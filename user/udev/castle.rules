@@ -1,0 +1,2 @@
+KERNEL=="castle-control", NAME="castle/control"
+SUBSYSTEM=="fs", ACTION=="change", DEVPATH=="/fs/castle", RUN+="/etc/castle/udev-watch $env{CMD} $env{ARG}"

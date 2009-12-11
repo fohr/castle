@@ -1,0 +1,27 @@
+#!/bin/bash
+
+CMD=$1
+ARG=$2
+CONTROL_FILE=/mnt/control
+
+
+DEV="dev-$(($ARG / 256))-$(( $ARG % 256 ))"
+
+case $CMD in
+1)
+    COMMAND_STR="init $DEV";;
+2)
+    COMMAND_STR="release unsupported";;
+3)
+    COMMAND_STR="attach $ARG dev-$(( $RANDOM % 256 ))-$(( $RANDOM % 256 ))";;
+4)
+    COMMAND_STR="detach $DEV";;
+5)
+    COMMAND_STR="create $ARG";;
+6)
+    COMMAND_STR="clone $ARG";;
+7)
+    COMMAND_STR="snapshot $DEV";;
+esac
+
+echo $COMMAND_STR | tee $CONTROL_FILE
