@@ -1,0 +1,8 @@
+syntax: glob
+.DS_Store
+*.d
+*~
+*.o
+user/ocaml/castle_ioctl
+*.cmi
+*.cmo
