@@ -11,6 +11,7 @@ CC := gcc
 ##
 
 CFLAGS          += -Werror
+CFLAGS          += -Wall
 CFLAGS          += -Wno-unused
 CFLAGS          += -D_GNU_SOURCE
 CFLAGS          += -fPIC

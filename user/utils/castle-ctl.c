@@ -1,8 +1,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <string.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <unistd.h>
 #include <sys/ioctl.h>
+#include <sys/types.h>
+#include <sys/stat.h>
 
 #include "castle_public.h"
 
@@ -22,7 +27,7 @@ int main(int argc, char* argv[])
     cmd = (uint16_t)strtol(argv[1], NULL, 10);
     printf("Cmd: %d\n", cmd);
     ctl.cmd = cmd;
-    fd = open(NODE);
+    fd = open(NODE, O_RDWR);
     if(fd < 0)
     {
         printf("Could not open " NODE " %d\n", errno);
