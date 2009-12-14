@@ -15,6 +15,7 @@ struct castle_disks   castle_disks;
 
 /* HACK! */
 DECLARE_MUTEX(in_ioctl);
+static cctrl_ioctl_t ioctl_ret;
 int ret_ready = 0;
 
 static void castle_uevent(uint16_t cmd, uint64_t main_arg)
@@ -28,7 +29,7 @@ static void castle_uevent(uint16_t cmd, uint64_t main_arg)
         return;
     }
     add_uevent_var(env, "CMD=%d",  cmd);
-    add_uevent_var(env, "ARG=%lld", main_arg);
+    add_uevent_var(env, "ARG=0x%llx", main_arg);
     printk("Sending the event.\n");
     kobject_uevent_env(&castle.kobj, KOBJ_CHANGE, env->envp);
 }
@@ -86,8 +87,6 @@ static int castle_control_ioctl(struct inode *inode, struct file *filp,
     
     int ret_ioctl = 0;
 
-    printk("Castle control ioctl, cmd=%d, arg=0x%lx\n", cmd, arg);
-
     if(cmd != CASTLE_CTRL_IOCTL)
     {
         printk("Unknown IOCTL: %d\n", cmd);
@@ -132,16 +131,46 @@ static int castle_control_ioctl(struct inode *inode, struct file *filp,
     /* Only allow one ioctl at the time. */
     if(!ret_ioctl) 
     {
+        int attach_int;
+
         down(&in_ioctl);
         ret_ready = 0;
         /* Signal to userspace */
         castle_uevent(ioctl.cmd, main_arg);
         while(!ret_ready) msleep(1);
         /* We've got the response */
-        printk("Got response.\n");
+        printk("Got response, ret val=%lld.\n", ioctl_ret.ret.ret_val);
+        switch(ioctl.cmd)
+        {
+            case CASTLE_CTRL_CMD_CLAIM:
+                ioctl.claim.ret = (int)ioctl_ret.ret.ret_val;
+                break;
+            case CASTLE_CTRL_CMD_RELEASE:
+                ioctl.release.ret = (int)ioctl_ret.ret.ret_val;
+                break;
+            case CASTLE_CTRL_CMD_ATTACH:
+                attach_int = (int)ioctl_ret.ret.ret_val;
+                ioctl.attach.ret = (int)ioctl_ret.ret.ret_val;
+                break;
+            case CASTLE_CTRL_CMD_DETACH:
+                ioctl.detach.ret = (int)ioctl_ret.ret.ret_val;
+                break;
+            case CASTLE_CTRL_CMD_CREATE:
+                ioctl.create.id = (snap_id_t)ioctl_ret.ret.ret_val;
+                break;
+            case CASTLE_CTRL_CMD_CLONE:
+                ioctl.clone.clone = (snap_id_t)ioctl_ret.ret.ret_val;
+                break;
+            case CASTLE_CTRL_CMD_SNAPSHOT:
+                ioctl.snapshot.snap_id = (snap_id_t)ioctl_ret.ret.ret_val;
+                break;
+            default:
+                BUG();
+        }
         up(&in_ioctl);
     } else
     {
+        memcpy(&ioctl_ret, &ioctl, sizeof(cctrl_ioctl_t));
         ret_ready = 1;
     }
 

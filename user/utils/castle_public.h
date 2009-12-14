@@ -56,7 +56,7 @@ typedef struct castle_control_cmd_snapshot {
 
 
 typedef struct castle_control_cmd_ret {
-    uint64_t   ret;
+    uint64_t   ret_val;
 } cctrl_cmd_ret_t;    
 
 
