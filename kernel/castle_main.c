@@ -3,6 +3,7 @@
 #include <linux/kobject.h>
 #include <linux/device-mapper.h>
 #include <linux/miscdevice.h>
+#include <linux/blkdev.h>
 #include <asm/semaphore.h>
 
 #include "castle_public.h"
@@ -17,6 +18,36 @@ struct castle_disks   castle_disks;
 DECLARE_MUTEX(in_ioctl);
 static cctrl_ioctl_t ioctl_ret;
 int ret_ready = 0;
+
+
+static int castle_claim(uint32_t new_dev, struct castle_disk *cd)
+{
+    dev_t dev;
+    struct block_device *bdev;
+    int err;
+    char b[BDEVNAME_SIZE];
+
+    dev = new_decode_dev(new_dev);
+    bdev = open_by_devnum(dev, FMODE_READ|FMODE_WRITE);
+    if (IS_ERR(bdev)) {
+        printk("Could not open %s.\n", __bdevname(dev, b));
+        return PTR_ERR(bdev);
+    }
+    err = bd_claim(bdev, &castle);
+    if (err) {
+        printk("Could not bd_claim %s.\n", bdevname(bdev, b));
+        blkdev_put(bdev);
+        return err;
+    }
+    cd->bdev = bdev;
+    return 0;
+}
+
+static void castle_release(struct castle_disk *cd)
+{
+    bd_release(cd->bdev);
+}
+
 
 static void castle_uevent(uint16_t cmd, uint64_t main_arg)
 {
@@ -37,25 +68,53 @@ static void castle_uevent(uint16_t cmd, uint64_t main_arg)
 
 static int castle_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 {
-    int i;
+    int i, ma, mi, ret;
+    struct castle_disk *cd;
 
+    cd = kzalloc(sizeof(struct castle_disk), GFP_KERNEL);
+    if(!cd)
+    {
+        printk("Could not alloc castle_disk.\n");
+        return -ENOMEM;
+    }
+    
     printk("Castle DM ctr\n");
     for(i=0; i<argc; i++)
         printk("argv[%d]=%s\n", i, argv[i]);
-
+    ma=simple_strtol(argv[0], NULL, 10);
+    mi=simple_strtol(argv[1], NULL, 10);
+    
+    ret = castle_claim(new_encode_dev(MKDEV(ma,mi)), cd); 
+    if(ret)
+    {
+        printk("Could not claim (%d,%d)\n", ma, mi);
+        return ret;
+    }
+    cd->ma = ma;
+    cd->mi = mi;
+    ti->private = cd;
     return 0;
 }
 
 static void castle_dtr(struct dm_target *ti)
 {
+    struct castle_disk *cd = (struct castle_disk *)ti->private;
+
     printk("Castle DM dtr\n");
+    castle_release(cd);
+    kfree(cd);
 }
 
 static int castle_map(struct dm_target *ti, struct bio *bio,
                       union map_info *map_context)
 {
-    printk("Castle DM map\n");
-    return -1;
+    struct castle_disk *cd = (struct castle_disk *)ti->private;
+
+    printk("Castle DM map forwarded to: (%d, %d)\n", cd->ma, cd->mi);
+    bio->bi_bdev = cd->bdev;
+	generic_make_request(bio);
+
+    return 0;
 }
 
 static int castle_ioctl(struct dm_target *ti,
@@ -84,7 +143,7 @@ static int castle_control_ioctl(struct inode *inode, struct file *filp,
     void __user *udata = (void __user *) arg;
     cctrl_ioctl_t ioctl;
     uint64_t main_arg;
-    
+
     int ret_ioctl = 0;
 
     if(cmd != CASTLE_CTRL_IOCTL)
@@ -101,6 +160,7 @@ static int castle_control_ioctl(struct inode *inode, struct file *filp,
     {
         case CASTLE_CTRL_CMD_CLAIM:
             main_arg = ioctl.claim.dev;
+            //castle_claim(ioctl.claim.dev);
             break;
         case CASTLE_CTRL_CMD_RELEASE:
             main_arg = ioctl.release.dev;
@@ -129,7 +189,7 @@ static int castle_control_ioctl(struct inode *inode, struct file *filp,
     }
 
     /* Only allow one ioctl at the time. */
-    if(!ret_ioctl) 
+    if(!ret_ioctl)
     {
         int attach_int;
 

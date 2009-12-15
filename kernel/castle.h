@@ -13,6 +13,12 @@ struct castle_disks {
     struct kobject kobj;
 };
 
+struct castle_disk {
+    int ma;
+    int mi;
+    struct block_device *bdev;
+};
+
 extern struct castle         castle;
 extern struct castle_volumes castle_volumes;
 extern struct castle_disks   castle_disks;
