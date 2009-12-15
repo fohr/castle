@@ -1,0 +1,6 @@
+version = "0.0"
+description = "Castle ioctl"
+requires = "unix"
+archive(byte) = "castle_ioctl.cma"
+archive(native) = "castle_ioctl.cmxa"
+
