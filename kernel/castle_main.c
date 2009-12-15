@@ -46,6 +46,7 @@ static int castle_claim(uint32_t new_dev, struct castle_disk *cd)
 static void castle_release(struct castle_disk *cd)
 {
     bd_release(cd->bdev);
+    blkdev_put(cd->bdev);
 }
 
 
