@@ -117,7 +117,7 @@ castle_ioctl (value fdv, value cmdv, value argv)
   uint64_t arg;
 
   fd = Int_val (fdv);
-  cmd = (uint16_t) Int_val (cmdv);
+  cmd = (uint16_t) Int32_val (cmdv);
   arg = Int64_val (argv);
  
   r = castle_ctl(fd, cmd, arg);
