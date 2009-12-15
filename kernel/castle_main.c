@@ -181,6 +181,9 @@ static int castle_control_ioctl(struct inode *inode, struct file *filp,
         case CASTLE_CTRL_CMD_SNAPSHOT:
             main_arg = ioctl.snapshot.dev;
             break;
+        case CASTLE_CTRL_CMD_INIT:
+            main_arg = -1; 
+            break;
 
         case CASTLE_CTRL_CMD_RET:
             ret_ioctl = 1;
@@ -224,6 +227,9 @@ static int castle_control_ioctl(struct inode *inode, struct file *filp,
                 break;
             case CASTLE_CTRL_CMD_SNAPSHOT:
                 ioctl.snapshot.snap_id = (snap_id_t)ioctl_ret.ret.ret_val;
+                break;
+            case CASTLE_CTRL_CMD_INIT:
+                ioctl.init.ret = (int)ioctl_ret.ret.ret_val;
                 break;
             default:
                 BUG();

@@ -53,6 +53,9 @@ int main(int argc, char* argv[])
         case CASTLE_CTRL_CMD_SNAPSHOT:
             ctl.snapshot.dev = (uint32_t)arg;
             break;
+        case CASTLE_CTRL_CMD_INIT:
+            /* No arguments to init */
+            break;
         case CASTLE_CTRL_CMD_RET:
             ctl.ret.ret_val = (uint64_t)arg;
             break;
@@ -96,6 +99,9 @@ int main(int argc, char* argv[])
             break;
         case CASTLE_CTRL_CMD_SNAPSHOT:
             ret_val = (uint64_t)ctl.snapshot.snap_id;
+            break;
+        case CASTLE_CTRL_CMD_INIT:
+            ret_val = (uint64_t)ctl.init.ret;
             break;
         case CASTLE_CTRL_CMD_RET:
             ret_val = (uint64_t)-1; 

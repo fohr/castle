@@ -1,17 +1,18 @@
 #!/bin/bash
 
+. /etc/bash.bashrc
+
 CMD=$1
 ARG=$2
-CONTROL_FILE=/mnt/control
-
+CONTROL_FILE=${CASTLE_MOUNT_POINT}/control
 
 DEV="dev-$(($ARG / 256))-$(( $ARG % 256 ))"
 
 case $CMD in
 1)
-    COMMAND_STR="init $DEV";;
+    COMMAND_STR="claim $DEV";;
 2)
-    COMMAND_STR="release unsupported";;
+    COMMAND_STR="release $DEV";;
 3)
     COMMAND_STR="attach $ARG dev-$(( $RANDOM % 256 ))-$(( $RANDOM % 256 ))";;
 4)
@@ -22,6 +23,8 @@ case $CMD in
     COMMAND_STR="clone $ARG";;
 7)
     COMMAND_STR="snapshot $DEV";;
+8)
+    COMMAND_STR="init";;
 esac
 
 echo $COMMAND_STR | tee $CONTROL_FILE

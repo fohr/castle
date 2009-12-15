@@ -14,6 +14,7 @@ typedef uint64_t snap_id_t;
 #define CASTLE_CTRL_CMD_CREATE         5     /* New vol                    */
 #define CASTLE_CTRL_CMD_CLONE          6     /* Writable vol from snapshot */
 #define CASTLE_CTRL_CMD_SNAPSHOT       7     /* Snapshot /dev file         */
+#define CASTLE_CTRL_CMD_INIT           8     /* Init the file sytem        */
 
 #define CASTLE_CTRL_CMD_RET          117     /* TEMPORARY       */
                                        
@@ -52,6 +53,10 @@ typedef struct castle_control_cmd_snapshot {
     snap_id_t snap_id;         /* OUT */
 } cctrl_cmd_snapshot_t;    
 
+typedef struct castle_control_cmd_init {
+    int ret;                   /* OUT */
+} cctrl_cmd_init_t;    
+
 
 
 
@@ -70,6 +75,7 @@ typedef struct castle_control_ioctl {
         cctrl_cmd_create_t    create;    
         cctrl_cmd_clone_t     clone;    
         cctrl_cmd_snapshot_t  snapshot;    
+        cctrl_cmd_init_t      init;    
 
         cctrl_cmd_ret_t       ret;    
     };
