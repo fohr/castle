@@ -6,4 +6,10 @@ THREADS = yes
 LIBINSTALL_FILES = castle_ioctl.cmi castle_ioctl.cmx castle_ioctl.a castle_ioctl.cmxa libcastle_ioctl_stubs.a
 
 all: native-code-library
+
+cleanlibs:
+	ocamlfind remove $(RESULT)
+
+install: cleanlibs libinstall
+
 include $(OCAMLMAKEFILE)
