@@ -1,10 +1,11 @@
 #!/bin/bash
 
-. /etc/bash.bashrc
-
 CMD=$1
 ARG=$2
-CONTROL_FILE=${CASTLE_MOUNT_POINT}/control
+
+# Work out where is castle mounted
+CASTLE_MOUNT_POINT=`mount | grep "fuse.castle" | cut -d" " -f3`
+CONTROL_FILE=${CASTLE_MOUNT_POINT}/sys/control
 
 DEV="dev-$(($ARG / 256))-$(( $ARG % 256 ))"
 
