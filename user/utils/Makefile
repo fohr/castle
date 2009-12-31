@@ -44,4 +44,4 @@ clean:
 
 .PHONY: install
 install:
-
+	install castle-ctl /usr/sbin

@@ -8,7 +8,7 @@ all:
 build:
 
 .PHONY: install
-install: $(UDEV_RULES) $()
+install: $(UDEV_RULES) $(SBIN_SCRIPTS)
 	mkdir -p /etc/castle
 	set -e; for rule in $(UDEV_RULES); do \
 		install $$rule /etc/castle; \
