@@ -195,8 +195,6 @@ static int castle_control_ioctl(struct inode *inode, struct file *filp,
     /* Only allow one ioctl at the time. */
     if(!ret_ioctl)
     {
-        int attach_int;
-
         down(&in_ioctl);
         ret_ready = 0;
         /* Signal to userspace */
@@ -213,8 +211,9 @@ static int castle_control_ioctl(struct inode *inode, struct file *filp,
                 ioctl.release.ret = (int)ioctl_ret.ret.ret_val;
                 break;
             case CASTLE_CTRL_CMD_ATTACH:
-                attach_int = (int)ioctl_ret.ret.ret_val;
-                ioctl.attach.ret = (int)ioctl_ret.ret.ret_val;
+                ioctl.attach.dev = (uint32_t)ioctl_ret.ret.ret_val;
+                /* Attach always succeeds at the moment ... */
+                ioctl.attach.ret = 0;
                 break;
             case CASTLE_CTRL_CMD_DETACH:
                 ioctl.detach.ret = (int)ioctl_ret.ret.ret_val;

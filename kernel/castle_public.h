@@ -30,6 +30,7 @@ typedef struct castle_control_cmd_release {
 
 typedef struct castle_control_cmd_attach {
     snap_id_t snap;            /* IN  */
+    uint32_t  dev;             /* OUT */
     int       ret;             /* OUT */
 } cctrl_cmd_attach_t;    
 

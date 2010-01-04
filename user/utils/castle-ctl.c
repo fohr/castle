@@ -41,7 +41,7 @@ struct ctrl_cmd
 
 CTRL_CMD(CASTLE_CTRL_CMD_CLAIM,    claim,    uint32_t, claim.dev,    claim.ret);
 CTRL_CMD(CASTLE_CTRL_CMD_RELEASE,  release,  uint32_t, release.dev,  release.ret);
-CTRL_CMD(CASTLE_CTRL_CMD_ATTACH,   attach,   uint64_t, attach.snap,  attach.ret);
+CTRL_CMD(CASTLE_CTRL_CMD_ATTACH,   attach,   uint64_t, attach.snap,  attach.dev);
 CTRL_CMD(CASTLE_CTRL_CMD_DETACH,   detach,   uint32_t, detach.dev,   detach.ret);
 CTRL_CMD(CASTLE_CTRL_CMD_CREATE,   create,   uint64_t, create.size,  create.id);
 CTRL_CMD(CASTLE_CTRL_CMD_CLONE,    clone,    uint64_t, clone.snap,   clone.clone);
