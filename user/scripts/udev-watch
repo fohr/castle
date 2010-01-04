@@ -10,17 +10,13 @@ CONTROL_FILE=${CASTLE_MOUNT_POINT}/sys/control
 MAJ=$(( $ARG / 65536 ))
 MIN=$(( $ARG % 65536 ))
 DEV=/dev/`cat /proc/partitions  | grep "$MAJ *$MIN " | awk '{print ( $4 ) }'`
-echo "$CMD, arg: $ARG, maj=$MAJ, min=$MIN, dev=$DEV" > /dev/console
-
 
 function get_loop_file {
     LOOP=`/sbin/losetup -f`
     LOOP_NR=`echo $LOOP | sed -e 's#/dev/loop\(.*\)#\1#g'`                                             
     MAJ=7
     MIN=$LOOP_NR
-    echo "Reserved $MAJ, $MIN, loop is $LOOP" > /dev/console
 }
-
 
 case $CMD in
 1)
@@ -37,7 +33,7 @@ case $CMD in
 6)
     COMMAND_STR="clone $ARG";;
 7)
-    COMMAND_STR="snapshot $DEV";;
+    COMMAND_STR="snapshot dev-$MAJ-$MIN";;
 8)
     COMMAND_STR="init";;
 esac
