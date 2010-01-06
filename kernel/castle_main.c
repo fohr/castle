@@ -13,6 +13,7 @@
 struct castle         castle;
 struct castle_volumes castle_volumes;
 struct castle_disks   castle_disks;
+struct castle_devices castle_devices;
 
 /* HACK! */
 DECLARE_MUTEX(in_ioctl);
@@ -78,14 +79,14 @@ static int castle_ctr(struct dm_target *ti, unsigned int argc, char **argv)
         printk("Could not alloc castle_disk.\n");
         return -ENOMEM;
     }
-    
+
     printk("Castle DM ctr\n");
     for(i=0; i<argc; i++)
         printk("argv[%d]=%s\n", i, argv[i]);
     ma=simple_strtol(argv[0], NULL, 10);
     mi=simple_strtol(argv[1], NULL, 10);
-    
-    ret = castle_claim(new_encode_dev(MKDEV(ma,mi)), cd); 
+
+    ret = castle_claim(new_encode_dev(MKDEV(ma,mi)), cd);
     if(ret)
     {
         printk("Could not claim (%d,%d)\n", ma, mi);
@@ -138,6 +139,154 @@ static struct target_type castle_target = {
     .ioctl   = castle_ioctl,
 };
 
+static int castle_open(struct inode *inode, struct file *filp)
+{
+	struct castle_device *dev = inode->i_bdev->bd_disk->private_data;
+
+	filp->private_data = dev;
+	spin_lock(&dev->lock);
+	if (! dev->users) 
+		check_disk_change(inode->i_bdev);
+	dev->users++;
+	spin_unlock(&dev->lock);
+	return 0;
+}
+
+static int castle_close(struct inode *inode, struct file *filp)
+{
+	struct castle_device *dev = inode->i_bdev->bd_disk->private_data;
+
+	spin_lock(&dev->lock);
+	dev->users--;
+	spin_unlock(&dev->lock);
+
+	return 0;
+}
+
+static struct block_device_operations castle_bd_ops = {
+	.owner           = THIS_MODULE,
+	.open 	         = castle_open,
+	.release 	     = castle_close,
+	.media_changed   = NULL,
+	.revalidate_disk = NULL,
+};
+
+static struct block_device* castle_basedisk_claim(dev_t base_dev)
+{
+    struct block_device *bdev;
+    int err;
+    char b[BDEVNAME_SIZE];
+
+    bdev = open_by_devnum(base_dev, FMODE_READ|FMODE_WRITE);
+    if (IS_ERR(bdev)) {
+        printk("Could not open %s.\n", __bdevname(base_dev, b));
+        return NULL;
+    }
+    err = bd_claim(bdev, &castle);
+    if (err) {
+        printk("Could not bd_claim %s.\n", bdevname(bdev, b));
+        blkdev_put(bdev);
+        return NULL;
+    }
+
+    return bdev;
+}
+
+static int castle_device_make_request(struct request_queue *rq, struct bio *bio)
+{ 
+    struct castle_device *dev = rq->queuedata;
+
+    printk("===> do request on castle device!\n");
+    bio->bi_bdev = dev->bdev;
+	generic_make_request(bio);
+    return 0;
+}
+
+static uint32_t castle_dev_mirror(uint32_t base_dev)
+{
+    struct castle_device *dev;
+    struct request_queue *rq;
+    struct gendisk *gd;
+    static int minor = 0;
+
+    dev = kmalloc(sizeof(struct castle_device), GFP_KERNEL); 
+    if(!dev)
+        goto error_out;
+    dev->bdev = castle_basedisk_claim(base_dev);
+    if(!dev->bdev)
+        goto error_out;
+	spin_lock_init(&dev->lock);
+        
+    gd = alloc_disk(1);
+    if(!gd)
+        goto error_out;
+
+    sprintf(gd->disk_name, "castle%d", minor);
+    gd->major        = castle_devices.major;
+    gd->first_minor  = minor++;
+	gd->fops         = &castle_bd_ops;
+    gd->private_data = dev;
+
+	rq = blk_alloc_queue(GFP_KERNEL);
+    if (!rq)
+        goto error_out;
+	blk_queue_make_request(rq, castle_device_make_request);
+	rq->queuedata    = dev;
+    gd->queue        = rq;
+
+
+    list_add(&dev->list, &castle_devices.devices);
+    dev->gd = gd;
+    set_capacity(gd, get_capacity(dev->bdev->bd_disk));
+    add_disk(gd);
+
+    return 0;
+
+error_out:
+    printk("Failed to mirror device.\n");
+    return 0;    
+}
+
+static int castle_devices_init(void)
+{
+    int major;
+
+    memset(&castle_devices, 0, sizeof(struct castle_devices));
+    INIT_LIST_HEAD(&castle_devices.devices);
+    /* Dynamically allocate a major for this device */
+    major = register_blkdev(0, "castle");
+    if (major < 0) 
+    {
+        printk("Couldn't register castle device\n");
+        return -ENOMEM;
+    }
+
+    castle_devices.major = major;
+    printk("blktap device major %d\n", major);
+
+    return 0;
+}
+
+static void castle_devices_free(void)                                                                 
+{                                                                                        
+    struct list_head *lh, *th;
+    struct castle_device *dev;
+
+    list_for_each_safe(lh, th, &castle_devices.devices)
+    {
+        dev = list_entry(lh, struct castle_device, list); 
+        bd_release(dev->bdev);
+        blkdev_put(dev->bdev);
+        del_gendisk(dev->gd);
+        put_disk(dev->gd);
+        list_del(&dev->list);
+        kfree(dev);
+    }
+
+    if (castle_devices.major)
+        unregister_blkdev(castle_devices.major, "castle");
+}
+
 static int castle_control_ioctl(struct inode *inode, struct file *filp,
                                 unsigned int cmd, unsigned long arg)
 {
@@ -182,7 +331,7 @@ static int castle_control_ioctl(struct inode *inode, struct file *filp,
             main_arg = ioctl.snapshot.dev;
             break;
         case CASTLE_CTRL_CMD_INIT:
-            main_arg = -1; 
+            main_arg = -1;
             break;
 
         case CASTLE_CTRL_CMD_RET:
@@ -214,6 +363,8 @@ static int castle_control_ioctl(struct inode *inode, struct file *filp,
                 ioctl.attach.dev = (uint32_t)ioctl_ret.ret.ret_val;
                 /* Attach always succeeds at the moment ... */
                 ioctl.attach.ret = 0;
+                printk("Attached snapshot as dev=%x\n", ioctl.attach.dev);
+                castle_dev_mirror(ioctl.attach.dev);
                 break;
             case CASTLE_CTRL_CMD_DETACH:
                 ioctl.detach.ret = (int)ioctl_ret.ret.ret_val;
@@ -263,12 +414,20 @@ static int __init castle_init(void)
 {
     int ret;
 
+    /* XXX: Handle failures properly! */
     printk("Castle init\n");
 
     ret = castle_kobjs_init();
     if(ret < 0)
     {
         printk("Could not register kobj\n");
+        return ret;
+    }
+
+    ret = castle_devices_init();
+    if(ret < 0)
+    {
+        printk("Could not initialise castle device\n");
         return ret;
     }
 
@@ -294,6 +453,8 @@ static void __exit castle_exit(void)
     printk("Castle exit\n");
     if(dm_unregister_target(&castle_target) < 0)
         printk("Could not unregister castle DM target.\n");
+
+    castle_devices_free();
 
     if (misc_deregister(&castle_control) < 0)
         printk("Could not unregister castle control node.\n");
