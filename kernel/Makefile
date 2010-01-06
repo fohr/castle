@@ -27,7 +27,7 @@ castle.ko: clean $(castle-objs)
 	$(MAKE) -C $(KERNEL_DIR) M=$(PWD) modules
 endif
 
-install:
+install: castle.ko
 	$(MAKE) -C $(KERNEL_DIR) M=$(PWD) modules_install
 	depmod -aq `uname -r` 
 

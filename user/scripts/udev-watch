@@ -7,8 +7,10 @@ ARG=$2
 CASTLE_MOUNT_POINT=`mount | grep "fuse.castle" | cut -d" " -f3`
 CONTROL_FILE=${CASTLE_MOUNT_POINT}/sys/control
 
-MAJ=$(( $ARG / 65536 ))
-MIN=$(( $ARG % 65536 ))
+# 12 bits for major, 20 bit for minor
+MAJ=$(( $ARG >> 20 ))
+MIN=$(( $ARG & 0xFFFFF ))
+#echo "Cmd=$CMD, Arg = $ARG, Maj=$MAJ, Min=$MIN" > /dev/console
 DEV=/dev/`cat /proc/partitions  | grep "$MAJ *$MIN " | awk '{print ( $4 ) }'`
 
 function get_loop_file {
@@ -39,9 +41,11 @@ case $CMD in
 esac
 
 echo -n $COMMAND_STR > $CONTROL_FILE
+#echo $COMMAND_STR > /dev/console
 
 # Special handling for "attach" command
 if [ $CMD == 3 ]; then
 	/sbin/losetup $LOOP ${CASTLE_MOUNT_POINT}/devices/dev-$MAJ-$MIN
-	/usr/sbin/castle-ctl "ret" "`printf "%X" $(( $MAJ << 16 | $MIN ))`"
+	#echo "`printf "%X" $(( $MAJ << 20 | $MIN ))`" > /dev/console
+	/usr/sbin/castle-ctl "ret" "`printf "%X" $(( $MAJ << 20 | $MIN ))`"
 fi
