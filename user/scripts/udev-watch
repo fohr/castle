@@ -29,7 +29,10 @@ case $CMD in
     get_loop_file
     COMMAND_STR="attach $ARG dev-$MAJ-$MIN";;
 4)
-    COMMAND_STR="detach $DEV";;
+    # First, delete the loop device we've created when attaching
+    # echo "Deleting loop: /dev/loop$MIN" > /dev/console
+    /sbin/losetup -d /dev/loop$MIN
+    COMMAND_STR="detach dev-$MAJ-$MIN";;
 5)
     COMMAND_STR="create $ARG";;
 6)
@@ -40,8 +43,8 @@ case $CMD in
     COMMAND_STR="init";;
 esac
 
-echo -n $COMMAND_STR > $CONTROL_FILE
 #echo $COMMAND_STR > /dev/console
+echo -n $COMMAND_STR > $CONTROL_FILE
 
 # Special handling for "attach" command
 if [ $CMD == 3 ]; then
