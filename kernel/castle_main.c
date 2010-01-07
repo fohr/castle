@@ -196,18 +196,19 @@ static int castle_device_make_request(struct request_queue *rq, struct bio *bio)
 { 
     struct castle_device *dev = rq->queuedata;
 
-    printk("===> do request on castle device!\n");
     bio->bi_bdev = dev->bdev;
 	generic_make_request(bio);
     return 0;
 }
 
-static uint32_t castle_dev_mirror(uint32_t base_dev)
+static struct castle_device* castle_dev_mirror(uint32_t base_dev)
 {
     struct castle_device *dev;
     struct request_queue *rq;
     struct gendisk *gd;
     static int minor = 0;
+
+    struct block_device *bdev;
 
     dev = kmalloc(sizeof(struct castle_device), GFP_KERNEL); 
     if(!dev)
@@ -240,11 +241,13 @@ static uint32_t castle_dev_mirror(uint32_t base_dev)
     set_capacity(gd, get_capacity(dev->bdev->bd_disk));
     add_disk(gd);
 
-    return 0;
+    bdev = bdget(MKDEV(gd->major, gd->first_minor));
+
+    return dev;
 
 error_out:
     printk("Failed to mirror device.\n");
-    return 0;    
+    return NULL;    
 }
 
 static int castle_devices_init(void)
@@ -328,8 +331,26 @@ static int castle_control_ioctl(struct inode *inode, struct file *filp,
             main_arg = ioctl.clone.snap;
             break;
         case CASTLE_CTRL_CMD_SNAPSHOT:
-            main_arg = ioctl.snapshot.dev;
+        {
+            dev_t idev = ioctl.snapshot.dev;
+            struct block_device *bdev = open_by_devnum(idev, FMODE_READ);
+            struct castle_device *cdev;
+
+            printk("==> Asked for snapshot on: %x\n", idev);
+            if(!bdev)
+            {
+                printk("=====> Could not find dev: %x\n", idev);
+                ioctl.snapshot.snap_id = 0;
+                goto out;
+            }
+            // XXX should really check if bdev is _castle_ bdev, but 
+            // this code is going to go away eventually anyway
+            cdev = bdev->bd_disk->private_data;
+            blkdev_put(bdev);
+            main_arg = MKDEV(cdev->bdev->bd_disk->major, 
+                             cdev->bdev->bd_disk->first_minor);
             break;
+        }
         case CASTLE_CTRL_CMD_INIT:
             main_arg = -1;
             break;
@@ -360,12 +381,26 @@ static int castle_control_ioctl(struct inode *inode, struct file *filp,
                 ioctl.release.ret = (int)ioctl_ret.ret.ret_val;
                 break;
             case CASTLE_CTRL_CMD_ATTACH:
-                ioctl.attach.dev = (uint32_t)ioctl_ret.ret.ret_val;
-                /* Attach always succeeds at the moment ... */
-                ioctl.attach.ret = 0;
-                printk("Attached snapshot as dev=%x\n", ioctl.attach.dev);
-                castle_dev_mirror(ioctl.attach.dev);
+            {
+                struct castle_device *cdev;
+                dev_t userspace_dev;
+
+                userspace_dev = (uint32_t)ioctl_ret.ret.ret_val;
+                cdev = castle_dev_mirror(userspace_dev);
+                if(cdev)
+                {
+                    ioctl.attach.dev = 
+                        MKDEV(cdev->gd->major, cdev->gd->first_minor);
+                    printk("===> Attached to (%d,%d) instead.\n",
+                            cdev->gd->major, cdev->gd->first_minor);
+                    ioctl.attach.ret = 0;
+                } else
+                {
+                    ioctl.attach.dev = 0; 
+                    ioctl.attach.ret = -EINVAL;
+                }
                 break;
+            }
             case CASTLE_CTRL_CMD_DETACH:
                 ioctl.detach.ret = (int)ioctl_ret.ret.ret_val;
                 break;
@@ -390,7 +425,7 @@ static int castle_control_ioctl(struct inode *inode, struct file *filp,
         memcpy(&ioctl_ret, &ioctl, sizeof(cctrl_ioctl_t));
         ret_ready = 1;
     }
-
+out:
     /* Copy the results back */
     if(copy_to_user(udata, &ioctl, sizeof(cctrl_ioctl_t)))
         return -EFAULT;
