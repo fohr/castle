@@ -20,7 +20,7 @@ castle-objs   := castle_main.o castle_sysfs.o
 
 else
 
-KERNEL_DIR ?= /lib/modules/`uname -r`/build
+KERNEL_DIR ?= /lib/modules/$(KVER)/build
 PWD        := $(shell pwd)
 
 castle.ko: clean $(castle-objs)
