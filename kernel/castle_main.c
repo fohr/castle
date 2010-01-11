@@ -61,12 +61,30 @@ static void castle_uevent(uint16_t cmd, uint64_t main_arg)
         printk("No memory\n");
         return;
     }
+    add_uevent_var(env, "NOTIFY=%s",  "false");
     add_uevent_var(env, "CMD=%d",  cmd);
     add_uevent_var(env, "ARG=0x%llx", main_arg);
     printk("Sending the event.\n");
     kobject_uevent_env(&castle.kobj, KOBJ_CHANGE, env->envp);
 }
 
+static void castle_notify(uint16_t cmd, uint64_t arg1, uint64_t arg2)
+{
+    struct kobj_uevent_env *env;
+
+    env = kzalloc(sizeof(struct kobj_uevent_env), GFP_NOIO);
+    if(!env)
+    {
+        printk("No memory\n");
+        return;
+    }
+    add_uevent_var(env, "NOTIFY=%s",  "true");
+    add_uevent_var(env, "CMD=%d",  cmd);
+    add_uevent_var(env, "ARG1=0x%llx", arg1);
+    add_uevent_var(env, "ARG2=0x%llx", arg2);
+    printk("Sending the event.\n");
+    kobject_uevent_env(&castle.kobj, KOBJ_CHANGE, env->envp);
+}
 
 static int castle_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 {
@@ -296,6 +314,7 @@ static int castle_control_ioctl(struct inode *inode, struct file *filp,
     void __user *udata = (void __user *) arg;
     cctrl_ioctl_t ioctl;
     uint64_t main_arg;
+    uint64_t ret1, ret2;
 
     int ret_ioctl = 0;
 
@@ -375,13 +394,16 @@ static int castle_control_ioctl(struct inode *inode, struct file *filp,
         while(!ret_ready) msleep(1);
         /* We've got the response */
         printk("Got response, ret val=%lld.\n", ioctl_ret.ret.ret_val);
+        ret1 = ret2 = 0;
         switch(ioctl.cmd)
         {
             case CASTLE_CTRL_CMD_CLAIM:
                 ioctl.claim.ret = (int)ioctl_ret.ret.ret_val;
+                ret1 = ioctl.claim.ret;
                 break;
             case CASTLE_CTRL_CMD_RELEASE:
                 ioctl.release.ret = (int)ioctl_ret.ret.ret_val;
+                ret1 = ioctl.release.ret;
                 break;
             case CASTLE_CTRL_CMD_ATTACH:
             {
@@ -397,31 +419,41 @@ static int castle_control_ioctl(struct inode *inode, struct file *filp,
                     printk("===> Attached to (%d,%d) instead.\n",
                             cdev->gd->major, cdev->gd->first_minor);
                     ioctl.attach.ret = 0;
+                    ret1 = 0;
+                    ret2 = ioctl.attach.dev;
                 } else
                 {
                     ioctl.attach.dev = 0; 
                     ioctl.attach.ret = -EINVAL;
+                    ret1 = -1;
+                    ret2 = ioctl.attach.dev;
                 }
                 break;
             }
             case CASTLE_CTRL_CMD_DETACH:
                 ioctl.detach.ret = (int)ioctl_ret.ret.ret_val;
+                ret1 = ioctl.detach.ret;
                 break;
             case CASTLE_CTRL_CMD_CREATE:
                 ioctl.create.id = (snap_id_t)ioctl_ret.ret.ret_val;
+                ret1 = ioctl.create.id;
                 break;
             case CASTLE_CTRL_CMD_CLONE:
                 ioctl.clone.clone = (snap_id_t)ioctl_ret.ret.ret_val;
+                ret1 = ioctl.clone.clone;
                 break;
             case CASTLE_CTRL_CMD_SNAPSHOT:
                 ioctl.snapshot.snap_id = (snap_id_t)ioctl_ret.ret.ret_val;
+                ret1 = ioctl.snapshot.snap_id;
                 break;
             case CASTLE_CTRL_CMD_INIT:
                 ioctl.init.ret = (int)ioctl_ret.ret.ret_val;
+                ret1 = ioctl.init.ret;
                 break;
             default:
                 BUG();
         }
+        castle_notify(cmd, ret1, ret2);
         up(&in_ioctl);
     } else
     {

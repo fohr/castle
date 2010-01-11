@@ -1,4 +1,4 @@
-UDEV_RULES  = udev-watch
+UDEV_RULES  = udev-watch event
 SBIN_SCRIPTS = create-dm.sh remove-all-dms.sh
 
 .PHONY: all
