@@ -1,0 +1,7 @@
+#!/bin/bash
+
+CMD=$1
+ARG1=$2
+ARG2=$3
+
+echo "Got notification event from the kernel: $CMD, $ARG1, $ARG2" > /dev/console
