@@ -20,6 +20,7 @@ castle-objs   := castle_main.o castle_sysfs.o
 
 else
 
+KVER       ?= 2.6.24
 KERNEL_DIR ?= /lib/modules/$(KVER)/build
 PWD        := $(shell pwd)
 

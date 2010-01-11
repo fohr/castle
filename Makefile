@@ -1,8 +1,7 @@
 KVER = 2.6.24
-KERNEL_DIR = /lib/modules/$(KVER)/build
 all:
-	make -C kernel KERNEL_DIR=$(KERNEL_DIR) KVER=$(KVER)
-	make -C kernel install KERNEL_DIR=$(KERNEL_DIR) KVER=$(KVER)
+	make -C kernel KVER=$(KVER)
+	make -C kernel install KVER=$(KVER)
 
 	make -C user 
 	make -C user install
