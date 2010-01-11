@@ -3,5 +3,6 @@
 CMD=$1
 ARG1=$2
 ARG2=$3
+ARG3=$4
 
-echo "Got notification event from the kernel: $CMD, $ARG1, $ARG2" > /dev/console
+echo "Got notification event from the kernel: $CMD, $ARG1, $ARG2, $ARG3" > /dev/console
