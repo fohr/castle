@@ -201,7 +201,7 @@ static int castle_device_make_request(struct request_queue *rq, struct bio *bio)
     return 0;
 }
 
-static struct castle_device* castle_dev_mirror(uint32_t base_dev)
+static struct castle_device* castle_dev_mirror(dev_t base_dev)
 {
     struct castle_device *dev;
     struct request_queue *rq;
@@ -333,7 +333,8 @@ static int castle_control_ioctl(struct inode *inode, struct file *filp,
         case CASTLE_CTRL_CMD_SNAPSHOT:
         {
             dev_t idev = ioctl.snapshot.dev;
-            struct block_device *bdev = open_by_devnum(idev, FMODE_READ);
+            struct block_device *bdev = 
+                open_by_devnum(new_decode_dev(idev), FMODE_READ);
             struct castle_device *cdev;
 
             printk("==> Asked for snapshot on: %x\n", idev);
@@ -347,8 +348,10 @@ static int castle_control_ioctl(struct inode *inode, struct file *filp,
             // this code is going to go away eventually anyway
             cdev = bdev->bd_disk->private_data;
             blkdev_put(bdev);
-            main_arg = MKDEV(cdev->bdev->bd_disk->major, 
-                             cdev->bdev->bd_disk->first_minor);
+            main_arg = new_encode_dev(
+                       MKDEV(cdev->bdev->bd_disk->major, 
+                             cdev->bdev->bd_disk->first_minor));
+            printk("==> Will snapshot: %llx\n", main_arg);
             break;
         }
         case CASTLE_CTRL_CMD_INIT:
@@ -386,11 +389,11 @@ static int castle_control_ioctl(struct inode *inode, struct file *filp,
                 dev_t userspace_dev;
 
                 userspace_dev = (uint32_t)ioctl_ret.ret.ret_val;
-                cdev = castle_dev_mirror(userspace_dev);
+                cdev = castle_dev_mirror(new_decode_dev(userspace_dev));
                 if(cdev)
                 {
-                    ioctl.attach.dev = 
-                        MKDEV(cdev->gd->major, cdev->gd->first_minor);
+                    ioctl.attach.dev = new_encode_dev( 
+                        MKDEV(cdev->gd->major, cdev->gd->first_minor));
                     printk("===> Attached to (%d,%d) instead.\n",
                             cdev->gd->major, cdev->gd->first_minor);
                     ioctl.attach.ret = 0;
