@@ -29,7 +29,7 @@ endif
 
 install: castle.ko
 	$(MAKE) -C $(KERNEL_DIR) M=$(PWD) modules_install
-	depmod -aq `uname -r` 
+	depmod -aq $(KVER)
 
 clean:
 	rm -rf *.o *~ core .depend .*.cmd *.ko *.mod.c .tmp_versions Module.symvers
