@@ -2,132 +2,198 @@
 #include <linux/kernel.h>
 #include <linux/capability.h>
 #include <linux/fs.h>
+#include <linux/blkdev.h>
 
 #include "castle.h"
 
-static ssize_t test_show(char *buf)
+static ssize_t test_show(struct kobject *kobj, char *buf)
 {
     return sprintf(buf, "%s\n", "Test castle attribute file");
 }
 
-static ssize_t test_store(const char *buf, size_t count)
+static ssize_t test_store(struct kobject *kobj, const char *buf, size_t count)
 {
     printk("Got write: %s\n", buf);
     return count;
 }
 
-static ssize_t volumes_test_show(char *buf)
+static ssize_t volumes_test_show(struct kobject *kobj, char *buf)
 {
     return sprintf(buf, "%s\n", "Test volumes attribute file");
 }
 
-static ssize_t volumes_test_store(const char *buf, size_t count)
+static ssize_t volumes_test_store(struct kobject *kobj, const char *buf, size_t count)
 {
     printk("Got write to volumes: %s\n", buf);
     return count;
 }
 
-static ssize_t disks_test_show(char *buf)
+static ssize_t slaves_number_show(struct kobject *kobj, char *buf)
 {
-    return sprintf(buf, "%s\n", "Test disks attribute file");
+    struct castle_slaves *slaves = 
+                container_of(kobj, struct castle_slaves, kobj);
+    struct list_head *lh;
+    int nr_slaves = 0;
+
+    printk("got kobj=%p, slaves=%p, castle_slaves=%p, castle=%p, castle_slaves=%p\n", 
+            kobj, slaves, &castle_slaves, &castle, &castle_slaves);
+    list_for_each(lh, &slaves->slaves)
+        nr_slaves++;
+
+    return sprintf(buf, "Nr slaves: %d\n", nr_slaves);
 }
 
-static ssize_t disks_test_store(const char *buf, size_t count)
+static ssize_t slaves_number_store(struct kobject *kobj, const char *buf, size_t count)
 {
     printk("Got write to disks: %s\n", buf);
     return count;
 }
 
+static ssize_t slave_test_show(struct kobject *kobj, char *buf)
+{
+    return sprintf(buf, "Nothing to see here. Move along\n");
+}
 
-struct castle_static_sysfs_entry {
+static ssize_t slave_test_store(struct kobject *kobj, const char *buf, size_t count)
+{
+    printk("Got write to slave: %s\n", buf);
+    return count;
+}
+
+
+struct castle_sysfs_entry {
     struct attribute attr;
-    ssize_t (*show)(char *buf);
-    ssize_t (*store)(const char *buf, size_t count);
+    ssize_t (*show) (struct kobject *kobj, char *buf);
+    ssize_t (*store)(struct kobject *kobj, const char *buf, size_t count);
 };
 
 
-static ssize_t castle_static_attr_show(struct kobject *kobj,
-                                       struct attribute *attr,
-                                       char *page)
+static ssize_t castle_attr_show(struct kobject *kobj,
+                                struct attribute *attr,
+                                char *page)
 {
-    struct castle_static_sysfs_entry *entry = 
-                container_of(attr, struct castle_static_sysfs_entry, attr);
+    struct castle_sysfs_entry *entry = 
+                container_of(attr, struct castle_sysfs_entry, attr);
 
     if (!entry->show)
         return -EIO;
-    return entry->show(page);
+    
+    return entry->show(kobj, page);
 }
 
-static ssize_t castle_static_attr_store(struct kobject *kobj, 
-                                        struct attribute *attr,
-                                        const char *page, 
-                                        size_t length)
+static ssize_t castle_attr_store(struct kobject *kobj, 
+                                 struct attribute *attr,
+                                 const char *page, 
+                                 size_t length)
 {
-    struct castle_static_sysfs_entry *entry = 
-                container_of(attr, struct castle_static_sysfs_entry, attr);
+    struct castle_sysfs_entry *entry = 
+                container_of(attr, struct castle_sysfs_entry, attr);
 
     if (!entry->store)
         return -EIO;
     if (!capable(CAP_SYS_ADMIN))
         return -EACCES;
-    return entry->store(page, length);
+    return entry->store(kobj, page, length);
 }
 
-static struct sysfs_ops castle_static_sysfs_ops = {
-    .show   = castle_static_attr_show,
-    .store  = castle_static_attr_store,
+static struct sysfs_ops castle_sysfs_ops = {
+    .show   = castle_attr_show,
+    .store  = castle_attr_store,
 };
 
 
 /* Definition of castle root sysfs directory attributes */
-static struct castle_static_sysfs_entry test =
+static struct castle_sysfs_entry test =
 __ATTR(test_attr, S_IRUGO|S_IWUSR, test_show, test_store);
 
-static struct attribute *castle_root_default_attrs[] = {
+static struct attribute *castle_root_attrs[] = {
     &test.attr,
     NULL,
 };
 
 static struct kobj_type castle_root_ktype = {
-    .sysfs_ops      = &castle_static_sysfs_ops,
-    .default_attrs  = castle_root_default_attrs,
+    .sysfs_ops      = &castle_sysfs_ops,
+    .default_attrs  = castle_root_attrs,
 };
 
 /* Definition of volumes sysfs directory attributes */
-static struct castle_static_sysfs_entry volumes_test =
+static struct castle_sysfs_entry volumes_test =
 __ATTR(vols_test_attr, S_IRUGO|S_IWUSR, volumes_test_show, volumes_test_store);
 
-static struct attribute *castle_volumes_default_attrs[] = {
+static struct attribute *castle_volumes_attrs[] = {
     &volumes_test.attr,
     NULL,
 };
 
 static struct kobj_type castle_volumes_ktype = {
-    .sysfs_ops      = &castle_static_sysfs_ops,
-    .default_attrs  = castle_volumes_default_attrs,
+    .sysfs_ops      = &castle_sysfs_ops,
+    .default_attrs  = castle_volumes_attrs,
 };
 
-/* Definition of disk_pool sysfs directory attributes */
-static struct castle_static_sysfs_entry disks_test =
-__ATTR(disks_test_attr, S_IRUGO|S_IWUSR, disks_test_show, disks_test_store);
+/* Definition of slaves sysfs directory attributes */
+static struct castle_sysfs_entry slaves_number =
+__ATTR(number, S_IRUGO|S_IWUSR, slaves_number_show, slaves_number_store);
 
-static struct attribute *castle_disks_default_attrs[] = {
-    &disks_test.attr,
+static struct attribute *castle_slaves_attrs[] = {
+    &slaves_number.attr,
     NULL,
 };
 
-static struct kobj_type castle_disks_ktype = {
-    .sysfs_ops      = &castle_static_sysfs_ops,
-    .default_attrs  = castle_disks_default_attrs,
+static struct kobj_type castle_slaves_ktype = {
+    .sysfs_ops      = &castle_sysfs_ops,
+    .default_attrs  = castle_slaves_attrs,
 };
 
-/* Initialisation of sysfs dirs == kobjs registration */
-int castle_kobjs_init(void)
+/* Definition of each slave sysfs directory attributes */
+static struct castle_sysfs_entry slave_test_attr =
+__ATTR(test_attr, S_IRUGO|S_IWUSR, slave_test_show, slave_test_store);
+
+static struct attribute *castle_slave_attrs[] = {
+    &slave_test_attr.attr,
+    NULL,
+};
+
+static struct kobj_type castle_slave_ktype = {
+    .sysfs_ops      = &castle_sysfs_ops,
+    .default_attrs  = castle_slave_attrs,
+};
+
+int castle_sysfs_slave_add(struct castle_slave *slave)
 {
     int ret;
-    int castle_registered, volumes_registered, disks_registered;
+    static int slave_id = 0;
 
-    castle_registered = volumes_registered = disks_registered = 0;
+    memset(&slave->kobj, 0, sizeof(struct kobject));
+    slave->kobj.parent = &castle_slaves.kobj; 
+    slave->kobj.ktype  = &castle_slave_ktype; 
+    ret = kobject_set_name(&slave->kobj, "slave%d", slave_id++);
+    if(ret < 0) 
+        return ret;
+    ret = kobject_register(&slave->kobj);
+    if(ret < 0)
+        return ret;
+    ret = sysfs_create_link(&slave->kobj, &slave->bdev->bd_disk->kobj, "bdev");
+    if (ret < 0)
+        return ret;
+
+    return 0;
+}
+
+int castle_sysfs_slave_del(struct castle_slave *slave)
+{
+    sysfs_remove_link(&slave->kobj, "bdev");
+    kobject_unregister(&slave->kobj);
+
+    return 0;
+}
+
+/* Initialisation of sysfs dirs == kobjs registration */
+int castle_sysfs_init(void)
+{
+    int ret;
+    int castle_registered, volumes_registered, slaves_registered;
+
+    castle_registered = volumes_registered = slaves_registered = 0;
 
     memset(&castle.kobj, 0, sizeof(struct kobject));
     castle.kobj.parent = &fs_subsys.kobj;
@@ -149,28 +215,28 @@ int castle_kobjs_init(void)
     if(ret < 0) goto error_out;
     volumes_registered = 1;
 
-    memset(&castle_disks.kobj, 0, sizeof(struct kobject));
-    castle_disks.kobj.parent = &castle.kobj;
-    castle_disks.kobj.ktype  = &castle_disks_ktype;
-    ret = kobject_set_name(&castle_disks.kobj, "%s", "disk_pool");
+    memset(&castle_slaves.kobj, 0, sizeof(struct kobject));
+    castle_slaves.kobj.parent = &castle.kobj;
+    castle_slaves.kobj.ktype  = &castle_slaves_ktype;
+    ret = kobject_set_name(&castle_slaves.kobj, "%s", "slaves");
     if(ret < 0) goto error_out;
-    ret = kobject_register(&castle_disks.kobj);
+    ret = kobject_register(&castle_slaves.kobj);
     if(ret < 0) goto error_out;
-    disks_registered = 1;
+    slaves_registered = 1;
 
     return 0;
 
 error_out:
     if(castle_registered)  kobject_unregister(&castle.kobj);
     if(volumes_registered) kobject_unregister(&castle_volumes.kobj);
-    if(disks_registered)   kobject_unregister(&castle_disks.kobj);
+    if(slaves_registered)  kobject_unregister(&castle_slaves.kobj);
 
     return ret;
 }
 
-void castle_kobjs_exit(void)
+void castle_sysfs_exit(void)
 {
-    kobject_unregister(&castle_disks.kobj);
+    kobject_unregister(&castle_slaves.kobj);
     kobject_unregister(&castle_volumes.kobj);
     kobject_unregister(&castle.kobj);
 }
