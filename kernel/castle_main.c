@@ -422,7 +422,7 @@ static int castle_control_ioctl(struct inode *inode, struct file *filp,
             default:
                 BUG();
         }
-        castle_notify(cmd, ret1, ret2, ret3);
+        castle_notify(ioctl.cmd, ret1, ret2, ret3);
         up(&in_ioctl);
     } else
     {
