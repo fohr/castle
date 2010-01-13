@@ -21,17 +21,18 @@ typedef uint64_t snap_id_t;
 typedef struct castle_control_cmd_claim {
     uint32_t dev;               /* IN  */
     int      ret;               /* OUT */
+    uint32_t id;                /* OUT */
 } cctrl_cmd_claim_t;    
 
 typedef struct castle_control_cmd_release {
-    uint32_t dev;              /* IN  */
+    uint32_t id;               /* IN  */
     int      ret;              /* OUT */
 } cctrl_cmd_release_t;    
 
 typedef struct castle_control_cmd_attach {
     snap_id_t snap;            /* IN  */
-    uint32_t  dev;             /* OUT */
     int       ret;             /* OUT */
+    uint32_t  dev;             /* OUT */
 } cctrl_cmd_attach_t;    
 
 typedef struct castle_control_cmd_detach {
@@ -41,16 +42,19 @@ typedef struct castle_control_cmd_detach {
 
 typedef struct castle_control_cmd_create {
     uint64_t  size;            /* IN  */
+    int       ret;             /* OUT */
     snap_id_t id;              /* OUT */
 } cctrl_cmd_create_t;    
 
 typedef struct castle_control_cmd_clone {
     snap_id_t snap;            /* IN  */
+    int       ret;             /* OUT */
     snap_id_t clone;           /* OUT */
 } cctrl_cmd_clone_t;    
 
 typedef struct castle_control_cmd_snapshot {
     uint32_t  dev;             /* IN  */
+    int       ret;             /* OUT */
     snap_id_t snap_id;         /* OUT */
 } cctrl_cmd_snapshot_t;    
 

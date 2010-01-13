@@ -35,12 +35,10 @@ static ssize_t slaves_number_show(struct kobject *kobj, char *buf)
     struct list_head *lh;
     int nr_slaves = 0;
 
-    printk("got kobj=%p, slaves=%p, castle_slaves=%p, castle=%p, castle_slaves=%p\n", 
-            kobj, slaves, &castle_slaves, &castle, &castle_slaves);
     list_for_each(lh, &slaves->slaves)
         nr_slaves++;
 
-    return sprintf(buf, "Nr slaves: %d\n", nr_slaves);
+    return sprintf(buf, "%d\n", nr_slaves);
 }
 
 static ssize_t slaves_number_store(struct kobject *kobj, const char *buf, size_t count)
@@ -49,15 +47,11 @@ static ssize_t slaves_number_store(struct kobject *kobj, const char *buf, size_t
     return count;
 }
 
-static ssize_t slave_test_show(struct kobject *kobj, char *buf)
+static ssize_t slave_uuid_show(struct kobject *kobj, char *buf)
 {
-    return sprintf(buf, "Nothing to see here. Move along\n");
-}
+    struct castle_slave *slave = container_of(kobj, struct castle_slave, kobj); 
 
-static ssize_t slave_test_store(struct kobject *kobj, const char *buf, size_t count)
-{
-    printk("Got write to slave: %s\n", buf);
-    return count;
+    return sprintf(buf, "%d\n", slave->uuid);
 }
 
 
@@ -145,11 +139,11 @@ static struct kobj_type castle_slaves_ktype = {
 };
 
 /* Definition of each slave sysfs directory attributes */
-static struct castle_sysfs_entry slave_test_attr =
-__ATTR(test_attr, S_IRUGO|S_IWUSR, slave_test_show, slave_test_store);
+static struct castle_sysfs_entry slave_uuid =
+__ATTR(uuid, S_IRUGO|S_IWUSR, slave_uuid_show, NULL);
 
 static struct attribute *castle_slave_attrs[] = {
-    &slave_test_attr.attr,
+    &slave_uuid.attr,
     NULL,
 };
 
@@ -161,18 +155,17 @@ static struct kobj_type castle_slave_ktype = {
 int castle_sysfs_slave_add(struct castle_slave *slave)
 {
     int ret;
-    static int slave_id = 0;
 
     memset(&slave->kobj, 0, sizeof(struct kobject));
     slave->kobj.parent = &castle_slaves.kobj; 
     slave->kobj.ktype  = &castle_slave_ktype; 
-    ret = kobject_set_name(&slave->kobj, "slave%d", slave_id++);
+    ret = kobject_set_name(&slave->kobj, "slave%d", slave->id);
     if(ret < 0) 
         return ret;
     ret = kobject_register(&slave->kobj);
     if(ret < 0)
         return ret;
-    ret = sysfs_create_link(&slave->kobj, &slave->bdev->bd_disk->kobj, "bdev");
+    ret = sysfs_create_link(&slave->kobj, &slave->bdev->bd_disk->kobj, "dev");
     if (ret < 0)
         return ret;
 
@@ -181,7 +174,7 @@ int castle_sysfs_slave_add(struct castle_slave *slave)
 
 int castle_sysfs_slave_del(struct castle_slave *slave)
 {
-    sysfs_remove_link(&slave->kobj, "bdev");
+    sysfs_remove_link(&slave->kobj, "dev");
     kobject_unregister(&slave->kobj);
 
     return 0;

@@ -10,6 +10,8 @@ struct castle_volumes {
 };
 
 struct castle_slave {
+    uint32_t             id;
+    uint32_t             uuid;
     struct kobject       kobj;
     struct list_head     list;
     struct block_device *bdev;
