@@ -51,5 +51,5 @@ if [ $CMD == 3 ]; then
 	/sbin/losetup $LOOP ${CASTLE_MOUNT_POINT}/devices/dev-$MAJ-$MIN
     MAJMIN=$(( ($MIN & 0xFF) | ( ($MIN & 0xFFF00) << 12 ) | ($MAJ << 8) ))
     #echo "Attached loop MAJMIN: `printf "%X" ${MAJMIN}`" > /dev/console
-	/usr/sbin/castle-ctl "ret" "`printf "%X" ${MAJMIN}`"
+	/usr/sbin/castle-ctl "ret" "`printf "0x%X" ${MAJMIN}`"
 fi
