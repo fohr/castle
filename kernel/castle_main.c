@@ -80,6 +80,8 @@ static void castle_release(struct castle_slave *cs)
     castle_sysfs_slave_del(cs);
     bd_release(cs->bdev);
     blkdev_put(cs->bdev);
+    list_del(&cs->list);
+    kfree(cs);
 }
 
 
@@ -261,6 +263,16 @@ static int castle_slaves_init(void)
     return 0;
 }
 
+static void castle_device_free(struct castle_device *cd)
+{
+    bd_release(cd->bdev);
+    blkdev_put(cd->bdev);
+    del_gendisk(cd->gd);
+    put_disk(cd->gd);
+    list_del(&cd->list);
+    kfree(cd);
+}
+
 static void castle_devices_free(void)                                                                 
 {                                                                                        
     struct list_head *lh, *th;
@@ -269,12 +281,7 @@ static void castle_devices_free(void)
     list_for_each_safe(lh, th, &castle_devices.devices)
     {
         dev = list_entry(lh, struct castle_device, list); 
-        bd_release(dev->bdev);
-        blkdev_put(dev->bdev);
-        del_gendisk(dev->gd);
-        put_disk(dev->gd);
-        list_del(&dev->list);
-        kfree(dev);
+        castle_device_free(dev);
     }
 
     if (castle_devices.major)
@@ -290,7 +297,6 @@ static void castle_slaves_free(void)
     {
         slave = list_entry(lh, struct castle_slave, list); 
         castle_release(slave);
-        kfree(slave);
     }
 }
 static int castle_control_ioctl(struct inode *inode, struct file *filp,
@@ -330,8 +336,33 @@ static int castle_control_ioctl(struct inode *inode, struct file *filp,
             main_arg = ioctl.attach.snap;
             break;
         case CASTLE_CTRL_CMD_DETACH:
-            main_arg = ioctl.detach.dev;
+        {
+            struct list_head *lh, *ls;
+            dev_t dev = new_decode_dev(ioctl.detach.dev);
+
+            
+            list_for_each_safe(lh, ls, &castle_devices.devices)
+            {
+                dev_t cd_dev;
+                struct castle_device *cd;
+
+                cd     = list_entry(lh, struct castle_device, list);
+                cd_dev = MKDEV(cd->gd->major, cd->gd->first_minor);
+
+                if(cd_dev == dev)
+                {
+                    dev = MKDEV(cd->bdev->bd_disk->major, 
+                                cd->bdev->bd_disk->first_minor);
+                    castle_device_free(cd);
+                    goto cd_found;
+                }
+            }
+            /* XXX: Could not find the device, fail for now */
+            BUG();
+cd_found:
+            main_arg = new_encode_dev(dev);
             break;
+        }
         case CASTLE_CTRL_CMD_CREATE:
             main_arg = ioctl.create.size;
             break;
@@ -392,10 +423,11 @@ static int castle_control_ioctl(struct inode *inode, struct file *filp,
 
                 slave = castle_claim(ioctl.claim.dev);
                 slave->uuid = (uint32_t)ioctl_ret.ret.ret_val;
-                ioctl.claim.ret = (int)ioctl_ret.ret.ret_val;
+                ioctl.claim.ret = (ioctl_ret.ret.ret_val != 0 ? 0 : -EINVAL);
+                ioctl.claim.id = (uint32_t)ioctl_ret.ret.ret_val;
                 /* event: return_code, disk_id */
-                ret1 = 0;
-                ret2 = ioctl.claim.ret;
+                ret1 = ioctl.claim.ret;
+                ret2 = ioctl.claim.id;
                 break;
             }
             case CASTLE_CTRL_CMD_RELEASE:
@@ -403,18 +435,13 @@ static int castle_control_ioctl(struct inode *inode, struct file *filp,
                 struct castle_slave *slave =
                     castle_slave_find_by_id(ioctl.release.id);
                 uint32_t id;
-                uint32_t dev_id;
 
                 BUG_ON(slave == NULL);
                 id = slave->id;
-                dev_id = new_encode_dev(
-                        MKDEV(slave->bdev->bd_disk->major, 
-                              slave->bdev->bd_disk->first_minor));
                 castle_release(slave);
                 ioctl.release.ret = (int)ioctl_ret.ret.ret_val;
                 ret1 = ioctl.release.ret;
-                ret2 = slave->id;
-                ret3 = dev_id; 
+                ret2 = id;
                 break;
             }
             case CASTLE_CTRL_CMD_ATTACH:
@@ -465,6 +492,7 @@ static int castle_control_ioctl(struct inode *inode, struct file *filp,
                 ioctl.snapshot.snap_id = (snap_id_t)ioctl_ret.ret.ret_val;
                 ret1 = ioctl.snapshot.ret;
                 ret2 = ioctl.snapshot.snap_id;
+                ret3 = ioctl.snapshot.dev;
                 break;
             case CASTLE_CTRL_CMD_INIT:
                 ioctl.init.ret = (int)ioctl_ret.ret.ret_val;
