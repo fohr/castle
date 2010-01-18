@@ -1,4 +1,2 @@
 KERNEL=="castle-control", NAME="castle/control"
 KERNEL=="castle[0-9]*", NAME="castle/%k"
-SUBSYSTEM=="fs", ACTION=="change", DEVPATH=="/fs/castle", ENV{NOTIFY}=="false", RUN+="/etc/castle/udev-watch $env{CMD} $env{ARG}"
-SUBSYSTEM=="fs", ACTION=="change", DEVPATH=="/fs/castle", ENV{NOTIFY}=="true", RUN+="/etc/castle/event $env{CMD} $env{ARG1} $env{ARG2} $env{ARG3}"
