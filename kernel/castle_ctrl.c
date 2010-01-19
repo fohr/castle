@@ -1,6 +1,7 @@
 #include <linux/module.h>
 #include <linux/fs.h>
 #include <linux/genhd.h>
+#include <linux/miscdevice.h>
 #include <asm/uaccess.h>
 
 #include "castle_public.h"
@@ -41,7 +42,7 @@ static void castle_control_snapshot(cctrl_cmd_snapshot_t *ioctl)
     printk("==> Snapshot\n");
 }
  
-static void castle_control_init(cctrl_cmd_init_t *ioctl)
+static void castle_control_fs_init(cctrl_cmd_init_t *ioctl)
 {
     printk("==> Init\n");
 }
@@ -87,7 +88,7 @@ int castle_control_ioctl(struct inode *inode, struct file *filp,
             castle_control_snapshot(&ioctl.snapshot);
             break;
         case CASTLE_CTRL_CMD_INIT:
-            castle_control_init(&ioctl.init);
+            castle_control_fs_init(&ioctl.init);
             break;
 
         default:
@@ -101,4 +102,32 @@ int castle_control_ioctl(struct inode *inode, struct file *filp,
     return 0;
 }
 
+static struct file_operations castle_control_fops = {
+    .owner   = THIS_MODULE,
+    .ioctl   = castle_control_ioctl,
+};
 
+
+static struct miscdevice castle_control = {
+    .minor   = MISC_DYNAMIC_MINOR,
+    .name    = "castle-fs-control",
+    .fops    = &castle_control_fops,
+};
+
+int castle_control_init(void)
+{
+    int ret;
+    
+    if((ret = misc_register(&castle_control)))
+        printk("Castle control device could not be registered (%d).", ret);
+
+    return ret;
+}
+
+void castle_control_fini(void)
+{
+    int ret;
+
+    if((ret = misc_deregister(&castle_control))) 
+        printk("Could not unregister castle control node (%d).\n", ret);
+}

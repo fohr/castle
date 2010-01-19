@@ -2,7 +2,6 @@
 #include <linux/bio.h>
 #include <linux/kobject.h>
 #include <linux/device-mapper.h>
-#include <linux/miscdevice.h>
 #include <linux/blkdev.h>
 #include <asm/semaphore.h>
 
@@ -191,57 +190,12 @@ error_out:
     return NULL;    
 }
 
-static int castle_devices_init(void)
-{
-    int major;
-
-    memset(&castle_devices, 0, sizeof(struct castle_devices));
-    INIT_LIST_HEAD(&castle_devices.devices);
-    /* Dynamically allocate a major for this device */
-    major = register_blkdev(0, "castle");
-    if (major < 0) 
-    {
-        printk("Couldn't register castle device\n");
-        return -ENOMEM;
-    }
-
-    castle_devices.major = major;
-    printk("blktap device major %d\n", major);
-
-    return 0;
-}
-
 static int castle_slaves_init(void)
 {
     memset(&castle_slaves, 0, sizeof(struct castle_slaves));
     INIT_LIST_HEAD(&castle_slaves.slaves);
 
     return 0;
-}
-
-void castle_device_free(struct castle_device *cd)
-{
-    bd_release(cd->bdev);
-    blkdev_put(cd->bdev);
-    del_gendisk(cd->gd);
-    put_disk(cd->gd);
-    list_del(&cd->list);
-    kfree(cd);
-}
-
-static void castle_devices_free(void)                                                                 
-{                                                                                        
-    struct list_head *lh, *th;
-    struct castle_device *dev;
-
-    list_for_each_safe(lh, th, &castle_devices.devices)
-    {
-        dev = list_entry(lh, struct castle_device, list); 
-        castle_device_free(dev);
-    }
-
-    if (castle_devices.major)
-        unregister_blkdev(castle_devices.major, "castle");
 }
 
 static void castle_slaves_free(void)                                                                 
@@ -256,68 +210,87 @@ static void castle_slaves_free(void)
     }
 }
 
-static struct file_operations castle_control_fops = {
-    .owner   = THIS_MODULE,
-    .ioctl   = castle_control_ioctl,
-};
+void castle_device_free(struct castle_device *cd)
+{
+    bd_release(cd->bdev);
+    blkdev_put(cd->bdev);
+    del_gendisk(cd->gd);
+    put_disk(cd->gd);
+    list_del(&cd->list);
+    kfree(cd);
+}
 
+static int castle_devices_init(void)
+{
+    int major;
 
-static struct miscdevice castle_control = {
-    .minor   = MISC_DYNAMIC_MINOR,
-    .name    = "castle-fs-control",
-    .fops    = &castle_control_fops,
-};
+    memset(&castle_devices, 0, sizeof(struct castle_devices));
+    INIT_LIST_HEAD(&castle_devices.devices);
+    /* Allocate a major for this device */
+    if((major = register_blkdev(0, "castle-fs")) < 0) 
+    {
+        printk("Couldn't register castle device\n");
+        return -ENOMEM;
+    }
+    castle_devices.major = major;
 
+    return 0;
+}
+
+static void castle_devices_free(void)                                                                 
+{                                                                                        
+    struct list_head *lh, *th;
+    struct castle_device *dev;
+
+    list_for_each_safe(lh, th, &castle_devices.devices)
+    {
+        dev = list_entry(lh, struct castle_device, list); 
+        castle_device_free(dev);
+    }
+
+    if (castle_devices.major)
+        unregister_blkdev(castle_devices.major, "castle-fs");
+}
 
 static int __init castle_init(void)
 {
     int ret;
 
-    /* XXX: Handle failures properly! */
-    printk("Castle init\n");
+    printk("Castle FS init ... ");
 
-    ret = castle_devices_init();
-    if(ret < 0)
-    {
-        printk("Could not initialise castle device\n");
-        return ret;
-    }
+    if((ret = castle_devices_init())) goto err_out1;
+    if((ret = castle_slaves_init()))  goto err_out2;
+    if((ret = castle_control_init())) goto err_out3;
+    if((ret = castle_sysfs_init()))   goto err_out4;
 
-    ret = castle_slaves_init();
-    if(ret < 0)
-    {
-        printk("Could not initialise castle slaves\n");
-        return ret;
-    }
-
-    ret = misc_register(&castle_control);
-    if (ret)
-    {
-        printk("Castle control node could not be register.\n");
-        return ret;
-    }
-
-    ret = castle_sysfs_init();
-    if(ret < 0)
-    {
-        printk("Could not register sysfs\n");
-        return ret;
-    }
-
+    printk("OK.\n");
 
     return 0;
+
+    /* Unreachable */
+    castle_sysfs_fini();
+err_out4:
+    castle_control_fini();
+err_out3:
+    castle_slaves_free();
+err_out2:
+    castle_devices_free();
+err_out1:
+
+    return ret;
 }
 
 
 static void __exit castle_exit(void)
 {
-    castle_sysfs_exit();
+    printk("Castle FS exit ... ");
+
+    castle_sysfs_fini();
+    castle_control_fini();
     castle_slaves_free();
     castle_devices_free();
 
-    if (misc_deregister(&castle_control) < 0)
-        printk("Could not unregister castle control node.\n");
-
+    printk("done.");
 }
 
 module_init(castle_init);

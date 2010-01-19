@@ -192,12 +192,11 @@ int castle_sysfs_init(void)
     castle.kobj.parent = &fs_subsys.kobj;
     castle.kobj.kset   = &fs_subsys;
     castle.kobj.ktype  = &castle_root_ktype;
-    ret = kobject_set_name(&castle.kobj, "%s", "castle");
+    ret = kobject_set_name(&castle.kobj, "%s", "castle-fs");
     if(ret < 0) goto error_out;
     ret = kobject_register(&castle.kobj);
     if(ret < 0) goto error_out;
     castle_registered = 1;
-    kobject_uevent(&castle.kobj, KOBJ_ADD);
 
     memset(&castle_volumes.kobj, 0, sizeof(struct kobject));
     castle_volumes.kobj.parent = &castle.kobj;
@@ -227,7 +226,7 @@ error_out:
     return ret;
 }
 
-void castle_sysfs_exit(void)
+void castle_sysfs_fini(void)
 {
     kobject_unregister(&castle_slaves.kobj);
     kobject_unregister(&castle_volumes.kobj);
