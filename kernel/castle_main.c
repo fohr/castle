@@ -290,7 +290,7 @@ static void __exit castle_exit(void)
     castle_slaves_free();
     castle_devices_free();
 
-    printk("done.");
+    printk("done.\n");
 }
 
 module_init(castle_init);

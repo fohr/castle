@@ -15,8 +15,6 @@ typedef uint64_t snap_id_t;
 #define CASTLE_CTRL_CMD_CLONE          6     /* Writable vol from snapshot */
 #define CASTLE_CTRL_CMD_SNAPSHOT       7     /* Snapshot /dev file         */
 #define CASTLE_CTRL_CMD_INIT           8     /* Init the file sytem        */
-
-#define CASTLE_CTRL_CMD_RET          117     /* TEMPORARY       */
                                        
 typedef struct castle_control_cmd_claim {
     uint32_t dev;               /* IN  */
