@@ -8,7 +8,7 @@ set -eu
 
 function umount_fs {
     if [ `lsmod | grep "castle_fs " | wc -l` != 0 ]; then 
-        rmmod castle
+        rmmod castle_fs
     fi
     # Delete the disk loop files
     for LOOP in `losetup -a | grep "${DISKS}" | cut -d":" -f1`; do

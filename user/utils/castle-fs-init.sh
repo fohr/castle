@@ -15,7 +15,7 @@ function onexit() {
 	local exit_status=${1:-$?}
     if [ $exit_status != 0 ]; then
         echo "Failed to initialise $exit_status!!!!"
-        ./castle-fini.sh
+        ./castle-fs-fini.sh
     fi
     exit $exit_status
 }
@@ -93,7 +93,7 @@ function check_contents_file {
 function do_control_internal {
     echo ""
 	echo "Command: $1 0x$2"
-	IOCTL_RET=`castle-ctl $1 0x$2 | grep "Ret val:"` 
+	IOCTL_RET=`castle-fs-cli $1 0x$2 | grep "Ret val:"` 
 	IOCTL_RET=`echo $IOCTL_RET | sed -e "s/Ret val: 0x\([0-9a-f]*\)./\1/g"`
 }
 
@@ -149,11 +149,13 @@ function initdisks {
     echo "Disks will be kept in ${TEST}"
     echo "Creating empty disk(s)..."
 
+	mkdir -p ${TEST}
 	for DISK in ${DISKS}; do
-		echo "Making empty ${DISK_SIZE} MB file ${TEST}/${DISK}"
-		rm -f ${TEST}/${DISK}
-		# make spase files with seek=...
-    	dd if=/dev/zero of=${TEST}/${DISK} bs=1M count=1 seek=${DISK_SIZE} 2>/dev/null 
+		if [ ! -f ${TEST}/${DISK} ]; then
+			echo "Making empty ${DISK_SIZE} MB file ${TEST}/${DISK}"
+			# make spase files with seek=...
+			dd if=/dev/zero of=${TEST}/${DISK} bs=1M count=1 seek=${DISK_SIZE} 2>/dev/null 
+		fi
 	done
 }
 
@@ -169,7 +171,7 @@ function initfs {
 	do_control_init
 }
 
-./castle-fini.sh
+./castle-fs-fini.sh
 initdisks
 initfs
 
