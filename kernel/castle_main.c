@@ -31,7 +31,16 @@ static void castle_superblock_print(struct castle_slave_superblock *cs_sb)
            cs_sb->size);
 }
 
-static int castle_supreblock_read(struct castle_slave *cs) 
+static int castle_superblock_validate(struct castle_slave_superblock *cs_sb)
+{
+    if(cs_sb->magic1 != 0x02061985) return -1;
+    if(cs_sb->magic2 != 0x16071983) return -2;
+    if(cs_sb->magic3 != 0x16061981) return -3;
+
+    return 0;
+}
+
+static int castle_superblock_read(struct castle_slave *cs) 
 {
     struct castle_slave_superblock *cs_sb = &cs->cs_sb;
     struct page *page = NULL;
@@ -46,14 +55,18 @@ static int castle_supreblock_read(struct castle_slave *cs)
         printk("Failed to read superblock.\n");
         goto err_out;
     }
-    printk("Read superblock.\n");
 
     memcpy(cs_sb, 
            pfn_to_kaddr(page_to_pfn(page)), 
            sizeof(struct castle_slave_superblock));
     __free_page(page);
     
-    castle_superblock_print(cs_sb);
+    err = castle_superblock_validate(cs_sb);
+    if(err)
+    {
+        printk("Invalid superblock.\n");
+        return err;
+    }
 
     return 0;
 
@@ -107,7 +120,7 @@ struct castle_slave* castle_claim(uint32_t new_dev)
     }
     cs->bdev = bdev;
 
-    err = castle_supreblock_read(cs); 
+    err = castle_superblock_read(cs); 
     if(err)
     {
         printk("Invalid superblock. Not initialised(?)\n");
