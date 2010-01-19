@@ -51,7 +51,7 @@ static ssize_t slave_uuid_show(struct kobject *kobj, char *buf)
 {
     struct castle_slave *slave = container_of(kobj, struct castle_slave, kobj); 
 
-    return sprintf(buf, "%d\n", slave->uuid);
+    return sprintf(buf, "%d\n", slave->cs_sb.uuid);
 }
 
 

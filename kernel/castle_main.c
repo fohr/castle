@@ -6,6 +6,7 @@
 #include <asm/semaphore.h>
 
 #include "castle.h"
+#include "castle_block.h"
 #include "castle_ctrl.h"
 #include "castle_sysfs.h"
 
@@ -14,6 +15,52 @@ struct castle_volumes castle_volumes;
 struct castle_slaves  castle_slaves;
 struct castle_devices castle_devices;
 
+static void castle_superblock_print(struct castle_slave_superblock *cs_sb)
+{
+    printk("Magic1: %.8x\n"
+           "Magic2: %.8x\n"
+           "Magic3: %.8x\n"
+           "Uuid:   %x\n"
+           "Free:   %x\n"
+           "Size:   %x\n",
+           cs_sb->magic1,
+           cs_sb->magic2,
+           cs_sb->magic3,
+           cs_sb->uuid,
+           cs_sb->free,
+           cs_sb->size);
+}
+
+static int castle_supreblock_read(struct castle_slave *cs) 
+{
+    struct castle_slave_superblock *cs_sb = &cs->cs_sb;
+    struct page *page = NULL;
+    int err;
+    
+    if(!(page = alloc_page(GFP_KERNEL)))
+        goto err_out; 
+    /* Try to read superblock */
+    err = castle_block_read(cs, 0, page);
+    if(err) 
+    {
+        printk("Failed to read superblock.\n");
+        goto err_out;
+    }
+    printk("Read superblock.\n");
+
+    memcpy(cs_sb, 
+           pfn_to_kaddr(page_to_pfn(page)), 
+           sizeof(struct castle_slave_superblock));
+    __free_page(page);
+    
+    castle_superblock_print(cs_sb);
+
+    return 0;
+
+err_out:
+    if(page) __free_page(page);
+    return -1;
+}
 
 struct castle_slave* castle_slave_find_by_id(uint32_t id)
 {
@@ -34,35 +81,46 @@ struct castle_slave* castle_claim(uint32_t new_dev)
 {
     dev_t dev;
     struct block_device *bdev;
+    int bdev_claimed = 0;
     int err;
     char b[BDEVNAME_SIZE];
-    struct castle_slave *cs;
+    struct castle_slave *cs = NULL;
     static int slave_id = 0;
 
-    cs = kmalloc(sizeof(struct castle_slave), GFP_KERNEL); 
-    if(!cs)
-        return NULL;
+    if(!(cs = kmalloc(sizeof(struct castle_slave), GFP_KERNEL)))
+        goto err_out;
     cs->id = slave_id++;
 
     dev = new_decode_dev(new_dev);
     bdev = open_by_devnum(dev, FMODE_READ|FMODE_WRITE);
-    if (IS_ERR(bdev)) {
+    if (IS_ERR(bdev)) 
+    {
         printk("Could not open %s.\n", __bdevname(dev, b));
         goto err_out;
     }
     err = bd_claim(bdev, &castle);
-    if (err) {
+    bdev_claimed = 1;
+    if (err) 
+    {
         printk("Could not bd_claim %s.\n", bdevname(bdev, b));
-        blkdev_put(bdev);
         goto err_out;
     }
     cs->bdev = bdev;
+
+    err = castle_supreblock_read(cs); 
+    if(err)
+    {
+        printk("Invalid superblock. Not initialised(?)\n");
+        goto err_out;
+    }
+
     list_add(&cs->list, &castle_slaves.slaves);
     castle_sysfs_slave_add(cs);
 
     return cs;
 err_out:
-    kfree(cs);
+    if(bdev_claimed) blkdev_put(bdev);
+    if(cs) kfree(cs);
     return NULL;    
 }
 

@@ -39,7 +39,7 @@ struct ctrl_cmd
         .get_ret = __##_name##_get_ret,                                 \
     }                                                                   \
 
-CTRL_CMD(CASTLE_CTRL_CMD_CLAIM,    claim,    uint32_t, claim.dev,    claim.ret);
+CTRL_CMD(CASTLE_CTRL_CMD_CLAIM,    claim,    uint32_t, claim.dev,    claim.id);
 CTRL_CMD(CASTLE_CTRL_CMD_RELEASE,  release,  uint32_t, release.id,   release.ret);
 CTRL_CMD(CASTLE_CTRL_CMD_ATTACH,   attach,   uint64_t, attach.snap,  attach.dev);
 CTRL_CMD(CASTLE_CTRL_CMD_DETACH,   detach,   uint32_t, detach.dev,   detach.ret);

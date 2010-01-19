@@ -95,6 +95,7 @@ function do_control_internal {
 	echo "Command: $1 0x$2"
 	IOCTL_RET=`castle-fs-cli $1 0x$2 | grep "Ret val:"` 
 	IOCTL_RET=`echo $IOCTL_RET | sed -e "s/Ret val: 0x\([0-9a-f]*\)./\1/g"`
+	echo "    ret: $IOCTL_RET"
 }
 
 function do_control_claim {

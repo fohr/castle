@@ -14,7 +14,7 @@ EXTRA_CFLAGS += -I..
 TARGET = castle-fs
 
 obj-m          := $(TARGET).o
-$(TARGET)-objs := castle_main.o castle_ctrl.o castle_sysfs.o
+$(TARGET)-objs := castle_main.o castle_block.o castle_ctrl.o castle_sysfs.o
 
 KVER       ?= 2.6.24
 KERNEL_DIR ?= /lib/modules/$(KVER)/build

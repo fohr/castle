@@ -9,7 +9,18 @@
 
 static void castle_control_claim(cctrl_cmd_claim_t *ioctl)
 {
-    printk("==> Claim.\n");
+    struct castle_slave *cs;
+
+    if((cs = castle_claim(ioctl->dev)))
+    {
+        ioctl->id  = cs->id;
+        ioctl->ret = 0;
+    }
+    else
+    {
+        ioctl->id  = (uint32_t)-1;
+        ioctl->ret = -EINVAL;
+    }
 }
 
 static void castle_control_release(cctrl_cmd_release_t *ioctl)
