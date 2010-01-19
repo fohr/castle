@@ -12,7 +12,7 @@
 
 #include "castle_public.h"
 
-#define NODE    "/dev/castle/control"
+#define NODE    "/dev/castle-fs/control"
 
 struct ctrl_cmd
 {
@@ -47,7 +47,6 @@ CTRL_CMD(CASTLE_CTRL_CMD_CREATE,   create,   uint64_t, create.size,  create.id);
 CTRL_CMD(CASTLE_CTRL_CMD_CLONE,    clone,    uint64_t, clone.snap,   clone.clone);
 CTRL_CMD(CASTLE_CTRL_CMD_SNAPSHOT, snapshot, uint32_t, snapshot.dev, snapshot.snap_id);
 CTRL_CMD(CASTLE_CTRL_CMD_INIT,     init,     uint32_t, claim.dev,    init.ret);    // No arg really 
-CTRL_CMD(CASTLE_CTRL_CMD_RET,      ret,      uint64_t, ret.ret_val,  ret.ret_val); // No ret really
 
 static struct ctrl_cmd *ctrl_cmds[] = 
 {
@@ -59,7 +58,6 @@ static struct ctrl_cmd *ctrl_cmds[] =
     &clone_ctrl_cmd,
     &snapshot_ctrl_cmd,
     &init_ctrl_cmd,
-    &ret_ctrl_cmd,
     NULL,
 };
 
@@ -73,7 +71,7 @@ int main(int argc, char* argv[])
 
     if(argc != 3)
     {
-        printf("usage: castle-ctl <cmd-string> <hex-arg>\n");
+        printf("usage: castle-cli <cmd-string> <hex-arg>\n");
         exit(1);
     }
     cmd = argv[1];

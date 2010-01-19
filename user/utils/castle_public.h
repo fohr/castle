@@ -63,13 +63,6 @@ typedef struct castle_control_cmd_init {
 } cctrl_cmd_init_t;    
 
 
-
-
-typedef struct castle_control_cmd_ret {
-    uint64_t   ret_val;
-} cctrl_cmd_ret_t;    
-
-
 typedef struct castle_control_ioctl {
     uint16_t cmd;
     union {
@@ -81,8 +74,6 @@ typedef struct castle_control_ioctl {
         cctrl_cmd_clone_t     clone;    
         cctrl_cmd_snapshot_t  snapshot;    
         cctrl_cmd_init_t      init;    
-
-        cctrl_cmd_ret_t       ret;    
     };
 } cctrl_ioctl_t;
 
