@@ -1,0 +1,2 @@
+KERNEL=="castle-fs-control", NAME="castle-fs/control"
+KERNEL=="castle-fs-[0-9]*", NAME="castle-fs/%k"

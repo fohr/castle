@@ -20,6 +20,7 @@ KVER       ?= 2.6.24
 KERNEL_DIR ?= /lib/modules/$(KVER)/build
 PWD        := $(shell pwd)
 
+.PHONY: $(TARGET).ko
 $(TARGET).ko:
 	$(MAKE) -C $(KERNEL_DIR) M=$(PWD) modules
 

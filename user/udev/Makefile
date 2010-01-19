@@ -1,4 +1,4 @@
-UDEV_RULES = castle.rules
+UDEV_RULES = castle-fs.rules
 
 .PHONY: all
 all:

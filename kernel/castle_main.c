@@ -163,7 +163,7 @@ struct castle_device* castle_dev_mirror(dev_t base_dev)
     if(!gd)
         goto error_out;
 
-    sprintf(gd->disk_name, "castle%d", minor);
+    sprintf(gd->disk_name, "castle-fs-%d", minor);
     gd->major        = castle_devices.major;
     gd->first_minor  = minor++;
 	gd->fops         = &castle_bd_ops;
@@ -264,7 +264,7 @@ static struct file_operations castle_control_fops = {
 
 static struct miscdevice castle_control = {
     .minor   = MISC_DYNAMIC_MINOR,
-    .name    = "castle-control",
+    .name    = "castle-fs-control",
     .fops    = &castle_control_fops,
 };
 
@@ -324,3 +324,4 @@ module_init(castle_init);
 module_exit(castle_exit);
 
 MODULE_LICENSE("GPL");
+

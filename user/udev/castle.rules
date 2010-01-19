@@ -1,2 +1,0 @@
-KERNEL=="castle-control", NAME="castle/control"
-KERNEL=="castle[0-9]*", NAME="castle/%k"
