@@ -11,6 +11,21 @@ struct castle_slave_superblock {
     uint32_t size; /* In blocks */
 };
 
+struct castle_fs_superblock {
+    uint32_t magic1;
+    uint32_t magic2;
+    uint32_t magic3;
+    uint32_t salt;
+    uint32_t peper;
+    uint32_t fwd_tree_disk1;
+    uint32_t fwd_tree_block1;
+    uint32_t fwd_tree_disk2;
+    uint32_t fwd_tree_block2;
+    uint32_t rev_tree_disk1;
+    uint32_t rev_tree_block1;
+    uint32_t rev_tree_disk2;
+    uint32_t rev_tree_block2;
+};
 
 /* First class structures */
 struct castle {

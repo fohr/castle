@@ -15,7 +15,83 @@ struct castle_volumes castle_volumes;
 struct castle_slaves  castle_slaves;
 struct castle_devices castle_devices;
 
-static void castle_superblock_print(struct castle_slave_superblock *cs_sb)
+
+static void castle_fs_superblock_print(struct castle_fs_superblock *fs_sb)
+{
+    printk("Magic1: %.8x\n"
+           "Magic2: %.8x\n"
+           "Magic3: %.8x\n"
+           "Salt:   %x\n"
+           "Pepper: %x\n"
+           "F_t_d1: %x\n"
+           "F_t_b1: %x\n"
+           "F_t_d2: %x\n"
+           "F_t_b2: %x\n"
+           "R_t_d1: %x\n"
+           "R_t_b1: %x\n"
+           "R_t_d2: %x\n"
+           "R_t_b2: %x\n",
+           fs_sb->magic1,
+           fs_sb->magic2,
+           fs_sb->magic3,
+           fs_sb->salt,
+           fs_sb->peper,
+           fs_sb->fwd_tree_disk1,
+           fs_sb->fwd_tree_block1,
+           fs_sb->fwd_tree_disk2,
+           fs_sb->fwd_tree_block2,
+           fs_sb->rev_tree_disk1,
+           fs_sb->rev_tree_block1,
+           fs_sb->rev_tree_disk2,
+           fs_sb->rev_tree_block2);
+}
+
+static int castle_fs_superblock_validate(struct castle_fs_superblock *fs_sb)
+{
+    if(fs_sb->magic1 != 0x19731121) return -1;
+    if(fs_sb->magic2 != 0x19880624) return -2;
+    if(fs_sb->magic3 != 0x19821120) return -3;
+
+    return 0;
+}
+
+static int castle_fs_superblock_read(struct castle_slave *cs) 
+{
+    struct castle_fs_superblock fs_sb;
+    struct page *page = NULL;
+    int err;
+    
+    if(!(page = alloc_page(GFP_KERNEL)))
+        goto err_out; 
+    /* Try to read superblock */
+    err = castle_block_read(cs, 1, page);
+    if(err) 
+    {
+        printk("Failed to read fs superblock.\n");
+        goto err_out;
+    }
+
+    memcpy(&fs_sb, 
+           pfn_to_kaddr(page_to_pfn(page)), 
+           sizeof(struct castle_fs_superblock));
+    __free_page(page);
+    
+    castle_fs_superblock_print(&fs_sb);
+    err = castle_fs_superblock_validate(&fs_sb);
+    if(err)
+    {
+        printk("Invalid superblock.\n");
+        return err;
+    }
+
+    return 0;
+
+err_out:
+    if(page) __free_page(page);
+    return -1;
+}
+
+static void castle_slave_superblock_print(struct castle_slave_superblock *cs_sb)
 {
     printk("Magic1: %.8x\n"
            "Magic2: %.8x\n"
@@ -31,7 +107,7 @@ static void castle_superblock_print(struct castle_slave_superblock *cs_sb)
            cs_sb->size);
 }
 
-static int castle_superblock_validate(struct castle_slave_superblock *cs_sb)
+static int castle_slave_superblock_validate(struct castle_slave_superblock *cs_sb)
 {
     if(cs_sb->magic1 != 0x02061985) return -1;
     if(cs_sb->magic2 != 0x16071983) return -2;
@@ -40,7 +116,7 @@ static int castle_superblock_validate(struct castle_slave_superblock *cs_sb)
     return 0;
 }
 
-static int castle_superblock_read(struct castle_slave *cs) 
+static int castle_slave_superblock_read(struct castle_slave *cs) 
 {
     struct castle_slave_superblock *cs_sb = &cs->cs_sb;
     struct page *page = NULL;
@@ -61,12 +137,14 @@ static int castle_superblock_read(struct castle_slave *cs)
            sizeof(struct castle_slave_superblock));
     __free_page(page);
     
-    err = castle_superblock_validate(cs_sb);
+    err = castle_slave_superblock_validate(cs_sb);
     if(err)
     {
         printk("Invalid superblock.\n");
         return err;
     }
+    
+    castle_fs_superblock_read(cs);
 
     return 0;
 
@@ -120,7 +198,7 @@ struct castle_slave* castle_claim(uint32_t new_dev)
     }
     cs->bdev = bdev;
 
-    err = castle_superblock_read(cs); 
+    err = castle_slave_superblock_read(cs); 
     if(err)
     {
         printk("Invalid superblock. Not initialised(?)\n");
