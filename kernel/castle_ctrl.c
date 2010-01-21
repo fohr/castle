@@ -26,31 +26,41 @@ static void castle_control_claim(cctrl_cmd_claim_t *ioctl)
 static void castle_control_release(cctrl_cmd_release_t *ioctl)
 {
     printk("==> Release NOT IMPLEMENTED YET\n");
+    ioctl->ret = -ENOSYS;
 }
 
 static void castle_control_attach(cctrl_cmd_attach_t *ioctl)
 {
     printk("==> Attach NOT IMPLEMENTED YET\n");
+    ioctl->dev = 0;
+    ioctl->ret = -ENOSYS;
 }
 
 static void castle_control_detach(cctrl_cmd_detach_t *ioctl)
 {
     printk("==> Detach NOT IMPLEMENTED YET\n");
+    ioctl->ret = -ENOSYS;
 }
 
 static void castle_control_create(cctrl_cmd_create_t *ioctl)
 {
     printk("==> Create NOT IMPLEMENTED YET\n");
+    ioctl->id = -1;
+    ioctl->ret = -ENOSYS;
 }
 
 static void castle_control_clone(cctrl_cmd_clone_t *ioctl)
 {
     printk("==> Clone NOT IMPLEMENTED YET\n");
+    ioctl->clone = 0;
+    ioctl->ret = -ENOSYS;
 }
 
 static void castle_control_snapshot(cctrl_cmd_snapshot_t *ioctl)
 {
     printk("==> Snapshot NOT IMPLEMENTED YET\n");
+    ioctl->snap_id = 0;
+    ioctl->ret = -ENOSYS;
 }
  
 static void castle_control_fs_init(cctrl_cmd_init_t *ioctl)
