@@ -60,24 +60,19 @@ static int castle_fs_superblock_validate(struct castle_fs_superblock *fs_sb)
 static int castle_fs_superblock_read(struct castle_slave *cs,
                                      struct castle_fs_superblock *fs_sb) 
 {
-    struct page *page = NULL;
     int err;
     
-    if(!(page = alloc_page(GFP_KERNEL)))
-        goto err_out; 
-    /* Try to read superblock */
-    err = castle_block_read(cs, 1, page);
-    if(err) 
+    err = castle_sub_block_read(cs,
+                                fs_sb,
+                                PAGE_SIZE, 
+                                sizeof(struct castle_fs_superblock));
+    if(err)
     {
         printk("Failed to read fs superblock.\n");
-        goto err_out;
+        return err;
     }
 
-    memcpy(fs_sb, 
-           pfn_to_kaddr(page_to_pfn(page)), 
-           sizeof(struct castle_fs_superblock));
-    __free_page(page);
-    
+    castle_fs_superblock_print(fs_sb); 
     err = castle_fs_superblock_validate(fs_sb);
     if(err)
     {
@@ -86,10 +81,61 @@ static int castle_fs_superblock_read(struct castle_slave *cs,
     }
 
     return 0;
+}
 
-err_out:
-    if(page) __free_page(page);
-    return -1;
+static int castle_version_tree_read(uint32_t cs_uuid, uint32_t root_blk)
+{
+    struct castle_slave *cs;
+    struct castle_vtree_node vtree_root;
+    int i, ret;
+
+    cs = castle_slave_find_by_uuid(cs_uuid);
+    if(cs == NULL) return -ENODEV; 
+
+    ret = castle_sub_block_read(cs,
+                               &vtree_root,
+                                root_blk * PAGE_SIZE,
+                                NODE_HEADER); 
+    if(ret)
+    {
+        printk("Could not read version tree root.\n");
+        return ret;
+    }
+
+    if((vtree_root.capacity > VTREE_NODE_SLOTS) ||
+       (vtree_root.used > vtree_root.capacity))
+    {
+        printk("Invalid vtree root capacity or/and used: (%d, %d)\n",
+               vtree_root.capacity, vtree_root.used);
+        return ret;
+    }
+    ret = castle_sub_block_read(cs,
+                               &vtree_root.slots,
+                                root_blk * PAGE_SIZE + NODE_HEADER,
+                                vtree_root.used * sizeof(struct castle_vtree_node_slot)); 
+    if(ret)
+    {
+        printk("Could not read version slots.\n");
+        return ret;
+    }
+    for(i=0; i<vtree_root.used; i++)
+    {
+        printk("Version slot[%d]: ta= 0x%x\n"
+               "                  vn= 0x%x\n"
+               "                  pa= 0x%x\n"
+               "                  si= 0x%x\n"
+               "                  di= 0x%x\n"
+               "                  bl= 0x%x\n",
+               i,
+               vtree_root.slots[i].tag,
+               vtree_root.slots[i].version_nr,
+               vtree_root.slots[i].parent,
+               vtree_root.slots[i].size,
+               vtree_root.slots[i].disk,
+               vtree_root.slots[i].block);
+    }
+
+    return 0;
 }
 
 int castle_fs_init(void)
@@ -139,6 +185,11 @@ int castle_fs_init(void)
     if(first)
         return -ENOENT;
 
+    ret = castle_version_tree_read(castle_fs_super.fwd_tree_disk1,
+                                   castle_fs_super.fwd_tree_block1);
+    if(ret)
+        return -EINVAL;
+
     printk("Castle FS inited.\n");
     castle_fs_inited = 1;
 
@@ -173,24 +224,18 @@ static int castle_slave_superblock_validate(struct castle_slave_superblock *cs_s
 static int castle_slave_superblock_read(struct castle_slave *cs) 
 {
     struct castle_slave_superblock *cs_sb = &cs->cs_sb;
-    struct page *page = NULL;
     int err;
     
-    if(!(page = alloc_page(GFP_KERNEL)))
-        goto err_out; 
-    /* Try to read superblock */
-    err = castle_block_read(cs, 0, page);
+    err = castle_sub_block_read(cs,
+                                cs_sb,
+                                0,
+                                sizeof(struct castle_slave_superblock));
     if(err) 
     {
         printk("Failed to read superblock.\n");
-        goto err_out;
+        return err;
     }
 
-    memcpy(cs_sb, 
-           pfn_to_kaddr(page_to_pfn(page)), 
-           sizeof(struct castle_slave_superblock));
-    __free_page(page);
-    
     err = castle_slave_superblock_validate(cs_sb);
     if(err)
     {
@@ -199,10 +244,6 @@ static int castle_slave_superblock_read(struct castle_slave *cs)
     }
     
     return 0;
-
-err_out:
-    if(page) __free_page(page);
-    return -1;
 }
 
 struct castle_slave* castle_slave_find_by_id(uint32_t id)
@@ -214,6 +255,21 @@ struct castle_slave* castle_slave_find_by_id(uint32_t id)
     {
         slave = list_entry(lh, struct castle_slave, list);
         if(slave->id == id)
+            return slave;
+    }
+
+    return NULL;
+}
+
+struct castle_slave* castle_slave_find_by_uuid(uint32_t uuid)
+{
+    struct list_head *lh;
+    struct castle_slave *slave;
+
+    list_for_each(lh, &castle_slaves.slaves)
+    {
+        slave = list_entry(lh, struct castle_slave, list);
+        if(slave->cs_sb.uuid == uuid)
             return slave;
     }
 

@@ -50,3 +50,27 @@ int castle_block_read(struct castle_slave *slave,
 
     return cbio.err;
 }
+
+int castle_sub_block_read(struct castle_slave *cs,
+                          void *buffer, 
+                          uint64_t offset,
+                          uint16_t size)
+{
+    struct page *page = NULL;
+    char *src;
+    int err;
+    
+    if(!(page = alloc_page(GFP_KERNEL)))
+        return -ENOMEM;
+    
+    err = castle_block_read(cs, offset >> PAGE_SHIFT, page);
+
+    src = pfn_to_kaddr(page_to_pfn(page));
+    src += (offset & ~PAGE_MASK);
+
+    memcpy(buffer, src, size); 
+
+    __free_page(page);
+ 
+    return 0;
+}
