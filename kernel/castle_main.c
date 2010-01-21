@@ -10,10 +10,12 @@
 #include "castle_ctrl.h"
 #include "castle_sysfs.h"
 
-struct castle         castle;
-struct castle_volumes castle_volumes;
-struct castle_slaves  castle_slaves;
-struct castle_devices castle_devices;
+struct castle               castle;
+struct castle_volumes       castle_volumes;
+struct castle_slaves        castle_slaves;
+struct castle_devices       castle_devices;
+int                         castle_fs_inited;
+struct castle_fs_superblock castle_fs_super;
 
 
 static void castle_fs_superblock_print(struct castle_fs_superblock *fs_sb)
@@ -55,9 +57,9 @@ static int castle_fs_superblock_validate(struct castle_fs_superblock *fs_sb)
     return 0;
 }
 
-static int castle_fs_superblock_read(struct castle_slave *cs) 
+static int castle_fs_superblock_read(struct castle_slave *cs,
+                                     struct castle_fs_superblock *fs_sb) 
 {
-    struct castle_fs_superblock fs_sb;
     struct page *page = NULL;
     int err;
     
@@ -71,13 +73,12 @@ static int castle_fs_superblock_read(struct castle_slave *cs)
         goto err_out;
     }
 
-    memcpy(&fs_sb, 
+    memcpy(fs_sb, 
            pfn_to_kaddr(page_to_pfn(page)), 
            sizeof(struct castle_fs_superblock));
     __free_page(page);
     
-    castle_fs_superblock_print(&fs_sb);
-    err = castle_fs_superblock_validate(&fs_sb);
+    err = castle_fs_superblock_validate(fs_sb);
     if(err)
     {
         printk("Invalid superblock.\n");
@@ -89,6 +90,59 @@ static int castle_fs_superblock_read(struct castle_slave *cs)
 err_out:
     if(page) __free_page(page);
     return -1;
+}
+
+int castle_fs_init(void)
+{
+    struct list_head *lh;
+    struct castle_slave *cs;
+    struct castle_fs_superblock fs_sb;
+    int ret, first;
+
+    if(castle_fs_inited)
+        return -EEXIST;
+
+    if(list_empty(&castle_slaves.slaves))
+        return -ENOENT;
+
+    first = 1;
+    list_for_each(lh, &castle_slaves.slaves)
+    {
+        cs = list_entry(lh, struct castle_slave, list);
+        ret = castle_fs_superblock_read(cs, &fs_sb);  
+        if(ret)
+        {
+            // TODO: invalidate/rebuild the slave! 
+            printk("Invaild superblock on slave uuid=0x%x, id=%d, err=%d\n",
+                    cs->cs_sb.uuid, cs->id, ret);
+            continue;
+        }
+        /* Save fs superblock if the first slave. */
+        if(first)
+        {
+            memcpy(&castle_fs_super, &fs_sb, sizeof(struct castle_fs_superblock));
+            first = 0;
+        }
+        else
+        /* Check if fs superblock the save as the one we already know about */
+        {
+            if(memcmp(&castle_fs_super, &fs_sb, 
+                      sizeof(struct castle_fs_superblock)) != 0)
+            {
+                printk("Castle fs supreblocks do not match!\n");
+                return -EINVAL;
+            }
+        }
+    }
+
+    /* If first is True, we've not found a single cs with valid fs superblock */
+    if(first)
+        return -ENOENT;
+
+    printk("Castle FS inited.\n");
+    castle_fs_inited = 1;
+
+    return 0;
 }
 
 static void castle_slave_superblock_print(struct castle_slave_superblock *cs_sb)
@@ -144,8 +198,6 @@ static int castle_slave_superblock_read(struct castle_slave *cs)
         return err;
     }
     
-    castle_fs_superblock_read(cs);
-
     return 0;
 
 err_out:
@@ -407,6 +459,7 @@ static int __init castle_init(void)
 
     printk("Castle FS init ... ");
 
+    castle_fs_inited = 0;
     if((ret = castle_devices_init())) goto err_out1;
     if((ret = castle_slaves_init()))  goto err_out2;
     if((ret = castle_control_init())) goto err_out3;

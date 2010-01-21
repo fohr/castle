@@ -77,5 +77,6 @@ void                  castle_device_free      (struct castle_device *cd);
 struct castle_slave*  castle_claim            (uint32_t new_dev);
 struct castle_slave*  castle_slave_find_by_id (uint32_t id);
 void                  castle_release          (struct castle_slave *cs);
+int                   castle_fs_init          (void);
 
 #endif /* __CASTLE_H__ */
