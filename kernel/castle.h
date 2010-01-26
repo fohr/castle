@@ -2,6 +2,12 @@
 #define __CASTLE_H__
 
 /* Disk layout related structures */
+struct castle_disk_block {
+    uint32_t disk;
+    uint32_t block;
+};
+typedef struct castle_disk_block c_disk_blk_t;
+
 struct castle_slave_superblock {
     uint32_t magic1;
     uint32_t magic2;
@@ -28,22 +34,38 @@ struct castle_fs_superblock {
 };
 
 struct castle_vtree_node_slot {
-    uint32_t tag;
-    uint32_t version_nr;
-    uint32_t parent;
-    uint32_t size;
-    uint32_t disk;
-    uint32_t block;
+    uint32_t     version_nr;
+    c_disk_blk_t cdb;
+};
+
+struct castle_vtree_leaf_slot {
+    uint32_t     version_nr;
+    uint32_t     parent;
+    uint32_t     size;
+    c_disk_blk_t cdb;
+};
+
+#define  VTREE_SLOT_LEAF       0x1
+#define  VTREE_SLOT_NODE       0x2
+#define  VTREE_SLOT_NODE_LAST  0x3
+struct castle_vtree_slot {
+    uint32_t type;
+    union {
+        struct castle_vtree_node_slot node;
+        struct castle_vtree_leaf_slot leaf;
+    };
 };
 
 #define NODE_HEADER        0x180
-#define VTREE_NODE_SLOTS  ((PAGE_SIZE - NODE_HEADER)/sizeof(struct castle_vtree_node_slot))
+#define VTREE_NODE_SLOTS  ((PAGE_SIZE - NODE_HEADER)/sizeof(struct castle_vtree_slot))
 struct castle_vtree_node {
     uint32_t magic;
     uint32_t version; 
     uint32_t capacity;
     uint32_t used;
-    struct castle_vtree_node_slot slots[VTREE_NODE_SLOTS]; 
+    struct castle_vtree_slot slots[VTREE_NODE_SLOTS]; 
+    /* Pointers to structures in memory. Invalid for the leaf children */
+    struct castle_vtree_node *children[VTREE_NODE_SLOTS];
 };
 
 /* First class structures */
@@ -90,12 +112,16 @@ extern struct castle_volumes castle_volumes;
 extern struct castle_slaves  castle_slaves;
 extern struct castle_devices castle_devices;
 
+/* Various utilities */
+#define C_BLK_SIZE                     4096
+#define disk_blk_to_offset(_cdb)     ((_cdb).block * C_BLK_SIZE)
 
 struct castle_device* castle_dev_mirror        (dev_t base_dev);
 void                  castle_device_free       (struct castle_device *cd);
 struct castle_slave*  castle_claim             (uint32_t new_dev);
 struct castle_slave*  castle_slave_find_by_id  (uint32_t id);
 struct castle_slave*  castle_slave_find_by_uuid(uint32_t uuid);
+struct castle_slave*  castle_slave_find_by_block(c_disk_blk_t cdb);
 void                  castle_release           (struct castle_slave *cs);
 int                   castle_fs_init           (void);
 

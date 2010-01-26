@@ -64,7 +64,7 @@ static int castle_fs_superblock_read(struct castle_slave *cs,
     
     err = castle_sub_block_read(cs,
                                 fs_sb,
-                                PAGE_SIZE, 
+                                C_BLK_SIZE, 
                                 sizeof(struct castle_fs_superblock));
     if(err)
     {
@@ -83,18 +83,32 @@ static int castle_fs_superblock_read(struct castle_slave *cs,
     return 0;
 }
 
-static int castle_version_tree_read(uint32_t cs_uuid, uint32_t root_blk)
+static void castle_version_node_destroy(struct castle_vtree_node *v_node)
+{
+    int i;
+
+    for(i=0; i<v_node->used; i++)
+        if(v_node->slots[i].type == VTREE_SLOT_NODE)
+            castle_version_node_destroy(v_node->children[i]);
+    kfree(v_node);
+}
+
+static int castle_version_tree_read(c_disk_blk_t cdb, struct castle_vtree_node **v_node)
 {
     struct castle_slave *cs;
-    struct castle_vtree_node vtree_root;
+    struct castle_vtree_node *vtree_node;
     int i, ret;
 
-    cs = castle_slave_find_by_uuid(cs_uuid);
+    vtree_node = kmalloc(sizeof(struct castle_vtree_node), GFP_KERNEL);
+    if(vtree_node == NULL) return -ENOMEM;
+    memset(vtree_node, 0, sizeof(struct castle_vtree_node));
+
+    cs = castle_slave_find_by_block(cdb);
     if(cs == NULL) return -ENODEV; 
 
     ret = castle_sub_block_read(cs,
-                               &vtree_root,
-                                root_blk * PAGE_SIZE,
+                                vtree_node,
+                                disk_blk_to_offset(cdb),
                                 NODE_HEADER); 
     if(ret)
     {
@@ -102,39 +116,58 @@ static int castle_version_tree_read(uint32_t cs_uuid, uint32_t root_blk)
         return ret;
     }
 
-    if((vtree_root.capacity > VTREE_NODE_SLOTS) ||
-       (vtree_root.used > vtree_root.capacity))
+    if((vtree_node->capacity > VTREE_NODE_SLOTS) ||
+       (vtree_node->used > vtree_node->capacity))
     {
         printk("Invalid vtree root capacity or/and used: (%d, %d)\n",
-               vtree_root.capacity, vtree_root.used);
+               vtree_node->capacity, vtree_node->used);
         return ret;
     }
     ret = castle_sub_block_read(cs,
-                               &vtree_root.slots,
-                                root_blk * PAGE_SIZE + NODE_HEADER,
-                                vtree_root.used * sizeof(struct castle_vtree_node_slot)); 
+                               &vtree_node->slots,
+                                disk_blk_to_offset(cdb) + NODE_HEADER,
+                                vtree_node->used * sizeof(struct castle_vtree_slot)); 
     if(ret)
     {
         printk("Could not read version slots.\n");
         return ret;
     }
-    for(i=0; i<vtree_root.used; i++)
+    for(i=0; i<vtree_node->used; i++)
     {
-        printk("Version slot[%d]: ta= 0x%x\n"
-               "                  vn= 0x%x\n"
-               "                  pa= 0x%x\n"
-               "                  si= 0x%x\n"
-               "                  di= 0x%x\n"
-               "                  bl= 0x%x\n",
-               i,
-               vtree_root.slots[i].tag,
-               vtree_root.slots[i].version_nr,
-               vtree_root.slots[i].parent,
-               vtree_root.slots[i].size,
-               vtree_root.slots[i].disk,
-               vtree_root.slots[i].block);
+        if((vtree_node->slots[i].type == VTREE_SLOT_NODE) ||
+           (vtree_node->slots[i].type == VTREE_SLOT_NODE_LAST))
+        {
+            /* Read the child node */
+            ret = castle_version_tree_read(vtree_node->slots[i].node.cdb, 
+                                           &vtree_node->children[i]);
+            /* If failed, cleanup all children read so far */
+            if(ret < 0)
+            {
+                while(i > 0)
+                {
+                    i--;
+                    /* This will decend recursively into sub-children */
+                    castle_version_node_destroy(vtree_node->children[i]);
+                }
+                /* All children freed, free our node */
+                kfree(vtree_node);
+                return ret;
+            }
+        } else
+        {
+            printk("Version slot[%d]: ty= 0x%x\n"
+                   "                  vn= 0x%x\n"
+                   "                  di= 0x%x\n"
+                   "                  bl= 0x%x\n",
+                   i,
+                   vtree_node->slots[i].type,
+                   vtree_node->slots[i].leaf.version_nr,
+                   vtree_node->slots[i].leaf.cdb.disk,
+                   vtree_node->slots[i].leaf.cdb.block);
+        }
     }
 
+    if(v_node) *v_node = vtree_node;
     return 0;
 }
 
@@ -144,6 +177,8 @@ int castle_fs_init(void)
     struct castle_slave *cs;
     struct castle_fs_superblock fs_sb;
     int ret, first;
+    // TODO: Temporary, replace with c_disk_blk_t in fs_superblock
+    c_disk_blk_t blk;
 
     if(castle_fs_inited)
         return -EEXIST;
@@ -185,8 +220,9 @@ int castle_fs_init(void)
     if(first)
         return -ENOENT;
 
-    ret = castle_version_tree_read(castle_fs_super.fwd_tree_disk1,
-                                   castle_fs_super.fwd_tree_block1);
+    blk.disk  = castle_fs_super.fwd_tree_disk1;
+    blk.block = castle_fs_super.fwd_tree_block1;
+    ret = castle_version_tree_read(blk, NULL);
     if(ret)
         return -EINVAL;
 
@@ -274,6 +310,11 @@ struct castle_slave* castle_slave_find_by_uuid(uint32_t uuid)
     }
 
     return NULL;
+}
+
+struct castle_slave* castle_slave_find_by_block(c_disk_blk_t cdb)
+{
+    return castle_slave_find_by_uuid(cdb.disk);
 }
 
 struct castle_slave* castle_claim(uint32_t new_dev)
