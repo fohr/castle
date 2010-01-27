@@ -7,6 +7,7 @@
 
 #include "castle.h"
 #include "castle_block.h"
+#include "castle_btree.h"
 #include "castle_ctrl.h"
 #include "castle_sysfs.h"
 

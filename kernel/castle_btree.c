@@ -1,7 +1,30 @@
+#include <linux/module.h>
 
 #include "castle.h"
 #include "castle_btree.h"
 
+/***** Init/fini functions *****/
+int castle_btree_init(void)
+{
+    int ret = 0;
+
+    printk("Initialising Castle Btrees.\n");
+#if 0
+    ret = castle_btree_cache_init();
+#endif
+    
+    return ret;
+}
+
+void castle_btree_free(void)
+{
+    printk("Freeing Castle BTree.\n");
+#if 0
+    castle_btree_cache_free();
+#endif
+}
+
+#if 0
 struct castle_btree_cache_entry {
     struct c_bnode_hnd_t             hnd;
     struct castle_btree_cache_entry *next;
@@ -53,20 +76,5 @@ struct castle_btree_type c_shdw_tree =
     .on_disk_node_size  =   4096,
 };
 
+#endif
 
-/***** Init/fini functions *****/
-int castle_btree_init(void)
-{
-    int ret;
-
-    printk("Initialising Castle Btrees.\n");
-    ret = castle_btree_cache_init();
-    
-    return ret;
-}
-
-void castle_btree_free(void)
-{
-    printk("Freeing Castle BTree.\n");
-    castle_btree_cache_free();
-}
