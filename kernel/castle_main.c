@@ -11,12 +11,13 @@
 #include "castle_ctrl.h"
 #include "castle_sysfs.h"
 
-struct castle               castle;
-struct castle_volumes       castle_volumes;
-struct castle_slaves        castle_slaves;
-struct castle_devices       castle_devices;
-int                         castle_fs_inited;
-struct castle_fs_superblock castle_fs_super;
+struct castle                castle;
+struct castle_volumes        castle_volumes;
+struct castle_slaves         castle_slaves;
+struct castle_devices        castle_devices;
+int                          castle_fs_inited;
+struct castle_fs_superblock  castle_fs_super;
+struct castle_vtree_node    *castle_vtree_root;
 
 
 static void castle_fs_superblock_print(struct castle_fs_superblock *fs_sb)
@@ -73,7 +74,6 @@ static int castle_fs_superblock_read(struct castle_slave *cs,
         return err;
     }
 
-    castle_fs_superblock_print(fs_sb); 
     err = castle_fs_superblock_validate(fs_sb);
     if(err)
     {
@@ -135,7 +135,7 @@ int castle_fs_init(void)
 
     blk.disk  = castle_fs_super.fwd_tree_disk1;
     blk.block = castle_fs_super.fwd_tree_block1;
-    ret = castle_version_tree_read(blk, NULL);
+    ret = castle_version_tree_read(blk, &castle_vtree_root);
     if(ret)
         return -EINVAL;
 
@@ -279,9 +279,6 @@ err_out:
 
 void castle_release(struct castle_slave *cs)
 {
-    printk("Releasing slave %x.\n", 
-            MKDEV(cs->bdev->bd_disk->major, 
-                  cs->bdev->bd_disk->first_minor));
     castle_sysfs_slave_del(cs);
     bd_release(cs->bdev);
     blkdev_put(cs->bdev);

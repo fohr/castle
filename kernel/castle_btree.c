@@ -4,6 +4,65 @@
 #include "castle_block.h"
 #include "castle_btree.h"
 
+static void castle_version_node_print(struct castle_vtree_slot *slot)
+{ 
+    if(slot->type == VTREE_SLOT_LEAF)
+    {
+        printk("Version slot: ty= 0x%x\n"
+               "              vn= 0x%x\n"
+               "              di= 0x%x\n"
+               "              bl= 0x%x\n"
+               "              pa= 0x%x\n"
+               "              si= 0x%x\n",
+               slot->type,
+               slot->leaf.version_nr,
+               slot->leaf.cdb.disk,
+               slot->leaf.cdb.block,
+               slot->leaf.parent,
+               slot->leaf.size);
+    } else
+    if((slot->type == VTREE_SLOT_NODE) ||
+       (slot->type == VTREE_SLOT_NODE_LAST))
+    {
+        printk("Version slot: ty= 0x%x\n"
+               "              vn= 0x%x\n"
+               "              di= 0x%x\n"
+               "              bl= 0x%x\n",
+               slot->type,
+               slot->node.version_nr,
+               slot->node.cdb.disk,
+               slot->node.cdb.block);
+    }
+}
+
+c_disk_blk_t castle_version_find(struct castle_vtree_node *node, uint32_t version)
+{
+    int i;
+    
+    for(i=0; i<node->used; i++)
+    {
+        struct castle_vtree_slot *slot = &node->slots[i];
+        struct castle_vtree_node *child = node->children[i];
+
+        if(VTREE_SLOT_IS_NODE_LAST(slot))
+        {
+            return castle_version_find(child, version);
+        } else
+        if(VTREE_SLOT_IS_NODE(slot))
+        {
+            if(slot->node.version_nr >= version)
+                return castle_version_find(child, version);
+        } else
+        if(VTREE_SLOT_IS_LEAF(slot))
+        {
+            if(slot->leaf.version_nr == version)
+                return slot->leaf.cdb;
+        }
+    }
+
+    return INVAL_DISK_BLK; 
+} 
+
 static void castle_version_node_destroy(struct castle_vtree_node *v_node)
 {
     int i;
@@ -87,7 +146,6 @@ int castle_btree_init(void)
 {
     int ret = 0;
 
-    printk("Initialising Castle Btrees.\n");
 #if 0
     ret = castle_btree_cache_init();
 #endif
@@ -97,7 +155,6 @@ int castle_btree_init(void)
 
 void castle_btree_free(void)
 {
-    printk("Freeing Castle BTree.\n");
 #if 0
     castle_btree_cache_free();
 #endif

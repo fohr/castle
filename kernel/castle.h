@@ -7,6 +7,8 @@ struct castle_disk_block {
     uint32_t block;
 };
 typedef struct castle_disk_block c_disk_blk_t;
+#define INVAL_DISK_BLK          ((c_disk_blk_t){0,0})
+#define DISK_BLK_INVAL(_blk)    ((_blk) == INVAL_DISK_BLK)
 
 struct castle_slave_superblock {
     uint32_t magic1;
@@ -45,9 +47,14 @@ struct castle_vtree_leaf_slot {
     c_disk_blk_t cdb;
 };
 
-#define  VTREE_SLOT_LEAF       0x1
-#define  VTREE_SLOT_NODE       0x2
-#define  VTREE_SLOT_NODE_LAST  0x3
+#define VTREE_SLOT_LEAF       0x1
+#define VTREE_SLOT_NODE       0x2
+#define VTREE_SLOT_NODE_LAST  0x3
+#define VTREE_SLOT_IS_NODE(_slot)       (((_slot)->type == VTREE_SLOT_NODE) || \
+                                         ((_slot)->type == VTREE_SLOT_NODE_LAST))
+#define VTREE_SLOT_IS_NODE_LAST(_slot)   ((_slot)->type == VTREE_SLOT_NODE_LAST)
+#define VTREE_SLOT_IS_LEAF(_slot)        ((_slot)->type == VTREE_SLOT_LEAF) 
+
 struct castle_vtree_slot {
     uint32_t type;
     union {
