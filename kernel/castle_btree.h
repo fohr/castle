@@ -1,6 +1,7 @@
 #ifndef __CASTLE_BTREE_H__
 #define __CASTLE_BTREE_H__
 
+int castle_version_tree_read(c_disk_blk_t cdb, struct castle_vtree_node **v_node);
 int  castle_btree_init(void);
 void castle_btree_free(void);
 
