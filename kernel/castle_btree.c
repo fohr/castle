@@ -35,7 +35,7 @@ static void castle_version_node_print(struct castle_vtree_slot *slot)
     }
 }
 
-c_disk_blk_t castle_version_find(struct castle_vtree_node *node, uint32_t version)
+struct castle_vtree_leaf_slot* castle_version_find(struct castle_vtree_node *node, uint32_t version)
 {
     int i;
     
@@ -56,11 +56,11 @@ c_disk_blk_t castle_version_find(struct castle_vtree_node *node, uint32_t versio
         if(VTREE_SLOT_IS_LEAF(slot))
         {
             if(slot->leaf.version_nr == version)
-                return slot->leaf.cdb;
+                return &slot->leaf;
         }
     }
 
-    return INVAL_DISK_BLK; 
+    return NULL; 
 } 
 
 static void castle_version_node_destroy(struct castle_vtree_node *v_node)
@@ -114,8 +114,7 @@ int castle_version_tree_read(c_disk_blk_t cdb, struct castle_vtree_node **v_node
     }
     for(i=0; i<vtree_node->used; i++)
     {
-        if((vtree_node->slots[i].type == VTREE_SLOT_NODE) ||
-           (vtree_node->slots[i].type == VTREE_SLOT_NODE_LAST))
+        if(VTREE_SLOT_IS_NODE(&vtree_node->slots[i])) 
         {
             /* Read the child node */
             ret = castle_version_tree_read(vtree_node->slots[i].node.cdb, 

@@ -104,8 +104,7 @@ struct castle_device {
     int               users;
     int               sysfs_registered;
 
-    /* At the moment we use loop devices as the base */
-    struct block_device *bdev;
+    uint32_t          version;
 };
 
 struct castle_devices { 
@@ -114,16 +113,17 @@ struct castle_devices {
     struct list_head devices;
 };
 
-extern struct castle         castle;
-extern struct castle_volumes castle_volumes;
-extern struct castle_slaves  castle_slaves;
-extern struct castle_devices castle_devices;
+extern struct castle             castle;
+extern struct castle_volumes     castle_volumes;
+extern struct castle_slaves      castle_slaves;
+extern struct castle_devices     castle_devices;
+extern struct castle_vtree_node *castle_vtree_root;
 
 /* Various utilities */
 #define C_BLK_SIZE                     4096
 #define disk_blk_to_offset(_cdb)     ((_cdb).block * C_BLK_SIZE)
 
-struct castle_device* castle_dev_mirror        (dev_t base_dev);
+struct castle_device* castle_device_init       (struct castle_vtree_leaf_slot *version);
 void                  castle_device_free       (struct castle_device *cd);
 struct castle_slave*  castle_claim             (uint32_t new_dev);
 struct castle_slave*  castle_slave_find_by_id  (uint32_t id);

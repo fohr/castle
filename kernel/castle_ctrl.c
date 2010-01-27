@@ -6,6 +6,7 @@
 
 #include "castle_public.h"
 #include "castle.h"
+#include "castle_btree.h"
 
 static void castle_control_claim(cctrl_cmd_claim_t *ioctl)
 {
@@ -31,9 +32,26 @@ static void castle_control_release(cctrl_cmd_release_t *ioctl)
 
 static void castle_control_attach(cctrl_cmd_attach_t *ioctl)
 {
-    printk("==> Attach NOT IMPLEMENTED YET\n");
+    struct castle_device* dev;
+    struct castle_vtree_leaf_slot *version;
+  
+    printk("Asked to attach version: %llx\n", ioctl->snap); 
     ioctl->dev = 0;
-    ioctl->ret = -ENOSYS;
+    // TODO all version numbers should be uint32_t (snap_id_t -> uint32_t)
+    version = castle_version_find(castle_vtree_root, (uint32_t)ioctl->snap);
+    if(!version)
+    {
+        ioctl->ret = -EINVAL;
+        return;
+    }
+    dev = castle_device_init(version);
+    if(!dev)
+    {
+        ioctl->ret = -ENOMEM; 
+        return;
+    }
+    ioctl->dev = new_encode_dev(MKDEV(dev->gd->major, dev->gd->first_minor));
+    ioctl->ret = 0;
 }
 
 static void castle_control_detach(cctrl_cmd_detach_t *ioctl)

@@ -319,52 +319,27 @@ static struct block_device_operations castle_bd_ops = {
 	.revalidate_disk = NULL,
 };
 
-static struct block_device* castle_basedisk_claim(dev_t base_dev)
-{
-    struct block_device *bdev;
-    int err;
-    char b[BDEVNAME_SIZE];
-
-    bdev = open_by_devnum(base_dev, FMODE_READ|FMODE_WRITE);
-    if (IS_ERR(bdev)) {
-        printk("Could not open %s.\n", __bdevname(base_dev, b));
-        return NULL;
-    }
-    err = bd_claim(bdev, &castle);
-    if (err) {
-        printk("Could not bd_claim %s.\n", bdevname(bdev, b));
-        blkdev_put(bdev);
-        return NULL;
-    }
-
-    return bdev;
-}
-
 static int castle_device_make_request(struct request_queue *rq, struct bio *bio)
 { 
-    struct castle_device *dev = rq->queuedata;
+    //struct castle_device *dev = rq->queuedata;
 
-    bio->bi_bdev = dev->bdev;
-	generic_make_request(bio);
+    bio_endio(bio, -EINVAL);
+
     return 0;
 }
 
-struct castle_device* castle_dev_mirror(dev_t base_dev)
+struct castle_device* castle_device_init(struct castle_vtree_leaf_slot *version)
 {
     struct castle_device *dev;
     struct request_queue *rq;
     struct gendisk *gd;
     static int minor = 0;
 
-    struct block_device *bdev;
-
     dev = kmalloc(sizeof(struct castle_device), GFP_KERNEL); 
     if(!dev)
         goto error_out;
-    dev->bdev = castle_basedisk_claim(base_dev);
-    if(!dev->bdev)
-        goto error_out;
 	spin_lock_init(&dev->lock);
+    dev->version = version->version_nr;
         
     gd = alloc_disk(1);
     if(!gd)
@@ -386,15 +361,15 @@ struct castle_device* castle_dev_mirror(dev_t base_dev)
 
     list_add(&dev->list, &castle_devices.devices);
     dev->gd = gd;
-    set_capacity(gd, get_capacity(dev->bdev->bd_disk));
+    set_capacity(gd, version->size);
     add_disk(gd);
 
-    bdev = bdget(MKDEV(gd->major, gd->first_minor));
+    bdget(MKDEV(gd->major, gd->first_minor));
 
     return dev;
 
 error_out:
-    printk("Failed to mirror device.\n");
+    printk("Failed to init device.\n");
     return NULL;    
 }
 
@@ -420,8 +395,6 @@ static void castle_slaves_free(void)
 
 void castle_device_free(struct castle_device *cd)
 {
-    bd_release(cd->bdev);
-    blkdev_put(cd->bdev);
     del_gendisk(cd->gd);
     put_disk(cd->gd);
     list_del(&cd->list);
