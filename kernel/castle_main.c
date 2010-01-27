@@ -557,10 +557,11 @@ static int __init castle_init(void)
     printk("Castle FS init ... ");
 
     castle_fs_inited = 0;
-    if((ret = castle_devices_init())) goto err_out1;
-    if((ret = castle_slaves_init()))  goto err_out2;
-    if((ret = castle_control_init())) goto err_out3;
-    if((ret = castle_sysfs_init()))   goto err_out4;
+    if((ret = castle_btree_init()))   goto err_out1;
+    if((ret = castle_devices_init())) goto err_out2;
+    if((ret = castle_slaves_init()))  goto err_out3;
+    if((ret = castle_control_init())) goto err_out4;
+    if((ret = castle_sysfs_init()))   goto err_out5;
 
     printk("OK.\n");
 
@@ -568,12 +569,14 @@ static int __init castle_init(void)
 
     /* Unreachable */
     castle_sysfs_fini();
-err_out4:
+err_out5:
     castle_control_fini();
-err_out3:
+err_out4:
     castle_slaves_free();
-err_out2:
+err_out3:
     castle_devices_free();
+err_out2:
+    castle_btree_free();
 err_out1:
 
     return ret;
@@ -588,6 +591,7 @@ static void __exit castle_exit(void)
     castle_control_fini();
     castle_slaves_free();
     castle_devices_free();
+    castle_btree_free();
 
     printk("done.\n\n\n");
 }
