@@ -176,6 +176,6 @@ function initfs {
 initdisks
 initfs
 
-do_control_attach 100
+do_control_attach 2000
 
 echo "Castle initialised successfully"

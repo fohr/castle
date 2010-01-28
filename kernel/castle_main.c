@@ -19,6 +19,12 @@ int                          castle_fs_inited;
 struct castle_fs_superblock  castle_fs_super;
 struct castle_vtree_node    *castle_vtree_root;
 
+#ifndef DEBUG
+#define debug(_f, ...)  ((void)0)
+#else
+#define debug(_f, _a...)  (printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
+#endif
+
 
 static void castle_fs_superblock_print(struct castle_fs_superblock *fs_sb)
 {
@@ -321,40 +327,143 @@ static struct block_device_operations castle_bd_ops = {
 	.revalidate_disk = NULL,
 };
 
+struct castle_dev_bio {
+    struct bio *bio;
+    int ref_cnt;
+    int ret;
+};
+
+struct castle_dev_io {
+    struct castle_dev_bio *cbio;
+    /* Stuff required to construct a bio */
+    struct page *page;
+};
+
+void castle_bio_put(struct castle_dev_bio *cbio)
+{
+    debug("Putting castle bio, current ref=%d\n", cbio->ref_cnt);
+    cbio->ref_cnt--;
+    if(cbio->ref_cnt == 0)
+    {
+        debug("Ending IO with err=%d\n", cbio->ret);
+        bio_endio(cbio->bio, cbio->ret); 
+    }
+}
+
+void castle_device_make_request_end(void *arg, int err)
+{
+    struct castle_dev_io *io = arg;
+    struct castle_dev_bio *cbio = io->cbio;
+
+    debug("Finished the read.\n");
+    kfree(io);
+    if(err) cbio->ret = err;
+    castle_bio_put(cbio);
+}
+
+void castle_device_make_request_read_slave(void *arg, c_disk_blk_t cdb, int err)
+{
+    struct castle_dev_io *io = arg;
+    struct castle_dev_bio *cbio = io->cbio;
+    struct castle_slave *cs;
+    
+    if(err)
+    {
+        if(err == (-ENOENT))
+            printk("!!!!!!!!!!!!!1 WARNING, this should probably return zeroed page.\n");
+        printk("Failed to find the block to read %d.\n", err);
+        goto error_out;
+    }
+
+    cs = castle_slave_find_by_block(cdb);
+    if(!cs)
+    {
+        err = -ENODEV;
+        goto error_out;
+    }
+
+    debug("Scheduling the read.\n");
+    err = castle_block_read(cs, 
+                            cdb.block,
+                            io->page,
+                            castle_device_make_request_end,
+                            io);
+    if(err) goto error_out;
+    return;
+
+error_out:
+    printk("Failing the read.\n");
+    kfree(io);    
+    cbio->ret = err;
+    castle_bio_put(cbio);
+}
+
 static int castle_device_make_request(struct request_queue *rq, struct bio *bio)
 { 
+    struct castle_dev_bio *cbio;
     struct castle_device *dev = rq->queuedata;
     struct bio_vec *bvec;
     sector_t block;
     c_disk_blk_t cdb;
-    int i;
+    int ret, i;
     static int first = 1;
+
+    cbio = kmalloc(sizeof(struct castle_dev_bio), GFP_KERNEL);
+    if(!cbio) goto fail_bio;
+    // TODO: Atomic + passibly could be done through plain old bio
+    cbio->bio = bio;
+    cbio->ret = 0;
+    cbio->ref_cnt = bio->bi_vcnt;
 
     if(bio->bi_sector % (1 << (C_BLK_SHIFT - 9)) != 0)
     {
         printk("Got BIO for unaligned sector: 0x%lx\n", bio->bi_sector);
-        bio_endio(bio, -EIO);
-        return 0;
+        goto fail_bio;
     }
+
     block = bio->bi_sector >> (C_BLK_SHIFT - 9);
     bio_for_each_segment(bvec, bio, i)
     {
-        if(bvec->bv_len != C_BLK_SIZE)
+        struct castle_dev_io *io;
+
+        if((bvec->bv_len != C_BLK_SIZE) || (bvec->bv_offset != 0))
         {
-            printk("Got unaligned bvec: 0x%x\n", bvec->bv_len);
-            bio_endio(bio, -EIO);
+            printk("Got unaligned bvec: len=0x%x, offset=0x%x\n", 
+                    bvec->bv_len, bvec->bv_offset);
+            goto fail_bio;
         }
-        if(first)
+
+        io = kmalloc(sizeof(struct castle_dev_io), GFP_KERNEL);
+        if(!io)
         {
-            first = 0;
-        printk("Reading block: 0x%lx, %ld\n", block, block);
+            printk("Could not allocate castle_dev_io.\n");
+            castle_bio_put(cbio);
+            continue;
+        }
+        io->cbio = cbio;
+        io->page = bvec->bv_page;
+
+        debug("Reading block: 0x%lx, %ld\n", block, block);
         cdb = castle_vtree_find(castle_vtree_root, dev->version); 
-        cdb = castle_ftree_find(cdb, block, dev->version);
+        ret = castle_ftree_find(cdb, 
+                                block, 
+                                dev->version,
+                                castle_device_make_request_read_slave,
+                                io);
+        if(ret)
+        {
+            printk("Failed to find a block.\n");
+            kfree(io);
+            castle_bio_put(cbio);
         }
     }
 
-    // TODO: Fail the bio
-    bio_endio(bio, -EINVAL);
+    return 0;
+
+fail_bio:
+    // TODO: Should invalidate/fixup existing ftree searches 
+    // TODO: Should not fail BIO unconditionally 
+    bio_endio(bio, -EIO);
 
     return 0;
 }
@@ -392,7 +501,7 @@ struct castle_device* castle_device_init(struct castle_vtree_leaf_slot *version)
 
     list_add(&dev->list, &castle_devices.devices);
     dev->gd = gd;
-    set_capacity(gd, version->size);
+    set_capacity(gd, (version->size << (C_BLK_SHIFT - 9)));
     add_disk(gd);
 
     bdget(MKDEV(gd->major, gd->first_minor));

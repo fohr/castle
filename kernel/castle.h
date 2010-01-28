@@ -37,6 +37,14 @@ struct castle_fs_superblock {
 
 #define NODE_HEADER        0x180
 
+#define FTREE_SLOT_LEAF       0x1
+#define FTREE_SLOT_NODE       0x2
+#define FTREE_SLOT_NODE_LAST  0x3
+#define FTREE_SLOT_IS_NODE(_slot)       (((_slot)->type == FTREE_SLOT_NODE) || \
+                                         ((_slot)->type == FTREE_SLOT_NODE_LAST))
+#define FTREE_SLOT_IS_NODE_LAST(_slot)   ((_slot)->type == FTREE_SLOT_NODE_LAST)
+#define FTREE_SLOT_IS_LEAF(_slot)        ((_slot)->type == FTREE_SLOT_LEAF) 
+
 struct castle_ftree_slot {
     uint32_t     type;
     uint32_t     block;
@@ -83,6 +91,7 @@ struct castle_vtree_slot {
 
 #define VTREE_NODE_SLOTS  ((PAGE_SIZE - NODE_HEADER)/sizeof(struct castle_vtree_slot))
 struct castle_vtree_node {
+    /* On disk representation of the node */
     uint32_t magic;
     uint32_t version; 
     uint32_t capacity;
