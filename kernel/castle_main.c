@@ -67,7 +67,8 @@ static int castle_fs_superblock_read(struct castle_slave *cs,
     err = castle_sub_block_read(cs,
                                 fs_sb,
                                 C_BLK_SIZE, 
-                                sizeof(struct castle_fs_superblock));
+                                sizeof(struct castle_fs_superblock),
+                                NULL, NULL);
     if(err)
     {
         printk("Failed to read fs superblock.\n");
@@ -178,7 +179,8 @@ static int castle_slave_superblock_read(struct castle_slave *cs)
     err = castle_sub_block_read(cs,
                                 cs_sb,
                                 0,
-                                sizeof(struct castle_slave_superblock));
+                                sizeof(struct castle_slave_superblock),
+                                NULL, NULL);
     if(err) 
     {
         printk("Failed to read superblock.\n");
@@ -252,12 +254,12 @@ struct castle_slave* castle_claim(uint32_t new_dev)
         goto err_out;
     }
     err = bd_claim(bdev, &castle);
-    bdev_claimed = 1;
     if (err) 
     {
-        printk("Could not bd_claim %s.\n", bdevname(bdev, b));
+        printk("Could not bd_claim %s, err=%d.\n", bdevname(bdev, b), err);
         goto err_out;
     }
+    bdev_claimed = 1;
     cs->bdev = bdev;
 
     err = castle_slave_superblock_read(cs); 
@@ -321,8 +323,37 @@ static struct block_device_operations castle_bd_ops = {
 
 static int castle_device_make_request(struct request_queue *rq, struct bio *bio)
 { 
-    //struct castle_device *dev = rq->queuedata;
+    struct castle_device *dev = rq->queuedata;
+    struct bio_vec *bvec;
+    sector_t block;
+    c_disk_blk_t cdb;
+    int i;
+    static int first = 1;
 
+    if(bio->bi_sector % (1 << (C_BLK_SHIFT - 9)) != 0)
+    {
+        printk("Got BIO for unaligned sector: 0x%lx\n", bio->bi_sector);
+        bio_endio(bio, -EIO);
+        return 0;
+    }
+    block = bio->bi_sector >> (C_BLK_SHIFT - 9);
+    bio_for_each_segment(bvec, bio, i)
+    {
+        if(bvec->bv_len != C_BLK_SIZE)
+        {
+            printk("Got unaligned bvec: 0x%x\n", bvec->bv_len);
+            bio_endio(bio, -EIO);
+        }
+        if(first)
+        {
+            first = 0;
+        printk("Reading block: 0x%lx, %ld\n", block, block);
+        cdb = castle_vtree_find(castle_vtree_root, dev->version); 
+        cdb = castle_ftree_find(cdb, block, dev->version);
+        }
+    }
+
+    // TODO: Fail the bio
     bio_endio(bio, -EINVAL);
 
     return 0;

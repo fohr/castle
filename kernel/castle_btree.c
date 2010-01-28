@@ -4,6 +4,124 @@
 #include "castle_block.h"
 #include "castle_btree.h"
 
+struct castle_ftree_io {
+    int header_read;
+    c_disk_blk_t cdb;
+    struct castle_ftree_node *node;
+    struct castle_ftree_node **nodep;
+};
+
+static void castle_ftree_read_end(void *arg, int ret)
+{
+    struct castle_slave *cs;
+    struct castle_ftree_io *io = arg;
+    struct castle_ftree_node *ftree_node = io->node;
+    int i;
+
+    if(ret)
+    {
+        printk("Could not read ftree node.\n");
+        kfree(ftree_node);
+        kfree(io);
+        return;
+    }
+
+    if(io->header_read)
+        goto header_read;
+    else
+        goto payload_read;
+
+header_read:
+    if((ftree_node->capacity > FTREE_NODE_SLOTS) ||
+       (ftree_node->used > ftree_node->capacity))
+    {
+        printk("Invalid ftree node capacity or/and used: (%d, %d)\n",
+               ftree_node->capacity, ftree_node->used);
+        kfree(ftree_node);
+        kfree(io);
+        return;
+    }
+    cs = castle_slave_find_by_block(io->cdb);
+    if(!cs) 
+    {
+        kfree(ftree_node);
+        kfree(io);
+        return;
+    }
+    
+    io->header_read = 0;
+    ret = castle_sub_block_read(cs,
+                               &ftree_node->slots,
+                                disk_blk_to_offset(io->cdb) + NODE_HEADER,
+                                ftree_node->used * sizeof(struct castle_ftree_slot),
+                                castle_ftree_read_end, 
+                                io); 
+    if(ret)
+    {
+        printk("Could not read ftree node slots.\n");
+        kfree(ftree_node);
+        kfree(io);
+    }
+    return;
+
+payload_read:
+    for(i=0; i<ftree_node->used; i++)
+    {
+        printk("Ftree tag: %x\n", ftree_node->slots[i].type);
+    } 
+
+    if(io->nodep) *(io->nodep) = ftree_node;
+}
+
+static int castle_ftree_read(c_disk_blk_t cdb, struct castle_ftree_node **f_node)
+{
+    struct castle_slave *cs;
+    struct castle_ftree_node *ftree_node; 
+    struct castle_ftree_io *io;
+    int ret;
+
+    io = kmalloc(sizeof(struct castle_ftree_io), GFP_KERNEL);
+    if(!io) return -ENOMEM;
+    ftree_node = kmalloc(sizeof(struct castle_ftree_node), GFP_KERNEL);
+    if(!ftree_node) 
+    {
+        kfree(io);
+        return -ENOMEM;
+    }
+    memset(ftree_node, 0, sizeof(struct castle_ftree_node));
+    io->cdb = cdb;
+    io->node = ftree_node;
+    io->nodep = f_node;
+
+    cs = castle_slave_find_by_block(cdb);
+    if(!cs) 
+    {
+        kfree(ftree_node);
+        kfree(io);
+        return -ENODEV;
+    }
+
+    io->header_read = 1;
+    ret = castle_sub_block_read(cs,
+                                ftree_node,
+                                disk_blk_to_offset(cdb),
+                                NODE_HEADER,
+                                castle_ftree_read_end, 
+                                io);
+    return ret;
+}
+
+c_disk_blk_t castle_ftree_find(c_disk_blk_t node_cdb, sector_t block, uint32_t version)
+{
+    struct castle_ftree_node *ftree_node;
+    int ret;
+
+    printk("Asked for block: 0x%lx, in version 0x%x\n", block, version);
+    ret = castle_ftree_read(node_cdb, &ftree_node); 
+
+    return INVAL_DISK_BLK;
+}
+
 static void castle_version_node_print(struct castle_vtree_slot *slot)
 { 
     if(slot->type == VTREE_SLOT_LEAF)
@@ -35,10 +153,12 @@ static void castle_version_node_print(struct castle_vtree_slot *slot)
     }
 }
 
-struct castle_vtree_leaf_slot* castle_version_find(struct castle_vtree_node *node, uint32_t version)
+struct castle_vtree_leaf_slot* castle_vtree_leaf_find(struct castle_vtree_node *node, uint32_t version)
 {
     int i;
     
+    if(!node) return NULL;
+
     for(i=0; i<node->used; i++)
     {
         struct castle_vtree_slot *slot = &node->slots[i];
@@ -46,12 +166,12 @@ struct castle_vtree_leaf_slot* castle_version_find(struct castle_vtree_node *nod
 
         if(VTREE_SLOT_IS_NODE_LAST(slot))
         {
-            return castle_version_find(child, version);
+            return castle_vtree_leaf_find(child, version);
         } else
         if(VTREE_SLOT_IS_NODE(slot))
         {
             if(slot->node.version_nr >= version)
-                return castle_version_find(child, version);
+                return castle_vtree_leaf_find(child, version);
         } else
         if(VTREE_SLOT_IS_LEAF(slot))
         {
@@ -62,6 +182,16 @@ struct castle_vtree_leaf_slot* castle_version_find(struct castle_vtree_node *nod
 
     return NULL; 
 } 
+
+c_disk_blk_t castle_vtree_find(struct castle_vtree_node *node, uint32_t version)
+{
+    struct castle_vtree_leaf_slot *leaf;
+
+    leaf = castle_vtree_leaf_find(node, version);
+    if(!leaf) return INVAL_DISK_BLK;
+
+    return leaf->cdb;
+}
 
 static void castle_version_node_destroy(struct castle_vtree_node *v_node)
 {
@@ -89,27 +219,32 @@ int castle_version_tree_read(c_disk_blk_t cdb, struct castle_vtree_node **v_node
     ret = castle_sub_block_read(cs,
                                 vtree_node,
                                 disk_blk_to_offset(cdb),
-                                NODE_HEADER); 
+                                NODE_HEADER,
+                                NULL, NULL); 
     if(ret)
     {
-        printk("Could not read version tree root.\n");
+        printk("Could not read version tree node.\n");
+        kfree(vtree_node);
         return ret;
     }
 
     if((vtree_node->capacity > VTREE_NODE_SLOTS) ||
        (vtree_node->used > vtree_node->capacity))
     {
-        printk("Invalid vtree root capacity or/and used: (%d, %d)\n",
+        printk("Invalid vtree node capacity or/and used: (%d, %d)\n",
                vtree_node->capacity, vtree_node->used);
+        kfree(vtree_node);
         return ret;
     }
     ret = castle_sub_block_read(cs,
                                &vtree_node->slots,
                                 disk_blk_to_offset(cdb) + NODE_HEADER,
-                                vtree_node->used * sizeof(struct castle_vtree_slot)); 
+                                vtree_node->used * sizeof(struct castle_vtree_slot),
+                                NULL, NULL); 
     if(ret)
     {
         printk("Could not read version slots.\n");
+        kfree(vtree_node);
         return ret;
     }
     for(i=0; i<vtree_node->used; i++)

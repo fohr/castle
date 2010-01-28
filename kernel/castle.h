@@ -35,6 +35,24 @@ struct castle_fs_superblock {
     uint32_t rev_tree_block2;
 };
 
+#define NODE_HEADER        0x180
+
+struct castle_ftree_slot {
+    uint32_t     type;
+    uint32_t     block;
+    uint32_t     version;
+    c_disk_blk_t cdb;
+};
+
+#define FTREE_NODE_SLOTS  ((PAGE_SIZE - NODE_HEADER)/sizeof(struct castle_ftree_slot))
+struct castle_ftree_node {
+    uint32_t magic;
+    uint32_t version;
+    uint32_t capacity;
+    uint32_t used;
+    struct castle_ftree_slot slots[FTREE_NODE_SLOTS];
+};
+
 struct castle_vtree_node_slot {
     uint32_t     version_nr;
     c_disk_blk_t cdb;
@@ -63,7 +81,6 @@ struct castle_vtree_slot {
     };
 };
 
-#define NODE_HEADER        0x180
 #define VTREE_NODE_SLOTS  ((PAGE_SIZE - NODE_HEADER)/sizeof(struct castle_vtree_slot))
 struct castle_vtree_node {
     uint32_t magic;
@@ -120,7 +137,8 @@ extern struct castle_devices     castle_devices;
 extern struct castle_vtree_node *castle_vtree_root;
 
 /* Various utilities */
-#define C_BLK_SIZE                     4096
+#define C_BLK_SHIFT                    (12) 
+#define C_BLK_SIZE                     (1 << C_BLK_SHIFT)
 #define disk_blk_to_offset(_cdb)     ((_cdb).block * C_BLK_SIZE)
 
 struct castle_device* castle_device_init       (struct castle_vtree_leaf_slot *version);

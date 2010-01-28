@@ -3,10 +3,14 @@
 
 int castle_block_read(struct castle_slave *slave, 
                       sector_t block,
-                      struct page *page);
+                      struct page *page,
+                      void (*callback)(void *, int err),
+                      void *arg);
 int castle_sub_block_read(struct castle_slave *slave,
                           void *buffer, 
                           uint64_t offset,
-                          uint16_t size);
+                          uint16_t size,
+                          void (*callback)(void *, int err),
+                          void *arg);
 
 #endif /* __CASTLE_BLOCK_H__ */

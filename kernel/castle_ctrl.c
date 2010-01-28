@@ -38,7 +38,7 @@ static void castle_control_attach(cctrl_cmd_attach_t *ioctl)
     printk("Asked to attach version: %llx\n", ioctl->snap); 
     ioctl->dev = 0;
     // TODO all version numbers should be uint32_t (snap_id_t -> uint32_t)
-    version = castle_version_find(castle_vtree_root, (uint32_t)ioctl->snap);
+    version = castle_vtree_leaf_find(castle_vtree_root, (uint32_t)ioctl->snap);
     if(!version)
     {
         ioctl->ret = -EINVAL;
