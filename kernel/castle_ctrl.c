@@ -56,8 +56,11 @@ static void castle_control_attach(cctrl_cmd_attach_t *ioctl)
 
 static void castle_control_detach(cctrl_cmd_detach_t *ioctl)
 {
-    printk("==> Detach NOT IMPLEMENTED YET\n");
-    ioctl->ret = -ENOSYS;
+    dev_t dev = new_decode_dev(ioctl->dev);
+    struct castle_device *cd = castle_device_find(dev);
+
+    if(cd) castle_device_free(cd);
+    ioctl->ret = (cd ? 0 : -ENODEV);
 }
 
 static void castle_control_create(cctrl_cmd_create_t *ioctl)

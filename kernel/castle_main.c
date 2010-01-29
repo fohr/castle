@@ -474,6 +474,29 @@ fail_bio:
     return 0;
 }
 
+struct castle_device* castle_device_find(dev_t dev)
+{
+    struct castle_device *cd;
+    struct list_head *lh;
+
+    list_for_each(lh, &castle_devices.devices)
+    {
+        cd = list_entry(lh, struct castle_device, list);
+        if((cd->gd->major == MAJOR(dev)) &&
+           (cd->gd->first_minor == MINOR(dev)))
+            return cd;
+    }
+    return NULL;
+}
+
+void castle_device_free(struct castle_device *cd)
+{
+    del_gendisk(cd->gd);
+    put_disk(cd->gd);
+    list_del(&cd->list);
+    kfree(cd);
+}
+
 struct castle_device* castle_device_init(struct castle_vtree_leaf_slot *version)
 {
     struct castle_device *dev;
@@ -537,14 +560,6 @@ static void castle_slaves_free(void)
         slave = list_entry(lh, struct castle_slave, list); 
         castle_release(slave);
     }
-}
-
-void castle_device_free(struct castle_device *cd)
-{
-    del_gendisk(cd->gd);
-    put_disk(cd->gd);
-    list_del(&cd->list);
-    kfree(cd);
 }
 
 static int castle_devices_init(void)

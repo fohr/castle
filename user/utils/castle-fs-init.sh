@@ -115,9 +115,12 @@ function do_control_create {
 }
 
 function do_control_attach {
-    do_control_internal "attach" `printf "%X" $1`
-    usleep 500000
+    do_control_internal "attach" $1
     majmin_to_dev $IOCTL_RET
+}
+
+function do_control_detach {
+    do_control_internal "detach" $1
 }
 
 function do_control_snapshot {
@@ -176,6 +179,9 @@ function initfs {
 initdisks
 initfs
 
-do_control_attach 2000
+do_control_attach 0x100
+DEV=$IOCTL_RET
+
+do_control_detach $DEV
 
 echo "Castle initialised successfully"

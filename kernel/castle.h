@@ -152,6 +152,7 @@ extern struct castle_vtree_node *castle_vtree_root;
 
 struct castle_device* castle_device_init       (struct castle_vtree_leaf_slot *version);
 void                  castle_device_free       (struct castle_device *cd);
+struct castle_device* castle_device_find       (dev_t dev);
 struct castle_slave*  castle_claim             (uint32_t new_dev);
 struct castle_slave*  castle_slave_find_by_id  (uint32_t id);
 struct castle_slave*  castle_slave_find_by_uuid(uint32_t uuid);
