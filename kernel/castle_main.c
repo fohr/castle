@@ -406,7 +406,13 @@ static int castle_device_make_request(struct request_queue *rq, struct bio *bio)
     sector_t block;
     c_disk_blk_t cdb;
     int ret, i;
-    static int first = 1;
+
+    /* Fail writes */
+    if(bio->bi_rw & (1 << BIO_RW))
+    {
+        bio_endio(bio, -EIO);
+        return 0;
+    }
 
     cbio = kmalloc(sizeof(struct castle_dev_bio), GFP_KERNEL);
     if(!cbio) goto fail_bio;

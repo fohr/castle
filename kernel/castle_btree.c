@@ -145,6 +145,16 @@ struct castle_ftree_find_io {
     uint32_t version;
 };
 
+static void castle_ftree_slot_normalize(struct castle_ftree_slot *slot)
+{
+    /* Look for 'last' slot, and if block is zero, assign the maximum value instead */
+    if(FTREE_SLOT_IS_NODE_LAST(slot) &&
+       (slot->block == 0))
+    {
+        slot->type = FTREE_SLOT_NODE;
+        slot->block = (uint32_t)-1;
+    }
+}
 
 void castle_ftree_find_end(void *arg, struct castle_ftree_node *node, int err)
 {
@@ -152,8 +162,8 @@ void castle_ftree_find_end(void *arg, struct castle_ftree_node *node, int err)
     struct castle_ftree_find_io io = *iop;
     uint32_t block = (uint32_t)io.block;
     uint32_t version = io.version;
-    uint32_t lub_blk;
-    int      lub_blk_idx, i;
+    uint32_t blk_lub;
+    int      blk_lub_idx, i;
 
     if(err)
     {
@@ -165,64 +175,74 @@ void castle_ftree_find_end(void *arg, struct castle_ftree_node *node, int err)
     }
 
     debug("Looking for (b,v) = (0x%x, 0x%x)\n", block, version);
+    blk_lub_idx = node->used-1;
+    blk_lub     = node->slots[blk_lub_idx].block;
     for(i=node->used-1; i >= 0; i--)
     {
         struct castle_ftree_slot *slot = &node->slots[i];
+        castle_ftree_slot_normalize(slot);
 
-        if(FTREE_SLOT_IS_NODE_LAST(slot) &&
-           (slot->block == 0))
-        {
-            slot->type = FTREE_SLOT_NODE;
-            slot->block = -1;
-        }
         debug(" (b,v) = (0x%x, 0x%x)\n", 
                slot->block,
                slot->version);
 
+        /* If the block is already too small, we must have gone past the least
+           upper bound */
+        if(slot->block < block)
+            break;
 
-        /* Logic starts here */
-        if(slot->block >= block)
+        /* Update the blk_lub, but only if it's different to the current block.
+           This would save an incorrect lub index */
+        if(blk_lub != slot->block)
         {
-             if(lub_blk != slot->block)
-             {
-                 lub_blk     = slot->block;
-                 lub_blk_idx = i;
-             }
-             debug("  skipping, b_lub=0x%x, b_lub_idx=%d\n", lub_blk, lub_blk_idx);
-             continue;
+            blk_lub     = slot->block;
+            blk_lub_idx = i;
+            debug("  set b_lub=0x%x, b_lub_idx=%d\n", blk_lub, blk_lub_idx);
         }
-        goto find_version;
     } 
-find_version:
-    debug("Version seach.\n");
-    for(i=lub_blk_idx; i>=0; i--)
+    
+    debug("Version seach, blk_lub=0x%x, idx=%d.\n", blk_lub, blk_lub_idx);
+    /* 
+       Start at blk LUB, and scan left. Stop if:
+       - blk number changes: 
+            block not found
+       - blk is still the lub, and version is an ancestor:
+            if we looking at a leaf, the search is finished
+            otherwise follow the pointer to the next level in the tree
+       Skip over versions which are not ancestors of the version we are 
+       looking for 
+    */
+    for(i=blk_lub_idx; i>=0; i--)
     {
         struct castle_ftree_slot *slot = &node->slots[i];
         
         debug(" (b,v) = (0x%x, 0x%x)\n", 
                slot->block,
                slot->version);
-        if(slot->block != lub_blk)
+
+        if(slot->block != blk_lub)
         {
-            debug("NOT FOUND\n");
+            debug("Not found\n");
             goto blk_not_found;
         }
+
         if(castle_is_ancestor(castle_vtree_root, slot->version, version))
         {
-            debug(" is an ancestor.\n");
+            debug(" Is an ancestor.\n");
             if(FTREE_SLOT_IS_LEAF(slot))
             {
-                debug(" is a leaf\n");
-                debug(" FOUND (b,v)=(0x%x, 0x%x)\n", slot->block, slot->version);
+                debug(" Is a leaf, found (b,v)=(0x%x, 0x%x)\n", 
+                    slot->block, slot->version);
                 kfree(node);
                 kfree(iop);
                 io.callback(io.arg, slot->cdb, 0);
                 return;
-            } else
+            } 
+            else
             {
                 int ret;
 
-                debug("Scheduling a read for: (0x%x, 0x%x)\n",
+                debug("Is not a leaf. Read and search (disk,blk#)=(0x%x, 0x%x)\n",
                         slot->cdb.disk, slot->cdb.block);
                 ret = castle_ftree_find(slot->cdb,
                                         (sector_t)block,
@@ -235,12 +255,9 @@ find_version:
                 if(ret) io.callback(io.arg, INVAL_DISK_BLK, ret);
                 return;
             }
-        } else
-        {
-            debug(" is NOT an ancestor.\n");
         }
     }
-    debug(" NOT FOUND3\n");
+    debug(" No elements left. Blk not found\n");
 blk_not_found:    
     kfree(node);
     kfree(iop);
