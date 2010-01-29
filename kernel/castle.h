@@ -124,6 +124,7 @@ struct castle_slaves {
 };
 
 struct castle_device {
+    struct kobject    kobj;
     spinlock_t        lock;
     struct list_head  list;
     struct gendisk   *gd;

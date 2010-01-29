@@ -491,6 +491,7 @@ struct castle_device* castle_device_find(dev_t dev)
 
 void castle_device_free(struct castle_device *cd)
 {
+    castle_sysfs_device_del(cd);
     del_gendisk(cd->gd);
     put_disk(cd->gd);
     list_del(&cd->list);
@@ -534,6 +535,7 @@ struct castle_device* castle_device_init(struct castle_vtree_leaf_slot *version)
     add_disk(gd);
 
     bdget(MKDEV(gd->major, gd->first_minor));
+    castle_sysfs_device_add(dev);
 
     return dev;
 

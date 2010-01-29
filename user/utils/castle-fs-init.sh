@@ -179,9 +179,10 @@ function initfs {
 initdisks
 initfs
 
-do_control_attach 0x100
+do_control_attach 100
+do_control_attach 200
 DEV=$IOCTL_RET
 
-do_control_detach $DEV
+#do_control_detach $DEV
 
 echo "Castle initialised successfully"
