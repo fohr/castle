@@ -1,9 +1,11 @@
 #include <linux/module.h>
+#include <linux/workqueue.h>
 
 #include "castle.h"
 #include "castle_block.h"
 #include "castle_btree.h"
 
+//#define DEBUG
 #ifndef DEBUG
 #define debug(_f, ...)  ((void)0)
 #else
@@ -21,14 +23,12 @@ static int castle_ftree_read(c_disk_blk_t cdb,
 struct castle_ftree_io {
     void (*callback)(void *arg, struct castle_ftree_node *node, int err);
     void *arg;
-    int payload_read;
     c_disk_blk_t cdb;
     struct castle_ftree_node *node;
 };
 
 static void castle_ftree_read_end(void *arg, int ret)
 {
-    struct castle_slave *cs;
     struct castle_ftree_io *iop = arg;
     struct castle_ftree_io io = *iop;
     struct castle_ftree_node *ftree_node = io.node;
@@ -39,14 +39,6 @@ static void castle_ftree_read_end(void *arg, int ret)
         kfree(ftree_node);
         kfree(iop);
         io.callback(io.arg, NULL, ret);
-        return;
-    }
-
-    /* If we've already read the entire node, call the callback and exit */
-    if(io.payload_read)
-    {
-        kfree(iop);
-        io.callback(io.arg, ftree_node, 0); 
         return;
     }
 
@@ -62,30 +54,9 @@ static void castle_ftree_read_end(void *arg, int ret)
         io.callback(io.arg, NULL, -EINVAL);
         return;
     }
-    cs = castle_slave_find_by_block(io.cdb);
-    if(!cs) 
-    {
-        kfree(ftree_node);
-        kfree(iop);
-        io.callback(io.arg, NULL, -ENODEV);
-        return;
-    }
     
-    /* The next time around the entire node (= payload) will be read */
-    iop->payload_read = 1;
-    ret = castle_sub_block_read(cs,
-                               &ftree_node->slots,
-                                disk_blk_to_offset(io.cdb) + NODE_HEADER,
-                                ftree_node->used * sizeof(struct castle_ftree_slot),
-                                castle_ftree_read_end, 
-                                iop); 
-    if(ret)
-    {
-        printk("Could not read ftree node slots.\n");
-        kfree(ftree_node);
-        kfree(iop);
-        io.callback(io.arg, NULL, ret);
-    }
+    kfree(iop);
+    io.callback(io.arg, ftree_node, 0); 
 }
 
 static int castle_ftree_read(c_disk_blk_t cdb, 
@@ -112,7 +83,6 @@ static int castle_ftree_read(c_disk_blk_t cdb,
     io->node = ftree_node;
     io->callback = callback;
     io->arg = arg;
-    io->payload_read = 0;
 
     cs = castle_slave_find_by_block(cdb);
     if(!cs) 
@@ -122,10 +92,11 @@ static int castle_ftree_read(c_disk_blk_t cdb,
         return -ENODEV;
     }
 
+    BUG_ON(sizeof(struct castle_ftree_node) > C_BLK_SIZE);
     ret = castle_sub_block_read(cs,
                                 ftree_node,
                                 disk_blk_to_offset(cdb),
-                                NODE_HEADER,
+                                sizeof(struct castle_ftree_node),
                                 castle_ftree_read_end, 
                                 io);
     /* We won't get a callback, cleanup here */
@@ -143,6 +114,8 @@ struct castle_ftree_find_io {
     void *arg;
     sector_t block;
     uint32_t version;
+    struct work_struct work;
+    struct castle_ftree_node *node;
 };
 
 static void castle_ftree_slot_normalize(struct castle_ftree_slot *slot)
@@ -156,25 +129,18 @@ static void castle_ftree_slot_normalize(struct castle_ftree_slot *slot)
     }
 }
 
-void castle_ftree_find_end(void *arg, struct castle_ftree_node *node, int err)
+void castle_ftree_process(struct work_struct *work)
 {
-    struct castle_ftree_find_io *iop = arg;
+    struct castle_ftree_find_io *iop = container_of(work, struct castle_ftree_find_io, work);
     struct castle_ftree_find_io io = *iop;
+    struct castle_ftree_node *node = io.node;
     uint32_t block = (uint32_t)io.block;
     uint32_t version = io.version;
     uint32_t blk_lub;
     int      blk_lub_idx, i;
 
-    if(err)
-    {
-        /* node should be null on error */
-        BUG_ON(node);
-        kfree(iop);
-        io.callback(io.arg, INVAL_DISK_BLK, err);
-        return;
-    }
-
-    debug("Looking for (b,v) = (0x%x, 0x%x)\n", block, version);
+    debug("Looking for (b,v) = (0x%x, 0x%x), node->used=%d, capacity=%d\n",
+            block, version, node->used, node->capacity);
     blk_lub_idx = node->used-1;
     blk_lub     = node->slots[blk_lub_idx].block;
     for(i=node->used-1; i >= 0; i--)
@@ -231,11 +197,12 @@ void castle_ftree_find_end(void *arg, struct castle_ftree_node *node, int err)
             debug(" Is an ancestor.\n");
             if(FTREE_SLOT_IS_LEAF(slot))
             {
+                c_disk_blk_t cdb = slot->cdb; 
                 debug(" Is a leaf, found (b,v)=(0x%x, 0x%x)\n", 
                     slot->block, slot->version);
                 kfree(node);
                 kfree(iop);
-                io.callback(io.arg, slot->cdb, 0);
+                io.callback(io.arg, cdb, 0);
                 return;
             } 
             else
@@ -262,6 +229,25 @@ blk_not_found:
     kfree(node);
     kfree(iop);
     io.callback(io.arg, INVAL_DISK_BLK, -ENOENT); 
+}
+
+void castle_ftree_find_end(void *arg, struct castle_ftree_node *node, int err)
+{
+    struct castle_ftree_find_io *iop = arg;
+    struct castle_ftree_find_io io = *iop;
+
+    /* Callback on error */
+    if(err)
+    {
+        kfree(iop);
+        io.callback(io.arg, INVAL_DISK_BLK, err);
+        return;
+    }
+
+    iop->node = node;
+    /* Otherwise queue processing */
+    INIT_WORK(&iop->work, castle_ftree_process);
+    queue_work(castle_wq, &iop->work); 
 }
 
 int castle_ftree_find(c_disk_blk_t node_cdb,

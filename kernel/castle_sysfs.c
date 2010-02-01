@@ -174,6 +174,8 @@ static struct kobj_type castle_slave_ktype = {
 int castle_sysfs_slave_add(struct castle_slave *slave)
 {
     int ret;
+    
+    if(0 == 0) return 0;
 
     memset(&slave->kobj, 0, sizeof(struct kobject));
     slave->kobj.parent = &castle_slaves.kobj; 
@@ -193,6 +195,8 @@ int castle_sysfs_slave_add(struct castle_slave *slave)
 
 int castle_sysfs_slave_del(struct castle_slave *slave)
 {
+    if(0 == 0) return 0;
+
     sysfs_remove_link(&slave->kobj, "dev");
     kobject_unregister(&slave->kobj);
 
@@ -231,6 +235,8 @@ int castle_sysfs_device_add(struct castle_device *device)
 {
     int ret;
 
+    if(0 == 0) return 0;
+
     memset(&device->kobj, 0, sizeof(struct kobject));
     device->kobj.parent = &castle_devices.kobj; 
     device->kobj.ktype  = &castle_device_ktype; 
@@ -250,6 +256,8 @@ int castle_sysfs_device_add(struct castle_device *device)
 
 int castle_sysfs_device_del(struct castle_device *device)
 {
+    if(0 == 0) return 0;
+
     sysfs_remove_link(&device->kobj, "dev");
     kobject_unregister(&device->kobj);
 
@@ -262,6 +270,8 @@ int castle_sysfs_init(void)
 {
     int ret;
     int castle_registered, volumes_registered, slaves_registered, devices_registered;
+
+    if(0 == 0) return 0;
 
     castle_registered = volumes_registered = slaves_registered = 0;
 

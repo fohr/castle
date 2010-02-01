@@ -15,10 +15,14 @@ struct castle                castle;
 struct castle_volumes        castle_volumes;
 struct castle_slaves         castle_slaves;
 struct castle_devices        castle_devices;
+
+struct workqueue_struct     *castle_wq;
+
 int                          castle_fs_inited;
 struct castle_fs_superblock  castle_fs_super;
 struct castle_vtree_node    *castle_vtree_root;
 
+//#define DEBUG
 #ifndef DEBUG
 #define debug(_f, ...)  ((void)0)
 #else
@@ -327,18 +331,23 @@ static struct block_device_operations castle_bd_ops = {
 	.revalidate_disk = NULL,
 };
 
-struct castle_dev_bio {
-    struct bio *bio;
-    int ref_cnt;
-    int ret;
-};
+struct castle_bio_vec;
+typedef struct castle_bio {
+    struct bio            *bio;
+    struct castle_bio_vec *c_bvecs; 
+    atomic_t               remaining;
+    int                    err;
+} c_bio_t;
 
-struct castle_dev_io {
-    struct castle_dev_bio *cbio;
-    /* Stuff required to construct a bio */
-    struct page *page;
-};
+typedef struct castle_bio_vec {
+    c_bio_t            *c_bio;
+    struct page        *page;
+    struct work_struct  work;
+    sector_t            block;
+    uint32_t            version;
+} c_bvec_t;
 
+#if 0
 void castle_bio_put(struct castle_dev_bio *cbio)
 {
     debug("Putting castle bio, current ref=%d\n", cbio->ref_cnt);
@@ -397,78 +406,169 @@ error_out:
     cbio->ret = err;
     castle_bio_put(cbio);
 }
+#endif
 
-static int castle_device_make_request(struct request_queue *rq, struct bio *bio)
-{ 
-    struct castle_dev_bio *cbio;
-    struct castle_device *dev = rq->queuedata;
-    struct bio_vec *bvec;
-    sector_t block;
-    c_disk_blk_t cdb;
-    int ret, i;
-
-    /* Fail writes */
-    if(bio->bi_rw & (1 << BIO_RW))
+static void castle_bio_put(c_bio_t *c_bio)
+{
+    if(atomic_dec_and_test(&c_bio->remaining))
     {
-        bio_endio(bio, -EIO);
-        return 0;
+        struct bio *bio = c_bio->bio;
+        int err = c_bio->err;
+        
+
+        kfree(c_bio->c_bvecs);
+        kfree(c_bio);
+
+        debug("Ending bio with ret=%d\n", err);
+        bio_endio(bio, err);
+    }
+}
+
+static void castle_bio_data_io_end(void *arg, int err)
+{
+    c_bvec_t *c_bvec = arg;
+
+    debug("Finished the read.\n");
+    if(err) c_bvec->c_bio->err = err;
+    castle_bio_put(c_bvec->c_bio);
+}
+
+static void castle_bio_data_io(void *ptr, c_disk_blk_t cdb, int err)
+{
+    c_bvec_t *c_bvec = ptr;
+    struct castle_slave *cs;
+
+    if(err)
+    {
+        if(err == (-ENOENT))
+        {
+            memset(pfn_to_kaddr(page_to_pfn(c_bvec->page)), 0, PAGE_SIZE);
+            castle_bio_put(c_bvec->c_bio);
+            return;
+        }
+        printk("Failed to find the block to read %d.\n", err);
+        goto error_out;
     }
 
-    cbio = kmalloc(sizeof(struct castle_dev_bio), GFP_KERNEL);
-    if(!cbio) goto fail_bio;
-    // TODO: Atomic + passibly could be done through plain old bio
-    cbio->bio = bio;
-    cbio->ret = 0;
-    cbio->ref_cnt = bio->bi_vcnt;
+    cs = castle_slave_find_by_block(cdb);
+    if(!cs)
+    {
+        err = -ENODEV;
+        goto error_out;
+    }
+
+    debug("Scheduling the read.\n");
+    err = castle_block_read(cs, 
+                            cdb.block,
+                            c_bvec->page,
+                            castle_bio_data_io_end,
+                            c_bvec);
+
+    if(err) goto error_out;
+    return;
+
+error_out:
+    printk("Failing the read.\n");
+    c_bvec->c_bio->err = err;
+    castle_bio_put(c_bvec->c_bio);
+}
+
+static void castle_bio_dispatch(struct work_struct *work)
+{
+    c_bvec_t *c_bvec = container_of(work, c_bvec_t, work);
+    c_disk_blk_t cdb;
+    int ret;
+        
+    debug("Reading block: 0x%lx, %ld\n", c_bvec->block, c_bvec->block);
+    cdb = castle_vtree_find(castle_vtree_root, c_bvec->version); 
+
+    ret = castle_ftree_find(cdb, 
+                            c_bvec->block, 
+                            c_bvec->version,
+                            castle_bio_data_io,
+                            c_bvec);
+    if(ret)
+    {
+        printk("Failed to find in ftree.\n");
+        c_bvec->c_bio->err = -EIO;
+        castle_bio_put(c_bvec->c_bio);
+    }
+}
+
+static int castle_bio_validate(struct bio *bio)
+{
+    struct bio_vec *bvec;
+    int i;
+
+    /* Fail writes */
+    if(bio_rw(bio) == WRITE)
+    {
+        printk("Cannot handle writes yet.\n");
+        return -ENOSYS;
+    }
 
     if(bio->bi_sector % (1 << (C_BLK_SHIFT - 9)) != 0)
     {
         printk("Got BIO for unaligned sector: 0x%lx\n", bio->bi_sector);
-        goto fail_bio;
+        return -EINVAL;
     }
 
-    block = bio->bi_sector >> (C_BLK_SHIFT - 9);
     bio_for_each_segment(bvec, bio, i)
     {
-        struct castle_dev_io *io;
-
         if((bvec->bv_len != C_BLK_SIZE) || (bvec->bv_offset != 0))
         {
             printk("Got unaligned bvec: len=0x%x, offset=0x%x\n", 
                     bvec->bv_len, bvec->bv_offset);
-            goto fail_bio;
+            return -EINVAL;
         }
+    }
 
-        io = kmalloc(sizeof(struct castle_dev_io), GFP_KERNEL);
-        if(!io)
-        {
-            printk("Could not allocate castle_dev_io.\n");
-            castle_bio_put(cbio);
-            continue;
-        }
-        io->cbio = cbio;
-        io->page = bvec->bv_page;
+    return 0;
+}
 
-        debug("Reading block: 0x%lx, %ld\n", block, block);
-        cdb = castle_vtree_find(castle_vtree_root, dev->version); 
-        ret = castle_ftree_find(cdb, 
-                                block, 
-                                dev->version,
-                                castle_device_make_request_read_slave,
-                                io);
-        if(ret)
-        {
-            printk("Failed to find a block.\n");
-            kfree(io);
-            castle_bio_put(cbio);
-        }
+static int castle_device_make_request(struct request_queue *rq, struct bio *bio)
+{ 
+    c_bio_t *c_bio = NULL;
+    c_bvec_t *c_bvecs = NULL;
+    struct castle_device *dev = rq->queuedata;
+    struct bio_vec *bvec;
+    sector_t block;
+    int i;
+
+    /* Check if we can handle this bio */
+    if(castle_bio_validate(bio))
+        goto fail_bio;
+
+    c_bio   = kmalloc(sizeof(c_bio_t), GFP_NOIO);
+    c_bvecs = kmalloc(sizeof(c_bvec_t) * bio->bi_vcnt, GFP_NOIO);
+    if(!c_bio || !c_bvecs) 
+        goto fail_bio;
+    
+    c_bio->bio = bio;
+    c_bio->c_bvecs = c_bvecs; 
+    atomic_set(&c_bio->remaining, bio->bi_vcnt);
+    c_bio->err = 0;
+
+    block = bio->bi_sector >> (C_BLK_SHIFT - 9);
+    bio_for_each_segment(bvec, bio, i)
+    {
+        c_bvec_t *c_bvec = c_bvecs + i; 
+
+        c_bvec->c_bio   = c_bio;
+        c_bvec->page    = bvec->bv_page;
+        c_bvec->block   = block;
+        c_bvec->version = dev->version; 
+        INIT_WORK(&c_bvec->work, castle_bio_dispatch);
+        queue_work(castle_wq, &c_bvec->work); 
+
+        block++;
     }
 
     return 0;
 
 fail_bio:
-    // TODO: Should invalidate/fixup existing ftree searches 
-    // TODO: Should not fail BIO unconditionally 
+    if(c_bio)   kfree(c_bio);
+    if(c_bvecs) kfree(c_bvecs);
     bio_endio(bio, -EIO);
 
     return 0;
@@ -570,6 +670,7 @@ static int castle_devices_init(void)
 
     memset(&castle_devices, 0, sizeof(struct castle_devices));
     INIT_LIST_HEAD(&castle_devices.devices);
+
     /* Allocate a major for this device */
     if((major = register_blkdev(0, "castle-fs")) < 0) 
     {
@@ -577,6 +678,14 @@ static int castle_devices_init(void)
         return -ENOMEM;
     }
     castle_devices.major = major;
+
+    castle_wq = create_workqueue("castle_wq");
+    if(!castle_wq)
+    {
+        printk("Could not create worqueue.\n");
+        unregister_blkdev(castle_devices.major, "castle-fs"); 
+        return -ENOMEM;
+    }
 
     return 0;
 }
@@ -594,6 +703,8 @@ static void castle_devices_free(void)
 
     if (castle_devices.major)
         unregister_blkdev(castle_devices.major, "castle-fs");
+
+    destroy_workqueue(castle_wq);
 }
 
 static int __init castle_init(void)

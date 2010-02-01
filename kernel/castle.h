@@ -58,6 +58,7 @@ struct castle_ftree_node {
     uint32_t version;
     uint32_t capacity;
     uint32_t used;
+    uint8_t  __pad[NODE_HEADER - 16];
     struct castle_ftree_slot slots[FTREE_NODE_SLOTS];
 };
 
@@ -144,6 +145,9 @@ extern struct castle             castle;
 extern struct castle_volumes     castle_volumes;
 extern struct castle_slaves      castle_slaves;
 extern struct castle_devices     castle_devices;
+
+extern struct workqueue_struct  *castle_wq;
+
 extern struct castle_vtree_node *castle_vtree_root;
 
 /* Various utilities */

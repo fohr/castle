@@ -2,11 +2,9 @@
 # This script is to start castle IN THE PRODUCT VM
 # it gets installed to /opt/acunu/castle/bin
 
-CASTLE=/opt/acunu/castle/bin/castle
 TEST=/tmp/castle-disks
-DISKS="disk1 disk2 disk3"
-DISK_SIZE=1000000 # MBs
-MOUNT_POINT=/fs
+#DISKS="disk1 disk2 disk3"
+DISKS="/dev/hdb /dev/hdc /dev/hdd"
 
 set -eu
 cd `dirname $0`
@@ -24,14 +22,17 @@ trap onexit EXIT
 
 function dev_to_majmin {
     local DEV=$1
-    # We only handle loop and castle devices for now
+    # We only handle loop and castle and hdX devices for now
     if [ "x`echo $DEV | grep loop`" != "x" ]; then
         local LOOP_NR=`echo $DEV | sed -e 's#/dev/loop\(.*\)#\1#g'`
         local MAJMIN=`cat /proc/partitions | grep "loop${LOOP_NR}$" | awk '{print ( $1":"$2) }'`
     elif [ "x`echo $DEV | grep castle`" != "x" ]; then
         local CASTLE_NR=`echo $DEV | sed -e 's#/dev/castle/castle\(.*\)#\1#g'`
         local MAJMIN=`cat /proc/partitions | grep "castle${CASTLE_NR}$" | awk '{print ( $1":"$2) }'`
-     else
+    elif [ "x`echo $DEV | grep hd`" != "x" ]; then
+        local HD=`echo $DEV | sed -e 's#/dev/hd\(.\)#hd\1#g'`
+        local MAJMIN=`cat /proc/partitions | grep "${HD}$" | awk '{print ( $1":"$2) }'`
+    else
         echo "Could not dev_to_majmin for dev: $DEV"
         false
     fi
@@ -100,9 +101,13 @@ function do_control_internal {
 
 function do_control_claim {
     local FILE=$1
-    local LOOP=`losetup -f`
-    losetup $LOOP $FILE
-    dev_to_majmin $LOOP
+    if [ `echo "${FILE}" | grep "/dev" | wc -l` == 0 ]; then
+        local LOOP=`losetup -f`
+        losetup $LOOP ${TEST}/${FILE}
+        dev_to_majmin $LOOP
+    else
+        dev_to_majmin $FILE
+    fi
     do_control_internal "claim" $DEVID_HEX
 }
 
@@ -149,34 +154,19 @@ function mod_init {
     fi
 }
 
-function initdisks {
-    echo "Disks will be kept in ${TEST}"
-    echo "Creating empty disk(s)..."
-
-	mkdir -p ${TEST}
-	for DISK in ${DISKS}; do
-		if [ ! -f ${TEST}/${DISK} ]; then
-			echo "Making empty ${DISK_SIZE} MB file ${TEST}/${DISK}"
-			# make spase files with seek=...
-			dd if=/dev/zero of=${TEST}/${DISK} bs=1M count=1 seek=${DISK_SIZE} 2>/dev/null 
-		fi
-	done
-}
-
 function initfs {
     mod_init
     echo
     echo "Initing FS..."
 	
 	for DISK in ${DISKS}; do
-		do_control_claim "${TEST}/${DISK}" 
+		do_control_claim "${DISK}" 
 	done
 
 	do_control_init
 }
 
 ./castle-fs-fini.sh
-initdisks
 initfs
 
 do_control_attach 100
