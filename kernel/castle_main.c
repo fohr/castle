@@ -331,22 +331,6 @@ static struct block_device_operations castle_bd_ops = {
 	.revalidate_disk = NULL,
 };
 
-struct castle_bio_vec;
-typedef struct castle_bio {
-    struct bio            *bio;
-    struct castle_bio_vec *c_bvecs; 
-    atomic_t               remaining;
-    int                    err;
-} c_bio_t;
-
-typedef struct castle_bio_vec {
-    c_bio_t            *c_bio;
-    struct page        *page;
-    struct work_struct  work;
-    sector_t            block;
-    uint32_t            version;
-} c_bvec_t;
-
 #if 0
 void castle_bio_put(struct castle_dev_bio *cbio)
 {
@@ -424,33 +408,30 @@ static void castle_bio_put(c_bio_t *c_bio)
     }
 }
 
-static void castle_bio_data_io_end(void *arg, int err)
+void castle_bio_data_io_end(void *ptr, int err)
 {
-    c_bvec_t *c_bvec = arg;
+    c_bvec_t *c_bvec = ptr;
 
     debug("Finished the read.\n");
     if(err) c_bvec->c_bio->err = err;
     castle_bio_put(c_bvec->c_bio);
 }
 
-static void castle_bio_data_io(void *ptr, c_disk_blk_t cdb, int err)
+void castle_bio_data_io(c_bvec_t *c_bvec)
 {
-    c_bvec_t *c_bvec = ptr;
     struct castle_slave *cs;
+    int err;
 
-    if(err)
+    /* Invalid pointer to on slave data means that it's never been written.
+       memset the buffer to zero end exit */
+    if(DISK_BLK_INVAL(c_bvec->cdb))
     {
-        if(err == (-ENOENT))
-        {
-            memset(pfn_to_kaddr(page_to_pfn(c_bvec->page)), 0, PAGE_SIZE);
-            castle_bio_put(c_bvec->c_bio);
-            return;
-        }
-        printk("Failed to find the block to read %d.\n", err);
-        goto error_out;
+        memset(pfn_to_kaddr(page_to_pfn(c_bvec->page)), 0, PAGE_SIZE);
+        castle_bio_put(c_bvec->c_bio);
+        return;
     }
 
-    cs = castle_slave_find_by_block(cdb);
+    cs = castle_slave_find_by_block(c_bvec->cdb);
     if(!cs)
     {
         err = -ENODEV;
@@ -459,7 +440,7 @@ static void castle_bio_data_io(void *ptr, c_disk_blk_t cdb, int err)
 
     debug("Scheduling the read.\n");
     err = castle_block_read(cs, 
-                            cdb.block,
+                            c_bvec->cdb.block,
                             c_bvec->page,
                             castle_bio_data_io_end,
                             c_bvec);
@@ -471,28 +452,6 @@ error_out:
     printk("Failing the read.\n");
     c_bvec->c_bio->err = err;
     castle_bio_put(c_bvec->c_bio);
-}
-
-static void castle_bio_dispatch(struct work_struct *work)
-{
-    c_bvec_t *c_bvec = container_of(work, c_bvec_t, work);
-    c_disk_blk_t cdb;
-    int ret;
-        
-    debug("Reading block: 0x%lx, %ld\n", c_bvec->block, c_bvec->block);
-    cdb = castle_vtree_find(castle_vtree_root, c_bvec->version); 
-
-    ret = castle_ftree_find(cdb, 
-                            c_bvec->block, 
-                            c_bvec->version,
-                            castle_bio_data_io,
-                            c_bvec);
-    if(ret)
-    {
-        printk("Failed to find in ftree.\n");
-        c_bvec->c_bio->err = -EIO;
-        castle_bio_put(c_bvec->c_bio);
-    }
 }
 
 static int castle_bio_validate(struct bio *bio)
@@ -540,7 +499,7 @@ static int castle_device_make_request(struct request_queue *rq, struct bio *bio)
         goto fail_bio;
 
     c_bio   = kmalloc(sizeof(c_bio_t), GFP_NOIO);
-    c_bvecs = kmalloc(sizeof(c_bvec_t) * bio->bi_vcnt, GFP_NOIO);
+    c_bvecs = kzalloc(sizeof(c_bvec_t) * bio->bi_vcnt, GFP_NOIO);
     if(!c_bio || !c_bvecs) 
         goto fail_bio;
     
@@ -552,14 +511,19 @@ static int castle_device_make_request(struct request_queue *rq, struct bio *bio)
     block = bio->bi_sector >> (C_BLK_SHIFT - 9);
     bio_for_each_segment(bvec, bio, i)
     {
+        c_disk_blk_t cdb;
         c_bvec_t *c_bvec = c_bvecs + i; 
 
         c_bvec->c_bio   = c_bio;
         c_bvec->page    = bvec->bv_page;
         c_bvec->block   = block;
         c_bvec->version = dev->version; 
-        INIT_WORK(&c_bvec->work, castle_bio_dispatch);
-        queue_work(castle_wq, &c_bvec->work); 
+        
+        cdb = castle_vtree_find(castle_vtree_root, c_bvec->version); 
+        if(DISK_BLK_INVAL(cdb))
+            castle_bio_data_io_end(c_bvec, -EINVAL);
+        else
+            castle_ftree_find(c_bvec, cdb); 
 
         block++;
     }

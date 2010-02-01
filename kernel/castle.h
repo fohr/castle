@@ -8,7 +8,7 @@ struct castle_disk_block {
 };
 typedef struct castle_disk_block c_disk_blk_t;
 #define INVAL_DISK_BLK          ((c_disk_blk_t){0,0})
-#define DISK_BLK_INVAL(_blk)    ((_blk) == INVAL_DISK_BLK)
+#define DISK_BLK_INVAL(_blk)    (((_blk).block == 0) && ((_blk).disk == 0))
 
 struct castle_slave_superblock {
     uint32_t magic1;
@@ -102,6 +102,29 @@ struct castle_vtree_node {
     struct castle_vtree_node *children[VTREE_NODE_SLOTS];
 };
 
+/* IO related structures */
+typedef struct castle_bio {
+    struct bio            *bio;
+    void                  *c_bvecs; 
+    atomic_t               remaining;
+    int                    err;
+} c_bio_t;
+
+typedef struct castle_bio_vec {
+    c_bio_t            *c_bio;
+    struct page        *page;
+    struct work_struct  work;
+    /* What block,version do we want to read */
+    sector_t            block;
+    uint32_t            version;
+    /* Updated as the IO progresses */
+    union {
+        struct castle_ftree_node *node;
+        c_disk_blk_t cdb;
+    };
+} c_bvec_t;
+
+
 /* First class structures */
 struct castle {
     struct kobject kobj;
@@ -154,6 +177,9 @@ extern struct castle_vtree_node *castle_vtree_root;
 #define C_BLK_SHIFT                    (12) 
 #define C_BLK_SIZE                     (1 << C_BLK_SHIFT)
 #define disk_blk_to_offset(_cdb)     ((_cdb).block * C_BLK_SIZE)
+
+void castle_bio_data_io_end(void *c_bvec, int err);
+void castle_bio_data_io(c_bvec_t *c_bvec);
 
 struct castle_device* castle_device_init       (struct castle_vtree_leaf_slot *version);
 void                  castle_device_free       (struct castle_device *cd);

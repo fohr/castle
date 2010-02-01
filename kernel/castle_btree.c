@@ -14,109 +14,6 @@
 
 
 static int castle_is_ancestor(struct castle_vtree_node *root, uint32_t candidate, uint32_t version);
-static int castle_ftree_read(c_disk_blk_t cdb, 
-                             void (*callback)(void *, 
-                                              struct castle_ftree_node *node, 
-                                              int err),
-                             void *arg);
-
-struct castle_ftree_io {
-    void (*callback)(void *arg, struct castle_ftree_node *node, int err);
-    void *arg;
-    c_disk_blk_t cdb;
-    struct castle_ftree_node *node;
-};
-
-static void castle_ftree_read_end(void *arg, int ret)
-{
-    struct castle_ftree_io *iop = arg;
-    struct castle_ftree_io io = *iop;
-    struct castle_ftree_node *ftree_node = io.node;
-
-    if(ret)
-    {
-        printk("Could not read ftree node.\n");
-        kfree(ftree_node);
-        kfree(iop);
-        io.callback(io.arg, NULL, ret);
-        return;
-    }
-
-    /* We'll only get here if we've just read the header, 
-       and we have to read the rest of the node */ 
-    if((ftree_node->capacity > FTREE_NODE_SLOTS) ||
-       (ftree_node->used > ftree_node->capacity))
-    {
-        printk("Invalid ftree node capacity or/and used: (%d, %d)\n",
-               ftree_node->capacity, ftree_node->used);
-        kfree(ftree_node);
-        kfree(iop);
-        io.callback(io.arg, NULL, -EINVAL);
-        return;
-    }
-    
-    kfree(iop);
-    io.callback(io.arg, ftree_node, 0); 
-}
-
-static int castle_ftree_read(c_disk_blk_t cdb, 
-                             void (*callback)(void *, 
-                                              struct castle_ftree_node *node, 
-                                              int err),
-                             void *arg)
-{
-    struct castle_slave *cs;
-    struct castle_ftree_node *ftree_node; 
-    struct castle_ftree_io *io;
-    int ret;
-
-    io = kmalloc(sizeof(struct castle_ftree_io), GFP_KERNEL);
-    if(!io) return -ENOMEM;
-    ftree_node = kmalloc(sizeof(struct castle_ftree_node), GFP_KERNEL);
-    if(!ftree_node) 
-    {
-        kfree(io);
-        return -ENOMEM;
-    }
-    memset(ftree_node, 0, sizeof(struct castle_ftree_node));
-    io->cdb = cdb;
-    io->node = ftree_node;
-    io->callback = callback;
-    io->arg = arg;
-
-    cs = castle_slave_find_by_block(cdb);
-    if(!cs) 
-    {
-        kfree(ftree_node);
-        kfree(io);
-        return -ENODEV;
-    }
-
-    BUG_ON(sizeof(struct castle_ftree_node) > C_BLK_SIZE);
-    ret = castle_sub_block_read(cs,
-                                ftree_node,
-                                disk_blk_to_offset(cdb),
-                                sizeof(struct castle_ftree_node),
-                                castle_ftree_read_end, 
-                                io);
-    /* We won't get a callback, cleanup here */
-    if(ret)
-    {
-        kfree(ftree_node);
-        kfree(io);
-    }
-
-    return ret;
-}
-
-struct castle_ftree_find_io {
-    void (*callback)(void *arg, c_disk_blk_t cdb, int err);
-    void *arg;
-    sector_t block;
-    uint32_t version;
-    struct work_struct work;
-    struct castle_ftree_node *node;
-};
 
 static void castle_ftree_slot_normalize(struct castle_ftree_slot *slot)
 {
@@ -131,14 +28,23 @@ static void castle_ftree_slot_normalize(struct castle_ftree_slot *slot)
 
 void castle_ftree_process(struct work_struct *work)
 {
-    struct castle_ftree_find_io *iop = container_of(work, struct castle_ftree_find_io, work);
-    struct castle_ftree_find_io io = *iop;
-    struct castle_ftree_node *node = io.node;
-    uint32_t block = (uint32_t)io.block;
-    uint32_t version = io.version;
+    c_bvec_t *c_bvec = container_of(work, c_bvec_t, work);
+    struct castle_ftree_node *node = c_bvec->node;
+    uint32_t block = c_bvec->block;
+    uint32_t version = c_bvec->version;
     uint32_t blk_lub;
     int      blk_lub_idx, i;
 
+    if((node->capacity > FTREE_NODE_SLOTS) ||
+       (node->used     > node->capacity))
+    {
+        printk("Invalid ftree node capacity or/and used: (%d, %d)\n",
+               node->capacity, node->used);
+        kfree(node);
+        castle_bio_data_io_end(c_bvec, -EINVAL);
+        return;
+    }
+ 
     debug("Looking for (b,v) = (0x%x, 0x%x), node->used=%d, capacity=%d\n",
             block, version, node->used, node->capacity);
     blk_lub_idx = node->used-1;
@@ -197,82 +103,75 @@ void castle_ftree_process(struct work_struct *work)
             debug(" Is an ancestor.\n");
             if(FTREE_SLOT_IS_LEAF(slot))
             {
-                c_disk_blk_t cdb = slot->cdb; 
+                c_bvec->cdb = slot->cdb; 
                 debug(" Is a leaf, found (b,v)=(0x%x, 0x%x)\n", 
                     slot->block, slot->version);
                 kfree(node);
-                kfree(iop);
-                io.callback(io.arg, cdb, 0);
+                castle_bio_data_io(c_bvec);
                 return;
             } 
             else
             {
-                int ret;
-
                 debug("Is not a leaf. Read and search (disk,blk#)=(0x%x, 0x%x)\n",
                         slot->cdb.disk, slot->cdb.block);
-                ret = castle_ftree_find(slot->cdb,
-                                        (sector_t)block,
-                                        version,
-                                        io.callback, 
-                                        io.arg);
-                kfree(node);
-                kfree(iop);
-                /* If error return, callback from here */
-                if(ret) io.callback(io.arg, INVAL_DISK_BLK, ret);
+                castle_ftree_find(c_bvec, slot->cdb);
                 return;
             }
         }
     }
     debug(" No elements left. Blk not found\n");
 blk_not_found:    
-    kfree(node);
-    kfree(iop);
-    io.callback(io.arg, INVAL_DISK_BLK, -ENOENT); 
+    c_bvec->cdb = INVAL_DISK_BLK;
+    kfree(c_bvec->node);
+    castle_bio_data_io(c_bvec);
 }
 
-void castle_ftree_find_end(void *arg, struct castle_ftree_node *node, int err)
+void castle_ftree_find_io_end(void *arg, int err)
 {
-    struct castle_ftree_find_io *iop = arg;
-    struct castle_ftree_find_io io = *iop;
+    c_bvec_t *c_bvec = arg;
 
     /* Callback on error */
     if(err)
     {
-        kfree(iop);
-        io.callback(io.arg, INVAL_DISK_BLK, err);
+        if(c_bvec->node) kfree(c_bvec->node);
+        castle_bio_data_io_end(c_bvec, err);
         return;
     }
 
-    iop->node = node;
-    /* Otherwise queue processing */
-    INIT_WORK(&iop->work, castle_ftree_process);
-    queue_work(castle_wq, &iop->work); 
+    /* Otherwise insert into the work queue */
+    INIT_WORK(&c_bvec->work, castle_ftree_process);
+    queue_work(castle_wq, &c_bvec->work); 
 }
 
-int castle_ftree_find(c_disk_blk_t node_cdb,
-                      sector_t block, 
-                      uint32_t version,
-                      void (*callback)(void *arg, c_disk_blk_t cdb, int err),
-                      void *arg)
+void castle_ftree_find(c_bvec_t *c_bvec,
+                       c_disk_blk_t node_cdb)
 {
-    struct castle_ftree_find_io *io;
+    struct castle_slave *cs;
     int ret;
 
-    io = kmalloc(sizeof(struct castle_ftree_find_io), GFP_KERNEL);
-    if(!io) return -ENOMEM;
-
-    io->callback = callback;
-    io->arg = arg;
-    io->block = block;
-    io->version = version;
-
     debug("Asked for block: 0x%lx, in version 0x%x\n", block, version);
-    ret = castle_ftree_read(node_cdb, castle_ftree_find_end, io); 
-    /* Free the continuation structure if we're not going to get the callback */
-    if(ret) kfree(io);
+    ret = -ENOMEM;
+    if(!c_bvec->node)
+        c_bvec->node = kmalloc(sizeof(struct castle_ftree_node), GFP_KERNEL);
+    if(!c_bvec->node) goto error_out;
 
-    return ret;
+    ret = -ENODEV;
+    cs = castle_slave_find_by_block(node_cdb);
+    if(!cs) goto error_out;
+
+    BUG_ON(sizeof(struct castle_ftree_node) > C_BLK_SIZE);
+    ret = castle_sub_block_read(cs,
+                                c_bvec->node,
+                                disk_blk_to_offset(node_cdb),
+                                sizeof(struct castle_ftree_node),
+                                castle_ftree_find_io_end,
+                                c_bvec); 
+    if(ret) goto error_out; 
+    return;
+
+error_out:
+    if(c_bvec->node) kfree(c_bvec->node);
+    castle_bio_data_io_end(c_bvec, ret);
 }
 
 static void castle_version_node_print(struct castle_vtree_slot *slot)
