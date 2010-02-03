@@ -9,6 +9,8 @@ struct castle_disk_block {
 typedef struct castle_disk_block c_disk_blk_t;
 #define INVAL_DISK_BLK          ((c_disk_blk_t){0,0})
 #define DISK_BLK_INVAL(_blk)    (((_blk).block == 0) && ((_blk).disk == 0))
+#define DISK_BLK_EQUAL(_blk1, _blk2) (((_blk1).disk == (_blk2).disk) && \
+                                      ((_blk1).block == (_blk2).block)) 
 
 struct castle_slave_superblock {
     uint32_t magic1;
