@@ -3,6 +3,7 @@
 #include <linux/sched.h>
 #include <linux/bio.h>
 #include <linux/spinlock.h>
+#include <linux/wait.h>
 
 #include "castle.h"
 #include "castle_cache.h"
@@ -16,15 +17,16 @@
 
 
 /* In pages */
-static int castle_cache_size = 500;
+static int castle_cache_size = 10500;
 
-static int               castle_cache_hash_size;
-static   DEFINE_SPINLOCK(castle_cache_hash_lock);
-static struct list_head *castle_cache_hash = NULL;
-static c2_page_t        *castle_cache_pgs  = NULL;
-static int               castle_cache_freelist_last;
-static   DEFINE_SPINLOCK(castle_cache_freelist_lock);
-static         LIST_HEAD(castle_cache_freelist);
+static int                     castle_cache_hash_size;
+static         DEFINE_SPINLOCK(castle_cache_hash_lock);
+static struct list_head       *castle_cache_hash = NULL;
+static c2_page_t              *castle_cache_pgs  = NULL;
+static int                     castle_cache_freelist_last;
+static         DEFINE_SPINLOCK(castle_cache_freelist_lock);
+static               LIST_HEAD(castle_cache_freelist);
+static DECLARE_WAIT_QUEUE_HEAD(castle_cache_writeout_wq); 
 
 static int sync_c2p(void *word)
 {
@@ -225,8 +227,42 @@ static int castle_cache_hash_clean(void)
     return 1;
 }
 
-static void castle_cache_writeout(void)
+void castle_cache_writeout_finish(c2_page_t *c2p, int uptodate)
 {
+    atomic_t *count = c2p->private;
+    if(!uptodate)
+        printk("Could not write out a page!\n");
+    unlock_c2p(c2p);
+    atomic_dec(count);
+    wake_up(&castle_cache_writeout_wq);
+}
+
+static void castle_cache_writeout(int all)
+{
+    struct list_head *l;
+    c2_page_t *c2p;
+    int i;
+
+    if(all)
+    {
+        atomic_t in_flight = ATOMIC_INIT(0);
+        for(i=0; i<castle_cache_hash_size; i++)
+            list_for_each(l, &castle_cache_hash[i])
+            {
+                c2p = list_entry(l, c2_page_t, list);
+                lock_c2p(c2p);
+                if(c2p_dirty(c2p))
+                {
+                    atomic_inc(&in_flight);
+                    c2p->private = &in_flight;
+                    c2p->end_io = castle_cache_writeout_finish;
+                    submit_c2p(WRITE, c2p);
+                } else
+                    unlock_c2p(c2p);
+            }
+        wait_event(castle_cache_writeout_wq, atomic_read(&in_flight) == 0);
+    }
+    else
     /* TODO: not implemented yet */
     BUG(); 
 }
@@ -249,7 +285,7 @@ static void castle_cache_freelist_grow(void)
         /* If we haven't found any !busy buffers in the hash
            its likely because some of them are dirty. 
            Schedule a writeout. */
-        castle_cache_writeout(); 
+        castle_cache_writeout(0); 
     }
     debug("Grown the list.\n");
 }
@@ -332,10 +368,11 @@ int castle_cache_init(void)
     castle_cache_hash_size = castle_cache_size >> 4; 
     castle_cache_hash = kzalloc(castle_cache_hash_size * sizeof(struct list_head), GFP_KERNEL);
     castle_cache_pgs  = kzalloc(castle_cache_size * sizeof(c2_page_t), GFP_KERNEL);
+    if(castle_cache_hash)
+        for(i=0; i<castle_cache_hash_size; i++)
+            INIT_LIST_HEAD(&castle_cache_hash[i]);
     if(!castle_cache_hash || ! castle_cache_pgs)
         goto no_mem;
-    for(i=0; i<castle_cache_hash_size; i++)
-        INIT_LIST_HEAD(&castle_cache_hash[i]);
 
     for(i=0; i<castle_cache_size; i++)
     {
@@ -361,15 +398,28 @@ void castle_cache_fini(void)
 {
     struct list_head *l, *t;
     c2_page_t *c2p;
+    int i;
     
-    /* TODO needs to free all buffers in the hash! */
     list_for_each_safe(l, t, &castle_cache_freelist)
     {
         list_del(l);
         c2p = list_entry(l, c2_page_t, list);
         __free_page(c2p->page);
     }
-    if(castle_cache_hash) kfree(castle_cache_hash);
+    if(castle_cache_hash) 
+    {
+        castle_cache_writeout(1); 
+        for(i=0; i<castle_cache_hash_size; i++)
+            list_for_each_safe(l, t, &castle_cache_hash[i])
+            {
+                c2p = list_entry(l, c2_page_t, list);
+                /* Buffers should not be in use any more (devices do not exist) */
+                BUG_ON(c2p_locked(c2p));
+                BUG_ON(atomic_read(&c2p->count) != 0);
+                __free_page(c2p->page);
+            }
+        kfree(castle_cache_hash);
+    }
     if(castle_cache_pgs)  kfree(castle_cache_pgs);
 }
 

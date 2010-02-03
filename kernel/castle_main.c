@@ -370,6 +370,8 @@ void castle_bio_c2p_update(c2_page_t *c2p, int uptodate)
     if(uptodate)
     {
         set_c2p_uptodate(c2p);
+        // TMP
+        set_c2p_dirty(c2p);
         castle_bio_data_copy(c_bvec, c2p);
         err = 0;
     }
@@ -381,7 +383,6 @@ void castle_bio_c2p_update(c2_page_t *c2p, int uptodate)
 void castle_bio_data_io(c_bvec_t *c_bvec)
 {
     c2_page_t *c2p;
-    int err;
 
     /* Invalid pointer to on slave data means that it's never been written.
        memset the buffer to zero end exit */
@@ -407,11 +408,6 @@ void castle_bio_data_io(c_bvec_t *c_bvec)
         submit_c2p(READ, c2p);
     }
     return;
-
-error_out:
-    printk("Failing the read.\n");
-    c_bvec->c_bio->err = err;
-    castle_bio_put(c_bvec->c_bio);
 }
 
 static int castle_bio_validate(struct bio *bio)
@@ -673,10 +669,10 @@ static void __exit castle_exit(void)
 
     castle_sysfs_fini();
     castle_control_fini();
-    castle_slaves_free();
     castle_devices_free();
     castle_btree_free();
     castle_cache_fini();
+    castle_slaves_free();
 
     printk("done.\n\n\n");
 }

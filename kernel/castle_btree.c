@@ -159,6 +159,8 @@ void castle_ftree_find_io_end(c2_page_t *c2p, int uptodate)
     }
 
     set_c2p_uptodate(c2p);
+    // TMP:
+    set_c2p_dirty(c2p);
     castle_ftree_c2p_process(c_bvec, c2p);
     /* Put on to the workqueue */
     INIT_WORK(&c_bvec->work, castle_ftree_process);
