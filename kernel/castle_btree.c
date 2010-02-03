@@ -1,9 +1,11 @@
 #include <linux/module.h>
 #include <linux/workqueue.h>
+#include <linux/fs.h>
 
 #include "castle.h"
-#include "castle_block.h"
 #include "castle_btree.h"
+#include "castle_block.h"
+#include "castle_cache.h"
 
 //#define DEBUG
 #ifndef DEBUG
@@ -12,6 +14,7 @@
 #define debug(_f, _a...)  (printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
 #endif
 
+#define debug_off(_f, ...)  ((void)0)
 
 static int castle_is_ancestor(struct castle_vtree_node *root, uint32_t candidate, uint32_t version);
 
@@ -54,7 +57,7 @@ void castle_ftree_process(struct work_struct *work)
         struct castle_ftree_slot *slot = &node->slots[i];
         castle_ftree_slot_normalize(slot);
 
-        debug(" (b,v) = (0x%x, 0x%x)\n", 
+        debug_off(" (b,v) = (0x%x, 0x%x)\n", 
                slot->block,
                slot->version);
 
@@ -69,11 +72,11 @@ void castle_ftree_process(struct work_struct *work)
         {
             blk_lub     = slot->block;
             blk_lub_idx = i;
-            debug("  set b_lub=0x%x, b_lub_idx=%d\n", blk_lub, blk_lub_idx);
+            debug_off("  set b_lub=0x%x, b_lub_idx=%d\n", blk_lub, blk_lub_idx);
         }
     } 
     
-    debug("Version seach, blk_lub=0x%x, idx=%d.\n", blk_lub, blk_lub_idx);
+    debug_off("Version seach, blk_lub=0x%x, idx=%d.\n", blk_lub, blk_lub_idx);
     /* 
        Start at blk LUB, and scan left. Stop if:
        - blk number changes: 
@@ -88,7 +91,7 @@ void castle_ftree_process(struct work_struct *work)
     {
         struct castle_ftree_slot *slot = &node->slots[i];
         
-        debug(" (b,v) = (0x%x, 0x%x)\n", 
+        debug_off(" (b,v) = (0x%x, 0x%x)\n", 
                slot->block,
                slot->version);
 
@@ -100,7 +103,7 @@ void castle_ftree_process(struct work_struct *work)
 
         if(castle_is_ancestor(castle_vtree_root, slot->version, version))
         {
-            debug(" Is an ancestor.\n");
+            debug_off(" Is an ancestor.\n");
             if(FTREE_SLOT_IS_LEAF(slot))
             {
                 c_bvec->cdb = slot->cdb; 
@@ -126,19 +129,35 @@ blk_not_found:
     castle_bio_data_io(c_bvec);
 }
 
-void castle_ftree_find_io_end(void *arg, int err)
+static void castle_ftree_c2p_process(c_bvec_t *c_bvec, c2_page_t *c2p)
 {
-    c_bvec_t *c_bvec = arg;
+    /* Copy the data */
+    BUG_ON(sizeof(struct castle_ftree_node) > PAGE_SIZE);
+    memcpy(c_bvec->node, 
+           pfn_to_kaddr(page_to_pfn(c2p->page)),
+           sizeof(struct castle_ftree_node));
+    /* Release the buffer */
+    unlock_c2p(c2p);
+    put_c2p(c2p);
+}
 
+void castle_ftree_find_io_end(c2_page_t *c2p, int uptodate)
+{
+    c_bvec_t *c_bvec = c2p->private;
+
+    debug("====> Finished IO for: block 0x%lx, in version 0x%x\n", 
+            c_bvec->block, c_bvec->version);
     /* Callback on error */
-    if(err)
+    if(!uptodate)
     {
         if(c_bvec->node) kfree(c_bvec->node);
-        castle_bio_data_io_end(c_bvec, err);
+        castle_bio_data_io_end(c_bvec, -EIO);
         return;
     }
 
-    /* Otherwise insert into the work queue */
+    set_c2p_uptodate(c2p);
+    castle_ftree_c2p_process(c_bvec, c2p);
+    /* Put on to the workqueue */
     INIT_WORK(&c_bvec->work, castle_ftree_process);
     queue_work(castle_wq, &c_bvec->work); 
 }
@@ -146,27 +165,37 @@ void castle_ftree_find_io_end(void *arg, int err)
 void castle_ftree_find(c_bvec_t *c_bvec,
                        c_disk_blk_t node_cdb)
 {
-    struct castle_slave *cs;
+    c2_page_t *c2p;
     int ret;
 
-    debug("Asked for block: 0x%lx, in version 0x%x\n", block, version);
+    debug("Asked for block: 0x%lx, in version 0x%x, reading ftree node (0x%x, 0x%x)\n", 
+            c_bvec->block, c_bvec->version, node_cdb.disk, node_cdb.block);
     ret = -ENOMEM;
     if(!c_bvec->node)
         c_bvec->node = kmalloc(sizeof(struct castle_ftree_node), GFP_KERNEL);
     if(!c_bvec->node) goto error_out;
 
-    ret = -ENODEV;
-    cs = castle_slave_find_by_block(node_cdb);
-    if(!cs) goto error_out;
-
-    BUG_ON(sizeof(struct castle_ftree_node) > C_BLK_SIZE);
-    ret = castle_sub_block_read(cs,
-                                c_bvec->node,
-                                disk_blk_to_offset(node_cdb),
-                                sizeof(struct castle_ftree_node),
-                                castle_ftree_find_io_end,
-                                c_bvec); 
-    if(ret) goto error_out; 
+    c2p = castle_cache_page_get(node_cdb);
+    debug("Got the buffer, trying to lock it\n");
+    lock_c2p(c2p);
+    debug("Locked for ftree node (0x%x, 0x%x)\n", 
+            node_cdb.disk, node_cdb.block);
+    if(!c2p_uptodate(c2p))
+    {
+        /* If the buffer doesn't contain up to date data, schedule the IO */
+        debug("Buffer not up to date. Scheduling a read.\n");
+        c2p->private = c_bvec;
+        c2p->end_io = castle_ftree_find_io_end;
+        submit_c2p(READ, c2p);
+        return;
+    } else
+    {
+        debug("Buffer up to date. Processing!\n");
+        /* If the buffer is up to date, copy data, and call the node processing
+           function directly */ 
+        castle_ftree_c2p_process(c_bvec, c2p);
+        castle_ftree_process(&c_bvec->work);
+    }
     return;
 
 error_out:

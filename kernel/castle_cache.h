@@ -69,6 +69,11 @@ static inline void put_c2p(c2_page_t *c2p)
     atomic_dec(&c2p->count);
 }
 
+/* The 'interesting' cache interface functions */
+int submit_c2p(int rw, c2_page_t *c2p);
+c2_page_t* castle_cache_page_get(c_disk_blk_t cdb);
+
+
 int castle_cache_init(void);
 void castle_cache_fini(void);
 

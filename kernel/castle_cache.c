@@ -7,6 +7,14 @@
 #include "castle.h"
 #include "castle_cache.h"
 
+//#define DEBUG
+#ifndef DEBUG
+#define debug(_f, ...)  ((void)0)
+#else
+#define debug(_f, _a...)  (printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
+#endif
+
+
 /* In pages */
 static int castle_cache_size = 1000;
 
@@ -90,8 +98,10 @@ static c2_page_t* castle_cache_hash_find(c_disk_blk_t cdb)
     int idx;
 
     idx = castle_cache_hash_idx(cdb);
+    debug("Idx = %d\n", idx);
     list_for_each(lh, &castle_cache_hash[idx])
     {
+        debug("Checking list element.\n");
         c2p = list_entry(lh, c2_page_t, list);
         if(DISK_BLK_EQUAL(c2p->cdb, cdb))
             return c2p;
@@ -111,6 +121,8 @@ static c2_page_t* castle_cache_hash_get(c_disk_blk_t cdb)
     if(c2p) get_c2p(c2p);
     /* If not found, drop the lock, we need to get ourselves a c2p first */
     spin_unlock(&castle_cache_hash_lock);
+
+    return c2p;
 }
 
 static int castle_cache_hash_insert(c2_page_t *c2p)
@@ -238,26 +250,34 @@ c2_page_t* castle_cache_page_get(c_disk_blk_t cdb)
 
     for(;;)
     {
+        debug("Trying to find buffer for cdb=(0x%x, 0x%x)\n",
+            cdb.disk, cdb.block);
         /* Try to find in the hash first */
         c2p = castle_cache_hash_get(cdb); 
+        debug("Found in hash: %p\n", c2p);
         if(c2p) return c2p;
 
         /* If we couldn't find in the hash, 
            try allocating from the freelist */ 
         do {
+            debug("Trying to allocate from freelist.\n");
             c2p = castle_cache_freelist_get(); 
             if(!c2p)
             {
+                printk("Failed to allocate from freelist. Growing freelist.\n");
                 /* If freelist is empty, we need to recycle some buffers */
                 castle_cache_freelist_grow(); 
             }
         } while(!c2p);
         /* Initialise the buffer */
+        debug("Initialisng the c2p\n");
         castle_cache_page_init(c2p, cdb);
         get_c2p(c2p);
         /* Try to insert into the hash, can fail if it is already there */
+        debug("Trying to insert\n");
         if(!castle_cache_hash_insert(c2p))
         {
+            debug("Failed\n");
             put_c2p(c2p);
             castle_cache_freelist_add(c2p);
         }
@@ -295,6 +315,8 @@ int castle_cache_init(void)
     castle_cache_pgs  = kzalloc(castle_cache_size * sizeof(c2_page_t), GFP_KERNEL);
     if(!castle_cache_hash || ! castle_cache_pgs)
         goto no_mem;
+    for(i=0; i<castle_cache_hash_size; i++)
+        INIT_LIST_HEAD(&castle_cache_hash[i]);
 
     for(i=0; i<castle_cache_size; i++)
     {
@@ -331,19 +353,4 @@ void castle_cache_fini(void)
     if(castle_cache_hash) kfree(castle_cache_hash);
     if(castle_cache_pgs)  kfree(castle_cache_pgs);
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 

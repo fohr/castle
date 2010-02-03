@@ -332,67 +332,6 @@ static struct block_device_operations castle_bd_ops = {
 	.revalidate_disk = NULL,
 };
 
-#if 0
-void castle_bio_put(struct castle_dev_bio *cbio)
-{
-    debug("Putting castle bio, current ref=%d\n", cbio->ref_cnt);
-    cbio->ref_cnt--;
-    if(cbio->ref_cnt == 0)
-    {
-        debug("Ending IO with err=%d\n", cbio->ret);
-        bio_endio(cbio->bio, cbio->ret); 
-    }
-}
-
-void castle_device_make_request_end(void *arg, int err)
-{
-    struct castle_dev_io *io = arg;
-    struct castle_dev_bio *cbio = io->cbio;
-
-    debug("Finished the read.\n");
-    kfree(io);
-    if(err) cbio->ret = err;
-    castle_bio_put(cbio);
-}
-
-void castle_device_make_request_read_slave(void *arg, c_disk_blk_t cdb, int err)
-{
-    struct castle_dev_io *io = arg;
-    struct castle_dev_bio *cbio = io->cbio;
-    struct castle_slave *cs;
-    
-    if(err)
-    {
-        if(err == (-ENOENT))
-            printk("!!!!!!!!!!!!!1 WARNING, this should probably return zeroed page.\n");
-        printk("Failed to find the block to read %d.\n", err);
-        goto error_out;
-    }
-
-    cs = castle_slave_find_by_block(cdb);
-    if(!cs)
-    {
-        err = -ENODEV;
-        goto error_out;
-    }
-
-    debug("Scheduling the read.\n");
-    err = castle_block_read(cs, 
-                            cdb.block,
-                            io->page,
-                            castle_device_make_request_end,
-                            io);
-    if(err) goto error_out;
-    return;
-
-error_out:
-    printk("Failing the read.\n");
-    kfree(io);    
-    cbio->ret = err;
-    castle_bio_put(cbio);
-}
-#endif
-
 static void castle_bio_put(c_bio_t *c_bio)
 {
     if(atomic_dec_and_test(&c_bio->remaining))
