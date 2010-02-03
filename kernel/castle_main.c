@@ -348,18 +348,39 @@ static void castle_bio_put(c_bio_t *c_bio)
     }
 }
 
-void castle_bio_data_io_end(void *ptr, int err)
+void castle_bio_data_io_end(c_bvec_t *c_bvec, int err)
 {
-    c_bvec_t *c_bvec = ptr;
-
     debug("Finished the read.\n");
     if(err) c_bvec->c_bio->err = err;
     castle_bio_put(c_bvec->c_bio);
 }
 
+void castle_bio_data_copy(c_bvec_t *c_bvec, c2_page_t *c2p)
+{
+    memcpy(pfn_to_kaddr(page_to_pfn(c_bvec->page)),
+           pfn_to_kaddr(page_to_pfn(c2p->page)),
+           PAGE_SIZE);
+}
+
+void castle_bio_c2p_update(c2_page_t *c2p, int uptodate)
+{
+    c_bvec_t *c_bvec = c2p->private;
+    int err = -EIO;
+
+    if(uptodate)
+    {
+        set_c2p_uptodate(c2p);
+        castle_bio_data_copy(c_bvec, c2p);
+        err = 0;
+    }
+    unlock_c2p(c2p);
+    put_c2p(c2p);
+    castle_bio_data_io_end(c_bvec, err);
+}
+
 void castle_bio_data_io(c_bvec_t *c_bvec)
 {
-    struct castle_slave *cs;
+    c2_page_t *c2p;
     int err;
 
     /* Invalid pointer to on slave data means that it's never been written.
@@ -371,21 +392,20 @@ void castle_bio_data_io(c_bvec_t *c_bvec)
         return;
     }
 
-    cs = castle_slave_find_by_block(c_bvec->cdb);
-    if(!cs)
+    c2p = castle_cache_page_get(c_bvec->cdb);
+    lock_c2p(c2p);
+    if(c2p_uptodate(c2p))
     {
-        err = -ENODEV;
-        goto error_out;
+        castle_bio_data_copy(c_bvec, c2p);
+        unlock_c2p(c2p);
+        put_c2p(c2p);
+        castle_bio_data_io_end(c_bvec, 0); 
+    } else
+    {
+        c2p->private = c_bvec;
+        c2p->end_io = castle_bio_c2p_update;
+        submit_c2p(READ, c2p);
     }
-
-    debug("Scheduling the read.\n");
-    err = castle_block_read(cs, 
-                            c_bvec->cdb.block,
-                            c_bvec->page,
-                            castle_bio_data_io_end,
-                            c_bvec);
-
-    if(err) goto error_out;
     return;
 
 error_out:

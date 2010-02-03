@@ -180,7 +180,7 @@ extern struct castle_vtree_node *castle_vtree_root;
 #define C_BLK_SIZE                     (1 << C_BLK_SHIFT)
 #define disk_blk_to_offset(_cdb)     ((_cdb).block * C_BLK_SIZE)
 
-void castle_bio_data_io_end(void *c_bvec, int err);
+void castle_bio_data_io_end(c_bvec_t *c_bvec, int err);
 void castle_bio_data_io(c_bvec_t *c_bvec);
 
 struct castle_device* castle_device_init       (struct castle_vtree_leaf_slot *version);

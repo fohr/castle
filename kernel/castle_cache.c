@@ -16,7 +16,7 @@
 
 
 /* In pages */
-static int castle_cache_size = 1000;
+static int castle_cache_size = 500;
 
 static int               castle_cache_hash_size;
 static   DEFINE_SPINLOCK(castle_cache_hash_lock);
@@ -28,7 +28,13 @@ static         LIST_HEAD(castle_cache_freelist);
 
 static int sync_c2p(void *word)
 {
-    printk("In sync_c2p. Not doing anything!\n");
+	c2_page_t *c2p
+		= container_of(word, c2_page_t, state);
+
+	smp_mb();
+    debug("In sync_c2p. Yielding\n");
+	io_schedule();
+
 	return 0;
 }
 
@@ -184,23 +190,34 @@ static int castle_cache_hash_clean(void)
     idx = castle_cache_freelist_last;
     do {
         idx = (idx + 1) % castle_cache_hash_size;
-        list_for_each(lh, &castle_cache_hash[idx])
+        debug("Trying to find victims in bucket %d\n", idx);
+        list_for_each_safe(lh, t, &castle_cache_hash[idx])
         {
             c2p = list_entry(lh, c2_page_t, list);
-            if(!c2p_busy(c2p)) list_add(&c2p->list, &victims);
+            if(!c2p_busy(c2p)) 
+            {
+                debug("Found a victim.\n");
+                list_del(&c2p->list);
+                list_add(&c2p->list, &victims);
+            }
         }
     } while(list_empty(&victims) && (idx != castle_cache_freelist_last));
+    castle_cache_freelist_last = idx;
     spin_unlock(&castle_cache_hash_lock);
 
     /* We couldn't find any victims */
     if(list_empty(&victims))
+    {
+        debug("No victims found!!\n");
         return 0;
+    }
 
     /* Add to the freelist */
     spin_lock(&castle_cache_freelist_lock);
     list_for_each_safe(lh, t, &victims)
     {
         list_del(lh);
+        debug("Adding to freelist.\n");
         list_add_tail(lh, &castle_cache_freelist);
     }
     spin_unlock(&castle_cache_freelist_lock);
@@ -220,6 +237,7 @@ static void castle_cache_freelist_grow(void)
 
     while(!castle_cache_hash_clean())
     {
+        debug("Failed to clean the hash.\n");
         /* Someone might have freed some pages, even though we failed. 
            We need to check that, in case hash is empty, and we will never 
            manage to free anything. */
@@ -233,6 +251,7 @@ static void castle_cache_freelist_grow(void)
            Schedule a writeout. */
         castle_cache_writeout(); 
     }
+    debug("Grown the list.\n");
 }
 
 static void castle_cache_page_init(c2_page_t *c2p, c_disk_blk_t cdb)
@@ -264,7 +283,7 @@ c2_page_t* castle_cache_page_get(c_disk_blk_t cdb)
             c2p = castle_cache_freelist_get(); 
             if(!c2p)
             {
-                printk("Failed to allocate from freelist. Growing freelist.\n");
+                debug("Failed to allocate from freelist. Growing freelist.\n");
                 /* If freelist is empty, we need to recycle some buffers */
                 castle_cache_freelist_grow(); 
             }

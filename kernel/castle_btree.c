@@ -151,6 +151,9 @@ void castle_ftree_find_io_end(c2_page_t *c2p, int uptodate)
     if(!uptodate)
     {
         if(c_bvec->node) kfree(c_bvec->node);
+        /* Release the buffer */
+        unlock_c2p(c2p);
+        put_c2p(c2p);
         castle_bio_data_io_end(c_bvec, -EIO);
         return;
     }
@@ -187,7 +190,6 @@ void castle_ftree_find(c_bvec_t *c_bvec,
         c2p->private = c_bvec;
         c2p->end_io = castle_ftree_find_io_end;
         submit_c2p(READ, c2p);
-        return;
     } else
     {
         debug("Buffer up to date. Processing!\n");
