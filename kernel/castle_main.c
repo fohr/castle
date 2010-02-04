@@ -370,8 +370,7 @@ void castle_bio_c2p_update(c2_page_t *c2p, int uptodate)
     if(uptodate)
     {
         set_c2p_uptodate(c2p);
-        // TMP
-        set_c2p_dirty(c2p);
+        dirty_c2p(c2p);
         castle_bio_data_copy(c_bvec, c2p);
         err = 0;
     }
@@ -450,6 +449,7 @@ static int castle_device_make_request(struct request_queue *rq, struct bio *bio)
     sector_t block;
     int i;
 
+    debug("Request on dev=0x%x\n", MKDEV(dev->gd->major, dev->gd->first_minor));
     /* Check if we can handle this bio */
     if(castle_bio_validate(bio))
         goto fail_bio;

@@ -16,7 +16,7 @@
 #define debug(_f, _a...)  (printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
 #endif
 
-static int                     castle_cache_size = 10500; /* in pages */
+static int                     castle_cache_size = 100; /* in pages */
 static c2_page_t              *castle_cache_pgs  = NULL;
 
 static int                     castle_cache_hash_buckets;
@@ -57,7 +57,8 @@ void fastcall __lock_c2p(c2_page_t *c2p)
 
 static int inline trylock_c2p(c2_page_t *c2p)
 {
-    return test_set_c2p_locked(c2p);
+    /* We succeed at locking if the previous value of the lock bit was 0 */
+    return (test_set_c2p_locked(c2p) == 0);
 }
 
 void fastcall unlock_c2p(c2_page_t *c2p)
@@ -70,7 +71,9 @@ void fastcall unlock_c2p(c2_page_t *c2p)
 
 void fastcall dirty_c2p(c2_page_t *c2p)
 {
-    spin_lock_irq(&castle_cache_hash_lock);
+    unsigned long flags;
+
+    spin_lock_irqsave(&castle_cache_hash_lock, flags);
     BUG_ON(!c2p_locked(c2p));
     if(c2p_dirty(c2p)) goto out;
     list_move(&c2p->dirty, &castle_cache_dirtylist);
@@ -78,19 +81,21 @@ void fastcall dirty_c2p(c2_page_t *c2p)
     atomic_dec(&castle_cache_cleanlist_size);
     atomic_inc(&castle_cache_dirtylist_size);
 out:        
-    spin_unlock_irq(&castle_cache_hash_lock);
+    spin_unlock_irqrestore(&castle_cache_hash_lock, flags);
 }
 
 static void fastcall clean_c2p(c2_page_t *c2p)
 {
-    spin_lock_irq(&castle_cache_hash_lock);
+    unsigned long flags;
+
+    spin_lock_irqsave(&castle_cache_hash_lock, flags);
     BUG_ON(!c2p_locked(c2p));
     BUG_ON(!c2p_dirty(c2p));
     list_move(&c2p->dirty, &castle_cache_cleanlist);
     clear_c2p_dirty(c2p); 
     atomic_dec(&castle_cache_dirtylist_size);
     atomic_inc(&castle_cache_cleanlist_size);
-    spin_unlock_irq(&castle_cache_hash_lock);
+    spin_unlock_irqrestore(&castle_cache_hash_lock, flags);
 }
 
 static void c2p_io_end(struct bio *bio, int err)
@@ -162,13 +167,13 @@ static c2_page_t* castle_cache_hash_get(c_disk_blk_t cdb)
 {
     c2_page_t *c2p = NULL;
 
-    spin_lock(&castle_cache_hash_lock);
+    spin_lock_irq(&castle_cache_hash_lock);
     /* Try to find in the hash first */
     c2p = castle_cache_hash_find(cdb);
     /* If found, get a reference to make sure c2p doesn't get removed */
     if(c2p) get_c2p(c2p);
     /* If not found, drop the lock, we need to get ourselves a c2p first */
-    spin_unlock(&castle_cache_hash_lock);
+    spin_unlock_irq(&castle_cache_hash_lock);
 
     return c2p;
 }
@@ -177,7 +182,7 @@ static int castle_cache_hash_insert(c2_page_t *c2p)
 {
     int idx, success;
 
-    spin_lock(&castle_cache_hash_lock);
+    spin_lock_irq(&castle_cache_hash_lock);
     /* Check if already in the hash */
     success = 0;
     if(castle_cache_hash_find(c2p->cdb)) goto out;
@@ -195,7 +200,7 @@ static int castle_cache_hash_insert(c2_page_t *c2p)
         atomic_inc(&castle_cache_cleanlist_size);
     }
 out:
-    spin_unlock(&castle_cache_hash_lock);
+    spin_unlock_irq(&castle_cache_hash_lock);
     return success;
 }
 
@@ -243,7 +248,7 @@ static int castle_cache_hash_clean(void)
     LIST_HEAD(victims);
     c2_page_t *c2p;
 
-    spin_lock(&castle_cache_hash_lock);
+    spin_lock_irq(&castle_cache_hash_lock);
     /* Find victim buffers, greater than the last one (if one exists) */ 
     idx = castle_cache_freelist_last;
     do {
@@ -263,7 +268,7 @@ static int castle_cache_hash_clean(void)
         }
     } while(list_empty(&victims) && (idx != castle_cache_freelist_last));
     castle_cache_freelist_last = idx;
-    spin_unlock(&castle_cache_hash_lock);
+    spin_unlock_irq(&castle_cache_hash_lock);
 
     /* We couldn't find any victims */
     if(list_empty(&victims))
@@ -303,8 +308,11 @@ static void castle_cache_freelist_grow(void)
         /* If we haven't found any !busy buffers in the hash
            its likely because they are dirty. 
            Schedule a writeout. */
+        printk("=> Could not clean the hash table. Waking flush.\n");
         castle_cache_flush_wakeup();
+        printk("=> Woken.\n");
         wait_event(castle_cache_flush_wq, 1);
+        printk("=> We think there is some free memory now.\n");
     }
     debug("Grown the list.\n");
 }
@@ -323,6 +331,7 @@ c2_page_t* castle_cache_page_get(c_disk_blk_t cdb)
     c2_page_t *c2p;
 
     castle_cache_flush_wakeup();
+    might_sleep();
     for(;;)
     {
         debug("Trying to find buffer for cdb=(0x%x, 0x%x)\n",
@@ -394,10 +403,10 @@ static int castle_cache_flush(void *unused)
         dirty_pgs = atomic_read(&castle_cache_dirtylist_size);  
         /* Go to sleep if < high_water_mark pages dirty.
            As long as we've not been asked to flush everything and exit. */
-        printk("====> Castle cache flush loop.\n");
+        debug("====> Castle cache flush loop.\n");
         if((dirty_pgs < high_water_mark) && !kthread_should_stop())
         {
-            printk("====> Going to sleep.\n");
+            debug("====> Going to sleep.\n");
             set_current_state(TASK_INTERRUPTIBLE);
             schedule();
             continue;
@@ -406,10 +415,10 @@ static int castle_cache_flush(void *unused)
         if(kthread_should_stop())
             to_flush = dirty_pgs;
         atomic_set(&in_flight, 0);
-        printk("====> Flushing: %d pages out of %d dirty.\n", to_flush, dirty_pgs);
+        debug("====> Flushing: %d pages out of %d dirty.\n", to_flush, dirty_pgs);
 next_batch:        
         batch_idx = 0;
-        spin_lock(&castle_cache_hash_lock);
+        spin_lock_irq(&castle_cache_hash_lock);
         list_for_each_safe(l, t, &castle_cache_dirtylist)
         {
             if(to_flush == 0)
@@ -425,9 +434,9 @@ next_batch:
             if(batch_idx >= FLUSH_BATCH)
                 break;
         }
-        spin_unlock(&castle_cache_hash_lock);
+        spin_unlock_irq(&castle_cache_hash_lock);
         
-        printk("====>  Batch of: %d pages.\n", batch_idx);
+        debug("====>  Batch of: %d pages.\n", batch_idx);
         /* We've dropped the hash lock, submit all the write requests now */
         for(i=0; i<batch_idx; i++)
         {
@@ -447,16 +456,16 @@ next_batch:
             printk("Could not find enough dirty pages to flush!\n");
         }
         
-        printk("====> Waiting for all IOs to complete.\n");
+        debug("====> Waiting for all IOs to complete.\n");
         /* Wait for all the IOs to complete */
         wait_event(castle_cache_flush_wq, atomic_read(&in_flight) == 0);
-        printk("====> Waiting completed.\n");
+        debug("====> Waiting completed.\n");
         
         /* Finally check if we should still continue */
         if(kthread_should_stop())
             break;
     }
-    printk("====> Castle cache flush loop EXITING.\n");
+    debug("====> Castle cache flush loop EXITING.\n");
 
     return 0;
 }
@@ -475,9 +484,7 @@ static int castle_cache_flush_init(void)
 
 static void castle_cache_flush_fini(void)
 {
-    printk("Asking the flush thread to stop.\n");
     kthread_stop(castle_cache_flush_thread);
-    printk("Finished waiting for the thread to stop.\n");
 }
 
 static int castle_cache_hash_init(void)
