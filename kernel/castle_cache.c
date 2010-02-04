@@ -361,65 +361,118 @@ void castle_cache_uptodate_page_get(c_disk_blk_t cdb,
 }
 #endif
 
-int castle_cache_init(void)
+static int castle_cache_flush_init(void)
+{
+    printk("TODO: flush init to implement\n");
+    return 0;
+}
+
+static void castle_cache_flush_fini(void)
+{
+    printk("TODO: flush fini to implement\n");
+}
+
+static int castle_cache_hash_init(void)
 {
     int i;
 
-    castle_cache_hash_size = castle_cache_size >> 4; 
-    castle_cache_hash = kzalloc(castle_cache_hash_size * sizeof(struct list_head), GFP_KERNEL);
-    castle_cache_pgs  = kzalloc(castle_cache_size * sizeof(c2_page_t), GFP_KERNEL);
-    if(castle_cache_hash)
-        for(i=0; i<castle_cache_hash_size; i++)
-            INIT_LIST_HEAD(&castle_cache_hash[i]);
-    if(!castle_cache_hash || ! castle_cache_pgs)
-        goto no_mem;
+    if(!castle_cache_hash)
+        return -ENOMEM;
+    
+    for(i=0; i<castle_cache_hash_size; i++)
+        INIT_LIST_HEAD(&castle_cache_hash[i]);
+
+    return 0;
+}
+
+static void castle_cache_hash_fini(void)
+{
+    struct list_head *l, *t;
+    c2_page_t *c2p;
+    int i;
+
+    if(!castle_cache_hash) 
+        return;
+
+    castle_cache_writeout(1); 
+    for(i=0; i<castle_cache_hash_size; i++)
+    {
+        list_for_each_safe(l, t, &castle_cache_hash[i])
+        {
+            c2p = list_entry(l, c2_page_t, list);
+            /* Buffers should not be in use any more (devices do not exist) */
+            BUG_ON(c2p_locked(c2p));
+            BUG_ON(atomic_read(&c2p->count) != 0);
+            __free_page(c2p->page);
+        }
+    }
+}
+
+static int castle_cache_freelist_init(void)
+{
+    int i;
+
+    if(!castle_cache_pgs)
+        return -ENOMEM;
 
     for(i=0; i<castle_cache_size; i++)
     {
         struct page *page = alloc_page(GFP_KERNEL); 
         c2_page_t   *c2p  = castle_cache_pgs + i; 
 
-        if(!page) goto no_mem;
+        if(!page)
+            return -ENOMEM;
         c2p->page = page; 
         list_add(&c2p->list, &castle_cache_freelist);
     }
-
     castle_cache_freelist_last = 0;
 
     return 0;
-
-no_mem:
-    castle_cache_fini();
-
-    return -ENOMEM;
 }
 
-void castle_cache_fini(void)
+static void castle_cache_freelist_fini(void)
 {
     struct list_head *l, *t;
     c2_page_t *c2p;
-    int i;
-    
+
+    if(!castle_cache_pgs)
+        return;
+
     list_for_each_safe(l, t, &castle_cache_freelist)
     {
         list_del(l);
         c2p = list_entry(l, c2_page_t, list);
         __free_page(c2p->page);
     }
-    if(castle_cache_hash) 
-    {
-        castle_cache_writeout(1); 
-        for(i=0; i<castle_cache_hash_size; i++)
-            list_for_each_safe(l, t, &castle_cache_hash[i])
-            {
-                c2p = list_entry(l, c2_page_t, list);
-                /* Buffers should not be in use any more (devices do not exist) */
-                BUG_ON(c2p_locked(c2p));
-                BUG_ON(atomic_read(&c2p->count) != 0);
-                __free_page(c2p->page);
-            }
-        kfree(castle_cache_hash);
-    }
+}
+
+int castle_cache_init(void)
+{
+    int ret;
+
+    castle_cache_hash_size = castle_cache_size >> 3; 
+    castle_cache_hash = kzalloc(castle_cache_hash_size * sizeof(struct list_head), GFP_KERNEL);
+    castle_cache_pgs  = kzalloc(castle_cache_size * sizeof(c2_page_t), GFP_KERNEL);
+
+    if((ret = castle_cache_hash_init()))     goto err_out;
+    if((ret = castle_cache_freelist_init())) goto err_out; 
+    if((ret = castle_cache_flush_init()))    goto err_out;
+
+    return 0;
+
+err_out:
+    castle_cache_fini();
+
+    return ret;
+}
+
+void castle_cache_fini(void)
+{
+    castle_cache_flush_fini();
+    castle_cache_hash_fini();
+    castle_cache_freelist_fini();
+
+    if(castle_cache_hash) kfree(castle_cache_hash);
     if(castle_cache_pgs)  kfree(castle_cache_pgs);
 }
 

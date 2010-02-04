@@ -263,7 +263,7 @@ int castle_sysfs_init(void)
     int ret;
     int castle_registered, volumes_registered, slaves_registered, devices_registered;
 
-    castle_registered = volumes_registered = slaves_registered = 0;
+    castle_registered = volumes_registered = slaves_registered = devices_registered = 0;
 
     memset(&castle.kobj, 0, sizeof(struct kobject));
     castle.kobj.parent = &fs_subsys.kobj;
