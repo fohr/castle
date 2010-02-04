@@ -31,7 +31,7 @@ install: $(TARGET).ko
 	depmod -aq $(KVER)
 
 clean:
-	rm -rf *.o *~ core .depend .*.cmd *.ko *.mod.c .tmp_versions Module.symvers
+	rm -rf *.o *~ core .depend .*.o. .*.cmd *.ko *.mod.c .tmp_versions Module.symvers
 
 depend .depend dep:
 	$(CC) $(EXTRA_FLAGS) -M *.c > .depend

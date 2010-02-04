@@ -13,6 +13,7 @@ typedef struct castle_cache_page {
     c_disk_blk_t cdb;
     struct page *page;
     struct list_head list;
+    struct list_head dirty;
 
     unsigned long state;
 	atomic_t count;
@@ -52,6 +53,7 @@ TAS_CACHE_FNS(lock, locked)
 
 void fastcall __lock_c2p(c2_page_t *c2p);
 void fastcall unlock_c2p(c2_page_t *c2p);
+void fastcall dirty_c2p(c2_page_t *c2p);
 static inline void lock_c2p(c2_page_t *c2p)
 {
 	might_sleep();
@@ -70,8 +72,9 @@ static inline void put_c2p(c2_page_t *c2p)
 }
 
 /* The 'interesting' cache interface functions */
-int submit_c2p(int rw, c2_page_t *c2p);
-c2_page_t* castle_cache_page_get(c_disk_blk_t cdb);
+int        submit_c2p                (int rw, c2_page_t *c2p);
+c2_page_t* castle_cache_page_get     (c_disk_blk_t cdb);
+void       castle_cache_flush_wakeup (void);
 
 
 int castle_cache_init(void);
