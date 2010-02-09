@@ -414,13 +414,6 @@ static int castle_bio_validate(struct bio *bio)
     struct bio_vec *bvec;
     int i;
 
-    /* Fail writes */
-    if(bio_rw(bio) == WRITE)
-    {
-        printk("Cannot handle writes yet.\n");
-        return -ENOSYS;
-    }
-
     if(bio->bi_sector % (1 << (C_BLK_SHIFT - 9)) != 0)
     {
         printk("Got BIO for unaligned sector: 0x%lx\n", bio->bi_sector);

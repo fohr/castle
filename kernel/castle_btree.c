@@ -1,6 +1,7 @@
 #include <linux/module.h>
 #include <linux/workqueue.h>
 #include <linux/fs.h>
+#include <linux/bio.h>
 
 #include "castle.h"
 #include "castle_btree.h"
@@ -14,8 +15,6 @@
 #define debug(_f, _a...)  (printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
 #endif
 
-#define debug_off(_f, ...)  ((void)0)
-
 static int castle_is_ancestor(struct castle_vtree_node *root, uint32_t candidate, uint32_t version);
 
 static void castle_ftree_slot_normalize(struct castle_ftree_slot *slot)
@@ -24,8 +23,8 @@ static void castle_ftree_slot_normalize(struct castle_ftree_slot *slot)
     if(FTREE_SLOT_IS_NODE_LAST(slot) &&
        (slot->block == 0))
     {
-        slot->type = FTREE_SLOT_NODE;
-        slot->block = (uint32_t)-1;
+        slot->type  = FTREE_SLOT_NODE;
+        slot->block = MAX_BLK;
     }
 }
 
@@ -33,10 +32,12 @@ void castle_ftree_process(struct work_struct *work)
 {
     c_bvec_t *c_bvec = container_of(work, c_bvec_t, work);
     struct castle_ftree_node *node = c_bvec->node;
+    struct castle_ftree_slot *slot;
     uint32_t block = c_bvec->block;
     uint32_t version = c_bvec->version;
     uint32_t blk_lub;
     int      blk_lub_idx, i;
+    int      create = (c_bvec_data_dir(c_bvec) == WRITE);
 
     if((node->capacity > FTREE_NODE_SLOTS) ||
        (node->used     > node->capacity))
@@ -50,14 +51,21 @@ void castle_ftree_process(struct work_struct *work)
  
     debug("Looking for (b,v) = (0x%x, 0x%x), node->used=%d, capacity=%d\n",
             block, version, node->used, node->capacity);
-    blk_lub_idx = node->used-1;
-    blk_lub     = node->slots[blk_lub_idx].block;
+    if(create)
+    {
+        printk("Got WRITE.\n");
+        castle_bio_data_io_end(c_bvec, -EINVAL);
+        kfree(node);
+        return;
+    }
+        
+    blk_lub_idx = -1;
+    blk_lub     = INVAL_BLK; 
     for(i=node->used-1; i >= 0; i--)
     {
-        struct castle_ftree_slot *slot = &node->slots[i];
-        castle_ftree_slot_normalize(slot);
+        slot = &node->slots[i];
 
-        debug_off(" (b,v) = (0x%x, 0x%x)\n", 
+        debug(" (b,v) = (0x%x, 0x%x)\n", 
                slot->block,
                slot->version);
 
@@ -66,76 +74,88 @@ void castle_ftree_process(struct work_struct *work)
         if(slot->block < block)
             break;
 
-        /* Update the blk_lub, but only if it's different to the current block.
-           This would save an incorrect lub index */
-        if(blk_lub != slot->block)
+        /* Do not consider versions which are not ancestral to the version we 
+           are looking for.
+           Also, don't update the LUB index if the block number doesn't change.
+           This is because the most recent ancestor will be found first when
+           scanning from right to left */
+        if((blk_lub != slot->block) &&
+            castle_is_ancestor(castle_vtree_root, slot->version, version))
         {
             blk_lub     = slot->block;
             blk_lub_idx = i;
-            debug_off("  set b_lub=0x%x, b_lub_idx=%d\n", blk_lub, blk_lub_idx);
+            debug("  set b_lub=0x%x, b_lub_idx=%d\n", blk_lub, blk_lub_idx);
         }
     } 
+    /* We should always find the LUB if we are not looking at a leaf node */
+    BUG_ON(node->used == 0);
+    BUG_ON((blk_lub_idx < 0) && !FTREE_SLOT_IS_LEAF(&node->slots[0]));
     
-    debug_off("Version seach, blk_lub=0x%x, idx=%d.\n", blk_lub, blk_lub_idx);
-    /* 
-       Start at blk LUB, and scan left. Stop if:
-       - blk number changes: 
-            block not found
-       - blk is still the lub, and version is an ancestor:
-            if we looking at a leaf, the search is finished
-            otherwise follow the pointer to the next level in the tree
-       Skip over versions which are not ancestors of the version we are 
-       looking for 
-    */
-    for(i=blk_lub_idx; i>=0; i--)
+    /* If we haven't found the LUB (in the leaf node), return early */
+    if(blk_lub_idx < 0)
     {
-        struct castle_ftree_slot *slot = &node->slots[i];
-        
-        debug_off(" (b,v) = (0x%x, 0x%x)\n", 
-               slot->block,
-               slot->version);
-
-        if(slot->block != blk_lub)
-        {
-            debug("Not found\n");
-            goto blk_not_found;
-        }
-
-        if(castle_is_ancestor(castle_vtree_root, slot->version, version))
-        {
-            debug_off(" Is an ancestor.\n");
-            if(FTREE_SLOT_IS_LEAF(slot))
-            {
-                c_bvec->cdb = slot->cdb; 
-                debug(" Is a leaf, found (b,v)=(0x%x, 0x%x)\n", 
-                    slot->block, slot->version);
-                kfree(node);
-                castle_bio_data_io(c_bvec);
-                return;
-            } 
-            else
-            {
-                debug("Is not a leaf. Read and search (disk,blk#)=(0x%x, 0x%x)\n",
-                        slot->cdb.disk, slot->cdb.block);
-                castle_ftree_find(c_bvec, slot->cdb);
-                return;
-            }
-        }
+        c_bvec->cdb = INVAL_DISK_BLK;
+        kfree(c_bvec->node);
+        castle_bio_data_io(c_bvec);
+        return;
     }
-    debug(" No elements left. Blk not found\n");
-blk_not_found:    
-    c_bvec->cdb = INVAL_DISK_BLK;
-    kfree(c_bvec->node);
-    castle_bio_data_io(c_bvec);
+
+    slot = &node->slots[blk_lub_idx];
+    /* If we found the LUB, either complete the ftree walk (if we are looking 
+       at a leaf), or go to the next level */
+    if(FTREE_SLOT_IS_LEAF(slot))
+    {
+        printk(" Found (b,v)=(0x%x, 0x%x) in node: (0x%x, 0x%x), capacity: %d, used: %d, idx: %d\n", 
+            slot->block, 
+            slot->version,
+            ((uint32_t*)node->__pad)[0],
+            ((uint32_t*)node->__pad)[1],
+            node->capacity,
+            node->used,
+            blk_lub_idx);
+        debug(" Is a leaf, found (b,v)=(0x%x, 0x%x)\n", 
+            slot->block, slot->version);
+        c_bvec->cdb = slot->cdb; 
+        kfree(node);
+        castle_bio_data_io(c_bvec);
+    }
+    else
+    {
+        printk("Found  (b,v)=(0x%x, 0x%x) in node: (0x%x, 0x%x), capacity: %d, used: %d, idx: %d\n", 
+            slot->block, 
+            slot->version,
+            ((uint32_t*)node->__pad)[0],
+            ((uint32_t*)node->__pad)[1],
+            node->capacity,
+            node->used,
+            blk_lub_idx);
+        debug("Is not a leaf. Read and search (disk,blk#)=(0x%x, 0x%x)\n",
+                slot->cdb.disk, slot->cdb.block);
+        castle_ftree_find(c_bvec, slot->cdb);
+    }
 }
 
 static void castle_ftree_c2p_process(c_bvec_t *c_bvec, c2_page_t *c2p)
 {
+    struct castle_ftree_node *node = c_bvec->node;
+    int i;
+
+
     /* Copy the data */
     BUG_ON(sizeof(struct castle_ftree_node) > PAGE_SIZE);
-    memcpy(c_bvec->node, 
+    memcpy(node, 
            pfn_to_kaddr(page_to_pfn(c2p->page)),
            sizeof(struct castle_ftree_node));
+    for(i=0; i < node->used; i++)
+    {
+        struct castle_ftree_slot *slot = &node->slots[i];
+        castle_ftree_slot_normalize(slot);
+    }
+
+    /* TMP: save cdb in __pad */
+    ((uint32_t*)c_bvec->node->__pad)[0] = c2p->cdb.disk;
+    ((uint32_t*)c_bvec->node->__pad)[1] = c2p->cdb.block;
+
     /* Release the buffer */
     unlock_c2p(c2p);
     put_c2p(c2p);
@@ -159,8 +179,6 @@ void castle_ftree_find_io_end(c2_page_t *c2p, int uptodate)
     }
 
     set_c2p_uptodate(c2p);
-    // TMP:
-    dirty_c2p(c2p);
     castle_ftree_c2p_process(c_bvec, c2p);
     /* Put on to the workqueue */
     INIT_WORK(&c_bvec->work, castle_ftree_process);

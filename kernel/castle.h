@@ -47,6 +47,10 @@ struct castle_fs_superblock {
 #define FTREE_SLOT_IS_NODE_LAST(_slot)   ((_slot)->type == FTREE_SLOT_NODE_LAST)
 #define FTREE_SLOT_IS_LEAF(_slot)        ((_slot)->type == FTREE_SLOT_LEAF) 
 
+#define INVAL_BLK          ((uint32_t)-1)
+#define MAX_BLK            ((uint32_t)-2)
+#define BLK_INVAL(_blk)    ((_blk) == INVAL_BLK)
+
 struct castle_ftree_slot {
     uint32_t     type;
     uint32_t     block;
@@ -125,7 +129,7 @@ typedef struct castle_bio_vec {
         c_disk_blk_t cdb;
     };
 } c_bvec_t;
-
+#define c_bvec_data_dir(_c_bvec)    bio_data_dir((_c_bvec)->c_bio->bio)
 
 /* First class structures */
 struct castle {
