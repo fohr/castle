@@ -311,7 +311,8 @@ static void castle_cache_freelist_grow(void)
         printk("=> Could not clean the hash table. Waking flush.\n");
         castle_cache_flush_wakeup();
         printk("=> Woken.\n");
-        wait_event(castle_cache_flush_wq, 1);
+        wait_event(castle_cache_flush_wq, 
+                   atomic_read(&castle_cache_cleanlist_size) > 0);
         printk("=> We think there is some free memory now.\n");
     }
     debug("Grown the list.\n");
