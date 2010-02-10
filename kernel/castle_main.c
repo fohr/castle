@@ -8,6 +8,7 @@
 #include "castle.h"
 #include "castle_block.h"
 #include "castle_btree.h"
+#include "castle_versions.h"
 #include "castle_cache.h"
 #include "castle_ctrl.h"
 #include "castle_sysfs.h"
@@ -21,7 +22,6 @@ struct workqueue_struct     *castle_wq;
 
 int                          castle_fs_inited;
 struct castle_fs_superblock  castle_fs_super;
-struct castle_vtree_node    *castle_vtree_root;
 
 //#define DEBUG
 #ifndef DEBUG
@@ -147,7 +147,7 @@ int castle_fs_init(void)
 
     blk.disk  = castle_fs_super.fwd_tree_disk1;
     blk.block = castle_fs_super.fwd_tree_block1;
-    ret = castle_version_tree_read(blk, &castle_vtree_root);
+    ret = castle_vtree_read(blk);
     if(ret)
         return -EINVAL;
 
@@ -350,15 +350,21 @@ static void castle_bio_put(c_bio_t *c_bio)
 
 void castle_bio_data_io_end(c_bvec_t *c_bvec, int err)
 {
-    debug("Finished the read.\n");
+    debug("Finished the IO.\n");
     if(err) c_bvec->c_bio->err = err;
     castle_bio_put(c_bvec->c_bio);
 }
 
-void castle_bio_data_copy(c_bvec_t *c_bvec, c2_page_t *c2p)
+void castle_bio_data_copy(c_bvec_t *c_bvec, c2_page_t *c2p, int io_dir)
 {
-    memcpy(pfn_to_kaddr(page_to_pfn(c_bvec->page)),
-           pfn_to_kaddr(page_to_pfn(c2p->page)),
+    int write = (io_dir == WRITE);
+    struct page *src_pg, *dst_pg;
+
+    src_pg = ( write ? c_bvec->page : c2p->page); 
+    dst_pg = (!write ? c_bvec->page : c2p->page); 
+
+    memcpy(pfn_to_kaddr(page_to_pfn(dst_pg)),
+           pfn_to_kaddr(page_to_pfn(src_pg)),
            PAGE_SIZE);
 }
 
@@ -370,8 +376,7 @@ void castle_bio_c2p_update(c2_page_t *c2p, int uptodate)
     if(uptodate)
     {
         set_c2p_uptodate(c2p);
-        dirty_c2p(c2p);
-        castle_bio_data_copy(c_bvec, c2p);
+        castle_bio_data_copy(c_bvec, c2p, READ);
         err = 0;
     }
     unlock_c2p(c2p);
@@ -382,11 +387,17 @@ void castle_bio_c2p_update(c2_page_t *c2p, int uptodate)
 void castle_bio_data_io(c_bvec_t *c_bvec)
 {
     c2_page_t *c2p;
+    int write = (c_bvec_data_dir(c_bvec) == WRITE);
 
-    /* Invalid pointer to on slave data means that it's never been written.
-       memset the buffer to zero end exit */
+    /* 
+     * Invalid pointer to on slave data means that it's never been written before.
+     * Memset BIO buffer page to zero.
+     * This should not happen on writes, since btree handling code should have 
+     * allocated a new block (TODO: what if we've just run out of capacity ...)
+     */
     if(DISK_BLK_INVAL(c_bvec->cdb))
     {
+        BUG_ON(write);
         memset(pfn_to_kaddr(page_to_pfn(c_bvec->page)), 0, PAGE_SIZE);
         castle_bio_put(c_bvec->c_bio);
         return;
@@ -394,9 +405,15 @@ void castle_bio_data_io(c_bvec_t *c_bvec)
 
     c2p = castle_cache_page_get(c_bvec->cdb);
     lock_c2p(c2p);
+
+    if(write) goto write; else goto read;
+read:
+    /* If the buffer is not up to date, submit the buffer, otherwise call 
+       io_end() directly */
     if(c2p_uptodate(c2p))
     {
-        castle_bio_data_copy(c_bvec, c2p);
+        /* TODO: move data copy and buffer unlock to io_end() */
+        castle_bio_data_copy(c_bvec, c2p, READ);
         unlock_c2p(c2p);
         put_c2p(c2p);
         castle_bio_data_io_end(c_bvec, 0); 
@@ -407,6 +424,15 @@ void castle_bio_data_io(c_bvec_t *c_bvec)
         submit_c2p(READ, c2p);
     }
     return;
+write:
+    /* For writes, it doesn't matter if the buffer is currently up-to-date.
+       Write it, set it up-to-date and dirty and finish */
+    castle_bio_data_copy(c_bvec, c2p, WRITE);
+    set_c2p_uptodate(c2p);
+    dirty_c2p(c2p);
+    unlock_c2p(c2p);
+    put_c2p(c2p);
+    castle_bio_data_io_end(c_bvec, 0); 
 }
 
 static int castle_bio_validate(struct bio *bio)
@@ -462,14 +488,15 @@ static int castle_device_make_request(struct request_queue *rq, struct bio *bio)
     {
         c_disk_blk_t cdb;
         c_bvec_t *c_bvec = c_bvecs + i; 
+        int ret;
 
         c_bvec->c_bio   = c_bio;
         c_bvec->page    = bvec->bv_page;
         c_bvec->block   = block;
         c_bvec->version = dev->version; 
         
-        cdb = castle_vtree_find(castle_vtree_root, c_bvec->version); 
-        if(DISK_BLK_INVAL(cdb))
+        ret = castle_version_snap_get(c_bvec->version, &cdb, NULL); 
+        if(ret)
             castle_bio_data_io_end(c_bvec, -EINVAL);
         else
             castle_ftree_find(c_bvec, cdb); 
@@ -505,24 +532,29 @@ struct castle_device* castle_device_find(dev_t dev)
 void castle_device_free(struct castle_device *cd)
 {
     castle_sysfs_device_del(cd);
+    /* TODO: Should this be done? blk_cleanup_queue(cd->gd->rq); */ 
     del_gendisk(cd->gd);
     put_disk(cd->gd);
     list_del(&cd->list);
     kfree(cd);
 }
 
-struct castle_device* castle_device_init(struct castle_vtree_leaf_slot *version)
+struct castle_device* castle_device_init(version_t version)
 {
-    struct castle_device *dev;
-    struct request_queue *rq;
-    struct gendisk *gd;
+    struct castle_device *dev = NULL;
+    struct request_queue *rq  = NULL;
+    struct gendisk *gd        = NULL;
     static int minor = 0;
+    uint32_t size;
+
+    if(castle_version_snap_get(version, NULL, &size))
+        goto error_out;
 
     dev = kmalloc(sizeof(struct castle_device), GFP_KERNEL); 
     if(!dev)
         goto error_out;
 	spin_lock_init(&dev->lock);
-    dev->version = version->version_nr;
+    dev->version = version;
         
     gd = alloc_disk(1);
     if(!gd)
@@ -544,7 +576,7 @@ struct castle_device* castle_device_init(struct castle_vtree_leaf_slot *version)
 
     list_add(&dev->list, &castle_devices.devices);
     dev->gd = gd;
-    set_capacity(gd, (version->size << (C_BLK_SHIFT - 9)));
+    set_capacity(gd, (size << (C_BLK_SHIFT - 9)));
     add_disk(gd);
 
     bdget(MKDEV(gd->major, gd->first_minor));
@@ -553,6 +585,9 @@ struct castle_device* castle_device_init(struct castle_vtree_leaf_slot *version)
     return dev;
 
 error_out:
+    if(dev) kfree(dev);
+    if(gd)  put_disk(gd); 
+    if(rq)  blk_cleanup_queue(rq); 
     printk("Failed to init device.\n");
     return NULL;    
 }
@@ -627,29 +662,31 @@ static int __init castle_init(void)
     printk("Castle FS init ... ");
 
     castle_fs_inited = 0;
-    if((ret = castle_cache_init()))   goto err_out1;
-    if((ret = castle_btree_init()))   goto err_out2;
-    if((ret = castle_devices_init())) goto err_out3;
-    if((ret = castle_slaves_init()))  goto err_out4;
-    if((ret = castle_control_init())) goto err_out5;
-    if((ret = castle_sysfs_init()))   goto err_out6;
+    if((ret = castle_slaves_init()))   goto err_out1;
+    if((ret = castle_cache_init()))    goto err_out2;
+    if((ret = castle_versions_init())) goto err_out3;
+    if((ret = castle_btree_init()))    goto err_out4;
+    if((ret = castle_devices_init()))  goto err_out5;
+    if((ret = castle_control_init()))  goto err_out6;
+    if((ret = castle_sysfs_init()))    goto err_out7;
 
     printk("OK.\n");
 
     return 0;
 
-    /* Unreachable */
-    castle_sysfs_fini();
-err_out6:
+    castle_sysfs_fini(); /* Unreachable */ 
+err_out7:
     castle_control_fini();
-err_out5:
-    castle_slaves_free();
-err_out4:
+err_out6:
     castle_devices_free();
-err_out3:
+err_out5:
     castle_btree_free();
-err_out2:
+err_out4:
+    castle_versions_fini();
+err_out3:
     castle_cache_fini();
+err_out2:
+    castle_slaves_free();
 err_out1:
 
     return ret;
@@ -664,6 +701,7 @@ static void __exit castle_exit(void)
     castle_control_fini();
     castle_devices_free();
     castle_btree_free();
+    castle_versions_fini();
     castle_cache_fini();
     castle_slaves_free();
 

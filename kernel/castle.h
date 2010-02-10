@@ -1,6 +1,7 @@
 #ifndef __CASTLE_H__
 #define __CASTLE_H__
 
+typedef uint32_t version_t;
 /* Disk layout related structures */
 struct castle_disk_block {
     uint32_t disk;
@@ -104,8 +105,6 @@ struct castle_vtree_node {
     uint32_t capacity;
     uint32_t used;
     struct castle_vtree_slot slots[VTREE_NODE_SLOTS]; 
-    /* Pointers to structures in memory. Invalid for the leaf children */
-    struct castle_vtree_node *children[VTREE_NODE_SLOTS];
 };
 
 /* IO related structures */
@@ -161,7 +160,7 @@ struct castle_device {
     int               users;
     int               sysfs_registered;
 
-    uint32_t          version;
+    version_t         version;
 };
 
 struct castle_devices { 
@@ -187,7 +186,7 @@ extern struct castle_vtree_node *castle_vtree_root;
 void castle_bio_data_io_end(c_bvec_t *c_bvec, int err);
 void castle_bio_data_io(c_bvec_t *c_bvec);
 
-struct castle_device* castle_device_init       (struct castle_vtree_leaf_slot *version);
+struct castle_device* castle_device_init       (version_t version);
 void                  castle_device_free       (struct castle_device *cd);
 struct castle_device* castle_device_find       (dev_t dev);
 struct castle_slave*  castle_claim             (uint32_t new_dev);

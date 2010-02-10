@@ -30,7 +30,7 @@ static void castle_block_read_end(struct bio *bio, int err)
         /* If no callback was supplied, wakeup blocked execution */
         *(cbio->ret) = err;
         complete(&cbio->io_completed);
-     } else
+    } else
     {
         debug("      With callback in block_read_end. Ret=%d\n", err);
         cbio->callback(cbio->arg, err);
@@ -48,14 +48,14 @@ int castle_block_read(struct castle_slave *slave,
                       void (* callback)(void *, int),
                       void *arg)
 {
-    struct bio *bio = bio_alloc(GFP_ATOMIC, 1);
+    struct bio *bio = bio_alloc(GFP_KERNEL, 1);
     struct castle_block_io *cbio;
 
     /* Early checks */
     BUG_ON(slave->bdev->bd_block_size != PAGE_SIZE);
     if(!bio) return -ENOMEM;
 
-    cbio = kmalloc(sizeof(struct castle_block_io), GFP_ATOMIC);
+    cbio = kmalloc(sizeof(struct castle_block_io), GFP_KERNEL);
     if(!cbio) {
         /* This will destroy the bio */
         bio_put(bio); 
@@ -162,10 +162,10 @@ int castle_sub_block_read(struct castle_slave *cs,
     struct page *page;
     int err;
     
-    io = kmalloc(sizeof(struct castle_sub_block_io), GFP_ATOMIC);
+    io = kmalloc(sizeof(struct castle_sub_block_io), GFP_KERNEL);
     if(!io) return -ENOMEM;
 
-    page = alloc_page(GFP_ATOMIC);
+    page = alloc_page(GFP_KERNEL);
     if(!page)
     {
         kfree(io);
