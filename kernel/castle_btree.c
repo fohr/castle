@@ -179,6 +179,7 @@ static void castle_ftree_c2p_process(c_bvec_t *c_bvec, c2_page_t *c2p)
     int i;
 
     /* Copy the data */
+    /* TODO: let c_bvec reference c2p directly. Keep it locked for as long as needed */
     BUG_ON(sizeof(struct castle_ftree_node) > PAGE_SIZE);
     memcpy(node, 
            pfn_to_kaddr(page_to_pfn(c2p->page)),
