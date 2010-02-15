@@ -115,20 +115,33 @@ typedef struct castle_bio {
     int                    err;
 } c_bio_t;
 
+
+struct castle_cache_page;
 typedef struct castle_bio_vec {
+    /* Where did this IO originate from */
     c_bio_t            *c_bio;
     struct page        *page;
-    struct work_struct  work;
-    /* What block,version do we want to read */
+    /* What (block,version) do we want to read */
     sector_t            block;
     uint32_t            version;
-    /* Updated as the IO progresses */
+    /* Used to walk the B-Tree, and return the final cdb */
     union {
-        struct castle_ftree_node *node;
+        /* Used when walking B-Tree. When writing, B-Tree node and
+           its parent have to be locked concurrently. */
+        struct {
+            struct castle_cache_page *btree_node;
+            struct castle_cache_page *btree_parent_node;
+        };
+        /* Location of the data on a slave disk. Set when B-Tree walk 
+           is finished */
         c_disk_blk_t cdb;
     };
+    /* Used to thread this bvec onto a workqueue */
+    struct work_struct  work;
 } c_bvec_t;
 #define c_bvec_data_dir(_c_bvec)    bio_data_dir((_c_bvec)->c_bio->bio)
+#define c_bvec_bnode(_c_bvec)       pfn_to_kaddr(page_to_pfn((_c_bvec)->btree_node->page))
+#define c_bvec_bpnode(_c_bvec)      pfn_to_kaddr(page_to_pfn((_c_bvec)->btree_parent_node->page))
 
 /* First class structures */
 struct castle {

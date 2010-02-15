@@ -17,6 +17,34 @@
 #define debug(_f, _a...)  (printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
 #endif
 
+static void castle_ftree_c2p_forget(c_bvec_t *c_bvec);
+static void __castle_ftree_find(c_bvec_t *c_bvec,
+                                c_disk_blk_t node_cdb);
+
+static void castle_ftree_io_end(c_bvec_t *c_bvec,
+                                c_disk_blk_t cdb,
+                                int err)
+{
+    /* We allow:
+       -   valid block and no error
+       - invalid block and    error
+       - invalid block and no error (reads from non-yet written block)
+       We disallow:
+       -   valid block and    error */
+    BUG_ON((!DISK_BLK_INVAL(cdb)) && (err));
+    /* Free the c2ps correctly. Call twice to release parent and child
+       (if both exist) */
+    castle_ftree_c2p_forget(c_bvec);
+    castle_ftree_c2p_forget(c_bvec);
+    /* Once buffers have been freed, save the cdb */
+    c_bvec->cdb = cdb;
+    /* Finish the IO (call _io_end directly on an error */
+    if(err)
+        castle_bio_data_io_end(c_bvec, err);
+    else
+        castle_bio_data_io(c_bvec);
+}
+
 static void castle_ftree_slot_normalize(struct castle_ftree_slot *slot)
 {
     /* Look for 'last' slot, and if block is zero, assign the maximum value instead */
@@ -73,7 +101,7 @@ static int castle_ftree_lub_find(struct castle_ftree_node *node,
 
 static void castle_ftree_write_process(c_bvec_t *c_bvec)
 {
-    struct castle_ftree_node *node = c_bvec->node;
+    struct castle_ftree_node *node = c_bvec_bnode(c_bvec);
     struct castle_ftree_slot *slot;
     uint32_t block = c_bvec->block;
     uint32_t version = c_bvec->version;
@@ -87,8 +115,7 @@ static void castle_ftree_write_process(c_bvec_t *c_bvec)
     if(blk_lub_idx < 0)
     {
         printk("Could not find the LUB during write.\n");
-        kfree(node);
-        castle_bio_data_io_end(c_bvec, -EINVAL);
+        castle_ftree_io_end(c_bvec, INVAL_DISK_BLK, -EINVAL);
         return;
     } 
     
@@ -101,27 +128,24 @@ static void castle_ftree_write_process(c_bvec_t *c_bvec)
            (slot->version == version))
         {
             printk("Block already exists, modifying in place.\n");
-            c_bvec->cdb = slot->cdb; 
-            kfree(node);
-            castle_bio_data_io(c_bvec);
+            castle_ftree_io_end(c_bvec, slot->cdb, 0);
             return;
         }
 
         printk("Could not find the exact (b,v).\n");
-        kfree(node);
-        castle_bio_data_io_end(c_bvec, -EINVAL);
+        castle_ftree_io_end(c_bvec, INVAL_DISK_BLK, -EINVAL);
         return;
     } else
     {
         printk("Following write down the tree.\n");
-        castle_ftree_find(c_bvec, slot->cdb);
+        __castle_ftree_find(c_bvec, slot->cdb);
         return;
     }
 }
 
 static void castle_ftree_read_process(c_bvec_t *c_bvec)
 {
-    struct castle_ftree_node *node = c_bvec->node;
+    struct castle_ftree_node *node = c_bvec_bnode(c_bvec);
     struct castle_ftree_slot *slot;
     uint32_t block = c_bvec->block;
     uint32_t version = c_bvec->version;
@@ -136,9 +160,7 @@ static void castle_ftree_read_process(c_bvec_t *c_bvec)
     {
         debug(" Could not find the LUB for (b,v)=(0x%x, 0x%x)\n", 
             block, version);
-        c_bvec->cdb = INVAL_DISK_BLK;
-        kfree(c_bvec->node);
-        castle_bio_data_io(c_bvec);
+        castle_ftree_io_end(c_bvec, INVAL_DISK_BLK, 0);
         return;
     }
 
@@ -149,15 +171,13 @@ static void castle_ftree_read_process(c_bvec_t *c_bvec)
     {
         debug(" Is a leaf, found (b,v)=(0x%x, 0x%x)\n", 
             slot->block, slot->version);
-        c_bvec->cdb = slot->cdb; 
-        kfree(node);
-        castle_bio_data_io(c_bvec);
+        castle_ftree_io_end(c_bvec, slot->cdb, 0);
     }
     else
     {
         debug("Is not a leaf. Read and search (disk,blk#)=(0x%x, 0x%x)\n",
                 slot->cdb.disk, slot->cdb.block);
-        castle_ftree_find(c_bvec, slot->cdb);
+        __castle_ftree_find(c_bvec, slot->cdb);
     }
 }
 
@@ -173,17 +193,18 @@ void castle_ftree_process(struct work_struct *work)
 }
 
 
-static void castle_ftree_c2p_process(c_bvec_t *c_bvec, c2_page_t *c2p)
+static void castle_ftree_c2p_remember(c_bvec_t *c_bvec, c2_page_t *c2p)
 {
-    struct castle_ftree_node *node = c_bvec->node;
+    struct castle_ftree_node *node;
     int i;
 
-    /* Copy the data */
-    /* TODO: let c_bvec reference c2p directly. Keep it locked for as long as needed */
+    /* Forget the parent node buffer first */
+    castle_ftree_c2p_forget(c_bvec);
+    /* Save the new node buffer */
+    c_bvec->btree_node = c2p;
+    node = c_bvec_bnode(c_bvec);
+
     BUG_ON(sizeof(struct castle_ftree_node) > PAGE_SIZE);
-    memcpy(node, 
-           pfn_to_kaddr(page_to_pfn(c2p->page)),
-           sizeof(struct castle_ftree_node));
 
     if((node->capacity > FTREE_NODE_SLOTS) ||
        (node->used     > node->capacity) ||
@@ -191,8 +212,7 @@ static void castle_ftree_c2p_process(c_bvec_t *c_bvec, c2_page_t *c2p)
     {
         printk("Invalid ftree node capacity or/and used: (%d, %d)\n",
                node->capacity, node->used);
-        kfree(node);
-        castle_bio_data_io_end(c_bvec, -EINVAL);
+        castle_ftree_io_end(c_bvec, INVAL_DISK_BLK, -EINVAL);
         return;
     }
  
@@ -201,38 +221,52 @@ static void castle_ftree_c2p_process(c_bvec_t *c_bvec, c2_page_t *c2p)
         struct castle_ftree_slot *slot = &node->slots[i];
         castle_ftree_slot_normalize(slot);
     }
-
-    /* Release the buffer */
-    unlock_c2p(c2p);
-    put_c2p(c2p);
 }
 
-void castle_ftree_find_io_end(c2_page_t *c2p, int uptodate)
+static void castle_ftree_c2p_forget(c_bvec_t *c_bvec)
+{
+    int write = (c_bvec_data_dir(c_bvec) == WRITE);
+    c2_page_t *to_forget;
+
+    /* We don't lock parent nodes on reads */
+    BUG_ON(!write && c_bvec->btree_parent_node);
+    /* On writes we forget the parent, on reads the node itself */
+    to_forget = (write ? c_bvec->btree_parent_node : c_bvec->btree_node);
+    /* Release the buffer if one exists */
+    if(to_forget)
+    {
+        unlock_c2p(to_forget);
+        put_c2p(to_forget);
+    }
+    /* Promote node to the parent on writes */
+    if(write) c_bvec->btree_parent_node = c_bvec->btree_node;
+    /* Forget */
+    c_bvec->btree_node = NULL;
+}
+
+static void castle_ftree_find_io_end(c2_page_t *c2p, int uptodate)
 {
     c_bvec_t *c_bvec = c2p->private;
 
     debug("Finished IO for: block 0x%lx, in version 0x%x\n", 
             c_bvec->block, c_bvec->version);
+    
+    castle_ftree_c2p_remember(c_bvec, c2p);
     /* Callback on error */
     if(!uptodate)
     {
-        if(c_bvec->node) kfree(c_bvec->node);
-        /* Release the buffer */
-        unlock_c2p(c2p);
-        put_c2p(c2p);
-        castle_bio_data_io_end(c_bvec, -EIO);
+        castle_ftree_io_end(c_bvec, INVAL_DISK_BLK, -EIO);
         return;
     }
 
     set_c2p_uptodate(c2p);
-    castle_ftree_c2p_process(c_bvec, c2p);
     /* Put on to the workqueue */
     INIT_WORK(&c_bvec->work, castle_ftree_process);
     queue_work(castle_wq, &c_bvec->work); 
 }
 
-void castle_ftree_find(c_bvec_t *c_bvec,
-                       c_disk_blk_t node_cdb)
+static void __castle_ftree_find(c_bvec_t *c_bvec,
+                                c_disk_blk_t node_cdb)
 {
     c2_page_t *c2p;
     int ret;
@@ -240,9 +274,6 @@ void castle_ftree_find(c_bvec_t *c_bvec,
     debug("Asked for block: 0x%lx, in version 0x%x, reading ftree node (0x%x, 0x%x)\n", 
             c_bvec->block, c_bvec->version, node_cdb.disk, node_cdb.block);
     ret = -ENOMEM;
-    if(!c_bvec->node)
-        c_bvec->node = kmalloc(sizeof(struct castle_ftree_node), GFP_KERNEL);
-    if(!c_bvec->node) goto error_out;
 
     c2p = castle_cache_page_get(node_cdb);
     debug("Got the buffer, trying to lock it\n");
@@ -261,14 +292,17 @@ void castle_ftree_find(c_bvec_t *c_bvec,
         debug("Buffer up to date. Processing!\n");
         /* If the buffer is up to date, copy data, and call the node processing
            function directly */ 
-        castle_ftree_c2p_process(c_bvec, c2p);
+        castle_ftree_c2p_remember(c_bvec, c2p);
         castle_ftree_process(&c_bvec->work);
     }
-    return;
+}
 
-error_out:
-    if(c_bvec->node) kfree(c_bvec->node);
-    castle_bio_data_io_end(c_bvec, ret);
+void castle_ftree_find(c_bvec_t *c_bvec,
+                       c_disk_blk_t node_cdb)
+{
+    c_bvec->btree_node = NULL;
+    c_bvec->btree_parent_node = NULL;
+    __castle_ftree_find(c_bvec, node_cdb);
 }
 
 static void castle_version_node_print(struct castle_vtree_slot *slot)
