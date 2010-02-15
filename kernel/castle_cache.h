@@ -13,6 +13,7 @@ typedef struct castle_cache_page {
     c_disk_blk_t cdb;
     struct page *page;
     struct list_head list;
+    /* TODO: dirty >> dirty_or_clean */
     struct list_head dirty;
 
     unsigned long state;

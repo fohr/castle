@@ -36,6 +36,7 @@ static               LIST_HEAD(castle_cache_freelist);
 
 static struct task_struct     *castle_cache_flush_thread;
 static DECLARE_WAIT_QUEUE_HEAD(castle_cache_flush_wq); 
+// TODO: This isn't used any more. Review, remove.
 static DECLARE_WAIT_QUEUE_HEAD(castle_cache_flush_all_wq); 
 
 static int sync_c2p(void *word)

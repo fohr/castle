@@ -370,6 +370,7 @@ void castle_bio_data_copy(c_bvec_t *c_bvec, c2_page_t *c2p, int io_dir)
 
 void castle_bio_c2p_update(c2_page_t *c2p, int uptodate)
 {
+    /* TODO: comment when it gets called */
     c_bvec_t *c_bvec = c2p->private;
     int err = -EIO;
 
