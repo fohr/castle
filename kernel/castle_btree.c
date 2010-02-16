@@ -282,7 +282,10 @@ static void castle_ftree_read_process(c_bvec_t *c_bvec)
     {
         debug(" Is a leaf, found (b,v)=(0x%x, 0x%x)\n", 
             slot->block, slot->version);
-        castle_ftree_io_end(c_bvec, slot->cdb, 0);
+        if(slot->block == block)
+            castle_ftree_io_end(c_bvec, slot->cdb, 0);
+        else
+            castle_ftree_io_end(c_bvec, INVAL_DISK_BLK, 0);
     }
     else
     {
