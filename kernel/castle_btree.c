@@ -56,19 +56,49 @@ static void castle_ftree_slot_normalize(struct castle_ftree_slot *slot)
     }
 }
 
-static int castle_ftree_lub_find(struct castle_ftree_node *node,
-                                 uint32_t block, 
-                                 uint32_t version)
+static int castle_ftree_node_normalize(struct castle_ftree_node *node)
+{
+    int i;
+
+    if((node->capacity > FTREE_NODE_SLOTS) ||
+       (node->used     > node->capacity) ||
+       (node->used     == 0))
+    {
+        printk("Invalid ftree node capacity or/and used: (%d, %d)\n",
+               node->capacity, node->used);
+        return -EIO;
+    }
+    /* There is at least one slot in the node */ 
+    node->is_leaf = FTREE_SLOT_IS_LEAF(&node->slots[0]);
+
+    for(i=0; i < node->used; i++)
+    {
+        struct castle_ftree_slot *slot = &node->slots[i];
+        /* Fail if node is_leaf doesn't match with the slot. ! needed 
+           to guarantee canonical value for boolean true */
+        if(!(node->is_leaf) != !(FTREE_SLOT_IS_LEAF(slot)))
+            return -EIO;
+        castle_ftree_slot_normalize(slot);
+    }
+
+    return 0;
+}
+
+static void castle_ftree_lub_find(struct castle_ftree_node *node,
+                                  uint32_t block, 
+                                  uint32_t version,
+                                  int *lub_idx_p,
+                                  int *insert_idx_p)
 {
     struct castle_ftree_slot *slot;
-    uint32_t blk_lub;
-    int      blk_lub_idx, i;
+    uint32_t block_lub, version_lub;
+    int      lub_idx, insert_idx, i;
 
     debug("Looking for (b,v) = (0x%x, 0x%x), node->used=%d, capacity=%d\n",
             block, version, node->used, node->capacity);
         
-    blk_lub_idx = -1;
-    blk_lub     = INVAL_BLK; 
+    lub_idx   = -1;
+    block_lub = INVAL_BLK; 
     for(i=node->used-1; i >= 0; i--)
     {
         slot = &node->slots[i];
@@ -87,60 +117,145 @@ static int castle_ftree_lub_find(struct castle_ftree_node *node,
            Also, don't update the LUB index if the block number doesn't change.
            This is because the most recent ancestor will be found first when
            scanning from right to left */
-        if((blk_lub != slot->block) &&
+        if((block_lub != slot->block) &&
             castle_version_is_ancestor(slot->version, version))
         {
-            blk_lub     = slot->block;
-            blk_lub_idx = i;
-            debug("  set b_lub=0x%x, b_lub_idx=%d\n", blk_lub, blk_lub_idx);
+            block_lub   = slot->block;
+            version_lub = slot->version;
+            lub_idx = i;
+            debug("  set b_lub=0x%x, lub_idx=%d\n", block_lub, lub_idx);
         }
     } 
 
-    return blk_lub_idx;
+    /* If we are insterting something into the node, work out where should it go */
+    /* Case 1: (block_lub == block) && (version_lub == version)
+               no need to insert, we have exactly the (b,v) we wanted
+       Case 2: (block_lub == block) && (version_lub != version)
+               but we know that is_ancestor(version_lub, version) == 1
+               this means that 'version' is more recent than version_lub, and
+               it needs to go (just) to the right of the LUB
+               => insert_idx = lub_idx + 1
+       Case 3: (block_lub > block)
+               there is no (b_x, v_x) such that 
+               (block <= b_x < block_lub) && (is_ancestor(v_x, version)) because then 
+               (b_x, v_x) would be the LUB.
+               Therefore, in the inclusive range [i+1, lub_idx-1] there are no 
+               ancestors of 'version'. It follows that we should insert on the basis
+               of block numbers only. Therefore i+1 will point to the correct place.
+       Case 4: There is no LUB.
+               This case is similar to Case 3, in that there is no (b_x, v_x) such
+               that (block <= b_x) && (is_ancestor(v_x, version)).
+               Insert at i+1.
+       Cases are exhaustive, because either LUB doesn't exist (Case 4), or it does,
+       in which case, block_lub > block (Case 3) or block_lub == block (Case 2 and Case 1).
+    */
+    if((lub_idx < 0) || (block_lub > block))
+    /* Case 4 and Case 3 */
+    {
+        insert_idx = i+1;    
+    }
+    else
+    if (version_lub != version)
+    /* Case 2 */
+    {
+        BUG_ON(block_lub != block);
+        insert_idx = lub_idx + 1;
+    } else
+    /* Case 1 */
+    {
+        BUG_ON(block_lub   != block);
+        BUG_ON(version_lub != version);
+        insert_idx = lub_idx;
+    }
+
+    if(lub_idx_p)    *lub_idx_p = lub_idx;
+    if(insert_idx_p) *insert_idx_p = insert_idx;
 }
 
-static void castle_ftree_write_process(c_bvec_t *c_bvec)
+static int castle_ftree_write_idx_find(c_bvec_t *c_bvec)
 {
     struct castle_ftree_node *node = c_bvec_bnode(c_bvec);
     struct castle_ftree_slot *slot;
     uint32_t block = c_bvec->block;
     uint32_t version = c_bvec->version;
-    int      blk_lub_idx;
-
-    blk_lub_idx = castle_ftree_lub_find(node, block, version);
-    /* We should always find the LUB if we are not looking at a leaf node */
-    BUG_ON((blk_lub_idx < 0) && !FTREE_SLOT_IS_LEAF(&node->slots[0]));
-
-    /* Only applies to leaf nodes after the check in the previous line */
-    if(blk_lub_idx < 0)
+    int i, idx;
+    
+    idx = node->used;
+    for(i=node->used-1; i >= 0; i--)
     {
-        printk("Could not find the LUB during write.\n");
+        slot = &node->slots[i];
+        
+        /* We've went to far now */
+        if(slot->block < block)
+            break;
+
+        /* Check versions if the block is the same */
+        if(slot->block == block)
+        {
+            /* If we found our own ancestor we must have gone too far ... */
+            if(castle_version_is_ancestor(slot->version, version)) 
+            {
+                /* ... unless we are looking at exactly the same version,
+                       in which case we've got exactly the entry we were 
+                       looking to insert */
+                if(slot->version == version)
+                    idx = i;
+                break;
+            }
+        }    
+        idx = i;
+    }
+
+    return idx;
+}
+
+static void castle_ftree_write_process(c_bvec_t *c_bvec)
+{
+    struct castle_ftree_node *node = c_bvec_bnode(c_bvec);
+    struct castle_ftree_slot *lub_slot;
+    uint32_t block = c_bvec->block;
+    uint32_t version = c_bvec->version;
+    int      lub_idx, insert_idx;
+
+    castle_ftree_lub_find(node, block, version, &lub_idx, &insert_idx);
+    if(lub_idx >= 0) lub_slot = &node->slots[lub_idx];
+
+    /* Deal with non-leaf nodes first */
+    if(!FTREE_NODE_IS_LEAF(node))
+    {
+        /* We should always find the LUB if we are not looking at a leaf node */
+        BUG_ON(lub_idx < 0);
+        printk("Following write down the tree.\n");
+        __castle_ftree_find(c_bvec, lub_slot->cdb);
+        return;
+    }
+
+    /* Deal with leaf nodes */
+    BUG_ON(!FTREE_NODE_IS_LEAF(node));
+
+    /* Insert an entry if LUB doesn't match our (b,v) precisely. */
+    if(lub_idx < 0 || (lub_slot->block != block) || (lub_slot->version != version))
+    {
+        int i;
+        printk("Need to insert (0x%x, 0x%x) into node (used: 0x%x, capacity: 0x%x, leaf=%d).\n",
+                block, version,
+                node->used, node->capacity, FTREE_NODE_IS_LEAF(node));
+        for(i=0; i<node->used; i++)
+                printk("(0x%x, 0x%x) ", node->slots[i].block, node->slots[i].version);
+                printk("\n");
+        BUG_ON(castle_ftree_write_idx_find(c_bvec) != insert_idx);
+        /* TODO: Insertion should happen here */
         castle_ftree_io_end(c_bvec, INVAL_DISK_BLK, -EINVAL);
         return;
     } 
     
-    slot = &node->slots[blk_lub_idx];
-    if(FTREE_SLOT_IS_LEAF(slot))
-    {
-        /* Handle the 'easy' case, where the block already exists in the 
-           correct version first */
-        if((slot->block == block) ||
-           (slot->version == version))
-        {
-            printk("Block already exists, modifying in place.\n");
-            castle_ftree_io_end(c_bvec, slot->cdb, 0);
-            return;
-        }
+    /* Final case: (b,v) found in the leaf node */
+    BUG_ON((lub_slot->block != block) || (lub_slot->version != version));
+    BUG_ON(lub_idx != insert_idx);
+    BUG_ON(castle_ftree_write_idx_find(c_bvec) != insert_idx);
 
-        printk("Could not find the exact (b,v).\n");
-        castle_ftree_io_end(c_bvec, INVAL_DISK_BLK, -EINVAL);
-        return;
-    } else
-    {
-        printk("Following write down the tree.\n");
-        __castle_ftree_find(c_bvec, slot->cdb);
-        return;
-    }
+    printk("Block already exists, modifying in place.\n");
+    castle_ftree_io_end(c_bvec, lub_slot->cdb, 0);
 }
 
 static void castle_ftree_read_process(c_bvec_t *c_bvec)
@@ -149,14 +264,14 @@ static void castle_ftree_read_process(c_bvec_t *c_bvec)
     struct castle_ftree_slot *slot;
     uint32_t block = c_bvec->block;
     uint32_t version = c_bvec->version;
-    int      blk_lub_idx;
+    int      lub_idx;
 
-    blk_lub_idx = castle_ftree_lub_find(node, block, version);
+    castle_ftree_lub_find(node, block, version, &lub_idx, NULL);
     /* We should always find the LUB if we are not looking at a leaf node */
-    BUG_ON((blk_lub_idx < 0) && !FTREE_SLOT_IS_LEAF(&node->slots[0]));
+    BUG_ON((lub_idx < 0) && !FTREE_NODE_IS_LEAF(node));
     
     /* If we haven't found the LUB (in the leaf node), return early */
-    if(blk_lub_idx < 0)
+    if(lub_idx < 0)
     {
         debug(" Could not find the LUB for (b,v)=(0x%x, 0x%x)\n", 
             block, version);
@@ -164,7 +279,7 @@ static void castle_ftree_read_process(c_bvec_t *c_bvec)
         return;
     }
 
-    slot = &node->slots[blk_lub_idx];
+    slot = &node->slots[lub_idx];
     /* If we found the LUB, either complete the ftree walk (if we are looking 
        at a leaf), or go to the next level */
     if(FTREE_SLOT_IS_LEAF(slot))
@@ -193,34 +308,26 @@ void castle_ftree_process(struct work_struct *work)
 }
 
 
-static void castle_ftree_c2p_remember(c_bvec_t *c_bvec, c2_page_t *c2p)
+static int castle_ftree_c2p_remember(c_bvec_t *c_bvec, c2_page_t *c2p)
 {
-    struct castle_ftree_node *node;
-    int i;
+    int ret = 0;
 
     /* Forget the parent node buffer first */
     castle_ftree_c2p_forget(c_bvec);
-    /* Save the new node buffer */
-    c_bvec->btree_node = c2p;
-    node = c_bvec_bnode(c_bvec);
-
+    
+    /* Sanity check to make sure that the node fits in the buffer */
     BUG_ON(sizeof(struct castle_ftree_node) > PAGE_SIZE);
 
-    if((node->capacity > FTREE_NODE_SLOTS) ||
-       (node->used     > node->capacity) ||
-       (node->used     == 0))
-    {
-        printk("Invalid ftree node capacity or/and used: (%d, %d)\n",
-               node->capacity, node->used);
-        castle_ftree_io_end(c_bvec, INVAL_DISK_BLK, -EINVAL);
-        return;
-    }
- 
-    for(i=0; i < node->used; i++)
-    {
-        struct castle_ftree_slot *slot = &node->slots[i];
-        castle_ftree_slot_normalize(slot);
-    }
+    /* Save the new node buffer */
+    c_bvec->btree_node = c2p;
+
+    /* Format the node to make sure everything is as expected by the rest of the code.
+       Only need to do that on the IO read, ie. when updating the buffer. */
+    BUG_ON(!c2p_locked(c2p));
+    if(!c2p_uptodate(c2p))
+        ret = castle_ftree_node_normalize(c_bvec_bnode(c_bvec));
+
+    return ret; 
 }
 
 static void castle_ftree_c2p_forget(c_bvec_t *c_bvec)
@@ -251,9 +358,8 @@ static void castle_ftree_find_io_end(c2_page_t *c2p, int uptodate)
     debug("Finished IO for: block 0x%lx, in version 0x%x\n", 
             c_bvec->block, c_bvec->version);
     
-    castle_ftree_c2p_remember(c_bvec, c2p);
     /* Callback on error */
-    if(!uptodate)
+    if(!uptodate || castle_ftree_c2p_remember(c_bvec, c2p))
     {
         castle_ftree_io_end(c_bvec, INVAL_DISK_BLK, -EIO);
         return;
@@ -291,8 +397,9 @@ static void __castle_ftree_find(c_bvec_t *c_bvec,
     {
         debug("Buffer up to date. Processing!\n");
         /* If the buffer is up to date, copy data, and call the node processing
-           function directly */ 
-        castle_ftree_c2p_remember(c_bvec, c2p);
+           function directly. c2p_remember should not return an error, because
+           the Btree node had been normalized already. */
+        BUG_ON(castle_ftree_c2p_remember(c_bvec, c2p) != 0);
         castle_ftree_process(&c_bvec->work);
     }
 }

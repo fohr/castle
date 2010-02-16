@@ -48,6 +48,8 @@ struct castle_fs_superblock {
 #define FTREE_SLOT_IS_NODE_LAST(_slot)   ((_slot)->type == FTREE_SLOT_NODE_LAST)
 #define FTREE_SLOT_IS_LEAF(_slot)        ((_slot)->type == FTREE_SLOT_LEAF) 
 
+#define FTREE_NODE_IS_LEAF(_node)        ((_node)->is_leaf)
+
 #define INVAL_BLK          ((uint32_t)-1)
 #define MAX_BLK            ((uint32_t)-2)
 #define BLK_INVAL(_blk)    ((_blk) == INVAL_BLK)
@@ -65,7 +67,10 @@ struct castle_ftree_node {
     uint32_t version;
     uint32_t capacity;
     uint32_t used;
-    uint8_t  __pad[NODE_HEADER - 16];
+    uint8_t  __pad[NODE_HEADER - 16 /* for the 4 u32s above */ - 1 /* for is_leaf */];
+    /* The following bits of data are computed dynamically, and don't need to be
+       saved to the disk (even though they probably will */
+    uint8_t  is_leaf;
     struct castle_ftree_slot slots[FTREE_NODE_SLOTS];
 };
 
