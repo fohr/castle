@@ -18,7 +18,7 @@ struct castle_slave_superblock {
     uint32_t magic2;
     uint32_t magic3;
     uint32_t uuid;
-    uint32_t free;
+    uint32_t used;
     uint32_t size; /* In blocks */
 };
 
@@ -159,10 +159,14 @@ struct castle_volumes {
 
 struct castle_slave {
     uint32_t                        id;
+    uint32_t                        uuid; /* Copy of the uuid from the superblock
+                                             needed here, because we cannot cache
+                                             the superblock without being able to
+                                             _find_by_uuid */
     struct kobject                  kobj;
     struct list_head                list;
     struct block_device            *bdev;
-    struct castle_slave_superblock  cs_sb;
+    struct castle_cache_page       *sblk;
 };
 
 struct castle_slaves {
@@ -211,6 +215,7 @@ struct castle_slave*  castle_claim             (uint32_t new_dev);
 struct castle_slave*  castle_slave_find_by_id  (uint32_t id);
 struct castle_slave*  castle_slave_find_by_uuid(uint32_t uuid);
 struct castle_slave*  castle_slave_find_by_block(c_disk_blk_t cdb);
+c_disk_blk_t          castle_slaves_disk_block_get(void);
 void                  castle_release           (struct castle_slave *cs);
 int                   castle_fs_init           (void);
 

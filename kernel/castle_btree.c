@@ -236,13 +236,9 @@ static void castle_ftree_write_process(c_bvec_t *c_bvec)
     /* Insert an entry if LUB doesn't match our (b,v) precisely. */
     if(lub_idx < 0 || (lub_slot->block != block) || (lub_slot->version != version))
     {
-        int i;
         printk("Need to insert (0x%x, 0x%x) into node (used: 0x%x, capacity: 0x%x, leaf=%d).\n",
                 block, version,
                 node->used, node->capacity, FTREE_NODE_IS_LEAF(node));
-        for(i=0; i<node->used; i++)
-                printk("(0x%x, 0x%x) ", node->slots[i].block, node->slots[i].version);
-                printk("\n");
         BUG_ON(castle_ftree_write_idx_find(c_bvec) != insert_idx);
         /* TODO: Insertion should happen here */
         castle_ftree_io_end(c_bvec, INVAL_DISK_BLK, -EINVAL);

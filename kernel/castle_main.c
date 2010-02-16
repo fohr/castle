@@ -120,7 +120,7 @@ int castle_fs_init(void)
         {
             // TODO: invalidate/rebuild the slave! 
             printk("Invaild superblock on slave uuid=0x%x, id=%d, err=%d\n",
-                    cs->cs_sb.uuid, cs->id, ret);
+                    cs->uuid, cs->id, ret);
             continue;
         }
         /* Save fs superblock if the first slave. */
@@ -163,13 +163,13 @@ static void castle_slave_superblock_print(struct castle_slave_superblock *cs_sb)
            "Magic2: %.8x\n"
            "Magic3: %.8x\n"
            "Uuid:   %x\n"
-           "Free:   %x\n"
+           "Used:   %x\n"
            "Size:   %x\n",
            cs_sb->magic1,
            cs_sb->magic2,
            cs_sb->magic3,
            cs_sb->uuid,
-           cs_sb->free,
+           cs_sb->used,
            cs_sb->size);
 }
 
@@ -184,11 +184,14 @@ static int castle_slave_superblock_validate(struct castle_slave_superblock *cs_s
 
 static int castle_slave_superblock_read(struct castle_slave *cs) 
 {
-    struct castle_slave_superblock *cs_sb = &cs->cs_sb;
+    struct castle_slave_superblock cs_sb;
     int err;
-    
+   
+    /* We're storing the superblock on the stack, make sure it doesn't
+       grow too large */
+    BUG_ON(sizeof(struct castle_slave_superblock) > PAGE_SIZE >> 2); 
     err = castle_sub_block_read(cs,
-                                cs_sb,
+                               &cs_sb,
                                 0,
                                 sizeof(struct castle_slave_superblock),
                                 NULL, NULL);
@@ -198,14 +201,60 @@ static int castle_slave_superblock_read(struct castle_slave *cs)
         return err;
     }
 
-    err = castle_slave_superblock_validate(cs_sb);
+    err = castle_slave_superblock_validate(&cs_sb);
     if(err)
     {
         printk("Invalid superblock.\n");
         return err;
     }
+    castle_slave_superblock_print(&cs_sb);
+    /* Save the uuid and exit */
+    cs->uuid = cs_sb.uuid;
     
     return 0;
+}
+
+static void castle_slave_superblock_read_finish(c2_page_t *c2p, int uptodate)
+{
+    struct completion *completion = c2p->private;
+    
+    if(uptodate) set_c2p_uptodate(c2p);
+    complete(completion);
+} 
+
+static int castle_slave_superblock_cache(struct castle_slave *cs)
+{
+    struct completion completion;
+    c_disk_blk_t cdb = {cs->uuid, 0};
+
+    init_completion(&completion);
+    cs->sblk = castle_cache_page_get(cdb);
+    /* We expecting the buffer not to be up to date. We check if it got updated later */
+    BUG_ON(c2p_uptodate(cs->sblk));
+    lock_c2p(cs->sblk);
+    cs->sblk->end_io  = castle_slave_superblock_read_finish;
+    cs->sblk->private = &completion;
+    submit_c2p(READ, cs->sblk);
+    wait_for_completion(&completion);
+    unlock_c2p(cs->sblk);
+    if(!c2p_uptodate(cs->sblk))
+        return -EIO;
+
+    return 0;
+}
+
+static inline struct castle_slave_superblock* castle_slave_superblock_get(struct castle_slave *cs)
+{
+    lock_c2p(cs->sblk);
+    BUG_ON(!c2p_uptodate(cs->sblk));
+    
+    return ((struct castle_slave_superblock*) pfn_to_kaddr(page_to_pfn(cs->sblk->page)));
+}
+
+static inline void castle_slave_superblock_put(struct castle_slave *cs, int dirty)
+{
+    if(dirty) dirty_c2p(cs->sblk);
+    unlock_c2p(cs->sblk);
 }
 
 struct castle_slave* castle_slave_find_by_id(uint32_t id)
@@ -231,7 +280,7 @@ struct castle_slave* castle_slave_find_by_uuid(uint32_t uuid)
     list_for_each(lh, &castle_slaves.slaves)
     {
         slave = list_entry(lh, struct castle_slave, list);
-        if(slave->cs_sb.uuid == uuid)
+        if(slave->uuid == uuid)
             return slave;
     }
 
@@ -241,6 +290,34 @@ struct castle_slave* castle_slave_find_by_uuid(uint32_t uuid)
 struct castle_slave* castle_slave_find_by_block(c_disk_blk_t cdb)
 {
     return castle_slave_find_by_uuid(cdb.disk);
+}
+
+c_disk_blk_t castle_slaves_disk_block_get(void)
+{
+    // TODO: slave locks!
+    static struct castle_slave *last_slave = NULL;
+    static struct castle_slave_superblock *sb;
+    struct list_head *l;
+    c_disk_blk_t cdb;
+    
+    if(!last_slave) 
+    {
+        BUG_ON(list_empty(&castle_slaves.slaves));
+        l = castle_slaves.slaves.next;
+        last_slave = list_entry(l, struct castle_slave, list);
+    }
+    l = &last_slave->list;
+    if(list_is_last(l, &castle_slaves.slaves))
+        l = &castle_slaves.slaves;
+    l = l->next;
+    last_slave = list_entry(l, struct castle_slave, list);
+    
+    sb = castle_slave_superblock_get(last_slave);
+    cdb.disk  = sb->uuid;
+    cdb.block = sb->used++;
+    castle_slave_superblock_put(last_slave, 1);
+
+    return cdb;
 }
 
 struct castle_slave* castle_claim(uint32_t new_dev)
@@ -281,6 +358,14 @@ struct castle_slave* castle_claim(uint32_t new_dev)
     }
 
     list_add(&cs->list, &castle_slaves.slaves);
+    err = castle_slave_superblock_cache(cs);
+    if(err)
+    {
+        printk("Could not cache the superblock.\n");
+        list_del(&cs->list);
+        goto err_out;
+    }
+
     castle_sysfs_slave_add(cs);
 
     return cs;
@@ -601,6 +686,18 @@ static int castle_slaves_init(void)
     return 0;
 }
 
+static void castle_slaves_unlock(void)                                                                 
+{                                                                                        
+    struct list_head *lh, *th;
+    struct castle_slave *slave;
+
+    list_for_each_safe(lh, th, &castle_slaves.slaves)
+    {
+        slave = list_entry(lh, struct castle_slave, list); 
+        put_c2p(slave->sblk);
+    }
+}
+
 static void castle_slaves_free(void)                                                                 
 {                                                                                        
     struct list_head *lh, *th;
@@ -685,6 +782,10 @@ err_out5:
 err_out4:
     castle_versions_fini();
 err_out3:
+    /* Cannot fini the cache without unlocking slave superblocks
+       but we shouldn't have any slaves at this point. Still, check
+       that */
+    BUG_ON(!list_empty(&castle_slaves.slaves));
     castle_cache_fini();
 err_out2:
     castle_slaves_free();
@@ -703,6 +804,7 @@ static void __exit castle_exit(void)
     castle_devices_free();
     castle_btree_free();
     castle_versions_fini();
+    castle_slaves_unlock();
     castle_cache_fini();
     castle_slaves_free();
 
