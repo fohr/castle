@@ -84,6 +84,17 @@ static int castle_ftree_node_normalize(struct castle_ftree_node *node)
     return 0;
 }
 
+static void castle_ftree_node_print(struct castle_ftree_node *node)
+{
+    int i;
+
+    printk("Printing node version=%d with (cap, use) = (%d, %d)\n",
+        node->version, node->capacity, node->used);
+    for(i=0; i<node->used; i++)
+        printk("(0x%x, 0x%x) ", node->slots[i].block, node->slots[i].version);
+    printk("\n");
+}
+
 static void castle_ftree_lub_find(struct castle_ftree_node *node,
                                   uint32_t block, 
                                   uint32_t version,
@@ -209,7 +220,104 @@ static int castle_ftree_write_idx_find(c_bvec_t *c_bvec)
     return idx;
 }
 
-static void castle_ftree_node_insert(struct castle_ftree_node *node,
+static c2_page_t* castle_ftree_effective_node_create(struct castle_ftree_node *node,
+                                                     uint32_t version)
+{
+    c_disk_blk_t cdb = castle_slaves_disk_block_get(); 
+    c2_page_t   *c2p = castle_cache_page_get(cdb);
+    struct castle_ftree_node *eff_node = pfn_to_kaddr(page_to_pfn(c2p->page));
+    struct castle_ftree_slot *last_eff_slot, *slot;
+    int i;
+
+    lock_c2p(c2p);
+    set_c2p_uptodate(c2p);
+    eff_node->magic    = 0x0000cdab;
+    eff_node->version  = version;
+    eff_node->capacity = FTREE_NODE_SLOTS;
+    eff_node->used     = 0;
+    eff_node->is_leaf  = node->is_leaf;
+
+    for(i=0, last_eff_slot = NULL; i<node->used; i++)
+    {
+        slot = &node->slots[i];
+
+        BUG_ON(eff_node->used >= eff_node->capacity);
+        /* Check if slot->version is ancestoral to version. If not,
+           reject straigt away. */
+        if(!castle_version_is_ancestor(slot->version, version))
+            continue;
+
+        if(!last_eff_slot || last_eff_slot->block != slot->block)
+        {
+            /* Allocate a new slot if the last eff slot doesn't exist
+               or refers to a different block */
+            last_eff_slot = &eff_node->slots[eff_node->used++]; 
+        } else
+        {
+            /* last_eff_slot != NULL && last_eff_slot->block == slot->block
+               => do not allocate a new slot, replace it instead.
+               Since we are scanning from left to right, we should be
+               looking on more recent versions of the block now. Check for that.
+             */
+            /* TODO: these asserts should really be turned into
+                     'corrupt btree' exception. */
+            BUG_ON(!castle_version_is_ancestor(last_eff_slot->version, 
+                                               slot->version));
+        }
+        memcpy(last_eff_slot,
+               slot,
+               sizeof(struct castle_ftree_slot)); 
+    }
+
+    /* If effective node is the same size as the original node, throw it away,
+       and return NULL */ 
+    if(eff_node->used == node->used)
+    {
+        unlock_c2p(c2p);
+        put_c2p(c2p);
+        /* TODO: should also return the allocated disk block, but our allocator
+                 is too simple to handle this ATM */
+        return NULL;
+    }
+
+    /* Mark the node dirty, so that it'll get written out, even if nothing gets
+       inserted into it */ 
+    dirty_c2p(c2p);
+
+    return c2p;
+}
+
+static c2_page_t* castle_ftree_node_split(struct castle_ftree_node *node)
+{
+    c_disk_blk_t cdb = castle_slaves_disk_block_get(); 
+    c2_page_t   *c2p = castle_cache_page_get(cdb);
+    struct castle_ftree_node *sec_node = pfn_to_kaddr(page_to_pfn(c2p->page));
+
+    lock_c2p(c2p);
+    set_c2p_uptodate(c2p);
+    sec_node->magic    = 0x0000cdab;
+    sec_node->version  = node->version;
+    sec_node->capacity = FTREE_NODE_SLOTS;
+    sec_node->used     = node->used >> 1;
+    sec_node->is_leaf  = node->is_leaf;
+
+    /* The original node needs to contain the elements from the right hand side
+       because otherwise the key in it's parent would have to change. We want
+       to avoid that */
+    node->used -= sec_node->used;
+    memcpy(sec_node->slots, 
+           node->slots, 
+           sec_node->used * sizeof(struct castle_ftree_slot));
+    memmove( node->slots, 
+            &node->slots[sec_node->used], 
+             node->used * sizeof(struct castle_ftree_slot));
+    /* c2p for node will be dirtied by the caller, we cannot work out its c2p from here */
+    dirty_c2p(c2p);
+
+    return c2p;
+}
+
+static void castle_ftree_slot_insert(struct castle_ftree_node *node,
                                      int index,
                                      uint32_t type,
                                      uint32_t block,
@@ -233,6 +341,30 @@ static void castle_ftree_node_insert(struct castle_ftree_node *node,
     node->used++;
 }
 
+static void castle_ftree_node_insert(c2_page_t *parent_c2p,
+                                     c2_page_t *child_c2p)
+{
+    struct castle_ftree_node *parent
+                     = pfn_to_kaddr(page_to_pfn(parent_c2p->page));
+    struct castle_ftree_node *child
+                     = pfn_to_kaddr(page_to_pfn(child_c2p->page));
+    uint32_t block   = child->slots[child->used-1].block; 
+    uint32_t version = child->version;
+    int insert_idx;
+
+    castle_ftree_lub_find(parent, block, version, NULL, &insert_idx);
+    printk("Inserting child node into parent, will insert (b,v)=(0x%x, 0x%x) at idx=%d.\n",
+            block, version, insert_idx);
+    castle_ftree_slot_insert(parent, 
+                             insert_idx, 
+                             FTREE_SLOT_NODE,
+                             block,
+                             version,
+                             child_c2p->cdb);
+    dirty_c2p(parent_c2p);
+}
+
+
 static void castle_ftree_write_process(c_bvec_t *c_bvec)
 {
     struct castle_ftree_node *node = c_bvec_bnode(c_bvec);
@@ -241,14 +373,15 @@ static void castle_ftree_write_process(c_bvec_t *c_bvec)
     uint32_t version = c_bvec->version;
     int      lub_idx, insert_idx;
 
-    castle_ftree_lub_find(node, block, version, &lub_idx, &insert_idx);
-    if(lub_idx >= 0) lub_slot = &node->slots[lub_idx];
-
     /* Deal with non-leaf nodes first */
     if(!FTREE_NODE_IS_LEAF(node))
     {
+        castle_ftree_lub_find(node, block, version, &lub_idx, NULL);
         /* We should always find the LUB if we are not looking at a leaf node */
         BUG_ON(lub_idx < 0);
+        lub_slot = &node->slots[lub_idx];
+        /* Should split the node if less than 2 empty slots available */
+        BUG_ON(node->capacity - node->used < 2);
         printk("Following write down the tree.\n");
         __castle_ftree_find(c_bvec, lub_slot->cdb);
         return;
@@ -256,6 +389,93 @@ static void castle_ftree_write_process(c_bvec_t *c_bvec)
 
     /* Deal with leaf nodes */
     BUG_ON(!FTREE_NODE_IS_LEAF(node));
+
+    /* A leaf node only needs to be split if there are _no_ empty slots in it */ 
+    if(node->used == node->capacity)
+    {
+        struct castle_ftree_node *eff_node;
+        c2_page_t *eff_c2p;
+
+        printk("Leaf node full while inserting (0x%x,0x%x), creating effective node for it.\n",
+                block, version);
+        castle_ftree_node_print(node);
+        eff_c2p = castle_ftree_effective_node_create(node, version);
+        /* eff_c2p will be NULL if the effective node is identical to the
+           original node */
+        if(!eff_c2p)
+        {
+            printk("Effective node is identical to the original node.\n");
+            eff_c2p  = c_bvec->btree_node; 
+            eff_node = node; 
+        }
+        else
+        {
+            printk("Effective node non identical to the original node.\n");
+            /* Cast eff_c2p buffer to eff_node */
+            eff_node = pfn_to_kaddr(page_to_pfn(eff_c2p->page));
+            castle_ftree_node_print(eff_node);
+            /* TODO: this means that there should be a new root node */
+            BUG_ON(!c_bvec->btree_parent_node);
+            castle_ftree_node_insert(c_bvec->btree_parent_node,
+                                     eff_c2p);
+            /* Unlock the original btree_node, and save the effective c2p instead */
+            unlock_c2p(c_bvec->btree_node);
+            put_c2p(c_bvec->btree_node);
+            c_bvec->btree_node = eff_c2p;
+        }
+        /* Split the effective node if it's more than 75% full */
+        if(eff_node->used > (eff_node->capacity >> 1) + (eff_node->capacity >> 2))
+        {
+            struct castle_ftree_node *split_node;
+            c2_page_t *split_c2p, *retain_c2p, *reject_c2p;
+
+            printk("Effective node too full, splitting.\n");
+            split_c2p = castle_ftree_node_split(eff_node);
+            /* Need to dirty the effective node here, since we are not passing the
+               buffer to the split routine */
+            dirty_c2p(eff_c2p);
+            split_node = pfn_to_kaddr(page_to_pfn(split_c2p->page));
+            printk("The effective node:\n");
+            castle_ftree_node_print(eff_node);
+            printk("The split node:\n");
+            castle_ftree_node_print(split_node);
+            /* TODO: this means that there should be a new root node */
+            BUG_ON(!c_bvec->btree_parent_node);
+            /* Insert into the parent node */
+            castle_ftree_node_insert(c_bvec->btree_parent_node,
+                                     split_c2p);
+            /* Work out whether to retain effective node, or the split node
+               for the further btree walk.
+               Since in the effective & split node there is at most one version
+               for each block, and this version is ancestoral to what we are
+               looking for, it's enough to check if the last entry in the 
+               split node (that's the node that contains left hand side elements
+               from the original effective node) is greater-or-equal to the block
+               we are looking for */
+            printk("Last element in split node is (b,v)=(0x%x, 0x%x)\n",
+                    split_node->slots[split_node->used-1].block,
+                    split_node->slots[split_node->used-1].version);
+            if(split_node->slots[split_node->used-1].block >= block)
+            {
+                printk("Retaing the split node.\n");
+                retain_c2p = split_c2p;
+                reject_c2p = eff_c2p;
+            } else
+            {
+                printk("Retaing the effective node.\n");
+                retain_c2p = eff_c2p;
+                reject_c2p = split_c2p;
+            }
+            unlock_c2p(reject_c2p);
+            put_c2p(reject_c2p);
+            c_bvec->btree_node = retain_c2p;
+        }
+        /* Make sure that node now points to the correct node */
+        node = c_bvec_bnode(c_bvec);
+    }
+    
+    castle_ftree_lub_find(node, block, version, &lub_idx, &insert_idx);
+    if(lub_idx >= 0) lub_slot = &node->slots[lub_idx];
 
     /* Insert an entry if LUB doesn't match our (b,v) precisely. */
     if(lub_idx < 0 || (lub_slot->block != block) || (lub_slot->version != version))
@@ -265,7 +485,7 @@ static void castle_ftree_write_process(c_bvec_t *c_bvec)
                 block, version,
                 node->used, node->capacity, FTREE_NODE_IS_LEAF(node));
         BUG_ON(castle_ftree_write_idx_find(c_bvec) != insert_idx);
-        castle_ftree_node_insert(node,
+        castle_ftree_slot_insert(node,
                                  insert_idx,
                                  FTREE_SLOT_LEAF,
                                  block,
