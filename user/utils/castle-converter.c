@@ -85,9 +85,13 @@ struct castle_vtree_node {
 
 #define VTREE_LIST_SLOTS  ((PAGE_SIZE - NODE_HEADER)/sizeof(struct castle_vtree_leaf_slot))
 struct castle_vtree_list_node {
+    uint32_t magic;
+    uint32_t version; 
+    uint32_t capacity;
+    uint32_t used;
     c_disk_blk_t next; /* 8 bytes */
     c_disk_blk_t prev; /* 8 bytes */
-    uint8_t __pad[NODE_HEADER - 16];
+    uint8_t __pad[NODE_HEADER - 32];
     struct castle_vtree_leaf_slot slots[VTREE_LIST_SLOTS];
 };
 
@@ -175,6 +179,11 @@ static int prepare_list_node(int first_version, int btree_node_id)
         memcpy(slot, &versions[version], sizeof(struct castle_vtree_leaf_slot));
         printf("Saving version: %d\n", versions[version].version_nr);
     }  
+
+    np->magic    = 0x0000115F;
+    np->version  = 0;
+    np->capacity = VTREE_LIST_SLOTS;
+    np->used     = version - first_version;
     if(btree_node_id == 0)
     {
         /* No prev element in the list */
@@ -193,7 +202,7 @@ static int prepare_list_node(int first_version, int btree_node_id)
         np->next.block = 0;
     } else
     {
-        np->prev = btree_nodes[btree_node_id + 1];
+        np->next = btree_nodes[btree_node_id + 1];
     }
 
     return (version >= max_version ? -1 : version);
