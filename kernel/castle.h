@@ -74,42 +74,24 @@ struct castle_ftree_node {
     struct castle_ftree_slot slots[FTREE_NODE_SLOTS];
 };
 
-struct castle_vtree_node_slot {
-    uint32_t     version_nr;
-    c_disk_blk_t cdb;
-};
 
-struct castle_vtree_leaf_slot {
+struct castle_vlist_slot {
     uint32_t     version_nr;
     uint32_t     parent;
     uint32_t     size;
     c_disk_blk_t cdb;
 };
 
-#define VTREE_SLOT_LEAF       0x1
-#define VTREE_SLOT_NODE       0x2
-#define VTREE_SLOT_NODE_LAST  0x3
-#define VTREE_SLOT_IS_NODE(_slot)       (((_slot)->type == VTREE_SLOT_NODE) || \
-                                         ((_slot)->type == VTREE_SLOT_NODE_LAST))
-#define VTREE_SLOT_IS_NODE_LAST(_slot)   ((_slot)->type == VTREE_SLOT_NODE_LAST)
-#define VTREE_SLOT_IS_LEAF(_slot)        ((_slot)->type == VTREE_SLOT_LEAF) 
-
-struct castle_vtree_slot {
-    uint32_t type;
-    union {
-        struct castle_vtree_node_slot node;
-        struct castle_vtree_leaf_slot leaf;
-    };
-};
-
-#define VTREE_NODE_SLOTS  ((PAGE_SIZE - NODE_HEADER)/sizeof(struct castle_vtree_slot))
-struct castle_vtree_node {
-    /* On disk representation of the node */
+#define VLIST_SLOTS  ((PAGE_SIZE - NODE_HEADER)/sizeof(struct castle_vlist_slot))
+struct castle_vlist_node {
     uint32_t magic;
     uint32_t version; 
     uint32_t capacity;
     uint32_t used;
-    struct castle_vtree_slot slots[VTREE_NODE_SLOTS]; 
+    c_disk_blk_t next; /* 8 bytes */
+    c_disk_blk_t prev; /* 8 bytes */
+    uint8_t __pad[NODE_HEADER - 32];
+    struct castle_vlist_slot slots[VLIST_SLOTS];
 };
 
 /* IO related structures */
@@ -198,8 +180,6 @@ extern struct castle_slaves      castle_slaves;
 extern struct castle_devices     castle_devices;
 
 extern struct workqueue_struct  *castle_wq;
-
-extern struct castle_vtree_node *castle_vtree_root;
 
 /* Various utilities */
 #define C_BLK_SHIFT                    (12) 

@@ -140,6 +140,30 @@ int submit_c2p(int rw, c2_page_t *c2p)
     return ret;
 }
 
+static void castle_cache_sync_io_end(c2_page_t *c2p, int uptodate)
+{
+    struct completion *completion = c2p->private;
+    
+    if(uptodate) set_c2p_uptodate(c2p);
+    complete(completion);
+}
+
+int submit_c2p_sync(int rw, c2_page_t *c2p)
+{
+    struct completion completion;
+
+	BUG_ON(!c2p_locked(c2p));
+	BUG_ON(c2p_uptodate(c2p));
+    c2p->end_io = castle_cache_sync_io_end;
+    c2p->private = &completion;
+    init_completion(&completion);
+    submit_c2p(rw, c2p);
+    wait_for_completion(&completion);
+
+    /* Success (ret=0) if uptodate now */
+    return !c2p_uptodate(c2p);
+}
+
 static inline int castle_cache_hash_idx(c_disk_blk_t cdb)
 {
     return (cdb.block % castle_cache_hash_buckets);

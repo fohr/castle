@@ -173,7 +173,7 @@ int castle_fs_init(void)
     blk.disk  = cs_fs_sb->fwd_tree_disk1;
     blk.block = cs_fs_sb->fwd_tree_block1;
     castle_fs_superblocks_put(cs_fs_sb, 0);
-    ret = castle_vtree_read(blk);
+    ret = castle_versions_read(blk);
     if(ret) return -EINVAL;
 
     printk("Castle FS inited.\n");
@@ -722,14 +722,6 @@ struct castle_device* castle_device_init(version_t version)
     bdget(MKDEV(gd->major, gd->first_minor));
     castle_sysfs_device_add(dev);
 
-    // TMP: make a change to the fs superblock, check if it gets written to 
-    // all the disks properly
-    {
-        struct castle_fs_superblock *sb = castle_fs_superblocks_get();
-        printk("==> rev tree block2\n");
-        sb->rev_tree_block2 = 0xdeadcafe;
-        castle_fs_superblocks_put(sb, 1);
-    }
     return dev;
 
 error_out:

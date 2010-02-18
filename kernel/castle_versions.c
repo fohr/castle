@@ -3,9 +3,11 @@
 #include <linux/list.h>
 #include <linux/slab.h>
 #include <linux/hardirq.h>
+#include <linux/fs.h>
 
 #include "castle.h"
 #include "castle_versions.h"
+#include "castle_cache.h"
 
 //#define DEBUG
 #ifndef DEBUG
@@ -290,6 +292,53 @@ int castle_version_is_ancestor(version_t candidate, version_t version)
        inclusive */
     ret = (v->o_order >= c->o_order) && (v->o_order <= c->r_order);
     spin_unlock(&castle_versions_hash_lock);
+
+    return ret;
+}
+
+int castle_versions_read(c_disk_blk_t list_cdb)
+{
+    struct castle_vlist_node *node;
+    struct castle_vlist_slot *slot;
+    c2_page_t *c2p, *prev_c2p;
+    int i, ret = 0;
+
+    prev_c2p = c2p = NULL;
+    while(!DISK_BLK_INVAL(list_cdb))
+    {
+        debug("Reading next version list node: (0x%x, 0x%x)\n",
+                list_cdb.disk, list_cdb.block);
+        c2p = castle_cache_page_get(list_cdb);
+        lock_c2p(c2p);         
+        /* Now that we've locked c2p, unlock prev (if exists) */
+        if(prev_c2p)
+        {
+            unlock_c2p(prev_c2p);
+            put_c2p(prev_c2p);
+        }
+        if(!c2p_uptodate(c2p)) 
+            ret = submit_c2p_sync(READ, c2p);
+        if(ret) goto out; 
+        node = pfn_to_kaddr(page_to_pfn(c2p->page));
+        for(i=0; i<node->used; i++)
+        {
+            slot = &node->slots[i];
+            ret = castle_version_add(slot->version_nr,
+                                     slot->parent,
+                                     slot->cdb,
+                                     slot->size);
+            if(ret) goto out; 
+        }
+        list_cdb = node->next;
+        prev_c2p = c2p;
+    }
+out:    
+    if(c2p)
+    {
+        unlock_c2p(c2p);
+        put_c2p(c2p);
+    }
+    if(!ret) castle_versions_process(); 
 
     return ret;
 }

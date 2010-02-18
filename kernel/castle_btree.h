@@ -4,8 +4,6 @@
 void castle_ftree_find(c_bvec_t *c_bvec,
                        c_disk_blk_t node_cdb);
 
-int castle_vtree_read(c_disk_blk_t cdb);
-
 int  castle_btree_init(void);
 void castle_btree_free(void);
 

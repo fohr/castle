@@ -74,6 +74,7 @@ static inline void put_c2p(c2_page_t *c2p)
 
 /* The 'interesting' cache interface functions */
 int        submit_c2p                (int rw, c2_page_t *c2p);
+int        submit_c2p_sync           (int rw, c2_page_t *c2p);
 c2_page_t* castle_cache_page_get     (c_disk_blk_t cdb);
 void       castle_cache_flush_wakeup (void);
 
