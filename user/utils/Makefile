@@ -19,20 +19,21 @@ CFLAGS          += -g
 
 LIBS = -L/usr/lib$(LIB_POSTFIX)
 
-MAIN_OBJ = castle-fs-cli
+MAIN_OBJS  = castle-fs-cli 
+MAIN_OBJS += castle-converter
 
 ##
 ## "all" Target
 ##
 
-all: $(MAIN_OBJ)
+all: $(MAIN_OBJS)
 
 ##
 ## Other targets
 ##
 
-$(MAIN_OBJ): $(OBJECT_FILES) $(HEADER_FILES)
-	$(CC) $(CFLAGS) $(OBJECT_FILES) $(LIBS) -o $@
+$(MAIN_OBJS): $(OBJECT_FILES) $(HEADER_FILES)
+	$(CC) $(CFLAGS) $@.o $(LIBS) -o $@
 
 %.o: %.c $(HEADER_FILES)
 	$(CC) $(CFLAGS) -c -o $*.o $*.c
@@ -42,8 +43,8 @@ tags: $(SOURCE_FILES) $(HEADER_FILES)
 
 .PHONY: clean
 clean:
-	rm -f *.o $(MAIN_OBJ) 
+	rm -f *.o $(MAIN_OBJS) 
 
 .PHONY: install
-install: $(MAIN_OBJ)
-	install $(MAIN_OBJ) /usr/sbin
+install: $(MAIN_OBJS)
+	install $(MAIN_OBJS) /usr/sbin

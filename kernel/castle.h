@@ -167,6 +167,7 @@ struct castle_slave {
     struct list_head                list;
     struct block_device            *bdev;
     struct castle_cache_page       *sblk;
+    struct castle_cache_page       *fs_sblk;
 };
 
 struct castle_slaves {
