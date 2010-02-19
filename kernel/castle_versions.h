@@ -5,7 +5,9 @@ int  castle_version_is_ancestor (version_t candidate, version_t version);
 int  castle_version_snap_get    (version_t version,
                                  c_disk_blk_t *ftree_root,
                                  uint32_t *size);
-int  castle_version_add         (version_t version, 
+int  castle_version_ftree_update(version_t version, c_disk_blk_t cdb);
+int  castle_version_add         (c_disk_blk_t cdb,
+                                 version_t version, 
                                  version_t parent, 
                                  c_disk_blk_t ftree_root,
                                  uint32_t size);

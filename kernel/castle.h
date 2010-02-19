@@ -61,6 +61,7 @@ struct castle_ftree_slot {
     c_disk_blk_t cdb;
 };
 
+#define FTREE_NODE_MAGIC  0x0000cdab
 #define FTREE_NODE_SLOTS  ((PAGE_SIZE - NODE_HEADER)/sizeof(struct castle_ftree_slot))
 struct castle_ftree_node {
     uint32_t magic;

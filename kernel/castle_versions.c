@@ -37,6 +37,7 @@ struct castle_version {
     struct castle_version     *next_sybling;
 
     /* Aux data */
+    c_disk_blk_t cdb;  /* Where is this version stored on disk */
     version_t    o_order;
     version_t    r_order;
     c_disk_blk_t ftree_root;
@@ -48,6 +49,11 @@ struct castle_version {
     struct list_head init_list;
 };
 
+struct castle_version_update {
+    version_t version;
+    c2_page_t *c2p;
+    struct work_struct work;
+}; 
 
 /***** Hash table & init list *****/
 static int castle_versions_hash_idx(version_t version)
@@ -108,7 +114,8 @@ static void castle_versions_init_add(struct castle_version *v)
 
 
 /***** External functions *****/
-int castle_version_add(version_t version, 
+int castle_version_add(c_disk_blk_t cdb,
+                       version_t version, 
                        version_t parent, 
                        c_disk_blk_t ftree_root,
                        uint32_t  size)
@@ -123,6 +130,7 @@ int castle_version_add(version_t version,
     v->parent_v     = parent;
     v->first_child  = NULL; 
     v->next_sybling = NULL; 
+    v->cdb          = cdb;
     v->o_order      = INVAL_VERSION;
     v->r_order      = INVAL_VERSION;
     v->ftree_root   = ftree_root;
@@ -145,6 +153,102 @@ int castle_version_add(version_t version,
            nodes have been collected */
         castle_versions_init_add(v);
     }
+
+    return 0;
+}
+
+void castle_version_update(struct work_struct *work)
+{
+    struct castle_version_update *vu = container_of(work, struct castle_version_update, work);
+    struct castle_vlist_node *node;
+    struct castle_vlist_slot *slot;
+    struct castle_version *v;
+    int i;
+
+    BUG_ON(!c2p_uptodate(vu->c2p));
+    node = pfn_to_kaddr(page_to_pfn(vu->c2p->page));
+    /* Find the version in the node */
+    for(i=0; i<node->used; i++)
+    {
+        slot = &node->slots[i];
+        if(slot->version_nr == vu->version)
+            break;
+    }
+    BUG_ON(slot->version_nr != vu->version);
+
+    printk("Found version on disk, updating it.\n");
+    spin_lock(&castle_versions_hash_lock);
+    v = __castle_versions_hash_get(vu->version);
+    slot->version_nr = v->version;
+    slot->parent     = (v->parent ? v->parent->version : 0);
+    slot->size       = v->size;
+    slot->cdb        = v->cdb;
+    spin_unlock(&castle_versions_hash_lock);
+
+    /* Finish-off and cleanup */
+    dirty_c2p(vu->c2p);
+    unlock_c2p(vu->c2p);
+    put_c2p(vu->c2p);
+    kfree(vu);
+}
+
+void castle_version_node_end_read(c2_page_t *c2p, int uptodate)
+{
+    struct castle_version_update *vu = c2p->private;
+    if(!uptodate)
+    {
+        printk("Failed to read version node off the disk.\n");
+        printk("Cannot handle that ATM.\n");
+        kfree(vu);
+        BUG();
+    } 
+    printk("Read version node from disk.\n");
+    set_c2p_uptodate(c2p);
+    
+    /* Put on the workqueue */
+    INIT_WORK(&vu->work, castle_version_update);
+    queue_work(castle_wq, &vu->work); 
+}
+
+int castle_version_ftree_update(version_t version, c_disk_blk_t cdb)
+{
+    struct castle_version_update *vu;
+    struct castle_version *v;
+    c_disk_blk_t node_cdb;
+    c2_page_t *c2p;
+
+    vu = kmalloc(sizeof(struct castle_version_update), GFP_KERNEL);
+    if(!vu) return -ENOMEM;
+
+    printk("Updating root node for version: %d\n", version);
+    spin_lock(&castle_versions_hash_lock);
+    v = __castle_versions_hash_get(version);
+    if(!v) 
+    {
+        spin_unlock(&castle_versions_hash_lock);
+        kfree(vu);
+        return -EINVAL;
+    }
+    v->ftree_root = cdb;
+    node_cdb = v->cdb;
+    spin_unlock(&castle_versions_hash_lock);
+   
+    /* Now, schedule the writeback of the data to the disk */
+    c2p = castle_cache_page_get(node_cdb);
+    lock_c2p(c2p);
+    vu->version = version;
+    vu->c2p = c2p;
+    if(!c2p_uptodate(c2p))
+    {
+        c2p->end_io  = castle_version_node_end_read; 
+        c2p->private = vu;
+        submit_c2p(READ, c2p);
+        return 0;
+    }
+    
+    /* Put on the workqueue */
+    INIT_WORK(&vu->work, castle_version_update);
+    queue_work(castle_wq, &vu->work); 
 
     return 0;
 }
@@ -323,7 +427,8 @@ int castle_versions_read(c_disk_blk_t list_cdb)
         for(i=0; i<node->used; i++)
         {
             slot = &node->slots[i];
-            ret = castle_version_add(slot->version_nr,
+            ret = castle_version_add(list_cdb,
+                                     slot->version_nr,
                                      slot->parent,
                                      slot->cdb,
                                      slot->size);
