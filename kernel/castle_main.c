@@ -496,15 +496,16 @@ void castle_bio_data_io_end(c_bvec_t *c_bvec, int err)
 
 void castle_bio_data_copy(c_bvec_t *c_bvec, c2_page_t *c2p, int io_dir)
 {
+    struct bio_vec *bvec = c_bvec_bio_iovec(c_bvec);
     int write = (io_dir == WRITE);
     struct page *src_pg, *dst_pg;
 
-    src_pg = ( write ? c_bvec->page : c2p->page); 
-    dst_pg = (!write ? c_bvec->page : c2p->page); 
+    src_pg = ( write ? bvec->bv_page : c2p->page);
+    dst_pg = (!write ? bvec->bv_page : c2p->page);
 
-    memcpy(pfn_to_kaddr(page_to_pfn(dst_pg)),
-           pfn_to_kaddr(page_to_pfn(src_pg)),
-           PAGE_SIZE);
+    memcpy(pfn_to_kaddr(page_to_pfn(dst_pg)) + bvec->bv_offset,
+           pfn_to_kaddr(page_to_pfn(src_pg)) + bvec->bv_offset,
+           bvec->bv_len);
 }
 
 void castle_bio_c2p_update(c2_page_t *c2p, int uptodate)
@@ -526,6 +527,7 @@ void castle_bio_c2p_update(c2_page_t *c2p, int uptodate)
 
 void castle_bio_data_io(c_bvec_t *c_bvec)
 {
+    struct bio_vec *bvec = c_bvec_bio_iovec(c_bvec);
     c2_page_t *c2p;
     int write = (c_bvec_data_dir(c_bvec) == WRITE);
 
@@ -538,7 +540,8 @@ void castle_bio_data_io(c_bvec_t *c_bvec)
     if(DISK_BLK_INVAL(c_bvec->cdb))
     {
         BUG_ON(write);
-        memset(pfn_to_kaddr(page_to_pfn(c_bvec->page)), 0, PAGE_SIZE);
+        /* TODO replace all the page_to_pfn with kmap/page_address or something better/equivalent */
+        memset(pfn_to_kaddr(page_to_pfn(bvec->bv_page)) + bvec->bv_offset, 0, bvec->bv_len);
         castle_bio_put(c_bvec->c_bio);
         return;
     }
@@ -565,8 +568,19 @@ read:
     }
     return;
 write:
-    /* For writes, it doesn't matter if the buffer is currently up-to-date.
-       Write it, set it up-to-date and dirty and finish */
+    if(!c2p_uptodate(c2p) && (bvec->bv_len != PAGE_SIZE))
+    {
+        printk("Inefficient, sub-block write. Sync read will be used.\n");
+        if(submit_c2p_sync(READ, c2p))
+        {
+            /* Read failed, fail the write too */
+            unlock_c2p(c2p);
+            put_c2p(c2p);
+            castle_bio_data_io_end(c_bvec, -EIO); 
+            return;
+        }
+        set_c2p_uptodate(c2p);
+    }
     castle_bio_data_copy(c_bvec, c2p, WRITE);
     set_c2p_uptodate(c2p);
     dirty_c2p(c2p);
@@ -579,18 +593,13 @@ static int castle_bio_validate(struct bio *bio)
 {
     struct bio_vec *bvec;
     int i;
-
-    if(bio->bi_sector % (1 << (C_BLK_SHIFT - 9)) != 0)
-    {
-        printk("Got BIO for unaligned sector: 0x%lx\n", bio->bi_sector);
-        return -EINVAL;
-    }
-
+        
     bio_for_each_segment(bvec, bio, i)
     {
-        if((bvec->bv_len != C_BLK_SIZE) || (bvec->bv_offset != 0))
+        if(((bvec->bv_offset % (1<<9)) != 0) ||  
+           ((bvec->bv_len    % (1<<9)) != 0)) 
         {
-            printk("Got unaligned bvec: len=0x%x, offset=0x%x\n", 
+            printk("Got non aligned IO: len=0x%x, offset=0x%x\n", 
                     bvec->bv_len, bvec->bv_offset);
             return -EINVAL;
         }
@@ -605,7 +614,7 @@ static int castle_device_make_request(struct request_queue *rq, struct bio *bio)
     c_bvec_t *c_bvecs = NULL;
     struct castle_device *dev = rq->queuedata;
     struct bio_vec *bvec;
-    sector_t block;
+    sector_t sector;
     int i;
 
     debug("Request on dev=0x%x\n", MKDEV(dev->gd->major, dev->gd->first_minor));
@@ -623,7 +632,7 @@ static int castle_device_make_request(struct request_queue *rq, struct bio *bio)
     atomic_set(&c_bio->remaining, bio->bi_vcnt);
     c_bio->err = 0;
 
-    block = bio->bi_sector >> (C_BLK_SHIFT - 9);
+    sector = bio->bi_sector;
     bio_for_each_segment(bvec, bio, i)
     {
         c_disk_blk_t cdb;
@@ -631,8 +640,7 @@ static int castle_device_make_request(struct request_queue *rq, struct bio *bio)
         int ret;
 
         c_bvec->c_bio   = c_bio;
-        c_bvec->page    = bvec->bv_page;
-        c_bvec->block   = block;
+        c_bvec->block   = sector >> (C_BLK_SHIFT - 9);
         c_bvec->version = dev->version; 
         
         ret = castle_version_snap_get(c_bvec->version, &cdb, NULL); 
@@ -641,7 +649,7 @@ static int castle_device_make_request(struct request_queue *rq, struct bio *bio)
         else
             castle_ftree_find(c_bvec, cdb); 
 
-        block++;
+        sector += (bvec->bv_len >> 9);
     }
 
     return 0;

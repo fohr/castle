@@ -96,9 +96,10 @@ struct castle_vlist_node {
 };
 
 /* IO related structures */
+struct castle_bio_vec;
 typedef struct castle_bio {
     struct bio            *bio;
-    void                  *c_bvecs; 
+    struct castle_bio_vec *c_bvecs; 
     atomic_t               remaining;
     int                    err;
 } c_bio_t;
@@ -108,7 +109,6 @@ struct castle_cache_page;
 typedef struct castle_bio_vec {
     /* Where did this IO originate from */
     c_bio_t            *c_bio;
-    struct page        *page;
     /* What (block,version) do we want to read */
     sector_t            block;
     uint32_t            version;
@@ -130,6 +130,7 @@ typedef struct castle_bio_vec {
 #define c_bvec_data_dir(_c_bvec)    bio_data_dir((_c_bvec)->c_bio->bio)
 #define c_bvec_bnode(_c_bvec)       pfn_to_kaddr(page_to_pfn((_c_bvec)->btree_node->page))
 #define c_bvec_bpnode(_c_bvec)      pfn_to_kaddr(page_to_pfn((_c_bvec)->btree_parent_node->page))
+#define c_bvec_bio_iovec(_c_bvec)   bio_iovec_idx((_c_bvec)->c_bio->bio, c_bvec - c_bvec->c_bio->c_bvecs)
 
 /* First class structures */
 struct castle {
