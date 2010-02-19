@@ -182,7 +182,7 @@ void castle_version_update(struct work_struct *work)
     slot->version_nr = v->version;
     slot->parent     = (v->parent ? v->parent->version : 0);
     slot->size       = v->size;
-    slot->cdb        = v->cdb;
+    slot->cdb        = v->ftree_root;
     spin_unlock(&castle_versions_hash_lock);
 
     /* Finish-off and cleanup */
