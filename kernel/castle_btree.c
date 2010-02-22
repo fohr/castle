@@ -9,6 +9,7 @@
 #include "castle_versions.h"
 #include "castle_block.h"
 #include "castle_cache.h"
+#include "castle_debug.h"
 
 //#define DEBUG
 #ifndef DEBUG
@@ -25,6 +26,7 @@ static void castle_ftree_io_end(c_bvec_t *c_bvec,
                                 c_disk_blk_t cdb,
                                 int err)
 {
+    castle_debug_bvec_update(c_bvec, C_BVEC_BTREE_NODE_IO_END);
     /* We allow:
        -   valid block and no error
        - invalid block and    error
@@ -616,6 +618,8 @@ static void castle_ftree_write_process(c_bvec_t *c_bvec)
     uint32_t version = c_bvec->version;
     int      lub_idx, insert_idx, ret;
 
+    castle_debug_bvec_update(c_bvec, C_BVEC_BTREE_NODE_WPROCESS);
+
     /* Check if the node needs to be split first. 
        A leaf node only needs to be split if there are _no_ empty slots in it.
        Internal nodes, if there are less than 2 free slots in them. */ 
@@ -688,6 +692,8 @@ static void castle_ftree_read_process(c_bvec_t *c_bvec)
     uint32_t block = c_bvec->block;
     uint32_t version = c_bvec->version;
     int      lub_idx;
+
+    castle_debug_bvec_update(c_bvec, C_BVEC_BTREE_NODE_RPROCESS);
 
     castle_ftree_lub_find(node, block, version, &lub_idx, NULL);
     /* We should always find the LUB if we are not looking at a leaf node */
@@ -791,6 +797,7 @@ static void castle_ftree_find_io_end(c2_page_t *c2p, int uptodate)
         return;
     }
 
+    castle_debug_bvec_update(c_bvec, C_BVEC_BTREE_NODE_UPTODATE);
     set_c2p_uptodate(c2p);
     /* Put on to the workqueue */
     INIT_WORK(&c_bvec->work, castle_ftree_process);
@@ -807,21 +814,26 @@ static void __castle_ftree_find(c_bvec_t *c_bvec,
             c_bvec->block, c_bvec->version, node_cdb.disk, node_cdb.block);
     ret = -ENOMEM;
 
+    castle_debug_bvec_btree_walk(c_bvec);
     c2p = castle_cache_page_get(node_cdb);
     debug("Got the buffer, trying to lock it\n");
+    castle_debug_bvec_update(c_bvec, C_BVEC_BTREE_GOT_NODE);
     lock_c2p(c2p);
     debug("Locked for ftree node (0x%x, 0x%x)\n", 
             node_cdb.disk, node_cdb.block);
+    castle_debug_bvec_update(c_bvec, C_BVEC_BTREE_LOCKED_NODE);
     if(!c2p_uptodate(c2p))
     {
         /* If the buffer doesn't contain up to date data, schedule the IO */
         debug("Buffer not up to date. Scheduling a read.\n");
+        castle_debug_bvec_update(c_bvec, C_BVEC_BTREE_NODE_OUTOFDATE);
         c2p->private = c_bvec;
         c2p->end_io = castle_ftree_find_io_end;
         submit_c2p(READ, c2p);
     } else
     {
         debug("Buffer up to date. Processing!\n");
+        castle_debug_bvec_update(c_bvec, C_BVEC_BTREE_NODE_UPTODATE);
         /* If the buffer is up to date, copy data, and call the node processing
            function directly. c2p_remember should not return an error, because
            the Btree node had been normalized already. */

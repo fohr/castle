@@ -102,6 +102,11 @@ typedef struct castle_bio {
     struct castle_bio_vec *c_bvecs; 
     atomic_t               remaining;
     int                    err;
+#ifdef CASTLE_DEBUG    
+    int                    id;
+    int                    nr_bvecs;
+    struct list_head       list;
+#endif
 } c_bio_t;
 
 
@@ -126,6 +131,10 @@ typedef struct castle_bio_vec {
     };
     /* Used to thread this bvec onto a workqueue */
     struct work_struct  work;
+#ifdef CASTLE_DEBUG    
+    unsigned long       state;
+    int                 btree_depth;
+#endif
 } c_bvec_t;
 #define c_bvec_data_dir(_c_bvec)    bio_data_dir((_c_bvec)->c_bio->bio)
 #define c_bvec_bnode(_c_bvec)       pfn_to_kaddr(page_to_pfn((_c_bvec)->btree_node->page))

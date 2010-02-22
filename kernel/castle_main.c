@@ -12,6 +12,7 @@
 #include "castle_cache.h"
 #include "castle_ctrl.h"
 #include "castle_sysfs.h"
+#include "castle_debug.h"
 
 struct castle                castle;
 struct castle_volumes        castle_volumes;
@@ -478,7 +479,7 @@ static void castle_bio_put(c_bio_t *c_bio)
         struct bio *bio = c_bio->bio;
         int err = c_bio->err;
         
-
+        castle_debug_bio_del(c_bio);
         kfree(c_bio->c_bvecs);
         kfree(c_bio);
 
@@ -490,7 +491,12 @@ static void castle_bio_put(c_bio_t *c_bio)
 void castle_bio_data_io_end(c_bvec_t *c_bvec, int err)
 {
     debug("Finished the IO.\n");
-    if(err) c_bvec->c_bio->err = err;
+    castle_debug_bvec_update(c_bvec, C_BVEC_IO_END);
+    if(err) 
+    {
+        castle_debug_bvec_update(c_bvec, C_BVEC_IO_END_ERR);
+        c_bvec->c_bio->err = err;
+    }
     castle_bio_put(c_bvec->c_bio);
 }
 
@@ -519,6 +525,7 @@ static void castle_bio_c2p_update(c2_page_t *c2p, int uptodate)
 
     if(uptodate)
     {
+        castle_debug_bvec_update(c_bvec, C_BVEC_DATA_C2P_UPTODATE);
         set_c2p_uptodate(c2p);
         castle_bio_data_copy(c_bvec, c2p);
         err = 0;
@@ -534,6 +541,7 @@ void castle_bio_data_io(c_bvec_t *c_bvec)
     c2_page_t *c2p;
     int write = (c_bvec_data_dir(c_bvec) == WRITE);
 
+    castle_debug_bvec_update(c_bvec, C_BVEC_DATA_IO);
     /* 
      * Invalid pointer to on slave data means that it's never been written before.
      * Memset BIO buffer page to zero.
@@ -542,6 +550,7 @@ void castle_bio_data_io(c_bvec_t *c_bvec)
      */
     if(DISK_BLK_INVAL(c_bvec->cdb))
     {
+        castle_debug_bvec_update(c_bvec, C_BVEC_DATA_IO_NO_BLK);
         BUG_ON(write);
         /* TODO replace all the page_to_pfn with kmap/page_address or something better/equivalent */
         memset(pfn_to_kaddr(page_to_pfn(bvec->bv_page)) + bvec->bv_offset, 0, bvec->bv_len);
@@ -558,6 +567,7 @@ void castle_bio_data_io(c_bvec_t *c_bvec)
     if(c2p_uptodate(c2p) || (write && (bvec->bv_len == PAGE_SIZE)))
     {
         set_c2p_uptodate(c2p);
+        castle_debug_bvec_update(c_bvec, C_BVEC_DATA_C2P_UPTODATE);
         /* TODO: move data copy and buffer unlock to io_end() */
         castle_bio_data_copy(c_bvec, c2p);
         unlock_c2p(c2p);
@@ -565,6 +575,7 @@ void castle_bio_data_io(c_bvec_t *c_bvec)
         castle_bio_data_io_end(c_bvec, 0); 
     } else
     {
+        castle_debug_bvec_update(c_bvec, C_BVEC_DATA_C2P_OUTOFDATE);
         c2p->private = c_bvec;
         c2p->end_io = castle_bio_c2p_update;
         submit_c2p(READ, c2p);
@@ -613,6 +624,7 @@ static int castle_device_make_request(struct request_queue *rq, struct bio *bio)
     c_bio->c_bvecs = c_bvecs; 
     atomic_set(&c_bio->remaining, bio->bi_vcnt);
     c_bio->err = 0;
+    castle_debug_bio_add(c_bio);
 
     sector = bio->bi_sector;
     bio_for_each_segment(bvec, bio, i)
@@ -624,12 +636,18 @@ static int castle_device_make_request(struct request_queue *rq, struct bio *bio)
         c_bvec->c_bio   = c_bio;
         c_bvec->block   = sector >> (C_BLK_SHIFT - 9);
         c_bvec->version = dev->version; 
+        castle_debug_bvec_update(c_bvec, C_BVEC_INITIALISED);
         
         ret = castle_version_snap_get(c_bvec->version, &cdb, NULL); 
         if(ret)
+        {
             castle_bio_data_io_end(c_bvec, -EINVAL);
+        }
         else
+        {
+            castle_debug_bvec_update(c_bvec, C_BVEC_VERSION_FOUND);
             castle_ftree_find(c_bvec, cdb); 
+        }
 
         sector += (bvec->bv_len >> 9);
     }
@@ -805,6 +823,7 @@ static int __init castle_init(void)
     printk("Castle FS init ... ");
 
     castle_fs_inited = 0;
+              castle_debug_init();
     if((ret = castle_slaves_init()))   goto err_out1;
     if((ret = castle_cache_init()))    goto err_out2;
     if((ret = castle_versions_init())) goto err_out3;
@@ -835,6 +854,7 @@ err_out3:
 err_out2:
     castle_slaves_free();
 err_out1:
+    castle_debug_fini();
 
     return ret;
 }
@@ -852,6 +872,7 @@ static void __exit castle_exit(void)
     castle_slaves_unlock();
     castle_cache_fini();
     castle_slaves_free();
+    castle_debug_fini();
 
     printk("done.\n\n\n");
 }
