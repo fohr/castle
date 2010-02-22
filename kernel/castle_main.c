@@ -494,21 +494,24 @@ void castle_bio_data_io_end(c_bvec_t *c_bvec, int err)
     castle_bio_put(c_bvec->c_bio);
 }
 
-void castle_bio_data_copy(c_bvec_t *c_bvec, c2_page_t *c2p, int io_dir)
+static void castle_bio_data_copy(c_bvec_t *c_bvec, c2_page_t *c2p)
 {
     struct bio_vec *bvec = c_bvec_bio_iovec(c_bvec);
-    int write = (io_dir == WRITE);
+    int write = (c_bvec_data_dir(c_bvec) == WRITE);
     struct page *src_pg, *dst_pg;
 
     src_pg = ( write ? bvec->bv_page : c2p->page);
     dst_pg = (!write ? bvec->bv_page : c2p->page);
 
+    /* TODO use better macros than page_to_pfn etc */
     memcpy(pfn_to_kaddr(page_to_pfn(dst_pg)) + bvec->bv_offset,
            pfn_to_kaddr(page_to_pfn(src_pg)) + bvec->bv_offset,
            bvec->bv_len);
+
+    if(write) dirty_c2p(c2p);
 }
 
-void castle_bio_c2p_update(c2_page_t *c2p, int uptodate)
+static void castle_bio_c2p_update(c2_page_t *c2p, int uptodate)
 {
     /* TODO: comment when it gets called */
     c_bvec_t *c_bvec = c2p->private;
@@ -517,7 +520,7 @@ void castle_bio_c2p_update(c2_page_t *c2p, int uptodate)
     if(uptodate)
     {
         set_c2p_uptodate(c2p);
-        castle_bio_data_copy(c_bvec, c2p, READ);
+        castle_bio_data_copy(c_bvec, c2p);
         err = 0;
     }
     unlock_c2p(c2p);
@@ -549,14 +552,14 @@ void castle_bio_data_io(c_bvec_t *c_bvec)
     c2p = castle_cache_page_get(c_bvec->cdb);
     lock_c2p(c2p);
 
-    if(write) goto write; else goto read;
-read:
-    /* If the buffer is not up to date, submit the buffer, otherwise call 
-       io_end() directly */
-    if(c2p_uptodate(c2p))
+    /* We don't need to update the c2p if it's already uptodate
+       or if we are doing entire page write, in which case we'll
+       overwrite previous content anyway */
+    if(c2p_uptodate(c2p) || (write && (bvec->bv_len == PAGE_SIZE)))
     {
+        set_c2p_uptodate(c2p);
         /* TODO: move data copy and buffer unlock to io_end() */
-        castle_bio_data_copy(c_bvec, c2p, READ);
+        castle_bio_data_copy(c_bvec, c2p);
         unlock_c2p(c2p);
         put_c2p(c2p);
         castle_bio_data_io_end(c_bvec, 0); 
@@ -566,27 +569,6 @@ read:
         c2p->end_io = castle_bio_c2p_update;
         submit_c2p(READ, c2p);
     }
-    return;
-write:
-    if(!c2p_uptodate(c2p) && (bvec->bv_len != PAGE_SIZE))
-    {
-        printk("Inefficient, sub-block write. Sync read will be used.\n");
-        if(submit_c2p_sync(READ, c2p))
-        {
-            /* Read failed, fail the write too */
-            unlock_c2p(c2p);
-            put_c2p(c2p);
-            castle_bio_data_io_end(c_bvec, -EIO); 
-            return;
-        }
-        set_c2p_uptodate(c2p);
-    }
-    castle_bio_data_copy(c_bvec, c2p, WRITE);
-    set_c2p_uptodate(c2p);
-    dirty_c2p(c2p);
-    unlock_c2p(c2p);
-    put_c2p(c2p);
-    castle_bio_data_io_end(c_bvec, 0); 
 }
 
 static int castle_bio_validate(struct bio *bio)
