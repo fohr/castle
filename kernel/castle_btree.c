@@ -32,8 +32,11 @@ static void castle_ftree_io_end(c_bvec_t *c_bvec,
        - invalid block and    error
        - invalid block and no error (reads from non-yet written block)
        We disallow:
-       -   valid block and    error */
+       -   valid block and    error 
+       - invalid block and no error on writes
+     */
     BUG_ON((!DISK_BLK_INVAL(cdb)) && (err));
+    BUG_ON((c_bvec_data_dir(c_bvec) == WRITE) && (DISK_BLK_INVAL(cdb)) && (!err));
     /* Free the c2ps correctly. Call twice to release parent and child
        (if both exist) */
     castle_ftree_c2p_forget(c_bvec);
@@ -324,13 +327,14 @@ static c2_page_t* castle_ftree_node_key_split(c2_page_t *orig_c2p)
     return c2p;
 }
 
-static void castle_ftree_slot_insert(struct castle_ftree_node *node,
+static void castle_ftree_slot_insert(c2_page_t *c2p,
                                      int index,
                                      uint32_t type,
                                      uint32_t block,
                                      uint32_t version,
                                      c_disk_blk_t cdb)
 {
+    struct castle_ftree_node *node = pfn_to_kaddr(page_to_pfn(c2p->page));
     struct castle_ftree_slot *slot;
 
     BUG_ON(index      >  node->used);
@@ -346,6 +350,7 @@ static void castle_ftree_slot_insert(struct castle_ftree_node *node,
     slot->version = version;
     slot->cdb     = cdb;
     node->used++;
+    dirty_c2p(c2p);
 }
 
 static void castle_ftree_node_insert(c2_page_t *parent_c2p,
@@ -362,13 +367,12 @@ static void castle_ftree_node_insert(c2_page_t *parent_c2p,
     castle_ftree_lub_find(parent, block, version, NULL, &insert_idx);
     debug("Inserting child node into parent (cap=0x%x, use=0x%x), will insert (b,v)=(0x%x, 0x%x) at idx=%d.\n",
             parent->capacity, parent->used, block, version, insert_idx);
-    castle_ftree_slot_insert(parent, 
+    castle_ftree_slot_insert(parent_c2p, 
                              insert_idx, 
                              FTREE_SLOT_NODE,
                              block,
                              version,
                              child_c2p->cdb);
-    dirty_c2p(parent_c2p);
 }
 
 static void castle_ftree_node_under_key_insert(c2_page_t *parent_c2p,
@@ -383,13 +387,12 @@ static void castle_ftree_node_under_key_insert(c2_page_t *parent_c2p,
     castle_ftree_lub_find(parent, block, version, NULL, &insert_idx);
     debug("Inserting child node into parent (cap=0x%x, use=0x%x), will insert (b,v)=(0x%x, 0x%x) at idx=%d.\n",
             parent->capacity, parent->used, block, version, insert_idx);
-    castle_ftree_slot_insert(parent, 
+    castle_ftree_slot_insert(parent_c2p, 
                              insert_idx, 
                              FTREE_SLOT_NODE,
                              block,
                              version,
                              child_c2p->cdb);
-    dirty_c2p(parent_c2p);
 }
 
 static int castle_ftree_new_root_create(c_bvec_t *c_bvec)
@@ -415,14 +418,11 @@ static int castle_ftree_new_root_create(c_bvec_t *c_bvec)
     node->capacity = FTREE_NODE_SLOTS;
     node->used     = 0;
     node->is_leaf  = 0;
-    /* Set the node dirty (it'll also get set dirty when inserting into it later),
-       but dirty_c2p can be called multiple times just fine. */
-    dirty_c2p(c2p);
     /* Update the version tree, and release the version lock (c2p_forget will 
        no longer do that, because there will be a parent node). */
     debug("About to update version tree.\n");
+    /* TODO: Check if we hold the version lock */
     ret = castle_version_ftree_update(c_bvec->version, cdb);
-    castle_version_ftree_unlock(c_bvec->version);
     /* If we failed to update the version tree, dealloc the root */
     if(ret)
     {
@@ -433,8 +433,12 @@ static int castle_ftree_new_root_create(c_bvec_t *c_bvec)
         return ret;
     }
     debug("Succeeded.\n");
+    /* Set the node dirty (it'll also get set dirty when inserting into it later),
+       but dirty_c2p can be called multiple times just fine. */
+    dirty_c2p(c2p);
     /* If all succeeded save the new node as the parent in bvec */
     c_bvec->btree_parent_node = c2p;
+    castle_version_ftree_unlock(c_bvec->version);
     return 0;
 }
 
@@ -476,6 +480,7 @@ static int castle_ftree_node_split(c_bvec_t *c_bvec)
         debug("Effective node too full, splitting.\n");
         split_c2p = castle_ftree_node_key_split(eff_c2p ? eff_c2p : c_bvec->btree_node);
         split_node = pfn_to_kaddr(page_to_pfn(split_c2p->page));
+        BUG_ON(split_node->version != c_bvec->version);
         /* Work out whether to take the split node for the further btree walk.
            Since in the effective & split node there is at most one version
            for each block, and this version is ancestoral to what we are
@@ -661,7 +666,7 @@ static void castle_ftree_write_process(c_bvec_t *c_bvec)
                 block, version,
                 node->used, node->capacity, FTREE_NODE_IS_LEAF(node));
         BUG_ON(castle_ftree_write_idx_find(c_bvec) != insert_idx);
-        castle_ftree_slot_insert(node,
+        castle_ftree_slot_insert(c_bvec->btree_node,
                                  insert_idx,
                                  FTREE_SLOT_LEAF,
                                  block,
