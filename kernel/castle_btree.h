@@ -1,9 +1,7 @@
 #ifndef __CASTLE_BTREE_H__
 #define __CASTLE_BTREE_H__
 
-void castle_ftree_find(c_bvec_t *c_bvec,
-                       c_disk_blk_t node_cdb);
-
+void castle_ftree_find(c_bvec_t *c_bvec);
 int  castle_btree_init(void);
 void castle_btree_free(void);
 

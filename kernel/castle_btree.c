@@ -418,9 +418,11 @@ static int castle_ftree_new_root_create(c_bvec_t *c_bvec)
     /* Set the node dirty (it'll also get set dirty when inserting into it later),
        but dirty_c2p can be called multiple times just fine. */
     dirty_c2p(c2p);
-    /* Update the version tree */
+    /* Update the version tree, and release the version lock (c2p_forget will 
+       no longer do that, because there will be a parent node). */
     debug("About to update version tree.\n");
     ret = castle_version_ftree_update(c_bvec->version, cdb);
+    castle_version_ftree_unlock(c_bvec->version);
     /* If we failed to update the version tree, dealloc the root */
     if(ret)
     {
@@ -740,6 +742,7 @@ void castle_ftree_process(struct work_struct *work)
 }
 
 
+/* TODO move locking of c2ps here?. Possibly rename the function */
 static int castle_ftree_c2p_remember(c_bvec_t *c_bvec, c2_page_t *c2p)
 {
     int ret = 0;
@@ -765,17 +768,27 @@ static int castle_ftree_c2p_remember(c_bvec_t *c_bvec, c2_page_t *c2p)
 static void castle_ftree_c2p_forget(c_bvec_t *c_bvec)
 {
     int write = (c_bvec_data_dir(c_bvec) == WRITE);
-    c2_page_t *to_forget;
+    c2_page_t *c2p_to_forget;
 
     /* We don't lock parent nodes on reads */
     BUG_ON(!write && c_bvec->btree_parent_node);
     /* On writes we forget the parent, on reads the node itself */
-    to_forget = (write ? c_bvec->btree_parent_node : c_bvec->btree_node);
+    c2p_to_forget = (write ? c_bvec->btree_parent_node : c_bvec->btree_node);
     /* Release the buffer if one exists */
-    if(to_forget)
+    if(c2p_to_forget)
     {
-        unlock_c2p(to_forget);
-        put_c2p(to_forget);
+        unlock_c2p(c2p_to_forget);
+        put_c2p(c2p_to_forget);
+    }
+    /* Also, release the version lock.
+       On writes: release when there already is a btree_node locked (that's going
+                  to be our parent now). But only if there is no parent node yet.
+       On reads:  release on first call to forget (btree_node will be NULL)
+     */
+    if( (  write  &&   c_bvec->btree_node && (!c_bvec->btree_parent_node)) ||
+        ((!write) && (!c_bvec->btree_node)) )
+    {
+        castle_version_ftree_unlock(c_bvec->version); 
     }
     /* Promote node to the parent on writes */
     if(write) c_bvec->btree_parent_node = c_bvec->btree_node;
@@ -842,12 +855,23 @@ static void __castle_ftree_find(c_bvec_t *c_bvec,
     }
 }
 
-void castle_ftree_find(c_bvec_t *c_bvec,
-                       c_disk_blk_t node_cdb)
+void castle_ftree_find(c_bvec_t *c_bvec)
 {
+    c_disk_blk_t root_cdb;
+
     c_bvec->btree_node = NULL;
     c_bvec->btree_parent_node = NULL;
-    __castle_ftree_find(c_bvec, node_cdb);
+    /* Lock the pointer to the root node.
+       This is unlocked by the (poorly named) castle_ftree_c2p_forget() */
+    root_cdb = castle_version_ftree_lock(c_bvec->version);
+    if(DISK_BLK_INVAL(root_cdb))
+    {
+        /* Complete the request early, end exit */
+        castle_bio_data_io_end(c_bvec, -EINVAL);
+        return;
+    }
+    castle_debug_bvec_update(c_bvec, C_BVEC_VERSION_FOUND);
+    __castle_ftree_find(c_bvec, root_cdb);
 }
 
 /***** Init/fini functions *****/

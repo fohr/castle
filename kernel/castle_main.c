@@ -629,25 +629,13 @@ static int castle_device_make_request(struct request_queue *rq, struct bio *bio)
     sector = bio->bi_sector;
     bio_for_each_segment(bvec, bio, i)
     {
-        c_disk_blk_t cdb;
         c_bvec_t *c_bvec = c_bvecs + i; 
-        int ret;
 
         c_bvec->c_bio   = c_bio;
         c_bvec->block   = sector >> (C_BLK_SHIFT - 9);
         c_bvec->version = dev->version; 
         castle_debug_bvec_update(c_bvec, C_BVEC_INITIALISED);
-        
-        ret = castle_version_snap_get(c_bvec->version, &cdb, NULL); 
-        if(ret)
-        {
-            castle_bio_data_io_end(c_bvec, -EINVAL);
-        }
-        else
-        {
-            castle_debug_bvec_update(c_bvec, C_BVEC_VERSION_FOUND);
-            castle_ftree_find(c_bvec, cdb); 
-        }
+        castle_ftree_find(c_bvec); 
 
         sector += (bvec->bv_len >> 9);
     }
@@ -695,7 +683,7 @@ struct castle_device* castle_device_init(version_t version)
     static int minor = 0;
     uint32_t size;
 
-    if(castle_version_snap_get(version, NULL, &size))
+    if(castle_version_snap_get(version, &size))
         goto error_out;
 
     dev = kmalloc(sizeof(struct castle_device), GFP_KERNEL); 
