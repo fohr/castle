@@ -141,20 +141,27 @@ static void castle_cache_sync_io_end(c2_page_t *c2p, int uptodate)
 {
     struct completion *completion = c2p->private;
     
-    if(uptodate) set_c2p_uptodate(c2p);
+    if(uptodate) 
+    {
+        set_c2p_uptodate(c2p);
+        if(c2p_dirty(c2p)) clean_c2p(c2p);
+    }
     complete(completion);
 }
 
 int submit_c2p_sync(int rw, c2_page_t *c2p)
 {
     struct completion completion;
+    int ret;
 
 	BUG_ON(!c2p_locked(c2p));
-	BUG_ON(c2p_uptodate(c2p));
+	BUG_ON((rw == READ)  &&  c2p_uptodate(c2p));
+	BUG_ON((rw == WRITE) && !c2p_dirty(c2p));
     c2p->end_io = castle_cache_sync_io_end;
     c2p->private = &completion;
     init_completion(&completion);
-    submit_c2p(rw, c2p);
+    if((ret = submit_c2p(rw, c2p)))
+        return ret;
     wait_for_completion(&completion);
 
     /* Success (ret=0) if uptodate now */
@@ -331,7 +338,7 @@ static void castle_cache_freelist_grow(void)
         printk("=> Could not clean the hash table. Waking flush.\n");
         castle_cache_flush_wakeup();
         printk("=> Woken.\n");
-        sleep_on_timeout(&castle_cache_flush_wq, 10 * HZ);
+        sleep_on_timeout(&castle_cache_flush_wq, HZ / 25);
         printk("=> We think there is some free memory now (cleanlist size: %d).\n",
                 atomic_read(&castle_cache_cleanlist_size));
     }
@@ -538,6 +545,9 @@ static void castle_cache_hash_fini(void)
             c2p = list_entry(l, c2_page_t, list);
             /* Buffers should not be in use any more (devices do not exist) */
             BUG_ON(c2p_locked(c2p));
+            if(atomic_read(&c2p->count) != 0)
+                printk("(disk,block)=(0x%x, 0x%x) not dropped.\n",
+                    c2p->cdb.disk, c2p->cdb.block);
             BUG_ON(atomic_read(&c2p->count) != 0);
             __free_page(c2p->page);
         }
