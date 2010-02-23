@@ -84,7 +84,7 @@ static void castle_debug_watches_print(void)
                 }
             } else
             {
-                printk("[0x%.3lx - 0x%.3lx] not written\n", 
+                printk("\n[0x%.3lx - 0x%.3lx] not written", 
                    (sector << 9), (((sector+1)<<9) -1));
             }
         }
