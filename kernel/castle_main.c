@@ -3,6 +3,7 @@
 #include <linux/kobject.h>
 #include <linux/device-mapper.h>
 #include <linux/blkdev.h>
+#include <linux/random.h>
 #include <asm/semaphore.h>
 
 #include "castle.h"
@@ -63,11 +64,30 @@ static void castle_fs_superblock_print(struct castle_fs_superblock *fs_sb)
 
 static int castle_fs_superblock_validate(struct castle_fs_superblock *fs_sb)
 {
-    if(fs_sb->magic1 != 0x19731121) return -1;
-    if(fs_sb->magic2 != 0x19880624) return -2;
-    if(fs_sb->magic3 != 0x19821120) return -3;
+    if(fs_sb->magic1 != CASTLE_FS_MAGIC1) return -1;
+    if(fs_sb->magic2 != CASTLE_FS_MAGIC2) return -2;
+    if(fs_sb->magic3 != CASTLE_FS_MAGIC3) return -3;
 
     return 0;
+}
+
+static void castle_fs_superblock_init(struct castle_fs_superblock *fs_sb)
+{   
+    c_disk_blk_t version_list_cdb = castle_slaves_disk_block_get();
+
+    fs_sb->magic1 = CASTLE_FS_MAGIC1;
+    fs_sb->magic2 = CASTLE_FS_MAGIC2;
+    fs_sb->magic3 = CASTLE_FS_MAGIC3;
+    get_random_bytes(&fs_sb->salt,  sizeof(fs_sb->salt));
+    get_random_bytes(&fs_sb->peper, sizeof(fs_sb->peper));
+    fs_sb->fwd_tree_disk1  = version_list_cdb.disk;
+    fs_sb->fwd_tree_block1 = version_list_cdb.block;
+    fs_sb->fwd_tree_disk2  = version_list_cdb.disk;
+    fs_sb->fwd_tree_block2 = version_list_cdb.block;
+    fs_sb->rev_tree_disk1  = 0;
+    fs_sb->rev_tree_block1 = 0;
+    fs_sb->rev_tree_disk2  = 0;
+    fs_sb->rev_tree_block2 = 0;
 }
 
 static inline struct castle_fs_superblock* castle_fs_superblock_get(struct castle_slave *cs)
@@ -141,11 +161,17 @@ int castle_fs_init(void)
         return -ENOENT;
 
     first = 1;
+    /* Make sure that superblocks of the all non-new devices are
+       the same, save the results */
     list_for_each(lh, &castle_slaves.slaves)
     {
         cs = list_entry(lh, struct castle_slave, list);
+        if(cs->new_dev)
+            continue;
+
         cs_fs_sb = castle_fs_superblock_get(cs);
         BUG_ON(!c2p_uptodate(cs->fs_sblk));
+
         /* Save fs superblock if the first slave. */
         if(first)
         {
@@ -166,14 +192,23 @@ int castle_fs_init(void)
         castle_fs_superblock_put(cs, 0);
     }
 
-    /* If first is True, we've not found a single valid cs */
-    if(first) return -ENOENT;
-
+    /* If first is still true, we've not found a single non-new cs.
+       Init the fs superblock. */
+    if(first) {
+        castle_fs_superblock_init(&fs_sb);
+        blk.disk  = fs_sb.fwd_tree_disk1;
+        blk.block = fs_sb.fwd_tree_block1;
+        ret = castle_versions_list_init(blk);
+        if(ret) return ret;
+    }
     cs_fs_sb = castle_fs_superblocks_get();
     BUG_ON(!cs_fs_sb);
+
+    /* This will initialise the fs superblock of all the new devices */
+    memcpy(cs_fs_sb, &fs_sb, sizeof(struct castle_fs_superblock));
     blk.disk  = cs_fs_sb->fwd_tree_disk1;
     blk.block = cs_fs_sb->fwd_tree_block1;
-    castle_fs_superblocks_put(cs_fs_sb, 0);
+    castle_fs_superblocks_put(cs_fs_sb, 1);
     ret = castle_versions_read(blk);
     if(ret) return -EINVAL;
 
@@ -201,9 +236,9 @@ static void castle_slave_superblock_print(struct castle_slave_superblock *cs_sb)
 
 static int castle_slave_superblock_validate(struct castle_slave_superblock *cs_sb)
 {
-    if(cs_sb->magic1 != 0x02061985) return -1;
-    if(cs_sb->magic2 != 0x16071983) return -2;
-    if(cs_sb->magic3 != 0x16061981) return -3;
+    if(cs_sb->magic1 != CASTLE_SLAVE_MAGIC1) return -1;
+    if(cs_sb->magic2 != CASTLE_SLAVE_MAGIC2) return -2;
+    if(cs_sb->magic3 != CASTLE_SLAVE_MAGIC3) return -3;
 
     return 0;
 }
@@ -231,7 +266,7 @@ static int castle_slave_superblock_read(struct castle_slave *cs)
     if(err)
     {
         printk("Invalid superblock.\n");
-        return err;
+        return -EINVAL;
     }
     castle_slave_superblock_print(&cs_sb);
     /* Save the uuid and exit */
@@ -254,22 +289,11 @@ static inline void castle_slave_superblock_put(struct castle_slave *cs, int dirt
     unlock_c2p(cs->sblk);
 }
 
-static void castle_superblock_read_finish(c2_page_t *c2p, int uptodate)
-{
-    struct completion *completion = c2p->private;
-    
-    if(uptodate) set_c2p_uptodate(c2p);
-    complete(completion);
-} 
-
 static int castle_slave_superblocks_cache(struct castle_slave *cs)
 {
-    struct castle_slave_superblock *cs_sb;
-    struct castle_fs_superblock *fs_sb;
-    struct completion completion;
     c2_page_t *c2p, **c2pp[2];
     c_disk_blk_t cdb;
-    uint32_t i, ret;
+    uint32_t i;
 
     /* We want to read the first two 4K blocks of the slave device
        Frist is the slave superblock, the second is the fs superblock */
@@ -287,28 +311,51 @@ static int castle_slave_superblocks_cache(struct castle_slave *cs)
            We check if it got updated later */
         BUG_ON(c2p_uptodate(c2p));
         lock_c2p(c2p);
-        c2p->end_io = castle_superblock_read_finish;
-        init_completion(&completion);
-        c2p->private = &completion;
-        submit_c2p(READ, c2p);
-        wait_for_completion(&completion);
-        unlock_c2p(c2p);
+        submit_c2p_sync(READ, c2p);
         if(!c2p_uptodate(c2p))
+        {
+            unlock_c2p(c2p);
             return -EIO;
+        }
+        unlock_c2p(c2p);
     }
 
-    /* If both superblock have been read correctly. Validate magics */ 
+    return 0;
+}
+
+static int castle_slave_superblocks_init(struct castle_slave *cs)
+{
+    struct castle_slave_superblock *cs_sb;
+    struct castle_fs_superblock *fs_sb;
+    int ret = castle_slave_superblocks_cache(cs);
+
+    if(ret) return ret;
+
+    /* If both superblock have been read correctly. Validate or write. */ 
     cs_sb = castle_slave_superblock_get(cs); 
     fs_sb = castle_fs_superblock_get(cs); 
-             ret = castle_slave_superblock_validate(cs_sb);
-    if(!ret) ret = castle_fs_superblock_validate(fs_sb);
-    castle_slave_superblock_put(cs, 0);
+
+    if(!cs->new_dev)
+    {
+                 ret = castle_slave_superblock_validate(cs_sb);
+        if(!ret) ret = castle_fs_superblock_validate(fs_sb);
+    } else
+    {
+        printk("Initing slave superblock.\n");
+        cs_sb->magic1 = CASTLE_SLAVE_MAGIC1;
+        cs_sb->magic2 = CASTLE_SLAVE_MAGIC2;
+        cs_sb->magic3 = CASTLE_SLAVE_MAGIC3;
+        cs_sb->uuid   = cs->uuid;
+        cs_sb->used   = 2; /* Two blocks used for the superblocks */
+        cs_sb->size   = get_capacity(cs->bdev->bd_disk) >> (C_BLK_SHIFT - 9);
+        castle_slave_superblock_print(cs_sb);
+        printk("Done.\n");
+    }
+    castle_slave_superblock_put(cs, cs->new_dev);
     castle_fs_superblock_put(cs, 0);
 
     return ret;
 }
-
-
 
 struct castle_slave* castle_slave_find_by_id(uint32_t id)
 {
@@ -373,6 +420,26 @@ c_disk_blk_t castle_slaves_disk_block_get(void)
     return cdb;
 }
 
+static int castle_slave_add(struct castle_slave *cs)
+{
+    struct list_head *l;
+    struct castle_slave *s;
+
+    list_for_each(l, &castle_slaves.slaves)
+    {
+        s = list_entry(l, struct castle_slave, list);
+        if(s->uuid == cs->uuid)
+        {
+            printk("Uuid of two slaves match (uuid=0x%x, id1=%d, id2=%d)\n", 
+                    cs->uuid, s->id, cs->id);
+            return -EINVAL;
+        }
+    }
+    /* If no UUID collision, add to the list */
+    list_add(&cs->list, &castle_slaves.slaves);
+    return 0;
+}
+
 struct castle_slave* castle_claim(uint32_t new_dev)
 {
     dev_t dev;
@@ -404,17 +471,31 @@ struct castle_slave* castle_claim(uint32_t new_dev)
     cs->bdev = bdev;
 
     err = castle_slave_superblock_read(cs); 
+    if(err == -EINVAL)
+    {
+        printk("Invalid superblock. Will initialise a new one.\n");
+        get_random_bytes(&cs->uuid, sizeof(cs->uuid));
+        printk("Will use uuid of: 0x%x\n", cs->uuid);
+        cs->new_dev = 1;
+        err = 0;
+    }
     if(err)
     {
-        printk("Invalid superblock. Not initialised(?)\n");
+        printk("Invalid superblock.\n");
         goto err_out;
     }
 
-    list_add(&cs->list, &castle_slaves.slaves);
-    err = castle_slave_superblocks_cache(cs);
+    err = castle_slave_add(cs);
     if(err)
     {
-        printk("Could not cache the superblock.\n");
+        printk("Could not add slave to the list.\n");
+        goto err_out;
+    }
+
+    err = castle_slave_superblocks_init(cs);
+    if(err)
+    {
+        printk("Could not cache the superblocks.\n");
         list_del(&cs->list);
         goto err_out;
     }

@@ -417,6 +417,38 @@ int castle_version_is_ancestor(version_t candidate, version_t version)
     return ret;
 }
 
+int castle_versions_list_init(c_disk_blk_t list_cdb)
+{
+    struct castle_vlist_node *node;
+    c2_page_t *c2p;
+    int ret;
+    
+    debug("Initialising version list.\n");
+    c2p = castle_cache_page_get(list_cdb);
+    lock_c2p(c2p);
+    set_c2p_uptodate(c2p);
+    node = pfn_to_kaddr(page_to_pfn(c2p->page));
+    node->magic               = VLIST_NODE_MAGIC;
+    node->version             = 0;
+    node->capacity            = VLIST_SLOTS;
+    node->used                = 1;
+    node->next                = INVAL_DISK_BLK;
+    node->prev                = INVAL_DISK_BLK;
+    node->slots[0].version_nr = 0;
+    node->slots[0].parent     = 0;
+    node->slots[0].size       = 0;
+    /* TODO: this should init the actual btree */
+    node->slots[0].cdb.disk   = INVAL_DISK_BLK.disk;
+    node->slots[0].cdb.block  = INVAL_DISK_BLK.block;
+    dirty_c2p(c2p);
+    ret = submit_c2p_sync(WRITE, c2p); 
+    unlock_c2p(c2p);
+    put_c2p(c2p);
+    debug("Done initialising version list, ret=%d.\n", ret);
+
+    return ret;
+}
+
 int castle_versions_read(c_disk_blk_t list_cdb)
 {
     struct castle_vlist_node *node;
@@ -441,6 +473,9 @@ int castle_versions_read(c_disk_blk_t list_cdb)
             ret = submit_c2p_sync(READ, c2p);
         if(ret) goto out; 
         node = pfn_to_kaddr(page_to_pfn(c2p->page));
+        /* TODO: handle this properly */
+        if(node->magic != VLIST_NODE_MAGIC)
+            printk("WARN: Version list magics don't agree!\n");
         for(i=0; i<node->used; i++)
         {
             slot = &node->slots[i];

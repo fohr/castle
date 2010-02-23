@@ -13,6 +13,9 @@ typedef struct castle_disk_block c_disk_blk_t;
 #define DISK_BLK_EQUAL(_blk1, _blk2) (((_blk1).disk == (_blk2).disk) && \
                                       ((_blk1).block == (_blk2).block)) 
 
+#define CASTLE_SLAVE_MAGIC1     (0x02061985)
+#define CASTLE_SLAVE_MAGIC2     (0x16071983)
+#define CASTLE_SLAVE_MAGIC3     (0x16061981)
 struct castle_slave_superblock {
     uint32_t magic1;
     uint32_t magic2;
@@ -22,6 +25,9 @@ struct castle_slave_superblock {
     uint32_t size; /* In blocks */
 };
 
+#define CASTLE_FS_MAGIC1        (0x19731121)
+#define CASTLE_FS_MAGIC2        (0x19880624)
+#define CASTLE_FS_MAGIC3        (0x19821120)
 struct castle_fs_superblock {
     uint32_t magic1;
     uint32_t magic2;
@@ -83,6 +89,7 @@ struct castle_vlist_slot {
     c_disk_blk_t cdb;
 };
 
+#define VLIST_NODE_MAGIC  0x0000baca
 #define VLIST_SLOTS  ((PAGE_SIZE - NODE_HEADER)/sizeof(struct castle_vlist_slot))
 struct castle_vlist_node {
     uint32_t magic;
@@ -157,6 +164,7 @@ struct castle_slave {
                                              needed here, because we cannot cache
                                              the superblock without being able to
                                              _find_by_uuid */
+    int                             new_dev;
     struct kobject                  kobj;
     struct list_head                list;
     struct block_device            *bdev;
