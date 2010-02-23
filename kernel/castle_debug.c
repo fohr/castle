@@ -17,7 +17,7 @@ static int                  bio_id = 0;
 static            LIST_HEAD(bio_list);
 static struct task_struct  *debug_thread;
 static cd_watch_t           watches[] = {{0x41, 0x3}};
-static int                  nr_watches = 1;
+static int                  nr_watches = 0;
 static struct page        **watched_data;
 
 static void castle_debug_buffer_init(struct page *pg)

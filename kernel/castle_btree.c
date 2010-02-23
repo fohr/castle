@@ -449,7 +449,6 @@ static int castle_ftree_node_split(c_bvec_t *c_bvec)
     debug("Node full while inserting (0x%x,0x%x), creating effective node for it.\n",
             block, version);
     node = c_bvec_bnode(c_bvec);
-    castle_ftree_node_print(node);
     eff_c2p = split_c2p = NULL;
     retain_c2p = c_bvec->btree_node;
 
@@ -460,7 +459,6 @@ static int castle_ftree_node_split(c_bvec_t *c_bvec)
         debug("Effective node NOT identical to the original node.\n");
         /* Cast eff_c2p buffer to eff_node */
         eff_node = pfn_to_kaddr(page_to_pfn(eff_c2p->page));
-        castle_ftree_node_print(eff_node);
         /* We should continue the walk with the effective node, rather than the
            original node */
         retain_c2p = eff_c2p;
@@ -478,10 +476,6 @@ static int castle_ftree_node_split(c_bvec_t *c_bvec)
         debug("Effective node too full, splitting.\n");
         split_c2p = castle_ftree_node_key_split(eff_c2p ? eff_c2p : c_bvec->btree_node);
         split_node = pfn_to_kaddr(page_to_pfn(split_c2p->page));
-        debug("The effective node:\n");
-        castle_ftree_node_print(eff_node);
-        debug("The split node:\n");
-        castle_ftree_node_print(split_node);
         /* Work out whether to take the split node for the further btree walk.
            Since in the effective & split node there is at most one version
            for each block, and this version is ancestoral to what we are

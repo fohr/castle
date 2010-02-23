@@ -28,7 +28,6 @@ static               LIST_HEAD(castle_cache_dirtylist);
 static atomic_t                castle_cache_cleanlist_size;
 static               LIST_HEAD(castle_cache_cleanlist);
 
-static int                     castle_cache_freelist_last;
 static int                     castle_cache_freelist_size;
 static         DEFINE_SPINLOCK(castle_cache_freelist_lock);
 static               LIST_HEAD(castle_cache_freelist);
@@ -36,8 +35,6 @@ static               LIST_HEAD(castle_cache_freelist);
 
 static struct task_struct     *castle_cache_flush_thread;
 static DECLARE_WAIT_QUEUE_HEAD(castle_cache_flush_wq); 
-// TODO: This isn't used any more. Review, remove.
-static DECLARE_WAIT_QUEUE_HEAD(castle_cache_flush_all_wq); 
 
 static int sync_c2p(void *word)
 {
@@ -268,31 +265,29 @@ static inline int c2p_busy(c2_page_t *c2p)
 
 static int castle_cache_hash_clean(void)
 {
-    int idx;
     struct list_head *lh, *t;
     LIST_HEAD(victims);
     c2_page_t *c2p;
+    int nr_victims;
 
     spin_lock_irq(&castle_cache_hash_lock);
-    /* Find victim buffers, greater than the last one (if one exists) */ 
-    idx = castle_cache_freelist_last;
-    do {
-        idx = (idx + 1) % castle_cache_hash_buckets;
-        debug("Trying to find victims in bucket %d\n", idx);
-        list_for_each_safe(lh, t, &castle_cache_hash[idx])
+    /* Find victim buffers. */ 
+    nr_victims = 0;
+    list_for_each_safe(lh, t, &castle_cache_cleanlist)
+    {
+        c2p = list_entry(lh, c2_page_t, dirty);
+        if(!c2p_busy(c2p)) 
         {
-            c2p = list_entry(lh, c2_page_t, list);
-            if(!c2p_busy(c2p)) 
-            {
-                debug("Found a victim.\n");
-                list_del(&c2p->list);
-                list_del(&c2p->dirty);
-                atomic_dec(&castle_cache_cleanlist_size);
-                list_add(&c2p->list, &victims);
-            }
+            debug("Found a victim.\n");
+            list_del(&c2p->list);
+            list_del(&c2p->dirty);
+            atomic_dec(&castle_cache_cleanlist_size);
+            list_add(&c2p->list, &victims);
+            nr_victims++;
         }
-    } while(list_empty(&victims) && (idx != castle_cache_freelist_last));
-    castle_cache_freelist_last = idx;
+        if(nr_victims > 20)
+            break;
+    }
     spin_unlock_irq(&castle_cache_hash_lock);
 
     /* We couldn't find any victims */
@@ -330,15 +325,15 @@ static void castle_cache_freelist_grow(void)
            success = 1; 
         spin_unlock(&castle_cache_freelist_lock);
         if(success) return;
-        /* If we haven't found any !busy buffers in the hash
+        /* If we haven't found any !busy buffers in the cleanlist 
            its likely because they are dirty. 
            Schedule a writeout. */
         printk("=> Could not clean the hash table. Waking flush.\n");
         castle_cache_flush_wakeup();
         printk("=> Woken.\n");
-        wait_event(castle_cache_flush_wq, 
-                   atomic_read(&castle_cache_cleanlist_size) > 0);
-        printk("=> We think there is some free memory now.\n");
+        sleep_on_timeout(&castle_cache_flush_wq, 10 * HZ);
+        printk("=> We think there is some free memory now (cleanlist size: %d).\n",
+                atomic_read(&castle_cache_cleanlist_size));
     }
     debug("Grown the list.\n");
 }
@@ -408,8 +403,6 @@ static void castle_cache_flush_endio(c2_page_t *c2p, int uptodate)
     unlock_c2p(c2p);
     put_c2p(c2p);
     atomic_dec(count);
-    if(atomic_read(count) == 0)
-        wake_up(&castle_cache_flush_all_wq);
     wake_up(&castle_cache_flush_wq);
 }
 
@@ -570,7 +563,6 @@ static int castle_cache_freelist_init(void)
         INIT_LIST_HEAD(&c2p->dirty);
     }
     castle_cache_freelist_size = castle_cache_size;
-    castle_cache_freelist_last = 0;
 
     return 0;
 }
