@@ -624,7 +624,7 @@ static int castle_device_make_request(struct request_queue *rq, struct bio *bio)
     c_bio->c_bvecs = c_bvecs; 
     atomic_set(&c_bio->remaining, bio->bi_vcnt);
     c_bio->err = 0;
-    castle_debug_bio_add(c_bio);
+    castle_debug_bio_add(c_bio, dev->version);
 
     sector = bio->bi_sector;
     bio_for_each_segment(bvec, bio, i)

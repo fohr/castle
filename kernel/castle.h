@@ -103,6 +103,7 @@ typedef struct castle_bio {
     atomic_t               remaining;
     int                    err;
 #ifdef CASTLE_DEBUG    
+    int                    stuck;
     int                    id;
     int                    nr_bvecs;
     struct list_head       list;
