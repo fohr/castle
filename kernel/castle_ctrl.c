@@ -70,7 +70,7 @@ static void castle_control_clone(cctrl_cmd_clone_t *ioctl)
     version_t version;
 
     printk("Hijacking the IOCTL to create new version.\n");
-    version = castle_version_new((version_t)ioctl->snap, 0xabba);
+    version = castle_version_new(1, (version_t)ioctl->snap, 0xabba);
     printk("Created version: 0x%x\n", version);
     printk("==> Clone NOT IMPLEMENTED YET\n");
     ioctl->clone = 0;

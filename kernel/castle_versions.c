@@ -1,3 +1,8 @@
+/* TODOs:
+   Locking & concurrency needs to be worked out here 
+   - what happens when someone clones a version that's currently attached (this should fail)
+ */
+
 #include <linux/module.h>
 #include <linux/workqueue.h> 
 #include <linux/list.h>
@@ -35,6 +40,12 @@ static version_t          castle_versions_last;
 static c_disk_blk_t       castle_versions_last_node_cdb;
 static int                castle_versions_last_node_unused;
 
+#define CV_INITED_BIT             (0)
+#define CV_INITED_MASK            (1 << CV_INITED_BIT)
+#define CV_ATTACHED_BIT           (1)
+#define CV_ATTACHED_MASK          (1 << CV_ATTACHED_BIT)
+#define CV_CLONE_BIT               (2)
+#define CV_CLONE_MASK              (1 << CV_ATTACHED_BIT)
 struct castle_version {
     /* Various tree links */
     version_t                  version;
@@ -54,7 +65,7 @@ struct castle_version {
 
     /* Lists for storing versions the hash table & the init list*/
     struct list_head hash_list; 
-    int              inited;
+    unsigned long    flags;
     struct list_head init_list;
 };
 
@@ -117,7 +128,7 @@ static void castle_versions_hash_destroy(void)
 static void castle_versions_init_add(struct castle_version *v)
 {
     down(&castle_versions_hash_lock);
-    v->inited = 0;
+    v->flags &= (~CV_INITED_MASK);
     list_add(&v->init_list, &castle_versions_init_list);
     up(&castle_versions_hash_lock);
 }
@@ -144,6 +155,7 @@ static int castle_version_add(c_disk_blk_t cdb,
     v->r_order      = INVAL_VERSION;
     v->ftree_root   = ftree_root;
     v->size         = size;
+    v->flags        = 0;
     INIT_LIST_HEAD(&v->hash_list);
     INIT_LIST_HEAD(&v->init_list);
 
@@ -154,7 +166,7 @@ static int castle_version_add(c_disk_blk_t cdb,
         v->parent       = NULL;
         v->first_child  = NULL; /* This will be updated later */
         v->next_sybling = NULL;
-        v->inited       = 1;
+        v->flags       |= CV_INITED_MASK;
 
     } else
     {
@@ -303,15 +315,46 @@ int castle_version_ftree_update(version_t version, c_disk_blk_t cdb)
     return 0;
 }
 
-static version_t castle_version_new_get(void)
+static version_t castle_version_new_create(int clone_or_snap,
+                                           version_t parent,
+                                           c_disk_blk_t ftree_root,
+                                           uint32_t size)
 {
+    struct castle_version *v;
     version_t version;
+    int ret;
 
     down(&castle_versions_last_lock);
     BUG_ON(VERSION_INVAL(castle_versions_last));
     /* Allocate a new version number ... */
     version = ++castle_versions_last;
     up(&castle_versions_last_lock);
+
+    /* Try to add it to the hash */
+    ret = castle_version_add(INVAL_DISK_BLK, version, parent, ftree_root, size); 
+    if(ret) return INVAL_VERSION;
+
+    /* Set clone/snap bit in flags */ 
+    down(&castle_versions_hash_lock);
+    v = __castle_versions_hash_get(version);
+    BUG_ON(!v);
+    if(clone_or_snap)
+        v->flags |= CV_CLONE_MASK;
+    else
+        v->flags &= ~CV_CLONE_MASK;
+    up(&castle_versions_hash_lock);
+
+    /* Run processing (which will thread the new version into the tree,
+       and recalculate the order numbers) */
+    castle_versions_process(); 
+    
+    /* Check if the version got initialised */
+    down(&castle_versions_hash_lock);
+    v = __castle_versions_hash_get(version);
+    BUG_ON(!v);
+    if(!(v->flags & CV_INITED_MASK))
+        version = INVAL_VERSION;
+    up(&castle_versions_hash_lock);
 
     return version;
 }
@@ -321,14 +364,14 @@ static version_t castle_version_new_get(void)
    2. If so, is it fine?
    3. If not, how to prevent it?
  */
-version_t castle_version_new(version_t parent,
+version_t castle_version_new(int clone_or_snap,
+                             version_t parent,
                              uint32_t size)
 {
     struct castle_version *v;
     c_disk_blk_t cdb, ftree_root;
     c2_page_t *c2p;
     version_t version;
-    int ret;
     
     /* Read ftree root from the parent (also, make sure parent exists) */
     down(&castle_versions_hash_lock);
@@ -344,15 +387,27 @@ version_t castle_version_new(version_t parent,
     up(&castle_versions_hash_lock);
 
     /* Get a new version number */
-    version = castle_version_new_get();
-    /* Try to add the version to the hash (with invalid cdb at the moment, 
-       because we don't know it yet) */
-    ret = castle_version_add(INVAL_DISK_BLK, version, parent, ftree_root, size); 
-    if(ret)
+    version = castle_version_new_create(clone_or_snap,
+                                        parent,
+                                        ftree_root,
+                                        size);
+    /* Return if we couldn't create the version correctly
+       (possibly because we trying to clone attached version,
+        or because someone asked for more than one snapshot to
+        an attached version */
+    if(VERSION_INVAL(version))
+        return INVAL_VERSION;
+
+    /* Check if the version has been initialised */
+    down(&castle_versions_hash_lock);
+    v = __castle_versions_hash_get(version);
+    BUG_ON(!v);
+    if(!(v->flags & CV_INITED_MASK))
     {
-        printk("Failed to add new version to the hash ");
+        up(&castle_versions_hash_lock);
         return INVAL_VERSION;
     }
+    up(&castle_versions_hash_lock);
 
     /* We've succeeded at creating a new version number.
        Let's find where to store it on the disk. */
@@ -386,7 +441,6 @@ version_t castle_version_new(version_t parent,
     v->cdb = cdb;
     up(&castle_versions_hash_lock);
 
-    castle_versions_process();
 
     /* TODO: Error handling? */
     castle_version_writeback(version, 1); 
@@ -413,7 +467,8 @@ void castle_version_ftree_unlock(version_t version)
 }
 
 int castle_version_snap_get(version_t version, 
-                            uint32_t *size)
+                            uint32_t *size,
+                            int *leaf)
 {
     struct castle_version *v;
     int ret = -EINVAL;
@@ -422,13 +477,27 @@ int castle_version_snap_get(version_t version,
     v = __castle_versions_hash_get(version);
     if(v) 
     {
-        *size = v->size;
         ret = 0;
+        *size =  v->size;
+        *leaf = (v->first_child == NULL);
+        if(test_and_set_bit(CV_ATTACHED_BIT, &v->flags))
+            ret = -EAGAIN;
     }
     up(&castle_versions_hash_lock);
 
     return ret;
 } 
+
+void castle_version_snap_put(version_t version)
+{
+    struct castle_version *v;
+
+    down(&castle_versions_hash_lock);
+    v = __castle_versions_hash_get(version);
+    BUG_ON(!v);
+    BUG_ON(!test_and_clear_bit(CV_ATTACHED_BIT, &v->flags));
+    up(&castle_versions_hash_lock);
+}
 
 static void castle_versions_process(void)
 {
@@ -446,14 +515,24 @@ static void castle_versions_process(void)
 process_version:        
         /* Remove the element from the list */
         list_del(&v->init_list);
-        BUG_ON(v->inited);
+        BUG_ON(v->flags & CV_INITED_MASK);
 
         /* Find it's parent, and check if it's been inited already */
         p = __castle_versions_hash_get(v->parent_v);
         BUG_ON(!p);
+        /* We can only snapshot leaf nodes */ 
+        if((!(v->flags & CV_CLONE_MASK)) &&  /* version is a snapshot    */
+              (p->first_child != NULL))      /* there already is a child */
+            continue;
+        /* Clones can only be made if the parent isn't attached writeably
+           Which is the same as to say that the parent is a leaf */
+        if((v->flags & CV_CLONE_MASK) &&       /* version is a clone */
+           (p->flags & CV_ATTACHED_MASK) &&    /* parent is attached */
+           (p->first_child == NULL))           /* parent is a leaf   */
+            continue;
         debug("Processing version: %d, parent: %d\n", v->version, p->version);
         /* If the parent hasn't been initialised yet, initialise it instead */
-        if(!p->inited)
+        if(!(p->flags & CV_INITED_MASK))
         {
             /* Re-add v back to the init list.
                Because the element is added to the front of the list O(n) is guaranteed.
@@ -476,7 +555,7 @@ process_version:
         //if(v->next_sybling)
           //  debug(" Versions's sybling is version %d\n", v->next_sybling->version);
         /* We are done */
-        v->inited = 1;
+        v->flags |= CV_INITED_MASK;
     }
 
     /* Now, once the tree has been built, assign the order to the nodes
@@ -486,7 +565,7 @@ process_version:
        potentialy deep recursion */  
     v = __castle_versions_hash_get(0); 
     BUG_ON(!v);
-    BUG_ON(!v->inited);
+    BUG_ON(!(v->flags & CV_INITED_MASK));
     BUG_ON(v->parent);
     id = 0;
     children_first = 1;
@@ -543,10 +622,10 @@ int castle_version_is_ancestor(version_t candidate, version_t version)
     c = __castle_versions_hash_get(candidate);
     /* Sanity checks */
     BUG_ON(!v);
-    BUG_ON(!v->inited);
+    BUG_ON(!(v->flags & CV_INITED_MASK));
     BUG_ON(VERSION_INVAL(v->o_order));
     BUG_ON(!c);
-    BUG_ON(!c->inited);
+    BUG_ON(!(c->flags & CV_INITED_MASK));
     BUG_ON(VERSION_INVAL(c->o_order));
     BUG_ON(VERSION_INVAL(c->r_order));
     /* c is an ancestor of v if v->o_order is in range c->o_order to c->r_order

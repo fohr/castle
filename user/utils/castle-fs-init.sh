@@ -169,8 +169,9 @@ function initfs {
 ./castle-fs-fini.sh
 initfs
 
-do_control_attach 100
-do_control_attach 3
+do_control_attach 0
+#do_control_attach 100
+#do_control_attach 3
 DEV=$IOCTL_RET
 
 #do_control_detach $DEV

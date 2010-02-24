@@ -761,12 +761,15 @@ struct castle_device* castle_device_find(dev_t dev)
 
 void castle_device_free(struct castle_device *cd)
 {
+    version_t version = cd->version;
+
     castle_sysfs_device_del(cd);
     /* TODO: Should this be done? blk_cleanup_queue(cd->gd->rq); */ 
     del_gendisk(cd->gd);
     put_disk(cd->gd);
     list_del(&cd->list);
     kfree(cd);
+    castle_version_snap_put(version);
 }
 
 struct castle_device* castle_device_init(version_t version)
@@ -776,10 +779,12 @@ struct castle_device* castle_device_init(version_t version)
     struct gendisk *gd        = NULL;
     static int minor = 0;
     uint32_t size;
+    int leaf;
 
-    if(castle_version_snap_get(version, &size))
+    if(castle_version_snap_get(version, &size, &leaf))
         goto error_out;
 
+        /* TODO readonly if not leaf! */
     dev = kmalloc(sizeof(struct castle_device), GFP_KERNEL); 
     if(!dev)
         goto error_out;
