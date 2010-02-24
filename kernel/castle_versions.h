@@ -12,7 +12,7 @@ int          castle_version_add         (c_disk_blk_t cdb,
                                          version_t parent, 
                                          c_disk_blk_t ftree_root,
                                          uint32_t size);
-int          castle_versions_list_init  (c_disk_blk_t list_cdb);
+int          castle_versions_list_init  (c_disk_blk_t list_cdb, c_disk_blk_t ftree_root);
 void         castle_versions_process    (void);
 int          castle_versions_read       (c_disk_blk_t list_cdb);
 int          castle_versions_init       (void);

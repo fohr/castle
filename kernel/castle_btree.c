@@ -5,13 +5,13 @@
 #include <linux/hardirq.h>
 
 #include "castle.h"
+#include "castle_cache.h"
 #include "castle_btree.h"
 #include "castle_versions.h"
 #include "castle_block.h"
-#include "castle_cache.h"
 #include "castle_debug.h"
 
-//#define DEBUG
+#define DEBUG
 #ifndef DEBUG
 #define debug(_f, ...)  ((void)0)
 #else
@@ -225,22 +225,40 @@ static int castle_ftree_write_idx_find(c_bvec_t *c_bvec)
     return idx;
 }
 
+c2_page_t* castle_ftree_node_create(int version, int is_leaf)
+{
+    c_disk_blk_t cdb;
+    c2_page_t   *c2p;
+    struct castle_ftree_node *node;
+    
+    cdb = castle_slaves_disk_block_get(); 
+    c2p = castle_cache_page_get(cdb);
+    
+    lock_c2p(c2p);
+    set_c2p_uptodate(c2p);
+
+    node = pfn_to_kaddr(page_to_pfn(c2p->page));
+    node->magic    = FTREE_NODE_MAGIC;
+    node->version  = version;
+    node->capacity = FTREE_NODE_SLOTS;
+    node->used     = 0;
+    node->is_leaf  = node->is_leaf;
+
+    dirty_c2p(c2p);
+
+    return c2p;
+}
+
 static c2_page_t* castle_ftree_effective_node_create(struct castle_ftree_node *node,
                                                      uint32_t version)
 {
-    c_disk_blk_t cdb = castle_slaves_disk_block_get(); 
-    c2_page_t   *c2p = castle_cache_page_get(cdb);
-    struct castle_ftree_node *eff_node = pfn_to_kaddr(page_to_pfn(c2p->page));
+    c2_page_t *c2p;
+    struct castle_ftree_node *eff_node;
     struct castle_ftree_slot *last_eff_slot, *slot;
     int i;
 
-    lock_c2p(c2p);
-    set_c2p_uptodate(c2p);
-    eff_node->magic    = FTREE_NODE_MAGIC;
-    eff_node->version  = version;
-    eff_node->capacity = FTREE_NODE_SLOTS;
-    eff_node->used     = 0;
-    eff_node->is_leaf  = node->is_leaf;
+    c2p = castle_ftree_node_create(version, node->is_leaf);
+    eff_node = pfn_to_kaddr(page_to_pfn(c2p->page));
 
     for(i=0, last_eff_slot = NULL; i<node->used; i++)
     {
@@ -281,6 +299,7 @@ static c2_page_t* castle_ftree_effective_node_create(struct castle_ftree_node *n
      */ 
     if((node->version == version) && (eff_node->used == node->used))
     {
+        /* TODO: should clean_c2p? */
         unlock_c2p(c2p);
         put_c2p(c2p);
         /* TODO: should also return the allocated disk block, but our allocator
@@ -288,41 +307,32 @@ static c2_page_t* castle_ftree_effective_node_create(struct castle_ftree_node *n
         return NULL;
     }
 
-    /* Mark the node dirty, so that it'll get written out, even if nothing gets
-       inserted into it */ 
-    dirty_c2p(c2p);
-
     return c2p;
 }
 
 static c2_page_t* castle_ftree_node_key_split(c2_page_t *orig_c2p)
 {
-    c_disk_blk_t cdb = castle_slaves_disk_block_get(); 
-    c2_page_t   *c2p = castle_cache_page_get(cdb);
-    struct castle_ftree_node *node = pfn_to_kaddr(page_to_pfn(orig_c2p->page));
-    struct castle_ftree_node *sec_node = pfn_to_kaddr(page_to_pfn(c2p->page));
+    c2_page_t *c2p;
+    struct castle_ftree_node *node, *sec_node;
 
-    lock_c2p(c2p);
-    set_c2p_uptodate(c2p);
-    sec_node->magic    = FTREE_NODE_MAGIC;
-    sec_node->version  = node->version;
-    sec_node->capacity = FTREE_NODE_SLOTS;
-    sec_node->used     = node->used >> 1;
-    sec_node->is_leaf  = node->is_leaf;
-
+    node     = pfn_to_kaddr(page_to_pfn(orig_c2p->page));
+    c2p      = castle_ftree_node_create(node->version, node->is_leaf);
+    sec_node = pfn_to_kaddr(page_to_pfn(c2p->page));
     /* The original node needs to contain the elements from the right hand side
        because otherwise the key in it's parent would have to change. We want
        to avoid that */
-    node->used -= sec_node->used;
+    sec_node->used = node->used >> 1;
+    node->used    -= sec_node->used;
     memcpy(sec_node->slots, 
            node->slots, 
            sec_node->used * sizeof(struct castle_ftree_slot));
     memmove( node->slots, 
             &node->slots[sec_node->used], 
              node->used * sizeof(struct castle_ftree_slot));
-    /* c2p for node will be dirtied by the caller, we cannot work out its c2p from here */
+    
+    /* c2p has already been dirtied by the node_create() function, but the orig_c2p
+       needs to be dirtied here */
     dirty_c2p(orig_c2p);
-    dirty_c2p(c2p);
 
     return c2p;
 }
@@ -397,48 +407,35 @@ static void castle_ftree_node_under_key_insert(c2_page_t *parent_c2p,
 
 static int castle_ftree_new_root_create(c_bvec_t *c_bvec)
 {
-    struct castle_ftree_node *node;
-    c_disk_blk_t cdb; 
     c2_page_t *c2p;
+    struct castle_ftree_node *node;
     int ret;
     
-    debug("Creating a new root node, while handli write to version: %d.\n",
+    debug("Creating a new root node, while handling write to version: %d.\n",
             c_bvec->version);
     BUG_ON(c_bvec->btree_parent_node);
-    /* Allocate a new block */
-    cdb = castle_slaves_disk_block_get(); 
-    debug("Allocated new disk block (0x%x, 0x%x).\n", cdb.disk, cdb.block);
-    c2p = castle_cache_page_get(cdb);
-    lock_c2p(c2p);
-    set_c2p_uptodate(c2p);
+    /* Create the node */
+    c2p = castle_ftree_node_create(c_bvec->version, 0);
     node = pfn_to_kaddr(page_to_pfn(c2p->page));
-    /* Init the node correctly */
-    node->magic    = FTREE_NODE_MAGIC;
-    node->version  = c_bvec->version;
-    node->capacity = FTREE_NODE_SLOTS;
-    node->used     = 0;
-    node->is_leaf  = 0;
     /* Update the version tree, and release the version lock (c2p_forget will 
        no longer do that, because there will be a parent node). */
     debug("About to update version tree.\n");
     /* TODO: Check if we hold the version lock */
-    ret = castle_version_ftree_update(c_bvec->version, cdb);
+    ret = castle_version_ftree_update(c_bvec->version, c2p->cdb);
     /* If we failed to update the version tree, dealloc the root */
     if(ret)
     {
         debug("Failed.\n");
-        /* TODO: dealloc the block */
+        /* TODO: dealloc the block, possibly clean c2p */
         unlock_c2p(c2p);
         put_c2p(c2p);
         return ret;
     }
     debug("Succeeded.\n");
-    /* Set the node dirty (it'll also get set dirty when inserting into it later),
-       but dirty_c2p can be called multiple times just fine. */
-    dirty_c2p(c2p);
     /* If all succeeded save the new node as the parent in bvec */
     c_bvec->btree_parent_node = c2p;
     castle_version_ftree_unlock(c_bvec->version);
+
     return 0;
 }
 

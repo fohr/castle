@@ -6,6 +6,7 @@
 
 #include "castle_public.h"
 #include "castle.h"
+#include "castle_cache.h"
 #include "castle_btree.h"
 #include "castle_versions.h"
 

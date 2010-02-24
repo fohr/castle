@@ -8,9 +8,9 @@
 
 #include "castle.h"
 #include "castle_block.h"
+#include "castle_cache.h"
 #include "castle_btree.h"
 #include "castle_versions.h"
-#include "castle_cache.h"
 #include "castle_ctrl.h"
 #include "castle_sysfs.h"
 #include "castle_debug.h"
@@ -52,14 +52,14 @@ static void castle_fs_superblock_print(struct castle_fs_superblock *fs_sb)
            fs_sb->magic3,
            fs_sb->salt,
            fs_sb->peper,
-           fs_sb->fwd_tree_disk1,
-           fs_sb->fwd_tree_block1,
-           fs_sb->fwd_tree_disk2,
-           fs_sb->fwd_tree_block2,
-           fs_sb->rev_tree_disk1,
-           fs_sb->rev_tree_block1,
-           fs_sb->rev_tree_disk2,
-           fs_sb->rev_tree_block2);
+           fs_sb->fwd_tree1.disk,
+           fs_sb->fwd_tree1.block,
+           fs_sb->fwd_tree2.disk,
+           fs_sb->fwd_tree2.block,
+           fs_sb->rev_tree1.disk,
+           fs_sb->rev_tree1.block,
+           fs_sb->rev_tree2.disk,
+           fs_sb->rev_tree2.block);
 }
 
 static int castle_fs_superblock_validate(struct castle_fs_superblock *fs_sb)
@@ -80,14 +80,10 @@ static void castle_fs_superblock_init(struct castle_fs_superblock *fs_sb)
     fs_sb->magic3 = CASTLE_FS_MAGIC3;
     get_random_bytes(&fs_sb->salt,  sizeof(fs_sb->salt));
     get_random_bytes(&fs_sb->peper, sizeof(fs_sb->peper));
-    fs_sb->fwd_tree_disk1  = version_list_cdb.disk;
-    fs_sb->fwd_tree_block1 = version_list_cdb.block;
-    fs_sb->fwd_tree_disk2  = version_list_cdb.disk;
-    fs_sb->fwd_tree_block2 = version_list_cdb.block;
-    fs_sb->rev_tree_disk1  = 0;
-    fs_sb->rev_tree_block1 = 0;
-    fs_sb->rev_tree_disk2  = 0;
-    fs_sb->rev_tree_block2 = 0;
+    fs_sb->fwd_tree1 = version_list_cdb;
+    fs_sb->fwd_tree2 = version_list_cdb;
+    fs_sb->rev_tree1 = INVAL_DISK_BLK;
+    fs_sb->rev_tree2 = INVAL_DISK_BLK;
 }
 
 static inline struct castle_fs_superblock* castle_fs_superblock_get(struct castle_slave *cs)
@@ -151,8 +147,6 @@ int castle_fs_init(void)
     struct castle_slave *cs;
     struct castle_fs_superblock fs_sb, *cs_fs_sb;
     int ret, first;
-    // TODO: Temporary, replace with c_disk_blk_t in fs_superblock
-    c_disk_blk_t blk;
 
     if(castle_fs_inited)
         return -EEXIST;
@@ -195,10 +189,17 @@ int castle_fs_init(void)
     /* If first is still true, we've not found a single non-new cs.
        Init the fs superblock. */
     if(first) {
+        c2_page_t *c2p;
+
+        /* Init the fs superblock */
         castle_fs_superblock_init(&fs_sb);
-        blk.disk  = fs_sb.fwd_tree_disk1;
-        blk.block = fs_sb.fwd_tree_block1;
-        ret = castle_versions_list_init(blk);
+        /* Init the root btree node */
+        c2p = castle_ftree_node_create(0 /* version */, 1 /* is_leaf */);
+        /* Init version list */
+        ret = castle_versions_list_init(fs_sb.fwd_tree1, c2p->cdb);
+        /* Release btree node c2p */
+        unlock_c2p(c2p);
+        put_c2p(c2p);
         if(ret) return ret;
     }
     cs_fs_sb = castle_fs_superblocks_get();
@@ -206,10 +207,9 @@ int castle_fs_init(void)
 
     /* This will initialise the fs superblock of all the new devices */
     memcpy(cs_fs_sb, &fs_sb, sizeof(struct castle_fs_superblock));
-    blk.disk  = cs_fs_sb->fwd_tree_disk1;
-    blk.block = cs_fs_sb->fwd_tree_block1;
     castle_fs_superblocks_put(cs_fs_sb, 1);
-    ret = castle_versions_read(blk);
+    /* Reda versions in */
+    ret = castle_versions_read(cs_fs_sb->fwd_tree1);
     if(ret) return -EINVAL;
 
     printk("Castle FS inited.\n");
@@ -793,6 +793,11 @@ struct castle_device* castle_device_init(version_t version)
 
     list_add(&dev->list, &castle_devices.devices);
     dev->gd = gd;
+    if(size == 0)
+    {
+        printk("Got snapshot of size 0, changing that to 1000.\n");
+        size = 1000;
+    }
     set_capacity(gd, (size << (C_BLK_SHIFT - 9)));
     add_disk(gd);
 

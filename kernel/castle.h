@@ -29,19 +29,15 @@ struct castle_slave_superblock {
 #define CASTLE_FS_MAGIC2        (0x19880624)
 #define CASTLE_FS_MAGIC3        (0x19821120)
 struct castle_fs_superblock {
-    uint32_t magic1;
-    uint32_t magic2;
-    uint32_t magic3;
-    uint32_t salt;
-    uint32_t peper;
-    uint32_t fwd_tree_disk1;
-    uint32_t fwd_tree_block1;
-    uint32_t fwd_tree_disk2;
-    uint32_t fwd_tree_block2;
-    uint32_t rev_tree_disk1;
-    uint32_t rev_tree_block1;
-    uint32_t rev_tree_disk2;
-    uint32_t rev_tree_block2;
+    uint32_t     magic1;
+    uint32_t     magic2;
+    uint32_t     magic3;
+    uint32_t     salt;
+    uint32_t     peper;
+    c_disk_blk_t fwd_tree1;
+    c_disk_blk_t fwd_tree2;
+    c_disk_blk_t rev_tree1;
+    c_disk_blk_t rev_tree2;
 };
 
 #define NODE_HEADER        0x180

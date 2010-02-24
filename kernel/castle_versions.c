@@ -417,7 +417,7 @@ int castle_version_is_ancestor(version_t candidate, version_t version)
     return ret;
 }
 
-int castle_versions_list_init(c_disk_blk_t list_cdb)
+int castle_versions_list_init(c_disk_blk_t list_cdb, c_disk_blk_t ftree_root)
 {
     struct castle_vlist_node *node;
     c2_page_t *c2p;
@@ -437,9 +437,7 @@ int castle_versions_list_init(c_disk_blk_t list_cdb)
     node->slots[0].version_nr = 0;
     node->slots[0].parent     = 0;
     node->slots[0].size       = 0;
-    /* TODO: this should init the actual btree */
-    node->slots[0].cdb.disk   = INVAL_DISK_BLK.disk;
-    node->slots[0].cdb.block  = INVAL_DISK_BLK.block;
+    node->slots[0].cdb        = ftree_root;
     dirty_c2p(c2p);
     ret = submit_c2p_sync(WRITE, c2p); 
     unlock_c2p(c2p);
