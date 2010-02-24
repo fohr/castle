@@ -202,18 +202,25 @@ extern struct workqueue_struct  *castle_wq;
 #define C_BLK_SIZE                     (1 << C_BLK_SHIFT)
 #define disk_blk_to_offset(_cdb)     ((_cdb).block * C_BLK_SIZE)
 
-void castle_bio_data_io_end(c_bvec_t *c_bvec, int err);
-void castle_bio_data_io(c_bvec_t *c_bvec);
+void                  castle_bio_data_io_end   (c_bvec_t *c_bvec, int err);
+void                  castle_bio_data_io       (c_bvec_t *c_bvec);
 
 struct castle_device* castle_device_init       (version_t version);
 void                  castle_device_free       (struct castle_device *cd);
 struct castle_device* castle_device_find       (dev_t dev);
+
 struct castle_slave*  castle_claim             (uint32_t new_dev);
+void                  castle_release           (struct castle_slave *cs);
+
 struct castle_slave*  castle_slave_find_by_id  (uint32_t id);
 struct castle_slave*  castle_slave_find_by_uuid(uint32_t uuid);
 struct castle_slave*  castle_slave_find_by_block(c_disk_blk_t cdb);
+
 c_disk_blk_t          castle_slaves_disk_block_get(void);
-void                  castle_release           (struct castle_slave *cs);
+struct castle_fs_superblock* 
+                      castle_fs_superblocks_get(void);
+void                  castle_fs_superblocks_put(struct castle_fs_superblock *sb, int dirty);
+
 int                   castle_fs_init           (void);
 
 #endif /* __CASTLE_H__ */

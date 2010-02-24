@@ -11,7 +11,7 @@
 #include "castle_block.h"
 #include "castle_debug.h"
 
-#define DEBUG
+//#define DEBUG
 #ifndef DEBUG
 #define debug(_f, ...)  ((void)0)
 #else

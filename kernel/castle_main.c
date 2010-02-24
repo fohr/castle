@@ -73,17 +73,24 @@ static int castle_fs_superblock_validate(struct castle_fs_superblock *fs_sb)
 
 static void castle_fs_superblock_init(struct castle_fs_superblock *fs_sb)
 {   
-    c_disk_blk_t version_list_cdb = castle_slaves_disk_block_get();
-
     fs_sb->magic1 = CASTLE_FS_MAGIC1;
     fs_sb->magic2 = CASTLE_FS_MAGIC2;
     fs_sb->magic3 = CASTLE_FS_MAGIC3;
     get_random_bytes(&fs_sb->salt,  sizeof(fs_sb->salt));
     get_random_bytes(&fs_sb->peper, sizeof(fs_sb->peper));
-    fs_sb->fwd_tree1 = version_list_cdb;
-    fs_sb->fwd_tree2 = version_list_cdb;
+    fs_sb->fwd_tree1 = INVAL_DISK_BLK; 
+    fs_sb->fwd_tree2 = INVAL_DISK_BLK;
     fs_sb->rev_tree1 = INVAL_DISK_BLK;
     fs_sb->rev_tree2 = INVAL_DISK_BLK;
+}
+
+static void castle_fs_superblocks_init(void)
+{
+    struct castle_fs_superblock *fs_sb;
+
+    fs_sb = castle_fs_superblocks_get();
+    castle_fs_superblock_init(fs_sb);
+    castle_fs_superblocks_put(fs_sb, 1);
 }
 
 static inline struct castle_fs_superblock* castle_fs_superblock_get(struct castle_slave *cs)
@@ -101,7 +108,7 @@ static inline void castle_fs_superblock_put(struct castle_slave *cs, int dirty)
 }
 
 /* Get all superblocks */
-static inline struct castle_fs_superblock* castle_fs_superblocks_get(void)
+struct castle_fs_superblock* castle_fs_superblocks_get(void)
 {
     struct list_head *l;
     struct castle_slave *cs;
@@ -117,7 +124,7 @@ static inline struct castle_fs_superblock* castle_fs_superblocks_get(void)
 }
 
 /* Put all superblocks */
-static inline void castle_fs_superblocks_put(struct castle_fs_superblock *sb, int dirty)
+void castle_fs_superblocks_put(struct castle_fs_superblock *sb, int dirty)
 {
     struct list_head *l;
     struct castle_slave *cs;
@@ -131,6 +138,8 @@ static inline void castle_fs_superblocks_put(struct castle_fs_superblock *sb, in
         /* If superblock has been dirtied, copy it, and dirty the buffer */
         if(dirty)
         {
+            printk("Dirty superblock, fwd1=(0x%x, 0x%x)\n",
+                    sb->fwd_tree1.disk, sb->fwd_tree1.block);
             curr_sb = pfn_to_kaddr(page_to_pfn(cs->fs_sblk->page));
             /* Note, we can be possibly copying from ourselves, memmove is safer */
             memmove(curr_sb, sb, sizeof(struct castle_fs_superblock)); 
@@ -192,15 +201,19 @@ int castle_fs_init(void)
         c2_page_t *c2p;
 
         /* Init the fs superblock */
-        castle_fs_superblock_init(&fs_sb);
+        castle_fs_superblocks_init();
         /* Init the root btree node */
         c2p = castle_ftree_node_create(0 /* version */, 1 /* is_leaf */);
         /* Init version list */
-        ret = castle_versions_list_init(fs_sb.fwd_tree1, c2p->cdb);
+        ret = castle_versions_list_init(c2p->cdb);
         /* Release btree node c2p */
         unlock_c2p(c2p);
         put_c2p(c2p);
         if(ret) return ret;
+        /* Make sure that fs_sb is up-to-date */
+        cs_fs_sb = castle_fs_superblocks_get();
+        memcpy(&fs_sb, cs_fs_sb, sizeof(struct castle_fs_superblock));
+        castle_fs_superblocks_put(cs_fs_sb, 0);
     }
     cs_fs_sb = castle_fs_superblocks_get();
     BUG_ON(!cs_fs_sb);
@@ -208,8 +221,8 @@ int castle_fs_init(void)
     /* This will initialise the fs superblock of all the new devices */
     memcpy(cs_fs_sb, &fs_sb, sizeof(struct castle_fs_superblock));
     castle_fs_superblocks_put(cs_fs_sb, 1);
-    /* Reda versions in */
-    ret = castle_versions_read(cs_fs_sb->fwd_tree1);
+    /* Read versions in */
+    ret = castle_versions_read();
     if(ret) return -EINVAL;
 
     printk("Castle FS inited.\n");
