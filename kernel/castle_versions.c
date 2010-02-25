@@ -25,9 +25,6 @@
 static void castle_versions_process(void);
 static c2_page_t* castle_versions_node_init(void);
 
-#define INVAL_VERSION       ((version_t)-1) 
-#define VERSION_INVAL(_v)   ((_v) == INVAL_VERSION) 
-
 static struct kmem_cache *castle_versions_cache = NULL;
 
 #define CASTLE_VERSIONS_HASH_SIZE       (1000)
@@ -44,8 +41,8 @@ static int                castle_versions_last_node_unused;
 #define CV_INITED_MASK            (1 << CV_INITED_BIT)
 #define CV_ATTACHED_BIT           (1)
 #define CV_ATTACHED_MASK          (1 << CV_ATTACHED_BIT)
-#define CV_CLONE_BIT               (2)
-#define CV_CLONE_MASK              (1 << CV_ATTACHED_BIT)
+#define CV_SNAP_BIT               (2)
+#define CV_SNAP_MASK              (1 << CV_ATTACHED_BIT)
 struct castle_version {
     /* Various tree links */
     version_t                  version;
@@ -315,33 +312,50 @@ int castle_version_ftree_update(version_t version, c_disk_blk_t cdb)
     return 0;
 }
 
-static version_t castle_version_new_create(int clone_or_snap,
+static version_t castle_version_new_create(int snap_or_clone,
                                            version_t parent,
-                                           c_disk_blk_t ftree_root,
                                            uint32_t size)
 {
     struct castle_version *v;
+    c_disk_blk_t ftree_root;
+    uint32_t parent_size;
     version_t version;
     int ret;
 
+    /* Read ftree root from the parent (also, make sure parent exists) */
+    down(&castle_versions_hash_lock);
+    v = __castle_versions_hash_get(parent);
+    if(!v)
+    {
+        printk("Asked to create a child of non-existant parent: %d\n",
+            parent);
+        up(&castle_versions_hash_lock);
+        return INVAL_VERSION;
+    }
+    ftree_root  = v->ftree_root;
+    parent_size = v->size;
+    up(&castle_versions_hash_lock);
+
+    /* Allocate a new version number. */
     down(&castle_versions_last_lock);
     BUG_ON(VERSION_INVAL(castle_versions_last));
-    /* Allocate a new version number ... */
     version = ++castle_versions_last;
     up(&castle_versions_last_lock);
 
     /* Try to add it to the hash */
-    ret = castle_version_add(INVAL_DISK_BLK, version, parent, ftree_root, size); 
+    ret = castle_version_add(INVAL_DISK_BLK, version, parent, ftree_root, size);
     if(ret) return INVAL_VERSION;
 
     /* Set clone/snap bit in flags */ 
     down(&castle_versions_hash_lock);
     v = __castle_versions_hash_get(version);
     BUG_ON(!v);
-    if(clone_or_snap)
-        v->flags |= CV_CLONE_MASK;
+    if(parent_size != 0) v->size = parent_size;
+    BUG_ON(v->size == 0);
+    if(snap_or_clone)
+        v->flags |= CV_SNAP_MASK;
     else
-        v->flags &= ~CV_CLONE_MASK;
+        v->flags &= ~CV_SNAP_MASK;
     up(&castle_versions_hash_lock);
 
     /* Run processing (which will thread the new version into the tree,
@@ -353,43 +367,33 @@ static version_t castle_version_new_create(int clone_or_snap,
     v = __castle_versions_hash_get(version);
     BUG_ON(!v);
     if(!(v->flags & CV_INITED_MASK))
+    {
+        /* TODO: remove from hash? */
         version = INVAL_VERSION;
+    }
     up(&castle_versions_hash_lock);
 
     return version;
 }
+
 /* BIG TODO:
    1. Is it possible for the ftree_root for the parent version to
       split after it gets read here?
    2. If so, is it fine?
    3. If not, how to prevent it?
  */
-version_t castle_version_new(int clone_or_snap,
+version_t castle_version_new(int snap_or_clone,
                              version_t parent,
                              uint32_t size)
 {
     struct castle_version *v;
-    c_disk_blk_t cdb, ftree_root;
+    c_disk_blk_t cdb;
     c2_page_t *c2p;
     version_t version;
     
-    /* Read ftree root from the parent (also, make sure parent exists) */
-    down(&castle_versions_hash_lock);
-    v = __castle_versions_hash_get(parent);
-    if(!v)
-    {
-        printk("Asked to create a child of non-existant parent: %d\n",
-            parent);
-        up(&castle_versions_hash_lock);
-        return INVAL_VERSION;
-    }
-    ftree_root = v->ftree_root;
-    up(&castle_versions_hash_lock);
-
     /* Get a new version number */
-    version = castle_version_new_create(clone_or_snap,
+    version = castle_version_new_create(snap_or_clone,
                                         parent,
-                                        ftree_root,
                                         size);
     /* Return if we couldn't create the version correctly
        (possibly because we trying to clone attached version,
@@ -397,17 +401,6 @@ version_t castle_version_new(int clone_or_snap,
         an attached version */
     if(VERSION_INVAL(version))
         return INVAL_VERSION;
-
-    /* Check if the version has been initialised */
-    down(&castle_versions_hash_lock);
-    v = __castle_versions_hash_get(version);
-    BUG_ON(!v);
-    if(!(v->flags & CV_INITED_MASK))
-    {
-        up(&castle_versions_hash_lock);
-        return INVAL_VERSION;
-    }
-    up(&castle_versions_hash_lock);
 
     /* We've succeeded at creating a new version number.
        Let's find where to store it on the disk. */
@@ -441,7 +434,6 @@ version_t castle_version_new(int clone_or_snap,
     v->cdb = cdb;
     up(&castle_versions_hash_lock);
 
-
     /* TODO: Error handling? */
     castle_version_writeback(version, 1); 
     
@@ -473,13 +465,16 @@ int castle_version_snap_get(version_t version,
     struct castle_version *v;
     int ret = -EINVAL;
 
+    if(version == 0)
+        return ret;
+
     down(&castle_versions_hash_lock);
     v = __castle_versions_hash_get(version);
     if(v) 
     {
         ret = 0;
-        *size =  v->size;
-        *leaf = (v->first_child == NULL);
+        if(size) *size =  v->size;
+        if(leaf) *leaf = (v->first_child == NULL);
         if(test_and_set_bit(CV_ATTACHED_BIT, &v->flags))
             ret = -EAGAIN;
     }
@@ -520,17 +515,25 @@ process_version:
         /* Find it's parent, and check if it's been inited already */
         p = __castle_versions_hash_get(v->parent_v);
         BUG_ON(!p);
+        debug("Processing version: %d, parent: %d\n", v->version, p->version);
         /* We can only snapshot leaf nodes */ 
-        if((!(v->flags & CV_CLONE_MASK)) &&  /* version is a snapshot    */
-              (p->first_child != NULL))      /* there already is a child */
+        if((v->flags & CV_SNAP_MASK) &&   /* version is a snapshot    */
+           (p->first_child != NULL))      /* there already is a child */
+        {
+            printk("Warn: ignoring snapshot: %d, parent: %d has a child %d already.\n",
+                    v->version, p->version, p->first_child->version);
             continue;
+        }
         /* Clones can only be made if the parent isn't attached writeably
            Which is the same as to say that the parent is a leaf */
-        if((v->flags & CV_CLONE_MASK) &&       /* version is a clone */
-           (p->flags & CV_ATTACHED_MASK) &&    /* parent is attached */
-           (p->first_child == NULL))           /* parent is a leaf   */
+        if(!(v->flags & CV_SNAP_MASK) &&        /* version is a clone */
+            (p->flags & CV_ATTACHED_MASK) &&    /* parent is attached */
+            (p->first_child == NULL))           /* parent is a leaf   */
+        {
+            printk("Warn: ignoring clone: %d, parent: %d is a leaf.\n",
+                    v->version, p->version);
             continue;
-        debug("Processing version: %d, parent: %d\n", v->version, p->version);
+        }
         /* If the parent hasn't been initialised yet, initialise it instead */
         if(!(p->flags & CV_INITED_MASK))
         {
@@ -539,6 +542,7 @@ process_version:
                This is because after following parent pointers up to the root of the tree,
                we will come back down initialising all children on the path. */
             list_add(&v->init_list, &castle_versions_init_list);
+            debug("Changing version to parent.\n");
             /* Set v to the parent */
             v = p;
             /* Retry processing, this time starting with the parent. 
@@ -548,15 +552,15 @@ process_version:
         }
         /* If we got here we know that the parent has been inited */
         debug(" Parent initialised, (v,p)=(%d,%d)\n", v->version, p->version);
+        printk(" (v,p)=(%d,%d) initialised\n", v->version, p->version);
         /* Insert v at the start of the sybling list. */
         v->parent       = p;
         v->next_sybling = p->first_child;
         p->first_child  = v;
-        //if(v->next_sybling)
-          //  debug(" Versions's sybling is version %d\n", v->next_sybling->version);
-        /* We are done */
+        /* We are done setting this version up. */
         v->flags |= CV_INITED_MASK;
     }
+    debug("Done with tree init.\n");
 
     /* Now, once the tree has been built, assign the order to the nodes
        We assign two id's to each node. o_order is based on when is the node 

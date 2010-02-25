@@ -11,7 +11,7 @@ c_disk_blk_t castle_version_ftree_lock  (version_t version);
 void         castle_version_ftree_unlock(version_t version);
 
 int          castle_versions_list_init  (c_disk_blk_t ftree_root);
-version_t    castle_version_new         (int clone_or_snap, version_t parent, uint32_t size);
+version_t    castle_version_new         (int snap_or_clone, version_t parent, uint32_t size);
 
 int          castle_versions_read       (void);
 int          castle_versions_init       (void);

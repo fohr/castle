@@ -784,7 +784,6 @@ struct castle_device* castle_device_init(version_t version)
     if(castle_version_snap_get(version, &size, &leaf))
         goto error_out;
 
-        /* TODO readonly if not leaf! */
     dev = kmalloc(sizeof(struct castle_device), GFP_KERNEL); 
     if(!dev)
         goto error_out;
@@ -807,7 +806,8 @@ struct castle_device* castle_device_init(version_t version)
 	blk_queue_make_request(rq, castle_device_make_request);
 	rq->queuedata    = dev;
     gd->queue        = rq;
-
+    if(!leaf) 
+        set_disk_ro(gd, 1);
 
     list_add(&dev->list, &castle_devices.devices);
     dev->gd = gd;

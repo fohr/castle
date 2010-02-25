@@ -60,28 +60,83 @@ static void castle_control_detach(cctrl_cmd_detach_t *ioctl)
 
 static void castle_control_create(cctrl_cmd_create_t *ioctl)
 {
-    printk("==> Create NOT IMPLEMENTED YET\n");
-    ioctl->id = -1;
-    ioctl->ret = -ENOSYS;
+    version_t version;
+
+    version = castle_version_new(0, /* clone */ 
+                                 0, /* root version */
+                                 ioctl->size);
+    if(VERSION_INVAL(version))
+    {
+        ioctl->id  = -1;
+        ioctl->ret = -EINVAL;
+    } else
+    {
+        ioctl->id  = version;
+        ioctl->ret = 0;
+    }
 }
 
 static void castle_control_clone(cctrl_cmd_clone_t *ioctl)
 {
-    version_t version;
+    version_t version = ioctl->snap;
 
-    printk("Hijacking the IOCTL to create new version.\n");
-    version = castle_version_new(1, (version_t)ioctl->snap, 0xabba);
-    printk("Created version: 0x%x\n", version);
-    printk("==> Clone NOT IMPLEMENTED YET\n");
-    ioctl->clone = 0;
-    ioctl->ret = -ENOSYS;
+    if(version == 0)
+    {
+        printk("Do not clone version 0. Create a new volume.\n");
+        ioctl->clone = 0;
+        ioctl->ret   = -EINVAL;
+        return;
+    }
+    
+    /* Try to create a new version in the version tree */
+    version = castle_version_new(0,       /* clone */ 
+                                 version, 
+                                 0);      /* size: take parent's */
+    if(VERSION_INVAL(version))
+    {
+        ioctl->clone = 0;
+        ioctl->ret = -EINVAL;
+    } else
+    {
+        ioctl->clone = version;
+        ioctl->ret = 0;
+    }
 }
 
 static void castle_control_snapshot(cctrl_cmd_snapshot_t *ioctl)
 {
-    printk("==> Snapshot NOT IMPLEMENTED YET\n");
-    ioctl->snap_id = 0;
-    ioctl->ret = -ENOSYS;
+    dev_t dev = new_decode_dev(ioctl->dev);
+    struct castle_device *cd = castle_device_find(dev);
+    version_t version, old_version;
+
+    if(!cd)
+    {   
+        ioctl->snap_id = -1;
+        ioctl->ret     = -ENOENT;
+        return;
+    }
+    /* TODO: lock device somehow */
+    old_version  = cd->version;
+    version = castle_version_new(1,            /* snapshot */
+                                 cd->version,
+                                 0);           /* take size from the parent */ 
+    if(VERSION_INVAL(version))
+    {
+        ioctl->snap_id = -1;
+        ioctl->ret     = -EINVAL;
+    }
+    else
+    {
+        /* Attach the new version */
+        castle_version_snap_get(version, NULL, NULL);
+        /* Change the version associated with the device */
+        cd->version    = version;
+        /* Release the old version */
+        castle_version_snap_put(old_version);
+        cd->version    = version;
+        ioctl->snap_id = version;
+        ioctl->ret     = 0;;
+    }
 }
  
 static void castle_control_fs_init(cctrl_cmd_init_t *ioctl)
