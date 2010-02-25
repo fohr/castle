@@ -242,7 +242,7 @@ c2_page_t* castle_ftree_node_create(int version, int is_leaf)
     node->version  = version;
     node->capacity = FTREE_NODE_SLOTS;
     node->used     = 0;
-    node->is_leaf  = node->is_leaf;
+    node->is_leaf  = is_leaf;
 
     dirty_c2p(c2p);
 

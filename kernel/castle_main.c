@@ -138,8 +138,6 @@ void castle_fs_superblocks_put(struct castle_fs_superblock *sb, int dirty)
         /* If superblock has been dirtied, copy it, and dirty the buffer */
         if(dirty)
         {
-            printk("Dirty superblock, fwd1=(0x%x, 0x%x)\n",
-                    sb->fwd_tree1.disk, sb->fwd_tree1.block);
             curr_sb = pfn_to_kaddr(page_to_pfn(cs->fs_sblk->page));
             /* Note, we can be possibly copying from ourselves, memmove is safer */
             memmove(curr_sb, sb, sizeof(struct castle_fs_superblock)); 
