@@ -28,7 +28,7 @@ static c2_page_t* castle_versions_node_init(void);
 static struct kmem_cache *castle_versions_cache = NULL;
 
 #define CASTLE_VERSIONS_HASH_SIZE       (1000)
-static      DECLARE_MUTEX(castle_versions_hash_lock);
+static    DEFINE_SPINLOCK(castle_versions_hash_lock);
 static struct list_head  *castle_versions_hash  = NULL;
 static          LIST_HEAD(castle_versions_init_list);
 
@@ -43,6 +43,8 @@ static int                castle_versions_last_node_unused;
 #define CV_ATTACHED_MASK          (1 << CV_ATTACHED_BIT)
 #define CV_SNAP_BIT               (2)
 #define CV_SNAP_MASK              (1 << CV_ATTACHED_BIT)
+#define CV_FTREE_LOCKED_BIT       (3)
+#define CV_FTREE_LOCKED_MASK      (1 << CV_FTREE_LOCKED_BIT)
 struct castle_version {
     /* Various tree links */
     version_t                  version;
@@ -83,9 +85,9 @@ static void castle_versions_hash_add(struct castle_version *v)
 {
     int idx = castle_versions_hash_idx(v->version);
     
-    down(&castle_versions_hash_lock);
+    spin_lock_irq(&castle_versions_hash_lock);
     list_add(&v->hash_list, &castle_versions_hash[idx]);
-    up(&castle_versions_hash_lock);
+    spin_unlock_irq(&castle_versions_hash_lock);
 }
 
 static struct castle_version* __castle_versions_hash_get(version_t version)
@@ -109,25 +111,27 @@ static void castle_versions_hash_destroy(void)
     struct castle_version *v;
     int i;
 
-    down(&castle_versions_hash_lock);
+    spin_lock_irq(&castle_versions_hash_lock);
     for(i=0; i<CASTLE_VERSIONS_HASH_SIZE; i++)
     {
         list_for_each_safe(l, t, &castle_versions_hash[i])
         {
             list_del(l);
             v = list_entry(l, struct castle_version, hash_list);
+            printk("Destroying version: %d. ftree_cdb=(0x%x, 0x%x)\n",
+                v->version, v->ftree_root.disk, v->ftree_root.block);
             kmem_cache_free(castle_versions_cache, v);
         }
     }
-    up(&castle_versions_hash_lock);
+    spin_unlock_irq(&castle_versions_hash_lock);
 }
 
 static void castle_versions_init_add(struct castle_version *v)
 {
-    down(&castle_versions_hash_lock);
+    spin_lock_irq(&castle_versions_hash_lock);
     v->flags &= (~CV_INITED_MASK);
     list_add(&v->init_list, &castle_versions_init_list);
-    up(&castle_versions_hash_lock);
+    spin_unlock_irq(&castle_versions_hash_lock);
 }
 
 
@@ -151,6 +155,8 @@ static int castle_version_add(c_disk_blk_t cdb,
     v->o_order      = INVAL_VERSION;
     v->r_order      = INVAL_VERSION;
     v->ftree_root   = ftree_root;
+    printk("Ftree root for version: %d is: (0x%x, 0x%x)\n",
+            version, ftree_root.disk, ftree_root.block);
     v->size         = size;
     v->flags        = 0;
     INIT_LIST_HEAD(&v->hash_list);
@@ -208,13 +214,13 @@ static void castle_version_update(struct work_struct *work)
     BUG_ON(( vu->new) && (i != (node->used-1)));
 
     debug("Writing verison update to the cached page.\n");
-    down(&castle_versions_hash_lock);
+    spin_lock_irq(&castle_versions_hash_lock);
     v = __castle_versions_hash_get(vu->version);
     slot->version_nr = v->version;
     slot->parent     = (v->parent ? v->parent->version : 0);
     slot->size       = v->size;
     slot->cdb        = v->ftree_root;
-    up(&castle_versions_hash_lock);
+    spin_unlock_irq(&castle_versions_hash_lock);
 
     /* Finish-off and cleanup */
     dirty_c2p(vu->c2p);
@@ -223,7 +229,7 @@ static void castle_version_update(struct work_struct *work)
     kfree(vu);
 }
 
-static void castle_version_node_end_read(c2_page_t *c2p, int uptodate)
+static void castle_version_node_read_end(c2_page_t *c2p, int uptodate)
 {
     struct castle_version_update *vu = c2p->private;
     if(!uptodate)
@@ -256,15 +262,15 @@ static void castle_version_writeback(version_t version, int new)
     vu = kmalloc(sizeof(struct castle_version_update), GFP_KERNEL);
     if(!vu) goto error_out;
 
-    down(&castle_versions_hash_lock);
+    spin_lock_irq(&castle_versions_hash_lock);
     v = __castle_versions_hash_get(version);
     if(!v) 
     {
-        up(&castle_versions_hash_lock);
+        spin_unlock_irq(&castle_versions_hash_lock);
         goto error_out;
     }
     node_cdb = v->cdb;
-    up(&castle_versions_hash_lock);
+    spin_unlock_irq(&castle_versions_hash_lock);
 
     /* Lock the disk node, and defer the writeback */
     c2p = castle_cache_page_get(node_cdb);
@@ -274,7 +280,7 @@ static void castle_version_writeback(version_t version, int new)
     vu->c2p = c2p;
     if(!c2p_uptodate(c2p))
     {
-        c2p->end_io  = castle_version_node_end_read; 
+        c2p->end_io  = castle_version_node_read_end; 
         c2p->private = vu;
         submit_c2p(READ, c2p);
         return;
@@ -296,15 +302,21 @@ int castle_version_ftree_update(version_t version, c_disk_blk_t cdb)
     struct castle_version *v;
 
     printk("Updating root node for version: %d\n", version);
-    down(&castle_versions_hash_lock);
+    spin_lock_irq(&castle_versions_hash_lock);
     v = __castle_versions_hash_get(version);
     if(!v) 
     {
-        up(&castle_versions_hash_lock);
+        spin_unlock_irq(&castle_versions_hash_lock);
         return -EINVAL;
     }
+    /* Test if the lock is taken out (check not 100% since it 
+       could be taken by someone else than us) */
+    BUG_ON(!test_bit(CV_FTREE_LOCKED_BIT, &v->flags));
+    printk("====> Updating ftree root from: (0x%x, 0x%x) to (0x%x, 0x%x)\n",
+            v->ftree_root.disk, v->ftree_root.block,
+            cdb.disk, cdb.block);
     v->ftree_root = cdb;
-    up(&castle_versions_hash_lock);
+    spin_unlock_irq(&castle_versions_hash_lock);
   
     /* TODO: Error handling? */
     castle_version_writeback(version, 0); 
@@ -323,18 +335,18 @@ static version_t castle_version_new_create(int snap_or_clone,
     int ret;
 
     /* Read ftree root from the parent (also, make sure parent exists) */
-    down(&castle_versions_hash_lock);
+    spin_lock_irq(&castle_versions_hash_lock);
     v = __castle_versions_hash_get(parent);
     if(!v)
     {
         printk("Asked to create a child of non-existant parent: %d\n",
             parent);
-        up(&castle_versions_hash_lock);
+        spin_unlock_irq(&castle_versions_hash_lock);
         return INVAL_VERSION;
     }
     ftree_root  = v->ftree_root;
     parent_size = v->size;
-    up(&castle_versions_hash_lock);
+    spin_unlock_irq(&castle_versions_hash_lock);
 
     /* Allocate a new version number. */
     down(&castle_versions_last_lock);
@@ -347,7 +359,7 @@ static version_t castle_version_new_create(int snap_or_clone,
     if(ret) return INVAL_VERSION;
 
     /* Set clone/snap bit in flags */ 
-    down(&castle_versions_hash_lock);
+    spin_lock_irq(&castle_versions_hash_lock);
     v = __castle_versions_hash_get(version);
     BUG_ON(!v);
     if(parent_size != 0) v->size = parent_size;
@@ -356,14 +368,14 @@ static version_t castle_version_new_create(int snap_or_clone,
         v->flags |= CV_SNAP_MASK;
     else
         v->flags &= ~CV_SNAP_MASK;
-    up(&castle_versions_hash_lock);
+    spin_unlock_irq(&castle_versions_hash_lock);
 
     /* Run processing (which will thread the new version into the tree,
        and recalculate the order numbers) */
     castle_versions_process(); 
     
     /* Check if the version got initialised */
-    down(&castle_versions_hash_lock);
+    spin_lock_irq(&castle_versions_hash_lock);
     v = __castle_versions_hash_get(version);
     BUG_ON(!v);
     if(!(v->flags & CV_INITED_MASK))
@@ -371,7 +383,7 @@ static version_t castle_version_new_create(int snap_or_clone,
         /* TODO: remove from hash? */
         version = INVAL_VERSION;
     }
-    up(&castle_versions_hash_lock);
+    spin_unlock_irq(&castle_versions_hash_lock);
 
     return version;
 }
@@ -428,11 +440,11 @@ version_t castle_version_new(int snap_or_clone,
     debug("New version %d will be written in (d,b)=(0x%x, 0x%x)\n",
             version, cdb.disk, cdb.block);
     /* Update the version */
-    down(&castle_versions_hash_lock);
+    spin_lock_irq(&castle_versions_hash_lock);
     v = __castle_versions_hash_get(version);
     BUG_ON(!v);
     v->cdb = cdb;
-    up(&castle_versions_hash_lock);
+    spin_unlock_irq(&castle_versions_hash_lock);
 
     /* TODO: Error handling? */
     castle_version_writeback(version, 1); 
@@ -440,22 +452,67 @@ version_t castle_version_new(int snap_or_clone,
     return version; 
 }
 
-/* TODO: Make this more granular */
+static int castle_version_ftree_yield(void *word)
+{
+	struct castle_version *v
+		= container_of(word, struct castle_version, flags);
+
+	smp_mb();
+    debug("In ftree_yield.\n");
+	io_schedule();
+
+	return 0;
+}
+
 c_disk_blk_t castle_version_ftree_lock(version_t version)
 {
     struct castle_version *v;
 
-    down(&castle_versions_hash_lock);
-    v = __castle_versions_hash_get(version);
-    if(v) return v->ftree_root;
-    /* Release the lock on failure */
-    up(&castle_versions_hash_lock);
+    /* This function may sleep on the ftree lock */
+	might_sleep();
 
-    return INVAL_DISK_BLK;
+    spin_lock_irq(&castle_versions_hash_lock);
+    v = __castle_versions_hash_get(version);
+    spin_unlock_irq(&castle_versions_hash_lock);
+
+    if(!v) return INVAL_DISK_BLK;
+
+	if (test_and_set_bit(CV_FTREE_LOCKED_BIT, &v->flags))
+    {
+        /* Slow path */
+	    wait_on_bit_lock(&v->flags, 
+                          CV_FTREE_LOCKED_BIT, 
+                          castle_version_ftree_yield,
+                          TASK_UNINTERRUPTIBLE);
+    }
+    /* We've locked the node, we can now read the root cdb */
+    BUG_ON(!test_bit(CV_FTREE_LOCKED_BIT, &v->flags));
+
+    return v->ftree_root;
 }
+
 void castle_version_ftree_unlock(version_t version)
 {
-    up(&castle_versions_hash_lock);
+    unsigned long flags;
+    struct castle_version *v;
+
+    spin_lock_irqsave(&castle_versions_hash_lock, flags);
+    v = __castle_versions_hash_get(version);
+    spin_unlock_irqrestore(&castle_versions_hash_lock, flags);
+    BUG_ON(!v);
+
+    /* Clear the bit, wake up anyone waiting */
+	smp_mb__before_clear_bit();
+    /* TODO: Check what happens to the locks if a new snapshot is being created */
+    if(!test_bit(CV_FTREE_LOCKED_BIT, &v->flags))
+    {
+        printk("About to BUG on version: %d, for flags: %lx\n",
+                version, v->flags);
+    }
+    BUG_ON(!test_bit(CV_FTREE_LOCKED_BIT, &v->flags));
+	clear_bit(CV_FTREE_LOCKED_BIT, &v->flags);
+	smp_mb__after_clear_bit();
+	wake_up_bit(&v->flags, CV_FTREE_LOCKED_BIT);
 }
 
 int castle_version_snap_get(version_t version, 
@@ -468,7 +525,7 @@ int castle_version_snap_get(version_t version,
     if(version == 0)
         return ret;
 
-    down(&castle_versions_hash_lock);
+    spin_lock_irq(&castle_versions_hash_lock);
     v = __castle_versions_hash_get(version);
     if(v) 
     {
@@ -478,7 +535,7 @@ int castle_version_snap_get(version_t version,
         if(test_and_set_bit(CV_ATTACHED_BIT, &v->flags))
             ret = -EAGAIN;
     }
-    up(&castle_versions_hash_lock);
+    spin_unlock_irq(&castle_versions_hash_lock);
 
     return ret;
 } 
@@ -487,11 +544,11 @@ void castle_version_snap_put(version_t version)
 {
     struct castle_version *v;
 
-    down(&castle_versions_hash_lock);
+    spin_lock_irq(&castle_versions_hash_lock);
     v = __castle_versions_hash_get(version);
     BUG_ON(!v);
     BUG_ON(!test_and_clear_bit(CV_ATTACHED_BIT, &v->flags));
-    up(&castle_versions_hash_lock);
+    spin_unlock_irq(&castle_versions_hash_lock);
 }
 
 static void castle_versions_process(void)
@@ -500,7 +557,7 @@ static void castle_versions_process(void)
     version_t id;
     int children_first;
 
-    down(&castle_versions_hash_lock);
+    spin_lock_irq(&castle_versions_hash_lock);
     /* Start processing elements from the init list, one at the time */
     while(!list_empty(&castle_versions_init_list))
     {
@@ -612,7 +669,7 @@ process_version:
         if(n) debug("Next version is: %d\n", n->version);
         v = n;
     }
-    up(&castle_versions_hash_lock);
+    spin_unlock_irq(&castle_versions_hash_lock);
     /* Done. */
 }
 
@@ -621,7 +678,7 @@ int castle_version_is_ancestor(version_t candidate, version_t version)
     struct castle_version *c, *v;
     int ret;
 
-    down(&castle_versions_hash_lock);
+    spin_lock_irq(&castle_versions_hash_lock);
     v = __castle_versions_hash_get(version);
     c = __castle_versions_hash_get(candidate);
     /* Sanity checks */
@@ -635,7 +692,7 @@ int castle_version_is_ancestor(version_t candidate, version_t version)
     /* c is an ancestor of v if v->o_order is in range c->o_order to c->r_order
        inclusive */
     ret = (v->o_order >= c->o_order) && (v->o_order <= c->r_order);
-    up(&castle_versions_hash_lock);
+    spin_unlock_irq(&castle_versions_hash_lock);
 
     return ret;
 }

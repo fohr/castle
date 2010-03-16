@@ -1,10 +1,12 @@
 #include <linux/module.h>
 #include <linux/kthread.h>
+#include <linux/workqueue.h>
 #include <linux/fs.h>
 #include <linux/bio.h>
 
 #include "castle.h"
 #include "castle_debug.h"
+#include "castle_cache.h"
 
 typedef struct castle_debug_watch {
     uint32_t block;
@@ -128,26 +130,37 @@ static void castle_debug_watches_update(struct bio *bio, uint32_t version)
     }
 }
 
-void castle_debug_bio_add(c_bio_t *c_bio, uint32_t version)
+void castle_debug_bio_add(c_bio_t *c_bio, uint32_t version, int nr_bvecs)
 {
     unsigned long flags;
 
-    c_bio->nr_bvecs = atomic_read(&c_bio->remaining);
+    c_bio->nr_bvecs = nr_bvecs; 
+    /* Take the reference to the c_bio by adding 1 to the count */
+    atomic_inc(&c_bio->count);
     spin_lock_irqsave(&bio_list_spinlock, flags);
     c_bio->id = bio_id++;
     c_bio->stuck = 0;
+    /* One extra reference (on top of the bvec refs)
+       taken to c_bio when bio_add is called */
     list_add(&c_bio->list, &bio_list);
     castle_debug_watches_update(c_bio->bio, version);
     spin_unlock_irqrestore(&bio_list_spinlock, flags);
 }
 
-void castle_debug_bio_del(c_bio_t *c_bio)
+void castle_debug_bio_put(c_bio_t *c_bio)
 {
+    extern void castle_bio_put(c_bio_t *cbio);
     unsigned long flags;
          
-    spin_lock_irqsave(&bio_list_spinlock, flags);
-    list_del(&c_bio->list);
-    spin_unlock_irqrestore(&bio_list_spinlock, flags);
+    if(atomic_read(&c_bio->count) == 1)
+    {
+        spin_lock_irqsave(&bio_list_spinlock, flags);
+        list_del(&c_bio->list);
+        spin_unlock_irqrestore(&bio_list_spinlock, flags);
+
+        /* Drop the reference */
+        castle_bio_put(c_bio);
+    }
 }
 
 static int castle_debug_run(void *unused)
@@ -156,12 +169,16 @@ static int castle_debug_run(void *unused)
     struct list_head *l;
     int i, j;
     unsigned long flags;
+    int cdb_idx;
+#define MAX_CDB 10
+    c_disk_blk_t cdbs[MAX_CDB];    
+    int flush_wq, sleep_time = 1000;
 
     printk("Castle debugging thread starting.\n");
     do {
-        msleep_interruptible(1000);
         i=0;
         spin_lock_irqsave(&bio_list_spinlock, flags);
+        cdb_idx = 0;
         list_for_each(l, &bio_list)
         {
             c_bio = list_entry(l, c_bio_t, list); 
@@ -170,23 +187,52 @@ static int castle_debug_run(void *unused)
                 c_bio->stuck = 1;
                 continue;
             }
-            printk("Found an oustanding Castle BIO, id=%d\n", c_bio->id);
+                c_bio->stuck++;
+
+            flush_wq = (c_bio->stuck > 10);
+            printk("Found an outstanding Castle BIO, id=%d\n", c_bio->id);
             for(j=0; j<c_bio->nr_bvecs; j++)
             {
                 c_bvec_t *c_bvec = &c_bio->c_bvecs[j];
+                c_disk_blk_t deb_cdb = c_bvec->deb_cdb;
+
                 printk(" c_bvecs[%d], "
                        "(b,v)=(0x%lx, 0x%x), "
                        "btree_depth=%d, "
-                       "state=0x%lx\n",
+                       "state=0x%lx, "
+                       "deb_cdb=(0x%x, 0x%x)\n",
                     j,
                     c_bvec->block, c_bvec->version,
                     c_bvec->btree_depth,
-                    c_bvec->state);
+                    c_bvec->state,
+                    deb_cdb.disk,
+                    deb_cdb.block);
+                if(!DISK_BLK_INVAL(deb_cdb))
+                    cdbs[cdb_idx++] = deb_cdb;
             }
-            i++;
+            if(i++ > 10)
+            {
+                printk("More than 10 outstanding request. Not printing.\n");
+                break;
+            }
         }
         spin_unlock_irqrestore(&bio_list_spinlock, flags);
-        if(i > 0) printk("Number of outstanding requests: %d\n", i);
+        if(i>0) sleep_time += 1000;
+        for(i=0; i<cdb_idx; i++)
+        {
+            c2_page_t *c2p;
+            c2p = castle_cache_page_get(cdbs[i]);
+            printk("(0x%x, 0x%x) last locked from: %s:%d. By BIO id=%d, depth=%d, bvec_id=%d\n", cdbs[i].disk, cdbs[i].block, c2p->file, c2p->line, c2p->id, c2p->depth, c2p->bvec_id);
+            printk(" bio flags = %lx\n", c2p->bio->bi_flags);
+        }
+
+        if(flush_wq) 
+        {
+            printk("=============> FLUSHING WORQUEUE\n");
+            flush_workqueue(castle_wq);
+            printk("=============> FLUSHED THE WORKQUEUE\n");
+        }
+        msleep_interruptible(sleep_time);
     } while(!kthread_should_stop());
 
     return 0;

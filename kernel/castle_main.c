@@ -1,9 +1,12 @@
+/* TODO: when castle disk mounted, and then castle-fs-test run, later bd_claims on
+         disk devices fail (multiple castle_fs_cli 'claim' cause problems?) */
 #include <linux/module.h>
 #include <linux/bio.h>
 #include <linux/kobject.h>
 #include <linux/device-mapper.h>
 #include <linux/blkdev.h>
 #include <linux/random.h>
+#include <linux/crc32.h>
 #include <asm/semaphore.h>
 
 #include "castle.h"
@@ -20,9 +23,17 @@ struct castle_volumes        castle_volumes;
 struct castle_slaves         castle_slaves;
 struct castle_devices        castle_devices;
 
+struct workqueue_struct  *test_wq;
 struct workqueue_struct     *castle_wq;
+struct workqueue_struct     *castle_wq1;
+struct workqueue_struct     *castle_wq2;
+struct workqueue_struct     *castle_wq3;
+struct workqueue_struct     *castle_wq4;
+struct workqueue_struct     *castle_wq5;
 
 int                          castle_fs_inited;
+
+static sector_t save_sec = 0;
 
 //#define DEBUG
 #ifndef DEBUG
@@ -218,6 +229,8 @@ int castle_fs_init(void)
 
     /* This will initialise the fs superblock of all the new devices */
     memcpy(cs_fs_sb, &fs_sb, sizeof(struct castle_fs_superblock));
+    printk(" ===============> RESTORING save_sec=0x%lx\n", fs_sb.deb_sec);
+    save_sec = fs_sb.deb_sec;
     castle_fs_superblocks_put(cs_fs_sb, 1);
     /* Read versions in */
     ret = castle_versions_read();
@@ -564,20 +577,29 @@ static struct block_device_operations castle_bd_ops = {
 	.revalidate_disk = NULL,
 };
 
-static void castle_bio_put(c_bio_t *c_bio)
+void castle_bio_get(c_bio_t *c_bio)
 {
-    if(atomic_dec_and_test(&c_bio->remaining))
-    {
-        struct bio *bio = c_bio->bio;
-        int err = c_bio->err;
-        
-        castle_debug_bio_del(c_bio);
-        kfree(c_bio->c_bvecs);
-        kfree(c_bio);
+    /* This should never called in race with the last _put */
+    BUG_ON(atomic_read(&c_bio->count) == 0);
+    atomic_inc(&c_bio->count);
+}
 
-        debug("Ending bio with ret=%d\n", err);
-        bio_endio(bio, err);
-    }
+/* Do not declare this as static because castle_debug calls this directly. 
+   But this is the only external reference */
+void castle_bio_put(c_bio_t *c_bio)
+{
+    struct bio *bio = c_bio->bio;
+    int finished, err = c_bio->err;
+
+    finished = atomic_dec_and_test(&c_bio->count);
+    castle_debug_bio_put(c_bio);
+    if(!finished)
+        return;
+
+    kfree(c_bio->c_bvecs);
+    kfree(c_bio);
+
+    bio_endio(bio, err);
 }
 
 void castle_bio_data_io_end(c_bvec_t *c_bvec, int err)
@@ -591,45 +613,212 @@ void castle_bio_data_io_end(c_bvec_t *c_bvec, int err)
     }
     castle_bio_put(c_bvec->c_bio);
 }
+    
 
 static void castle_bio_data_copy(c_bvec_t *c_bvec, c2_page_t *c2p)
 {
-    struct bio_vec *bvec = c_bvec_bio_iovec(c_bvec);
     int write = (c_bvec_data_dir(c_bvec) == WRITE);
-    struct page *src_pg, *dst_pg;
+    struct bio *bio = c_bvec->c_bio->bio;
+    sector_t sector = bio->bi_sector;
+    struct bio_vec *bvec;
+    char *bvec_buf, *buf;
+    int i;
+    int sector_debug = 0;
 
-    src_pg = ( write ? bvec->bv_page : c2p->page);
-    dst_pg = (!write ? bvec->bv_page : c2p->page);
+    if(c_bvec->sector_debug)
+    {
+        printk("Copying data for block: 0x%lx which should contain save_sec.\n",
+                c_bvec->block);
+        sector_debug = 1;
+    }
+    /* Find bvec(s) to IO to/from */
+    bio_for_each_segment(bvec, bio, i)
+    {
+        sector_t bv_first_sec   = sector;
+        sector_t bv_last_sec    = sector + (bvec->bv_len >> 9);
+        sector_t cbv_first_sec  =  c_bvec->block      << (C_BLK_SHIFT - 9);
+        sector_t cbv_last_sec   = (c_bvec->block + 1) << (C_BLK_SHIFT - 9);
+        sector_t first_sec, last_sec;
 
-    /* TODO use better macros than page_to_pfn etc */
-    memcpy(pfn_to_kaddr(page_to_pfn(dst_pg)) + bvec->bv_offset,
-           pfn_to_kaddr(page_to_pfn(src_pg)) + bvec->bv_offset,
-           bvec->bv_len);
+        if(sector_debug)
+        {
+            printk("Inspecting  bv_first_sec=0x%lx,  bv_last_sec=0x%lx\n",
+                    bv_first_sec, bv_last_sec);
+            printk("           cbv_first_sec=0x%lx, cbv_last_sec=0x%lx\n",
+                    cbv_first_sec, cbv_last_sec);
+        }
+        /* Exit if we've already gone too far */
+        if(cbv_last_sec < sector)
+            break;
+        if(sector_debug)
+            printk("a\n");
 
-    if(write) dirty_c2p(c2p);
+        /* Ignore bvecs which touch different sectors than those in c_bvec */
+        if((cbv_first_sec >= bv_last_sec) ||
+           (cbv_last_sec  <= bv_first_sec))
+        {
+            sector += (bvec->bv_len >> 9);
+            continue;
+        }
+        if(sector_debug)
+            printk("b\n");
+
+        /* Work out which sectors to copy */
+        first_sec = (bv_first_sec < cbv_first_sec ? cbv_first_sec : bv_first_sec);
+        last_sec  = (bv_last_sec  < cbv_last_sec  ? bv_last_sec   : cbv_last_sec);
+        if(sector_debug)
+        {
+            printk("Inspecting  first_sec=0x%lx,  last_sec=0x%lx\n",
+                    first_sec, last_sec);
+        }
+        
+        /* Some sanity checks */
+        BUG_ON(last_sec <= first_sec);
+        BUG_ON(last_sec > bv_last_sec);
+        BUG_ON(last_sec > cbv_last_sec);
+        BUG_ON(first_sec < bv_first_sec);
+        BUG_ON(first_sec < cbv_first_sec);
+        
+        bvec_buf  = pfn_to_kaddr(page_to_pfn(bvec->bv_page));
+        bvec_buf += bvec->bv_offset + ((first_sec - sector) << 9);
+        /* If invalid block, we are handling non-allocated block read */
+        if(DISK_BLK_INVAL(c_bvec->cdb))
+        {
+            /* c2p should be NULL */
+            BUG_ON(c2p);
+            memset(bvec_buf, 0, (last_sec - first_sec) << 9);
+        } else
+        {
+            /* TODO use better macros than page_to_pfn etc */
+            buf  = pfn_to_kaddr(page_to_pfn(c2p->page)); 
+            buf += (first_sec - cbv_first_sec) << 9;
+
+            if(sector_debug)
+                printk("buf=%p, bvec_buf=%p\n", buf, bvec_buf);
+
+            if(write)
+            {
+                char *deb_buf = pfn_to_kaddr(page_to_pfn(bvec->bv_page));
+                int a, b, deb_sec, printing=0;
+
+                for(a=0; a<8; a++)
+                {
+                    deb_sec = 1;
+                    for(b=0; b<512; b++)
+                    {
+                        char *d = deb_buf + ((a<<9) + b);
+                        if(((b % 4 == 0) && (*d != ' ')) ||
+                           ((b % 4 == 1) && (*d != ' ')) ||
+                           ((b % 4 == 2) && (*d != ' ')) ||
+                           ((b % 4 == 3) && (*d != '2' && *d != '3')))
+                        deb_sec = 0;
+                    }
+                    if(deb_sec)
+                    {
+                        if(!printing)
+                        {
+                            printing = 1;
+                            printk("==============\n");
+                        }
+                        printk("Sector: %d in bvec (off=0x%x, len=0x%x) matches '  %c'\n", 
+                            a, bvec->bv_offset, bvec->bv_len, *(deb_buf + ((a<<9) + 3)));
+                        printk("Will be written to cdb=(0x%x, 0x%x) at %p, bio sector=0x%lx, vcnt=%d.\n",
+                            c2p->cdb.disk, c2p->cdb.block, buf, bio->bi_sector, bio->bi_vcnt);
+                        if( (save_sec == 0) && (*(deb_buf + ((a<<9) + 3)) == '3'))
+                        {
+                            save_sec = sector + a;
+                            printk("!!!!!!!!!!!!!!!! SAVING sector=0x%lx for further debugging.\n",
+                                    save_sec);
+                        }
+                    }
+                }
+                if(printing)
+                {
+                    printk("<==============\n");
+                }
+            } else
+            {
+                char *deb_buf = pfn_to_kaddr(page_to_pfn(c2p->page));
+                int a, b, deb_sec, printing=0;
+
+                for(a=0; a<8; a++)
+                {
+                    deb_sec = 1;
+                    for(b=0; b<512; b++)
+                    {
+                        char *d = deb_buf + ((a<<9) + b);
+                        if(((b % 4 == 0) && (*d != ' ')) ||
+                           ((b % 4 == 1) && (*d != ' ')) ||
+                           ((b % 4 == 2) && (*d != ' ')) ||
+                           ((b % 4 == 3) && (*d != '3')))
+                        deb_sec = 0;
+                    }
+                    if(deb_sec)
+                    {
+                        if(!printing)
+                        {
+                            printing = 1;
+                            printk("=== READ ====\n");
+                        }
+                        printk("Sector: %d in castle bvec. Bvec (off=0x%x, len=0x%x) matches '  %c'\n", 
+                            a, bvec->bv_offset, bvec->bv_len, *(deb_buf + ((a<<9) + 3)));
+                        printk("Will be read from cdb=(0x%x, 0x%x) at %p, bio sector=0x%lx, vcnt=%d.\n",
+                            c2p->cdb.disk, c2p->cdb.block, buf, bio->bi_sector, bio->bi_vcnt);
+                    }
+                }
+                if(printing)
+                {
+                    printk("<==== READ ===\n");
+                }
+             }
+
+            memcpy( write ? buf : bvec_buf,
+                    write ? bvec_buf : buf,
+                   (last_sec - first_sec) << 9);
+        }
+
+        sector += (bvec->bv_len >> 9);
+    }
+
+    /* Dirty buffers on writes */
+    if(write) 
+    {
+        BUG_ON(!c2p);
+        dirty_c2p(c2p);
+    }
+
+    /* Unlock buffers */
+    if(c2p)
+    {
+        unlock_c2p(c2p);
+        put_c2p(c2p);
+    }
+        
+    /* End the IO (with no error) */ 
+    castle_bio_data_io_end(c_bvec, 0); 
 }
 
 static void castle_bio_c2p_update(c2_page_t *c2p, int uptodate)
 {
     /* TODO: comment when it gets called */
     c_bvec_t *c_bvec = c2p->private;
-    int err = -EIO;
 
     if(uptodate)
     {
         castle_debug_bvec_update(c_bvec, C_BVEC_DATA_C2P_UPTODATE);
         set_c2p_uptodate(c2p);
         castle_bio_data_copy(c_bvec, c2p);
-        err = 0;
+    } else
+    {
+        /* Just drop the lock, if we failed to update */
+        unlock_c2p(c2p);
+        put_c2p(c2p);
+        castle_bio_data_io_end(c_bvec, -EIO);
     }
-    unlock_c2p(c2p);
-    put_c2p(c2p);
-    castle_bio_data_io_end(c_bvec, err);
 }
 
 void castle_bio_data_io(c_bvec_t *c_bvec)
 {
-    struct bio_vec *bvec = c_bvec_bio_iovec(c_bvec);
     c2_page_t *c2p;
     int write = (c_bvec_data_dir(c_bvec) == WRITE);
 
@@ -644,9 +833,7 @@ void castle_bio_data_io(c_bvec_t *c_bvec)
     {
         castle_debug_bvec_update(c_bvec, C_BVEC_DATA_IO_NO_BLK);
         BUG_ON(write);
-        /* TODO replace all the page_to_pfn with kmap/page_address or something better/equivalent */
-        memset(pfn_to_kaddr(page_to_pfn(bvec->bv_page)) + bvec->bv_offset, 0, bvec->bv_len);
-        castle_bio_put(c_bvec->c_bio);
+        castle_bio_data_copy(c_bvec, NULL);
         return;
     }
 
@@ -656,15 +843,11 @@ void castle_bio_data_io(c_bvec_t *c_bvec)
     /* We don't need to update the c2p if it's already uptodate
        or if we are doing entire page write, in which case we'll
        overwrite previous content anyway */
-    if(c2p_uptodate(c2p) || (write && (bvec->bv_len == PAGE_SIZE)))
+    if(c2p_uptodate(c2p) || (write && test_bit(CBV_ONE2ONE_BIT, &c_bvec->flags)))
     {
         set_c2p_uptodate(c2p);
         castle_debug_bvec_update(c_bvec, C_BVEC_DATA_C2P_UPTODATE);
-        /* TODO: move data copy and buffer unlock to io_end() */
         castle_bio_data_copy(c_bvec, c2p);
-        unlock_c2p(c2p);
-        put_c2p(c2p);
-        castle_bio_data_io_end(c_bvec, 0); 
     } else
     {
         castle_debug_bvec_update(c_bvec, C_BVEC_DATA_C2P_OUTOFDATE);
@@ -693,14 +876,43 @@ static int castle_bio_validate(struct bio *bio)
     return 0;
 }
 
+static void castle_device_c_bvec_make(c_bio_t *c_bio, 
+                                      int idx, 
+                                      sector_t block,
+                                      version_t version,
+                                      int one2one_bvec,
+                                      
+                                      int debug)
+{
+    /* Create an appropriate c_bvec */
+    c_bvec_t *c_bvec = c_bio->c_bvecs + idx;
+
+    /* Get a reference */
+    castle_bio_get(c_bio);
+
+    /* Init the c_bvec */
+    c_bvec->c_bio        = c_bio;
+    c_bvec->block        = block;
+    c_bvec->version      = version; 
+    c_bvec->sector_debug = debug;
+    if(debug)
+        printk("Block: 0x%lx may contain save_sector.\n", block);
+    if(one2one_bvec)
+        set_bit(CBV_ONE2ONE_BIT, &c_bvec->flags);
+    castle_debug_bvec_update(c_bvec, C_BVEC_INITIALISED);
+
+    /* Submit the c_bvec for processing */
+    castle_ftree_find(c_bvec); 
+}
+ 
 static int castle_device_make_request(struct request_queue *rq, struct bio *bio)
 { 
     c_bio_t *c_bio = NULL;
     c_bvec_t *c_bvecs = NULL;
     struct castle_device *dev = rq->queuedata;
     struct bio_vec *bvec;
-    sector_t sector;
-    int i;
+    sector_t sector, last_block;
+    int i, j;
 
     debug("Request on dev=0x%x\n", MKDEV(dev->gd->major, dev->gd->first_minor));
     /* Check if we can handle this bio */
@@ -708,29 +920,74 @@ static int castle_device_make_request(struct request_queue *rq, struct bio *bio)
         goto fail_bio;
 
     c_bio   = kmalloc(sizeof(c_bio_t), GFP_NOIO);
-    c_bvecs = kzalloc(sizeof(c_bvec_t) * bio->bi_vcnt, GFP_NOIO);
+    /* We'll generate at most bi_vcnt + 1 castle_bio_vecs (for full page, 
+       unaligned bvecs) */
+    c_bvecs = kzalloc(sizeof(c_bvec_t) * (bio->bi_vcnt + 1), GFP_NOIO);
     if(!c_bio || !c_bvecs) 
         goto fail_bio;
     
     c_bio->bio = bio;
     c_bio->c_bvecs = c_bvecs; 
-    atomic_set(&c_bio->remaining, bio->bi_vcnt);
+    /* Take reference to the c_bio before handling all the bvecs.
+       Do it directly (castle_bio_get(c_bio) doesn't work with ref_cnt=0). */
+    atomic_set(&c_bio->count, 1);
     c_bio->err = 0;
-    castle_debug_bio_add(c_bio, dev->version);
 
     sector = bio->bi_sector;
+    //printk("==> bio: bi_sector=0x%lx, bi_vcnt=%d [", bio->bi_sector, bio->bi_vcnt);
+    //bio_for_each_segment(bvec, bio, i)
+    //    printk("%d=(off=0x%x, len=0x%x) ", i, bvec->bv_offset, bvec->bv_len);
+    //printk("]\n");
+    last_block   = -1;
+    j = 0;
     bio_for_each_segment(bvec, bio, i)
     {
-        c_bvec_t *c_bvec = c_bvecs + i; 
+        sector_t block   = sector >> (C_BLK_SHIFT - 9);
+        sector_t bv_secs = (bvec->bv_len >> 9);
+        int aligned = !(sector % (1 << (C_BLK_SHIFT - 9)));
+        int one2one = aligned && (bvec->bv_len == C_BLK_SIZE);
 
-        c_bvec->c_bio   = c_bio;
-        c_bvec->block   = sector >> (C_BLK_SHIFT - 9);
-        c_bvec->version = dev->version; 
-        castle_debug_bvec_update(c_bvec, C_BVEC_INITIALISED);
-        castle_ftree_find(c_bvec); 
+        int debug = 0;
+ 
+        if((sector <= save_sec) && (sector + bv_secs >= save_sec) && (save_sec != 0))
+        {
+            printk("\n\n\n\n\n\n!!!!!!!!!!!!!!!!!!1 bio->bi_sector=0x%lx, bvec_idx=%d, bv_offset=0x%x, bv_len=0x%x is asking for save_sec of 0x%lx\n", bio->bi_sector, i, bvec->bv_offset, bvec->bv_len, save_sec);
+            debug = 1;
+        }
 
-        sector += (bvec->bv_len >> 9);
+        /* Check if block number is different to the previous one.
+           If so, init and submit a new c_bvec. */
+        if(block != last_block)
+            castle_device_c_bvec_make(c_bio, j++, block, 
+                                      dev->version,
+                                      one2one,
+                                      debug);
+        last_block = block;
+
+        /* Check this bvec shouldn't be split into two c_bvecs now. */
+        block = (sector + bv_secs - 1) >> (C_BLK_SHIFT - 9);
+        if(block != last_block)
+        {
+            /* We should have only advanced by one block */
+            BUG_ON(block != last_block + 1);
+            /* Make sure we never try to use too many c_bvecs 
+               (we've got bi_vcnt + 1) */
+            BUG_ON(j > bio->bi_vcnt);
+            /* Block cannot possibly correspond to one bvec exactly */
+            BUG_ON(one2one);
+            /* Submit the request */
+            castle_device_c_bvec_make(c_bio, j++, block, 
+                                      dev->version,
+                                      one2one,
+                                      debug);
+        }
+        last_block = block;
+
+        /* Advance the sector counter */
+        sector += bv_secs;
     }
+    castle_debug_bio_add(c_bio, dev->version, j);
+    castle_bio_put(c_bio);
 
     return 0;
 
@@ -809,11 +1066,8 @@ struct castle_device* castle_device_init(version_t version)
 
     list_add(&dev->list, &castle_devices.devices);
     dev->gd = gd;
-    if(size == 0)
-    {
-        printk("Got snapshot of size 0, changing that to 1000.\n");
-        size = 1000;
-    }
+    
+    printk("Creating dev with size: %d.\n", size);
     set_capacity(gd, (size << (C_BLK_SHIFT - 9)));
     add_disk(gd);
 
@@ -878,7 +1132,13 @@ static int castle_devices_init(void)
     }
     castle_devices.major = major;
 
+    test_wq = create_workqueue("test_wq");
     castle_wq = create_workqueue("castle_wq");
+    castle_wq1 = create_workqueue("castle_wq1");
+    castle_wq2 = create_workqueue("castle_wq2");
+    castle_wq3 = create_workqueue("castle_wq3");
+    castle_wq4 = create_workqueue("castle_wq4");
+    castle_wq5 = create_workqueue("castle_wq5");
     if(!castle_wq)
     {
         printk("Could not create worqueue.\n");
@@ -894,6 +1154,16 @@ static void castle_devices_free(void)
     struct list_head *lh, *th;
     struct castle_device *dev;
 
+    struct castle_fs_superblock *fs_sb;
+
+    fs_sb = castle_fs_superblocks_get();
+    printk("===============> Saving sector 0x%lx to superblock.\n", 
+            save_sec);
+    fs_sb->deb_sec = save_sec;
+    castle_fs_superblocks_put(fs_sb, 1);
+
+
+
     list_for_each_safe(lh, th, &castle_devices.devices)
     {
         dev = list_entry(lh, struct castle_device, list); 
@@ -903,7 +1173,13 @@ static void castle_devices_free(void)
     if (castle_devices.major)
         unregister_blkdev(castle_devices.major, "castle-fs");
 
+    destroy_workqueue(test_wq);
     destroy_workqueue(castle_wq);
+    destroy_workqueue(castle_wq1);
+    destroy_workqueue(castle_wq2);
+    destroy_workqueue(castle_wq3);
+    destroy_workqueue(castle_wq4);
+    destroy_workqueue(castle_wq5);
 }
 
 static int __init castle_init(void)

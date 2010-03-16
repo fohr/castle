@@ -61,6 +61,10 @@ static int inline trylock_c2p(c2_page_t *c2p)
 
 void fastcall unlock_c2p(c2_page_t *c2p)
 {
+    c2p->file = "none";
+    c2p->line = 0;;
+    c2p->depth=0;
+    c2p->id=0;
 	smp_mb__before_clear_bit();
 	clear_c2p_locked(c2p);
 	smp_mb__after_clear_bit();
@@ -108,7 +112,6 @@ int submit_c2p(int rw, c2_page_t *c2p)
 {
     struct castle_slave *cs;
 	struct bio *bio;
-	int ret = 0;
 
 	BUG_ON(!c2p_locked(c2p));
 	BUG_ON(!c2p->end_io);
@@ -132,9 +135,11 @@ int submit_c2p(int rw, c2_page_t *c2p)
 	bio->bi_end_io = c2p_io_end;
 	bio->bi_private = c2p;
 
+    c2p->bio = bio;
+
 	submit_bio(rw, bio);
 	
-    return ret;
+    return 0;
 }
 
 static void castle_cache_sync_io_end(c2_page_t *c2p, int uptodate)
@@ -469,7 +474,7 @@ next_batch:
             atomic_inc(&in_flight);
             c2p_batch[i]->end_io = castle_cache_flush_endio; 
             c2p_batch[i]->private = &in_flight;
-            submit_c2p(WRITE, c2p_batch[i]);
+            BUG_ON(submit_c2p(WRITE, c2p_batch[i]));
         }
 
         /* We may have to flush more than one batch */

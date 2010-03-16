@@ -22,10 +22,19 @@
 #define C_BVEC_BTREE_NODE_WPROCESS  (0x00200000)
 #define C_BVEC_BTREE_NODE_IO_END    (0x00400000)
 
+#define C_BVEC_BTREE_NODE_TMP1       (0x10000000)
+#define C_BVEC_BTREE_NODE_TMP2       (0x20000000)
+#define C_BVEC_BTREE_NODE_TMP3       (0x40000000)
+#define C_BVEC_BTREE_NODE_TMP4       (0x80000000)
+#define C_BVEC_BTREE_NODE_TMP5       (0x01000000)
+#define C_BVEC_BTREE_NODE_TMP6       (0x02000000)
+#define C_BVEC_BTREE_NODE_TMP7       (0x04000000)
+#define C_BVEC_BTREE_NODE_TMP8       (0x08000000)
+
 void castle_debug_bvec_update(c_bvec_t *c_bvec, unsigned long state_flag);
 void castle_debug_bvec_btree_walk(c_bvec_t *c_bvec);
-void castle_debug_bio_add(c_bio_t *c_bio, uint32_t version);
-void castle_debug_bio_del(c_bio_t *c_bio);
+void castle_debug_bio_add(c_bio_t *c_bio, uint32_t version, int nr_cbvecs);
+void castle_debug_bio_put(c_bio_t *c_bio);
 void castle_debug_init(void);
 void castle_debug_fini(void);
 
@@ -33,8 +42,8 @@ void castle_debug_fini(void);
 /* NO-OP debugging statements */
 #define castle_debug_bvec_update(_a, _b)  ((void)0)
 #define castle_debug_bvec_btree_walk(_a)  ((void)0) 
-#define castle_debug_bio_add(_a, _b)      ((void)0)
-#define castle_debug_bio_del(_a)          ((void)0)
+#define castle_debug_bio_add(_a, _b, _c)  ((void)0)
+#define castle_debug_bio_put(_a)          ((void)0)
 #define castle_debug_init()               ((void)0)
 #define castle_debug_fini()               ((void)0)
 

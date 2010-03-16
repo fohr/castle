@@ -5,12 +5,16 @@
 TEST=/tmp/castle-disks
 #DISKS="disk1 disk2 disk3"
 DISKS="/dev/hdb /dev/hdc /dev/hdd"
+MOUNT_POINT=/tmp/mnt
+MOUNT_POINT2=/tmp/mnt2
 
 set -eu
 cd `dirname $0`
 
 function onexit() {
 	local exit_status=${1:-$?}
+    umount ${MOUNT_POINT}
+    umount ${MOUNT_POINT2}
     if [ $exit_status != 0 ]; then
         echo "Failed to initialise $exit_status!!!!"
         ./castle-fs-fini.sh
@@ -18,7 +22,7 @@ function onexit() {
     exit $exit_status
 }
 
-trap onexit EXIT
+#trap onexit EXIT
 
 function dev_to_majmin {
     local DEV=$1
@@ -27,8 +31,8 @@ function dev_to_majmin {
         local LOOP_NR=`echo $DEV | sed -e 's#/dev/loop\(.*\)#\1#g'`
         local MAJMIN=`cat /proc/partitions | grep "loop${LOOP_NR}$" | awk '{print ( $1":"$2) }'`
     elif [ "x`echo $DEV | grep castle`" != "x" ]; then
-        local CASTLE_NR=`echo $DEV | sed -e 's#/dev/castle/castle\(.*\)#\1#g'`
-        local MAJMIN=`cat /proc/partitions | grep "castle${CASTLE_NR}$" | awk '{print ( $1":"$2) }'`
+        local CASTLE_NR=`echo $DEV | sed -e 's#/dev/castle-fs/castle-\(.*\)#\1#g'`
+        local MAJMIN=`cat /proc/partitions | grep "castle-fs-${CASTLE_NR}$" | awk '{print ( $1":"$2) }'`
     elif [ "x`echo $DEV | grep hd`" != "x" ]; then
         local HD=`echo $DEV | sed -e 's#/dev/hd\(.\)#hd\1#g'`
         local MAJMIN=`cat /proc/partitions | grep "${HD}$" | awk '{print ( $1":"$2) }'`
@@ -50,7 +54,7 @@ function majmin_to_dev {
     if [ $MAJ == 7 ]; then
         DEV="/dev/loop$MIN"
     elif [ "x`grep "252 *castle" /proc/devices`" != "x" ]; then
-        DEV="/dev/castle/castle$MIN"
+        DEV="/dev/castle-fs/castle-$MIN"
     else
         echo "Script does not support devs with major: $MAJ"
         false
@@ -68,7 +72,6 @@ function check_contents {
 	local filename="$1"
 	local phrase="$2"
 	
-    ls -lah ${filename}
 	READ=`dd if=${filename} 2> /dev/null`
 	if [ "${READ}" == "${phrase}" ]; then
 		echo "Got '${READ}', correct."
@@ -81,19 +84,26 @@ function check_contents_file {
 	local file1="$1"
 	local file2="$2"
 	
-	local CHK1=`dd if=${file1} 2>/dev/null | md5sum -b -`
+    echo "==> Comparing ${file1} with ${file2}"
+    echo "    ${file1}"
+	dd if=${file1} 2>/dev/null | hexdump -C
+    echo "    ${file2}"
+	dd if=${file2} 2>/dev/null | hexdump -C 
+	
+    local CHK1=`dd if=${file1} 2>/dev/null | md5sum -b -`
 	local CHK2=`dd if=${file2} 2>/dev/null | md5sum -b -`
 
 	if [ "${CHK1}" == "${CHK2}" ]; then
-		echo "File ${file2} still stored correctly"
+		echo "Files ${file1} and ${file2} match"
 	else
-		echo "Massive fail in snapshot ${file2}"
+        echo "========================================"
+		echo "FILES ${file1} AND ${file2} DO NOT MATCH"
+        echo "========================================"
 	fi
 }
 
 function do_control_internal {
-    echo ""
-	echo "Command: $1 0x$2"
+	echo -n "   Command: $1 0x$2"
 	IOCTL_RET=`castle-fs-cli $1 0x$2 | grep "Ret val:"` 
 	IOCTL_RET=`echo $IOCTL_RET | sed -e "s/Ret val: 0x\([0-9a-f]*\)./\1/g"`
 	echo "    ret: $IOCTL_RET"
@@ -117,6 +127,7 @@ function do_control_init {
 
 function do_control_create {
     do_control_internal "create" `printf "%X" $1`
+    VOL_VER=$IOCTL_RET
 }
 
 function do_control_attach {
@@ -125,16 +136,19 @@ function do_control_attach {
 }
 
 function do_control_detach {
-    do_control_internal "detach" $1
+    dev_to_majmin $1
+    do_control_internal "detach" $DEVID_HEX
 }
 
 function do_control_snapshot {
     dev_to_majmin $1
     do_control_internal "snapshot" $DEVID_HEX 
+    SNAP_VER=$IOCTL_RET
 }
 
 function do_control_clone {
-    do_control_internal "clone" `printf "%X" $1`
+    do_control_internal "clone" $1
+    CLONE_VER=$IOCTL_RET
 }
 
 function mod_init {
@@ -167,13 +181,11 @@ function initfs {
 }
 
 ./castle-fs-fini.sh
+for DISK in ${DISKS}; do
+	# clear the superblocks
+	dd if=/dev/zero of=${DISK} bs=4K count=2 
+done
 initfs
 
-do_control_attach 0
-#do_control_attach 100
-#do_control_attach 3
-DEV=$IOCTL_RET
-
-#do_control_detach $DEV
-
-echo "Castle initialised successfully"
+do_control_create 50000
+do_control_attach ${VOL_VER}

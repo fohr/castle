@@ -41,6 +41,8 @@ struct castle_fs_superblock {
     c_disk_blk_t fwd_tree2;
     c_disk_blk_t rev_tree1;
     c_disk_blk_t rev_tree2;
+
+    sector_t deb_sec;
 };
 
 #define NODE_HEADER        0x180
@@ -68,6 +70,8 @@ struct castle_ftree_slot {
 
 #define FTREE_NODE_MAGIC  0x0000cdab
 #define FTREE_NODE_SLOTS  ((PAGE_SIZE - NODE_HEADER)/sizeof(struct castle_ftree_slot))
+/* For debugging */
+//#define FTREE_NODE_SLOTS  10 
 struct castle_ftree_node {
     uint32_t magic;
     uint32_t version;
@@ -106,24 +110,30 @@ struct castle_bio_vec;
 typedef struct castle_bio {
     struct bio            *bio;
     struct castle_bio_vec *c_bvecs; 
-    atomic_t               remaining;
+    atomic_t               count;
     int                    err;
 #ifdef CASTLE_DEBUG    
     int                    stuck;
     int                    id;
     int                    nr_bvecs;
     struct list_head       list;
+
+    int                     tmp;
 #endif
 } c_bio_t;
 
 
 struct castle_cache_page;
+#define CBV_ONE2ONE_BIT         (0) 
+#define CBV_ROOT_LOCKED_BIT     (1) 
 typedef struct castle_bio_vec {
     /* Where did this IO originate from */
     c_bio_t            *c_bio;
     /* What (block,version) do we want to read */
     sector_t            block;
     uint32_t            version;
+    /* Flags */
+    unsigned long       flags;
     /* Used to walk the B-Tree, and return the final cdb */
     union {
         /* Used when walking B-Tree. When writing, B-Tree node and
@@ -137,16 +147,23 @@ typedef struct castle_bio_vec {
         c_disk_blk_t cdb;
     };
     /* Used to thread this bvec onto a workqueue */
+    struct workqueue_struct  *last_wq;
     struct work_struct  work;
+
+    int            sector_debug;
 #ifdef CASTLE_DEBUG    
+    sector_t            key_block;
+    uint32_t            key_version;
     unsigned long       state;
     int                 btree_depth;
+
+    c_disk_blk_t        deb_cdb;
+    c_disk_blk_t        deb_cdb2;
 #endif
 } c_bvec_t;
 #define c_bvec_data_dir(_c_bvec)    bio_data_dir((_c_bvec)->c_bio->bio)
 #define c_bvec_bnode(_c_bvec)       pfn_to_kaddr(page_to_pfn((_c_bvec)->btree_node->page))
 #define c_bvec_bpnode(_c_bvec)      pfn_to_kaddr(page_to_pfn((_c_bvec)->btree_parent_node->page))
-#define c_bvec_bio_iovec(_c_bvec)   bio_iovec_idx((_c_bvec)->c_bio->bio, c_bvec - c_bvec->c_bio->c_bvecs)
 
 /* First class structures */
 struct castle {
@@ -198,7 +215,13 @@ extern struct castle_volumes     castle_volumes;
 extern struct castle_slaves      castle_slaves;
 extern struct castle_devices     castle_devices;
 
+extern struct workqueue_struct  *test_wq;
 extern struct workqueue_struct  *castle_wq;
+extern struct workqueue_struct  *castle_wq1;
+extern struct workqueue_struct  *castle_wq2;
+extern struct workqueue_struct  *castle_wq3;
+extern struct workqueue_struct  *castle_wq4;
+extern struct workqueue_struct  *castle_wq5;
 
 /* Various utilities */
 #define C_BLK_SHIFT                    (12) 

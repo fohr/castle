@@ -20,6 +20,13 @@ typedef struct castle_cache_page {
 	atomic_t count;
     void (*end_io)(struct castle_cache_page *c2p, int uptodate);
     void *private; /* Can only be used if c2p is locked */
+/* if defined debug! */    
+    char *file;
+    int   line;
+    int   id;
+    int   bvec_id;
+    int   depth;
+    struct bio *bio;
 } c2_page_t;
 
 #define CACHE_FNS(bit, name)					                    \
@@ -55,12 +62,38 @@ TAS_CACHE_FNS(lock, locked)
 void fastcall __lock_c2p(c2_page_t *c2p);
 void fastcall unlock_c2p(c2_page_t *c2p);
 void fastcall dirty_c2p(c2_page_t *c2p);
+
+#define lock_c2p(_c2p)                \
+{                                     \
+	might_sleep();                    \
+	if (test_set_c2p_locked(_c2p))    \
+		__lock_c2p(_c2p);             \
+    (_c2p)->file = __FILE__;          \
+    (_c2p)->line = __LINE__;          \
+}
+
+
+#define lock_c2p_id_depth(_c2p, _id, _depth, _bvec_id)                \
+{                                     \
+	might_sleep();                    \
+	if (test_set_c2p_locked(_c2p))    \
+		__lock_c2p(_c2p);             \
+    (_c2p)->file = __FILE__;          \
+    (_c2p)->line = __LINE__;          \
+    (_c2p)->id   =  (_id) ;          \
+    (_c2p)->bvec_id   =  (_bvec_id) ;          \
+    (_c2p)->depth = (_depth);          \
+}
+
+
+/*
 static inline void lock_c2p(c2_page_t *c2p)
 {
 	might_sleep();
 	if (test_set_c2p_locked(c2p))
 		__lock_c2p(c2p);
 }
+*/
 
 static inline void get_c2p(c2_page_t *c2p)
 {
