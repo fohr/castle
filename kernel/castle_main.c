@@ -645,7 +645,7 @@ static void castle_bio_data_copy(c_bvec_t *c_bvec, c2_page_t *c2p)
         first_sec = (bv_first_sec < cbv_first_sec ? cbv_first_sec : bv_first_sec);
         last_sec  = (bv_last_sec  < cbv_last_sec  ? bv_last_sec   : cbv_last_sec);
         
-#if CASTLE_DEBUG        
+#ifdef CASTLE_DEBUG        
         /* Some sanity checks */
         BUG_ON(last_sec <= first_sec);
         BUG_ON(last_sec > bv_last_sec);

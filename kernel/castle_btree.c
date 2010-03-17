@@ -859,30 +859,28 @@ static void __castle_ftree_find(c_bvec_t *c_bvec,
             c_bvec->block, c_bvec->version, node_cdb.disk, node_cdb.block);
     ret = -ENOMEM;
 
+    c_bvec->btree_depth++;
     c_bvec->key_block = key_block;
     castle_debug_bvec_btree_walk(c_bvec);
+
     c2p = castle_cache_page_get(node_cdb);
-    debug("Got the buffer, trying to lock it\n");
     castle_debug_bvec_update(c_bvec, C_BVEC_BTREE_GOT_NODE);
     lock_c2p(c2p);
-    debug("Locked for ftree node (0x%x, 0x%x)\n", 
-            node_cdb.disk, node_cdb.block);
     castle_debug_bvec_update(c_bvec, C_BVEC_BTREE_LOCKED_NODE);
+
     if(!c2p_uptodate(c2p))
     {
         /* If the buffer doesn't contain up to date data, schedule the IO */
-        debug("Buffer not up to date. Scheduling a read.\n");
         castle_debug_bvec_update(c_bvec, C_BVEC_BTREE_NODE_OUTOFDATE);
         c2p->private = c_bvec;
         c2p->end_io = castle_ftree_find_io_end;
         BUG_ON(submit_c2p(READ, c2p));
     } else
     {
-        debug("Buffer up to date. Processing!\n");
-        castle_debug_bvec_update(c_bvec, C_BVEC_BTREE_NODE_UPTODATE);
         /* If the buffer is up to date, copy data, and call the node processing
            function directly. c2p_remember should not return an error, because
            the Btree node had been normalized already. */
+        castle_debug_bvec_update(c_bvec, C_BVEC_BTREE_NODE_UPTODATE);
         BUG_ON(castle_ftree_c2p_remember(c_bvec, c2p) != 0);
         castle_ftree_process(&c_bvec->work);
     }
@@ -893,7 +891,8 @@ static void _castle_ftree_find(struct work_struct *work)
     c_bvec_t *c_bvec = container_of(work, c_bvec_t, work);
     c_disk_blk_t root_cdb;
 
-    c_bvec->btree_node = NULL;
+    c_bvec->btree_depth       = 0;
+    c_bvec->btree_node        = NULL;
     c_bvec->btree_parent_node = NULL;
     /* Lock the pointer to the root node.
        This is unlocked by the (poorly named) castle_ftree_c2p_forget() */

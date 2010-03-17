@@ -54,7 +54,6 @@ void castle_debug_bvec_update(c_bvec_t *c_bvec, unsigned long state_flag)
 
 void castle_debug_bvec_btree_walk(c_bvec_t *c_bvec)
 {
-    c_bvec->btree_depth++;
     c_bvec->state &= (~C_BVEC_BTREE_MASK);
 }
 

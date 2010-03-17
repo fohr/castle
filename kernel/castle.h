@@ -131,6 +131,7 @@ typedef struct castle_bio_vec {
     /* Used to walk the B-Tree, and return the final cdb */
     union {
         struct {
+            int                       btree_depth;
             /* Block key in the parent node under which we found
                btree_node */
             sector_t                  key_block;
@@ -147,7 +148,6 @@ typedef struct castle_bio_vec {
     struct work_struct  work;
 #ifdef CASTLE_DEBUG    
     unsigned long       state;
-    int                 btree_depth;
 #endif
 } c_bvec_t;
 #define c_bvec_data_dir(_c_bvec)    bio_data_dir((_c_bvec)->c_bio->bio)

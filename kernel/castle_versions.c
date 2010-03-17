@@ -297,7 +297,6 @@ int castle_version_ftree_update(version_t version, c_disk_blk_t cdb)
 {
     struct castle_version *v;
 
-    printk("Updating root node for version: %d\n", version);
     spin_lock_irq(&castle_versions_hash_lock);
     v = __castle_versions_hash_get(version);
     if(!v) 
@@ -597,7 +596,6 @@ process_version:
         }
         /* If we got here we know that the parent has been inited */
         debug(" Parent initialised, (v,p)=(%d,%d)\n", v->version, p->version);
-        printk(" (v,p)=(%d,%d) initialised\n", v->version, p->version);
         /* Insert v at the start of the sybling list. */
         v->parent       = p;
         v->next_sybling = p->first_child;
