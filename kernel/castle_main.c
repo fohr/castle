@@ -645,12 +645,14 @@ static void castle_bio_data_copy(c_bvec_t *c_bvec, c2_page_t *c2p)
         first_sec = (bv_first_sec < cbv_first_sec ? cbv_first_sec : bv_first_sec);
         last_sec  = (bv_last_sec  < cbv_last_sec  ? bv_last_sec   : cbv_last_sec);
         
+#if CASTLE_DEBUG        
         /* Some sanity checks */
         BUG_ON(last_sec <= first_sec);
         BUG_ON(last_sec > bv_last_sec);
         BUG_ON(last_sec > cbv_last_sec);
         BUG_ON(first_sec < bv_first_sec);
         BUG_ON(first_sec < cbv_first_sec);
+#endif        
         
         bvec_buf  = pfn_to_kaddr(page_to_pfn(bvec->bv_page));
         bvec_buf += bvec->bv_offset + ((first_sec - sector) << 9);
@@ -822,13 +824,9 @@ static int castle_device_make_request(struct request_queue *rq, struct bio *bio)
     atomic_set(&c_bio->count, 1);
     c_bio->err = 0;
 
-    sector = bio->bi_sector;
-    //printk("==> bio: bi_sector=0x%lx, bi_vcnt=%d [", bio->bi_sector, bio->bi_vcnt);
-    //bio_for_each_segment(bvec, bio, i)
-    //    printk("%d=(off=0x%x, len=0x%x) ", i, bvec->bv_offset, bvec->bv_len);
-    //printk("]\n");
-    last_block   = -1;
-    j = 0;
+    sector     = bio->bi_sector;
+    last_block = -1;
+    j          = 0;
     bio_for_each_segment(bvec, bio, i)
     {
         sector_t block   = sector >> (C_BLK_SHIFT - 9);
@@ -946,7 +944,6 @@ struct castle_device* castle_device_init(version_t version)
     list_add(&dev->list, &castle_devices.devices);
     dev->gd = gd;
     
-    printk("Creating dev with size: %d.\n", size);
     set_capacity(gd, (size << (C_BLK_SHIFT - 9)));
     add_disk(gd);
 
@@ -1032,13 +1029,6 @@ static void castle_devices_free(void)
 {                                                                                        
     struct list_head *lh, *th;
     struct castle_device *dev;
-
-    struct castle_fs_superblock *fs_sb;
-
-    fs_sb = castle_fs_superblocks_get();
-    castle_fs_superblocks_put(fs_sb, 1);
-
-
 
     list_for_each_safe(lh, th, &castle_devices.devices)
     {
