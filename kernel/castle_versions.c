@@ -118,8 +118,6 @@ static void castle_versions_hash_destroy(void)
         {
             list_del(l);
             v = list_entry(l, struct castle_version, hash_list);
-            printk("Destroying version: %d. ftree_cdb=(0x%x, 0x%x)\n",
-                v->version, v->ftree_root.disk, v->ftree_root.block);
             kmem_cache_free(castle_versions_cache, v);
         }
     }
@@ -155,8 +153,6 @@ static int castle_version_add(c_disk_blk_t cdb,
     v->o_order      = INVAL_VERSION;
     v->r_order      = INVAL_VERSION;
     v->ftree_root   = ftree_root;
-    printk("Ftree root for version: %d is: (0x%x, 0x%x)\n",
-            version, ftree_root.disk, ftree_root.block);
     v->size         = size;
     v->flags        = 0;
     INIT_LIST_HEAD(&v->hash_list);
@@ -312,9 +308,6 @@ int castle_version_ftree_update(version_t version, c_disk_blk_t cdb)
     /* Test if the lock is taken out (check not 100% since it 
        could be taken by someone else than us) */
     BUG_ON(!test_bit(CV_FTREE_LOCKED_BIT, &v->flags));
-    printk("====> Updating ftree root from: (0x%x, 0x%x) to (0x%x, 0x%x)\n",
-            v->ftree_root.disk, v->ftree_root.block,
-            cdb.disk, cdb.block);
     v->ftree_root = cdb;
     spin_unlock_irq(&castle_versions_hash_lock);
   
@@ -504,11 +497,6 @@ void castle_version_ftree_unlock(version_t version)
     /* Clear the bit, wake up anyone waiting */
 	smp_mb__before_clear_bit();
     /* TODO: Check what happens to the locks if a new snapshot is being created */
-    if(!test_bit(CV_FTREE_LOCKED_BIT, &v->flags))
-    {
-        printk("About to BUG on version: %d, for flags: %lx\n",
-                version, v->flags);
-    }
     BUG_ON(!test_bit(CV_FTREE_LOCKED_BIT, &v->flags));
 	clear_bit(CV_FTREE_LOCKED_BIT, &v->flags);
 	smp_mb__after_clear_bit();
