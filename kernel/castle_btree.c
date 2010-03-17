@@ -23,8 +23,7 @@
 static void castle_ftree_c2p_forget(c_bvec_t *c_bvec, int);
 static void __castle_ftree_find(c_bvec_t *c_bvec,
                                 c_disk_blk_t node_cdb,
-                                sector_t key_block,
-                                uint32_t key_version);
+                                sector_t key_block);
 
 static void castle_ftree_io_end(c_bvec_t *c_bvec,
                                 c_disk_blk_t cdb,
@@ -682,8 +681,7 @@ static void castle_ftree_write_process(c_bvec_t *c_bvec)
         BUG_ON(lub_idx < 0);
         lub_slot = &node->slots[lub_idx];
         debug("Following write down the tree.\n");
-        //printk("Following write down the tree.\n");
-        __castle_ftree_find(c_bvec, lub_slot->cdb, lub_slot->block, lub_slot->version);
+        __castle_ftree_find(c_bvec, lub_slot->cdb, lub_slot->block);
         return;
     }
 
@@ -771,7 +769,7 @@ static void castle_ftree_read_process(c_bvec_t *c_bvec)
     {
         debug("Is not a leaf. Read and search (disk,blk#)=(0x%x, 0x%x)\n",
                 slot->cdb.disk, slot->cdb.block);
-        __castle_ftree_find(c_bvec, slot->cdb, slot->block, slot->version);
+        __castle_ftree_find(c_bvec, slot->cdb, slot->block);
     }
 }
 
@@ -896,8 +894,7 @@ static void castle_ftree_find_io_end(c2_page_t *c2p, int uptodate)
 
 static void __castle_ftree_find(c_bvec_t *c_bvec,
                                 c_disk_blk_t node_cdb,
-                                sector_t key_block,
-                                uint32_t key_version)
+                                sector_t key_block)
 {
     c2_page_t *c2p;
     int ret;
@@ -907,7 +904,6 @@ static void __castle_ftree_find(c_bvec_t *c_bvec,
     ret = -ENOMEM;
 
     c_bvec->key_block = key_block;
-    c_bvec->key_version = key_version;
     castle_debug_bvec_btree_walk(c_bvec);
     c2p = castle_cache_page_get(node_cdb);
     debug("Got the buffer, trying to lock it\n");
@@ -961,7 +957,7 @@ static void _castle_ftree_find(struct work_struct *work)
     }
     set_bit(CBV_ROOT_LOCKED_BIT, &c_bvec->flags);
     castle_debug_bvec_update(c_bvec, C_BVEC_VERSION_FOUND);
-    __castle_ftree_find(c_bvec, root_cdb, MAX_BLK, c_bvec->version);
+    __castle_ftree_find(c_bvec, root_cdb, MAX_BLK);
 }
 
 void castle_ftree_find(c_bvec_t *c_bvec)

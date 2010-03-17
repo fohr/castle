@@ -130,9 +130,12 @@ typedef struct castle_bio_vec {
     unsigned long       flags;
     /* Used to walk the B-Tree, and return the final cdb */
     union {
-        /* Used when walking B-Tree. When writing, B-Tree node and
-           its parent have to be locked concurrently. */
         struct {
+            /* Block key in the parent node under which we found
+               btree_node */
+            sector_t                  key_block;
+            /* When writing, B-Tree node and its parent have to be 
+               locked concurrently. */
             struct castle_cache_page *btree_node;
             struct castle_cache_page *btree_parent_node;
         };
@@ -143,8 +146,6 @@ typedef struct castle_bio_vec {
     /* Used to thread this bvec onto a workqueue */
     struct work_struct  work;
 #ifdef CASTLE_DEBUG    
-    sector_t            key_block;
-    uint32_t            key_version;
     unsigned long       state;
     int                 btree_depth;
 #endif
