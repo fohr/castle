@@ -203,7 +203,7 @@ static int castle_debug_run(void *unused)
             }
             if(i++ > 10)
             {
-                printk("More than 10 outstanding request. Not printing.\n");
+                printk("More than 10 outstanding request. Not printing all.\n");
                 break;
             }
         }

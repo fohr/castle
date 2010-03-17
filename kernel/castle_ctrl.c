@@ -62,7 +62,6 @@ static void castle_control_create(cctrl_cmd_create_t *ioctl)
 {
     version_t version;
 
-    printk("Wanting to create volume of size: %lld\n", ioctl->size);
     version = castle_version_new(0, /* clone */ 
                                  0, /* root version */
                                  ioctl->size);
