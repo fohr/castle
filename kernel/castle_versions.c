@@ -72,7 +72,6 @@ struct castle_version_update {
     version_t version;
     int       new;
     c2_page_t *c2p;
-    struct work_struct work;
 }; 
 
 /***** Hash table & init list *****/
@@ -177,12 +176,12 @@ static int castle_version_add(c_disk_blk_t cdb,
     return 0;
 }
 
-static void castle_version_update(struct work_struct *work)
+static void castle_version_update(struct castle_version_update *vu)
 {
-    struct castle_version_update *vu = container_of(work, struct castle_version_update, work);
     struct castle_vlist_node *node;
     struct castle_vlist_slot *slot;
     struct castle_version *v;
+    unsigned long flags;
     int i;
 
     BUG_ON(!c2p_uptodate(vu->c2p));
@@ -210,13 +209,13 @@ static void castle_version_update(struct work_struct *work)
     BUG_ON(( vu->new) && (i != (node->used-1)));
 
     debug("Writing verison update to the cached page.\n");
-    spin_lock_irq(&castle_versions_hash_lock);
+    spin_lock_irqsave(&castle_versions_hash_lock, flags);
     v = __castle_versions_hash_get(vu->version);
     slot->version_nr = v->version;
     slot->parent     = (v->parent ? v->parent->version : 0);
     slot->size       = v->size;
     slot->cdb        = v->ftree_root;
-    spin_unlock_irq(&castle_versions_hash_lock);
+    spin_unlock_irqrestore(&castle_versions_hash_lock, flags);
 
     /* Finish-off and cleanup */
     dirty_c2p(vu->c2p);
@@ -242,9 +241,7 @@ static void castle_version_node_read_end(c2_page_t *c2p, int uptodate)
     debug("Read version node from disk.\n");
     set_c2p_uptodate(c2p);
     
-    /* Put on the workqueue */
-    INIT_WORK(&vu->work, castle_version_update);
-    queue_work(castle_wq, &vu->work); 
+    castle_version_update(vu);
 }
 
 /* TODO who should handle errors in writeback? */
@@ -282,9 +279,7 @@ static void castle_version_writeback(version_t version, int new)
         return;
     }
     
-    /* Put on the workqueue */
-    INIT_WORK(&vu->work, castle_version_update);
-    queue_work(castle_wq, &vu->work); 
+    castle_version_update(vu);
     return;
 
 error_out:    

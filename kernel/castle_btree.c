@@ -805,7 +805,6 @@ static void castle_ftree_c2p_forget(c_bvec_t *c_bvec)
 static void castle_ftree_find_io_end(c2_page_t *c2p, int uptodate)
 {
     c_bvec_t *c_bvec = c2p->private;
-    struct workqueue_struct *wq;
 
     debug("Finished IO for: block 0x%lx, in version 0x%x\n", 
             c_bvec->block, c_bvec->version);
@@ -819,33 +818,14 @@ static void castle_ftree_find_io_end(c2_page_t *c2p, int uptodate)
 
     castle_debug_bvec_update(c_bvec, C_BVEC_BTREE_NODE_UPTODATE);
     set_c2p_uptodate(c2p);
+
+    BUG_ON(c_bvec->btree_depth > MAX_BTREE_DEPTH);
     /* Put on to the workqueue. Choose a workqueue which corresponds
-       to how deep we are in the tree. */
-    switch(c_bvec->btree_depth)
-    {
-        case 0:
-            wq = castle_wq;
-            break;
-        case 1:
-            wq = castle_wq1;
-            break;
-        case 2:
-            wq = castle_wq2;
-            break;
-        case 3:
-            wq = castle_wq3;
-            break;
-        case 4:
-            wq = castle_wq4;
-            break;
-        case 5:
-            wq = castle_wq5;
-            break;
-        default:
-            BUG();
-    }
+       to how deep we are in the tree. 
+       A single queue cannot be used, because a request blocked on 
+       lock_c2p() would block the entire queue (=> deadlock). */
     INIT_WORK(&c_bvec->work, castle_ftree_process);
-    queue_work(wq, &c_bvec->work); 
+    queue_work(castle_wqs[c_bvec->btree_depth], &c_bvec->work); 
 }
 
 static void __castle_ftree_find(c_bvec_t *c_bvec,
@@ -911,7 +891,7 @@ static void _castle_ftree_find(struct work_struct *work)
 void castle_ftree_find(c_bvec_t *c_bvec)
 {
     INIT_WORK(&c_bvec->work, _castle_ftree_find);
-    queue_work(test_wq, &c_bvec->work); 
+    queue_work(castle_wq, &c_bvec->work); 
 }
 
 /***** Init/fini functions *****/

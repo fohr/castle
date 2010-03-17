@@ -43,7 +43,10 @@ struct castle_fs_superblock {
     c_disk_blk_t rev_tree2;
 };
 
-#define NODE_HEADER        0x180
+
+#define MAX_BTREE_DEPTH       (5)
+
+#define NODE_HEADER           0x180
 
 #define FTREE_SLOT_LEAF       0x1
 #define FTREE_SLOT_NODE       0x2
@@ -204,13 +207,8 @@ extern struct castle_volumes     castle_volumes;
 extern struct castle_slaves      castle_slaves;
 extern struct castle_devices     castle_devices;
 
-extern struct workqueue_struct  *test_wq;
-extern struct workqueue_struct  *castle_wq;
-extern struct workqueue_struct  *castle_wq1;
-extern struct workqueue_struct  *castle_wq2;
-extern struct workqueue_struct  *castle_wq3;
-extern struct workqueue_struct  *castle_wq4;
-extern struct workqueue_struct  *castle_wq5;
+extern struct workqueue_struct *castle_wqs[MAX_BTREE_DEPTH+1];
+#define castle_wq              (castle_wqs[0])
 
 /* Various utilities */
 #define C_BLK_SHIFT                    (12) 

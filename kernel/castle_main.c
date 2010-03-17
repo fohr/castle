@@ -23,13 +23,7 @@ struct castle_volumes        castle_volumes;
 struct castle_slaves         castle_slaves;
 struct castle_devices        castle_devices;
 
-struct workqueue_struct  *test_wq;
-struct workqueue_struct     *castle_wq;
-struct workqueue_struct     *castle_wq1;
-struct workqueue_struct     *castle_wq2;
-struct workqueue_struct     *castle_wq3;
-struct workqueue_struct     *castle_wq4;
-struct workqueue_struct     *castle_wq5;
+struct workqueue_struct     *castle_wqs[MAX_BTREE_DEPTH+1];
 
 int                          castle_fs_inited;
 
@@ -995,7 +989,8 @@ static void castle_slaves_free(void)
 
 static int castle_devices_init(void)
 {
-    int major;
+    int i, major;
+    char *wq_names[MAX_BTREE_DEPTH+1];
 
     memset(&castle_devices, 0, sizeof(struct castle_devices));
     INIT_LIST_HEAD(&castle_devices.devices);
@@ -1008,27 +1003,43 @@ static int castle_devices_init(void)
     }
     castle_devices.major = major;
 
-    test_wq = create_workqueue("test_wq");
-    castle_wq = create_workqueue("castle_wq");
-    castle_wq1 = create_workqueue("castle_wq1");
-    castle_wq2 = create_workqueue("castle_wq2");
-    castle_wq3 = create_workqueue("castle_wq3");
-    castle_wq4 = create_workqueue("castle_wq4");
-    castle_wq5 = create_workqueue("castle_wq5");
-    if(!castle_wq)
+    memset(wq_names  , 0, sizeof(char *) * (MAX_BTREE_DEPTH+1));
+    memset(castle_wqs, 0, sizeof(struct workqueue_struct *) * (MAX_BTREE_DEPTH+1));
+    for(i=0; i<=MAX_BTREE_DEPTH; i++)
     {
-        printk("Could not create worqueue.\n");
-        unregister_blkdev(castle_devices.major, "castle-fs"); 
-        return -ENOMEM;
+        /* At most two characters for the number */
+        BUG_ON(i > 99);
+        wq_names[i] = kmalloc(strlen("castle_wq")+3, GFP_KERNEL);
+        if(!wq_names[i])
+            goto err_out;
+        sprintf(wq_names[i], "castle_wq%d", i);
+        castle_wqs[i] = create_workqueue(wq_names[i]);
+        if(!castle_wqs[i])
+            goto err_out;
     }
 
     return 0;
+
+err_out:
+    printk("Could not create worqueues.\n");
+    
+    for(i=0; i<=MAX_BTREE_DEPTH; i++)
+    {
+        if(wq_names[i])
+            kfree(wq_names[i]); 
+        if(castle_wqs[i]) 
+            destroy_workqueue(castle_wqs[i]);
+    }
+    unregister_blkdev(castle_devices.major, "castle-fs"); 
+
+    return -ENOMEM;
 }
 
 static void castle_devices_free(void)                                                                 
 {                                                                                        
     struct list_head *lh, *th;
     struct castle_device *dev;
+    int i;
 
     list_for_each_safe(lh, th, &castle_devices.devices)
     {
@@ -1039,13 +1050,8 @@ static void castle_devices_free(void)
     if (castle_devices.major)
         unregister_blkdev(castle_devices.major, "castle-fs");
 
-    destroy_workqueue(test_wq);
-    destroy_workqueue(castle_wq);
-    destroy_workqueue(castle_wq1);
-    destroy_workqueue(castle_wq2);
-    destroy_workqueue(castle_wq3);
-    destroy_workqueue(castle_wq4);
-    destroy_workqueue(castle_wq5);
+    for(i=0; i<=MAX_BTREE_DEPTH; i++)
+        destroy_workqueue(castle_wqs[i]);
 }
 
 static int __init castle_init(void)
