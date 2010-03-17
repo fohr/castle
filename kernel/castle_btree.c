@@ -909,7 +909,6 @@ static void __castle_ftree_find(c_bvec_t *c_bvec,
     c_bvec->key_block = key_block;
     c_bvec->key_version = key_version;
     castle_debug_bvec_btree_walk(c_bvec);
-    c_bvec->deb_cdb = node_cdb;
     c2p = castle_cache_page_get(node_cdb);
     debug("Got the buffer, trying to lock it\n");
     castle_debug_bvec_update(c_bvec, C_BVEC_BTREE_GOT_NODE);
@@ -917,7 +916,6 @@ static void __castle_ftree_find(c_bvec_t *c_bvec,
             (c_bvec - c_bvec->c_bio->c_bvecs));
     debug("Locked for ftree node (0x%x, 0x%x)\n", 
             node_cdb.disk, node_cdb.block);
-    c_bvec->deb_cdb = INVAL_DISK_BLK;
     castle_debug_bvec_update(c_bvec, C_BVEC_BTREE_LOCKED_NODE);
     if(!c2p_uptodate(c2p))
     {

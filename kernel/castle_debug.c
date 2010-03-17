@@ -170,9 +170,7 @@ static int castle_debug_run(void *unused)
     int i, j;
     unsigned long flags;
     int cdb_idx;
-#define MAX_CDB 10
-    c_disk_blk_t cdbs[MAX_CDB];    
-    int flush_wq, sleep_time = 1000;
+    int sleep_time = 10;
 
     printk("Castle debugging thread starting.\n");
     do {
@@ -189,26 +187,19 @@ static int castle_debug_run(void *unused)
             }
                 c_bio->stuck++;
 
-            flush_wq = (c_bio->stuck > 10);
             printk("Found an outstanding Castle BIO, id=%d\n", c_bio->id);
             for(j=0; j<c_bio->nr_bvecs; j++)
             {
                 c_bvec_t *c_bvec = &c_bio->c_bvecs[j];
-                c_disk_blk_t deb_cdb = c_bvec->deb_cdb;
 
                 printk(" c_bvecs[%d], "
                        "(b,v)=(0x%lx, 0x%x), "
                        "btree_depth=%d, "
-                       "state=0x%lx, "
-                       "deb_cdb=(0x%x, 0x%x)\n",
+                       "state=0x%lx\n",
                     j,
                     c_bvec->block, c_bvec->version,
                     c_bvec->btree_depth,
-                    c_bvec->state,
-                    deb_cdb.disk,
-                    deb_cdb.block);
-                if(!DISK_BLK_INVAL(deb_cdb))
-                    cdbs[cdb_idx++] = deb_cdb;
+                    c_bvec->state);
             }
             if(i++ > 10)
             {
@@ -217,22 +208,10 @@ static int castle_debug_run(void *unused)
             }
         }
         spin_unlock_irqrestore(&bio_list_spinlock, flags);
-        if(i>0) sleep_time += 1000;
-        for(i=0; i<cdb_idx; i++)
-        {
-            c2_page_t *c2p;
-            c2p = castle_cache_page_get(cdbs[i]);
-            printk("(0x%x, 0x%x) last locked from: %s:%d. By BIO id=%d, depth=%d, bvec_id=%d\n", cdbs[i].disk, cdbs[i].block, c2p->file, c2p->line, c2p->id, c2p->depth, c2p->bvec_id);
-            printk(" bio flags = %lx\n", c2p->bio->bi_flags);
-        }
-
-        if(flush_wq) 
-        {
-            printk("=============> FLUSHING WORQUEUE\n");
-            flush_workqueue(castle_wq);
-            printk("=============> FLUSHED THE WORKQUEUE\n");
-        }
-        msleep_interruptible(sleep_time);
+        if(i>0) sleep_time += 1;
+        
+        set_task_state(current, TASK_INTERRUPTIBLE);
+        schedule_timeout(sleep_time * HZ);
     } while(!kthread_should_stop());
 
     return 0;

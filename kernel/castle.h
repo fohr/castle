@@ -41,8 +41,6 @@ struct castle_fs_superblock {
     c_disk_blk_t fwd_tree2;
     c_disk_blk_t rev_tree1;
     c_disk_blk_t rev_tree2;
-
-    sector_t deb_sec;
 };
 
 #define NODE_HEADER        0x180
@@ -70,8 +68,6 @@ struct castle_ftree_slot {
 
 #define FTREE_NODE_MAGIC  0x0000cdab
 #define FTREE_NODE_SLOTS  ((PAGE_SIZE - NODE_HEADER)/sizeof(struct castle_ftree_slot))
-/* For debugging */
-//#define FTREE_NODE_SLOTS  10 
 struct castle_ftree_node {
     uint32_t magic;
     uint32_t version;
@@ -117,8 +113,6 @@ typedef struct castle_bio {
     int                    id;
     int                    nr_bvecs;
     struct list_head       list;
-
-    int                     tmp;
 #endif
 } c_bio_t;
 
@@ -147,18 +141,12 @@ typedef struct castle_bio_vec {
         c_disk_blk_t cdb;
     };
     /* Used to thread this bvec onto a workqueue */
-    struct workqueue_struct  *last_wq;
     struct work_struct  work;
-
-    int            sector_debug;
 #ifdef CASTLE_DEBUG    
     sector_t            key_block;
     uint32_t            key_version;
     unsigned long       state;
     int                 btree_depth;
-
-    c_disk_blk_t        deb_cdb;
-    c_disk_blk_t        deb_cdb2;
 #endif
 } c_bvec_t;
 #define c_bvec_data_dir(_c_bvec)    bio_data_dir((_c_bvec)->c_bio->bio)
