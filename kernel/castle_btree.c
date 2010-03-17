@@ -20,7 +20,7 @@
 #define debug(_f, _a...)  (printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
 #endif
 
-static void castle_ftree_c2p_forget(c_bvec_t *c_bvec, int);
+static void castle_ftree_c2p_forget(c_bvec_t *c_bvec);
 static void __castle_ftree_find(c_bvec_t *c_bvec,
                                 c_disk_blk_t node_cdb,
                                 sector_t key_block);
@@ -42,14 +42,8 @@ static void castle_ftree_io_end(c_bvec_t *c_bvec,
     BUG_ON((c_bvec_data_dir(c_bvec) == WRITE) && (DISK_BLK_INVAL(cdb)) && (!err));
     /* Free the c2ps correctly. Call twice to release parent and child
        (if both exist) */
-//printk("Flags before first  forget: 0x%x\n", c_bvec->flags);    
-    castle_ftree_c2p_forget(c_bvec, 0);
-//printk("Flags before second forget: 0x%x\n", c_bvec->flags);    
-    if(test_bit(CBV_ROOT_LOCKED_BIT, &c_bvec->flags))
-    {
-        printk("ERROR: root lock set after first forget: 0x%lx!\n", c_bvec->flags);
-    }
-    castle_ftree_c2p_forget(c_bvec, 1);
+    castle_ftree_c2p_forget(c_bvec);
+    castle_ftree_c2p_forget(c_bvec);
     /* Once buffers have been freed, save the cdb */
     c_bvec->cdb = cdb;
     /* Finish the IO (call _io_end directly on an error */
@@ -113,9 +107,7 @@ static void castle_ftree_lub_find(struct castle_ftree_node *node,
                                   uint32_t block, 
                                   uint32_t version,
                                   int *lub_idx_p,
-                                  int *insert_idx_p,
-
-                                  c_bvec_t *c_bvec)
+                                  int *insert_idx_p)
 {
     struct castle_ftree_slot *slot;
     uint32_t block_lub, version_lub;
@@ -123,12 +115,9 @@ static void castle_ftree_lub_find(struct castle_ftree_node *node,
 
     debug("Looking for (b,v) = (0x%x, 0x%x), node->used=%d, capacity=%d\n",
             block, version, node->used, node->capacity);
-    if(c_bvec) castle_debug_bvec_update(c_bvec, C_BVEC_BTREE_NODE_TMP3);
         
     lub_idx   = -1;
     block_lub = INVAL_BLK; 
-    if(node->used > 1000)
-        printk("WARNING used is greater than 1000: %d\n", node->used);
     for(i=node->used-1; i >= 0; i--)
     {
         slot = &node->slots[i];
@@ -147,12 +136,9 @@ static void castle_ftree_lub_find(struct castle_ftree_node *node,
            Also, don't update the LUB index if the block number doesn't change.
            This is because the most recent ancestor will be found first when
            scanning from right to left */
-    if(c_bvec)castle_debug_bvec_update(c_bvec, C_BVEC_BTREE_NODE_TMP4);
         if((block_lub != slot->block) &&
             castle_version_is_ancestor(slot->version, version))
         {
-    if(c_bvec)castle_debug_bvec_update(c_bvec, C_BVEC_BTREE_NODE_TMP5);
-
             block_lub   = slot->block;
             version_lub = slot->version;
             lub_idx = i;
@@ -200,7 +186,6 @@ static void castle_ftree_lub_find(struct castle_ftree_node *node,
         BUG_ON(version_lub != version);
         insert_idx = lub_idx;
     }
-    if(c_bvec)castle_debug_bvec_update(c_bvec, C_BVEC_BTREE_NODE_TMP6);
 
     if(lub_idx_p)    *lub_idx_p = lub_idx;
     if(insert_idx_p) *insert_idx_p = insert_idx;
@@ -324,8 +309,6 @@ static c2_page_t* castle_ftree_effective_node_create(struct castle_ftree_node *n
                  is too simple to handle this ATM */
         return NULL;
     }
-    //printk("Effective node is:\n");
-    //castle_ftree_node_print(eff_node);
 
     return c2p;
 }
@@ -353,10 +336,6 @@ static c2_page_t* castle_ftree_node_key_split(c2_page_t *orig_c2p)
     /* c2p has already been dirtied by the node_create() function, but the orig_c2p
        needs to be dirtied here */
     dirty_c2p(orig_c2p);
-    //printk("Split node is:\n");
-    //castle_ftree_node_print(sec_node);
-    //printk("Rest of the node is:\n");
-    //castle_ftree_node_print(node);
 
     return c2p;
 }
@@ -398,7 +377,7 @@ static void castle_ftree_node_insert(c2_page_t *parent_c2p,
     uint32_t version = child->version;
     int insert_idx;
 
-    castle_ftree_lub_find(parent, block, version, NULL, &insert_idx, NULL);
+    castle_ftree_lub_find(parent, block, version, NULL, &insert_idx);
     debug("Inserting child node into parent (cap=0x%x, use=0x%x), will insert (b,v)=(0x%x, 0x%x) at idx=%d.\n",
             parent->capacity, parent->used, block, version, insert_idx);
     castle_ftree_slot_insert(parent_c2p, 
@@ -418,7 +397,7 @@ static void castle_ftree_node_under_key_insert(c2_page_t *parent_c2p,
                      = pfn_to_kaddr(page_to_pfn(parent_c2p->page));
     int insert_idx;
 
-    castle_ftree_lub_find(parent, block, version, NULL, &insert_idx, NULL);
+    castle_ftree_lub_find(parent, block, version, NULL, &insert_idx);
     debug("Inserting child node into parent (cap=0x%x, use=0x%x), will insert (b,v)=(0x%x, 0x%x) at idx=%d.\n",
             parent->capacity, parent->used, block, version, insert_idx);
     castle_ftree_slot_insert(parent_c2p, 
@@ -646,9 +625,6 @@ static void castle_ftree_write_process(c_bvec_t *c_bvec)
 
     castle_debug_bvec_update(c_bvec, C_BVEC_BTREE_NODE_WPROCESS);
 
-    //printk("\nProcessing node at btree_depth=%d\n", c_bvec->btree_depth);
-    //castle_ftree_node_print(node);
-
     /* Check if the node needs to be split first. 
        A leaf node only needs to be split if there are _no_ empty slots in it.
        Internal nodes, if there are less than 2 free slots in them. */ 
@@ -657,8 +633,6 @@ static void castle_ftree_write_process(c_bvec_t *c_bvec)
     {
         debug("===> Splitting node: leaf=%d, cap,use=(%d,%d)\n",
                 node->is_leaf, node->capacity, node->used);
-        //printk("===> Splitting node: leaf=%d, cap,use=(%d,%d)\n",
-         //       node->is_leaf, node->capacity, node->used);
         ret = castle_ftree_node_split(c_bvec);
         if(ret)
         {
@@ -671,7 +645,7 @@ static void castle_ftree_write_process(c_bvec_t *c_bvec)
     }
  
     /* Find out what to follow, and where to insert */
-    castle_ftree_lub_find(node, block, version, &lub_idx, &insert_idx, NULL);
+    castle_ftree_lub_find(node, block, version, &lub_idx, &insert_idx);
     if(lub_idx >= 0) lub_slot = &node->slots[lub_idx];
 
     /* Deal with non-leaf nodes first */
@@ -692,20 +666,12 @@ static void castle_ftree_write_process(c_bvec_t *c_bvec)
     if(lub_idx < 0 || (lub_slot->block != block) || (lub_slot->version != version))
     {
         c_disk_blk_t cdb = castle_slaves_disk_block_get(); 
-        c2_page_t *data_c2p = castle_cache_page_get(cdb);
-
-        lock_c2p(data_c2p);
-        set_c2p_uptodate(data_c2p);
-        memset(pfn_to_kaddr(page_to_pfn(data_c2p->page)), 0x5A, PAGE_SIZE);
-        dirty_c2p(data_c2p);
-        unlock_c2p(data_c2p);
-        put_c2p(data_c2p);
+        
+        /* TODO: should memset the page to zero (because we return zeros on reads)
+                 this can be done here, or beter still in _main.c, in data_copy */
         debug("Need to insert (0x%x, 0x%x) into node (used: 0x%x, capacity: 0x%x, leaf=%d).\n",
                 block, version,
                 node->used, node->capacity, FTREE_NODE_IS_LEAF(node));
-        //printk("Need to insert (0x%x, 0x%x) into node (used: 0x%x, capacity: 0x%x, leaf=%d).\n",
-         //       block, version,
-          //      node->used, node->capacity, FTREE_NODE_IS_LEAF(node));
         BUG_ON(castle_ftree_write_idx_find(c_bvec) != insert_idx);
         castle_ftree_slot_insert(c_bvec->btree_node,
                                  insert_idx,
@@ -724,7 +690,6 @@ static void castle_ftree_write_process(c_bvec_t *c_bvec)
     BUG_ON(castle_ftree_write_idx_find(c_bvec) != insert_idx);
 
     debug("Block already exists, modifying in place.\n");
-    //printk("Block already exists, modifying in place.\n");
     castle_ftree_io_end(c_bvec, lub_slot->cdb, 0);
 }
 
@@ -738,9 +703,7 @@ static void castle_ftree_read_process(c_bvec_t *c_bvec)
 
     castle_debug_bvec_update(c_bvec, C_BVEC_BTREE_NODE_RPROCESS);
 
-    castle_debug_bvec_update(c_bvec, C_BVEC_BTREE_NODE_TMP1);
-    castle_ftree_lub_find(node, block, version, &lub_idx, NULL, c_bvec);
-    castle_debug_bvec_update(c_bvec, C_BVEC_BTREE_NODE_TMP2);
+    castle_ftree_lub_find(node, block, version, &lub_idx, NULL);
     /* We should always find the LUB if we are not looking at a leaf node */
     BUG_ON((lub_idx < 0) && !FTREE_NODE_IS_LEAF(node));
     
@@ -791,7 +754,7 @@ static int castle_ftree_c2p_remember(c_bvec_t *c_bvec, c2_page_t *c2p)
     int ret = 0;
 
     /* Forget the parent node buffer first */
-    castle_ftree_c2p_forget(c_bvec, 0);
+    castle_ftree_c2p_forget(c_bvec);
     
     /* Sanity check to make sure that the node fits in the buffer */
     BUG_ON(sizeof(struct castle_ftree_node) > PAGE_SIZE);
@@ -810,7 +773,7 @@ static int castle_ftree_c2p_remember(c_bvec_t *c_bvec, c2_page_t *c2p)
 
 /* TODO check that the root node lock will be released correctly, even on 
    node splits! */
-static void castle_ftree_c2p_forget(c_bvec_t *c_bvec, int debug)
+static void castle_ftree_c2p_forget(c_bvec_t *c_bvec)
 {
     int write = (c_bvec_data_dir(c_bvec) == WRITE);
     c2_page_t *c2p_to_forget;
@@ -830,12 +793,6 @@ static void castle_ftree_c2p_forget(c_bvec_t *c_bvec, int debug)
        btree_node c2p locked. */
     if(test_bit(CBV_ROOT_LOCKED_BIT, &c_bvec->flags) && (!write || c_bvec->btree_node))
     {
-        if(debug)
-        {
-            printk("===> GOT TO INCORRECT UNLOCKING.\n");
-            printk("flags: %lx, write=%d, c_Bvec->btree_node=%p\n",
-                    c_bvec->flags, write, c_bvec->btree_node);
-        }
         castle_version_ftree_unlock(c_bvec->version); 
         clear_bit(CBV_ROOT_LOCKED_BIT, &c_bvec->flags);
     }
@@ -856,7 +813,6 @@ static void castle_ftree_find_io_end(c2_page_t *c2p, int uptodate)
     /* Callback on error */
     if(!uptodate || castle_ftree_c2p_remember(c_bvec, c2p))
     {
-        printk("ERROR UPDATING THE NODE C2P.\n");
         castle_ftree_io_end(c_bvec, INVAL_DISK_BLK, -EIO);
         return;
     }
@@ -908,8 +864,7 @@ static void __castle_ftree_find(c_bvec_t *c_bvec,
     c2p = castle_cache_page_get(node_cdb);
     debug("Got the buffer, trying to lock it\n");
     castle_debug_bvec_update(c_bvec, C_BVEC_BTREE_GOT_NODE);
-    lock_c2p_id_depth(c2p, c_bvec->c_bio->id, c_bvec->btree_depth,
-            (c_bvec - c_bvec->c_bio->c_bvecs));
+    lock_c2p(c2p);
     debug("Locked for ftree node (0x%x, 0x%x)\n", 
             node_cdb.disk, node_cdb.block);
     castle_debug_bvec_update(c_bvec, C_BVEC_BTREE_LOCKED_NODE);
@@ -937,12 +892,6 @@ static void _castle_ftree_find(struct work_struct *work)
 {
     c_bvec_t *c_bvec = container_of(work, c_bvec_t, work);
     c_disk_blk_t root_cdb;
-
-    if(c_bvec_data_dir(c_bvec) == WRITE)
-    {
-        //printk("\n\n\nProcessing a write to (b,v)=(0x%lx, %d/0x%x)\n",
-        //        c_bvec->block, c_bvec->version, c_bvec->version);
-    }
 
     c_bvec->btree_node = NULL;
     c_bvec->btree_parent_node = NULL;
