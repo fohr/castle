@@ -10,6 +10,8 @@
 #include "castle_btree.h"
 #include "castle_versions.h"
 
+static DECLARE_MUTEX(castle_control_lock);
+
 static void castle_control_claim(cctrl_cmd_claim_t *ioctl)
 {
     struct castle_slave *cs;
@@ -115,7 +117,7 @@ static void castle_control_snapshot(cctrl_cmd_snapshot_t *ioctl)
         ioctl->ret     = -ENOENT;
         return;
     }
-    /* TODO: lock device somehow */
+    down_write(&cd->lock);
     old_version  = cd->version;
     version = castle_version_new(1,            /* snapshot */
                                  cd->version,
@@ -133,10 +135,10 @@ static void castle_control_snapshot(cctrl_cmd_snapshot_t *ioctl)
         cd->version    = version;
         /* Release the old version */
         castle_version_snap_put(old_version);
-        cd->version    = version;
         ioctl->snap_id = version;
-        ioctl->ret     = 0;;
+        ioctl->ret     = 0;
     }
+    up_write(&cd->lock);
 }
  
 static void castle_control_fs_init(cctrl_cmd_init_t *ioctl)
@@ -160,6 +162,7 @@ int castle_control_ioctl(struct inode *inode, struct file *filp,
     if (copy_from_user(&ioctl, udata, sizeof(cctrl_ioctl_t)))
         return -EFAULT;
 
+    down(&castle_control_lock);
     printk("Got IOCTL command %d.\n", ioctl.cmd);
     switch(ioctl.cmd)
     {
@@ -189,8 +192,10 @@ int castle_control_ioctl(struct inode *inode, struct file *filp,
             break;
 
         default:
+            up(&castle_control_lock);
             return -EINVAL;
     }
+    up(&castle_control_lock);
 
     /* Copy the results back */
     if(copy_to_user(udata, &ioctl, sizeof(cctrl_ioctl_t)))

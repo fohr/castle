@@ -107,6 +107,7 @@ struct castle_vlist_node {
 /* IO related structures */
 struct castle_bio_vec;
 typedef struct castle_bio {
+    struct castle_device  *c_dev;
     struct bio            *bio;
     struct castle_bio_vec *c_bvecs; 
     atomic_t               count;
@@ -186,14 +187,14 @@ struct castle_slaves {
 };
 
 struct castle_device {
-    struct kobject    kobj;
-    spinlock_t        lock;
-    struct list_head  list;
-    struct gendisk   *gd;
-    int               users;
-    int               sysfs_registered;
-
-    version_t         version;
+    struct kobject      kobj;
+    struct rw_semaphore lock;
+    struct list_head    list;
+    struct gendisk     *gd;
+    int                 users;
+    int                 sysfs_registered;
+                       
+    version_t           version;
 };
 
 struct castle_devices { 

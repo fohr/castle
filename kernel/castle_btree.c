@@ -869,6 +869,7 @@ static void __castle_ftree_find(c_bvec_t *c_bvec,
 static void _castle_ftree_find(struct work_struct *work)
 {
     c_bvec_t *c_bvec = container_of(work, c_bvec_t, work);
+    struct castle_device *c_dev = c_bvec->c_bio->c_dev;
     c_disk_blk_t root_cdb;
 
     c_bvec->btree_depth       = 0;
@@ -876,7 +877,10 @@ static void _castle_ftree_find(struct work_struct *work)
     c_bvec->btree_parent_node = NULL;
     /* Lock the pointer to the root node.
        This is unlocked by the (poorly named) castle_ftree_c2p_forget() */
+    down_read(&c_dev->lock);
+    c_bvec->version = c_dev->version;
     root_cdb = castle_version_ftree_lock(c_bvec->version);
+    up_read(&c_dev->lock);
     if(DISK_BLK_INVAL(root_cdb))
     {
         /* Complete the request early, end exit */

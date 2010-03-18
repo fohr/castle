@@ -331,9 +331,19 @@ static version_t castle_version_new_create(int snap_or_clone,
         spin_unlock_irq(&castle_versions_hash_lock);
         return INVAL_VERSION;
     }
-    ftree_root  = v->ftree_root;
-    parent_size = v->size;
     spin_unlock_irq(&castle_versions_hash_lock);
+    
+    /* Lock the root, to make sure that there are no ongoing writes 
+       which may split the root node. New writes will not be accepted
+       unil we are done, because we are working under device lock.
+       If we are doing clones rather than snapshots (and there is no
+       locked device), there won't be any IO for the version either.
+       Finally, because control commands are serialised, if someone
+       tries to attach the version while we are cloning it, he'll have
+       to wait for us to finish. */
+    ftree_root = castle_version_ftree_lock(parent);
+    castle_version_ftree_unlock(parent);
+    parent_size = v->size;
 
     /* Allocate a new version number. */
     down(&castle_versions_last_lock);

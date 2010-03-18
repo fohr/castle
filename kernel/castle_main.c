@@ -540,11 +540,11 @@ static int castle_open(struct inode *inode, struct file *filp)
 	struct castle_device *dev = inode->i_bdev->bd_disk->private_data;
 
 	filp->private_data = dev;
-	spin_lock(&dev->lock);
+	down_write(&dev->lock);
 	if (! dev->users) 
 		check_disk_change(inode->i_bdev);
 	dev->users++;
-	spin_unlock(&dev->lock);
+	up_write(&dev->lock);
 	return 0;
 }
 
@@ -552,9 +552,9 @@ static int castle_close(struct inode *inode, struct file *filp)
 {
 	struct castle_device *dev = inode->i_bdev->bd_disk->private_data;
 
-	spin_lock(&dev->lock);
+	down_write(&dev->lock);
 	dev->users--;
-	spin_unlock(&dev->lock);
+	up_write(&dev->lock);
 
 	return 0;
 }
@@ -769,7 +769,6 @@ static int castle_bio_validate(struct bio *bio)
 static void castle_device_c_bvec_make(c_bio_t *c_bio, 
                                       int idx, 
                                       sector_t block,
-                                      version_t version,
                                       int one2one_bvec)
 {
     /* Create an appropriate c_bvec */
@@ -781,7 +780,7 @@ static void castle_device_c_bvec_make(c_bio_t *c_bio,
     /* Init the c_bvec */
     c_bvec->c_bio        = c_bio;
     c_bvec->block        = block;
-    c_bvec->version      = version; 
+    c_bvec->version      = INVAL_VERSION; 
     if(one2one_bvec)
         set_bit(CBV_ONE2ONE_BIT, &c_bvec->flags);
     castle_debug_bvec_update(c_bvec, C_BVEC_INITIALISED);
@@ -811,12 +810,13 @@ static int castle_device_make_request(struct request_queue *rq, struct bio *bio)
     if(!c_bio || !c_bvecs) 
         goto fail_bio;
     
-    c_bio->bio = bio;
+    c_bio->c_dev   = dev;
+    c_bio->bio     = bio;
     c_bio->c_bvecs = c_bvecs; 
     /* Take reference to the c_bio before handling all the bvecs.
        Do it directly (castle_bio_get(c_bio) doesn't work with ref_cnt=0). */
     atomic_set(&c_bio->count, 1);
-    c_bio->err = 0;
+    c_bio->err     = 0;
 
     sector     = bio->bi_sector;
     last_block = -1;
@@ -831,9 +831,7 @@ static int castle_device_make_request(struct request_queue *rq, struct bio *bio)
         /* Check if block number is different to the previous one.
            If so, init and submit a new c_bvec. */
         if(block != last_block)
-            castle_device_c_bvec_make(c_bio, j++, block, 
-                                      dev->version,
-                                      one2one);
+            castle_device_c_bvec_make(c_bio, j++, block, one2one);
         last_block = block;
 
         /* Check this bvec shouldn't be split into two c_bvecs now. */
@@ -848,9 +846,7 @@ static int castle_device_make_request(struct request_queue *rq, struct bio *bio)
             /* Block cannot possibly correspond to one bvec exactly */
             BUG_ON(one2one);
             /* Submit the request */
-            castle_device_c_bvec_make(c_bio, j++, block, 
-                                      dev->version,
-                                      one2one);
+            castle_device_c_bvec_make(c_bio, j++, block, one2one);
         }
         last_block = block;
 
@@ -913,7 +909,7 @@ struct castle_device* castle_device_init(version_t version)
     dev = kmalloc(sizeof(struct castle_device), GFP_KERNEL); 
     if(!dev)
         goto error_out;
-	spin_lock_init(&dev->lock);
+	init_rwsem(&dev->lock);
     dev->version = version;
         
     gd = alloc_disk(1);
