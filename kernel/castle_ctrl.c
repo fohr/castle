@@ -163,7 +163,7 @@ int castle_control_ioctl(struct inode *inode, struct file *filp,
         return -EFAULT;
 
     down(&castle_control_lock);
-    printk("Got IOCTL command %d.\n", ioctl.cmd);
+    //printk("Got IOCTL command %d.\n", ioctl.cmd);
     switch(ioctl.cmd)
     {
         case CASTLE_CTRL_CMD_CLAIM:

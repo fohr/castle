@@ -338,11 +338,11 @@ static void castle_cache_freelist_grow(void)
         /* If we haven't found any !busy buffers in the cleanlist 
            its likely because they are dirty. 
            Schedule a writeout. */
-        printk("=> Could not clean the hash table. Waking flush.\n");
+        debug("=> Could not clean the hash table. Waking flush.\n");
         castle_cache_flush_wakeup();
-        printk("=> Woken.\n");
+        debug("=> Woken.\n");
         sleep_on_timeout(&castle_cache_flush_wq, HZ / 25);
-        printk("=> We think there is some free memory now (cleanlist size: %d).\n",
+        debug("=> We think there is some free memory now (cleanlist size: %d).\n",
                 atomic_read(&castle_cache_cleanlist_size));
     }
     debug("Grown the list.\n");

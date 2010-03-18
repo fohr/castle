@@ -278,11 +278,8 @@ static int castle_slave_superblock_read(struct castle_slave *cs)
 
     err = castle_slave_superblock_validate(&cs_sb);
     if(err)
-    {
-        printk("Invalid superblock.\n");
         return -EINVAL;
-    }
-    castle_slave_superblock_print(&cs_sb);
+    //castle_slave_superblock_print(&cs_sb);
     /* Save the uuid and exit */
     cs->uuid = cs_sb.uuid;
     

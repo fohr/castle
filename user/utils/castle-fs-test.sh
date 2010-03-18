@@ -3,8 +3,9 @@
 # it gets installed to /opt/acunu/castle/bin
 
 TEST=/tmp/castle-disks
-#DISKS="disk1 disk2 disk3"
-DISKS="/dev/hdb /dev/hdc /dev/hdd"
+DISKS="disk1 disk2 disk3"
+DISK_SIZE=100 # in MB
+#DISKS="/dev/hdb /dev/hdc /dev/hdd"
 MOUNT_POINT=/tmp/mnt
 MOUNT_POINT2=/tmp/mnt2
 
@@ -16,7 +17,7 @@ function onexit() {
     umount ${MOUNT_POINT} 2>/dev/null  || true
     umount ${MOUNT_POINT2} 2>/dev/null || true
     if [ $exit_status != 0 ]; then
-        echo "Failed to initialise $exit_status!!!!"
+        echo "FAILED THE TEST. EXIT STATUS: $exit_status."
         ./castle-fs-fini.sh
     fi
     exit $exit_status
@@ -177,10 +178,18 @@ function initfs {
 	do_control_init
 }
 
+mkdir -p ${TEST}
 ./castle-fs-fini.sh
 for DISK in ${DISKS}; do
-	# clear the superblocks
-	dd if=/dev/zero of=${DISK} bs=4K count=2 
+    if [ `echo "$DISK" | grep dev | wc -l` == 0 ]; then 
+        echo "Creating backing file: $DISK"
+	    dd              if=/dev/zero of=${TEST}/${DISK} bs=1M count=1 seek=$DISK_SIZE 2>/dev/null
+	    dd conv=notrunc if=/dev/zero of=${TEST}/${DISK} bs=4K count=2 2>/dev/null
+    else
+	    # clear the superblocks
+        echo "Invalidating superblocks in $DISK"
+	    dd if=/dev/zero of=${DISK} bs=4K count=2 2>/dev/null
+    fi
 done
 initfs
 echo "Castle initialised successfully"
@@ -190,8 +199,7 @@ echo
 echo "Simple Hello World Test..."
 
 do_control_create 10
-# will attach as $DEV
-do_control_attach 1
+do_control_attach ${VOL_VER}
 
 PHRASE="Hello World!"
 write_phrase   $DEV "$PHRASE"

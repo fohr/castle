@@ -71,7 +71,18 @@ int main(int argc, char* argv[])
 
     if(argc != 3)
     {
-        printf("usage: castle-cli <cmd-string> <hex-arg>\n");
+        printf("usage: castle-cli <cmd-string> <hex-arg>\n\n");
+        printf("Available commands:\n");
+        printf("    Command       Argument               Return value \n");
+        printf("------------------------------------------------------\n");
+        printf("    claim         (maj,min) of disk      slave id     \n");
+        printf("    release       slave id               error #      \n");
+        printf("    init          unused                 error #      \n");
+        printf("    create        volume size            snapshot id  \n");
+        printf("    attach        snapshot id            dev (maj,min)\n");
+        printf("    detach        dev (maj,min)          error #      \n");
+        printf("    clone         snapshot id            clone id     \n");
+        printf("    snapshot      dev (maj,min)          snapshot id  \n\n");
         exit(1);
     }
     cmd = argv[1];

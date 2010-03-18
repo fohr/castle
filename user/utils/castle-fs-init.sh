@@ -3,8 +3,9 @@
 # it gets installed to /opt/acunu/castle/bin
 
 TEST=/tmp/castle-disks
-#DISKS="disk1 disk2 disk3"
-DISKS="/dev/hdb /dev/hdc /dev/hdd"
+DISKS="disk1 disk2 disk3"
+DISK_SIZE=100 # in MB
+#DISKS="/dev/hdb /dev/hdc /dev/hdd"
 MOUNT_POINT=/tmp/mnt
 MOUNT_POINT2=/tmp/mnt2
 
@@ -182,10 +183,19 @@ function initfs {
 
 ./castle-fs-fini.sh
 for DISK in ${DISKS}; do
-	# clear the superblocks
-	dd if=/dev/zero of=${DISK} bs=4K count=2 
+    if [ `echo "$DISK" | grep dev | wc -l` == 0 ]; then 
+        echo "Creating backing file: $DISK"
+	    dd              if=/dev/zero of=${TEST}/${DISK} bs=1M count=1 seek=$DISK_SIZE 2>/dev/null
+	    dd conv=notrunc if=/dev/zero of=${TEST}/${DISK} bs=4K count=2 2>/dev/null
+    else
+	    # clear the superblocks
+        echo "Invalidating superblocks in $DISK"
+	    dd if=/dev/zero of=${DISK} bs=4K count=2 2>/dev/null
+    fi
 done
 initfs
 
 do_control_create 50000
 do_control_attach ${VOL_VER}
+
+echo "Created volume: ${VOL_VER} and attached as: ${DEV}"
