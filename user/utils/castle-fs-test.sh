@@ -263,9 +263,9 @@ check_contents_file ${DEV} ${TEST_FILE}
 
 echo
 echo "More intense snapshots/clones"
-INTENSITY=1000
+INTENSITY=100
 TEST_FILE=/tmp/a_block_of_as
-COMP_FILES=/scratch/gmilos/tmp/snap
+COMP_FILES=/tmp/snap
 rm -f $TEST_FILE
 # a block of 1s (for dd'ing in)
 for i in `seq 4096`; do echo -n "a">> ${TEST_FILE}; done
