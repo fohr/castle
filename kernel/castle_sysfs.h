@@ -8,5 +8,7 @@ int  castle_sysfs_slave_add(struct castle_slave *slave);
 void castle_sysfs_slave_del(struct castle_slave *slave);
 int  castle_sysfs_device_add(struct castle_device *device);
 void castle_sysfs_device_del(struct castle_device *device);
+int castle_sysfs_region_add(struct castle_region *region);
+void castle_sysfs_region_del(struct castle_region *region);
 
 #endif /* __CASTLE_SYSFS_H__ */

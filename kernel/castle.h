@@ -199,9 +199,26 @@ struct castle_devices {
     struct list_head devices;
 };
 
+struct castle_region {
+	region_id_t          id;
+	struct kobject       kobj;
+	struct list_head     list;
+	
+	struct castle_slave *slave;
+	snap_id_t            snapshot;
+	int                  start;
+	int                  length;
+};
+
+struct castle_regions {
+    struct kobject   kobj;
+    struct list_head regions;
+};
+
 extern struct castle             castle;
 extern struct castle_slaves      castle_slaves;
 extern struct castle_devices     castle_devices;
+extern struct castle_regions     castle_regions;
 
 extern struct workqueue_struct *castle_wqs[MAX_BTREE_DEPTH+1];
 #define castle_wq              (castle_wqs[0])
@@ -220,6 +237,10 @@ struct castle_device* castle_device_find       (dev_t dev);
 
 struct castle_slave*  castle_claim             (uint32_t new_dev);
 void                  castle_release           (struct castle_slave *cs);
+
+struct castle_region* castle_region_find       (region_id_t id);
+struct castle_region* castle_region_create     (uint32_t slave_id, snap_id_t snapshot, uint32_t start, uint32_t length);
+void                  castle_region_destroy    (struct castle_region *region);
 
 struct castle_slave*  castle_slave_find_by_id  (uint32_t id);
 struct castle_slave*  castle_slave_find_by_uuid(uint32_t uuid);

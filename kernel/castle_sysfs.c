@@ -4,7 +4,9 @@
 #include <linux/fs.h>
 #include <linux/blkdev.h>
 
+#include "castle_public.h"
 #include "castle.h"
+#include "castle_sysfs.h"
 #include "castle_versions.h"
 
 struct castle_volumes {
@@ -250,12 +252,10 @@ int castle_sysfs_slave_add(struct castle_slave *slave)
     return 0;
 }
 
-int castle_sysfs_slave_del(struct castle_slave *slave)
+void castle_sysfs_slave_del(struct castle_slave *slave)
 {
     sysfs_remove_link(&slave->kobj, "dev");
     kobject_unregister(&slave->kobj);
-
-    return 0;
 }
 
 /* Definition of devices sysfs directory attributes */
@@ -307,22 +307,108 @@ int castle_sysfs_device_add(struct castle_device *device)
     return 0;
 }
 
-int castle_sysfs_device_del(struct castle_device *device)
+void castle_sysfs_device_del(struct castle_device *device)
 {
     sysfs_remove_link(&device->kobj, "dev");
     kobject_unregister(&device->kobj);
+}
+
+/* REGIONS */
+
+static ssize_t region_start_show(struct kobject *kobj, 
+						           struct attribute *attr, 
+                                   char *buf)
+{
+    struct castle_region *region = container_of(kobj, struct castle_region, kobj); 
+
+    return sprintf(buf, "0x%x\n", region->start);
+}
+
+static ssize_t region_length_show(struct kobject *kobj, 
+						           struct attribute *attr, 
+                                   char *buf)
+{
+    struct castle_region *region = container_of(kobj, struct castle_region, kobj); 
+
+    return sprintf(buf, "0x%x\n", region->length);
+}
+
+static ssize_t region_snapshot_show(struct kobject *kobj, 
+						           struct attribute *attr, 
+                                   char *buf)
+{
+    struct castle_region *region = container_of(kobj, struct castle_region, kobj); 
+
+    return sprintf(buf, "0x%x\n", region->snapshot);
+}
+
+/* Definition of regions sysfs directory attributes */
+static struct attribute *castle_regions_attrs[] = {
+    NULL,
+};
+
+static struct kobj_type castle_regions_ktype = {
+    .sysfs_ops      = &castle_sysfs_ops,
+    .default_attrs  = castle_regions_attrs,
+};
+
+/* Definition of each region sysfs directory attributes */
+static struct castle_sysfs_entry region_start =
+__ATTR(start, S_IRUGO|S_IWUSR, region_start_show, NULL);
+
+static struct castle_sysfs_entry region_length =
+__ATTR(length, S_IRUGO|S_IWUSR, region_length_show, NULL);
+
+static struct castle_sysfs_entry region_snapshot =
+__ATTR(snapshot, S_IRUGO|S_IWUSR, region_snapshot_show, NULL);
+
+static struct attribute *castle_region_attrs[] = {
+    &region_start.attr,
+    &region_length.attr,
+    &region_snapshot.attr,
+    NULL,
+};
+
+static struct kobj_type castle_region_ktype = {
+    .sysfs_ops      = &castle_sysfs_ops,
+    .default_attrs  = castle_region_attrs,
+};
+
+int castle_sysfs_region_add(struct castle_region *region)
+{
+    int ret;
+
+    memset(&region->kobj, 0, sizeof(struct kobject));
+    region->kobj.parent = &castle_regions.kobj; 
+    region->kobj.ktype  = &castle_region_ktype; 
+    ret = kobject_set_name(&region->kobj, "%d", region->id);
+    if(ret < 0) 
+        return ret;
+        
+    ret = kobject_register(&region->kobj);
+    if(ret < 0)
+        return ret;
+
+    ret = sysfs_create_link(&region->kobj, &region->slave->kobj, "slave");
+    if (ret < 0)
+        return ret;
 
     return 0;
 }
 
+void castle_sysfs_region_del(struct castle_region *region)
+{
+    sysfs_remove_link(&region->kobj, "slave");
+    kobject_unregister(&region->kobj);
+}
 
 /* Initialisation of sysfs dirs == kobjs registration */
 int castle_sysfs_init(void)
 {
     int ret;
-    int castle_registered, volumes_registered, slaves_registered, devices_registered;
+    int castle_registered, volumes_registered, slaves_registered, devices_registered, regions_registered;
 
-    castle_registered = volumes_registered = slaves_registered = devices_registered = 0;
+    castle_registered = volumes_registered = slaves_registered = devices_registered = regions_registered = 0;
 
     memset(&castle.kobj, 0, sizeof(struct kobject));
     castle.kobj.parent = &fs_subsys.kobj;
@@ -361,6 +447,15 @@ int castle_sysfs_init(void)
     if(ret < 0) goto error_out;
     devices_registered = 1;
 
+    memset(&castle_regions.kobj, 0, sizeof(struct kobject));
+    castle_regions.kobj.parent = &castle.kobj;
+    castle_regions.kobj.ktype  = &castle_regions_ktype;
+    ret = kobject_set_name(&castle_regions.kobj, "%s", "regions");
+    if(ret < 0) goto error_out;
+    ret = kobject_register(&castle_regions.kobj);
+    if(ret < 0) goto error_out;
+    regions_registered = 1;
+
     return 0;
 
 error_out:
@@ -368,12 +463,14 @@ error_out:
     if(volumes_registered) kobject_unregister(&castle_volumes.kobj);
     if(slaves_registered)  kobject_unregister(&castle_slaves.kobj);
     if(devices_registered) kobject_unregister(&castle_devices.kobj);
+    if(regions_registered) kobject_unregister(&castle_regions.kobj);
 
     return ret;
 }
 
 void castle_sysfs_fini(void)
 {
+    kobject_unregister(&castle_regions.kobj);
     kobject_unregister(&castle_slaves.kobj);
     kobject_unregister(&castle_volumes.kobj);
     kobject_unregister(&castle.kobj);

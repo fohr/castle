@@ -3,6 +3,7 @@
 #include <linux/bio.h>
 #include <linux/hardirq.h>
 
+#include "castle_public.h"
 #include "castle.h"
 
 //#define DEBUG

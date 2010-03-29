@@ -6,6 +6,7 @@
 #include <linux/wait.h>
 #include <linux/kthread.h>
 
+#include "castle_public.h"
 #include "castle.h"
 #include "castle_cache.h"
 

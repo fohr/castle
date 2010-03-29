@@ -9,6 +9,7 @@
 #include <linux/crc32.h>
 #include <asm/semaphore.h>
 
+#include "castle_public.h"
 #include "castle.h"
 #include "castle_block.h"
 #include "castle_cache.h"
@@ -21,6 +22,7 @@
 struct castle                castle;
 struct castle_slaves         castle_slaves;
 struct castle_devices        castle_devices;
+struct castle_regions        castle_regions;
 
 struct workqueue_struct     *castle_wqs[MAX_BTREE_DEPTH+1];
 
@@ -536,6 +538,120 @@ void castle_release(struct castle_slave *cs)
     kfree(cs);
 }
 
+struct castle_region* castle_region_find(region_id_t id)
+{
+    struct list_head *lh;
+    struct castle_region *region;
+
+    list_for_each(lh, &castle_regions.regions)
+    {
+        region = list_entry(lh, struct castle_region, list);
+        if(region->id == id)
+            return region;
+    }
+
+    return NULL;
+}
+
+static int castle_region_add(struct castle_region *region)
+{
+    struct list_head *l;
+    struct castle_region *r;
+
+    list_for_each(l, &castle_regions.regions)
+    {
+        r = list_entry(l, struct castle_region, list);
+        /* Check region does not overlap any other */
+        if((region->slave == r->slave) && (region->start + region->length > r->start) && (region->start < r->start + r->length))
+        {
+            printk("Region overlaps another - existing=(start=%d, length=%d) new=(start=%d, length=%d)\n", 
+                    r->start, r->length, region->start, region->length);
+            return -EINVAL;            
+        }
+    }
+    /* If no UUID collision, add to the list */
+    list_add(&region->list, &castle_regions.regions);
+    return 0;
+}
+
+/*
+ * TODO: ref count slaves with regions or something?
+ */
+struct castle_region* castle_region_create(uint32_t slave_id, snap_id_t snapshot, uint32_t start, uint32_t length)
+{
+    struct castle_region* region = NULL;
+    struct castle_slave* slave = NULL;
+    static int region_id = 0;
+    int err;
+    
+    printk("castle_region_create(slave_id=%d, snapshot=%d, start=%d, length=%d)\n", slave_id, snapshot, start, length);
+    
+    if(length <= 0)
+    {
+        printk("length must be greater than 0!\n");
+        goto err_out;
+    }
+    
+    if(VERSION_INVAL(snapshot))
+    {
+        printk("Invalid version '%d'!\n", snapshot);
+        goto err_out;
+    }
+    
+    if(!(region = kzalloc(sizeof(struct castle_region), GFP_KERNEL)))
+        goto err_out;
+        
+    if(!(slave = castle_slave_find_by_id(slave_id)))
+        goto err_out;
+    
+    region->id = region_id++;
+    region->slave = slave;
+    region->snapshot = snapshot;
+    region->start = start;
+    region->length = length;
+    
+    err = castle_region_add(region);
+    if(err)
+    {
+        printk("Could not add region to the list.\n");
+        goto err_out;
+    }
+    
+    castle_sysfs_region_add(region);
+    
+    return region;
+        
+err_out:
+    if(region) kfree(region);
+    return NULL;
+}
+
+void castle_region_destroy(struct castle_region *region)
+{
+    castle_sysfs_region_del(region);
+    list_del(&region->list);
+    kfree(region);
+}
+
+static int castle_regions_init(void)
+{
+    memset(&castle_regions, 0, sizeof(struct castle_regions));
+    INIT_LIST_HEAD(&castle_regions.regions);
+
+    return 0;
+}
+
+static void castle_regions_free(void)                                                                 
+{                                                                                        
+    struct list_head *lh, *th;
+    struct castle_region *region;
+
+    list_for_each_safe(lh, th, &castle_regions.regions)
+    {
+        region = list_entry(lh, struct castle_region, list); 
+        castle_region_destroy(region);
+    }
+}
 
 static int castle_open(struct inode *inode, struct file *filp)
 {
@@ -1075,13 +1191,16 @@ static int __init castle_init(void)
     if((ret = castle_btree_init()))    goto err_out4;
     if((ret = castle_devices_init()))  goto err_out5;
     if((ret = castle_control_init()))  goto err_out6;
-    if((ret = castle_sysfs_init()))    goto err_out7;
+    if((ret = castle_regions_init()))  goto err_out7;
+    if((ret = castle_sysfs_init()))    goto err_out8;
 
     printk("OK.\n");
 
     return 0;
 
-    castle_sysfs_fini(); /* Unreachable */ 
+    castle_sysfs_fini(); /* Unreachable */
+err_out8:
+    castle_regions_free();
 err_out7:
     castle_control_fini();
 err_out6:
@@ -1109,7 +1228,7 @@ static void __exit castle_exit(void)
 {
     printk("Castle FS exit ... ");
 
-    castle_sysfs_fini();
+    castle_regions_free();
     castle_control_fini();
     castle_devices_free();
     castle_btree_free();
@@ -1117,6 +1236,7 @@ static void __exit castle_exit(void)
     castle_slaves_unlock();
     castle_cache_fini();
     castle_slaves_free();
+    castle_sysfs_fini();
     castle_debug_fini();
 
     printk("done.\n\n\n");

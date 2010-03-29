@@ -6,6 +6,7 @@
 #include <linux/bio.h>
 #include <linux/hardirq.h>
 
+#include "castle_public.h"
 #include "castle.h"
 #include "castle_cache.h"
 #include "castle_btree.h"

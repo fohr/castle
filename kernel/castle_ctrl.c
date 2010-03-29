@@ -146,6 +146,37 @@ static void castle_control_fs_init(cctrl_cmd_init_t *ioctl)
     ioctl->ret = castle_fs_init();
 }
 
+static void castle_control_region_create(cctrl_cmd_region_create_t *ioctl)
+{
+    struct castle_region *region;
+
+    if(!(region = castle_region_create(ioctl->slave, ioctl->snapshot, ioctl->start, ioctl->length)))
+        goto err_out;
+
+    ioctl->id  = region->id;
+    ioctl->ret = 0;
+    
+    return;
+        
+err_out:
+    ioctl->id  = (uint32_t)-1;
+    ioctl->ret = -EINVAL;
+}
+
+static void castle_control_region_destroy(cctrl_cmd_region_destroy_t *ioctl)
+{
+    struct castle_region *region;
+    
+    if(!(region = castle_region_find(ioctl->id)))
+    {
+        ioctl->ret = -EINVAL;
+    }
+    else
+    {
+        castle_region_destroy(region);
+        ioctl->ret = 0;
+    }
+}
 
 int castle_control_ioctl(struct inode *inode, struct file *filp,
                          unsigned int cmd, unsigned long arg)
@@ -189,6 +220,12 @@ int castle_control_ioctl(struct inode *inode, struct file *filp,
             break;
         case CASTLE_CTRL_CMD_INIT:
             castle_control_fs_init(&ioctl.init);
+            break;
+        case CASTLE_CTRL_CMD_REGION_CREATE:
+            castle_control_region_create(&ioctl.region_create);
+            break;        
+        case CASTLE_CTRL_CMD_REGION_DESTROY:
+            castle_control_region_destroy(&ioctl.region_destroy);
             break;
 
         default:

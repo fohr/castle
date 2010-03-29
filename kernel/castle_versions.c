@@ -11,6 +11,7 @@
 #include <linux/fs.h>
 #include <asm/semaphore.h>
 
+#include "castle_public.h"
 #include "castle.h"
 #include "castle_versions.h"
 #include "castle_sysfs.h"
@@ -344,7 +345,7 @@ static version_t castle_version_new_create(int snap_or_clone,
     
     /* Lock the root, to make sure that there are no ongoing writes 
        which may split the root node. New writes will not be accepted
-       unil we are done, because we are working under device lock.
+       until we are done, because we are working under device lock.
        If we are doing clones rather than snapshots (and there is no
        locked device), there won't be any IO for the version either.
        Finally, because control commands are serialised, if someone
