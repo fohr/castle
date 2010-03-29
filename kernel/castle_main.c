@@ -19,7 +19,6 @@
 #include "castle_debug.h"
 
 struct castle                castle;
-struct castle_volumes        castle_volumes;
 struct castle_slaves         castle_slaves;
 struct castle_devices        castle_devices;
 
@@ -900,7 +899,7 @@ struct castle_device* castle_device_init(version_t version)
     uint32_t size;
     int leaf;
 
-    if(castle_version_snap_get(version, &size, &leaf))
+    if(castle_version_snap_get(version, NULL, &size, &leaf))
         goto error_out;
 
     dev = kmalloc(sizeof(struct castle_device), GFP_KERNEL); 

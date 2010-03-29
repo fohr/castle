@@ -163,10 +163,6 @@ struct castle {
     struct kobject kobj;
 };
 
-struct castle_volumes {
-    struct kobject kobj;
-};
-
 struct castle_slave {
     uint32_t                        id;
     uint32_t                        uuid; /* Copy of the uuid from the superblock
@@ -204,7 +200,6 @@ struct castle_devices {
 };
 
 extern struct castle             castle;
-extern struct castle_volumes     castle_volumes;
 extern struct castle_slaves      castle_slaves;
 extern struct castle_devices     castle_devices;
 

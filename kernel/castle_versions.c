@@ -13,6 +13,7 @@
 
 #include "castle.h"
 #include "castle_versions.h"
+#include "castle_sysfs.h"
 #include "castle_cache.h"
 
 //#define DEBUG
@@ -139,7 +140,8 @@ static int castle_version_add(c_disk_blk_t cdb,
                               uint32_t size)
 {
     struct castle_version *v;
-
+    int ret;
+    
     v = kmem_cache_alloc(castle_versions_cache, GFP_KERNEL);
     if(!v) return -ENOMEM;
     debug("Adding: (v, p)=(%d,%d)\n", version, parent);
@@ -158,6 +160,8 @@ static int castle_version_add(c_disk_blk_t cdb,
     INIT_LIST_HEAD(&v->init_list);
 
     castle_versions_hash_add(v);
+    castle_sysfs_version_add(version);
+
     /* Initialise version 0 (root version) fully */ 
     if(v->version == 0)
     {
@@ -508,22 +512,21 @@ void castle_version_ftree_unlock(version_t version)
 }
 
 int castle_version_snap_get(version_t version, 
+                            version_t *parent,
                             uint32_t *size,
                             int *leaf)
 {
     struct castle_version *v;
     int ret = -EINVAL;
 
-    if(version == 0)
-        return ret;
-
     spin_lock_irq(&castle_versions_hash_lock);
     v = __castle_versions_hash_get(version);
     if(v) 
     {
         ret = 0;
-        if(size) *size =  v->size;
-        if(leaf) *leaf = (v->first_child == NULL);
+        if(size)   *size =  v->size;
+        if(parent) *parent = v->parent ? v->parent->version : 0;
+        if(leaf)   *leaf = (v->first_child == NULL);
         if(test_and_set_bit(CV_ATTACHED_BIT, &v->flags))
             ret = -EAGAIN;
     }

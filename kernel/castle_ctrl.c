@@ -130,7 +130,7 @@ static void castle_control_snapshot(cctrl_cmd_snapshot_t *ioctl)
     else
     {
         /* Attach the new version */
-        castle_version_snap_get(version, NULL, NULL);
+        castle_version_snap_get(version, NULL, NULL, NULL);
         /* Change the version associated with the device */
         cd->version    = version;
         /* Release the old version */

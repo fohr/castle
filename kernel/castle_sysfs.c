@@ -5,30 +5,96 @@
 #include <linux/blkdev.h>
 
 #include "castle.h"
+#include "castle_versions.h"
 
-static ssize_t test_show(struct kobject *kobj, char *buf)
+struct castle_volumes {
+    struct kobject kobj;
+};
+static struct castle_volumes castle_volumes;
+
+struct castle_sysfs_entry {
+    struct attribute attr;
+    ssize_t (*show) (struct kobject *kobj, struct attribute *attr, char *buf);
+    ssize_t (*store)(struct kobject *kobj, struct attribute *attr, const char *buf, size_t count);
+};
+
+struct castle_sysfs_version {
+    version_t version;
+    char name[10];
+    struct castle_sysfs_entry csys_entry; 
+};
+
+
+static ssize_t versions_list_show(struct kobject *kobj, 
+							      struct attribute *attr, 
+								  char *buf)
 {
-    return sprintf(buf, "%s\n", "Test castle attribute file");
+    struct castle_sysfs_entry *csys_entry = 
+                container_of(attr, struct castle_sysfs_entry, attr);
+    struct castle_sysfs_version *v =
+                container_of(csys_entry, struct castle_sysfs_version, csys_entry);
+    version_t parent;
+    uint32_t size;
+    ssize_t len;
+    int leaf;
+    int ret;
+
+    ret = castle_version_snap_get(v->version, &parent, &size, &leaf);
+    if((ret == 0) || (ret == -EAGAIN))
+    {
+        len = sprintf(buf,
+                "Id\tParentId\tLogicalSize\tIsLeaf\n%d\t%d\t%d\t%d\n",
+                 v->version, parent, size, leaf);
+        /* Put the version, if we 'attached' it */
+        if(ret == 0) castle_version_snap_put(v->version);
+
+        return len;
+    }
+
+    return sprintf(buf, "Could not read the version, err %d\n", ret); 
 }
 
-static ssize_t test_store(struct kobject *kobj, const char *buf, size_t count)
-{
-    printk("Got write: %s\n", buf);
-    return count;
-}
-
-static ssize_t volumes_test_show(struct kobject *kobj, char *buf)
-{
-    return sprintf(buf, "%s\n", "Test volumes attribute file");
-}
-
-static ssize_t volumes_test_store(struct kobject *kobj, const char *buf, size_t count)
+static ssize_t versions_list_store(struct kobject *kobj,
+							       struct attribute *attr, 
+								   const char *buf, 
+								   size_t count)
 {
     printk("Got write to volumes: %s\n", buf);
     return count;
 }
 
-static ssize_t slaves_number_show(struct kobject *kobj, char *buf)
+
+void castle_sysfs_version_add(version_t version)
+{
+    struct castle_sysfs_version *v;
+    char *name_prefix = "ver-";
+    int ret;
+
+    /* We've got 10 chars for the name, 'ver-%d'. This means
+       version has to be less than 100000 */
+    if(version >= 100000)
+    {
+        printk("ERROR: version number > 100000. Not adding to sysfs.\n");
+        return;
+    }
+    v = kmalloc(sizeof(struct castle_sysfs_version), GFP_KERNEL);
+    if(!v) return;
+
+    v->version = version;
+    sprintf(v->name, "%s%d", name_prefix, version); 
+    v->csys_entry.attr.name = v->name;
+    v->csys_entry.attr.mode = S_IRUGO|S_IWUSR;
+    v->csys_entry.show  = versions_list_show;
+    v->csys_entry.store = versions_list_store;
+
+    ret = sysfs_create_file(&castle_volumes.kobj, &v->csys_entry.attr);
+    if(ret)
+        printk("Warning: could not create a version file in sysfs.\n");
+}
+
+static ssize_t slaves_number_show(struct kobject *kobj, 
+								  struct attribute *attr, 
+							      char *buf)
 {
     struct castle_slaves *slaves = 
                 container_of(kobj, struct castle_slaves, kobj);
@@ -41,20 +107,27 @@ static ssize_t slaves_number_show(struct kobject *kobj, char *buf)
     return sprintf(buf, "%d\n", nr_slaves);
 }
 
-static ssize_t slaves_number_store(struct kobject *kobj, const char *buf, size_t count)
+static ssize_t slaves_number_store(struct kobject *kobj, 
+								  struct attribute *attr, 
+                                  const char *buf, 
+                                  size_t count)
 {
     printk("Got write to disks: %s\n", buf);
     return count;
 }
 
-static ssize_t slave_uuid_show(struct kobject *kobj, char *buf)
+static ssize_t slave_uuid_show(struct kobject *kobj, 
+						       struct attribute *attr, 
+                               char *buf)
 {
     struct castle_slave *slave = container_of(kobj, struct castle_slave, kobj); 
 
     return sprintf(buf, "0x%x\n", slave->uuid);
 }
 
-static ssize_t devices_number_show(struct kobject *kobj, char *buf)
+static ssize_t devices_number_show(struct kobject *kobj, 
+						           struct attribute *attr, 
+                                   char *buf)
 {
     struct castle_devices *devices = 
                 container_of(kobj, struct castle_devices, kobj);
@@ -67,18 +140,14 @@ static ssize_t devices_number_show(struct kobject *kobj, char *buf)
     return sprintf(buf, "%d\n", nr_devices);
 }
 
-static ssize_t device_version_show(struct kobject *kobj, char *buf)
+static ssize_t device_version_show(struct kobject *kobj, 
+						           struct attribute *attr, 
+                                   char *buf)
 {
     struct castle_device *device = container_of(kobj, struct castle_device, kobj); 
 
     return sprintf(buf, "0x%x\n", device->version);
 }
-
-struct castle_sysfs_entry {
-    struct attribute attr;
-    ssize_t (*show) (struct kobject *kobj, char *buf);
-    ssize_t (*store)(struct kobject *kobj, const char *buf, size_t count);
-};
 
 
 static ssize_t castle_attr_show(struct kobject *kobj,
@@ -91,7 +160,7 @@ static ssize_t castle_attr_show(struct kobject *kobj,
     if (!entry->show)
         return -EIO;
     
-    return entry->show(kobj, page);
+    return entry->show(kobj, attr, page);
 }
 
 static ssize_t castle_attr_store(struct kobject *kobj, 
@@ -106,7 +175,7 @@ static ssize_t castle_attr_store(struct kobject *kobj,
         return -EIO;
     if (!capable(CAP_SYS_ADMIN))
         return -EACCES;
-    return entry->store(kobj, page, length);
+    return entry->store(kobj, attr, page, length);
 }
 
 static struct sysfs_ops castle_sysfs_ops = {
@@ -114,13 +183,7 @@ static struct sysfs_ops castle_sysfs_ops = {
     .store  = castle_attr_store,
 };
 
-
-/* Definition of castle root sysfs directory attributes */
-static struct castle_sysfs_entry test =
-__ATTR(test_attr, S_IRUGO|S_IWUSR, test_show, test_store);
-
 static struct attribute *castle_root_attrs[] = {
-    &test.attr,
     NULL,
 };
 
@@ -129,12 +192,7 @@ static struct kobj_type castle_root_ktype = {
     .default_attrs  = castle_root_attrs,
 };
 
-/* Definition of volumes sysfs directory attributes */
-static struct castle_sysfs_entry volumes_test =
-__ATTR(vols_test_attr, S_IRUGO|S_IWUSR, volumes_test_show, volumes_test_store);
-
 static struct attribute *castle_volumes_attrs[] = {
-    &volumes_test.attr,
     NULL,
 };
 
