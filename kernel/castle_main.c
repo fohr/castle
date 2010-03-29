@@ -454,7 +454,7 @@ struct castle_slave* castle_claim(uint32_t new_dev)
 {
     dev_t dev;
     struct block_device *bdev;
-    int bdev_claimed = 0;
+    int bdev_claimed = 0, cs_added = 0;
     int err;
     char b[BDEVNAME_SIZE];
     struct castle_slave *cs = NULL;
@@ -501,23 +501,29 @@ struct castle_slave* castle_claim(uint32_t new_dev)
         printk("Could not add slave to the list.\n");
         goto err_out;
     }
+    cs_added = 1;
 
     err = castle_slave_superblocks_init(cs);
     if(err)
     {
         printk("Could not cache the superblocks.\n");
-        list_del(&cs->list);
         goto err_out;
     }
 
-    castle_sysfs_slave_add(cs);
+    err = castle_sysfs_slave_add(cs);
+    if(err)
+    {
+        printk("Could not add slave to sysfs.\n");
+        goto err_out;
+    }
 
     return cs;
 err_out:
-    if(cs->sblk) put_c2p(cs->sblk);
-    if(cs->fs_sblk) put_c2p(cs->fs_sblk);
+    if(cs_added)     list_del(&cs->list);
+    if(cs->sblk)     put_c2p(cs->sblk);
+    if(cs->fs_sblk)  put_c2p(cs->fs_sblk);
     if(bdev_claimed) blkdev_put(bdev);
-    if(cs) kfree(cs);
+    if(cs)           kfree(cs);
     return NULL;    
 }
 
@@ -898,6 +904,7 @@ struct castle_device* castle_device_init(version_t version)
     static int minor = 0;
     uint32_t size;
     int leaf;
+    int err;
 
     if(castle_version_snap_get(version, NULL, &size, &leaf))
         goto error_out;
@@ -934,14 +941,22 @@ struct castle_device* castle_device_init(version_t version)
     add_disk(gd);
 
     bdget(MKDEV(gd->major, gd->first_minor));
-    castle_sysfs_device_add(dev);
+    err = castle_sysfs_device_add(dev);
+    if(err) 
+    {
+        /* TODO: this doesn't do bdput. device_free doesn't 
+                 do this neither, and it works ... */
+        del_gendisk(gd);
+        list_del(&dev->list);
+        goto error_out;
+    }
 
     return dev;
 
 error_out:
-    if(dev) kfree(dev);
     if(gd)  put_disk(gd); 
     if(rq)  blk_cleanup_queue(rq); 
+    if(dev) kfree(dev);
     printk("Failed to init device.\n");
     return NULL;    
 }

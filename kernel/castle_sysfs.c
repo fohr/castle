@@ -64,10 +64,9 @@ static ssize_t versions_list_store(struct kobject *kobj,
 }
 
 
-void castle_sysfs_version_add(version_t version)
+int castle_sysfs_version_add(version_t version)
 {
     struct castle_sysfs_version *v;
-    char *name_prefix = "ver-";
     int ret;
 
     /* We've got 10 chars for the name, 'ver-%d'. This means
@@ -75,13 +74,13 @@ void castle_sysfs_version_add(version_t version)
     if(version >= 100000)
     {
         printk("ERROR: version number > 100000. Not adding to sysfs.\n");
-        return;
+        return -E2BIG;
     }
     v = kmalloc(sizeof(struct castle_sysfs_version), GFP_KERNEL);
-    if(!v) return;
+    if(!v) return -ENOMEM;
 
     v->version = version;
-    sprintf(v->name, "%s%d", name_prefix, version); 
+    sprintf(v->name, "%d", version); 
     v->csys_entry.attr.name = v->name;
     v->csys_entry.attr.mode = S_IRUGO|S_IWUSR;
     v->csys_entry.show  = versions_list_show;
@@ -90,6 +89,8 @@ void castle_sysfs_version_add(version_t version)
     ret = sysfs_create_file(&castle_volumes.kobj, &v->csys_entry.attr);
     if(ret)
         printk("Warning: could not create a version file in sysfs.\n");
+
+    return 0;
 }
 
 static ssize_t slaves_number_show(struct kobject *kobj, 

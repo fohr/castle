@@ -23,7 +23,7 @@
 #define debug(_f, _a...)  (printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
 #endif
 
-static void castle_versions_process(void);
+static int castle_versions_process(void);
 static c2_page_t* castle_versions_node_init(void);
 
 static struct kmem_cache *castle_versions_cache = NULL;
@@ -88,6 +88,11 @@ static void castle_versions_hash_add(struct castle_version *v)
     spin_lock_irq(&castle_versions_hash_lock);
     list_add(&v->hash_list, &castle_versions_hash[idx]);
     spin_unlock_irq(&castle_versions_hash_lock);
+}
+
+static void __castle_versions_hash_remove(struct castle_version *v)
+{
+    list_del(&v->hash_list);
 }
 
 static struct castle_version* __castle_versions_hash_get(version_t version)
@@ -160,8 +165,6 @@ static int castle_version_add(c_disk_blk_t cdb,
     INIT_LIST_HEAD(&v->init_list);
 
     castle_versions_hash_add(v);
-    castle_sysfs_version_add(version);
-
     /* Initialise version 0 (root version) fully */ 
     if(v->version == 0)
     {
@@ -169,6 +172,8 @@ static int castle_version_add(c_disk_blk_t cdb,
         v->first_child  = NULL; /* This will be updated later */
         v->next_sybling = NULL;
         v->flags       |= CV_INITED_MASK;
+
+        return castle_sysfs_version_add(v->version); 
 
     } else
     {
@@ -381,7 +386,8 @@ static version_t castle_version_new_create(int snap_or_clone,
     BUG_ON(!v);
     if(!(v->flags & CV_INITED_MASK))
     {
-        /* TODO: remove from hash? */
+        __castle_versions_hash_remove(v);
+        kmem_cache_free(castle_versions_cache, v);
         version = INVAL_VERSION;
     }
     spin_unlock_irq(&castle_versions_hash_lock);
@@ -546,11 +552,13 @@ void castle_version_snap_put(version_t version)
     spin_unlock_irq(&castle_versions_hash_lock);
 }
 
-static void castle_versions_process(void)
+static int castle_versions_process(void)
 {
     struct castle_version *v, *p, *n;
+    LIST_HEAD(sysfs_list); 
     version_t id;
-    int children_first;
+    int children_first, ret;
+    int err = 0;
 
     spin_lock_irq(&castle_versions_hash_lock);
     /* Start processing elements from the init list, one at the time */
@@ -574,6 +582,7 @@ process_version:
         {
             printk("Warn: ignoring snapshot: %d, parent: %d has a child %d already.\n",
                     v->version, p->version, p->first_child->version);
+            err = -1;
             continue;
         }
         /* Clones can only be made if the parent isn't attached writeably
@@ -584,6 +593,7 @@ process_version:
         {
             printk("Warn: ignoring clone: %d, parent: %d is a leaf.\n",
                     v->version, p->version);
+            err = -2;
             continue;
         }
         /* If the parent hasn't been initialised yet, initialise it instead */
@@ -608,6 +618,8 @@ process_version:
         v->parent       = p;
         v->next_sybling = p->first_child;
         p->first_child  = v;
+        list_add(&v->init_list, &sysfs_list);
+
         /* We are done setting this version up. */
         v->flags |= CV_INITED_MASK;
     }
@@ -664,7 +676,25 @@ process_version:
         v = n;
     }
     spin_unlock_irq(&castle_versions_hash_lock);
+
+    while(!list_empty(&sysfs_list))
+    {
+        v = list_first_entry(&sysfs_list, 
+                              struct castle_version,
+                              init_list);
+        list_del(&v->init_list);
+        /* Now that we are done setting the version up, try to add it to sysfs. */
+        ret = castle_sysfs_version_add(v->version);
+        if(ret)
+        {
+            printk("Could not add version %d to sysfs. Errno=%d.\n", v->version, ret);
+            err = -3;
+            continue; 
+        }
+    }
+ 
     /* Done. */
+    return err;
 }
 
 int castle_version_is_ancestor(version_t candidate, version_t version)
@@ -860,10 +890,17 @@ out:
         unlock_c2p(c2p);
         put_c2p(c2p);
     }
-    if(!ret) 
-        castle_versions_process(); 
-    else
+    if(ret) 
+    {
         printk("ERROR: Failed to read versions in!\n");
+        return ret;
+    }
+    ret = castle_versions_process(); 
+    if(ret)
+    {
+        printk("ERROR: Failed to init versions, %d!\n", ret);
+        return ret;
+    }
 
     return ret;
 }
