@@ -107,6 +107,13 @@ function do_control_internal {
 	echo "    ret: $IOCTL_RET"
 }
 
+function do_control_internal4 {
+	echo -n "   Command: $1 0x$2 0x$3 0x$4 0x$5"
+	IOCTL_RET=`castle-fs-cli $1 0x$2 0x$3 0x$4 0x$5 | grep "Ret val:"` 
+	IOCTL_RET=`echo $IOCTL_RET | sed -e "s/Ret val: 0x\([0-9a-f]*\)./\1/g"`
+	echo "    ret: $IOCTL_RET"
+}
+
 function do_control_claim {
     local FILE=$1
     if [ `echo "${FILE}" | grep "/dev" | wc -l` == 0 ]; then
@@ -147,6 +154,15 @@ function do_control_snapshot {
 function do_control_clone {
     do_control_internal "clone" $1
     CLONE_VER=$IOCTL_RET
+}
+
+function do_control_region_create {
+    do_control_internal4 "region_create" `printf "%X" $1` `printf "%X" $2` `printf "%X" $3` `printf "%X" $4`
+    REGION_ID=`printf "%d" 0x$IOCTL_RET`
+}
+
+function do_control_region_destroy {
+    do_control_internal "region_destroy" `printf "%X" $1`
 }
 
 function mod_init {
@@ -239,7 +255,7 @@ done
 
 
 
-
+echo
 echo "Large volume (btree split) test"
 SIZE=5000
 TEST_FILE=/tmp/bigvol
@@ -256,6 +272,27 @@ check_contents_file ${DEV} ${TEST_FILE}
 
 
 
+
+
+echo
+echo "Regions tests"
+REGIONS=100
+REGION_SIZE=10
+SLAVE_ID=0
+VERSION_ID=0
+for I in `seq $REGIONS`; do
+	do_control_region_create $SLAVE_ID $VERSION_ID $I 1
+	check_contents /sys/fs/castle-fs/regions/$REGION_ID/start "0x`printf "%x" $I`"
+	check_contents /sys/fs/castle-fs/regions/$REGION_ID/length "0x1"
+done
+
+check_contents /sys/fs/castle-fs/regions/number $REGIONS
+
+for I in `seq 0 $(( $REGIONS - 1 ))`; do
+	do_control_region_destroy $I
+done
+
+check_contents /sys/fs/castle-fs/regions/number "0"
 
 
 

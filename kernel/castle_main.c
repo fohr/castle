@@ -577,14 +577,14 @@ static int castle_region_add(struct castle_region *region)
 /*
  * TODO: ref count slaves with regions or something?
  */
-struct castle_region* castle_region_create(uint32_t slave_id, snap_id_t snapshot, uint32_t start, uint32_t length)
+struct castle_region* castle_region_create(uint32_t slave_id, version_t version, uint32_t start, uint32_t length)
 {
     struct castle_region* region = NULL;
     struct castle_slave* slave = NULL;
     static int region_id = 0;
     int err;
     
-    printk("castle_region_create(slave_id=%d, snapshot=%d, start=%d, length=%d)\n", slave_id, snapshot, start, length);
+    printk("castle_region_create(slave_id=%d, version=%d, start=%d, length=%d)\n", slave_id, version, start, length);
     
     if(length <= 0)
     {
@@ -592,10 +592,19 @@ struct castle_region* castle_region_create(uint32_t slave_id, snap_id_t snapshot
         goto err_out;
     }
     
-    if(VERSION_INVAL(snapshot))
+    /* To check if a good snapshot version, try and
+       get the snapshot.  If we do get it, then we may
+       take the 'lock' out on it.  If we do, then
+       release the 'lock' */
+    err = castle_version_snap_get(version, NULL, NULL, NULL);
+    if(err == -EINVAL)
     {
-        printk("Invalid version '%d'!\n", snapshot);
+        printk("Invalid version '%d'!\n", version);
         goto err_out;
+    }
+    else if(err == -EAGAIN)
+    {
+        castle_version_snap_put(version);
     }
     
     if(!(region = kzalloc(sizeof(struct castle_region), GFP_KERNEL)))
@@ -606,7 +615,7 @@ struct castle_region* castle_region_create(uint32_t slave_id, snap_id_t snapshot
     
     region->id = region_id++;
     region->slave = slave;
-    region->snapshot = snapshot;
+    region->version = version;
     region->start = start;
     region->length = length;
     
@@ -617,7 +626,12 @@ struct castle_region* castle_region_create(uint32_t slave_id, snap_id_t snapshot
         goto err_out;
     }
     
-    castle_sysfs_region_add(region);
+    err = castle_sysfs_region_add(region);
+    if(err) 
+    {
+         list_del(&region->list);
+         goto err_out;
+    }
     
     return region;
         

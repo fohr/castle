@@ -84,6 +84,7 @@ static struct ctrl_cmd *ctrl_cmds[] =
     &snapshot_ctrl_cmd,
     &init_ctrl_cmd,
     &region_create_ctrl_cmd,
+    &region_destroy_ctrl_cmd,
     NULL,
 };
 

@@ -315,6 +315,21 @@ void castle_sysfs_device_del(struct castle_device *device)
 
 /* REGIONS */
 
+static ssize_t regions_number_show(struct kobject *kobj, 
+						           struct attribute *attr, 
+                                   char *buf)
+{
+    struct castle_regions *regions = 
+                container_of(kobj, struct castle_regions, kobj);
+    struct list_head *lh;
+    int nr_regions = 0;
+
+    list_for_each(lh, &regions->regions)
+        nr_regions++;
+
+    return sprintf(buf, "%d\n", nr_regions);
+}
+
 static ssize_t region_start_show(struct kobject *kobj, 
 						           struct attribute *attr, 
                                    char *buf)
@@ -339,11 +354,15 @@ static ssize_t region_snapshot_show(struct kobject *kobj,
 {
     struct castle_region *region = container_of(kobj, struct castle_region, kobj); 
 
-    return sprintf(buf, "0x%x\n", region->snapshot);
+    return sprintf(buf, "%d\n", region->version);
 }
 
 /* Definition of regions sysfs directory attributes */
+static struct castle_sysfs_entry regions_number =
+__ATTR(number, S_IRUGO|S_IWUSR, regions_number_show, NULL);
+
 static struct attribute *castle_regions_attrs[] = {
+    &regions_number.attr,
     NULL,
 };
 

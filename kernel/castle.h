@@ -205,7 +205,7 @@ struct castle_region {
 	struct list_head     list;
 	
 	struct castle_slave *slave;
-	snap_id_t            snapshot;
+	version_t            version;
 	int                  start;
 	int                  length;
 };
@@ -239,7 +239,7 @@ struct castle_slave*  castle_claim             (uint32_t new_dev);
 void                  castle_release           (struct castle_slave *cs);
 
 struct castle_region* castle_region_find       (region_id_t id);
-struct castle_region* castle_region_create     (uint32_t slave_id, snap_id_t snapshot, uint32_t start, uint32_t length);
+struct castle_region* castle_region_create     (uint32_t slave_id, version_t version, uint32_t start, uint32_t length);
 void                  castle_region_destroy    (struct castle_region *region);
 
 struct castle_slave*  castle_slave_find_by_id  (uint32_t id);
