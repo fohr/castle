@@ -172,6 +172,8 @@ struct castle_slave {
                                              needed here, because we cannot cache
                                              the superblock without being able to
                                              _find_by_uuid */
+    bool                            target; /* Whether to allocate new blocks from
+                                               from this disk or not */
     int                             new_dev;
     struct kobject                  kobj;
     struct list_head                list;
@@ -219,10 +221,25 @@ struct castle_regions {
     struct list_head regions;
 };
 
+struct castle_transfer {
+    transfer_id_t           id;
+    struct kobject          kobj;
+    struct list_head        list;
+
+    int                     direction;
+    version_t               version;
+};
+
+struct castle_transfers {
+    struct kobject   kobj;
+    struct list_head transfers;
+};
+
 extern struct castle             castle;
 extern struct castle_slaves      castle_slaves;
 extern struct castle_devices     castle_devices;
 extern struct castle_regions     castle_regions;
+extern struct castle_transfers   castle_transfers;
 
 extern struct workqueue_struct *castle_wqs[MAX_BTREE_DEPTH+1];
 #define castle_wq              (castle_wqs[0])
@@ -245,6 +262,12 @@ void                  castle_release           (struct castle_slave *cs);
 struct castle_region* castle_region_find       (region_id_t id);
 struct castle_region* castle_region_create     (uint32_t slave_id, version_t version, uint32_t start, uint32_t length);
 void                  castle_region_destroy    (struct castle_region *region);
+
+struct castle_transfer* 
+                      castle_transfer_find     (transfer_id_t id);
+struct castle_transfer* 
+                      castle_transfer_create   (version_t version, int direction);
+void                  castle_transfer_destroy  (struct castle_transfer *transfer);
 
 struct castle_slave*  castle_slave_find_by_id  (uint32_t id);
 struct castle_slave*  castle_slave_find_by_uuid(uint32_t uuid);

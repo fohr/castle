@@ -128,6 +128,38 @@ static ssize_t slave_uuid_show(struct kobject *kobj,
     return sprintf(buf, "0x%x\n", slave->uuid);
 }
 
+static ssize_t slave_target_show(struct kobject *kobj, 
+                                 struct attribute *attr, 
+                                 char *buf)
+{
+    struct castle_slave *slave = container_of(kobj, struct castle_slave, kobj); 
+
+    return sprintf(buf, "%d\n", slave->target);
+}
+
+static ssize_t slave_target_store(struct kobject *kobj, 
+                                  struct attribute *attr, 
+                                  char *buf,
+                                  size_t count)
+{
+    struct castle_slave *slave = container_of(kobj, struct castle_slave, kobj); 
+    
+    if(buf[0] == '0')
+    {
+        slave->target = false;
+    }
+    else if(buf[0] == '1')
+    {
+        slave->target = true;
+    }
+    else
+    {
+        return -EINVAL;
+    }
+    
+    return count;
+}
+
 static ssize_t devices_number_show(struct kobject *kobj, 
 						           struct attribute *attr, 
                                    char *buf)
@@ -222,8 +254,12 @@ static struct kobj_type castle_slaves_ktype = {
 static struct castle_sysfs_entry slave_uuid =
 __ATTR(uuid, S_IRUGO|S_IWUSR, slave_uuid_show, NULL);
 
+static struct castle_sysfs_entry slave_target =
+__ATTR(target, S_IRUGO|S_IWUSR, slave_target_show, slave_target_store);
+
 static struct attribute *castle_slave_attrs[] = {
     &slave_uuid.attr,
+    &slave_target.attr,
     NULL,
 };
 
@@ -421,13 +457,105 @@ void castle_sysfs_region_del(struct castle_region *region)
     kobject_unregister(&region->kobj);
 }
 
+/* TRANSFERS */
+
+static ssize_t transfers_number_show(struct kobject *kobj, 
+						           struct attribute *attr, 
+                                   char *buf)
+{
+    struct castle_transfers *transfers = 
+                container_of(kobj, struct castle_transfers, kobj);
+    struct list_head *lh;
+    int nr_transfers = 0;
+
+    list_for_each(lh, &transfers->transfers)
+        nr_transfers++;
+
+    return sprintf(buf, "%d\n", nr_transfers);
+}
+
+static ssize_t transfer_direction_show(struct kobject *kobj, 
+						           struct attribute *attr, 
+                                   char *buf)
+{
+    struct castle_transfer *transfer = 
+                container_of(kobj, struct castle_transfer, kobj);
+
+    return sprintf(buf, "%d\n", transfer->direction);
+}
+
+static ssize_t transfer_version_show(struct kobject *kobj, 
+						           struct attribute *attr, 
+                                   char *buf)
+{
+    struct castle_transfer *transfer = 
+                container_of(kobj, struct castle_transfer, kobj);
+
+    return sprintf(buf, "%d\n", transfer->version);
+}
+
+/* Definition of regions sysfs directory attributes */
+static struct castle_sysfs_entry transfers_number =
+__ATTR(number, S_IRUGO|S_IWUSR, transfers_number_show, NULL);
+
+static struct attribute *castle_transfers_attrs[] = {
+    &transfers_number.attr,
+    NULL,
+};
+
+static struct kobj_type castle_transfers_ktype = {
+    .sysfs_ops      = &castle_sysfs_ops,
+    .default_attrs  = castle_transfers_attrs,
+};
+
+/* Definition of each region sysfs directory attributes */
+static struct castle_sysfs_entry transfer_version =
+__ATTR(direction, S_IRUGO|S_IWUSR, transfer_direction_show, NULL);
+
+static struct castle_sysfs_entry transfer_direction =
+__ATTR(version, S_IRUGO|S_IWUSR, transfer_version_show, NULL);
+
+static struct attribute *castle_transfer_attrs[] = {
+    &transfer_version.attr,
+    &transfer_direction.attr,
+    NULL,
+};
+
+static struct kobj_type castle_transfer_ktype = {
+    .sysfs_ops      = &castle_sysfs_ops,
+    .default_attrs  = castle_transfer_attrs,
+};
+
+int castle_sysfs_transfer_add(struct castle_transfer *transfer)
+{
+    int ret;
+
+    memset(&transfer->kobj, 0, sizeof(struct kobject));
+    transfer->kobj.parent = &castle_transfers.kobj; 
+    transfer->kobj.ktype  = &castle_transfer_ktype; 
+    ret = kobject_set_name(&transfer->kobj, "%d", transfer->id);
+    if(ret < 0) 
+        return ret;
+        
+    ret = kobject_register(&transfer->kobj);
+    if(ret < 0)
+        return ret;
+        
+    return 0;
+}
+
+void castle_sysfs_transfer_del(struct castle_transfer *transfer)
+{
+    kobject_unregister(&transfer->kobj);
+}
+
 /* Initialisation of sysfs dirs == kobjs registration */
 int castle_sysfs_init(void)
 {
     int ret;
-    int castle_registered, volumes_registered, slaves_registered, devices_registered, regions_registered;
+    int castle_registered, volumes_registered, slaves_registered, devices_registered, regions_registered, transfers_registered;
 
-    castle_registered = volumes_registered = slaves_registered = devices_registered = regions_registered = 0;
+    castle_registered = volumes_registered = slaves_registered = devices_registered = regions_registered = transfers_registered = 0;
 
     memset(&castle.kobj, 0, sizeof(struct kobject));
     castle.kobj.parent = &fs_subsys.kobj;
@@ -475,6 +603,15 @@ int castle_sysfs_init(void)
     if(ret < 0) goto error_out;
     regions_registered = 1;
 
+    memset(&castle_transfers.kobj, 0, sizeof(struct kobject));
+    castle_transfers.kobj.parent = &castle.kobj;
+    castle_transfers.kobj.ktype  = &castle_transfers_ktype;
+    ret = kobject_set_name(&castle_transfers.kobj, "%s", "transfers");
+    if(ret < 0) goto error_out;
+    ret = kobject_register(&castle_transfers.kobj);
+    if(ret < 0) goto error_out;
+    transfers_registered = 1;
+
     return 0;
 
 error_out:
@@ -483,6 +620,7 @@ error_out:
     if(slaves_registered)  kobject_unregister(&castle_slaves.kobj);
     if(devices_registered) kobject_unregister(&castle_devices.kobj);
     if(regions_registered) kobject_unregister(&castle_regions.kobj);
+    if(transfers_registered) kobject_unregister(&castle_transfers.kobj);
 
     return ret;
 }

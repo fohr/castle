@@ -24,6 +24,7 @@ struct castle                castle;
 struct castle_slaves         castle_slaves;
 struct castle_devices        castle_devices;
 struct castle_regions        castle_regions;
+struct castle_transfers      castle_transfers;
 
 struct workqueue_struct     *castle_wqs[MAX_BTREE_DEPTH+1];
 
@@ -642,6 +643,101 @@ static void castle_regions_free(void)
     }
 }
 
+/* TRANSFERS */
+
+static void castle_transfer_add(struct castle_transfer *transfer)
+{
+    list_add(&transfer->list, &castle_transfers.transfers);
+}
+
+struct castle_transfer* castle_transfer_find(transfer_id_t id)
+{
+    struct list_head *lh;
+    struct castle_transfer *transfer;
+
+    list_for_each(lh, &castle_transfers.transfers)
+    {
+        transfer = list_entry(lh, struct castle_transfer, list);
+        if(transfer->id == id)
+            return transfer;
+    }
+
+    return NULL;
+}
+
+struct castle_transfer* castle_transfer_create(version_t version, int direction)
+{
+    struct castle_transfer* transfer = NULL;
+    static int transfer_id = 0;
+    int err;
+
+    printk("castle_transfer_create(version=%d, direction=%d)\n", version, direction);
+
+    /* To check if a good snapshot version, try and
+       get the snapshot.  If we do get it, then we may
+       take the 'lock' out on it.  If we do, then
+       release the 'lock' */
+    err = castle_version_snap_get(version, NULL, NULL, NULL);
+    if(err == -EINVAL)
+    {
+        printk("Invalid version '%d'!\n", version);
+        goto err_out;
+    }
+    else if(err == -EAGAIN)
+    {
+        castle_version_snap_put(version);
+    }
+
+    if(!(transfer = kzalloc(sizeof(struct castle_transfer), GFP_KERNEL)))
+        goto err_out;
+
+    transfer->id = transfer_id++;
+    transfer->version = version;
+    transfer->direction = direction;
+
+    castle_transfer_add(transfer);
+
+    err = castle_sysfs_transfer_add(transfer);
+    if(err) 
+    {
+         list_del(&transfer->list);
+         goto err_out;
+    }
+
+    return transfer;
+
+err_out:
+    if(transfer) kfree(transfer);
+    return NULL;
+}
+
+void castle_transfer_destroy(struct castle_transfer *transfer)
+{
+    castle_sysfs_transfer_del(transfer);
+    list_del(&transfer->list);
+    kfree(transfer);
+}
+
+static int castle_transfers_init(void)
+{
+    memset(&castle_transfers, 0, sizeof(struct castle_transfers));
+    INIT_LIST_HEAD(&castle_transfers.transfers);
+
+    return 0;
+}
+
+static void castle_transfers_free(void)                                                                 
+{                                                                                        
+    struct list_head *lh, *th;
+    struct castle_transfer *transfer;
+
+    list_for_each_safe(lh, th, &castle_transfers.transfers)
+    {
+        transfer = list_entry(lh, struct castle_transfer, list); 
+        castle_transfer_destroy(transfer);
+    }
+}
+
 static int castle_open(struct inode *inode, struct file *filp)
 {
 	struct castle_device *dev = inode->i_bdev->bd_disk->private_data;
@@ -1181,13 +1277,16 @@ static int __init castle_init(void)
     if((ret = castle_devices_init()))  goto err_out5;
     if((ret = castle_control_init()))  goto err_out6;
     if((ret = castle_regions_init()))  goto err_out7;
-    if((ret = castle_sysfs_init()))    goto err_out8;
+    if((ret = castle_transfers_init()))goto err_out8;
+    if((ret = castle_sysfs_init()))    goto err_out9;
 
     printk("OK.\n");
 
     return 0;
 
     castle_sysfs_fini(); /* Unreachable */
+err_out9:
+    castle_transfers_free();
 err_out8:
     castle_regions_free();
 err_out7:

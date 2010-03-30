@@ -178,6 +178,38 @@ static void castle_control_region_destroy(cctrl_cmd_region_destroy_t *ioctl)
     }
 }
 
+static void castle_control_transfer_create(cctrl_cmd_transfer_create_t *ioctl)
+{
+    struct castle_transfer *transfer;
+
+    if(!(transfer = castle_transfer_create(ioctl->snapshot, ioctl->direction)))
+        goto err_out;
+
+    ioctl->id  = transfer->id;
+    ioctl->ret = 0;
+
+    return;
+
+err_out:
+    ioctl->id  = (uint32_t)-1;
+    ioctl->ret = -EINVAL;
+}
+
+static void castle_control_transfer_destroy(cctrl_cmd_transfer_destroy_t *ioctl)
+{
+    struct castle_transfer *transfer;
+    
+    if(!(transfer = castle_transfer_find(ioctl->id)))
+    {
+        ioctl->ret = -EINVAL;
+    }
+    else
+    {
+        castle_transfer_destroy(transfer);
+        ioctl->ret = 0;
+    }
+}
+
 int castle_control_ioctl(struct inode *inode, struct file *filp,
                          unsigned int cmd, unsigned long arg)
 {
@@ -227,7 +259,12 @@ int castle_control_ioctl(struct inode *inode, struct file *filp,
         case CASTLE_CTRL_CMD_REGION_DESTROY:
             castle_control_region_destroy(&ioctl.region_destroy);
             break;
-
+        case CASTLE_CTRL_CMD_TRANSFER_CREATE:
+            castle_control_transfer_create(&ioctl.transfer_create);
+            break;
+        case CASTLE_CTRL_CMD_TRANSFER_DESTROY:
+            castle_control_transfer_destroy(&ioctl.transfer_destroy);
+            break;
         default:
             up(&castle_control_lock);
             return -EINVAL;

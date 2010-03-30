@@ -41,6 +41,25 @@ struct ctrl_cmd
         .get_ret = __##_name##_get_ret,                                 \
     }                                                                   \
 
+#define CTRL_CMD2(_id, _name, _arg1_t, _arg1, _arg2_t, _arg2, _ret)     \
+    static void __##_name##_set_args(cctrl_ioctl_t *ctl, char* argv[])  \
+    {                                                                   \
+        ctl->_arg1 = (_arg1_t)strtoul(argv[0], NULL, 16);               \
+        ctl->_arg2 = (_arg2_t)strtoul(argv[1], NULL, 16);               \
+    };                                                                  \
+    static uint64_t __##_name##_get_ret(cctrl_ioctl_t *ctl)             \
+    {                                                                   \
+        return (uint64_t)ctl->_ret;                                     \
+    };                                                                  \
+    static struct ctrl_cmd _name##_ctrl_cmd =                           \
+    {                                                                   \
+        .id   = _id,                                                    \
+        .args = 2,                                                      \
+        .name = #_name,                                                 \
+        .set_args = __##_name##_set_args,                               \
+        .get_ret = __##_name##_get_ret,                                 \
+    }                                                                   \
+
 #define CTRL_CMD4(_id, _name, _arg1_t, _arg1, _arg2_t, _arg2, _arg3_t, _arg3, _arg4_t, _arg4, _ret)\
     static void __##_name##_set_args(cctrl_ioctl_t *ctl, char* argv[])  \
     {                                                                   \
@@ -72,6 +91,8 @@ CTRL_CMD1(CASTLE_CTRL_CMD_SNAPSHOT, snapshot, uint32_t, snapshot.dev, snapshot.s
 CTRL_CMD1(CASTLE_CTRL_CMD_INIT,     init,     uint32_t, claim.dev,    init.ret);    // No arg really
 CTRL_CMD4(CASTLE_CTRL_CMD_REGION_CREATE, region_create, uint32_t, region_create.slave, snap_id_t, region_create.snapshot, uint32_t, region_create.start, uint32_t, region_create.length, region_create.id);
 CTRL_CMD1(CASTLE_CTRL_CMD_REGION_DESTROY, region_destroy, region_id_t, region_destroy.id, region_destroy.ret);
+CTRL_CMD2(CASTLE_CTRL_CMD_TRANSFER_CREATE, transfer_create, snap_id_t, transfer_create.snapshot, int, transfer_create.direction, transfer_create.id);
+CTRL_CMD1(CASTLE_CTRL_CMD_TRANSFER_DESTROY, transfer_destroy, transfer_id_t, transfer_destroy.id, transfer_destroy.ret);
 
 static struct ctrl_cmd *ctrl_cmds[] = 
 {
@@ -85,6 +106,8 @@ static struct ctrl_cmd *ctrl_cmds[] =
     &init_ctrl_cmd,
     &region_create_ctrl_cmd,
     &region_destroy_ctrl_cmd,
+    &transfer_create_ctrl_cmd,
+    &transfer_destroy_ctrl_cmd,
     NULL,
 };
 
@@ -130,7 +153,7 @@ int main(int argc, char* argv[])
     args = ctrl_cmd->args + 2;
     if(argc != args)
     {
-        printf("Need %d arguments for command \"%s\" (found %d)\n", args, cmd, argc);
+        printf("Need %d arguments for command \"%s\" (found %d)\n", args, cmd, argc - 2);
         exit(2);
     }
     
