@@ -14,6 +14,7 @@
 #include "castle_block.h"
 #include "castle_cache.h"
 #include "castle_btree.h"
+#include "castle_freespace.h"
 #include "castle_versions.h"
 #include "castle_ctrl.h"
 #include "castle_sysfs.h"
@@ -287,7 +288,7 @@ static int castle_slave_superblock_read(struct castle_slave *cs)
     return 0;
 }
 
-static inline struct castle_slave_superblock* castle_slave_superblock_get(struct castle_slave *cs)
+struct castle_slave_superblock* castle_slave_superblock_get(struct castle_slave *cs)
 {
     lock_c2p(cs->sblk);
     BUG_ON(!c2p_uptodate(cs->sblk));
@@ -295,7 +296,7 @@ static inline struct castle_slave_superblock* castle_slave_superblock_get(struct
     return ((struct castle_slave_superblock*) pfn_to_kaddr(page_to_pfn(cs->sblk->page)));
 }
 
-static inline void castle_slave_superblock_put(struct castle_slave *cs, int dirty)
+void castle_slave_superblock_put(struct castle_slave *cs, int dirty)
 {
     if(dirty) dirty_c2p(cs->sblk);
     unlock_c2p(cs->sblk);
@@ -305,7 +306,7 @@ static int castle_slave_superblocks_cache(struct castle_slave *cs)
 {
     c2_page_t *c2p, **c2pp[2];
     c_disk_blk_t cdb;
-    uint32_t i;
+    block_t i;
 
     /* We want to read the first two 4K blocks of the slave device
        Frist is the slave superblock, the second is the fs superblock */
@@ -357,10 +358,12 @@ static int castle_slave_superblocks_init(struct castle_slave *cs)
         cs_sb->magic1 = CASTLE_SLAVE_MAGIC1;
         cs_sb->magic2 = CASTLE_SLAVE_MAGIC2;
         cs_sb->magic3 = CASTLE_SLAVE_MAGIC3;
-        cs_sb->uuid   = cs->uuid;
+        /* TODO: this is obsolete with freespace management */
         cs_sb->used   = 2; /* Two blocks used for the superblocks */
+        cs_sb->uuid   = cs->uuid;
         cs_sb->size   = get_capacity(cs->bdev->bd_disk) >> (C_BLK_SHIFT - 9);
         castle_slave_superblock_print(cs_sb);
+        castle_freespace_slave_init(cs, cs_sb);
         printk("Done.\n");
     }
     castle_slave_superblock_put(cs, cs->new_dev);
@@ -402,34 +405,6 @@ struct castle_slave* castle_slave_find_by_uuid(uint32_t uuid)
 struct castle_slave* castle_slave_find_by_block(c_disk_blk_t cdb)
 {
     return castle_slave_find_by_uuid(cdb.disk);
-}
-
-c_disk_blk_t castle_slaves_disk_block_get(void)
-{
-    // TODO: slave locks!
-    static struct castle_slave *last_slave = NULL;
-    static struct castle_slave_superblock *sb;
-    struct list_head *l;
-    c_disk_blk_t cdb;
-    
-    if(!last_slave) 
-    {
-        BUG_ON(list_empty(&castle_slaves.slaves));
-        l = castle_slaves.slaves.next;
-        last_slave = list_entry(l, struct castle_slave, list);
-    }
-    l = &last_slave->list;
-    if(list_is_last(l, &castle_slaves.slaves))
-        l = &castle_slaves.slaves;
-    l = l->next;
-    last_slave = list_entry(l, struct castle_slave, list);
-    
-    sb = castle_slave_superblock_get(last_slave);
-    cdb.disk  = sb->uuid;
-    cdb.block = sb->used++;
-    castle_slave_superblock_put(last_slave, 1);
-
-    return cdb;
 }
 
 static int castle_slave_add(struct castle_slave *cs)
@@ -1234,6 +1209,7 @@ err_out2:
 err_out1:
     castle_debug_fini();
 
+    /* TODO: check if kernel will accept any non-zero return value to mean: we want to exit */
     return ret;
 }
 

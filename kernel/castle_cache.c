@@ -123,7 +123,7 @@ int submit_c2p(int rw, c2_page_t *c2p)
 
 	bio = bio_alloc(GFP_NOIO, 1);
 
-	bio->bi_sector = c2p->cdb.block * (C_BLK_SIZE >> 9);
+	bio->bi_sector = (sector_t)(c2p->cdb.block * (C_BLK_SIZE >> 9));
 	bio->bi_bdev = cs->bdev;
 	bio->bi_io_vec[0].bv_page = c2p->page;
 	bio->bi_io_vec[0].bv_len  = C_BLK_SIZE; 
@@ -552,6 +552,7 @@ static void castle_cache_hash_fini(void)
             if(atomic_read(&c2p->count) != 0)
                 printk("(disk,block)=(0x%x, 0x%x) not dropped.\n",
                     c2p->cdb.disk, c2p->cdb.block);
+
             BUG_ON(atomic_read(&c2p->count) != 0);
             __free_page(c2p->page);
         }

@@ -5,10 +5,13 @@ typedef uint32_t version_t;
 #define INVAL_VERSION       ((version_t)-1) 
 #define VERSION_INVAL(_v)   ((_v) == INVAL_VERSION) 
 
+typedef uint32_t block_t;
+#define INVAL_BLOCK         ((block_t)-1) 
+#define BLOCK_INVAL(_b)     ((_b) == INVAL_BLOCK) 
 /* Disk layout related structures */
 struct castle_disk_block {
     uint32_t disk;
-    uint32_t block;
+    block_t block;
 };
 typedef struct castle_disk_block c_disk_blk_t;
 #define INVAL_DISK_BLK          ((c_disk_blk_t){0,0})
@@ -175,6 +178,7 @@ struct castle_slave {
     struct block_device            *bdev;
     struct castle_cache_page       *sblk;
     struct castle_cache_page       *fs_sblk;
+    block_t                         free_blk;
 };
 
 struct castle_slaves {
@@ -246,11 +250,14 @@ struct castle_slave*  castle_slave_find_by_id  (uint32_t id);
 struct castle_slave*  castle_slave_find_by_uuid(uint32_t uuid);
 struct castle_slave*  castle_slave_find_by_block(c_disk_blk_t cdb);
 
-c_disk_blk_t          castle_slaves_disk_block_get(void);
+struct castle_slave_superblock* 
+                      castle_slave_superblock_get(struct castle_slave *cs);
+void                  castle_slave_superblock_put(struct castle_slave *cs, int dirty);
 struct castle_fs_superblock* 
                       castle_fs_superblocks_get(void);
 void                  castle_fs_superblocks_put(struct castle_fs_superblock *sb, int dirty);
 
 int                   castle_fs_init           (void);
+
 
 #endif /* __CASTLE_H__ */

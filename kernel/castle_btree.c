@@ -10,6 +10,7 @@
 #include "castle.h"
 #include "castle_cache.h"
 #include "castle_btree.h"
+#include "castle_freespace.h"
 #include "castle_versions.h"
 #include "castle_block.h"
 #include "castle_debug.h"
@@ -235,7 +236,7 @@ c2_page_t* castle_ftree_node_create(int version, int is_leaf)
     c2_page_t   *c2p;
     struct castle_ftree_node *node;
     
-    cdb = castle_slaves_disk_block_get(); 
+    cdb = castle_freespace_block_get(); 
     c2p = castle_cache_page_get(cdb);
     
     lock_c2p(c2p);
@@ -666,7 +667,7 @@ static void castle_ftree_write_process(c_bvec_t *c_bvec)
     /* Insert an entry if LUB doesn't match our (b,v) precisely. */
     if(lub_idx < 0 || (lub_slot->block != block) || (lub_slot->version != version))
     {
-        c_disk_blk_t cdb = castle_slaves_disk_block_get(); 
+        c_disk_blk_t cdb = castle_freespace_block_get(); 
         
         /* TODO: should memset the page to zero (because we return zeros on reads)
                  this can be done here, or beter still in _main.c, in data_copy */

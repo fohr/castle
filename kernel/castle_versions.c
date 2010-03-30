@@ -13,6 +13,7 @@
 
 #include "castle_public.h"
 #include "castle.h"
+#include "castle_freespace.h"
 #include "castle_versions.h"
 #include "castle_sysfs.h"
 #include "castle_cache.h"
@@ -754,7 +755,7 @@ static c2_page_t* castle_versions_node_init(void)
         prev_node = pfn_to_kaddr(page_to_pfn(prev_c2p->page));
     }
     /* Allocate a new node */
-    cdb = castle_slaves_disk_block_get();
+    cdb = castle_freespace_block_get();
     c2p = castle_cache_page_get(cdb);
     lock_c2p(c2p);
     set_c2p_uptodate(c2p);
