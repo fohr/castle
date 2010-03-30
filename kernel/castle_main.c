@@ -569,7 +569,7 @@ static int castle_region_add(struct castle_region *region)
             return -EINVAL;            
         }
     }
-    /* If no UUID collision, add to the list */
+    
     list_add(&region->list, &castle_regions.regions);
     return 0;
 }
@@ -586,7 +586,7 @@ struct castle_region* castle_region_create(uint32_t slave_id, version_t version,
     
     printk("castle_region_create(slave_id=%d, version=%d, start=%d, length=%d)\n", slave_id, version, start, length);
     
-    if(length <= 0)
+    if(length == 0)
     {
         printk("length must be greater than 0!\n");
         goto err_out;
