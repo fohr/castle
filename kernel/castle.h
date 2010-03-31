@@ -19,6 +19,8 @@ typedef struct castle_disk_block c_disk_blk_t;
 #define DISK_BLK_EQUAL(_blk1, _blk2) (((_blk1).disk == (_blk2).disk) && \
                                       ((_blk1).block == (_blk2).block)) 
 
+#define CASTLE_SLAVE_TARGET     (0x1ULL)
+
 #define CASTLE_SLAVE_MAGIC1     (0x02061985)
 #define CASTLE_SLAVE_MAGIC2     (0x16071983)
 #define CASTLE_SLAVE_MAGIC3     (0x16061981)
@@ -29,6 +31,7 @@ struct castle_slave_superblock {
     uint32_t uuid;
     uint32_t used;
     uint32_t size; /* In blocks */
+	uint64_t flags; 
 };
 
 #define CASTLE_FS_MAGIC1        (0x19731121)
@@ -172,8 +175,6 @@ struct castle_slave {
                                              needed here, because we cannot cache
                                              the superblock without being able to
                                              _find_by_uuid */
-    bool                            target; /* Whether to allocate new blocks from
-                                               from this disk or not */
     int                             new_dev;
     struct kobject                  kobj;
     struct list_head                list;
@@ -262,12 +263,6 @@ void                  castle_release           (struct castle_slave *cs);
 struct castle_region* castle_region_find       (region_id_t id);
 struct castle_region* castle_region_create     (uint32_t slave_id, version_t version, uint32_t start, uint32_t length);
 void                  castle_region_destroy    (struct castle_region *region);
-
-struct castle_transfer* 
-                      castle_transfer_find     (transfer_id_t id);
-struct castle_transfer* 
-                      castle_transfer_create   (version_t version, int direction);
-void                  castle_transfer_destroy  (struct castle_transfer *transfer);
 
 struct castle_slave*  castle_slave_find_by_id  (uint32_t id);
 struct castle_slave*  castle_slave_find_by_uuid(uint32_t uuid);

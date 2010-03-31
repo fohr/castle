@@ -9,6 +9,7 @@
 #include "castle_cache.h"
 #include "castle_btree.h"
 #include "castle_versions.h"
+#include "castle_transfer.h"
 
 static DECLARE_MUTEX(castle_control_lock);
 

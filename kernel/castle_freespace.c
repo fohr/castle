@@ -100,7 +100,7 @@ c_disk_blk_t castle_freespace_block_get(void)
     c_disk_blk_t free_cdb, bitmap_cdb, first_bitmap_cdb;
     c2_page_t *bitmap_c2p;
     uint64_t *bitmap_buf, word, complement_word;
-    int i, i_max = (C_BLK_SIZE / sizeof(uint64_t));
+    int slave_is_target, i, i_max = (C_BLK_SIZE / sizeof(uint64_t));
     
     debug("\nAllocating a new block.\n");
     
@@ -122,6 +122,7 @@ next_disk:
         BUG();
         return INVAL_DISK_BLK;
     }
+
     last_slave = slave;
     if(!first_slave) first_slave = slave;
     
@@ -129,7 +130,12 @@ next_disk:
     /* We've selected a disk to search for a new block on. Select bitmap block. */
     sb = castle_slave_superblock_get(slave);
     slave_size = sb->size;
+    slave_is_target = sb->flags & CASTLE_SLAVE_TARGET;
     castle_slave_superblock_put(slave, 0);
+    
+    if(!slave_is_target)
+        goto next_disk;
+    
     debug("Slave size=0x%x\n", slave_size);
 
     free_cdb = (c_disk_blk_t){slave->uuid, slave->free_blk+1};

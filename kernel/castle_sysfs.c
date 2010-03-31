@@ -132,9 +132,15 @@ static ssize_t slave_target_show(struct kobject *kobj,
                                  struct attribute *attr, 
                                  char *buf)
 {
+    int target;
+    struct castle_slave_superblock *sb;
     struct castle_slave *slave = container_of(kobj, struct castle_slave, kobj); 
+    
+    sb = castle_slave_superblock_get(slave);
+    target = sb->flags & CASTLE_SLAVE_TARGET ? 1 : 0;
+    castle_slave_superblock_put(slave, 0);
 
-    return sprintf(buf, "%d\n", slave->target);
+    return sprintf(buf, "%d\n", target);
 }
 
 static ssize_t slave_target_store(struct kobject *kobj, 
@@ -142,20 +148,21 @@ static ssize_t slave_target_store(struct kobject *kobj,
                                   char *buf,
                                   size_t count)
 {
+    struct castle_slave_superblock *sb;
     struct castle_slave *slave = container_of(kobj, struct castle_slave, kobj); 
+    int target;
     
-    if(buf[0] == '0')
-    {
-        slave->target = false;
-    }
-    else if(buf[0] == '1')
-    {
-        slave->target = true;
-    }
-    else
-    {
+    if(count != 1 || (buf[0] != '0' && buf[0] != '1'))
         return -EINVAL;
-    }
+    
+    sb = castle_slave_superblock_get(slave);
+    
+    if (buf[0] == '1')
+        sb->flags |= CASTLE_SLAVE_TARGET;
+    else
+        sb->flags &= ~CASTLE_SLAVE_TARGET;
+    
+    castle_slave_superblock_put(slave, 1);
     
     return count;
 }
