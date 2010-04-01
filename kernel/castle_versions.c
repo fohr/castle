@@ -151,6 +151,8 @@ static int castle_version_add(c_disk_blk_t cdb,
     
     v = kmem_cache_alloc(castle_versions_cache, GFP_KERNEL);
     if(!v) return -ENOMEM;
+    ret = castle_freespace_version_add(version);
+    if(ret) return -ENOMEM;
     debug("Adding: (v, p)=(%d,%d)\n", version, parent);
 
     v->version      = version;
@@ -755,7 +757,7 @@ static c2_page_t* castle_versions_node_init(void)
         prev_node = pfn_to_kaddr(page_to_pfn(prev_c2p->page));
     }
     /* Allocate a new node */
-    cdb = castle_freespace_block_get();
+    cdb = castle_freespace_block_get(0);
     c2p = castle_cache_page_get(cdb);
     lock_c2p(c2p);
     set_c2p_uptodate(c2p);

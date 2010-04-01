@@ -359,11 +359,10 @@ static int castle_slave_superblocks_init(struct castle_slave *cs)
         cs_sb->magic1 = CASTLE_SLAVE_MAGIC1;
         cs_sb->magic2 = CASTLE_SLAVE_MAGIC2;
         cs_sb->magic3 = CASTLE_SLAVE_MAGIC3;
-        /* TODO: this is obsolete with freespace management */
         cs_sb->used   = 2; /* Two blocks used for the superblocks */
         cs_sb->uuid   = cs->uuid;
         cs_sb->size   = get_capacity(cs->bdev->bd_disk) >> (C_BLK_SHIFT - 9);
-        cs_sb->flags  = CASTLE_SLAVE_TARGET;
+        cs_sb->flags  = CASTLE_SLAVE_TARGET | CASTLE_SLAVE_SPINNING;
         castle_slave_superblock_print(cs_sb);
         castle_freespace_slave_init(cs, cs_sb);
         printk("Done.\n");

@@ -8,6 +8,7 @@
 #include "castle.h"
 #include "castle_sysfs.h"
 #include "castle_versions.h"
+#include "castle_freespace.h"
 
 struct castle_volumes {
     struct kobject kobj;
@@ -128,13 +129,52 @@ static ssize_t slave_uuid_show(struct kobject *kobj,
     return sprintf(buf, "0x%x\n", slave->uuid);
 }
 
+static ssize_t slave_id_show(struct kobject *kobj, 
+						     struct attribute *attr, 
+                             char *buf)
+{
+    struct castle_slave *slave = container_of(kobj, struct castle_slave, kobj); 
+
+    return sprintf(buf, "%d\n", slave->id);
+}
+
+static ssize_t slave_size_show(struct kobject *kobj, 
+						       struct attribute *attr, 
+                               char *buf)
+{
+    struct castle_slave *slave = container_of(kobj, struct castle_slave, kobj); 
+    struct castle_slave_superblock *sb;
+    uint32_t size;
+
+    sb = castle_slave_superblock_get(slave);
+    size = sb->size;
+    castle_slave_superblock_put(slave, 0);
+
+    return sprintf(buf, "%d\n", size);
+}
+
+static ssize_t slave_used_show(struct kobject *kobj, 
+						       struct attribute *attr, 
+                               char *buf)
+{
+    struct castle_slave *slave = container_of(kobj, struct castle_slave, kobj); 
+    struct castle_slave_superblock *sb;
+    uint32_t used;
+
+    sb = castle_slave_superblock_get(slave);
+    used = sb->used;
+    castle_slave_superblock_put(slave, 0);
+
+    return sprintf(buf, "%d\n", used);
+}
+
 static ssize_t slave_target_show(struct kobject *kobj, 
                                  struct attribute *attr, 
                                  char *buf)
 {
-    int target;
-    struct castle_slave_superblock *sb;
     struct castle_slave *slave = container_of(kobj, struct castle_slave, kobj); 
+    struct castle_slave_superblock *sb;
+    int target;
     
     sb = castle_slave_superblock_get(slave);
     target = sb->flags & CASTLE_SLAVE_TARGET ? 1 : 0;
@@ -145,12 +185,11 @@ static ssize_t slave_target_show(struct kobject *kobj,
 
 static ssize_t slave_target_store(struct kobject *kobj, 
                                   struct attribute *attr, 
-                                  char *buf,
+                                  const char *buf,
                                   size_t count)
 {
     struct castle_slave_superblock *sb;
     struct castle_slave *slave = container_of(kobj, struct castle_slave, kobj); 
-    int target;
     
     if(count != 1 || (buf[0] != '0' && buf[0] != '1'))
         return -EINVAL;
@@ -165,6 +204,46 @@ static ssize_t slave_target_store(struct kobject *kobj,
     castle_slave_superblock_put(slave, 1);
     
     return count;
+}
+
+static ssize_t slave_spinning_show(struct kobject *kobj, 
+                                   struct attribute *attr, 
+                                   char *buf)
+{
+    struct castle_slave *slave = container_of(kobj, struct castle_slave, kobj); 
+    struct castle_slave_superblock *sb;
+    int spinning;
+    
+    sb = castle_slave_superblock_get(slave);
+    spinning = !!(sb->flags & CASTLE_SLAVE_SPINNING);
+    castle_slave_superblock_put(slave, 0);
+
+    return sprintf(buf, "%d\n", spinning);
+}
+
+static ssize_t slave_spinning_store(struct kobject *kobj, 
+                                    struct attribute *attr, 
+                                    const char *buf,
+                                    size_t count)
+{
+#if 0    
+    struct castle_slave_superblock *sb;
+    struct castle_slave *slave = container_of(kobj, struct castle_slave, kobj); 
+#endif    
+    
+    if(count != 1 || (buf[0] != '0' && buf[0] != '1'))
+        return -EINVAL;
+
+    return -ENOSYS;
+}
+
+static ssize_t slave_block_cnts_show(struct kobject *kobj, 
+						             struct attribute *attr, 
+                                     char *buf)
+{
+    struct castle_slave *slave = container_of(kobj, struct castle_slave, kobj); 
+
+    return castle_freespace_summary_get(slave, buf);
 }
 
 static ssize_t devices_number_show(struct kobject *kobj, 
@@ -258,15 +337,35 @@ static struct kobj_type castle_slaves_ktype = {
 };
 
 /* Definition of each slave sysfs directory attributes */
+static struct castle_sysfs_entry slave_id =
+__ATTR(id, S_IRUGO|S_IWUSR, slave_id_show, NULL);
+
 static struct castle_sysfs_entry slave_uuid =
 __ATTR(uuid, S_IRUGO|S_IWUSR, slave_uuid_show, NULL);
+
+static struct castle_sysfs_entry slave_size =
+__ATTR(size, S_IRUGO|S_IWUSR, slave_size_show, NULL);
+
+static struct castle_sysfs_entry slave_used =
+__ATTR(used, S_IRUGO|S_IWUSR, slave_used_show, NULL);
 
 static struct castle_sysfs_entry slave_target =
 __ATTR(target, S_IRUGO|S_IWUSR, slave_target_show, slave_target_store);
 
+static struct castle_sysfs_entry slave_spinning =
+__ATTR(spinning, S_IRUGO|S_IWUSR, slave_spinning_show, slave_spinning_store);
+
+static struct castle_sysfs_entry slave_block_cnts =
+__ATTR(block_cnts, S_IRUGO|S_IWUSR, slave_block_cnts_show, NULL);
+
 static struct attribute *castle_slave_attrs[] = {
+    &slave_id.attr,
     &slave_uuid.attr,
+    &slave_size.attr,
+    &slave_used.attr,
     &slave_target.attr,
+    &slave_spinning.attr,
+    &slave_block_cnts.attr,
     NULL,
 };
 

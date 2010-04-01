@@ -23,6 +23,103 @@
 #define blk_to_bitmap_off(_blk) ((_blk) & (8 * C_BLK_SIZE - 1))
 #define cdb_to_bitmap_off(_cdb) (blk_to_bitmap_off((_cdb).block))
 
+#define HASH_MOD_INC     (1)
+#define HASH_MOD_DEC     (2)
+#define HASH_MOD_ADD     (3)
+#define HASH_MOD_REM     (4)
+static int castle_freespace_hash_mod(struct castle_slave *cs,
+                                     version_t version,
+                                     int mod)
+{
+    int hash_idx = (version % BLOCKS_HASH_SIZE);
+    struct list_head *i, *h = &cs->block_cnts.hash[hash_idx];
+    struct castle_slave_blocks_cnt *cnt = NULL;
+
+    if((mod == HASH_MOD_INC) ||
+       (mod == HASH_MOD_DEC) ||
+       (mod == HASH_MOD_REM))
+    {
+        list_for_each(i, h)
+        {
+            cnt = list_entry(i, struct castle_slave_blocks_cnt, list);
+            if(cnt->version == version)
+                break;
+        }
+        BUG_ON(!cnt);
+    }
+
+    switch(mod)
+    {
+        case HASH_MOD_INC:
+            cnt->cnt++;
+            break;
+        case HASH_MOD_DEC:
+            cnt->cnt--;
+            break;
+        case HASH_MOD_ADD:
+            if(version == 0)
+                cnt = &cs->block_cnts.metadata_cnt;
+            else 
+            {
+                cnt = kmalloc(sizeof(struct castle_slave_blocks_cnt), GFP_KERNEL);
+                if(!cnt) return -ENOMEM;
+            }
+            cnt->version = version;
+            cnt->cnt = 0;
+            INIT_LIST_HEAD(&cnt->list);
+            list_add(&cnt->list, h);
+            break;
+        case HASH_MOD_REM:
+            list_del(&cnt->list);
+            if(cnt->version != 0)
+                kfree(cnt);
+            break;
+        default:
+            printk("Unknown hash mod: %d\n", mod);
+            BUG();
+            break;
+    }
+
+    return 0;
+}
+
+ssize_t castle_freespace_summary_get(struct castle_slave *cs, char *buf)
+{
+    struct castle_slave_blocks_cnt *cnt;
+    struct list_head *l;
+    ssize_t offset = 0;
+    int i;
+
+    for(i=0; i<BLOCKS_HASH_SIZE; i++)
+    {
+        list_for_each(l, &cs->block_cnts.hash[i])
+        {
+            cnt = list_entry(l, struct castle_slave_blocks_cnt, list);
+            offset += sprintf((buf + offset), "%d\t%d\n", cnt->version, cnt->cnt); 
+        }
+    }
+
+    return offset;
+}
+
+int castle_freespace_version_add(version_t version)
+{
+    struct list_head *l;
+
+    /* That has already been done */
+    if(version == 0)
+        return 0;
+
+    list_for_each(l, &castle_slaves.slaves)
+    {
+        struct castle_slave *cs = list_entry(l, struct castle_slave, list);
+        int ret = castle_freespace_hash_mod(cs, version, HASH_MOD_ADD);
+
+        if(ret) return ret;
+    }
+
+    return 0;
+}
 
 void castle_freespace_slave_init(struct castle_slave *cs, struct castle_slave_superblock *cs_sb)
 {
@@ -31,20 +128,29 @@ void castle_freespace_slave_init(struct castle_slave *cs, struct castle_slave_su
     void * bitmap_buf;
     uint8_t *bitmap;
     int i;
-    
+
+    /* Initialise the hashtable to store version->blk_cnt map */
+    for(i=0; i<BLOCKS_HASH_SIZE; i++)
+        INIT_LIST_HEAD(&cs->block_cnts.hash[i]);
+    BUG_ON(castle_freespace_hash_mod(cs, 0, HASH_MOD_ADD)); 
+    /* TODO: other versions may already exist. We need to ask versions.c for them
+       ATM we don't support adding disks after initing the FS */
+
     freespace_cdb.disk  = cs->uuid;
     freespace_cdb.block = cs_sb->used;
+    for(i=0; i<cs_sb->used; i++)
+        BUG_ON(castle_freespace_hash_mod(cs, 0, HASH_MOD_INC));
     last_cdb.disk  = cs->uuid;
     last_cdb.block = 0;
     bitmap_cdb = INVAL_DISK_BLK;
-    
+
     while(last_cdb.block < cs_sb->size)
     {
-        c2_page_t *c2p = castle_cache_page_get(freespace_cdb); 
-        
+        c2_page_t *c2p = castle_cache_page_get(freespace_cdb);
+
         lock_c2p(c2p);
         /* We'll overwrite entire block */
-        set_c2p_uptodate(c2p); 
+        set_c2p_uptodate(c2p);
         bitmap = c2p_buffer(c2p);
         for(i=0; i<C_BLK_SIZE; i++)
             bitmap[i] = (uint8_t)-1;
@@ -63,7 +169,7 @@ void castle_freespace_slave_init(struct castle_slave *cs, struct castle_slave_su
                 unlock_c2p(bitmap_c2p);
                 put_c2p(bitmap_c2p);
             }
-            bitmap_cdb = cdb_to_bitmap_cdb(freespace_cdb); 
+            bitmap_cdb = cdb_to_bitmap_cdb(freespace_cdb);
             bitmap_c2p = castle_cache_page_get(bitmap_cdb);
             lock_c2p(bitmap_c2p);
             if(!c2p_uptodate(bitmap_c2p))
@@ -71,7 +177,7 @@ void castle_freespace_slave_init(struct castle_slave *cs, struct castle_slave_su
             bitmap_buf = c2p_buffer(bitmap_c2p);
         }
         clear_bit(cdb_to_bitmap_off(freespace_cdb), bitmap_buf);
-        /* Superblocks use up 2 blocks */ 
+        /* Superblocks use up 2 blocks */
         if(last_cdb.block == 0)
         {
             clear_bit(0, bitmap_buf);
@@ -81,36 +187,39 @@ void castle_freespace_slave_init(struct castle_slave *cs, struct castle_slave_su
         freespace_cdb.block += 1;
         last_cdb.block      += C_BLK_SIZE * 8;
         cs_sb->used++;
+        BUG_ON(castle_freespace_hash_mod(cs, 0, HASH_MOD_INC));
     }
-    
+
     /* Release the last bitmap */
     dirty_c2p(bitmap_c2p);
     unlock_c2p(bitmap_c2p);
     put_c2p(bitmap_c2p);
 }
 
-c_disk_blk_t castle_freespace_block_get(void)                                  
-{                                                                              
-    // TODO: slave locks!                                                      
-    static struct castle_slave *last_slave = NULL;                             
-    static struct castle_slave_superblock *sb;
-    struct castle_slave *slave, *first_slave = NULL; 
+c_disk_blk_t castle_freespace_block_get(version_t version)
+{
+    // TODO: slave locks!
+    static struct castle_slave *last_slave = NULL;
+    struct castle_slave_superblock *sb = NULL;
+    struct castle_slave *slave, *first_slave = NULL;
     uint32_t slave_size;
     struct list_head *l;
     c_disk_blk_t free_cdb, bitmap_cdb, first_bitmap_cdb;
     c2_page_t *bitmap_c2p;
     uint64_t *bitmap_buf, word, complement_word;
     int slave_is_target, i, i_max = (C_BLK_SIZE / sizeof(uint64_t));
-    
+
     debug("\nAllocating a new block.\n");
-    
-    if(!last_slave) 
+
+    if(!last_slave)
     {
         BUG_ON(list_empty(&castle_slaves.slaves));
         l = castle_slaves.slaves.next;
         last_slave = list_entry(l, struct castle_slave, list);
     }
 next_disk:
+    if(sb) castle_slave_superblock_put(slave, 0);
+
     l = &last_slave->list;
     if(list_is_last(l, &castle_slaves.slaves))
         l = &castle_slaves.slaves;
@@ -125,22 +234,21 @@ next_disk:
 
     last_slave = slave;
     if(!first_slave) first_slave = slave;
-    
+
     debug("Selected slave=0x%x\n", slave->uuid);
     /* We've selected a disk to search for a new block on. Select bitmap block. */
     sb = castle_slave_superblock_get(slave);
     slave_size = sb->size;
     slave_is_target = sb->flags & CASTLE_SLAVE_TARGET;
-    castle_slave_superblock_put(slave, 0);
-    
+
     if(!slave_is_target)
         goto next_disk;
-    
+
     debug("Slave size=0x%x\n", slave_size);
 
     free_cdb = (c_disk_blk_t){slave->uuid, slave->free_blk+1};
     debug("Free block on the slave is: 0x%x\n", free_cdb.block);
-    i = cdb_to_bitmap_off(free_cdb) / (sizeof(uint64_t) * 8);    
+    i = cdb_to_bitmap_off(free_cdb) / (sizeof(uint64_t) * 8);
     debug("uint64_t offset is: 0x%x\n", i);
     first_bitmap_cdb = bitmap_cdb = cdb_to_bitmap_cdb(free_cdb);
     debug("first bitmap block: 0x%x\n", first_bitmap_cdb.block);
@@ -155,13 +263,13 @@ next_bitmap_cdb:
     if(bitmap_cdb.block > blk_to_bitmap_blk(slave_size-1))
         bitmap_cdb.block = 2;
     debug("0x%x\n", bitmap_cdb.block);
-    if(bitmap_cdb.block == first_bitmap_cdb.block) 
+    if(bitmap_cdb.block == first_bitmap_cdb.block)
     {
         debug("Checked all bitmap blocks. Going to the next slave.\n");
         goto next_disk;
     }
-    
-process_bitmap_cdb:    
+
+process_bitmap_cdb:
     /* Find first non-zero uint64_t in the bitmap */
     bitmap_c2p = castle_cache_page_get(bitmap_cdb);
     lock_c2p(bitmap_c2p);
@@ -203,6 +311,9 @@ process_bitmap_cdb:
     /* Book-keeping stuff */
     debug("Free_block is (0x%x, 0x%x), bookkeeping that\n", free_cdb.disk, free_cdb.block);
     slave->free_blk = free_cdb.block;
+    castle_freespace_hash_mod(slave, version, HASH_MOD_INC);
+    sb->used++;
+    castle_slave_superblock_put(slave, 1);
 
     return free_cdb;
 }

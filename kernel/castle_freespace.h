@@ -3,7 +3,10 @@
 
 void         castle_freespace_slave_init   (struct castle_slave *cs, 
                                             struct castle_slave_superblock *cs_sb);
-c_disk_blk_t castle_freespace_block_get    (void);
+c_disk_blk_t castle_freespace_block_get    (version_t version);
 void         castle_freespace_block_free   (c_disk_blk_t cdb);
+    
+int          castle_freespace_version_add  (version_t version);
+ssize_t      castle_freespace_summary_get  (struct castle_slave *cs, char *buf);
 
 #endif /* __CASTLE_FREESPACE_H__ */

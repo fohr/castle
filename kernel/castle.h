@@ -19,7 +19,8 @@ typedef struct castle_disk_block c_disk_blk_t;
 #define DISK_BLK_EQUAL(_blk1, _blk2) (((_blk1).disk == (_blk2).disk) && \
                                       ((_blk1).block == (_blk2).block)) 
 
-#define CASTLE_SLAVE_TARGET     (0x1ULL)
+#define CASTLE_SLAVE_TARGET     (0x00000001)
+#define CASTLE_SLAVE_SPINNING   (0x00000002)
 
 #define CASTLE_SLAVE_MAGIC1     (0x02061985)
 #define CASTLE_SLAVE_MAGIC2     (0x16071983)
@@ -31,7 +32,7 @@ struct castle_slave_superblock {
     uint32_t uuid;
     uint32_t used;
     uint32_t size; /* In blocks */
-	uint64_t flags; 
+	uint32_t flags; 
 };
 
 #define CASTLE_FS_MAGIC1        (0x19731121)
@@ -164,6 +165,20 @@ typedef struct castle_bio_vec {
 #define c_bvec_bnode(_c_bvec)       pfn_to_kaddr(page_to_pfn((_c_bvec)->btree_node->page))
 #define c_bvec_bpnode(_c_bvec)      pfn_to_kaddr(page_to_pfn((_c_bvec)->btree_parent_node->page))
 
+#define BLOCKS_HASH_SIZE        (100)
+struct castle_slave_blocks_cnt
+{
+    version_t version;
+    block_t cnt;
+    struct list_head list;
+};
+
+struct castle_slave_blocks_hash 
+{
+    struct list_head hash[BLOCKS_HASH_SIZE];
+    struct castle_slave_blocks_cnt metadata_cnt; 
+};
+
 /* First class structures */
 struct castle {
     struct kobject kobj;
@@ -182,6 +197,7 @@ struct castle_slave {
     struct castle_cache_page       *sblk;
     struct castle_cache_page       *fs_sblk;
     block_t                         free_blk;
+    struct castle_slave_blocks_hash block_cnts;
 };
 
 struct castle_slaves {
