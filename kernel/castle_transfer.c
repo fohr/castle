@@ -9,6 +9,8 @@
 
 #include "castle_public.h"
 #include "castle.h"
+#include "castle_cache.h"
+#include "castle_btree.h"
 #include "castle_transfer.h"
 #include "castle_sysfs.h"
 #include "castle_versions.h"
@@ -63,6 +65,33 @@ struct castle_transfer* castle_transfer_find(transfer_id_t id)
     return NULL;
 }
 
+static c_disk_blk_t castle_iter_each(c_iter_t *iter, c_disk_blk_t cdb)
+{
+    printk("castle_iter_each: (%d, %d)", cdb.disk, cdb.block);
+    return cdb;
+}
+
+static void castle_iter_error(c_iter_t *iter, int err)
+{
+    printk("castle_iter_error: %d", err);
+}
+
+void castle_init_ftree_iter(struct castle_transfer *transfer)
+{
+    c_iter_t *c_iter;
+    
+    if(!(c_iter = kzalloc(sizeof(c_iter_t), GFP_KERNEL)))
+        return;
+
+    c_iter->private = transfer;        
+    c_iter->version = transfer->version;
+    c_iter->each    = castle_iter_each;
+    c_iter->end     = NULL;
+    c_iter->error   = castle_iter_error;
+
+    castle_ftree_iter(c_iter);
+}
+
 struct castle_transfer* castle_transfer_create(version_t version, int direction)
 {
     struct castle_transfer* transfer = NULL;
@@ -101,6 +130,8 @@ struct castle_transfer* castle_transfer_create(version_t version, int direction)
          list_del(&transfer->list);
          goto err_out;
     }
+
+    castle_init_ftree_iter(transfer);
 
     return transfer;
 
