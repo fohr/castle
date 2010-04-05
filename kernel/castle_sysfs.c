@@ -150,7 +150,6 @@ static ssize_t slave_target_store(struct kobject *kobj,
 {
     struct castle_slave_superblock *sb;
     struct castle_slave *slave = container_of(kobj, struct castle_slave, kobj); 
-    int target;
     
     if(count != 1 || (buf[0] != '0' && buf[0] != '1'))
         return -EINVAL;

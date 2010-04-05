@@ -161,8 +161,37 @@ typedef struct castle_bio_vec {
 #endif
 } c_bvec_t;
 #define c_bvec_data_dir(_c_bvec)    bio_data_dir((_c_bvec)->c_bio->bio)
-#define c_bvec_bnode(_c_bvec)       pfn_to_kaddr(page_to_pfn((_c_bvec)->btree_node->page))
+#define c2p_bnode(_c2p)             pfn_to_kaddr(page_to_pfn((_c2p)->page))
+#define c_bvec_bnode(_c_bvec)       c2p_bnode((_c_bvec)->btree_node) //pfn_to_kaddr(page_to_pfn((_c_bvec)->btree_node->page))
 #define c_bvec_bpnode(_c_bvec)      pfn_to_kaddr(page_to_pfn((_c_bvec)->btree_parent_node->page))
+
+/* Used for iterating through the tree */
+
+typedef struct castle_path_item {
+    int                       depth;
+    int                       index;
+    c_disk_blk_t              cdb;
+    struct castle_cache_page *btree_node;
+    struct list_head          list;
+    } c_path_item_t;
+
+typedef struct castle_iterator {
+    /* What version do we want to read */
+    uint32_t            version;
+    c_disk_blk_t      (*each)(struct castle_iterator *c_iter, c_disk_blk_t cdb);
+    void              (*error)(struct castle_iterator *c_iter, int err);
+    void              (*end)(struct castle_iterator *c_iter);
+    void               *private;
+
+    int                 depth;
+    struct list_head    path;
+
+    /* Used to thread this bvec onto a workqueue */
+    struct work_struct  work;
+#ifdef CASTLE_DEBUG    
+    unsigned long       state;
+#endif
+} c_iter_t;
 
 /* First class structures */
 struct castle {
