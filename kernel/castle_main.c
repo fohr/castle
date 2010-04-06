@@ -364,9 +364,9 @@ static int castle_slave_superblocks_init(struct castle_slave *cs)
         cs_sb->size   = get_capacity(cs->bdev->bd_disk) >> (C_BLK_SHIFT - 9);
         cs_sb->flags  = CASTLE_SLAVE_TARGET | CASTLE_SLAVE_SPINNING;
         castle_slave_superblock_print(cs_sb);
-        castle_freespace_slave_init(cs, cs_sb);
         printk("Done.\n");
     }
+    castle_freespace_slave_init(cs, cs_sb);
     castle_slave_superblock_put(cs, cs->new_dev);
     castle_fs_superblock_put(cs, 0);
 
