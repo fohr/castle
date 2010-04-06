@@ -465,8 +465,8 @@ version_t castle_version_new(int snap_or_clone,
 
 static int castle_version_ftree_yield(void *word)
 {
-	struct castle_version *v
-		= container_of(word, struct castle_version, flags);
+    /* If you need the version struct here is how you work it out:
+	struct castle_version *v = container_of(word, struct castle_version, flags); */
 
 	smp_mb();
     debug("In ftree_yield.\n");

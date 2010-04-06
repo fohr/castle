@@ -98,7 +98,7 @@ static int castle_regions_get(version_t version, struct castle_region*** regions
             count ++;
     }
 
-    if (!(*regions = kzalloc(count * sizeof(struct castle_region*), GFP_KERNEL)))
+    if (!(regions = kzalloc(count * sizeof(struct castle_region*), GFP_KERNEL)))
         return -ENOMEM;
 
     /* TODO race if someone comes and add another region between the first count and here */
@@ -202,7 +202,7 @@ void castle_transfers_free(void)
 
 static void castle_do_transfer_callback(c2_page_t *src, int uptodate);
 
-static int castle_transfer_is_block_on_correct_disk(struct castle_transfer *transfer, c_disk_blk_t cdb)
+static int USED castle_transfer_is_block_on_correct_disk(struct castle_transfer *transfer, c_disk_blk_t cdb)
 {
     struct castle_slave *slave = castle_slave_find_by_block(cdb);
     struct castle_slave_superblock *sb;

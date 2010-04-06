@@ -94,7 +94,7 @@ static int castle_ftree_node_normalize(struct castle_ftree_node *node)
     return 0;
 }
 
-static void castle_ftree_node_print(struct castle_ftree_node *node)
+static void USED castle_ftree_node_print(struct castle_ftree_node *node)
 {
     int i;
 

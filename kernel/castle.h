@@ -1,6 +1,8 @@
 #ifndef __CASTLE_H__
 #define __CASTLE_H__
 
+#define USED                 __attribute__((used))
+
 typedef uint32_t version_t;
 #define INVAL_VERSION       ((version_t)-1) 
 #define VERSION_INVAL(_v)   ((_v) == INVAL_VERSION) 

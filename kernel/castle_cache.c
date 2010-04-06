@@ -39,8 +39,8 @@ static DECLARE_WAIT_QUEUE_HEAD(castle_cache_flush_wq);
 
 static int sync_c2p(void *word)
 {
-	c2_page_t *c2p
-		= container_of(word, c2_page_t, state);
+	/* If you need to use the c2p, here is how you work it out;
+       c2_page_t *c2p = container_of(word, c2_page_t, state); */
 
 	smp_mb();
     debug("In sync_c2p. Yielding\n");

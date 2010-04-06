@@ -8,7 +8,7 @@ $(TARGET)-objs := castle_main.o castle_cache.o castle_block.o castle_btree.o cas
 
 # Add your debugging flag (or not) to CFLAGS
 ifeq ($(DEBUG),y)
-  DEBFLAGS = -O0 -g -DCASTLE_DEBUG # "-O" is needed to expand inlines
+  DEBFLAGS = -Werror -O0 -g -DCASTLE_DEBUG # "-O" is needed to expand inlines
   $(TARGET)-objs += castle_debug.o
 else
   DEBFLAGS = -O0 -g

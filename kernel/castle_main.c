@@ -38,7 +38,7 @@ int                          castle_fs_inited;
 #endif
 
 
-static void castle_fs_superblock_print(struct castle_fs_superblock *fs_sb)
+static void USED castle_fs_superblock_print(struct castle_fs_superblock *fs_sb)
 {
     printk("Magic1: %.8x\n"
            "Magic2: %.8x\n"
