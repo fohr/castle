@@ -8,5 +8,6 @@ void         castle_freespace_block_free   (c_disk_blk_t cdb);
     
 int          castle_freespace_version_add  (version_t version);
 ssize_t      castle_freespace_summary_get  (struct castle_slave *cs, char *buf);
+ssize_t      castle_freespace_blks_for_version_get(struct castle_slave *cs, version_t version);
 
 #endif /* __CASTLE_FREESPACE_H__ */

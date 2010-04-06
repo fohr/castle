@@ -102,6 +102,23 @@ ssize_t castle_freespace_summary_get(struct castle_slave *cs, char *buf)
     return offset;
 }
 
+ssize_t castle_freespace_blks_for_version_get(struct castle_slave *cs, version_t version)
+{
+    int hash_idx = (version % BLOCKS_HASH_SIZE);
+    struct list_head *i, *h = &cs->block_cnts.hash[hash_idx];
+    struct castle_slave_blocks_cnt *cnt = NULL;
+
+    list_for_each(i, h)
+    {
+        cnt = list_entry(i, struct castle_slave_blocks_cnt, list);
+        if(cnt->version == version)
+            break;
+    }
+    BUG_ON(!cnt);
+    
+    return cnt->cnt;
+}
+
 int castle_freespace_version_add(version_t version)
 {
     struct list_head *l;
@@ -318,7 +335,7 @@ process_bitmap_cdb:
     return free_cdb;
 }
 
-void castle_freespace_block_free(c_disk_blk_t cdb)
+void castle_freespace_block_free(c_disk_blk_t cdb, version_t version)
 {
     struct castle_slave *slave = castle_slave_find_by_uuid(cdb.disk);
     c_disk_blk_t bitmap_cdb;
@@ -336,5 +353,7 @@ void castle_freespace_block_free(c_disk_blk_t cdb)
     dirty_c2p(bitmap_c2p);
     unlock_c2p(bitmap_c2p);
     put_c2p(bitmap_c2p);
+    
+    castle_freespace_hash_mod(slave, version, HASH_MOD_DEC);
 }
 

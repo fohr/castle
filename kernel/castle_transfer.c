@@ -14,41 +14,56 @@
 #include "castle_transfer.h"
 #include "castle_sysfs.h"
 #include "castle_versions.h"
+#include "castle_freespace.h"
 
 struct castle_transfers      castle_transfers;
 
-//struct list_head castle_transfers_queue;
+static void castle_move_block(struct castle_transfer *transfer, c_disk_blk_t cdb);
+static void castle_transfer_error(struct castle_transfer *transfer, int err); 
 
-//DEFINE_MUTEX(castle_transfers_mutex);
-//DECLARE_WAIT_QUEUE_HEAD(castle_transfers_wait_queue);
-
-static void castle_transfer_add(struct castle_transfer *transfer)
+static void castle_iter_each(c_iter_t *c_iter, c_disk_blk_t cdb)
 {
-//    mutex_lock(&castle_transfers_mutex);
-    
-    list_add(&transfer->list, &castle_transfers.transfers);
-//    list_add_tail(&transfer->list, &castle_transfers_queue);
-    
-//   mutex_unlock(&castle_transfers_mutex);
-//   wake_up (&castle_transfers_wait_queue);
+    struct castle_transfer *transfer = container_of(c_iter, struct castle_transfer, c_iter);
+
+    printk("castle_iter_each: (%d, %d)\n", cdb.disk, cdb.block);
+	
+	castle_move_block(transfer, cdb);
 }
 
-/*struct castle_transfer* castle_get_next_transfer(void)
+static void castle_iter_error(c_iter_t *c_iter, int err)
 {
-    castle_transfer* transfer = NULL;
-    
-    mutex_lock (&castle_transfers_mutex);
-    while (list_empty(castle_transfers_queue)) {
-        mutex_unlock (&castle_transfers_mutex);
-        wait_event (&castle_transfers_wait_queue, list_empty(castle_transfers_queue));
-        mutex_lock (&castle_transfers_mutex);
-    }
+    struct castle_transfer *transfer = container_of(c_iter, struct castle_transfer, c_iter);
 
-    transfer = list_first_entry(&castle_transfers_queue, struct castle_transfer, list);
-    list_del(&transfer->list);
+    printk("castle_iter_error: %d\n", err);
 
-    mutex_unlock (&castle_transfers_mutex);
-}*/
+	castle_transfer_error(transfer, err);
+}
+
+static void castle_iter_end(c_iter_t *c_iter)
+{
+    printk("castle_iter_end\n");
+}
+
+static void castle_transfer_start(struct castle_transfer *transfer)
+{
+    transfer->c_iter.private = transfer;        
+    transfer->c_iter.version = transfer->version;
+    transfer->c_iter.each    = castle_iter_each;
+    transfer->c_iter.end     = castle_iter_end;
+    transfer->c_iter.error   = castle_iter_error;
+
+    castle_ftree_iter(&transfer->c_iter);
+}
+
+static void castle_transfer_error(struct castle_transfer *transfer, int err)
+{
+  /* TODO need callback to userspace */
+}
+
+static void castle_transfer_add(struct castle_transfer *transfer)
+{    
+    list_add(&transfer->list, &castle_transfers.transfers);
+}
 
 struct castle_transfer* castle_transfer_find(transfer_id_t id)
 {
@@ -65,31 +80,50 @@ struct castle_transfer* castle_transfer_find(transfer_id_t id)
     return NULL;
 }
 
-static c_disk_blk_t castle_iter_each(c_iter_t *iter, c_disk_blk_t cdb)
+static int castle_regions_get(version_t version, struct castle_region*** regions_ret)
 {
-    printk("castle_iter_each: (%d, %d)", cdb.disk, cdb.block);
-    return cdb;
-}
+    struct list_head *lh;
+    struct castle_region *region;
+    struct castle_region **regions;
+    int count, i;
 
-static void castle_iter_error(c_iter_t *iter, int err)
-{
-    printk("castle_iter_error: %d", err);
-}
+    count = i = 0;
 
-void castle_init_ftree_iter(struct castle_transfer *transfer)
-{
-    c_iter_t *c_iter;
+    BUG_ON(regions_ret != NULL);
+
+    list_for_each(lh, &castle_regions.regions)
+    {
+        region = list_entry(lh, struct castle_region, list);
+        if (region->version == version)
+            count ++;
+    }
+
+    if (!(*regions = kzalloc(count * sizeof(struct castle_region*), GFP_KERNEL)))
+        return -ENOMEM;
+
+    /* TODO race if someone comes and add another region between the first count and here */
+
+    list_for_each(lh, &castle_regions.regions)
+    {
+        region = list_entry(lh, struct castle_region, list);
+        if (region->version == version)
+        {
+            regions[i] = region;
+            i ++;
+        }
+    }
     
-    if(!(c_iter = kzalloc(sizeof(c_iter_t), GFP_KERNEL)))
-        return;
+    *regions_ret = regions;
 
-    c_iter->private = transfer;        
-    c_iter->version = transfer->version;
-    c_iter->each    = castle_iter_each;
-    c_iter->end     = NULL;
-    c_iter->error   = castle_iter_error;
+    return count;
+}
 
-    castle_ftree_iter(c_iter);
+void castle_transfer_destroy(struct castle_transfer *transfer)
+{
+    castle_sysfs_transfer_del(transfer);
+    list_del(&transfer->list);
+    kfree(transfer->regions);
+    kfree(transfer);
 }
 
 struct castle_transfer* castle_transfer_create(version_t version, int direction)
@@ -110,17 +144,22 @@ struct castle_transfer* castle_transfer_create(version_t version, int direction)
         printk("Invalid version '%d'!\n", version);
         goto err_out;
     }
-    else if(err == -EAGAIN)
-    {
+    else if(err == 0)
         castle_version_snap_put(version);
-    }
 
     if(!(transfer = kzalloc(sizeof(struct castle_transfer), GFP_KERNEL)))
+    {
+        err = -ENOMEM;
         goto err_out;
+    }
 
     transfer->id = transfer_id++;
     transfer->version = version;
     transfer->direction = direction;
+    transfer->regions_count = err = castle_regions_get(version, &transfer->regions);
+    
+    if(transfer->regions_count < 0)
+        goto err_out;
 
     castle_transfer_add(transfer);
 
@@ -131,20 +170,14 @@ struct castle_transfer* castle_transfer_create(version_t version, int direction)
          goto err_out;
     }
 
-    castle_init_ftree_iter(transfer);
+    castle_transfer_start(transfer);
 
     return transfer;
 
 err_out:
+    if(transfer->regions) kfree(transfer->regions);
     if(transfer) kfree(transfer);
     return NULL;
-}
-
-void castle_transfer_destroy(struct castle_transfer *transfer)
-{
-    castle_sysfs_transfer_del(transfer);
-    list_del(&transfer->list);
-    kfree(transfer);
 }
 
 int castle_transfers_init(void)
@@ -155,7 +188,7 @@ int castle_transfers_init(void)
     return 0;
 }
 
-void castle_transfers_free(void)                                                                 
+void castle_transfers_free(void)                                                        
 {                                                                                        
     struct list_head *lh, *th;
     struct castle_transfer *transfer;
@@ -167,43 +200,115 @@ void castle_transfers_free(void)
     }
 }
 
-/*void castle_abort_transfer(struct castle_transfer *transfer, int reason, )
+static void castle_do_transfer_callback(c2_page_t *src, int uptodate);
+
+static int castle_transfer_is_block_on_correct_disk(struct castle_transfer *transfer, c_disk_blk_t cdb)
 {
-    
+    struct castle_slave *slave = castle_slave_find_by_block(cdb);
+    struct castle_slave_superblock *sb;
+    struct castle_region *region;
+    int target, i;
+
+    if (transfer->direction == CASTLE_TRANSFER_TO_TARGET)
+    {
+        sb = castle_slave_superblock_get(slave);
+        target = sb->flags & CASTLE_SLAVE_TARGET ? 1 : 0;
+        castle_slave_superblock_put(slave, 0);
+        return target;
+    }
+    else if (transfer->direction == CASTLE_TRANSFER_TO_REGION)
+    {
+        /* check the block is on one of the regions' slaves */
+        for (i = 0; i < transfer->regions_count; i++)
+        {
+            region = transfer->regions[i];
+            if ((region->slave)->uuid == cdb.disk)
+                return true;
+        }
+        
+        return false;
+    } 
+    else 
+        BUG_ON(true);
 }
 
-void castle_do_transfer(struct castle_transfer *transfer)
+static c_disk_blk_t castle_transfer_get_destination(struct castle_transfer *transfer)
+{
+    
+    int i;
+    struct castle_region *region;
+    c_disk_blk_t cdb = INVAL_DISK_BLK;
+    
+    switch (transfer->direction)
+    {
+        case CASTLE_TRANSFER_TO_TARGET:
+            cdb = castle_freespace_block_get(transfer->version);
+            break;
+            
+        case CASTLE_TRANSFER_TO_REGION:
+            for (i = 0; (i < transfer->regions_count) && DISK_BLK_INVAL(cdb); i++)
+            {
+                region = transfer->regions[i];
+            
+                if (castle_freespace_blks_for_version_get(region->slave, region->version) >= region->length)
+                    continue;
+            
+                //cdb = castle_freespace_cdb_get(region->slave, region->version)
+            }
+            break;
+        
+        default:
+             BUG_ON(true);
+             break;
+    }
+
+    return cdb;
+}
+
+static void castle_move_block(struct castle_transfer *transfer, c_disk_blk_t cdb)
 {
     c2_page_t *src, *dest;
+    c_disk_blk_t dest_db;
     
-    while(true)
+    printk("castle_move_block transfer=%d\n", transfer->id);
+
+    if (true) //!castle_transfer_is_block_on_correct_disk(transfer, cdb))
     {
-        src = get_c2p();
-        lock_c2p(src);
+        atomic_add(1, &transfer->progress);
+        castle_ftree_iter_continue(&transfer->c_iter);
+        return;
+    }
+
+    src = castle_cache_page_get(cdb);
+    lock_c2p(src);
+    
+    dest_db = castle_transfer_get_destination(transfer);
+    
+    dest = castle_cache_page_get(dest_db);
+    lock_c2p(dest);
         
-        dest = get_c2p();
-        lock_c2p(dest);
+    dest->private = transfer;
+    src->private = dest;
         
-        dest->private = transfer;
-        src->private = dest;
-        
-        if(!c2p_up2date(src)) {
-            src->callback = castle_do_transfer_callback;
-            submit_c2p(READ, src);
-        }
-        else
-        {
-            castle_do_transfer_callback(src)
-        }
+    if(!c2p_uptodate(src)) 
+    {
+        src->end_io = castle_do_transfer_callback;
+        submit_c2p(READ, src);
+    }
+    else
+    {
+        castle_do_transfer_callback(src, true);
     }
 }
 
-void castle_do_transfer_callback(c2_page_t *src, int uptodate)
+static void castle_do_transfer_callback(c2_page_t *src, int uptodate)
 {
     c2_page_t *dest = src->private;
-    castle_transfer *transfer = dest->private;
+    struct castle_transfer *transfer = dest->private;
+
+	printk("castle_do_transfer_callback transfer=%d\n", transfer->id);
     
-    if (!uptodate) 
+    if (!uptodate)
     {
         memcpy(c2p_buffer(dest), c2p_buffer(src), PAGE_SIZE);
 
@@ -211,12 +316,18 @@ void castle_do_transfer_callback(c2_page_t *src, int uptodate)
     }
     else
     {
-        castle_abort_transfer(transfer, )
+        castle_transfer_error(transfer, -EIO);
     }
-    
+        
     unlock_c2p(src);
     put_c2p(src);   
     
     unlock_c2p(dest);
     put_c2p(dest);
-}*/
+
+    /* Update counters etc... */
+    castle_freespace_block_free(src->cdb);
+    atomic_add(1, &transfer->progress);
+
+    castle_ftree_iter_continue(&transfer->c_iter);
+}

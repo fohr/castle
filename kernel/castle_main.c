@@ -578,10 +578,8 @@ struct castle_region* castle_region_create(uint32_t slave_id, version_t version,
         printk("Invalid version '%d'!\n", version);
         goto err_out;
     }
-    else if(err == -EAGAIN)
-    {
+    else if(err == 0)
         castle_version_snap_put(version);
-    }
     
     if(!(region = kzalloc(sizeof(struct castle_region), GFP_KERNEL)))
         goto err_out;

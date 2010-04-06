@@ -916,7 +916,6 @@ void castle_path_item_free(c_path_item_t *path_item)
 
 void castle_iter_error(c_iter_t *c_iter, int err) 
 {
-    /* TODO: free up anything in my path */
     struct list_head *lh, *th;
     c_path_item_t *path_item;
 
@@ -980,7 +979,9 @@ static void castle_ftree_iter_process(struct work_struct *work)
     path_item = list_first_entry(&c_iter->path, c_path_item_t, list);
     node = c2p_bnode(path_item->btree_node);
 
-	castle_ftree_node_print(node);
+#ifdef DEBUG
+    castle_ftree_node_print(node);
+#endif
 
     /*
      * Go through each entry in the node.
@@ -989,7 +990,7 @@ static void castle_ftree_iter_process(struct work_struct *work)
      * putting ourselves back on the workqueue,
      * so we must make sure we save our index
      */ 
-    while (path_item->index < node->used)
+    if (path_item->index < node->used)
     {
         slot = &node->slots[path_item->index];
         path_item->index++;
@@ -1006,20 +1007,20 @@ static void castle_ftree_iter_process(struct work_struct *work)
              * to the stack 
              */
             __castle_ftree_iter(c_iter, slot->cdb);
-            return;
         }
     }
-    
-    /* 
-     * We have finished in this node.
-     * Pop the path_item off the stack and process
-     * again..
-     */
-     castle_path_item_free(path_item);         
-     c_iter->depth--;
-     
-     castle_queue_iter_process(c_iter);
-     return;
+    else 
+    {
+        /* 
+         * We have finished in this node.
+         * Pop the path_item off the stack and process
+         * again..
+         */
+        castle_path_item_free(path_item);         
+        c_iter->depth--;
+
+        castle_queue_iter_process(c_iter);
+    }
 }
 
 static void castle_ftree_iter_io_end(c2_page_t *c2p, int uptodate)
@@ -1121,6 +1122,20 @@ void castle_ftree_iter(c_iter_t *c_iter)
     INIT_LIST_HEAD(&c_iter->path);
     INIT_WORK(&c_iter->work, _castle_ftree_iter);
     queue_work(castle_wq, &c_iter->work);
+}
+
+void castle_ftree_iter_continue(c_iter_t *c_iter)
+{
+    castle_queue_iter_process(c_iter);
+}
+
+void castle_ftree_iter_replace_and_continue(c_iter_t *c_iter)
+{
+}
+
+void castle_ftree_iter_cancel(c_iter_t *c_iter)
+{
+    /* TODO - needed when something goes wrong in transfer */
 }
 
 /***** Init/fini functions *****/
