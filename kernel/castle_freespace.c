@@ -213,53 +213,24 @@ void castle_freespace_slave_init(struct castle_slave *cs, struct castle_slave_su
     put_c2p(bitmap_c2p);
 }
 
-c_disk_blk_t castle_freespace_block_get(version_t version)
+c_disk_blk_t castle_freespace_slave_block_get(struct castle_slave *slave, version_t version)
 {
-    // TODO: slave locks!
-    static struct castle_slave *last_slave = NULL;
     struct castle_slave_superblock *sb = NULL;
-    struct castle_slave *slave, *first_slave = NULL;
-    uint32_t slave_size;
-    struct list_head *l;
     c_disk_blk_t free_cdb, bitmap_cdb, first_bitmap_cdb;
-    c2_page_t *bitmap_c2p;
     uint64_t *bitmap_buf, word, complement_word;
-    int slave_is_target, i, i_max = (C_BLK_SIZE / sizeof(uint64_t));
+    c2_page_t *bitmap_c2p;
+    block_t slave_size;
+    int i, i_max = (C_BLK_SIZE / sizeof(uint64_t));
 
-    debug("\nAllocating a new block.\n");
-
-    if(!last_slave)
-    {
-        BUG_ON(list_empty(&castle_slaves.slaves));
-        l = castle_slaves.slaves.next;
-        last_slave = list_entry(l, struct castle_slave, list);
-    }
-next_disk:
-    if(sb) castle_slave_superblock_put(slave, 0);
-
-    l = &last_slave->list;
-    if(list_is_last(l, &castle_slaves.slaves))
-        l = &castle_slaves.slaves;
-    l = l->next;
-    slave = list_entry(l, struct castle_slave, list);
-    if(slave == first_slave)
-    {
-        printk("Could not find a single free block, on any of the disks!\n");
-        BUG();
-        return INVAL_DISK_BLK;
-    }
-
-    last_slave = slave;
-    if(!first_slave) first_slave = slave;
-
-    debug("Selected slave=0x%x\n", slave->uuid);
+    // TODO: slave locks!
     /* We've selected a disk to search for a new block on. Select bitmap block. */
     sb = castle_slave_superblock_get(slave);
     slave_size = sb->size;
-    slave_is_target = sb->flags & CASTLE_SLAVE_TARGET;
-
-    if(!slave_is_target)
-        goto next_disk;
+    if(!(sb->flags & CASTLE_SLAVE_TARGET))
+    {
+        castle_slave_superblock_put(slave, 0);
+        return INVAL_DISK_BLK;
+    }
 
     debug("Slave size=0x%x\n", slave_size);
 
@@ -283,7 +254,8 @@ next_bitmap_cdb:
     if(bitmap_cdb.block == first_bitmap_cdb.block)
     {
         debug("Checked all bitmap blocks. Going to the next slave.\n");
-        goto next_disk;
+        castle_slave_superblock_put(slave, 0);
+        return INVAL_DISK_BLK;
     }
 
 process_bitmap_cdb:
@@ -331,6 +303,50 @@ process_bitmap_cdb:
     castle_freespace_hash_mod(slave, version, HASH_MOD_INC);
     sb->used++;
     castle_slave_superblock_put(slave, 1);
+
+    return free_cdb;
+}
+
+c_disk_blk_t castle_freespace_block_get(version_t version)
+{
+    static struct castle_slave *last_slave = NULL;
+    struct castle_slave *slave, *first_slave = NULL;
+    struct list_head *l;
+    c_disk_blk_t free_cdb;
+
+    debug("\nAllocating a new block.\n");
+
+    /* Will happen only once. The first time the allocator is called */
+    if(!last_slave)
+    {
+        BUG_ON(list_empty(&castle_slaves.slaves));
+        l = castle_slaves.slaves.next;
+        last_slave = list_entry(l, struct castle_slave, list);
+    }
+
+next_disk:
+    l = &last_slave->list;
+    if(list_is_last(l, &castle_slaves.slaves))
+        l = &castle_slaves.slaves;
+    l = l->next;
+    slave = list_entry(l, struct castle_slave, list);
+
+    /* We've selected the next slave, check if we've tried it already */
+    if(slave == first_slave)
+    {
+        printk("Could not find a single free block, on any of the disks!\n");
+        BUG();
+        return INVAL_DISK_BLK;
+    }
+
+    /* Remember what slave we've tried last */
+    last_slave = slave;
+    if(!first_slave) first_slave = slave;
+
+    debug("Selected slave=0x%x\n", slave->uuid);
+    free_cdb = castle_freespace_slave_block_get(slave, version);
+    if(DISK_BLK_INVAL(free_cdb))
+        goto next_disk;
 
     return free_cdb;
 }
