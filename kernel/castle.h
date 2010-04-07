@@ -28,13 +28,15 @@ typedef struct castle_disk_block c_disk_blk_t;
 #define CASTLE_SLAVE_MAGIC2     (0x16071983)
 #define CASTLE_SLAVE_MAGIC3     (0x16061981)
 struct castle_slave_superblock {
-    uint32_t magic1;
-    uint32_t magic2;
-    uint32_t magic3;
-    uint32_t uuid;
-    uint32_t used;
-    uint32_t size; /* In blocks */
-	uint32_t flags; 
+    uint32_t     magic1;
+    uint32_t     magic2;
+    uint32_t     magic3;
+    uint32_t     uuid;
+    uint32_t     used;
+    uint32_t     size; /* In blocks */
+	uint32_t     flags; 
+    c_disk_blk_t flist_next;
+    c_disk_blk_t flist_prev;
 };
 
 #define CASTLE_FS_MAGIC1        (0x19731121)
@@ -111,6 +113,24 @@ struct castle_vlist_node {
     c_disk_blk_t prev; /* 8 bytes */
     uint8_t __pad[NODE_HEADER - 32];
     struct castle_vlist_slot slots[VLIST_SLOTS];
+};
+
+struct castle_flist_slot {
+    version_t    version;
+    block_t      blocks;
+};
+
+#define FLIST_NODE_MAGIC  0x0000faca
+#define FLIST_SLOTS  ((PAGE_SIZE - NODE_HEADER)/sizeof(struct castle_flist_slot))
+struct castle_flist_node {
+    uint32_t magic;
+    uint32_t version; 
+    uint32_t capacity;
+    uint32_t used;
+    c_disk_blk_t next; /* 8 bytes */
+    c_disk_blk_t prev; /* 8 bytes */
+    uint8_t __pad[NODE_HEADER - 32];
+    struct castle_flist_slot slots[FLIST_SLOTS];
 };
 
 /* IO related structures */
@@ -197,17 +217,21 @@ typedef struct castle_iterator {
 } c_iter_t;
 
 #define BLOCKS_HASH_SIZE        (100)
-struct castle_slave_blocks_cnt
+struct castle_slave_block_cnt
 {
     version_t version;
     block_t cnt;
     struct list_head list;
 };
 
-struct castle_slave_blocks_hash 
+struct castle_slave_block_cnts 
 {
     struct list_head hash[BLOCKS_HASH_SIZE];
-    struct castle_slave_blocks_cnt metadata_cnt; 
+    struct castle_slave_block_cnt metadata_cnt;  /* Count for version 0 (metadata) */
+    struct castle_cache_page *last_flist_c2p;    /* Buffer for the last flist node.
+                                            `       One ref, unlocked. */
+    uint32_t flist_capacity;
+    uint32_t flist_used;
 };
 
 /* First class structures */
@@ -228,7 +252,7 @@ struct castle_slave {
     struct castle_cache_page       *sblk;
     struct castle_cache_page       *fs_sblk;
     block_t                         free_blk;
-    struct castle_slave_blocks_hash block_cnts;
+    struct castle_slave_block_cnts  block_cnts;
 };
 
 struct castle_slaves {

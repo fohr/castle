@@ -366,8 +366,8 @@ static int castle_slave_superblocks_init(struct castle_slave *cs)
         castle_slave_superblock_print(cs_sb);
         printk("Done.\n");
     }
-    castle_freespace_slave_init(cs, cs_sb);
     castle_slave_superblock_put(cs, cs->new_dev);
+    castle_freespace_slave_init(cs, cs->new_dev);
     castle_fs_superblock_put(cs, 0);
 
     return ret;
@@ -1173,29 +1173,32 @@ static int __init castle_init(void)
 
     castle_fs_inited = 0;
               castle_debug_init();
-    if((ret = castle_slaves_init()))   goto err_out1;
-    if((ret = castle_cache_init()))    goto err_out2;
-    if((ret = castle_versions_init())) goto err_out3;
-    if((ret = castle_btree_init()))    goto err_out4;
-    if((ret = castle_devices_init()))  goto err_out5;
-    if((ret = castle_control_init()))  goto err_out6;
-    if((ret = castle_regions_init()))  goto err_out7;
-    if((ret = castle_transfers_init()))goto err_out8;
-    if((ret = castle_sysfs_init()))    goto err_out9;
+    if((ret = castle_slaves_init()))    goto err_out1;
+    if((ret = castle_cache_init()))     goto err_out2;
+    if((ret = castle_versions_init()))  goto err_out3;
+    if((ret = castle_btree_init()))     goto err_out4;
+    if((ret = castle_freespace_init())) goto err_out5;
+    if((ret = castle_devices_init()))   goto err_out6;
+    if((ret = castle_control_init()))   goto err_out7;
+    if((ret = castle_regions_init()))   goto err_out8;
+    if((ret = castle_transfers_init())) goto err_out9;
+    if((ret = castle_sysfs_init()))     goto err_out10;
 
     printk("OK.\n");
 
     return 0;
 
     castle_sysfs_fini(); /* Unreachable */
-err_out9:
+err_out10:
     castle_transfers_free();
-err_out8:
+err_out9:
     castle_regions_free();
-err_out7:
+err_out8:
     castle_control_fini();
-err_out6:
+err_out7:
     castle_devices_free();
+err_out6:
+    castle_freespace_fini();
 err_out5:
     castle_btree_free();
 err_out4:
@@ -1223,6 +1226,7 @@ static void __exit castle_exit(void)
     castle_regions_free();
     castle_control_fini();
     castle_devices_free();
+    castle_freespace_fini();
     castle_btree_free();
     castle_versions_fini();
     castle_slaves_unlock();

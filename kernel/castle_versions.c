@@ -953,6 +953,7 @@ err_out:
 
 void castle_versions_fini(void)
 {
+    // TODO: there seem to be a bug when a snapshot failed. kmem cache cannot be destroyed.
     castle_versions_hash_destroy();
     kmem_cache_destroy(castle_versions_cache);
     kfree(castle_versions_hash);
