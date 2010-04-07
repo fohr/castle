@@ -932,7 +932,8 @@ static void castle_ftree_iter_end(c_iter_t *c_iter, int err)
     
     castle_version_ftree_unlock(c_iter->version);
     
-    if (c_iter->end) c_iter->end(c_iter, err);
+    if (c_iter->end) 
+        c_iter->end(c_iter, err);
 }
 
 static void castle_queue_iter_process(c_iter_t *c_iter)
@@ -953,6 +954,17 @@ void castle_ftree_iter_continue(c_iter_t *c_iter)
     struct castle_ftree_node *node;
     
     debug("castle_ftree_iter_continue: version=0x%x\n", c_iter->version);
+    
+    /*
+     * AFAICT, this is the only place that it is safe
+     * to detect a previous cancel and clean up the iterator.
+     */
+    if (atomic_read(&c_iter->cancelled) > 0)
+    {
+        debug("castle_ftree_iter_continue: cancelled!\n");
+        castle_ftree_iter_end(c_iter, c_iter->err);
+        return;
+    }
     
     path_item = list_first_entry(&c_iter->path, c_path_item_t, list);
     node = c2p_bnode(path_item->btree_node);
@@ -1007,7 +1019,7 @@ static void castle_ftree_iter_process(struct work_struct *work)
 
     /* callback to say we have entered a leaf */
     /* This is going to get more complicated with leaf pointers */
-    if (FTREE_NODE_IS_LEAF(node))
+    if (FTREE_NODE_IS_LEAF(node) && c_iter->node_start != NULL)
         c_iter->node_start(c_iter);
 
     /*
@@ -1019,6 +1031,9 @@ static void castle_ftree_iter_process(struct work_struct *work)
      */ 
     while (path_item->index < node->used)
     {
+        if (atomic_read(&c_iter->cancelled) > 0)
+            break;
+        
         slot = &node->slots[path_item->index];
         path_item->index++;
         
@@ -1038,10 +1053,36 @@ static void castle_ftree_iter_process(struct work_struct *work)
         }
     }
     
-    if (FTREE_NODE_IS_LEAF(node))
+    /* 
+     * send async end node callback
+     * if one not specified, continue automatically
+     */   
+    if (FTREE_NODE_IS_LEAF(node) && c_iter->node_end != NULL)
         c_iter->node_end(c_iter);
     else
         castle_ftree_iter_continue(c_iter);
+}
+
+void castle_ftree_iter_replace(c_iter_t *c_iter, int index, c_disk_blk_t cdb)
+{
+    c_path_item_t *path_item;
+    struct castle_ftree_node *node;
+    struct castle_ftree_slot *slot;
+
+    debug("castle_ftree_iter_replace: version=0x%x, index=%d\n", c_iter->version, index);
+    
+    path_item = list_first_entry(&c_iter->path, c_path_item_t, list);
+    node = c2p_bnode(path_item->btree_node);
+    
+    BUG_ON(!FTREE_NODE_IS_LEAF(node));
+    BUG_ON(index >= node->used);
+    
+    slot = &node->slots[index];
+    
+    slot->cdb = cdb;
+    
+    /* GM says this is thread safe */
+    c2p_dirty(path_item->btree_node);
 }
 
 static void castle_ftree_iter_io_end(c2_page_t *c2p, int uptodate)
@@ -1150,6 +1191,7 @@ void castle_ftree_iter_cancel(c_iter_t *c_iter, int err)
 {
     debug("castle_ftree_iter_cancel: version=0x%x\n", c_iter->version);
     
+    c_iter->err = err;
     atomic_inc(&c_iter->cancelled);
 }
 

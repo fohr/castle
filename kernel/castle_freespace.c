@@ -1,5 +1,6 @@
 #include <linux/module.h>
 #include <linux/workqueue.h>
+#include <linux/sched.h>
 #include <linux/fs.h>
 
 #include "castle_public.h"

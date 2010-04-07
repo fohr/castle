@@ -196,7 +196,7 @@ typedef struct castle_path_item {
     c_disk_blk_t              cdb;
     struct castle_cache_page *btree_node;
     struct list_head          list;
-    } c_path_item_t;
+} c_path_item_t;
 
 typedef struct castle_iterator {
     /* What version do we want to read */
@@ -210,7 +210,8 @@ typedef struct castle_iterator {
     int                 depth;
     struct list_head    path;
     atomic_t            cancelled;
-    /* Used to thread this bvec onto a workqueue */
+    int                 err;
+    /* Used to thread this iter onto a workqueue */
     struct work_struct  work;
 #ifdef CASTLE_DEBUG    
     unsigned long       state;
@@ -307,6 +308,7 @@ struct castle_transfer {
     
     c_iter_t                c_iter;
     atomic_t                phase;
+    struct completion       completion;
 };
 
 struct castle_transfers {

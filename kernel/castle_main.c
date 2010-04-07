@@ -1223,6 +1223,7 @@ static void __exit castle_exit(void)
 {
     printk("Castle FS exit ... ");
 
+    castle_transfers_free();
     castle_regions_free();
     castle_control_fini();
     castle_devices_free();

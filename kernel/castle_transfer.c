@@ -5,6 +5,7 @@
 #include <linux/blkdev.h>
 #include <linux/random.h>
 #include <linux/crc32.h>
+#include <linux/sched.h>
 #include <asm/semaphore.h>
 
 #include "castle_public.h"
@@ -25,16 +26,15 @@
 
 struct castle_transfers      castle_transfers;
 
-static void castle_move_block(struct castle_transfer *transfer, c_disk_blk_t cdb);
-static void castle_transfer_error(struct castle_transfer *transfer, int err); 
+static void castle_block_move(struct castle_transfer *transfer, int index, c_disk_blk_t cdb);
 
 static void castle_transfer_each(c_iter_t *c_iter, int index, c_disk_blk_t cdb)
 {
     struct castle_transfer *transfer = container_of(c_iter, struct castle_transfer, c_iter);
 
-    debug("castle_iter_each: (%d, %d)\n", cdb.disk, cdb.block);
+    debug("castle_transfer_each: (0x%x, %d)\n", cdb.disk, cdb.block);
 
-    castle_move_block(transfer, cdb);
+    castle_block_move(transfer, index, cdb);
 }
 
 static void castle_transfer_node_start(c_iter_t *c_iter)
@@ -62,9 +62,13 @@ static void castle_transfer_end(c_iter_t *c_iter, int err)
 {
     struct castle_transfer *transfer = container_of(c_iter, struct castle_transfer, c_iter);
 
-    debug("castle_iter_error: transfer=%d, err=%d\n", transfer->id, err);
+    debug("castle_transfer_end: transfer=%d, err=%d\n", transfer->id, err);
 
-	castle_transfer_error(transfer, err);
+    complete(&transfer->completion);
+
+    /* TODO need callback to userspace */
+    //if (!err)
+    //    castle_transfer_error(transfer, err);
 }
 
 static void castle_transfer_start(struct castle_transfer *transfer)
@@ -76,13 +80,9 @@ static void castle_transfer_start(struct castle_transfer *transfer)
     transfer->c_iter.node_end   = castle_transfer_node_end;
     transfer->c_iter.end        = castle_transfer_end;
 
+    init_completion(&transfer->completion);
     atomic_set(&transfer->phase, 0);
     castle_ftree_iter(&transfer->c_iter);
-}
-
-static void castle_transfer_error(struct castle_transfer *transfer, int err)
-{
-  /* TODO need callback to userspace */
 }
 
 static void castle_transfer_add(struct castle_transfer *transfer)
@@ -145,6 +145,10 @@ static int castle_regions_get(version_t version, struct castle_region*** regions
 
 void castle_transfer_destroy(struct castle_transfer *transfer)
 {
+    debug("castle_transfer_destroy: transfer=%d\n", transfer->id);
+    
+    castle_ftree_iter_cancel(&transfer->c_iter, -EINTR);
+    wait_for_completion(&transfer->completion);
     castle_sysfs_transfer_del(transfer);
     list_del(&transfer->list);
     kfree(transfer->regions);
@@ -178,6 +182,7 @@ struct castle_transfer* castle_transfer_create(version_t version, int direction)
         goto err_out;
     }
 
+
     transfer->id = transfer_id++;
     transfer->version = version;
     transfer->direction = direction;
@@ -185,7 +190,7 @@ struct castle_transfer* castle_transfer_create(version_t version, int direction)
     
     if(transfer->regions_count < 0)
         goto err_out;
-
+    
     castle_transfer_add(transfer);
 
     err = castle_sysfs_transfer_add(transfer);
@@ -218,6 +223,8 @@ void castle_transfers_free(void)
     struct list_head *lh, *th;
     struct castle_transfer *transfer;
 
+    debug("castle_transfers_free\n");
+
     list_for_each_safe(lh, th, &castle_transfers.transfers)
     {
         transfer = list_entry(lh, struct castle_transfer, list); 
@@ -225,9 +232,7 @@ void castle_transfers_free(void)
     }
 }
 
-static void castle_do_transfer_callback(c2_page_t *src, int uptodate);
-
-static int USED castle_transfer_is_block_on_correct_disk(struct castle_transfer *transfer, c_disk_blk_t cdb)
+static int castle_transfer_is_block_on_correct_disk(struct castle_transfer *transfer, c_disk_blk_t cdb)
 {
     struct castle_slave *slave = castle_slave_find_by_block(cdb);
     struct castle_slave_superblock *sb;
@@ -258,7 +263,7 @@ static int USED castle_transfer_is_block_on_correct_disk(struct castle_transfer 
     }
 }
 
-static c_disk_blk_t castle_transfer_get_destination(struct castle_transfer *transfer)
+static c_disk_blk_t castle_transfer_destination_get(struct castle_transfer *transfer)
 {
     int i;
     struct castle_region *region;
@@ -290,80 +295,108 @@ static c_disk_blk_t castle_transfer_get_destination(struct castle_transfer *tran
     return cdb;
 }
 
-static void castle_move_block(struct castle_transfer *transfer, c_disk_blk_t cdb)
+// I just want this after the next function so its looks more inline
+static void castle_transfer_callback(c2_page_t *src, int uptodate);
+
+struct castle_block_move_info
+{
+    int                     index;
+    c2_page_t               *dest;
+    struct castle_transfer  *transfer;
+};
+
+static void castle_block_move(struct castle_transfer *transfer, int index, c_disk_blk_t cdb)
 {
     c2_page_t *src, *dest;
     c_disk_blk_t dest_db;
+    struct castle_block_move_info *info;
     
-    debug("castle_move_block transfer=%d\n", transfer->id);
+    debug("castle_move_block: index=%d, transfer=%d\n", index, transfer->id);
 
     if (castle_transfer_is_block_on_correct_disk(transfer, cdb))
     {
+        debug("castle_move_block: index=%d, block on correct disk...\n", index);
         atomic_add(1, &transfer->progress);
         return;
     }
-
+    
+    if(!(info = kzalloc(sizeof(struct castle_block_move_info), GFP_KERNEL)))
+    {
+        castle_ftree_iter_cancel(&transfer->c_iter, -ENOMEM);
+        return;
+    }
+    
     src = castle_cache_page_get(cdb);
     lock_c2p(src);
     
-    dest_db = castle_transfer_get_destination(transfer);
+    dest_db = castle_transfer_destination_get(transfer);
     if (DISK_BLK_INVAL(dest_db))
     {
-        debug("castle_move_block: couldn't find free block, cancelling\n");
+        debug("castle_move_block: index=%d, couldn't find free block, cancelling\n", index);
+        
+        kfree(info);
         
         unlock_c2p(src);
         put_c2p(src);
                 
-        /* this will eventually call c_iter->end, which is castle_transfer_error */
-        castle_ftree_iter_cancel(&transfer->c_iter, -ENOMEM);
+        /* 
+         * this will eventually call c_iter->end, which is 
+         * castle_transfer_error, on the next iter_continue
+         */
+        castle_ftree_iter_cancel(&transfer->c_iter, -ENOMEM); //ENOMEM? or EOUTOFDISKSPACE?
         return;
     }
     
     dest = castle_cache_page_get(dest_db);
     lock_c2p(dest);
         
-    dest->private = transfer;
-    src->private = dest;
+    info->index    = index;
+    info->dest     = dest;
+    info->transfer = transfer;
+        
+    src->private = info;
         
     atomic_inc(&transfer->phase);
         
     if(!c2p_uptodate(src)) 
     {
-        debug("castle_move_block: not uptodate, submitting...\n");
-        src->end_io = castle_do_transfer_callback;
+        debug("castle_move_block: index=%d, not uptodate, submitting...\n", index);
+        src->end_io = castle_transfer_callback;
         submit_c2p(READ, src);
     }
     else
     {
-        debug("castle_move_block: uptodate, continuing...\n");
-        castle_do_transfer_callback(src, true);
+        debug("castle_move_block: index=%d, uptodate, continuing...\n", index);
+        castle_transfer_callback(src, true);
     }
 }
 
-static void castle_do_transfer_callback(c2_page_t *src, int uptodate)
+static void castle_transfer_callback(c2_page_t *src, int uptodate)
 {
-    c2_page_t *dest = src->private;
-    struct castle_transfer *transfer = dest->private;
+    struct castle_block_move_info *info = src->private;
+    int index = info->index;
+    c2_page_t *dest = info->dest;
+    struct castle_transfer *transfer = info->transfer;
 
-	debug("castle_do_transfer_callback transfer=%d\n", transfer->id);
+    debug("castle_do_transfer_callback: index=%d, transfer=%d\n", index, transfer->id);
+    
+    kfree(info);
     
     if (!uptodate)
     {
         debug("castle_do_transfer_callback: not uptodate, cancelling...\n");
         
-        unlock_c2p(src);
-        put_c2p(src);
-        
-        unlock_c2p(dest);
-        put_c2p(dest);
-
-        /* this will eventually call c_iter->end, which is castle_transfer_error */        
+        /* 
+         * this will eventually call c_iter->end, which is 
+         * castle_transfer_error, on the next iter_continue
+         */        
         castle_ftree_iter_cancel(&transfer->c_iter, -EIO);
-        return;
     }    
-    
-    memcpy(c2p_buffer(dest), c2p_buffer(src), PAGE_SIZE);
-    dirty_c2p(dest);
+    else
+    {
+        memcpy(c2p_buffer(dest), c2p_buffer(src), PAGE_SIZE);
+        dirty_c2p(dest);
+    }
         
     unlock_c2p(src);
     put_c2p(src);   
@@ -371,10 +404,13 @@ static void castle_do_transfer_callback(c2_page_t *src, int uptodate)
     unlock_c2p(dest);
     put_c2p(dest);
 
-    /* Update counters etc... */
-    //castle_ftree_iter_replace(c_iter, i, dest->cdb);
-    castle_freespace_block_free(src->cdb, transfer->version);
-    atomic_inc(&transfer->progress);
+    if (uptodate)
+    {
+        /* Update counters etc... */
+        castle_ftree_iter_replace(&transfer->c_iter, index, dest->cdb);
+        castle_freespace_block_free(src->cdb, transfer->version);
+        atomic_inc(&transfer->progress);
+    }
 
     /* if all the block moves have succeeded then continue to next btree block */
     if (atomic_dec_and_test(&transfer->phase)) 
