@@ -5,6 +5,7 @@
 #include "castle_public.h"
 #include "castle.h"
 #include "castle_cache.h"
+#include "castle_freespace.h"
 
 //#define DEBUG
 #ifndef DEBUG

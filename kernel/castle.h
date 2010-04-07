@@ -201,14 +201,15 @@ typedef struct castle_path_item {
 typedef struct castle_iterator {
     /* What version do we want to read */
     uint32_t            version;
-    void              (*each)(struct castle_iterator *c_iter, c_disk_blk_t cdb);
-    void              (*error)(struct castle_iterator *c_iter, int err);
-    void              (*end)(struct castle_iterator *c_iter);
+    void              (*node_start)(struct castle_iterator *c_iter);
+    void              (*each)(struct castle_iterator *c_iter, int index, c_disk_blk_t cdb);
+    void              (*node_end)(struct castle_iterator *c_iter);
+    void              (*end)(struct castle_iterator *c_iter, int err);
     void               *private;
 
     int                 depth;
     struct list_head    path;
-
+    atomic_t            cancelled;
     /* Used to thread this bvec onto a workqueue */
     struct work_struct  work;
 #ifdef CASTLE_DEBUG    
@@ -295,16 +296,17 @@ struct castle_regions {
 
 struct castle_transfer {
     transfer_id_t           id;
-
-    struct kobject          kobj;
-    struct list_head        list;
-    c_iter_t                c_iter;
-    struct castle_region  **regions;
-
-    int                     regions_count;
+    version_t               version;
     int                     direction;
     atomic_t                progress;
-    version_t               version;
+    struct castle_region  **regions;
+    int                     regions_count;
+    
+    struct kobject          kobj;
+    struct list_head        list;
+    
+    c_iter_t                c_iter;
+    atomic_t                phase;
 };
 
 struct castle_transfers {
