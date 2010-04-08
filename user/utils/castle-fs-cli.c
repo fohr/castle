@@ -17,15 +17,16 @@
 struct ctrl_cmd
 {
     int        id;
+    int        args;
     char      *name;
-    void     (*set_arg)(cctrl_ioctl_t *ctl, uint64_t arg);
+    void     (*set_args)(cctrl_ioctl_t *ctl, char* argv[]);
     uint64_t (*get_ret)(cctrl_ioctl_t *ctl);
 };
 
-#define CTRL_CMD(_id, _name, _arg_t, _arg, _ret)                        \
-    static void __##_name##_set_arg(cctrl_ioctl_t *ctl, uint64_t arg)   \
+#define CTRL_CMD1(_id, _name, _arg_t, _arg, _ret)                       \
+    static void __##_name##_set_args(cctrl_ioctl_t *ctl, char* argv[])  \
     {                                                                   \
-        ctl->_arg = (_arg_t)arg;                                        \
+        ctl->_arg = (_arg_t)strtoul(argv[0], NULL, 16);                 \
     };                                                                  \
     static uint64_t __##_name##_get_ret(cctrl_ioctl_t *ctl)             \
     {                                                                   \
@@ -34,19 +35,64 @@ struct ctrl_cmd
     static struct ctrl_cmd _name##_ctrl_cmd =                           \
     {                                                                   \
         .id   = _id,                                                    \
+        .args = 1,                                                      \
         .name = #_name,                                                 \
-        .set_arg = __##_name##_set_arg,                                 \
+        .set_args = __##_name##_set_args,                               \
         .get_ret = __##_name##_get_ret,                                 \
     }                                                                   \
 
-CTRL_CMD(CASTLE_CTRL_CMD_CLAIM,    claim,    uint32_t, claim.dev,    claim.id);
-CTRL_CMD(CASTLE_CTRL_CMD_RELEASE,  release,  uint32_t, release.id,   release.ret);
-CTRL_CMD(CASTLE_CTRL_CMD_ATTACH,   attach,   uint64_t, attach.snap,  attach.dev);
-CTRL_CMD(CASTLE_CTRL_CMD_DETACH,   detach,   uint32_t, detach.dev,   detach.ret);
-CTRL_CMD(CASTLE_CTRL_CMD_CREATE,   create,   uint64_t, create.size,  create.id);
-CTRL_CMD(CASTLE_CTRL_CMD_CLONE,    clone,    uint64_t, clone.snap,   clone.clone);
-CTRL_CMD(CASTLE_CTRL_CMD_SNAPSHOT, snapshot, uint32_t, snapshot.dev, snapshot.snap_id);
-CTRL_CMD(CASTLE_CTRL_CMD_INIT,     init,     uint32_t, claim.dev,    init.ret);    // No arg really 
+#define CTRL_CMD2(_id, _name, _arg1_t, _arg1, _arg2_t, _arg2, _ret)     \
+    static void __##_name##_set_args(cctrl_ioctl_t *ctl, char* argv[])  \
+    {                                                                   \
+        ctl->_arg1 = (_arg1_t)strtoul(argv[0], NULL, 16);               \
+        ctl->_arg2 = (_arg2_t)strtoul(argv[1], NULL, 16);               \
+    };                                                                  \
+    static uint64_t __##_name##_get_ret(cctrl_ioctl_t *ctl)             \
+    {                                                                   \
+        return (uint64_t)ctl->_ret;                                     \
+    };                                                                  \
+    static struct ctrl_cmd _name##_ctrl_cmd =                           \
+    {                                                                   \
+        .id   = _id,                                                    \
+        .args = 2,                                                      \
+        .name = #_name,                                                 \
+        .set_args = __##_name##_set_args,                               \
+        .get_ret = __##_name##_get_ret,                                 \
+    }                                                                   \
+
+#define CTRL_CMD4(_id, _name, _arg1_t, _arg1, _arg2_t, _arg2, _arg3_t, _arg3, _arg4_t, _arg4, _ret)\
+    static void __##_name##_set_args(cctrl_ioctl_t *ctl, char* argv[])  \
+    {                                                                   \
+        ctl->_arg1 = (_arg1_t)strtoul(argv[0], NULL, 16);               \
+        ctl->_arg2 = (_arg2_t)strtoul(argv[1], NULL, 16);               \
+        ctl->_arg3 = (_arg3_t)strtoul(argv[2], NULL, 16);               \
+        ctl->_arg4 = (_arg4_t)strtoul(argv[3], NULL, 16);               \
+    };                                                                  \
+    static uint64_t __##_name##_get_ret(cctrl_ioctl_t *ctl)             \
+    {                                                                   \
+        return (uint64_t)ctl->_ret;                                     \
+    };                                                                  \
+    static struct ctrl_cmd _name##_ctrl_cmd =                           \
+    {                                                                   \
+        .id   = _id,                                                    \
+        .args = 4,                                                      \
+        .name = #_name,                                                 \
+        .set_args = __##_name##_set_args,                               \
+        .get_ret = __##_name##_get_ret,                                 \
+    }                                                                   \
+
+CTRL_CMD1(CASTLE_CTRL_CMD_CLAIM,    claim,    uint32_t, claim.dev,    claim.id);
+CTRL_CMD1(CASTLE_CTRL_CMD_RELEASE,  release,  uint32_t, release.id,   release.ret);
+CTRL_CMD1(CASTLE_CTRL_CMD_ATTACH,   attach,   uint64_t, attach.snap,  attach.dev);
+CTRL_CMD1(CASTLE_CTRL_CMD_DETACH,   detach,   uint32_t, detach.dev,   detach.ret);
+CTRL_CMD1(CASTLE_CTRL_CMD_CREATE,   create,   uint64_t, create.size,  create.id);
+CTRL_CMD1(CASTLE_CTRL_CMD_CLONE,    clone,    uint64_t, clone.snap,   clone.clone);
+CTRL_CMD1(CASTLE_CTRL_CMD_SNAPSHOT, snapshot, uint32_t, snapshot.dev, snapshot.snap_id);
+CTRL_CMD1(CASTLE_CTRL_CMD_INIT,     init,     uint32_t, claim.dev,    init.ret);    // No arg really
+CTRL_CMD4(CASTLE_CTRL_CMD_REGION_CREATE, region_create, uint32_t, region_create.slave, snap_id_t, region_create.snapshot, uint32_t, region_create.start, uint32_t, region_create.length, region_create.id);
+CTRL_CMD1(CASTLE_CTRL_CMD_REGION_DESTROY, region_destroy, region_id_t, region_destroy.id, region_destroy.ret);
+CTRL_CMD2(CASTLE_CTRL_CMD_TRANSFER_CREATE, transfer_create, snap_id_t, transfer_create.snapshot, int, transfer_create.direction, transfer_create.id);
+CTRL_CMD1(CASTLE_CTRL_CMD_TRANSFER_DESTROY, transfer_destroy, transfer_id_t, transfer_destroy.id, transfer_destroy.ret);
 
 static struct ctrl_cmd *ctrl_cmds[] = 
 {
@@ -58,18 +104,22 @@ static struct ctrl_cmd *ctrl_cmds[] =
     &clone_ctrl_cmd,
     &snapshot_ctrl_cmd,
     &init_ctrl_cmd,
+    &region_create_ctrl_cmd,
+    &region_destroy_ctrl_cmd,
+    &transfer_create_ctrl_cmd,
+    &transfer_destroy_ctrl_cmd,
     NULL,
 };
 
 int main(int argc, char* argv[])
 {
-    int i, fd, ret;
+    int i, fd, ret, args;
     char *cmd;
     uint64_t arg, ret_val;
     struct castle_control_ioctl ctl;
     struct ctrl_cmd *ctrl_cmd;
 
-    if(argc != 3)
+    if(argc < 3)
     {
         printf("usage: castle-cli <cmd-string> <hex-arg>\n\n");
         printf("Available commands:\n");
@@ -86,8 +136,7 @@ int main(int argc, char* argv[])
         exit(1);
     }
     cmd = argv[1];
-    arg = (uint64_t)strtoul(argv[2], NULL, 16);
-    printf("Cmd: %s, arg=0x%lx\n", cmd, arg);
+    printf("Cmd: %s, arg=%s\n", cmd, argv[2]);
 
     i=0;
     while(ctrl_cmds[i] != NULL && 
@@ -100,9 +149,17 @@ int main(int argc, char* argv[])
         exit(2);
     }
 
+    // check we have enough arguments
+    args = ctrl_cmd->args + 2;
+    if(argc != args)
+    {
+        printf("Need %d arguments for command \"%s\" (found %d)\n", args, cmd, argc - 2);
+        exit(2);
+    }
+    
     // Set up ctl structure
     ctl.cmd = ctrl_cmd->id;
-    ctrl_cmd->set_arg(&ctl, arg);
+    ctrl_cmd->set_args(&ctl, &argv[2]);
 
     fd = open(NODE, O_RDWR);
     if(fd < 0)

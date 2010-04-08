@@ -89,6 +89,8 @@ static inline void put_c2p(c2_page_t *c2p)
     atomic_dec(&c2p->count);
 }
 
+#define c2p_buffer(_c2p)    ((void *)pfn_to_kaddr(page_to_pfn((_c2p)->page)))
+
 /* The 'interesting' cache interface functions */
 int        submit_c2p                (int rw, c2_page_t *c2p);
 int        submit_c2p_sync           (int rw, c2_page_t *c2p);

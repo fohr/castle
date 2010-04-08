@@ -9,6 +9,7 @@
 #include "castle_cache.h"
 #include "castle_btree.h"
 #include "castle_versions.h"
+#include "castle_transfer.h"
 
 static DECLARE_MUTEX(castle_control_lock);
 
@@ -130,7 +131,7 @@ static void castle_control_snapshot(cctrl_cmd_snapshot_t *ioctl)
     else
     {
         /* Attach the new version */
-        castle_version_snap_get(version, NULL, NULL);
+        castle_version_snap_get(version, NULL, NULL, NULL);
         /* Change the version associated with the device */
         cd->version    = version;
         /* Release the old version */
@@ -146,6 +147,69 @@ static void castle_control_fs_init(cctrl_cmd_init_t *ioctl)
     ioctl->ret = castle_fs_init();
 }
 
+static void castle_control_region_create(cctrl_cmd_region_create_t *ioctl)
+{
+    struct castle_region *region;
+
+    if(!(region = castle_region_create(ioctl->slave, ioctl->snapshot, ioctl->start, ioctl->length)))
+        goto err_out;
+
+    ioctl->id  = region->id;
+    ioctl->ret = 0;
+    
+    return;
+        
+err_out:
+    ioctl->id  = (uint32_t)-1;
+    ioctl->ret = -EINVAL;
+}
+
+static void castle_control_region_destroy(cctrl_cmd_region_destroy_t *ioctl)
+{
+    struct castle_region *region;
+    
+    if(!(region = castle_region_find(ioctl->id)))
+    {
+        ioctl->ret = -EINVAL;
+    }
+    else
+    {
+        castle_region_destroy(region);
+        ioctl->ret = 0;
+    }
+}
+
+static void castle_control_transfer_create(cctrl_cmd_transfer_create_t *ioctl)
+{
+    struct castle_transfer *transfer;
+
+    if(!(transfer = castle_transfer_create(ioctl->snapshot, ioctl->direction)))
+        goto err_out;
+
+    ioctl->id  = transfer->id;
+    ioctl->ret = 0;
+
+    return;
+
+err_out:
+    ioctl->id  = (uint32_t)-1;
+    ioctl->ret = -EINVAL;
+}
+
+static void castle_control_transfer_destroy(cctrl_cmd_transfer_destroy_t *ioctl)
+{
+    struct castle_transfer *transfer;
+    
+    if(!(transfer = castle_transfer_find(ioctl->id)))
+    {
+        ioctl->ret = -EINVAL;
+    }
+    else
+    {
+        castle_transfer_destroy(transfer);
+        ioctl->ret = 0;
+    }
+}
 
 int castle_control_ioctl(struct inode *inode, struct file *filp,
                          unsigned int cmd, unsigned long arg)
@@ -190,7 +254,18 @@ int castle_control_ioctl(struct inode *inode, struct file *filp,
         case CASTLE_CTRL_CMD_INIT:
             castle_control_fs_init(&ioctl.init);
             break;
-
+        case CASTLE_CTRL_CMD_REGION_CREATE:
+            castle_control_region_create(&ioctl.region_create);
+            break;        
+        case CASTLE_CTRL_CMD_REGION_DESTROY:
+            castle_control_region_destroy(&ioctl.region_destroy);
+            break;
+        case CASTLE_CTRL_CMD_TRANSFER_CREATE:
+            castle_control_transfer_create(&ioctl.transfer_create);
+            break;
+        case CASTLE_CTRL_CMD_TRANSFER_DESTROY:
+            castle_control_transfer_destroy(&ioctl.transfer_destroy);
+            break;
         default:
             up(&castle_control_lock);
             return -EINVAL;

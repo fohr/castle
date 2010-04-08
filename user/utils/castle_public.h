@@ -2,7 +2,8 @@
 #define __CASTLE_PUBLIC_H__
 
 typedef uint64_t snap_id_t;
-
+typedef uint32_t region_id_t;
+typedef uint32_t transfer_id_t;
 
 /* Control ioctls */
 #define CASTLE_CTRL_IOCTL              1     /* Only 1 ioctl at the moment */
@@ -15,6 +16,14 @@ typedef uint64_t snap_id_t;
 #define CASTLE_CTRL_CMD_CLONE          6     /* Writable vol from snapshot */
 #define CASTLE_CTRL_CMD_SNAPSHOT       7     /* Snapshot /dev file         */
 #define CASTLE_CTRL_CMD_INIT           8     /* Init the file sytem        */
+#define CASTLE_CTRL_CMD_REGION_CREATE  9     /* Create a region            */
+#define CASTLE_CTRL_CMD_REGION_DESTROY 10    /* Destory a region           */
+#define CASTLE_CTRL_CMD_TRANSFER_CREATE 11
+#define CASTLE_CTRL_CMD_TRANSFER_DESTROY 12
+
+/* Transfer directions */
+#define CASTLE_TRANSFER_TO_TARGET 0
+#define CASTLE_TRANSFER_TO_REGION 1
                                        
 typedef struct castle_control_cmd_claim {
     uint32_t dev;               /* IN  */
@@ -60,6 +69,31 @@ typedef struct castle_control_cmd_init {
     int ret;                   /* OUT */
 } cctrl_cmd_init_t;    
 
+typedef struct castle_control_cmd_region_create {
+    uint32_t slave;            /* IN  */
+    snap_id_t snapshot;        /* IN  */
+    uint32_t start;            /* IN  */
+    uint32_t length;           /* IN  */
+    int ret;                   /* OUT */
+    region_id_t id;            /* OUT */
+} cctrl_cmd_region_create_t;
+
+typedef struct castle_control_cmd_region_destroy {
+    region_id_t id;            /* IN */
+    int ret;                   /* OUT */
+} cctrl_cmd_region_destroy_t;
+
+typedef struct castle_control_cmd_transfer_create {
+    snap_id_t snapshot;        /* IN  */
+    int direction;             /* IN  */
+    int ret;                   /* OUT */
+    transfer_id_t id;          /* OUT */
+} cctrl_cmd_transfer_create_t;
+
+typedef struct castle_control_cmd_transfer_destroy {
+    transfer_id_t id;            /* IN */
+    int ret;                   /* OUT */
+} cctrl_cmd_transfer_destroy_t;
 
 typedef struct castle_control_ioctl {
     uint16_t cmd;
@@ -71,7 +105,11 @@ typedef struct castle_control_ioctl {
         cctrl_cmd_create_t    create;    
         cctrl_cmd_clone_t     clone;    
         cctrl_cmd_snapshot_t  snapshot;    
-        cctrl_cmd_init_t      init;    
+        cctrl_cmd_init_t      init;  
+        cctrl_cmd_region_create_t region_create;
+        cctrl_cmd_region_destroy_t region_destroy;
+        cctrl_cmd_transfer_create_t transfer_create;
+        cctrl_cmd_transfer_destroy_t transfer_destroy;
     };
 } cctrl_ioctl_t;
 

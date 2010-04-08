@@ -11,8 +11,11 @@
 #include <linux/fs.h>
 #include <asm/semaphore.h>
 
+#include "castle_public.h"
 #include "castle.h"
+#include "castle_freespace.h"
 #include "castle_versions.h"
+#include "castle_sysfs.h"
 #include "castle_cache.h"
 
 //#define DEBUG
@@ -22,7 +25,7 @@
 #define debug(_f, _a...)  (printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
 #endif
 
-static void castle_versions_process(void);
+static int castle_versions_process(void);
 static c2_page_t* castle_versions_node_init(void);
 
 static struct kmem_cache *castle_versions_cache = NULL;
@@ -89,6 +92,11 @@ static void castle_versions_hash_add(struct castle_version *v)
     spin_unlock_irq(&castle_versions_hash_lock);
 }
 
+static void __castle_versions_hash_remove(struct castle_version *v)
+{
+    list_del(&v->hash_list);
+}
+
 static struct castle_version* __castle_versions_hash_get(version_t version)
 {
     struct castle_version *v;
@@ -139,9 +147,12 @@ static int castle_version_add(c_disk_blk_t cdb,
                               uint32_t size)
 {
     struct castle_version *v;
-
+    int ret;
+    
     v = kmem_cache_alloc(castle_versions_cache, GFP_KERNEL);
     if(!v) return -ENOMEM;
+    ret = castle_freespace_version_add(version);
+    if(ret) return -ENOMEM;
     debug("Adding: (v, p)=(%d,%d)\n", version, parent);
 
     v->version      = version;
@@ -165,6 +176,8 @@ static int castle_version_add(c_disk_blk_t cdb,
         v->first_child  = NULL; /* This will be updated later */
         v->next_sybling = NULL;
         v->flags       |= CV_INITED_MASK;
+
+        return castle_sysfs_version_add(v->version); 
 
     } else
     {
@@ -335,7 +348,7 @@ static version_t castle_version_new_create(int snap_or_clone,
     
     /* Lock the root, to make sure that there are no ongoing writes 
        which may split the root node. New writes will not be accepted
-       unil we are done, because we are working under device lock.
+       until we are done, because we are working under device lock.
        If we are doing clones rather than snapshots (and there is no
        locked device), there won't be any IO for the version either.
        Finally, because control commands are serialised, if someone
@@ -377,7 +390,8 @@ static version_t castle_version_new_create(int snap_or_clone,
     BUG_ON(!v);
     if(!(v->flags & CV_INITED_MASK))
     {
-        /* TODO: remove from hash? */
+        __castle_versions_hash_remove(v);
+        kmem_cache_free(castle_versions_cache, v);
         version = INVAL_VERSION;
     }
     spin_unlock_irq(&castle_versions_hash_lock);
@@ -451,8 +465,8 @@ version_t castle_version_new(int snap_or_clone,
 
 static int castle_version_ftree_yield(void *word)
 {
-	struct castle_version *v
-		= container_of(word, struct castle_version, flags);
+    /* If you need the version struct here is how you work it out:
+	struct castle_version *v = container_of(word, struct castle_version, flags); */
 
 	smp_mb();
     debug("In ftree_yield.\n");
@@ -508,22 +522,21 @@ void castle_version_ftree_unlock(version_t version)
 }
 
 int castle_version_snap_get(version_t version, 
+                            version_t *parent,
                             uint32_t *size,
                             int *leaf)
 {
     struct castle_version *v;
     int ret = -EINVAL;
 
-    if(version == 0)
-        return ret;
-
     spin_lock_irq(&castle_versions_hash_lock);
     v = __castle_versions_hash_get(version);
     if(v) 
     {
         ret = 0;
-        if(size) *size =  v->size;
-        if(leaf) *leaf = (v->first_child == NULL);
+        if(size)   *size =  v->size;
+        if(parent) *parent = v->parent ? v->parent->version : 0;
+        if(leaf)   *leaf = (v->first_child == NULL);
         if(test_and_set_bit(CV_ATTACHED_BIT, &v->flags))
             ret = -EAGAIN;
     }
@@ -543,11 +556,13 @@ void castle_version_snap_put(version_t version)
     spin_unlock_irq(&castle_versions_hash_lock);
 }
 
-static void castle_versions_process(void)
+static int castle_versions_process(void)
 {
     struct castle_version *v, *p, *n;
+    LIST_HEAD(sysfs_list); 
     version_t id;
-    int children_first;
+    int children_first, ret;
+    int err = 0;
 
     spin_lock_irq(&castle_versions_hash_lock);
     /* Start processing elements from the init list, one at the time */
@@ -571,6 +586,7 @@ process_version:
         {
             printk("Warn: ignoring snapshot: %d, parent: %d has a child %d already.\n",
                     v->version, p->version, p->first_child->version);
+            err = -1;
             continue;
         }
         /* Clones can only be made if the parent isn't attached writeably
@@ -581,6 +597,7 @@ process_version:
         {
             printk("Warn: ignoring clone: %d, parent: %d is a leaf.\n",
                     v->version, p->version);
+            err = -2;
             continue;
         }
         /* If the parent hasn't been initialised yet, initialise it instead */
@@ -605,6 +622,8 @@ process_version:
         v->parent       = p;
         v->next_sybling = p->first_child;
         p->first_child  = v;
+        list_add(&v->init_list, &sysfs_list);
+
         /* We are done setting this version up. */
         v->flags |= CV_INITED_MASK;
     }
@@ -661,7 +680,25 @@ process_version:
         v = n;
     }
     spin_unlock_irq(&castle_versions_hash_lock);
+
+    while(!list_empty(&sysfs_list))
+    {
+        v = list_first_entry(&sysfs_list, 
+                              struct castle_version,
+                              init_list);
+        list_del(&v->init_list);
+        /* Now that we are done setting the version up, try to add it to sysfs. */
+        ret = castle_sysfs_version_add(v->version);
+        if(ret)
+        {
+            printk("Could not add version %d to sysfs. Errno=%d.\n", v->version, ret);
+            err = -3;
+            continue; 
+        }
+    }
+ 
     /* Done. */
+    return err;
 }
 
 int castle_version_is_ancestor(version_t candidate, version_t version)
@@ -720,7 +757,7 @@ static c2_page_t* castle_versions_node_init(void)
         prev_node = pfn_to_kaddr(page_to_pfn(prev_c2p->page));
     }
     /* Allocate a new node */
-    cdb = castle_slaves_disk_block_get();
+    cdb = castle_freespace_block_get(0);
     c2p = castle_cache_page_get(cdb);
     lock_c2p(c2p);
     set_c2p_uptodate(c2p);
@@ -857,10 +894,17 @@ out:
         unlock_c2p(c2p);
         put_c2p(c2p);
     }
-    if(!ret) 
-        castle_versions_process(); 
-    else
+    if(ret) 
+    {
         printk("ERROR: Failed to read versions in!\n");
+        return ret;
+    }
+    ret = castle_versions_process(); 
+    if(ret)
+    {
+        printk("ERROR: Failed to init versions, %d!\n", ret);
+        return ret;
+    }
 
     return ret;
 }
@@ -909,6 +953,7 @@ err_out:
 
 void castle_versions_fini(void)
 {
+    // TODO: there seem to be a bug when a snapshot failed. kmem cache cannot be destroyed.
     castle_versions_hash_destroy();
     kmem_cache_destroy(castle_versions_cache);
     kfree(castle_versions_hash);

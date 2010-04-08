@@ -6,3 +6,7 @@ syntax: glob
 user/ocaml/castle_ioctl
 *.cmi
 *.cmo
+*.cmd
+*.orig
+*.rej
+._*

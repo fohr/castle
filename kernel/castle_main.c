@@ -9,19 +9,22 @@
 #include <linux/crc32.h>
 #include <asm/semaphore.h>
 
+#include "castle_public.h"
 #include "castle.h"
 #include "castle_block.h"
 #include "castle_cache.h"
 #include "castle_btree.h"
+#include "castle_freespace.h"
 #include "castle_versions.h"
 #include "castle_ctrl.h"
+#include "castle_transfer.h"
 #include "castle_sysfs.h"
 #include "castle_debug.h"
 
 struct castle                castle;
-struct castle_volumes        castle_volumes;
 struct castle_slaves         castle_slaves;
 struct castle_devices        castle_devices;
+struct castle_regions        castle_regions;
 
 struct workqueue_struct     *castle_wqs[MAX_BTREE_DEPTH+1];
 
@@ -35,7 +38,7 @@ int                          castle_fs_inited;
 #endif
 
 
-static void castle_fs_superblock_print(struct castle_fs_superblock *fs_sb)
+static void USED castle_fs_superblock_print(struct castle_fs_superblock *fs_sb)
 {
     printk("Magic1: %.8x\n"
            "Magic2: %.8x\n"
@@ -286,7 +289,7 @@ static int castle_slave_superblock_read(struct castle_slave *cs)
     return 0;
 }
 
-static inline struct castle_slave_superblock* castle_slave_superblock_get(struct castle_slave *cs)
+struct castle_slave_superblock* castle_slave_superblock_get(struct castle_slave *cs)
 {
     lock_c2p(cs->sblk);
     BUG_ON(!c2p_uptodate(cs->sblk));
@@ -294,7 +297,7 @@ static inline struct castle_slave_superblock* castle_slave_superblock_get(struct
     return ((struct castle_slave_superblock*) pfn_to_kaddr(page_to_pfn(cs->sblk->page)));
 }
 
-static inline void castle_slave_superblock_put(struct castle_slave *cs, int dirty)
+void castle_slave_superblock_put(struct castle_slave *cs, int dirty)
 {
     if(dirty) dirty_c2p(cs->sblk);
     unlock_c2p(cs->sblk);
@@ -304,7 +307,7 @@ static int castle_slave_superblocks_cache(struct castle_slave *cs)
 {
     c2_page_t *c2p, **c2pp[2];
     c_disk_blk_t cdb;
-    uint32_t i;
+    block_t i;
 
     /* We want to read the first two 4K blocks of the slave device
        Frist is the slave superblock, the second is the fs superblock */
@@ -356,13 +359,15 @@ static int castle_slave_superblocks_init(struct castle_slave *cs)
         cs_sb->magic1 = CASTLE_SLAVE_MAGIC1;
         cs_sb->magic2 = CASTLE_SLAVE_MAGIC2;
         cs_sb->magic3 = CASTLE_SLAVE_MAGIC3;
-        cs_sb->uuid   = cs->uuid;
         cs_sb->used   = 2; /* Two blocks used for the superblocks */
+        cs_sb->uuid   = cs->uuid;
         cs_sb->size   = get_capacity(cs->bdev->bd_disk) >> (C_BLK_SHIFT - 9);
+        cs_sb->flags  = CASTLE_SLAVE_TARGET | CASTLE_SLAVE_SPINNING;
         castle_slave_superblock_print(cs_sb);
         printk("Done.\n");
     }
     castle_slave_superblock_put(cs, cs->new_dev);
+    castle_freespace_slave_init(cs, cs->new_dev);
     castle_fs_superblock_put(cs, 0);
 
     return ret;
@@ -403,34 +408,6 @@ struct castle_slave* castle_slave_find_by_block(c_disk_blk_t cdb)
     return castle_slave_find_by_uuid(cdb.disk);
 }
 
-c_disk_blk_t castle_slaves_disk_block_get(void)
-{
-    // TODO: slave locks!
-    static struct castle_slave *last_slave = NULL;
-    static struct castle_slave_superblock *sb;
-    struct list_head *l;
-    c_disk_blk_t cdb;
-    
-    if(!last_slave) 
-    {
-        BUG_ON(list_empty(&castle_slaves.slaves));
-        l = castle_slaves.slaves.next;
-        last_slave = list_entry(l, struct castle_slave, list);
-    }
-    l = &last_slave->list;
-    if(list_is_last(l, &castle_slaves.slaves))
-        l = &castle_slaves.slaves;
-    l = l->next;
-    last_slave = list_entry(l, struct castle_slave, list);
-    
-    sb = castle_slave_superblock_get(last_slave);
-    cdb.disk  = sb->uuid;
-    cdb.block = sb->used++;
-    castle_slave_superblock_put(last_slave, 1);
-
-    return cdb;
-}
-
 static int castle_slave_add(struct castle_slave *cs)
 {
     struct list_head *l;
@@ -455,7 +432,7 @@ struct castle_slave* castle_claim(uint32_t new_dev)
 {
     dev_t dev;
     struct block_device *bdev;
-    int bdev_claimed = 0;
+    int bdev_claimed = 0, cs_added = 0;
     int err;
     char b[BDEVNAME_SIZE];
     struct castle_slave *cs = NULL;
@@ -502,23 +479,29 @@ struct castle_slave* castle_claim(uint32_t new_dev)
         printk("Could not add slave to the list.\n");
         goto err_out;
     }
+    cs_added = 1;
 
     err = castle_slave_superblocks_init(cs);
     if(err)
     {
         printk("Could not cache the superblocks.\n");
-        list_del(&cs->list);
         goto err_out;
     }
 
-    castle_sysfs_slave_add(cs);
+    err = castle_sysfs_slave_add(cs);
+    if(err)
+    {
+        printk("Could not add slave to sysfs.\n");
+        goto err_out;
+    }
 
     return cs;
 err_out:
-    if(cs->sblk) put_c2p(cs->sblk);
-    if(cs->fs_sblk) put_c2p(cs->fs_sblk);
+    if(cs_added)     list_del(&cs->list);
+    if(cs->sblk)     put_c2p(cs->sblk);
+    if(cs->fs_sblk)  put_c2p(cs->fs_sblk);
     if(bdev_claimed) blkdev_put(bdev);
-    if(cs) kfree(cs);
+    if(cs)           kfree(cs);
     return NULL;    
 }
 
@@ -531,6 +514,132 @@ void castle_release(struct castle_slave *cs)
     kfree(cs);
 }
 
+struct castle_region* castle_region_find(region_id_t id)
+{
+    struct list_head *lh;
+    struct castle_region *region;
+
+    list_for_each(lh, &castle_regions.regions)
+    {
+        region = list_entry(lh, struct castle_region, list);
+        if(region->id == id)
+            return region;
+    }
+
+    return NULL;
+}
+
+static int castle_region_add(struct castle_region *region)
+{
+    struct list_head *l;
+    struct castle_region *r;
+
+    list_for_each(l, &castle_regions.regions)
+    {
+        r = list_entry(l, struct castle_region, list);
+        /* Check region does not overlap any other */
+        if((region->slave == r->slave) && (region->start + region->length > r->start) && (region->start < r->start + r->length))
+        {
+            printk("Region overlaps another - existing=(start=%d, length=%d) new=(start=%d, length=%d)\n", 
+                    r->start, r->length, region->start, region->length);
+            return -EINVAL;            
+        }
+    }
+    
+    list_add(&region->list, &castle_regions.regions);
+    return 0;
+}
+
+/*
+ * TODO: ref count slaves with regions or something?
+ */
+struct castle_region* castle_region_create(uint32_t slave_id, version_t version, uint32_t start, uint32_t length)
+{
+    struct castle_region* region = NULL;
+    struct castle_slave* slave = NULL;
+    static int region_id = 0;
+    int err;
+    
+    printk("castle_region_create(slave_id=%d, version=%d, start=%d, length=%d)\n", slave_id, version, start, length);
+    
+    if(length == 0)
+    {
+        printk("length must be greater than 0!\n");
+        goto err_out;
+    }
+    
+    /* To check if a good snapshot version, try and
+       get the snapshot.  If we do get it, then we may
+       take the 'lock' out on it.  If we do, then
+       release the 'lock' */
+    err = castle_version_snap_get(version, NULL, NULL, NULL);
+    if(err == -EINVAL)
+    {
+        printk("Invalid version '%d'!\n", version);
+        goto err_out;
+    }
+    else if(err == 0)
+        castle_version_snap_put(version);
+    
+    if(!(region = kzalloc(sizeof(struct castle_region), GFP_KERNEL)))
+        goto err_out;
+        
+    if(!(slave = castle_slave_find_by_id(slave_id)))
+        goto err_out;
+    
+    region->id = region_id++;
+    region->slave = slave;
+    region->version = version;
+    region->start = start;
+    region->length = length;
+    
+    err = castle_region_add(region);
+    if(err)
+    {
+        printk("Could not add region to the list.\n");
+        goto err_out;
+    }
+    
+    err = castle_sysfs_region_add(region);
+    if(err) 
+    {
+         list_del(&region->list);
+         goto err_out;
+    }
+    
+    return region;
+        
+err_out:
+    if(region) kfree(region);
+    return NULL;
+}
+
+void castle_region_destroy(struct castle_region *region)
+{
+    castle_sysfs_region_del(region);
+    list_del(&region->list);
+    kfree(region);
+}
+
+static int castle_regions_init(void)
+{
+    memset(&castle_regions, 0, sizeof(struct castle_regions));
+    INIT_LIST_HEAD(&castle_regions.regions);
+
+    return 0;
+}
+
+static void castle_regions_free(void)                                                                 
+{                                                                                        
+    struct list_head *lh, *th;
+    struct castle_region *region;
+
+    list_for_each_safe(lh, th, &castle_regions.regions)
+    {
+        region = list_entry(lh, struct castle_region, list); 
+        castle_region_destroy(region);
+    }
+}
 
 static int castle_open(struct inode *inode, struct file *filp)
 {
@@ -899,8 +1008,9 @@ struct castle_device* castle_device_init(version_t version)
     static int minor = 0;
     uint32_t size;
     int leaf;
+    int err;
 
-    if(castle_version_snap_get(version, &size, &leaf))
+    if(castle_version_snap_get(version, NULL, &size, &leaf))
         goto error_out;
 
     dev = kmalloc(sizeof(struct castle_device), GFP_KERNEL); 
@@ -935,14 +1045,22 @@ struct castle_device* castle_device_init(version_t version)
     add_disk(gd);
 
     bdget(MKDEV(gd->major, gd->first_minor));
-    castle_sysfs_device_add(dev);
+    err = castle_sysfs_device_add(dev);
+    if(err) 
+    {
+        /* TODO: this doesn't do bdput. device_free doesn't 
+                 do this neither, and it works ... */
+        del_gendisk(gd);
+        list_del(&dev->list);
+        goto error_out;
+    }
 
     return dev;
 
 error_out:
-    if(dev) kfree(dev);
     if(gd)  put_disk(gd); 
     if(rq)  blk_cleanup_queue(rq); 
+    if(dev) kfree(dev);
     printk("Failed to init device.\n");
     return NULL;    
 }
@@ -1055,23 +1173,32 @@ static int __init castle_init(void)
 
     castle_fs_inited = 0;
               castle_debug_init();
-    if((ret = castle_slaves_init()))   goto err_out1;
-    if((ret = castle_cache_init()))    goto err_out2;
-    if((ret = castle_versions_init())) goto err_out3;
-    if((ret = castle_btree_init()))    goto err_out4;
-    if((ret = castle_devices_init()))  goto err_out5;
-    if((ret = castle_control_init()))  goto err_out6;
-    if((ret = castle_sysfs_init()))    goto err_out7;
+    if((ret = castle_slaves_init()))    goto err_out1;
+    if((ret = castle_cache_init()))     goto err_out2;
+    if((ret = castle_versions_init()))  goto err_out3;
+    if((ret = castle_btree_init()))     goto err_out4;
+    if((ret = castle_freespace_init())) goto err_out5;
+    if((ret = castle_devices_init()))   goto err_out6;
+    if((ret = castle_control_init()))   goto err_out7;
+    if((ret = castle_regions_init()))   goto err_out8;
+    if((ret = castle_transfers_init())) goto err_out9;
+    if((ret = castle_sysfs_init()))     goto err_out10;
 
     printk("OK.\n");
 
     return 0;
 
-    castle_sysfs_fini(); /* Unreachable */ 
-err_out7:
+    castle_sysfs_fini(); /* Unreachable */
+err_out10:
+    castle_transfers_free();
+err_out9:
+    castle_regions_free();
+err_out8:
     castle_control_fini();
-err_out6:
+err_out7:
     castle_devices_free();
+err_out6:
+    castle_freespace_fini();
 err_out5:
     castle_btree_free();
 err_out4:
@@ -1087,6 +1214,7 @@ err_out2:
 err_out1:
     castle_debug_fini();
 
+    /* TODO: check if kernel will accept any non-zero return value to mean: we want to exit */
     return ret;
 }
 
@@ -1095,14 +1223,17 @@ static void __exit castle_exit(void)
 {
     printk("Castle FS exit ... ");
 
-    castle_sysfs_fini();
+    castle_transfers_free();
+    castle_regions_free();
     castle_control_fini();
     castle_devices_free();
+    castle_freespace_fini();
     castle_btree_free();
     castle_versions_fini();
     castle_slaves_unlock();
     castle_cache_fini();
     castle_slaves_free();
+    castle_sysfs_fini();
     castle_debug_fini();
 
     printk("done.\n\n\n");

@@ -3,6 +3,7 @@
 
 int          castle_version_is_ancestor (version_t candidate, version_t version);
 int          castle_version_snap_get    (version_t version, 
+                                         version_t *parent,
                                          uint32_t *size,
                                          int *leaf);
 void         castle_version_snap_put    (version_t version);

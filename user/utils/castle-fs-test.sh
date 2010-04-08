@@ -75,28 +75,29 @@ function check_contents {
 	
 	READ=`dd if=${filename} 2> /dev/null`
 	if [ "${READ}" == "${phrase}" ]; then
-		echo "Got '${READ}', correct."
+		echo "   Got '${READ}', correct."
 	else
-		echo "Got '${READ}', INCORRECT!"
+		echo "   Got '${READ}', INCORRECT!"
 	fi
 }
 
 function check_contents_file {
 	local file1="$1"
 	local file2="$2"
+	local size="$3"
 	
-	local CHK1=`dd if=${file1} 2>/dev/null | md5sum -b -`
-	local CHK2=`dd if=${file2} 2>/dev/null | md5sum -b -`
-    #echo "==> Comparing ${file1} with ${file2}"
+	local CHK1=`dd if=${file1} bs=4k count=${size} 2>/dev/null | md5sum -b -`
+	local CHK2=`dd if=${file2} bs=4k count=${size} 2>/dev/null | md5sum -b -`
+    #echo "==> Comparing ${file1} with ${file2} (${size} blocks)"
     #echo "    ${file1}"
 	#dd if=${file1} 2>/dev/null | hexdump -C
     #echo "    ${file2}"
 	#dd if=${file2} 2>/dev/null | hexdump -C 
 
 	if [ "${CHK1}" == "${CHK2}" ]; then
-		echo "Files ${file1} and ${file2} match"
+		echo "   Files ${file1} and ${file2} match"
 	else
-		echo "FAILED content check for ${file1} & ${file2}"
+		echo "	FAILED content check for ${file1} & ${file2}"
         exit 1
 	fi
 }
@@ -104,6 +105,20 @@ function check_contents_file {
 function do_control_internal {
 	echo -n "   Command: $1 0x$2"
 	IOCTL_RET=`castle-fs-cli $1 0x$2 | grep "Ret val:"` 
+	IOCTL_RET=`echo $IOCTL_RET | sed -e "s/Ret val: 0x\([0-9a-f]*\)./\1/g"`
+	echo "    ret: $IOCTL_RET"
+}
+
+function do_control_internal2 {
+	echo -n "   Command: $1 0x$2 0x$3"
+	IOCTL_RET=`castle-fs-cli $1 0x$2 0x$3 | grep "Ret val:"` 
+	IOCTL_RET=`echo $IOCTL_RET | sed -e "s/Ret val: 0x\([0-9a-f]*\)./\1/g"`
+	echo "    ret: $IOCTL_RET"
+}
+
+function do_control_internal4 {
+	echo -n "   Command: $1 0x$2 0x$3 0x$4 0x$5"
+	IOCTL_RET=`castle-fs-cli $1 0x$2 0x$3 0x$4 0x$5 | grep "Ret val:"` 
 	IOCTL_RET=`echo $IOCTL_RET | sed -e "s/Ret val: 0x\([0-9a-f]*\)./\1/g"`
 	echo "    ret: $IOCTL_RET"
 }
@@ -163,6 +178,20 @@ function do_control_clone {
     CLONE_VER=$IOCTL_RET
 }
 
+function do_control_region_create {
+    do_control_internal4 "region_create" `printf "%X" $1` `printf "%X" $2` `printf "%X" $3` `printf "%X" $4`
+    REGION_ID=`printf "%d" 0x$IOCTL_RET`
+}
+
+function do_control_region_destroy {
+    do_control_internal "region_destroy" `printf "%X" $1`
+}
+
+function do_control_transfer_create {
+    do_control_internal2 "transfer_create" `printf "%X" $1` `printf "%X" $2`
+    REGION_ID=`printf "%d" 0x$IOCTL_RET`
+}
+
 function mod_init {
     if [ `whoami` != root ]; then
         echo "Please run as root"
@@ -209,6 +238,7 @@ initfs
 echo "Castle initialised successfully"
 
 
+
 echo
 echo "Simple Hello World Test..."
 
@@ -253,7 +283,7 @@ done
 
 
 
-
+echo
 echo "Large volume (btree split) test"
 SIZE=5000
 TEST_FILE=/tmp/bigvol
@@ -266,11 +296,96 @@ echo -n "   Zeroing ${TEST_FILE} ... "
 dd if=/dev/zero of=${TEST_FILE} bs=4K count=${SIZE} 2> /dev/null
 echo    " done."
 
-check_contents_file ${DEV} ${TEST_FILE}
+check_contents_file ${DEV} ${TEST_FILE} ${SIZE}
 
 
 
 
+
+echo
+echo "Regions tests"
+REGIONS=10
+REGION_SIZE=10
+SLAVE_ID=0
+VERSION_ID=0
+for I in `seq $REGIONS`; do
+	do_control_region_create $SLAVE_ID $VERSION_ID $I 1
+	check_contents /sys/fs/castle-fs/regions/$REGION_ID/start "0x`printf "%x" $I`"
+	check_contents /sys/fs/castle-fs/regions/$REGION_ID/length "0x1"
+done
+
+check_contents /sys/fs/castle-fs/regions/number $REGIONS
+
+for I in `seq 0 $(( $REGIONS - 1 ))`; do
+    do_control_region_destroy $I
+done
+
+check_contents /sys/fs/castle-fs/regions/number "0"
+
+
+
+
+echo
+echo "Transfers Test..."
+SIZE=1000
+TEST_FILE=/tmp/txtest
+REGION_SLAVE=0
+do_control_create ${SIZE}
+do_control_attach ${VOL_VER}
+echo "   Creating volume to trasfer..."
+dd if=/dev/zero of=${TEST_FILE} bs=4k count=${SIZE} &> /dev/null
+# write block number into each block (this way we can tell which ones are missing!)
+for I in `seq 0 $(( ${SIZE} - 1 ))`; do
+    /usr/bin/printf "%8s" $I | dd of=${TEST_FILE} bs=4k seek=$I conv=notrunc &> /dev/null
+done
+
+dd if=${TEST_FILE} of=${DEV} bs=4k count=${SIZE} &> /dev/null
+do_control_region_create ${REGION_SLAVE} ${VOL_VER} 0 ${SIZE}
+
+function print_volume_summary {
+    local VOL=${1}
+    local TARGET=${2}
+    RESULT=0
+    for dir in `ls /sys/fs/castle-fs/slaves/`; do 
+        if [[ $dir == slave* ]]; then
+            count=`cat /sys/fs/castle-fs/slaves/$dir/block_cnts | grep ^${VOL} | cut -f 2`
+            echo "        $dir: $count";
+            if [[ "$dir" == "slave${TARGET}" ]]; then
+                RESULT=$count
+            fi
+        fi
+    done
+}
+
+echo "   Summary for version ${VOL_VER} before move..."
+print_volume_summary ${VOL_VER} ${REGION_SLAVE}
+echo
+
+check_contents_file ${TEST_FILE} ${DEV} ${SIZE}
+
+echo "   Initialising trasfer..."
+do_control_transfer_create $VOL_VER 0x1
+
+STEP=1
+STEPS=300
+for I in `seq 0 $STEPS`; do
+    TIME=$I #`echo "$STEP * 5" | bc`
+    echo "   Summary for version ${VOL_VER} ${TIME}s after move..."
+    print_volume_summary ${VOL_VER} ${REGION_SLAVE}
+    if [[ "$RESULT" == "$SIZE" ]]; then
+        break
+    fi
+    sleep $STEP
+done
+
+check_contents_file ${TEST_FILE} ${DEV} ${SIZE}
+
+if [[ "$RESULT" == "$SIZE" ]]; then
+    echo "Transfer successful!"
+else
+    echo "Trasfer failed!"
+    exit 1 
+fi
 
 
 
@@ -313,7 +428,7 @@ for I in `seq 1 $(( ${INTENSITY} - 1 ))`; do
     echo "Comparing ${COMP_FILES}${H} with snapshot ${CURR_SNAP}"
     do_control_attach `printf "%X" ${CURR_SNAP}`
     echo "Got device: ${DEV}"
-    check_contents_file ${DEV} ${COMP_FILES}${H}
+    check_contents_file ${DEV} ${COMP_FILES}${H} ${INTENSITY}
     do_control_detach ${DEV}
 done
 
@@ -372,7 +487,7 @@ echo "  Files created"
 cp ${RANDOM_FILE} ${MOUNT_POINT}/${RANDOM_FILE_ON_FS}
 echo "  Random file copied to the fs"
 
-check_contents_file ${RANDOM_FILE} ${MOUNT_POINT}/${RANDOM_FILE_ON_FS}
+check_contents_file ${RANDOM_FILE} ${MOUNT_POINT}/${RANDOM_FILE_ON_FS} ${RANDOM_FILE_SIZE}
 umount ${MOUNT_POINT}
 echo "  Restarting the fs"
 ./castle-fs-fini.sh
@@ -380,7 +495,7 @@ initfs
 
 do_control_attach ${CURR_SNAP} 
 mount ${DEV} ${MOUNT_POINT}
-check_contents_file ${RANDOM_FILE} ${MOUNT_POINT}/${RANDOM_FILE_ON_FS}
+check_contents_file ${RANDOM_FILE} ${MOUNT_POINT}/${RANDOM_FILE_ON_FS} ${RANDOM_FILE_SIZE}
 umount ${MOUNT_POINT}
 
 
@@ -396,18 +511,18 @@ RO_DEV=${DEV}
 mkdir -p ${MOUNT_POINT2}
 mount ${RO_DEV} ${MOUNT_POINT2} -o ro
 
-check_contents_file ${RANDOM_FILE} ${MOUNT_POINT2}/${RANDOM_FILE_ON_FS}
+check_contents_file ${RANDOM_FILE} ${MOUNT_POINT2}/${RANDOM_FILE_ON_FS} ${RANDOM_FILE_SIZE}
 
 echo "Also remount RW volume.."
 mount ${RW_DEV} ${MOUNT_POINT}
-check_contents_file ${RANDOM_FILE} ${MOUNT_POINT}/${RANDOM_FILE_ON_FS}
+check_contents_file ${RANDOM_FILE} ${MOUNT_POINT}/${RANDOM_FILE_ON_FS} ${RANDOM_FILE_SIZE}
 
 echo "Overwrite the random file..."
 cp ${RANDOM_FILE2} ${MOUNT_POINT}/${RANDOM_FILE_ON_FS}
-check_contents_file ${RANDOM_FILE2} ${MOUNT_POINT}/${RANDOM_FILE_ON_FS}
+check_contents_file ${RANDOM_FILE2} ${MOUNT_POINT}/${RANDOM_FILE_ON_FS} ${RANDOM_FILE_SIZE}
 
 echo "Check contents of file in RO snapshot unaffected..."
-check_contents_file ${RANDOM_FILE} ${MOUNT_POINT2}/${RANDOM_FILE_ON_FS}
+check_contents_file ${RANDOM_FILE} ${MOUNT_POINT2}/${RANDOM_FILE_ON_FS} ${RANDOM_FILE_SIZE}
 
 umount ${MOUNT_POINT2}
 umount ${MOUNT_POINT}

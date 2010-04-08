@@ -6,9 +6,11 @@
 #include <linux/bio.h>
 #include <linux/hardirq.h>
 
+#include "castle_public.h"
 #include "castle.h"
 #include "castle_cache.h"
 #include "castle_btree.h"
+#include "castle_freespace.h"
 #include "castle_versions.h"
 #include "castle_block.h"
 #include "castle_debug.h"
@@ -92,7 +94,7 @@ static int castle_ftree_node_normalize(struct castle_ftree_node *node)
     return 0;
 }
 
-static void castle_ftree_node_print(struct castle_ftree_node *node)
+static void USED castle_ftree_node_print(struct castle_ftree_node *node)
 {
     int i;
 
@@ -234,7 +236,7 @@ c2_page_t* castle_ftree_node_create(int version, int is_leaf)
     c2_page_t   *c2p;
     struct castle_ftree_node *node;
     
-    cdb = castle_slaves_disk_block_get(); 
+    cdb = castle_freespace_block_get(0 /* Used to denote nodes used by metadata */); 
     c2p = castle_cache_page_get(cdb);
     
     lock_c2p(c2p);
@@ -665,7 +667,7 @@ static void castle_ftree_write_process(c_bvec_t *c_bvec)
     /* Insert an entry if LUB doesn't match our (b,v) precisely. */
     if(lub_idx < 0 || (lub_slot->block != block) || (lub_slot->version != version))
     {
-        c_disk_blk_t cdb = castle_slaves_disk_block_get(); 
+        c_disk_blk_t cdb = castle_freespace_block_get(version); 
         
         /* TODO: should memset the page to zero (because we return zeros on reads)
                  this can be done here, or beter still in _main.c, in data_copy */
@@ -896,6 +898,335 @@ void castle_ftree_find(c_bvec_t *c_bvec)
 {
     INIT_WORK(&c_bvec->work, _castle_ftree_find);
     queue_work(castle_wq, &c_bvec->work); 
+}
+
+/* Btree iterate functions */
+
+static void castle_ftree_iter_process(struct work_struct *work);
+static void __castle_ftree_iter(c_iter_t *c_iter, c_disk_blk_t node_cdb);
+
+static void castle_path_item_destroy(c_path_item_t *path_item)
+{
+    debug("castle_path_item_destroy\n");
+    unlock_c2p(path_item->btree_node);
+    put_c2p(path_item->btree_node);
+    list_del(&path_item->list);
+    kfree(path_item);
+}
+
+static void castle_ftree_iter_end(c_iter_t *c_iter, int err)
+{
+    struct list_head *lh, *th;
+    c_path_item_t *path_item;
+    
+    debug("castle_iter_end\n");
+    
+    BUG_ON(err == 0 && !list_empty(&c_iter->path));
+    BUG_ON(err == 0 && c_iter->depth != 0);
+    
+    list_for_each_safe(lh, th, &c_iter->path)
+    {
+        path_item = list_entry(lh, c_path_item_t, list); 
+        castle_path_item_destroy(path_item);
+    }
+    
+    castle_version_ftree_unlock(c_iter->version);
+    
+    if (c_iter->end) 
+        c_iter->end(c_iter, err);
+}
+
+static void castle_queue_iter_process(c_iter_t *c_iter)
+{
+    debug("castle_queue_iter_process\n");
+    
+    /* Put on to the workqueue. Choose a workqueue which corresponds
+       to how deep we are in the tree. 
+       A single queue cannot be used, because a request blocked on 
+       lock_c2p() would block the entire queue (=> deadlock). */
+    INIT_WORK(&c_iter->work, castle_ftree_iter_process);
+    queue_work(castle_wqs[c_iter->depth], &c_iter->work);
+}
+
+void castle_ftree_iter_continue(c_iter_t *c_iter)
+{
+    c_path_item_t *path_item;     
+    struct castle_ftree_node *node;
+    #ifdef DEBUG
+    struct castle_ftree_slot *slot;
+    int j;
+    #endif
+    
+    debug("castle_ftree_iter_continue: version=0x%x\n", c_iter->version);
+    
+    /*
+     * AFAICT, this is the only place that it is safe
+     * to detect a previous cancel and clean up the iterator.
+     */
+    if (atomic_read(&c_iter->cancelled) > 0)
+    {
+        debug("castle_ftree_iter_continue: cancelled!\n");
+        castle_ftree_iter_end(c_iter, c_iter->err);
+        return;
+    }
+    
+    path_item = list_first_entry(&c_iter->path, c_path_item_t, list);
+    node = c2p_bnode(path_item->btree_node);
+
+    #ifdef DEBUG
+    castle_ftree_node_print(node);
+
+    for(j=0; j<node->used; j++)
+    {
+        slot = &node->slots[j];
+        printk("   %d: (0x%x, 0x%x) -> (0x%x, 0x%x)\n", j, slot->block, slot->version, slot->cdb.disk, slot->cdb.block);
+    }
+    #endif
+
+    debug("castle_ftree_iter_continue: index=%d\n", path_item->index);
+
+    BUG_ON(path_item->index < node->used);
+    
+    /* 
+     * We have finished in this node.
+     * Pop the path_item off the stack and process
+     * again..
+     */
+    castle_path_item_destroy(path_item);         
+    c_iter->depth--;
+
+    castle_queue_iter_process(c_iter);
+}
+
+static void castle_ftree_iter_process(struct work_struct *work)
+{
+    struct castle_ftree_node *node;
+    struct castle_ftree_slot *slot;
+    c_iter_t *c_iter = container_of(work, c_iter_t, work);
+    c_path_item_t *path_item; 
+#ifdef DEBUG
+    int j;  
+#endif  
+
+    debug("castle_ftree_iter_process: version=0x%x\n", c_iter->version);
+
+    if(list_empty(&c_iter->path))
+    {
+        /* 
+         * We have popped the stack until it is empty.
+         * Iteration must be done.  Caller will free
+         * c_iter.
+         */
+        castle_ftree_iter_end(c_iter, 0);
+        return;
+    }
+
+    path_item = list_first_entry(&c_iter->path, c_path_item_t, list);
+    node = c2p_bnode(path_item->btree_node);
+
+#ifdef DEBUG
+    castle_ftree_node_print(node);
+#endif
+
+    debug("castle_ftree_iter_process: index=%d\n", path_item->index);
+
+    /* callback to say we have entered a leaf */
+    /* This is going to get more complicated with leaf pointers */
+    if (FTREE_NODE_IS_LEAF(node) && c_iter->node_start != NULL)
+    {
+        c_iter->node_start(c_iter);
+#ifdef DEBUG  
+        for(j=0; j<node->used; j++)
+        {
+            slot = &node->slots[j];
+            printk("   %d: (0x%x, 0x%x) -> (0x%x, 0x%x)\n", j, slot->block, slot->version, slot->cdb.disk, slot->cdb.block);
+        }
+#endif
+    }
+        
+    /*
+     * Go through each entry in the node.
+     * For a leaf, we can do this all in one
+     * go.  But for a node, we have to 'recurse'
+     * putting ourselves back on the workqueue,
+     * so we must make sure we save our index
+     */ 
+    while (path_item->index < node->used)
+    {
+        if (atomic_read(&c_iter->cancelled) > 0)
+            break;
+        
+        slot = &node->slots[path_item->index];
+        path_item->index++;
+        
+        if (FTREE_SLOT_IS_LEAF(slot))
+        {
+            if (slot->version == c_iter->version)
+                c_iter->each(c_iter, path_item->index - 1, slot->cdb);
+        }
+        else
+        {
+            /* 
+             * recursive step.  will add another path_item
+             * to the stack 
+             */
+            __castle_ftree_iter(c_iter, slot->cdb);
+            return;
+        }
+    }
+    
+    /* 
+     * send async end node callback
+     * if one not specified, continue automatically
+     */   
+    if (FTREE_NODE_IS_LEAF(node) && c_iter->node_end != NULL)
+    {
+        c_iter->node_end(c_iter);
+    
+#ifdef DEBUG    
+        for(j=0; j<node->used; j++)
+        {
+            slot = &node->slots[j];
+            printk("   %d: (0x%x, 0x%x) -> (0x%x, 0x%x)\n", j, slot->block, slot->version, slot->cdb.disk, slot->cdb.block);
+        }
+#endif
+    } 
+    else
+        castle_ftree_iter_continue(c_iter);
+}
+
+void castle_ftree_iter_replace(c_iter_t *c_iter, int index, c_disk_blk_t cdb)
+{
+    c_path_item_t *path_item;
+    struct castle_ftree_node *node;
+    struct castle_ftree_slot *slot;
+
+    debug("castle_ftree_iter_replace: version=0x%x, index=%d\n", c_iter->version, index);
+    
+    path_item = list_first_entry(&c_iter->path, c_path_item_t, list);
+    node = c2p_bnode(path_item->btree_node);
+    
+    BUG_ON(!FTREE_NODE_IS_LEAF(node));
+    BUG_ON(index >= node->used);
+    
+    slot = &node->slots[index];
+    
+    debug("castle_ftree_iter_replace: current=(0x%x, %d), new=(0x%x, %d)\n", slot->cdb.disk, slot->cdb.block, cdb.disk, cdb.block);
+    
+    slot->cdb = cdb;
+    
+    /* GM says this is thread safe */
+    c2p_dirty(path_item->btree_node);
+}
+
+static void castle_ftree_iter_io_end(c2_page_t *c2p, int uptodate)
+{
+    c_iter_t *c_iter = c2p->private;
+    c_path_item_t *path_item;
+    
+    BUG_ON(list_empty(&c_iter->path));
+    
+    path_item = list_first_entry(&c_iter->path, c_path_item_t, list);
+
+    debug("castle_ftree_iter_io_end: disk 0x%x, block 0x%x\n", 
+            path_item->cdb.disk, path_item->cdb.block);
+    
+    /* Callback on error */
+    if(!uptodate)
+    {
+        castle_ftree_iter_end(c_iter, -EIO);
+        return;
+    }
+
+    set_c2p_uptodate(c2p);
+
+    BUG_ON(c_iter->depth > MAX_BTREE_DEPTH);
+    castle_queue_iter_process(c_iter);
+}
+
+static void __castle_ftree_iter(c_iter_t *c_iter, c_disk_blk_t node_cdb)
+{
+    c2_page_t *c2p;
+    c_path_item_t *path_item;
+    int ret, uptodate;
+
+    debug("__castle_ftree_iter: version=0x%x, node=(0x%x, 0x%x)\n", c_iter->version, node_cdb.disk, node_cdb.block);
+    ret = -ENOMEM;
+    
+    /* add new node to the path */
+    if(!(path_item = kmalloc(sizeof(c_path_item_t), GFP_KERNEL)))
+    {
+        castle_ftree_iter_end(c_iter, ret);
+        return;
+    }
+    
+    path_item->depth = c_iter->depth++;
+    path_item->index = 0;
+    path_item->cdb = node_cdb;
+    
+    list_add(&path_item->list, &c_iter->path);
+
+    /* read node from disk */
+
+    c2p = castle_cache_page_get(node_cdb);
+    lock_c2p(c2p);
+
+    path_item->btree_node = c2p;
+    c2p->private = c_iter;
+
+    uptodate = c2p_uptodate(c2p);
+
+    if(!uptodate)
+    {
+        debug("__castle_ftree_iter: not uptodate, submitting\n");
+        
+        /* If the buffer doesn't contain up to date data, schedule the IO */
+        c2p->end_io = castle_ftree_iter_io_end;
+        BUG_ON(submit_c2p(READ, c2p));
+    } 
+    else
+    {
+        debug("__castle_ftree_iter: uptodate, carrying on\n");
+        /* If the buffer is up to date */
+        castle_ftree_iter_io_end(c2p, uptodate);
+    }
+}
+
+static void _castle_ftree_iter(struct work_struct *work)
+{
+    c_iter_t *c_iter = container_of(work, c_iter_t, work);
+    c_disk_blk_t root_cdb;
+ 
+    debug("_castle_ftree_iter: version=0x%x\n", c_iter->version);
+ 
+    root_cdb = castle_version_ftree_lock(c_iter->version);
+    if(DISK_BLK_INVAL(root_cdb))
+    {
+        /* Complete the request early, end exit */
+        castle_ftree_iter_end(c_iter, -EINVAL);
+        return;
+    }
+    
+    __castle_ftree_iter(c_iter, root_cdb);
+}
+
+void castle_ftree_iter(c_iter_t *c_iter)
+{
+    debug("castle_ftree_iter: version=0x%x\n", c_iter->version);
+    
+    c_iter->depth = 0;
+    atomic_set(&c_iter->cancelled, 0);
+    INIT_LIST_HEAD(&c_iter->path);
+    INIT_WORK(&c_iter->work, _castle_ftree_iter);
+    queue_work(castle_wq, &c_iter->work);
+}
+
+void castle_ftree_iter_cancel(c_iter_t *c_iter, int err)
+{
+    debug("castle_ftree_iter_cancel: version=0x%x\n", c_iter->version);
+    
+    c_iter->err = err;
+    atomic_inc(&c_iter->cancelled);
 }
 
 /***** Init/fini functions *****/

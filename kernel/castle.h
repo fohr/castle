@@ -1,14 +1,19 @@
 #ifndef __CASTLE_H__
 #define __CASTLE_H__
 
+#define USED                 __attribute__((used))
+
 typedef uint32_t version_t;
 #define INVAL_VERSION       ((version_t)-1) 
 #define VERSION_INVAL(_v)   ((_v) == INVAL_VERSION) 
 
+typedef uint32_t block_t;
+#define INVAL_BLOCK         ((block_t)-1) 
+#define BLOCK_INVAL(_b)     ((_b) == INVAL_BLOCK) 
 /* Disk layout related structures */
 struct castle_disk_block {
     uint32_t disk;
-    uint32_t block;
+    block_t block;
 };
 typedef struct castle_disk_block c_disk_blk_t;
 #define INVAL_DISK_BLK          ((c_disk_blk_t){0,0})
@@ -16,16 +21,22 @@ typedef struct castle_disk_block c_disk_blk_t;
 #define DISK_BLK_EQUAL(_blk1, _blk2) (((_blk1).disk == (_blk2).disk) && \
                                       ((_blk1).block == (_blk2).block)) 
 
+#define CASTLE_SLAVE_TARGET     (0x00000001)
+#define CASTLE_SLAVE_SPINNING   (0x00000002)
+
 #define CASTLE_SLAVE_MAGIC1     (0x02061985)
 #define CASTLE_SLAVE_MAGIC2     (0x16071983)
 #define CASTLE_SLAVE_MAGIC3     (0x16061981)
 struct castle_slave_superblock {
-    uint32_t magic1;
-    uint32_t magic2;
-    uint32_t magic3;
-    uint32_t uuid;
-    uint32_t used;
-    uint32_t size; /* In blocks */
+    uint32_t     magic1;
+    uint32_t     magic2;
+    uint32_t     magic3;
+    uint32_t     uuid;
+    uint32_t     used;
+    uint32_t     size; /* In blocks */
+	uint32_t     flags; 
+    c_disk_blk_t flist_next;
+    c_disk_blk_t flist_prev;
 };
 
 #define CASTLE_FS_MAGIC1        (0x19731121)
@@ -104,6 +115,24 @@ struct castle_vlist_node {
     struct castle_vlist_slot slots[VLIST_SLOTS];
 };
 
+struct castle_flist_slot {
+    version_t    version;
+    block_t      blocks;
+};
+
+#define FLIST_NODE_MAGIC  0x0000faca
+#define FLIST_SLOTS  ((PAGE_SIZE - NODE_HEADER)/sizeof(struct castle_flist_slot))
+struct castle_flist_node {
+    uint32_t magic;
+    uint32_t version; 
+    uint32_t capacity;
+    uint32_t used;
+    c_disk_blk_t next; /* 8 bytes */
+    c_disk_blk_t prev; /* 8 bytes */
+    uint8_t __pad[NODE_HEADER - 32];
+    struct castle_flist_slot slots[FLIST_SLOTS];
+};
+
 /* IO related structures */
 struct castle_bio_vec;
 typedef struct castle_bio {
@@ -155,15 +184,60 @@ typedef struct castle_bio_vec {
 #endif
 } c_bvec_t;
 #define c_bvec_data_dir(_c_bvec)    bio_data_dir((_c_bvec)->c_bio->bio)
-#define c_bvec_bnode(_c_bvec)       pfn_to_kaddr(page_to_pfn((_c_bvec)->btree_node->page))
+#define c2p_bnode(_c2p)             pfn_to_kaddr(page_to_pfn((_c2p)->page))
+#define c_bvec_bnode(_c_bvec)       c2p_bnode((_c_bvec)->btree_node) //pfn_to_kaddr(page_to_pfn((_c_bvec)->btree_node->page))
 #define c_bvec_bpnode(_c_bvec)      pfn_to_kaddr(page_to_pfn((_c_bvec)->btree_parent_node->page))
+
+/* Used for iterating through the tree */
+
+typedef struct castle_path_item {
+    int                       depth;
+    int                       index;
+    c_disk_blk_t              cdb;
+    struct castle_cache_page *btree_node;
+    struct list_head          list;
+} c_path_item_t;
+
+typedef struct castle_iterator {
+    /* What version do we want to read */
+    uint32_t            version;
+    void              (*node_start)(struct castle_iterator *c_iter);
+    void              (*each)(struct castle_iterator *c_iter, int index, c_disk_blk_t cdb);
+    void              (*node_end)(struct castle_iterator *c_iter);
+    void              (*end)(struct castle_iterator *c_iter, int err);
+    void               *private;
+
+    int                 depth;
+    struct list_head    path;
+    atomic_t            cancelled;
+    int                 err;
+    /* Used to thread this iter onto a workqueue */
+    struct work_struct  work;
+#ifdef CASTLE_DEBUG    
+    unsigned long       state;
+#endif
+} c_iter_t;
+
+#define BLOCKS_HASH_SIZE        (100)
+struct castle_slave_block_cnt
+{
+    version_t version;
+    block_t cnt;
+    struct list_head list;
+};
+
+struct castle_slave_block_cnts 
+{
+    struct list_head hash[BLOCKS_HASH_SIZE];
+    struct castle_slave_block_cnt metadata_cnt;  /* Count for version 0 (metadata) */
+    struct castle_cache_page *last_flist_c2p;    /* Buffer for the last flist node.
+                                            `       One ref, unlocked. */
+    uint32_t flist_capacity;
+    uint32_t flist_used;
+};
 
 /* First class structures */
 struct castle {
-    struct kobject kobj;
-};
-
-struct castle_volumes {
     struct kobject kobj;
 };
 
@@ -179,6 +253,8 @@ struct castle_slave {
     struct block_device            *bdev;
     struct castle_cache_page       *sblk;
     struct castle_cache_page       *fs_sblk;
+    block_t                         free_blk;
+    struct castle_slave_block_cnts  block_cnts;
 };
 
 struct castle_slaves {
@@ -203,10 +279,48 @@ struct castle_devices {
     struct list_head devices;
 };
 
+struct castle_region {
+	region_id_t          id;
+	struct kobject       kobj;
+	struct list_head     list;
+	
+	struct castle_slave *slave;
+	version_t            version;
+	int                  start;
+	int                  length;
+};
+
+struct castle_regions {
+    struct kobject   kobj;
+    struct list_head regions;
+};
+
+struct castle_transfer {
+    transfer_id_t           id;
+    version_t               version;
+    int                     direction;
+    atomic_t                progress;
+    struct castle_region  **regions;
+    int                     regions_count;
+    
+    struct kobject          kobj;
+    struct list_head        list;
+    
+    c_iter_t                c_iter;
+    atomic_t                phase;
+    struct completion       completion;
+};
+
+struct castle_transfers {
+    struct kobject   kobj;
+    struct list_head transfers;
+};
+
 extern struct castle             castle;
-extern struct castle_volumes     castle_volumes;
 extern struct castle_slaves      castle_slaves;
 extern struct castle_devices     castle_devices;
+extern struct castle_regions     castle_regions;
+extern struct castle_transfers   castle_transfers;
 
 extern struct workqueue_struct *castle_wqs[MAX_BTREE_DEPTH+1];
 #define castle_wq              (castle_wqs[0])
@@ -226,15 +340,22 @@ struct castle_device* castle_device_find       (dev_t dev);
 struct castle_slave*  castle_claim             (uint32_t new_dev);
 void                  castle_release           (struct castle_slave *cs);
 
+struct castle_region* castle_region_find       (region_id_t id);
+struct castle_region* castle_region_create     (uint32_t slave_id, version_t version, uint32_t start, uint32_t length);
+void                  castle_region_destroy    (struct castle_region *region);
+
 struct castle_slave*  castle_slave_find_by_id  (uint32_t id);
 struct castle_slave*  castle_slave_find_by_uuid(uint32_t uuid);
 struct castle_slave*  castle_slave_find_by_block(c_disk_blk_t cdb);
 
-c_disk_blk_t          castle_slaves_disk_block_get(void);
+struct castle_slave_superblock* 
+                      castle_slave_superblock_get(struct castle_slave *cs);
+void                  castle_slave_superblock_put(struct castle_slave *cs, int dirty);
 struct castle_fs_superblock* 
                       castle_fs_superblocks_get(void);
 void                  castle_fs_superblocks_put(struct castle_fs_superblock *sb, int dirty);
 
 int                   castle_fs_init           (void);
+
 
 #endif /* __CASTLE_H__ */

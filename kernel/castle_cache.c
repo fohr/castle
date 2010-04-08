@@ -6,6 +6,7 @@
 #include <linux/wait.h>
 #include <linux/kthread.h>
 
+#include "castle_public.h"
 #include "castle.h"
 #include "castle_cache.h"
 
@@ -38,8 +39,8 @@ static DECLARE_WAIT_QUEUE_HEAD(castle_cache_flush_wq);
 
 static int sync_c2p(void *word)
 {
-	c2_page_t *c2p
-		= container_of(word, c2_page_t, state);
+	/* If you need to use the c2p, here is how you work it out;
+       c2_page_t *c2p = container_of(word, c2_page_t, state); */
 
 	smp_mb();
     debug("In sync_c2p. Yielding\n");
@@ -122,7 +123,7 @@ int submit_c2p(int rw, c2_page_t *c2p)
 
 	bio = bio_alloc(GFP_NOIO, 1);
 
-	bio->bi_sector = c2p->cdb.block * (C_BLK_SIZE >> 9);
+	bio->bi_sector = (sector_t)(c2p->cdb.block * (C_BLK_SIZE >> 9));
 	bio->bi_bdev = cs->bdev;
 	bio->bi_io_vec[0].bv_page = c2p->page;
 	bio->bi_io_vec[0].bv_len  = C_BLK_SIZE; 
@@ -385,7 +386,7 @@ c2_page_t* castle_cache_page_get(c_disk_blk_t cdb)
             }
         } while(!c2p);
         /* Initialise the buffer */
-        debug("Initialisng the c2p\n");
+        debug("Initialisng the c2p: %p\n", c2p);
         castle_cache_page_init(c2p, cdb);
         get_c2p(c2p);
         /* Try to insert into the hash, can fail if it is already there */
@@ -551,6 +552,7 @@ static void castle_cache_hash_fini(void)
             if(atomic_read(&c2p->count) != 0)
                 printk("(disk,block)=(0x%x, 0x%x) not dropped.\n",
                     c2p->cdb.disk, c2p->cdb.block);
+
             BUG_ON(atomic_read(&c2p->count) != 0);
             __free_page(c2p->page);
         }
