@@ -97,6 +97,7 @@ function check_contents_file {
 		echo "Files ${file1} and ${file2} match"
 	else
 		echo "FAILED content check for ${file1} & ${file2}"
+        exit 1
 	fi
 }
 
@@ -131,6 +132,19 @@ function do_control_create {
 function do_control_attach {
     do_control_internal "attach" $1
     majmin_to_dev $IOCTL_RET
+    # Wait up to 5 seconds for the file to appear, /dev/castle-fs has to be
+    # renamed by the udev, this is sometimes slow
+    for i in `seq 50`; do
+        if [ -e ${DEV} ]; then
+            break
+        fi
+        # Wait 0.1s
+        usleep 100000
+    done
+    if [ ! -e ${DEV} ]; then
+        echo "File ${DEV} was supposed to be attached, but doesn't exist"
+        exit 1
+    fi
 }
 
 function do_control_detach {
