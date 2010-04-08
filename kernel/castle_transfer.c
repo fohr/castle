@@ -7,6 +7,7 @@
 #include <linux/crc32.h>
 #include <linux/sched.h>
 #include <asm/semaphore.h>
+#include <linux/kernel.h>
 
 #include "castle_public.h"
 #include "castle.h"
@@ -17,14 +18,14 @@
 #include "castle_versions.h"
 #include "castle_freespace.h"
 
-#define DEBUG
+//#define DEBUG
 #ifndef DEBUG
 #define debug(_f, ...)  ((void)0)
 #else
 #define debug(_f, _a...)  (printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
 #endif
 
-struct castle_transfers      castle_transfers;
+struct castle_transfers castle_transfers;
 
 static void castle_block_move(struct castle_transfer *transfer, int index, c_disk_blk_t cdb);
 
@@ -311,11 +312,11 @@ static void castle_block_move(struct castle_transfer *transfer, int index, c_dis
     c_disk_blk_t dest_db;
     struct castle_block_move_info *info;
     
-    debug("castle_move_block: index=%d, transfer=%d\n", index, transfer->id);
+    debug("castle_block_move: index=%d, transfer=%d\n", index, transfer->id);
 
     if (castle_transfer_is_block_on_correct_disk(transfer, cdb))
     {
-        debug("castle_move_block: index=%d, block on correct disk...\n", index);
+        debug("castle_block_move: index=%d, block on correct disk...\n", index);
         atomic_add(1, &transfer->progress);
         return;
     }
@@ -332,7 +333,7 @@ static void castle_block_move(struct castle_transfer *transfer, int index, c_dis
     dest_db = castle_transfer_destination_get(transfer);
     if (DISK_BLK_INVAL(dest_db))
     {
-        debug("castle_move_block: index=%d, couldn't find free block, cancelling\n", index);
+        debug("castle_block_move: index=%d, couldn't find free block, cancelling\n", index);
         
         kfree(info);
         
@@ -360,13 +361,13 @@ static void castle_block_move(struct castle_transfer *transfer, int index, c_dis
         
     if(!c2p_uptodate(src)) 
     {
-        debug("castle_move_block: index=%d, not uptodate, submitting...\n", index);
+        debug("castle_block_move: index=%d, not uptodate, submitting...\n", index);
         src->end_io = castle_transfer_callback;
         submit_c2p(READ, src);
     }
     else
     {
-        debug("castle_move_block: index=%d, uptodate, continuing...\n", index);
+        debug("castle_block_move: index=%d, uptodate, continuing...\n", index);
         castle_transfer_callback(src, true);
     }
 }
@@ -374,17 +375,18 @@ static void castle_block_move(struct castle_transfer *transfer, int index, c_dis
 static void castle_transfer_callback(c2_page_t *src, int uptodate)
 {
     struct castle_block_move_info *info = src->private;
+    
     int index = info->index;
     c2_page_t *dest = info->dest;
     struct castle_transfer *transfer = info->transfer;
 
-    debug("castle_do_transfer_callback: index=%d, transfer=%d\n", index, transfer->id);
+    debug("castle_transfer_callback: index=%d, transfer=%d\n", index, transfer->id);
     
     kfree(info);
     
     if (!uptodate)
     {
-        debug("castle_do_transfer_callback: not uptodate, cancelling...\n");
+        debug("castle_transfer_callback: not uptodate, cancelling...\n");
         
         /* 
          * this will eventually call c_iter->end, which is 
@@ -394,8 +396,13 @@ static void castle_transfer_callback(c2_page_t *src, int uptodate)
     }    
     else
     {
+        //print_hex_dump_bytes("before: ", DUMP_PREFIX_ADDRESS, c2p_buffer(dest), PAGE_SIZE);
+        
         memcpy(c2p_buffer(dest), c2p_buffer(src), PAGE_SIZE);
+        set_c2p_uptodate(dest);
         dirty_c2p(dest);
+
+        //print_hex_dump_bytes("after: ", DUMP_PREFIX_ADDRESS, c2p_buffer(dest), PAGE_SIZE);
     }
         
     unlock_c2p(src);

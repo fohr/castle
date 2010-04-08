@@ -952,6 +952,10 @@ void castle_ftree_iter_continue(c_iter_t *c_iter)
 {
     c_path_item_t *path_item;     
     struct castle_ftree_node *node;
+    #ifdef DEBUG
+    struct castle_ftree_slot *slot;
+    int j;
+    #endif
     
     debug("castle_ftree_iter_continue: version=0x%x\n", c_iter->version);
     
@@ -971,6 +975,12 @@ void castle_ftree_iter_continue(c_iter_t *c_iter)
 
     #ifdef DEBUG
     castle_ftree_node_print(node);
+
+    for(j=0; j<node->used; j++)
+    {
+        slot = &node->slots[j];
+        printk("   %d: (0x%x, 0x%x) -> (0x%x, 0x%x)\n", j, slot->block, slot->version, slot->cdb.disk, slot->cdb.block);
+    }
     #endif
 
     debug("castle_ftree_iter_continue: index=%d\n", path_item->index);
@@ -993,7 +1003,10 @@ static void castle_ftree_iter_process(struct work_struct *work)
     struct castle_ftree_node *node;
     struct castle_ftree_slot *slot;
     c_iter_t *c_iter = container_of(work, c_iter_t, work);
-    c_path_item_t *path_item;     
+    c_path_item_t *path_item; 
+#ifdef DEBUG
+    int j;  
+#endif  
 
     debug("castle_ftree_iter_process: version=0x%x\n", c_iter->version);
 
@@ -1020,8 +1033,17 @@ static void castle_ftree_iter_process(struct work_struct *work)
     /* callback to say we have entered a leaf */
     /* This is going to get more complicated with leaf pointers */
     if (FTREE_NODE_IS_LEAF(node) && c_iter->node_start != NULL)
+    {
         c_iter->node_start(c_iter);
-
+#ifdef DEBUG  
+        for(j=0; j<node->used; j++)
+        {
+            slot = &node->slots[j];
+            printk("   %d: (0x%x, 0x%x) -> (0x%x, 0x%x)\n", j, slot->block, slot->version, slot->cdb.disk, slot->cdb.block);
+        }
+#endif
+    }
+        
     /*
      * Go through each entry in the node.
      * For a leaf, we can do this all in one
@@ -1058,7 +1080,17 @@ static void castle_ftree_iter_process(struct work_struct *work)
      * if one not specified, continue automatically
      */   
     if (FTREE_NODE_IS_LEAF(node) && c_iter->node_end != NULL)
+    {
         c_iter->node_end(c_iter);
+    
+#ifdef DEBUG    
+        for(j=0; j<node->used; j++)
+        {
+            slot = &node->slots[j];
+            printk("   %d: (0x%x, 0x%x) -> (0x%x, 0x%x)\n", j, slot->block, slot->version, slot->cdb.disk, slot->cdb.block);
+        }
+#endif
+    } 
     else
         castle_ftree_iter_continue(c_iter);
 }
@@ -1078,6 +1110,8 @@ void castle_ftree_iter_replace(c_iter_t *c_iter, int index, c_disk_blk_t cdb)
     BUG_ON(index >= node->used);
     
     slot = &node->slots[index];
+    
+    debug("castle_ftree_iter_replace: current=(0x%x, %d), new=(0x%x, %d)\n", slot->cdb.disk, slot->cdb.block, cdb.disk, cdb.block);
     
     slot->cdb = cdb;
     

@@ -75,9 +75,9 @@ function check_contents {
 	
 	READ=`dd if=${filename} 2> /dev/null`
 	if [ "${READ}" == "${phrase}" ]; then
-		echo "Got '${READ}', correct."
+		echo "   Got '${READ}', correct."
 	else
-		echo "Got '${READ}', INCORRECT!"
+		echo "   Got '${READ}', INCORRECT!"
 	fi
 }
 
@@ -95,9 +95,9 @@ function check_contents_file {
 	#dd if=${file2} 2>/dev/null | hexdump -C 
 
 	if [ "${CHK1}" == "${CHK2}" ]; then
-		echo "Files ${file1} and ${file2} match"
+		echo "   Files ${file1} and ${file2} match"
 	else
-		echo "FAILED content check for ${file1} & ${file2}"
+		echo "   FAILED content check for ${file1} & ${file2}"
 	fi
 }
 
@@ -303,7 +303,7 @@ done
 check_contents /sys/fs/castle-fs/regions/number $REGIONS
 
 for I in `seq 0 $(( $REGIONS - 1 ))`; do
-	do_control_region_destroy $I
+    do_control_region_destroy $I
 done
 
 check_contents /sys/fs/castle-fs/regions/number "0"
@@ -313,14 +313,19 @@ check_contents /sys/fs/castle-fs/regions/number "0"
 
 echo
 echo "Transfers Test..."
-SIZE=10000
+SIZE=1000
 TEST_FILE=/tmp/txtest
 REGION_SLAVE=0
 do_control_create ${SIZE}
 do_control_attach ${VOL_VER}
 echo "   Creating volume to trasfer..."
-dd if=/dev/urandom of=${TEST_FILE} bs=4k count=${SIZE}
-dd if=${TEST_FILE} of=${DEV} bs=4k count=${SIZE}
+dd if=/dev/zero of=${TEST_FILE} bs=4k count=${SIZE} &> /dev/null
+# write block number into each block (this way we can tell which ones are missing!)
+for I in `seq 0 $(( ${SIZE} - 1 ))`; do
+    /usr/bin/printf "%8s" $I | dd of=${TEST_FILE} bs=4k seek=$I conv=notrunc &> /dev/null
+done
+
+dd if=${TEST_FILE} of=${DEV} bs=4k count=${SIZE} &> /dev/null
 do_control_region_create ${REGION_SLAVE} ${VOL_VER} 0 ${SIZE}
 
 function print_volume_summary {
@@ -338,20 +343,20 @@ function print_volume_summary {
     done
 }
 
-echo "    Summary for version ${VOL_VER} before move..."
+echo "   Summary for version ${VOL_VER} before move..."
 print_volume_summary ${VOL_VER} ${REGION_SLAVE}
 echo
 
 check_contents_file ${TEST_FILE} ${DEV} ${SIZE}
 
-echo "    Initialising trasfer..."
+echo "   Initialising trasfer..."
 do_control_transfer_create $VOL_VER 0x1
 
 STEP=1
 STEPS=300
 for I in `seq 0 $STEPS`; do
     TIME=$I #`echo "$STEP * 5" | bc`
-    echo "    Summary for version ${VOL_VER} ${TIME}s after move..."
+    echo "   Summary for version ${VOL_VER} ${TIME}s after move..."
     print_volume_summary ${VOL_VER} ${REGION_SLAVE}
     if [[ "$RESULT" == "$SIZE" ]]; then
         break
@@ -367,9 +372,6 @@ else
     echo "Trasfer failed!"
     exit 1 
 fi
-
-#exit 0
-
 
 
 

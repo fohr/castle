@@ -386,7 +386,7 @@ c2_page_t* castle_cache_page_get(c_disk_blk_t cdb)
             }
         } while(!c2p);
         /* Initialise the buffer */
-        debug("Initialisng the c2p\n");
+        debug("Initialisng the c2p: %p\n", c2p);
         castle_cache_page_init(c2p, cdb);
         get_c2p(c2p);
         /* Try to insert into the hash, can fail if it is already there */
