@@ -283,24 +283,6 @@ done
 
 
 
-echo
-echo "Large volume (btree split) test"
-SIZE=5000
-TEST_FILE=/tmp/bigvol
-do_control_create ${SIZE}
-do_control_attach ${VOL_VER}
-echo -n "   Zeroing $DEV ... "
-dd if=/dev/zero of=${DEV}      bs=4K count=${SIZE}  2> /dev/null
-echo    " done."
-echo -n "   Zeroing ${TEST_FILE} ... "
-dd if=/dev/zero of=${TEST_FILE} bs=4K count=${SIZE} 2> /dev/null
-echo    " done."
-
-check_contents_file ${DEV} ${TEST_FILE} ${SIZE}
-
-
-
-
 
 echo
 echo "Regions tests"
@@ -327,7 +309,7 @@ check_contents /sys/fs/castle-fs/regions/number "0"
 
 echo
 echo "Transfers Test..."
-SIZE=1000
+SIZE=10000
 TEST_FILE=/tmp/txtest
 REGION_SLAVE=0
 do_control_create ${SIZE}
@@ -390,9 +372,30 @@ fi
 
 
 
+
+echo
+echo "Large volume (btree split) test"
+SIZE=5000
+TEST_FILE=/tmp/bigvol
+do_control_create ${SIZE}
+do_control_attach ${VOL_VER}
+echo -n "   Zeroing $DEV ... "
+dd if=/dev/zero of=${DEV}      bs=4K count=${SIZE}  2> /dev/null
+echo    " done."
+echo -n "   Zeroing ${TEST_FILE} ... "
+dd if=/dev/zero of=${TEST_FILE} bs=4K count=${SIZE} 2> /dev/null
+echo    " done."
+
+check_contents_file ${DEV} ${TEST_FILE} ${SIZE}
+
+
+
+
+
+
 echo
 echo "More intense snapshots/clones"
-INTENSITY=100
+INTENSITY=10
 TEST_FILE=/tmp/a_block_of_as
 COMP_FILES=/tmp/snap
 rm -f $TEST_FILE

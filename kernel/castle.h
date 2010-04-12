@@ -189,33 +189,24 @@ typedef struct castle_bio_vec {
 #define c_bvec_bpnode(_c_bvec)      pfn_to_kaddr(page_to_pfn((_c_bvec)->btree_parent_node->page))
 
 /* Used for iterating through the tree */
-
-typedef struct castle_path_item {
-    int                       depth;
-    int                       index;
-    c_disk_blk_t              cdb;
-    struct castle_cache_page *btree_node;
-    struct list_head          list;
-} c_path_item_t;
-
 typedef struct castle_iterator {
-    /* What version do we want to read */
-    uint32_t            version;
-    void              (*node_start)(struct castle_iterator *c_iter);
-    void              (*each)(struct castle_iterator *c_iter, int index, c_disk_blk_t cdb);
-    void              (*node_end)(struct castle_iterator *c_iter);
-    void              (*end)(struct castle_iterator *c_iter, int err);
-    void               *private;
+    uint32_t                  version;
+    void                    (*node_start)(struct castle_iterator *c_iter);
+    void                    (*each)(struct castle_iterator *c_iter, int index, c_disk_blk_t cdb);
+    void                    (*node_end)(struct castle_iterator *c_iter);
+    void                    (*end)(struct castle_iterator *c_iter, int err);
+    void                     *private;
 
-    int                 depth;
-    struct list_head    path;
-    atomic_t            cancelled;
-    int                 err;
-    /* Used to thread this iter onto a workqueue */
-    struct work_struct  work;
-#ifdef CASTLE_DEBUG    
-    unsigned long       state;
-#endif
+    uint32_t                  parent_vblk; /* the v_blk followed to get to the block on the top of the path/stack */
+    uint32_t                  next_vblk; /* the next v_blk to look for in the interation (typically parent_vblk + 1 when at leafs) */
+    c_disk_blk_t              current_cdb;
+
+    struct castle_cache_page *path[MAX_BTREE_DEPTH];
+    int                       depth;
+    
+    atomic_t                  cancelled;
+    int                       err;
+    struct work_struct        work;
 } c_iter_t;
 
 #define BLOCKS_HASH_SIZE        (100)

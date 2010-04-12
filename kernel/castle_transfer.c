@@ -18,7 +18,7 @@
 #include "castle_versions.h"
 #include "castle_freespace.h"
 
-//#define DEBUG
+#define DEBUG
 #ifndef DEBUG
 #define debug(_f, ...)  ((void)0)
 #else
@@ -75,7 +75,6 @@ static void castle_transfer_end(c_iter_t *c_iter, int err)
 static void castle_transfer_start(struct castle_transfer *transfer)
 {
     transfer->c_iter.private    = transfer;        
-    transfer->c_iter.version    = transfer->version;
     transfer->c_iter.node_start = castle_transfer_node_start;
     transfer->c_iter.each       = castle_transfer_each;
     transfer->c_iter.node_end   = castle_transfer_node_end;
@@ -83,7 +82,8 @@ static void castle_transfer_start(struct castle_transfer *transfer)
 
     init_completion(&transfer->completion);
     atomic_set(&transfer->phase, 0);
-    castle_ftree_iter(&transfer->c_iter);
+    castle_ftree_iter_init(&transfer->c_iter, transfer->version);
+    castle_ftree_iter_start(&transfer->c_iter);
 }
 
 static void castle_transfer_add(struct castle_transfer *transfer)
@@ -284,7 +284,7 @@ static c_disk_blk_t castle_transfer_destination_get(struct castle_transfer *tran
                 if (castle_freespace_blks_for_version_get(region->slave, region->version) >= region->length)
                     continue;
             
-                /* this will update the freespace mapping... */
+                /* this will update the summaries... */
                 cdb = castle_freespace_slave_block_get(region->slave, region->version);
             }
             break;
@@ -297,7 +297,7 @@ static c_disk_blk_t castle_transfer_destination_get(struct castle_transfer *tran
 }
 
 // I just want this after the next function so its looks more inline
-static void castle_transfer_callback(c2_page_t *src, int uptodate);
+static void _castle_block_move(c2_page_t *src, int uptodate);
 
 struct castle_block_move_info
 {
@@ -327,6 +327,8 @@ static void castle_block_move(struct castle_transfer *transfer, int index, c_dis
         return;
     }
     
+    debug("castle_block_move: index=%d, getting src...\n", index);
+    
     src = castle_cache_page_get(cdb);
     lock_c2p(src);
     
@@ -348,7 +350,10 @@ static void castle_block_move(struct castle_transfer *transfer, int index, c_dis
         return;
     }
     
+    debug("castle_block_move: index=%d, getting dest...\n", index);
+    
     dest = castle_cache_page_get(dest_db);
+    debug("castle_block_move: index=%d, locking dest...\n", index);
     lock_c2p(dest);
         
     info->index    = index;
@@ -362,17 +367,17 @@ static void castle_block_move(struct castle_transfer *transfer, int index, c_dis
     if(!c2p_uptodate(src)) 
     {
         debug("castle_block_move: index=%d, not uptodate, submitting...\n", index);
-        src->end_io = castle_transfer_callback;
+        src->end_io = _castle_block_move;
         submit_c2p(READ, src);
     }
     else
     {
         debug("castle_block_move: index=%d, uptodate, continuing...\n", index);
-        castle_transfer_callback(src, true);
+        _castle_block_move(src, true);
     }
 }
 
-static void castle_transfer_callback(c2_page_t *src, int uptodate)
+static void _castle_block_move(c2_page_t *src, int uptodate)
 {
     struct castle_block_move_info *info = src->private;
     
@@ -380,13 +385,13 @@ static void castle_transfer_callback(c2_page_t *src, int uptodate)
     c2_page_t *dest = info->dest;
     struct castle_transfer *transfer = info->transfer;
 
-    debug("castle_transfer_callback: index=%d, transfer=%d\n", index, transfer->id);
+    debug("_castle_block_move: index=%d, transfer=%d\n", index, transfer->id);
     
     kfree(info);
     
     if (!uptodate)
     {
-        debug("castle_transfer_callback: not uptodate, cancelling...\n");
+        debug("_castle_block_move: not uptodate, cancelling...\n");
         
         /* 
          * this will eventually call c_iter->end, which is 
@@ -396,20 +401,16 @@ static void castle_transfer_callback(c2_page_t *src, int uptodate)
     }    
     else
     {
-        //print_hex_dump_bytes("before: ", DUMP_PREFIX_ADDRESS, c2p_buffer(dest), PAGE_SIZE);
-        
         memcpy(c2p_buffer(dest), c2p_buffer(src), PAGE_SIZE);
         set_c2p_uptodate(dest);
         dirty_c2p(dest);
-
-        //print_hex_dump_bytes("after: ", DUMP_PREFIX_ADDRESS, c2p_buffer(dest), PAGE_SIZE);
     }
+
+    unlock_c2p(dest);
+    put_c2p(dest);
         
     unlock_c2p(src);
     put_c2p(src);   
-    
-    unlock_c2p(dest);
-    put_c2p(dest);
 
     if (uptodate)
     {
