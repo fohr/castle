@@ -101,7 +101,12 @@ static void USED castle_ftree_node_print(struct castle_ftree_node *node)
     printk("Printing node version=%d with (cap, use) = (%d, %d), is_leaf=%d\n",
         node->version, node->capacity, node->used, node->is_leaf);
     for(i=0; i<node->used; i++)
-        printk("(0x%x, 0x%x) ", node->slots[i].block, node->slots[i].version);
+        printk("[%d] (0x%x, 0x%x) -> (0x%x, 0x%x)\n", 
+            i,
+            node->slots[i].block,
+            node->slots[i].version,
+            node->slots[i].cdb.disk,
+            node->slots[i].cdb.block);
     printk("\n");
 }
 
@@ -350,11 +355,33 @@ static void castle_ftree_slot_insert(c2_page_t *c2p,
                                      c_disk_blk_t cdb)
 {
     struct castle_ftree_node *node = pfn_to_kaddr(page_to_pfn(c2p->page));
+    version_t slot_version = index > 0 ? node->slots[index-1].version : INVAL_VERSION;
+    block_t   slot_block   = index > 0 ? node->slots[index-1].block   : INVAL_BLOCK;
     struct castle_ftree_slot *slot;
 
     BUG_ON(index      >  node->used);
     BUG_ON(node->used >= node->capacity);
     
+    /* Special case:
+       - blocks match
+       - version to insert descendant from the slot_version (and different)
+       - the slot_version is older than the node version
+      If all of the above true, replace rather than insert */ 
+    if((slot_block   == block) &&
+       (slot_version != version) &&
+        castle_version_is_ancestor(slot_version, version) &&
+        slot_version != node->version)
+    {
+        printk("==> Replacing is_leaf=%d!\n", node->is_leaf);
+        printk("==> What if this removes an non-leaf pointer??\n");
+        printk("==> Actually, this should never be non-leaf pointer, beacuse.\n");
+        printk("==> it will only happen after version split.\n");
+        printk("==> BUG otherwise.\n");
+        node->slots[index].version = version;
+        node->slots[index].cdb = cdb;
+        dirty_c2p(c2p);
+        return;
+    }
     /* Make space for the extra slot. */
     memmove(&node->slots[index+1],
             &node->slots[index],
