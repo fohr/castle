@@ -330,7 +330,7 @@ function print_volume_summary {
     RESULT=0
     for dir in `ls /sys/fs/castle-fs/slaves/`; do 
         if [[ $dir == slave* ]]; then
-            count=`cat /sys/fs/castle-fs/slaves/$dir/block_cnts | grep ^${VOL} | cut -f 2`
+            count=`cat /sys/fs/castle-fs/slaves/$dir/block_cnts | grep ^${VOL} | cut -d" " -f 2`
             echo "        $dir: $count";
             if [[ "$dir" == "slave${TARGET}" ]]; then
                 RESULT=$count
