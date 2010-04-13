@@ -64,7 +64,7 @@ void fastcall unlock_c2p(c2_page_t *c2p)
 {
 #ifdef CASTLE_DEBUG    
     c2p->file = "none";
-    c2p->line = 0;;
+    c2p->line = 0;
 #endif
 	smp_mb__before_clear_bit();
 	clear_c2p_locked(c2p);

@@ -8,6 +8,13 @@
 #include "castle.h"
 #include "castle_events.h"
 
+//#define DEBUG
+#ifndef DEBUG
+#define debug(_f, ...)          ((void)0)
+#else
+#define debug(_f, _a...)        (printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
+#endif
+
 void castle_uevent4(uint16_t cmd, uint64_t arg1, uint64_t arg2, uint64_t arg3, uint64_t arg4)
 {
     struct kobj_uevent_env *env;
@@ -24,7 +31,7 @@ void castle_uevent4(uint16_t cmd, uint64_t arg1, uint64_t arg2, uint64_t arg3, u
     add_uevent_var(env, "ARG2=0x%llx", arg2);
     add_uevent_var(env, "ARG3=0x%llx", arg3);
     add_uevent_var(env, "ARG4=0x%llx", arg4);    
-    printk("Sending the event. CMD=%d ARG1=0x%Lx ARG2=0x%Lx ARG3=0x%Lx ARG4=0x%Lx\n", cmd, arg1, arg2, arg3, arg4);
+    debug("Sending the event. CMD=%d ARG1=0x%Lx ARG2=0x%Lx ARG3=0x%Lx ARG4=0x%Lx\n", cmd, arg1, arg2, arg3, arg4);
     kobject_uevent_env(&castle.kobj, KOBJ_CHANGE, env->envp);
 }
 

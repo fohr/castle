@@ -185,21 +185,22 @@ typedef struct castle_bio_vec {
 } c_bvec_t;
 #define c_bvec_data_dir(_c_bvec)    bio_data_dir((_c_bvec)->c_bio->bio)
 #define c2p_bnode(_c2p)             pfn_to_kaddr(page_to_pfn((_c2p)->page))
-#define c_bvec_bnode(_c_bvec)       c2p_bnode((_c_bvec)->btree_node) //pfn_to_kaddr(page_to_pfn((_c_bvec)->btree_node->page))
+#define c_bvec_bnode(_c_bvec)       c2p_bnode((_c_bvec)->btree_node)
 #define c_bvec_bpnode(_c_bvec)      pfn_to_kaddr(page_to_pfn((_c_bvec)->btree_parent_node->page))
 
 /* Used for iterating through the tree */
 typedef struct castle_iterator {
-    uint32_t                  version;
+    version_t                 version;
     void                    (*node_start)(struct castle_iterator *c_iter);
-    void                    (*each)(struct castle_iterator *c_iter, int index, c_disk_blk_t cdb);
-    void                    (*node_end)(struct castle_iterator *c_iter);
-    void                    (*end)(struct castle_iterator *c_iter, int err);
+    void                    (*each)      (struct castle_iterator *c_iter, int index, c_disk_blk_t cdb);
+    void                    (*node_end)  (struct castle_iterator *c_iter);
+    void                    (*end)       (struct castle_iterator *c_iter, int err);
     void                     *private;
 
-    uint32_t                  parent_vblk; /* the v_blk followed to get to the block on the top of the path/stack */
-    uint32_t                  next_vblk; /* the next v_blk to look for in the interation (typically parent_vblk + 1 when at leafs) */
-    c_disk_blk_t              current_cdb;
+    block_t                   parent_vblk; /* The v_blk followed to get to the block 
+                                              on the top of the path/stack */
+    block_t                   next_vblk;   /* The next v_blk to look for in the interation 
+                                              (typically parent_vblk + 1 when at leafs) */
 
     struct castle_cache_page *path[MAX_BTREE_DEPTH];
     int                       depth;

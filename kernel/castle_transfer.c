@@ -19,11 +19,11 @@
 #include "castle_freespace.h"
 #include "castle_events.h"
 
-#define DEBUG
+//#define DEBUG
 #ifndef DEBUG
-#define debug(_f, ...)  ((void)0)
+#define debug(_f, ...)     ((void)0)
 #else
-#define debug(_f, _a...)  (printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
+#define debug(_f, _a...)   (printk("Transfer:%.60s:%.4d:  " _f, __func__, __LINE__ , ##_a))
 #endif
 
 struct castle_transfers castle_transfers;
@@ -34,7 +34,7 @@ static void castle_transfer_each(c_iter_t *c_iter, int index, c_disk_blk_t cdb)
 {
     struct castle_transfer *transfer = container_of(c_iter, struct castle_transfer, c_iter);
 
-    debug("castle_transfer_each: (0x%x, %d)\n", cdb.disk, cdb.block);
+    debug("---> (0x%x, %d)\n", cdb.disk, cdb.block);
 
     castle_block_move(transfer, index, cdb);
 }
@@ -43,7 +43,7 @@ static void castle_transfer_node_start(c_iter_t *c_iter)
 {
     struct castle_transfer *transfer = container_of(c_iter, struct castle_transfer, c_iter);
 
-    debug("castle_transfer_block_start: transfer=%d\n", transfer->id);
+    debug("Transfer=%d\n", transfer->id);
 
     BUG_ON(atomic_read(&transfer->phase) != 0);
 
@@ -54,7 +54,7 @@ static void castle_transfer_node_end(c_iter_t *c_iter)
 {
     struct castle_transfer *transfer = container_of(c_iter, struct castle_transfer, c_iter);
 
-    debug("castle_transfer_block_end: transfer=%d\n", transfer->id);
+    debug("Transfer=%d\n", transfer->id);
     
     if (atomic_dec_and_test(&transfer->phase)) 
         castle_ftree_iter_continue(&transfer->c_iter);
@@ -62,7 +62,7 @@ static void castle_transfer_node_end(c_iter_t *c_iter)
 
 static void _castle_transfer_destroy(struct castle_transfer *transfer, int err)
 {
-    debug("_castle_transfer_destroy: transfer=%d err=%d\n", transfer->id, err);
+    debug("Transfer=%d err=%d\n", transfer->id, err);
     
     castle_events_transfer_destroy(transfer->id, err);    
     
@@ -76,7 +76,7 @@ static void castle_transfer_end(c_iter_t *c_iter, int err)
 {
     struct castle_transfer *transfer = container_of(c_iter, struct castle_transfer, c_iter);
 
-    debug("castle_transfer_end: transfer=%d, err=%d\n", transfer->id, err);
+    debug("Transfer=%d, err=%d\n", transfer->id, err);
 
     complete(&transfer->completion);
 
@@ -157,7 +157,7 @@ static int castle_regions_get(version_t version, struct castle_region*** regions
 
 void castle_transfer_destroy(struct castle_transfer *transfer)
 {
-    debug("castle_transfer_destroy: transfer=%d\n", transfer->id);
+    debug("Transfer=%d\n", transfer->id);
     
     castle_ftree_iter_cancel(&transfer->c_iter, -EINTR);
     wait_for_completion(&transfer->completion);
@@ -169,7 +169,7 @@ struct castle_transfer* castle_transfer_create(version_t version, int direction)
     static int transfer_id = 0;
     int err;
 
-    debug("castle_transfer_create(version=%d, direction=%d)\n", version, direction);
+    debug("(version=%d, direction=%d)\n", version, direction);
 
     /* To check if a good snapshot version, try and
        get the snapshot.  If we do get it, then we may
@@ -232,7 +232,7 @@ void castle_transfers_free(void)
     struct list_head *lh, *th;
     struct castle_transfer *transfer;
 
-    debug("castle_transfers_free\n");
+    debug("Freeing transfer.\n");
 
     list_for_each_safe(lh, th, &castle_transfers.transfers)
     {
@@ -304,15 +304,90 @@ static c_disk_blk_t castle_transfer_destination_get(struct castle_transfer *tran
     return cdb;
 }
 
-// I just want this after the next function so its looks more inline
-static void _castle_block_move(c2_page_t *src, int uptodate);
-
 struct castle_block_move_info
 {
     int                     index;
-    c2_page_t               *dest;
-    struct castle_transfer  *transfer;
+    union {
+        c2_page_t          *dest;
+        c_disk_blk_t        dest_cdb;
+    };
+    c_disk_blk_t            src_cdb;
+    struct castle_transfer *transfer;
+    int                     err;
+    struct work_struct      work;
 };
+
+static void castle_block_move_complete(struct work_struct *work)
+{
+    struct castle_block_move_info *info = container_of(work, struct castle_block_move_info, work);
+    struct castle_transfer *transfer = info->transfer;
+    c_disk_blk_t src_cdb = info->src_cdb;
+    c_disk_blk_t dest_cdb = info->dest_cdb;
+    int index = info->index;
+    int err = info->err;
+
+    kfree(info);
+    if(!err)
+    {
+        /* Update counters etc... */
+        castle_ftree_iter_replace(&transfer->c_iter, index, dest_cdb);
+        castle_freespace_block_free(src_cdb, transfer->version);
+        atomic_inc(&transfer->progress);
+    }
+
+    /* if all the block moves have succeeded then continue to next btree block */
+    if (atomic_dec_and_test(&transfer->phase)) 
+        castle_ftree_iter_continue(&transfer->c_iter);  
+}
+
+static void castle_block_move_io_end(c2_page_t *src, int uptodate)
+{
+    struct castle_block_move_info *info = src->private;
+    c2_page_t *dest = info->dest;
+
+    debug("Index=%d, transfer=%d\n", info->index, info->transfer->id);
+    
+    BUG_ON(info->err != 0);
+    if (!uptodate)
+    {
+        debug("Not uptodate, cancelling...\n");
+        
+        /* 
+         * This will eventually call c_iter->end, which is 
+         * castle_transfer_error, on the next iter_continue.
+         * It's safe to use it from the interrupt context because 
+         * it initially only sets a flag. 
+         */        
+        castle_ftree_iter_cancel(&info->transfer->c_iter, -EIO);
+        info->err = -EIO;
+    }    
+    else
+    {
+        set_c2p_uptodate(src);
+
+        memcpy(c2p_buffer(dest), c2p_buffer(src), PAGE_SIZE);
+        set_c2p_uptodate(dest);
+        dirty_c2p(dest);
+
+#ifdef DEBUG        
+        memcpy(c2p_buffer(src), "----MOVED----", strlen("----MOVED----"));
+        dirty_c2p(src);
+#endif        
+
+        /* Save CDBs for move_complete */
+        info->src_cdb  = src->cdb;
+        info->dest_cdb = dest->cdb;
+    }
+
+    unlock_c2p(dest);
+    put_c2p(dest);
+        
+    unlock_c2p(src);
+    put_c2p(src);   
+
+    INIT_WORK(&info->work, castle_block_move_complete);
+    queue_work(castle_wq, &info->work);
+}    
 
 static void castle_block_move(struct castle_transfer *transfer, int index, c_disk_blk_t cdb)
 {
@@ -320,11 +395,11 @@ static void castle_block_move(struct castle_transfer *transfer, int index, c_dis
     c_disk_blk_t dest_db;
     struct castle_block_move_info *info;
     
-    debug("castle_block_move: index=%d, transfer=%d\n", index, transfer->id);
+    debug("Index=%d, transfer=%d\n", index, transfer->id);
 
     if (castle_transfer_is_block_on_correct_disk(transfer, cdb))
     {
-        debug("castle_block_move: index=%d, block on correct disk...\n", index);
+        debug("Index=%d, block on correct disk...\n", index);
         atomic_add(1, &transfer->progress);
         return;
     }
@@ -335,7 +410,7 @@ static void castle_block_move(struct castle_transfer *transfer, int index, c_dis
         return;
     }
     
-    debug("castle_block_move: index=%d, getting src...\n", index);
+    debug("Index=%d, getting src...\n", index);
     
     src = castle_cache_page_get(cdb);
     lock_c2p(src);
@@ -343,7 +418,7 @@ static void castle_block_move(struct castle_transfer *transfer, int index, c_dis
     dest_db = castle_transfer_destination_get(transfer);
     if (DISK_BLK_INVAL(dest_db))
     {
-        debug("castle_block_move: index=%d, couldn't find free block, cancelling\n", index);
+        debug("Index=%d, couldn't find free block, cancelling\n", index);
         
         kfree(info);
         
@@ -358,15 +433,16 @@ static void castle_block_move(struct castle_transfer *transfer, int index, c_dis
         return;
     }
     
-    debug("castle_block_move: index=%d, getting dest...\n", index);
+    debug("Index=%d, getting dest...\n", index);
     
     dest = castle_cache_page_get(dest_db);
-    debug("castle_block_move: index=%d, locking dest...\n", index);
+    debug("Index=%d, locking dest...\n", index);
     lock_c2p(dest);
         
     info->index    = index;
     info->dest     = dest;
     info->transfer = transfer;
+    info->err      = 0;
         
     src->private = info;
         
@@ -374,61 +450,14 @@ static void castle_block_move(struct castle_transfer *transfer, int index, c_dis
         
     if(!c2p_uptodate(src)) 
     {
-        debug("castle_block_move: index=%d, not uptodate, submitting...\n", index);
-        src->end_io = _castle_block_move;
+        debug("Index=%d, not uptodate, submitting...\n", index);
+        src->end_io = castle_block_move_io_end;
         submit_c2p(READ, src);
     }
     else
     {
-        debug("castle_block_move: index=%d, uptodate, continuing...\n", index);
-        _castle_block_move(src, true);
+        debug("Index=%d, uptodate, continuing...\n", index);
+        castle_block_move_io_end(src, true);
     }
 }
 
-static void _castle_block_move(c2_page_t *src, int uptodate)
-{
-    struct castle_block_move_info *info = src->private;
-    
-    int index = info->index;
-    c2_page_t *dest = info->dest;
-    struct castle_transfer *transfer = info->transfer;
-
-    debug("_castle_block_move: index=%d, transfer=%d\n", index, transfer->id);
-    
-    kfree(info);
-    
-    if (!uptodate)
-    {
-        debug("_castle_block_move: not uptodate, cancelling...\n");
-        
-        /* 
-         * this will eventually call c_iter->end, which is 
-         * castle_transfer_error, on the next iter_continue
-         */        
-        castle_ftree_iter_cancel(&transfer->c_iter, -EIO);
-    }    
-    else
-    {
-        memcpy(c2p_buffer(dest), c2p_buffer(src), PAGE_SIZE);
-        set_c2p_uptodate(dest);
-        dirty_c2p(dest);
-    }
-
-    unlock_c2p(dest);
-    put_c2p(dest);
-        
-    unlock_c2p(src);
-    put_c2p(src);   
-
-    if (uptodate)
-    {
-        /* Update counters etc... */
-        castle_ftree_iter_replace(&transfer->c_iter, index, dest->cdb);
-        castle_freespace_block_free(src->cdb, transfer->version);
-        atomic_inc(&transfer->progress);
-    }
-
-    /* if all the block moves have succeeded then continue to next btree block */
-    if (atomic_dec_and_test(&transfer->phase)) 
-        castle_ftree_iter_continue(&transfer->c_iter);  
-}
