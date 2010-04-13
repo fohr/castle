@@ -17,7 +17,7 @@
 #define debug(_f, _a...)  (printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
 #endif
 
-static int                     castle_cache_size = 200; /* in pages */
+static int                     castle_cache_size = 100; /* in pages */
 static c2_page_t              *castle_cache_pgs  = NULL;
 
 static int                     castle_cache_hash_buckets;

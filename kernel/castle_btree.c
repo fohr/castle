@@ -17,9 +17,11 @@
 
 //#define DEBUG
 #ifndef DEBUG
-#define debug(_f, ...)  ((void)0)
+#define debug(_f, ...)          ((void)0)
+#define iter_debug(_f, ...)     ((void)0)
 #else
-#define debug(_f, _a...)  (printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
+#define debug(_f, _a...)        (printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
+#define iter_debug(_f, _a...)   (printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
 #endif
 
 static void castle_ftree_c2p_forget(c_bvec_t *c_bvec);
@@ -928,8 +930,6 @@ void castle_ftree_find(c_bvec_t *c_bvec)
 }
 
 /* Btree iterate functions */
-
-#define iter_debug(_f, _a...)  (printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
 
 /* Put c2p's on the path from given depth. from = 0 means put entire path */
 static void castle_ftree_iter_path_put(c_iter_t *c_iter, int from)
