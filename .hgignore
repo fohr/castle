@@ -10,3 +10,4 @@ user/ocaml/castle_ioctl
 *.orig
 *.rej
 ._*
+\#*

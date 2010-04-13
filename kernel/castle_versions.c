@@ -17,6 +17,7 @@
 #include "castle_versions.h"
 #include "castle_sysfs.h"
 #include "castle_cache.h"
+#include "castle_events.h"
 
 //#define DEBUG
 #ifndef DEBUG
@@ -395,6 +396,8 @@ static version_t castle_version_new_create(int snap_or_clone,
         version = INVAL_VERSION;
     }
     spin_unlock_irq(&castle_versions_hash_lock);
+
+    castle_events_version_create(version);
 
     return version;
 }

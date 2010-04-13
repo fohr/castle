@@ -20,6 +20,7 @@
 #include "castle_transfer.h"
 #include "castle_sysfs.h"
 #include "castle_debug.h"
+#include "castle_events.h"
 
 struct castle                castle;
 struct castle_slaves         castle_slaves;
@@ -231,6 +232,8 @@ int castle_fs_init(void)
 
     printk("Castle FS inited.\n");
     castle_fs_inited = 1;
+
+    castle_events_init();
 
     return 0;
 }
@@ -494,6 +497,8 @@ struct castle_slave* castle_claim(uint32_t new_dev)
         printk("Could not add slave to sysfs.\n");
         goto err_out;
     }
+    
+    castle_events_slave_claim(cs->id);
 
     return cs;
 err_out:
@@ -507,6 +512,7 @@ err_out:
 
 void castle_release(struct castle_slave *cs)
 {
+    castle_events_slave_release(cs->id);
     castle_sysfs_slave_del(cs);
     bd_release(cs->bdev);
     blkdev_put(cs->bdev);
@@ -607,6 +613,8 @@ struct castle_region* castle_region_create(uint32_t slave_id, version_t version,
          goto err_out;
     }
     
+    castle_events_region_create(region->id);
+    
     return region;
         
 err_out:
@@ -616,6 +624,7 @@ err_out:
 
 void castle_region_destroy(struct castle_region *region)
 {
+    castle_events_region_destroy(region->id);
     castle_sysfs_region_del(region);
     list_del(&region->list);
     kfree(region);
@@ -990,6 +999,8 @@ struct castle_device* castle_device_find(dev_t dev)
 void castle_device_free(struct castle_device *cd)
 {
     version_t version = cd->version;
+    
+    castle_events_device_detach(cd->gd->major, cd->gd->first_minor);
 
     castle_sysfs_device_del(cd);
     /* TODO: Should this be done? blk_cleanup_queue(cd->gd->rq); */ 
@@ -1054,6 +1065,8 @@ struct castle_device* castle_device_init(version_t version)
         list_del(&dev->list);
         goto error_out;
     }
+
+    castle_events_device_attach(gd->major, gd->first_minor, version);
 
     return dev;
 

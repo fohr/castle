@@ -1,2 +1,3 @@
 KERNEL=="castle-fs-control", NAME="castle-fs/control"
 KERNEL=="castle-fs-[0-9]*", NAME="castle-fs/castle-%n"
+SUBSYSTEM=="fs", ACTION=="change", DEVPATH=="/fs/castle-fs", ENV{NOTIFY}=="false", RUN+="/etc/castle/udev-watch $env{CMD} $env{ARG1} $env{ARG2} $env{ARG3} $env{ARG4}"

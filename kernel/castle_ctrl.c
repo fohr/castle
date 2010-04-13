@@ -10,6 +10,7 @@
 #include "castle_btree.h"
 #include "castle_versions.h"
 #include "castle_transfer.h"
+#include "castle_events.h"
 
 static DECLARE_MUTEX(castle_control_lock);
 
@@ -65,6 +66,14 @@ static void castle_control_create(cctrl_cmd_create_t *ioctl)
 {
     version_t version;
 
+    if(ioctl->size <= 0)
+    {
+        printk("When creating a volume size must be g.t. 0!\n");
+        ioctl->id  = -1;
+        ioctl->ret = -EINVAL;
+        return;
+    }
+
     version = castle_version_new(0, /* clone */ 
                                  0, /* root version */
                                  ioctl->size);
@@ -72,7 +81,8 @@ static void castle_control_create(cctrl_cmd_create_t *ioctl)
     {
         ioctl->id  = -1;
         ioctl->ret = -EINVAL;
-    } else
+    } 
+    else
     {
         ioctl->id  = version;
         ioctl->ret = 0;
@@ -140,6 +150,8 @@ static void castle_control_snapshot(cctrl_cmd_snapshot_t *ioctl)
         ioctl->ret     = 0;
     }
     up_write(&cd->lock);
+    
+    castle_events_device_snapshot(version, cd->gd->major, cd->gd->first_minor);
 }
  
 static void castle_control_fs_init(cctrl_cmd_init_t *ioctl)

@@ -17,6 +17,7 @@
 #include "castle_sysfs.h"
 #include "castle_versions.h"
 #include "castle_freespace.h"
+#include "castle_events.h"
 
 #define DEBUG
 #ifndef DEBUG
@@ -59,6 +60,18 @@ static void castle_transfer_node_end(c_iter_t *c_iter)
         castle_ftree_iter_continue(&transfer->c_iter);
 }
 
+static void _castle_transfer_destroy(struct castle_transfer *transfer, int err)
+{
+    debug("_castle_transfer_destroy: transfer=%d err=%d\n", transfer->id, err);
+    
+    castle_events_transfer_destroy(transfer->id, err);    
+    
+    castle_sysfs_transfer_del(transfer);
+    list_del(&transfer->list);
+    kfree(transfer->regions);
+    kfree(transfer);
+}
+
 static void castle_transfer_end(c_iter_t *c_iter, int err)
 {
     struct castle_transfer *transfer = container_of(c_iter, struct castle_transfer, c_iter);
@@ -67,9 +80,7 @@ static void castle_transfer_end(c_iter_t *c_iter, int err)
 
     complete(&transfer->completion);
 
-    /* TODO need callback to userspace */
-    //if (!err)
-    //    castle_transfer_error(transfer, err);
+    _castle_transfer_destroy(transfer, err);
 }
 
 static void castle_transfer_start(struct castle_transfer *transfer)
@@ -150,10 +161,6 @@ void castle_transfer_destroy(struct castle_transfer *transfer)
     
     castle_ftree_iter_cancel(&transfer->c_iter, -EINTR);
     wait_for_completion(&transfer->completion);
-    castle_sysfs_transfer_del(transfer);
-    list_del(&transfer->list);
-    kfree(transfer->regions);
-    kfree(transfer);
 }
 
 struct castle_transfer* castle_transfer_create(version_t version, int direction)
@@ -183,7 +190,6 @@ struct castle_transfer* castle_transfer_create(version_t version, int direction)
         goto err_out;
     }
 
-
     transfer->id = transfer_id++;
     transfer->version = version;
     transfer->direction = direction;
@@ -202,6 +208,8 @@ struct castle_transfer* castle_transfer_create(version_t version, int direction)
     }
 
     castle_transfer_start(transfer);
+
+    castle_events_transfer_create(transfer->id);
 
     return transfer;
 

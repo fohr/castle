@@ -10,7 +10,7 @@
 #include "castle.h"
 #include "castle_cache.h"
 
-#define DEBUG
+//#define DEBUG
 #ifndef DEBUG
 #define debug(_f, ...)  ((void)0)
 #else

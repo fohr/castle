@@ -1,0 +1,68 @@
+#!/bin/bash
+
+CMD=$1
+RET=$2
+ARG1=$3
+ARG2=$4
+ARG3=$5
+ARG4=$6
+
+#echo $* >>/tmp/events
+
+function find_dev {
+    local MAJ=$1
+    local MIN=$2
+    #echo "find_dev MAJ=$MAJ MIN=$MIN" >> /tmp/events
+    DEV=/dev/`cat /proc/partitions  | grep "$MAJ *$MIN " | awk '{print ( $4 ) }'`  
+}
+
+function get_slave {
+    local SLAVEID=`printf "%d" $1`
+    local DEVID=`cat /sys/fs/castle-fs/slaves/slave${SLAVEID}/dev/dev`
+    
+    local MAJ=`echo "${DEVID}" | sed 's/\:/ /' | awk '{print $1}'`
+    local MIN=`echo "${DEVID}" | sed 's/\:/ /' | awk '{print $2}'`
+    
+    find_dev $MAJ $MIN
+}
+
+function get_dev {
+    local MAJ=$(( ($1 >> 8) & 0xFFF ))
+    local MIN=$(( ($1 & 0xFF) | (( $1 >> 12 ) & 0xFFF00 ) ))
+    
+    find_dev $MAJ $MIN
+}
+
+case $CMD in
+1)
+    get_slave $ARG1
+    COMMAND_STR="claim $DEV";;
+2)
+    get_slave $ARG1
+    COMMAND_STR="release $DEV";;
+3)
+    get_dev $ARG2
+    COMMAND_STR="attach $DEV -> $ARG1";;
+4)
+    get_dev $ARG1
+    COMMAND_STR="detach $DEV";;
+5)
+    COMMAND_STR="create $ARG1";;
+6)
+    COMMAND_STR="clone $ARG1";;
+7)
+    get_dev $ARG2
+    COMMAND_STR="snapshot $DEV -> $ARG1";;
+8)
+    COMMAND_STR="init";;
+9)
+    COMMAND_STR="region_create $ARG1";;
+10)
+    COMMAND_STR="region_destroy $ARG1";;
+11)
+    COMMAND_STR="transfer_create $ARG1";;
+12)
+    COMMAND_STR="transfer_cancel $ARG1";;
+esac
+
+echo $COMMAND_STR >> /tmp/events
