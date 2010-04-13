@@ -60,18 +60,6 @@ static void castle_transfer_node_end(c_iter_t *c_iter)
         castle_ftree_iter_continue(&transfer->c_iter);
 }
 
-static void _castle_transfer_destroy(struct castle_transfer *transfer, int err)
-{
-    debug("Transfer=%d err=%d\n", transfer->id, err);
-    
-    castle_events_transfer_destroy(transfer->id, err);    
-    
-    castle_sysfs_transfer_del(transfer);
-    list_del(&transfer->list);
-    kfree(transfer->regions);
-    kfree(transfer);
-}
-
 static void castle_transfer_end(c_iter_t *c_iter, int err)
 {
     struct castle_transfer *transfer = container_of(c_iter, struct castle_transfer, c_iter);
@@ -80,7 +68,12 @@ static void castle_transfer_end(c_iter_t *c_iter, int err)
 
     complete(&transfer->completion);
 
-    _castle_transfer_destroy(transfer, err);
+    castle_events_transfer_destroy(transfer->id, err);    
+    castle_sysfs_transfer_del(transfer);
+
+    list_del(&transfer->list);
+    kfree(transfer->regions);
+    kfree(transfer);
 }
 
 static void castle_transfer_start(struct castle_transfer *transfer)
@@ -268,7 +261,7 @@ static int castle_transfer_is_block_on_correct_disk(struct castle_transfer *tran
             return false;
             
         default:
-            BUG_ON(true);
+            BUG();
     }
 }
 
@@ -298,7 +291,7 @@ static c_disk_blk_t castle_transfer_destination_get(struct castle_transfer *tran
             break;
         
         default:
-            BUG_ON(true);
+            BUG();
     }
 
     return cdb;

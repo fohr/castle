@@ -205,7 +205,7 @@ typedef struct castle_iterator {
     struct castle_cache_page *path[MAX_BTREE_DEPTH];
     int                       depth;
     
-    atomic_t                  cancelled;
+    int                       cancelled;
     int                       err;
     struct work_struct        work;
 } c_iter_t;
