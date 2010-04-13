@@ -11,6 +11,9 @@ void castle_uevent1(uint16_t cmd, uint64_t arg1);
 #define castle_events_slave_claim(_slave_id) \
     castle_uevent2(CASTLE_CTRL_CMD_CLAIM, CASTLE_EVENTS_SUCCESS, _slave_id)
 
+#define castle_events_slave_changed(_slave_id) \
+    castle_uevent2(CASTLE_CTRL_CMD_CLAIM, CASTLE_EVENTS_SUCCESS, _slave_id)
+
 #define castle_events_slave_release(_slave_id) \
     castle_uevent2(CASTLE_CTRL_CMD_RELEASE, CASTLE_EVENTS_SUCCESS, _slave_id)
 
