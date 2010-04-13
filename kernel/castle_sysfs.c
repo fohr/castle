@@ -6,6 +6,7 @@
 
 #include "castle_public.h"
 #include "castle.h"
+#include "castle_events.h"
 #include "castle_sysfs.h"
 #include "castle_versions.h"
 #include "castle_freespace.h"
@@ -202,6 +203,8 @@ static ssize_t slave_target_store(struct kobject *kobj,
         sb->flags &= ~CASTLE_SLAVE_TARGET;
     
     castle_slave_superblock_put(slave, 1);
+    
+    castle_events_slave_changed(slave->id);
     
     return count;
 }
