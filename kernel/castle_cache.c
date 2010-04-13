@@ -104,8 +104,15 @@ static void fastcall clean_c2p(c2_page_t *c2p)
 static void c2p_io_end(struct bio *bio, int err)
 {
 	c2_page_t *c2p = bio->bi_private;
-
+#ifdef CASTLE_DEBUG    
+    unsigned long flags;
+    
+    local_irq_save(flags);
+#endif
 	c2p->end_io(c2p, test_bit(BIO_UPTODATE, &bio->bi_flags));
+#ifdef CASTLE_DEBUG    
+    local_irq_restore(flags);
+#endif
 	bio_put(bio);
 }
 
