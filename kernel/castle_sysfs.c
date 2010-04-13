@@ -472,6 +472,15 @@ static ssize_t regions_number_show(struct kobject *kobj,
     return sprintf(buf, "%d\n", nr_regions);
 }
 
+static ssize_t region_id_show(struct kobject *kobj, 
+						           struct attribute *attr, 
+                                   char *buf)
+{
+    struct castle_region *region = container_of(kobj, struct castle_region, kobj); 
+
+    return sprintf(buf, "%d\n", region->id);
+}
+
 static ssize_t region_start_show(struct kobject *kobj, 
 						           struct attribute *attr, 
                                    char *buf)
@@ -490,7 +499,7 @@ static ssize_t region_length_show(struct kobject *kobj,
     return sprintf(buf, "0x%x\n", region->length);
 }
 
-static ssize_t region_snapshot_show(struct kobject *kobj, 
+static ssize_t region_version_show(struct kobject *kobj, 
 						           struct attribute *attr, 
                                    char *buf)
 {
@@ -514,19 +523,24 @@ static struct kobj_type castle_regions_ktype = {
 };
 
 /* Definition of each region sysfs directory attributes */
+
+static struct castle_sysfs_entry region_id =
+__ATTR(id, S_IRUGO|S_IWUSR, region_id_show, NULL);
+
 static struct castle_sysfs_entry region_start =
 __ATTR(start, S_IRUGO|S_IWUSR, region_start_show, NULL);
 
 static struct castle_sysfs_entry region_length =
 __ATTR(length, S_IRUGO|S_IWUSR, region_length_show, NULL);
 
-static struct castle_sysfs_entry region_snapshot =
-__ATTR(snapshot, S_IRUGO|S_IWUSR, region_snapshot_show, NULL);
+static struct castle_sysfs_entry region_version =
+__ATTR(version, S_IRUGO|S_IWUSR, region_version_show, NULL);
 
 static struct attribute *castle_region_attrs[] = {
+    &region_id.attr,
     &region_start.attr,
     &region_length.attr,
-    &region_snapshot.attr,
+    &region_version.attr,
     NULL,
 };
 
