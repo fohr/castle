@@ -273,6 +273,14 @@ static ssize_t device_version_show(struct kobject *kobj,
     return sprintf(buf, "0x%x\n", device->version);
 }
 
+static ssize_t device_id_show(struct kobject *kobj, 
+						           struct attribute *attr, 
+                                   char *buf)
+{
+    struct castle_device *device = container_of(kobj, struct castle_device, kobj); 
+
+    return sprintf(buf, "0x%x\n", device->gd->first_minor);
+}
 
 static ssize_t castle_attr_show(struct kobject *kobj,
                                 struct attribute *attr,
@@ -419,9 +427,13 @@ static struct kobj_type castle_devices_ktype = {
 
 /* Definition of each device sysfs directory attributes */
 static struct castle_sysfs_entry device_version =
-__ATTR(version, S_IRUGO|S_IWUSR, device_version_show, NULL);
+__ATTR(id, S_IRUGO|S_IWUSR, device_version_show, NULL);
+
+static struct castle_sysfs_entry device_id =
+__ATTR(version, S_IRUGO|S_IWUSR, device_id_show, NULL);
 
 static struct attribute *castle_device_attrs[] = {
+    &device_id.attr,
     &device_version.attr,
     NULL,
 };
@@ -597,6 +609,16 @@ static ssize_t transfers_number_show(struct kobject *kobj,
     return sprintf(buf, "%d\n", nr_transfers);
 }
 
+static ssize_t transfer_id_show(struct kobject *kobj, 
+						           struct attribute *attr, 
+                                   char *buf)
+{
+    struct castle_transfer *transfer = 
+                container_of(kobj, struct castle_transfer, kobj);
+
+    return sprintf(buf, "%d\n", transfer->id);
+}
+
 static ssize_t transfer_direction_show(struct kobject *kobj, 
 						           struct attribute *attr, 
                                    char *buf)
@@ -642,6 +664,9 @@ static struct kobj_type castle_transfers_ktype = {
 };
 
 /* Definition of each region sysfs directory attributes */
+static struct castle_sysfs_entry transfer_id =
+__ATTR(id, S_IRUGO|S_IWUSR, transfer_id_show, NULL);
+
 static struct castle_sysfs_entry transfer_version =
 __ATTR(direction, S_IRUGO|S_IWUSR, transfer_direction_show, NULL);
 
@@ -652,6 +677,7 @@ static struct castle_sysfs_entry transfer_progress =
 __ATTR(progress, S_IRUGO|S_IWUSR, transfer_progress_show, NULL);
 
 static struct attribute *castle_transfer_attrs[] = {
+    &transfer_id.attr,
     &transfer_version.attr,
     &transfer_direction.attr,
     &transfer_progress.attr,
