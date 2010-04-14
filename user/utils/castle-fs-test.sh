@@ -78,6 +78,7 @@ function check_contents {
 		echo "   Got '${READ}', correct."
 	else
 		echo "   Got '${READ}', INCORRECT!"
+        exit 1
 	fi
 }
 
