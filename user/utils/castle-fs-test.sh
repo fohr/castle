@@ -32,7 +32,7 @@ function dev_to_majmin {
         local LOOP_NR=`echo $DEV | sed -e 's#/dev/loop\(.*\)#\1#g'`
         local MAJMIN=`cat /proc/partitions | grep "loop${LOOP_NR}$" | awk '{print ( $1":"$2) }'`
     elif [ "x`echo $DEV | grep castle`" != "x" ]; then
-        local CASTLE_NR=`echo $DEV | sed -e 's#/dev/castle-fs/castle-\(.*\)#\1#g'`
+        local CASTLE_NR=`echo $DEV | sed -e 's#/dev/castle-fs/castle-fs-\(.*\)#\1#g'`
         local MAJMIN=`cat /proc/partitions | grep "castle-fs-${CASTLE_NR}$" | awk '{print ( $1":"$2) }'`
     elif [ "x`echo $DEV | grep hd`" != "x" ]; then
         local HD=`echo $DEV | sed -e 's#/dev/hd\(.\)#hd\1#g'`
@@ -55,7 +55,7 @@ function majmin_to_dev {
     if [ $MAJ == 7 ]; then
         DEV="/dev/loop$MIN"
     elif [ "x`grep "252 *castle" /proc/devices`" != "x" ]; then
-        DEV="/dev/castle-fs/castle-$MIN"
+        DEV="/dev/castle-fs/castle-fs-$MIN"
     else
         echo "Script does not support devs with major: $MAJ"
         false
@@ -329,10 +329,10 @@ function print_volume_summary {
     local TARGET=${2}
     RESULT=0
     for dir in `ls /sys/fs/castle-fs/slaves/`; do 
-        if [[ $dir == slave* ]]; then
+        if [[ "$dir" != "number" ]]; then
             count=`cat /sys/fs/castle-fs/slaves/$dir/block_cnts | grep ^${VOL} | cut -d" " -f 2`
             echo "        $dir: $count";
-            if [[ "$dir" == "slave${TARGET}" ]]; then
+            if [[ "$dir" == "${TARGET}" ]]; then
                 RESULT=$count
             fi
         fi

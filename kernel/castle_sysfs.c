@@ -47,7 +47,7 @@ static ssize_t versions_list_show(struct kobject *kobj,
     if((ret == 0) || (ret == -EAGAIN))
     {
         len = sprintf(buf,
-                "Id\tParentId\tLogicalSize\tIsLeaf\n%d\t%d\t%d\t%d\n",
+                "Id: %d\nParentId: %d\nLogicalSize: %d\nIsLeaf: %d\n",
                  v->version, parent, size, leaf);
         /* Put the version, if we 'attached' it */
         if(ret == 0) castle_version_snap_put(v->version);
@@ -384,7 +384,7 @@ int castle_sysfs_slave_add(struct castle_slave *slave)
     memset(&slave->kobj, 0, sizeof(struct kobject));
     slave->kobj.parent = &castle_slaves.kobj; 
     slave->kobj.ktype  = &castle_slave_ktype; 
-    ret = kobject_set_name(&slave->kobj, "slave%d", slave->id);
+    ret = kobject_set_name(&slave->kobj, "%d", slave->id);
     if(ret < 0) 
         return ret;
     ret = kobject_register(&slave->kobj);
@@ -438,7 +438,7 @@ int castle_sysfs_device_add(struct castle_device *device)
     memset(&device->kobj, 0, sizeof(struct kobject));
     device->kobj.parent = &castle_devices.kobj; 
     device->kobj.ktype  = &castle_device_ktype; 
-    ret = kobject_set_name(&device->kobj, "castle-%d", device->gd->first_minor);
+    ret = kobject_set_name(&device->kobj, "%d", device->gd->first_minor);
     if(ret < 0) 
         return ret;
     ret = kobject_register(&device->kobj);

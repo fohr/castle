@@ -1,3 +1,4 @@
 KERNEL=="castle-fs-control", NAME="castle-fs/control"
-KERNEL=="castle-fs-[0-9]*", NAME="castle-fs/castle-%n"
+KERNEL=="castle-fs-[0-9]*", NAME="castle-fs/castle-fs-%n"
 SUBSYSTEM=="fs", ACTION=="change", DEVPATH=="/fs/castle-fs", ENV{NOTIFY}=="false", RUN+="/etc/castle-fs/udev-watch $env{CMD} $env{ARG1} $env{ARG2} $env{ARG3} $env{ARG4}"
+SUBSYSTEM=="fs", ACTION=="change", DEVPATH=="/fs/castle-fs", ENV{NOTIFY}=="false", RUN+="/etc/castle/event $env{CMD} $env{ARG1} $env{ARG2} $env{ARG3} $env{ARG4}"
