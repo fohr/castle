@@ -59,14 +59,14 @@ struct castle_fs_superblock {
 
 #define NODE_HEADER           0x180
 
-#define FTREE_SLOT_LEAF       0x1
-#define FTREE_SLOT_NODE       0x2
-#define FTREE_SLOT_NODE_LAST  0x3
-#define FTREE_SLOT_IS_NODE(_slot)       (((_slot)->type == FTREE_SLOT_NODE) || \
-                                         ((_slot)->type == FTREE_SLOT_NODE_LAST))
-#define FTREE_SLOT_IS_NODE_LAST(_slot)   ((_slot)->type == FTREE_SLOT_NODE_LAST)
-#define FTREE_SLOT_IS_LEAF(_slot)        ((_slot)->type == FTREE_SLOT_LEAF) 
-
+#define FTREE_SLOT_LEAF_VAL   0x1
+#define FTREE_SLOT_LEAF_PTR   0x2
+#define FTREE_SLOT_NODE       0x3
+#define FTREE_SLOT_IS_NODE(_slot)        ((_slot)->type == FTREE_SLOT_NODE)
+#define FTREE_SLOT_IS_LEAF_VAL(_slot)    ((_slot)->type == FTREE_SLOT_LEAF_VAL) 
+#define FTREE_SLOT_IS_LEAF_PTR(_slot)    ((_slot)->type == FTREE_SLOT_LEAF_PTR) 
+#define FTREE_SLOT_IS_ANY_LEAF(_slot)   (((_slot)->type == FTREE_SLOT_LEAF_VAL) ||  \
+                                         ((_slot)->type == FTREE_SLOT_LEAF_PTR))
 #define FTREE_NODE_IS_LEAF(_node)        ((_node)->is_leaf)
 
 #define INVAL_BLK          ((uint32_t)-1)
@@ -74,7 +74,7 @@ struct castle_fs_superblock {
 #define BLK_INVAL(_blk)    ((_blk) == INVAL_BLK)
 
 struct castle_ftree_slot {
-    uint32_t     type;
+    uint8_t      type;
     uint32_t     block;
     uint32_t     version;
     c_disk_blk_t cdb;

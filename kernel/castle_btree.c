@@ -59,13 +59,8 @@ static void castle_ftree_io_end(c_bvec_t *c_bvec,
 
 static void castle_ftree_slot_normalize(struct castle_ftree_slot *slot)
 {
-    /* Look for 'last' slot, and if block is zero, assign the maximum value instead */
-    if(FTREE_SLOT_IS_NODE_LAST(slot) &&
-       (slot->block == 0))
-    {
-        slot->type  = FTREE_SLOT_NODE;
-        slot->block = MAX_BLK;
-    }
+    /* Does anything have to be done when the node is read off the disk? */
+    /* It should go here */
 }
 
 static int castle_ftree_node_normalize(struct castle_ftree_node *node)
@@ -81,14 +76,14 @@ static int castle_ftree_node_normalize(struct castle_ftree_node *node)
         return -EIO;
     }
     /* There is at least one slot in the node */ 
-    node->is_leaf = FTREE_SLOT_IS_LEAF(&node->slots[0]);
+    node->is_leaf = FTREE_SLOT_IS_ANY_LEAF(&node->slots[0]);
 
     for(i=0; i < node->used; i++)
     {
         struct castle_ftree_slot *slot = &node->slots[i];
         /* Fail if node is_leaf doesn't match with the slot. ! needed 
            to guarantee canonical value for boolean true */
-        if(!(node->is_leaf) != !(FTREE_SLOT_IS_LEAF(slot)))
+        if(!(node->is_leaf) != !(FTREE_SLOT_IS_ANY_LEAF(slot)))
             return -EIO;
         castle_ftree_slot_normalize(slot);
     }
@@ -262,14 +257,15 @@ c2_page_t* castle_ftree_node_create(int version, int is_leaf)
     return c2p;
 }
 
-static c2_page_t* castle_ftree_effective_node_create(struct castle_ftree_node *node,
+static c2_page_t* castle_ftree_effective_node_create(c2_page_t *orig_c2p,
                                                      uint32_t version)
 {
-    c2_page_t *c2p;
-    struct castle_ftree_node *eff_node;
+    struct castle_ftree_node *node, *eff_node;
     struct castle_ftree_slot *last_eff_slot, *slot;
+    c2_page_t *c2p;
     int i;
 
+    node = c2p_bnode(orig_c2p); 
     c2p = castle_ftree_node_create(version, node->is_leaf);
     eff_node = pfn_to_kaddr(page_to_pfn(c2p->page));
 
@@ -300,9 +296,22 @@ static c2_page_t* castle_ftree_effective_node_create(struct castle_ftree_node *n
             BUG_ON(!castle_version_is_ancestor(last_eff_slot->version, 
                                                slot->version));
         }
-        memcpy(last_eff_slot,
-               slot,
-               sizeof(struct castle_ftree_slot)); 
+        
+        if(FTREE_SLOT_IS_LEAF_PTR(slot))
+        {
+            /* If already a leaf pointer, copy directly. */
+            memcpy(last_eff_slot,
+                   slot,
+                   sizeof(struct castle_ftree_slot)); 
+        } else
+        {
+            /* Otherwise construct a new leaf pointer. */
+            last_eff_slot->type    = FTREE_SLOT_LEAF_PTR;
+            last_eff_slot->block   = slot->block; 
+            last_eff_slot->version = slot->version; 
+            /* CDB of the block we are splitting from */
+            last_eff_slot->cdb     = orig_c2p->cdb; 
+        }
     }
 
     /* If effective node is the same size as the original node, throw it away,
@@ -352,36 +361,46 @@ static c2_page_t* castle_ftree_node_key_split(c2_page_t *orig_c2p)
 
 static void castle_ftree_slot_insert(c2_page_t *c2p,
                                      int index,
-                                     uint32_t type,
+                                     uint8_t type,
                                      uint32_t block,
                                      uint32_t version,
                                      c_disk_blk_t cdb)
 {
     struct castle_ftree_node *node = pfn_to_kaddr(page_to_pfn(c2p->page));
-    version_t slot_version = index > 0 ? node->slots[index-1].version : INVAL_VERSION;
-    block_t   slot_block   = index > 0 ? node->slots[index-1].block   : INVAL_BLOCK;
+    /* TODO: Check that that 'index-1' is really always correct! */
+    struct castle_ftree_slot *left_slot = (index > 0 ? &node->slots[index-1] : NULL);
+    version_t left_version = (left_slot ? left_slot->version : INVAL_VERSION);
+    block_t   left_block   = (left_slot ? left_slot->block   : INVAL_BLOCK);
     struct castle_ftree_slot *slot;
 
     BUG_ON(index      >  node->used);
     BUG_ON(node->used >= node->capacity);
     
-    /* Special case:
+    /* Special case. Newly inserted block may make another entry unreachable.
+       This would cause problems with future splits. And therefore unreachable
+       entry has to be replaced by the new one.
+       The potentially unreachable entry is neccessarily just to the left. 
+       It will stop being reachable if:
        - blocks match
-       - version to insert descendant from the slot_version (and different)
-       - the slot_version is older than the node version
+       - version to insert descendant from the left_version (and different)
+       - version to insert the same as the node version
       If all of the above true, replace rather than insert */ 
-    if((slot_block   == block) &&
-       (slot_version != version) &&
-        castle_version_is_ancestor(slot_version, version) &&
-        slot_version != node->version)
+    if((left_block   == block) &&
+       (left_version != version) &&
+        castle_version_is_ancestor(left_version, version) &&
+       (version == node->version))
     {
-        printk("==> Replacing is_leaf=%d!\n", node->is_leaf);
-        printk("==> What if this removes an non-leaf pointer??\n");
-        printk("==> Actually, this should never be non-leaf pointer, beacuse.\n");
-        printk("==> it will only happen after version split.\n");
-        printk("==> BUG otherwise.\n");
-        node->slots[index].version = version;
-        node->slots[index].cdb = cdb;
+        /* The element we are replacing MUST be a leaf pointer, 
+           because left_version is strictly ancestoral to the node version.
+           It implies that the block hasn't been insterted here, because 
+           blocks are only inserted to weakly ancestoral nodes */
+        BUG_ON(!FTREE_SLOT_IS_LEAF_PTR(left_slot));
+        /* Replace the slot */
+        left_slot->type    = FTREE_SLOT_LEAF_VAL;
+        /* We've already checked it just above, but the block #s must match */
+        BUG_ON(left_slot->block != block);
+        left_slot->version = version;
+        left_slot->cdb     = cdb;
         dirty_c2p(c2p);
         return;
     }
@@ -429,8 +448,10 @@ static void castle_ftree_node_under_key_insert(c2_page_t *parent_c2p,
                      = pfn_to_kaddr(page_to_pfn(parent_c2p->page));
     int insert_idx;
 
+    BUG_ON(BLOCK_INVAL(block));
     castle_ftree_lub_find(parent, block, version, NULL, &insert_idx);
-    debug("Inserting child node into parent (cap=0x%x, use=0x%x), will insert (b,v)=(0x%x, 0x%x) at idx=%d.\n",
+    debug("Inserting child node into parent (cap=0x%x, use=0x%x), "
+          "will insert (b,v)=(0x%x, 0x%x) at idx=%d.\n",
             parent->capacity, parent->used, block, version, insert_idx);
     castle_ftree_slot_insert(parent_c2p, 
                              insert_idx, 
@@ -490,7 +511,7 @@ static int castle_ftree_node_split(c_bvec_t *c_bvec)
     retain_c2p = c_bvec->btree_node;
 
     /* Create the effective node */
-    eff_c2p = castle_ftree_effective_node_create(node, version);
+    eff_c2p = castle_ftree_effective_node_create(retain_c2p, version);
     if(eff_c2p)
     {
         debug("Effective node NOT identical to the original node.\n");
@@ -659,9 +680,13 @@ static void castle_ftree_write_process(c_bvec_t *c_bvec)
 
     /* Check if the node needs to be split first. 
        A leaf node only needs to be split if there are _no_ empty slots in it.
-       Internal nodes, if there are less than 2 free slots in them. */ 
-    if((FTREE_NODE_IS_LEAF(node) && (node->capacity == node->used)) ||
-      (!FTREE_NODE_IS_LEAF(node) && (node->capacity - node->used < 2)))
+       Internal nodes, if there are less than 2 free slots in them. 
+       The exception is, if we got here following a leaf pointer. If that's the
+       case, we know that we'll be updating in place.
+     */ 
+    if(!BLOCK_INVAL(c_bvec->key_block) &&
+       ((FTREE_NODE_IS_LEAF(node) && (node->capacity == node->used)) ||
+       (!FTREE_NODE_IS_LEAF(node) && (node->capacity - node->used < 2))))
     {
         debug("===> Splitting node: leaf=%d, cap,use=(%d,%d)\n",
                 node->is_leaf, node->capacity, node->used);
@@ -685,6 +710,7 @@ static void castle_ftree_write_process(c_bvec_t *c_bvec)
     {
         /* We should always find the LUB if we are not looking at a leaf node */
         BUG_ON(lub_idx < 0);
+        BUG_ON(BLOCK_INVAL(c_bvec->key_block));
         lub_slot = &node->slots[lub_idx];
         debug("Following write down the tree.\n");
         __castle_ftree_find(c_bvec, lub_slot->cdb, lub_slot->block);
@@ -704,10 +730,11 @@ static void castle_ftree_write_process(c_bvec_t *c_bvec)
         debug("Need to insert (0x%x, 0x%x) into node (used: 0x%x, capacity: 0x%x, leaf=%d).\n",
                 block, version,
                 node->used, node->capacity, FTREE_NODE_IS_LEAF(node));
+        BUG_ON(BLOCK_INVAL(c_bvec->key_block));
         BUG_ON(castle_ftree_write_idx_find(c_bvec) != insert_idx);
         castle_ftree_slot_insert(c_bvec->btree_node,
                                  insert_idx,
-                                 FTREE_SLOT_LEAF,
+                                 FTREE_SLOT_LEAF_VAL,
                                  block,
                                  version,
                                  cdb);
@@ -716,10 +743,19 @@ static void castle_ftree_write_process(c_bvec_t *c_bvec)
         return;
     } 
     
-    /* Final case: (b,v) found in the leaf node */
+    /* Final case: (b,v) found in the leaf node. */
     BUG_ON((lub_slot->block != block) || (lub_slot->version != version));
     BUG_ON(lub_idx != insert_idx);
     BUG_ON(castle_ftree_write_idx_find(c_bvec) != insert_idx);
+
+    /* If we are looking at the leaf pointer, follow it */
+    if(FTREE_SLOT_IS_LEAF_PTR(lub_slot))
+    {
+        debug("Following a leaf pointer to (0x%x, 0x%x).\n", 
+                lub_slot->cdb.disk, lub_slot->cdb.block);
+        __castle_ftree_find(c_bvec, lub_slot->cdb, INVAL_BLOCK);
+        return;
+    }
 
     debug("Block already exists, modifying in place.\n");
     castle_ftree_io_end(c_bvec, lub_slot->cdb, 0);
@@ -750,11 +786,10 @@ static void castle_ftree_read_process(c_bvec_t *c_bvec)
 
     slot = &node->slots[lub_idx];
     /* If we found the LUB, either complete the ftree walk (if we are looking 
-       at a leaf), or go to the next level */
-    if(FTREE_SLOT_IS_LEAF(slot))
+       at a 'proper' leaf), or go to the next level (possibly follow a leaf ptr) */
+    if(FTREE_SLOT_IS_LEAF_VAL(slot))
     {
-        debug(" Is a leaf, found (b,v)=(0x%x, 0x%x)\n", 
-            slot->block, slot->version);
+        debug(" Is a leaf, found (b,v)=(0x%x, 0x%x)\n", slot->block, slot->version);
         if(slot->block == block)
             castle_ftree_io_end(c_bvec, slot->cdb, 0);
         else
@@ -762,9 +797,11 @@ static void castle_ftree_read_process(c_bvec_t *c_bvec)
     }
     else
     {
-        debug("Is not a leaf. Read and search (disk,blk#)=(0x%x, 0x%x)\n",
+        debug("Not a leaf, or a leaf ptr. Read and search (disk,blk#)=(0x%x, 0x%x)\n",
                 slot->cdb.disk, slot->cdb.block);
-        __castle_ftree_find(c_bvec, slot->cdb, slot->block);
+        /* key_block is not needed when reading (also, we might be looking at a leaf ptr)
+           use INVAL_BLOCK instead. */
+        __castle_ftree_find(c_bvec, slot->cdb, INVAL_BLOCK);
     }
 }
 
