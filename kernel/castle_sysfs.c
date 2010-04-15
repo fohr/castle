@@ -288,7 +288,7 @@ static ssize_t device_id_show(struct kobject *kobj,
 {
     struct castle_device *device = container_of(kobj, struct castle_device, kobj); 
 
-    return sprintf(buf, "0x%x\n", device->gd->first_minor);
+    return sprintf(buf, "%d\n", new_encode_dev(MKDEV(device->gd->major, device->gd->first_minor)));
 }
 
 static ssize_t castle_attr_show(struct kobject *kobj,
@@ -436,10 +436,10 @@ static struct kobj_type castle_devices_ktype = {
 
 /* Definition of each device sysfs directory attributes */
 static struct castle_sysfs_entry device_version =
-__ATTR(id, S_IRUGO|S_IWUSR, device_version_show, NULL);
+__ATTR(version, S_IRUGO|S_IWUSR, device_version_show, NULL);
 
 static struct castle_sysfs_entry device_id =
-__ATTR(version, S_IRUGO|S_IWUSR, device_id_show, NULL);
+__ATTR(id, S_IRUGO|S_IWUSR, device_id_show, NULL);
 
 static struct attribute *castle_device_attrs[] = {
     &device_id.attr,
@@ -459,7 +459,7 @@ int castle_sysfs_device_add(struct castle_device *device)
     memset(&device->kobj, 0, sizeof(struct kobject));
     device->kobj.parent = &castle_devices.kobj; 
     device->kobj.ktype  = &castle_device_ktype; 
-    ret = kobject_set_name(&device->kobj, "%d", device->gd->first_minor);
+    ret = kobject_set_name(&device->kobj, "%d", new_encode_dev(MKDEV(device->gd->major, device->gd->first_minor)));
     if(ret < 0) 
         return ret;
     ret = kobject_register(&device->kobj);
