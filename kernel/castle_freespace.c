@@ -127,7 +127,7 @@ ssize_t castle_freespace_summary_get(struct castle_slave *cs, char *buf)
     return offset;
 }
 
-ssize_t castle_freespace_blks_for_version_get(struct castle_slave *cs, version_t version)
+ssize_t castle_freespace_version_slave_blocks_get(struct castle_slave *cs, version_t version)
 {
     int hash_idx = (version % BLOCKS_HASH_SIZE);
     struct list_head *i, *h = &cs->block_cnts.hash[hash_idx];
@@ -142,6 +142,21 @@ ssize_t castle_freespace_blks_for_version_get(struct castle_slave *cs, version_t
     BUG_ON(!cnt);
     
     return cnt->cnt;
+}
+
+ssize_t castle_freespace_version_blocks_get(version_t version)
+{
+    struct list_head *l;
+    ssize_t cnt = 0;
+
+    list_for_each(l, &castle_slaves.slaves)
+    {
+        struct castle_slave *cs = list_entry(l, struct castle_slave, list);
+
+        cnt += castle_freespace_version_slave_blocks_get(cs, version);
+    }
+
+    return cnt;
 }
 
 static c2_page_t* castle_freespace_flist_alloc(struct castle_slave *cs,

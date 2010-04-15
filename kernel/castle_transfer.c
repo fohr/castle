@@ -282,7 +282,8 @@ static c_disk_blk_t castle_transfer_destination_get(struct castle_transfer *tran
             {
                 region = transfer->regions[i];
             
-                if (castle_freespace_blks_for_version_get(region->slave, region->version) >= region->length)
+                if (castle_freespace_version_slave_blocks_get(region->slave, region->version) >= 
+                    region->length)
                     continue;
             
                 /* this will update the summaries... */

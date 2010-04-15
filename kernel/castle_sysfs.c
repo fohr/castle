@@ -39,16 +39,25 @@ static ssize_t versions_list_show(struct kobject *kobj,
                 container_of(csys_entry, struct castle_sysfs_version, csys_entry);
     version_t parent;
     uint32_t size;
-    ssize_t len;
+    ssize_t len, phys_size;
     int leaf;
     int ret;
 
     ret = castle_version_snap_get(v->version, &parent, &size, &leaf);
     if((ret == 0) || (ret == -EAGAIN))
     {
+        phys_size = castle_freespace_version_blocks_get(v->version);
         len = sprintf(buf,
-                "Id: %d\nParentId: %d\nLogicalSize: %d\nIsLeaf: %d\n",
-                 v->version, parent, size, leaf);
+                "Id: %d\n"
+                "ParentId: %d\n"
+                "LogicalSize: %d\n"
+                "PhysicalSize: %ld\n"
+                "IsLeaf: %d\n",
+                 v->version, 
+                 parent, 
+                 size, 
+                 phys_size,
+                 leaf);
         /* Put the version, if we 'attached' it */
         if(ret == 0) castle_version_snap_put(v->version);
 
