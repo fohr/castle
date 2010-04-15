@@ -11,3 +11,5 @@ install:
 clean:
 	make -C kernel clean
 	make -C user clean
+
+bs-install: install
