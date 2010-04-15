@@ -184,7 +184,7 @@ typedef struct castle_bio_vec {
 #endif
 } c_bvec_t;
 #define c_bvec_data_dir(_c_bvec)    bio_data_dir((_c_bvec)->c_bio->bio)
-#define c2p_bnode(_c2p)             pfn_to_kaddr(page_to_pfn((_c2p)->page))
+#define c2p_bnode(_c2p)           ((struct castle_ftree_node *)pfn_to_kaddr(page_to_pfn((_c2p)->page)))
 #define c_bvec_bnode(_c_bvec)       c2p_bnode((_c_bvec)->btree_node)
 #define c_bvec_bpnode(_c_bvec)      pfn_to_kaddr(page_to_pfn((_c_bvec)->btree_parent_node->page))
 
@@ -196,15 +196,30 @@ typedef struct castle_iterator {
     void                    (*node_end)  (struct castle_iterator *c_iter);
     void                    (*end)       (struct castle_iterator *c_iter, int err);
     void                     *private;
-
+                            
     block_t                   parent_vblk; /* The v_blk followed to get to the block 
                                               on the top of the path/stack */
     block_t                   next_vblk;   /* The next v_blk to look for in the interation 
-                                              (typically parent_vblk + 1 when at leafs) */
+                                               (typically parent_vblk + 1 when at leafs) */
 
     struct castle_cache_page *path[MAX_BTREE_DEPTH];
+    struct {
+        union {
+            struct {
+                struct castle_cache_page *c2p;      /* Cache page for an 'indirect' node */
+            };
+            struct {
+                c_disk_blk_t              cdb;      /* CDB from leaf pointer  */
+                uint8_t                   f_idx;    /* Index in the orig node */
+            };                            
+        };                                
+        struct {
+            uint8_t                       r_idx;    /* Index in indirect_nodes array */
+            uint8_t                       node_idx; /* Inder in the indirect node */ 
+        };
+    }                         indirect_nodes[FTREE_NODE_SLOTS];
     int                       depth;
-    
+                              
     int                       cancelled;
     int                       err;
     struct work_struct        work;
