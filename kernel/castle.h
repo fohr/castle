@@ -262,6 +262,7 @@ struct castle_slave {
     struct castle_cache_page       *fs_sblk;
     block_t                         free_blk;
     struct castle_slave_block_cnts  block_cnts;
+    unsigned long                   last_access;
 };
 
 struct castle_slaves {
@@ -350,6 +351,8 @@ void                  castle_release           (struct castle_slave *cs);
 struct castle_region* castle_region_find       (region_id_t id);
 struct castle_region* castle_region_create     (uint32_t slave_id, version_t version, uint32_t start, uint32_t length);
 void                  castle_region_destroy    (struct castle_region *region);
+
+void                  castle_slave_access      (uint32_t uuid);
 
 struct castle_slave*  castle_slave_find_by_id  (uint32_t id);
 struct castle_slave*  castle_slave_find_by_uuid(uint32_t uuid);

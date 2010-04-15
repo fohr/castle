@@ -6,6 +6,11 @@ void castle_uevent3(uint16_t cmd, uint64_t arg1, uint64_t arg2, uint64_t arg3);
 void castle_uevent2(uint16_t cmd, uint64_t arg1, uint64_t arg2);
 void castle_uevent1(uint16_t cmd, uint64_t arg1);
 
+/* Events which do not correspond to any particular command. Defined in 0x80+ range not
+   to overlap with IOCTL command ids. */
+#define CASTLE_EVENT_SPINUP   (128) 
+#define CASTLE_EVENT_SPINDOWN (129) 
+
 #define CASTLE_EVENTS_SUCCESS (0)
 
 #define castle_events_slave_claim(_slave_id) \
@@ -46,5 +51,13 @@ void castle_uevent1(uint16_t cmd, uint64_t arg1);
 
 #define castle_events_transfer_destroy(_transfer_id, _err) \
     castle_uevent3(CASTLE_CTRL_CMD_TRANSFER_DESTROY, CASTLE_EVENTS_SUCCESS, _transfer_id, _err)
+
+
+#define castle_events_spinup(_disk_id) \
+    castle_uevent1(CASTLE_EVENT_SPINUP, _disk_id)
+
+#define castle_events_spindown(_disk_id) \
+    castle_uevent1(CASTLE_EVENT_SPINDOWN, _disk_id)
+
 
 #endif /* __CASTLE_EVENTS_H__ */

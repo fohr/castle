@@ -320,6 +320,10 @@ static void castle_block_move_complete(struct work_struct *work)
     int index = info->index;
     int err = info->err;
 
+    /* Save last_access time in the slave */
+    castle_slave_access(src_cdb.disk);
+    castle_slave_access(dest_cdb.disk);
+
     kfree(info);
     if(!err)
     {
