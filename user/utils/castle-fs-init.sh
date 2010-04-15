@@ -182,6 +182,7 @@ function initfs {
 }
 
 ./castle-fs-fini.sh
+mkdir -p ${TEST} 
 for DISK in ${DISKS}; do
     if [ `echo "$DISK" | grep dev | wc -l` == 0 ]; then 
         echo "Creating backing file: $DISK"
