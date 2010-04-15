@@ -1,6 +1,3 @@
-/* TODO: work out what key should nodes be insterted under to get O(1) amortised writes */
-
-#include <linux/module.h>
 #include <linux/workqueue.h>
 #include <linux/fs.h>
 #include <linux/bio.h>
@@ -995,35 +992,66 @@ static void castle_ftree_iter_end(c_iter_t *c_iter, int err)
         c_iter->end(c_iter, err);
 }
 
+#define indirect_node(_i)      (c_iter->indirect_nodes[(_i)]) 
+#define cdb_lt(_cdb1, _cdb2) ( ((_cdb1).disk  < (_cdb2).disk ) ||            \
+                              (((_cdb1).disk == (_cdb2).disk ) &&            \
+                               ((_cdb1).block < (_cdb2).block)) )           
+#define c2p_follow_ptr(_i)     indirect_node(indirect_node(_i).r_idx).c2p
+
+#define slot_follow_ptr(_i, _real_c2p, _real_slot)                           \
+({                                                                           \
+    struct castle_ftree_node *_n;                                            \
+                                                                             \
+    (_real_c2p)  = c_iter->path[c_iter->depth];                              \
+    _n           = c2p_bnode(_real_c2p);                                     \
+    (_real_slot) = &_n->slots[_i];                                           \
+    if(FTREE_SLOT_IS_LEAF_PTR(_real_slot))                                   \
+    {                                                                        \
+        (_real_c2p)  = c2p_follow_ptr(_i);                                   \
+        _n           = c2p_bnode(_real_c2p);                                 \
+        (_real_slot) = &_n->slots[indirect_node(_i).node_idx];               \
+    }                                                                        \
+ })
+
 void castle_ftree_iter_replace(c_iter_t *c_iter, int index, c_disk_blk_t cdb)
 {
-    c2_page_t *leaf;
+    struct castle_ftree_slot *real_slot;
+    c2_page_t *real_c2p;
+#ifdef DEBUG    
     struct castle_ftree_node *node;
-    struct castle_ftree_slot *slot;
-
+    
     iter_debug("Version=0x%x, index=%d\n", c_iter->version, index);
 
-    leaf = c_iter->path[c_iter->depth];
-    BUG_ON(leaf == NULL);
+    real_c2p = c_iter->path[c_iter->depth];
+    BUG_ON(real_c2p == NULL);
     
-    node = c2p_bnode(leaf);
+    node = c2p_bnode(real_c2p);
     BUG_ON(!FTREE_NODE_IS_LEAF(node));
     BUG_ON(index >= node->used);
+#endif    
     
-    slot = &node->slots[index];
+    slot_follow_ptr(index, real_c2p, real_slot);
+    iter_debug("Current=(0x%x, 0x%x), new=(0x%x, 0x%x), "
+               "in btree node: (0x%x, 0x%x), index=%d\n", 
+                slot->cdb.disk, 
+                slot->cdb.block, 
+                cdb.disk, 
+                cdb.block, 
+                leaf->cdb.disk, 
+                leaf->cdb.block, 
+                index);
     
-    iter_debug("Current=(0x%x, 0x%x), new=(0x%x, 0x%x), in btree node: (0x%x, 0x%x), index=%d\n", slot->cdb.disk, slot->cdb.block, cdb.disk, cdb.block, leaf->cdb.disk, leaf->cdb.block, index);
-    
-    slot->cdb = cdb;
-    dirty_c2p(leaf);
+    real_slot->cdb = cdb;
+    dirty_c2p(real_c2p);
 }
 
 static void __castle_ftree_iter_start(c_iter_t *c_iter);
 
 void castle_ftree_iter_continue(c_iter_t *c_iter)
 {
-    c2_page_t *leaf; 
     struct castle_ftree_node *node;
+    c2_page_t *leaf; 
+    int i;
 
     iter_debug("Continuing.\n");
     leaf = c_iter->path[c_iter->depth];
@@ -1032,6 +1060,16 @@ void castle_ftree_iter_continue(c_iter_t *c_iter)
     node = c2p_bnode(leaf);
     BUG_ON(!FTREE_NODE_IS_LEAF(node));
     
+    /* Unlock all the indirect nodes. */
+    for(i=FTREE_NODE_SLOTS-1; i>=0; i--)
+    {
+        if(indirect_node(i).c2p)
+        {
+            unlock_c2p(indirect_node(i).c2p);
+            put_c2p(indirect_node(i).c2p);
+            indirect_node(i).c2p = NULL;
+        }
+    }
     iter_debug("Unlocking cdb=(0x%x, 0x%x)\n", 
         leaf->cdb.disk, leaf->cdb.block);
     unlock_c2p(leaf);
@@ -1039,12 +1077,146 @@ void castle_ftree_iter_continue(c_iter_t *c_iter)
     castle_ftree_iter_start(c_iter);
 }
 
-static void castle_ftree_iter_leaf_process(c_iter_t *c_iter)
+static void castle_ftree_iter_leaf_ptrs_sort(c_iter_t *c_iter, int nr_ptrs)
 {
-    c2_page_t *leaf; 
+    int i, root, child, start, end, last_r_idx;
+    c_disk_blk_t last_cdb;
+
+    /* We use heapsort, using Wikipedia's pseudo-code as the reference */
+#define swap(_i, _j)                                                      \
+           {c_disk_blk_t tmp_cdb;                                         \
+            uint8_t      tmp_f_idx;                                       \
+            tmp_cdb   = indirect_node(_i).cdb;                            \
+            tmp_f_idx = indirect_node(_i).f_idx;                          \
+            indirect_node(_i).cdb   = indirect_node(_j).cdb;              \
+            indirect_node(_i).f_idx = indirect_node(_j).f_idx;            \
+            indirect_node(_j).cdb   = tmp_cdb;                            \
+            indirect_node(_j).f_idx = tmp_f_idx;}
+    
+#define sift_down(_start, _end)                                           \
+   {root = (_start);                                                      \
+    while((2*root + 1) <= (_end))                                         \
+    {                                                                     \
+        child = 2 * root + 1;                                             \
+        if((child < (_end)) &&                                            \
+            cdb_lt(indirect_node(child).cdb, indirect_node(child+1).cdb)) \
+                child = child+1;                                          \
+        if(cdb_lt(indirect_node(root).cdb, indirect_node(child).cdb))     \
+        {                                                                 \
+            swap(root, child)                                             \
+            root = child;                                                 \
+        } else                                                            \
+        {                                                                 \
+            break;                                                        \
+        }                                                                 \
+    }}
+
+    /* Arrange the array into a heap */
+    for(start = (nr_ptrs - 2)/2; start >= 0; start--)
+        sift_down(start, nr_ptrs-1);
+
+    /* Sort */ 
+    for(end=nr_ptrs-1; end > 0; end--)
+    {
+        swap(end, 0);
+        sift_down(0, end-1);
+    }
+
+    /* Create the reverse map. Also, remove duplicate cdbs from the array */
+    last_cdb   = INVAL_DISK_BLK;
+    last_r_idx = -1;
+    for(i=0; i < nr_ptrs; i++)
+    {
+        if(DISK_BLK_EQUAL(indirect_node(i).cdb, last_cdb))
+        {
+            BUG_ON(last_r_idx < 0);
+            indirect_node(indirect_node(i).f_idx).r_idx = last_r_idx;
+            indirect_node(i).cdb = INVAL_DISK_BLK;
+        } else
+        {
+            indirect_node(indirect_node(i).f_idx).r_idx = i;
+            last_cdb   = indirect_node(i).cdb;
+            last_r_idx = i;
+        }
+    }
+}
+
+static void castle_ftree_iter_leaf_ptrs_lock(c_iter_t *c_iter)
+{
     struct castle_ftree_node *node;
     struct castle_ftree_slot *slot;
-    int index = 0;
+    c2_page_t *c2p;
+    int i, j, nr_ptrs;
+
+    node = c2p_bnode(c_iter->path[c_iter->depth]);
+    /* Make sure that node->used is smaller than what we can index in 1 byte f/r_idx */
+    BUG_ON(node->used >= 256);
+    
+    /* Find all leaf pointers */
+    j=0;
+    for(i=0; i<node->used; i++)
+    {
+        slot = &node->slots[i];
+        if(slot->version != c_iter->version)
+            continue;
+        if(FTREE_SLOT_IS_LEAF_PTR(slot))
+        {
+            BUG_ON(indirect_node(j).c2p);
+            indirect_node(j).cdb   = slot->cdb;
+            indirect_node(j).f_idx = i;
+            j++;
+        }
+    }
+    nr_ptrs = j;
+
+    /* Sort the pointers on cdb ordering */
+    castle_ftree_iter_leaf_ptrs_sort(c_iter, nr_ptrs);
+
+    /* Now that leafs have been sorted, lock them all */
+    for(i=0; i<nr_ptrs; i++)
+    {
+        c_disk_blk_t cdb = indirect_node(i).cdb;
+        /* Skip over the invalid (previously duplicated) blocks */
+        if(DISK_BLK_INVAL(cdb))
+        {
+            indirect_node(i).c2p = NULL; 
+            continue;
+        }
+        c2p = castle_cache_page_get(cdb);
+        lock_c2p(c2p);
+        indirect_node(i).c2p = c2p; 
+    }
+    /* Finally, find out where in the indirect block the individual ptrs are */
+    for(i=0; i<FTREE_NODE_SLOTS; i++)
+        indirect_node(i).node_idx = -1;
+    for(i=0; i<node->used; i++)
+    {
+        slot = &node->slots[i];
+        if(slot->version != c_iter->version)
+            continue;
+        if(FTREE_SLOT_IS_LEAF_PTR(slot))
+        {
+            int lub_idx;
+
+            castle_ftree_lub_find(c2p_bnode(c2p_follow_ptr(i)), 
+                                  slot->block, 
+                                  slot->version, 
+                                 &lub_idx, 
+                                  NULL);
+            /* Check that we _really_ found the right entry in the indirect node */
+            BUG_ON((c2p_bnode(c2p)->slots[lub_idx].block   != slot->block) ||
+                   (c2p_bnode(c2p)->slots[lub_idx].version != slot->version));
+            indirect_node(i).node_idx = lub_idx;
+        }
+    }
+}
+
+static void castle_ftree_iter_leaf_process(c_iter_t *c_iter)
+{
+    struct castle_ftree_node *node;
+    struct castle_ftree_slot *slot, *real_slot;
+    c2_page_t *leaf; 
+    int i;
     
     leaf = c_iter->path[c_iter->depth];
     BUG_ON(leaf == NULL);
@@ -1059,20 +1231,25 @@ static void castle_ftree_iter_leaf_process(c_iter_t *c_iter)
 
     if (c_iter->node_start != NULL) 
         c_iter->node_start(c_iter);
+    
+    castle_ftree_iter_leaf_ptrs_lock(c_iter);
 
-    while (index < node->used)
+    for(i=0; i<node->used; i++)
     {
         if (c_iter->cancelled)
             break;
 
-        slot = &node->slots[index];
+        slot = &node->slots[i];
 
         iter_debug("Current slot: (b=0x%x, v=%x)->(cdb=0x%x, 0x%x)\n",
                 slot->block, slot->version, slot->cdb.disk, slot->cdb.block);
         if (slot->version == c_iter->version)
-            c_iter->each(c_iter, index, slot->cdb);
+        {
+            c2_page_t *c2p;
 
-        index++;
+            slot_follow_ptr(i, c2p, real_slot);
+            c_iter->each(c_iter, i, real_slot->cdb);
+        }
     }
 
     iter_debug("Done processing entries.\n");
@@ -1276,6 +1453,7 @@ void castle_ftree_iter_init(c_iter_t *c_iter, version_t version)
     c_iter->depth = -1;
     c_iter->err = 0;
     c_iter->cancelled = 0;
+    memset(c_iter->indirect_nodes, 0, sizeof(c_iter->indirect_nodes));
     memset(c_iter->path, 0, sizeof(c_iter->path));
 }
 
