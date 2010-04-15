@@ -18,7 +18,7 @@ void castle_uevent1(uint16_t cmd, uint64_t arg1);
     castle_uevent2(CASTLE_CTRL_CMD_RELEASE, CASTLE_EVENTS_SUCCESS, _slave_id)
 
 #define castle_events_device_attach(_maj, _min, _version_id) \
-    castle_uevent3(CASTLE_CTRL_CMD_ATTACH, CASTLE_EVENTS_SUCCESS, _version_id, new_encode_dev(MKDEV(_maj, _min)))
+    castle_uevent3(CASTLE_CTRL_CMD_ATTACH, CASTLE_EVENTS_SUCCESS, new_encode_dev(MKDEV(_maj, _min)), _version_id)
     
 #define castle_events_device_detach(_maj, _min) \
     castle_uevent2(CASTLE_CTRL_CMD_DETACH, CASTLE_EVENTS_SUCCESS, new_encode_dev(MKDEV(_maj, _min)))
