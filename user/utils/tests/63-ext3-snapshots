@@ -1,0 +1,26 @@
+echo
+echo "Now snapshot file system and mount old image..."
+
+RW_DEV=${DEV}
+do_control_snapshot ${DEV} 
+do_control_attach ${CURR_SNAP}
+RO_DEV=${DEV}
+
+mkdir -p ${MOUNT_POINT2}
+mount ${RO_DEV} ${MOUNT_POINT2} -o ro
+
+check_contents_file ${RANDOM_FILE} ${MOUNT_POINT2}/${RANDOM_FILE_ON_FS} ${RANDOM_FILE_SIZE}
+
+echo "Also remount RW volume.."
+mount ${RW_DEV} ${MOUNT_POINT}
+check_contents_file ${RANDOM_FILE} ${MOUNT_POINT}/${RANDOM_FILE_ON_FS} ${RANDOM_FILE_SIZE}
+
+echo "Overwrite the random file..."
+cp ${RANDOM_FILE2} ${MOUNT_POINT}/${RANDOM_FILE_ON_FS}
+check_contents_file ${RANDOM_FILE2} ${MOUNT_POINT}/${RANDOM_FILE_ON_FS} ${RANDOM_FILE_SIZE}
+
+echo "Check contents of file in RO snapshot unaffected..."
+check_contents_file ${RANDOM_FILE} ${MOUNT_POINT2}/${RANDOM_FILE_ON_FS} ${RANDOM_FILE_SIZE}
+
+umount ${MOUNT_POINT2}
+umount ${MOUNT_POINT}

@@ -1,0 +1,25 @@
+echo
+echo "Random file test..."
+
+RANDOM_FILE_SIZE=15 # in MB
+RANDOM_FILE=/tmp/some_random_file
+RANDOM_FILE_ON_FS=some_random_file
+RANDOM_FILE2=/tmp/another_random_file
+
+dd if=/dev/urandom of=${RANDOM_FILE}  bs=1M count=$RANDOM_FILE_SIZE &>/dev/null
+dd if=/dev/urandom of=${RANDOM_FILE2} bs=1M count=$RANDOM_FILE_SIZE &>/dev/null
+echo "  Files created"
+
+cp ${RANDOM_FILE} ${MOUNT_POINT}/${RANDOM_FILE_ON_FS}
+echo "  Random file copied to the fs"
+
+check_contents_file ${RANDOM_FILE} ${MOUNT_POINT}/${RANDOM_FILE_ON_FS} ${RANDOM_FILE_SIZE}
+umount ${MOUNT_POINT}
+echo "  Restarting the fs"
+umount_fs
+init_fs
+
+do_control_attach ${CURR_SNAP} 
+mount ${DEV} ${MOUNT_POINT}
+check_contents_file ${RANDOM_FILE} ${MOUNT_POINT}/${RANDOM_FILE_ON_FS} ${RANDOM_FILE_SIZE}
+umount ${MOUNT_POINT}

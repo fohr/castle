@@ -1,0 +1,242 @@
+. CONFIG
+
+set -eu
+
+function umount_fs {
+    if [ `lsmod | grep "castle_fs " | wc -l` != 0 ]; then 
+        rmmod castle_fs
+    fi
+    # Delete the disk loop files
+    for LOOP in `losetup -a | cut -d":" -f1`; do
+        LOOP_FILE=`losetup ${LOOP} | cut -d"(" -f2 | cut -d")" -f1 | xargs basename`
+        if [ `echo ${DISKS} | grep ${LOOP_FILE} | wc -l` != 0 ]; then
+            echo "Deleting loop: ${LOOP} (${LOOP_FILE})"
+            losetup -d $LOOP
+        fi
+    done
+}
+
+function onexit() {
+	local exit_status=${1:-$?}
+    umount ${MOUNT_POINT} 2>/dev/null  || true
+    umount ${MOUNT_POINT2} 2>/dev/null || true
+    if [ $exit_status != 0 ]; then
+        echo "FAILED THE TEST. EXIT STATUS: $exit_status."
+        umount_fs
+    fi
+    exit $exit_status
+}
+
+trap onexit EXIT
+
+function dev_to_majmin {
+    local DEV=$1
+    # We only handle loop and castle and hdX devices here 
+    if [ "x`echo $DEV | grep loop`" != "x" ]; then
+        local LOOP_NR=`echo $DEV | sed -e 's#/dev/loop\(.*\)#\1#g'`
+        local MAJMIN=`cat /proc/partitions | grep "loop${LOOP_NR}$" | awk '{print ( $1":"$2) }'`
+    elif [ "x`echo $DEV | grep castle`" != "x" ]; then
+        local CASTLE_NR=`echo $DEV | sed -e 's#/dev/castle-fs/castle-fs-\(.*\)#\1#g'`
+        local MAJMIN=`cat /proc/partitions | grep "castle-fs-${CASTLE_NR}$" | awk '{print ( $1":"$2) }'`
+    elif [ "x`echo $DEV | grep hd`" != "x" ]; then
+        local HD=`echo $DEV | sed -e 's#/dev/hd\(.\)#hd\1#g'`
+        local MAJMIN=`cat /proc/partitions | grep "${HD}$" | awk '{print ( $1":"$2) }'`
+    else
+        echo "Could not dev_to_majmin for dev: $DEV"
+        false
+    fi
+    local MAJ=`echo $MAJMIN | cut -d":" -f1`
+    local MIN=`echo $MAJMIN | cut -d":" -f2`
+    local DEVID=$(( ($MIN & 0xFF) | ( ($MIN & 0xFFF00) << 12 ) | ($MAJ << 8) ))
+    DEVID_HEX=`printf "%X" $DEVID`
+}
+
+function majmin_to_dev {
+    local MAJMIN=`printf "%d" 0x$1`
+    local MAJ=$(( ($MAJMIN >> 8) & 0xFFF ))
+    local MIN=$(( ($MAJMIN & 0xFF) | (( $MAJMIN >> 12 ) & 0xFFF00 ) ))
+    # At the moment we only handle loop and castle devices
+    if [ $MAJ == 7 ]; then
+        DEV="/dev/loop$MIN"
+    elif [ "x`grep "252 *castle" /proc/devices`" != "x" ]; then
+        DEV="/dev/castle-fs/castle-fs-$MIN"
+    else
+        echo "Script does not support devs with major: $MAJ"
+        false
+    fi
+}
+
+function write_phrase {
+	local filename="$1"
+	local phrase="$2"
+	
+    echo -n "${phrase}" | dd of=$filename 2> /dev/null
+}
+
+function check_contents {
+	local filename="$1"
+	local phrase="$2"
+	
+	READ=`dd if=${filename} 2> /dev/null`
+	if [ "${READ}" == "${phrase}" ]; then
+		echo "   Got '${READ}', correct."
+	else
+		echo "   Got '${READ}', INCORRECT!"
+        exit 1
+	fi
+}
+
+function check_contents_file {
+	local file1="$1"
+	local file2="$2"
+	local size="$3"
+	
+	local CHK1=`dd if=${file1} bs=4k count=${size} 2>/dev/null | md5sum -b -`
+	local CHK2=`dd if=${file2} bs=4k count=${size} 2>/dev/null | md5sum -b -`
+    #echo "==> Comparing ${file1} with ${file2} (${size} blocks)"
+    #echo "    ${file1}"
+	#dd if=${file1} 2>/dev/null | hexdump -C
+    #echo "    ${file2}"
+	#dd if=${file2} 2>/dev/null | hexdump -C 
+
+	if [ "${CHK1}" == "${CHK2}" ]; then
+		echo "   Files ${file1} and ${file2} match"
+	else
+		echo "	FAILED content check for ${file1} & ${file2}"
+        exit 1
+	fi
+}
+
+function do_control_internal {
+	echo -n "   Command: $1 0x$2"
+	IOCTL_RET=`castle-fs-cli $1 0x$2 | grep "Ret val:"` 
+	IOCTL_RET=`echo $IOCTL_RET | sed -e "s/Ret val: 0x\([0-9a-f]*\)./\1/g"`
+	echo "    ret: $IOCTL_RET"
+}
+
+function do_control_internal2 {
+	echo -n "   Command: $1 0x$2 0x$3"
+	IOCTL_RET=`castle-fs-cli $1 0x$2 0x$3 | grep "Ret val:"` 
+	IOCTL_RET=`echo $IOCTL_RET | sed -e "s/Ret val: 0x\([0-9a-f]*\)./\1/g"`
+	echo "    ret: $IOCTL_RET"
+}
+
+function do_control_internal4 {
+	echo -n "   Command: $1 0x$2 0x$3 0x$4 0x$5"
+	IOCTL_RET=`castle-fs-cli $1 0x$2 0x$3 0x$4 0x$5 | grep "Ret val:"` 
+	IOCTL_RET=`echo $IOCTL_RET | sed -e "s/Ret val: 0x\([0-9a-f]*\)./\1/g"`
+	echo "    ret: $IOCTL_RET"
+}
+
+function do_control_claim {
+    local FILE=$1
+    if [ `echo "${FILE}" | grep "/dev" | wc -l` == 0 ]; then
+        local LOOP=`losetup -f`
+        losetup $LOOP ${TEST}/${FILE}
+        dev_to_majmin $LOOP
+    else
+        dev_to_majmin $FILE
+    fi
+    do_control_internal "claim" $DEVID_HEX
+}
+
+function do_control_init {
+    do_control_internal "init" 0
+}
+
+function do_control_create {
+    do_control_internal "create" `printf "%X" $1`
+    VOL_VER=$IOCTL_RET
+}
+
+function do_control_attach {
+    do_control_internal "attach" $1
+    majmin_to_dev $IOCTL_RET
+    # Wait up to 5 seconds for the file to appear, /dev/castle-fs has to be
+    # renamed by the udev, this is sometimes slow
+    for i in `seq 50`; do
+        if [ -e ${DEV} ]; then
+            break
+        fi
+        # Wait 0.1s
+        usleep 100000
+    done
+    if [ ! -e ${DEV} ]; then
+        echo "File ${DEV} was supposed to be attached, but doesn't exist"
+        exit 1
+    fi
+}
+
+function do_control_detach {
+    dev_to_majmin $1
+    do_control_internal "detach" $DEVID_HEX
+}
+
+function do_control_snapshot {
+    dev_to_majmin $1
+    do_control_internal "snapshot" $DEVID_HEX 
+    SNAP_VER=$IOCTL_RET
+}
+
+function do_control_clone {
+    do_control_internal "clone" $1
+    CLONE_VER=$IOCTL_RET
+}
+
+function do_control_region_create {
+    do_control_internal4 "region_create" `printf "%X" $1` `printf "%X" $2` `printf "%X" $3` `printf "%X" $4`
+    REGION_ID=`printf "%d" 0x$IOCTL_RET`
+}
+
+function do_control_region_destroy {
+    do_control_internal "region_destroy" `printf "%X" $1`
+}
+
+function do_control_transfer_create {
+    do_control_internal2 "transfer_create" `printf "%X" $1` `printf "%X" $2`
+    REGION_ID=`printf "%d" 0x$IOCTL_RET`
+}
+
+function init_mod {
+    if [ `whoami` != root ]; then
+        echo "Please run as root"
+        exit 1
+    fi
+
+    if [ `type castle-fs-cli > /dev/null 2>&1; echo $?` != 0 ]; then
+        echo "Command \"castle-fs-cli\" not installed."
+        exit 1
+    fi
+
+    if [ `lsmod | grep "castle_fs " | wc -l` == 0 ]; then
+        echo "Castle FS kernel module not found, trying to insert."
+        modprobe castle-fs
+    fi
+}
+
+function init_fs {
+    init_mod
+    echo
+    echo "Initing FS..."
+	
+	for DISK in ${DISKS}; do
+		do_control_claim "${DISK}" 
+	done
+
+	do_control_init
+}
+
+function init_disks {
+    mkdir -p ${TEST}
+    for DISK in ${DISKS}; do
+        if [ `echo "$DISK" | grep dev | wc -l` == 0 ]; then 
+            echo "Creating backing file: $DISK"
+    	    dd              if=/dev/zero of=${TEST}/${DISK} bs=1M count=1 seek=$DISK_SIZE 2>/dev/null
+    	    dd conv=notrunc if=/dev/zero of=${TEST}/${DISK} bs=4K count=2 2>/dev/null
+        else
+    	    # clear the superblocks
+            echo "Invalidating superblocks in $DISK"
+    	    dd if=/dev/zero of=${DISK} bs=4K count=2 2>/dev/null
+        fi
+    done
+}

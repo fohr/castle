@@ -1,0 +1,18 @@
+echo
+echo "Simple Hello World Test..."
+
+do_control_create 10
+do_control_attach ${VOL_VER}
+
+PHRASE="Hello World!"
+write_phrase   $DEV "$PHRASE"
+check_contents $DEV "$PHRASE"
+
+echo
+echo "Removing module, reinitialising the FS ..."
+umount_fs
+init_fs
+do_control_attach 1
+check_contents $DEV "$PHRASE"
+echo
+

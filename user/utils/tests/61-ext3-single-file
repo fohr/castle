@@ -1,0 +1,14 @@
+touch ${MOUNT_POINT}/testfile
+
+echo
+echo "Remounting ext3..."
+
+umount ${MOUNT_POINT}
+
+mount ${DEV} ${MOUNT_POINT}
+
+if [ -f ${MOUNT_POINT}/testfile ]; then
+	echo "  File exists, OK"
+else
+	echo "  File doesn't exist, FAIL"
+fi

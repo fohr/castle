@@ -1,0 +1,63 @@
+echo
+echo "Transfers Test..."
+SIZE=200
+TEST_FILE=/tmp/txtest
+REGION_SLAVE=0
+do_control_create ${SIZE}
+do_control_attach ${VOL_VER}
+echo "   Creating volume to trasfer..."
+dd if=/dev/zero of=${TEST_FILE} bs=4k count=${SIZE} &> /dev/null
+# write block number into each block (this way we can tell which ones are missing!)
+for I in `seq 0 $(( ${SIZE} - 1 ))`; do
+    /usr/bin/printf "%8s" $I | dd of=${TEST_FILE} bs=4k seek=$I conv=notrunc &> /dev/null
+done
+
+dd if=${TEST_FILE} of=${DEV} bs=4k count=${SIZE} &> /dev/null
+do_control_region_create ${REGION_SLAVE} ${VOL_VER} 0 ${SIZE}
+
+function print_volume_summary {
+    local VOL=${1}
+    local TARGET=${2}
+    RESULT=0
+    for dir in `ls /sys/fs/castle-fs/slaves/`; do 
+        if [[ "$dir" != "number" ]]; then
+            count=`cat /sys/fs/castle-fs/slaves/$dir/block_cnts | grep ^${VOL} | cut -d" " -f 2`
+            echo "        $dir: $count";
+            if [[ "$dir" == "${TARGET}" ]]; then
+                RESULT=$count
+            fi
+        fi
+    done
+}
+
+echo "   Summary for version ${VOL_VER} before move..."
+print_volume_summary ${VOL_VER} ${REGION_SLAVE}
+echo
+
+check_contents_file ${TEST_FILE} ${DEV} ${SIZE}
+
+echo "   Initialising trasfer..."
+do_control_transfer_create $VOL_VER 0x1
+
+STEP=1
+STEPS=300
+for I in `seq 0 $STEPS`; do
+    TIME=$I #`echo "$STEP * 5" | bc`
+    echo "   Summary for version ${VOL_VER} ${TIME}s after move..."
+    print_volume_summary ${VOL_VER} ${REGION_SLAVE}
+    if [[ "$RESULT" == "$SIZE" ]]; then
+        break
+    fi
+    sleep $STEP
+done
+
+check_contents_file ${TEST_FILE} ${DEV} ${SIZE}
+
+if [[ "$RESULT" == "$SIZE" ]]; then
+    echo "Transfer successful!"
+else
+    echo "Trasfer failed!"
+    exit 1 
+fi
+
+

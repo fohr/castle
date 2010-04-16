@@ -1,0 +1,19 @@
+echo "Create two snapshots"
+
+echo "Dev is: $DEV"
+do_control_snapshot $DEV
+do_control_snapshot $DEV
+
+NEW_PHRASE="This is some stuff written to snapshot 3"
+write_phrase   $DEV "$NEW_PHRASE" 
+check_contents $DEV "$NEW_PHRASE"
+
+echo "Check snapshot 1 and 2"
+
+for I in 1 2; do
+	echo "Check contents now of snapshot ${I}"
+    do_control_attach ${I}
+    check_contents $DEV "$PHRASE"
+done
+
+

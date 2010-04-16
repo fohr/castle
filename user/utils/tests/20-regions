@@ -1,0 +1,21 @@
+echo
+echo "Regions tests"
+REGIONS=10
+REGION_SIZE=10
+SLAVE_ID=0
+VERSION_ID=0
+for I in `seq $REGIONS`; do
+	do_control_region_create $SLAVE_ID $VERSION_ID $I 1
+	check_contents /sys/fs/castle-fs/regions/$REGION_ID/start "0x`printf "%x" $I`"
+	check_contents /sys/fs/castle-fs/regions/$REGION_ID/length "0x1"
+done
+
+check_contents /sys/fs/castle-fs/regions/number $REGIONS
+
+for I in `seq 0 $(( $REGIONS - 1 ))`; do
+    do_control_region_destroy $I
+done
+
+check_contents /sys/fs/castle-fs/regions/number "0"
+
+

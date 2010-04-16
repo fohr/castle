@@ -1,0 +1,6 @@
+TEST=/tmp/castle-disks
+DISKS="disk1 disk2 disk3"
+DISK_SIZE=100 # in MB
+#DISKS="/dev/hdb /dev/hdc /dev/hdd"
+MOUNT_POINT=/tmp/mnt
+MOUNT_POINT2=/tmp/mnt2

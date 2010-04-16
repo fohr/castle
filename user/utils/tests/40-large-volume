@@ -1,0 +1,16 @@
+echo
+echo "Large volume (btree split) test"
+SIZE=5000
+TEST_FILE=/tmp/bigvol
+do_control_create ${SIZE}
+do_control_attach ${VOL_VER}
+echo -n "   Zeroing $DEV ... "
+dd if=/dev/zero of=${DEV}      bs=4K count=${SIZE}  2> /dev/null
+echo    " done."
+echo -n "   Zeroing ${TEST_FILE} ... "
+dd if=/dev/zero of=${TEST_FILE} bs=4K count=${SIZE} 2> /dev/null
+echo    " done."
+
+check_contents_file ${DEV} ${TEST_FILE} ${SIZE}
+
+
