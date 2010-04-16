@@ -560,14 +560,14 @@ static int castle_region_add(struct castle_region *region)
 /*
  * TODO: ref count slaves with regions or something?
  */
-struct castle_region* castle_region_create(uint32_t slave_id, version_t version, uint32_t start, uint32_t length)
+struct castle_region* castle_region_create(uint32_t slave_uuid, version_t version, uint32_t start, uint32_t length)
 {
     struct castle_region* region = NULL;
     struct castle_slave* slave = NULL;
     static int region_id = 0;
     int err;
     
-    printk("castle_region_create(slave_id=%d, version=%d, start=%d, length=%d)\n", slave_id, version, start, length);
+    printk("castle_region_create(slave_uuid=%d, version=%d, start=%d, length=%d)\n", slave_uuid, version, start, length);
     
     if(length == 0)
     {
@@ -591,7 +591,7 @@ struct castle_region* castle_region_create(uint32_t slave_id, version_t version,
     if(!(region = kzalloc(sizeof(struct castle_region), GFP_KERNEL)))
         goto err_out;
         
-    if(!(slave = castle_slave_find_by_id(slave_id)))
+    if(!(slave = castle_slave_find_by_uuid(slave_uuid)))
         goto err_out;
     
     region->id = region_id++;

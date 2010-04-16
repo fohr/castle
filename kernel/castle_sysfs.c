@@ -139,15 +139,6 @@ static ssize_t slave_uuid_show(struct kobject *kobj,
     return sprintf(buf, "0x%x\n", slave->uuid);
 }
 
-static ssize_t slave_id_show(struct kobject *kobj, 
-						     struct attribute *attr, 
-                             char *buf)
-{
-    struct castle_slave *slave = container_of(kobj, struct castle_slave, kobj); 
-
-    return sprintf(buf, "%d\n", slave->id);
-}
-
 static ssize_t slave_size_show(struct kobject *kobj, 
 						       struct attribute *attr, 
                                char *buf)
@@ -357,9 +348,6 @@ static struct kobj_type castle_slaves_ktype = {
 };
 
 /* Definition of each slave sysfs directory attributes */
-static struct castle_sysfs_entry slave_id =
-__ATTR(id, S_IRUGO|S_IWUSR, slave_id_show, NULL);
-
 static struct castle_sysfs_entry slave_uuid =
 __ATTR(uuid, S_IRUGO|S_IWUSR, slave_uuid_show, NULL);
 
@@ -379,7 +367,6 @@ static struct castle_sysfs_entry slave_block_cnts =
 __ATTR(block_cnts, S_IRUGO|S_IWUSR, slave_block_cnts_show, NULL);
 
 static struct attribute *castle_slave_attrs[] = {
-    &slave_id.attr,
     &slave_uuid.attr,
     &slave_size.attr,
     &slave_used.attr,

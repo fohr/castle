@@ -1,7 +1,7 @@
 #ifndef __CASTLE_PUBLIC_H__
 #define __CASTLE_PUBLIC_H__
 
-typedef uint32_t slave_id_t;
+typedef uint32_t slave_uuid_t;
 typedef uint64_t snap_id_t;
 typedef uint32_t region_id_t;
 typedef uint32_t transfer_id_t;
@@ -27,14 +27,14 @@ typedef uint32_t transfer_id_t;
 #define CASTLE_TRANSFER_TO_REGION 1
                                        
 typedef struct castle_control_cmd_claim {
-    uint32_t dev;               /* IN  */
-    int      ret;               /* OUT */
-    slave_id_t id;                /* OUT */
-} cctrl_cmd_claim_t;    
+    uint32_t     dev;          /* IN  */
+    int          ret;          /* OUT */
+    slave_uuid_t id;           /* OUT */
+} cctrl_cmd_claim_t;   
 
 typedef struct castle_control_cmd_release {
-    slave_id_t id;               /* IN  */
-    int      ret;              /* OUT */
+    slave_uuid_t id;           /* IN  */
+    int          ret;          /* OUT */
 } cctrl_cmd_release_t;    
 
 typedef struct castle_control_cmd_attach {
@@ -71,9 +71,9 @@ typedef struct castle_control_cmd_init {
 } cctrl_cmd_init_t;    
 
 typedef struct castle_control_cmd_region_create {
-    slave_id_t slave;            /* IN  */
-    snap_id_t snapshot;        /* IN  */
-    uint32_t start;            /* IN  */
+    slave_uuid_t slave;        /* IN  */
+    snap_id_t    snapshot;     /* IN  */
+    uint32_t     start;        /* IN  */
     uint32_t length;           /* IN  */
     int ret;                   /* OUT */
     region_id_t id;            /* OUT */

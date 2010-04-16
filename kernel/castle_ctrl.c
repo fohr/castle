@@ -20,7 +20,7 @@ static void castle_control_claim(cctrl_cmd_claim_t *ioctl)
 
     if((cs = castle_claim(ioctl->dev)))
     {
-        ioctl->id  = cs->id;
+        ioctl->id  = cs->uuid;
         ioctl->ret = 0;
     }
     else
