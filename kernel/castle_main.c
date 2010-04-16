@@ -567,7 +567,7 @@ struct castle_region* castle_region_create(uint32_t slave_uuid, version_t versio
     static int region_id = 0;
     int err;
     
-    printk("castle_region_create(slave_uuid=%d, version=%d, start=%d, length=%d)\n", slave_uuid, version, start, length);
+    printk("castle_region_create(slave_uuid=0x%x, version=%d, start=%d, length=%d)\n", slave_uuid, version, start, length);
     
     if(length == 0)
     {

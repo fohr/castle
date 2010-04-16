@@ -388,7 +388,7 @@ int castle_sysfs_slave_add(struct castle_slave *slave)
     memset(&slave->kobj, 0, sizeof(struct kobject));
     slave->kobj.parent = &castle_slaves.kobj; 
     slave->kobj.ktype  = &castle_slave_ktype; 
-    ret = kobject_set_name(&slave->kobj, "%d", slave->id);
+    ret = kobject_set_name(&slave->kobj, "%x", slave->uuid);
     if(ret < 0) 
         return ret;
     ret = kobject_register(&slave->kobj);
