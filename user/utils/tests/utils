@@ -7,12 +7,10 @@ function umount_fs {
         rmmod castle_fs
     fi
     # Delete the disk loop files
-    for LOOP in `losetup -a | cut -d":" -f1`; do
-        LOOP_FILE=`losetup ${LOOP} | cut -d"(" -f2 | cut -d")" -f1 | xargs basename`
-        if [ `echo ${DISKS} | grep ${LOOP_FILE} | wc -l` != 0 ]; then
-            echo "Deleting loop: ${LOOP} (${LOOP_FILE})"
-            losetup -d $LOOP
-        fi
+    for LOOP in `losetup -a | grep "${TEST}" | cut -d":" -f1`; do
+        LOOP_FILE=`losetup ${LOOP} | cut -d"(" -f2 | cut -d")" -f1`
+        echo "Deleting loop: ${LOOP} (${LOOP_FILE})"
+        losetup -d $LOOP
     done
 }
 
