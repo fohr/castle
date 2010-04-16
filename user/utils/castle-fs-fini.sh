@@ -14,11 +14,7 @@ elif [ -e tests/utils ]; then
 fi
 # Override CONFIG variables (e.g. DISKS) here 
 
-DISKS="disk1 disk2 disk3 disk4 disk5 disk6"
-
 umount_fs
-init_disks
-init_fs
 
-echo "Castle initialised successfully"
+echo "Castle cleaned up successfully"
 
