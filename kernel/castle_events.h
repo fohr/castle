@@ -54,10 +54,10 @@ void castle_uevent1(uint16_t cmd, uint64_t arg1);
 
 
 #define castle_events_spinup(_slave_uuid) \
-    castle_uevent1(CASTLE_EVENT_SPINUP, _slave_uuid)
+    castle_uevent2(CASTLE_EVENT_SPINUP, CASTLE_EVENTS_SUCCESS, _slave_uuid)
 
 #define castle_events_spindown(_slave_uuid) \
-    castle_uevent1(CASTLE_EVENT_SPINDOWN, _slave_uuid)
+    castle_uevent2(CASTLE_EVENT_SPINDOWN, CASTLE_EVENTS_SUCCESS, _slave_uuid)
 
 
 #endif /* __CASTLE_EVENTS_H__ */
