@@ -136,6 +136,7 @@ function do_control_claim {
         dev_to_majmin $FILE
     fi
     do_control_internal "claim" $DEVID_HEX
+    SLAVE_UUID="0x${IOCTL_RET}"
 }
 
 function do_control_init {
@@ -213,12 +214,17 @@ function init_mod {
 }
 
 function init_fs {
+    SLAVES=""
     init_mod
     echo
     echo "Initing FS..."
 	
 	for DISK in ${DISKS}; do
 		do_control_claim "${DISK}" 
+        if [ "${SLAVES}" != "" ]; then
+            SLAVES=${SLAVES}" "
+        fi
+        SLAVES=${SLAVES}"${SLAVE_UUID}"
 	done
 
 	do_control_init

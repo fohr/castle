@@ -1,8 +1,12 @@
 echo
 echo "Transfers Test..."
+
+umount_fs
+init_fs
+REGION_SLAVE=`echo ${SLAVES} | cut -d" " -f1`
+
 SIZE=200
 TEST_FILE=/tmp/txtest
-REGION_SLAVE=0
 do_control_create ${SIZE}
 do_control_attach ${VOL_VER}
 echo "   Creating volume to trasfer..."
@@ -21,9 +25,9 @@ function print_volume_summary {
     RESULT=0
     for dir in `ls /sys/fs/castle-fs/slaves/`; do 
         if [[ "$dir" != "number" ]]; then
-            count=`cat /sys/fs/castle-fs/slaves/$dir/block_cnts | grep ^${VOL} | cut -d" " -f 2`
+            count=`cat /sys/fs/castle-fs/slaves/$dir/block_cnts | grep "0x${VOL}" | cut -d" " -f 2`
             echo "        $dir: $count";
-            if [[ "$dir" == "${TARGET}" ]]; then
+            if [[ "0x${dir}" == "${TARGET}" ]]; then
                 RESULT=$count
             fi
         fi

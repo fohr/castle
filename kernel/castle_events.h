@@ -13,14 +13,14 @@ void castle_uevent1(uint16_t cmd, uint64_t arg1);
 
 #define CASTLE_EVENTS_SUCCESS (0)
 
-#define castle_events_slave_claim(_slave_id) \
-    castle_uevent2(CASTLE_CTRL_CMD_CLAIM, CASTLE_EVENTS_SUCCESS, _slave_id)
+#define castle_events_slave_claim(_slave_uuid) \
+    castle_uevent2(CASTLE_CTRL_CMD_CLAIM, CASTLE_EVENTS_SUCCESS, _slave_uuid)
 
-#define castle_events_slave_changed(_slave_id) \
-    castle_uevent2(CASTLE_CTRL_CMD_CLAIM, CASTLE_EVENTS_SUCCESS, _slave_id)
+#define castle_events_slave_changed(_slave_uuid) \
+    castle_uevent2(CASTLE_CTRL_CMD_CLAIM, CASTLE_EVENTS_SUCCESS, _slave_uuid)
 
-#define castle_events_slave_release(_slave_id) \
-    castle_uevent2(CASTLE_CTRL_CMD_RELEASE, CASTLE_EVENTS_SUCCESS, _slave_id)
+#define castle_events_slave_release(_slave_uuid) \
+    castle_uevent2(CASTLE_CTRL_CMD_RELEASE, CASTLE_EVENTS_SUCCESS, _slave_uuid)
 
 #define castle_events_device_attach(_maj, _min, _version_id) \
     castle_uevent3(CASTLE_CTRL_CMD_ATTACH, CASTLE_EVENTS_SUCCESS, new_encode_dev(MKDEV(_maj, _min)), _version_id)
@@ -53,11 +53,11 @@ void castle_uevent1(uint16_t cmd, uint64_t arg1);
     castle_uevent3(CASTLE_CTRL_CMD_TRANSFER_DESTROY, CASTLE_EVENTS_SUCCESS, _transfer_id, _err)
 
 
-#define castle_events_spinup(_disk_id) \
-    castle_uevent1(CASTLE_EVENT_SPINUP, _disk_id)
+#define castle_events_spinup(_slave_uuid) \
+    castle_uevent1(CASTLE_EVENT_SPINUP, _slave_uuid)
 
-#define castle_events_spindown(_disk_id) \
-    castle_uevent1(CASTLE_EVENT_SPINDOWN, _disk_id)
+#define castle_events_spindown(_slave_uuid) \
+    castle_uevent1(CASTLE_EVENT_SPINDOWN, _slave_uuid)
 
 
 #endif /* __CASTLE_EVENTS_H__ */

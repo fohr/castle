@@ -48,8 +48,8 @@ static ssize_t versions_list_show(struct kobject *kobj,
     {
         phys_size = castle_freespace_version_blocks_get(v->version);
         len = sprintf(buf,
-                "Id: %d\n"
-                "ParentId: %d\n"
+                "Id: 0x%x\n"
+                "ParentId: 0x%x\n"
                 "LogicalSize: %d\n"
                 "PhysicalSize: %ld\n"
                 "IsLeaf: %d\n",
@@ -204,7 +204,7 @@ static ssize_t slave_target_store(struct kobject *kobj,
     
     castle_slave_superblock_put(slave, 1);
     
-    castle_events_slave_changed(slave->id);
+    castle_events_slave_changed(slave->uuid);
     
     return count;
 }
@@ -279,7 +279,7 @@ static ssize_t device_id_show(struct kobject *kobj,
 {
     struct castle_device *device = container_of(kobj, struct castle_device, kobj); 
 
-    return sprintf(buf, "%d\n", new_encode_dev(MKDEV(device->gd->major, device->gd->first_minor)));
+    return sprintf(buf, "0x%x\n", new_encode_dev(MKDEV(device->gd->major, device->gd->first_minor)));
 }
 
 static ssize_t castle_attr_show(struct kobject *kobj,
@@ -489,7 +489,7 @@ static ssize_t region_id_show(struct kobject *kobj,
 {
     struct castle_region *region = container_of(kobj, struct castle_region, kobj); 
 
-    return sprintf(buf, "%d\n", region->id);
+    return sprintf(buf, "0x%x\n", region->id);
 }
 
 static ssize_t region_start_show(struct kobject *kobj, 
@@ -498,7 +498,7 @@ static ssize_t region_start_show(struct kobject *kobj,
 {
     struct castle_region *region = container_of(kobj, struct castle_region, kobj); 
 
-    return sprintf(buf, "0x%x\n", region->start);
+    return sprintf(buf, "%d\n", region->start);
 }
 
 static ssize_t region_length_show(struct kobject *kobj, 
@@ -507,7 +507,7 @@ static ssize_t region_length_show(struct kobject *kobj,
 {
     struct castle_region *region = container_of(kobj, struct castle_region, kobj); 
 
-    return sprintf(buf, "0x%x\n", region->length);
+    return sprintf(buf, "%d\n", region->length);
 }
 
 static ssize_t region_version_show(struct kobject *kobj, 
@@ -516,7 +516,7 @@ static ssize_t region_version_show(struct kobject *kobj,
 {
     struct castle_region *region = container_of(kobj, struct castle_region, kobj); 
 
-    return sprintf(buf, "%d\n", region->version);
+    return sprintf(buf, "0x%x\n", region->version);
 }
 
 /* Definition of regions sysfs directory attributes */
@@ -612,7 +612,7 @@ static ssize_t transfer_id_show(struct kobject *kobj,
     struct castle_transfer *transfer = 
                 container_of(kobj, struct castle_transfer, kobj);
 
-    return sprintf(buf, "%d\n", transfer->id);
+    return sprintf(buf, "0x%x\n", transfer->id);
 }
 
 static ssize_t transfer_direction_show(struct kobject *kobj, 
@@ -632,7 +632,7 @@ static ssize_t transfer_version_show(struct kobject *kobj,
     struct castle_transfer *transfer = 
                 container_of(kobj, struct castle_transfer, kobj);
 
-    return sprintf(buf, "%d\n", transfer->version);
+    return sprintf(buf, "0x%x\n", transfer->version);
 }
 
 static ssize_t transfer_progress_show(struct kobject *kobj, 

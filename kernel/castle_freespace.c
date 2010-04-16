@@ -120,7 +120,7 @@ ssize_t castle_freespace_summary_get(struct castle_slave *cs, char *buf)
         list_for_each(l, &cs->block_cnts.hash[i])
         {
             cnt = list_entry(l, struct castle_slave_block_cnt, list);
-            offset += sprintf((buf + offset), "%d: %d\n", cnt->version, cnt->cnt); 
+            offset += sprintf((buf + offset), "0x%x: %d\n", cnt->version, cnt->cnt); 
         }
     }
 

@@ -499,7 +499,7 @@ struct castle_slave* castle_claim(uint32_t new_dev)
         goto err_out;
     }
     
-    castle_events_slave_claim(cs->id);
+    castle_events_slave_claim(cs->uuid);
 
     return cs;
 err_out:
@@ -513,7 +513,7 @@ err_out:
 
 void castle_release(struct castle_slave *cs)
 {
-    castle_events_slave_release(cs->id);
+    castle_events_slave_release(cs->uuid);
     castle_sysfs_slave_del(cs);
     bd_release(cs->bdev);
     blkdev_put(cs->bdev);
@@ -1096,7 +1096,7 @@ void castle_slave_access(uint32_t uuid)
     {
         sb->flags |= CASTLE_SLAVE_SPINNING;
         castle_slave_superblock_put(cs, 1);
-        castle_events_spinup(cs->id);
+        castle_events_spinup(cs->uuid);
     } else
         castle_slave_superblock_put(cs, 0);
 }
@@ -1123,7 +1123,7 @@ static void castle_slaves_spindown(struct work_struct *work)
         {
             sb->flags &= ~CASTLE_SLAVE_SPINNING; 
             castle_slave_superblock_put(cs, 1);
-            castle_events_spindown(cs->id);
+            castle_events_spindown(cs->uuid);
         } else
             castle_slave_superblock_put(cs, 0);
     }
