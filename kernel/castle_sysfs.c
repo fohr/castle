@@ -93,7 +93,7 @@ int castle_sysfs_version_add(version_t version)
     if(!v) return -ENOMEM;
 
     v->version = version;
-    sprintf(v->name, "%d", version); 
+    sprintf(v->name, "%x", version); 
     v->csys_entry.attr.name = v->name;
     v->csys_entry.attr.mode = S_IRUGO|S_IWUSR;
     v->csys_entry.show  = versions_list_show;
@@ -446,7 +446,7 @@ int castle_sysfs_device_add(struct castle_device *device)
     memset(&device->kobj, 0, sizeof(struct kobject));
     device->kobj.parent = &castle_devices.kobj; 
     device->kobj.ktype  = &castle_device_ktype; 
-    ret = kobject_set_name(&device->kobj, "%d", new_encode_dev(MKDEV(device->gd->major, device->gd->first_minor)));
+    ret = kobject_set_name(&device->kobj, "%x", new_encode_dev(MKDEV(device->gd->major, device->gd->first_minor)));
     if(ret < 0) 
         return ret;
     ret = kobject_register(&device->kobj);
@@ -567,7 +567,7 @@ int castle_sysfs_region_add(struct castle_region *region)
     memset(&region->kobj, 0, sizeof(struct kobject));
     region->kobj.parent = &castle_regions.kobj; 
     region->kobj.ktype  = &castle_region_ktype; 
-    ret = kobject_set_name(&region->kobj, "%d", region->id);
+    ret = kobject_set_name(&region->kobj, "%x", region->id);
     if(ret < 0) 
         return ret;
         
@@ -692,7 +692,7 @@ int castle_sysfs_transfer_add(struct castle_transfer *transfer)
     memset(&transfer->kobj, 0, sizeof(struct kobject));
     transfer->kobj.parent = &castle_transfers.kobj; 
     transfer->kobj.ktype  = &castle_transfer_ktype; 
-    ret = kobject_set_name(&transfer->kobj, "%d", transfer->id);
+    ret = kobject_set_name(&transfer->kobj, "%x", transfer->id);
     if(ret < 0) 
         return ret;
         
