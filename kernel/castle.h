@@ -308,6 +308,9 @@ struct castle_transfer {
     version_t               version;
     int                     direction;
     atomic_t                progress;
+    int                     finished;
+    int                     error;
+
     struct castle_region  **regions;
     int                     regions_count;
     

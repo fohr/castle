@@ -426,12 +426,7 @@ c_disk_blk_t castle_freespace_slave_block_get(struct castle_slave *slave, versio
     /* We've selected a disk to search for a new block on. Select bitmap block. */
     sb = castle_slave_superblock_get(slave);
     slave_size = sb->size;
-    if(!(sb->flags & CASTLE_SLAVE_TARGET))
-    {
-        castle_slave_superblock_put(slave, 0);
-        return INVAL_DISK_BLK;
-    }
-
+    
     debug("Slave size=0x%x\n", slave_size);
 
     free_cdb = (c_disk_blk_t){slave->uuid, slave->free_blk+1};
@@ -512,6 +507,7 @@ c_disk_blk_t castle_freespace_block_get(version_t version)
     static struct castle_slave *last_slave = NULL;
     struct castle_slave *slave, *first_slave = NULL;
     struct list_head *l;
+    struct castle_slave_superblock *sb = NULL;
     c_disk_blk_t free_cdb;
 
     debug("\nAllocating a new block.\n");
@@ -542,6 +538,15 @@ next_disk:
     /* Remember what slave we've tried last */
     last_slave = slave;
     if(!first_slave) first_slave = slave;
+
+    /* Only allocate onto target disks */
+    sb = castle_slave_superblock_get(slave);
+    if(!(sb->flags & CASTLE_SLAVE_TARGET))
+    {
+        castle_slave_superblock_put(slave, 0);
+        goto next_disk;
+    }
+    castle_slave_superblock_put(slave, 0);
 
     debug("Selected slave=0x%x\n", slave->uuid);
     free_cdb = castle_freespace_slave_block_get(slave, version);

@@ -645,6 +645,16 @@ static ssize_t transfer_progress_show(struct kobject *kobj,
     return sprintf(buf, "%d\n", atomic_read(&transfer->progress));
 }
 
+static ssize_t transfer_finished_show(struct kobject *kobj, 
+						           struct attribute *attr, 
+                                   char *buf)
+{
+    struct castle_transfer *transfer = 
+                container_of(kobj, struct castle_transfer, kobj);
+
+    return sprintf(buf, "%d\n", transfer->finished);
+}
+
 /* Definition of regions sysfs directory attributes */
 static struct castle_sysfs_entry transfers_number =
 __ATTR(number, S_IRUGO|S_IWUSR, transfers_number_show, NULL);
@@ -672,11 +682,15 @@ __ATTR(version, S_IRUGO|S_IWUSR, transfer_version_show, NULL);
 static struct castle_sysfs_entry transfer_progress =
 __ATTR(progress, S_IRUGO|S_IWUSR, transfer_progress_show, NULL);
 
+static struct castle_sysfs_entry transfer_finished =
+__ATTR(finished, S_IRUGO|S_IWUSR, transfer_finished_show, NULL);
+
 static struct attribute *castle_transfer_attrs[] = {
     &transfer_id.attr,
     &transfer_version.attr,
     &transfer_direction.attr,
     &transfer_progress.attr,
+    &transfer_finished.attr,
     NULL,
 };
 

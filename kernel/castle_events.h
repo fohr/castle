@@ -9,7 +9,8 @@ void castle_uevent1(uint16_t cmd, uint64_t arg1);
 /* Events which do not correspond to any particular command. Defined in 0x80+ range not
    to overlap with IOCTL command ids. */
 #define CASTLE_EVENT_SPINUP   (128) 
-#define CASTLE_EVENT_SPINDOWN (129) 
+#define CASTLE_EVENT_SPINDOWN (129)
+#define CASTLE_EVENT_TRANFSER_FINISHED (130)
 
 #define CASTLE_EVENTS_SUCCESS (0)
 
@@ -49,9 +50,11 @@ void castle_uevent1(uint16_t cmd, uint64_t arg1);
 #define castle_events_transfer_create(_transfer_id) \
     castle_uevent2(CASTLE_CTRL_CMD_TRANSFER_CREATE, CASTLE_EVENTS_SUCCESS, _transfer_id)
 
-#define castle_events_transfer_destroy(_transfer_id, _err) \
-    castle_uevent3(CASTLE_CTRL_CMD_TRANSFER_DESTROY, CASTLE_EVENTS_SUCCESS, _transfer_id, _err)
+#define castle_events_transfer_finished(_transfer_id, _err) \
+    castle_uevent3(CASTLE_EVENT_TRANFSER_FINISHED, CASTLE_EVENTS_SUCCESS, _transfer_id, _err)
 
+#define castle_events_transfer_destroy(_transfer_id) \
+    castle_uevent2(CASTLE_CTRL_CMD_TRANSFER_DESTROY, CASTLE_EVENTS_SUCCESS, _transfer_id)
 
 #define castle_events_spinup(_slave_uuid) \
     castle_uevent2(CASTLE_EVENT_SPINUP, CASTLE_EVENTS_SUCCESS, _slave_uuid)

@@ -64,16 +64,12 @@ static void castle_transfer_end(c_iter_t *c_iter, int err)
 {
     struct castle_transfer *transfer = container_of(c_iter, struct castle_transfer, c_iter);
 
-    debug("Transfer=%d, err=%d\n", transfer->id, err);
+    printk("castle_transfer_end transfer=%d, err=%d\n", transfer->id, err);
 
+    transfer->finished = 1;
     complete(&transfer->completion);
 
-    castle_events_transfer_destroy(transfer->id, err);    
-    castle_sysfs_transfer_del(transfer);
-
-    list_del(&transfer->list);
-    kfree(transfer->regions);
-    kfree(transfer);
+    castle_events_transfer_finished(transfer->id, err);
 }
 
 static void castle_transfer_start(struct castle_transfer *transfer)
@@ -150,10 +146,19 @@ static int castle_regions_get(version_t version, struct castle_region*** regions
 
 void castle_transfer_destroy(struct castle_transfer *transfer)
 {
-    debug("Transfer=%d\n", transfer->id);
+    printk("castle_transfer_destroy id=%d\n", transfer->id);
     
     castle_ftree_iter_cancel(&transfer->c_iter, -EINTR);
     wait_for_completion(&transfer->completion);
+    
+    castle_events_transfer_destroy(transfer->id);    
+    castle_sysfs_transfer_del(transfer);
+
+    list_del(&transfer->list);
+    kfree(transfer->regions);
+    kfree(transfer);    
+
+    printk("castle_transfer_destroy'd id=%d\n", transfer->id);
 }
 
 struct castle_transfer* castle_transfer_create(version_t version, int direction)
@@ -162,7 +167,7 @@ struct castle_transfer* castle_transfer_create(version_t version, int direction)
     static int transfer_id = 0;
     int err;
 
-    debug("(version=%d, direction=%d)\n", version, direction);
+    printk("castle_transfer_create(version=%d, direction=%d)\n", version, direction);
 
     /* To check if a good snapshot version, try and
        get the snapshot.  If we do get it, then we may
@@ -271,6 +276,8 @@ static c_disk_blk_t castle_transfer_destination_get(struct castle_transfer *tran
     struct castle_region *region;
     c_disk_blk_t cdb = INVAL_DISK_BLK;
     
+    debug("transfer->regions_count=%i\n", transfer->regions_count);
+    
     switch (transfer->direction)
     {
         case CASTLE_TRANSFER_TO_TARGET:
@@ -285,9 +292,13 @@ static c_disk_blk_t castle_transfer_destination_get(struct castle_transfer *tran
                 if (castle_freespace_version_slave_blocks_get(region->slave, region->version) >= 
                     region->length)
                     continue;
+                    
+                debug("region=%i\n", region->id);
             
                 /* this will update the summaries... */
                 cdb = castle_freespace_slave_block_get(region->slave, region->version);
+
+                debug("cdb=(%i,%i)\n", cdb.disk, cdb.block);
             }
             break;
         
