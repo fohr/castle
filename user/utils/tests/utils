@@ -2,6 +2,8 @@
 
 set -eu
 
+CONTROL_FILE=/dev/castle-fs/control
+
 function umount_fs {
     if [ `lsmod | grep "castle_fs " | wc -l` != 0 ]; then 
         rmmod castle_fs
@@ -210,6 +212,19 @@ function init_mod {
     if [ `lsmod | grep "castle_fs " | wc -l` == 0 ]; then
         echo "Castle FS kernel module not found, trying to insert."
         modprobe castle-fs
+        # Wait up to 5 seconds for the control file to appear
+        # udev renaming is sometimes slow
+        for i in `seq 50`; do
+            if [ -e "${CONTROL_FILE}" ]; then
+                break
+            fi
+            # Wait 0.1s
+            usleep 100000
+        done
+        if [ ! -e "${CONTROL_FILE}" ]; then
+            echo "Control file has not been created after kernel module insertion"
+            exit 1
+        fi
     fi
 }
 
