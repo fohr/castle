@@ -64,7 +64,7 @@ static void castle_transfer_end(c_iter_t *c_iter, int err)
 {
     struct castle_transfer *transfer = container_of(c_iter, struct castle_transfer, c_iter);
 
-    printk("castle_transfer_end transfer=%d, err=%d\n", transfer->id, err);
+    debug("castle_transfer_end transfer=%d, err=%d\n", transfer->id, err);
 
     transfer->finished = 1;
     complete(&transfer->completion);
@@ -146,7 +146,7 @@ static int castle_regions_get(version_t version, struct castle_region*** regions
 
 void castle_transfer_destroy(struct castle_transfer *transfer)
 {
-    printk("castle_transfer_destroy id=%d\n", transfer->id);
+    debug("castle_transfer_destroy id=%d\n", transfer->id);
     
     castle_ftree_iter_cancel(&transfer->c_iter, -EINTR);
     wait_for_completion(&transfer->completion);
@@ -158,7 +158,7 @@ void castle_transfer_destroy(struct castle_transfer *transfer)
     kfree(transfer->regions);
     kfree(transfer);    
 
-    printk("castle_transfer_destroy'd id=%d\n", transfer->id);
+    debug("castle_transfer_destroy'd id=%d\n", transfer->id);
 }
 
 struct castle_transfer* castle_transfer_create(version_t version, int direction)
@@ -167,7 +167,7 @@ struct castle_transfer* castle_transfer_create(version_t version, int direction)
     static int transfer_id = 0;
     int err;
 
-    printk("castle_transfer_create(version=%d, direction=%d)\n", version, direction);
+    debug("castle_transfer_create(version=%d, direction=%d)\n", version, direction);
 
     /* To check if a good snapshot version, try and
        get the snapshot.  If we do get it, then we may
