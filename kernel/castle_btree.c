@@ -1184,6 +1184,8 @@ static void castle_ftree_iter_leaf_ptrs_lock(c_iter_t *c_iter)
         }
         c2p = castle_cache_page_get(cdb);
         lock_c2p(c2p);
+        if(!c2p_uptodate(c2p))
+            submit_c2p_sync(READ, c2p);
         indirect_node(i).c2p = c2p; 
     }
     /* Finally, find out where in the indirect block the individual ptrs are */
@@ -1204,6 +1206,7 @@ static void castle_ftree_iter_leaf_ptrs_lock(c_iter_t *c_iter)
                                  &lub_idx, 
                                   NULL);
             /* Check that we _really_ found the right entry in the indirect node */
+            BUG_ON(lub_idx < 0);
             BUG_ON((c2p_bnode(c2p)->slots[lub_idx].block   != slot->block) ||
                    (c2p_bnode(c2p)->slots[lub_idx].version != slot->version));
             indirect_node(i).node_idx = lub_idx;
