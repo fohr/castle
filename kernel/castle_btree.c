@@ -1278,6 +1278,10 @@ static void __castle_ftree_iter_path_traverse(struct work_struct *work)
     /* Return early on error */
     if(c_iter->err)
     {
+        /* Unlock the top of the stack, this is normally done by 
+           castle_ftree_iter_continue. This will not happen now, because 
+           the iterator was cancelled between two btree nodes. */
+        unlock_c2p(c_iter->path[c_iter->depth]);
         castle_ftree_iter_end(c_iter, c_iter->err);
         return;
     }
@@ -1327,9 +1331,10 @@ static void _castle_ftree_iter_path_traverse(c2_page_t *c2p, int uptodate)
     /* Put on to the workqueue. Choose a workqueue which corresponds
        to how deep we are in the tree. 
        A single queue cannot be used, because a request blocked on 
-       lock_c2p() would block the entire queue (=> deadlock). */
+       lock_c2p() would block the entire queue (=> deadlock). 
+       NOTE: The +1 is required to match the wqs we are using in normal btree walks. */
     INIT_WORK(&c_iter->work, __castle_ftree_iter_path_traverse);
-    queue_work(castle_wqs[c_iter->depth], &c_iter->work);
+    queue_work(castle_wqs[c_iter->depth+1], &c_iter->work);
 }
 
 static void castle_ftree_iter_path_traverse(c_iter_t *c_iter, c_disk_blk_t node_cdb)
