@@ -54,7 +54,8 @@ static int castle_freespace_hash_mod(struct castle_slave *cs,
             if(cnt->version == version)
                 break;
         }
-        if(mod != HASH_MOD_ADD) BUG_ON(!cnt);
+        if(cnt && (cnt->version != version)) cnt = NULL;
+        BUG_ON((mod != HASH_MOD_ADD) && (!cnt));
     }
 
     switch(mod)
@@ -140,7 +141,7 @@ ssize_t castle_freespace_version_slave_blocks_get(struct castle_slave *cs, versi
         if(cnt->version == version)
             break;
     }
-    BUG_ON(!cnt);
+    BUG_ON(!cnt || (cnt->version != version));
     
     return cnt->cnt;
 }
