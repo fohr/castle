@@ -178,9 +178,10 @@ typedef struct castle_bio_vec {
         c_disk_blk_t cdb;
     };
     /* Used to thread this bvec onto a workqueue */
-    struct work_struct  work;
+    struct work_struct        work;
 #ifdef CASTLE_DEBUG    
-    unsigned long       state;
+    unsigned long             state;
+    struct castle_cache_page *locking;
 #endif
 } c_bvec_t;
 #define c_bvec_data_dir(_c_bvec)    bio_data_dir((_c_bvec)->c_bio->bio)

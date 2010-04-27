@@ -167,7 +167,7 @@ static int castle_debug_run(void *unused)
 {
     c_bio_t *c_bio;
     struct list_head *l;
-    int i, j;
+    int i, j, keep_printing;
     unsigned long flags;
     int cdb_idx;
     int sleep_time = 10;
@@ -175,6 +175,7 @@ static int castle_debug_run(void *unused)
     printk("Castle debugging thread starting.\n");
     do {
         i=0;
+        keep_printing = 1;
         spin_lock_irqsave(&bio_list_spinlock, flags);
         cdb_idx = 0;
         list_for_each(l, &bio_list)
@@ -187,26 +188,46 @@ static int castle_debug_run(void *unused)
             }
                 c_bio->stuck++;
 
-            printk("Found an outstanding Castle BIO, id=%d\n", c_bio->id);
+            if(keep_printing)
+                printk("Found an outstanding Castle BIO, id=%d\n", c_bio->id);
             for(j=0; j<c_bio->nr_bvecs; j++)
             {
                 c_bvec_t *c_bvec = &c_bio->c_bvecs[j];
+                int locking = ((c_bvec->state & C_BVEC_BTREE_GOT_NODE) &&
+                              !(c_bvec->state & C_BVEC_BTREE_LOCKED_NODE));
 
-                printk(" c_bvecs[%d], "
-                       "(b,v)=(0x%lx, 0x%x), "
-                       "btree_depth=%d, "
-                       "state=0x%lx\n",
-                    j,
-                    c_bvec->block, c_bvec->version,
-                    c_bvec->btree_depth,
-                    c_bvec->state);
+                /* Print info about first 10 stuck BIO + all in locking state */
+                if(keep_printing || locking)
+                    printk(" c_bvecs[%d], "
+                           "(b,v)=(0x%lx, 0x%x), "
+                           "btree_depth=%d, "
+                           "state=0x%lx\n",
+                        j,
+                        c_bvec->block, c_bvec->version,
+                        c_bvec->btree_depth,
+                        c_bvec->state);
+                /* For locking BIOs print what lock are they blocked on. */ 
+                if(locking)
+                {
+                    c2_page_t *c2p = c_bvec->locking;
+
+                    printk("Blocked on locking c2p for (0x%x, 0x%x).\n",
+                        c2p->cdb.disk, c2p->cdb.block);
+                    if(c2p->file != NULL)
+                        printk("c2p last locked from: %s:%d\n", c2p->file, c2p->line);
+                    else
+                        printk("has never been locked before?\n");
+                }
             }
-            if(i++ > 10)
+ 
+            if(i++ > 10 && !keep_printing)
             {
-                printk("More than 10 outstanding request. Not printing all.\n");
-                break;
+                printk("...\n...\n...\n");
+                keep_printing = 0;
             }
         }
+        if(i > 10)
+            printk("More than 10 outstanding request. Not printing all.\n");
         spin_unlock_irqrestore(&bio_list_spinlock, flags);
         if(i>0) sleep_time += 1;
         

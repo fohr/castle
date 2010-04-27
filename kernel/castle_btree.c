@@ -910,6 +910,9 @@ static void __castle_ftree_find(c_bvec_t *c_bvec,
     castle_debug_bvec_btree_walk(c_bvec);
 
     c2p = castle_cache_page_get(node_cdb);
+#ifdef CASTLE_DEBUG
+    c_bvec->locking = c2p;
+#endif
     castle_debug_bvec_update(c_bvec, C_BVEC_BTREE_GOT_NODE);
     lock_c2p(c2p);
     castle_debug_bvec_update(c_bvec, C_BVEC_BTREE_LOCKED_NODE);
