@@ -65,6 +65,7 @@ static void castle_transfer_end(c_iter_t *c_iter, int err)
     struct castle_transfer *transfer = container_of(c_iter, struct castle_transfer, c_iter);
 
     debug("castle_transfer_end transfer=%d, err=%d\n", transfer->id, err);
+    printk("castle_transfer_end transfer=%d, err=%d\n", transfer->id, err);
 
     transfer->finished = 1;
     complete(&transfer->completion);
@@ -74,6 +75,7 @@ static void castle_transfer_end(c_iter_t *c_iter, int err)
 
 static void castle_transfer_start(struct castle_transfer *transfer)
 {
+    printk("====> Starting transfer %d.\n", transfer->id);
     transfer->c_iter.private    = transfer;        
     transfer->c_iter.node_start = castle_transfer_node_start;
     transfer->c_iter.each       = castle_transfer_each;
@@ -146,6 +148,7 @@ static int castle_regions_get(version_t version, struct castle_region*** regions
 
 void castle_transfer_destroy(struct castle_transfer *transfer)
 {
+    printk("====> Destroying transfer %d.\n", transfer->id);
     debug("castle_transfer_destroy id=%d\n", transfer->id);
     
     castle_ftree_iter_cancel(&transfer->c_iter, -EINTR);
@@ -168,6 +171,7 @@ struct castle_transfer* castle_transfer_create(version_t version, int direction)
     int err;
 
     debug("castle_transfer_create(version=%d, direction=%d)\n", version, direction);
+    printk("castle_transfer_create(version=%d, direction=%d)\n", version, direction);
 
     /* To check if a good snapshot version, try and
        get the snapshot.  If we do get it, then we may
