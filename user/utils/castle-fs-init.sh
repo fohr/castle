@@ -15,7 +15,7 @@ fi
 # Override CONFIG variables (e.g. DISKS) here 
 
 DISKS="disk1 disk2 disk3 disk4 disk5 disk6"
-DISK_SIZE=100 # in MB
+DISK_SIZE=1000 # in MB
 
 umount_fs
 init_disks
