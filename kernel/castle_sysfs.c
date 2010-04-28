@@ -20,6 +20,7 @@ struct castle_sysfs_entry {
     struct attribute attr;
     ssize_t (*show) (struct kobject *kobj, struct attribute *attr, char *buf);
     ssize_t (*store)(struct kobject *kobj, struct attribute *attr, const char *buf, size_t count);
+    void *private;
 };
 
 struct castle_sysfs_version {
@@ -245,8 +246,11 @@ static ssize_t slave_block_cnts_show(struct kobject *kobj,
                                      char *buf)
 {
     struct castle_slave *slave = container_of(kobj, struct castle_slave, kobj); 
+    const char *name = attr->name;
 
-    return castle_freespace_summary_get(slave, buf);
+    unsigned long offset = simple_strtoul(name + 10, NULL, 10) * 200; // 10 = length of "block_cnts"
+
+    return castle_freespace_summary_get(slave, buf, offset, 200);
 }
 
 static ssize_t devices_number_show(struct kobject *kobj, 
@@ -363,8 +367,36 @@ __ATTR(target, S_IRUGO|S_IWUSR, slave_target_show, slave_target_store);
 static struct castle_sysfs_entry slave_spinning =
 __ATTR(spinning, S_IRUGO|S_IWUSR, slave_spinning_show, slave_spinning_store);
 
-static struct castle_sysfs_entry slave_block_cnts =
-__ATTR(block_cnts, S_IRUGO|S_IWUSR, slave_block_cnts_show, NULL);
+/* TODO we should dynamically create these files */
+static struct castle_sysfs_entry slave_block_cnts0 =
+__ATTR(block_cnts0, S_IRUGO|S_IWUSR, slave_block_cnts_show, NULL);
+
+static struct castle_sysfs_entry slave_block_cnts1 =
+__ATTR(block_cnts1, S_IRUGO|S_IWUSR, slave_block_cnts_show, NULL);
+
+static struct castle_sysfs_entry slave_block_cnts2 =
+__ATTR(block_cnts2, S_IRUGO|S_IWUSR, slave_block_cnts_show, NULL);
+
+static struct castle_sysfs_entry slave_block_cnts3 =
+__ATTR(block_cnts3, S_IRUGO|S_IWUSR, slave_block_cnts_show, NULL);
+
+static struct castle_sysfs_entry slave_block_cnts4 =
+__ATTR(block_cnts4, S_IRUGO|S_IWUSR, slave_block_cnts_show, NULL);
+
+static struct castle_sysfs_entry slave_block_cnts5 =
+__ATTR(block_cnts5, S_IRUGO|S_IWUSR, slave_block_cnts_show, NULL);
+
+static struct castle_sysfs_entry slave_block_cnts6 =
+__ATTR(block_cnts6, S_IRUGO|S_IWUSR, slave_block_cnts_show, NULL);
+
+static struct castle_sysfs_entry slave_block_cnts7 =
+__ATTR(block_cnts7, S_IRUGO|S_IWUSR, slave_block_cnts_show, NULL);
+
+static struct castle_sysfs_entry slave_block_cnts8 =
+__ATTR(block_cnts8, S_IRUGO|S_IWUSR, slave_block_cnts_show, NULL);
+
+static struct castle_sysfs_entry slave_block_cnts9 =
+__ATTR(block_cnts9, S_IRUGO|S_IWUSR, slave_block_cnts_show, NULL);
 
 static struct attribute *castle_slave_attrs[] = {
     &slave_uuid.attr,
@@ -372,7 +404,16 @@ static struct attribute *castle_slave_attrs[] = {
     &slave_used.attr,
     &slave_target.attr,
     &slave_spinning.attr,
-    &slave_block_cnts.attr,
+    &slave_block_cnts0.attr,
+    &slave_block_cnts1.attr,
+    &slave_block_cnts2.attr,
+    &slave_block_cnts3.attr,
+    &slave_block_cnts4.attr,
+    &slave_block_cnts5.attr,
+    &slave_block_cnts6.attr,
+    &slave_block_cnts7.attr,
+    &slave_block_cnts8.attr,
+    &slave_block_cnts9.attr,
     NULL,
 };
 

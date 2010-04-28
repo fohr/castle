@@ -110,18 +110,27 @@ static int castle_freespace_hash_mod(struct castle_slave *cs,
     return 0;
 }
 
-ssize_t castle_freespace_summary_get(struct castle_slave *cs, char *buf)
+ssize_t castle_freespace_summary_get(struct castle_slave *cs, char *buf, int version_offset, int number)
 {
     struct castle_slave_block_cnt *cnt;
     struct list_head *l;
     ssize_t offset = 0;
     int i;
 
+    // TODO we currently assume here we never do delete! version numbers must be contig
+
     for(i=0; i<BLOCKS_HASH_SIZE; i++)
     {
         list_for_each(l, &cs->block_cnts.hash[i])
         {
             cnt = list_entry(l, struct castle_slave_block_cnt, list);
+            
+            if (cnt->version >= version_offset + number)
+                break;
+                
+            if (cnt->version < version_offset)
+                continue;
+            
             offset += sprintf((buf + offset), "0x%x: %d\n", cnt->version, cnt->cnt); 
         }
     }
@@ -134,7 +143,7 @@ ssize_t castle_freespace_version_slave_blocks_get(struct castle_slave *cs, versi
     int hash_idx = (version % BLOCKS_HASH_SIZE);
     struct list_head *i, *h = &cs->block_cnts.hash[hash_idx];
     struct castle_slave_block_cnt *cnt = NULL;
-
+    
     list_for_each(i, h)
     {
         cnt = list_entry(i, struct castle_slave_block_cnt, list);
