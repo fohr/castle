@@ -126,7 +126,7 @@ ssize_t castle_freespace_summary_get(struct castle_slave *cs, char *buf, int ver
             cnt = list_entry(l, struct castle_slave_block_cnt, list);
             
             if (cnt->version >= version_offset + number)
-                break;
+                continue;
                 
             if (cnt->version < version_offset)
                 continue;
