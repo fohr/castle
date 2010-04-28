@@ -51,7 +51,7 @@ function dev_to_majmin {
         local CASTLE_NR=`echo $DEV | sed -e 's#/dev/castle-fs/castle-fs-\(.*\)#\1#g'`
         local MAJMIN=`cat /proc/partitions | grep "castle-fs-${CASTLE_NR}$" | awk '{print ( $1":"$2) }'`
     elif [ "x`echo $DEV | grep hd`" != "x" ]; then
-        local HD=`echo $DEV | sed -e 's#/dev/hd\(.\)#hd\1#g'`
+        local HD=`echo $DEV | sed -e 's#/dev/hd\(.*\)#hd\1#g'`
         local MAJMIN=`cat /proc/partitions | grep "${HD}$" | awk '{print ( $1":"$2) }'`
     else
         echo "Could not dev_to_majmin for dev: $DEV"

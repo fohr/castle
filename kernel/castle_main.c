@@ -340,6 +340,11 @@ static int castle_slave_superblocks_cache(struct castle_slave *cs)
     return 0;
 }
 
+static sector_t get_bd_capacity(struct block_device *bd)
+{
+    return bd->bd_contains == bd ? get_capacity(bd->bd_disk) : bd->bd_part->nr_sects;
+}
+
 static int castle_slave_superblocks_init(struct castle_slave *cs)
 {
     struct castle_slave_superblock *cs_sb;
@@ -364,7 +369,7 @@ static int castle_slave_superblocks_init(struct castle_slave *cs)
         cs_sb->magic3 = CASTLE_SLAVE_MAGIC3;
         cs_sb->used   = 2; /* Two blocks used for the superblocks */
         cs_sb->uuid   = cs->uuid;
-        cs_sb->size   = get_capacity(cs->bdev->bd_disk) >> (C_BLK_SHIFT - 9);
+        cs_sb->size   = get_bd_capacity(cs->bdev) >> (C_BLK_SHIFT - 9);
         cs_sb->flags  = CASTLE_SLAVE_TARGET | CASTLE_SLAVE_SPINNING;
         castle_slave_superblock_print(cs_sb);
         printk("Done.\n");
