@@ -399,7 +399,7 @@ static void castle_block_move_io_end(c2_page_t *src, int uptodate)
     put_c2p(src);   
 
     INIT_WORK(&info->work, castle_block_move_complete);
-    queue_work(castle_wq, &info->work);
+    queue_work(castle_wqs[MAX_BTREE_DEPTH-1], &info->work);
 }    
 
 static void castle_block_move(struct castle_transfer *transfer, int index, c_disk_blk_t cdb)

@@ -27,7 +27,7 @@ struct castle_slaves         castle_slaves;
 struct castle_devices        castle_devices;
 struct castle_regions        castle_regions;
 
-struct workqueue_struct     *castle_wqs[MAX_BTREE_DEPTH+1];
+struct workqueue_struct     *castle_wqs[2*MAX_BTREE_DEPTH+1];
 
 int                          castle_fs_inited;
 
@@ -1189,7 +1189,7 @@ static void castle_slaves_free(void)
 static int castle_devices_init(void)
 {
     int i, major;
-    char *wq_names[MAX_BTREE_DEPTH+1];
+    char *wq_names[2*MAX_BTREE_DEPTH+1];
 
     memset(&castle_devices, 0, sizeof(struct castle_devices));
     INIT_LIST_HEAD(&castle_devices.devices);
@@ -1202,9 +1202,9 @@ static int castle_devices_init(void)
     }
     castle_devices.major = major;
 
-    memset(wq_names  , 0, sizeof(char *) * (MAX_BTREE_DEPTH+1));
-    memset(castle_wqs, 0, sizeof(struct workqueue_struct *) * (MAX_BTREE_DEPTH+1));
-    for(i=0; i<=MAX_BTREE_DEPTH; i++)
+    memset(wq_names  , 0, sizeof(char *) * (2*MAX_BTREE_DEPTH+1));
+    memset(castle_wqs, 0, sizeof(struct workqueue_struct *) * (2*MAX_BTREE_DEPTH+1));
+    for(i=0; i<=2*MAX_BTREE_DEPTH; i++)
     {
         /* At most two characters for the number */
         BUG_ON(i > 99);
@@ -1222,7 +1222,7 @@ static int castle_devices_init(void)
 err_out:
     printk("Could not create worqueues.\n");
     
-    for(i=0; i<=MAX_BTREE_DEPTH; i++)
+    for(i=0; i<=2*MAX_BTREE_DEPTH; i++)
     {
         if(wq_names[i])
             kfree(wq_names[i]); 
@@ -1249,7 +1249,7 @@ static void castle_devices_free(void)
     if (castle_devices.major)
         unregister_blkdev(castle_devices.major, "castle-fs");
 
-    for(i=0; i<=MAX_BTREE_DEPTH; i++)
+    for(i=0; i<=2*MAX_BTREE_DEPTH; i++)
         destroy_workqueue(castle_wqs[i]);
 }
 

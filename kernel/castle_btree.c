@@ -1337,7 +1337,7 @@ static void _castle_ftree_iter_path_traverse(c2_page_t *c2p, int uptodate)
        lock_c2p() would block the entire queue (=> deadlock). 
        NOTE: The +1 is required to match the wqs we are using in normal btree walks. */
     INIT_WORK(&c_iter->work, __castle_ftree_iter_path_traverse);
-    queue_work(castle_wqs[c_iter->depth+1], &c_iter->work);
+    queue_work(castle_wqs[c_iter->depth+MAX_BTREE_DEPTH], &c_iter->work);
 }
 
 static void castle_ftree_iter_path_traverse(c_iter_t *c_iter, c_disk_blk_t node_cdb)

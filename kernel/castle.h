@@ -55,7 +55,7 @@ struct castle_fs_superblock {
 };
 
 
-#define MAX_BTREE_DEPTH       (5)
+#define MAX_BTREE_DEPTH       (10)
 
 #define NODE_HEADER           0x180
 
@@ -334,7 +334,7 @@ extern struct castle_devices     castle_devices;
 extern struct castle_regions     castle_regions;
 extern struct castle_transfers   castle_transfers;
 
-extern struct workqueue_struct *castle_wqs[MAX_BTREE_DEPTH+1];
+extern struct workqueue_struct *castle_wqs[2*MAX_BTREE_DEPTH+1];
 #define castle_wq              (castle_wqs[0])
 
 /* Various utilities */

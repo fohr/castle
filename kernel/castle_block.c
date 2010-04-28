@@ -53,7 +53,6 @@ int castle_block_read(struct castle_slave *slave,
     struct castle_block_io *cbio;
 
     /* Early checks */
-    BUG_ON(slave->bdev->bd_block_size != PAGE_SIZE);
     if(!bio) return -ENOMEM;
 
     cbio = kmalloc(sizeof(struct castle_block_io), GFP_KERNEL);
