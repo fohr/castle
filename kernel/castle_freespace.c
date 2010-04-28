@@ -429,7 +429,7 @@ c_disk_blk_t castle_freespace_slave_block_get(struct castle_slave *slave, versio
 {
     struct castle_slave_superblock *sb = NULL;
     c_disk_blk_t free_cdb, bitmap_cdb, first_bitmap_cdb;
-    uint64_t *bitmap_buf, word, complement_word;
+    volatile uint64_t *bitmap_buf, word, complement_word;
     c2_page_t *bitmap_c2p;
     block_t slave_size;
     int i, i_max = (C_BLK_SIZE / sizeof(uint64_t));
@@ -474,7 +474,7 @@ process_bitmap_cdb:
     if(!c2p_uptodate(bitmap_c2p))
         BUG_ON(submit_c2p_sync(READ, bitmap_c2p));
     bitmap_buf = c2p_buffer(bitmap_c2p);
-    for(; i < i_max; i++)
+    for(i=0; i < i_max; i++)
         if(bitmap_buf[i] != 0)
             break;
     debug("First non-zero bitmap block word is at i=%d (i_max=%d)\n",
@@ -482,7 +482,7 @@ process_bitmap_cdb:
 
     /* If none of the words were non-zero in the bitmap, goto next bitmap
        block straight away */
-    if(i == i_max) goto next_bitmap_cdb;
+    if(i >= i_max) goto next_bitmap_cdb;
 
     /* Find the first set bit in the first non-zero bitmap word */
     /* We are assuming little endian here */
@@ -576,7 +576,8 @@ void castle_freespace_block_free(c_disk_blk_t cdb, version_t version)
     struct castle_slave_superblock *cs_sb;
     c_disk_blk_t bitmap_cdb;
     c2_page_t *bitmap_c2p;
-    void *bitmap_buf;
+    volatile uint64_t *bitmap_buf;
+    int position;
 
     BUG_ON(!slave);
     bitmap_cdb = cdb_to_bitmap_cdb(cdb);
@@ -585,7 +586,9 @@ void castle_freespace_block_free(c_disk_blk_t cdb, version_t version)
     if(!c2p_uptodate(bitmap_c2p))
         BUG_ON(submit_c2p_sync(READ, bitmap_c2p));
     bitmap_buf = c2p_buffer(bitmap_c2p);
-    set_bit(blk_to_bitmap_off(cdb.block), bitmap_buf);
+    position = blk_to_bitmap_off(cdb.block);
+    BUG_ON(test_bit(position, bitmap_buf));
+    set_bit(position, bitmap_buf);
     dirty_c2p(bitmap_c2p);
     unlock_c2p(bitmap_c2p);
     put_c2p(bitmap_c2p);

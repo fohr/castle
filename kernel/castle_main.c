@@ -630,9 +630,24 @@ err_out:
 
 void castle_region_destroy(struct castle_region *region)
 {
+    struct castle_transfer *t;
+    struct list_head *l;
+    int do_not_free = 0;
+
+    list_for_each(l, &castle_transfers.transfers)
+    {
+        t = list_entry(l, struct castle_transfer, list);
+        if(t->version == region->version)
+        {
+            printk("===========> Trying to destroy region id=%d, with an active transfer id=%d.\n",
+                    region->id, t->id);
+            do_not_free = 1;
+        } 
+    }
     castle_events_region_destroy(region->id);
     castle_sysfs_region_del(region);
     list_del(&region->list);
+    if(!do_not_free)
     kfree(region);
 }
 
@@ -1123,7 +1138,7 @@ static void castle_slaves_spindown(struct work_struct *work)
         }
         /* This slave is spinning, check if there was an access to it within
            the spindown period */
-        if((cs->last_access + 30 * HZ < jiffies) &&
+        if((cs->last_access + 5 * HZ < jiffies) &&
            !(sb->flags & CASTLE_SLAVE_TARGET))
         {
             sb->flags &= ~CASTLE_SLAVE_SPINNING; 
