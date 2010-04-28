@@ -167,17 +167,18 @@ static int castle_debug_run(void *unused)
 {
     c_bio_t *c_bio;
     struct list_head *l;
-    int i, j, keep_printing;
-    unsigned long flags;
+    int something_printed, j, nr_bios;
+    unsigned long flags, states_printed;
     int cdb_idx;
     int sleep_time = 10;
 
     printk("Castle debugging thread starting.\n");
     do {
-        i=0;
-        keep_printing = 1;
         spin_lock_irqsave(&bio_list_spinlock, flags);
         cdb_idx = 0;
+        states_printed = 0;
+        something_printed = 0;
+        nr_bios = 0;
         list_for_each(l, &bio_list)
         {
             c_bio = list_entry(l, c_bio_t, list); 
@@ -188,21 +189,30 @@ static int castle_debug_run(void *unused)
             }
                 c_bio->stuck++;
 
-            if(keep_printing)
-                printk("Found an outstanding Castle BIO, id=%d\n", c_bio->id);
+            nr_bios++;
             for(j=0; j<c_bio->nr_bvecs; j++)
             {
                 c_bvec_t *c_bvec = &c_bio->c_bvecs[j];
                 int locking = ((c_bvec->state & C_BVEC_BTREE_GOT_NODE) &&
                               !(c_bvec->state & C_BVEC_BTREE_LOCKED_NODE));
+                int print = (states_printed & c_bvec->state) != c_bvec->state;
 
+                /* Save that we've already printed this particular state */
+                states_printed |= c_bvec->state;
+
+                if(!something_printed)
+                {
+                    printk("Found an outstanding Castle BIOs\n");
+                    something_printed = 1;
+                }
+ 
                 /* Print info about first 10 stuck BIO + all in locking state */
-                if(keep_printing || locking)
-                    printk(" c_bvecs[%d], "
+                if(print || locking)
+                    printk(" c_bio->id=%d, c_bvecs[%d], "
                            "(b,v)=(0x%lx, 0x%x), "
                            "btree_depth=%d, "
                            "state=0x%lx\n",
-                        j,
+                        c_bio->id, j,
                         c_bvec->block, c_bvec->version,
                         c_bvec->btree_depth,
                         c_bvec->state);
@@ -219,18 +229,14 @@ static int castle_debug_run(void *unused)
                         printk("has never been locked before?\n");
                 }
             }
- 
-            if(i++ > 10 && !keep_printing)
-            {
-                printk("...\n...\n...\n");
-                keep_printing = 0;
-            }
         }
-        if(i > 10)
-            printk("More than 10 outstanding request. Not printing all.\n");
         spin_unlock_irqrestore(&bio_list_spinlock, flags);
-        if(i>0) sleep_time += 1;
-        
+        if(something_printed) 
+        {
+            printk("...\nTotal number of stuck bios=%d\n\n", nr_bios);
+            sleep_time += 1;
+        }
+  
         set_task_state(current, TASK_INTERRUPTIBLE);
         schedule_timeout(sleep_time * HZ);
     } while(!kthread_should_stop());
