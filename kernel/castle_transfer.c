@@ -164,6 +164,27 @@ void castle_transfer_destroy(struct castle_transfer *transfer)
     debug("castle_transfer_destroy'd id=%d\n", transfer->id);
 }
 
+static void castle_transfer_check(struct castle_transfer *transfer)
+{
+    struct list_head *l;
+    struct castle_transfer *t;
+
+    list_for_each(l, &castle_transfers.transfers)
+    {
+        t = list_entry(l, struct castle_transfer, list);
+        if(t->version == transfer->version)
+        {
+            printk("============= WARNING FOUND MULTIPLE TRANSFERS FOR THE SAME VERSION =========== \n ");
+            printk(" Version=%d\n", transfer->version);
+            printk(" Found when creating transfer id=%d, direction=%d\n", 
+                    transfer->id, transfer->direction);
+            printk(" The other transfer is: id=%d, direction=%d\n", 
+                    t->id, t->direction);
+            printk("============ DEBUG END ==========\n");
+        }
+    }
+}
+
 struct castle_transfer* castle_transfer_create(version_t version, int direction)
 {
     struct castle_transfer* transfer = NULL;
@@ -171,7 +192,6 @@ struct castle_transfer* castle_transfer_create(version_t version, int direction)
     int err;
 
     debug("castle_transfer_create(version=%d, direction=%d)\n", version, direction);
-    printk("castle_transfer_create(version=%d, direction=%d)\n", version, direction);
 
     /* To check if a good snapshot version, try and
        get the snapshot.  If we do get it, then we may
@@ -200,6 +220,9 @@ struct castle_transfer* castle_transfer_create(version_t version, int direction)
     if(transfer->regions_count < 0)
         goto err_out;
     
+    /* For Hugh's debugging only.
+       TODO: remove when done */
+    castle_transfer_check(transfer);
     castle_transfer_add(transfer);
 
     err = castle_sysfs_transfer_add(transfer);
@@ -213,9 +236,12 @@ struct castle_transfer* castle_transfer_create(version_t version, int direction)
 
     castle_events_transfer_create(transfer->id);
 
+    printk("castle_transfer_create(version=%d, direction=%d) -> id=%d\n", 
+            version, direction, transfer->id);
     return transfer;
 
 err_out:
+    printk("castle_transfer_create has failed.\n");
     if(transfer->regions) kfree(transfer->regions);
     if(transfer) kfree(transfer);
     return NULL;
