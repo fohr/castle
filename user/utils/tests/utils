@@ -33,7 +33,7 @@ function onexit() {
     umount ${MOUNT_POINT} 2>/dev/null  || true
     umount ${MOUNT_POINT2} 2>/dev/null || true
     if [ $exit_status != 0 ]; then
-        echo "FAILED THE TEST. EXIT STATUS: $exit_status."
+	echo "WARNING: Failure."
         umount_fs
     fi
     exit $exit_status
@@ -56,6 +56,10 @@ function dev_to_majmin {
     else
         echo "Could not dev_to_majmin for dev: $DEV"
         false
+    fi
+    if [ "x$MAJMIN" == "x" ]; then
+	echo "Could not find $DEV"
+        exit 1
     fi
     local MAJ=`echo $MAJMIN | cut -d":" -f1`
     local MIN=`echo $MAJMIN | cut -d":" -f2`
