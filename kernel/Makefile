@@ -21,11 +21,17 @@ KVER       ?= 2.6.24
 KERNEL_DIR ?= /lib/modules/$(KVER)/build
 PWD        := $(shell pwd)
 
-.PHONY: $(TARGET).ko
-$(TARGET).ko:
-	$(MAKE) -C $(KERNEL_DIR) M=$(PWD) modules
-
+.PHONY: all
 all: $(TARGET).ko
+
+# Make castle_compile.h PHONY, to get it refreshed every build
+.PHONY: castle_compile.h
+castle_compile.h:
+	echo "#define CASTLE_COMPILE_CHANGESET \"$(shell ((hg parents --template "{date|date} {rev}:{node|short}" >/dev/null && hg parents --template "{date|date} {rev}:{node|short}") || echo "unavailable") 2>/dev/null)\"" > castle_compile.h
+
+.PHONY: $(TARGET).ko
+$(TARGET).ko: castle_compile.h
+	$(MAKE) -C $(KERNEL_DIR) M=$(PWD) modules
 
 install: $(TARGET).ko
 	$(MAKE) -C $(KERNEL_DIR) M=$(PWD) modules_install

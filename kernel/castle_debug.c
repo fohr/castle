@@ -172,7 +172,6 @@ static int castle_debug_run(void *unused)
     int cdb_idx;
     int sleep_time = 10;
 
-    printk("Castle debugging thread starting.\n");
     do {
         spin_lock_irqsave(&bio_list_spinlock, flags);
         cdb_idx = 0;

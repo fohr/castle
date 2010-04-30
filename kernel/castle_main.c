@@ -10,6 +10,7 @@
 #include <asm/semaphore.h>
 
 #include "castle_public.h"
+#include "castle_compile.h"
 #include "castle.h"
 #include "castle_block.h"
 #include "castle_cache.h"
@@ -1277,7 +1278,7 @@ static int __init castle_init(void)
 {
     int ret;
 
-    printk("Castle FS init ... ");
+    printk("Castle FS init (build: %s) ... ", CASTLE_COMPILE_CHANGESET);
 
     castle_fs_inited = 0;
               castle_debug_init();
