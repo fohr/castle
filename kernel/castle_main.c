@@ -1027,6 +1027,7 @@ void castle_device_free(struct castle_device *cd)
     
     castle_events_device_detach(cd->gd->major, cd->gd->first_minor);
 
+    printk("===> When freeing the number of cd users is: %d\n", cd->users);
     castle_sysfs_device_del(cd);
     /* TODO: Should this be done? blk_cleanup_queue(cd->gd->rq); */ 
     del_gendisk(cd->gd);
@@ -1172,56 +1173,8 @@ static void castle_slaves_spindowns_check(unsigned long first)
 
 static int castle_slaves_init(void)
 {
-    memset(&castle_slaves, 0, sizeof(struct castle_slaves));
-    INIT_LIST_HEAD(&castle_slaves.slaves);
-
-    castle_slaves_spindowns_check(1);
-
-    return 0;
-}
-
-static void castle_slaves_unlock(void)                                                                 
-{                                                                                        
-    struct list_head *lh, *th;
-    struct castle_slave *slave;
-
-    list_for_each_safe(lh, th, &castle_slaves.slaves)
-    {
-        slave = list_entry(lh, struct castle_slave, list); 
-        put_c2p(slave->sblk);
-        put_c2p(slave->fs_sblk);
-    }
-}
-
-static void castle_slaves_free(void)                                                                 
-{                                                                                        
-    struct list_head *lh, *th;
-    struct castle_slave *slave;
-
-    del_singleshot_timer_sync(&spindown_timer);
-
-    list_for_each_safe(lh, th, &castle_slaves.slaves)
-    {
-        slave = list_entry(lh, struct castle_slave, list); 
-        castle_release(slave);
-    }
-}
-
-static int castle_devices_init(void)
-{
-    int i, major;
     char *wq_names[2*MAX_BTREE_DEPTH+1];
-
-    memset(&castle_devices, 0, sizeof(struct castle_devices));
-    INIT_LIST_HEAD(&castle_devices.devices);
-
-    /* Allocate a major for this device */
-    if((major = register_blkdev(0, "castle-fs")) < 0) 
-    {
-        printk("Couldn't register castle device\n");
-        return -ENOMEM;
-    }
-    castle_devices.major = major;
+    int i;
 
     memset(wq_names  , 0, sizeof(char *) * (2*MAX_BTREE_DEPTH+1));
     memset(castle_wqs, 0, sizeof(struct workqueue_struct *) * (2*MAX_BTREE_DEPTH+1));
@@ -1237,6 +1190,12 @@ static int castle_devices_init(void)
         if(!castle_wqs[i])
             goto err_out;
     }
+
+    /* Init the slaves structures */
+    memset(&castle_slaves, 0, sizeof(struct castle_slaves));
+    INIT_LIST_HEAD(&castle_slaves.slaves);
+
+    castle_slaves_spindowns_check(1);
 
     return 0;
 
@@ -1255,11 +1214,59 @@ err_out:
     return -ENOMEM;
 }
 
-static void castle_devices_free(void)                                                                 
+static void castle_slaves_unlock(void)                                                                 
+{                                                                                        
+    struct list_head *lh, *th;
+    struct castle_slave *slave;
+
+    list_for_each_safe(lh, th, &castle_slaves.slaves)
+    {
+        slave = list_entry(lh, struct castle_slave, list); 
+        put_c2p(slave->sblk);
+        put_c2p(slave->fs_sblk);
+    }
+}
+
+static void castle_slaves_free(void)
+{                                                                                        
+    struct list_head *lh, *th;
+    struct castle_slave *slave;
+    int i;
+
+    del_singleshot_timer_sync(&spindown_timer);
+
+    list_for_each_safe(lh, th, &castle_slaves.slaves)
+    {
+        slave = list_entry(lh, struct castle_slave, list); 
+        castle_release(slave);
+    }
+
+    for(i=0; i<=2*MAX_BTREE_DEPTH; i++)
+        destroy_workqueue(castle_wqs[i]);
+}
+
+static int castle_devices_init(void)
+{
+    int major;
+
+    memset(&castle_devices, 0, sizeof(struct castle_devices));
+    INIT_LIST_HEAD(&castle_devices.devices);
+
+    /* Allocate a major for this device */
+    if((major = register_blkdev(0, "castle-fs")) < 0) 
+    {
+        printk("Couldn't register castle device\n");
+        return -ENOMEM;
+    }
+    castle_devices.major = major;
+
+    return 0;
+}
+
+static void castle_devices_free(void)
 {                                                                                        
     struct list_head *lh, *th;
     struct castle_device *dev;
-    int i;
 
     list_for_each_safe(lh, th, &castle_devices.devices)
     {
@@ -1269,9 +1276,6 @@ static void castle_devices_free(void)
 
     if (castle_devices.major)
         unregister_blkdev(castle_devices.major, "castle-fs");
-
-    for(i=0; i<=2*MAX_BTREE_DEPTH; i++)
-        destroy_workqueue(castle_wqs[i]);
 }
 
 static int __init castle_init(void)
@@ -1288,9 +1292,9 @@ static int __init castle_init(void)
     if((ret = castle_btree_init()))     goto err_out4;
     if((ret = castle_freespace_init())) goto err_out5;
     if((ret = castle_devices_init()))   goto err_out6;
-    if((ret = castle_control_init()))   goto err_out7;
-    if((ret = castle_regions_init()))   goto err_out8;
-    if((ret = castle_transfers_init())) goto err_out9;
+    if((ret = castle_regions_init()))   goto err_out7;
+    if((ret = castle_transfers_init())) goto err_out8;
+    if((ret = castle_control_init()))   goto err_out9;
     if((ret = castle_sysfs_init()))     goto err_out10;
 
     printk("OK.\n");
@@ -1299,11 +1303,11 @@ static int __init castle_init(void)
 
     castle_sysfs_fini(); /* Unreachable */
 err_out10:
-    castle_transfers_free();
-err_out9:
-    castle_regions_free();
-err_out8:
     castle_control_fini();
+err_out9:
+    castle_transfers_free();
+err_out8:
+    castle_regions_free();
 err_out7:
     castle_devices_free();
 err_out6:
@@ -1332,17 +1336,22 @@ static void __exit castle_exit(void)
 {
     printk("Castle FS exit ... ");
 
+    /* Remove externaly visible interfaces */
+    castle_sysfs_fini();
+    castle_control_fini();
+    /* Now, make sure no more IO can be made, internally or externally generated */
     castle_transfers_free();
     castle_regions_free();
-    castle_control_fini();
     castle_devices_free();
+    /* Cleanup/writeout all metadata */ 
     castle_freespace_fini();
     castle_btree_free();
     castle_versions_fini();
+    /* Drop all cache references (superblocks), flush the cache, free the slaves. */ 
     castle_slaves_unlock();
     castle_cache_fini();
     castle_slaves_free();
-    castle_sysfs_fini();
+    /* All finished, stop the debugger */
     castle_debug_fini();
 
     printk("done.\n\n\n");
