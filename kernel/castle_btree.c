@@ -964,7 +964,7 @@ static void _castle_ftree_find(struct work_struct *work)
 void castle_ftree_find(c_bvec_t *c_bvec)
 {
     INIT_WORK(&c_bvec->work, _castle_ftree_find);
-    queue_work(castle_wq, &c_bvec->work); 
+    queue_work(castle_wqs[19], &c_bvec->work); 
 }
 
 /* Btree iterate functions */
