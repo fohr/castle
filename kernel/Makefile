@@ -40,6 +40,19 @@ install: $(TARGET).ko
 clean:
 	rm -rf *.o *~ core .depend .*.o.d .*.cmd *.ko *.mod.c .tmp_versions Module.symvers
 
+define all_sources	
+	(find $(SUBDIRS) -name '*.[ch]' -print)
+endef
+
+.PHONY: tags
+tags:
+	$(all_sources) | xargs ctags
+
+.PHONY: cscope
+cscope:
+	$(all_sources) > cscope.files
+	cscope -k -b -q
+
 depend .depend dep:
 	$(CC) $(EXTRA_FLAGS) -M *.c > .depend
 

@@ -11,3 +11,8 @@ user/ocaml/castle_ioctl
 *.rej
 ._*
 \#*
+*cscope.files
+*cscope.out
+*cscope.in.out
+*cscope.po.out
+*tags
