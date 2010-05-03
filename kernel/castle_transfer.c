@@ -164,7 +164,7 @@ void castle_transfer_destroy(struct castle_transfer *transfer)
     debug("castle_transfer_destroy'd id=%d\n", transfer->id);
 }
 
-static void castle_transfer_check(struct castle_transfer *transfer)
+static int castle_transfer_check(struct castle_transfer *transfer)
 {
     struct list_head *l;
     struct castle_transfer *t;
@@ -172,24 +172,29 @@ static void castle_transfer_check(struct castle_transfer *transfer)
     list_for_each(l, &castle_transfers.transfers)
     {
         t = list_entry(l, struct castle_transfer, list);
+        if(t->finished)
+            continue;
         if(t->version == transfer->version)
         {
-            printk("============= WARNING FOUND MULTIPLE TRANSFERS FOR THE SAME VERSION =========== \n ");
-            printk(" Version=%d\n", transfer->version);
-            printk(" Found when creating transfer id=%d, direction=%d\n", 
-                    transfer->id, transfer->direction);
-            printk(" The other transfer is: id=%d, direction=%d\n", 
+            printk("Found existing transfer when creating transfer "
+                   "id=%d, version=%d, direction=%d\n"
+                   "The other transfer is: id=%d, direction=%d\n", 
+                    transfer->id, transfer->version, transfer->direction,
                     t->id, t->direction);
-            printk("============ DEBUG END ==========\n");
+            return -EBUSY;
         }
     }
+
+    return 0;
 }
 
-struct castle_transfer* castle_transfer_create(version_t version, int direction)
+struct castle_transfer* castle_transfer_create(version_t version, int direction, int *ret)
 {
     struct castle_transfer* transfer = NULL;
     static int transfer_id = 0;
-    int err;
+    int err = 0;
+    
+    BUG_ON(ret == NULL);
 
     debug("castle_transfer_create(version=%d, direction=%d)\n", version, direction);
 
@@ -220,9 +225,9 @@ struct castle_transfer* castle_transfer_create(version_t version, int direction)
     if(transfer->regions_count < 0)
         goto err_out;
     
-    /* For Hugh's debugging only.
-       TODO: remove when done */
-    castle_transfer_check(transfer);
+    if((err = castle_transfer_check(transfer)) != 0)
+        goto err_out;
+
     castle_transfer_add(transfer);
 
     err = castle_sysfs_transfer_add(transfer);
@@ -238,12 +243,18 @@ struct castle_transfer* castle_transfer_create(version_t version, int direction)
 
     printk("castle_transfer_create(version=%d, direction=%d) -> id=%d\n", 
             version, direction, transfer->id);
+
+    BUG_ON(err != 0);
+    *ret = 0;
     return transfer;
 
 err_out:
     printk("castle_transfer_create has failed.\n");
     if(transfer->regions) kfree(transfer->regions);
-    if(transfer) kfree(transfer);
+    if(transfer)          kfree(transfer);
+
+    BUG_ON(err == 0);
+    *ret = err;
     return NULL;
 }
 

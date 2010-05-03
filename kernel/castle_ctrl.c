@@ -194,17 +194,18 @@ static void castle_control_transfer_create(cctrl_cmd_transfer_create_t *ioctl)
 {
     struct castle_transfer *transfer;
 
-    if(!(transfer = castle_transfer_create(ioctl->snapshot, ioctl->direction)))
+    if(!(transfer = castle_transfer_create(ioctl->snapshot, ioctl->direction, &ioctl->ret)))
         goto err_out;
 
+    /* Return value should have been correctly set by _create() */
+    BUG_ON(ioctl->ret != 0);
     ioctl->id  = transfer->id;
-    ioctl->ret = 0;
 
     return;
 
 err_out:
+    BUG_ON(ioctl->ret == 0);
     ioctl->id  = (uint32_t)-1;
-    ioctl->ret = -EINVAL;
 }
 
 static void castle_control_transfer_destroy(cctrl_cmd_transfer_destroy_t *ioctl)
