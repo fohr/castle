@@ -354,7 +354,7 @@ void                  castle_release           (struct castle_slave *cs);
 
 struct castle_region* castle_region_find       (region_id_t id);
 struct castle_region* castle_region_create     (uint32_t slave_id, version_t version, uint32_t start, uint32_t length);
-void                  castle_region_destroy    (struct castle_region *region);
+int                   castle_region_destroy    (struct castle_region *region);
 
 void                  castle_slave_access      (uint32_t uuid);
 

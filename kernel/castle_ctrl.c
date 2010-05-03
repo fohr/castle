@@ -186,8 +186,7 @@ static void castle_control_region_destroy(cctrl_cmd_region_destroy_t *ioctl)
     }
     else
     {
-        castle_region_destroy(region);
-        ioctl->ret = 0;
+        ioctl->ret = castle_region_destroy(region);
     }
 }
 
@@ -319,4 +318,7 @@ void castle_control_fini(void)
 
     if((ret = misc_deregister(&castle_control))) 
         printk("Could not unregister castle control node (%d).\n", ret);
+    /* Sleep waiting for the last ctrl op to complete, if there is one */
+    down(&castle_control_lock);
+    up(&castle_control_lock);
 }

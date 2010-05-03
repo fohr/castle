@@ -629,27 +629,28 @@ err_out:
     return NULL;
 }
 
-void castle_region_destroy(struct castle_region *region)
+int castle_region_destroy(struct castle_region *region)
 {
     struct castle_transfer *t;
     struct list_head *l;
-    int do_not_free = 0;
 
+    /* TODO: transfres are regions must be protected by locks! */
     list_for_each(l, &castle_transfers.transfers)
     {
         t = list_entry(l, struct castle_transfer, list);
         if(t->version == region->version)
         {
-            printk("===========> Trying to destroy region id=%d, with an active transfer id=%d.\n",
+            printk("Warning: Trying to destroy region id=%d, with an active transfer id=%d.\n",
                     region->id, t->id);
-            do_not_free = 1;
+            return -EBUSY;
         } 
     }
     castle_events_region_destroy(region->id);
     castle_sysfs_region_del(region);
     list_del(&region->list);
-    if(!do_not_free)
     kfree(region);
+
+    return 0;
 }
 
 static int castle_regions_init(void)
