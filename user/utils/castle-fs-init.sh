@@ -14,7 +14,8 @@ elif [ -e tests/utils ]; then
 fi
 # Override CONFIG variables (e.g. DISKS) here 
 
-DISKS="/dev/hdb5 /dev/hdb6 /dev/hdb7 /dev/hdb8 /dev/hdb9 /dev/hdb10 /dev/hdb11 /dev/hdb12"
+#DISKS="/dev/hdb5 /dev/hdb6 /dev/hdb7 /dev/hdb8 /dev/hdb9 /dev/hdb10 /dev/hdb11 /dev/hdb12"
+DISKS="disk1 disk2 disk3 disk4 disk5 disk6 disk7 disk8 disk8 disk10"
 DISK_SIZE=1000 # in MB
 
 umount_fs
