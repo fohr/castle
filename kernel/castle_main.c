@@ -22,6 +22,7 @@
 #include "castle_sysfs.h"
 #include "castle_debug.h"
 #include "castle_events.h"
+#include "castle_rxrpc.h"
 
 struct castle                castle;
 struct castle_slaves         castle_slaves;
@@ -1296,13 +1297,16 @@ static int __init castle_init(void)
     if((ret = castle_regions_init()))   goto err_out7;
     if((ret = castle_transfers_init())) goto err_out8;
     if((ret = castle_control_init()))   goto err_out9;
-    if((ret = castle_sysfs_init()))     goto err_out10;
+    if((ret = castle_rxrpc_init()))     goto err_out10;
+    if((ret = castle_sysfs_init()))     goto err_out11;
 
     printk("OK.\n");
 
     return 0;
 
     castle_sysfs_fini(); /* Unreachable */
+err_out11:
+    castle_rxrpc_fini();
 err_out10:
     castle_control_fini();
 err_out9:
@@ -1327,11 +1331,10 @@ err_out2:
     castle_slaves_free();
 err_out1:
     castle_debug_fini();
-
+    
     /* TODO: check if kernel will accept any non-zero return value to mean: we want to exit */
     return ret;
 }
-
 
 static void __exit castle_exit(void)
 {
@@ -1339,6 +1342,7 @@ static void __exit castle_exit(void)
 
     /* Remove externaly visible interfaces */
     castle_sysfs_fini();
+    castle_rxrpc_fini();
     castle_control_fini();
     /* Now, make sure no more IO can be made, internally or externally generated */
     castle_transfers_free();
