@@ -2,6 +2,12 @@
 #define __CASTLE_H__
 
 #define USED                 __attribute__((used))
+#define PACKED               __attribute__((packed))
+
+#define STATIC_BUG_ON_HELPER(expr) \
+        (!!sizeof (struct { unsigned int static_assertion_error: (expr) ? -1 : 1; }))
+#define STATIC_BUG_ON(expr) \
+        extern int (*assert_function__(void)) [STATIC_BUG_ON_HELPER(expr)]
 
 typedef uint32_t version_t;
 #define INVAL_VERSION       ((version_t)-1) 
@@ -14,12 +20,14 @@ typedef uint32_t block_t;
 struct castle_disk_block {
     uint32_t disk;
     block_t block;
-};
+} PACKED;
 typedef struct castle_disk_block c_disk_blk_t;
 #define INVAL_DISK_BLK          ((c_disk_blk_t){0,0})
 #define DISK_BLK_INVAL(_blk)    (((_blk).block == 0) && ((_blk).disk == 0))
 #define DISK_BLK_EQUAL(_blk1, _blk2) (((_blk1).disk == (_blk2).disk) && \
                                       ((_blk1).block == (_blk2).block)) 
+#define blkfmt                  "(0x%x, 0x%x)"
+#define blk2str(_blk)           (_blk).disk, (_blk).block
 
 #define CASTLE_SLAVE_TARGET     (0x00000001)
 #define CASTLE_SLAVE_SPINNING   (0x00000002)
@@ -37,7 +45,7 @@ struct castle_slave_superblock {
 	uint32_t     flags; 
     c_disk_blk_t flist_next;
     c_disk_blk_t flist_prev;
-};
+} PACKED;
 
 #define CASTLE_FS_MAGIC1        (0x19731121)
 #define CASTLE_FS_MAGIC2        (0x19880624)
@@ -52,7 +60,7 @@ struct castle_fs_superblock {
     c_disk_blk_t fwd_tree2;
     c_disk_blk_t rev_tree1;
     c_disk_blk_t rev_tree2;
-};
+} PACKED;
 
 
 #define MAX_BTREE_DEPTH       (10)
@@ -78,7 +86,7 @@ struct castle_ftree_slot {
     uint32_t     block;
     uint32_t     version;
     c_disk_blk_t cdb;
-};
+} PACKED;
 
 #define FTREE_NODE_MAGIC  0x0000cdab
 #define FTREE_NODE_SLOTS  ((PAGE_SIZE - NODE_HEADER)/sizeof(struct castle_ftree_slot))
@@ -92,7 +100,7 @@ struct castle_ftree_node {
        saved to the disk (even though they probably will */
     uint8_t  is_leaf;
     struct castle_ftree_slot slots[FTREE_NODE_SLOTS];
-};
+} PACKED;
 
 
 struct castle_vlist_slot {
@@ -100,7 +108,7 @@ struct castle_vlist_slot {
     uint32_t     parent;
     uint32_t     size;
     c_disk_blk_t cdb;
-};
+} PACKED;
 
 #define VLIST_NODE_MAGIC  0x0000baca
 #define VLIST_SLOTS  ((PAGE_SIZE - NODE_HEADER)/sizeof(struct castle_vlist_slot))
@@ -113,12 +121,12 @@ struct castle_vlist_node {
     c_disk_blk_t prev; /* 8 bytes */
     uint8_t __pad[NODE_HEADER - 32];
     struct castle_vlist_slot slots[VLIST_SLOTS];
-};
+} PACKED;
 
 struct castle_flist_slot {
     version_t    version;
     block_t      blocks;
-};
+} PACKED;
 
 #define FLIST_NODE_MAGIC  0x0000faca
 #define FLIST_SLOTS  ((PAGE_SIZE - NODE_HEADER)/sizeof(struct castle_flist_slot))
@@ -131,7 +139,7 @@ struct castle_flist_node {
     c_disk_blk_t prev; /* 8 bytes */
     uint8_t __pad[NODE_HEADER - 32];
     struct castle_flist_slot slots[FLIST_SLOTS];
-};
+} PACKED;
 
 /* IO related structures */
 struct castle_bio_vec;
