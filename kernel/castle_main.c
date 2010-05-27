@@ -7,6 +7,7 @@
 #include <linux/blkdev.h>
 #include <linux/random.h>
 #include <linux/crc32.h>
+#include <linux/skbuff.h>
 #include <asm/semaphore.h>
 
 #include "castle_public.h"
