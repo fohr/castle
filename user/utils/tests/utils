@@ -146,6 +146,7 @@ function do_control_internal4 {
 
 function do_control_claim {
     local FILE=$1
+	echo " ===> adding ${FILE}" >&2
     if [ `echo "${FILE}" | grep "/dev" | wc -l` == 0 ]; then
         local LOOP=`losetup -f`
         losetup $LOOP ${TEST}/${FILE}

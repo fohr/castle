@@ -10,38 +10,157 @@
 #include <linux/rxrpc.h>
 #include <net/af_rxrpc.h>
 #include <linux/errqueue.h>
+#include <rxrpc/packet.h>
 
 #include "castle_public.h"
 #include "castle.h"
 #include "castle_debug.h"
 #include "castle_cache.h"
 
+
+/* Forward definitions */
+struct castle_rxrpc_call;
+static const struct castle_rxrpc_call_type castle_rxrpc_op_call;
+static const struct castle_rxrpc_call_type castle_rxrpc_get_call;
+static const struct castle_rxrpc_call_type castle_rxrpc_replace_call;
+static const struct castle_rxrpc_call_type castle_rxrpc_slice_call;
+static const struct castle_rxrpc_call_type castle_rxrpc_ctrl_call;
+
+
 #define NR_WQS    4
 static struct socket            *socket;
-static struct workqueue_struct  *rxrpc_wqs[NR_WQS]; /* Need singlethreaded WQs, 
+static struct workqueue_struct  *rxrpc_wqs[NR_WQS]; /* Need singlethreaded WQs,
                                                        because individual calls handling
                                                        is not multithread safe. Collection
-                                                       of queues will alow concurrency 
+                                                       of queues will alow concurrency
                                                        between calls through. */
 static struct sk_buff_head       rxrpc_incoming_calls;
 static void castle_rxrpc_incoming_call_collect(struct work_struct *work);
 static DECLARE_WORK(castle_rxrpc_incoming_call_work, castle_rxrpc_incoming_call_collect);
 
-struct castle_rxrpc_call {
-    struct workqueue_struct *wq;         /* One of the rxrpc_wqs. Used to process the call. */
-    struct work_struct       work;
-    unsigned long            call_id;
-    struct rxrpc_call       *rxcall;
-    struct sk_buff_head      rx_queue;   /* Queue of packets for this call */
-
-    uint8_t                 *buffer;
+struct castle_rxrpc_call_type {
+    int (*deliver)     (struct castle_rxrpc_call *call, struct sk_buff *skb,  bool last);
+    void (*destructor) (struct castle_rxrpc_call *call);
 };
 
-static void castle_rxrpc_packet_repspond(struct castle_rxrpc_call *call)
+struct castle_rxrpc_call {
+    struct workqueue_struct       *wq;         /* One of the rxrpc_wqs. Used to process the call. */
+    struct work_struct             work;
+    unsigned long                  call_id;
+    struct rxrpc_call             *rxcall;
+    struct sk_buff_head            rx_queue;   /* Queue of packets for this call */
+
+    int                            op_id;
+    const struct castle_rxrpc_call_type *type;
+    enum {
+        /* Copied from AFS */
+        RXRPC_CALL_AWAIT_OP_ID,   /* awaiting op ID on incoming call */
+        RXRPC_CALL_AWAIT_REQUEST, /* awaiting request data on incoming call */
+        RXRPC_CALL_REPLYING,      /* replying to incoming call */
+        RXRPC_CALL_AWAIT_ACK,     /* awaiting final ACK of incoming call */
+        RXRPC_CALL_COMPLETE,      /* successfully completed */
+        RXRPC_CALL_BUSY,          /* server was busy */
+        RXRPC_CALL_ABORTED,       /* call was aborted */
+        RXRPC_CALL_ERROR,         /* call failed due to error */
+    }                              state;
+    int                            error;
+
+    uint8_t                       *buffer;
+};
+
+
+/* Definition of different call types */
+int castle_rxrpc_op_decode(struct castle_rxrpc_call *call, struct sk_buff *skb,  bool last)
+{
+    __be32 op;
+
+    if(skb->len < 4)
+        return -EBADMSG;
+
+    call->state = RXRPC_CALL_AWAIT_REQUEST;
+    BUG_ON(skb_copy_bits(skb, 0, &op, 4) < 0);
+    /* ? if (!pskb_pull(skb, len))
+        BUG();
+     */
+    call->op_id = ntohl(op);
+    printk("op id: %d\n", call->op_id);
+
+    switch(call->op_id)
+    {
+        case CASTLE_OBJ_REQ_GET:
+            call->type = &castle_rxrpc_get_call;
+            break;
+        case CASTLE_OBJ_REQ_REPLACE:
+            call->type = &castle_rxrpc_replace_call;
+            break;
+        case CASTLE_OBJ_REQ_SLICE:
+            call->type = &castle_rxrpc_slice_call;
+            break;
+        case CASTLE_CTRL_REQ:
+            call->type = &castle_rxrpc_ctrl_call;
+            break;
+        default:
+            return -ENOTSUPP;
+    }
+
+    return call->type->deliver(call, skb, last);
+}
+
+int castle_rxrpc_get_decode(struct castle_rxrpc_call *call, struct sk_buff *skb,  bool last)
+{
+    printk("Obj Get.\n");
+    return -ENOTSUPP;
+}
+
+int castle_rxrpc_replace_decode(struct castle_rxrpc_call *call, struct sk_buff *skb,  bool last)
+{
+    printk("Obj Replace.\n");
+    return -ENOTSUPP;
+}
+
+int castle_rxrpc_slice_decode(struct castle_rxrpc_call *call, struct sk_buff *skb,  bool last)
+{
+    printk("Obj Slice.\n");
+    return -ENOTSUPP;
+}
+
+int castle_rxrpc_ctrl_decode(struct castle_rxrpc_call *call, struct sk_buff *skb,  bool last)
+{
+    printk("Ctrl.\n");
+    return -ENOTSUPP;
+}
+
+
+static const struct castle_rxrpc_call_type castle_rxrpc_op_call =
+{
+    .deliver = castle_rxrpc_op_decode,
+};
+
+static const struct castle_rxrpc_call_type castle_rxrpc_get_call =
+{
+    .deliver = castle_rxrpc_get_decode,
+};
+
+static const struct castle_rxrpc_call_type castle_rxrpc_replace_call =
+{
+    .deliver = castle_rxrpc_replace_decode,
+};
+
+static const struct castle_rxrpc_call_type castle_rxrpc_slice_call =
+{
+    .deliver = castle_rxrpc_slice_decode,
+};
+
+static const struct castle_rxrpc_call_type castle_rxrpc_ctrl_call =
+{
+    .deliver = castle_rxrpc_ctrl_decode,
+};
+
+static void USED castle_rxrpc_packet_repspond(struct castle_rxrpc_call *call)
 {
     struct msghdr msg;
     struct iovec iov[1];
-                            
+
     call->buffer[0]     = 0;
     call->buffer[1]     = 1;
     call->buffer[2]     = 2;
@@ -56,43 +175,101 @@ static void castle_rxrpc_packet_repspond(struct castle_rxrpc_call *call)
     msg.msg_control     = NULL;
     msg.msg_controllen  = 0;
     msg.msg_flags       = 0;
-        
+
     BUG_ON(rxrpc_kernel_send_data(call->rxcall, &msg, 4) != 4);
+}
+
+static void castle_rxrpc_call_free(struct castle_rxrpc_call *call)
+{
+    BUG_ON(call->rxcall != NULL);
+    BUG_ON(!skb_queue_empty(&call->rx_queue));
+    kfree(call);
 }
 
 static void castle_rxrpc_packet_process(struct work_struct *work)
 {
-    struct castle_rxrpc_call *c_rxcall = container_of(work, struct castle_rxrpc_call, work);
+    struct castle_rxrpc_call *call = container_of(work, struct castle_rxrpc_call, work);
+    uint32_t abort_code;
     struct sk_buff *skb;
-    int last;
+    int last, ret;
 
-    while((skb = skb_dequeue(&c_rxcall->rx_queue)))
+printk("Processing packets.\n");
+    while ((call->state == RXRPC_CALL_AWAIT_OP_ID   ||
+            call->state == RXRPC_CALL_AWAIT_REQUEST ||
+            call->state == RXRPC_CALL_AWAIT_ACK) &&
+           (skb = skb_dequeue(&call->rx_queue)))
     {
-        if(skb->mark != RXRPC_SKB_MARK_DATA)
+printk("Processing packet: %d.\n", skb->mark);
+        switch(skb->mark)
         {
-            rxrpc_kernel_free_skb(skb);
             /* Queue should be empty. */
-            BUG_ON(!skb_queue_empty(&c_rxcall->rx_queue));
-            rxrpc_kernel_end_call(c_rxcall->rxcall);
+            BUG_ON(!skb_queue_empty(&call->rx_queue));
+            rxrpc_kernel_end_call(call->rxcall);
             return;
-        }
-        last = rxrpc_kernel_is_data_last(skb);
-        if(skb_copy_bits(skb, 0, c_rxcall->buffer, skb->len) >= 0)
-            print_hex_dump_bytes("", DUMP_PREFIX_OFFSET, c_rxcall->buffer, skb->len);
-        else
-            printk("Could not copy data out of the packet.\n");
-        
-        rxrpc_kernel_data_delivered(skb);
-        castle_rxrpc_packet_repspond(c_rxcall);
-    }
-}
 
-static void castle_rxrpc_call_free(struct castle_rxrpc_call *call)
-{       
-    BUG_ON(call->rxcall != NULL);
-    BUG_ON(!skb_queue_empty(&call->rx_queue));
-    kfree(call);
-} 
+            case RXRPC_SKB_MARK_DATA:
+                last = rxrpc_kernel_is_data_last(skb);
+                /* Deliver the packet to the call */
+                ret = call->type->deliver(call, skb, last);
+                switch (ret)
+                {
+                    case 0:
+                        break;
+                    case -ENOTCONN:
+                        abort_code = RX_CALL_DEAD;
+                        goto do_abort;
+                    case -ENOTSUPP:
+                        abort_code = RX_INVALID_OPERATION;
+                        goto do_abort;
+                    default:
+                        abort_code = RXGEN_SS_UNMARSHAL;
+                    do_abort:
+                        rxrpc_kernel_abort_call(call->rxcall, abort_code);
+                        call->error = ret;
+                        call->state = RXRPC_CALL_ERROR;
+                        break;
+                }
+                rxrpc_kernel_data_delivered(skb);
+                skb = NULL;
+                continue;
+            case RXRPC_SKB_MARK_FINAL_ACK:
+                call->state = RXRPC_CALL_COMPLETE;
+                break;
+            case RXRPC_SKB_MARK_BUSY:
+                call->error = -EBUSY;
+                call->state = RXRPC_CALL_BUSY;
+                break;
+            case RXRPC_SKB_MARK_REMOTE_ABORT:
+                call->error = -rxrpc_kernel_get_abort_code(skb);
+                call->state = RXRPC_CALL_ABORTED;
+                break;
+            case RXRPC_SKB_MARK_NET_ERROR:
+            case RXRPC_SKB_MARK_LOCAL_ERROR:
+                call->error = -rxrpc_kernel_get_error_number(skb);
+                call->state = RXRPC_CALL_ERROR;
+                break;
+            default:
+                BUG();
+                break;
+        }
+        /* SKB processed, free it */
+        rxrpc_kernel_free_skb(skb);
+    }
+
+    /* make sure the queue is empty if the call is done with (we might have
+     * aborted the call early because of an unmarshalling error) */
+    if (call->state >= RXRPC_CALL_COMPLETE) {
+        while ((skb = skb_dequeue(&call->rx_queue)))
+            rxrpc_kernel_free_skb(skb);
+
+        rxrpc_kernel_end_call(call->rxcall);
+        call->rxcall = NULL;
+        if(call->type->destructor)
+            call->type->destructor(call);
+        castle_rxrpc_call_free(call);
+    }
+
+}
 
 static void castle_rxrpc_incoming_call_collect(struct work_struct *work)
 {
@@ -106,7 +283,7 @@ static void castle_rxrpc_incoming_call_collect(struct work_struct *work)
     {
         /* Nothing interesting in the packet, free it */
         rxrpc_kernel_free_skb(skb);
-        
+
         /* Try to allocate a call struct, reject call if failed */
         c_rxcall = kzalloc(sizeof(struct castle_rxrpc_call), GFP_KERNEL);
         /* TMP buffering */
@@ -116,26 +293,31 @@ static void castle_rxrpc_incoming_call_collect(struct work_struct *work)
             rxrpc_kernel_reject_call(socket);
             continue;
         }
-        /* Init the call struct */ 
+
+printk("Collecting call.\n");
+        /* Init the call struct */
         INIT_WORK(&c_rxcall->work, castle_rxrpc_packet_process);
         skb_queue_head_init(&c_rxcall->rx_queue); 	
-        c_rxcall->wq = rxrpc_wqs[(wq_nr++) % NR_WQS];
-        c_rxcall->call_id = atomic_inc_return(&call_id); 
-        c_rxcall->buffer = buffer;
-        
-        c_rxcall->rxcall = rxrpc_kernel_accept_call(socket, 
+        c_rxcall->wq      = rxrpc_wqs[(wq_nr++) % NR_WQS];
+        c_rxcall->call_id = atomic_inc_return(&call_id);
+        c_rxcall->buffer  = buffer;
+        c_rxcall->type    = &castle_rxrpc_op_call;
+        c_rxcall->state   = RXRPC_CALL_AWAIT_OP_ID;
+
+        c_rxcall->rxcall = rxrpc_kernel_accept_call(socket,
                                                     (unsigned long)c_rxcall);
         if(IS_ERR(c_rxcall->rxcall))
             castle_rxrpc_call_free(c_rxcall);
     }
 }
 
-static void castle_rxrpc_interceptor(struct sock *sk, 
+static void castle_rxrpc_interceptor(struct sock *sk,
                                      unsigned long user_call_ID,
 			                         struct sk_buff *skb)
 {
     struct castle_rxrpc_call *call = (struct castle_rxrpc_call *) user_call_ID;
 
+printk("Inntercepting.\n");
     if(!call)
     {
         skb_queue_tail(&rxrpc_incoming_calls, skb);
@@ -165,7 +347,7 @@ int castle_rxrpc_init(void)
         rxrpc_wqs[i] = create_singlethread_workqueue(wq_name);
         if(!rxrpc_wqs[i])
         {
-wq_error:        
+wq_error:
             kfree(wq_name);
             for(; i>=0; i--)
                 destroy_workqueue(rxrpc_wqs[i]);
@@ -185,7 +367,7 @@ wq_error:
 	socket->sk->sk_allocation = GFP_NOIO;
 
 	srx.srx_family						= AF_RXRPC;
-	srx.srx_service						= 1; 
+	srx.srx_service						= 1;
 	srx.transport_type					= SOCK_DGRAM;
 	srx.transport_len					= sizeof(srx.transport.sin);
 	srx.transport.sin.sin_addr.s_addr   = htonl(INADDR_LOOPBACK);
