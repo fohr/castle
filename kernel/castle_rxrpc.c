@@ -16,6 +16,8 @@
 #include "castle.h"
 #include "castle_debug.h"
 #include "castle_cache.h"
+#include "castle_rxrpc.h"
+#include "castle_ctrl.h"
 
 
 /* Forward definitions */
@@ -25,6 +27,7 @@ static const struct castle_rxrpc_call_type castle_rxrpc_get_call;
 static const struct castle_rxrpc_call_type castle_rxrpc_replace_call;
 static const struct castle_rxrpc_call_type castle_rxrpc_slice_call;
 static const struct castle_rxrpc_call_type castle_rxrpc_ctrl_call;
+void castle_rxrpc_reply_send(struct castle_rxrpc_call *call, const void *buf, size_t len);
 
 
 #define NR_WQS    4
@@ -68,21 +71,14 @@ struct castle_rxrpc_call {
     uint8_t                       *buffer;
 };
 
-
 /* Definition of different call types */
 int castle_rxrpc_op_decode(struct castle_rxrpc_call *call, struct sk_buff *skb,  bool last)
 {
-    __be32 op;
-
     if(skb->len < 4)
         return -EBADMSG;
 
     call->state = RXRPC_CALL_AWAIT_REQUEST;
-    BUG_ON(skb_copy_bits(skb, 0, &op, 4) < 0);
-    /* ? if (!pskb_pull(skb, len))
-        BUG();
-     */
-    call->op_id = ntohl(op);
+    call->op_id = SKB_L_GET(skb);
     printk("op id: %d\n", call->op_id);
 
     switch(call->op_id)
@@ -126,8 +122,21 @@ int castle_rxrpc_slice_decode(struct castle_rxrpc_call *call, struct sk_buff *sk
 
 int castle_rxrpc_ctrl_decode(struct castle_rxrpc_call *call, struct sk_buff *skb,  bool last)
 {
-    printk("Ctrl.\n");
-    return -ENOTSUPP;
+    int ret, len;
+    char reply[8];
+
+    ret = castle_ctrl_packet_process(skb, reply, &len);
+    printk("=> Ctrl ret=%d\n", ret);
+    rxrpc_kernel_data_delivered(skb);
+    printk("=> The above is temporary.\n");
+    /* Advance the state, if we succeeded at decoding the packet */
+    if(ret) return ret;
+
+    call->state = RXRPC_CALL_REPLYING;
+    printk("=> Sending reply of length=%d\n", len);
+    castle_rxrpc_reply_send(call, reply, len);
+
+    return 0;
 }
 
 
@@ -156,6 +165,39 @@ static const struct castle_rxrpc_call_type castle_rxrpc_ctrl_call =
     .deliver = castle_rxrpc_ctrl_decode,
 };
 
+
+static void castle_rxrpc_call_free(struct castle_rxrpc_call *call)
+{
+    BUG_ON(call->rxcall != NULL);
+    BUG_ON(!skb_queue_empty(&call->rx_queue));
+    kfree(call);
+}
+
+void castle_rxrpc_reply_send(struct castle_rxrpc_call *call, const void *buf, size_t len)
+{
+    struct msghdr msg;
+    struct iovec iov[1];
+    int n;
+
+    iov[0].iov_base     = (void *) buf;
+    iov[0].iov_len      = len;
+    msg.msg_name        = NULL;
+    msg.msg_namelen     = 0;
+    msg.msg_iov         = iov;
+    msg.msg_iovlen      = 1;
+    msg.msg_control     = NULL;
+    msg.msg_controllen  = 0;
+    msg.msg_flags       = 0;
+
+    call->state = RXRPC_CALL_AWAIT_ACK;
+    n = rxrpc_kernel_send_data(call->rxcall, &msg, len);
+    printk("Sent %d bytes.\n", n);
+    if (n >= 0) 
+        return;
+    if (n == -ENOMEM)
+        rxrpc_kernel_abort_call(call->rxcall, RX_USER_ABORT);
+}
+
 static void USED castle_rxrpc_packet_repspond(struct castle_rxrpc_call *call)
 {
     struct msghdr msg;
@@ -179,13 +221,6 @@ static void USED castle_rxrpc_packet_repspond(struct castle_rxrpc_call *call)
     BUG_ON(rxrpc_kernel_send_data(call->rxcall, &msg, 4) != 4);
 }
 
-static void castle_rxrpc_call_free(struct castle_rxrpc_call *call)
-{
-    BUG_ON(call->rxcall != NULL);
-    BUG_ON(!skb_queue_empty(&call->rx_queue));
-    kfree(call);
-}
-
 static void castle_rxrpc_packet_process(struct work_struct *work)
 {
     struct castle_rxrpc_call *call = container_of(work, struct castle_rxrpc_call, work);
@@ -202,11 +237,6 @@ printk("Processing packets.\n");
 printk("Processing packet: %d.\n", skb->mark);
         switch(skb->mark)
         {
-            /* Queue should be empty. */
-            BUG_ON(!skb_queue_empty(&call->rx_queue));
-            rxrpc_kernel_end_call(call->rxcall);
-            return;
-
             case RXRPC_SKB_MARK_DATA:
                 last = rxrpc_kernel_is_data_last(skb);
                 /* Deliver the packet to the call */
@@ -229,7 +259,7 @@ printk("Processing packet: %d.\n", skb->mark);
                         call->state = RXRPC_CALL_ERROR;
                         break;
                 }
-                rxrpc_kernel_data_delivered(skb);
+                //rxrpc_kernel_data_delivered(skb);
                 skb = NULL;
                 continue;
             case RXRPC_SKB_MARK_FINAL_ACK:
@@ -255,6 +285,8 @@ printk("Processing packet: %d.\n", skb->mark);
         /* SKB processed, free it */
         rxrpc_kernel_free_skb(skb);
     }
+    
+printk("Call state is %d.\n", call->state);
 
     /* make sure the queue is empty if the call is done with (we might have
      * aborted the call early because of an unmarshalling error) */
@@ -262,6 +294,7 @@ printk("Processing packet: %d.\n", skb->mark);
         while ((skb = skb_dequeue(&call->rx_queue)))
             rxrpc_kernel_free_skb(skb);
 
+printk("Ending the call.\n");
         rxrpc_kernel_end_call(call->rxcall);
         call->rxcall = NULL;
         if(call->type->destructor)
