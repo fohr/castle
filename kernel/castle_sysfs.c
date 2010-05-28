@@ -784,7 +784,7 @@ int castle_sysfs_init(void)
     memset(&castle_volumes.kobj, 0, sizeof(struct kobject));
     castle_volumes.kobj.parent = &castle.kobj;
     castle_volumes.kobj.ktype  = &castle_volumes_ktype;
-    ret = kobject_set_name(&castle_volumes.kobj, "%s", "volumes");
+    ret = kobject_set_name(&castle_volumes.kobj, "%s", "versions");
     if(ret < 0) goto error_out;
     ret = kobject_register(&castle_volumes.kobj);
     if(ret < 0) goto error_out;
