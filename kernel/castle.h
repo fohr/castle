@@ -9,10 +9,6 @@
 #define STATIC_BUG_ON(expr) \
         extern int (*assert_function__(void)) [STATIC_BUG_ON_HELPER(expr)]
 
-typedef uint32_t version_t;
-#define INVAL_VERSION       ((version_t)-1) 
-#define VERSION_INVAL(_v)   ((_v) == INVAL_VERSION) 
-
 typedef uint32_t block_t;
 #define INVAL_BLOCK         ((block_t)-1) 
 #define BLOCK_INVAL(_b)     ((_b) == INVAL_BLOCK) 

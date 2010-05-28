@@ -38,9 +38,8 @@ static void castle_control_release(slave_uuid_t id, int *ret)
     *ret = -ENOSYS;
 }
 
-static void castle_control_attach(snap_id_t snap, int *ret, uint32_t *dev)
+static void castle_control_attach(version_t version, int *ret, uint32_t *dev)
 {
-    version_t version = (version_t)snap;
     struct castle_device *cd;
   
     *dev = 0;
@@ -63,7 +62,7 @@ static void castle_control_detach(uint32_t dev, int *ret)
     *ret = (cd ? 0 : -ENODEV);
 }
 
-static void castle_control_create(uint64_t size, int *ret, snap_id_t *id)
+static void castle_control_create(uint64_t size, int *ret, version_t *id)
 {
     version_t version;
 
@@ -90,10 +89,8 @@ static void castle_control_create(uint64_t size, int *ret, snap_id_t *id)
     }
 }
 
-static void castle_control_clone(snap_id_t snap, int *ret, snap_id_t *clone)
+static void castle_control_clone(version_t version, int *ret, version_t *clone)
 {
-    version_t version = (version_t)snap;
-
     if(version == 0)
     {
         printk("Do not clone version 0. Create a new volume.\n");
@@ -117,42 +114,42 @@ static void castle_control_clone(snap_id_t snap, int *ret, snap_id_t *clone)
     }
 }
 
-static void castle_control_snapshot(uint32_t dev, int *ret, snap_id_t *snap_id)
+static void castle_control_snapshot(uint32_t dev, int *ret, version_t *version)
 {
     dev_t devid = new_decode_dev(dev);
     struct castle_device *cd = castle_device_find(devid);
-    version_t version, old_version;
+    version_t ver, old_version;
 
     if(!cd)
     {   
-        *snap_id = -1;
+        *version = -1;
         *ret     = -ENOENT;
         return;
     }
     down_write(&cd->lock);
     old_version  = cd->version;
-    version = castle_version_new(1,            /* snapshot */
-                                 cd->version,
-                                 0);           /* take size from the parent */ 
-    if(VERSION_INVAL(version))
+    ver = castle_version_new(1,            /* snapshot */
+                             cd->version,
+                             0);           /* take size from the parent */ 
+    if(VERSION_INVAL(ver))
     {
-        *snap_id = -1;
+        *version = -1;
         *ret     = -EINVAL;
     }
     else
     {
         /* Attach the new version */
-        castle_version_snap_get(version, NULL, NULL, NULL);
+        castle_version_snap_get(ver, NULL, NULL, NULL);
         /* Change the version associated with the device */
-        cd->version    = version;
+        cd->version    = ver;
         /* Release the old version */
         castle_version_snap_put(old_version);
-        *snap_id = version;
+        *version = ver;
         *ret     = 0;
     }
     up_write(&cd->lock);
     
-    castle_events_device_snapshot(version, cd->gd->major, cd->gd->first_minor);
+    castle_events_device_snapshot(ver, cd->gd->major, cd->gd->first_minor);
 }
  
 static void castle_control_fs_init(int *ret)
@@ -161,7 +158,7 @@ static void castle_control_fs_init(int *ret)
 }
 
 static void castle_control_region_create(slave_uuid_t slave,
-                                         snap_id_t    snapshot,
+                                         version_t    version,
                                          uint32_t     start,
                                          uint32_t     length,
                                          int         *ret,
@@ -169,7 +166,7 @@ static void castle_control_region_create(slave_uuid_t slave,
 {
     struct castle_region *region;
 
-    if(!(region = castle_region_create(slave, snapshot, start, length)))
+    if(!(region = castle_region_create(slave, version, start, length)))
         goto err_out;
 
     *id  = region->id;
@@ -196,14 +193,14 @@ static void castle_control_region_destroy(region_id_t id, int *ret)
     }
 }
 
-static void castle_control_transfer_create(snap_id_t      snapshot,
+static void castle_control_transfer_create(version_t      version,
                                            uint32_t       direction,
                                            int           *ret,
                                            transfer_id_t *id)
 {
     struct castle_transfer *transfer;
 
-    if(!(transfer = castle_transfer_create(snapshot, direction, ret)))
+    if(!(transfer = castle_transfer_create(version, direction, ret)))
         goto err_out;
 
     /* Return value should have been correctly set by _create() */
@@ -261,7 +258,7 @@ int castle_control_ioctl(struct inode *inode, struct file *filp,
                                    &ioctl.release.ret);
             break;
         case CASTLE_CTRL_CMD_ATTACH:
-            castle_control_attach( ioctl.attach.snap,
+            castle_control_attach( ioctl.attach.version,
                                   &ioctl.attach.ret,
                                   &ioctl.attach.dev);
             break;
@@ -275,21 +272,21 @@ int castle_control_ioctl(struct inode *inode, struct file *filp,
                                   &ioctl.create.id);
             break;
         case CASTLE_CTRL_CMD_CLONE:
-            castle_control_clone( ioctl.clone.snap,
+            castle_control_clone( ioctl.clone.version,
                                  &ioctl.clone.ret,
                                  &ioctl.clone.clone);
             break;
         case CASTLE_CTRL_CMD_SNAPSHOT:
             castle_control_snapshot( ioctl.snapshot.dev,
                                     &ioctl.snapshot.ret,
-                                    &ioctl.snapshot.snap_id);
+                                    &ioctl.snapshot.version);
             break;
         case CASTLE_CTRL_CMD_INIT:
             castle_control_fs_init(&ioctl.init.ret);
             break;
         case CASTLE_CTRL_CMD_REGION_CREATE:
             castle_control_region_create( ioctl.region_create.slave,
-                                          ioctl.region_create.snapshot,
+                                          ioctl.region_create.version,
                                           ioctl.region_create.start,
                                           ioctl.region_create.length,
                                          &ioctl.region_create.ret,
@@ -300,7 +297,7 @@ int castle_control_ioctl(struct inode *inode, struct file *filp,
                                           &ioctl.region_destroy.ret);
             break;
         case CASTLE_CTRL_CMD_TRANSFER_CREATE:
-            castle_control_transfer_create( ioctl.transfer_create.snapshot,
+            castle_control_transfer_create( ioctl.transfer_create.version,
                                             ioctl.transfer_create.direction,
                                            &ioctl.transfer_create.ret,
                                            &ioctl.transfer_create.id);
@@ -432,6 +429,7 @@ int castle_ctrl_packet_process(struct sk_buff *skb, void *reply, int *len_p)
             break;
         case CASTLE_CTRL_REQ_COLLECTION_ATTACH:
             if(skb->len < 8) return -EBADMSG;
+            
             return -ENOTSUPP;
             break;
         case CASTLE_CTRL_REQ_COLLECTION_DETACH:
