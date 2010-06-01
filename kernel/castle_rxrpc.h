@@ -21,6 +21,24 @@ static inline uint64_t SKB_LL_GET(struct sk_buff *skb)
     return be64_to_cpu(qword);
 }
 
+static inline char* SKB_STR_GET(struct sk_buff *skb, int max_len)
+{
+    uint32_t str_len = SKB_L_GET(skb);
+    char *str;
+    
+    if((str_len > max_len) || (str_len > skb->len))
+        return NULL;
+
+    if(!(str = kzalloc(str_len+1, GFP_KERNEL)))
+        return NULL;
+
+    BUG_ON(skb_copy_bits(skb, 0, str, str_len) < 0);
+    str_len += (str_len % 4 == 0 ? 0 : 4 - str_len % 4);
+    BUG_ON(!pskb_pull(skb, str_len));
+
+    return str;
+}
+
 int  castle_rxrpc_init(void);
 void castle_rxrpc_fini(void);
 

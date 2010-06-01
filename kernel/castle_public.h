@@ -4,6 +4,7 @@
 typedef uint32_t region_id_t;
 typedef uint32_t transfer_id_t;
 typedef uint32_t slave_uuid_t;
+typedef uint32_t collection_id_t;
 typedef uint32_t version_t;
 #define INVAL_VERSION       ((version_t)-1) 
 #define VERSION_INVAL(_v)   ((_v) == INVAL_VERSION) 

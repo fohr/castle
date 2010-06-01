@@ -229,6 +229,32 @@ static void castle_control_transfer_destroy(transfer_id_t id, int *ret)
     }
 }
 
+static void castle_control_collection_attach(version_t version,
+                                             char *name,
+                                             int *ret,
+                                             collection_id_t *collection)
+{
+    printk("==> Collection attach NOT IMPLEMENTED YET, version=%d, name=%s\n", 
+            version, name);
+    *ret = -ENOTSUPP;
+}
+            
+static void castle_control_collection_detach(collection_id_t collection,
+                                             int *ret)
+{
+    printk("==> Collection detach NOT IMPLEMENTED YET, collection=%d", collection);
+    *ret = -ENOTSUPP;
+}
+
+static void castle_control_collection_snapshot(collection_id_t collection,
+                                               int *ret,
+                                               version_t *version)
+{
+    printk("==> Collection snapshot NOT IMPLEMENTED YET, collection=%d", collection);
+    *ret = -ENOTSUPP;
+}
+            
+
 int castle_control_ioctl(struct inode *inode, struct file *filp,
                          unsigned int cmd, unsigned long arg)
 {
@@ -331,11 +357,61 @@ static struct miscdevice castle_control = {
     .fops    = &castle_control_fops,
 };
 
+static void castle_control_reply(uint32_t *reply, 
+                                 int *length, 
+                                 int op_code, 
+                                 int ret_code, 
+                                 uint32_t token)
+{
+    int i, len;
+
+    /* Deal with error condition first */
+    if(ret_code)
+    {
+        printk("==> Fail reply.\n");
+        reply[0] = CASTLE_CTRL_REPLY;
+        reply[1] = CASTLE_CTRL_REPLY_FAIL;
+        reply[2] = ret_code;
+        reply[3] = 0; /* No stack trace from kernel */
+        len = 4;
+    } else
+    /* Next, void replies */
+    if(op_code == CASTLE_CTRL_REPLY_VOID)
+    {
+        reply[0] = CASTLE_CTRL_REPLY;
+        reply[1] = CASTLE_CTRL_REPLY_VOID;
+        len = 2;
+    } else
+    /* All the rest */
+    {
+        reply[0] = CASTLE_CTRL_REPLY;
+        reply[1] = op_code;
+        reply[2] = token;
+        len = 3;
+    } 
+
+    /* Convert to network byte order */
+    for(i=0; i<len; i++)
+    {
+        printk("=> word[%d] before=0x%x\n", i, reply[i]);
+        reply[i] = htonl(reply[i]);
+        printk("=> word[%d] after =0x%x\n", i, reply[i]);
+    }
+    
+    printk("=> Here.\n");
+    for(i=0; i<4*len; i++)
+        printk("=> [%d]=%d\n", i, *(((uint8_t *)reply) + i));
+    printk("<= Here.\n");
+
+    /* length is in bytes */
+    *length = 4*len;
+}
+
 int castle_ctrl_packet_process(struct sk_buff *skb, void *reply, int *len_p)
 {
     uint32_t *reply32 = reply; /* For now, all reply values are 32 bit wide */
     uint32_t ctrl_op;
-    int len, i;
+    int i;
 
     printk("Ctrl, skb->len=%d.\n", skb->len);
     if(skb->len < 4)
@@ -346,107 +422,245 @@ int castle_ctrl_packet_process(struct sk_buff *skb, void *reply, int *len_p)
     switch(ctrl_op)
     {
         case CASTLE_CTRL_REQ_CLAIM:
+        {
+            int ret;
+            slave_uuid_t id;
+
             if(skb->len != 4) return -EBADMSG;
-            castle_control_claim( SKB_L_GET(skb), 
-                                 &reply32[0], 
-                                 &reply32[1]);
-            len = 8;
+            castle_control_claim(SKB_L_GET(skb), &ret, &id);
+            castle_control_reply(reply32, 
+                                 len_p, 
+                                 CASTLE_CTRL_REPLY_NEW_SLAVE,
+                                 ret, 
+                                 id);
             break;
+        }
         case CASTLE_CTRL_REQ_RELEASE:
+        {
+            int ret/*, i*/;
+            int len_d;
+
             if(skb->len != 4) return -EBADMSG;
-            castle_control_release( SKB_L_GET(skb), 
-                                   &reply32[0]);
-            len = 4;
+            castle_control_release(SKB_L_GET(skb), &ret); 
+            castle_control_reply(reply32,
+                                 &len_d,
+                                 CASTLE_CTRL_REPLY_VOID,
+                                 ret,
+                                 0);
+    printk("=> Here2.\n");
+    for(i=0; i<len_d; i++)
+        printk("=> [%d]=%d\n", i, *(((uint8_t *)reply) + i));
+    printk("<= Here2.\n");
+            *len_p = len_d;
+
             break;
+        }
         case CASTLE_CTRL_REQ_ATTACH:
+        {
+            int ret;
+            uint32_t dev;
+
             if(skb->len != 4) return -EBADMSG;
-            castle_control_attach( SKB_L_GET(skb), 
-                                  &reply32[0], 
-                                  &reply32[1]);
-            len = 8;
+            castle_control_attach(SKB_L_GET(skb), 
+                                  &ret, 
+                                  &dev);
+            castle_control_reply(reply32,
+                                 len_p,
+                                 CASTLE_CTRL_REPLY_NEW_DEVICE,
+                                 ret,
+                                 dev);
             break;
+        }
         case CASTLE_CTRL_REQ_DETACH:
+        {
+            int ret;
+
             if(skb->len != 4) return -EBADMSG;
-            castle_control_detach( SKB_L_GET(skb), 
-                                  &reply32[0]);
-            len = 4;
+            castle_control_detach(SKB_L_GET(skb), &ret); 
+            castle_control_reply(reply32,
+                                 len_p,
+                                 CASTLE_CTRL_REPLY_VOID,
+                                 ret,
+                                 0);
             break;
+        }
         case CASTLE_CTRL_REQ_CREATE:
+        {
+            int ret;
+            version_t version;
+
             if(skb->len != 8) return -EBADMSG;
-            castle_control_create( SKB_LL_GET(skb), 
-                                  &reply32[0], 
-                                  &reply32[1]);
-            len = 8;
+            castle_control_create(SKB_LL_GET(skb), 
+                                  &ret, 
+                                  &version);
+            castle_control_reply(reply32,
+                                 len_p,
+                                 CASTLE_CTRL_REPLY_NEW_VERSION,
+                                 ret,
+                                 version);
             break;
+        }
         case CASTLE_CTRL_REQ_CLONE:
+        {
+            int ret;
+            version_t version;
+
             if(skb->len != 4) return -EBADMSG;
-            castle_control_clone( SKB_L_GET(skb), 
-                                 &reply32[0], 
-                                 &reply32[1]);
-            len = 8;
+            castle_control_clone(SKB_L_GET(skb),
+                                 &ret,
+                                 &version); 
+            castle_control_reply(reply32,
+                                 len_p,
+                                 CASTLE_CTRL_REPLY_NEW_VERSION,
+                                 ret,
+                                 version);
             break;
+        }
         case CASTLE_CTRL_REQ_SNAPSHOT:
+        {
+            int ret;
+            version_t version;
+            
             if(skb->len != 4) return -EBADMSG;
-            castle_control_snapshot( SKB_L_GET(skb), 
-                                    &reply32[0], 
-                                    &reply32[1]);
-            len = 8;
+            castle_control_snapshot(SKB_L_GET(skb), 
+                                    &ret, 
+                                    &version);
+            castle_control_reply(reply32,
+                                 len_p,
+                                 CASTLE_CTRL_REPLY_NEW_VERSION,
+                                 ret,
+                                 version);
             break;
+        }
         case CASTLE_CTRL_REQ_INIT:
+        {
+            int ret;
+            
             if(skb->len != 0) return -EBADMSG;
-            castle_control_fs_init(&reply32[0]);
-            len = 4;
+            castle_control_fs_init(&ret);
+            castle_control_reply(reply32,
+                                 len_p,
+                                 CASTLE_CTRL_REPLY_VOID,
+                                 ret,
+                                 0);
             break;
+        }
         case CASTLE_CTRL_REQ_REGION_CREATE:
+        {
+            int ret;
+            region_id_t region;
+
             if(skb->len != 16) return -EBADMSG;
             castle_control_region_create(SKB_L_GET(skb),
                                          SKB_L_GET(skb),  
                                          SKB_L_GET(skb),
                                          SKB_L_GET(skb),
-                                         &reply32[0],
-                                         &reply32[1]);
-            len = 8;
+                                         &ret,
+                                         &region);
+            castle_control_reply(reply32,
+                                 len_p,
+                                 CASTLE_CTRL_REPLY_NEW_REGION,
+                                 ret,
+                                 region);
             break;
+        }
         case CASTLE_CTRL_REQ_REGION_DESTROY:
+        {
+            int ret;
+
             if(skb->len != 4) return -EBADMSG;
-            castle_control_region_destroy( SKB_L_GET(skb), 
-                                          &reply32[0]);
-            len = 4;
+            castle_control_region_destroy(SKB_L_GET(skb), 
+                                          &ret);
+            castle_control_reply(reply32,
+                                 len_p,
+                                 CASTLE_CTRL_REPLY_VOID,
+                                 ret,
+                                 0);
             break;
+        }
         case CASTLE_CTRL_REQ_TRANSFER_CREATE:
+        {
+            int ret;
+            transfer_id_t transfer;
+
             if(skb->len != 8) return -EBADMSG;
             castle_control_transfer_create(SKB_L_GET(skb),
                                            SKB_L_GET(skb),
-                                           &reply32[0],
-                                           &reply32[1]);
-            len = 8;
+                                           &ret,
+                                           &transfer);
+            castle_control_reply(reply32,
+                                 len_p,
+                                 CASTLE_CTRL_REPLY_NEW_TRANSFER,
+                                 ret,
+                                 transfer);
             break;
+        }
         case CASTLE_CTRL_REQ_TRANSFER_DESTROY:
+        {
+            int ret;
+
             if(skb->len != 4) return -EBADMSG;
             castle_control_transfer_destroy(SKB_L_GET(skb),
-                                            &reply32[0]);
-            len = 4;
+                                            &ret);
+            castle_control_reply(reply32,
+                                 len_p,
+                                 CASTLE_CTRL_REPLY_VOID,
+                                 ret,
+                                 0);
             break;
+        }
         case CASTLE_CTRL_REQ_COLLECTION_ATTACH:
+        {
+            int ret;
+            collection_id_t collection;
+
             if(skb->len < 8) return -EBADMSG;
-            
-            return -ENOTSUPP;
+            castle_control_collection_attach(SKB_L_GET(skb),
+                                             SKB_STR_GET(skb, 128),
+                                             &ret,
+                                             &collection);
+            castle_control_reply(reply32,
+                                 len_p,
+                                 CASTLE_CTRL_REPLY_NEW_COLLECTION,
+                                 ret,
+                                 collection);
             break;
+        }
         case CASTLE_CTRL_REQ_COLLECTION_DETACH:
+        {
+            int ret;
+            
             if(skb->len != 4) return -EBADMSG;
-            return -ENOTSUPP;
+            castle_control_collection_detach(SKB_L_GET(skb),
+                                             &ret);
+            castle_control_reply(reply32,
+                                 len_p,
+                                 CASTLE_CTRL_REPLY_VOID,
+                                 ret,
+                                 0);
             break;
+        }
         case CASTLE_CTRL_REQ_COLLECTION_SNAPSHOT:
+        {
+            int ret;
+            version_t version;
+
             if(skb->len != 4) return -EBADMSG;
-            return -ENOTSUPP;
+            castle_control_collection_snapshot(SKB_L_GET(skb),
+                                               &ret,
+                                               &version);
+            castle_control_reply(reply32,
+                                 len_p,
+                                 CASTLE_CTRL_REPLY_NEW_VERSION,
+                                 ret,
+                                 version);
             break;
+        }
     }
 
-    /* Convert to network byte order */
-    for(i=0; i<(len/4); i++)
-        reply32[i] = htonl(reply32[i]);
-    *len_p = len;
-    printk("Reply length=%d\n", len);
+    printk("=> Reply length=%d\n", *len_p);
+    for(i=0; i<*len_p; i++)
+        printk("=> [%d]=%d\n", i, *(((uint8_t *)reply) + i));
 
     return 0;
 }

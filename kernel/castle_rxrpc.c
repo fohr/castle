@@ -123,7 +123,7 @@ int castle_rxrpc_slice_decode(struct castle_rxrpc_call *call, struct sk_buff *sk
 int castle_rxrpc_ctrl_decode(struct castle_rxrpc_call *call, struct sk_buff *skb,  bool last)
 {
     int ret, len;
-    char reply[8];
+    char reply[256];
 
     ret = castle_ctrl_packet_process(skb, reply, &len);
     printk("=> Ctrl ret=%d\n", ret);
@@ -135,6 +135,7 @@ int castle_rxrpc_ctrl_decode(struct castle_rxrpc_call *call, struct sk_buff *skb
     call->state = RXRPC_CALL_REPLYING;
     printk("=> Sending reply of length=%d\n", len);
     castle_rxrpc_reply_send(call, reply, len);
+    call->state = RXRPC_CALL_AWAIT_ACK;
 
     return 0;
 }
@@ -168,9 +169,11 @@ static const struct castle_rxrpc_call_type castle_rxrpc_ctrl_call =
 
 static void castle_rxrpc_call_free(struct castle_rxrpc_call *call)
 {
+printk("Freeing call: %p\n", call);    
     BUG_ON(call->rxcall != NULL);
     BUG_ON(!skb_queue_empty(&call->rx_queue));
-    kfree(call);
+    printk("Cannot free the call here: work item used for the workqueue.\n");
+    //kfree(call);
 }
 
 void castle_rxrpc_reply_send(struct castle_rxrpc_call *call, const void *buf, size_t len)
@@ -228,7 +231,7 @@ static void castle_rxrpc_packet_process(struct work_struct *work)
     struct sk_buff *skb;
     int last, ret;
 
-printk("Processing packets.\n");
+printk("Processing packets for call: %p.\n", call);
     while ((call->state == RXRPC_CALL_AWAIT_OP_ID   ||
             call->state == RXRPC_CALL_AWAIT_REQUEST ||
             call->state == RXRPC_CALL_AWAIT_ACK) &&
@@ -282,6 +285,7 @@ printk("Processing packet: %d.\n", skb->mark);
                 BUG();
                 break;
         }
+printk("Freeing SKB.\n");        
         /* SKB processed, free it */
         rxrpc_kernel_free_skb(skb);
     }
@@ -290,12 +294,13 @@ printk("Call state is %d.\n", call->state);
 
     /* make sure the queue is empty if the call is done with (we might have
      * aborted the call early because of an unmarshalling error) */
-    if (call->state >= RXRPC_CALL_COMPLETE) {
+    if ((call->state >= RXRPC_CALL_COMPLETE) && (call->rxcall)) {
         while ((skb = skb_dequeue(&call->rx_queue)))
             rxrpc_kernel_free_skb(skb);
 
 printk("Ending the call.\n");
         rxrpc_kernel_end_call(call->rxcall);
+printk("Temporarily relying on rxcall being NULL to mean that the call has been dealt with.\n Should be handled properly in destruction WQ or something.\n");        
         call->rxcall = NULL;
         if(call->type->destructor)
             call->type->destructor(call);
@@ -327,7 +332,7 @@ static void castle_rxrpc_incoming_call_collect(struct work_struct *work)
             continue;
         }
 
-printk("Collecting call.\n");
+printk("Collecting call %p.\n", c_rxcall);
         /* Init the call struct */
         INIT_WORK(&c_rxcall->work, castle_rxrpc_packet_process);
         skb_queue_head_init(&c_rxcall->rx_queue); 	
@@ -350,13 +355,14 @@ static void castle_rxrpc_interceptor(struct sock *sk,
 {
     struct castle_rxrpc_call *call = (struct castle_rxrpc_call *) user_call_ID;
 
-printk("Inntercepting.\n");
     if(!call)
     {
+printk("Inntercepting new call request.\n");
         skb_queue_tail(&rxrpc_incoming_calls, skb);
         schedule_work(&castle_rxrpc_incoming_call_work);
     } else
     {
+printk("Inntercepting call 0x%lx\n", user_call_ID);
         skb_queue_tail(&call->rx_queue, skb);
         queue_work(call->wq, &call->work);
     }
