@@ -173,7 +173,7 @@ printk("Freeing call: %p\n", call);
     BUG_ON(call->rxcall != NULL);
     BUG_ON(!skb_queue_empty(&call->rx_queue));
     printk("Cannot free the call here: work item used for the workqueue.\n");
-    //kfree(call);
+    kfree(call);
 }
 
 void castle_rxrpc_reply_send(struct castle_rxrpc_call *call, const void *buf, size_t len)
@@ -224,12 +224,24 @@ static void USED castle_rxrpc_packet_repspond(struct castle_rxrpc_call *call)
     BUG_ON(rxrpc_kernel_send_data(call->rxcall, &msg, 4) != 4);
 }
 
+static void castle_rxrpc_call_delete(struct work_struct *work)
+{
+    struct castle_rxrpc_call *call = container_of(work, struct castle_rxrpc_call, work);
+
+    castle_rxrpc_call_free(call);
+}
+
 static void castle_rxrpc_packet_process(struct work_struct *work)
 {
     struct castle_rxrpc_call *call = container_of(work, struct castle_rxrpc_call, work);
     uint32_t abort_code;
     struct sk_buff *skb;
     int last, ret;
+
+    /* Exit early if there are no packet on the queue (e.g. queue is flushed for 
+       completed calls) */
+    if (skb_queue_empty(&call->rx_queue))
+        return;
 
 printk("Processing packets for call: %p.\n", call);
     while ((call->state == RXRPC_CALL_AWAIT_OP_ID   ||
@@ -294,7 +306,7 @@ printk("Call state is %d.\n", call->state);
 
     /* make sure the queue is empty if the call is done with (we might have
      * aborted the call early because of an unmarshalling error) */
-    if ((call->state >= RXRPC_CALL_COMPLETE) && (call->rxcall)) {
+    if (call->state >= RXRPC_CALL_COMPLETE) {
         while ((skb = skb_dequeue(&call->rx_queue)))
             rxrpc_kernel_free_skb(skb);
 
@@ -304,7 +316,9 @@ printk("Temporarily relying on rxcall being NULL to mean that the call has been 
         call->rxcall = NULL;
         if(call->type->destructor)
             call->type->destructor(call);
-        castle_rxrpc_call_free(call);
+
+        PREPARE_WORK(&call->work, castle_rxrpc_call_delete);
+        queue_work(call->wq, &call->work);
     }
 
 }
