@@ -242,7 +242,7 @@ c2_block_t* castle_ftree_node_create(int version, int is_leaf)
     lock_c2b(c2b);
     set_c2b_uptodate(c2b);
 
-    node = pfn_to_kaddr(page_to_pfn(c2b->page));
+    node = c2b_buffer(c2b);
     node->magic    = FTREE_NODE_MAGIC;
     node->version  = version;
     node->capacity = FTREE_NODE_SLOTS;
@@ -264,7 +264,7 @@ static c2_block_t* castle_ftree_effective_node_create(c2_block_t *orig_c2b,
 
     node = c2b_bnode(orig_c2b); 
     c2b = castle_ftree_node_create(version, node->is_leaf);
-    eff_node = pfn_to_kaddr(page_to_pfn(c2b->page));
+    eff_node = c2b_buffer(c2b);
 
     for(i=0, last_eff_slot = NULL; i<node->used; i++)
     {
@@ -334,9 +334,9 @@ static c2_block_t* castle_ftree_node_key_split(c2_block_t *orig_c2b)
     c2_block_t *c2b;
     struct castle_ftree_node *node, *sec_node;
 
-    node     = pfn_to_kaddr(page_to_pfn(orig_c2b->page));
+    node     = c2b_buffer(orig_c2b);
     c2b      = castle_ftree_node_create(node->version, node->is_leaf);
-    sec_node = pfn_to_kaddr(page_to_pfn(c2b->page));
+    sec_node = c2b_buffer(c2b);
     /* The original node needs to contain the elements from the right hand side
        because otherwise the key in it's parent would have to change. We want
        to avoid that */
@@ -363,7 +363,7 @@ static void castle_ftree_slot_insert(c2_block_t *c2b,
                                      uint32_t version,
                                      c_disk_blk_t cdb)
 {
-    struct castle_ftree_node *node = pfn_to_kaddr(page_to_pfn(c2b->page));
+    struct castle_ftree_node *node = c2b_buffer(c2b);
     /* TODO: Check that that 'index-1' is really always correct! */
     struct castle_ftree_slot *left_slot = (index > 0 ? &node->slots[index-1] : NULL);
     version_t left_version = (left_slot ? left_slot->version : INVAL_VERSION);
@@ -417,10 +417,8 @@ static void castle_ftree_slot_insert(c2_block_t *c2b,
 static void castle_ftree_node_insert(c2_block_t *parent_c2b,
                                      c2_block_t *child_c2b)
 {
-    struct castle_ftree_node *parent
-                     = pfn_to_kaddr(page_to_pfn(parent_c2b->page));
-    struct castle_ftree_node *child
-                     = pfn_to_kaddr(page_to_pfn(child_c2b->page));
+    struct castle_ftree_node *parent = c2b_buffer(parent_c2b);
+    struct castle_ftree_node *child  = c2b_buffer(child_c2b);
     uint32_t block   = child->slots[child->used-1].block; 
     uint32_t version = child->version;
     int insert_idx;
@@ -441,8 +439,7 @@ static void castle_ftree_node_under_key_insert(c2_block_t *parent_c2b,
                                                uint32_t block,
                                                uint32_t version)
 {
-    struct castle_ftree_node *parent
-                     = pfn_to_kaddr(page_to_pfn(parent_c2b->page));
+    struct castle_ftree_node *parent = c2b_buffer(parent_c2b);
     int insert_idx;
 
     BUG_ON(BLOCK_INVAL(block));
@@ -469,7 +466,7 @@ static int castle_ftree_new_root_create(c_bvec_t *c_bvec)
     BUG_ON(c_bvec->btree_parent_node);
     /* Create the node */
     c2b = castle_ftree_node_create(c_bvec->version, 0);
-    node = pfn_to_kaddr(page_to_pfn(c2b->page));
+    node = c2b_buffer(c2b);
     /* Update the version tree, and release the version lock (c2b_forget will 
        no longer do that, because there will be a parent node). */
     debug("About to update version tree.\n");
@@ -513,7 +510,7 @@ static int castle_ftree_node_split(c_bvec_t *c_bvec)
     {
         debug("Effective node NOT identical to the original node.\n");
         /* Cast eff_c2b buffer to eff_node */
-        eff_node = pfn_to_kaddr(page_to_pfn(eff_c2b->page));
+        eff_node = c2b_buffer(eff_c2b);
         /* We should continue the walk with the effective node, rather than the
            original node */
         retain_c2b = eff_c2b;
@@ -530,7 +527,7 @@ static int castle_ftree_node_split(c_bvec_t *c_bvec)
     {
         debug("Effective node too full, splitting.\n");
         split_c2b = castle_ftree_node_key_split(eff_c2b ? eff_c2b : c_bvec->btree_node);
-        split_node = pfn_to_kaddr(page_to_pfn(split_c2b->page));
+        split_node = c2b_buffer(split_c2b);
         BUG_ON(split_node->version != c_bvec->version);
         /* Work out whether to take the split node for the further btree walk.
            Since in the effective & split node there is at most one version
@@ -587,7 +584,7 @@ static int castle_ftree_node_split(c_bvec_t *c_bvec)
 
     /* Work out if we have a parent */
     parent_c2b  = c_bvec->btree_parent_node;
-    parent_node = parent_c2b ? pfn_to_kaddr(page_to_pfn(parent_c2b->page)) : NULL;
+    parent_node = parent_c2b ? c2b_buffer(parent_c2b) : NULL;
     /* Insert!
        This is a bit complex, due to number of different cases. Each is described below
        in some detail.

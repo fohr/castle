@@ -199,7 +199,7 @@ static void castle_version_update(struct castle_version_update *vu)
     int i;
 
     BUG_ON(!c2b_uptodate(vu->c2b));
-    node = pfn_to_kaddr(page_to_pfn(vu->c2b->page));
+    node = c2b_buffer(vu->c2b);
     /* Find the version in the node */
     for(i=0; i<node->used; i++)
     {
@@ -757,7 +757,7 @@ static c2_block_t* castle_versions_node_init(void)
             ret = submit_c2b_sync(READ, prev_c2b);
         if(ret) goto error_out;
         debug("Last vlist node uptodate now.\n");
-        prev_node = pfn_to_kaddr(page_to_pfn(prev_c2b->page));
+        prev_node = c2b_buffer(prev_c2b);
     }
     /* Allocate a new node */
     cdb = castle_freespace_block_get(0);
@@ -766,7 +766,7 @@ static c2_block_t* castle_versions_node_init(void)
     set_c2b_uptodate(c2b);
     debug("Allocated new block (0x%x, 0x%x).\n", cdb.disk, cdb.block);
     /* Init the node correctly */
-    node = pfn_to_kaddr(page_to_pfn(c2b->page));
+    node = c2b_buffer(c2b);
     node->magic               = VLIST_NODE_MAGIC;
     node->version             = 0;
     node->capacity            = VLIST_SLOTS;
@@ -818,7 +818,7 @@ int castle_versions_list_init(c_disk_blk_t ftree_root)
     c2b = castle_versions_node_init();
     if(!c2b) return -EIO;
 
-    node = pfn_to_kaddr(page_to_pfn(c2b->page));
+    node = c2b_buffer(c2b);
     node->used                = 1;
     node->slots[0].version_nr = 0;
     node->slots[0].parent     = 0;
@@ -864,7 +864,7 @@ int castle_versions_read(void)
         if(!c2b_uptodate(c2b)) 
             ret = submit_c2b_sync(READ, c2b);
         if(ret) goto out; 
-        node = pfn_to_kaddr(page_to_pfn(c2b->page));
+        node = c2b_buffer(c2b);
         /* TODO: handle this properly */
         if(node->magic != VLIST_NODE_MAGIC)
             printk("WARN: Version list magics don't agree!\n");

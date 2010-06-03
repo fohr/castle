@@ -11,7 +11,7 @@ enum c2b_state_bits {
 
 typedef struct castle_cache_block {
     c_disk_blk_t cdb;
-    struct page *page;
+    struct list_head pages;
     struct list_head list;
     /* TODO: dirty >> dirty_or_clean */
     struct list_head dirty;
@@ -24,6 +24,7 @@ typedef struct castle_cache_block {
     char *file;
     int   line;
 #endif
+
 } c2_block_t;
 
 #define CACHE_FNS(bit, name)					                    \
@@ -89,7 +90,17 @@ static inline void put_c2b(c2_block_t *c2b)
     atomic_dec(&c2b->count);
 }
 
-#define c2b_buffer(_c2b)    ((void *)pfn_to_kaddr(page_to_pfn((_c2b)->page)))
+#define c2b_buffer(_c2b) ({                              \
+    void *_buf;                                          \
+    struct list_head *_l;                                \
+    struct page *_pg;                                    \
+    BUG_ON((_c2b)->pages.next       == &(_c2b)->pages);  \
+    BUG_ON((_c2b)->pages.next->next != &(_c2b)->pages);  \
+    _l  = (_c2b)->pages.next;                            \
+    _pg = list_entry(_l, struct page, lru);              \
+    _buf = pfn_to_kaddr(page_to_pfn(_pg));               \
+    _buf;                                                \
+})
 
 /* The 'interesting' cache interface functions */
 int         submit_c2b                (int rw, c2_block_t *c2b);

@@ -29,9 +29,10 @@ static               LIST_HEAD(castle_cache_dirtylist);
 static atomic_t                castle_cache_cleanlist_size;
 static               LIST_HEAD(castle_cache_cleanlist);
 
-static int                     castle_cache_freelist_size;
-static         DEFINE_SPINLOCK(castle_cache_freelist_lock);
-static               LIST_HEAD(castle_cache_freelist);
+static         DEFINE_SPINLOCK(castle_cache_freelist_lock); /* Lock for the two freelists below */
+static int                     castle_cache_page_freelist_size;
+static               LIST_HEAD(castle_cache_page_freelist);
+static               LIST_HEAD(castle_cache_block_freelist);
 
 
 static struct task_struct     *castle_cache_flush_thread;
@@ -129,10 +130,13 @@ int submit_c2b(int rw, c2_block_t *c2b)
     if(!cs) return -ENODEV;
 
 	bio = bio_alloc(GFP_NOIO, 1);
+/* Temporarily we assume a single page to c2_block_t */
+BUG_ON(c2b->pages.next       == &c2b->pages);
+BUG_ON(c2b->pages.next->next != &c2b->pages);
 
 	bio->bi_sector = (sector_t)(c2b->cdb.block * (C_BLK_SIZE >> 9));
 	bio->bi_bdev = cs->bdev;
-	bio->bi_io_vec[0].bv_page = c2b->page;
+	bio->bi_io_vec[0].bv_page = (struct page *)list_entry(c2b->pages.next, struct page, lru);
 	bio->bi_io_vec[0].bv_len  = C_BLK_SIZE; 
 	bio->bi_io_vec[0].bv_offset = 0;
 
@@ -244,35 +248,83 @@ out:
     return success;
 }
 
-static c2_block_t* castle_cache_freelist_get(void)
+static c2_block_t* castle_cache_block_freelist_get(void)
 {
     struct list_head *lh;
     c2_block_t *c2b = NULL;
 
     spin_lock(&castle_cache_freelist_lock);
-    if(!list_empty(&castle_cache_freelist)) 
-    {
-        lh = castle_cache_freelist.next;
-        castle_cache_freelist_size--;
-        list_del(lh);
-        c2b = list_entry(lh, c2_block_t, list);
-    }
+    /* We should never run out of blocks, we will run out of pages first */
+    BUG_ON(list_empty(&castle_cache_block_freelist));
+    lh = castle_cache_block_freelist.next;
+    list_del(lh);
+    c2b = list_entry(lh, c2_block_t, list);
     spin_unlock(&castle_cache_freelist_lock);
 
     return c2b;
 }
 
-static inline void __castle_cache_freelist_add(c2_block_t *c2b)
+static inline void __castle_cache_block_freelist_add(c2_block_t *c2b)
 {
-    list_add_tail(&c2b->list, &castle_cache_freelist);
-    castle_cache_freelist_size++;
+    list_add_tail(&c2b->list, &castle_cache_block_freelist);
 }
 
-static inline void castle_cache_freelist_add(c2_block_t *c2b)
+static inline void castle_cache_block_freelist_add(c2_block_t *c2b)
 {
     spin_lock(&castle_cache_freelist_lock);
-    __castle_cache_freelist_add(c2b);
+    __castle_cache_block_freelist_add(c2b);
     spin_unlock(&castle_cache_freelist_lock);
+}
+
+static struct page* castle_cache_page_freelist_get(void)
+{
+    struct list_head *lh;
+    struct page *pg = NULL;
+
+    spin_lock(&castle_cache_freelist_lock);
+    if(!list_empty(&castle_cache_page_freelist)) 
+    {
+        lh = castle_cache_page_freelist.next;
+        castle_cache_page_freelist_size--;
+        list_del(lh);
+        pg = list_entry(lh, struct page, lru);
+    }
+    spin_unlock(&castle_cache_freelist_lock);
+
+    return pg;
+}
+
+static inline void __castle_cache_page_freelist_add(struct page *pg)
+{
+    list_add_tail(&pg->lru, &castle_cache_page_freelist);
+    castle_cache_page_freelist_size++;
+}
+
+static inline void castle_cache_page_freelist_add(struct page *pg)
+{
+    spin_lock(&castle_cache_freelist_lock);
+    __castle_cache_page_freelist_add(pg);
+    spin_unlock(&castle_cache_freelist_lock);
+}
+
+static void castle_cache_block_init(c2_block_t *c2b, c_disk_blk_t cdb, struct page *pg)
+{
+    /* c2b should only be initialised if it's not used */
+    BUG_ON(list_empty(&c2b->list)); 
+    BUG_ON(!list_empty(&c2b->pages));
+    BUG_ON(atomic_read(&c2b->count) != 0);
+    c2b->cdb = cdb;
+    c2b->state = INIT_C2B_BITS;
+    list_add(&pg->lru, &c2b->pages);
+}
+
+/* Must be called with freelist lock held */
+static void castle_cache_block_free(c2_block_t *c2b)
+{
+    /* Add the pages back to the freelist */
+    list_splice_init(&c2b->pages, &castle_cache_page_freelist);
+    /* Then put the block on its freelist */
+    __castle_cache_block_freelist_add(c2b);
 }
 
 static inline int c2b_busy(c2_block_t *c2b)
@@ -319,16 +371,16 @@ static int castle_cache_hash_clean(void)
     spin_lock(&castle_cache_freelist_lock);
     list_for_each_safe(lh, t, &victims)
     {
-        c2b = list_entry(lh, c2_block_t, list);
         list_del(lh);
-        __castle_cache_freelist_add(c2b);
+        c2b = list_entry(lh, c2_block_t, list);
+        castle_cache_block_free(c2b);
     }
     spin_unlock(&castle_cache_freelist_lock);
 
     return 1;
 }
 
-static void castle_cache_freelist_grow(void)
+static void castle_cache_page_freelist_grow(void)
 {
     int success = 0;
 
@@ -339,7 +391,7 @@ static void castle_cache_freelist_grow(void)
            We need to check that, in case hash is empty, and we will never 
            manage to free anything. */
         spin_lock(&castle_cache_freelist_lock);
-        if(!list_empty(&castle_cache_freelist))
+        if(!list_empty(&castle_cache_page_freelist))
            success = 1; 
         spin_unlock(&castle_cache_freelist_lock);
         if(success) return;
@@ -356,18 +408,10 @@ static void castle_cache_freelist_grow(void)
     debug("Grown the list.\n");
 }
 
-static void castle_cache_block_init(c2_block_t *c2b, c_disk_blk_t cdb)
-{
-    /* c2b should only be initialised if it's not used */
-    BUG_ON(list_empty(&c2b->list)); 
-    BUG_ON(atomic_read(&c2b->count) != 0);
-    c2b->cdb = cdb;
-    c2b->state = INIT_C2B_BITS;
-}
-
 c2_block_t* castle_cache_block_get(c_disk_blk_t cdb)
 {
     c2_block_t *c2b;
+    struct page *pg;
 
     castle_cache_flush_wakeup();
     might_sleep();
@@ -384,17 +428,18 @@ c2_block_t* castle_cache_block_get(c_disk_blk_t cdb)
            try allocating from the freelist */ 
         do {
             debug("Trying to allocate from freelist.\n");
-            c2b = castle_cache_freelist_get(); 
+            pg = castle_cache_page_freelist_get(); 
             if(!c2b)
             {
                 debug("Failed to allocate from freelist. Growing freelist.\n");
                 /* If freelist is empty, we need to recycle some buffers */
-                castle_cache_freelist_grow(); 
+                castle_cache_page_freelist_grow(); 
             }
-        } while(!c2b);
+        } while(!pg);
         /* Initialise the buffer */
+        c2b = castle_cache_block_freelist_get();
         debug("Initialisng the c2b: %p\n", c2b);
-        castle_cache_block_init(c2b, cdb);
+        castle_cache_block_init(c2b, cdb, pg);
         get_c2b(c2b);
         /* Try to insert into the hash, can fail if it is already there */
         debug("Trying to insert\n");
@@ -402,7 +447,7 @@ c2_block_t* castle_cache_block_get(c_disk_blk_t cdb)
         {
             debug("Failed\n");
             put_c2b(c2b);
-            castle_cache_freelist_add(c2b);
+            castle_cache_block_free(c2b);
         }
         else
             return c2b;
@@ -553,6 +598,7 @@ static void castle_cache_hash_fini(void)
     {
         list_for_each_safe(l, t, &castle_cache_hash[i])
         {
+            list_del(l);
             c2b = list_entry(l, c2_block_t, list);
             /* Buffers should not be in use any more (devices do not exist) */
             BUG_ON(c2b_locked(c2b));
@@ -561,12 +607,12 @@ static void castle_cache_hash_fini(void)
                     c2b->cdb.disk, c2b->cdb.block);
 
             BUG_ON(atomic_read(&c2b->count) != 0);
-            __free_page(c2b->page);
+            castle_cache_block_free(c2b);
         }
     }
 }
 
-static int castle_cache_freelist_init(void)
+static int castle_cache_freelists_init(void)
 {
     int i;
 
@@ -576,33 +622,48 @@ static int castle_cache_freelist_init(void)
     for(i=0; i<castle_cache_size; i++)
     {
         struct page *page = alloc_page(GFP_KERNEL); 
-        c2_block_t   *c2b  = castle_cache_blks + i; 
+        c2_block_t  *c2b  = castle_cache_blks + i; 
 
         if(!page)
             return -ENOMEM;
-        c2b->page = page; 
-        list_add(&c2b->list, &castle_cache_freelist);
+        /* Add page to page_freelist */
+        list_add(&page->lru, &castle_cache_page_freelist);
+
+        /* Add c2b to block_freelist */
+        INIT_LIST_HEAD(&c2b->pages);
+        INIT_LIST_HEAD(&c2b->list);
         INIT_LIST_HEAD(&c2b->dirty);
+        list_add(&c2b->list, &castle_cache_block_freelist);
     }
-    castle_cache_freelist_size = castle_cache_size;
+    castle_cache_page_freelist_size = castle_cache_size;
 
     return 0;
 }
 
-static void castle_cache_freelist_fini(void)
+static void castle_cache_freelists_fini(void)
 {
     struct list_head *l, *t;
     c2_block_t *c2b;
+    struct page *pg;
 
     if(!castle_cache_blks)
         return;
 
-    list_for_each_safe(l, t, &castle_cache_freelist)
+    list_for_each_safe(l, t, &castle_cache_page_freelist)
+    {
+        list_del(l);
+        pg = list_entry(l, struct page, lru);
+        __free_page(pg);
+    }
+
+#ifdef CASTLE_DEBUG     
+    list_for_each_safe(l, t, &castle_cache_block_freelist)
     {
         list_del(l);
         c2b = list_entry(l, c2_block_t, list);
-        __free_page(c2b->page);
+        BUG_ON(!list_empty(&c2b->pages));
     }
+#endif    
 }
 
 int castle_cache_init(void)
@@ -614,9 +675,9 @@ int castle_cache_init(void)
          kzalloc(castle_cache_hash_buckets * sizeof(struct list_head), GFP_KERNEL);
     castle_cache_blks  = kzalloc(castle_cache_size * sizeof(c2_block_t), GFP_KERNEL);
 
-    if((ret = castle_cache_hash_init()))     goto err_out;
-    if((ret = castle_cache_freelist_init())) goto err_out; 
-    if((ret = castle_cache_flush_init()))    goto err_out;
+    if((ret = castle_cache_hash_init()))      goto err_out;
+    if((ret = castle_cache_freelists_init())) goto err_out; 
+    if((ret = castle_cache_flush_init()))     goto err_out;
 
     return 0;
 
@@ -630,7 +691,7 @@ void castle_cache_fini(void)
 {
     castle_cache_flush_fini();
     castle_cache_hash_fini();
-    castle_cache_freelist_fini();
+    castle_cache_freelists_fini();
 
     if(castle_cache_hash) kfree(castle_cache_hash);
     if(castle_cache_blks) kfree(castle_cache_blks);

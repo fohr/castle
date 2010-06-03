@@ -189,9 +189,9 @@ typedef struct castle_bio_vec {
 #endif
 } c_bvec_t;
 #define c_bvec_data_dir(_c_bvec)    bio_data_dir((_c_bvec)->c_bio->bio)
-#define c2b_bnode(_c2b)           ((struct castle_ftree_node *)pfn_to_kaddr(page_to_pfn((_c2b)->page)))
+#define c2b_bnode(_c2b)           ((struct castle_ftree_node *)c2b_buffer(_c2b))
 #define c_bvec_bnode(_c_bvec)       c2b_bnode((_c_bvec)->btree_node)
-#define c_bvec_bpnode(_c_bvec)      pfn_to_kaddr(page_to_pfn((_c_bvec)->btree_parent_node->page))
+#define c_bvec_bpnode(_c_bvec)      c2b_buffer((_c_bvec)->btree_parent_node)
 
 /* Used for iterating through the tree */
 typedef struct castle_iterator {

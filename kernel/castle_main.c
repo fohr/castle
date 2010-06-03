@@ -107,8 +107,8 @@ static inline struct castle_fs_superblock* castle_fs_superblock_get(struct castl
 {
     lock_c2b(cs->fs_sblk);
     BUG_ON(!c2b_uptodate(cs->fs_sblk));
-    
-    return ((struct castle_fs_superblock*) pfn_to_kaddr(page_to_pfn(cs->fs_sblk->page)));
+
+    return ((struct castle_fs_superblock*) c2b_buffer(cs->fs_sblk));
 }
 
 static inline void castle_fs_superblock_put(struct castle_slave *cs, int dirty)
@@ -148,7 +148,7 @@ void castle_fs_superblocks_put(struct castle_fs_superblock *sb, int dirty)
         /* If superblock has been dirtied, copy it, and dirty the buffer */
         if(dirty)
         {
-            curr_sb = pfn_to_kaddr(page_to_pfn(cs->fs_sblk->page));
+            curr_sb = c2b_buffer(cs->fs_sblk);
             /* Note, we can be possibly copying from ourselves, memmove is safer */
             memmove(curr_sb, sb, sizeof(struct castle_fs_superblock)); 
             dirty_c2b(cs->fs_sblk);
@@ -300,7 +300,7 @@ struct castle_slave_superblock* castle_slave_superblock_get(struct castle_slave 
     lock_c2b(cs->sblk);
     BUG_ON(!c2b_uptodate(cs->sblk));
     
-    return ((struct castle_slave_superblock*) pfn_to_kaddr(page_to_pfn(cs->sblk->page)));
+    return ((struct castle_slave_superblock*) c2b_buffer(cs->sblk));
 }
 
 void castle_slave_superblock_put(struct castle_slave *cs, int dirty)
@@ -799,7 +799,7 @@ static void castle_bio_data_copy(c_bvec_t *c_bvec, c2_block_t *c2b)
         } else
         {
             /* TODO use better macros than page_to_pfn etc */
-            buf  = pfn_to_kaddr(page_to_pfn(c2b->page)); 
+            buf  = c2b_buffer(c2b); 
             buf += (first_sec - cbv_first_sec) << 9;
 
             memcpy( write ? buf : bvec_buf,
