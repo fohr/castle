@@ -81,18 +81,18 @@ struct ctrl_cmd
         .get_ret = __##_name##_get_ret,                                 \
     }                                                                   \
 
-CTRL_CMD1(CASTLE_CTRL_CMD_CLAIM,    claim,    uint32_t, claim.dev,    claim.id);
-CTRL_CMD1(CASTLE_CTRL_CMD_RELEASE,  release,  uint32_t, release.id,   release.ret);
-CTRL_CMD1(CASTLE_CTRL_CMD_ATTACH,   attach,   uint64_t, attach.snap,  attach.dev);
-CTRL_CMD1(CASTLE_CTRL_CMD_DETACH,   detach,   uint32_t, detach.dev,   detach.ret);
-CTRL_CMD1(CASTLE_CTRL_CMD_CREATE,   create,   uint64_t, create.size,  create.id);
-CTRL_CMD1(CASTLE_CTRL_CMD_CLONE,    clone,    uint64_t, clone.snap,   clone.clone);
-CTRL_CMD1(CASTLE_CTRL_CMD_SNAPSHOT, snapshot, uint32_t, snapshot.dev, snapshot.snap_id);
-CTRL_CMD1(CASTLE_CTRL_CMD_INIT,     init,     uint32_t, claim.dev,    init.ret);    // No arg really
-CTRL_CMD4(CASTLE_CTRL_CMD_REGION_CREATE, region_create, uint32_t, region_create.slave, snap_id_t, region_create.snapshot, uint32_t, region_create.start, uint32_t, region_create.length, region_create.id);
-CTRL_CMD1(CASTLE_CTRL_CMD_REGION_DESTROY, region_destroy, region_id_t, region_destroy.id, region_destroy.ret);
-CTRL_CMD2(CASTLE_CTRL_CMD_TRANSFER_CREATE, transfer_create, snap_id_t, transfer_create.snapshot, int, transfer_create.direction, transfer_create.id);
-CTRL_CMD1(CASTLE_CTRL_CMD_TRANSFER_DESTROY, transfer_destroy, transfer_id_t, transfer_destroy.id, transfer_destroy.ret);
+CTRL_CMD1(CASTLE_CTRL_CMD_CLAIM,            claim,            uint32_t,      claim.dev,               claim.id);
+CTRL_CMD1(CASTLE_CTRL_CMD_RELEASE,          release,          uint32_t,      release.id,              release.ret);
+CTRL_CMD1(CASTLE_CTRL_CMD_ATTACH,           attach,           uint64_t,      attach.version,          attach.dev);
+CTRL_CMD1(CASTLE_CTRL_CMD_DETACH,           detach,           uint32_t,      detach.dev,              detach.ret);
+CTRL_CMD1(CASTLE_CTRL_CMD_CREATE,           create,           uint64_t,      create.size,             create.id);
+CTRL_CMD1(CASTLE_CTRL_CMD_CLONE,            clone,            uint64_t,      clone.version,           clone.clone);
+CTRL_CMD1(CASTLE_CTRL_CMD_SNAPSHOT,         snapshot,         uint32_t,      snapshot.dev,            snapshot.version);
+CTRL_CMD1(CASTLE_CTRL_CMD_INIT,             init,             uint32_t,      claim.dev,               init.ret);    // No arg really
+CTRL_CMD4(CASTLE_CTRL_CMD_REGION_CREATE,    region_create,    uint32_t,      region_create.slave,     version_t, region_create.version, uint32_t, region_create.start, uint32_t, region_create.length, region_create.id);
+CTRL_CMD1(CASTLE_CTRL_CMD_REGION_DESTROY,   region_destroy,   region_id_t,   region_destroy.id,       region_destroy.ret);
+CTRL_CMD2(CASTLE_CTRL_CMD_TRANSFER_CREATE,  transfer_create,  version_t,     transfer_create.version, int, transfer_create.direction, transfer_create.id);
+CTRL_CMD1(CASTLE_CTRL_CMD_TRANSFER_DESTROY, transfer_destroy, transfer_id_t, transfer_destroy.id,     transfer_destroy.ret);
 
 static struct ctrl_cmd *ctrl_cmds[] = 
 {
