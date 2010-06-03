@@ -354,7 +354,7 @@ struct castle_block_move_info
 {
     int                     index;
     union {
-        c2_page_t          *dest;
+        c2_block_t          *dest;
         c_disk_blk_t        dest_cdb;
     };
     c_disk_blk_t            src_cdb;
@@ -390,10 +390,10 @@ static void castle_block_move_complete(struct work_struct *work)
         castle_ftree_iter_continue(&transfer->c_iter);  
 }
 
-static void castle_block_move_io_end(c2_page_t *src, int uptodate)
+static void castle_block_move_io_end(c2_block_t *src, int uptodate)
 {
     struct castle_block_move_info *info = src->private;
-    c2_page_t *dest = info->dest;
+    c2_block_t *dest = info->dest;
 
     debug("Index=%d, transfer=%d\n", info->index, info->transfer->id);
     
@@ -413,15 +413,15 @@ static void castle_block_move_io_end(c2_page_t *src, int uptodate)
     }    
     else
     {
-        set_c2p_uptodate(src);
+        set_c2b_uptodate(src);
 
-        memcpy(c2p_buffer(dest), c2p_buffer(src), PAGE_SIZE);
-        set_c2p_uptodate(dest);
-        dirty_c2p(dest);
+        memcpy(c2b_buffer(dest), c2b_buffer(src), PAGE_SIZE);
+        set_c2b_uptodate(dest);
+        dirty_c2b(dest);
 
 #ifdef DEBUG        
-        memcpy(c2p_buffer(src), "----MOVED----", strlen("----MOVED----"));
-        dirty_c2p(src);
+        memcpy(c2b_buffer(src), "----MOVED----", strlen("----MOVED----"));
+        dirty_c2b(src);
 #endif        
 
         /* Save CDBs for move_complete */
@@ -429,11 +429,11 @@ static void castle_block_move_io_end(c2_page_t *src, int uptodate)
         info->dest_cdb = dest->cdb;
     }
 
-    unlock_c2p(dest);
-    put_c2p(dest);
+    unlock_c2b(dest);
+    put_c2b(dest);
         
-    unlock_c2p(src);
-    put_c2p(src);   
+    unlock_c2b(src);
+    put_c2b(src);   
 
     INIT_WORK(&info->work, castle_block_move_complete);
     queue_work(castle_wqs[MAX_BTREE_DEPTH-1], &info->work);
@@ -441,7 +441,7 @@ static void castle_block_move_io_end(c2_page_t *src, int uptodate)
 
 static void castle_block_move(struct castle_transfer *transfer, int index, c_disk_blk_t cdb)
 {
-    c2_page_t *src, *dest;
+    c2_block_t *src, *dest;
     c_disk_blk_t dest_db;
     struct castle_block_move_info *info;
     
@@ -462,8 +462,8 @@ static void castle_block_move(struct castle_transfer *transfer, int index, c_dis
     
     debug("Index=%d, getting src...\n", index);
     
-    src = castle_cache_page_get(cdb);
-    lock_c2p(src);
+    src = castle_cache_block_get(cdb);
+    lock_c2b(src);
     
     dest_db = castle_transfer_destination_get(transfer);
     if (DISK_BLK_INVAL(dest_db))
@@ -472,8 +472,8 @@ static void castle_block_move(struct castle_transfer *transfer, int index, c_dis
         
         kfree(info);
         
-        unlock_c2p(src);
-        put_c2p(src);
+        unlock_c2b(src);
+        put_c2b(src);
                 
         /* 
          * this will eventually call c_iter->end, which is 
@@ -485,9 +485,9 @@ static void castle_block_move(struct castle_transfer *transfer, int index, c_dis
     
     debug("Index=%d, getting dest...\n", index);
     
-    dest = castle_cache_page_get(dest_db);
+    dest = castle_cache_block_get(dest_db);
     debug("Index=%d, locking dest...\n", index);
-    lock_c2p(dest);
+    lock_c2b(dest);
         
     info->index    = index;
     info->dest     = dest;
@@ -498,11 +498,11 @@ static void castle_block_move(struct castle_transfer *transfer, int index, c_dis
         
     atomic_inc(&transfer->phase);
         
-    if(!c2p_uptodate(src)) 
+    if(!c2b_uptodate(src)) 
     {
         debug("Index=%d, not uptodate, submitting...\n", index);
         src->end_io = castle_block_move_io_end;
-        submit_c2p(READ, src);
+        submit_c2b(READ, src);
     }
     else
     {

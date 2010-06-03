@@ -10,8 +10,8 @@
 #define C_BVEC_IO_END_ERR           (0x8)
 #define C_BVEC_DATA_IO              (0x10)
 #define C_BVEC_DATA_IO_NO_BLK       (0x20)
-#define C_BVEC_DATA_C2P_UPTODATE    (0x40)
-#define C_BVEC_DATA_C2P_OUTOFDATE   (0x80)
+#define C_BVEC_DATA_C2B_UPTODATE    (0x40)
+#define C_BVEC_DATA_C2B_OUTOFDATE   (0x80)
 
 #define C_BVEC_BTREE_MASK           (0xFFFF0000)    
 #define C_BVEC_BTREE_GOT_NODE       (0x00010000)

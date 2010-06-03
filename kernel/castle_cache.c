@@ -18,7 +18,7 @@
 #endif
 
 static int                     castle_cache_size = 1000; /* in pages */
-static c2_page_t              *castle_cache_pgs  = NULL;
+static c2_block_t             *castle_cache_blks = NULL;
 
 static int                     castle_cache_hash_buckets;
 static         DEFINE_SPINLOCK(castle_cache_hash_lock);
@@ -37,102 +37,102 @@ static               LIST_HEAD(castle_cache_freelist);
 static struct task_struct     *castle_cache_flush_thread;
 static DECLARE_WAIT_QUEUE_HEAD(castle_cache_flush_wq); 
 
-static int sync_c2p(void *word)
+static int sync_c2b(void *word)
 {
-	/* If you need to use the c2p, here is how you work it out;
-       c2_page_t *c2p = container_of(word, c2_page_t, state); */
+	/* If you need to use the c2b, here is how you work it out;
+       c2_block_t *c2b = container_of(word, c2_block_t, state); */
 
 	smp_mb();
-    debug("In sync_c2p. Yielding\n");
+    debug("In sync_c2b. Yielding\n");
 	io_schedule();
 
 	return 0;
 }
 
-void fastcall __lock_c2p(c2_page_t *c2p)
+void fastcall __lock_c2b(c2_block_t *c2b)
 {
-	wait_on_bit_lock(&c2p->state, C2P_lock, sync_c2p, TASK_UNINTERRUPTIBLE);
+	wait_on_bit_lock(&c2b->state, C2B_lock, sync_c2b, TASK_UNINTERRUPTIBLE);
 }
 
-static int inline trylock_c2p(c2_page_t *c2p)
+static int inline trylock_c2b(c2_block_t *c2b)
 {
     /* We succeed at locking if the previous value of the lock bit was 0 */
-    return (test_set_c2p_locked(c2p) == 0);
+    return (test_set_c2b_locked(c2b) == 0);
 }
 
-void fastcall unlock_c2p(c2_page_t *c2p)
+void fastcall unlock_c2b(c2_block_t *c2b)
 {
 #ifdef CASTLE_DEBUG    
-    c2p->file = "none";
-    c2p->line = 0;
+    c2b->file = "none";
+    c2b->line = 0;
 #endif
 	smp_mb__before_clear_bit();
-	clear_c2p_locked(c2p);
+	clear_c2b_locked(c2b);
 	smp_mb__after_clear_bit();
-	wake_up_bit(&c2p->state, C2P_lock);
+	wake_up_bit(&c2b->state, C2B_lock);
 }
 
-void fastcall dirty_c2p(c2_page_t *c2p)
+void fastcall dirty_c2b(c2_block_t *c2b)
 {
     unsigned long flags;
 
     spin_lock_irqsave(&castle_cache_hash_lock, flags);
-    BUG_ON(!c2p_locked(c2p));
-    if(c2p_dirty(c2p)) goto out;
-    list_move(&c2p->dirty, &castle_cache_dirtylist);
-    set_c2p_dirty(c2p); 
+    BUG_ON(!c2b_locked(c2b));
+    if(c2b_dirty(c2b)) goto out;
+    list_move(&c2b->dirty, &castle_cache_dirtylist);
+    set_c2b_dirty(c2b); 
     atomic_dec(&castle_cache_cleanlist_size);
     atomic_inc(&castle_cache_dirtylist_size);
 out:        
     spin_unlock_irqrestore(&castle_cache_hash_lock, flags);
 }
 
-static void fastcall clean_c2p(c2_page_t *c2p)
+static void fastcall clean_c2b(c2_block_t *c2b)
 {
     unsigned long flags;
 
     spin_lock_irqsave(&castle_cache_hash_lock, flags);
-    BUG_ON(!c2p_locked(c2p));
-    BUG_ON(!c2p_dirty(c2p));
-    list_move(&c2p->dirty, &castle_cache_cleanlist);
-    clear_c2p_dirty(c2p); 
+    BUG_ON(!c2b_locked(c2b));
+    BUG_ON(!c2b_dirty(c2b));
+    list_move(&c2b->dirty, &castle_cache_cleanlist);
+    clear_c2b_dirty(c2b); 
     atomic_dec(&castle_cache_dirtylist_size);
     atomic_inc(&castle_cache_cleanlist_size);
     spin_unlock_irqrestore(&castle_cache_hash_lock, flags);
 }
 
-static void c2p_io_end(struct bio *bio, int err)
+static void c2b_io_end(struct bio *bio, int err)
 {
-	c2_page_t *c2p = bio->bi_private;
+	c2_block_t *c2b = bio->bi_private;
 #ifdef CASTLE_DEBUG    
     unsigned long flags;
     
     local_irq_save(flags);
 #endif
-	c2p->end_io(c2p, test_bit(BIO_UPTODATE, &bio->bi_flags));
+	c2b->end_io(c2b, test_bit(BIO_UPTODATE, &bio->bi_flags));
 #ifdef CASTLE_DEBUG    
     local_irq_restore(flags);
 #endif
 	bio_put(bio);
 }
 
-int submit_c2p(int rw, c2_page_t *c2p)
+int submit_c2b(int rw, c2_block_t *c2b)
 {
     struct castle_slave *cs;
 	struct bio *bio;
 
-	BUG_ON(!c2p_locked(c2p));
-	BUG_ON(!c2p->end_io);
-    BUG_ON(DISK_BLK_INVAL(c2p->cdb));
+	BUG_ON(!c2b_locked(c2b));
+	BUG_ON(!c2b->end_io);
+    BUG_ON(DISK_BLK_INVAL(c2b->cdb));
     
-    cs = castle_slave_find_by_block(c2p->cdb);
+    cs = castle_slave_find_by_block(c2b->cdb);
     if(!cs) return -ENODEV;
 
 	bio = bio_alloc(GFP_NOIO, 1);
 
-	bio->bi_sector = (sector_t)(c2p->cdb.block * (C_BLK_SIZE >> 9));
+	bio->bi_sector = (sector_t)(c2b->cdb.block * (C_BLK_SIZE >> 9));
 	bio->bi_bdev = cs->bdev;
-	bio->bi_io_vec[0].bv_page = c2p->page;
+	bio->bi_io_vec[0].bv_page = c2b->page;
 	bio->bi_io_vec[0].bv_len  = C_BLK_SIZE; 
 	bio->bi_io_vec[0].bv_offset = 0;
 
@@ -140,43 +140,43 @@ int submit_c2p(int rw, c2_page_t *c2p)
 	bio->bi_idx = 0;
 	bio->bi_size = C_BLK_SIZE;
 
-	bio->bi_end_io = c2p_io_end;
-	bio->bi_private = c2p;
+	bio->bi_end_io = c2b_io_end;
+	bio->bi_private = c2b;
 
 	submit_bio(rw, bio);
 	
     return 0;
 }
 
-static void castle_cache_sync_io_end(c2_page_t *c2p, int uptodate)
+static void castle_cache_sync_io_end(c2_block_t *c2b, int uptodate)
 {
-    struct completion *completion = c2p->private;
+    struct completion *completion = c2b->private;
     
     if(uptodate) 
     {
-        set_c2p_uptodate(c2p);
-        if(c2p_dirty(c2p)) clean_c2p(c2p);
+        set_c2b_uptodate(c2b);
+        if(c2b_dirty(c2b)) clean_c2b(c2b);
     }
     complete(completion);
 }
 
-int submit_c2p_sync(int rw, c2_page_t *c2p)
+int submit_c2b_sync(int rw, c2_block_t *c2b)
 {
     struct completion completion;
     int ret;
 
-	BUG_ON(!c2p_locked(c2p));
-	BUG_ON((rw == READ)  &&  c2p_uptodate(c2p));
-	BUG_ON((rw == WRITE) && !c2p_dirty(c2p));
-    c2p->end_io = castle_cache_sync_io_end;
-    c2p->private = &completion;
+	BUG_ON(!c2b_locked(c2b));
+	BUG_ON((rw == READ)  &&  c2b_uptodate(c2b));
+	BUG_ON((rw == WRITE) && !c2b_dirty(c2b));
+    c2b->end_io = castle_cache_sync_io_end;
+    c2b->private = &completion;
     init_completion(&completion);
-    if((ret = submit_c2p(rw, c2p)))
+    if((ret = submit_c2b(rw, c2b)))
         return ret;
     wait_for_completion(&completion);
 
     /* Success (ret=0) if uptodate now */
-    return !c2p_uptodate(c2p);
+    return !c2b_uptodate(c2b);
 }
 
 static inline int castle_cache_hash_idx(c_disk_blk_t cdb)
@@ -184,10 +184,10 @@ static inline int castle_cache_hash_idx(c_disk_blk_t cdb)
     return (cdb.block % castle_cache_hash_buckets);
 }
 
-static c2_page_t* castle_cache_hash_find(c_disk_blk_t cdb)
+static c2_block_t* castle_cache_hash_find(c_disk_blk_t cdb)
 {
     struct list_head *lh;
-    c2_page_t *c2p;
+    c2_block_t *c2b;
     int idx;
 
     idx = castle_cache_hash_idx(cdb);
@@ -195,48 +195,48 @@ static c2_page_t* castle_cache_hash_find(c_disk_blk_t cdb)
     list_for_each(lh, &castle_cache_hash[idx])
     {
         debug("Checking list element.\n");
-        c2p = list_entry(lh, c2_page_t, list);
-        if(DISK_BLK_EQUAL(c2p->cdb, cdb))
-            return c2p;
+        c2b = list_entry(lh, c2_block_t, list);
+        if(DISK_BLK_EQUAL(c2b->cdb, cdb))
+            return c2b;
     }
 
     return NULL;
 }
 
-static c2_page_t* castle_cache_hash_get(c_disk_blk_t cdb)
+static c2_block_t* castle_cache_hash_get(c_disk_blk_t cdb)
 {
-    c2_page_t *c2p = NULL;
+    c2_block_t *c2b = NULL;
 
     spin_lock_irq(&castle_cache_hash_lock);
     /* Try to find in the hash first */
-    c2p = castle_cache_hash_find(cdb);
-    /* If found, get a reference to make sure c2p doesn't get removed */
-    if(c2p) get_c2p(c2p);
-    /* If not found, drop the lock, we need to get ourselves a c2p first */
+    c2b = castle_cache_hash_find(cdb);
+    /* If found, get a reference to make sure c2b doesn't get removed */
+    if(c2b) get_c2b(c2b);
+    /* If not found, drop the lock, we need to get ourselves a c2b first */
     spin_unlock_irq(&castle_cache_hash_lock);
 
-    return c2p;
+    return c2b;
 }
 
-static int castle_cache_hash_insert(c2_page_t *c2p)
+static int castle_cache_hash_insert(c2_block_t *c2b)
 {
     int idx, success;
 
     spin_lock_irq(&castle_cache_hash_lock);
     /* Check if already in the hash */
     success = 0;
-    if(castle_cache_hash_find(c2p->cdb)) goto out;
+    if(castle_cache_hash_find(c2b->cdb)) goto out;
     /* Insert */
     success = 1;
-    idx = castle_cache_hash_idx(c2p->cdb);
-    list_add(&c2p->list, &castle_cache_hash[idx]);
-    if(c2p_dirty(c2p))
+    idx = castle_cache_hash_idx(c2b->cdb);
+    list_add(&c2b->list, &castle_cache_hash[idx]);
+    if(c2b_dirty(c2b))
     {
-        list_add_tail(&c2p->dirty, &castle_cache_dirtylist);
+        list_add_tail(&c2b->dirty, &castle_cache_dirtylist);
         atomic_inc(&castle_cache_dirtylist_size);
     } else
     {
-        list_add_tail(&c2p->dirty, &castle_cache_cleanlist);
+        list_add_tail(&c2b->dirty, &castle_cache_cleanlist);
         atomic_inc(&castle_cache_cleanlist_size);
     }
 out:
@@ -244,10 +244,10 @@ out:
     return success;
 }
 
-static c2_page_t* castle_cache_freelist_get(void)
+static c2_block_t* castle_cache_freelist_get(void)
 {
     struct list_head *lh;
-    c2_page_t *c2p = NULL;
+    c2_block_t *c2b = NULL;
 
     spin_lock(&castle_cache_freelist_lock);
     if(!list_empty(&castle_cache_freelist)) 
@@ -255,37 +255,37 @@ static c2_page_t* castle_cache_freelist_get(void)
         lh = castle_cache_freelist.next;
         castle_cache_freelist_size--;
         list_del(lh);
-        c2p = list_entry(lh, c2_page_t, list);
+        c2b = list_entry(lh, c2_block_t, list);
     }
     spin_unlock(&castle_cache_freelist_lock);
 
-    return c2p;
+    return c2b;
 }
 
-static inline void __castle_cache_freelist_add(c2_page_t *c2p)
+static inline void __castle_cache_freelist_add(c2_block_t *c2b)
 {
-    list_add_tail(&c2p->list, &castle_cache_freelist);
+    list_add_tail(&c2b->list, &castle_cache_freelist);
     castle_cache_freelist_size++;
 }
 
-static inline void castle_cache_freelist_add(c2_page_t *c2p)
+static inline void castle_cache_freelist_add(c2_block_t *c2b)
 {
     spin_lock(&castle_cache_freelist_lock);
-    __castle_cache_freelist_add(c2p);
+    __castle_cache_freelist_add(c2b);
     spin_unlock(&castle_cache_freelist_lock);
 }
 
-static inline int c2p_busy(c2_page_t *c2p)
+static inline int c2b_busy(c2_block_t *c2b)
 {
-	return atomic_read(&c2p->count) |
-		(c2p->state & ((1 << C2P_dirty) | (1 << C2P_lock)));
+	return atomic_read(&c2b->count) |
+		(c2b->state & ((1 << C2B_dirty) | (1 << C2B_lock)));
 }
 
 static int castle_cache_hash_clean(void)
 {
     struct list_head *lh, *t;
     LIST_HEAD(victims);
-    c2_page_t *c2p;
+    c2_block_t *c2b;
     int nr_victims;
 
     spin_lock_irq(&castle_cache_hash_lock);
@@ -293,14 +293,14 @@ static int castle_cache_hash_clean(void)
     nr_victims = 0;
     list_for_each_safe(lh, t, &castle_cache_cleanlist)
     {
-        c2p = list_entry(lh, c2_page_t, dirty);
-        if(!c2p_busy(c2p)) 
+        c2b = list_entry(lh, c2_block_t, dirty);
+        if(!c2b_busy(c2b)) 
         {
             debug("Found a victim.\n");
-            list_del(&c2p->list);
-            list_del(&c2p->dirty);
+            list_del(&c2b->list);
+            list_del(&c2b->dirty);
             atomic_dec(&castle_cache_cleanlist_size);
-            list_add(&c2p->list, &victims);
+            list_add(&c2b->list, &victims);
             nr_victims++;
         }
         if(nr_victims > 20)
@@ -319,9 +319,9 @@ static int castle_cache_hash_clean(void)
     spin_lock(&castle_cache_freelist_lock);
     list_for_each_safe(lh, t, &victims)
     {
-        c2p = list_entry(lh, c2_page_t, list);
+        c2b = list_entry(lh, c2_block_t, list);
         list_del(lh);
-        __castle_cache_freelist_add(c2p);
+        __castle_cache_freelist_add(c2b);
     }
     spin_unlock(&castle_cache_freelist_lock);
 
@@ -356,18 +356,18 @@ static void castle_cache_freelist_grow(void)
     debug("Grown the list.\n");
 }
 
-static void castle_cache_page_init(c2_page_t *c2p, c_disk_blk_t cdb)
+static void castle_cache_block_init(c2_block_t *c2b, c_disk_blk_t cdb)
 {
-    /* c2p should only be initialised if it's not used */
-    BUG_ON(list_empty(&c2p->list)); 
-    BUG_ON(atomic_read(&c2p->count) != 0);
-    c2p->cdb = cdb;
-    c2p->state = INIT_C2P_BITS;
+    /* c2b should only be initialised if it's not used */
+    BUG_ON(list_empty(&c2b->list)); 
+    BUG_ON(atomic_read(&c2b->count) != 0);
+    c2b->cdb = cdb;
+    c2b->state = INIT_C2B_BITS;
 }
 
-c2_page_t* castle_cache_page_get(c_disk_blk_t cdb)
+c2_block_t* castle_cache_block_get(c_disk_blk_t cdb)
 {
-    c2_page_t *c2p;
+    c2_block_t *c2b;
 
     castle_cache_flush_wakeup();
     might_sleep();
@@ -376,50 +376,50 @@ c2_page_t* castle_cache_page_get(c_disk_blk_t cdb)
         debug("Trying to find buffer for cdb=(0x%x, 0x%x)\n",
             cdb.disk, cdb.block);
         /* Try to find in the hash first */
-        c2p = castle_cache_hash_get(cdb); 
-        debug("Found in hash: %p\n", c2p);
-        if(c2p) return c2p;
+        c2b = castle_cache_hash_get(cdb); 
+        debug("Found in hash: %p\n", c2b);
+        if(c2b) return c2b;
 
         /* If we couldn't find in the hash, 
            try allocating from the freelist */ 
         do {
             debug("Trying to allocate from freelist.\n");
-            c2p = castle_cache_freelist_get(); 
-            if(!c2p)
+            c2b = castle_cache_freelist_get(); 
+            if(!c2b)
             {
                 debug("Failed to allocate from freelist. Growing freelist.\n");
                 /* If freelist is empty, we need to recycle some buffers */
                 castle_cache_freelist_grow(); 
             }
-        } while(!c2p);
+        } while(!c2b);
         /* Initialise the buffer */
-        debug("Initialisng the c2p: %p\n", c2p);
-        castle_cache_page_init(c2p, cdb);
-        get_c2p(c2p);
+        debug("Initialisng the c2b: %p\n", c2b);
+        castle_cache_block_init(c2b, cdb);
+        get_c2b(c2b);
         /* Try to insert into the hash, can fail if it is already there */
         debug("Trying to insert\n");
-        if(!castle_cache_hash_insert(c2p))
+        if(!castle_cache_hash_insert(c2b))
         {
             debug("Failed\n");
-            put_c2p(c2p);
-            castle_cache_freelist_add(c2p);
+            put_c2b(c2b);
+            castle_cache_freelist_add(c2b);
         }
         else
-            return c2p;
+            return c2b;
     }
 }
 
 /***** Flush thread functions *****/
-static void castle_cache_flush_endio(c2_page_t *c2p, int uptodate)
+static void castle_cache_flush_endio(c2_block_t *c2b, int uptodate)
 {
-    atomic_t *count = c2p->private;
+    atomic_t *count = c2b->private;
     if(!uptodate)
         printk("Could not write out a page!\n");
     else
-        clean_c2p(c2p);
+        clean_c2b(c2b);
 
-    unlock_c2p(c2p);
-    put_c2p(c2p);
+    unlock_c2b(c2b);
+    put_c2b(c2b);
     atomic_dec(count);
     wake_up(&castle_cache_flush_wq);
 }
@@ -428,9 +428,9 @@ static int castle_cache_flush(void *unused)
 {
     int high_water_mark, low_water_mark, to_flush, dirty_pgs, batch_idx, i;
     struct list_head *l, *t;
-    c2_page_t *c2p;
+    c2_block_t *c2b;
 #define FLUSH_BATCH     512    
-    c2_page_t *c2p_batch[FLUSH_BATCH];
+    c2_block_t *c2b_batch[FLUSH_BATCH];
     atomic_t in_flight;
 
     high_water_mark = castle_cache_size >> 1;
@@ -460,14 +460,14 @@ next_batch:
         {
             if(to_flush == 0)
                 break;
-            c2p = list_entry(l, c2_page_t, dirty);
-            if(!trylock_c2p(c2p))
+            c2b = list_entry(l, c2_block_t, dirty);
+            if(!trylock_c2b(c2b))
                 continue;
             /* This is slightly dangerous, but should be fine */
             list_move_tail(l, &castle_cache_dirtylist);
-            get_c2p(c2p);
+            get_c2b(c2b);
             to_flush--;
-            c2p_batch[batch_idx++] = c2p;
+            c2b_batch[batch_idx++] = c2b;
             if(batch_idx >= FLUSH_BATCH)
                 break;
         }
@@ -478,9 +478,9 @@ next_batch:
         for(i=0; i<batch_idx; i++)
         {
             atomic_inc(&in_flight);
-            c2p_batch[i]->end_io = castle_cache_flush_endio; 
-            c2p_batch[i]->private = &in_flight;
-            BUG_ON(submit_c2p(WRITE, c2p_batch[i]));
+            c2b_batch[i]->end_io = castle_cache_flush_endio; 
+            c2b_batch[i]->private = &in_flight;
+            BUG_ON(submit_c2b(WRITE, c2b_batch[i]));
         }
 
         /* We may have to flush more than one batch */
@@ -543,7 +543,7 @@ static int castle_cache_hash_init(void)
 static void castle_cache_hash_fini(void)
 {
     struct list_head *l, *t;
-    c2_page_t *c2p;
+    c2_block_t *c2b;
     int i;
 
     if(!castle_cache_hash) 
@@ -553,15 +553,15 @@ static void castle_cache_hash_fini(void)
     {
         list_for_each_safe(l, t, &castle_cache_hash[i])
         {
-            c2p = list_entry(l, c2_page_t, list);
+            c2b = list_entry(l, c2_block_t, list);
             /* Buffers should not be in use any more (devices do not exist) */
-            BUG_ON(c2p_locked(c2p));
-            if(atomic_read(&c2p->count) != 0)
+            BUG_ON(c2b_locked(c2b));
+            if(atomic_read(&c2b->count) != 0)
                 printk("(disk,block)=(0x%x, 0x%x) not dropped.\n",
-                    c2p->cdb.disk, c2p->cdb.block);
+                    c2b->cdb.disk, c2b->cdb.block);
 
-            BUG_ON(atomic_read(&c2p->count) != 0);
-            __free_page(c2p->page);
+            BUG_ON(atomic_read(&c2b->count) != 0);
+            __free_page(c2b->page);
         }
     }
 }
@@ -570,19 +570,19 @@ static int castle_cache_freelist_init(void)
 {
     int i;
 
-    if(!castle_cache_pgs)
+    if(!castle_cache_blks)
         return -ENOMEM;
 
     for(i=0; i<castle_cache_size; i++)
     {
         struct page *page = alloc_page(GFP_KERNEL); 
-        c2_page_t   *c2p  = castle_cache_pgs + i; 
+        c2_block_t   *c2b  = castle_cache_blks + i; 
 
         if(!page)
             return -ENOMEM;
-        c2p->page = page; 
-        list_add(&c2p->list, &castle_cache_freelist);
-        INIT_LIST_HEAD(&c2p->dirty);
+        c2b->page = page; 
+        list_add(&c2b->list, &castle_cache_freelist);
+        INIT_LIST_HEAD(&c2b->dirty);
     }
     castle_cache_freelist_size = castle_cache_size;
 
@@ -592,16 +592,16 @@ static int castle_cache_freelist_init(void)
 static void castle_cache_freelist_fini(void)
 {
     struct list_head *l, *t;
-    c2_page_t *c2p;
+    c2_block_t *c2b;
 
-    if(!castle_cache_pgs)
+    if(!castle_cache_blks)
         return;
 
     list_for_each_safe(l, t, &castle_cache_freelist)
     {
         list_del(l);
-        c2p = list_entry(l, c2_page_t, list);
-        __free_page(c2p->page);
+        c2b = list_entry(l, c2_block_t, list);
+        __free_page(c2b->page);
     }
 }
 
@@ -612,7 +612,7 @@ int castle_cache_init(void)
     castle_cache_hash_buckets = castle_cache_size >> 3; 
     castle_cache_hash = 
          kzalloc(castle_cache_hash_buckets * sizeof(struct list_head), GFP_KERNEL);
-    castle_cache_pgs  = kzalloc(castle_cache_size * sizeof(c2_page_t), GFP_KERNEL);
+    castle_cache_blks  = kzalloc(castle_cache_size * sizeof(c2_block_t), GFP_KERNEL);
 
     if((ret = castle_cache_hash_init()))     goto err_out;
     if((ret = castle_cache_freelist_init())) goto err_out; 
@@ -633,6 +633,6 @@ void castle_cache_fini(void)
     castle_cache_freelist_fini();
 
     if(castle_cache_hash) kfree(castle_cache_hash);
-    if(castle_cache_pgs)  kfree(castle_cache_pgs);
+    if(castle_cache_blks) kfree(castle_cache_blks);
 }
 

@@ -218,12 +218,12 @@ static int castle_debug_run(void *unused)
                 /* For locking BIOs print what lock are they blocked on. */ 
                 if(locking)
                 {
-                    c2_page_t *c2p = c_bvec->locking;
+                    c2_block_t *c2b = c_bvec->locking;
 
-                    printk("Blocked on locking c2p for (0x%x, 0x%x).\n",
-                        c2p->cdb.disk, c2p->cdb.block);
-                    if(c2p->file != NULL)
-                        printk("c2p last locked from: %s:%d\n", c2p->file, c2p->line);
+                    printk("Blocked on locking c2b for (0x%x, 0x%x).\n",
+                        c2b->cdb.disk, c2b->cdb.block);
+                    if(c2b->file != NULL)
+                        printk("c2b last locked from: %s:%d\n", c2b->file, c2b->line);
                     else
                         printk("has never been locked before?\n");
                 }
