@@ -10,21 +10,22 @@ enum c2b_state_bits {
 #define INIT_C2B_BITS (0)
 
 typedef struct castle_cache_block {
-    c_disk_blk_t cdb;
+    c_disk_blk_t     cdb;
+    int              nr_pages;
     struct list_head pages;
+    void            *buffer; /* Linear mapping of the pages */
     struct list_head list;
     /* TODO: dirty >> dirty_or_clean */
     struct list_head dirty;
 
-    unsigned long state;
-	atomic_t count;
-    void (*end_io)(struct castle_cache_block *c2b, int uptodate);
-    void *private; /* Can only be used if c2b is locked */
+    unsigned long    state;
+	atomic_t         count;
+    void           (*end_io)(struct castle_cache_block *c2b, int uptodate);
+    void            *private; /* Can only be used if c2b is locked */
 #ifdef CASTLE_DEBUG    
-    char *file;
-    int   line;
+    char            *file;
+    int              line;
 #endif
-
 } c2_block_t;
 
 #define CACHE_FNS(bit, name)					                    \
@@ -90,22 +91,13 @@ static inline void put_c2b(c2_block_t *c2b)
     atomic_dec(&c2b->count);
 }
 
-#define c2b_buffer(_c2b) ({                              \
-    void *_buf;                                          \
-    struct list_head *_l;                                \
-    struct page *_pg;                                    \
-    BUG_ON((_c2b)->pages.next       == &(_c2b)->pages);  \
-    BUG_ON((_c2b)->pages.next->next != &(_c2b)->pages);  \
-    _l  = (_c2b)->pages.next;                            \
-    _pg = list_entry(_l, struct page, lru);              \
-    _buf = pfn_to_kaddr(page_to_pfn(_pg));               \
-    _buf;                                                \
-})
+#define c2b_buffer(_c2b)    ((_c2b)->buffer)
 
 /* The 'interesting' cache interface functions */
 int         submit_c2b                (int rw, c2_block_t *c2b);
 int         submit_c2b_sync           (int rw, c2_block_t *c2b);
-c2_block_t* castle_cache_block_get    (c_disk_blk_t cdb);
+#define castle_cache_block_get(_cdb)    _castle_cache_block_get(_cdb, 1)
+c2_block_t* _castle_cache_block_get   (c_disk_blk_t cdb, int nr_pages);
 void        castle_cache_flush_wakeup (void);
 
 

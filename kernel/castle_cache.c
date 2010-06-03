@@ -5,6 +5,7 @@
 #include <linux/spinlock.h>
 #include <linux/wait.h>
 #include <linux/kthread.h>
+#include <linux/vmalloc.h>
 
 #include "castle_public.h"
 #include "castle.h"
@@ -120,7 +121,10 @@ static void c2b_io_end(struct bio *bio, int err)
 int submit_c2b(int rw, c2_block_t *c2b)
 {
     struct castle_slave *cs;
+    struct list_head *l;
 	struct bio *bio;
+    struct page *pg;
+    int i;
 
 	BUG_ON(!c2b_locked(c2b));
 	BUG_ON(!c2b->end_io);
@@ -129,21 +133,23 @@ int submit_c2b(int rw, c2_block_t *c2b)
     cs = castle_slave_find_by_block(c2b->cdb);
     if(!cs) return -ENODEV;
 
-	bio = bio_alloc(GFP_NOIO, 1);
-/* Temporarily we assume a single page to c2_block_t */
-BUG_ON(c2b->pages.next       == &c2b->pages);
-BUG_ON(c2b->pages.next->next != &c2b->pages);
+    i = 0;
+	bio = bio_alloc(GFP_NOIO, c2b->nr_pages);
+    list_for_each(l, &c2b->pages)
+    {
+        pg = list_entry(l, struct page, lru);
+        BUG_ON(i > c2b->nr_pages);
+	    bio->bi_io_vec[i].bv_page   = pg; 
+	    bio->bi_io_vec[i].bv_len    = C_BLK_SIZE; 
+	    bio->bi_io_vec[i].bv_offset = 0;
+        i++;
+    }
 
 	bio->bi_sector = (sector_t)(c2b->cdb.block * (C_BLK_SIZE >> 9));
 	bio->bi_bdev = cs->bdev;
-	bio->bi_io_vec[0].bv_page = (struct page *)list_entry(c2b->pages.next, struct page, lru);
-	bio->bi_io_vec[0].bv_len  = C_BLK_SIZE; 
-	bio->bi_io_vec[0].bv_offset = 0;
-
-	bio->bi_vcnt = 1;
+	bio->bi_vcnt = c2b->nr_pages;
 	bio->bi_idx = 0;
-	bio->bi_size = C_BLK_SIZE;
-
+	bio->bi_size = c2b->nr_pages * C_BLK_SIZE;
 	bio->bi_end_io = c2b_io_end;
 	bio->bi_private = c2b;
 
@@ -276,22 +282,29 @@ static inline void castle_cache_block_freelist_add(c2_block_t *c2b)
     spin_unlock(&castle_cache_freelist_lock);
 }
 
-static struct page* castle_cache_page_freelist_get(void)
+static void castle_cache_page_freelist_get(int nr_pages, struct list_head *pages)
 {
-    struct list_head *lh;
-    struct page *pg = NULL;
+    struct list_head *lh, *lt;
+    struct page *pg;
 
     spin_lock(&castle_cache_freelist_lock);
-    if(!list_empty(&castle_cache_page_freelist)) 
+    /* Will only be able to satisfy the request if we have nr_pages on the list */
+    if(castle_cache_page_freelist_size < nr_pages)
     {
-        lh = castle_cache_page_freelist.next;
-        castle_cache_page_freelist_size--;
+        spin_unlock(&castle_cache_freelist_lock);
+        return;
+    }
+    
+    list_for_each_safe(lh, lt, &castle_cache_page_freelist)
+    {
+        if(nr_pages-- <= 0)
+            break;
         list_del(lh);
+        castle_cache_page_freelist_size--;
         pg = list_entry(lh, struct page, lru);
+        list_add(&pg->lru, pages);
     }
     spin_unlock(&castle_cache_freelist_lock);
-
-    return pg;
 }
 
 static inline void __castle_cache_page_freelist_add(struct page *pg)
@@ -307,22 +320,40 @@ static inline void castle_cache_page_freelist_add(struct page *pg)
     spin_unlock(&castle_cache_freelist_lock);
 }
 
-static void castle_cache_block_init(c2_block_t *c2b, c_disk_blk_t cdb, struct page *pg)
+static void castle_cache_block_init(c2_block_t *c2b,
+                                    c_disk_blk_t cdb, 
+                                    struct list_head *pages,
+                                    int nr_pages)
 {
+    struct list_head *lh;
+    struct page *pgs[256];
+    int i;
+
     /* c2b should only be initialised if it's not used */
+    BUG_ON(nr_pages > 256);
     BUG_ON(list_empty(&c2b->list)); 
     BUG_ON(!list_empty(&c2b->pages));
     BUG_ON(atomic_read(&c2b->count) != 0);
     c2b->cdb = cdb;
     c2b->state = INIT_C2B_BITS;
-    list_add(&pg->lru, &c2b->pages);
+    c2b->nr_pages = nr_pages;
+    list_splice(pages, &c2b->pages);
+
+    i = 0;
+    list_for_each(lh, &c2b->pages)
+        pgs[i++] = list_entry(lh, struct page, lru);
+
+    c2b->buffer = vmap(pgs, i, VM_READ|VM_WRITE, PAGE_KERNEL);
+    BUG_ON(!c2b->buffer);
 }
 
 /* Must be called with freelist lock held */
 static void castle_cache_block_free(c2_block_t *c2b)
 {
+    vunmap(c2b->buffer);
     /* Add the pages back to the freelist */
     list_splice_init(&c2b->pages, &castle_cache_page_freelist);
+    castle_cache_page_freelist_size += c2b->nr_pages;
     /* Then put the block on its freelist */
     __castle_cache_block_freelist_add(c2b);
 }
@@ -401,17 +432,17 @@ static void castle_cache_page_freelist_grow(void)
         debug("=> Could not clean the hash table. Waking flush.\n");
         castle_cache_flush_wakeup();
         debug("=> Woken.\n");
-        sleep_on_timeout(&castle_cache_flush_wq, HZ / 25);
+        sleep_on(&castle_cache_flush_wq);
         debug("=> We think there is some free memory now (cleanlist size: %d).\n",
                 atomic_read(&castle_cache_cleanlist_size));
     }
     debug("Grown the list.\n");
 }
 
-c2_block_t* castle_cache_block_get(c_disk_blk_t cdb)
+c2_block_t* _castle_cache_block_get(c_disk_blk_t cdb, int nr_pages)
 {
     c2_block_t *c2b;
-    struct page *pg;
+    LIST_HEAD(pages);
 
     castle_cache_flush_wakeup();
     might_sleep();
@@ -428,18 +459,18 @@ c2_block_t* castle_cache_block_get(c_disk_blk_t cdb)
            try allocating from the freelist */ 
         do {
             debug("Trying to allocate from freelist.\n");
-            pg = castle_cache_page_freelist_get(); 
-            if(!c2b)
+            castle_cache_page_freelist_get(nr_pages, &pages); 
+            if(list_empty(&pages))
             {
                 debug("Failed to allocate from freelist. Growing freelist.\n");
                 /* If freelist is empty, we need to recycle some buffers */
                 castle_cache_page_freelist_grow(); 
             }
-        } while(!pg);
+        } while(list_empty(&pages));
         /* Initialise the buffer */
         c2b = castle_cache_block_freelist_get();
         debug("Initialisng the c2b: %p\n", c2b);
-        castle_cache_block_init(c2b, cdb, pg);
+        castle_cache_block_init(c2b, cdb, &pages, nr_pages);
         get_c2b(c2b);
         /* Try to insert into the hash, can fail if it is already there */
         debug("Trying to insert\n");
