@@ -368,7 +368,6 @@ static void castle_control_reply(uint32_t *reply,
     /* Deal with error condition first */
     if(ret_code)
     {
-        printk("==> Fail reply.\n");
         reply[0] = CASTLE_CTRL_REPLY;
         reply[1] = CASTLE_CTRL_REPLY_FAIL;
         reply[2] = ret_code;
@@ -392,33 +391,28 @@ static void castle_control_reply(uint32_t *reply,
 
     /* Convert to network byte order */
     for(i=0; i<len; i++)
-    {
-        printk("=> word[%d] before=0x%x\n", i, reply[i]);
         reply[i] = htonl(reply[i]);
-        printk("=> word[%d] after =0x%x\n", i, reply[i]);
-    }
     
+#ifdef DEBUG
     printk("=> Here.\n");
     for(i=0; i<4*len; i++)
         printk("=> [%d]=%d\n", i, *(((uint8_t *)reply) + i));
     printk("<= Here.\n");
+#endif    
 
     /* length is in bytes */
     *length = 4*len;
 }
 
-int castle_ctrl_packet_process(struct sk_buff *skb, void *reply, int *len_p)
+int castle_control_packet_process(struct sk_buff *skb, void *reply, int *len_p)
 {
     uint32_t *reply32 = reply; /* For now, all reply values are 32 bit wide */
     uint32_t ctrl_op;
-    int i;
 
-    printk("Ctrl, skb->len=%d.\n", skb->len);
     if(skb->len < 4)
         return -EBADMSG;
 
     ctrl_op = SKB_L_GET(skb);
-    printk("Ctrl op: %d\n", ctrl_op);
     switch(ctrl_op)
     {
         case CASTLE_CTRL_REQ_CLAIM:
@@ -447,10 +441,6 @@ int castle_ctrl_packet_process(struct sk_buff *skb, void *reply, int *len_p)
                                  CASTLE_CTRL_REPLY_VOID,
                                  ret,
                                  0);
-    printk("=> Here2.\n");
-    for(i=0; i<len_d; i++)
-        printk("=> [%d]=%d\n", i, *(((uint8_t *)reply) + i));
-    printk("<= Here2.\n");
             *len_p = len_d;
 
             break;
@@ -657,10 +647,6 @@ int castle_ctrl_packet_process(struct sk_buff *skb, void *reply, int *len_p)
             break;
         }
     }
-
-    printk("=> Reply length=%d\n", *len_p);
-    for(i=0; i<*len_p; i++)
-        printk("=> [%d]=%d\n", i, *(((uint8_t *)reply) + i));
 
     return 0;
 }
