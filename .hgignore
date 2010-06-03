@@ -16,3 +16,11 @@ user/ocaml/castle_ioctl
 *cscope.in.out
 *cscope.po.out
 *tags
+*.swp
+*.patch
+kernel/.tmp_versions/castle-fs.mod
+kernel/Module.symvers
+kernel/castle-fs.ko
+kernel/castle-fs.mod.c
+kernel/castle_compile.h
+user/utils/castle-fs-cli
