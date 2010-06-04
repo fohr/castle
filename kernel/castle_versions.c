@@ -280,7 +280,7 @@ static void castle_version_writeback(version_t version, int new)
     spin_unlock_irq(&castle_versions_hash_lock);
 
     /* Lock the disk node, and defer the writeback */
-    c2b = castle_cache_block_get(node_cdb);
+    c2b = castle_cache_page_block_get(node_cdb);
     lock_c2b(c2b);
     vu->version = version;
     vu->new = new;
@@ -750,7 +750,7 @@ static c2_block_t* castle_versions_node_init(void)
     if(!DISK_BLK_INVAL(fs_sb->fwd_tree2))
     {
         debug("Valid last vlist node.\n");
-        prev_c2b  = castle_cache_block_get(fs_sb->fwd_tree2);
+        prev_c2b  = castle_cache_page_block_get(fs_sb->fwd_tree2);
         lock_c2b(prev_c2b);
         ret = 0;
         if(!c2b_uptodate(prev_c2b))
@@ -760,8 +760,8 @@ static c2_block_t* castle_versions_node_init(void)
         prev_node = c2b_buffer(prev_c2b);
     }
     /* Allocate a new node */
-    cdb = castle_freespace_block_get(0);
-    c2b = castle_cache_block_get(cdb);
+    cdb = castle_freespace_block_get(0, 1);
+    c2b = castle_cache_page_block_get(cdb);
     lock_c2b(c2b);
     set_c2b_uptodate(c2b);
     debug("Allocated new block (0x%x, 0x%x).\n", cdb.disk, cdb.block);
@@ -853,7 +853,7 @@ int castle_versions_read(void)
     {
         debug("Reading next version list node: (0x%x, 0x%x)\n",
                 list_cdb.disk, list_cdb.block);
-        c2b = castle_cache_block_get(list_cdb);
+        c2b = castle_cache_page_block_get(list_cdb);
         lock_c2b(c2b);         
         /* Now that we've locked c2b, unlock prev (if exists) */
         if(prev_c2b)

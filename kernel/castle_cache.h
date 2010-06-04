@@ -87,6 +87,7 @@ static inline void get_c2b(c2_block_t *c2b)
 
 static inline void put_c2b(c2_block_t *c2b)
 {
+    BUG_ON(atomic_read(&c2b->count) == 0);
     atomic_dec(&c2b->count);
 }
 
@@ -95,8 +96,9 @@ static inline void put_c2b(c2_block_t *c2b)
 /* The 'interesting' cache interface functions */
 int         submit_c2b                (int rw, c2_block_t *c2b);
 int         submit_c2b_sync           (int rw, c2_block_t *c2b);
-#define castle_cache_block_get(_cdb)    _castle_cache_block_get(_cdb, 1)
-c2_block_t* _castle_cache_block_get   (c_disk_blk_t cdb, int nr_pages);
+#define     castle_cache_page_block_get(_cdb) \
+            castle_cache_block_get    (_cdb, 1)
+c2_block_t* castle_cache_block_get    (c_disk_blk_t cdb, int nr_pages);
 void        castle_cache_flush_wakeup (void);
 
 

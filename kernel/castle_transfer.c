@@ -322,7 +322,7 @@ static c_disk_blk_t castle_transfer_destination_get(struct castle_transfer *tran
     switch (transfer->direction)
     {
         case CASTLE_TRANSFER_TO_TARGET:
-            cdb = castle_freespace_block_get(transfer->version);
+            cdb = castle_freespace_block_get(transfer->version, 1);
             break;
             
         case CASTLE_TRANSFER_TO_REGION:
@@ -337,7 +337,7 @@ static c_disk_blk_t castle_transfer_destination_get(struct castle_transfer *tran
                 debug("region=%i\n", region->id);
             
                 /* this will update the summaries... */
-                cdb = castle_freespace_slave_block_get(region->slave, region->version);
+                cdb = castle_freespace_slave_block_get(region->slave, region->version, 1);
 
                 debug("cdb=(%i,%i)\n", cdb.disk, cdb.block);
             }
@@ -381,7 +381,7 @@ static void castle_block_move_complete(struct work_struct *work)
     {
         /* Update counters etc... */
         castle_ftree_iter_replace(&transfer->c_iter, index, dest_cdb);
-        castle_freespace_block_free(src_cdb, transfer->version);
+        castle_freespace_block_free(src_cdb, transfer->version, 1);
         atomic_inc(&transfer->progress);
     }
 
@@ -462,7 +462,7 @@ static void castle_block_move(struct castle_transfer *transfer, int index, c_dis
     
     debug("Index=%d, getting src...\n", index);
     
-    src = castle_cache_block_get(cdb);
+    src = castle_cache_page_block_get(cdb);
     lock_c2b(src);
     
     dest_db = castle_transfer_destination_get(transfer);
@@ -485,7 +485,7 @@ static void castle_block_move(struct castle_transfer *transfer, int index, c_dis
     
     debug("Index=%d, getting dest...\n", index);
     
-    dest = castle_cache_block_get(dest_db);
+    dest = castle_cache_page_block_get(dest_db);
     debug("Index=%d, locking dest...\n", index);
     lock_c2b(dest);
         

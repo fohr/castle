@@ -16,7 +16,7 @@
 #endif
 
 #define FREESPACE_START_BLK     2
-c_disk_blk_t castle_freespace_slave_block_get(struct castle_slave *cs, version_t v);
+c_disk_blk_t castle_freespace_slave_block_get(struct castle_slave *cs, version_t v, int size);
 
 #define blk_to_bitmap_blk(_blk) (((_blk) >> (C_BLK_SHIFT + 3)) + FREESPACE_START_BLK)
 #define bitmap_blk_to_blk(_blk) (((_blk) - FREESPACE_START_BLK) << (C_BLK_SHIFT + 3))
@@ -178,12 +178,12 @@ static c2_block_t* castle_freespace_flist_alloc(struct castle_slave *cs,
     c2_block_t *c2b;
 
     debug("\nAllocating a new block for flist.\n");
-    cdb = castle_freespace_slave_block_get(cs, 0);
+    cdb = castle_freespace_slave_block_get(cs, 0, 1);
     debug("Allocated (0x%x, 0x%x)\n", cdb.disk, cdb.block);
     if(DISK_BLK_INVAL(cdb))
         return NULL;
 
-    c2b = castle_cache_block_get(cdb);
+    c2b = castle_cache_page_block_get(cdb);
     lock_c2b(c2b);
     set_c2b_uptodate(c2b);
     flist_node = c2b_buffer(c2b);
@@ -292,9 +292,12 @@ static void castle_freespace_new_slave_init(struct castle_slave *cs)
     last_cdb.block = 0;
     bitmap_cdb = INVAL_DISK_BLK;
 
-    while(last_cdb.block < cs_sb->size)
+    /* Note, the bitmap will extend beyond the last block of the device.
+       The next block will be marked as allocated, which simplifies allocation
+       algorithms below. */
+    while(last_cdb.block <= cs_sb->size)
     {
-        c2_block_t *c2b = castle_cache_block_get(freespace_cdb);
+        c2_block_t *c2b = castle_cache_page_block_get(freespace_cdb);
 
         lock_c2b(c2b);
         /* We'll overwrite entire block */
@@ -302,6 +305,27 @@ static void castle_freespace_new_slave_init(struct castle_slave *cs)
         bitmap = c2b_buffer(c2b);
         for(i=0; i<C_BLK_SIZE; i++)
             bitmap[i] = (uint8_t)-1;
+
+        /* Check if the end of device is in this page */
+        if(last_cdb.block + C_BLK_SIZE * 8 >= cs_sb->size)
+        {
+            i = blk_to_bitmap_off(cs_sb->size);
+            debug("Marking end of device in freespace map.\n"
+                  "Freespace_cdb=(0x%x, 0x%x), @offset: %d\n",
+                  freespace_cdb.disk, freespace_cdb.block, i);
+            
+            while(i < C_BLK_SIZE * 8) 
+            {
+                if(i % 8 != 0)
+                {
+                    clear_bit(i, bitmap);
+                    i++;
+                    continue;
+                }
+                bitmap[i/8] = 0;
+                i += 8;
+            }
+        }
 
         /* c2b has been changed */
         dirty_c2b(c2b);
@@ -318,7 +342,7 @@ static void castle_freespace_new_slave_init(struct castle_slave *cs)
                 put_c2b(bitmap_c2b);
             }
             bitmap_cdb = cdb_to_bitmap_cdb(freespace_cdb);
-            bitmap_c2b = castle_cache_block_get(bitmap_cdb);
+            bitmap_c2b = castle_cache_page_block_get(bitmap_cdb);
             lock_c2b(bitmap_c2b);
             if(!c2b_uptodate(bitmap_c2b))
                 BUG_ON(submit_c2b_sync(READ, bitmap_c2b));
@@ -377,7 +401,7 @@ static void castle_freespace_old_slave_init(struct castle_slave *cs)
     debug("First flist cdb=(0x%x, 0x%x)\n", flist_cdb.disk, flist_cdb.block);
     while(!DISK_BLK_INVAL(flist_cdb))
     {
-        flist_c2b = castle_cache_block_get(flist_cdb);
+        flist_c2b = castle_cache_page_block_get(flist_cdb);
         lock_c2b(flist_c2b);
          // TODO proper error handling
         if(!c2b_uptodate(flist_c2b))
@@ -425,14 +449,148 @@ void castle_freespace_slave_init(struct castle_slave *cs, int fresh)
     if(!fresh) castle_freespace_old_slave_init(cs);
 }
 
-c_disk_blk_t castle_freespace_slave_block_get(struct castle_slave *slave, version_t version)
+static int castle_freespace_bitmap_block_get(c2_block_t *bitmap_c2b, 
+                                             int bit_idx, 
+                                             version_t version, 
+                                             int size)
+{
+    /* Search for contiguous run of set bits of size 'size' starting with bit_idx */
+    uint64_t *bitmap_buf;
+    int i;
+
+    /* TODO: This can be optimised with the use of the following snipet of code:
+        word = bitmap_buf[word_idx];
+        debug("The non-zero bitmap block word is 0x%.16llx\n", word);
+        complement_word = (~word) + 1UL;
+        debug("2's completement is               0x%.16llx\n", complement_word);
+        word = word & complement_word;
+        debug("And is                            0x%.16llx\n", word);
+        debug("The set bit is at position        %d\n", fls64(word)-1);
+        bit_idx = word_idx * sizeof(uint64_t) * 8 + fls64(word) - 1;
+        debug("Found set bit at offset=%d\n", bit_idx);
+        BUG_ON(test_bit(bit_idx, bitmap_buf) == 0);
+
+        For the time being the dumbest code that works below.
+     */
+    debug("=> Searching bitmap, with bit_idx=%d\n", bit_idx);
+    bitmap_buf = c2b_buffer(bitmap_c2b);
+    for(;bit_idx + size < C_BLK_SIZE * 8; bit_idx++)
+    {
+        /* Check if bit_idx is set (=> free block), and start searching for 'size' from there. */
+        for(i=0; test_bit(bit_idx+i, bitmap_buf) && (i < size); i++);
+        //debug("=> Check for bit_idx=%d, i=%d, size=%d\n", bit_idx, i, size);
+        /* Consider the 3 cases: i < size, i==size, i > size */
+        BUG_ON(i > size);
+        if(i == size)
+        {
+            /* Got it! Clear all the bits, and return */
+            for(i=0; i<size; i++)
+            {
+#ifdef CASTLE_DEBUG            
+                BUG_ON(!test_bit(bit_idx + i, bitmap_buf));
+#endif                
+                clear_bit(bit_idx + i, bitmap_buf);
+            }
+            dirty_c2b(bitmap_c2b);
+            return bit_idx;
+        }
+        bit_idx += i;
+#ifdef CASTLE_DEBUG            
+        BUG_ON((bit_idx < C_BLK_SIZE * 8) && test_bit(bit_idx, bitmap_buf));
+#endif                
+    }
+    debug("=> Bitmap exhausted, bit_idx=%d.\n", bit_idx);
+ 
+    return -1; 
+}
+
+c_disk_blk_t castle_freespace_slave_block_get(struct castle_slave *slave, version_t version, int size)
+{
+    c_disk_blk_t first_bitmap_cdb, bitmap_cdb, free_cdb;
+    struct castle_slave_superblock *sb = NULL;
+    c2_block_t *bitmap_c2b;
+    block_t slave_size;
+    int bit_idx, bitmap_offset;
+
+    /* Lock the slave, read of the slave related info. 
+       Especially the next candidate block to look at. */
+    sb = castle_slave_superblock_get(slave);
+    slave_size = sb->size;
+    debug("Slave size=0x%x\n", slave_size);
+   
+    first_bitmap_cdb = bitmap_cdb = 
+        (c_disk_blk_t){slave->uuid, blk_to_bitmap_blk(slave->free_blk)};
+    debug("First bitmap block: 0x%x\n", first_bitmap_cdb.block);
+    bit_idx = blk_to_bitmap_off(slave->free_blk);
+    debug("Bit_idx: 0x%x\n", bit_idx);
+                
+    free_cdb = INVAL_DISK_BLK;
+    /* Check the bitmap blocks until we get back to the first_bitmap_cdb again */
+    do {
+        bitmap_c2b = castle_cache_page_block_get(bitmap_cdb);
+        lock_c2b(bitmap_c2b);
+         
+        /* NOTE: This will not find free blocks crossing the bitmap page
+           boundries. If this is a problem it might be worth mapping more
+           than a page at a time */
+        bitmap_offset = castle_freespace_bitmap_block_get(bitmap_c2b, bit_idx, version, size);
+        /* bitmap_offset >= 0 if contiguous block of freespace of size 'size'
+           was found. Check if not beyond the end of device, and return. */
+        debug("Got bitmap_offest=%d\n", bitmap_offset);
+        if(bitmap_offset >= 0)
+        {
+            free_cdb.block = bitmap_cdb_to_cdb(bitmap_cdb).block + bitmap_offset;
+            if(free_cdb.block + size > slave_size)
+            {
+                free_cdb = INVAL_DISK_BLK;
+                /* Should free up the space, or at least adjust the accounting */
+                BUG();
+            }
+        }
+        unlock_c2b(bitmap_c2b);
+        put_c2b(bitmap_c2b);
+        /* Check if we found free block, if so exit. */
+        if(!DISK_BLK_INVAL(free_cdb))
+        {
+            /* Book-keeping stuff */
+            free_cdb.disk = slave->uuid;
+            debug("Free block is (0x%x, 0x%x), size=%d, bookkeeping that\n", 
+                    free_cdb.disk, free_cdb.block, size);
+            slave->free_blk = free_cdb.block + size;
+            if(slave->free_blk > slave_size)
+                slave->free_blk = 0; /* Obviously 0 isn't free, but that's fine. */
+            castle_freespace_hash_mod(slave, version, HASH_MOD_INC);
+            sb->used += size;
+            castle_slave_superblock_put(slave, 1);
+            
+            return free_cdb;
+        }
+        /* Haven't found appropriate free block in this bitmap. Check the next page. */
+        bit_idx = 0;
+        bitmap_cdb.block++;
+        if(bitmap_cdb.block > blk_to_bitmap_blk(slave_size-1))
+            bitmap_cdb.block = FREESPACE_START_BLK;
+        debug("Selected next bitmap block, 0x%x.\n", bitmap_cdb.block);
+    } 
+    while(bitmap_cdb.block != first_bitmap_cdb.block);
+
+    /* We dropped out of the bottom of the while loop => free block not found */
+    castle_slave_superblock_put(slave, 0);
+    printk("Warning: Could not find a free block on slave(%d, 0x%x), used=%d\n",
+            slave->id, slave->uuid, sb->used);
+
+    return INVAL_DISK_BLK;
+}
+
+#if 0
+c_disk_blk_t castle_freespace_slave_block_get(struct castle_slave *slave, version_t version, int size)
 {
     struct castle_slave_superblock *sb = NULL;
     c_disk_blk_t free_cdb, bitmap_cdb, first_bitmap_cdb;
     volatile uint64_t *bitmap_buf, word, complement_word;
     c2_block_t *bitmap_c2b;
     block_t slave_size;
-    int i, i_max = (C_BLK_SIZE / sizeof(uint64_t));
+    int idx, bit_idx, word_idx, word_max = (C_BLK_SIZE / sizeof(uint64_t));
 
     // TODO: slave locks!
     /* We've selected a disk to search for a new block on. Select bitmap block. */
@@ -443,7 +601,7 @@ c_disk_blk_t castle_freespace_slave_block_get(struct castle_slave *slave, versio
 
     free_cdb = (c_disk_blk_t){slave->uuid, slave->free_blk+1};
     debug("Free block on the slave is: 0x%x\n", free_cdb.block);
-    i = cdb_to_bitmap_off(free_cdb) / (sizeof(uint64_t) * 8);
+    word_idx = cdb_to_bitmap_off(free_cdb) / (sizeof(uint64_t) * 8);
     debug("uint64_t offset is: 0x%x\n", i);
     first_bitmap_cdb = bitmap_cdb = cdb_to_bitmap_cdb(free_cdb);
     debug("first bitmap block: 0x%x\n", first_bitmap_cdb.block);
@@ -466,37 +624,53 @@ next_bitmap_cdb:
         castle_slave_superblock_put(slave, 0);
         return INVAL_DISK_BLK;
     }
+    word_idx=0;
 
 process_bitmap_cdb:
     /* Find first non-zero uint64_t in the bitmap */
-    bitmap_c2b = castle_cache_block_get(bitmap_cdb);
+    bitmap_c2b = castle_cache_page_block_get(bitmap_cdb);
     lock_c2b(bitmap_c2b);
     if(!c2b_uptodate(bitmap_c2b))
         BUG_ON(submit_c2b_sync(READ, bitmap_c2b));
     bitmap_buf = c2b_buffer(bitmap_c2b);
-    for(i=0; i < i_max; i++)
-        if(bitmap_buf[i] != 0)
+
+    for(; word_idx < word_max; word_idx++)
+        if(bitmap_buf[word_idx] != 0)
             break;
-    debug("First non-zero bitmap block word is at i=%d (i_max=%d)\n",
-        i, i_max);
+    debug("First non-zero bitmap block word is at word_idx=%d (word_max=%d)\n",
+        word_idx, word_max);
 
     /* If none of the words were non-zero in the bitmap, goto next bitmap
        block straight away */
-    if(i >= i_max) goto next_bitmap_cdb;
+    if(word >= word_max) 
+        goto next_bitmap_cdb;
 
     /* Find the first set bit in the first non-zero bitmap word */
     /* We are assuming little endian here */
-    word = bitmap_buf[i];
+    word = bitmap_buf[word_idx];
     debug("The non-zero bitmap block word is 0x%.16llx\n", word);
     complement_word = (~word) + 1UL;
     debug("2's completement is               0x%.16llx\n", complement_word);
     word = word & complement_word;
     debug("And is                            0x%.16llx\n", word);
     debug("The set bit is at position        %d\n", fls64(word)-1);
-    i = i * sizeof(uint64_t) * 8 + fls64(word) - 1;
-    debug("Found set bit at offset=%d\n", i);
-    BUG_ON(test_bit(i, bitmap_buf) == 0);
-    /* This might be past the end of the block device, check for that */
+    bit_idx = word_idx * sizeof(uint64_t) * 8 + fls64(word) - 1;
+    debug("Found set bit at offset=%d\n", bit_idx);
+    BUG_ON(test_bit(bit_idx, bitmap_buf) == 0);
+    /* Check if we have at least 'size' set bits after 'bit_idx' */
+    /* We might be looking beyond the end of this page */
+    if((bit_idx + size > max_word * sizeof(uint64_t) * 8) ||                /* End of bitmap page */
+       (bitmap_cdb_to_cdb(bitmap_cdb).block + bit_idx + size > slave_size)) /* End of device      */
+        goto next_bitmap_cdb;
+    for(idx = 0; idx < size; idx++)
+    {
+        if(!test_bit(bit_idx + idx, bitmap_buff))
+        {
+            bit_idx += idx + 1;
+            goto TODO;
+        }
+    
+            /* This might be past the end of the block device, check for that */
     free_cdb.block = bitmap_cdb_to_cdb(bitmap_cdb).block + i;
     debug("Free block corresponding to this bit is: 0x%x (slave_size=0x%x)\n", free_cdb.block, slave_size);
     if(free_cdb.block >= slave_size)
@@ -516,7 +690,9 @@ process_bitmap_cdb:
     return free_cdb;
 }
 
-c_disk_blk_t castle_freespace_block_get(version_t version)
+#endif
+
+c_disk_blk_t castle_freespace_block_get(version_t version, int size)
 {
     static struct castle_slave *last_slave = NULL;
     struct castle_slave *slave, *first_slave = NULL;
@@ -563,32 +739,45 @@ next_disk:
     castle_slave_superblock_put(slave, 0);
 
     debug("Selected slave=0x%x\n", slave->uuid);
-    free_cdb = castle_freespace_slave_block_get(slave, version);
+    free_cdb = castle_freespace_slave_block_get(slave, version, size);
     if(DISK_BLK_INVAL(free_cdb))
         goto next_disk;
 
     return free_cdb;
 }
 
-void castle_freespace_block_free(c_disk_blk_t cdb, version_t version)
+void castle_freespace_block_free(c_disk_blk_t cdb, version_t version, int size)
 {
     struct castle_slave *slave = castle_slave_find_by_uuid(cdb.disk);
     struct castle_slave_superblock *cs_sb;
     c_disk_blk_t bitmap_cdb;
     c2_block_t *bitmap_c2b;
     volatile uint64_t *bitmap_buf;
-    int position;
+    int i, position;
 
     BUG_ON(!slave);
     bitmap_cdb = cdb_to_bitmap_cdb(cdb);
-    bitmap_c2b = castle_cache_block_get(bitmap_cdb);
+    bitmap_c2b = castle_cache_page_block_get(bitmap_cdb);
     lock_c2b(bitmap_c2b);
     if(!c2b_uptodate(bitmap_c2b))
         BUG_ON(submit_c2b_sync(READ, bitmap_c2b));
     bitmap_buf = c2b_buffer(bitmap_c2b);
     position = blk_to_bitmap_off(cdb.block);
-    BUG_ON(test_bit(position, bitmap_buf));
-    set_bit(position, bitmap_buf);
+    debug("Freeing cdb=(0x%x, 0x%x), in freespace_cdb=(0x%x, 0x%x), position=%d, size=%d\n",
+            cdb.disk, cdb.block, bitmap_cdb.disk, bitmap_cdb.block, position, size);
+    for(i=0; i<size; i++)
+    {
+        /* Bug if we need to cross page boundry */
+        BUG_ON(position + i > C_BLK_SIZE * 8);
+        
+        if(test_bit(position + i, bitmap_buf))
+        {
+            printk("Found a set bit @i=%d\n", i);
+            continue;
+        }
+        BUG_ON(test_bit(position + i, bitmap_buf));
+        set_bit(position + i, bitmap_buf);
+    }
     dirty_c2b(bitmap_c2b);
     unlock_c2b(bitmap_c2b);
     put_c2b(bitmap_c2b);
@@ -629,7 +818,7 @@ void castle_freespace_fini(void)
 
         debug("Writing version->cnts map for slave=%d, cdb=(0x%x, 0x%x)\n",
                 cs->id, cdb.disk, cdb.block);
-        c2b = castle_cache_block_get(cdb);
+        c2b = castle_cache_page_block_get(cdb);
         lock_c2b(c2b);
         if(!c2b_uptodate(c2b))
             BUG_ON(submit_c2b_sync(READ, c2b));
@@ -649,7 +838,7 @@ void castle_freespace_fini(void)
                     unlock_c2b(c2b);
                     put_c2b(c2b);
 
-                    c2b = castle_cache_block_get(cdb);
+                    c2b = castle_cache_page_block_get(cdb);
                     debug("Next flist block (0x%x, 0x%x).\n", cdb.disk, cdb.block);
                     lock_c2b(c2b);
                     if(!c2b_uptodate(c2b))
@@ -672,4 +861,49 @@ void castle_freespace_fini(void)
     }    
 }
 
+#if 0
+void castle_freespace_tests(void)
+{
+    c_disk_blk_t cdb;
+    struct castle_slave *cs;
+    int i=0;
+    static c_disk_blk_t big_blocks[256];
+    static c_disk_blk_t mid_blocks[256];
+    static c_disk_blk_t sml_blocks[256];
 
+    /* Allocate a single page to get the slave uuid. */
+    printk("\n\nAllocating a single page to find out the block id.\n");
+    cdb = castle_freespace_block_get(0, 1);
+    printk("Got: (0x%x, 0x%x)\n", cdb.disk, cdb.block);
+    cs = castle_slave_find_by_uuid(cdb.disk);
+    BUG_ON(!cs);
+
+    for(i=0; i<256; i++)
+    {
+        printk("\n\nLoop: %d\n", i);
+        cdb = big_blocks[i] = castle_freespace_slave_block_get(cs, 0, 256);
+        printk("Got: (0x%x, 0x%x)\n", cdb.disk, cdb.block);
+        cdb = mid_blocks[i] = castle_freespace_slave_block_get(cs, 0, 4);
+        printk("Got: (0x%x, 0x%x)\n", cdb.disk, cdb.block);
+        cdb = sml_blocks[i] = castle_freespace_slave_block_get(cs, 0, 1);
+        printk("Got: (0x%x, 0x%x)\n", cdb.disk, cdb.block);
+    }
+    printk("\n\n\nFreeing some blocks.\n");
+    for(i=0; i<(256-3); i+=3)
+    {
+        castle_freespace_block_free(big_blocks[i], 0, 256);
+        castle_freespace_block_free(mid_blocks[i+1], 0, 4);
+        castle_freespace_block_free(sml_blocks[i+2], 0, 1);
+    }
+    for(i=0; i<256; i++)
+    {
+        printk("\n\nLoop: %d\n", i);
+        cdb = castle_freespace_slave_block_get(cs, 0, 256);
+        printk("Got: (0x%x, 0x%x)\n", cdb.disk, cdb.block);
+        cdb = castle_freespace_slave_block_get(cs, 0, 4);
+        printk("Got: (0x%x, 0x%x)\n", cdb.disk, cdb.block);
+        cdb = castle_freespace_slave_block_get(cs, 0, 1);
+        printk("Got: (0x%x, 0x%x)\n", cdb.disk, cdb.block);
+    }
+}
+#endif

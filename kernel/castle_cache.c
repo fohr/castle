@@ -439,7 +439,7 @@ static void castle_cache_page_freelist_grow(void)
     debug("Grown the list.\n");
 }
 
-c2_block_t* _castle_cache_block_get(c_disk_blk_t cdb, int nr_pages)
+c2_block_t* castle_cache_block_get(c_disk_blk_t cdb, int nr_pages)
 {
     c2_block_t *c2b;
     LIST_HEAD(pages);

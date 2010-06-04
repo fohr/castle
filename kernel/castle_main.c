@@ -325,7 +325,7 @@ static int castle_slave_superblocks_cache(struct castle_slave *cs)
         /* Read the superblock */
         cdb.disk  = cs->uuid;
         cdb.block = i;
-        c2b = castle_cache_block_get(cdb);
+        c2b = castle_cache_page_block_get(cdb);
         *(c2bp[i]) = c2b;
         /* We expecting the buffer not to be up to date. 
            We check if it got updated later */
@@ -870,7 +870,7 @@ void castle_bio_data_io(c_bvec_t *c_bvec)
     /* Save last_access time in the slave */
     castle_slave_access(c_bvec->cdb.disk);
 
-    c2b = castle_cache_block_get(c_bvec->cdb);
+    c2b = castle_cache_page_block_get(c_bvec->cdb);
     lock_c2b(c2b);
 
     /* We don't need to update the c2b if it's already uptodate
@@ -1222,6 +1222,8 @@ static void castle_slaves_unlock(void)
     struct list_head *lh, *th;
     struct castle_slave *slave;
 
+    del_singleshot_timer_sync(&spindown_timer);
+
     list_for_each_safe(lh, th, &castle_slaves.slaves)
     {
         slave = list_entry(lh, struct castle_slave, list); 
@@ -1235,8 +1237,6 @@ static void castle_slaves_free(void)
     struct list_head *lh, *th;
     struct castle_slave *slave;
     int i;
-
-    del_singleshot_timer_sync(&spindown_timer);
 
     list_for_each_safe(lh, th, &castle_slaves.slaves)
     {
