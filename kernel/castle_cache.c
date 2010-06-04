@@ -81,7 +81,7 @@ void fastcall dirty_c2b(c2_block_t *c2b)
     spin_lock_irqsave(&castle_cache_hash_lock, flags);
     BUG_ON(!c2b_locked(c2b));
     if(c2b_dirty(c2b)) goto out;
-    list_move(&c2b->dirty, &castle_cache_dirtylist);
+    list_move(&c2b->dirty_or_clean, &castle_cache_dirtylist);
     set_c2b_dirty(c2b); 
     atomic_dec(&castle_cache_cleanlist_size);
     atomic_inc(&castle_cache_dirtylist_size);
@@ -96,7 +96,7 @@ static void fastcall clean_c2b(c2_block_t *c2b)
     spin_lock_irqsave(&castle_cache_hash_lock, flags);
     BUG_ON(!c2b_locked(c2b));
     BUG_ON(!c2b_dirty(c2b));
-    list_move(&c2b->dirty, &castle_cache_cleanlist);
+    list_move(&c2b->dirty_or_clean, &castle_cache_cleanlist);
     clear_c2b_dirty(c2b); 
     atomic_dec(&castle_cache_dirtylist_size);
     atomic_inc(&castle_cache_cleanlist_size);
@@ -242,11 +242,11 @@ static int castle_cache_hash_insert(c2_block_t *c2b)
     list_add(&c2b->list, &castle_cache_hash[idx]);
     if(c2b_dirty(c2b))
     {
-        list_add_tail(&c2b->dirty, &castle_cache_dirtylist);
+        list_add_tail(&c2b->dirty_or_clean, &castle_cache_dirtylist);
         atomic_inc(&castle_cache_dirtylist_size);
     } else
     {
-        list_add_tail(&c2b->dirty, &castle_cache_cleanlist);
+        list_add_tail(&c2b->dirty_or_clean, &castle_cache_cleanlist);
         atomic_inc(&castle_cache_cleanlist_size);
     }
 out:
@@ -376,12 +376,12 @@ static int castle_cache_hash_clean(void)
     nr_victims = 0;
     list_for_each_safe(lh, t, &castle_cache_cleanlist)
     {
-        c2b = list_entry(lh, c2_block_t, dirty);
+        c2b = list_entry(lh, c2_block_t, dirty_or_clean);
         if(!c2b_busy(c2b)) 
         {
             debug("Found a victim.\n");
             list_del(&c2b->list);
-            list_del(&c2b->dirty);
+            list_del(&c2b->dirty_or_clean);
             atomic_dec(&castle_cache_cleanlist_size);
             list_add(&c2b->list, &victims);
             nr_victims++;
@@ -536,7 +536,7 @@ next_batch:
         {
             if(to_flush == 0)
                 break;
-            c2b = list_entry(l, c2_block_t, dirty);
+            c2b = list_entry(l, c2_block_t, dirty_or_clean);
             if(!trylock_c2b(c2b))
                 continue;
             /* This is slightly dangerous, but should be fine */
@@ -663,7 +663,7 @@ static int castle_cache_freelists_init(void)
         /* Add c2b to block_freelist */
         INIT_LIST_HEAD(&c2b->pages);
         INIT_LIST_HEAD(&c2b->list);
-        INIT_LIST_HEAD(&c2b->dirty);
+        INIT_LIST_HEAD(&c2b->dirty_or_clean);
         list_add(&c2b->list, &castle_cache_block_freelist);
     }
     castle_cache_page_freelist_size = castle_cache_size;

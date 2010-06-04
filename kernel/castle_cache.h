@@ -15,8 +15,7 @@ typedef struct castle_cache_block {
     struct list_head pages;
     void            *buffer; /* Linear mapping of the pages */
     struct list_head list;
-    /* TODO: dirty >> dirty_or_clean */
-    struct list_head dirty;
+    struct list_head dirty_or_clean;
 
     unsigned long    state;
 	atomic_t         count;
