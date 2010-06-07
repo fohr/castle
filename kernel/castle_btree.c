@@ -66,10 +66,10 @@ static int castle_ftree_node_normalize(struct castle_ftree_node *node)
 
     if((node->capacity > FTREE_NODE_SLOTS) ||
        (node->used     > node->capacity) ||
-       (node->used     == 0))
+      ((node->used     == 0) && (node->version != 0)))
     {
-        printk("Invalid ftree node capacity or/and used: (%d, %d)\n",
-               node->capacity, node->used);
+        printk("Invalid ftree node capacity or/and used: (%d, %d), node version=%d\n",
+               node->capacity, node->used, node->version);
         return -EIO;
     }
     /* There is at least one slot in the node */ 
