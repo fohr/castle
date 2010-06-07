@@ -529,6 +529,8 @@ c_disk_blk_t castle_freespace_slave_block_get(struct castle_slave *slave, versio
     do {
         bitmap_c2b = castle_cache_page_block_get(bitmap_cdb);
         lock_c2b(bitmap_c2b);
+        if(!c2b_uptodate(bitmap_c2b))
+            BUG_ON(submit_c2b_sync(READ, bitmap_c2b));
          
         /* NOTE: This will not find free blocks crossing the bitmap page
            boundries. If this is a problem it might be worth mapping more
@@ -540,12 +542,7 @@ c_disk_blk_t castle_freespace_slave_block_get(struct castle_slave *slave, versio
         if(bitmap_offset >= 0)
         {
             free_cdb.block = bitmap_cdb_to_cdb(bitmap_cdb).block + bitmap_offset;
-            if(free_cdb.block + size > slave_size)
-            {
-                free_cdb = INVAL_DISK_BLK;
-                /* Should free up the space, or at least adjust the accounting */
-                BUG();
-            }
+            BUG_ON(free_cdb.block + size > slave_size);
         }
         unlock_c2b(bitmap_c2b);
         put_c2b(bitmap_c2b);
