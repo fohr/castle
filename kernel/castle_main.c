@@ -310,10 +310,11 @@ void castle_slave_superblock_put(struct castle_slave *cs, int dirty)
 }
 
 static int castle_slave_superblocks_cache(struct castle_slave *cs)
+/* NOTE: This function leaves superblocks locked. This prevents init races */
 {
     c2_block_t *c2b, **c2bp[2];
     c_disk_blk_t cdb;
-    block_t i;
+    block_t i, j;
 
     /* We want to read the first two 4K blocks of the slave device
        Frist is the slave superblock, the second is the fs superblock */
@@ -334,10 +335,10 @@ static int castle_slave_superblocks_cache(struct castle_slave *cs)
         submit_c2b_sync(READ, c2b);
         if(!c2b_uptodate(c2b))
         {
-            unlock_c2b(c2b);
+            for(j=0; j<=i; i++)
+                unlock_c2b(*(c2bp[i]));
             return -EIO;
         }
-        unlock_c2b(c2b);
     }
 
     return 0;
@@ -356,9 +357,13 @@ static int castle_slave_superblocks_init(struct castle_slave *cs)
 
     if(ret) return ret;
 
-    /* If both superblock have been read correctly. Validate or write. */ 
-    cs_sb = castle_slave_superblock_get(cs); 
-    fs_sb = castle_fs_superblock_get(cs); 
+    /* If both superblock have been read correctly. Validate or write. 
+       *_superblock_get() functions are not used, because superblocks are
+       already locked for us by superblocks_cache function. */
+    BUG_ON(!c2b_uptodate(cs->sblk));
+    cs_sb = ((struct castle_slave_superblock*) c2b_buffer(cs->sblk)); 
+    BUG_ON(!c2b_uptodate(cs->fs_sblk));
+    fs_sb = ((struct castle_fs_superblock*) c2b_buffer(cs->fs_sblk));
 
     if(!cs->new_dev)
     {
@@ -1155,20 +1160,21 @@ static void castle_slaves_spindown(struct work_struct *work)
 }
     
 static struct timer_list spindown_timer; 
+static struct work_struct spindown_work_item;
 static void castle_slaves_spindowns_check(unsigned long first)
 {
-    static struct work_struct work_item;
     unsigned long sleep = 5*HZ;
 
     /* NOTE: This should really check if we've got waitqueues initialised
        at the moment we assume 10s is enough for that */
     if(first)
-        sleep = 10*HZ;
-    else
     {
-        INIT_WORK(&work_item, castle_slaves_spindown);
-        queue_work(castle_wq, &work_item); 
+        INIT_WORK(&spindown_work_item, castle_slaves_spindown);
+        sleep = 10*HZ;
     }
+    else
+        queue_work(castle_wq, &spindown_work_item); 
+
     /* Reschedule ourselves */
     setup_timer(&spindown_timer, castle_slaves_spindowns_check, 0);
     __mod_timer(&spindown_timer, jiffies + sleep);
@@ -1223,6 +1229,7 @@ static void castle_slaves_unlock(void)
     struct castle_slave *slave;
 
     del_singleshot_timer_sync(&spindown_timer);
+    cancel_work_sync(&spindown_work_item);
 
     list_for_each_safe(lh, th, &castle_slaves.slaves)
     {
