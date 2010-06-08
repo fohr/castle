@@ -236,13 +236,16 @@ c2_block_t* castle_ftree_node_create(int version, int is_leaf)
     c2_block_t  *c2b;
     struct castle_ftree_node *node;
     
-    cdb = castle_freespace_block_get(0 /* Used to denote nodes used by metadata */, 1); 
-    c2b = castle_cache_page_block_get(cdb);
+    cdb = castle_freespace_block_get(0, /* Used to denote nodes used by metadata */
+                                     FTREE_NODE_SIZE); 
+    c2b = castle_cache_block_get(cdb, FTREE_NODE_SIZE);
     
     lock_c2b(c2b);
     set_c2b_uptodate(c2b);
 
     node = c2b_buffer(c2b);
+    /* memset the node, so that ftree nodes are easily recognisable in hexdump. */
+    memset(node, 0x77, FTREE_NODE_SIZE * C_BLK_SIZE);
     node->magic    = FTREE_NODE_MAGIC;
     node->version  = version;
     node->capacity = FTREE_NODE_SLOTS;
@@ -820,7 +823,7 @@ static int castle_ftree_c2b_remember(c_bvec_t *c_bvec, c2_block_t *c2b)
     castle_ftree_c2b_forget(c_bvec);
     
     /* Sanity check to make sure that the node fits in the buffer */
-    BUG_ON(sizeof(struct castle_ftree_node) > PAGE_SIZE);
+    BUG_ON(sizeof(struct castle_ftree_node) > C_BLK_SIZE * FTREE_NODE_SIZE);
 
     /* Save the new node buffer */
     c_bvec->btree_node = c2b;
@@ -906,7 +909,7 @@ static void __castle_ftree_find(c_bvec_t *c_bvec,
     c_bvec->key_block = key_block;
     castle_debug_bvec_btree_walk(c_bvec);
 
-    c2b = castle_cache_page_block_get(node_cdb);
+    c2b = castle_cache_block_get(node_cdb, FTREE_NODE_SIZE);
 #ifdef CASTLE_DEBUG
     c_bvec->locking = c2b;
 #endif
@@ -1182,7 +1185,7 @@ static void castle_ftree_iter_leaf_ptrs_lock(c_iter_t *c_iter)
             indirect_node(i).c2b = NULL; 
             continue;
         }
-        c2b = castle_cache_page_block_get(cdb);
+        c2b = castle_cache_block_get(cdb, FTREE_NODE_SIZE);
         lock_c2b(c2b);
         if(!c2b_uptodate(c2b))
             submit_c2b_sync(READ, c2b);
@@ -1358,7 +1361,7 @@ static void castle_ftree_iter_path_traverse(c_iter_t *c_iter, c_disk_blk_t node_
     
     /* If we haven't found node_cdb in path, get it from the cache instead */
     if(c2b == NULL)
-        c2b = castle_cache_page_block_get(node_cdb);
+        c2b = castle_cache_block_get(node_cdb, FTREE_NODE_SIZE);
   
     iter_debug("Locking cdb=(0x%x, 0x%x)\n", 
         c2b->cdb.disk, c2b->cdb.block);

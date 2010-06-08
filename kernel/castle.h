@@ -84,8 +84,9 @@ struct castle_ftree_slot {
     c_disk_blk_t cdb;
 } PACKED;
 
+#define FTREE_NODE_SIZE   (10) /* In blocks */
 #define FTREE_NODE_MAGIC  0x0000cdab
-#define FTREE_NODE_SLOTS  ((PAGE_SIZE - NODE_HEADER)/sizeof(struct castle_ftree_slot))
+#define FTREE_NODE_SLOTS  ((FTREE_NODE_SIZE * PAGE_SIZE - NODE_HEADER)/sizeof(struct castle_ftree_slot))
 struct castle_ftree_node {
     uint32_t magic;
     uint32_t version;
@@ -93,7 +94,7 @@ struct castle_ftree_node {
     uint32_t used;
     uint8_t  __pad[NODE_HEADER - 16 /* for the 4 u32s above */ - 1 /* for is_leaf */];
     /* The following bits of data are computed dynamically, and don't need to be
-       saved to the disk (even though they probably will */
+       saved to the disk (even though they probably will) */
     uint8_t  is_leaf;
     struct castle_ftree_slot slots[FTREE_NODE_SLOTS];
 } PACKED;
