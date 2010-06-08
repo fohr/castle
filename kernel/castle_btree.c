@@ -294,7 +294,7 @@ static c2_block_t* castle_ftree_effective_node_create(c2_block_t *orig_c2b,
                                                slot->version));
         }
         
-        if(FTREE_SLOT_IS_LEAF_PTR(slot))
+        if(FTREE_SLOT_IS_LEAF_PTR(slot) || !node->is_leaf)
         {
             /* If already a leaf pointer, copy directly. */
             memcpy(last_eff_slot,
