@@ -211,7 +211,7 @@ int castle_fs_init(void)
         /* Init the fs superblock */
         castle_fs_superblocks_init();
         /* Init the root btree node */
-        c2b = castle_ftree_node_create(0 /* version */, 1 /* is_leaf */);
+        c2b = castle_ftree_node_create(0 /* version */, 1 /* is_leaf */, MTREE_TYPE);
         /* Init version list */
         ret = castle_versions_list_init(c2b->cdb);
         /* Release btree node c2b */
@@ -764,8 +764,8 @@ static void castle_bio_data_copy(c_bvec_t *c_bvec, c2_block_t *c2b)
     {
         sector_t bv_first_sec   = sector;
         sector_t bv_last_sec    = sector + (bvec->bv_len >> 9);
-        sector_t cbv_first_sec  =  c_bvec->block      << (C_BLK_SHIFT - 9);
-        sector_t cbv_last_sec   = (c_bvec->block + 1) << (C_BLK_SHIFT - 9);
+        sector_t cbv_first_sec  =  MTREE_BVEC_BLOCK(c_bvec)      << (C_BLK_SHIFT - 9);
+        sector_t cbv_last_sec   = (MTREE_BVEC_BLOCK(c_bvec) + 1) << (C_BLK_SHIFT - 9);
         sector_t first_sec, last_sec;
 
         /* Exit if we've already gone too far */
@@ -927,14 +927,14 @@ static void castle_device_c_bvec_make(c_bio_t *c_bio,
 
     /* Init the c_bvec */
     c_bvec->c_bio        = c_bio;
-    c_bvec->block        = block;
+    c_bvec->key          = (void *)block; 
     c_bvec->version      = INVAL_VERSION; 
     if(one2one_bvec)
         set_bit(CBV_ONE2ONE_BIT, &c_bvec->flags);
     castle_debug_bvec_update(c_bvec, C_BVEC_INITIALISED);
 
     /* Submit the c_bvec for processing */
-    castle_ftree_find(c_bvec); 
+    castle_ftree_find(&castle_mtree, c_bvec); 
 }
  
 static int castle_device_make_request(struct request_queue *rq, struct bio *bio)
@@ -958,9 +958,9 @@ static int castle_device_make_request(struct request_queue *rq, struct bio *bio)
     if(!c_bio || !c_bvecs) 
         goto fail_bio;
     
-    c_bio->c_dev   = dev;
-    c_bio->bio     = bio;
-    c_bio->c_bvecs = c_bvecs; 
+    c_bio->c_dev   =  dev;
+    c_bio->bio     =  bio;
+    c_bio->c_bvecs =  c_bvecs; 
     /* Take reference to the c_bio before handling all the bvecs.
        Do it directly (castle_bio_get(c_bio) doesn't work with ref_cnt=0). */
     atomic_set(&c_bio->count, 1);

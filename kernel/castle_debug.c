@@ -208,11 +208,11 @@ static int castle_debug_run(void *unused)
                 /* Print info about first 10 stuck BIO + all in locking state */
                 if(print || locking)
                     printk(" c_bio->id=%d, c_bvecs[%d], "
-                           "(b,v)=(0x%lx, 0x%x), "
+                           "(k,v)=(%p, 0x%x), "
                            "btree_depth=%d, "
                            "state=0x%lx\n",
                         c_bio->id, j,
-                        c_bvec->block, c_bvec->version,
+                        c_bvec->key, c_bvec->version,
                         c_bvec->btree_depth,
                         c_bvec->state);
                 /* For locking BIOs print what lock are they blocked on. */ 

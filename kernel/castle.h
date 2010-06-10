@@ -15,7 +15,7 @@ typedef uint32_t block_t;
 /* Disk layout related structures */
 struct castle_disk_block {
     uint32_t disk;
-    block_t block;
+    block_t  block;
 } PACKED;
 typedef struct castle_disk_block c_disk_blk_t;
 #define INVAL_DISK_BLK          ((c_disk_blk_t){0,0})
@@ -60,45 +60,90 @@ struct castle_fs_superblock {
 
 
 #define MAX_BTREE_DEPTH       (10)
+#define MAX_BTREE_ENTRIES     (2500)
 
-#define NODE_HEADER           0x180
+/* Defines entry type for block device mapper btree (shortened mtree) */
+#define MTREE_TYPE            0x33
 
-#define FTREE_SLOT_LEAF_VAL   0x1
-#define FTREE_SLOT_LEAF_PTR   0x2
-#define FTREE_SLOT_NODE       0x3
-#define FTREE_SLOT_IS_NODE(_slot)        ((_slot)->type == FTREE_SLOT_NODE)
-#define FTREE_SLOT_IS_LEAF_VAL(_slot)    ((_slot)->type == FTREE_SLOT_LEAF_VAL) 
-#define FTREE_SLOT_IS_LEAF_PTR(_slot)    ((_slot)->type == FTREE_SLOT_LEAF_PTR) 
-#define FTREE_SLOT_IS_ANY_LEAF(_slot)   (((_slot)->type == FTREE_SLOT_LEAF_VAL) ||  \
-                                         ((_slot)->type == FTREE_SLOT_LEAF_PTR))
-#define FTREE_NODE_IS_LEAF(_node)        ((_node)->is_leaf)
+#define MTREE_ENTRY_LEAF_VAL   0x1
+#define MTREE_ENTRY_LEAF_PTR   0x2
+#define MTREE_ENTRY_NODE       0x3
+#define MTREE_ENTRY_IS_NODE(_slot)        ((_slot)->type == MTREE_ENTRY_NODE)
+#define MTREE_ENTRY_IS_LEAF_VAL(_slot)    ((_slot)->type == MTREE_ENTRY_LEAF_VAL) 
+#define MTREE_ENTRY_IS_LEAF_PTR(_slot)    ((_slot)->type == MTREE_ENTRY_LEAF_PTR) 
+#define MTREE_ENTRY_IS_ANY_LEAF(_slot)   (((_slot)->type == MTREE_ENTRY_LEAF_VAL) ||  \
+                                          ((_slot)->type == MTREE_ENTRY_LEAF_PTR))
 
-#define INVAL_BLK          ((uint32_t)-1)
-#define MAX_BLK            ((uint32_t)-2)
+#define INVAL_BLK          ((block_t)-1)
+#define MAX_BLK            ((block_t)-2)
 #define BLK_INVAL(_blk)    ((_blk) == INVAL_BLK)
 
-struct castle_ftree_slot {
+struct castle_mtree_entry {
     uint8_t      type;
-    uint32_t     block;
-    uint32_t     version;
+    block_t      block;
+    version_t    version;
     c_disk_blk_t cdb;
 } PACKED;
 
-#define FTREE_NODE_SIZE   (10) /* In blocks */
-#define FTREE_NODE_MAGIC  0x0000cdab
-#define FTREE_NODE_SLOTS  ((FTREE_NODE_SIZE * PAGE_SIZE - NODE_HEADER)/sizeof(struct castle_ftree_slot))
-struct castle_ftree_node {
+#define MTREE_NODE_SIZE     (10) /* In blocks */
+#define MTREE_NODE_ENTRIES  ((MTREE_NODE_SIZE * PAGE_SIZE - sizeof(struct castle_btree_node))/sizeof(struct castle_mtree_entry))
+
+#define MTREE_BVEC_BLOCK(_bvec)              ((sector_t)(_bvec)->key)
+
+typedef uint8_t btree_t;
+
+#define BTREE_NODE_MAGIC  0x0000cdab
+struct castle_btree_node {
     uint32_t magic;
     uint32_t version;
     uint32_t capacity;
     uint32_t used;
-    uint8_t  __pad[NODE_HEADER - 16 /* for the 4 u32s above */ - 1 /* for is_leaf */];
-    /* The following bits of data are computed dynamically, and don't need to be
-       saved to the disk (even though they probably will) */
     uint8_t  is_leaf;
-    struct castle_ftree_slot slots[FTREE_NODE_SLOTS];
+    /* Payload (i.e. btree entries) depend on the B-tree type */
+    btree_t  type;
+    uint8_t  payload[0];
 } PACKED;
 
+#define BTREE_NODE_PAYLOAD(_node)   ((void *)&(_node)->payload)
+
+/* Below encapsulates the internal btree node structure, different type of
+   nodes may be used for different trees */
+struct castle_btree_type {
+    btree_t   magic;
+    int       node_size;     /* in C_DISK_BLKs                         */
+    int       node_capacity; /* Number of entries in each node         */
+    void     *min_key;       /* Minimum key                            */
+    void     *max_key;       /* Maximum used as the end of node marker */
+    void     *inv_key;       /* An invalid key, comparison with it 
+                                should always return a negative number
+                                except if also compared to invalid key
+                                in which case cmp should return zero   */
+    int     (*key_compare)   (void *key1, void *key2);
+                             /* Returns negative if key1 < key2, zero 
+                                if equal, positive otherwise           */
+    void*   (*key_next)      (void *key);
+                             /* Successor key, succ(MAX) = INVAL,
+                                succ(INVAL) = INVAL                    */
+    void    (*entry_get)     (struct castle_btree_node *node,
+                              int                       idx,
+                              void                    **key_p,            
+                              version_t                *version_p,
+                              int                      *is_leaf_ptr_p,
+                              c_disk_blk_t             *cdb_p);
+    void    (*entry_set)     (struct castle_btree_node *node,
+                              int                       idx,
+                              void                     *key,            
+                              version_t                 version,
+                              int                       is_leaf_ptr,
+                              c_disk_blk_t              cdb);
+    void    (*node_print)    (struct castle_btree_node *node);
+#if CASTLE_DEBUG    
+    void    (*node_validate) (struct castle_btree_node *node);
+#endif        
+};
+
+
+#define NODE_HEADER           0x180
 
 struct castle_vlist_slot {
     uint32_t     version_nr;
@@ -141,16 +186,16 @@ struct castle_flist_node {
 /* IO related structures */
 struct castle_bio_vec;
 typedef struct castle_bio {
-    struct castle_device  *c_dev;
-    struct bio            *bio;
-    struct castle_bio_vec *c_bvecs; 
-    atomic_t               count;
-    int                    err;
-#ifdef CASTLE_DEBUG    
-    int                    stuck;
-    int                    id;
-    int                    nr_bvecs;
-    struct list_head       list;
+    struct castle_device     *c_dev;
+    struct bio               *bio;
+    struct castle_bio_vec    *c_bvecs; 
+    atomic_t                  count;
+    int                       err;
+#ifdef CASTLE_DEBUG          
+    int                       stuck;
+    int                       id;
+    int                       nr_bvecs;
+    struct list_head          list;
 #endif
 } c_bio_t;
 
@@ -161,8 +206,9 @@ struct castle_cache_block;
 typedef struct castle_bio_vec {
     /* Where did this IO originate from */
     c_bio_t            *c_bio;
-    /* What (block,version) do we want to read */
-    sector_t            block;
+    
+    /* What (key, version) do we want to read */
+    void               *key;
     uint32_t            version;
     /* Flags */
     unsigned long       flags;
@@ -170,9 +216,8 @@ typedef struct castle_bio_vec {
     union {
         struct {
             int                        btree_depth;
-            /* Block key in the parent node under which we found
-               btree_node */
-            sector_t                   key_block;
+            /* Key in the parent node under which we found btree_node */
+            void                      *parent_key;
             /* When writing, B-Tree node and its parent have to be 
                locked concurrently. */
             struct castle_cache_block *btree_node;
@@ -181,6 +226,8 @@ typedef struct castle_bio_vec {
         /* Location of the data on a slave disk. Set when B-Tree walk 
            is finished */
         c_disk_blk_t cdb;
+        /* Btree type, only used before the B-Tree walk is started */
+        struct castle_btree_type *btree;
     };
     /* Used to thread this bvec onto a workqueue */
     struct work_struct         work;
@@ -189,10 +236,11 @@ typedef struct castle_bio_vec {
     struct castle_cache_block *locking;
 #endif
 } c_bvec_t;
-#define c_bvec_data_dir(_c_bvec)    bio_data_dir((_c_bvec)->c_bio->bio)
-#define c2b_bnode(_c2b)           ((struct castle_ftree_node *)c2b_buffer(_c2b))
-#define c_bvec_bnode(_c_bvec)       c2b_bnode((_c_bvec)->btree_node)
-#define c_bvec_bpnode(_c_bvec)      c2b_buffer((_c_bvec)->btree_parent_node)
+#define c_bvec_data_dir(_c_bvec)        bio_data_dir((_c_bvec)->c_bio->bio)
+#define c2b_bnode(_c2b)               ((struct castle_btree_node *)c2b_buffer(_c2b))
+#define c_bvec_bnode(_c_bvec)           c2b_bnode((_c_bvec)->btree_node)
+#define c_bvec_bpnode(_c_bvec)          c2b_buffer((_c_bvec)->btree_parent_node)
+#define c_bvec_btree_fn(_c_bvec, _fn) ((_c_bvec)->c_bio->btree->(_fn))
 
 /* Used for iterating through the tree */
 typedef struct castle_iterator {
@@ -203,10 +251,11 @@ typedef struct castle_iterator {
     void                     (*end)       (struct castle_iterator *c_iter, int err);
     void                      *private;
                              
-    block_t                    parent_vblk; /* The v_blk followed to get to the block 
-                                               on the top of the path/stack */
-    block_t                    next_vblk;   /* The next v_blk to look for in the interation 
-                                               (typically parent_vblk + 1 when at leafs) */
+    struct castle_btree_type  *btree;
+    void                      *parent_key; /* The key we followed to get to the block 
+                                              on the top of the path/stack */
+    void                      *next_key;   /* The next key to look for in the iteration 
+                                              (typically parent_key + 1 when at leafs) */
 
     struct castle_cache_block *path[MAX_BTREE_DEPTH];
     struct {
@@ -221,9 +270,9 @@ typedef struct castle_iterator {
         };                                 
         struct {                 
             uint8_t                        r_idx;    /* Index in indirect_nodes array */
-            uint8_t                        node_idx; /* Inder in the indirect node */ 
+            uint8_t                        node_idx; /* Index in the indirect node */ 
         };
-    }                         indirect_nodes[FTREE_NODE_SLOTS];
+    }                         indirect_nodes[MAX_BTREE_ENTRIES];
     int                       depth;
                               
     int                       cancelled;
