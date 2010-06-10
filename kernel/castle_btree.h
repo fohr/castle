@@ -1,6 +1,7 @@
 #ifndef __CASTLE_BTREE_H__
 #define __CASTLE_BTREE_H__
   
+extern struct castle_btree_type castle_batree;
 extern struct castle_btree_type castle_mtree;
 
 c2_block_t* castle_btree_node_create  (int version, int is_leaf, uint8_t type);

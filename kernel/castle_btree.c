@@ -34,9 +34,9 @@
 #define MTREE_ENTRY_IS_ANY_LEAF(_slot)   (((_slot)->type == MTREE_ENTRY_LEAF_VAL) ||  \
                                           ((_slot)->type == MTREE_ENTRY_LEAF_PTR))
 
-#define INVAL_BLK          ((block_t)-1)
-#define MAX_BLK            ((block_t)-2)
-#define BLK_INVAL(_blk)    ((_blk) == INVAL_BLK)
+#define MTREE_INVAL_BLK          ((block_t)-1)
+#define MTREE_MAX_BLK            ((block_t)-2)
+#define MTREE_BLK_INVAL(_blk)    ((_blk) == MTREE_INVAL_BLK)
 
 struct castle_mtree_entry {
     uint8_t      type;
@@ -55,13 +55,13 @@ static int castle_mtree_key_compare(void *key1, void *key2)
     block_t blk1 = (block_t)(unsigned long)key1;
     block_t blk2 = (block_t)(unsigned long)key2;
 
-    if(unlikely(BLK_INVAL(blk1) && BLK_INVAL(blk2)))
+    if(unlikely(MTREE_BLK_INVAL(blk1) && MTREE_BLK_INVAL(blk2)))
         return 0;
 
-    if(unlikely(BLK_INVAL(blk1)))
+    if(unlikely(MTREE_BLK_INVAL(blk1)))
         return -1;
     
-    if(unlikely(BLK_INVAL(blk2)))
+    if(unlikely(MTREE_BLK_INVAL(blk2)))
         return 1;
 
     if(blk1 < blk2)
@@ -78,10 +78,10 @@ static void* castle_mtree_key_next(void *key)
     block_t blk = (block_t)(unsigned long)key;
 
     /* No successor to invalid block */
-    if(BLK_INVAL(blk))
-        return (void *)(unsigned long)INVAL_BLK;
+    if(MTREE_BLK_INVAL(blk))
+        return (void *)(unsigned long)MTREE_INVAL_BLK;
 
-    /* INVAL_BLK is the successor of MAX_BLK, conviniently */
+    /* MTREE_INVAL_BLK is the successor of MTREE_MAX_BLK, conviniently */
     return (void *)(unsigned long)(blk+1);
 }
 
@@ -137,7 +137,7 @@ static void castle_mtree_node_validate(struct castle_btree_node *node)
        (node->used     > node->capacity) ||
       ((node->used     == 0) && (node->version != 0)))
     {
-        printk("Invalid ftree node capacity or/and used: (%d, %d), node version=%d\n",
+        printk("Invalid mtree node capacity or/and used: (%d, %d), node version=%d\n",
                node->capacity, node->used, node->version);
         BUG();
     }
@@ -174,8 +174,8 @@ struct castle_btree_type castle_mtree = {
     .node_size     = MTREE_NODE_SIZE,
     .node_capacity = MTREE_NODE_ENTRIES,
     .min_key       = (void *)0,
-    .max_key       = (void *)MAX_BLK,
-    .inv_key       = (void *)INVAL_BLK,
+    .max_key       = (void *)MTREE_MAX_BLK,
+    .inv_key       = (void *)MTREE_INVAL_BLK,
     .key_compare   = castle_mtree_key_compare,
     .key_next      = castle_mtree_key_next,
     .entry_get     = castle_mtree_entry_get,
@@ -189,18 +189,219 @@ struct castle_btree_type castle_mtree = {
 /**********************************************************************************************/
 /* Fixed size byte array key btree (batree) definitions */
 
+#define BATREE_ENTRY_LEAF_VAL   0x1
+#define BATREE_ENTRY_LEAF_PTR   0x2
+#define BATREE_ENTRY_NODE       0x3
+#define BATREE_ENTRY_IS_NODE(_slot)        ((_slot)->type == BATREE_ENTRY_NODE)
+#define BATREE_ENTRY_IS_LEAF_VAL(_slot)    ((_slot)->type == BATREE_ENTRY_LEAF_VAL) 
+#define BATREE_ENTRY_IS_LEAF_PTR(_slot)    ((_slot)->type == BATREE_ENTRY_LEAF_PTR) 
+#define BATREE_ENTRY_IS_ANY_LEAF(_slot)   (((_slot)->type == BATREE_ENTRY_LEAF_VAL) ||  \
+                                           ((_slot)->type == BATREE_ENTRY_LEAF_PTR))
+
+#define BATREE_KEY_SIZE         128      /* In bytes */
+typedef struct bakey {
+    uint8_t _key[BATREE_KEY_SIZE];
+} PACKED bakey_t;
+
+static const bakey_t BATREE_INVAL_KEY = (bakey_t){._key = {[0 ... (BATREE_KEY_SIZE-1)] = 0xFF}};
+static const bakey_t BATREE_MIN_KEY   = (bakey_t){._key = {[0 ... (BATREE_KEY_SIZE-1)] = 0x00}};
+static const bakey_t BATREE_MAX_KEY   = (bakey_t){._key = {[0 ... (BATREE_KEY_SIZE-2)] = 0xFF,
+                                                           [      (BATREE_KEY_SIZE-1)] = 0xFE}};
+#define BATREE_KEY_INVAL(_key)          ((_key) == &BATREE_INVAL_KEY)
+
+struct castle_batree_entry {
+    uint8_t      type;
+    bakey_t      key;
+    version_t    version;
+    c_disk_blk_t cdb;
+} PACKED;
+
+#define BATREE_NODE_SIZE     (5) /* In blocks */
+#define BATREE_NODE_ENTRIES  ((BATREE_NODE_SIZE * PAGE_SIZE - sizeof(struct castle_btree_node))/sizeof(struct castle_batree_entry))
+
+static void inline castle_batree_key_print(bakey_t *key)
+{
+    int i;
+
+    for(i=0; i<BATREE_KEY_SIZE; i++)
+        printk("%.2x", key->_key[i]);
+}
+
+static int castle_batree_key_compare(void *keyv1, void *keyv2)
+{
+    bakey_t *key1 = (bakey_t *)keyv1;
+    bakey_t *key2 = (bakey_t *)keyv2;
+    int ret;
+
+    if(unlikely(BATREE_KEY_INVAL(key1) && BATREE_KEY_INVAL(key2)))
+        return 0;
+
+    if(unlikely(BATREE_KEY_INVAL(key1)))
+        return -1;
+    
+    if(unlikely(BATREE_KEY_INVAL(key2)))
+        return 1;
+
+    ret = memcmp(key1, key2, sizeof(bakey_t));
+
+#if 0    
+    printk("Comparing key: ");
+    castle_batree_key_print(key1);
+    printk(" to ");
+    castle_batree_key_print(key2);
+    printk(", result=%d\n", ret);
+#endif    
+
+    return ret;
+}
+    
+static void* castle_batree_key_next(void *keyv)
+{
+    bakey_t *key = (bakey_t *)keyv;
+    bakey_t *succ;
+    int i;
+
+    /* No successor to invalid block */
+    if(BATREE_KEY_INVAL(key))
+        return (void *)&BATREE_INVAL_KEY;
+
+    /* Successor to max key is the invalid key (return the static copy). */
+    if(castle_batree_key_compare((void *)&BATREE_MAX_KEY, key) == 0)
+        return (void *)&BATREE_INVAL_KEY;
+     
+    /* Finally allocate and return the successor key */ 
+    /* TODO: IMPORTANT THIS CREATES MEMORY LEAK, NEEDS TO BE FIXED */
+    succ = kmalloc(sizeof(bakey_t), GFP_NOIO);
+    /* TODO: Should this be handled properly? */
+    BUG_ON(!succ);
+    memcpy(succ, key, sizeof(bakey_t));
+    for(i=0; i<sizeof(bakey_t); i++)
+        if((++succ->_key[i]) != 0)
+            break;
+      
+    return succ;
+}
+
+static void castle_batree_entry_get(struct castle_btree_node *node,
+                                    int                       idx,
+                                    void                    **key_p,            
+                                    version_t                *version_p,
+                                    int                      *is_leaf_ptr_p,
+                                    c_disk_blk_t             *cdb_p)
+{
+    struct castle_batree_entry *entries = 
+                (struct castle_batree_entry *) BTREE_NODE_PAYLOAD(node);
+    struct castle_batree_entry *entry = entries + idx;
+
+    BUG_ON(idx < 0 || idx >= node->used);
+
+    if(key_p)         *key_p         = (void *)&entry->key;
+    if(version_p)     *version_p     = entry->version;
+    if(is_leaf_ptr_p) *is_leaf_ptr_p = BATREE_ENTRY_IS_LEAF_PTR(entry);
+    if(cdb_p)         *cdb_p         = entry->cdb;
+}
+
+static void castle_batree_entry_set(struct castle_btree_node *node,
+                                    int                       idx,
+                                    void                     *key,            
+                                    version_t                 version,
+                                    int                       is_leaf_ptr,
+                                    c_disk_blk_t              cdb)
+{
+    struct castle_batree_entry *entries = 
+                (struct castle_batree_entry *) BTREE_NODE_PAYLOAD(node);
+    struct castle_batree_entry *entry = entries + idx;
+
+    BUG_ON(idx < 0 || idx >= node->used);
+    BUG_ON(!node->is_leaf && is_leaf_ptr);
+
+    memcpy(&entry->key, key, sizeof(bakey_t));
+    entry->version = version;
+    entry->type    = node->is_leaf ? 
+                        (is_leaf_ptr ? BATREE_ENTRY_LEAF_PTR : BATREE_ENTRY_LEAF_VAL) :
+                        BATREE_ENTRY_NODE;
+    entry->cdb     = cdb;
+}   
+
+#ifdef CASTLE_DEBUG
+static void castle_batree_node_validate(struct castle_btree_node *node)
+{
+    struct castle_batree_entry *entries = 
+                (struct castle_batree_entry *) BTREE_NODE_PAYLOAD(node);
+    int i;
+
+    if((node->capacity > BATREE_NODE_ENTRIES) ||
+       (node->used     > node->capacity) ||
+      ((node->used     == 0) && (node->version != 0)))
+    {
+        printk("Invalid batree node capacity or/and used: (%d, %d), node version=%d\n",
+               node->capacity, node->used, node->version);
+        BUG();
+    }
+
+    for(i=0; i < node->used; i++)
+    {
+        struct castle_batree_entry *entry = entries + i;
+        /* Fail if node is_leaf doesn't match with the slot. ! needed 
+           to guarantee canonical value for boolean true */
+        BUG_ON(!(node->is_leaf) != !(BATREE_ENTRY_IS_ANY_LEAF(entry)));
+    }
+}
+#endif
+
+static void castle_batree_node_print(struct castle_btree_node *node)
+{
+    struct castle_batree_entry *entries = 
+                (struct castle_batree_entry *) BTREE_NODE_PAYLOAD(node);
+    int i, j;
+
+    for(i=0; i<node->used; i++)
+    {
+        struct castle_batree_entry *entry = entries + i;
+
+        printk("[%d] (", i); 
+        for(j=0; j<BATREE_KEY_SIZE; j++)
+            printk("%.2x", entry->key._key[j]);
+        printk(", 0x%x) -> (0x%x, 0x%x)\n", 
+            entries[i].version,
+            entries[i].cdb.disk,
+            entries[i].cdb.block);
+    }
+    printk("\n");
+}
+
+
+struct castle_btree_type castle_batree = {
+    .magic         = BATREE_TYPE,
+    .node_size     = BATREE_NODE_SIZE,
+    .node_capacity = BATREE_NODE_ENTRIES,
+    .min_key       = (void *)&BATREE_MIN_KEY,
+    .max_key       = (void *)&BATREE_MAX_KEY,
+    .inv_key       = (void *)&BATREE_INVAL_KEY,
+    .key_compare   = castle_batree_key_compare,
+    .key_next      = castle_batree_key_next,
+    .entry_get     = castle_batree_entry_get,
+    .entry_set     = castle_batree_entry_set,
+    .node_print    = castle_batree_node_print,
+#ifdef CASTLE_DEBUG    
+    .node_validate = castle_batree_node_validate,
+#endif
+}; 
+
 
 /**********************************************************************************************/
 /* Array of btree types */
 
 static struct castle_btree_type *castle_btrees[1<<(8 * sizeof(btree_t))] = 
-                                                                {[MTREE_TYPE] = &castle_mtree};
+                                                       {[MTREE_TYPE]  = &castle_mtree,
+                                                        [BATREE_TYPE] = &castle_batree};
 
 
 static inline struct castle_btree_type *castle_btree_type_get(btree_t type)
 {
 #ifdef CASTLE_DEBUG
-    BUG_ON(type != MTREE_TYPE);
+    BUG_ON((type != MTREE_TYPE) &&
+           (type != BATREE_TYPE));
 #endif
     return castle_btrees[type];
 }
@@ -528,6 +729,7 @@ static void castle_btree_slot_insert(c2_block_t  *c2b,
     BUG_ON(index      >  node->used);
     BUG_ON(node->used >= node->capacity);
     
+    debug("Inserting (0x%x, 0x%x) under index=%d\n", cdb.disk, cdb.block, index);
     if(index > 0)
         btree->entry_get(node, index-1, &left_key, &left_version, &left_is_leaf_ptr, NULL);
 
@@ -953,11 +1155,18 @@ static void castle_btree_read_process(c_bvec_t *c_bvec)
        at a 'proper' leaf), or go to the next level (possibly following a leaf ptr) */
     if(node->is_leaf && !lub_is_leaf_ptr)
     {
-        debug(" Is a leaf, found (k,v)=(%p, 0x%x)\n", lub_key, lub_version);
+        debug(" Is a leaf, found (k,v)=(%p, 0x%x), cdb=(0x%x, 0x%x)\n", 
+                lub_key, lub_version, lub_cdb.disk, lub_cdb.block);
         if(btree->key_compare(lub_key, key) == 0)
+        {
+            debug("Ending with valid block.\n");
             castle_btree_io_end(c_bvec, lub_cdb, 0);
+        }
         else
+        {
+            debug("Ending with invalid block.\n");
             castle_btree_io_end(c_bvec, INVAL_DISK_BLK, 0);
+        }
     }
     else
     {
@@ -1525,6 +1734,10 @@ static void __castle_btree_iter_path_traverse(struct work_struct *work)
         return;        
     }
 
+    printk("c_iter->next_key=%p\n", c_iter->next_key);
+    if(c_iter->next_key == NULL)
+        return;
+
     /* Otherwise, 'recurse' - find the occurance of the next key */
     castle_btree_lub_find(node, c_iter->next_key, c_iter->version, &index, NULL);
     iter_debug("Node index=%d\n", index);
@@ -1687,7 +1900,7 @@ void castle_btree_iter_init(c_iter_t *c_iter, version_t version)
     iter_debug("Initialising iterator for version=0x%x\n", version);
     
     /* TODO: This needs to be moved! */
-    c_iter->btree = &castle_mtree;
+    c_iter->btree = &castle_batree;
     c_iter->version = version;
     c_iter->parent_key = c_iter->btree->min_key;
     c_iter->next_key = c_iter->btree->min_key;

@@ -12,6 +12,7 @@
 typedef uint32_t block_t;
 #define INVAL_BLOCK         ((block_t)-1) 
 #define BLOCK_INVAL(_b)     ((_b) == INVAL_BLOCK) 
+
 /* Disk layout related structures */
 struct castle_disk_block {
     uint32_t disk;
@@ -61,6 +62,8 @@ struct castle_fs_superblock {
 
 #define MTREE_TYPE                 0x33
 #define MTREE_BVEC_BLOCK(_bvec)   ((sector_t)(_bvec)->key)
+
+#define BATREE_TYPE                0x44
                                   
 #define MAX_BTREE_DEPTH           (10)
 #define MAX_BTREE_ENTRIES         (2500)
@@ -184,6 +187,7 @@ typedef struct castle_bio_vec {
     
     /* What (key, version) do we want to read */
     void               *key;
+    block_t             block;
     uint32_t            version;
     /* Flags */
     unsigned long       flags;
