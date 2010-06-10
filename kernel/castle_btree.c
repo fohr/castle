@@ -25,6 +25,31 @@
 /**********************************************************************************************/
 /* Block mapper btree (mtree) definitions */
 
+#define MTREE_ENTRY_LEAF_VAL   0x1
+#define MTREE_ENTRY_LEAF_PTR   0x2
+#define MTREE_ENTRY_NODE       0x3
+#define MTREE_ENTRY_IS_NODE(_slot)        ((_slot)->type == MTREE_ENTRY_NODE)
+#define MTREE_ENTRY_IS_LEAF_VAL(_slot)    ((_slot)->type == MTREE_ENTRY_LEAF_VAL) 
+#define MTREE_ENTRY_IS_LEAF_PTR(_slot)    ((_slot)->type == MTREE_ENTRY_LEAF_PTR) 
+#define MTREE_ENTRY_IS_ANY_LEAF(_slot)   (((_slot)->type == MTREE_ENTRY_LEAF_VAL) ||  \
+                                          ((_slot)->type == MTREE_ENTRY_LEAF_PTR))
+
+#define INVAL_BLK          ((block_t)-1)
+#define MAX_BLK            ((block_t)-2)
+#define BLK_INVAL(_blk)    ((_blk) == INVAL_BLK)
+
+struct castle_mtree_entry {
+    uint8_t      type;
+    block_t      block;
+    version_t    version;
+    c_disk_blk_t cdb;
+} PACKED;
+
+#define MTREE_NODE_SIZE     (10) /* In blocks */
+#define MTREE_NODE_ENTRIES  ((MTREE_NODE_SIZE * PAGE_SIZE - sizeof(struct castle_btree_node))/sizeof(struct castle_mtree_entry))
+
+
+
 static int castle_mtree_key_compare(void *key1, void *key2)
 {
     block_t blk1 = (block_t)(unsigned long)key1;
