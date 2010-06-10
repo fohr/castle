@@ -211,7 +211,7 @@ int castle_fs_init(void)
         /* Init the fs superblock */
         castle_fs_superblocks_init();
         /* Init the root btree node */
-        c2b = castle_ftree_node_create(0 /* version */, 1 /* is_leaf */, MTREE_TYPE);
+        c2b = castle_btree_node_create(0 /* version */, 1 /* is_leaf */, MTREE_TYPE);
         /* Init version list */
         ret = castle_versions_list_init(c2b->cdb);
         /* Release btree node c2b */
@@ -934,7 +934,7 @@ static void castle_device_c_bvec_make(c_bio_t *c_bio,
     castle_debug_bvec_update(c_bvec, C_BVEC_INITIALISED);
 
     /* Submit the c_bvec for processing */
-    castle_ftree_find(&castle_mtree, c_bvec); 
+    castle_btree_find(&castle_mtree, c_bvec); 
 }
  
 static int castle_device_make_request(struct request_queue *rq, struct bio *bio)

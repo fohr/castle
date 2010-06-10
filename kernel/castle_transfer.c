@@ -57,7 +57,7 @@ static void castle_transfer_node_end(c_iter_t *c_iter)
     debug("Transfer=%d\n", transfer->id);
     
     if (atomic_dec_and_test(&transfer->phase)) 
-        castle_ftree_iter_continue(&transfer->c_iter);
+        castle_btree_iter_continue(&transfer->c_iter);
 }
 
 static void castle_transfer_end(c_iter_t *c_iter, int err)
@@ -84,8 +84,8 @@ static void castle_transfer_start(struct castle_transfer *transfer)
 
     init_completion(&transfer->completion);
     atomic_set(&transfer->phase, 0);
-    castle_ftree_iter_init(&transfer->c_iter, transfer->version);
-    castle_ftree_iter_start(&transfer->c_iter);
+    castle_btree_iter_init(&transfer->c_iter, transfer->version);
+    castle_btree_iter_start(&transfer->c_iter);
 }
 
 static void castle_transfer_add(struct castle_transfer *transfer)
@@ -151,7 +151,7 @@ void castle_transfer_destroy(struct castle_transfer *transfer)
     printk("====> Destroying transfer %d.\n", transfer->id);
     debug("castle_transfer_destroy id=%d\n", transfer->id);
     
-    castle_ftree_iter_cancel(&transfer->c_iter, -EINTR);
+    castle_btree_iter_cancel(&transfer->c_iter, -EINTR);
     wait_for_completion(&transfer->completion);
     
     castle_events_transfer_destroy(transfer->id);    
@@ -380,14 +380,14 @@ static void castle_block_move_complete(struct work_struct *work)
     if(!err)
     {
         /* Update counters etc... */
-        castle_ftree_iter_replace(&transfer->c_iter, index, dest_cdb);
+        castle_btree_iter_replace(&transfer->c_iter, index, dest_cdb);
         castle_freespace_block_free(src_cdb, transfer->version, 1);
         atomic_inc(&transfer->progress);
     }
 
     /* if all the block moves have succeeded then continue to next btree block */
     if (atomic_dec_and_test(&transfer->phase)) 
-        castle_ftree_iter_continue(&transfer->c_iter);  
+        castle_btree_iter_continue(&transfer->c_iter);  
 }
 
 static void castle_block_move_io_end(c2_block_t *src, int uptodate)
@@ -408,7 +408,7 @@ static void castle_block_move_io_end(c2_block_t *src, int uptodate)
          * It's safe to use it from the interrupt context because 
          * it initially only sets a flag. 
          */        
-        castle_ftree_iter_cancel(&info->transfer->c_iter, -EIO);
+        castle_btree_iter_cancel(&info->transfer->c_iter, -EIO);
         info->err = -EIO;
     }    
     else
@@ -456,7 +456,7 @@ static void castle_block_move(struct castle_transfer *transfer, int index, c_dis
     
     if(!(info = kzalloc(sizeof(struct castle_block_move_info), GFP_KERNEL)))
     {
-        castle_ftree_iter_cancel(&transfer->c_iter, -ENOMEM);
+        castle_btree_iter_cancel(&transfer->c_iter, -ENOMEM);
         return;
     }
     
@@ -479,7 +479,7 @@ static void castle_block_move(struct castle_transfer *transfer, int index, c_dis
          * this will eventually call c_iter->end, which is 
          * castle_transfer_error, on the next iter_continue
          */
-        castle_ftree_iter_cancel(&transfer->c_iter, -ENOMEM); //ENOMEM? or EOUTOFDISKSPACE?
+        castle_btree_iter_cancel(&transfer->c_iter, -ENOMEM); //ENOMEM? or EOUTOFDISKSPACE?
         return;
     }
     

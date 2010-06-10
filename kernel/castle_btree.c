@@ -22,7 +22,9 @@
 #endif
 
 
-/* Btree node type for block mapper trees (mtree) */
+/**********************************************************************************************/
+/* Block mapper btree (mtree) definitions */
+
 static int castle_mtree_key_compare(void *key1, void *key2)
 {
     block_t blk1 = (block_t)(unsigned long)key1;
@@ -159,6 +161,13 @@ struct castle_btree_type castle_mtree = {
 #endif
 }; 
 
+/**********************************************************************************************/
+/* Fixed size byte array key btree (batree) definitions */
+
+
+/**********************************************************************************************/
+/* Array of btree types */
+
 static struct castle_btree_type *castle_btrees[1<<(8 * sizeof(btree_t))] = 
                                                                 {[MTREE_TYPE] = &castle_mtree};
 
@@ -171,16 +180,18 @@ static inline struct castle_btree_type *castle_btree_type_get(btree_t type)
     return castle_btrees[type];
 }
 
-/* Generic modlist B-tree implementation below */
 
-static void castle_ftree_c2b_forget(c_bvec_t *c_bvec);
-static void __castle_ftree_find(struct castle_btree_type *btree,
+/**********************************************************************************************/
+/* Common modlist btree code */
+
+static void castle_btree_c2b_forget(c_bvec_t *c_bvec);
+static void __castle_btree_find(struct castle_btree_type *btree,
                                 c_bvec_t *c_bvec,
                                 c_disk_blk_t node_cdb,
                                 void *parent_key);
 
 
-static void castle_ftree_io_end(c_bvec_t *c_bvec,
+static void castle_btree_io_end(c_bvec_t *c_bvec,
                                 c_disk_blk_t cdb,
                                 int err)
 {
@@ -197,8 +208,8 @@ static void castle_ftree_io_end(c_bvec_t *c_bvec,
     BUG_ON((c_bvec_data_dir(c_bvec) == WRITE) && (DISK_BLK_INVAL(cdb)) && (!err));
     /* Free the c2bs correctly. Call twice to release parent and child
        (if both exist) */
-    castle_ftree_c2b_forget(c_bvec);
-    castle_ftree_c2b_forget(c_bvec);
+    castle_btree_c2b_forget(c_bvec);
+    castle_btree_c2b_forget(c_bvec);
     /* Once buffers have been freed, save the cdb */
     c_bvec->cdb = cdb;
     /* Finish the IO (call _io_end directly on an error */
@@ -208,7 +219,7 @@ static void castle_ftree_io_end(c_bvec_t *c_bvec,
         castle_bio_data_io(c_bvec);
 }
 
-static void USED castle_ftree_node_print(struct castle_btree_type *t, struct castle_btree_node *node)
+static void USED castle_btree_node_print(struct castle_btree_type *t, struct castle_btree_node *node)
 {
     printk("Printing node version=%d with (cap, use) = (%d, %d), is_leaf=%d\n",
         node->version, node->capacity, node->used, node->is_leaf);
@@ -216,7 +227,7 @@ static void USED castle_ftree_node_print(struct castle_btree_type *t, struct cas
     t->node_print(node);
 }
 
-static void castle_ftree_lub_find(struct castle_btree_node *node,
+static void castle_btree_lub_find(struct castle_btree_node *node,
                                   void *key,
                                   version_t version,
                                   int *lub_idx_p,
@@ -312,7 +323,7 @@ static void castle_ftree_lub_find(struct castle_btree_node *node,
     if(insert_idx_p) *insert_idx_p = insert_idx;
 }
 
-c2_block_t* castle_ftree_node_create(int version, int is_leaf, btree_t type)
+c2_block_t* castle_btree_node_create(int version, int is_leaf, btree_t type)
 {
     struct castle_btree_type *btree;
     struct castle_btree_node *node;
@@ -342,7 +353,7 @@ c2_block_t* castle_ftree_node_create(int version, int is_leaf, btree_t type)
     return c2b;
 }
 
-static c2_block_t* castle_ftree_effective_node_create(c2_block_t *orig_c2b,
+static c2_block_t* castle_btree_effective_node_create(c2_block_t *orig_c2b,
                                                       version_t version)
 {
     struct castle_btree_type *btree;
@@ -352,11 +363,9 @@ static c2_block_t* castle_ftree_effective_node_create(c2_block_t *orig_c2b,
     version_t last_eff_version;
     int i, first;
     
-    //struct castle_ftree_slot *last_eff_slot, *slot;
-
     node = c2b_bnode(orig_c2b); 
     btree = castle_btree_type_get(node->type);
-    c2b = castle_ftree_node_create(version, node->is_leaf, node->type);
+    c2b = castle_btree_node_create(version, node->is_leaf, node->type);
     eff_node = c2b_buffer(c2b);
 
     first = 1;
@@ -434,7 +443,7 @@ static c2_block_t* castle_ftree_effective_node_create(c2_block_t *orig_c2b,
     return c2b;
 }
 
-static c2_block_t* castle_ftree_node_key_split(c2_block_t *orig_c2b)
+static c2_block_t* castle_btree_node_key_split(c2_block_t *orig_c2b)
 {
     c2_block_t *c2b;
     struct castle_btree_node *node, *sec_node;
@@ -448,7 +457,7 @@ static c2_block_t* castle_ftree_node_key_split(c2_block_t *orig_c2b)
 
     node     = c2b_bnode(orig_c2b);
     btree    = castle_btree_type_get(node->type);
-    c2b      = castle_ftree_node_create(node->version, node->is_leaf, node->type);
+    c2b      = castle_btree_node_create(node->version, node->is_leaf, node->type);
     sec_node = c2b_bnode(c2b);
     /* The original node needs to contain the elements from the right hand side
        because otherwise the key in it's parent would have to change. We want
@@ -477,7 +486,7 @@ static c2_block_t* castle_ftree_node_key_split(c2_block_t *orig_c2b)
     return c2b;
 }
 
-static void castle_ftree_slot_insert(c2_block_t  *c2b,
+static void castle_btree_slot_insert(c2_block_t  *c2b,
                                      int          index,
                                      void        *key,
                                      version_t    version,
@@ -539,7 +548,7 @@ static void castle_ftree_slot_insert(c2_block_t  *c2b,
     dirty_c2b(c2b);
 }
 
-static void castle_ftree_node_insert(c2_block_t *parent_c2b,
+static void castle_btree_node_insert(c2_block_t *parent_c2b,
                                      c2_block_t *child_c2b)
 {
     struct castle_btree_node *parent = c2b_buffer(parent_c2b);
@@ -552,10 +561,10 @@ static void castle_ftree_node_insert(c2_block_t *parent_c2b,
     BUG_ON(castle_btree_type_get(child->type) != btree);
     btree->entry_get(child, child->used-1, &key, NULL, NULL, NULL);
 
-    castle_ftree_lub_find(parent, key, version, NULL, &insert_idx);
+    castle_btree_lub_find(parent, key, version, NULL, &insert_idx);
     debug("Inserting child node into parent (cap=0x%x, use=0x%x), will insert (k,v)=(%p, 0x%x) at idx=%d.\n",
             parent->capacity, parent->used, key, version, insert_idx);
-    castle_ftree_slot_insert(parent_c2b, 
+    castle_btree_slot_insert(parent_c2b, 
                              insert_idx, 
                              key,
                              version,
@@ -563,7 +572,7 @@ static void castle_ftree_node_insert(c2_block_t *parent_c2b,
                              child_c2b->cdb);
 }
 
-static void castle_ftree_node_under_key_insert(c2_block_t *parent_c2b,
+static void castle_btree_node_under_key_insert(c2_block_t *parent_c2b,
                                                c2_block_t *child_c2b,
                                                void *key,
                                                version_t version)
@@ -573,11 +582,11 @@ static void castle_ftree_node_under_key_insert(c2_block_t *parent_c2b,
     int insert_idx;
 
     BUG_ON(btree->key_compare(key, btree->inv_key) == 0);
-    castle_ftree_lub_find(parent, key, version, NULL, &insert_idx);
+    castle_btree_lub_find(parent, key, version, NULL, &insert_idx);
     debug("Inserting child node into parent (cap=0x%x, use=0x%x), "
           "will insert (k,v)=(%p, 0x%x) at idx=%d.\n",
             parent->capacity, parent->used, key, version, insert_idx);
-    castle_ftree_slot_insert(parent_c2b, 
+    castle_btree_slot_insert(parent_c2b, 
                              insert_idx, 
                              key,
                              version,
@@ -585,17 +594,17 @@ static void castle_ftree_node_under_key_insert(c2_block_t *parent_c2b,
                              child_c2b->cdb);
 }
 
-static int castle_ftree_new_root_create(c_bvec_t *c_bvec, btree_t type)
+static int castle_btree_new_root_create(c_bvec_t *c_bvec, btree_t type)
 {
     c2_block_t *c2b;
-    struct castle_ftree_node *node;
+    struct castle_btree_node *node;
     int ret;
     
     debug("Creating a new root node, while handling write to version: %d.\n",
             c_bvec->version);
     BUG_ON(c_bvec->btree_parent_node);
     /* Create the node */
-    c2b = castle_ftree_node_create(c_bvec->version, 0, type);
+    c2b = castle_btree_node_create(c_bvec->version, 0, type);
     node = c2b_buffer(c2b);
     /* Update the version tree, and release the version lock (c2b_forget will 
        no longer do that, because there will be a parent node). */
@@ -620,7 +629,7 @@ static int castle_ftree_new_root_create(c_bvec_t *c_bvec, btree_t type)
     return 0;
 }
 
-static int castle_ftree_node_split(c_bvec_t *c_bvec)
+static int castle_btree_node_split(c_bvec_t *c_bvec)
 {
     struct castle_btree_node *node, *eff_node, *split_node, *parent_node;
     c2_block_t *eff_c2b, *split_c2b, *retain_c2b, *parent_c2b;
@@ -637,7 +646,7 @@ static int castle_ftree_node_split(c_bvec_t *c_bvec)
     retain_c2b = c_bvec->btree_node;
 
     /* Create the effective node */
-    eff_c2b = castle_ftree_effective_node_create(retain_c2b, version);
+    eff_c2b = castle_btree_effective_node_create(retain_c2b, version);
     if(eff_c2b)
     {
         debug("Effective node NOT identical to the original node.\n");
@@ -660,7 +669,7 @@ static int castle_ftree_node_split(c_bvec_t *c_bvec)
         void *max_split_key;
 
         debug("Effective node too full, splitting.\n");
-        split_c2b = castle_ftree_node_key_split(eff_c2b ? eff_c2b : c_bvec->btree_node);
+        split_c2b = castle_btree_node_key_split(eff_c2b ? eff_c2b : c_bvec->btree_node);
         split_node = c2b_buffer(split_c2b);
         BUG_ON(split_node->version != c_bvec->version);
         /* Work out whether to take the split node for the further btree walk.
@@ -689,7 +698,7 @@ static int castle_ftree_node_split(c_bvec_t *c_bvec)
         if(split_c2b)
         {
             debug("Creating new root node.\n");
-            ret = castle_ftree_new_root_create(c_bvec, node->type);
+            ret = castle_btree_new_root_create(c_bvec, node->type);
             new_root = 1;
         } else
         {
@@ -732,7 +741,7 @@ static int castle_ftree_node_split(c_bvec_t *c_bvec)
     {
         debug("Inserting split node.\n");
         BUG_ON(!parent_c2b);
-        castle_ftree_node_insert(parent_c2b, split_c2b);
+        castle_btree_node_insert(parent_c2b, split_c2b);
     }
 
     /* If effective node got created (rather than using the original node) then
@@ -745,14 +754,14 @@ static int castle_ftree_node_split(c_bvec_t *c_bvec)
         if(new_root)
         {
             debug("Inserting effective node under MAX block key.\n");
-            castle_ftree_node_under_key_insert(parent_c2b,
+            castle_btree_node_under_key_insert(parent_c2b,
                                                eff_c2b,
                                                btree->max_key,
                                                c_bvec->version);
         } else
         {
             debug("Inserting effective node under the usual key.\n");
-            castle_ftree_node_under_key_insert(parent_c2b,
+            castle_btree_node_under_key_insert(parent_c2b,
                                                eff_c2b,
                                                c_bvec->parent_key,
                                                c_bvec->version);
@@ -764,7 +773,7 @@ static int castle_ftree_node_split(c_bvec_t *c_bvec)
     if(new_root && !eff_c2b)
     {
         debug("Inserting original root node under MAX block key.\n");
-        castle_ftree_node_under_key_insert(parent_c2b,
+        castle_btree_node_under_key_insert(parent_c2b,
                                            c_bvec->btree_node,
                                            btree->max_key,
                                            c_bvec->version);
@@ -797,7 +806,7 @@ static int castle_ftree_node_split(c_bvec_t *c_bvec)
     return 0;
 }
 
-static void castle_ftree_write_process(c_bvec_t *c_bvec)
+static void castle_btree_write_process(c_bvec_t *c_bvec)
 {
     struct castle_btree_node *node = c_bvec_bnode(c_bvec);
     struct castle_btree_type *btree = castle_btree_type_get(node->type);
@@ -820,11 +829,11 @@ static void castle_ftree_write_process(c_bvec_t *c_bvec)
     {
         debug("===> Splitting node: leaf=%d, cap,use=(%d,%d)\n",
                 node->is_leaf, node->capacity, node->used);
-        ret = castle_ftree_node_split(c_bvec);
+        ret = castle_btree_node_split(c_bvec);
         if(ret)
         {
             /* End the IO in failure */
-            castle_ftree_io_end(c_bvec, INVAL_DISK_BLK, ret);
+            castle_btree_io_end(c_bvec, INVAL_DISK_BLK, ret);
             return;
         }
         /* Make sure that node now points to the correct node after split */
@@ -832,7 +841,7 @@ static void castle_ftree_write_process(c_bvec_t *c_bvec)
     }
  
     /* Find out what to follow, and where to insert */
-    castle_ftree_lub_find(node, key, version, &lub_idx, &insert_idx);
+    castle_btree_lub_find(node, key, version, &lub_idx, &insert_idx);
     if(lub_idx >= 0)
         btree->entry_get(node, lub_idx, &lub_key, &lub_version, &lub_is_leaf_ptr, &lub_cdb);
 
@@ -843,7 +852,7 @@ static void castle_ftree_write_process(c_bvec_t *c_bvec)
         BUG_ON(lub_idx < 0);
         BUG_ON(btree->key_compare(c_bvec->parent_key, btree->inv_key) == 0);
         debug("Following write down the tree.\n");
-        __castle_ftree_find(btree, c_bvec, lub_cdb, lub_key);
+        __castle_btree_find(btree, c_bvec, lub_cdb, lub_key);
         return;
     }
 
@@ -862,14 +871,14 @@ static void castle_ftree_write_process(c_bvec_t *c_bvec)
         debug("Need to insert (%p, 0x%x) into node (used: 0x%x, capacity: 0x%x, leaf=%d).\n",
                 key, version, node->used, node->capacity, node->is_leaf);
         BUG_ON(btree->key_compare(c_bvec->parent_key, btree->inv_key) == 0);
-        castle_ftree_slot_insert(c_bvec->btree_node,
+        castle_btree_slot_insert(c_bvec->btree_node,
                                  insert_idx,
                                  key,
                                  version,
                                  0,
                                  cdb);
         dirty_c2b(c_bvec->btree_node);
-        castle_ftree_io_end(c_bvec, cdb, 0);
+        castle_btree_io_end(c_bvec, cdb, 0);
         return;
     } 
     
@@ -883,15 +892,15 @@ static void castle_ftree_write_process(c_bvec_t *c_bvec)
     {
         debug("Following a leaf pointer to (0x%x, 0x%x).\n", 
                 lub_cdb.disk, lub_cdb.block);
-        __castle_ftree_find(btree, c_bvec, lub_cdb, btree->inv_key);
+        __castle_btree_find(btree, c_bvec, lub_cdb, btree->inv_key);
         return;
     }
 
     debug("Block already exists, modifying in place.\n");
-    castle_ftree_io_end(c_bvec, lub_cdb, 0);
+    castle_btree_io_end(c_bvec, lub_cdb, 0);
 }
 
-static void castle_ftree_read_process(c_bvec_t *c_bvec)
+static void castle_btree_read_process(c_bvec_t *c_bvec)
 {
     struct castle_btree_node *node = c_bvec_bnode(c_bvec);
     struct castle_btree_type *btree = castle_btree_type_get(node->type);
@@ -902,7 +911,7 @@ static void castle_ftree_read_process(c_bvec_t *c_bvec)
 
     castle_debug_bvec_update(c_bvec, C_BVEC_BTREE_NODE_RPROCESS);
 
-    castle_ftree_lub_find(node, key, version, &lub_idx, NULL);
+    castle_btree_lub_find(node, key, version, &lub_idx, NULL);
     /* We should always find the LUB if we are not looking at a leaf node */
     BUG_ON((lub_idx < 0) && (!node->is_leaf));
     
@@ -910,7 +919,7 @@ static void castle_ftree_read_process(c_bvec_t *c_bvec)
     if(lub_idx < 0)
     {
         debug(" Could not find the LUB for (k,v)=(%p, 0x%x)\n", key, version);
-        castle_ftree_io_end(c_bvec, INVAL_DISK_BLK, 0);
+        castle_btree_io_end(c_bvec, INVAL_DISK_BLK, 0);
         return;
     }
 
@@ -921,9 +930,9 @@ static void castle_ftree_read_process(c_bvec_t *c_bvec)
     {
         debug(" Is a leaf, found (k,v)=(%p, 0x%x)\n", lub_key, lub_version);
         if(btree->key_compare(lub_key, key) == 0)
-            castle_ftree_io_end(c_bvec, lub_cdb, 0);
+            castle_btree_io_end(c_bvec, lub_cdb, 0);
         else
-            castle_ftree_io_end(c_bvec, INVAL_DISK_BLK, 0);
+            castle_btree_io_end(c_bvec, INVAL_DISK_BLK, 0);
     }
     else
     {
@@ -931,29 +940,29 @@ static void castle_ftree_read_process(c_bvec_t *c_bvec)
                 lub_cdb.disk, lub_cdb.block);
         /* parent_key is not needed when reading (also, we might be looking at a leaf ptr)
            use INVAL key instead. */
-        __castle_ftree_find(btree, c_bvec, lub_cdb, btree->inv_key);
+        __castle_btree_find(btree, c_bvec, lub_cdb, btree->inv_key);
     }
 }
 
-void castle_ftree_process(struct work_struct *work)
+void castle_btree_process(struct work_struct *work)
 {
     c_bvec_t *c_bvec = container_of(work, c_bvec_t, work);
     int write = (c_bvec_data_dir(c_bvec) == WRITE);
 
     if(write)
-        castle_ftree_write_process(c_bvec);
+        castle_btree_write_process(c_bvec);
     else
-        castle_ftree_read_process(c_bvec);
+        castle_btree_read_process(c_bvec);
 }
 
 
 /* TODO move locking of c2bs here?. Possibly rename the function */
-static int castle_ftree_c2b_remember(c_bvec_t *c_bvec, c2_block_t *c2b)
+static int castle_btree_c2b_remember(c_bvec_t *c_bvec, c2_block_t *c2b)
 {
     int ret = 0;
 
     /* Forget the parent node buffer first */
-    castle_ftree_c2b_forget(c_bvec);
+    castle_btree_c2b_forget(c_bvec);
 
     /* Save the new node buffer */
     BUG_ON(!c2b_locked(c2b));
@@ -964,7 +973,7 @@ static int castle_ftree_c2b_remember(c_bvec_t *c_bvec, c2_block_t *c2b)
 
 /* TODO check that the root node lock will be released correctly, even on 
    node splits! */
-static void castle_ftree_c2b_forget(c_bvec_t *c_bvec)
+static void castle_btree_c2b_forget(c_bvec_t *c_bvec)
 {
     int write = (c_bvec_data_dir(c_bvec) == WRITE);
     c2_block_t *c2b_to_forget;
@@ -993,7 +1002,7 @@ static void castle_ftree_c2b_forget(c_bvec_t *c_bvec)
     c_bvec->btree_node = NULL;
 }
 
-static void castle_ftree_find_io_end(c2_block_t *c2b, int uptodate)
+static void castle_btree_find_io_end(c2_block_t *c2b, int uptodate)
 {
 #ifdef CASTLE_DEBUG    
     struct castle_btree_node *node;
@@ -1005,9 +1014,9 @@ static void castle_ftree_find_io_end(c2_block_t *c2b, int uptodate)
             c_bvec->key, c_bvec->version);
     
     /* Callback on error */
-    if(!uptodate || castle_ftree_c2b_remember(c_bvec, c2b))
+    if(!uptodate || castle_btree_c2b_remember(c_bvec, c2b))
     {
-        castle_ftree_io_end(c_bvec, INVAL_DISK_BLK, -EIO);
+        castle_btree_io_end(c_bvec, INVAL_DISK_BLK, -EIO);
         return;
     }
 
@@ -1024,11 +1033,11 @@ static void castle_ftree_find_io_end(c2_block_t *c2b, int uptodate)
        to how deep we are in the tree. 
        A single queue cannot be used, because a request blocked on 
        lock_c2b() would block the entire queue (=> deadlock). */
-    INIT_WORK(&c_bvec->work, castle_ftree_process);
+    INIT_WORK(&c_bvec->work, castle_btree_process);
     queue_work(castle_wqs[c_bvec->btree_depth], &c_bvec->work); 
 }
 
-static void __castle_ftree_find(struct castle_btree_type *btree,
+static void __castle_btree_find(struct castle_btree_type *btree,
                                 c_bvec_t *c_bvec,
                                 c_disk_blk_t node_cdb,
                                 void *parent_key)
@@ -1057,7 +1066,7 @@ static void __castle_ftree_find(struct castle_btree_type *btree,
         /* If the buffer doesn't contain up to date data, schedule the IO */
         castle_debug_bvec_update(c_bvec, C_BVEC_BTREE_NODE_OUTOFDATE);
         c2b->private = c_bvec;
-        c2b->end_io = castle_ftree_find_io_end;
+        c2b->end_io = castle_btree_find_io_end;
         BUG_ON(submit_c2b(READ, c2b));
     } else
     {
@@ -1065,12 +1074,12 @@ static void __castle_ftree_find(struct castle_btree_type *btree,
            function directly. c2b_remember should not return an error, because
            the Btree node had been normalized already. */
         castle_debug_bvec_update(c_bvec, C_BVEC_BTREE_NODE_UPTODATE);
-        BUG_ON(castle_ftree_c2b_remember(c_bvec, c2b) != 0);
-        castle_ftree_process(&c_bvec->work);
+        BUG_ON(castle_btree_c2b_remember(c_bvec, c2b) != 0);
+        castle_btree_process(&c_bvec->work);
     }
 }
 
-static void _castle_ftree_find(struct work_struct *work)
+static void _castle_btree_find(struct work_struct *work)
 {
     c_bvec_t *c_bvec = container_of(work, c_bvec_t, work);
     struct castle_device *c_dev = c_bvec->c_bio->c_dev;
@@ -1081,7 +1090,7 @@ static void _castle_ftree_find(struct work_struct *work)
     c_bvec->btree_node        = NULL;
     c_bvec->btree_parent_node = NULL;
     /* Lock the pointer to the root node.
-       This is unlocked by the (poorly named) castle_ftree_c2b_forget() */
+       This is unlocked by the (poorly named) castle_btree_c2b_forget() */
     down_read(&c_dev->lock);
     c_bvec->version = c_dev->version;
     root_cdb = castle_version_ftree_lock(c_bvec->version);
@@ -1094,20 +1103,22 @@ static void _castle_ftree_find(struct work_struct *work)
     }
     set_bit(CBV_ROOT_LOCKED_BIT, &c_bvec->flags);
     castle_debug_bvec_update(c_bvec, C_BVEC_VERSION_FOUND);
-    __castle_ftree_find(btree, c_bvec, root_cdb, btree->max_key);
+    __castle_btree_find(btree, c_bvec, root_cdb, btree->max_key);
 }
 
-void castle_ftree_find(struct castle_btree_type *btree, c_bvec_t *c_bvec)
+void castle_btree_find(struct castle_btree_type *btree, c_bvec_t *c_bvec)
 {
     c_bvec->btree = btree;
-    INIT_WORK(&c_bvec->work, _castle_ftree_find);
+    INIT_WORK(&c_bvec->work, _castle_btree_find);
     queue_work(castle_wqs[19], &c_bvec->work); 
 }
 
-/* Btree iterate functions */
+
+/**********************************************************************************************/
+/* Btree iterator */
 
 /* Put c2b's on the path from given depth. from = 0 means put entire path */
-static void castle_ftree_iter_path_put(c_iter_t *c_iter, int from)
+static void castle_btree_iter_path_put(c_iter_t *c_iter, int from)
 {
     int i = 0;
     iter_debug("From=%d\n", from);
@@ -1122,11 +1133,11 @@ static void castle_ftree_iter_path_put(c_iter_t *c_iter, int from)
     }
 }
 
-static void castle_ftree_iter_end(c_iter_t *c_iter, int err)
+static void castle_btree_iter_end(c_iter_t *c_iter, int err)
 {
     iter_debug("Putting path, ending\n");
     
-    castle_ftree_iter_path_put(c_iter, 0);
+    castle_btree_iter_path_put(c_iter, 0);
     
     if (c_iter->end) 
         c_iter->end(c_iter, err);
@@ -1156,7 +1167,7 @@ static void castle_ftree_iter_end(c_iter_t *c_iter, int err)
     }                                                                        \
  })
 
-void castle_ftree_iter_replace(c_iter_t *c_iter, int index, c_disk_blk_t cdb)
+void castle_btree_iter_replace(c_iter_t *c_iter, int index, c_disk_blk_t cdb)
 {
     struct castle_btree_node *real_node;
     struct castle_btree_type *btree = c_iter->btree;
@@ -1209,9 +1220,9 @@ void castle_ftree_iter_replace(c_iter_t *c_iter, int index, c_disk_blk_t cdb)
     dirty_c2b(real_c2b);
 }
 
-static void __castle_ftree_iter_start(c_iter_t *c_iter);
+static void __castle_btree_iter_start(c_iter_t *c_iter);
 
-void castle_ftree_iter_continue(c_iter_t *c_iter)
+void castle_btree_iter_continue(c_iter_t *c_iter)
 {
     struct castle_btree_node *node;
     struct castle_btree_type *btree = c_iter->btree;
@@ -1240,10 +1251,10 @@ void castle_ftree_iter_continue(c_iter_t *c_iter)
         leaf->cdb.disk, leaf->cdb.block);
     unlock_c2b(leaf);
     
-    castle_ftree_iter_start(c_iter);
+    castle_btree_iter_start(c_iter);
 }
 
-static void castle_ftree_iter_leaf_ptrs_sort(c_iter_t *c_iter, int nr_ptrs)
+static void castle_btree_iter_leaf_ptrs_sort(c_iter_t *c_iter, int nr_ptrs)
 {
     int i, root, child, start, end, last_r_idx;
     c_disk_blk_t last_cdb;
@@ -1307,7 +1318,7 @@ static void castle_ftree_iter_leaf_ptrs_sort(c_iter_t *c_iter, int nr_ptrs)
     }
 }
 
-static void castle_ftree_iter_leaf_ptrs_lock(c_iter_t *c_iter)
+static void castle_btree_iter_leaf_ptrs_lock(c_iter_t *c_iter)
 {
     struct castle_btree_node *node;
     struct castle_btree_type *btree = c_iter->btree;
@@ -1340,7 +1351,7 @@ static void castle_ftree_iter_leaf_ptrs_lock(c_iter_t *c_iter)
     nr_ptrs = j;
 
     /* Sort the pointers on cdb ordering */
-    castle_ftree_iter_leaf_ptrs_sort(c_iter, nr_ptrs);
+    castle_btree_iter_leaf_ptrs_sort(c_iter, nr_ptrs);
 
     /* Now that leafs have been sorted, lock them all */
     for(i=0; i<nr_ptrs; i++)
@@ -1377,7 +1388,7 @@ static void castle_ftree_iter_leaf_ptrs_lock(c_iter_t *c_iter)
             void *real_entry_key;
             int lub_idx;
 
-            castle_ftree_lub_find(c2b_bnode(c2b_follow_ptr(i)), 
+            castle_btree_lub_find(c2b_bnode(c2b_follow_ptr(i)), 
                                   entry_key,
                                   entry_version,
                                  &lub_idx,
@@ -1397,11 +1408,10 @@ static void castle_ftree_iter_leaf_ptrs_lock(c_iter_t *c_iter)
     }
 }
 
-static void castle_ftree_iter_leaf_process(c_iter_t *c_iter)
+static void castle_btree_iter_leaf_process(c_iter_t *c_iter)
 {
     struct castle_btree_node *node;
     struct castle_btree_type *btree = c_iter->btree;
-    //struct castle_ftree_slot *slot, *real_slot;
     c2_block_t *leaf; 
     int i;
 
@@ -1421,7 +1431,7 @@ static void castle_ftree_iter_leaf_process(c_iter_t *c_iter)
     if (c_iter->node_start != NULL) 
         c_iter->node_start(c_iter);
     
-    castle_ftree_iter_leaf_ptrs_lock(c_iter);
+    castle_btree_iter_leaf_ptrs_lock(c_iter);
 
     for(i=0; i<node->used; i++)
     {
@@ -1455,12 +1465,12 @@ static void castle_ftree_iter_leaf_process(c_iter_t *c_iter)
     if (c_iter->node_end != NULL)
        c_iter->node_end(c_iter);
     else
-       castle_ftree_iter_continue(c_iter);
+       castle_btree_iter_continue(c_iter);
 }
 
-static void castle_ftree_iter_path_traverse(c_iter_t *c_iter, c_disk_blk_t node_cdb);
+static void castle_btree_iter_path_traverse(c_iter_t *c_iter, c_disk_blk_t node_cdb);
 
-static void __castle_ftree_iter_path_traverse(struct work_struct *work)
+static void __castle_btree_iter_path_traverse(struct work_struct *work)
 {
     c_iter_t *c_iter = container_of(work, c_iter_t, work);
     struct castle_btree_node *node;
@@ -1473,10 +1483,10 @@ static void __castle_ftree_iter_path_traverse(struct work_struct *work)
     if(c_iter->err)
     {
         /* Unlock the top of the stack, this is normally done by 
-           castle_ftree_iter_continue. This will not happen now, because 
+           castle_btree_iter_continue. This will not happen now, because 
            the iterator was cancelled between two btree nodes. */
         unlock_c2b(c_iter->path[c_iter->depth]);
-        castle_ftree_iter_end(c_iter, c_iter->err);
+        castle_btree_iter_end(c_iter, c_iter->err);
         return;
     }
     
@@ -1486,22 +1496,22 @@ static void __castle_ftree_iter_path_traverse(struct work_struct *work)
     /* Are we at a leaf? */
     if(node->is_leaf)
     {
-        castle_ftree_iter_leaf_process(c_iter);
+        castle_btree_iter_leaf_process(c_iter);
         return;        
     }
 
     /* Otherwise, 'recurse' - find the occurance of the next key */
-    castle_ftree_lub_find(node, c_iter->next_key, c_iter->version, &index, NULL);
+    castle_btree_lub_find(node, c_iter->next_key, c_iter->version, &index, NULL);
     iter_debug("Node index=%d\n", index);
     btree->entry_get(node, index, &entry_key, NULL, NULL, &entry_cdb);
 
     c_iter->depth++;
     c_iter->parent_key = entry_key;
 
-    castle_ftree_iter_path_traverse(c_iter, entry_cdb);
+    castle_btree_iter_path_traverse(c_iter, entry_cdb);
 }
 
-static void _castle_ftree_iter_path_traverse(c2_block_t *c2b, int uptodate)
+static void _castle_btree_iter_path_traverse(c2_block_t *c2b, int uptodate)
 {
     c_iter_t *c_iter = c2b->private;
 
@@ -1527,11 +1537,11 @@ static void _castle_ftree_iter_path_traverse(c2_block_t *c2b, int uptodate)
        A single queue cannot be used, because a request blocked on 
        lock_c2b() would block the entire queue (=> deadlock). 
        NOTE: The +1 is required to match the wqs we are using in normal btree walks. */
-    INIT_WORK(&c_iter->work, __castle_ftree_iter_path_traverse);
+    INIT_WORK(&c_iter->work, __castle_btree_iter_path_traverse);
     queue_work(castle_wqs[c_iter->depth+MAX_BTREE_DEPTH], &c_iter->work);
 }
 
-static void castle_ftree_iter_path_traverse(c_iter_t *c_iter, c_disk_blk_t node_cdb)
+static void castle_btree_iter_path_traverse(c_iter_t *c_iter, c_disk_blk_t node_cdb)
 {
     struct castle_btree_type *btree = c_iter->btree;
     c2_block_t *c2b = NULL;
@@ -1546,7 +1556,7 @@ static void castle_ftree_iter_path_traverse(c_iter_t *c_iter, c_disk_blk_t node_
         
         if(!DISK_BLK_EQUAL(c2b->cdb, node_cdb))
         {
-            castle_ftree_iter_path_put(c_iter, c_iter->depth);
+            castle_btree_iter_path_put(c_iter, c_iter->depth);
             c2b = NULL;
         }
     }
@@ -1583,18 +1593,18 @@ static void castle_ftree_iter_path_traverse(c_iter_t *c_iter, c_disk_blk_t node_
         iter_debug("Not uptodate, submitting\n");
         
         /* If the buffer doesn't contain up to date data, schedule the IO */
-        c2b->end_io = _castle_ftree_iter_path_traverse;
+        c2b->end_io = _castle_btree_iter_path_traverse;
         BUG_ON(submit_c2b(READ, c2b));
     } 
     else
     {
         iter_debug("Uptodate, carrying on\n");
         /* If the buffer is up to date */
-        _castle_ftree_iter_path_traverse(c2b, 1);
+        _castle_btree_iter_path_traverse(c2b, 1);
     }
 }
 
-static void __castle_ftree_iter_start(c_iter_t *c_iter)
+static void __castle_btree_iter_start(c_iter_t *c_iter)
 {
     struct castle_btree_type *btree = c_iter->btree;
     c_disk_blk_t root_cdb;
@@ -1611,7 +1621,7 @@ static void __castle_ftree_iter_start(c_iter_t *c_iter)
         (btree->key_compare(c_iter->next_key, btree->inv_key) == 0) ||
         (c_iter->cancelled))
     {
-        castle_ftree_iter_end(c_iter, c_iter->err);
+        castle_btree_iter_end(c_iter, c_iter->err);
         return;
     }
     
@@ -1626,28 +1636,28 @@ static void __castle_ftree_iter_start(c_iter_t *c_iter)
     if(DISK_BLK_INVAL(root_cdb))
     {
         /* Complete the request early, end exit */
-        castle_ftree_iter_end(c_iter, -EINVAL);
+        castle_btree_iter_end(c_iter, -EINVAL);
         return;
     }
 
     c_iter->parent_key = btree->inv_key;
-    castle_ftree_iter_path_traverse(c_iter, root_cdb);
+    castle_btree_iter_path_traverse(c_iter, root_cdb);
 }
 
-static void _castle_ftree_iter_start(struct work_struct *work)
+static void _castle_btree_iter_start(struct work_struct *work)
 {
     c_iter_t *c_iter = container_of(work, c_iter_t, work);
 
-    __castle_ftree_iter_start(c_iter);
+    __castle_btree_iter_start(c_iter);
 }
 
-void castle_ftree_iter_start(c_iter_t* c_iter)
+void castle_btree_iter_start(c_iter_t* c_iter)
 {
-    INIT_WORK(&c_iter->work, _castle_ftree_iter_start);
+    INIT_WORK(&c_iter->work, _castle_btree_iter_start);
     queue_work(castle_wq, &c_iter->work);
 }
 
-void castle_ftree_iter_init(c_iter_t *c_iter, version_t version)
+void castle_btree_iter_init(c_iter_t *c_iter, version_t version)
 {
     iter_debug("Initialising iterator for version=0x%x\n", version);
     
@@ -1663,7 +1673,7 @@ void castle_ftree_iter_init(c_iter_t *c_iter, version_t version)
     memset(c_iter->path, 0, sizeof(c_iter->path));
 }
 
-void castle_ftree_iter_cancel(c_iter_t *c_iter, int err)
+void castle_btree_iter_cancel(c_iter_t *c_iter, int err)
 {
     iter_debug("Cancelling version=0x%x iterator, error=%d\n", c_iter->version, err);
     
