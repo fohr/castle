@@ -211,7 +211,7 @@ int castle_fs_init(void)
         /* Init the fs superblock */
         castle_fs_superblocks_init();
         /* Init the root btree node */
-        c2b = castle_btree_node_create(0 /* version */, 1 /* is_leaf */, BATREE_TYPE);
+        c2b = castle_btree_node_create(0 /* version */, 1 /* is_leaf */, MTREE_TYPE);
         /* Init version list */
         ret = castle_versions_list_init(c2b->cdb);
         /* Release btree node c2b */
@@ -764,10 +764,8 @@ static void castle_bio_data_copy(c_bvec_t *c_bvec, c2_block_t *c2b)
     {
         sector_t bv_first_sec   = sector;
         sector_t bv_last_sec    = sector + (bvec->bv_len >> 9);
-        sector_t cbv_first_sec  =  c_bvec->block      << (C_BLK_SHIFT - 9);
-        sector_t cbv_last_sec   = (c_bvec->block + 1) << (C_BLK_SHIFT - 9);
-        //sector_t cbv_first_sec  =  MTREE_BVEC_BLOCK(c_bvec)      << (C_BLK_SHIFT - 9);
-        //sector_t cbv_last_sec   = (MTREE_BVEC_BLOCK(c_bvec) + 1) << (C_BLK_SHIFT - 9);
+        sector_t cbv_first_sec  =  MTREE_BVEC_BLOCK(c_bvec)      << (C_BLK_SHIFT - 9);
+        sector_t cbv_last_sec   = (MTREE_BVEC_BLOCK(c_bvec) + 1) << (C_BLK_SHIFT - 9);
         sector_t first_sec, last_sec;
 
         /* Exit if we've already gone too far */
@@ -878,10 +876,7 @@ void castle_bio_data_io(c_bvec_t *c_bvec)
     castle_slave_access(c_bvec->cdb.disk);
 
     c2b = castle_cache_page_block_get(c_bvec->cdb);
-    castle_debug_bvec_update(c_bvec, C_BVEC_DATA_C2B_GOT);
-    c_bvec->locking = c2b;
     lock_c2b(c2b);
-    castle_debug_bvec_update(c_bvec, C_BVEC_DATA_C2B_LOCKED);
 
     /* We don't need to update the c2b if it's already uptodate
        or if we are doing entire page write, in which case we'll
@@ -924,27 +919,22 @@ static void castle_device_c_bvec_make(c_bio_t *c_bio,
                                       sector_t block,
                                       int one2one_bvec)
 {
-    uint8_t *key;
     /* Create an appropriate c_bvec */
     c_bvec_t *c_bvec = c_bio->c_bvecs + idx;
-
 
     /* Get a reference */
     castle_bio_get(c_bio);
 
-    key = kzalloc(128, GFP_NOIO);
-    *((sector_t *)key) = block;
     /* Init the c_bvec */
-    c_bvec->block        = (block_t)block;
     c_bvec->c_bio        = c_bio;
-    c_bvec->key          = key; 
+    c_bvec->key          = (void *)block; 
     c_bvec->version      = INVAL_VERSION; 
     if(one2one_bvec)
         set_bit(CBV_ONE2ONE_BIT, &c_bvec->flags);
     castle_debug_bvec_update(c_bvec, C_BVEC_INITIALISED);
 
     /* Submit the c_bvec for processing */
-    castle_btree_find(&castle_batree, c_bvec); 
+    castle_btree_find(&castle_mtree, c_bvec); 
 }
  
 static int castle_device_make_request(struct request_queue *rq, struct bio *bio)
