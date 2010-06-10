@@ -12,6 +12,8 @@
 #define C_BVEC_DATA_IO_NO_BLK       (0x20)
 #define C_BVEC_DATA_C2B_UPTODATE    (0x40)
 #define C_BVEC_DATA_C2B_OUTOFDATE   (0x80)
+#define C_BVEC_DATA_C2B_GOT         (0x100)
+#define C_BVEC_DATA_C2B_LOCKED      (0x200)
 
 #define C_BVEC_BTREE_MASK           (0xFFFF0000)    
 #define C_BVEC_BTREE_GOT_NODE       (0x00010000)

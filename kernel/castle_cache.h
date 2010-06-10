@@ -105,4 +105,8 @@ void        castle_cache_flush_wakeup (void);
 int castle_cache_init(void);
 void castle_cache_fini(void);
 
+#ifdef CASTLE_DEBUG
+void castle_cache_debug(void);
+#endif
+
 #endif /* __CASTLE_CACHE_H__ */

@@ -83,8 +83,8 @@ void fastcall dirty_c2b(c2_block_t *c2b)
     if(c2b_dirty(c2b)) goto out;
     list_move(&c2b->dirty_or_clean, &castle_cache_dirtylist);
     set_c2b_dirty(c2b); 
-    atomic_dec(&castle_cache_cleanlist_size);
-    atomic_inc(&castle_cache_dirtylist_size);
+    atomic_sub(c2b->nr_pages, &castle_cache_cleanlist_size);
+    atomic_add(c2b->nr_pages, &castle_cache_dirtylist_size);
 out:        
     spin_unlock_irqrestore(&castle_cache_hash_lock, flags);
 }
@@ -98,8 +98,8 @@ static void fastcall clean_c2b(c2_block_t *c2b)
     BUG_ON(!c2b_dirty(c2b));
     list_move(&c2b->dirty_or_clean, &castle_cache_cleanlist);
     clear_c2b_dirty(c2b); 
-    atomic_dec(&castle_cache_dirtylist_size);
-    atomic_inc(&castle_cache_cleanlist_size);
+    atomic_sub(c2b->nr_pages, &castle_cache_dirtylist_size);
+    atomic_add(c2b->nr_pages, &castle_cache_cleanlist_size);
     spin_unlock_irqrestore(&castle_cache_hash_lock, flags);
 }
 
@@ -243,11 +243,11 @@ static int castle_cache_hash_insert(c2_block_t *c2b)
     if(c2b_dirty(c2b))
     {
         list_add_tail(&c2b->dirty_or_clean, &castle_cache_dirtylist);
-        atomic_inc(&castle_cache_dirtylist_size);
+        atomic_add(c2b->nr_pages, &castle_cache_dirtylist_size);
     } else
     {
         list_add_tail(&c2b->dirty_or_clean, &castle_cache_cleanlist);
-        atomic_inc(&castle_cache_cleanlist_size);
+        atomic_add(c2b->nr_pages, &castle_cache_cleanlist_size);
     }
 out:
     spin_unlock_irq(&castle_cache_hash_lock);
@@ -354,6 +354,8 @@ static void castle_cache_block_free(c2_block_t *c2b)
     /* Add the pages back to the freelist */
     list_splice_init(&c2b->pages, &castle_cache_page_freelist);
     castle_cache_page_freelist_size += c2b->nr_pages;
+    /* For debugging only: it will be spotted quickly if nr_pages isn't reinited properly */
+    c2b->nr_pages = 0xFFFF;
     /* Then put the block on its freelist */
     __castle_cache_block_freelist_add(c2b);
 }
@@ -382,7 +384,7 @@ static int castle_cache_hash_clean(void)
             debug("Found a victim.\n");
             list_del(&c2b->list);
             list_del(&c2b->dirty_or_clean);
-            atomic_dec(&castle_cache_cleanlist_size);
+            atomic_sub(c2b->nr_pages, &castle_cache_cleanlist_size);
             list_add(&c2b->list, &victims);
             nr_victims++;
         }
@@ -482,8 +484,29 @@ c2_block_t* castle_cache_block_get(c_disk_blk_t cdb, int nr_pages)
         }
         else
             return c2b;
+        
     }
 }
+
+#ifdef CASTLE_DEBUG
+void castle_cache_debug(void)
+{
+    int dirty, clean, free, diff;
+
+    dirty = atomic_read(&castle_cache_dirtylist_size);
+    clean = atomic_read(&castle_cache_cleanlist_size);
+    free  = castle_cache_page_freelist_size;
+
+    diff = castle_cache_size - (dirty + clean + free);
+    if(diff < 0) diff *= (-1);
+    if(diff > castle_cache_size / 10)
+    {
+        printk("ERROR: Castle cache pages do not add up:\n"
+               "       #dirty_pgs=%d, #clean_pgs=%d, #freelist_pgs=%d\n",
+                dirty, clean, free);
+    }
+}
+#endif
 
 /***** Flush thread functions *****/
 static void castle_cache_flush_endio(c2_block_t *c2b, int uptodate)
@@ -534,7 +557,7 @@ next_batch:
         spin_lock_irq(&castle_cache_hash_lock);
         list_for_each_safe(l, t, &castle_cache_dirtylist)
         {
-            if(to_flush == 0)
+            if(to_flush <= 0)
                 break;
             c2b = list_entry(l, c2_block_t, dirty_or_clean);
             if(!trylock_c2b(c2b))
@@ -542,7 +565,7 @@ next_batch:
             /* This is slightly dangerous, but should be fine */
             list_move_tail(l, &castle_cache_dirtylist);
             get_c2b(c2b);
-            to_flush--;
+            to_flush -= c2b->nr_pages;
             c2b_batch[batch_idx++] = c2b;
             if(batch_idx >= FLUSH_BATCH)
                 break;
@@ -560,13 +583,19 @@ next_batch:
         }
 
         /* We may have to flush more than one batch */
-        if(to_flush != 0)
+        if(to_flush > 0)
         {
             if(batch_idx == FLUSH_BATCH)
                 goto next_batch; 
             /* If we still have buffers to flush, but we could not lock 
                enough dirty buffers print a warning message, and stop */
-            printk("Could not find enough dirty pages to flush!\n");
+            printk("WARNING: Could not find enough dirty pages to flush\n"
+                   "  Stats: dirty=%d, clean=%d, free=%d\n"
+                   "         low wm=%d, to_flush=%d, blocks=%d\n",
+                atomic_read(&castle_cache_dirtylist_size), 
+                atomic_read(&castle_cache_cleanlist_size),
+                castle_cache_page_freelist_size,
+                low_water_mark, to_flush, batch_idx); 
         }
         
         debug("====> Waiting for all IOs to complete.\n");

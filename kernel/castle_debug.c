@@ -193,7 +193,9 @@ static int castle_debug_run(void *unused)
             {
                 c_bvec_t *c_bvec = &c_bio->c_bvecs[j];
                 int locking = ((c_bvec->state & C_BVEC_BTREE_GOT_NODE) &&
-                              !(c_bvec->state & C_BVEC_BTREE_LOCKED_NODE));
+                              !(c_bvec->state & C_BVEC_BTREE_LOCKED_NODE)) ||
+                              ((c_bvec->state & C_BVEC_DATA_C2B_GOT) &&
+                              !(c_bvec->state & C_BVEC_DATA_C2B_LOCKED));
                 int print = (states_printed & c_bvec->state) != c_bvec->state;
 
                 /* Save that we've already printed this particular state */
@@ -238,6 +240,7 @@ static int castle_debug_run(void *unused)
   
         set_task_state(current, TASK_INTERRUPTIBLE);
         schedule_timeout(sleep_time * HZ);
+        castle_cache_debug();
     } while(!kthread_should_stop());
 
     return 0;
