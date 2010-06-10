@@ -1,4 +1,5 @@
 syntax: glob
+.hg-rev
 .DS_Store
 *.d
 *~
