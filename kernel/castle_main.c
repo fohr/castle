@@ -876,7 +876,10 @@ void castle_bio_data_io(c_bvec_t *c_bvec)
     castle_slave_access(c_bvec->cdb.disk);
 
     c2b = castle_cache_page_block_get(c_bvec->cdb);
+    castle_debug_bvec_update(c_bvec, C_BVEC_DATA_C2B_GOT);
+    c_bvec->locking = c2b;
     lock_c2b(c2b);
+    castle_debug_bvec_update(c_bvec, C_BVEC_DATA_C2B_LOCKED);
 
     /* We don't need to update the c2b if it's already uptodate
        or if we are doing entire page write, in which case we'll

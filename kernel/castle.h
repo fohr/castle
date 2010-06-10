@@ -12,6 +12,7 @@
 typedef uint32_t block_t;
 #define INVAL_BLOCK         ((block_t)-1) 
 #define BLOCK_INVAL(_b)     ((_b) == INVAL_BLOCK) 
+
 /* Disk layout related structures */
 struct castle_disk_block {
     uint32_t disk;
@@ -61,6 +62,8 @@ struct castle_fs_superblock {
 
 #define MTREE_TYPE                 0x33
 #define MTREE_BVEC_BLOCK(_bvec)   ((sector_t)(_bvec)->key)
+
+#define BATREE_TYPE                0x44
                                   
 #define MAX_BTREE_DEPTH           (10)
 #define MAX_BTREE_ENTRIES         (2500)
@@ -240,12 +243,12 @@ typedef struct castle_iterator {
             };
             struct {
                 c_disk_blk_t               cdb;      /* CDB from leaf pointer  */
-                uint8_t                    f_idx;    /* Index in the orig node */
+                uint16_t                   f_idx;    /* Index in the orig node */
             };                             
         };                                 
         struct {                 
-            uint8_t                        r_idx;    /* Index in indirect_nodes array */
-            uint8_t                        node_idx; /* Index in the indirect node */ 
+            uint16_t                       r_idx;    /* Index in indirect_nodes array */
+            uint16_t                       node_idx; /* Index in the indirect node */ 
         };
     }                         indirect_nodes[MAX_BTREE_ENTRIES];
     int                       depth;
