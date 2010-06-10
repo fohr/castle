@@ -29,6 +29,8 @@ function print_volume_summary {
             echo "        $dir: $count";
             if [[ "0x${dir}" == "${TARGET}" ]]; then
                 RESULT=$count
+            elif [[ $count != 0 ]]; then
+                OTHERS_EMPTY=0
             fi
         fi
     done
@@ -49,6 +51,7 @@ for I in `seq 0 $STEPS`; do
     TIME=$I #`echo "$STEP * 5" | bc`
     echo "   Summary for version ${VOL_VER} ${TIME}s after move..."
     print_volume_summary ${VOL_VER} ${REGION_SLAVE}
+    OTHERS_EMPTY=1
     if [[ "$RESULT" == "$SIZE" ]]; then
         break
     fi
