@@ -13,6 +13,7 @@
 #include "castle_public.h"
 #include "castle_compile.h"
 #include "castle.h"
+#include "castle_da.h"
 #include "castle_block.h"
 #include "castle_cache.h"
 #include "castle_btree.h"
@@ -48,28 +49,12 @@ static void USED castle_fs_superblock_print(struct castle_fs_superblock *fs_sb)
            "Magic2: %.8x\n"
            "Magic3: %.8x\n"
            "Salt:   %x\n"
-           "Pepper: %x\n"
-           "F_t_d1: %x\n"
-           "F_t_b1: %x\n"
-           "F_t_d2: %x\n"
-           "F_t_b2: %x\n"
-           "R_t_d1: %x\n"
-           "R_t_b1: %x\n"
-           "R_t_d2: %x\n"
-           "R_t_b2: %x\n",
+           "Pepper: %x\n",
            fs_sb->magic1,
            fs_sb->magic2,
            fs_sb->magic3,
            fs_sb->salt,
-           fs_sb->peper,
-           fs_sb->fwd_tree1.disk,
-           fs_sb->fwd_tree1.block,
-           fs_sb->fwd_tree2.disk,
-           fs_sb->fwd_tree2.block,
-           fs_sb->rev_tree1.disk,
-           fs_sb->rev_tree1.block,
-           fs_sb->rev_tree2.disk,
-           fs_sb->rev_tree2.block);
+           fs_sb->peper);
 }
 
 static int castle_fs_superblock_validate(struct castle_fs_superblock *fs_sb)
@@ -83,15 +68,15 @@ static int castle_fs_superblock_validate(struct castle_fs_superblock *fs_sb)
 
 static void castle_fs_superblock_init(struct castle_fs_superblock *fs_sb)
 {   
+    int i;
+
     fs_sb->magic1 = CASTLE_FS_MAGIC1;
     fs_sb->magic2 = CASTLE_FS_MAGIC2;
     fs_sb->magic3 = CASTLE_FS_MAGIC3;
     get_random_bytes(&fs_sb->salt,  sizeof(fs_sb->salt));
     get_random_bytes(&fs_sb->peper, sizeof(fs_sb->peper));
-    fs_sb->fwd_tree1 = INVAL_DISK_BLK; 
-    fs_sb->fwd_tree2 = INVAL_DISK_BLK;
-    fs_sb->rev_tree1 = INVAL_DISK_BLK;
-    fs_sb->rev_tree2 = INVAL_DISK_BLK;
+    for(i=0; i<sizeof(fs_sb->mstore) / sizeof(c_disk_blk_t); i++)
+        fs_sb->mstore[i] = INVAL_DISK_BLK;
 }
 
 static void castle_fs_superblocks_init(void)
@@ -213,7 +198,7 @@ int castle_fs_init(void)
         /* Init the root btree node */
         c2b = castle_btree_node_create(0 /* version */, 1 /* is_leaf */, MTREE_TYPE);
         /* Init version list */
-        ret = castle_versions_list_init(c2b->cdb);
+        ret = castle_versions_root_init(c2b->cdb);
         /* Release btree node c2b */
         unlock_c2b(c2b);
         put_c2b(c2b);
@@ -1299,35 +1284,38 @@ static int __init castle_init(void)
 
     castle_fs_inited = 0;
               castle_debug_init();
-    if((ret = castle_slaves_init()))    goto err_out1;
-    if((ret = castle_cache_init()))     goto err_out2;
-    if((ret = castle_versions_init()))  goto err_out3;
-    if((ret = castle_btree_init()))     goto err_out4;
-    if((ret = castle_freespace_init())) goto err_out5;
-    if((ret = castle_devices_init()))   goto err_out6;
-    if((ret = castle_regions_init()))   goto err_out7;
-    if((ret = castle_transfers_init())) goto err_out8;
-    if((ret = castle_control_init()))   goto err_out9;
-    if((ret = castle_rxrpc_init()))     goto err_out10;
-    if((ret = castle_sysfs_init()))     goto err_out11;
+    if((ret = castle_slaves_init()))       goto err_out1;
+    if((ret = castle_cache_init()))        goto err_out2;
+    if((ret = castle_versions_init()))     goto err_out3;
+    if((ret = castle_btree_init()))        goto err_out4;
+    if((ret = castle_double_array_init())) goto err_out5;
+    if((ret = castle_freespace_init()))    goto err_out6;
+    if((ret = castle_devices_init()))      goto err_out7;
+    if((ret = castle_regions_init()))      goto err_out8;
+    if((ret = castle_transfers_init()))    goto err_out9;
+    if((ret = castle_control_init()))      goto err_out10;
+    if((ret = castle_rxrpc_init()))        goto err_out11;
+    if((ret = castle_sysfs_init()))        goto err_out12;
 
     printk("OK.\n");
 
     return 0;
 
     castle_sysfs_fini(); /* Unreachable */
-err_out11:
+err_out12:
     castle_rxrpc_fini();
-err_out10:
+err_out11:
     castle_control_fini();
-err_out9:
+err_out10:
     castle_transfers_free();
-err_out8:
+err_out9:
     castle_regions_free();
-err_out7:
+err_out8:
     castle_devices_free();
-err_out6:
+err_out7:
     castle_freespace_fini();
+err_out6:
+    castle_double_array_fini();
 err_out5:
     castle_btree_free();
 err_out4:
@@ -1361,6 +1349,7 @@ static void __exit castle_exit(void)
     castle_devices_free();
     /* Cleanup/writeout all metadata */ 
     castle_freespace_fini();
+    castle_double_array_fini();
     castle_btree_free();
     castle_versions_fini();
     /* Drop all cache references (superblocks), flush the cache, free the slaves. */ 

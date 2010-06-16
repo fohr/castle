@@ -101,8 +101,25 @@ int         submit_c2b_sync           (int rw, c2_block_t *c2b);
 c2_block_t* castle_cache_block_get    (c_disk_blk_t cdb, int nr_pages);
 void        castle_cache_flush_wakeup (void);
 
+/* MStore related functions */ 
+int                        castle_mstore_iterator_has_next (struct castle_mstore_iter *iter);
+void                       castle_mstore_iterator_next     (struct castle_mstore_iter *iter,
+                                                            void *entry,
+                                                            c_mstore_key_t *key);
+void                       castle_mstore_iterator_destroy  (struct castle_mstore_iter *iter);
+struct castle_mstore_iter* castle_mstore_iterate           (struct castle_mstore *store);
+void                       castle_mstore_entry_update      (struct castle_mstore *store,
+                                                            c_mstore_key_t key,
+                                                            void *entry);
+c_mstore_key_t             castle_mstore_entry_insert      (struct castle_mstore *store,
+                                                            void *entry);
+struct castle_mstore*      castle_mstore_open              (c_mstore_id_t store_id,
+                                                            size_t entry_size);
+struct castle_mstore*      castle_mstore_init              (c_mstore_id_t store_id,
+                                                            size_t entry_size);
 
-int castle_cache_init(void);
+/* Cache init/fini */
+int  castle_cache_init(void);
 void castle_cache_fini(void);
 
 #ifdef CASTLE_DEBUG

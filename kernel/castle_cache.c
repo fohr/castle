@@ -10,12 +10,15 @@
 #include "castle_public.h"
 #include "castle.h"
 #include "castle_cache.h"
+#include "castle_freespace.h"
 
 //#define DEBUG
 #ifndef DEBUG
-#define debug(_f, ...)  ((void)0)
+#define debug(_f, ...)           ((void)0)
+#define debug_mstore(_f, _a...)  ((void)0)
 #else
-#define debug(_f, _a...)  (printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
+#define debug(_f, _a...)         (printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
+#define debug_mstore(_f, _a...)  (printk("%s:%.4d:%s " _f, __FILE__, __LINE__ , __func__, ##_a))
 #endif
 
 static int                     castle_cache_size = 1000; /* in pages */
@@ -724,6 +727,363 @@ static void castle_cache_freelists_fini(void)
         BUG_ON(!list_empty(&c2b->pages));
     }
 #endif    
+}
+
+/**********************************************************************************************
+ * Generic storage functionality for (usually small) persisted data (e.g. versions in 
+ * version tree, double arrays).
+ */
+static void castle_mstore_iterator_validate(struct castle_mstore_iter *iter)
+{
+    struct castle_mlist_node *node = c2b_buffer(iter->node_c2b);
+
+    if((node->magic != MLIST_NODE_MAGIC) || 
+       (node->used  >  node->capacity))
+    {
+        printk("Trying to iterate over non-mlist node or over-full node.\n");
+        unlock_c2b(iter->node_c2b);
+        put_c2b(iter->node_c2b);
+        iter->node_c2b = NULL;
+    }
+    debug_mstore("Succeeded at validating the iterator.\n");
+}
+
+static void castle_mstore_iterator_advance(struct castle_mstore_iter *iter)
+{
+    struct castle_mlist_node *node;
+    c2_block_t *c2b = NULL;
+    int ret;
+    
+    debug_mstore("Advancing the iterator.\n");
+
+    /* Ignore attemts to advance completed iterator */
+    if(!iter->node_c2b)
+        return;
+    iter->node_idx++;
+    node = c2b_buffer(iter->node_c2b);
+    debug_mstore("node_idx=%d, node->used=%d.\n", iter->node_idx, node->used);
+    /* Check if we need to advance to the next node */
+    BUG_ON(iter->node_idx > node->used);
+    if(iter->node_idx == node->used)
+    {
+        debug_mstore("Next node.\n");
+        /* Update the node_c2 field appropriately */
+        if(!DISK_BLK_INVAL(node->next))
+        {
+            debug_mstore("Node exists.\n");
+            /* If next block exist, make sure the current one is full */
+            BUG_ON(node->used != node->capacity);
+            c2b = castle_cache_page_block_get(node->next);
+            lock_c2b(c2b);
+            if(!c2b_uptodate(c2b)) 
+            {
+                debug_mstore("Scheduling a read.\n");
+                ret = submit_c2b_sync(READ, c2b);
+                BUG_ON(ret);
+            }
+        } else
+        /* For the sole benefit of initialising the store */
+        {
+            down(&iter->store->mutex);
+            iter->store->last_node_cdb    = iter->node_c2b->cdb;
+            iter->store->last_node_unused = node->capacity - node->used;
+            up(&iter->store->mutex);
+            debug_mstore("End of the list, last_node_unused=%d.\n", 
+                    iter->store->last_node_unused);
+        }
+        debug_mstore("Unlocking prev node.\n");
+        unlock_c2b(iter->node_c2b); 
+        put_c2b(iter->node_c2b);
+        iter->node_c2b = c2b;
+        iter->node_idx = -1;
+        /* Limited recursion, to deal with empty last node */
+        debug_mstore("Recursing.\n");
+        castle_mstore_iterator_advance(iter);
+    }
+}
+
+int castle_mstore_iterator_has_next(struct castle_mstore_iter *iter)
+{
+    debug_mstore("Iterator %s.\n", iter->node_c2b ? "has next" : "doesn't have next");
+    return iter->node_c2b ? 1 : 0;
+}
+
+void castle_mstore_iterator_next(struct castle_mstore_iter *iter,
+                                 void *entry,
+                                 c_mstore_key_t *key)
+{
+    struct castle_mlist_node *node;
+
+    debug_mstore("Iterator next.\n");
+    BUG_ON(!castle_mstore_iterator_has_next(iter));
+    node = c2b_buffer(iter->node_c2b);
+    if(entry)
+    {
+        debug_mstore("Copying entry.\n");
+        memcpy(entry,
+               node->payload + iter->store->entry_size * iter->node_idx,
+               iter->store->entry_size);
+    }
+    if(key)
+    {
+        key->cdb = iter->node_c2b->cdb;
+        key->idx = iter->node_idx;
+        debug_mstore("Key: cdb=(0x%x, 0x%x), idx=%d.\n", 
+                key->cdb.disk, key->cdb.block, key->idx);
+    }
+    debug_mstore("Advancing the iterator.\n"); 
+    castle_mstore_iterator_advance(iter);
+}
+
+void castle_mstore_iterator_destroy(struct castle_mstore_iter *iter)
+{
+    debug_mstore("Destroying the iterator.\n"); 
+    if(iter->node_c2b)
+    {
+        debug_mstore("Unlocking the node.\n"); 
+        unlock_c2b(iter->node_c2b);
+        put_c2b(iter->node_c2b);
+    }
+    debug_mstore("Freeing.\n"); 
+    kfree(iter);
+}
+
+struct castle_mstore_iter* castle_mstore_iterate(struct castle_mstore *store)
+{
+    struct castle_fs_superblock *fs_sb;
+    struct castle_mstore_iter *iter;
+    c_disk_blk_t list_cdb;
+
+    debug_mstore("Creating the iterator.\n"); 
+    iter = kzalloc(sizeof(struct castle_mstore_iter), GFP_KERNEL);
+    if(!iter)
+        return NULL;
+
+    iter->store = store;
+    fs_sb = castle_fs_superblocks_get(); 
+    list_cdb = fs_sb->mstore[store->store_id];
+    castle_fs_superblocks_put(fs_sb, 0); 
+    debug_mstore("Read first list node for mstore %d, got (0x%x, 0x%x)\n",
+                    store->store_id, list_cdb.disk, list_cdb.block);
+    if(DISK_BLK_INVAL(list_cdb))
+        return NULL;
+    iter->node_c2b = castle_cache_page_block_get(list_cdb);
+    iter->node_idx = -1;
+    debug_mstore("Locknig the first node (0x%x, 0x%x)\n",
+            iter->node_c2b->cdb.disk, iter->node_c2b->cdb.block);
+    lock_c2b(iter->node_c2b);
+    if(!c2b_uptodate(iter->node_c2b)) 
+        BUG_ON(submit_c2b_sync(READ, iter->node_c2b));
+    debug_mstore("Node uptodate\n");
+    castle_mstore_iterator_validate(iter);
+    castle_mstore_iterator_advance(iter);
+    debug_mstore("Iterator ready.\n");
+
+    return iter;
+}
+
+static void castle_mstore_node_add(struct castle_mstore *store)
+/* Needs to be called with store mutex locked. Otherwise two/more racing node_adds may 
+   be generated due to the lock-free period between last_node_unused check, and 
+   node_add. */
+{
+    struct castle_mlist_node *node, *prev_node;
+    struct castle_fs_superblock *fs_sb;
+    c2_block_t *c2b, *prev_c2b;
+    c_disk_blk_t cdb;
+    
+    debug_mstore("Adding a node.\n");
+    /* Check if mutex is locked */
+    BUG_ON(down_trylock(&store->mutex) == 0);
+
+    /* Prepare the node first */
+    cdb = castle_freespace_block_get(0, 1);
+    c2b = castle_cache_page_block_get(cdb);
+    debug_mstore("Allocated (0x%x, 0x%x).\n", cdb.disk, cdb.block);
+    lock_c2b(c2b);
+    set_c2b_uptodate(c2b);
+    debug_mstore("Locked.\n");
+
+    /* Init the node correctly */
+    node = c2b_buffer(c2b);
+    node->magic     = MLIST_NODE_MAGIC;
+    node->capacity  = (PAGE_SIZE - sizeof(struct castle_mlist_node)) / store->entry_size;
+    node->used      = 0;
+    node->next      = INVAL_DISK_BLK;
+    dirty_c2b(c2b);
+    debug_mstore("Inited the node.\n");
+    /* Update relevant pointers to point to us (either FS superblock, or prev node) */
+    if(DISK_BLK_INVAL(store->last_node_cdb))
+    {
+        debug_mstore("Linking into the superblock.\n");
+        fs_sb = castle_fs_superblocks_get(); 
+        BUG_ON(!DISK_BLK_INVAL(fs_sb->mstore[store->store_id]));
+        fs_sb->mstore[store->store_id] = cdb;
+        castle_fs_superblocks_put(fs_sb, 1); 
+    } else
+    {
+        prev_c2b = castle_cache_page_block_get(store->last_node_cdb);
+        debug_mstore("Linking into the prev node (0x%x, 0x%x).\n", 
+                prev_c2b->cdb.disk, prev_c2b->cdb.block);
+        lock_c2b(prev_c2b);
+        if(!c2b_uptodate(prev_c2b))
+            BUG_ON(submit_c2b_sync(READ, prev_c2b));
+        debug_mstore("Read prev node.\n"); 
+        prev_node = c2b_buffer(prev_c2b);
+        prev_node->next = cdb;
+        dirty_c2b(prev_c2b);
+        unlock_c2b(prev_c2b);
+        put_c2b(prev_c2b);
+    }
+    debug_mstore("Updating the saved last node.\n"); 
+    /* Finally, save this node as the last node */
+    store->last_node_cdb    = cdb;
+    store->last_node_unused = node->capacity; 
+    unlock_c2b(c2b);
+    put_c2b(c2b);
+}
+
+void castle_mstore_entry_update(struct castle_mstore *store,
+                                c_mstore_key_t key,
+                                void *entry)
+{
+    struct castle_mlist_node *node;
+    c2_block_t *node_c2b;
+    
+    debug_mstore("Updating an entry in (0x%x, 0x%x), idx=%d.\n",
+            key.cdb.disk, key.cdb.block, key.idx); 
+    node_c2b = castle_cache_page_block_get(key.cdb);
+    lock_c2b(node_c2b);
+    if(!c2b_uptodate(node_c2b))
+        BUG_ON(submit_c2b_sync(READ, node_c2b));
+    debug_mstore("Read the block.\n");
+    node = c2b_buffer(node_c2b);
+    memcpy(node->payload + key.idx * store->entry_size,
+           entry,
+           store->entry_size);
+    dirty_c2b(node_c2b);
+    unlock_c2b(node_c2b); 
+    put_c2b(node_c2b);
+}
+
+c_mstore_key_t castle_mstore_entry_insert(struct castle_mstore *store,
+                                          void *entry)
+{
+    struct castle_mlist_node *node;
+    c_mstore_key_t key;
+    c2_block_t *c2b;
+
+    debug_mstore("Inserting a new entry.\n");
+    down(&store->mutex);
+    /* We should always have at least one more entry left in the last node */
+    BUG_ON(store->last_node_unused <= 0);
+    /* Write the entry to the last node */
+    debug_mstore("Reading last node (0x%x, 0x%x).\n",
+            store->last_node_cdb.disk, store->last_node_cdb.block);
+    c2b = castle_cache_page_block_get(store->last_node_cdb);
+    lock_c2b(c2b);
+    if(!c2b_uptodate(c2b))
+        BUG_ON(submit_c2b_sync(READ, c2b));
+    node = c2b_buffer(c2b);
+    key.cdb = c2b->cdb;
+    key.idx = node->used;
+    debug_mstore("Writing out under idx=%d.\n", key.idx);
+    memcpy(node->payload + key.idx * store->entry_size,
+           entry,
+           store->entry_size);
+    node->used++;
+    store->last_node_unused--;
+    dirty_c2b(c2b);
+    unlock_c2b(c2b); 
+    put_c2b(c2b);
+ 
+    /* Add a new node if we've run out */
+    if(store->last_node_unused == 0)
+    {
+        debug_mstore("Adding a new node to the list.\n");
+        castle_mstore_node_add(store);
+    }
+    up(&store->mutex);
+
+    return key;
+}
+
+static struct castle_mstore *castle_mstore_alloc(c_mstore_id_t store_id, size_t entry_size)
+{
+    struct castle_mstore *store;
+
+    debug_mstore("Allocating mstore id=%d.\n", store_id);
+    store = kzalloc(sizeof(struct castle_mstore), GFP_KERNEL);
+    if(!store)
+        return NULL;
+
+    store->store_id         = store_id;
+    store->entry_size       = entry_size;
+    init_MUTEX(&store->mutex);
+    store->last_node_cdb    = INVAL_DISK_BLK; 
+    store->last_node_unused = -1;
+    debug_mstore("Done.\n");
+
+    return store;
+}
+
+struct castle_mstore* castle_mstore_open(c_mstore_id_t store_id, size_t entry_size)
+{
+    struct castle_fs_superblock *fs_sb;
+    struct castle_mstore *store;
+    struct castle_mstore_iter *iterator;
+
+    debug_mstore("Opening mstore.\n");
+    /* Sanity check, to see if store_id isn't too large. */
+    if(store_id >= sizeof(fs_sb->mstore) / sizeof(c_disk_blk_t))
+    {
+        printk("Asked for mstore id=%d, this is too large.\n", store_id);
+        return NULL;
+    }
+
+    store = castle_mstore_alloc(store_id, entry_size);
+    if(!store)
+        return NULL;
+    /* Inefficient, because we read all the data to get to the last node,
+       but mstores are expected to be small.
+       The iterator will initialise last_node_{cdb,unused} */
+    debug_mstore("Iterating to find last node.\n");
+    iterator = castle_mstore_iterate(store);
+    if(!iterator)
+    {
+        kfree(store);
+        return NULL;
+    }
+    while(castle_mstore_iterator_has_next(iterator))
+        castle_mstore_iterator_next(iterator, NULL, NULL);
+    debug_mstore("Destroying iterator and exiting.\n");
+    castle_mstore_iterator_destroy(iterator);
+    
+    return store;
+}
+
+struct castle_mstore* castle_mstore_init(c_mstore_id_t store_id, size_t entry_size)
+{
+    struct castle_fs_superblock *fs_sb;
+    struct castle_mstore *store;
+
+    debug_mstore("Opening mstore id=%d.\n", store_id);
+    /* Sanity check, to see if store_id isn't too large. */
+    if(store_id >= sizeof(fs_sb->mstore) / sizeof(c_disk_blk_t))
+    {
+        printk("Asked for mstore id=%d, this is too large.\n", store_id);
+        return NULL;
+    }
+
+    store = castle_mstore_alloc(store_id, entry_size);
+    if(!store)
+        return NULL;
+    debug_mstore("Initialising first list node.\n");
+    down(&store->mutex);
+    castle_mstore_node_add(store);
+    up(&store->mutex);
+     
+    return store;
 }
 
 int castle_cache_init(void)

@@ -53,10 +53,7 @@ struct castle_fs_superblock {
     uint32_t     magic3;
     uint32_t     salt;
     uint32_t     peper;
-    c_disk_blk_t fwd_tree1;
-    c_disk_blk_t fwd_tree2;
-    c_disk_blk_t rev_tree1;
-    c_disk_blk_t rev_tree2;
+    c_disk_blk_t mstore[16];
 } PACKED;
 
 
@@ -120,27 +117,20 @@ struct castle_btree_type {
 #endif        
 };
 
-
-#define NODE_HEADER           0x180
-
-struct castle_vlist_slot {
+struct castle_vlist_entry {
     uint32_t     version_nr;
     uint32_t     parent;
     uint32_t     size;
     c_disk_blk_t cdb;
 } PACKED;
 
-#define VLIST_NODE_MAGIC  0x0000baca
-#define VLIST_SLOTS  ((PAGE_SIZE - NODE_HEADER)/sizeof(struct castle_vlist_slot))
-struct castle_vlist_node {
-    uint32_t magic;
-    uint32_t version; 
-    uint32_t capacity;
-    uint32_t used;
-    c_disk_blk_t next; /* 8 bytes */
-    c_disk_blk_t prev; /* 8 bytes */
-    uint8_t __pad[NODE_HEADER - 32];
-    struct castle_vlist_slot slots[VLIST_SLOTS];
+#define MLIST_NODE_MAGIC  0x0000baca
+struct castle_mlist_node {
+    uint32_t     magic;
+    uint16_t     capacity;
+    uint16_t     used;
+    c_disk_blk_t next;
+    uint8_t      payload[0];
 } PACKED;
 
 struct castle_flist_slot {
@@ -148,6 +138,7 @@ struct castle_flist_slot {
     block_t      blocks;
 } PACKED;
 
+#define NODE_HEADER           0x180
 #define FLIST_NODE_MAGIC  0x0000faca
 #define FLIST_SLOTS  ((PAGE_SIZE - NODE_HEADER)/sizeof(struct castle_flist_slot))
 struct castle_flist_node {
@@ -257,6 +248,36 @@ typedef struct castle_iterator {
     int                       err;
     struct work_struct        work;
 } c_iter_t;
+
+
+typedef uint8_t c_mstore_id_t;
+
+typedef struct castle_mstore_key {
+    c_disk_blk_t cdb;
+    int          idx;
+} c_mstore_key_t;
+
+typedef struct castle_mstore {
+    c_mstore_id_t              store_id;             /* Id of the store, ptr in fs_sb    */
+    size_t                     entry_size;           /* Size of the entries stored       */
+    struct semaphore           mutex;                /* Mutex which protects the         */
+                                                     /*  last_node_* variables           */
+    c_disk_blk_t               last_node_cdb;        /* Tail of the list, has at least   */
+                                                     /* one unused entry in it           */
+    int                        last_node_unused;     /* Number of unused entries in the  */
+                                                     /* last node                        */
+} c_mstore_t;
+
+typedef struct castle_mstore_iter {
+    struct castle_mstore      *store;                /* Store we are iterating over      */
+    struct castle_cache_block *node_c2b;             /* Currently accessed node (locked) */
+    int                        node_idx;             /* Next entry index in current node */ 
+} c_mstore_iter_t;
+
+enum {
+    MSTORE_VERSIONS_ID,
+}; 
+
 
 #define BLOCKS_HASH_SIZE        (100)
 struct castle_slave_block_cnt

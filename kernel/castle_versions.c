@@ -27,19 +27,16 @@
 #endif
 
 static int castle_versions_process(void);
-static c2_block_t* castle_versions_node_init(void);
 
-static struct kmem_cache *castle_versions_cache = NULL;
+static struct kmem_cache *castle_versions_cache  = NULL;
 
 #define CASTLE_VERSIONS_HASH_SIZE       (1000)
 static    DEFINE_SPINLOCK(castle_versions_hash_lock);
-static struct list_head  *castle_versions_hash  = NULL;
+static struct list_head  *castle_versions_hash   = NULL;
 static          LIST_HEAD(castle_versions_init_list);
 
-static      DECLARE_MUTEX(castle_versions_last_lock);
-static version_t          castle_versions_last;
-static c_disk_blk_t       castle_versions_last_node_cdb;
-static int                castle_versions_last_node_unused;
+static version_t          castle_versions_last   = INVAL_VERSION;
+static c_mstore_t        *castle_versions_mstore = NULL;
 
 #define CV_INITED_BIT             (0)
 #define CV_INITED_MASK            (1 << CV_INITED_BIT)
@@ -60,23 +57,17 @@ struct castle_version {
     struct castle_version     *next_sybling;
 
     /* Aux data */
-    c_disk_blk_t cdb;  /* Where is this version stored on disk */
-    version_t    o_order;
-    version_t    r_order;
-    c_disk_blk_t ftree_root;
-    uint32_t     size;
+    c_mstore_key_t mstore_key;
+    version_t      o_order;
+    version_t      r_order;
+    c_disk_blk_t   ftree_root;
+    uint32_t       size;
 
     /* Lists for storing versions the hash table & the init list*/
     struct list_head hash_list; 
     unsigned long    flags;
     struct list_head init_list;
 };
-
-struct castle_version_update {
-    version_t version;
-    int       new;
-    c2_block_t *c2b;
-}; 
 
 /***** Hash table & init list *****/
 static int castle_versions_hash_idx(version_t version)
@@ -141,26 +132,25 @@ static void castle_versions_init_add(struct castle_version *v)
 }
 
 
-static int castle_version_add(c_disk_blk_t cdb,
-                              version_t version, 
-                              version_t parent, 
-                              c_disk_blk_t ftree_root,
-                              uint32_t size)
+static struct castle_version* castle_version_add(version_t version, 
+                                                 version_t parent, 
+                                                 c_disk_blk_t ftree_root,
+                                                 uint32_t size)
 {
     struct castle_version *v;
-    int ret;
     
     v = kmem_cache_alloc(castle_versions_cache, GFP_KERNEL);
-    if(!v) return -ENOMEM;
-    ret = castle_freespace_version_add(version);
-    if(ret) return -ENOMEM;
+    if(!v) 
+        goto out; 
+    if(castle_freespace_version_add(version)) 
+        goto out_dealloc; 
+    
     debug("Adding: (v, p)=(%d,%d)\n", version, parent);
 
     v->version      = version;
     v->parent_v     = parent;
     v->first_child  = NULL; 
     v->next_sybling = NULL; 
-    v->cdb          = cdb;
     v->o_order      = INVAL_VERSION;
     v->r_order      = INVAL_VERSION;
     v->ftree_root   = ftree_root;
@@ -169,171 +159,82 @@ static int castle_version_add(c_disk_blk_t cdb,
     INIT_LIST_HEAD(&v->hash_list);
     INIT_LIST_HEAD(&v->init_list);
 
-    castle_versions_hash_add(v);
-    /* Initialise version 0 (root version) fully */ 
+    /* Initialise version 0 fully, defer all other versions by 
+       putting it on the init list. */ 
     if(v->version == 0)
     {
+        if(castle_sysfs_version_add(v->version))
+            goto out_dealloc;
+
         v->parent       = NULL;
         v->first_child  = NULL; /* This will be updated later */
         v->next_sybling = NULL;
         v->flags       |= CV_INITED_MASK;
 
-        return castle_sysfs_version_add(v->version); 
-
+        castle_versions_hash_add(v);
     } else
     {
-        /* Defer the initialisation until all the parent 
-           nodes have been collected */
+        /* Defer the initialisation until all the ancestral nodes are
+           available. */
         castle_versions_init_add(v);
+        castle_versions_hash_add(v);
     }
 
-    return 0;
-}
+    return v;
 
-static void castle_version_update(struct castle_version_update *vu)
-{
-    struct castle_vlist_node *node;
-    struct castle_vlist_slot *slot;
-    struct castle_version *v;
-    unsigned long flags;
-    int i;
-
-    BUG_ON(!c2b_uptodate(vu->c2b));
-    node = c2b_buffer(vu->c2b);
-    /* Find the version in the node */
-    for(i=0; i<node->used; i++)
-    {
-        slot = &node->slots[i];
-        if(slot->version_nr == vu->version)
-        {
-            debug("Found version on disk, updating it.\n");
-            break;
-        }
-    }
-    /* If we allocating new node allocate the first free slot */ 
-    if(vu->new)
-    {
-        debug("Allocating new slot in node (0x%x, 0x%x), idx=%d.\n",
-            vu->c2b->cdb.disk, vu->c2b->cdb.block, node->used);
-        BUG_ON(node->used >= node->capacity);
-        slot = &node->slots[node->used++];
-    }
-    /* Some sanity checks */
-    BUG_ON((!vu->new) && (slot->version_nr != vu->version));
-    BUG_ON(( vu->new) && (i != (node->used-1)));
-
-    debug("Writing verison update to the cached page.\n");
-    spin_lock_irqsave(&castle_versions_hash_lock, flags);
-    v = __castle_versions_hash_get(vu->version);
-    slot->version_nr = v->version;
-    slot->parent     = (v->parent ? v->parent->version : 0);
-    slot->size       = v->size;
-    slot->cdb        = v->ftree_root;
-    spin_unlock_irqrestore(&castle_versions_hash_lock, flags);
-
-    /* Finish-off and cleanup */
-    dirty_c2b(vu->c2b);
-    unlock_c2b(vu->c2b);
-    put_c2b(vu->c2b);
-    kfree(vu);
-}
-
-static void castle_version_node_read_end(c2_block_t *c2b, int uptodate)
-{
-    struct castle_version_update *vu = c2b->private;
-    if(!uptodate)
-    {
-        /* TODO: This failure NEEDs to be handled properly. 
-                 Quite possibly ftree_update() and others 
-                 using this function should do a blocking IO
-                 and handle the failure there */
-        printk("Failed to read version node off the disk.\n");
-        printk("Cannot handle that ATM.\n");
-        kfree(vu);
-        BUG();
-    } 
-    debug("Read version node from disk.\n");
-    set_c2b_uptodate(c2b);
-    
-    castle_version_update(vu);
+out_dealloc:
+    kmem_cache_free(castle_versions_cache, v);
+out:
+    return v;
 }
 
 /* TODO who should handle errors in writeback? */
-static void castle_version_writeback(version_t version, int new)
+static void castle_version_writeback(struct castle_version *v, int new)
 {
-    struct castle_version_update *vu;
-    struct castle_version *v;
-    c_disk_blk_t node_cdb;
-    c2_block_t *c2b;
+    struct castle_vlist_entry mstore_entry;
+    c_mstore_key_t key;
 
-    vu = kmalloc(sizeof(struct castle_version_update), GFP_KERNEL);
-    if(!vu) goto error_out;
+    mstore_entry.version_nr = v->version;
+    mstore_entry.parent     = (v->parent ? v->parent->version : 0);
+    mstore_entry.size       = v->size;
+    mstore_entry.cdb        = v->ftree_root;
+    key                     = v->mstore_key;
 
-    spin_lock_irq(&castle_versions_hash_lock);
-    v = __castle_versions_hash_get(version);
-    if(!v) 
-    {
-        spin_unlock_irq(&castle_versions_hash_lock);
-        goto error_out;
-    }
-    node_cdb = v->cdb;
-    spin_unlock_irq(&castle_versions_hash_lock);
-
-    /* Lock the disk node, and defer the writeback */
-    c2b = castle_cache_page_block_get(node_cdb);
-    lock_c2b(c2b);
-    vu->version = version;
-    vu->new = new;
-    vu->c2b = c2b;
-    if(!c2b_uptodate(c2b))
-    {
-        c2b->end_io  = castle_version_node_read_end; 
-        c2b->private = vu;
-        submit_c2b(READ, c2b);
-        return;
-    }
-    
-    castle_version_update(vu);
-    return;
-
-error_out:    
-    if(vu) kfree(vu);
-    return;
+    if(new)
+        v->mstore_key = 
+            castle_mstore_entry_insert(castle_versions_mstore, &mstore_entry);
+    else
+        castle_mstore_entry_update(castle_versions_mstore, key, &mstore_entry);
 }
 
 /***** External functions *****/
-int castle_version_ftree_update(version_t version, c_disk_blk_t cdb)
+void castle_version_ftree_update(version_t version, c_disk_blk_t cdb)
 {
     struct castle_version *v;
 
     spin_lock_irq(&castle_versions_hash_lock);
     v = __castle_versions_hash_get(version);
-    if(!v) 
-    {
-        spin_unlock_irq(&castle_versions_hash_lock);
-        return -EINVAL;
-    }
+    spin_unlock_irq(&castle_versions_hash_lock);
+    BUG_ON(!v);
+
     /* Test if the lock is taken out (check not 100% since it 
        could be taken by someone else than us) */
     BUG_ON(!test_bit(CV_FTREE_LOCKED_BIT, &v->flags));
     v->ftree_root = cdb;
-    spin_unlock_irq(&castle_versions_hash_lock);
   
     /* TODO: Error handling? */
-    castle_version_writeback(version, 0); 
-
-    return 0;
+    castle_version_writeback(v, 0 /* Not new */); 
 }
 
-static version_t castle_version_new_create(int snap_or_clone,
-                                           version_t parent,
-                                           uint32_t size)
+static struct castle_version* castle_version_new_create(int snap_or_clone,
+                                                        version_t parent,
+                                                        uint32_t size)
 {
+    static DEFINE_SPINLOCK(castle_next_version_lock);
     struct castle_version *v;
     c_disk_blk_t ftree_root;
     uint32_t parent_size;
     version_t version;
-    int ret;
 
     /* Read ftree root from the parent (also, make sure parent exists) */
     spin_lock_irq(&castle_versions_hash_lock);
@@ -343,7 +244,7 @@ static version_t castle_version_new_create(int snap_or_clone,
         printk("Asked to create a child of non-existant parent: %d\n",
             parent);
         spin_unlock_irq(&castle_versions_hash_lock);
-        return INVAL_VERSION;
+        return NULL;
     }
     spin_unlock_irq(&castle_versions_hash_lock);
     
@@ -360,46 +261,43 @@ static version_t castle_version_new_create(int snap_or_clone,
     parent_size = v->size;
 
     /* Allocate a new version number. */
-    down(&castle_versions_last_lock);
+    spin_lock(&castle_next_version_lock);
     BUG_ON(VERSION_INVAL(castle_versions_last));
     version = ++castle_versions_last;
-    up(&castle_versions_last_lock);
+    BUG_ON(VERSION_INVAL(castle_versions_last));
+    spin_unlock(&castle_next_version_lock);
 
     /* Try to add it to the hash */
-    ret = castle_version_add(INVAL_DISK_BLK, version, parent, ftree_root, size);
-    if(ret) return INVAL_VERSION;
+    v = castle_version_add(version, parent, ftree_root, size);
+    if(!v) 
+        return NULL;
 
     /* Set clone/snap bit in flags */ 
-    spin_lock_irq(&castle_versions_hash_lock);
-    v = __castle_versions_hash_get(version);
-    BUG_ON(!v);
     if(parent_size != 0) v->size = parent_size;
     BUG_ON(v->size == 0);
     if(snap_or_clone)
         v->flags |= CV_SNAP_MASK;
     else
         v->flags &= ~CV_SNAP_MASK;
-    spin_unlock_irq(&castle_versions_hash_lock);
 
     /* Run processing (which will thread the new version into the tree,
        and recalculate the order numbers) */
     castle_versions_process(); 
     
     /* Check if the version got initialised */
-    spin_lock_irq(&castle_versions_hash_lock);
-    v = __castle_versions_hash_get(version);
-    BUG_ON(!v);
     if(!(v->flags & CV_INITED_MASK))
     {
+        spin_lock_irq(&castle_versions_hash_lock);
         __castle_versions_hash_remove(v);
+        spin_unlock_irq(&castle_versions_hash_lock);
         kmem_cache_free(castle_versions_cache, v);
-        version = INVAL_VERSION;
+
+        return NULL;
     }
-    spin_unlock_irq(&castle_versions_hash_lock);
 
     castle_events_version_create(version);
 
-    return version;
+    return v;
 }
 
 /* BIG TODO:
@@ -413,57 +311,26 @@ version_t castle_version_new(int snap_or_clone,
                              uint32_t size)
 {
     struct castle_version *v;
-    c_disk_blk_t cdb;
-    c2_block_t *c2b;
-    version_t version;
     
     /* Get a new version number */
-    version = castle_version_new_create(snap_or_clone,
-                                        parent,
-                                        size);
+    v = castle_version_new_create(snap_or_clone,
+                                  parent,
+                                  size);
+        
     /* Return if we couldn't create the version correctly
        (possibly because we trying to clone attached version,
         or because someone asked for more than one snapshot to
         an attached version */
-    if(VERSION_INVAL(version))
+    if(!v)
         return INVAL_VERSION;
 
     /* We've succeeded at creating a new version number.
        Let's find where to store it on the disk. */
-    down(&castle_versions_last_lock);
-    cdb = castle_versions_last_node_cdb; 
-    /* Create a new list node, if we've just used up the last slot */
-    if(--castle_versions_last_node_unused == 0)
-    {
-        printk("Need to allocate a new node for version list.\n");
-        c2b = castle_versions_node_init();
-        if(!c2b)
-        {
-            up(&castle_versions_last_lock);
-            /* Could remove version from the hash, but this is 
-               so unlikely that it doesn't matter really */
-            return INVAL_VERSION;
-        }
-        castle_versions_last_node_cdb    = c2b->cdb; 
-        castle_versions_last_node_unused = VLIST_SLOTS;
-        unlock_c2b(c2b);
-        put_c2b(c2b);
-    }
-    up(&castle_versions_last_lock);
-    
-    debug("New version %d will be written in (d,b)=(0x%x, 0x%x)\n",
-            version, cdb.disk, cdb.block);
-    /* Update the version */
-    spin_lock_irq(&castle_versions_hash_lock);
-    v = __castle_versions_hash_get(version);
-    BUG_ON(!v);
-    v->cdb = cdb;
-    spin_unlock_irq(&castle_versions_hash_lock);
 
     /* TODO: Error handling? */
-    castle_version_writeback(version, 1); 
+    castle_version_writeback(v, 1); 
     
-    return version; 
+    return v->version; 
 }
 
 static int castle_version_ftree_yield(void *word)
@@ -728,188 +595,60 @@ int castle_version_is_ancestor(version_t candidate, version_t version)
     return ret;
 }
 
-static c2_block_t* castle_versions_node_init(void)
+/* Write root version (version 0) to mstore, which will then be processed by
+   castle_versions_read() */
+int castle_versions_root_init(c_disk_blk_t ftree_root)
 {
-    struct castle_fs_superblock *fs_sb;
-    struct castle_vlist_node *node, *prev_node;
-    c_disk_blk_t cdb;
-    c2_block_t *c2b, *prev_c2b;
-    int ret;
-
-    c2b   = prev_c2b  = NULL;
-    node  = prev_node = NULL;
-    cdb   = INVAL_DISK_BLK;
-    fs_sb = NULL;
-    /* Get the FS superblock, because we will have to insert
-       the new node into the doubly linked list, rooted at the 
-       superblock */
-    debug("Initialising vlist node.\n");
-    fs_sb = castle_fs_superblocks_get();
-    debug("Got fs superblock.\n");
-    /* Get the last node */
-    if(!DISK_BLK_INVAL(fs_sb->fwd_tree2))
-    {
-        debug("Valid last vlist node.\n");
-        prev_c2b  = castle_cache_page_block_get(fs_sb->fwd_tree2);
-        lock_c2b(prev_c2b);
-        ret = 0;
-        if(!c2b_uptodate(prev_c2b))
-            ret = submit_c2b_sync(READ, prev_c2b);
-        if(ret) goto error_out;
-        debug("Last vlist node uptodate now.\n");
-        prev_node = c2b_buffer(prev_c2b);
-    }
-    /* Allocate a new node */
-    cdb = castle_freespace_block_get(0, 1);
-    c2b = castle_cache_page_block_get(cdb);
-    lock_c2b(c2b);
-    set_c2b_uptodate(c2b);
-    debug("Allocated new block (0x%x, 0x%x).\n", cdb.disk, cdb.block);
-    /* Init the node correctly */
-    node = c2b_buffer(c2b);
-    node->magic               = VLIST_NODE_MAGIC;
-    node->version             = 0;
-    node->capacity            = VLIST_SLOTS;
-    node->used                = 0;
-    node->next                = INVAL_DISK_BLK;
-    node->prev                = fs_sb->fwd_tree2;
-    dirty_c2b(c2b);
-    debug("Initialised and dirtied the new node.\n");
-    /* Update relevant pointers to point to us */
-    if(prev_node)
-    {
-        debug("Updating prev node.\n");
-        prev_node->next = cdb;
-        dirty_c2b(prev_c2b);
-        unlock_c2b(prev_c2b);
-        put_c2b(prev_c2b);
-    } else
-    {
-        debug("Updating fwd1 in superblock to: (0x%x, 0x%x).\n",
-                cdb.disk, cdb.block);
-        fs_sb->fwd_tree1 = cdb;
-    }
-    debug("Updating fwd2 in superblock to: (0x%x, 0x%x).\n",
-            cdb.disk, cdb.block);
-    fs_sb->fwd_tree2 = cdb;
-    /* The fs has been updated, dirty+release */
-    castle_fs_superblocks_put(fs_sb, 1);
-
-    /* Return the (locked) c2b for the new node we've just created */
-    return c2b;
-
-error_out:
-    debug("Failed to allocate new vlist node.\n");
-    if(prev_c2b) {unlock_c2b(prev_c2b); put_c2b(prev_c2b);}
-    if(c2b)      {unlock_c2b(c2b);      put_c2b(c2b);     }
-    if(fs_sb)    {castle_fs_superblocks_put(fs_sb, 0);    }
-    /* TODO: return the block back to the allocator */
-
-    return NULL; 
-}
-
-int castle_versions_list_init(c_disk_blk_t ftree_root)
-{
-    struct castle_vlist_node *node;
-    c2_block_t *c2b;
-    int ret;
+    struct castle_vlist_entry mstore_entry;
     
-    debug("Initialising version list.\n");
-    c2b = castle_versions_node_init();
-    if(!c2b) return -EIO;
+    debug("Initialising version root.\n");
+    castle_versions_mstore = 
+        castle_mstore_init(MSTORE_VERSIONS_ID, sizeof(struct castle_vlist_entry));
+    if(!castle_versions_mstore)
+        return -ENOMEM;
 
-    node = c2b_buffer(c2b);
-    node->used                = 1;
-    node->slots[0].version_nr = 0;
-    node->slots[0].parent     = 0;
-    node->slots[0].size       = 0;
-    node->slots[0].cdb        = ftree_root;
-    dirty_c2b(c2b);
-    ret = submit_c2b_sync(WRITE, c2b); 
-    unlock_c2b(c2b);
-    put_c2b(c2b);
-    debug("Done initialising version list, ret=%d.\n", ret);
+    mstore_entry.version_nr = 0;
+    mstore_entry.parent     = 0;
+    mstore_entry.size       = 0;
+    mstore_entry.cdb        = ftree_root;
 
-    return ret;
+    castle_mstore_entry_insert(castle_versions_mstore, &mstore_entry); 
+
+    return 0;
 }
 
 int castle_versions_read(void)
 {
-    struct castle_fs_superblock *fs_sb;
-    struct castle_vlist_node *node;
-    struct castle_vlist_slot *slot;
-    c2_block_t *c2b, *prev_c2b;
-    c_disk_blk_t list_cdb;
-    int i, ret = 0;
+    struct castle_vlist_entry mstore_entry;
+    struct castle_mstore_iter* iterator;
+    struct castle_version* v; 
+    c_mstore_key_t key;
 
-    fs_sb = castle_fs_superblocks_get(); 
-    list_cdb = fs_sb->fwd_tree1;
-    debug("Read first version list node from the superblock (0x%x, 0x%x)\n",
-            list_cdb.disk, list_cdb.block);
-    castle_fs_superblocks_put(fs_sb, 0); 
+    if(!castle_versions_mstore)
+        castle_versions_mstore = 
+            castle_mstore_open(MSTORE_VERSIONS_ID, sizeof(struct castle_vlist_entry));
 
-    prev_c2b = c2b = NULL;
-    while(!DISK_BLK_INVAL(list_cdb))
-    {
-        debug("Reading next version list node: (0x%x, 0x%x)\n",
-                list_cdb.disk, list_cdb.block);
-        c2b = castle_cache_page_block_get(list_cdb);
-        lock_c2b(c2b);         
-        /* Now that we've locked c2b, unlock prev (if exists) */
-        if(prev_c2b)
-        {
-            unlock_c2b(prev_c2b);
-            put_c2b(prev_c2b);
-        }
-        if(!c2b_uptodate(c2b)) 
-            ret = submit_c2b_sync(READ, c2b);
-        if(ret) goto out; 
-        node = c2b_buffer(c2b);
-        /* TODO: handle this properly */
-        if(node->magic != VLIST_NODE_MAGIC)
-            printk("WARN: Version list magics don't agree!\n");
-        for(i=0; i<node->used; i++)
-        {
-            slot = &node->slots[i];
-            ret = castle_version_add(list_cdb,
-                                     slot->version_nr,
-                                     slot->parent,
-                                     slot->cdb,
-                                     slot->size);
-            if(ret) goto out; 
-            /* TODO should we hold the last_lock? (also make sure last_node
-               protected) */
-            if(VERSION_INVAL(castle_versions_last) ||
-               slot->version_nr > castle_versions_last)
-                castle_versions_last = slot->version_nr;
-        }
-        /* Save this node as potentially the last node. If it is, it should
-           not be full. */
-        BUG_ON(DISK_BLK_INVAL(node->next) && (node->used == node->capacity));
-        castle_versions_last_node_cdb = c2b->cdb;
-        castle_versions_last_node_unused = node->capacity - node->used;
-        list_cdb = node->next;
-        prev_c2b = c2b;
-    }
-out:    
-    if(c2b)
-    {
-        unlock_c2b(c2b);
-        put_c2b(c2b);
-    }
-    if(ret) 
-    {
-        printk("ERROR: Failed to read versions in!\n");
-        return ret;
-    }
-    ret = castle_versions_process(); 
-    if(ret)
-    {
-        printk("ERROR: Failed to init versions, %d!\n", ret);
-        return ret;
-    }
+    if(!castle_versions_mstore)
+        return -ENOMEM;
 
-    return ret;
+    iterator = castle_mstore_iterate(castle_versions_mstore);
+    if(!iterator)
+        return -EINVAL;
+
+    while(castle_mstore_iterator_has_next(iterator))
+    {
+        castle_mstore_iterator_next(iterator, &mstore_entry, &key);
+        v = castle_version_add(mstore_entry.version_nr, 
+                               mstore_entry.parent, 
+                               mstore_entry.cdb,
+                               mstore_entry.size);
+        if(VERSION_INVAL(castle_versions_last) || v->version > castle_versions_last)
+            castle_versions_last = v->version;
+        v->mstore_key = key;
+    }
+    castle_mstore_iterator_destroy(iterator);
+
+    return castle_versions_process(); 
 }
 
 /***** Init/fini functions *****/
@@ -917,7 +656,6 @@ int castle_versions_init(void)
 {
     int i, ret;
 
-    castle_versions_last = INVAL_VERSION;
     ret = -ENOMEM;
     castle_versions_cache = kmem_cache_create("castle_versions",
                                                sizeof(struct castle_version),

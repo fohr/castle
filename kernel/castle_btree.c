@@ -813,11 +813,10 @@ static void castle_btree_node_under_key_insert(c2_block_t *parent_c2b,
                              child_c2b->cdb);
 }
 
-static int castle_btree_new_root_create(c_bvec_t *c_bvec, btree_t type)
+static void castle_btree_new_root_create(c_bvec_t *c_bvec, btree_t type)
 {
     c2_block_t *c2b;
     struct castle_btree_node *node;
-    int ret;
     
     debug("Creating a new root node, while handling write to version: %d.\n",
             c_bvec->version);
@@ -829,23 +828,11 @@ static int castle_btree_new_root_create(c_bvec_t *c_bvec, btree_t type)
        no longer do that, because there will be a parent node). */
     debug("About to update version tree.\n");
     /* TODO: Check if we hold the version lock */
-    ret = castle_version_ftree_update(c_bvec->version, c2b->cdb);
-    /* If we failed to update the version tree, dealloc the root */
-    if(ret)
-    {
-        debug("Failed.\n");
-        /* TODO: dealloc the block, possibly clean c2b */
-        unlock_c2b(c2b);
-        put_c2b(c2b);
-        return ret;
-    }
-    debug("Succeeded.\n");
+    castle_version_ftree_update(c_bvec->version, c2b->cdb);
     /* If all succeeded save the new node as the parent in bvec */
     c_bvec->btree_parent_node = c2b;
     castle_version_ftree_unlock(c_bvec->version);
     clear_bit(CBV_ROOT_LOCKED_BIT, &c_bvec->flags);
-
-    return 0;
 }
 
 static int castle_btree_node_split(c_bvec_t *c_bvec)
@@ -912,36 +899,16 @@ static int castle_btree_node_split(c_bvec_t *c_bvec)
     new_root = 0;
     if(!c_bvec->btree_parent_node)
     {
-        int ret;
-        
         if(split_c2b)
         {
             debug("Creating new root node.\n");
-            ret = castle_btree_new_root_create(c_bvec, node->type);
+            castle_btree_new_root_create(c_bvec, node->type);
             new_root = 1;
         } else
         {
             debug("Effective node will be the new root node\n");
             BUG_ON(!eff_c2b);
-            ret = castle_version_ftree_update(version, eff_c2b->cdb);
-        }
-        /* If ret != 0, we failed to update (version -> root) mapping */ 
-        if(ret)
-        {
-            debug("Failed to update version->root mapping.\n");
-            /* Free the newly created nodes */
-            /* TODO: we should also free the blocks */
-            if(split_c2b)
-            {
-                unlock_c2b(split_c2b);
-                put_c2b(split_c2b);
-            }
-            if(eff_c2b)
-            {
-                unlock_c2b(eff_c2b);
-                put_c2b(eff_c2b);
-            }
-            return ret;
+            castle_version_ftree_update(version, eff_c2b->cdb);
         }
     }
 
