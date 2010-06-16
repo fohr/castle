@@ -210,10 +210,13 @@ int castle_fs_init(void)
     }
     cs_fs_sb = castle_fs_superblocks_get();
     BUG_ON(!cs_fs_sb);
-
     /* This will initialise the fs superblock of all the new devices */
     memcpy(cs_fs_sb, &fs_sb, sizeof(struct castle_fs_superblock));
     castle_fs_superblocks_put(cs_fs_sb, 1);
+
+    /* Post initialise freespace on all the slaves. */
+    castle_freespace_slaves_init(first);
+
     /* Read versions in */
     ret = castle_versions_read();
     if(ret) return -EINVAL;

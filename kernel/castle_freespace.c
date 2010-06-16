@@ -15,6 +15,8 @@
 #define debug(_f, _a...)  (printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
 #endif
 
+static struct castle_mstore *castle_block_cnts_mstore = NULL;
+
 #define FREESPACE_START_BLK     2
 c_disk_blk_t castle_freespace_slave_block_get(struct castle_slave *cs, version_t v, int size);
 
@@ -73,6 +75,11 @@ static int castle_freespace_hash_mod(struct castle_slave *cs,
             /* Check if there is an entry for this version already */ 
             if(cnt)
             {
+                c_mstore_key_t key = va_arg(vl, c_mstore_key_t);
+                /* Catch dropped mstore key updates */
+                BUG_ON(!MSTORE_KEY_INVAL(key) && MSTORE_KEY_INVAL(cnt->mstore_key));
+                BUG_ON( MSTORE_KEY_INVAL(key) && MSTORE_KEY_INVAL(cnt->mstore_key) &&
+                       !MSTORE_KEY_EQUAL(key, cnt->mstore_key));
                 va_end(vl);
                 return -EEXIST;
             }
@@ -90,8 +97,10 @@ static int castle_freespace_hash_mod(struct castle_slave *cs,
                 }
             }
             /* Init and insert */
-            cnt->version = version;
-            cnt->cnt = 0;
+            cnt->version    = version;
+            cnt->cnt        = 0;
+            cnt->mstore_key = va_arg(vl, c_mstore_key_t);
+            
             INIT_LIST_HEAD(&cnt->list);
             list_add(&cnt->list, h);
             break;
@@ -170,82 +179,21 @@ ssize_t castle_freespace_version_blocks_get(version_t version)
     return cnt;
 }
 
-static c2_block_t* castle_freespace_flist_alloc(struct castle_slave *cs,
-                                               c_disk_blk_t prev_flist_cdb)
-{
-    struct castle_flist_node *flist_node;
-    c_disk_blk_t cdb;
-    c2_block_t *c2b;
-
-    debug("\nAllocating a new block for flist.\n");
-    cdb = castle_freespace_slave_block_get(cs, 0, 1);
-    debug("Allocated (0x%x, 0x%x)\n", cdb.disk, cdb.block);
-    if(DISK_BLK_INVAL(cdb))
-        return NULL;
-
-    c2b = castle_cache_page_block_get(cdb);
-    lock_c2b(c2b);
-    set_c2b_uptodate(c2b);
-    flist_node = c2b_buffer(c2b);
-    flist_node->magic    = FLIST_NODE_MAGIC;
-    flist_node->version  = 0;
-    flist_node->capacity = FLIST_SLOTS;
-    flist_node->used     = -1;
-    flist_node->next     = INVAL_DISK_BLK;
-    flist_node->prev     = prev_flist_cdb;
-    dirty_c2b(c2b);
-    unlock_c2b(c2b);
-
-    return c2b;
-}
-
 static int castle_freespace_flist_extend(struct castle_slave *cs, version_t version)
 {
-    // TODO: locks?
-    struct castle_flist_node *flist_node;
-    struct castle_slave_superblock *sb;
-    c2_block_t *prev_c2b, *c2b; 
 
-    debug("Extending flist for version %d. Capacity=%d, used=%d\n", version,
-            cs->block_cnts.flist_capacity, cs->block_cnts.flist_used);
-    if(cs->block_cnts.flist_used >=
-       cs->block_cnts.flist_capacity - 1)
-    {
-        debug("====> Allocating a new node for flist.\n");
-        /* We are running out of space on the flist. */
-        prev_c2b = cs->block_cnts.last_flist_c2b;
-        /* Allocate a new node */
-        c2b = castle_freespace_flist_alloc(cs, prev_c2b->cdb);
-        /* Return early if could not allocate the block */
-        if(!c2b) return -EFBIG;
-        /* Update the existing last flist node */
-        lock_c2b(prev_c2b);
-        BUG_ON(!c2b_uptodate(prev_c2b));
-        flist_node = c2b_buffer(prev_c2b); 
-        flist_node->next = c2b->cdb;
-        dirty_c2b(prev_c2b);
-        unlock_c2b(prev_c2b);
-        put_c2b(prev_c2b);
-        /* Update the prev pointer in the superblock */
-        sb = castle_slave_superblock_get(cs);
-        sb->flist_prev = c2b->cdb;
-        /* Make the new node the last node */ 
-        cs->block_cnts.last_flist_c2b = c2b;
-        cs->block_cnts.flist_capacity += FLIST_SLOTS;
-        castle_slave_superblock_put(cs, 1);
-    }
-
-    cs->block_cnts.flist_used++;
-    BUG_ON(cs->block_cnts.flist_used > 
-           cs->block_cnts.flist_capacity);
 
     return 0;
 }
 
 int castle_freespace_version_add(version_t version)
 {
+    // TODO: locks?
+    struct castle_flist_entry flist_entry;
     struct list_head *l;
     int ret;
+
+    debug("Extending flist for version %d.\n", version);
 
     /* That has already been done */
     if(version == 0)
@@ -255,10 +203,14 @@ int castle_freespace_version_add(version_t version)
     {
         struct castle_slave *cs = list_entry(l, struct castle_slave, list);
 
-        ret = castle_freespace_hash_mod(cs, version, HASH_MOD_ADD);
+        memset(&flist_entry, 0, sizeof(flist_entry));
+        flist_entry.slave_uuid = cs->uuid;
+        flist_entry.version    = version;
+        flist_entry.blocks     = 0;
+    
+        ret = castle_freespace_hash_mod(cs, version, HASH_MOD_ADD, INVAL_MSTORE_KEY);
         if(ret == -EEXIST)
             continue;
-        if(ret) return ret;
         ret = castle_freespace_flist_extend(cs, version);
         if(ret) return ret;
     }
@@ -270,7 +222,7 @@ static void castle_freespace_new_slave_init(struct castle_slave *cs)
 {
     struct castle_slave_superblock *cs_sb;
     c_disk_blk_t freespace_cdb, last_cdb, bitmap_cdb;
-    c2_block_t *bitmap_c2b, *flist_c2b;
+    c2_block_t *bitmap_c2b;
     void * bitmap_buf;
     uint8_t *bitmap;
     int i;
@@ -280,7 +232,7 @@ static void castle_freespace_new_slave_init(struct castle_slave *cs)
 
     /* TODO: other versions may already exist. We need to ask versions.c for them
        ATM we don't support adding disks after initing the FS */
-    BUG_ON(castle_freespace_hash_mod(cs, 0, HASH_MOD_ADD)); 
+    BUG_ON(castle_freespace_hash_mod(cs, 0, HASH_MOD_ADD, INVAL_MSTORE_KEY)); 
 
     cs_sb = castle_slave_superblock_get(cs);
     BUG_ON(cs_sb->used != FREESPACE_START_BLK);
@@ -367,71 +319,10 @@ static void castle_freespace_new_slave_init(struct castle_slave *cs)
     dirty_c2b(bitmap_c2b);
     unlock_c2b(bitmap_c2b);
     put_c2b(bitmap_c2b);
-
-    /* Initialise the flist */
-    flist_c2b = castle_freespace_flist_alloc(cs, INVAL_DISK_BLK);
-    BUG_ON(!flist_c2b);
-    cs_sb = castle_slave_superblock_get(cs);
-    cs_sb->flist_next = flist_c2b->cdb;
-    cs_sb->flist_prev = flist_c2b->cdb;
-    castle_slave_superblock_put(cs, 1);
-    cs->block_cnts.last_flist_c2b = flist_c2b; 
-    cs->block_cnts.flist_capacity = FLIST_SLOTS;
-    cs->block_cnts.flist_used     = 1; /* One entry used for version 0 */
 }
 
 static void castle_freespace_old_slave_init(struct castle_slave *cs)
 {
-    struct castle_slave_superblock *cs_sb;
-    c_disk_blk_t flist_cdb, last_flist_cdb;
-    c2_block_t *flist_c2b;
-    struct castle_flist_node *flist_node;
-    int i;
-    
-    /* If the slave is an 'old' slave, the bitmap has already been
-       initialised. Also, the flist also exists. We need to read it */
-    cs_sb = castle_slave_superblock_get(cs);
-    flist_cdb = cs_sb->flist_next; 
-    last_flist_cdb = cs_sb->flist_prev;
-    castle_slave_superblock_put(cs, 0);
-        
-    cs->block_cnts.flist_used     = 0;
-    cs->block_cnts.flist_capacity = 0;
-
-    debug("First flist cdb=(0x%x, 0x%x)\n", flist_cdb.disk, flist_cdb.block);
-    while(!DISK_BLK_INVAL(flist_cdb))
-    {
-        flist_c2b = castle_cache_page_block_get(flist_cdb);
-        lock_c2b(flist_c2b);
-         // TODO proper error handling
-        if(!c2b_uptodate(flist_c2b))
-            BUG_ON(submit_c2b_sync(READ, flist_c2b));
-        flist_node = c2b_buffer(flist_c2b);
-        flist_cdb = flist_node->next;
-        if(flist_node->used > flist_node->capacity)
-        {
-            debug("Found flist_node with used=%x\n", flist_node->used);
-            flist_node->used = 0;
-        }
-        for(i=0; i<flist_node->used; i++)
-        {
-            version_t version = flist_node->slots[i].version;
-            block_t   blocks  = flist_node->slots[i].blocks;
-            debug("Reading: v->cnt = %d->%d\n", version, blocks);
-            // TODO proper error handling
-            BUG_ON(castle_freespace_hash_mod(cs, version, HASH_MOD_ADD));
-            BUG_ON(castle_freespace_hash_mod(cs, version, HASH_MOD_SET, blocks));
-        } 
-        cs->block_cnts.flist_used     += flist_node->used;
-        cs->block_cnts.flist_capacity += flist_node->capacity;
-        unlock_c2b(flist_c2b);
-
-        if(DISK_BLK_INVAL(flist_cdb))
-            cs->block_cnts.last_flist_c2b = flist_c2b;
-        else
-            put_c2b(flist_c2b);
-    }
-
 }
 
 void castle_freespace_slave_init(struct castle_slave *cs, int fresh)
@@ -447,6 +338,34 @@ void castle_freespace_slave_init(struct castle_slave *cs, int fresh)
     if(fresh)  castle_freespace_new_slave_init(cs);
     /* If not a new device, read the flist */
     if(!fresh) castle_freespace_old_slave_init(cs);
+}
+
+void castle_freespace_slaves_init(int fresh_fs)
+{
+    struct castle_mstore_iter* iterator;
+    struct castle_flist_entry entry;
+    struct castle_slave *cs;
+    c_mstore_key_t key;
+
+    /* Done during FS init time, read block counts from the mstore */
+    if(fresh_fs)
+    {
+        castle_block_cnts_mstore = 
+            castle_mstore_init(MSTORE_BLOCK_CNTS, sizeof(struct castle_flist_entry));
+        return;
+    } 
+    castle_block_cnts_mstore = 
+        castle_mstore_open(MSTORE_BLOCK_CNTS, sizeof(struct castle_flist_entry));
+    iterator = castle_mstore_iterate(castle_block_cnts_mstore);
+    while(castle_mstore_iterator_has_next(iterator))
+    {
+        castle_mstore_iterator_next(iterator, &entry, &key);
+        cs = castle_slave_find_by_uuid(entry.slave_uuid);
+        // TODO proper error handling
+        BUG_ON(castle_freespace_hash_mod(cs, entry.version, HASH_MOD_ADD, key));
+        BUG_ON(castle_freespace_hash_mod(cs, entry.version, HASH_MOD_SET, entry.blocks));
+    }
+    castle_mstore_iterator_destroy(iterator);
 }
 
 static int castle_freespace_bitmap_block_get(c2_block_t *bitmap_c2b, 
@@ -579,116 +498,6 @@ c_disk_blk_t castle_freespace_slave_block_get(struct castle_slave *slave, versio
     return INVAL_DISK_BLK;
 }
 
-#if 0
-c_disk_blk_t castle_freespace_slave_block_get(struct castle_slave *slave, version_t version, int size)
-{
-    struct castle_slave_superblock *sb = NULL;
-    c_disk_blk_t free_cdb, bitmap_cdb, first_bitmap_cdb;
-    volatile uint64_t *bitmap_buf, word, complement_word;
-    c2_block_t *bitmap_c2b;
-    block_t slave_size;
-    int idx, bit_idx, word_idx, word_max = (C_BLK_SIZE / sizeof(uint64_t));
-
-    // TODO: slave locks!
-    /* We've selected a disk to search for a new block on. Select bitmap block. */
-    sb = castle_slave_superblock_get(slave);
-    slave_size = sb->size;
-    
-    debug("Slave size=0x%x\n", slave_size);
-
-    free_cdb = (c_disk_blk_t){slave->uuid, slave->free_blk+1};
-    debug("Free block on the slave is: 0x%x\n", free_cdb.block);
-    word_idx = cdb_to_bitmap_off(free_cdb) / (sizeof(uint64_t) * 8);
-    debug("uint64_t offset is: 0x%x\n", i);
-    first_bitmap_cdb = bitmap_cdb = cdb_to_bitmap_cdb(free_cdb);
-    debug("first bitmap block: 0x%x\n", first_bitmap_cdb.block);
-    goto process_bitmap_cdb;
-
-next_bitmap_cdb:
-    debug("==> Selecting next bitmap block.\n");
-    debug("0x%x -> ", bitmap_cdb.block);
-    unlock_c2b(bitmap_c2b);
-    put_c2b(bitmap_c2b);
-    bitmap_cdb.block++;
-    if(bitmap_cdb.block > blk_to_bitmap_blk(slave_size-1))
-        bitmap_cdb.block = FREESPACE_START_BLK;
-    debug("0x%x\n", bitmap_cdb.block);
-    if(bitmap_cdb.block == first_bitmap_cdb.block)
-    {
-        debug("Checked all bitmap blocks. Going to the next slave.\n");
-        printk("Warning: Could not find a free block on slave(%d, 0x%x), used=%d\n",
-                slave->id, slave->uuid, sb->used);
-        castle_slave_superblock_put(slave, 0);
-        return INVAL_DISK_BLK;
-    }
-    word_idx=0;
-
-process_bitmap_cdb:
-    /* Find first non-zero uint64_t in the bitmap */
-    bitmap_c2b = castle_cache_page_block_get(bitmap_cdb);
-    lock_c2b(bitmap_c2b);
-    if(!c2b_uptodate(bitmap_c2b))
-        BUG_ON(submit_c2b_sync(READ, bitmap_c2b));
-    bitmap_buf = c2b_buffer(bitmap_c2b);
-
-    for(; word_idx < word_max; word_idx++)
-        if(bitmap_buf[word_idx] != 0)
-            break;
-    debug("First non-zero bitmap block word is at word_idx=%d (word_max=%d)\n",
-        word_idx, word_max);
-
-    /* If none of the words were non-zero in the bitmap, goto next bitmap
-       block straight away */
-    if(word >= word_max) 
-        goto next_bitmap_cdb;
-
-    /* Find the first set bit in the first non-zero bitmap word */
-    /* We are assuming little endian here */
-    word = bitmap_buf[word_idx];
-    debug("The non-zero bitmap block word is 0x%.16llx\n", word);
-    complement_word = (~word) + 1UL;
-    debug("2's completement is               0x%.16llx\n", complement_word);
-    word = word & complement_word;
-    debug("And is                            0x%.16llx\n", word);
-    debug("The set bit is at position        %d\n", fls64(word)-1);
-    bit_idx = word_idx * sizeof(uint64_t) * 8 + fls64(word) - 1;
-    debug("Found set bit at offset=%d\n", bit_idx);
-    BUG_ON(test_bit(bit_idx, bitmap_buf) == 0);
-    /* Check if we have at least 'size' set bits after 'bit_idx' */
-    /* We might be looking beyond the end of this page */
-    if((bit_idx + size > max_word * sizeof(uint64_t) * 8) ||                /* End of bitmap page */
-       (bitmap_cdb_to_cdb(bitmap_cdb).block + bit_idx + size > slave_size)) /* End of device      */
-        goto next_bitmap_cdb;
-    for(idx = 0; idx < size; idx++)
-    {
-        if(!test_bit(bit_idx + idx, bitmap_buff))
-        {
-            bit_idx += idx + 1;
-            goto TODO;
-        }
-    
-            /* This might be past the end of the block device, check for that */
-    free_cdb.block = bitmap_cdb_to_cdb(bitmap_cdb).block + i;
-    debug("Free block corresponding to this bit is: 0x%x (slave_size=0x%x)\n", free_cdb.block, slave_size);
-    if(free_cdb.block >= slave_size)
-        goto next_bitmap_cdb;
-    /* If we got here we found a non-set bit, < size of the slave device */
-    clear_bit(i, bitmap_buf);
-    dirty_c2b(bitmap_c2b);
-    unlock_c2b(bitmap_c2b);
-    put_c2b(bitmap_c2b);
-    /* Book-keeping stuff */
-    debug("Free_block is (0x%x, 0x%x), bookkeeping that\n", free_cdb.disk, free_cdb.block);
-    slave->free_blk = free_cdb.block;
-    castle_freespace_hash_mod(slave, version, HASH_MOD_INC);
-    sb->used++;
-    castle_slave_superblock_put(slave, 1);
-
-    return free_cdb;
-}
-
-#endif
-
 c_disk_blk_t castle_freespace_block_get(version_t version, int size)
 {
     static struct castle_slave *last_slave = NULL;
@@ -787,18 +596,14 @@ void castle_freespace_block_free(c_disk_blk_t cdb, version_t version, int size)
 
 int castle_freespace_init(void)
 {
-    /* Initialisation is done when sleves are initialised */
+    /* Initialisation is done when slaves are initialised */
     return 0; 
 }
 
 void castle_freespace_fini(void)
 {
-    struct castle_slave_superblock *cs_sb;
     struct castle_slave_block_cnt *cnt;
-    struct castle_flist_node *flist_node;
     struct list_head *l, *h, *ht;
-    c_disk_blk_t cdb;
-    c2_block_t *c2b;
     int i;
 
     /* Write the version->count maps for each slave */
@@ -806,56 +611,31 @@ void castle_freespace_fini(void)
     {
         struct castle_slave *cs = list_entry(l, struct castle_slave, list);
 
-        /* Drop the buffer for last_flist_c2b */
-        put_c2b(cs->block_cnts.last_flist_c2b);
-
-        cs_sb = castle_slave_superblock_get(cs);
-        cdb = cs_sb->flist_next;
-        castle_slave_superblock_put(cs, 0);
-
-        debug("Writing version->cnts map for slave=%d, cdb=(0x%x, 0x%x)\n",
-                cs->id, cdb.disk, cdb.block);
-        c2b = castle_cache_page_block_get(cdb);
-        lock_c2b(c2b);
-        if(!c2b_uptodate(c2b))
-            BUG_ON(submit_c2b_sync(READ, c2b));
-        flist_node = c2b_buffer(c2b);
-        flist_node->used = 0;
         for(i=0; i<BLOCKS_HASH_SIZE; i++)
         {
             list_for_each_safe(h, ht, &cs->block_cnts.hash[i])
             {
+                struct castle_flist_entry entry;
+
                 cnt = list_entry(h, struct castle_slave_block_cnt, list);
                 list_del(h);
-                if(flist_node->used >= flist_node->capacity)
-                {
-                    /* Move on to the next node */
-                    cdb = flist_node->next;
-                    dirty_c2b(c2b);
-                    unlock_c2b(c2b);
-                    put_c2b(c2b);
 
-                    c2b = castle_cache_page_block_get(cdb);
-                    debug("Next flist block (0x%x, 0x%x).\n", cdb.disk, cdb.block);
-                    lock_c2b(c2b);
-                    if(!c2b_uptodate(c2b))
-                        BUG_ON(submit_c2b_sync(READ, c2b));
-                    flist_node = c2b_buffer(c2b);
-                    flist_node->used = 0;
-                }
-                debug("Writing out (version=%d, blocks=%d)\n", cnt->version, cnt->cnt);
-                debug("Idx=%d\n", flist_node->used);
-                flist_node->slots[flist_node->used].version = cnt->version; 
-                flist_node->slots[flist_node->used].blocks  = cnt->cnt; 
-                flist_node->used++;
+                entry.slave_uuid = cs->uuid;
+                entry.version    = cnt->version;
+                entry.blocks     = cnt->cnt;
+                if(MSTORE_KEY_INVAL(cnt->mstore_key))
+                    cnt->mstore_key = 
+                        castle_mstore_entry_insert(castle_block_cnts_mstore, &entry);
+                else 
+                    castle_mstore_entry_update(castle_block_cnts_mstore,
+                                               cnt->mstore_key,
+                                               &entry);
+                
                 if(cnt->version != 0) 
                     kfree(cnt); 
             } 
         } 
-        dirty_c2b(c2b);
-        unlock_c2b(c2b);
-        put_c2b(c2b);
-    }    
+    }
 }
 
 #if 0

@@ -40,8 +40,6 @@ struct castle_slave_superblock {
     uint32_t     used;
     uint32_t     size; /* In blocks */
 	uint32_t     flags; 
-    c_disk_blk_t flist_next;
-    c_disk_blk_t flist_prev;
 } PACKED;
 
 #define CASTLE_FS_MAGIC1        (0x19731121)
@@ -55,6 +53,41 @@ struct castle_fs_superblock {
     uint32_t     peper;
     c_disk_blk_t mstore[16];
 } PACKED;
+
+
+typedef uint8_t c_mstore_id_t;
+
+#define INVAL_MSTORE_KEY             ((c_mstore_key_t){{0,0},0})
+#define MSTORE_KEY_INVAL(_k)       (((_k).cdb.disk == 0) && ((_k).cdb.block == 0) && ((_k).idx == 0))
+#define MSTORE_KEY_EQUAL(_k1, _k2) (((_k1).cdb.disk  == (_k2).cdb.disk)  && \
+                                    ((_k1).cdb.block == (_k2).cdb.block) && \
+                                    ((_k1).idx       == (_k2).idx))
+typedef struct castle_mstore_key {
+    c_disk_blk_t cdb;
+    int          idx;
+} c_mstore_key_t;
+
+typedef struct castle_mstore {
+    c_mstore_id_t              store_id;             /* Id of the store, ptr in fs_sb    */
+    size_t                     entry_size;           /* Size of the entries stored       */
+    struct semaphore           mutex;                /* Mutex which protects the         */
+                                                     /*  last_node_* variables           */
+    c_disk_blk_t               last_node_cdb;        /* Tail of the list, has at least   */
+                                                     /* one unused entry in it           */
+    int                        last_node_unused;     /* Number of unused entries in the  */
+                                                     /* last node                        */
+} c_mstore_t;
+
+typedef struct castle_mstore_iter {
+    struct castle_mstore      *store;                /* Store we are iterating over      */
+    struct castle_cache_block *node_c2b;             /* Currently accessed node (locked) */
+    int                        node_idx;             /* Next entry index in current node */ 
+} c_mstore_iter_t;
+
+enum {
+    MSTORE_VERSIONS_ID,
+    MSTORE_BLOCK_CNTS,
+}; 
 
 
 #define MTREE_TYPE                 0x33
@@ -133,11 +166,13 @@ struct castle_mlist_node {
     uint8_t      payload[0];
 } PACKED;
 
-struct castle_flist_slot {
-    version_t    version;
-    block_t      blocks;
+struct castle_flist_entry {
+    uint32_t        slave_uuid;
+    version_t       version;
+    block_t         blocks;
 } PACKED;
 
+#if 0
 #define NODE_HEADER           0x180
 #define FLIST_NODE_MAGIC  0x0000faca
 #define FLIST_SLOTS  ((PAGE_SIZE - NODE_HEADER)/sizeof(struct castle_flist_slot))
@@ -151,6 +186,7 @@ struct castle_flist_node {
     uint8_t __pad[NODE_HEADER - 32];
     struct castle_flist_slot slots[FLIST_SLOTS];
 } PACKED;
+#endif
 
 /* IO related structures */
 struct castle_bio_vec;
@@ -250,51 +286,19 @@ typedef struct castle_iterator {
 } c_iter_t;
 
 
-typedef uint8_t c_mstore_id_t;
-
-typedef struct castle_mstore_key {
-    c_disk_blk_t cdb;
-    int          idx;
-} c_mstore_key_t;
-
-typedef struct castle_mstore {
-    c_mstore_id_t              store_id;             /* Id of the store, ptr in fs_sb    */
-    size_t                     entry_size;           /* Size of the entries stored       */
-    struct semaphore           mutex;                /* Mutex which protects the         */
-                                                     /*  last_node_* variables           */
-    c_disk_blk_t               last_node_cdb;        /* Tail of the list, has at least   */
-                                                     /* one unused entry in it           */
-    int                        last_node_unused;     /* Number of unused entries in the  */
-                                                     /* last node                        */
-} c_mstore_t;
-
-typedef struct castle_mstore_iter {
-    struct castle_mstore      *store;                /* Store we are iterating over      */
-    struct castle_cache_block *node_c2b;             /* Currently accessed node (locked) */
-    int                        node_idx;             /* Next entry index in current node */ 
-} c_mstore_iter_t;
-
-enum {
-    MSTORE_VERSIONS_ID,
-}; 
-
-
 #define BLOCKS_HASH_SIZE        (100)
 struct castle_slave_block_cnt
 {
-    version_t version;
-    block_t cnt;
+    version_t        version;
+    block_t          cnt;
     struct list_head list;
+    c_mstore_key_t   mstore_key;
 };
 
 struct castle_slave_block_cnts 
 {
     struct list_head hash[BLOCKS_HASH_SIZE];
     struct castle_slave_block_cnt metadata_cnt;  /* Count for version 0 (metadata) */
-    struct castle_cache_block *last_flist_c2b;   /* Buffer for the last flist node.
-                                             `      One ref, unlocked. */
-    uint32_t flist_capacity;
-    uint32_t flist_used;
 };
 
 /* First class structures */

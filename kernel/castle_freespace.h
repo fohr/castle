@@ -2,6 +2,7 @@
 #define __CASTLE_FREESPACE_H__
 
 void         castle_freespace_slave_init               (struct castle_slave *cs, int fresh);
+void         castle_freespace_slaves_init              (int fresh_fs);
 c_disk_blk_t castle_freespace_slave_block_get          (struct castle_slave *cs, version_t version, int size);
 c_disk_blk_t castle_freespace_block_get                (version_t version, int size);
 void         castle_freespace_block_free               (c_disk_blk_t cdb, version_t version, int size);
