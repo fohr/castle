@@ -1,8 +1,3 @@
-/* TODOs:
-   Locking & concurrency needs to be worked out here 
-   - what happens when someone clones a version that's currently attached (this should fail)
- */
-
 #include <linux/module.h>
 #include <linux/workqueue.h> 
 #include <linux/list.h>
@@ -43,7 +38,7 @@ static c_mstore_t        *castle_versions_mstore = NULL;
 #define CV_ATTACHED_BIT           (1)
 #define CV_ATTACHED_MASK          (1 << CV_ATTACHED_BIT)
 #define CV_SNAP_BIT               (2)
-#define CV_SNAP_MASK              (1 << CV_ATTACHED_BIT)
+#define CV_SNAP_MASK              (1 << CV_SNAP_BIT)
 #define CV_FTREE_LOCKED_BIT       (3)
 #define CV_FTREE_LOCKED_MASK      (1 << CV_FTREE_LOCKED_BIT)
 struct castle_version {
@@ -104,6 +99,19 @@ static struct castle_version* __castle_versions_hash_get(version_t version)
 
     return NULL;
 } 
+
+static struct castle_version* castle_versions_hash_get(version_t version)
+{
+    struct castle_version *v;
+    unsigned long flags;
+
+    spin_lock_irqsave(&castle_versions_hash_lock, flags);
+    v = __castle_versions_hash_get(version);
+    spin_unlock_irqrestore(&castle_versions_hash_lock, flags);
+
+    return v;
+}
+
 static void castle_versions_hash_destroy(void)
 {
     struct list_head *l, *t;
@@ -125,10 +133,8 @@ static void castle_versions_hash_destroy(void)
 
 static void castle_versions_init_add(struct castle_version *v)
 {
-    spin_lock_irq(&castle_versions_hash_lock);
     v->flags &= (~CV_INITED_MASK);
     list_add(&v->init_list, &castle_versions_init_list);
-    spin_unlock_irq(&castle_versions_hash_lock);
 }
 
 
@@ -141,7 +147,7 @@ static struct castle_version* castle_version_add(version_t version,
     
     v = kmem_cache_alloc(castle_versions_cache, GFP_KERNEL);
     if(!v) 
-        goto out; 
+        goto err_out; 
     if(castle_freespace_version_add(version)) 
         goto out_dealloc; 
     
@@ -159,7 +165,7 @@ static struct castle_version* castle_version_add(version_t version,
     INIT_LIST_HEAD(&v->hash_list);
     INIT_LIST_HEAD(&v->init_list);
 
-    /* Initialise version 0 fully, defer all other versions by 
+    /* Initialise version 0 fully, defer full init of all other versions by 
        putting it on the init list. */ 
     if(v->version == 0)
     {
@@ -184,8 +190,8 @@ static struct castle_version* castle_version_add(version_t version,
 
 out_dealloc:
     kmem_cache_free(castle_versions_cache, v);
-out:
-    return v;
+err_out:
+    return NULL;
 }
 
 /* TODO who should handle errors in writeback? */
@@ -212,9 +218,7 @@ void castle_version_ftree_update(version_t version, c_disk_blk_t cdb)
 {
     struct castle_version *v;
 
-    spin_lock_irq(&castle_versions_hash_lock);
-    v = __castle_versions_hash_get(version);
-    spin_unlock_irq(&castle_versions_hash_lock);
+    v = castle_versions_hash_get(version);
     BUG_ON(!v);
 
     /* Test if the lock is taken out (check not 100% since it 
@@ -230,42 +234,43 @@ static struct castle_version* castle_version_new_create(int snap_or_clone,
                                                         version_t parent,
                                                         uint32_t size)
 {
-    static DEFINE_SPINLOCK(castle_next_version_lock);
     struct castle_version *v;
     c_disk_blk_t ftree_root;
     uint32_t parent_size;
     version_t version;
 
     /* Read ftree root from the parent (also, make sure parent exists) */
-    spin_lock_irq(&castle_versions_hash_lock);
-    v = __castle_versions_hash_get(parent);
+    v = castle_versions_hash_get(parent);
     if(!v)
     {
         printk("Asked to create a child of non-existant parent: %d\n",
             parent);
-        spin_unlock_irq(&castle_versions_hash_lock);
         return NULL;
     }
-    spin_unlock_irq(&castle_versions_hash_lock);
     
-    /* Lock the root, to make sure that there are no ongoing writes 
-       which may split the root node. New writes will not be accepted
-       until we are done, because we are working under device lock.
-       If we are doing clones rather than snapshots (and there is no
-       locked device), there won't be any IO for the version either.
-       Finally, because control commands are serialised, if someone
-       tries to attach the version while we are cloning it, he'll have
-       to wait for us to finish. */
+    /* Be careful about reading the ftree_root.
+       If we are creating a clone, the parent is not attached (by definition)
+       and therefore the root will not change. Attach/detach races are 
+       prevented by control command serialisation.
+
+       If we are creating a snapshot, we must make sure that there are no
+       ongoing writes, because they could key-split the root node (version 
+       splits would be fine).
+
+       We prevent this from happening by locking the ftree first. This 
+       guarantees that any ongoing writes have already released the root node.
+       We can then release the ftree lock straight away, beacuse we are
+       doing snapshots under device lock. Therefore, no new IOs will be
+       accepted before we release it (by this time the new vesion will 
+       be saved to castle_device structure) */ 
     ftree_root = castle_version_ftree_lock(parent);
     castle_version_ftree_unlock(parent);
     parent_size = v->size;
 
     /* Allocate a new version number. */
-    spin_lock(&castle_next_version_lock);
     BUG_ON(VERSION_INVAL(castle_versions_last));
     version = ++castle_versions_last;
     BUG_ON(VERSION_INVAL(castle_versions_last));
-    spin_unlock(&castle_next_version_lock);
 
     /* Try to add it to the hash */
     v = castle_version_add(version, parent, ftree_root, size);
@@ -300,12 +305,6 @@ static struct castle_version* castle_version_new_create(int snap_or_clone,
     return v;
 }
 
-/* BIG TODO:
-   1. Is it possible for the ftree_root for the parent version to
-      split after it gets read here?
-   2. If so, is it fine?
-   3. If not, how to prevent it?
- */
 version_t castle_version_new(int snap_or_clone,
                              version_t parent,
                              uint32_t size)
@@ -352,9 +351,7 @@ c_disk_blk_t castle_version_ftree_lock(version_t version)
     /* This function may sleep on the ftree lock */
 	might_sleep();
 
-    spin_lock_irq(&castle_versions_hash_lock);
-    v = __castle_versions_hash_get(version);
-    spin_unlock_irq(&castle_versions_hash_lock);
+    v = castle_versions_hash_get(version);
 
     if(!v) return INVAL_DISK_BLK;
 
@@ -374,56 +371,59 @@ c_disk_blk_t castle_version_ftree_lock(version_t version)
 
 void castle_version_ftree_unlock(version_t version)
 {
-    unsigned long flags;
     struct castle_version *v;
 
-    spin_lock_irqsave(&castle_versions_hash_lock, flags);
-    v = __castle_versions_hash_get(version);
-    spin_unlock_irqrestore(&castle_versions_hash_lock, flags);
+    v = castle_versions_hash_get(version);
     BUG_ON(!v);
 
     /* Clear the bit, wake up anyone waiting */
 	smp_mb__before_clear_bit();
-    /* TODO: Check what happens to the locks if a new snapshot is being created */
     BUG_ON(!test_bit(CV_FTREE_LOCKED_BIT, &v->flags));
 	clear_bit(CV_FTREE_LOCKED_BIT, &v->flags);
 	smp_mb__after_clear_bit();
 	wake_up_bit(&v->flags, CV_FTREE_LOCKED_BIT);
 }
 
-int castle_version_snap_get(version_t version, 
-                            version_t *parent,
-                            uint32_t *size,
-                            int *leaf)
+int castle_version_attach(version_t version) 
 {
     struct castle_version *v;
-    int ret = -EINVAL;
 
-    spin_lock_irq(&castle_versions_hash_lock);
-    v = __castle_versions_hash_get(version);
-    if(v) 
-    {
-        ret = 0;
-        if(size)   *size =  v->size;
-        if(parent) *parent = v->parent ? v->parent->version : 0;
-        if(leaf)   *leaf = (v->first_child == NULL);
-        if(test_and_set_bit(CV_ATTACHED_BIT, &v->flags))
-            ret = -EAGAIN;
-    }
-    spin_unlock_irq(&castle_versions_hash_lock);
+    v = castle_versions_hash_get(version);
+    if(!v)
+        return -EINVAL;
 
-    return ret;
+    if(test_and_set_bit(CV_ATTACHED_BIT, &v->flags))
+        return -EAGAIN;
+
+    return 0;
+}
+
+int castle_version_read(version_t version, 
+                        version_t *parent,
+                        uint32_t *size,
+                        int *leaf)
+{
+    struct castle_version *v;
+
+    v = castle_versions_hash_get(version);
+    if(!v)
+        return -EINVAL;
+    
+    /* Set these even if we fail to set the attached bit */
+    if(size)   *size   =  v->size;
+    if(parent) *parent =  v->parent ? v->parent->version : 0;
+    if(leaf)   *leaf   = (v->first_child == NULL);
+
+    return 0;
 } 
 
-void castle_version_snap_put(version_t version)
+void castle_version_detach(version_t version)
 {
     struct castle_version *v;
 
-    spin_lock_irq(&castle_versions_hash_lock);
-    v = __castle_versions_hash_get(version);
+    v = castle_versions_hash_get(version);
     BUG_ON(!v);
     BUG_ON(!test_and_clear_bit(CV_ATTACHED_BIT, &v->flags));
-    spin_unlock_irq(&castle_versions_hash_lock);
 }
 
 static int castle_versions_process(void)
@@ -694,7 +694,6 @@ err_out:
 
 void castle_versions_fini(void)
 {
-    // TODO: there seem to be a bug when a snapshot failed. kmem cache cannot be destroyed.
     castle_versions_hash_destroy();
     kmem_cache_destroy(castle_versions_cache);
     kfree(castle_versions_hash);

@@ -573,18 +573,12 @@ struct castle_region* castle_region_create(uint32_t slave_uuid, version_t versio
         goto err_out;
     }
     
-    /* To check if a good snapshot version, try and
-       get the snapshot.  If we do get it, then we may
-       take the 'lock' out on it.  If we do, then
-       release the 'lock' */
-    err = castle_version_snap_get(version, NULL, NULL, NULL);
-    if(err == -EINVAL)
+    err = castle_version_read(version, NULL, NULL, NULL);
+    if(err)
     {
         printk("Invalid version '%d'!\n", version);
         goto err_out;
     }
-    else if(err == 0)
-        castle_version_snap_put(version);
     
     if(!(region = kzalloc(sizeof(struct castle_region), GFP_KERNEL)))
         goto err_out;
@@ -1030,7 +1024,7 @@ void castle_device_free(struct castle_device *cd)
     put_disk(cd->gd);
     list_del(&cd->list);
     kfree(cd);
-    castle_version_snap_put(version);
+    castle_version_detach(version);
 }
 
 struct castle_device* castle_device_init(version_t version)
@@ -1043,8 +1037,9 @@ struct castle_device* castle_device_init(version_t version)
     int leaf;
     int err;
 
-    if(castle_version_snap_get(version, NULL, &size, &leaf))
+    if(castle_version_attach(version))
         goto error_out;
+    BUG_ON(castle_version_read(version, NULL, &size, &leaf));
 
     dev = kmalloc(sizeof(struct castle_device), GFP_KERNEL); 
     if(!dev)

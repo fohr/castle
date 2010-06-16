@@ -44,8 +44,8 @@ static ssize_t versions_list_show(struct kobject *kobj,
     int leaf;
     int ret;
 
-    ret = castle_version_snap_get(v->version, &parent, &size, &leaf);
-    if((ret == 0) || (ret == -EAGAIN))
+    ret = castle_version_read(v->version, &parent, &size, &leaf);
+    if(ret == 0)
     {
         phys_size = castle_freespace_version_blocks_get(v->version);
         len = sprintf(buf,
@@ -59,8 +59,6 @@ static ssize_t versions_list_show(struct kobject *kobj,
                  size, 
                  phys_size,
                  leaf);
-        /* Put the version, if we 'attached' it */
-        if(ret == 0) castle_version_snap_put(v->version);
 
         return len;
     }

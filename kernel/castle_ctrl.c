@@ -139,11 +139,11 @@ static void castle_control_snapshot(uint32_t dev, int *ret, version_t *version)
     else
     {
         /* Attach the new version */
-        castle_version_snap_get(ver, NULL, NULL, NULL);
+        BUG_ON(castle_version_attach(ver));
         /* Change the version associated with the device */
         cd->version    = ver;
         /* Release the old version */
-        castle_version_snap_put(old_version);
+        castle_version_detach(old_version);
         *version = ver;
         *ret     = 0;
     }
@@ -412,6 +412,7 @@ int castle_control_packet_process(struct sk_buff *skb, void *reply, int *len_p)
     if(skb->len < 4)
         return -EBADMSG;
 
+    down(&castle_control_lock);
     ctrl_op = SKB_L_GET(skb);
     switch(ctrl_op)
     {
@@ -420,7 +421,7 @@ int castle_control_packet_process(struct sk_buff *skb, void *reply, int *len_p)
             int ret;
             slave_uuid_t id;
 
-            if(skb->len != 4) return -EBADMSG;
+            if(skb->len != 4) goto bad_msg;
             castle_control_claim(SKB_L_GET(skb), &ret, &id);
             castle_control_reply(reply32, 
                                  len_p, 
@@ -434,7 +435,7 @@ int castle_control_packet_process(struct sk_buff *skb, void *reply, int *len_p)
             int ret/*, i*/;
             int len_d;
 
-            if(skb->len != 4) return -EBADMSG;
+            if(skb->len != 4) goto bad_msg;
             castle_control_release(SKB_L_GET(skb), &ret); 
             castle_control_reply(reply32,
                                  &len_d,
@@ -450,7 +451,7 @@ int castle_control_packet_process(struct sk_buff *skb, void *reply, int *len_p)
             int ret;
             uint32_t dev;
 
-            if(skb->len != 4) return -EBADMSG;
+            if(skb->len != 4) goto bad_msg;
             castle_control_attach(SKB_L_GET(skb), 
                                   &ret, 
                                   &dev);
@@ -465,7 +466,7 @@ int castle_control_packet_process(struct sk_buff *skb, void *reply, int *len_p)
         {
             int ret;
 
-            if(skb->len != 4) return -EBADMSG;
+            if(skb->len != 4) goto bad_msg;
             castle_control_detach(SKB_L_GET(skb), &ret); 
             castle_control_reply(reply32,
                                  len_p,
@@ -479,7 +480,7 @@ int castle_control_packet_process(struct sk_buff *skb, void *reply, int *len_p)
             int ret;
             version_t version;
 
-            if(skb->len != 8) return -EBADMSG;
+            if(skb->len != 8) goto bad_msg;
             castle_control_create(SKB_LL_GET(skb), 
                                   &ret, 
                                   &version);
@@ -495,7 +496,7 @@ int castle_control_packet_process(struct sk_buff *skb, void *reply, int *len_p)
             int ret;
             version_t version;
 
-            if(skb->len != 4) return -EBADMSG;
+            if(skb->len != 4) goto bad_msg;
             castle_control_clone(SKB_L_GET(skb),
                                  &ret,
                                  &version); 
@@ -511,7 +512,7 @@ int castle_control_packet_process(struct sk_buff *skb, void *reply, int *len_p)
             int ret;
             version_t version;
             
-            if(skb->len != 4) return -EBADMSG;
+            if(skb->len != 4) goto bad_msg;
             castle_control_snapshot(SKB_L_GET(skb), 
                                     &ret, 
                                     &version);
@@ -526,7 +527,7 @@ int castle_control_packet_process(struct sk_buff *skb, void *reply, int *len_p)
         {
             int ret;
             
-            if(skb->len != 0) return -EBADMSG;
+            if(skb->len != 0) goto bad_msg;
             castle_control_fs_init(&ret);
             castle_control_reply(reply32,
                                  len_p,
@@ -540,7 +541,7 @@ int castle_control_packet_process(struct sk_buff *skb, void *reply, int *len_p)
             int ret;
             region_id_t region;
 
-            if(skb->len != 16) return -EBADMSG;
+            if(skb->len != 16) goto bad_msg;
             castle_control_region_create(SKB_L_GET(skb),
                                          SKB_L_GET(skb),  
                                          SKB_L_GET(skb),
@@ -558,7 +559,7 @@ int castle_control_packet_process(struct sk_buff *skb, void *reply, int *len_p)
         {
             int ret;
 
-            if(skb->len != 4) return -EBADMSG;
+            if(skb->len != 4) goto bad_msg;
             castle_control_region_destroy(SKB_L_GET(skb), 
                                           &ret);
             castle_control_reply(reply32,
@@ -573,7 +574,7 @@ int castle_control_packet_process(struct sk_buff *skb, void *reply, int *len_p)
             int ret;
             transfer_id_t transfer;
 
-            if(skb->len != 8) return -EBADMSG;
+            if(skb->len != 8) goto bad_msg;
             castle_control_transfer_create(SKB_L_GET(skb),
                                            SKB_L_GET(skb),
                                            &ret,
@@ -589,7 +590,7 @@ int castle_control_packet_process(struct sk_buff *skb, void *reply, int *len_p)
         {
             int ret;
 
-            if(skb->len != 4) return -EBADMSG;
+            if(skb->len != 4) goto bad_msg;
             castle_control_transfer_destroy(SKB_L_GET(skb),
                                             &ret);
             castle_control_reply(reply32,
@@ -604,7 +605,7 @@ int castle_control_packet_process(struct sk_buff *skb, void *reply, int *len_p)
             int ret;
             collection_id_t collection;
 
-            if(skb->len < 8) return -EBADMSG;
+            if(skb->len < 8) goto bad_msg;
             castle_control_collection_attach(SKB_L_GET(skb),
                                              SKB_STR_GET(skb, 128),
                                              &ret,
@@ -620,7 +621,7 @@ int castle_control_packet_process(struct sk_buff *skb, void *reply, int *len_p)
         {
             int ret;
             
-            if(skb->len != 4) return -EBADMSG;
+            if(skb->len != 4) goto bad_msg;
             castle_control_collection_detach(SKB_L_GET(skb),
                                              &ret);
             castle_control_reply(reply32,
@@ -635,7 +636,7 @@ int castle_control_packet_process(struct sk_buff *skb, void *reply, int *len_p)
             int ret;
             version_t version;
 
-            if(skb->len != 4) return -EBADMSG;
+            if(skb->len != 4) goto bad_msg;
             castle_control_collection_snapshot(SKB_L_GET(skb),
                                                &ret,
                                                &version);
@@ -647,8 +648,14 @@ int castle_control_packet_process(struct sk_buff *skb, void *reply, int *len_p)
             break;
         }
     }
+    up(&castle_control_lock);
 
     return 0;
+
+bad_msg:
+    up(&castle_control_lock);
+
+    return -EBADMSG;
 }
 
 

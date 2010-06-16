@@ -198,18 +198,12 @@ struct castle_transfer* castle_transfer_create(version_t version, int direction,
 
     debug("castle_transfer_create(version=%d, direction=%d)\n", version, direction);
 
-    /* To check if a good snapshot version, try and
-       get the snapshot.  If we do get it, then we may
-       take the 'lock' out on it.  If we do, then
-       release the 'lock' */
-    err = castle_version_snap_get(version, NULL, NULL, NULL);
-    if(err == -EINVAL)
+    err = castle_version_read(version, NULL, NULL, NULL);
+    if(err)
     {
         debug("Invalid version '%d'!\n", version);
         goto err_out;
     }
-    else if(err == 0)
-        castle_version_snap_put(version);
 
     if(!(transfer = kzalloc(sizeof(struct castle_transfer), GFP_KERNEL)))
     {
