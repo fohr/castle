@@ -34,9 +34,18 @@ c_disk_blk_t castle_freespace_slave_block_get(struct castle_slave *cs, version_t
 #define HASH_MOD_SET     (3)
 #define HASH_MOD_ADD     (4)
 #define HASH_MOD_REM     (5)
-static int castle_freespace_hash_mod(struct castle_slave *cs,
-                                     version_t version,
-                                     int mod, ...)
+/* Block count hashtable is protected with the slave superblock lock */
+#define castle_freespace_hash_mod(_cs, _ver, _mod, _args...)           \
+    ({  int _ret;                                                      \
+        castle_slave_superblock_get(_cs);                              \
+        _ret = __castle_freespace_hash_mod(_cs, _ver, _mod, ##_args);  \
+        castle_slave_superblock_put(_cs, 0);                           \
+        _ret;                                                          \
+    })
+static int __castle_freespace_hash_mod(struct castle_slave *cs,
+                                       version_t version,
+                                       int mod, ...)
+/* Hash modifications are protected by castle_slave superblock lock */
 {
     int hash_idx = (version % BLOCKS_HASH_SIZE);
     struct list_head *i, *h = &cs->block_cnts.hash[hash_idx];
@@ -128,6 +137,8 @@ ssize_t castle_freespace_summary_get(struct castle_slave *cs, char *buf, int ver
 
     // TODO we currently assume here we never do delete! version numbers must be contig
 
+    /* Superblock lock is used to protect the hash-table */
+    castle_slave_superblock_get(cs);
     for(i=0; i<BLOCKS_HASH_SIZE; i++)
     {
         list_for_each(l, &cs->block_cnts.hash[i])
@@ -143,6 +154,7 @@ ssize_t castle_freespace_summary_get(struct castle_slave *cs, char *buf, int ver
             offset += sprintf((buf + offset), "0x%x: %d\n", cnt->version, cnt->cnt); 
         }
     }
+    castle_slave_superblock_put(cs, 0);
 
     return offset;
 }
@@ -153,12 +165,14 @@ ssize_t castle_freespace_version_slave_blocks_get(struct castle_slave *cs, versi
     struct list_head *i, *h = &cs->block_cnts.hash[hash_idx];
     struct castle_slave_block_cnt *cnt = NULL;
     
+    castle_slave_superblock_get(cs);
     list_for_each(i, h)
     {
         cnt = list_entry(i, struct castle_slave_block_cnt, list);
         if(cnt->version == version)
             break;
     }
+    castle_slave_superblock_put(cs, 0);
     BUG_ON(!cnt || (cnt->version != version));
     
     return cnt->cnt;
@@ -179,16 +193,8 @@ ssize_t castle_freespace_version_blocks_get(version_t version)
     return cnt;
 }
 
-static int castle_freespace_flist_extend(struct castle_slave *cs, version_t version)
-{
-
-
-    return 0;
-}
-
 int castle_freespace_version_add(version_t version)
 {
-    // TODO: locks?
     struct castle_flist_entry flist_entry;
     struct list_head *l;
     int ret;
@@ -211,7 +217,6 @@ int castle_freespace_version_add(version_t version)
         ret = castle_freespace_hash_mod(cs, version, HASH_MOD_ADD, INVAL_MSTORE_KEY);
         if(ret == -EEXIST)
             continue;
-        ret = castle_freespace_flist_extend(cs, version);
         if(ret) return ret;
     }
 
@@ -239,13 +244,13 @@ static void castle_freespace_new_slave_init(struct castle_slave *cs)
     freespace_cdb.disk  = cs->uuid;
     freespace_cdb.block = cs_sb->used;
     for(i=0; i<cs_sb->used; i++)
-        BUG_ON(castle_freespace_hash_mod(cs, 0, HASH_MOD_INC));
+        BUG_ON(__castle_freespace_hash_mod(cs, 0, HASH_MOD_INC));
     last_cdb.disk  = cs->uuid;
     last_cdb.block = 0;
     bitmap_cdb = INVAL_DISK_BLK;
 
     /* Note, the bitmap will extend beyond the last block of the device.
-       The next block will be marked as allocated, which simplifies allocation
+       All the remaining blocks are marked as allocated, which simplifies
        algorithms below. */
     while(last_cdb.block <= cs_sb->size)
     {
@@ -311,7 +316,7 @@ static void castle_freespace_new_slave_init(struct castle_slave *cs)
         freespace_cdb.block += 1;
         last_cdb.block      += C_BLK_SIZE * 8;
         cs_sb->used++;
-        BUG_ON(castle_freespace_hash_mod(cs, 0, HASH_MOD_INC));
+        BUG_ON(__castle_freespace_hash_mod(cs, 0, HASH_MOD_INC));
     }
     castle_slave_superblock_put(cs, 1);
 
@@ -475,7 +480,7 @@ c_disk_blk_t castle_freespace_slave_block_get(struct castle_slave *slave, versio
             slave->free_blk = free_cdb.block + size;
             if(slave->free_blk > slave_size)
                 slave->free_blk = 0; /* Obviously 0 isn't free, but that's fine. */
-            castle_freespace_hash_mod(slave, version, HASH_MOD_INC);
+            __castle_freespace_hash_mod(slave, version, HASH_MOD_INC);
             sb->used += size;
             castle_slave_superblock_put(slave, 1);
             
@@ -589,7 +594,7 @@ void castle_freespace_block_free(c_disk_blk_t cdb, version_t version, int size)
     put_c2b(bitmap_c2b);
     
     cs_sb = castle_slave_superblock_get(slave);
-    castle_freespace_hash_mod(slave, version, HASH_MOD_DEC);
+    __castle_freespace_hash_mod(slave, version, HASH_MOD_DEC);
     cs_sb->used--;
     castle_slave_superblock_put(slave, 1);
 }

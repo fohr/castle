@@ -297,7 +297,8 @@ struct castle_slave_block_cnt
 
 struct castle_slave_block_cnts 
 {
-    struct list_head hash[BLOCKS_HASH_SIZE];
+    struct list_head hash[BLOCKS_HASH_SIZE];     /* The hashtable is protected by 
+                                                    castle_slave superblock lock   */
     struct castle_slave_block_cnt metadata_cnt;  /* Count for version 0 (metadata) */
 };
 
