@@ -1,4 +1,4 @@
-#include <linux/module.h>
+#include <linux/module.h> 
 #include <linux/workqueue.h> 
 #include <linux/list.h>
 #include <linux/slab.h>
@@ -32,6 +32,15 @@ static          LIST_HEAD(castle_versions_init_list);
 
 static version_t          castle_versions_last   = INVAL_VERSION;
 static c_mstore_t        *castle_versions_mstore = NULL;
+static c_mstore_t        *castle_roots_mstore    = NULL;
+
+struct castle_tree_root {
+    tree_seq_t       tree_seq; 
+    da_id_t          da_id;
+    c_disk_blk_t     root;
+    c_mstore_key_t   mstore_key;
+    struct list_head list;
+};
 
 #define CV_INITED_BIT             (0)
 #define CV_INITED_MASK            (1 << CV_INITED_BIT)
@@ -52,11 +61,11 @@ struct castle_version {
     struct castle_version     *next_sybling;
 
     /* Aux data */
-    c_mstore_key_t mstore_key;
-    version_t      o_order;
-    version_t      r_order;
-    c_disk_blk_t   ftree_root;
-    uint32_t       size;
+    c_mstore_key_t   mstore_key;
+    version_t        o_order;
+    version_t        r_order;
+    struct list_head tree_roots;
+    uint32_t         size;
 
     /* Lists for storing versions the hash table & the init list*/
     struct list_head hash_list; 
@@ -82,6 +91,13 @@ static void castle_versions_hash_add(struct castle_version *v)
 static void __castle_versions_hash_remove(struct castle_version *v)
 {
     list_del(&v->hash_list);
+}
+
+static void castle_versions_hash_remove(struct castle_version *v)
+{
+    spin_lock_irq(&castle_versions_hash_lock);
+    list_del(&v->hash_list);
+    spin_unlock_irq(&castle_versions_hash_lock);
 }
 
 static struct castle_version* __castle_versions_hash_get(version_t version)
@@ -140,27 +156,24 @@ static void castle_versions_init_add(struct castle_version *v)
 
 static struct castle_version* castle_version_add(version_t version, 
                                                  version_t parent, 
-                                                 c_disk_blk_t ftree_root,
                                                  uint32_t size)
 {
     struct castle_version *v;
     
     v = kmem_cache_alloc(castle_versions_cache, GFP_KERNEL);
-    if(!v) 
-        goto err_out; 
-    if(castle_freespace_version_add(version)) 
-        goto out_dealloc; 
+    if(!v || castle_freespace_version_add(version)) 
+        goto out_dealloc;
     
     debug("Adding: (v, p)=(%d,%d)\n", version, parent);
-
+    
     v->version      = version;
     v->parent_v     = parent;
     v->first_child  = NULL; 
     v->next_sybling = NULL; 
     v->o_order      = INVAL_VERSION;
     v->r_order      = INVAL_VERSION;
-    v->ftree_root   = ftree_root;
-    v->size         = size;
+    INIT_LIST_HEAD(&v->tree_roots);
+    v->size         = size; 
     v->flags        = 0;
     INIT_LIST_HEAD(&v->hash_list);
     INIT_LIST_HEAD(&v->init_list);
@@ -190,32 +203,96 @@ static struct castle_version* castle_version_add(version_t version,
 
 out_dealloc:
     kmem_cache_free(castle_versions_cache, v);
-err_out:
+
     return NULL;
+}
+
+static int castle_version_root_add(version_t version,
+                                   tree_seq_t tree_seq, 
+                                   da_id_t da_id,
+                                   c_disk_blk_t root,
+                                   c_mstore_key_t mstore_key)
+{
+    struct castle_tree_root *r;
+    struct castle_version *v;
+
+    debug("Adding root: (v, da, tree, cdb)=(%d, 0x%x, 0x%x, (0x%x, 0x%x))\n",
+            version, da_id, tree_seq, root.disk, root.block);
+    v = castle_versions_hash_get(version);
+    if(!v)
+        return -EINVAL;
+     
+    r = kzalloc(sizeof(struct castle_tree_root), GFP_KERNEL);
+    if(!r)
+        return -ENOMEM;
+
+    r->da_id        = da_id; 
+    r->tree_seq     = tree_seq;
+    r->root         = root;
+    r->mstore_key   = mstore_key;
+    INIT_LIST_HEAD(&r->list);
+    list_add(&r->list, &v->tree_roots);
+
+    return 0;
 }
 
 /* TODO who should handle errors in writeback? */
 static void castle_version_writeback(struct castle_version *v, int new)
 {
-    struct castle_vlist_entry mstore_entry;
+    struct castle_vlist_entry mstore_ventry;
+    struct castle_rlist_entry mstore_rentry;
+    struct castle_tree_root *root;
+    struct list_head *l;
     c_mstore_key_t key;
+    
+    debug("Writing back version %d\n", v->version);
 
-    mstore_entry.version_nr = v->version;
-    mstore_entry.parent     = (v->parent ? v->parent->version : 0);
-    mstore_entry.size       = v->size;
-    mstore_entry.cdb        = v->ftree_root;
-    key                     = v->mstore_key;
+    mstore_ventry.version_nr = v->version;
+    mstore_ventry.parent     = (v->parent ? v->parent->version : 0);
+    mstore_ventry.size       = v->size;
+    key                      = v->mstore_key;
 
     if(new)
+    {
+        debug("New version, inserting.\n");
         v->mstore_key = 
-            castle_mstore_entry_insert(castle_versions_mstore, &mstore_entry);
+            castle_mstore_entry_insert(castle_versions_mstore, &mstore_ventry);
+    }
     else
-        castle_mstore_entry_update(castle_versions_mstore, key, &mstore_entry);
+    {
+        debug("Existing version, updating.\n");
+        castle_mstore_entry_update(castle_versions_mstore, key, &mstore_ventry);
+    }
+
+    list_for_each(l, &v->tree_roots)
+    {
+        root = list_entry(l, struct castle_tree_root, list); 
+        
+        debug("Writing back root for da_id=0x%x, tree_seq=%d.\n",
+                root->da_id, root->tree_seq);
+        mstore_rentry.version   = v->version;
+        mstore_rentry.tree_seq  = root->tree_seq;
+        mstore_rentry.da_id     = root->da_id;
+        mstore_rentry.cdb       = root->root;
+        key                     = root->mstore_key;
+        if(MSTORE_KEY_INVAL(key))
+        {
+            debug("Inserting the root.\n");
+            root->mstore_key = 
+                castle_mstore_entry_insert(castle_roots_mstore, &mstore_rentry);
+        }
+        else
+        {
+            debug("Updating the root.\n");
+            castle_mstore_entry_update(castle_roots_mstore, key, &mstore_rentry);
+        }
+    }
 }
 
 /***** External functions *****/
 void castle_version_ftree_update(version_t version, c_disk_blk_t cdb)
 {
+    struct castle_tree_root *r;
     struct castle_version *v;
 
     v = castle_versions_hash_get(version);
@@ -224,9 +301,12 @@ void castle_version_ftree_update(version_t version, c_disk_blk_t cdb)
     /* Test if the lock is taken out (check not 100% since it 
        could be taken by someone else than us) */
     BUG_ON(!test_bit(CV_FTREE_LOCKED_BIT, &v->flags));
-    v->ftree_root = cdb;
+    /* Make sure there is only a single entry in the list */
+    BUG_ON((v->tree_roots.next       == &v->tree_roots) ||
+           (v->tree_roots.next->next != &v->tree_roots));
+    r = list_entry(v->tree_roots.next, struct castle_tree_root, list);
+    r->root = cdb;
   
-    /* TODO: Error handling? */
     castle_version_writeback(v, 0 /* Not new */); 
 }
 
@@ -263,6 +343,7 @@ static struct castle_version* castle_version_new_create(int snap_or_clone,
        doing snapshots under device lock. Therefore, no new IOs will be
        accepted before we release it (by this time the new vesion will 
        be saved to castle_device structure) */ 
+    debug("Locking the parent (%d) ftree.\n", parent);
     ftree_root = castle_version_ftree_lock(parent);
     castle_version_ftree_unlock(parent);
     parent_size = v->size;
@@ -273,10 +354,16 @@ static struct castle_version* castle_version_new_create(int snap_or_clone,
     BUG_ON(VERSION_INVAL(castle_versions_last));
 
     /* Try to add it to the hash */
-    v = castle_version_add(version, parent, ftree_root, size);
+    v = castle_version_add(version, parent, size);
     if(!v) 
         return NULL;
-
+    if(castle_version_root_add(version, 0, INVAL_DA, ftree_root, INVAL_MSTORE_KEY))
+    {
+        castle_versions_hash_remove(v);
+        kmem_cache_free(castle_versions_cache, v);
+        return NULL;
+    }
+        
     /* Set clone/snap bit in flags */ 
     if(parent_size != 0) v->size = parent_size;
     BUG_ON(v->size == 0);
@@ -311,6 +398,8 @@ version_t castle_version_new(int snap_or_clone,
 {
     struct castle_version *v;
     
+    debug("New version: snap_or_clone=%d, parent=%d, size=%d\n",
+            snap_or_clone, parent, size);
     /* Get a new version number */
     v = castle_version_new_create(snap_or_clone,
                                   parent,
@@ -346,6 +435,7 @@ static int castle_version_ftree_yield(void *word)
 
 c_disk_blk_t castle_version_ftree_lock(version_t version)
 {
+    struct castle_tree_root *r;
     struct castle_version *v;
 
     /* This function may sleep on the ftree lock */
@@ -365,8 +455,11 @@ c_disk_blk_t castle_version_ftree_lock(version_t version)
     }
     /* We've locked the node, we can now read the root cdb */
     BUG_ON(!test_bit(CV_FTREE_LOCKED_BIT, &v->flags));
+    BUG_ON((v->tree_roots.next       == &v->tree_roots) ||
+           (v->tree_roots.next->next != &v->tree_roots));
+    r = list_entry(v->tree_roots.next, struct castle_tree_root, list);
 
-    return v->ftree_root;
+    return r->root;
 }
 
 void castle_version_ftree_unlock(version_t version)
@@ -599,27 +692,36 @@ int castle_version_is_ancestor(version_t candidate, version_t version)
    castle_versions_read() */
 int castle_versions_root_init(c_disk_blk_t ftree_root)
 {
-    struct castle_vlist_entry mstore_entry;
+    struct castle_vlist_entry mstore_ventry;
+    struct castle_rlist_entry mstore_rentry;
     
     debug("Initialising version root.\n");
     castle_versions_mstore = 
         castle_mstore_init(MSTORE_VERSIONS_ID, sizeof(struct castle_vlist_entry));
-    if(!castle_versions_mstore)
+    castle_roots_mstore = 
+        castle_mstore_init(MSTORE_ROOTS, sizeof(struct castle_rlist_entry));
+
+    if(!castle_versions_mstore || !castle_roots_mstore)
         return -ENOMEM;
 
-    mstore_entry.version_nr = 0;
-    mstore_entry.parent     = 0;
-    mstore_entry.size       = 0;
-    mstore_entry.cdb        = ftree_root;
+    mstore_ventry.version_nr = 0;
+    mstore_ventry.parent     = 0;
+    mstore_ventry.size       = 0;
+    castle_mstore_entry_insert(castle_versions_mstore, &mstore_ventry); 
 
-    castle_mstore_entry_insert(castle_versions_mstore, &mstore_entry); 
+    mstore_rentry.version    = 0;
+    mstore_rentry.tree_seq   = 0;
+    mstore_rentry.da_id      = INVAL_DA;
+    mstore_rentry.cdb        = ftree_root;
+    castle_mstore_entry_insert(castle_roots_mstore, &mstore_rentry); 
 
     return 0;
 }
 
 int castle_versions_read(void)
 {
-    struct castle_vlist_entry mstore_entry;
+    struct castle_vlist_entry mstore_ventry;
+    struct castle_rlist_entry mstore_rentry;
     struct castle_mstore_iter* iterator;
     struct castle_version* v; 
     c_mstore_key_t key;
@@ -627,8 +729,11 @@ int castle_versions_read(void)
     if(!castle_versions_mstore)
         castle_versions_mstore = 
             castle_mstore_open(MSTORE_VERSIONS_ID, sizeof(struct castle_vlist_entry));
+    if(!castle_roots_mstore)
+        castle_roots_mstore = 
+            castle_mstore_open(MSTORE_ROOTS, sizeof(struct castle_rlist_entry));
 
-    if(!castle_versions_mstore)
+    if(!castle_versions_mstore || !castle_roots_mstore)
         return -ENOMEM;
 
     iterator = castle_mstore_iterate(castle_versions_mstore);
@@ -637,14 +742,32 @@ int castle_versions_read(void)
 
     while(castle_mstore_iterator_has_next(iterator))
     {
-        castle_mstore_iterator_next(iterator, &mstore_entry, &key);
-        v = castle_version_add(mstore_entry.version_nr, 
-                               mstore_entry.parent, 
-                               mstore_entry.cdb,
-                               mstore_entry.size);
+        castle_mstore_iterator_next(iterator, &mstore_ventry, &key);
+        v = castle_version_add(mstore_ventry.version_nr, 
+                               mstore_ventry.parent, 
+                               mstore_ventry.size);
         if(VERSION_INVAL(castle_versions_last) || v->version > castle_versions_last)
             castle_versions_last = v->version;
         v->mstore_key = key;
+    }
+    castle_mstore_iterator_destroy(iterator);
+
+    iterator = castle_mstore_iterate(castle_roots_mstore);
+    if(!iterator)
+        return -EINVAL;
+
+    while(castle_mstore_iterator_has_next(iterator))
+    {
+        castle_mstore_iterator_next(iterator, &mstore_rentry, &key);
+        if(castle_version_root_add(mstore_rentry.version,
+                                    mstore_rentry.tree_seq,
+                                    mstore_rentry.da_id,
+                                    mstore_rentry.cdb,
+                                    key))
+        {
+            printk("Error! Could not add root.\n");
+            return -EINVAL;
+        }
     }
     castle_mstore_iterator_destroy(iterator);
 

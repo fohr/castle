@@ -9,6 +9,11 @@
 #define STATIC_BUG_ON(expr) \
         extern int (*assert_function__(void)) [STATIC_BUG_ON_HELPER(expr)]
 
+typedef uint32_t tree_seq_t;                   
+typedef uint32_t da_id_t;                   
+#define INVAL_DA            ((da_id_t)-1)
+#define DA_INVAL(_da)       ((_da) == INVAL_DA)
+
 typedef uint32_t block_t;
 #define INVAL_BLOCK         ((block_t)-1) 
 #define BLOCK_INVAL(_b)     ((_b) == INVAL_BLOCK) 
@@ -87,6 +92,7 @@ typedef struct castle_mstore_iter {
 enum {
     MSTORE_VERSIONS_ID,
     MSTORE_BLOCK_CNTS,
+    MSTORE_ROOTS,
 }; 
 
 
@@ -150,11 +156,17 @@ struct castle_btree_type {
 #endif        
 };
 
+struct castle_rlist_entry {
+    version_t    version;
+    tree_seq_t   tree_seq;
+    da_id_t      da_id;
+    c_disk_blk_t cdb;
+} PACKED;
+
 struct castle_vlist_entry {
     uint32_t     version_nr;
     uint32_t     parent;
     uint32_t     size;
-    c_disk_blk_t cdb;
 } PACKED;
 
 #define MLIST_NODE_MAGIC  0x0000baca
