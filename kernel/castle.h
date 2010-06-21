@@ -93,6 +93,8 @@ enum {
     MSTORE_VERSIONS_ID,
     MSTORE_BLOCK_CNTS,
     MSTORE_ROOTS,
+    MSTORE_DOUBLE_ARRAYS,
+    MSTORE_COMPONENT_TREES,
 }; 
 
 
@@ -156,16 +158,26 @@ struct castle_btree_type {
 #endif        
 };
 
+struct castle_dlist_entry {
+    da_id_t     id;
+} PACKED;
+
+struct castle_clist_entry {
+    tree_seq_t   seq;
+    uint8_t      level;
+    c_disk_blk_t first_node;
+} PACKED;
+
 struct castle_rlist_entry {
     version_t    version;
     tree_seq_t   tree_seq;
-    da_id_t      da_id;
     c_disk_blk_t cdb;
 } PACKED;
 
 struct castle_vlist_entry {
     uint32_t     version_nr;
     uint32_t     parent;
+    da_id_t      da_id;
     uint32_t     size;
 } PACKED;
 
