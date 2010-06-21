@@ -1322,10 +1322,8 @@ err_out5:
 err_out4:
     castle_versions_fini();
 err_out3:
-    /* Cannot fini the cache without unlocking slave superblocks
-       but we shouldn't have any slaves at this point. Still, check
-       that */
     BUG_ON(!list_empty(&castle_slaves.slaves));
+    castle_slaves_unlock();
     castle_cache_fini();
 err_out2:
     castle_slaves_free();
