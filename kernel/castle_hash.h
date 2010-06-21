@@ -16,11 +16,10 @@ static inline int _prefix##_hash_idx(_key_t key)                                
                                                                                      \
 static inline void _prefix##_hash_add(_struct *v)                                    \
 {                                                                                    \
-    int idx = _prefix##_hash_idx(v->_key);                                         \
+    int idx = _prefix##_hash_idx(v->_key);                                           \
     unsigned long flags;                                                             \
                                                                                      \
     spin_lock_irqsave(&_prefix##_hash_lock, flags);                                  \
-printk("Adding under idx=%d\n", idx); \
     list_add(&v->_list_mbr, &_tab[idx]);                                             \
     spin_unlock_irqrestore(&_prefix##_hash_lock, flags);                             \
 }                                                                                    \
@@ -79,9 +78,10 @@ static inline void _prefix##_hash_iterate(int (*fn)(_struct*, void*), void *arg)
         list_for_each_safe(l, t, &_tab[i])                                           \
         {                                                                            \
             v = list_entry(l, _struct, hash_list);                                   \
-            if(fn(v, arg)) return;                                                   \
+            if(fn(v, arg)) goto out;                                                 \
         }                                                                            \
     }                                                                                \
+out:                                                                                 \
     spin_unlock_irq(&_prefix##_hash_lock);                                           \
 }                                                                                    \
                                                                                      \

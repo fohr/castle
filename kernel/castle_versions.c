@@ -86,6 +86,7 @@ static int castle_version_hash_remove(struct castle_version *v, void *unused)
 static void castle_versions_hash_destroy(void)
 {
    castle_versions_hash_iterate(castle_version_hash_remove, NULL); 
+   kfree(castle_versions_hash);
 }
 
 static void castle_versions_init_add(struct castle_version *v)
@@ -687,6 +688,11 @@ int castle_versions_read(void)
                                mstore_ventry.parent, 
                                mstore_ventry.da_id,
                                mstore_ventry.size);
+        if(!v)
+        {
+            castle_mstore_iterator_destroy(iterator);
+            return -ENOMEM;
+        }
         if(VERSION_INVAL(castle_versions_last) || v->version > castle_versions_last)
             castle_versions_last = v->version;
         v->mstore_key = key;
@@ -705,8 +711,9 @@ int castle_versions_read(void)
                                    mstore_rentry.cdb,
                                    key))
         {
+            castle_mstore_iterator_destroy(iterator);
             printk("Error! Could not add root.\n");
-            return -EINVAL;
+            return -ENOMEM;
         }
     }
     castle_mstore_iterator_destroy(iterator);
@@ -737,11 +744,9 @@ int castle_versions_init(void)
         printk("Could not allocate versions hash\n");
         goto err_out;
     }
-    /* We've allocated everything, we'll succeed after here */
-    ret = 0;
     castle_versions_hash_init();
 
-    return ret;
+    return 0;
 
 err_out:
     if(castle_versions_cache)
@@ -755,5 +760,4 @@ void castle_versions_fini(void)
 {
     castle_versions_hash_destroy();
     kmem_cache_destroy(castle_versions_cache);
-    kfree(castle_versions_hash);
 }

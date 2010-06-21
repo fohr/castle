@@ -221,6 +221,9 @@ int castle_fs_init(void)
     ret = castle_versions_read();
     if(ret) return -EINVAL;
 
+    ret = first ? castle_double_array_create() : castle_double_array_read(); 
+    if(ret) return -EINVAL;
+
     printk("Castle FS inited.\n");
     castle_fs_inited = 1;
 
