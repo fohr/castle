@@ -4,7 +4,7 @@ DEBUG = y
 TARGET = castle-fs
 
 obj-m          := $(TARGET).o
-$(TARGET)-objs := castle_main.o castle_cache.o castle_block.o castle_btree.o castle_freespace.o castle_versions.o castle_ctrl.o castle_sysfs.o castle_transfer.o castle_events.o castle_rxrpc.o castle_da.o
+$(TARGET)-objs := castle_utils.o castle_main.o castle_cache.o castle_block.o castle_btree.o castle_freespace.o castle_versions.o castle_ctrl.o castle_sysfs.o castle_transfer.o castle_events.o castle_rxrpc.o castle_da.o
 
 # Add your debugging flag (or not) to CFLAGS
 ifeq ($(DEBUG),y)

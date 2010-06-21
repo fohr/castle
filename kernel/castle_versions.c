@@ -7,7 +7,7 @@
 #include <asm/semaphore.h>
 
 #include "castle_public.h"
-#include "castle_hash.h"
+#include "castle_utils.h"
 #include "castle.h"
 #include "castle_freespace.h"
 #include "castle_versions.h"

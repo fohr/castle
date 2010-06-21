@@ -163,6 +163,7 @@ struct castle_dlist_entry {
 } PACKED;
 
 struct castle_clist_entry {
+    da_id_t      da_id;
     tree_seq_t   seq;
     uint8_t      level;
     c_disk_blk_t first_node;

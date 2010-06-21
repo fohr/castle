@@ -1,5 +1,5 @@
-#ifndef __CASTLE_HASH_H__
-#define __CASTLE_HASH_H__
+#ifndef __CASTLE_UTILS_H__
+#define __CASTLE_UTILS_H__
 
 #define DEFINE_HASH_TBL(_prefix, _tab, _tab_size, _struct, _list_mbr, _key_t, _key)  \
                                                                                      \
@@ -97,4 +97,9 @@ static void inline _prefix##_hash_init(void)                                    
         INIT_LIST_HEAD(&_tab[i]);                                                    \
 }
 
-#endif /* __CASTLE_HASH_H__ */
+void inline list_swap(struct list_head *t1, struct list_head *t2);
+void        list_sort(struct list_head *list, 
+                      int (*compare)(struct list_head *l1, struct list_head *l2));
+
+#endif /* __CASTLE_UTILS_H__ */
+
