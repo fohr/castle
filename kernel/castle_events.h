@@ -44,6 +44,9 @@ void castle_uevent1(uint16_t cmd, uint64_t arg1);
 #define castle_events_device_snapshot(_version_id, _maj, _min) \
     castle_uevent3(CASTLE_CTRL_REQ_SNAPSHOT, CASTLE_EVENTS_SUCCESS, _version_id, new_encode_dev(MKDEV(_maj, _min)))
 
+#define castle_events_collection_snapshot(_version_id, _id) \
+    castle_uevent3(CASTLE_CTRL_REQ_COLLECTION_SNAPSHOT, CASTLE_EVENTS_SUCCESS, _version_id, _id)
+
 #define castle_events_init() \
     castle_uevent1(CASTLE_CTRL_REQ_INIT, CASTLE_EVENTS_SUCCESS)
 

@@ -287,8 +287,39 @@ static void castle_control_collection_snapshot(collection_id_t collection,
                                                int *ret,
                                                version_t *version)
 {
-    printk("==> Collection snapshot NOT IMPLEMENTED YET, collection=%d", collection);
-    *ret = -ENOTSUPP;
+    struct castle_attachment *ca = castle_collection_find(collection);
+    version_t ver, old_version;
+
+    if(!ca)
+    {   
+        *version = -1;
+        *ret     = -ENOENT;
+        return;
+    }
+    down_write(&ca->lock);
+    old_version  = ca->version;
+    ver = castle_version_new(1,            /* snapshot */
+                             ca->version,
+                             0);           /* take size from the parent */ 
+    if(VERSION_INVAL(ver))
+    {
+        *version = -1;
+        *ret     = -EINVAL;
+    }
+    else
+    {
+        /* Attach the new version */
+        BUG_ON(castle_version_attach(ver));
+        /* Change the version associated with the device */
+        ca->version    = ver;
+        /* Release the old version */
+        castle_version_detach(old_version);
+        *version = ver;
+        *ret     = 0;
+    }
+    up_write(&ca->lock);
+    
+    castle_events_collection_snapshot(ver, ca->col.id);
 }
             
 
@@ -408,8 +439,7 @@ static void castle_control_reply(uint32_t *reply,
         reply[0] = CASTLE_CTRL_REPLY;
         reply[1] = CASTLE_CTRL_REPLY_FAIL;
         reply[2] = ret_code;
-        reply[3] = 0; /* No stack trace from kernel */
-        len = 4;
+        len = 3;
     } else
     /* Next, void replies */
     if(op_code == CASTLE_CTRL_REPLY_VOID)
