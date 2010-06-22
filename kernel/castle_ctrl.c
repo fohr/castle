@@ -14,7 +14,35 @@
 #include "castle_events.h"
 #include "castle_rxrpc.h"
 
+//#define DEBUG
+#ifndef DEBUG
+#define debug(_f, ...)  ((void)0)
+#else
+#define debug(_f, _a...)  (printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
+#endif
+
 static DECLARE_MUTEX(castle_control_lock);
+
+#ifdef DEBUG        
+static void castle_skb_print(struct sk_buff *skb)
+{
+    uint8_t buffer[128];
+    int i;
+
+    BUG_ON(skb->len > 128);
+    BUG_ON(skb_copy_bits(skb, 0, buffer, skb->len) < 0);
+    debug("\nControl packet length=%d\n", skb->len);
+    for(i=0; i<skb->len; i++)
+    {
+        uint8_t byte = *(buffer + i);    
+        if((byte >= 32) && (byte <= 126))
+            debug(" [%d]=%d (%c)\n", i, byte, byte);
+        else
+            debug(" [%d]=%d\n", i, byte);
+    }
+    debug("\n");
+}
+#endif
 
 static void castle_control_claim(uint32_t dev, int *ret, slave_uuid_t *id)
 {
@@ -393,12 +421,12 @@ static void castle_control_reply(uint32_t *reply,
     for(i=0; i<len; i++)
         reply[i] = htonl(reply[i]);
     
-#ifdef DEBUG
-    printk("=> Here.\n");
+#ifdef DEBUG        
+    debug("Reply message:\n");
     for(i=0; i<4*len; i++)
-        printk("=> [%d]=%d\n", i, *(((uint8_t *)reply) + i));
-    printk("<= Here.\n");
-#endif    
+        debug(" [%d]=%d\n", i, *(((uint8_t *)reply) + i));
+    debug("\n");
+#endif
 
     /* length is in bytes */
     *length = 4*len;
@@ -409,11 +437,16 @@ int castle_control_packet_process(struct sk_buff *skb, void *reply, int *len_p)
     uint32_t *reply32 = reply; /* For now, all reply values are 32 bit wide */
     uint32_t ctrl_op;
 
+    debug("Processing control packet.\n");
+#ifdef DEBUG
+    castle_skb_print(skb);
+#endif
     if(skb->len < 4)
         return -EBADMSG;
 
     down(&castle_control_lock);
     ctrl_op = SKB_L_GET(skb);
+    debug("Ctrl op=%d\n", ctrl_op);
     switch(ctrl_op)
     {
         case CASTLE_CTRL_REQ_CLAIM:
@@ -605,11 +638,18 @@ int castle_control_packet_process(struct sk_buff *skb, void *reply, int *len_p)
             int ret;
             collection_id_t collection;
 
+            version_t version;
+            char *name;
+
             if(skb->len < 8) goto bad_msg;
-            castle_control_collection_attach(SKB_L_GET(skb),
-                                             SKB_STR_GET(skb, 128),
+            version = SKB_L_GET(skb);
+            name = SKB_STR_GET(skb, 128);
+            if(!name) goto bad_msg;
+
+            castle_control_collection_attach(version, name,
                                              &ret,
                                              &collection);
+            kfree(name);
             castle_control_reply(reply32,
                                  len_p,
                                  CASTLE_CTRL_REPLY_NEW_COLLECTION,
