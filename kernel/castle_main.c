@@ -28,7 +28,7 @@
 
 struct castle                castle;
 struct castle_slaves         castle_slaves;
-struct castle_devices        castle_devices;
+struct castle_attachments    castle_attachments;
 struct castle_regions        castle_regions;
 
 struct workqueue_struct     *castle_wqs[2*MAX_BTREE_DEPTH+1];
@@ -667,7 +667,7 @@ static void castle_regions_free(void)
 
 static int castle_open(struct inode *inode, struct file *filp)
 {
-	struct castle_device *dev = inode->i_bdev->bd_disk->private_data;
+	struct castle_attachment *dev = inode->i_bdev->bd_disk->private_data;
 
 	filp->private_data = dev;
 	down_write(&dev->lock);
@@ -680,7 +680,7 @@ static int castle_open(struct inode *inode, struct file *filp)
 
 static int castle_close(struct inode *inode, struct file *filp)
 {
-	struct castle_device *dev = inode->i_bdev->bd_disk->private_data;
+	struct castle_attachment *dev = inode->i_bdev->bd_disk->private_data;
 
 	down_write(&dev->lock);
 	dev->users--;
@@ -929,12 +929,12 @@ static int castle_device_make_request(struct request_queue *rq, struct bio *bio)
 { 
     c_bio_t *c_bio = NULL;
     c_bvec_t *c_bvecs = NULL;
-    struct castle_device *dev = rq->queuedata;
+    struct castle_attachment *dev = rq->queuedata;
     struct bio_vec *bvec;
     sector_t sector, last_block;
     int i, j;
 
-    debug("Request on dev=0x%x\n", MKDEV(dev->gd->major, dev->gd->first_minor));
+    debug("Request on dev=0x%x\n", MKDEV(dev->dev.gd->major, dev->dev.gd->first_minor));
     /* Check if we can handle this bio */
     if(castle_bio_validate(bio))
         goto fail_bio;
@@ -1002,63 +1002,95 @@ fail_bio:
     return 0;
 }
 
-struct castle_device* castle_device_find(dev_t dev)
+struct castle_attachment* castle_device_find(dev_t dev)
 {
-    struct castle_device *cd;
+    struct castle_attachment *cd;
     struct list_head *lh;
 
-    list_for_each(lh, &castle_devices.devices)
+    list_for_each(lh, &castle_attachments.attachments)
     {
-        cd = list_entry(lh, struct castle_device, list);
-        if((cd->gd->major == MAJOR(dev)) &&
-           (cd->gd->first_minor == MINOR(dev)))
+        cd = list_entry(lh, struct castle_attachment, list);
+        if(!cd->device)
+            continue;
+        if((cd->dev.gd->major == MAJOR(dev)) &&
+           (cd->dev.gd->first_minor == MINOR(dev)))
             return cd;
     }
     return NULL;
 }
 
-void castle_device_free(struct castle_device *cd)
+struct castle_attachment* castle_collection_find(collection_id_t col_id)
+{
+    struct castle_attachment *ca;
+    struct list_head *lh;
+
+    list_for_each(lh, &castle_attachments.attachments)
+    {
+        ca = list_entry(lh, struct castle_attachment, list);
+        if(ca->device)
+            continue;
+        if(ca->col.id == col_id)
+            return ca;
+    }
+    return NULL;
+}
+
+struct castle_attachment* castle_attachment_init(int device, /* _or_object_collection */
+                                                 version_t version,
+                                                 uint32_t *size,
+                                                 int *leaf)
+{
+    struct castle_attachment *attachment = NULL;
+
+    if(castle_version_attach(version))
+        return NULL;
+    BUG_ON(castle_version_read(version, NULL, size, leaf));
+
+    attachment = kmalloc(sizeof(struct castle_attachment), GFP_KERNEL); 
+    if(!attachment)
+        return NULL;
+	init_rwsem(&attachment->lock);
+    attachment->device  = device;
+    attachment->version = version;
+
+    return attachment; 
+}
+
+void castle_device_free(struct castle_attachment *cd)
 {
     version_t version = cd->version;
     
-    castle_events_device_detach(cd->gd->major, cd->gd->first_minor);
+    castle_events_device_detach(cd->dev.gd->major, cd->dev.gd->first_minor);
 
     printk("===> When freeing the number of cd users is: %d\n", cd->users);
     castle_sysfs_device_del(cd);
-    /* TODO: Should this be done? blk_cleanup_queue(cd->gd->rq); */ 
-    del_gendisk(cd->gd);
-    put_disk(cd->gd);
+    /* TODO: Should this be done? blk_cleanup_queue(cd->dev.gd->rq); */ 
+    del_gendisk(cd->dev.gd);
+    put_disk(cd->dev.gd);
     list_del(&cd->list);
     kfree(cd);
     castle_version_detach(version);
 }
 
-struct castle_device* castle_device_init(version_t version)
+struct castle_attachment* castle_device_init(version_t version)
 {
-    struct castle_device *dev = NULL;
-    struct request_queue *rq  = NULL;
-    struct gendisk *gd        = NULL;
+    struct castle_attachment *dev = NULL;
+    struct request_queue *rq      = NULL;
+    struct gendisk *gd            = NULL;
     static int minor = 0;
     uint32_t size;
     int leaf;
     int err;
 
-    if(castle_version_attach(version))
-        goto error_out;
-    BUG_ON(castle_version_read(version, NULL, &size, &leaf));
-
-    dev = kmalloc(sizeof(struct castle_device), GFP_KERNEL); 
+    dev = castle_attachment_init(1, version, &size, &leaf); 
     if(!dev)
         goto error_out;
-	init_rwsem(&dev->lock);
-    dev->version = version;
-        
     gd = alloc_disk(1);
     if(!gd)
         goto error_out;
 
     sprintf(gd->disk_name, "castle-fs-%d", minor);
-    gd->major        = castle_devices.major;
+    gd->major        = castle_attachments.major;
     gd->first_minor  = minor++;
 	gd->fops         = &castle_bd_ops;
     gd->private_data = dev;
@@ -1072,8 +1104,8 @@ struct castle_device* castle_device_init(version_t version)
     if(!leaf) 
         set_disk_ro(gd, 1);
 
-    list_add(&dev->list, &castle_devices.devices);
-    dev->gd = gd;
+    list_add(&dev->list, &castle_attachments.attachments);
+    dev->dev.gd = gd;
     
     set_capacity(gd, (size << (C_BLK_SHIFT - 9)));
     add_disk(gd);
@@ -1098,6 +1130,51 @@ error_out:
     if(rq)  blk_cleanup_queue(rq); 
     if(dev) kfree(dev);
     printk("Failed to init device.\n");
+    return NULL;    
+}
+
+void castle_collection_free(struct castle_attachment *ca)
+{
+    version_t version = ca->version;
+    
+    castle_events_collection_detach(ca->col.id);
+
+    printk("===> When freeing the number of ca users is: %d\n", ca->users);
+    castle_sysfs_collection_del(ca);
+    list_del(&ca->list);
+    kfree(ca->col.name);
+    kfree(ca);
+    castle_version_detach(version);
+}
+
+struct castle_attachment* castle_collection_init(version_t version, char *name)
+{
+    struct castle_attachment *collection = NULL;
+    static collection_id_t collection_id = 13;
+    int err;
+
+    collection = castle_attachment_init(0, version, NULL, NULL); 
+    if(!collection)
+        goto error_out;
+    
+    collection->col.id   = collection_id++;
+    collection->col.name = name;
+    list_add(&collection->list, &castle_attachments.attachments);
+
+    err = castle_sysfs_collection_add(collection);
+    if(err) 
+    {
+        list_del(&collection->list);
+        goto error_out;
+    }
+
+    castle_events_collection_attach(collection->col.id, version);
+
+    return collection;
+
+error_out:
+    if(collection) kfree(collection);
+    printk("Failed to init collection.\n");
     return NULL;    
 }
 
@@ -1207,7 +1284,7 @@ err_out:
         if(castle_wqs[i]) 
             destroy_workqueue(castle_wqs[i]);
     }
-    unregister_blkdev(castle_devices.major, "castle-fs"); 
+    unregister_blkdev(castle_attachments.major, "castle-fs"); 
 
     return -ENOMEM;
 }
@@ -1244,12 +1321,12 @@ static void castle_slaves_free(void)
         destroy_workqueue(castle_wqs[i]);
 }
 
-static int castle_devices_init(void)
+static int castle_attachments_init(void)
 {
     int major;
 
-    memset(&castle_devices, 0, sizeof(struct castle_devices));
-    INIT_LIST_HEAD(&castle_devices.devices);
+    memset(&castle_attachments, 0, sizeof(struct castle_attachments));
+    INIT_LIST_HEAD(&castle_attachments.attachments);
 
     /* Allocate a major for this device */
     if((major = register_blkdev(0, "castle-fs")) < 0) 
@@ -1257,24 +1334,27 @@ static int castle_devices_init(void)
         printk("Couldn't register castle device\n");
         return -ENOMEM;
     }
-    castle_devices.major = major;
+    castle_attachments.major = major;
 
     return 0;
 }
 
-static void castle_devices_free(void)
+static void castle_attachments_free(void)
 {                                                                                        
     struct list_head *lh, *th;
-    struct castle_device *dev;
+    struct castle_attachment *ca;
 
-    list_for_each_safe(lh, th, &castle_devices.devices)
+    list_for_each_safe(lh, th, &castle_attachments.attachments)
     {
-        dev = list_entry(lh, struct castle_device, list); 
-        castle_device_free(dev);
+        ca = list_entry(lh, struct castle_attachment, list); 
+        if(ca->device)
+            castle_device_free(ca);
+        else
+            castle_collection_free(ca);
     }
 
-    if (castle_devices.major)
-        unregister_blkdev(castle_devices.major, "castle-fs");
+    if (castle_attachments.major)
+        unregister_blkdev(castle_attachments.major, "castle-fs");
 }
 
 static int __init castle_init(void)
@@ -1291,7 +1371,7 @@ static int __init castle_init(void)
     if((ret = castle_btree_init()))        goto err_out4;
     if((ret = castle_double_array_init())) goto err_out5;
     if((ret = castle_freespace_init()))    goto err_out6;
-    if((ret = castle_devices_init()))      goto err_out7;
+    if((ret = castle_attachments_init()))  goto err_out7;
     if((ret = castle_regions_init()))      goto err_out8;
     if((ret = castle_transfers_init()))    goto err_out9;
     if((ret = castle_control_init()))      goto err_out10;
@@ -1312,7 +1392,7 @@ err_out10:
 err_out9:
     castle_regions_free();
 err_out8:
-    castle_devices_free();
+    castle_attachments_free();
 err_out7:
     castle_freespace_fini();
 err_out6:
@@ -1345,7 +1425,7 @@ static void __exit castle_exit(void)
     /* Now, make sure no more IO can be made, internally or externally generated */
     castle_transfers_free();
     castle_regions_free();
-    castle_devices_free();
+    castle_attachments_free();
     /* Cleanup/writeout all metadata */ 
     castle_freespace_fini();
     castle_double_array_fini();

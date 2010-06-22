@@ -68,7 +68,7 @@ static void castle_control_release(slave_uuid_t id, int *ret)
 
 static void castle_control_attach(version_t version, int *ret, uint32_t *dev)
 {
-    struct castle_device *cd;
+    struct castle_attachment *cd;
   
     *dev = 0;
     cd = castle_device_init(version);
@@ -77,14 +77,14 @@ static void castle_control_attach(version_t version, int *ret, uint32_t *dev)
         *ret = -EINVAL; 
         return;
     }
-    *dev = new_encode_dev(MKDEV(cd->gd->major, cd->gd->first_minor));
+    *dev = new_encode_dev(MKDEV(cd->dev.gd->major, cd->dev.gd->first_minor));
     *ret = 0;
 }
 
 static void castle_control_detach(uint32_t dev, int *ret)
 {
     dev_t dev_id = new_decode_dev(dev);
-    struct castle_device *cd = castle_device_find(dev_id);
+    struct castle_attachment *cd = castle_device_find(dev_id);
 
     if(cd) castle_device_free(cd);
     *ret = (cd ? 0 : -ENODEV);
@@ -145,7 +145,7 @@ static void castle_control_clone(version_t version, int *ret, version_t *clone)
 static void castle_control_snapshot(uint32_t dev, int *ret, version_t *version)
 {
     dev_t devid = new_decode_dev(dev);
-    struct castle_device *cd = castle_device_find(devid);
+    struct castle_attachment *cd = castle_device_find(devid);
     version_t ver, old_version;
 
     if(!cd)
@@ -177,7 +177,7 @@ static void castle_control_snapshot(uint32_t dev, int *ret, version_t *version)
     }
     up_write(&cd->lock);
     
-    castle_events_device_snapshot(ver, cd->gd->major, cd->gd->first_minor);
+    castle_events_device_snapshot(ver, cd->dev.gd->major, cd->dev.gd->first_minor);
 }
  
 static void castle_control_fs_init(int *ret)
@@ -262,16 +262,25 @@ static void castle_control_collection_attach(version_t version,
                                              int *ret,
                                              collection_id_t *collection)
 {
-    printk("==> Collection attach NOT IMPLEMENTED YET, version=%d, name=%s\n", 
-            version, name);
-    *ret = -ENOTSUPP;
+    struct castle_attachment *ca;
+
+    ca = castle_collection_init(version, name);
+    if(!ca)
+    {
+        *ret = -EINVAL;
+        return;
+    }
+    *collection = ca->col.id; 
+    *ret = 0;
 }
             
 static void castle_control_collection_detach(collection_id_t collection,
                                              int *ret)
 {
-    printk("==> Collection detach NOT IMPLEMENTED YET, collection=%d", collection);
-    *ret = -ENOTSUPP;
+    struct castle_attachment *ca = castle_collection_find(collection);
+    
+    if(ca) castle_collection_free(ca);
+    *ret = (ca ? 0 : -ENODEV);
 }
 
 static void castle_control_collection_snapshot(collection_id_t collection,
@@ -302,43 +311,43 @@ int castle_control_ioctl(struct inode *inode, struct file *filp,
     //printk("Got IOCTL command %d.\n", ioctl.cmd);
     switch(ioctl.cmd)
     {
-        case CASTLE_CTRL_CMD_CLAIM:
+        case CASTLE_CTRL_REQ_CLAIM:
             castle_control_claim( ioctl.claim.dev,
                                  &ioctl.claim.ret,
                                  &ioctl.claim.id);
             break;
-        case CASTLE_CTRL_CMD_RELEASE:
+        case CASTLE_CTRL_REQ_RELEASE:
             castle_control_release( ioctl.release.id,
                                    &ioctl.release.ret);
             break;
-        case CASTLE_CTRL_CMD_ATTACH:
+        case CASTLE_CTRL_REQ_ATTACH:
             castle_control_attach( ioctl.attach.version,
                                   &ioctl.attach.ret,
                                   &ioctl.attach.dev);
             break;
-        case CASTLE_CTRL_CMD_DETACH:
+        case CASTLE_CTRL_REQ_DETACH:
             castle_control_detach( ioctl.detach.dev,
                                   &ioctl.detach.ret);
             break;
-        case CASTLE_CTRL_CMD_CREATE:
+        case CASTLE_CTRL_REQ_CREATE:
             castle_control_create( ioctl.create.size,
                                   &ioctl.create.ret,
                                   &ioctl.create.id);
             break;
-        case CASTLE_CTRL_CMD_CLONE:
+        case CASTLE_CTRL_REQ_CLONE:
             castle_control_clone( ioctl.clone.version,
                                  &ioctl.clone.ret,
                                  &ioctl.clone.clone);
             break;
-        case CASTLE_CTRL_CMD_SNAPSHOT:
+        case CASTLE_CTRL_REQ_SNAPSHOT:
             castle_control_snapshot( ioctl.snapshot.dev,
                                     &ioctl.snapshot.ret,
                                     &ioctl.snapshot.version);
             break;
-        case CASTLE_CTRL_CMD_INIT:
+        case CASTLE_CTRL_REQ_INIT:
             castle_control_fs_init(&ioctl.init.ret);
             break;
-        case CASTLE_CTRL_CMD_REGION_CREATE:
+        case CASTLE_CTRL_REQ_REGION_CREATE:
             castle_control_region_create( ioctl.region_create.slave,
                                           ioctl.region_create.version,
                                           ioctl.region_create.start,
@@ -346,17 +355,17 @@ int castle_control_ioctl(struct inode *inode, struct file *filp,
                                          &ioctl.region_create.ret,
                                          &ioctl.region_create.id);
             break;        
-        case CASTLE_CTRL_CMD_REGION_DESTROY:
+        case CASTLE_CTRL_REQ_REGION_DESTROY:
             castle_control_region_destroy( ioctl.region_destroy.id,
                                           &ioctl.region_destroy.ret);
             break;
-        case CASTLE_CTRL_CMD_TRANSFER_CREATE:
+        case CASTLE_CTRL_REQ_TRANSFER_CREATE:
             castle_control_transfer_create( ioctl.transfer_create.version,
                                             ioctl.transfer_create.direction,
                                            &ioctl.transfer_create.ret,
                                            &ioctl.transfer_create.id);
             break;
-        case CASTLE_CTRL_CMD_TRANSFER_DESTROY:
+        case CASTLE_CTRL_REQ_TRANSFER_DESTROY:
             castle_control_transfer_destroy( ioctl.transfer_destroy.id,
                                             &ioctl.transfer_destroy.ret);
             break;
@@ -649,7 +658,8 @@ int castle_control_packet_process(struct sk_buff *skb, void *reply, int *len_p)
             castle_control_collection_attach(version, name,
                                              &ret,
                                              &collection);
-            kfree(name);
+            if(ret)
+                kfree(name);
             castle_control_reply(reply32,
                                  len_p,
                                  CASTLE_CTRL_REPLY_NEW_COLLECTION,

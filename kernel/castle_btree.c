@@ -1269,7 +1269,7 @@ static void __castle_btree_find(struct castle_btree_type *btree,
 static void _castle_btree_find(struct work_struct *work)
 {
     c_bvec_t *c_bvec = container_of(work, c_bvec_t, work);
-    struct castle_device *c_dev = c_bvec->c_bio->c_dev;
+    struct castle_attachment *c_dev = c_bvec->c_bio->c_dev;
     struct castle_btree_type *btree = c_bvec->btree; /* This is in an union, get it out ASAP */
     c_disk_blk_t root_cdb;
 

@@ -25,7 +25,7 @@ typedef uint32_t version_t;
 #define CASTLE_OBJ_TOMBSTONE                     0
 #define CASTLE_OBJ_VALUE                         1
 
-/* Subtypes for CASTLE_CTRL_REQ */
+/* Subtypes for CASTLE_CTRL_REQ, also used for IOCTLs */
 #define CASTLE_CTRL_REQ_CLAIM                    1
 #define CASTLE_CTRL_REQ_RELEASE                  2
 #define CASTLE_CTRL_REQ_ATTACH                   3
@@ -52,22 +52,8 @@ typedef uint32_t version_t;
 #define CASTLE_CTRL_REPLY_NEW_TRANSFER           6
 #define CASTLE_CTRL_REPLY_NEW_COLLECTION         7
 
-
 /* Definitions for IOCTLs */
 #define CASTLE_CTRL_IOCTL                        1     /* Only 1 ioctl at the moment */
-
-#define CASTLE_CTRL_CMD_CLAIM                    1     /* Claim physical device      */
-#define CASTLE_CTRL_CMD_RELEASE                  2     /* Release physical device    */
-#define CASTLE_CTRL_CMD_ATTACH                   3     /* Create /dev file for vol   */
-#define CASTLE_CTRL_CMD_DETACH                   4     /* Release /dev file          */
-#define CASTLE_CTRL_CMD_CREATE                   5     /* New vol                    */
-#define CASTLE_CTRL_CMD_CLONE                    6     /* Writable vol from snapshot */
-#define CASTLE_CTRL_CMD_SNAPSHOT                 7     /* Snapshot /dev file         */
-#define CASTLE_CTRL_CMD_INIT                     8     /* Init the file sytem        */
-#define CASTLE_CTRL_CMD_REGION_CREATE            9     /* Create region              */
-#define CASTLE_CTRL_CMD_REGION_DESTROY           10    /* Destory region             */
-#define CASTLE_CTRL_CMD_TRANSFER_CREATE          11
-#define CASTLE_CTRL_CMD_TRANSFER_DESTROY         12
 
 /* Transfer directions */
 #define CASTLE_TRANSFER_TO_TARGET                0

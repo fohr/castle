@@ -197,35 +197,19 @@ struct castle_flist_entry {
     block_t         blocks;
 } PACKED;
 
-#if 0
-#define NODE_HEADER           0x180
-#define FLIST_NODE_MAGIC  0x0000faca
-#define FLIST_SLOTS  ((PAGE_SIZE - NODE_HEADER)/sizeof(struct castle_flist_slot))
-struct castle_flist_node {
-    uint32_t magic;
-    uint32_t version; 
-    uint32_t capacity;
-    uint32_t used;
-    c_disk_blk_t next; /* 8 bytes */
-    c_disk_blk_t prev; /* 8 bytes */
-    uint8_t __pad[NODE_HEADER - 32];
-    struct castle_flist_slot slots[FLIST_SLOTS];
-} PACKED;
-#endif
-
 /* IO related structures */
 struct castle_bio_vec;
 typedef struct castle_bio {
-    struct castle_device     *c_dev;
-    struct bio               *bio;
-    struct castle_bio_vec    *c_bvecs; 
-    atomic_t                  count;
-    int                       err;
-#ifdef CASTLE_DEBUG          
-    int                       stuck;
-    int                       id;
-    int                       nr_bvecs;
-    struct list_head          list;
+    struct castle_attachment  *c_dev;
+    struct bio                *bio;
+    struct castle_bio_vec     *c_bvecs; 
+    atomic_t                   count;
+    int                        err;
+#ifdef CASTLE_DEBUG           
+    int                        stuck;
+    int                        id;
+    int                        nr_bvecs;
+    struct list_head           list;
 #endif
 } c_bio_t;
 
@@ -354,21 +338,32 @@ struct castle_slaves {
     struct list_head slaves;
 };
 
-struct castle_device {
-    struct kobject      kobj;
-    struct rw_semaphore lock;
-    struct list_head    list;
-    struct gendisk     *gd;
-    int                 users;
-    int                 sysfs_registered;
-                       
+/* Castle attachment represents a block device or an attached object collection */
+struct castle_attachment {
     version_t           version;
+    int                 users;
+    struct rw_semaphore lock;
+    int                 device; /* !=0 if block device, == 0 if object collection */
+    union {
+        struct {
+            struct gendisk  *gd;
+        } dev; /* Only valid for block devices */ 
+        struct {
+            collection_id_t  id;
+            char            *name;
+        } col; /* Only valid for object collections */
+    };
+
+    struct kobject      kobj;
+    int                 sysfs_registered;
+    struct list_head    list;
 };
 
-struct castle_devices { 
-    struct kobject kobj;
+struct castle_attachments { 
+    struct kobject collections_kobj;
+    struct kobject devices_kobj;
     int major;
-    struct list_head devices;
+    struct list_head attachments;
 };
 
 struct castle_region {
@@ -411,11 +406,11 @@ struct castle_transfers {
     struct list_head transfers;
 };
 
-extern struct castle             castle;
-extern struct castle_slaves      castle_slaves;
-extern struct castle_devices     castle_devices;
-extern struct castle_regions     castle_regions;
-extern struct castle_transfers   castle_transfers;
+extern struct castle              castle;
+extern struct castle_slaves       castle_slaves;
+extern struct castle_attachments  castle_attachments;
+extern struct castle_regions      castle_regions;
+extern struct castle_transfers    castle_transfers;
 
 extern struct workqueue_struct *castle_wqs[2*MAX_BTREE_DEPTH+1];
 #define castle_wq              (castle_wqs[0])
@@ -425,34 +420,45 @@ extern struct workqueue_struct *castle_wqs[2*MAX_BTREE_DEPTH+1];
 #define C_BLK_SIZE                     (1 << C_BLK_SHIFT)
 #define disk_blk_to_offset(_cdb)     ((_cdb).block * C_BLK_SIZE)
 
-void                  castle_bio_data_io_end   (c_bvec_t *c_bvec, int err);
-void                  castle_bio_data_io       (c_bvec_t *c_bvec);
+void                  castle_bio_data_io_end       (c_bvec_t *c_bvec, int err);
+void                  castle_bio_data_io           (c_bvec_t *c_bvec);
+                                                   
+struct castle_attachment*                          
+                      castle_device_init           (version_t version);
+void                  castle_device_free           (struct castle_attachment *cd);
+struct castle_attachment*                          
+                      castle_device_find           (dev_t dev);
+                                                   
+struct castle_attachment* 
+                      castle_collection_init       (version_t version, char *name);
+void                  castle_collection_free       (struct castle_attachment *ca);
+struct castle_attachment* 
+                      castle_collection_find       (collection_id_t col_id);
 
-struct castle_device* castle_device_init       (version_t version);
-void                  castle_device_free       (struct castle_device *cd);
-struct castle_device* castle_device_find       (dev_t dev);
-
-struct castle_slave*  castle_claim             (uint32_t new_dev);
-void                  castle_release           (struct castle_slave *cs);
-
-struct castle_region* castle_region_find       (region_id_t id);
-struct castle_region* castle_region_create     (uint32_t slave_id, version_t version, uint32_t start, uint32_t length);
-int                   castle_region_destroy    (struct castle_region *region);
-
-void                  castle_slave_access      (uint32_t uuid);
-
-struct castle_slave*  castle_slave_find_by_id  (uint32_t id);
-struct castle_slave*  castle_slave_find_by_uuid(uint32_t uuid);
-struct castle_slave*  castle_slave_find_by_block(c_disk_blk_t cdb);
+struct castle_slave*  castle_claim                 (uint32_t new_dev);
+void                  castle_release               (struct castle_slave *cs);
+                                                   
+struct castle_region* castle_region_find           (region_id_t id);
+struct castle_region* castle_region_create         (uint32_t slave_id, 
+                                                    version_t version, 
+                                                    uint32_t start, 
+                                                    uint32_t length);
+int                   castle_region_destroy        (struct castle_region *region);
+                                                   
+void                  castle_slave_access          (uint32_t uuid);
+                                                   
+struct castle_slave*  castle_slave_find_by_id      (uint32_t id);
+struct castle_slave*  castle_slave_find_by_uuid    (uint32_t uuid);
+struct castle_slave*  castle_slave_find_by_block   (c_disk_blk_t cdb);
 
 struct castle_slave_superblock* 
-                      castle_slave_superblock_get(struct castle_slave *cs);
-void                  castle_slave_superblock_put(struct castle_slave *cs, int dirty);
+                      castle_slave_superblock_get  (struct castle_slave *cs);
+void                  castle_slave_superblock_put  (struct castle_slave *cs, int dirty);
 struct castle_fs_superblock* 
-                      castle_fs_superblocks_get(void);
-void                  castle_fs_superblocks_put(struct castle_fs_superblock *sb, int dirty);
+                      castle_fs_superblocks_get    (void);
+void                  castle_fs_superblocks_put    (struct castle_fs_superblock *sb, int dirty);
 
-int                   castle_fs_init           (void);
+int                   castle_fs_init               (void);
 
 
 #endif /* __CASTLE_H__ */
