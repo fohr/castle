@@ -6,6 +6,7 @@
 #include <asm/uaccess.h>
 
 #include "castle_public.h"
+#include "castle_utils.h"
 #include "castle.h"
 #include "castle_cache.h"
 #include "castle_btree.h"
@@ -23,26 +24,6 @@
 
 static DECLARE_MUTEX(castle_control_lock);
 
-#ifdef DEBUG        
-static void castle_skb_print(struct sk_buff *skb)
-{
-    uint8_t buffer[128];
-    int i;
-
-    BUG_ON(skb->len > 128);
-    BUG_ON(skb_copy_bits(skb, 0, buffer, skb->len) < 0);
-    debug("\nControl packet length=%d\n", skb->len);
-    for(i=0; i<skb->len; i++)
-    {
-        uint8_t byte = *(buffer + i);    
-        if((byte >= 32) && (byte <= 126))
-            debug(" [%d]=%d (%c)\n", i, byte, byte);
-        else
-            debug(" [%d]=%d\n", i, byte);
-    }
-    debug("\n");
-}
-#endif
 
 static void castle_control_claim(uint32_t dev, int *ret, slave_uuid_t *id)
 {
@@ -478,7 +459,7 @@ int castle_control_packet_process(struct sk_buff *skb, void *reply, int *len_p)
 
     debug("Processing control packet.\n");
 #ifdef DEBUG
-    castle_skb_print(skb);
+    skb_print(skb);
 #endif
     if(skb->len < 4)
         return -EBADMSG;

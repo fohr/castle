@@ -1,16 +1,8 @@
 #include <linux/list.h>
 
-
-#include <linux/module.h>
-#include <linux/workqueue.h>
-#include <linux/sched.h>
-#include <linux/fs.h>
-
 #include "castle_public.h"
 #include "castle_utils.h"
 #include "castle.h"
-#include "castle_cache.h"
-#include "castle_freespace.h"
 
 struct castle_component_tree {
     tree_seq_t       seq;
@@ -72,3 +64,21 @@ void list_sort(struct list_head *list,
     }
 }
 
+void skb_print(struct sk_buff *skb)
+{
+    uint8_t buffer[128];
+    int i;
+
+    BUG_ON(skb->len > 128);
+    BUG_ON(skb_copy_bits(skb, 0, buffer, skb->len) < 0);
+    printk("\nPacket length=%d\n", skb->len);
+    for(i=0; i<skb->len; i++)
+    {
+        uint8_t byte = *(buffer + i);    
+        if((byte >= 32) && (byte <= 126))
+            printk(" [%d]=%d (%c)\n", i, byte, byte);
+        else
+            printk(" [%d]=%d\n", i, byte);
+    }
+    printk("\n");
+}

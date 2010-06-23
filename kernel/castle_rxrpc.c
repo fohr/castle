@@ -13,6 +13,7 @@
 #include <rxrpc/packet.h>
 
 #include "castle_public.h"
+#include "castle_utils.h"
 #include "castle.h"
 #include "castle_debug.h"
 #include "castle_cache.h"
@@ -118,7 +119,36 @@ int castle_rxrpc_get_decode(struct castle_rxrpc_call *call, struct sk_buff *skb,
 
 int castle_rxrpc_replace_decode(struct castle_rxrpc_call *call, struct sk_buff *skb,  bool last)
 {
+    char *collection_name, *key[10], *value;
+    uint32_t nr_key_dim, val_type, i;
+
     printk("Obj Replace.\n");
+    collection_name = SKB_STR_GET(skb, 128);
+    nr_key_dim      = SKB_L_GET  (skb);
+    BUG_ON(nr_key_dim > 10);
+    for(i=0; i<nr_key_dim; i++)
+        key[i]      = SKB_STR_GET(skb, 128);
+    val_type        = SKB_L_GET  (skb);
+    if(val_type == CASTLE_OBJ_VALUE)
+        value       = SKB_STR_GET(skb, 128);
+    
+    printk(" collection name: %s (ignoring)\n", collection_name);
+    kfree(collection_name);
+    printk(" nr key dims    : %d\n", nr_key_dim);
+    for(i=0; i<nr_key_dim; i++)
+    {
+        printk(" key[%d]         : ", i);
+        print_hex_dump_bytes("", DUMP_PREFIX_NONE, key[i], strlen(key[i]));
+        kfree(key[i]);
+    }
+    printk(" val type       : %d\n", val_type);
+    if(val_type == CASTLE_OBJ_VALUE)
+    {
+        printk(" value          : ");
+        print_hex_dump_bytes("", DUMP_PREFIX_NONE, value, strlen(value));
+        kfree(value);
+    }
+
     return -ENOTSUPP;
 }
 
@@ -134,13 +164,13 @@ int castle_rxrpc_ctrl_decode(struct castle_rxrpc_call *call, struct sk_buff *skb
     char reply[256];
 
     ret = castle_control_packet_process(skb, reply, &len);
-    debug("=> Ctrl ret=%d\n", ret);
+    debug("Ctrl ret=%d\n", ret);
     rxrpc_kernel_data_delivered(skb);
     /* Advance the state, if we succeeded at decoding the packet */
     if(ret) return ret;
 
     call->state = RXRPC_CALL_REPLYING;
-    debug("=> Sending reply of length=%d\n", len);
+    debug("Sending reply of length=%d\n", len);
     castle_rxrpc_reply_send(call, reply, len);
     call->state = RXRPC_CALL_AWAIT_ACK;
 
