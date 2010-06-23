@@ -226,7 +226,7 @@ typedef struct castle_bio_vec {
     uint32_t            version;
     /* Flags */
     unsigned long       flags;
-    /* Used to walk the B-Tree, and return the final cdb */
+    /* Used to walk the B-Tree */
     union {
         struct {
             int                        btree_depth;
@@ -237,12 +237,11 @@ typedef struct castle_bio_vec {
             struct castle_cache_block *btree_node;
             struct castle_cache_block *btree_parent_node;
         };
-        /* Location of the data on a slave disk. Set when B-Tree walk 
-           is finished */
-        c_disk_blk_t cdb;
         /* Btree type, only used before the B-Tree walk is started */
         struct castle_btree_type *btree;
     };
+    /* Completion callback */
+    void                     (*callback) (struct castle_bio_vec *c_bvec, int err, c_disk_blk_t cdb);
     /* Used to thread this bvec onto a workqueue */
     struct work_struct         work;
 #ifdef CASTLE_DEBUG    
@@ -420,9 +419,6 @@ extern struct workqueue_struct *castle_wqs[2*MAX_BTREE_DEPTH+1];
 #define C_BLK_SIZE                     (1 << C_BLK_SHIFT)
 #define disk_blk_to_offset(_cdb)     ((_cdb).block * C_BLK_SIZE)
 
-void                  castle_bio_data_io_end       (c_bvec_t *c_bvec, int err);
-void                  castle_bio_data_io           (c_bvec_t *c_bvec);
-                                                   
 struct castle_attachment*                          
                       castle_device_init           (version_t version);
 void                  castle_device_free           (struct castle_attachment *cd);

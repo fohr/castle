@@ -721,19 +721,7 @@ void castle_bio_put(c_bio_t *c_bio)
 
     bio_endio(bio, err);
 }
-
-void castle_bio_data_io_end(c_bvec_t *c_bvec, int err)
-{
-    debug("Finished the IO.\n");
-    castle_debug_bvec_update(c_bvec, C_BVEC_IO_END);
-    if(err) 
-    {
-        castle_debug_bvec_update(c_bvec, C_BVEC_IO_END_ERR);
-        c_bvec->c_bio->err = err;
-    }
-    castle_bio_put(c_bvec->c_bio);
-}
-    
+   
 
 static void castle_bio_data_copy(c_bvec_t *c_bvec, c2_block_t *c2b)
 {
@@ -781,12 +769,7 @@ static void castle_bio_data_copy(c_bvec_t *c_bvec, c2_block_t *c2b)
         bvec_buf  = pfn_to_kaddr(page_to_pfn(bvec->bv_page));
         bvec_buf += bvec->bv_offset + ((first_sec - sector) << 9);
         /* If invalid block, we are handling non-allocated block read */
-        if(DISK_BLK_INVAL(c_bvec->cdb))
-        {
-            /* c2b should be NULL */
-            BUG_ON(c2b);
-            memset(bvec_buf, 0, (last_sec - first_sec) << 9);
-        } else
+        if(c2b)
         {
             /* TODO use better macros than page_to_pfn etc */
             buf  = c2b_buffer(c2b); 
@@ -795,6 +778,9 @@ static void castle_bio_data_copy(c_bvec_t *c_bvec, c2_block_t *c2b)
             memcpy( write ? buf : bvec_buf,
                     write ? bvec_buf : buf,
                    (last_sec - first_sec) << 9);
+        } else
+        {
+            memset(bvec_buf, 0, (last_sec - first_sec) << 9);
         }
 
         sector += (bvec->bv_len >> 9);
@@ -813,9 +799,17 @@ static void castle_bio_data_copy(c_bvec_t *c_bvec, c2_block_t *c2b)
         unlock_c2b(c2b);
         put_c2b(c2b);
     }
-        
-    /* End the IO (with no error) */ 
-    castle_bio_data_io_end(c_bvec, 0); 
+    
+    castle_bio_put(c_bvec->c_bio);
+}
+
+static void castle_bio_data_io_error(c_bvec_t *c_bvec, int err)
+{
+    BUG_ON(!err);
+     
+    castle_debug_bvec_update(c_bvec, C_BVEC_IO_END_ERR);
+    c_bvec->c_bio->err = err;
+    castle_bio_put(c_bvec->c_bio);
 }
 
 static void castle_bio_c2b_update(c2_block_t *c2b, int uptodate)
@@ -833,23 +827,22 @@ static void castle_bio_c2b_update(c2_block_t *c2b, int uptodate)
         /* Just drop the lock, if we failed to update */
         unlock_c2b(c2b);
         put_c2b(c2b);
-        castle_bio_data_io_end(c_bvec, -EIO);
+        castle_bio_data_io_error(c_bvec, -EIO);
     }
 }
 
-void castle_bio_data_io(c_bvec_t *c_bvec)
+static void castle_bio_data_io_do(c_bvec_t *c_bvec, c_disk_blk_t cdb)
 {
     c2_block_t *c2b;
     int write = (c_bvec_data_dir(c_bvec) == WRITE);
 
-    castle_debug_bvec_update(c_bvec, C_BVEC_DATA_IO);
     /* 
      * Invalid pointer to on slave data means that it's never been written before.
      * Memset BIO buffer page to zero.
      * This should not happen on writes, since btree handling code should have 
      * allocated a new block (TODO: what if we've just run out of capacity ...)
      */
-    if(DISK_BLK_INVAL(c_bvec->cdb))
+    if(DISK_BLK_INVAL(cdb))
     {
         castle_debug_bvec_update(c_bvec, C_BVEC_DATA_IO_NO_BLK);
         BUG_ON(write);
@@ -858,9 +851,9 @@ void castle_bio_data_io(c_bvec_t *c_bvec)
     }
 
     /* Save last_access time in the slave */
-    castle_slave_access(c_bvec->cdb.disk);
+    castle_slave_access(cdb.disk);
 
-    c2b = castle_cache_page_block_get(c_bvec->cdb);
+    c2b = castle_cache_page_block_get(cdb);
     castle_debug_bvec_update(c_bvec, C_BVEC_DATA_C2B_GOT);
     c_bvec->locking = c2b;
     lock_c2b(c2b);
@@ -883,6 +876,16 @@ void castle_bio_data_io(c_bvec_t *c_bvec)
     }
 }
 
+static void castle_bio_data_io_end(c_bvec_t *c_bvec, int err, c_disk_blk_t cdb)
+{
+    debug("Finished the IO.\n");
+    castle_debug_bvec_update(c_bvec, C_BVEC_IO_END);
+    if(err) 
+        castle_bio_data_io_error(c_bvec, err);
+    else
+        castle_bio_data_io_do(c_bvec, cdb);
+}
+ 
 static int castle_bio_validate(struct bio *bio)
 {
     struct bio_vec *bvec;
@@ -917,6 +920,7 @@ static void castle_device_c_bvec_make(c_bio_t *c_bio,
     c_bvec->c_bio        = c_bio;
     c_bvec->key          = (void *)block; 
     c_bvec->version      = INVAL_VERSION; 
+    c_bvec->callback     = castle_bio_data_io_end;
     if(one2one_bvec)
         set_bit(CBV_ONE2ONE_BIT, &c_bvec->flags);
     castle_debug_bvec_update(c_bvec, C_BVEC_INITIALISED);
