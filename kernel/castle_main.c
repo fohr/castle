@@ -1,18 +1,16 @@
 /* TODO: when castle disk mounted, and then castle-fs-test run, later bd_claims on
          disk devices fail (multiple castle_fs_cli 'claim' cause problems?) */
-#include <linux/module.h>
 #include <linux/bio.h>
 #include <linux/kobject.h>
-#include <linux/device-mapper.h>
 #include <linux/blkdev.h>
 #include <linux/random.h>
 #include <linux/crc32.h>
 #include <linux/skbuff.h>
-#include <asm/semaphore.h>
 
 #include "castle_public.h"
 #include "castle_compile.h"
 #include "castle.h"
+#include "castle_utils.h"
 #include "castle_da.h"
 #include "castle_block.h"
 #include "castle_cache.h"
@@ -716,8 +714,7 @@ void castle_bio_put(c_bio_t *c_bio)
     if(!finished)
         return;
 
-    kfree(c_bio->c_bvecs);
-    kfree(c_bio);
+    castle_utils_bio_free(c_bio);
 
     bio_endio(bio, err);
 }
@@ -917,9 +914,9 @@ static void castle_device_c_bvec_make(c_bio_t *c_bio,
     castle_bio_get(c_bio);
 
     /* Init the c_bvec */
-    c_bvec->c_bio        = c_bio;
     c_bvec->key          = (void *)block; 
     c_bvec->version      = INVAL_VERSION; 
+    c_bvec->flags        = 0; 
     c_bvec->callback     = castle_bio_data_io_end;
     if(one2one_bvec)
         set_bit(CBV_ONE2ONE_BIT, &c_bvec->flags);
@@ -931,8 +928,7 @@ static void castle_device_c_bvec_make(c_bio_t *c_bio,
  
 static int castle_device_make_request(struct request_queue *rq, struct bio *bio)
 { 
-    c_bio_t *c_bio = NULL;
-    c_bvec_t *c_bvecs = NULL;
+    c_bio_t *c_bio;
     struct castle_attachment *dev = rq->queuedata;
     struct bio_vec *bvec;
     sector_t sector, last_block;
@@ -943,20 +939,14 @@ static int castle_device_make_request(struct request_queue *rq, struct bio *bio)
     if(castle_bio_validate(bio))
         goto fail_bio;
 
-    c_bio   = kmalloc(sizeof(c_bio_t), GFP_NOIO);
     /* We'll generate at most bi_vcnt + 1 castle_bio_vecs (for full page, 
        unaligned bvecs) */
-    c_bvecs = kzalloc(sizeof(c_bvec_t) * (bio->bi_vcnt + 1), GFP_NOIO);
-    if(!c_bio || !c_bvecs) 
+    c_bio = castle_utils_bio_alloc(bio->bi_vcnt + 1);
+    if(!c_bio) 
         goto fail_bio;
     
-    c_bio->c_dev   =  dev;
-    c_bio->bio     =  bio;
-    c_bio->c_bvecs =  c_bvecs; 
-    /* Take reference to the c_bio before handling all the bvecs.
-       Do it directly (castle_bio_get(c_bio) doesn't work with ref_cnt=0). */
-    atomic_set(&c_bio->count, 1);
-    c_bio->err     = 0;
+    c_bio->attachment = dev;
+    c_bio->bio        = bio;
 
     sector     = bio->bi_sector;
     last_block = -1;
@@ -999,8 +989,7 @@ static int castle_device_make_request(struct request_queue *rq, struct bio *bio)
     return 0;
 
 fail_bio:
-    if(c_bio)   kfree(c_bio);
-    if(c_bvecs) kfree(c_bvecs);
+    if(c_bio) castle_utils_bio_free(c_bio);
     bio_endio(bio, -EIO);
 
     return 0;

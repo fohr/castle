@@ -1,5 +1,3 @@
-#include <linux/workqueue.h>
-#include <linux/fs.h>
 #include <linux/bio.h>
 #include <linux/hardirq.h>
 
@@ -1266,7 +1264,7 @@ static void __castle_btree_find(struct castle_btree_type *btree,
 static void _castle_btree_find(struct work_struct *work)
 {
     c_bvec_t *c_bvec = container_of(work, c_bvec_t, work);
-    struct castle_attachment *c_dev = c_bvec->c_bio->c_dev;
+    struct castle_attachment *att = c_bvec->c_bio->attachment;
     struct castle_btree_type *btree = c_bvec->btree; /* This is in an union, get it out ASAP */
     c_disk_blk_t root_cdb;
 
@@ -1275,11 +1273,11 @@ static void _castle_btree_find(struct work_struct *work)
     c_bvec->btree_parent_node = NULL;
     /* Lock the pointer to the root node.
        This is unlocked by the (poorly named) castle_btree_c2b_forget() */
-    down_read(&c_dev->lock);
-    c_bvec->version = c_dev->version;
+    down_read(&att->lock);
+    c_bvec->version = att->version;
     castle_version_lock(c_bvec->version);
     root_cdb = castle_version_root_get(c_bvec->version, GLOBAL_TREE);
-    up_read(&c_dev->lock);
+    up_read(&att->lock);
     if(DISK_BLK_INVAL(root_cdb))
     {
         /* Complete the request early, end exit */

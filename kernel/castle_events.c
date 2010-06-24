@@ -1,8 +1,6 @@
-#include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/kobject.h>
 #include <linux/sched.h>
-#include <asm/semaphore.h>
 
 #include "castle_public.h"
 #include "castle.h"

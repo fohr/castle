@@ -1,10 +1,6 @@
-#include <linux/module.h> 
-#include <linux/workqueue.h> 
 #include <linux/list.h>
 #include <linux/slab.h>
 #include <linux/hardirq.h>
-#include <linux/fs.h>
-#include <asm/semaphore.h>
 
 #include "castle_public.h"
 #include "castle_utils.h"

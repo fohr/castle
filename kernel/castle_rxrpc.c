@@ -1,7 +1,4 @@
-#include <linux/module.h>
 #include <linux/kthread.h>
-#include <linux/workqueue.h>
-#include <linux/fs.h>
 #include <linux/bio.h>
 #include <linux/net.h>
 #include <linux/socket.h>
@@ -19,6 +16,7 @@
 #include "castle_cache.h"
 #include "castle_rxrpc.h"
 #include "castle_ctrl.h"
+#include "castle_objects.h"
 
 //#define DEBUG
 #ifndef DEBUG
@@ -76,8 +74,6 @@ struct castle_rxrpc_call {
         RXRPC_CALL_ERROR,         /* call failed due to error */
     }                              state;
     int                            error;
-
-    uint8_t                       *buffer;
 };
 
 /* Definition of different call types */
@@ -116,40 +112,65 @@ int castle_rxrpc_get_decode(struct castle_rxrpc_call *call, struct sk_buff *skb,
     printk("Obj Get.\n");
     return -ENOTSUPP;
 }
+    
+static void castle_rxrpc_bvec_complete(c_bvec_t *c_bvec, int err, c_disk_blk_t cdb)
+{
+    c_bio_t *c_bio = c_bvec->c_bio;
+    struct castle_rxrpc_call *call = c_bio->rxrpc_call; 
 
+    uint32_t tmp_reply = htonl((uint32_t)CASTLE_OBJ_REPLY_REPLACE);
+
+    printk("Returned from btree walk with cdb=(0x%x, 0x%x)\n", cdb.disk, cdb.block);
+    /* Sanity check on the bio */
+    BUG_ON(atomic_read(&c_bio->count) != 1);
+    BUG_ON(c_bio->err != 0);
+
+    castle_rxrpc_reply_send(call, &tmp_reply, 4);
+    call->state = RXRPC_CALL_AWAIT_ACK;
+}
+
+extern struct castle_attachment *global_attachment_hack;
 int castle_rxrpc_replace_decode(struct castle_rxrpc_call *call, struct sk_buff *skb,  bool last)
 {
-    char *collection_name, *key[10], *value;
+    uint8_t *collection_name, **key, *value = NULL;
     uint32_t nr_key_dim, val_type, i;
-
+    c_bio_t *c_bio;
+    c_bvec_t *c_bvec;
+    
     printk("Obj Replace.\n");
     collection_name = SKB_STR_GET(skb, 128);
+    printk(" collection name: %s (ignoring)\n", collection_name);
+    kfree(collection_name);
+
     nr_key_dim      = SKB_L_GET  (skb);
-    BUG_ON(nr_key_dim > 10);
+
+    key = kzalloc(sizeof(uint8_t *) * (nr_key_dim + 1), GFP_KERNEL);
+    if(!key)
+        return -ENOMEM;
+
     for(i=0; i<nr_key_dim; i++)
         key[i]      = SKB_STR_GET(skb, 128);
+
     val_type        = SKB_L_GET  (skb);
     if(val_type == CASTLE_OBJ_VALUE)
         value       = SKB_STR_GET(skb, 128);
     
-    printk(" collection name: %s (ignoring)\n", collection_name);
-    kfree(collection_name);
-    printk(" nr key dims    : %d\n", nr_key_dim);
-    for(i=0; i<nr_key_dim; i++)
-    {
-        printk(" key[%d]         : ", i);
-        print_hex_dump_bytes("", DUMP_PREFIX_NONE, key[i], strlen(key[i]));
-        kfree(key[i]);
-    }
-    printk(" val type       : %d\n", val_type);
-    if(val_type == CASTLE_OBJ_VALUE)
-    {
-        printk(" value          : ");
-        print_hex_dump_bytes("", DUMP_PREFIX_NONE, value, strlen(value));
-        kfree(value);
-    }
+    rxrpc_kernel_data_delivered(skb);
+    call->state = RXRPC_CALL_REPLYING;
+    /* Single c_bvec for the bio */
+    c_bio = castle_utils_bio_alloc(1);
+    c_bio->attachment = global_attachment_hack;
+    c_bio->rxrpc_call = call;
 
-    return -ENOTSUPP;
+    c_bvec = c_bio->c_bvecs; 
+    c_bvec->callback  = castle_rxrpc_bvec_complete;
+    
+    /* TODO: add bios to the debugger! */ 
+    
+    BUG_ON(!global_attachment_hack);
+    castle_object_replace(c_bio, key, value);
+
+    return 0;
 }
 
 int castle_rxrpc_slice_decode(struct castle_rxrpc_call *call, struct sk_buff *skb,  bool last)
@@ -235,29 +256,6 @@ void castle_rxrpc_reply_send(struct castle_rxrpc_call *call, const void *buf, si
         return;
     if (n == -ENOMEM)
         rxrpc_kernel_abort_call(call->rxcall, RX_USER_ABORT);
-}
-
-static void USED castle_rxrpc_packet_repspond(struct castle_rxrpc_call *call)
-{
-    struct msghdr msg;
-    struct iovec iov[1];
-
-    call->buffer[0]     = 0;
-    call->buffer[1]     = 1;
-    call->buffer[2]     = 2;
-    call->buffer[3]     = 3;
-
-    iov[0].iov_base     = call->buffer;
-    iov[0].iov_len      = 4; /* <- same as in send_data? */
-    msg.msg_name        = NULL;
-    msg.msg_namelen     = 0;
-    msg.msg_iov         = iov;
-    msg.msg_iovlen      = 1;
-    msg.msg_control     = NULL;
-    msg.msg_controllen  = 0;
-    msg.msg_flags       = 0;
-
-    BUG_ON(rxrpc_kernel_send_data(call->rxcall, &msg, 4) != 4);
 }
 
 static void castle_rxrpc_call_delete(struct work_struct *work)
@@ -362,8 +360,7 @@ static void castle_rxrpc_incoming_call_collect(struct work_struct *work)
 {
     struct castle_rxrpc_call *c_rxcall;
     struct sk_buff *skb;
-    static atomic_t call_id = ATOMIC_INIT(0);
-    uint8_t *buffer;
+    static atomic_t call_id = ATOMIC(0);
     static int wq_nr = 0;
 
     while((skb = skb_dequeue(&rxrpc_incoming_calls)))
@@ -373,9 +370,7 @@ static void castle_rxrpc_incoming_call_collect(struct work_struct *work)
 
         /* Try to allocate a call struct, reject call if failed */
         c_rxcall = kzalloc(sizeof(struct castle_rxrpc_call), GFP_KERNEL);
-        /* TMP buffering */
-        buffer = kmalloc(17000, GFP_KERNEL);
-        if(!c_rxcall || !buffer)
+        if(!c_rxcall)
         {
             rxrpc_kernel_reject_call(socket);
             continue;
@@ -387,7 +382,6 @@ static void castle_rxrpc_incoming_call_collect(struct work_struct *work)
         skb_queue_head_init(&c_rxcall->rx_queue); 	
         c_rxcall->wq      = rxrpc_wqs[(wq_nr++) % NR_WQS];
         c_rxcall->call_id = atomic_inc_return(&call_id);
-        c_rxcall->buffer  = buffer;
         c_rxcall->type    = &castle_rxrpc_op_call;
         c_rxcall->state   = RXRPC_CALL_AWAIT_OP_ID;
 

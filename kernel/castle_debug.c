@@ -1,7 +1,4 @@
-#include <linux/module.h>
 #include <linux/kthread.h>
-#include <linux/workqueue.h>
-#include <linux/fs.h>
 #include <linux/bio.h>
 
 #include "castle_public.h"
@@ -133,6 +130,7 @@ static void castle_debug_watches_update(struct bio *bio, uint32_t version)
 void castle_debug_bio_add(c_bio_t *c_bio, uint32_t version, int nr_bvecs)
 {
     unsigned long flags;
+    int i;
 
     c_bio->nr_bvecs = nr_bvecs; 
     /* Take the reference to the c_bio by adding 1 to the count */
@@ -140,6 +138,8 @@ void castle_debug_bio_add(c_bio_t *c_bio, uint32_t version, int nr_bvecs)
     spin_lock_irqsave(&bio_list_spinlock, flags);
     c_bio->id = bio_id++;
     c_bio->stuck = 0;
+    for(i=0; i<nr_bvecs; i++)
+        c_bio->c_bvecs[i].state = 0;
     /* One extra reference (on top of the bvec refs)
        taken to c_bio when bio_add is called */
     list_add(&c_bio->list, &bio_list);

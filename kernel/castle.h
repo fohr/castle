@@ -1,6 +1,13 @@
 #ifndef __CASTLE_H__
 #define __CASTLE_H__
 
+#include <linux/module.h>
+#include <linux/workqueue.h>
+#include <linux/completion.h>
+#include <linux/fs.h>
+#include <asm/semaphore.h>
+
+
 #define USED                 __attribute__((used))
 #define PACKED               __attribute__((packed))
 
@@ -206,16 +213,20 @@ struct castle_flist_entry {
 /* IO related structures */
 struct castle_bio_vec;
 typedef struct castle_bio {
-    struct castle_attachment  *c_dev;
-    struct bio                *bio;
-    struct castle_bio_vec     *c_bvecs; 
-    atomic_t                   count;
-    int                        err;
-#ifdef CASTLE_DEBUG           
-    int                        stuck;
-    int                        id;
-    int                        nr_bvecs;
-    struct list_head           list;
+    struct castle_attachment  *attachment;
+    /* castle_bio is created to handle a bio, or an rxrpc call (never both) */
+    union {
+        struct bio               *bio;
+        struct castle_rxrpc_call *rxrpc_call;
+    };
+    struct castle_bio_vec        *c_bvecs; 
+    atomic_t                      count;
+    int                           err;
+#ifdef CASTLE_DEBUG              
+    int                           stuck;
+    int                           id;
+    int                           nr_bvecs;
+    struct list_head              list;
 #endif
 } c_bio_t;
 

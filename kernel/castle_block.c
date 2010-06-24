@@ -1,4 +1,3 @@
-#include <linux/completion.h>
 #include <linux/kobject.h>
 #include <linux/bio.h>
 #include <linux/hardirq.h>

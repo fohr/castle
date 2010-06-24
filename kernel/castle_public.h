@@ -1,6 +1,8 @@
 #ifndef __CASTLE_PUBLIC_H__
 #define __CASTLE_PUBLIC_H__
 
+#include <linux/types.h>
+
 typedef uint32_t region_id_t;
 typedef uint32_t transfer_id_t;
 typedef uint32_t slave_uuid_t;

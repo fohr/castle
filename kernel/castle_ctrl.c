@@ -1,5 +1,3 @@
-#include <linux/module.h>
-#include <linux/fs.h>
 #include <linux/genhd.h>
 #include <linux/miscdevice.h>
 #include <linux/skbuff.h>
@@ -252,6 +250,7 @@ static void castle_control_transfer_destroy(transfer_id_t id, int *ret)
     }
 }
 
+struct castle_attachment *global_attachment_hack = NULL;
 static void castle_control_collection_attach(version_t version,
                                              char *name,
                                              int *ret,
@@ -265,6 +264,7 @@ static void castle_control_collection_attach(version_t version,
         *ret = -EINVAL;
         return;
     }
+    global_attachment_hack = ca;
     *collection = ca->col.id; 
     *ret = 0;
 }

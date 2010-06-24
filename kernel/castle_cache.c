@@ -1,5 +1,3 @@
-#include <linux/module.h>
-#include <linux/workqueue.h>
 #include <linux/sched.h>
 #include <linux/bio.h>
 #include <linux/spinlock.h>

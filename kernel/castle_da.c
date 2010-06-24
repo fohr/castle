@@ -1,9 +1,4 @@
-#include <linux/module.h>
-#include <linux/workqueue.h>
 #include <linux/sched.h>
-#include <linux/fs.h>
-
-#include <linux/random.h>
 
 #include "castle_public.h"
 #include "castle_utils.h"
@@ -250,6 +245,7 @@ int castle_double_array_read(void)
             goto out_iter_destroy;
         castle_da_unmarshall(da, &mstore_dentry, key);
         castle_da_hash_add(da);
+        debug("Read DA id=%d\n", da->id);
         castle_next_da_id = (da->id >= castle_next_da_id) ? da->id + 1 : castle_next_da_id;
     }
     castle_mstore_iterator_destroy(iterator);
@@ -269,11 +265,12 @@ int castle_double_array_read(void)
         da = castle_da_hash_get(da_id);
         if(!da)
             goto out_iter_destroy;
+        debug("Read CT seq=%d\n", ct->seq);
         list_add(&ct->list, &da->trees[ct->level]);
         castle_next_tree_seq = (ct->seq >= castle_next_tree_seq) ? ct->seq + 1 : castle_next_tree_seq;
     }
     castle_mstore_iterator_destroy(iterator);
-    printk("=========> castle_next_da_id = %d, castle_next_tree_id=%d\n", 
+    debug("castle_next_da_id = %d, castle_next_tree_id=%d\n", 
             castle_next_da_id, 
             castle_next_tree_seq);
 
@@ -287,7 +284,7 @@ out_iter_destroy:
     return -EINVAL;
 }
 
-static struct castle_component_tree* castle_da_ct_make(struct castle_double_array *da)
+static int castle_da_ct_make(struct castle_double_array *da)
 {
     struct castle_component_tree *ct;
     c2_block_t *c2b;
@@ -295,7 +292,7 @@ static struct castle_component_tree* castle_da_ct_make(struct castle_double_arra
 
     ct = kzalloc(sizeof(struct castle_double_array), GFP_KERNEL); 
     if(!ct) 
-        return NULL;
+        return -ENOMEM;
     
     /* TODO: work out locking for ALL of this! */
 
@@ -317,17 +314,18 @@ static struct castle_component_tree* castle_da_ct_make(struct castle_double_arra
         /* TODO: free the block */
         printk("Could not write root node for version: %d\n", da->root_version);
         kfree(ct);
-        return NULL;
+        return ret;
     }
+    /* Thread CT onto level 0 list */
+    list_add(&ct->list, &da->trees[ct->level]);
 
-    return ct;
+    return 0;
 }
 
 int castle_double_array_make(da_id_t da_id, version_t root_version)
 {
-    struct castle_component_tree *ct;
     struct castle_double_array *da;
-    int i;
+    int ret, i;
 
     printk("Creating doubling array for da_id=%d, version=%d\n", da_id, root_version);
     da = kzalloc(sizeof(struct castle_double_array), GFP_KERNEL); 
@@ -338,16 +336,17 @@ int castle_double_array_make(da_id_t da_id, version_t root_version)
     da->mstore_key = INVAL_MSTORE_KEY;
     for(i=0; i<MAX_DA_LEVEL; i++)
         INIT_LIST_HEAD(&da->trees[i]);
-    ct = castle_da_ct_make(da);
-    if(!ct)
+    ret = castle_da_ct_make(da);
+    if(ret)
     {
         printk("Exiting from failed ct create.\n");
         kfree(da);
         
-        return -EINVAL;
+        return ret;
     }
     printk("Successfully made a new doubling array, id=%d, for version=%d\n",
         da_id, root_version);
+    castle_da_hash_add(da);
 
     return 0;
 }

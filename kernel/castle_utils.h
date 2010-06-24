@@ -2,6 +2,11 @@
 #define __CASTLE_UTILS_H__
 
 #include <linux/skbuff.h>
+#include "castle_public.h"
+#include "castle_utils.h"
+#include "castle.h"
+
+#define ATOMIC(_i)  ((atomic_t)ATOMIC_INIT(_i))
 
 #define DEFINE_HASH_TBL(_prefix, _tab, _tab_size, _struct, _list_mbr, _key_t, _key)  \
                                                                                      \
@@ -135,6 +140,32 @@ static inline char* SKB_STR_GET(struct sk_buff *skb, int max_len)
     BUG_ON(!pskb_pull(skb, str_len));
 
     return str;
+}
+
+static inline c_bio_t* castle_utils_bio_alloc(int nr_bvecs)
+{
+    c_bio_t *c_bio;
+    c_bvec_t *c_bvecs;
+    int i;
+
+    /* Allocate bio & bvec structures in one memory block */
+    c_bio = kmalloc(sizeof(c_bio_t) + nr_bvecs * sizeof(c_bvec_t), GFP_NOIO);
+    if(!c_bio)
+        return NULL;
+    c_bvecs = (c_bvec_t *)(c_bio + 1);
+    for(i=0; i<nr_bvecs; i++)
+        c_bvecs[i].c_bio = c_bio;
+    c_bio->c_bvecs = c_bvecs; 
+    /* Single reference taken out, the user decides how many more to take */
+    c_bio->count   = ATOMIC(1);
+    c_bio->err     = 0;
+
+    return c_bio;
+}
+
+static inline void castle_utils_bio_free(c_bio_t *bio)
+{
+    kfree(bio);
 }
 
 void inline list_swap(struct list_head *t1, struct list_head *t2);

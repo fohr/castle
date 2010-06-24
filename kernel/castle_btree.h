@@ -1,6 +1,8 @@
 #ifndef __CASTLE_BTREE_H__
 #define __CASTLE_BTREE_H__
-  
+
+#include "castle_cache.h"
+
 extern struct castle_btree_type castle_batree;
 extern struct castle_btree_type castle_mtree;
 

@@ -1,12 +1,9 @@
-#include <linux/module.h>
 #include <linux/bio.h>
 #include <linux/kobject.h>
-#include <linux/device-mapper.h>
 #include <linux/blkdev.h>
 #include <linux/random.h>
 #include <linux/crc32.h>
 #include <linux/sched.h>
-#include <asm/semaphore.h>
 #include <linux/kernel.h>
 
 #include "castle_public.h"
