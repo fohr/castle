@@ -9,6 +9,8 @@
 #include "castle_utils.h"
 #include "castle.h"
 #include "castle_cache.h"
+#include "castle_btree.h"
+#include "castle_versions.h"
 #include "castle_freespace.h"
 
 //#define DEBUG
@@ -21,12 +23,15 @@
 #define MAX_DA_LEVEL                    (10)
 
 #define CASTLE_DA_HASH_SIZE             (1000)
-static struct list_head  *castle_da_hash;
-struct castle_mstore     *castle_da_store;
-struct castle_mstore     *castle_tree_store;
+static struct list_head     *castle_da_hash;
+static struct castle_mstore *castle_da_store;
+static struct castle_mstore *castle_tree_store;
+       da_id_t               castle_next_da_id    = 1; 
+static tree_seq_t            castle_next_tree_seq = 1; 
 
 struct castle_double_array {
     da_id_t          id;
+    version_t        root_version;
     struct list_head trees[MAX_DA_LEVEL];
     struct list_head hash_list;
     c_mstore_key_t   mstore_key;
@@ -53,7 +58,8 @@ static int castle_da_ct_inc_cmp(struct list_head *l1, struct list_head *l2)
 static c_mstore_key_t castle_da_marshall(struct castle_dlist_entry *dam,
                                          struct castle_double_array *da)
 {
-    dam->id = da->id;
+    dam->id           = da->id;
+    dam->root_version = da->root_version;
 
     return da->mstore_key;
 }
@@ -64,8 +70,9 @@ static void castle_da_unmarshall(struct castle_double_array *da,
 {
     int i;
 
-    da->id         = dam->id;
-    da->mstore_key = key;
+    da->id           = dam->id;
+    da->root_version = dam->root_version;
+    da->mstore_key   = key;
 
     for(i=0; i<MAX_DA_LEVEL; i++)
         INIT_LIST_HEAD(&da->trees[i]);
@@ -243,6 +250,7 @@ int castle_double_array_read(void)
             goto out_iter_destroy;
         castle_da_unmarshall(da, &mstore_dentry, key);
         castle_da_hash_add(da);
+        castle_next_da_id = (da->id >= castle_next_da_id) ? da->id + 1 : castle_next_da_id;
     }
     castle_mstore_iterator_destroy(iterator);
 
@@ -262,8 +270,12 @@ int castle_double_array_read(void)
         if(!da)
             goto out_iter_destroy;
         list_add(&ct->list, &da->trees[ct->level]);
+        castle_next_tree_seq = (ct->seq >= castle_next_tree_seq) ? ct->seq + 1 : castle_next_tree_seq;
     }
     castle_mstore_iterator_destroy(iterator);
+    printk("=========> castle_next_da_id = %d, castle_next_tree_id=%d\n", 
+            castle_next_da_id, 
+            castle_next_tree_seq);
 
     /* Sort all the tree lists by the sequence number */
     castle_da_hash_iterate(castle_da_trees_sort, NULL); 
@@ -274,6 +286,72 @@ out_iter_destroy:
     castle_mstore_iterator_destroy(iterator);
     return -EINVAL;
 }
+
+static struct castle_component_tree* castle_da_ct_make(struct castle_double_array *da)
+{
+    struct castle_component_tree *ct;
+    c2_block_t *c2b;
+    int ret;
+
+    ct = kzalloc(sizeof(struct castle_double_array), GFP_KERNEL); 
+    if(!ct) 
+        return NULL;
+    
+    /* TODO: work out locking for ALL of this! */
+
+    /* Allocate an id for the tree, init the ct. */
+    ct->seq         = castle_next_tree_seq++;
+    ct->level      = 0;
+    ct->mstore_key = INVAL_MSTORE_KEY; 
+
+    /* Create a root node for this tree, and update the root version */
+    c2b = castle_btree_node_create(da->root_version, 1 /* is_leaf */, MTREE_TYPE);
+    ct->first_node = c2b->cdb; 
+    unlock_c2b(c2b);
+    put_c2b(c2b);
+    castle_version_lock(da->root_version);
+    ret = castle_version_root_update(da->root_version, ct->seq, ct->first_node);
+    castle_version_unlock(da->root_version);
+    if(ret)
+    {
+        /* TODO: free the block */
+        printk("Could not write root node for version: %d\n", da->root_version);
+        kfree(ct);
+        return NULL;
+    }
+
+    return ct;
+}
+
+int castle_double_array_make(da_id_t da_id, version_t root_version)
+{
+    struct castle_component_tree *ct;
+    struct castle_double_array *da;
+    int i;
+
+    printk("Creating doubling array for da_id=%d, version=%d\n", da_id, root_version);
+    da = kzalloc(sizeof(struct castle_double_array), GFP_KERNEL); 
+    if(!da)
+        return -ENOMEM;
+    da->id = da_id;
+    da->root_version = root_version;
+    da->mstore_key = INVAL_MSTORE_KEY;
+    for(i=0; i<MAX_DA_LEVEL; i++)
+        INIT_LIST_HEAD(&da->trees[i]);
+    ct = castle_da_ct_make(da);
+    if(!ct)
+    {
+        printk("Exiting from failed ct create.\n");
+        kfree(da);
+        
+        return -EINVAL;
+    }
+    printk("Successfully made a new doubling array, id=%d, for version=%d\n",
+        da_id, root_version);
+
+    return 0;
+}
+
 
 int castle_double_array_create(void)
 {

@@ -10,6 +10,11 @@
         extern int (*assert_function__(void)) [STATIC_BUG_ON_HELPER(expr)]
 
 typedef uint32_t tree_seq_t;                   
+#define GLOBAL_TREE         ((tree_seq_t)0)
+#define INVAL_TREE          ((tree_seq_t)-1)
+#define TREE_GLOBAL(_t)     ((_t) == GLOBAL_TREE)
+#define TREE_INVAL(_t)      ((_t) == INVAL_TREE)
+
 typedef uint32_t da_id_t;                   
 #define INVAL_DA            ((da_id_t)-1)
 #define DA_INVAL(_da)       ((_da) == INVAL_DA)
@@ -160,6 +165,7 @@ struct castle_btree_type {
 
 struct castle_dlist_entry {
     da_id_t     id;
+    version_t   root_version;
 } PACKED;
 
 struct castle_clist_entry {
@@ -410,6 +416,7 @@ extern struct castle_slaves       castle_slaves;
 extern struct castle_attachments  castle_attachments;
 extern struct castle_regions      castle_regions;
 extern struct castle_transfers    castle_transfers;
+extern da_id_t                    castle_next_da_id;
 
 extern struct workqueue_struct *castle_wqs[2*MAX_BTREE_DEPTH+1];
 #define castle_wq              (castle_wqs[0])

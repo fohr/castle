@@ -8,6 +8,7 @@
 #include "castle_public.h"
 #include "castle_utils.h"
 #include "castle.h"
+#include "castle_da.h"
 #include "castle_cache.h"
 #include "castle_btree.h"
 #include "castle_versions.h"
@@ -71,27 +72,38 @@ static void castle_control_detach(uint32_t dev, int *ret)
     *ret = (cd ? 0 : -ENODEV);
 }
 
+/* Size == 0 means that a collection tree is supposed to be created */ 
 static void castle_control_create(uint64_t size, int *ret, version_t *id)
 {
+    int collection_tree = (size == 0);
+    da_id_t da_id = INVAL_DA; 
     version_t version;
 
-    if(size == 0)
+    if(collection_tree)
     {
-        printk("When creating a volume size must be g.t. 0!\n");
-        *id  = -1;
-        *ret = -EINVAL;
-        return;
+        printk("Creating a collection version tree.\n");
+        da_id = castle_next_da_id++;
     }
 
+    /* Create a new version which will act as the root for this version tree */
     version = castle_version_new(0, /* clone */ 
                                  0, /* root version */
+                                 da_id,
                                  size);
+
+    /* We use doubling arrays for collection trees */
+    if(collection_tree &&
+       castle_double_array_make(da_id, version))
+    {
+        printk("Failed creating doubling array for version: %d\n", version);
+        version = INVAL_VERSION; 
+    }
+
     if(VERSION_INVAL(version))
     {
         *id  = -1;
         *ret = -EINVAL;
-    } 
-    else
+    } else
     {
         *id  = version;
         *ret = 0;
@@ -109,9 +121,10 @@ static void castle_control_clone(version_t version, int *ret, version_t *clone)
     }
     
     /* Try to create a new version in the version tree */
-    version = castle_version_new(0,       /* clone */ 
-                                 version, 
-                                 0);      /* size: take parent's */
+    version = castle_version_new(0,        /* clone */ 
+                                 version,
+                                 INVAL_DA, /* da_id: take parent's */
+                                 0);       /* size:  take parent's */
     if(VERSION_INVAL(version))
     {
         *clone = 0;
@@ -139,7 +152,8 @@ static void castle_control_snapshot(uint32_t dev, int *ret, version_t *version)
     old_version  = cd->version;
     ver = castle_version_new(1,            /* snapshot */
                              cd->version,
-                             0);           /* take size from the parent */ 
+                             INVAL_DA,     /* take da_id from the parent */
+                             0);           /* take size  from the parent */ 
     if(VERSION_INVAL(ver))
     {
         *version = -1;
@@ -281,7 +295,8 @@ static void castle_control_collection_snapshot(collection_id_t collection,
     old_version  = ca->version;
     ver = castle_version_new(1,            /* snapshot */
                              ca->version,
-                             0);           /* take size from the parent */ 
+                             INVAL_DA,     /* take da_id from the parent */
+                             0);           /* take size  from the parent */ 
     if(VERSION_INVAL(ver))
     {
         *version = -1;

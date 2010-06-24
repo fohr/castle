@@ -151,6 +151,39 @@ out_dealloc:
     return NULL;
 }
 
+static struct castle_tree_root *__castle_version_root_get(struct castle_version *v,
+                                                          tree_seq_t tree)
+{
+    struct castle_tree_root *ct;
+    struct list_head *l;
+
+    BUG_ON(!test_bit(CV_FTREE_LOCKED_BIT, &v->flags));
+    list_for_each(l, &v->tree_roots)
+    {
+        ct = list_entry(l, struct castle_tree_root, list);
+        if(ct->tree_seq == tree)
+            return ct;
+    }
+
+    return NULL;
+}
+
+c_disk_blk_t castle_version_root_get(version_t version, tree_seq_t tree)
+{
+    struct castle_tree_root *ct;
+    struct castle_version *v;
+
+    v = castle_versions_hash_get(version);
+    if(!v)
+        return INVAL_DISK_BLK;
+
+    ct = __castle_version_root_get(v, tree);
+    if(!ct)
+        return INVAL_DISK_BLK;
+
+    return ct->root;
+}
+
 static int castle_version_root_add(version_t version,
                                    tree_seq_t tree_seq, 
                                    c_disk_blk_t root,
@@ -231,38 +264,77 @@ static void castle_version_writeback(struct castle_version *v, int new)
 }
 
 /***** External functions *****/
-void castle_version_ftree_update(version_t version, c_disk_blk_t cdb)
+int castle_version_root_update(version_t version, tree_seq_t tree_id, c_disk_blk_t cdb)
 {
     struct castle_tree_root *r;
     struct castle_version *v;
+    int ret;
 
+    printk("Updating root for version=%d, tree_id=%d\n", version, tree_id);
     v = castle_versions_hash_get(version);
     BUG_ON(!v);
 
-    /* Test if the lock is taken out (check not 100% since it 
-       could be taken by someone else than us) */
-    BUG_ON(!test_bit(CV_FTREE_LOCKED_BIT, &v->flags));
-    /* Make sure there is only a single entry in the list */
-    BUG_ON((v->tree_roots.next       == &v->tree_roots) ||
-           (v->tree_roots.next->next != &v->tree_roots));
-    r = list_entry(v->tree_roots.next, struct castle_tree_root, list);
-    r->root = cdb;
+    r = __castle_version_root_get(v, tree_id);
+    if(!r)
+    {
+        printk("Haven't found root for version=%d, tree_id=%d\n", version, tree_id);
+        printk("Creating one.\n");
+        ret = castle_version_root_add(version, tree_id, cdb, INVAL_MSTORE_KEY);
+        if(ret)
+            return ret;
+    } else
+    {
+        r->root = cdb;
+    }
   
     castle_version_writeback(v, 0 /* Not new */); 
+
+    return 0;
+}
+
+static int castle_version_roots_clone(struct castle_version *dst,
+                                      struct castle_version *src)
+{
+    struct castle_tree_root *r;
+    struct list_head *l, *t;
+    int ret;
+
+    BUG_ON(!list_empty(&dst->tree_roots));
+    list_for_each(l, &src->tree_roots)
+    {
+        r = list_entry(l, struct castle_tree_root, list); 
+        if((ret = castle_version_root_add(dst->version, 
+                                          r->tree_seq, 
+                                          r->root, 
+                                          INVAL_MSTORE_KEY)))
+            goto err_out;
+    }
+
+    return 0;
+err_out:
+    /* Free the already created roots, and exit */
+    list_for_each_safe(l, t, &dst->tree_roots)
+    {
+        list_del(l);
+        r = list_entry(l, struct castle_tree_root, list); 
+        kfree(r);
+    }
+
+    return ret;
 }
 
 static struct castle_version* castle_version_new_create(int snap_or_clone,
                                                         version_t parent,
+                                                        da_id_t da_id,
                                                         uint32_t size)
 {
-    struct castle_version *v;
-    c_disk_blk_t ftree_root;
+    struct castle_version *v, *p;
     uint32_t parent_size;
     version_t version;
 
     /* Read ftree root from the parent (also, make sure parent exists) */
-    v = castle_versions_hash_get(parent);
-    if(!v)
+    p = castle_versions_hash_get(parent);
+    if(!p)
     {
         printk("Asked to create a child of non-existant parent: %d\n",
             parent);
@@ -285,29 +357,34 @@ static struct castle_version* castle_version_new_create(int snap_or_clone,
        accepted before we release it (by this time the new vesion will 
        be saved to castle_device structure) */ 
     debug("Locking the parent (%d) ftree.\n", parent);
-    ftree_root = castle_version_ftree_lock(parent);
-    castle_version_ftree_unlock(parent);
-    parent_size = v->size;
+    castle_version_lock(parent);
+    castle_version_unlock(parent);
+    parent_size = p->size;
 
     /* Allocate a new version number. */
     BUG_ON(VERSION_INVAL(castle_versions_last));
     version = ++castle_versions_last;
     BUG_ON(VERSION_INVAL(castle_versions_last));
 
-    /* Try to add it to the hash */
+    /* Try to add it to the hash. Use the da_id provided or the parent's */
+    BUG_ON(!DA_INVAL(da_id) && !DA_INVAL(p->da_id));
+    da_id = DA_INVAL(da_id) ? p->da_id : da_id;
     v = castle_version_add(version, parent, INVAL_DA, size);
     if(!v) 
         return NULL;
-    if(castle_version_root_add(version, 0, ftree_root, INVAL_MSTORE_KEY))
+    
+    if(castle_version_roots_clone(v, p))
     {
         castle_versions_hash_remove(v);
         kmem_cache_free(castle_versions_cache, v);
         return NULL;
     }
         
+    /* If our parent has the size set, inherit it (ignores the size argument) */
+    if(parent_size != 0)
+        v->size = parent_size;
+    
     /* Set clone/snap bit in flags */ 
-    if(parent_size != 0) v->size = parent_size;
-    BUG_ON(v->size == 0);
     if(snap_or_clone)
         v->flags |= CV_SNAP_MASK;
     else
@@ -335,6 +412,7 @@ static struct castle_version* castle_version_new_create(int snap_or_clone,
 
 version_t castle_version_new(int snap_or_clone,
                              version_t parent,
+                             da_id_t da_id,
                              uint32_t size)
 {
     struct castle_version *v;
@@ -344,6 +422,7 @@ version_t castle_version_new(int snap_or_clone,
     /* Get a new version number */
     v = castle_version_new_create(snap_or_clone,
                                   parent,
+                                  da_id,
                                   size);
         
     /* Return if we couldn't create the version correctly
@@ -374,9 +453,8 @@ static int castle_version_ftree_yield(void *word)
 	return 0;
 }
 
-c_disk_blk_t castle_version_ftree_lock(version_t version)
+void castle_version_lock(version_t version)
 {
-    struct castle_tree_root *r;
     struct castle_version *v;
 
     /* This function may sleep on the ftree lock */
@@ -384,7 +462,8 @@ c_disk_blk_t castle_version_ftree_lock(version_t version)
 
     v = castle_versions_hash_get(version);
 
-    if(!v) return INVAL_DISK_BLK;
+    if(!v) 
+        return;
 
 	if (test_and_set_bit(CV_FTREE_LOCKED_BIT, &v->flags))
     {
@@ -394,16 +473,9 @@ c_disk_blk_t castle_version_ftree_lock(version_t version)
                           castle_version_ftree_yield,
                           TASK_UNINTERRUPTIBLE);
     }
-    /* We've locked the node, we can now read the root cdb */
-    BUG_ON(!test_bit(CV_FTREE_LOCKED_BIT, &v->flags));
-    BUG_ON((v->tree_roots.next       == &v->tree_roots) ||
-           (v->tree_roots.next->next != &v->tree_roots));
-    r = list_entry(v->tree_roots.next, struct castle_tree_root, list);
-
-    return r->root;
 }
 
-void castle_version_ftree_unlock(version_t version)
+void castle_version_unlock(version_t version)
 {
     struct castle_version *v;
 
@@ -631,7 +703,7 @@ int castle_version_is_ancestor(version_t candidate, version_t version)
 
 /* Write root version (version 0) to mstore, which will then be processed by
    castle_versions_read() */
-int castle_versions_root_init(c_disk_blk_t ftree_root)
+int castle_versions_zero_init(c_disk_blk_t ftree_root)
 {
     struct castle_vlist_entry mstore_ventry;
     struct castle_rlist_entry mstore_rentry;

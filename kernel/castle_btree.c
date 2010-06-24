@@ -823,10 +823,11 @@ static void castle_btree_new_root_create(c_bvec_t *c_bvec, btree_t type)
        no longer do that, because there will be a parent node). */
     debug("About to update version tree.\n");
     /* TODO: Check if we hold the version lock */
-    castle_version_ftree_update(c_bvec->version, c2b->cdb);
+    /* Should not fail, because the root already exists */
+    BUG_ON(castle_version_root_update(c_bvec->version, GLOBAL_TREE, c2b->cdb));
     /* If all succeeded save the new node as the parent in bvec */
     c_bvec->btree_parent_node = c2b;
-    castle_version_ftree_unlock(c_bvec->version);
+    castle_version_unlock(c_bvec->version);
     clear_bit(CBV_ROOT_LOCKED_BIT, &c_bvec->flags);
 }
 
@@ -903,7 +904,8 @@ static int castle_btree_node_split(c_bvec_t *c_bvec)
         {
             debug("Effective node will be the new root node\n");
             BUG_ON(!eff_c2b);
-            castle_version_ftree_update(version, eff_c2b->cdb);
+            /* Should not fail, because the root already exists */
+            BUG_ON(castle_version_root_update(version, GLOBAL_TREE, eff_c2b->cdb));
         }
     }
 
@@ -1175,7 +1177,7 @@ static void castle_btree_c2b_forget(c_bvec_t *c_bvec)
        btree_node c2b locked. */
     if(test_bit(CBV_ROOT_LOCKED_BIT, &c_bvec->flags) && (!write || c_bvec->btree_node))
     {
-        castle_version_ftree_unlock(c_bvec->version); 
+        castle_version_unlock(c_bvec->version); 
         clear_bit(CBV_ROOT_LOCKED_BIT, &c_bvec->flags);
     }
     /* Promote node to the parent on writes */
@@ -1275,7 +1277,8 @@ static void _castle_btree_find(struct work_struct *work)
        This is unlocked by the (poorly named) castle_btree_c2b_forget() */
     down_read(&c_dev->lock);
     c_bvec->version = c_dev->version;
-    root_cdb = castle_version_ftree_lock(c_bvec->version);
+    castle_version_lock(c_bvec->version);
+    root_cdb = castle_version_root_get(c_bvec->version, GLOBAL_TREE);
     up_read(&c_dev->lock);
     if(DISK_BLK_INVAL(root_cdb))
     {
@@ -1756,7 +1759,7 @@ static void castle_btree_iter_path_traverse(c_iter_t *c_iter, c_disk_blk_t node_
     {
         /* We have just started the iteration - lets unlock the version tree */
         iter_debug("Unlocking version tree.\n");
-        castle_version_ftree_unlock(c_iter->version);
+        castle_version_unlock(c_iter->version);
     }
     /* Unlock previous c2b */
     if((c_iter->depth > 0) && (c_iter->path[c_iter->depth - 1] != NULL))
@@ -1814,7 +1817,8 @@ static void __castle_btree_iter_start(c_iter_t *c_iter)
     
     iter_debug("Locking version tree\n");
     
-    root_cdb = castle_version_ftree_lock(c_iter->version);
+    castle_version_lock(c_iter->version);
+    root_cdb = castle_version_root_get(c_iter->version, GLOBAL_TREE);
     if(DISK_BLK_INVAL(root_cdb))
     {
         /* Complete the request early, end exit */

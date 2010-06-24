@@ -198,7 +198,7 @@ int castle_fs_init(void)
         /* Init the root btree node */
         c2b = castle_btree_node_create(0 /* version */, 1 /* is_leaf */, MTREE_TYPE);
         /* Init version list */
-        ret = castle_versions_root_init(c2b->cdb);
+        ret = castle_versions_zero_init(c2b->cdb);
         /* Release btree node c2b */
         unlock_c2b(c2b);
         put_c2b(c2b);
