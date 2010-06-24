@@ -481,6 +481,7 @@ void castle_rxrpc_fini(void)
     int i;
 
     printk("Castle RXRPC fini.\n");
+    kernel_sock_shutdown(socket, SHUT_RDWR);
 	sock_release(socket);
     for(i=0; i<NR_WQS; i++)
         destroy_workqueue(rxrpc_wqs[i]);
