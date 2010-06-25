@@ -351,6 +351,22 @@ int castle_double_array_make(da_id_t da_id, version_t root_version)
     return 0;
 }
 
+static void castle_da_bvec_complete(c_bvec_t *c_bvec, int err, c_disk_blk_t cdb)
+{
+    void (*callback) (struct castle_bio_vec *c_bvec, int err, c_disk_blk_t cdb) =
+        c_bvec->da_endfind;
+    
+    callback(c_bvec, err, cdb);
+}
+
+void castle_double_array_find(c_bvec_t *c_bvec)
+{
+    BUG_ON(c_bvec->da_endfind);
+    c_bvec->da_endfind = c_bvec->endfind;
+    c_bvec->endfind = castle_da_bvec_complete;
+    
+    castle_btree_find(c_bvec);
+}
 
 int castle_double_array_create(void)
 {

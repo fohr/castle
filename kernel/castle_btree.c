@@ -427,7 +427,7 @@ static void castle_btree_io_end(c_bvec_t *c_bvec,
     castle_btree_c2b_forget(c_bvec);
     castle_btree_c2b_forget(c_bvec);
     /* Finish the IO */
-    c_bvec->callback(c_bvec, err, cdb);
+    c_bvec->endfind(c_bvec, err, cdb);
 }
 
 static void USED castle_btree_node_print(struct castle_btree_type *t, struct castle_btree_node *node)
@@ -1281,7 +1281,7 @@ static void _castle_btree_find(struct work_struct *work)
     if(DISK_BLK_INVAL(root_cdb))
     {
         /* Complete the request early, end exit */
-        c_bvec->callback(c_bvec, -EINVAL, INVAL_DISK_BLK);
+        c_bvec->endfind(c_bvec, -EINVAL, INVAL_DISK_BLK);
         return;
     }
     set_bit(CBV_ROOT_LOCKED_BIT, &c_bvec->flags);
@@ -1289,9 +1289,10 @@ static void _castle_btree_find(struct work_struct *work)
     __castle_btree_find(btree, c_bvec, root_cdb, btree->max_key);
 }
 
-void castle_btree_find(struct castle_btree_type *btree, c_bvec_t *c_bvec)
+void castle_btree_find(c_bvec_t *c_bvec)
 {
-    c_bvec->btree = btree;
+    BUG_ON((c_bvec->btree != &castle_mtree) &&
+           (c_bvec->btree != &castle_batree));
     INIT_WORK(&c_bvec->work, _castle_btree_find);
     queue_work(castle_wqs[19], &c_bvec->work); 
 }

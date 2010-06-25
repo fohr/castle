@@ -914,16 +914,18 @@ static void castle_device_c_bvec_make(c_bio_t *c_bio,
     castle_bio_get(c_bio);
 
     /* Init the c_bvec */
-    c_bvec->key          = (void *)block; 
-    c_bvec->version      = INVAL_VERSION; 
-    c_bvec->flags        = 0; 
-    c_bvec->callback     = castle_bio_data_io_end;
+    c_bvec->key         = (void *)block; 
+    c_bvec->version     = INVAL_VERSION; 
+    c_bvec->flags       = 0; 
+    c_bvec->btree       = &castle_mtree;
+    c_bvec->endfind     = castle_bio_data_io_end;
+    c_bvec->da_endfind  = NULL;
     if(one2one_bvec)
         set_bit(CBV_ONE2ONE_BIT, &c_bvec->flags);
     castle_debug_bvec_update(c_bvec, C_BVEC_INITIALISED);
 
     /* Submit the c_bvec for processing */
-    castle_btree_find(&castle_mtree, c_bvec); 
+    castle_btree_find(c_bvec); 
 }
  
 static int castle_device_make_request(struct request_queue *rq, struct bio *bio)
@@ -947,6 +949,7 @@ static int castle_device_make_request(struct request_queue *rq, struct bio *bio)
     
     c_bio->attachment = dev;
     c_bio->bio        = bio;
+    c_bio->data_dir   = bio_data_dir(bio);
 
     sector     = bio->bi_sector;
     last_block = -1;

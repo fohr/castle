@@ -1,6 +1,7 @@
 #ifndef __CASTLE_OBJECTS_H__
 #define __CASTLE_OBJECTS_H__
 
-void castle_object_replace(c_bio_t *c_bio, uint8_t **key, uint8_t *value);
+int castle_object_get    (struct castle_rxrpc_call *call, uint8_t **key);
+int castle_object_replace(struct castle_rxrpc_call *call, uint8_t **key, int tombstone);
 
 #endif /* __CASTLE_OBJECTS_H__ */

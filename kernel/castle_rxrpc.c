@@ -13,6 +13,7 @@
 #include "castle_utils.h"
 #include "castle.h"
 #include "castle_debug.h"
+#include "castle_btree.h"
 #include "castle_cache.h"
 #include "castle_rxrpc.h"
 #include "castle_ctrl.h"
@@ -32,8 +33,11 @@ static const struct castle_rxrpc_call_type castle_rxrpc_get_call;
 static const struct castle_rxrpc_call_type castle_rxrpc_replace_call;
 static const struct castle_rxrpc_call_type castle_rxrpc_slice_call;
 static const struct castle_rxrpc_call_type castle_rxrpc_ctrl_call;
-void castle_rxrpc_reply_send(struct castle_rxrpc_call *call, const void *buf, size_t len);
-
+static void castle_rxrpc_reply_send       (struct castle_rxrpc_call *call, 
+                                           const void *buf, size_t len);
+static void castle_rxrpc_double_reply_send(struct castle_rxrpc_call *call, 
+                                           const void *buf1, size_t len1,
+                                           const void *buf2, size_t len2);
 
 #define NR_WQS    4
 static struct socket            *socket;
@@ -54,11 +58,12 @@ struct castle_rxrpc_call_type {
 };
 
 struct castle_rxrpc_call {
-    struct workqueue_struct       *wq;         /* One of the rxrpc_wqs. Used to process the call. */
     struct work_struct             work;
+    struct workqueue_struct       *wq;          /* One of the rxrpc_wqs. Used to process the call. */
     unsigned long                  call_id;
     struct rxrpc_call             *rxcall;
-    struct sk_buff_head            rx_queue;   /* Queue of packets for this call */
+    struct sk_buff_head            rx_queue;    /* Queue of packets for this call */
+    struct sk_buff                *current_skb; /* Set when packet is processed asynchronously */
 
     int                            op_id;
     const struct castle_rxrpc_call_type *type;
@@ -77,7 +82,7 @@ struct castle_rxrpc_call {
 };
 
 /* Definition of different call types */
-int castle_rxrpc_op_decode(struct castle_rxrpc_call *call, struct sk_buff *skb,  bool last)
+static int castle_rxrpc_op_decode(struct castle_rxrpc_call *call, struct sk_buff *skb,  bool last)
 {
     if(skb->len < 4)
         return -EBADMSG;
@@ -107,79 +112,149 @@ int castle_rxrpc_op_decode(struct castle_rxrpc_call *call, struct sk_buff *skb, 
     return call->type->deliver(call, skb, last);
 }
 
-int castle_rxrpc_get_decode(struct castle_rxrpc_call *call, struct sk_buff *skb,  bool last)
+void castle_rxrpc_get_complete(struct castle_rxrpc_call *call, int err, void *data, size_t length)
 {
-    printk("Obj Get.\n");
-    return -ENOTSUPP;
-}
+    uint32_t reply[2];
+  
+    printk("Completing get.\n");
+    /* Deal with errors first */
+    if(err)
+    {
+        reply[0] = htonl(CASTLE_OBJ_REPLY_ERROR);
+        castle_rxrpc_reply_send(call, reply, 4);
+        call->state = RXRPC_CALL_AWAIT_ACK;
+        return;
+    }
+
+    reply[0] = htonl(CASTLE_OBJ_REPLY_GET);
+    /* Deal with tombstones next */
+    if(!data)
+    {
+        BUG_ON(length != 0);
+        reply[1] = htonl(CASTLE_OBJ_TOMBSTONE);
+        castle_rxrpc_reply_send(call, reply, 8);
+        call->state = RXRPC_CALL_AWAIT_ACK;
+        return;
+    }
     
-static void castle_rxrpc_bvec_complete(c_bvec_t *c_bvec, int err, c_disk_blk_t cdb)
+    /* Finally, deal with full values */
+    reply[1] = htonl(CASTLE_OBJ_VALUE);
+    reply[2] = htonl(length);
+    printk("Sending double reply.\n");
+
+    castle_rxrpc_double_reply_send(call, 
+                                   reply, 12,
+                                   data, length);
+}
+
+void castle_rxrpc_replace_complete(struct castle_rxrpc_call *call, int err)
 {
-    c_bio_t *c_bio = c_bvec->c_bio;
-    struct castle_rxrpc_call *call = c_bio->rxrpc_call; 
+    uint32_t reply[1];
+  
+    rxrpc_kernel_data_delivered(call->current_skb);
 
-    uint32_t tmp_reply = htonl((uint32_t)CASTLE_OBJ_REPLY_REPLACE);
+    if(err)
+        reply[0] = htonl(CASTLE_OBJ_REPLY_ERROR);
+    else
+        reply[0] = htonl(CASTLE_OBJ_REPLY_REPLACE);
 
-    printk("Returned from btree walk with cdb=(0x%x, 0x%x)\n", cdb.disk, cdb.block);
-    /* Sanity check on the bio */
-    BUG_ON(atomic_read(&c_bio->count) != 1);
-    BUG_ON(c_bio->err != 0);
-
-    castle_rxrpc_reply_send(call, &tmp_reply, 4);
+    castle_rxrpc_reply_send(call, reply, 4);
     call->state = RXRPC_CALL_AWAIT_ACK;
 }
 
-extern struct castle_attachment *global_attachment_hack;
-int castle_rxrpc_replace_decode(struct castle_rxrpc_call *call, struct sk_buff *skb,  bool last)
+void castle_rxrpc_str_copy(struct castle_rxrpc_call *call, void *buffer, int max_length)
 {
-    uint8_t *collection_name, **key, *value = NULL;
-    uint32_t nr_key_dim, val_type, i;
-    c_bio_t *c_bio;
-    c_bvec_t *c_bvec;
-    
-    printk("Obj Replace.\n");
-    collection_name = SKB_STR_GET(skb, 128);
-    printk(" collection name: %s (ignoring)\n", collection_name);
-    kfree(collection_name);
+    SKB_STR_CPY(call->current_skb, buffer, max_length);
+}
 
-    nr_key_dim      = SKB_L_GET  (skb);
+static int castle_rxrpc_collection_key_get(struct sk_buff *skb, 
+                                           collection_id_t *collection_p, 
+                                           uint8_t ***key_p)
+{
+    collection_id_t collection;
+    uint8_t **key;
+    uint32_t nr_key_dim, i;
 
+    collection = SKB_L_GET(skb);
+    nr_key_dim = SKB_L_GET(skb);
     key = kzalloc(sizeof(uint8_t *) * (nr_key_dim + 1), GFP_KERNEL);
     if(!key)
         return -ENOMEM;
 
     for(i=0; i<nr_key_dim; i++)
-        key[i]      = SKB_STR_GET(skb, 128);
+    {
+        key[i] = SKB_STR_GET(skb, 128);
+        if(!key[i])
+        {
+            for(i--; i>=0; i--)
+                kfree(key[i]);
+            kfree(key);
 
-    val_type        = SKB_L_GET  (skb);
-    if(val_type == CASTLE_OBJ_VALUE)
-        value       = SKB_STR_GET(skb, 128);
-    
-    rxrpc_kernel_data_delivered(skb);
-    call->state = RXRPC_CALL_REPLYING;
-    /* Single c_bvec for the bio */
-    c_bio = castle_utils_bio_alloc(1);
-    c_bio->attachment = global_attachment_hack;
-    c_bio->rxrpc_call = call;
+            return -ENOMEM;
+        }
+    }
 
-    c_bvec = c_bio->c_bvecs; 
-    c_bvec->callback  = castle_rxrpc_bvec_complete;
-    
-    /* TODO: add bios to the debugger! */ 
-    
-    BUG_ON(!global_attachment_hack);
-    castle_object_replace(c_bio, key, value);
+    *collection_p = collection;
+    *key_p = key;
 
     return 0;
 }
 
-int castle_rxrpc_slice_decode(struct castle_rxrpc_call *call, struct sk_buff *skb,  bool last)
+static int castle_rxrpc_get_decode(struct castle_rxrpc_call *call, struct sk_buff *skb,  bool last)
+{
+    collection_id_t collection;
+    uint8_t **key;
+    int ret;
+
+    printk("Obj Get.\n");
+    ret = castle_rxrpc_collection_key_get(skb, &collection, &key);
+    if(ret)
+        return ret;
+
+    printk(" collection %d\n", collection);
+
+    ret = castle_object_get(call, key);
+    if(ret)
+        return ret;
+
+    rxrpc_kernel_data_delivered(skb);
+    call->state = RXRPC_CALL_REPLYING;
+
+    return 0;
+}
+ 
+static int castle_rxrpc_replace_decode(struct castle_rxrpc_call *call, struct sk_buff *skb,  bool last)
+{
+    collection_id_t collection;
+    uint8_t **key;
+    int ret;
+static int cnt = 0;
+    
+    if((cnt++) % 100 == 0)
+       printk("Got %d replaces\n", cnt); 
+    //printk("Obj Replace.\n");
+    ret = castle_rxrpc_collection_key_get(skb, &collection, &key);
+    if(ret)
+        return ret;
+
+    ret = castle_object_replace(call, key, (SKB_L_GET(skb) == CASTLE_OBJ_TOMBSTONE));
+    if(ret)
+        return ret;
+
+    /* TODO: maybe should move this earlier, what if we get straight through the da/tree? */
+    call->current_skb = skb;
+    call->state = RXRPC_CALL_REPLYING;
+
+    return 0;
+}
+
+static int castle_rxrpc_slice_decode(struct castle_rxrpc_call *call, struct sk_buff *skb,  bool last)
 {
     printk("Obj Slice.\n");
     return -ENOTSUPP;
 }
 
-int castle_rxrpc_ctrl_decode(struct castle_rxrpc_call *call, struct sk_buff *skb,  bool last)
+static int castle_rxrpc_ctrl_decode(struct castle_rxrpc_call *call, struct sk_buff *skb,  bool last)
 {
     int ret, len;
     char reply[256];
@@ -233,11 +308,30 @@ static void castle_rxrpc_call_free(struct castle_rxrpc_call *call)
     kfree(call);
 }
 
-void castle_rxrpc_reply_send(struct castle_rxrpc_call *call, const void *buf, size_t len)
+static void castle_rxrpc_msg_send(struct castle_rxrpc_call *call, struct msghdr *msg, size_t len)
+{
+    int n;
+    int deb = 0;
+
+    if(msg->msg_iovlen != 1)
+        deb = 1;
+    if(deb)
+        printk("Sending message.\n");
+    call->state = RXRPC_CALL_AWAIT_ACK;
+    n = rxrpc_kernel_send_data(call->rxcall, msg, len);
+    if(deb)
+        printk("Sent %d bytes.\n", n);
+    debug("Sent %d bytes.\n", n);
+    if (n >= 0) 
+        return;
+    if (n == -ENOMEM)
+        rxrpc_kernel_abort_call(call->rxcall, RX_USER_ABORT);
+}
+
+static void castle_rxrpc_reply_send(struct castle_rxrpc_call *call, const void *buf, size_t len)
 {
     struct msghdr msg;
     struct iovec iov[1];
-    int n;
 
     iov[0].iov_base     = (void *) buf;
     iov[0].iov_len      = len;
@@ -249,13 +343,40 @@ void castle_rxrpc_reply_send(struct castle_rxrpc_call *call, const void *buf, si
     msg.msg_controllen  = 0;
     msg.msg_flags       = 0;
 
-    call->state = RXRPC_CALL_AWAIT_ACK;
-    n = rxrpc_kernel_send_data(call->rxcall, &msg, len);
-    debug("Sent %d bytes.\n", n);
-    if (n >= 0) 
-        return;
-    if (n == -ENOMEM)
-        rxrpc_kernel_abort_call(call->rxcall, RX_USER_ABORT);
+    castle_rxrpc_msg_send(call, &msg, len);
+}
+
+static void castle_rxrpc_double_reply_send(struct castle_rxrpc_call *call, 
+                                           const void *buf1, 
+                                           size_t len1,
+                                           const void *buf2, 
+                                           size_t len2)
+{
+    struct msghdr msg;
+    struct iovec iov[3];
+    uint8_t pad_buff[3] = {0, 0, 0};
+    int pad = (4 - (len2 % 4)) % 4;
+
+    iov[0].iov_base     = (void *) buf1;
+    iov[0].iov_len      = len1;
+    iov[1].iov_base     = (void *) buf2;
+    iov[1].iov_len      = len2;
+    if(pad)
+    { 
+        iov[2].iov_base = (void *)pad_buff;
+        iov[2].iov_len  = pad;
+    }
+
+    printk("Pad is: %d.\n", pad);
+    msg.msg_name        = NULL;
+    msg.msg_namelen     = 0;
+    msg.msg_iov         = iov;
+    msg.msg_iovlen      = pad ? 3 : 2;
+    msg.msg_control     = NULL;
+    msg.msg_controllen  = 0;
+    msg.msg_flags       = 0;
+    
+    castle_rxrpc_msg_send(call, &msg, len1 + len2 + pad);
 }
 
 static void castle_rxrpc_call_delete(struct work_struct *work)

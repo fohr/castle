@@ -215,6 +215,7 @@ struct castle_bio_vec;
 typedef struct castle_bio {
     struct castle_attachment  *attachment;
     /* castle_bio is created to handle a bio, or an rxrpc call (never both) */
+    int                           data_dir;
     union {
         struct bio               *bio;
         struct castle_rxrpc_call *rxrpc_call;
@@ -256,17 +257,24 @@ typedef struct castle_bio_vec {
         };
         /* Btree type, only used before the B-Tree walk is started */
         struct castle_btree_type *btree;
+        /* Buffer node, only used after B-Tree walk (to copy data) */
+        struct castle_cache_block *data_c2b;
     };
-    /* Completion callback */
-    void                     (*callback) (struct castle_bio_vec *c_bvec, int err, c_disk_blk_t cdb);
     /* Used to thread this bvec onto a workqueue */
     struct work_struct         work;
+    /* Completion callback */
+    void                     (*endfind)    (struct castle_bio_vec *, int, c_disk_blk_t);
+    void                     (*da_endfind) (struct castle_bio_vec *, int, c_disk_blk_t);
 #ifdef CASTLE_DEBUG    
     unsigned long              state;
     struct castle_cache_block *locking;
 #endif
 } c_bvec_t;
-#define c_bvec_data_dir(_c_bvec)        bio_data_dir((_c_bvec)->c_bio->bio)
+
+#define REMOVE                        (2) 
+
+#define c_bvec_data_dir(_c_bvec)      ((_c_bvec)->c_bio->data_dir & RW_MASK)
+#define c_bvec_data_del(_c_bvec)      ((_c_bvec)->c_bio->data_dir & REMOVE)
 #define c2b_bnode(_c2b)               ((struct castle_btree_node *)c2b_buffer(_c2b))
 #define c_bvec_bnode(_c_bvec)           c2b_bnode((_c_bvec)->btree_node)
 #define c_bvec_bpnode(_c_bvec)          c2b_buffer((_c_bvec)->btree_parent_node)
