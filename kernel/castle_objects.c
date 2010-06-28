@@ -51,19 +51,17 @@ int castle_object_replace(struct castle_rxrpc_call *call, uint8_t **key, int tom
     c_bvec_t *c_bvec;
     c_bio_t *c_bio;
     uint64_t noddy_key;
-#if 0
     int i;
-#endif
 
     memcpy(&noddy_key, key[0], 8);
-#if 0
     for(i=0; key[i]; i++)
     {
+#if 0
         printk(" key[%d]         : ", i);
         print_hex_dump_bytes("", DUMP_PREFIX_NONE, key[i], strlen(key[i]));
+#endif    
         kfree(key[i]);
     }
-#endif    
     kfree(key);
     //printk(" value          : %s\n", tombstone ? "tombstone" : "object");
     //printk(" Noddy key=%llx\n", noddy_key);
@@ -174,12 +172,16 @@ int castle_object_get(struct castle_rxrpc_call *call, uint8_t **key)
     memcpy(&noddy_key, key[0], 8);
     for(i=0; key[i]; i++)
     {
+#if 0        
         printk(" key[%d]         : ", i);
         print_hex_dump_bytes("", DUMP_PREFIX_NONE, key[i], strlen(key[i]));
+#endif
         kfree(key[i]);
     }
     kfree(key);
+#if 0
     printk(" Noddy key=%llx\n", noddy_key);
+#endif
 
     /* Single c_bvec for the bio */
     c_bio = castle_utils_bio_alloc(1);

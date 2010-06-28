@@ -67,7 +67,7 @@ struct castle_rxrpc_call {
 
     int                            op_id;
     const struct castle_rxrpc_call_type *type;
-    enum {
+    volatile enum {
         /* Copied from AFS */
         RXRPC_CALL_AWAIT_OP_ID,   /* awaiting op ID on incoming call */
         RXRPC_CALL_AWAIT_REQUEST, /* awaiting request data on incoming call */
@@ -81,13 +81,27 @@ struct castle_rxrpc_call {
     int                            error;
 };
 
+static void castle_rxrpc_state_update(struct castle_rxrpc_call *call, int state)
+{
+    if(state < call->state)
+    {
+        printk("Asked to update state backwards: %d->%d\n", call->state, state);
+        BUG();
+    }
+    call->state = state;
+    /* Make sure that the change is visible from other threads.
+       This is (especiall) important for RXRPC_CALL_AWAIT_ACK which 
+       is set from some da/btree wq, but read by rxrpc processors */
+    mb();
+}
+
 /* Definition of different call types */
 static int castle_rxrpc_op_decode(struct castle_rxrpc_call *call, struct sk_buff *skb,  bool last)
 {
     if(skb->len < 4)
         return -EBADMSG;
 
-    call->state = RXRPC_CALL_AWAIT_REQUEST;
+    castle_rxrpc_state_update(call, RXRPC_CALL_AWAIT_REQUEST);
     call->op_id = SKB_L_GET(skb);
     debug("op id: %d\n", call->op_id);
 
@@ -122,7 +136,6 @@ void castle_rxrpc_get_complete(struct castle_rxrpc_call *call, int err, void *da
     {
         reply[0] = htonl(CASTLE_OBJ_REPLY_ERROR);
         castle_rxrpc_reply_send(call, reply, 4);
-        call->state = RXRPC_CALL_AWAIT_ACK;
         return;
     }
 
@@ -133,7 +146,6 @@ void castle_rxrpc_get_complete(struct castle_rxrpc_call *call, int err, void *da
         BUG_ON(length != 0);
         reply[1] = htonl(CASTLE_OBJ_TOMBSTONE);
         castle_rxrpc_reply_send(call, reply, 8);
-        call->state = RXRPC_CALL_AWAIT_ACK;
         return;
     }
     
@@ -159,7 +171,6 @@ void castle_rxrpc_replace_complete(struct castle_rxrpc_call *call, int err)
         reply[0] = htonl(CASTLE_OBJ_REPLY_REPLACE);
 
     castle_rxrpc_reply_send(call, reply, 4);
-    call->state = RXRPC_CALL_AWAIT_ACK;
 }
 
 void castle_rxrpc_str_copy(struct castle_rxrpc_call *call, void *buffer, int max_length)
@@ -218,7 +229,7 @@ static int castle_rxrpc_get_decode(struct castle_rxrpc_call *call, struct sk_buf
         return ret;
 
     rxrpc_kernel_data_delivered(skb);
-    call->state = RXRPC_CALL_REPLYING;
+    castle_rxrpc_state_update(call, RXRPC_CALL_REPLYING);
 
     return 0;
 }
@@ -243,7 +254,7 @@ static int cnt = 0;
 
     /* TODO: maybe should move this earlier, what if we get straight through the da/tree? */
     call->current_skb = skb;
-    call->state = RXRPC_CALL_REPLYING;
+    castle_rxrpc_state_update(call, RXRPC_CALL_REPLYING);
 
     return 0;
 }
@@ -265,10 +276,9 @@ static int castle_rxrpc_ctrl_decode(struct castle_rxrpc_call *call, struct sk_bu
     /* Advance the state, if we succeeded at decoding the packet */
     if(ret) return ret;
 
-    call->state = RXRPC_CALL_REPLYING;
+    castle_rxrpc_state_update(call, RXRPC_CALL_REPLYING);
     debug("Sending reply of length=%d\n", len);
     castle_rxrpc_reply_send(call, reply, len);
-    call->state = RXRPC_CALL_AWAIT_ACK;
 
     return 0;
 }
@@ -311,16 +321,9 @@ static void castle_rxrpc_call_free(struct castle_rxrpc_call *call)
 static void castle_rxrpc_msg_send(struct castle_rxrpc_call *call, struct msghdr *msg, size_t len)
 {
     int n;
-    int deb = 0;
 
-    if(msg->msg_iovlen != 1)
-        deb = 1;
-    if(deb)
-        printk("Sending message.\n");
-    call->state = RXRPC_CALL_AWAIT_ACK;
+    castle_rxrpc_state_update(call, RXRPC_CALL_AWAIT_ACK);
     n = rxrpc_kernel_send_data(call->rxcall, msg, len);
-    if(deb)
-        printk("Sent %d bytes.\n", n);
     debug("Sent %d bytes.\n", n);
     if (n >= 0) 
         return;
@@ -426,26 +429,26 @@ static void castle_rxrpc_packet_process(struct work_struct *work)
                     do_abort:
                         rxrpc_kernel_abort_call(call->rxcall, abort_code);
                         call->error = ret;
-                        call->state = RXRPC_CALL_ERROR;
+                        castle_rxrpc_state_update(call, RXRPC_CALL_ERROR);
                         break;
                 }
                 skb = NULL;
                 continue;
             case RXRPC_SKB_MARK_FINAL_ACK:
-                call->state = RXRPC_CALL_COMPLETE;
+                castle_rxrpc_state_update(call, RXRPC_CALL_COMPLETE);
                 break;
             case RXRPC_SKB_MARK_BUSY:
                 call->error = -EBUSY;
-                call->state = RXRPC_CALL_BUSY;
+                castle_rxrpc_state_update(call, RXRPC_CALL_BUSY);
                 break;
             case RXRPC_SKB_MARK_REMOTE_ABORT:
                 call->error = -rxrpc_kernel_get_abort_code(skb);
-                call->state = RXRPC_CALL_ABORTED;
+                castle_rxrpc_state_update(call, RXRPC_CALL_ABORTED);
                 break;
             case RXRPC_SKB_MARK_NET_ERROR:
             case RXRPC_SKB_MARK_LOCAL_ERROR:
                 call->error = -rxrpc_kernel_get_error_number(skb);
-                call->state = RXRPC_CALL_ERROR;
+                castle_rxrpc_state_update(call, RXRPC_CALL_ERROR);
                 break;
             default:
                 BUG();
@@ -504,7 +507,7 @@ static void castle_rxrpc_incoming_call_collect(struct work_struct *work)
         c_rxcall->wq      = rxrpc_wqs[(wq_nr++) % NR_WQS];
         c_rxcall->call_id = atomic_inc_return(&call_id);
         c_rxcall->type    = &castle_rxrpc_op_call;
-        c_rxcall->state   = RXRPC_CALL_AWAIT_OP_ID;
+        castle_rxrpc_state_update(c_rxcall, RXRPC_CALL_AWAIT_OP_ID);
 
         c_rxcall->rxcall = rxrpc_kernel_accept_call(socket,
                                                     (unsigned long)c_rxcall);
