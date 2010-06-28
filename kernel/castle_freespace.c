@@ -608,6 +608,10 @@ void castle_freespace_fini(void)
     struct list_head *l, *h, *ht;
     int i;
 
+    /* If we haven't initialised the FS (=> no mstore), don't write the counts back,
+       the slaves will have to be reset anyway */
+    if(!castle_block_cnts_mstore) 
+        return;
     /* Write the version->count maps for each slave */
     list_for_each(l, &castle_slaves.slaves)
     {

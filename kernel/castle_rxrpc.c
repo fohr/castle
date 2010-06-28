@@ -90,7 +90,7 @@ static void castle_rxrpc_state_update(struct castle_rxrpc_call *call, int state)
     }
     call->state = state;
     /* Make sure that the change is visible from other threads.
-       This is (especiall) important for RXRPC_CALL_AWAIT_ACK which 
+       This is (especially) important for RXRPC_CALL_AWAIT_ACK which 
        is set from some da/btree wq, but read by rxrpc processors */
     mb();
 }
