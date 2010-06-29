@@ -66,15 +66,13 @@ void list_sort(struct list_head *list,
 
 void skb_print(struct sk_buff *skb)
 {
-    uint8_t buffer[128];
     int i;
+    uint8_t byte;
 
-    BUG_ON(skb->len > 128);
-    BUG_ON(skb_copy_bits(skb, 0, buffer, skb->len) < 0);
     printk("\nPacket length=%d\n", skb->len);
     for(i=0; i<skb->len; i++)
     {
-        uint8_t byte = *(buffer + i);    
+        BUG_ON(skb_copy_bits(skb, i, &byte, 1) < 0);
         if((byte >= 32) && (byte <= 126))
             printk(" [%d]=%d (%c)\n", i, byte, byte);
         else
