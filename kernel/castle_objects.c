@@ -145,7 +145,11 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec, int err, c_disk_b
     }
 
     /* Otherwise, read the relevant disk block */
-    BUG_ON(DISK_BLK_INVAL(cdb));
+    if(DISK_BLK_INVAL(cdb))
+    {
+        castle_rxrpc_get_complete(call, 0, NULL, 0);
+        return;
+    }
     c2b = castle_cache_page_block_get(cdb);
     c_bvec->data_c2b = c2b;
     lock_c2b(c2b);
