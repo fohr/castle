@@ -101,6 +101,9 @@ static int castle_rxrpc_op_decode(struct castle_rxrpc_call *call, struct sk_buff
     if(skb->len < 4)
         return -EBADMSG;
 
+    printk("\n Got following RxRPC packet:\n");
+    skb_print(skb);
+
     castle_rxrpc_state_update(call, RXRPC_CALL_AWAIT_REQUEST);
     call->op_id = SKB_L_GET(skb);
     debug("op id: %d\n", call->op_id);
