@@ -19,8 +19,8 @@
 
 #define CASTLE_DA_HASH_SIZE             (1000)
 static struct list_head     *castle_da_hash;
-static struct castle_mstore *castle_da_store;
-static struct castle_mstore *castle_tree_store;
+static struct castle_mstore *castle_da_store      = NULL;
+static struct castle_mstore *castle_tree_store    = NULL;
        da_id_t               castle_next_da_id    = 1; 
 static tree_seq_t            castle_next_tree_seq = 1; 
 
@@ -220,8 +220,11 @@ static int castle_da_writeback(struct castle_double_array *da, void *unused)
 
 static void castle_da_hash_writeback(void)
 {
-   castle_da_hash_iterate(castle_da_writeback, NULL); 
-   castle_da_tree_writeback(NULL, &castle_global_tree, -1, NULL);
+    /* Do not write back if the fs hasn't been inited */
+    if(!castle_tree_store || !castle_da_store)
+        return;
+    castle_da_hash_iterate(castle_da_writeback, NULL); 
+    castle_da_tree_writeback(NULL, &castle_global_tree, -1, NULL);
 }
     
 int castle_double_array_read(void)
