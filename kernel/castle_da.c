@@ -388,9 +388,9 @@ static struct castle_component_tree* castle_da_ct_next(struct castle_component_t
     {
         if(!list_is_last(ct_list, &da->trees[level]))
         {
-            next_ct = list_entry(ct->list.next, struct castle_component_tree, list); 
+            next_ct = list_entry(ct_list->next, struct castle_component_tree, list); 
             debug("Found component tree %d\n", next_ct->seq);
-            BUG_ON(next_ct->seq < ct->seq);
+            BUG_ON(next_ct->seq > ct->seq);
 
             return next_ct;
         }
