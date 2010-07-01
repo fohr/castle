@@ -26,8 +26,6 @@
 #define debug(_f, _a...)  (printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
 #endif
 
-/* Bhaskar: Test Change - IGNORE */
-
 /* Forward definitions */
 struct castle_rxrpc_call;
 static const struct castle_rxrpc_call_type castle_rxrpc_op_call;
@@ -51,6 +49,10 @@ static struct workqueue_struct  *rxrpc_wqs[NR_WQS]; /* Need singlethreaded WQs,
 static struct sk_buff_head       rxrpc_incoming_calls;
 static void castle_rxrpc_incoming_call_collect(struct work_struct *work);
 static DECLARE_WORK(castle_rxrpc_incoming_call_work, castle_rxrpc_incoming_call_collect);
+
+/* Wait Queue to delay module exit (rmmod) till all outstanding requests are over */
+static DECLARE_WAIT_QUEUE_HEAD(castle_rxrpc_rmmod_wq); 
+static atomic_t castle_outst_call_cnt = ATOMIC_INIT(0);
 
 struct castle_rxrpc_call_type {
     /* Deliver packet to this call type. Deliver should consume ENTIRE packet, 
@@ -317,6 +319,10 @@ static void castle_rxrpc_call_free(struct castle_rxrpc_call *call)
     BUG_ON(call->rxcall != NULL);
     BUG_ON(!skb_queue_empty(&call->rx_queue));
     kfree(call);
+
+    /* Decrement outstanding call count */
+    atomic_dec(&castle_outst_call_cnt);
+    wake_up(&castle_rxrpc_rmmod_wq);
 }
 
 static void castle_rxrpc_msg_send(struct castle_rxrpc_call *call, struct msghdr *msg, size_t len)
@@ -513,6 +519,11 @@ static void castle_rxrpc_incoming_call_collect(struct work_struct *work)
                                                     (unsigned long)c_rxcall);
         if(IS_ERR(c_rxcall->rxcall))
             castle_rxrpc_call_free(c_rxcall);
+        else 
+        {
+            /* Increment outstanding call count */
+            atomic_add(1, &castle_outst_call_cnt);
+        }
     }
 }
 
@@ -599,6 +610,8 @@ void castle_rxrpc_fini(void)
     int i;
 
     printk("Castle RXRPC fini.\n");
+    /* Wait until all outstanding calls are finished */
+    wait_event(castle_rxrpc_rmmod_wq, (atomic_read(&castle_outst_call_cnt) == 0));
     kernel_sock_shutdown(socket, SHUT_RDWR);
 	sock_release(socket);
     for(i=0; i<NR_WQS; i++)
