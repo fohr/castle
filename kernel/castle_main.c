@@ -29,6 +29,7 @@ struct castle_slaves         castle_slaves;
 struct castle_attachments    castle_attachments;
 struct castle_regions        castle_regions;
 struct castle_component_tree castle_global_tree = {.seq         = GLOBAL_TREE,
+                                                   .item_count  = {0ULL},
                                                    .btree_type  = MTREE_TYPE, 
                                                    .da          = INVAL_DA,
                                                    .level       = -1, 

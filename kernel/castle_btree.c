@@ -1051,6 +1051,7 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
     {
         c_disk_blk_t cdb = castle_freespace_block_get(version, 1); 
         
+        atomic64_inc(&c_bvec->tree->item_count);
         /* TODO: should memset the page to zero (because we return zeros on reads)
                  this can be done here, or beter still in _main.c, in data_copy */
         debug("Need to insert (%p, 0x%x) into node (used: 0x%x, capacity: 0x%x, leaf=%d).\n",

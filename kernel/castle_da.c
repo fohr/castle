@@ -91,6 +91,7 @@ static c_mstore_key_t castle_da_ct_marshall(struct castle_clist_entry *ctm,
                                             struct castle_component_tree *ct)
 {
     ctm->da_id      = ct->da; 
+    ctm->item_count = atomic64_read(&ct->item_count);
     ctm->btree_type = ct->btree_type; 
     ctm->seq        = ct->seq;
     ctm->level      = ct->level;
@@ -104,6 +105,7 @@ static da_id_t castle_da_ct_unmarshall(struct castle_component_tree *ct,
                                        c_mstore_key_t key)
 {
     ct->seq        = ctm->seq;
+    atomic64_set(&ct->item_count, ctm->item_count);
     ct->btree_type = ctm->btree_type; 
     ct->da         = ctm->da_id; 
     ct->level      = ctm->level;
@@ -219,6 +221,7 @@ static int castle_da_writeback(struct castle_double_array *da, void *unused)
 static void castle_da_hash_writeback(void)
 {
    castle_da_hash_iterate(castle_da_writeback, NULL); 
+   castle_da_tree_writeback(NULL, &castle_global_tree, -1, NULL);
 }
     
 int castle_double_array_read(void)
@@ -264,6 +267,14 @@ int castle_double_array_read(void)
     while(castle_mstore_iterator_has_next(iterator))
     {
         castle_mstore_iterator_next(iterator, &mstore_centry, &key);
+        /* Special case for castle_global_tree, it doesn't have a da associated with it. */
+        if(TREE_GLOBAL(mstore_centry.seq))
+        {
+            da_id = castle_da_ct_unmarshall(&castle_global_tree, &mstore_centry, key);
+            BUG_ON(!DA_INVAL(da_id));
+            continue;
+        }
+        /* Otherwise allocate a ct structure */
         ct = kmalloc(sizeof(struct castle_component_tree), GFP_KERNEL);
         if(!ct)
             goto out_iter_destroy;
@@ -304,6 +315,7 @@ static int castle_da_rwct_make(struct castle_double_array *da)
 
     /* Allocate an id for the tree, init the ct. */
     ct->seq         = castle_next_tree_seq++;
+    atomic64_set(&ct->item_count, 0); 
     ct->btree_type  = MTREE_TYPE; 
     ct->da          = da->id;
     ct->level       = 0;

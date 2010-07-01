@@ -172,6 +172,7 @@ struct castle_btree_type {
 
 struct castle_component_tree {
     tree_seq_t       seq;
+    atomic64_t       item_count;
     uint8_t          btree_type;
     da_id_t          da;
     uint8_t          level;
@@ -188,6 +189,7 @@ struct castle_dlist_entry {
 
 struct castle_clist_entry {
     da_id_t      da_id;
+    uint64_t     item_count;
     uint8_t      btree_type;
     tree_seq_t   seq;
     uint8_t      level;
