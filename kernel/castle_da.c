@@ -8,7 +8,7 @@
 #include "castle_versions.h"
 #include "castle_freespace.h"
 
-//#define DEBUG
+#define DEBUG
 #ifndef DEBUG
 #define debug(_f, ...)  ((void)0)
 #else
@@ -29,14 +29,6 @@ struct castle_double_array {
     version_t        root_version;
     struct list_head trees[MAX_DA_LEVEL];
     struct list_head hash_list;
-    c_mstore_key_t   mstore_key;
-};
-
-struct castle_component_tree {
-    tree_seq_t       seq;
-    uint8_t          level;
-    c_disk_blk_t     first_node;
-    struct list_head list;
     c_mstore_key_t   mstore_key;
 };
 
@@ -73,6 +65,18 @@ static void castle_da_unmarshall(struct castle_double_array *da,
         INIT_LIST_HEAD(&da->trees[i]);
 }
 
+static struct castle_component_tree *castle_da_rwct_get(struct castle_double_array *da)
+{
+    struct list_head *h, *l;
+
+    h = &da->trees[0]; 
+    l = h->next; 
+    /* There should be precisely one entry in the list */
+    BUG_ON((h == l) || (l->next != h));
+        
+    return list_entry(l, struct castle_component_tree, list);
+}
+
 static int castle_da_trees_sort(struct castle_double_array *da, void *unused)
 {
     int i;
@@ -84,10 +88,10 @@ static int castle_da_trees_sort(struct castle_double_array *da, void *unused)
 }
 
 static c_mstore_key_t castle_da_ct_marshall(struct castle_clist_entry *ctm,
-                                            struct castle_double_array *da,
                                             struct castle_component_tree *ct)
 {
-    ctm->da_id      = da->id; 
+    ctm->da_id      = ct->da; 
+    ctm->btree_type = ct->btree_type; 
     ctm->seq        = ct->seq;
     ctm->level      = ct->level;
     ctm->first_node = ct->first_node;
@@ -100,6 +104,8 @@ static da_id_t castle_da_ct_unmarshall(struct castle_component_tree *ct,
                                        c_mstore_key_t key)
 {
     ct->seq        = ctm->seq;
+    ct->btree_type = ctm->btree_type; 
+    ct->da         = ctm->da_id; 
     ct->level      = ctm->level;
     ct->first_node = ctm->first_node;
     ct->mstore_key = key;
@@ -166,7 +172,7 @@ static int castle_da_tree_writeback(struct castle_double_array *da,
     struct castle_clist_entry mstore_entry;
     c_mstore_key_t key;
 
-    key = castle_da_ct_marshall(&mstore_entry, da, ct); 
+    key = castle_da_ct_marshall(&mstore_entry, ct); 
     if(MSTORE_KEY_INVAL(key))
     {
         debug("Inserting CT seq=%d\n", ct->seq);
@@ -284,13 +290,13 @@ out_iter_destroy:
     return -EINVAL;
 }
 
-static int castle_da_ct_make(struct castle_double_array *da)
+static int castle_da_rwct_make(struct castle_double_array *da)
 {
     struct castle_component_tree *ct;
     c2_block_t *c2b;
     int ret;
 
-    ct = kzalloc(sizeof(struct castle_double_array), GFP_KERNEL); 
+    ct = kzalloc(sizeof(struct castle_component_tree), GFP_KERNEL); 
     if(!ct) 
         return -ENOMEM;
     
@@ -298,8 +304,10 @@ static int castle_da_ct_make(struct castle_double_array *da)
 
     /* Allocate an id for the tree, init the ct. */
     ct->seq         = castle_next_tree_seq++;
-    ct->level      = 0;
-    ct->mstore_key = INVAL_MSTORE_KEY; 
+    ct->btree_type  = MTREE_TYPE; 
+    ct->da          = da->id;
+    ct->level       = 0;
+    ct->mstore_key  = INVAL_MSTORE_KEY; 
 
     /* Create a root node for this tree, and update the root version */
     c2b = castle_btree_node_create(da->root_version, 1 /* is_leaf */, MTREE_TYPE);
@@ -316,6 +324,8 @@ static int castle_da_ct_make(struct castle_double_array *da)
         kfree(ct);
         return ret;
     }
+    debug("Added component tree seq=%d, root_node=(0x%x, 0x%x), it's threaded onto da=%p, level=%d\n",
+            ct->seq, c2b->cdb.disk, c2b->cdb.block, da, ct->level);
     /* Thread CT onto level 0 list */
     list_add(&ct->list, &da->trees[ct->level]);
 
@@ -336,7 +346,7 @@ int castle_double_array_make(da_id_t da_id, version_t root_version)
     da->mstore_key = INVAL_MSTORE_KEY;
     for(i=0; i<MAX_DA_LEVEL; i++)
         INIT_LIST_HEAD(&da->trees[i]);
-    ret = castle_da_ct_make(da);
+    ret = castle_da_rwct_make(da);
     if(ret)
     {
         printk("Exiting from failed ct create.\n");
@@ -351,19 +361,86 @@ int castle_double_array_make(da_id_t da_id, version_t root_version)
     return 0;
 }
 
+static struct castle_component_tree* castle_da_ct_next(struct castle_component_tree *ct)
+{
+    struct castle_double_array *da = castle_da_hash_get(ct->da);
+    struct castle_component_tree *next_ct;
+    struct list_head *ct_list;
+    uint8_t level;
+
+    debug("Asked for component tree after %d\n", ct->seq);
+    BUG_ON(!da);
+    for(level = ct->level, ct_list = &ct->list; 
+        level < MAX_DA_LEVEL; 
+        level++, ct_list = &da->trees[level])
+    {
+        if(!list_is_last(ct_list, &da->trees[level]))
+        {
+            next_ct = list_entry(ct->list.next, struct castle_component_tree, list); 
+            debug("Found component tree %d\n", next_ct->seq);
+            BUG_ON(next_ct->seq < ct->seq);
+
+            return next_ct;
+        }
+    }     
+
+    return NULL;
+}
+
 static void castle_da_bvec_complete(c_bvec_t *c_bvec, int err, c_disk_blk_t cdb)
 {
-    void (*callback) (struct castle_bio_vec *c_bvec, int err, c_disk_blk_t cdb) =
-        c_bvec->da_endfind;
+    void (*callback) (struct castle_bio_vec *c_bvec, int err, c_disk_blk_t cdb);
+    struct castle_component_tree *ct;
     
+    callback = c_bvec->da_endfind;
+    ct = c_bvec->tree;
+
+    /* If the key hasn't been found, check in the next tree. */
+    if(DISK_BLK_INVAL(cdb) && (!err) && (c_bvec_data_dir(c_bvec) == READ))
+    {
+        debug("Checking next ct.\n");
+        ct = castle_da_ct_next(ct);
+        if(!ct)
+        {
+            callback(c_bvec, err, INVAL_DISK_BLK); 
+            return;
+        }
+        /* If there is the next tree, try searching in it now */
+        c_bvec->tree = ct;
+        debug("Scheduling btree read in the next tree.\n");
+        castle_btree_find(c_bvec);
+        return;
+    }
+    debug("Finished with DA, calling back.\n");
     callback(c_bvec, err, cdb);
 }
 
 void castle_double_array_find(c_bvec_t *c_bvec)
 {
+    struct castle_attachment *att = c_bvec->c_bio->attachment;
+    struct castle_double_array *da;
+    da_id_t da_id; 
+
+    /* da_endfind should be null it is for our privte use */
     BUG_ON(c_bvec->da_endfind);
+
+    down_read(&att->lock);
+    /* Since the version is attached, it must be found */
+    BUG_ON(castle_version_read(att->version, &da_id, NULL, NULL, NULL));
+    up_read(&att->lock);
+
+    debug("Doing DA %s for da_id=%d, for version=%d\n", 
+           c_bvec_data_dir(c_bvec) == READ ? "read" : "write",
+           da_id, att->version);
+
+    da = castle_da_hash_get(da_id);
+    BUG_ON(!da);
+
+    c_bvec->tree       = castle_da_rwct_get(da);
     c_bvec->da_endfind = c_bvec->endfind;
-    c_bvec->endfind = castle_da_bvec_complete;
+    c_bvec->endfind    = castle_da_bvec_complete;
+
+    debug("Looking up in ct=%d\n", c_bvec->tree->seq); 
     
     castle_btree_find(c_bvec);
 }

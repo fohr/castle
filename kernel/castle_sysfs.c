@@ -42,7 +42,7 @@ static ssize_t versions_list_show(struct kobject *kobj,
     int leaf;
     int ret;
 
-    ret = castle_version_read(v->version, &parent, &size, &leaf);
+    ret = castle_version_read(v->version, NULL, &parent, &size, &leaf);
     if(ret == 0)
     {
         phys_size = castle_freespace_version_blocks_get(v->version);

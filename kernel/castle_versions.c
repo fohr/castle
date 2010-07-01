@@ -365,7 +365,7 @@ static struct castle_version* castle_version_new_create(int snap_or_clone,
     /* Try to add it to the hash. Use the da_id provided or the parent's */
     BUG_ON(!DA_INVAL(da_id) && !DA_INVAL(p->da_id));
     da_id = DA_INVAL(da_id) ? p->da_id : da_id;
-    v = castle_version_add(version, parent, INVAL_DA, size);
+    v = castle_version_add(version, parent, da_id, size);
     if(!v) 
         return NULL;
     
@@ -501,6 +501,7 @@ int castle_version_attach(version_t version)
 }
 
 int castle_version_read(version_t version, 
+                        da_id_t *da,
                         version_t *parent,
                         uint32_t *size,
                         int *leaf)
@@ -512,6 +513,7 @@ int castle_version_read(version_t version,
         return -EINVAL;
     
     /* Set these even if we fail to set the attached bit */
+    if(da)     *da     =  v->da_id;
     if(size)   *size   =  v->size;
     if(parent) *parent =  v->parent ? v->parent->version : 0;
     if(leaf)   *leaf   = (v->first_child == NULL);

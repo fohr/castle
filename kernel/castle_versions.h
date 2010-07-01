@@ -5,6 +5,7 @@ int          castle_version_is_ancestor (version_t candidate, version_t version)
 int          castle_version_attach      (version_t version); 
 void         castle_version_detach      (version_t version);
 int          castle_version_read        (version_t version, 
+                                         da_id_t *da,
                                          version_t *parent,
                                          uint32_t *size,
                                          int *leaf);

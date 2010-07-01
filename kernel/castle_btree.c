@@ -822,7 +822,9 @@ static void castle_btree_new_root_create(c_bvec_t *c_bvec, btree_t type)
     debug("About to update version tree.\n");
     /* TODO: Check if we hold the version lock */
     /* Should not fail, because the root already exists */
-    BUG_ON(castle_version_root_update(c_bvec->version, GLOBAL_TREE, c2b->cdb));
+    BUG_ON(castle_version_root_update(c_bvec->version, 
+                                      c_bvec->tree->seq,
+                                      c2b->cdb));
     /* If all succeeded save the new node as the parent in bvec */
     c_bvec->btree_parent_node = c2b;
     castle_version_unlock(c_bvec->version);
@@ -903,7 +905,9 @@ static int castle_btree_node_split(c_bvec_t *c_bvec)
             debug("Effective node will be the new root node\n");
             BUG_ON(!eff_c2b);
             /* Should not fail, because the root already exists */
-            BUG_ON(castle_version_root_update(version, GLOBAL_TREE, eff_c2b->cdb));
+            BUG_ON(castle_version_root_update(version,
+                                              c_bvec->tree->seq,
+                                              eff_c2b->cdb));
         }
     }
 
@@ -1265,7 +1269,7 @@ static void _castle_btree_find(struct work_struct *work)
 {
     c_bvec_t *c_bvec = container_of(work, c_bvec_t, work);
     struct castle_attachment *att = c_bvec->c_bio->attachment;
-    struct castle_btree_type *btree = c_bvec->btree; /* This is in an union, get it out ASAP */
+    struct castle_btree_type *btree = castle_btree_type_get(c_bvec->tree->btree_type);
     c_disk_blk_t root_cdb;
 
     c_bvec->btree_depth       = 0;
@@ -1276,7 +1280,8 @@ static void _castle_btree_find(struct work_struct *work)
     down_read(&att->lock);
     c_bvec->version = att->version;
     castle_version_lock(c_bvec->version);
-    root_cdb = castle_version_root_get(c_bvec->version, GLOBAL_TREE);
+    root_cdb = castle_version_root_get(c_bvec->version, 
+                                       c_bvec->tree->seq);
     up_read(&att->lock);
     if(DISK_BLK_INVAL(root_cdb))
     {
@@ -1291,8 +1296,6 @@ static void _castle_btree_find(struct work_struct *work)
 
 void castle_btree_find(c_bvec_t *c_bvec)
 {
-    BUG_ON((c_bvec->btree != &castle_mtree) &&
-           (c_bvec->btree != &castle_batree));
     INIT_WORK(&c_bvec->work, _castle_btree_find);
     queue_work(castle_wqs[19], &c_bvec->work); 
 }
@@ -1354,7 +1357,7 @@ static void castle_btree_iter_end(c_iter_t *c_iter, int err)
 void castle_btree_iter_replace(c_iter_t *c_iter, int index, c_disk_blk_t cdb)
 {
     struct castle_btree_node *real_node;
-    struct castle_btree_type *btree = c_iter->btree;
+    struct castle_btree_type *btree = castle_btree_type_get(c_iter->tree->btree_type);
     c2_block_t *real_c2b;
     int real_entry_idx, prev_is_leaf_ptr;
     void *prev_key;
@@ -1409,7 +1412,7 @@ static void __castle_btree_iter_start(c_iter_t *c_iter);
 void castle_btree_iter_continue(c_iter_t *c_iter)
 {
     struct castle_btree_node *node;
-    struct castle_btree_type *btree = c_iter->btree;
+    struct castle_btree_type *btree = castle_btree_type_get(c_iter->tree->btree_type);
     c2_block_t *leaf; 
     int i;
 
@@ -1505,7 +1508,7 @@ static void castle_btree_iter_leaf_ptrs_sort(c_iter_t *c_iter, int nr_ptrs)
 static void castle_btree_iter_leaf_ptrs_lock(c_iter_t *c_iter)
 {
     struct castle_btree_node *node;
-    struct castle_btree_type *btree = c_iter->btree;
+    struct castle_btree_type *btree = castle_btree_type_get(c_iter->tree->btree_type);
     c2_block_t *c2b;
     int i, j, nr_ptrs;
 
@@ -1595,7 +1598,7 @@ static void castle_btree_iter_leaf_ptrs_lock(c_iter_t *c_iter)
 static void castle_btree_iter_leaf_process(c_iter_t *c_iter)
 {
     struct castle_btree_node *node;
-    struct castle_btree_type *btree = c_iter->btree;
+    struct castle_btree_type *btree = castle_btree_type_get(c_iter->tree->btree_type);
     c2_block_t *leaf; 
     int i;
 
@@ -1658,7 +1661,7 @@ static void __castle_btree_iter_path_traverse(struct work_struct *work)
 {
     c_iter_t *c_iter = container_of(work, c_iter_t, work);
     struct castle_btree_node *node;
-    struct castle_btree_type *btree = c_iter->btree;
+    struct castle_btree_type *btree = castle_btree_type_get(c_iter->tree->btree_type);
     c_disk_blk_t entry_cdb;
     void *entry_key;
     int index; 
@@ -1727,7 +1730,7 @@ static void _castle_btree_iter_path_traverse(c2_block_t *c2b, int uptodate)
 
 static void castle_btree_iter_path_traverse(c_iter_t *c_iter, c_disk_blk_t node_cdb)
 {
-    struct castle_btree_type *btree = c_iter->btree;
+    struct castle_btree_type *btree = castle_btree_type_get(c_iter->tree->btree_type);
     c2_block_t *c2b = NULL;
     
     iter_debug("Starting the traversal: depth=%d, node_cdb=(0x%x, 0x%x)\n", 
@@ -1790,7 +1793,7 @@ static void castle_btree_iter_path_traverse(c_iter_t *c_iter, c_disk_blk_t node_
 
 static void __castle_btree_iter_start(c_iter_t *c_iter)
 {
-    struct castle_btree_type *btree = c_iter->btree;
+    struct castle_btree_type *btree = castle_btree_type_get(c_iter->tree->btree_type);
     c_disk_blk_t root_cdb;
 
     iter_debug("-------------- STARTING THE ITERATOR -------------------\n");
@@ -1817,7 +1820,7 @@ static void __castle_btree_iter_start(c_iter_t *c_iter)
     iter_debug("Locking version tree\n");
     
     castle_version_lock(c_iter->version);
-    root_cdb = castle_version_root_get(c_iter->version, GLOBAL_TREE);
+    root_cdb = castle_version_root_get(c_iter->version, c_iter->tree->seq);
     if(DISK_BLK_INVAL(root_cdb))
     {
         /* Complete the request early, end exit */
@@ -1844,13 +1847,16 @@ void castle_btree_iter_start(c_iter_t* c_iter)
 
 void castle_btree_iter_init(c_iter_t *c_iter, version_t version)
 {
+    struct castle_btree_type *btree;
     iter_debug("Initialising iterator for version=0x%x\n", version);
     
     /* TODO: This needs to be moved! */
-    c_iter->btree = &castle_mtree;
+    c_iter->tree = &castle_global_tree;
+    btree = castle_btree_type_get(c_iter->tree->btree_type);
+
     c_iter->version = version;
-    c_iter->parent_key = c_iter->btree->min_key;
-    c_iter->next_key = c_iter->btree->min_key;
+    c_iter->parent_key = btree->min_key;
+    c_iter->next_key = btree->min_key;
     c_iter->depth = -1;
     c_iter->err = 0;
     c_iter->cancelled = 0;

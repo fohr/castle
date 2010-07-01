@@ -28,9 +28,15 @@ struct castle                castle;
 struct castle_slaves         castle_slaves;
 struct castle_attachments    castle_attachments;
 struct castle_regions        castle_regions;
-
+struct castle_component_tree castle_global_tree = {.seq         = GLOBAL_TREE,
+                                                   .btree_type  = MTREE_TYPE, 
+                                                   .da          = INVAL_DA,
+                                                   .level       = -1, 
+                                                   .first_node  = INVAL_DISK_BLK,
+                                                   .list        = {NULL, NULL},
+                                                   .mstore_key  = INVAL_MSTORE_KEY,
+                                                  }; 
 struct workqueue_struct     *castle_wqs[2*MAX_BTREE_DEPTH+1];
-
 int                          castle_fs_inited;
 
 //#define DEBUG
@@ -577,7 +583,7 @@ struct castle_region* castle_region_create(uint32_t slave_uuid, version_t versio
         goto err_out;
     }
     
-    err = castle_version_read(version, NULL, NULL, NULL);
+    err = castle_version_read(version, NULL, NULL, NULL, NULL);
     if(err)
     {
         printk("Invalid version '%d'!\n", version);
@@ -917,7 +923,7 @@ static void castle_device_c_bvec_make(c_bio_t *c_bio,
     c_bvec->key         = (void *)block; 
     c_bvec->version     = INVAL_VERSION; 
     c_bvec->flags       = 0; 
-    c_bvec->btree       = &castle_mtree;
+    c_bvec->tree        = &castle_global_tree;
     c_bvec->endfind     = castle_bio_data_io_end;
     c_bvec->da_endfind  = NULL;
     if(one2one_bvec)
@@ -1033,6 +1039,7 @@ struct castle_attachment* castle_collection_find(collection_id_t col_id)
 
 struct castle_attachment* castle_attachment_init(int device, /* _or_object_collection */
                                                  version_t version,
+                                                 da_id_t *da_id,
                                                  uint32_t *size,
                                                  int *leaf)
 {
@@ -1040,7 +1047,7 @@ struct castle_attachment* castle_attachment_init(int device, /* _or_object_colle
 
     if(castle_version_attach(version))
         return NULL;
-    BUG_ON(castle_version_read(version, NULL, size, leaf));
+    BUG_ON(castle_version_read(version, da_id, NULL, size, leaf));
 
     attachment = kmalloc(sizeof(struct castle_attachment), GFP_KERNEL); 
     if(!attachment)
@@ -1078,7 +1085,7 @@ struct castle_attachment* castle_device_init(version_t version)
     int leaf;
     int err;
 
-    dev = castle_attachment_init(1, version, &size, &leaf); 
+    dev = castle_attachment_init(1, version, NULL, &size, &leaf); 
     if(!dev)
         goto error_out;
     gd = alloc_disk(1);
@@ -1147,12 +1154,21 @@ struct castle_attachment* castle_collection_init(version_t version, char *name)
 {
     struct castle_attachment *collection = NULL;
     static collection_id_t collection_id = 13;
+    da_id_t da_id;
     int err;
 
-    collection = castle_attachment_init(0, version, NULL, NULL); 
+    collection = castle_attachment_init(0, version, &da_id, NULL, NULL); 
     if(!collection)
         goto error_out;
     
+    if(DA_INVAL(da_id))
+    {
+        printk("Could not attach collection: %s, version: %d, because no DA found.\n",
+                name, version);
+        castle_version_detach(version);
+        goto error_out;
+    }
+
     collection->col.id   = collection_id++;
     collection->col.name = name;
     list_add(&collection->list, &castle_attachments.attachments);

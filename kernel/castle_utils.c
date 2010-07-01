@@ -4,15 +4,6 @@
 #include "castle_utils.h"
 #include "castle.h"
 
-struct castle_component_tree {
-    tree_seq_t       seq;
-    uint8_t          level;
-    c_disk_blk_t     first_node;
-    struct list_head list;
-    c_mstore_key_t   mstore_key;
-};
-
-
 void inline  __list_swap(struct list_head *p,
                          struct list_head *t1,
                          struct list_head *t2,

@@ -195,7 +195,7 @@ struct castle_transfer* castle_transfer_create(version_t version, int direction,
 
     debug("castle_transfer_create(version=%d, direction=%d)\n", version, direction);
 
-    err = castle_version_read(version, NULL, NULL, NULL);
+    err = castle_version_read(version, NULL, NULL, NULL, NULL);
     if(err)
     {
         debug("Invalid version '%d'!\n", version);

@@ -5,6 +5,14 @@
 #include "castle_utils.h"
 #include "castle_btree.h"
 #include "castle_rxrpc.h"
+
+//#define DEBUG
+#ifndef DEBUG
+#define debug(_f, ...)          ((void)0)
+#else
+#define debug(_f, _a...)        (printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
+#endif
+
    
 static const uint32_t OBJ_TOMBSTONE = ((uint32_t)-1);
 extern struct castle_attachment *global_attachment_hack;
@@ -16,7 +24,6 @@ void castle_object_replace_complete(struct castle_bio_vec *c_bvec, int err, c_di
     c_bio_t *c_bio = c_bvec->c_bio;
     c2_block_t *c2b;
 
-    //printk("Returned from btree walk with cdb=(0x%x, 0x%x)\n", cdb.disk, cdb.block);
     /* Sanity checks on the bio */
     BUG_ON(c_bvec_data_dir(c_bvec) != WRITE); 
     BUG_ON(atomic_read(&c_bio->count) != 1);
@@ -80,7 +87,6 @@ int castle_object_replace(struct castle_rxrpc_call *call, uint8_t **key, int tom
 
     c_bvec = c_bio->c_bvecs; 
     c_bvec->key        = (void *)noddy_key; 
-    c_bvec->btree      = &castle_mtree;
     c_bvec->endfind    = castle_object_replace_complete;
     c_bvec->da_endfind = NULL; 
     
@@ -98,8 +104,8 @@ void __castle_object_get_complete(struct work_struct *work)
     c2_block_t *c2b = c_bvec->data_c2b;
     uint32_t *buffer = c2b_buffer(c2b);
 
-    printk("Completed reading buffer for object get.\n"); 
-    printk("First word: 0x%x.\n", buffer[0]); 
+    debug("Completed reading buffer for object get.\n"); 
+    debug("First word: 0x%x.\n", buffer[0]); 
 
     BUG_ON(buffer[0] > PAGE_SIZE - 4);
     if(buffer[0] == OBJ_TOMBSTONE)
@@ -131,7 +137,7 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec, int err, c_disk_b
     c_bio_t *c_bio = c_bvec->c_bio;
     c2_block_t *c2b;
 
-    printk("Returned from btree walk with cdb=(0x%x, 0x%x)\n", cdb.disk, cdb.block);
+    debug("Returned from btree walk with cdb=(0x%x, 0x%x)\n", cdb.disk, cdb.block);
     /* Sanity checks on the bio */
     BUG_ON(c_bvec_data_dir(c_bvec) != READ); 
     BUG_ON(atomic_read(&c_bio->count) != 1);
@@ -198,7 +204,6 @@ int castle_object_get(struct castle_rxrpc_call *call, uint8_t **key)
 
     c_bvec = c_bio->c_bvecs; 
     c_bvec->key        = (void *)noddy_key; 
-    c_bvec->btree      = &castle_mtree;
     c_bvec->endfind    = castle_object_get_complete;
     c_bvec->da_endfind = NULL; 
     

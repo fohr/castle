@@ -103,8 +103,10 @@ static int castle_rxrpc_op_decode(struct castle_rxrpc_call *call, struct sk_buff
     if(skb->len < 4)
         return -EBADMSG;
 
+#ifdef DEBUG    
     printk("\n Got following RxRPC packet:\n");
     skb_print(skb);
+#endif
 
     castle_rxrpc_state_update(call, RXRPC_CALL_AWAIT_REQUEST);
     call->op_id = SKB_L_GET(skb);
@@ -135,7 +137,6 @@ void castle_rxrpc_get_complete(struct castle_rxrpc_call *call, int err, void *da
 {
     uint32_t reply[2];
   
-    printk("Completing get.\n");
     /* Deal with errors first */
     if(err)
     {
@@ -157,7 +158,6 @@ void castle_rxrpc_get_complete(struct castle_rxrpc_call *call, int err, void *da
     /* Finally, deal with full values */
     reply[1] = htonl(CASTLE_OBJ_VALUE);
     reply[2] = htonl(length);
-    printk("Sending double reply.\n");
 
     castle_rxrpc_double_reply_send(call, 
                                    reply, 12,
@@ -222,12 +222,9 @@ static int castle_rxrpc_get_decode(struct castle_rxrpc_call *call, struct sk_buf
     uint8_t **key;
     int ret;
 
-    printk("Obj Get.\n");
     ret = castle_rxrpc_collection_key_get(skb, &collection, &key);
     if(ret)
         return ret;
-
-    printk(" collection %d\n", collection);
 
     ret = castle_object_get(call, key);
     if(ret)
@@ -266,7 +263,6 @@ static int cnt = 0;
 
 static int castle_rxrpc_slice_decode(struct castle_rxrpc_call *call, struct sk_buff *skb,  bool last)
 {
-    printk("Obj Slice.\n");
     return -ENOTSUPP;
 }
 
@@ -375,7 +371,6 @@ static void castle_rxrpc_double_reply_send(struct castle_rxrpc_call *call,
         iov[2].iov_len  = pad;
     }
 
-    printk("Pad is: %d.\n", pad);
     msg.msg_name        = NULL;
     msg.msg_namelen     = 0;
     msg.msg_iov         = iov;

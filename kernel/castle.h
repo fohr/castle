@@ -170,6 +170,17 @@ struct castle_btree_type {
 #endif        
 };
 
+struct castle_component_tree {
+    tree_seq_t       seq;
+    uint8_t          btree_type;
+    da_id_t          da;
+    uint8_t          level;
+    c_disk_blk_t     first_node;
+    struct list_head list;
+    c_mstore_key_t   mstore_key;
+};
+extern struct castle_component_tree castle_global_tree;
+
 struct castle_dlist_entry {
     da_id_t     id;
     version_t   root_version;
@@ -177,6 +188,7 @@ struct castle_dlist_entry {
 
 struct castle_clist_entry {
     da_id_t      da_id;
+    uint8_t      btree_type;
     tree_seq_t   seq;
     uint8_t      level;
     c_disk_blk_t first_node;
@@ -213,7 +225,7 @@ struct castle_flist_entry {
 /* IO related structures */
 struct castle_bio_vec;
 typedef struct castle_bio {
-    struct castle_attachment  *attachment;
+    struct castle_attachment     *attachment;
     /* castle_bio is created to handle a bio, or an rxrpc call (never both) */
     int                           data_dir;
     union {
@@ -237,13 +249,15 @@ struct castle_cache_block;
 #define CBV_ROOT_LOCKED_BIT     (1) 
 typedef struct castle_bio_vec {
     /* Where did this IO originate from */
-    c_bio_t            *c_bio;
+    c_bio_t                      *c_bio;
     
     /* What (key, version) do we want to read */
-    void               *key;
-    uint32_t            version;
+    void                         *key;
+    version_t                     version;
+    /* Component tree in which to perform the search */
+    struct castle_component_tree *tree;
     /* Flags */
-    unsigned long       flags;
+    unsigned long                 flags;
     /* Used to walk the B-Tree */
     union {
         struct {
@@ -255,10 +269,8 @@ typedef struct castle_bio_vec {
             struct castle_cache_block *btree_node;
             struct castle_cache_block *btree_parent_node;
         };
-        /* Btree type, only used before the B-Tree walk is started */
-        struct castle_btree_type *btree;
         /* Buffer node, only used after B-Tree walk (to copy data) */
-        struct castle_cache_block *data_c2b;
+        struct castle_cache_block     *data_c2b;
     };
     /* Used to thread this bvec onto a workqueue */
     struct work_struct         work;
@@ -282,18 +294,18 @@ typedef struct castle_bio_vec {
 
 /* Used for iterating through the tree */
 typedef struct castle_iterator {
-    version_t                  version;
-    void                     (*node_start)(struct castle_iterator *c_iter);
-    void                     (*each)      (struct castle_iterator *c_iter, int index, c_disk_blk_t cdb);
-    void                     (*node_end)  (struct castle_iterator *c_iter);
-    void                     (*end)       (struct castle_iterator *c_iter, int err);
-    void                      *private;
+    version_t                     version;
+    void                        (*node_start)(struct castle_iterator *c_iter);
+    void                        (*each)      (struct castle_iterator *c_iter, int index, c_disk_blk_t cdb);
+    void                        (*node_end)  (struct castle_iterator *c_iter);
+    void                        (*end)       (struct castle_iterator *c_iter, int err);
+    void                         *private;
                              
-    struct castle_btree_type  *btree;
-    void                      *parent_key; /* The key we followed to get to the block 
-                                              on the top of the path/stack */
-    void                      *next_key;   /* The next key to look for in the iteration 
-                                              (typically parent_key + 1 when at leafs) */
+    struct castle_component_tree *tree;
+    void                         *parent_key; /* The key we followed to get to the block 
+                                                 on the top of the path/stack */
+    void                         *next_key;   /* The next key to look for in the iteration 
+                                                 (typically parent_key + 1 when at leafs) */
 
     struct castle_cache_block *path[MAX_BTREE_DEPTH];
     struct {
