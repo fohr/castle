@@ -275,6 +275,8 @@ static int castle_rxrpc_ctrl_decode(struct castle_rxrpc_call *call, struct sk_bu
 
     ret = castle_control_packet_process(skb, reply, &len);
     debug("Ctrl ret=%d\n", ret);
+    debug("DATA packet delivered, freeing.\n");
+
     rxrpc_kernel_data_delivered(skb);
     /* Advance the state, if we succeeded at decoding the packet */
     if(ret) return ret;
@@ -420,6 +422,7 @@ static void castle_rxrpc_packet_process(struct work_struct *work)
                 last = rxrpc_kernel_is_data_last(skb);
                 /* Deliver the packet to the call */
                 ret = call->type->deliver(call, skb, last);
+                debug("Processed data packet, got ret=%d\n", ret);
                 switch (ret)
                 {
                     case 0:
@@ -460,6 +463,7 @@ static void castle_rxrpc_packet_process(struct work_struct *work)
                 BUG();
                 break;
         }
+        debug("Freeing non-DATA skb.\n");
         /* SKB processed, free it */
         rxrpc_kernel_free_skb(skb);
     }
@@ -480,6 +484,7 @@ static void castle_rxrpc_packet_process(struct work_struct *work)
         if(call->type->destructor)
             call->type->destructor(call);
 
+        debug("Queueing call delete.\n");
         PREPARE_WORK(&call->work, castle_rxrpc_call_delete);
         queue_work(call->wq, &call->work);
     }
@@ -518,7 +523,9 @@ static void castle_rxrpc_incoming_call_collect(struct work_struct *work)
         c_rxcall->rxcall = rxrpc_kernel_accept_call(socket,
                                                     (unsigned long)c_rxcall);
         if(IS_ERR(c_rxcall->rxcall))
+        {
             castle_rxrpc_call_free(c_rxcall);
+        }
         else 
         {
             /* Increment outstanding call count */
@@ -612,9 +619,8 @@ void castle_rxrpc_fini(void)
     printk("Castle RXRPC fini.\n");
     /* Wait until all outstanding calls are finished */
     wait_event(castle_rxrpc_rmmod_wq, (atomic_read(&castle_outst_call_cnt) == 0));
-    kernel_sock_shutdown(socket, SHUT_RDWR);
 	sock_release(socket);
-    for(i=0; i<NR_WQS; i++)
+	for(i=0; i<NR_WQS; i++)
         destroy_workqueue(rxrpc_wqs[i]);
 }
 
