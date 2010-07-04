@@ -102,12 +102,43 @@ static void castle_mtree_entry_get(struct castle_btree_node *node,
     if(cdb_p)         *cdb_p         = entry->cdb;
 }
 
-static void castle_mtree_entry_set(struct castle_btree_node *node,
+static void castle_mtree_entry_add(struct castle_btree_node *node,
                                    int                       idx,
                                    void                     *key,            
                                    version_t                 version,
                                    int                       is_leaf_ptr,
                                    c_disk_blk_t              cdb)
+{
+    struct castle_mtree_entry *entries = 
+                (struct castle_mtree_entry *) BTREE_NODE_PAYLOAD(node);
+    struct castle_mtree_entry *entry = entries + idx;
+
+    BUG_ON(idx < 0 || idx > node->used);
+    BUG_ON(sizeof(*entry) * node->used + sizeof(struct castle_btree_node) > 
+                                                MTREE_NODE_SIZE * C_BLK_SIZE); 
+    BUG_ON(!node->is_leaf && is_leaf_ptr);
+
+    /* Make space for the new entry, noop if we are adding one at the end
+       of the node */
+    memmove(entry + 1, entry, sizeof(*entry) * (node->used - idx));
+
+    entry->block   = (block_t)(unsigned long)key;
+    entry->version = version;
+    entry->type    = node->is_leaf ? 
+                        (is_leaf_ptr ? MTREE_ENTRY_LEAF_PTR : MTREE_ENTRY_LEAF_VAL) :
+                        MTREE_ENTRY_NODE;
+    entry->cdb     = cdb;
+
+    /* Increment the node used count */
+    node->used++;
+}   
+
+static void castle_mtree_entry_replace(struct castle_btree_node *node,
+                                       int                       idx,
+                                       void                     *key,            
+                                       version_t                 version,
+                                       int                       is_leaf_ptr,
+                                       c_disk_blk_t              cdb)
 {
     struct castle_mtree_entry *entries = 
                 (struct castle_mtree_entry *) BTREE_NODE_PAYLOAD(node);
@@ -123,6 +154,27 @@ static void castle_mtree_entry_set(struct castle_btree_node *node,
                         MTREE_ENTRY_NODE;
     entry->cdb     = cdb;
 }   
+
+static void castle_mtree_entries_drop(struct castle_btree_node *node,
+                                      int                       idx_start,
+                                      int                       idx_end)
+{
+    struct castle_mtree_entry *entries = 
+                (struct castle_mtree_entry *) BTREE_NODE_PAYLOAD(node);
+    struct castle_mtree_entry *entry_start = entries + idx_start;
+    struct castle_mtree_entry *entry_end   = entries + idx_end;
+
+    BUG_ON(idx_start < 0 || idx_start > node->used);
+    BUG_ON(idx_end   < 0 || idx_end   > node->used);
+    BUG_ON(idx_start > idx_end);
+
+    /* Move the node entries forward */
+    memmove(entry_start, 
+            entry_end + 1, 
+            sizeof(*entry_start) * (node->used - idx_end - 1));
+    /* Decrement the node used count */
+    node->used -= (idx_end - idx_start + 1);
+}
 
 #ifdef CASTLE_DEBUG
 static void castle_mtree_node_validate(struct castle_btree_node *node)
@@ -177,7 +229,9 @@ struct castle_btree_type castle_mtree = {
     .key_compare   = castle_mtree_key_compare,
     .key_next      = castle_mtree_key_next,
     .entry_get     = castle_mtree_entry_get,
-    .entry_set     = castle_mtree_entry_set,
+    .entry_add     = castle_mtree_entry_add,
+    .entry_replace = castle_mtree_entry_replace,
+    .entries_drop  = castle_mtree_entries_drop,
     .node_print    = castle_mtree_node_print,
 #ifdef CASTLE_DEBUG    
     .node_validate = castle_mtree_node_validate,
@@ -291,12 +345,40 @@ static void castle_batree_entry_get(struct castle_btree_node *node,
     if(cdb_p)         *cdb_p         = entry->cdb;
 }
 
-static void castle_batree_entry_set(struct castle_btree_node *node,
+static void castle_batree_entry_add(struct castle_btree_node *node,
                                     int                       idx,
                                     void                     *key,            
                                     version_t                 version,
                                     int                       is_leaf_ptr,
                                     c_disk_blk_t              cdb)
+{
+    struct castle_batree_entry *entries = 
+                (struct castle_batree_entry *) BTREE_NODE_PAYLOAD(node);
+    struct castle_batree_entry *entry = entries + idx;
+
+    BUG_ON(idx < 0 || idx > node->used);
+    BUG_ON(sizeof(*entry) * node->used + sizeof(struct castle_btree_node) > 
+                                                BATREE_NODE_SIZE * C_BLK_SIZE); 
+    BUG_ON(!node->is_leaf && is_leaf_ptr);
+
+    /* Make space for the new entry, noop if we are adding one at the end
+       of the node */
+    memmove(entry + 1, entry, sizeof(*entry) * (node->used - idx));
+
+    memcpy(&entry->key, key, sizeof(bakey_t));
+    entry->version = version;
+    entry->type    = node->is_leaf ? 
+                        (is_leaf_ptr ? BATREE_ENTRY_LEAF_PTR : BATREE_ENTRY_LEAF_VAL) :
+                        BATREE_ENTRY_NODE;
+    entry->cdb     = cdb;
+}   
+
+static void castle_batree_entry_replace(struct castle_btree_node *node,
+                                        int                       idx,
+                                        void                     *key,            
+                                        version_t                 version,
+                                        int                       is_leaf_ptr,
+                                        c_disk_blk_t              cdb)
 {
     struct castle_batree_entry *entries = 
                 (struct castle_batree_entry *) BTREE_NODE_PAYLOAD(node);
@@ -371,7 +453,8 @@ struct castle_btree_type castle_batree = {
     .key_compare   = castle_batree_key_compare,
     .key_next      = castle_batree_key_next,
     .entry_get     = castle_batree_entry_get,
-    .entry_set     = castle_batree_entry_set,
+    .entry_add     = castle_batree_entry_add,
+    .entry_replace = castle_batree_entry_replace,
     .node_print    = castle_batree_node_print,
 #ifdef CASTLE_DEBUG    
     .node_validate = castle_batree_node_validate,
@@ -572,15 +655,16 @@ static c2_block_t* castle_btree_effective_node_create(c2_block_t *orig_c2b,
     c2_block_t *c2b;
     void *last_eff_key;
     version_t last_eff_version;
-    int i, first;
+    int i, insert_idx;
     
     node = c2b_bnode(orig_c2b); 
     btree = castle_btree_type_get(node->type);
     c2b = castle_btree_node_create(version, node->is_leaf, node->type);
     eff_node = c2b_buffer(c2b);
 
-    first = 1;
     last_eff_key = btree->inv_key;
+    BUG_ON(eff_node->used != 0);
+    insert_idx = -1;
     for(i=0; i<node->used; i++)
     {
         void        *entry_key;
@@ -600,7 +684,7 @@ static c2_block_t* castle_btree_effective_node_create(c2_block_t *orig_c2b,
            to the key we are looking at */ 
         if(btree->key_compare(last_eff_key, entry_key) != 0)
         {
-            eff_node->used++;
+            insert_idx++;
         } else
         {
             /* last_eff_key == entry_key (&& last_eff_key != inv_key) 
@@ -616,8 +700,8 @@ static c2_block_t* castle_btree_effective_node_create(c2_block_t *orig_c2b,
         if(!node->is_leaf || entry_is_leaf_ptr)
         {
             /* If already a leaf pointer, or a non-leaf entry copy directly. */
-            btree->entry_set(eff_node,
-                             eff_node->used-1,
+            btree->entry_add(eff_node,
+                             insert_idx,
                              entry_key,
                              entry_version,
                              entry_is_leaf_ptr,
@@ -625,8 +709,8 @@ static c2_block_t* castle_btree_effective_node_create(c2_block_t *orig_c2b,
         } else
         {
             /* Otherwise construct a new leaf pointer. */
-            btree->entry_set(eff_node,
-                             eff_node->used-1,
+            btree->entry_add(eff_node,
+                             insert_idx,
                              entry_key,
                              entry_version,
                              1,
@@ -659,7 +743,7 @@ static c2_block_t* castle_btree_node_key_split(c2_block_t *orig_c2b)
     c2_block_t *c2b;
     struct castle_btree_node *node, *sec_node;
     struct castle_btree_type *btree;
-    int i, j;
+    int i;
 
     void        *entry_key;
     version_t    entry_version;
@@ -673,22 +757,16 @@ static c2_block_t* castle_btree_node_key_split(c2_block_t *orig_c2b)
     /* The original node needs to contain the elements from the right hand side
        because otherwise the key in it's parent would have to change. We want
        to avoid that */
-    sec_node->used = node->used >> 1;
-    for(i=0; i<sec_node->used; i++)
+    BUG_ON(sec_node->used != 0);
+    for(i=0; i<node->used >> 1; i++)
     {
         /* Copy the entries */
         btree->entry_get(node,     i, &entry_key, &entry_version, &entry_is_leaf_ptr, &entry_cdb);
-        btree->entry_set(sec_node, i,  entry_key,  entry_version,  entry_is_leaf_ptr,  entry_cdb);
+        btree->entry_add(sec_node, i,  entry_key,  entry_version,  entry_is_leaf_ptr,  entry_cdb);
     }
 
-    /* Move the entries in node to the beginning of the node */
-    for(i=sec_node->used, j=0; i<node->used; i++, j++)
-    {
-        btree->entry_get(node, i, &entry_key, &entry_version, &entry_is_leaf_ptr, &entry_cdb);
-        btree->entry_set(node, j,  entry_key,  entry_version,  entry_is_leaf_ptr,  entry_cdb);
-    }
-    node->used -= sec_node->used;
-    BUG_ON(node->used != j);
+    BUG_ON(sec_node->used != node->used >> 1);
+    btree->entries_drop(node, 0, sec_node->used - 1);
     
     /* c2b has already been dirtied by the node_create() function, but the orig_c2b
        needs to be dirtied here */
@@ -709,7 +787,7 @@ static void castle_btree_slot_insert(c2_block_t  *c2b,
     struct castle_btree_type *btree = castle_btree_type_get(node->type);
     void      *left_key      = btree->inv_key;
     version_t  left_version  = INVAL_VERSION;
-    int        left_is_leaf_ptr, i;
+    int        left_is_leaf_ptr;
 
     BUG_ON(index      >  node->used);
     BUG_ON(node->used >= node->capacity);
@@ -738,24 +816,12 @@ static void castle_btree_slot_insert(c2_block_t  *c2b,
            keys are only inserted to weakly ancestoral nodes */
         BUG_ON(!left_is_leaf_ptr);
         /* Replace the slot */
-        btree->entry_set(node, index-1, key, version, 0, cdb);
+        btree->entry_replace(node, index-1, key, version, 0, cdb);
         dirty_c2b(c2b);
         return;
     }
-    /* Make space for the extra slot. */
-    node->used++;
-    for(i=node->used-2; i>=index; i--) 
-    {
-        void        *entry_key;
-        version_t    entry_version;
-        int          entry_is_leaf_ptr;
-        c_disk_blk_t entry_cdb;
-
-        btree->entry_get(node, i,  &entry_key, &entry_version, &entry_is_leaf_ptr, &entry_cdb);
-        btree->entry_set(node, i+1, entry_key,  entry_version,  entry_is_leaf_ptr,  entry_cdb);
-    }
-    /* Finally, set the entry */ 
-    btree->entry_set(node, index, key, version, is_leaf_ptr, cdb);
+    /* Insert the new entry */ 
+    btree->entry_add(node, index, key, version, is_leaf_ptr, cdb);
     BUG_ON(node->used >= MAX_BTREE_ENTRIES);
     dirty_c2b(c2b);
 }
@@ -865,8 +931,8 @@ static int castle_btree_node_split(c_bvec_t *c_bvec)
         eff_node = node;
     }
 
-    /* Split the effective node if it's more than 75% full */
-    if(eff_node->used > (eff_node->capacity >> 1) + (eff_node->capacity >> 2))
+    /* Split the effective node if it's more than 2/3s full */
+    if(eff_node->used > 2 * eff_node->capacity / 3)
     {
         void *max_split_key;
 
@@ -1399,12 +1465,12 @@ void castle_btree_iter_replace(c_iter_t *c_iter, int index, c_disk_blk_t cdb)
                 real_c2b->cdb.block, 
                 real_entry_idx);
     
-    btree->entry_set(real_node,
-                     real_entry_idx,
-                     prev_key,
-                     prev_version,
-                     0,
-                     cdb);
+    btree->entry_replace(real_node,
+                         real_entry_idx,
+                         prev_key,
+                         prev_version,
+                         0,
+                         cdb);
     dirty_c2b(real_c2b);
 }
 

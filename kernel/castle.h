@@ -138,7 +138,7 @@ struct castle_btree_node {
    nodes may be used for different trees */
 struct castle_btree_type {
     btree_t   magic;
-    int       node_size;     /* in C_DISK_BLKs                         */
+    int       node_size;     /* in C_BLK_SIZE                          */
     int       node_capacity; /* Number of entries in each node         */
     void     *min_key;       /* Minimum key                            */
     void     *max_key;       /* Maximum used as the end of node marker */
@@ -158,12 +158,23 @@ struct castle_btree_type {
                               version_t                *version_p,
                               int                      *is_leaf_ptr_p,
                               c_disk_blk_t             *cdb_p);
-    void    (*entry_set)     (struct castle_btree_node *node,
+    void    (*entry_add)     (struct castle_btree_node *node,
                               int                       idx,
                               void                     *key,            
                               version_t                 version,
                               int                       is_leaf_ptr,
                               c_disk_blk_t              cdb);
+    void    (*entry_replace) (struct castle_btree_node *node,
+                              int                       idx,
+                              void                     *key,            
+                              version_t                 version,
+                              int                       is_leaf_ptr,
+                              c_disk_blk_t              cdb);
+    void    (*entries_drop)  (struct castle_btree_node *node,
+                              int                       idx_start,
+                              int                       idx_end);
+                             /* Drop all entries between idx_start and
+                                idx_stop. Inclusive                    */ 
     void    (*node_print)    (struct castle_btree_node *node);
 #if CASTLE_DEBUG    
     void    (*node_validate) (struct castle_btree_node *node);
