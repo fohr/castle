@@ -118,15 +118,6 @@ static ssize_t slaves_number_show(struct kobject *kobj,
     return sprintf(buf, "%d\n", nr_slaves);
 }
 
-static ssize_t slaves_number_store(struct kobject *kobj, 
-								  struct attribute *attr, 
-                                  const char *buf, 
-                                  size_t count)
-{
-    printk("Got write to disks: %s\n", buf);
-    return count;
-}
-
 static ssize_t slave_uuid_show(struct kobject *kobj, 
 						       struct attribute *attr, 
                                char *buf)
@@ -181,31 +172,6 @@ static ssize_t slave_target_show(struct kobject *kobj,
     return sprintf(buf, "%d\n", target);
 }
 
-static ssize_t slave_target_store(struct kobject *kobj, 
-                                  struct attribute *attr, 
-                                  const char *buf,
-                                  size_t count)
-{
-    struct castle_slave_superblock *sb;
-    struct castle_slave *slave = container_of(kobj, struct castle_slave, kobj); 
-    
-    if(count != 1 || (buf[0] != '0' && buf[0] != '1'))
-        return -EINVAL;
-    
-    sb = castle_slave_superblock_get(slave);
-    
-    if (buf[0] == '1')
-        sb->flags |= CASTLE_SLAVE_TARGET;
-    else
-        sb->flags &= ~CASTLE_SLAVE_TARGET;
-    
-    castle_slave_superblock_put(slave, 1);
-    
-    castle_events_slave_changed(slave->uuid);
-    
-    return count;
-}
-
 static ssize_t slave_spinning_show(struct kobject *kobj, 
                                    struct attribute *attr, 
                                    char *buf)
@@ -219,22 +185,6 @@ static ssize_t slave_spinning_show(struct kobject *kobj,
     castle_slave_superblock_put(slave, 0);
 
     return sprintf(buf, "%d\n", spinning);
-}
-
-static ssize_t slave_spinning_store(struct kobject *kobj, 
-                                    struct attribute *attr, 
-                                    const char *buf,
-                                    size_t count)
-{
-#if 0    
-    struct castle_slave_superblock *sb;
-    struct castle_slave *slave = container_of(kobj, struct castle_slave, kobj); 
-#endif    
-    
-    if(count != 1 || (buf[0] != '0' && buf[0] != '1'))
-        return -EINVAL;
-
-    return -ENOSYS;
 }
 
 static ssize_t slave_block_cnts_show(struct kobject *kobj, 
@@ -389,7 +339,7 @@ static struct kobj_type castle_volumes_ktype = {
 
 /* Definition of slaves sysfs directory attributes */
 static struct castle_sysfs_entry slaves_number =
-__ATTR(number, S_IRUGO|S_IWUSR, slaves_number_show, slaves_number_store);
+__ATTR(number, S_IRUGO|S_IWUSR, slaves_number_show, NULL);
 
 static struct attribute *castle_slaves_attrs[] = {
     &slaves_number.attr,
@@ -412,10 +362,10 @@ static struct castle_sysfs_entry slave_used =
 __ATTR(used, S_IRUGO|S_IWUSR, slave_used_show, NULL);
 
 static struct castle_sysfs_entry slave_target =
-__ATTR(target, S_IRUGO|S_IWUSR, slave_target_show, slave_target_store);
+__ATTR(target, S_IRUGO|S_IWUSR, slave_target_show, NULL);
 
 static struct castle_sysfs_entry slave_spinning =
-__ATTR(spinning, S_IRUGO|S_IWUSR, slave_spinning_show, slave_spinning_store);
+__ATTR(spinning, S_IRUGO|S_IWUSR, slave_spinning_show, NULL);
 
 /* TODO we should dynamically create these files */
 static struct castle_sysfs_entry slave_block_cnts0 =

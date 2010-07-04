@@ -1432,9 +1432,9 @@ static void __exit castle_exit(void)
     printk("Castle FS exit ... ");
 
     /* Remove externaly visible interfaces */
-    castle_sysfs_fini();
     castle_rxrpc_fini();
     castle_control_fini();
+    castle_sysfs_fini();
     /* Now, make sure no more IO can be made, internally or externally generated */
     castle_transfers_free();
     castle_regions_free();
