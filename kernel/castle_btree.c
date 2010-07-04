@@ -46,7 +46,21 @@ struct castle_mtree_entry {
 #define MTREE_NODE_SIZE     (10) /* In blocks */
 #define MTREE_NODE_ENTRIES  ((MTREE_NODE_SIZE * PAGE_SIZE - sizeof(struct castle_btree_node))/sizeof(struct castle_mtree_entry))
 
+static int castle_mtree_need_split(struct castle_btree_node *node, int ver_or_key_split)
+{
+    switch(ver_or_key_split)
+    {
+        case 0:
+            return ((node->is_leaf &&  (node->used == MTREE_NODE_ENTRIES)) ||
+                    (!node->is_leaf && (MTREE_NODE_ENTRIES - node->used < 2)));
+        case 1:
+            return (node->used > 2 * MTREE_NODE_ENTRIES / 3);
+        default:
+            BUG();
+    }
 
+    return -1;
+}
 
 static int castle_mtree_key_compare(void *key1, void *key2)
 {
@@ -183,12 +197,11 @@ static void castle_mtree_node_validate(struct castle_btree_node *node)
                 (struct castle_mtree_entry *) BTREE_NODE_PAYLOAD(node);
     int i;
 
-    if((node->capacity > MTREE_NODE_ENTRIES) ||
-       (node->used     > node->capacity) ||
+    if((node->used     > MTREE_NODE_ENTRIES) ||
       ((node->used     == 0) && (node->version != 0)))
     {
-        printk("Invalid mtree node capacity or/and used: (%d, %d), node version=%d\n",
-               node->capacity, node->used, node->version);
+        printk("Invalid mtree node used=%d and/or node version=%d\n",
+               node->used, node->version);
         BUG();
     }
 
@@ -222,10 +235,10 @@ static void castle_mtree_node_print(struct castle_btree_node *node)
 struct castle_btree_type castle_mtree = {
     .magic         = MTREE_TYPE,
     .node_size     = MTREE_NODE_SIZE,
-    .node_capacity = MTREE_NODE_ENTRIES,
     .min_key       = (void *)0,
     .max_key       = (void *)MTREE_MAX_BLK,
     .inv_key       = (void *)MTREE_INVAL_BLK,
+    .need_split    = castle_mtree_need_split,
     .key_compare   = castle_mtree_key_compare,
     .key_next      = castle_mtree_key_next,
     .entry_get     = castle_mtree_entry_get,
@@ -277,6 +290,22 @@ static void inline castle_batree_key_print(bakey_t *key)
 
     for(i=0; i<BATREE_KEY_SIZE; i++)
         printk("%.2x", key->_key[i]);
+}
+
+static int castle_batree_need_split(struct castle_btree_node *node, int ver_or_key_split)
+{
+    switch(ver_or_key_split)
+    {
+        case 0:
+            return ((node->is_leaf &&  (node->used == BATREE_NODE_ENTRIES)) ||
+                    (!node->is_leaf && (BATREE_NODE_ENTRIES - node->used < 2)));
+        case 1:
+            return (node->used > 2 * BATREE_NODE_ENTRIES / 3);
+        default:
+            BUG();
+    }
+
+    return -1;
 }
 
 static int castle_batree_key_compare(void *keyv1, void *keyv2)
@@ -402,12 +431,11 @@ static void castle_batree_node_validate(struct castle_btree_node *node)
                 (struct castle_batree_entry *) BTREE_NODE_PAYLOAD(node);
     int i;
 
-    if((node->capacity > BATREE_NODE_ENTRIES) ||
-       (node->used     > node->capacity) ||
+    if((node->used     > BATREE_NODE_ENTRIES) ||
       ((node->used     == 0) && (node->version != 0)))
     {
-        printk("Invalid batree node capacity or/and used: (%d, %d), node version=%d\n",
-               node->capacity, node->used, node->version);
+        printk("Invalid batree node used=%d and/or node version=%d\n",
+               node->used, node->version);
         BUG();
     }
 
@@ -446,10 +474,10 @@ static void castle_batree_node_print(struct castle_btree_node *node)
 struct castle_btree_type castle_batree = {
     .magic         = BATREE_TYPE,
     .node_size     = BATREE_NODE_SIZE,
-    .node_capacity = BATREE_NODE_ENTRIES,
     .min_key       = (void *)&BATREE_MIN_KEY,
     .max_key       = (void *)&BATREE_MAX_KEY,
     .inv_key       = (void *)&BATREE_INVAL_KEY,
+    .need_split    = castle_batree_need_split,
     .key_compare   = castle_batree_key_compare,
     .key_next      = castle_batree_key_next,
     .entry_get     = castle_batree_entry_get,
@@ -515,8 +543,8 @@ static void castle_btree_io_end(c_bvec_t *c_bvec,
 
 static void USED castle_btree_node_print(struct castle_btree_type *t, struct castle_btree_node *node)
 {
-    printk("Printing node version=%d with (cap, use) = (%d, %d), is_leaf=%d\n",
-        node->version, node->capacity, node->used, node->is_leaf);
+    printk("Printing node version=%d with used=%d, is_leaf=%d\n",
+        node->version, node->used, node->is_leaf);
 
     t->node_print(node);
 }
@@ -638,7 +666,6 @@ c2_block_t* castle_btree_node_create(int version, int is_leaf, btree_t type)
     node->magic    = BTREE_NODE_MAGIC;
     node->type     = type;
     node->version  = version;
-    node->capacity = btree->node_capacity;
     node->used     = 0;
     node->is_leaf  = is_leaf;
 
@@ -673,8 +700,6 @@ static c2_block_t* castle_btree_effective_node_create(c2_block_t *orig_c2b,
         c_disk_blk_t entry_cdb;
 
         btree->entry_get(node, i, &entry_key, &entry_version, &entry_is_leaf_ptr, &entry_cdb);
-
-        BUG_ON(eff_node->used >= eff_node->capacity);
         /* Check if slot->version is ancestoral to version. If not,
            reject straigt away. */
         if(!castle_version_is_ancestor(entry_version, version))
@@ -789,8 +814,7 @@ static void castle_btree_slot_insert(c2_block_t  *c2b,
     version_t  left_version  = INVAL_VERSION;
     int        left_is_leaf_ptr;
 
-    BUG_ON(index      >  node->used);
-    BUG_ON(node->used >= node->capacity);
+    BUG_ON(index > node->used);
     
     debug("Inserting (0x%x, 0x%x) under index=%d\n", cdb.disk, cdb.block, index);
     if(index > 0)
@@ -932,7 +956,7 @@ static int castle_btree_node_split(c_bvec_t *c_bvec)
     }
 
     /* Split the effective node if it's more than 2/3s full */
-    if(eff_node->used > 2 * eff_node->capacity / 3)
+    if(btree->need_split(eff_node, 1))
     {
         void *max_split_key;
 
@@ -1075,8 +1099,7 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
        case, we know that we'll be updating in place.
      */ 
     if((btree->key_compare(c_bvec->parent_key, btree->inv_key) != 0) &&
-       ((node->is_leaf && (node->capacity == node->used)) ||
-       (!node->is_leaf && (node->capacity - node->used < 2))))
+       (btree->need_split(node, 0)))
     {
         debug("===> Splitting node: leaf=%d, cap,use=(%d,%d)\n",
                 node->is_leaf, node->capacity, node->used);
@@ -1479,7 +1502,6 @@ static void __castle_btree_iter_start(c_iter_t *c_iter);
 void castle_btree_iter_continue(c_iter_t *c_iter)
 {
     struct castle_btree_node *node;
-    struct castle_btree_type *btree = castle_btree_type_get(c_iter->tree->btree_type);
     c2_block_t *leaf; 
     int i;
 
@@ -1491,7 +1513,7 @@ void castle_btree_iter_continue(c_iter_t *c_iter)
     BUG_ON(!node->is_leaf);
     
     /* Unlock all the indirect nodes. */
-    for(i=btree->node_capacity-1; i>=0; i--)
+    for(i=node->used - 1; i>=0; i--)
     {
         iter_debug("===> Trying to unlock indirect node i=%d\n", i);
         if(indirect_node(i).c2b)
@@ -1617,21 +1639,22 @@ static void castle_btree_iter_leaf_ptrs_lock(c_iter_t *c_iter)
             indirect_node(i).c2b = NULL; 
             continue;
         }
-        c2b = castle_cache_block_get(cdb, btree->node_capacity);
+        c2b = castle_cache_block_get(cdb, btree->node_size);
         lock_c2b(c2b);
         if(!c2b_uptodate(c2b))
             submit_c2b_sync(READ, c2b);
         indirect_node(i).c2b = c2b; 
     }
     /* Finally, find out where in the indirect block the individual ptrs are */
-    for(i=0; i<btree->node_capacity; i++)
-        indirect_node(i).node_idx = -1;
     for(i=0; i<node->used; i++)
     {
         version_t entry_version;
         c_disk_blk_t entry_cdb;
         int entry_is_leaf_ptr; 
         void *entry_key;
+
+        /* Set the idx to inval to catch bugs early */
+        indirect_node(i).node_idx = -1;
 
         btree->entry_get(node, i, &entry_key, &entry_version, &entry_is_leaf_ptr, &entry_cdb);
         if(entry_version != c_iter->version)
@@ -1947,6 +1970,7 @@ int castle_btree_init(void)
        large. */
     BUG_ON(sizeof(btree_t) != 1);
     BUG_ON(MAX_BTREE_ENTRIES < MTREE_NODE_ENTRIES);
+    BUG_ON(MAX_BTREE_ENTRIES < BATREE_NODE_ENTRIES);
 
     return 0;
 }

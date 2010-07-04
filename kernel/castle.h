@@ -124,7 +124,6 @@ typedef uint8_t btree_t;
 struct castle_btree_node {
     uint32_t magic;
     uint32_t version;
-    uint32_t capacity;
     uint32_t used;
     uint8_t  is_leaf;
     /* Payload (i.e. btree entries) depend on the B-tree type */
@@ -137,15 +136,18 @@ struct castle_btree_node {
 /* Below encapsulates the internal btree node structure, different type of
    nodes may be used for different trees */
 struct castle_btree_type {
-    btree_t   magic;
+    btree_t   magic;         /* Also used as an index to castle_btrees
+                                array.                                 */
     int       node_size;     /* in C_BLK_SIZE                          */
-    int       node_capacity; /* Number of entries in each node         */
     void     *min_key;       /* Minimum key                            */
     void     *max_key;       /* Maximum used as the end of node marker */
     void     *inv_key;       /* An invalid key, comparison with it 
                                 should always return a negative number
                                 except if also compared to invalid key
                                 in which case cmp should return zero   */
+    int     (*need_split)    (struct castle_btree_node *node,
+                              int                       version_or_key);
+                             /* 0 - version split, 1 - key split       */
     int     (*key_compare)   (void *key1, void *key2);
                              /* Returns negative if key1 < key2, zero 
                                 if equal, positive otherwise           */
@@ -322,15 +324,24 @@ typedef struct castle_iterator {
 
     struct castle_cache_block *path[MAX_BTREE_DEPTH];
     struct {
+        /* An array of c2b/{cdb, f_idx} for the 'indirect nodes'. Sorted by
+           cdb. May contain holes, if multiple entries in the original node
+           point to the same indirect node. Will span at most orig_node->used
+           entries. */
         union {
-            struct {
-                struct castle_cache_block *c2b;      /* Cache page for an 'indirect' node */
-            };
+            /* Used before entries are locked */
             struct {
                 c_disk_blk_t               cdb;      /* CDB from leaf pointer  */
                 uint16_t                   f_idx;    /* Index in the orig node */
             };                             
+            /* Used after entries are locked */
+            struct {
+                struct castle_cache_block *c2b;      /* Cache page for an 'indirect' node */
+            };
         };                                 
+        /* An array indexed by the entry # from the orginal node. Used to find
+           the right indirect node/entry in the array above. Again spans at most
+           node->used entries. */
         struct {                 
             uint16_t                       r_idx;    /* Index in indirect_nodes array */
             uint16_t                       node_idx; /* Index in the indirect node */ 
