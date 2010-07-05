@@ -114,6 +114,8 @@ enum {
 #define MTREE_BVEC_BLOCK(_bvec)   ((sector_t)(_bvec)->key)
 
 #define BATREE_TYPE                0x44
+
+#define VLBA_TREE_TYPE             0x55
                                   
 #define MAX_BTREE_DEPTH           (10)
 #define MAX_BTREE_ENTRIES         (2500)

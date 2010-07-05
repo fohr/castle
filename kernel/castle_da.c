@@ -319,13 +319,13 @@ static int castle_da_rwct_make(struct castle_double_array *da)
     /* Allocate an id for the tree, init the ct. */
     ct->seq         = castle_next_tree_seq++;
     atomic64_set(&ct->item_count, 0); 
-    ct->btree_type  = MTREE_TYPE; 
+    ct->btree_type  = VLBA_TREE_TYPE; 
     ct->da          = da->id;
     ct->level       = 0;
     ct->mstore_key  = INVAL_MSTORE_KEY; 
 
     /* Create a root node for this tree, and update the root version */
-    c2b = castle_btree_node_create(da->root_version, 1 /* is_leaf */, MTREE_TYPE);
+    c2b = castle_btree_node_create(da->root_version, 1 /* is_leaf */, VLBA_TREE_TYPE);
     ct->first_node = c2b->cdb; 
     unlock_c2b(c2b);
     put_c2b(c2b);

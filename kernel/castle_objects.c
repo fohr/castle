@@ -45,6 +45,15 @@ static c_vl_key_t* castle_object_key_convert(c_vl_key_t **obj_key)
     return btree_key;
 }
 
+static void castle_object_key_free(c_vl_key_t **obj_key)
+{
+    int i;
+
+    for(i=0; obj_key[i]; i++)
+        kfree(obj_key[i]);
+    kfree(obj_key);
+}
+
 void castle_object_replace_complete(struct castle_bio_vec *c_bvec, int err, c_disk_blk_t cdb)
 {
     struct castle_rxrpc_call *call = c_bvec->c_bio->rxrpc_call;
@@ -55,6 +64,9 @@ void castle_object_replace_complete(struct castle_bio_vec *c_bvec, int err, c_di
     BUG_ON(c_bvec_data_dir(c_bvec) != WRITE); 
     BUG_ON(atomic_read(&c_bio->count) != 1);
     BUG_ON(c_bio->err != 0);
+
+    /* Free the key */
+    kfree(c_bvec->key);
 
     /* Deal with error case first */
     if(err)
@@ -85,24 +97,13 @@ int castle_object_replace(struct castle_rxrpc_call *call, c_vl_key_t **key, int 
     c_vl_key_t *btree_key;
     c_bvec_t *c_bvec;
     c_bio_t *c_bio;
-    uint64_t noddy_key;
-    int i;
 
-    memcpy(&noddy_key, key[0], 8);
     btree_key = castle_object_key_convert(key);
-    for(i=0; key[i]; i++)
-    {
-//#if 0
-        vl_key_print(key[i]);
-//#endif    
-        kfree(key[i]);
-    }
-    kfree(key);
+    castle_object_key_free(key);
+    
     //printk(" value          : %s\n", tombstone ? "tombstone" : "object");
-    //printk(" Noddy key=%llx\n", noddy_key);
     printk("Btree key is:");
     vl_key_print(btree_key);
-    kfree(btree_key);
 
     /* Single c_bvec for the bio */
     c_bio = castle_utils_bio_alloc(1);
@@ -117,7 +118,7 @@ int castle_object_replace(struct castle_rxrpc_call *call, c_vl_key_t **key, int 
         c_bio->data_dir |= REMOVE;
 
     c_bvec = c_bio->c_bvecs; 
-    c_bvec->key        = (void *)noddy_key; 
+    c_bvec->key        = btree_key; 
     c_bvec->endfind    = castle_object_replace_complete;
     c_bvec->da_endfind = NULL; 
     
@@ -174,6 +175,9 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec, int err, c_disk_b
     BUG_ON(atomic_read(&c_bio->count) != 1);
     BUG_ON(c_bio->err != 0);
 
+    /* Free the key */
+    kfree(c_bvec->key);
+
     /* Deal with error case first */
     if(err)
     {
@@ -205,23 +209,12 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec, int err, c_disk_b
 
 int castle_object_get(struct castle_rxrpc_call *call, c_vl_key_t **key)
 {
+    c_vl_key_t *btree_key;
     c_bvec_t *c_bvec;
     c_bio_t *c_bio;
-    uint64_t noddy_key;
-    int i;
 
-    memcpy(&noddy_key, key[0], 8);
-    for(i=0; key[i]; i++)
-    {
-#if 0        
-        vl_key_print(key[i]);
-#endif
-        kfree(key[i]);
-    }
-    kfree(key);
-#if 0
-    printk(" Noddy key=%llx\n", noddy_key);
-#endif
+    btree_key = castle_object_key_convert(key);
+    castle_object_key_free(key);
 
     /* Single c_bvec for the bio */
     c_bio = castle_utils_bio_alloc(1);
@@ -233,7 +226,7 @@ int castle_object_get(struct castle_rxrpc_call *call, c_vl_key_t **key)
     c_bio->data_dir      = READ;
 
     c_bvec = c_bio->c_bvecs; 
-    c_bvec->key        = (void *)noddy_key; 
+    c_bvec->key        = btree_key; 
     c_bvec->endfind    = castle_object_get_complete;
     c_bvec->da_endfind = NULL; 
     

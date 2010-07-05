@@ -400,6 +400,9 @@ static void castle_batree_entry_add(struct castle_btree_node *node,
                         (is_leaf_ptr ? BATREE_ENTRY_LEAF_PTR : BATREE_ENTRY_LEAF_VAL) :
                         BATREE_ENTRY_NODE;
     entry->cdb     = cdb;
+
+    /* Increment the node used count */
+    node->used++;
 }   
 
 static void castle_batree_entry_replace(struct castle_btree_node *node,
@@ -513,18 +516,130 @@ struct castle_btree_type castle_batree = {
 
 
 /**********************************************************************************************/
+/* Variable length byte array key btree (vlbatree) definitions */
+#define VLBA_TREE_NODE_SIZE         10
+
+static int castle_vlba_tree_need_split(struct castle_btree_node *node, int ver_or_key_split)
+{
+    switch(ver_or_key_split)
+    {
+        case 0:
+            BUG();
+        case 1:
+            BUG();
+        default:
+            BUG();
+    }
+
+    return -1;
+}
+
+static int castle_vlba_tree_key_compare(void *keyv1, void *keyv2)
+{
+    BUG();
+
+    return 0;
+}
+    
+static void* castle_vlba_tree_key_next(void *keyv)
+{
+    BUG();
+
+    return NULL;
+}
+
+static void castle_vlba_tree_entry_get(struct castle_btree_node *node,
+                                       int                       idx,
+                                       void                    **key_p,            
+                                       version_t                *version_p,
+                                       int                      *is_leaf_ptr_p,
+                                       c_disk_blk_t             *cdb_p)
+{
+    BUG();
+}
+
+static void castle_vlba_tree_entry_add(struct castle_btree_node *node,
+                                       int                       idx,
+                                       void                     *key,            
+                                       version_t                 version,
+                                       int                       is_leaf_ptr,
+                                       c_disk_blk_t              cdb)
+{
+    BUG();
+
+    /* Increment the node used count */
+    node->used++;
+}   
+
+static void castle_vlba_tree_entry_replace(struct castle_btree_node *node,
+                                           int                       idx,
+                                           void                     *key,            
+                                           version_t                 version,
+                                           int                       is_leaf_ptr,
+                                           c_disk_blk_t              cdb)
+{
+    BUG();
+}   
+
+static void castle_vlba_tree_entries_drop(struct castle_btree_node *node,
+                                          int                       idx_start,
+                                          int                       idx_end)
+{
+    BUG();
+
+    /* Decrement the node used count */
+    node->used -= (idx_end - idx_start + 1);
+}
+
+#ifdef CASTLE_DEBUG
+static void castle_vlba_tree_node_validate(struct castle_btree_node *node)
+{
+    BUG();
+}
+#endif
+
+static void castle_vlba_tree_node_print(struct castle_btree_node *node)
+{
+    BUG();
+}
+
+
+struct castle_btree_type castle_vlba_tree = {
+    .magic         = VLBA_TREE_TYPE,
+    .node_size     = VLBA_TREE_NODE_SIZE,
+    .min_key       = NULL,
+    .max_key       = NULL, 
+    .inv_key       = NULL, 
+    .need_split    = castle_vlba_tree_need_split,
+    .key_compare   = castle_vlba_tree_key_compare,
+    .key_next      = castle_vlba_tree_key_next,
+    .entry_get     = castle_vlba_tree_entry_get,
+    .entry_add     = castle_vlba_tree_entry_add,
+    .entry_replace = castle_vlba_tree_entry_replace,
+    .entries_drop  = castle_vlba_tree_entries_drop,
+    .node_print    = castle_vlba_tree_node_print,
+#ifdef CASTLE_DEBUG    
+    .node_validate = castle_vlba_tree_node_validate,
+#endif
+}; 
+
+
+
+/**********************************************************************************************/
 /* Array of btree types */
 
 static struct castle_btree_type *castle_btrees[1<<(8 * sizeof(btree_t))] = 
-                                                       {[MTREE_TYPE]  = &castle_mtree,
-                                                        [BATREE_TYPE] = &castle_batree};
+                                                       {[MTREE_TYPE]     = &castle_mtree,
+                                                        [BATREE_TYPE]    = &castle_batree,
+                                                        [VLBA_TREE_TYPE] = &castle_vlba_tree};
 
 
 static inline struct castle_btree_type *castle_btree_type_get(btree_t type)
 {
 #ifdef CASTLE_DEBUG
     BUG_ON((type != MTREE_TYPE) &&
-           (type != BATREE_TYPE));
+           (type != BATREE_TYPE) &&
+           (type != VLBA_TREE_TYPE));
 #endif
     return castle_btrees[type];
 }
