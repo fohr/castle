@@ -424,6 +424,27 @@ static void castle_batree_entry_replace(struct castle_btree_node *node,
     entry->cdb     = cdb;
 }   
 
+static void castle_batree_entries_drop(struct castle_btree_node *node,
+                                       int                       idx_start,
+                                       int                       idx_end)
+{
+    struct castle_batree_entry *entries = 
+                (struct castle_batree_entry *) BTREE_NODE_PAYLOAD(node);
+    struct castle_batree_entry *entry_start = entries + idx_start;
+    struct castle_batree_entry *entry_end   = entries + idx_end;
+
+    BUG_ON(idx_start < 0 || idx_start > node->used);
+    BUG_ON(idx_end   < 0 || idx_end   > node->used);
+    BUG_ON(idx_start > idx_end);
+
+    /* Move the node entries forward */
+    memmove(entry_start, 
+            entry_end + 1, 
+            sizeof(*entry_start) * (node->used - idx_end - 1));
+    /* Decrement the node used count */
+    node->used -= (idx_end - idx_start + 1);
+}
+
 #ifdef CASTLE_DEBUG
 static void castle_batree_node_validate(struct castle_btree_node *node)
 {
@@ -483,6 +504,7 @@ struct castle_btree_type castle_batree = {
     .entry_get     = castle_batree_entry_get,
     .entry_add     = castle_batree_entry_add,
     .entry_replace = castle_batree_entry_replace,
+    .entries_drop  = castle_batree_entries_drop,
     .node_print    = castle_batree_node_print,
 #ifdef CASTLE_DEBUG    
     .node_validate = castle_batree_node_validate,
