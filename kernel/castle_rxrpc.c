@@ -187,21 +187,21 @@ void castle_rxrpc_str_copy(struct castle_rxrpc_call *call, void *buffer, int max
 
 static int castle_rxrpc_collection_key_get(struct sk_buff *skb, 
                                            collection_id_t *collection_p, 
-                                           uint8_t ***key_p)
+                                           c_vl_key_t ***key_p)
 {
     collection_id_t collection;
-    uint8_t **key;
+    c_vl_key_t **key;
     uint32_t nr_key_dim, i;
 
     collection = SKB_L_GET(skb);
     nr_key_dim = SKB_L_GET(skb);
-    key = kzalloc(sizeof(uint8_t *) * (nr_key_dim + 1), GFP_KERNEL);
+    key = kzalloc(sizeof(c_vl_key_t *) * (nr_key_dim + 1), GFP_KERNEL);
     if(!key)
         return -ENOMEM;
 
     for(i=0; i<nr_key_dim; i++)
     {
-        key[i] = SKB_STR_GET(skb, 128);
+        key[i] = SKB_VL_KEY_GET(skb, 128);
         if(!key[i])
         {
             for(i--; i>=0; i--)
@@ -221,7 +221,7 @@ static int castle_rxrpc_collection_key_get(struct sk_buff *skb,
 static int castle_rxrpc_get_decode(struct castle_rxrpc_call *call, struct sk_buff *skb,  bool last)
 {
     collection_id_t collection;
-    uint8_t **key;
+    c_vl_key_t **key;
     int ret;
 
     ret = castle_rxrpc_collection_key_get(skb, &collection, &key);
@@ -241,7 +241,7 @@ static int castle_rxrpc_get_decode(struct castle_rxrpc_call *call, struct sk_buf
 static int castle_rxrpc_replace_decode(struct castle_rxrpc_call *call, struct sk_buff *skb,  bool last)
 {
     collection_id_t collection;
-    uint8_t **key;
+    c_vl_key_t **key;
     int ret;
 static int cnt = 0;
     

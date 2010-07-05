@@ -71,3 +71,9 @@ void skb_print(struct sk_buff *skb)
     }
     printk("\n");
 }
+
+void vl_key_print(c_vl_key_t *vl_key)
+{
+    printk(" key len=%d: ", vl_key->length);
+    print_hex_dump_bytes("", DUMP_PREFIX_NONE, vl_key->key, vl_key->length);
+}

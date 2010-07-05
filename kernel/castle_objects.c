@@ -17,6 +17,33 @@
 static const uint32_t OBJ_TOMBSTONE = ((uint32_t)-1);
 extern struct castle_attachment *global_attachment_hack;
 
+/* Converts 'object key' (i.e. multidimensional key) to btree key (single dimensional) */
+static c_vl_key_t* castle_object_key_convert(c_vl_key_t **obj_key)
+{
+    c_vl_key_t *btree_key;
+    uint32_t max_len = 0;
+    int i, nr_keys = 0;
+
+    /* Work out the maximum length of the keys, and number of keys in the array */
+    while(obj_key[nr_keys])
+    {
+        max_len = max_len < obj_key[nr_keys]->length ? obj_key[nr_keys]->length : max_len;
+        nr_keys++;
+    }
+
+    /* Allocate the single-dimensional key */
+    btree_key = kzalloc(sizeof(c_vl_key_t) + max_len * nr_keys, GFP_KERNEL);
+    if(!btree_key)
+        return NULL;
+
+    /* Construct interleaved key */
+    btree_key->length = max_len * nr_keys;
+    for(i=0; i<btree_key->length; i++)
+        if(i / nr_keys < obj_key[i % nr_keys]->length)
+            btree_key->key[i] = obj_key[i % nr_keys]->key[i / nr_keys];
+
+    return btree_key;
+}
 
 void castle_object_replace_complete(struct castle_bio_vec *c_bvec, int err, c_disk_blk_t cdb)
 {
@@ -53,25 +80,29 @@ void castle_object_replace_complete(struct castle_bio_vec *c_bvec, int err, c_di
     castle_utils_bio_free(c_bio);
 }
 
-int castle_object_replace(struct castle_rxrpc_call *call, uint8_t **key, int tombstone)
+int castle_object_replace(struct castle_rxrpc_call *call, c_vl_key_t **key, int tombstone)
 {
+    c_vl_key_t *btree_key;
     c_bvec_t *c_bvec;
     c_bio_t *c_bio;
     uint64_t noddy_key;
     int i;
 
     memcpy(&noddy_key, key[0], 8);
+    btree_key = castle_object_key_convert(key);
     for(i=0; key[i]; i++)
     {
-#if 0
-        printk(" key[%d]         : ", i);
-        print_hex_dump_bytes("", DUMP_PREFIX_NONE, key[i], strlen(key[i]));
-#endif    
+//#if 0
+        vl_key_print(key[i]);
+//#endif    
         kfree(key[i]);
     }
     kfree(key);
     //printk(" value          : %s\n", tombstone ? "tombstone" : "object");
     //printk(" Noddy key=%llx\n", noddy_key);
+    printk("Btree key is:");
+    vl_key_print(btree_key);
+    kfree(btree_key);
 
     /* Single c_bvec for the bio */
     c_bio = castle_utils_bio_alloc(1);
@@ -172,7 +203,7 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec, int err, c_disk_b
     }
 }
 
-int castle_object_get(struct castle_rxrpc_call *call, uint8_t **key)
+int castle_object_get(struct castle_rxrpc_call *call, c_vl_key_t **key)
 {
     c_bvec_t *c_bvec;
     c_bio_t *c_bio;
@@ -183,8 +214,7 @@ int castle_object_get(struct castle_rxrpc_call *call, uint8_t **key)
     for(i=0; key[i]; i++)
     {
 #if 0        
-        printk(" key[%d]         : ", i);
-        print_hex_dump_bytes("", DUMP_PREFIX_NONE, key[i], strlen(key[i]));
+        vl_key_print(key[i]);
 #endif
         kfree(key[i]);
     }

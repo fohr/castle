@@ -156,6 +156,25 @@ static inline void SKB_STR_CPY(struct sk_buff *skb, void *dst, int max_len)
     BUG_ON(!pskb_pull(skb, str_len));
 }
 
+static inline c_vl_key_t* SKB_VL_KEY_GET(struct sk_buff *skb, int max_len)
+{
+    uint32_t key_len = SKB_L_GET(skb);
+    c_vl_key_t *vlk;
+    
+    if((key_len > max_len) || (key_len > skb->len))
+        return NULL;
+
+    if(!(vlk = kzalloc(key_len+4, GFP_KERNEL)))
+        return NULL;
+
+    vlk->length = key_len;
+    BUG_ON(skb_copy_bits(skb, 0, &vlk->key, key_len) < 0);
+    key_len += (key_len % 4 == 0 ? 0 : 4 - key_len % 4);
+    BUG_ON(!pskb_pull(skb, key_len));
+
+    return vlk;
+}
+
 static inline c_bio_t* castle_utils_bio_alloc(int nr_bvecs)
 {
     c_bio_t *c_bio;
@@ -185,6 +204,7 @@ static inline void castle_utils_bio_free(c_bio_t *bio)
 void inline list_swap(struct list_head *t1, struct list_head *t2);
 void        list_sort(struct list_head *list, 
                       int (*compare)(struct list_head *l1, struct list_head *l2));
+void        vl_key_print(c_vl_key_t *vl_key);
 void        skb_print(struct sk_buff *skb);
 
 #endif /* __CASTLE_UTILS_H__ */

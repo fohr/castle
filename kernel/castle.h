@@ -133,6 +133,12 @@ struct castle_btree_node {
 
 #define BTREE_NODE_PAYLOAD(_node)   ((void *)&(_node)->payload)
 
+/* Variable length key, for example used by the btree */
+typedef struct castle_var_length_key {
+    uint32_t length;
+    uint8_t key[0];
+} c_vl_key_t;
+
 /* Below encapsulates the internal btree node structure, different type of
    nodes may be used for different trees */
 struct castle_btree_type {
