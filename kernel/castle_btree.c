@@ -982,11 +982,11 @@ static void castle_btree_slot_insert(c2_block_t  *c2b,
         castle_version_is_ancestor(left_version, version) &&
        (version == node->version))
     {
-        /* The element we are replacing MUST be a leaf pointer, 
+        /* In leaf nodes the element we are replacing MUST be a leaf pointer, 
            because left_version is strictly ancestoral to the node version.
            It implies that the key hasn't been insterted here, because 
            keys are only inserted to weakly ancestoral nodes */
-        BUG_ON(!left_is_leaf_ptr);
+        BUG_ON(!left_is_leaf_ptr && node->is_leaf);
         /* Replace the slot */
         btree->entry_replace(node, index-1, key, version, 0, cdb);
         dirty_c2b(c2b);
