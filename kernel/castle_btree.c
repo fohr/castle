@@ -10,7 +10,7 @@
 #include "castle_block.h"
 #include "castle_debug.h"
 
-//#define DEBUG
+#define DEBUG
 #ifndef DEBUG
 #define debug(_f, ...)          ((void)0)
 #define iter_debug(_f, ...)     ((void)0)
@@ -221,11 +221,14 @@ static void castle_mtree_node_print(struct castle_btree_node *node)
                 (struct castle_mtree_entry *) BTREE_NODE_PAYLOAD(node);
     int i;
 
+    printk("Node: used=%d, version=%d, is_leaf=%d\n",
+        node->used, node->version, node->is_leaf);
     for(i=0; i<node->used; i++)
-        printk("[%d] (0x%x, 0x%x) -> (0x%x, 0x%x)\n", 
+        printk("[%d] (0x%x, 0x%x, %s) -> (0x%x, 0x%x)\n", 
             i,
             entries[i].block,
             entries[i].version,
+            MTREE_ENTRY_IS_LEAF_PTR(entries + i) ? "leafptr" : "direct ",
             entries[i].cdb.disk,
             entries[i].cdb.block);
     printk("\n");
@@ -697,8 +700,8 @@ static void castle_btree_lub_find(struct castle_btree_node *node,
     void *key_lub;
     int lub_idx, insert_idx, i, key_cmp;
 
-    debug("Looking for (k,v) = (%p, 0x%x), node->used=%d, capacity=%d\n",
-            key, version, node->used, node->capacity);
+    debug("Looking for (k,v) = (%p, 0x%x), node->used=%d\n",
+            key, version, node->used);
     /* We should not search for an invalid key */
     BUG_ON(btree->key_compare(key, btree->inv_key) == 0);
         
@@ -1001,8 +1004,8 @@ static void castle_btree_node_insert(c2_block_t *parent_c2b,
     btree->entry_get(child, child->used-1, &key, NULL, NULL, NULL);
 
     castle_btree_lub_find(parent, key, version, NULL, &insert_idx);
-    debug("Inserting child node into parent (cap=0x%x, use=0x%x), will insert (k,v)=(%p, 0x%x) at idx=%d.\n",
-            parent->capacity, parent->used, key, version, insert_idx);
+    debug("Inserting child node into parent (used=0x%x), will insert (k,v)=(%p, 0x%x) at idx=%d.\n",
+            parent->used, key, version, insert_idx);
     castle_btree_slot_insert(parent_c2b, 
                              insert_idx, 
                              key,
@@ -1022,9 +1025,9 @@ static void castle_btree_node_under_key_insert(c2_block_t *parent_c2b,
 
     BUG_ON(btree->key_compare(key, btree->inv_key) == 0);
     castle_btree_lub_find(parent, key, version, NULL, &insert_idx);
-    debug("Inserting child node into parent (cap=0x%x, use=0x%x), "
+    debug("Inserting child node into parent (used=0x%x), "
           "will insert (k,v)=(%p, 0x%x) at idx=%d.\n",
-            parent->capacity, parent->used, key, version, insert_idx);
+            parent->used, key, version, insert_idx); 
     castle_btree_slot_insert(parent_c2b, 
                              insert_idx, 
                              key,
@@ -1238,8 +1241,8 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
     if((btree->key_compare(c_bvec->parent_key, btree->inv_key) != 0) &&
        (btree->need_split(node, 0)))
     {
-        debug("===> Splitting node: leaf=%d, cap,use=(%d,%d)\n",
-                node->is_leaf, node->capacity, node->used);
+        debug("===> Splitting node: leaf=%d, used=%d\n",
+                node->is_leaf, node->used);
         ret = castle_btree_node_split(c_bvec);
         if(ret)
         {
@@ -1280,8 +1283,8 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
         atomic64_inc(&c_bvec->tree->item_count);
         /* TODO: should memset the page to zero (because we return zeros on reads)
                  this can be done here, or beter still in _main.c, in data_copy */
-        debug("Need to insert (%p, 0x%x) into node (used: 0x%x, capacity: 0x%x, leaf=%d).\n",
-                key, version, node->used, node->capacity, node->is_leaf);
+        debug("Need to insert (%p, 0x%x) into node (used: 0x%x, leaf=%d).\n",
+                key, version, node->used, node->is_leaf);
         BUG_ON(btree->key_compare(c_bvec->parent_key, btree->inv_key) == 0);
         castle_btree_slot_insert(c_bvec->btree_node,
                                  insert_idx,
