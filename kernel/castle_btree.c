@@ -838,7 +838,13 @@ static c2_block_t* castle_btree_effective_node_create(c2_block_t *orig_c2b,
         version_t    entry_version;
         int          entry_is_leaf_ptr;
         c_disk_blk_t entry_cdb;
-
+        void       (*consume_entry_fn) (struct castle_btree_node *node,
+                                        int                       idx,
+                                        void                     *key,            
+                                        version_t                 version,
+                                        int                       is_leaf_ptr,
+                                        c_disk_blk_t              cdb);
+ 
         btree->entry_get(node, i, &entry_key, &entry_version, &entry_is_leaf_ptr, &entry_cdb);
         /* Check if slot->version is ancestoral to version. If not,
            reject straigt away. */
@@ -850,6 +856,7 @@ static c2_block_t* castle_btree_effective_node_create(c2_block_t *orig_c2b,
         if(btree->key_compare(last_eff_key, entry_key) != 0)
         {
             insert_idx++;
+            consume_entry_fn = btree->entry_add;
         } else
         {
             /* last_eff_key == entry_key (&& last_eff_key != inv_key) 
@@ -860,26 +867,27 @@ static c2_block_t* castle_btree_effective_node_create(c2_block_t *orig_c2b,
             /* TODO: these asserts should really be turned into
                      'corrupt btree' exception. */
             BUG_ON(!castle_version_is_ancestor(last_eff_version, entry_version));
+            consume_entry_fn = btree->entry_replace;
         }
         
         if(!node->is_leaf || entry_is_leaf_ptr)
         {
             /* If already a leaf pointer, or a non-leaf entry copy directly. */
-            btree->entry_add(eff_node,
-                             insert_idx,
-                             entry_key,
-                             entry_version,
-                             entry_is_leaf_ptr,
-                             entry_cdb);
+            consume_entry_fn(eff_node,
+                            insert_idx,
+                            entry_key,
+                            entry_version,
+                            entry_is_leaf_ptr,
+                            entry_cdb);
         } else
         {
             /* Otherwise construct a new leaf pointer. */
-            btree->entry_add(eff_node,
-                             insert_idx,
-                             entry_key,
-                             entry_version,
-                             1,
-                             orig_c2b->cdb);
+            consume_entry_fn(eff_node,
+                            insert_idx,
+                            entry_key,
+                            entry_version,
+                            1,
+                            orig_c2b->cdb);
         }
         last_eff_key = entry_key;
         last_eff_version = entry_version;
