@@ -34,7 +34,9 @@ struct castle_component_tree castle_global_tree = {.seq         = GLOBAL_TREE,
                                                    .da          = INVAL_DA,
                                                    .level       = -1, 
                                                    .first_node  = INVAL_DISK_BLK,
-                                                   .list        = {NULL, NULL},
+                                                   .da_list     = {NULL, NULL},
+                                                   .hash_list   = {NULL, NULL},
+                                                   .roots_list  = {NULL, NULL},
                                                    .mstore_key  = INVAL_MSTORE_KEY,
                                                   }; 
 struct workqueue_struct     *castle_wqs[2*MAX_BTREE_DEPTH+1];
@@ -222,11 +224,12 @@ int castle_fs_init(void)
     /* Post initialise freespace on all the slaves. */
     castle_freespace_slaves_init(first);
 
-    /* Read versions in */
-    ret = castle_versions_read();
+    /* Read doubling arrays and component trees in. */
+    ret = first ? castle_double_array_create() : castle_double_array_read(); 
     if(ret) return -EINVAL;
 
-    ret = first ? castle_double_array_create() : castle_double_array_read(); 
+    /* Read versions in. This requires component trees. */
+    ret = castle_versions_read();
     if(ret) return -EINVAL;
 
     printk("Castle FS inited.\n");

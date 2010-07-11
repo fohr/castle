@@ -18,7 +18,9 @@
 #define MAX_DA_LEVEL                    (10)
 
 #define CASTLE_DA_HASH_SIZE             (1000)
+#define CASTLE_CT_HASH_SIZE             (4000)
 static struct list_head     *castle_da_hash;
+static struct list_head     *castle_ct_hash;
 static struct castle_mstore *castle_da_store      = NULL;
 static struct castle_mstore *castle_tree_store    = NULL;
        da_id_t               castle_next_da_id    = 1; 
@@ -33,11 +35,13 @@ struct castle_double_array {
 };
 
 DEFINE_HASH_TBL(castle_da, castle_da_hash, CASTLE_DA_HASH_SIZE, struct castle_double_array, hash_list, da_id_t, id);
+DEFINE_HASH_TBL(castle_ct, castle_ct_hash, CASTLE_CT_HASH_SIZE, struct castle_component_tree, hash_list, tree_seq_t, seq);
+
 
 static int castle_da_ct_inc_cmp(struct list_head *l1, struct list_head *l2)
 {
-    struct castle_component_tree *ct1 = list_entry(l1, struct castle_component_tree, list);
-    struct castle_component_tree *ct2 = list_entry(l2, struct castle_component_tree, list);
+    struct castle_component_tree *ct1 = list_entry(l1, struct castle_component_tree, da_list);
+    struct castle_component_tree *ct2 = list_entry(l2, struct castle_component_tree, da_list);
 
     return ct1->seq > ct2->seq ? 1 : -1;
 }
@@ -65,7 +69,12 @@ static void castle_da_unmarshall(struct castle_double_array *da,
         INIT_LIST_HEAD(&da->trees[i]);
 }
 
-static struct castle_component_tree *castle_da_rwct_get(struct castle_double_array *da)
+struct castle_component_tree* castle_component_tree_get(tree_seq_t seq)
+{
+    return castle_ct_hash_get(seq);
+}
+
+static struct castle_component_tree* castle_da_rwct_get(struct castle_double_array *da)
 {
     struct list_head *h, *l;
 
@@ -74,7 +83,7 @@ static struct castle_component_tree *castle_da_rwct_get(struct castle_double_arr
     /* There should be precisely one entry in the list */
     BUG_ON((h == l) || (l->next != h));
         
-    return list_entry(l, struct castle_component_tree, list);
+    return list_entry(l, struct castle_component_tree, da_list);
 }
 
 static int castle_da_trees_sort(struct castle_double_array *da, void *unused)
@@ -111,7 +120,8 @@ static da_id_t castle_da_ct_unmarshall(struct castle_component_tree *ct,
     ct->level      = ctm->level;
     ct->first_node = ctm->first_node;
     ct->mstore_key = key;
-    INIT_LIST_HEAD(&ct->list);
+    INIT_LIST_HEAD(&ct->da_list);
+    INIT_LIST_HEAD(&ct->roots_list);
 
     return ctm->da_id;
 }
@@ -132,7 +142,7 @@ static void castle_da_foreach_tree(struct castle_double_array *da,
         j = 0;
         list_for_each_safe(lh, t, &da->trees[i])
         {
-            ct = list_entry(lh, struct castle_component_tree, list); 
+            ct = list_entry(lh, struct castle_component_tree, da_list); 
             if(fn(da, ct, j, token))
                 return;
             j++;
@@ -145,7 +155,7 @@ static int castle_da_ct_dealloc(struct castle_double_array *da,
                                 int level_cnt,
                                 void *unused)
 {
-    list_del(&ct->list);
+    list_del(&ct->da_list);
     kfree(ct);
 
     return 0;
@@ -164,6 +174,11 @@ static void castle_da_hash_destroy(void)
 {
    castle_da_hash_iterate(castle_da_hash_dealloc, NULL); 
    kfree(castle_da_hash);
+}
+
+static void castle_ct_hash_destroy(void)
+{
+    kfree(castle_ct_hash);
 }
 
 static int castle_da_tree_writeback(struct castle_double_array *da,
@@ -275,6 +290,7 @@ int castle_double_array_read(void)
         {
             da_id = castle_da_ct_unmarshall(&castle_global_tree, &mstore_centry, key);
             BUG_ON(!DA_INVAL(da_id));
+            castle_ct_hash_add(ct);
             continue;
         }
         /* Otherwise allocate a ct structure */
@@ -282,11 +298,12 @@ int castle_double_array_read(void)
         if(!ct)
             goto out_iter_destroy;
         da_id = castle_da_ct_unmarshall(ct, &mstore_centry, key);
+        castle_ct_hash_add(ct);
         da = castle_da_hash_get(da_id);
         if(!da)
             goto out_iter_destroy;
         debug("Read CT seq=%d\n", ct->seq);
-        list_add(&ct->list, &da->trees[ct->level]);
+        list_add(&ct->da_list, &da->trees[ct->level]);
         castle_next_tree_seq = (ct->seq >= castle_next_tree_seq) ? ct->seq + 1 : castle_next_tree_seq;
     }
     castle_mstore_iterator_destroy(iterator);
@@ -342,7 +359,7 @@ static int castle_da_rwct_make(struct castle_double_array *da)
     debug("Added component tree seq=%d, root_node=(0x%x, 0x%x), it's threaded onto da=%p, level=%d\n",
             ct->seq, c2b->cdb.disk, c2b->cdb.block, da, ct->level);
     /* Thread CT onto level 0 list */
-    list_add(&ct->list, &da->trees[ct->level]);
+    list_add(&ct->da_list, &da->trees[ct->level]);
 
     return 0;
 }
@@ -385,13 +402,13 @@ static struct castle_component_tree* castle_da_ct_next(struct castle_component_t
 
     debug("Asked for component tree after %d\n", ct->seq);
     BUG_ON(!da);
-    for(level = ct->level, ct_list = &ct->list; 
+    for(level = ct->level, ct_list = &ct->da_list; 
         level < MAX_DA_LEVEL; 
         level++, ct_list = &da->trees[level])
     {
         if(!list_is_last(ct_list, &da->trees[level]))
         {
-            next_ct = list_entry(ct_list->next, struct castle_component_tree, list); 
+            next_ct = list_entry(ct_list->next, struct castle_component_tree, da_list); 
             debug("Found component tree %d\n", next_ct->seq);
             BUG_ON(next_ct->seq > ct->seq);
 
@@ -470,6 +487,10 @@ int castle_double_array_create(void)
     if(!castle_da_store || !castle_tree_store)
         return -ENOMEM;
 
+    /* Make sure that the global tree is in the ct hash */
+    INIT_LIST_HEAD(&castle_global_tree.roots_list);
+    castle_ct_hash_add(&castle_global_tree);
+
     return 0;
 }
     
@@ -479,7 +500,14 @@ int castle_double_array_init(void)
     castle_da_hash = castle_da_hash_alloc();
     if(!castle_da_hash)
         return -ENOMEM;
+    castle_ct_hash = castle_ct_hash_alloc();
+    if(!castle_ct_hash)
+    {
+        kfree(castle_da_hash);
+        return -ENOMEM; 
+    }
     castle_da_hash_init();
+    castle_ct_hash_init();
 
     return 0;
 }
@@ -489,4 +517,5 @@ void castle_double_array_fini(void)
     printk("\n========= Double Array fini ==========\n");
     castle_da_hash_writeback();
     castle_da_hash_destroy();
+    castle_ct_hash_destroy();
 }

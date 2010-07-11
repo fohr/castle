@@ -5,6 +5,7 @@
 #include "castle_public.h"
 #include "castle_utils.h"
 #include "castle.h"
+#include "castle_da.h"
 #include "castle_freespace.h"
 #include "castle_versions.h"
 #include "castle_sysfs.h"
@@ -32,9 +33,11 @@ static c_mstore_t        *castle_roots_mstore    = NULL;
 
 struct castle_tree_root {
     tree_seq_t       tree_seq; 
+    version_t        version;
     c_disk_blk_t     root;
     c_mstore_key_t   mstore_key;
-    struct list_head list;
+    struct list_head version_list;
+    struct list_head ct_list; 
 };
 
 #define CV_INITED_BIT             (0)
@@ -156,7 +159,7 @@ static struct castle_tree_root *__castle_version_root_get(struct castle_version 
     BUG_ON(!test_bit(CV_FTREE_LOCKED_BIT, &v->flags));
     list_for_each(l, &v->tree_roots)
     {
-        ct = list_entry(l, struct castle_tree_root, list);
+        ct = list_entry(l, struct castle_tree_root, version_list);
         if(ct->tree_seq == tree)
             return ct;
     }
@@ -180,11 +183,42 @@ c_disk_blk_t castle_version_root_get(version_t version, tree_seq_t tree)
     return ct->root;
 }
 
+void castle_version_root_next(tree_seq_t tree,
+                              version_t *next_version,
+                              c_disk_blk_t *btree_root)
+{
+    struct castle_component_tree *ct;
+    struct castle_tree_root *tr;
+    struct list_head *l;
+    
+    ct = castle_component_tree_get(tree);
+    BUG_ON(!ct);
+
+    /* Return invalid if list is empty */
+    if(list_empty(&ct->roots_list))
+    {
+        *next_version = INVAL_VERSION;
+        *btree_root = INVAL_DISK_BLK;
+        return;
+    }
+
+    /* Otherwise, return the first entry from the front of the list, and 
+       move it to the tail */
+    l = ct->roots_list.next;
+    tr = list_entry(l, struct castle_tree_root, ct_list); 
+    list_move_tail(l, &ct->roots_list);
+
+    /* Return */
+    *next_version = tr->version;
+    *btree_root = tr->root;
+}
+
 static int castle_version_root_add(version_t version,
                                    tree_seq_t tree_seq, 
                                    c_disk_blk_t root,
                                    c_mstore_key_t mstore_key)
 {
+    struct castle_component_tree *ct; 
     struct castle_tree_root *r;
     struct castle_version *v;
 
@@ -193,16 +227,23 @@ static int castle_version_root_add(version_t version,
     v = castle_versions_hash_get(version);
     if(!v)
         return -EINVAL;
+    
+    ct = castle_component_tree_get(tree_seq);
+    if(!ct)
+        return -EINVAL;
      
     r = kzalloc(sizeof(struct castle_tree_root), GFP_KERNEL);
     if(!r)
         return -ENOMEM;
 
     r->tree_seq     = tree_seq;
+    r->version      = version;
     r->root         = root;
     r->mstore_key   = mstore_key;
-    INIT_LIST_HEAD(&r->list);
-    list_add(&r->list, &v->tree_roots);
+    INIT_LIST_HEAD(&r->version_list);
+    list_add(&r->version_list, &v->tree_roots);
+    INIT_LIST_HEAD(&r->ct_list);
+    list_add(&r->ct_list, &ct->roots_list);
 
     return 0;
 }
@@ -238,10 +279,11 @@ static void castle_version_writeback(struct castle_version *v, int new)
 
     list_for_each(l, &v->tree_roots)
     {
-        root = list_entry(l, struct castle_tree_root, list); 
+        root = list_entry(l, struct castle_tree_root, version_list); 
         
         debug("Writing back root for tree_seq=%d.\n", root->tree_seq);
-        mstore_rentry.version   = v->version;
+        BUG_ON(v->version != root->version);
+        mstore_rentry.version   = root->version;
         mstore_rentry.tree_seq  = root->tree_seq;
         mstore_rentry.cdb       = root->root;
         key                     = root->mstore_key;
@@ -298,7 +340,8 @@ static int castle_version_roots_clone(struct castle_version *dst,
     BUG_ON(!list_empty(&dst->tree_roots));
     list_for_each(l, &src->tree_roots)
     {
-        r = list_entry(l, struct castle_tree_root, list); 
+        r = list_entry(l, struct castle_tree_root, version_list); 
+        BUG_ON(src->version != r->version);
         if((ret = castle_version_root_add(dst->version, 
                                           r->tree_seq, 
                                           r->root, 
@@ -312,7 +355,7 @@ err_out:
     list_for_each_safe(l, t, &dst->tree_roots)
     {
         list_del(l);
-        r = list_entry(l, struct castle_tree_root, list); 
+        r = list_entry(l, struct castle_tree_root, version_list); 
         kfree(r);
     }
 

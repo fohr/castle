@@ -11,6 +11,9 @@ int          castle_version_read        (version_t version,
                                          int *leaf);
 c_disk_blk_t castle_version_root_get    (version_t version,
                                          tree_seq_t tree);
+void         castle_version_root_next   (tree_seq_t tree,
+                                         version_t *next_version,
+                                         c_disk_blk_t *btree_root);
 int          castle_version_root_update (version_t version, 
                                          tree_seq_t tree_id, 
                                          c_disk_blk_t cdb);

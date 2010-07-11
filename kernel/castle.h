@@ -198,7 +198,9 @@ struct castle_component_tree {
     da_id_t          da;
     uint8_t          level;
     c_disk_blk_t     first_node;
-    struct list_head list;
+    struct list_head da_list;
+    struct list_head hash_list;
+    struct list_head roots_list;
     c_mstore_key_t   mstore_key;
 };
 extern struct castle_component_tree castle_global_tree;
