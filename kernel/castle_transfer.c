@@ -74,6 +74,7 @@ static void castle_transfer_start(struct castle_transfer *transfer)
 {
     printk("====> Starting transfer %d.\n", transfer->id);
     transfer->c_iter.private    = transfer;        
+    transfer->c_iter.tree       = &castle_global_tree;
     transfer->c_iter.node_start = castle_transfer_node_start;
     transfer->c_iter.each       = castle_transfer_each;
     transfer->c_iter.node_end   = castle_transfer_node_end;
@@ -81,7 +82,7 @@ static void castle_transfer_start(struct castle_transfer *transfer)
 
     init_completion(&transfer->completion);
     atomic_set(&transfer->phase, 0);
-    castle_btree_iter_init(&transfer->c_iter, transfer->version);
+    castle_btree_iter_init(&transfer->c_iter, transfer->version, C_ITER_MATCHING_VERSIONS);
     castle_btree_iter_start(&transfer->c_iter);
 }
 

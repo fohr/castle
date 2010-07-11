@@ -315,51 +315,69 @@ typedef struct castle_bio_vec {
 #define c_bvec_bpnode(_c_bvec)          c2b_buffer((_c_bvec)->btree_parent_node)
 #define c_bvec_btree_fn(_c_bvec, _fn) ((_c_bvec)->c_bio->btree->(_fn))
 
+/* Used to lock nodes pointed to by leaf pointers (refered to as 'indirect nodes') */
+struct castle_indirect_node {
+    /* Will form array of c2b/{cdb, f_idx} for the indirect nodes. Sorted by
+       cdb. May contain holes, if multiple entries in the original node
+       point to the same indirect node. Will span at most orig_node->used
+       entries. */
+    union {
+        /* Used before entries are locked */
+        struct {
+            c_disk_blk_t               cdb;      /* CDB from leaf pointer  */
+            uint16_t                   f_idx;    /* Index in the orig node */
+        };                             
+        /* Used after entries are locked */
+        struct {
+            struct castle_cache_block *c2b;      /* Cache page for an 'indirect' node */
+        };
+    };                                 
+    /* Will form array indexed by the entry # from the orginal node. Used to find
+       the right indirect node/entry in the array above. Again spans at most
+       node->used entries. */
+    struct {                 
+        uint16_t                       r_idx;    /* Index in indirect_nodes array */
+        uint16_t                       node_idx; /* Index in the indirect node */ 
+    };
+}; 
+
+enum {
+    C_ITER_ALL_ENTRIES,
+    C_ITER_MATCHING_VERSIONS,
+};
+
 /* Used for iterating through the tree */
 typedef struct castle_iterator {
-    version_t                     version;
+    /* Fields below should be filled in before iterator is registered with the btree 
+       code with btree_iter_init() and start() */ 
     void                        (*node_start)(struct castle_iterator *c_iter);
     void                        (*each)      (struct castle_iterator *c_iter, int index, c_disk_blk_t cdb);
     void                        (*node_end)  (struct castle_iterator *c_iter);
     void                        (*end)       (struct castle_iterator *c_iter, int err);
     void                         *private;
-                             
     struct castle_component_tree *tree;
+
+    /* Fields below are used by the iterator to conduct the walk */
+    int                           type;       /* C_ITER_XXX */
+    version_t                     version;
     void                         *parent_key; /* The key we followed to get to the block 
                                                  on the top of the path/stack */
-    void                         *next_key;   /* The next key to look for in the iteration 
+    union {
+        /* Only used by C_ITER_ALL_ENTRIES       */
+        int                       node_idx[MAX_BTREE_DEPTH];
+        /* Only used by C_ITER_MATCHING_VERSIONS */
+        void                     *next_key;   /* The next key to look for in the iteration 
                                                  (typically parent_key + 1 when at leafs) */
+    };
+    int                           cancelled;
+    int                           err;
+    
+    struct castle_cache_block    *path[MAX_BTREE_DEPTH];
+    int                           depth;
 
-    struct castle_cache_block *path[MAX_BTREE_DEPTH];
-    struct {
-        /* An array of c2b/{cdb, f_idx} for the 'indirect nodes'. Sorted by
-           cdb. May contain holes, if multiple entries in the original node
-           point to the same indirect node. Will span at most orig_node->used
-           entries. */
-        union {
-            /* Used before entries are locked */
-            struct {
-                c_disk_blk_t               cdb;      /* CDB from leaf pointer  */
-                uint16_t                   f_idx;    /* Index in the orig node */
-            };                             
-            /* Used after entries are locked */
-            struct {
-                struct castle_cache_block *c2b;      /* Cache page for an 'indirect' node */
-            };
-        };                                 
-        /* An array indexed by the entry # from the orginal node. Used to find
-           the right indirect node/entry in the array above. Again spans at most
-           node->used entries. */
-        struct {                 
-            uint16_t                       r_idx;    /* Index in indirect_nodes array */
-            uint16_t                       node_idx; /* Index in the indirect node */ 
-        };
-    }                         indirect_nodes[MAX_BTREE_ENTRIES];
-    int                       depth;
-                              
-    int                       cancelled;
-    int                       err;
-    struct work_struct        work;
+    struct castle_indirect_node *indirect_nodes; /* If allocated, MAX_BTREE_ENTRIES */
+                                
+    struct work_struct           work;
 } c_iter_t;
 
 
