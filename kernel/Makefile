@@ -42,7 +42,7 @@ clean:
 	rm -rf *.o *~ core .depend .*.o.d .*.cmd *.ko *.mod.c .tmp_versions Module.symvers
 
 define all_sources	
-	(find $(SUBDIRS) -name '*.[ch]' -print)
+	(find . -name '*.[ch]' -print)
 endef
 
 .PHONY: tags
