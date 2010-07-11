@@ -529,7 +529,7 @@ static void castle_rxrpc_incoming_call_collect(struct work_struct *work)
         else 
         {
             /* Increment outstanding call count */
-            atomic_add(1, &castle_outst_call_cnt);
+            atomic_inc(&castle_outst_call_cnt);
         }
     }
 }

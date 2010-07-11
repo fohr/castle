@@ -19,6 +19,9 @@
 #define iter_debug(_f, _a...)   (printk("Iterator:%.60s:%.4d:  " _f, __func__, __LINE__ , ##_a))
 #endif
 
+static DECLARE_WAIT_QUEUE_HEAD(castle_btree_iters_wq); 
+static atomic_t castle_btree_iters_cnt = ATOMIC_INIT(0);
+
 
 /**********************************************************************************************/
 /* Block mapper btree (mtree) definitions */
@@ -1569,6 +1572,9 @@ static void castle_btree_iter_end(c_iter_t *c_iter, int err)
     
     if (c_iter->end) 
         c_iter->end(c_iter, err);
+    
+    atomic_dec(&castle_btree_iters_cnt);
+    wake_up(&castle_btree_iters_wq);
 }
 
 #define indirect_node(_i)      (c_iter->indirect_nodes[(_i)]) 
@@ -2215,6 +2221,8 @@ void castle_btree_iter_init(c_iter_t *c_iter, version_t version, int type)
 ;
     iter_debug("Initialising iterator for version=0x%x\n", version);
     
+    atomic_inc(&castle_btree_iters_cnt);
+    
     c_iter->type = type;
     c_iter->version = version;
     c_iter->parent_key = btree->min_key;
@@ -2258,4 +2266,6 @@ int castle_btree_init(void)
 
 void castle_btree_free(void)
 {
+    /* Wait until all iterators are completed */
+    wait_event(castle_btree_iters_wq, (atomic_read(&castle_btree_iters_cnt) == 0));
 }
