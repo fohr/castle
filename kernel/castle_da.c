@@ -290,7 +290,7 @@ int castle_double_array_read(void)
         {
             da_id = castle_da_ct_unmarshall(&castle_global_tree, &mstore_centry, key);
             BUG_ON(!DA_INVAL(da_id));
-            castle_ct_hash_add(ct);
+            castle_ct_hash_add(&castle_global_tree);
             continue;
         }
         /* Otherwise allocate a ct structure */
