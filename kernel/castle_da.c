@@ -340,6 +340,9 @@ static int castle_da_rwct_make(struct castle_double_array *da)
     ct->da          = da->id;
     ct->level       = 0;
     ct->mstore_key  = INVAL_MSTORE_KEY; 
+    INIT_LIST_HEAD(&ct->da_list);
+    INIT_LIST_HEAD(&ct->roots_list);
+    castle_ct_hash_add(ct);
 
     /* Create a root node for this tree, and update the root version */
     c2b = castle_btree_node_create(da->root_version, 1 /* is_leaf */, VLBA_TREE_TYPE);
@@ -353,6 +356,7 @@ static int castle_da_rwct_make(struct castle_double_array *da)
     {
         /* TODO: free the block */
         printk("Could not write root node for version: %d\n", da->root_version);
+        castle_ct_hash_remove(ct);
         kfree(ct);
         return ret;
     }
