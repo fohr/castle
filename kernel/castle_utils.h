@@ -201,6 +201,17 @@ static inline void castle_utils_bio_free(c_bio_t *bio)
     kfree(bio);
 }
 
+static inline int list_length(struct list_head *head)
+{
+    struct list_head *l;
+    int length = 0; 
+
+    list_for_each(l, head)
+        length++;
+
+    return length;
+}
+
 void inline list_swap(struct list_head *t1, struct list_head *t2);
 void        list_sort(struct list_head *list, 
                       int (*compare)(struct list_head *l1, struct list_head *l2));

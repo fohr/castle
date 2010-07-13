@@ -382,6 +382,24 @@ typedef struct castle_iterator {
     struct work_struct           work;
 } c_iter_t;
 
+/* Enumerates all entries in a modlist btree */
+typedef struct castle_enumerator {
+    struct castle_component_tree *tree;
+    int                           err;
+    version_t                     nr_iters;
+    struct castle_iterator       *iterators; 
+    wait_queue_head_t             iterators_wq;
+    atomic_t                      outs_iterators;
+    atomic_t                      live_iterators;
+    struct castle_iterator_buffer {
+        int                       iter_completed;
+        int                       prod_idx;
+        int                       cons_idx;
+        char                     *buffer; 
+    } *buffers;
+
+    int tmp_iter;
+} c_enum_t; 
 
 #define BLOCKS_HASH_SIZE        (100)
 struct castle_slave_block_cnt
