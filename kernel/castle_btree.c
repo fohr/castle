@@ -562,21 +562,19 @@ struct castle_vlba_tree_entry {
 struct castle_vlba_tree_node {
     uint32_t    dead_bytes;
     uint32_t    free_bytes;
-    uint32_t    key_idx[VLBA_TREE_NODE_ENTRIES];
-    struct castle_vlba_tree_entry entries[0];
+    uint32_t    key_idx[0];
 } PACKED;
 
 #define VLBA_TREE_NODE_SIZE                 10
 #define VLBA_TREE_NODE_LENGTH               (VLBA_TREE_NODE_SIZE * C_BLK_SIZE)
 #define EOF_VLBA_NODE(_node)                (((uint8_t *)_node) + VLBA_TREE_NODE_LENGTH)
-#define VLBA_NODE_FIRST_ENTRY(_vlba_node)   ((uint8_t *)&_vlba_node->entries[0])
 #define VLBA_KEY_LENGTH(_key)               (VLBA_TREE_KEY_MAX(_key) ? 0 : (_key)->length)
 #define VLBA_ENTRY_LENGTH(_entry)           \
                 (sizeof(struct castle_vlba_tree_entry) + VLBA_KEY_LENGTH(&(_entry)->key))
 #define MAX_VLBA_ENTRY_LENGTH               \
                 (sizeof(struct castle_vlba_tree_entry) + VLBA_TREE_MAX_KEY_SIZE)
-#define VLBA_ENTRY_PTR(_vlba_node, _i)      (VLBA_NODE_FIRST_ENTRY(_vlba_node) + \
-                                                           _vlba_node->key_idx[_i])
+#define VLBA_ENTRY_PTR(__node, _vlba_node, _i)   \
+                (EOF_VLBA_NODE(__node) - _vlba_node->key_idx[_i])
 
 /* Implementation of heap sort from wiki */
 static void min_heap_swap(uint32_t *a, int i, int j)
@@ -648,13 +646,21 @@ static void castle_vlba_tree_node_compact(struct castle_btree_node *node)
         struct castle_vlba_tree_entry *entry;
 
         idx[i] = i;
-        entry = (struct castle_vlba_tree_entry *)VLBA_ENTRY_PTR(vlba_node, i);
+        entry = (struct castle_vlba_tree_entry *)VLBA_ENTRY_PTR(node, vlba_node, i);
         count += VLBA_ENTRY_LENGTH(entry);
     }
 
+    /* Check for total length adds upto node length */
+    /* node header + vlba header + index table + free bytes + sum of entries + dead bytes */
+    printk("%u-%u-%u-%u-%u-%u\n", (uint32_t)sizeof(struct castle_btree_node)
+                                , (uint32_t)sizeof(struct castle_vlba_tree_node)
+                                , (uint32_t)sizeof(uint32_t) * node->used
+                                , vlba_node->free_bytes
+                                , count
+                                , vlba_node->dead_bytes);
     BUG_ON( sizeof(struct castle_btree_node) + sizeof(struct castle_vlba_tree_node) +
-                                           count + vlba_node->free_bytes +
-                                           vlba_node->dead_bytes != VLBA_TREE_NODE_LENGTH);
+            + sizeof(uint32_t) * node->used + vlba_node->free_bytes + count +
+            vlba_node->dead_bytes != VLBA_TREE_NODE_LENGTH);
 
     /* Store index for each entry to update entries index in the table */
     min_heap_heapify(a, idx, node->used);
@@ -668,27 +674,24 @@ static void castle_vlba_tree_node_compact(struct castle_btree_node *node)
 
         entry_offset = min_heap_del_root(a, idx, count);
         count--;
-        entry = (struct castle_vlba_tree_entry *)(VLBA_NODE_FIRST_ENTRY(vlba_node) +
-                 entry_offset);
+        entry = (struct castle_vlba_tree_entry *)(EOF_VLBA_NODE(node) - entry_offset);
         ent_len = (uint32_t)VLBA_ENTRY_LENGTH(entry);
-        
+        cur_loc += ent_len;
+
         BUG_ON(entry_offset != a[count]);
         BUG_ON(cur_loc > entry_offset);
        
         /* If there is no hole before the entry, just leave the entry as it was */
         if (entry_offset == cur_loc) 
-        {   
-            cur_loc += ent_len;
             continue;
-        }
         
-        memmove(VLBA_NODE_FIRST_ENTRY(vlba_node) + cur_loc, entry, ent_len);
+        memmove(EOF_VLBA_NODE(node) - cur_loc, entry, ent_len);
         vlba_node->key_idx[idx[count]] = cur_loc;
-        cur_loc += ent_len;
     }
 
     vlba_node->free_bytes += vlba_node->dead_bytes;
     vlba_node->dead_bytes = 0;
+
     kfree(a);
     kfree(idx);
 }
@@ -702,18 +705,14 @@ static int castle_vlba_tree_need_split(struct castle_btree_node *node,
 
     switch(ver_or_key_split)
     {
-        case 0:
+        case 0://FIXME: clear the code
             if(node->is_leaf)
             {
-                if(node->used >= VLBA_TREE_NODE_ENTRIES) 
-                    return 1;
                 if(vlba_node->free_bytes + vlba_node->dead_bytes < MAX_VLBA_ENTRY_LENGTH) 
                     return 1;
                 return 0;
             } else
             {
-                if(node->used >= VLBA_TREE_NODE_ENTRIES - 1)
-                    return 1;
                 if(vlba_node->free_bytes + vlba_node->dead_bytes < MAX_VLBA_ENTRY_LENGTH*2)
                     return 1;
                 return 0;
@@ -721,11 +720,9 @@ static int castle_vlba_tree_need_split(struct castle_btree_node *node,
             BUG();
             break;
         case 1:
-            if(node->used >= 2*VLBA_TREE_NODE_ENTRIES/3)
-                return 1;
             if ((vlba_node->free_bytes + vlba_node->dead_bytes) < 
                 (VLBA_TREE_NODE_LENGTH - sizeof(struct castle_btree_node) - 
-                                         sizeof(struct castle_vlba_tree_node)) / 3)
+                 sizeof(struct castle_vlba_tree_node) - sizeof(uint32_t) * node->used) / 3)
                 return 1;
             return 0;
         default:
@@ -781,7 +778,7 @@ static void castle_vlba_tree_entry_get(struct castle_btree_node *node,
     struct castle_vlba_tree_node *vlba_node = 
         (struct castle_vlba_tree_node*) BTREE_NODE_PAYLOAD(node);
     struct castle_vlba_tree_entry *entry = 
-               (struct castle_vlba_tree_entry *) VLBA_ENTRY_PTR(vlba_node, idx);
+               (struct castle_vlba_tree_entry *) VLBA_ENTRY_PTR(node, vlba_node, idx);
 
     BUG_ON(idx < 0 || idx >= node->used);
     BUG_ON(((uint8_t *)entry) >= EOF_VLBA_NODE(node));
@@ -804,7 +801,9 @@ static void castle_vlba_tree_entry_add(struct castle_btree_node *node,
     struct castle_vlba_tree_entry *entry; 
     vlba_key_t *key = (vlba_key_t *)key_v;
     uint32_t key_length = VLBA_KEY_LENGTH(key);
-    uint32_t req_space = sizeof(struct castle_vlba_tree_entry) + key_length;
+    /* entry header + key length + an entry in index table */
+    uint32_t req_space = sizeof(struct castle_vlba_tree_entry) + key_length +
+                         sizeof(uint32_t);
 
     BUG_ON(idx < 0 || idx > node->used);
 
@@ -814,11 +813,12 @@ static void castle_vlba_tree_entry_add(struct castle_btree_node *node,
         vlba_node->dead_bytes = 0;
         vlba_node->free_bytes = VLBA_TREE_NODE_LENGTH - sizeof(struct castle_btree_node) -
                                 sizeof(struct castle_vlba_tree_node);
+        BUG_ON( sizeof(struct castle_btree_node) + sizeof(struct castle_vlba_tree_node) +
+                vlba_node->free_bytes + vlba_node->dead_bytes != VLBA_TREE_NODE_LENGTH);
     }
         
     BUG_ON(key_length > VLBA_TREE_MAX_KEY_SIZE);
     BUG_ON(vlba_node->free_bytes + vlba_node->dead_bytes < req_space);
-    BUG_ON(node->used >= VLBA_TREE_NODE_ENTRIES);
     BUG_ON(!node->is_leaf && is_leaf_ptr);
 
     if(vlba_node->free_bytes < req_space) 
@@ -826,12 +826,14 @@ static void castle_vlba_tree_entry_add(struct castle_btree_node *node,
 
     BUG_ON(vlba_node->free_bytes < req_space);
 
-    entry = (struct castle_vlba_tree_entry *)(EOF_VLBA_NODE(node) - vlba_node->free_bytes);
     vlba_node->free_bytes -= req_space;
+    /* Add free bytes count to end of index table to get new entry */
+    entry = (struct castle_vlba_tree_entry *)(((uint8_t *)&vlba_node->key_idx[node->used+1]) + 
+                                              vlba_node->free_bytes);
     memmove(&vlba_node->key_idx[idx+1], &vlba_node->key_idx[idx],
             sizeof(uint32_t) * (node->used - idx));
 
-    vlba_node->key_idx[idx] = ((uint8_t *)entry) - VLBA_NODE_FIRST_ENTRY(vlba_node);
+    vlba_node->key_idx[idx] = EOF_VLBA_NODE(node) - ((uint8_t *)entry);
     memcpy(&entry->key, key, sizeof(vlba_key_t) + key_length);
     entry->version = version;
     entry->type    = node->is_leaf ? 
@@ -859,8 +861,8 @@ static void castle_vlba_tree_entries_drop(struct castle_btree_node *node,
     /* Calculate space taken by the entries getting dropped */
     for(i=idx_start; i <= idx_end; i++)
     {
-        entry = (struct castle_vlba_tree_entry *)VLBA_ENTRY_PTR(vlba_node, i);
-        vlba_node->dead_bytes += VLBA_ENTRY_LENGTH(entry);
+        entry = (struct castle_vlba_tree_entry *)VLBA_ENTRY_PTR(node, vlba_node, i);
+        vlba_node->dead_bytes += VLBA_ENTRY_LENGTH(entry) + sizeof(uint32_t);
     }
 
     /* Move the index table entries forward */
@@ -882,7 +884,7 @@ static void castle_vlba_tree_entry_replace(struct castle_btree_node *node,
     struct castle_vlba_tree_node *vlba_node = 
         (struct castle_vlba_tree_node*) BTREE_NODE_PAYLOAD(node);
     struct castle_vlba_tree_entry *entry = 
-        (struct castle_vlba_tree_entry *)VLBA_ENTRY_PTR(vlba_node, idx);
+        (struct castle_vlba_tree_entry *)VLBA_ENTRY_PTR(node, vlba_node, idx);
     vlba_key_t *key = (vlba_key_t *)key_v;
 
     BUG_ON(idx < 0 || idx >= node->used);
@@ -927,13 +929,15 @@ static void castle_vlba_tree_node_validate(struct castle_btree_node *node)
         struct castle_vlba_tree_entry *entry;
 
         idx[i] = i;
-        entry = (struct castle_vlba_tree_entry *)VLBA_ENTRY_PTR(vlba_node, i);
+        entry = (struct castle_vlba_tree_entry *)VLBA_ENTRY_PTR(node, vlba_node, i);
         count += VLBA_ENTRY_LENGTH(entry);
     }
 
+    /* Check for total length adds upto node length */
+    /* node header + vlba header + index table + free bytes + sum of entries + dead bytes */
     BUG_ON( sizeof(struct castle_btree_node) + sizeof(struct castle_vlba_tree_node) +
-                                           count + vlba_node->free_bytes +
-                                           vlba_node->dead_bytes != VLBA_TREE_NODE_LENGTH);
+            sizeof(uint32_t) * node->used + vlba_node->free_bytes + count +
+            vlba_node->dead_bytes != VLBA_TREE_NODE_LENGTH);
 
     /* Store index for each entry to update entries index in the table */
     min_heap_heapify(a, idx, node->used);
@@ -949,8 +953,7 @@ static void castle_vlba_tree_node_validate(struct castle_btree_node *node)
 
         entry_offset = min_heap_del_root(a, idx, count);
         count--;
-        entry = (struct castle_vlba_tree_entry *)(VLBA_NODE_FIRST_ENTRY(vlba_node) +
-                 entry_offset);
+        entry = (struct castle_vlba_tree_entry *)(EOF_VLBA_NODE(node) - entry_offset);
         ent_len = (uint32_t)VLBA_ENTRY_LENGTH(entry);
    
         if (((uint8_t *)entry) + ent_len > EOF_VLBA_NODE(node))
@@ -964,7 +967,7 @@ static void castle_vlba_tree_node_validate(struct castle_btree_node *node)
             printk("Heap sort error\n");
             BUG();
         }
-        if ((prev_offset != -1) && (prev_offset + prev_len > entry_offset))
+        if ((prev_offset != -1) && (prev_offset + ent_len > entry_offset))
         {
             printk("Entry overlap: offset:length -> %u:%u-%u:%u\n", prev_offset, prev_len,
                    entry_offset, ent_len);
@@ -985,8 +988,7 @@ static void castle_vlba_tree_node_validate(struct castle_btree_node *node)
         uint8_t ret;
 
         entry_offset = vlba_node->key_idx[i];
-        entry = (struct castle_vlba_tree_entry *)(VLBA_NODE_FIRST_ENTRY(vlba_node) +
-                 entry_offset);
+        entry = (struct castle_vlba_tree_entry *)(EOF_VLBA_NODE(node) - entry_offset);
         ent_len = (uint32_t)VLBA_ENTRY_LENGTH(entry);
 
         ret = (prev_offset == -1)?0:castle_vlba_tree_key_compare(&prev_entry->key, &entry->key);
@@ -1037,7 +1039,7 @@ static void castle_vlba_tree_node_print(struct castle_btree_node *node)
     for(i=0; i<node->used; i++)
     {
         struct castle_vlba_tree_entry *entry;
-        entry = (struct castle_vlba_tree_entry *)VLBA_ENTRY_PTR(vlba_node, i);
+        entry = (struct castle_vlba_tree_entry *)VLBA_ENTRY_PTR(node, vlba_node, i);
 
         printk("[%d] (", i); 
         for(j=0; j<VLBA_KEY_LENGTH(&entry->key); j++)
