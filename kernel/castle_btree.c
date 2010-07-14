@@ -572,9 +572,12 @@ struct castle_vlba_tree_node {
 #define VLBA_ENTRY_LENGTH(_entry)           \
                 (sizeof(struct castle_vlba_tree_entry) + VLBA_KEY_LENGTH(&(_entry)->key))
 #define MAX_VLBA_ENTRY_LENGTH               \
-                (sizeof(struct castle_vlba_tree_entry) + VLBA_TREE_MAX_KEY_SIZE)
+                (sizeof(struct castle_vlba_tree_entry) + VLBA_TREE_MAX_KEY_SIZE + \
+                sizeof(uint32_t))
 #define VLBA_ENTRY_PTR(__node, _vlba_node, _i)   \
                 (EOF_VLBA_NODE(__node) - _vlba_node->key_idx[_i])
+
+static void castle_vlba_tree_node_print(struct castle_btree_node *node);
 
 /* Implementation of heap sort from wiki */
 static void min_heap_swap(uint32_t *a, int i, int j)
@@ -652,12 +655,6 @@ static void castle_vlba_tree_node_compact(struct castle_btree_node *node)
 
     /* Check for total length adds upto node length */
     /* node header + vlba header + index table + free bytes + sum of entries + dead bytes */
-    printk("%u-%u-%u-%u-%u-%u\n", (uint32_t)sizeof(struct castle_btree_node)
-                                , (uint32_t)sizeof(struct castle_vlba_tree_node)
-                                , (uint32_t)sizeof(uint32_t) * node->used
-                                , vlba_node->free_bytes
-                                , count
-                                , vlba_node->dead_bytes);
     BUG_ON( sizeof(struct castle_btree_node) + sizeof(struct castle_vlba_tree_node) +
             + sizeof(uint32_t) * node->used + vlba_node->free_bytes + count +
             vlba_node->dead_bytes != VLBA_TREE_NODE_LENGTH);
@@ -827,7 +824,8 @@ static void castle_vlba_tree_entry_add(struct castle_btree_node *node,
     BUG_ON(vlba_node->free_bytes < req_space);
 
     vlba_node->free_bytes -= req_space;
-    /* Add free bytes count to end of index table to get new entry */
+    /* Free bytes count is already got updated. Adding free bytes count to the end of
+     * index table gives us the pointer to new entry. */
     entry = (struct castle_vlba_tree_entry *)(((uint8_t *)&vlba_node->key_idx[node->used+1]) + 
                                               vlba_node->free_bytes);
     memmove(&vlba_node->key_idx[idx+1], &vlba_node->key_idx[idx],
@@ -872,6 +870,8 @@ static void castle_vlba_tree_entries_drop(struct castle_btree_node *node,
 
     /* Decrement the node used count */
     node->used -= (idx_end - idx_start + 1);
+
+    castle_vlba_tree_node_print(node);
 }
 
 static void castle_vlba_tree_entry_replace(struct castle_btree_node *node,
@@ -935,9 +935,20 @@ static void castle_vlba_tree_node_validate(struct castle_btree_node *node)
 
     /* Check for total length adds upto node length */
     /* node header + vlba header + index table + free bytes + sum of entries + dead bytes */
-    BUG_ON( sizeof(struct castle_btree_node) + sizeof(struct castle_vlba_tree_node) +
+    if ( sizeof(struct castle_btree_node) + sizeof(struct castle_vlba_tree_node) +
             sizeof(uint32_t) * node->used + vlba_node->free_bytes + count +
-            vlba_node->dead_bytes != VLBA_TREE_NODE_LENGTH);
+            vlba_node->dead_bytes != VLBA_TREE_NODE_LENGTH) 
+    {
+        printk("sizeof(struct castle_btree_node) + sizeof(struct castle_vlba_tree_node) +"
+                "Index Table + Free Bytes + Sum of entries + Dead Bytes\n");
+        printk("%u-%u-%u-%u-%u-%u\n", (uint32_t)sizeof(struct castle_btree_node)
+                                    , (uint32_t)sizeof(struct castle_vlba_tree_node)
+                                    , (uint32_t)sizeof(uint32_t) * node->used
+                                    , vlba_node->free_bytes
+                                    , count
+                                    , vlba_node->dead_bytes);
+        BUG();
+    }
 
     /* Store index for each entry to update entries index in the table */
     min_heap_heapify(a, idx, node->used);
@@ -992,8 +1003,10 @@ static void castle_vlba_tree_node_validate(struct castle_btree_node *node)
         ent_len = (uint32_t)VLBA_ENTRY_LENGTH(entry);
 
         ret = (prev_offset == -1)?0:castle_vlba_tree_key_compare(&prev_entry->key, &entry->key);
-        if ((prev_offset != -1) && (ret == 1 || 
-                                    (!ret && prev_entry->version > entry->version)))
+        if ((prev_offset != -1) && 
+            (ret == 1 || 
+             (!ret && 
+              castle_version_is_ancestor(entry->version, prev_entry->version))))
         {
             int j;
 
