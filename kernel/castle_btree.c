@@ -2790,14 +2790,86 @@ static void castle_enum_iter_end(c_iter_t *c_iter, int err)
     wake_up(&c_enum->iterators_wq);
 }
 
+static void castle_btree_enum_fini(c_enum_t *c_enum)
+{
+    version_t ver_idx;
+
+    enum_debug("Freeing enumerator.\n");
+    if(c_enum->buffers)
+    {
+        for(ver_idx = 0; ver_idx < c_enum->nr_iters; ver_idx++)
+        {
+            if(c_enum->buffers[ver_idx].buffer)
+            {
+                struct castle_iterator_buffer *buff = c_enum->buffers + ver_idx;
+#ifdef DEBUG                
+                struct castle_iterator *c_iter = c_enum->iterators + ver_idx;
+                if(c_enum->iterators)
+                    enum_debug("Freeing buffer for iterator %d, ver=%d.\n", 
+                        ver_idx, c_iter->version);
+#endif                
+                BUG_ON((c_enum->err != -ENOMEM) && (!buff->iter_completed));
+                vfree(c_enum->buffers[ver_idx].buffer);
+            }
+        }
+        vfree(c_enum->buffers);
+        c_enum->buffers = NULL;
+    }
+    if(c_enum->iterators)
+    {
+        vfree(c_enum->iterators);
+        c_enum->iterators = NULL;
+    }
+}
+
+void castle_btree_enum_cancel(c_enum_t *c_enum)
+{
+    int i;
+
+    enum_debug("Cancelling the enumerator, currently live iters: %d\n", 
+            atomic_read(&c_enum->live_iterators));
+    /* Make sure that there are no outstanding iterations going on */
+    wait_event(c_enum->iterators_wq, (atomic_read(&c_enum->outs_iterators) == 0));
+    /* Then go through all iterators and cancel them */ 
+    for(i = 0; i < c_enum->nr_iters; i++)
+    {
+        struct castle_iterator_buffer *buff = c_enum->buffers + i;
+        struct castle_iterator *c_iter = c_enum->iterators + i;
+
+        BUG_ON(!buff);
+            
+        enum_debug("Canceling iterator %d, ver=%d.\n", i, c_iter->version);
+        if(!buff->iter_completed)
+        {
+            castle_btree_iter_cancel(c_iter, 0);
+            /* Increment the counter, before restarting the iterator (this will terminate it) */
+            atomic_inc(&c_enum->outs_iterators);
+            castle_btree_iter_start(c_iter);
+        }
+    }
+    /* Wait for all iterators to terminate */
+    enum_debug("Waiting for all iterators to terminate, currently out_iterators: %d\n",
+        atomic_read(&c_enum->outs_iterators));
+    wait_event(c_enum->iterators_wq, (atomic_read(&c_enum->outs_iterators) == 0));
+    
+    /* Now free the buffers */
+    castle_btree_enum_fini(c_enum);
+}
+
 int castle_btree_enum_has_next(c_enum_t *c_enum)
 {
+    int ret;
+   
     enum_debug("outs_iterators: %d\n", atomic_read(&c_enum->outs_iterators));
     /* Make sure that all buffers are up-to-date */
     wait_event(c_enum->iterators_wq, (atomic_read(&c_enum->outs_iterators) == 0));
     enum_debug("live_iterators: %d\n", atomic_read(&c_enum->live_iterators));
+   
+    ret = (atomic_read(&c_enum->live_iterators) != 0); 
+    if(!ret)
+        castle_btree_enum_fini(c_enum);
 
-    return (atomic_read(&c_enum->live_iterators) != 0);
+    return ret;
 }
 
 void castle_btree_enum_next(c_enum_t *c_enum)
@@ -2916,15 +2988,7 @@ void castle_btree_enum_init(c_enum_t *c_enum)
 
     return;
 no_mem:
-    if(c_enum->buffers)
-    {
-        for(ver_idx = 0; ver_idx < c_enum->nr_iters; ver_idx++)
-            if(c_enum->buffers[ver_idx].buffer)
-                vfree(c_enum->buffers[ver_idx].buffer);
-        vfree(c_enum->buffers);
-    }
-    if(c_enum->iterators)
-        vfree(c_enum->iterators);
     c_enum->err = -ENOMEM;
+    castle_btree_enum_fini(c_enum);
 }
 
