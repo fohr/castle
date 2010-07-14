@@ -1036,12 +1036,18 @@ static void castle_vlba_tree_node_print(struct castle_btree_node *node)
         (struct castle_vlba_tree_node*) BTREE_NODE_PAYLOAD(node);
     int i, j;
 
+    printk("node->used=%d, node=%p, vlba_node=%p, payload=%p\n", 
+            node->used, 
+            node, 
+            vlba_node, 
+            ((uint8_t*)vlba_node + sizeof(struct castle_vlba_tree_node)));
     for(i=0; i<node->used; i++)
     {
         struct castle_vlba_tree_entry *entry;
         entry = (struct castle_vlba_tree_entry *)VLBA_ENTRY_PTR(node, vlba_node, i);
 
-        printk("[%d] (", i); 
+        printk("[%d] key_idx[%d]=%d, key_length=%d, entry_size=%ld (", 
+            i, i, vlba_node->key_idx[i], VLBA_KEY_LENGTH(&entry->key), VLBA_ENTRY_LENGTH(entry)); 
         for(j=0; j<VLBA_KEY_LENGTH(&entry->key); j++)
             printk("%.2x", entry->key._key[j]);
         printk(", 0x%x) -> (0x%x, 0x%x)\n", 
