@@ -414,7 +414,7 @@ static int castle_cache_hash_clean(void)
     return 1;
 }
 
-static void castle_cache_page_freelist_grow(void)
+static void castle_cache_page_freelist_grow(int nr_pages)
 {
     int success = 0;
 
@@ -425,7 +425,7 @@ static void castle_cache_page_freelist_grow(void)
            We need to check that, in case hash is empty, and we will never 
            manage to free anything. */
         spin_lock(&castle_cache_freelist_lock);
-        if(!list_empty(&castle_cache_page_freelist))
+        if(castle_cache_page_freelist_size >= nr_pages)
            success = 1; 
         spin_unlock(&castle_cache_freelist_lock);
         if(success) return;
@@ -467,7 +467,7 @@ c2_block_t* castle_cache_block_get(c_disk_blk_t cdb, int nr_pages)
             {
                 debug("Failed to allocate from freelist. Growing freelist.\n");
                 /* If freelist is empty, we need to recycle some buffers */
-                castle_cache_page_freelist_grow(); 
+                castle_cache_page_freelist_grow(nr_pages); 
             }
         } while(list_empty(&pages));
         /* Initialise the buffer */
