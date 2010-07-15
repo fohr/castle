@@ -2147,6 +2147,8 @@ static void __castle_btree_iter_release(c_iter_t *c_iter)
         iter_debug("Unlocking cdb=(0x%x, 0x%x)\n", 
             leaf->cdb.disk, leaf->cdb.block);
     }
+    iter_debug("%p unlocks leaf (0x%x, 0x%x)\n",
+        c_iter, leaf->cdb.disk, leaf->cdb.block);
     unlock_c2b(leaf);
 }
 
@@ -2313,6 +2315,10 @@ static void castle_btree_iter_leaf_ptrs_lock(c_iter_t *c_iter)
 
 static void castle_btree_iter_parent_node_idx_increment(c_iter_t *c_iter)
 {
+#ifdef DEBUG
+    int i;
+#endif    
+    
     iter_debug("Called parent_node_idx_increment at depth=%d\n", 
                 c_iter->depth);
     /* Increment ONLY if we are doing C_ITER_ALL_ENTRIES */
@@ -2330,11 +2336,23 @@ static void castle_btree_iter_parent_node_idx_increment(c_iter_t *c_iter)
                 c_iter->node_idx[c_iter->depth - 1],
                 c_iter->node_idx[c_iter->depth - 1] + 1);
         c_iter->node_idx[c_iter->depth - 1]++;
-        /* Reset the current depth idx to 0 */
-        iter_debug("Reseting index at depth: %d, from %d->0\n",
+        /* Reset the current depth idx to -1 */
+        iter_debug("Reseting index at depth: %d, from %d->-1\n",
                 c_iter->depth,
                 c_iter->node_idx[c_iter->depth]);
-        c_iter->node_idx[c_iter->depth] = 0;
+        c_iter->node_idx[c_iter->depth] = -1;
+#ifdef DEBUG
+        /* All indicies below should be zero, but check that anyway */
+        for(i=c_iter->depth+1; i<MAX_BTREE_DEPTH; i++)
+        {
+            if(c_iter->node_idx[i] == -1)
+                continue;
+            printk("ERROR: non -1 node_idx (%d) in idx_increment. "
+                   "at c_iter->depth=%d, found non -1 at depth=%d\n",
+                c_iter->node_idx[i], c_iter->depth, i);
+            BUG();
+        }     
+#endif
     }
     /* We don't have to do anything if we are at the root node.
        What will happen is that iter_start() will be called again, and
@@ -2446,8 +2464,6 @@ static void castle_btree_iter_all_leaf_process(c_iter_t *c_iter)
        c_iter->node_end(c_iter);
     else
        castle_btree_iter_continue(c_iter);
-        
-    castle_btree_iter_parent_node_idx_increment(c_iter);
 }
 
 static void   castle_btree_iter_path_traverse(c_iter_t *c_iter, c_disk_blk_t node_cdb);
@@ -2456,9 +2472,9 @@ static void __castle_btree_iter_path_traverse(struct work_struct *work)
     c_iter_t *c_iter = container_of(work, c_iter_t, work);
     struct castle_btree_node *node;
     struct castle_btree_type *btree = castle_btree_type_get(c_iter->tree->btree_type);
-    c_disk_blk_t entry_cdb;
+    c_disk_blk_t entry_cdb, node_cdb;
     void *entry_key;
-    int index; 
+    int index, skip; 
 
     /* Return early on error */
     if(c_iter->err)
@@ -2466,6 +2482,10 @@ static void __castle_btree_iter_path_traverse(struct work_struct *work)
         /* Unlock the top of the stack, this is normally done by 
            castle_btree_iter_continue. This will not happen now, because 
            the iterator was cancelled between two btree nodes. */
+        iter_debug("%p unlocking (0x%x, 0x%x)\n", 
+                c_iter,
+                c_iter->path[c_iter->depth]->cdb.disk,
+                c_iter->path[c_iter->depth]->cdb.block);
         unlock_c2b(c_iter->path[c_iter->depth]);
         castle_btree_iter_end(c_iter, c_iter->err);
         return;
@@ -2477,30 +2497,60 @@ static void __castle_btree_iter_path_traverse(struct work_struct *work)
     switch(c_iter->type)
     { 
         case C_ITER_ALL_ENTRIES:
-            /* Deal with leafs first */
-            if(node->is_leaf)
-            {
-                castle_btree_iter_all_leaf_process(c_iter);
-                return;        
-            }
-
+            node_cdb = c_iter->path[c_iter->depth]->cdb;
             /* If we enumerating all entries in the tree, we use the index saved
                in node_idx table. */
             index = c_iter->node_idx[c_iter->depth];
-            /* Check if that index goes past the last entry in the node,
-               if so, increment the index in the parent and restart the 
-               traverse with the new node_idx array */
-            if(index == node->used)
+            iter_debug("Processing node_cdb=(0x%x, 0x%x), index=%d, node->used=%d\n",
+                    node_cdb.disk, node_cdb.block, index, node->used);
+            BUG_ON((index >= 0) && (index > node->used)); /* Be careful about unsigned comparions */
+            /* If index is in range [0 - (node->used-1)] (inclusive), we don't
+               have to check need_visit() (this has already been done). 
+               If so, we can go straight to the next level of recursion */
+            if((index >= 0) && (index < node->used))
             {
-                iter_debug("Got to the end of the node at depth=%d. "
-                           "Incrementing the parent idx.\n",
-                        c_iter->depth);
+                iter_debug("Subsequent visit, processing.\n");
+                break;
+            }
+
+            /* Skip processing the node if we already got to the end of the node. 
+               Or if we are visiting the node for the first time (index == -1), 
+               we may still want to skip it, if need_visit() call is false. */
+            BUG_ON((index != node->used) && (index != -1));
+            skip = (index == node->used) ||
+                   (c_iter->need_visit && !c_iter->need_visit(c_iter, node_cdb));
+
+            if(skip)
+            {
+                iter_debug("Skipping.\n");
                 castle_btree_iter_parent_node_idx_increment(c_iter);
+                iter_debug("%p unlocking (0x%x, 0x%x)\n",
+                        c_iter, 
+                        node_cdb.disk,
+                        node_cdb.block);
                 unlock_c2b(c_iter->path[c_iter->depth]);
                 castle_btree_iter_start(c_iter);
                 return;
             }
-            BUG_ON(index > node->used);
+
+            /* If we got here, it must be because we are visiting a node for the
+               first time, and need_visit() was true */
+            BUG_ON((index != -1) || skip);
+
+            /* Deal with leafs first */
+            if(node->is_leaf)
+            {
+                iter_debug("Visiting leaf node cdb=(0x%x, 0x%x).\n",
+                        node_cdb.disk, node_cdb.block);
+                castle_btree_iter_all_leaf_process(c_iter);
+                castle_btree_iter_parent_node_idx_increment(c_iter);
+                return;        
+            }
+
+            /* Final case: intermediate node visited for the first time */
+            iter_debug("Visiting node cdb=(0x%x, 0x%x) for the first time.\n",
+                       node_cdb.disk, node_cdb.block);
+            c_iter->node_idx[c_iter->depth] = index = 0;
             break;
         case C_ITER_MATCHING_VERSIONS:
             /* Deal with leafs first */
@@ -2533,7 +2583,7 @@ static void _castle_btree_iter_path_traverse(c2_block_t *c2b, int uptodate)
     if(!uptodate)
     {
         iter_debug("Error reading the btree node. Cancelling iterator.\n");
-        iter_debug("Unlocking cdb: (0x%x, 0x%x).\n", c2b->cdb.disk, c2b->cdb.block);
+        iter_debug("%p unlocking cdb: (0x%x, 0x%x).\n", c_iter, c2b->cdb.disk, c2b->cdb.block);
         unlock_c2b(c2b);
         put_c2b(c2b);
         /* Save the error. This will be handled properly by __path_traverse */
@@ -2579,8 +2629,8 @@ static void castle_btree_iter_path_traverse(c_iter_t *c_iter, c_disk_blk_t node_
     if(c2b == NULL)
         c2b = castle_cache_block_get(node_cdb, btree->node_size);
   
-    iter_debug("Locking cdb=(0x%x, 0x%x)\n", 
-        c2b->cdb.disk, c2b->cdb.block);
+    iter_debug("%p locking cdb=(0x%x, 0x%x)\n", 
+        c_iter, c2b->cdb.disk, c2b->cdb.block);
     lock_c2b(c2b);
     
     /* Unlock the ftree if we've just locked the root */
@@ -2594,8 +2644,8 @@ static void castle_btree_iter_path_traverse(c_iter_t *c_iter, c_disk_blk_t node_
     if((c_iter->depth > 0) && (c_iter->path[c_iter->depth - 1] != NULL))
     {
         c2_block_t *prev_c2b = c_iter->path[c_iter->depth - 1];
-        iter_debug("Unlocking cdb=(0x%x, 0x%x)\n", 
-            prev_c2b->cdb.disk, prev_c2b->cdb.block);
+        iter_debug("%p unlocking cdb=(0x%x, 0x%x)\n", 
+            c_iter, prev_c2b->cdb.disk, prev_c2b->cdb.block);
         unlock_c2b(prev_c2b);
         /* NOTE: not putting the c2b. Might be useful if we have to walk the tree again */
     }
@@ -2632,7 +2682,8 @@ static void __castle_btree_iter_start(c_iter_t *c_iter)
      *    - we were cancelled
      */
     if ((c_iter->depth == 0) || 
-        (btree->key_compare(c_iter->next_key, btree->inv_key) == 0) ||
+       ((c_iter->type == C_ITER_MATCHING_VERSIONS) && 
+            (btree->key_compare(c_iter->next_key, btree->inv_key) == 0)) ||
         (c_iter->cancelled))
     {
         castle_btree_iter_end(c_iter, c_iter->err);
@@ -2684,6 +2735,7 @@ void castle_btree_iter_cancel(c_iter_t *c_iter, int err)
 void castle_btree_iter_init(c_iter_t *c_iter, version_t version, int type)
 {
     struct castle_btree_type *btree = castle_btree_type_get(c_iter->tree->btree_type);
+    int i;
 ;
     iter_debug("Initialising iterator for version=0x%x\n", version);
     
@@ -2701,9 +2753,10 @@ void castle_btree_iter_init(c_iter_t *c_iter, version_t version, int type)
     switch(c_iter->type)
     {
         case C_ITER_ALL_ENTRIES:
-            /* Set all node indices to 0, which implies most extreme LHS walk through
-               the tree first, which is precisely what we want */ 
-            memset(c_iter->node_idx, 0, sizeof(c_iter->node_idx));
+            /* Set all node indices to -1, which implies most extreme LHS walk through
+               the tree first */ 
+            for(i=0; i<MAX_BTREE_DEPTH; i++)
+                c_iter->node_idx[i] = -1;
             return;
         case C_ITER_MATCHING_VERSIONS:
             c_iter->indirect_nodes = kzalloc(MAX_BTREE_ENTRIES * sizeof(struct castle_indirect_node), GFP_KERNEL);
@@ -2739,6 +2792,7 @@ void castle_btree_free(void)
 
 /**********************************************************************************************/
 /* Btree enumerator */
+#define TMP_VISITED_HASH_LENGTH     (1000)
 static inline void castle_iter_enum_idx_get(c_iter_t *c_iter,
                                             c_enum_t **c_enum_p,
                                             version_t *idx_p)
@@ -2747,6 +2801,45 @@ static inline void castle_iter_enum_idx_get(c_iter_t *c_iter,
 
     if(c_enum_p) *c_enum_p = c_enum;
     if(idx_p)    *idx_p    = (c_iter - c_enum->iterators);
+}
+
+static int castle_enum_iter_need_visit(c_iter_t *c_iter, c_disk_blk_t node_cdb)
+{
+    struct castle_visited *visited; 
+    struct list_head *l;
+    c_enum_t *c_enum;
+    version_t idx; 
+    int i;
+
+    castle_iter_enum_idx_get(c_iter, &c_enum, &idx);
+    enum_debug("Iterator %d is asking if to visit (0x%x, 0x%x)\n", 
+            idx, node_cdb.disk, node_cdb.block);
+    /* All hash operations need to be protected with the lock */
+    spin_lock(&c_enum->visited_lock);
+    /* Simplistic hash function */ 
+    i = (node_cdb.disk + node_cdb.block) % TMP_VISITED_HASH_LENGTH;
+    enum_debug("Hash bucket: %d\n", i);
+    /* Check if the cdb is in the hash */
+    list_for_each(l, &c_enum->visited_hash[i])
+    {
+        visited = list_entry(l, struct castle_visited, list);
+        if(DISK_BLK_EQUAL(visited->cdb, node_cdb))
+        {
+            enum_debug("Found in the hash.\n");
+            spin_unlock(&c_enum->visited_lock);
+            return 0;
+        }
+    }
+    enum_debug("Not found in the hash. Inserting\n");
+    /* We haven't found the entry in the hash, insert it instead */
+    visited = c_enum->visited + c_enum->next_visited++;
+    BUG_ON(c_enum->next_visited >= c_enum->max_visited);
+    visited->cdb = node_cdb;
+    list_add(&visited->list, &c_enum->visited_hash[i]);
+    /* Unlock and return 1 (please visit the node) */
+    spin_unlock(&c_enum->visited_lock);
+
+    return 1;
 }
 
 static void castle_enum_iter_each(c_iter_t *c_iter, int index, c_disk_blk_t cdb)
@@ -2832,6 +2925,16 @@ static void castle_btree_enum_fini(c_enum_t *c_enum)
     {
         vfree(c_enum->iterators);
         c_enum->iterators = NULL;
+    }
+    if(c_enum->visited_hash)
+    {
+        kfree(c_enum->visited_hash);
+        c_enum->visited_hash = NULL;
+    }
+    if(c_enum->visited)
+    {
+        vfree(c_enum->visited);
+        c_enum->visited = NULL;
     }
 }
 
@@ -2935,6 +3038,7 @@ void castle_btree_enum_init(c_enum_t *c_enum)
     version_t first_version, curr_version, ver_idx, nr_versions;
     struct castle_btree_type *btype;
     c_disk_blk_t cdb;
+    int i;
 
     btype = castle_btree_type_get(c_enum->tree->btree_type);
     nr_versions = list_length(&c_enum->tree->roots_list);
@@ -2951,11 +3055,22 @@ void castle_btree_enum_init(c_enum_t *c_enum)
     c_enum->iterators      = vmalloc(nr_versions * sizeof(struct castle_iterator)); 
     c_enum->buffers        = NULL;
     c_enum->buffers        = vmalloc(nr_versions * sizeof(*c_enum->buffers));
-    if(!c_enum->iterators || !c_enum->buffers)
+    c_enum->visited_hash   = NULL;
+    c_enum->visited_hash   = kmalloc(TMP_VISITED_HASH_LENGTH * sizeof(struct list_head),
+                                     GFP_KERNEL);
+    c_enum->max_visited    = 8 * TMP_VISITED_HASH_LENGTH;
+    c_enum->visited        = NULL;
+    c_enum->visited        = vmalloc(c_enum->max_visited * sizeof(struct castle_visited));
+    if(!c_enum->iterators || !c_enum->buffers || !c_enum->visited_hash || !c_enum->visited)
         goto no_mem;
-    memset(c_enum->buffers, 0, sizeof(c_enum->buffers)); 
+    /* Init structures related to visited hash */ 
+    spin_lock_init(&c_enum->visited_lock);
+    c_enum->next_visited = 0; 
+    for(i=0; i<TMP_VISITED_HASH_LENGTH; i++)
+        INIT_LIST_HEAD(c_enum->visited_hash + i);
     /* Go through versions, one at the time, and initialise the iterators, as well as the
        buffers */
+    memset(c_enum->buffers, 0, sizeof(c_enum->buffers)); 
     ver_idx = 0;
     castle_version_root_next(c_enum->tree->seq, &first_version, &cdb);
     curr_version = first_version;
@@ -2979,6 +3094,7 @@ void castle_btree_enum_init(c_enum_t *c_enum)
 
         iter = c_enum->iterators + ver_idx; 
         iter->tree       = c_enum->tree;
+        iter->need_visit = castle_enum_iter_need_visit;
         iter->node_start = NULL;
         iter->each       = castle_enum_iter_each;
         iter->node_end   = castle_enum_iter_node_end;
@@ -3004,4 +3120,3 @@ no_mem:
     c_enum->err = -ENOMEM;
     castle_btree_enum_fini(c_enum);
 }
-

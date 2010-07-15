@@ -352,6 +352,7 @@ enum {
 typedef struct castle_iterator {
     /* Fields below should be filled in before iterator is registered with the btree 
        code with btree_iter_init() and start() */ 
+    int                         (*need_visit)(struct castle_iterator *c_iter, c_disk_blk_t node_cdb);
     void                        (*node_start)(struct castle_iterator *c_iter);
     void                        (*each)      (struct castle_iterator *c_iter, int index, c_disk_blk_t cdb);
     void                        (*node_end)  (struct castle_iterator *c_iter);
@@ -391,6 +392,16 @@ typedef struct castle_enumerator {
     wait_queue_head_t             iterators_wq;
     atomic_t                      outs_iterators;
     atomic_t                      live_iterators;
+    struct {
+        spinlock_t                visited_lock;
+        struct list_head         *visited_hash;
+        int                       next_visited;
+        int                       max_visited;
+        struct castle_visited {
+            c_disk_blk_t          cdb;
+            struct list_head      list;
+        } *visited;
+    };
     struct castle_iterator_buffer {
         int                       iter_completed;
         int                       prod_idx;
