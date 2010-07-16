@@ -360,7 +360,11 @@ typedef struct castle_iterator {
        code with btree_iter_init() and start() */ 
     int                         (*need_visit)(struct castle_iterator *c_iter, c_disk_blk_t node_cdb);
     void                        (*node_start)(struct castle_iterator *c_iter);
-    void                        (*each)      (struct castle_iterator *c_iter, int index, c_disk_blk_t cdb);
+    void                        (*each)      (struct castle_iterator *c_iter, 
+                                              int index, 
+                                              void *key, 
+                                              version_t version,
+                                              c_disk_blk_t cdb);
     void                        (*node_end)  (struct castle_iterator *c_iter);
     void                        (*end)       (struct castle_iterator *c_iter, int err);
     void                         *private;
@@ -412,10 +416,11 @@ typedef struct castle_enumerator {
         int                       iter_completed;
         int                       prod_idx;
         int                       cons_idx;
-        char                     *buffer; 
+        struct castle_btree_node *buffer; 
     } *buffers;
 
-    int tmp_iter;
+    int                           curr_iter;    /* Iterator we are enumerating from at the moment */
+    int                           max_key_iter; /* Which iterator is the max_key taken from       */
 } c_enum_t; 
 
 #define BLOCKS_HASH_SIZE        (100)

@@ -2470,7 +2470,7 @@ static void castle_btree_iter_version_leaf_process(c_iter_t *c_iter)
 
             slot_follow_ptr(i, c2b, real_slot_idx);
             btree->entry_get(c2b_bnode(c2b), real_slot_idx, NULL, NULL, NULL, &entry_cdb);
-            c_iter->each(c_iter, i, entry_cdb);
+            c_iter->each(c_iter, i, entry_key, entry_version, entry_cdb);
         }
     }
 
@@ -2518,7 +2518,7 @@ static void castle_btree_iter_all_leaf_process(c_iter_t *c_iter)
         iter_debug("All entries: current slot: (b=%p, v=%x)->(cdb=0x%x, 0x%x)\n",
                 entry_key, entry_version, entry_cdb.disk, entry_cdb.block);
         if (!entry_is_leaf_ptr)
-            c_iter->each(c_iter, i, entry_cdb);
+            c_iter->each(c_iter, i, entry_key, entry_version, entry_cdb);
     }
 
     iter_debug("Done processing entries.\n");
@@ -2908,17 +2908,25 @@ static int castle_enum_iter_need_visit(c_iter_t *c_iter, c_disk_blk_t node_cdb)
     return 1;
 }
 
-static void castle_enum_iter_each(c_iter_t *c_iter, int index, c_disk_blk_t cdb)
+static void castle_enum_iter_each(c_iter_t *c_iter, 
+                                  int index, 
+                                  void *key, 
+                                  version_t version, 
+                                  c_disk_blk_t cdb)
 {
+    struct castle_btree_type *btree;
     struct castle_enumerator *c_enum;
     struct castle_iterator_buffer *buff;
     version_t idx; 
 
     castle_iter_enum_idx_get(c_iter, &c_enum, &idx);
     buff = c_enum->buffers + idx;
+    btree = castle_btree_type_get(buff->buffer->type);
+    BUG_ON(buff->prod_idx != buff->buffer->used);
+    enum_debug("Entry for iterator idx=%d: idx=%d, key=%p, version=%d, cdb=(0x%x, 0x%x)\n", 
+                    idx, index, key, version, cdb.disk, cdb.block);
+    btree->entry_add(buff->buffer, buff->prod_idx, key, version, 0, cdb);
     buff->prod_idx++;
-    enum_debug("Entry for iterator idx=%d: idx=%d, cdb=(0x%x, 0x%x)\n", 
-                    idx, index, cdb.disk, cdb.block);
 }
 
 static void castle_enum_iter_node_end(c_iter_t *c_iter)
@@ -3054,51 +3062,105 @@ int castle_btree_enum_has_next(c_enum_t *c_enum)
     return ret;
 }
 
-void castle_btree_enum_next(c_enum_t *c_enum)
+static void castle_enum_buffer_init(c_enum_t *c_enum, struct castle_btree_node *buffer)
 {
+    /* Buffers are proper btree nodes understood by castle_btree_node_type function sets.
+       Initialise the required bits of the node, so that the types don't complain. */
+    buffer->magic   = BTREE_NODE_MAGIC;
+    buffer->type    = c_enum->tree->btree_type;
+    buffer->version = 0;
+    buffer->used    = 0;
+    buffer->is_leaf = 1;
+}
+
+void castle_btree_enum_next(c_enum_t *c_enum, 
+                            void **key_p, 
+                            version_t *version_p, 
+                            c_disk_blk_t *cdb_p)
+{
+    struct castle_btree_type *btree = castle_btree_type_get(c_enum->tree->btree_type);
     struct castle_iterator_buffer *buff;
     int first_iter;
+    void *max_key;
 
     /* _has_next() waits for all buffers to be filled in, it's safe to assume this has
        been called just before */
     BUG_ON(atomic_read(&c_enum->outs_iterators) != 0);
     BUG_ON(atomic_read(&c_enum->live_iterators) == 0);
     
+    /* The maximum key we are using for this batch is the last key for the max_key_iter.
+       However, at the start, or after max_key_iter has been changed (below), max_key_iter
+       may be pointing to a completed iterator, fix that (find the first non-completed). */
+    first_iter = c_enum->max_key_iter;
+    do {
+        buff = c_enum->buffers + c_enum->max_key_iter;
+        if(!buff->iter_completed)
+        {
+            btree->entry_get(buff->buffer, buff->prod_idx-1, &max_key, NULL, NULL, NULL);
+            enum_debug("max_key=%p, got it from iterator %d\n", max_key, c_enum->max_key_iter);
+            break;
+        }
+        /* Move to the next iterator */
+        enum_debug("Iterator %d completed, trying next one to get max_key.\n", 
+                c_enum->max_key_iter);
+        c_enum->max_key_iter = (c_enum->max_key_iter + 1) % c_enum->nr_iters;
+        BUG_ON(first_iter == c_enum->max_key_iter);
+    } while(1);
+
     /* First, find the iterator to use, all non-completed iterators are guaranteed to have
        something in the buffer */
-    first_iter = c_enum->tmp_iter;
-    enum_debug("first_iter %d\n", first_iter);
+    first_iter = c_enum->curr_iter;
+    enum_debug("First_iter %d\n", first_iter);
     do {
-        buff = c_enum->buffers + c_enum->tmp_iter;
-        enum_debug("iter_completed %d\n", buff->iter_completed);
+        buff = c_enum->buffers + c_enum->curr_iter;
+        enum_debug("Iter_completed %d\n", buff->iter_completed);
         if(!buff->iter_completed)
-            break;
+        {
+            void *candidate_key;
+            /* Check if the first entry we'd return is small enough */ 
+            btree->entry_get(buff->buffer, buff->cons_idx, &candidate_key, NULL, NULL, NULL); 
+            enum_debug("Candidate key=%p\n", candidate_key);
+            if(btree->key_compare(candidate_key, max_key) <= 0)
+                break;
+        }
         /* Move to the next iterator */
-        c_enum->tmp_iter = (c_enum->tmp_iter + 1) % c_enum->nr_iters;
-        enum_debug("moving to iter %d\n", c_enum->tmp_iter);
-    } while(c_enum->tmp_iter != first_iter);
+        c_enum->curr_iter = (c_enum->curr_iter + 1) % c_enum->nr_iters;
+        enum_debug("Moving to iter %d\n", c_enum->curr_iter);
+        /* Something is wrong if we cycled through all the iterators without breaking.
+           We should have broken out of the loop for max_key_iter in the worst case */
+        BUG_ON(c_enum->curr_iter == first_iter);
+    } while(1);
 
     BUG_ON(buff->iter_completed);
-    BUG_ON((buff - c_enum->buffers) != c_enum->tmp_iter);
+    BUG_ON((buff - c_enum->buffers) != c_enum->curr_iter);
     BUG_ON(buff->cons_idx >= buff->prod_idx);
-
+    
     enum_debug("cons_idx %d, prod_idx %d\n", buff->cons_idx, buff->prod_idx);
-    /* TODO: Read off the entry we want to return here */
+    /* Read off the entry we want to return, and increment the consumer index */
+    btree->entry_get(buff->buffer, buff->cons_idx, key_p, version_p, NULL, cdb_p); 
     buff->cons_idx++;
     
     /* Check if next node should be read for this iterator */
     if(buff->cons_idx == buff->prod_idx)
     {
-        enum_debug("Scheduling a read for iterator %d.\n", c_enum->tmp_iter);
+        enum_debug("Scheduling a read for iterator %d.\n", c_enum->curr_iter);
         buff->prod_idx = buff->cons_idx = 0;
         /* Remember that there will one more iterator in flight, and schedule the read. */
         atomic_inc(&c_enum->outs_iterators);
-        castle_btree_iter_start(c_enum->iterators + c_enum->tmp_iter);
-        /* TODO: this should be cleverer, at the moment, just move to the next iterator */
-        c_enum->tmp_iter = (c_enum->tmp_iter + 1) % c_enum->nr_iters;
+        /* Reset the buffer node */
+        castle_enum_buffer_init(c_enum, buff->buffer);
+        /* If the current iterator is also the max key iterator, move the latter forward */
+        if(c_enum->curr_iter == c_enum->max_key_iter)
+        {
+            c_enum->max_key_iter = (c_enum->max_key_iter + 1) % c_enum->nr_iters;
+            enum_debug("Max key iterator read scheduled, moved max_key_iter to %d\n",
+                    c_enum->max_key_iter);
+        }
+        /* Run the iterator again to get the next nodes worth of stuff */
+        castle_btree_iter_start(c_enum->iterators + c_enum->curr_iter);
     }
 }
-
+       
 void castle_btree_enum_init(c_enum_t *c_enum)
 {
     version_t first_version, curr_version, ver_idx, nr_versions;
@@ -3111,7 +3173,8 @@ void castle_btree_enum_init(c_enum_t *c_enum)
     enum_debug("Nr versions: %d\n", nr_versions);
     c_enum->nr_iters       = nr_versions;
     c_enum->err            = 0;
-    c_enum->tmp_iter = 0;
+    c_enum->curr_iter      = 0;
+    c_enum->max_key_iter   = 0;
     init_waitqueue_head(&c_enum->iterators_wq);
     c_enum->outs_iterators = ATOMIC(0);
     c_enum->live_iterators = ATOMIC(0); 
@@ -3156,7 +3219,8 @@ void castle_btree_enum_init(c_enum_t *c_enum)
         c_enum->buffers[ver_idx].iter_completed = 0;
         c_enum->buffers[ver_idx].buffer = vmalloc(btype->node_size * C_BLK_SIZE);
         if(!c_enum->buffers[ver_idx].buffer)
-        goto no_mem;
+            goto no_mem;
+        castle_enum_buffer_init(c_enum, c_enum->buffers[ver_idx].buffer);
 
         iter = c_enum->iterators + ver_idx; 
         iter->tree       = c_enum->tree;

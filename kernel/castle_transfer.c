@@ -27,7 +27,11 @@ struct castle_transfers castle_transfers;
 
 static void castle_block_move(struct castle_transfer *transfer, int index, c_disk_blk_t cdb);
 
-static void castle_transfer_each(c_iter_t *c_iter, int index, c_disk_blk_t cdb)
+static void castle_transfer_each(c_iter_t *c_iter, 
+                                 int index, 
+                                 void *key,
+                                 version_t version,
+                                 c_disk_blk_t cdb)
 {
     struct castle_transfer *transfer = container_of(c_iter, struct castle_transfer, c_iter);
 
