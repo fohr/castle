@@ -25,7 +25,7 @@
 static DECLARE_WAIT_QUEUE_HEAD(castle_btree_iters_wq); 
 static atomic_t castle_btree_iters_cnt = ATOMIC_INIT(0);
 
-struct castle_btree_def_fn {
+struct castle_btree_node_save {
     struct castle_component_tree   *ct;
     c_disk_blk_t                    cdb;
     struct work_struct              work;
@@ -1256,10 +1256,10 @@ static void castle_btree_lub_find(struct castle_btree_node *node,
     if(insert_idx_p) *insert_idx_p = insert_idx;
 }
 
-static void castle_btree_def_nd_create(struct work_struct *work)
+static void castle_btree_node_save(struct work_struct *work)
 {
-    struct castle_btree_def_fn *work_st = container_of(work, 
-                                                       struct castle_btree_def_fn, 
+    struct castle_btree_node_save *work_st = container_of(work, 
+                                                       struct castle_btree_node_save, 
                                                        work);
     struct castle_component_tree *ct = work_st->ct;
     struct castle_btree_node *node;
@@ -1294,7 +1294,6 @@ static void castle_btree_def_nd_create(struct work_struct *work)
     }
     ct->last_node = work_st->cdb;
     atomic64_inc(&ct->node_cnt);
-    printk("Node Count: %u\n", (uint32_t)atomic64_read(&ct->node_cnt));
     up(&ct->mutex);
 
     kfree(work_st);
@@ -1305,7 +1304,7 @@ c2_block_t* castle_btree_node_create(int version, int is_leaf, btree_t type,
 {
     struct castle_btree_type *btree;
     struct castle_btree_node *node;
-    struct castle_btree_def_fn *work_st; 
+    struct castle_btree_node_save *work_st; 
     c_disk_blk_t cdb;
     c2_block_t  *c2b;
     
@@ -1332,11 +1331,11 @@ c2_block_t* castle_btree_node_create(int version, int is_leaf, btree_t type,
     /* Link the new node to last created node. But, schedule the task for later; as
      * locking the last node while holding lock for current node might lead to a
      * dead-lock */
-    work_st = kmalloc(sizeof(struct castle_btree_def_fn), GFP_NOIO);
+    work_st = kmalloc(sizeof(struct castle_btree_node_save), GFP_NOIO);
     BUG_ON(!work_st);
     work_st->ct = ct;
     work_st->cdb = cdb;
-    INIT_WORK(&work_st->work, castle_btree_def_nd_create);
+    INIT_WORK(&work_st->work, castle_btree_node_save);
     queue_work(castle_wq, &work_st->work);
 
     return c2b;
