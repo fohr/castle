@@ -105,6 +105,8 @@ static c_mstore_key_t castle_da_ct_marshall(struct castle_clist_entry *ctm,
     ctm->seq        = ct->seq;
     ctm->level      = ct->level;
     ctm->first_node = ct->first_node;
+    ctm->last_node  = ct->last_node;
+    ctm->node_cnt   = atomic64_read(&ct->node_cnt);
 
     return ct->mstore_key;
 }
@@ -119,6 +121,9 @@ static da_id_t castle_da_ct_unmarshall(struct castle_component_tree *ct,
     ct->da         = ctm->da_id; 
     ct->level      = ctm->level;
     ct->first_node = ctm->first_node;
+    ct->last_node  = ctm->last_node;
+    init_MUTEX(&ct->mutex);
+    atomic64_set(&ct->node_cnt, ctm->node_cnt);
     ct->mstore_key = key;
     INIT_LIST_HEAD(&ct->da_list);
     INIT_LIST_HEAD(&ct->roots_list);
@@ -326,6 +331,7 @@ static int castle_da_rwct_make(struct castle_double_array *da)
     struct castle_component_tree *ct;
     c2_block_t *c2b;
     int ret;
+    c_disk_blk_t cdb;
 
     ct = kzalloc(sizeof(struct castle_component_tree), GFP_KERNEL); 
     if(!ct) 
@@ -344,13 +350,15 @@ static int castle_da_rwct_make(struct castle_double_array *da)
     INIT_LIST_HEAD(&ct->roots_list);
     castle_ct_hash_add(ct);
 
+    atomic64_set(&ct->node_cnt, 0); 
+    init_MUTEX(&ct->mutex);
     /* Create a root node for this tree, and update the root version */
-    c2b = castle_btree_node_create(da->root_version, 1 /* is_leaf */, VLBA_TREE_TYPE);
-    ct->first_node = c2b->cdb; 
+    c2b = castle_btree_node_create(da->root_version, 1 /* is_leaf */, VLBA_TREE_TYPE, ct);
+    cdb = c2b->cdb;
     unlock_c2b(c2b);
     put_c2b(c2b);
     castle_version_lock(da->root_version);
-    ret = castle_version_root_update(da->root_version, ct->seq, ct->first_node);
+    ret = castle_version_root_update(da->root_version, ct->seq, cdb);
     castle_version_unlock(da->root_version);
     if(ret)
     {

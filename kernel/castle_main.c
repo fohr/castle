@@ -34,6 +34,8 @@ struct castle_component_tree castle_global_tree = {.seq         = GLOBAL_TREE,
                                                    .da          = INVAL_DA,
                                                    .level       = -1, 
                                                    .first_node  = INVAL_DISK_BLK,
+                                                   .last_node   = INVAL_DISK_BLK,
+                                                   .node_cnt    = {0ULL},
                                                    .da_list     = {NULL, NULL},
                                                    .hash_list   = {NULL, NULL},
                                                    .roots_list  = {NULL, NULL},
@@ -203,7 +205,10 @@ int castle_fs_init(void)
         /* Init the fs superblock */
         castle_fs_superblocks_init();
         /* Init the root btree node */
-        c2b = castle_btree_node_create(0 /* version */, 1 /* is_leaf */, MTREE_TYPE);
+        atomic64_set(&(castle_global_tree.node_cnt), 0);
+        init_MUTEX(&(castle_global_tree.mutex));
+        c2b = castle_btree_node_create(0 /* version */, 1 /* is_leaf */, MTREE_TYPE,
+                                       &castle_global_tree);
         /* Init version list */
         ret = castle_versions_zero_init(c2b->cdb);
         /* Release btree node c2b */
