@@ -124,13 +124,14 @@ typedef uint8_t btree_t;
 
 #define BTREE_NODE_MAGIC  0x0000cdab
 struct castle_btree_node {
-    uint32_t magic;
-    uint32_t version;
-    uint32_t used;
-    uint8_t  is_leaf;
+    uint32_t        magic;
+    uint32_t        version;
+    uint32_t        used;
+    uint8_t         is_leaf;
     /* Payload (i.e. btree entries) depend on the B-tree type */
-    btree_t  type;
-    uint8_t  payload[0];
+    btree_t         type;
+    c_disk_blk_t    next_node;
+    uint8_t         payload[0];
 } PACKED;
 
 #define BTREE_NODE_PAYLOAD(_node)   ((void *)&(_node)->payload)
@@ -194,10 +195,13 @@ struct castle_btree_type {
 struct castle_component_tree {
     tree_seq_t       seq;
     atomic64_t       item_count;
-    uint8_t          btree_type;
+    btree_t          btree_type;
     da_id_t          da;
     uint8_t          level;
     c_disk_blk_t     first_node;
+    c_disk_blk_t     last_node;
+    struct semaphore mutex;          /* Mutex which protects the last_node */
+    atomic64_t       node_cnt;
     struct list_head da_list;
     struct list_head hash_list;
     struct list_head roots_list;
@@ -217,6 +221,8 @@ struct castle_clist_entry {
     tree_seq_t   seq;
     uint8_t      level;
     c_disk_blk_t first_node;
+    c_disk_blk_t last_node;
+    uint64_t     node_cnt;
 } PACKED;
 
 struct castle_rlist_entry {

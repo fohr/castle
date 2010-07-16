@@ -25,6 +25,12 @@
 static DECLARE_WAIT_QUEUE_HEAD(castle_btree_iters_wq); 
 static atomic_t castle_btree_iters_cnt = ATOMIC_INIT(0);
 
+struct castle_btree_def_fn {
+    struct castle_component_tree   *ct;
+    c_disk_blk_t                    cdb;
+    struct work_struct              work;
+} PACKED;
+
 
 /**********************************************************************************************/
 /* Block mapper btree (mtree) definitions */
@@ -1250,10 +1256,56 @@ static void castle_btree_lub_find(struct castle_btree_node *node,
     if(insert_idx_p) *insert_idx_p = insert_idx;
 }
 
-c2_block_t* castle_btree_node_create(int version, int is_leaf, btree_t type)
+static void castle_btree_def_nd_create(struct work_struct *work)
+{
+    struct castle_btree_def_fn *work_st = container_of(work, 
+                                                       struct castle_btree_def_fn, 
+                                                       work);
+    struct castle_component_tree *ct = work_st->ct;
+    struct castle_btree_node *node;
+    struct castle_btree_type *btree;
+    c_disk_blk_t prev_cdb;
+    c2_block_t *c2b;
+
+    down(&ct->mutex);
+    btree = castle_btree_type_get(ct->btree_type);
+
+    if (unlikely(!atomic64_read(&ct->node_cnt))) 
+    {
+        BUG_ON(!DISK_BLK_INVAL(ct->first_node));
+        ct->first_node = work_st->cdb;
+    } 
+    else
+    {
+        prev_cdb = ct->last_node;
+        c2b = castle_cache_block_get(prev_cdb, btree->node_size);
+        lock_c2b(c2b);
+   
+        /* If c2b is not up to date, issue a blocking READ to update */
+        if(!c2b_uptodate(c2b))
+            BUG_ON(submit_c2b_sync(READ, c2b));
+
+        node = c2b_buffer(c2b);
+        node->next_node = work_st->cdb;
+
+        dirty_c2b(c2b);
+        unlock_c2b(c2b);
+        put_c2b(c2b);
+    }
+    ct->last_node = work_st->cdb;
+    atomic64_inc(&ct->node_cnt);
+    printk("Node Count: %u\n", (uint32_t)atomic64_read(&ct->node_cnt));
+    up(&ct->mutex);
+
+    kfree(work_st);
+}
+
+c2_block_t* castle_btree_node_create(int version, int is_leaf, btree_t type,
+                                     struct castle_component_tree *ct)
 {
     struct castle_btree_type *btree;
     struct castle_btree_node *node;
+    struct castle_btree_def_fn *work_st; 
     c_disk_blk_t cdb;
     c2_block_t  *c2b;
     
@@ -1273,13 +1325,25 @@ c2_block_t* castle_btree_node_create(int version, int is_leaf, btree_t type)
     node->version  = version;
     node->used     = 0;
     node->is_leaf  = is_leaf;
+    node->next_node = INVAL_DISK_BLK;
 
     dirty_c2b(c2b);
+
+    /* Link the new node to last created node. But, schedule the task for later; as
+     * locking the last node while holding lock for current node might lead to a
+     * dead-lock */
+    work_st = kmalloc(sizeof(struct castle_btree_def_fn), GFP_NOIO);
+    BUG_ON(!work_st);
+    work_st->ct = ct;
+    work_st->cdb = cdb;
+    INIT_WORK(&work_st->work, castle_btree_def_nd_create);
+    queue_work(castle_wq, &work_st->work);
 
     return c2b;
 }
 
-static c2_block_t* castle_btree_effective_node_create(c2_block_t *orig_c2b,
+static c2_block_t* castle_btree_effective_node_create(c_bvec_t *c_bvec, 
+                                                      c2_block_t *orig_c2b,
                                                       version_t version)
 {
     struct castle_btree_type *btree;
@@ -1291,7 +1355,7 @@ static c2_block_t* castle_btree_effective_node_create(c2_block_t *orig_c2b,
     
     node = c2b_bnode(orig_c2b); 
     btree = castle_btree_type_get(node->type);
-    c2b = castle_btree_node_create(version, node->is_leaf, node->type);
+    c2b = castle_btree_node_create(version, node->is_leaf, node->type, c_bvec->tree);
     eff_node = c2b_buffer(c2b);
 
     last_eff_key = btree->inv_key;
@@ -1376,7 +1440,7 @@ static c2_block_t* castle_btree_effective_node_create(c2_block_t *orig_c2b,
     return c2b;
 }
 
-static c2_block_t* castle_btree_node_key_split(c2_block_t *orig_c2b)
+static c2_block_t* castle_btree_node_key_split(c_bvec_t *c_bvec, c2_block_t *orig_c2b)
 {
     c2_block_t *c2b;
     struct castle_btree_node *node, *sec_node;
@@ -1390,7 +1454,8 @@ static c2_block_t* castle_btree_node_key_split(c2_block_t *orig_c2b)
 
     node     = c2b_bnode(orig_c2b);
     btree    = castle_btree_type_get(node->type);
-    c2b      = castle_btree_node_create(node->version, node->is_leaf, node->type);
+    c2b      = castle_btree_node_create(node->version, node->is_leaf, 
+                                        node->type, c_bvec->tree);
     sec_node = c2b_bnode(c2b);
     /* The original node needs to contain the elements from the right hand side
        because otherwise the key in it's parent would have to change. We want
@@ -1518,7 +1583,7 @@ static void castle_btree_new_root_create(c_bvec_t *c_bvec, btree_t type)
             c_bvec->version);
     BUG_ON(c_bvec->btree_parent_node);
     /* Create the node */
-    c2b = castle_btree_node_create(c_bvec->version, 0, type);
+    c2b = castle_btree_node_create(c_bvec->version, 0, type, c_bvec->tree);
     node = c2b_buffer(c2b);
     /* Update the version tree, and release the version lock (c2b_forget will 
        no longer do that, because there will be a parent node). */
@@ -1551,7 +1616,7 @@ static int castle_btree_node_split(c_bvec_t *c_bvec)
     retain_c2b = c_bvec->btree_node;
 
     /* Create the effective node */
-    eff_c2b = castle_btree_effective_node_create(retain_c2b, version);
+    eff_c2b = castle_btree_effective_node_create(c_bvec, retain_c2b, version);
     if(eff_c2b)
     {
         debug("Effective node NOT identical to the original node.\n");
@@ -1574,7 +1639,8 @@ static int castle_btree_node_split(c_bvec_t *c_bvec)
         void *max_split_key;
 
         debug("Effective node too full, splitting.\n");
-        split_c2b = castle_btree_node_key_split(eff_c2b ? eff_c2b : c_bvec->btree_node);
+        split_c2b = castle_btree_node_key_split(c_bvec, 
+                                                eff_c2b ? eff_c2b : c_bvec->btree_node);
         split_node = c2b_buffer(split_c2b);
         BUG_ON(split_node->version != c_bvec->version);
         /* Work out whether to take the split node for the further btree walk.
