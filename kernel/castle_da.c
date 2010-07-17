@@ -8,7 +8,7 @@
 #include "castle_versions.h"
 #include "castle_freespace.h"
 
-#define DEBUG
+//#define DEBUG
 #ifndef DEBUG
 #define debug(_f, ...)  ((void)0)
 #else
@@ -106,7 +106,7 @@ static c_mstore_key_t castle_da_ct_marshall(struct castle_clist_entry *ctm,
     ctm->level      = ct->level;
     ctm->first_node = ct->first_node;
     ctm->last_node  = ct->last_node;
-    ctm->node_cnt   = atomic64_read(&ct->node_cnt);
+    ctm->node_count = atomic64_read(&ct->node_count);
 
     return ct->mstore_key;
 }
@@ -123,7 +123,7 @@ static da_id_t castle_da_ct_unmarshall(struct castle_component_tree *ct,
     ct->first_node = ctm->first_node;
     ct->last_node  = ctm->last_node;
     init_MUTEX(&ct->mutex);
-    atomic64_set(&ct->node_cnt, ctm->node_cnt);
+    atomic64_set(&ct->node_count, ctm->node_count);
     ct->mstore_key = key;
     INIT_LIST_HEAD(&ct->da_list);
     INIT_LIST_HEAD(&ct->roots_list);
@@ -328,7 +328,7 @@ out_iter_destroy:
 
 static int castle_da_rwct_make(struct castle_double_array *da)
 {
-    struct castle_component_tree *ct;
+    struct castle_component_tree *ct, *old_ct;
     c2_block_t *c2b;
     int ret;
     c_disk_blk_t cdb;
@@ -350,7 +350,7 @@ static int castle_da_rwct_make(struct castle_double_array *da)
     INIT_LIST_HEAD(&ct->roots_list);
     castle_ct_hash_add(ct);
 
-    atomic64_set(&ct->node_cnt, 0); 
+    atomic64_set(&ct->node_count, 0); 
     init_MUTEX(&ct->mutex);
     /* Create a root node for this tree, and update the root version */
     c2b = castle_btree_node_create(da->root_version, 1 /* is_leaf */, VLBA_TREE_TYPE, ct);
@@ -370,6 +370,14 @@ static int castle_da_rwct_make(struct castle_double_array *da)
     }
     debug("Added component tree seq=%d, root_node=(0x%x, 0x%x), it's threaded onto da=%p, level=%d\n",
             ct->seq, c2b->cdb.disk, c2b->cdb.block, da, ct->level);
+    /* Move the last rwct (if one exists) to level 1 */
+    if(!list_empty(&da->trees[0]))
+    {
+        old_ct = list_entry(da->trees[0].next, struct castle_component_tree, da_list);
+        list_del(&old_ct->da_list);
+        old_ct->level = 1;
+        list_add(&old_ct->da_list, &da->trees[old_ct->level]);
+    }
     /* Thread CT onto level 0 list */
     list_add(&ct->da_list, &da->trees[ct->level]);
 
@@ -381,7 +389,7 @@ int castle_double_array_make(da_id_t da_id, version_t root_version)
     struct castle_double_array *da;
     int ret, i;
 
-    printk("Creating doubling array for da_id=%d, version=%d\n", da_id, root_version);
+    debug("Creating doubling array for da_id=%d, version=%d\n", da_id, root_version);
     da = kzalloc(sizeof(struct castle_double_array), GFP_KERNEL); 
     if(!da)
         return -ENOMEM;
@@ -398,7 +406,7 @@ int castle_double_array_make(da_id_t da_id, version_t root_version)
         
         return ret;
     }
-    printk("Successfully made a new doubling array, id=%d, for version=%d\n",
+    debug("Successfully made a new doubling array, id=%d, for version=%d\n",
         da_id, root_version);
     castle_da_hash_add(da);
 
@@ -459,33 +467,326 @@ static void castle_da_bvec_complete(c_bvec_t *c_bvec, int err, c_disk_blk_t cdb)
     callback(c_bvec, err, cdb);
 }
 
+struct castle_ct_sort {
+    struct castle_component_tree *tree;
+    struct castle_btree_type *btree;
+    struct castle_enumerator *enumerator;
+    uint32_t nr_nodes;          /* Number of nodes in the buffer */
+    void *node_buffer;          /* Buffer to store all the nodes */
+    uint32_t nr_items;          /* Number of items in the buffer */
+    struct item_idx {
+        uint32_t node;          /* Which node                    */
+        uint32_t node_offset;   /* Where in the node             */
+    } *sort_idx;
+};
+
+static void castle_ct_buffer_init(struct castle_btree_type *btree, struct castle_btree_node *buffer)
+{
+    /* Buffers are proper btree nodes understood by castle_btree_node_type function sets.
+       Initialise the required bits of the node, so that the types don't complain. */
+    buffer->magic   = BTREE_NODE_MAGIC;
+    buffer->type    = btree->magic;
+    buffer->version = 0;
+    buffer->used    = 0;
+    buffer->is_leaf = 1;
+}
+
+static struct castle_btree_node* castle_ct_sort_node_get(struct castle_ct_sort *cs, 
+                                                         uint32_t idx)
+{
+    struct castle_btree_type *btree = cs->btree;
+    char *buffer = cs->node_buffer;
+
+    return (struct castle_btree_node *)(buffer + idx * btree->node_size * C_BLK_SIZE); 
+}
+
+static struct castle_ct_sort* castle_ct_sort_init(struct castle_component_tree *ct)
+{
+    struct castle_btree_type *btree = castle_btree_type_get(ct->btree_type);
+    struct castle_ct_sort *sort_struct;
+    
+    sort_struct = kmalloc(sizeof(struct castle_ct_sort), GFP_KERNEL);
+    if(!sort_struct)
+        return NULL;
+
+    sort_struct->tree = ct;
+    sort_struct->btree = btree;
+    sort_struct->enumerator = kmalloc(sizeof(struct castle_enumerator), GFP_KERNEL);
+    /* Allocate slighly more than number of nodes in the tree, to make sure everything
+       fits, even if we unlucky, and waste parts of the node in each node */
+    sort_struct->nr_nodes = 1.1 * (atomic64_read(&ct->node_count) + 1);
+    sort_struct->node_buffer = vmalloc(sort_struct->nr_nodes * btree->node_size * C_BLK_SIZE);
+    sort_struct->sort_idx = vmalloc(atomic64_read(&ct->item_count) * sizeof(struct item_idx));
+    if(!sort_struct->enumerator || !sort_struct->node_buffer || !sort_struct->sort_idx)
+    {
+        if(sort_struct->enumerator)
+            kfree(sort_struct->enumerator);
+        if(sort_struct->node_buffer)
+            vfree(sort_struct->node_buffer);
+        if(sort_struct->sort_idx)
+            vfree(sort_struct->sort_idx);
+        kfree(sort_struct);
+
+        return NULL;
+    }
+    sort_struct->enumerator->tree = ct;
+    castle_btree_enum_init(sort_struct->enumerator); 
+    
+    return sort_struct; 
+}
+
+static void castle_ct_sort_fill(struct castle_ct_sort *cs)
+{
+    struct castle_btree_type *btree = cs->btree;
+    struct castle_btree_node *node;
+    uint32_t node_idx, node_offset, item_idx;
+    version_t version;
+    c_disk_blk_t cdb;
+    void *key;
+
+    /* BIG TODO: the enumerator will invalidate the key when it reads a new
+       batch of entries. Make sure this is fixed */
+    item_idx = node_idx = node_offset = 0;
+    while(castle_btree_enum_has_next(cs->enumerator))
+    {
+        /* Check if we moved on to a new node. If so, init that. */
+        if(node_offset == 0)
+        {
+            node = castle_ct_sort_node_get(cs, node_idx);
+            castle_ct_buffer_init(btree, node);
+        } else
+        {
+            BUG_ON(btree->need_split(node, 0)); 
+        }
+
+        /* Get the next entry from the comparator */
+        castle_btree_enum_next(cs->enumerator, &key, &version, &cdb);
+        debug("In enum got next: k=%p, version=%d, cdb=(0x%x, 0x%x)\n",
+                key, version, cdb.disk, cdb.block);
+        debug("Dereferencing first 4 bytes of the key (should be length)=0x%x.\n",
+                *((uint32_t *)key));
+        debug("Inserting into the node=%d, under idx=%d\n", node_idx, node_offset);
+        btree->entry_add(node, node_offset, key, version, 1, cdb);
+        cs->sort_idx[item_idx].node        = node_idx;
+        cs->sort_idx[item_idx].node_offset = node_offset;
+        node_offset++;
+        item_idx++;
+        /* Check if the node is full */
+        if(btree->need_split(node, 0))
+        {
+            debug("Node %d full, moving to the next one.\n", node_idx);
+            node_idx++; 
+            node_offset = 0;
+        }
+    }
+    BUG_ON(item_idx != atomic64_read(&cs->tree->item_count));
+    cs->nr_items = item_idx;
+}
+
+static void castle_ct_sort_item_get(struct castle_ct_sort *cs, 
+                                    uint32_t sort_idx,
+                                    void **key_p,
+                                    version_t *version_p)
+{
+    struct castle_btree_type *btree = cs->btree;
+    struct castle_btree_node *node;
+   
+    debug("Node_idx=%d, offset=%d\n", 
+            cs->sort_idx[sort_idx].node,
+            cs->sort_idx[sort_idx].node_offset);
+    node = castle_ct_sort_node_get(cs, cs->sort_idx[sort_idx].node);
+    btree->entry_get(node,
+                     cs->sort_idx[sort_idx].node_offset,
+                     key_p,
+                     version_p,
+                     NULL,
+                     NULL);
+}
+
+static int castle_kv_compare(struct castle_btree_type *btree,
+                             void *k1, version_t v1,
+                             void *k2, version_t v2)
+{
+    int ret = btree->key_compare(k1, k2);
+    if(ret != 0)
+        return ret;
+    
+    /* Reverse v achieved by inverting v1<->v2 given to version_compare() function */
+    return castle_version_compare(v2, v1);
+}
+                               
+
+static void castle_ct_heap_sift_down(struct castle_ct_sort *cs, uint32_t start, uint32_t end)
+{
+    struct castle_btree_type *btree = cs->btree;
+    version_t root_version, child_version;
+    void *root_key, *child_key;
+    uint32_t root, child;
+   
+    root = start;
+    /* Work out root key and version */
+    castle_ct_sort_item_get(cs, root, &root_key, &root_version);
+    while(2*root + 1 <= end)
+    {
+        /* First child MUST exist */
+        child = 2*root + 1;
+        castle_ct_sort_item_get(cs, child, &child_key, &child_version);
+        /* Check if the second child is greater than the first (MAX heap). If exists */
+        if(child < end)
+        {
+            version_t child2_version;
+            void *child2_key;
+
+            castle_ct_sort_item_get(cs, child+1, &child2_key, &child2_version);
+            if(castle_kv_compare(btree,
+                                 child2_key, child2_version, 
+                                 child_key, child_version) > 0)
+            {
+                child++;
+                /* Adjust pointers to point to child2 */
+                child_key = child2_key;
+                child_version = child2_version;
+            } 
+        }
+        /* Finally check whether greater child isn't greatest than the root */
+        if(castle_kv_compare(btree,
+                             child_key, child_version,
+                             root_key, root_version) > 0)
+        {
+            struct item_idx tmp_idx;
+            
+            /* Swap root and child, by swapping the respective sort_idx-es */
+            tmp_idx = cs->sort_idx[child];
+            cs->sort_idx[child] = cs->sort_idx[root];
+            cs->sort_idx[root] = tmp_idx;
+            /* Adjust root idx to point to the child, this should now be considered
+               for sifting down. 
+               NOTE: root_key & root_version are still correct. i.e.
+               castle_ct_sort_item_get(root) would still return the same values.
+               This is because we swapped the indicies. Also, in sifting you have to
+               keep perculating the SAME value down until it is in the right place.
+             */
+            root = child;
+        } else
+            return;
+    }
+}
+
+static void castle_ct_heapify(struct castle_ct_sort *cs)
+{
+    uint32_t start = (cs->nr_items - 2)/2;
+
+    while(true)
+    {
+        castle_ct_heap_sift_down(cs, start, cs->nr_items - 1);
+        /* Check for start == 0 here, beacuse it's unsigned, and we cannot check
+           for < 0 in the loop condition */
+        if(start-- == 0)
+            return;
+    }
+}
+
+static void castle_ct_heapsort(struct castle_ct_sort *cs)
+{
+    uint32_t last;
+
+    for(last = cs->nr_items-1; last > 0; last--)
+    {
+        struct item_idx tmp_idx;
+
+        /* Head is the greatest item, swap with last, and sift down */
+        tmp_idx = cs->sort_idx[last];
+        cs->sort_idx[last] = cs->sort_idx[0];
+        cs->sort_idx[0] = tmp_idx;
+        castle_ct_heap_sift_down(cs, 0, last-1); 
+    }
+}
+
+static USED void castle_ct_sort(struct castle_component_tree *ct)
+{
+    struct castle_ct_sort *sort_struct;
+    uint32_t i;
+
+    debug("Number of items in the component tree: %ld, number of nodes: %ld\n", 
+            atomic64_read(&ct->item_count),
+            atomic64_read(&ct->node_count));
+
+    BUG_ON(atomic64_read(&ct->item_count) == 0);
+    sort_struct = castle_ct_sort_init(ct); 
+    if(!sort_struct)
+    {
+        printk("Couldn't init sort struct. Exiting sort.\n");
+        return;
+    }
+    castle_ct_sort_fill(sort_struct);
+    castle_ct_heapify(sort_struct);
+    castle_ct_heapsort(sort_struct);
+    debug("=============== SORTED ================\n");
+    for(i=0; i<sort_struct->nr_items; i++)
+    {
+        version_t version;
+        void *key;
+
+        castle_ct_sort_item_get(sort_struct, i, &key, &version); 
+        debug("Sorted: %d: k=%p, version=%d\n",
+                i, key, version);
+        debug("Dereferencing first 4 bytes of the key (should be length)=0x%x.\n",
+                *((uint32_t *)key));
+    }
+}
+
 void castle_double_array_find(c_bvec_t *c_bvec)
 {
     struct castle_attachment *att = c_bvec->c_bio->attachment;
+    struct castle_component_tree *ct;
     struct castle_double_array *da;
     da_id_t da_id; 
 
-    /* da_endfind should be null it is for our privte use */
-    BUG_ON(c_bvec->da_endfind);
+#ifdef DEBUG
+    /* For test only */
+    static int first_time = 1;
+#endif
 
     down_read(&att->lock);
     /* Since the version is attached, it must be found */
     BUG_ON(castle_version_read(att->version, &da_id, NULL, NULL, NULL));
     up_read(&att->lock);
 
+    da = castle_da_hash_get(da_id);
+    BUG_ON(!da);
+
+    /* da_endfind should be null it is for our privte use */
+    BUG_ON(c_bvec->da_endfind);
+#ifdef DEBUG
+if((c_bvec_data_dir(c_bvec) == READ) && (first_time) && !list_empty(&da->trees[1]))
+{
+    first_time = 0;
+    ct = list_entry(da->trees[1].next, struct castle_component_tree, da_list);
+    castle_ct_sort(ct);
+}
+#endif
     debug("Doing DA %s for da_id=%d, for version=%d\n", 
            c_bvec_data_dir(c_bvec) == READ ? "read" : "write",
            da_id, att->version);
 
-    da = castle_da_hash_get(da_id);
-    BUG_ON(!da);
+    ct = castle_da_rwct_get(da);
+#ifdef DEBUG
+    if(atomic_read(&ct->item_count) > 1000)
+    {
+        struct castle_double_array *da = castle_da_hash_get(ct->da);  
+
+        BUG_ON(!da);
+        debug("Number of items in component tree: %d greater than 1000 (%ld). Adding a new rwct.\n",
+                ct->seq, atomic64_read(&ct->item_count));
+        castle_da_rwct_make(da);
+    }
+#endif
 
     c_bvec->tree       = castle_da_rwct_get(da);
     c_bvec->da_endfind = c_bvec->endfind;
     c_bvec->endfind    = castle_da_bvec_complete;
 
     debug("Looking up in ct=%d\n", c_bvec->tree->seq); 
-    
     castle_btree_find(c_bvec);
 }
 

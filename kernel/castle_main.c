@@ -35,7 +35,7 @@ struct castle_component_tree castle_global_tree = {.seq         = GLOBAL_TREE,
                                                    .level       = -1, 
                                                    .first_node  = INVAL_DISK_BLK,
                                                    .last_node   = INVAL_DISK_BLK,
-                                                   .node_cnt    = {0ULL},
+                                                   .node_count  = {0ULL},
                                                    .da_list     = {NULL, NULL},
                                                    .hash_list   = {NULL, NULL},
                                                    .roots_list  = {NULL, NULL},
@@ -205,7 +205,7 @@ int castle_fs_init(void)
         /* Init the fs superblock */
         castle_fs_superblocks_init();
         /* Init the root btree node */
-        atomic64_set(&(castle_global_tree.node_cnt), 0);
+        atomic64_set(&(castle_global_tree.node_count), 0);
         init_MUTEX(&(castle_global_tree.mutex));
         c2b = castle_btree_node_create(0 /* version */, 1 /* is_leaf */, MTREE_TYPE,
                                        &castle_global_tree);
@@ -1448,10 +1448,10 @@ static void __exit castle_exit(void)
     castle_regions_free();
     castle_attachments_free();
     /* Cleanup/writeout all metadata */ 
-    castle_freespace_fini();
     castle_double_array_fini();
     castle_btree_free();
     castle_versions_fini();
+    castle_freespace_fini();
     /* Drop all cache references (superblocks), flush the cache, free the slaves. */ 
     castle_slaves_unlock();
     castle_cache_fini();

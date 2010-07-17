@@ -201,7 +201,7 @@ struct castle_component_tree {
     c_disk_blk_t     first_node;
     c_disk_blk_t     last_node;
     struct semaphore mutex;          /* Mutex which protects the last_node */
-    atomic64_t       node_cnt;
+    atomic64_t       node_count;
     struct list_head da_list;
     struct list_head hash_list;
     struct list_head roots_list;
@@ -222,7 +222,7 @@ struct castle_clist_entry {
     uint8_t      level;
     c_disk_blk_t first_node;
     c_disk_blk_t last_node;
-    uint64_t     node_cnt;
+    uint64_t     node_count;
 } PACKED;
 
 struct castle_rlist_entry {

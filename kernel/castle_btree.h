@@ -3,6 +3,8 @@
 
 #include "castle_cache.h"
 
+struct castle_btree_type* 
+            castle_btree_type_get     (btree_t type);
 c2_block_t* castle_btree_node_create  (int version, int is_leaf, uint8_t type,
                                        struct castle_component_tree *ct);
 void        castle_btree_find         (c_bvec_t *c_bvec);

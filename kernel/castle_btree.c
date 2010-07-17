@@ -571,7 +571,7 @@ struct castle_vlba_tree_node {
     uint32_t    key_idx[0];
 } PACKED;
 
-#define VLBA_TREE_NODE_SIZE                 10
+#define VLBA_TREE_NODE_SIZE                 (2) 
 #define VLBA_TREE_NODE_LENGTH               (VLBA_TREE_NODE_SIZE * C_BLK_SIZE)
 #define EOF_VLBA_NODE(_node)                (((uint8_t *)_node) + VLBA_TREE_NODE_LENGTH)
 #define VLBA_KEY_LENGTH(_key)               (VLBA_TREE_KEY_MAX(_key) ? 0 : (_key)->length)
@@ -582,8 +582,6 @@ struct castle_vlba_tree_node {
                 sizeof(uint32_t))
 #define VLBA_ENTRY_PTR(__node, _vlba_node, _i)   \
                 (EOF_VLBA_NODE(__node) - _vlba_node->key_idx[_i])
-
-static void castle_vlba_tree_node_print(struct castle_btree_node *node);
 
 /* Implementation of heap sort from wiki */
 static void min_heap_swap(uint32_t *a, int i, int j)
@@ -705,6 +703,10 @@ static int castle_vlba_tree_need_split(struct castle_btree_node *node,
 {
     struct castle_vlba_tree_node *vlba_node = 
                 (struct castle_vlba_tree_node *) BTREE_NODE_PAYLOAD(node);
+
+    /* Special case, unitialised node should never be split. */
+    if(node->used == 0)
+        return 0;
 
     switch(ver_or_key_split)
     {
@@ -876,8 +878,6 @@ static void castle_vlba_tree_entries_drop(struct castle_btree_node *node,
 
     /* Decrement the node used count */
     node->used -= (idx_end - idx_start + 1);
-
-    castle_vlba_tree_node_print(node);
 }
 
 static void castle_vlba_tree_entry_replace(struct castle_btree_node *node,
@@ -925,6 +925,9 @@ static void castle_vlba_tree_node_validate(struct castle_btree_node *node)
     uint32_t count;
     struct castle_vlba_tree_entry *prev_entry;
 
+    /* TODO: node_validate called in interrupt context, cannot kmalloc GFP_NOIO here */
+    if(0 == 0)
+        return;
     a = kmalloc(sizeof(uint32_t) * node->used, GFP_NOIO);
     idx = kmalloc(sizeof(uint32_t) * node->used, GFP_NOIO);
     BUG_ON(!a || !idx);
@@ -1108,7 +1111,7 @@ static struct castle_btree_type *castle_btrees[1<<(8 * sizeof(btree_t))] =
                                                         [VLBA_TREE_TYPE] = &castle_vlba_tree};
 
 
-static inline struct castle_btree_type *castle_btree_type_get(btree_t type)
+struct castle_btree_type *castle_btree_type_get(btree_t type)
 {
 #ifdef CASTLE_DEBUG
     BUG_ON((type != MTREE_TYPE) &&
@@ -1270,7 +1273,7 @@ static void castle_btree_def_nd_create(struct work_struct *work)
     down(&ct->mutex);
     btree = castle_btree_type_get(ct->btree_type);
 
-    if (unlikely(!atomic64_read(&ct->node_cnt))) 
+    if (unlikely(!atomic64_read(&ct->node_count))) 
     {
         BUG_ON(!DISK_BLK_INVAL(ct->first_node));
         ct->first_node = work_st->cdb;
@@ -1293,8 +1296,7 @@ static void castle_btree_def_nd_create(struct work_struct *work)
         put_c2b(c2b);
     }
     ct->last_node = work_st->cdb;
-    atomic64_inc(&ct->node_cnt);
-    printk("Node Count: %u\n", (uint32_t)atomic64_read(&ct->node_cnt));
+    atomic64_inc(&ct->node_count);
     up(&ct->mutex);
 
     kfree(work_st);
@@ -3250,3 +3252,4 @@ no_mem:
     c_enum->err = -ENOMEM;
     castle_btree_enum_fini(c_enum);
 }
+

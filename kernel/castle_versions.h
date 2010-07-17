@@ -2,6 +2,7 @@
 #define __CASTLE_VERSIONS_H__
 
 int          castle_version_is_ancestor (version_t candidate, version_t version);
+int          castle_version_compare     (version_t version1,  version_t version2);
 int          castle_version_attach      (version_t version); 
 void         castle_version_detach      (version_t version);
 int          castle_version_read        (version_t version, 

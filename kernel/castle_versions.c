@@ -742,6 +742,29 @@ int castle_version_is_ancestor(version_t candidate, version_t version)
     return ret;
 }
 
+int castle_version_compare(version_t version1, version_t version2)
+{
+    struct castle_version *v1, *v2;
+    int ret;
+
+    spin_lock_irq(&castle_versions_hash_lock);
+    v1 = __castle_versions_hash_get(version1);
+    v2 = __castle_versions_hash_get(version2);
+    /* Sanity checks */
+    BUG_ON(!v1);
+    BUG_ON(!(v1->flags & CV_INITED_MASK));
+    BUG_ON(VERSION_INVAL(v1->o_order));
+    BUG_ON(!v2);
+    BUG_ON(!(v2->flags & CV_INITED_MASK));
+    BUG_ON(VERSION_INVAL(v2->o_order));
+
+    ret = v1->o_order - v2->o_order;
+    spin_unlock_irq(&castle_versions_hash_lock);
+
+    return ret;
+}
+
+
 /* Write root version (version 0) to mstore, which will then be processed by
    castle_versions_read() */
 int castle_versions_zero_init(c_disk_blk_t ftree_root)
