@@ -2981,18 +2981,21 @@ static void castle_btree_enum_fini(c_enum_t *c_enum)
     {
         for(ver_idx = 0; ver_idx < c_enum->nr_iters; ver_idx++)
         {
+#ifdef DEBUG                
             if(c_enum->buffers[ver_idx].buffer)
             {
                 struct castle_iterator_buffer *buff = c_enum->buffers + ver_idx;
-#ifdef DEBUG                
                 struct castle_iterator *c_iter = c_enum->iterators + ver_idx;
                 if(c_enum->iterators)
                     enum_debug("Freeing buffer for iterator %d, ver=%d.\n", 
                         ver_idx, c_iter->version);
-#endif                
                 BUG_ON((c_enum->err != -ENOMEM) && (!buff->iter_completed));
-                vfree(c_enum->buffers[ver_idx].buffer);
             }
+#endif                
+            if(c_enum->buffers[ver_idx].buffer1)
+                vfree(c_enum->buffers[ver_idx].buffer1);
+            if(c_enum->buffers[ver_idx].buffer2)
+                vfree(c_enum->buffers[ver_idx].buffer2);
         }
         vfree(c_enum->buffers);
         c_enum->buffers = NULL;
@@ -3149,7 +3152,10 @@ void castle_btree_enum_next(c_enum_t *c_enum,
         buff->prod_idx = buff->cons_idx = 0;
         /* Remember that there will one more iterator in flight, and schedule the read. */
         atomic_inc(&c_enum->outs_iterators);
-        /* Reset the buffer node */
+        /* Switch buffers and reset the buffer node */
+        enum_debug("Switching buffer from %p ...\n", buff->buffer);
+        buff->buffer = (buff->buffer == buff->buffer1 ? buff->buffer2 : buff->buffer1);
+        enum_debug("                   to %p.\n", buff->buffer);
         castle_enum_buffer_init(c_enum, buff->buffer);
         /* If the current iterator is also the max key iterator, move the latter forward */
         if(c_enum->curr_iter == c_enum->max_key_iter)
@@ -3219,8 +3225,10 @@ void castle_btree_enum_init(c_enum_t *c_enum)
         c_enum->buffers[ver_idx].prod_idx = 0;
         c_enum->buffers[ver_idx].cons_idx = 0;
         c_enum->buffers[ver_idx].iter_completed = 0;
-        c_enum->buffers[ver_idx].buffer = vmalloc(btype->node_size * C_BLK_SIZE);
-        if(!c_enum->buffers[ver_idx].buffer)
+        c_enum->buffers[ver_idx].buffer1 = vmalloc(btype->node_size * C_BLK_SIZE);
+        c_enum->buffers[ver_idx].buffer2 = vmalloc(btype->node_size * C_BLK_SIZE);
+        c_enum->buffers[ver_idx].buffer = c_enum->buffers[ver_idx].buffer1;
+        if(!c_enum->buffers[ver_idx].buffer1 || !c_enum->buffers[ver_idx].buffer2)
             goto no_mem;
         castle_enum_buffer_init(c_enum, c_enum->buffers[ver_idx].buffer);
 

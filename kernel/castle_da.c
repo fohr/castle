@@ -544,8 +544,6 @@ static void castle_ct_sort_fill(struct castle_ct_sort *cs)
     c_disk_blk_t cdb;
     void *key;
 
-    /* BIG TODO: the enumerator will invalidate the key when it reads a new
-       batch of entries. Make sure this is fixed */
     item_idx = node_idx = node_offset = 0;
     while(castle_btree_enum_has_next(cs->enumerator))
     {

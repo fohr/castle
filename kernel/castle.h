@@ -416,8 +416,10 @@ typedef struct castle_enumerator {
         int                       iter_completed;
         int                       prod_idx;
         int                       cons_idx;
-        struct castle_btree_node *buffer; 
-    } *buffers;
+        struct castle_btree_node *buffer;       /* Two buffers are actually allocated (buffer1/2) */
+        struct castle_btree_node *buffer1;      /* buffer points to the one currently used to     */
+        struct castle_btree_node *buffer2;      /* read in a node, second is used to preserve     */
+    } *buffers;                                 /* key pointer validity. TODO: fix, waseful.      */
 
     int                           curr_iter;    /* Iterator we are enumerating from at the moment */
     int                           max_key_iter; /* Which iterator is the max_key taken from       */
