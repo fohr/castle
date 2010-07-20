@@ -467,139 +467,20 @@ static void castle_da_bvec_complete(c_bvec_t *c_bvec, int err, c_disk_blk_t cdb)
     callback(c_bvec, err, cdb);
 }
 
-struct castle_ct_sort {
+typedef struct castle_modlist_iterator {
     struct castle_component_tree *tree;
     struct castle_btree_type *btree;
     struct castle_enumerator *enumerator;
-    uint32_t nr_nodes;          /* Number of nodes in the buffer */
-    void *node_buffer;          /* Buffer to store all the nodes */
-    uint32_t nr_items;          /* Number of items in the buffer */
+    int err;
+    uint32_t nr_nodes;          /* Number of nodes in the buffer   */
+    void *node_buffer;          /* Buffer to store all the nodes   */
+    uint32_t nr_items;          /* Number of items in the buffer   */
+    uint32_t next_item;         /* Next item to return in iterator */ 
     struct item_idx {
-        uint32_t node;          /* Which node                    */
-        uint32_t node_offset;   /* Where in the node             */
+        uint32_t node;          /* Which node                      */
+        uint32_t node_offset;   /* Where in the node               */
     } *sort_idx;
-};
-
-static void castle_ct_buffer_init(struct castle_btree_type *btree, struct castle_btree_node *buffer)
-{
-    /* Buffers are proper btree nodes understood by castle_btree_node_type function sets.
-       Initialise the required bits of the node, so that the types don't complain. */
-    buffer->magic   = BTREE_NODE_MAGIC;
-    buffer->type    = btree->magic;
-    buffer->version = 0;
-    buffer->used    = 0;
-    buffer->is_leaf = 1;
-}
-
-static struct castle_btree_node* castle_ct_sort_node_get(struct castle_ct_sort *cs, 
-                                                         uint32_t idx)
-{
-    struct castle_btree_type *btree = cs->btree;
-    char *buffer = cs->node_buffer;
-
-    return (struct castle_btree_node *)(buffer + idx * btree->node_size * C_BLK_SIZE); 
-}
-
-static struct castle_ct_sort* castle_ct_sort_init(struct castle_component_tree *ct)
-{
-    struct castle_btree_type *btree = castle_btree_type_get(ct->btree_type);
-    struct castle_ct_sort *sort_struct;
-    
-    sort_struct = kmalloc(sizeof(struct castle_ct_sort), GFP_KERNEL);
-    if(!sort_struct)
-        return NULL;
-
-    sort_struct->tree = ct;
-    sort_struct->btree = btree;
-    sort_struct->enumerator = kmalloc(sizeof(struct castle_enumerator), GFP_KERNEL);
-    /* Allocate slighly more than number of nodes in the tree, to make sure everything
-       fits, even if we unlucky, and waste parts of the node in each node */
-    sort_struct->nr_nodes = 1.1 * (atomic64_read(&ct->node_count) + 1);
-    sort_struct->node_buffer = vmalloc(sort_struct->nr_nodes * btree->node_size * C_BLK_SIZE);
-    sort_struct->sort_idx = vmalloc(atomic64_read(&ct->item_count) * sizeof(struct item_idx));
-    if(!sort_struct->enumerator || !sort_struct->node_buffer || !sort_struct->sort_idx)
-    {
-        if(sort_struct->enumerator)
-            kfree(sort_struct->enumerator);
-        if(sort_struct->node_buffer)
-            vfree(sort_struct->node_buffer);
-        if(sort_struct->sort_idx)
-            vfree(sort_struct->sort_idx);
-        kfree(sort_struct);
-
-        return NULL;
-    }
-    sort_struct->enumerator->tree = ct;
-    castle_btree_enum_init(sort_struct->enumerator); 
-    
-    return sort_struct; 
-}
-
-static void castle_ct_sort_fill(struct castle_ct_sort *cs)
-{
-    struct castle_btree_type *btree = cs->btree;
-    struct castle_btree_node *node;
-    uint32_t node_idx, node_offset, item_idx;
-    version_t version;
-    c_disk_blk_t cdb;
-    void *key;
-
-    item_idx = node_idx = node_offset = 0;
-    while(castle_btree_enum_has_next(cs->enumerator))
-    {
-        /* Check if we moved on to a new node. If so, init that. */
-        if(node_offset == 0)
-        {
-            node = castle_ct_sort_node_get(cs, node_idx);
-            castle_ct_buffer_init(btree, node);
-        } else
-        {
-            BUG_ON(btree->need_split(node, 0)); 
-        }
-
-        /* Get the next entry from the comparator */
-        castle_btree_enum_next(cs->enumerator, &key, &version, &cdb);
-        debug("In enum got next: k=%p, version=%d, cdb=(0x%x, 0x%x)\n",
-                key, version, cdb.disk, cdb.block);
-        debug("Dereferencing first 4 bytes of the key (should be length)=0x%x.\n",
-                *((uint32_t *)key));
-        debug("Inserting into the node=%d, under idx=%d\n", node_idx, node_offset);
-        btree->entry_add(node, node_offset, key, version, 1, cdb);
-        cs->sort_idx[item_idx].node        = node_idx;
-        cs->sort_idx[item_idx].node_offset = node_offset;
-        node_offset++;
-        item_idx++;
-        /* Check if the node is full */
-        if(btree->need_split(node, 0))
-        {
-            debug("Node %d full, moving to the next one.\n", node_idx);
-            node_idx++; 
-            node_offset = 0;
-        }
-    }
-    BUG_ON(item_idx != atomic64_read(&cs->tree->item_count));
-    cs->nr_items = item_idx;
-}
-
-static void castle_ct_sort_item_get(struct castle_ct_sort *cs, 
-                                    uint32_t sort_idx,
-                                    void **key_p,
-                                    version_t *version_p)
-{
-    struct castle_btree_type *btree = cs->btree;
-    struct castle_btree_node *node;
-   
-    debug("Node_idx=%d, offset=%d\n", 
-            cs->sort_idx[sort_idx].node,
-            cs->sort_idx[sort_idx].node_offset);
-    node = castle_ct_sort_node_get(cs, cs->sort_idx[sort_idx].node);
-    btree->entry_get(node,
-                     cs->sort_idx[sort_idx].node_offset,
-                     key_p,
-                     version_p,
-                     NULL,
-                     NULL);
-}
+} c_modlist_iter_t;
 
 static int castle_kv_compare(struct castle_btree_type *btree,
                              void *k1, version_t v1,
@@ -612,30 +493,118 @@ static int castle_kv_compare(struct castle_btree_type *btree,
     /* Reverse v achieved by inverting v1<->v2 given to version_compare() function */
     return castle_version_compare(v2, v1);
 }
-                               
 
-static void castle_ct_heap_sift_down(struct castle_ct_sort *cs, uint32_t start, uint32_t end)
+static void castle_ct_modlist_iter_buffer_init(struct castle_btree_type *btree,
+                                               struct castle_btree_node *buffer)
 {
-    struct castle_btree_type *btree = cs->btree;
+    /* Buffers are proper btree nodes understood by castle_btree_node_type function sets.
+       Initialise the required bits of the node, so that the types don't complain. */
+    buffer->magic   = BTREE_NODE_MAGIC;
+    buffer->type    = btree->magic;
+    buffer->version = 0;
+    buffer->used    = 0;
+    buffer->is_leaf = 1;
+}
+
+static struct castle_btree_node* castle_ct_modlist_iter_buffer_get(c_modlist_iter_t *iter, 
+                                                                   uint32_t idx)
+{
+    struct castle_btree_type *btree = iter->btree;
+    char *buffer = iter->node_buffer;
+
+    return (struct castle_btree_node *)(buffer + idx * btree->node_size * C_BLK_SIZE); 
+}
+
+static void castle_ct_modlist_iter_fill(c_modlist_iter_t *iter)
+{
+    struct castle_btree_type *btree = iter->btree;
+    struct castle_btree_node *node;
+    uint32_t node_idx, node_offset, item_idx;
+    version_t version;
+    c_disk_blk_t cdb;
+    void *key;
+
+    item_idx = node_idx = node_offset = 0;
+    while(castle_btree_enum_has_next(iter->enumerator))
+    {
+        /* Check if we moved on to a new node. If so, init that. */
+        if(node_offset == 0)
+        {
+            node = castle_ct_modlist_iter_buffer_get(iter, node_idx);
+            castle_ct_modlist_iter_buffer_init(btree, node);
+        } else
+        {
+            BUG_ON(btree->need_split(node, 0)); 
+        }
+
+        /* Get the next entry from the comparator */
+        castle_btree_enum_next(iter->enumerator, &key, &version, &cdb);
+        debug("In enum got next: k=%p, version=%d, cdb=(0x%x, 0x%x)\n",
+                key, version, cdb.disk, cdb.block);
+        debug("Dereferencing first 4 bytes of the key (should be length)=0x%x.\n",
+                *((uint32_t *)key));
+        debug("Inserting into the node=%d, under idx=%d\n", node_idx, node_offset);
+        btree->entry_add(node, node_offset, key, version, 1, cdb);
+        iter->sort_idx[item_idx].node        = node_idx;
+        iter->sort_idx[item_idx].node_offset = node_offset;
+        node_offset++;
+        item_idx++;
+        /* Check if the node is full */
+        if(btree->need_split(node, 0))
+        {
+            debug("Node %d full, moving to the next one.\n", node_idx);
+            node_idx++; 
+            node_offset = 0;
+        }
+    }
+    BUG_ON(item_idx != atomic64_read(&iter->tree->item_count));
+    iter->nr_items = item_idx;
+    iter->err = iter->enumerator->err;
+}
+
+static void castle_ct_modlist_iter_item_get(c_modlist_iter_t *iter, 
+                                            uint32_t sort_idx,
+                                            void **key_p,
+                                            version_t *version_p,
+                                            c_disk_blk_t *cdb_p)
+{
+    struct castle_btree_type *btree = iter->btree;
+    struct castle_btree_node *node;
+   
+    debug("Node_idx=%d, offset=%d\n", 
+            iter->sort_idx[sort_idx].node,
+            iter->sort_idx[sort_idx].node_offset);
+    node = castle_ct_modlist_iter_buffer_get(iter, iter->sort_idx[sort_idx].node);
+    btree->entry_get(node,
+                     iter->sort_idx[sort_idx].node_offset,
+                     key_p,
+                     version_p,
+                     NULL,
+                     cdb_p);
+}
+
+static void castle_ct_modlist_iter_sift_down(c_modlist_iter_t *iter, uint32_t start, uint32_t end)
+{
+    struct castle_btree_type *btree = iter->btree;
     version_t root_version, child_version;
     void *root_key, *child_key;
     uint32_t root, child;
    
     root = start;
     /* Work out root key and version */
-    castle_ct_sort_item_get(cs, root, &root_key, &root_version);
+    castle_ct_modlist_iter_item_get(iter, root, &root_key, &root_version, NULL);
     while(2*root + 1 <= end)
     {
         /* First child MUST exist */
         child = 2*root + 1;
-        castle_ct_sort_item_get(cs, child, &child_key, &child_version);
+        castle_ct_modlist_iter_item_get(iter, child, &child_key, &child_version, NULL);
         /* Check if the second child is greater than the first (MAX heap). If exists */
         if(child < end)
         {
             version_t child2_version;
             void *child2_key;
 
-            castle_ct_sort_item_get(cs, child+1, &child2_key, &child2_version);
+            castle_ct_modlist_iter_item_get(iter, child+1, &child2_key, &child2_version, NULL);
             if(castle_kv_compare(btree,
                                  child2_key, child2_version, 
                                  child_key, child_version) > 0)
@@ -654,13 +623,13 @@ static void castle_ct_heap_sift_down(struct castle_ct_sort *cs, uint32_t start, 
             struct item_idx tmp_idx;
             
             /* Swap root and child, by swapping the respective sort_idx-es */
-            tmp_idx = cs->sort_idx[child];
-            cs->sort_idx[child] = cs->sort_idx[root];
-            cs->sort_idx[root] = tmp_idx;
+            tmp_idx = iter->sort_idx[child];
+            iter->sort_idx[child] = iter->sort_idx[root];
+            iter->sort_idx[root] = tmp_idx;
             /* Adjust root idx to point to the child, this should now be considered
                for sifting down. 
                NOTE: root_key & root_version are still correct. i.e.
-               castle_ct_sort_item_get(root) would still return the same values.
+               castle_ct_modlist_iter_item_get(root) would still return the same values.
                This is because we swapped the indicies. Also, in sifting you have to
                keep perculating the SAME value down until it is in the right place.
              */
@@ -670,13 +639,13 @@ static void castle_ct_heap_sift_down(struct castle_ct_sort *cs, uint32_t start, 
     }
 }
 
-static void castle_ct_heapify(struct castle_ct_sort *cs)
+static void castle_ct_modlist_iter_heapify(c_modlist_iter_t *iter)
 {
-    uint32_t start = (cs->nr_items - 2)/2;
+    uint32_t start = (iter->nr_items - 2)/2;
 
     while(true)
     {
-        castle_ct_heap_sift_down(cs, start, cs->nr_items - 1);
+        castle_ct_modlist_iter_sift_down(iter, start, iter->nr_items - 1);
         /* Check for start == 0 here, beacuse it's unsigned, and we cannot check
            for < 0 in the loop condition */
         if(start-- == 0)
@@ -684,54 +653,108 @@ static void castle_ct_heapify(struct castle_ct_sort *cs)
     }
 }
 
-static void castle_ct_heapsort(struct castle_ct_sort *cs)
+static void castle_ct_modlist_iter_heapsort(c_modlist_iter_t *iter)
 {
     uint32_t last;
 
-    for(last = cs->nr_items-1; last > 0; last--)
+    for(last = iter->nr_items-1; last > 0; last--)
     {
         struct item_idx tmp_idx;
 
         /* Head is the greatest item, swap with last, and sift down */
-        tmp_idx = cs->sort_idx[last];
-        cs->sort_idx[last] = cs->sort_idx[0];
-        cs->sort_idx[0] = tmp_idx;
-        castle_ct_heap_sift_down(cs, 0, last-1); 
+        tmp_idx = iter->sort_idx[last];
+        iter->sort_idx[last] = iter->sort_idx[0];
+        iter->sort_idx[0] = tmp_idx;
+        castle_ct_modlist_iter_sift_down(iter, 0, last-1); 
     }
 }
 
-static USED void castle_ct_sort(struct castle_component_tree *ct)
+static void castle_ct_modlist_iter_free(c_modlist_iter_t *iter)
 {
-    struct castle_ct_sort *sort_struct;
-    uint32_t i;
+    if(iter->enumerator)
+        kfree(iter->enumerator);
+    if(iter->node_buffer)
+        vfree(iter->node_buffer);
+    if(iter->sort_idx)
+        vfree(iter->sort_idx);
+}
+
+static USED int castle_ct_modlist_iter_has_next(c_modlist_iter_t *iter)
+{
+    return (!iter->err && (iter->next_item < iter->nr_items));
+}
+
+static USED void castle_ct_modlist_iter_next(c_modlist_iter_t *iter, 
+                                             void **key_p, 
+                                             version_t *version_p, 
+                                             c_disk_blk_t *cdb_p)
+{
+    castle_ct_modlist_iter_item_get(iter, iter->next_item, key_p, version_p, cdb_p);
+    iter->next_item++;
+}
+
+static USED void castle_ct_modlist_iter_init(c_modlist_iter_t *iter)
+{
+    struct castle_component_tree *ct = iter->tree;
+
+    BUG_ON(atomic64_read(&ct->item_count) == 0);
+    /* Component tree has to be provided */
+    BUG_ON(!iter->tree);
+    iter->err = 0;
+    iter->btree = castle_btree_type_get(iter->tree->btree_type);
+    iter->enumerator = kmalloc(sizeof(struct castle_enumerator), GFP_KERNEL);
+    /* Allocate slighly more than number of nodes in the tree, to make sure everything
+       fits, even if we unlucky, and waste parts of the node in each node */
+    iter->nr_nodes = 1.1 * (atomic64_read(&ct->node_count) + 1);
+    iter->node_buffer = vmalloc(iter->nr_nodes * iter->btree->node_size * C_BLK_SIZE);
+    iter->sort_idx = vmalloc(atomic64_read(&ct->item_count) * sizeof(struct item_idx));
+    if(!iter->enumerator || !iter->node_buffer || !iter->sort_idx)
+    {
+        castle_ct_modlist_iter_free(iter);       
+        iter->err = -ENOMEM;
+        return;
+    }
+    /* Start up the child enumerator */
+    iter->enumerator->tree = ct;
+    castle_btree_enum_init(iter->enumerator); 
+    iter->next_item = 0;
+    /* Run the enumerator, sort the output. */
+    castle_ct_modlist_iter_fill(iter);
+    /* Fill may fail if the enumerator underneath fails */
+    if(iter->err)
+        return;
+    castle_ct_modlist_iter_heapify(iter);
+    castle_ct_modlist_iter_heapsort(iter);
+}
+
+#ifdef DEBUG
+c_modlist_iter_t test_iter;
+static void castle_ct_sort(struct castle_component_tree *ct)
+{
+    version_t version;
+    void *key;
+    c_disk_blk_t cdb;
+    int i=0;
 
     debug("Number of items in the component tree: %ld, number of nodes: %ld\n", 
             atomic64_read(&ct->item_count),
             atomic64_read(&ct->node_count));
 
-    BUG_ON(atomic64_read(&ct->item_count) == 0);
-    sort_struct = castle_ct_sort_init(ct); 
-    if(!sort_struct)
-    {
-        printk("Couldn't init sort struct. Exiting sort.\n");
-        return;
-    }
-    castle_ct_sort_fill(sort_struct);
-    castle_ct_heapify(sort_struct);
-    castle_ct_heapsort(sort_struct);
-    debug("=============== SORTED ================\n");
-    for(i=0; i<sort_struct->nr_items; i++)
-    {
-        version_t version;
-        void *key;
+    test_iter.tree = ct;
+    castle_ct_modlist_iter_init(&test_iter);
 
-        castle_ct_sort_item_get(sort_struct, i, &key, &version); 
-        debug("Sorted: %d: k=%p, version=%d\n",
-                i, key, version);
+    debug("=============== SORTED ================\n");
+    while(castle_ct_modlist_iter_has_next(&test_iter))
+    {
+        castle_ct_modlist_iter_next(&test_iter, &key, &version, &cdb); 
+        debug("Sorted: %d: k=%p, version=%d, cdb=(0x%x, 0x%x)\n",
+                i, key, version, cdb.disk, cdb.block);
         debug("Dereferencing first 4 bytes of the key (should be length)=0x%x.\n",
                 *((uint32_t *)key));
+        i++;
     }
 }
+#endif
 
 void castle_double_array_find(c_bvec_t *c_bvec)
 {
