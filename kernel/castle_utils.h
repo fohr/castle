@@ -3,7 +3,6 @@
 
 #include <linux/skbuff.h>
 #include "castle_public.h"
-#include "castle_utils.h"
 #include "castle.h"
 
 #define ATOMIC(_i)  ((atomic_t)ATOMIC_INIT(_i))

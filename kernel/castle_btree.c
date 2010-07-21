@@ -2232,7 +2232,7 @@ static void castle_btree_iter_leaf_ptrs_sort(c_iter_t *c_iter, int nr_ptrs)
     c_disk_blk_t last_cdb;
 
     /* We use heapsort, using Wikipedia's pseudo-code as the reference */
-#define swap(_i, _j)                                                      \
+#define heap_swap(_i, _j)                                                 \
            {c_disk_blk_t tmp_cdb;                                         \
             uint8_t      tmp_f_idx;                                       \
             tmp_cdb   = indirect_node(_i).cdb;                            \
@@ -2252,7 +2252,7 @@ static void castle_btree_iter_leaf_ptrs_sort(c_iter_t *c_iter, int nr_ptrs)
                 child = child+1;                                          \
         if(cdb_lt(indirect_node(root).cdb, indirect_node(child).cdb))     \
         {                                                                 \
-            swap(root, child)                                             \
+            heap_swap(root, child);                                       \
             root = child;                                                 \
         } else                                                            \
         {                                                                 \
@@ -2267,7 +2267,7 @@ static void castle_btree_iter_leaf_ptrs_sort(c_iter_t *c_iter, int nr_ptrs)
     /* Sort */ 
     for(end=nr_ptrs-1; end > 0; end--)
     {
-        swap(end, 0);
+        heap_swap(end, 0);
         sift_down(0, end-1);
     }
 

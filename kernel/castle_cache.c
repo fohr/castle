@@ -52,7 +52,7 @@ static int sync_c2b(void *word)
 	return 0;
 }
 
-void fastcall __lock_c2b(c2_block_t *c2b)
+void __lock_c2b(c2_block_t *c2b)
 {
 	wait_on_bit_lock(&c2b->state, C2B_lock, sync_c2b, TASK_UNINTERRUPTIBLE);
 }
@@ -63,7 +63,7 @@ static int inline trylock_c2b(c2_block_t *c2b)
     return (test_set_c2b_locked(c2b) == 0);
 }
 
-void fastcall unlock_c2b(c2_block_t *c2b)
+void unlock_c2b(c2_block_t *c2b)
 {
 #ifdef CASTLE_DEBUG    
     c2b->file = "none";
@@ -75,7 +75,7 @@ void fastcall unlock_c2b(c2_block_t *c2b)
 	wake_up_bit(&c2b->state, C2B_lock);
 }
 
-void fastcall dirty_c2b(c2_block_t *c2b)
+void dirty_c2b(c2_block_t *c2b)
 {
     unsigned long flags;
 
@@ -90,7 +90,7 @@ out:
     spin_unlock_irqrestore(&castle_cache_hash_lock, flags);
 }
 
-static void fastcall clean_c2b(c2_block_t *c2b)
+static void clean_c2b(c2_block_t *c2b)
 {
     unsigned long flags;
 

@@ -2,6 +2,7 @@
 #include <linux/miscdevice.h>
 #include <linux/skbuff.h>
 #include <asm/uaccess.h>
+#include <linux/hardirq.h>
 
 #include "castle_public.h"
 #include "castle_utils.h"
@@ -335,6 +336,7 @@ int castle_control_ioctl(struct inode *inode, struct file *filp,
         return -EFAULT;
 
     down(&castle_control_lock);
+    debug("Lock taken: in_atomic=%d.\n", in_atomic());
     //printk("Got IOCTL command %d.\n", ioctl.cmd);
     switch(ioctl.cmd)
     {
@@ -472,7 +474,7 @@ int castle_control_packet_process(struct sk_buff *skb, void *reply, int *len_p)
     uint32_t *reply32 = reply; /* For now, all reply values are 32 bit wide */
     uint32_t ctrl_op;
 
-    debug("Processing control packet.\n");
+    debug("Processing control packet (in_atomic=%d).\n", in_atomic());
 #ifdef DEBUG
     skb_print(skb);
 #endif

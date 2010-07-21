@@ -2,10 +2,15 @@
 #define __CASTLE_H__
 
 #include <linux/module.h>
+#include <linux/version.h>
 #include <linux/workqueue.h>
 #include <linux/completion.h>
 #include <linux/fs.h>
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,24)
 #include <asm/semaphore.h>
+#else
+#include <linux/semaphore.h>
+#endif
 
 
 #define USED                 __attribute__((used))

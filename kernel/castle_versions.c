@@ -1,6 +1,7 @@
 #include <linux/list.h>
 #include <linux/slab.h>
 #include <linux/hardirq.h>
+#include <linux/sched.h>
 
 #include "castle_public.h"
 #include "castle_utils.h"
