@@ -8,6 +8,7 @@
 #include <net/af_rxrpc.h>
 #include <linux/errqueue.h>
 #include <rxrpc/packet.h>
+#include <linux/sched.h>
 
 #include "castle_public.h"
 #include "castle_utils.h"

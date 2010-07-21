@@ -321,13 +321,16 @@ static inline void castle_cache_page_freelist_add(struct page *pg)
     spin_unlock(&castle_cache_freelist_lock);
 }
 
+
+static DECLARE_MUTEX(pgs_mutex);
+struct page *pgs[256];           /* May be too big for the stack, allocate static, protect with
+                                    a mutex */
 static void castle_cache_block_init(c2_block_t *c2b,
                                     c_disk_blk_t cdb, 
                                     struct list_head *pages,
                                     int nr_pages)
 {
     struct list_head *lh;
-    struct page *pgs[256];
     int i;
 
     /* c2b should only be initialised if it's not used */
@@ -341,10 +344,12 @@ static void castle_cache_block_init(c2_block_t *c2b,
     list_splice(pages, &c2b->pages);
 
     i = 0;
+    down(&pgs_mutex);
     list_for_each(lh, &c2b->pages)
         pgs[i++] = list_entry(lh, struct page, lru);
 
     c2b->buffer = vmap(pgs, i, VM_READ|VM_WRITE, PAGE_KERNEL);
+    up(&pgs_mutex);
     BUG_ON(!c2b->buffer);
 }
 

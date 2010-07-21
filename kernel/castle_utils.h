@@ -211,6 +211,24 @@ static inline int list_length(struct list_head *head)
     return length;
 }
 
+#ifdef DEBUG
+#include <linux/sched.h>
+static USED void check_stack_usage(void)
+{
+    unsigned long *n = end_of_stack(current) + 1;
+    unsigned long free;
+
+    while (*n == 0)
+        n++;
+    free = (unsigned long)n - (unsigned long)end_of_stack(current);
+
+    printk("%s used greatest stack depth: %lu bytes left, currently left %lu\n",
+                current->comm, 
+                free,
+                (unsigned long)&free - (unsigned long)end_of_stack(current));
+}
+#endif
+
 void inline list_swap(struct list_head *t1, struct list_head *t2);
 void        list_sort(struct list_head *list, 
                       int (*compare)(struct list_head *l1, struct list_head *l2));

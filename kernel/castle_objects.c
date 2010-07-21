@@ -102,8 +102,8 @@ int castle_object_replace(struct castle_rxrpc_call *call, c_vl_key_t **key, int 
     castle_object_key_free(key);
     
     //printk(" value          : %s\n", tombstone ? "tombstone" : "object");
-    printk("Btree key is:");
-    vl_key_print(btree_key);
+    //printk("Btree key is:");
+    //vl_key_print(btree_key);
 
     /* Single c_bvec for the bio */
     c_bio = castle_utils_bio_alloc(1);

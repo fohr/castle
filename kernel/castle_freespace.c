@@ -236,8 +236,6 @@ static void castle_freespace_new_slave_init(struct castle_slave *cs)
     /* TODO: other versions may already exist. We need to ask versions.c for them
        ATM we don't support adding disks after initing the FS */
     BUG_ON(castle_freespace_hash_mod(cs, 0, HASH_MOD_ADD, INVAL_MSTORE_KEY)); 
-    debug("New slave init: in_atomic()=%d\n", in_atomic());
-
     cs_sb = castle_slave_superblock_get(cs);
     BUG_ON(cs_sb->used != FREESPACE_START_BLK);
     freespace_cdb.disk  = cs->uuid;
@@ -254,11 +252,10 @@ static void castle_freespace_new_slave_init(struct castle_slave *cs)
     while(last_cdb.block <= cs_sb->size)
     {
         c2_block_t *c2b = castle_cache_page_block_get(freespace_cdb);
-
-        debug("Locking c2b->cdb=(0x%x, 0x%x): in_atomic()=%d\n", 
-            freespace_cdb.disk, freespace_cdb.block, in_atomic());
+ 
+        debug("Locking c2b->cdb=(0x%x, 0x%x)\n", 
+            freespace_cdb.disk, freespace_cdb.block);
         lock_c2b(c2b);
-        //printk("a %d, ", in_atomic());
         /* We'll overwrite entire block */
         set_c2b_uptodate(c2b);
         bitmap = c2b_buffer(c2b);
@@ -286,17 +283,14 @@ static void castle_freespace_new_slave_init(struct castle_slave *cs)
             }
         }
 
-        //printk("b %d, ", in_atomic());
         /* c2b has been changed */
         dirty_c2b(c2b);
         unlock_c2b(c2b);
         put_c2b(c2b);
 
-        //printk("c %d, ", in_atomic());
         /* Make sure that the blocks used for freespace bitmap is set as used */
         if(memcmp(&bitmap_cdb, &cdb_to_bitmap_cdb(freespace_cdb), sizeof(c_disk_blk_t)) != 0)
         {
-        //printk("d %d, ", in_atomic());
             if(!DISK_BLK_INVAL(bitmap_cdb))
             {
                 dirty_c2b(bitmap_c2b);
@@ -307,13 +301,9 @@ static void castle_freespace_new_slave_init(struct castle_slave *cs)
             bitmap_c2b = castle_cache_page_block_get(bitmap_cdb);
             lock_c2b(bitmap_c2b);
             if(!c2b_uptodate(bitmap_c2b))
-            {
-                //printk("Submitting READ.\n");
                 BUG_ON(submit_c2b_sync(READ, bitmap_c2b));
-            }
             bitmap_buf = c2b_buffer(bitmap_c2b);
         }
-        //printk("e %d, ", in_atomic());
         clear_bit(cdb_to_bitmap_off(freespace_cdb), bitmap_buf);
         /* Superblocks use up 2 blocks. */
         if(last_cdb.block == 0)
@@ -322,11 +312,9 @@ static void castle_freespace_new_slave_init(struct castle_slave *cs)
             clear_bit(1, bitmap_buf);
         }
 
-        //printk("f %d, ", in_atomic());
         freespace_cdb.block += 1;
         last_cdb.block      += C_BLK_SIZE * 8;
         cs_sb->used++;
-        //printk("g %d\n", in_atomic());
         BUG_ON(__castle_freespace_hash_mod(cs, 0, HASH_MOD_INC));
     }
     castle_slave_superblock_put(cs, 1);
