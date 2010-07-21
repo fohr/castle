@@ -36,9 +36,8 @@ struct castle_sysfs_version {
     (_kobj)->ktype = (_ktype);                                                   \
     (_kobj)->parent = (_parent);                                                 \
     _ret = kobject_set_name(_kobj, _fmt, ##_a);                                  \
-    if(_ret) goto k_err_out;                                                     \
-    _ret = kobject_register(_kobj);                                              \
-k_err_out:                                                                       \
+    if(!_ret)                                                                    \
+        _ret = kobject_register(_kobj);                                          \
     _ret;                                                                        \
 })
 #define kobject_remove(_kobj)                                                    \
