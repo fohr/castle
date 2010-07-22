@@ -765,7 +765,6 @@ int castle_version_compare(version_t version1, version_t version2)
     return ret;
 }
 
-
 /* Write root version (version 0) to mstore, which will then be processed by
    castle_versions_read() */
 int castle_versions_zero_init(c_disk_blk_t ftree_root)

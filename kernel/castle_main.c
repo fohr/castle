@@ -32,6 +32,7 @@ struct castle_regions        castle_regions;
 struct castle_component_tree castle_global_tree = {.seq         = GLOBAL_TREE,
                                                    .item_count  = {0ULL},
                                                    .btree_type  = MTREE_TYPE, 
+                                                   .dynamic     = 1,
                                                    .da          = INVAL_DA,
                                                    .level       = -1, 
                                                    .first_node  = INVAL_DISK_BLK,

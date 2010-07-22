@@ -201,11 +201,12 @@ struct castle_component_tree {
     tree_seq_t       seq;
     atomic64_t       item_count;
     btree_t          btree_type;
+    uint8_t          dynamic;           /* 1 - dynamic modlist btree, 0 - merge result */ 
     da_id_t          da;
     uint8_t          level;
     c_disk_blk_t     first_node;
     c_disk_blk_t     last_node;
-    struct semaphore mutex;          /* Mutex which protects the last_node */
+    struct semaphore mutex;             /* Mutex which protects the last_node          */
     atomic64_t       node_count;
     struct list_head da_list;
     struct list_head hash_list;
@@ -222,7 +223,8 @@ struct castle_dlist_entry {
 struct castle_clist_entry {
     da_id_t      da_id;
     uint64_t     item_count;
-    uint8_t      btree_type;
+    btree_t      btree_type;
+    uint8_t      dynamic;
     tree_seq_t   seq;
     uint8_t      level;
     c_disk_blk_t first_node;
