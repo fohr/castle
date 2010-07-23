@@ -71,6 +71,51 @@ struct castle_fs_superblock {
     c_disk_blk_t mstore[16];
 } PACKED;
 
+enum {
+    CVT_TYPE_TOMB_STONE      = 0x08,
+    CVT_TYPE_INLINE          = 0x10,
+    CVT_TYPE_ONDISK         = 0x20,
+    CVT_TYPE_INVALID
+};
+
+#define MAX_INLINE_VAL_SIZE 512
+
+struct castle_btree_val {
+    uint8_t     type;
+    uint32_t    length;
+    union {
+        uint8_t         *val;
+        c_disk_blk_t    cdb;
+    };
+} PACKED;
+typedef struct castle_btree_val c_val_tup_t;
+
+#define INVAL_VAL_TUP        ((c_val_tup_t){CVT_TYPE_INVALID, 0, {.cdb = {0, 0}}})
+
+#define CVT_TOMB_STONE(_cvt) ((_cvt).type == CVT_TYPE_TOMB_STONE)
+#define CVT_INLINE(_cvt)     ((_cvt).type == CVT_TYPE_INLINE)
+#define CVT_ONDISK(_cvt)     ((_cvt).type == CVT_TYPE_ONDISK)
+#define CVT_INVALID(_cvt)    ((_cvt).type == CVT_TYPE_INVALID)
+#define CVT_ONE_BLK(_cvt)    (CVT_ONDISK(_cvt) &&  (_cvt).length == C_BLK_SIZE)
+#define CVT_BTREE_NODE(_cvt, _btree)     \
+                            (CVT_ONDISK(_cvt) &&             \
+                            (_cvt).length == (_btree)->node_size * C_BLK_SIZE)
+#define CVT_INLINE_VAL_LENGTH(_cvt)                                      \
+                             (CVT_INLINE(_cvt)?((_cvt).length):0)
+
+#define CVT_EQUAL(_cvt1, _cvt2)                                  \
+                             ((_cvt1).type == (_cvt2).type &&         \
+                              (_cvt1).length == (_cvt2).length &&     \
+                              (!CVT_ONDISK(_cvt1) ||                \
+                               DISK_BLK_EQUAL((_cvt1).cdb, (_cvt2).cdb)))
+
+#define CDB_TO_CVT(_cvt, _cdb, _blks)                         \
+                                {                                 \
+                                    (_cvt).type = CVT_TYPE_ONDISK;    \
+                                    (_cvt).length =  _blks * C_BLK_SIZE;  \
+                                    (_cvt).cdb = _cdb;          \
+                                }
+
 
 typedef uint8_t c_mstore_id_t;
 
@@ -168,19 +213,19 @@ struct castle_btree_type {
                               void                    **key_p,            
                               version_t                *version_p,
                               int                      *is_leaf_ptr_p,
-                              c_disk_blk_t             *cdb_p);
+                              c_val_tup_t              *cvt_p);
     void    (*entry_add)     (struct castle_btree_node *node,
                               int                       idx,
                               void                     *key,            
                               version_t                 version,
                               int                       is_leaf_ptr,
-                              c_disk_blk_t              cdb);
+                              c_val_tup_t               cvt);
     void    (*entry_replace) (struct castle_btree_node *node,
                               int                       idx,
                               void                     *key,            
                               version_t                 version,
                               int                       is_leaf_ptr,
-                              c_disk_blk_t              cdb);
+                              c_val_tup_t               cvt);
     void    (*entries_drop)  (struct castle_btree_node *node,
                               int                       idx_start,
                               int                       idx_end);
@@ -305,9 +350,13 @@ typedef struct castle_bio_vec {
     };
     /* Used to thread this bvec onto a workqueue */
     struct work_struct         work;
+    /* Valuei tuple allocation callback */
+    void                     (*get_cvt)    (struct castle_bio_vec *, 
+                                            c_val_tup_t,
+                                            c_val_tup_t *);
     /* Completion callback */
-    void                     (*endfind)    (struct castle_bio_vec *, int, c_disk_blk_t);
-    void                     (*da_endfind) (struct castle_bio_vec *, int, c_disk_blk_t);
+    void                     (*endfind)    (struct castle_bio_vec *, int, c_val_tup_t);
+    void                     (*da_endfind) (struct castle_bio_vec *, int, c_val_tup_t);
 #ifdef CASTLE_DEBUG    
     unsigned long              state;
     struct castle_cache_block *locking;
@@ -364,7 +413,7 @@ typedef struct castle_iterator {
                                               int index, 
                                               void *key, 
                                               version_t version,
-                                              c_disk_blk_t cdb);
+                                              c_val_tup_t cvt);
     void                        (*node_end)  (struct castle_iterator *c_iter);
     void                        (*end)       (struct castle_iterator *c_iter, int err);
     void                         *private;

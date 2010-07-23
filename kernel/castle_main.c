@@ -818,7 +818,7 @@ static void castle_bio_data_copy(c_bvec_t *c_bvec, c2_block_t *c2b)
 static void castle_bio_data_io_error(c_bvec_t *c_bvec, int err)
 {
     BUG_ON(!err);
-     
+
     castle_debug_bvec_update(c_bvec, C_BVEC_IO_END_ERR);
     c_bvec->c_bio->err = err;
     castle_bio_put(c_bvec->c_bio);
@@ -888,14 +888,47 @@ static void castle_bio_data_io_do(c_bvec_t *c_bvec, c_disk_blk_t cdb)
     }
 }
 
-static void castle_bio_data_io_end(c_bvec_t *c_bvec, int err, c_disk_blk_t cdb)
+static void castle_bio_data_get_cvt(c_bvec_t    *c_bvec,
+                                    c_val_tup_t  prev_cvt,
+                                    c_val_tup_t *cvt)
+{
+    BUG_ON(c_bvec_data_dir(c_bvec) != WRITE); 
+
+#if 0
+    printk("GET_CVT: Key-%p, cdb=(0x%x, 0x%x)\n",
+            c_bvec->key, prev_cvt.cdb.disk, prev_cvt.cdb.block);
+#endif
+    if (!CVT_INVALID(prev_cvt))
+    {
+        BUG_ON(!CVT_ONE_BLK(prev_cvt));
+        *cvt = prev_cvt;
+        return;
+    }
+
+    cvt->type = CVT_TYPE_ONDISK;
+    cvt->length = C_BLK_SIZE;
+    /* FIXME: Don't read version without acquiring attachment/version lock */
+    cvt->cdb = castle_freespace_block_get(c_bvec->c_bio->attachment->version, 
+                                          1);
+
+#if 0
+    printk("GET_CVT-Alloc: Key-%p, cdb=(0x%x, 0x%x)\n",
+            c_bvec->key, cvt->cdb.disk, cvt->cdb.block);
+#endif
+    BUG_ON(DISK_BLK_INVAL(cvt->cdb));
+}
+
+static void castle_bio_data_io_end(c_bvec_t     *c_bvec, 
+                                   int           err, 
+                                   c_val_tup_t   cvt)
 {
     debug("Finished the IO.\n");
     castle_debug_bvec_update(c_bvec, C_BVEC_IO_END);
+   
     if(err) 
         castle_bio_data_io_error(c_bvec, err);
     else
-        castle_bio_data_io_do(c_bvec, cdb);
+        castle_bio_data_io_do(c_bvec, cvt.cdb);
 }
  
 static int castle_bio_validate(struct bio *bio)
@@ -924,7 +957,7 @@ static void castle_device_c_bvec_make(c_bio_t *c_bio,
 {
     /* Create an appropriate c_bvec */
     c_bvec_t *c_bvec = c_bio->c_bvecs + idx;
-
+                                
     /* Get a reference */
     castle_bio_get(c_bio);
 
@@ -933,6 +966,7 @@ static void castle_device_c_bvec_make(c_bio_t *c_bio,
     c_bvec->version     = INVAL_VERSION; 
     c_bvec->flags       = 0; 
     c_bvec->tree        = &castle_global_tree;
+    c_bvec->get_cvt     = castle_bio_data_get_cvt;
     c_bvec->endfind     = castle_bio_data_io_end;
     c_bvec->da_endfind  = NULL;
     if(one2one_bvec)

@@ -4,6 +4,7 @@
 #include "castle_da.h"
 #include "castle_utils.h"
 #include "castle_btree.h"
+#include "castle_freespace.h"
 #include "castle_rxrpc.h"
 
 //#define DEBUG
@@ -54,7 +55,30 @@ static void castle_object_key_free(c_vl_key_t **obj_key)
     kfree(obj_key);
 }
 
-void castle_object_replace_complete(struct castle_bio_vec *c_bvec, int err, c_disk_blk_t cdb)
+static void castle_object_replace_get_cvt(c_bvec_t    *c_bvec,
+                                          c_val_tup_t  prev_cvt,
+                                          c_val_tup_t *cvt)
+{
+    /* TODO: Add support for inline values and larger objects */
+    BUG_ON(c_bvec_data_dir(c_bvec) != WRITE); 
+
+    if (!CVT_INVALID(prev_cvt))
+    {
+        BUG_ON(!CVT_ONE_BLK(prev_cvt));
+        *cvt = prev_cvt;
+        return;
+    }
+
+    cvt->type = CVT_TYPE_ONDISK;
+    cvt->length = C_BLK_SIZE;
+    /* FIXME: Don't read version without acquiring attachment/version lock */
+    cvt->cdb = castle_freespace_block_get(c_bvec->c_bio->attachment->version, 
+                                          1);
+    BUG_ON(DISK_BLK_INVAL(cvt->cdb));
+}
+
+void castle_object_replace_complete(struct castle_bio_vec *c_bvec, int err, 
+                                    c_val_tup_t cvt)
 {
     struct castle_rxrpc_call *call = c_bvec->c_bio->rxrpc_call;
     c_bio_t *c_bio = c_bvec->c_bio;
@@ -76,8 +100,9 @@ void castle_object_replace_complete(struct castle_bio_vec *c_bvec, int err, c_di
     }
 
     /* Otherwise, write the entry out to the cache */
-    BUG_ON(DISK_BLK_INVAL(cdb));
-    c2b = castle_cache_page_block_get(cdb);
+    BUG_ON(CVT_INVALID(cvt));
+    BUG_ON(!CVT_ONDISK(cvt));
+    c2b = castle_cache_page_block_get(cvt.cdb);
     lock_c2b(c2b);
     set_c2b_uptodate(c2b);
     if(c_bvec_data_del(c_bvec))
@@ -119,6 +144,7 @@ int castle_object_replace(struct castle_rxrpc_call *call, c_vl_key_t **key, int 
 
     c_bvec = c_bio->c_bvecs; 
     c_bvec->key        = btree_key; 
+    c_bvec->get_cvt    = castle_object_replace_get_cvt;
     c_bvec->endfind    = castle_object_replace_complete;
     c_bvec->da_endfind = NULL; 
     
@@ -163,13 +189,16 @@ void castle_object_get_io_end(c2_block_t *c2b, int uptodate)
     queue_work(castle_wq, &c_bvec->work); 
 }
 
-void castle_object_get_complete(struct castle_bio_vec *c_bvec, int err, c_disk_blk_t cdb)
+void castle_object_get_complete(struct castle_bio_vec *c_bvec, int err,
+                                c_val_tup_t cvt)
 {
     struct castle_rxrpc_call *call = c_bvec->c_bio->rxrpc_call;
     c_bio_t *c_bio = c_bvec->c_bio;
     c2_block_t *c2b;
 
-    debug("Returned from btree walk with cdb=(0x%x, 0x%x)\n", cdb.disk, cdb.block);
+    BUG_ON(!CVT_ONDISK(cvt));
+    debug("Returned from btree walk with cdb=(0x%x, 0x%x)\n", cvt.cdb.disk, 
+          cvt.cdb.block);
     /* Sanity checks on the bio */
     BUG_ON(c_bvec_data_dir(c_bvec) != READ); 
     BUG_ON(atomic_read(&c_bio->count) != 1);
@@ -186,12 +215,14 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec, int err, c_disk_b
     }
 
     /* Otherwise, read the relevant disk block */
-    if(DISK_BLK_INVAL(cdb))
+    if(CVT_INVALID(cvt))
     {
         castle_rxrpc_get_complete(call, 0, NULL, 0);
         return;
     }
-    c2b = castle_cache_page_block_get(cdb);
+    /* TODO: Handle inline values */
+    BUG_ON(!CVT_ONDISK(cvt));
+    c2b = castle_cache_page_block_get(cvt.cdb);
     c_bvec->data_c2b = c2b;
     lock_c2b(c2b);
     
@@ -227,6 +258,8 @@ int castle_object_get(struct castle_rxrpc_call *call, c_vl_key_t **key)
 
     c_bvec = c_bio->c_bvecs; 
     c_bvec->key        = btree_key; 
+    /* Callback get_cvt() is not required for READ */
+    c_bvec->get_cvt    = NULL;
     c_bvec->endfind    = castle_object_get_complete;
     c_bvec->da_endfind = NULL; 
     
