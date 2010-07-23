@@ -8,7 +8,7 @@
 #include "castle_versions.h"
 #include "castle_freespace.h"
 
-#define DEBUG
+//#define DEBUG
 #ifndef DEBUG
 #define debug(_f, ...)            ((void)0)
 #define debug_verbose(_f, ...)    ((void)0)
@@ -46,6 +46,126 @@ static struct castle_component_tree* castle_ct_alloc(struct castle_double_array 
 /**********************************************************************************************/
 /* Iterators */
 
+typedef struct castle_immut_iterator {
+    struct castle_component_tree *tree;
+    struct castle_btree_type     *btree;
+    c2_block_t                   *curr_c2b;
+    struct castle_btree_node     *curr_node;
+    int                           curr_idx;
+    c2_block_t                   *next_c2b;
+} c_immut_iter_t;
+
+static void castle_ct_immut_iter_next_node_find(c_immut_iter_t *iter, c_disk_blk_t cdb)
+{
+    struct castle_btree_node *node;
+    c2_block_t *c2b;
+     
+    debug("Looking for next node starting with (0x%x, 0x%x)\n", cdb.disk, cdb.block);
+    BUG_ON(iter->next_c2b);
+    c2b=NULL;
+    while(!DISK_BLK_INVAL(cdb))
+    {
+        /* Unlock c2b if we've got one */
+        if(c2b)
+        {
+            unlock_c2b(c2b);
+            put_c2b(c2b);
+        }
+        /* Get cache block for the current c2b */
+        c2b = castle_cache_block_get(cdb, iter->btree->node_size); 
+        lock_c2b(c2b);
+        /* If c2b is not up to date, issue a blocking READ to update */
+        if(!c2b_uptodate(c2b))
+            BUG_ON(submit_c2b_sync(READ, c2b));
+        node = c2b_bnode(c2b);
+        BUG_ON(node->used == 0);
+        if(node->is_leaf)
+        {
+            debug("Cdb (0x%x, 0x%x) is leaf, exiting.\n", cdb.disk, cdb.block);
+            /* Found */
+            iter->next_c2b = c2b;
+            return;
+        }
+        cdb = node->next_node;
+        debug("Not a leaf node, moving to (0x%x, 0x%x).\n", cdb.disk, cdb.block);
+    } 
+}
+
+static void castle_ct_immut_iter_next_node(c_immut_iter_t *iter)
+{
+    BUG_ON(!iter->next_c2b);
+    /* Drop the current c2b, if one exists. */
+    if(iter->curr_c2b)
+    {
+        debug("Moving to the next block after: (0x%x, 0x%x)\n", 
+                iter->curr_c2b->cdb.disk, iter->curr_c2b->cdb.block);
+        unlock_c2b(iter->curr_c2b);
+        put_c2b(iter->curr_c2b);
+    }
+    /* next_c2b becomes curr_c2b */ 
+    iter->curr_c2b  = iter->next_c2b;
+    BUG_ON(!c2b_uptodate(iter->curr_c2b));
+    iter->curr_node = c2b_bnode(iter->curr_c2b); 
+    BUG_ON(!iter->curr_node->is_leaf ||
+           (iter->curr_node->used == 0));
+    iter->curr_idx  = 0;
+    debug("Moved to cdb=(0x%x, 0x%x)\n", 
+            iter->curr_c2b->cdb.disk, 
+            iter->curr_c2b->cdb.block); 
+
+    /* Find next c2b following the list pointers */
+    iter->next_c2b = NULL;
+    castle_ct_immut_iter_next_node_find(iter, iter->curr_node->next_node);
+}
+
+static USED void castle_ct_immut_iter_next(c_immut_iter_t *iter, 
+                                           void **key_p, 
+                                           version_t *version_p, 
+                                           c_val_tup_t *cvt_p)
+{
+    int is_leaf_ptr;
+
+    /* Check if we can read from the curr_node. If not move to the next node. */
+    if(iter->curr_idx >= iter->curr_node->used) 
+    {
+        debug("No more entries in the current node. Asking for next.\n");
+        BUG_ON(iter->curr_idx > iter->curr_node->used);
+        castle_ct_immut_iter_next_node(iter);
+        BUG_ON(iter->curr_idx >= iter->curr_node->used);
+    }
+    iter->btree->entry_get(iter->curr_node, iter->curr_idx, key_p, version_p, &is_leaf_ptr, cvt_p);
+    BUG_ON(is_leaf_ptr);
+    iter->curr_idx++;
+    debug("Returned next, curr_idx is now=%d / %d.\n", iter->curr_idx, iter->curr_node->used);
+}
+
+static USED int castle_ct_immut_iter_has_next(c_immut_iter_t *iter)
+{
+    if((iter->curr_idx >= iter->curr_node->used) && (!iter->next_c2b))
+    {
+        BUG_ON(!iter->curr_c2b);
+        unlock_c2b(iter->curr_c2b);
+        put_c2b(iter->curr_c2b);
+
+        return 0;
+    }
+
+    return 1;
+} 
+
+static USED void castle_ct_immut_iter_init(c_immut_iter_t *iter)
+{
+    debug("Initialising immut enumerator for ct id=%d\n", iter->tree->seq);
+    iter->btree     = castle_btree_type_get(iter->tree->btree_type);
+    iter->curr_c2b  = NULL;
+    iter->next_c2b  = NULL;
+    castle_ct_immut_iter_next_node_find(iter, iter->tree->first_node);
+    /* Check if we succeeded at finding at least a single node */
+    BUG_ON(!iter->next_c2b);
+    /* Init curr_c2b correctly */
+    castle_ct_immut_iter_next_node(iter);
+}
+
 typedef struct castle_modlist_iterator {
     struct castle_component_tree *tree;
     struct castle_btree_type *btree;
@@ -79,11 +199,12 @@ static void castle_da_node_buffer_init(struct castle_btree_type *btree,
     debug("Resetting btree node buffer.\n");
     /* Buffers are proper btree nodes understood by castle_btree_node_type function sets.
        Initialise the required bits of the node, so that the types don't complain. */
-    buffer->magic   = BTREE_NODE_MAGIC;
-    buffer->type    = btree->magic;
-    buffer->version = 0;
-    buffer->used    = 0;
-    buffer->is_leaf = 1;
+    buffer->magic     = BTREE_NODE_MAGIC;
+    buffer->type      = btree->magic;
+    buffer->version   = 0;
+    buffer->used      = 0;
+    buffer->is_leaf   = 1;
+    buffer->next_node = INVAL_DISK_BLK;
 }
 
 static struct castle_btree_node* castle_ct_modlist_iter_buffer_get(c_modlist_iter_t *iter, 
@@ -265,9 +386,9 @@ static int castle_ct_modlist_iter_has_next(c_modlist_iter_t *iter)
 }
 
 static void castle_ct_modlist_iter_next(c_modlist_iter_t *iter, 
-                                             void **key_p, 
-                                             version_t *version_p, 
-                                             c_val_tup_t *cvt_p)
+                                        void **key_p, 
+                                        version_t *version_p, 
+                                        c_val_tup_t *cvt_p)
 {
     castle_ct_modlist_iter_item_get(iter, iter->next_item, key_p, version_p, cvt_p);
     iter->next_item++;
@@ -538,7 +659,8 @@ struct castle_da_merge {
     void                         *iter2;
     c_merged_iter_t              *merged_iter;
     int                           root_depth;
-    c_disk_blk_t                  root_node;     /* Set when merge is completing. */
+    c2_block_t                   *last_node_c2b;
+    c_disk_blk_t                  first_node;
     int                           completing;
     struct castle_da_merge_level {
         /* Node we are currently generating, and book-keeping variables about the node. */
@@ -743,7 +865,7 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
 {
     struct castle_da_merge_level *level = merge->levels + depth;
     struct castle_btree_type *btree = merge->btree;
-    struct castle_btree_node *node, *buffer;
+    struct castle_btree_node *node, *prev_node, *buffer;
     int buffer_idx, node_idx;
     void *key;
     version_t version;
@@ -752,7 +874,7 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
 
     debug("Completing node at depth=%d\n", depth);
     BUG_ON(depth >= MAX_BTREE_DEPTH);
-    node    = c2b_bnode(level->node_c2b);
+    node      = c2b_bnode(level->node_c2b);
     BUG_ON(!node);
     buffer  = level->buffer;
     /* Version of the node should be the last valid_version */
@@ -788,7 +910,6 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
     {
         debug("Just completed the root node (depth=%d), at the end of the merge.\n",
                 depth);
-        merge->root_node = level->node_c2b->cdb; 
         goto release_node;
     }
     BUG_ON(node->used != level->valid_end_idx + 1);
@@ -803,20 +924,32 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
         node->version = version = 0;
     CDB_TO_CVT(node_cvt, level->node_c2b->cdb, level->node_c2b->nr_pages);
     castle_da_entry_add(merge, depth+1, key, node->version, node_cvt);
+release_node:
     /* For internal node, we replace the key with max_key. This is over the top. 
        (max_keys are probably only needed in the right-most path). But this shouldn't
        break anything either (higher levels in the tree will direct us correctly). */
     if(depth > 0)
         btree->entry_replace(node, level->valid_end_idx, btree->max_key, version, 0, cvt);
-release_node:
 
     debug("Releasing c2b for cdb=(0x%x, 0x%x)\n", 
             level->node_c2b->cdb.disk,
             level->node_c2b->cdb.block);
-    /* 'Commit' the node we've just completed */ 
-    dirty_c2b(level->node_c2b);
-    unlock_c2b(level->node_c2b);
-    put_c2b(level->node_c2b);
+    /* Write the list pointer into the previous node we've completed (if one exists).
+       Then release it. */
+    prev_node = merge->last_node_c2b ? c2b_bnode(merge->last_node_c2b) : NULL; 
+    if(prev_node)
+    {
+        prev_node->next_node = level->node_c2b->cdb;
+        dirty_c2b(merge->last_node_c2b);
+        unlock_c2b(merge->last_node_c2b);
+        put_c2b(merge->last_node_c2b);
+    } else
+    {
+        /* We've just created the first node, save it */
+        merge->first_node = level->node_c2b->cdb;
+    }
+    /* Save this node as the last node now */
+    merge->last_node_c2b = level->node_c2b;
     /* Reset the variables to the correct state */
     level->node_c2b      = NULL;
     level->last_key      = NULL; 
@@ -880,9 +1013,16 @@ static struct castle_component_tree* castle_da_merge_package(struct castle_da_me
         return NULL;
 
     debug("Allocated component tree id=%d\n", out_tree->seq);
-    out_tree->root_node = merge->root_node; 
+    /* Root node is the last node that gets completed, and therefore will be saved in last_node */
+    out_tree->root_node = merge->last_node_c2b->cdb; 
+    out_tree->first_node = merge->first_node;
+    out_tree->last_node = INVAL_DISK_BLK;
     debug("Root for that tree is: (0x%x, 0x%x)\n", 
             out_tree->root_node.disk, out_tree->root_node.block);
+    /* Release the last node c2b */
+    dirty_c2b(merge->last_node_c2b);
+    unlock_c2b(merge->last_node_c2b);
+    put_c2b(merge->last_node_c2b);
     /* Add the new tree to the doubling array */
     BUG_ON(merge->da->id != out_tree->da); 
     debug("Adding to doubling array, level: %d\n", out_tree->level);
@@ -953,12 +1093,14 @@ static USED struct castle_component_tree* castle_da_merge(struct castle_double_a
     merge = kzalloc(sizeof(struct castle_da_merge), GFP_KERNEL);
     if(!merge)
         goto out;
-    merge->da         = da;
-    merge->btree      = btree;
-    merge->in_tree1   = in_tree1;
-    merge->in_tree2   = in_tree2;
-    merge->root_depth = -1;
-    merge->completing = 0;
+    merge->da            = da;
+    merge->btree         = btree;
+    merge->in_tree1      = in_tree1;
+    merge->in_tree2      = in_tree2;
+    merge->root_depth    = -1;
+    merge->last_node_c2b = NULL;
+    merge->first_node    = INVAL_DISK_BLK;
+    merge->completing    = 0;
     for(i=0; i<MAX_BTREE_DEPTH; i++)
     {
         merge->levels[i].buffer        = vmalloc(btree->node_size * C_BLK_SIZE);
@@ -1462,6 +1604,9 @@ static void castle_da_bvec_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cvt)
     callback(c_bvec, err, cvt);
 }
 
+#ifdef DEBUG
+c_immut_iter_t test_iter;
+#endif
 void castle_double_array_find(c_bvec_t *c_bvec)
 {
     struct castle_attachment *att = c_bvec->c_bio->attachment;
@@ -1497,6 +1642,11 @@ if((c_bvec_data_dir(c_bvec) == READ) && (first_time) && !list_empty(&da->trees[1
         debug("Haven't completed the merge correctly!\n");
     else
         debug("Out tree created, id=%d\n", out_ct->seq);
+    debug("Iterating through all entries in out_ct.\n");
+    test_iter.tree = out_ct;
+    castle_ct_immut_iter_init(&test_iter);
+    while(castle_ct_immut_iter_has_next(&test_iter))
+        castle_ct_immut_iter_next(&test_iter, NULL, NULL, NULL);
 }
 #endif
 
