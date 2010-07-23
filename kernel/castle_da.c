@@ -743,6 +743,8 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
     /* Version of the node should be the last valid_version */
     debug("Node version=%d\n", level->valid_version);
     node->version = level->valid_version;
+    if(depth > 0)
+        node->is_leaf = 0;
     /* When a node is complete, we need to copy the entires after valid_end_idx to 
        the corresponding buffer */
     BUG_ON(buffer->used != 0);
