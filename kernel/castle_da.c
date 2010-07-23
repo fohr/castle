@@ -329,13 +329,29 @@ typedef struct castle_merged_iterator {
     } *iterators;
 } c_merged_iter_t;
 
+static void castle_ct_merged_iter_consume(c_merged_iter_t *iter,
+                                          struct component_iterator *comp_iter)
+{
+    BUG_ON(!comp_iter->cached);
+    /* This will effectively consume the cached entry */
+    comp_iter->cached = 0;
+    if(!comp_iter->has_next_fn(comp_iter->iterator))
+    {
+        comp_iter->completed = 1;
+        iter->non_empty_cnt--;
+        debug("A component iterator run out of stuff, we are left with %d iterators.\n",
+                iter->non_empty_cnt);
+    }
+}
+                                    
+
 static void castle_ct_merged_iter_next(c_merged_iter_t *iter,
                                        void **key_p,
                                        version_t *version_p,
                                        c_disk_blk_t *cdb_p)
 {
     struct component_iterator *comp_iter; 
-    int i, smallest_idx;
+    int i, smallest_idx, kv_cmp;
     void *smallest_k;
     version_t smallest_v;
     c_disk_blk_t smallest_cdb;
@@ -366,18 +382,25 @@ static void castle_ct_merged_iter_next(c_merged_iter_t *iter,
         }
 
         /* Check how does the smallest entry so far compare to this entry */
-        if((smallest_idx < 0) ||
-           (castle_kv_compare(iter->btree,
-                              comp_iter->cached_entry.k,
-                              comp_iter->cached_entry.v,
-                              smallest_k,
-                              smallest_v) < 0))
+        kv_cmp = (smallest_idx >= 0) ? castle_kv_compare(iter->btree,
+                                                         comp_iter->cached_entry.k,
+                                                         comp_iter->cached_entry.v,
+                                                         smallest_k,
+                                                         smallest_v)
+                                     : -1;
+        if(kv_cmp < 0)
         {
             debug("So far the smallest entry is from iterator: %d.\n", i);
             smallest_idx = i;
             smallest_k = comp_iter->cached_entry.k;
             smallest_v = comp_iter->cached_entry.v;
             smallest_cdb = comp_iter->cached_entry.cdb;
+        }
+
+        if(kv_cmp == 0)
+        {
+            debug("Duplicate entry found. Removing.\n");
+            castle_ct_merged_iter_consume(iter, comp_iter);
         }
     }
 
@@ -387,15 +410,7 @@ static void castle_ct_merged_iter_next(c_merged_iter_t *iter,
     debug("Smallest entry is from iterator: %d.\n", smallest_idx);
     /* The cache for smallest_idx iterator cached entry should be removed */ 
     comp_iter = iter->iterators + smallest_idx;
-    comp_iter->cached = 0;
-    if(!comp_iter->has_next_fn(comp_iter->iterator))
-    {
-        debug("Iterator: %d run out of stuff, we don't have anything cached either.\n", 
-                smallest_idx);
-        comp_iter->completed = 1;
-        iter->non_empty_cnt--;
-    }
-
+    castle_ct_merged_iter_consume(iter, comp_iter);
     /* Return the smallest entry */
     if(key_p) *key_p = smallest_k;
     if(version_p) *version_p = smallest_v;
