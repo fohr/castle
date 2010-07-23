@@ -14,7 +14,8 @@
 #define debug_verbose(_f, ...)    ((void)0)
 #else
 #define debug(_f, _a...)          (printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
-#define debug_verbose(_f, _a...)  (printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
+#define debug_verbose(_f, ...)    ((void)0)
+//#define debug_verbose(_f, _a...)  (printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
 #endif
 
 #define MAX_DA_LEVEL                    (10)
@@ -517,6 +518,8 @@ struct castle_da_merge {
     void                         *iter1;
     void                         *iter2;
     c_merged_iter_t              *merged_iter;
+    int                           root_depth;
+    int                           completing;
     struct castle_da_merge_level {
         /* Node we are currently generating, and book-keeping variables about the node. */
         c2_block_t               *node_c2b;
@@ -641,7 +644,13 @@ static inline void castle_da_entry_add(struct castle_da_merge *merge,
     if(!level->node_c2b)
     {
         c_disk_blk_t cdb;
-
+        
+        if(merge->root_depth < depth)
+        {
+            debug("Creating a new root level: %d\n", depth);
+            BUG_ON(merge->root_depth != depth - 1);
+            merge->root_depth = depth; 
+        }
         BUG_ON(level->next_idx      != 0);
         BUG_ON(level->valid_end_idx >= 0);
         debug("Allocating a new node at depth: %d\n", depth);
@@ -751,13 +760,21 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
     /* Now that entries are safely in the buffer, drop them from the node */ 
     if((level->valid_end_idx + 1) <= (node->used - 1))
         btree->entries_drop(node, level->valid_end_idx + 1, node->used - 1);
-    /* Insert correct pointer in the parent */ 
+    /* Insert correct pointer in the parent, unless we've just completed the
+       root node at the end of the merge. */ 
+    if(merge->completing && (merge->root_depth == depth) && (buffer->used == 0)) 
+    {
+        debug("Just completed the root node (depth=%d), at the end of the merge.\n",
+                depth);
+        goto release_node;
+    }
     BUG_ON(node->used != level->valid_end_idx + 1);
     btree->entry_get(node, level->valid_end_idx, &key, NULL, &leaf_ptr, NULL);
-    debug("Inserting into parent key=%p, *key=%d, version=%d\n",
-            key, *((uint32_t*)key), node->version);
+    debug("Inserting into parent key=%p, *key=%d, version=%d, buffer->used=%d\n",
+            key, *((uint32_t*)key), node->version, buffer->used);
     BUG_ON(leaf_ptr);
     castle_da_entry_add(merge, depth+1, key, node->version, level->node_c2b->cdb);
+release_node:
 
     debug("Releasing c2b for cdb=(0x%x, 0x%x)\n", 
             level->node_c2b->cdb.disk,
@@ -774,7 +791,7 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
     level->valid_version = INVAL_VERSION;  
 }
        
-static inline void castle_da_nodes_complete(struct castle_da_merge *merge, int depth, int end)
+static inline void castle_da_nodes_complete(struct castle_da_merge *merge, int depth)
 {
     struct castle_da_merge_level *level;
     struct castle_btree_node *buffer;
@@ -783,19 +800,6 @@ static inline void castle_da_nodes_complete(struct castle_da_merge *merge, int d
     c_disk_blk_t cdb;
     void *key;
     
-    /* Special case to handle completing the root node when merge firishes */
-    BUG_ON(depth + 1 > MAX_BTREE_DEPTH);
-    level = merge->levels + depth;
-    if(end && (level->next_idx < 0))
-    {
-        level++;
-        if(level->next_idx == 0)
-        {
-            debug("Completing the root of fully merged tree at depth=%d!.\n", depth);
-            return;
-        }
-    }
-
     debug("Checking if we need to complete nodes starting at level: %d\n", depth);
     /* Check if the level 'depth' node has been completed, which may trigger a cascade of
        completes up the tree. */ 
@@ -836,6 +840,7 @@ static void castle_da_merge_complete(struct castle_da_merge *merge)
     struct castle_da_merge_level *level;
     int i;
 
+    merge->completing = 1;
     /* Force the nodes to complete by setting next_idx negative. Deal with the
        leaf level first (this may require multiple node completes). Then move
        on to the second level etc. Prevent node overflows using nodes_complete(). */ 
@@ -847,7 +852,7 @@ static void castle_da_merge_complete(struct castle_da_merge *merge)
         {
             debug("Artificially completing the node at depth: %d\n", i);
             level->next_idx = -1;
-            castle_da_nodes_complete(merge, i, 1);
+            castle_da_nodes_complete(merge, i);
         } 
     }
 }
@@ -874,9 +879,11 @@ static USED int castle_da_merge(struct castle_component_tree *in_tree1,
     merge = kzalloc(sizeof(struct castle_da_merge), GFP_KERNEL);
     if(!merge)
         goto out;
-    merge->btree    = btree;
-    merge->in_tree1 = in_tree1;
-    merge->in_tree2 = in_tree2;
+    merge->btree      = btree;
+    merge->in_tree1   = in_tree1;
+    merge->in_tree2   = in_tree2;
+    merge->root_depth = -1;
+    merge->completing = 0;
     for(i=0; i<MAX_BTREE_DEPTH; i++)
     {
         merge->levels[i].buffer        = vmalloc(btree->node_size * C_BLK_SIZE);
@@ -905,7 +912,7 @@ static USED int castle_da_merge(struct castle_component_tree *in_tree1,
         debug("Merging entry id=%d: k=%p, *k=%d, version=%d, cdb=(0x%x, 0x%x)\n",
                 i, key, *((uint32_t *)key), version, cdb.disk, cdb.block);
         castle_da_entry_add(merge, 0, key, version, cdb);
-        castle_da_nodes_complete(merge, 0, 0);
+        castle_da_nodes_complete(merge, 0);
         i++;
     }
     debug("Flushing the last nodes.\n");
@@ -1313,7 +1320,7 @@ static struct castle_component_tree* castle_da_ct_next(struct castle_component_t
     struct list_head *ct_list;
     uint8_t level;
 
-    debug("Asked for component tree after %d\n", ct->seq);
+    debug_verbose("Asked for component tree after %d\n", ct->seq);
     BUG_ON(!da);
     for(level = ct->level, ct_list = &ct->da_list; 
         level < MAX_DA_LEVEL; 
@@ -1322,7 +1329,7 @@ static struct castle_component_tree* castle_da_ct_next(struct castle_component_t
         if(!list_is_last(ct_list, &da->trees[level]))
         {
             next_ct = list_entry(ct_list->next, struct castle_component_tree, da_list); 
-            debug("Found component tree %d\n", next_ct->seq);
+            debug_verbose("Found component tree %d\n", next_ct->seq);
             BUG_ON(next_ct->seq > ct->seq);
 
             return next_ct;
@@ -1343,7 +1350,7 @@ static void castle_da_bvec_complete(c_bvec_t *c_bvec, int err, c_disk_blk_t cdb)
     /* If the key hasn't been found, check in the next tree. */
     if(DISK_BLK_INVAL(cdb) && (!err) && (c_bvec_data_dir(c_bvec) == READ))
     {
-        debug("Checking next ct.\n");
+        debug_verbose("Checking next ct.\n");
         ct = castle_da_ct_next(ct);
         if(!ct)
         {
@@ -1352,7 +1359,7 @@ static void castle_da_bvec_complete(c_bvec_t *c_bvec, int err, c_disk_blk_t cdb)
         }
         /* If there is the next tree, try searching in it now */
         c_bvec->tree = ct;
-        debug("Scheduling btree read in the next tree.\n");
+        debug_verbose("Scheduling btree read in the next tree.\n");
         castle_btree_find(c_bvec);
         return;
     }
