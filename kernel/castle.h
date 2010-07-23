@@ -204,6 +204,7 @@ struct castle_component_tree {
     uint8_t          dynamic;           /* 1 - dynamic modlist btree, 0 - merge result */ 
     da_id_t          da;
     uint8_t          level;
+    c_disk_blk_t     root_node;         /* Only for non-dynamic trees at the moment    */
     c_disk_blk_t     first_node;
     c_disk_blk_t     last_node;
     struct semaphore mutex;             /* Mutex which protects the last_node          */
@@ -227,6 +228,7 @@ struct castle_clist_entry {
     uint8_t      dynamic;
     tree_seq_t   seq;
     uint8_t      level;
+    c_disk_blk_t root_node;
     c_disk_blk_t first_node;
     c_disk_blk_t last_node;
     uint64_t     node_count;
