@@ -57,9 +57,9 @@ TAS_CACHE_FNS(dirty, dirty)
 CACHE_FNS(lock, locked)
 TAS_CACHE_FNS(lock, locked)
 
-void fastcall __lock_c2b(c2_block_t *c2b);
-void fastcall unlock_c2b(c2_block_t *c2b);
-void fastcall dirty_c2b(c2_block_t *c2b);
+void __lock_c2b(c2_block_t *c2b);
+void unlock_c2b(c2_block_t *c2b);
+void dirty_c2b(c2_block_t *c2b);
 
 #ifdef CASTLE_DEBUG
 #define lock_c2b(_c2b)                \

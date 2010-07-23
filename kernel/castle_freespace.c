@@ -1,4 +1,5 @@
 #include <linux/sched.h>
+#include <linux/hardirq.h>
 
 #include "castle_public.h"
 #include "castle.h"
@@ -235,7 +236,6 @@ static void castle_freespace_new_slave_init(struct castle_slave *cs)
     /* TODO: other versions may already exist. We need to ask versions.c for them
        ATM we don't support adding disks after initing the FS */
     BUG_ON(castle_freespace_hash_mod(cs, 0, HASH_MOD_ADD, INVAL_MSTORE_KEY)); 
-
     cs_sb = castle_slave_superblock_get(cs);
     BUG_ON(cs_sb->used != FREESPACE_START_BLK);
     freespace_cdb.disk  = cs->uuid;
@@ -252,7 +252,9 @@ static void castle_freespace_new_slave_init(struct castle_slave *cs)
     while(last_cdb.block <= cs_sb->size)
     {
         c2_block_t *c2b = castle_cache_page_block_get(freespace_cdb);
-
+ 
+        debug("Locking c2b->cdb=(0x%x, 0x%x)\n", 
+            freespace_cdb.disk, freespace_cdb.block);
         lock_c2b(c2b);
         /* We'll overwrite entire block */
         set_c2b_uptodate(c2b);
@@ -272,7 +274,7 @@ static void castle_freespace_new_slave_init(struct castle_slave *cs)
             {
                 if(i % 8 != 0)
                 {
-                    clear_bit(i, bitmap);
+                    clear_bit(i, (unsigned long *)bitmap);
                     i++;
                     continue;
                 }
@@ -376,7 +378,7 @@ static int castle_freespace_bitmap_block_get(c2_block_t *bitmap_c2b,
                                              int size)
 {
     /* Search for contiguous run of set bits of size 'size' starting with bit_idx */
-    uint64_t *bitmap_buf;
+    volatile unsigned long *bitmap_buf;
     int i;
 
     /* TODO: This can be optimised with the use of the following snipet of code:
@@ -560,7 +562,7 @@ void castle_freespace_block_free(c_disk_blk_t cdb, version_t version, int size)
     struct castle_slave_superblock *cs_sb;
     c_disk_blk_t bitmap_cdb;
     c2_block_t *bitmap_c2b;
-    volatile uint64_t *bitmap_buf;
+    volatile unsigned long *bitmap_buf;
     int i, position;
 
     BUG_ON(!slave);

@@ -1217,6 +1217,30 @@ struct castle_btree_type *castle_btree_type_get(btree_t type)
 /**********************************************************************************************/
 /* Common modlist btree code */
 
+static inline c_disk_blk_t castle_btree_root_get(c_bvec_t *c_bvec)
+{
+    struct castle_attachment *att = c_bvec->c_bio->attachment;
+    c_disk_blk_t root_cdb;
+
+    down_read(&att->lock);
+    c_bvec->version = att->version;
+    /* Lock the pointer to the root node.
+       This is unlocked by the (poorly named) castle_btree_c2b_forget() */
+    castle_version_lock(c_bvec->version);
+    if(c_bvec->tree->dynamic)
+        root_cdb = castle_version_root_get(c_bvec->version, 
+                                           c_bvec->tree->seq);
+    else
+    {
+        root_cdb = c_bvec->tree->root_node;
+        printk("Doing static btree walk, starting with root node: (0x%x, 0x%x)\n", 
+                root_cdb.disk, root_cdb.block);
+    }
+    up_read(&att->lock);
+
+    return root_cdb;
+}
+  
 static void castle_btree_c2b_forget(c_bvec_t *c_bvec);
 static void __castle_btree_find(struct castle_btree_type *btree,
                                 c_bvec_t *c_bvec,
@@ -2178,21 +2202,14 @@ static void __castle_btree_find(struct castle_btree_type *btree,
 static void _castle_btree_find(struct work_struct *work)
 {
     c_bvec_t *c_bvec = container_of(work, c_bvec_t, work);
-    struct castle_attachment *att = c_bvec->c_bio->attachment;
     struct castle_btree_type *btree = castle_btree_type_get(c_bvec->tree->btree_type);
     c_disk_blk_t root_cdb;
 
     c_bvec->btree_depth       = 0;
     c_bvec->btree_node        = NULL;
     c_bvec->btree_parent_node = NULL;
-    /* Lock the pointer to the root node.
-       This is unlocked by the (poorly named) castle_btree_c2b_forget() */
-    down_read(&att->lock);
-    c_bvec->version = att->version;
-    castle_version_lock(c_bvec->version);
-    root_cdb = castle_version_root_get(c_bvec->version, 
-                                       c_bvec->tree->seq);
-    up_read(&att->lock);
+    /* This will lock the version. */
+    root_cdb = castle_btree_root_get(c_bvec);
     if(DISK_BLK_INVAL(root_cdb))
     {
         /* Complete the request early, end exit */
@@ -2372,7 +2389,7 @@ static void castle_btree_iter_leaf_ptrs_sort(c_iter_t *c_iter, int nr_ptrs)
     c_disk_blk_t last_cdb;
 
     /* We use heapsort, using Wikipedia's pseudo-code as the reference */
-#define swap(_i, _j)                                                      \
+#define heap_swap(_i, _j)                                                 \
            {c_disk_blk_t tmp_cdb;                                         \
             uint8_t      tmp_f_idx;                                       \
             tmp_cdb   = indirect_node(_i).cdb;                            \
@@ -2392,7 +2409,7 @@ static void castle_btree_iter_leaf_ptrs_sort(c_iter_t *c_iter, int nr_ptrs)
                 child = child+1;                                          \
         if(cdb_lt(indirect_node(root).cdb, indirect_node(child).cdb))     \
         {                                                                 \
-            swap(root, child)                                             \
+            heap_swap(root, child);                                       \
             root = child;                                                 \
         } else                                                            \
         {                                                                 \
@@ -2407,7 +2424,7 @@ static void castle_btree_iter_leaf_ptrs_sort(c_iter_t *c_iter, int nr_ptrs)
     /* Sort */ 
     for(end=nr_ptrs-1; end > 0; end--)
     {
-        swap(end, 0);
+        heap_swap(end, 0);
         sift_down(0, end-1);
     }
 

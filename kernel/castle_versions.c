@@ -1,6 +1,7 @@
 #include <linux/list.h>
 #include <linux/slab.h>
 #include <linux/hardirq.h>
+#include <linux/sched.h>
 
 #include "castle_public.h"
 #include "castle_utils.h"
@@ -763,7 +764,6 @@ int castle_version_compare(version_t version1, version_t version2)
 
     return ret;
 }
-
 
 /* Write root version (version 0) to mstore, which will then be processed by
    castle_versions_read() */

@@ -6,6 +6,7 @@
 #include <linux/random.h>
 #include <linux/crc32.h>
 #include <linux/skbuff.h>
+#include <linux/hardirq.h>
 
 #include "castle_public.h"
 #include "castle_compile.h"
@@ -31,8 +32,10 @@ struct castle_regions        castle_regions;
 struct castle_component_tree castle_global_tree = {.seq         = GLOBAL_TREE,
                                                    .item_count  = {0ULL},
                                                    .btree_type  = MTREE_TYPE, 
+                                                   .dynamic     = 1,
                                                    .da          = INVAL_DA,
                                                    .level       = -1, 
+                                                   .root_node   = INVAL_DISK_BLK,
                                                    .first_node  = INVAL_DISK_BLK,
                                                    .last_node   = INVAL_DISK_BLK,
                                                    .node_count  = {0ULL},
@@ -369,6 +372,7 @@ static int castle_slave_superblocks_init(struct castle_slave *cs)
     BUG_ON(!c2b_uptodate(cs->fs_sblk));
     fs_sb = ((struct castle_fs_superblock*) c2b_buffer(cs->fs_sblk));
 
+    debug("In superblocks_init: in_atomic()=%d\n", in_atomic());
     if(!cs->new_dev)
     {
                  ret = castle_slave_superblock_validate(cs_sb);
@@ -387,6 +391,7 @@ static int castle_slave_superblocks_init(struct castle_slave *cs)
         printk("Done.\n");
     }
     castle_slave_superblock_put(cs, cs->new_dev);
+    debug("Before slave init: in_atomic()=%d\n", in_atomic());
     castle_freespace_slave_init(cs, cs->new_dev);
     castle_fs_superblock_put(cs, 0);
 
@@ -458,6 +463,7 @@ struct castle_slave* castle_claim(uint32_t new_dev)
     struct castle_slave *cs = NULL;
     static int slave_id = 0;
 
+    debug("Claiming: in_atomic=%d.\n", in_atomic());
     if(!(cs = kzalloc(sizeof(struct castle_slave), GFP_KERNEL)))
         goto err_out;
     cs->id = slave_id++;
@@ -501,7 +507,8 @@ struct castle_slave* castle_claim(uint32_t new_dev)
         goto err_out;
     }
     cs_added = 1;
-
+    
+    debug("Initing superblocks: in_atomic=%d.\n", in_atomic());
     err = castle_slave_superblocks_init(cs);
     if(err)
     {
@@ -523,7 +530,11 @@ err_out:
     if(cs_added)     list_del(&cs->list);
     if(cs->sblk)     put_c2b(cs->sblk);
     if(cs->fs_sblk)  put_c2b(cs->fs_sblk);
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,24)
     if(bdev_claimed) blkdev_put(bdev);
+#else
+    if(bdev_claimed) blkdev_put(bdev, FMODE_READ|FMODE_WRITE);
+#endif
     if(cs)           kfree(cs);
     return NULL;    
 }
@@ -533,7 +544,11 @@ void castle_release(struct castle_slave *cs)
     castle_events_slave_release(cs->uuid);
     castle_sysfs_slave_del(cs);
     bd_release(cs->bdev);
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,24)
     blkdev_put(cs->bdev);
+#else
+    blkdev_put(cs->bdev, FMODE_READ|FMODE_WRITE);
+#endif
     list_del(&cs->list);
     kfree(cs);
 }
@@ -678,23 +693,16 @@ static void castle_regions_free(void)
     }
 }
 
-static int castle_open(struct inode *inode, struct file *filp)
+static int castle_open(struct castle_attachment *dev)
 {
-	struct castle_attachment *dev = inode->i_bdev->bd_disk->private_data;
-
-	filp->private_data = dev;
 	down_write(&dev->lock);
-	if (! dev->users) 
-		check_disk_change(inode->i_bdev);
 	dev->users++;
 	up_write(&dev->lock);
 	return 0;
 }
 
-static int castle_close(struct inode *inode, struct file *filp)
+static int castle_close(struct castle_attachment *dev)
 {
-	struct castle_attachment *dev = inode->i_bdev->bd_disk->private_data;
-
 	down_write(&dev->lock);
 	dev->users--;
 	up_write(&dev->lock);
@@ -702,13 +710,43 @@ static int castle_close(struct inode *inode, struct file *filp)
 	return 0;
 }
 
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,24)
+static int castle_old_open(struct inode *inode, struct file *filp)
+{
+    return castle_open(inode->i_bdev->bd_disk->private_data);
+}
+
+static int castle_old_close(struct inode *inode, struct file *filp)
+{
+    return castle_close(inode->i_bdev->bd_disk->private_data);
+}
+
 static struct block_device_operations castle_bd_ops = {
 	.owner           = THIS_MODULE,
-	.open 	         = castle_open,
-	.release 	     = castle_close,
+	.open 	         = castle_old_open,
+	.release 	     = castle_old_close,
 	.media_changed   = NULL,
 	.revalidate_disk = NULL,
 };
+#else
+static int castle_new_open(struct block_device *bdev, fmode_t mode)
+{
+    return castle_open(bdev->bd_disk->private_data);
+}
+
+static int castle_new_close(struct gendisk *gendisk, fmode_t mode)
+{
+    return castle_close(gendisk->private_data);
+}
+
+static struct block_device_operations castle_bd_ops = {
+	.owner           = THIS_MODULE,
+	.open 	         = castle_new_open,
+	.release 	     = castle_new_close,
+	.media_changed   = NULL,
+	.revalidate_disk = NULL,
+};
+#endif
 
 void castle_bio_get(c_bio_t *c_bio)
 {
@@ -1298,7 +1336,7 @@ static void castle_slaves_spindowns_check(unsigned long first)
 
     /* Reschedule ourselves */
     setup_timer(&spindown_timer, castle_slaves_spindowns_check, 0);
-    __mod_timer(&spindown_timer, jiffies + sleep);
+    mod_timer(&spindown_timer, jiffies + sleep);
 }
 
 static int castle_slaves_init(void)

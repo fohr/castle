@@ -27,6 +27,40 @@ struct castle_sysfs_version {
     struct castle_sysfs_entry csys_entry; 
 };
 
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,24)
+/* Helper function which mimicks newer sysfs interfaces */
+#define kobject_tree_add(_kobj, _parent, _ktype, _fmt, _a...)                    \
+({                                                                               \
+    int _ret = 0;                                                                \
+                                                                                 \
+    (_kobj)->ktype = (_ktype);                                                   \
+    (_kobj)->parent = (_parent);                                                 \
+    _ret = kobject_set_name(_kobj, _fmt, ##_a);                                  \
+    if(!_ret)                                                                    \
+        _ret = kobject_register(_kobj);                                          \
+    _ret;                                                                        \
+})
+#define kobject_remove(_kobj)                                                    \
+    kobject_unregister(_kobj)
+
+#define fs_kobject  (&fs_subsys.kobj)
+
+#else /* KERNEL_VERSION(2,6,24+) */
+
+#define kobject_tree_add(_kobj, _parent, _ktype, _fmt, _a...)                    \
+({                                                                               \
+    int _ret;                                                                    \
+                                                                                 \
+    kobject_init(_kobj, _ktype);                                                 \
+    _ret = kobject_add(_kobj, _parent, _fmt, ##_a);                              \
+    _ret;                                                                        \
+})
+
+#define kobject_remove(_kobj)                                                    \
+    kobject_del(_kobj)
+#define fs_kobject  (fs_kobj)
+#endif
+
 
 static ssize_t versions_list_show(struct kobject *kobj, 
 							      struct attribute *attr, 
@@ -427,25 +461,28 @@ int castle_sysfs_slave_add(struct castle_slave *slave)
     int ret;
     
     memset(&slave->kobj, 0, sizeof(struct kobject));
-    slave->kobj.parent = &castle_slaves.kobj; 
-    slave->kobj.ktype  = &castle_slave_ktype; 
-    ret = kobject_set_name(&slave->kobj, "%x", slave->uuid);
+    ret = kobject_tree_add(&slave->kobj, 
+                           &castle_slaves.kobj, 
+                           &castle_slave_ktype, 
+                           "%x", slave->uuid);
     if(ret < 0) 
         return ret;
-    ret = kobject_register(&slave->kobj);
-    if(ret < 0)
-        return ret;
+    /* TODO: do we need a link for >32?. If so, how do we get hold of the right kobj */ 
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,24)
     ret = sysfs_create_link(&slave->kobj, &slave->bdev->bd_disk->kobj, "dev");
     if (ret < 0)
         return ret;
+#endif
 
     return 0;
 }
 
 void castle_sysfs_slave_del(struct castle_slave *slave)
 {
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,24)
     sysfs_remove_link(&slave->kobj, "dev");
-    kobject_unregister(&slave->kobj);
+#endif
+    kobject_remove(&slave->kobj);
 }
 
 /* Definition of devices sysfs directory attributes */
@@ -499,29 +536,30 @@ int castle_sysfs_device_add(struct castle_attachment *device)
     int ret;
 
     memset(&device->kobj, 0, sizeof(struct kobject));
-    device->kobj.parent = &castle_attachments.devices_kobj; 
-    device->kobj.ktype  = &castle_device_ktype; 
-    ret = kobject_set_name(&device->kobj, 
+    ret = kobject_tree_add(&device->kobj, 
+                           &castle_attachments.devices_kobj,
+                           &castle_device_ktype,
                            "%x", 
                            new_encode_dev(MKDEV(device->dev.gd->major, 
                                                 device->dev.gd->first_minor)));
     if(ret < 0) 
         return ret;
-    ret = kobject_register(&device->kobj);
-    if(ret < 0)
-        return ret;
 
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,24)
     ret = sysfs_create_link(&device->kobj, &device->dev.gd->kobj, "dev");
     if (ret < 0)
         return ret;
+#endif
 
     return 0;
 }
 
 void castle_sysfs_device_del(struct castle_attachment *device)
 {
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,24)
     sysfs_remove_link(&device->kobj, "dev");
-    kobject_unregister(&device->kobj);
+#endif
+    kobject_remove(&device->kobj);
 }
 
 /* Definition of each collection sysfs directory attributes */
@@ -551,15 +589,12 @@ int castle_sysfs_collection_add(struct castle_attachment *collection)
     int ret;
 
     memset(&collection->kobj, 0, sizeof(struct kobject));
-    collection->kobj.parent = &castle_attachments.collections_kobj; 
-    collection->kobj.ktype  = &castle_collection_ktype; 
-    ret = kobject_set_name(&collection->kobj, 
+    ret = kobject_tree_add(&collection->kobj, 
+                           &castle_attachments.collections_kobj,
+                           &castle_collection_ktype,
                            "%x", 
                            collection->col.id);
     if(ret < 0) 
-        return ret;
-    ret = kobject_register(&collection->kobj);
-    if(ret < 0)
         return ret;
 
     return 0;
@@ -567,7 +602,7 @@ int castle_sysfs_collection_add(struct castle_attachment *collection)
 
 void castle_sysfs_collection_del(struct castle_attachment *collection)
 {
-    kobject_unregister(&collection->kobj);
+    kobject_remove(&collection->kobj);
 }
 
 
@@ -670,14 +705,11 @@ int castle_sysfs_region_add(struct castle_region *region)
     int ret;
 
     memset(&region->kobj, 0, sizeof(struct kobject));
-    region->kobj.parent = &castle_regions.kobj; 
-    region->kobj.ktype  = &castle_region_ktype; 
-    ret = kobject_set_name(&region->kobj, "%x", region->id);
+    ret = kobject_tree_add(&region->kobj, 
+                           &castle_regions.kobj, 
+                           &castle_region_ktype, 
+                           "%x", region->id);
     if(ret < 0) 
-        return ret;
-        
-    ret = kobject_register(&region->kobj);
-    if(ret < 0)
         return ret;
 
     ret = sysfs_create_link(&region->kobj, &region->slave->kobj, "slave");
@@ -690,7 +722,7 @@ int castle_sysfs_region_add(struct castle_region *region)
 void castle_sysfs_region_del(struct castle_region *region)
 {
     sysfs_remove_link(&region->kobj, "slave");
-    kobject_unregister(&region->kobj);
+    kobject_remove(&region->kobj);
 }
 
 /* TRANSFERS */
@@ -809,14 +841,11 @@ int castle_sysfs_transfer_add(struct castle_transfer *transfer)
     int ret;
 
     memset(&transfer->kobj, 0, sizeof(struct kobject));
-    transfer->kobj.parent = &castle_transfers.kobj; 
-    transfer->kobj.ktype  = &castle_transfer_ktype; 
-    ret = kobject_set_name(&transfer->kobj, "%x", transfer->id);
+    ret = kobject_tree_add(&transfer->kobj, 
+                           &castle_transfers.kobj,
+                           &castle_transfer_ktype, 
+                           "%x", transfer->id);
     if(ret < 0) 
-        return ret;
-        
-    ret = kobject_register(&transfer->kobj);
-    if(ret < 0)
         return ret;
         
     return 0;
@@ -824,7 +853,7 @@ int castle_sysfs_transfer_add(struct castle_transfer *transfer)
 
 void castle_sysfs_transfer_del(struct castle_transfer *transfer)
 {
-    kobject_unregister(&transfer->kobj);
+    kobject_remove(&transfer->kobj);
 }
 
 /* Initialisation of sysfs dirs == kobjs registration */
@@ -833,77 +862,69 @@ int castle_sysfs_init(void)
     int ret;
 
     memset(&castle.kobj, 0, sizeof(struct kobject));
-    castle.kobj.parent = &fs_subsys.kobj;
-    castle.kobj.kset   = &fs_subsys;
-    castle.kobj.ktype  = &castle_root_ktype;
-    ret = kobject_set_name(&castle.kobj, "%s", "castle-fs");
-    if(ret < 0) goto out1;
-    ret = kobject_register(&castle.kobj);
+    ret = kobject_tree_add(&castle.kobj, 
+                            fs_kobject, 
+                           &castle_root_ktype, 
+                           "%s", "castle-fs");
     if(ret < 0) goto out1;
 
     memset(&castle_volumes.kobj, 0, sizeof(struct kobject));
-    castle_volumes.kobj.parent = &castle.kobj;
-    castle_volumes.kobj.ktype  = &castle_volumes_ktype;
-    ret = kobject_set_name(&castle_volumes.kobj, "%s", "versions");
-    if(ret < 0) goto out2;
-    ret = kobject_register(&castle_volumes.kobj);
+    ret = kobject_tree_add(&castle_volumes.kobj, 
+                           &castle.kobj, 
+                           &castle_volumes_ktype, 
+                           "%s", "versions");
     if(ret < 0) goto out2;
 
     memset(&castle_slaves.kobj, 0, sizeof(struct kobject));
-    castle_slaves.kobj.parent = &castle.kobj;
-    castle_slaves.kobj.ktype  = &castle_slaves_ktype;
-    ret = kobject_set_name(&castle_slaves.kobj, "%s", "slaves");
-    if(ret < 0) goto out3;
-    ret = kobject_register(&castle_slaves.kobj);
+    ret = kobject_tree_add(&castle_slaves.kobj, 
+                           &castle.kobj, 
+                           &castle_slaves_ktype, 
+                           "%s", "slaves");
     if(ret < 0) goto out3;
 
     memset(&castle_attachments.devices_kobj, 0, sizeof(struct kobject));
-    castle_attachments.devices_kobj.parent = &castle.kobj;
-    castle_attachments.devices_kobj.ktype  = &castle_devices_ktype;
-    ret = kobject_set_name(&castle_attachments.devices_kobj, "%s", "devices");
-    if(ret < 0) goto out4;
-    ret = kobject_register(&castle_attachments.devices_kobj);
+    ret = kobject_tree_add(&castle_attachments.devices_kobj, 
+                           &castle.kobj, 
+                           &castle_devices_ktype, 
+                           "%s", "devices");
     if(ret < 0) goto out4;
 
     memset(&castle_attachments.collections_kobj, 0, sizeof(struct kobject));
-    castle_attachments.collections_kobj.parent = &castle.kobj;
-    castle_attachments.collections_kobj.ktype  = &castle_collections_ktype;
-    ret = kobject_set_name(&castle_attachments.collections_kobj, "%s", "collections");
-    if(ret < 0) goto out5;
-    ret = kobject_register(&castle_attachments.collections_kobj);
+    ret = kobject_tree_add(&castle_attachments.collections_kobj, 
+                           &castle.kobj, 
+                           &castle_collections_ktype, 
+                           "%s", "collections");
     if(ret < 0) goto out5;
 
     memset(&castle_regions.kobj, 0, sizeof(struct kobject));
-    castle_regions.kobj.parent = &castle.kobj;
-    castle_regions.kobj.ktype  = &castle_regions_ktype;
-    ret = kobject_set_name(&castle_regions.kobj, "%s", "regions");
-    if(ret < 0) goto out6;
-    ret = kobject_register(&castle_regions.kobj);
+    ret = kobject_tree_add(&castle_regions.kobj, 
+                           &castle.kobj, 
+                           &castle_regions_ktype, 
+                           "%s", "regions");
     if(ret < 0) goto out6;
 
     memset(&castle_transfers.kobj, 0, sizeof(struct kobject));
-    castle_transfers.kobj.parent = &castle.kobj;
-    castle_transfers.kobj.ktype  = &castle_transfers_ktype;
-    ret = kobject_set_name(&castle_transfers.kobj, "%s", "transfers");
-    if(ret < 0) goto out7;
-    ret = kobject_register(&castle_transfers.kobj);
+    ret = kobject_tree_add(&castle_transfers.kobj, 
+                           &castle.kobj, 
+                           &castle_transfers_ktype, 
+                           "%s", "transfers");
     if(ret < 0) goto out7;
 
     return 0;
     
-    kobject_unregister(&castle_transfers.kobj); /* Unreachable */
+    kobject_remove(&castle_transfers.kobj); /* Unreachable */
 out7:  
-    kobject_unregister(&castle_regions.kobj);
+    kobject_remove(&castle_regions.kobj);
 out6: 
-    kobject_unregister(&castle_attachments.collections_kobj);
+    kobject_remove(&castle_attachments.collections_kobj);
 out5:
-    kobject_unregister(&castle_attachments.devices_kobj);
+    kobject_remove(&castle_attachments.devices_kobj);
 out4:
-    kobject_unregister(&castle_slaves.kobj);
+    kobject_remove(&castle_slaves.kobj);
 out3:
-    kobject_unregister(&castle_volumes.kobj);
+    kobject_remove(&castle_volumes.kobj);
 out2:
-    kobject_unregister(&castle.kobj);
+    kobject_remove(&castle.kobj);
 out1:
 
     return ret;
@@ -911,13 +932,13 @@ out1:
 
 void castle_sysfs_fini(void)
 {
-    kobject_unregister(&castle_transfers.kobj);
-    kobject_unregister(&castle_regions.kobj);
-    kobject_unregister(&castle_attachments.collections_kobj);
-    kobject_unregister(&castle_attachments.devices_kobj);
-    kobject_unregister(&castle_slaves.kobj);
-    kobject_unregister(&castle_volumes.kobj);
-    kobject_unregister(&castle.kobj);
+    kobject_remove(&castle_transfers.kobj);
+    kobject_remove(&castle_regions.kobj);
+    kobject_remove(&castle_attachments.collections_kobj);
+    kobject_remove(&castle_attachments.devices_kobj);
+    kobject_remove(&castle_slaves.kobj);
+    kobject_remove(&castle_volumes.kobj);
+    kobject_remove(&castle.kobj);
 }
 
 

@@ -52,7 +52,7 @@ static int sync_c2b(void *word)
 	return 0;
 }
 
-void fastcall __lock_c2b(c2_block_t *c2b)
+void __lock_c2b(c2_block_t *c2b)
 {
 	wait_on_bit_lock(&c2b->state, C2B_lock, sync_c2b, TASK_UNINTERRUPTIBLE);
 }
@@ -63,7 +63,7 @@ static int inline trylock_c2b(c2_block_t *c2b)
     return (test_set_c2b_locked(c2b) == 0);
 }
 
-void fastcall unlock_c2b(c2_block_t *c2b)
+void unlock_c2b(c2_block_t *c2b)
 {
 #ifdef CASTLE_DEBUG    
     c2b->file = "none";
@@ -75,7 +75,7 @@ void fastcall unlock_c2b(c2_block_t *c2b)
 	wake_up_bit(&c2b->state, C2B_lock);
 }
 
-void fastcall dirty_c2b(c2_block_t *c2b)
+void dirty_c2b(c2_block_t *c2b)
 {
     unsigned long flags;
 
@@ -90,7 +90,7 @@ out:
     spin_unlock_irqrestore(&castle_cache_hash_lock, flags);
 }
 
-static void fastcall clean_c2b(c2_block_t *c2b)
+static void clean_c2b(c2_block_t *c2b)
 {
     unsigned long flags;
 
@@ -321,13 +321,16 @@ static inline void castle_cache_page_freelist_add(struct page *pg)
     spin_unlock(&castle_cache_freelist_lock);
 }
 
+
+static DECLARE_MUTEX(pgs_mutex);
+struct page *pgs[256];           /* May be too big for the stack, allocate static, protect with
+                                    a mutex */
 static void castle_cache_block_init(c2_block_t *c2b,
                                     c_disk_blk_t cdb, 
                                     struct list_head *pages,
                                     int nr_pages)
 {
     struct list_head *lh;
-    struct page *pgs[256];
     int i;
 
     /* c2b should only be initialised if it's not used */
@@ -341,10 +344,12 @@ static void castle_cache_block_init(c2_block_t *c2b,
     list_splice(pages, &c2b->pages);
 
     i = 0;
+    down(&pgs_mutex);
     list_for_each(lh, &c2b->pages)
         pgs[i++] = list_entry(lh, struct page, lru);
 
     c2b->buffer = vmap(pgs, i, VM_READ|VM_WRITE, PAGE_KERNEL);
+    up(&pgs_mutex);
     BUG_ON(!c2b->buffer);
 }
 
@@ -662,11 +667,11 @@ static void castle_cache_hash_fini(void)
             list_del(l);
             c2b = list_entry(l, c2_block_t, list);
             /* Buffers should not be in use any more (devices do not exist) */
-            BUG_ON(c2b_locked(c2b));
-            if(atomic_read(&c2b->count) != 0)
-                printk("(disk,block)=(0x%x, 0x%x) not dropped.\n",
-                    c2b->cdb.disk, c2b->cdb.block);
+            if((atomic_read(&c2b->count) != 0) || c2b_locked(c2b))
+                printk("(disk,block)=(0x%x, 0x%x) not dropped count=%d, locked=%d.\n",
+                    c2b->cdb.disk, c2b->cdb.block, atomic_read(&c2b->count), c2b_locked(c2b));
 
+            BUG_ON(c2b_locked(c2b));
             BUG_ON(atomic_read(&c2b->count) != 0);
             castle_cache_block_free(c2b);
         }

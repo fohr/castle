@@ -8,6 +8,7 @@
 #include <net/af_rxrpc.h>
 #include <linux/errqueue.h>
 #include <rxrpc/packet.h>
+#include <linux/sched.h>
 
 #include "castle_public.h"
 #include "castle_utils.h"
@@ -273,9 +274,9 @@ static int castle_rxrpc_ctrl_decode(struct castle_rxrpc_call *call, struct sk_bu
     int ret, len;
     char reply[256];
 
+    debug("Delivering ctrl packet.\n");
     ret = castle_control_packet_process(skb, reply, &len);
     debug("Ctrl ret=%d\n", ret);
-    debug("DATA packet delivered, freeing.\n");
 
     rxrpc_kernel_data_delivered(skb);
     /* Advance the state, if we succeeded at decoding the packet */
