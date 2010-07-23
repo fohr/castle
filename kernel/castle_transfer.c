@@ -31,13 +31,13 @@ static void castle_transfer_each(c_iter_t *c_iter,
                                  int index, 
                                  void *key,
                                  version_t version,
-                                 c_disk_blk_t cdb)
+                                 c_val_tup_t cvt)
 {
     struct castle_transfer *transfer = container_of(c_iter, struct castle_transfer, c_iter);
 
-    debug("---> (0x%x, %d)\n", cdb.disk, cdb.block);
+    debug("---> (0x%x, %d)\n", cvt.cdb.disk, cvt.cdb.block);
 
-    castle_block_move(transfer, index, cdb);
+    castle_block_move(transfer, index, cvt.cdb);
 }
 
 static void castle_transfer_node_start(c_iter_t *c_iter)
@@ -375,8 +375,10 @@ static void castle_block_move_complete(struct work_struct *work)
     kfree(info);
     if(!err)
     {
+        c_val_tup_t dest_cvt;
+        CDB_TO_CVT(dest_cvt, dest_cdb, 1);
         /* Update counters etc... */
-        castle_btree_iter_replace(&transfer->c_iter, index, dest_cdb);
+        castle_btree_iter_replace(&transfer->c_iter, index, dest_cvt);
         castle_freespace_block_free(src_cdb, transfer->version, 1);
         atomic_inc(&transfer->progress);
     }

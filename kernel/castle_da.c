@@ -8,7 +8,7 @@
 #include "castle_versions.h"
 #include "castle_freespace.h"
 
-//#define DEBUG
+#define DEBUG
 #ifndef DEBUG
 #define debug(_f, ...)            ((void)0)
 #define debug_verbose(_f, ...)    ((void)0)
@@ -101,7 +101,7 @@ static void castle_ct_modlist_iter_fill(c_modlist_iter_t *iter)
     struct castle_btree_node *node;
     uint32_t node_idx, node_offset, item_idx;
     version_t version;
-    c_disk_blk_t cdb;
+    c_val_tup_t cvt;
     void *key;
 
     item_idx = node_idx = node_offset = 0;
@@ -118,13 +118,13 @@ static void castle_ct_modlist_iter_fill(c_modlist_iter_t *iter)
         }
 
         /* Get the next entry from the comparator */
-        castle_btree_enum_next(iter->enumerator, &key, &version, &cdb);
+        castle_btree_enum_next(iter->enumerator, &key, &version, &cvt);
         debug("In enum got next: k=%p, version=%d, cdb=(0x%x, 0x%x)\n",
-                key, version, cdb.disk, cdb.block);
+                key, version, cvt.cdb.disk, cvt.cdb.block);
         debug("Dereferencing first 4 bytes of the key (should be length)=0x%x.\n",
                 *((uint32_t *)key));
         debug("Inserting into the node=%d, under idx=%d\n", node_idx, node_offset);
-        btree->entry_add(node, node_offset, key, version, 1, cdb);
+        btree->entry_add(node, node_offset, key, version, 1, cvt);
         iter->sort_idx[item_idx].node        = node_idx;
         iter->sort_idx[item_idx].node_offset = node_offset;
         node_offset++;
@@ -146,7 +146,7 @@ static void castle_ct_modlist_iter_item_get(c_modlist_iter_t *iter,
                                             uint32_t sort_idx,
                                             void **key_p,
                                             version_t *version_p,
-                                            c_disk_blk_t *cdb_p)
+                                            c_val_tup_t *cvt_p)
 {
     struct castle_btree_type *btree = iter->btree;
     struct castle_btree_node *node;
@@ -160,7 +160,7 @@ static void castle_ct_modlist_iter_item_get(c_modlist_iter_t *iter,
                      key_p,
                      version_p,
                      NULL,
-                     cdb_p);
+                     cvt_p);
 }
 
 static void castle_ct_modlist_iter_sift_down(c_modlist_iter_t *iter, uint32_t start, uint32_t end)
@@ -265,11 +265,11 @@ static int castle_ct_modlist_iter_has_next(c_modlist_iter_t *iter)
 }
 
 static void castle_ct_modlist_iter_next(c_modlist_iter_t *iter, 
-                                       void **key_p, 
-                                        version_t *version_p, 
-                                        c_disk_blk_t *cdb_p)
+                                             void **key_p, 
+                                             version_t *version_p, 
+                                             c_val_tup_t *cvt_p)
 {
-    castle_ct_modlist_iter_item_get(iter, iter->next_item, key_p, version_p, cdb_p);
+    castle_ct_modlist_iter_item_get(iter, iter->next_item, key_p, version_p, cvt_p);
     iter->next_item++;
 }
 
@@ -319,12 +319,12 @@ typedef struct castle_merged_iterator {
         void  (*next_fn)     (void *iter, 
                               void **key_p, 
                               version_t *version_p, 
-                              c_disk_blk_t *cdb_p);
+                              c_val_tup_t *cvt_p);
         int     cached;
         struct {
             void         *k;
             version_t     v;
-            c_disk_blk_t  cdb;
+            c_val_tup_t   cvt;
         } cached_entry;
     } *iterators;
 } c_merged_iter_t;
@@ -348,13 +348,13 @@ static void castle_ct_merged_iter_consume(c_merged_iter_t *iter,
 static void castle_ct_merged_iter_next(c_merged_iter_t *iter,
                                        void **key_p,
                                        version_t *version_p,
-                                       c_disk_blk_t *cdb_p)
+                                       c_val_tup_t *cvt_p)
 {
     struct component_iterator *comp_iter; 
     int i, smallest_idx, kv_cmp;
     void *smallest_k;
     version_t smallest_v;
-    c_disk_blk_t smallest_cdb;
+    c_val_tup_t smallest_cvt;
 
     debug("Merged iterator next.\n");
     /* When next is called, we are free to call next on any of the 
@@ -370,7 +370,7 @@ static void castle_ct_merged_iter_next(c_merged_iter_t *iter,
             comp_iter->next_fn( comp_iter->iterator,
                                &comp_iter->cached_entry.k,
                                &comp_iter->cached_entry.v,
-                               &comp_iter->cached_entry.cdb);
+                               &comp_iter->cached_entry.cvt);
             comp_iter->cached = 1;
         }
 
@@ -394,7 +394,7 @@ static void castle_ct_merged_iter_next(c_merged_iter_t *iter,
             smallest_idx = i;
             smallest_k = comp_iter->cached_entry.k;
             smallest_v = comp_iter->cached_entry.v;
-            smallest_cdb = comp_iter->cached_entry.cdb;
+            smallest_cvt = comp_iter->cached_entry.cvt;
         }
 
         if(kv_cmp == 0)
@@ -414,7 +414,7 @@ static void castle_ct_merged_iter_next(c_merged_iter_t *iter,
     /* Return the smallest entry */
     if(key_p) *key_p = smallest_k;
     if(version_p) *version_p = smallest_v;
-    if(cdb_p) *cdb_p = smallest_cdb;
+    if(cvt_p) *cvt_p = smallest_cvt;
 }
 
 static int castle_ct_merged_iter_has_next(c_merged_iter_t *iter)
@@ -480,7 +480,7 @@ static USED void castle_ct_sort(struct castle_component_tree *ct1,
 {
     version_t version;
     void *key;
-    c_disk_blk_t cdb;
+    c_val_tup_t cvt;
     int i=0;
 
     debug("Number of items in the component tree1: %ld, number of nodes: %ld, ct2=%ld, %ld\n", 
@@ -517,9 +517,9 @@ static USED void castle_ct_sort(struct castle_component_tree *ct1,
     debug("=============== SORTED ================\n");
     while(castle_ct_merged_iter_has_next(&test_miter))
     {
-        castle_ct_merged_iter_next(&test_miter, &key, &version, &cdb); 
+        castle_ct_merged_iter_next(&test_miter, &key, &version, &cvt); 
         debug("Sorted: %d: k=%p, version=%d, cdb=(0x%x, 0x%x)\n",
-                i, key, version, cdb.disk, cdb.block);
+                i, key, version, cvt.cdb.disk, cvt.cdb.block);
         debug("Dereferencing first 4 bytes of the key (should be length)=0x%x.\n",
                 *((uint32_t *)key));
         i++;
@@ -651,7 +651,7 @@ static inline void castle_da_entry_add(struct castle_da_merge *merge,
                                        int depth,
                                        void *key, 
                                        version_t version, 
-                                       c_disk_blk_t cdb)
+                                       c_val_tup_t cvt)
 {
     struct castle_da_merge_level *level = merge->levels + depth;
     struct castle_btree_type *btree = merge->btree;
@@ -691,7 +691,7 @@ static inline void castle_da_entry_add(struct castle_da_merge *merge,
     debug("Adding an idx=%d, key=%p, *key=%d, version=%d\n", 
             level->next_idx, key, *((uint32_t *)key), version);
     /* Add the entry to the node (this may get dropped later, but leave it here for now */
-    btree->entry_add(node, level->next_idx, key, version, 0, cdb);
+    btree->entry_add(node, level->next_idx, key, version, 0, cvt);
     /* Compare the current key to the last key. Should never be smaller */
     key_cmp = (level->next_idx != 0) ? btree->key_compare(key, level->last_key) : 0;
     debug("Key cmp=%d\n", key_cmp);
@@ -747,8 +747,8 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
     int buffer_idx, node_idx;
     void *key;
     version_t version;
-    c_disk_blk_t cdb;
     int leaf_ptr;
+    c_val_tup_t cvt, node_cvt;
 
     debug("Completing node at depth=%d\n", depth);
     BUG_ON(depth >= MAX_BTREE_DEPTH);
@@ -771,9 +771,9 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
     while(node_idx < node->used) 
     {
         BUG_ON(buffer->used != buffer_idx);
-        btree->entry_get(node,   node_idx,  &key, &version, &leaf_ptr, &cdb);
+        btree->entry_get(node,   node_idx,  &key, &version, &leaf_ptr, &cvt);
         BUG_ON(leaf_ptr);
-        btree->entry_add(buffer, buffer_idx, key, version, 0, cdb);
+        btree->entry_add(buffer, buffer_idx, key, version, 0, cvt);
         buffer_idx++;
         node_idx++;
     }
@@ -792,7 +792,7 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
         goto release_node;
     }
     BUG_ON(node->used != level->valid_end_idx + 1);
-    btree->entry_get(node, level->valid_end_idx, &key, &version, &leaf_ptr, &cdb);
+    btree->entry_get(node, level->valid_end_idx, &key, &version, &leaf_ptr, &cvt);
     debug("Inserting into parent key=%p, *key=%d, version=%d, buffer->used=%d\n",
             key, *((uint32_t*)key), node->version, buffer->used);
     BUG_ON(leaf_ptr);
@@ -801,12 +801,13 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
        in non-existant version will have somewhere to go */
     if(merge->completing && (depth > 0) && (buffer->used == 0))
         node->version = version = 0;
-    castle_da_entry_add(merge, depth+1, key, node->version, level->node_c2b->cdb);
+    CDB_TO_CVT(node_cvt, level->node_c2b->cdb, level->node_c2b->nr_pages);
+    castle_da_entry_add(merge, depth+1, key, node->version, node_cvt);
     /* For internal node, we replace the key with max_key. This is over the top. 
        (max_keys are probably only needed in the right-most path). But this shouldn't
        break anything either (higher levels in the tree will direct us correctly). */
     if(depth > 0)
-        btree->entry_replace(node, level->valid_end_idx, btree->max_key, version, 0, cdb);
+        btree->entry_replace(node, level->valid_end_idx, btree->max_key, version, 0, cvt);
 release_node:
 
     debug("Releasing c2b for cdb=(0x%x, 0x%x)\n", 
@@ -830,7 +831,6 @@ static inline void castle_da_nodes_complete(struct castle_da_merge *merge, int d
     struct castle_btree_node *buffer;
     int i, buffer_idx, leaf_ptr;
     version_t version;
-    c_disk_blk_t cdb;
     void *key;
     
     debug("Checking if we need to complete nodes starting at level: %d\n", depth);
@@ -857,9 +857,12 @@ fill_buffers:
         debug("Buffer at depth=%d, has %d entries\n", i, buffer->used);
         for(buffer_idx=0; buffer_idx<buffer->used; buffer_idx++) 
         {
-            merge->btree->entry_get(buffer, buffer_idx, &key, &version, &leaf_ptr, &cdb);
+            c_val_tup_t cvt;
+
+            merge->btree->entry_get(buffer, buffer_idx, &key, &version,
+                                    &leaf_ptr, &cvt);
             BUG_ON(leaf_ptr);
-            castle_da_entry_add(merge, i, key, version, cdb);
+            castle_da_entry_add(merge, i, key, version, cvt);
             /* Check if the node completed, it should never do */
             BUG_ON(level->next_idx < 0);
         }
@@ -934,7 +937,7 @@ static USED struct castle_component_tree* castle_da_merge(struct castle_double_a
     struct castle_da_merge *merge;
     void *key;
     version_t version;
-    c_disk_blk_t cdb;
+    c_val_tup_t cvt;
     int i, ret;
 
     debug("============ Merging ct=%d (%d) with ct=%d (%d) ============\n", 
@@ -980,10 +983,10 @@ static USED struct castle_component_tree* castle_da_merge(struct castle_double_a
     {
         /* TODO: we never check iterator errors. We should! */
         /* TODO: we never destroy iterator. We may need to! */
-        castle_ct_merged_iter_next(merge->merged_iter, &key, &version, &cdb); 
+        castle_ct_merged_iter_next(merge->merged_iter, &key, &version, &cvt); 
         debug("Merging entry id=%d: k=%p, *k=%d, version=%d, cdb=(0x%x, 0x%x)\n",
-                i, key, *((uint32_t *)key), version, cdb.disk, cdb.block);
-        castle_da_entry_add(merge, 0, key, version, cdb);
+                i, key, *((uint32_t *)key), version, cvt.cdb.disk, cvt.cdb.block);
+        castle_da_entry_add(merge, 0, key, version, cvt);
         castle_da_nodes_complete(merge, 0);
         i++;
     }
@@ -1430,22 +1433,22 @@ static struct castle_component_tree* castle_da_ct_next(struct castle_component_t
     return NULL;
 }
 
-static void castle_da_bvec_complete(c_bvec_t *c_bvec, int err, c_disk_blk_t cdb)
+static void castle_da_bvec_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cvt)
 {
-    void (*callback) (struct castle_bio_vec *c_bvec, int err, c_disk_blk_t cdb);
+    void (*callback) (struct castle_bio_vec *c_bvec, int err, c_val_tup_t cvt);
     struct castle_component_tree *ct;
     
     callback = c_bvec->da_endfind;
     ct = c_bvec->tree;
 
     /* If the key hasn't been found, check in the next tree. */
-    if(DISK_BLK_INVAL(cdb) && (!err) && (c_bvec_data_dir(c_bvec) == READ))
+    if(CVT_INVALID(cvt) && (!err) && (c_bvec_data_dir(c_bvec) == READ))
     {
         debug_verbose("Checking next ct.\n");
         ct = castle_da_ct_next(ct);
         if(!ct)
         {
-            callback(c_bvec, err, INVAL_DISK_BLK); 
+            callback(c_bvec, err, INVAL_VAL_TUP); 
             return;
         }
         /* If there is the next tree, try searching in it now */
@@ -1456,7 +1459,7 @@ static void castle_da_bvec_complete(c_bvec_t *c_bvec, int err, c_disk_blk_t cdb)
         return;
     }
     debug_verbose("Finished with DA, calling back.\n");
-    callback(c_bvec, err, cdb);
+    callback(c_bvec, err, cvt);
 }
 
 void castle_double_array_find(c_bvec_t *c_bvec)
