@@ -1139,11 +1139,7 @@ static inline c_disk_blk_t castle_btree_root_get(c_bvec_t *c_bvec)
         root_cdb = castle_version_root_get(c_bvec->version, 
                                            c_bvec->tree->seq);
     else
-    {
         root_cdb = c_bvec->tree->root_node;
-        printk("Doing static btree walk, starting with root node: (0x%x, 0x%x)\n", 
-                root_cdb.disk, root_cdb.block);
-    }
     up_read(&att->lock);
 
     return root_cdb;

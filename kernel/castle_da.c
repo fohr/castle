@@ -777,11 +777,21 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
         goto release_node;
     }
     BUG_ON(node->used != level->valid_end_idx + 1);
-    btree->entry_get(node, level->valid_end_idx, &key, NULL, &leaf_ptr, NULL);
+    btree->entry_get(node, level->valid_end_idx, &key, &version, &leaf_ptr, &cdb);
     debug("Inserting into parent key=%p, *key=%d, version=%d, buffer->used=%d\n",
             key, *((uint32_t*)key), node->version, buffer->used);
     BUG_ON(leaf_ptr);
+    /* If we are dealing with right-most internal node, use version 0 instead
+       (max_version). This will guarantee that any btree walk, even for keys 
+       in non-existant version will have somewhere to go */
+    if(merge->completing && (depth > 0) && (buffer->used == 0))
+        node->version = version = 0;
     castle_da_entry_add(merge, depth+1, key, node->version, level->node_c2b->cdb);
+    /* For internal node, we replace the key with max_key. This is over the top. 
+       (max_keys are probably only needed in the right-most path). But this shouldn't
+       break anything either (higher levels in the tree will direct us correctly). */
+    if(depth > 0)
+        btree->entry_replace(node, level->valid_end_idx, btree->max_key, version, 0, cdb);
 release_node:
 
     debug("Releasing c2b for cdb=(0x%x, 0x%x)\n", 
@@ -900,9 +910,9 @@ static struct castle_component_tree* castle_da_merge_complete(struct castle_da_m
     return castle_da_merge_package(merge);
 }
 
-static struct castle_component_tree* castle_da_merge(struct castle_double_array *da,
-                                                     struct castle_component_tree *in_tree1,
-                                                     struct castle_component_tree *in_tree2)
+static USED struct castle_component_tree* castle_da_merge(struct castle_double_array *da,
+                                                          struct castle_component_tree *in_tree1,
+                                                          struct castle_component_tree *in_tree2)
 {
     struct castle_component_tree *out_tree;
     struct castle_btree_type *btree;
@@ -1425,9 +1435,8 @@ static void castle_da_bvec_complete(c_bvec_t *c_bvec, int err, c_disk_blk_t cdb)
         }
         /* If there is the next tree, try searching in it now */
         c_bvec->tree = ct;
-        debug_verbose("Scheduling btree read in the next tree.\n");
-        if(!ct->dynamic)
-            debug("Scheduling btree read in static tree: %d.\n", ct->seq);
+        debug_verbose("Scheduling btree read in %s tree: %d.\n", 
+                ct->dynamic ? "dynamic" : "static", ct->seq);
         castle_btree_find(c_bvec);
         return;
     }
