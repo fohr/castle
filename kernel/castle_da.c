@@ -65,18 +65,16 @@ static void castle_ct_immut_iter_next_node_find(c_immut_iter_t *iter, c_disk_blk
     c2b=NULL;
     while(!DISK_BLK_INVAL(cdb))
     {
-        /* Unlock c2b if we've got one */
+        /* Release c2b if we've got one */
         if(c2b)
-        {
-            unlock_c2b(c2b);
             put_c2b(c2b);
-        }
         /* Get cache block for the current c2b */
         c2b = castle_cache_block_get(cdb, iter->btree->node_size); 
         lock_c2b(c2b);
         /* If c2b is not up to date, issue a blocking READ to update */
         if(!c2b_uptodate(c2b))
             BUG_ON(submit_c2b_sync(READ, c2b));
+        unlock_c2b(c2b);
         node = c2b_bnode(c2b);
         BUG_ON(node->used == 0);
         if(node->is_leaf)
@@ -89,13 +87,10 @@ static void castle_ct_immut_iter_next_node_find(c_immut_iter_t *iter, c_disk_blk
         cdb = node->next_node;
         debug("Not a leaf node, moving to (0x%x, 0x%x).\n", cdb.disk, cdb.block);
     } 
-    /* Unlock if we failed to find a leaf node, but have something (i.e. non-leaf)
-       locked */
+    /* Drop c2b if we failed to find a leaf node, but have an outstanding reference to 
+       a non-leaf node */
     if(c2b)
-    {
-        unlock_c2b(c2b);
         put_c2b(c2b);
-    }
 }
 
 static void castle_ct_immut_iter_next_node(c_immut_iter_t *iter)
@@ -106,7 +101,6 @@ static void castle_ct_immut_iter_next_node(c_immut_iter_t *iter)
     {
         debug("Moving to the next block after: (0x%x, 0x%x)\n", 
                 iter->curr_c2b->cdb.disk, iter->curr_c2b->cdb.block);
-        unlock_c2b(iter->curr_c2b);
         put_c2b(iter->curr_c2b);
     }
     /* next_c2b becomes curr_c2b */ 
@@ -151,7 +145,6 @@ static USED int castle_ct_immut_iter_has_next(c_immut_iter_t *iter)
     if((iter->curr_idx >= iter->curr_node->used) && (!iter->next_c2b))
     {
         BUG_ON(!iter->curr_c2b);
-        unlock_c2b(iter->curr_c2b);
         put_c2b(iter->curr_c2b);
 
         return 0;
