@@ -70,6 +70,7 @@ static void castle_ct_immut_iter_next_node_find(c_immut_iter_t *iter, c_disk_blk
             put_c2b(c2b);
         /* Get cache block for the current c2b */
         c2b = castle_cache_block_get(cdb, iter->btree->node_size); 
+        debug("Node in immut iter.\n");
         lock_c2b(c2b);
         /* If c2b is not up to date, issue a blocking READ to update */
         if(!c2b_uptodate(c2b))
@@ -662,6 +663,8 @@ struct castle_da_merge {
     c2_block_t                   *last_node_c2b;
     c_disk_blk_t                  first_node;
     int                           completing;
+    uint64_t                      nr_entries;
+    uint64_t                      nr_nodes;
     struct castle_da_merge_level {
         /* Node we are currently generating, and book-keeping variables about the node. */
         c2_block_t               *node_c2b;
@@ -956,6 +959,8 @@ release_node:
     level->next_idx      = 0;
     level->valid_end_idx = -1;
     level->valid_version = INVAL_VERSION;  
+    /* Increment node count */
+    merge->nr_nodes++;
 }
        
 static inline void castle_da_nodes_complete(struct castle_da_merge *merge, int depth)
@@ -1019,6 +1024,12 @@ static struct castle_component_tree* castle_da_merge_package(struct castle_da_me
     out_tree->last_node = INVAL_DISK_BLK;
     debug("Root for that tree is: (0x%x, 0x%x)\n", 
             out_tree->root_node.disk, out_tree->root_node.block);
+    /* Write counts out */
+    atomic64_set(&out_tree->item_count, merge->nr_entries);
+    atomic64_set(&out_tree->node_count, merge->nr_nodes);
+    debug("Number of entries=%ld, number of nodes=%ld\n",
+            atomic64_read(&out_tree->item_count),
+            atomic64_read(&out_tree->node_count));
     /* Release the last node c2b */
     dirty_c2b(merge->last_node_c2b);
     unlock_c2b(merge->last_node_c2b);
@@ -1101,6 +1112,8 @@ static USED struct castle_component_tree* castle_da_merge(struct castle_double_a
     merge->last_node_c2b = NULL;
     merge->first_node    = INVAL_DISK_BLK;
     merge->completing    = 0;
+    merge->nr_entries    = 0;
+    merge->nr_nodes      = 0;
     for(i=0; i<MAX_BTREE_DEPTH; i++)
     {
         merge->levels[i].buffer        = vmalloc(btree->node_size * C_BLK_SIZE);
@@ -1129,6 +1142,7 @@ static USED struct castle_component_tree* castle_da_merge(struct castle_double_a
         debug("Merging entry id=%d: k=%p, *k=%d, version=%d, cdb=(0x%x, 0x%x)\n",
                 i, key, *((uint32_t *)key), version, cvt.cdb.disk, cvt.cdb.block);
         castle_da_entry_add(merge, 0, key, version, cvt);
+        merge->nr_entries++;
         castle_da_nodes_complete(merge, 0);
         i++;
     }
@@ -1646,7 +1660,12 @@ if((c_bvec_data_dir(c_bvec) == READ) && (first_time) && !list_empty(&da->trees[1
     test_iter.tree = out_ct;
     castle_ct_immut_iter_init(&test_iter);
     while(castle_ct_immut_iter_has_next(&test_iter))
-        castle_ct_immut_iter_next(&test_iter, NULL, NULL, NULL);
+    {
+        void *key;
+        version_t version;
+        castle_ct_immut_iter_next(&test_iter, &key, &version, NULL);
+        printk("*key=0x%x, version=%d\n", *((uint32_t *)key), version);
+    }
 }
 #endif
 
