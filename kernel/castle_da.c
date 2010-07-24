@@ -89,6 +89,13 @@ static void castle_ct_immut_iter_next_node_find(c_immut_iter_t *iter, c_disk_blk
         cdb = node->next_node;
         debug("Not a leaf node, moving to (0x%x, 0x%x).\n", cdb.disk, cdb.block);
     } 
+    /* Unlock if we failed to find a leaf node, but have something (i.e. non-leaf)
+       locked */
+    if(c2b)
+    {
+        unlock_c2b(c2b);
+        put_c2b(c2b);
+    }
 }
 
 static void castle_ct_immut_iter_next_node(c_immut_iter_t *iter)
