@@ -22,8 +22,8 @@
 
 #define CASTLE_DA_HASH_SIZE             (1000)
 #define CASTLE_CT_HASH_SIZE             (4000)
-static struct list_head        *castle_da_hash;
-static struct list_head        *castle_ct_hash;
+static struct list_head        *castle_da_hash       = NULL;
+static struct list_head        *castle_ct_hash       = NULL;
 static struct castle_mstore    *castle_da_store      = NULL;
 static struct castle_mstore    *castle_tree_store    = NULL;
        da_id_t                  castle_next_da_id    = 1; 
@@ -49,6 +49,8 @@ static inline void castle_da_lock(struct castle_double_array *da);
 static inline void castle_da_unlock(struct castle_double_array *da);
 static inline void castle_ct_get(struct castle_component_tree *ct);
 static inline void castle_ct_put(struct castle_component_tree *ct);
+struct castle_da_merge;
+static void castle_da_merge_budget_consume(struct castle_da_merge *merge);
 
 /**********************************************************************************************/
 /* Iterators */
@@ -175,8 +177,9 @@ static USED void castle_ct_immut_iter_init(c_immut_iter_t *iter)
 }
 
 typedef struct castle_modlist_iterator {
-    struct castle_component_tree *tree;
     struct castle_btree_type *btree;
+    struct castle_component_tree *tree;
+    struct castle_da_merge *merge;
     struct castle_enumerator *enumerator;
     int err;
     uint32_t nr_nodes;          /* Number of nodes in the buffer   */
@@ -236,6 +239,8 @@ static void castle_ct_modlist_iter_fill(c_modlist_iter_t *iter)
     item_idx = node_idx = node_offset = 0;
     while(castle_btree_enum_has_next(iter->enumerator))
     {
+        if(iter->merge)
+            castle_da_merge_budget_consume(iter->merge);
         /* Check if we moved on to a new node. If so, init that. */
         if(node_offset == 0)
         {
@@ -354,6 +359,8 @@ static void castle_ct_modlist_iter_heapify(c_modlist_iter_t *iter)
 
     while(true)
     {
+        if(iter->merge)
+            castle_da_merge_budget_consume(iter->merge);
         castle_ct_modlist_iter_sift_down(iter, start, iter->nr_items - 1);
         /* Check for start == 0 here, beacuse it's unsigned, and we cannot check
            for < 0 in the loop condition */
@@ -370,6 +377,8 @@ static void castle_ct_modlist_iter_heapsort(c_modlist_iter_t *iter)
     {
         struct item_idx tmp_idx;
 
+        if(iter->merge)
+            castle_da_merge_budget_consume(iter->merge);
         /* Head is the greatest item, swap with last, and sift down */
         tmp_idx = iter->sort_idx[last];
         iter->sort_idx[last] = iter->sort_idx[0];
@@ -685,8 +694,85 @@ struct castle_da_merge {
 
     /* Deamortization variables */
     struct work_struct            work;
+    int                           budget_cons_rate;
+    int                           budget_cons_units;
 };
 
+/************************************/
+/* Marge rate control functionality */
+static DEFINE_SPINLOCK(merge_budget_lock);
+static DECLARE_WAIT_QUEUE_HEAD(merge_budget_wq); 
+static int merge_budget = 0;
+
+static void castle_da_merge_budget_consume(struct castle_da_merge *merge)
+{
+    unsigned long flags;
+
+    /* Check if we need to consume some merge budget */
+    merge->budget_cons_units++;
+    if(merge->budget_cons_units < merge->budget_cons_rate)
+        return;
+
+try_again:
+    /* We need to consume a single unit from the budget, check if there is something there */
+    spin_lock_irqsave(&merge_budget_lock, flags);
+    if(merge_budget > 0)
+    {
+        merge_budget--;
+        spin_unlock_irqrestore(&merge_budget_lock, flags);
+        return;
+    }
+    spin_unlock_irqrestore(&merge_budget_lock, flags);
+    /* We haven't found anything, sleep until next replenish. */
+    printk("Run out of merge budget, waiting.\n");
+    sleep_on(&merge_budget_wq);
+    goto try_again;
+}
+
+static atomic_t epoch_ios = ATOMIC_INIT(0); 
+static void castle_da_merge_budget_replenish(void)
+{
+#define MAX_IOS             (10000) /* Arbitrary constants */
+#define MIN_BUDGET_DELTA    (10)
+#define MAX_BUDGET          (1000000)
+    int ios = atomic_read(&epoch_ios);
+    int budget_delta = 0;
+
+    atomic_set(&epoch_ios, 0);
+    printk("Merge replenish, number of ios in last second=%d.\n", ios);
+    if(ios < MAX_IOS) 
+        budget_delta = MAX_IOS - ios;
+    if(budget_delta < MIN_BUDGET_DELTA)
+        budget_delta = MIN_BUDGET_DELTA;
+    BUG_ON(budget_delta <= 0);
+    spin_lock_irq(&merge_budget_lock);
+    merge_budget += budget_delta;
+    if(merge_budget > MAX_BUDGET)
+        merge_budget = MAX_BUDGET;
+    spin_unlock_irq(&merge_budget_lock);
+    wake_up(&merge_budget_wq);
+}
+
+static inline void castle_da_merge_budget_io_end(struct castle_double_array *da)
+{
+    atomic_inc(&epoch_ios);
+}
+
+/************************************/
+/* Marge rate timers */
+static struct timer_list merge_rate_timer; 
+static void castle_da_merge_budget_add(unsigned long first)
+{
+    unsigned long sleep = 1; /* In seconds */
+
+    castle_da_merge_budget_replenish();
+    /* Reschedule ourselves */
+    setup_timer(&merge_rate_timer, castle_da_merge_budget_add, 0);
+    mod_timer(&merge_rate_timer, jiffies + sleep * HZ);
+}
+
+/************************************/
+/* Actual merges */
 static void castle_da_iterator_destroy(struct castle_component_tree *tree,
                                        void *iter)
 {
@@ -703,7 +789,8 @@ static void castle_da_iterator_destroy(struct castle_component_tree *tree,
     kfree(iter);
 }
 
-static void castle_da_iterator_create(struct castle_component_tree *tree,
+static void castle_da_iterator_create(struct castle_da_merge *merge,
+                                      struct castle_component_tree *tree,
                                       void **iter_p)
 {
     if(tree->dynamic)
@@ -712,6 +799,7 @@ static void castle_da_iterator_create(struct castle_component_tree *tree,
         if(!iter)
             return;
         iter->tree = tree;
+        iter->merge = merge; 
         castle_ct_modlist_iter_init(iter);
         if(iter->err)
         {
@@ -737,8 +825,8 @@ static int castle_da_iterators_create(struct castle_da_merge *merge)
     btree = castle_btree_type_get(merge->in_tree1->btree_type);
 
     /* Create apprapriate iterators for both of the trees. */
-    castle_da_iterator_create(merge->in_tree1, &merge->iter1);
-    castle_da_iterator_create(merge->in_tree2, &merge->iter2);
+    castle_da_iterator_create(merge, merge->in_tree1, &merge->iter1);
+    castle_da_iterator_create(merge, merge->in_tree2, &merge->iter2);
     debug("Tree iterators created.\n");
     
     /* Check if the iterators got created properly. */
@@ -1131,6 +1219,7 @@ static void castle_da_merge_do(struct work_struct *work)
         castle_da_entry_add(merge, 0, key, version, cvt);
         merge->nr_entries++;
         castle_da_nodes_complete(merge, 0);
+        castle_da_merge_budget_consume(merge);
         i++;
     }
     debug("Flushing the last nodes.\n");
@@ -1164,16 +1253,18 @@ static USED void castle_da_merge_schedule(struct castle_double_array *da,
     merge = kzalloc(sizeof(struct castle_da_merge), GFP_KERNEL);
     if(!merge)
         goto error_out;
-    merge->da            = da;
-    merge->btree         = btree;
-    merge->in_tree1      = in_tree1;
-    merge->in_tree2      = in_tree2;
-    merge->root_depth    = -1;
-    merge->last_node_c2b = NULL;
-    merge->first_node    = INVAL_DISK_BLK;
-    merge->completing    = 0;
-    merge->nr_entries    = 0;
-    merge->nr_nodes      = 0;
+    merge->da                = da;
+    merge->btree             = btree;
+    merge->in_tree1          = in_tree1;
+    merge->in_tree2          = in_tree2;
+    merge->root_depth        = -1;
+    merge->last_node_c2b     = NULL;
+    merge->first_node        = INVAL_DISK_BLK;
+    merge->completing        = 0;
+    merge->nr_entries        = 0;
+    merge->nr_nodes          = 0;
+    merge->budget_cons_rate  = 1; 
+    merge->budget_cons_units = 0; 
     for(i=0; i<MAX_BTREE_DEPTH; i++)
     {
         merge->levels[i].buffer        = vmalloc(btree->node_size * C_BLK_SIZE);
@@ -1198,6 +1289,8 @@ error_out:
 
 /**********************************************************************************************/
 /* Generic DA code */
+
+
 
 static int castle_da_ct_inc_cmp(struct list_head *l1, struct list_head *l2)
 {
@@ -1700,6 +1793,7 @@ static void castle_da_bvec_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cvt)
         return;
     }
     debug_verbose("Finished with DA, calling back.\n");
+    castle_da_merge_budget_io_end(castle_da_hash_get(ct->da));
     castle_ct_put(ct);
     callback(c_bvec, err, cvt);
 }
@@ -1787,34 +1881,43 @@ int castle_double_array_create(void)
     
 int castle_double_array_init(void)
 {
+    int ret;
+
     printk("\n========= Double Array init ==========\n");
+    /* Start up the timer which replenishes merge budget */
+    castle_da_merge_budget_add(1); 
+    ret = -ENOMEM;
     castle_da_hash = castle_da_hash_alloc();
     if(!castle_da_hash)
-        return -ENOMEM;
+        goto err_out;
     castle_ct_hash = castle_ct_hash_alloc();
     if(!castle_ct_hash)
-    {
-        kfree(castle_da_hash);
-        return -ENOMEM; 
-    }
+        goto err_out;
     castle_merge_wq = create_workqueue("castle_merge");
     if(!castle_merge_wq)
-    {
-        kfree(castle_ct_hash);
-        kfree(castle_da_hash);
-        return -ENOMEM;
-    }
-    
+        goto err_out;
+
     castle_da_hash_init();
     castle_ct_hash_init();
 
     return 0;
+ 
+err_out:
+    BUG_ON(!ret);
+    del_singleshot_timer_sync(&merge_rate_timer);
+    if(castle_ct_hash)
+        kfree(castle_ct_hash);
+    if(castle_da_hash)
+        kfree(castle_da_hash);
+
+    return ret;
 }
 
 void castle_double_array_fini(void)
 {
     printk("\n========= Double Array fini ==========\n");
     destroy_workqueue(castle_merge_wq);
+    del_singleshot_timer_sync(&merge_rate_timer);
     castle_da_hash_writeback();
     castle_da_hash_destroy();
     castle_ct_hash_destroy();
