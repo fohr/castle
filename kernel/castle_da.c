@@ -47,6 +47,8 @@ static struct castle_component_tree* castle_ct_alloc(struct castle_double_array 
                                                      int level);
 static inline void castle_da_lock(struct castle_double_array *da);
 static inline void castle_da_unlock(struct castle_double_array *da);
+static inline void castle_ct_get(struct castle_component_tree *ct);
+static inline void castle_ct_put(struct castle_component_tree *ct);
 
 /**********************************************************************************************/
 /* Iterators */
@@ -1033,6 +1035,7 @@ static struct castle_component_tree* castle_da_merge_package(struct castle_da_me
     debug("Root for that tree is: (0x%x, 0x%x)\n", 
             out_tree->root_node.disk, out_tree->root_node.block);
     /* Write counts out */
+    atomic_set(&out_tree->ref_count, 1);
     atomic64_set(&out_tree->item_count, merge->nr_entries);
     atomic64_set(&out_tree->node_count, merge->nr_nodes);
     debug("Number of entries=%ld, number of nodes=%ld\n",
@@ -1054,13 +1057,8 @@ static struct castle_component_tree* castle_da_merge_package(struct castle_da_me
            (merge->da->id != merge->in_tree2->da));
     list_del(&merge->in_tree1->da_list);
     list_del(&merge->in_tree2->da_list);
-    castle_ct_hash_remove(merge->in_tree1);
-    castle_ct_hash_remove(merge->in_tree2);
-    /* Poison old ct (note this will be repoisoned by kfree on kernel debug build. */
-    memset(merge->in_tree1, 0xac, sizeof(struct castle_component_tree));
-    memset(merge->in_tree2, 0xac, sizeof(struct castle_component_tree));
-    kfree(merge->in_tree1);
-    kfree(merge->in_tree2);
+    castle_ct_put(merge->in_tree1);
+    castle_ct_put(merge->in_tree2);
 
     return out_tree;
 }
@@ -1248,6 +1246,26 @@ static inline void castle_da_unlock(struct castle_double_array *da)
     spin_unlock(&da->lock);
 }
 
+static inline void castle_ct_get(struct castle_component_tree *ct)
+{
+    atomic_inc(&ct->ref_count);
+}
+
+static inline void castle_ct_put(struct castle_component_tree *ct)
+{
+    if(likely(!atomic_dec_and_test(&ct->ref_count)))
+        return;
+
+    debug("Ref count for ct id=%d went to 0, releasing.\n", ct->seq);
+    BUG_ON(TREE_GLOBAL(ct->seq) || TREE_INVAL(ct->seq));
+    castle_ct_hash_remove(ct);
+    /* TODO: FREE */
+    printk("Should release freespace occupied by ct=%d\n", ct->seq);
+    /* Poison ct (note this will be repoisoned by kfree on kernel debug build. */
+    memset(ct, 0xde, sizeof(struct castle_component_tree));
+    kfree(ct);
+}
+
 static struct castle_component_tree* castle_da_rwct_get(struct castle_double_array *da)
 {
     struct castle_component_tree *ct;
@@ -1259,6 +1277,8 @@ static struct castle_component_tree* castle_da_rwct_get(struct castle_double_arr
     /* There should be precisely one entry in the list */
     BUG_ON((h == l) || (l->next != h));
     ct = list_entry(l, struct castle_component_tree, da_list);
+    /* Get a ref to this tree so that it doesn't go away while we are doing an IO on it */
+    castle_ct_get(ct);
     castle_da_unlock(da);
         
     return ct; 
@@ -1298,6 +1318,7 @@ static da_id_t castle_da_ct_unmarshall(struct castle_component_tree *ct,
                                        c_mstore_key_t key)
 {
     ct->seq         = ctm->seq;
+    atomic_set(&ct->ref_count, 1);
     atomic64_set(&ct->item_count, ctm->item_count);
     ct->btree_type  = ctm->btree_type; 
     ct->dynamic     = ctm->dynamic;
@@ -1527,6 +1548,7 @@ static struct castle_component_tree* castle_ct_alloc(struct castle_double_array 
     
     /* Allocate an id for the tree, init the ct. */
     ct->seq         = castle_next_tree_seq++;
+    atomic_set(&ct->ref_count, 1);
     atomic64_set(&ct->item_count, 0); 
     ct->btree_type  = VLBA_TREE_TYPE; 
     ct->dynamic     = dynamic;
@@ -1640,6 +1662,7 @@ static struct castle_component_tree* castle_da_ct_next(struct castle_component_t
         {
             next_ct = list_entry(ct_list->next, struct castle_component_tree, da_list); 
             debug_verbose("Found component tree %d\n", next_ct->seq);
+            castle_ct_get(next_ct);
             castle_da_unlock(da);
 
             return next_ct;
@@ -1653,29 +1676,31 @@ static struct castle_component_tree* castle_da_ct_next(struct castle_component_t
 static void castle_da_bvec_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cvt)
 {
     void (*callback) (struct castle_bio_vec *c_bvec, int err, c_val_tup_t cvt);
-    struct castle_component_tree *ct;
+    struct castle_component_tree *ct, *next_ct;
     
     callback = c_bvec->da_endfind;
     ct = c_bvec->tree;
-
+    
     /* If the key hasn't been found, check in the next tree. */
     if(CVT_INVALID(cvt) && (!err) && (c_bvec_data_dir(c_bvec) == READ))
     {
         debug_verbose("Checking next ct.\n");
-        ct = castle_da_ct_next(ct);
-        if(!ct)
+        next_ct = castle_da_ct_next(ct);
+        castle_ct_put(ct);
+        if(!next_ct)
         {
             callback(c_bvec, err, INVAL_VAL_TUP); 
             return;
         }
         /* If there is the next tree, try searching in it now */
-        c_bvec->tree = ct;
+        c_bvec->tree = next_ct;
         debug_verbose("Scheduling btree read in %s tree: %d.\n", 
                 ct->dynamic ? "dynamic" : "static", ct->seq);
         castle_btree_find(c_bvec);
         return;
     }
     debug_verbose("Finished with DA, calling back.\n");
+    castle_ct_put(ct);
     callback(c_bvec, err, cvt);
 }
 
@@ -1735,7 +1760,7 @@ castle_da_unlock(da);
     }
 #endif
 
-    c_bvec->tree       = castle_da_rwct_get(da);
+    c_bvec->tree       = ct; 
     c_bvec->da_endfind = c_bvec->endfind;
     c_bvec->endfind    = castle_da_bvec_complete;
 
