@@ -437,6 +437,68 @@ static void castle_control_reply(uint32_t *reply,
     castle_control_reply_process(reply, len, length);
 }
 
+static void castle_control_get_valid_counts(slave_uuid_t slave_uuid, uint32_t *reply, int max, int *len_p)
+{
+    int ret = 0, count = 0;
+    struct castle_slave *slave = NULL;
+
+    slave = castle_slave_find_by_uuid(slave_uuid);
+
+    debug("castle_control_get_valid_counts slave_uuid=0x%x slave=%p\n", slave_uuid, slave);
+
+    if (!slave)
+    {
+        ret = -ENOENT;
+        goto error;
+    }
+
+    ret = castle_freespace_summary_get(slave, reply + 3, max - 3, &count);
+    if (ret)
+        goto error;
+
+    debug("castle_control_get_valid_counts ret=%d\n", ret);
+
+    reply[0] = CASTLE_CTRL_REPLY;
+    reply[1] = CASTLE_CTRL_REPLY_VALID_COUNTS;
+    reply[2] = count >> 1;
+    count += 3;
+
+error:
+    if (ret)
+        castle_control_reply_error(reply, ret, &count);
+
+    castle_control_reply_process(reply, count, len_p);
+}
+
+static void castle_control_get_invalid_counts(slave_uuid_t slave_uuid, uint32_t *reply, int max, int *len_p)
+{
+    int ret = 0, count = 0;
+    struct castle_slave *slave = NULL;
+
+    slave = castle_slave_find_by_uuid(slave_uuid);
+
+    debug("castle_control_get_invalid_counts slave_uuid=0x%x slave=%p\n", slave_uuid, slave);
+
+    if (!slave)
+    {
+        ret = -ENOENT;
+        goto error;
+    }
+
+    debug("castle_control_get_invalid_counts castle_freespace_summary_get ret=%d\n", ret);
+
+    reply[0] = CASTLE_CTRL_REPLY;
+    reply[1] = CASTLE_CTRL_REPLY_INVALID_COUNTS;
+    reply[2] = 0;
+    count = 3;
+
+error:
+    if (ret)
+        castle_control_reply_error(reply, ret, &count);
+
+    castle_control_reply_process(reply, count, len_p);
+}
+
 int castle_control_packet_process(struct sk_buff *skb, void **reply, int *len_p)
 {
     uint32_t *reply32; /* For now, all reply values are 32 bit wide */
@@ -716,46 +778,26 @@ int castle_control_packet_process(struct sk_buff *skb, void **reply, int *len_p)
         }
         case CASTLE_CTRL_REQ_VALID_STATS:
         {
-            int ret, count = 0;
             slave_uuid_t slave_uuid;
-            struct castle_slave *slave;
             
             if(skb->len != 4) goto bad_msg;
-            
+
             slave_uuid = SKB_L_GET(skb);
-            slave = castle_slave_find_by_uuid(slave_uuid);
             
-            if (!slave)
-            {
-                ret = -ENOENT;
-                goto stats_error;
-            }
-            
-            debug("get_valid_stats slave_uuid=0x%x slave=%p\n", slave_uuid, slave);
-            
-            ret = castle_freespace_summary_get(slave, reply32 + 3, word_len - 3, &count);
-            if (ret)
-                goto stats_error;
-
-            debug("get_valid_stats castle_freespace_summary_get ret=%d\n", ret);
-
-            reply32[0] = CASTLE_CTRL_REPLY;
-            reply32[1] = CASTLE_CTRL_REPLY_VALID_COUNTS;
-            reply32[2] = count >> 1;
-            count += 3;
-
-stats_error:
-            if (ret)
-                castle_control_reply_error(reply32, ret, &count);
-            
-            castle_control_reply_process(reply32, count, len_p);
+            castle_control_get_valid_counts(slave_uuid, reply32, word_len, len_p);
             
             break;
         }
         case CASTLE_CTRL_REQ_INVALID_STATS:
         {
-            /* TODO we don't have any invalid blocks atm */
-            *len_p = 0;            
+            slave_uuid_t slave_uuid;
+            
+            if(skb->len != 4) goto bad_msg;
+
+            slave_uuid = SKB_L_GET(skb);
+            
+            castle_control_get_invalid_counts(slave_uuid, reply32, word_len, len_p);
+            
             break;
         }
     }
