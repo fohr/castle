@@ -126,14 +126,12 @@ static int __castle_freespace_hash_mod(struct castle_slave *cs,
     return 0;
 }
 
-ssize_t castle_freespace_summary_get(struct castle_slave *cs, char *buf, int version_offset, int number)
+int castle_freespace_summary_get(struct castle_slave *cs, uint32_t *buf, int max, int *count)
 {
     struct castle_slave_block_cnt *cnt;
     struct list_head *l;
     ssize_t offset = 0;
     int i;
-
-    // TODO we currently assume here we never do delete! version numbers must be contig
 
     /* Superblock lock is used to protect the hash-table */
     castle_slave_superblock_get(cs);
@@ -142,19 +140,20 @@ ssize_t castle_freespace_summary_get(struct castle_slave *cs, char *buf, int ver
         list_for_each(l, &cs->block_cnts.hash[i])
         {
             cnt = list_entry(l, struct castle_slave_block_cnt, list);
+
+            BUG_ON(offset + 2 > max);
+
+            buf[offset]     = cnt->version;
+            buf[offset + 1] = cnt->cnt;
             
-            if (cnt->version >= version_offset + number)
-                continue;
-                
-            if (cnt->version < version_offset)
-                continue;
-            
-            offset += sprintf((buf + offset), "0x%x: %d\n", cnt->version, cnt->cnt); 
+            offset += 2;
         }
     }
     castle_slave_superblock_put(cs, 0);
 
-    return offset;
+    *count = offset;
+    
+    return 0;
 }
 
 ssize_t castle_freespace_version_slave_blocks_get(struct castle_slave *cs, version_t version)

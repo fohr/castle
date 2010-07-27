@@ -57,6 +57,9 @@ typedef uint32_t version_t;
 #define CASTLE_CTRL_REPLY_NEW_REGION             5
 #define CASTLE_CTRL_REPLY_NEW_TRANSFER           6
 #define CASTLE_CTRL_REPLY_NEW_COLLECTION         7
+//EXCEPTIONS 8
+#define CASTLE_CTRL_REPLY_VALID_COUNTS           9
+#define CASTLE_CTRL_REPLY_INVALID_COUNTS         10
 
 /* Definitions for IOCTLs */
 #define CASTLE_CTRL_IOCTL                        1     /* Only 1 ioctl at the moment */
