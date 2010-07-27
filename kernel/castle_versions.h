@@ -31,6 +31,6 @@ int          castle_versions_read       (void);
 int          castle_versions_init       (void);
 void         castle_versions_fini       (void);
 
-version_t    castle_version_get_max     (void);
+version_t    castle_version_max_get     (void);
 
 #endif /*__CASTLE_VERSIONS_H__ */
