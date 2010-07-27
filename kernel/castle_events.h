@@ -50,12 +50,6 @@ void castle_uevent1(uint16_t cmd, uint64_t arg1);
 #define castle_events_init() \
     castle_uevent1(CASTLE_CTRL_REQ_INIT, CASTLE_EVENTS_SUCCESS)
 
-#define castle_events_region_create(_region_id) \
-    castle_uevent2(CASTLE_CTRL_REQ_REGION_CREATE, CASTLE_EVENTS_SUCCESS, _region_id)
-
-#define castle_events_region_destroy(_region_id) \
-    castle_uevent2(CASTLE_CTRL_REQ_REGION_DESTROY, CASTLE_EVENTS_SUCCESS, _region_id)
-
 #define castle_events_transfer_create(_transfer_id) \
     castle_uevent2(CASTLE_CTRL_REQ_TRANSFER_CREATE, CASTLE_EVENTS_SUCCESS, _transfer_id)
 

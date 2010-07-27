@@ -95,6 +95,10 @@ static void castle_versions_init_add(struct castle_version *v)
     list_add(&v->init_list, &castle_versions_init_list);
 }
 
+version_t castle_version_get_max(void)
+{
+    return castle_versions_last;
+}
 
 static struct castle_version* castle_version_add(version_t version, 
                                                  version_t parent, 

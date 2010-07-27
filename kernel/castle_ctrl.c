@@ -179,42 +179,6 @@ static void castle_control_fs_init(int *ret)
     *ret = castle_fs_init();
 }
 
-static void castle_control_region_create(slave_uuid_t slave,
-                                         version_t    version,
-                                         uint32_t     start,
-                                         uint32_t     length,
-                                         int         *ret,
-                                         region_id_t *id)
-{
-    struct castle_region *region;
-
-    if(!(region = castle_region_create(slave, version, start, length)))
-        goto err_out;
-
-    *id  = region->id;
-    *ret = 0;
-    
-    return;
-        
-err_out:
-    *id  = (uint32_t)-1;
-    *ret = -EINVAL;
-}
-
-static void castle_control_region_destroy(region_id_t id, int *ret)
-{
-    struct castle_region *region;
-    
-    if(!(region = castle_region_find(id)))
-    {
-        *ret = -EINVAL;
-    }
-    else
-    { 
-        *ret = castle_region_destroy(region);
-    }
-}
-
 static void castle_control_transfer_create(version_t      version,
                                            uint32_t       direction,
                                            int           *ret,
@@ -376,18 +340,6 @@ int castle_control_ioctl(struct inode *inode, struct file *filp,
         case CASTLE_CTRL_REQ_INIT:
             castle_control_fs_init(&ioctl.init.ret);
             break;
-        case CASTLE_CTRL_REQ_REGION_CREATE:
-            castle_control_region_create( ioctl.region_create.slave,
-                                          ioctl.region_create.version,
-                                          ioctl.region_create.start,
-                                          ioctl.region_create.length,
-                                         &ioctl.region_create.ret,
-                                         &ioctl.region_create.id);
-            break;        
-        case CASTLE_CTRL_REQ_REGION_DESTROY:
-            castle_control_region_destroy( ioctl.region_destroy.id,
-                                          &ioctl.region_destroy.ret);
-            break;
         case CASTLE_CTRL_REQ_TRANSFER_CREATE:
             castle_control_transfer_create( ioctl.transfer_create.version,
                                             ioctl.transfer_create.direction,
@@ -469,9 +421,9 @@ static void castle_control_reply(uint32_t *reply,
     *length = 4*len;
 }
 
-int castle_control_packet_process(struct sk_buff *skb, void *reply, int *len_p)
+int castle_control_packet_process(struct sk_buff *skb, void **reply, int *len_p)
 {
-    uint32_t *reply32 = reply; /* For now, all reply values are 32 bit wide */
+    uint32_t *reply32; /* For now, all reply values are 32 bit wide */
     uint32_t ctrl_op;
 
     debug("Processing control packet (in_atomic=%d).\n", in_atomic());
@@ -484,6 +436,18 @@ int castle_control_packet_process(struct sk_buff *skb, void *reply, int *len_p)
     down(&castle_control_lock);
     ctrl_op = SKB_L_GET(skb);
     debug("Ctrl op=%d\n", ctrl_op);
+    switch(ctrl_op)
+    {
+        case CASTLE_CTRL_REQ_VALID_STATS:
+        case CASTLE_CTRL_REQ_INVALID_STATS:
+            *reply = reply32 = kmalloc(castle_version_get_max() * 2 * sizeof(uint32_t), GFP_KERNEL);
+            break;
+
+        default:
+            *reply = reply32 = kmalloc(256 * sizeof(char), GFP_KERNEL);
+            break;
+    }
+    
     switch(ctrl_op)
     {
         case CASTLE_CTRL_REQ_CLAIM:
@@ -606,39 +570,42 @@ int castle_control_packet_process(struct sk_buff *skb, void *reply, int *len_p)
                                  0);
             break;
         }
-        case CASTLE_CTRL_REQ_REGION_CREATE:
+        case CASTLE_CTRL_REQ_RESERVE_FOR_TRANSFER:
         {
-            int ret;
-            region_id_t region;
+            int version, type, reservations_count, i;
+            int *reservations_disk, *reservations_length;
 
-            if(skb->len != 16) goto bad_msg;
-            castle_control_region_create(SKB_L_GET(skb),
-                                         SKB_L_GET(skb),  
-                                         SKB_L_GET(skb),
-                                         SKB_L_GET(skb),
-                                         &ret,
-                                         &region);
+            debug("reserve_for_transfer skb->len=%d", skb->len);
+
+            if(skb->len < 12) goto bad_msg;
+            
+            version = SKB_L_GET(skb);
+            type = SKB_L_GET(skb);
+            reservations_count = SKB_L_GET(skb);
+            
+            debug("reserve_for_transfer version=0x%x type=0x%x reservations_count=%d", version, type, reservations_count);
+            
+            if(skb->len < (reservations_count * 2)) goto bad_msg;
+            
+            reservations_disk = kmalloc(reservations_count * sizeof(int), GFP_KERNEL);
+            reservations_length = kmalloc(reservations_count * sizeof(int), GFP_KERNEL);
+            
+            for (i = 0; i < reservations_count; i++) {
+                reservations_disk[i] = SKB_L_GET(skb);
+                reservations_length[i] = SKB_L_GET(skb);
+            }
+            
+            kfree(reservations_disk);
+            kfree(reservations_length);
+            
             castle_control_reply(reply32,
                                  len_p,
                                  CASTLE_CTRL_REPLY_NEW_REGION,
-                                 ret,
-                                 region);
-            break;
-        }
-        case CASTLE_CTRL_REQ_REGION_DESTROY:
-        {
-            int ret;
-
-            if(skb->len != 4) goto bad_msg;
-            castle_control_region_destroy(SKB_L_GET(skb), 
-                                          &ret);
-            castle_control_reply(reply32,
-                                 len_p,
-                                 CASTLE_CTRL_REPLY_VOID,
-                                 ret,
+                                 -EINVAL,
                                  0);
             break;
         }
+
         case CASTLE_CTRL_REQ_TRANSFER_CREATE:
         {
             int ret;

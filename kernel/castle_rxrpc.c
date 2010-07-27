@@ -276,20 +276,25 @@ static int castle_rxrpc_slice_decode(struct castle_rxrpc_call *call, struct sk_b
 static int castle_rxrpc_ctrl_decode(struct castle_rxrpc_call *call, struct sk_buff *skb,  bool last)
 {
     int ret, len;
-    char reply[256];
+    void *reply = NULL;
 
     debug("Delivering ctrl packet.\n");
-    ret = castle_control_packet_process(skb, reply, &len);
+    ret = castle_control_packet_process(skb, &reply, &len);
     debug("Ctrl ret=%d\n", ret);
 
     rxrpc_kernel_data_delivered(skb);
     /* Advance the state, if we succeeded at decoding the packet */
-    if(ret) return ret;
-
+    if(ret) 
+    {
+        if(reply) kfree(reply);
+        return ret;
+    }
+    
     castle_rxrpc_state_update(call, RXRPC_CALL_REPLYING);
     debug("Sending reply of length=%d\n", len);
     castle_rxrpc_reply_send(call, reply, len);
 
+    kfree(reply);
     return 0;
 }
 
@@ -339,10 +344,11 @@ static void castle_rxrpc_msg_send(struct castle_rxrpc_call *call, struct msghdr 
     castle_rxrpc_state_update(call, RXRPC_CALL_AWAIT_ACK);
     n = rxrpc_kernel_send_data(call->rxcall, msg, len);
     debug("Sent %d bytes.\n", n);
-    if (n >= 0) 
-        return;
     if (n == -ENOMEM)
         rxrpc_kernel_abort_call(call->rxcall, RX_USER_ABORT);
+    BUG_ON(n != len);
+    if (n >= 0) 
+        return;
 }
 
 static void castle_rxrpc_reply_send(struct castle_rxrpc_call *call, const void *buf, size_t len)
