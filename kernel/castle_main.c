@@ -28,7 +28,6 @@
 struct castle                castle;
 struct castle_slaves         castle_slaves;
 struct castle_attachments    castle_attachments;
-struct castle_regions        castle_regions;
 struct castle_component_tree castle_global_tree = {.seq         = GLOBAL_TREE,
                                                    .item_count  = {0ULL},
                                                    .btree_type  = MTREE_TYPE, 
@@ -551,26 +550,6 @@ void castle_release(struct castle_slave *cs)
 #endif
     list_del(&cs->list);
     kfree(cs);
-}
-
-static int castle_regions_init(void)
-{
-    memset(&castle_regions, 0, sizeof(struct castle_regions));
-    INIT_LIST_HEAD(&castle_regions.regions);
-
-    return 0;
-}
-
-static void castle_regions_free(void)                                                                 
-{                                                                                        
-    struct list_head *lh, *th;
-    struct castle_region *region;
-
-    list_for_each_safe(lh, th, &castle_regions.regions)
-    {
-        region = list_entry(lh, struct castle_region, list); 
-        //castle_region_destroy(region);
-    }
 }
 
 static int castle_open(struct castle_attachment *dev)
@@ -1347,25 +1326,22 @@ static int __init castle_init(void)
     if((ret = castle_double_array_init())) goto err_out5;
     if((ret = castle_freespace_init()))    goto err_out6;
     if((ret = castle_attachments_init()))  goto err_out7;
-    if((ret = castle_regions_init()))      goto err_out8;
-    if((ret = castle_transfers_init()))    goto err_out9;
-    if((ret = castle_control_init()))      goto err_out10;
-    if((ret = castle_rxrpc_init()))        goto err_out11;
-    if((ret = castle_sysfs_init()))        goto err_out12;
+    if((ret = castle_transfers_init()))    goto err_out8;
+    if((ret = castle_control_init()))      goto err_out9;
+    if((ret = castle_rxrpc_init()))        goto err_out10;
+    if((ret = castle_sysfs_init()))        goto err_out11;
 
     printk("OK.\n");
 
     return 0;
 
     castle_sysfs_fini(); /* Unreachable */
-err_out12:
-    castle_rxrpc_fini();
 err_out11:
-    castle_control_fini();
+    castle_rxrpc_fini();
 err_out10:
-    castle_transfers_free();
+    castle_control_fini();
 err_out9:
-    castle_regions_free();
+    castle_transfers_free();
 err_out8:
     castle_attachments_free();
 err_out7:
@@ -1399,7 +1375,6 @@ static void __exit castle_exit(void)
     castle_sysfs_fini();
     /* Now, make sure no more IO can be made, internally or externally generated */
     castle_transfers_free();
-    castle_regions_free();
     castle_attachments_free();
     /* Cleanup/writeout all metadata */ 
     castle_double_array_fini();

@@ -684,7 +684,7 @@ int castle_control_packet_process(struct sk_buff *skb, void **reply, int *len_p)
             
             castle_control_reply(reply32,
                                  len_p,
-                                 CASTLE_CTRL_REPLY_NEW_REGION,
+                                 CASTLE_CTRL_REPLY_VOID,
                                  -EINVAL,
                                  0);
             break;

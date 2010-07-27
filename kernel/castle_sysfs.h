@@ -10,8 +10,6 @@ int  castle_sysfs_device_add     (struct castle_attachment *attachment);
 void castle_sysfs_device_del     (struct castle_attachment *attachment);
 int  castle_sysfs_collection_add (struct castle_attachment *attachment);
 void castle_sysfs_collection_del (struct castle_attachment *attachment);
-int  castle_sysfs_region_add     (struct castle_region *region);
-void castle_sysfs_region_del     (struct castle_region *region);
 int  castle_sysfs_transfer_add   (struct castle_transfer *transfer);
 void castle_sysfs_transfer_del   (struct castle_transfer *transfer);
 

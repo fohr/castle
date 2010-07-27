@@ -3,7 +3,6 @@
 
 #include <linux/types.h>
 
-typedef uint32_t region_id_t;
 typedef uint32_t transfer_id_t;
 typedef uint32_t slave_uuid_t;
 typedef uint32_t collection_id_t;
@@ -54,7 +53,7 @@ typedef uint32_t version_t;
 #define CASTLE_CTRL_REPLY_NEW_SLAVE              2
 #define CASTLE_CTRL_REPLY_NEW_VERSION            3
 #define CASTLE_CTRL_REPLY_NEW_DEVICE             4
-#define CASTLE_CTRL_REPLY_NEW_REGION             5
+//#define CASTLE_CTRL_REPLY_NEW_REGION             5
 #define CASTLE_CTRL_REPLY_NEW_TRANSFER           6
 #define CASTLE_CTRL_REPLY_NEW_COLLECTION         7
 //EXCEPTIONS 8
@@ -112,20 +111,6 @@ typedef struct castle_control_cmd_init {
     int ret;                   /* OUT */
 } cctrl_cmd_init_t;
 
-typedef struct castle_control_cmd_region_create {
-    slave_uuid_t slave;        /* IN  */
-    version_t    version;      /* IN  */
-    uint32_t     start;        /* IN  */
-    uint32_t     length;       /* IN  */
-    int          ret;          /* OUT */
-    region_id_t  id;           /* OUT */
-} cctrl_cmd_region_create_t;
-
-typedef struct castle_control_cmd_region_destroy {
-    region_id_t id;            /* IN */
-    int         ret;           /* OUT */
-} cctrl_cmd_region_destroy_t;
-
 typedef struct castle_control_cmd_transfer_create {
     version_t     version;     /* IN  */
     uint32_t      direction;   /* IN  */
@@ -149,8 +134,6 @@ typedef struct castle_control_ioctl {
         cctrl_cmd_clone_t            clone;
         cctrl_cmd_snapshot_t         snapshot;
         cctrl_cmd_init_t             init;
-        cctrl_cmd_region_create_t    region_create;
-        cctrl_cmd_region_destroy_t   region_destroy;
         cctrl_cmd_transfer_create_t  transfer_create;
         cctrl_cmd_transfer_destroy_t transfer_destroy;
     };

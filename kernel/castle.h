@@ -571,22 +571,6 @@ struct castle_attachments {
     struct list_head attachments;
 };
 
-struct castle_region {
-	region_id_t          id;
-	struct kobject       kobj;
-	struct list_head     list;
-	
-	struct castle_slave *slave;
-	version_t            version;
-	int                  start;
-	int                  length;
-};
-
-struct castle_regions {
-    struct kobject   kobj;
-    struct list_head regions;
-};
-
 struct castle_transfer {
     transfer_id_t           id;
     version_t               version;
@@ -595,8 +579,8 @@ struct castle_transfer {
     int                     finished;
     int                     error;
 
-    struct castle_region  **regions;
-    int                     regions_count;
+/*    struct castle_region  **regions;
+    int                     regions_count; */
     
     struct kobject          kobj;
     struct list_head        list;
@@ -614,7 +598,6 @@ struct castle_transfers {
 extern struct castle              castle;
 extern struct castle_slaves       castle_slaves;
 extern struct castle_attachments  castle_attachments;
-extern struct castle_regions      castle_regions;
 extern struct castle_transfers    castle_transfers;
 extern da_id_t                    castle_next_da_id;
 
@@ -640,13 +623,6 @@ struct castle_attachment*
 
 struct castle_slave*  castle_claim                 (uint32_t new_dev);
 void                  castle_release               (struct castle_slave *cs);
-                                                   
-struct castle_region* castle_region_find           (region_id_t id);
-struct castle_region* castle_region_create         (uint32_t slave_id, 
-                                                    version_t version, 
-                                                    uint32_t start, 
-                                                    uint32_t length);
-int                   castle_region_destroy        (struct castle_region *region);
                                                    
 void                  castle_slave_access          (uint32_t uuid);
                                                    

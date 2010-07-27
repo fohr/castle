@@ -110,7 +110,7 @@ struct castle_transfer* castle_transfer_find(transfer_id_t id)
     return NULL;
 }
 
-static int castle_regions_get(version_t version, struct castle_region*** regions_ret)
+/*static int castle_regions_get(version_t version, struct castle_region*** regions_ret)
 {
     struct list_head *lh;
     struct castle_region *region;
@@ -131,7 +131,7 @@ static int castle_regions_get(version_t version, struct castle_region*** regions
     if (!(regions = kzalloc(count * sizeof(struct castle_region*), GFP_KERNEL)))
         return -ENOMEM;
 
-    /* TODO race if someone comes and add another region between the first count and here */
+    // TODO race if someone comes and add another region between the first count and here
 
     list_for_each(lh, &castle_regions.regions)
     {
@@ -146,7 +146,7 @@ static int castle_regions_get(version_t version, struct castle_region*** regions
     *regions_ret = regions;
 
     return count;
-}
+}*/
 
 void castle_transfer_destroy(struct castle_transfer *transfer)
 {
@@ -160,7 +160,6 @@ void castle_transfer_destroy(struct castle_transfer *transfer)
     castle_sysfs_transfer_del(transfer);
 
     list_del(&transfer->list);
-    kfree(transfer->regions);
     kfree(transfer);    
 
     debug("castle_transfer_destroy'd id=%d\n", transfer->id);
@@ -216,10 +215,6 @@ struct castle_transfer* castle_transfer_create(version_t version, int direction,
     transfer->id = transfer_id++;
     transfer->version = version;
     transfer->direction = direction;
-    transfer->regions_count = err = castle_regions_get(version, &transfer->regions);
-    
-    if(transfer->regions_count < 0)
-        goto err_out;
     
     if((err = castle_transfer_check(transfer)) != 0)
         goto err_out;
@@ -246,7 +241,6 @@ struct castle_transfer* castle_transfer_create(version_t version, int direction,
 
 err_out:
     printk("castle_transfer_create has failed.\n");
-    if(transfer->regions) kfree(transfer->regions);
     if(transfer)          kfree(transfer);
 
     BUG_ON(err == 0);
@@ -280,8 +274,7 @@ static int castle_transfer_is_block_on_correct_disk(struct castle_transfer *tran
 {
     struct castle_slave *slave = castle_slave_find_by_block(cdb);
     struct castle_slave_superblock *sb;
-    struct castle_region *region;
-    int target, i;
+    int target;
 
     switch (transfer->direction)
     {
@@ -291,8 +284,8 @@ static int castle_transfer_is_block_on_correct_disk(struct castle_transfer *tran
             castle_slave_superblock_put(slave, 0);
             return target;
     
-        case CASTLE_TRANSFER_TO_REGION:
-            /* check the block is on one of the regions' slaves */
+ /*       case CASTLE_TRANSFER_TO_REGION:
+            // check the block is on one of the regions' slaves
             for (i = 0; i < transfer->regions_count; i++)
             {
                 region = transfer->regions[i];
@@ -301,7 +294,7 @@ static int castle_transfer_is_block_on_correct_disk(struct castle_transfer *tran
             }
         
             return false;
-            
+*/            
         default:
             BUG();
     }
@@ -309,8 +302,6 @@ static int castle_transfer_is_block_on_correct_disk(struct castle_transfer *tran
 
 static c_disk_blk_t castle_transfer_destination_get(struct castle_transfer *transfer)
 {
-    int i;
-    struct castle_region *region;
     c_disk_blk_t cdb = INVAL_DISK_BLK;
     
     debug("transfer->regions_count=%i\n", transfer->regions_count);
@@ -321,7 +312,7 @@ static c_disk_blk_t castle_transfer_destination_get(struct castle_transfer *tran
             cdb = castle_freespace_block_get(transfer->version, 1);
             break;
             
-        case CASTLE_TRANSFER_TO_REGION:
+/*        case CASTLE_TRANSFER_TO_REGION:
             for (i = 0; (i < transfer->regions_count) && DISK_BLK_INVAL(cdb); i++)
             {
                 region = transfer->regions[i];
@@ -332,12 +323,12 @@ static c_disk_blk_t castle_transfer_destination_get(struct castle_transfer *tran
                     
                 debug("region=%i\n", region->id);
             
-                /* this will update the summaries... */
+                // this will update the summaries... 
                 cdb = castle_freespace_slave_block_get(region->slave, region->version, 1);
 
                 debug("cdb=(%i,%i)\n", cdb.disk, cdb.block);
             }
-            break;
+            break;*/
         
         default:
             BUG();
