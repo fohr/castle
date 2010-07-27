@@ -689,6 +689,12 @@ int castle_sysfs_init(void)
     int ret;
 
     memset(&castle.kobj, 0, sizeof(struct kobject));
+
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,24)
+    // seems to fix uevent stuff, probably not valid for 2.6.24+
+    castle.kobj.kset   = &fs_subsys; 
+#endif
+
     ret = kobject_tree_add(&castle.kobj, 
                             fs_kobject, 
                            &castle_root_ktype, 
@@ -751,7 +757,6 @@ out1:
 void castle_sysfs_fini(void)
 {
     kobject_remove(&castle_transfers.kobj);
-    kobject_remove(&castle_regions.kobj);
     kobject_remove(&castle_attachments.collections_kobj);
     kobject_remove(&castle_attachments.devices_kobj);
     kobject_remove(&castle_slaves.kobj);
