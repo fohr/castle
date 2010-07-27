@@ -135,10 +135,10 @@ static void castle_ct_immut_iter_next_node(c_immut_iter_t *iter)
     castle_ct_immut_iter_next_node_find(iter, iter->curr_node->next_node);
 }
 
-static USED void castle_ct_immut_iter_next(c_immut_iter_t *iter, 
-                                           void **key_p, 
-                                           version_t *version_p, 
-                                           c_val_tup_t *cvt_p)
+static void castle_ct_immut_iter_next(c_immut_iter_t *iter, 
+                                      void **key_p, 
+                                      version_t *version_p, 
+                                      c_val_tup_t *cvt_p)
 {
     int is_leaf_ptr;
 
@@ -156,7 +156,7 @@ static USED void castle_ct_immut_iter_next(c_immut_iter_t *iter,
     debug("Returned next, curr_idx is now=%d / %d.\n", iter->curr_idx, iter->curr_node->used);
 }
 
-static USED int castle_ct_immut_iter_has_next(c_immut_iter_t *iter)
+static int castle_ct_immut_iter_has_next(c_immut_iter_t *iter)
 {
     if(unlikely(iter->completed))
         return 0;
@@ -173,7 +173,7 @@ static USED int castle_ct_immut_iter_has_next(c_immut_iter_t *iter)
     return 1;
 } 
 
-static USED void castle_ct_immut_iter_init(c_immut_iter_t *iter)
+static void castle_ct_immut_iter_init(c_immut_iter_t *iter)
 {
     debug("Initialising immut enumerator for ct id=%d\n", iter->tree->seq);
     iter->btree     = castle_btree_type_get(iter->tree->btree_type);
