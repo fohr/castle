@@ -221,18 +221,6 @@ static ssize_t slave_spinning_show(struct kobject *kobj,
     return sprintf(buf, "%d\n", spinning);
 }
 
-static ssize_t slave_block_cnts_show(struct kobject *kobj, 
-						             struct attribute *attr, 
-                                     char *buf)
-{
-    struct castle_slave *slave = container_of(kobj, struct castle_slave, kobj); 
-    const char *name = attr->name;
-
-    unsigned long offset = simple_strtoul(name + 10, NULL, 10) * 200; // 10 = length of "block_cnts"
-
-    return castle_freespace_summary_get(slave, buf, offset, 200);
-}
-
 static ssize_t devices_number_show(struct kobject *kobj, 
 						           struct attribute *attr, 
                                    char *buf)
@@ -401,53 +389,12 @@ __ATTR(target, S_IRUGO|S_IWUSR, slave_target_show, NULL);
 static struct castle_sysfs_entry slave_spinning =
 __ATTR(spinning, S_IRUGO|S_IWUSR, slave_spinning_show, NULL);
 
-/* TODO we should dynamically create these files */
-static struct castle_sysfs_entry slave_block_cnts0 =
-__ATTR(block_cnts0, S_IRUGO|S_IWUSR, slave_block_cnts_show, NULL);
-
-static struct castle_sysfs_entry slave_block_cnts1 =
-__ATTR(block_cnts1, S_IRUGO|S_IWUSR, slave_block_cnts_show, NULL);
-
-static struct castle_sysfs_entry slave_block_cnts2 =
-__ATTR(block_cnts2, S_IRUGO|S_IWUSR, slave_block_cnts_show, NULL);
-
-static struct castle_sysfs_entry slave_block_cnts3 =
-__ATTR(block_cnts3, S_IRUGO|S_IWUSR, slave_block_cnts_show, NULL);
-
-static struct castle_sysfs_entry slave_block_cnts4 =
-__ATTR(block_cnts4, S_IRUGO|S_IWUSR, slave_block_cnts_show, NULL);
-
-static struct castle_sysfs_entry slave_block_cnts5 =
-__ATTR(block_cnts5, S_IRUGO|S_IWUSR, slave_block_cnts_show, NULL);
-
-static struct castle_sysfs_entry slave_block_cnts6 =
-__ATTR(block_cnts6, S_IRUGO|S_IWUSR, slave_block_cnts_show, NULL);
-
-static struct castle_sysfs_entry slave_block_cnts7 =
-__ATTR(block_cnts7, S_IRUGO|S_IWUSR, slave_block_cnts_show, NULL);
-
-static struct castle_sysfs_entry slave_block_cnts8 =
-__ATTR(block_cnts8, S_IRUGO|S_IWUSR, slave_block_cnts_show, NULL);
-
-static struct castle_sysfs_entry slave_block_cnts9 =
-__ATTR(block_cnts9, S_IRUGO|S_IWUSR, slave_block_cnts_show, NULL);
-
 static struct attribute *castle_slave_attrs[] = {
     &slave_uuid.attr,
     &slave_size.attr,
     &slave_used.attr,
     &slave_target.attr,
     &slave_spinning.attr,
-    &slave_block_cnts0.attr,
-    &slave_block_cnts1.attr,
-    &slave_block_cnts2.attr,
-    &slave_block_cnts3.attr,
-    &slave_block_cnts4.attr,
-    &slave_block_cnts5.attr,
-    &slave_block_cnts6.attr,
-    &slave_block_cnts7.attr,
-    &slave_block_cnts8.attr,
-    &slave_block_cnts9.attr,
     NULL,
 };
 
@@ -605,126 +552,6 @@ void castle_sysfs_collection_del(struct castle_attachment *collection)
     kobject_remove(&collection->kobj);
 }
 
-
-/* REGIONS */
-
-static ssize_t regions_number_show(struct kobject *kobj, 
-						           struct attribute *attr, 
-                                   char *buf)
-{
-    struct castle_regions *regions = 
-                container_of(kobj, struct castle_regions, kobj);
-    struct list_head *lh;
-    int nr_regions = 0;
-
-    list_for_each(lh, &regions->regions)
-        nr_regions++;
-
-    return sprintf(buf, "%d\n", nr_regions);
-}
-
-static ssize_t region_id_show(struct kobject *kobj, 
-						           struct attribute *attr, 
-                                   char *buf)
-{
-    struct castle_region *region = container_of(kobj, struct castle_region, kobj); 
-
-    return sprintf(buf, "0x%x\n", region->id);
-}
-
-static ssize_t region_start_show(struct kobject *kobj, 
-						           struct attribute *attr, 
-                                   char *buf)
-{
-    struct castle_region *region = container_of(kobj, struct castle_region, kobj); 
-
-    return sprintf(buf, "%d\n", region->start);
-}
-
-static ssize_t region_length_show(struct kobject *kobj, 
-						           struct attribute *attr, 
-                                   char *buf)
-{
-    struct castle_region *region = container_of(kobj, struct castle_region, kobj); 
-
-    return sprintf(buf, "%d\n", region->length);
-}
-
-static ssize_t region_version_show(struct kobject *kobj, 
-						           struct attribute *attr, 
-                                   char *buf)
-{
-    struct castle_region *region = container_of(kobj, struct castle_region, kobj); 
-
-    return sprintf(buf, "0x%x\n", region->version);
-}
-
-/* Definition of regions sysfs directory attributes */
-static struct castle_sysfs_entry regions_number =
-__ATTR(number, S_IRUGO|S_IWUSR, regions_number_show, NULL);
-
-static struct attribute *castle_regions_attrs[] = {
-    &regions_number.attr,
-    NULL,
-};
-
-static struct kobj_type castle_regions_ktype = {
-    .sysfs_ops      = &castle_sysfs_ops,
-    .default_attrs  = castle_regions_attrs,
-};
-
-/* Definition of each region sysfs directory attributes */
-
-static struct castle_sysfs_entry region_id =
-__ATTR(id, S_IRUGO|S_IWUSR, region_id_show, NULL);
-
-static struct castle_sysfs_entry region_start =
-__ATTR(start, S_IRUGO|S_IWUSR, region_start_show, NULL);
-
-static struct castle_sysfs_entry region_length =
-__ATTR(length, S_IRUGO|S_IWUSR, region_length_show, NULL);
-
-static struct castle_sysfs_entry region_version =
-__ATTR(version, S_IRUGO|S_IWUSR, region_version_show, NULL);
-
-static struct attribute *castle_region_attrs[] = {
-    &region_id.attr,
-    &region_start.attr,
-    &region_length.attr,
-    &region_version.attr,
-    NULL,
-};
-
-static struct kobj_type castle_region_ktype = {
-    .sysfs_ops      = &castle_sysfs_ops,
-    .default_attrs  = castle_region_attrs,
-};
-
-int castle_sysfs_region_add(struct castle_region *region)
-{
-    int ret;
-
-    memset(&region->kobj, 0, sizeof(struct kobject));
-    ret = kobject_tree_add(&region->kobj, 
-                           &castle_regions.kobj, 
-                           &castle_region_ktype, 
-                           "%x", region->id);
-    if(ret < 0) 
-        return ret;
-
-    ret = sysfs_create_link(&region->kobj, &region->slave->kobj, "slave");
-    if (ret < 0)
-        return ret;
-
-    return 0;
-}
-
-void castle_sysfs_region_del(struct castle_region *region)
-{
-    sysfs_remove_link(&region->kobj, "slave");
-    kobject_remove(&region->kobj);
-}
-
 /* TRANSFERS */
 
 static ssize_t transfers_number_show(struct kobject *kobj, 
@@ -792,7 +619,7 @@ static ssize_t transfer_finished_show(struct kobject *kobj,
     return sprintf(buf, "%d\n", transfer->finished);
 }
 
-/* Definition of regions sysfs directory attributes */
+/* Definition of transfer sysfs directory attributes */
 static struct castle_sysfs_entry transfers_number =
 __ATTR(number, S_IRUGO|S_IWUSR, transfers_number_show, NULL);
 
@@ -806,7 +633,7 @@ static struct kobj_type castle_transfers_ktype = {
     .default_attrs  = castle_transfers_attrs,
 };
 
-/* Definition of each region sysfs directory attributes */
+/* Definition of each transfer sysfs directory attributes */
 static struct castle_sysfs_entry transfer_id =
 __ATTR(id, S_IRUGO|S_IWUSR, transfer_id_show, NULL);
 
@@ -896,25 +723,16 @@ int castle_sysfs_init(void)
                            "%s", "collections");
     if(ret < 0) goto out5;
 
-    memset(&castle_regions.kobj, 0, sizeof(struct kobject));
-    ret = kobject_tree_add(&castle_regions.kobj, 
-                           &castle.kobj, 
-                           &castle_regions_ktype, 
-                           "%s", "regions");
-    if(ret < 0) goto out6;
-
     memset(&castle_transfers.kobj, 0, sizeof(struct kobject));
     ret = kobject_tree_add(&castle_transfers.kobj, 
                            &castle.kobj, 
                            &castle_transfers_ktype, 
                            "%s", "transfers");
-    if(ret < 0) goto out7;
+    if(ret < 0) goto out6;
 
     return 0;
     
     kobject_remove(&castle_transfers.kobj); /* Unreachable */
-out7:  
-    kobject_remove(&castle_regions.kobj);
 out6: 
     kobject_remove(&castle_attachments.collections_kobj);
 out5:

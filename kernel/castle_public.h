@@ -36,13 +36,17 @@ typedef uint32_t version_t;
 #define CASTLE_CTRL_REQ_CLONE                    6
 #define CASTLE_CTRL_REQ_SNAPSHOT                 7
 #define CASTLE_CTRL_REQ_INIT                     8
-#define CASTLE_CTRL_REQ_REGION_CREATE            9
-#define CASTLE_CTRL_REQ_REGION_DESTROY           10
+//#define CASTLE_CTRL_REQ_REGION_CREATE            9
+//#define CASTLE_CTRL_REQ_REGION_DESTROY           10
 #define CASTLE_CTRL_REQ_TRANSFER_CREATE          11
 #define CASTLE_CTRL_REQ_TRANSFER_DESTROY         12
 #define CASTLE_CTRL_REQ_COLLECTION_ATTACH        13
 #define CASTLE_CTRL_REQ_COLLECTION_DETACH        14
 #define CASTLE_CTRL_REQ_COLLECTION_SNAPSHOT      15
+#define CASTLE_CTRL_REQ_RESERVE_FOR_TRANSFER     16
+
+#define CASTLE_CTRL_REQ_VALID_STATS              17
+#define CASTLE_CTRL_REQ_INVALID_STATS            18
 
 /* Subtypes for CASTLE_CTRL_REPLY */
 #define CASTLE_CTRL_REPLY_FAIL                   0

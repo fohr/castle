@@ -553,126 +553,6 @@ void castle_release(struct castle_slave *cs)
     kfree(cs);
 }
 
-struct castle_region* castle_region_find(region_id_t id)
-{
-    struct list_head *lh;
-    struct castle_region *region;
-
-    list_for_each(lh, &castle_regions.regions)
-    {
-        region = list_entry(lh, struct castle_region, list);
-        if(region->id == id)
-            return region;
-    }
-
-    return NULL;
-}
-
-static int castle_region_add(struct castle_region *region)
-{
-    struct list_head *l;
-    struct castle_region *r;
-
-    list_for_each(l, &castle_regions.regions)
-    {
-        r = list_entry(l, struct castle_region, list);
-        /* Check region does not overlap any other */
-        if((region->slave == r->slave) && (region->start + region->length > r->start) && (region->start < r->start + r->length))
-        {
-            printk("Region overlaps another - existing=(start=%d, length=%d) new=(start=%d, length=%d)\n", 
-                    r->start, r->length, region->start, region->length);
-            return -EINVAL;            
-        }
-    }
-    
-    list_add(&region->list, &castle_regions.regions);
-    return 0;
-}
-
-/*
- * TODO: ref count slaves with regions or something?
- */
-struct castle_region* castle_region_create(uint32_t slave_uuid, version_t version, uint32_t start, uint32_t length)
-{
-    struct castle_region* region = NULL;
-    struct castle_slave* slave = NULL;
-    static int region_id = 0;
-    int err;
-    
-    printk("castle_region_create(slave_uuid=0x%x, version=%d, start=%d, length=%d)\n", slave_uuid, version, start, length);
-    
-    if(length == 0)
-    {
-        printk("length must be greater than 0!\n");
-        goto err_out;
-    }
-    
-    err = castle_version_read(version, NULL, NULL, NULL, NULL);
-    if(err)
-    {
-        printk("Invalid version '%d'!\n", version);
-        goto err_out;
-    }
-    
-    if(!(region = kzalloc(sizeof(struct castle_region), GFP_KERNEL)))
-        goto err_out;
-        
-    if(!(slave = castle_slave_find_by_uuid(slave_uuid)))
-        goto err_out;
-    
-    region->id = region_id++;
-    region->slave = slave;
-    region->version = version;
-    region->start = start;
-    region->length = length;
-    
-    err = castle_region_add(region);
-    if(err)
-    {
-        printk("Could not add region to the list.\n");
-        goto err_out;
-    }
-    
-    err = castle_sysfs_region_add(region);
-    if(err) 
-    {
-         list_del(&region->list);
-         goto err_out;
-    }
-    
-    castle_events_region_create(region->id);
-    
-    return region;
-        
-err_out:
-    if(region) kfree(region);
-    return NULL;
-}
-
-int castle_region_destroy(struct castle_region *region)
-{
-    struct castle_transfer *t;
-    struct list_head *l;
-
-    /* TODO: transfres are regions must be protected by locks! */
-    list_for_each(l, &castle_transfers.transfers)
-    {
-        t = list_entry(l, struct castle_transfer, list);
-        if(t->version == region->version)
-        {
-            printk("Warning: Trying to destroy region id=%d, with an active transfer id=%d.\n",
-                    region->id, t->id);
-            return -EBUSY;
-        } 
-    }
-    castle_events_region_destroy(region->id);
-    castle_sysfs_region_del(region);
-    list_del(&region->list);
-    kfree(region);
-
-    return 0;
-}
-
 static int castle_regions_init(void)
 {
     memset(&castle_regions, 0, sizeof(struct castle_regions));
@@ -689,7 +569,7 @@ static void castle_regions_free(void)
     list_for_each_safe(lh, th, &castle_regions.regions)
     {
         region = list_entry(lh, struct castle_region, list); 
-        castle_region_destroy(region);
+        //castle_region_destroy(region);
     }
 }
 
@@ -926,11 +806,12 @@ static void castle_bio_data_io_do(c_bvec_t *c_bvec, c_disk_blk_t cdb)
     }
 }
 
-static void castle_bio_data_get_cvt(c_bvec_t    *c_bvec,
+static void castle_bio_data_cvt_get(c_bvec_t    *c_bvec,
                                     c_val_tup_t  prev_cvt,
                                     c_val_tup_t *cvt)
 {
     BUG_ON(c_bvec_data_dir(c_bvec) != WRITE); 
+    BUG_ON(!CVT_INVALID(c_bvec->cvt));
 
 #if 0
     printk("GET_CVT: Key-%p, cdb=(0x%x, 0x%x)\n",
@@ -1004,7 +885,8 @@ static void castle_device_c_bvec_make(c_bio_t *c_bio,
     c_bvec->version     = INVAL_VERSION; 
     c_bvec->flags       = 0; 
     c_bvec->tree        = &castle_global_tree;
-    c_bvec->get_cvt     = castle_bio_data_get_cvt;
+    c_bvec->cvt.type    = CVT_TYPE_INVALID;
+    c_bvec->cvt_get     = castle_bio_data_cvt_get;
     c_bvec->endfind     = castle_bio_data_io_end;
     c_bvec->da_endfind  = NULL;
     if(one2one_bvec)

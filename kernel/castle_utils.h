@@ -117,6 +117,7 @@ static inline uint64_t SKB_LL_GET(struct sk_buff *skb)
 {
     __be64 qword;
 
+    BUG_ON(skb == NULL);
     BUG_ON(skb_copy_bits(skb, 0, &qword, 8) < 0);
     BUG_ON(!pskb_pull(skb, 8));
 
@@ -141,16 +142,12 @@ static inline char* SKB_STR_GET(struct sk_buff *skb, int max_len)
     return str;
 }
 
-static inline void SKB_STR_CPY(struct sk_buff *skb, void *dst, int max_len)
+static inline void SKB_STR_CPY(struct sk_buff *skb, void *dst, int str_len)
 {
-    uint32_t str_len = SKB_L_GET(skb);
     uint32_t *dst32 = (uint32_t *)dst;
     
-    max_len -= 4;
-    BUG_ON((str_len > max_len) || (str_len > skb->len));
-    memcpy(dst32, &str_len, 4);
-
-    BUG_ON(skb_copy_bits(skb, 0, dst32 + 1, str_len) < 0);
+    BUG_ON(str_len > skb->len);
+    BUG_ON(skb_copy_bits(skb, 0, dst32, str_len) < 0);
     str_len += (str_len % 4 == 0 ? 0 : 4 - str_len % 4);
     BUG_ON(!pskb_pull(skb, str_len));
 }

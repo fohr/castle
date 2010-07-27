@@ -181,9 +181,14 @@ void castle_rxrpc_replace_complete(struct castle_rxrpc_call *call, int err)
     castle_rxrpc_reply_send(call, reply, 4);
 }
 
-void castle_rxrpc_str_copy(struct castle_rxrpc_call *call, void *buffer, int max_length)
+uint32_t castle_rxrpc_uint32_get(struct castle_rxrpc_call *call)
 {
-    SKB_STR_CPY(call->current_skb, buffer, max_length);
+    return SKB_L_GET(call->current_skb);
+}
+
+void castle_rxrpc_str_copy(struct castle_rxrpc_call *call, void *buffer, int str_length)
+{
+    SKB_STR_CPY(call->current_skb, buffer, str_length);
 }
 
 static int castle_rxrpc_collection_key_get(struct sk_buff *skb, 
@@ -253,12 +258,11 @@ static int cnt = 0;
     if(ret)
         return ret;
 
+    call->current_skb = skb;
     ret = castle_object_replace(call, key, (SKB_L_GET(skb) == CASTLE_OBJ_TOMBSTONE));
     if(ret)
         return ret;
 
-    /* TODO: maybe should move this earlier, what if we get straight through the da/tree? */
-    call->current_skb = skb;
     castle_rxrpc_state_update(call, RXRPC_CALL_REPLYING);
 
     return 0;
@@ -272,20 +276,25 @@ static int castle_rxrpc_slice_decode(struct castle_rxrpc_call *call, struct sk_b
 static int castle_rxrpc_ctrl_decode(struct castle_rxrpc_call *call, struct sk_buff *skb,  bool last)
 {
     int ret, len;
-    char reply[256];
+    void *reply = NULL;
 
     debug("Delivering ctrl packet.\n");
-    ret = castle_control_packet_process(skb, reply, &len);
+    ret = castle_control_packet_process(skb, &reply, &len);
     debug("Ctrl ret=%d\n", ret);
 
     rxrpc_kernel_data_delivered(skb);
     /* Advance the state, if we succeeded at decoding the packet */
-    if(ret) return ret;
-
+    if(ret) 
+    {
+        if(reply) kfree(reply);
+        return ret;
+    }
+    
     castle_rxrpc_state_update(call, RXRPC_CALL_REPLYING);
     debug("Sending reply of length=%d\n", len);
     castle_rxrpc_reply_send(call, reply, len);
 
+    kfree(reply);
     return 0;
 }
 
@@ -335,10 +344,11 @@ static void castle_rxrpc_msg_send(struct castle_rxrpc_call *call, struct msghdr 
     castle_rxrpc_state_update(call, RXRPC_CALL_AWAIT_ACK);
     n = rxrpc_kernel_send_data(call->rxcall, msg, len);
     debug("Sent %d bytes.\n", n);
-    if (n >= 0) 
-        return;
     if (n == -ENOMEM)
         rxrpc_kernel_abort_call(call->rxcall, RX_USER_ABORT);
+    BUG_ON(n != len);
+    if (n >= 0) 
+        return;
 }
 
 static void castle_rxrpc_reply_send(struct castle_rxrpc_call *call, const void *buf, size_t len)
