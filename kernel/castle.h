@@ -79,7 +79,7 @@ struct castle_fs_superblock {
 enum {
     CVT_TYPE_TOMB_STONE      = 0x08,
     CVT_TYPE_INLINE          = 0x10,
-    CVT_TYPE_ONDISK         = 0x20,
+    CVT_TYPE_ONDISK          = 0x20,
     CVT_TYPE_INVALID
 };
 
@@ -102,6 +102,20 @@ typedef struct castle_btree_val c_val_tup_t;
 #define CVT_ONDISK(_cvt)     ((_cvt).type == CVT_TYPE_ONDISK)
 #define CVT_INVALID(_cvt)    ((_cvt).type == CVT_TYPE_INVALID)
 #define CVT_ONE_BLK(_cvt)    (CVT_ONDISK(_cvt) &&  (_cvt).length == C_BLK_SIZE)
+#define CVT_TOMB_STONE_SET(_cvt)                                            \
+                             {                                              \
+                                (_cvt).type     = CVT_TYPE_TOMB_STONE;      \
+                                (_cvt).length   = 0;                        \
+                                (_cvt).cdb.disk = 0;                        \
+                                (_cvt).cdb.block= 0;                        \
+                             }
+#define CVT_INVALID_SET(_cvt)                                               \
+                             {                                              \
+                                (_cvt).type     = CVT_TYPE_INVALID;         \
+                                (_cvt).length   = 0;                        \
+                                (_cvt).cdb.disk = 0;                        \
+                                (_cvt).cdb.block= 0;                        \
+                             }
 #define CVT_BTREE_NODE(_cvt, _btree)     \
                             (CVT_ONDISK(_cvt) &&             \
                             (_cvt).length == (_btree)->node_size * C_BLK_SIZE)
@@ -359,10 +373,12 @@ typedef struct castle_bio_vec {
     };
     /* Used to thread this bvec onto a workqueue */
     struct work_struct         work;
-    /* Valuei tuple allocation callback */
-    void                     (*get_cvt)    (struct castle_bio_vec *, 
+    /* Value tuple allocation callback */
+    void                     (*cvt_get)    (struct castle_bio_vec *, 
                                             c_val_tup_t,
                                             c_val_tup_t *);
+    /* CVT passed from client, used by cvt_get() */
+    c_val_tup_t                cvt;
     /* Completion callback */
     void                     (*endfind)    (struct castle_bio_vec *, int, c_val_tup_t);
     void                     (*da_endfind) (struct castle_bio_vec *, int, c_val_tup_t);

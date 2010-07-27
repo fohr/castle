@@ -609,7 +609,7 @@ struct castle_vlba_tree_entry {
     uint8_t      type;
     version_t    version;
     uint32_t     val_len;
-    c_disk_blk_t cdb;   /* FIXME: this space wasted for inline values */
+    c_disk_blk_t cdb;   
     vlba_key_t   key;
     /* Inline values are stored at the end of entry */
 } PACKED;
@@ -702,6 +702,8 @@ static void castle_vlba_tree_node_compact(struct castle_btree_node *node)
     uint32_t *a, *idx;
     uint32_t count;
 
+    /* Buffers to keep the minimum heap of entries offsets and corresponsding
+     * entry index */
     a = kmalloc(sizeof(uint32_t) * node->used, GFP_NOIO);
     idx = kmalloc(sizeof(uint32_t) * node->used, GFP_NOIO);
     BUG_ON(!a || !idx);
@@ -769,7 +771,7 @@ static int castle_vlba_tree_need_split(struct castle_btree_node *node,
 
     switch(ver_or_key_split)
     {
-        case 0://FIXME: clear the code
+        case 0:
             if(node->is_leaf)
             {
                 if(vlba_node->free_bytes + vlba_node->dead_bytes < MAX_VLBA_ENTRY_LENGTH) 
@@ -854,11 +856,15 @@ static void castle_vlba_tree_entry_get(struct castle_btree_node *node,
     {
         cvt_p->type = VLBA_TREE_ENTRY_DATA_TYPE(entry);
         cvt_p->length = entry->val_len;
+        BUG_ON(VLBA_TREE_ENTRY_IS_TOMB_STONE(entry) && entry->val_len != 0);
         if (VLBA_TREE_ENTRY_IS_INLINE(entry))
         {
-            BUG_ON(entry->val_len == 0);
+            BUG_ON(entry->val_len == 0 || entry->val_len > MAX_INLINE_VAL_SIZE);
+#if 0
             cvt_p->val = kmalloc(entry->val_len, GFP_NOIO);
             memcpy(cvt_p->val, VLBA_ENTRY_VAL_PTR(entry), entry->val_len);
+#endif
+            cvt_p->val = VLBA_ENTRY_VAL_PTR(entry);
         }
         else 
             cvt_p->cdb = entry->cdb;
@@ -918,13 +924,15 @@ static void castle_vlba_tree_entry_add(struct castle_btree_node *node,
                         VLBA_TREE_ENTRY_NODE;
     entry->type        |= cvt.type; 
     entry->val_len  = cvt.length;
+    BUG_ON(VLBA_TREE_ENTRY_IS_TOMB_STONE(entry) && entry->val_len != 0);
+    BUG_ON(!VLBA_TREE_ENTRY_IS_TOMB_STONE(entry) && entry->val_len == 0);
     if (VLBA_TREE_ENTRY_IS_INLINE(entry))
-        memcpy(VLBA_ENTRY_VAL_PTR(entry), cvt.val, cvt.length);
+    {
+        BUG_ON(entry->val_len == 0 || entry->val_len > MAX_INLINE_VAL_SIZE);
+        memmove(VLBA_ENTRY_VAL_PTR(entry), cvt.val, cvt.length);
+    }
     else 
         entry->cdb      = cvt.cdb;
-
-    BUG_ON(VLBA_TREE_ENTRY_IS_TOMB_STONE(entry) && entry->val_len != 0);
-    BUG_ON(VLBA_TREE_ENTRY_IS_INLINE(entry) && entry->val_len == 0);
 
     /* Increment the node used count */
     node->used++;
@@ -987,13 +995,15 @@ static void castle_vlba_tree_entry_replace(struct castle_btree_node *node,
                         VLBA_TREE_ENTRY_NODE;
         entry->type        |= cvt.type; 
         entry->val_len  = cvt.length;
+        BUG_ON(VLBA_TREE_ENTRY_IS_TOMB_STONE(entry) && entry->val_len != 0);
+        BUG_ON(!VLBA_TREE_ENTRY_IS_TOMB_STONE(entry) && entry->val_len == 0);
         if (VLBA_TREE_ENTRY_IS_INLINE(entry))
+        {
+            BUG_ON(entry->val_len == 0 || entry->val_len > MAX_INLINE_VAL_SIZE);
             memcpy(VLBA_ENTRY_VAL_PTR(entry), cvt.val, cvt.length);
+        }
         else 
             entry->cdb      = cvt.cdb;
-
-        BUG_ON(VLBA_TREE_ENTRY_IS_TOMB_STONE(entry) && entry->val_len != 0);
-        BUG_ON(VLBA_TREE_ENTRY_IS_INLINE(entry) && entry->val_len == 0);
     } 
     else 
     {
@@ -1953,7 +1963,7 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
        (btree->key_compare(lub_key, key) != 0) || 
        (lub_version != version))
     {
-        c_bvec->get_cvt(c_bvec, INVAL_VAL_TUP, &new_cvt);
+        c_bvec->cvt_get(c_bvec, INVAL_VAL_TUP, &new_cvt);
 
         atomic64_inc(&c_bvec->tree->item_count);
         /* TODO: should memset the page to zero (because we return zeros on reads)
@@ -1992,7 +2002,7 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
     }
 
     /* NOP for block devices */
-    c_bvec->get_cvt(c_bvec, lub_cvt, &new_cvt);
+    c_bvec->cvt_get(c_bvec, lub_cvt, &new_cvt);
     debug("Block already exists, modifying in place.\n");
     castle_btree_io_end(c_bvec, lub_cvt, 0);
 }
@@ -2039,7 +2049,16 @@ static void castle_btree_read_process(c_bvec_t *c_bvec)
                     lub_key, lub_version);
 
         if(btree->key_compare(lub_key, key) == 0)
+        {
+            if (CVT_INLINE(lub_cvt))
+            {
+                char *loc_buf;
+                loc_buf = kmalloc(lub_cvt.length, GFP_NOIO);
+                memcpy(loc_buf, lub_cvt.val, lub_cvt.length);
+                lub_cvt.val = loc_buf;
+            }
             castle_btree_io_end(c_bvec, lub_cvt, 0);
+        }
         else
             castle_btree_io_end(c_bvec, INVAL_VAL_TUP, 0);
     }
@@ -2137,7 +2156,7 @@ static void castle_btree_find_io_end(c2_block_t *c2b, int uptodate)
 #ifdef CASTLE_DEBUG    
     node = c_bvec_bnode(c_bvec);
     btree = castle_btree_type_get(node->type);
-    /* FIXME: This function runs in interrupt context and node_validate might
+    /* TODO: This function runs in interrupt context and node_validate might
      * block due to kmalloc() */
     btree->node_validate(node);
 #endif

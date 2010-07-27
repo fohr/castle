@@ -181,9 +181,14 @@ void castle_rxrpc_replace_complete(struct castle_rxrpc_call *call, int err)
     castle_rxrpc_reply_send(call, reply, 4);
 }
 
-void castle_rxrpc_str_copy(struct castle_rxrpc_call *call, void *buffer, int max_length)
+uint32_t castle_rxrpc_uint32_get(struct castle_rxrpc_call *call)
 {
-    SKB_STR_CPY(call->current_skb, buffer, max_length);
+    return SKB_L_GET(call->current_skb);
+}
+
+void castle_rxrpc_str_copy(struct castle_rxrpc_call *call, void *buffer, int str_length)
+{
+    SKB_STR_CPY(call->current_skb, buffer, str_length);
 }
 
 static int castle_rxrpc_collection_key_get(struct sk_buff *skb, 
@@ -253,12 +258,11 @@ static int cnt = 0;
     if(ret)
         return ret;
 
+    call->current_skb = skb;
     ret = castle_object_replace(call, key, (SKB_L_GET(skb) == CASTLE_OBJ_TOMBSTONE));
     if(ret)
         return ret;
 
-    /* TODO: maybe should move this earlier, what if we get straight through the da/tree? */
-    call->current_skb = skb;
     castle_rxrpc_state_update(call, RXRPC_CALL_REPLYING);
 
     return 0;
