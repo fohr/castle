@@ -79,8 +79,8 @@ struct castle_fs_superblock {
 enum {
     CVT_TYPE_TOMB_STONE      = 0x08,
     CVT_TYPE_INLINE          = 0x10,
-    CVT_TYPE_ONDISK         = 0x20,
-    CVT_TYPE_INVALID
+    CVT_TYPE_ONDISK          = 0x20,
+    CVT_TYPE_INVALID         = 0x30,
 };
 
 #define MAX_INLINE_VAL_SIZE 512

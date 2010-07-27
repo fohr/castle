@@ -19,6 +19,7 @@
 #endif
 
 #define MAX_DA_LEVEL                    (10)
+#define MAX_DYNAMIC_TREE_SIZE           (1000)
 
 #define CASTLE_DA_HASH_SIZE             (1000)
 #define CASTLE_CT_HASH_SIZE             (4000)
@@ -35,6 +36,7 @@ struct castle_double_array {
     version_t        root_version;
     /* Lock protects the trees list */
     spinlock_t       lock;
+    int              in_merge;
     struct list_head trees[MAX_DA_LEVEL];
     struct list_head hash_list;
     c_mstore_key_t   mstore_key;
@@ -42,6 +44,9 @@ struct castle_double_array {
 
 DEFINE_HASH_TBL(castle_da, castle_da_hash, CASTLE_DA_HASH_SIZE, struct castle_double_array, hash_list, da_id_t, id);
 DEFINE_HASH_TBL(castle_ct, castle_ct_hash, CASTLE_CT_HASH_SIZE, struct castle_component_tree, hash_list, tree_seq_t, seq);
+
+/**********************************************************************************************/
+/* Prototypes */
 static struct castle_component_tree* castle_ct_alloc(struct castle_double_array *da, 
                                                      int dynamic, 
                                                      int level);
@@ -49,15 +54,16 @@ static inline void castle_da_lock(struct castle_double_array *da);
 static inline void castle_da_unlock(struct castle_double_array *da);
 static inline void castle_ct_get(struct castle_component_tree *ct);
 static inline void castle_ct_put(struct castle_component_tree *ct);
+static void castle_da_merge_check(struct castle_double_array *da);
 struct castle_da_merge;
 static void castle_da_merge_budget_consume(struct castle_da_merge *merge);
 
 /**********************************************************************************************/
 /* Iterators */
-
 typedef struct castle_immut_iterator {
     struct castle_component_tree *tree;
     struct castle_btree_type     *btree;
+    int                           completed;
     c2_block_t                   *curr_c2b;
     struct castle_btree_node     *curr_node;
     int                           curr_idx;
@@ -152,8 +158,12 @@ static USED void castle_ct_immut_iter_next(c_immut_iter_t *iter,
 
 static USED int castle_ct_immut_iter_has_next(c_immut_iter_t *iter)
 {
+    if(unlikely(iter->completed))
+        return 0;
+
     if((iter->curr_idx >= iter->curr_node->used) && (!iter->next_c2b))
     {
+        iter->completed = 1;
         BUG_ON(!iter->curr_c2b);
         put_c2b(iter->curr_c2b);
 
@@ -167,6 +177,7 @@ static USED void castle_ct_immut_iter_init(c_immut_iter_t *iter)
 {
     debug("Initialising immut enumerator for ct id=%d\n", iter->tree->seq);
     iter->btree     = castle_btree_type_get(iter->tree->btree_type);
+    iter->completed = 0;
     iter->curr_c2b  = NULL;
     iter->next_c2b  = NULL;
     castle_ct_immut_iter_next_node_find(iter, iter->tree->first_node);
@@ -445,20 +456,23 @@ static void castle_ct_modlist_iter_init(c_modlist_iter_t *iter)
     castle_ct_modlist_iter_heapsort(iter);
 }
 
+typedef int  (*iter_has_next_fn)(void *iter);
+typedef void (*iter_next_fn)    (void *iter, 
+                                 void **key_p, 
+                                 version_t *version_p, 
+                                 c_val_tup_t *cvt_p);
+ 
 typedef struct castle_merged_iterator {
     int nr_iters;
     struct castle_btree_type *btree;
     int err;
     int non_empty_cnt;
     struct component_iterator {
-        int     completed;
-        void   *iterator;
-        int   (*has_next_fn) (void *iter);
-        void  (*next_fn)     (void *iter, 
-                              void **key_p, 
-                              version_t *version_p, 
-                              c_val_tup_t *cvt_p);
-        int     cached;
+        int               completed;
+        void             *iterator;
+        iter_has_next_fn  has_next_fn;
+        iter_next_fn      next_fn;
+        int               cached;
         struct {
             void         *k;
             version_t     v;
@@ -739,7 +753,7 @@ static void castle_da_merge_budget_replenish(void)
     int budget_delta = 0;
 
     atomic_set(&epoch_ios, 0);
-    printk("Merge replenish, number of ios in last second=%d.\n", ios);
+    debug("Merge replenish, number of ios in last second=%d.\n", ios);
     if(ios < MAX_IOS) 
         budget_delta = MAX_IOS - ios;
     if(budget_delta < MIN_BUDGET_DELTA)
@@ -810,8 +824,28 @@ static void castle_da_iterator_create(struct castle_da_merge *merge,
         *iter_p = iter; 
     } else
     {
-        BUG();
+        c_immut_iter_t *iter = kmalloc(sizeof(c_immut_iter_t), GFP_KERNEL);
+        if(!iter)
+            return;
+        iter->tree = tree;
+        castle_ct_immut_iter_init(iter);
+        /* TODO: after init errors? */
+        *iter_p = iter;
     }
+}
+        
+static iter_has_next_fn castle_da_iterator_has_next_fn_get(struct castle_component_tree *ct)
+{
+    if(ct->dynamic)
+        return (iter_has_next_fn)castle_ct_modlist_iter_has_next;
+    return (iter_has_next_fn)castle_ct_immut_iter_has_next;
+}
+
+static iter_next_fn castle_da_iterator_next_fn_get(struct castle_component_tree *ct)
+{
+    if(ct->dynamic)
+        return (iter_next_fn)castle_ct_modlist_iter_next;
+    return (iter_next_fn)castle_ct_immut_iter_next;
 }
 
 static int castle_da_iterators_create(struct castle_da_merge *merge)
@@ -819,7 +853,7 @@ static int castle_da_iterators_create(struct castle_da_merge *merge)
     struct castle_btree_type *btree;
     int ret;
 
-    debug("Creating iterators for the merge.\n");
+    printk("Creating iterators for the merge.\n");
     BUG_ON( merge->iter1    ||  merge->iter2);
     BUG_ON(!merge->in_tree1 || !merge->in_tree2);
     btree = castle_btree_type_get(merge->in_tree1->btree_type);
@@ -845,11 +879,11 @@ static int castle_da_iterators_create(struct castle_da_merge *merge)
     merge->merged_iter->btree    = btree;
     castle_ct_merged_iter_init(merge->merged_iter,
                                merge->iter1, 
-                               merge->in_tree1->dynamic ? castle_ct_modlist_iter_has_next : NULL,
-                               merge->in_tree1->dynamic ? castle_ct_modlist_iter_next     : NULL,
+                               castle_da_iterator_has_next_fn_get(merge->in_tree1),
+                               castle_da_iterator_next_fn_get(merge->in_tree1),
                                merge->iter2, 
-                               merge->in_tree2->dynamic ? castle_ct_modlist_iter_has_next : NULL,
-                               merge->in_tree2->dynamic ? castle_ct_modlist_iter_next     : NULL);
+                               castle_da_iterator_has_next_fn_get(merge->in_tree2),
+                               castle_da_iterator_next_fn_get(merge->in_tree2));
     ret = merge->merged_iter->err;
     debug("Merged iterator inited with ret=%d.\n", ret);
     if(ret)
@@ -1005,6 +1039,13 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
     /* Now that entries are safely in the buffer, drop them from the node */ 
     if((level->valid_end_idx + 1) <= (node->used - 1))
         btree->entries_drop(node, level->valid_end_idx + 1, node->used - 1);
+
+    BUG_ON(node->used != level->valid_end_idx + 1);
+    btree->entry_get(node, level->valid_end_idx, &key, &version, &leaf_ptr, &cvt);
+    debug("Inserting into parent key=%p, *key=%d, version=%d, buffer->used=%d\n",
+            key, *((uint32_t*)key), node->version, buffer->used);
+    BUG_ON(leaf_ptr);
+ 
     /* Insert correct pointer in the parent, unless we've just completed the
        root node at the end of the merge. */ 
     if(merge->completing && (merge->root_depth == depth) && (buffer->used == 0)) 
@@ -1013,11 +1054,6 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
                 depth);
         goto release_node;
     }
-    BUG_ON(node->used != level->valid_end_idx + 1);
-    btree->entry_get(node, level->valid_end_idx, &key, &version, &leaf_ptr, &cvt);
-    debug("Inserting into parent key=%p, *key=%d, version=%d, buffer->used=%d\n",
-            key, *((uint32_t*)key), node->version, buffer->used);
-    BUG_ON(leaf_ptr);
     /* If we are dealing with right-most internal node, use version 0 instead
        (max_version). This will guarantee that any btree walk, even for keys 
        in non-existant version will have somewhere to go */
@@ -1135,16 +1171,20 @@ static struct castle_component_tree* castle_da_merge_package(struct castle_da_me
     put_c2b(merge->last_node_c2b);
     /* Add the new tree to the doubling array */
     BUG_ON(merge->da->id != out_tree->da); 
+    printk("Finishing merge of ct1=%d, ct2=%d, new tree=%d\n", 
+            merge->in_tree1->seq, merge->in_tree2->seq, out_tree->seq);
     debug("Adding to doubling array, level: %d\n", out_tree->level);
     castle_da_lock(merge->da);
-    list_add(&out_tree->da_list, &merge->da->trees[out_tree->level]);
-    castle_da_unlock(merge->da);
-    /* Remove old cts from the DA */
-    debug("Removing and destroying old CTs.\n");
     BUG_ON((merge->da->id != merge->in_tree1->da) ||
            (merge->da->id != merge->in_tree2->da));
     list_del(&merge->in_tree1->da_list);
     list_del(&merge->in_tree2->da_list);
+    list_add(&out_tree->da_list, &merge->da->trees[out_tree->level]);
+    merge->da->in_merge = 0;
+    castle_da_merge_check(merge->da);
+    castle_da_unlock(merge->da);
+    /* Remove old cts from the DA */
+    debug("Destroying old CTs.\n");
     castle_ct_put(merge->in_tree1);
     castle_ct_put(merge->in_tree2);
 
@@ -1233,9 +1273,9 @@ out:
     castle_da_merge_dealloc(merge);
 }
 
-static USED void castle_da_merge_schedule(struct castle_double_array *da,
-                                          struct castle_component_tree *in_tree1,
-                                          struct castle_component_tree *in_tree2)
+static void castle_da_merge_schedule(struct castle_double_array *da,
+                                     struct castle_component_tree *in_tree1,
+                                     struct castle_component_tree *in_tree2)
 {
     struct castle_btree_type *btree;
     struct castle_da_merge *merge;
@@ -1287,6 +1327,47 @@ error_out:
     printk("Failed a merge with ret=%d\n", ret);
 }
 
+static void castle_da_merge_check(struct castle_double_array *da)
+/* Called with da->lock held */
+{
+    struct castle_component_tree *ct1, *ct2;
+    struct list_head *l;
+    int level;
+
+    printk("Checking if to do a merge for da: %d (in_merge=%d)\n", da->id, da->in_merge);
+    /* Return early if we are already doing a merge. */
+    if(da->in_merge)
+        return;
+    /* Go through all the levels >= 1, and check if there is more than one tree 
+       there. Schedule the merge if so */
+    for(level=1; level<MAX_DA_LEVEL; level++)
+    {
+        ct1 = ct2 = NULL;
+        list_for_each_prev(l, &da->trees[level])
+        {
+            if(!ct2)
+                ct2 = list_entry(l, struct castle_component_tree, da_list);
+            else
+            if(!ct1)
+                ct1 = list_entry(l, struct castle_component_tree, da_list);
+            if(ct1 && ct2)
+            {
+                printk("Found two trees for merge: ct1=%d, ct2=%d.\n",
+                    ct1->seq, ct2->seq);
+                /* Schedule the merge, but make sure the lock is not held then
+                   (merge_schedule() calls a bunch of sleeping functions). Set in_merge
+                   beforehand, which will stop further merges in this da being scheduled.
+                 */
+                da->in_merge = 1;
+                castle_da_unlock(da);
+                castle_da_merge_schedule(da, ct1, ct2);
+                castle_da_lock(da);
+                return;
+            }
+        }
+    }
+}
+
 /**********************************************************************************************/
 /* Generic DA code */
 
@@ -1319,6 +1400,7 @@ static void castle_da_unmarshall(struct castle_double_array *da,
     da->root_version = dam->root_version;
     da->mstore_key   = key;
     spin_lock_init(&da->lock);
+    da->in_merge     = 0;
 
     for(i=0; i<MAX_DA_LEVEL; i++)
         INIT_LIST_HEAD(&da->trees[i]);
@@ -1611,6 +1693,7 @@ int castle_double_array_read(void)
         debug("Read CT seq=%d\n", ct->seq);
         castle_da_lock(da);
         list_add(&ct->da_list, &da->trees[ct->level]);
+        castle_da_merge_check(da);
         castle_da_unlock(da);
         castle_next_tree_seq = (ct->seq >= castle_next_tree_seq) ? ct->seq + 1 : castle_next_tree_seq;
     }
@@ -1702,6 +1785,7 @@ static int castle_da_rwct_make(struct castle_double_array *da)
     }
     /* Thread CT onto level 0 list */
     list_add(&ct->da_list, &da->trees[ct->level]);
+    castle_da_merge_check(da);
     castle_da_unlock(da);
 
     return 0;
@@ -1718,8 +1802,9 @@ int castle_double_array_make(da_id_t da_id, version_t root_version)
         return -ENOMEM;
     da->id = da_id;
     da->root_version = root_version;
-    da->mstore_key = INVAL_MSTORE_KEY;
+    da->mstore_key   = INVAL_MSTORE_KEY;
     spin_lock_init(&da->lock);
+    da->in_merge     = 0;
     for(i=0; i<MAX_DA_LEVEL; i++)
         INIT_LIST_HEAD(&da->trees[i]);
     ret = castle_da_rwct_make(da);
@@ -1798,9 +1883,6 @@ static void castle_da_bvec_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cvt)
     callback(c_bvec, err, cvt);
 }
 
-#ifdef DEBUG
-c_immut_iter_t test_iter;
-#endif
 void castle_double_array_find(c_bvec_t *c_bvec)
 {
     struct castle_attachment *att = c_bvec->c_bio->attachment;
@@ -1808,11 +1890,7 @@ void castle_double_array_find(c_bvec_t *c_bvec)
     struct castle_double_array *da;
     da_id_t da_id; 
 
-#ifdef DEBUG
-    /* For test only */
-    static int first_time = 1;
-#endif
-
+    
     down_read(&att->lock);
     /* Since the version is attached, it must be found */
     BUG_ON(castle_version_read(att->version, &da_id, NULL, NULL, NULL));
@@ -1823,36 +1901,21 @@ void castle_double_array_find(c_bvec_t *c_bvec)
 
     /* da_endfind should be null it is for our privte use */
     BUG_ON(c_bvec->da_endfind);
-#ifdef DEBUG
-castle_da_lock(da);
-if((c_bvec_data_dir(c_bvec) == READ) && (first_time) && !list_empty(&da->trees[1]))
-{
-    struct castle_component_tree *ct1, *ct2;
-
-    first_time = 0;
-    ct1 = list_entry(da->trees[1].prev->prev, struct castle_component_tree, da_list);
-    ct2 = list_entry(da->trees[1].prev, struct castle_component_tree, da_list);
-    castle_da_merge_schedule(da, ct1, ct2);
-}
-castle_da_unlock(da);
-#endif
-
     debug_verbose("Doing DA %s for da_id=%d, for version=%d\n", 
                   c_bvec_data_dir(c_bvec) == READ ? "read" : "write",
                   da_id, att->version);
 
     ct = castle_da_rwct_get(da);
-#ifdef DEBUG
-    if(atomic_read(&ct->item_count) > 1000)
+    if(atomic_read(&ct->item_count) > MAX_DYNAMIC_TREE_SIZE)
     {
         struct castle_double_array *da = castle_da_hash_get(ct->da);  
 
         BUG_ON(!da);
-        debug("Number of items in component tree: %d greater than 1000 (%ld). Adding a new rwct.\n",
-                ct->seq, atomic64_read(&ct->item_count));
+        debug("Number of items in component tree: %d greater than %d (%ld). "
+              "Adding a new rwct.\n",
+                ct->seq, MAX_DYNAMIC_TREE_SIZE, atomic64_read(&ct->item_count));
         castle_da_rwct_make(da);
     }
-#endif
 
     c_bvec->tree       = ct; 
     c_bvec->da_endfind = c_bvec->endfind;
