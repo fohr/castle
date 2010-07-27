@@ -578,6 +578,29 @@ void castle_version_detach(version_t version)
     BUG_ON(!test_and_clear_bit(CV_ATTACHED_BIT, &v->flags));
 }
 
+static void castle_versions_insert(struct castle_version *p,
+                                   struct castle_version *v)
+{
+    struct castle_version *sybling_list;
+    struct castle_version **pprev;
+
+    /* We know who our parent is */
+    v->parent = p;
+    /* Sybling list starts with whatever the parent is pointing at. pprev will point to
+       the address where sybling list was stored. This allows us to update it without
+       special casing first child etc. */
+    pprev = &p->first_child;
+    sybling_list = *pprev;
+    while(sybling_list && (sybling_list->version > v->version))
+    {
+        pprev = &sybling_list->next_sybling;
+        sybling_list = *pprev;
+    }
+    BUG_ON(!pprev);
+    v->next_sybling = sybling_list;
+    *pprev = v;
+}
+
 static int castle_versions_process(void)
 {
     struct castle_version *v, *p, *n;
@@ -641,9 +664,7 @@ process_version:
         /* If we got here we know that the parent has been inited */
         debug(" Parent initialised, (v,p)=(%d,%d)\n", v->version, p->version);
         /* Insert v at the start of the sybling list. */
-        v->parent       = p;
-        v->next_sybling = p->first_child;
-        p->first_child  = v;
+        castle_versions_insert(p, v);
         list_add(&v->init_list, &sysfs_list);
 
         /* We are done setting this version up. */
