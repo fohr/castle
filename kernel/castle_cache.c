@@ -736,6 +736,34 @@ static void castle_cache_freelists_fini(void)
  * Generic storage functionality for (usually small) persisted data (e.g. versions in 
  * version tree, double arrays).
  */
+#define CASTLE_MSTORE_ENTRY_DELETED     (1<<1)
+struct castle_mstore_entry {
+    uint8_t flags;
+    char payload[0];
+} PACKED;
+
+static inline struct castle_mstore_entry* castle_mstore_entry_get(struct castle_mstore *mstore,
+                                                                  struct castle_mlist_node *node,
+                                                                  int idx)
+/* Works out where a given entry is in an mstore */
+{
+    return (struct castle_mstore_entry *)(node->payload + mstore->entry_size * idx); 
+}
+
+static inline char* castle_mstore_entry_payload_get(struct castle_mstore *mstore,
+                                                    struct castle_mlist_node *node,
+                                                    int idx)
+{
+    struct castle_mstore_entry *entry = castle_mstore_entry_get(mstore, node, idx);
+
+    return entry->payload;
+}
+
+static inline size_t castle_mstore_payload_size(struct castle_mstore *mstore)
+{
+    return mstore->entry_size - sizeof(struct castle_mstore_entry);
+}
+
 static void castle_mstore_iterator_validate(struct castle_mstore_iter *iter)
 {
     struct castle_mlist_node *node = c2b_buffer(iter->node_c2b);
@@ -754,9 +782,12 @@ static void castle_mstore_iterator_validate(struct castle_mstore_iter *iter)
 static void castle_mstore_iterator_advance(struct castle_mstore_iter *iter)
 {
     struct castle_mlist_node *node;
-    c2_block_t *c2b = NULL;
+    struct castle_mstore_entry *mentry;
+    c2_block_t *c2b;
     int ret;
-    
+
+again: 
+    c2b = NULL;
     debug_mstore("Advancing the iterator.\n");
 
     /* Ignore attemts to advance completed iterator */
@@ -799,10 +830,19 @@ static void castle_mstore_iterator_advance(struct castle_mstore_iter *iter)
         put_c2b(iter->node_c2b);
         iter->node_c2b = c2b;
         iter->node_idx = -1;
-        /* Limited recursion, to deal with empty last node */
-        debug_mstore("Recursing.\n");
-        castle_mstore_iterator_advance(iter);
+        debug_mstore("Advancing again.\n");
+        goto again;
     }
+    /* We've found an entry (may be a deleted one) */
+    debug_mstore("Entry found.\n");
+    mentry = castle_mstore_entry_get(iter->store, node, iter->node_idx);
+    if(mentry->flags & CASTLE_MSTORE_ENTRY_DELETED)
+    {
+        debug_mstore("The entry has been deleted. Advancing.");
+        printk("The entry has been deleted. Advancing.\n\n\n\n\n\n");
+        goto again;
+    }
+    debug_mstore("Exiting advance.\n");
 }
 
 int castle_mstore_iterator_has_next(struct castle_mstore_iter *iter)
@@ -824,8 +864,8 @@ void castle_mstore_iterator_next(struct castle_mstore_iter *iter,
     {
         debug_mstore("Copying entry.\n");
         memcpy(entry,
-               node->payload + iter->store->entry_size * iter->node_idx,
-               iter->store->entry_size);
+               castle_mstore_entry_payload_get(iter->store, node, iter->node_idx),
+               castle_mstore_payload_size(iter->store));
     }
     if(key)
     {
@@ -946,33 +986,62 @@ static void castle_mstore_node_add(struct castle_mstore *store)
     put_c2b(c2b);
 }
 
-void castle_mstore_entry_update(struct castle_mstore *store,
-                                c_mstore_key_t key,
-                                void *entry)
+static void castle_mstore_entry_mod(struct castle_mstore *store,
+                                    c_mstore_key_t key,
+                                    void *entry)
 {
     struct castle_mlist_node *node;
+    struct castle_mstore_entry *mentry;
     c2_block_t *node_c2b;
     
-    debug_mstore("Updating an entry in (0x%x, 0x%x), idx=%d.\n",
-            key.cdb.disk, key.cdb.block, key.idx); 
+    debug_mstore("Modifying an entry in (0x%x, 0x%x), idx=%d, %s.\n",
+            key.cdb.disk, key.cdb.block, key.idx, entry ? "updating" : "deleting"); 
     node_c2b = castle_cache_page_block_get(key.cdb);
     lock_c2b(node_c2b);
     if(!c2b_uptodate(node_c2b))
         BUG_ON(submit_c2b_sync(READ, node_c2b));
     debug_mstore("Read the block.\n");
     node = c2b_buffer(node_c2b);
-    memcpy(node->payload + key.idx * store->entry_size,
-           entry,
-           store->entry_size);
+    mentry = castle_mstore_entry_get(store, node, key.idx);
+    if(entry == NULL)
+    {
+        mentry->flags |= CASTLE_MSTORE_ENTRY_DELETED;
+    } else
+    {
+        if(mentry->flags & CASTLE_MSTORE_ENTRY_DELETED)
+        {
+            printk("WARNING: updating removed mstore entry for mstore=%d, key=((0x%x, 0x%x), %d)\n",
+                    store->store_id, key.cdb.disk, key.cdb.block, key.idx);
+            mentry->flags &= ~CASTLE_MSTORE_ENTRY_DELETED;
+        }
+        memcpy(mentry->payload,
+               entry,
+               castle_mstore_payload_size(store));
+    }
     dirty_c2b(node_c2b);
     unlock_c2b(node_c2b); 
     put_c2b(node_c2b);
+}
+
+void castle_mstore_entry_update(struct castle_mstore *store,
+                                c_mstore_key_t key,
+                                void *entry)
+{
+    BUG_ON(!entry);
+    castle_mstore_entry_mod(store, key, entry);
+}
+
+void castle_mstore_entry_delete(struct castle_mstore *store,
+                                c_mstore_key_t key)
+{
+    castle_mstore_entry_mod(store, key, NULL);
 }
 
 c_mstore_key_t castle_mstore_entry_insert(struct castle_mstore *store,
                                           void *entry)
 {
     struct castle_mlist_node *node;
+    struct castle_mstore_entry *mentry;
     c_mstore_key_t key;
     c2_block_t *c2b;
 
@@ -991,9 +1060,11 @@ c_mstore_key_t castle_mstore_entry_insert(struct castle_mstore *store,
     key.cdb = c2b->cdb;
     key.idx = node->used;
     debug_mstore("Writing out under idx=%d.\n", key.idx);
-    memcpy(node->payload + key.idx * store->entry_size,
+    mentry = castle_mstore_entry_get(store, node, key.idx);
+    mentry->flags = 0;
+    memcpy(mentry->payload,
            entry,
-           store->entry_size);
+           castle_mstore_payload_size(store));
     node->used++;
     store->last_node_unused--;
     dirty_c2b(c2b);
@@ -1021,7 +1092,7 @@ static struct castle_mstore *castle_mstore_alloc(c_mstore_id_t store_id, size_t 
         return NULL;
 
     store->store_id         = store_id;
-    store->entry_size       = entry_size;
+    store->entry_size       = entry_size + sizeof(struct castle_mstore_entry);
     init_MUTEX(&store->mutex);
     store->last_node_cdb    = INVAL_DISK_BLK; 
     store->last_node_unused = -1;

@@ -111,6 +111,8 @@ struct castle_mstore_iter* castle_mstore_iterate           (struct castle_mstore
 void                       castle_mstore_entry_update      (struct castle_mstore *store,
                                                             c_mstore_key_t key,
                                                             void *entry);
+void                       castle_mstore_entry_delete      (struct castle_mstore *store,
+                                                            c_mstore_key_t key);
 c_mstore_key_t             castle_mstore_entry_insert      (struct castle_mstore *store,
                                                             void *entry);
 struct castle_mstore*      castle_mstore_open              (c_mstore_id_t store_id,
