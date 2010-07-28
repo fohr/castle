@@ -55,7 +55,8 @@ static inline void castle_da_unlock(struct castle_double_array *da);
 static inline void castle_ct_get(struct castle_component_tree *ct);
 static inline void castle_ct_put(struct castle_component_tree *ct);
 static void castle_component_tree_add(struct castle_double_array *da,
-                                      struct castle_component_tree *ct);
+                                      struct castle_component_tree *ct,
+                                      int in_init);
 static void castle_da_merge_check(struct castle_double_array *da);
 struct castle_da_merge;
 static void castle_da_merge_budget_consume(struct castle_da_merge *merge);
@@ -1181,7 +1182,7 @@ static struct castle_component_tree* castle_da_merge_package(struct castle_da_me
            (merge->da->id != merge->in_tree2->da));
     list_del(&merge->in_tree1->da_list);
     list_del(&merge->in_tree2->da_list);
-    castle_component_tree_add(merge->da, out_tree);
+    castle_component_tree_add(merge->da, out_tree, 0 /* not in init */);
     merge->da->in_merge = 0;
     castle_da_merge_check(merge->da);
     castle_da_unlock(merge->da);
@@ -1373,14 +1374,13 @@ static void castle_da_merge_check(struct castle_double_array *da)
 /**********************************************************************************************/
 /* Generic DA code */
 
-
-
-static USED int castle_da_ct_inc_cmp(struct list_head *l1, struct list_head *l2)
+static int castle_da_ct_dec_cmp(struct list_head *l1, struct list_head *l2)
 {
     struct castle_component_tree *ct1 = list_entry(l1, struct castle_component_tree, da_list);
     struct castle_component_tree *ct2 = list_entry(l2, struct castle_component_tree, da_list);
+    BUG_ON(ct1->seq == ct2->seq);
 
-    return ct1->seq > ct2->seq ? 1 : -1;
+    return ct1->seq > ct2->seq ? -1 : 1;
 }
 
 static c_mstore_key_t castle_da_marshall(struct castle_dlist_entry *dam,
@@ -1414,15 +1414,18 @@ struct castle_component_tree* castle_component_tree_get(tree_seq_t seq)
 }
 
 static void castle_component_tree_add(struct castle_double_array *da,
-                                      struct castle_component_tree *ct)
+                                      struct castle_component_tree *ct,
+                                      int in_init)
 /* Needs to be called with da->lock held */
 {
     struct castle_component_tree *next_ct; 
 
     BUG_ON(da->id != ct->da);
     /* If there is something on the list, check that the sequence number 
-       of the tree we are inserting is greater */
-    if(!list_empty(&da->trees[ct->level]))
+       of the tree we are inserting is greater (i.e. enforce rev seq number
+       ordering in component trees in a given level). Don't check that during
+       init (when we are storting the trees afterwards). */
+    if(!in_init && !list_empty(&da->trees[ct->level]))
     {
         next_ct = list_entry(da->trees[ct->level].next, 
                              struct castle_component_tree,
@@ -1484,11 +1487,11 @@ static struct castle_component_tree* castle_da_rwct_get(struct castle_double_arr
 
 static int castle_da_trees_sort(struct castle_double_array *da, void *unused)
 {
- //   int i;
+    int i;
 
     castle_da_lock(da);
- //   for(i=0; i<MAX_DA_LEVEL; i++)
- //       list_sort(&da->trees[i], castle_da_ct_inc_cmp);
+    for(i=0; i<MAX_DA_LEVEL; i++)
+        list_sort(&da->trees[i], castle_da_ct_dec_cmp);
     castle_da_unlock(da);
 
     return 0;
@@ -1715,7 +1718,7 @@ int castle_double_array_read(void)
             goto out_iter_destroy;
         debug("Read CT seq=%d\n", ct->seq);
         castle_da_lock(da);
-        castle_component_tree_add(da, ct);
+        castle_component_tree_add(da, ct, 1 /* in init */);
         castle_da_unlock(da);
         castle_next_tree_seq = (ct->seq >= castle_next_tree_seq) ? ct->seq + 1 : castle_next_tree_seq;
     }
@@ -1803,10 +1806,10 @@ static int castle_da_rwct_make(struct castle_double_array *da)
         old_ct = list_entry(da->trees[0].next, struct castle_component_tree, da_list);
         list_del(&old_ct->da_list);
         old_ct->level = 1;
-        castle_component_tree_add(da, old_ct);
+        castle_component_tree_add(da, old_ct, 0 /* not in init */);
     }
     /* Thread CT onto level 0 list */
-    castle_component_tree_add(da, ct);
+    castle_component_tree_add(da, ct, 0 /* not in init */);
     castle_da_merge_check(da);
     castle_da_unlock(da);
 
