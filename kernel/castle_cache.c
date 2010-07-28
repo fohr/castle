@@ -839,7 +839,6 @@ again:
     if(mentry->flags & CASTLE_MSTORE_ENTRY_DELETED)
     {
         debug_mstore("The entry has been deleted. Advancing.");
-        printk("The entry has been deleted. Advancing.\n\n\n\n\n\n");
         goto again;
     }
     debug_mstore("Exiting advance.\n");

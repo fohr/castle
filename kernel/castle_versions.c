@@ -335,6 +335,28 @@ int castle_version_root_update(version_t version, tree_seq_t tree_id, c_disk_blk
     return 0;
 }
 
+void castle_version_roots_delete(tree_seq_t tree_id)
+{
+    struct castle_component_tree *ct; 
+    struct castle_tree_root *r;
+    struct list_head *l, *t;
+
+    printk("Deleting roots for tree_id=%d\n", tree_id);
+    ct = castle_component_tree_get(tree_id);
+    BUG_ON(!ct);
+
+    list_for_each_safe(l, t, &ct->roots_list)
+    {
+        r = list_entry(l, struct castle_tree_root, ct_list); 
+        list_del(&r->ct_list);
+        list_del(&r->version_list);
+        
+        if(!MSTORE_KEY_INVAL(r->mstore_key))
+            castle_mstore_entry_delete(castle_roots_mstore, r->mstore_key);
+        kfree(r);
+    }
+}
+
 static int castle_version_roots_clone(struct castle_version *dst,
                                       struct castle_version *src)
 {
@@ -873,7 +895,8 @@ int castle_versions_read(void)
                                    key))
         {
             castle_mstore_iterator_destroy(iterator);
-            printk("Error! Could not add root.\n");
+            printk("Error! Could not add root, version=%d, ct=%d.\n",
+                    mstore_rentry.version, mstore_rentry.tree_seq);
             return -ENOMEM;
         }
     }

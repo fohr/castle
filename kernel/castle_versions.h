@@ -18,6 +18,7 @@ void         castle_version_root_next   (tree_seq_t tree,
 int          castle_version_root_update (version_t version, 
                                          tree_seq_t tree_id, 
                                          c_disk_blk_t cdb);
+void         castle_version_roots_delete(tree_seq_t tree_id);
 void         castle_version_lock        (version_t version);
 void         castle_version_unlock      (version_t version);
 
