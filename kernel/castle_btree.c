@@ -1294,17 +1294,40 @@ static void castle_btree_lub_find(struct castle_btree_node *node,
     struct castle_btree_type *btree = castle_btree_type_get(node->type);
     version_t version_lub;
     void *key_lub;
-    int lub_idx, insert_idx;
+    int lub_idx, insert_idx, low, high, mid;
 
     debug("Looking for (k,v) = (%p, 0x%x), node->used=%d\n",
             key, version, node->used);
     /* We should not search for an invalid key */
     BUG_ON(btree->key_compare(key, btree->inv_key) == 0);
-        
-    key_lub = btree->inv_key; 
-    /* Scan the node left to right.
-       Going this direction keys increase and versions go from newest to oldest */
-    for(lub_idx=0; lub_idx < node->used; lub_idx++)
+    
+    /* Binary search on the keys to find LUB key */
+    low = -1;           /* Key in entry pointed to by low is guaranteed
+                           to be less than 'key' */ 
+    high = node->used;  /* Key in entry pointed to be high is guaranteed
+                           to be higher or equal to the 'key' */
+    debug(" (lo,hi) = (%d, %d)\n", low, high); 
+    while(low != high-1)
+    {
+        int key_cmp;
+
+        BUG_ON(high <= low);
+        mid = (low + high) / 2; 
+        btree->entry_get(node, mid, &key_lub, NULL, NULL, NULL);
+        key_cmp = btree->key_compare(key_lub, key);
+        debug("mid=%d, key_cmp=%d\n", mid, key_cmp);
+        if(key_cmp < 0)
+            low = mid;
+        else
+            high = mid;
+        debug(" (lo,hi) = (%d, %d)\n", low, high); 
+    }
+    /* 'high' is now pointing to the LUB key (left-most copy if there are a few instances
+        of it in the node), or past the end of the node.
+        We should start scanning to the right starting with the entry pointed by high (if 
+        one exists). Going this direction keys increase and versions go from newest to 
+        oldest */
+    for(lub_idx=high; lub_idx < node->used; lub_idx++)
     {
         btree->entry_get(node, lub_idx, &key_lub, &version_lub, NULL, NULL);
 
