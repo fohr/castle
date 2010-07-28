@@ -2003,8 +2003,19 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
 
     /* NOP for block devices */
     c_bvec->cvt_get(c_bvec, lub_cvt, &new_cvt);
+    /* Temporary check - remove */
+    {
+        void *tmp_key;
+        version_t tmp_version;
+
+        btree->entry_get(node, lub_idx, &tmp_key, &tmp_version, NULL, NULL);
+        BUG_ON((btree->key_compare(lub_key, tmp_key) != 0) || 
+               (lub_version != tmp_version));
+    }
+    btree->entry_replace(node, lub_idx, lub_key, lub_version, 0,
+                         new_cvt);
     debug("Block already exists, modifying in place.\n");
-    castle_btree_io_end(c_bvec, lub_cvt, 0);
+    castle_btree_io_end(c_bvec, new_cvt, 0);
 }
 
 static void castle_btree_read_process(c_bvec_t *c_bvec)
