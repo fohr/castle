@@ -284,6 +284,30 @@ static void castle_control_collection_snapshot(collection_id_t collection,
     castle_events_collection_snapshot(ver, ca->col.id);
 }
             
+static void castle_control_set_target(slave_uuid_t slave_uuid, int value, int *ret)
+{
+    struct castle_slave *slave = castle_slave_find_by_uuid(slave_uuid);
+    struct castle_slave_superblock *sb;
+
+    if (!slave)
+    {
+        *ret = -ENOENT;
+        return;
+    }
+    
+    sb = castle_slave_superblock_get(slave);
+    
+    if (value)
+        sb->flags |= CASTLE_SLAVE_TARGET;
+    else
+        sb->flags &= ~CASTLE_SLAVE_TARGET;
+    
+    castle_slave_superblock_put(slave, 1);
+
+    castle_events_slave_changed(slave->uuid);
+
+    *ret = 0;
+}
 
 int castle_control_ioctl(struct inode *inode, struct file *filp,
                          unsigned int cmd, unsigned long arg)
@@ -798,6 +822,26 @@ int castle_control_packet_process(struct sk_buff *skb, void **reply, int *len_p)
             
             castle_control_get_invalid_counts(slave_uuid, reply32, word_len, len_p);
             
+            break;
+        }
+        case CASTLE_CTRL_REQ_SET_TARGET:
+        {
+            int ret, value;
+            slave_uuid_t slave_uuid;
+            
+            if(skb->len != 8) goto bad_msg;
+
+            slave_uuid = SKB_L_GET(skb);
+            value = SKB_L_GET(skb);
+            
+            castle_control_set_target(slave_uuid,
+                                      value,
+                                      &ret);
+            castle_control_reply(reply32,
+                                 len_p,
+                                 CASTLE_CTRL_REPLY_VOID,
+                                 ret,
+                                 0);
             break;
         }
     }

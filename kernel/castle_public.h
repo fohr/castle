@@ -47,6 +47,8 @@ typedef uint32_t version_t;
 #define CASTLE_CTRL_REQ_VALID_STATS              17
 #define CASTLE_CTRL_REQ_INVALID_STATS            18
 
+#define CASTLE_CTRL_REQ_SET_TARGET               19
+
 /* Subtypes for CASTLE_CTRL_REPLY */
 #define CASTLE_CTRL_REPLY_FAIL                   0
 #define CASTLE_CTRL_REPLY_VOID                   1
