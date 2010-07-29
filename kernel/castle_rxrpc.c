@@ -84,7 +84,35 @@ struct castle_rxrpc_call {
         RXRPC_CALL_ERROR,         /* call failed due to error */
     }                              state;
     int                            error;
+    int                            tmp_packets;
+    union
+    {
+        /* For CASTLE_OBJ_REQ_GET */
+        struct {
+            c2_block_t *data_c2b;
+            c_val_tup_t data_cvt;
+        };
+    };
 };
+
+void castle_rxrpc_call_c2b_cvt_get(struct castle_rxrpc_call *call, 
+                                   c2_block_t **data_c2b, 
+                                   c_val_tup_t *data_cvt)
+{
+    BUG_ON(call->type != &castle_rxrpc_get_call);
+    BUG_ON(!data_cvt || !data_c2b);
+    *data_c2b = call->data_c2b;
+    *data_cvt = call->data_cvt;
+}
+
+void castle_rxrpc_call_c2b_cvt_set(struct castle_rxrpc_call *call, 
+                                   c2_block_t *data_c2b, 
+                                   c_val_tup_t data_cvt)
+{
+    BUG_ON(call->type != &castle_rxrpc_get_call);
+    call->data_c2b = data_c2b;
+    call->data_cvt = data_cvt;
+}
 
 static void castle_rxrpc_state_update(struct castle_rxrpc_call *call, int state)
 {
@@ -253,6 +281,11 @@ static int cnt = 0;
     
     if((cnt++) % 100 == 0)
        printk("Got %d replaces\n", cnt); 
+//printk("=> call->tmp_packets=%d\n", call->tmp_packets);
+//if(call->tmp_packets > 1)
+//{
+//    printk("===> More than one packet.\n");
+//}
     //printk("Obj Replace.\n");
     ret = castle_rxrpc_collection_key_get(skb, &collection, &key);
     if(ret)
@@ -427,6 +460,7 @@ static void castle_rxrpc_packet_process(struct work_struct *work)
            (skb = skb_dequeue(&call->rx_queue)))
     {
         debug("Processing packet: %d.\n", skb->mark);
+        call->tmp_packets++;
         switch(skb->mark)
         {
             case RXRPC_SKB_MARK_DATA:
@@ -529,6 +563,7 @@ static void castle_rxrpc_incoming_call_collect(struct work_struct *work)
         c_rxcall->wq      = rxrpc_wqs[(wq_nr++) % NR_WQS];
         c_rxcall->call_id = atomic_inc_return(&call_id);
         c_rxcall->type    = &castle_rxrpc_op_call;
+        c_rxcall->tmp_packets = 0;
         castle_rxrpc_state_update(c_rxcall, RXRPC_CALL_AWAIT_OP_ID);
 
         c_rxcall->rxcall = rxrpc_kernel_accept_call(socket,
