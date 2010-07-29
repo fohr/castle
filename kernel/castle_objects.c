@@ -76,13 +76,15 @@ static void castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
         cvt->length = castle_rxrpc_uint32_get(call);
         /* Decide whether to use inline, or out-of-line value on the 
            basis of this length. */
-        if ((cvt->length <= MAX_INLINE_VAL_SIZE) && (0 == 1)) /* DISABLE INLINE VALUES TEMPORARILY */
+        if (cvt->length <= MAX_INLINE_VAL_SIZE)
         {
             cvt->type = CVT_TYPE_INLINE;
             cvt->val  = kmalloc(cvt->length, GFP_NOIO);
             /* TODO: Work out how to handle this */
             BUG_ON(!cvt->val);
-            castle_rxrpc_str_copy(call, cvt->val, cvt->length); 
+            /* We should not inline values which do not fit in a packet */
+            BUG_ON(castle_rxrpc_packet_length(call) < cvt->length);
+            castle_rxrpc_str_copy(call, cvt->val, cvt->length, 0 /* not partial */); 
         }
         else
         {
@@ -113,13 +115,119 @@ static void castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
     BUG_ON(CVT_INVALID(*cvt));
 }
 
+#define OBJ_IO_MAX_BUFFER_SIZE      (10)    /* In C_BLK_SIZE blocks */
+
+static c2_block_t* castle_object_write_buffer_alloc(struct castle_rxrpc_call *call,
+                                                    c_disk_blk_t old_cdb,
+                                                    uint32_t data_length)
+{
+    uint32_t data_c2b_length;
+    int nr_blocks;
+    c_disk_blk_t new_data_cdb;
+    c2_block_t *new_data_c2b;
+
+    /* Work out how large buffer to allocate */
+    data_c2b_length = data_length > OBJ_IO_MAX_BUFFER_SIZE * C_BLK_SIZE ?
+                                    OBJ_IO_MAX_BUFFER_SIZE * C_BLK_SIZE :
+                                    data_length;
+    nr_blocks = (data_c2b_length - 1) / C_BLK_SIZE + 1; 
+    debug("Allocating buffer of size %d blocks, for data_length=%d\n",
+        nr_blocks, data_length);
+    new_data_cdb.disk  = old_cdb.disk; 
+    new_data_cdb.block = old_cdb.block + nr_blocks; 
+    new_data_c2b = castle_cache_block_get(new_data_cdb, nr_blocks);
+    lock_c2b(new_data_c2b);
+    set_c2b_uptodate(new_data_c2b);
+#ifdef CASTLE_DEBUG        
+    /* Poison the data block */
+    memset(c2b_buffer(new_data_c2b), 0xf4, nr_blocks * C_BLK_SIZE);
+#endif
+ 
+    return new_data_c2b;
+}
+
+static int castle_object_data_write(struct castle_rxrpc_call *call)
+{
+    c2_block_t *data_c2b;
+    uint32_t data_c2b_offset, data_c2b_length, data_length, packet_length;
+    c2_block_t *new_data_c2b;
+
+    /* Work out how much data we've got, and how far we've got so far */
+    castle_rxrpc_replace_call_get(call, &data_c2b, &data_c2b_offset, &data_length);
+    debug("Data write. call=%p, data_c2b=%p, data_c2b_offset=%d, data_length=%d\n",
+        call, data_c2b, data_c2b_offset, data_length);
+    data_c2b_length = data_c2b->nr_pages * C_BLK_SIZE;
+    packet_length = castle_rxrpc_packet_length(call);
+
+    debug("Packet length=%d, data_length=%d\n", packet_length, data_length);
+    BUG_ON(packet_length <= 0);
+    do {
+        char *data_c2b_buffer;
+        int copy_length;
+        int last_copy;
+
+        BUG_ON(data_c2b_offset >= data_c2b_length);
+        data_c2b_buffer = (char *)c2b_buffer(data_c2b) + data_c2b_offset; 
+        copy_length = data_c2b_length - data_c2b_offset >= packet_length ? 
+                                           packet_length :
+                                           data_c2b_length - data_c2b_offset;
+        debug("Could copy %d bytes.\n", copy_length);
+        last_copy = 0;
+        if(copy_length >= data_length)
+        {
+            debug("data_length=%d is smaller than copy_length=%d, resetting copy_length.\n", 
+                    data_length, copy_length);
+            last_copy = 1;
+            copy_length = data_length;
+        }
+        castle_rxrpc_str_copy(call, 
+                              data_c2b_buffer,
+                              copy_length,
+                              last_copy ? 0 : 1);
+
+        data_length     -= copy_length;
+        data_c2b_offset += copy_length;
+        /* For last copy more bytes might have been pulled, work out how many */
+        if(last_copy)
+            copy_length += (copy_length % 4 == 0 ? 0 : 4 - copy_length % 4);
+        debug("Read %d bytes from the packet.\n", copy_length);
+        packet_length   -= copy_length;
+
+
+        /* Allocate a new buffer if there will be more data (either in the current
+           packet, or in future packets). */
+        if((data_c2b_offset == data_c2b_length) && (data_length > 0))
+        {
+            debug("Run out of buffer space, allocating a new one.\n");
+            new_data_c2b = castle_object_write_buffer_alloc(call, data_c2b->cdb, data_length);
+            data_c2b_length = new_data_c2b->nr_pages * C_BLK_SIZE;
+            data_c2b_offset = 0;
+            /* Release the (old) buffer */
+            dirty_c2b(data_c2b);
+            unlock_c2b(data_c2b);
+            put_c2b(data_c2b);
+            /* Swap the new buffer in, if one was initialised. */
+            data_c2b = new_data_c2b;
+        } 
+    }
+    while((packet_length > 0) && (data_length > 0));
+
+    debug("Exiting data_write with data_c2b_offset=%d, data_length=%d, data_c2b=%p\n", 
+            data_c2b_offset, data_length, data_c2b);
+    castle_rxrpc_replace_call_set(call, data_c2b, data_c2b_offset, data_length);
+
+    return (data_length == 0);
+}
+                                     
+
 void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
                                     int err,
                                     c_val_tup_t cvt)
 {
     struct castle_rxrpc_call *call = c_bvec->c_bio->rxrpc_call;
     c_bio_t *c_bio = c_bvec->c_bio;
-    c2_block_t *c2b;
+    c2_block_t *c2b = NULL;
+    int complete_write;
 
     /* Sanity checks on the bio */
     BUG_ON(c_bvec_data_dir(c_bvec) != WRITE); 
@@ -133,6 +241,7 @@ void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
     if(err)
     {
         castle_rxrpc_replace_complete(call, err);
+        castle_utils_bio_free(c_bio);
         return;
     }
 
@@ -140,27 +249,66 @@ void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
     BUG_ON(CVT_INVALID(cvt));
     if(CVT_ONDISK(cvt))
     {
-        BUG_ON(cvt.length > C_BLK_SIZE);
         BUG_ON(c_bvec_data_del(c_bvec));
-        c2b = castle_cache_page_block_get(cvt.cdb);
-        lock_c2b(c2b);
-        set_c2b_uptodate(c2b);
-#ifdef CASTLE_DEBUG        
-        /* Poison the data block */
-        memset(c2b_buffer(c2b), 0xf4, C_BLK_SIZE);
-#endif
-        castle_rxrpc_str_copy(call, c2b_buffer(c2b), cvt.length); 
-        dirty_c2b(c2b);
-        unlock_c2b(c2b);
-        put_c2b(c2b);
+        c2b = castle_object_write_buffer_alloc(call, cvt.cdb, cvt.length); 
+        castle_rxrpc_replace_call_set(call, c2b, 0, cvt.length); 
+        complete_write = castle_object_data_write(call);
     }
     else 
     if(CVT_INLINE(cvt))
     {
+        complete_write = 1;
         kfree(cvt.val);
     }
-    castle_rxrpc_replace_complete(call, 0);
+        
+        
+    /* Unlock buffers, and complete the call if we are done already */
+    if(complete_write)
+    {
+        debug("Completing the write. c2b=%p\n", c2b);
+        if(c2b)
+        {
+            dirty_c2b(c2b);
+            unlock_c2b(c2b);
+            put_c2b(c2b);
+        }
+ 
+        castle_rxrpc_replace_complete(call, 0);
+    } else
+    /* Complete the packet, so that the client sends us more. */
+    {
+        debug("Completing the packet, continuing the rest of the write.\n");
+        castle_rxrpc_replace_continue(call);
+    }
+
     castle_utils_bio_free(c_bio);
+}
+
+int castle_object_replace_continue(struct castle_rxrpc_call *call, int last)
+{
+    int copy_end;
+
+    debug("Replace continue.\n");
+    copy_end = castle_object_data_write(call);
+    if(copy_end != last)
+        printk("Warning packet for completed replace!!.\n");
+    if(last)
+    {
+        c2_block_t *data_c2b;
+        uint32_t data_c2b_offset, data_length;
+
+        castle_rxrpc_replace_call_get(call, &data_c2b, &data_c2b_offset, &data_length);
+        BUG_ON(data_length != 0);
+        dirty_c2b(data_c2b);
+        unlock_c2b(data_c2b);
+        put_c2b(data_c2b);
+        castle_rxrpc_replace_complete(call, 0);
+    } else
+    {
+        castle_rxrpc_replace_continue(call);
+    }
+
+    return 0;
 }
 
 int castle_object_replace(struct castle_rxrpc_call *call, c_vl_key_t **key, int tombstone)
@@ -208,7 +356,7 @@ void __castle_object_get_complete(struct work_struct *work)
     c2_block_t *c2b;
     c_val_tup_t cvt;
 
-    castle_rxrpc_call_c2b_cvt_get(call, &c2b, &cvt); 
+    castle_rxrpc_get_call_get(call, &c2b, &cvt); 
 
     BUG_ON(!CVT_ONDISK(cvt));
     BUG_ON(cvt.length > C_BLK_SIZE);
@@ -231,7 +379,7 @@ void castle_object_get_io_end(c2_block_t *c2b, int uptodate)
     c2_block_t *data_c2b;
     c_val_tup_t data_cvt;
 
-    castle_rxrpc_call_c2b_cvt_get(call, &data_c2b, &data_cvt); 
+    castle_rxrpc_get_call_get(call, &data_c2b, &data_cvt); 
     BUG_ON(c2b != data_c2b);
 #endif
     if(uptodate)
@@ -280,7 +428,7 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec, int err,
     BUG_ON(!CVT_ONDISK(cvt));
     nr_blocks = (cvt.length - 1) / C_BLK_SIZE + 1; 
     c2b = castle_cache_block_get(cvt.cdb, nr_blocks);
-    castle_rxrpc_call_c2b_cvt_set(call, c2b, cvt);
+    castle_rxrpc_get_call_set(call, c2b, cvt);
     lock_c2b(c2b);
     if(!c2b_uptodate(c2b))
     {
