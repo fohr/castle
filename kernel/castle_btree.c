@@ -1340,90 +1340,63 @@ static void castle_btree_lub_find(struct castle_btree_node *node,
     struct castle_btree_type *btree = castle_btree_type_get(node->type);
     version_t version_lub;
     void *key_lub;
-    int lub_idx, insert_idx, i, key_cmp;
+    int lub_idx, insert_idx, low, high, mid;
 
     debug("Looking for (k,v) = (%p, 0x%x), node->used=%d\n",
             key, version, node->used);
     /* We should not search for an invalid key */
     BUG_ON(btree->key_compare(key, btree->inv_key) == 0);
-        
-    lub_idx   = -1;
-    key_lub = btree->inv_key; 
-    for(i=node->used-1; i >= 0; i--)
+    
+    /* Binary search on the keys to find LUB key */
+    low = -1;           /* Key in entry pointed to by low is guaranteed
+                           to be less than 'key' */ 
+    high = node->used;  /* Key in entry pointed to be high is guaranteed
+                           to be higher or equal to the 'key' */
+    debug(" (lo,hi) = (%d, %d)\n", low, high); 
+    while(low != high-1)
     {
-        void *entry_key;
-        version_t entry_version;
+        int key_cmp;
 
-        btree->entry_get(node, i, &entry_key, &entry_version, NULL, NULL);
+        BUG_ON(high <= low);
+        mid = (low + high) / 2; 
+        btree->entry_get(node, mid, &key_lub, NULL, NULL, NULL);
+        key_cmp = btree->key_compare(key_lub, key);
+        debug("mid=%d, key_cmp=%d\n", mid, key_cmp);
+        if(key_cmp < 0)
+            low = mid;
+        else
+            high = mid;
+        debug(" (lo,hi) = (%d, %d)\n", low, high); 
+    }
+    /* 'high' is now pointing to the LUB key (left-most copy if there are a few instances
+        of it in the node), or past the end of the node.
+        We should start scanning to the right starting with the entry pointed by high (if 
+        one exists). Going this direction keys increase and versions go from newest to 
+        oldest */
+    for(lub_idx=high; lub_idx < node->used; lub_idx++)
+    {
+        btree->entry_get(node, lub_idx, &key_lub, &version_lub, NULL, NULL);
 
-        debug(" (k,v) = (%p, 0x%x)\n", entry_key, entry_version); 
+        debug(" (k,v) = (%p, 0x%x)\n", key_lub, version_lub); 
 
-        /* If the key is already too small, we must have gone past the least
-           upper bound */
-        if(btree->key_compare(entry_key, key) < 0)
+        /* First (k,v) that's an upper bound is guaranteed to be the correct lub,
+           because versions are arranged from newest to oldest */ 
+        if(btree->key_compare(key_lub, key) < 0)
+            continue;
+        if(castle_version_is_ancestor(version_lub, version))
             break;
-
-        /* Do not consider versions which are not ancestral to the version we 
-           are looking for.
-           Also, don't update the LUB index if the key doesn't change.
-           This is because the most recent ancestor will be found first when
-           scanning from right to left */
-        if((btree->key_compare(key_lub, entry_key) != 0) &&
-            castle_version_is_ancestor(entry_version, version))
-        {
-            key_lub     = entry_key;
-            version_lub = entry_version;
-            lub_idx = i;
-            debug("  set key_lub=%p, lub_idx=%d\n", key_lub, lub_idx);
-        }
     } 
-
-    /* If we are insterting something into the node, work out where should it go */
-    /* Case 1: (key_lub == key) && (version_lub == version)
-               no need to insert, we have exactly the (k,v) we wanted
-       Case 2: (key_lub == key) && (version_lub != version)
-               but we know that is_ancestor(version_lub, version) == 1
-               this means that 'version' is more recent than version_lub, and
-               it needs to go (just) to the right of the LUB
-               => insert_idx = lub_idx + 1
-       Case 3: (key_lub > key)
-               there is no (k_x, v_x) such that 
-               (key <= k_x < key_lub) && (is_ancestor(v_x, version)) because then 
-               (k_x, v_x) would be the LUB.
-               Therefore, in the inclusive range [i+1, lub_idx-1] there are no 
-               ancestors of 'version'. It follows that we should insert on the basis
-               of the key only. Therefore i+1 will point to the correct place.
-       Case 4: There is no LUB.
-               This case is similar to Case 3, in that there is no (k_x, v_x) such
-               that (key <= k_x) && (is_ancestor(v_x, version)).
-               Insert at i+1.
-       Cases are exhaustive, because either LUB doesn't exist (Case 4), or it does,
-       in which case, key_lub > key (Case 3) or key_lub == key (Case 2 and Case 1).
-    */
-    key_cmp = btree->key_compare(key_lub, key);
-    if((lub_idx < 0) || (key_cmp > 0))
-    /* Case 4 and Case 3 */
-    {
-        insert_idx = i+1;    
-    }
-    else
-    if (version_lub != version)
-    /* Case 2 */
-    {
-        /* key_lub should equal key */
-        BUG_ON(key_cmp != 0);
-        insert_idx = lub_idx + 1;
-    } else
-    /* Case 1 */
-    {
-        /* key_lub should equal key */
-        BUG_ON(key_cmp != 0);
-        /* version_lub should equal version */
-        BUG_ON(version_lub != version);
-        insert_idx = lub_idx;
-    }
-
-    if(lub_idx_p)    *lub_idx_p = lub_idx;
+    BUG_ON(lub_idx > node->used);
+    /* insert_idx equals lub_idx because we are guaranteed to be inserting
+       a newer entry (it should go to the left of lub) of a smaller or equal 
+       key (which also should go to the left). 
+       If there is no LUB, lub_idx will equal node->used, which also is the
+       correct insertion point */
+    insert_idx = lub_idx;
+    if(lub_idx == node->used)
+        lub_idx = -1;
+    /* Return the indices */
+    if(lub_idx_p) *lub_idx_p = lub_idx;
     if(insert_idx_p) *insert_idx_p = insert_idx;
 }
 
@@ -1530,19 +1503,13 @@ static c2_block_t* castle_btree_effective_node_create(c_bvec_t *c_bvec,
 
     last_eff_key = btree->inv_key;
     BUG_ON(eff_node->used != 0);
-    insert_idx = -1;
+    insert_idx = 0;
     for(i=0; i<node->used; i++)
     {
         void        *entry_key;
         version_t    entry_version;
         int          entry_is_leaf_ptr;
         c_val_tup_t  entry_cvt;
-        void       (*consume_entry_fn) (struct castle_btree_node *node,
-                                        int                       idx,
-                                        void                     *key,            
-                                        version_t                 version,
-                                        int                       is_leaf_ptr,
-                                        c_val_tup_t               cvt);
  
         btree->entry_get(node, i, &entry_key, &entry_version,
                          &entry_is_leaf_ptr, &entry_cvt);
@@ -1551,48 +1518,37 @@ static c2_block_t* castle_btree_effective_node_create(c_bvec_t *c_bvec,
         if(!castle_version_is_ancestor(entry_version, version))
             continue;
 
-        /* Advance to the next entry if last_eff_key (last effective entry key) is different
-           to the key we are looking at */ 
-        if(btree->key_compare(last_eff_key, entry_key) != 0)
+        /* Ignore all versions of the key except of the left-most (=> newest) one. */ 
+        if(btree->key_compare(last_eff_key, entry_key) == 0)
         {
-            insert_idx++;
-            consume_entry_fn = btree->entry_add;
-        } else
-        {
-            /* last_eff_key == entry_key (&& last_eff_key != inv_key) 
-               => do not allocate a new slot, replace it instead.
-               Since we are scanning from left to right, we should be
-               looking on a more recent versions now. Check for that.
-             */
-            /* TODO: these asserts should really be turned into
-                     'corrupt btree' exception. */
-            BUG_ON(!castle_version_is_ancestor(last_eff_version, entry_version));
-            consume_entry_fn = btree->entry_replace;
+            /* Check that the version really is older */
+            BUG_ON(!castle_version_is_ancestor(entry_version, last_eff_version));
+            continue;
         }
-        
         if(!node->is_leaf || entry_is_leaf_ptr)
         {
             /* If already a leaf pointer, or a non-leaf entry copy directly. */
-            consume_entry_fn(eff_node,
-                            insert_idx,
-                            entry_key,
-                            entry_version,
-                            entry_is_leaf_ptr,
-                            entry_cvt);
+            btree->entry_add(eff_node,
+                             insert_idx,
+                             entry_key,
+                             entry_version,
+                             entry_is_leaf_ptr,
+                             entry_cvt);
         } else
         {
             c_val_tup_t cvt;
             CDB_TO_CVT(cvt, orig_c2b->cdb, orig_c2b->nr_pages);
             /* Otherwise construct a new leaf pointer. */
-            consume_entry_fn(eff_node,
-                            insert_idx,
-                            entry_key,
-                            entry_version,
-                            1,
-                            cvt);
+            btree->entry_add(eff_node,
+                             insert_idx,
+                             entry_key,
+                             entry_version,
+                             1,
+                             cvt);
         }
         last_eff_key = entry_key;
         last_eff_version = entry_version;
+        insert_idx++;
     }
 
     /* If effective node is the same size as the original node, throw it away,
@@ -1661,11 +1617,10 @@ static void castle_btree_slot_insert(c2_block_t  *c2b,
                                      c_val_tup_t  cvt)
 {
     struct castle_btree_node *node = c2b_buffer(c2b);
-    /* TODO: Check that that 'index-1' is really always correct! */
     struct castle_btree_type *btree = castle_btree_type_get(node->type);
-    void      *left_key      = btree->inv_key;
-    version_t  left_version  = INVAL_VERSION;
-    int        left_is_leaf_ptr;
+    void      *lub_key      = btree->inv_key;
+    version_t  lub_version  = INVAL_VERSION;
+    int        lub_is_leaf_ptr;
 
     BUG_ON(index > node->used);
    
@@ -1675,30 +1630,32 @@ static void castle_btree_slot_insert(c2_block_t  *c2b,
     else 
         debug("Inserting a inline value under index=%d\n", index);
 
-    if(index > 0)
-        btree->entry_get(node, index-1, &left_key, &left_version, &left_is_leaf_ptr, NULL);
+    if(index < node->used)
+        btree->entry_get(node, index, &lub_key, &lub_version, &lub_is_leaf_ptr, NULL);
 
     /* Special case. Newly inserted block may make another entry unreachable.
        This would cause problems with future splits. And therefore unreachable
        entry has to be replaced by the new one.
-       The potentially unreachable entry is neccessarily just to the left. 
-       It will stop being reachable if:
+       The entry will stop being reachable if:
        - keys match
        - version to insert descendant from the left_version (and different)
        - version to insert the same as the node version
-      If all of the above true, replace rather than insert */ 
-    if((btree->key_compare(left_key, key) == 0) &&
-       (left_version != version) &&
-        castle_version_is_ancestor(left_version, version) &&
+      If all of the above true, replace rather than insert.
+      The now unreachable entry must necessarily be the previous LUB entry. 
+      Therefore it will be pointed to by index.
+     */ 
+    if((btree->key_compare(lub_key, key) == 0) &&
+       (lub_version != version) &&
+        castle_version_is_ancestor(lub_version, version) &&
        (version == node->version))
     {
         /* In leaf nodes the element we are replacing MUST be a leaf pointer, 
-           because left_version is strictly ancestoral to the node version.
+           because lub_version is strictly ancestoral to the node version.
            It implies that the key hasn't been insterted here, because 
            keys are only inserted to weakly ancestoral nodes */
-        BUG_ON(!left_is_leaf_ptr && node->is_leaf);
+        BUG_ON(!lub_is_leaf_ptr && node->is_leaf);
         /* Replace the slot */
-        btree->entry_replace(node, index-1, key, version, 0, cvt);
+        btree->entry_replace(node, index, key, version, 0, cvt);
         dirty_c2b(c2b);
         return;
     }
@@ -1717,7 +1674,7 @@ static void castle_btree_node_insert(c2_block_t *parent_c2b,
     version_t                    version = child->version;
     void                        *key;
     int                          insert_idx;
-    c_val_tup_t                    cvt;
+    c_val_tup_t                  cvt;
     
     BUG_ON(castle_btree_type_get(child->type) != btree);
     btree->entry_get(child, child->used-1, &key, NULL, NULL, NULL);
@@ -1742,7 +1699,7 @@ static void castle_btree_node_under_key_insert(c2_block_t *parent_c2b,
     struct castle_btree_node    *parent = c2b_buffer(parent_c2b);
     struct castle_btree_type    *btree = castle_btree_type_get(parent->type);
     int                          insert_idx;
-    c_val_tup_t                    cvt;
+    c_val_tup_t                  cvt;
 
     BUG_ON(btree->key_compare(key, btree->inv_key) == 0);
     castle_btree_lub_find(parent, key, version, NULL, &insert_idx);
@@ -1818,7 +1775,7 @@ static int castle_btree_node_split(c_bvec_t *c_bvec)
     }
 
     /* Split the effective node if it's more than 2/3s full */
-    if(btree->need_split(eff_node, 1))
+    if(btree->need_split(eff_node, 1 /* key split */))
     {
         void *max_split_key;
 
@@ -1829,7 +1786,7 @@ static int castle_btree_node_split(c_bvec_t *c_bvec)
         BUG_ON(split_node->version != c_bvec->version);
         /* Work out whether to take the split node for the further btree walk.
            Since in the effective & split node there is at most one version
-           for each block, and this version is ancestoral to what we are
+           for each key, and this version is ancestoral to what we are
            looking for, it's enough to check if the last entry in the 
            split node (that's the node that contains left hand side elements
            from the original effective node) is greater-or-equal to the block
@@ -1963,7 +1920,7 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
        case, we know that we'll be updating in place.
      */ 
     if((btree->key_compare(c_bvec->parent_key, btree->inv_key) != 0) &&
-       (btree->need_split(node, 0)))
+       (btree->need_split(node, 0 /* version split */)))
     {
         debug("===> Splitting node: leaf=%d, used=%d\n",
                 node->is_leaf, node->used);
@@ -1980,6 +1937,7 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
  
     /* Find out what to follow, and where to insert */
     castle_btree_lub_find(node, key, version, &lub_idx, &insert_idx);
+    BUG_ON((insert_idx < 0) || (insert_idx > node->used));
     if(lub_idx >= 0)
         btree->entry_get(node, lub_idx, &lub_key, &lub_version,
                         &lub_is_leaf_ptr, &lub_cvt);
@@ -2035,12 +1993,7 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
     /* If we are looking at the leaf pointer, follow it */
     if(lub_is_leaf_ptr)
     {
-        if (!CVT_BTREE_NODE(lub_cvt, btree) && !CVT_INVALID(lub_cvt))
-        {
-            printk("0x%x-%d-0x%x-0x%x\n", lub_cvt.type, lub_cvt.length,
-                   lub_cvt.cdb.disk, lub_cvt.cdb.block);
-            BUG();
-        }
+        BUG_ON(!CVT_ONDISK(lub_cvt));
         debug("Following a leaf pointer to (0x%x, 0x%x).\n", 
                 lub_cvt.cdb.disk, lub_cvt.cdb.block);
         __castle_btree_find(btree, c_bvec, lub_cvt.cdb, btree->inv_key);
@@ -2060,8 +2013,9 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
     }
     btree->entry_replace(node, lub_idx, lub_key, lub_version, 0,
                          new_cvt);
-    debug("Block already exists, modifying in place.\n");
+    debug("Key already exists, modifying in place.\n");
     castle_btree_io_end(c_bvec, new_cvt, 0);
+
 }
 
 static void castle_btree_read_process(c_bvec_t *c_bvec)

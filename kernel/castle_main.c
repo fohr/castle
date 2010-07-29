@@ -790,12 +790,8 @@ static void castle_bio_data_cvt_get(c_bvec_t    *c_bvec,
                                     c_val_tup_t *cvt)
 {
     BUG_ON(c_bvec_data_dir(c_bvec) != WRITE); 
-    BUG_ON(!CVT_INVALID(c_bvec->cvt));
 
-#if 0
-    printk("GET_CVT: Key-%p, cdb=(0x%x, 0x%x)\n",
-            c_bvec->key, prev_cvt.cdb.disk, prev_cvt.cdb.block);
-#endif
+    /* If the block has already been allocated, override it */
     if (!CVT_INVALID(prev_cvt))
     {
         BUG_ON(!CVT_ONE_BLK(prev_cvt));
@@ -803,16 +799,10 @@ static void castle_bio_data_cvt_get(c_bvec_t    *c_bvec,
         return;
     }
 
-    cvt->type = CVT_TYPE_ONDISK;
+    /* Otherwise, allocate a new out-of-line block */
+    cvt->type   = CVT_TYPE_ONDISK;
     cvt->length = C_BLK_SIZE;
-    /* FIXME: Don't read version without acquiring attachment/version lock */
-    cvt->cdb = castle_freespace_block_get(c_bvec->c_bio->attachment->version, 
-                                          1);
-
-#if 0
-    printk("GET_CVT-Alloc: Key-%p, cdb=(0x%x, 0x%x)\n",
-            c_bvec->key, cvt->cdb.disk, cvt->cdb.block);
-#endif
+    cvt->cdb    = castle_freespace_block_get(c_bvec->version, 1);
     BUG_ON(DISK_BLK_INVAL(cvt->cdb));
 }
 
@@ -864,7 +854,6 @@ static void castle_device_c_bvec_make(c_bio_t *c_bio,
     c_bvec->version     = INVAL_VERSION; 
     c_bvec->flags       = 0; 
     c_bvec->tree        = &castle_global_tree;
-    c_bvec->cvt.type    = CVT_TYPE_INVALID;
     c_bvec->cvt_get     = castle_bio_data_cvt_get;
     c_bvec->endfind     = castle_bio_data_io_end;
     c_bvec->da_endfind  = NULL;

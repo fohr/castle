@@ -86,11 +86,11 @@ enum {
 #define MAX_INLINE_VAL_SIZE 512
 
 struct castle_btree_val {
-    uint8_t     type;
-    uint32_t    length;
+    uint8_t           type;
+    uint32_t          length;
     union {
-        uint8_t         *val;
-        c_disk_blk_t    cdb;
+        uint8_t      *val;
+        c_disk_blk_t  cdb;
     };
 } PACKED;
 typedef struct castle_btree_val c_val_tup_t;
@@ -369,8 +369,6 @@ typedef struct castle_bio_vec {
             struct castle_cache_block *btree_node;
             struct castle_cache_block *btree_parent_node;
         };
-        /* Buffer node, only used after B-Tree walk (to copy data) */
-        struct castle_cache_block     *data_c2b;
     };
     /* Used to thread this bvec onto a workqueue */
     struct work_struct         work;
@@ -378,8 +376,6 @@ typedef struct castle_bio_vec {
     void                     (*cvt_get)    (struct castle_bio_vec *, 
                                             c_val_tup_t,
                                             c_val_tup_t *);
-    /* CVT passed from client, used by cvt_get() */
-    c_val_tup_t                cvt;
     /* Completion callback */
     void                     (*endfind)    (struct castle_bio_vec *, int, c_val_tup_t);
     void                     (*da_endfind) (struct castle_bio_vec *, int, c_val_tup_t);
