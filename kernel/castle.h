@@ -427,6 +427,7 @@ struct castle_indirect_node {
 enum {
     C_ITER_ALL_ENTRIES,
     C_ITER_MATCHING_VERSIONS,
+    C_ITER_ANCESTRAL_VERSIONS
 };
 
 /* Used for iterating through the tree */
@@ -499,6 +500,26 @@ typedef struct castle_enumerator {
     int                           curr_iter;    /* Iterator we are enumerating from at the moment */
     int                           max_key_iter; /* Which iterator is the max_key taken from       */
 } c_enum_t; 
+
+/* Enumerates latest version value for all entries */
+typedef struct castle_rq_enumerator {
+    struct castle_component_tree *tree;
+    int                           err;
+    version_t                     version;
+    struct castle_iterator        iterator; 
+    int                           iter_completed;
+    wait_queue_head_t             iter_wq;
+    atomic_t                      iter_running;
+    int                           prod_idx;
+    int                           cons_idx;
+    struct castle_btree_node     *buffer;       /* Two buffers are actually allocated (buffer1/2) */
+    struct castle_btree_node     *buffer1;      /* buffer points to the one currently used to     */
+    struct castle_btree_node     *buffer2;      /* read in a node, second is used to preserve     */
+    void                         *cur_key;
+    void                         *start_key;
+    void                         *end_key;
+    int                           in_range;
+} c_rq_enum_t;
 
 #define BLOCKS_HASH_SIZE        (100)
 struct castle_slave_block_cnt
