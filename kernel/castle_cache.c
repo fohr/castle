@@ -461,7 +461,12 @@ c2_block_t* castle_cache_block_get(c_disk_blk_t cdb, int nr_pages)
         /* Try to find in the hash first */
         c2b = castle_cache_hash_get(cdb); 
         debug("Found in hash: %p\n", c2b);
-        if(c2b) return c2b;
+        if(c2b) 
+        {
+            /* Make sure that the number of pages agrees */
+            BUG_ON(c2b->nr_pages != nr_pages);
+            return c2b;
+        }
 
         /* If we couldn't find in the hash, 
            try allocating from the freelist */ 
@@ -489,8 +494,10 @@ c2_block_t* castle_cache_block_get(c_disk_blk_t cdb, int nr_pages)
             castle_cache_block_free(c2b);
         }
         else
+        {
+            BUG_ON(c2b->nr_pages != nr_pages);
             return c2b;
-        
+        }
     }
 }
 
