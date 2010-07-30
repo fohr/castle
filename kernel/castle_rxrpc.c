@@ -35,10 +35,11 @@ static const struct castle_rxrpc_call_type castle_rxrpc_replace_call;
 static const struct castle_rxrpc_call_type castle_rxrpc_slice_call;
 static const struct castle_rxrpc_call_type castle_rxrpc_ctrl_call;
 static void castle_rxrpc_reply_send       (struct castle_rxrpc_call *call, 
-                                           const void *buf, size_t len);
+                                           const void *buf, size_t len, int last);
 static void castle_rxrpc_double_reply_send(struct castle_rxrpc_call *call, 
                                            const void *buf1, size_t len1,
-                                           const void *buf2, size_t len2);
+                                           const void *buf2, size_t len2,
+                                           int last);
 
 #define NR_WQS    4
 static struct socket            *socket;
@@ -92,7 +93,9 @@ struct castle_rxrpc_call {
         /* For CASTLE_OBJ_REQ_GET */
         struct {
             c2_block_t *data_c2b;
-            c_val_tup_t data_cvt;
+            uint32_t    data_c2b_length;
+            uint32_t    data_length;
+            int         first;
         } get;
         /* For CASTLE_OBJ_REQ_REPLACE */
         struct {
@@ -105,21 +108,29 @@ struct castle_rxrpc_call {
 
 void castle_rxrpc_get_call_get(struct castle_rxrpc_call *call, 
                                c2_block_t **data_c2b, 
-                               c_val_tup_t *data_cvt)
+                               uint32_t *data_c2b_length,
+                               uint32_t *data_length,
+                               int *first)
 {
     BUG_ON(call->type != &castle_rxrpc_get_call);
-    BUG_ON(!data_cvt || !data_c2b);
-    *data_c2b = call->get.data_c2b;
-    *data_cvt = call->get.data_cvt;
+    BUG_ON(!data_length || !data_c2b || !data_c2b_length || !first);
+    *data_c2b        = call->get.data_c2b;
+    *data_length     = call->get.data_length;
+    *data_c2b_length = call->get.data_c2b_length;
+    *first           = call->get.first;
 }
 
 void castle_rxrpc_get_call_set(struct castle_rxrpc_call *call, 
                                c2_block_t *data_c2b, 
-                               c_val_tup_t data_cvt)
+                               uint32_t data_c2b_length,
+                               uint32_t data_length,
+                               int first)
 {
     BUG_ON(call->type != &castle_rxrpc_get_call);
-    call->get.data_c2b = data_c2b;
-    call->get.data_cvt = data_cvt;
+    call->get.data_c2b        = data_c2b;
+    call->get.data_c2b_length = data_c2b_length;
+    call->get.data_length     = data_length;
+    call->get.first           = first;
 }
 
 void castle_rxrpc_replace_call_get(struct castle_rxrpc_call *call, 
@@ -197,7 +208,11 @@ static int castle_rxrpc_op_decode(struct castle_rxrpc_call *call, struct sk_buff
     return call->type->deliver(call, skb, last);
 }
 
-void castle_rxrpc_get_complete(struct castle_rxrpc_call *call, int err, void *data, size_t length)
+void castle_rxrpc_get_reply_start(struct castle_rxrpc_call *call, 
+                                  int err, 
+                                  uint32_t data_length,
+                                  void *buffer, 
+                                  uint32_t buffer_length)
 {
     uint32_t reply[2];
   
@@ -205,28 +220,48 @@ void castle_rxrpc_get_complete(struct castle_rxrpc_call *call, int err, void *da
     if(err)
     {
         reply[0] = htonl(CASTLE_OBJ_REPLY_ERROR);
-        castle_rxrpc_reply_send(call, reply, 4);
+        castle_rxrpc_reply_send(call, reply, 4, 1 /* last */);
         return;
     }
 
     reply[0] = htonl(CASTLE_OBJ_REPLY_GET);
     /* Deal with tombstones next */
-    if(!data)
+    if(!buffer)
     {
-        BUG_ON(length != 0);
+        BUG_ON((data_length != 0) || (buffer_length != 0));
         reply[1] = htonl(CASTLE_OBJ_TOMBSTONE);
-        castle_rxrpc_reply_send(call, reply, 8);
+        castle_rxrpc_reply_send(call, reply, 8, 1 /* last */);
         return;
     }
     
     /* Finally, deal with full values */
     reply[1] = htonl(CASTLE_OBJ_VALUE);
-    reply[2] = htonl(length);
+    /* Write out the entire data length, but send buffer_length worth of stuff now */
+    reply[2] = htonl(data_length);
 
     castle_rxrpc_double_reply_send(call, 
                                    reply, 12,
-                                   data, length);
+                                   buffer, buffer_length,
+                                  (data_length == buffer_length));
 }
+
+void castle_rxrpc_get_reply_continue(struct castle_rxrpc_call *call,
+                                     int err,
+                                     void *buffer,
+                                     uint32_t buffer_length,
+                                     int last)
+{
+    /* Deal with errors first (this will basically advance the state to AWAIT_ACK) */
+    if(err)
+    {
+        castle_rxrpc_reply_send(call, NULL, 0, 1 /* last */);
+        return;
+    }
+
+    /* Otherwise send the buffer through */ 
+    castle_rxrpc_reply_send(call, buffer, buffer_length, last);
+}
+
 
 void castle_rxrpc_replace_complete(struct castle_rxrpc_call *call, int err)
 {
@@ -241,7 +276,7 @@ void castle_rxrpc_replace_complete(struct castle_rxrpc_call *call, int err)
     else
         reply[0] = htonl(CASTLE_OBJ_REPLY_REPLACE);
 
-    castle_rxrpc_reply_send(call, reply, 4);
+    castle_rxrpc_reply_send(call, reply, 4, 1 /* last */);
 }
 
 void castle_rxrpc_replace_continue(struct castle_rxrpc_call *call)
@@ -387,8 +422,8 @@ static int castle_rxrpc_ctrl_decode(struct castle_rxrpc_call *call, struct sk_bu
     }
     
     castle_rxrpc_state_update(call, RXRPC_CALL_REPLYING);
-    debug("Sending reply of length=%lu\n", len);
-    castle_rxrpc_reply_send(call, reply, len);
+    debug("Sending reply of length=%d\n", len);
+    castle_rxrpc_reply_send(call, reply, len, 1 /* last */);
 
     kfree(reply);
     return 0;
@@ -437,7 +472,9 @@ static void castle_rxrpc_msg_send(struct castle_rxrpc_call *call, struct msghdr 
 {
     int n;
 
-    castle_rxrpc_state_update(call, RXRPC_CALL_AWAIT_ACK);
+    /* Check if we are sending the last message for this call, if so advance the state */
+    if(!(msg->msg_flags & MSG_MORE))
+        castle_rxrpc_state_update(call, RXRPC_CALL_AWAIT_ACK);
     n = rxrpc_kernel_send_data(call->rxcall, msg, len);
     debug("Sent %d bytes.\n", n);
     if (n < 0)
@@ -455,7 +492,10 @@ static void castle_rxrpc_msg_send(struct castle_rxrpc_call *call, struct msghdr 
         return;
 }
 
-static void castle_rxrpc_reply_send(struct castle_rxrpc_call *call, const void *buf, size_t len)
+static void castle_rxrpc_reply_send(struct castle_rxrpc_call *call, 
+                                    const void *buf, 
+                                    size_t len, 
+                                    int last)
 {
     struct msghdr msg;
     struct iovec iov[1];
@@ -464,11 +504,11 @@ static void castle_rxrpc_reply_send(struct castle_rxrpc_call *call, const void *
     iov[0].iov_len      = len;
     msg.msg_name        = NULL;
     msg.msg_namelen     = 0;
-    msg.msg_iov         = iov;
-    msg.msg_iovlen      = 1;
+    msg.msg_iov         = buf ? iov : NULL;
+    msg.msg_iovlen      = buf ? 1 : 0;
     msg.msg_control     = NULL;
     msg.msg_controllen  = 0;
-    msg.msg_flags       = 0;
+    msg.msg_flags       = last ? 0 : MSG_MORE;
 
     castle_rxrpc_msg_send(call, &msg, len);
 }
@@ -477,7 +517,8 @@ static void castle_rxrpc_double_reply_send(struct castle_rxrpc_call *call,
                                            const void *buf1, 
                                            size_t len1,
                                            const void *buf2, 
-                                           size_t len2)
+                                           size_t len2,
+                                           int last)
 {
     struct msghdr msg;
     struct iovec iov[3];
@@ -500,7 +541,7 @@ static void castle_rxrpc_double_reply_send(struct castle_rxrpc_call *call,
     msg.msg_iovlen      = pad ? 3 : 2;
     msg.msg_control     = NULL;
     msg.msg_controllen  = 0;
-    msg.msg_flags       = 0;
+    msg.msg_flags       = last ? 0 : MSG_MORE;
     
     castle_rxrpc_msg_send(call, &msg, len1 + len2 + pad);
 }
