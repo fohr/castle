@@ -403,7 +403,7 @@ static struct miscdevice castle_control = {
 
 static void castle_control_reply_error(uint32_t *reply, 
                                        int ret_code,
-                                       int *len)
+                                       size_t *len)
 {
     reply[0] = CASTLE_CTRL_REPLY;
     reply[1] = CASTLE_CTRL_REPLY_FAIL;
@@ -411,9 +411,9 @@ static void castle_control_reply_error(uint32_t *reply,
     *len = 3;
 }
 
-static void castle_control_reply_process(uint32_t *reply, int len, int *length)
+static void castle_control_reply_process(uint32_t *reply, size_t len, size_t *length)
 {
-    int i;
+    size_t i;
     
     /* Convert to network byte order */
     for(i=0; i<len; i++)
@@ -431,12 +431,12 @@ static void castle_control_reply_process(uint32_t *reply, int len, int *length)
 }
 
 static void castle_control_reply(uint32_t *reply, 
-                                 int *length, 
+                                 size_t *length, 
                                  int op_code, 
                                  int ret_code, 
                                  uint32_t token)
 {
-    int len;
+    size_t len;
 
     /* Deal with error condition first */
     if(ret_code)
@@ -461,9 +461,10 @@ static void castle_control_reply(uint32_t *reply,
     castle_control_reply_process(reply, len, length);
 }
 
-static void castle_control_get_valid_counts(slave_uuid_t slave_uuid, uint32_t *reply, int max, int *len_p)
+static void castle_control_get_valid_counts(slave_uuid_t slave_uuid, uint32_t *reply, size_t length, size_t *len_p)
 {
-    int ret = 0, count = 0;
+    int ret = 0;
+    size_t count = 0;
     struct castle_slave *slave = NULL;
 
     slave = castle_slave_find_by_uuid(slave_uuid);
@@ -476,7 +477,7 @@ static void castle_control_get_valid_counts(slave_uuid_t slave_uuid, uint32_t *r
         goto error;
     }
 
-    ret = castle_freespace_summary_get(slave, reply + 3, max - 3, &count);
+    ret = castle_freespace_summary_get(slave, reply + 3, length - 3, &count);
     if (ret)
         goto error;
 
@@ -484,7 +485,7 @@ static void castle_control_get_valid_counts(slave_uuid_t slave_uuid, uint32_t *r
 
     reply[0] = CASTLE_CTRL_REPLY;
     reply[1] = CASTLE_CTRL_REPLY_VALID_COUNTS;
-    reply[2] = count >> 1;
+    reply[2] = count >> 1; // count should only ever be 2^33, so this number will be 2^32
     count += 3;
 
 error:
@@ -494,9 +495,10 @@ error:
     castle_control_reply_process(reply, count, len_p);
 }
 
-static void castle_control_get_invalid_counts(slave_uuid_t slave_uuid, uint32_t *reply, int max, int *len_p)
+static void castle_control_get_invalid_counts(slave_uuid_t slave_uuid, uint32_t *reply, size_t length, size_t *len_p)
 {
-    int ret = 0, count = 0;
+    int ret = 0;
+    size_t count = 0;
     struct castle_slave *slave = NULL;
 
     slave = castle_slave_find_by_uuid(slave_uuid);
@@ -523,11 +525,11 @@ error:
     castle_control_reply_process(reply, count, len_p);
 }
 
-int castle_control_packet_process(struct sk_buff *skb, void **reply, int *len_p)
+int castle_control_packet_process(struct sk_buff *skb, void **reply, size_t *len_p)
 {
     uint32_t *reply32; /* For now, all reply values are 32 bit wide */
     uint32_t ctrl_op;
-    int word_len = 0;
+    size_t reply32_size = 0;
 
     debug("Processing control packet (in_atomic=%d).\n", in_atomic());
 #ifdef DEBUG
@@ -544,15 +546,18 @@ int castle_control_packet_process(struct sk_buff *skb, void **reply, int *len_p)
     {
         case CASTLE_CTRL_REQ_VALID_STATS:
         case CASTLE_CTRL_REQ_INVALID_STATS:
-            word_len = (castle_version_max_get() * 2) + 3;
+        {
+            // must not forget version zero!
+            int versions = castle_version_max_get() + 1;
+            reply32_size = (versions * 2) + 3;
             break;
-
+        }
         default:
-            word_len = 64;
+            reply32_size = 64;
             break;
     }
 
-    *reply = reply32 = kmalloc(word_len * sizeof(uint32_t), GFP_KERNEL);
+    *reply = reply32 = kmalloc(reply32_size * sizeof(uint32_t), GFP_KERNEL);
     if (!reply32)
         return -ENOMEM;
     
@@ -575,16 +580,14 @@ int castle_control_packet_process(struct sk_buff *skb, void **reply, int *len_p)
         case CASTLE_CTRL_REQ_RELEASE:
         {
             int ret/*, i*/;
-            int len_d;
 
             if(skb->len != 4) goto bad_msg;
             castle_control_release(SKB_L_GET(skb), &ret); 
             castle_control_reply(reply32,
-                                 &len_d,
+                                 len_p,
                                  CASTLE_CTRL_REPLY_VOID,
                                  ret,
                                  0);
-            *len_p = len_d;
 
             break;
         }
@@ -808,7 +811,7 @@ int castle_control_packet_process(struct sk_buff *skb, void **reply, int *len_p)
 
             slave_uuid = SKB_L_GET(skb);
             
-            castle_control_get_valid_counts(slave_uuid, reply32, word_len, len_p);
+            castle_control_get_valid_counts(slave_uuid, reply32, reply32_size, len_p);
             
             break;
         }
@@ -820,7 +823,7 @@ int castle_control_packet_process(struct sk_buff *skb, void **reply, int *len_p)
 
             slave_uuid = SKB_L_GET(skb);
             
-            castle_control_get_invalid_counts(slave_uuid, reply32, word_len, len_p);
+            castle_control_get_invalid_counts(slave_uuid, reply32, reply32_size, len_p);
             
             break;
         }

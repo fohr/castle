@@ -370,7 +370,8 @@ static int castle_rxrpc_slice_decode(struct castle_rxrpc_call *call, struct sk_b
 
 static int castle_rxrpc_ctrl_decode(struct castle_rxrpc_call *call, struct sk_buff *skb,  bool last)
 {
-    int ret, len;
+    int ret;
+    size_t len;
     void *reply = NULL;
 
     debug("Delivering ctrl packet.\n");
@@ -386,7 +387,7 @@ static int castle_rxrpc_ctrl_decode(struct castle_rxrpc_call *call, struct sk_bu
     }
     
     castle_rxrpc_state_update(call, RXRPC_CALL_REPLYING);
-    debug("Sending reply of length=%d\n", len);
+    debug("Sending reply of length=%lu\n", len);
     castle_rxrpc_reply_send(call, reply, len);
 
     kfree(reply);

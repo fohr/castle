@@ -5,6 +5,7 @@
 #include "castle.h"
 #include "castle_cache.h"
 #include "castle_freespace.h"
+#include "castle_versions.h"
 
 //#define DEBUG
 #ifndef DEBUG
@@ -126,11 +127,11 @@ static int __castle_freespace_hash_mod(struct castle_slave *cs,
     return 0;
 }
 
-int castle_freespace_summary_get(struct castle_slave *cs, uint32_t *buf, int max, int *count)
+int castle_freespace_summary_get(struct castle_slave *cs, uint32_t *buf, size_t max, size_t *count)
 {
     struct castle_slave_block_cnt *cnt;
     struct list_head *l;
-    ssize_t offset = 0;
+    size_t offset = 0;
     int i;
 
     /* Superblock lock is used to protect the hash-table */

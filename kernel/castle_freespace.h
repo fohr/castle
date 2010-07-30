@@ -8,7 +8,7 @@ c_disk_blk_t castle_freespace_block_get                (version_t version, int s
 void         castle_freespace_block_free               (c_disk_blk_t cdb, version_t version, int size);
                                                        
 int          castle_freespace_version_add              (version_t version);
-int          castle_freespace_summary_get              (struct castle_slave *cs, uint32_t *buf, int max, int *count);
+int          castle_freespace_summary_get              (struct castle_slave *cs, uint32_t *buf, size_t max, size_t *count);
 ssize_t      castle_freespace_version_slave_blocks_get (struct castle_slave *cs, version_t version);
 ssize_t      castle_freespace_version_blocks_get       (version_t version);
 
