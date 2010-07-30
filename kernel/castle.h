@@ -273,6 +273,7 @@ struct castle_component_tree {
     struct list_head hash_list;
     struct list_head roots_list;
     c_mstore_key_t   mstore_key;
+    int              tmp_dbg;
 };
 extern struct castle_component_tree castle_global_tree;
 
@@ -505,7 +506,7 @@ typedef struct castle_rq_enumerator {
     struct castle_iterator        iterator; 
     int                           iter_completed;
     wait_queue_head_t             iter_wq;
-    atomic_t                      iter_running;
+    uint8_t                       iter_running;
     int                           prod_idx;
     int                           cons_idx;
     struct castle_btree_node     *buffer;       /* Two buffers are actually allocated (buffer1/2) */
