@@ -117,24 +117,40 @@ static void castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
 
 #define OBJ_IO_MAX_BUFFER_SIZE      (10)    /* In C_BLK_SIZE blocks */
 
-static c2_block_t* castle_object_write_buffer_alloc(struct castle_rxrpc_call *call,
-                                                    c_disk_blk_t old_cdb,
-                                                    uint32_t data_length)
+static c_disk_blk_t castle_object_write_next_cdb(struct castle_rxrpc_call *call,
+                                                 c_disk_blk_t old_cdb,
+                                                 uint32_t data_length)
 {
     uint32_t data_c2b_length;
-    int nr_blocks;
     c_disk_blk_t new_data_cdb;
-    c2_block_t *new_data_c2b;
+    int nr_blocks;
 
     /* Work out how large buffer to allocate */
     data_c2b_length = data_length > OBJ_IO_MAX_BUFFER_SIZE * C_BLK_SIZE ?
                                     OBJ_IO_MAX_BUFFER_SIZE * C_BLK_SIZE :
                                     data_length;
     nr_blocks = (data_c2b_length - 1) / C_BLK_SIZE + 1; 
-    debug("Allocating buffer of size %d blocks, for data_length=%d\n",
+    debug("Allocating new buffer of size %d blocks, for data_length=%d\n",
         nr_blocks, data_length);
     new_data_cdb.disk  = old_cdb.disk; 
     new_data_cdb.block = old_cdb.block + nr_blocks; 
+
+    return new_data_cdb;
+}
+
+static c2_block_t* castle_object_write_buffer_alloc(struct castle_rxrpc_call *call,
+                                                    c_disk_blk_t new_data_cdb,
+                                                    uint32_t data_length)
+{
+    uint32_t data_c2b_length;
+    c2_block_t *new_data_c2b;
+    int nr_blocks;
+
+    /* Work out how large the buffer is */
+    data_c2b_length = data_length > OBJ_IO_MAX_BUFFER_SIZE * C_BLK_SIZE ?
+                                    OBJ_IO_MAX_BUFFER_SIZE * C_BLK_SIZE :
+                                    data_length;
+    nr_blocks = (data_c2b_length - 1) / C_BLK_SIZE + 1; 
     new_data_c2b = castle_cache_block_get(new_data_cdb, nr_blocks);
     lock_c2b(new_data_c2b);
     set_c2b_uptodate(new_data_c2b);
@@ -151,6 +167,7 @@ static int castle_object_data_write(struct castle_rxrpc_call *call)
     c2_block_t *data_c2b;
     uint32_t data_c2b_offset, data_c2b_length, data_length, packet_length;
     c2_block_t *new_data_c2b;
+    c_disk_blk_t new_data_cdb;
 
     /* Work out how much data we've got, and how far we've got so far */
     castle_rxrpc_replace_call_get(call, &data_c2b, &data_c2b_offset, &data_length);
@@ -199,7 +216,8 @@ static int castle_object_data_write(struct castle_rxrpc_call *call)
         if((data_c2b_offset == data_c2b_length) && (data_length > 0))
         {
             debug("Run out of buffer space, allocating a new one.\n");
-            new_data_c2b = castle_object_write_buffer_alloc(call, data_c2b->cdb, data_length);
+            new_data_cdb = castle_object_write_next_cdb(call, data_c2b->cdb, data_length); 
+            new_data_c2b = castle_object_write_buffer_alloc(call, new_data_cdb, data_length); 
             data_c2b_length = new_data_c2b->nr_pages * C_BLK_SIZE;
             data_c2b_offset = 0;
             /* Release the (old) buffer */
