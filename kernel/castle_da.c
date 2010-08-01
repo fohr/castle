@@ -37,6 +37,7 @@ struct castle_double_array {
     /* Lock protects the trees list */
     spinlock_t       lock;
     int              in_merge;
+    int              nr_trees;
     struct list_head trees[MAX_DA_LEVEL];
     struct list_head hash_list;
     c_mstore_key_t   mstore_key;
@@ -190,6 +191,12 @@ static void castle_ct_immut_iter_init(c_immut_iter_t *iter)
     castle_ct_immut_iter_next_node(iter);
 }
 
+struct castle_iterator_type castle_ct_immut_iter = {
+    .has_next = (castle_iterator_has_next_t)castle_ct_immut_iter_has_next,
+    .next     = (castle_iterator_next_t)    castle_ct_immut_iter_next,
+    .skip     = NULL,
+};
+
 typedef struct castle_modlist_iterator {
     struct castle_btree_type *btree;
     struct castle_component_tree *tree;
@@ -251,7 +258,7 @@ static void castle_ct_modlist_iter_fill(c_modlist_iter_t *iter)
     void *key;
 
     item_idx = node_idx = node_offset = 0;
-    while(castle_btree_enum_has_next(iter->enumerator))
+    while(castle_btree_enum.has_next(iter->enumerator))
     {
         if(iter->merge)
             castle_da_merge_budget_consume(iter->merge);
@@ -266,7 +273,7 @@ static void castle_ct_modlist_iter_fill(c_modlist_iter_t *iter)
         }
 
         /* Get the next entry from the comparator */
-        castle_btree_enum_next(iter->enumerator, &key, &version, &cvt);
+        castle_btree_enum.next(iter->enumerator, &key, &version, &cvt);
         debug("In enum got next: k=%p, version=%d, cdb=(0x%x, 0x%x)\n",
                 key, version, cvt.cdb.disk, cvt.cdb.block);
         debug("Dereferencing first 4 bytes of the key (should be length)=0x%x.\n",
@@ -459,30 +466,30 @@ static void castle_ct_modlist_iter_init(c_modlist_iter_t *iter)
     castle_ct_modlist_iter_heapsort(iter);
 }
 
-typedef int  (*iter_has_next_fn)(void *iter);
-typedef void (*iter_next_fn)    (void *iter, 
-                                 void **key_p, 
-                                 version_t *version_p, 
-                                 c_val_tup_t *cvt_p);
- 
+struct castle_iterator_type castle_ct_modlist_iter = {
+    .has_next = (castle_iterator_has_next_t)castle_ct_modlist_iter_has_next,
+    .next     = (castle_iterator_next_t)    castle_ct_modlist_iter_next,
+    .skip     = NULL,
+};
+
 typedef struct castle_merged_iterator {
     int nr_iters;
     struct castle_btree_type *btree;
     int err;
     int non_empty_cnt;
     struct component_iterator {
-        int               completed;
-        void             *iterator;
-        iter_has_next_fn  has_next_fn;
-        iter_next_fn      next_fn;
-        int               cached;
-        struct {
-            void         *k;
-            version_t     v;
-            c_val_tup_t   cvt;
+        int                          completed;
+        void                        *iterator;
+        struct castle_iterator_type *iterator_type;
+        int                          cached;
+        struct {           
+            void                    *k;
+            version_t                v;
+            c_val_tup_t              cvt;
         } cached_entry;
     } *iterators;
 } c_merged_iter_t;
+
 
 static void castle_ct_merged_iter_consume(c_merged_iter_t *iter,
                                           struct component_iterator *comp_iter)
@@ -490,7 +497,7 @@ static void castle_ct_merged_iter_consume(c_merged_iter_t *iter,
     BUG_ON(!comp_iter->cached);
     /* This will effectively consume the cached entry */
     comp_iter->cached = 0;
-    if(!comp_iter->has_next_fn(comp_iter->iterator))
+    if(!comp_iter->iterator_type->has_next(comp_iter->iterator))
     {
         comp_iter->completed = 1;
         iter->non_empty_cnt--;
@@ -498,7 +505,6 @@ static void castle_ct_merged_iter_consume(c_merged_iter_t *iter,
                 iter->non_empty_cnt);
     }
 }
-                                    
 
 static void castle_ct_merged_iter_next(c_merged_iter_t *iter,
                                        void **key_p,
@@ -522,17 +528,17 @@ static void castle_ct_merged_iter_next(c_merged_iter_t *iter,
         if(!comp_iter->completed && !comp_iter->cached)
         {
             debug("Reading next entry for iterator: %d.\n", i);
-            comp_iter->next_fn( comp_iter->iterator,
-                               &comp_iter->cached_entry.k,
-                               &comp_iter->cached_entry.v,
-                               &comp_iter->cached_entry.cvt);
+            comp_iter->iterator_type->next( comp_iter->iterator,
+                                           &comp_iter->cached_entry.k,
+                                           &comp_iter->cached_entry.v,
+                                           &comp_iter->cached_entry.cvt);
             comp_iter->cached = 1;
         }
 
         /* If there is no cached entry by here, the compenennt iterator must be finished */ 
         if(!comp_iter->cached)
         {
-            BUG_ON(comp_iter->has_next_fn(comp_iter->iterator));
+            BUG_ON(comp_iter->iterator_type->has_next(comp_iter->iterator));
             continue;
         }
 
@@ -579,13 +585,38 @@ static int castle_ct_merged_iter_has_next(c_merged_iter_t *iter)
     return (!iter->err && (iter->non_empty_cnt > 0));
 }
 
-/* Constructs a merged iterator out of a set of iterator, and has_next(), next() function
-   pointers. Arguments are:
-   iterator, iter1, iter1_has_next, iter1_next, iter2, ... */
-static void castle_ct_merged_iter_init(c_merged_iter_t *iter, 
-                                  ...)
+static void castle_ct_merged_iter_skip(c_merged_iter_t *iter,
+                                       void *key)
 {
-    va_list vl;
+    struct component_iterator *comp_iter; 
+    int i;
+
+    /* Go through iterators, and do the following:
+       * call skip in each of the iterators
+       * check if we have something cached
+       * if we do, and the cached k < key, flush it
+     */
+    for(i=0; i<iter->nr_iters; i++)
+    {
+        comp_iter = iter->iterators + i; 
+        if(comp_iter->completed)
+            continue;
+        /* Skip in the component iterator */
+        BUG_ON(!comp_iter->iterator_type->skip);
+        comp_iter->iterator_type->skip(comp_iter->iterator, key);
+
+        /* Flush cached entry if too small */
+        if( comp_iter->cached && 
+           (iter->btree->key_compare(comp_iter->cached_entry.k, key) < 0)) 
+            castle_ct_merged_iter_consume(iter, comp_iter);
+    }
+}
+
+/* Constructs a merged iterator out of a set of iterators. */
+static void castle_ct_merged_iter_init(c_merged_iter_t *iter,
+                                       void **iterators,
+                                       struct castle_iterator_type **iterator_types)
+{
     int i;
 
     debug("Initing merged iterator for %d component iterators.\n", iter->nr_iters);
@@ -602,18 +633,16 @@ static void castle_ct_merged_iter_init(c_merged_iter_t *iter,
     }
     /* Memory allocated for the iterators array, save whatever was given to us */
     iter->non_empty_cnt = 0; 
-    va_start(vl, iter);
     for(i=0; i<iter->nr_iters; i++)
     {
         struct component_iterator *comp_iter = iter->iterators + i; 
 
-        comp_iter->iterator     = va_arg(vl, void *);
-        comp_iter->has_next_fn  = va_arg(vl, void *); 
-        comp_iter->next_fn      = va_arg(vl, void *); 
-        comp_iter->cached       = 0;
+        comp_iter->iterator      = iterators[i];
+        comp_iter->iterator_type = iterator_types[i];
+        comp_iter->cached        = 0;
         /* Check if the iterator has at least one entry, so that we know what
            non_empty_count to start with. Otherwise first has_next() could fail */
-        if(comp_iter->has_next_fn(comp_iter->iterator)) 
+        if(comp_iter->iterator_type->has_next(comp_iter->iterator)) 
         {
             debug("Iterator %d has next.\n", i);
             comp_iter->completed = 0;
@@ -622,9 +651,14 @@ static void castle_ct_merged_iter_init(c_merged_iter_t *iter,
         else
             comp_iter->completed = 1;
     } 
-
-    va_end(vl);
 }
+
+struct castle_iterator_type castle_ct_merged_iter = {
+    .has_next = (castle_iterator_has_next_t)castle_ct_merged_iter_has_next,
+    .next     = (castle_iterator_next_t)    castle_ct_merged_iter_next,
+    .skip     = (castle_iterator_skip_t)    castle_ct_merged_iter_skip, 
+};
+
 
 #ifdef DEBUG
 c_modlist_iter_t test_iter1;
@@ -637,6 +671,8 @@ static USED void castle_ct_sort(struct castle_component_tree *ct1,
     void *key;
     c_val_tup_t cvt;
     int i=0;
+    void *iters[2];
+    struct castle_iterator_type *iter_types[2];
 
     debug("Number of items in the component tree1: %ld, number of nodes: %ld, ct2=%ld, %ld\n", 
             atomic64_read(&ct1->item_count),
@@ -662,13 +698,13 @@ static USED void castle_ct_sort(struct castle_component_tree *ct1,
 #endif
     test_miter.nr_iters = 2;
     test_miter.btree = test_iter1.btree;
+    iters[0] = &test_iter1;
+    iters[1] = &test_iter2;
+    iter_types[0] = &castle_ct_modlist_iter;
+    iter_types[1] = &castle_ct_modlist_iter;
     castle_ct_merged_iter_init(&test_miter,
-                               &test_iter1, 
-                               castle_ct_modlist_iter_has_next,
-                               castle_ct_modlist_iter_next,
-                               &test_iter2, 
-                               castle_ct_modlist_iter_has_next,
-                               castle_ct_modlist_iter_next);
+                               iters,
+                               iter_types);
     debug("=============== SORTED ================\n");
     while(castle_ct_merged_iter_has_next(&test_miter))
     {
@@ -681,6 +717,128 @@ static USED void castle_ct_sort(struct castle_component_tree *ct1,
     }
 }
 #endif
+
+typedef struct castle_da_rq_iterator {
+    int                       nr_cts;
+    int                       err;
+    struct castle_btree_type *btree;
+    void                     *min_key;
+    c_merged_iter_t           merged_iter;
+
+    struct ct_rq {
+        struct castle_component_tree *ct;
+        c_rq_enum_t                   ct_rq_iter; 
+    } *ct_rqs;
+} c_da_rq_iter_t;
+
+/* Has next, next and skip only need to call the corresponding functions on
+   the underlying merged iterator */
+static int castle_da_rq_iter_has_next(c_da_rq_iter_t *iter)
+{
+    return castle_ct_merged_iter_has_next(&iter->merged_iter);
+} 
+
+static void castle_da_rq_iter_next(c_da_rq_iter_t *iter,
+                                   void **key_p,
+                                   version_t *version_p,
+                                   c_val_tup_t *cvt_p)
+{
+    castle_ct_merged_iter_next(&iter->merged_iter, key_p, version_p, cvt_p);
+}
+
+static void castle_da_rq_iter_skip(c_da_rq_iter_t *iter, void *key)
+{
+    castle_ct_merged_iter_skip(&iter->merged_iter, key);
+}
+
+static USED void castle_da_rq_iter_init(c_da_rq_iter_t *iter,
+                                        version_t version,
+                                        struct castle_double_array *da,
+                                        void *start_key,
+                                        void *end_key)
+{
+    void **iters;
+    struct castle_iterator_type **iter_types;
+    struct list_head *l;
+    int i, j;
+
+    BUG_ON(!castle_version_is_ancestor(da->root_version, version));
+    iter->btree = NULL;
+again:
+    /* Try to allocate the right amount of memory, but remember that nr_trees
+       may change, because we are not holding the da lock (cannot kmalloc holding
+       a spinlock). */
+    iter->nr_cts = da->nr_trees;
+    iter->ct_rqs = kzalloc(iter->nr_cts * sizeof(struct ct_rq), GFP_KERNEL);
+    iters        = kmalloc(iter->nr_cts * sizeof(void *), GFP_KERNEL);
+    iter_types   = kmalloc(iter->nr_cts * sizeof(struct castle_iterator_type *), GFP_KERNEL);
+    if(!iter->ct_rqs || !iters || !iter_types)
+    {
+        iter->err = -ENOMEM;
+        return;
+    }
+
+    castle_da_lock(da);
+    /* Check the number of trees under lock. Retry again if # changed. */ 
+    if(iter->nr_cts != da->nr_trees)
+    {
+        castle_da_unlock(da);
+        printk("Warning. Untested path. # of cts changed while allocating memory for rq.\n");
+        kfree(iter->ct_rqs);
+        kfree(iters);
+        kfree(iter_types);
+        goto again;
+    }
+    /* Get refs to all the component trees, and release the lock */
+    j=0;
+    for(i=0; i<MAX_DA_LEVEL; i++)
+    {
+        list_for_each(l, &da->trees[i])
+        {
+            struct castle_component_tree *ct;
+
+            BUG_ON(j >= iter->nr_cts);
+            ct = list_entry(l, struct castle_component_tree, da_list);
+            iter->ct_rqs[j].ct = ct; 
+            castle_ct_get(ct);
+            if(!iter->btree)
+                iter->btree = castle_btree_type_get(ct->btree_type);
+            BUG_ON(iter->btree->magic != ct->btree_type);
+            j++;
+        }
+    }
+    castle_da_unlock(da);
+    BUG_ON(j != iter->nr_cts);
+
+    /* Initialise range queries for individual cts */
+    for(i=0; i<iter->nr_cts; i++)
+    {
+        struct ct_rq *ct_rq = iter->ct_rqs + i;
+
+        castle_btree_rq_enum_init(&ct_rq->ct_rq_iter,
+                                   version,
+                                   ct_rq->ct,
+                                   start_key,
+                                   end_key);
+        /* TODO: handle errors! Don't know how to destroy ct_rq_iter ATM. */
+        BUG_ON(ct_rq->ct_rq_iter.err);
+        iters[i]        = &ct_rq->ct_rq_iter;
+        iter_types[i]   = &castle_btree_rq_iter;
+    }
+
+    /* Iterators have been initialised, now initialise the merged iterator */
+    iter->merged_iter.nr_iters = iter->nr_cts;
+    iter->merged_iter.btree    = iter->btree;
+    castle_ct_merged_iter_init(&iter->merged_iter,
+                                iters,
+                                iter_types);
+}
+
+struct castle_iterator_type castle_da_rq_iter = {
+    .has_next = (castle_iterator_has_next_t)castle_da_rq_iter_has_next,
+    .next     = (castle_iterator_next_t)    castle_da_rq_iter_next,
+    .skip     = (castle_iterator_skip_t)    castle_da_rq_iter_skip, 
+};
 
 /**********************************************************************************************/
 /* Merges */
@@ -837,24 +995,20 @@ static void castle_da_iterator_create(struct castle_da_merge *merge,
     }
 }
         
-static iter_has_next_fn castle_da_iterator_has_next_fn_get(struct castle_component_tree *ct)
+static struct castle_iterator_type* castle_da_iter_type_get(struct castle_component_tree *ct)
 {
     if(ct->dynamic)
-        return (iter_has_next_fn)castle_ct_modlist_iter_has_next;
-    return (iter_has_next_fn)castle_ct_immut_iter_has_next;
-}
-
-static iter_next_fn castle_da_iterator_next_fn_get(struct castle_component_tree *ct)
-{
-    if(ct->dynamic)
-        return (iter_next_fn)castle_ct_modlist_iter_next;
-    return (iter_next_fn)castle_ct_immut_iter_next;
+        return &castle_ct_modlist_iter;
+    else
+        return &castle_ct_immut_iter;
 }
 
 static int castle_da_iterators_create(struct castle_da_merge *merge)
 {
     struct castle_btree_type *btree;
     int ret;
+    void *iters[2];
+    struct castle_iterator_type *iter_types[2];
 
     printk("Creating iterators for the merge.\n");
     BUG_ON( merge->iter1    ||  merge->iter2);
@@ -880,13 +1034,13 @@ static int castle_da_iterators_create(struct castle_da_merge *merge)
 
     merge->merged_iter->nr_iters = 2;
     merge->merged_iter->btree    = btree;
+    iters[0] = merge->iter1;
+    iters[1] = merge->iter2;
+    iter_types[0] = castle_da_iter_type_get(merge->in_tree1); 
+    iter_types[1] = castle_da_iter_type_get(merge->in_tree2); 
     castle_ct_merged_iter_init(merge->merged_iter,
-                               merge->iter1, 
-                               castle_da_iterator_has_next_fn_get(merge->in_tree1),
-                               castle_da_iterator_next_fn_get(merge->in_tree1),
-                               merge->iter2, 
-                               castle_da_iterator_has_next_fn_get(merge->in_tree2),
-                               castle_da_iterator_next_fn_get(merge->in_tree2));
+                               iters,
+                               iter_types);
     ret = merge->merged_iter->err;
     debug("Merged iterator inited with ret=%d.\n", ret);
     if(ret)
@@ -1180,8 +1334,6 @@ static struct castle_component_tree* castle_da_merge_package(struct castle_da_me
     castle_da_lock(merge->da);
     BUG_ON((merge->da->id != merge->in_tree1->da) ||
            (merge->da->id != merge->in_tree2->da));
-    list_del(&merge->in_tree1->da_list);
-    list_del(&merge->in_tree2->da_list);
     castle_component_tree_add(merge->da, out_tree, 0 /* not in init */);
     merge->da->in_merge = 0;
     castle_da_merge_check(merge->da);
@@ -1403,6 +1555,7 @@ static void castle_da_unmarshall(struct castle_double_array *da,
     da->mstore_key   = key;
     spin_lock_init(&da->lock);
     da->in_merge     = 0;
+    da->nr_trees     = 0;
 
     for(i=0; i<MAX_DA_LEVEL; i++)
         INIT_LIST_HEAD(&da->trees[i]);
@@ -1433,6 +1586,7 @@ static void castle_component_tree_add(struct castle_double_array *da,
         BUG_ON(next_ct->seq >= ct->seq);
     }
     list_add(&ct->da_list, &da->trees[ct->level]);
+    da->nr_trees++;
 }
 
 static inline void castle_da_lock(struct castle_double_array *da)
@@ -1452,10 +1606,25 @@ static inline void castle_ct_get(struct castle_component_tree *ct)
 
 static inline void castle_ct_put(struct castle_component_tree *ct)
 {
+    struct castle_double_array *da;
+    
+    da = castle_da_hash_get(ct->da);
+    BUG_ON(!da);
+    castle_da_lock(da);
     if(likely(!atomic_dec_and_test(&ct->ref_count)))
+    {
+        castle_da_unlock(da);
         return;
+    }
 
-    debug("Ref count for ct id=%d went to 0, releasing.\n", ct->seq);
+    debug("Ref count for ct id=%d went to 0, releasing, da->id=%d.\n", ct->seq, da->id);
+    /* Remove from the trees list, so that no-one will try to get a reference to it */
+    list_del(&ct->da_list);
+    da->nr_trees--;
+    /* Now that da variables have been update, we can release the lock */
+    castle_da_unlock(da);
+
+    /* Destroy the component tree */
     BUG_ON(TREE_GLOBAL(ct->seq) || TREE_INVAL(ct->seq));
     castle_version_roots_delete(ct->seq);
     BUG_ON(!list_empty(&ct->roots_list));
@@ -1830,6 +1999,7 @@ int castle_double_array_make(da_id_t da_id, version_t root_version)
     da->mstore_key   = INVAL_MSTORE_KEY;
     spin_lock_init(&da->lock);
     da->in_merge     = 0;
+    da->nr_trees     = 0;
     for(i=0; i<MAX_DA_LEVEL; i++)
         INIT_LIST_HEAD(&da->trees[i]);
     ret = castle_da_rwct_make(da);

@@ -395,6 +395,20 @@ typedef struct castle_bio_vec {
 #define c_bvec_bpnode(_c_bvec)          c2b_buffer((_c_bvec)->btree_parent_node)
 #define c_bvec_btree_fn(_c_bvec, _fn) ((_c_bvec)->c_bio->btree->(_fn))
 
+/* Iterface implemented by various iterators in the module. Skip function is optional. */
+typedef int  (*castle_iterator_has_next_t)(void *iter);
+typedef void (*castle_iterator_next_t)    (void *iter, 
+                                           void **key_p, 
+                                           version_t *version_p, 
+                                           c_val_tup_t *cvt_p);
+typedef void (*castle_iterator_skip_t)    (void *iter,
+                                           void *key);
+struct castle_iterator_type {
+    castle_iterator_has_next_t has_next;
+    castle_iterator_next_t     next;
+    castle_iterator_skip_t     skip;
+};
+
 /* Used to lock nodes pointed to by leaf pointers (refered to as 'indirect nodes') */
 struct castle_indirect_node {
     /* Will form array of c2b/{cdb, f_idx} for the indirect nodes. Sorted by

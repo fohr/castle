@@ -3463,6 +3463,11 @@ no_mem:
     castle_btree_enum_fini(c_enum);
 }
 
+struct castle_iterator_type castle_btree_enum = {
+    .has_next = (castle_iterator_has_next_t)castle_btree_enum_has_next,
+    .next     = (castle_iterator_next_t)    castle_btree_enum_next,
+    .skip     = NULL, 
+};
 
 static void castle_rq_enum_iter_each(c_iter_t *c_iter, 
                                      int index, 
@@ -3685,3 +3690,9 @@ void castle_btree_rq_enum_cancel(c_rq_enum_t *rq_enum)
 
     castle_btree_rq_enum_fini(rq_enum);
 }
+
+struct castle_iterator_type castle_btree_rq_iter = {
+    .has_next = (castle_iterator_has_next_t)castle_btree_rq_enum_has_next,
+    .next     = (castle_iterator_next_t)    castle_btree_rq_enum_next,
+    .skip     = (castle_iterator_skip_t)    castle_btree_rq_enum_skip, 
+};
