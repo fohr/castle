@@ -1348,6 +1348,13 @@ static struct castle_component_tree* castle_da_merge_package(struct castle_da_me
     castle_da_lock(merge->da);
     BUG_ON((merge->da->id != merge->in_tree1->da) ||
            (merge->da->id != merge->in_tree2->da));
+    /* Delete the old trees from DA list (note that it may still be used by
+       a lot of IOs and will only be destroyed on the last ct_put()). But
+       we want to remove it from the DA straight away. The out_tree now takes
+       over their functionality. */
+    list_del(&merge->in_tree1->da_list);
+    list_del(&merge->in_tree2->da_list);
+    merge->da->nr_trees -= 2;
     castle_component_tree_add(merge->da, out_tree, 0 /* not in init */);
     merge->da->in_merge = 0;
     castle_da_merge_check(merge->da);
@@ -1620,23 +1627,10 @@ static inline void castle_ct_get(struct castle_component_tree *ct)
 
 static inline void castle_ct_put(struct castle_component_tree *ct)
 {
-    struct castle_double_array *da;
-    
-    da = castle_da_hash_get(ct->da);
-    BUG_ON(!da);
-    castle_da_lock(da);
     if(likely(!atomic_dec_and_test(&ct->ref_count)))
-    {
-        castle_da_unlock(da);
         return;
-    }
 
-    debug("Ref count for ct id=%d went to 0, releasing, da->id=%d.\n", ct->seq, da->id);
-    /* Remove from the trees list, so that no-one will try to get a reference to it */
-    list_del(&ct->da_list);
-    da->nr_trees--;
-    /* Now that da variables have been update, we can release the lock */
-    castle_da_unlock(da);
+    debug("Ref count for ct id=%d went to 0, releasing.\n", ct->seq);
 
     /* Destroy the component tree */
     BUG_ON(TREE_GLOBAL(ct->seq) || TREE_INVAL(ct->seq));
