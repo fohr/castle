@@ -206,6 +206,13 @@ typedef struct castle_var_length_key {
     uint8_t key[0];
 } c_vl_key_t;
 
+typedef struct castle_var_length_btree_key {
+    uint32_t length;
+    uint32_t nr_dims;
+    uint32_t dim_head[0];
+    /* uint8_t dims[][] */
+} c_vl_bkey_t;
+
 /* Below encapsulates the internal btree node structure, different type of
    nodes may be used for different trees */
 struct castle_btree_type {

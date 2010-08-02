@@ -19,30 +19,53 @@
 static const uint32_t OBJ_TOMBSTONE = ((uint32_t)-1);
 extern struct castle_attachment *global_attachment_hack;
 
-/* Converts 'object key' (i.e. multidimensional key) to btree key (single dimensional) */
-static c_vl_key_t* castle_object_key_convert(c_vl_key_t **obj_key)
-{
-    c_vl_key_t *btree_key;
-    uint32_t max_len = 0;
-    int i, nr_keys = 0;
+#define KEY_DIMENSION_NEXT_FLAG             (1 << 0)                                              
+#define KEY_DIMENSION_UNUSED1_FLAG          (1 << 1)                                              
+#define KEY_DIMENSION_UNUSED2_FLAG          (1 << 2)                                              
+#define KEY_DIMENSION_UNUSED3_FLAG          (1 << 3)                                              
+#define KEY_DIMENSION_FLAGS_SHIFT           (4)
+#define KEY_DIMENSION_FLAGS_MASK           ((1 << KEY_DIMENSION_FLAGS_SHIFT) - 1) 
+#define KEY_DIMENSION_FLAGS(_dim_head)      ((_dim_head) &  KEY_DIMENSION_FLAGS_MASK)
+#define KEY_DIMENSION_LENGTH(_dim_head)     ((_dim_head) >> KEY_DIMENSION_FLAGS_SHIFT)
+#define KEY_DIMENSION_HEADER(_len, _flags)  ((_len)  << KEY_DIMENSION_FLAGS_SHIFT ||     \
+                                            ((_flags) & KEY_DIMENSION_FLAGS_MASK))
 
-    /* Work out the maximum length of the keys, and number of keys in the array */
-    while(obj_key[nr_keys])
+/* Converts 'object key' (i.e. multidimensional key) to btree key (single dimensional) */
+static c_vl_bkey_t* castle_object_key_convert(c_vl_key_t **obj_key)
+{
+    c_vl_bkey_t *btree_key;
+    uint32_t key_len, payload_offset;
+    int i, nr_dims;
+
+    /* Work the length of the btree key */ 
+    key_len = 0;
+    for(i=0; obj_key[i]; i++)
     {
-        max_len = max_len < obj_key[nr_keys]->length ? obj_key[nr_keys]->length : max_len;
-        nr_keys++;
+        key_len += 4;           /* 4 bytes for the dimension offset, and flags */ 
+        key_len += obj_key[i]->length;
     }
+    nr_dims = i;
 
     /* Allocate the single-dimensional key */
-    btree_key = kzalloc(sizeof(c_vl_key_t) + max_len * nr_keys, GFP_KERNEL);
+    btree_key = kzalloc(sizeof(c_vl_bkey_t) + key_len, GFP_KERNEL);
     if(!btree_key)
+    {
+        printk("Could not allocate memory for the key, sizeof=%ld, key_len=%d.\n",
+            sizeof(c_vl_bkey_t), key_len);
         return NULL;
+    }
 
-    /* Construct interleaved key */
-    btree_key->length = max_len * nr_keys;
-    for(i=0; i<btree_key->length; i++)
-        if(i / nr_keys < obj_key[i % nr_keys]->length)
-            btree_key->key[i] = obj_key[i % nr_keys]->key[i / nr_keys];
+    /* Construct the key */
+    btree_key->length  = sizeof(c_vl_bkey_t) + key_len - 4; /* Length doesn't include length field */
+    btree_key->nr_dims = nr_dims;
+    payload_offset = sizeof(c_vl_bkey_t) + 4 * nr_dims;
+    for(i=0; i<nr_dims; i++)
+    {
+        btree_key->dim_head[i] = KEY_DIMENSION_HEADER(payload_offset, 0);
+        memcpy((char *)btree_key + payload_offset, obj_key[i]->key, obj_key[i]->length);
+        payload_offset += obj_key[i]->length;
+    }
+    BUG_ON(payload_offset != sizeof(c_vl_bkey_t) + key_len);
 
     return btree_key;
 }
@@ -331,7 +354,7 @@ int castle_object_replace_continue(struct castle_rxrpc_call *call, int last)
 
 int castle_object_replace(struct castle_rxrpc_call *call, c_vl_key_t **key, int tombstone)
 {
-    c_vl_key_t *btree_key;
+    c_vl_bkey_t *btree_key;
     c_bvec_t *c_bvec;
     c_bio_t *c_bio;
 
@@ -564,7 +587,7 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
 
 int castle_object_get(struct castle_rxrpc_call *call, c_vl_key_t **key)
 {
-    c_vl_key_t *btree_key;
+    c_vl_bkey_t *btree_key;
     c_bvec_t *c_bvec;
     c_bio_t *c_bio;
 

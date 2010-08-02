@@ -2151,7 +2151,6 @@ void castle_double_array_find(c_bvec_t *c_bvec)
 
     da = castle_da_hash_get(da_id);
     BUG_ON(!da);
-
     /* da_endfind should be null it is for our privte use */
     BUG_ON(c_bvec->da_endfind);
     debug_verbose("Doing DA %s for da_id=%d, for version=%d\n", 
