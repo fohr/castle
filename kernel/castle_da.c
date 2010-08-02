@@ -1225,20 +1225,9 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
                 depth);
         goto release_node;
     }
-    /* If we are dealing with right-most internal node, use version 0 instead
-       (max_version). This will guarantee that any btree walk, even for keys 
-       in non-existant version will have somewhere to go */
-    if(merge->completing && (depth > 0) && (buffer->used == 0))
-        node->version = version = 0;
     CDB_TO_CVT(node_cvt, level->node_c2b->cdb, level->node_c2b->nr_pages);
     castle_da_entry_add(merge, depth+1, key, node->version, node_cvt);
 release_node:
-    /* For internal node, we replace the key with max_key. This is over the top. 
-       (max_keys are probably only needed in the right-most path). But this shouldn't
-       break anything either (higher levels in the tree will direct us correctly). */
-    if(depth > 0)
-        btree->entry_replace(node, level->valid_end_idx, btree->max_key, version, 0, cvt);
-
     debug("Releasing c2b for cdb=(0x%x, 0x%x)\n", 
             level->node_c2b->cdb.disk,
             level->node_c2b->cdb.block);
@@ -1367,6 +1356,66 @@ static struct castle_component_tree* castle_da_merge_package(struct castle_da_me
     return out_tree;
 }
 
+static void castle_da_max_path_complete(struct castle_da_merge *merge)
+{
+    struct castle_btree_type *btree = merge->btree;
+    struct castle_btree_node *node;
+    c2_block_t *root_c2b, *node_c2b, *next_node_c2b;
+
+    BUG_ON(!merge->completing);
+    /* Root stored in last_node_c2b at the end of the merge */
+    root_c2b = merge->last_node_c2b;
+    printk("Maxifying the right most path, starting with root_cdb=(0x%x, 0x%x)\n",
+            root_c2b->cdb.disk, root_c2b->cdb.block);
+    /* Start of with root node */
+    node_c2b = root_c2b;
+    node = c2b_bnode(node_c2b);
+    while(!node->is_leaf)
+    {
+        void *k;
+        version_t v;
+        int is_leaf_ptr;
+        c_val_tup_t cvt;
+
+        /* Replace right-most entry with (k=max_key, v=0) */
+        btree->entry_get(node, node->used-1, &k, &v, &is_leaf_ptr, &cvt);
+        BUG_ON(!CVT_ONDISK(cvt) || is_leaf_ptr);
+        debug("The node is non-leaf, replacing the right most entry with (max_key, 0).\n");
+        btree->entry_replace(node, node->used-1, btree->max_key, 0, 0, cvt);
+        /* Change the version of the node to 0 */
+        node->version = 0;
+        /* Dirty the c2b */
+        dirty_c2b(node_c2b);
+        /* Go to the next btree node */
+        debug("Locking next node cdb=(0x%x, 0x%x)\n", 
+                cvt.cdb.disk, cvt.cdb.block);
+        next_node_c2b = castle_cache_block_get(cvt.cdb, btree->node_size);
+        lock_c2b(next_node_c2b);
+        /* We unlikely to need a blocking read, because we've just had these
+           nodes in the cache. */
+        if(!c2b_uptodate(next_node_c2b))
+            BUG_ON(submit_c2b_sync(READ, next_node_c2b));
+        /* Release the old node, if it's not the same as the root node */
+        if(node_c2b != root_c2b) 
+        {
+            debug("Unlocking prev node cdb=(0x%x, 0x%x)\n", 
+                    node_c2b->cdb.disk, node_c2b->cdb.block);
+            unlock_c2b(node_c2b);
+            put_c2b(node_c2b);
+        }
+        node_c2b = next_node_c2b;
+        node = c2b_bnode(node_c2b);
+    }
+    /* Release the leaf node, if it's not the same as the root node */
+    if(node_c2b != root_c2b) 
+    {
+        debug("Unlocking prev node cdb=(0x%x, 0x%x)\n", 
+                node_c2b->cdb.disk, node_c2b->cdb.block);
+        unlock_c2b(node_c2b);
+        put_c2b(node_c2b);
+    }
+}
+
 static struct castle_component_tree* castle_da_merge_complete(struct castle_da_merge *merge)
 {
     struct castle_da_merge_level *level;
@@ -1387,6 +1436,7 @@ static struct castle_component_tree* castle_da_merge_complete(struct castle_da_m
             castle_da_nodes_complete(merge, i);
         } 
     }
+    castle_da_max_path_complete(merge);
 
     return castle_da_merge_package(merge);
 }
