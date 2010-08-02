@@ -490,13 +490,12 @@ typedef struct castle_merged_iterator {
     } *iterators;
 } c_merged_iter_t;
 
-
-static void castle_ct_merged_iter_consume(c_merged_iter_t *iter,
-                                          struct component_iterator *comp_iter)
+static inline void castle_ct_merged_iter_has_next_check(c_merged_iter_t *iter,
+                                                        struct component_iterator *comp_iter)
 {
-    BUG_ON(!comp_iter->cached);
-    /* This will effectively consume the cached entry */
-    comp_iter->cached = 0;
+    /* Should not be called if we've got something cached, or the iterator has completed */
+    BUG_ON(comp_iter->cached || comp_iter->completed);
+    /* If the iterator doesn't have more items, set it completed, and decrement non_empty_cnt. */ 
     if(!comp_iter->iterator_type->has_next(comp_iter->iterator))
     {
         comp_iter->completed = 1;
@@ -504,6 +503,15 @@ static void castle_ct_merged_iter_consume(c_merged_iter_t *iter,
         debug("A component iterator run out of stuff, we are left with %d iterators.\n",
                 iter->non_empty_cnt);
     }
+}
+
+static void castle_ct_merged_iter_consume(c_merged_iter_t *iter,
+                                          struct component_iterator *comp_iter)
+{
+    BUG_ON(!comp_iter->cached);
+    /* This will effectively consume the cached entry */
+    comp_iter->cached = 0;
+    castle_ct_merged_iter_has_next_check(iter, comp_iter);
 }
 
 static void castle_ct_merged_iter_next(c_merged_iter_t *iter,
@@ -589,7 +597,7 @@ static void castle_ct_merged_iter_skip(c_merged_iter_t *iter,
                                        void *key)
 {
     struct component_iterator *comp_iter; 
-    int i;
+    int i, skip_cached;
 
     /* Go through iterators, and do the following:
        * call skip in each of the iterators
@@ -601,14 +609,25 @@ static void castle_ct_merged_iter_skip(c_merged_iter_t *iter,
         comp_iter = iter->iterators + i; 
         if(comp_iter->completed)
             continue;
-        /* Skip in the component iterator */
+
+        /* Check if the cached entry needs to be skipped AHEAD of the skip
+           being called on the appropriate component iterator (which may 
+           invalidate the cached key pointer */
+        skip_cached = comp_iter->cached && 
+                     (iter->btree->key_compare(comp_iter->cached_entry.k, key) < 0);
+        /* Next skip in the component iterator */
         BUG_ON(!comp_iter->iterator_type->skip);
         comp_iter->iterator_type->skip(comp_iter->iterator, key);
 
-        /* Flush cached entry if too small */
-        if( comp_iter->cached && 
-           (iter->btree->key_compare(comp_iter->cached_entry.k, key) < 0)) 
+        /* Flush cached entry if it was to small (this doesn't inspect the cached entry
+           any more). */
+        if(skip_cached)
             castle_ct_merged_iter_consume(iter, comp_iter);
+        else
+        /* Otherwise, if we don't have anything cached, check if the iterator still
+           has something to return (this may have changed after the skip */
+        if(!comp_iter->cached)
+            castle_ct_merged_iter_has_next_check(iter, comp_iter);
     }
 }
 
@@ -631,8 +650,10 @@ static void castle_ct_merged_iter_init(c_merged_iter_t *iter,
         iter->err = -ENOMEM;
         return;
     }
-    /* Memory allocated for the iterators array, save whatever was given to us */
-    iter->non_empty_cnt = 0; 
+    /* Memory allocated for the iterators array, init the state. 
+       Assume that all iterators have something in them, and let the has_next_check() 
+       handle the opposite. */
+    iter->non_empty_cnt = iter->nr_iters; 
     for(i=0; i<iter->nr_iters; i++)
     {
         struct component_iterator *comp_iter = iter->iterators + i; 
@@ -640,16 +661,9 @@ static void castle_ct_merged_iter_init(c_merged_iter_t *iter,
         comp_iter->iterator      = iterators[i];
         comp_iter->iterator_type = iterator_types[i];
         comp_iter->cached        = 0;
-        /* Check if the iterator has at least one entry, so that we know what
-           non_empty_count to start with. Otherwise first has_next() could fail */
-        if(comp_iter->iterator_type->has_next(comp_iter->iterator)) 
-        {
-            debug("Iterator %d has next.\n", i);
-            comp_iter->completed = 0;
-            iter->non_empty_cnt++;
-        }
-        else
-            comp_iter->completed = 1;
+        comp_iter->completed     = 0;
+
+        castle_ct_merged_iter_has_next_check(iter, comp_iter);
     } 
 }
 
