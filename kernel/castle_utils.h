@@ -231,6 +231,7 @@ void inline list_swap(struct list_head *t1, struct list_head *t2);
 void        list_sort(struct list_head *list, 
                       int (*compare)(struct list_head *l1, struct list_head *l2));
 void        vl_key_print(c_vl_key_t *vl_key);
+void        vl_bkey_print(c_vl_bkey_t *key);
 void        skb_print(struct sk_buff *skb);
 
 #endif /* __CASTLE_UTILS_H__ */

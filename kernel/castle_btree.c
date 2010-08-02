@@ -5,6 +5,7 @@
 #include "castle.h"
 #include "castle_cache.h"
 #include "castle_btree.h"
+#include "castle_objects.h"
 #include "castle_utils.h"
 #include "castle_freespace.h"
 #include "castle_versions.h"
@@ -603,6 +604,7 @@ static const vlba_key_t VLBA_TREE_MIN_KEY = (vlba_key_t){.length = 0x00};
 static const vlba_key_t VLBA_TREE_MAX_KEY = (vlba_key_t){.length = 0xFFFFFFFE};
 
 #define VLBA_TREE_KEY_INVAL(_key)          ((_key)->length == VLBA_TREE_INVAL_KEY.length) 
+#define VLBA_TREE_KEY_MIN(_key)            ((_key)->length == VLBA_TREE_MIN_KEY.length) 
 #define VLBA_TREE_KEY_MAX(_key)            ((_key)->length == VLBA_TREE_MAX_KEY.length) 
 
 struct castle_vlba_tree_entry {
@@ -802,7 +804,7 @@ static int castle_vlba_tree_key_compare(void *keyv1, void *keyv2)
 {
     vlba_key_t *key1 = (vlba_key_t *)keyv1;
     vlba_key_t *key2 = (vlba_key_t *)keyv2;
-    uint32_t key1_length = VLBA_KEY_LENGTH(key1);
+    int key1_min, key2_min, key1_max, key2_max;
 
     BUG_ON(!key1 || !key2);
 
@@ -815,59 +817,32 @@ static int castle_vlba_tree_key_compare(void *keyv1, void *keyv2)
     if(unlikely(VLBA_TREE_KEY_INVAL(key2)))
         return 1;
 
-    if(key1->length < key2->length)
-        return -1;
+    key1_min = !!VLBA_TREE_KEY_MIN(key1);
+    key2_min = !!VLBA_TREE_KEY_MIN(key2);
+    if(key1_min || key2_min)
+        return key2_min - key1_min;
 
-    if(key1->length > key2->length)
-        return 1;
+    key1_max = !!VLBA_TREE_KEY_MAX(key1);
+    key2_max = !!VLBA_TREE_KEY_MAX(key2);
+    if(key1_max || key2_max)
+        return key1_max - key2_max;
 
-    BUG_ON(key1_length >= VLBA_TREE_MAX_KEY_SIZE);
-    
-    return memcmp(key1->_key, key2->_key, key1_length);
+    BUG_ON(VLBA_KEY_LENGTH(key1) >= VLBA_TREE_MAX_KEY_SIZE);
+    BUG_ON(VLBA_KEY_LENGTH(key2) >= VLBA_TREE_MAX_KEY_SIZE);
+
+    return castle_object_btree_key_compare(keyv1, keyv2); 
 }
     
 static void* castle_vlba_tree_key_next(void *keyv)
 {
     vlba_key_t *key = (vlba_key_t *)keyv;
-    vlba_key_t *succ;
-    int i;
-    int total_length;
 
-    /* No successor to invalid block */
-    if(VLBA_TREE_KEY_INVAL(key))
-        return (void *)&VLBA_TREE_INVAL_KEY;
+    /* No successor to invalid, min or max keys. */
+    BUG_ON(VLBA_TREE_KEY_INVAL(key));
+    BUG_ON(VLBA_TREE_KEY_MIN(key));
+    BUG_ON(VLBA_TREE_KEY_MAX(key));
 
-    /* Successor to max key is the invalid key (return the static copy). */
-    if(castle_vlba_tree_key_compare((void *)&VLBA_TREE_MAX_KEY, key) == 0)
-        return (void *)&VLBA_TREE_INVAL_KEY;
- 
-    total_length = sizeof(vlba_key_t) + key->length;
-    /* Finally allocate and return the successor key */ 
-    /* TODO: IMPORTANT THIS CREATES MEMORY LEAK, NEEDS TO BE FIXED */
-    succ = kmalloc(total_length, GFP_NOIO);
-    /* TODO: Should this be handled properly? */
-    BUG_ON(!succ);
-    memcpy(succ, key, total_length);
-    for (i=key->length-1; i >= 0; i--)
-        if((++succ->_key[i]) != 0)
-            break;
-
-    /* If the successor is all 0s, then add one extra byte set to 0 */
-    if (i < 0)
-    {
-        vlba_key_t *succ1;
-
-        succ1 = kmalloc(total_length + 1, GFP_NOIO);
-        BUG_ON(!succ1);
-        memset(succ1, 0, total_length);
-        succ1->length = succ->length + 1;
-        succ1->_key[succ1->length - 1] = 0;
-        kfree(succ);
-
-        return succ1;
-    }
-      
-    return succ;
+    return castle_object_btree_key_next(keyv);
 }
 
 static void castle_vlba_tree_entry_get(struct castle_btree_node *node,

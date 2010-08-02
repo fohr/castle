@@ -77,3 +77,14 @@ void vl_key_print(c_vl_key_t *vl_key)
     printk(" key len=%d: ", vl_key->length);
     print_hex_dump_bytes("", DUMP_PREFIX_NONE, vl_key->key, vl_key->length);
 }
+
+void vl_bkey_print(c_vl_bkey_t *key)
+{
+    int i;
+    
+    printk("Key len     =%d\n", key->length);
+    printk("Key dims    =%d\n", key->nr_dims);
+    for(i=0; i<key->nr_dims; i++)
+        printk(" dim_head[%d]=0x%x\n", i, key->dim_head[i]);
+}
+

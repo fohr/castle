@@ -23,12 +23,16 @@ extern struct castle_attachment *global_attachment_hack;
 #define KEY_DIMENSION_UNUSED1_FLAG          (1 << 1)                                              
 #define KEY_DIMENSION_UNUSED2_FLAG          (1 << 2)                                              
 #define KEY_DIMENSION_UNUSED3_FLAG          (1 << 3)                                              
-#define KEY_DIMENSION_FLAGS_SHIFT           (4)
+#define KEY_DIMENSION_UNUSED4_FLAG          (1 << 4)                                              
+#define KEY_DIMENSION_UNUSED5_FLAG          (1 << 5)                                              
+#define KEY_DIMENSION_UNUSED6_FLAG          (1 << 6)                                              
+#define KEY_DIMENSION_UNUSED7_FLAG          (1 << 7)                                              
+#define KEY_DIMENSION_FLAGS_SHIFT           (8)
 #define KEY_DIMENSION_FLAGS_MASK           ((1 << KEY_DIMENSION_FLAGS_SHIFT) - 1) 
 #define KEY_DIMENSION_FLAGS(_dim_head)      ((_dim_head) &  KEY_DIMENSION_FLAGS_MASK)
-#define KEY_DIMENSION_LENGTH(_dim_head)     ((_dim_head) >> KEY_DIMENSION_FLAGS_SHIFT)
-#define KEY_DIMENSION_HEADER(_len, _flags)  ((_len)  << KEY_DIMENSION_FLAGS_SHIFT ||     \
-                                            ((_flags) & KEY_DIMENSION_FLAGS_MASK))
+#define KEY_DIMENSION_OFFSET(_dim_head)     ((_dim_head) >> KEY_DIMENSION_FLAGS_SHIFT)
+#define KEY_DIMENSION_HEADER(_off, _flags)  (((_off)  << KEY_DIMENSION_FLAGS_SHIFT) |     \
+                                             ((_flags) & KEY_DIMENSION_FLAGS_MASK))
 
 /* Converts 'object key' (i.e. multidimensional key) to btree key (single dimensional) */
 static c_vl_bkey_t* castle_object_key_convert(c_vl_key_t **obj_key)
@@ -68,6 +72,92 @@ static c_vl_bkey_t* castle_object_key_convert(c_vl_key_t **obj_key)
     BUG_ON(payload_offset != sizeof(c_vl_bkey_t) + key_len);
 
     return btree_key;
+}
+
+static inline uint32_t castle_object_btree_key_dim_length(c_vl_bkey_t *key, int dim)
+{
+    uint32_t end_offset;
+
+    end_offset = (dim+1 < key->nr_dims) ? KEY_DIMENSION_OFFSET(key->dim_head[dim+1]) :
+                                          key->length + 4;
+
+    return end_offset - KEY_DIMENSION_OFFSET(key->dim_head[dim]);
+}
+
+static inline char* castle_object_btree_key_dim_get(c_vl_bkey_t *key, int dim)
+{
+    return (char *)key + KEY_DIMENSION_OFFSET(key->dim_head[dim]);
+}
+
+static inline uint32_t castle_object_btree_key_dim_flags_get(c_vl_bkey_t *key, int dim)
+{
+    return KEY_DIMENSION_FLAGS(key->dim_head[dim]);
+}
+
+int castle_object_btree_key_compare(c_vl_bkey_t *key1, c_vl_bkey_t *key2)
+{
+    int dim;
+
+    /* Compare dimensions first */
+    if(key1->nr_dims != key2->nr_dims)
+        return key1->nr_dims > key2->nr_dims ? 1 : -1;
+
+    /* Number of dimensions is the same, go through them one by one */ 
+    for(dim=0; dim<key1->nr_dims; dim++)
+    {
+        uint32_t key1_dim_len, key2_dim_len;
+        int cmp, key1_next_flag, key2_next_flag;
+
+        key1_dim_len = castle_object_btree_key_dim_length(key1, dim);
+        key2_dim_len = castle_object_btree_key_dim_length(key2, dim);
+        /* Lexicographic comparison of the two dims (min length) */
+        cmp = memcmp(castle_object_btree_key_dim_get(key1, dim),
+                     castle_object_btree_key_dim_get(key2, dim),
+                     key1_dim_len > key2_dim_len ? key2_dim_len : key1_dim_len);
+        if(cmp)
+            return cmp;
+        /* If the common part of the keys the same, check which one is shorter */
+        if(key1_dim_len != key2_dim_len)
+            return key1_dim_len < key2_dim_len ? 1 : -1;
+        /* Identical dimension, check if either of the keys has NEXT_FLAG set */ 
+        key1_next_flag = castle_object_btree_key_dim_flags_get(key1, dim) & KEY_DIMENSION_NEXT_FLAG;
+        key2_next_flag = castle_object_btree_key_dim_flags_get(key2, dim) & KEY_DIMENSION_NEXT_FLAG;
+        /* We should never compare two non-btree keys */
+        BUG_ON(key1_next_flag && key2_next_flag);
+        if(key1_next_flag)
+            return 1;
+        if(key2_next_flag)
+            return -1;
+        /* This dimension is identical in every way for the two keys. Move on to the next one */
+    }
+
+    /* All dimensions identical in every way for the two keys => keys identical */
+    return 0;
+}
+    
+static void castle_object_btree_key_dim_inc(c_vl_bkey_t *key, int dim)
+{
+    uint32_t flags = KEY_DIMENSION_FLAGS(key->dim_head[dim]);
+    uint32_t offset = KEY_DIMENSION_OFFSET(key->dim_head[dim]);
+
+    key->dim_head[dim] = KEY_DIMENSION_HEADER(offset, flags);
+}
+
+void *castle_object_btree_key_next(c_vl_bkey_t *key)
+{
+    c_vl_bkey_t *new_key;
+    uint32_t key_length;
+
+    /* Duplicate the key first */
+    key_length = key->length + 4;
+    /* TODO: memory leak, fix all clients */
+    new_key = kmalloc(key_length, GFP_KERNEL);
+    memcpy(new_key, key, key_length);
+
+    /* Increment the least significant dimension */
+    castle_object_btree_key_dim_inc(new_key, new_key->nr_dims-1);
+
+    return new_key;
 }
 
 static void castle_object_key_free(c_vl_key_t **obj_key)
