@@ -783,6 +783,7 @@ again:
        may change, because we are not holding the da lock (cannot kmalloc holding
        a spinlock). */
     iter->nr_cts = da->nr_trees;
+    iter->err    = 0;
     iter->ct_rqs = kzalloc(iter->nr_cts * sizeof(struct ct_rq), GFP_KERNEL);
     iters        = kmalloc(iter->nr_cts * sizeof(void *), GFP_KERNEL);
     iter_types   = kmalloc(iter->nr_cts * sizeof(struct castle_iterator_type *), GFP_KERNEL);
