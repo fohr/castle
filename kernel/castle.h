@@ -206,6 +206,11 @@ typedef struct castle_var_length_key {
     uint8_t key[0];
 } c_vl_key_t;
 
+typedef struct castle_var_length_object_key {
+    uint32_t nr_dims;
+    c_vl_key_t *dims[0];
+} c_vl_okey_t;
+
 typedef struct castle_var_length_btree_key {
     uint32_t length;
     uint32_t nr_dims;
