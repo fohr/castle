@@ -35,7 +35,7 @@ extern struct castle_attachment *global_attachment_hack;
                                              ((_flags) & KEY_DIMENSION_FLAGS_MASK))
 
 /* Converts 'object key' (i.e. multidimensional key) to btree key (single dimensional) */
-static c_vl_bkey_t* castle_object_key_convert(c_vl_key_t **obj_key)
+static c_vl_bkey_t* castle_object_key_convert(c_vl_okey_t *obj_key)
 {
     c_vl_bkey_t *btree_key;
     uint32_t key_len, payload_offset;
@@ -43,12 +43,12 @@ static c_vl_bkey_t* castle_object_key_convert(c_vl_key_t **obj_key)
 
     /* Work the length of the btree key */ 
     key_len = 0;
-    for(i=0; obj_key[i]; i++)
+    nr_dims = obj_key->nr_dims; 
+    for(i=0; i<nr_dims; i++)
     {
         key_len += 4;           /* 4 bytes for the dimension offset, and flags */ 
-        key_len += obj_key[i]->length;
+        key_len += obj_key->dims[i]->length;
     }
-    nr_dims = i;
 
     /* Allocate the single-dimensional key */
     btree_key = kzalloc(sizeof(c_vl_bkey_t) + key_len, GFP_KERNEL);
@@ -66,8 +66,8 @@ static c_vl_bkey_t* castle_object_key_convert(c_vl_key_t **obj_key)
     for(i=0; i<nr_dims; i++)
     {
         btree_key->dim_head[i] = KEY_DIMENSION_HEADER(payload_offset, 0);
-        memcpy((char *)btree_key + payload_offset, obj_key[i]->key, obj_key[i]->length);
-        payload_offset += obj_key[i]->length;
+        memcpy((char *)btree_key + payload_offset, obj_key->dims[i]->key, obj_key->dims[i]->length);
+        payload_offset += obj_key->dims[i]->length;
     }
     BUG_ON(payload_offset != sizeof(c_vl_bkey_t) + key_len);
 
@@ -152,6 +152,8 @@ void *castle_object_btree_key_next(c_vl_bkey_t *key)
     key_length = key->length + 4;
     /* TODO: memory leak, fix all clients */
     new_key = kmalloc(key_length, GFP_KERNEL);
+    if(!new_key)
+        return NULL;
     memcpy(new_key, key, key_length);
 
     /* Increment the least significant dimension */
@@ -160,12 +162,12 @@ void *castle_object_btree_key_next(c_vl_bkey_t *key)
     return new_key;
 }
 
-static void castle_object_key_free(c_vl_key_t **obj_key)
+static void castle_object_key_free(c_vl_okey_t *obj_key)
 {
     int i;
 
-    for(i=0; obj_key[i]; i++)
-        kfree(obj_key[i]);
+    for(i=0; i < obj_key->nr_dims; i++)
+        kfree(obj_key->dims[i]);
     kfree(obj_key);
 }
 
@@ -442,7 +444,7 @@ int castle_object_replace_continue(struct castle_rxrpc_call *call, int last)
     return 0;
 }
 
-int castle_object_replace(struct castle_rxrpc_call *call, c_vl_key_t **key, int tombstone)
+int castle_object_replace(struct castle_rxrpc_call *call, c_vl_okey_t *key, int tombstone)
 {
     c_vl_bkey_t *btree_key;
     c_bvec_t *c_bvec;
@@ -675,7 +677,7 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
     castle_object_get_continue(c_bvec, call, cvt.cdb, cvt.length);
 }
 
-int castle_object_get(struct castle_rxrpc_call *call, c_vl_key_t **key)
+int castle_object_get(struct castle_rxrpc_call *call, c_vl_okey_t *key)
 {
     c_vl_bkey_t *btree_key;
     c_bvec_t *c_bvec;
