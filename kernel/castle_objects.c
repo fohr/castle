@@ -214,10 +214,10 @@ void *castle_object_btree_key_next(c_vl_bkey_t *key)
    Returns 1 if the most significant dimension is greater than the end, -1 if it is
    less then start, or 0 if the key is within bounds. Optionally, the function can
    be queried about which dimension offeneded */
-static USED int castle_object_btree_key_bounds_check(c_vl_bkey_t *key,
-                                                     c_vl_okey_t *start,
-                                                     c_vl_okey_t *end,
-                                                     int *offending_dim_p)
+static int castle_object_btree_key_bounds_check(c_vl_bkey_t *key,
+                                                c_vl_okey_t *start,
+                                                c_vl_okey_t *end,
+                                                int *offending_dim_p)
 {
     int dim;
 
@@ -269,10 +269,10 @@ static USED int castle_object_btree_key_bounds_check(c_vl_bkey_t *key,
     return 0;
 }
 
-c_vl_bkey_t* castle_object_btree_key_skip(c_vl_bkey_t *old_key, 
-                                          c_vl_okey_t *start, 
-                                          int offending_dim,
-                                          int bigger)
+static c_vl_bkey_t* castle_object_btree_key_skip(c_vl_bkey_t *old_key, 
+                                                 c_vl_okey_t *start, 
+                                                 int offending_dim,
+                                                 int bigger)
 {
     c_vl_bkey_t *new_key;
 
@@ -299,6 +299,137 @@ static void castle_object_key_free(c_vl_okey_t *obj_key)
     kfree(obj_key);
 }
 
+/**********************************************************************************************/
+/* Iterator(s) */
+
+typedef struct castle_objects_rq_iterator {
+    /* Filled in by the client */
+    da_id_t             da_id;
+    version_t           version;
+    c_vl_okey_t        *start_okey;
+    c_vl_okey_t        *end_okey;
+
+    /* Rest */
+    int                 err;
+    c_vl_bkey_t        *start_bkey;
+    c_vl_bkey_t        *end_bkey;
+    c_da_rq_iter_t      da_rq_iter;
+    /* Cached entry, guaranteed to fall in the hypercube */
+    int                 cached;
+    void               *cached_k;
+    version_t           cached_v;
+    c_val_tup_t         cached_cvt;
+} c_obj_rq_iter_t;
+
+#if 0 
+typedef struct castle_da_rq_iterator {
+    int                       nr_cts;
+    int                       err;
+    struct castle_btree_type *btree;
+    void                     *min_key;
+    c_merged_iter_t           merged_iter;
+
+    struct ct_rq {
+        struct castle_component_tree *ct;
+        c_rq_enum_t                   ct_rq_iter; 
+    } *ct_rqs;
+} c_da_rq_iter_t;
+#endif
+
+static void castle_objects_rq_iter_next(c_obj_rq_iter_t *iter, 
+                                        void **k, 
+                                        version_t *v, 
+                                        c_val_tup_t *cvt) 
+{
+    BUG_ON(!iter->cached);
+    if(k)   *k   = iter->cached_k;
+    if(v)   *v   = iter->cached_v;
+    if(cvt) *cvt = iter->cached_cvt;
+    iter->cached = 0;
+}
+
+static int castle_objects_rq_iter_has_next(c_obj_rq_iter_t *iter)
+{
+    void *k, *next_key;
+    version_t v;
+    c_val_tup_t cvt;
+    int offending_dim, bigger;
+
+    while(1)
+    {
+        if(iter->cached)
+            return 1;
+        /* Nothing cached, check if da_rq_iter has anything */
+        if(!castle_da_rq_iter.has_next(&iter->da_rq_iter))
+            return 0;
+        /* Nothing cached, but there is something in the da_rq_iter.
+           Check if that's within the rq hypercube */
+        castle_da_rq_iter.next(&iter->da_rq_iter, &k, &v, &cvt);
+        bigger = castle_object_btree_key_bounds_check(k, 
+                                                      iter->start_okey, 
+                                                      iter->end_okey,
+                                                      &offending_dim);
+        if(bigger)
+        {
+            /* We are outside of the rq hypercube, find next intersection point
+               and skip to that */
+            next_key = castle_object_btree_key_skip(k, 
+                                                    iter->start_okey, 
+                                                    offending_dim,
+                                                    bigger);
+            /* TODO: memory leak for next keys! FIX that */
+            castle_da_rq_iter.skip(&iter->da_rq_iter, next_key);
+        }    
+        else 
+        {
+            /* Found something to cache, save */
+            iter->cached_k = k;
+            iter->cached_v = v;
+            iter->cached_cvt = cvt;
+        }
+    }
+
+    /* We should never get here */
+    BUG();
+}
+
+static USED void castle_objects_rq_iter_init(c_obj_rq_iter_t *iter)
+{
+    BUG_ON(!iter->start_okey || !iter->end_okey);
+
+    iter->err = 0;
+    iter->cached = 0;
+    /* Construct the btree keys for range-query */
+    iter->start_bkey = castle_object_key_convert(iter->start_okey);
+    iter->end_bkey   = castle_object_key_convert(iter->end_okey);
+
+    /* Check if we managed to initialise the btree keys correctly */
+    if(!iter->start_bkey || !iter->end_bkey)
+    {
+        iter->err = -ENOMEM;
+        return;
+    }
+
+    castle_da_rq_iter_init(&iter->da_rq_iter, 
+                            iter->version, 
+                            iter->da_id, 
+                            iter->start_bkey, 
+                            iter->end_bkey);
+    if(iter->da_rq_iter.err)
+    {
+        iter->err = iter->da_rq_iter.err;
+        return;
+    }
+}
+
+struct castle_iterator_type castle_obj_rq_iter = {
+    .has_next = (castle_iterator_has_next_t)castle_objects_rq_iter_has_next,
+    .next     = (castle_iterator_next_t)    castle_objects_rq_iter_next,
+    .skip     = NULL, 
+};
+
+/**********************************************************************************************/
+/* High level interface functions */
 static void castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
                                           c_val_tup_t  prev_cvt,
                                           c_val_tup_t *cvt)

@@ -544,6 +544,37 @@ typedef struct castle_rq_enumerator {
     int                           in_range;
 } c_rq_enum_t;
 
+typedef struct castle_merged_iterator {
+    int nr_iters;
+    struct castle_btree_type *btree;
+    int err;
+    int non_empty_cnt;
+    struct component_iterator {
+        int                          completed;
+        void                        *iterator;
+        struct castle_iterator_type *iterator_type;
+        int                          cached;
+        struct {           
+            void                    *k;
+            version_t                v;
+            c_val_tup_t              cvt;
+        } cached_entry;
+    } *iterators;
+} c_merged_iter_t;
+
+typedef struct castle_da_rq_iterator {
+    int                       nr_cts;
+    int                       err;
+    struct castle_btree_type *btree;
+    c_merged_iter_t           merged_iter;
+
+    struct ct_rq {
+        struct castle_component_tree *ct;
+        c_rq_enum_t                   ct_rq_iter; 
+    } *ct_rqs;
+} c_da_rq_iter_t;
+
+
 #define BLOCKS_HASH_SIZE        (100)
 struct castle_slave_block_cnt
 {

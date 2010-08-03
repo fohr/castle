@@ -472,24 +472,6 @@ struct castle_iterator_type castle_ct_modlist_iter = {
     .skip     = NULL,
 };
 
-typedef struct castle_merged_iterator {
-    int nr_iters;
-    struct castle_btree_type *btree;
-    int err;
-    int non_empty_cnt;
-    struct component_iterator {
-        int                          completed;
-        void                        *iterator;
-        struct castle_iterator_type *iterator_type;
-        int                          cached;
-        struct {           
-            void                    *k;
-            version_t                v;
-            c_val_tup_t              cvt;
-        } cached_entry;
-    } *iterators;
-} c_merged_iter_t;
-
 static inline void castle_ct_merged_iter_has_next_check(c_merged_iter_t *iter,
                                                         struct component_iterator *comp_iter)
 {
@@ -732,19 +714,6 @@ static USED void castle_ct_sort(struct castle_component_tree *ct1,
 }
 #endif
 
-typedef struct castle_da_rq_iterator {
-    int                       nr_cts;
-    int                       err;
-    struct castle_btree_type *btree;
-    void                     *min_key;
-    c_merged_iter_t           merged_iter;
-
-    struct ct_rq {
-        struct castle_component_tree *ct;
-        c_rq_enum_t                   ct_rq_iter; 
-    } *ct_rqs;
-} c_da_rq_iter_t;
-
 /* Has next, next and skip only need to call the corresponding functions on
    the underlying merged iterator */
 static int castle_da_rq_iter_has_next(c_da_rq_iter_t *iter)
@@ -765,17 +734,20 @@ static void castle_da_rq_iter_skip(c_da_rq_iter_t *iter, void *key)
     castle_ct_merged_iter_skip(&iter->merged_iter, key);
 }
 
-static USED void castle_da_rq_iter_init(c_da_rq_iter_t *iter,
-                                        version_t version,
-                                        struct castle_double_array *da,
-                                        void *start_key,
-                                        void *end_key)
+void castle_da_rq_iter_init(c_da_rq_iter_t *iter,
+                            version_t version,
+                            da_id_t da_id,
+                            void *start_key,
+                            void *end_key)
 {
     void **iters;
     struct castle_iterator_type **iter_types;
+    struct castle_double_array *da;
     struct list_head *l;
     int i, j;
 
+    da = castle_da_hash_get(da_id);
+    BUG_ON(!da);
     BUG_ON(!castle_version_is_ancestor(da->root_version, version));
     iter->btree = NULL;
 again:
