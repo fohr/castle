@@ -2005,6 +2005,7 @@ static int castle_da_rwct_make(struct castle_double_array *da)
     {
         old_ct = list_entry(da->trees[0].next, struct castle_component_tree, da_list);
         list_del(&old_ct->da_list);
+        da->nr_trees--;
         old_ct->level = 1;
         castle_component_tree_add(da, old_ct, 0 /* not in init */);
     }
