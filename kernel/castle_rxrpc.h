@@ -29,6 +29,19 @@ void     castle_rxrpc_replace_call_set   (struct castle_rxrpc_call *call,
                                          
 void     castle_rxrpc_replace_continue   (struct castle_rxrpc_call *call);
 void     castle_rxrpc_replace_complete   (struct castle_rxrpc_call *call, int err);
+int      castle_rxrpc_get_slice_reply_marshall
+                                         (struct castle_rxrpc_call *call,
+                                          c_vl_okey_t *k,
+                                          char *value,
+                                          uint32_t value_len,
+                                          char *buffer,
+                                          uint32_t buffer_len,
+                                          uint32_t *buffer_used);
+void     castle_rxrpc_get_slice_reply    (struct castle_rxrpc_call *call,
+                                          int err,
+                                          int nr_vals,
+                                          char *buffer,
+                                          uint32_t buffer_len);
 void     castle_rxrpc_get_reply_start    (struct castle_rxrpc_call *call, 
                                           int err, 
                                           uint32_t data_length,

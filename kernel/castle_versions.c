@@ -155,6 +155,22 @@ out_dealloc:
     return NULL;
 }
 
+da_id_t castle_version_da_id_get(version_t version)
+{
+    struct castle_version *v;
+    da_id_t da_id;
+
+    spin_lock_irq(&castle_versions_hash_lock);
+    v = __castle_versions_hash_get(version);
+    /* Sanity checks */
+    BUG_ON(!v);
+    BUG_ON(!(v->flags & CV_INITED_MASK));
+    da_id = v->da_id;
+    spin_unlock_irq(&castle_versions_hash_lock);
+ 
+    return da_id; 
+}
+
 static struct castle_tree_root *__castle_version_root_get(struct castle_version *v,
                                                           tree_seq_t tree)
 {

@@ -208,6 +208,86 @@ static int castle_rxrpc_op_decode(struct castle_rxrpc_call *call, struct sk_buff
     return call->type->deliver(call, skb, last);
 }
 
+#define BUFFER_PUT(_value, _value_len)                                          \
+({                                                                              \
+    uint32_t _pad_len;                                                          \
+                                                                                \
+    /* Work out how much pading do we need */                                   \
+    _pad_len = (_value_len % 4 == 0 ? 0 : 4 - _value_len % 4);                  \
+    if(buffer_len < _value_len + _pad_len)                                      \
+        return 1;                                                               \
+    /* Copy the value in */                                                     \
+    memcpy(buffer, _value, _value_len);                                         \
+    /* Copy the pad in */                                                       \
+    memcpy(buffer + _value_len, &pad, _pad_len);                                \
+    *buffer_used += _value_len + _pad_len;                                      \
+     buffer_len  -= _value_len + _pad_len;                                      \
+})
+    
+
+int castle_rxrpc_get_slice_reply_marshall(struct castle_rxrpc_call *call,
+                                          c_vl_okey_t *k,
+                                          char *value,
+                                          uint32_t value_len,
+                                          char *buffer,
+                                          uint32_t buffer_len,
+                                          uint32_t *buffer_used)
+{
+    uint32_t pad = 0;
+    uint32_t rsp_val;
+    int i;
+
+    /* There has to be some space in the buffer, otherwise this function shouldn't be called */
+    BUG_ON(buffer_len < 4);
+    *buffer_used = 0;
+    /* Key has to be marshalled first. Number of dimensions should be written out first. */
+    rsp_val = htonl(k->nr_dims);
+    BUFFER_PUT(&rsp_val, 4);
+    /* Next, write out each dimension */
+    for(i=0; i<k->nr_dims; i++)
+    {
+        /* Write the length of the key */
+        rsp_val = htonl(k->dims[i]->length);
+        BUFFER_PUT(&rsp_val, 4);
+        /* Write the key itself */
+        BUFFER_PUT(k->dims[i]->key, k->dims[i]->length); 
+    }
+    /* All keys written out, write out the value itself */
+    rsp_val = htonl(CASTLE_OBJ_VALUE);
+    BUFFER_PUT(&rsp_val, 4);
+    BUFFER_PUT(value, value_len); 
+
+    return 0;
+}
+
+void castle_rxrpc_get_slice_reply(struct castle_rxrpc_call *call,
+                                  int err,
+                                  int nr_vals,
+                                  char *buffer,
+                                  uint32_t buffer_len)
+{
+    uint32_t reply[2];
+    
+    /* Deal with errors first */
+    if(err)
+    {   
+        reply[0] = htonl(CASTLE_OBJ_REPLY_ERROR);
+        castle_rxrpc_reply_send(call, reply, 4, 1 /* last */);
+        return;
+    }
+
+    /* Otherwise return the buffered reply message */
+    reply[0] = htonl(CASTLE_OBJ_REPLY_GET_SLICE);
+    reply[1] = htonl(nr_vals);
+
+    castle_rxrpc_double_reply_send(call, 
+                                   reply, 8,
+                                   buffer, buffer_len,
+                                   1);
+    return;
+}
+
+
 void castle_rxrpc_get_reply_start(struct castle_rxrpc_call *call, 
                                   int err, 
                                   uint32_t data_length,
@@ -244,6 +324,7 @@ void castle_rxrpc_get_reply_start(struct castle_rxrpc_call *call,
                                    buffer, buffer_length,
                                   (data_length == buffer_length));
 }
+
 
 void castle_rxrpc_get_reply_continue(struct castle_rxrpc_call *call,
                                      int err,
@@ -307,15 +388,20 @@ void castle_rxrpc_str_copy(struct castle_rxrpc_call *call, void *buffer, int str
     SKB_STR_CPY(call->current_skb, buffer, str_length, !partial);
 }
 
-static int castle_rxrpc_collection_key_get(struct sk_buff *skb, 
-                                           collection_id_t *collection_p, 
-                                           c_vl_okey_t **key_p)
+static int castle_rxrpc_collection_get(struct sk_buff *skb,
+                                       collection_id_t *collection_p)
 {
-    collection_id_t collection;
-    c_vl_okey_t *key;
-    uint32_t nr_dims, i;
+    *collection_p = SKB_L_GET(skb);
 
-    collection = SKB_L_GET(skb);
+    return 0;
+}
+    
+static int castle_rxrpc_key_get(struct sk_buff *skb,
+                                c_vl_okey_t **key_p)
+{
+    uint32_t nr_dims, i;
+    c_vl_okey_t *key;
+
     nr_dims = SKB_L_GET(skb);
     key = kzalloc(sizeof(c_vl_okey_t) + sizeof(c_vl_key_t *) * nr_dims, GFP_KERNEL);
     if(!key)
@@ -336,8 +422,24 @@ static int castle_rxrpc_collection_key_get(struct sk_buff *skb,
         }
     }
 
-    *collection_p = collection;
     *key_p = key;
+
+    return 0;
+}
+
+static int castle_rxrpc_collection_key_get(struct sk_buff *skb, 
+                                           collection_id_t *collection_p, 
+                                           c_vl_okey_t **key_p)
+{
+    int ret;
+
+    ret = castle_rxrpc_collection_get(skb, collection_p);
+    if(ret)
+        return ret;
+
+    ret = castle_rxrpc_key_get(skb, key_p);
+    if(ret)
+        return ret;
 
     return 0;
 }
@@ -402,7 +504,27 @@ static int cnt = 0;
 
 static int castle_rxrpc_slice_decode(struct castle_rxrpc_call *call, struct sk_buff *skb,  bool last)
 {
-    return -ENOTSUPP;
+    collection_id_t collection_id;
+    c_vl_okey_t *start_key, *end_key;
+    int ret;
+
+    skb_print(skb);
+    ret = castle_rxrpc_collection_get(skb, &collection_id);
+    if(ret)
+        return ret;
+    ret = castle_rxrpc_key_get(skb, &start_key);
+    if(ret)
+        return ret;
+    ret = castle_rxrpc_key_get(skb, &end_key);
+    if(ret)
+    {
+        castle_object_key_free(start_key);
+        return ret;
+    }
+    castle_rxrpc_state_update(call, RXRPC_CALL_REPLYING);
+    printk("Executing a range query.\n");
+
+    return castle_object_slice_get(call, start_key, end_key);
 }
 
 static int castle_rxrpc_ctrl_decode(struct castle_rxrpc_call *call, struct sk_buff *skb,  bool last)

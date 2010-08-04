@@ -10,6 +10,7 @@ int          castle_version_read        (version_t version,
                                          version_t *parent,
                                          uint32_t *size,
                                          int *leaf);
+da_id_t      castle_version_da_id_get   (version_t version);
 c_disk_blk_t castle_version_root_get    (version_t version,
                                          tree_seq_t tree);
 void         castle_version_root_next   (tree_seq_t tree,

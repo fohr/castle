@@ -5,6 +5,7 @@
 #include "castle_utils.h"
 #include "castle_btree.h"
 #include "castle_cache.h"
+#include "castle_versions.h"
 #include "castle_freespace.h"
 #include "castle_rxrpc.h"
 
@@ -20,8 +21,8 @@ static const uint32_t OBJ_TOMBSTONE = ((uint32_t)-1);
 extern struct castle_attachment *global_attachment_hack;
 
 #define KEY_DIMENSION_NEXT_FLAG             (1 << 0)                                              
-#define KEY_DIMENSION_UNUSED1_FLAG          (1 << 1)                                              
-#define KEY_DIMENSION_UNUSED2_FLAG          (1 << 2)                                              
+#define KEY_DIMENSION_PLUS_INFINITY_FLAG    (1 << 1)                                              
+#define KEY_DIMENSION_MINUS_INFINITY_FLAG   (1 << 2)                                              
 #define KEY_DIMENSION_UNUSED3_FLAG          (1 << 3)                                              
 #define KEY_DIMENSION_UNUSED4_FLAG          (1 << 4)                                              
 #define KEY_DIMENSION_UNUSED5_FLAG          (1 << 5)                                              
@@ -126,6 +127,39 @@ static c_vl_bkey_t* castle_object_btree_key_construct(c_vl_bkey_t *src_bkey,
 static c_vl_bkey_t* castle_object_key_convert(c_vl_okey_t *obj_key)
 {
     return castle_object_btree_key_construct(NULL, obj_key, 0);
+}
+
+static c_vl_okey_t* castle_object_btree_key_convert(c_vl_bkey_t *btree_key)
+{
+    c_vl_okey_t *obj_key;
+    c_vl_key_t *dim;
+    uint32_t dim_len;
+    int i;
+
+    obj_key = kzalloc(sizeof(c_vl_okey_t) + btree_key->nr_dims * 4, GFP_KERNEL);
+    if(obj_key)
+        return NULL;
+
+    obj_key->nr_dims = btree_key->nr_dims;
+    for(i=0; i<btree_key->nr_dims; i++)
+    {
+        dim_len = castle_object_btree_key_dim_length(btree_key, i);
+        dim = kmalloc(dim_len + 4, GFP_KERNEL);
+        if(!dim)
+            goto err_out;
+        dim->length = dim_len;
+        memcpy(dim->key, castle_object_btree_key_dim_get(btree_key, i), dim_len);
+        obj_key->dims[i] = dim; 
+    }
+
+    return obj_key;
+
+err_out:
+    for(i--; i>0; i--)
+        kfree(obj_key->dims[i]);
+    kfree(obj_key);
+
+    return NULL;
 }
 
 static inline int castle_object_key_dim_compare(char *dim_a, uint32_t dim_a_len, uint32_t dim_a_flags,
@@ -290,7 +324,7 @@ static c_vl_bkey_t* castle_object_btree_key_skip(c_vl_bkey_t *old_key,
     return new_key;
 }
 
-static void castle_object_key_free(c_vl_okey_t *obj_key)
+void castle_object_key_free(c_vl_okey_t *obj_key)
 {
     int i;
 
@@ -386,6 +420,7 @@ static int castle_objects_rq_iter_has_next(c_obj_rq_iter_t *iter)
             iter->cached_k = k;
             iter->cached_v = v;
             iter->cached_cvt = cvt;
+            iter->cached = 1;
         }
     }
 
@@ -393,7 +428,7 @@ static int castle_objects_rq_iter_has_next(c_obj_rq_iter_t *iter)
     BUG();
 }
 
-static USED void castle_objects_rq_iter_init(c_obj_rq_iter_t *iter)
+static void castle_objects_rq_iter_init(c_obj_rq_iter_t *iter)
 {
     BUG_ON(!iter->start_okey || !iter->end_okey);
 
@@ -422,7 +457,7 @@ static USED void castle_objects_rq_iter_init(c_obj_rq_iter_t *iter)
     }
 }
 
-struct castle_iterator_type castle_obj_rq_iter = {
+struct castle_iterator_type castle_objects_rq_iter = {
     .has_next = (castle_iterator_has_next_t)castle_objects_rq_iter_has_next,
     .next     = (castle_iterator_next_t)    castle_objects_rq_iter_next,
     .skip     = NULL, 
@@ -738,6 +773,123 @@ int castle_object_replace(struct castle_rxrpc_call *call, c_vl_okey_t *key, int 
 
     castle_double_array_find(c_bvec);
 
+    return 0;
+}
+
+int castle_object_slice_get(struct castle_rxrpc_call *call, 
+                            c_vl_okey_t *start_key, 
+                            c_vl_okey_t *end_key)
+{
+    c_obj_rq_iter_t *iterator;
+    int dim;
+    char *rsp_buffer;
+    uint32_t rsp_buffer_offset;
+    int nr_vals;
+#define SLICE_RSP_BUFFER_LEN    (C_BLK_SIZE * 256)  /* 1MB buffer */
+
+    if(start_key->nr_dims != end_key->nr_dims)
+    {
+        printk("Range query with different # of dimensions.\n");
+        return -EINVAL;
+    }
+
+    /* Cannot handle infinities just yet */
+    for(dim=0; dim<start_key->nr_dims; dim++)
+    {
+        BUG_ON(start_key->dims[dim]->length == 0);
+        BUG_ON(end_key->dims[dim]->length == 0);
+    }
+
+    rsp_buffer = vmalloc(SLICE_RSP_BUFFER_LEN); 
+
+    iterator = kmalloc(sizeof(c_obj_rq_iter_t), GFP_KERNEL);
+    if(!iterator)
+        return -ENOMEM;
+
+    /* Initialise the iterator */
+    iterator->start_okey = start_key;
+    iterator->end_okey   = end_key;
+    iterator->version    = global_attachment_hack->version;
+    iterator->da_id      = castle_version_da_id_get(iterator->version);
+    
+    printk("rq_iter_init.\n");
+    castle_objects_rq_iter_init(iterator);
+    if(iterator->err)
+    {
+        kfree(iterator);
+        return iterator->err;
+    }
+    printk("rq_iter_init done.\n");
+
+    nr_vals = 0;
+    rsp_buffer_offset = 0;
+    while(castle_objects_rq_iter.has_next(iterator))
+    {
+        c_vl_bkey_t *k;
+        c_vl_okey_t *okey;
+        version_t v;
+        c_val_tup_t cvt;
+        char *value;
+        c2_block_t *data_c2b;
+        int nr_blocks;
+        uint32_t marshalled_len;
+
+        printk("Getting an entry the range query.\n");
+        castle_objects_rq_iter.next(iterator, (void **)&k, &v, &cvt);
+        printk("Got an entry the range query.\n");
+
+        /* Ignore tombstones, we are not sending these */
+        if(CVT_TOMB_STONE(cvt))
+            continue;
+
+        /* Now we know we've got something to send. 
+           Prepare the key for marshaling */
+        okey = castle_object_btree_key_convert(k);
+        if(!okey)
+        {
+            /* TODO: free all the buffers etc! */
+            return -ENOMEM;
+        }
+        /* Prepare the value for marshaling */
+        if(CVT_INLINE(cvt))
+        {
+            value = cvt.val;
+        } else
+        if(CVT_ONDISK(cvt))
+        {
+            /* We are not handling large values here for the time being 
+               (never, if replaced with iterators?) */
+            BUG_ON(cvt.length > C_BLK_SIZE); 
+            nr_blocks = (cvt.length - 1) / C_BLK_SIZE + 1;
+            data_c2b = castle_cache_block_get(cvt.cdb, nr_blocks);
+            lock_c2b(data_c2b);
+            if(!c2b_uptodate(data_c2b)) 
+                BUG_ON(submit_c2b_sync(READ, data_c2b));
+            value = c2b_buffer(data_c2b);
+        } else
+        {
+            /* Unknown cvt type */
+            BUG();
+        }
+        BUG_ON(castle_rxrpc_get_slice_reply_marshall(call, 
+                                                     okey, 
+                                                     value, 
+                                                     cvt.length, 
+                                                     rsp_buffer + rsp_buffer_offset,
+                                                     SLICE_RSP_BUFFER_LEN - rsp_buffer_offset,
+                                                     &marshalled_len));
+        rsp_buffer_offset += marshalled_len; 
+        nr_vals++;
+        /* Unlock c2b if one was taken out */
+        if(CVT_ONDISK(cvt))
+        {
+            unlock_c2b(data_c2b);
+            put_c2b(data_c2b);
+        }
+    }
+    /* rsp buffer contains responce payload, send it through */
+    castle_rxrpc_get_slice_reply(call, 0, nr_vals, rsp_buffer, rsp_buffer_offset);
+    
     return 0;
 }
 
