@@ -292,7 +292,12 @@ static void castle_ct_modlist_iter_fill(c_modlist_iter_t *iter)
             node_offset = 0;
         }
     }
-    BUG_ON(item_idx != atomic64_read(&iter->tree->item_count));
+    if(item_idx != atomic64_read(&iter->tree->item_count))
+    {
+        printk("Error. Different number of items than expected. item_idx=%d, item_count=%ld\n",
+            item_idx, atomic64_read(&iter->tree->item_count));
+        BUG();
+    }
     iter->nr_items = item_idx;
     iter->err = iter->enumerator->err;
 }
@@ -1279,6 +1284,7 @@ fill_buffers:
 static struct castle_component_tree* castle_da_merge_package(struct castle_da_merge *merge)
 {
     struct castle_component_tree *out_tree;
+    int ret;
 
     out_tree = castle_ct_alloc(merge->da, 0 /* not-dynamic */, merge->in_tree1->level + 1);
     if(!out_tree)
@@ -1291,6 +1297,16 @@ static struct castle_component_tree* castle_da_merge_package(struct castle_da_me
     out_tree->last_node = INVAL_DISK_BLK;
     debug("Root for that tree is: (0x%x, 0x%x)\n", 
             out_tree->root_node.disk, out_tree->root_node.block);
+    castle_version_lock(merge->da->root_version);
+    ret = castle_version_root_update(merge->da->root_version, out_tree->seq, out_tree->root_node);
+    castle_version_unlock(merge->da->root_version);
+    if(ret)
+    {
+        /* TODO: free up the nodes! */
+        printk("Failed to update the root for newly ct=%d\n", out_tree->seq);
+        kfree(out_tree);
+        return NULL;
+    }
     /* Write counts out */
     atomic_set(&out_tree->ref_count, 1);
     atomic64_set(&out_tree->item_count, merge->nr_entries);

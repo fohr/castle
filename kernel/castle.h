@@ -204,19 +204,19 @@ struct castle_btree_node {
 typedef struct castle_var_length_key {
     uint32_t length;
     uint8_t key[0];
-} c_vl_key_t;
+} PACKED c_vl_key_t;
 
 typedef struct castle_var_length_object_key {
     uint32_t nr_dims;
     c_vl_key_t *dims[0];
-} c_vl_okey_t;
+} PACKED c_vl_okey_t;
 
 typedef struct castle_var_length_btree_key {
     uint32_t length;
     uint32_t nr_dims;
     uint32_t dim_head[0];
     /* uint8_t dims[][] */
-} c_vl_bkey_t;
+} PACKED c_vl_bkey_t;
 
 /* Below encapsulates the internal btree node structure, different type of
    nodes may be used for different trees */
@@ -530,9 +530,9 @@ typedef struct castle_rq_enumerator {
     int                           err;
     version_t                     version;
     struct castle_iterator        iterator; 
-    int                           iter_completed;
+    volatile int                  iter_completed;
     wait_queue_head_t             iter_wq;
-    uint8_t                       iter_running;
+    volatile int                  iter_running;
     int                           prod_idx;
     int                           cons_idx;
     struct castle_btree_node     *buffer;       /* Two buffers are actually allocated (buffer1/2) */

@@ -255,7 +255,12 @@ static int castle_object_btree_key_bounds_check(c_vl_bkey_t *key,
 {
     int dim;
 
-    BUG_ON((key->nr_dims != start->nr_dims) || (key->nr_dims != end->nr_dims));
+    if((key->nr_dims != start->nr_dims) || (key->nr_dims != end->nr_dims))
+    {
+        printk("Nonmatching # of dimensions: key=%d, start_key=%d, end_key=%d\n",
+                key->nr_dims, start->nr_dims, end->nr_dims);
+        BUG();
+    }
     /* Go through each dimension checking if they are within bounds */
     for(dim=0; dim<key->nr_dims; dim++)
     {

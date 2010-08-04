@@ -2241,11 +2241,15 @@ static void castle_btree_iter_path_put(c_iter_t *c_iter, int from)
 static void castle_btree_iter_end(c_iter_t *c_iter, int err)
 {
     iter_debug("Putting path, ending\n");
-    
+ 
     castle_btree_iter_path_put(c_iter, 0);
 
+    /* TODO: this will not work well for double frees/double ends, fix that */
     if(c_iter->indirect_nodes)
+    {
         kfree(c_iter->indirect_nodes);
+        c_iter->indirect_nodes = NULL;
+    }
     
     if (c_iter->end) 
         c_iter->end(c_iter, err);
@@ -2873,6 +2877,7 @@ static void castle_btree_iter_path_traverse(c_iter_t *c_iter, c_disk_blk_t node_
   
     iter_debug("%p locking cdb=(0x%x, 0x%x)\n", 
         c_iter, c2b->cdb.disk, c2b->cdb.block);
+    
     lock_c2b(c2b);
     
     /* Unlock the ftree if we've just locked the root */
@@ -2937,12 +2942,14 @@ static void __castle_btree_iter_start(c_iter_t *c_iter)
      */
     c_iter->depth = 0;
     
-    iter_debug("Locking version tree\n");
+    iter_debug("Locking version tree for version: %d\n", c_iter->version);
     
     castle_version_lock(c_iter->version);
     root_cdb = castle_version_root_get(c_iter->version, c_iter->tree->seq);
     if(DISK_BLK_INVAL(root_cdb))
     {
+        iter_debug("Warning: Invalid disk block for the root.\n");
+        castle_version_unlock(c_iter->version);
         /* Complete the request early, end exit */
         castle_btree_iter_end(c_iter, -EINVAL);
         return;
@@ -2955,7 +2962,7 @@ static void __castle_btree_iter_start(c_iter_t *c_iter)
 static void _castle_btree_iter_start(struct work_struct *work)
 {
     c_iter_t *c_iter = container_of(work, c_iter_t, work);
-
+    
     __castle_btree_iter_start(c_iter);
 }
 
@@ -3481,6 +3488,7 @@ static void castle_rq_enum_iter_node_end(c_iter_t *c_iter)
 
     __castle_btree_iter_release(c_iter);
     rq_enum->iter_running = 0;
+    wmb();
     wake_up(&rq_enum->iter_wq);
 }
 
@@ -3491,6 +3499,7 @@ static void castle_rq_enum_iter_end(c_iter_t *c_iter, int err)
     if(err) rq_enum->err = err;
     rq_enum->iter_completed = 1;
     rq_enum->iter_running = 0;
+    wmb();
     wake_up(&rq_enum->iter_wq);
 }
 
@@ -3554,6 +3563,27 @@ no_mem:
     castle_btree_rq_enum_fini(rq_enum);
 }
 
+static void castle_btree_rq_enum_buffer_switch(c_rq_enum_t *rq_enum)
+{
+    /* Only switch the buffer if the old buffer actually had anything in it,
+       this prevents problems when the iterator below hasn't returned anything 
+       in the range we are interested in (double buffer swap will start invalidating
+       the memory area used by the key pointer returned by previous _next()) */
+    /* TODO: check if enumerator also suffers from the same problem */
+    if(rq_enum->prod_idx > 0)
+    {
+        rq_enum->buffer  = (rq_enum->buffer == rq_enum->buffer1) ?
+                            rq_enum->buffer2 : rq_enum->buffer1;
+    } else
+    {
+        BUG_ON(rq_enum->cons_idx != 0);
+    }
+    rq_enum->cons_idx = 0;
+    rq_enum->prod_idx = 0;
+
+    castle_btree_node_buffer_init(rq_enum->tree, rq_enum->buffer);
+}
+
 int castle_btree_rq_enum_has_next(c_rq_enum_t *rq_enum)
 {
     struct castle_iterator *iter = &rq_enum->iterator;
@@ -3563,7 +3593,7 @@ int castle_btree_rq_enum_has_next(c_rq_enum_t *rq_enum)
 __has_next_again:
   
     /* Wait for the iterator to complete */
-    wait_event(rq_enum->iter_wq, (rq_enum->iter_running == 0));
+    wait_event(rq_enum->iter_wq, ({int _ret; rmb(); _ret = (rq_enum->iter_running == 0); _ret;}));
     
     BUG_ON(rq_enum->cons_idx > rq_enum->prod_idx);
    
@@ -3574,6 +3604,9 @@ __has_next_again:
         /* Move this check to rq_enum_each() */
         if (btree->key_compare(rq_enum->end_key, key) < 0)
         {
+            /* The iterator has noting more of interest, reset the idxs to zero.
+               This will make has_next() reentrant even for completed iterator. */
+            rq_enum->cons_idx = rq_enum->prod_idx = 0;
             castle_btree_iter_cancel(iter, 0);
             rq_enum->iter_running = 1;
             castle_btree_iter_start(iter);
@@ -3587,11 +3620,7 @@ __has_next_again:
     if (rq_enum->iter_completed)
         return 0;
 
-    rq_enum->cons_idx       = 0;
-    rq_enum->prod_idx       = 0;
-    rq_enum->buffer         = (rq_enum->buffer == rq_enum->buffer1) ?
-                               rq_enum->buffer2 : rq_enum->buffer1;
-    castle_btree_node_buffer_init(rq_enum->tree, rq_enum->buffer);
+    castle_btree_rq_enum_buffer_switch(rq_enum);
     rq_enum->iter_running = 1;
     castle_btree_iter_start(iter);
 
@@ -3637,10 +3666,7 @@ void castle_btree_rq_enum_skip(c_rq_enum_t *rq_enum,
         }
     }
 
-    /* Clean curent node buffer */
-    castle_btree_node_buffer_init(rq_enum->tree, rq_enum->buffer);
-    rq_enum->cons_idx = 0;
-    rq_enum->prod_idx = 0;
+    castle_btree_rq_enum_buffer_switch(rq_enum);
     rq_enum->iterator.next_key = key;
     /* Reset range to handle next key in the middle of a node */
     rq_enum->in_range = 0;
