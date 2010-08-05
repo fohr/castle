@@ -31,6 +31,24 @@ static struct castle_mstore    *castle_tree_store    = NULL;
 static tree_seq_t               castle_next_tree_seq = 1; 
 static struct workqueue_struct *castle_merge_wq;
 
+
+/**********************************************************************************************/
+/* Notes about the locking on doubling arrays & component trees.
+   Each doubling array has a spinlock which protects the lists of component trees rooted in
+   the trees array.
+   Each component tree has a reference count, initialised to 1 at the tree creation. Each IO
+   and other operation which uses the tree needs to take a reference to the tree. Reference
+   should be taken under doubling array lock (which guarantees that the component tree is
+   currently threaded onto the doubling array tree list, and vice versa. When a tree is 
+   removed from the doubling array, no-one else will take references to it any more.
+   Component trees are destroyed when reference count reaches 0. The only operation which
+   causes trees to be destroyed is the merge process. It decrements the reference count by 1,
+   if there are any outstanding IOs, the ref count will reach 0 when last IO completes.
+   When a new RW component tree (rwct) is created, previous rwct is moved onto level one. There
+   may be ongoing writes to this component tree. This is safe, because all further reads to 
+   the tree (either doubling array reads, or merge) chain lock the tree nodes appropriately.
+ */
+
 struct castle_double_array {
     da_id_t          id;
     version_t        root_version;
