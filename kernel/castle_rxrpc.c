@@ -521,6 +521,7 @@ static int castle_rxrpc_slice_decode(struct castle_rxrpc_call *call, struct sk_b
         castle_object_key_free(start_key);
         return ret;
     }
+    rxrpc_kernel_data_delivered(skb);
     castle_rxrpc_state_update(call, RXRPC_CALL_REPLYING);
     printk("Executing a range query.\n");
 

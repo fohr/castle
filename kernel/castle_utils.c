@@ -2,6 +2,7 @@
 
 #include "castle_public.h"
 #include "castle_utils.h"
+#include "castle_objects.h"
 #include "castle.h"
 
 void inline  __list_swap(struct list_head *p,
@@ -78,13 +79,33 @@ void vl_key_print(c_vl_key_t *vl_key)
     print_hex_dump_bytes("", DUMP_PREFIX_NONE, vl_key->key, vl_key->length);
 }
 
+void vl_okey_print(c_vl_okey_t *key)
+{
+    int i, j;
+#define NR_BYTES_PRINT  15
+
+    printk("# key dimensions: %d, key array=%p\n", key->nr_dims, key);
+    for(i=0; i<key->nr_dims; i++)
+    {
+        printk(" dim[%.2d], %p, length=%.3d, first %d bytes: ", i, key->dims[i], key->dims[i]->length, NR_BYTES_PRINT);
+        for(j=0; j<NR_BYTES_PRINT && j<key->dims[i]->length; j++)
+            printk("%.2x", key->dims[i]->key[j]);
+        printk("\n");
+    }
+}
+
 void vl_bkey_print(c_vl_bkey_t *key)
 {
-    int i;
+    c_vl_okey_t *okey;
     
-    printk("Key len     =%d\n", key->length);
-    printk("Key dims    =%d\n", key->nr_dims);
-    for(i=0; i<key->nr_dims; i++)
-        printk(" dim_head[%d]=0x%x\n", i, key->dim_head[i]);
+    okey = castle_object_btree_key_convert(key);
+    if(!okey)
+    {
+        printk("Couldn't convert btree key for printing.\n");
+        return;
+    }
+    printk("Btree key, length=%d\n", key->length);
+    vl_okey_print(okey);
+    castle_object_key_free(okey);
 }
 

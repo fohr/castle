@@ -124,20 +124,20 @@ static c_vl_bkey_t* castle_object_btree_key_construct(c_vl_bkey_t *src_bkey,
 }
 
 /* Converts 'object key' (i.e. multidimensional key) to btree key (single dimensional) */
-static c_vl_bkey_t* castle_object_key_convert(c_vl_okey_t *obj_key)
+c_vl_bkey_t* castle_object_key_convert(c_vl_okey_t *obj_key)
 {
     return castle_object_btree_key_construct(NULL, obj_key, 0);
 }
 
-static c_vl_okey_t* castle_object_btree_key_convert(c_vl_bkey_t *btree_key)
+c_vl_okey_t* castle_object_btree_key_convert(c_vl_bkey_t *btree_key)
 {
     c_vl_okey_t *obj_key;
     c_vl_key_t *dim;
     uint32_t dim_len;
     int i;
 
-    obj_key = kzalloc(sizeof(c_vl_okey_t) + btree_key->nr_dims * 4, GFP_KERNEL);
-    if(obj_key)
+    obj_key = kzalloc(sizeof(c_vl_okey_t) + sizeof(c_vl_key_t *) * btree_key->nr_dims, GFP_KERNEL);
+    if(!obj_key)
         return NULL;
 
     obj_key->nr_dims = btree_key->nr_dims;
@@ -408,6 +408,9 @@ static int castle_objects_rq_iter_has_next(c_obj_rq_iter_t *iter)
                                                       iter->start_okey, 
                                                       iter->end_okey,
                                                       &offending_dim);
+        //printk("Got the following key from da_rq iterator. Is in range: %d, offending_dim=%d\n", 
+        //        bigger, offending_dim);
+        //vl_bkey_print(k);
         if(bigger)
         {
             /* We are outside of the rq hypercube, find next intersection point
@@ -416,6 +419,8 @@ static int castle_objects_rq_iter_has_next(c_obj_rq_iter_t *iter)
                                                     iter->start_okey, 
                                                     offending_dim,
                                                     bigger);
+            //printk("Skipping to:\n");
+            //vl_bkey_print(next_key);
             /* TODO: memory leak for next keys! FIX that */
             castle_da_rq_iter.skip(&iter->da_rq_iter, next_key);
         }    
@@ -442,6 +447,13 @@ static void castle_objects_rq_iter_init(c_obj_rq_iter_t *iter)
     /* Construct the btree keys for range-query */
     iter->start_bkey = castle_object_key_convert(iter->start_okey);
     iter->end_bkey   = castle_object_key_convert(iter->end_okey);
+    printk("====================== RQ start keys =======================\n");
+    vl_okey_print(iter->start_okey);
+    vl_bkey_print(iter->start_bkey);
+    printk("======================= RQ end keys ========================\n");
+    vl_okey_print(iter->end_okey);
+    vl_bkey_print(iter->end_bkey);
+    printk("============================================================\n");
 
     /* Check if we managed to initialise the btree keys correctly */
     if(!iter->start_bkey || !iter->end_bkey)
@@ -892,6 +904,8 @@ int castle_object_slice_get(struct castle_rxrpc_call *call,
             put_c2b(data_c2b);
         }
     }
+    printk("Ended the rq iterator in objects, replying with nr_vals: %d, rsp_buffer_offset=%d.\n",
+            nr_vals, rsp_buffer_offset);
     /* rsp buffer contains responce payload, send it through */
     castle_rxrpc_get_slice_reply(call, 0, nr_vals, rsp_buffer, rsp_buffer_offset);
     
