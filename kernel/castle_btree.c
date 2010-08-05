@@ -837,10 +837,12 @@ static void* castle_vlba_tree_key_next(void *keyv)
 {
     vlba_key_t *key = (vlba_key_t *)keyv;
 
-    /* No successor to invalid, min or max keys. */
+    /* No successor to invalid or min key. */
     BUG_ON(VLBA_TREE_KEY_INVAL(key));
     BUG_ON(VLBA_TREE_KEY_MIN(key));
-    BUG_ON(VLBA_TREE_KEY_MAX(key));
+    /* Successor to max key is the invalid key */
+    if(VLBA_TREE_KEY_MAX(key))
+        return (void *)&VLBA_TREE_INVAL_KEY; 
 
     return castle_object_btree_key_next(keyv);
 }
@@ -2603,7 +2605,7 @@ static void castle_btree_iter_version_leaf_process(c_iter_t *c_iter)
     iter_debug("Processing %d entries\n", node->used);
     
     /* We are in a leaf, then save the vblk number we followed to get here */
-    c_iter->next_key = btree->key_compare(c_iter->parent_key, btree->inv_key) == 0 ?
+    c_iter->next_key = (btree->key_compare(c_iter->parent_key, btree->inv_key) == 0) ? 
                             btree->inv_key :
                             btree->key_next(c_iter->parent_key); 
 

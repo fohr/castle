@@ -167,13 +167,13 @@ static inline int castle_object_key_dim_compare(char *dim_a, uint32_t dim_a_len,
 {
     int cmp, dim_a_next_flag, dim_b_next_flag;
 
-    /* Lexicographic comparison of the two dims (min length) */
-    cmp = memcmp(dim_a, dim_b, ((dim_a_len > dim_b_len) ? dim_b_len : dim_b_len));
+     /* Lexicographic comparison of the two dims (min length) */
+    cmp = memcmp(dim_a, dim_b, ((dim_a_len > dim_b_len) ? dim_b_len : dim_a_len));
     if(cmp)
         return cmp;
     /* If the common part of the keys the same, check which one is shorter */
     if(dim_a_len != dim_b_len)
-        return (dim_a_len < dim_b_len) ? 1 : -1;
+        return (dim_a_len > dim_b_len) ? 1 : -1;
 
     /* Identical dimension, check if either of the keys has NEXT_FLAG set */ 
     dim_a_next_flag = dim_a_flags & KEY_DIMENSION_NEXT_FLAG;
