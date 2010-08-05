@@ -18,7 +18,6 @@
 
    
 static const uint32_t OBJ_TOMBSTONE = ((uint32_t)-1);
-extern struct castle_attachment *global_attachment_hack;
 
 #define KEY_DIMENSION_NEXT_FLAG             (1 << 0)                                              
 #define KEY_DIMENSION_PLUS_INFINITY_FLAG    (1 << 1)                                              
@@ -755,7 +754,10 @@ int castle_object_replace_continue(struct castle_rxrpc_call *call, int last)
     return 0;
 }
 
-int castle_object_replace(struct castle_rxrpc_call *call, c_vl_okey_t *key, int tombstone)
+int castle_object_replace(struct castle_rxrpc_call *call, 
+                          struct castle_attachment *attachment,
+                          c_vl_okey_t *key, 
+                          int tombstone)
 {
     c_vl_bkey_t *btree_key;
     c_bvec_t *c_bvec;
@@ -772,8 +774,8 @@ int castle_object_replace(struct castle_rxrpc_call *call, c_vl_okey_t *key, int 
     c_bio = castle_utils_bio_alloc(1);
     if(!c_bio)
         return -ENOMEM;
-    BUG_ON(!global_attachment_hack);
-    c_bio->attachment    = global_attachment_hack;
+    BUG_ON(!attachment);
+    c_bio->attachment    = attachment;
     c_bio->rxrpc_call    = call;
     c_bio->data_dir      = WRITE;
     /* Tombstone & object replace both require a write */
@@ -794,6 +796,7 @@ int castle_object_replace(struct castle_rxrpc_call *call, c_vl_okey_t *key, int 
 }
 
 int castle_object_slice_get(struct castle_rxrpc_call *call, 
+                            struct castle_attachment *attachment, 
                             c_vl_okey_t *start_key, 
                             c_vl_okey_t *end_key)
 {
@@ -826,7 +829,7 @@ int castle_object_slice_get(struct castle_rxrpc_call *call,
     /* Initialise the iterator */
     iterator->start_okey = start_key;
     iterator->end_okey   = end_key;
-    iterator->version    = global_attachment_hack->version;
+    iterator->version    = attachment->version; 
     iterator->da_id      = castle_version_da_id_get(iterator->version);
     
     printk("rq_iter_init.\n");
@@ -1107,7 +1110,9 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
     castle_object_get_continue(c_bvec, call, cvt.cdb, cvt.length);
 }
 
-int castle_object_get(struct castle_rxrpc_call *call, c_vl_okey_t *key)
+int castle_object_get(struct castle_rxrpc_call *call, 
+                      struct castle_attachment *attachment, 
+                      c_vl_okey_t *key)
 {
     c_vl_bkey_t *btree_key;
     c_bvec_t *c_bvec;
@@ -1120,8 +1125,8 @@ int castle_object_get(struct castle_rxrpc_call *call, c_vl_okey_t *key)
     c_bio = castle_utils_bio_alloc(1);
     if(!c_bio)
         return -ENOMEM;
-    BUG_ON(!global_attachment_hack);
-    c_bio->attachment    = global_attachment_hack;
+    BUG_ON(!attachment);
+    c_bio->attachment    = attachment; 
     c_bio->rxrpc_call    = call;
     c_bio->data_dir      = READ;
 

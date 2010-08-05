@@ -392,11 +392,14 @@ void castle_rxrpc_str_copy(struct castle_rxrpc_call *call, void *buffer, int str
 }
 
 static int castle_rxrpc_collection_get(struct sk_buff *skb,
-                                       collection_id_t *collection_p)
+                                       struct castle_attachment **attachment_p)
 {
-    *collection_p = SKB_L_GET(skb);
+    struct castle_attachment *ca;
+    
+    ca = castle_collection_find(SKB_L_GET(skb));
+    *attachment_p = ca;
 
-    return 0;
+    return (ca == NULL) ? -EINVAL : 0;
 }
     
 static int castle_rxrpc_key_get(struct sk_buff *skb,
@@ -431,12 +434,12 @@ static int castle_rxrpc_key_get(struct sk_buff *skb,
 }
 
 static int castle_rxrpc_collection_key_get(struct sk_buff *skb, 
-                                           collection_id_t *collection_p, 
+                                           struct castle_attachment **attachment_p,
                                            c_vl_okey_t **key_p)
 {
     int ret;
 
-    ret = castle_rxrpc_collection_get(skb, collection_p);
+    ret = castle_rxrpc_collection_get(skb, attachment_p);
     if(ret)
         return ret;
 
@@ -449,15 +452,15 @@ static int castle_rxrpc_collection_key_get(struct sk_buff *skb,
 
 static int castle_rxrpc_get_decode(struct castle_rxrpc_call *call, struct sk_buff *skb,  bool last)
 {
-    collection_id_t collection;
+    struct castle_attachment *attachment;
     c_vl_okey_t *key;
     int ret;
 
-    ret = castle_rxrpc_collection_key_get(skb, &collection, &key);
+    ret = castle_rxrpc_collection_key_get(skb, &attachment, &key);
     if(ret)
         return ret;
 
-    ret = castle_object_get(call, key);
+    ret = castle_object_get(call, attachment, key);
     if(ret)
         return ret;
 
@@ -469,7 +472,7 @@ static int castle_rxrpc_get_decode(struct castle_rxrpc_call *call, struct sk_buf
  
 static int castle_rxrpc_replace_decode(struct castle_rxrpc_call *call, struct sk_buff *skb, bool last)
 {
-    collection_id_t collection;
+    struct castle_attachment *attachment;
     c_vl_okey_t *key;
     int ret;
 static int cnt = 0;
@@ -482,10 +485,10 @@ static int cnt = 0;
     /* First packet processing */
     if(call->packet_cnt == 1)
     {
-        ret = castle_rxrpc_collection_key_get(skb, &collection, &key);
+        ret = castle_rxrpc_collection_key_get(skb, &attachment, &key);
         if(ret)
             return ret;
-        ret = castle_object_replace(call, key, (SKB_L_GET(skb) == CASTLE_OBJ_TOMBSTONE));
+        ret = castle_object_replace(call, attachment, key, (SKB_L_GET(skb) == CASTLE_OBJ_TOMBSTONE));
         castle_rxrpc_state_update(call, RXRPC_CALL_AWAIT_DATA);
     } else
     /* Subsequent packet processing */
@@ -507,12 +510,12 @@ static int cnt = 0;
 
 static int castle_rxrpc_slice_decode(struct castle_rxrpc_call *call, struct sk_buff *skb,  bool last)
 {
-    collection_id_t collection_id;
+    struct castle_attachment *attachment;
     c_vl_okey_t *start_key, *end_key;
     int ret;
 
     skb_print(skb);
-    ret = castle_rxrpc_collection_get(skb, &collection_id);
+    ret = castle_rxrpc_collection_get(skb, &attachment);
     if(ret)
         return ret;
     ret = castle_rxrpc_key_get(skb, &start_key);
@@ -528,7 +531,7 @@ static int castle_rxrpc_slice_decode(struct castle_rxrpc_call *call, struct sk_b
     castle_rxrpc_state_update(call, RXRPC_CALL_REPLYING);
     printk("Executing a range query.\n");
 
-    return castle_object_slice_get(call, start_key, end_key);
+    return castle_object_slice_get(call, attachment, start_key, end_key);
 }
 
 static int castle_rxrpc_ctrl_decode(struct castle_rxrpc_call *call, struct sk_buff *skb,  bool last)
