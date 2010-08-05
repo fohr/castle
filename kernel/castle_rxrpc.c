@@ -222,6 +222,7 @@ static int castle_rxrpc_op_decode(struct castle_rxrpc_call *call, struct sk_buff
     memcpy(buffer + _value_len, &pad, _pad_len);                                \
     *buffer_used += _value_len + _pad_len;                                      \
      buffer_len  -= _value_len + _pad_len;                                      \
+     buffer      += _value_len + _pad_len;                                      \
 })
     
 
@@ -254,6 +255,8 @@ int castle_rxrpc_get_slice_reply_marshall(struct castle_rxrpc_call *call,
     }
     /* All keys written out, write out the value itself */
     rsp_val = htonl(CASTLE_OBJ_VALUE);
+    BUFFER_PUT(&rsp_val, 4);
+    rsp_val = htonl(value_len);
     BUFFER_PUT(&rsp_val, 4);
     BUFFER_PUT(value, value_len); 
 
@@ -770,7 +773,6 @@ static void castle_rxrpc_packet_process(struct work_struct *work)
         PREPARE_WORK(&call->work, castle_rxrpc_call_delete);
         queue_work(call->wq, &call->work);
     }
-
 }
 
 static void castle_rxrpc_incoming_call_collect(struct work_struct *work)
