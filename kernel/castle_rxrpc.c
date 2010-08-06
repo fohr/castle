@@ -488,8 +488,8 @@ static int cnt = 0;
         ret = castle_rxrpc_collection_key_get(skb, &attachment, &key);
         if(ret)
             return ret;
-        ret = castle_object_replace(call, attachment, key, (SKB_L_GET(skb) == CASTLE_OBJ_TOMBSTONE));
         castle_rxrpc_state_update(call, RXRPC_CALL_AWAIT_DATA);
+        ret = castle_object_replace(call, attachment, key, (SKB_L_GET(skb) == CASTLE_OBJ_TOMBSTONE));
     } else
     /* Subsequent packet processing */
     {

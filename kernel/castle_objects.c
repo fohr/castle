@@ -20,8 +20,8 @@
 static const uint32_t OBJ_TOMBSTONE = ((uint32_t)-1);
 
 #define KEY_DIMENSION_NEXT_FLAG             (1 << 0)                                              
-#define KEY_DIMENSION_PLUS_INFINITY_FLAG    (1 << 1)                                              
-#define KEY_DIMENSION_MINUS_INFINITY_FLAG   (1 << 2)                                              
+#define KEY_DIMENSION_MINUS_INFINITY_FLAG   (1 << 1)                                              
+#define KEY_DIMENSION_UNUSED2_FLAG          (1 << 2)                                              
 #define KEY_DIMENSION_UNUSED3_FLAG          (1 << 3)                                              
 #define KEY_DIMENSION_UNUSED4_FLAG          (1 << 4)                                              
 #define KEY_DIMENSION_UNUSED5_FLAG          (1 << 5)                                              
