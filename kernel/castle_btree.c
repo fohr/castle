@@ -1250,11 +1250,7 @@ static inline c_disk_blk_t castle_btree_root_get(c_bvec_t *c_bvec)
     /* Lock the pointer to the root node.
        This is unlocked by the (poorly named) castle_btree_c2b_forget() */
     castle_version_lock(c_bvec->version);
-    if(c_bvec->tree->dynamic)
-        root_cdb = castle_version_root_get(c_bvec->version, 
-                                           c_bvec->tree->seq);
-    else
-        root_cdb = c_bvec->tree->root_node;
+    root_cdb = c_bvec->tree->root_node;
     up_read(&att->lock);
 
     return root_cdb;
@@ -1691,18 +1687,14 @@ static void castle_btree_new_root_create(c_bvec_t *c_bvec, btree_t type)
             c_bvec->version);
     BUG_ON(c_bvec->btree_parent_node);
     /* Create the node */
-    c2b = castle_btree_node_create(c_bvec->version, 0, type, c_bvec->tree);
+    c2b = castle_btree_node_create(0, 0, type, c_bvec->tree);
     node = c2b_buffer(c2b);
-    /* Update the version tree, and release the version lock (c2b_forget will 
-       no longer do that, because there will be a parent node). */
-    debug("About to update version tree.\n");
-    /* TODO: Check if we hold the version lock */
-    /* Should not fail, because the root already exists */
-    BUG_ON(castle_version_root_update(c_bvec->version, 
-                                      c_bvec->tree->seq,
-                                      c2b->cdb));
+    /* TODO: locking for root_node */
+    c_bvec->tree->root_node = c2b->cdb;
     /* If all succeeded save the new node as the parent in bvec */
     c_bvec->btree_parent_node = c2b;
+    /* Release the version lock (c2b_forget will no longer do that, 
+       because there will be a parent node). */
     castle_version_unlock(c_bvec->version);
     clear_bit(CBV_ROOT_LOCKED_BIT, &c_bvec->flags);
 }
@@ -1766,52 +1758,42 @@ static int castle_btree_node_split(c_bvec_t *c_bvec)
         }
     }
 
-    /* If we don't have a parent, we may may need to create a new root node.
-       If not, the effective node will act as the new root node. In either 
-       case (version -> root cdb) mapping has to be updated. */
+    /* If we don't have a parent, we have to create a new root node. */
     new_root = 0;
     if(!c_bvec->btree_parent_node)
     {
-        if(split_c2b)
-        {
-            debug("Creating new root node.\n");
-            castle_btree_new_root_create(c_bvec, node->type);
-            new_root = 1;
-        } else
-        {
-            debug("Effective node will be the new root node\n");
-            BUG_ON(!eff_c2b);
-            /* Should not fail, because the root already exists */
-            BUG_ON(castle_version_root_update(version,
-                                              c_bvec->tree->seq,
-                                              eff_c2b->cdb));
-        }
+        /* When we are splitting the root node there must be an effective node 
+           (i.e. effective node must not be identical to the original node).
+           This is because we are writing in a version != 0, and the version of
+           root node is always 0 */
+        BUG_ON(!eff_c2b);
+
+        debug("Creating new root node.\n");
+        castle_btree_new_root_create(c_bvec, node->type);
+        new_root = 1;
     }
 
     /* Work out if we have a parent */
     parent_c2b  = c_bvec->btree_parent_node;
-    parent_node = parent_c2b ? c2b_buffer(parent_c2b) : NULL;
+    BUG_ON(!parent_c2b);
+    parent_node = c2b_buffer(parent_c2b);
     /* Insert!
        This is a bit complex, due to number of different cases. Each is described below
        in some detail.
      
        If split node got created then it should be inserted with the
-       usual (b,v) in the parent. Parent must have existed, or has just been 
-       created
+       usual (b,v) in the parent.
      */
     if(split_c2b)
     {
         debug("Inserting split node.\n");
-        BUG_ON(!parent_c2b);
         castle_btree_node_insert(parent_c2b, split_c2b);
     }
 
     /* If effective node got created (rather than using the original node) then
        it either needs to be inserted in the usual way, or under MAX key if we are 
-       inserting into the new root.
-       Also, note that if effective node is our new root, and we don't have to
-       insert it anywhere. In this case parent_c2b will be NULL. */
-    if(eff_c2b && parent_c2b)
+       inserting into the new root. */
+    if(eff_c2b)
     {
         if(new_root)
         {
@@ -1830,15 +1812,15 @@ static int castle_btree_node_split(c_bvec_t *c_bvec)
         }
     }
 
-    /* Finally, if new root got created, and the effective node was identical
-       to the original node. Insert the original node under MAX block key */
-    if(new_root && !eff_c2b)
+    /* Finally, if new root got created, we must also insert the original node into it.
+       This should be inserted under MAX_KEY,and version 0 (this is the version of the node). */
+    if(new_root)
     {
         debug("Inserting original root node under MAX block key.\n");
         castle_btree_node_under_key_insert(parent_c2b,
                                            c_bvec->btree_node,
                                            btree->max_key,
-                                           c_bvec->version);
+                                           0);
     }
 
     /* All nodes inserted. Now, unlock all children nodes, except of the
@@ -1849,13 +1831,13 @@ static int castle_btree_node_split(c_bvec_t *c_bvec)
         unlock_c2b(c_bvec->btree_node);
         put_c2b(c_bvec->btree_node);
     }
-    if((retain_c2b != eff_c2b) && (eff_c2b))
+    if(eff_c2b && (retain_c2b != eff_c2b))
     {
         debug("Unlocking the effective node.\n");
         unlock_c2b(eff_c2b);
         put_c2b(eff_c2b);
     }
-    if((retain_c2b != split_c2b) && (split_c2b))
+    if(split_c2b && (retain_c2b != split_c2b))
     {
         debug("Unlocking the split node.\n");
         unlock_c2b(split_c2b);
@@ -2595,6 +2577,8 @@ static void castle_btree_iter_version_leaf_process(c_iter_t *c_iter)
     struct castle_btree_type *btree = castle_btree_type_get(c_iter->tree->btree_type);
     c2_block_t *leaf; 
     int i;
+        
+    BUG_ON(VERSION_INVAL(c_iter->version));
 
     leaf = c_iter->path[c_iter->depth];
     BUG_ON(leaf == NULL);
@@ -2803,6 +2787,7 @@ static void __castle_btree_iter_path_traverse(struct work_struct *work)
 
              /* If we are enumerating all entries for a particular version,
                fin the occurance of the next key. */
+            BUG_ON(VERSION_INVAL(c_iter->version));
             castle_btree_lub_find(node, c_iter->next_key, c_iter->version, &index, NULL);
             iter_debug("Node index=%d\n", index);
             break;
@@ -2887,7 +2872,8 @@ static void castle_btree_iter_path_traverse(c_iter_t *c_iter, c_disk_blk_t node_
     {
         /* We have just started the iteration - lets unlock the version tree */
         iter_debug("Unlocking version tree.\n");
-        castle_version_unlock(c_iter->version);
+        if(!VERSION_INVAL(c_iter->version))
+            castle_version_unlock(c_iter->version);
     }
     /* Unlock previous c2b */
     if((c_iter->depth > 0) && (c_iter->path[c_iter->depth - 1] != NULL))
@@ -2946,12 +2932,14 @@ static void __castle_btree_iter_start(c_iter_t *c_iter)
     
     iter_debug("Locking version tree for version: %d\n", c_iter->version);
     
-    castle_version_lock(c_iter->version);
-    root_cdb = castle_version_root_get(c_iter->version, c_iter->tree->seq);
+    if(!VERSION_INVAL(c_iter->version))
+        castle_version_lock(c_iter->version);
+    root_cdb = c_iter->tree->root_node;
     if(DISK_BLK_INVAL(root_cdb))
     {
         iter_debug("Warning: Invalid disk block for the root.\n");
-        castle_version_unlock(c_iter->version);
+        if(!VERSION_INVAL(c_iter->version))
+            castle_version_unlock(c_iter->version);
         /* Complete the request early, end exit */
         castle_btree_iter_end(c_iter, -EINVAL);
         return;
@@ -3004,6 +2992,7 @@ void castle_btree_iter_init(c_iter_t *c_iter, version_t version, int type)
     switch(c_iter->type)
     {
         case C_ITER_ALL_ENTRIES:
+            BUG_ON(!VERSION_INVAL(version));
             /* Set all node indices to -1, which implies most extreme LHS walk through
                the tree first */ 
             for(i=0; i<MAX_BTREE_DEPTH; i++)
@@ -3044,7 +3033,7 @@ void castle_btree_free(void)
 
 /**********************************************************************************************/
 /* Btree enumerator */
-#define TMP_VISITED_HASH_LENGTH     (1000)
+#define VISITED_HASH_LENGTH     (1000)
 static inline void castle_iter_enum_idx_get(c_iter_t *c_iter,
                                             c_enum_t **c_enum_p,
                                             version_t *idx_p)
@@ -3053,6 +3042,8 @@ static inline void castle_iter_enum_idx_get(c_iter_t *c_iter,
 
     if(c_enum_p) *c_enum_p = c_enum;
     if(idx_p)    *idx_p    = (c_iter - c_enum->iterators);
+    /* We only have one iterator now */
+    BUG_ON(c_iter != c_enum->iterators);
 }
 
 static int castle_enum_iter_need_visit(c_iter_t *c_iter, c_disk_blk_t node_cdb)
@@ -3060,8 +3051,7 @@ static int castle_enum_iter_need_visit(c_iter_t *c_iter, c_disk_blk_t node_cdb)
     struct castle_visited *visited; 
     struct list_head *l;
     c_enum_t *c_enum;
-    version_t idx; 
-    int i;
+    int i, idx; 
 
     castle_iter_enum_idx_get(c_iter, &c_enum, &idx);
     enum_debug("Iterator %d is asking if to visit (0x%x, 0x%x)\n", 
@@ -3069,7 +3059,7 @@ static int castle_enum_iter_need_visit(c_iter_t *c_iter, c_disk_blk_t node_cdb)
     /* All hash operations need to be protected with the lock */
     spin_lock(&c_enum->visited_lock);
     /* Simplistic hash function */ 
-    i = (node_cdb.disk + node_cdb.block) % TMP_VISITED_HASH_LENGTH;
+    i = (node_cdb.disk + node_cdb.block) % VISITED_HASH_LENGTH;
     enum_debug("Hash bucket: %d\n", i);
     /* Check if the cdb is in the hash */
     list_for_each(l, &c_enum->visited_hash[i])
@@ -3103,7 +3093,7 @@ static void castle_enum_iter_each(c_iter_t *c_iter,
     struct castle_btree_type *btree;
     struct castle_enumerator *c_enum;
     struct castle_iterator_buffer *buff;
-    version_t idx; 
+    int idx; 
 
     castle_iter_enum_idx_get(c_iter, &c_enum, &idx);
     buff = c_enum->buffers + idx;
@@ -3120,7 +3110,7 @@ static void castle_enum_iter_node_end(c_iter_t *c_iter)
 {
     struct castle_enumerator *c_enum;
     struct castle_iterator_buffer *buff;
-    version_t idx; 
+    int idx; 
 
     castle_iter_enum_idx_get(c_iter, &c_enum, &idx);
     buff = c_enum->buffers + idx;
@@ -3145,7 +3135,7 @@ static void castle_enum_iter_end(c_iter_t *c_iter, int err)
 {
     struct castle_enumerator *c_enum;
     struct castle_iterator_buffer *buff;
-    version_t idx; 
+    int idx; 
 
     castle_iter_enum_idx_get(c_iter, &c_enum, &idx);
     if(err) c_enum->err = err;
@@ -3159,28 +3149,26 @@ static void castle_enum_iter_end(c_iter_t *c_iter, int err)
 
 static void castle_btree_enum_fini(c_enum_t *c_enum)
 {
-    version_t ver_idx;
+    int i;
 
     enum_debug("Freeing enumerator.\n");
     if(c_enum->buffers)
     {
-        for(ver_idx = 0; ver_idx < c_enum->nr_iters; ver_idx++)
+        for(i = 0; i < c_enum->nr_iters; i++)
         {
 #ifdef DEBUG                
-            if(c_enum->buffers[ver_idx].buffer)
+            if(c_enum->buffers[i].buffer)
             {
-                struct castle_iterator_buffer *buff = c_enum->buffers + ver_idx;
-                struct castle_iterator *c_iter = c_enum->iterators + ver_idx;
+                struct castle_iterator_buffer *buff = c_enum->buffers + i;
                 if(c_enum->iterators)
-                    enum_debug("Freeing buffer for iterator %d, ver=%d.\n", 
-                        ver_idx, c_iter->version);
+                    enum_debug("Freeing buffer for iterator %d.\n", i);
                 BUG_ON((c_enum->err != -ENOMEM) && (!buff->iter_completed));
             }
 #endif                
-            if(c_enum->buffers[ver_idx].buffer1)
-                vfree(c_enum->buffers[ver_idx].buffer1);
-            if(c_enum->buffers[ver_idx].buffer2)
-                vfree(c_enum->buffers[ver_idx].buffer2);
+            if(c_enum->buffers[i].buffer1)
+                vfree(c_enum->buffers[i].buffer1);
+            if(c_enum->buffers[i].buffer2)
+                vfree(c_enum->buffers[i].buffer2);
         }
         vfree(c_enum->buffers);
         c_enum->buffers = NULL;
@@ -3218,7 +3206,7 @@ void castle_btree_enum_cancel(c_enum_t *c_enum)
 
         BUG_ON(!buff);
             
-        enum_debug("Canceling iterator %d, ver=%d.\n", i, c_iter->version);
+        enum_debug("Canceling iterator %d.\n", i);
         if(!buff->iter_completed)
         {
             castle_btree_iter_cancel(c_iter, 0);
@@ -3330,7 +3318,6 @@ void castle_btree_enum_next(c_enum_t *c_enum,
     /* Read off the entry we want to return, and increment the consumer index */
     btree->entry_get(buff->buffer, buff->cons_idx, key_p, version_p, NULL, cvt_p); 
     buff->cons_idx++;
-    
     /* Check if next node should be read for this iterator */
     if(buff->cons_idx == buff->prod_idx)
     {
@@ -3357,15 +3344,14 @@ void castle_btree_enum_next(c_enum_t *c_enum,
        
 void castle_btree_enum_init(c_enum_t *c_enum)
 {
-    version_t first_version, curr_version, ver_idx, nr_versions;
     struct castle_btree_type *btype;
-    c_disk_blk_t cdb;
     int i;
 
     btype = castle_btree_type_get(c_enum->tree->btree_type);
-    nr_versions = list_length(&c_enum->tree->roots_list);
-    enum_debug("Nr versions: %d\n", nr_versions);
-    c_enum->nr_iters       = nr_versions;
+    /* We no longer need to support multiple iterators, this should simplify a lot of
+       this code.
+        TODO: go through it all and remove unneccessary code */
+    c_enum->nr_iters       = 1;
     c_enum->err            = 0;
     c_enum->curr_iter      = 0;
     c_enum->max_key_iter   = 0;
@@ -3375,13 +3361,13 @@ void castle_btree_enum_init(c_enum_t *c_enum)
     /* Allocate memory for iterators, and for buffers to store one node's worth of entries
        for each iterator */
     c_enum->iterators      = NULL;
-    c_enum->iterators      = vmalloc(nr_versions * sizeof(struct castle_iterator)); 
+    c_enum->iterators      = vmalloc(sizeof(struct castle_iterator)); 
     c_enum->buffers        = NULL;
-    c_enum->buffers        = vmalloc(nr_versions * sizeof(*c_enum->buffers));
+    c_enum->buffers        = vmalloc(sizeof(*c_enum->buffers));
     c_enum->visited_hash   = NULL;
-    c_enum->visited_hash   = kmalloc(TMP_VISITED_HASH_LENGTH * sizeof(struct list_head),
+    c_enum->visited_hash   = kmalloc(VISITED_HASH_LENGTH * sizeof(struct list_head),
                                      GFP_KERNEL);
-    c_enum->max_visited    = 8 * TMP_VISITED_HASH_LENGTH;
+    c_enum->max_visited    = 8 * VISITED_HASH_LENGTH;
     c_enum->visited        = NULL;
     c_enum->visited        = vmalloc(c_enum->max_visited * sizeof(struct castle_visited));
     if(!c_enum->iterators || !c_enum->buffers || !c_enum->visited_hash || !c_enum->visited)
@@ -3389,36 +3375,25 @@ void castle_btree_enum_init(c_enum_t *c_enum)
     /* Init structures related to visited hash */ 
     spin_lock_init(&c_enum->visited_lock);
     c_enum->next_visited = 0; 
-    for(i=0; i<TMP_VISITED_HASH_LENGTH; i++)
+    for(i=0; i<VISITED_HASH_LENGTH; i++)
         INIT_LIST_HEAD(c_enum->visited_hash + i);
-    /* Go through versions, one at the time, and initialise the iterators, as well as the
-       buffers */
+    /* Initialise the iterator and the buffers */
     memset(c_enum->buffers, 0, sizeof(c_enum->buffers)); 
-    ver_idx = 0;
-    castle_version_root_next(c_enum->tree->seq, &first_version, &cdb);
-    curr_version = first_version;
     do {
         struct castle_iterator *iter;
 
-        BUG_ON(ver_idx >= c_enum->nr_iters);
-        /* Work out the next version, the root node cdb is ignored */
-        castle_version_root_next(c_enum->tree->seq, &curr_version, &cdb);
-        if(VERSION_INVAL(curr_version))
-           break; 
-        enum_debug("Version: %d, cdb=(0x%x, 0x%x)\n", curr_version, cdb.disk, cdb.block);
-
         /* Allocate buffer for a node */
-        c_enum->buffers[ver_idx].prod_idx = 0;
-        c_enum->buffers[ver_idx].cons_idx = 0;
-        c_enum->buffers[ver_idx].iter_completed = 0;
-        c_enum->buffers[ver_idx].buffer1 = vmalloc(btype->node_size * C_BLK_SIZE);
-        c_enum->buffers[ver_idx].buffer2 = vmalloc(btype->node_size * C_BLK_SIZE);
-        c_enum->buffers[ver_idx].buffer = c_enum->buffers[ver_idx].buffer1;
-        if(!c_enum->buffers[ver_idx].buffer1 || !c_enum->buffers[ver_idx].buffer2)
+        c_enum->buffers[0].prod_idx = 0;
+        c_enum->buffers[0].cons_idx = 0;
+        c_enum->buffers[0].iter_completed = 0;
+        c_enum->buffers[0].buffer1 = vmalloc(btype->node_size * C_BLK_SIZE);
+        c_enum->buffers[0].buffer2 = vmalloc(btype->node_size * C_BLK_SIZE);
+        c_enum->buffers[0].buffer = c_enum->buffers[0].buffer1;
+        if(!c_enum->buffers[0].buffer1 || !c_enum->buffers[0].buffer2)
             goto no_mem;
-        castle_btree_node_buffer_init(c_enum->tree, c_enum->buffers[ver_idx].buffer);
+        castle_btree_node_buffer_init(c_enum->tree, c_enum->buffers[0].buffer);
 
-        iter = c_enum->iterators + ver_idx; 
+        iter = c_enum->iterators; 
         iter->tree       = c_enum->tree;
         iter->need_visit = castle_enum_iter_need_visit;
         iter->node_start = NULL;
@@ -3426,20 +3401,14 @@ void castle_btree_enum_init(c_enum_t *c_enum)
         iter->node_end   = castle_enum_iter_node_end;
         iter->end        = castle_enum_iter_end;
         iter->private    = c_enum;
-        castle_btree_iter_init(iter, curr_version, C_ITER_ALL_ENTRIES);
-        ver_idx++;
-    } while(curr_version != first_version);
-    /* We should go through precisely nr_iters versions */
-    BUG_ON(ver_idx != c_enum->nr_iters);
+        castle_btree_iter_init(iter, INVAL_VERSION, C_ITER_ALL_ENTRIES);
+    } while(0);
 
     enum_debug("Allocated all buffers & iterators.\n"); 
     c_enum->live_iterators = ATOMIC(c_enum->nr_iters); 
-    /* Now, that all iterators have been created, and buffers allocated, start them all */
-    for(ver_idx = 0; ver_idx < c_enum->nr_iters; ver_idx++)
-    {
-        atomic_inc(&c_enum->outs_iterators);
-        castle_btree_iter_start(c_enum->iterators + ver_idx); 
-    }
+    c_enum->outs_iterators = ATOMIC(c_enum->nr_iters);
+    /* Now, that the iterator has been created, and buffers allocated, start it */
+    castle_btree_iter_start(c_enum->iterators); 
 
     return;
 no_mem:

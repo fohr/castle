@@ -40,7 +40,6 @@ struct castle_component_tree castle_global_tree = {.seq         = GLOBAL_TREE,
                                                    .node_count  = {0ULL},
                                                    .da_list     = {NULL, NULL},
                                                    .hash_list   = {NULL, NULL},
-                                                   .roots_list  = {NULL, NULL},
                                                    .mstore_key  = INVAL_MSTORE_KEY,
                                                   }; 
 struct workqueue_struct     *castle_wqs[2*MAX_BTREE_DEPTH+1];
@@ -211,11 +210,13 @@ int castle_fs_init(void)
         init_MUTEX(&(castle_global_tree.mutex));
         c2b = castle_btree_node_create(0 /* version */, 1 /* is_leaf */, MTREE_TYPE,
                                        &castle_global_tree);
-        /* Init version list */
-        ret = castle_versions_zero_init(c2b->cdb);
+        /* Save the root node in the global tree */
+        castle_global_tree.root_node = c2b->cdb; 
         /* Release btree node c2b */
         unlock_c2b(c2b);
         put_c2b(c2b);
+        /* Init version list */
+        ret = castle_versions_zero_init();
         if(ret) return ret;
         /* Make sure that fs_sb is up-to-date */
         cs_fs_sb = castle_fs_superblocks_get();

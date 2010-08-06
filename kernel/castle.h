@@ -168,7 +168,6 @@ typedef struct castle_mstore_iter {
 enum {
     MSTORE_VERSIONS_ID,
     MSTORE_BLOCK_CNTS,
-    MSTORE_ROOTS,
     MSTORE_DOUBLE_ARRAYS,
     MSTORE_COMPONENT_TREES,
 }; 
@@ -283,7 +282,6 @@ struct castle_component_tree {
     atomic64_t       node_count;
     struct list_head da_list;
     struct list_head hash_list;
-    struct list_head roots_list;
     c_mstore_key_t   mstore_key;
     int              tmp_dbg;
 };
@@ -305,12 +303,6 @@ struct castle_clist_entry {
     c_disk_blk_t first_node;
     c_disk_blk_t last_node;
     uint64_t     node_count;
-} PACKED;
-
-struct castle_rlist_entry {
-    version_t    version;
-    tree_seq_t   tree_seq;
-    c_disk_blk_t cdb;
 } PACKED;
 
 struct castle_vlist_entry {
@@ -496,7 +488,7 @@ typedef struct castle_iterator {
 typedef struct castle_enumerator {
     struct castle_component_tree *tree;
     int                           err;
-    version_t                     nr_iters;
+    int                           nr_iters;
     struct castle_iterator       *iterators; 
     wait_queue_head_t             iterators_wq;
     atomic_t                      outs_iterators;
