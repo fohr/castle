@@ -488,11 +488,19 @@ typedef struct castle_iterator {
 typedef struct castle_enumerator {
     struct castle_component_tree *tree;
     int                           err;
-    int                           nr_iters;
-    struct castle_iterator       *iterators; 
-    wait_queue_head_t             iterators_wq;
-    atomic_t                      outs_iterators;
-    atomic_t                      live_iterators;
+    struct castle_iterator        iterator; 
+    wait_queue_head_t             iterator_wq;
+    volatile int                  iterator_outs;
+    int                           iter_completed;
+    /* Variables used to buffer up entries from the iterator */
+    int                           prod_idx;
+    int                           cons_idx;
+    struct castle_btree_node     *buffer;       /* Two buffers are actually allocated (buffer1/2) */
+    struct castle_btree_node     *buffer1;      /* buffer points to the one currently used to     */
+    struct castle_btree_node     *buffer2;      /* read in a node, second is used to preserve     */
+                                                /* key pointer validity. TODO: fix, waseful.      */
+
+    /* Set to decide whether to visit nodes, implemented as hash table */
     struct {
         spinlock_t                visited_lock;
         struct list_head         *visited_hash;
@@ -503,17 +511,6 @@ typedef struct castle_enumerator {
             struct list_head      list;
         } *visited;
     };
-    struct castle_iterator_buffer {
-        int                       iter_completed;
-        int                       prod_idx;
-        int                       cons_idx;
-        struct castle_btree_node *buffer;       /* Two buffers are actually allocated (buffer1/2) */
-        struct castle_btree_node *buffer1;      /* buffer points to the one currently used to     */
-        struct castle_btree_node *buffer2;      /* read in a node, second is used to preserve     */
-    } *buffers;                                 /* key pointer validity. TODO: fix, waseful.      */
-
-    int                           curr_iter;    /* Iterator we are enumerating from at the moment */
-    int                           max_key_iter; /* Which iterator is the max_key taken from       */
 } c_enum_t; 
 
 /* Enumerates latest version value for all entries */
