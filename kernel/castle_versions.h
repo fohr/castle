@@ -11,8 +11,6 @@ int          castle_version_read        (version_t version,
                                          uint32_t *size,
                                          int *leaf);
 da_id_t      castle_version_da_id_get   (version_t version);
-void         castle_version_lock        (version_t version);
-void         castle_version_unlock      (version_t version);
 
 int          castle_versions_zero_init  (void);
 version_t    castle_version_new         (int snap_or_clone, 

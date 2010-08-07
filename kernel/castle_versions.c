@@ -205,24 +205,6 @@ static struct castle_version* castle_version_new_create(int snap_or_clone,
         return NULL;
     }
     
-    /* Be careful about reading the ftree_root.
-       If we are creating a clone, the parent is not attached (by definition)
-       and therefore the root will not change. Attach/detach races are 
-       prevented by control command serialisation.
-
-       If we are creating a snapshot, we must make sure that there are no
-       ongoing writes, because they could key-split the root node (version 
-       splits would be fine).
-
-       We prevent this from happening by locking the ftree first. This 
-       guarantees that any ongoing writes have already released the root node.
-       We can then release the ftree lock straight away, beacuse we are
-       doing snapshots under device lock. Therefore, no new IOs will be
-       accepted before we release it (by this time the new vesion will 
-       be saved to castle_device structure) */ 
-    debug("Locking the parent (%d) ftree.\n", parent);
-    castle_version_lock(parent);
-    castle_version_unlock(parent);
     parent_size = p->size;
 
     /* Allocate a new version number. */
@@ -296,55 +278,6 @@ version_t castle_version_new(int snap_or_clone,
     castle_version_writeback(v, 1); 
     
     return v->version; 
-}
-
-static int castle_version_ftree_yield(void *word)
-{
-    /* If you need the version struct here is how you work it out:
-	struct castle_version *v = container_of(word, struct castle_version, flags); */
-
-	smp_mb();
-    debug("In ftree_yield.\n");
-	io_schedule();
-
-	return 0;
-}
-
-void castle_version_lock(version_t version)
-{
-    struct castle_version *v;
-
-    /* This function may sleep on the ftree lock */
-	might_sleep();
-
-    v = castle_versions_hash_get(version);
-
-    if(!v) 
-        return;
-
-	if (test_and_set_bit(CV_FTREE_LOCKED_BIT, &v->flags))
-    {
-        /* Slow path */
-	    wait_on_bit_lock(&v->flags, 
-                          CV_FTREE_LOCKED_BIT, 
-                          castle_version_ftree_yield,
-                          TASK_UNINTERRUPTIBLE);
-    }
-}
-
-void castle_version_unlock(version_t version)
-{
-    struct castle_version *v;
-
-    v = castle_versions_hash_get(version);
-    BUG_ON(!v);
-
-    /* Clear the bit, wake up anyone waiting */
-	smp_mb__before_clear_bit();
-    BUG_ON(!test_bit(CV_FTREE_LOCKED_BIT, &v->flags));
-	clear_bit(CV_FTREE_LOCKED_BIT, &v->flags);
-	smp_mb__after_clear_bit();
-	wake_up_bit(&v->flags, CV_FTREE_LOCKED_BIT);
 }
 
 int castle_version_attach(version_t version) 

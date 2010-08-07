@@ -1239,21 +1239,40 @@ struct castle_btree_type *castle_btree_type_get(btree_t type)
 
 /**********************************************************************************************/
 /* Common modlist btree code */
+void castle_btree_ct_lock(c_bvec_t *c_bvec)
+{
+    int write = (c_bvec_data_dir(c_bvec) == WRITE);
+
+    if(write)
+        down_write(&c_bvec->tree->lock);
+    else
+        down_read(&c_bvec->tree->lock);
+    set_bit(CBV_ROOT_LOCKED_BIT, &c_bvec->flags);
+}
+
+void castle_btree_ct_unlock(c_bvec_t *c_bvec)
+{
+    int write = (c_bvec_data_dir(c_bvec) == WRITE);
+
+    if(write)
+        up_write(&c_bvec->tree->lock);
+    else
+        up_read(&c_bvec->tree->lock);
+    clear_bit(CBV_ROOT_LOCKED_BIT, &c_bvec->flags);
+}
 
 static inline c_disk_blk_t castle_btree_root_get(c_bvec_t *c_bvec)
 {
     struct castle_attachment *att = c_bvec->c_bio->attachment;
-    c_disk_blk_t root_cdb;
 
     down_read(&att->lock);
     c_bvec->version = att->version;
+    up_read(&att->lock);
     /* Lock the pointer to the root node.
        This is unlocked by the (poorly named) castle_btree_c2b_forget() */
-    castle_version_lock(c_bvec->version);
-    root_cdb = c_bvec->tree->root_node;
-    up_read(&att->lock);
-
-    return root_cdb;
+    castle_btree_ct_lock(c_bvec);
+    
+    return c_bvec->tree->root_node;
 }
   
 static void castle_btree_c2b_forget(c_bvec_t *c_bvec);
@@ -1374,7 +1393,7 @@ static void castle_btree_node_save(struct work_struct *work)
     c_disk_blk_t prev_cdb;
     c2_block_t *c2b;
 
-    down(&ct->mutex);
+    down_write(&ct->lock);
     btree = castle_btree_type_get(ct->btree_type);
 
     if (unlikely(!atomic64_read(&ct->node_count))) 
@@ -1401,7 +1420,7 @@ static void castle_btree_node_save(struct work_struct *work)
     }
     ct->last_node = work_st->cdb;
     atomic64_inc(&ct->node_count);
-    up(&ct->mutex);
+    up_write(&ct->lock);
 
     kfree(work_st);
 }
@@ -1591,7 +1610,7 @@ static void castle_btree_slot_insert(c2_block_t  *c2b,
         debug("Inserting (0x%x, 0x%x) under index=%d\n", cvt.cdb.disk,
               cvt.cdb.block, index);
     else 
-        debug("Inserting a inline value under index=%d\n", index);
+        debug("Inserting an inline value under index=%d\n", index);
 
     if(index < node->used)
         btree->entry_get(node, index, &lub_key, &lub_version, &lub_is_leaf_ptr, NULL);
@@ -1689,14 +1708,14 @@ static void castle_btree_new_root_create(c_bvec_t *c_bvec, btree_t type)
     /* Create the node */
     c2b = castle_btree_node_create(0, 0, type, c_bvec->tree);
     node = c2b_buffer(c2b);
-    /* TODO: locking for root_node */
+    /* We should be under write lock here, check if we can read lock it (and BUG) */
+    BUG_ON(down_read_trylock(&c_bvec->tree->lock));
     c_bvec->tree->root_node = c2b->cdb;
     /* If all succeeded save the new node as the parent in bvec */
     c_bvec->btree_parent_node = c2b;
     /* Release the version lock (c2b_forget will no longer do that, 
        because there will be a parent node). */
-    castle_version_unlock(c_bvec->version);
-    clear_bit(CBV_ROOT_LOCKED_BIT, &c_bvec->flags);
+    castle_btree_ct_unlock(c_bvec);
 }
 
 static int castle_btree_node_split(c_bvec_t *c_bvec)
@@ -2049,23 +2068,16 @@ void castle_btree_process(struct work_struct *work)
 }
 
 
-/* TODO move locking of c2bs here?. Possibly rename the function */
-static int castle_btree_c2b_remember(c_bvec_t *c_bvec, c2_block_t *c2b)
+static void castle_btree_c2b_remember(c_bvec_t *c_bvec, c2_block_t *c2b)
 {
-    int ret = 0;
-
     /* Forget the parent node buffer first */
     castle_btree_c2b_forget(c_bvec);
 
     /* Save the new node buffer */
     BUG_ON(!c2b_locked(c2b));
     c_bvec->btree_node = c2b;
-
-    return ret; 
 }
 
-/* TODO check that the root node lock will be released correctly, even on 
-   node splits! */
 static void castle_btree_c2b_forget(c_bvec_t *c_bvec)
 {
     int write = (c_bvec_data_dir(c_bvec) == WRITE);
@@ -2081,14 +2093,11 @@ static void castle_btree_c2b_forget(c_bvec_t *c_bvec)
         unlock_c2b(c2b_to_forget);
         put_c2b(c2b_to_forget);
     }
-    /* Also, release the version lock.
+    /* Also, release the component tree lock.
        On reads release as soon as possible. On writes make sure that we've got
        btree_node c2b locked. */
     if(test_bit(CBV_ROOT_LOCKED_BIT, &c_bvec->flags) && (!write || c_bvec->btree_node))
-    {
-        castle_version_unlock(c_bvec->version); 
-        clear_bit(CBV_ROOT_LOCKED_BIT, &c_bvec->flags);
-    }
+        castle_btree_ct_unlock(c_bvec); 
     /* Promote node to the parent on writes */
     if(write) c_bvec->btree_parent_node = c_bvec->btree_node;
     /* Forget */
@@ -2107,12 +2116,12 @@ static void castle_btree_find_io_end(c2_block_t *c2b, int uptodate)
             c_bvec->key, c_bvec->version);
     
     /* Callback on error */
-    if(!uptodate || castle_btree_c2b_remember(c_bvec, c2b))
+    if(!uptodate) 
     {
         castle_btree_io_end(c_bvec, INVAL_VAL_TUP, -EIO);
         return;
     }
-
+    castle_btree_c2b_remember(c_bvec, c2b);
 #ifdef CASTLE_DEBUG    
     node = c_bvec_bnode(c_bvec);
     btree = castle_btree_type_get(node->type);
@@ -2169,7 +2178,7 @@ static void __castle_btree_find(struct castle_btree_type *btree,
            function directly. c2b_remember should not return an error, because
            the Btree node had been normalized already. */
         castle_debug_bvec_update(c_bvec, C_BVEC_BTREE_NODE_UPTODATE);
-        BUG_ON(castle_btree_c2b_remember(c_bvec, c2b) != 0);
+        castle_btree_c2b_remember(c_bvec, c2b);
         castle_btree_process(&c_bvec->work);
     }
 }
@@ -2183,15 +2192,9 @@ static void _castle_btree_find(struct work_struct *work)
     c_bvec->btree_depth       = 0;
     c_bvec->btree_node        = NULL;
     c_bvec->btree_parent_node = NULL;
-    /* This will lock the version. */
+    /* This will lock the component tree. */
     root_cdb = castle_btree_root_get(c_bvec);
-    if(DISK_BLK_INVAL(root_cdb))
-    {
-        /* Complete the request early, end exit */
-        c_bvec->endfind(c_bvec, -EINVAL, INVAL_VAL_TUP);
-        return;
-    }
-    set_bit(CBV_ROOT_LOCKED_BIT, &c_bvec->flags);
+    BUG_ON(DISK_BLK_INVAL(root_cdb));
     castle_debug_bvec_update(c_bvec, C_BVEC_VERSION_FOUND);
     __castle_btree_find(btree, c_bvec, root_cdb, btree->max_key);
 }
@@ -2871,9 +2874,8 @@ static void castle_btree_iter_path_traverse(c_iter_t *c_iter, c_disk_blk_t node_
     if(c_iter->depth == 0)
     {
         /* We have just started the iteration - lets unlock the version tree */
-        iter_debug("Unlocking version tree.\n");
-        if(!VERSION_INVAL(c_iter->version))
-            castle_version_unlock(c_iter->version);
+        iter_debug("Unlocking component tree.\n");
+        up_read(&c_iter->tree->lock);
     }
     /* Unlock previous c2b */
     if((c_iter->depth > 0) && (c_iter->path[c_iter->depth - 1] != NULL))
@@ -2932,14 +2934,12 @@ static void __castle_btree_iter_start(c_iter_t *c_iter)
     
     iter_debug("Locking version tree for version: %d\n", c_iter->version);
     
-    if(!VERSION_INVAL(c_iter->version))
-        castle_version_lock(c_iter->version);
+    down_read(&c_iter->tree->lock);
     root_cdb = c_iter->tree->root_node;
     if(DISK_BLK_INVAL(root_cdb))
     {
         iter_debug("Warning: Invalid disk block for the root.\n");
-        if(!VERSION_INVAL(c_iter->version))
-            castle_version_unlock(c_iter->version);
+        up_read(&c_iter->tree->lock);
         /* Complete the request early, end exit */
         castle_btree_iter_end(c_iter, -EINVAL);
         return;
@@ -3082,9 +3082,8 @@ static void castle_enum_iter_each(c_iter_t *c_iter,
 
     btree = castle_btree_type_get(c_enum->buffer->type);
     BUG_ON(c_enum->prod_idx != c_enum->buffer->used);
-    if (CVT_ONDISK(cvt))
-        enum_debug("Entry for iterator idx=%d: idx=%d, key=%p, version=%d, cdb=(0x%x, 0x%x)\n", 
-                    idx, index, key, version, cvt.cdb.disk, cvt.cdb.block);
+    enum_debug("Entry for iterator: idx=%d, key=%p, version=%d\n", 
+               index, key, version);
     btree->entry_add(c_enum->buffer, c_enum->prod_idx, key, version, 0, cvt);
     c_enum->prod_idx++;
 }
@@ -3094,7 +3093,7 @@ static void castle_enum_iter_node_end(c_iter_t *c_iter)
     struct castle_enumerator *c_enum = c_iter->private;
 
     BUG_ON(c_enum->cons_idx != 0);
-    enum_debug("Ending node for iterator idx=%d, nr_entries=%d.\n", idx, c_enum->prod_idx);
+    enum_debug("Ending node for iterator, nr_entries=%d.\n", c_enum->prod_idx);
     /* Special case, if nothing was read (it's possible if e.g. all entries are leaf ptrs)
        schedule the next node read, and exit early */
     if(c_enum->prod_idx == 0)
@@ -3161,8 +3160,7 @@ static inline void castle_btree_enum_iterator_wait(c_enum_t *c_enum)
 
 void castle_btree_enum_cancel(c_enum_t *c_enum)
 {
-    enum_debug("Cancelling the enumerator, currently live iters: %d\n", 
-            atomic_read(&c_enum->live_iterators));
+    enum_debug("Cancelling the enumerator\n");
     /* Make sure that there are no outstanding iterations going on */
     castle_btree_enum_iterator_wait(c_enum);
     /* Cancel the iterator */

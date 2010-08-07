@@ -1749,7 +1749,7 @@ static da_id_t castle_da_ct_unmarshall(struct castle_component_tree *ct,
     ct->root_node   = ctm->root_node;
     ct->first_node  = ctm->first_node;
     ct->last_node   = ctm->last_node;
-    init_MUTEX(&ct->mutex);
+    init_rwsem(&ct->lock);
     atomic64_set(&ct->node_count, ctm->node_count);
     ct->mstore_key  = key;
     INIT_LIST_HEAD(&ct->da_list);
@@ -1978,7 +1978,7 @@ static struct castle_component_tree* castle_ct_alloc(struct castle_double_array 
     ct->root_node   = INVAL_DISK_BLK;
     ct->first_node  = INVAL_DISK_BLK;
     ct->last_node   = INVAL_DISK_BLK;
-    init_MUTEX(&ct->mutex);
+    init_rwsem(&ct->lock);
     atomic64_set(&ct->node_count, 0); 
     INIT_LIST_HEAD(&ct->da_list);
     INIT_LIST_HEAD(&ct->hash_list);

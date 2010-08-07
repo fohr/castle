@@ -207,7 +207,7 @@ int castle_fs_init(void)
         castle_fs_superblocks_init();
         /* Init the root btree node */
         atomic64_set(&(castle_global_tree.node_count), 0);
-        init_MUTEX(&(castle_global_tree.mutex));
+        init_rwsem(&castle_global_tree.lock);
         c2b = castle_btree_node_create(0 /* version */, 1 /* is_leaf */, MTREE_TYPE,
                                        &castle_global_tree);
         /* Save the root node in the global tree */

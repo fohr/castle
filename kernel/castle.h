@@ -268,22 +268,21 @@ struct castle_btree_type {
 };
 
 struct castle_component_tree {
-    tree_seq_t       seq;
-    atomic_t         ref_count;
-    atomic64_t       item_count;
-    btree_t          btree_type;
-    uint8_t          dynamic;           /* 1 - dynamic modlist btree, 0 - merge result */ 
-    da_id_t          da;
-    uint8_t          level;
-    c_disk_blk_t     root_node;         /* Only for non-dynamic trees at the moment    */
-    c_disk_blk_t     first_node;
-    c_disk_blk_t     last_node;
-    struct semaphore mutex;             /* Mutex which protects the last_node          */
-    atomic64_t       node_count;
-    struct list_head da_list;
-    struct list_head hash_list;
-    c_mstore_key_t   mstore_key;
-    int              tmp_dbg;
+    tree_seq_t          seq;
+    atomic_t            ref_count;
+    atomic64_t          item_count;
+    btree_t             btree_type;
+    uint8_t             dynamic;           /* 1 - dynamic modlist btree, 0 - merge result */ 
+    da_id_t             da;
+    uint8_t             level;
+    struct rw_semaphore lock;              /* Protects root_node & last_node              */
+    c_disk_blk_t        root_node;
+    c_disk_blk_t        first_node;
+    c_disk_blk_t        last_node;
+    atomic64_t          node_count;
+    struct list_head    da_list;
+    struct list_head    hash_list;
+    c_mstore_key_t      mstore_key;
 };
 extern struct castle_component_tree castle_global_tree;
 
