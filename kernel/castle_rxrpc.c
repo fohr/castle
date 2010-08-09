@@ -608,16 +608,13 @@ static void castle_rxrpc_msg_send(struct castle_rxrpc_call *call, struct msghdr 
         castle_rxrpc_state_update(call, RXRPC_CALL_AWAIT_ACK);
     n = rxrpc_kernel_send_data(call->rxcall, msg, len);
     debug("Sent %d bytes.\n", n);
-    if (n < 0)
-    {
-        rxrpc_kernel_abort_call(call->rxcall, RX_USER_ABORT);
-        return;
-    }
-    if(n != len)
+    if (n != len)
     {
         printk("Failed to send the reply, wanted to send %ld bytes, sent %d bytes.\n",
                 len, n);
-        BUG();
+        rxrpc_kernel_abort_call(call->rxcall, RX_USER_ABORT);
+        castle_rxrpc_state_update(call, RXRPC_CALL_ERROR);
+        return;
     }
     if (n >= 0) 
         return;
