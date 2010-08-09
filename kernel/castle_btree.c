@@ -885,6 +885,7 @@ static void castle_vlba_tree_entry_get(struct castle_btree_node *node,
     }
 }
 
+static void castle_vlba_tree_node_validate(struct castle_btree_node *node);
 static void castle_vlba_tree_entry_add(struct castle_btree_node *node,
                                        int                       idx,
                                        void                     *key_v,            
@@ -900,6 +901,7 @@ static void castle_vlba_tree_entry_add(struct castle_btree_node *node,
     /* entry header + key length + an entry in index table */
     uint32_t req_space = sizeof(struct castle_vlba_tree_entry) + key_length +
                          CVT_INLINE_VAL_LENGTH(cvt) + sizeof(uint32_t);
+    int mem_alloc = 0;
 
     BUG_ON(idx < 0 || idx > node->used);
 
@@ -918,7 +920,29 @@ static void castle_vlba_tree_entry_add(struct castle_btree_node *node,
     BUG_ON(!node->is_leaf && is_leaf_ptr);
 
     if(vlba_node->free_bytes < req_space) 
+    {
+        if (((uint8_t *)key <= EOF_VLBA_NODE(node)) && 
+            (((uint8_t *)key + key_length + sizeof(vlba_key_t)) >= (uint8_t *)node)) 
+        {
+            vlba_key_t *tmp_key;
+            uint8_t *tmp_val;
+
+            tmp_key = kmalloc(key_length + sizeof(vlba_key_t), GFP_NOIO);
+            BUG_ON(!tmp_key);
+            memcpy(tmp_key, key, key_length + sizeof(vlba_key_t));
+            key = tmp_key;
+            mem_alloc++;
+            if (CVT_INLINE(cvt))
+            {
+                tmp_val = kmalloc(cvt.length, GFP_NOIO);
+                BUG_ON(!tmp_val);
+                memcpy(tmp_val, cvt.val, cvt.length);
+                cvt.val = tmp_val;
+                mem_alloc++;
+            }
+        }
         castle_vlba_tree_node_compact(node);
+    }
 
     BUG_ON(vlba_node->free_bytes < req_space);
 
@@ -943,10 +967,18 @@ static void castle_vlba_tree_entry_add(struct castle_btree_node *node,
     if (VLBA_TREE_ENTRY_IS_INLINE(entry))
     {
         BUG_ON(entry->val_len == 0 || entry->val_len > MAX_INLINE_VAL_SIZE);
+        BUG_ON(VLBA_ENTRY_VAL_PTR(entry)+cvt.length > EOF_VLBA_NODE(node));
         memmove(VLBA_ENTRY_VAL_PTR(entry), cvt.val, cvt.length);
     }
     else 
         entry->cdb      = cvt.cdb;
+
+    if (mem_alloc)
+    {
+        kfree(key);
+        if (mem_alloc == 2)
+            kfree(cvt.val);
+    }
 
     /* Increment the node used count */
     node->used++;
