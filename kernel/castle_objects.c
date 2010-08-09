@@ -19,14 +19,14 @@
    
 static const uint32_t OBJ_TOMBSTONE = ((uint32_t)-1);
 
-#define KEY_DIMENSION_NEXT_FLAG             (1 << 0)                                              
-#define KEY_DIMENSION_MINUS_INFINITY_FLAG   (1 << 1)                                              
-#define KEY_DIMENSION_UNUSED2_FLAG          (1 << 2)                                              
-#define KEY_DIMENSION_UNUSED3_FLAG          (1 << 3)                                              
-#define KEY_DIMENSION_UNUSED4_FLAG          (1 << 4)                                              
-#define KEY_DIMENSION_UNUSED5_FLAG          (1 << 5)                                              
-#define KEY_DIMENSION_UNUSED6_FLAG          (1 << 6)                                              
-#define KEY_DIMENSION_UNUSED7_FLAG          (1 << 7)                                              
+#define KEY_DIMENSION_NEXT_FLAG             (1 << 0)
+#define KEY_DIMENSION_MINUS_INFINITY_FLAG   (1 << 1)
+#define KEY_DIMENSION_PLUS_INFINITY_FLAG    (1 << 2)
+#define KEY_DIMENSION_UNUSED3_FLAG          (1 << 3)
+#define KEY_DIMENSION_UNUSED4_FLAG          (1 << 4)
+#define KEY_DIMENSION_UNUSED5_FLAG          (1 << 5)
+#define KEY_DIMENSION_UNUSED6_FLAG          (1 << 6)
+#define KEY_DIMENSION_UNUSED7_FLAG          (1 << 7)
 #define KEY_DIMENSION_FLAGS_SHIFT           (8)
 #define KEY_DIMENSION_FLAGS_MASK           ((1 << KEY_DIMENSION_FLAGS_SHIFT) - 1) 
 #define KEY_DIMENSION_FLAGS(_dim_head)      ((_dim_head) &  KEY_DIMENSION_FLAGS_MASK)
@@ -64,6 +64,7 @@ static c_vl_bkey_t* castle_object_btree_key_construct(c_vl_bkey_t *src_bkey,
     uint32_t key_len, first_okey_offset, payload_offset;
     int i, nr_dims;
     c_vl_bkey_t *btree_key;
+    int plus_infinity = 0;
 
     /* Sanity checks */
     BUG_ON(!src_okey);
@@ -73,6 +74,16 @@ static c_vl_bkey_t* castle_object_btree_key_construct(c_vl_bkey_t *src_bkey,
     BUG_ON(okey_first_dim >= src_okey->nr_dims);
 
     nr_dims = src_okey->nr_dims;
+
+    for (i=okey_first_dim; i<nr_dims; i++)
+    {
+        if (src_okey->dims[i]->length == PLUS_INFINITY_DIM_LENGTH)
+        {
+            plus_infinity = 1;
+            src_okey->dims[i]->length = 0;
+            break;
+        }
+    }
     /* Work the length of the btree key. okey_first_dim > 0, work out how much space the
        dimensions < okey_first_dim take up first. */ 
     if(okey_first_dim > 0)
@@ -113,7 +124,26 @@ static c_vl_bkey_t* castle_object_btree_key_construct(c_vl_bkey_t *src_bkey,
     /* Go through all okey dimensions and write them in. */ 
     for(i=okey_first_dim; i<nr_dims; i++)
     {
-        btree_key->dim_head[i] = KEY_DIMENSION_HEADER(payload_offset, 0);
+        BUG_ON(src_okey->dims[i]->length == PLUS_INFINITY_DIM_LENGTH);
+        if (src_okey->dims[i]->length == 0)
+        {
+            if (!plus_infinity)
+            {
+                btree_key->dim_head[i] = KEY_DIMENSION_HEADER(payload_offset,
+                                           KEY_DIMENSION_MINUS_INFINITY_FLAG);
+                BUG_ON(!(castle_object_btree_key_dim_flags_get(btree_key, i) & 
+                        KEY_DIMENSION_MINUS_INFINITY_FLAG));
+            }
+            else
+            {
+                btree_key->dim_head[i] = KEY_DIMENSION_HEADER(payload_offset,
+                                           KEY_DIMENSION_PLUS_INFINITY_FLAG);
+                BUG_ON(!(castle_object_btree_key_dim_flags_get(btree_key, i) & 
+                        KEY_DIMENSION_PLUS_INFINITY_FLAG));
+            }
+        }
+        else
+            btree_key->dim_head[i] = KEY_DIMENSION_HEADER(payload_offset, 0);
         memcpy((char *)btree_key + payload_offset, src_okey->dims[i]->key, src_okey->dims[i]->length);
         payload_offset += src_okey->dims[i]->length;
     }
@@ -143,6 +173,11 @@ c_vl_okey_t* castle_object_btree_key_convert(c_vl_bkey_t *btree_key)
     for(i=0; i<btree_key->nr_dims; i++)
     {
         dim_len = castle_object_btree_key_dim_length(btree_key, i);
+        BUG_ON((dim_len == 0) &&
+               !(castle_object_btree_key_dim_flags_get(btree_key, i) &
+                KEY_DIMENSION_MINUS_INFINITY_FLAG) &&
+               !(castle_object_btree_key_dim_flags_get(btree_key, i) &
+                KEY_DIMENSION_PLUS_INFINITY_FLAG));
         dim = kmalloc(dim_len + 4, GFP_KERNEL);
         if(!dim)
             goto err_out;
@@ -170,7 +205,22 @@ static inline int castle_object_key_dim_compare(char *dim_a, uint32_t dim_a_len,
     cmp = memcmp(dim_a, dim_b, ((dim_a_len > dim_b_len) ? dim_b_len : dim_a_len));
     if(cmp)
         return cmp;
+
+    BUG_ON(dim_a_len == PLUS_INFINITY_DIM_LENGTH || 
+           dim_b_len == PLUS_INFINITY_DIM_LENGTH);
+    BUG_ON((dim_a_len == 0) && 
+           !(dim_a_flags & KEY_DIMENSION_MINUS_INFINITY_FLAG) &&
+           !(dim_a_flags & KEY_DIMENSION_PLUS_INFINITY_FLAG));
+    BUG_ON((dim_b_len == 0) && 
+           !(dim_b_flags & KEY_DIMENSION_MINUS_INFINITY_FLAG) &&
+           !(dim_b_flags & KEY_DIMENSION_PLUS_INFINITY_FLAG));
     /* If the common part of the keys the same, check which one is shorter */
+    dim_a_len = (dim_a_flags & KEY_DIMENSION_PLUS_INFINITY_FLAG)?
+                 PLUS_INFINITY_DIM_LENGTH:
+                 dim_a_len;
+    dim_b_len = (dim_b_flags & KEY_DIMENSION_PLUS_INFINITY_FLAG)?
+                 PLUS_INFINITY_DIM_LENGTH:
+                 dim_b_len;
     if(dim_a_len != dim_b_len)
         return (dim_a_len > dim_b_len) ? 1 : -1;
 
@@ -263,7 +313,8 @@ static int castle_object_btree_key_bounds_check(c_vl_bkey_t *key,
     /* Go through each dimension checking if they are within bounds */
     for(dim=0; dim<key->nr_dims; dim++)
     {
-        uint32_t key_dim_len, key_dim_flags, start_dim_len, end_dim_len;
+        uint32_t key_dim_len, key_dim_flags, start_dim_len, start_dim_flags;
+        uint32_t end_dim_len, end_dim_flags;
         char *key_dim, *start_dim, *end_dim;
         int cmp;
 
@@ -273,16 +324,20 @@ static int castle_object_btree_key_bounds_check(c_vl_bkey_t *key,
 
         start_dim_len = start->dims[dim]->length;
         start_dim     = start->dims[dim]->key;
+        start_dim_flags = ((start_dim_len == 0)?
+                           KEY_DIMENSION_MINUS_INFINITY_FLAG:0);
 
         end_dim_len   = end->dims[dim]->length;
         end_dim       = end->dims[dim]->key;
+        end_dim_flags = ((end_dim_len == 0)?
+                         KEY_DIMENSION_PLUS_INFINITY_FLAG:0);
 
         cmp = castle_object_key_dim_compare(key_dim, 
                                             key_dim_len,
                                             key_dim_flags,
                                             start_dim,
                                             start_dim_len,
-                                            0);
+                                            start_dim_flags);
         /* We expect the key to be >= than the start key. Therefore, exit when it is not. */
         if(cmp < 0)
         {
@@ -295,7 +350,7 @@ static int castle_object_btree_key_bounds_check(c_vl_bkey_t *key,
                                             key_dim_flags,
                                             end_dim,
                                             end_dim_len,
-                                            0);
+                                            end_dim_flags);
         /* We expect the key to be <= than the end key. */ 
         if(cmp > 0)
         {
@@ -762,10 +817,14 @@ int castle_object_replace(struct castle_rxrpc_call *call,
     c_vl_bkey_t *btree_key;
     c_bvec_t *c_bvec;
     c_bio_t *c_bio;
+    int i;
 
+    for (i=0; i<key->nr_dims; i++)
+        BUG_ON(key->dims[i]->length == 0);
+    
     btree_key = castle_object_key_convert(key);
     castle_object_key_free(key);
-    
+   
     //printk(" value          : %s\n", tombstone ? "tombstone" : "object");
     //printk("Btree key is:");
     //vl_key_print(btree_key);
@@ -801,10 +860,9 @@ int castle_object_slice_get(struct castle_rxrpc_call *call,
                             c_vl_okey_t *end_key)
 {
     c_obj_rq_iter_t *iterator;
-    int dim;
     char *rsp_buffer;
     uint32_t rsp_buffer_offset;
-    int nr_vals;
+    int nr_vals, i;
 #define SLICE_RSP_BUFFER_LEN    (C_BLK_SIZE * 256)  /* 1MB buffer */
 
     if(start_key->nr_dims != end_key->nr_dims)
@@ -812,12 +870,16 @@ int castle_object_slice_get(struct castle_rxrpc_call *call,
         printk("Range query with different # of dimensions.\n");
         return -EINVAL;
     }
-
-    /* Cannot handle infinities just yet */
-    for(dim=0; dim<start_key->nr_dims; dim++)
+    /* Mark the key that this is end key. To notify this is infinity and +ve.
+     * Assuming that end_key will not used anywhere before converting into
+     * btree_key. */
+    for (i=0; i<end_key->nr_dims; i++)
     {
-        BUG_ON(start_key->dims[dim]->length == 0);
-        BUG_ON(end_key->dims[dim]->length == 0);
+        if (end_key->dims[i]->length == 0)
+        {
+            end_key->dims[i]->length = PLUS_INFINITY_DIM_LENGTH;
+            break;
+        }
     }
 
     rsp_buffer = vmalloc(SLICE_RSP_BUFFER_LEN); 

@@ -200,6 +200,8 @@ struct castle_btree_node {
 
 #define BTREE_NODE_PAYLOAD(_node)   ((void *)&(_node)->payload)
 
+#define PLUS_INFINITY_DIM_LENGTH 0xFFFFFFFF
+
 /* Variable length key, for example used by the btree */
 typedef struct castle_var_length_key {
     uint32_t length;

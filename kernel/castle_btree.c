@@ -2933,6 +2933,8 @@ static void __castle_btree_iter_start(c_iter_t *c_iter)
     if ((c_iter->depth == 0) || 
        ((c_iter->type == C_ITER_MATCHING_VERSIONS) && 
             (btree->key_compare(c_iter->next_key, btree->inv_key) == 0)) ||
+       ((c_iter->type == C_ITER_ANCESTRAL_VERSIONS) && 
+            (btree->key_compare(c_iter->next_key, btree->inv_key) == 0)) ||
         (c_iter->cancelled))
     {
         castle_btree_iter_end(c_iter, c_iter->err);
