@@ -843,6 +843,7 @@ int castle_object_replace(struct castle_rxrpc_call *call,
     
     c_bvec = c_bio->c_bvecs; 
     c_bvec->key        = btree_key; 
+    c_bvec->flags      = 0;
     c_bvec->cvt_get    = castle_object_replace_cvt_get;
     c_bvec->endfind    = castle_object_replace_complete;
     c_bvec->da_endfind = NULL; 

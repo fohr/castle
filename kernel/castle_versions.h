@@ -11,19 +11,8 @@ int          castle_version_read        (version_t version,
                                          uint32_t *size,
                                          int *leaf);
 da_id_t      castle_version_da_id_get   (version_t version);
-c_disk_blk_t castle_version_root_get    (version_t version,
-                                         tree_seq_t tree);
-void         castle_version_root_next   (tree_seq_t tree,
-                                         version_t *next_version,
-                                         c_disk_blk_t *btree_root);
-int          castle_version_root_update (version_t version, 
-                                         tree_seq_t tree_id, 
-                                         c_disk_blk_t cdb);
-void         castle_version_roots_delete(tree_seq_t tree_id);
-void         castle_version_lock        (version_t version);
-void         castle_version_unlock      (version_t version);
 
-int          castle_versions_zero_init  (c_disk_blk_t ftree_root);
+int          castle_versions_zero_init  (void);
 version_t    castle_version_new         (int snap_or_clone, 
                                          version_t parent, 
                                          da_id_t da, 

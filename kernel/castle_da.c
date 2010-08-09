@@ -1302,7 +1302,6 @@ fill_buffers:
 static struct castle_component_tree* castle_da_merge_package(struct castle_da_merge *merge)
 {
     struct castle_component_tree *out_tree;
-    int ret;
 
     out_tree = castle_ct_alloc(merge->da, 0 /* not-dynamic */, merge->in_tree1->level + 1);
     if(!out_tree)
@@ -1315,16 +1314,6 @@ static struct castle_component_tree* castle_da_merge_package(struct castle_da_me
     out_tree->last_node = INVAL_DISK_BLK;
     debug("Root for that tree is: (0x%x, 0x%x)\n", 
             out_tree->root_node.disk, out_tree->root_node.block);
-    castle_version_lock(merge->da->root_version);
-    ret = castle_version_root_update(merge->da->root_version, out_tree->seq, out_tree->root_node);
-    castle_version_unlock(merge->da->root_version);
-    if(ret)
-    {
-        /* TODO: free up the nodes! */
-        printk("Failed to update the root for newly ct=%d\n", out_tree->seq);
-        kfree(out_tree);
-        return NULL;
-    }
     /* Write counts out */
     atomic_set(&out_tree->ref_count, 1);
     atomic64_set(&out_tree->item_count, merge->nr_entries);
@@ -1691,8 +1680,6 @@ static inline void castle_ct_put(struct castle_component_tree *ct)
 
     /* Destroy the component tree */
     BUG_ON(TREE_GLOBAL(ct->seq) || TREE_INVAL(ct->seq));
-    castle_version_roots_delete(ct->seq);
-    BUG_ON(!list_empty(&ct->roots_list));
     castle_ct_hash_remove(ct);
     /* TODO: FREE */
     printk("Should release freespace occupied by ct=%d\n", ct->seq);
@@ -1762,11 +1749,10 @@ static da_id_t castle_da_ct_unmarshall(struct castle_component_tree *ct,
     ct->root_node   = ctm->root_node;
     ct->first_node  = ctm->first_node;
     ct->last_node   = ctm->last_node;
-    init_MUTEX(&ct->mutex);
+    init_rwsem(&ct->lock);
     atomic64_set(&ct->node_count, ctm->node_count);
     ct->mstore_key  = key;
     INIT_LIST_HEAD(&ct->da_list);
-    INIT_LIST_HEAD(&ct->roots_list);
 
     return ctm->da_id;
 }
@@ -1992,11 +1978,10 @@ static struct castle_component_tree* castle_ct_alloc(struct castle_double_array 
     ct->root_node   = INVAL_DISK_BLK;
     ct->first_node  = INVAL_DISK_BLK;
     ct->last_node   = INVAL_DISK_BLK;
-    init_MUTEX(&ct->mutex);
+    init_rwsem(&ct->lock);
     atomic64_set(&ct->node_count, 0); 
     INIT_LIST_HEAD(&ct->da_list);
     INIT_LIST_HEAD(&ct->hash_list);
-    INIT_LIST_HEAD(&ct->roots_list);
     castle_ct_hash_add(ct);
     ct->mstore_key  = INVAL_MSTORE_KEY; 
 
@@ -2009,28 +1994,15 @@ static int castle_da_rwct_make(struct castle_double_array *da)
 {
     struct castle_component_tree *ct, *old_ct;
     c2_block_t *c2b;
-    int ret;
-    c_disk_blk_t cdb;
 
     ct = castle_ct_alloc(da, 1 /* dynamic tree */, 0 /* level */);
     if(!ct)
         return -ENOMEM;
     /* Create a root node for this tree, and update the root version */
-    c2b = castle_btree_node_create(da->root_version, 1 /* is_leaf */, VLBA_TREE_TYPE, ct);
-    cdb = c2b->cdb;
+    c2b = castle_btree_node_create(0, 1 /* is_leaf */, VLBA_TREE_TYPE, ct);
+    ct->root_node = c2b->cdb;
     unlock_c2b(c2b);
     put_c2b(c2b);
-    castle_version_lock(da->root_version);
-    ret = castle_version_root_update(da->root_version, ct->seq, cdb);
-    castle_version_unlock(da->root_version);
-    if(ret)
-    {
-        /* TODO: free the block */
-        printk("Could not write root node for version: %d\n", da->root_version);
-        castle_ct_hash_remove(ct);
-        kfree(ct);
-        return ret;
-    }
     debug("Added component tree seq=%d, root_node=(0x%x, 0x%x), it's threaded onto da=%p, level=%d\n",
             ct->seq, c2b->cdb.disk, c2b->cdb.block, da, ct->level);
     /* Move the last rwct (if one exists) to level 1 */
@@ -2196,7 +2168,6 @@ int castle_double_array_create(void)
         return -ENOMEM;
 
     /* Make sure that the global tree is in the ct hash */
-    INIT_LIST_HEAD(&castle_global_tree.roots_list);
     castle_ct_hash_add(&castle_global_tree);
 
     return 0;

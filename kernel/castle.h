@@ -168,7 +168,6 @@ typedef struct castle_mstore_iter {
 enum {
     MSTORE_VERSIONS_ID,
     MSTORE_BLOCK_CNTS,
-    MSTORE_ROOTS,
     MSTORE_DOUBLE_ARRAYS,
     MSTORE_COMPONENT_TREES,
 }; 
@@ -271,23 +270,21 @@ struct castle_btree_type {
 };
 
 struct castle_component_tree {
-    tree_seq_t       seq;
-    atomic_t         ref_count;
-    atomic64_t       item_count;
-    btree_t          btree_type;
-    uint8_t          dynamic;           /* 1 - dynamic modlist btree, 0 - merge result */ 
-    da_id_t          da;
-    uint8_t          level;
-    c_disk_blk_t     root_node;         /* Only for non-dynamic trees at the moment    */
-    c_disk_blk_t     first_node;
-    c_disk_blk_t     last_node;
-    struct semaphore mutex;             /* Mutex which protects the last_node          */
-    atomic64_t       node_count;
-    struct list_head da_list;
-    struct list_head hash_list;
-    struct list_head roots_list;
-    c_mstore_key_t   mstore_key;
-    int              tmp_dbg;
+    tree_seq_t          seq;
+    atomic_t            ref_count;
+    atomic64_t          item_count;
+    btree_t             btree_type;
+    uint8_t             dynamic;           /* 1 - dynamic modlist btree, 0 - merge result */ 
+    da_id_t             da;
+    uint8_t             level;
+    struct rw_semaphore lock;              /* Protects root_node & last_node              */
+    c_disk_blk_t        root_node;
+    c_disk_blk_t        first_node;
+    c_disk_blk_t        last_node;
+    atomic64_t          node_count;
+    struct list_head    da_list;
+    struct list_head    hash_list;
+    c_mstore_key_t      mstore_key;
 };
 extern struct castle_component_tree castle_global_tree;
 
@@ -307,12 +304,6 @@ struct castle_clist_entry {
     c_disk_blk_t first_node;
     c_disk_blk_t last_node;
     uint64_t     node_count;
-} PACKED;
-
-struct castle_rlist_entry {
-    version_t    version;
-    tree_seq_t   tree_seq;
-    c_disk_blk_t cdb;
 } PACKED;
 
 struct castle_vlist_entry {
@@ -498,11 +489,19 @@ typedef struct castle_iterator {
 typedef struct castle_enumerator {
     struct castle_component_tree *tree;
     int                           err;
-    version_t                     nr_iters;
-    struct castle_iterator       *iterators; 
-    wait_queue_head_t             iterators_wq;
-    atomic_t                      outs_iterators;
-    atomic_t                      live_iterators;
+    struct castle_iterator        iterator; 
+    wait_queue_head_t             iterator_wq;
+    volatile int                  iterator_outs;
+    int                           iter_completed;
+    /* Variables used to buffer up entries from the iterator */
+    int                           prod_idx;
+    int                           cons_idx;
+    struct castle_btree_node     *buffer;       /* Two buffers are actually allocated (buffer1/2) */
+    struct castle_btree_node     *buffer1;      /* buffer points to the one currently used to     */
+    struct castle_btree_node     *buffer2;      /* read in a node, second is used to preserve     */
+                                                /* key pointer validity. TODO: fix, waseful.      */
+
+    /* Set to decide whether to visit nodes, implemented as hash table */
     struct {
         spinlock_t                visited_lock;
         struct list_head         *visited_hash;
@@ -513,17 +512,6 @@ typedef struct castle_enumerator {
             struct list_head      list;
         } *visited;
     };
-    struct castle_iterator_buffer {
-        int                       iter_completed;
-        int                       prod_idx;
-        int                       cons_idx;
-        struct castle_btree_node *buffer;       /* Two buffers are actually allocated (buffer1/2) */
-        struct castle_btree_node *buffer1;      /* buffer points to the one currently used to     */
-        struct castle_btree_node *buffer2;      /* read in a node, second is used to preserve     */
-    } *buffers;                                 /* key pointer validity. TODO: fix, waseful.      */
-
-    int                           curr_iter;    /* Iterator we are enumerating from at the moment */
-    int                           max_key_iter; /* Which iterator is the max_key taken from       */
 } c_enum_t; 
 
 /* Enumerates latest version value for all entries */
