@@ -637,6 +637,7 @@ struct castle_vlba_tree_node {
                  VLBA_TREE_MAX_KEY_SIZE +                                   \
                  MAX_INLINE_VAL_SIZE +                                      \
                  sizeof(uint32_t))
+
 #define VLBA_ENTRY_PTR(__node, _vlba_node, _i)                              \
                 (EOF_VLBA_NODE(__node) - _vlba_node->key_idx[_i])
 #define VLBA_ENTRY_VAL_PTR(_entry)                                          \
@@ -997,7 +998,8 @@ static void castle_vlba_tree_entry_replace(struct castle_btree_node *node,
     BUG_ON(!node->is_leaf && is_leaf_ptr);
     BUG_ON(((uint8_t *)entry) >= EOF_VLBA_NODE(node));
 
-    if (VLBA_KEY_LENGTH(&entry->key) >= VLBA_KEY_LENGTH(key)) 
+#if 0
+    if (VLBA_KEY_LENGTH(&entry->key)  >= VLBA_KEY_LENGTH(key)) 
     {
         vlba_node->dead_bytes += VLBA_KEY_LENGTH(&entry->key) - VLBA_KEY_LENGTH(key);
 
@@ -1020,9 +1022,12 @@ static void castle_vlba_tree_entry_replace(struct castle_btree_node *node,
     } 
     else 
     {
+#endif
         castle_vlba_tree_entries_drop(node, idx, idx);
         castle_vlba_tree_entry_add(node, idx, key, version, is_leaf_ptr, cvt);
+#if 0
     }
+#endif
 }   
 
 #ifdef CASTLE_DEBUG
