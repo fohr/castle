@@ -612,7 +612,7 @@ static int castle_rxrpc_replace_decode(struct castle_rxrpc_call *call, struct sk
 static int cnt = 0;
     
     if((cnt++) % 100 == 0)
-       printk("Got %d replaces\n", cnt); 
+       debug("Got %d replaces\n", cnt);
 
     debug("Packed %d in replace, is it last=%d\n", call->packet_cnt, last);
     call->current_skb = skb;
@@ -814,7 +814,9 @@ static int castle_rxrpc_slice_decode(struct castle_rxrpc_call *call, struct sk_b
     c_vl_okey_t *start_key, *end_key;
     int ret;
 
+#ifdef DEBUG
     skb_print(skb);
+#endif
     ret = castle_rxrpc_collection_get(skb, &attachment);
     if(ret)
         return ret;
@@ -829,7 +831,7 @@ static int castle_rxrpc_slice_decode(struct castle_rxrpc_call *call, struct sk_b
     }
     rxrpc_kernel_data_delivered(skb);
     castle_rxrpc_state_update(call, RXRPC_CALL_REPLYING);
-    printk("Executing a range query.\n");
+    debug("Executing a range query.\n");
 
     return castle_object_slice_get(call, attachment, start_key, end_key);
 }

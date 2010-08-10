@@ -501,6 +501,7 @@ static void castle_objects_rq_iter_init(c_obj_rq_iter_t *iter)
     /* Construct the btree keys for range-query */
     iter->start_bkey = castle_object_key_convert(iter->start_okey);
     iter->end_bkey   = castle_object_key_convert(iter->end_okey);
+#ifdef DEBUG
     printk("====================== RQ start keys =======================\n");
     vl_okey_print(iter->start_okey);
     vl_bkey_print(iter->start_bkey);
@@ -508,6 +509,7 @@ static void castle_objects_rq_iter_init(c_obj_rq_iter_t *iter)
     vl_okey_print(iter->end_okey);
     vl_bkey_print(iter->end_bkey);
     printk("============================================================\n");
+#endif
 
     /* Check if we managed to initialise the btree keys correctly */
     if(!iter->start_bkey || !iter->end_bkey)
@@ -998,14 +1000,14 @@ int castle_object_slice_get(struct castle_rxrpc_call *call,
     iterator->version    = attachment->version; 
     iterator->da_id      = castle_version_da_id_get(iterator->version);
     
-    printk("rq_iter_init.\n");
+    debug("rq_iter_init.\n");
     castle_objects_rq_iter_init(iterator);
     if(iterator->err)
     {
         kfree(iterator);
         return iterator->err;
     }
-    printk("rq_iter_init done.\n");
+    debug("rq_iter_init done.\n");
 
     nr_vals = 0;
     rsp_buffer_offset = 0;
@@ -1020,9 +1022,9 @@ int castle_object_slice_get(struct castle_rxrpc_call *call,
         int nr_blocks;
         uint32_t marshalled_len;
 
-        printk("Getting an entry the range query.\n");
+        debug("Getting an entry the range query.\n");
         castle_objects_rq_iter.next(iterator, (void **)&k, &v, &cvt);
-        printk("Got an entry the range query.\n");
+        debug("Got an entry the range query.\n");
 
         /* Ignore tombstones, we are not sending these */
         if(CVT_TOMB_STONE(cvt))
@@ -1073,7 +1075,7 @@ int castle_object_slice_get(struct castle_rxrpc_call *call,
             put_c2b(data_c2b);
         }
     }
-    printk("Ended the rq iterator in objects, replying with nr_vals: %d, rsp_buffer_offset=%d.\n",
+    debug("Ended the rq iterator in objects, replying with nr_vals: %d, rsp_buffer_offset=%d.\n",
             nr_vals, rsp_buffer_offset);
     /* rsp buffer contains responce payload, send it through */
     castle_rxrpc_get_slice_reply(call, 0, nr_vals, rsp_buffer, rsp_buffer_offset);
