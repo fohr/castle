@@ -13,6 +13,13 @@
 #define debug(_f, _a...)        (printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
 #endif
 
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,18)
+/* rhel backported these, will not work on vanilla 2.6.18. */
+#define add_uevent_var(_env, _fmt, _a...) add_uevent_var_env(_env, _fmt, ##_a)
+#else
+#define add_uevent_var(_env, _fmt, _a...) add_uevent_var(_env, _fmt, ##_a)
+#endif
+
 void castle_uevent4(uint16_t cmd, uint64_t arg1, uint64_t arg2, uint64_t arg3, uint64_t arg4)
 {
     int err = 0;
@@ -46,6 +53,8 @@ void castle_uevent4(uint16_t cmd, uint64_t arg1, uint64_t arg2, uint64_t arg3, u
     
     err = kobject_uevent_env(&castle.kobj, KOBJ_CHANGE, env->envp);
     if (err) debug("Error sending event err=%d\n", err);
+    
+    kfree(env);
 }
 
 void castle_uevent3(uint16_t cmd, uint64_t arg1, uint64_t arg2, uint64_t arg3)

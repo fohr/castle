@@ -25,6 +25,7 @@ static c2_block_t             *castle_cache_blks = NULL;
 static int                     castle_cache_hash_buckets;
 static         DEFINE_SPINLOCK(castle_cache_hash_lock);
 static struct list_head       *castle_cache_hash = NULL;
+static atomic_t                castle_cache_flush_seq;
 
 static atomic_t                castle_cache_dirtylist_size;
 static               LIST_HEAD(castle_cache_dirtylist);
@@ -104,19 +105,36 @@ static void clean_c2b(c2_block_t *c2b)
     spin_unlock_irqrestore(&castle_cache_hash_lock, flags);
 }
 
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,18)
+static int c2b_io_end(struct bio *bio, unsigned int completed, int err)
+#else
 static void c2b_io_end(struct bio *bio, int err)
+#endif
 {
 	c2_block_t *c2b = bio->bi_private;
 #ifdef CASTLE_DEBUG    
     unsigned long flags;
     
+    /* In debugging mode force the end_io to complete in atomic */
     local_irq_save(flags);
 #endif
+    
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,18)
+    /* Check if we always complete the entire BIO. Likely yes, since
+       the interface in >= 2.6.24 removes the completed variable */
+    BUG_ON((!err) && (completed != C_BLK_SIZE * c2b->nr_pages));
+    BUG_ON( (err) && (completed != 0));
+#endif
+    /* End the IO by calling the client's end_io function */ 
 	c2b->end_io(c2b, test_bit(BIO_UPTODATE, &bio->bi_flags));
 #ifdef CASTLE_DEBUG    
     local_irq_restore(flags);
 #endif
 	bio_put(bio);
+	
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,18)
+    return 0;
+#endif
 }
 
 int submit_c2b(int rw, c2_block_t *c2b)
@@ -421,7 +439,7 @@ static int castle_cache_hash_clean(void)
 
 static void castle_cache_page_freelist_grow(int nr_pages)
 {
-    int success = 0;
+    int flush_seq, success = 0;
 
     while(!castle_cache_hash_clean())
     {
@@ -429,6 +447,7 @@ static void castle_cache_page_freelist_grow(int nr_pages)
         /* Someone might have freed some pages, even though we failed. 
            We need to check that, in case hash is empty, and we will never 
            manage to free anything. */
+        flush_seq = atomic_read(&castle_cache_flush_seq);
         spin_lock(&castle_cache_freelist_lock);
         if(castle_cache_page_freelist_size >= nr_pages)
            success = 1; 
@@ -440,7 +459,9 @@ static void castle_cache_page_freelist_grow(int nr_pages)
         debug("=> Could not clean the hash table. Waking flush.\n");
         castle_cache_flush_wakeup();
         debug("=> Woken.\n");
-        sleep_on(&castle_cache_flush_wq);
+        /* Make sure at least one extra IO is done */
+        wait_event(castle_cache_flush_wq, 
+                (atomic_read(&castle_cache_flush_seq) != flush_seq));
         debug("=> We think there is some free memory now (cleanlist size: %d).\n",
                 atomic_read(&castle_cache_cleanlist_size));
     }
@@ -502,9 +523,13 @@ c2_block_t* castle_cache_block_get(c_disk_blk_t cdb, int nr_pages)
 }
 
 #ifdef CASTLE_DEBUG
+static int castle_cache_debug_counts = 1;
 void castle_cache_debug(void)
 {
     int dirty, clean, free, diff;
+
+    if(!castle_cache_debug_counts)
+        return;
 
     dirty = atomic_read(&castle_cache_dirtylist_size);
     clean = atomic_read(&castle_cache_cleanlist_size);
@@ -519,6 +544,13 @@ void castle_cache_debug(void)
                 dirty, clean, free);
     }
 }
+
+void castle_cache_debug_fini(void)
+{
+    castle_cache_debug_counts = 0;
+}
+#else
+#define castle_cache_debug_fini()    ((void)0) 
 #endif
 
 /***** Flush thread functions *****/
@@ -533,6 +565,7 @@ static void castle_cache_flush_endio(c2_block_t *c2b, int uptodate)
     unlock_c2b(c2b);
     put_c2b(c2b);
     atomic_dec(count);
+    atomic_inc(&castle_cache_flush_seq);
     wake_up(&castle_cache_flush_wq);
 }
 
@@ -716,8 +749,10 @@ static int castle_cache_freelists_init(void)
 static void castle_cache_freelists_fini(void)
 {
     struct list_head *l, *t;
-    c2_block_t *c2b;
     struct page *pg;
+#ifdef CASTLE_DEBUG     
+    c2_block_t *c2b;
+#endif    
 
     if(!castle_cache_blks)
         return;
@@ -1174,6 +1209,7 @@ int castle_cache_init(void)
     castle_cache_hash = 
          kzalloc(castle_cache_hash_buckets * sizeof(struct list_head), GFP_KERNEL);
     castle_cache_blks  = kzalloc(castle_cache_size * sizeof(c2_block_t), GFP_KERNEL);
+    atomic_set(&castle_cache_flush_seq, 0);
 
     if((ret = castle_cache_hash_init()))      goto err_out;
     if((ret = castle_cache_freelists_init())) goto err_out; 
@@ -1189,6 +1225,7 @@ err_out:
 
 void castle_cache_fini(void)
 {
+    castle_cache_debug_fini();
     castle_cache_flush_fini();
     castle_cache_hash_fini();
     castle_cache_freelists_fini();

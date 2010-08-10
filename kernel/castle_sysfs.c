@@ -27,6 +27,14 @@ struct castle_sysfs_version {
     struct castle_sysfs_entry csys_entry; 
 };
 
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,18)
+    #define fs_kobject  (&fs_subsys.kset.kobj)
+#elif LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,24)
+    #define fs_kobject  (&fs_subsys.kobj)
+#else /* KERNEL_VERSION(2,6,24+) */
+    #define fs_kobject  (fs_kobj)
+#endif
+
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,24)
 /* Helper function which mimicks newer sysfs interfaces */
 #define kobject_tree_add(_kobj, _parent, _ktype, _fmt, _a...)                    \
@@ -40,10 +48,9 @@ struct castle_sysfs_version {
         _ret = kobject_register(_kobj);                                          \
     _ret;                                                                        \
 })
+
 #define kobject_remove(_kobj)                                                    \
     kobject_unregister(_kobj)
-
-#define fs_kobject  (&fs_subsys.kobj)
 
 #else /* KERNEL_VERSION(2,6,24+) */
 
@@ -58,9 +65,8 @@ struct castle_sysfs_version {
 
 #define kobject_remove(_kobj)                                                    \
     kobject_del(_kobj)
-#define fs_kobject  (fs_kobj)
+    
 #endif
-
 
 static ssize_t versions_list_show(struct kobject *kobj, 
 							      struct attribute *attr, 
@@ -690,8 +696,10 @@ int castle_sysfs_init(void)
 
     memset(&castle.kobj, 0, sizeof(struct kobject));
 
-#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,24)
-    // seems to fix uevent stuff, probably not valid for 2.6.24+
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,18)
+    kobj_set_kset_s(&castle, fs_subsys);
+#elif LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,24)
+    /* TODO should probably be kobj_set_kset_s(&castle, fs_subsys); */
     castle.kobj.kset   = &fs_subsys; 
 #endif
 

@@ -1,6 +1,7 @@
 #ifndef __CASTLE_H__
 #define __CASTLE_H__
 
+#include <asm/byteorder.h>
 #include <linux/module.h>
 #include <linux/version.h>
 #include <linux/workqueue.h>
@@ -12,6 +13,15 @@
 #include <linux/semaphore.h>
 #endif
 
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,18)
+#define CASTLE_INIT_WORK(_work, _func) INIT_WORK((_work), (void (*)(void *)) (_func), (void *) (_work))
+#define CASTLE_DECLARE_WORK(_name, _func) DECLARE_WORK((_name), (void (*)(void *)) _func, &(_name))
+#define CASTLE_PREPARE_WORK(_work, _func) PREPARE_WORK((_work), (void (*)(void *)) (_func), (void *) (_work))
+#else
+#define CASTLE_INIT_WORK(_work, _func) INIT_WORK((_work), (_func))
+#define CASTLE_DECLARE_WORK(_name, _func) DECLARE_WORK((_name), (_func))
+#define CASTLE_PREPARE_WORK(_work, _func) PREPARE_WORK((_work), (_func))
+#endif
 
 #define USED                 __attribute__((used))
 #define PACKED               __attribute__((packed))
@@ -264,7 +274,7 @@ struct castle_btree_type {
                              /* Drop all entries between idx_start and
                                 idx_stop. Inclusive                    */ 
     void    (*node_print)    (struct castle_btree_node *node);
-#if CASTLE_DEBUG    
+#ifdef CASTLE_DEBUG    
     void    (*node_validate) (struct castle_btree_node *node);
 #endif        
 };
@@ -703,6 +713,5 @@ struct castle_fs_superblock*
 void                  castle_fs_superblocks_put    (struct castle_fs_superblock *sb, int dirty);
 
 int                   castle_fs_init               (void);
-
 
 #endif /* __CASTLE_H__ */

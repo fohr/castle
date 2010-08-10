@@ -910,7 +910,8 @@ try_again:
     spin_unlock_irqrestore(&merge_budget_lock, flags);
     /* We haven't found anything, sleep until next replenish. */
     printk("Run out of merge budget, waiting.\n");
-    sleep_on(&merge_budget_wq);
+    wait_event(merge_budget_wq, (merge_budget > 0));
+
     goto try_again;
 }
 
@@ -1539,7 +1540,7 @@ static void castle_da_merge_schedule(struct castle_double_array *da,
         merge->levels[i].valid_version = INVAL_VERSION;  
     }
 
-    INIT_WORK(&merge->work, castle_da_merge_do);
+    CASTLE_INIT_WORK(&merge->work, castle_da_merge_do);
     queue_work(castle_merge_wq, &merge->work);
     return;
 

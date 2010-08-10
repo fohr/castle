@@ -20,9 +20,20 @@ struct castle_block_io
     int *ret;
 };
 
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,18)
+static int castle_block_read_end(struct bio *bio, unsigned int completed, int err)
+{
+    struct castle_block_io *cbio = (struct castle_block_io *)bio->bi_private;
+
+    /* Check if we always complete the entire BIO. Likely yes, since
+       the interface in >= 2.6.24 removes the completed variable */
+    BUG_ON((!err) && (completed != C_BLK_SIZE));
+    BUG_ON((err) && (completed != 0));
+#else
 static void castle_block_read_end(struct bio *bio, int err)
 {
     struct castle_block_io *cbio = (struct castle_block_io *)bio->bi_private;
+#endif
 
     if(!cbio->callback)
     {
@@ -40,6 +51,10 @@ static void castle_block_read_end(struct bio *bio, int err)
     /* TODO: Does this need to be done, or will bio get cleaned up by our caller? */
     debug("      NOT PUTTING BIO\n");
     //bio_put(bio);
+    
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,18)
+    return 0;
+#endif
 }
 
 int castle_block_read(struct castle_slave *slave, 

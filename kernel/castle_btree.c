@@ -885,7 +885,10 @@ static void castle_vlba_tree_entry_get(struct castle_btree_node *node,
     }
 }
 
+#ifdef CASTLE_DEBUG
 static void castle_vlba_tree_node_validate(struct castle_btree_node *node);
+#endif
+
 static void castle_vlba_tree_entry_add(struct castle_btree_node *node,
                                        int                       idx,
                                        void                     *key_v,            
@@ -1515,7 +1518,7 @@ c2_block_t* castle_btree_node_create(int version, int is_leaf, btree_t type,
     BUG_ON(!work_st);
     work_st->ct = ct;
     work_st->cdb = cdb;
-    INIT_WORK(&work_st->work, castle_btree_node_save);
+    CASTLE_INIT_WORK(&work_st->work, castle_btree_node_save);
     queue_work(castle_wq, &work_st->work);
 
     return c2b;
@@ -2191,7 +2194,7 @@ static void castle_btree_find_io_end(c2_block_t *c2b, int uptodate)
        to how deep we are in the tree. 
        A single queue cannot be used, because a request blocked on 
        lock_c2b() would block the entire queue (=> deadlock). */
-    INIT_WORK(&c_bvec->work, castle_btree_process);
+    CASTLE_INIT_WORK(&c_bvec->work, castle_btree_process);
     queue_work(castle_wqs[c_bvec->btree_depth], &c_bvec->work); 
 }
 
@@ -2255,7 +2258,7 @@ static void _castle_btree_find(struct work_struct *work)
 
 void castle_btree_find(c_bvec_t *c_bvec)
 {
-    INIT_WORK(&c_bvec->work, _castle_btree_find);
+    CASTLE_INIT_WORK(&c_bvec->work, _castle_btree_find);
     queue_work(castle_wqs[19], &c_bvec->work); 
 }
 
@@ -2891,7 +2894,7 @@ static void _castle_btree_iter_path_traverse(c2_block_t *c2b, int uptodate)
        A single queue cannot be used, because a request blocked on 
        lock_c2b() would block the entire queue (=> deadlock). 
        NOTE: The +1 is required to match the wqs we are using in normal btree walks. */
-    INIT_WORK(&c_iter->work, __castle_btree_iter_path_traverse);
+    CASTLE_INIT_WORK(&c_iter->work, __castle_btree_iter_path_traverse);
     queue_work(castle_wqs[c_iter->depth+MAX_BTREE_DEPTH], &c_iter->work);
 }
 
@@ -3014,7 +3017,7 @@ static void _castle_btree_iter_start(struct work_struct *work)
 
 void castle_btree_iter_start(c_iter_t* c_iter)
 {
-    INIT_WORK(&c_iter->work, _castle_btree_iter_start);
+    CASTLE_INIT_WORK(&c_iter->work, _castle_btree_iter_start);
     queue_work(castle_wq, &c_iter->work);
 }
 

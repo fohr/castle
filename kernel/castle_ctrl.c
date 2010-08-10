@@ -1,3 +1,4 @@
+#define __OPTIMIZE__
 #include <linux/genhd.h>
 #include <linux/miscdevice.h>
 #include <linux/skbuff.h>
@@ -420,7 +421,7 @@ static void castle_control_reply_process(uint32_t *reply, size_t len, size_t *le
     #ifdef DEBUG        
     debug("Reply message:\n");
     for(i=0; i<4*len; i++)
-        debug(" [%d]=%d\n", i, *(((uint8_t *)reply) + i));
+        debug(" [%ld]=%d\n", i, *(((uint8_t *)reply) + i));
     debug("\n");
     #endif
 

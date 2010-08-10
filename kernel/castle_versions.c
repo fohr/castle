@@ -605,7 +605,12 @@ int castle_versions_init(void)
                                                sizeof(struct castle_version),
                                                0,     /* align */
                                                0,     /* flags */
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,18)
+                                               NULL, NULL); /* ctor, dtor */
+#else                                               
                                                NULL); /* ctor */
+#endif
+
     if(!castle_versions_cache)
     {
         printk("Could not allocate kmem cache for castle versions.\n");

@@ -81,10 +81,6 @@ static void castle_debug_watches_print(void)
                     if(j % 16 == 0) printk("\n[0x%.3x] ", j);
                     printk("%.2x ", buffer[j]);
                 }
-            } else
-            {
-                printk("\n[0x%.3lx - 0x%.3lx] not written", 
-                   (sector << 9), (((sector+1)<<9) -1));
             }
         }
         printk("\n\n");

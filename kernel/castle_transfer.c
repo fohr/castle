@@ -297,6 +297,7 @@ static int castle_transfer_is_block_on_correct_disk(struct castle_transfer *tran
 */            
         default:
             BUG();
+            return false;
     }
 }
 
@@ -424,7 +425,7 @@ static void castle_block_move_io_end(c2_block_t *src, int uptodate)
     unlock_c2b(src);
     put_c2b(src);   
 
-    INIT_WORK(&info->work, castle_block_move_complete);
+    CASTLE_INIT_WORK(&info->work, castle_block_move_complete);
     queue_work(castle_wqs[MAX_BTREE_DEPTH-1], &info->work);
 }    
 

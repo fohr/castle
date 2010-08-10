@@ -1049,8 +1049,8 @@ out:
 void castle_object_get_io_end(c2_block_t *c2b, int uptodate)
 {
     c_bvec_t *c_bvec = c2b->private;
-    struct castle_rxrpc_call *call = c_bvec->c_bio->rxrpc_call;
 #ifdef CASTLE_DEBUG    
+    struct castle_rxrpc_call *call = c_bvec->c_bio->rxrpc_call;
     c2_block_t *data_c2b;
     uint32_t data_length, data_c2b_length;
     int first;
@@ -1063,7 +1063,7 @@ void castle_object_get_io_end(c2_block_t *c2b, int uptodate)
     if(uptodate)
         set_c2b_uptodate(c2b);
 
-    INIT_WORK(&c_bvec->work, __castle_object_get_complete);
+    CASTLE_INIT_WORK(&c_bvec->work, __castle_object_get_complete);
     queue_work(castle_wq, &c_bvec->work); 
 }
 

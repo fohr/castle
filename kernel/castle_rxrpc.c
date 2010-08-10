@@ -1,3 +1,4 @@
+#define __OPTIMIZE__
 #include <linux/kthread.h>
 #include <linux/bio.h>
 #include <linux/net.h>
@@ -50,7 +51,7 @@ static struct workqueue_struct  *rxrpc_wqs[NR_WQS]; /* Need singlethreaded WQs,
                                                        between calls through. */
 static struct sk_buff_head       rxrpc_incoming_calls;
 static void castle_rxrpc_incoming_call_collect(struct work_struct *work);
-static DECLARE_WORK(castle_rxrpc_incoming_call_work, castle_rxrpc_incoming_call_collect);
+static CASTLE_DECLARE_WORK(castle_rxrpc_incoming_call_work, castle_rxrpc_incoming_call_collect);
 
 /* Wait Queue to delay module exit (rmmod) till all outstanding requests are over */
 static DECLARE_WAIT_QUEUE_HEAD(castle_rxrpc_rmmod_wq); 
@@ -553,7 +554,7 @@ static int castle_rxrpc_ctrl_decode(struct castle_rxrpc_call *call, struct sk_bu
     }
     
     castle_rxrpc_state_update(call, RXRPC_CALL_REPLYING);
-    debug("Sending reply of length=%d\n", len);
+    debug("Sending reply of length=%ld\n", len);
     castle_rxrpc_reply_send(call, reply, len, 1 /* last */);
 
     kfree(reply);
@@ -770,7 +771,7 @@ static void castle_rxrpc_packet_process(struct work_struct *work)
             call->type->destructor(call);
 
         debug("Queueing call delete.\n");
-        PREPARE_WORK(&call->work, castle_rxrpc_call_delete);
+        CASTLE_PREPARE_WORK(&call->work, castle_rxrpc_call_delete);
         queue_work(call->wq, &call->work);
     }
 }
@@ -797,7 +798,7 @@ static void castle_rxrpc_incoming_call_collect(struct work_struct *work)
 
         debug("Collecting call %p.\n", c_rxcall);
         /* Init the call struct */
-        INIT_WORK(&c_rxcall->work, castle_rxrpc_packet_process);
+        CASTLE_INIT_WORK(&c_rxcall->work, castle_rxrpc_packet_process);
         skb_queue_head_init(&c_rxcall->rx_queue); 	
         c_rxcall->wq         = rxrpc_wqs[(wq_nr++) % NR_WQS];
         c_rxcall->call_id    = atomic_inc_return(&call_id);

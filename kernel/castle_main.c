@@ -629,7 +629,11 @@ void castle_bio_put(c_bio_t *c_bio)
 
     castle_utils_bio_free(c_bio);
 
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,18)
+    bio_endio(bio, bio->bi_size, err);
+#else
     bio_endio(bio, err);
+#endif
 }
    
 
@@ -765,7 +769,9 @@ static void castle_bio_data_io_do(c_bvec_t *c_bvec, c_disk_blk_t cdb)
 
     c2b = castle_cache_page_block_get(cdb);
     castle_debug_bvec_update(c_bvec, C_BVEC_DATA_C2B_GOT);
+#ifdef CASTLE_DEBUG
     c_bvec->locking = c2b;
+#endif
     lock_c2b(c2b);
     castle_debug_bvec_update(c_bvec, C_BVEC_DATA_C2B_LOCKED);
 
@@ -931,7 +937,14 @@ static int castle_device_make_request(struct request_queue *rq, struct bio *bio)
 
 fail_bio:
     if(c_bio) castle_utils_bio_free(c_bio);
+ 
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,18)
+    bio_endio(bio, 0, -EIO);
+#else
     bio_endio(bio, -EIO);
+#endif
+
+
 
     return 0;
 }
@@ -1179,7 +1192,7 @@ static void castle_slaves_spindowns_check(unsigned long first)
        at the moment we assume 10s is enough for that */
     if(first)
     {
-        INIT_WORK(&spindown_work_item, castle_slaves_spindown);
+        CASTLE_INIT_WORK(&spindown_work_item, castle_slaves_spindown);
         sleep = 10*HZ;
     }
     else
@@ -1239,7 +1252,13 @@ static void castle_slaves_unlock(void)
     struct castle_slave *slave;
 
     del_singleshot_timer_sync(&spindown_timer);
+
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,18)
+    cancel_delayed_work(&spindown_work_item);
+    flush_scheduled_work();
+#else
     cancel_work_sync(&spindown_work_item);
+#endif
 
     list_for_each_safe(lh, th, &castle_slaves.slaves)
     {
