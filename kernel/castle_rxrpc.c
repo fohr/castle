@@ -33,6 +33,7 @@ struct castle_rxrpc_call;
 static const struct castle_rxrpc_call_type castle_rxrpc_op_call;
 static const struct castle_rxrpc_call_type castle_rxrpc_get_call;
 static const struct castle_rxrpc_call_type castle_rxrpc_replace_call;
+static const struct castle_rxrpc_call_type castle_rxrpc_replace_multi_call;
 static const struct castle_rxrpc_call_type castle_rxrpc_slice_call;
 static const struct castle_rxrpc_call_type castle_rxrpc_ctrl_call;
 static void castle_rxrpc_reply_send       (struct castle_rxrpc_call *call, 
@@ -60,7 +61,8 @@ static atomic_t castle_outst_call_cnt = ATOMIC_INIT(0);
 struct castle_rxrpc_call_type {
     /* Deliver packet to this call type. Deliver should consume ENTIRE packet, 
        free it using rxrpc_kernel_data_delivered() */
-    int (*deliver)     (struct castle_rxrpc_call *call, struct sk_buff *skb,  bool last);
+    char  *name;
+    int  (*deliver)    (struct castle_rxrpc_call *call, struct sk_buff *skb,  bool last);
     void (*destructor) (struct castle_rxrpc_call *call);
 };
 
@@ -104,6 +106,15 @@ struct castle_rxrpc_call {
             uint32_t    data_c2b_offset;
             uint32_t    data_length;
         } replace;
+        /* For CASTLE_OBJ_REQ_REPLACE_MULTI */
+        struct {
+            char       *buf;
+            uint32_t    buf_offset;
+            uint32_t    buf_length;
+            uint32_t    num_objects;
+            uint32_t    objects_processed;
+            struct castle_attachment *attachment;
+        } replace_multi;
     };
 };
 
@@ -195,6 +206,9 @@ static int castle_rxrpc_op_decode(struct castle_rxrpc_call *call, struct sk_buff
             break;
         case CASTLE_OBJ_REQ_REPLACE:
             call->type = &castle_rxrpc_replace_call;
+            break;
+        case CASTLE_OBJ_REQ_REPLACE_MULTI:
+            call->type = &castle_rxrpc_replace_multi_call;
             break;
         case CASTLE_OBJ_REQ_SLICE:
             call->type = &castle_rxrpc_slice_call;
@@ -347,7 +361,6 @@ void castle_rxrpc_get_reply_continue(struct castle_rxrpc_call *call,
     castle_rxrpc_reply_send(call, buffer, buffer_length, last);
 }
 
-
 void castle_rxrpc_replace_complete(struct castle_rxrpc_call *call, int err)
 {
     uint32_t reply[1];
@@ -364,17 +377,47 @@ void castle_rxrpc_replace_complete(struct castle_rxrpc_call *call, int err)
     castle_rxrpc_reply_send(call, reply, 4, 1 /* last */);
 }
 
-void castle_rxrpc_replace_continue(struct castle_rxrpc_call *call)
+void castle_rxrpc_call_continue(struct castle_rxrpc_call *call)
 {
-    debug("Continuing replace call (checking for more packets on the queue).\n");
+    debug("Continuing call type \"%s\" (checking for more packets on the queue).\n",
+            call->type->name);
     /* Go back in the state, because otherwise packet_process() will ignore us. */
     castle_rxrpc_state_update(call, RXRPC_CALL_AWAIT_REQUEST);
     rxrpc_kernel_data_delivered(call->current_skb);
     if(!skb_queue_empty(&call->rx_queue));
     {
-        debug("Queueing packet process..\n");
+        debug("Queueing packet process.\n");
         queue_work(call->wq, &call->work);
     }
+}
+
+void castle_rxrpc_replace_continue(struct castle_rxrpc_call *call)
+{
+    castle_rxrpc_call_continue(call);
+}
+
+void castle_rxrpc_replace_multi_complete(struct castle_rxrpc_call *call, int err)
+{
+    uint32_t reply[1];
+
+    BUG_ON(!call->replace_multi.buf);
+    kfree(call->replace_multi.buf);
+
+    debug("Call=%p\n", call);
+    rxrpc_kernel_data_delivered(call->current_skb);
+    castle_rxrpc_state_update(call, RXRPC_CALL_REPLYING);
+
+    if(err)
+        reply[0] = htonl(CASTLE_OBJ_REPLY_ERROR);
+    else
+        reply[0] = htonl(CASTLE_OBJ_REPLY_REPLACE);
+
+    castle_rxrpc_reply_send(call, reply, 4, 1 /* last */);
+}
+
+void castle_rxrpc_replace_multi_continue(struct castle_rxrpc_call *call)
+{
+    castle_rxrpc_call_continue(call);
 }
 
 uint32_t castle_rxrpc_packet_length(struct castle_rxrpc_call *call)
@@ -392,11 +435,101 @@ void castle_rxrpc_str_copy(struct castle_rxrpc_call *call, void *buffer, int str
     SKB_STR_CPY(call->current_skb, buffer, str_length, !partial);
 }
 
+uint32_t castle_rxrpc_uint32_get_buf(struct castle_rxrpc_call *call)
+{
+    uint32_t val;
+
+    BUG_ON(call->replace_multi.buf_length - call->replace_multi.buf_offset < 4);
+    val = BUF_L_GET(call->replace_multi.buf + call->replace_multi.buf_offset);
+    call->replace_multi.buf_offset += 4;
+    return val;
+}
+
+static inline int castle_rxrpc_rounded_length(uint32_t len)
+{
+    return len + (len % 4 == 0 ? 0 : - len % 4);
+}
+
+void castle_rxrpc_str_copy_buf(struct castle_rxrpc_call *call, void *buffer, int str_length, int partial)
+{
+    BUG_ON(call->replace_multi.buf_length - call->replace_multi.buf_offset < str_length);
+    memcpy(buffer, call->replace_multi.buf + call->replace_multi.buf_offset, str_length);
+    if(!partial)
+        str_length = castle_rxrpc_rounded_length(str_length);
+    call->replace_multi.buf_offset += str_length;
+}
+
+/* Returns negative on error, positive return is amount of data read, 
+   0 if there was not enough data. */
+static int castle_rxrpc_key_get_check(const char *buf,
+                                      uint32_t buf_length,
+                                      c_vl_okey_t **key_p)
+{
+    c_vl_okey_t *key;
+    uint32_t nr_dims, i;
+    int ret;
+    uint32_t buf_offset = 0;
+
+    if(buf_length < 4)
+        return 0;
+
+    nr_dims = BUF_L_GET(buf);
+    buf_offset += 4;
+
+    key = kzalloc(sizeof(c_vl_okey_t) + sizeof(c_vl_key_t *) * nr_dims, GFP_KERNEL);
+    if(!key)
+        return -ENOMEM;
+
+    /* Init the key */
+    key->nr_dims = nr_dims;
+    for(i=0; i<nr_dims; i++)
+    {
+        uint32_t key_len;
+        uint32_t rounded_key_len;
+
+        if(buf_length - buf_offset < 4)
+        {
+            ret = 0;
+            goto clean_up;
+        }
+        key_len = BUF_L_GET(buf + buf_offset);
+        buf_offset += 4;
+
+        rounded_key_len = castle_rxrpc_rounded_length(key_len);
+
+        if(buf_length - buf_offset < rounded_key_len)
+        {
+            ret = 0;
+            goto clean_up;
+        }
+
+        if(key_len > 128 || !(key->dims[i] = kzalloc(key_len+4, GFP_KERNEL)))
+        {
+            ret = -ENOMEM;
+            goto clean_up;
+        }
+
+        key->dims[i]->length = key_len;
+        memcpy(&key->dims[i]->key, buf + buf_offset, key_len);
+        buf_offset += rounded_key_len;
+    }
+    *key_p = key;
+
+    return buf_offset;
+
+clean_up:
+    while (i > 0)
+        kfree(key->dims[--i]);
+    kfree(key);
+
+    return ret;
+}
+
 static int castle_rxrpc_collection_get(struct sk_buff *skb,
                                        struct castle_attachment **attachment_p)
 {
     struct castle_attachment *ca;
-    
+
     ca = castle_collection_find(SKB_L_GET(skb));
     *attachment_p = ca;
 
@@ -421,8 +554,8 @@ static int castle_rxrpc_key_get(struct sk_buff *skb,
         key->dims[i] = SKB_VL_KEY_GET(skb, 128);
         if(!key->dims[i])
         {
-            for(i--; i>=0; i--)
-                kfree(key->dims[i]);
+            while (i > 0)
+                kfree(key->dims[--i]);
             kfree(key);
 
             return -ENOMEM;
@@ -509,6 +642,172 @@ static int cnt = 0;
     return 0;
 }
 
+static int castle_rxrpc_replace_multi_decode(struct castle_rxrpc_call *call, 
+                                             struct sk_buff *skb, 
+                                             bool last)
+{
+    uint32_t len;
+
+    call->current_skb = skb;
+    /* First packet processing */
+    if (call->packet_cnt == 1)
+    {
+        int ret;
+
+        debug("Got first packet length %u\n", castle_rxrpc_packet_length(call));
+        ret = castle_rxrpc_collection_get(skb, &call->replace_multi.attachment);
+        if (ret)
+            return ret;
+        call->replace_multi.num_objects = SKB_L_GET(skb);
+        call->replace_multi.objects_processed = 0;
+
+        len = castle_rxrpc_packet_length(call);
+        call->replace_multi.buf = kzalloc(len, GFP_KERNEL);
+        if (!call->replace_multi.buf)
+            return -ENOMEM;
+        call->replace_multi.buf_length = len;
+        call->replace_multi.buf_offset = 0;
+
+        castle_rxrpc_str_copy(call, call->replace_multi.buf, len, 1);
+        castle_rxrpc_state_update(call, RXRPC_CALL_AWAIT_DATA);
+        castle_rxrpc_replace_multi_next_process(call, 0);
+
+        return 0;
+    }
+    else
+    {
+        char *new_buf;
+        uint32_t remaining_len; /* the data left from the last packet */
+
+        debug("Got %uth packet length %u\n", call->packet_cnt, castle_rxrpc_packet_length(call));
+
+        len = castle_rxrpc_packet_length(call);
+        remaining_len = call->replace_multi.buf_length - call->replace_multi.buf_offset;
+        new_buf = kzalloc(len + remaining_len, GFP_KERNEL);
+        if (!new_buf)
+            return -ENOMEM;
+        memcpy(new_buf, call->replace_multi.buf + call->replace_multi.buf_offset, remaining_len);
+        castle_rxrpc_str_copy(call, new_buf + remaining_len, len, 1);
+
+        kfree(call->replace_multi.buf);
+        call->replace_multi.buf = new_buf;
+        call->replace_multi.buf_length = len + remaining_len;
+        call->replace_multi.buf_offset = 0;
+
+        debug("Got more data, new length %d\n", call->replace_multi.buf_length);
+
+        castle_rxrpc_state_update(call, RXRPC_CALL_AWAIT_DATA);
+        castle_rxrpc_replace_multi_next_process(call, 0);
+
+        return 0;
+    }
+}
+
+void castle_rxrpc_replace_multi_next_process(struct castle_rxrpc_call *call, int err)
+{
+    c_vl_okey_t *key;
+    int key_len;
+    uint32_t val_len, val_type;
+    uint32_t peak_read = 0; /* the amount of buf we've read but might not keep */
+
+    debug("With objects_processed=%u, offset=%u.\n",
+            call->replace_multi.objects_processed,
+            call->replace_multi.buf_offset);
+
+    BUG_ON(call->replace_multi.objects_processed > call->replace_multi.num_objects);
+
+    if (call->replace_multi.objects_processed == call->replace_multi.num_objects || err)
+    {
+        /* Finished. */
+        BUG_ON(call->replace_multi.buf_length - call->replace_multi.buf_offset > 0);
+        castle_rxrpc_replace_multi_complete(call, err);
+        return;
+    }
+
+    /* See if we don't have any data. */
+    if(call->replace_multi.buf_length - call->replace_multi.buf_offset == 0)
+    {
+        debug("Has no data, waiting for more...\n");
+        castle_rxrpc_replace_multi_continue(call);
+        return;
+    }
+
+    key_len = castle_rxrpc_key_get_check(call->replace_multi.buf + call->replace_multi.buf_offset,
+                                         call->replace_multi.buf_length - call->replace_multi.buf_offset,
+                                         &key);
+
+    /* Error reading the key. */
+    if (key_len < 0)
+    {
+        debug("Key read error %d\n", key_len);
+        castle_rxrpc_replace_multi_complete(call, key_len);
+        return;
+    }
+
+    if(key_len == 0)
+    {
+        debug("Not enough data for key, waiting for more...\n");
+        castle_rxrpc_replace_multi_continue(call);
+        return;
+    }
+
+    peak_read += key_len;
+
+    /* Need to read in value type. */
+    if(call->replace_multi.buf_length - (call->replace_multi.buf_offset + peak_read) < 4)
+    {
+        debug("Not enough data for value type, waiting for more...\n");
+        castle_rxrpc_replace_multi_continue(call);
+        return;
+    }
+
+    val_type = BUF_L_GET(call->replace_multi.buf + (call->replace_multi.buf_offset + peak_read));
+    peak_read += 4;
+
+    if (val_type == CASTLE_OBJ_TOMBSTONE)
+    {
+        call->replace_multi.buf_offset += peak_read;
+        castle_object_replace_multi(call,
+                                        call->replace_multi.attachment,
+                                        key,
+                                        1);
+        call->replace_multi.objects_processed++;
+        return;
+    }
+
+    /* Need to read in value length. */
+    if(call->replace_multi.buf_length - (call->replace_multi.buf_offset + peak_read) < 4)
+    {
+        debug("Not enough data for value length, waiting for more...\n");
+        castle_rxrpc_replace_multi_continue(call);
+        return;
+    }
+
+    val_len = BUF_L_GET(call->replace_multi.buf + (call->replace_multi.buf_offset + peak_read));
+    peak_read += 4;
+
+    if(call->replace_multi.buf_length - (call->replace_multi.buf_offset + peak_read) < 
+            castle_rxrpc_rounded_length(val_len))
+    {
+        debug("Not enough data for value, waiting for more...\n");
+        castle_rxrpc_replace_continue(call);
+        return;
+    }
+
+    BUG_ON(val_len > MAX_INLINE_VAL_SIZE);
+
+    /* We now have enough data for this value, so proceed. */
+    /* Want to read the value length again, so subtract 4. */
+    call->replace_multi.buf_offset += peak_read - 4;
+
+    castle_object_replace_multi(call, 
+                                call->replace_multi.attachment, 
+                                key, 
+                                0);
+
+    call->replace_multi.objects_processed++;
+}
+
 static int castle_rxrpc_slice_decode(struct castle_rxrpc_call *call, struct sk_buff *skb,  bool last)
 {
     struct castle_attachment *attachment;
@@ -564,26 +863,37 @@ static int castle_rxrpc_ctrl_decode(struct castle_rxrpc_call *call, struct sk_bu
 
 static const struct castle_rxrpc_call_type castle_rxrpc_op_call =
 {
+    .name    = "op decode",
     .deliver = castle_rxrpc_op_decode,
 };
 
 static const struct castle_rxrpc_call_type castle_rxrpc_get_call =
 {
+    .name    = "get",
     .deliver = castle_rxrpc_get_decode,
 };
 
 static const struct castle_rxrpc_call_type castle_rxrpc_replace_call =
 {
+    .name    = "replace",
     .deliver = castle_rxrpc_replace_decode,
+};
+
+static const struct castle_rxrpc_call_type castle_rxrpc_replace_multi_call =
+{
+    .name    = "multi replace",
+    .deliver = castle_rxrpc_replace_multi_decode,
 };
 
 static const struct castle_rxrpc_call_type castle_rxrpc_slice_call =
 {
+    .name    = "slice",
     .deliver = castle_rxrpc_slice_decode,
 };
 
 static const struct castle_rxrpc_call_type castle_rxrpc_ctrl_call =
 {
+    .name    = "control",
     .deliver = castle_rxrpc_ctrl_decode,
 };
 

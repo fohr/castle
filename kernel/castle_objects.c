@@ -595,6 +595,40 @@ static void castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
     BUG_ON(CVT_INVALID(*cvt));
 }
 
+static void castle_object_replace_multi_cvt_get(c_bvec_t    *c_bvec,
+                                                c_val_tup_t  prev_cvt,
+                                                c_val_tup_t *cvt)
+{
+    struct castle_rxrpc_call *call = c_bvec->c_bio->rxrpc_call;
+    int tombstone = c_bvec_data_del(c_bvec);
+
+    /* We should be handling a write (possibly a tombstone write). */
+    BUG_ON(c_bvec_data_dir(c_bvec) != WRITE);
+    /* Some sanity checks */
+    BUG_ON(CVT_TOMB_STONE(prev_cvt) && (prev_cvt.length != 0));
+
+    /* Allocate space for new value, in or out of line */
+    if(!tombstone)
+    {
+        /* The packet will now contain the length of the data payload */
+        cvt->length = castle_rxrpc_uint32_get_buf(call);
+        /* Must be inline size for replace_multi */
+        BUG_ON(cvt->length > MAX_INLINE_VAL_SIZE);
+
+        cvt->type = CVT_TYPE_INLINE;
+        cvt->val  = kmalloc(cvt->length, GFP_NOIO);
+        /* TODO: Work out how to handle this */
+        BUG_ON(!cvt->val);
+        castle_rxrpc_str_copy_buf(call, cvt->val, cvt->length, 0 /* not partial */);
+    } else
+    /* For tombstones, construct the cvt and exit. */
+    {
+        CVT_TOMB_STONE_SET(*cvt);
+    }
+
+    BUG_ON(CVT_INVALID(*cvt));
+}
+
 #define OBJ_IO_MAX_BUFFER_SIZE      (10)    /* In C_BLK_SIZE blocks */
 
 static c_disk_blk_t castle_object_write_next_cdb(struct castle_rxrpc_call *call,
@@ -782,6 +816,37 @@ void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
     castle_utils_bio_free(c_bio);
 }
 
+void castle_object_replace_multi_complete(struct castle_bio_vec *c_bvec,
+                                          int err,
+                                          c_val_tup_t cvt)
+{
+    struct castle_rxrpc_call *call = c_bvec->c_bio->rxrpc_call;
+    c_bio_t *c_bio = c_bvec->c_bio;
+
+    /* Sanity checks on the bio */
+    BUG_ON(c_bvec_data_dir(c_bvec) != WRITE);
+    BUG_ON(atomic_read(&c_bio->count) != 1);
+    BUG_ON(c_bio->err != 0);
+
+    /* Free the key, value and the BIO. */
+    kfree(c_bvec->key);
+    BUG_ON(CVT_INVALID(cvt) || CVT_ONDISK(cvt));
+    if(CVT_INLINE(cvt))
+        kfree(cvt.val);
+
+    castle_utils_bio_free(c_bio);
+
+    /* Deal with error case first */
+    if(err)
+    {
+        debug("Err: %d\n", err);
+        castle_rxrpc_replace_multi_complete(call, err);
+        return;
+    }
+    
+    castle_rxrpc_replace_multi_next_process(call, 0);
+}
+
 int castle_object_replace_continue(struct castle_rxrpc_call *call, int last)
 {
     int copy_end;
@@ -849,6 +914,44 @@ int castle_object_replace(struct castle_rxrpc_call *call,
     c_bvec->da_endfind = NULL; 
     
     /* TODO: add bios to the debugger! */ 
+
+    castle_double_array_find(c_bvec);
+
+    return 0;
+}
+
+int castle_object_replace_multi(struct castle_rxrpc_call *call,
+                                struct castle_attachment *attachment,
+                                c_vl_okey_t *key,
+                                int tombstone)
+{
+    c_vl_bkey_t *btree_key;
+    c_bvec_t *c_bvec;
+    c_bio_t *c_bio;
+
+    btree_key = castle_object_key_convert(key);
+    castle_object_key_free(key);
+
+    /* Single c_bvec for the bio */
+    c_bio = castle_utils_bio_alloc(1);
+    if(!c_bio)
+        return -ENOMEM;
+    BUG_ON(!attachment);
+    c_bio->attachment    = attachment;
+    c_bio->rxrpc_call    = call;
+    c_bio->data_dir      = WRITE;
+    /* Tombstone & object replace both require a write */
+    if(tombstone)
+        c_bio->data_dir |= REMOVE;
+
+    c_bvec = c_bio->c_bvecs;
+    c_bvec->key        = btree_key;
+    c_bvec->flags      = 0;
+    c_bvec->cvt_get    = castle_object_replace_multi_cvt_get;
+    c_bvec->endfind    = castle_object_replace_multi_complete;
+    c_bvec->da_endfind = NULL;
+
+    /* TODO: add bios to the debugger! */
 
     castle_double_array_find(c_bvec);
 

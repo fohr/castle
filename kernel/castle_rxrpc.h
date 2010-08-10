@@ -7,7 +7,12 @@ void     castle_rxrpc_str_copy           (struct castle_rxrpc_call *call,
                                           void *buffer, 
                                           int str_length, 
                                           int partial);
-                                         
+
+uint32_t castle_rxrpc_uint32_get_buf     (struct castle_rxrpc_call *call);
+void     castle_rxrpc_str_copy_buf       (struct castle_rxrpc_call *call,
+                                          void *buffer,
+                                          int str_length,
+                                          int partial);
 void     castle_rxrpc_get_call_get       (struct castle_rxrpc_call *call, 
                                           c2_block_t **data_c2b, 
                                           uint32_t *data_c2b_length,
@@ -29,6 +34,12 @@ void     castle_rxrpc_replace_call_set   (struct castle_rxrpc_call *call,
                                          
 void     castle_rxrpc_replace_continue   (struct castle_rxrpc_call *call);
 void     castle_rxrpc_replace_complete   (struct castle_rxrpc_call *call, int err);
+void     castle_rxrpc_replace_multi_continue
+                                         (struct castle_rxrpc_call *call);
+void     castle_rxrpc_replace_multi_complete
+                                         (struct castle_rxrpc_call *call, int err);
+void     castle_rxrpc_replace_multi_next_process
+                                         (struct castle_rxrpc_call *call, int err);
 int      castle_rxrpc_get_slice_reply_marshall
                                          (struct castle_rxrpc_call *call,
                                           c_vl_okey_t *k,

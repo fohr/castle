@@ -103,6 +103,15 @@ static void inline _prefix##_hash_init(void)                                    
         INIT_LIST_HEAD(&_tab[i]);                                                    \
 }
 
+static inline uint32_t BUF_L_GET(const char *buf)
+{
+    __be32 word;
+
+    memcpy(&word, buf, 4);
+
+    return ntohl(word);
+}
+
 static inline uint32_t SKB_L_GET(struct sk_buff *skb)
 {
     __be32 word;

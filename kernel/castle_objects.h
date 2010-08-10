@@ -19,6 +19,10 @@ int          castle_object_replace           (struct castle_rxrpc_call *call,
                                               struct castle_attachment *attachment, 
                                               c_vl_okey_t *key, 
                                               int tombstone);
+int          castle_object_replace_multi     (struct castle_rxrpc_call *call,
+                                              struct castle_attachment *attachment,
+                                              c_vl_okey_t *key,
+                                              int tombstone);
 int          castle_object_replace_continue  (struct castle_rxrpc_call *call, 
                                               int last);
 

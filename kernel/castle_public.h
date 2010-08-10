@@ -21,6 +21,7 @@ typedef uint32_t version_t;
 #define CASTLE_OBJ_REPLY_ERROR                   4
 #define CASTLE_OBJ_REPLY_GET_SLICE               6
 #define CASTLE_CTRL_REPLY                        8
+#define CASTLE_OBJ_REQ_REPLACE_MULTI             15
 
 /* Subtypes for CASTLE_REPLACE_REQ */
 #define CASTLE_OBJ_TOMBSTONE                     0
