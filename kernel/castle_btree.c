@@ -3478,6 +3478,7 @@ static void castle_btree_rq_enum_fini(c_rq_enum_t *rq_enum)
         count++;
         BUG_ON(count > rq_enum->buf_count);
     } while (buf != rq_enum->buf_head);
+    debug("Free rq_enum: %p\n", rq_enum);
 }
 
 void castle_btree_rq_enum_init(c_rq_enum_t *rq_enum, version_t version, 
@@ -3711,4 +3712,5 @@ struct castle_iterator_type castle_btree_rq_iter = {
     .has_next = (castle_iterator_has_next_t)castle_btree_rq_enum_has_next,
     .next     = (castle_iterator_next_t)    castle_btree_rq_enum_next,
     .skip     = (castle_iterator_skip_t)    castle_btree_rq_enum_skip, 
+    .cancel   = (castle_iterator_cancel_t)    castle_btree_rq_enum_cancel, 
 };

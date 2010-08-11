@@ -418,10 +418,12 @@ typedef void (*castle_iterator_next_t)    (void *iter,
                                            c_val_tup_t *cvt_p);
 typedef void (*castle_iterator_skip_t)    (void *iter,
                                            void *key);
+typedef void (*castle_iterator_cancel_t)  (void *iter);
 struct castle_iterator_type {
     castle_iterator_has_next_t has_next;
     castle_iterator_next_t     next;
     castle_iterator_skip_t     skip;
+    castle_iterator_cancel_t   cancel;
 };
 
 /* Used to lock nodes pointed to by leaf pointers (refered to as 'indirect nodes') */

@@ -184,6 +184,8 @@ static void castle_rxrpc_state_update(struct castle_rxrpc_call *call, int state)
     mb();
 }
 
+uint64_t get_cnt, replace_cnt, replace_multi_cnt, slice_cnt, ctrl_cnt, call_cnt;
+
 /* Definition of different call types */
 static int castle_rxrpc_op_decode(struct castle_rxrpc_call *call, struct sk_buff *skb,  bool last)
 {
@@ -203,22 +205,42 @@ static int castle_rxrpc_op_decode(struct castle_rxrpc_call *call, struct sk_buff
     {
         case CASTLE_OBJ_REQ_GET:
             call->type = &castle_rxrpc_get_call;
+            get_cnt++;
             break;
         case CASTLE_OBJ_REQ_REPLACE:
             call->type = &castle_rxrpc_replace_call;
+            replace_cnt++;
             break;
         case CASTLE_OBJ_REQ_REPLACE_MULTI:
             call->type = &castle_rxrpc_replace_multi_call;
+            replace_multi_cnt++;
             break;
         case CASTLE_OBJ_REQ_SLICE:
             call->type = &castle_rxrpc_slice_call;
+            slice_cnt++;
             break;
         case CASTLE_CTRL_REQ:
             call->type = &castle_rxrpc_ctrl_call;
+            ctrl_cnt++;
             break;
         default:
             return -ENOTSUPP;
     }
+    call_cnt++;
+#if 1
+    if (call_cnt % 500 == 0)
+    {
+        printk("\n");
+        printk("     Get          : %10llu\n", get_cnt);
+        printk("     Replace      : %10llu\n", replace_cnt);
+        printk("     Replace multi: %10llu\n", replace_multi_cnt);
+        printk("     Slice        : %10llu\n", slice_cnt);
+        printk("     Ctrl         : %10llu\n", ctrl_cnt);
+        printk("---------------------------------------\n");
+        printk(" Total no of calls: %10llu\n", call_cnt);
+        printk("---------------------------------------\n");
+    }
+#endif
 
     return call->type->deliver(call, skb, last);
 }

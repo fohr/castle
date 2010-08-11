@@ -492,6 +492,11 @@ static int castle_objects_rq_iter_has_next(c_obj_rq_iter_t *iter)
     BUG();
 }
 
+static void castle_objects_rq_iter_cancel(c_obj_rq_iter_t *iter)
+{
+    castle_da_rq_iter.cancel(&iter->da_rq_iter);
+}
+
 static void castle_objects_rq_iter_init(c_obj_rq_iter_t *iter)
 {
     BUG_ON(!iter->start_okey || !iter->end_okey);
@@ -534,6 +539,7 @@ struct castle_iterator_type castle_objects_rq_iter = {
     .has_next = (castle_iterator_has_next_t)castle_objects_rq_iter_has_next,
     .next     = (castle_iterator_next_t)    castle_objects_rq_iter_next,
     .skip     = NULL, 
+    .cancel   = (castle_iterator_cancel_t)  castle_objects_rq_iter_cancel,
 };
 
 /**********************************************************************************************/
@@ -1079,6 +1085,9 @@ int castle_object_slice_get(struct castle_rxrpc_call *call,
             nr_vals, rsp_buffer_offset);
     /* rsp buffer contains responce payload, send it through */
     castle_rxrpc_get_slice_reply(call, 0, nr_vals, rsp_buffer, rsp_buffer_offset);
+    castle_objects_rq_iter_cancel(iterator);
+    kfree(iterator);
+    vfree(rsp_buffer);
     
     return 0;
 }

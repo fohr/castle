@@ -1098,7 +1098,7 @@ void castle_collection_free(struct castle_attachment *ca)
 struct castle_attachment* castle_collection_init(version_t version, char *name)
 {
     struct castle_attachment *collection = NULL;
-    static collection_id_t collection_id = 13;
+    static collection_id_t collection_id = 0;
     da_id_t da_id;
     int err;
 

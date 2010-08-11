@@ -636,6 +636,11 @@ static void castle_ct_merged_iter_skip(c_merged_iter_t *iter,
     }
 }
 
+static void castle_ct_merged_iter_cancel(c_merged_iter_t *iter)
+{
+    kfree(iter->iterators);
+}
+
 /* Constructs a merged iterator out of a set of iterators. */
 static void castle_ct_merged_iter_init(c_merged_iter_t *iter,
                                        void **iterators,
@@ -676,6 +681,7 @@ struct castle_iterator_type castle_ct_merged_iter = {
     .has_next = (castle_iterator_has_next_t)castle_ct_merged_iter_has_next,
     .next     = (castle_iterator_next_t)    castle_ct_merged_iter_next,
     .skip     = (castle_iterator_skip_t)    castle_ct_merged_iter_skip, 
+    .cancel   = (castle_iterator_cancel_t)    castle_ct_merged_iter_cancel, 
 };
 
 
@@ -757,6 +763,19 @@ static void castle_da_rq_iter_skip(c_da_rq_iter_t *iter, void *key)
     castle_ct_merged_iter_skip(&iter->merged_iter, key);
 }
 
+void castle_da_rq_iter_cancel(c_da_rq_iter_t *iter)
+{
+    int i;
+
+    castle_ct_merged_iter_cancel(&iter->merged_iter);
+    for(i=0; i<iter->nr_cts; i++)
+    {
+        struct ct_rq *ct_rq = iter->ct_rqs + i;
+        castle_btree_rq_enum_cancel(&ct_rq->ct_rq_iter);
+    }
+    kfree(iter->ct_rqs);
+}
+
 void castle_da_rq_iter_init(c_da_rq_iter_t *iter,
                             version_t version,
                             da_id_t da_id,
@@ -821,6 +840,8 @@ again:
     BUG_ON(j != iter->nr_cts);
 
     /* Initialise range queries for individual cts */
+    /* TODO: Better to re-organize the code, such that these iterators belong to
+     * merged iterator. Easy to manage resources - Talk to Gregor */
     for(i=0; i<iter->nr_cts; i++)
     {
         struct ct_rq *ct_rq = iter->ct_rqs + i;
@@ -842,12 +863,15 @@ again:
     castle_ct_merged_iter_init(&iter->merged_iter,
                                 iters,
                                 iter_types);
+    kfree(iters);
+    kfree(iter_types);
 }
 
 struct castle_iterator_type castle_da_rq_iter = {
     .has_next = (castle_iterator_has_next_t)castle_da_rq_iter_has_next,
     .next     = (castle_iterator_next_t)    castle_da_rq_iter_next,
     .skip     = (castle_iterator_skip_t)    castle_da_rq_iter_skip, 
+    .cancel   = (castle_iterator_cancel_t)  castle_da_rq_iter_cancel, 
 };
 
 /**********************************************************************************************/
