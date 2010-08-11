@@ -524,6 +524,12 @@ typedef struct castle_enumerator {
     };
 } c_enum_t; 
 
+struct node_buf_t;
+struct node_buf_t {
+    struct castle_btree_node *node;
+    struct list_head          list;
+};
+
 /* Enumerates latest version value for all entries */
 typedef struct castle_rq_enumerator {
     struct castle_component_tree *tree;
@@ -533,11 +539,12 @@ typedef struct castle_rq_enumerator {
     volatile int                  iter_completed;
     wait_queue_head_t             iter_wq;
     volatile int                  iter_running;
+    struct node_buf_t            *prod_buf;
     int                           prod_idx;
+    struct node_buf_t            *cons_buf;
     int                           cons_idx;
-    struct castle_btree_node     *buffer;       /* Two buffers are actually allocated (buffer1/2) */
-    struct castle_btree_node     *buffer1;      /* buffer points to the one currently used to     */
-    struct castle_btree_node     *buffer2;      /* read in a node, second is used to preserve     */
+    struct node_buf_t            *buf_head;
+    int                           buf_count;
     void                         *cur_key;
     void                         *start_key;
     void                         *end_key;

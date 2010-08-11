@@ -3368,6 +3368,22 @@ struct castle_iterator_type castle_btree_enum = {
     .skip     = NULL, 
 };
 
+static struct node_buf_t * node_buf_alloc(c_rq_enum_t *rq_enum)
+{
+    struct node_buf_t *node_buf;
+    struct castle_btree_type *btype;
+
+    btype = castle_btree_type_get(rq_enum->tree->btree_type);
+    node_buf = vmalloc(sizeof(struct node_buf_t));
+    BUG_ON(!node_buf);
+    node_buf->node = vmalloc(btype->node_size * C_BLK_SIZE);
+    BUG_ON(!node_buf->node);
+    castle_btree_node_buffer_init(rq_enum->tree, node_buf->node);
+    rq_enum->buf_count++;
+
+    return node_buf;
+}
+
 static void castle_rq_enum_iter_each(c_iter_t *c_iter, 
                                      int index, 
                                      void *key, 
@@ -3375,12 +3391,38 @@ static void castle_rq_enum_iter_each(c_iter_t *c_iter,
                                      c_val_tup_t cvt)
 {
     struct castle_btree_type *btree;
-    c_rq_enum_t *rq_enum;
+    c_rq_enum_t *rq_enum = (c_rq_enum_t *)c_iter->private;
+    struct node_buf_t *prod_buf = rq_enum->prod_buf;
+    struct node_buf_t *cons_buf = rq_enum->cons_buf;
+    struct castle_btree_node *node = prod_buf->node;
 
-    rq_enum = (c_rq_enum_t *) c_iter->private;
-    btree = castle_btree_type_get(rq_enum->buffer->type);
-    BUG_ON(rq_enum->prod_idx != rq_enum->buffer->used);
-    
+    btree = castle_btree_type_get(node->type);
+    BUG_ON(rq_enum->prod_idx != node->used);
+
+    /* Check if the node buffer is full */
+    if (btree->need_split(node, 0))
+    {
+        debug("Need split - producer buffer :%p\n", prod_buf);
+        /* Check to not overwrite last node of previous buffer */
+        if (prod_buf->list.next == &cons_buf->list || 
+            prod_buf->list.next->next == &cons_buf->list)
+        {
+            struct node_buf_t *new_buf;
+
+            new_buf = node_buf_alloc(rq_enum);
+            list_add(&new_buf->list, &prod_buf->list);
+            rq_enum->prod_buf = new_buf;
+            debug("Creating new node buffer: %p\n", rq_enum->prod_buf);
+        }
+        else 
+        {
+            rq_enum->prod_buf = list_entry(prod_buf->list.next,
+                                           struct node_buf_t, list);
+            debug("Moving prod_buf to next node_buf: %p\n", rq_enum->prod_buf);
+        }
+        rq_enum->prod_idx = 0;
+    }
+
     if (!rq_enum->in_range) 
     {
         if (btree->key_compare(rq_enum->start_key, key) <= 0)
@@ -3391,9 +3433,10 @@ static void castle_rq_enum_iter_each(c_iter_t *c_iter,
     
     if ((!rq_enum->cur_key || btree->key_compare(rq_enum->cur_key, key) != 0))
     {
+        debug("Adding entry to node buffer: %p\n", rq_enum->prod_buf);
         BUG_ON(rq_enum->cur_key && btree->key_compare(rq_enum->cur_key, key) > 0);
-        btree->entry_add(rq_enum->buffer, rq_enum->prod_idx, key, version, 0, cvt);
-        btree->entry_get(rq_enum->buffer, rq_enum->prod_idx, &rq_enum->cur_key, NULL, 
+        btree->entry_add(rq_enum->prod_buf->node, rq_enum->prod_idx, key, version, 0, cvt);
+        btree->entry_get(rq_enum->prod_buf->node, rq_enum->prod_idx, &rq_enum->cur_key, NULL, 
                          NULL, NULL);
         rq_enum->prod_idx++;
     } 
@@ -3422,10 +3465,19 @@ static void castle_rq_enum_iter_end(c_iter_t *c_iter, int err)
 
 static void castle_btree_rq_enum_fini(c_rq_enum_t *rq_enum)
 {
-    if (rq_enum->buffer1)
-        vfree(rq_enum->buffer1);
-    if (rq_enum->buffer2)
-        vfree(rq_enum->buffer2);
+    struct node_buf_t *buf = rq_enum->buf_head;
+    struct node_buf_t *next;
+    int count = 0;
+
+    do {
+        next = list_entry(buf->list.next,
+                          struct node_buf_t, list);
+        vfree(buf->node);
+        vfree(buf);
+        buf = next;
+        count++;
+        BUG_ON(count > rq_enum->buf_count);
+    } while (buf != rq_enum->buf_head);
 }
 
 void castle_btree_rq_enum_init(c_rq_enum_t *rq_enum, version_t version, 
@@ -3448,17 +3500,16 @@ void castle_btree_rq_enum_init(c_rq_enum_t *rq_enum, version_t version,
     rq_enum->iter_running   = 0;
     rq_enum->prod_idx       = 0;
     rq_enum->cons_idx       = 0;
-    rq_enum->buffer1        = vmalloc(btype->node_size * C_BLK_SIZE);
-    rq_enum->buffer2        = vmalloc(btype->node_size * C_BLK_SIZE);
-    rq_enum->buffer         = rq_enum->buffer1;
+    rq_enum->buf_count      = 0;
+    rq_enum->buf_head       = node_buf_alloc(rq_enum);
+    INIT_LIST_HEAD(&rq_enum->buf_head->list);
+    rq_enum->prod_buf       = rq_enum->buf_head;
+    debug("0: Creating new node buffer: %p\n", rq_enum->prod_buf);
+    rq_enum->cons_buf       = rq_enum->buf_head;
     rq_enum->cur_key        = NULL;
     rq_enum->start_key      = start_key;
     rq_enum->end_key        = end_key;
     rq_enum->in_range       = 0;
-
-    if(!rq_enum->buffer1 || !rq_enum->buffer2)
-        goto no_mem;
-    castle_btree_node_buffer_init(rq_enum->tree, rq_enum->buffer);
 
     iter = &rq_enum->iterator;
     iter->tree       = rq_enum->tree;
@@ -3475,9 +3526,11 @@ void castle_btree_rq_enum_init(c_rq_enum_t *rq_enum, version_t version,
     castle_btree_iter_start(iter);
     
     return;
+#if 0
 no_mem:
     rq_enum->err = -ENOMEM;
     castle_btree_rq_enum_fini(rq_enum);
+#endif
 }
 
 static void castle_btree_rq_enum_buffer_switch(c_rq_enum_t *rq_enum)
@@ -3489,22 +3542,47 @@ static void castle_btree_rq_enum_buffer_switch(c_rq_enum_t *rq_enum)
     /* TODO: check if enumerator also suffers from the same problem */
     if(rq_enum->prod_idx > 0)
     {
-        rq_enum->buffer  = (rq_enum->buffer == rq_enum->buffer1) ?
-                            rq_enum->buffer2 : rq_enum->buffer1;
+        if (rq_enum->prod_buf->list.next == &rq_enum->prod_buf->list)
+        {
+            struct node_buf_t *new_buf;
+
+            new_buf = node_buf_alloc(rq_enum);
+            list_add(&new_buf->list, &rq_enum->prod_buf->list);
+            debug("1: Creating new node buffer: %p\n", rq_enum->prod_buf);
+        }
+        BUG_ON(rq_enum->prod_buf->list.next == &rq_enum->prod_buf->list);
+        rq_enum->prod_buf = list_entry(rq_enum->prod_buf->list.next,
+                                       struct node_buf_t, list);
+        debug("1: Moving prod_buf to next node_buf: %p\n", rq_enum->prod_buf);
     } else
     {
-        BUG_ON(rq_enum->cons_idx != 0);
+        BUG_ON(rq_enum->cons_idx != 0 && rq_enum->cons_buf == rq_enum->prod_buf);
     }
+    rq_enum->cons_buf = rq_enum->prod_buf;
     rq_enum->cons_idx = 0;
     rq_enum->prod_idx = 0;
 
-    castle_btree_node_buffer_init(rq_enum->tree, rq_enum->buffer);
+    castle_btree_node_buffer_init(rq_enum->tree, rq_enum->prod_buf->node);
+}
+
+int cons_idx_prod_idx_compare(c_rq_enum_t *rq_enum)
+{
+    /* TODO: Better checks needed */
+    if (rq_enum->cons_buf != rq_enum->prod_buf || 
+        rq_enum->cons_idx < rq_enum->prod_idx)
+        return -1;
+
+    if (rq_enum->cons_idx > rq_enum->prod_idx)
+        return 1;
+    
+    return 0;
 }
 
 int castle_btree_rq_enum_has_next(c_rq_enum_t *rq_enum)
 {
     struct castle_iterator *iter = &rq_enum->iterator;
-    struct castle_btree_type *btree = castle_btree_type_get(rq_enum->buffer->type);
+    struct castle_btree_type *btree =
+                            castle_btree_type_get(rq_enum->prod_buf->node->type);
     void *key;
 
 __has_next_again:
@@ -3512,17 +3590,18 @@ __has_next_again:
     /* Wait for the iterator to complete */
     wait_event(rq_enum->iter_wq, ({int _ret; rmb(); _ret = (rq_enum->iter_running == 0); _ret;}));
     
-    BUG_ON(rq_enum->cons_idx > rq_enum->prod_idx);
+    BUG_ON(cons_idx_prod_idx_compare(rq_enum) > 0);
    
-    if (rq_enum->cons_idx < rq_enum->prod_idx)
+    if (cons_idx_prod_idx_compare(rq_enum) < 0)
     {
-        btree->entry_get(rq_enum->buffer, rq_enum->cons_idx, &key, NULL,
-                             NULL, NULL);
+        btree->entry_get(rq_enum->cons_buf->node, rq_enum->cons_idx, &key, NULL,
+                         NULL, NULL);
         /* Move this check to rq_enum_each() */
         if (btree->key_compare(rq_enum->end_key, key) < 0)
         {
             /* The iterator has noting more of interest, reset the idxs to zero.
                This will make has_next() reentrant even for completed iterator. */
+            rq_enum->cons_buf = rq_enum->prod_buf;
             rq_enum->cons_idx = rq_enum->prod_idx = 0;
             castle_btree_iter_cancel(iter, 0);
             rq_enum->iter_running = 1;
@@ -3554,10 +3633,17 @@ void castle_btree_rq_enum_next(c_rq_enum_t *rq_enum,
 
     wait_event(rq_enum->iter_wq, (rq_enum->iter_running == 0));
 
-    BUG_ON(rq_enum->cons_idx >= rq_enum->prod_idx);
-    btree->entry_get(rq_enum->buffer, rq_enum->cons_idx, key_p, version_p, NULL, 
+    BUG_ON(cons_idx_prod_idx_compare(rq_enum) >= 0);
+    btree->entry_get(rq_enum->cons_buf->node, rq_enum->cons_idx, key_p, version_p, NULL, 
                      cvt_p);
     rq_enum->cons_idx++;
+    if (rq_enum->cons_buf != rq_enum->prod_buf && 
+        rq_enum->cons_idx == rq_enum->cons_buf->node->used)
+    {
+        rq_enum->cons_buf = list_entry(rq_enum->cons_buf->list.next,
+                                       struct node_buf_t, list);
+        rq_enum->cons_idx = 0;
+    }
 }
 
 void castle_btree_rq_enum_skip(c_rq_enum_t *rq_enum, 
@@ -3570,17 +3656,29 @@ void castle_btree_rq_enum_skip(c_rq_enum_t *rq_enum,
     /* Wait for the iterator to complete */
     wait_event(rq_enum->iter_wq, (rq_enum->iter_running == 0));
 
-    /* Check if the seeking key is in buffer, if so skip to it and return */
-    for (i=rq_enum->cons_idx; i < rq_enum->prod_idx; i++)
+    while(1)
     {
-        void *buf_key;
+        int last_idx;
 
-        btree->entry_get(rq_enum->buffer, i, &buf_key, NULL, NULL, NULL);
-        if (btree->key_compare(buf_key, key) >= 0)
+        last_idx = (rq_enum->cons_buf == rq_enum->prod_buf)
+                    ? rq_enum->prod_idx
+                    : (rq_enum->cons_buf->node->used);
+        /* Check if the seeking key is in buffer, if so skip to it and return */
+        for (i=rq_enum->cons_idx; i < last_idx; i++)
         {
-            rq_enum->cons_idx = i;
-            return;
+            void *buf_key;
+
+            btree->entry_get(rq_enum->cons_buf->node, i, &buf_key, NULL, NULL, NULL);
+            if (btree->key_compare(buf_key, key) >= 0)
+            {
+                rq_enum->cons_idx = i;
+                return;
+            }
         }
+        if (rq_enum->cons_buf == rq_enum->prod_buf)
+            break;
+        rq_enum->cons_buf = list_entry(rq_enum->cons_buf->list.next,
+                                       struct node_buf_t, list);
     }
 
     castle_btree_rq_enum_buffer_switch(rq_enum);
