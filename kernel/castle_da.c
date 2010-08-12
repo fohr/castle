@@ -1278,7 +1278,7 @@ release_node:
     merge->nr_nodes++;
 }
        
-static inline void castle_da_nodes_complete(struct castle_da_merge *merge, int depth)
+static inline int castle_da_nodes_complete(struct castle_da_merge *merge, int depth)
 {
     struct castle_da_merge_level *level;
     struct castle_btree_node *buffer;
@@ -1289,7 +1289,7 @@ static inline void castle_da_nodes_complete(struct castle_da_merge *merge, int d
     debug("Checking if we need to complete nodes starting at level: %d\n", depth);
     /* Check if the level 'depth' node has been completed, which may trigger a cascade of
        completes up the tree. */ 
-    for(i=depth; i<MAX_BTREE_DEPTH; i++)
+    for(i=depth; i<MAX_BTREE_DEPTH-1; i++)
     {
         level = merge->levels + i;
         /* Complete if next_idx < 0 */
@@ -1299,6 +1299,9 @@ static inline void castle_da_nodes_complete(struct castle_da_merge *merge, int d
             /* As soon as we see an incomplete node, we need to break out: */
             goto fill_buffers;
     }
+    /* If we reached the top of the tree, we must fail the merge */
+    if(i == MAX_BTREE_DEPTH - 1)
+        return -EINVAL;
 fill_buffers:
     debug("We got as far as depth=%d\n", i);
     /* Go through all the nodes we've completed, and check re-add all the entries from 
@@ -1322,6 +1325,8 @@ fill_buffers:
         /* Buffer now consumed, reset it */
         castle_da_node_buffer_init(merge->btree, buffer);
     } 
+
+    return 0;
 }
    
 static struct castle_component_tree* castle_da_merge_package(struct castle_da_merge *merge)
@@ -1346,10 +1351,6 @@ static struct castle_component_tree* castle_da_merge_package(struct castle_da_me
     debug("Number of entries=%ld, number of nodes=%ld\n",
             atomic64_read(&out_tree->item_count),
             atomic64_read(&out_tree->node_count));
-    /* Release the last node c2b */
-    dirty_c2b(merge->last_node_c2b);
-    unlock_c2b(merge->last_node_c2b);
-    put_c2b(merge->last_node_c2b);
     /* Add the new tree to the doubling array */
     BUG_ON(merge->da->id != out_tree->da); 
     printk("Finishing merge of ct1=%d, ct2=%d, new tree=%d\n", 
@@ -1454,12 +1455,17 @@ static struct castle_component_tree* castle_da_merge_complete(struct castle_da_m
         {
             debug("Artificially completing the node at depth: %d\n", i);
             level->next_idx = -1;
-            castle_da_nodes_complete(merge, i);
+            if(castle_da_nodes_complete(merge, i))
+                goto err_out;
         } 
     }
     castle_da_max_path_complete(merge);
 
     return castle_da_merge_package(merge);
+
+err_out:
+    printk("Failed the merge in merge_complete().\n");
+    return NULL;
 }
 
 static void castle_da_merge_dealloc(struct castle_da_merge *merge)
@@ -1468,10 +1474,27 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge)
 
     if(!merge)
         return;
+
+    /* Release the last node c2b */
+    if(merge->last_node_c2b)
+    {
+        dirty_c2b(merge->last_node_c2b);
+        unlock_c2b(merge->last_node_c2b);
+        put_c2b(merge->last_node_c2b);
+    }
     
+    /* Free all the buffers */
     for(i=0; i<MAX_BTREE_DEPTH; i++)
+    {
+        c2_block_t *c2b = merge->levels[i].node_c2b;
+        if(c2b)
+        {
+            unlock_c2b(c2b);
+            put_c2b(c2b);
+        }
         if(merge->levels[i].buffer)
             vfree(merge->levels[i].buffer);
+    }
     kfree(merge);
 }
 
@@ -1491,7 +1514,7 @@ static void castle_da_merge_do(struct work_struct *work)
     /* Create an appropriate iterator for each of the trees */
     ret = castle_da_iterators_create(merge);
     if(ret)
-        goto out;
+        goto err_out;
 
     /* Do the merge by iterating through all the entries. */
     i = 0;
@@ -1505,16 +1528,19 @@ static void castle_da_merge_do(struct work_struct *work)
                 i, key, *((uint32_t *)key), version, cvt.cdb.disk, cvt.cdb.block);
         castle_da_entry_add(merge, 0, key, version, cvt);
         merge->nr_entries++;
-        castle_da_nodes_complete(merge, 0);
+        if((ret = castle_da_nodes_complete(merge, 0)))
+            goto err_out;
         castle_da_merge_budget_consume(merge);
         i++;
     }
     debug("Flushing the last nodes.\n");
     /* Complete the merge, by flushing all the buffered entries */
     out_tree = castle_da_merge_complete(merge);
+    if(!out_tree)
+        ret = -EFAULT;
     debug("============ Merge completed ============\n"); 
 
-out:
+err_out:
     if(ret)
         printk("Merge failed with %d\n", ret);
     castle_da_merge_dealloc(merge);

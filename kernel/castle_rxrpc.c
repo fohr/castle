@@ -227,7 +227,7 @@ static int castle_rxrpc_op_decode(struct castle_rxrpc_call *call, struct sk_buff
             return -ENOTSUPP;
     }
     call_cnt++;
-#if 1
+#ifdef DEBUG
     if (call_cnt % 500 == 0)
     {
         printk("\n");

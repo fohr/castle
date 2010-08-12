@@ -708,8 +708,14 @@ static void castle_cache_hash_fini(void)
             c2b = list_entry(l, c2_block_t, list);
             /* Buffers should not be in use any more (devices do not exist) */
             if((atomic_read(&c2b->count) != 0) || c2b_locked(c2b))
+            {
                 printk("(disk,block)=(0x%x, 0x%x) not dropped count=%d, locked=%d.\n",
                     c2b->cdb.disk, c2b->cdb.block, atomic_read(&c2b->count), c2b_locked(c2b));
+#ifdef CASTLE_DEBUG
+                if(c2b_locked(c2b))
+                    printk("Locked from: %s:%d\n", c2b->file, c2b->line);
+#endif
+            }
 
             BUG_ON(c2b_locked(c2b));
             BUG_ON(atomic_read(&c2b->count) != 0);
