@@ -3478,6 +3478,7 @@ static void castle_btree_rq_enum_fini(c_rq_enum_t *rq_enum)
         count++;
         BUG_ON(count > rq_enum->buf_count);
     } while (buf != rq_enum->buf_head);
+    BUG_ON(count != rq_enum->buf_count);
     debug("Free rq_enum: %p\n", rq_enum);
 }
 
@@ -3527,6 +3528,7 @@ void castle_btree_rq_enum_init(c_rq_enum_t *rq_enum, version_t version,
     castle_btree_iter_start(iter);
     
     return;
+    /* TODO: do we need to handle out of memory condidions better than with BUG_ON? */
 #if 0
 no_mem:
     rq_enum->err = -ENOMEM;
@@ -3568,13 +3570,14 @@ static void castle_btree_rq_enum_buffer_switch(c_rq_enum_t *rq_enum)
 
 int cons_idx_prod_idx_compare(c_rq_enum_t *rq_enum)
 {
-    /* TODO: Better checks needed */
     if (rq_enum->cons_buf != rq_enum->prod_buf || 
         rq_enum->cons_idx < rq_enum->prod_idx)
-        return -1;
-
-    if (rq_enum->cons_idx > rq_enum->prod_idx)
         return 1;
+
+    /* If we are consuming and producing in different buffers, we should not get here */
+    BUG_ON(rq_enum->cons_buf != rq_enum->prod_buf);
+    /* In same buffer, consumer buffer must not overtake the producer index */
+    BUG_ON(rq_enum->cons_idx > rq_enum->prod_idx);
     
     return 0;
 }
@@ -3586,14 +3589,12 @@ int castle_btree_rq_enum_has_next(c_rq_enum_t *rq_enum)
                             castle_btree_type_get(rq_enum->prod_buf->node->type);
     void *key;
 
-__has_next_again:
+has_next_again:
   
     /* Wait for the iterator to complete */
     wait_event(rq_enum->iter_wq, ({int _ret; rmb(); _ret = (rq_enum->iter_running == 0); _ret;}));
     
-    BUG_ON(cons_idx_prod_idx_compare(rq_enum) > 0);
-   
-    if (cons_idx_prod_idx_compare(rq_enum) < 0)
+    if (cons_idx_prod_idx_compare(rq_enum))
     {
         btree->entry_get(rq_enum->cons_buf->node, rq_enum->cons_idx, &key, NULL,
                          NULL, NULL);
@@ -3621,7 +3622,7 @@ __has_next_again:
     rq_enum->iter_running = 1;
     castle_btree_iter_start(iter);
 
-goto __has_next_again;
+goto has_next_again;
 }
 
 void castle_btree_rq_enum_next(c_rq_enum_t *rq_enum, 
@@ -3634,7 +3635,9 @@ void castle_btree_rq_enum_next(c_rq_enum_t *rq_enum,
 
     wait_event(rq_enum->iter_wq, (rq_enum->iter_running == 0));
 
-    BUG_ON(cons_idx_prod_idx_compare(rq_enum) >= 0);
+    /* Make sure that consumer index is less than the producer (there is an assert in
+       the comparator). */
+    cons_idx_prod_idx_compare(rq_enum);
     btree->entry_get(rq_enum->cons_buf->node, rq_enum->cons_idx, key_p, version_p, NULL, 
                      cvt_p);
     rq_enum->cons_idx++;
