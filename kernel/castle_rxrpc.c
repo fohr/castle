@@ -631,10 +631,12 @@ static int castle_rxrpc_replace_decode(struct castle_rxrpc_call *call, struct sk
     struct castle_attachment *attachment;
     c_vl_okey_t *key;
     int ret;
-static int cnt = 0;
+#ifdef DEBUG
+    static int cnt = 0;
     
     if((cnt++) % 100 == 0)
        debug("Got %d replaces\n", cnt);
+#endif
 
     debug("Packed %d in replace, is it last=%d\n", call->packet_cnt, last);
     call->current_skb = skb;
