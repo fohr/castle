@@ -3374,7 +3374,7 @@ static struct node_buf_t * node_buf_alloc(c_rq_enum_t *rq_enum)
     struct castle_btree_type *btype;
 
     btype = castle_btree_type_get(rq_enum->tree->btree_type);
-    node_buf = vmalloc(sizeof(struct node_buf_t));
+    node_buf = kmalloc(sizeof(struct node_buf_t), GFP_KERNEL);
     BUG_ON(!node_buf);
     node_buf->node = vmalloc(btype->node_size * C_BLK_SIZE);
     BUG_ON(!node_buf->node);
@@ -3473,7 +3473,7 @@ static void castle_btree_rq_enum_fini(c_rq_enum_t *rq_enum)
         next = list_entry(buf->list.next,
                           struct node_buf_t, list);
         vfree(buf->node);
-        vfree(buf);
+        kfree(buf);
         buf = next;
         count++;
         BUG_ON(count > rq_enum->buf_count);
