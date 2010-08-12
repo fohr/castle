@@ -495,6 +495,8 @@ static int castle_objects_rq_iter_has_next(c_obj_rq_iter_t *iter)
 static void castle_objects_rq_iter_cancel(c_obj_rq_iter_t *iter)
 {
     castle_da_rq_iter.cancel(&iter->da_rq_iter);
+    kfree(iter->start_bkey);
+    kfree(iter->end_bkey);
 }
 
 static void castle_objects_rq_iter_init(c_obj_rq_iter_t *iter)
@@ -1086,6 +1088,8 @@ int castle_object_slice_get(struct castle_rxrpc_call *call,
     /* rsp buffer contains responce payload, send it through */
     castle_rxrpc_get_slice_reply(call, 0, nr_vals, rsp_buffer, rsp_buffer_offset);
     castle_objects_rq_iter_cancel(iterator);
+    kfree(iterator->start_okey);
+    kfree(iterator->end_okey);
     kfree(iterator);
     vfree(rsp_buffer);
     
