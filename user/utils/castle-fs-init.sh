@@ -14,9 +14,14 @@ elif [ -e tests/utils ]; then
 fi
 # Override CONFIG variables (e.g. DISKS) here 
 
-#DISKS="/dev/hdc5 /dev/hdc6 /dev/hdc7 /dev/hdc8 /dev/hdc9 /dev/hdc10 /dev/hdc11 /dev/hdc12"
-DISKS="disk1 disk2 disk3"
-# disk4 disk5 disk6 disk7 disk8 disk9 disk10"
+case $(hostname) in
+	jarek.theisland.acunu.com|lech.theisland.acunu.com)
+		echo foo;
+		DISKS=`ls /dev/sd*2`;;
+	*)
+		DISKS="disk1 disk2 disk3";;
+esac
+
 DISK_SIZE=2000 # in MB
 
 umount_fs
