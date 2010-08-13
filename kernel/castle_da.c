@@ -18,8 +18,8 @@
 //#define debug_verbose(_f, _a...)  (printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
 #endif
 
-#define MAX_DA_LEVEL                    (10)
-#define MAX_DYNAMIC_TREE_SIZE           (1000)
+#define MAX_DA_LEVEL                    (20)
+#define MAX_DYNAMIC_TREE_SIZE           (10000)
 
 #define CASTLE_DA_HASH_SIZE             (1000)
 #define CASTLE_CT_HASH_SIZE             (4000)
@@ -650,7 +650,9 @@ static void castle_ct_merged_iter_init(c_merged_iter_t *iter,
 
     debug("Initing merged iterator for %d component iterators.\n", iter->nr_iters);
     /* nr_iters should be given in the iterator, and we expecting it to be in [1,10] range */
-    BUG_ON((iter->nr_iters <= 0) || (iter->nr_iters > 10));
+    if(iter->nr_iters > 10)
+        printk("Merged iterator for %d > 10 trees.\n", iter->nr_iters);
+    BUG_ON(iter->nr_iters <= 0);
     BUG_ON(!iter->btree);
     iter->err = 0;
     iter->iterators = kmalloc(iter->nr_iters * sizeof(struct component_iterator), GFP_KERNEL);
@@ -943,7 +945,7 @@ static atomic_t epoch_ios = ATOMIC_INIT(0);
 static void castle_da_merge_budget_replenish(void)
 {
 #define MAX_IOS             (10000) /* Arbitrary constants */
-#define MIN_BUDGET_DELTA    (10)
+#define MIN_BUDGET_DELTA    (500)
 #define MAX_BUDGET          (1000000)
     int ios = atomic_read(&epoch_ios);
     int budget_delta = 0;
@@ -1692,6 +1694,7 @@ static void castle_component_tree_add(struct castle_double_array *da,
     struct castle_component_tree *next_ct; 
 
     BUG_ON(da->id != ct->da);
+    BUG_ON(ct->level >= MAX_DA_LEVEL);
     /* If there is something on the list, check that the sequence number 
        of the tree we are inserting is greater (i.e. enforce rev seq number
        ordering in component trees in a given level). Don't check that during
