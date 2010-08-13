@@ -131,8 +131,9 @@ int castle_sysfs_version_add(version_t version)
 
     v->version = version;
     sprintf(v->name, "%x", version); 
-    v->csys_entry.attr.name = v->name;
-    v->csys_entry.attr.mode = S_IRUGO|S_IWUSR;
+    v->csys_entry.attr.name  = v->name;
+    v->csys_entry.attr.mode  = S_IRUGO|S_IWUSR;
+    v->csys_entry.attr.owner = THIS_MODULE;
     v->csys_entry.show  = versions_list_show;
     v->csys_entry.store = versions_list_store;
 
