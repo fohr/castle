@@ -1,3 +1,5 @@
+#include <linux/delay.h>
+
 #include "castle_public.h"
 #include "castle_compile.h"
 #include "castle.h"
@@ -12,8 +14,10 @@
 //#define DEBUG
 #ifndef DEBUG
 #define debug(_f, ...)          ((void)0)
+#define debug_rq(_f, ...)       ((void)0)
 #else
 #define debug(_f, _a...)        (printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
+#define debug_rq(_f, _a...)     (printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
 #endif
 
    
@@ -971,13 +975,18 @@ int castle_object_replace_multi(struct castle_rxrpc_call *call,
 int castle_object_slice_get(struct castle_rxrpc_call *call, 
                             struct castle_attachment *attachment, 
                             c_vl_okey_t *start_key, 
-                            c_vl_okey_t *end_key)
+                            c_vl_okey_t *end_key,
+                            uint32_t max_entries)
 {
     c_obj_rq_iter_t *iterator;
     char *rsp_buffer;
-    uint32_t rsp_buffer_offset;
-    int nr_vals, i;
+    uint32_t rsp_buffer_offset, chunk_size;
+    int nr_vals, i, last_chunk;
 #define SLICE_RSP_BUFFER_LEN    (C_BLK_SIZE * 256)  /* 1MB buffer */
+
+    /* 0 max_entries means infinity, FFFFFFFF should do */
+    if(max_entries == 0)
+        max_entries = (uint32_t)-1;
 
     if(start_key->nr_dims != end_key->nr_dims)
     {
@@ -1008,14 +1017,14 @@ int castle_object_slice_get(struct castle_rxrpc_call *call,
     iterator->version    = attachment->version; 
     iterator->da_id      = castle_version_da_id_get(iterator->version);
     
-    debug("rq_iter_init.\n");
+    debug_rq("rq_iter_init.\n");
     castle_objects_rq_iter_init(iterator);
     if(iterator->err)
     {
         kfree(iterator);
         return iterator->err;
     }
-    debug("rq_iter_init done.\n");
+    debug_rq("rq_iter_init done.\n");
 
     nr_vals = 0;
     rsp_buffer_offset = 0;
@@ -1030,9 +1039,9 @@ int castle_object_slice_get(struct castle_rxrpc_call *call,
         int nr_blocks;
         uint32_t marshalled_len;
 
-        debug("Getting an entry the range query.\n");
+        debug_rq("Getting an entry the range query.\n");
         castle_objects_rq_iter.next(iterator, (void **)&k, &v, &cvt);
-        debug("Got an entry the range query.\n");
+        debug_rq("Got an entry the range query.\n");
 
         /* Ignore tombstones, we are not sending these */
         if(CVT_TOMB_STONE(cvt))
@@ -1074,6 +1083,7 @@ int castle_object_slice_get(struct castle_rxrpc_call *call,
                                                      rsp_buffer + rsp_buffer_offset,
                                                      SLICE_RSP_BUFFER_LEN - rsp_buffer_offset,
                                                      &marshalled_len));
+        max_entries--;
         rsp_buffer_offset += marshalled_len; 
         nr_vals++;
         /* Unlock c2b if one was taken out */
@@ -1082,16 +1092,50 @@ int castle_object_slice_get(struct castle_rxrpc_call *call,
             unlock_c2b(data_c2b);
             put_c2b(data_c2b);
         }
+        if(max_entries == 0)
+            break;
     }
-    debug("Ended the rq iterator in objects, replying with nr_vals: %d, rsp_buffer_offset=%d.\n",
+    debug_rq("Ended the rq iterator in objects, replying with nr_vals: %d, rsp_buffer_offset=%d.\n",
             nr_vals, rsp_buffer_offset);
-    /* rsp buffer contains responce payload, send it through */
-    castle_rxrpc_get_slice_reply(call, 0, nr_vals, rsp_buffer, rsp_buffer_offset);
+#define RSP_CHUNK_SIZE  10000
+    /* Rsp buffer contains responce payload, send it through in RSP_CHUNK_SIZE chunks. */
+    i = 0;
+    do
+    {
+        if(rsp_buffer_offset - i > RSP_CHUNK_SIZE)
+        /* We've got more than 10k to send */
+        {
+            chunk_size = RSP_CHUNK_SIZE;
+            last_chunk = 0;     
+        } else
+        /* We've got <= 10k to send */
+        {
+            chunk_size = rsp_buffer_offset - i;
+            last_chunk = 1;     
+        }
+        /* Send */
+        if(i == 0)
+        {
+            debug_rq("Staring slice reply. Sending %d bytes, is_last=%d\n", chunk_size, last_chunk);
+            castle_rxrpc_get_slice_reply_start(call, 0, nr_vals, rsp_buffer, chunk_size, last_chunk);
+        } else
+        {
+            debug_rq("Continuing slice reply. Sending %d bytes, is_last=%d\n", chunk_size, last_chunk);
+            castle_rxrpc_get_slice_reply_continue(call, rsp_buffer + i, chunk_size, last_chunk); 
+        }
+        i+=chunk_size;
+        if(!last_chunk)
+            msleep(20);
+    } 
+    while(!last_chunk);
+
     castle_objects_rq_iter_cancel(iterator);
+    debug_rq("Freeing iterators & buffers.\n");
     kfree(iterator->start_okey);
     kfree(iterator->end_okey);
     kfree(iterator);
     vfree(rsp_buffer);
+    debug_rq("Returning.\n");
     
     return 0;
 }

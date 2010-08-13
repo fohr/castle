@@ -14,7 +14,8 @@ int          castle_object_get               (struct castle_rxrpc_call *call,
 int          castle_object_slice_get         (struct castle_rxrpc_call *call, 
                                               struct castle_attachment *attachment, 
                                               c_vl_okey_t *start_key, 
-                                              c_vl_okey_t *end_key);
+                                              c_vl_okey_t *end_key,
+                                              uint32_t max_entries);
 int          castle_object_replace           (struct castle_rxrpc_call *call, 
                                               struct castle_attachment *attachment, 
                                               c_vl_okey_t *key, 
