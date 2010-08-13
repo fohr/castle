@@ -300,11 +300,29 @@ int castle_rxrpc_get_slice_reply_marshall(struct castle_rxrpc_call *call,
     return 0;
 }
 
-void castle_rxrpc_get_slice_reply(struct castle_rxrpc_call *call,
-                                  int err,
-                                  int nr_vals,
-                                  char *buffer,
-                                  uint32_t buffer_len)
+static void inline castle_rxrpc_call_reply_continue(struct castle_rxrpc_call *call,
+                                                    int err,
+                                                    void *buffer,
+                                                    uint32_t buffer_length,
+                                                    int last)
+{
+    /* Deal with errors first (this will basically advance the state to AWAIT_ACK) */
+    if(err)
+    {
+        castle_rxrpc_reply_send(call, NULL, 0, 1 /* last */);
+        return;
+    }
+
+    /* Otherwise send the buffer through */ 
+    castle_rxrpc_reply_send(call, buffer, buffer_length, last);
+}
+
+void castle_rxrpc_get_slice_reply_start(struct castle_rxrpc_call *call,
+                                        int err,
+                                        int nr_vals,
+                                        char *buffer,
+                                        uint32_t buffer_len,
+                                        int last)
 {
     uint32_t reply[2];
     
@@ -323,10 +341,17 @@ void castle_rxrpc_get_slice_reply(struct castle_rxrpc_call *call,
     castle_rxrpc_double_reply_send(call, 
                                    reply, 8,
                                    buffer, buffer_len,
-                                   1);
+                                   last);
     return;
 }
 
+void castle_rxrpc_get_slice_reply_continue(struct castle_rxrpc_call *call,
+                                           char *buffer,
+                                           uint32_t buffer_len,
+                                           int last)
+{
+    castle_rxrpc_call_reply_continue(call, 0, buffer, buffer_len, last); 
+}
 
 void castle_rxrpc_get_reply_start(struct castle_rxrpc_call *call, 
                                   int err, 
@@ -372,15 +397,7 @@ void castle_rxrpc_get_reply_continue(struct castle_rxrpc_call *call,
                                      uint32_t buffer_length,
                                      int last)
 {
-    /* Deal with errors first (this will basically advance the state to AWAIT_ACK) */
-    if(err)
-    {
-        castle_rxrpc_reply_send(call, NULL, 0, 1 /* last */);
-        return;
-    }
-
-    /* Otherwise send the buffer through */ 
-    castle_rxrpc_reply_send(call, buffer, buffer_length, last);
+    castle_rxrpc_call_reply_continue(call, err, buffer, buffer_length, last); 
 }
 
 void castle_rxrpc_replace_complete(struct castle_rxrpc_call *call, int err)
@@ -857,7 +874,7 @@ static int castle_rxrpc_slice_decode(struct castle_rxrpc_call *call, struct sk_b
     castle_rxrpc_state_update(call, RXRPC_CALL_REPLYING);
     debug("Executing a range query.\n");
 
-    return castle_object_slice_get(call, attachment, start_key, end_key);
+    return castle_object_slice_get(call, attachment, start_key, end_key, SKB_L_GET(skb));
 }
 
 static int castle_rxrpc_ctrl_decode(struct castle_rxrpc_call *call, struct sk_buff *skb,  bool last)
@@ -940,6 +957,12 @@ static void castle_rxrpc_msg_send(struct castle_rxrpc_call *call, struct msghdr 
 {
     int n;
 
+    if(call->state >= RXRPC_CALL_COMPLETE)
+    {
+        printk("Warning, trying to sent data on completed call, type=%s.\n",
+                call->type->name);
+        return;
+    } 
     /* Check if we are sending the last message for this call, if so advance the state */
     if(!(msg->msg_flags & MSG_MORE))
         castle_rxrpc_state_update(call, RXRPC_CALL_AWAIT_ACK);
