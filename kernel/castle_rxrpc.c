@@ -853,6 +853,7 @@ static int castle_rxrpc_slice_decode(struct castle_rxrpc_call *call, struct sk_b
 {
     struct castle_attachment *attachment;
     c_vl_okey_t *start_key, *end_key;
+    uint32_t max_entries;
     int ret;
 
 #ifdef DEBUG
@@ -870,11 +871,12 @@ static int castle_rxrpc_slice_decode(struct castle_rxrpc_call *call, struct sk_b
         castle_object_key_free(start_key);
         return ret;
     }
+    max_entries = SKB_L_GET(skb);
     rxrpc_kernel_data_delivered(skb);
     castle_rxrpc_state_update(call, RXRPC_CALL_REPLYING);
     debug("Executing a range query.\n");
 
-    return castle_object_slice_get(call, attachment, start_key, end_key, SKB_L_GET(skb));
+    return castle_object_slice_get(call, attachment, start_key, end_key, max_entries);
 }
 
 static int castle_rxrpc_ctrl_decode(struct castle_rxrpc_call *call, struct sk_buff *skb,  bool last)
