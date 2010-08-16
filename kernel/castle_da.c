@@ -47,14 +47,19 @@ static struct workqueue_struct *castle_merge_wq;
    When a new RW component tree (rwct) is created, previous rwct is moved onto level one. There
    may be ongoing writes to this component tree. This is safe, because all further reads to 
    the tree (either doubling array reads, or merge) chain lock the tree nodes appropriately.
+   RW tree creation and merges are serialised using the flags field.
  */
 
+#define DOUBLE_ARRAY_GROWING_RW_TREE_BIT    (0)
+#define DOUBLE_ARRAY_GROWING_RW_TREE_FLAG   (1 << DOUBLE_ARRAY_GROWING_RW_TREE_BIT)
+#define DOUBLE_ARRAY_MERGING_BIT            (1)
+#define DOUBLE_ARRAY_MERGING_FLAG           (1 << DOUBLE_ARRAY_MERGING_BIT)
 struct castle_double_array {
     da_id_t          id;
     version_t        root_version;
     /* Lock protects the trees list */
     spinlock_t       lock;
-    int              in_merge;
+    unsigned long    flags;
     int              nr_trees;
     struct list_head trees[MAX_DA_LEVEL];
     struct list_head hash_list;
@@ -79,6 +84,36 @@ static void castle_component_tree_add(struct castle_double_array *da,
 static void castle_da_merge_check(struct castle_double_array *da);
 struct castle_da_merge;
 static void castle_da_merge_budget_consume(struct castle_da_merge *merge);
+
+/**********************************************************************************************/
+/* Utils */
+
+/* DA merging is checked/set under DA lock, simple bit test/sets suffice. */
+static inline int castle_da_merging(struct castle_double_array *da)
+{
+    return test_bit(DOUBLE_ARRAY_MERGING_BIT, &da->flags);
+}
+
+static inline void castle_da_merging_set(struct castle_double_array *da)
+{
+    set_bit(DOUBLE_ARRAY_MERGING_BIT, &da->flags);
+}
+
+static inline void castle_da_merging_clear(struct castle_double_array *da)
+{
+    clear_bit(DOUBLE_ARRAY_MERGING_BIT, &da->flags);
+}
+
+/* These need to be atomic */
+static inline int castle_da_growing_rw_test_and_set(struct castle_double_array *da)
+{
+    return test_and_set_bit(DOUBLE_ARRAY_GROWING_RW_TREE_BIT, &da->flags);
+}
+
+static inline void castle_da_growing_rw_clear(struct castle_double_array *da)
+{
+    clear_bit(DOUBLE_ARRAY_GROWING_RW_TREE_BIT, &da->flags);
+}
 
 /**********************************************************************************************/
 /* Iterators */
@@ -1369,7 +1404,7 @@ static struct castle_component_tree* castle_da_merge_package(struct castle_da_me
     list_del(&merge->in_tree2->da_list);
     merge->da->nr_trees -= 2;
     castle_component_tree_add(merge->da, out_tree, 0 /* not in init */);
-    merge->da->in_merge = 0;
+    castle_da_merging_clear(merge->da);
     castle_da_merge_check(merge->da);
     castle_da_unlock(merge->da);
     /* Remove old cts from the DA */
@@ -1609,9 +1644,9 @@ static void castle_da_merge_check(struct castle_double_array *da)
     struct list_head *l;
     int level;
 
-    printk("Checking if to do a merge for da: %d (in_merge=%d)\n", da->id, da->in_merge);
+    printk("Checking if to do a merge for da: %d\n", da->id);
     /* Return early if we are already doing a merge. */
-    if(da->in_merge)
+    if(castle_da_merging(da))
         return;
     /* Go through all the levels >= 1, and check if there is more than one tree 
        there. Schedule the merge if so */
@@ -1630,10 +1665,10 @@ static void castle_da_merge_check(struct castle_double_array *da)
                 printk("Found two trees for merge: ct1=%d, ct2=%d.\n",
                     ct1->seq, ct2->seq);
                 /* Schedule the merge, but make sure the lock is not held then
-                   (merge_schedule() calls a bunch of sleeping functions). Set in_merge
+                   (merge_schedule() calls a bunch of sleeping functions). Set merge flag
                    beforehand, which will stop further merges in this da being scheduled.
                  */
-                da->in_merge = 1;
+                castle_da_merging_set(da);
                 castle_da_unlock(da);
                 castle_da_merge_schedule(da, ct1, ct2);
                 castle_da_lock(da);
@@ -1674,7 +1709,7 @@ static void castle_da_unmarshall(struct castle_double_array *da,
     da->root_version = dam->root_version;
     da->mstore_key   = key;
     spin_lock_init(&da->lock);
-    da->in_merge     = 0;
+    da->flags        = 0;
     da->nr_trees     = 0;
 
     for(i=0; i<MAX_DA_LEVEL; i++)
@@ -2042,16 +2077,17 @@ static struct castle_component_tree* castle_ct_alloc(struct castle_double_array 
     return ct;
 }
     
-/* TODO: work out locking for ALL of this! */
-
 static int castle_da_rwct_make(struct castle_double_array *da)
 {
     struct castle_component_tree *ct, *old_ct;
     c2_block_t *c2b;
+    int ret;
 
+    ret = -ENOMEM;
     ct = castle_ct_alloc(da, 1 /* dynamic tree */, 0 /* level */);
     if(!ct)
-        return -ENOMEM;
+        goto out;
+
     /* Create a root node for this tree, and update the root version */
     c2b = castle_btree_node_create(0, 1 /* is_leaf */, VLBA_TREE_TYPE, ct);
     ct->root_node = c2b->cdb;
@@ -2073,8 +2109,11 @@ static int castle_da_rwct_make(struct castle_double_array *da)
     castle_component_tree_add(da, ct, 0 /* not in init */);
     castle_da_merge_check(da);
     castle_da_unlock(da);
+    ret = 0;
 
-    return 0;
+out:
+    castle_da_growing_rw_clear(da);
+    return ret;
 }
 
 int castle_double_array_make(da_id_t da_id, version_t root_version)
@@ -2090,7 +2129,7 @@ int castle_double_array_make(da_id_t da_id, version_t root_version)
     da->root_version = root_version;
     da->mstore_key   = INVAL_MSTORE_KEY;
     spin_lock_init(&da->lock);
-    da->in_merge     = 0;
+    da->flags        = 0;
     da->nr_trees     = 0;
     for(i=0; i<MAX_DA_LEVEL; i++)
         INIT_LIST_HEAD(&da->trees[i]);
@@ -2192,7 +2231,8 @@ void castle_double_array_find(c_bvec_t *c_bvec)
                   da_id, att->version);
 
     ct = castle_da_rwct_get(da);
-    if(atomic_read(&ct->item_count) > MAX_DYNAMIC_TREE_SIZE)
+    if((atomic_read(&ct->item_count) > MAX_DYNAMIC_TREE_SIZE) && 
+       !castle_da_growing_rw_test_and_set(da))
     {
         struct castle_double_array *da = castle_da_hash_get(ct->da);  
 
