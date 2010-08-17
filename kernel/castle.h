@@ -282,6 +282,7 @@ struct castle_btree_type {
 struct castle_component_tree {
     tree_seq_t          seq;
     atomic_t            ref_count;
+    atomic_t            write_ref_count;
     atomic64_t          item_count;
     btree_t             btree_type;
     uint8_t             dynamic;           /* 1 - dynamic modlist btree, 0 - merge result */ 
