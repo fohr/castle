@@ -200,6 +200,7 @@ static void castle_ct_immut_iter_next(c_immut_iter_t *iter,
 {
     int is_leaf_ptr;
 
+again:
     /* Check if we can read from the curr_node. If not move to the next node. */
     if(iter->curr_idx >= iter->curr_node->used) 
     {
@@ -209,7 +210,12 @@ static void castle_ct_immut_iter_next(c_immut_iter_t *iter,
         BUG_ON(iter->curr_idx >= iter->curr_node->used);
     }
     iter->btree->entry_get(iter->curr_node, iter->curr_idx, key_p, version_p, &is_leaf_ptr, cvt_p);
-    BUG_ON(is_leaf_ptr);
+    if(is_leaf_ptr)
+    {
+        iter->curr_idx++;
+        goto again;
+    }
+    //BUG_ON(is_leaf_ptr);
     iter->curr_idx++;
     debug("Returned next, curr_idx is now=%d / %d.\n", iter->curr_idx, iter->curr_node->used);
 }
@@ -255,7 +261,7 @@ typedef struct castle_modlist_iterator {
     struct castle_btree_type *btree;
     struct castle_component_tree *tree;
     struct castle_da_merge *merge;
-    struct castle_enumerator *enumerator;
+    c_immut_iter_t *enumerator;
     int err;
     uint32_t nr_nodes;          /* Number of nodes in the buffer   */
     void *node_buffer;          /* Buffer to store all the nodes   */
@@ -312,7 +318,7 @@ static void castle_ct_modlist_iter_fill(c_modlist_iter_t *iter)
     void *key;
 
     item_idx = node_idx = node_offset = 0;
-    while(castle_btree_enum.has_next(iter->enumerator))
+    while(castle_ct_immut_iter.has_next(iter->enumerator))
     {
         if(iter->merge)
             castle_da_merge_budget_consume(iter->merge);
@@ -327,7 +333,7 @@ static void castle_ct_modlist_iter_fill(c_modlist_iter_t *iter)
         }
 
         /* Get the next entry from the comparator */
-        castle_btree_enum.next(iter->enumerator, &key, &version, &cvt);
+        castle_ct_immut_iter.next(iter->enumerator, &key, &version, &cvt);
         debug("In enum got next: k=%p, version=%d, cdb=(0x%x, 0x%x)\n",
                 key, version, cvt.cdb.disk, cvt.cdb.block);
         debug("Dereferencing first 4 bytes of the key (should be length)=0x%x.\n",
@@ -355,7 +361,7 @@ static void castle_ct_modlist_iter_fill(c_modlist_iter_t *iter)
         BUG();
     }
     iter->nr_items = item_idx;
-    iter->err = iter->enumerator->err;
+    //iter->err = iter->enumerator->err;
 }
 
 static void castle_ct_modlist_iter_item_get(c_modlist_iter_t *iter, 
@@ -502,7 +508,7 @@ static void castle_ct_modlist_iter_init(c_modlist_iter_t *iter)
     BUG_ON(!iter->tree);
     iter->err = 0;
     iter->btree = castle_btree_type_get(iter->tree->btree_type);
-    iter->enumerator = kmalloc(sizeof(struct castle_enumerator), GFP_KERNEL);
+    iter->enumerator = kmalloc(sizeof(c_immut_iter_t), GFP_KERNEL);
     /* Allocate slighly more than number of nodes in the tree, to make sure everything
        fits, even if we unlucky, and waste parts of the node in each node */
     iter->nr_nodes = 1.1 * (atomic64_read(&ct->node_count) + 1);
@@ -516,7 +522,7 @@ static void castle_ct_modlist_iter_init(c_modlist_iter_t *iter)
     }
     /* Start up the child enumerator */
     iter->enumerator->tree = ct;
-    castle_btree_enum_init(iter->enumerator); 
+    castle_ct_immut_iter_init(iter->enumerator); 
     iter->next_item = 0;
     /* Run the enumerator, sort the output. */
     castle_ct_modlist_iter_fill(iter);
@@ -2110,6 +2116,7 @@ static int castle_da_rwct_make(struct castle_double_array *da)
 
     /* Create a root node for this tree, and update the root version */
     c2b = castle_btree_node_create(0, 1 /* is_leaf */, VLBA_TREE_TYPE, ct);
+    castle_btree_node_prep_save(ct, c2b->cdb);
     ct->root_node = c2b->cdb;
     unlock_c2b(c2b);
     put_c2b(c2b);

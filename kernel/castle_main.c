@@ -210,6 +210,7 @@ int castle_fs_init(void)
         init_rwsem(&castle_global_tree.lock);
         c2b = castle_btree_node_create(0 /* version */, 1 /* is_leaf */, MTREE_TYPE,
                                        &castle_global_tree);
+        castle_btree_node_prep_save(&castle_global_tree, c2b->cdb);
         /* Save the root node in the global tree */
         castle_global_tree.root_node = c2b->cdb; 
         /* Release btree node c2b */
