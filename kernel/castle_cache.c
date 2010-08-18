@@ -564,7 +564,7 @@ static int castle_cache_flush(void *unused)
     int high_water_mark, low_water_mark, to_flush, dirty_pgs, batch_idx, i;
     struct list_head *l, *t;
     c2_block_t *c2b;
-#define FLUSH_BATCH     512    
+#define FLUSH_BATCH     512
     c2_block_t *c2b_batch[FLUSH_BATCH];
     atomic_t in_flight;
 
@@ -1228,7 +1228,7 @@ void castle_cache_fini(void)
     castle_cache_hash_fini();
     castle_cache_freelists_fini();
 
-    if(castle_cache_hash) kfree(castle_cache_hash);
-    if(castle_cache_blks) kfree(castle_cache_blks);
+    if(castle_cache_hash) vfree(castle_cache_hash);
+    if(castle_cache_blks) vfree(castle_cache_blks);
 }
 
