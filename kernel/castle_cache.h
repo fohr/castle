@@ -4,26 +4,26 @@
 enum c2b_state_bits {
     C2B_uptodate,
     C2B_dirty,
-    C2B_lock,
 };
 
 #define INIT_C2B_BITS (0)
 
 typedef struct castle_cache_block {
-    c_disk_blk_t     cdb;
-    int              nr_pages;
-    struct list_head pages;
-    void            *buffer; /* Linear mapping of the pages */
-    struct list_head list;
-    struct list_head dirty_or_clean;
+    c_disk_blk_t          cdb;
+    int                   nr_pages;
+    struct list_head      pages;
+    void                 *buffer; /* Linear mapping of the pages */
+    struct list_head      list;
+    struct list_head      dirty_or_clean;
 
-    unsigned long    state;
-	atomic_t         count;
-    void           (*end_io)(struct castle_cache_block *c2b, int uptodate);
-    void            *private; /* Can only be used if c2b is locked */
-#ifdef CASTLE_DEBUG    
-    char            *file;
-    int              line;
+    struct rw_semaphore   lock;
+    unsigned long         state;
+	atomic_t              count;
+    void                (*end_io)(struct castle_cache_block *c2b, int uptodate);
+    void                 *private; /* Can only be used if c2b is locked */
+#ifdef CASTLE_DEBUG       
+    char                 *file;
+    int                   line;
 #endif
 } c2_block_t;
 
@@ -54,28 +54,24 @@ static inline int test_clear_c2b_##name(c2_block_t *c2b)	        \
 CACHE_FNS(uptodate, uptodate)
 CACHE_FNS(dirty, dirty)
 TAS_CACHE_FNS(dirty, dirty)
-CACHE_FNS(lock, locked)
-TAS_CACHE_FNS(lock, locked)
 
 void __lock_c2b(c2_block_t *c2b);
 void unlock_c2b(c2_block_t *c2b);
+int c2b_locked(c2_block_t *c2b);
 void dirty_c2b(c2_block_t *c2b);
 
 #ifdef CASTLE_DEBUG
 #define lock_c2b(_c2b)                \
 {                                     \
 	might_sleep();                    \
-	if (test_set_c2b_locked(_c2b))    \
-		__lock_c2b(_c2b);             \
+     __lock_c2b(_c2b);                \
     (_c2b)->file = __FILE__;          \
     (_c2b)->line = __LINE__;          \
 }
 #else
 static inline void lock_c2b(c2_block_t *c2b)
 {
-	might_sleep();
-	if (test_set_c2b_locked(c2b))
-		__lock_c2b(c2b);
+     __lock_c2b(c2b);
 }
 #endif
 

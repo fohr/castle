@@ -41,27 +41,14 @@ static               LIST_HEAD(castle_cache_block_freelist);
 static struct task_struct     *castle_cache_flush_thread;
 static DECLARE_WAIT_QUEUE_HEAD(castle_cache_flush_wq); 
 
-static int sync_c2b(void *word)
-{
-	/* If you need to use the c2b, here is how you work it out;
-       c2_block_t *c2b = container_of(word, c2_block_t, state); */
-
-	smp_mb();
-    debug("In sync_c2b. Yielding\n");
-	io_schedule();
-
-	return 0;
-}
-
 void __lock_c2b(c2_block_t *c2b)
 {
-	wait_on_bit_lock(&c2b->state, C2B_lock, sync_c2b, TASK_UNINTERRUPTIBLE);
+    down_write(&c2b->lock);
 }
 
 static int inline trylock_c2b(c2_block_t *c2b)
 {
-    /* We succeed at locking if the previous value of the lock bit was 0 */
-    return (test_set_c2b_locked(c2b) == 0);
+    return down_write_trylock(&c2b->lock);
 }
 
 void unlock_c2b(c2_block_t *c2b)
@@ -70,10 +57,12 @@ void unlock_c2b(c2_block_t *c2b)
     c2b->file = "none";
     c2b->line = 0;
 #endif
-	smp_mb__before_clear_bit();
-	clear_c2b_locked(c2b);
-	smp_mb__after_clear_bit();
-	wake_up_bit(&c2b->state, C2B_lock);
+    up_write(&c2b->lock);
+}
+
+int c2b_locked(c2_block_t *c2b)
+{
+    return rwsem_is_locked(&c2b->lock); 
 }
 
 void dirty_c2b(c2_block_t *c2b)
@@ -387,7 +376,8 @@ static void castle_cache_block_free(c2_block_t *c2b)
 static inline int c2b_busy(c2_block_t *c2b)
 {
 	return atomic_read(&c2b->count) |
-		(c2b->state & ((1 << C2B_dirty) | (1 << C2B_lock)));
+		  (c2b->state & (1 << C2B_dirty)) |
+           rwsem_is_locked(&c2b->lock);
 }
 
 static int castle_cache_hash_clean(void)
@@ -731,6 +721,7 @@ static int castle_cache_freelists_init(void)
     if(!castle_cache_blks)
         return -ENOMEM;
 
+    memset(castle_cache_blks, 0, sizeof(c2_block_t) * castle_cache_size);
     for(i=0; i<castle_cache_size; i++)
     {
         struct page *page = alloc_page(GFP_KERNEL); 
@@ -745,6 +736,7 @@ static int castle_cache_freelists_init(void)
         INIT_LIST_HEAD(&c2b->pages);
         INIT_LIST_HEAD(&c2b->list);
         INIT_LIST_HEAD(&c2b->dirty_or_clean);
+        init_rwsem(&c2b->lock);
         list_add(&c2b->list, &castle_cache_block_freelist);
     }
     castle_cache_page_freelist_size = castle_cache_size;
@@ -1213,8 +1205,8 @@ int castle_cache_init(void)
 
     castle_cache_hash_buckets = castle_cache_size >> 3; 
     castle_cache_hash = 
-         kzalloc(castle_cache_hash_buckets * sizeof(struct list_head), GFP_KERNEL);
-    castle_cache_blks  = kzalloc(castle_cache_size * sizeof(c2_block_t), GFP_KERNEL);
+         vmalloc(castle_cache_hash_buckets * sizeof(struct list_head));
+    castle_cache_blks  = vmalloc(castle_cache_size * sizeof(c2_block_t));
     atomic_set(&castle_cache_flush_seq, 0);
 
     if((ret = castle_cache_hash_init()))      goto err_out;

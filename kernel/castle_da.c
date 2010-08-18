@@ -348,7 +348,9 @@ static void castle_ct_modlist_iter_fill(c_modlist_iter_t *iter)
     }
     if(item_idx != atomic64_read(&iter->tree->item_count))
     {
-        printk("Error. Different number of items than expected. item_idx=%d, item_count=%ld\n",
+        printk("Error. Different number of items than expected in CT=%d (dynamic=%d). "
+               "Item_idx=%d, item_count=%ld\n",
+            iter->tree->seq, iter->tree->dynamic,
             item_idx, atomic64_read(&iter->tree->item_count));
         BUG();
     }
