@@ -17,6 +17,8 @@ typedef struct castle_request_timeline {
         struct timespec  start_tm;
         uint32_t         cnts;
         struct timespec  aggregate_tm;
+        struct timespec  max_tm;
+        struct timespec  min_tm;
         char            *file;
         int              line;
     } checkpoints[MAX_CHECK_POINTS];
