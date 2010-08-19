@@ -6,6 +6,7 @@
 #include "castle.h"
 #include "castle_cache.h"
 #include "castle_btree.h"
+#include "castle_time.h"
 #include "castle_versions.h"
 #include "castle_freespace.h"
 
@@ -2232,6 +2233,7 @@ static void castle_da_bvec_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cvt)
         castle_btree_find(c_bvec);
         return;
     }
+    castle_request_timeline_destroy(c_bvec->timeline);
     debug_verbose("Finished with DA, calling back.\n");
     castle_da_merge_budget_io_end(castle_da_hash_get(ct->da));
     castle_ct_put(ct, write);
@@ -2278,6 +2280,7 @@ void castle_double_array_find(c_bvec_t *c_bvec)
     c_bvec->da_endfind = c_bvec->endfind;
     c_bvec->endfind    = castle_da_bvec_complete;
 
+    castle_request_timeline_create(c_bvec->timeline);
     debug_verbose("Looking up in ct=%d\n", c_bvec->tree->seq); 
     castle_btree_find(c_bvec);
 }

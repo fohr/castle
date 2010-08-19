@@ -1,5 +1,6 @@
 # Comment/uncomment the following line to disable/enable debugging
 DEBUG = y
+PERF_DEBUG = y
 
 TARGET = castle-fs
 
@@ -12,6 +13,11 @@ ifeq ($(DEBUG),y)
   $(TARGET)-objs += castle_debug.o
 else
   DEBFLAGS = -O0 -g
+endif
+
+ifeq ($(PERF_DEBUG),y)
+  EXTRA_CFLAGS += -DCASTLE_PERF_DEBUG 
+  $(TARGET)-objs += castle_time.o
 endif
 
 EXTRA_CFLAGS += $(DEBFLAGS)

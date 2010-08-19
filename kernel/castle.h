@@ -362,6 +362,7 @@ typedef struct castle_bio {
 
 
 struct castle_cache_block;
+struct castle_request_timeline;
 #define CBV_ONE2ONE_BIT         (0) 
 #define CBV_ROOT_LOCKED_BIT     (1) 
 typedef struct castle_bio_vec {
@@ -388,17 +389,20 @@ typedef struct castle_bio_vec {
         };
     };
     /* Used to thread this bvec onto a workqueue */
-    struct work_struct         work;
+    struct work_struct               work;
     /* Value tuple allocation callback */
-    void                     (*cvt_get)    (struct castle_bio_vec *, 
-                                            c_val_tup_t,
-                                            c_val_tup_t *);
+    void                           (*cvt_get)    (struct castle_bio_vec *, 
+                                                  c_val_tup_t,
+                                                  c_val_tup_t *);
     /* Completion callback */
-    void                     (*endfind)    (struct castle_bio_vec *, int, c_val_tup_t);
-    void                     (*da_endfind) (struct castle_bio_vec *, int, c_val_tup_t);
-#ifdef CASTLE_DEBUG    
-    unsigned long              state;
-    struct castle_cache_block *locking;
+    void                           (*endfind)    (struct castle_bio_vec *, int, c_val_tup_t);
+    void                           (*da_endfind) (struct castle_bio_vec *, int, c_val_tup_t);
+#ifdef CASTLE_DEBUG              
+    unsigned long                    state;
+    struct castle_cache_block       *locking;
+#endif
+#ifdef CASTLE_PERF_DEBUG    
+    struct castle_request_timeline  *timeline;
 #endif
 } c_bvec_t;
 

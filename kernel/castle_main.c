@@ -21,6 +21,7 @@
 #include "castle_ctrl.h"
 #include "castle_transfer.h"
 #include "castle_sysfs.h"
+#include "castle_time.h"
 #include "castle_debug.h"
 #include "castle_events.h"
 #include "castle_rxrpc.h"
@@ -1329,6 +1330,7 @@ static int __init castle_init(void)
 
     castle_fs_inited = 0;
               castle_debug_init();
+              castle_time_init();
     if((ret = castle_slaves_init()))       goto err_out1;
     if((ret = castle_cache_init()))        goto err_out2;
     if((ret = castle_versions_init()))     goto err_out3;
@@ -1369,6 +1371,7 @@ err_out3:
 err_out2:
     castle_slaves_free();
 err_out1:
+    castle_time_fini();
     castle_debug_fini();
     
     /* TODO: check if kernel will accept any non-zero return value to mean: we want to exit */
@@ -1395,7 +1398,8 @@ static void __exit castle_exit(void)
     castle_slaves_unlock();
     castle_cache_fini();
     castle_slaves_free();
-    /* All finished, stop the debugger */
+    /* All finished, stop the debuggers */
+    castle_time_fini();
     castle_debug_fini();
 
     printk("done.\n\n\n");
