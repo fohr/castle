@@ -23,6 +23,9 @@ static uint32_t              castle_checkpoint_seq;
 static struct task_struct   *time_thread;
 static c_check_stats_t       castle_checkpoint_stats[MAX_CHECK_POINTS + 1]; 
                                                     /* +1 for the stats on timeline duration */
+static atomic_t              castle_checkpoint_create_seq;
+#define                      REQUEST_PERIOD         1000   /* Trace every 1000th request */
+#define                      PRINT_PERIOD           100    /* Print every 100th trace */
 
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,18)
 /* Copied from the kernel code, because not EXPORTed until ~2.6.24 */
@@ -126,6 +129,9 @@ c_req_time_t* _castle_request_timeline_create(void)
 {
     c_req_time_t* timeline;
 
+    /* Create the timeline when sequence # is divisible by period. */ 
+    if(atomic_inc_return(&castle_checkpoint_create_seq) % REQUEST_PERIOD != 0)
+        return NULL;
     timeline = kzalloc(sizeof(c_req_time_t), GFP_KERNEL);
     if(!timeline)
         return NULL;
@@ -183,7 +189,9 @@ void _castle_request_timeline_checkpoint_start(c_req_time_t *timeline,
 {
     struct castle_checkpoint *checkpoint;
     int checkpoint_idx;
-    
+
+    if(!timeline)
+        return;
     /* Stop should have been called first */
     BUG_ON(timeline->active_checkpoint >= 0);
 
@@ -205,6 +213,8 @@ void castle_request_timeline_checkpoint_stop(c_req_time_t *timeline)
     s64 start_ns, end_ns;
     struct timespec end_tm;
 
+    if(!timeline)
+        return;
     BUG_ON(timeline->active_checkpoint < 0); 
     checkpoint = &timeline->checkpoints[timeline->active_checkpoint];
     BUG_ON(!checkpoint->active);
@@ -225,6 +235,8 @@ void castle_request_timeline_checkpoint_stop(c_req_time_t *timeline)
 
 void castle_request_timeline_destroy(c_req_time_t *timeline)
 {
+    if(!timeline)
+        return;
     /* Record the time, and move to the dead list */
     getnstimeofday(&timeline->destroy_tm);
     castle_request_timeline_del(timeline);
@@ -327,6 +339,37 @@ static void castle_checkpoint_stats_print(void)
     printk("\n");
 }
 
+static void castle_request_timeline_print(c_req_time_t *timeline)
+{
+    struct castle_checkpoint *checkpoint;
+    struct timespec dur_tm;
+    s64 dur;
+    int i;
+
+    printk("Stats for timeline %d\n", timeline->seq);
+    dur = timespec_to_ns(&timeline->destroy_tm) - timespec_to_ns(&timeline->create_tm);
+    dur_tm = ns_to_timespec(dur);
+    printk("Durat. : %.2ld.%.6ld\n", dur_tm.tv_sec, dur_tm.tv_nsec / 1000); 
+
+    for(i=0; i<MAX_CHECK_POINTS; i++)
+    {
+        checkpoint = &timeline->checkpoints[i]; 
+        if(checkpoint->file == NULL)
+            continue;
+           
+        printk("For checkpoint started at %s:%d\n", checkpoint->file, checkpoint->line);
+        dur = timespec_to_ns(&checkpoint->aggregate_tm);
+        dur_tm = ns_to_timespec(dur / checkpoint->cnts);
+        printk("Average: %.2ld.%.6ld\n", dur_tm.tv_sec, dur_tm.tv_nsec / 1000); 
+        printk("Min:     %.2ld.%.6ld\n", 
+            checkpoint->min_tm.tv_sec, 
+            checkpoint->min_tm.tv_nsec / 1000);
+        printk("Max:     %.2ld.%.6ld\n", 
+            checkpoint->max_tm.tv_sec, 
+            checkpoint->max_tm.tv_nsec / 1000);
+    }
+}
+
 static int castle_time_run(void *unused)
 {
     c_req_time_t *timeline;
@@ -348,10 +391,13 @@ static int castle_time_run(void *unused)
 
         /* Process the timeline */
         castle_request_timeline_process(timeline);
+        if(cnt % PRINT_PERIOD == 0)
+        {
+            castle_request_timeline_print(timeline); 
+            castle_checkpoint_stats_print();
+        }
         kfree(timeline);
         cnt++;
-        if(cnt % 100000 == 0)
-            castle_checkpoint_stats_print();
 
         /* Go to the next timeline */
         continue;
@@ -371,6 +417,7 @@ void castle_time_init(void)
 {
     time_thread = kthread_run(castle_time_run, NULL, "castle-perf-debug");
     BUG_ON(!time_thread);
+    atomic_set(&castle_checkpoint_create_seq, 0);
     castle_checkpoint_collisions_print = 1;
     castle_checkpoint_seq = 0;
     memset(castle_checkpoint_stats, 0, sizeof(castle_checkpoint_stats));
