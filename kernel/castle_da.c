@@ -32,6 +32,7 @@ static struct castle_mstore    *castle_tree_store    = NULL;
        da_id_t                  castle_next_da_id    = 1; 
 static tree_seq_t               castle_next_tree_seq = 1; 
 static struct workqueue_struct *castle_merge_wq;
+static int                      castle_da_exiting    = 0;
 
 
 /**********************************************************************************************/
@@ -1666,7 +1667,7 @@ static void castle_da_merge_check(struct castle_double_array *da)
 
     printk("Checking if to do a merge for da: %d\n", da->id);
     /* Return early if we are already doing a merge. */
-    if(castle_da_merging(da))
+    if(castle_da_merging(da) || castle_da_exiting)
         return;
     /* Go through all the levels >= 1, and check if there is more than one tree 
        there. Schedule the merge if so */
@@ -2327,7 +2328,6 @@ int castle_double_array_init(void)
 
     castle_da_hash_init();
     castle_ct_hash_init();
-
     return 0;
  
 err_out:
@@ -2344,6 +2344,7 @@ err_out:
 void castle_double_array_fini(void)
 {
     printk("\n========= Double Array fini ==========\n");
+    castle_da_exiting = 1;
     destroy_workqueue(castle_merge_wq);
     del_singleshot_timer_sync(&merge_rate_timer);
     castle_da_hash_writeback();

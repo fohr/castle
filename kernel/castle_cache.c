@@ -580,7 +580,7 @@ static int castle_cache_flush(void *unused)
     int high_water_mark, low_water_mark, to_flush, dirty_pgs, batch_idx, i;
     struct list_head *l, *t;
     c2_block_t *c2b;
-#define FLUSH_BATCH     512
+#define FLUSH_BATCH     64 
     c2_block_t *c2b_batch[FLUSH_BATCH];
     atomic_t in_flight;
 
