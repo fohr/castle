@@ -41,9 +41,12 @@ static               LIST_HEAD(castle_cache_block_freelist);
 static struct task_struct     *castle_cache_flush_thread;
 static DECLARE_WAIT_QUEUE_HEAD(castle_cache_flush_wq); 
 
-void __lock_c2b(c2_block_t *c2b)
+void __lock_c2b(c2_block_t *c2b, int write)
 {
-    down_write(&c2b->lock);
+    if(write)
+        down_write(&c2b->lock);
+    else
+        down_read(&c2b->lock);
 }
 
 static int inline trylock_c2b(c2_block_t *c2b)
@@ -51,13 +54,26 @@ static int inline trylock_c2b(c2_block_t *c2b)
     return down_write_trylock(&c2b->lock);
 }
 
-void unlock_c2b(c2_block_t *c2b)
+static inline void __unlock_c2b(c2_block_t *c2b, int write)
 {
 #ifdef CASTLE_DEBUG    
     c2b->file = "none";
     c2b->line = 0;
 #endif
-    up_write(&c2b->lock);
+    if(write)
+        up_write(&c2b->lock);
+    else
+        up_read(&c2b->lock);
+}
+
+void unlock_c2b(c2_block_t *c2b)
+{
+    __unlock_c2b(c2b, 1);
+}
+
+void unlock_c2b_read(c2_block_t *c2b)
+{
+    __unlock_c2b(c2b, 0);
 }
 
 int c2b_locked(c2_block_t *c2b)

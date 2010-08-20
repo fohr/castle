@@ -1300,10 +1300,11 @@ void castle_btree_ct_lock(c_bvec_t *c_bvec)
 {
     int write = (c_bvec_data_dir(c_bvec) == WRITE);
 
-    if(write)
+    if(write && test_bit(CBV_DOING_SPLITS, &c_bvec->flags))
         down_write(&c_bvec->tree->lock);
     else
         down_read(&c_bvec->tree->lock);
+
     set_bit(CBV_ROOT_LOCKED_BIT, &c_bvec->flags);
 }
 
@@ -1311,10 +1312,11 @@ void castle_btree_ct_unlock(c_bvec_t *c_bvec)
 {
     int write = (c_bvec_data_dir(c_bvec) == WRITE);
 
-    if(write)
+    if(write && test_bit(CBV_DOING_SPLITS, &c_bvec->flags))
         up_write(&c_bvec->tree->lock);
     else
         up_read(&c_bvec->tree->lock);
+
     clear_bit(CBV_ROOT_LOCKED_BIT, &c_bvec->flags);
 }
 
@@ -1337,6 +1339,7 @@ static void __castle_btree_find(struct castle_btree_type *btree,
                                 c_bvec_t *c_bvec,
                                 c_disk_blk_t node_cdb,
                                 void *parent_key);
+static void castle_btree_find_no_clear(c_bvec_t *c_bvec);
 
 
 static void castle_btree_io_end(c_bvec_t    *c_bvec,
@@ -1776,11 +1779,15 @@ static void castle_btree_new_root_create(c_bvec_t *c_bvec, btree_t type)
     /* We should be under write lock here, check if we can read lock it (and BUG) */
     BUG_ON(down_read_trylock(&c_bvec->tree->lock));
     c_bvec->tree->root_node = c2b->cdb;
+    c_bvec->tree->tree_depth++;
     /* If all succeeded save the new node as the parent in bvec */
     c_bvec->btree_parent_node = c2b;
     /* Release the version lock (c2b_forget will no longer do that, 
        because there will be a parent node). */
     castle_btree_ct_unlock(c_bvec);
+    /* Also, make sure that the PARENT_WRITE_LOCKED flag is set, so that the new
+       root will get unlocked correctly */
+    set_bit(CBV_PARENT_WRITE_LOCKED, &c_bvec->flags);
 }
 
 static int castle_btree_node_split(c_bvec_t *c_bvec)
@@ -1955,6 +1962,19 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
     if((btree->key_compare(c_bvec->parent_key, btree->inv_key) != 0) &&
        (btree->need_split(node, 0 /* version split */)))
     {
+        /* If the DOING_SPLITS flag is not set, the locks were likely not
+           acquired in the write mode, restart the entire btree_find,
+           now with the flag set */
+        if(!test_bit(CBV_DOING_SPLITS, &c_bvec->flags))
+        {
+            castle_btree_c2b_forget(c_bvec);
+            castle_btree_c2b_forget(c_bvec);
+            /* Set the flag AFTER releasing the lock (which could confuse ct_unlock) */
+            set_bit(CBV_DOING_SPLITS, &c_bvec->flags);
+            castle_btree_find_no_clear(c_bvec);  
+            return;
+        }
+
         debug("===> Splitting node: leaf=%d, used=%d\n",
                 node->is_leaf, node->used);
         ret = castle_btree_node_split(c_bvec);
@@ -2132,17 +2152,6 @@ void castle_btree_process(struct work_struct *work)
         castle_btree_read_process(c_bvec);
 }
 
-
-static void castle_btree_c2b_remember(c_bvec_t *c_bvec, c2_block_t *c2b)
-{
-    /* Forget the parent node buffer first */
-    castle_btree_c2b_forget(c_bvec);
-
-    /* Save the new node buffer */
-    BUG_ON(!c2b_locked(c2b));
-    c_bvec->btree_node = c2b;
-}
-
 static void castle_btree_c2b_forget(c_bvec_t *c_bvec)
 {
     int write = (c_bvec_data_dir(c_bvec) == WRITE);
@@ -2155,7 +2164,11 @@ static void castle_btree_c2b_forget(c_bvec_t *c_bvec)
     /* Release the buffer if one exists */
     if(c2b_to_forget)
     {
-        unlock_c2b(c2b_to_forget);
+        if(test_bit(CBV_PARENT_WRITE_LOCKED, &c_bvec->flags))
+            unlock_c2b(c2b_to_forget);
+        else
+            unlock_c2b_read(c2b_to_forget);
+
         put_c2b(c2b_to_forget);
     }
     /* Also, release the component tree lock.
@@ -2164,9 +2177,61 @@ static void castle_btree_c2b_forget(c_bvec_t *c_bvec)
     if(test_bit(CBV_ROOT_LOCKED_BIT, &c_bvec->flags) && (!write || c_bvec->btree_node))
         castle_btree_ct_unlock(c_bvec); 
     /* Promote node to the parent on writes */
-    if(write) c_bvec->btree_parent_node = c_bvec->btree_node;
+    if(write) 
+    {
+        c_bvec->btree_parent_node = c_bvec->btree_node;
+       if(test_bit(CBV_CHILD_WRITE_LOCKED, &c_bvec->flags))
+           set_bit(CBV_PARENT_WRITE_LOCKED, &c_bvec->flags);
+       else
+           clear_bit(CBV_PARENT_WRITE_LOCKED, &c_bvec->flags);
+    }
     /* Forget */
     c_bvec->btree_node = NULL;
+}
+
+static void castle_btree_c2b_remember(c_bvec_t *c_bvec, c2_block_t *c2b)
+{
+
+    /* Forget the parent node buffer first */
+    castle_btree_c2b_forget(c_bvec);
+
+    /* Save the new node buffer, and the lock flags */
+    BUG_ON(!c2b_locked(c2b));
+    c_bvec->btree_node = c2b;
+    if(test_bit(CBV_C2B_WRITE_LOCKED, &c_bvec->flags))
+        set_bit(CBV_CHILD_WRITE_LOCKED, &c_bvec->flags);
+    else
+        clear_bit(CBV_CHILD_WRITE_LOCKED, &c_bvec->flags);
+}
+
+
+static void castle_btree_c2b_lock(c_bvec_t *c_bvec, c2_block_t *c2b)
+{
+    int write = (c_bvec_data_dir(c_bvec) == WRITE);
+
+#ifdef CASTLE_DEBUG
+    c_bvec->locking = c2b;
+#endif
+    castle_debug_bvec_update(c_bvec, C_BVEC_BTREE_GOT_NODE);
+    /* Lock the c2b in the write mode if:
+       - c2b not up-to-date (doesn't matter if we are doing a read or a write,
+       - on writes, if we reached leaf level (possibly following leaf pointers)
+       - on writes, if we are doing splits
+     */
+    if(!c2b_uptodate(c2b) || 
+       (write && (test_bit(CBV_DOING_SPLITS, &c_bvec->flags) || 
+                 (c_bvec->btree_depth >= c_bvec->btree_levels))))
+    {
+        lock_c2b(c2b);
+        set_bit(CBV_C2B_WRITE_LOCKED, &c_bvec->flags);
+    }
+    else
+    {
+        lock_c2b_read(c2b);
+        clear_bit(CBV_C2B_WRITE_LOCKED, &c_bvec->flags);
+    }
+    castle_debug_bvec_update(c_bvec, C_BVEC_BTREE_LOCKED_NODE);
+
 }
 
 static void castle_btree_find_io_end(c2_block_t *c2b, int uptodate)
@@ -2223,13 +2288,7 @@ static void __castle_btree_find(struct castle_btree_type *btree,
     castle_debug_bvec_btree_walk(c_bvec);
 
     c2b = castle_cache_block_get(node_cdb, btree->node_size);
-#ifdef CASTLE_DEBUG
-    c_bvec->locking = c2b;
-#endif
-    castle_debug_bvec_update(c_bvec, C_BVEC_BTREE_GOT_NODE);
-    lock_c2b(c2b);
-    castle_debug_bvec_update(c_bvec, C_BVEC_BTREE_LOCKED_NODE);
-
+    castle_btree_c2b_lock(c_bvec, c2b);
     if(!c2b_uptodate(c2b))
     {
         /* If the buffer doesn't contain up to date data, schedule the IO */
@@ -2254,17 +2313,30 @@ static void _castle_btree_find(struct work_struct *work)
     struct castle_btree_type *btree = castle_btree_type_get(c_bvec->tree->btree_type);
     c_disk_blk_t root_cdb;
 
+    clear_bit(CBV_ROOT_LOCKED_BIT, &c_bvec->flags);
+    clear_bit(CBV_PARENT_WRITE_LOCKED, &c_bvec->flags);
+    clear_bit(CBV_CHILD_WRITE_LOCKED, &c_bvec->flags);
+    clear_bit(CBV_C2B_WRITE_LOCKED, &c_bvec->flags);
     c_bvec->btree_depth       = 0;
     c_bvec->btree_node        = NULL;
     c_bvec->btree_parent_node = NULL;
     /* This will lock the component tree. */
     root_cdb = castle_btree_root_get(c_bvec);
+    /* Number of levels in the tree can be read safely now */
+    c_bvec->btree_levels = c_bvec->tree->tree_depth;
     BUG_ON(DISK_BLK_INVAL(root_cdb));
     castle_debug_bvec_update(c_bvec, C_BVEC_VERSION_FOUND);
     __castle_btree_find(btree, c_bvec, root_cdb, btree->max_key);
 }
 
 void castle_btree_find(c_bvec_t *c_bvec)
+{
+    clear_bit(CBV_DOING_SPLITS, &c_bvec->flags);
+    CASTLE_INIT_WORK(&c_bvec->work, _castle_btree_find);
+    queue_work(castle_wqs[19], &c_bvec->work); 
+}
+
+static void castle_btree_find_no_clear(c_bvec_t *c_bvec)
 {
     CASTLE_INIT_WORK(&c_bvec->work, _castle_btree_find);
     queue_work(castle_wqs[19], &c_bvec->work); 

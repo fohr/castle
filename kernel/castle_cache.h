@@ -55,8 +55,9 @@ CACHE_FNS(uptodate, uptodate)
 CACHE_FNS(dirty, dirty)
 TAS_CACHE_FNS(dirty, dirty)
 
-void __lock_c2b(c2_block_t *c2b);
+void __lock_c2b(c2_block_t *c2b, int write_mode);
 void unlock_c2b(c2_block_t *c2b);
+void unlock_c2b_read(c2_block_t *c2b);
 int c2b_locked(c2_block_t *c2b);
 void dirty_c2b(c2_block_t *c2b);
 
@@ -64,14 +65,26 @@ void dirty_c2b(c2_block_t *c2b);
 #define lock_c2b(_c2b)                \
 {                                     \
 	might_sleep();                    \
-     __lock_c2b(_c2b);                \
+     __lock_c2b(_c2b, 1);             \
     (_c2b)->file = __FILE__;          \
     (_c2b)->line = __LINE__;          \
 }
+#define lock_c2b_read(_c2b)           \
+{                                     \
+	might_sleep();                    \
+     __lock_c2b(_c2b, 0);             \
+    (_c2b)->file = __FILE__;          \
+    (_c2b)->line = __LINE__;          \
+}
+
 #else
 static inline void lock_c2b(c2_block_t *c2b)
 {
-     __lock_c2b(c2b);
+     __lock_c2b(c2b, 1);
+}
+static inline void lock_c2b_read(c2_block_t *c2b)
+{
+     __lock_c2b(c2b, 0);
 }
 #endif
 

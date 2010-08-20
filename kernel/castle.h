@@ -288,7 +288,8 @@ struct castle_component_tree {
     uint8_t             dynamic;           /* 1 - dynamic modlist btree, 0 - merge result */ 
     da_id_t             da;
     uint8_t             level;
-    struct rw_semaphore lock;              /* Protects root_node & last_node              */
+    struct rw_semaphore lock;              /* Protects root_node, tree depth & last_node  */
+    uint8_t             tree_depth;
     c_disk_blk_t        root_node;
     c_disk_blk_t        first_node;
     c_disk_blk_t        last_node;
@@ -311,6 +312,7 @@ struct castle_clist_entry {
     uint8_t      dynamic;
     tree_seq_t   seq;
     uint8_t      level;
+    uint8_t      tree_depth;
     c_disk_blk_t root_node;
     c_disk_blk_t first_node;
     c_disk_blk_t last_node;
@@ -363,8 +365,14 @@ typedef struct castle_bio {
 
 struct castle_cache_block;
 struct castle_request_timeline;
-#define CBV_ONE2ONE_BIT         (0) 
-#define CBV_ROOT_LOCKED_BIT     (1) 
+#define CBV_ONE2ONE_BIT               (0) 
+#define CBV_ROOT_LOCKED_BIT           (1) 
+#define CBV_DOING_SPLITS              (2) 
+#define CBV_PARENT_WRITE_LOCKED       (3) 
+#define CBV_CHILD_WRITE_LOCKED        (4) 
+/* Temporary variable used to set the above correctly, at the right point in time */ 
+#define CBV_C2B_WRITE_LOCKED          (5) 
+
 typedef struct castle_bio_vec {
     /* Where did this IO originate from */
     c_bio_t                      *c_bio;
@@ -379,7 +387,11 @@ typedef struct castle_bio_vec {
     /* Used to walk the B-Tree */
     union {
         struct {
+            /* How far down the tree we've gone so far */
             int                        btree_depth;
+            /* What's the number of levels in the tree, private copy needed in case
+               someone splits the root node while we are lower down in the tree */
+            int                        btree_levels;
             /* Key in the parent node under which we found btree_node */
             void                      *parent_key;
             /* When writing, B-Tree node and its parent have to be 

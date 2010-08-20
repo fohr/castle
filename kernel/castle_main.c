@@ -35,6 +35,7 @@ struct castle_component_tree castle_global_tree = {.seq         = GLOBAL_TREE,
                                                    .dynamic     = 1,
                                                    .da          = INVAL_DA,
                                                    .level       = -1, 
+                                                   .tree_depth  = -1,
                                                    .root_node   = INVAL_DISK_BLK,
                                                    .first_node  = INVAL_DISK_BLK,
                                                    .last_node   = INVAL_DISK_BLK,
@@ -214,6 +215,8 @@ int castle_fs_init(void)
         castle_btree_node_prep_save(&castle_global_tree, c2b->cdb);
         /* Save the root node in the global tree */
         castle_global_tree.root_node = c2b->cdb; 
+        /* We know that the tree is 1 level deep at the moment */
+        castle_global_tree.tree_depth = 1;
         /* Release btree node c2b */
         unlock_c2b(c2b);
         put_c2b(c2b);

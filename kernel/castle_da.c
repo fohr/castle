@@ -1841,6 +1841,7 @@ static c_mstore_key_t castle_da_ct_marshall(struct castle_clist_entry *ctm,
     ctm->dynamic     = ct->dynamic;
     ctm->seq         = ct->seq;
     ctm->level       = ct->level;
+    ctm->tree_depth  = ct->tree_depth;
     ctm->root_node   = ct->root_node;
     ctm->first_node  = ct->first_node;
     ctm->last_node   = ct->last_node;
@@ -1861,6 +1862,7 @@ static da_id_t castle_da_ct_unmarshall(struct castle_component_tree *ct,
     ct->dynamic     = ctm->dynamic;
     ct->da          = ctm->da_id; 
     ct->level       = ctm->level;
+    ct->tree_depth  = ctm->tree_depth;
     ct->root_node   = ctm->root_node;
     ct->first_node  = ctm->first_node;
     ct->last_node   = ctm->last_node;
@@ -2091,6 +2093,7 @@ static struct castle_component_tree* castle_ct_alloc(struct castle_double_array 
     ct->dynamic     = dynamic;
     ct->da          = da->id;
     ct->level       = level;
+    ct->tree_depth  = -1;
     ct->root_node   = INVAL_DISK_BLK;
     ct->first_node  = INVAL_DISK_BLK;
     ct->last_node   = INVAL_DISK_BLK;
@@ -2119,6 +2122,7 @@ static int castle_da_rwct_make(struct castle_double_array *da)
     c2b = castle_btree_node_create(0, 1 /* is_leaf */, VLBA_TREE_TYPE, ct);
     castle_btree_node_prep_save(ct, c2b->cdb);
     ct->root_node = c2b->cdb;
+    ct->tree_depth = 1;
     unlock_c2b(c2b);
     put_c2b(c2b);
     debug("Added component tree seq=%d, root_node=(0x%x, 0x%x), it's threaded onto da=%p, level=%d\n",
