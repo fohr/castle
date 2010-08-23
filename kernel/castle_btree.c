@@ -10,6 +10,7 @@
 #include "castle_freespace.h"
 #include "castle_versions.h"
 #include "castle_block.h"
+#include "castle_da.h"
 #include "castle_debug.h"
 
 //#define DEBUG
@@ -1481,11 +1482,12 @@ static void castle_btree_node_save(struct work_struct *work)
     ct->last_node = work_st->cdb;
     atomic64_inc(&ct->node_count);
     up_write(&ct->lock);
+    castle_ct_put(ct, 1 /* write */);
 
     kfree(work_st);
 }
 
-void castle_btree_node_prep_save(struct castle_component_tree *ct, c_disk_blk_t node_cdb)
+void castle_btree_node_save_prepare(struct castle_component_tree *ct, c_disk_blk_t node_cdb)
 {
     struct castle_btree_node_save *work_st; 
 
@@ -1494,6 +1496,9 @@ void castle_btree_node_prep_save(struct castle_component_tree *ct, c_disk_blk_t 
      * dead-lock */
     work_st = kmalloc(sizeof(struct castle_btree_node_save), GFP_NOIO);
     BUG_ON(!work_st);
+    /* Get a writable reference to the component tree, to stop people from assuming 
+       the tree is static now */
+    castle_ct_get(ct, 1 /* write */);
     work_st->ct = ct;
     work_st->cdb = node_cdb;
     CASTLE_INIT_WORK(&work_st->work, castle_btree_node_save);
@@ -1612,7 +1617,7 @@ static c2_block_t* castle_btree_effective_node_create(c_bvec_t *c_bvec,
         return NULL;
     }
 
-    castle_btree_node_prep_save(c_bvec->tree, c2b->cdb);
+    castle_btree_node_save_prepare(c_bvec->tree, c2b->cdb);
 
     return c2b;
 }
@@ -1633,7 +1638,7 @@ static c2_block_t* castle_btree_node_key_split(c_bvec_t *c_bvec, c2_block_t *ori
     btree    = castle_btree_type_get(node->type);
     c2b      = castle_btree_node_create(node->version, node->is_leaf, 
                                         node->type, c_bvec->tree);
-    castle_btree_node_prep_save(c_bvec->tree, c2b->cdb);
+    castle_btree_node_save_prepare(c_bvec->tree, c2b->cdb);
     sec_node = c2b_bnode(c2b);
     /* The original node needs to contain the elements from the right hand side
        because otherwise the key in it's parent would have to change. We want
@@ -1774,7 +1779,7 @@ static void castle_btree_new_root_create(c_bvec_t *c_bvec, btree_t type)
     BUG_ON(c_bvec->btree_parent_node);
     /* Create the node */
     c2b = castle_btree_node_create(0, 0, type, c_bvec->tree);
-    castle_btree_node_prep_save(c_bvec->tree, c2b->cdb);
+    castle_btree_node_save_prepare(c_bvec->tree, c2b->cdb);
     node = c2b_buffer(c2b);
     /* We should be under write lock here, check if we can read lock it (and BUG) */
     BUG_ON(down_read_trylock(&c_bvec->tree->lock));

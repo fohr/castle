@@ -79,8 +79,8 @@ static struct castle_component_tree* castle_ct_alloc(struct castle_double_array 
                                                      int level);
 static inline void castle_da_lock(struct castle_double_array *da);
 static inline void castle_da_unlock(struct castle_double_array *da);
-static inline void castle_ct_get(struct castle_component_tree *ct, int write);
-static inline void castle_ct_put(struct castle_component_tree *ct, int write);
+void castle_ct_get(struct castle_component_tree *ct, int write);
+void castle_ct_put(struct castle_component_tree *ct, int write);
 static void castle_component_tree_add(struct castle_double_array *da,
                                       struct castle_component_tree *ct,
                                       int in_init);
@@ -128,7 +128,48 @@ typedef struct castle_immut_iterator {
     struct castle_btree_node     *curr_node;
     int                           curr_idx;
     c2_block_t                   *next_c2b;
+    int                           next_idx;
 } c_immut_iter_t;
+
+static int castle_ct_immut_iter_entry_find(c_immut_iter_t *iter,
+                                           struct castle_btree_node *node,
+                                           int start_idx) 
+{
+    int leaf_ptr;
+
+    for(; start_idx<node->used; start_idx++)
+    {
+        iter->btree->entry_get(node, start_idx, NULL, NULL, &leaf_ptr, NULL);
+        if(!leaf_ptr)
+            return start_idx; 
+    }
+
+    return -1;
+}
+
+
+static int castle_ct_immut_iter_next_node_validate(c_immut_iter_t *iter,
+                                                   struct castle_btree_node *node)
+{
+    /* Non-leaf nodes do not contain any entries for the enumerator, continue straight through */
+    if(!node->is_leaf)
+        return 0;
+
+    /* Non-dynamic trees do not contain leaf pointers => the node must be non-empty, 
+       and will not contain leaf pointers */
+    if(!iter->tree->dynamic)
+    {
+        BUG_ON(node->used == 0);
+        return 1;
+    }
+
+    /* Finally, for dynamic trees, check if we have at least non-leaf pointer */
+    iter->next_idx = castle_ct_immut_iter_entry_find(iter, node, 0 /* start_idx */);
+    if(iter->next_idx >= 0)
+        return 1;
+
+    return 0;
+}
 
 static void castle_ct_immut_iter_next_node_find(c_immut_iter_t *iter, c_disk_blk_t cdb)
 {
@@ -153,15 +194,16 @@ static void castle_ct_immut_iter_next_node_find(c_immut_iter_t *iter, c_disk_blk
         unlock_c2b(c2b);
         node = c2b_bnode(c2b);
         BUG_ON(node->used == 0);
-        if(node->is_leaf)
+        if(castle_ct_immut_iter_next_node_validate(iter, node))
         {
-            debug("Cdb (0x%x, 0x%x) is leaf, exiting.\n", cdb.disk, cdb.block);
+            debug("Cdb (0x%x, 0x%x) will be used next, exiting.\n", cdb.disk, cdb.block);
             /* Found */
             iter->next_c2b = c2b;
             return;
         }
         cdb = node->next_node;
-        debug("Not a leaf node, moving to (0x%x, 0x%x).\n", cdb.disk, cdb.block);
+        debug("Node non-leaf or no non-leaf-ptr entries, moving to (0x%x, 0x%x).\n", 
+                cdb.disk, cdb.block);
     } 
     /* Drop c2b if we failed to find a leaf node, but have an outstanding reference to 
        a non-leaf node */
@@ -184,8 +226,8 @@ static void castle_ct_immut_iter_next_node(c_immut_iter_t *iter)
     BUG_ON(!c2b_uptodate(iter->curr_c2b));
     iter->curr_node = c2b_bnode(iter->curr_c2b); 
     BUG_ON(!iter->curr_node->is_leaf ||
-           (iter->curr_node->used == 0));
-    iter->curr_idx  = 0;
+           (iter->curr_node->used <= iter->next_idx));
+    iter->curr_idx  = iter->next_idx;
     debug("Moved to cdb=(0x%x, 0x%x)\n", 
             iter->curr_c2b->cdb.disk, 
             iter->curr_c2b->cdb.block); 
@@ -202,23 +244,19 @@ static void castle_ct_immut_iter_next(c_immut_iter_t *iter,
 {
     int is_leaf_ptr;
 
-again:
-    /* Check if we can read from the curr_node. If not move to the next node. */
-    if(iter->curr_idx >= iter->curr_node->used) 
+    /* Check if we can read from the curr_node. If not move to the next node. 
+       Make sure that if entries exist, they are not leaf pointers. */
+    if(iter->curr_idx >= iter->curr_node->used || iter->curr_idx < 0) 
     {
         debug("No more entries in the current node. Asking for next.\n");
-        BUG_ON(iter->curr_idx > iter->curr_node->used);
+        BUG_ON((iter->curr_idx >= 0) && (iter->curr_idx > iter->curr_node->used));
         castle_ct_immut_iter_next_node(iter);
-        BUG_ON(iter->curr_idx >= iter->curr_node->used);
+        BUG_ON((iter->curr_idx >= 0) && (iter->curr_idx >= iter->curr_node->used));
     }
     iter->btree->entry_get(iter->curr_node, iter->curr_idx, key_p, version_p, &is_leaf_ptr, cvt_p);
-    if(is_leaf_ptr)
-    {
-        iter->curr_idx++;
-        goto again;
-    }
-    //BUG_ON(is_leaf_ptr);
-    iter->curr_idx++;
+    /* curr_idx should have been set to a non-leaf pointer */
+    BUG_ON(is_leaf_ptr);
+    iter->curr_idx = castle_ct_immut_iter_entry_find(iter, iter->curr_node, iter->curr_idx + 1);
     debug("Returned next, curr_idx is now=%d / %d.\n", iter->curr_idx, iter->curr_node->used);
 }
 
@@ -227,7 +265,7 @@ static int castle_ct_immut_iter_has_next(c_immut_iter_t *iter)
     if(unlikely(iter->completed))
         return 0;
 
-    if((iter->curr_idx >= iter->curr_node->used) && (!iter->next_c2b))
+    if((iter->curr_idx >= iter->curr_node->used || iter->curr_idx < 0) && (!iter->next_c2b))
     {
         iter->completed = 1;
         BUG_ON(!iter->curr_c2b);
@@ -1776,14 +1814,14 @@ static inline void castle_da_unlock(struct castle_double_array *da)
     spin_unlock(&da->lock);
 }
 
-static inline void castle_ct_get(struct castle_component_tree *ct, int write)
+void castle_ct_get(struct castle_component_tree *ct, int write)
 {
     atomic_inc(&ct->ref_count);
     if(write)
         atomic_inc(&ct->write_ref_count);
 }
 
-static inline void castle_ct_put(struct castle_component_tree *ct, int write)
+void castle_ct_put(struct castle_component_tree *ct, int write)
 {
     if(write)
         atomic_dec(&ct->write_ref_count);
@@ -2121,7 +2159,7 @@ static int castle_da_rwct_make(struct castle_double_array *da)
 
     /* Create a root node for this tree, and update the root version */
     c2b = castle_btree_node_create(0, 1 /* is_leaf */, VLBA_TREE_TYPE, ct);
-    castle_btree_node_prep_save(ct, c2b->cdb);
+    castle_btree_node_save_prepare(ct, c2b->cdb);
     ct->root_node = c2b->cdb;
     ct->tree_depth = 1;
     unlock_c2b(c2b);

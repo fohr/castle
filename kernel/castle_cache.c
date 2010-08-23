@@ -128,6 +128,10 @@ static void c2b_io_end(struct bio *bio, int err)
     /* Check if we always complete the entire BIO. Likely yes, since
        the interface in >= 2.6.24 removes the completed variable */
     BUG_ON((!err) && (completed != C_BLK_SIZE * c2b->nr_pages));
+    if( (err) && (completed != 0))
+    {
+        printk("===> Err = %d, completed=%d\n", err, completed);
+    }
     BUG_ON( (err) && (completed != 0));
 #endif
     /* End the IO by calling the client's end_io function */ 

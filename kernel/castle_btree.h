@@ -9,7 +9,7 @@ c2_block_t* castle_btree_node_create  (int version,
                                        int is_leaf, 
                                        btree_t type,
                                        struct castle_component_tree *ct);
-void        castle_btree_node_prep_save
+void        castle_btree_node_save_prepare
                                       (struct castle_component_tree *ct, 
                                        c_disk_blk_t node_cdb);
 void        castle_btree_find         (c_bvec_t *c_bvec);

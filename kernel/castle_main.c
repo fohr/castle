@@ -29,20 +29,22 @@
 struct castle                castle;
 struct castle_slaves         castle_slaves;
 struct castle_attachments    castle_attachments;
-struct castle_component_tree castle_global_tree = {.seq         = GLOBAL_TREE,
-                                                   .item_count  = {0ULL},
-                                                   .btree_type  = MTREE_TYPE, 
-                                                   .dynamic     = 1,
-                                                   .da          = INVAL_DA,
-                                                   .level       = -1, 
-                                                   .tree_depth  = -1,
-                                                   .root_node   = INVAL_DISK_BLK,
-                                                   .first_node  = INVAL_DISK_BLK,
-                                                   .last_node   = INVAL_DISK_BLK,
-                                                   .node_count  = {0ULL},
-                                                   .da_list     = {NULL, NULL},
-                                                   .hash_list   = {NULL, NULL},
-                                                   .mstore_key  = INVAL_MSTORE_KEY,
+struct castle_component_tree castle_global_tree = {.seq             = GLOBAL_TREE,
+                                                   .ref_count       = {1},
+                                                   .write_ref_count = {1},
+                                                   .item_count      = {0ULL},
+                                                   .btree_type      = MTREE_TYPE, 
+                                                   .dynamic         = 1,
+                                                   .da              = INVAL_DA,
+                                                   .level           = -1, 
+                                                   .tree_depth      = -1,
+                                                   .root_node       = INVAL_DISK_BLK,
+                                                   .first_node      = INVAL_DISK_BLK,
+                                                   .last_node       = INVAL_DISK_BLK,
+                                                   .node_count      = {0ULL},
+                                                   .da_list         = {NULL, NULL},
+                                                   .hash_list       = {NULL, NULL},
+                                                   .mstore_key      = INVAL_MSTORE_KEY,
                                                   }; 
 struct workqueue_struct     *castle_wqs[2*MAX_BTREE_DEPTH+1];
 int                          castle_fs_inited;
@@ -212,7 +214,7 @@ int castle_fs_init(void)
         init_rwsem(&castle_global_tree.lock);
         c2b = castle_btree_node_create(0 /* version */, 1 /* is_leaf */, MTREE_TYPE,
                                        &castle_global_tree);
-        castle_btree_node_prep_save(&castle_global_tree, c2b->cdb);
+        castle_btree_node_save_prepare(&castle_global_tree, c2b->cdb);
         /* Save the root node in the global tree */
         castle_global_tree.root_node = c2b->cdb; 
         /* We know that the tree is 1 level deep at the moment */
