@@ -1545,7 +1545,8 @@ static c2_block_t* castle_btree_effective_node_create(c_bvec_t *c_bvec,
     c2_block_t *c2b;
     void *last_eff_key;
     version_t last_eff_version;
-    int i, insert_idx;
+    int i, insert_idx, moved_cnt;
+    static atomic_t print_perf_warning = ATOMIC(0);
     
     node = c2b_bnode(orig_c2b); 
     btree = castle_btree_type_get(node->type);
@@ -1555,12 +1556,14 @@ static c2_block_t* castle_btree_effective_node_create(c_bvec_t *c_bvec,
     last_eff_key = btree->inv_key;
     BUG_ON(eff_node->used != 0);
     insert_idx = 0;
+    moved_cnt = 0;
     for(i=0; i<node->used; i++)
     {
         void        *entry_key;
         version_t    entry_version;
         int          entry_is_leaf_ptr;
         c_val_tup_t  entry_cvt;
+        int          need_move;
  
         btree->entry_get(node, i, &entry_key, &entry_version,
                          &entry_is_leaf_ptr, &entry_cvt);
@@ -1576,7 +1579,15 @@ static c2_block_t* castle_btree_effective_node_create(c_bvec_t *c_bvec,
             BUG_ON(!castle_version_is_ancestor(entry_version, last_eff_version));
             continue;
         }
-        if(!node->is_leaf || entry_is_leaf_ptr)
+        /* Copy directly if:
+            - we are not looking at a leaf node 
+            - the entry is already a leaf pointer
+            - we making the entry in the old node unreachable (that will happen
+              if the effective node version is the same as the entry version,
+              but different from the old node version)
+         */
+        need_move = (entry_version == version) && (node->version != version);
+        if(!node->is_leaf || entry_is_leaf_ptr || need_move)
         {
             /* If already a leaf pointer, or a non-leaf entry copy directly. */
             btree->entry_add(eff_node,
@@ -1597,10 +1608,29 @@ static c2_block_t* castle_btree_effective_node_create(c_bvec_t *c_bvec,
                              1,
                              cvt);
         }
+
+        /* Remember what the last key/version was, so that we know whether to take the
+           next entry we see in the original node or not */ 
         last_eff_key = entry_key;
         last_eff_version = entry_version;
+        /* If we _moved_ something, we need to remove it from the old node */
+        if(need_move)
+        {
+            btree->entries_drop(node, i, i);
+            /* Now that we've dropped the entry, last_eff_key will likely be a broken
+               pointer. Set it to point to eff_node instead */
+            btree->entry_get(eff_node, insert_idx, &last_eff_key, NULL, NULL, NULL);
+            moved_cnt++;
+            /* Decrement the index, so that it'll point to the right entry
+               after the for loop increments it back again */
+            i--;
+        }
         insert_idx++;
     }
+    
+    /* entries_drop is O(n^2), warn if n > a constant. */
+    if((moved_cnt > 5) && atomic_add_unless(&print_perf_warning, 1, 20))
+        printk("Using inefficient entries_drop too frequently (%d).\n", moved_cnt);
 
     /* If effective node is the same size as the original node, throw it away,
        and return NULL.
@@ -1609,6 +1639,7 @@ static c2_block_t* castle_btree_effective_node_create(c_bvec_t *c_bvec,
      */ 
     if((node->version == version) && (eff_node->used == node->used))
     {
+        BUG_ON(moved_cnt > 0);
         /* TODO: should clean_c2b? */
         unlock_c2b(c2b);
         put_c2b(c2b);
@@ -2047,28 +2078,10 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
     BUG_ON((btree->key_compare(lub_key, key) != 0) || 
            (lub_version != version));
     BUG_ON(lub_idx != insert_idx);
-
-    /* If we are looking at the leaf pointer, follow it */
-    if(lub_is_leaf_ptr)
-    {
-        BUG_ON(!CVT_ONDISK(lub_cvt));
-        debug("Following a leaf pointer to (0x%x, 0x%x).\n", 
-                lub_cvt.cdb.disk, lub_cvt.cdb.block);
-        __castle_btree_find(btree, c_bvec, lub_cvt.cdb, btree->inv_key);
-        return;
-    }
+    BUG_ON(lub_is_leaf_ptr);
 
     /* NOP for block devices */
     c_bvec->cvt_get(c_bvec, lub_cvt, &new_cvt);
-    /* Temporary check - remove */
-    {
-        void *tmp_key;
-        version_t tmp_version;
-
-        btree->entry_get(node, lub_idx, &tmp_key, &tmp_version, NULL, NULL);
-        BUG_ON((btree->key_compare(lub_key, tmp_key) != 0) || 
-               (lub_version != tmp_version));
-    }
     btree->entry_replace(node, lub_idx, lub_key, lub_version, 0,
                          new_cvt);
     debug("Key already exists, modifying in place.\n");

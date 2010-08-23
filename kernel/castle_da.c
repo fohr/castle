@@ -193,7 +193,7 @@ static void castle_ct_immut_iter_next_node_find(c_immut_iter_t *iter, c_disk_blk
             BUG_ON(submit_c2b_sync(READ, c2b));
         unlock_c2b(c2b);
         node = c2b_bnode(c2b);
-        BUG_ON(node->used == 0);
+        //BUG_ON(node->used == 0);
         if(castle_ct_immut_iter_next_node_validate(iter, node))
         {
             debug("Cdb (0x%x, 0x%x) will be used next, exiting.\n", cdb.disk, cdb.block);
@@ -225,6 +225,14 @@ static void castle_ct_immut_iter_next_node(c_immut_iter_t *iter)
     iter->curr_c2b  = iter->next_c2b;
     BUG_ON(!c2b_uptodate(iter->curr_c2b));
     iter->curr_node = c2b_bnode(iter->curr_c2b); 
+    if(!iter->curr_node->is_leaf ||
+           (iter->curr_node->used <= iter->next_idx))
+    {
+        printk("curr_node=%d, used=%d, next_idx=%d\n",
+                iter->curr_node->is_leaf,
+                iter->curr_node->used,
+                iter->next_idx);
+    }
     BUG_ON(!iter->curr_node->is_leaf ||
            (iter->curr_node->used <= iter->next_idx));
     iter->curr_idx  = iter->next_idx;
