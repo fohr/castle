@@ -26,7 +26,7 @@ DISK_SIZE=2000 # in MB
 
 umount_fs
 init_disks
-init_fs
+init_fs $@
 
 echo "Castle initialised successfully"
 castle-fs-cli "create" 0x280000 

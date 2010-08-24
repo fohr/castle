@@ -20,6 +20,10 @@
 #endif
 
 static int                     castle_cache_size = 1000; /* in pages */
+
+module_param(castle_cache_size, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
+MODULE_PARM_DESC(castle_cache_size, "Cache size");
+
 static c2_block_t             *castle_cache_blks = NULL;
 
 static int                     castle_cache_hash_buckets;
@@ -40,6 +44,25 @@ static               LIST_HEAD(castle_cache_block_freelist);
 
 static struct task_struct     *castle_cache_flush_thread;
 static DECLARE_WAIT_QUEUE_HEAD(castle_cache_flush_wq); 
+
+static atomic_t                castle_cache_read_stats = ATOMIC_INIT(0);
+static atomic_t                castle_cache_write_stats = ATOMIC_INIT(0);
+
+void castle_cache_print_stats(void)
+{
+    int reads = atomic_read(&castle_cache_read_stats);
+    int writes = atomic_read(&castle_cache_write_stats);
+    atomic_sub(reads, &castle_cache_read_stats);
+    atomic_sub(writes, &castle_cache_write_stats);
+    
+    printk("%d, %d, %d, %d, %d", 
+        atomic_read(&castle_cache_dirtylist_size), 
+        atomic_read(&castle_cache_cleanlist_size),
+        castle_cache_page_freelist_size,
+        reads, writes);
+}
+
+EXPORT_SYMBOL(castle_cache_print_stats);
 
 void __lock_c2b(c2_block_t *c2b, int write)
 {
@@ -103,6 +126,7 @@ static void clean_c2b(c2_block_t *c2b)
     spin_lock_irqsave(&castle_cache_hash_lock, flags);
     BUG_ON(!c2b_locked(c2b));
     BUG_ON(!c2b_dirty(c2b));
+    // TW TODO: try list_move_tail?
     list_move(&c2b->dirty_or_clean, &castle_cache_cleanlist);
     clear_c2b_dirty(c2b); 
     atomic_sub(c2b->nr_pages, &castle_cache_dirtylist_size);
@@ -166,6 +190,11 @@ int submit_c2b(int rw, c2_block_t *c2b)
 	BUG_ON(!c2b_locked(c2b));
 	BUG_ON(!c2b->end_io);
     BUG_ON(DISK_BLK_INVAL(c2b->cdb));
+    
+    if (rw == READ)
+        atomic_inc(&castle_cache_read_stats);
+    else if (rw == WRITE)
+        atomic_inc(&castle_cache_write_stats);
     
     cs = castle_slave_find_by_block(c2b->cdb);
     if(!cs) return -ENODEV;
@@ -411,6 +440,8 @@ static inline int c2b_busy(c2_block_t *c2b)
 
 static int castle_cache_hash_clean(void)
 {
+#define BATCH_FREE 200
+    
     struct list_head *lh, *t;
     LIST_HEAD(victims);
     c2_block_t *c2b;
@@ -431,7 +462,8 @@ static int castle_cache_hash_clean(void)
             list_add(&c2b->list, &victims);
             nr_victims++;
         }
-        if(nr_victims > 20)
+        
+        if(nr_victims > BATCH_FREE)
             break;
     }
     spin_unlock_irq(&castle_cache_hash_lock);
@@ -590,11 +622,15 @@ static void castle_cache_flush_endio(c2_block_t *c2b, int uptodate)
 
 static int castle_cache_flush(void *unused)
 {
-    int high_water_mark, low_water_mark, to_flush, dirty_pgs, batch_idx, i;
+/* The minimum flush speed is: 128 * c2_block size * 5/s ~= 5MB/s */
+#define MIN_FLUSH_BATCH     128
+#define MAX_FLUSH_BATCH     1024
+#define MIN_FLUSH_FREQ      5
+
+    int high_water_mark, low_water_mark, to_flush, dirty_pgs, batch_idx, i, pre_batch_dirty, batch_size, batch_complete, pages_dirtied;
     struct list_head *l, *t;
     c2_block_t *c2b;
-#define FLUSH_BATCH     64 
-    c2_block_t *c2b_batch[FLUSH_BATCH];
+    static c2_block_t *c2b_batch[MAX_FLUSH_BATCH];
     atomic_t in_flight;
 
     high_water_mark = castle_cache_size >> 1;
@@ -617,8 +653,18 @@ static int castle_cache_flush(void *unused)
             to_flush = dirty_pgs;
         atomic_set(&in_flight, 0);
         debug("====> Flushing: %d pages out of %d dirty.\n", to_flush, dirty_pgs);
-next_batch:        
+
+        // Remember how many pages are dirty before we go to sleep, 
+        // so we can work out how many were dirtied whilst we waited
+        pre_batch_dirty = dirty_pgs;
+        pages_dirtied = 0;
+next_batch:
+        // We will submit a batch of min_size, or #pgs dirtied since last batch
+        batch_size = max(MIN_FLUSH_BATCH, pages_dirtied);
+        batch_size = min(batch_size, to_flush);
+        batch_size = min(batch_size, MAX_FLUSH_BATCH);
         batch_idx = 0;
+        
         spin_lock_irq(&castle_cache_hash_lock);
         list_for_each_safe(l, t, &castle_cache_dirtylist)
         {
@@ -632,7 +678,7 @@ next_batch:
             get_c2b(c2b);
             to_flush -= c2b->nr_pages;
             c2b_batch[batch_idx++] = c2b;
-            if(batch_idx >= FLUSH_BATCH)
+            if(batch_idx >= batch_size)
                 break;
         }
         spin_unlock_irq(&castle_cache_hash_lock);
@@ -647,26 +693,40 @@ next_batch:
             BUG_ON(submit_c2b(WRITE, c2b_batch[i]));
         }
 
+        /* Wait for 95% of the inflight ops to complete before doing the next batch */
+        batch_complete = batch_size / 20;
+        debug("====> Waiting for all IOs to complete.\n");
+        wait_event(castle_cache_flush_wq, atomic_read(&in_flight) <= batch_complete);
+        debug("====> Waiting completed.\n");
+        
+        /* Wait until enough pages have been dirtied to make it worth out while
+         * this will rate limit us to a min of 10 MIN_BATCHes a second */
+        wait_event_timeout(castle_cache_flush_wq,
+            (atomic_read(&castle_cache_dirtylist_size) + batch_size 
+                - pre_batch_dirty) > MIN_FLUSH_BATCH, HZ/MIN_FLUSH_FREQ);
+        
+        dirty_pgs = atomic_read(&castle_cache_dirtylist_size);
+        pages_dirtied = dirty_pgs + batch_size - pre_batch_dirty;
+        pre_batch_dirty = dirty_pgs;
+        to_flush = dirty_pgs - low_water_mark;
+        if(kthread_should_stop())
+            to_flush = dirty_pgs;
+        
         /* We may have to flush more than one batch */
         if(to_flush > 0)
         {
-            if(batch_idx == FLUSH_BATCH)
+            if(batch_idx == batch_size)
                 goto next_batch; 
             /* If we still have buffers to flush, but we could not lock 
                enough dirty buffers print a warning message, and stop */
             printk("WARNING: Could not find enough dirty pages to flush\n"
                    "  Stats: dirty=%d, clean=%d, free=%d\n"
-                   "         low wm=%d, to_flush=%d, blocks=%d\n",
+                   "         low wm=%d, to_flush=%d, blocks=%d, batch_size=%d\n",
                 atomic_read(&castle_cache_dirtylist_size), 
                 atomic_read(&castle_cache_cleanlist_size),
                 castle_cache_page_freelist_size,
-                low_water_mark, to_flush, batch_idx); 
+                low_water_mark, to_flush, batch_idx, batch_size); 
         }
-        
-        debug("====> Waiting for all IOs to complete.\n");
-        /* Wait for all the IOs to complete */
-        wait_event(castle_cache_flush_wq, atomic_read(&in_flight) == 0);
-        debug("====> Waiting completed.\n");
         
         /* Finally check if we should still continue */
         if(kthread_should_stop())
@@ -1231,6 +1291,8 @@ struct castle_mstore* castle_mstore_init(c_mstore_id_t store_id, size_t entry_si
 int castle_cache_init(void)
 {
     int ret;
+
+    printk("Castle cache init, size=%d\n", castle_cache_size);
 
     castle_cache_hash_buckets = castle_cache_size >> 3; 
     castle_cache_hash = 

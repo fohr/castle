@@ -231,7 +231,7 @@ function init_mod {
 
     if [ `lsmod | grep "castle_fs " | wc -l` == 0 ]; then
         echo "Castle FS kernel module not found, trying to insert."
-        modprobe castle-fs
+        modprobe castle-fs $@
         # Wait up to 5 seconds for the control file to appear
         # udev renaming is sometimes slow
         for i in `seq 50`; do
@@ -250,7 +250,7 @@ function init_mod {
 
 function init_fs {
     SLAVES=""
-    init_mod
+    init_mod $@
     echo
     echo "Initing FS..."
 	
