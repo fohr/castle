@@ -2172,17 +2172,19 @@ void castle_btree_process(struct work_struct *work)
 
 static void castle_btree_c2b_forget(c_bvec_t *c_bvec)
 {
-    int write = (c_bvec_data_dir(c_bvec) == WRITE);
+    int write = (c_bvec_data_dir(c_bvec) == WRITE), write_unlock;
     c2_block_t *c2b_to_forget;
 
     /* We don't lock parent nodes on reads */
     BUG_ON(!write && c_bvec->btree_parent_node);
     /* On writes we forget the parent, on reads the node itself */
     c2b_to_forget = (write ? c_bvec->btree_parent_node : c_bvec->btree_node);
+    write_unlock = (write ? test_bit(CBV_PARENT_WRITE_LOCKED, &c_bvec->flags) :
+                            test_bit(CBV_CHILD_WRITE_LOCKED, &c_bvec->flags));
     /* Release the buffer if one exists */
     if(c2b_to_forget)
     {
-        if(test_bit(CBV_PARENT_WRITE_LOCKED, &c_bvec->flags))
+        if(write_unlock)
             unlock_c2b(c2b_to_forget);
         else
             unlock_c2b_read(c2b_to_forget);
