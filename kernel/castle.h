@@ -7,6 +7,9 @@
 #include <linux/workqueue.h>
 #include <linux/completion.h>
 #include <linux/fs.h>
+#include <linux/net.h>
+#include <linux/socket.h>
+#include <net/sock.h>
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,24)
 #include <asm/semaphore.h>
 #else
@@ -343,6 +346,8 @@ struct castle_flist_entry {
 
 /* IO related structures */
 struct castle_bio_vec;
+struct castle_object_replace;
+
 typedef struct castle_bio {
     struct castle_attachment     *attachment;
     /* castle_bio is created to handle a bio, or an rxrpc call (never both) */
@@ -350,6 +355,7 @@ typedef struct castle_bio {
     union {
         struct bio               *bio;
         struct castle_rxrpc_call *rxrpc_call;
+        struct castle_object_replace *replace;
     };
     struct castle_bio_vec        *c_bvecs; 
     atomic_t                      count;
@@ -739,5 +745,24 @@ struct castle_fs_superblock*
 void                  castle_fs_superblocks_put    (struct castle_fs_superblock *sb, int dirty);
 
 int                   castle_fs_init               (void);
+
+struct castle_cache_block;
+
+struct castle_object_replace {
+    uint32_t    value_len; // total value length
+
+    void        (*complete)        (struct castle_object_replace *op,
+                                    int                           err);
+    void        (*replace_continue)(struct castle_object_replace *op);
+    uint32_t    (*data_length_get) (struct castle_object_replace *op);
+    void        (*data_copy)       (struct castle_object_replace *op, 
+                                    void                         *buffer, 
+                                    int                           str_length, 
+                                    int                           partial);
+
+    struct castle_cache_block *data_c2b;
+    uint32_t    data_c2b_offset;
+    uint32_t    data_length;
+};
 
 #endif /* __CASTLE_H__ */

@@ -2,6 +2,8 @@
 
 #include "castle_public.h"
 #include "castle_utils.h"
+#include "castle_cache.h"
+#include "castle_btree.h"
 #include "castle_objects.h"
 #include "castle.h"
 

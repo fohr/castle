@@ -10,6 +10,7 @@
 #include "castle_versions.h"
 #include "castle_freespace.h"
 #include "castle_rxrpc.h"
+#include "castle_objects.h"
 
 //#define DEBUG
 #ifndef DEBUG
@@ -37,7 +38,6 @@ static const uint32_t OBJ_TOMBSTONE = ((uint32_t)-1);
 #define KEY_DIMENSION_OFFSET(_dim_head)     ((_dim_head) >> KEY_DIMENSION_FLAGS_SHIFT)
 #define KEY_DIMENSION_HEADER(_off, _flags)  (((_off)  << KEY_DIMENSION_FLAGS_SHIFT) |     \
                                              ((_flags) & KEY_DIMENSION_FLAGS_MASK))
-
 
 static inline uint32_t castle_object_btree_key_dim_length(c_vl_bkey_t *key, int dim)
 {
@@ -554,7 +554,7 @@ static void castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
                                           c_val_tup_t  prev_cvt,
                                           c_val_tup_t *cvt)
 {
-    struct castle_rxrpc_call *call = c_bvec->c_bio->rxrpc_call;
+    struct castle_object_replace *replace = c_bvec->c_bio->replace;
     int tombstone = c_bvec_data_del(c_bvec); 
     int nr_blocks;
 
@@ -566,8 +566,8 @@ static void castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
     /* Allocate space for new value, in or out of line */ 
     if(!tombstone)
     {
-        /* The packet will now contain the length of the data payload */
-        cvt->length = castle_rxrpc_uint32_get(call);
+        cvt->length = replace->value_len;
+
         /* Decide whether to use inline, or out-of-line value on the 
            basis of this length. */
         if (cvt->length <= MAX_INLINE_VAL_SIZE)
@@ -577,8 +577,8 @@ static void castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
             /* TODO: Work out how to handle this */
             BUG_ON(!cvt->val);
             /* We should not inline values which do not fit in a packet */
-            BUG_ON(castle_rxrpc_packet_length(call) < cvt->length);
-            castle_rxrpc_str_copy(call, cvt->val, cvt->length, 0 /* not partial */); 
+            BUG_ON(replace->data_length_get(replace) < cvt->length);
+            replace->data_copy(replace, cvt->val, cvt->length, 0 /* not partial */); 
         }
         else
         {
@@ -645,8 +645,7 @@ static void castle_object_replace_multi_cvt_get(c_bvec_t    *c_bvec,
 
 #define OBJ_IO_MAX_BUFFER_SIZE      (10)    /* In C_BLK_SIZE blocks */
 
-static c_disk_blk_t castle_object_write_next_cdb(struct castle_rxrpc_call *call,
-                                                 c_disk_blk_t old_cdb,
+static c_disk_blk_t castle_object_write_next_cdb(c_disk_blk_t old_cdb,
                                                  uint32_t data_length)
 {
     uint32_t data_c2b_length;
@@ -666,8 +665,7 @@ static c_disk_blk_t castle_object_write_next_cdb(struct castle_rxrpc_call *call,
     return new_data_cdb;
 }
 
-static c2_block_t* castle_object_write_buffer_alloc(struct castle_rxrpc_call *call,
-                                                    c_disk_blk_t new_data_cdb,
+static c2_block_t* castle_object_write_buffer_alloc(c_disk_blk_t new_data_cdb,
                                                     uint32_t data_length)
 {
     uint32_t data_c2b_length;
@@ -690,7 +688,7 @@ static c2_block_t* castle_object_write_buffer_alloc(struct castle_rxrpc_call *ca
     return new_data_c2b;
 }
 
-static int castle_object_data_write(struct castle_rxrpc_call *call)
+static int castle_object_data_write(struct castle_object_replace *replace)
 {
     c2_block_t *data_c2b;
     uint32_t data_c2b_offset, data_c2b_length, data_length, packet_length;
@@ -698,11 +696,14 @@ static int castle_object_data_write(struct castle_rxrpc_call *call)
     c_disk_blk_t new_data_cdb;
 
     /* Work out how much data we've got, and how far we've got so far */
-    castle_rxrpc_replace_call_get(call, &data_c2b, &data_c2b_offset, &data_length);
+    data_c2b = replace->data_c2b;
+    data_c2b_offset = replace->data_c2b_offset;
+    data_length = replace->data_length;
+
     debug("Data write. call=%p, data_c2b=%p, data_c2b_offset=%d, data_length=%d\n",
         call, data_c2b, data_c2b_offset, data_length);
     data_c2b_length = data_c2b->nr_pages * C_BLK_SIZE;
-    packet_length = castle_rxrpc_packet_length(call);
+    packet_length = replace->data_length_get(replace);
 
     debug("Packet length=%d, data_length=%d\n", packet_length, data_length);
     BUG_ON(packet_length <= 0);
@@ -725,10 +726,10 @@ static int castle_object_data_write(struct castle_rxrpc_call *call)
             last_copy = 1;
             copy_length = data_length;
         }
-        castle_rxrpc_str_copy(call, 
-                              data_c2b_buffer,
-                              copy_length,
-                              last_copy ? 0 : 1);
+        replace->data_copy(replace, 
+                          data_c2b_buffer,
+                          copy_length,
+                          last_copy ? 0 : 1);
 
         data_length     -= copy_length;
         data_c2b_offset += copy_length;
@@ -744,8 +745,8 @@ static int castle_object_data_write(struct castle_rxrpc_call *call)
         if((data_c2b_offset == data_c2b_length) && (data_length > 0))
         {
             debug("Run out of buffer space, allocating a new one.\n");
-            new_data_cdb = castle_object_write_next_cdb(call, data_c2b->cdb, data_length); 
-            new_data_c2b = castle_object_write_buffer_alloc(call, new_data_cdb, data_length); 
+            new_data_cdb = castle_object_write_next_cdb(data_c2b->cdb, data_length); 
+            new_data_c2b = castle_object_write_buffer_alloc(new_data_cdb, data_length); 
             data_c2b_length = new_data_c2b->nr_pages * C_BLK_SIZE;
             data_c2b_offset = 0;
             /* Release the (old) buffer */
@@ -760,8 +761,11 @@ static int castle_object_data_write(struct castle_rxrpc_call *call)
 
     debug("Exiting data_write with data_c2b_offset=%d, data_length=%d, data_c2b=%p\n", 
             data_c2b_offset, data_length, data_c2b);
-    castle_rxrpc_replace_call_set(call, data_c2b, data_c2b_offset, data_length);
-
+    
+    replace->data_c2b = data_c2b;
+    replace->data_c2b_offset = data_c2b_offset;
+    replace->data_length = data_length;
+    
     return (data_length == 0);
 }
                                      
@@ -770,7 +774,7 @@ void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
                                     int err,
                                     c_val_tup_t cvt)
 {
-    struct castle_rxrpc_call *call = c_bvec->c_bio->rxrpc_call;
+    struct castle_object_replace *replace = c_bvec->c_bio->replace;
     c_bio_t *c_bio = c_bvec->c_bio;
     c2_block_t *c2b = NULL;
     int complete_write;
@@ -786,7 +790,7 @@ void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
     /* Deal with error case first */
     if(err)
     {
-        castle_rxrpc_replace_complete(call, err);
+        replace->complete(replace, err);
         castle_utils_bio_free(c_bio);
         return;
     }
@@ -796,9 +800,13 @@ void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
     if(CVT_ONDISK(cvt))
     {
         BUG_ON(c_bvec_data_del(c_bvec));
-        c2b = castle_object_write_buffer_alloc(call, cvt.cdb, cvt.length); 
-        castle_rxrpc_replace_call_set(call, c2b, 0, cvt.length); 
-        complete_write = castle_object_data_write(call);
+        c2b = castle_object_write_buffer_alloc(cvt.cdb, cvt.length); 
+        
+        replace->data_c2b = c2b;
+        replace->data_c2b_offset = 0;
+        replace->data_length = cvt.length;
+        
+        complete_write = castle_object_data_write(replace);
     }
     else 
     if(CVT_INLINE(cvt))
@@ -819,12 +827,12 @@ void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
             put_c2b(c2b);
         }
  
-        castle_rxrpc_replace_complete(call, 0);
+        replace->complete(replace, 0);
     } else
     /* Complete the packet, so that the client sends us more. */
     {
         debug("Completing the packet, continuing the rest of the write.\n");
-        castle_rxrpc_replace_continue(call);
+        replace->replace_continue(replace);
     }
 
     castle_utils_bio_free(c_bio);
@@ -861,34 +869,33 @@ void castle_object_replace_multi_complete(struct castle_bio_vec *c_bvec,
     castle_rxrpc_replace_multi_next_process(call, 0);
 }
 
-int castle_object_replace_continue(struct castle_rxrpc_call *call, int last)
+int castle_object_replace_continue(struct castle_object_replace *replace, int last)
 {
     int copy_end;
 
     debug("Replace continue.\n");
-    copy_end = castle_object_data_write(call);
+    copy_end = castle_object_data_write(replace);
     if(copy_end != last)
         printk("Warning packet for completed replace!!.\n");
     if(last)
     {
-        c2_block_t *data_c2b;
-        uint32_t data_c2b_offset, data_length;
-
-        castle_rxrpc_replace_call_get(call, &data_c2b, &data_c2b_offset, &data_length);
+        c2_block_t *data_c2b = replace->data_c2b;
+        uint32_t data_length = replace->data_length;
+        
         BUG_ON(data_length != 0);
         dirty_c2b(data_c2b);
         unlock_c2b(data_c2b);
         put_c2b(data_c2b);
-        castle_rxrpc_replace_complete(call, 0);
+        replace->complete(replace, 0);
     } else
     {
-        castle_rxrpc_replace_continue(call);
+        replace->replace_continue(replace);
     }
 
     return 0;
 }
 
-int castle_object_replace(struct castle_rxrpc_call *call, 
+int castle_object_replace(struct castle_object_replace *replace, 
                           struct castle_attachment *attachment,
                           c_vl_okey_t *key, 
                           int tombstone)
@@ -914,7 +921,7 @@ int castle_object_replace(struct castle_rxrpc_call *call,
         return -ENOMEM;
     BUG_ON(!attachment);
     c_bio->attachment    = attachment;
-    c_bio->rxrpc_call    = call;
+    c_bio->replace       = replace;
     c_bio->data_dir      = WRITE;
     /* Tombstone & object replace both require a write */
     if(tombstone) 
@@ -933,6 +940,8 @@ int castle_object_replace(struct castle_rxrpc_call *call,
 
     return 0;
 }
+
+EXPORT_SYMBOL(castle_object_replace);
 
 int castle_object_replace_multi(struct castle_rxrpc_call *call,
                                 struct castle_attachment *attachment,

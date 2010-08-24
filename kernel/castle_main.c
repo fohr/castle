@@ -989,6 +989,8 @@ struct castle_attachment* castle_collection_find(collection_id_t col_id)
     return NULL;
 }
 
+EXPORT_SYMBOL(castle_collection_find);
+
 struct castle_attachment* castle_attachment_init(int device, /* _or_object_collection */
                                                  version_t version,
                                                  da_id_t *da_id,

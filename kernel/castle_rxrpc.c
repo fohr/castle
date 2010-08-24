@@ -101,11 +101,7 @@ struct castle_rxrpc_call {
             int         first;
         } get;
         /* For CASTLE_OBJ_REQ_REPLACE */
-        struct {
-            c2_block_t *data_c2b;
-            uint32_t    data_c2b_offset;
-            uint32_t    data_length;
-        } replace;
+        struct castle_object_replace replace;
         /* For CASTLE_OBJ_REQ_REPLACE_MULTI */
         struct {
             char       *buf;
@@ -143,29 +139,6 @@ void castle_rxrpc_get_call_set(struct castle_rxrpc_call *call,
     call->get.data_c2b_length = data_c2b_length;
     call->get.data_length     = data_length;
     call->get.first           = first;
-}
-
-void castle_rxrpc_replace_call_get(struct castle_rxrpc_call *call, 
-                                   c2_block_t **data_c2b, 
-                                   uint32_t *data_c2b_offset,
-                                   uint32_t *data_length)
-{
-    BUG_ON(call->type != &castle_rxrpc_replace_call);
-    BUG_ON(!data_c2b || !data_c2b_offset || !data_length);
-    *data_c2b        = call->replace.data_c2b;
-    *data_c2b_offset = call->replace.data_c2b_offset;
-    *data_length     = call->replace.data_length;
-}
-
-void castle_rxrpc_replace_call_set(struct castle_rxrpc_call *call, 
-                                   c2_block_t *data_c2b, 
-                                   uint32_t data_c2b_offset,
-                                   uint32_t data_length)
-{
-    BUG_ON(call->type != &castle_rxrpc_replace_call);
-    call->replace.data_c2b        = data_c2b;
-    call->replace.data_c2b_offset = data_c2b_offset;
-    call->replace.data_length     = data_length;
 }
 
 static void castle_rxrpc_state_update(struct castle_rxrpc_call *call, int state)
@@ -400,8 +373,9 @@ void castle_rxrpc_get_reply_continue(struct castle_rxrpc_call *call,
     castle_rxrpc_call_reply_continue(call, err, buffer, buffer_length, last); 
 }
 
-void castle_rxrpc_replace_complete(struct castle_rxrpc_call *call, int err)
+void castle_rxrpc_replace_complete(struct castle_object_replace *op, int err)
 {
+    struct castle_rxrpc_call *call = container_of(op, struct castle_rxrpc_call, replace);
     uint32_t reply[1];
 
     debug("Replace complete for call=%p\n", call); 
@@ -430,8 +404,9 @@ void castle_rxrpc_call_continue(struct castle_rxrpc_call *call)
     }
 }
 
-void castle_rxrpc_replace_continue(struct castle_rxrpc_call *call)
+void castle_rxrpc_replace_continue(struct castle_object_replace *op)
 {
+    struct castle_rxrpc_call *call = container_of(op, struct castle_rxrpc_call, replace);
     castle_rxrpc_call_continue(call);
 }
 
@@ -464,14 +439,21 @@ uint32_t castle_rxrpc_packet_length(struct castle_rxrpc_call *call)
     return call->current_skb->len;
 }
 
-uint32_t castle_rxrpc_uint32_get(struct castle_rxrpc_call *call)
+uint32_t castle_rxrpc_replace_packet_length(struct castle_object_replace *op)
 {
-    return SKB_L_GET(call->current_skb);
+    struct castle_rxrpc_call *call = container_of(op, struct castle_rxrpc_call, replace);
+    return castle_rxrpc_packet_length(call);
 }
 
 void castle_rxrpc_str_copy(struct castle_rxrpc_call *call, void *buffer, int str_length, int partial)
 {
     SKB_STR_CPY(call->current_skb, buffer, str_length, !partial);
+}
+
+void castle_rxrpc_replace_str_copy(struct castle_object_replace *op, void *buffer, int str_length, int partial)
+{
+    struct castle_rxrpc_call *call = container_of(op, struct castle_rxrpc_call, replace); 
+    castle_rxrpc_str_copy(call, buffer, str_length, partial);
 }
 
 uint32_t castle_rxrpc_uint32_get_buf(struct castle_rxrpc_call *call)
@@ -647,6 +629,7 @@ static int castle_rxrpc_replace_decode(struct castle_rxrpc_call *call, struct sk
 {
     struct castle_attachment *attachment;
     c_vl_okey_t *key;
+    uint32_t value_len, is_tombstone;
     int ret;
 #ifdef DEBUG
     static int cnt = 0;
@@ -663,8 +646,18 @@ static int castle_rxrpc_replace_decode(struct castle_rxrpc_call *call, struct sk
         ret = castle_rxrpc_collection_key_get(skb, &attachment, &key);
         if(ret)
             return ret;
+        is_tombstone = SKB_L_GET(skb) == CASTLE_OBJ_TOMBSTONE;
+        value_len = is_tombstone ? 0 : SKB_L_GET(skb);
+
         castle_rxrpc_state_update(call, RXRPC_CALL_AWAIT_DATA);
-        ret = castle_object_replace(call, attachment, key, (SKB_L_GET(skb) == CASTLE_OBJ_TOMBSTONE));
+        
+        call->replace.value_len = value_len;
+        call->replace.replace_continue = castle_rxrpc_replace_continue;
+        call->replace.complete = castle_rxrpc_replace_complete;
+        call->replace.data_length_get = castle_rxrpc_replace_packet_length;
+        call->replace.data_copy = castle_rxrpc_replace_str_copy;
+        
+        ret = castle_object_replace(&call->replace, attachment, key, is_tombstone);
     } else
     /* Subsequent packet processing */
     {
@@ -674,7 +667,7 @@ static int castle_rxrpc_replace_decode(struct castle_rxrpc_call *call, struct sk
                    "(data_length=0, packet_length=%d, last=%d). Ignoring.\n",
                     call, skb->len, last);
         }
-        ret = castle_object_replace_continue(call, last);
+        ret = castle_object_replace_continue(&call->replace, last);
     }
 
     if(ret)
@@ -831,7 +824,7 @@ void castle_rxrpc_replace_multi_next_process(struct castle_rxrpc_call *call, int
             castle_rxrpc_rounded_length(val_len))
     {
         debug("Not enough data for value, waiting for more...\n");
-        castle_rxrpc_replace_continue(call);
+        castle_rxrpc_replace_multi_continue(call);
         return;
     }
 

@@ -2,7 +2,6 @@
 #define __CASTLE_RXRPC_H__
 
 uint32_t castle_rxrpc_packet_length      (struct castle_rxrpc_call *call);
-uint32_t castle_rxrpc_uint32_get         (struct castle_rxrpc_call *call);
 void     castle_rxrpc_str_copy           (struct castle_rxrpc_call *call, 
                                           void *buffer, 
                                           int str_length, 
@@ -23,17 +22,7 @@ void     castle_rxrpc_get_call_set       (struct castle_rxrpc_call *call,
                                           uint32_t data_c2b_length,
                                           uint32_t data_length,
                                           int first);
-void     castle_rxrpc_replace_call_get   (struct castle_rxrpc_call *call, 
-                                          c2_block_t **data_c2b, 
-                                          uint32_t *data_c2b_offset,
-                                          uint32_t *data_length);
-void     castle_rxrpc_replace_call_set   (struct castle_rxrpc_call *call, 
-                                          c2_block_t *data_c2b, 
-                                          uint32_t data_c2b_offset,
-                                          uint32_t data_length);
                                          
-void     castle_rxrpc_replace_continue   (struct castle_rxrpc_call *call);
-void     castle_rxrpc_replace_complete   (struct castle_rxrpc_call *call, int err);
 void     castle_rxrpc_replace_multi_continue
                                          (struct castle_rxrpc_call *call);
 void     castle_rxrpc_replace_multi_complete
