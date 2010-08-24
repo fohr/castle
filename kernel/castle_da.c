@@ -148,8 +148,8 @@ static int castle_ct_immut_iter_entry_find(c_immut_iter_t *iter,
 }
 
 
-static int castle_ct_immut_iter_next_node_validate(c_immut_iter_t *iter,
-                                                   struct castle_btree_node *node)
+static int castle_ct_immut_iter_next_node_init(c_immut_iter_t *iter,
+                                               struct castle_btree_node *node)
 {
     /* Non-leaf nodes do not contain any entries for the enumerator, continue straight through */
     if(!node->is_leaf)
@@ -159,6 +159,8 @@ static int castle_ct_immut_iter_next_node_validate(c_immut_iter_t *iter,
        and will not contain leaf pointers */
     if(!iter->tree->dynamic)
     {
+        iter->next_idx = 0;
+        BUG_ON(castle_ct_immut_iter_entry_find(iter, node, 0 /* start_idx */) != iter->next_idx);
         BUG_ON(node->used == 0);
         return 1;
     }
@@ -193,8 +195,7 @@ static void castle_ct_immut_iter_next_node_find(c_immut_iter_t *iter, c_disk_blk
             BUG_ON(submit_c2b_sync(READ, c2b));
         unlock_c2b(c2b);
         node = c2b_bnode(c2b);
-        //BUG_ON(node->used == 0);
-        if(castle_ct_immut_iter_next_node_validate(iter, node))
+        if(castle_ct_immut_iter_next_node_init(iter, node))
         {
             debug("Cdb (0x%x, 0x%x) will be used next, exiting.\n", cdb.disk, cdb.block);
             /* Found */
