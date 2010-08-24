@@ -125,14 +125,23 @@ static void c2b_io_end(struct bio *bio, int err)
 #endif
     
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,18)
+    if (bio->bi_size)
+    {
+#ifdef CASTLE_DEBUG    
+        local_irq_restore(flags);
+#endif
+        return 1;
+    }
+
     /* Check if we always complete the entire BIO. Likely yes, since
        the interface in >= 2.6.24 removes the completed variable */
     BUG_ON((!err) && (completed != C_BLK_SIZE * c2b->nr_pages));
     if( (err) && (completed != 0))
     {
-        printk("===> Err = %d, completed=%d\n", err, completed);
+        printk("Bio error=%d, completed=%d, bio->bi_size=%d\n", err, completed, bio->bi_size);
+        BUG();
     }
-    BUG_ON( (err) && (completed != 0));
+    BUG_ON(err && test_bit(BIO_UPTODATE, &bio->bi_flags));
 #endif
     /* End the IO by calling the client's end_io function */ 
 	c2b->end_io(c2b, test_bit(BIO_UPTODATE, &bio->bi_flags));
