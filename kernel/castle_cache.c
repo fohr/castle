@@ -424,6 +424,7 @@ static void castle_cache_block_init(c2_block_t *c2b,
 /* Must be called with freelist lock held */
 static void castle_cache_block_free(c2_block_t *c2b)
 {
+    BUG_ON(spin_trylock(&castle_cache_freelist_lock));
     if(c2b->nr_pages > 1)
         vunmap(c2b->buffer);
     /* Add the pages back to the freelist */
@@ -568,7 +569,9 @@ c2_block_t* castle_cache_block_get(c_disk_blk_t cdb, int nr_pages)
         {
             debug("Failed\n");
             put_c2b(c2b);
+            spin_lock(&castle_cache_freelist_lock);
             castle_cache_block_free(c2b);
+            spin_unlock(&castle_cache_freelist_lock);
         }
         else
         {
@@ -803,7 +806,9 @@ static void castle_cache_hash_fini(void)
 
             BUG_ON(c2b_locked(c2b));
             BUG_ON(atomic_read(&c2b->count) != 0);
+            spin_lock(&castle_cache_freelist_lock);
             castle_cache_block_free(c2b);
+            spin_unlock(&castle_cache_freelist_lock);
         }
     }
 }
