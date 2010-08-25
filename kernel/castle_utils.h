@@ -193,7 +193,12 @@ static inline c_bio_t* castle_utils_bio_alloc(int nr_bvecs)
         return NULL;
     c_bvecs = (c_bvec_t *)(c_bio + 1);
     for(i=0; i<nr_bvecs; i++)
+    {
         c_bvecs[i].c_bio = c_bio;
+#ifdef CASTLE_PERF_DEBUG    
+        c_bvecs[i].timeline = NULL;
+#endif
+    }
     c_bio->c_bvecs = c_bvecs; 
     /* Single reference taken out, the user decides how many more to take */
     c_bio->count   = ATOMIC(1);
