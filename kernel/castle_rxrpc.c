@@ -394,9 +394,9 @@ void castle_rxrpc_call_continue(struct castle_rxrpc_call *call)
 {
     debug("Continuing call type \"%s\" (checking for more packets on the queue).\n",
             call->type->name);
+    rxrpc_kernel_data_delivered(call->current_skb);
     /* Go back in the state, because otherwise packet_process() will ignore us. */
     castle_rxrpc_state_update(call, RXRPC_CALL_AWAIT_REQUEST);
-    rxrpc_kernel_data_delivered(call->current_skb);
     if(!skb_queue_empty(&call->rx_queue));
     {
         debug("Queueing packet process.\n");
