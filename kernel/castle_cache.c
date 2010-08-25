@@ -526,7 +526,7 @@ static void castle_cache_page_freelist_grow(int nr_pages)
 c2_block_t* castle_cache_block_get(c_disk_blk_t cdb, int nr_pages)
 {
     c2_block_t *c2b;
-    LIST_HEAD(pages);
+    struct list_head pages;
 
     castle_cache_flush_wakeup();
     might_sleep();
@@ -546,6 +546,7 @@ c2_block_t* castle_cache_block_get(c_disk_blk_t cdb, int nr_pages)
 
         /* If we couldn't find in the hash, 
            try allocating from the freelist */ 
+        INIT_LIST_HEAD(&pages);
         do {
             debug("Trying to allocate from freelist.\n");
             castle_cache_page_freelist_get(nr_pages, &pages); 
