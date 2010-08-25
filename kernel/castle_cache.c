@@ -413,7 +413,10 @@ static void castle_cache_block_init(c2_block_t *c2b,
     list_for_each(lh, &c2b->pages)
         pgs[i++] = list_entry(lh, struct page, lru);
 
-    c2b->buffer = vmap(pgs, i, VM_READ|VM_WRITE, PAGE_KERNEL);
+    if(nr_pages > 1)
+        c2b->buffer = vmap(pgs, i, VM_READ|VM_WRITE, PAGE_KERNEL);
+    else
+        c2b->buffer = pfn_to_kaddr(page_to_pfn(pgs[0])); 
     up(&pgs_mutex);
     BUG_ON(!c2b->buffer);
 }
@@ -421,7 +424,8 @@ static void castle_cache_block_init(c2_block_t *c2b,
 /* Must be called with freelist lock held */
 static void castle_cache_block_free(c2_block_t *c2b)
 {
-    vunmap(c2b->buffer);
+    if(c2b->nr_pages > 1)
+        vunmap(c2b->buffer);
     /* Add the pages back to the freelist */
     list_splice_init(&c2b->pages, &castle_cache_page_freelist);
     castle_cache_page_freelist_size += c2b->nr_pages;
