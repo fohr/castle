@@ -1129,6 +1129,7 @@ static void castle_rxrpc_packet_process(struct work_struct *work)
     }
 }
 
+static DEFINE_SPINLOCK(castle_rxrpc_next_cpu_lock);
 static int castle_rxrpc_next_cpu;
 
 static void castle_rxrpc_incoming_call_collect(struct work_struct *work)
@@ -1154,14 +1155,16 @@ static void castle_rxrpc_incoming_call_collect(struct work_struct *work)
         /* Init the call struct */
         CASTLE_INIT_WORK(&c_rxcall->work, castle_rxrpc_packet_process);
         skb_queue_head_init(&c_rxcall->rx_queue);
-        c_rxcall->cpu        = castle_rxrpc_next_cpu;
         
+        spin_lock_irq(&castle_rxrpc_next_cpu_lock);
+        c_rxcall->cpu = castle_rxrpc_next_cpu;
         do {
             if (castle_rxrpc_next_cpu >= NR_CPUS)
                 castle_rxrpc_next_cpu = first_cpu(cpu_online_map);
             else
                 castle_rxrpc_next_cpu = next_cpu(castle_rxrpc_next_cpu, cpu_online_map);
         } while (castle_rxrpc_next_cpu >= NR_CPUS);
+        spin_unlock_irq(&castle_rxrpc_next_cpu_lock);
         
         c_rxcall->call_id    = atomic_inc_return(&call_id);
         
