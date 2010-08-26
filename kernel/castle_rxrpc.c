@@ -43,13 +43,12 @@ static void castle_rxrpc_double_reply_send(struct castle_rxrpc_call *call,
                                            const void *buf2, size_t len2,
                                            int last);
 
-#define NR_WQS    4
 static struct socket            *socket;
-static struct workqueue_struct  *rxrpc_wqs[NR_WQS]; /* Need singlethreaded WQs,
+static struct workqueue_struct  *rxrpc_wq;          /* <s>Need singlethreaded WQs,
                                                        because individual calls handling
                                                        is not multithread safe. Collection
                                                        of queues will alow concurrency
-                                                       between calls through. */
+                                                       between calls through.</s> - using queue_work_on now */
 static struct sk_buff_head       rxrpc_incoming_calls;
 static void castle_rxrpc_incoming_call_collect(struct work_struct *work);
 static CASTLE_DECLARE_WORK(castle_rxrpc_incoming_call_work, castle_rxrpc_incoming_call_collect);
@@ -68,7 +67,7 @@ struct castle_rxrpc_call_type {
 
 struct castle_rxrpc_call {
     struct work_struct             work;
-    struct workqueue_struct       *wq;          /* One of the rxrpc_wqs. Used to process the call. */
+    int                            cpu;
     unsigned long                  call_id;
     struct rxrpc_call             *rxcall;
     struct sk_buff_head            rx_queue;    /* Queue of packets for this call */
@@ -400,7 +399,7 @@ void castle_rxrpc_call_continue(struct castle_rxrpc_call *call)
     if(!skb_queue_empty(&call->rx_queue));
     {
         debug("Queueing packet process.\n");
-        queue_work(call->wq, &call->work);
+        queue_work_on(call->cpu, rxrpc_wq, &call->work);
     }
 }
 
@@ -1126,16 +1125,17 @@ static void castle_rxrpc_packet_process(struct work_struct *work)
 
         debug("Queueing call delete.\n");
         CASTLE_PREPARE_WORK(&call->work, castle_rxrpc_call_delete);
-        queue_work(call->wq, &call->work);
+        queue_work_on(call->cpu, rxrpc_wq, &call->work);
     }
 }
+
+static int castle_rxrpc_next_cpu;
 
 static void castle_rxrpc_incoming_call_collect(struct work_struct *work)
 {
     struct castle_rxrpc_call *c_rxcall;
     struct sk_buff *skb;
     static atomic_t call_id = ATOMIC(0);
-    static int wq_nr = 0;
 
     while((skb = skb_dequeue(&rxrpc_incoming_calls)))
     {
@@ -1153,9 +1153,20 @@ static void castle_rxrpc_incoming_call_collect(struct work_struct *work)
         debug("Collecting call %p.\n", c_rxcall);
         /* Init the call struct */
         CASTLE_INIT_WORK(&c_rxcall->work, castle_rxrpc_packet_process);
-        skb_queue_head_init(&c_rxcall->rx_queue); 	
-        c_rxcall->wq         = rxrpc_wqs[(wq_nr++) % NR_WQS];
+        skb_queue_head_init(&c_rxcall->rx_queue);
+        c_rxcall->cpu        = castle_rxrpc_next_cpu;
+        
+        do {
+            if (castle_rxrpc_next_cpu >= NR_CPUS)
+                castle_rxrpc_next_cpu = first_cpu(cpu_online_map);
+            else
+                castle_rxrpc_next_cpu = next_cpu(castle_rxrpc_next_cpu, cpu_online_map);
+        } while (castle_rxrpc_next_cpu >= NR_CPUS);
+        
         c_rxcall->call_id    = atomic_inc_return(&call_id);
+        
+        debug("Starting call 0x%lx cpu=%d\n", c_rxcall->call_id, c_rxcall->cpu);
+        
         c_rxcall->type       = &castle_rxrpc_op_call;
         c_rxcall->packet_cnt = 0;
         castle_rxrpc_state_update(c_rxcall, RXRPC_CALL_AWAIT_OP_ID);
@@ -1187,44 +1198,29 @@ static void castle_rxrpc_interceptor(struct sock *sk,
         schedule_work(&castle_rxrpc_incoming_call_work);
     } else
     {
-        debug("Intercepting call 0x%lx\n", user_call_ID);
+        debug("Intercepting call 0x%lx cpu=%d\n", user_call_ID, call->cpu);
         skb_queue_tail(&call->rx_queue, skb);
-        queue_work(call->wq, &call->work);
+        queue_work_on(call->cpu, rxrpc_wq, &call->work);
     }
 }
 
 int castle_rxrpc_init(void)
 {
 	struct sockaddr_rxrpc srx;
-    int i, ret;
-    char *wq_name;
+    int ret;
+    
+    castle_rxrpc_next_cpu = first_cpu(cpu_online_map);
 
     printk("Castle RXRPC init.\n");
     skb_queue_head_init(&rxrpc_incoming_calls);
-    for(i=0; i<NR_WQS; i++)
-    {
-        char *name_prefix = "castle_rxrpc_";
-        wq_name = kzalloc(strlen(name_prefix)+3, GFP_KERNEL);
-        if(!wq_name)
-            goto wq_error;
-        sprintf(wq_name, "%s%d", name_prefix, i);
-        rxrpc_wqs[i] = create_singlethread_workqueue(wq_name);
-        if(!rxrpc_wqs[i])
-        {
-wq_error:
-            kfree(wq_name);
-            for(; i>=0; i--)
-                destroy_workqueue(rxrpc_wqs[i]);
-
-            return -ENOMEM;
-        }
-    }
+    rxrpc_wq = create_workqueue("castle_rxrpc");
+    if(!rxrpc_wq)
+        return -ENOMEM;
 
 	ret = sock_create_kern(AF_RXRPC, SOCK_DGRAM, PF_INET, &socket);
     if(ret < 0)
     {
-        for(i=0; i<NR_WQS; i++)
-            destroy_workqueue(rxrpc_wqs[i]);
+        destroy_workqueue(rxrpc_wq);
         return ret;
     }
 
@@ -1241,8 +1237,7 @@ wq_error:
 
     ret = kernel_bind(socket, (struct sockaddr *) &srx, sizeof(srx));
 	if (ret < 0) {
-        for(i=0; i<NR_WQS; i++)
-            destroy_workqueue(rxrpc_wqs[i]);
+        destroy_workqueue(rxrpc_wq);
 		sock_release(socket);
         return ret;
 	}
@@ -1254,13 +1249,10 @@ wq_error:
 
 void castle_rxrpc_fini(void)
 {
-    int i;
-
     printk("Castle RXRPC fini.\n");
     /* Wait until all outstanding calls are finished */
     wait_event(castle_rxrpc_rmmod_wq, (atomic_read(&castle_outst_call_cnt) == 0));
 	sock_release(socket);
-	for(i=0; i<NR_WQS; i++)
-        destroy_workqueue(rxrpc_wqs[i]);
+    destroy_workqueue(rxrpc_wq);
 }
 
