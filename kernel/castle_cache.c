@@ -24,6 +24,11 @@ static int                     castle_cache_size = 1000; /* in pages */
 module_param(castle_cache_size, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
 MODULE_PARM_DESC(castle_cache_size, "Cache size");
 
+static int                     castle_cache_stats_timer_interval = 0; /* in seconds */
+
+module_param(castle_cache_stats_timer_interval, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
+MODULE_PARM_DESC(castle_cache_stats_timer_interval, "Cache stats print interval (seconds)");
+
 static c2_block_t             *castle_cache_blks = NULL;
 
 static int                     castle_cache_hash_buckets;
@@ -48,6 +53,8 @@ static DECLARE_WAIT_QUEUE_HEAD(castle_cache_flush_wq);
 static atomic_t                castle_cache_read_stats = ATOMIC_INIT(0);
 static atomic_t                castle_cache_write_stats = ATOMIC_INIT(0);
 
+struct timer_list              castle_cache_stats_timer;
+
 void castle_cache_print_stats(void)
 {
     int reads = atomic_read(&castle_cache_read_stats);
@@ -63,6 +70,18 @@ void castle_cache_print_stats(void)
 }
 
 EXPORT_SYMBOL(castle_cache_print_stats);
+
+static void castle_cache_stats_timer_tick(unsigned long foo)
+{
+    BUG_ON(castle_cache_stats_timer_interval <= 0);
+
+    printk("castle_cache_stats_timer_tick: ");
+    castle_cache_print_stats();
+    printk("\n");
+
+    setup_timer(&castle_cache_stats_timer, castle_cache_stats_timer_tick, 0);
+    mod_timer(&castle_cache_stats_timer, jiffies + (HZ * castle_cache_stats_timer_interval));
+}
 
 void __lock_c2b(c2_block_t *c2b, int write)
 {
@@ -1314,6 +1333,8 @@ int castle_cache_init(void)
     if((ret = castle_cache_freelists_init())) goto err_out; 
     if((ret = castle_cache_flush_init()))     goto err_out;
 
+    if(castle_cache_stats_timer_interval) castle_cache_stats_timer_tick(0);
+
     return 0;
 
 err_out:
@@ -1328,6 +1349,8 @@ void castle_cache_fini(void)
     castle_cache_flush_fini();
     castle_cache_hash_fini();
     castle_cache_freelists_fini();
+
+    if(castle_cache_stats_timer_interval) del_timer(&castle_cache_stats_timer);
 
     if(castle_cache_hash) vfree(castle_cache_hash);
     if(castle_cache_blks) vfree(castle_cache_blks);
