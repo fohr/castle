@@ -215,7 +215,11 @@ void castle_request_timeline_checkpoint_stop(c_req_time_t *timeline)
 
     if(!timeline)
         return;
-    BUG_ON(timeline->active_checkpoint < 0); 
+    if(timeline->active_checkpoint < 0)
+    {
+        printk("Stopping an inactive checkpoint. Due to a collision?.\n");
+        return;
+    } 
     checkpoint = &timeline->checkpoints[timeline->active_checkpoint];
     BUG_ON(!checkpoint->active);
     getnstimeofday(&end_tm);
@@ -321,9 +325,10 @@ static void castle_checkpoint_stats_print(void)
 
         /* Print */
         if(i < MAX_CHECK_POINTS)
-            printk("For checkpoint started at %s:%d\n", check_stats->file, check_stats->line);
+            printk("For checkpoint started at %s:%d, samples=%d\n", 
+                check_stats->file, check_stats->line, check_stats->cnt);
         else
-            printk("For entire timeline (i=%d):\n", i);
+            printk("For entire timeline, samples=%d:\n", check_stats->cnt);
 
         if(check_stats->cnt == 0)
         {
