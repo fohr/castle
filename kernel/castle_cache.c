@@ -649,49 +649,56 @@ static void castle_cache_flush_endio(c2_block_t *c2b, int uptodate)
 
 static int castle_cache_flush(void *unused)
 {
-/* The minimum flush speed is: 128 * c2_block size * 5/s ~= 5MB/s */
-#define MIN_FLUSH_BATCH     128
-#define MAX_FLUSH_BATCH     1024
-#define MIN_FLUSH_FREQ      5
-
-    int high_water_mark, low_water_mark, to_flush, dirty_pgs, batch_idx, i, pre_batch_dirty, batch_size, batch_complete, pages_dirtied;
+    int target_dirty_pgs, to_flush, flush_size, dirty_pgs, batch_idx, i;
     struct list_head *l, *t;
     c2_block_t *c2b;
-    static c2_block_t *c2b_batch[MAX_FLUSH_BATCH];
+#define MIN_FLUSH_SIZE     128
+#define MAX_FLUSH_SIZE     1024
+#define MIN_FLUSH_FREQ     5        /* Min flush rate: 5*128 pgs/s = 2.5 MB/s. */
+
+#define FLUSH_BATCH        64
+    c2_block_t *c2b_batch[FLUSH_BATCH];
     atomic_t in_flight;
 
-    high_water_mark = castle_cache_size >> 1;
-    low_water_mark = high_water_mark - (castle_cache_size >> 3) - 1;
+    /* We'll try to maintain # dirty pages at this */
+    target_dirty_pgs = 3 * (castle_cache_size / 4);
+    atomic_set(&in_flight, 0);
+    flush_size = 0;
+
     for(;;)
     {
-        dirty_pgs = atomic_read(&castle_cache_dirtylist_size);  
-        /* Go to sleep if < high_water_mark pages dirty.
-           As long as we've not been asked to flush everything and exit. */
-        debug("====> Castle cache flush loop.\n");
-        if((dirty_pgs < high_water_mark) && !kthread_should_stop())
-        {
-            debug("====> Going to sleep.\n");
-            set_current_state(TASK_INTERRUPTIBLE);
-            schedule();
-            continue;
-        }
-        to_flush = dirty_pgs - low_water_mark;
-        if(kthread_should_stop())
-            to_flush = dirty_pgs;
-        atomic_set(&in_flight, 0);
-        debug("====> Flushing: %d pages out of %d dirty.\n", to_flush, dirty_pgs);
+        /* Wait for 95% of IOs to complete */
+        debug("====> Waiting for 95\% of outstanding IOs to complete.\n");
+        wait_event(castle_cache_flush_wq, atomic_read(&in_flight) <= flush_size / 20);
 
-        // Remember how many pages are dirty before we go to sleep, 
-        // so we can work out how many were dirtied whilst we waited
-        pre_batch_dirty = dirty_pgs;
-        pages_dirtied = 0;
-next_batch:
-        // We will submit a batch of min_size, or #pgs dirtied since last batch
-        batch_size = max(MIN_FLUSH_BATCH, pages_dirtied);
-        batch_size = min(batch_size, to_flush);
-        batch_size = min(batch_size, MAX_FLUSH_BATCH);
+        /* Wait until enough pages have been dirtied to make it worth while
+         * this will rate limit us to a min of 10 MIN_BATCHes a second */
+        debug("====> Waiting completed, now waiting for big enough flush.\n");
+        wait_event_timeout(
+            castle_cache_flush_wq, 
+            kthread_should_stop() ||
+            (atomic_read(&castle_cache_dirtylist_size) - target_dirty_pgs > MIN_FLUSH_SIZE),
+            HZ/MIN_FLUSH_FREQ);
+ 
+        dirty_pgs = atomic_read(&castle_cache_dirtylist_size);  
+
+        /* 
+         * Work out how many pages to flush.
+         * Note that (dirty_pgs - target_dirty_pages) approximates the number of pages that
+         * got dirtied since the last time around the loop (modulo MIN & MAX).
+         */
+        flush_size = dirty_pgs - target_dirty_pgs;
+        flush_size = max(MIN_FLUSH_SIZE, flush_size);
+        flush_size = min(MAX_FLUSH_SIZE, flush_size);
+        /* If we are removing the module, we need to flush all pages */
+        if(kthread_should_stop() || (flush_size > dirty_pgs))
+            flush_size = dirty_pgs;
+
+        /* Submit the IOs in batches of at most FLUSH_BATCH */ 
+        to_flush = flush_size;
+        debug("====> Flushing: %d pages out of %d dirty.\n", to_flush, dirty_pgs);
+next_batch:        
         batch_idx = 0;
-        
         spin_lock_irq(&castle_cache_hash_lock);
         list_for_each_safe(l, t, &castle_cache_dirtylist)
         {
@@ -705,7 +712,7 @@ next_batch:
             get_c2b(c2b);
             to_flush -= c2b->nr_pages;
             c2b_batch[batch_idx++] = c2b;
-            if(batch_idx >= batch_size)
+            if(batch_idx >= FLUSH_BATCH)
                 break;
         }
         spin_unlock_irq(&castle_cache_hash_lock);
@@ -720,45 +727,29 @@ next_batch:
             BUG_ON(submit_c2b(WRITE, c2b_batch[i]));
         }
 
-        /* Wait for 95% of the inflight ops to complete before doing the next batch */
-        batch_complete = batch_size / 20;
-        debug("====> Waiting for all IOs to complete.\n");
-        wait_event(castle_cache_flush_wq, atomic_read(&in_flight) <= batch_complete);
-        debug("====> Waiting completed.\n");
-        
-        /* Wait until enough pages have been dirtied to make it worth out while
-         * this will rate limit us to a min of 10 MIN_BATCHes a second */
-        wait_event_timeout(castle_cache_flush_wq,
-            (atomic_read(&castle_cache_dirtylist_size) + batch_size 
-                - pre_batch_dirty) > MIN_FLUSH_BATCH, HZ/MIN_FLUSH_FREQ);
-        
-        dirty_pgs = atomic_read(&castle_cache_dirtylist_size);
-        pages_dirtied = dirty_pgs + batch_size - pre_batch_dirty;
-        pre_batch_dirty = dirty_pgs;
-        to_flush = dirty_pgs - low_water_mark;
-        if(kthread_should_stop())
-            to_flush = dirty_pgs;
-        
         /* We may have to flush more than one batch */
         if(to_flush > 0)
         {
-            if(batch_idx == batch_size)
+            if(batch_idx == FLUSH_BATCH)
                 goto next_batch; 
             /* If we still have buffers to flush, but we could not lock 
                enough dirty buffers print a warning message, and stop */
             printk("WARNING: Could not find enough dirty pages to flush\n"
                    "  Stats: dirty=%d, clean=%d, free=%d\n"
-                   "         low wm=%d, to_flush=%d, blocks=%d, batch_size=%d\n",
+                   "         target=%d, to_flush=%d, blocks=%d\n",
                 atomic_read(&castle_cache_dirtylist_size), 
                 atomic_read(&castle_cache_cleanlist_size),
                 castle_cache_page_freelist_size,
-                low_water_mark, to_flush, batch_idx, batch_size); 
+                target_dirty_pgs, to_flush, batch_idx); 
         }
         
         /* Finally check if we should still continue */
         if(kthread_should_stop())
             break;
     }
+
+    /* When exitig wait for _all_ (and not 95%) of IO to complete */
+    wait_event(castle_cache_flush_wq, atomic_read(&in_flight) == 0);
     debug("====> Castle cache flush loop EXITING.\n");
 
     return 0;
