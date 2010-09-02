@@ -130,7 +130,7 @@ void dirty_c2b(c2_block_t *c2b)
     spin_lock_irqsave(&castle_cache_hash_lock, flags);
     BUG_ON(!c2b_locked(c2b));
     if(c2b_dirty(c2b)) goto out;
-    list_move(&c2b->dirty_or_clean, &castle_cache_dirtylist);
+    list_move_tail(&c2b->dirty_or_clean, &castle_cache_dirtylist);
     set_c2b_dirty(c2b); 
     atomic_sub(c2b->nr_pages, &castle_cache_cleanlist_size);
     atomic_add(c2b->nr_pages, &castle_cache_dirtylist_size);
@@ -145,8 +145,7 @@ static void clean_c2b(c2_block_t *c2b)
     spin_lock_irqsave(&castle_cache_hash_lock, flags);
     BUG_ON(!c2b_locked(c2b));
     BUG_ON(!c2b_dirty(c2b));
-    // TW TODO: try list_move_tail?
-    list_move(&c2b->dirty_or_clean, &castle_cache_cleanlist);
+    list_move_tail(&c2b->dirty_or_clean, &castle_cache_cleanlist);
     clear_c2b_dirty(c2b); 
     atomic_sub(c2b->nr_pages, &castle_cache_dirtylist_size);
     atomic_add(c2b->nr_pages, &castle_cache_cleanlist_size);
@@ -305,8 +304,15 @@ static c2_block_t* castle_cache_hash_get(c_disk_blk_t cdb)
     spin_lock_irq(&castle_cache_hash_lock);
     /* Try to find in the hash first */
     c2b = castle_cache_hash_find(cdb);
-    /* If found, get a reference to make sure c2b doesn't get removed */
-    if(c2b) get_c2b(c2b);
+    /* If found, get a reference to make sure c2b doesn't get removed.
+       Move to the tail of dirty/clean list to get LRU(-like) behaviour. */
+    if(c2b) 
+    {
+        get_c2b(c2b);
+        list_move_tail(&c2b->dirty_or_clean, 
+                        c2b_dirty(c2b) ? &castle_cache_dirtylist : 
+                                         &castle_cache_cleanlist);
+    }
     /* If not found, drop the lock, we need to get ourselves a c2b first */
     spin_unlock_irq(&castle_cache_hash_lock);
 
