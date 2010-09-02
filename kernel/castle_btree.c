@@ -1505,8 +1505,7 @@ void castle_btree_node_save_prepare(struct castle_component_tree *ct, c_disk_blk
     queue_work(castle_wq, &work_st->work);
 }
 
-c2_block_t* castle_btree_node_create(int version, int is_leaf, btree_t type,
-                                     struct castle_component_tree *ct)
+c2_block_t* castle_btree_node_create(int version, int is_leaf, btree_t type)
 {
     struct castle_btree_type *btree;
     struct castle_btree_node *node;
@@ -1550,7 +1549,7 @@ static c2_block_t* castle_btree_effective_node_create(c_bvec_t *c_bvec,
     
     node = c2b_bnode(orig_c2b); 
     btree = castle_btree_type_get(node->type);
-    c2b = castle_btree_node_create(version, node->is_leaf, node->type, c_bvec->tree);
+    c2b = castle_btree_node_create(version, node->is_leaf, node->type);
     eff_node = c2b_buffer(c2b);
 
     last_eff_key = btree->inv_key;
@@ -1667,8 +1666,7 @@ static c2_block_t* castle_btree_node_key_split(c_bvec_t *c_bvec, c2_block_t *ori
 
     node     = c2b_bnode(orig_c2b);
     btree    = castle_btree_type_get(node->type);
-    c2b      = castle_btree_node_create(node->version, node->is_leaf, 
-                                        node->type, c_bvec->tree);
+    c2b      = castle_btree_node_create(node->version, node->is_leaf, node->type);
     castle_btree_node_save_prepare(c_bvec->tree, c2b->cdb);
     sec_node = c2b_bnode(c2b);
     /* The original node needs to contain the elements from the right hand side
@@ -1809,7 +1807,7 @@ static void castle_btree_new_root_create(c_bvec_t *c_bvec, btree_t type)
             c_bvec->version);
     BUG_ON(c_bvec->btree_parent_node);
     /* Create the node */
-    c2b = castle_btree_node_create(0, 0, type, c_bvec->tree);
+    c2b = castle_btree_node_create(0, 0, type);
     castle_btree_node_save_prepare(c_bvec->tree, c2b->cdb);
     node = c2b_buffer(c2b);
     /* We should be under write lock here, check if we can read lock it (and BUG) */

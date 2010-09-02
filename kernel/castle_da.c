@@ -2167,7 +2167,7 @@ static int castle_da_rwct_make(struct castle_double_array *da)
         goto out;
 
     /* Create a root node for this tree, and update the root version */
-    c2b = castle_btree_node_create(0, 1 /* is_leaf */, VLBA_TREE_TYPE, ct);
+    c2b = castle_btree_node_create(0, 1 /* is_leaf */, VLBA_TREE_TYPE);
     castle_btree_node_save_prepare(ct, c2b->cdb);
     ct->root_node = c2b->cdb;
     ct->tree_depth = 1;
