@@ -1458,6 +1458,7 @@ static void castle_btree_lub_find(struct castle_btree_node *node,
 
 static void castle_btree_node_save(struct work_struct *work)
 {
+    static DECLARE_MUTEX(node_save_lock);
     struct castle_btree_node_save *work_st = container_of(work, 
                                                        struct castle_btree_node_save, 
                                                        work);
@@ -1467,7 +1468,7 @@ static void castle_btree_node_save(struct work_struct *work)
     c_disk_blk_t prev_cdb;
     c2_block_t *c2b;
 
-    down_write(&ct->lock);
+    down(&node_save_lock);
     btree = castle_btree_type_get(ct->btree_type);
 
     if (unlikely(!atomic64_read(&ct->node_count))) 
@@ -1494,7 +1495,7 @@ static void castle_btree_node_save(struct work_struct *work)
     }
     ct->last_node = work_st->cdb;
     atomic64_inc(&ct->node_count);
-    up_write(&ct->lock);
+    up(&node_save_lock);
     castle_ct_put(ct, 1 /* write */);
 
     kfree(work_st);
