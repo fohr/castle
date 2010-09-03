@@ -135,12 +135,12 @@ static int castle_ct_immut_iter_entry_find(c_immut_iter_t *iter,
                                            struct castle_btree_node *node,
                                            int start_idx) 
 {
-    int leaf_ptr;
+    int leaf_ptr, disabled;
 
     for(; start_idx<node->used; start_idx++)
     {
-        iter->btree->entry_get(node, start_idx, NULL, NULL, &leaf_ptr, NULL);
-        if(!leaf_ptr)
+        disabled = iter->btree->entry_get(node, start_idx, NULL, NULL, &leaf_ptr, NULL);
+        if(!leaf_ptr && !disabled)
             return start_idx; 
     }
 
@@ -251,7 +251,7 @@ static void castle_ct_immut_iter_next(c_immut_iter_t *iter,
                                       version_t *version_p, 
                                       c_val_tup_t *cvt_p)
 {
-    int is_leaf_ptr;
+    int is_leaf_ptr, disabled;
 
     /* Check if we can read from the curr_node. If not move to the next node. 
        Make sure that if entries exist, they are not leaf pointers. */
@@ -262,9 +262,14 @@ static void castle_ct_immut_iter_next(c_immut_iter_t *iter,
         castle_ct_immut_iter_next_node(iter);
         BUG_ON((iter->curr_idx >= 0) && (iter->curr_idx >= iter->curr_node->used));
     }
-    iter->btree->entry_get(iter->curr_node, iter->curr_idx, key_p, version_p, &is_leaf_ptr, cvt_p);
+    disabled = iter->btree->entry_get(iter->curr_node, 
+                                      iter->curr_idx, 
+                                      key_p, 
+                                      version_p, 
+                                      &is_leaf_ptr, 
+                                      cvt_p);
     /* curr_idx should have been set to a non-leaf pointer */
-    BUG_ON(is_leaf_ptr);
+    BUG_ON(is_leaf_ptr || disabled);
     iter->curr_idx = castle_ct_immut_iter_entry_find(iter, iter->curr_node, iter->curr_idx + 1);
     debug("Returned next, curr_idx is now=%d / %d.\n", iter->curr_idx, iter->curr_node->used);
 }

@@ -253,7 +253,7 @@ struct castle_btree_type {
     void*   (*key_next)      (void *key);
                              /* Successor key, succ(MAX) = INVAL,
                                 succ(INVAL) = INVAL                    */
-    void    (*entry_get)     (struct castle_btree_node *node,
+    int     (*entry_get)     (struct castle_btree_node *node,
                               int                       idx,
                               void                    **key_p,            
                               version_t                *version_p,
@@ -271,6 +271,8 @@ struct castle_btree_type {
                               version_t                 version,
                               int                       is_leaf_ptr,
                               c_val_tup_t               cvt);
+    void    (*entry_disable) (struct castle_btree_node *node,
+                              int                       idx);
     void    (*entries_drop)  (struct castle_btree_node *node,
                               int                       idx_start,
                               int                       idx_end);

@@ -122,12 +122,12 @@ static void* castle_mtree_key_next(void *key)
     return (void *)(unsigned long)(blk+1);
 }
 
-static void castle_mtree_entry_get(struct castle_btree_node *node,
-                                   int                       idx,
-                                   void                    **key_p,            
-                                   version_t                *version_p,
-                                   int                      *is_leaf_ptr_p,
-                                   c_val_tup_t              *cvt_p)
+static int castle_mtree_entry_get(struct castle_btree_node *node,
+                                  int                       idx,
+                                  void                    **key_p,            
+                                  version_t                *version_p,
+                                  int                      *is_leaf_ptr_p,
+                                  c_val_tup_t              *cvt_p)
 {
     struct castle_mtree_entry *entries = 
                 (struct castle_mtree_entry *) BTREE_NODE_PAYLOAD(node);
@@ -143,6 +143,8 @@ static void castle_mtree_entry_get(struct castle_btree_node *node,
         BUG_ON(!MTREE_ENTRY_IS_ONDISK(entry));
         CDB_TO_CVT(*cvt_p, entry->cdb, entry->val_len/C_BLK_SIZE);
     }
+
+    return 0;
 }
 
 static void castle_mtree_entry_add(struct castle_btree_node *node,
@@ -203,6 +205,13 @@ static void castle_mtree_entry_replace(struct castle_btree_node *node,
     entry->cdb     = cvt.cdb;
     entry->val_len = cvt.length;
 }   
+    
+static void castle_mtree_entry_disable(struct castle_btree_node *node,
+                                       int                       idx)
+{
+    /* This does nothing, which means that we cannot merge MTrees,
+       that's fine ATM */ 
+}
 
 static void castle_mtree_entries_drop(struct castle_btree_node *node,
                                       int                       idx_start,
@@ -282,6 +291,7 @@ struct castle_btree_type castle_mtree = {
     .entry_get     = castle_mtree_entry_get,
     .entry_add     = castle_mtree_entry_add,
     .entry_replace = castle_mtree_entry_replace,
+    .entry_disable = castle_mtree_entry_disable,
     .entries_drop  = castle_mtree_entries_drop,
     .node_print    = castle_mtree_node_print,
 #ifdef CASTLE_DEBUG    
@@ -402,12 +412,12 @@ static void* castle_batree_key_next(void *keyv)
     return succ;
 }
 
-static void castle_batree_entry_get(struct castle_btree_node *node,
-                                    int                       idx,
-                                    void                    **key_p,            
-                                    version_t                *version_p,
-                                    int                      *is_leaf_ptr_p,
-                                    c_val_tup_t              *cvt_p)
+static int castle_batree_entry_get(struct castle_btree_node *node,
+                                   int                       idx,
+                                   void                    **key_p,            
+                                   version_t                *version_p,
+                                   int                      *is_leaf_ptr_p,
+                                   c_val_tup_t              *cvt_p)
 {
     struct castle_batree_entry *entries = 
                 (struct castle_batree_entry *) BTREE_NODE_PAYLOAD(node);
@@ -423,6 +433,8 @@ static void castle_batree_entry_get(struct castle_btree_node *node,
         BUG_ON(!BATREE_ENTRY_IS_ONDISK(entry));
         CDB_TO_CVT(*cvt_p, entry->cdb, entry->val_len/C_BLK_SIZE);
     }
+
+    return 0;
 }
 
 static void castle_batree_entry_add(struct castle_btree_node *node,
@@ -483,6 +495,13 @@ static void castle_batree_entry_replace(struct castle_btree_node *node,
     entry->cdb     = cvt.cdb;
     entry->val_len = cvt.length;
 }   
+    
+static void castle_batree_entry_disable(struct castle_btree_node *node,
+                                        int                       idx)
+{
+    /* This does nothing, which means that we cannot merge BATrees,
+       that's fine ATM */ 
+}
 
 static void castle_batree_entries_drop(struct castle_btree_node *node,
                                        int                       idx_start,
@@ -564,6 +583,7 @@ struct castle_btree_type castle_batree = {
     .entry_get     = castle_batree_entry_get,
     .entry_add     = castle_batree_entry_add,
     .entry_replace = castle_batree_entry_replace,
+    .entry_disable = castle_batree_entry_disable,
     .entries_drop  = castle_batree_entries_drop,
     .node_print    = castle_batree_node_print,
 #ifdef CASTLE_DEBUG    
@@ -581,6 +601,7 @@ struct castle_btree_type castle_batree = {
 #define VLBA_TREE_ENTRY_TOMB_STONE    0x08
 #define VLBA_TREE_ENTRY_INLINE        0x10
 #define VLBA_TREE_ENTRY_ONDISK        0x20
+#define VLBA_TREE_ENTRY_DISABLED      0x40
 #define VLBA_TREE_ENTRY_IS_NODE(_slot)        ((_slot)->type & VLBA_TREE_ENTRY_NODE)
 #define VLBA_TREE_ENTRY_IS_LEAF_VAL(_slot)    ((_slot)->type & VLBA_TREE_ENTRY_LEAF_VAL) 
 #define VLBA_TREE_ENTRY_IS_LEAF_PTR(_slot)    ((_slot)->type & VLBA_TREE_ENTRY_LEAF_PTR) 
@@ -591,9 +612,9 @@ struct castle_btree_type castle_batree = {
 #define VLBA_TREE_ENTRY_IS_TOMB_STONE(_slot)  ((_slot)->type & VLBA_TREE_ENTRY_TOMB_STONE) 
 #define VLBA_TREE_ENTRY_IS_INLINE(_slot)      ((_slot)->type & VLBA_TREE_ENTRY_INLINE) 
 #define VLBA_TREE_ENTRY_IS_ONDISK(_slot)      ((_slot)->type & VLBA_TREE_ENTRY_ONDISK) 
+#define VLBA_TREE_ENTRY_IS_DISABLED(_slot)    ((_slot)->type & VLBA_TREE_ENTRY_DISABLED) 
 
 #define VLBA_TREE_MAX_KEY_SIZE         512      /* In bytes */
-#define VLBA_TREE_NODE_ENTRIES      254
 
 typedef struct vlba_key {
     uint32_t length;
@@ -849,12 +870,12 @@ static void* castle_vlba_tree_key_next(void *keyv)
     return castle_object_btree_key_next(keyv);
 }
 
-static void castle_vlba_tree_entry_get(struct castle_btree_node *node,
-                                       int                       idx,
-                                       void                    **key_p,            
-                                       version_t                *version_p,
-                                       int                      *is_leaf_ptr_p,
-                                       c_val_tup_t              *cvt_p)
+static int castle_vlba_tree_entry_get(struct castle_btree_node *node,
+                                      int                       idx,
+                                      void                    **key_p,            
+                                      version_t                *version_p,
+                                      int                      *is_leaf_ptr_p,
+                                      c_val_tup_t              *cvt_p)
 {
     struct castle_vlba_tree_node *vlba_node = 
         (struct castle_vlba_tree_node*) BTREE_NODE_PAYLOAD(node);
@@ -884,6 +905,8 @@ static void castle_vlba_tree_entry_get(struct castle_btree_node *node,
         else 
             cvt_p->cdb = entry->cdb;
     }
+
+    return VLBA_TREE_ENTRY_IS_DISABLED(entry);
 }
 
 #ifdef CASTLE_DEBUG
@@ -1083,6 +1106,18 @@ static void castle_vlba_tree_entry_replace(struct castle_btree_node *node,
     }
 }   
 
+static void castle_vlba_tree_entry_disable(struct castle_btree_node *node,
+                                           int                       idx)
+{
+    struct castle_vlba_tree_node *vlba_node = 
+        (struct castle_vlba_tree_node*) BTREE_NODE_PAYLOAD(node);
+    struct castle_vlba_tree_entry *entry = 
+        (struct castle_vlba_tree_entry *)VLBA_ENTRY_PTR(node, vlba_node, idx);
+
+    entry->type |= VLBA_TREE_ENTRY_DISABLED;
+}   
+
+
 #ifdef CASTLE_DEBUG
 static void castle_vlba_tree_node_validate(struct castle_btree_node *node)
 {
@@ -1266,6 +1301,7 @@ struct castle_btree_type castle_vlba_tree = {
     .entry_get     = castle_vlba_tree_entry_get,
     .entry_add     = castle_vlba_tree_entry_add,
     .entry_replace = castle_vlba_tree_entry_replace,
+    .entry_disable = castle_vlba_tree_entry_disable,
     .entries_drop  = castle_vlba_tree_entries_drop,
     .node_print    = castle_vlba_tree_node_print,
 #ifdef CASTLE_DEBUG    
@@ -1559,7 +1595,6 @@ static c2_block_t* castle_btree_effective_node_create(c_bvec_t *c_bvec,
     void *last_eff_key;
     version_t last_eff_version;
     int i, insert_idx, moved_cnt;
-    static atomic_t print_perf_warning = ATOMIC(0);
     
     node = c2b_bnode(orig_c2b); 
     btree = castle_btree_type_get(node->type);
@@ -1628,23 +1663,11 @@ static c2_block_t* castle_btree_effective_node_create(c_bvec_t *c_bvec,
         last_eff_version = entry_version;
         /* If we _moved_ something, we need to remove it from the old node */
         if(need_move)
-        {
-            btree->entries_drop(node, i, i);
-            /* Now that we've dropped the entry, last_eff_key will likely be a broken
-               pointer. Set it to point to eff_node instead */
-            btree->entry_get(eff_node, insert_idx, &last_eff_key, NULL, NULL, NULL);
-            moved_cnt++;
-            /* Decrement the index, so that it'll point to the right entry
-               after the for loop increments it back again */
-            i--;
-        }
+            btree->entry_disable(node, i);
+
         insert_idx++;
     }
     
-    /* entries_drop is O(n^2), warn if n > a constant. */
-    if((moved_cnt > 5) && atomic_add_unless(&print_perf_warning, 1, 20))
-        printk("Using inefficient entries_drop too frequently (%d).\n", moved_cnt);
-
     /* If effective node is the same size as the original node, throw it away,
        and return NULL.
        Note that effective node is only identical to the original node if the
