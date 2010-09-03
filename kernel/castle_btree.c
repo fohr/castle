@@ -1301,10 +1301,16 @@ void castle_btree_ct_lock(c_bvec_t *c_bvec)
 {
     int write = (c_bvec_data_dir(c_bvec) == WRITE);
 
-    if(write && test_bit(CBV_DOING_SPLITS, &c_bvec->flags))
+    if(write && test_bit(CBV_DOING_SPLITS, &c_bvec->flags) && (c_bvec->split_depth == 0))
+    {
         down_write(&c_bvec->tree->lock);
+        set_bit(CBV_CHILD_WRITE_LOCKED, &c_bvec->flags);
+    }
     else
+    {
         down_read(&c_bvec->tree->lock);
+        clear_bit(CBV_CHILD_WRITE_LOCKED, &c_bvec->flags);
+    }
 
     set_bit(CBV_ROOT_LOCKED_BIT, &c_bvec->flags);
 }
@@ -1313,10 +1319,17 @@ void castle_btree_ct_unlock(c_bvec_t *c_bvec)
 {
     int write = (c_bvec_data_dir(c_bvec) == WRITE);
 
-    if(write && test_bit(CBV_DOING_SPLITS, &c_bvec->flags))
+    if(write && test_bit(CBV_DOING_SPLITS, &c_bvec->flags) && (c_bvec->split_depth == 0))
+    {
+        BUG_ON(!test_bit(CBV_PARENT_WRITE_LOCKED, &c_bvec->flags));
         up_write(&c_bvec->tree->lock);
+    }
     else
+    {
+        BUG_ON( (write && test_bit(CBV_PARENT_WRITE_LOCKED, &c_bvec->flags)) ||
+               (!write && test_bit(CBV_CHILD_WRITE_LOCKED, &c_bvec->flags)) );
         up_read(&c_bvec->tree->lock);
+    }
 
     clear_bit(CBV_ROOT_LOCKED_BIT, &c_bvec->flags);
 }
@@ -1840,6 +1853,8 @@ static int castle_btree_node_split(c_bvec_t *c_bvec)
     eff_c2b = split_c2b = NULL;
     retain_c2b = c_bvec->btree_node;
 
+    BUG_ON(!test_bit(CBV_PARENT_WRITE_LOCKED, &c_bvec->flags) || 
+           !test_bit(CBV_CHILD_WRITE_LOCKED, &c_bvec->flags));
     /* Create the effective node */
     eff_c2b = castle_btree_effective_node_create(c_bvec, retain_c2b, version);
     if(eff_c2b)
@@ -1999,13 +2014,16 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
         /* If the DOING_SPLITS flag is not set, the locks were likely not
            acquired in the write mode, restart the entire btree_find,
            now with the flag set */
-        if(!test_bit(CBV_DOING_SPLITS, &c_bvec->flags))
+        if(!test_bit(CBV_DOING_SPLITS, &c_bvec->flags) ||
+            (c_bvec->split_depth >= c_bvec->btree_depth))
         {
             castle_btree_c2b_forget(c_bvec);
             castle_btree_c2b_forget(c_bvec);
             /* Set the flag AFTER releasing the lock (which could confuse ct_unlock) */
             set_bit(CBV_DOING_SPLITS, &c_bvec->flags);
+            c_bvec->split_depth = c_bvec->btree_depth - 1;
             castle_btree_find_no_clear(c_bvec);  
+
             return;
         }
 
@@ -2237,8 +2255,9 @@ static void castle_btree_c2b_lock(c_bvec_t *c_bvec, c2_block_t *c2b)
        - on writes, if we are doing splits
      */
     if(!c2b_uptodate(c2b) || 
-       (write && (test_bit(CBV_DOING_SPLITS, &c_bvec->flags) || 
-                 (c_bvec->btree_depth >= c_bvec->btree_levels))))
+       (write && ((test_bit(CBV_DOING_SPLITS, &c_bvec->flags) && 
+                  (c_bvec->split_depth <= c_bvec->btree_depth))|| 
+                  (c_bvec->btree_depth >= c_bvec->btree_levels))))
     {
         lock_c2b(c2b);
         set_bit(CBV_C2B_WRITE_LOCKED, &c_bvec->flags);
@@ -2357,7 +2376,7 @@ void castle_btree_find(c_bvec_t *c_bvec)
 static void castle_btree_find_no_clear(c_bvec_t *c_bvec)
 {
     CASTLE_INIT_WORK(&c_bvec->work, _castle_btree_find);
-    queue_work(castle_wqs[19], &c_bvec->work); 
+    queue_work(castle_wqs[18], &c_bvec->work); 
 }
 
 

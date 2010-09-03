@@ -395,6 +395,7 @@ typedef struct castle_bio_vec {
         struct {
             /* How far down the tree we've gone so far */
             int                        btree_depth;
+            int                        split_depth;
             /* What's the number of levels in the tree, private copy needed in case
                someone splits the root node while we are lower down in the tree */
             int                        btree_levels;
