@@ -1,4 +1,5 @@
 #include <linux/list.h>
+#include <asm/tlbflush.h>
 
 #include "castle_public.h"
 #include "castle_utils.h"
@@ -111,3 +112,52 @@ void vl_bkey_print(c_vl_bkey_t *key)
     castle_object_key_free(okey);
 }
 
+/**********************************************************************************************
+ * Utilities for vmapping/vunmapping pages. Assumes that virtual address to map/unmap is known.
+ * Copied from RHEL mm/vmalloc.c.
+ */
+
+void pgd_clear_bad(pgd_t *pgd)
+{
+    pgd_ERROR(*pgd);
+    pgd_clear(pgd);
+}
+
+void castle_unmap_vm_area(void *addr_p, int nr_pages)
+{
+	pgd_t *pgd;
+	unsigned long next;
+	unsigned long addr = (unsigned long) addr_p;
+	unsigned long end = addr + nr_pages * PAGE_SIZE; 
+
+	BUG_ON(addr >= end);
+	pgd = pgd_offset_k(addr);
+	flush_cache_vunmap(addr, end);
+	do {
+		next = pgd_addr_end(addr, end);
+		if (pgd_none_or_clear_bad(pgd))
+			continue;
+		vunmap_pud_range(pgd, addr, next);
+	} while (pgd++, addr = next, addr != end);
+	flush_tlb_kernel_range((unsigned long) addr_p, end);
+}
+
+int castle_map_vm_area(void *addr_p, struct page **pages, int nr_pages, pgprot_t prot)
+{
+	pgd_t *pgd;
+	unsigned long next;
+	unsigned long addr = (unsigned long) addr_p;
+	unsigned long end = addr + nr_pages * PAGE_SIZE;
+	int err;
+
+	BUG_ON(addr >= end);
+	pgd = pgd_offset_k(addr);
+	do {
+		next = pgd_addr_end(addr, end);
+		err = vmap_pud_range(pgd, addr, next, prot, &pages);
+		if (err)
+			break;
+	} while (pgd++, addr = next, addr != end);
+	flush_cache_vmap((unsigned long) addr_p, end);
+	return err;
+}

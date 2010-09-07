@@ -9,6 +9,8 @@
 #include "castle.h"
 #include "castle_cache.h"
 #include "castle_freespace.h"
+#include "castle_utils.h"
+#include "castle_btree.h"
 
 //#define DEBUG
 #ifndef DEBUG
@@ -46,6 +48,12 @@ static int                     castle_cache_page_freelist_size;
 static               LIST_HEAD(castle_cache_page_freelist);
 static               LIST_HEAD(castle_cache_block_freelist);
 
+#define CASTLE_CACHE_VMAP_PGS   256
+static int                     castle_cache_fast_vmap_pages;
+static uint32_t               *castle_cache_fast_vmap_freelist;
+static void                   *castle_cache_fast_vmap_vstart;
+static struct page            *castle_cache_vmap_pgs[CASTLE_CACHE_VMAP_PGS]; 
+static           DECLARE_MUTEX(castle_cache_vmap_lock);
 
 static struct task_struct     *castle_cache_flush_thread;
 static DECLARE_WAIT_QUEUE_HEAD(castle_cache_flush_wq); 
@@ -398,23 +406,24 @@ static void castle_cache_page_freelist_get(int nr_pages, struct list_head *pages
     spin_unlock(&castle_cache_freelist_lock);
 }
 
-static inline void __castle_cache_page_freelist_add(struct page *pg)
+static void castle_cache_fast_vmap_freelist_add(uint32_t id)
 {
-    list_add_tail(&pg->lru, &castle_cache_page_freelist);
-    castle_cache_page_freelist_size++;
+    castle_cache_fast_vmap_freelist[id+1] = castle_cache_fast_vmap_freelist[0]; 
+    castle_cache_fast_vmap_freelist[0]    = id; 
 }
 
-static inline void castle_cache_page_freelist_add(struct page *pg)
+static uint32_t castle_cache_fast_vmap_freelist_get(void)
 {
-    spin_lock(&castle_cache_freelist_lock);
-    __castle_cache_page_freelist_add(pg);
-    spin_unlock(&castle_cache_freelist_lock);
+    uint32_t id;
+   
+    id = castle_cache_fast_vmap_freelist[0];
+    castle_cache_fast_vmap_freelist[0] = castle_cache_fast_vmap_freelist[id+1]; 
+    /* Make sure we didn't run out of entries in the freelist (we'd get id == (uint32_t)-1). */
+    BUG_ON(id >= castle_cache_size);
+
+    return id;
 }
 
-
-static DECLARE_MUTEX(pgs_mutex);
-struct page *pgs[256];           /* May be too big for the stack, allocate static, protect with
-                                    a mutex */
 static void castle_cache_block_init(c2_block_t *c2b,
                                     c_disk_blk_t cdb, 
                                     struct list_head *pages,
@@ -424,7 +433,7 @@ static void castle_cache_block_init(c2_block_t *c2b,
     int i;
 
     /* c2b should only be initialised if it's not used */
-    BUG_ON(nr_pages > 256);
+    BUG_ON(nr_pages > CASTLE_CACHE_VMAP_PGS);
     BUG_ON(list_empty(&c2b->list)); 
     BUG_ON(!list_empty(&c2b->pages));
     BUG_ON(atomic_read(&c2b->count) != 0);
@@ -434,24 +443,46 @@ static void castle_cache_block_init(c2_block_t *c2b,
     list_splice(pages, &c2b->pages);
 
     i = 0;
-    down(&pgs_mutex);
+    down(&castle_cache_vmap_lock);
     list_for_each(lh, &c2b->pages)
-        pgs[i++] = list_entry(lh, struct page, lru);
+        castle_cache_vmap_pgs[i++] = list_entry(lh, struct page, lru);
 
-    if(nr_pages > 1)
-        c2b->buffer = vmap(pgs, i, VM_READ|VM_WRITE, PAGE_KERNEL);
+    if(nr_pages == castle_cache_fast_vmap_pages)
+    {
+        uint32_t vmap_slot;
+
+        vmap_slot = castle_cache_fast_vmap_freelist_get();
+        c2b->buffer = castle_cache_fast_vmap_vstart + vmap_slot * nr_pages * PAGE_SIZE;
+        if(castle_map_vm_area(c2b->buffer, castle_cache_vmap_pgs, nr_pages, PAGE_KERNEL))
+            c2b->buffer = NULL;
+    }
     else
-        c2b->buffer = pfn_to_kaddr(page_to_pfn(pgs[0])); 
-    up(&pgs_mutex);
+    if(nr_pages > 1)
+        c2b->buffer = vmap(castle_cache_vmap_pgs, i, VM_READ|VM_WRITE, PAGE_KERNEL);
+    else
+        c2b->buffer = pfn_to_kaddr(page_to_pfn(castle_cache_vmap_pgs[0])); 
+
+    up(&castle_cache_vmap_lock);
     BUG_ON(!c2b->buffer);
 }
 
-/* Must be called with freelist lock held */
 static void castle_cache_block_free(c2_block_t *c2b)
 {
-    BUG_ON(spin_trylock(&castle_cache_freelist_lock));
+    if(c2b->nr_pages == castle_cache_fast_vmap_pages)
+    {
+        uint32_t vmap_slot;
+
+        castle_unmap_vm_area(c2b->buffer, c2b->nr_pages);
+        vmap_slot = (c2b->buffer - castle_cache_fast_vmap_vstart) / (c2b->nr_pages * PAGE_SIZE);
+        down(&castle_cache_vmap_lock);
+        castle_cache_fast_vmap_freelist_add(vmap_slot);
+        up(&castle_cache_vmap_lock);
+    }
+    else
     if(c2b->nr_pages > 1)
         vunmap(c2b->buffer);
+    /* Changes to freelists under freelist_lock */
+    spin_lock(&castle_cache_freelist_lock);
     /* Add the pages back to the freelist */
     list_splice_init(&c2b->pages, &castle_cache_page_freelist);
     castle_cache_page_freelist_size += c2b->nr_pages;
@@ -459,6 +490,7 @@ static void castle_cache_block_free(c2_block_t *c2b)
     c2b->nr_pages = 0xFFFF;
     /* Then put the block on its freelist */
     __castle_cache_block_freelist_add(c2b);
+    spin_unlock(&castle_cache_freelist_lock);
 }
 
 static inline int c2b_busy(c2_block_t *c2b)
@@ -506,14 +538,12 @@ static int castle_cache_hash_clean(void)
     }
 
     /* Add to the freelist */
-    spin_lock(&castle_cache_freelist_lock);
     list_for_each_safe(lh, t, &victims)
     {
         list_del(lh);
         c2b = list_entry(lh, c2_block_t, list);
         castle_cache_block_free(c2b);
     }
-    spin_unlock(&castle_cache_freelist_lock);
 
     return 1;
 }
@@ -594,9 +624,7 @@ c2_block_t* castle_cache_block_get(c_disk_blk_t cdb, int nr_pages)
         {
             debug("Failed\n");
             put_c2b(c2b);
-            spin_lock(&castle_cache_freelist_lock);
             castle_cache_block_free(c2b);
-            spin_unlock(&castle_cache_freelist_lock);
         }
         else
         {
@@ -822,9 +850,7 @@ static void castle_cache_hash_fini(void)
 
             BUG_ON(c2b_locked(c2b));
             BUG_ON(atomic_read(&c2b->count) != 0);
-            spin_lock(&castle_cache_freelist_lock);
             castle_cache_block_free(c2b);
-            spin_unlock(&castle_cache_freelist_lock);
         }
     }
 }
@@ -885,6 +911,74 @@ static void castle_cache_freelists_fini(void)
         BUG_ON(!list_empty(&c2b->pages));
     }
 #endif    
+}
+
+static int castle_cache_fast_vmap_init(void)
+{
+    struct page **pgs_array;
+    struct list_head *l;
+    int i;
+
+    castle_cache_fast_vmap_pages = castle_btree_type_get(VLBA_TREE_TYPE)->node_size;
+    /* We need cache_castle_size / 512 for this array, if that's too big, we
+       could use the cache pages themselves */
+    pgs_array = vmalloc(castle_cache_size * sizeof(struct page *));
+    if(!pgs_array)
+        return -ENOMEM;
+
+    castle_cache_fast_vmap_freelist = vmalloc((castle_cache_size + 1) * sizeof(uint32_t)); 
+    if(!castle_cache_fast_vmap_freelist)
+    {
+        vfree(pgs_array);
+        return -ENOMEM;
+    }
+
+    /* Assemble array of all pages from the freelist. Vmap them all. */
+    i = 0;
+    list_for_each(l, &castle_cache_page_freelist)
+        pgs_array[i++] = list_entry(l, struct page, lru);
+
+    castle_cache_fast_vmap_vstart = vmap(pgs_array, 
+                                         castle_cache_size, 
+                                         VM_READ|VM_WRITE, 
+                                         PAGE_KERNEL);
+    /* This gives as an area in virtual memory in which we'll keep mapping multi-page c2bs.
+       In order for this to work we need to unmap all the pages, but tricking the vmalloc.c
+       into not deallocating the vm_area_struct describing our virtual memory region.
+       Use castle_unmap_vm_area for that.
+     */
+    BUG_ON(!castle_cache_fast_vmap_vstart);
+    castle_unmap_vm_area(castle_cache_fast_vmap_vstart, castle_cache_size);
+    /* Init the freelist */
+    castle_cache_fast_vmap_freelist[0] = (uint32_t)-1;
+    for(i=0; i<castle_cache_size; i++)
+        castle_cache_fast_vmap_freelist_add(i);
+
+    return 0;
+}
+
+static void castle_cache_fast_vmap_fini(void)
+{
+    int i;
+
+    /* If the freelist didn't get allocated, there is nothing to fini. */
+    if(!castle_cache_fast_vmap_freelist)
+        return;
+
+    /* Because we've done hash_fini(), there should be nothing mapped in the fast vmap area. 
+       When in debug mode, verify that the freelist contains castle_cache_size items. Then,
+       map all the cache pages, and let the vmalloc.c destroy vm_area_struct by vmunmping it.
+     */ 
+#ifdef CASTLE_DEBUG
+   i = 0;
+   while(castle_cache_fast_vmap_freelist[0] < castle_cache_size)
+   {
+       castle_cache_fast_vmap_freelist_get(); 
+       i++;
+   }
+   BUG_ON(i != castle_cache_size);
+#endif 
+   vunmap(castle_cache_fast_vmap_vstart);
 }
 
 /**********************************************************************************************
@@ -1321,13 +1415,15 @@ int castle_cache_init(void)
     printk("Castle cache init, size=%d\n", castle_cache_size);
 
     castle_cache_hash_buckets = castle_cache_size >> 3; 
-    castle_cache_hash = 
-         vmalloc(castle_cache_hash_buckets * sizeof(struct list_head));
-    castle_cache_blks  = vmalloc(castle_cache_size * sizeof(c2_block_t));
+    castle_cache_hash = vmalloc(castle_cache_hash_buckets * sizeof(struct list_head));
+    castle_cache_blks = vmalloc(castle_cache_size * sizeof(c2_block_t));
+    castle_cache_fast_vmap_freelist = NULL;
+    castle_cache_fast_vmap_vstart = NULL;
     atomic_set(&castle_cache_flush_seq, 0);
 
     if((ret = castle_cache_hash_init()))      goto err_out;
     if((ret = castle_cache_freelists_init())) goto err_out; 
+    if((ret = castle_cache_fast_vmap_init())) goto err_out;
     if((ret = castle_cache_flush_init()))     goto err_out;
 
     if(castle_cache_stats_timer_interval) castle_cache_stats_timer_tick(0);
@@ -1345,6 +1441,7 @@ void castle_cache_fini(void)
     castle_cache_debug_fini();
     castle_cache_flush_fini();
     castle_cache_hash_fini();
+    castle_cache_fast_vmap_fini();
     castle_cache_freelists_fini();
 
     if(castle_cache_stats_timer_interval) del_timer(&castle_cache_stats_timer);
