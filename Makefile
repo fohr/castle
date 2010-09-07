@@ -1,4 +1,4 @@
-KVER = 2.6.18-194.8.1.el5.acunu
+KVER = 2.6.18-194.11.3.el5.acunu
 
 all:
 	make -C kernel KVER=$(KVER)
