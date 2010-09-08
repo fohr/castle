@@ -21,7 +21,7 @@
 #endif
 
 #define MAX_DA_LEVEL                    (20)
-#define MAX_DYNAMIC_TREE_SIZE           (10000)
+#define MAX_DYNAMIC_TREE_SIZE           (100000)
 
 #define CASTLE_DA_HASH_SIZE             (1000)
 #define CASTLE_CT_HASH_SIZE             (4000)
@@ -1017,6 +1017,9 @@ static void castle_da_merge_budget_consume(struct castle_da_merge *merge)
 {
     unsigned long flags;
 
+    if(castle_da_exiting)
+        return;
+
     /* Check if we need to consume some merge budget */
     merge->budget_cons_units++;
     if(merge->budget_cons_units < merge->budget_cons_rate)
@@ -1033,7 +1036,6 @@ try_again:
     }
     spin_unlock_irqrestore(&merge_budget_lock, flags);
     /* We haven't found anything, sleep until next replenish. */
-    printk("Run out of merge budget, waiting.\n");
     wait_event(merge_budget_wq, (merge_budget > 0));
 
     goto try_again;
@@ -1717,7 +1719,7 @@ static void castle_da_merge_check(struct castle_double_array *da)
     struct list_head *l;
     int level;
 
-    printk("Checking if to do a merge for da: %d\n", da->id);
+    debug("Checking if to do a merge for da: %d\n", da->id);
     /* Return early if we are already doing a merge. */
     if(castle_da_merging(da) || castle_da_exiting)
         return;
@@ -2338,7 +2340,7 @@ void castle_double_array_find(c_bvec_t *c_bvec)
     c_bvec->da_endfind = c_bvec->endfind;
     c_bvec->endfind    = castle_da_bvec_complete;
 
-    castle_request_timeline_create(c_bvec->timeline);
+    //castle_request_timeline_create(c_bvec->timeline);
     castle_request_timeline_checkpoint_start(c_bvec->timeline);
     debug_verbose("Looking up in ct=%d\n", c_bvec->tree->seq); 
     castle_btree_find(c_bvec);
