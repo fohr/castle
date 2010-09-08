@@ -687,7 +687,7 @@ static int castle_cache_flush(void *unused)
     struct list_head *l, *t;
     c2_block_t *c2b;
 #define MIN_FLUSH_SIZE     128
-#define MAX_FLUSH_SIZE     1024
+#define MAX_FLUSH_SIZE     (4*1024)
 #define MIN_FLUSH_FREQ     5        /* Min flush rate: 5*128 pgs/s = 2.5 MB/s. */
 
 #define FLUSH_BATCH        64
