@@ -595,12 +595,12 @@ struct castle_btree_type castle_batree = {
 /**********************************************************************************************/
 /* Variable length byte array key btree (vlbatree) definitions */
 
-#define VLBA_TREE_ENTRY_LEAF_VAL     0x01
-#define VLBA_TREE_ENTRY_LEAF_PTR     0x02
+#define VLBA_TREE_ENTRY_LEAF_VAL      0x01
+#define VLBA_TREE_ENTRY_LEAF_PTR      0x02
 #define VLBA_TREE_ENTRY_NODE          0x04
-#define VLBA_TREE_ENTRY_TOMB_STONE    0x08
-#define VLBA_TREE_ENTRY_INLINE        0x10
-#define VLBA_TREE_ENTRY_ONDISK        0x20
+#define VLBA_TREE_ENTRY_TOMB_STONE    CVT_TYPE_TOMB_STONE
+#define VLBA_TREE_ENTRY_INLINE        CVT_TYPE_INLINE
+#define VLBA_TREE_ENTRY_ONDISK        CVT_TYPE_ONDISK
 #define VLBA_TREE_ENTRY_DISABLED      0x40
 #define VLBA_TREE_ENTRY_IS_NODE(_slot)        ((_slot)->type & VLBA_TREE_ENTRY_NODE)
 #define VLBA_TREE_ENTRY_IS_LEAF_VAL(_slot)    ((_slot)->type & VLBA_TREE_ENTRY_LEAF_VAL) 
@@ -896,10 +896,6 @@ static int castle_vlba_tree_entry_get(struct castle_btree_node *node,
         if (VLBA_TREE_ENTRY_IS_INLINE(entry))
         {
             BUG_ON(entry->val_len == 0 || entry->val_len > MAX_INLINE_VAL_SIZE);
-#if 0
-            cvt_p->val = kmalloc(entry->val_len, GFP_NOIO);
-            memcpy(cvt_p->val, VLBA_ENTRY_VAL_PTR(entry), entry->val_len);
-#endif
             cvt_p->val = VLBA_ENTRY_VAL_PTR(entry);
         }
         else 
@@ -928,15 +924,14 @@ static void castle_vlba_tree_entry_add(struct castle_btree_node *node,
     uint32_t key_length = VLBA_KEY_LENGTH(key);
     /* entry header + key length + an entry in index table */
     uint32_t req_space;
-    int mem_alloc = 0;
 
     BUG_ON(idx < 0 || idx > node->used);
 
-#if 0
-    new_entry.version = ;
-    new_entry.cdb = ;
-#endif
-    new_entry.type       = cvt.type;
+    new_entry.version    = version;
+    new_entry.type       = node->is_leaf ? 
+                        (is_leaf_ptr ? VLBA_TREE_ENTRY_LEAF_PTR : VLBA_TREE_ENTRY_LEAF_VAL) :
+                        VLBA_TREE_ENTRY_NODE;
+    new_entry.type      |= cvt.type; 
     new_entry.val_len    = cvt.length;
     new_entry.key.length = key_length;
     req_space = VLBA_ENTRY_LENGTH((&new_entry)) + sizeof(uint32_t);
@@ -957,26 +952,9 @@ static void castle_vlba_tree_entry_add(struct castle_btree_node *node,
 
     if(vlba_node->free_bytes < req_space) 
     {
-        if (((uint8_t *)key <= EOF_VLBA_NODE(node)) && 
-            (((uint8_t *)key + key_length + sizeof(vlba_key_t)) >= (uint8_t *)node)) 
-        {
-            vlba_key_t *tmp_key;
-            uint8_t *tmp_val;
-
-            tmp_key = kmalloc(key_length + sizeof(vlba_key_t), GFP_NOIO);
-            BUG_ON(!tmp_key);
-            memcpy(tmp_key, key, key_length + sizeof(vlba_key_t));
-            key = tmp_key;
-            mem_alloc++;
-            if (CVT_INLINE(cvt))
-            {
-                tmp_val = kmalloc(cvt.length, GFP_NOIO);
-                BUG_ON(!tmp_val);
-                memcpy(tmp_val, cvt.val, cvt.length);
-                cvt.val = tmp_val;
-                mem_alloc++;
-            }
-        }
+        /* BUG if the key is in the node we are processing (compaction will invalidate the pointer) */
+        BUG_ON(((uint8_t *)key <= EOF_VLBA_NODE(node)) && 
+            (((uint8_t *)key + key_length + sizeof(vlba_key_t)) >= (uint8_t *)node));
         castle_vlba_tree_node_compact(node);
     }
 
@@ -991,13 +969,9 @@ static void castle_vlba_tree_entry_add(struct castle_btree_node *node,
             sizeof(uint32_t) * (node->used - idx));
 
     vlba_node->key_idx[idx] = EOF_VLBA_NODE(node) - ((uint8_t *)entry);
+    memcpy(entry, &new_entry, sizeof(struct castle_vlba_tree_entry));
     memcpy(&entry->key, key, sizeof(vlba_key_t) + key_length);
-    entry->version      = version;
-    entry->type         = node->is_leaf ? 
-                        (is_leaf_ptr ? VLBA_TREE_ENTRY_LEAF_PTR : VLBA_TREE_ENTRY_LEAF_VAL) :
-                        VLBA_TREE_ENTRY_NODE;
-    entry->type        |= cvt.type; 
-    entry->val_len  = cvt.length;
+    
     BUG_ON(VLBA_TREE_ENTRY_IS_TOMB_STONE(entry) && entry->val_len != 0);
     BUG_ON(!VLBA_TREE_ENTRY_IS_TOMB_STONE(entry) && entry->val_len == 0);
     if (VLBA_TREE_ENTRY_IS_INLINE(entry))
@@ -1008,13 +982,6 @@ static void castle_vlba_tree_entry_add(struct castle_btree_node *node,
     }
     else 
         entry->cdb      = cvt.cdb;
-
-    if (mem_alloc)
-    {
-        kfree(key);
-        if (mem_alloc == 2)
-            kfree(cvt.val);
-    }
 
     /* Increment the node used count */
     node->used++;
@@ -1068,11 +1035,11 @@ static void castle_vlba_tree_entry_replace(struct castle_btree_node *node,
     BUG_ON(!node->is_leaf && is_leaf_ptr);
     BUG_ON(((uint8_t *)entry) >= EOF_VLBA_NODE(node));
 
-#if 0
-    new_entry.version = ;
-    new_entry.cdb = ;
-#endif
-    new_entry.type       = cvt.type;
+    new_entry.version    = version;
+    new_entry.type       = node->is_leaf ? 
+                         (is_leaf_ptr ? VLBA_TREE_ENTRY_LEAF_PTR : VLBA_TREE_ENTRY_LEAF_VAL) :
+                         VLBA_TREE_ENTRY_NODE;
+    new_entry.type      |= cvt.type; 
     new_entry.val_len    = cvt.length;
     new_entry.key.length = key->length;
     new_length = VLBA_ENTRY_LENGTH((&new_entry));
@@ -1082,13 +1049,8 @@ static void castle_vlba_tree_entry_replace(struct castle_btree_node *node,
     {
         vlba_node->dead_bytes += old_length - new_length;
 
+        memcpy(entry, &new_entry, sizeof(struct castle_vlba_tree_entry));
         memcpy(&entry->key, key, sizeof(vlba_key_t) + VLBA_KEY_LENGTH(key));
-        entry->version = version;
-        entry->type    = node->is_leaf ? 
-                        (is_leaf_ptr ? VLBA_TREE_ENTRY_LEAF_PTR : VLBA_TREE_ENTRY_LEAF_VAL) :
-                        VLBA_TREE_ENTRY_NODE;
-        entry->type        |= cvt.type; 
-        entry->val_len  = cvt.length;
         BUG_ON(VLBA_TREE_ENTRY_IS_TOMB_STONE(entry) && entry->val_len != 0);
         BUG_ON(!VLBA_TREE_ENTRY_IS_TOMB_STONE(entry) && entry->val_len == 0);
         if (VLBA_TREE_ENTRY_IS_INLINE(entry))
@@ -2122,7 +2084,7 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
 
     /* NOP for block devices */
     c_bvec->cvt_get(c_bvec, lub_cvt, &new_cvt);
-    btree->entry_replace(node, lub_idx, lub_key, lub_version, 0,
+    btree->entry_replace(node, lub_idx, key, lub_version, 0,
                          new_cvt);
     debug("Key already exists, modifying in place.\n");
     castle_btree_io_end(c_bvec, new_cvt, 0);

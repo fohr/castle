@@ -90,6 +90,7 @@ struct castle_fs_superblock {
 } PACKED;
 
 enum {
+    /* NOTE: if you change these, make sure VLBA_TREE_ENTRY_* are also updated */
     CVT_TYPE_TOMB_STONE      = 0x08,
     CVT_TYPE_INLINE          = 0x10,
     CVT_TYPE_ONDISK          = 0x20,
