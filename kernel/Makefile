@@ -23,7 +23,7 @@ endif
 EXTRA_CFLAGS += $(DEBFLAGS)
 EXTRA_CFLAGS += -I..
 
-KVER       ?= 2.6.18-194.8.1.el5.acunu
+KVER       ?= 2.6.18-194.11.3.el5.acunu
 KERNEL_DIR ?= /lib/modules/$(KVER)/build
 PWD        := $(shell pwd)
 
