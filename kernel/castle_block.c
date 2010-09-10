@@ -4,6 +4,7 @@
 
 #include "castle_public.h"
 #include "castle.h"
+#include "castle_debug.h"
 
 //#define DEBUG
 #ifndef DEBUG
@@ -46,7 +47,7 @@ static void castle_block_read_end(struct bio *bio, int err)
         debug("      With callback in block_read_end. Ret=%d\n", err);
         cbio->callback(cbio->arg, err);
         debug("      FREEING CBIO\n");
-        kfree(cbio);
+        castle_free(cbio);
     }
     /* TODO: Does this need to be done, or will bio get cleaned up by our caller? */
     debug("      NOT PUTTING BIO\n");
@@ -69,7 +70,7 @@ int castle_block_read(struct castle_slave *slave,
     /* Early checks */
     if(!bio) return -ENOMEM;
 
-    cbio = kmalloc(sizeof(struct castle_block_io), GFP_KERNEL);
+    cbio = castle_malloc(sizeof(struct castle_block_io), GFP_KERNEL);
     if(!cbio) {
         /* This will destroy the bio */
         bio_put(bio); 
@@ -104,7 +105,7 @@ int castle_block_read(struct castle_slave *slave,
         wait_for_completion(&cbio->io_completed);
         debug("     Completion returned, ret=%d\n", ret);
         debug("     FREEING CBIO\n");
-        kfree(cbio);
+        castle_free(cbio);
         return ret;
     } else
     {
@@ -133,7 +134,7 @@ void castle_sub_block_read_end(void *arg, int err)
 
     /* Free the io structure (we've got a local copy) */
     debug("   FREEING SUB BLOCK IO STRUCT.\n");
-    kfree(iop);
+    castle_free(iop);
 
     /* Callback early if read failed */
     if(err) 
@@ -176,13 +177,13 @@ int castle_sub_block_read(struct castle_slave *cs,
     struct page *page;
     int err;
     
-    io = kmalloc(sizeof(struct castle_sub_block_io), GFP_KERNEL);
+    io = castle_malloc(sizeof(struct castle_sub_block_io), GFP_KERNEL);
     if(!io) return -ENOMEM;
 
     page = alloc_page(GFP_KERNEL);
     if(!page)
     {
-        kfree(io);
+        castle_free(io);
         return -ENOMEM;
     }
     

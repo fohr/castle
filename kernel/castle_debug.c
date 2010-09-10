@@ -11,7 +11,14 @@ typedef struct castle_debug_watch {
     uint32_t version;
 } cd_watch_t;
 
+struct castle_malloc_debug {
+    struct list_head list;
+    char *file;
+    int line;
+};
 
+static spinlock_t           malloc_list_spinlock = SPIN_LOCK_UNLOCKED;
+static            LIST_HEAD(malloc_list);
 static spinlock_t           bio_list_spinlock = SPIN_LOCK_UNLOCKED;
 static int                  bio_id = 0;
 static            LIST_HEAD(bio_list);
@@ -19,6 +26,67 @@ static struct task_struct  *debug_thread;
 static cd_watch_t           watches[] = {{0x41, 0x3}};
 static int                  nr_watches = 0;
 static struct page        **watched_data;
+
+
+void* castle_debug_malloc(size_t size, gfp_t flags, char *file, int line)
+{
+    struct castle_malloc_debug *dobj;
+
+    BUG_ON(in_atomic());
+
+    size += sizeof(struct castle_malloc_debug);
+    /* Alloc the object */
+    dobj = kmalloc(size, flags); 
+    /* Init all fields */
+    INIT_LIST_HEAD(&dobj->list);
+    dobj->file = file;
+    dobj->line = line;
+
+    /* Add ourselves to the list under lock */
+    spin_lock(&malloc_list_spinlock);
+    list_add(&dobj->list, &malloc_list);
+    spin_unlock(&malloc_list_spinlock);
+
+    return (char *)dobj + sizeof(struct castle_malloc_debug); 
+}
+
+void* castle_debug_zalloc(size_t size, gfp_t flags, char *file, int line)
+{
+    char *obj;
+   
+    obj = castle_debug_malloc(size, flags, file, line);
+    if(obj)
+        memset(obj, 0, size);
+
+    return obj; 
+}
+
+void castle_debug_free(void *obj)
+{
+    struct castle_malloc_debug *dobj;
+
+    dobj = obj;
+    dobj--;
+    /* Remove from list */
+    spin_lock(&malloc_list_spinlock);
+    list_del(&dobj->list);
+    spin_unlock(&malloc_list_spinlock);
+
+    kfree(dobj);
+}
+
+static void castle_debug_malloc_fini(void)
+{
+    struct castle_malloc_debug *dobj;
+    struct list_head *l;
+
+    list_for_each(l, &malloc_list)
+    {
+        dobj = list_entry(l, struct castle_malloc_debug, list);
+        printk("kmalloc/kzalloc from %s:%d hasn't been deallocated.\n",
+                dobj->file, dobj->line);
+    }
+}
 
 static void castle_debug_buffer_init(struct page *pg)
 {
@@ -251,7 +319,7 @@ static void castle_debug_watches_free(void)
         for(i=0; i<nr_watches; i++)
             if(watched_data[i] != NULL)
                 __free_page(watched_data[i]);
-        kfree(watched_data);
+        castle_free(watched_data);
     }
 }
 
@@ -262,7 +330,7 @@ void castle_debug_init(void)
     debug_thread = kthread_run(castle_debug_run, NULL, "castle-debug");
    
     /* Try to allocate buffers for watched pages */
-    watched_data = kzalloc(sizeof(struct page*) * nr_watches, GFP_KERNEL); 
+    watched_data = castle_zalloc(sizeof(struct page*) * nr_watches, GFP_KERNEL); 
     if(!watched_data) goto alloc_failed;
     for(i=0; i<nr_watches; i++)
     {
@@ -282,4 +350,5 @@ void castle_debug_fini(void)
     kthread_stop(debug_thread);
     castle_debug_watches_print();
     castle_debug_watches_free();
+    castle_debug_malloc_fini();
 }

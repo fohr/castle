@@ -532,7 +532,7 @@ static void castle_ct_modlist_iter_heapsort(c_modlist_iter_t *iter)
 static void castle_ct_modlist_iter_free(c_modlist_iter_t *iter)
 {
     if(iter->enumerator)
-        kfree(iter->enumerator);
+        castle_free(iter->enumerator);
     if(iter->node_buffer)
         vfree(iter->node_buffer);
     if(iter->sort_idx)
@@ -562,7 +562,7 @@ static void castle_ct_modlist_iter_init(c_modlist_iter_t *iter)
     BUG_ON(!iter->tree);
     iter->err = 0;
     iter->btree = castle_btree_type_get(iter->tree->btree_type);
-    iter->enumerator = kmalloc(sizeof(c_immut_iter_t), GFP_KERNEL);
+    iter->enumerator = castle_malloc(sizeof(c_immut_iter_t), GFP_KERNEL);
     /* Allocate slighly more than number of nodes in the tree, to make sure everything
        fits, even if we unlucky, and waste parts of the node in each node */
     iter->nr_nodes = 1.1 * (atomic64_read(&ct->node_count) + 1);
@@ -736,7 +736,7 @@ static void castle_ct_merged_iter_skip(c_merged_iter_t *iter,
 
 static void castle_ct_merged_iter_cancel(c_merged_iter_t *iter)
 {
-    kfree(iter->iterators);
+    castle_free(iter->iterators);
 }
 
 /* Constructs a merged iterator out of a set of iterators. */
@@ -753,7 +753,7 @@ static void castle_ct_merged_iter_init(c_merged_iter_t *iter,
     BUG_ON(iter->nr_iters <= 0);
     BUG_ON(!iter->btree);
     iter->err = 0;
-    iter->iterators = kmalloc(iter->nr_iters * sizeof(struct component_iterator), GFP_KERNEL);
+    iter->iterators = castle_malloc(iter->nr_iters * sizeof(struct component_iterator), GFP_KERNEL);
     if(!iter->iterators)
     {
         printk("Failed to allocate memory for merged iterator.\n");
@@ -873,7 +873,7 @@ void castle_da_rq_iter_cancel(c_da_rq_iter_t *iter)
         struct ct_rq *ct_rq = iter->ct_rqs + i;
         castle_btree_rq_enum_cancel(&ct_rq->ct_rq_iter);
     }
-    kfree(iter->ct_rqs);
+    castle_free(iter->ct_rqs);
 }
 
 void castle_da_rq_iter_init(c_da_rq_iter_t *iter,
@@ -898,9 +898,9 @@ again:
        a spinlock). */
     iter->nr_cts = da->nr_trees;
     iter->err    = 0;
-    iter->ct_rqs = kzalloc(iter->nr_cts * sizeof(struct ct_rq), GFP_KERNEL);
-    iters        = kmalloc(iter->nr_cts * sizeof(void *), GFP_KERNEL);
-    iter_types   = kmalloc(iter->nr_cts * sizeof(struct castle_iterator_type *), GFP_KERNEL);
+    iter->ct_rqs = castle_zalloc(iter->nr_cts * sizeof(struct ct_rq), GFP_KERNEL);
+    iters        = castle_malloc(iter->nr_cts * sizeof(void *), GFP_KERNEL);
+    iter_types   = castle_malloc(iter->nr_cts * sizeof(struct castle_iterator_type *), GFP_KERNEL);
     if(!iter->ct_rqs || !iters || !iter_types)
     {
         iter->err = -ENOMEM;
@@ -913,9 +913,9 @@ again:
     {
         castle_da_unlock(da);
         printk("Warning. Untested path. # of cts changed while allocating memory for rq.\n");
-        kfree(iter->ct_rqs);
-        kfree(iters);
-        kfree(iter_types);
+        castle_free(iter->ct_rqs);
+        castle_free(iters);
+        castle_free(iter_types);
         goto again;
     }
     /* Get refs to all the component trees, and release the lock */
@@ -963,8 +963,8 @@ again:
     castle_ct_merged_iter_init(&iter->merged_iter,
                                 iters,
                                 iter_types);
-    kfree(iters);
-    kfree(iter_types);
+    castle_free(iters);
+    castle_free(iter_types);
 }
 
 struct castle_iterator_type castle_da_rq_iter = {
@@ -1098,7 +1098,7 @@ static void castle_da_iterator_destroy(struct castle_component_tree *tree,
     {
         BUG();
     }
-    kfree(iter);
+    castle_free(iter);
 }
 
 static void castle_da_iterator_create(struct castle_da_merge *merge,
@@ -1107,7 +1107,7 @@ static void castle_da_iterator_create(struct castle_da_merge *merge,
 {
     if(tree->dynamic)
     {
-        c_modlist_iter_t *iter = kmalloc(sizeof(c_modlist_iter_t), GFP_KERNEL);
+        c_modlist_iter_t *iter = castle_malloc(sizeof(c_modlist_iter_t), GFP_KERNEL);
         if(!iter)
             return;
         iter->tree = tree;
@@ -1122,7 +1122,7 @@ static void castle_da_iterator_create(struct castle_da_merge *merge,
         *iter_p = iter; 
     } else
     {
-        c_immut_iter_t *iter = kmalloc(sizeof(c_immut_iter_t), GFP_KERNEL);
+        c_immut_iter_t *iter = castle_malloc(sizeof(c_immut_iter_t), GFP_KERNEL);
         if(!iter)
             return;
         iter->tree = tree;
@@ -1173,7 +1173,7 @@ static int castle_da_iterators_create(struct castle_da_merge *merge)
 
     /* Init the merged iterator */
     ret = -ENOMEM;
-    merge->merged_iter = kmalloc(sizeof(c_merged_iter_t), GFP_KERNEL);
+    merge->merged_iter = castle_malloc(sizeof(c_merged_iter_t), GFP_KERNEL);
     if(!merge->merged_iter)
         goto err_out;
     debug("Merged iterator allocated.\n");
@@ -1201,7 +1201,7 @@ err_out:
     castle_da_iterator_destroy(merge->in_tree2, merge->iter2);
     if(merge->merged_iter)
         /* TODO: this should call a destructor, rather than just free */
-        kfree(merge->merged_iter);
+        castle_free(merge->merged_iter);
 
     BUG_ON(!ret);
     return ret;
@@ -1607,7 +1607,7 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge)
         if(merge->levels[i].buffer)
             vfree(merge->levels[i].buffer);
     }
-    kfree(merge);
+    castle_free(merge);
 }
 
 
@@ -1675,7 +1675,7 @@ static void castle_da_merge_schedule(struct castle_double_array *da,
     BUG_ON(btree != castle_btree_type_get(in_tree2->btree_type));
     /* Malloc everything ... */
     ret = -ENOMEM;
-    merge = kzalloc(sizeof(struct castle_da_merge), GFP_KERNEL);
+    merge = castle_zalloc(sizeof(struct castle_da_merge), GFP_KERNEL);
     if(!merge)
         goto error_out;
     merge->da                = da;
@@ -1854,7 +1854,7 @@ void castle_ct_put(struct castle_component_tree *ct, int write)
     printk("Should release freespace occupied by ct=%d\n", ct->seq);
     /* Poison ct (note this will be repoisoned by kfree on kernel debug build. */
     memset(ct, 0xde, sizeof(struct castle_component_tree));
-    kfree(ct);
+    castle_free(ct);
 }
 
 static struct castle_component_tree* castle_da_rwct_get(struct castle_double_array *da, int write)
@@ -1962,7 +1962,7 @@ static int castle_da_ct_dealloc(struct castle_double_array *da,
                                 void *unused)
 {
     list_del(&ct->da_list);
-    kfree(ct);
+    castle_free(ct);
 
     return 0;
 }
@@ -1971,7 +1971,7 @@ static int castle_da_hash_dealloc(struct castle_double_array *da, void *unused)
 {
     castle_da_foreach_tree(da, castle_da_ct_dealloc, NULL);
     list_del(&da->hash_list);
-    kfree(da);
+    castle_free(da);
 
     return 0;
 }
@@ -1979,12 +1979,12 @@ static int castle_da_hash_dealloc(struct castle_double_array *da, void *unused)
 static void castle_da_hash_destroy(void)
 {
    castle_da_hash_iterate(castle_da_hash_dealloc, NULL); 
-   kfree(castle_da_hash);
+   castle_free(castle_da_hash);
 }
 
 static void castle_ct_hash_destroy(void)
 {
-    kfree(castle_ct_hash);
+    castle_free(castle_ct_hash);
 }
 
 static int castle_da_tree_writeback(struct castle_double_array *da,
@@ -2073,7 +2073,7 @@ int castle_double_array_read(void)
     while(castle_mstore_iterator_has_next(iterator))
     {
         castle_mstore_iterator_next(iterator, &mstore_dentry, &key);
-        da = kmalloc(sizeof(struct castle_double_array), GFP_KERNEL);
+        da = castle_malloc(sizeof(struct castle_double_array), GFP_KERNEL);
         if(!da) 
             goto out_iter_destroy;
         castle_da_unmarshall(da, &mstore_dentry, key);
@@ -2100,7 +2100,7 @@ int castle_double_array_read(void)
             continue;
         }
         /* Otherwise allocate a ct structure */
-        ct = kmalloc(sizeof(struct castle_component_tree), GFP_KERNEL);
+        ct = castle_malloc(sizeof(struct castle_component_tree), GFP_KERNEL);
         if(!ct)
             goto out_iter_destroy;
         da_id = castle_da_ct_unmarshall(ct, &mstore_centry, key);
@@ -2135,7 +2135,7 @@ static struct castle_component_tree* castle_ct_alloc(struct castle_double_array 
 {
     struct castle_component_tree *ct;
 
-    ct = kzalloc(sizeof(struct castle_component_tree), GFP_KERNEL); 
+    ct = castle_zalloc(sizeof(struct castle_component_tree), GFP_KERNEL); 
     if(!ct) 
         return NULL;
     
@@ -2209,7 +2209,7 @@ int castle_double_array_make(da_id_t da_id, version_t root_version)
     int ret, i;
 
     debug("Creating doubling array for da_id=%d, version=%d\n", da_id, root_version);
-    da = kzalloc(sizeof(struct castle_double_array), GFP_KERNEL); 
+    da = castle_zalloc(sizeof(struct castle_double_array), GFP_KERNEL); 
     if(!da)
         return -ENOMEM;
     da->id = da_id;
@@ -2224,7 +2224,7 @@ int castle_double_array_make(da_id_t da_id, version_t root_version)
     if(ret)
     {
         printk("Exiting from failed ct create.\n");
-        kfree(da);
+        castle_free(da);
         
         return ret;
     }
@@ -2388,9 +2388,9 @@ err_out:
     BUG_ON(!ret);
     del_singleshot_timer_sync(&merge_rate_timer);
     if(castle_ct_hash)
-        kfree(castle_ct_hash);
+        castle_free(castle_ct_hash);
     if(castle_da_hash)
-        kfree(castle_da_hash);
+        castle_free(castle_da_hash);
 
     return ret;
 }

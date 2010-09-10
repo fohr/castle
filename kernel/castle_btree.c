@@ -401,7 +401,7 @@ static void* castle_batree_key_next(void *keyv)
      
     /* Finally allocate and return the successor key */ 
     /* TODO: IMPORTANT THIS CREATES MEMORY LEAK, NEEDS TO BE FIXED */
-    succ = kmalloc(sizeof(bakey_t), GFP_NOIO);
+    succ = castle_malloc(sizeof(bakey_t), GFP_NOIO);
     /* TODO: Should this be handled properly? */
     BUG_ON(!succ);
     memcpy(succ, key, sizeof(bakey_t));
@@ -729,8 +729,8 @@ static void castle_vlba_tree_node_compact(struct castle_btree_node *node)
 
     /* Buffers to keep the minimum heap of entries offsets and corresponsding
      * entry index */
-    a = kmalloc(sizeof(uint32_t) * node->used, GFP_NOIO);
-    idx = kmalloc(sizeof(uint32_t) * node->used, GFP_NOIO);
+    a = castle_malloc(sizeof(uint32_t) * node->used, GFP_NOIO);
+    idx = castle_malloc(sizeof(uint32_t) * node->used, GFP_NOIO);
     BUG_ON(!a || !idx);
     
     memcpy(a, &vlba_node->key_idx[0], (sizeof(uint32_t) * node->used));
@@ -779,8 +779,8 @@ static void castle_vlba_tree_node_compact(struct castle_btree_node *node)
     vlba_node->free_bytes += vlba_node->dead_bytes;
     vlba_node->dead_bytes = 0;
 
-    kfree(a);
-    kfree(idx);
+    castle_free(a);
+    castle_free(idx);
 }
 
 
@@ -1093,8 +1093,8 @@ static void castle_vlba_tree_node_validate(struct castle_btree_node *node)
     /* TODO: node_validate called in interrupt context, cannot kmalloc GFP_NOIO here */
     if(0 == 0)
         return;
-    a = kmalloc(sizeof(uint32_t) * node->used, GFP_NOIO);
-    idx = kmalloc(sizeof(uint32_t) * node->used, GFP_NOIO);
+    a = castle_malloc(sizeof(uint32_t) * node->used, GFP_NOIO);
+    idx = castle_malloc(sizeof(uint32_t) * node->used, GFP_NOIO);
     BUG_ON(!a || !idx);
     
     memcpy(a, &vlba_node->key_idx[0], (sizeof(uint32_t) * node->used));
@@ -1215,8 +1215,8 @@ static void castle_vlba_tree_node_validate(struct castle_btree_node *node)
         BUG_ON(VLBA_INLINE_VAL_LENGTH(entry) > MAX_INLINE_VAL_SIZE);
     }
 
-    kfree(a);
-    kfree(idx);
+    castle_free(a);
+    castle_free(idx);
 }
 #endif
 
@@ -1496,7 +1496,7 @@ static void castle_btree_node_save(struct work_struct *work)
     up(&node_save_lock);
     castle_ct_put(ct, 1 /* write */);
 
-    kfree(work_st);
+    castle_free(work_st);
 }
 
 void castle_btree_node_save_prepare(struct castle_component_tree *ct, c_disk_blk_t node_cdb)
@@ -1506,7 +1506,7 @@ void castle_btree_node_save_prepare(struct castle_component_tree *ct, c_disk_blk
     /* Link the new node to last created node. But, schedule the task for later; as
      * locking the last node while holding lock for current node might lead to a
      * dead-lock */
-    work_st = kmalloc(sizeof(struct castle_btree_node_save), GFP_NOIO);
+    work_st = castle_malloc(sizeof(struct castle_btree_node_save), GFP_NOIO);
     BUG_ON(!work_st);
     /* Get a writable reference to the component tree, to stop people from assuming 
        the tree is static now */
@@ -2137,7 +2137,7 @@ static void castle_btree_read_process(c_bvec_t *c_bvec)
             if (CVT_INLINE(lub_cvt))
             {
                 char *loc_buf;
-                loc_buf = kmalloc(lub_cvt.length, GFP_NOIO);
+                loc_buf = castle_malloc(lub_cvt.length, GFP_NOIO);
                 memcpy(loc_buf, lub_cvt.val, lub_cvt.length);
                 lub_cvt.val = loc_buf;
             }
@@ -2394,7 +2394,7 @@ static void castle_btree_iter_end(c_iter_t *c_iter, int err)
     /* TODO: this will not work well for double frees/double ends, fix that */
     if(c_iter->indirect_nodes)
     {
-        kfree(c_iter->indirect_nodes);
+        castle_free(c_iter->indirect_nodes);
         c_iter->indirect_nodes = NULL;
     }
     
@@ -3162,7 +3162,9 @@ void castle_btree_iter_init(c_iter_t *c_iter, version_t version, int type)
             return;
         case C_ITER_MATCHING_VERSIONS:
         case C_ITER_ANCESTRAL_VERSIONS:
-            c_iter->indirect_nodes = kzalloc(MAX_BTREE_ENTRIES * sizeof(struct castle_indirect_node), GFP_KERNEL);
+            c_iter->indirect_nodes = 
+                castle_zalloc(MAX_BTREE_ENTRIES * sizeof(struct castle_indirect_node), 
+                    GFP_KERNEL);
             /* If memory allocation failed, cancel the iterator, and set the error condition. 
                This will get picked up by _start() */
             if(!c_iter->indirect_nodes)
@@ -3302,7 +3304,7 @@ static void castle_btree_enum_fini(c_enum_t *c_enum)
     
     if(c_enum->visited_hash)
     {
-        kfree(c_enum->visited_hash);
+        castle_free(c_enum->visited_hash);
         c_enum->visited_hash = NULL;
     }
     if(c_enum->visited)
@@ -3421,7 +3423,7 @@ void castle_btree_enum_init(c_enum_t *c_enum)
     c_enum->buffer         = NULL;
     c_enum->buffer1        = NULL;
     c_enum->buffer2        = NULL;
-    c_enum->visited_hash   = kmalloc(VISITED_HASH_LENGTH * sizeof(struct list_head),
+    c_enum->visited_hash   = castle_malloc(VISITED_HASH_LENGTH * sizeof(struct list_head),
                                      GFP_KERNEL);
     c_enum->max_visited    = 8 * VISITED_HASH_LENGTH;
     c_enum->visited        = vmalloc(c_enum->max_visited * sizeof(struct castle_visited));
@@ -3477,7 +3479,7 @@ static struct node_buf_t * node_buf_alloc(c_rq_enum_t *rq_enum)
     struct castle_btree_type *btype;
 
     btype = castle_btree_type_get(rq_enum->tree->btree_type);
-    node_buf = kmalloc(sizeof(struct node_buf_t), GFP_KERNEL);
+    node_buf = castle_malloc(sizeof(struct node_buf_t), GFP_KERNEL);
     BUG_ON(!node_buf);
     node_buf->node = vmalloc(btype->node_size * C_BLK_SIZE);
     BUG_ON(!node_buf->node);
@@ -3576,7 +3578,7 @@ static void castle_btree_rq_enum_fini(c_rq_enum_t *rq_enum)
         next = list_entry(buf->list.next,
                           struct node_buf_t, list);
         vfree(buf->node);
-        kfree(buf);
+        castle_free(buf);
         buf = next;
         count++;
         BUG_ON(count > rq_enum->buf_count);

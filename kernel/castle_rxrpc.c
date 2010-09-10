@@ -414,7 +414,7 @@ void castle_rxrpc_replace_multi_complete(struct castle_rxrpc_call *call, int err
     uint32_t reply[1];
 
     BUG_ON(!call->replace_multi.buf);
-    kfree(call->replace_multi.buf);
+    castle_free(call->replace_multi.buf);
 
     debug("Call=%p\n", call);
     rxrpc_kernel_data_delivered(call->current_skb);
@@ -496,7 +496,7 @@ static int castle_rxrpc_key_get_check(const char *buf,
     nr_dims = BUF_L_GET(buf);
     buf_offset += 4;
 
-    key = kzalloc(sizeof(c_vl_okey_t) + sizeof(c_vl_key_t *) * nr_dims, GFP_KERNEL);
+    key = castle_zalloc(sizeof(c_vl_okey_t) + sizeof(c_vl_key_t *) * nr_dims, GFP_KERNEL);
     if(!key)
         return -ENOMEM;
 
@@ -523,7 +523,7 @@ static int castle_rxrpc_key_get_check(const char *buf,
             goto clean_up;
         }
 
-        if(key_len > 128 || !(key->dims[i] = kzalloc(key_len+4, GFP_KERNEL)))
+        if(key_len > 128 || !(key->dims[i] = castle_zalloc(key_len+4, GFP_KERNEL)))
         {
             ret = -ENOMEM;
             goto clean_up;
@@ -539,8 +539,8 @@ static int castle_rxrpc_key_get_check(const char *buf,
 
 clean_up:
     while (i > 0)
-        kfree(key->dims[--i]);
-    kfree(key);
+        castle_free(key->dims[--i]);
+    castle_free(key);
 
     return ret;
 }
@@ -563,7 +563,7 @@ static int castle_rxrpc_key_get(struct sk_buff *skb,
     c_vl_okey_t *key;
 
     nr_dims = SKB_L_GET(skb);
-    key = kzalloc(sizeof(c_vl_okey_t) + sizeof(c_vl_key_t *) * nr_dims, GFP_KERNEL);
+    key = castle_zalloc(sizeof(c_vl_okey_t) + sizeof(c_vl_key_t *) * nr_dims, GFP_KERNEL);
     if(!key)
         return -ENOMEM;
 
@@ -575,8 +575,8 @@ static int castle_rxrpc_key_get(struct sk_buff *skb,
         if(!key->dims[i])
         {
             while (i > 0)
-                kfree(key->dims[--i]);
-            kfree(key);
+                castle_free(key->dims[--i]);
+            castle_free(key);
 
             return -ENOMEM;
         }
@@ -657,6 +657,7 @@ static int castle_rxrpc_replace_decode(struct castle_rxrpc_call *call, struct sk
         call->replace.data_copy = castle_rxrpc_replace_str_copy;
         
         ret = castle_object_replace(&call->replace, attachment, key, is_tombstone);
+        castle_object_key_free(key);
     } else
     /* Subsequent packet processing */
     {
@@ -695,7 +696,7 @@ static int castle_rxrpc_replace_multi_decode(struct castle_rxrpc_call *call,
         call->replace_multi.objects_processed = 0;
 
         len = castle_rxrpc_packet_length(call);
-        call->replace_multi.buf = kzalloc(len, GFP_KERNEL);
+        call->replace_multi.buf = castle_zalloc(len, GFP_KERNEL);
         if (!call->replace_multi.buf)
             return -ENOMEM;
         call->replace_multi.buf_length = len;
@@ -716,13 +717,13 @@ static int castle_rxrpc_replace_multi_decode(struct castle_rxrpc_call *call,
 
         len = castle_rxrpc_packet_length(call);
         remaining_len = call->replace_multi.buf_length - call->replace_multi.buf_offset;
-        new_buf = kzalloc(len + remaining_len, GFP_KERNEL);
+        new_buf = castle_zalloc(len + remaining_len, GFP_KERNEL);
         if (!new_buf)
             return -ENOMEM;
         memcpy(new_buf, call->replace_multi.buf + call->replace_multi.buf_offset, remaining_len);
         castle_rxrpc_str_copy(call, new_buf + remaining_len, len, 1);
 
-        kfree(call->replace_multi.buf);
+        castle_free(call->replace_multi.buf);
         call->replace_multi.buf = new_buf;
         call->replace_multi.buf_length = len + remaining_len;
         call->replace_multi.buf_offset = 0;
@@ -885,7 +886,7 @@ static int castle_rxrpc_ctrl_decode(struct castle_rxrpc_call *call, struct sk_bu
     /* Advance the state, if we succeeded at decoding the packet */
     if(ret) 
     {
-        if(reply) kfree(reply);
+        if(reply) castle_free(reply);
         return ret;
     }
     
@@ -893,7 +894,7 @@ static int castle_rxrpc_ctrl_decode(struct castle_rxrpc_call *call, struct sk_bu
     debug("Sending reply of length=%ld\n", len);
     castle_rxrpc_reply_send(call, reply, len, 1 /* last */);
 
-    kfree(reply);
+    castle_free(reply);
     return 0;
 }
 
@@ -940,7 +941,7 @@ static void castle_rxrpc_call_free(struct castle_rxrpc_call *call)
     debug("Freeing call: %p\n", call);    
     BUG_ON(call->rxcall != NULL);
     BUG_ON(!skb_queue_empty(&call->rx_queue));
-    kfree(call);
+    castle_free(call);
 
     /* Decrement outstanding call count */
     atomic_dec(&castle_outst_call_cnt);
@@ -1144,7 +1145,7 @@ static void castle_rxrpc_incoming_call_collect(struct work_struct *work)
         rxrpc_kernel_free_skb(skb);
 
         /* Try to allocate a call struct, reject call if failed */
-        c_rxcall = kzalloc(sizeof(struct castle_rxrpc_call), GFP_KERNEL);
+        c_rxcall = castle_zalloc(sizeof(struct castle_rxrpc_call), GFP_KERNEL);
         if(!c_rxcall)
         {
             rxrpc_kernel_reject_call(socket);

@@ -75,7 +75,7 @@ static int castle_version_hash_remove(struct castle_version *v, void *unused)
 static void castle_versions_hash_destroy(void)
 {
    castle_versions_hash_iterate(castle_version_hash_remove, NULL); 
-   kfree(castle_versions_hash);
+   castle_free(castle_versions_hash);
 }
 
 static void castle_versions_init_add(struct castle_version *v)
@@ -631,7 +631,7 @@ err_out:
     if(castle_versions_cache)
         kmem_cache_destroy(castle_versions_cache);
     if(castle_versions_hash)
-        kfree(castle_versions_hash);
+        castle_free(castle_versions_hash);
     return ret;
 }
 

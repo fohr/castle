@@ -109,7 +109,7 @@ static c_vl_bkey_t* castle_object_btree_key_construct(c_vl_bkey_t *src_bkey,
         key_len += src_okey->dims[i]->length;
 
     /* Allocate the single-dimensional key */
-    btree_key = kzalloc(key_len, GFP_KERNEL);
+    btree_key = castle_zalloc(key_len, GFP_KERNEL);
     if(!btree_key)
         return NULL;
 
@@ -169,7 +169,7 @@ c_vl_okey_t* castle_object_btree_key_convert(c_vl_bkey_t *btree_key)
     uint32_t dim_len;
     int i;
 
-    obj_key = kzalloc(sizeof(c_vl_okey_t) + sizeof(c_vl_key_t *) * btree_key->nr_dims, GFP_KERNEL);
+    obj_key = castle_zalloc(sizeof(c_vl_okey_t) + sizeof(c_vl_key_t *) * btree_key->nr_dims, GFP_KERNEL);
     if(!obj_key)
         return NULL;
 
@@ -182,9 +182,12 @@ c_vl_okey_t* castle_object_btree_key_convert(c_vl_bkey_t *btree_key)
                 KEY_DIMENSION_MINUS_INFINITY_FLAG) &&
                !(castle_object_btree_key_dim_flags_get(btree_key, i) &
                 KEY_DIMENSION_PLUS_INFINITY_FLAG));
-        dim = kmalloc(dim_len + 4, GFP_KERNEL);
+        dim = castle_malloc(dim_len + 4, GFP_KERNEL);
         if(!dim)
+        {
+        printk("Couldn't malloc dim_len=%d, dim=%p\n", dim_len, dim);
             goto err_out;
+        }
         dim->length = dim_len;
         memcpy(dim->key, castle_object_btree_key_dim_get(btree_key, i), dim_len);
         obj_key->dims[i] = dim; 
@@ -193,9 +196,10 @@ c_vl_okey_t* castle_object_btree_key_convert(c_vl_bkey_t *btree_key)
     return obj_key;
 
 err_out:
+printk("Error!\n");
     for(i--; i>0; i--)
-        kfree(obj_key->dims[i]);
-    kfree(obj_key);
+        castle_free(obj_key->dims[i]);
+    castle_free(obj_key);
 
     return NULL;
 }
@@ -286,7 +290,7 @@ void *castle_object_btree_key_next(c_vl_bkey_t *key)
     /* Duplicate the key first */
     key_length = key->length + 4;
     /* TODO: memory leak, fix all clients */
-    new_key = kmalloc(key_length, GFP_KERNEL);
+    new_key = castle_malloc(key_length, GFP_KERNEL);
     if(!new_key)
         return NULL;
     memcpy(new_key, key, key_length);
@@ -392,8 +396,8 @@ void castle_object_key_free(c_vl_okey_t *obj_key)
     int i;
 
     for(i=0; i < obj_key->nr_dims; i++)
-        kfree(obj_key->dims[i]);
-    kfree(obj_key);
+        castle_free(obj_key->dims[i]);
+    castle_free(obj_key);
 }
 
 /**********************************************************************************************/
@@ -499,8 +503,8 @@ static int castle_objects_rq_iter_has_next(c_obj_rq_iter_t *iter)
 static void castle_objects_rq_iter_cancel(c_obj_rq_iter_t *iter)
 {
     castle_da_rq_iter.cancel(&iter->da_rq_iter);
-    kfree(iter->start_bkey);
-    kfree(iter->end_bkey);
+    castle_free(iter->start_bkey);
+    castle_free(iter->end_bkey);
 }
 
 static void castle_objects_rq_iter_init(c_obj_rq_iter_t *iter)
@@ -573,7 +577,7 @@ static void castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
         if (cvt->length <= MAX_INLINE_VAL_SIZE)
         {
             cvt->type = CVT_TYPE_INLINE;
-            cvt->val  = kmalloc(cvt->length, GFP_NOIO);
+            cvt->val  = castle_malloc(cvt->length, GFP_NOIO);
             /* TODO: Work out how to handle this */
             BUG_ON(!cvt->val);
             /* We should not inline values which do not fit in a packet */
@@ -630,7 +634,7 @@ static void castle_object_replace_multi_cvt_get(c_bvec_t    *c_bvec,
         BUG_ON(cvt->length > MAX_INLINE_VAL_SIZE);
 
         cvt->type = CVT_TYPE_INLINE;
-        cvt->val  = kmalloc(cvt->length, GFP_NOIO);
+        cvt->val  = castle_malloc(cvt->length, GFP_NOIO);
         /* TODO: Work out how to handle this */
         BUG_ON(!cvt->val);
         castle_rxrpc_str_copy_buf(call, cvt->val, cvt->length, 0 /* not partial */);
@@ -785,7 +789,7 @@ void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
     BUG_ON(c_bio->err != 0);
 
     /* Free the key */
-    kfree(c_bvec->key);
+    castle_free(c_bvec->key);
 
     /* Deal with error case first */
     if(err)
@@ -812,7 +816,7 @@ void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
     if(CVT_INLINE(cvt))
     {
         complete_write = 1;
-        kfree(cvt.val);
+        castle_free(cvt.val);
     }
         
         
@@ -851,10 +855,10 @@ void castle_object_replace_multi_complete(struct castle_bio_vec *c_bvec,
     BUG_ON(c_bio->err != 0);
 
     /* Free the key, value and the BIO. */
-    kfree(c_bvec->key);
+    castle_free(c_bvec->key);
     BUG_ON(CVT_INVALID(cvt) || CVT_ONDISK(cvt));
     if(CVT_INLINE(cvt))
-        kfree(cvt.val);
+        castle_free(cvt.val);
 
     castle_utils_bio_free(c_bio);
 
@@ -909,7 +913,6 @@ int castle_object_replace(struct castle_object_replace *replace,
         BUG_ON(key->dims[i]->length == 0);
     
     btree_key = castle_object_key_convert(key);
-    castle_object_key_free(key);
    
     //printk(" value          : %s\n", tombstone ? "tombstone" : "object");
     //printk("Btree key is:");
@@ -1016,7 +1019,7 @@ int castle_object_slice_get(struct castle_rxrpc_call *call,
 
     rsp_buffer = vmalloc(SLICE_RSP_BUFFER_LEN); 
 
-    iterator = kmalloc(sizeof(c_obj_rq_iter_t), GFP_KERNEL);
+    iterator = castle_malloc(sizeof(c_obj_rq_iter_t), GFP_KERNEL);
     if(!iterator)
         return -ENOMEM;
 
@@ -1030,7 +1033,7 @@ int castle_object_slice_get(struct castle_rxrpc_call *call,
     castle_objects_rq_iter_init(iterator);
     if(iterator->err)
     {
-        kfree(iterator);
+        castle_free(iterator);
         return iterator->err;
     }
     debug_rq("rq_iter_init done.\n");
@@ -1140,9 +1143,9 @@ int castle_object_slice_get(struct castle_rxrpc_call *call,
 
     castle_objects_rq_iter_cancel(iterator);
     debug_rq("Freeing iterators & buffers.\n");
-    kfree(iterator->start_okey);
-    kfree(iterator->end_okey);
-    kfree(iterator);
+    castle_free(iterator->start_okey);
+    castle_free(iterator->end_okey);
+    castle_free(iterator);
     vfree(rsp_buffer);
     debug_rq("Returning.\n");
     
@@ -1314,7 +1317,7 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
     BUG_ON(c_bio->err != 0);
 
     /* Free the key */
-    kfree(c_bvec->key);
+    castle_free(c_bvec->key);
 
     /* Deal with error case, or non-existant value. */
     if(err || CVT_INVALID(cvt) || CVT_TOMB_STONE(cvt))
@@ -1330,7 +1333,7 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
     {
         debug("Inline.\n");
         castle_rxrpc_get_reply_start(call, 0, cvt.length, cvt.val, cvt.length);
-        kfree(cvt.val);
+        castle_free(cvt.val);
         castle_utils_bio_free(c_bvec->c_bio);
         return;
     }

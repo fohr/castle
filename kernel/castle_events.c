@@ -5,6 +5,7 @@
 #include "castle_public.h"
 #include "castle.h"
 #include "castle_events.h"
+#include "castle_debug.h"
 
 //#define DEBUG
 #ifndef DEBUG
@@ -25,7 +26,7 @@ void castle_uevent4(uint16_t cmd, uint64_t arg1, uint64_t arg2, uint64_t arg3, u
     int err = 0;
     struct kobj_uevent_env *env;
 
-    env = kzalloc(sizeof(struct kobj_uevent_env), GFP_NOIO);
+    env = castle_zalloc(sizeof(struct kobj_uevent_env), GFP_NOIO);
     if(!env)
     {
         printk("No memory\n");
@@ -54,7 +55,7 @@ void castle_uevent4(uint16_t cmd, uint64_t arg1, uint64_t arg2, uint64_t arg3, u
     err = kobject_uevent_env(&castle.kobj, KOBJ_CHANGE, env->envp);
     if (err) debug("Error sending event err=%d\n", err);
     
-    kfree(env);
+    castle_free(env);
 }
 
 void castle_uevent3(uint16_t cmd, uint64_t arg1, uint64_t arg2, uint64_t arg3)

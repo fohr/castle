@@ -470,7 +470,7 @@ struct castle_slave* castle_claim(uint32_t new_dev)
     static int slave_id = 0;
 
     debug("Claiming: in_atomic=%d.\n", in_atomic());
-    if(!(cs = kzalloc(sizeof(struct castle_slave), GFP_KERNEL)))
+    if(!(cs = castle_zalloc(sizeof(struct castle_slave), GFP_KERNEL)))
         goto err_out;
     cs->id = slave_id++;
     cs->last_access = jiffies;
@@ -541,7 +541,7 @@ err_out:
 #else
     if(bdev_claimed) blkdev_put(bdev, FMODE_READ|FMODE_WRITE);
 #endif
-    if(cs)           kfree(cs);
+    if(cs)           castle_free(cs);
     return NULL;    
 }
 
@@ -556,7 +556,7 @@ void castle_release(struct castle_slave *cs)
     blkdev_put(cs->bdev, FMODE_READ|FMODE_WRITE);
 #endif
     list_del(&cs->list);
-    kfree(cs);
+    castle_free(cs);
 }
 
 static int castle_open(struct castle_attachment *dev)
@@ -1002,7 +1002,7 @@ struct castle_attachment* castle_attachment_init(int device, /* _or_object_colle
         return NULL;
     BUG_ON(castle_version_read(version, da_id, NULL, size, leaf));
 
-    attachment = kmalloc(sizeof(struct castle_attachment), GFP_KERNEL); 
+    attachment = castle_malloc(sizeof(struct castle_attachment), GFP_KERNEL); 
     if(!attachment)
         return NULL;
 	init_rwsem(&attachment->lock);
@@ -1024,7 +1024,7 @@ void castle_device_free(struct castle_attachment *cd)
     del_gendisk(cd->dev.gd);
     put_disk(cd->dev.gd);
     list_del(&cd->list);
-    kfree(cd);
+    castle_free(cd);
     castle_version_detach(version);
 }
 
@@ -1084,7 +1084,7 @@ struct castle_attachment* castle_device_init(version_t version)
 error_out:
     if(gd)  put_disk(gd); 
     if(rq)  blk_cleanup_queue(rq); 
-    if(dev) kfree(dev);
+    if(dev) castle_free(dev);
     printk("Failed to init device.\n");
     return NULL;    
 }
@@ -1098,8 +1098,8 @@ void castle_collection_free(struct castle_attachment *ca)
     printk("===> When freeing the number of ca users is: %d\n", ca->users);
     castle_sysfs_collection_del(ca);
     list_del(&ca->list);
-    kfree(ca->col.name);
-    kfree(ca);
+    castle_free(ca->col.name);
+    castle_free(ca);
     castle_version_detach(version);
 }
 
@@ -1138,7 +1138,7 @@ struct castle_attachment* castle_collection_init(version_t version, char *name)
     return collection;
 
 error_out:
-    if(collection) kfree(collection);
+    if(collection) castle_free(collection);
     printk("Failed to init collection.\n");
     return NULL;    
 }
@@ -1222,7 +1222,7 @@ static int castle_slaves_init(void)
     {
         /* At most two characters for the number */
         BUG_ON(i > 99);
-        wq_names[i] = kmalloc(strlen("castle_wq")+3, GFP_KERNEL);
+        wq_names[i] = castle_malloc(strlen("castle_wq")+3, GFP_KERNEL);
         if(!wq_names[i])
             goto err_out;
         sprintf(wq_names[i], "castle_wq%d", i);
@@ -1245,7 +1245,7 @@ err_out:
     for(i=0; i<=2*MAX_BTREE_DEPTH; i++)
     {
         if(wq_names[i])
-            kfree(wq_names[i]); 
+            castle_free(wq_names[i]); 
         if(castle_wqs[i]) 
             destroy_workqueue(castle_wqs[i]);
     }

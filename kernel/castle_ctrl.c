@@ -556,7 +556,7 @@ int castle_control_packet_process(struct sk_buff *skb, void **reply, size_t *len
             break;
     }
 
-    *reply = reply32 = kmalloc(reply32_size * sizeof(uint32_t), GFP_KERNEL);
+    *reply = reply32 = castle_malloc(reply32_size * sizeof(uint32_t), GFP_KERNEL);
     if (!reply32)
         return -ENOMEM;
     
@@ -697,16 +697,16 @@ int castle_control_packet_process(struct sk_buff *skb, void **reply, size_t *len
             
             if(skb->len < (reservations_count * 2)) goto bad_msg;
             
-            reservations_disk = kmalloc(reservations_count * sizeof(int), GFP_KERNEL);
-            reservations_length = kmalloc(reservations_count * sizeof(int), GFP_KERNEL);
+            reservations_disk = castle_malloc(reservations_count * sizeof(int), GFP_KERNEL);
+            reservations_length = castle_malloc(reservations_count * sizeof(int), GFP_KERNEL);
             
             for (i = 0; i < reservations_count; i++) {
                 reservations_disk[i] = SKB_L_GET(skb);
                 reservations_length[i] = SKB_L_GET(skb);
             }
             
-            kfree(reservations_disk);
-            kfree(reservations_length);
+            castle_free(reservations_disk);
+            castle_free(reservations_length);
             
             castle_control_reply(reply32,
                                  len_p,
@@ -764,7 +764,7 @@ int castle_control_packet_process(struct sk_buff *skb, void **reply, size_t *len
                                              &ret,
                                              &collection);
             if(ret)
-                kfree(name);
+                castle_free(name);
             castle_control_reply(reply32,
                                  len_p,
                                  CASTLE_CTRL_REPLY_NEW_COLLECTION,

@@ -4,6 +4,7 @@
 #include <linux/skbuff.h>
 #include "castle_public.h"
 #include "castle.h"
+#include "castle_debug.h"
 
 #define ATOMIC(_i)  ((atomic_t)ATOMIC_INIT(_i))
 
@@ -93,7 +94,7 @@ out:                                                                            
                                                                                      \
 static inline struct list_head* _prefix##_hash_alloc(void)                           \
 {                                                                                    \
-    return kmalloc(sizeof(struct list_head) * _tab_size, GFP_KERNEL);                \
+    return castle_malloc(sizeof(struct list_head) * _tab_size, GFP_KERNEL);          \
 }                                                                                    \
                                                                                      \
 static void inline _prefix##_hash_init(void)                                         \
@@ -141,7 +142,7 @@ static inline char* SKB_STR_GET(struct sk_buff *skb, int max_len)
     if((str_len > max_len) || (str_len > skb->len))
         return NULL;
 
-    if(!(str = kzalloc(str_len+1, GFP_KERNEL)))
+    if(!(str = castle_zalloc(str_len+1, GFP_KERNEL)))
         return NULL;
 
     BUG_ON(skb_copy_bits(skb, 0, str, str_len) < 0);
@@ -170,7 +171,7 @@ static inline c_vl_key_t* SKB_VL_KEY_GET(struct sk_buff *skb, int max_len)
     if((key_len > max_len) || (key_len > skb->len))
         return NULL;
 
-    if(!(vlk = kzalloc(key_len+4, GFP_KERNEL)))
+    if(!(vlk = castle_zalloc(key_len+4, GFP_KERNEL)))
         return NULL;
 
     vlk->length = key_len;
@@ -188,7 +189,7 @@ static inline c_bio_t* castle_utils_bio_alloc(int nr_bvecs)
     int i;
 
     /* Allocate bio & bvec structures in one memory block */
-    c_bio = kmalloc(sizeof(c_bio_t) + nr_bvecs * sizeof(c_bvec_t), GFP_NOIO);
+    c_bio = castle_malloc(sizeof(c_bio_t) + nr_bvecs * sizeof(c_bvec_t), GFP_NOIO);
     if(!c_bio)
         return NULL;
     c_bvecs = (c_bvec_t *)(c_bio + 1);
@@ -209,7 +210,7 @@ static inline c_bio_t* castle_utils_bio_alloc(int nr_bvecs)
 
 static inline void castle_utils_bio_free(c_bio_t *bio)
 {
-    kfree(bio);
+    castle_free(bio);
 }
 
 static inline int list_length(struct list_head *head)

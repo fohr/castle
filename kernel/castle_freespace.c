@@ -4,6 +4,7 @@
 #include "castle_public.h"
 #include "castle.h"
 #include "castle_cache.h"
+#include "castle_debug.h"
 #include "castle_freespace.h"
 #include "castle_versions.h"
 
@@ -97,7 +98,7 @@ static int __castle_freespace_hash_mod(struct castle_slave *cs,
                 cnt = &cs->block_cnts.metadata_cnt;
             else 
             {
-                cnt = kmalloc(sizeof(struct castle_slave_block_cnt), GFP_KERNEL);
+                cnt = castle_malloc(sizeof(struct castle_slave_block_cnt), GFP_KERNEL);
                 if(!cnt) 
                 {
                     va_end(vl);
@@ -115,7 +116,7 @@ static int __castle_freespace_hash_mod(struct castle_slave *cs,
         case HASH_MOD_REM:
             list_del(&cnt->list);
             if(cnt->version != 0)
-                kfree(cnt);
+                castle_free(cnt);
             break;
         default:
             printk("Unknown hash mod: %d\n", mod);
@@ -640,7 +641,7 @@ void castle_freespace_fini(void)
                                                &entry);
                 
                 if(cnt->version != 0) 
-                    kfree(cnt); 
+                    castle_free(cnt); 
             } 
         } 
     }

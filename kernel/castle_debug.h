@@ -24,12 +24,19 @@
 #define C_BVEC_BTREE_NODE_WPROCESS  (0x00200000)
 #define C_BVEC_BTREE_NODE_IO_END    (0x00400000)
 
-void castle_debug_bvec_update(c_bvec_t *c_bvec, unsigned long state_flag);
-void castle_debug_bvec_btree_walk(c_bvec_t *c_bvec);
-void castle_debug_bio_add(c_bio_t *c_bio, uint32_t version, int nr_cbvecs);
-void castle_debug_bio_put(c_bio_t *c_bio);
-void castle_debug_init(void);
-void castle_debug_fini(void);
+#define castle_malloc(_s, _f)        castle_debug_malloc(_s, _f, __FILE__, __LINE__)
+#define castle_zalloc(_s, _f)        castle_debug_zalloc(_s, _f, __FILE__, __LINE__)
+#define castle_free(_p)              castle_debug_free(_p)
+
+void* castle_debug_malloc(size_t size, gfp_t flags, char *file, int line);
+void* castle_debug_zalloc(size_t size, gfp_t flags, char *file, int line);
+void  castle_debug_free(void *obj);
+void  castle_debug_bvec_update(c_bvec_t *c_bvec, unsigned long state_flag);
+void  castle_debug_bvec_btree_walk(c_bvec_t *c_bvec);
+void  castle_debug_bio_add(c_bio_t *c_bio, uint32_t version, int nr_cbvecs);
+void  castle_debug_bio_put(c_bio_t *c_bio);
+void  castle_debug_init(void);
+void  castle_debug_fini(void);
 
 #else /* !CASTLE_DEBUG */
 /* NO-OP debugging statements */
@@ -39,6 +46,9 @@ void castle_debug_fini(void);
 #define castle_debug_bio_put(_a)          ((void)0)
 #define castle_debug_init()               ((void)0)
 #define castle_debug_fini()               ((void)0)
+#define castle_malloc(_s, _f)             kmalloc(_s, _f)
+#define castle_zalloc(_s, _f)             kzalloc(_s, _f)
+#define castle_free(_p)                   kfree(_p)
 
 #endif /* CASTLE_DEBUG */
 

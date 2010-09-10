@@ -3,6 +3,7 @@
 #include "castle_public.h"
 #include "castle.h"
 #include "castle_time.h"
+#include "castle_debug.h"
 
 /* Aggregates stats from multiple timelines, one for each checkpoint */
 typedef struct castle_checkpoint_stats {
@@ -132,7 +133,7 @@ c_req_time_t* _castle_request_timeline_create(void)
     /* Create the timeline when sequence # is divisible by period. */ 
     if(atomic_inc_return(&castle_checkpoint_create_seq) % REQUEST_PERIOD != 0)
         return NULL;
-    timeline = kzalloc(sizeof(c_req_time_t), GFP_KERNEL);
+    timeline = castle_zalloc(sizeof(c_req_time_t), GFP_KERNEL);
     if(!timeline)
         return NULL;
     timeline->active_checkpoint = -1;
@@ -401,7 +402,7 @@ static int castle_time_run(void *unused)
             castle_request_timeline_print(timeline); 
             castle_checkpoint_stats_print();
         }
-        kfree(timeline);
+        castle_free(timeline);
         cnt++;
 
         /* Go to the next timeline */

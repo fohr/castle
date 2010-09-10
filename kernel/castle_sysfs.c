@@ -6,6 +6,7 @@
 #include "castle.h"
 #include "castle_events.h"
 #include "castle_sysfs.h"
+#include "castle_debug.h"
 #include "castle_versions.h"
 #include "castle_freespace.h"
 
@@ -126,7 +127,7 @@ int castle_sysfs_version_add(version_t version)
         printk("ERROR: version number > 100000. Not adding to sysfs.\n");
         return -E2BIG;
     }
-    v = kmalloc(sizeof(struct castle_sysfs_version), GFP_KERNEL);
+    v = castle_malloc(sizeof(struct castle_sysfs_version), GFP_KERNEL);
     if(!v) return -ENOMEM;
 
     v->version = version;

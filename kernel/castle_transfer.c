@@ -10,6 +10,7 @@
 #include "castle.h"
 #include "castle_cache.h"
 #include "castle_btree.h"
+#include "castle_debug.h"
 #include "castle_transfer.h"
 #include "castle_sysfs.h"
 #include "castle_versions.h"
@@ -128,7 +129,7 @@ struct castle_transfer* castle_transfer_find(transfer_id_t id)
             count ++;
     }
 
-    if (!(regions = kzalloc(count * sizeof(struct castle_region*), GFP_KERNEL)))
+    if (!(regions = castle_zalloc(count * sizeof(struct castle_region*), GFP_KERNEL)))
         return -ENOMEM;
 
     // TODO race if someone comes and add another region between the first count and here
@@ -160,7 +161,7 @@ void castle_transfer_destroy(struct castle_transfer *transfer)
     castle_sysfs_transfer_del(transfer);
 
     list_del(&transfer->list);
-    kfree(transfer);    
+    castle_free(transfer);    
 
     debug("castle_transfer_destroy'd id=%d\n", transfer->id);
 }
@@ -206,7 +207,7 @@ struct castle_transfer* castle_transfer_create(version_t version, int direction,
         goto err_out;
     }
 
-    if(!(transfer = kzalloc(sizeof(struct castle_transfer), GFP_KERNEL)))
+    if(!(transfer = castle_zalloc(sizeof(struct castle_transfer), GFP_KERNEL)))
     {
         err = -ENOMEM;
         goto err_out;
@@ -241,7 +242,7 @@ struct castle_transfer* castle_transfer_create(version_t version, int direction,
 
 err_out:
     printk("castle_transfer_create has failed.\n");
-    if(transfer)          kfree(transfer);
+    if(transfer)          castle_free(transfer);
 
     BUG_ON(err == 0);
     *ret = err;
@@ -364,7 +365,7 @@ static void castle_block_move_complete(struct work_struct *work)
     castle_slave_access(src_cdb.disk);
     castle_slave_access(dest_cdb.disk);
 
-    kfree(info);
+    castle_free(info);
     if(!err)
     {
         c_val_tup_t dest_cvt;
@@ -444,7 +445,7 @@ static void castle_block_move(struct castle_transfer *transfer, int index, c_dis
         return;
     }
     
-    if(!(info = kzalloc(sizeof(struct castle_block_move_info), GFP_KERNEL)))
+    if(!(info = castle_zalloc(sizeof(struct castle_block_move_info), GFP_KERNEL)))
     {
         castle_btree_iter_cancel(&transfer->c_iter, -ENOMEM);
         return;
@@ -460,7 +461,7 @@ static void castle_block_move(struct castle_transfer *transfer, int index, c_dis
     {
         debug("Index=%d, couldn't find free block, cancelling\n", index);
         
-        kfree(info);
+        castle_free(info);
         
         unlock_c2b(src);
         put_c2b(src);

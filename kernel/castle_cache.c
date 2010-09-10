@@ -8,6 +8,7 @@
 #include "castle_public.h"
 #include "castle.h"
 #include "castle_cache.h"
+#include "castle_debug.h"
 #include "castle_freespace.h"
 #include "castle_utils.h"
 #include "castle_btree.h"
@@ -1164,7 +1165,7 @@ void castle_mstore_iterator_destroy(struct castle_mstore_iter *iter)
         put_c2b(iter->node_c2b);
     }
     debug_mstore("Freeing.\n"); 
-    kfree(iter);
+    castle_free(iter);
 }
 
 struct castle_mstore_iter* castle_mstore_iterate(struct castle_mstore *store)
@@ -1174,7 +1175,7 @@ struct castle_mstore_iter* castle_mstore_iterate(struct castle_mstore *store)
     c_disk_blk_t list_cdb;
 
     debug_mstore("Creating the iterator.\n"); 
-    iter = kzalloc(sizeof(struct castle_mstore_iter), GFP_KERNEL);
+    iter = castle_zalloc(sizeof(struct castle_mstore_iter), GFP_KERNEL);
     if(!iter)
         return NULL;
 
@@ -1363,7 +1364,7 @@ static struct castle_mstore *castle_mstore_alloc(c_mstore_id_t store_id, size_t 
     struct castle_mstore *store;
 
     debug_mstore("Allocating mstore id=%d.\n", store_id);
-    store = kzalloc(sizeof(struct castle_mstore), GFP_KERNEL);
+    store = castle_zalloc(sizeof(struct castle_mstore), GFP_KERNEL);
     if(!store)
         return NULL;
 
@@ -1401,7 +1402,7 @@ struct castle_mstore* castle_mstore_open(c_mstore_id_t store_id, size_t entry_si
     iterator = castle_mstore_iterate(store);
     if(!iterator)
     {
-        kfree(store);
+        castle_free(store);
         return NULL;
     }
     while(castle_mstore_iterator_has_next(iterator))
