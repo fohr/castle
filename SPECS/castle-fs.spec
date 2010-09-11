@@ -71,8 +71,11 @@ rm -rf %{buildroot}
 
 %post -n dkms-castle-fs
 dkms add -m castle-fs -v %{dkms_version} --rpm_safe_upgrade
-dkms build -m castle-fs -v %{dkms_version} --rpm_safe_upgrade
-dkms install -m castle-fs -v %{dkms_version} --rpm_safe_upgrade
+if [ -z "$INHIBIT_DKMS_BUILD" ]
+then
+    dkms build -m castle-fs -v %{dkms_version} --rpm_safe_upgrade
+    dkms install -m castle-fs -v %{dkms_version} --rpm_safe_upgrade
+fi
 
 %preun -n dkms-castle-fs
 dkms remove -m castle-fs -v %{dkms_version} --rpm_safe_upgrade --all ||:
