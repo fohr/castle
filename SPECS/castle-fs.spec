@@ -20,6 +20,7 @@ Source:         %{name}-%{version}.tar.gz
 BuildRoot:      %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
 
 Provides: castle-fs-kmod-common = %{version}
+Provides:       %{name}-%{changesetver}
 
 %define dkms_version %{buildver}.%{buildrev}
 
@@ -28,6 +29,8 @@ Provides: castle-fs-kmod-common = %{version}
 %package -n %{kmod_name}-kmod
 Summary:    Acunu kernel filesystem module
 Group:      System Environment/Kernel
+
+Provides:       %{name}-%{changesetver}
 
 %description -n %{kmod_name}-kmod
 kmod package for the Acunu kernel filesystem module
@@ -45,6 +48,8 @@ Provides:       openafs-kernel = %{PACKAGE_VERSION}
 Requires(pre):  dkms
 Requires(post): dkms
 Requires:	castle-fs-kmod-common = %{version}
+
+Provides:       %{name}-%{changesetver}
 
 %description -n dkms-castle-fs
 This package provides the DKMS-ready source code for the castle-fs kernel module.
