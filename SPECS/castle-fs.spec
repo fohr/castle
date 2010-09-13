@@ -1,7 +1,17 @@
+%define   kmodtool sh /usr/lib/rpm/redhat/kmodtool
+
+# hardcode for now:
+%{!?kversion: %{expand: %%define kversion %(uname -r)}}
+
+%define kmod_name castle
+%define kverrel %(%{kmodtool} verrel %{?kversion} 2>/dev/null)
+%define kvariants ""
+%define kerneldir %{_usrsrc}/kernels/%{kverrel}-%{_target_cpu}
+
 Name:           castle-fs
 Version:        %{buildver}
 Release:        %{buildrev}
-Summary:        Acunu Kernel Filesystem
+Summary:        Acunu kernel filesystem
 
 Group:          Filesystem
 License:        Closed
@@ -14,6 +24,19 @@ Provides: castle-fs-kmod-common = %{version}
 %define dkms_version %{buildver}.%{buildrev}
 
 %description
+
+%package -n %{kmod_name}-kmod
+Summary:    Acunu kernel filesystem module
+Group:      System Environment/Kernel
+
+%description -n %{kmod_name}-kmod
+kmod package for the Acunu kernel filesystem module
+
+# magic hidden here:
+# NOTE: these two extra defines will not be necessary in future.
+%define kmp_version %{version}
+%define kmp_release %{release}
+%{expand:%(%{kmodtool} rpmtemplate_kmp %{kmod_name} %{kverrel} %{kvariants} 2>/dev/null)}
 
 %package -n dkms-castle-fs
 Summary:        DKMS-ready kernel source for castlefs
@@ -31,7 +54,7 @@ This package provides the DKMS-ready source code for the castle-fs kernel module
 
 %build
 make -C user/utils
-make -C kernel castle_compile.h
+make -C kernel KVER=%{kversion} KERNEL_DIR=%{kerneldir}
 
 %install
 rm -rf %{buildroot}
@@ -40,7 +63,7 @@ mkdir -p %{buildroot}/etc/udev/rules.d/
 mkdir -p %{buildroot}/etc/castle-fs
 mkdir -p %{buildroot}/opt/acunu/castle-fs/bin
 mkdir -p %{buildroot}/usr/sbin
-mkdir -p %{buildroot}%{_prefix}/src
+mkdir -p %{buildroot}%{_prefix}/src/castle-fs-%{dkms_version}
 cp user/udev/castle-fs.rules %{buildroot}/etc/udev/rules.d/
 cp user/udev/udev-watch %{buildroot}/etc/castle-fs/
 cp user/utils/tests/CONFIG %{buildroot}/opt/acunu/castle-fs/bin/
@@ -48,9 +71,9 @@ cp user/utils/tests/utils %{buildroot}/opt/acunu/castle-fs/bin/
 cp user/utils/castle-fs-init.sh %{buildroot}/opt/acunu/castle-fs/bin/
 cp user/utils/castle-fs-fini.sh %{buildroot}/opt/acunu/castle-fs/bin/
 cp user/utils/castle-fs-cli %{buildroot}/usr/sbin/
-cp -r kernel %{buildroot}%{_prefix}/src/castle-fs-%{dkms_version}
+cp kernel/*.c kernel/*.h kernel/Makefile %{buildroot}%{_prefix}/src/castle-fs-%{dkms_version}/
 
-cat > $RPM_BUILD_ROOT%{_prefix}/src/%{name}-%{dkms_version}/dkms.conf <<EOF
+cat > %{buildroot}%{_prefix}/src/%{name}-%{dkms_version}/dkms.conf <<EOF
 
 PACKAGE_VERSION="%{dkms_version}"
 
@@ -65,6 +88,10 @@ STRIP[0]=no
 AUTOINSTALL=yes
 
 EOF
+
+export INSTALL_MOD_PATH=%{buildroot}
+export INSTALL_MOD_DIR=extra/%{kmod_name}
+make -C "%{kerneldir}" modules_install M=`pwd`/kernel
 
 %clean
 rm -rf %{buildroot}
