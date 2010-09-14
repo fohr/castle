@@ -81,7 +81,7 @@ __hell:
     return NULL;
 }
 
-void castle_rda_extent_free(c_ext_id_t    ext_id,
+void castle_rda_extent_fini(c_ext_id_t    ext_id,
                             void         *_state)
 {
     c_rda_state_t   *state = _state;
@@ -101,6 +101,9 @@ int castle_rda_next_slave_get(struct castle_slave  *cs[],
     uint32_t       n;
     int i;
 
+    if (state == NULL)
+        goto __hell;
+
     BUG_ON(state->size <= chk_num);
     if (chk_num == state->prev_chk)
     {
@@ -108,9 +111,6 @@ int castle_rda_next_slave_get(struct castle_slave  *cs[],
         printk("Not yet ready for extent manager errors\n");
         BUG();
     }
-
-    if (_state == NULL)
-        goto __hell;
 
     n = nr_act_slaves - state->permut_idx; 
     if (n < rda_spec->k_factor)

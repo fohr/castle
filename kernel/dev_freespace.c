@@ -11,7 +11,7 @@
 #endif
 
 #define CHKS_PER_SLOT  10
-#define C_FLOOR_OF(a) ((a) / CHKS_PER_SLOT * CHKS_PER_SLOT)
+#define C_FLOOR_OF(a) (((a) / CHKS_PER_SLOT) * CHKS_PER_SLOT)
 #define C_CEIL_OF(a)  (C_FLOOR_OF(a) + CHKS_PER_SLOT) 
 
 c_chk_seq_t castle_freespace_slave_chunks_alloc(struct castle_slave    *cs,
@@ -37,7 +37,6 @@ c_chk_seq_t castle_freespace_slave_chunks_alloc(struct castle_slave    *cs,
     BUG_ON(cons_chk_seq->count % CHKS_PER_SLOT);
 
     chk_seq.first_chk        = cons_chk_seq->first_chk;
-    freespace->free_chk_cnt -= count;
     if (cons_chk_seq->count > count)
     {
         cons_chk_seq->first_chk += count;
@@ -50,6 +49,7 @@ c_chk_seq_t castle_freespace_slave_chunks_alloc(struct castle_slave    *cs,
         freespace->cons = (freespace->cons + 1) % freespace->max_entries;
         freespace->nr_entries--;
     }
+    freespace->free_chk_cnt -= chk_seq.count;
 
     spin_unlock(&freespace->lock);
 
@@ -84,7 +84,6 @@ void castle_freespace_slave_chunk_free(struct castle_slave      *cs,
     if (freespace->prod == freespace->cons)
     {
         spin_unlock_irqrestore(&freespace->lock, flags);
-        printk("Disk is badly fragmented\n");
         printk("    Free Chunks: %llu\n", freespace->free_chk_cnt);
         BUG(); /* FIXME: shouldn't come here */
     }
@@ -112,7 +111,7 @@ int dev_freespace_init(struct castle_slave *cs)
     freespace->disk_id          = cs->id;
     freespace->prod             = 0;
     freespace->cons             = 0;
-    freespace->disk_size        = C_FLOOR_OF((disk_sz << 9) / C_CHK_SIZE);
+    freespace->disk_size        = C_FLOOR_OF(disk_sz / C_CHK_SIZE);
     freespace->free_chk_cnt     = freespace->disk_size;
     spin_lock_init(&freespace->lock);
     freespace->max_entries      = freespace->free_chk_cnt / CHKS_PER_SLOT;

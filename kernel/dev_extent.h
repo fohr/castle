@@ -38,7 +38,7 @@ typedef void* (*c_extent_init_t)(c_ext_id_t         ext_id,
                                  c_chk_cnt_t        size,
                                  c_rda_type_t       rda_type);
 
-typedef void (*c_extent_free_t)(c_ext_id_t         ext_id, 
+typedef void (*c_extent_fini_t)(c_ext_id_t         ext_id, 
                                 void              *state);
 typedef struct {
     c_rda_type_t                type;           /* RDA type */
@@ -46,7 +46,7 @@ typedef struct {
     c_next_slave_get_t          next_slave_get; /* fn() to get sequence of
                                                  * slaves to allocate freespace */
     c_extent_init_t             extent_init;
-    c_extent_free_t             extent_free;
+    c_extent_fini_t             extent_fini;
 } c_rda_spec_t;
 
 

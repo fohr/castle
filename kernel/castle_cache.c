@@ -343,7 +343,6 @@ int submit_c2b_rda(int rw, c2_block_t *c2b)
     struct list_head        *cur_page;
     uint32_t                 rem_pages;
     uint32_t                 cur_offset = ext_off.offset;
-    struct bio_info         *bio_info;
     sector_t                 sector;
 
     BUG_ON(atomic_read(&c2b->remaining));
@@ -366,6 +365,7 @@ int submit_c2b_rda(int rw, c2_block_t *c2b)
         for (i=0; i<nr_chunks; i++)
         {
             uint32_t pgs_in_chk;
+            uint32_t first_pg, last_pg;
 
             chk = read_slave_get(ext_off.ext_id, CHUNK(cur_offset));
 #if 0
@@ -376,20 +376,16 @@ int submit_c2b_rda(int rw, c2_block_t *c2b)
             }
 #endif
             cs = castle_slave_find_by_uuid(chk.slave_id);
-            if (rem_pages < BLKS_PER_CHK)
-                pgs_in_chk = rem_pages;
-            else
-                pgs_in_chk = BLKS_PER_CHK - BLK_IN_CHK(cur_offset);
+            first_pg = 0;
+            last_pg  = BLKS_PER_CHK - 1;
+            if (i == 0)
+                first_pg = BLK_IN_CHK(cur_offset);
+            if (i == nr_chunks - 1)
+                last_pg  = BLK_IN_CHK(ext_off.offset + (c2b->nr_pages * (1 << C_BLK_SHIFT)) - 1);
+            pgs_in_chk = last_pg + 1 - first_pg;
             
             sector      = (sector_t)(chk.offset << (C_CHK_SHIFT - 9)) +
                                 (BLK_IN_CHK(cur_offset) << (C_BLK_SHIFT - 9));
-            /* FIXME: use mem chunks instead of kmalloc. Do we really need
-             * bio_info?? */
-            bio_info    = kmalloc(sizeof(struct bio_info), GFP_KERNEL);
-            BUG_ON(!bio_info);
-            bio_info->c2b       = c2b;
-            bio_info->nr_pages  = pgs_in_chk;
-
             debug("\t%u pages from slave %u at %llu\n", pgs_in_chk, chk.slave_id, chk.offset);
             __submit_bio(rw, cs->bdev, &cur_page, pgs_in_chk, sector, c2b);
             
@@ -408,14 +404,17 @@ int submit_c2b_rda(int rw, c2_block_t *c2b)
     cur_page    = c2b->pages.next;
     for (i=0; i<nr_chunks; i++)
     {
-        uint32_t            pgs_in_chk;
+        uint32_t            pgs_in_chk, first_pg, last_pg;
         struct list_head   *page;
         
-        if (rem_pages < BLKS_PER_CHK)
-            pgs_in_chk = rem_pages;
-        else
-            pgs_in_chk = BLKS_PER_CHK - BLK_IN_CHK(cur_offset);
-
+        first_pg = 0;
+        last_pg  = BLKS_PER_CHK - 1;
+        if (i == 0)
+            first_pg = BLK_IN_CHK(cur_offset);
+        if (i == nr_chunks - 1)
+            last_pg  = BLK_IN_CHK(ext_off.offset + (c2b->nr_pages * (1 << C_BLK_SHIFT)) - 1);
+        pgs_in_chk = last_pg + 1 - first_pg;
+            
         chunks = castle_extent_map_get(ext_off.ext_id,
                                        CHUNK(ext_off.offset)+i,
                                        NULL);

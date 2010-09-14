@@ -67,9 +67,6 @@ typedef struct castle_disk_block c_disk_blk_t;
 
 #define MAX_NR_SLAVES 20
 
-#define MB (1 << 20)
-#define BLKS_PER_MB (MB / C_BLK_SIZE)
-#define CHUNK_SIZE  (1)
 #define C_CHK_SHIFT                    (20) 
 #define C_CHK_SIZE                     (1 << C_CHK_SHIFT)
 

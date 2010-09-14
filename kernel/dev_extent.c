@@ -22,9 +22,10 @@ typedef struct {
     c_rda_type_t        type;           /* RDA type */
     uint32_t            k_factor;       /* K factor in K-RDA */
     struct list_head    hash_list; 
-    c_chk_seq_t         chk_buf[MAX_NR_SLAVES];
+    c_chk_seq_t         chk_buf[MAX_NR_SLAVES]; /* Give space to client and
+    get-rid off this */
     uint32_t            chk_map_off;    /* Offset of chunk mapping in logical extent */
-    c_disk_chk_t             chk_map[0];  /* Logical-to-Physical chunk mappings */
+    c_disk_chk_t        chk_map[0];     /* Logical-to-Physical chunk mappings */
 } c_ext_t;
 
 static struct list_head *castle_extents_hash = NULL;
@@ -42,7 +43,7 @@ int castle_rda_next_slave_get(struct castle_slave  *cs[],
                               c_chk_t               chk_num,
                               c_rda_type_t          rda_type);
 
-void castle_rda_extent_free(c_ext_id_t    ext_id,
+void castle_rda_extent_fini(c_ext_id_t    ext_id,
                             void         *_state);
 
 static c_rda_spec_t castle_default_rda = {
@@ -50,7 +51,7 @@ static c_rda_spec_t castle_default_rda = {
     .k_factor           = 2,
     .next_slave_get     = castle_rda_next_slave_get,
     .extent_init        = castle_rda_extent_init,
-    .extent_free        = castle_rda_extent_free,
+    .extent_fini        = castle_rda_extent_fini,
 };
 
 static c_rda_spec_t castle_journal_rda = {
@@ -128,7 +129,7 @@ void castle_extents_fini()
     debug("Finishing castle extents\n");
     /* Free the resources */
     castle_extents_hash_iterate(castle_extent_hash_remove, NULL);
-    kfree(castle_extents_hash);
+    castle_free(castle_extents_hash);
 }
 
 c_ext_id_t castle_extent_alloc(c_rda_type_t            rda_type,
@@ -237,12 +238,12 @@ c_ext_id_t castle_extent_alloc(c_rda_type_t            rda_type,
     castle_extents_hash_add(ext);
     
     kfree(slaves);
-    rda_spec->extent_free(ext->ext_id, state);
+    rda_spec->extent_fini(ext->ext_id, state);
     return ext->ext_id;
 
 __hell:
     if (state)
-        rda_spec->extent_free(ext->ext_id, state);
+        rda_spec->extent_fini(ext->ext_id, state);
     if (ext)
         vfree(ext);
     if (slaves)
@@ -292,7 +293,11 @@ void castle_extent_free(c_rda_type_t            rda_type,
                     ext->chk_buf[id].count++;
                 }
                 else
+                {
                     castle_freespace_slave_chunk_free(cs, ext->chk_buf[id], da_id);
+                    ext->chk_buf[id].first_chk = ext->chk_map[MAP_IDX(ext,i,j)].offset;
+                    ext->chk_buf[id].count = 1;
+                }
             } 
             else 
             {
