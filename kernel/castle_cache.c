@@ -1437,6 +1437,12 @@ struct castle_mstore* castle_mstore_init(c_mstore_id_t store_id, size_t entry_si
     return store;
 }
 
+void castle_mstore_fini(struct castle_mstore *store)
+{
+    debug_mstore("Closing mstore id=%d.\n", store->store_id);
+    castle_free(store);
+}
+
 int castle_cache_init(void)
 {
     int ret;

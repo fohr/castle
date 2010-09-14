@@ -74,8 +74,10 @@ static int castle_version_hash_remove(struct castle_version *v, void *unused)
 
 static void castle_versions_hash_destroy(void)
 {
-   castle_versions_hash_iterate(castle_version_hash_remove, NULL); 
-   castle_free(castle_versions_hash);
+    castle_versions_hash_iterate(castle_version_hash_remove, NULL); 
+    castle_free(castle_versions_hash);
+    if(castle_versions_mstore)
+        castle_mstore_fini(castle_versions_mstore);
 }
 
 static void castle_versions_init_add(struct castle_version *v)

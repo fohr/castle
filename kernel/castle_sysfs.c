@@ -10,10 +10,11 @@
 #include "castle_versions.h"
 #include "castle_freespace.h"
 
-struct castle_volumes {
+struct castle_sysfs_versions {
     struct kobject kobj;
+    struct list_head version_list;
 };
-static struct castle_volumes castle_volumes;
+static struct castle_sysfs_versions castle_sysfs_versions;
 
 struct castle_sysfs_entry {
     struct attribute attr;
@@ -26,6 +27,7 @@ struct castle_sysfs_version {
     version_t version;
     char name[10];
     struct castle_sysfs_entry csys_entry; 
+    struct list_head list;
 };
 
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,18)
@@ -114,6 +116,19 @@ static ssize_t versions_list_store(struct kobject *kobj,
     return count;
 }
 
+static void castle_sysfs_versions_fini(void)
+{
+    struct castle_sysfs_version *v;
+    struct list_head *l, *t;
+
+    kobject_remove(&castle_sysfs_versions.kobj);
+    list_for_each_safe(l, t, &castle_sysfs_versions.version_list)
+    {
+        list_del(l);
+        v = list_entry(l, struct castle_sysfs_version, list);
+        castle_free(v);
+    }
+}
 
 int castle_sysfs_version_add(version_t version)
 {
@@ -138,11 +153,19 @@ int castle_sysfs_version_add(version_t version)
     v->csys_entry.show  = versions_list_show;
     v->csys_entry.store = versions_list_store;
 
-    ret = sysfs_create_file(&castle_volumes.kobj, &v->csys_entry.attr);
+    ret = sysfs_create_file(&castle_sysfs_versions.kobj, &v->csys_entry.attr);
     if(ret)
+    {
         printk("Warning: could not create a version file in sysfs.\n");
+        castle_free(v);
+    } else
+    {
+        /* Succeeded at adding the version, add it to the list, so that it gets cleaned up */
+        INIT_LIST_HEAD(&v->list);
+        list_add(&v->list, &castle_sysfs_versions.version_list);
+    }
 
-    return 0;
+    return ret;
 }
 
 static ssize_t slaves_number_show(struct kobject *kobj, 
@@ -358,13 +381,13 @@ static struct kobj_type castle_root_ktype = {
     .default_attrs  = castle_root_attrs,
 };
 
-static struct attribute *castle_volumes_attrs[] = {
+static struct attribute *castle_versions_attrs[] = {
     NULL,
 };
 
-static struct kobj_type castle_volumes_ktype = {
+static struct kobj_type castle_versions_ktype = {
     .sysfs_ops      = &castle_sysfs_ops,
-    .default_attrs  = castle_volumes_attrs,
+    .default_attrs  = castle_versions_attrs,
 };
 
 /* Definition of slaves sysfs directory attributes */
@@ -711,10 +734,11 @@ int castle_sysfs_init(void)
                            "%s", "castle-fs");
     if(ret < 0) goto out1;
 
-    memset(&castle_volumes.kobj, 0, sizeof(struct kobject));
-    ret = kobject_tree_add(&castle_volumes.kobj, 
+    memset(&castle_sysfs_versions.kobj, 0, sizeof(struct kobject));
+    INIT_LIST_HEAD(&castle_sysfs_versions.version_list);
+    ret = kobject_tree_add(&castle_sysfs_versions.kobj, 
                            &castle.kobj, 
-                           &castle_volumes_ktype, 
+                           &castle_versions_ktype, 
                            "%s", "versions");
     if(ret < 0) goto out2;
 
@@ -756,7 +780,7 @@ out5:
 out4:
     kobject_remove(&castle_slaves.kobj);
 out3:
-    kobject_remove(&castle_volumes.kobj);
+    kobject_remove(&castle_sysfs_versions.kobj);
 out2:
     kobject_remove(&castle.kobj);
 out1:
@@ -770,7 +794,7 @@ void castle_sysfs_fini(void)
     kobject_remove(&castle_attachments.collections_kobj);
     kobject_remove(&castle_attachments.devices_kobj);
     kobject_remove(&castle_slaves.kobj);
-    kobject_remove(&castle_volumes.kobj);
+    castle_sysfs_versions_fini();
     kobject_remove(&castle.kobj);
 }
 

@@ -1211,49 +1211,6 @@ static void castle_slaves_spindowns_check(unsigned long first)
     mod_timer(&spindown_timer, jiffies + sleep);
 }
 
-static int castle_slaves_init(void)
-{
-    char *wq_names[2*MAX_BTREE_DEPTH+1];
-    int i;
-
-    memset(wq_names  , 0, sizeof(char *) * (2*MAX_BTREE_DEPTH+1));
-    memset(castle_wqs, 0, sizeof(struct workqueue_struct *) * (2*MAX_BTREE_DEPTH+1));
-    for(i=0; i<=2*MAX_BTREE_DEPTH; i++)
-    {
-        /* At most two characters for the number */
-        BUG_ON(i > 99);
-        wq_names[i] = castle_malloc(strlen("castle_wq")+3, GFP_KERNEL);
-        if(!wq_names[i])
-            goto err_out;
-        sprintf(wq_names[i], "castle_wq%d", i);
-        castle_wqs[i] = create_workqueue(wq_names[i]);
-        if(!castle_wqs[i])
-            goto err_out;
-    }
-
-    /* Init the slaves structures */
-    memset(&castle_slaves, 0, sizeof(struct castle_slaves));
-    INIT_LIST_HEAD(&castle_slaves.slaves);
-
-    castle_slaves_spindowns_check(1);
-
-    return 0;
-
-err_out:
-    printk("Could not create worqueues.\n");
-    
-    for(i=0; i<=2*MAX_BTREE_DEPTH; i++)
-    {
-        if(wq_names[i])
-            castle_free(wq_names[i]); 
-        if(castle_wqs[i]) 
-            destroy_workqueue(castle_wqs[i]);
-    }
-    unregister_blkdev(castle_attachments.major, "castle-fs"); 
-
-    return -ENOMEM;
-}
-
 static void castle_slaves_unlock(void)                                                                 
 {                                                                                        
     struct list_head *lh, *th;
@@ -1276,6 +1233,7 @@ static void castle_slaves_unlock(void)
     }
 }
 
+static char *wq_names[2*MAX_BTREE_DEPTH+1];
 static void castle_slaves_free(void)
 {                                                                                        
     struct list_head *lh, *th;
@@ -1289,7 +1247,47 @@ static void castle_slaves_free(void)
     }
 
     for(i=0; i<=2*MAX_BTREE_DEPTH; i++)
-        destroy_workqueue(castle_wqs[i]);
+    {
+        if(wq_names[i])
+            castle_free(wq_names[i]); 
+        if(castle_wqs[i]) 
+            destroy_workqueue(castle_wqs[i]);
+    }
+}
+
+static int castle_slaves_init(void)
+{
+    int i;
+
+    /* Init the slaves structures */
+    memset(&castle_slaves, 0, sizeof(struct castle_slaves));
+    INIT_LIST_HEAD(&castle_slaves.slaves);
+
+    /* Init the castle workqueues */
+    memset(wq_names  , 0, sizeof(char *) * (2*MAX_BTREE_DEPTH+1));
+    memset(castle_wqs, 0, sizeof(struct workqueue_struct *) * (2*MAX_BTREE_DEPTH+1));
+    for(i=0; i<=2*MAX_BTREE_DEPTH; i++)
+    {
+        /* At most two characters for the number */
+        BUG_ON(i > 99);
+        wq_names[i] = castle_malloc(strlen("castle_wq")+3, GFP_KERNEL);
+        if(!wq_names[i])
+            goto err_out;
+        sprintf(wq_names[i], "castle_wq%d", i);
+        castle_wqs[i] = create_workqueue(wq_names[i]);
+        if(!castle_wqs[i])
+            goto err_out;
+    }
+
+    castle_slaves_spindowns_check(1);
+
+    return 0;
+
+err_out:
+    printk("Could not create workqueues.\n");
+    castle_slaves_free();
+
+    return -ENOMEM;
 }
 
 static int castle_attachments_init(void)

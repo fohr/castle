@@ -1090,15 +1090,18 @@ static void castle_da_iterator_destroy(struct castle_component_tree *tree,
 {
     if(!iter)
         return;
-    /* TODO: this needs to be handled properly. */
+
     if(tree->dynamic)
     {
-        BUG();
+        /* For dynamic trees we are using modlist iterator. */ 
+        castle_ct_modlist_iter_free(iter);
+        castle_free(iter);
     } else
     {
-        BUG();
+        /* For static trees, we are using immut iterator. It's enough to free it */
+        /* TODO: do we need to do better resource release here? */
+        castle_free(iter);
     }
-    castle_free(iter);
 }
 
 static void castle_da_iterator_create(struct castle_da_merge *merge,
@@ -1197,11 +1200,6 @@ static int castle_da_iterators_create(struct castle_da_merge *merge)
 
 err_out:
     debug("Failed to create iterators. Ret=%d\n", ret);
-    castle_da_iterator_destroy(merge->in_tree1, merge->iter1);
-    castle_da_iterator_destroy(merge->in_tree2, merge->iter2);
-    if(merge->merged_iter)
-        /* TODO: this should call a destructor, rather than just free */
-        castle_free(merge->merged_iter);
 
     BUG_ON(!ret);
     return ret;
@@ -1482,10 +1480,6 @@ static struct castle_component_tree* castle_da_merge_package(struct castle_da_me
     castle_da_merging_clear(merge->da);
     castle_da_merge_check(merge->da);
     castle_da_unlock(merge->da);
-    /* Remove old cts from the DA */
-    debug("Destroying old CTs.\n");
-    castle_ct_put(merge->in_tree1, 0);
-    castle_ct_put(merge->in_tree2, 0);
 
     return out_tree;
 }
@@ -1580,7 +1574,7 @@ err_out:
     return NULL;
 }
 
-static void castle_da_merge_dealloc(struct castle_da_merge *merge)
+static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
 {
     int i;
 
@@ -1607,6 +1601,18 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge)
         if(merge->levels[i].buffer)
             vfree(merge->levels[i].buffer);
     }
+    castle_da_iterator_destroy(merge->in_tree1, merge->iter1);
+    castle_da_iterator_destroy(merge->in_tree2, merge->iter2);
+    castle_ct_merged_iter_cancel(merge->merged_iter);
+    /* If succeeded at merging, old trees need to be destroyed (they've already been removed
+       from the DA by castle_da_merge_package(). */
+    if(!err)
+    {
+        debug("Destroying old CTs.\n");
+        castle_ct_put(merge->in_tree1, 0);
+        castle_ct_put(merge->in_tree2, 0);
+    }
+    castle_free(merge->merged_iter);
     castle_free(merge);
 }
 
@@ -1655,7 +1661,7 @@ static void castle_da_merge_do(struct work_struct *work)
 err_out:
     if(ret)
         printk("Merge failed with %d\n", ret);
-    castle_da_merge_dealloc(merge);
+    castle_da_merge_dealloc(merge, ret);
 }
 
 static void castle_da_merge_schedule(struct castle_double_array *da,
@@ -1708,7 +1714,7 @@ static void castle_da_merge_schedule(struct castle_double_array *da,
 
 error_out:
     BUG_ON(!ret);
-    castle_da_merge_dealloc(merge);
+    castle_da_merge_dealloc(merge, ret);
     printk("Failed a merge with ret=%d\n", ret);
 }
 
@@ -2046,6 +2052,8 @@ static void castle_da_hash_writeback(void)
         return;
     castle_da_hash_iterate(castle_da_writeback, NULL); 
     castle_da_tree_writeback(NULL, &castle_global_tree, -1, NULL);
+    castle_mstore_fini(castle_tree_store);
+    castle_mstore_fini(castle_da_store);
 }
     
 int castle_double_array_read(void)

@@ -645,6 +645,8 @@ void castle_freespace_fini(void)
             } 
         } 
     }
+
+    castle_mstore_fini(castle_block_cnts_mstore);
 }
 
 #if 0
