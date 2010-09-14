@@ -16,6 +16,8 @@
 #include <linux/semaphore.h>
 #endif
 
+#include "castle_public.h"
+
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,18)
 #define CASTLE_INIT_WORK(_work, _func) INIT_WORK((_work), (void (*)(void *)) (_func), (void *) (_work))
 #define CASTLE_DECLARE_WORK(_name, _func) DECLARE_WORK((_name), (void (*)(void *)) _func, &(_name))
@@ -60,6 +62,71 @@ typedef struct castle_disk_block c_disk_blk_t;
                                       ((_blk1).block == (_blk2).block)) 
 #define blkfmt                  "(0x%x, 0x%x)"
 #define blk2str(_blk)           (_blk).disk, (_blk).block
+
+/* New Free space structures */
+
+#define MAX_NR_SLAVES 20
+
+#define MB (1 << 20)
+#define BLKS_PER_MB (MB / C_BLK_SIZE)
+#define CHUNK_SIZE  (1)
+#define C_CHK_SHIFT                    (20) 
+#define C_CHK_SIZE                     (1 << C_CHK_SHIFT)
+
+#define CHUNK_OFFSET(offset)  ((offset) & ((1 << C_CHK_SHIFT)-1))
+#define BLOCK_OFFSET(offset)  ((offset) & ((1 << C_BLK_SHIFT)-1))
+#define SECTOR_OFFSET(offset) ((offset) & ((1 << 9)-1))
+#define CHUNK(offset)         ((offset) >> C_CHK_SHIFT)
+#define BLOCK(offset)         ((offset) >> C_BLK_SHIFT)
+#define BLK_IN_CHK(offset)    (BLOCK(CHUNK_OFFSET(offset)))
+#define BLKS_PER_CHK          (C_CHK_SIZE / C_BLK_SIZE)
+//#define SECTOR(offset)        ((offset) >> 9)
+
+typedef uint64_t c_chk_cnt_t;
+typedef uint64_t c_chk_t;
+/* FIXME: ext_id should be 64-bit. Cahnging to 32-bit to making it compatible
+ * with cdb, for easy integration */
+typedef uint32_t c_ext_id_t;
+typedef uint32_t c_uuid_t;
+
+/* FIXME: remove from castle.h */
+typedef struct {
+    c_chk_t         first_chk;
+    c_chk_cnt_t     count;
+} c_chk_seq_t;
+
+typedef struct {
+    c_uuid_t            slave_id;
+    c_chk_t             offset;
+} c_disk_chk_t;
+
+typedef struct {
+    uint32_t                disk_id;
+    c_chk_seq_t            *chk_seqs;
+    uint32_t                max_entries;
+    uint32_t                nr_entries;
+    uint32_t                prod;
+    uint32_t                cons;
+    c_chk_cnt_t             free_chk_cnt;
+    c_chk_cnt_t             disk_size;
+    spinlock_t              lock;
+} castle_freespace_t;
+
+typedef uint32_t c_byte_off_t; 
+
+/* Disk layout related structures (extent based) */
+struct castle_extent_offset {
+    c_ext_id_t      ext_id;
+    c_byte_off_t    offset;
+} PACKED;
+typedef struct castle_extent_offset c_ext_off_t;
+#define INVAL_EXT_OFF               ((c_ext_off_t){0,0})
+#define EXT_OFF_INVAL(_off)         (((_off).ext_id == 0) && ((_off).offset == 0))
+#define EXT_OFF_EQUAL(_off1, _off2) (((_off1).ext_id == (_off2).ext_id) && \
+                                      ((_off1).offset == (_off2).offset)) 
+#define ext_off_fmt                  "(0x%llx, 0x%llx)"
+#define ext_off2str(_off)            (_off).ext_id, (_off).offset
+
 
 #define CASTLE_SLAVE_TARGET     (0x00000001)
 #define CASTLE_SLAVE_SPINNING   (0x00000002)
@@ -647,6 +714,7 @@ struct castle_slave {
     block_t                         free_blk;
     struct castle_slave_block_cnts  block_cnts;
     unsigned long                   last_access;
+    castle_freespace_t             *freespace;
 };
 
 struct castle_slaves {
@@ -768,5 +836,4 @@ struct castle_object_replace {
     uint32_t    data_c2b_offset;
     uint32_t    data_length;
 };
-
 #endif /* __CASTLE_H__ */

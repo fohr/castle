@@ -1241,6 +1241,7 @@ int castle_rxrpc_init(void)
 
     ret = kernel_bind(socket, (struct sockaddr *) &srx, sizeof(srx));
 	if (ret < 0) {
+        printk("Socket binding failed\n");
         destroy_workqueue(rxrpc_wq);
 		sock_release(socket);
         return ret;

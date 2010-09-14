@@ -26,6 +26,9 @@
 #include "castle_events.h"
 #include "castle_rxrpc.h"
 
+#include "dev_extent.h"
+#include "dev_freespace.h"
+
 struct castle                castle;
 struct castle_slaves         castle_slaves;
 struct castle_attachments    castle_attachments;
@@ -357,7 +360,7 @@ static int castle_slave_superblocks_cache(struct castle_slave *cs)
     return 0;
 }
 
-static sector_t get_bd_capacity(struct block_device *bd)
+sector_t get_bd_capacity(struct block_device *bd)
 {
     return bd->bd_contains == bd ? get_capacity(bd->bd_disk) : bd->bd_part->nr_sects;
 }
@@ -459,6 +462,47 @@ static int castle_slave_add(struct castle_slave *cs)
     return 0;
 }
 
+void do_extents(void)
+{
+    c_ext_id_t      ext_id;
+    c2_block_t     *c2b;
+
+    if (castle_extents_init())
+    {
+        printk("Failed to alloc extent\n");
+        return;
+    }
+
+    ext_id = castle_extent_alloc(DEFAULT, 0, 11);
+
+    c2b = castle_cache_block_get((c_disk_blk_t){ext_id, 2 * C_BLK_SIZE}, BLKS_PER_CHK);
+    c2b->is_ext = 1;
+    lock_c2b(c2b);
+    if(!c2b_uptodate(c2b))
+        submit_c2b_sync(READ, c2b);
+
+    printk("Data: %x\n", *((uint32_t *)c2b->buffer));
+    
+    memset(c2b->buffer, 0xAB, C_CHK_SIZE);
+    dirty_c2b(c2b);
+    submit_c2b_sync(WRITE, c2b);
+    
+    printk("Data: %x\n", *((uint32_t *)c2b->buffer));
+    *((uint32_t *)c2b->buffer) = 0xFFFFFFFF;
+    printk("Data: %x\n", *((uint32_t *)c2b->buffer));
+    clear_c2b_uptodate(c2b);
+    if(!c2b_uptodate(c2b))
+        submit_c2b_sync(READ, c2b);
+    printk("Data: %x\n", *((uint32_t *)c2b->buffer));
+
+    unlock_c2b(c2b);
+    put_c2b(c2b);
+
+    castle_extent_free(DEFAULT, 0, ext_id);
+
+    castle_extents_fini();
+}
+
 struct castle_slave* castle_claim(uint32_t new_dev)
 {
     dev_t dev;
@@ -468,6 +512,7 @@ struct castle_slave* castle_claim(uint32_t new_dev)
     char b[BDEVNAME_SIZE];
     struct castle_slave *cs = NULL;
     static int slave_id = 0;
+    static int nr_slaves = 0;
 
     debug("Claiming: in_atomic=%d.\n", in_atomic());
     if(!(cs = castle_zalloc(sizeof(struct castle_slave), GFP_KERNEL)))
@@ -491,6 +536,18 @@ struct castle_slave* castle_claim(uint32_t new_dev)
     bdev_claimed = 1;
     cs->bdev = bdev;
 
+    nr_slaves++;
+    cs->uuid = 111*nr_slaves;
+
+    dev_freespace_init(cs);
+    castle_rda_slave_add(DEFAULT, cs);
+    castle_slave_add(cs);
+
+    if (nr_slaves == 4)
+        do_extents();
+
+    return cs;
+
     err = castle_slave_superblock_read(cs); 
     if(err == -EINVAL)
     {
@@ -513,6 +570,7 @@ struct castle_slave* castle_claim(uint32_t new_dev)
         goto err_out;
     }
     cs_added = 1;
+    nr_slaves++;
     
     debug("Initing superblocks: in_atomic=%d.\n", in_atomic());
     err = castle_slave_superblocks_init(cs);
@@ -547,6 +605,7 @@ err_out:
 
 void castle_release(struct castle_slave *cs)
 {
+    dev_freespace_close(cs);
     castle_events_slave_release(cs->uuid);
     castle_sysfs_slave_del(cs);
     bd_release(cs->bdev);
@@ -1279,7 +1338,9 @@ static int castle_slaves_init(void)
             goto err_out;
     }
 
+#if 0
     castle_slaves_spindowns_check(1);
+#endif
 
     return 0;
 
@@ -1382,6 +1443,8 @@ err_out1:
     return ret;
 }
 
+void castle_rda_slaves_free(void);
+
 static void __exit castle_exit(void)
 {
     printk("Castle FS exit ... ");
@@ -1399,9 +1462,10 @@ static void __exit castle_exit(void)
     castle_versions_fini();
     castle_freespace_fini();
     /* Drop all cache references (superblocks), flush the cache, free the slaves. */ 
-    castle_slaves_unlock();
+    //castle_slaves_unlock();
     castle_cache_fini();
     castle_slaves_free();
+    //castle_rda_slaves_free();
     /* All finished, stop the debuggers */
     castle_time_fini();
     castle_debug_fini();

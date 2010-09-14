@@ -10,6 +10,9 @@ enum c2b_state_bits {
 
 typedef struct castle_cache_block {
     c_disk_blk_t          cdb;
+    //c_ext_off_t           ext_off; /* Offset inside an extent */
+    int                   is_ext; /* C2B is extent based or not */
+    atomic_t              remaining;
     int                   nr_pages;
     struct list_head      pages;
     void                 *buffer; /* Linear mapping of the pages */

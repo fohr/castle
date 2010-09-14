@@ -18,7 +18,7 @@ static inline int _prefix##_hash_idx(_key_t key)                                
                                                                                      \
     memcpy(&hash, &key, sizeof(_key_t) > 8 ? 8 : sizeof(_key_t));                    \
                                                                                      \
-    return (int)(key % _tab_size);                                                   \
+    return (int)(hash % _tab_size);                                                  \
 }                                                                                    \
                                                                                      \
 static inline void _prefix##_hash_add(_struct *v)                                    \

@@ -12,6 +12,7 @@
 #include "castle_freespace.h"
 #include "castle_utils.h"
 #include "castle_btree.h"
+#include "dev_extent.h"
 
 //#define DEBUG
 #ifndef DEBUG
@@ -209,6 +210,237 @@ static void c2b_io_end(struct bio *bio, int err)
 #endif
 }
 
+struct bio_info {
+    struct bio *bio;
+    c2_block_t *c2b;
+    uint32_t    nr_pages;
+};
+
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,18)
+static int c2b_multi_io_end(struct bio *bio, unsigned int completed, int err)
+#else
+static void c2b_multi_io_end(struct bio *bio, int err)
+#endif
+{
+    struct bio_info *bio_info = bio->bi_private;
+	c2_block_t *c2b = bio_info->c2b;
+#ifdef CASTLE_DEBUG    
+    unsigned long flags;
+    
+    /* In debugging mode force the end_io to complete in atomic */
+    local_irq_save(flags);
+#endif
+    
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,18)
+    if (bio->bi_size)
+    {
+#ifdef CASTLE_DEBUG    
+        local_irq_restore(flags);
+#endif
+        return 1;
+    }
+
+    /* Check if we always complete the entire BIO. Likely yes, since
+       the interface in >= 2.6.24 removes the completed variable */
+    BUG_ON((!err) && (completed != C_BLK_SIZE * bio_info->nr_pages));
+    if( (err) && (completed != 0))
+    {
+        printk("Bio error=%d, completed=%d, bio->bi_size=%d\n", err, completed, bio->bi_size);
+        BUG();
+    }
+    BUG_ON(err && test_bit(BIO_UPTODATE, &bio->bi_flags));
+#endif
+    /* End the IO by calling the client's end_io function */ 
+    if (atomic_sub_and_test(bio_info->nr_pages, &c2b->remaining))
+	    c2b->end_io(c2b, test_bit(BIO_UPTODATE, &bio->bi_flags));
+#ifdef CASTLE_DEBUG    
+    local_irq_restore(flags);
+#endif
+    kfree(bio_info);
+	bio_put(bio);
+	
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,18)
+    return 0;
+#endif
+}
+
+c_disk_chk_t read_slave_get(c_ext_id_t ext_id, c_chk_t offset)
+{
+    uint32_t k_factor;
+    c_disk_chk_t *chunks = NULL;
+
+    if ((chunks = castle_extent_map_get(ext_id, offset, &k_factor)) == NULL)
+        return ((c_disk_chk_t){0, 0});
+
+    return chunks[0];
+    
+    /* Take decision based on disk loads */
+#if 0
+    for (i=0; i<k_factor; i++)
+    {
+    }
+#endif
+}
+
+void __submit_bio(int                         rw,
+                  struct block_device        *bdev, 
+                  struct list_head          **page_head, 
+                  uint32_t                    nr_pages,
+                  sector_t                    sector,
+                  c2_block_t                 *c2b)
+{
+    struct list_head *pos;
+    int i;
+    uint32_t pg_count;
+    struct bio *bio;
+    struct page *pg;
+    struct bio_info *bio_info;
+
+    printk("%s for %d pages from sector %llu\n", (rw == READ)?"Read":"Write",
+    nr_pages, sector);
+
+    pg_count = nr_pages;
+    while (pg_count)
+    {
+        BUG_ON(pg_count <= 0);
+        nr_pages = (pg_count <= 25)?pg_count:25;
+        
+        bio = bio_alloc(GFP_NOIO, nr_pages);
+        bio_info = kmalloc(sizeof(struct bio_info), GFP_KERNEL);
+        BUG_ON(!bio_info);
+        for (pos = *page_head, i=0; prefetch(pos->next), i < nr_pages; 
+                pos = pos->next, i++)
+        {
+            pg = list_entry(pos, struct page, lru);
+            bio->bi_io_vec[i].bv_page   = pg; 
+            bio->bi_io_vec[i].bv_len    = C_BLK_SIZE; 
+            bio->bi_io_vec[i].bv_offset = 0;
+        }
+        bio->bi_sector  = sector;
+        bio->bi_bdev    = bdev;
+        bio->bi_vcnt    = nr_pages;
+        bio->bi_idx     = 0;
+        bio->bi_size    = nr_pages * C_BLK_SIZE;
+        bio->bi_end_io  = c2b_multi_io_end;
+        bio->bi_private = bio_info;
+        bio_info->bio   = bio;
+        bio_info->c2b   = c2b;
+        bio_info->nr_pages = nr_pages;
+        *page_head      = pos;
+        pg_count       -= nr_pages;
+  		
+        submit_bio(rw, bio);
+    }
+}
+
+int submit_c2b_rda(int rw, c2_block_t *c2b)
+{
+    struct castle_slave     *cs;
+    c_ext_off_t              ext_off = (c_ext_off_t){c2b->cdb.disk, c2b->cdb.block};
+    c_disk_chk_t            *chunks;
+    uint32_t                 k_factor, i, j;
+    uint32_t                 nr_chunks;
+    struct list_head        *cur_page;
+    uint32_t                 rem_pages;
+    uint32_t                 cur_offset = ext_off.offset;
+    struct bio_info         *bio_info;
+    sector_t                 sector;
+
+    BUG_ON(atomic_read(&c2b->remaining));
+    BUG_ON(BLOCK_OFFSET(ext_off.offset));
+
+    nr_chunks = CHUNK(ext_off.offset + (c2b->nr_pages * (1 << C_BLK_SHIFT)) - 1)
+                    - CHUNK(ext_off.offset) + 1;
+
+    debug("RDA %s: extid - %u offset - %u nr_pages - %u\n", 
+            (rw == READ)?"Read":"Write", ext_off.ext_id, ext_off.offset,
+            c2b->nr_pages);
+    if (rw == READ)
+    {
+        c_disk_chk_t        chk;
+        
+        atomic_add(c2b->nr_pages, &c2b->remaining);
+        rem_pages   = c2b->nr_pages;
+        cur_page    = c2b->pages.next;
+
+        for (i=0; i<nr_chunks; i++)
+        {
+            uint32_t pgs_in_chk;
+
+            chk = read_slave_get(ext_off.ext_id, CHUNK(cur_offset));
+#if 0
+            if (INVAL_CDC(chk))
+            {
+                atomic_sub(c2b->nr_pages - rem_pages, &c2b->remaining);
+                return -ENODEV;
+            }
+#endif
+            cs = castle_slave_find_by_uuid(chk.slave_id);
+            if (rem_pages < BLKS_PER_CHK)
+                pgs_in_chk = rem_pages;
+            else
+                pgs_in_chk = BLKS_PER_CHK - BLK_IN_CHK(cur_offset);
+            
+            sector      = (sector_t)(chk.offset << (C_CHK_SHIFT - 9)) +
+                                (BLK_IN_CHK(cur_offset) << (C_BLK_SHIFT - 9));
+            /* FIXME: use mem chunks instead of kmalloc. Do we really need
+             * bio_info?? */
+            bio_info    = kmalloc(sizeof(struct bio_info), GFP_KERNEL);
+            BUG_ON(!bio_info);
+            bio_info->c2b       = c2b;
+            bio_info->nr_pages  = pgs_in_chk;
+
+            debug("\t%u pages from slave %u at %llu\n", pgs_in_chk, chk.slave_id, chk.offset);
+            __submit_bio(rw, cs->bdev, &cur_page, pgs_in_chk, sector, c2b);
+            
+            cur_offset += (pgs_in_chk * C_BLK_SIZE);
+            rem_pages  -= pgs_in_chk;
+        }
+        return 0;
+    }
+
+    /* Handle writes */
+    (void) castle_extent_map_get(ext_off.ext_id,
+                                 CHUNK(ext_off.offset)+i,
+                                 &k_factor);
+    atomic_add((c2b->nr_pages * k_factor), &c2b->remaining);
+    rem_pages   = c2b->nr_pages;
+    cur_page    = c2b->pages.next;
+    for (i=0; i<nr_chunks; i++)
+    {
+        uint32_t            pgs_in_chk;
+        struct list_head   *page;
+        
+        if (rem_pages < BLKS_PER_CHK)
+            pgs_in_chk = rem_pages;
+        else
+            pgs_in_chk = BLKS_PER_CHK - BLK_IN_CHK(cur_offset);
+
+        chunks = castle_extent_map_get(ext_off.ext_id,
+                                       CHUNK(ext_off.offset)+i,
+                                       NULL);
+        if (chunks == NULL)
+            BUG();
+
+        page = cur_page;
+        for (j=0; j<k_factor; j++)
+        {
+            c_disk_chk_t    chk;
+
+            chk     = chunks[j];
+            cs      = castle_slave_find_by_uuid(chk.slave_id);
+            sector  = (sector_t)(chk.offset << (C_CHK_SHIFT - 9)) +
+                                (BLK_IN_CHK(cur_offset) << (C_BLK_SHIFT - 9));
+            cur_page = page;
+            debug("\t%u pages from slave %u at %llu\n", pgs_in_chk, chk.slave_id, chk.offset);
+            __submit_bio(rw, cs->bdev, &cur_page, pgs_in_chk, sector, (void *)c2b);
+        }
+        rem_pages  -= pgs_in_chk;
+        cur_offset += (pgs_in_chk * C_BLK_SIZE);
+    }
+    return 0;
+}
+
 int submit_c2b(int rw, c2_block_t *c2b)
 {
     struct castle_slave *cs;
@@ -225,6 +457,9 @@ int submit_c2b(int rw, c2_block_t *c2b)
         atomic_inc(&castle_cache_read_stats);
     else if (rw == WRITE)
         atomic_inc(&castle_cache_write_stats);
+
+    if (c2b->is_ext)
+        return submit_c2b_rda(rw, c2b);
     
     cs = castle_slave_find_by_block(c2b->cdb);
     if(!cs) return -ENODEV;
@@ -477,6 +712,8 @@ static void castle_cache_block_init(c2_block_t *c2b,
     BUG_ON(list_empty(&c2b->list)); 
     BUG_ON(!list_empty(&c2b->pages));
     BUG_ON(atomic_read(&c2b->count) != 0);
+    c2b->is_ext = 0;
+    atomic_set(&c2b->remaining, 0);
     c2b->cdb = cdb;
     c2b->state = INIT_C2B_BITS;
     c2b->nr_pages = nr_pages;
