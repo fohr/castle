@@ -536,18 +536,6 @@ struct castle_slave* castle_claim(uint32_t new_dev)
     bdev_claimed = 1;
     cs->bdev = bdev;
 
-    nr_slaves++;
-    cs->uuid = 111*nr_slaves;
-
-    dev_freespace_init(cs);
-    castle_rda_slave_add(DEFAULT, cs);
-    castle_slave_add(cs);
-
-    if (nr_slaves == 4)
-        do_extents();
-
-    return cs;
-
     err = castle_slave_superblock_read(cs); 
     if(err == -EINVAL)
     {
@@ -563,6 +551,18 @@ struct castle_slave* castle_claim(uint32_t new_dev)
         goto err_out;
     }
 
+    err = dev_freespace_init(cs);
+    if (err)
+    {
+        printk("Could not init freespace for slave.\n");
+        goto err_out;
+    }
+    err = castle_rda_slave_add(DEFAULT, cs);
+    if (err)
+    {
+        printk("Could not add slave to DEFAULT RDA.\n");
+        goto err_out;
+    }
     err = castle_slave_add(cs);
     if(err)
     {
@@ -589,8 +589,16 @@ struct castle_slave* castle_claim(uint32_t new_dev)
     
     castle_events_slave_claim(cs->uuid);
 
+    if (nr_slaves == 4)
+        do_extents();
+
     return cs;
 err_out:
+    if (cs->freespace)
+    {
+        castle_rda_slave_remove(DEFAULT, cs);
+        dev_freespace_close(cs);
+    }
     if(cs_added)     list_del(&cs->list);
     if(cs->sblk)     put_c2b(cs->sblk);
     if(cs->fs_sblk)  put_c2b(cs->fs_sblk);
@@ -605,7 +613,9 @@ err_out:
 
 void castle_release(struct castle_slave *cs)
 {
+    castle_rda_slave_remove(DEFAULT, cs);
     dev_freespace_close(cs);
+
     castle_events_slave_release(cs->uuid);
     castle_sysfs_slave_del(cs);
     bd_release(cs->bdev);
@@ -1293,17 +1303,9 @@ static void castle_slaves_unlock(void)
 }
 
 static char *wq_names[2*MAX_BTREE_DEPTH+1];
-static void castle_slaves_free(void)
-{                                                                                        
-    struct list_head *lh, *th;
-    struct castle_slave *slave;
+static void castle_wqs_fini(void)
+{
     int i;
-
-    list_for_each_safe(lh, th, &castle_slaves.slaves)
-    {
-        slave = list_entry(lh, struct castle_slave, list); 
-        castle_release(slave);
-    }
 
     for(i=0; i<=2*MAX_BTREE_DEPTH; i++)
     {
@@ -1314,13 +1316,9 @@ static void castle_slaves_free(void)
     }
 }
 
-static int castle_slaves_init(void)
+static int castle_wqs_init(void)
 {
     int i;
-
-    /* Init the slaves structures */
-    memset(&castle_slaves, 0, sizeof(struct castle_slaves));
-    INIT_LIST_HEAD(&castle_slaves.slaves);
 
     /* Init the castle workqueues */
     memset(wq_names  , 0, sizeof(char *) * (2*MAX_BTREE_DEPTH+1));
@@ -1338,17 +1336,35 @@ static int castle_slaves_init(void)
             goto err_out;
     }
 
-#if 0
-    castle_slaves_spindowns_check(1);
-#endif
-
     return 0;
 
 err_out:
     printk("Could not create workqueues.\n");
-    castle_slaves_free();
 
     return -ENOMEM;
+}
+
+static void castle_slaves_free(void)
+{                                                                                        
+    struct list_head *lh, *th;
+    struct castle_slave *slave;
+
+    list_for_each_safe(lh, th, &castle_slaves.slaves)
+    {
+        slave = list_entry(lh, struct castle_slave, list); 
+        castle_release(slave);
+    }
+}
+
+static int castle_slaves_init(void)
+{
+    /* Init the slaves structures */
+    memset(&castle_slaves, 0, sizeof(struct castle_slaves));
+    INIT_LIST_HEAD(&castle_slaves.slaves);
+
+    castle_slaves_spindowns_check(1);
+
+    return 0;
 }
 
 static int castle_attachments_init(void)
@@ -1396,6 +1412,7 @@ static int __init castle_init(void)
     castle_fs_inited = 0;
               castle_debug_init();
               castle_time_init();
+    if((ret = castle_wqs_init()))          goto err_out0;
     if((ret = castle_slaves_init()))       goto err_out1;
     if((ret = castle_cache_init()))        goto err_out2;
     if((ret = castle_versions_init()))     goto err_out3;
@@ -1436,6 +1453,8 @@ err_out3:
 err_out2:
     castle_slaves_free();
 err_out1:
+    castle_wqs_fini();
+err_out0:
     castle_time_fini();
     castle_debug_fini();
     
@@ -1462,10 +1481,10 @@ static void __exit castle_exit(void)
     castle_versions_fini();
     castle_freespace_fini();
     /* Drop all cache references (superblocks), flush the cache, free the slaves. */ 
-    //castle_slaves_unlock();
+    castle_slaves_unlock();
     castle_cache_fini();
     castle_slaves_free();
-    //castle_rda_slaves_free();
+    castle_wqs_fini();
     /* All finished, stop the debuggers */
     castle_time_fini();
     castle_debug_fini();

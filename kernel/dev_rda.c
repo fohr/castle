@@ -180,14 +180,9 @@ int castle_rda_slave_add(c_rda_type_t rda_type, struct castle_slave *cs)
     return 0;
 }
 
-void castle_release(struct castle_slave *cs);
-
-void castle_rda_slaves_free(void)
+void castle_rda_slave_remove(c_rda_type_t rda_type, struct castle_slave *cs)
 {
-    int i;
-
-    for (i=0; i<def_rda_spec.nr_act_slaves; i++)
-    {
-        castle_release(def_rda_spec.act_slaves[i]);
-    }
+    /* FIXME: Implementation should take care of cs not being in the list  */
+    printk("Not yet implemented.\n");
+    return;
 }

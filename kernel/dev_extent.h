@@ -50,6 +50,10 @@ typedef struct {
 } c_rda_spec_t;
 
 
+void 
+castle_rda_slave_remove(c_rda_type_t         rda_type, 
+                        struct castle_slave *slave);
+
 int 
 castle_rda_slave_add(c_rda_type_t            rda_type,
                      struct castle_slave    *slave);
