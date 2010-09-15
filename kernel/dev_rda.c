@@ -1,8 +1,10 @@
 #include <linux/mm.h>
 #include <linux/vmalloc.h>
 #include <linux/random.h>
-#include "dev_extent.h"
+
 #include "castle.h"
+#include "castle_debug.h"
+#include "dev_extent.h"
 
 #define DEBUG
 #ifdef DEBUG
@@ -56,9 +58,9 @@ void* castle_rda_extent_init(c_ext_id_t             ext_id,
     c_rda_state_t   *state;
     c_rda_spec_t    *rda_spec = castle_rda_spec_get(rda_type);
 
-    state = kmalloc(sizeof(c_rda_state_t) + 
-                        sizeof(struct castle_slave *) * rda_spec->k_factor, 
-                    GFP_KERNEL);
+    state = castle_malloc(sizeof(c_rda_state_t) + 
+                          sizeof(struct castle_slave *) * rda_spec->k_factor, 
+                          GFP_KERNEL);
     if (!state)
     {
         printk("Failed to allocate memory for RDA state\n");
@@ -76,7 +78,7 @@ void* castle_rda_extent_init(c_ext_id_t             ext_id,
 
 __hell:
     if (state)
-        kfree(state);
+        castle_free(state);
 
     return NULL;
 }
@@ -86,7 +88,7 @@ void castle_rda_extent_fini(c_ext_id_t    ext_id,
 {
     c_rda_state_t   *state = _state;
 
-    kfree(state);
+    castle_free(state);
 }
 
 int castle_rda_next_slave_get(struct castle_slave  *cs[],

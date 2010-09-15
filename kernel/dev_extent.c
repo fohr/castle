@@ -1,9 +1,11 @@
 #include <linux/mm.h>
 #include <linux/vmalloc.h>
+
 #include "castle.h"
+#include "castle_debug.h"
+#include "castle_utils.h"
 #include "dev_freespace.h"
 #include "dev_extent.h"
-#include "castle_utils.h"
 
 #define DEBUG
 #ifdef DEBUG
@@ -117,7 +119,7 @@ static int castle_extent_hash_remove(c_ext_t *ext, void *unused)
     debug("Freeing extent #%u\n", ext->ext_id);
 
     list_del(&ext->hash_list);
-    kfree(ext);
+    castle_free(ext);
 
     return 0;
 }
@@ -143,7 +145,7 @@ c_ext_id_t castle_extent_alloc(c_rda_type_t            rda_type,
     c_rda_spec_t           *rda_spec = castle_rda_spec_get(rda_type);
     c_chk_seq_t            *chk_buf;
 
-    ext = kmalloc(sizeof(c_ext_t) + 
+    ext = castle_malloc(sizeof(c_ext_t) + 
                     (sizeof(c_disk_chk_t) * count * rda_spec->k_factor), GFP_KERNEL);
     if (!ext)
     {
@@ -162,7 +164,7 @@ c_ext_id_t castle_extent_alloc(c_rda_type_t            rda_type,
     
     chk_buf             = &ext->chk_buf[0];
     memset(chk_buf, 0, sizeof(ext->chk_buf));
-    slaves              = kmalloc(sizeof(struct castle_slave *) * ext->k_factor,
+    slaves              = castle_malloc(sizeof(struct castle_slave *) * ext->k_factor,
                                      GFP_KERNEL);
     if (!slaves)
     {
@@ -237,7 +239,7 @@ c_ext_id_t castle_extent_alloc(c_rda_type_t            rda_type,
     /* Add extent to hash table */
     castle_extents_hash_add(ext);
     
-    kfree(slaves);
+    castle_free(slaves);
     rda_spec->extent_fini(ext->ext_id, state);
     return ext->ext_id;
 
@@ -247,7 +249,7 @@ __hell:
     if (ext)
         vfree(ext);
     if (slaves)
-        kfree(slaves);
+        castle_free(slaves);
     return INV_EXT_ID;
 }
 
@@ -319,7 +321,7 @@ void castle_extent_free(c_rda_type_t            rda_type,
         }
     }
 
-    kfree(ext);
+    castle_free(ext);
 }
 
 c_disk_chk_t * castle_extent_map_get(c_ext_id_t             ext_id,  

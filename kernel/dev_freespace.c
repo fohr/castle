@@ -1,7 +1,9 @@
 #include <linux/mm.h>
 #include <linux/vmalloc.h>
 #include <linux/spinlock.h>
+
 #include "castle.h"
+#include "castle_debug.h"
 
 #define DEBUG
 #ifdef DEBUG
@@ -101,7 +103,7 @@ int dev_freespace_init(struct castle_slave *cs)
     int ret = 0;
 
     /* Allocate free-space structure for each slave */
-    freespace = kzalloc(sizeof(castle_freespace_t), GFP_KERNEL);
+    freespace = castle_zalloc(sizeof(castle_freespace_t), GFP_KERNEL);
     if (!freespace)
     {
         ret = -ENOMEM;
@@ -145,8 +147,8 @@ __hell:
     if (freespace)
     {
         if (freespace->chk_seqs)
-            kfree(freespace->chk_seqs);
-        kfree(freespace);
+            castle_free(freespace->chk_seqs);
+        castle_free(freespace);
     }
     cs->freespace = NULL;
 
@@ -172,7 +174,7 @@ void dev_freespace_close(struct castle_slave *cs)
           freespace->free_chk_cnt);
 
     vfree(freespace->chk_seqs);
-    kfree(freespace);
+    castle_free(freespace);
     cs->freespace = NULL;
 
     debug("Closed the module\n");
