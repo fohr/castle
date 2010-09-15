@@ -113,7 +113,7 @@ int dev_freespace_init(struct castle_slave *cs)
     freespace->disk_id          = cs->id;
     freespace->prod             = 0;
     freespace->cons             = 0;
-    freespace->disk_size        = C_FLOOR_OF(disk_sz / C_CHK_SIZE);
+    freespace->disk_size        = C_FLOOR_OF((disk_sz << 9)/ C_CHK_SIZE);
     freespace->free_chk_cnt     = freespace->disk_size;
     spin_lock_init(&freespace->lock);
     freespace->max_entries      = freespace->free_chk_cnt / CHKS_PER_SLOT;
