@@ -4,6 +4,7 @@
 
 #include "castle.h"
 #include "castle_debug.h"
+#include "castle_cache.h"
 
 #define DEBUG
 #ifdef DEBUG
@@ -194,4 +195,3 @@ void castle_freespace_print(struct castle_slave *cs)
     }
     printk("*************************************************************");
 }
-

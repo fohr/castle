@@ -9,7 +9,6 @@
 #include "castle.h"
 #include "castle_cache.h"
 #include "castle_debug.h"
-#include "castle_freespace.h"
 #include "castle_utils.h"
 #include "castle_btree.h"
 #include "dev_extent.h"
@@ -711,7 +710,7 @@ static void castle_cache_block_init(c2_block_t *c2b,
     BUG_ON(list_empty(&c2b->list)); 
     BUG_ON(!list_empty(&c2b->pages));
     BUG_ON(atomic_read(&c2b->count) != 0);
-    c2b->is_ext = 0;
+    c2b->is_ext = 1;
     atomic_set(&c2b->remaining, 0);
     c2b->cdb = cdb;
     c2b->state = INIT_C2B_BITS;
@@ -1452,8 +1451,10 @@ static void castle_mstore_node_add(struct castle_mstore *store)
     /* Check if mutex is locked */
     BUG_ON(down_trylock(&store->mutex) == 0);
 
+    // FIXME: bhaskar
     /* Prepare the node first */
-    cdb = castle_freespace_block_get(0, 1);
+    cdb.disk  = castle_extent_alloc(DEFAULT, 0, 1);
+    cdb.block = 0;
     c2b = castle_cache_page_block_get(cdb);
     debug_mstore("Allocated (0x%x, 0x%x).\n", cdb.disk, cdb.block);
     lock_c2b(c2b);

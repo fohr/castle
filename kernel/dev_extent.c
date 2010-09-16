@@ -128,6 +128,7 @@ void castle_extents_fini()
 {
     /* Sync in-memory extent hash table with extent store and chunk map store */
 
+    // free castle_extent_free();
     debug("Finishing castle extents\n");
     /* Free the resources */
     castle_extents_hash_iterate(castle_extent_hash_remove, NULL);
@@ -250,7 +251,7 @@ __hell:
         vfree(ext);
     if (slaves)
         castle_free(slaves);
-    return INV_EXT_ID;
+    return INVAL_EXT_ID;
 }
 
 void castle_extent_free(c_rda_type_t            rda_type,

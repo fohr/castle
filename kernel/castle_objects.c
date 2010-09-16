@@ -8,9 +8,10 @@
 #include "castle_btree.h"
 #include "castle_cache.h"
 #include "castle_versions.h"
-#include "castle_freespace.h"
 #include "castle_rxrpc.h"
 #include "castle_objects.h"
+
+#include "dev_extent.h"
 
 //#define DEBUG
 #ifndef DEBUG
@@ -591,7 +592,10 @@ static void castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
                huge objects ATM) */
             BUG_ON(nr_blocks > 100); 
             cvt->type   = CVT_TYPE_ONDISK;
-            cvt->cdb    = castle_freespace_block_get(c_bvec->version, nr_blocks); 
+            // FIXME: bhaskar
+            cvt->cdb.disk = castle_extent_alloc(DEFAULT, c_bvec->tree->da, 1);
+            cvt->cdb.block = 0;
+            //cvt->cdb    = castle_freespace_block_get(c_bvec->version, nr_blocks); 
             /* TODO: Again, work out how to handle failed allocations */ 
             BUG_ON(DISK_BLK_INVAL(cvt->cdb));
          }
@@ -606,9 +610,12 @@ static void castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
     if (CVT_ONDISK(prev_cvt))
     {
         nr_blocks = (prev_cvt.length - 1) / C_BLK_SIZE + 1; 
+        /* FIXME: bhaskar - Free old object */
+#if 0
         castle_freespace_block_free(prev_cvt.cdb,
                                     c_bvec->version,
                                     nr_blocks);
+#endif
     }
     BUG_ON(CVT_INVALID(*cvt));
 }

@@ -8,7 +8,8 @@
 #include "castle_btree.h"
 #include "castle_time.h"
 #include "castle_versions.h"
-#include "castle_freespace.h"
+
+#include "dev_extent.h"
 
 //#define DEBUG
 #ifndef DEBUG
@@ -1233,7 +1234,9 @@ static inline void castle_da_entry_add(struct castle_da_merge *merge,
         BUG_ON(level->valid_end_idx >= 0);
         debug("Allocating a new node at depth: %d\n", depth);
 
-        cdb = castle_freespace_block_get(0, btree->node_size);
+        cdb.disk = castle_extent_alloc(DEFAULT, merge->da->id, 1);
+        cdb.block = 0;
+        //cdb = castle_freespace_block_get(0, btree->node_size);
         debug("Got (0x%x, 0x%x)\n", cdb.disk, cdb.block);
 
         level->node_c2b = castle_cache_block_get(cdb, btree->node_size);
@@ -2182,7 +2185,7 @@ static int castle_da_rwct_make(struct castle_double_array *da)
         goto out;
 
     /* Create a root node for this tree, and update the root version */
-    c2b = castle_btree_node_create(0, 1 /* is_leaf */, VLBA_TREE_TYPE);
+    c2b = castle_btree_node_create(0, 1 /* is_leaf */, ct);
     castle_btree_node_save_prepare(ct, c2b->cdb);
     ct->root_node = c2b->cdb;
     ct->tree_depth = 1;

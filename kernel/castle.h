@@ -86,6 +86,8 @@ typedef uint64_t c_chk_t;
 typedef uint32_t c_ext_id_t;
 typedef uint32_t c_uuid_t;
 
+#define INVAL_EXT_ID           (0)
+
 /* FIXME: remove from castle.h */
 typedef struct {
     c_chk_t         first_chk;
@@ -367,6 +369,8 @@ struct castle_component_tree {
     struct list_head    da_list;
     struct list_head    hash_list;
     c_mstore_key_t      mstore_key;
+    c_ext_id_t          tree_ext;
+    c_ext_id_t          data_ext;
 };
 extern struct castle_component_tree castle_global_tree;
 

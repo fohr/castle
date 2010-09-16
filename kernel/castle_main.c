@@ -16,7 +16,6 @@
 #include "castle_block.h"
 #include "castle_cache.h"
 #include "castle_btree.h"
-#include "castle_freespace.h"
 #include "castle_versions.h"
 #include "castle_ctrl.h"
 #include "castle_sysfs.h"
@@ -47,6 +46,8 @@ struct castle_component_tree castle_global_tree = {.seq             = GLOBAL_TRE
                                                    .da_list         = {NULL, NULL},
                                                    .hash_list       = {NULL, NULL},
                                                    .mstore_key      = INVAL_MSTORE_KEY,
+                                                   .tree_ext        = INVAL_EXT_ID,
+                                                   .data_ext        = INVAL_EXT_ID,
                                                   }; 
 struct workqueue_struct     *castle_wqs[2*MAX_BTREE_DEPTH+1];
 int                          castle_fs_inited;
@@ -214,7 +215,7 @@ int castle_fs_init(void)
         /* Init the root btree node */
         atomic64_set(&(castle_global_tree.node_count), 0);
         init_rwsem(&castle_global_tree.lock);
-        c2b = castle_btree_node_create(0 /* version */, 1 /* is_leaf */, MTREE_TYPE);
+        c2b = castle_btree_node_create(0 /* version */, 1 /* is_leaf */, &castle_global_tree);
         castle_btree_node_save_prepare(&castle_global_tree, c2b->cdb);
         /* Save the root node in the global tree */
         castle_global_tree.root_node = c2b->cdb; 
@@ -238,7 +239,7 @@ int castle_fs_init(void)
     castle_fs_superblocks_put(cs_fs_sb, 1);
 
     /* Post initialise freespace on all the slaves. */
-    castle_freespace_slaves_init(first);
+    //castle_freespace_slaves_init(first);
 
     /* Read doubling arrays and component trees in. */
     ret = first ? castle_double_array_create() : castle_double_array_read(); 
@@ -342,6 +343,7 @@ static int castle_slave_superblocks_cache(struct castle_slave *cs)
         cdb.disk  = cs->uuid;
         cdb.block = i;
         c2b = castle_cache_page_block_get(cdb);
+        c2b->is_ext = 0;
         *(c2bp[i]) = c2b;
         /* We expecting the buffer not to be up to date. 
            We check if it got updated later */
@@ -400,7 +402,9 @@ static int castle_slave_superblocks_init(struct castle_slave *cs)
     }
     castle_slave_superblock_put(cs, cs->new_dev);
     debug("Before slave init: in_atomic()=%d\n", in_atomic());
-    castle_freespace_slave_init(cs, cs->new_dev);
+    // FIXME: bhaskar
+    //castle_freespace_slave_init(cs, cs->new_dev);
+    dev_freespace_init(cs);
     castle_fs_superblock_put(cs, 0);
 
     return ret;
@@ -466,12 +470,6 @@ void do_extents(void)
     c_ext_id_t      ext_id;
     c2_block_t     *c2b;
 
-    if (castle_extents_init())
-    {
-        printk("Failed to alloc extent\n");
-        return;
-    }
-
     ext_id = castle_extent_alloc(DEFAULT, 0, 11);
 
     c2b = castle_cache_block_get((c_disk_blk_t){ext_id, 2 * C_BLK_SIZE}, BLKS_PER_CHK);
@@ -497,9 +495,11 @@ void do_extents(void)
     unlock_c2b(c2b);
     put_c2b(c2b);
 
-    castle_extent_free(DEFAULT, 0, ext_id);
+#if 0
+    castle_cache_block_free(c2b);
 
-    castle_extents_fini();
+    castle_extent_free(DEFAULT, 0, ext_id);
+#endif
 }
 
 struct castle_slave* castle_claim(uint32_t new_dev)
@@ -550,12 +550,6 @@ struct castle_slave* castle_claim(uint32_t new_dev)
         goto err_out;
     }
 
-    err = dev_freespace_init(cs);
-    if (err)
-    {
-        printk("Could not init freespace for slave.\n");
-        goto err_out;
-    }
     err = castle_rda_slave_add(DEFAULT, cs);
     if (err)
     {
@@ -588,16 +582,14 @@ struct castle_slave* castle_claim(uint32_t new_dev)
     
     castle_events_slave_claim(cs->uuid);
 
+#if 0
     if (nr_slaves == 4)
         do_extents();
+#endif
 
     return cs;
 err_out:
-    if (cs->freespace)
-    {
-        castle_rda_slave_remove(DEFAULT, cs);
-        dev_freespace_close(cs);
-    }
+    castle_rda_slave_remove(DEFAULT, cs);
     if(cs_added)     list_del(&cs->list);
     if(cs->sblk)     put_c2b(cs->sblk);
     if(cs->fs_sblk)  put_c2b(cs->fs_sblk);
@@ -838,8 +830,10 @@ static void castle_bio_data_io_do(c_bvec_t *c_bvec, c_disk_blk_t cdb)
         return;
     }
 
+#if 0 // FIXME: bhaskar
     /* Save last_access time in the slave */
     castle_slave_access(cdb.disk);
+#endif
 
     c2b = castle_cache_page_block_get(cdb);
     castle_debug_bvec_update(c_bvec, C_BVEC_DATA_C2B_GOT);
@@ -883,7 +877,9 @@ static void castle_bio_data_cvt_get(c_bvec_t    *c_bvec,
     /* Otherwise, allocate a new out-of-line block */
     cvt->type   = CVT_TYPE_ONDISK;
     cvt->length = C_BLK_SIZE;
-    cvt->cdb    = castle_freespace_block_get(c_bvec->version, 1);
+    cvt->cdb.disk = castle_extent_alloc(DEFAULT, c_bvec->tree->da, 1);
+    cvt->cdb.block = 0;
+    //cvt->cdb    = castle_freespace_block_get(c_bvec->version, 1);
     BUG_ON(DISK_BLK_INVAL(cvt->cdb));
 }
 
@@ -1279,8 +1275,8 @@ static void castle_slaves_spindowns_check(unsigned long first)
     mod_timer(&spindown_timer, jiffies + sleep);
 }
 
-static void castle_slaves_unlock(void)                                                                 
-{                                                                                        
+static void castle_slaves_unlock(void)
+{
     struct list_head *lh, *th;
     struct castle_slave *slave;
 
@@ -1413,39 +1409,42 @@ static int __init castle_init(void)
               castle_time_init();
     if((ret = castle_wqs_init()))          goto err_out0;
     if((ret = castle_slaves_init()))       goto err_out1;
-    if((ret = castle_cache_init()))        goto err_out2;
-    if((ret = castle_versions_init()))     goto err_out3;
-    if((ret = castle_btree_init()))        goto err_out4;
-    if((ret = castle_double_array_init())) goto err_out5;
-    if((ret = castle_freespace_init()))    goto err_out6;
-    if((ret = castle_attachments_init()))  goto err_out7;
-    if((ret = castle_control_init()))      goto err_out8;
-    if((ret = castle_rxrpc_init()))        goto err_out9;
-    if((ret = castle_sysfs_init()))        goto err_out10;
+    if((ret = castle_extents_init()))      goto err_out2;
+    if((ret = castle_cache_init()))        goto err_out3;
+    if((ret = castle_versions_init()))     goto err_out4;
+    if((ret = castle_btree_init()))        goto err_out5;
+    if((ret = castle_double_array_init())) goto err_out6;
+    //if((ret = castle_freespace_init()))    goto err_out7;
+    if((ret = castle_attachments_init()))  goto err_out8;
+    if((ret = castle_control_init()))      goto err_out9;
+    if((ret = castle_rxrpc_init()))        goto err_out10;
+    if((ret = castle_sysfs_init()))        goto err_out11;
 
     printk("OK.\n");
 
     return 0;
 
     castle_sysfs_fini(); /* Unreachable */
-err_out10:
+err_out11:
     castle_rxrpc_fini();
-err_out9:
+err_out10:
     castle_control_fini();
-err_out8:
+err_out9:
     castle_attachments_free();
-err_out7:
-    castle_freespace_fini();
-err_out6:
+err_out8:
+    //castle_freespace_fini();
+//err_out7:
     castle_double_array_fini();
-err_out5:
+err_out6:
     castle_btree_free();
-err_out4:
+err_out5:
     castle_versions_fini();
-err_out3:
+err_out4:
     BUG_ON(!list_empty(&castle_slaves.slaves));
     castle_slaves_unlock();
     castle_cache_fini();
+err_out3:
+    castle_extents_fini();
 err_out2:
     castle_slaves_free();
 err_out1:
@@ -1474,10 +1473,11 @@ static void __exit castle_exit(void)
     castle_double_array_fini();
     castle_btree_free();
     castle_versions_fini();
-    castle_freespace_fini();
+    //castle_freespace_fini();
     /* Drop all cache references (superblocks), flush the cache, free the slaves. */ 
     castle_slaves_unlock();
     castle_cache_fini();
+    castle_extents_fini();
     castle_slaves_free();
     castle_wqs_fini();
     /* All finished, stop the debuggers */

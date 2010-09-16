@@ -7,11 +7,12 @@
 #include "castle_btree.h"
 #include "castle_objects.h"
 #include "castle_utils.h"
-#include "castle_freespace.h"
 #include "castle_versions.h"
 #include "castle_block.h"
 #include "castle_da.h"
 #include "castle_debug.h"
+
+#include "dev_extent.h"
 
 //#define DEBUG
 #ifndef DEBUG
@@ -1517,17 +1518,21 @@ void castle_btree_node_save_prepare(struct castle_component_tree *ct, c_disk_blk
     queue_work(castle_wq, &work_st->work);
 }
 
-c2_block_t* castle_btree_node_create(int version, int is_leaf, btree_t type)
+c2_block_t* castle_btree_node_create(int version, int is_leaf, struct castle_component_tree *ct)
 {
     struct castle_btree_type *btree;
     struct castle_btree_node *node;
-    c_disk_blk_t cdb;
+    //c_disk_blk_t cdb;
     c2_block_t  *c2b;
-    
+    btree_t      type;
+    c_ext_off_t  ext_off;
+
+    type  = ct->btree_type;
     btree = castle_btree_type_get(type);
-    cdb = castle_freespace_block_get(0, /* Used to denote nodes used by metadata */
-                                     btree->node_size); 
-    c2b = castle_cache_block_get(cdb, btree->node_size);
+    BUG_ON(btree->node_size > C_CHK_SIZE);
+    ext_off = (c_ext_off_t){castle_extent_alloc(DEFAULT, ct->da, 1), 0};
+    BUG_ON(ext_off.ext_id == INVAL_EXT_ID);
+    c2b   = castle_cache_block_get((c_disk_blk_t){ext_off.ext_id, ext_off.offset}, btree->node_size);
     
     lock_c2b(c2b);
     set_c2b_uptodate(c2b);
@@ -1560,7 +1565,7 @@ static c2_block_t* castle_btree_effective_node_create(c_bvec_t *c_bvec,
     
     node = c2b_bnode(orig_c2b); 
     btree = castle_btree_type_get(node->type);
-    c2b = castle_btree_node_create(version, node->is_leaf, node->type);
+    c2b = castle_btree_node_create(version, node->is_leaf, c_bvec->tree);
     eff_node = c2b_buffer(c2b);
 
     last_eff_key = btree->inv_key;
@@ -1665,7 +1670,7 @@ static c2_block_t* castle_btree_node_key_split(c_bvec_t *c_bvec, c2_block_t *ori
 
     node     = c2b_bnode(orig_c2b);
     btree    = castle_btree_type_get(node->type);
-    c2b      = castle_btree_node_create(node->version, node->is_leaf, node->type);
+    c2b      = castle_btree_node_create(node->version, node->is_leaf, c_bvec->tree);
     castle_btree_node_save_prepare(c_bvec->tree, c2b->cdb);
     sec_node = c2b_bnode(c2b);
     /* The original node needs to contain the elements from the right hand side
@@ -1806,7 +1811,7 @@ static void castle_btree_new_root_create(c_bvec_t *c_bvec, btree_t type)
             c_bvec->version);
     BUG_ON(c_bvec->btree_parent_node);
     /* Create the node */
-    c2b = castle_btree_node_create(0, 0, type);
+    c2b = castle_btree_node_create(0, 0, c_bvec->tree);
     castle_btree_node_save_prepare(c_bvec->tree, c2b->cdb);
     node = c2b_buffer(c2b);
     /* We should be under write lock here, check if we can read lock it (and BUG) */

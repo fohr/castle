@@ -7,7 +7,6 @@
 #include "castle_utils.h"
 #include "castle.h"
 #include "castle_da.h"
-#include "castle_freespace.h"
 #include "castle_versions.h"
 #include "castle_sysfs.h"
 #include "castle_cache.h"
@@ -99,8 +98,11 @@ static struct castle_version* castle_version_add(version_t version,
     struct castle_version *v;
     
     v = kmem_cache_alloc(castle_versions_cache, GFP_KERNEL);
+#if 0
+    // FIXME - bhaskar
     if(!v || castle_freespace_version_add(version)) 
         goto out_dealloc;
+#endif
     
     debug("Adding: (v, p)=(%d,%d)\n", version, parent);
     

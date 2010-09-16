@@ -3,8 +3,6 @@
 
 #include "castle.h"
 
-#define INV_EXT_ID 0
-
 typedef enum {
     DEFAULT,
     JOURNAL,
@@ -77,7 +75,7 @@ castle_extent_alloc(c_rda_type_t            rda_type,
 
 void 
 castle_extent_free(c_rda_type_t             rda_type,
-                   da_id_t                 da_id,
+                   da_id_t                  da_id,
                    c_ext_id_t               ext_id);
 
 /* Sets @chunks to all physical chunks holding the logical chunks from offset */

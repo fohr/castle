@@ -14,7 +14,6 @@
 #include "castle_versions.h"
 #include "castle_events.h"
 #include "castle_rxrpc.h"
-#include "castle_freespace.h"
 
 //#define DEBUG
 #ifndef DEBUG
@@ -416,6 +415,7 @@ static void castle_control_reply(uint32_t *reply,
     castle_control_reply_process(reply, len, length);
 }
 
+#if 0 // FIXME: bhaskar
 static void castle_control_get_valid_counts(slave_uuid_t slave_uuid, uint32_t *reply, size_t length, size_t *len_p)
 {
     int ret = 0;
@@ -449,6 +449,7 @@ error:
 
     castle_control_reply_process(reply, count, len_p);
 }
+#endif
 
 static void castle_control_get_invalid_counts(slave_uuid_t slave_uuid, uint32_t *reply, size_t length, size_t *len_p)
 {
@@ -696,6 +697,8 @@ int castle_control_packet_process(struct sk_buff *skb, void **reply, size_t *len
             break;
         }
         case CASTLE_CTRL_REQ_VALID_STATS:
+            return -ENOSYS;
+#if 0
         {
             slave_uuid_t slave_uuid;
             
@@ -707,6 +710,7 @@ int castle_control_packet_process(struct sk_buff *skb, void **reply, size_t *len
             
             break;
         }
+#endif
         case CASTLE_CTRL_REQ_INVALID_STATS:
         {
             slave_uuid_t slave_uuid;

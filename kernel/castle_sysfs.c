@@ -8,7 +8,6 @@
 #include "castle_sysfs.h"
 #include "castle_debug.h"
 #include "castle_versions.h"
-#include "castle_freespace.h"
 
 struct castle_sysfs_versions {
     struct kobject kobj;
@@ -88,7 +87,8 @@ static ssize_t versions_list_show(struct kobject *kobj,
     ret = castle_version_read(v->version, NULL, &parent, &size, &leaf);
     if(ret == 0)
     {
-        phys_size = castle_freespace_version_blocks_get(v->version);
+        // FIXME: bhaskar
+        //phys_size = castle_freespace_version_blocks_get(v->version);
         len = sprintf(buf,
                 "Id: 0x%x\n"
                 "ParentId: 0x%x\n"
