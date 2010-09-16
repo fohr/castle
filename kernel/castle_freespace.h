@@ -13,10 +13,10 @@
 void castle_freespace_slaves_init(int fresh_fs);
 
 /* Load on-disk structures into memory */
-int dev_freespace_init(struct castle_slave *cs);
+int castle_freespace_slave_init(struct castle_slave *cs);
 
 /* Free in-memory structures */
-void dev_freespace_close(struct castle_slave *cs);
+void castle_freespace_slave_close(struct castle_slave *cs);
 
 #if 0                                                       
 int          castle_freespace_version_add              (version_t version);
@@ -26,7 +26,7 @@ ssize_t      castle_freespace_version_blocks_get       (version_t version);
 #endif
 
 #if 0
-void dev_freespace_summary_get(struct castle_slave *cs,
+void castle_freespace_summary_get(struct castle_slave *cs,
                                   c_chk_cnt_t         *free_cnt,
                                   c_chk_cnt_t         *size);
 #endif

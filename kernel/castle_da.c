@@ -8,8 +8,7 @@
 #include "castle_btree.h"
 #include "castle_time.h"
 #include "castle_versions.h"
-
-#include "dev_extent.h"
+#include "castle_extent.h"
 
 //#define DEBUG
 #ifndef DEBUG

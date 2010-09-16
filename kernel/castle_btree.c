@@ -11,8 +11,7 @@
 #include "castle_block.h"
 #include "castle_da.h"
 #include "castle_debug.h"
-
-#include "dev_extent.h"
+#include "castle_extent.h"
 
 //#define DEBUG
 #ifndef DEBUG

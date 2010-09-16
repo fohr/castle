@@ -4,8 +4,8 @@
 #include "castle.h"
 #include "castle_debug.h"
 #include "castle_utils.h"
-#include "dev_freespace.h"
-#include "dev_extent.h"
+#include "castle_freespace.h"
+#include "castle_extent.h"
 
 #define DEBUG
 #ifdef DEBUG

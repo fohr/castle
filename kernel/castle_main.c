@@ -24,8 +24,8 @@
 #include "castle_events.h"
 #include "castle_rxrpc.h"
 
-#include "dev_extent.h"
-#include "dev_freespace.h"
+#include "castle_extent.h"
+#include "castle_freespace.h"
 
 struct castle                castle;
 struct castle_slaves         castle_slaves;
@@ -404,7 +404,7 @@ static int castle_slave_superblocks_init(struct castle_slave *cs)
     debug("Before slave init: in_atomic()=%d\n", in_atomic());
     // FIXME: bhaskar
     //castle_freespace_slave_init(cs, cs->new_dev);
-    dev_freespace_init(cs);
+    castle_freespace_slave_init(cs);
     castle_fs_superblock_put(cs, 0);
 
     return ret;
@@ -605,7 +605,7 @@ err_out:
 void castle_release(struct castle_slave *cs)
 {
     castle_rda_slave_remove(DEFAULT, cs);
-    dev_freespace_close(cs);
+    castle_freespace_slave_close(cs);
 
     castle_events_slave_release(cs->uuid);
     castle_sysfs_slave_del(cs);

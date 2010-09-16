@@ -10,8 +10,7 @@
 #include "castle_versions.h"
 #include "castle_rxrpc.h"
 #include "castle_objects.h"
-
-#include "dev_extent.h"
+#include "castle_extent.h"
 
 //#define DEBUG
 #ifndef DEBUG

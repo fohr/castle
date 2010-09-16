@@ -4,7 +4,7 @@
 
 #include "castle.h"
 #include "castle_debug.h"
-#include "dev_extent.h"
+#include "castle_extent.h"
 
 #define DEBUG
 #ifdef DEBUG

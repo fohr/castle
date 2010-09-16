@@ -97,7 +97,7 @@ void castle_freespace_slave_chunk_free(struct castle_slave      *cs,
 sector_t get_bd_capacity(struct block_device *bd);
 
 /* Load on-disk structures into memory */
-int dev_freespace_init(struct castle_slave *cs)
+int castle_freespace_slave_init(struct castle_slave *cs)
 {
     castle_freespace_t *freespace;
     size_t disk_sz = get_bd_capacity(cs->bdev);
@@ -156,7 +156,7 @@ __hell:
     return ret;
 }
 
-void dev_freespace_summary_get(struct castle_slave *cs,
+void castle_freespace_summary_get(struct castle_slave *cs,
                                   c_chk_cnt_t         *free_cnt,
                                   c_chk_cnt_t         *size)
 {
@@ -166,7 +166,7 @@ void dev_freespace_summary_get(struct castle_slave *cs,
     *size       = freespace->disk_size;
 }
 
-void dev_freespace_close(struct castle_slave *cs)
+void castle_freespace_slave_close(struct castle_slave *cs)
 {
     castle_freespace_t *freespace = cs->freespace;
 
