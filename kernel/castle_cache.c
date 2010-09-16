@@ -335,7 +335,7 @@ void __submit_bio(int                         rw,
 int submit_c2b_rda(int rw, c2_block_t *c2b)
 {
     struct castle_slave     *cs;
-    c_ext_off_t              ext_off = (c_ext_off_t){c2b->cdb.disk, c2b->cdb.block};
+    c_ext_pos_t              ext_off = (c_ext_pos_t){c2b->cep.ext_id, c2b->cep.offset};
     c_disk_chk_t            *chunks;
     uint32_t                 k_factor, i, j;
     uint32_t                 nr_chunks;
@@ -449,7 +449,7 @@ int submit_c2b(int rw, c2_block_t *c2b)
 
 	BUG_ON(!c2b_locked(c2b));
 	BUG_ON(!c2b->end_io);
-    BUG_ON(DISK_BLK_INVAL(c2b->cdb));
+    BUG_ON(EXT_POS_INVAL(c2b->cep));
     
     if (rw == READ)
         atomic_inc(&castle_cache_read_stats);
@@ -459,7 +459,7 @@ int submit_c2b(int rw, c2_block_t *c2b)
     if (c2b->is_ext)
         return submit_c2b_rda(rw, c2b);
     
-    cs = castle_slave_find_by_block(c2b->cdb);
+    cs = castle_slave_find_by_block(c2b->cep);
     if(!cs) return -ENODEV;
 
     i = 0;
@@ -474,7 +474,7 @@ int submit_c2b(int rw, c2_block_t *c2b)
         i++;
     }
 
-	bio->bi_sector = (sector_t)(c2b->cdb.block * (C_BLK_SIZE >> 9));
+	bio->bi_sector = (sector_t)(c2b->cep.offset * (C_BLK_SIZE >> 9));
 	bio->bi_bdev = cs->bdev;
 	bio->bi_vcnt = c2b->nr_pages;
 	bio->bi_idx = 0;
@@ -518,37 +518,37 @@ int submit_c2b_sync(int rw, c2_block_t *c2b)
     return !c2b_uptodate(c2b);
 }
 
-static inline int castle_cache_hash_idx(c_disk_blk_t cdb)
+static inline int castle_cache_hash_idx(c_ext_pos_t  cep)
 {
-    return (cdb.block % castle_cache_hash_buckets);
+    return (cep.offset % castle_cache_hash_buckets);
 }
 
-static c2_block_t* castle_cache_hash_find(c_disk_blk_t cdb)
+static c2_block_t* castle_cache_hash_find(c_ext_pos_t  cep)
 {
     struct list_head *lh;
     c2_block_t *c2b;
     int idx;
 
-    idx = castle_cache_hash_idx(cdb);
+    idx = castle_cache_hash_idx(cep);
     debug("Idx = %d\n", idx);
     list_for_each(lh, &castle_cache_hash[idx])
     {
         debug("Checking list element.\n");
         c2b = list_entry(lh, c2_block_t, list);
-        if(DISK_BLK_EQUAL(c2b->cdb, cdb))
+        if(EXT_POS_EQUAL(c2b->cep, cep))
             return c2b;
     }
 
     return NULL;
 }
 
-static c2_block_t* castle_cache_hash_get(c_disk_blk_t cdb)
+static c2_block_t* castle_cache_hash_get(c_ext_pos_t  cep)
 {
     c2_block_t *c2b = NULL;
 
     spin_lock_irq(&castle_cache_hash_lock);
     /* Try to find in the hash first */
-    c2b = castle_cache_hash_find(cdb);
+    c2b = castle_cache_hash_find(cep);
     /* If found, get a reference to make sure c2b doesn't get removed.
        Move to the tail of dirty/clean list to get LRU(-like) behaviour. */
     if(c2b) 
@@ -571,10 +571,10 @@ static int castle_cache_hash_insert(c2_block_t *c2b)
     spin_lock_irq(&castle_cache_hash_lock);
     /* Check if already in the hash */
     success = 0;
-    if(castle_cache_hash_find(c2b->cdb)) goto out;
+    if(castle_cache_hash_find(c2b->cep)) goto out;
     /* Insert */
     success = 1;
-    idx = castle_cache_hash_idx(c2b->cdb);
+    idx = castle_cache_hash_idx(c2b->cep);
     list_add(&c2b->list, &castle_cache_hash[idx]);
     if(c2b_dirty(c2b))
     {
@@ -698,7 +698,7 @@ static inline void castle_cache_fast_vunmap(void *vaddr, int nr_pages)
 }
 
 static void castle_cache_block_init(c2_block_t *c2b,
-                                    c_disk_blk_t cdb, 
+                                    c_ext_pos_t  cep, 
                                     struct list_head *pages,
                                     int nr_pages)
 {
@@ -712,7 +712,7 @@ static void castle_cache_block_init(c2_block_t *c2b,
     BUG_ON(atomic_read(&c2b->count) != 0);
     c2b->is_ext = 1;
     atomic_set(&c2b->remaining, 0);
-    c2b->cdb = cdb;
+    c2b->cep = cep;
     c2b->state = INIT_C2B_BITS;
     c2b->nr_pages = nr_pages;
     list_splice(pages, &c2b->pages);
@@ -839,7 +839,7 @@ static void castle_cache_page_freelist_grow(int nr_pages)
     debug("Grown the list.\n");
 }
 
-c2_block_t* castle_cache_block_get(c_disk_blk_t cdb, int nr_pages)
+c2_block_t* castle_cache_block_get(c_ext_pos_t  cep, int nr_pages)
 {
     c2_block_t *c2b;
     struct list_head pages;
@@ -848,10 +848,10 @@ c2_block_t* castle_cache_block_get(c_disk_blk_t cdb, int nr_pages)
     might_sleep();
     for(;;)
     {
-        debug("Trying to find buffer for cdb=(0x%x, 0x%x)\n",
-            cdb.disk, cdb.block);
+        debug("Trying to find buffer for cep=(0x%x, 0x%x)\n",
+            cep.ext_id, cep.offset);
         /* Try to find in the hash first */
-        c2b = castle_cache_hash_get(cdb); 
+        c2b = castle_cache_hash_get(cep); 
         debug("Found in hash: %p\n", c2b);
         if(c2b) 
         {
@@ -876,7 +876,7 @@ c2_block_t* castle_cache_block_get(c_disk_blk_t cdb, int nr_pages)
         /* Initialise the buffer */
         c2b = castle_cache_block_freelist_get();
         debug("Initialisng the c2b: %p\n", c2b);
-        castle_cache_block_init(c2b, cdb, &pages, nr_pages);
+        castle_cache_block_init(c2b, cep, &pages, nr_pages);
         get_c2b(c2b);
         /* Try to insert into the hash, can fail if it is already there */
         debug("Trying to insert\n");
@@ -1101,7 +1101,7 @@ static void castle_cache_hash_fini(void)
             if((atomic_read(&c2b->count) != 0) || c2b_locked(c2b))
             {
                 printk("(disk,block)=(0x%x, 0x%x) not dropped count=%d, locked=%d.\n",
-                    c2b->cdb.disk, c2b->cdb.block, atomic_read(&c2b->count), c2b_locked(c2b));
+                    c2b->cep.ext_id, c2b->cep.offset, atomic_read(&c2b->count), c2b_locked(c2b));
 #ifdef CASTLE_DEBUG
                 if(c2b_locked(c2b))
                     printk("Locked from: %s:%d\n", c2b->file, c2b->line);
@@ -1315,7 +1315,7 @@ again:
     {
         debug_mstore("Next node.\n");
         /* Update the node_c2 field appropriately */
-        if(!DISK_BLK_INVAL(node->next))
+        if(!EXT_POS_INVAL(node->next))
         {
             debug_mstore("Node exists.\n");
             /* If next block exist, make sure the current one is full */
@@ -1332,7 +1332,7 @@ again:
         /* For the sole benefit of initialising the store */
         {
             down(&iter->store->mutex);
-            iter->store->last_node_cdb    = iter->node_c2b->cdb;
+            iter->store->last_node_cep    = iter->node_c2b->cep;
             iter->store->last_node_unused = node->capacity - node->used;
             up(&iter->store->mutex);
             debug_mstore("End of the list, last_node_unused=%d.\n", 
@@ -1381,10 +1381,10 @@ void castle_mstore_iterator_next(struct castle_mstore_iter *iter,
     }
     if(key)
     {
-        key->cdb = iter->node_c2b->cdb;
+        key->cep = iter->node_c2b->cep;
         key->idx = iter->node_idx;
-        debug_mstore("Key: cdb=(0x%x, 0x%x), idx=%d.\n", 
-                key->cdb.disk, key->cdb.block, key->idx);
+        debug_mstore("Key: cep=(0x%x, 0x%x), idx=%d.\n", 
+                key->cep.ext_id, key->cep.offset, key->idx);
     }
     debug_mstore("Advancing the iterator.\n"); 
     castle_mstore_iterator_advance(iter);
@@ -1407,7 +1407,7 @@ struct castle_mstore_iter* castle_mstore_iterate(struct castle_mstore *store)
 {
     struct castle_fs_superblock *fs_sb;
     struct castle_mstore_iter *iter;
-    c_disk_blk_t list_cdb;
+    c_ext_pos_t  list_cep;
 
     debug_mstore("Creating the iterator.\n"); 
     iter = castle_zalloc(sizeof(struct castle_mstore_iter), GFP_KERNEL);
@@ -1416,16 +1416,16 @@ struct castle_mstore_iter* castle_mstore_iterate(struct castle_mstore *store)
 
     iter->store = store;
     fs_sb = castle_fs_superblocks_get(); 
-    list_cdb = fs_sb->mstore[store->store_id];
+    list_cep = fs_sb->mstore[store->store_id];
     castle_fs_superblocks_put(fs_sb, 0); 
     debug_mstore("Read first list node for mstore %d, got (0x%x, 0x%x)\n",
-                    store->store_id, list_cdb.disk, list_cdb.block);
-    if(DISK_BLK_INVAL(list_cdb))
+                    store->store_id, list_cep.ext_id, list_cep.offset);
+    if(EXT_POS_INVAL(list_cep))
         return NULL;
-    iter->node_c2b = castle_cache_page_block_get(list_cdb);
+    iter->node_c2b = castle_cache_page_block_get(list_cep);
     iter->node_idx = -1;
     debug_mstore("Locknig the first node (0x%x, 0x%x)\n",
-            iter->node_c2b->cdb.disk, iter->node_c2b->cdb.block);
+            iter->node_c2b->cep.ext_id, iter->node_c2b->cep.offset);
     lock_c2b(iter->node_c2b);
     if(!c2b_uptodate(iter->node_c2b)) 
         BUG_ON(submit_c2b_sync(READ, iter->node_c2b));
@@ -1445,7 +1445,7 @@ static void castle_mstore_node_add(struct castle_mstore *store)
     struct castle_mlist_node *node, *prev_node;
     struct castle_fs_superblock *fs_sb;
     c2_block_t *c2b, *prev_c2b;
-    c_disk_blk_t cdb;
+    c_ext_pos_t  cep;
     
     debug_mstore("Adding a node.\n");
     /* Check if mutex is locked */
@@ -1453,10 +1453,10 @@ static void castle_mstore_node_add(struct castle_mstore *store)
 
     // FIXME: bhaskar
     /* Prepare the node first */
-    cdb.disk  = castle_extent_alloc(DEFAULT, 0, 1);
-    cdb.block = 0;
-    c2b = castle_cache_page_block_get(cdb);
-    debug_mstore("Allocated (0x%x, 0x%x).\n", cdb.disk, cdb.block);
+    cep.ext_id  = castle_extent_alloc(DEFAULT, 0, 1);
+    cep.offset = 0;
+    c2b = castle_cache_page_block_get(cep);
+    debug_mstore("Allocated (0x%x, 0x%x).\n", cep.ext_id, cep.offset);
     lock_c2b(c2b);
     set_c2b_uptodate(c2b);
     debug_mstore("Locked.\n");
@@ -1466,35 +1466,35 @@ static void castle_mstore_node_add(struct castle_mstore *store)
     node->magic     = MLIST_NODE_MAGIC;
     node->capacity  = (PAGE_SIZE - sizeof(struct castle_mlist_node)) / store->entry_size;
     node->used      = 0;
-    node->next      = INVAL_DISK_BLK;
+    node->next      = INVAL_EXT_POS;
     dirty_c2b(c2b);
     debug_mstore("Inited the node.\n");
     /* Update relevant pointers to point to us (either FS superblock, or prev node) */
-    if(DISK_BLK_INVAL(store->last_node_cdb))
+    if(EXT_POS_INVAL(store->last_node_cep))
     {
         debug_mstore("Linking into the superblock.\n");
         fs_sb = castle_fs_superblocks_get(); 
-        BUG_ON(!DISK_BLK_INVAL(fs_sb->mstore[store->store_id]));
-        fs_sb->mstore[store->store_id] = cdb;
+        BUG_ON(!EXT_POS_INVAL(fs_sb->mstore[store->store_id]));
+        fs_sb->mstore[store->store_id] = cep;
         castle_fs_superblocks_put(fs_sb, 1); 
     } else
     {
-        prev_c2b = castle_cache_page_block_get(store->last_node_cdb);
+        prev_c2b = castle_cache_page_block_get(store->last_node_cep);
         debug_mstore("Linking into the prev node (0x%x, 0x%x).\n", 
-                prev_c2b->cdb.disk, prev_c2b->cdb.block);
+                prev_c2b->cep.ext_id, prev_c2b->cep.offset);
         lock_c2b(prev_c2b);
         if(!c2b_uptodate(prev_c2b))
             BUG_ON(submit_c2b_sync(READ, prev_c2b));
         debug_mstore("Read prev node.\n"); 
         prev_node = c2b_buffer(prev_c2b);
-        prev_node->next = cdb;
+        prev_node->next = cep;
         dirty_c2b(prev_c2b);
         unlock_c2b(prev_c2b);
         put_c2b(prev_c2b);
     }
     debug_mstore("Updating the saved last node.\n"); 
     /* Finally, save this node as the last node */
-    store->last_node_cdb    = cdb;
+    store->last_node_cep    = cep;
     store->last_node_unused = node->capacity; 
     unlock_c2b(c2b);
     put_c2b(c2b);
@@ -1509,8 +1509,8 @@ static void castle_mstore_entry_mod(struct castle_mstore *store,
     c2_block_t *node_c2b;
     
     debug_mstore("Modifying an entry in (0x%x, 0x%x), idx=%d, %s.\n",
-            key.cdb.disk, key.cdb.block, key.idx, entry ? "updating" : "deleting"); 
-    node_c2b = castle_cache_page_block_get(key.cdb);
+            key.cep.ext_id, key.cep.offset, key.idx, entry ? "updating" : "deleting"); 
+    node_c2b = castle_cache_page_block_get(key.cep);
     lock_c2b(node_c2b);
     if(!c2b_uptodate(node_c2b))
         BUG_ON(submit_c2b_sync(READ, node_c2b));
@@ -1525,7 +1525,7 @@ static void castle_mstore_entry_mod(struct castle_mstore *store,
         if(mentry->flags & CASTLE_MSTORE_ENTRY_DELETED)
         {
             printk("WARNING: updating removed mstore entry for mstore=%d, key=((0x%x, 0x%x), %d)\n",
-                    store->store_id, key.cdb.disk, key.cdb.block, key.idx);
+                    store->store_id, key.cep.ext_id, key.cep.offset, key.idx);
             mentry->flags &= ~CASTLE_MSTORE_ENTRY_DELETED;
         }
         memcpy(mentry->payload,
@@ -1565,13 +1565,13 @@ c_mstore_key_t castle_mstore_entry_insert(struct castle_mstore *store,
     BUG_ON(store->last_node_unused <= 0);
     /* Write the entry to the last node */
     debug_mstore("Reading last node (0x%x, 0x%x).\n",
-            store->last_node_cdb.disk, store->last_node_cdb.block);
-    c2b = castle_cache_page_block_get(store->last_node_cdb);
+            store->last_node_cep.ext_id, store->last_node_cep.offset);
+    c2b = castle_cache_page_block_get(store->last_node_cep);
     lock_c2b(c2b);
     if(!c2b_uptodate(c2b))
         BUG_ON(submit_c2b_sync(READ, c2b));
     node = c2b_buffer(c2b);
-    key.cdb = c2b->cdb;
+    key.cep = c2b->cep;
     key.idx = node->used;
     debug_mstore("Writing out under idx=%d.\n", key.idx);
     mentry = castle_mstore_entry_get(store, node, key.idx);
@@ -1608,7 +1608,7 @@ static struct castle_mstore *castle_mstore_alloc(c_mstore_id_t store_id, size_t 
     store->store_id         = store_id;
     store->entry_size       = entry_size + sizeof(struct castle_mstore_entry);
     init_MUTEX(&store->mutex);
-    store->last_node_cdb    = INVAL_DISK_BLK; 
+    store->last_node_cep    = INVAL_EXT_POS; 
     store->last_node_unused = -1;
     debug_mstore("Done.\n");
 
@@ -1623,7 +1623,7 @@ struct castle_mstore* castle_mstore_open(c_mstore_id_t store_id, size_t entry_si
 
     debug_mstore("Opening mstore.\n");
     /* Sanity check, to see if store_id isn't too large. */
-    if(store_id >= sizeof(fs_sb->mstore) / sizeof(c_disk_blk_t))
+    if(store_id >= sizeof(fs_sb->mstore) / sizeof(c_ext_pos_t ))
     {
         printk("Asked for mstore id=%d, this is too large.\n", store_id);
         return NULL;
@@ -1634,7 +1634,7 @@ struct castle_mstore* castle_mstore_open(c_mstore_id_t store_id, size_t entry_si
         return NULL;
     /* Inefficient, because we read all the data to get to the last node,
        but mstores are expected to be small.
-       The iterator will initialise last_node_{cdb,unused} */
+       The iterator will initialise last_node_{cep,unused} */
     debug_mstore("Iterating to find last node.\n");
     iterator = castle_mstore_iterate(store);
     if(!iterator)
@@ -1657,7 +1657,7 @@ struct castle_mstore* castle_mstore_init(c_mstore_id_t store_id, size_t entry_si
 
     debug_mstore("Opening mstore id=%d.\n", store_id);
     /* Sanity check, to see if store_id isn't too large. */
-    if(store_id >= sizeof(fs_sb->mstore) / sizeof(c_disk_blk_t))
+    if(store_id >= sizeof(fs_sb->mstore) / sizeof(c_ext_pos_t ))
     {
         printk("Asked for mstore id=%d, this is too large.\n", store_id);
         return NULL;

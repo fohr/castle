@@ -233,12 +233,12 @@ static int castle_debug_run(void *unused)
     struct list_head *l;
     int something_printed, j, nr_bios;
     unsigned long flags, states_printed;
-    int cdb_idx;
+    int cep_idx;
     int sleep_time = 10;
 
     do {
         spin_lock_irqsave(&bio_list_spinlock, flags);
-        cdb_idx = 0;
+        cep_idx = 0;
         states_printed = 0;
         something_printed = 0;
         nr_bios = 0;
@@ -287,7 +287,7 @@ static int castle_debug_run(void *unused)
                     c2_block_t *c2b = c_bvec->locking;
 
                     printk("Blocked on locking c2b for (0x%x, 0x%x).\n",
-                        c2b->cdb.disk, c2b->cdb.block);
+                        c2b->cep.ext_id, c2b->cep.offset);
                     if(c2b->file != NULL)
                         printk("c2b last locked from: %s:%d\n", c2b->file, c2b->line);
                     else

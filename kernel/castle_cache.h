@@ -9,7 +9,7 @@ enum c2b_state_bits {
 #define INIT_C2B_BITS (0)
 
 typedef struct castle_cache_block {
-    c_disk_blk_t          cdb;
+    c_ext_pos_t           cep;
     //c_ext_off_t           ext_off; /* Offset inside an extent */
     int                   is_ext; /* C2B is extent based or not */
     atomic_t              remaining;
@@ -108,9 +108,9 @@ static inline void put_c2b(c2_block_t *c2b)
 /* The 'interesting' cache interface functions */
 int         submit_c2b                (int rw, c2_block_t *c2b);
 int         submit_c2b_sync           (int rw, c2_block_t *c2b);
-#define     castle_cache_page_block_get(_cdb) \
-            castle_cache_block_get    (_cdb, 1)
-c2_block_t* castle_cache_block_get    (c_disk_blk_t cdb, int nr_pages);
+#define     castle_cache_page_block_get(_cep) \
+            castle_cache_block_get    (_cep, 1)
+c2_block_t* castle_cache_block_get    (c_ext_pos_t  cep, int nr_pages);
 void        castle_cache_flush_wakeup (void);
 
 /* MStore related functions */ 

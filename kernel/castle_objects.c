@@ -592,11 +592,11 @@ static void castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
             BUG_ON(nr_blocks > 100); 
             cvt->type   = CVT_TYPE_ONDISK;
             // FIXME: bhaskar
-            cvt->cdb.disk = castle_extent_alloc(DEFAULT, c_bvec->tree->da, 1);
-            cvt->cdb.block = 0;
-            //cvt->cdb    = castle_freespace_block_get(c_bvec->version, nr_blocks); 
+            cvt->cep.ext_id = castle_extent_alloc(DEFAULT, c_bvec->tree->da, 1);
+            cvt->cep.offset = 0;
+            //cvt->cep    = castle_freespace_block_get(c_bvec->version, nr_blocks); 
             /* TODO: Again, work out how to handle failed allocations */ 
-            BUG_ON(DISK_BLK_INVAL(cvt->cdb));
+            BUG_ON(EXT_POS_INVAL(cvt->cep));
          }
 
     } else
@@ -611,7 +611,7 @@ static void castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
         nr_blocks = (prev_cvt.length - 1) / C_BLK_SIZE + 1; 
         /* FIXME: bhaskar - Free old object */
 #if 0
-        castle_freespace_block_free(prev_cvt.cdb,
+        castle_freespace_block_free(prev_cvt.cep,
                                     c_bvec->version,
                                     nr_blocks);
 #endif
@@ -655,11 +655,11 @@ static void castle_object_replace_multi_cvt_get(c_bvec_t    *c_bvec,
 
 #define OBJ_IO_MAX_BUFFER_SIZE      (10)    /* In C_BLK_SIZE blocks */
 
-static c_disk_blk_t castle_object_write_next_cdb(c_disk_blk_t old_cdb,
+static c_ext_pos_t  castle_object_write_next_cep(c_ext_pos_t  old_cep,
                                                  uint32_t data_length)
 {
     uint32_t data_c2b_length;
-    c_disk_blk_t new_data_cdb;
+    c_ext_pos_t  new_data_cep;
     int nr_blocks;
 
     /* Work out how large buffer to allocate */
@@ -669,13 +669,13 @@ static c_disk_blk_t castle_object_write_next_cdb(c_disk_blk_t old_cdb,
     nr_blocks = (data_c2b_length - 1) / C_BLK_SIZE + 1; 
     debug("Allocating new buffer of size %d blocks, for data_length=%d\n",
         nr_blocks, data_length);
-    new_data_cdb.disk  = old_cdb.disk; 
-    new_data_cdb.block = old_cdb.block + nr_blocks; 
+    new_data_cep.ext_id  = old_cep.ext_id; 
+    new_data_cep.offset = old_cep.offset + nr_blocks; 
 
-    return new_data_cdb;
+    return new_data_cep;
 }
 
-static c2_block_t* castle_object_write_buffer_alloc(c_disk_blk_t new_data_cdb,
+static c2_block_t* castle_object_write_buffer_alloc(c_ext_pos_t  new_data_cep,
                                                     uint32_t data_length)
 {
     uint32_t data_c2b_length;
@@ -687,7 +687,7 @@ static c2_block_t* castle_object_write_buffer_alloc(c_disk_blk_t new_data_cdb,
                                     OBJ_IO_MAX_BUFFER_SIZE * C_BLK_SIZE :
                                     data_length;
     nr_blocks = (data_c2b_length - 1) / C_BLK_SIZE + 1; 
-    new_data_c2b = castle_cache_block_get(new_data_cdb, nr_blocks);
+    new_data_c2b = castle_cache_block_get(new_data_cep, nr_blocks);
     lock_c2b(new_data_c2b);
     set_c2b_uptodate(new_data_c2b);
 #ifdef CASTLE_DEBUG        
@@ -703,7 +703,7 @@ static int castle_object_data_write(struct castle_object_replace *replace)
     c2_block_t *data_c2b;
     uint32_t data_c2b_offset, data_c2b_length, data_length, packet_length;
     c2_block_t *new_data_c2b;
-    c_disk_blk_t new_data_cdb;
+    c_ext_pos_t  new_data_cep;
 
     /* Work out how much data we've got, and how far we've got so far */
     data_c2b = replace->data_c2b;
@@ -755,8 +755,8 @@ static int castle_object_data_write(struct castle_object_replace *replace)
         if((data_c2b_offset == data_c2b_length) && (data_length > 0))
         {
             debug("Run out of buffer space, allocating a new one.\n");
-            new_data_cdb = castle_object_write_next_cdb(data_c2b->cdb, data_length); 
-            new_data_c2b = castle_object_write_buffer_alloc(new_data_cdb, data_length); 
+            new_data_cep = castle_object_write_next_cep(data_c2b->cep, data_length); 
+            new_data_c2b = castle_object_write_buffer_alloc(new_data_cep, data_length); 
             data_c2b_length = new_data_c2b->nr_pages * C_BLK_SIZE;
             data_c2b_offset = 0;
             /* Release the (old) buffer */
@@ -810,7 +810,7 @@ void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
     if(CVT_ONDISK(cvt))
     {
         BUG_ON(c_bvec_data_del(c_bvec));
-        c2b = castle_object_write_buffer_alloc(cvt.cdb, cvt.length); 
+        c2b = castle_object_write_buffer_alloc(cvt.cep, cvt.length); 
         
         replace->data_c2b = c2b;
         replace->data_c2b_offset = 0;
@@ -1084,7 +1084,7 @@ int castle_object_slice_get(struct castle_rxrpc_call *call,
                (never, if replaced with iterators?) */
             BUG_ON(cvt.length > C_BLK_SIZE); 
             nr_blocks = (cvt.length - 1) / C_BLK_SIZE + 1;
-            data_c2b = castle_cache_block_get(cvt.cdb, nr_blocks);
+            data_c2b = castle_cache_block_get(cvt.cep, nr_blocks);
             lock_c2b(data_c2b);
             if(!c2b_uptodate(data_c2b)) 
                 BUG_ON(submit_c2b_sync(READ, data_c2b));
@@ -1160,7 +1160,7 @@ int castle_object_slice_get(struct castle_rxrpc_call *call,
 
 void castle_object_get_continue(struct castle_bio_vec *c_bvec,
                                 struct castle_rxrpc_call *call,
-                                c_disk_blk_t data_cdb,
+                                c_ext_pos_t  data_cep,
                                 uint32_t data_length);
 void __castle_object_get_complete(struct work_struct *work)
 {
@@ -1168,13 +1168,13 @@ void __castle_object_get_complete(struct work_struct *work)
     struct castle_rxrpc_call *call = c_bvec->c_bio->rxrpc_call;
     c2_block_t *c2b;
     uint32_t data_c2b_length, data_length;
-    c_disk_blk_t cdb;
+    c_ext_pos_t  cep;
     int first, last;
 
     castle_rxrpc_get_call_get(call, &c2b, &data_c2b_length, &data_length, &first);
-    debug("Get complete for call %p, first=%d, c2b->cdb=(0x%x, 0x%x), "
+    debug("Get complete for call %p, first=%d, c2b->cep=(0x%x, 0x%x), "
            "data_c2b_length=%d, data_length=%d\n", 
-        call, first, c2b->cdb.disk, c2b->cdb.block, data_c2b_length, data_length);
+        call, first, c2b->cep.ext_id, c2b->cep.offset, data_c2b_length, data_length);
     /* Deal with error case first */
     if(!c2b_uptodate(c2b))
     {
@@ -1206,20 +1206,20 @@ void __castle_object_get_complete(struct work_struct *work)
         goto out;
         
     BUG_ON(data_c2b_length != OBJ_IO_MAX_BUFFER_SIZE * C_BLK_SIZE);
-    cdb.disk  = c2b->cdb.disk;
-    cdb.block = c2b->cdb.block + OBJ_IO_MAX_BUFFER_SIZE;
-    debug("Continuing for cdb=(0x%x, 0x%x)\n", cdb.disk, cdb.block);   
+    cep.ext_id  = c2b->cep.ext_id;
+    cep.offset = c2b->cep.offset + OBJ_IO_MAX_BUFFER_SIZE;
+    debug("Continuing for cep=(0x%x, 0x%x)\n", cep.ext_id, cep.offset);   
     /* TODO: Work out if we don't go into unbound recursion here */
     castle_rxrpc_get_call_set(call, c2b, data_c2b_length, data_length, 0 /* not first any more */);
     castle_object_get_continue(c_bvec,
                                call,
-                               cdb,
+                               cep,
                                data_length);
     return;
 
 out:    
-    debug("Finishing with call %p, putting c2b->cdb=(0x%x, 0x%x)\n",
-        call, c2b->cdb.disk, c2b->cdb.block);
+    debug("Finishing with call %p, putting c2b->cep=(0x%x, 0x%x)\n",
+        call, c2b->cep.ext_id, c2b->cep.offset);
     unlock_c2b(c2b);
     put_c2b(c2b);
 
@@ -1238,8 +1238,8 @@ void castle_object_get_io_end(c2_block_t *c2b, int uptodate)
     castle_rxrpc_get_call_get(call, &data_c2b, &data_c2b_length, &data_length, &first); 
     BUG_ON(c2b != data_c2b);
 #endif
-    debug("IO end for cdb (0x%x, 0x%x), uptodate=%d\n", 
-            c2b->cdb.disk, c2b->cdb.block, uptodate);
+    debug("IO end for cep (0x%x, 0x%x), uptodate=%d\n", 
+            c2b->cep.ext_id, c2b->cep.offset, uptodate);
     if(uptodate)
         set_c2b_uptodate(c2b);
 
@@ -1249,7 +1249,7 @@ void castle_object_get_io_end(c2_block_t *c2b, int uptodate)
 
 void castle_object_get_continue(struct castle_bio_vec *c_bvec,
                                 struct castle_rxrpc_call *call,
-                                c_disk_blk_t data_cdb,
+                                c_ext_pos_t  data_cep,
                                 uint32_t data_length)
 {
     c2_block_t *c2b, *old_c2b;
@@ -1264,8 +1264,8 @@ void castle_object_get_continue(struct castle_bio_vec *c_bvec,
     BUG_ON(data_length != old_data_length);
     /* If old_c2b exists, we must have completed a MAX chunk */
     BUG_ON( old_c2b &&
-           (old_c2b->cdb.disk != data_cdb.disk) &&
-           (old_c2b->cdb.block + OBJ_IO_MAX_BUFFER_SIZE != data_cdb.block));
+           (old_c2b->cep.ext_id != data_cep.ext_id) &&
+           (old_c2b->cep.offset + OBJ_IO_MAX_BUFFER_SIZE != data_cep.offset));
 
     nr_blocks = (data_length - 1) / C_BLK_SIZE + 1; 
     debug("Nr blocks required for entire data: %d\n", nr_blocks);
@@ -1283,14 +1283,14 @@ void castle_object_get_continue(struct castle_bio_vec *c_bvec,
     debug("data_c2b_length=%d, data_length=%d\n", data_c2b_length, data_length);
     data_length -= data_c2b_length; 
     
-    debug("Locking cdb (0x%x, 0x%x)\n", data_cdb.disk, data_cdb.block);
-    c2b = castle_cache_block_get(data_cdb, nr_blocks);
+    debug("Locking cep (0x%x, 0x%x)\n", data_cep.ext_id, data_cep.offset);
+    c2b = castle_cache_block_get(data_cep, nr_blocks);
     lock_c2b(c2b);
     castle_rxrpc_get_call_set(call, c2b, data_c2b_length, data_length, first);
     /* Unlock the old c2b if we had one */
     if(old_c2b)
     {
-        debug("Unlocking old_cdb (0x%x, 0x%x)\n", old_c2b->cdb.disk, old_c2b->cdb.block);
+        debug("Unlocking old_cep (0x%x, 0x%x)\n", old_c2b->cep.ext_id, old_c2b->cep.offset);
         unlock_c2b(old_c2b);
         put_c2b(old_c2b);
     }
@@ -1350,7 +1350,7 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
     /* Init the variables stored in the call correctly, so that _continue() doesn't
        get confused */
     castle_rxrpc_get_call_set(call, NULL, 0, cvt.length, 1 /* first */);
-    castle_object_get_continue(c_bvec, call, cvt.cdb, cvt.length);
+    castle_object_get_continue(c_bvec, call, cvt.cep, cvt.length);
 }
 
 int castle_object_get(struct castle_rxrpc_call *call, 

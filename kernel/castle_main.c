@@ -39,9 +39,9 @@ struct castle_component_tree castle_global_tree = {.seq             = GLOBAL_TRE
                                                    .da              = INVAL_DA,
                                                    .level           = -1, 
                                                    .tree_depth      = -1,
-                                                   .root_node       = INVAL_DISK_BLK,
-                                                   .first_node      = INVAL_DISK_BLK,
-                                                   .last_node       = INVAL_DISK_BLK,
+                                                   .root_node       = INVAL_EXT_POS,
+                                                   .first_node      = INVAL_EXT_POS,
+                                                   .last_node       = INVAL_EXT_POS,
                                                    .node_count      = {0ULL},
                                                    .da_list         = {NULL, NULL},
                                                    .hash_list       = {NULL, NULL},
@@ -92,8 +92,8 @@ static void castle_fs_superblock_init(struct castle_fs_superblock *fs_sb)
     fs_sb->magic3 = CASTLE_FS_MAGIC3;
     get_random_bytes(&fs_sb->salt,  sizeof(fs_sb->salt));
     get_random_bytes(&fs_sb->peper, sizeof(fs_sb->peper));
-    for(i=0; i<sizeof(fs_sb->mstore) / sizeof(c_disk_blk_t); i++)
-        fs_sb->mstore[i] = INVAL_DISK_BLK;
+    for(i=0; i<sizeof(fs_sb->mstore) / sizeof(c_ext_pos_t ); i++)
+        fs_sb->mstore[i] = INVAL_EXT_POS;
 }
 
 static void castle_fs_superblocks_init(void)
@@ -216,9 +216,9 @@ int castle_fs_init(void)
         atomic64_set(&(castle_global_tree.node_count), 0);
         init_rwsem(&castle_global_tree.lock);
         c2b = castle_btree_node_create(0 /* version */, 1 /* is_leaf */, &castle_global_tree);
-        castle_btree_node_save_prepare(&castle_global_tree, c2b->cdb);
+        castle_btree_node_save_prepare(&castle_global_tree, c2b->cep);
         /* Save the root node in the global tree */
-        castle_global_tree.root_node = c2b->cdb; 
+        castle_global_tree.root_node = c2b->cep; 
         /* We know that the tree is 1 level deep at the moment */
         castle_global_tree.tree_depth = 1;
         /* Release btree node c2b */
@@ -329,7 +329,7 @@ static int castle_slave_superblocks_cache(struct castle_slave *cs)
 /* NOTE: This function leaves superblocks locked. This prevents init races */
 {
     c2_block_t *c2b, **c2bp[2];
-    c_disk_blk_t cdb;
+    c_ext_pos_t  cep;
     block_t i, j;
 
     /* We want to read the first two 4K blocks of the slave device
@@ -340,9 +340,9 @@ static int castle_slave_superblocks_cache(struct castle_slave *cs)
     for(i=0; i<2; i++)
     {
         /* Read the superblock */
-        cdb.disk  = cs->uuid;
-        cdb.block = i;
-        c2b = castle_cache_page_block_get(cdb);
+        cep.ext_id  = cs->uuid;
+        cep.offset = i;
+        c2b = castle_cache_page_block_get(cep);
         c2b->is_ext = 0;
         *(c2bp[i]) = c2b;
         /* We expecting the buffer not to be up to date. 
@@ -440,9 +440,9 @@ struct castle_slave* castle_slave_find_by_uuid(uint32_t uuid)
     return NULL;
 }
 
-struct castle_slave* castle_slave_find_by_block(c_disk_blk_t cdb)
+struct castle_slave* castle_slave_find_by_block(c_ext_pos_t  cep)
 {
-    return castle_slave_find_by_uuid(cdb.disk);
+    return castle_slave_find_by_uuid(cep.ext_id);
 }
 
 static int castle_slave_add(struct castle_slave *cs)
@@ -472,7 +472,7 @@ void do_extents(void)
 
     ext_id = castle_extent_alloc(DEFAULT, 0, 11);
 
-    c2b = castle_cache_block_get((c_disk_blk_t){ext_id, 2 * C_BLK_SIZE}, BLKS_PER_CHK);
+    c2b = castle_cache_block_get((c_ext_pos_t ){ext_id, 2 * C_BLK_SIZE}, BLKS_PER_CHK);
     c2b->is_ext = 1;
     lock_c2b(c2b);
     if(!c2b_uptodate(c2b))
@@ -811,7 +811,7 @@ static void castle_bio_c2b_update(c2_block_t *c2b, int uptodate)
     }
 }
 
-static void castle_bio_data_io_do(c_bvec_t *c_bvec, c_disk_blk_t cdb)
+static void castle_bio_data_io_do(c_bvec_t *c_bvec, c_ext_pos_t  cep)
 {
     c2_block_t *c2b;
     int write = (c_bvec_data_dir(c_bvec) == WRITE);
@@ -822,7 +822,7 @@ static void castle_bio_data_io_do(c_bvec_t *c_bvec, c_disk_blk_t cdb)
      * This should not happen on writes, since btree handling code should have 
      * allocated a new block (TODO: what if we've just run out of capacity ...)
      */
-    if(DISK_BLK_INVAL(cdb))
+    if(EXT_POS_INVAL(cep))
     {
         castle_debug_bvec_update(c_bvec, C_BVEC_DATA_IO_NO_BLK);
         BUG_ON(write);
@@ -832,10 +832,10 @@ static void castle_bio_data_io_do(c_bvec_t *c_bvec, c_disk_blk_t cdb)
 
 #if 0 // FIXME: bhaskar
     /* Save last_access time in the slave */
-    castle_slave_access(cdb.disk);
+    castle_slave_access(cep.ext_id);
 #endif
 
-    c2b = castle_cache_page_block_get(cdb);
+    c2b = castle_cache_page_block_get(cep);
     castle_debug_bvec_update(c_bvec, C_BVEC_DATA_C2B_GOT);
 #ifdef CASTLE_DEBUG
     c_bvec->locking = c2b;
@@ -877,10 +877,10 @@ static void castle_bio_data_cvt_get(c_bvec_t    *c_bvec,
     /* Otherwise, allocate a new out-of-line block */
     cvt->type   = CVT_TYPE_ONDISK;
     cvt->length = C_BLK_SIZE;
-    cvt->cdb.disk = castle_extent_alloc(DEFAULT, c_bvec->tree->da, 1);
-    cvt->cdb.block = 0;
-    //cvt->cdb    = castle_freespace_block_get(c_bvec->version, 1);
-    BUG_ON(DISK_BLK_INVAL(cvt->cdb));
+    cvt->cep.ext_id = castle_extent_alloc(DEFAULT, c_bvec->tree->da, 1);
+    cvt->cep.offset = 0;
+    //cvt->cep    = castle_freespace_block_get(c_bvec->version, 1);
+    BUG_ON(EXT_POS_INVAL(cvt->cep));
 }
 
 static void castle_bio_data_io_end(c_bvec_t     *c_bvec, 
@@ -893,7 +893,7 @@ static void castle_bio_data_io_end(c_bvec_t     *c_bvec,
     if(err) 
         castle_bio_data_io_error(c_bvec, err);
     else
-        castle_bio_data_io_do(c_bvec, cvt.cdb);
+        castle_bio_data_io_do(c_bvec, cvt.cep);
 }
  
 static int castle_bio_validate(struct bio *bio)

@@ -50,6 +50,7 @@ typedef uint32_t block_t;
 #define INVAL_BLOCK         ((block_t)-1) 
 #define BLOCK_INVAL(_b)     ((_b) == INVAL_BLOCK) 
 
+#if 0
 /* Disk layout related structures */
 struct castle_disk_block {
     uint32_t disk;
@@ -62,6 +63,7 @@ typedef struct castle_disk_block c_disk_blk_t;
                                       ((_blk1).block == (_blk2).block)) 
 #define blkfmt                  "(0x%x, 0x%x)"
 #define blk2str(_blk)           (_blk).disk, (_blk).block
+#endif
 
 /* New Free space structures */
 
@@ -114,17 +116,17 @@ typedef struct {
 typedef uint32_t c_byte_off_t; 
 
 /* Disk layout related structures (extent based) */
-struct castle_extent_offset {
+struct castle_extent_position {
     c_ext_id_t      ext_id;
     c_byte_off_t    offset;
 } PACKED;
-typedef struct castle_extent_offset c_ext_off_t;
-#define INVAL_EXT_OFF               ((c_ext_off_t){0,0})
-#define EXT_OFF_INVAL(_off)         (((_off).ext_id == 0) && ((_off).offset == 0))
-#define EXT_OFF_EQUAL(_off1, _off2) (((_off1).ext_id == (_off2).ext_id) && \
+typedef struct castle_extent_position c_ext_pos_t;
+#define INVAL_EXT_POS               ((c_ext_pos_t){0,0})
+#define EXT_POS_INVAL(_off)         (((_off).ext_id == 0) && ((_off).offset == 0))
+#define EXT_POS_EQUAL(_off1, _off2) (((_off1).ext_id == (_off2).ext_id) && \
                                       ((_off1).offset == (_off2).offset)) 
-#define ext_off_fmt                  "(0x%llx, 0x%llx)"
-#define ext_off2str(_off)            (_off).ext_id, (_off).offset
+#define ext_pos_fmt                  "(0x%llx, 0x%llx)"
+#define ext_pos2str(_off)            (_off).ext_id, (_off).offset
 
 
 #define CASTLE_SLAVE_TARGET     (0x00000001)
@@ -152,7 +154,7 @@ struct castle_fs_superblock {
     uint32_t     magic3;
     uint32_t     salt;
     uint32_t     peper;
-    c_disk_blk_t mstore[16];
+    c_ext_pos_t  mstore[16];
 } PACKED;
 
 enum {
@@ -170,61 +172,61 @@ struct castle_btree_val {
     uint32_t          length;
     union {
         uint8_t      *val;
-        c_disk_blk_t  cdb;
+        c_ext_pos_t   cep;
     };
 } PACKED;
 typedef struct castle_btree_val c_val_tup_t;
 
-#define INVAL_VAL_TUP        ((c_val_tup_t){CVT_TYPE_INVALID, 0, {.cdb = {0, 0}}})
+#define INVAL_VAL_TUP        ((c_val_tup_t){CVT_TYPE_INVALID, 0, {.cep = {0, 0}}})
 
 #define CVT_TOMB_STONE(_cvt) ((_cvt).type == CVT_TYPE_TOMB_STONE)
 #define CVT_INLINE(_cvt)     ((_cvt).type == CVT_TYPE_INLINE)
 #define CVT_ONDISK(_cvt)     ((_cvt).type == CVT_TYPE_ONDISK)
 #define CVT_INVALID(_cvt)    ((_cvt).type == CVT_TYPE_INVALID)
 #define CVT_ONE_BLK(_cvt)    (CVT_ONDISK(_cvt) &&  (_cvt).length == C_BLK_SIZE)
-#define CVT_TOMB_STONE_SET(_cvt)                                            \
-                             {                                              \
-                                (_cvt).type     = CVT_TYPE_TOMB_STONE;      \
-                                (_cvt).length   = 0;                        \
-                                (_cvt).cdb.disk = 0;                        \
-                                (_cvt).cdb.block= 0;                        \
+#define CVT_TOMB_STONE_SET(_cvt)                                                \
+                             {                                                  \
+                                (_cvt).type         = CVT_TYPE_TOMB_STONE;      \
+                                (_cvt).length       = 0;                        \
+                                (_cvt).cep.ext_id   = 0;                        \
+                                (_cvt).cep.offset   = 0;                        \
+                             }                                                  
+#define CVT_INVALID_SET(_cvt)                                                   \
+                             {                                                  \
+                                (_cvt).type         = CVT_TYPE_INVALID;         \
+                                (_cvt).length       = 0;                        \
+                                (_cvt).cep.ext_id   = 0;                        \
+                                (_cvt).cep.offset   = 0;                        \
                              }
-#define CVT_INVALID_SET(_cvt)                                               \
-                             {                                              \
-                                (_cvt).type     = CVT_TYPE_INVALID;         \
-                                (_cvt).length   = 0;                        \
-                                (_cvt).cdb.disk = 0;                        \
-                                (_cvt).cdb.block= 0;                        \
-                             }
-#define CVT_BTREE_NODE(_cvt, _btree)     \
-                            (CVT_ONDISK(_cvt) &&             \
+#define CVT_BTREE_NODE(_cvt, _btree)                                            \
+                            (CVT_ONDISK(_cvt) &&                                \
                             (_cvt).length == (_btree)->node_size * C_BLK_SIZE)
-#define CVT_INLINE_VAL_LENGTH(_cvt)                                      \
+#define CVT_INLINE_VAL_LENGTH(_cvt)                                             \
                              (CVT_INLINE(_cvt)?((_cvt).length):0)
 
-#define CVT_EQUAL(_cvt1, _cvt2)                                  \
-                             ((_cvt1).type == (_cvt2).type &&         \
-                              (_cvt1).length == (_cvt2).length &&     \
-                              (!CVT_ONDISK(_cvt1) ||                \
-                               DISK_BLK_EQUAL((_cvt1).cdb, (_cvt2).cdb)))
+#define CVT_EQUAL(_cvt1, _cvt2)                                                 \
+                             ((_cvt1).type      == (_cvt2).type &&              \
+                              (_cvt1).length    == (_cvt2).length &&            \
+                              (!CVT_ONDISK(_cvt1) ||                            \
+                               DISK_BLK_EQUAL((_cvt1).cep, (_cvt2).cep)))
 
-#define CDB_TO_CVT(_cvt, _cdb, _blks)                         \
-                                {                                 \
-                                    (_cvt).type = CVT_TYPE_ONDISK;    \
-                                    (_cvt).length =  _blks * C_BLK_SIZE;  \
-                                    (_cvt).cdb = _cdb;          \
+#define CEP_TO_CVT(_cvt, _cep, _blks)                                           \
+                                {                                               \
+                                    (_cvt).type     = CVT_TYPE_ONDISK;          \
+                                    (_cvt).length   =  _blks * C_BLK_SIZE;      \
+                                    (_cvt).cep      = _cep;                     \
                                 }
 
 
 typedef uint8_t c_mstore_id_t;
 
 #define INVAL_MSTORE_KEY             ((c_mstore_key_t){{0,0},0})
-#define MSTORE_KEY_INVAL(_k)       (((_k).cdb.disk == 0) && ((_k).cdb.block == 0) && ((_k).idx == 0))
-#define MSTORE_KEY_EQUAL(_k1, _k2) (((_k1).cdb.disk  == (_k2).cdb.disk)  && \
-                                    ((_k1).cdb.block == (_k2).cdb.block) && \
-                                    ((_k1).idx       == (_k2).idx))
+#define MSTORE_KEY_INVAL(_k)       (((_k).cep.ext_id == 0) && ((_k).cep.offset == 0) && ((_k).idx == 0))
+#define MSTORE_KEY_EQUAL(_k1, _k2) (((_k1).cep.ext_id  == (_k2).cep.ext_id)  && \
+                                    ((_k1).cep.offset  == (_k2).cep.offset) &&  \
+                                    ((_k1).idx         == (_k2).idx))
 typedef struct castle_mstore_key {
-    c_disk_blk_t cdb;
+    c_ext_pos_t  cep;
     int          idx;
 } c_mstore_key_t;
 
@@ -233,7 +235,7 @@ typedef struct castle_mstore {
     size_t                     entry_size;           /* Size of the entries stored       */
     struct semaphore           mutex;                /* Mutex which protects the         */
                                                      /*  last_node_* variables           */
-    c_disk_blk_t               last_node_cdb;        /* Tail of the list, has at least   */
+    c_ext_pos_t                last_node_cep;        /* Tail of the list, has at least   */
                                                      /* one unused entry in it           */
     int                        last_node_unused;     /* Number of unused entries in the  */
                                                      /* last node                        */
@@ -273,7 +275,7 @@ struct castle_btree_node {
     uint8_t         is_leaf;
     /* Payload (i.e. btree entries) depend on the B-tree type */
     btree_t         type;
-    c_disk_blk_t    next_node;
+    c_ext_pos_t     next_node;
     uint8_t         payload[0];
 } PACKED;
 
@@ -362,9 +364,9 @@ struct castle_component_tree {
     uint8_t             level;
     struct rw_semaphore lock;              /* Protects root_node, tree depth & last_node  */
     uint8_t             tree_depth;
-    c_disk_blk_t        root_node;
-    c_disk_blk_t        first_node;
-    c_disk_blk_t        last_node;
+    c_ext_pos_t         root_node;
+    c_ext_pos_t         first_node;
+    c_ext_pos_t         last_node;
     atomic64_t          node_count;
     struct list_head    da_list;
     struct list_head    hash_list;
@@ -387,9 +389,9 @@ struct castle_clist_entry {
     tree_seq_t   seq;
     uint8_t      level;
     uint8_t      tree_depth;
-    c_disk_blk_t root_node;
-    c_disk_blk_t first_node;
-    c_disk_blk_t last_node;
+    c_ext_pos_t  root_node;
+    c_ext_pos_t  first_node;
+    c_ext_pos_t  last_node;
     uint64_t     node_count;
 } PACKED;
 
@@ -405,7 +407,7 @@ struct castle_mlist_node {
     uint32_t     magic;
     uint16_t     capacity;
     uint16_t     used;
-    c_disk_blk_t next;
+    c_ext_pos_t  next;
     uint8_t      payload[0];
 } PACKED;
 
@@ -523,14 +525,14 @@ struct castle_iterator_type {
 
 /* Used to lock nodes pointed to by leaf pointers (refered to as 'indirect nodes') */
 struct castle_indirect_node {
-    /* Will form array of c2b/{cdb, f_idx} for the indirect nodes. Sorted by
-       cdb. May contain holes, if multiple entries in the original node
+    /* Will form array of c2b/{cep, f_idx} for the indirect nodes. Sorted by
+       cep. May contain holes, if multiple entries in the original node
        point to the same indirect node. Will span at most orig_node->used
        entries. */
     union {
         /* Used before entries are locked */
         struct {
-            c_disk_blk_t               cdb;      /* CDB from leaf pointer  */
+            c_ext_pos_t                cep;      /* CEP from leaf pointer  */
             uint16_t                   f_idx;    /* Index in the orig node */
         };                             
         /* Used after entries are locked */
@@ -557,7 +559,8 @@ enum {
 typedef struct castle_iterator {
     /* Fields below should be filled in before iterator is registered with the btree 
        code with btree_iter_init() and start() */ 
-    int                         (*need_visit)(struct castle_iterator *c_iter, c_disk_blk_t node_cdb);
+    int                         (*need_visit)(struct castle_iterator *c_iter,
+    c_ext_pos_t node_cep);
     void                        (*node_start)(struct castle_iterator *c_iter);
     void                        (*each)      (struct castle_iterator *c_iter, 
                                               int index, 
@@ -615,7 +618,7 @@ typedef struct castle_enumerator {
         int                       next_visited;
         int                       max_visited;
         struct castle_visited {
-            c_disk_blk_t          cdb;
+            c_ext_pos_t           cep;
             struct list_head      list;
         } *visited;
     };
@@ -762,7 +765,7 @@ extern struct workqueue_struct *castle_wqs[2*MAX_BTREE_DEPTH+1];
 /* Various utilities */
 #define C_BLK_SHIFT                    (12) 
 #define C_BLK_SIZE                     (1 << C_BLK_SHIFT)
-#define disk_blk_to_offset(_cdb)     ((_cdb).block * C_BLK_SIZE)
+//#define disk_blk_to_offset(_cdb)     ((_cdb).block * C_BLK_SIZE)
 
 struct castle_attachment*                          
                       castle_device_init           (version_t version);
@@ -783,7 +786,7 @@ void                  castle_slave_access          (uint32_t uuid);
                                                    
 struct castle_slave*  castle_slave_find_by_id      (uint32_t id);
 struct castle_slave*  castle_slave_find_by_uuid    (uint32_t uuid);
-struct castle_slave*  castle_slave_find_by_block   (c_disk_blk_t cdb);
+struct castle_slave*  castle_slave_find_by_block   (c_ext_pos_t cep);
 
 struct castle_slave_superblock* 
                       castle_slave_superblock_get  (struct castle_slave *cs);
