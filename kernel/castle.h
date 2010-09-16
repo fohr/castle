@@ -747,34 +747,9 @@ struct castle_attachments {
     struct list_head attachments;
 };
 
-struct castle_transfer {
-    transfer_id_t           id;
-    version_t               version;
-    int                     direction;
-    atomic_t                progress;
-    int                     finished;
-    int                     error;
-
-/*    struct castle_region  **regions;
-    int                     regions_count; */
-    
-    struct kobject          kobj;
-    struct list_head        list;
-    
-    c_iter_t                c_iter;
-    atomic_t                phase;
-    struct completion       completion;
-};
-
-struct castle_transfers {
-    struct kobject   kobj;
-    struct list_head transfers;
-};
-
 extern struct castle              castle;
 extern struct castle_slaves       castle_slaves;
 extern struct castle_attachments  castle_attachments;
-extern struct castle_transfers    castle_transfers;
 extern da_id_t                    castle_next_da_id;
 
 extern struct workqueue_struct *castle_wqs[2*MAX_BTREE_DEPTH+1];

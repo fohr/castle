@@ -19,7 +19,6 @@
 #include "castle_freespace.h"
 #include "castle_versions.h"
 #include "castle_ctrl.h"
-#include "castle_transfer.h"
 #include "castle_sysfs.h"
 #include "castle_time.h"
 #include "castle_debug.h"
@@ -1420,22 +1419,19 @@ static int __init castle_init(void)
     if((ret = castle_double_array_init())) goto err_out5;
     if((ret = castle_freespace_init()))    goto err_out6;
     if((ret = castle_attachments_init()))  goto err_out7;
-    if((ret = castle_transfers_init()))    goto err_out8;
-    if((ret = castle_control_init()))      goto err_out9;
-    if((ret = castle_rxrpc_init()))        goto err_out10;
-    if((ret = castle_sysfs_init()))        goto err_out11;
+    if((ret = castle_control_init()))      goto err_out8;
+    if((ret = castle_rxrpc_init()))        goto err_out9;
+    if((ret = castle_sysfs_init()))        goto err_out10;
 
     printk("OK.\n");
 
     return 0;
 
     castle_sysfs_fini(); /* Unreachable */
-err_out11:
-    castle_rxrpc_fini();
 err_out10:
-    castle_control_fini();
+    castle_rxrpc_fini();
 err_out9:
-    castle_transfers_free();
+    castle_control_fini();
 err_out8:
     castle_attachments_free();
 err_out7:
@@ -1473,7 +1469,6 @@ static void __exit castle_exit(void)
     castle_control_fini();
     castle_sysfs_fini();
     /* Now, make sure no more IO can be made, internally or externally generated */
-    castle_transfers_free();
     castle_attachments_free();
     /* Cleanup/writeout all metadata */ 
     castle_double_array_fini();

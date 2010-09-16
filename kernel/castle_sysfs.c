@@ -583,137 +583,6 @@ void castle_sysfs_collection_del(struct castle_attachment *collection)
     kobject_remove(&collection->kobj);
 }
 
-/* TRANSFERS */
-
-static ssize_t transfers_number_show(struct kobject *kobj, 
-						           struct attribute *attr, 
-                                   char *buf)
-{
-    struct castle_transfers *transfers = 
-                container_of(kobj, struct castle_transfers, kobj);
-    struct list_head *lh;
-    int nr_transfers = 0;
-
-    list_for_each(lh, &transfers->transfers)
-        nr_transfers++;
-
-    return sprintf(buf, "%d\n", nr_transfers);
-}
-
-static ssize_t transfer_id_show(struct kobject *kobj, 
-						           struct attribute *attr, 
-                                   char *buf)
-{
-    struct castle_transfer *transfer = 
-                container_of(kobj, struct castle_transfer, kobj);
-
-    return sprintf(buf, "0x%x\n", transfer->id);
-}
-
-static ssize_t transfer_direction_show(struct kobject *kobj, 
-						           struct attribute *attr, 
-                                   char *buf)
-{
-    struct castle_transfer *transfer = 
-                container_of(kobj, struct castle_transfer, kobj);
-
-    return sprintf(buf, "%d\n", transfer->direction);
-}
-
-static ssize_t transfer_version_show(struct kobject *kobj, 
-						           struct attribute *attr, 
-                                   char *buf)
-{
-    struct castle_transfer *transfer = 
-                container_of(kobj, struct castle_transfer, kobj);
-
-    return sprintf(buf, "0x%x\n", transfer->version);
-}
-
-static ssize_t transfer_progress_show(struct kobject *kobj, 
-						           struct attribute *attr, 
-                                   char *buf)
-{
-    struct castle_transfer *transfer = 
-                container_of(kobj, struct castle_transfer, kobj);
-
-    return sprintf(buf, "%d\n", atomic_read(&transfer->progress));
-}
-
-static ssize_t transfer_finished_show(struct kobject *kobj, 
-						           struct attribute *attr, 
-                                   char *buf)
-{
-    struct castle_transfer *transfer = 
-                container_of(kobj, struct castle_transfer, kobj);
-
-    return sprintf(buf, "%d\n", transfer->finished);
-}
-
-/* Definition of transfer sysfs directory attributes */
-static struct castle_sysfs_entry transfers_number =
-__ATTR(number, S_IRUGO|S_IWUSR, transfers_number_show, NULL);
-
-static struct attribute *castle_transfers_attrs[] = {
-    &transfers_number.attr,
-    NULL,
-};
-
-static struct kobj_type castle_transfers_ktype = {
-    .sysfs_ops      = &castle_sysfs_ops,
-    .default_attrs  = castle_transfers_attrs,
-};
-
-/* Definition of each transfer sysfs directory attributes */
-static struct castle_sysfs_entry transfer_id =
-__ATTR(id, S_IRUGO|S_IWUSR, transfer_id_show, NULL);
-
-static struct castle_sysfs_entry transfer_version =
-__ATTR(direction, S_IRUGO|S_IWUSR, transfer_direction_show, NULL);
-
-static struct castle_sysfs_entry transfer_direction =
-__ATTR(version, S_IRUGO|S_IWUSR, transfer_version_show, NULL);
-
-static struct castle_sysfs_entry transfer_progress =
-__ATTR(progress, S_IRUGO|S_IWUSR, transfer_progress_show, NULL);
-
-static struct castle_sysfs_entry transfer_finished =
-__ATTR(finished, S_IRUGO|S_IWUSR, transfer_finished_show, NULL);
-
-static struct attribute *castle_transfer_attrs[] = {
-    &transfer_id.attr,
-    &transfer_version.attr,
-    &transfer_direction.attr,
-    &transfer_progress.attr,
-    &transfer_finished.attr,
-    NULL,
-};
-
-static struct kobj_type castle_transfer_ktype = {
-    .sysfs_ops      = &castle_sysfs_ops,
-    .default_attrs  = castle_transfer_attrs,
-};
-
-int castle_sysfs_transfer_add(struct castle_transfer *transfer)
-{
-    int ret;
-
-    memset(&transfer->kobj, 0, sizeof(struct kobject));
-    ret = kobject_tree_add(&transfer->kobj, 
-                           &castle_transfers.kobj,
-                           &castle_transfer_ktype, 
-                           "%x", transfer->id);
-    if(ret < 0) 
-        return ret;
-        
-    return 0;
-}
-
-void castle_sysfs_transfer_del(struct castle_transfer *transfer)
-{
-    kobject_remove(&transfer->kobj);
-}
-
 /* Initialisation of sysfs dirs == kobjs registration */
 int castle_sysfs_init(void)
 {
@@ -763,18 +632,9 @@ int castle_sysfs_init(void)
                            "%s", "collections");
     if(ret < 0) goto out5;
 
-    memset(&castle_transfers.kobj, 0, sizeof(struct kobject));
-    ret = kobject_tree_add(&castle_transfers.kobj, 
-                           &castle.kobj, 
-                           &castle_transfers_ktype, 
-                           "%s", "transfers");
-    if(ret < 0) goto out6;
-
     return 0;
     
-    kobject_remove(&castle_transfers.kobj); /* Unreachable */
-out6: 
-    kobject_remove(&castle_attachments.collections_kobj);
+    kobject_remove(&castle_attachments.collections_kobj); /* Unreachable */
 out5:
     kobject_remove(&castle_attachments.devices_kobj);
 out4:
@@ -790,7 +650,6 @@ out1:
 
 void castle_sysfs_fini(void)
 {
-    kobject_remove(&castle_transfers.kobj);
     kobject_remove(&castle_attachments.collections_kobj);
     kobject_remove(&castle_attachments.devices_kobj);
     kobject_remove(&castle_slaves.kobj);
