@@ -56,7 +56,9 @@ c_chk_seq_t castle_freespace_slave_chunks_alloc(struct castle_slave    *cs,
 
     spin_unlock(&freespace->lock);
 
-    debug("Allocating %llu chunks from %llu\n", chk_seq.count, chk_seq.first_chk);
+    debug("Allocating %llu chunks from slave %u at %llu chunk\n", chk_seq.count, 
+          cs->uuid,
+          chk_seq.first_chk);
     
     return chk_seq;
 }
@@ -87,7 +89,8 @@ void castle_freespace_slave_chunk_free(struct castle_slave      *cs,
     if (freespace->prod == freespace->cons)
     {
         spin_unlock_irqrestore(&freespace->lock, flags);
-        printk("    Free Chunks: %llu\n", freespace->free_chk_cnt);
+        printk("    Free Chunks: %llu from slave %u\n", freespace->free_chk_cnt,
+                cs->uuid);
         BUG(); /* FIXME: shouldn't come here */
     }
 
@@ -123,23 +126,23 @@ int castle_freespace_slave_init(struct castle_slave *cs)
     if (!freespace->chk_seqs)
     {
         ret = -ENOMEM;
-        printk("FATAL: Failed to allocate memory for freespace list: %u:%lu\n",
-               freespace->max_entries, disk_sz);
+        printk("FATAL: Failed to allocate memory for freespace list: %u:%llu\n",
+               freespace->max_entries, freespace->disk_size);
         goto __hell;
     }
     /* FIXME: This is in-efficient. Need this for sake of correctness */
     memset(freespace->chk_seqs, 0, freespace->max_entries * sizeof(c_chk_seq_t));
     
-    debug("Init Disk %d of size %lu bytes with list size: %u\n", 
+    debug("Init Disk %d of size %llu chunks with list size: %u\n", 
           cs->id, 
-          disk_sz,
+          freespace->disk_size,
           freespace->max_entries);
    
-    freespace->free_chk_cnt -= 10;
+    freespace->free_chk_cnt -= FREE_SPACE_START;
     cs->freespace = freespace;
     
     castle_freespace_slave_chunk_free(cs, 
-                         (c_chk_seq_t){10, freespace->free_chk_cnt},
+                         (c_chk_seq_t){FREE_SPACE_START, freespace->free_chk_cnt},
                          0);
 
     return 0;

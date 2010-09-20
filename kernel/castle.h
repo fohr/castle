@@ -81,6 +81,10 @@ typedef struct castle_disk_block c_disk_blk_t;
 #define BLKS_PER_CHK          (C_CHK_SIZE / C_BLK_SIZE)
 //#define SECTOR(offset)        ((offset) >> 9)
 
+#define SUP_EXT_SIZE                   (30)  /* 2-RDA. Occupies double the space */
+#define META_SPACE_SIZE                (500)
+#define FREE_SPACE_START               (600)
+
 typedef uint64_t c_chk_cnt_t;
 typedef uint64_t c_chk_t;
 /* FIXME: ext_id should be 64-bit. Cahnging to 32-bit to making it compatible
@@ -88,29 +92,31 @@ typedef uint64_t c_chk_t;
 typedef uint32_t c_ext_id_t;
 typedef uint32_t c_uuid_t;
 
-#define INVAL_EXT_ID           (0)
+#define INVAL_EXT_ID                    (-1)
 
 /* FIXME: remove from castle.h */
-typedef struct {
+struct castle_chunk_sequence {
     c_chk_t         first_chk;
     c_chk_cnt_t     count;
-} c_chk_seq_t;
+} PACKED;
+typedef struct castle_chunk_sequence c_chk_seq_t;
+
+struct castle_disk_chunk {
+    c_uuid_t        slave_id;
+    c_chk_t         offset;
+} PACKED;
+typedef struct castle_disk_chunk c_disk_chk_t;
 
 typedef struct {
-    c_uuid_t            slave_id;
-    c_chk_t             offset;
-} c_disk_chk_t;
-
-typedef struct {
-    uint32_t                disk_id;
-    c_chk_seq_t            *chk_seqs;
-    uint32_t                max_entries;
-    uint32_t                nr_entries;
-    uint32_t                prod;
-    uint32_t                cons;
-    c_chk_cnt_t             free_chk_cnt;
-    c_chk_cnt_t             disk_size;
-    spinlock_t              lock;
+    uint32_t        disk_id;
+    c_chk_seq_t    *chk_seqs;
+    uint32_t        max_entries;
+    uint32_t        nr_entries;
+    uint32_t        prod;
+    uint32_t        cons;
+    c_chk_cnt_t     free_chk_cnt;
+    c_chk_cnt_t     disk_size;
+    spinlock_t      lock;
 } castle_freespace_t;
 
 typedef uint32_t c_byte_off_t; 
@@ -121,13 +127,12 @@ struct castle_extent_position {
     c_byte_off_t    offset;
 } PACKED;
 typedef struct castle_extent_position c_ext_pos_t;
-#define INVAL_EXT_POS               ((c_ext_pos_t){0,0})
-#define EXT_POS_INVAL(_off)         (((_off).ext_id == 0) && ((_off).offset == 0))
+#define INVAL_EXT_POS               ((c_ext_pos_t){INVAL_EXT_ID,0})
+#define EXT_POS_INVAL(_off)         (((_off).ext_id == INVAL_EXT_ID))
 #define EXT_POS_EQUAL(_off1, _off2) (((_off1).ext_id == (_off2).ext_id) && \
                                       ((_off1).offset == (_off2).offset)) 
 #define ext_pos_fmt                  "(0x%llx, 0x%llx)"
 #define ext_pos2str(_off)            (_off).ext_id, (_off).offset
-
 
 #define CASTLE_SLAVE_TARGET     (0x00000001)
 #define CASTLE_SLAVE_SPINNING   (0x00000002)
@@ -135,10 +140,14 @@ typedef struct castle_extent_position c_ext_pos_t;
 #define CASTLE_SLAVE_MAGIC1     (0x02061985)
 #define CASTLE_SLAVE_MAGIC2     (0x16071983)
 #define CASTLE_SLAVE_MAGIC3     (0x16061981)
+
+#define CASTLE_SLAVE_VERSION    (1)
+
 struct castle_slave_superblock {
     uint32_t     magic1;
     uint32_t     magic2;
     uint32_t     magic3;
+    uint32_t     version;   /* Super chunk format version */
     uint32_t     uuid;
     uint32_t     used;
     uint32_t     size; /* In blocks */
@@ -177,7 +186,7 @@ struct castle_btree_val {
 } PACKED;
 typedef struct castle_btree_val c_val_tup_t;
 
-#define INVAL_VAL_TUP        ((c_val_tup_t){CVT_TYPE_INVALID, 0, {.cep = {0, 0}}})
+#define INVAL_VAL_TUP        ((c_val_tup_t){CVT_TYPE_INVALID, 0, {.cep = INVAL_EXT_POS}})
 
 #define CVT_TOMB_STONE(_cvt) ((_cvt).type == CVT_TYPE_TOMB_STONE)
 #define CVT_INLINE(_cvt)     ((_cvt).type == CVT_TYPE_INLINE)
@@ -713,6 +722,7 @@ struct castle_slave {
     struct kobject                  kobj;
     struct list_head                list;
     struct block_device            *bdev;
+    c_ext_id_t                      sup_ext;
     struct castle_cache_block      *sblk;
     struct castle_cache_block      *fs_sblk;
     block_t                         free_blk;

@@ -84,4 +84,10 @@ castle_extent_map_get(c_ext_id_t             ext_id,
                       c_chk_t                offset,
                       uint32_t              *k_factor);
 
+c_ext_id_t 
+castle_extent_sup_ext_init(struct castle_slave      *cs);
+
+void 
+castle_extent_sup_ext_close(struct castle_slave     *cs);
+
 #endif //__CASTLE_EXTENT_H__

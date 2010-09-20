@@ -52,7 +52,7 @@ struct castle_component_tree castle_global_tree = {.seq             = GLOBAL_TRE
 struct workqueue_struct     *castle_wqs[2*MAX_BTREE_DEPTH+1];
 int                          castle_fs_inited;
 
-//#define DEBUG
+#define DEBUG
 #ifndef DEBUG
 #define debug(_f, ...)  ((void)0)
 #else
@@ -262,12 +262,14 @@ static void castle_slave_superblock_print(struct castle_slave_superblock *cs_sb)
     printk("Magic1: %.8x\n"
            "Magic2: %.8x\n"
            "Magic3: %.8x\n"
+           "Version:%x\n"
            "Uuid:   %x\n"
            "Used:   %x\n"
            "Size:   %x\n",
            cs_sb->magic1,
            cs_sb->magic2,
            cs_sb->magic3,
+           cs_sb->version,
            cs_sb->uuid,
            cs_sb->used,
            cs_sb->size);
@@ -278,6 +280,7 @@ static int castle_slave_superblock_validate(struct castle_slave_superblock *cs_s
     if(cs_sb->magic1 != CASTLE_SLAVE_MAGIC1) return -1;
     if(cs_sb->magic2 != CASTLE_SLAVE_MAGIC2) return -2;
     if(cs_sb->magic3 != CASTLE_SLAVE_MAGIC3) return -3;
+    if(cs_sb->version != CASTLE_SLAVE_VERSION) return -4;
 
     return 0;
 }
@@ -304,7 +307,7 @@ static int castle_slave_superblock_read(struct castle_slave *cs)
     err = castle_slave_superblock_validate(&cs_sb);
     if(err)
         return -EINVAL;
-    //castle_slave_superblock_print(&cs_sb);
+    castle_slave_superblock_print(&cs_sb);
     /* Save the uuid and exit */
     cs->uuid = cs_sb.uuid;
     
@@ -340,10 +343,9 @@ static int castle_slave_superblocks_cache(struct castle_slave *cs)
     for(i=0; i<2; i++)
     {
         /* Read the superblock */
-        cep.ext_id  = cs->uuid;
-        cep.offset = i;
+        cep.ext_id = cs->sup_ext;
+        cep.offset = i * C_BLK_SIZE;
         c2b = castle_cache_page_block_get(cep);
-        c2b->is_ext = 0;
         *(c2bp[i]) = c2b;
         /* We expecting the buffer not to be up to date. 
            We check if it got updated later */
@@ -393,6 +395,7 @@ static int castle_slave_superblocks_init(struct castle_slave *cs)
         cs_sb->magic1 = CASTLE_SLAVE_MAGIC1;
         cs_sb->magic2 = CASTLE_SLAVE_MAGIC2;
         cs_sb->magic3 = CASTLE_SLAVE_MAGIC3;
+        cs_sb->version= CASTLE_SLAVE_VERSION;
         cs_sb->used   = 2; /* Two blocks used for the superblocks */
         cs_sb->uuid   = cs->uuid;
         cs_sb->size   = get_bd_capacity(cs->bdev) >> (C_BLK_SHIFT - 9);
@@ -516,8 +519,9 @@ struct castle_slave* castle_claim(uint32_t new_dev)
     debug("Claiming: in_atomic=%d.\n", in_atomic());
     if(!(cs = castle_zalloc(sizeof(struct castle_slave), GFP_KERNEL)))
         goto err_out;
-    cs->id = slave_id++;
+    cs->id          = slave_id++;
     cs->last_access = jiffies;
+    cs->sup_ext     = INVAL_EXT_ID;
 
     dev = new_decode_dev(new_dev);
     bdev = open_by_devnum(dev, FMODE_READ|FMODE_WRITE);
@@ -547,6 +551,13 @@ struct castle_slave* castle_claim(uint32_t new_dev)
     if(err)
     {
         printk("Invalid superblock.\n");
+        goto err_out;
+    }
+
+    cs->sup_ext = castle_extent_sup_ext_init(cs);
+    if (cs->sup_ext == INVAL_EXT_ID)
+    {
+        printk("Could not initialize super extent for slave 0x%x\n", cs->uuid);
         goto err_out;
     }
 
@@ -589,6 +600,7 @@ struct castle_slave* castle_claim(uint32_t new_dev)
 
     return cs;
 err_out:
+    castle_extent_sup_ext_close(cs);
     castle_rda_slave_remove(DEFAULT, cs);
     if(cs_added)     list_del(&cs->list);
     if(cs->sblk)     put_c2b(cs->sblk);
@@ -759,9 +771,7 @@ static void castle_bio_data_copy(c_bvec_t *c_bvec, c2_block_t *c2b)
                     write ? bvec_buf : buf,
                    (last_sec - first_sec) << 9);
         } else
-        {
             memset(bvec_buf, 0, (last_sec - first_sec) << 9);
-        }
 
         sector += (bvec->bv_len >> 9);
     }
