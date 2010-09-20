@@ -13,7 +13,7 @@
 #include "castle_debug.h"
 #include "castle_extent.h"
 
-#define DEBUG
+//#define DEBUG
 #ifndef DEBUG
 #define debug(_f, ...)          ((void)0)
 #define iter_debug(_f, ...)     ((void)0)

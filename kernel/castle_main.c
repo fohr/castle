@@ -52,7 +52,7 @@ struct castle_component_tree castle_global_tree = {.seq             = GLOBAL_TRE
 struct workqueue_struct     *castle_wqs[2*MAX_BTREE_DEPTH+1];
 int                          castle_fs_inited;
 
-#define DEBUG
+//#define DEBUG
 #ifndef DEBUG
 #define debug(_f, ...)  ((void)0)
 #else

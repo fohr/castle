@@ -26,7 +26,7 @@ c_chk_seq_t castle_freespace_slave_chunks_alloc(struct castle_slave    *cs,
     c_chk_seq_t *cons_chk_seq;
 
     if (!count)
-        return (c_chk_seq_t){0, 0};
+        return INVAL_CHK_SEQ;
     
     if (count % CHKS_PER_SLOT)
         count = C_CEIL_OF(count);

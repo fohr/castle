@@ -269,7 +269,7 @@ c_disk_chk_t read_slave_get(c_ext_id_t ext_id, c_chk_t offset)
     c_disk_chk_t *chunks = NULL;
 
     if ((chunks = castle_extent_map_get(ext_id, offset, &k_factor)) == NULL)
-        return ((c_disk_chk_t){0, 0});
+        return INVAL_DISK_CHK;
 
     return chunks[0];
     
@@ -367,13 +367,11 @@ int submit_c2b_rda(int rw, c2_block_t *c2b)
             uint32_t first_pg, last_pg;
 
             chk = read_slave_get(ext_off.ext_id, CHUNK(cur_offset));
-#if 0
-            if (INVAL_CDC(chk))
+            if (DISK_CHK_INVAL(chk))
             {
                 atomic_sub(c2b->nr_pages - rem_pages, &c2b->remaining);
                 return -ENODEV;
             }
-#endif
             cs = castle_slave_find_by_uuid(chk.slave_id);
             first_pg = 0;
             last_pg  = BLKS_PER_CHK - 1;

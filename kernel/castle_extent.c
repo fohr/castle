@@ -229,7 +229,7 @@ c_ext_id_t castle_extent_alloc(c_rda_type_t            rda_type,
                     for (k=0; k<j; k++)
                     {
                         BUG_ON(chk_buf[id].count == 0);
-                        ext->chk_map[MAP_IDX(ext,i,k)] = (c_disk_chk_t){0, 0};
+                        ext->chk_map[MAP_IDX(ext,i,k)] = INVAL_DISK_CHK;
                         chk_buf[id].first_chk--;
                         chk_buf[id].count++;
                     }

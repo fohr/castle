@@ -93,6 +93,7 @@ typedef uint32_t c_ext_id_t;
 typedef uint32_t c_uuid_t;
 
 #define INVAL_EXT_ID                    (-1)
+#define INVAL_SLAVE_ID                  (0)
 
 /* FIXME: remove from castle.h */
 struct castle_chunk_sequence {
@@ -100,12 +101,26 @@ struct castle_chunk_sequence {
     c_chk_cnt_t     count;
 } PACKED;
 typedef struct castle_chunk_sequence c_chk_seq_t;
+#define INVAL_CHK_SEQ                ((c_chk_seq_t){0,0})
+#define CHK_SEQ_INVAL(_seq)          ((_seq).count == 0)
+#define CHK_SEQ_EQUAL(_seq1, _seq2)  (((_seq1).first_chk == (_seq2).first_chk) && \
+                                      ((_seq1).count == (_seq2).count)) 
+#define chk_seq_fmt                  "(0x%llx, 0x%llx)"
+#define chk_seq2str(_seq)            (_seq).first_chk, (_seq).count
 
 struct castle_disk_chunk {
     c_uuid_t        slave_id;
     c_chk_t         offset;
 } PACKED;
 typedef struct castle_disk_chunk c_disk_chk_t;
+#define INVAL_DISK_CHK               ((c_disk_chk_t){INVAL_SLAVE_ID,0})
+#define DISK_CHK_INVAL(_chk)         (((_chk).slave_id == INVAL_SLAVE_ID) &&    \
+                                      ((_chk).offset == 0))
+#define DISK_CHK_EQUAL(_chk1, _chk2) (((_chk1).slave_id == (_chk2).slave_id) && \
+                                      ((_chk1).offset == (_chk2).offset)) 
+#define disk_chk_fmt                  "(0x%x, 0x%llx)"
+#define disk_chk2str(_chk)            (_chk).slave_id, (_chk).offset
+
 
 typedef struct {
     uint32_t        disk_id;
@@ -128,7 +143,7 @@ struct castle_extent_position {
 } PACKED;
 typedef struct castle_extent_position c_ext_pos_t;
 #define INVAL_EXT_POS               ((c_ext_pos_t){INVAL_EXT_ID,0})
-#define EXT_POS_INVAL(_off)         (((_off).ext_id == INVAL_EXT_ID))
+#define EXT_POS_INVAL(_off)         ((_off).ext_id == INVAL_EXT_ID)
 #define EXT_POS_EQUAL(_off1, _off2) (((_off1).ext_id == (_off2).ext_id) && \
                                       ((_off1).offset == (_off2).offset)) 
 #define ext_pos_fmt                  "(0x%llx, 0x%llx)"
@@ -197,15 +212,13 @@ typedef struct castle_btree_val c_val_tup_t;
                              {                                                  \
                                 (_cvt).type         = CVT_TYPE_TOMB_STONE;      \
                                 (_cvt).length       = 0;                        \
-                                (_cvt).cep.ext_id   = 0;                        \
-                                (_cvt).cep.offset   = 0;                        \
+                                (_cvt).cep          = INVAL_EXT_POS;            \
                              }                                                  
 #define CVT_INVALID_SET(_cvt)                                                   \
                              {                                                  \
                                 (_cvt).type         = CVT_TYPE_INVALID;         \
                                 (_cvt).length       = 0;                        \
-                                (_cvt).cep.ext_id   = 0;                        \
-                                (_cvt).cep.offset   = 0;                        \
+                                (_cvt).cep          = INVAL_EXT_POS;            \
                              }
 #define CVT_BTREE_NODE(_cvt, _btree)                                            \
                             (CVT_ONDISK(_cvt) &&                                \
@@ -217,7 +230,7 @@ typedef struct castle_btree_val c_val_tup_t;
                              ((_cvt1).type      == (_cvt2).type &&              \
                               (_cvt1).length    == (_cvt2).length &&            \
                               (!CVT_ONDISK(_cvt1) ||                            \
-                               DISK_BLK_EQUAL((_cvt1).cep, (_cvt2).cep)))
+                               EXT_POS_EQUAL((_cvt1).cep, (_cvt2).cep)))
 
 #define CEP_TO_CVT(_cvt, _cep, _blks)                                           \
                                 {                                               \
@@ -229,11 +242,12 @@ typedef struct castle_btree_val c_val_tup_t;
 
 typedef uint8_t c_mstore_id_t;
 
-#define INVAL_MSTORE_KEY             ((c_mstore_key_t){{0,0},0})
-#define MSTORE_KEY_INVAL(_k)       (((_k).cep.ext_id == 0) && ((_k).cep.offset == 0) && ((_k).idx == 0))
-#define MSTORE_KEY_EQUAL(_k1, _k2) (((_k1).cep.ext_id  == (_k2).cep.ext_id)  && \
-                                    ((_k1).cep.offset  == (_k2).cep.offset) &&  \
-                                    ((_k1).idx         == (_k2).idx))
+#define INVAL_MSTORE_KEY           ((c_mstore_key_t){{INVAL_EXT_ID,0},0})
+//FIXME: Try to use the following syntax.
+//#define INVAL_MSTORE_KEY           ((c_mstore_key_t){INVAL_EXT_POS,0})
+#define MSTORE_KEY_INVAL(_k)       (EXT_POS_INVAL(_k.cep) && ((_k).idx == 0))
+#define MSTORE_KEY_EQUAL(_k1, _k2) (EXT_POS_EQUAL(_k1.cep, _k2.cep)  &&         \
+                                    ((_k1).idx == (_k2).idx))
 typedef struct castle_mstore_key {
     c_ext_pos_t  cep;
     int          idx;
