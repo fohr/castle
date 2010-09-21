@@ -7,6 +7,7 @@
 %define kverrel %(%{kmodtool} verrel %{?kversion} 2>/dev/null)
 %define kvariants ""
 %define kerneldir %{_usrsrc}/kernels/%{kverrel}-%{_target_cpu}
+%define krel	%(echo %{kverrel} | sed -e 's/-/_/g')
 
 Name:           castle-fs
 Version:        %{buildver}
@@ -26,20 +27,12 @@ Provides:       %{name}-%{changesetver}
 
 %description
 
-%package -n %{kmod_name}-kmod
-Summary:    Acunu kernel filesystem module
-Group:      System Environment/Kernel
-
-Provides:       %{name}-%{changesetver}
-
-%description -n %{kmod_name}-kmod
-kmod package for the Acunu kernel filesystem module
-
 # magic hidden here:
 # NOTE: these two extra defines will not be necessary in future.
 %define kmp_version %{version}
-%define kmp_release %{release}_%{kverrel}
-%{expand:%(%{kmodtool} rpmtemplate_kmp %{kmod_name} %{kverrel} %{kvariants} 2>/dev/null)}
+%define kmp_release %{buildrev}_%{krel}
+# kmodtool is a bit brainless in how it handles kmp_release
+%{expand:%(kmp_version=foo kmp_release=bar %{kmodtool} rpmtemplate_kmp %{kmod_name} %{kverrel} %{kvariants} 2>/dev/null)}
 
 %package -n dkms-castle-fs
 Summary:        DKMS-ready kernel source for castlefs
