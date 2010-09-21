@@ -38,7 +38,7 @@ kmod package for the Acunu kernel filesystem module
 # magic hidden here:
 # NOTE: these two extra defines will not be necessary in future.
 %define kmp_version %{version}
-%define kmp_release %{release}
+%define kmp_release %{release}_%{kverrel}
 %{expand:%(%{kmodtool} rpmtemplate_kmp %{kmod_name} %{kverrel} %{kvariants} 2>/dev/null)}
 
 %package -n dkms-castle-fs
