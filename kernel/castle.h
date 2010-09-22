@@ -350,6 +350,7 @@ struct castle_flist_entry {
 /* IO related structures */
 struct castle_bio_vec;
 struct castle_object_replace;
+struct castle_object_get;
 
 typedef struct castle_bio {
     struct castle_attachment     *attachment;
@@ -359,6 +360,7 @@ typedef struct castle_bio {
         struct bio               *bio;
         struct castle_rxrpc_call *rxrpc_call;
         struct castle_object_replace *replace;
+        struct castle_object_get *get;
     };
     struct castle_bio_vec        *c_bvecs; 
     atomic_t                      count;
@@ -767,6 +769,25 @@ struct castle_object_replace {
     struct castle_cache_block *data_c2b;
     uint32_t    data_c2b_offset;
     uint32_t    data_length;
+};
+
+struct castle_object_get {
+    struct castle_cache_block *data_c2b;
+    uint32_t    data_c2b_length;
+    uint32_t    data_length;
+    int         first;
+    
+    void      (*reply_start)     (struct castle_object_get *get, 
+                                  int err, 
+                                  uint32_t data_length,
+                                  void *buffer, 
+                                  uint32_t buffer_length);
+    void      (*reply_continue)  (struct castle_object_get *get,
+                                  int err,
+                                  void *buffer,
+                                  uint32_t buffer_length,
+                                  int last);
+    
 };
 
 #endif /* __CASTLE_H__ */

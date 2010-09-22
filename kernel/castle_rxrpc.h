@@ -12,12 +12,12 @@ void     castle_rxrpc_str_copy_buf       (struct castle_rxrpc_call *call,
                                           void *buffer,
                                           int str_length,
                                           int partial);
-void     castle_rxrpc_get_call_get       (struct castle_rxrpc_call *call, 
+void     castle_rxrpc_get_call_get       (struct castle_object_get *get, 
                                           c2_block_t **data_c2b, 
                                           uint32_t *data_c2b_length,
                                           uint32_t *data_length,
                                           int *first);
-void     castle_rxrpc_get_call_set       (struct castle_rxrpc_call *call, 
+void     castle_rxrpc_get_call_set       (struct castle_object_get *get, 
                                           c2_block_t *data_c2b, 
                                           uint32_t data_c2b_length,
                                           uint32_t data_length,
@@ -48,16 +48,6 @@ void     castle_rxrpc_get_slice_reply_continue
                                          (struct castle_rxrpc_call *call,
                                           char *buffer,
                                           uint32_t buffer_len,
-                                          int last);
-void     castle_rxrpc_get_reply_start    (struct castle_rxrpc_call *call, 
-                                          int err, 
-                                          uint32_t data_length,
-                                          void *buffer, 
-                                          uint32_t buffer_length);
-void     castle_rxrpc_get_reply_continue (struct castle_rxrpc_call *call,
-                                          int err,
-                                          void *buffer,
-                                          uint32_t buffer_length,
                                           int last);
 
 void     castle_rxrpc_get_complete     (struct castle_rxrpc_call *call, int err, void *d, size_t len);

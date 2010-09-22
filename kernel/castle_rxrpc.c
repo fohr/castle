@@ -93,12 +93,7 @@ struct castle_rxrpc_call {
     union
     {
         /* For CASTLE_OBJ_REQ_GET */
-        struct {
-            c2_block_t *data_c2b;
-            uint32_t    data_c2b_length;
-            uint32_t    data_length;
-            int         first;
-        } get;
+        struct castle_object_get get;
         /* For CASTLE_OBJ_REQ_REPLACE */
         struct castle_object_replace replace;
         /* For CASTLE_OBJ_REQ_REPLACE_MULTI */
@@ -113,12 +108,13 @@ struct castle_rxrpc_call {
     };
 };
 
-void castle_rxrpc_get_call_get(struct castle_rxrpc_call *call, 
+void castle_rxrpc_get_call_get(struct castle_object_get *get, 
                                c2_block_t **data_c2b, 
                                uint32_t *data_c2b_length,
                                uint32_t *data_length,
                                int *first)
 {
+    struct castle_rxrpc_call *call = container_of(get, struct castle_rxrpc_call, get);
     BUG_ON(call->type != &castle_rxrpc_get_call);
     BUG_ON(!data_length || !data_c2b || !data_c2b_length || !first);
     *data_c2b        = call->get.data_c2b;
@@ -127,12 +123,14 @@ void castle_rxrpc_get_call_get(struct castle_rxrpc_call *call,
     *first           = call->get.first;
 }
 
-void castle_rxrpc_get_call_set(struct castle_rxrpc_call *call, 
+void castle_rxrpc_get_call_set(struct castle_object_get *get, 
                                c2_block_t *data_c2b, 
                                uint32_t data_c2b_length,
                                uint32_t data_length,
                                int first)
 {
+    struct castle_rxrpc_call *call = container_of(get, struct castle_rxrpc_call, get);
+    
     BUG_ON(call->type != &castle_rxrpc_get_call);
     call->get.data_c2b        = data_c2b;
     call->get.data_c2b_length = data_c2b_length;
@@ -325,12 +323,13 @@ void castle_rxrpc_get_slice_reply_continue(struct castle_rxrpc_call *call,
     castle_rxrpc_call_reply_continue(call, 0, buffer, buffer_len, last); 
 }
 
-void castle_rxrpc_get_reply_start(struct castle_rxrpc_call *call, 
+void castle_rxrpc_get_reply_start(struct castle_object_get *get, 
                                   int err, 
                                   uint32_t data_length,
                                   void *buffer, 
                                   uint32_t buffer_length)
 {
+    struct castle_rxrpc_call *call = container_of(get, struct castle_rxrpc_call, get);
     uint32_t reply[2];
   
     /* Deal with errors first */
@@ -363,12 +362,13 @@ void castle_rxrpc_get_reply_start(struct castle_rxrpc_call *call,
 }
 
 
-void castle_rxrpc_get_reply_continue(struct castle_rxrpc_call *call,
+void castle_rxrpc_get_reply_continue(struct castle_object_get *get,
                                      int err,
                                      void *buffer,
                                      uint32_t buffer_length,
                                      int last)
 {
+    struct castle_rxrpc_call *call = container_of(get, struct castle_rxrpc_call, get);
     castle_rxrpc_call_reply_continue(call, err, buffer, buffer_length, last); 
 }
 
@@ -614,7 +614,10 @@ static int castle_rxrpc_get_decode(struct castle_rxrpc_call *call, struct sk_buf
     if(ret)
         return ret;
 
-    ret = castle_object_get(call, attachment, key);
+    call->get.reply_start = castle_rxrpc_get_reply_start;
+    call->get.reply_continue = castle_rxrpc_get_reply_continue;
+
+    ret = castle_object_get(&call->get, attachment, key);
     if(ret)
         return ret;
 
