@@ -300,7 +300,7 @@ void castle_rxrpc_get_reply_start(struct castle_object_get *get,
                                   uint32_t buffer_length)
 {
     struct castle_rxrpc_call *call = container_of(get, struct castle_rxrpc_call, get);
-    uint32_t reply[2];
+    uint32_t reply[3];
   
     debug("castle_rxrpc_get_reply_start call=%p get=%p\n", call, get);
   
