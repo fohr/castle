@@ -108,36 +108,6 @@ struct castle_rxrpc_call {
     };
 };
 
-void castle_rxrpc_get_call_get(struct castle_object_get *get, 
-                               c2_block_t **data_c2b, 
-                               uint32_t *data_c2b_length,
-                               uint32_t *data_length,
-                               int *first)
-{
-    struct castle_rxrpc_call *call = container_of(get, struct castle_rxrpc_call, get);
-    BUG_ON(call->type != &castle_rxrpc_get_call);
-    BUG_ON(!data_length || !data_c2b || !data_c2b_length || !first);
-    *data_c2b        = call->get.data_c2b;
-    *data_length     = call->get.data_length;
-    *data_c2b_length = call->get.data_c2b_length;
-    *first           = call->get.first;
-}
-
-void castle_rxrpc_get_call_set(struct castle_object_get *get, 
-                               c2_block_t *data_c2b, 
-                               uint32_t data_c2b_length,
-                               uint32_t data_length,
-                               int first)
-{
-    struct castle_rxrpc_call *call = container_of(get, struct castle_rxrpc_call, get);
-    
-    BUG_ON(call->type != &castle_rxrpc_get_call);
-    call->get.data_c2b        = data_c2b;
-    call->get.data_c2b_length = data_c2b_length;
-    call->get.data_length     = data_length;
-    call->get.first           = first;
-}
-
 static void castle_rxrpc_state_update(struct castle_rxrpc_call *call, int state)
 {
     /* AWAIT_DATA -> AWAIT_REQUEST is allowed */
@@ -332,6 +302,8 @@ void castle_rxrpc_get_reply_start(struct castle_object_get *get,
     struct castle_rxrpc_call *call = container_of(get, struct castle_rxrpc_call, get);
     uint32_t reply[2];
   
+    debug("castle_rxrpc_get_reply_start call=%p get=%p\n", call, get);
+  
     /* Deal with errors first */
     if(err)
     {
@@ -369,6 +341,9 @@ void castle_rxrpc_get_reply_continue(struct castle_object_get *get,
                                      int last)
 {
     struct castle_rxrpc_call *call = container_of(get, struct castle_rxrpc_call, get);
+    
+    debug("castle_rxrpc_get_reply_continue call=%p get=%p\n", call, get);
+    
     castle_rxrpc_call_reply_continue(call, err, buffer, buffer_length, last); 
 }
 
@@ -613,6 +588,8 @@ static int castle_rxrpc_get_decode(struct castle_rxrpc_call *call, struct sk_buf
     ret = castle_rxrpc_collection_key_get(skb, &attachment, &key);
     if(ret)
         return ret;
+
+    debug("castle_rxrpc_get_decode call=%p get=%p\n", call, &call->get);
 
     call->get.reply_start = castle_rxrpc_get_reply_start;
     call->get.reply_continue = castle_rxrpc_get_reply_continue;
@@ -955,6 +932,8 @@ static void castle_rxrpc_msg_send(struct castle_rxrpc_call *call, struct msghdr 
 {
     int n;
 
+    debug("castle_rxrpc_msg_send call=%p\n", call);
+
     if(call->state >= RXRPC_CALL_COMPLETE)
     {
         printk("Warning, trying to sent data on completed call, type=%s.\n",
@@ -1010,7 +989,7 @@ static void castle_rxrpc_double_reply_send(struct castle_rxrpc_call *call,
     struct iovec iov[3];
     uint8_t pad_buff[3] = {0, 0, 0};
     int pad = (4 - (len2 % 4)) % 4;
-
+    
     iov[0].iov_base     = (void *) buf1;
     iov[0].iov_len      = len1;
     iov[1].iov_base     = (void *) buf2;
