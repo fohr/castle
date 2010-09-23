@@ -704,8 +704,8 @@ static int castle_object_data_write(struct castle_object_replace *replace)
     data_c2b_offset = replace->data_c2b_offset;
     data_length = replace->data_length;
 
-    debug("Data write. call=%p, data_c2b=%p, data_c2b_offset=%d, data_length=%d\n",
-        call, data_c2b, data_c2b_offset, data_length);
+    debug("Data write. replace=%p, data_c2b=%p, data_c2b_offset=%d, data_length=%d\n",
+        replace, data_c2b, data_c2b_offset, data_length);
     data_c2b_length = data_c2b->nr_pages * C_BLK_SIZE;
     packet_length = replace->data_length_get(replace);
 
@@ -1160,15 +1160,15 @@ void __castle_object_get_complete(struct work_struct *work)
 {
     c_bvec_t *c_bvec = container_of(work, c_bvec_t, work);
     struct castle_object_get *get = c_bvec->c_bio->get;
-    c2_block_t *c2b;
-    uint32_t data_c2b_length, data_length;
+    
+    c2_block_t *c2b = get->data_c2b;
+    uint32_t data_c2b_length = get->data_c2b_length;
+    uint32_t data_length = get->data_length;
+    int first = get->first;
+    
     c_disk_blk_t cdb;
-    int first, last;
-
-    castle_rxrpc_get_call_get(get, &c2b, &data_c2b_length, &data_length, &first);
-    debug("Get complete for get %p, first=%d, c2b->cdb=(0x%x, 0x%x), "
-           "data_c2b_length=%d, data_length=%d\n", 
-        get, first, c2b->cdb.disk, c2b->cdb.block, data_c2b_length, data_length);
+    int last;
+    
     /* Deal with error case first */
     if(!c2b_uptodate(c2b))
     {
@@ -1204,7 +1204,13 @@ void __castle_object_get_complete(struct work_struct *work)
     cdb.block = c2b->cdb.block + OBJ_IO_MAX_BUFFER_SIZE;
     debug("Continuing for cdb=(0x%x, 0x%x)\n", cdb.disk, cdb.block);   
     /* TODO: Work out if we don't go into unbound recursion here */
-    castle_rxrpc_get_call_set(get, c2b, data_c2b_length, data_length, 0 /* not first any more */);
+    
+    /* TODO: how much of this is a no-op from above? */
+    get->data_c2b        = c2b;
+    get->data_c2b_length = data_c2b_length;
+    get->data_length     = data_length;
+    get->first           = 0; /* not first any more */
+    
     castle_object_get_continue(c_bvec,
                                get,
                                cdb,
@@ -1212,8 +1218,8 @@ void __castle_object_get_complete(struct work_struct *work)
     return;
 
 out:    
-    debug("Finishing with call %p, putting c2b->cdb=(0x%x, 0x%x)\n",
-        call, c2b->cdb.disk, c2b->cdb.block);
+    debug("Finishing with get=%p, putting c2b->cdb=(0x%x, 0x%x)\n",
+        get, c2b->cdb.disk, c2b->cdb.block);
     unlock_c2b(c2b);
     put_c2b(c2b);
 
@@ -1223,15 +1229,13 @@ out:
 void castle_object_get_io_end(c2_block_t *c2b, int uptodate)
 {
     c_bvec_t *c_bvec = c2b->private;
+
 #ifdef CASTLE_DEBUG    
     struct castle_object_get *get = c_bvec->c_bio->get;
-    c2_block_t *data_c2b;
-    uint32_t data_length, data_c2b_length;
-    int first;
-
-    castle_rxrpc_get_call_get(get, &data_c2b, &data_c2b_length, &data_length, &first); 
+    c2_block_t *data_c2b = get->data_c2b;
     BUG_ON(c2b != data_c2b);
 #endif
+
     debug("IO end for cdb (0x%x, 0x%x), uptodate=%d\n", 
             c2b->cdb.disk, c2b->cdb.block, uptodate);
     if(uptodate)
@@ -1246,15 +1250,18 @@ void castle_object_get_continue(struct castle_bio_vec *c_bvec,
                                 c_disk_blk_t data_cdb,
                                 uint32_t data_length)
 {
-    c2_block_t *c2b, *old_c2b;
-    int nr_blocks, first;
-    uint32_t data_c2b_length, old_data_length;
+    c2_block_t *c2b;
+    int nr_blocks;
+    
+    c2_block_t *old_c2b = get->data_c2b;
+    uint32_t data_c2b_length = get->data_c2b_length;
+    uint32_t old_data_length = get->data_length;
     
     BUG_ON(c_bvec->c_bio->get != get);
-    castle_rxrpc_get_call_get(get, &old_c2b, &data_c2b_length, &old_data_length, &first);
-    debug("get_continue for call %p, data_c2b_length=%d, "
+
+    debug("get_continue for get=%p, data_c2b_length=%d, "
            "old_data_length=%d, data_length=%d, first=%d\n", 
-        call, data_c2b_length, old_data_length, data_length, first);
+        get, data_c2b_length, old_data_length, data_length, get->first);
     BUG_ON(data_length != old_data_length);
     /* If old_c2b exists, we must have completed a MAX chunk */
     BUG_ON( old_c2b &&
@@ -1280,7 +1287,11 @@ void castle_object_get_continue(struct castle_bio_vec *c_bvec,
     debug("Locking cdb (0x%x, 0x%x)\n", data_cdb.disk, data_cdb.block);
     c2b = castle_cache_block_get(data_cdb, nr_blocks);
     lock_c2b(c2b);
-    castle_rxrpc_get_call_set(get, c2b, data_c2b_length, data_length, first);
+    
+    get->data_c2b        = c2b;
+    get->data_c2b_length = data_c2b_length;
+    get->data_length     = data_length;
+    
     /* Unlock the old c2b if we had one */
     if(old_c2b)
     {
@@ -1310,8 +1321,8 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
     struct castle_object_get *get = c_bvec->c_bio->get;
     c_bio_t *c_bio = c_bvec->c_bio;
 
-    debug("Returned from btree walk with value of type 0x%x and length %u\n", 
-          cvt.type, cvt.length);
+    debug("Returned from btree walk with value of type get=%p 0x%x and length %u\n", 
+          get, cvt.type, cvt.length);
     /* Sanity checks on the bio */
     BUG_ON(c_bvec_data_dir(c_bvec) != READ); 
     BUG_ON(atomic_read(&c_bio->count) != 1);
@@ -1344,7 +1355,12 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
     BUG_ON(!CVT_ONDISK(cvt));
     /* Init the variables stored in the call correctly, so that _continue() doesn't
        get confused */
-    castle_rxrpc_get_call_set(get, NULL, 0, cvt.length, 1 /* first */);
+      
+    get->data_c2b        = NULL;
+    get->data_c2b_length = 0;
+    get->data_length     = cvt.length;
+    get->first           = 1; /* first */
+    
     castle_object_get_continue(c_bvec, get, cvt.cdb, cvt.length);
 }
 
@@ -1355,6 +1371,8 @@ int castle_object_get(struct castle_object_get *get,
     c_vl_bkey_t *btree_key;
     c_bvec_t *c_bvec;
     c_bio_t *c_bio;
+
+    debug("castle_object_get get=%p\n", get);
 
     btree_key = castle_object_key_convert(key);
     castle_object_key_free(key);
@@ -1381,3 +1399,5 @@ int castle_object_get(struct castle_object_get *get,
 
     return 0;
 }
+
+EXPORT_SYMBOL(castle_object_get);
