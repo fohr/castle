@@ -1048,10 +1048,9 @@ int castle_object_iterfinish(castle_object_iterator_t *iterator)
 {
     castle_objects_rq_iter_cancel(iterator);
     debug_rq("Freeing iterators & buffers.\n");
-    // TODO: should be castle_free, but is kalloced at the moment
-    kfree(iterator->start_okey);
-    kfree(iterator->end_okey);
-    kfree(iterator);
+    castle_free(iterator->start_okey);
+    castle_free(iterator->end_okey);
+    castle_free(iterator);
 
     return 0;
 }
