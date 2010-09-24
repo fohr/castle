@@ -50,6 +50,8 @@ void* castle_debug_malloc(size_t size, gfp_t flags, char *file, int line)
     return (char *)dobj + sizeof(struct castle_malloc_debug); 
 }
 
+EXPORT_SYMBOL(castle_debug_malloc);
+
 void* castle_debug_zalloc(size_t size, gfp_t flags, char *file, int line)
 {
     char *obj;
@@ -60,6 +62,8 @@ void* castle_debug_zalloc(size_t size, gfp_t flags, char *file, int line)
 
     return obj; 
 }
+
+EXPORT_SYMBOL(castle_debug_zalloc);
 
 void castle_debug_free(void *obj)
 {
@@ -74,6 +78,8 @@ void castle_debug_free(void *obj)
 
     kfree(dobj);
 }
+
+EXPORT_SYMBOL(castle_debug_free);
 
 static void castle_debug_malloc_fini(void)
 {

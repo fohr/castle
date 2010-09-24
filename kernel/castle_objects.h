@@ -11,6 +11,14 @@ void        *castle_object_btree_key_next    (c_vl_bkey_t *key);
 int          castle_object_get               (struct castle_object_get *get, 
                                               struct castle_attachment *attachment, 
                                               c_vl_okey_t *key);
+int          castle_object_iterstart         (struct castle_attachment *attachment,
+                                              c_vl_okey_t *start_key,
+                                              c_vl_okey_t *end_key,
+                                              castle_object_iterator_t **iter);
+int          castle_object_iternext          (castle_object_iterator_t *iterator,
+                                              c_vl_okey_t **key,
+                                              c_val_tup_t *val);
+int          castle_object_iterfinish        (castle_object_iterator_t *iter);
 int          castle_object_slice_get         (struct castle_rxrpc_call *call, 
                                               struct castle_attachment *attachment, 
                                               c_vl_okey_t *start_key, 

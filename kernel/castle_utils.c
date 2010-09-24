@@ -97,6 +97,8 @@ void vl_okey_print(c_vl_okey_t *key)
     }
 }
 
+EXPORT_SYMBOL(vl_okey_print);
+
 void vl_bkey_print(c_vl_bkey_t *key)
 {
     c_vl_okey_t *okey;

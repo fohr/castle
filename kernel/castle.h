@@ -790,4 +790,23 @@ struct castle_object_get {
     
 };
 
+typedef struct castle_object_iterator {
+    /* Filled in by the client */
+    da_id_t             da_id;
+    version_t           version;
+    c_vl_okey_t        *start_okey;
+    c_vl_okey_t        *end_okey;
+
+    /* Rest */
+    int                 err;
+    c_vl_bkey_t        *start_bkey;
+    c_vl_bkey_t        *end_bkey;
+    c_da_rq_iter_t      da_rq_iter;
+    /* Cached entry, guaranteed to fall in the hypercube */
+    int                 cached;
+    void               *cached_k;
+    version_t           cached_v;
+    c_val_tup_t         cached_cvt;
+} castle_object_iterator_t;
+
 #endif /* __CASTLE_H__ */
