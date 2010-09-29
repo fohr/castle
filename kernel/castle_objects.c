@@ -451,7 +451,7 @@ static void castle_objects_rq_iter_next(c_obj_rq_iter_t *iter,
 
 static int castle_objects_rq_iter_has_next(c_obj_rq_iter_t *iter)
 {
-    void *k, *next_key;
+    void *k;
     version_t v;
     c_val_tup_t cvt;
     int offending_dim, bigger;
@@ -475,6 +475,8 @@ static int castle_objects_rq_iter_has_next(c_obj_rq_iter_t *iter)
         //vl_bkey_print(k);
         if(bigger)
         {
+            void *next_key;
+
             /* We are outside of the rq hypercube, find next intersection point
                and skip to that */
             next_key = castle_object_btree_key_skip(k, 
@@ -485,6 +487,7 @@ static int castle_objects_rq_iter_has_next(c_obj_rq_iter_t *iter)
             //vl_bkey_print(next_key);
             /* TODO: memory leak for next keys! FIX that */
             castle_da_rq_iter.skip(&iter->da_rq_iter, next_key);
+            castle_free(next_key);
         }    
         else 
         {
