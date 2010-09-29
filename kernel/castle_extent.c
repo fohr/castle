@@ -276,13 +276,9 @@ static int castle_extent_hash_flush2disk(c_ext_t *ext, void *unused)
     if (!i)
     {
         cep.offset = pg << C_BLK_SHIFT;
-        printk("1\n");
         c2b = castle_cache_block_get(cep, 1);
         set_c2b_uptodate(c2b);
-        printk("%p on %s:%u - "cep_fmt_str_nl, c2b, c2b->file, c2b->line,
-                                cep2str(cep));
         lock_c2b(c2b);
-        printk("%p\n", c2b);
         extents = c2b->buffer;
     }
     BUG_ON(!extents);
@@ -327,17 +323,8 @@ void __castle_extents_fini(void)
 void castle_extents_fini()
 {
     /* Make sure cache flushed all dirty pages */
-
-    /* Sync in-memory extent hash table with extent store and chunk map store */
-
     castle_extents_hash_iterate(castle_extent_hash_remove, NULL);
-#if 0
-    /* Flush all dirty pages */
-    castle_extents_hash_remove(&meta_ext);
-    castle_extents_hash_remove(&micro_ext);
-#endif
     castle_extent_micro_maps_destroy();
-
     castle_free(castle_extents_hash);
 }
 
@@ -393,7 +380,6 @@ int castle_extent_space_alloc(c_ext_t *ext, da_id_t da_id)
              * allocate more */
             if (chk_buf[id].count)
             {
-                //debug("Using chunks from buffer\n");
                 maps_buf[MAP_IDX(ext, i, j)].offset   = chk_buf[id].first_chk;
                 if (--chk_buf[id].count)
                     chk_buf[id].first_chk++;
@@ -404,7 +390,6 @@ int castle_extent_space_alloc(c_ext_t *ext, da_id_t da_id)
                 /* FIXME: might need to allocate more than one slot */
                 chk_buf[id] = castle_freespace_slave_chunks_alloc(cs, 
                                             da_id, 1);
-                //debug("Allocating more into buffer\n");
                 if (!chk_buf[id].count)
                 {
                     debug("Failed to allocate chunks from slave: %u\n",
@@ -429,7 +414,6 @@ int castle_extent_space_alloc(c_ext_t *ext, da_id_t da_id)
     rda_spec->extent_fini(ext->ext_id, state);
     castle_free(slaves);
 
-#if 1
     debug("Extent #%llu; size: %u\n ", ext->ext_id, ext->size);
     for (i=0; i<ext->size; i++)
     {
@@ -438,7 +422,6 @@ int castle_extent_space_alloc(c_ext_t *ext, da_id_t da_id)
                                     maps_buf[MAP_IDX(ext, i, j)].offset);
         printk("\n ");
     }
-#endif
 
     cep = ext->maps_cep;
     for (i=0; i < req_space; i += C_BLK_SIZE)
@@ -670,11 +653,9 @@ void castle_extent_map_get(c_ext_id_t             ext_id,
     c2_block_t  *c2b =  NULL;
     c_disk_chk_t *buf;
 
-    debug("Query for extent %llu on offset %u\n", ext_id, offset);
     buf = castle_extent_map_buf_get(ext, offset, nr_chunks, &c2b);
     memcpy(chk_maps, buf, sizeof(c_disk_chk_t) * nr_chunks * ext->k_factor);
     castle_extent_map_buf_put(ext, c2b);
-    debug("Query handled for extent %llu on offset %u\n", ext_id, offset);
 }
 
 
