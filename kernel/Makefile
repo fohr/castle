@@ -12,7 +12,7 @@ ifeq ($(DEBUG),y)
   DEBFLAGS = -Werror -O0 -g -DCASTLE_DEBUG # "-O" is needed to expand inlines
   $(TARGET)-objs += castle_debug.o
 else
-  DEBFLAGS = -O0 -g
+  DEBFLAGS = -O2 -g
 endif
 
 ifeq ($(PERF_DEBUG),y)
