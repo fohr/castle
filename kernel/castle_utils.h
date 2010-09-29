@@ -73,6 +73,24 @@ static inline _struct* _prefix##_hash_get(_key_t key)                           
     return v;                                                                        \
 }                                                                                    \
                                                                                      \
+static inline void _prefix##_hash_iterate_unsafe(int (*fn)(_struct*, void*), void *arg)     \
+{                                                                                    \
+    struct list_head *l, *t;                                                         \
+    _struct *v;                                                                      \
+    int i;                                                                           \
+                                                                                     \
+    for(i=0; i<_tab_size; i++)                                                       \
+    {                                                                                \
+        list_for_each_safe(l, t, &_tab[i])                                           \
+        {                                                                            \
+            v = list_entry(l, _struct, hash_list);                                   \
+            if(fn(v, arg)) goto out;                                                 \
+        }                                                                            \
+    }                                                                                \
+out:                                                                                 \
+   return;                                                                           \
+}                                                                                    \
+                                                                                     \
 static inline void _prefix##_hash_iterate(int (*fn)(_struct*, void*), void *arg)     \
 {                                                                                    \
     struct list_head *l, *t;                                                         \

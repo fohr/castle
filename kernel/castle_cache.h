@@ -4,14 +4,13 @@
 enum c2b_state_bits {
     C2B_uptodate,
     C2B_dirty,
+    C2B_flushing,
 };
 
 #define INIT_C2B_BITS (0)
 
 typedef struct castle_cache_block {
     c_ext_pos_t           cep;
-    //c_ext_off_t           ext_off; /* Offset inside an extent */
-    int                   is_ext; /* C2B is extent based or not */
     atomic_t              remaining;
     int                   nr_pages;
     struct list_head      pages;
@@ -57,8 +56,11 @@ static inline int test_clear_c2b_##name(c2_block_t *c2b)	        \
 CACHE_FNS(uptodate, uptodate)
 CACHE_FNS(dirty, dirty)
 TAS_CACHE_FNS(dirty, dirty)
+CACHE_FNS(flushing, flushing)
+TAS_CACHE_FNS(flushing, flushing)
 
 void __lock_c2b(c2_block_t *c2b, int write_mode);
+int __trylock_c2b(c2_block_t *c2b, int write_mode);
 void unlock_c2b(c2_block_t *c2b);
 void unlock_c2b_read(c2_block_t *c2b);
 int c2b_locked(c2_block_t *c2b);
@@ -79,7 +81,6 @@ void dirty_c2b(c2_block_t *c2b);
     (_c2b)->file = __FILE__;          \
     (_c2b)->line = __LINE__;          \
 }
-
 #else
 static inline void lock_c2b(c2_block_t *c2b)
 {
@@ -91,6 +92,14 @@ static inline void lock_c2b_read(c2_block_t *c2b)
 }
 #endif
 
+static inline int trylock_c2b(c2_block_t *c2b)
+{
+     return __trylock_c2b(c2b, 1);
+}
+static inline int trylock_c2b_read(c2_block_t *c2b)
+{
+     return __trylock_c2b(c2b, 0);
+}
 
 static inline void get_c2b(c2_block_t *c2b)
 {

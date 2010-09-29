@@ -10,10 +10,10 @@
  * buddy-list allocation.
  */
 
-void castle_freespace_slaves_init(int fresh_fs);
+//void castle_freespace_slaves_init(int fresh_fs);
 
 /* Load on-disk structures into memory */
-int castle_freespace_slave_init(struct castle_slave *cs);
+int castle_freespace_slave_init(struct castle_slave *cs, int fresh);
 
 /* Free in-memory structures */
 void castle_freespace_slave_close(struct castle_slave *cs);

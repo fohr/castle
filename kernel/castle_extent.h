@@ -8,6 +8,9 @@ typedef enum {
     JOURNAL,
     FS_META,
     LOG_FREEZER,
+    META_EXT,
+    MICRO_EXT,
+    SUPER_EXT,
     NR_RDA_SPEC
 } c_rda_type_t;
 
@@ -40,7 +43,7 @@ typedef void (*c_extent_fini_t)(c_ext_id_t         ext_id,
                                 void              *state);
 typedef struct {
     c_rda_type_t                type;           /* RDA type */
-    uint32_t                    k_factor;       /* K factor in K-RDA */
+    uint32_t                    k_factor;       /* K in K-RDA. [in order of 2] */
     c_next_slave_get_t          next_slave_get; /* fn() to get sequence of
                                                  * slaves to allocate freespace */
     c_extent_init_t             extent_init;
@@ -78,16 +81,23 @@ castle_extent_free(c_rda_type_t             rda_type,
                    da_id_t                  da_id,
                    c_ext_id_t               ext_id);
 
+uint32_t
+castle_extent_kfactor_get(c_ext_id_t ext_id);
+
 /* Sets @chunks to all physical chunks holding the logical chunks from offset */
-c_disk_chk_t * 
+void 
 castle_extent_map_get(c_ext_id_t             ext_id,
                       c_chk_t                offset,
-                      uint32_t              *k_factor);
+                      c_chk_cnt_t            nr_chunks,
+                      c_disk_chk_t          *chk_maps);
 
 c_ext_id_t 
 castle_extent_sup_ext_init(struct castle_slave      *cs);
 
 void 
 castle_extent_sup_ext_close(struct castle_slave     *cs);
+
+void 
+castle_extents_load(int first);
 
 #endif //__CASTLE_EXTENT_H__

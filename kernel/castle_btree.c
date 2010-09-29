@@ -268,13 +268,12 @@ static void castle_mtree_node_print(struct castle_btree_node *node)
     printk("Node: used=%d, version=%d, is_leaf=%d\n",
         node->used, node->version, node->is_leaf);
     for(i=0; i<node->used; i++)
-        printk("[%d] (0x%x, 0x%x, %s) -> (0x%x, 0x%x)\n", 
+        printk("[%d] (0x%x, 0x%x, %s) -> "cep_fmt_str_nl, 
             i,
             entries[i].block,
             entries[i].version,
             MTREE_ENTRY_IS_LEAF_PTR(entries + i) ? "leafptr" : "direct ",
-            entries[i].cep.ext_id,
-            entries[i].cep.offset);
+            cep2str(entries[i].cep));
     printk("\n");
 }
 
@@ -562,10 +561,9 @@ static void castle_batree_node_print(struct castle_btree_node *node)
         printk("[%d] (", i); 
         for(j=0; j<BATREE_KEY_SIZE; j++)
             printk("%.2x", entry->key._key[j]);
-        printk(", 0x%x) -> (0x%x, 0x%x)\n", 
+        printk(", 0x%x) -> "cep_fmt_str_nl, 
             entries[i].version,
-            entries[i].cep.ext_id,
-            entries[i].cep.offset);
+            cep2str(entries[i].cep));
     }
     printk("\n");
 }
@@ -1188,19 +1186,17 @@ static void castle_vlba_tree_node_validate(struct castle_btree_node *node)
             printk("[%d] (", i-1); 
             for(j=0; j<VLBA_KEY_LENGTH(&prev_entry->key); j++)
                 printk("%.2x", prev_entry->key._key[j]);
-            printk(", 0x%x) -> (0x%x, 0x%x)\n", 
+            printk(", 0x%x) -> "cep_fmt_str_nl, 
                 prev_entry->version,
-                prev_entry->cep.ext_id,
-                prev_entry->cep.offset);
+                cep2str(prev_entry->cep));
 
             printk("Entry 2:\n");
             printk("[%d] (", i); 
             for(j=0; j<VLBA_KEY_LENGTH(&entry->key); j++)
                 printk("%.2x", entry->key._key[j]);
-            printk(", 0x%x) -> (0x%x, 0x%x)\n", 
+            printk(", 0x%x) -> "cep_fmt_str_nl, 
                 entry->version,
-                entry->cep.ext_id,
-                entry->cep.offset);
+                cep2str(entry->cep));
             BUG();
         }
 
@@ -1242,10 +1238,9 @@ static void castle_vlba_tree_node_print(struct castle_btree_node *node)
                 VLBA_ENTRY_LENGTH(entry)); 
         for(j=0; j<VLBA_KEY_LENGTH(&entry->key); j++)
             printk("%.2x", entry->key._key[j]);
-        printk(", 0x%x) -> (0x%x, 0x%x)\n", 
+        printk(", 0x%x) -> "cep_fmt_str_nl, 
             entry->version,
-            entry->cep.ext_id,
-            entry->cep.offset);
+            cep2str(entry->cep));
     }
     printk("\n");
 }
@@ -1478,11 +1473,15 @@ static void castle_btree_node_save(struct work_struct *work)
     {
         prev_cep = ct->last_node;
         c2b = castle_cache_block_get(prev_cep, btree->node_size);
+        printk("2.3\n");
         lock_c2b(c2b);
+        printk("2.4\n");
    
         /* If c2b is not up to date, issue a blocking READ to update */
+        printk("2.5\n");
         if(!c2b_uptodate(c2b))
             BUG_ON(submit_c2b_sync(READ, c2b));
+        printk("2.6\n");
 
         node = c2b_buffer(c2b);
         node->next_node = work_st->cep;
@@ -2046,8 +2045,8 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
         debug("Following write down the tree.\n");
         if (!CVT_BTREE_NODE(lub_cvt, btree)) 
         {
-            printk("0x%x-%d-0x%x-0x%x\n", lub_cvt.type, lub_cvt.length,
-                   lub_cvt.cep.ext_id, lub_cvt.cep.offset);
+            printk("0x%x-%d-"cep_fmt_str_nl, lub_cvt.type, lub_cvt.length,
+                   cep2str(lub_cvt.cep));
             BUG();
         }
         __castle_btree_find(btree, c_bvec, lub_cvt.cep, lub_key);
@@ -2963,8 +2962,8 @@ static void __castle_btree_iter_path_traverse(struct work_struct *work)
     entry_cep = cvt.cep;
     if (!CVT_BTREE_NODE(cvt, btree))
     {
-        printk("0x%x-%d-0x%x-0x%x\n", cvt.type, cvt.length,
-                cvt.cep.ext_id, cvt.cep.offset);
+        printk("0x%x-%d-"cep_fmt_str_nl, cvt.type, cvt.length,
+                cep2str(cvt.cep));
         BUG();
     }
 

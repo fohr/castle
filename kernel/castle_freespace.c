@@ -1,12 +1,11 @@
 #include <linux/mm.h>
 #include <linux/vmalloc.h>
-#include <linux/spinlock.h>
 
 #include "castle.h"
 #include "castle_debug.h"
 #include "castle_cache.h"
 
-#define DEBUG
+//#define DEBUG
 #ifdef DEBUG
 #define debug(_f, _a...)        (printk(_f, ##_a))
 #else
@@ -17,13 +16,39 @@
 #define C_FLOOR_OF(a) (((a) / CHKS_PER_SLOT) * CHKS_PER_SLOT)
 #define C_CEIL_OF(a)  (C_FLOOR_OF(a) + CHKS_PER_SLOT) 
 
+#define ENTRIES_PER_CHK                (C_CHK_SIZE / sizeof(c_chk_seq_t))
+
+castle_freespace_t * freespace_sblk_get(struct castle_slave *cs)
+{
+    c2_block_t *c2b = cs->freespace_sblk; 
+    
+    BUG_ON(c2b == NULL);
+    BUG_ON(!c2b_uptodate(c2b));
+    lock_c2b(c2b);
+    
+    return c2b->buffer;
+}
+
+void freespace_sblk_put(struct castle_slave *cs, int dirty)
+{
+    c2_block_t *c2b = cs->freespace_sblk;
+
+    BUG_ON(c2b == NULL);
+    if (dirty)
+        dirty_c2b(c2b);
+    unlock_c2b(c2b);
+}
+
 c_chk_seq_t castle_freespace_slave_chunks_alloc(struct castle_slave    *cs,
                                                 da_id_t                 da_id, 
                                                 c_chk_cnt_t             count)
 {
-    castle_freespace_t *freespace = cs->freespace;
-    c_chk_seq_t  chk_seq;
-    c_chk_seq_t *cons_chk_seq;
+    castle_freespace_t  *freespace;
+    c_chk_seq_t          chk_seq;
+    c_chk_seq_t         *cons_chk_seq;
+    c_ext_pos_t          cep;
+    c_byte_off_t         cons_off;
+    c2_block_t          *c2b;
 
     if (!count)
         return INVAL_CHK_SEQ;
@@ -31,15 +56,24 @@ c_chk_seq_t castle_freespace_slave_chunks_alloc(struct castle_slave    *cs,
     if (count % CHKS_PER_SLOT)
         count = C_CEIL_OF(count);
 
-    spin_lock(&freespace->lock);
+    freespace = freespace_sblk_get(cs);
 
     BUG_ON(freespace->cons == freespace->prod);
 
-    cons_chk_seq = &freespace->chk_seqs[freespace->cons];
+    cons_off   = FREESPACE_OFFSET + C_BLK_SIZE + freespace->cons * sizeof(c_chk_seq_t);
+    cep.ext_id = cs->sup_ext;
+    cep.offset = MASK_BLK_OFFSET(cons_off);
+    c2b = castle_cache_block_get(cep, 1);
+    lock_c2b(c2b);
+    
+    if (!c2b_uptodate(c2b))
+        BUG_ON(submit_c2b_sync(READ, c2b));
+    
+    cons_chk_seq = (c_chk_seq_t *)(((uint8_t *)c2b->buffer) + (cons_off - cep.offset));
     BUG_ON(!cons_chk_seq->count);
     BUG_ON(cons_chk_seq->count % CHKS_PER_SLOT);
 
-    chk_seq.first_chk        = cons_chk_seq->first_chk;
+    chk_seq.first_chk            = cons_chk_seq->first_chk;
     if (cons_chk_seq->count > count)
     {
         cons_chk_seq->first_chk += count;
@@ -53,10 +87,16 @@ c_chk_seq_t castle_freespace_slave_chunks_alloc(struct castle_slave    *cs,
         freespace->nr_entries--;
     }
     freespace->free_chk_cnt -= chk_seq.count;
+    
+    BUG_ON(freespace->nr_entries < 0 || freespace->free_chk_cnt < 0);
 
-    spin_unlock(&freespace->lock);
+    dirty_c2b(c2b);
+    unlock_c2b(c2b);
+    put_c2b(c2b);
 
-    debug("Allocating %llu chunks from slave %u at %llu chunk\n", chk_seq.count, 
+    freespace_sblk_put(cs, 1);
+
+    debug("Allocating %u chunks from slave %u at %u chunk\n", chk_seq.count, 
           cs->uuid,
           chk_seq.first_chk);
     
@@ -67,123 +107,126 @@ void castle_freespace_slave_chunk_free(struct castle_slave      *cs,
                                        c_chk_seq_t               chk_seq, 
                                        da_id_t                   da_id)
 {
-    castle_freespace_t *freespace = cs->freespace;
-    unsigned long flags;
+    castle_freespace_t  *freespace;
+    c2_block_t          *c2b;
+    c_chk_seq_t         *prod_chk_seq;
+    c_byte_off_t         prod_off;
+    c_ext_pos_t          cep;
 
     if (!chk_seq.count)
         return;
 
-    spin_lock(&freespace->lock);
+    freespace = freespace_sblk_get(cs);
 
-    printk("Freeing blocks %llu\n", chk_seq.count);
+    debug("Freeing blocks %u\n", chk_seq.count);
     BUG_ON(chk_seq.count % CHKS_PER_SLOT);
-    BUG_ON(freespace->chk_seqs[freespace->prod].count);
 
-    freespace->chk_seqs[freespace->prod].first_chk  = chk_seq.first_chk;
-    freespace->chk_seqs[freespace->prod].count      = chk_seq.count;
-    freespace->free_chk_cnt                        += chk_seq.count;
+    prod_off   = FREESPACE_OFFSET + C_BLK_SIZE + freespace->prod * sizeof(c_chk_seq_t);
+    cep.ext_id = cs->sup_ext;
+    cep.offset = MASK_BLK_OFFSET(prod_off);
+    c2b = castle_cache_block_get(cep, 1);
+    lock_c2b(c2b);
+    
+    if (!c2b_uptodate(c2b))
+        BUG_ON(submit_c2b_sync(READ, c2b));
+    
+    prod_chk_seq = (c_chk_seq_t *)(((uint8_t *)c2b->buffer) + (prod_off - cep.offset));
+    prod_chk_seq->first_chk  = chk_seq.first_chk;
+    prod_chk_seq->count      = chk_seq.count;
+
+    dirty_c2b(c2b);
+    unlock_c2b(c2b);
+    put_c2b(c2b);
+
+    freespace->free_chk_cnt += chk_seq.count;
     freespace->nr_entries++;
 
     freespace->prod = (freespace->prod + 1) % freespace->max_entries;
 
     if (freespace->prod == freespace->cons)
     {
-        spin_unlock_irqrestore(&freespace->lock, flags);
-        printk("    Free Chunks: %llu from slave %u\n", freespace->free_chk_cnt,
+        printk("    Free Chunks: %u from slave %u\n", freespace->free_chk_cnt,
                 cs->uuid);
         BUG(); /* FIXME: shouldn't come here */
     }
+    BUG_ON(freespace->nr_entries > freespace->max_entries ||
+                freespace->free_chk_cnt > freespace->disk_size);
 
-    spin_unlock(&freespace->lock);
+    freespace_sblk_put(cs, 1);
 }
 
 sector_t get_bd_capacity(struct block_device *bd);
 
 /* Load on-disk structures into memory */
-int castle_freespace_slave_init(struct castle_slave *cs)
+int castle_freespace_slave_init(struct castle_slave *cs, int fresh)
 {
-    castle_freespace_t *freespace;
-    size_t disk_sz = get_bd_capacity(cs->bdev);
-    int ret = 0;
+    castle_freespace_t      *freespace;
+    size_t                   disk_sz = get_bd_capacity(cs->bdev);
+    c2_block_t              *c2b;
+    c_chk_cnt_t              nr_chunks;
+    c_ext_pos_t              cep;
 
-    /* Allocate free-space structure for each slave */
-    freespace = castle_zalloc(sizeof(castle_freespace_t), GFP_KERNEL);
-    if (!freespace)
-    {
-        ret = -ENOMEM;
-        printk("FATAL: Failed to allocate memory for freespace\n");
-        goto __hell;
-    }
-    freespace->disk_id          = cs->id;
-    freespace->prod             = 0;
-    freespace->cons             = 0;
-    freespace->disk_size        = C_FLOOR_OF((disk_sz << 9)/ C_CHK_SIZE);
-    freespace->free_chk_cnt     = freespace->disk_size;
-    spin_lock_init(&freespace->lock);
-    freespace->max_entries      = freespace->free_chk_cnt / CHKS_PER_SLOT;
-    freespace->chk_seqs         = vmalloc(freespace->max_entries *
-                                                    sizeof(c_chk_seq_t));
-    if (!freespace->chk_seqs)
-    {
-        ret = -ENOMEM;
-        printk("FATAL: Failed to allocate memory for freespace list: %u:%llu\n",
-               freespace->max_entries, freespace->disk_size);
-        goto __hell;
-    }
-    /* FIXME: This is in-efficient. Need this for sake of correctness */
-    memset(freespace->chk_seqs, 0, freespace->max_entries * sizeof(c_chk_seq_t));
+    BUG_ON(!POWOF2(sizeof(c_chk_seq_t)));
+    BUG_ON(cs->sup_ext == INVAL_EXT_ID);
+
+    cep.ext_id = cs->sup_ext;
+    cep.offset = FREESPACE_OFFSET;
+    c2b = castle_cache_block_get(cep, 1);
+    BUG_ON(!c2b);
+    if (fresh)
+        set_c2b_uptodate(c2b);
+    lock_c2b(c2b);
+    /* If c2b is not up to date, issue a blocking READ to update */
+    if (!c2b_uptodate(c2b))
+        BUG_ON(submit_c2b_sync(READ, c2b));
+    cs->freespace_sblk = c2b;
+    freespace = c2b->buffer;
     
-    debug("Init Disk %d of size %llu chunks with list size: %u\n", 
+    if (fresh)
+    {
+        debug("Initialising new device\n");
+        memset(freespace, 0, sizeof(castle_freespace_t));
+        freespace->disk_size        = C_FLOOR_OF((disk_sz << 9)/ C_CHK_SIZE) -
+                                                FREE_SPACE_START;
+        freespace->max_entries      = freespace->disk_size / CHKS_PER_SLOT;
+    }
+
+    debug("Init Disk %d\n\tsize %u chunks\n\tlist size: %u\n", 
           cs->id, 
           freespace->disk_size,
           freespace->max_entries);
-   
-    freespace->free_chk_cnt -= FREE_SPACE_START;
-    cs->freespace = freespace;
-    
-    castle_freespace_slave_chunk_free(cs, 
-                         (c_chk_seq_t){FREE_SPACE_START, freespace->free_chk_cnt},
+    debug("     Free chunks: %u\n", freespace->free_chk_cnt);
+    debug("     nr_entries: %u\n", freespace->nr_entries);
+
+    nr_chunks = freespace->disk_size;
+    unlock_c2b(c2b);
+  
+    if (fresh)
+        castle_freespace_slave_chunk_free(cs, 
+                         (c_chk_seq_t){FREE_SPACE_START, nr_chunks},
                          0);
 
     return 0;
-
-__hell:
-    if (freespace)
-    {
-        if (freespace->chk_seqs)
-            castle_free(freespace->chk_seqs);
-        castle_free(freespace);
-    }
-    cs->freespace = NULL;
-
-    return ret;
 }
 
 void castle_freespace_summary_get(struct castle_slave *cs,
                                   c_chk_cnt_t         *free_cnt,
                                   c_chk_cnt_t         *size)
 {
-    castle_freespace_t *freespace = cs->freespace;
+    castle_freespace_t *freespace;
 
+    freespace = freespace_sblk_get(cs);
     *free_cnt   = freespace->free_chk_cnt;
     *size       = freespace->disk_size;
+    freespace_sblk_put(cs, 0);
 }
 
 void castle_freespace_slave_close(struct castle_slave *cs)
 {
-    castle_freespace_t *freespace = cs->freespace;
-
-    debug("De-Init Disk %u with free chunks: %llu\n", 
-          cs->id, 
-          freespace->free_chk_cnt);
-
-    vfree(freespace->chk_seqs);
-    castle_free(freespace);
-    cs->freespace = NULL;
-
     debug("Closed the module\n");
 }
 
+#if 0
 void castle_freespace_print(struct castle_slave *cs)
 {
     castle_freespace_t *freespace = cs->freespace;
@@ -198,3 +241,4 @@ void castle_freespace_print(struct castle_slave *cs)
     }
     printk("*************************************************************");
 }
+#endif

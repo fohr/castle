@@ -286,8 +286,8 @@ static int castle_debug_run(void *unused)
                 {
                     c2_block_t *c2b = c_bvec->locking;
 
-                    printk("Blocked on locking c2b for (0x%x, 0x%x).\n",
-                        c2b->cep.ext_id, c2b->cep.offset);
+                    printk("Blocked on locking c2b for "cep_fmt_str_nl,
+                        cep2str(c2b->cep));
                     if(c2b->file != NULL)
                         printk("c2b last locked from: %s:%d\n", c2b->file, c2b->line);
                     else

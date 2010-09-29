@@ -1495,8 +1495,8 @@ static void castle_da_max_path_complete(struct castle_da_merge *merge)
     BUG_ON(!merge->completing);
     /* Root stored in last_node_c2b at the end of the merge */
     root_c2b = merge->last_node_c2b;
-    printk("Maxifying the right most path, starting with root_cep=(0x%x, 0x%x)\n",
-            root_c2b->cep.ext_id, root_c2b->cep.offset);
+    printk("Maxifying the right most path, starting with root_cep="cep_fmt_str_nl,
+            cep2str(root_c2b->cep));
     /* Start of with root node */
     node_c2b = root_c2b;
     node = c2b_bnode(node_c2b);

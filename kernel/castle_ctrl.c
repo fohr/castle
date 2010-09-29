@@ -287,7 +287,7 @@ int castle_control_ioctl(struct inode *inode, struct file *filp,
 
     down(&castle_control_lock);
     debug("Lock taken: in_atomic=%d.\n", in_atomic());
-    //printk("Got IOCTL command %d.\n", ioctl.cmd);
+    printk("Got IOCTL command %d.\n", ioctl.cmd);
     switch(ioctl.cmd)
     {
         case CASTLE_CTRL_REQ_CLAIM:

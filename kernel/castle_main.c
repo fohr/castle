@@ -205,6 +205,9 @@ int castle_fs_init(void)
         castle_fs_superblock_put(cs, 0);
     }
 
+    /* Load extent structures into memory */
+    castle_extents_load(first);
+
     /* If first is still true, we've not found a single non-new cs.
        Init the fs superblock. */
     if(first) {
@@ -242,8 +245,10 @@ int castle_fs_init(void)
     //castle_freespace_slaves_init(first);
 
     /* Read doubling arrays and component trees in. */
+#if 1
     ret = first ? castle_double_array_create() : castle_double_array_read(); 
     if(ret) return -EINVAL;
+#endif
 
     /* Read versions in. This requires component trees. */
     ret = castle_versions_read();
@@ -405,9 +410,7 @@ static int castle_slave_superblocks_init(struct castle_slave *cs)
     }
     castle_slave_superblock_put(cs, cs->new_dev);
     debug("Before slave init: in_atomic()=%d\n", in_atomic());
-    // FIXME: bhaskar
-    //castle_freespace_slave_init(cs, cs->new_dev);
-    castle_freespace_slave_init(cs);
+    castle_freespace_slave_init(cs, cs->new_dev);
     castle_fs_superblock_put(cs, 0);
 
     return ret;
@@ -468,43 +471,6 @@ static int castle_slave_add(struct castle_slave *cs)
     return 0;
 }
 
-void do_extents(void)
-{
-    c_ext_id_t      ext_id;
-    c2_block_t     *c2b;
-
-    ext_id = castle_extent_alloc(DEFAULT, 0, 11);
-
-    c2b = castle_cache_block_get((c_ext_pos_t ){ext_id, 2 * C_BLK_SIZE}, BLKS_PER_CHK);
-    c2b->is_ext = 1;
-    lock_c2b(c2b);
-    if(!c2b_uptodate(c2b))
-        submit_c2b_sync(READ, c2b);
-
-    printk("Data: %x\n", *((uint32_t *)c2b->buffer));
-    
-    memset(c2b->buffer, 0xAB, C_CHK_SIZE);
-    dirty_c2b(c2b);
-    submit_c2b_sync(WRITE, c2b);
-    
-    printk("Data: %x\n", *((uint32_t *)c2b->buffer));
-    *((uint32_t *)c2b->buffer) = 0xFFFFFFFF;
-    printk("Data: %x\n", *((uint32_t *)c2b->buffer));
-    clear_c2b_uptodate(c2b);
-    if(!c2b_uptodate(c2b))
-        submit_c2b_sync(READ, c2b);
-    printk("Data: %x\n", *((uint32_t *)c2b->buffer));
-
-    unlock_c2b(c2b);
-    put_c2b(c2b);
-
-#if 0
-    castle_cache_block_free(c2b);
-
-    castle_extent_free(DEFAULT, 0, ext_id);
-#endif
-}
-
 struct castle_slave* castle_claim(uint32_t new_dev)
 {
     dev_t dev;
@@ -543,7 +509,11 @@ struct castle_slave* castle_claim(uint32_t new_dev)
     if(err == -EINVAL)
     {
         printk("Invalid superblock. Will initialise a new one.\n");
+#if 0   // FIXME: For sake of debugging
         get_random_bytes(&cs->uuid, sizeof(cs->uuid));
+#else
+        cs->uuid = cs->id + 0x100;
+#endif
         printk("Will use uuid of: 0x%x\n", cs->uuid);
         cs->new_dev = 1;
         err = 0;
@@ -593,11 +563,6 @@ struct castle_slave* castle_claim(uint32_t new_dev)
     
     castle_events_slave_claim(cs->uuid);
 
-#if 0
-    if (nr_slaves == 4)
-        do_extents();
-#endif
-
     return cs;
 err_out:
     castle_extent_sup_ext_close(cs);
@@ -617,8 +582,6 @@ err_out:
 void castle_release(struct castle_slave *cs)
 {
     castle_rda_slave_remove(DEFAULT, cs);
-    castle_freespace_slave_close(cs);
-
     castle_events_slave_release(cs->uuid);
     castle_sysfs_slave_del(cs);
     bd_release(cs->bdev);
@@ -1304,6 +1267,8 @@ static void castle_slaves_unlock(void)
         slave = list_entry(lh, struct castle_slave, list); 
         put_c2b(slave->sblk);
         put_c2b(slave->fs_sblk);
+        put_c2b(slave->freespace_sblk);
+        slave->freespace_sblk = NULL;
     }
 }
 
@@ -1408,6 +1373,8 @@ static void castle_attachments_free(void)
         unregister_blkdev(castle_attachments.major, "castle-fs");
 }
 
+void __castle_extents_fini(void);
+
 static int __init castle_init(void)
 {
     int ret;
@@ -1452,6 +1419,7 @@ err_out5:
 err_out4:
     BUG_ON(!list_empty(&castle_slaves.slaves));
     castle_slaves_unlock();
+    __castle_extents_fini();
     castle_cache_fini();
 err_out3:
     castle_extents_fini();
@@ -1486,6 +1454,7 @@ static void __exit castle_exit(void)
     //castle_freespace_fini();
     /* Drop all cache references (superblocks), flush the cache, free the slaves. */ 
     castle_slaves_unlock();
+    __castle_extents_fini();
     castle_cache_fini();
     castle_extents_fini();
     castle_slaves_free();

@@ -6,7 +6,7 @@
 #include "castle_debug.h"
 #include "castle_extent.h"
 
-#define DEBUG
+//#define DEBUG
 #ifdef DEBUG
 #define debug(_f, _a...)        (printk(_f, ##_a))
 #else
@@ -47,7 +47,7 @@ void knuth_shuffle(uint8_t *a, int n)
     }
     debug("Permuation:\n\t");
     for (i=0; i<n; i++)
-        printk("%u ", (uint32_t)a[i]);
+        debug("%u ", (uint32_t)a[i]);
     debug("\n");
 }
 

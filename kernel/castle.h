@@ -79,17 +79,56 @@ typedef struct castle_disk_block c_disk_blk_t;
 #define BLOCK(offset)         ((offset) >> C_BLK_SHIFT)
 #define BLK_IN_CHK(offset)    (BLOCK(CHUNK_OFFSET(offset)))
 #define BLKS_PER_CHK          (C_CHK_SIZE / C_BLK_SIZE)
+#define MASK_BLK_OFFSET(offset) ((offset) >> C_BLK_SHIFT << C_BLK_SHIFT)
 //#define SECTOR(offset)        ((offset) >> 9)
 
-#define SUP_EXT_SIZE                   (30)  /* 2-RDA. Occupies double the space */
-#define META_SPACE_SIZE                (500)
-#define FREE_SPACE_START               (600)
+#define POWOF2(_n)            (((_n) & ((_n) - 1)) == 0)
+/*  Chunk #                     Description     
+ *  =======                     ===========
+ *   0 - 29                     Super Extent
+ *   0                          Super block (Only first 8k)
+ *   1                          Reserved
+ *   2                          Freespace structures
+ *   3 - 29                     Reserved
+ *          
+ *           Leave double the space (Super Extent is 2-RDA)
+ *
+ *   60                         Micro Extent (Maps of meta extent) 
+ *
+ *   61 - 63                    Reserved
+ *
+ *   64 - 563 (on each disk)    Meta extent (Spans across multiple disks)
+ *                              would occupy 1024 logical chunks
+ *    0 -  99                   Extent Structures
+ *  100 - 1023                  Extent maps
+ */
 
-typedef uint64_t c_chk_cnt_t;
-typedef uint64_t c_chk_t;
-/* FIXME: ext_id should be 64-bit. Cahnging to 32-bit to making it compatible
- * with cdb, for easy integration */
-typedef uint32_t c_ext_id_t;
+#define SUP_EXT_ID                     (10)
+#define MICRO_EXT_ID                   (332)
+#define META_EXT_ID                    (333)
+#define EXT_SEQ_START                  (1000)
+
+/* Size of special(or logical) extents [in chunks] */
+#define SUP_EXT_SIZE                   (30)  /* 2-RDA. Occupies double the space */
+#define MICRO_EXT_START                (60)
+#define MICRO_EXT_SIZE                 (1)   /* Dont change this */
+#define META_SPACE_START               (64)
+#define META_SPACE_SIZE                (100)
+#define META_EXT_SIZE                  (50) /* 2-RDA. Occupies double the space */
+#define EXT_ST_SIZE                    (10)
+#define FREE_SPACE_START               (600)
+#define FREESPACE_OFFSET               (2 * C_CHK_SIZE)
+#define FREESPACE_SIZE                 (20 * C_CHK_SIZE)
+
+#define sup_ext_to_slave_id(_id)       ((_id) - SUP_EXT_ID)
+#define slave_id_to_sup_ext(_id)       ((_id) + SUP_EXT_ID)
+
+#define LOGICAL_EXTENT(_ext_id)        ((_ext_id) < EXT_SEQ_START)
+#define SUPER_EXTENT(_ext_id)          ((_ext_id) >= SUP_EXT_ID && (_ext_id) < slave_id_to_sup_ext(MAX_NR_SLAVES))
+
+typedef uint32_t c_chk_cnt_t;
+typedef uint32_t c_chk_t;
+typedef uint64_t c_ext_id_t;
 typedef uint32_t c_uuid_t;
 
 #define INVAL_EXT_ID                    (-1)
@@ -118,21 +157,9 @@ typedef struct castle_disk_chunk c_disk_chk_t;
                                       ((_chk).offset == 0))
 #define DISK_CHK_EQUAL(_chk1, _chk2) (((_chk1).slave_id == (_chk2).slave_id) && \
                                       ((_chk1).offset == (_chk2).offset)) 
-#define disk_chk_fmt                  "(0x%x, 0x%llx)"
+#define disk_chk_fmt                  "(0x%x, 0x%x)"
+#define disk_chk_fmt_nl               "(0x%x, 0x%x)\n"
 #define disk_chk2str(_chk)            (_chk).slave_id, (_chk).offset
-
-
-typedef struct {
-    uint32_t        disk_id;
-    c_chk_seq_t    *chk_seqs;
-    uint32_t        max_entries;
-    uint32_t        nr_entries;
-    uint32_t        prod;
-    uint32_t        cons;
-    c_chk_cnt_t     free_chk_cnt;
-    c_chk_cnt_t     disk_size;
-    spinlock_t      lock;
-} castle_freespace_t;
 
 typedef uint32_t c_byte_off_t; 
 
@@ -142,12 +169,14 @@ struct castle_extent_position {
     c_byte_off_t    offset;
 } PACKED;
 typedef struct castle_extent_position c_ext_pos_t;
+#define __INVAL_EXT_POS             {INVAL_EXT_ID,0}
 #define INVAL_EXT_POS               ((c_ext_pos_t){INVAL_EXT_ID,0})
 #define EXT_POS_INVAL(_off)         ((_off).ext_id == INVAL_EXT_ID)
 #define EXT_POS_EQUAL(_off1, _off2) (((_off1).ext_id == (_off2).ext_id) && \
                                       ((_off1).offset == (_off2).offset)) 
-#define ext_pos_fmt                  "(0x%llx, 0x%llx)"
-#define ext_pos2str(_off)            (_off).ext_id, (_off).offset
+#define cep_fmt_str                  "(%llu, 0x%x)"
+#define cep_fmt_str_nl               "(%llu, 0x%x). \n"
+#define cep2str(_off)                (_off).ext_id, BLOCK((_off).offset)
 
 #define CASTLE_SLAVE_TARGET     (0x00000001)
 #define CASTLE_SLAVE_SPINNING   (0x00000002)
@@ -157,6 +186,16 @@ typedef struct castle_extent_position c_ext_pos_t;
 #define CASTLE_SLAVE_MAGIC3     (0x16061981)
 
 #define CASTLE_SLAVE_VERSION    (1)
+
+typedef struct {
+    uint32_t        max_entries;
+    uint32_t        nr_entries;
+    uint32_t        prod;
+    uint32_t        cons;
+    c_chk_cnt_t     free_chk_cnt;
+    c_chk_cnt_t     disk_size;
+} castle_freespace_t;
+
 
 struct castle_slave_superblock {
     uint32_t     magic1;
@@ -242,9 +281,7 @@ typedef struct castle_btree_val c_val_tup_t;
 
 typedef uint8_t c_mstore_id_t;
 
-#define INVAL_MSTORE_KEY           ((c_mstore_key_t){{INVAL_EXT_ID,0},0})
-//FIXME: Try to use the following syntax.
-//#define INVAL_MSTORE_KEY           ((c_mstore_key_t){INVAL_EXT_POS,0})
+#define INVAL_MSTORE_KEY           ((c_mstore_key_t){__INVAL_EXT_POS,0})
 #define MSTORE_KEY_INVAL(_k)       (EXT_POS_INVAL(_k.cep) && ((_k).idx == 0))
 #define MSTORE_KEY_EQUAL(_k1, _k2) (EXT_POS_EQUAL(_k1.cep, _k2.cep)  &&         \
                                     ((_k1).idx == (_k2).idx))
@@ -737,12 +774,13 @@ struct castle_slave {
     struct list_head                list;
     struct block_device            *bdev;
     c_ext_id_t                      sup_ext;
+    c_disk_chk_t                   *sup_ext_maps;
+    struct castle_cache_block      *freespace_sblk;
     struct castle_cache_block      *sblk;
     struct castle_cache_block      *fs_sblk;
     block_t                         free_blk;
     struct castle_slave_block_cnts  block_cnts;
     unsigned long                   last_access;
-    castle_freespace_t             *freespace;
 };
 
 struct castle_slaves {
