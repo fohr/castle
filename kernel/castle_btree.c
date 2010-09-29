@@ -1473,15 +1473,11 @@ static void castle_btree_node_save(struct work_struct *work)
     {
         prev_cep = ct->last_node;
         c2b = castle_cache_block_get(prev_cep, btree->node_size);
-        printk("2.3\n");
         lock_c2b(c2b);
-        printk("2.4\n");
    
         /* If c2b is not up to date, issue a blocking READ to update */
-        printk("2.5\n");
         if(!c2b_uptodate(c2b))
             BUG_ON(submit_c2b_sync(READ, c2b));
-        printk("2.6\n");
 
         node = c2b_buffer(c2b);
         node->next_node = work_st->cep;

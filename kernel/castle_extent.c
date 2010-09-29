@@ -418,9 +418,9 @@ int castle_extent_space_alloc(c_ext_t *ext, da_id_t da_id)
     for (i=0; i<ext->size; i++)
     {
         for (j=0; j<ext->k_factor; j++)
-            printk("%u - %u |", maps_buf[MAP_IDX(ext, i, j)].slave_id,
+            debug("%u - %u |", maps_buf[MAP_IDX(ext, i, j)].slave_id,
                                     maps_buf[MAP_IDX(ext, i, j)].offset);
-        printk("\n ");
+        debug("\n ");
     }
 
     cep = ext->maps_cep;

@@ -395,8 +395,10 @@ int submit_c2b_rda(int rw, c2_block_t *c2b)
                 atomic_sub(c2b->nr_pages - rem_pages, &c2b->remaining);
                 return -ENODEV;
             }
+#if 0
             printk("READ "cep_fmt_str"-"disk_chk_fmt_nl, cep2str(c2b->cep),
                         disk_chk2str(chk));
+#endif
             cs = castle_slave_find_by_uuid(chk.slave_id);
             if (!cs)
             {
@@ -456,8 +458,10 @@ int submit_c2b_rda(int rw, c2_block_t *c2b)
             sector  = (sector_t)(chk.offset << (C_CHK_SHIFT - 9)) +
                                 (BLK_IN_CHK(cur_offset) << (C_BLK_SHIFT - 9));
             cur_page = page;
+#if 0
             printk("WRITE "cep_fmt_str"-"disk_chk_fmt_nl, cep2str(c2b->cep),
                         disk_chk2str(chk));
+#endif
             debug("\t%u pages from slave %u at %u\n", pgs_in_chk, chk.slave_id, chk.offset);
             __submit_bio(rw, cs->bdev, &cur_page, pgs_in_chk, sector, (void *)c2b);
         }
@@ -527,7 +531,7 @@ static c2_block_t* castle_cache_hash_find(c_ext_pos_t  cep)
     debug("Idx = %d\n", idx);
     list_for_each(lh, &castle_cache_hash[idx])
     {
-        debug("Checking list element.\n");
+        //debug("Checking list element.\n");
         c2b = list_entry(lh, c2_block_t, list);
         if(EXT_POS_EQUAL(c2b->cep, cep))
             return c2b;
@@ -957,7 +961,7 @@ static int castle_cache_flush(void *unused)
     for(;;)
     {
         /* Wait for 95% of IOs to complete */
-        debug("====> Waiting for 95\% of outstanding IOs to complete.\n");
+        debug("====> Waiting for 95 of outstanding IOs to complete.\n");
         wait_event(castle_cache_flush_wq, (atomic_read(&in_flight) <= flush_size / 20));
 
         /* Wait until enough pages have been dirtied to make it worth while
