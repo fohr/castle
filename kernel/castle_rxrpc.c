@@ -598,6 +598,8 @@ static int castle_rxrpc_get_decode(struct castle_rxrpc_call *call, struct sk_buf
     if(ret)
         return ret;
 
+    castle_object_key_free(key);
+
     rxrpc_kernel_data_delivered(skb);
     castle_rxrpc_state_update(call, RXRPC_CALL_REPLYING);
 

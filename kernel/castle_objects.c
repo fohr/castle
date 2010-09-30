@@ -1451,7 +1451,6 @@ int castle_object_get(struct castle_object_get *get,
     debug("castle_object_get get=%p\n", get);
 
     btree_key = castle_object_key_convert(key);
-    castle_object_key_free(key);
 
     /* Single c_bvec for the bio */
     c_bio = castle_utils_bio_alloc(1);
