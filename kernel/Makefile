@@ -27,6 +27,8 @@ KVER       ?= $(shell uname -r)
 KERNEL_DIR ?= /lib/modules/$(KVER)/build
 PWD        := $(shell pwd)
 
+INSTALL_MOD_DIR = extra/castle
+
 .PHONY: all
 all: $(TARGET).ko
 
