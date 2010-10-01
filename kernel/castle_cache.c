@@ -22,7 +22,7 @@
 #define debug_mstore(_f, _a...)  (printk("%s:%.4d:%s " _f, __FILE__, __LINE__ , __func__, ##_a))
 #endif
 
-static int                     castle_cache_size = 1000; /* in pages */
+static int                     castle_cache_size = 100000; /* in pages */
 
 module_param(castle_cache_size, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
 MODULE_PARM_DESC(castle_cache_size, "Cache size");
@@ -359,7 +359,7 @@ void __submit_bio(int                         rw,
 int submit_c2b_rda(int rw, c2_block_t *c2b)
 {
     struct castle_slave     *cs;
-    c_ext_pos_t              cep = (c_ext_pos_t){c2b->cep.ext_id, c2b->cep.offset};
+    c_ext_pos_t              cep = c2b->cep;
     c_disk_chk_t             chunks[MAX_NR_SLAVES];
     uint32_t                 k_factor, i, j;
     c_chk_cnt_t              nr_chunks;
@@ -369,7 +369,12 @@ int submit_c2b_rda(int rw, c2_block_t *c2b)
     sector_t                 sector;
 
     BUG_ON(atomic_read(&c2b->remaining));
-    BUG_ON(BLOCK_OFFSET(cep.offset));
+    if (BLOCK_OFFSET(cep.offset))
+    {
+        printk("RDA %s: nr_pages - %u cep: "cep_fmt_str_nl, 
+                (rw == READ)?"Read":"Write", c2b->nr_pages, __cep2str(cep));
+        BUG();
+    }
 
     nr_chunks = CHUNK(cep.offset + (c2b->nr_pages * (1 << C_BLK_SHIFT)) - 1)
                     - CHUNK(cep.offset) + 1;
@@ -772,7 +777,9 @@ static int castle_cache_hash_clean(void)
     list_for_each_safe(lh, t, &castle_cache_cleanlist)
     {
         c2b = list_entry(lh, c2_block_t, dirty_or_clean);
-        if(!c2b_busy(c2b)) 
+        /* FIXME: Pinning all logical extent pages in cache. Make sure cache is
+         * big enough. */
+        if(!c2b_busy(c2b) && !LOGICAL_EXTENT(c2b->cep.ext_id)) 
         {
             debug("Found a victim.\n");
             list_del(&c2b->list);
@@ -836,17 +843,19 @@ static void castle_cache_page_freelist_grow(int nr_pages)
     debug("Grown the list.\n");
 }
 
-c2_block_t* castle_cache_block_get(c_ext_pos_t  cep, int nr_pages)
+c2_block_t* castle_cache_block_get(c_ext_pos_t cep, int nr_pages)
 {
     c2_block_t *c2b;
     struct list_head pages;
+
+    BUG_ON(BLOCK_OFFSET(cep.offset));
 
     castle_cache_flush_wakeup();
     might_sleep();
     for(;;)
     {
         debug("Trying to find buffer for cep="cep_fmt_str_nl,
-            cep2str(cep));
+            __cep2str(cep));
         /* Try to find in the hash first */
         c2b = castle_cache_hash_get(cep); 
         debug("Found in hash: %p\n", c2b);
@@ -961,7 +970,7 @@ static int castle_cache_flush(void *unused)
     for(;;)
     {
         /* Wait for 95% of IOs to complete */
-        debug("====> Waiting for 95 of outstanding IOs to complete.\n");
+        debug("====> Waiting for 95%% of outstanding IOs to complete.\n");
         wait_event(castle_cache_flush_wq, (atomic_read(&in_flight) <= flush_size / 20));
 
         /* Wait until enough pages have been dirtied to make it worth while

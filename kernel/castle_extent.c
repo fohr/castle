@@ -452,6 +452,7 @@ c_ext_id_t castle_extent_alloc(c_rda_type_t            rda_type,
     struct castle_extents_t *castle_extents_sb = NULL;
 
     BUG_ON(!extent_init_done);
+    BUG_ON(count <= 0 || count >= MAX_EXT_SIZE);
     ext = castle_zalloc(sizeof(c_ext_t), GFP_KERNEL);
     if (!ext)
     {
@@ -472,6 +473,7 @@ c_ext_id_t castle_extent_alloc(c_rda_type_t            rda_type,
     if (BLOCK_OFFSET(castle_extents_sb->next_free_byte))
         castle_extents_sb->next_free_byte =
                     MASK_BLK_OFFSET(castle_extents_sb->next_free_byte + C_BLK_SIZE);
+    BUG_ON(castle_extents_sb->next_free_byte > (meta_ext.size << C_CHK_SHIFT));
     castle_extents_sb->nr_exts++;
     castle_extents_put_sb(1);
 
@@ -649,9 +651,21 @@ void castle_extent_map_get(c_ext_id_t             ext_id,
                            c_chk_cnt_t            nr_chunks, 
                            c_disk_chk_t          *chk_maps)
 {
-    c_ext_t     *ext = castle_extents_hash_get(ext_id);
-    c2_block_t  *c2b =  NULL;
+    c_ext_t     *ext;
+    c2_block_t  *c2b = NULL;
     c_disk_chk_t *buf;
+
+    BUG_ON(ext_id == INVAL_EXT_ID);
+    BUG_ON((ext = castle_extents_hash_get(ext_id)) == NULL);
+    if ((offset >= ext->size) || ((offset + nr_chunks - 1) >= ext->size))
+    {
+        printk("BUG in %s\n", __FUNCTION__);
+        printk("    Extent: %llu\n", ext_id);
+        printk("    Offset: %u\n", offset);
+        printk("    Count: %u\n", nr_chunks);
+        printk("    Extent Size: %u\n", ext->size);
+        BUG();
+    }
 
     buf = castle_extent_map_buf_get(ext, offset, nr_chunks, &c2b);
     memcpy(chk_maps, buf, sizeof(c_disk_chk_t) * nr_chunks * ext->k_factor);

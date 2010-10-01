@@ -79,7 +79,8 @@ typedef struct castle_disk_block c_disk_blk_t;
 #define BLOCK(offset)         ((offset) >> C_BLK_SHIFT)
 #define BLK_IN_CHK(offset)    (BLOCK(CHUNK_OFFSET(offset)))
 #define BLKS_PER_CHK          (C_CHK_SIZE / C_BLK_SIZE)
-#define MASK_BLK_OFFSET(offset) ((offset) >> C_BLK_SHIFT << C_BLK_SHIFT)
+#define MASK_BLK_OFFSET(offset) (((offset) >> C_BLK_SHIFT) << C_BLK_SHIFT)
+#define MASK_CHK_OFFSET(offset) (((offset) >> C_CHK_SHIFT) << C_CHK_SHIFT)
 //#define SECTOR(offset)        ((offset) >> 9)
 
 #define POWOF2(_n)            (((_n) & ((_n) - 1)) == 0)
@@ -113,12 +114,13 @@ typedef struct castle_disk_block c_disk_blk_t;
 #define MICRO_EXT_START                (60)
 #define MICRO_EXT_SIZE                 (1)   /* Dont change this */
 #define META_SPACE_START               (64)
-#define META_SPACE_SIZE                (100)
-#define META_EXT_SIZE                  (50) /* 2-RDA. Occupies double the space */
-#define EXT_ST_SIZE                    (10)
+#define META_SPACE_SIZE                (300)
+#define META_EXT_SIZE                  (500) /* 2-RDA. Occupies double the space */
+#define EXT_ST_SIZE                    (50)
 #define FREE_SPACE_START               (600)
 #define FREESPACE_OFFSET               (2 * C_CHK_SIZE)
 #define FREESPACE_SIZE                 (20 * C_CHK_SIZE)
+#define MAX_EXT_SIZE                   (102400) // 100 GB
 
 #define sup_ext_to_slave_id(_id)       ((_id) - SUP_EXT_ID)
 #define slave_id_to_sup_ext(_id)       ((_id) + SUP_EXT_ID)
@@ -132,6 +134,7 @@ typedef uint64_t c_ext_id_t;
 typedef uint32_t c_uuid_t;
 
 #define INVAL_EXT_ID                    (-1)
+#define EXT_ID_INVAL(_id)               ((_id) == INVAL_EXT_ID)
 #define INVAL_SLAVE_ID                  (0)
 
 /* FIXME: remove from castle.h */
@@ -177,6 +180,7 @@ typedef struct castle_extent_position c_ext_pos_t;
 #define cep_fmt_str                  "(%llu, 0x%x)"
 #define cep_fmt_str_nl               "(%llu, 0x%x). \n"
 #define cep2str(_off)                (_off).ext_id, BLOCK((_off).offset)
+#define __cep2str(_off)              (_off).ext_id, ((_off).offset)
 
 #define CASTLE_SLAVE_TARGET     (0x00000001)
 #define CASTLE_SLAVE_SPINNING   (0x00000002)

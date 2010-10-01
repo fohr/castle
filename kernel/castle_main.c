@@ -852,7 +852,6 @@ static void castle_bio_data_cvt_get(c_bvec_t    *c_bvec,
     cvt->length = C_BLK_SIZE;
     cvt->cep.ext_id = castle_extent_alloc(DEFAULT, c_bvec->tree->da, 1);
     cvt->cep.offset = 0;
-    //cvt->cep    = castle_freespace_block_get(c_bvec->version, 1);
     BUG_ON(EXT_POS_INVAL(cvt->cep));
 }
 
