@@ -164,7 +164,7 @@ typedef struct castle_disk_chunk c_disk_chk_t;
 #define disk_chk_fmt_nl               "(0x%x, 0x%x)\n"
 #define disk_chk2str(_chk)            (_chk).slave_id, (_chk).offset
 
-typedef uint32_t c_byte_off_t; 
+typedef uint64_t c_byte_off_t; 
 
 /* Disk layout related structures (extent based) */
 struct castle_extent_position {
@@ -177,10 +177,16 @@ typedef struct castle_extent_position c_ext_pos_t;
 #define EXT_POS_INVAL(_off)         ((_off).ext_id == INVAL_EXT_ID)
 #define EXT_POS_EQUAL(_off1, _off2) (((_off1).ext_id == (_off2).ext_id) && \
                                       ((_off1).offset == (_off2).offset)) 
-#define cep_fmt_str                  "(%llu, 0x%x)"
-#define cep_fmt_str_nl               "(%llu, 0x%x). \n"
+#define cep_fmt_str                  "(%llu, 0x%llx)"
+#define cep_fmt_str_nl               "(%llu, 0x%llx). \n"
 #define cep2str(_off)                (_off).ext_id, BLOCK((_off).offset)
 #define __cep2str(_off)              (_off).ext_id, ((_off).offset)
+
+typedef struct castle_extent_freespace {
+    c_ext_id_t      ext_id;
+    c_byte_off_t    ext_size;
+    atomic64_t      next_free_byte;
+} c_ext_fs_t;
 
 #define CASTLE_SLAVE_TARGET     (0x00000001)
 #define CASTLE_SLAVE_SPINNING   (0x00000002)
@@ -435,8 +441,8 @@ struct castle_component_tree {
     struct list_head    da_list;
     struct list_head    hash_list;
     c_mstore_key_t      mstore_key;
-    c_ext_id_t          tree_ext;
-    c_ext_id_t          data_ext;
+    c_ext_fs_t          tree_ext_fs;
+    c_ext_fs_t          data_ext_fs;
 };
 extern struct castle_component_tree castle_global_tree;
 

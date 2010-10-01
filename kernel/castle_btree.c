@@ -11,7 +11,6 @@
 #include "castle_block.h"
 #include "castle_da.h"
 #include "castle_debug.h"
-#include "castle_extent.h"
 
 //#define DEBUG
 #ifndef DEBUG
@@ -1523,10 +1522,17 @@ c2_block_t* castle_btree_node_create(int version, int is_leaf, struct castle_com
 
     type  = ct->btree_type;
     btree = castle_btree_type_get(type);
-    BUG_ON(btree->node_size > C_CHK_SIZE);
-    cep = (c_ext_pos_t){castle_extent_alloc(DEFAULT, ct->da, 1), 0};
-    BUG_ON(cep.ext_id == INVAL_EXT_ID);
-    c2b   = castle_cache_block_get((c_ext_pos_t ){cep.ext_id, cep.offset}, btree->node_size);
+   
+    BUG_ON(atomic64_read(&ct->tree_ext_fs.next_free_byte) % 
+                (btree->node_size * C_BLK_SIZE));
+    cep.ext_id = ct->tree_ext_fs.ext_id;
+    cep.offset = atomic64_add_return((btree->node_size * C_BLK_SIZE), 
+                            &ct->tree_ext_fs.next_free_byte) - 
+                            (btree->node_size * C_BLK_SIZE);
+    BUG_ON(EXT_ID_INVAL(cep.ext_id) || 
+           (cep.offset > ct->tree_ext_fs.ext_size));
+
+    c2b   = castle_cache_block_get(cep, btree->node_size);
     
     lock_c2b(c2b);
     set_c2b_uptodate(c2b);

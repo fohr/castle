@@ -46,8 +46,8 @@ struct castle_component_tree castle_global_tree = {.seq             = GLOBAL_TRE
                                                    .da_list         = {NULL, NULL},
                                                    .hash_list       = {NULL, NULL},
                                                    .mstore_key      = INVAL_MSTORE_KEY,
-                                                   .tree_ext        = INVAL_EXT_ID,
-                                                   .data_ext        = INVAL_EXT_ID,
+                                                   .tree_ext_fs     = {INVAL_EXT_ID, (1024 << C_CHK_SHIFT), {0ULL}},
+                                                   .data_ext_fs     = {INVAL_EXT_ID, 0,{0ULL}},
                                                   }; 
 struct workqueue_struct     *castle_wqs[2*MAX_BTREE_DEPTH+1];
 int                          castle_fs_inited;
@@ -218,6 +218,15 @@ int castle_fs_init(void)
         /* Init the root btree node */
         atomic64_set(&(castle_global_tree.node_count), 0);
         init_rwsem(&castle_global_tree.lock);
+        atomic64_set(&(castle_global_tree.tree_ext_fs.next_free_byte), 0); 
+        atomic64_set(&(castle_global_tree.data_ext_fs.next_free_byte), 0);
+
+        castle_global_tree.tree_ext_fs.ext_id 
+                = castle_extent_alloc(DEFAULT, 
+                                      castle_global_tree.da,
+                                      (castle_global_tree.tree_ext_fs.ext_size >> C_CHK_SHIFT));
+        BUG_ON(castle_global_tree.tree_ext_fs.ext_id == INVAL_EXT_ID);
+
         c2b = castle_btree_node_create(0 /* version */, 1 /* is_leaf */, &castle_global_tree);
         castle_btree_node_save_prepare(&castle_global_tree, c2b->cep);
         /* Save the root node in the global tree */
