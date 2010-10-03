@@ -12,6 +12,7 @@
 #include "castle_utils.h"
 #include "castle_btree.h"
 #include "castle_extent.h"
+#include "castle_freespace.h"
 
 //#define DEBUG
 #ifndef DEBUG
@@ -356,6 +357,28 @@ void __submit_bio(int                         rw,
     }
 }
 
+int chk_valid(c_disk_chk_t chk)
+{
+    struct castle_slave *cs = castle_slave_find_by_uuid(chk.slave_id);
+    c_chk_t size;
+
+    if (!cs)
+    {
+        printk("Couldn't find disk with uuid: %u\n", chk.slave_id);
+        return 0;
+    }
+
+    castle_freespace_summary_get(cs, NULL, &size);
+    if (chk.offset >= size)
+    {
+        printk("Unexpected chunk "disk_chk_fmt", Disk Size: 0x%x\n",
+                disk_chk2str(chk), size);
+        return 0;
+    }
+
+    return 1;
+}
+
 int submit_c2b_rda(int rw, c2_block_t *c2b)
 {
     struct castle_slave     *cs;
@@ -395,6 +418,12 @@ int submit_c2b_rda(int rw, c2_block_t *c2b)
             uint32_t first_pg, last_pg;
 
             chk = read_slave_get(cep.ext_id, CHUNK(cur_offset));
+            if (!SUPER_EXTENT(cep.ext_id) && !chk_valid(chk))
+            {
+                printk("Bad chunk: "disk_chk_fmt", cep: "cep_fmt_str_nl,
+                        disk_chk2str(chk), cep2str(cep));
+                BUG();
+            }
             if (DISK_CHK_INVAL(chk))
             {
                 atomic_sub(c2b->nr_pages - rem_pages, &c2b->remaining);
@@ -459,6 +488,12 @@ int submit_c2b_rda(int rw, c2_block_t *c2b)
             c_disk_chk_t    chk;
 
             chk     = chunks[j];
+            if (!SUPER_EXTENT(cep.ext_id) && !chk_valid(chk))
+            {
+                printk("Bad chunk: "disk_chk_fmt", cep: "cep_fmt_str_nl,
+                        disk_chk2str(chk), cep2str(cep));
+                BUG();
+            }
             cs      = castle_slave_find_by_uuid(chk.slave_id);
             sector  = (sector_t)(chk.offset << (C_CHK_SHIFT - 9)) +
                                 (BLK_IN_CHK(cur_offset) << (C_BLK_SHIFT - 9));

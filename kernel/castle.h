@@ -791,6 +791,9 @@ struct castle_slave {
     block_t                         free_blk;
     struct castle_slave_block_cnts  block_cnts;
     unsigned long                   last_access;
+#ifdef CASTLE_DEBUG
+    c_chk_cnt_t                     disk_size; /* in chunks; max_chk_num + 1 */
+#endif
 };
 
 struct castle_slaves {

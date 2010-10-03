@@ -25,11 +25,9 @@ ssize_t      castle_freespace_version_slave_blocks_get (struct castle_slave *cs,
 ssize_t      castle_freespace_version_blocks_get       (version_t version);
 #endif
 
-#if 0
 void castle_freespace_summary_get(struct castle_slave *cs,
                                   c_chk_cnt_t         *free_cnt,
                                   c_chk_cnt_t         *size);
-#endif
 
 /* Allocate chunks */
 c_chk_seq_t castle_freespace_slave_chunks_alloc(struct castle_slave *cs,
