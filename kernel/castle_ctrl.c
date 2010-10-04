@@ -685,7 +685,7 @@ int castle_control_packet_process(struct sk_buff *skb, void **reply, size_t *len
             int version, type, reservations_count, i;
             int *reservations_disk, *reservations_length;
 
-            debug("reserve_for_transfer skb->len=%d", skb->len);
+            debug("Reserve_for_transfer skb->len=%d", skb->len);
 
             if(skb->len < 12) goto bad_msg;
             
@@ -693,7 +693,8 @@ int castle_control_packet_process(struct sk_buff *skb, void **reply, size_t *len
             type = SKB_L_GET(skb);
             reservations_count = SKB_L_GET(skb);
             
-            debug("reserve_for_transfer version=0x%x type=0x%x reservations_count=%d", version, type, reservations_count);
+            debug("Reserve_for_transfer version=0x%x type=0x%x reservations_count=%d", 
+                    version, type, reservations_count);
             
             if(skb->len < (reservations_count * 2)) goto bad_msg;
             

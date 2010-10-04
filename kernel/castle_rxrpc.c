@@ -626,7 +626,7 @@ static int castle_rxrpc_replace_decode(struct castle_rxrpc_call *call, struct sk
     {
         ret = castle_rxrpc_collection_key_get(skb, &attachment, &key);
         if(ret)
-            return ret;
+            goto out;
         is_tombstone = SKB_L_GET(skb) == CASTLE_OBJ_TOMBSTONE;
         value_len = is_tombstone ? 0 : SKB_L_GET(skb);
 
@@ -652,8 +652,9 @@ static int castle_rxrpc_replace_decode(struct castle_rxrpc_call *call, struct sk
         ret = castle_object_replace_continue(&call->replace, last);
     }
 
+out:
     if(ret)
-        return ret;
+        castle_rxrpc_replace_complete(&call->replace, ret);
 
     return 0;
 }
