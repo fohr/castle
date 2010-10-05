@@ -289,7 +289,6 @@ void *castle_object_btree_key_next(c_vl_bkey_t *key)
 
     /* Duplicate the key first */
     key_length = key->length + 4;
-    /* TODO: memory leak, fix all clients */
     new_key = castle_malloc(key_length, GFP_KERNEL);
     if(!new_key)
         return NULL;
@@ -391,13 +390,18 @@ static c_vl_bkey_t* castle_object_btree_key_skip(c_vl_bkey_t *old_key,
     return new_key;
 }
 
-void castle_object_key_free(c_vl_okey_t *obj_key)
+void castle_object_okey_free(c_vl_okey_t *obj_key)
 {
     int i;
 
     for(i=0; i < obj_key->nr_dims; i++)
         castle_free(obj_key->dims[i]);
     castle_free(obj_key);
+}
+
+void castle_object_bkey_free(c_vl_bkey_t *bkey)
+{
+    castle_free(bkey);
 }
 
 /**********************************************************************************************/
@@ -413,6 +417,13 @@ static void castle_objects_rq_iter_next(castle_object_iterator_t *iter,
     if(v)   *v   = iter->cached_v;
     if(cvt) *cvt = iter->cached_cvt;
     iter->cached = 0;
+}
+
+static void castle_objects_rq_iter_next_key_free(castle_object_iterator_t *iter)
+{
+    if(iter->last_next_key)
+        castle_object_bkey_free(iter->last_next_key);
+    iter->last_next_key = NULL;
 }
 
 static int castle_objects_rq_iter_has_next(castle_object_iterator_t *iter)
@@ -436,12 +447,14 @@ static int castle_objects_rq_iter_has_next(castle_object_iterator_t *iter)
                                                       iter->start_okey, 
                                                       iter->end_okey,
                                                       &offending_dim);
-        //printk("Got the following key from da_rq iterator. Is in range: %d, offending_dim=%d\n", 
-        //        bigger, offending_dim);
-        //vl_bkey_print(k);
+#ifdef DEBUG
+        debug("Got the following key from da_rq iterator. Is in range: %d, offending_dim=%d\n", 
+                bigger, offending_dim);
+        vl_bkey_print(k);
+#endif
         if(bigger)
         {
-            void *next_key;
+            c_vl_bkey_t *next_key;
 
             /* We are outside of the rq hypercube, find next intersection point
                and skip to that */
@@ -449,11 +462,15 @@ static int castle_objects_rq_iter_has_next(castle_object_iterator_t *iter)
                                                     iter->start_okey, 
                                                     offending_dim,
                                                     bigger);
-            //printk("Skipping to:\n");
-            //vl_bkey_print(next_key);
-            /* TODO: memory leak for next keys! FIX that */
+            /* Save the key, to be freed the next time around the loop/on cancel */
+            castle_objects_rq_iter_next_key_free(iter);
+            iter->last_next_key = next_key;
+
+#ifdef DEBUG
+            debug("Skipping to:\n");
+            vl_bkey_print(next_key);
+#endif
             castle_da_rq_iter.skip(&iter->da_rq_iter, next_key);
-            castle_free(next_key);
         }    
         else 
         {
@@ -471,9 +488,14 @@ static int castle_objects_rq_iter_has_next(castle_object_iterator_t *iter)
 
 static void castle_objects_rq_iter_cancel(castle_object_iterator_t *iter)
 {
-    castle_da_rq_iter.cancel(&iter->da_rq_iter);
-    castle_free(iter->start_bkey);
-    castle_free(iter->end_bkey);
+    /* Cancel da_rq_iter if it's error free */
+    if(!iter->da_rq_iter.err)
+        castle_da_rq_iter.cancel(&iter->da_rq_iter);
+    if(iter->start_bkey);
+        castle_object_bkey_free(iter->start_bkey);
+    if(iter->end_bkey);
+        castle_object_bkey_free(iter->end_bkey);
+    castle_objects_rq_iter_next_key_free(iter);
 }
 
 static void castle_objects_rq_iter_init(castle_object_iterator_t *iter)
@@ -482,9 +504,14 @@ static void castle_objects_rq_iter_init(castle_object_iterator_t *iter)
 
     iter->err = 0;
     iter->cached = 0;
+    /* Set the error on da_rq_iter, which will get cleared by the init,
+       but will prevent castle_object_rq_iter_cancel from cancelling the
+       da_rq_iter unnecessarily */
+    iter->da_rq_iter.err = -EINVAL;
     /* Construct the btree keys for range-query */
-    iter->start_bkey = castle_object_key_convert(iter->start_okey);
-    iter->end_bkey   = castle_object_key_convert(iter->end_okey);
+    iter->start_bkey    = castle_object_key_convert(iter->start_okey);
+    iter->end_bkey      = castle_object_key_convert(iter->end_okey);
+    iter->last_next_key = NULL;
 #ifdef DEBUG
     printk("====================== RQ start keys =======================\n");
     vl_okey_print(iter->start_okey);
@@ -498,6 +525,7 @@ static void castle_objects_rq_iter_init(castle_object_iterator_t *iter)
     /* Check if we managed to initialise the btree keys correctly */
     if(!iter->start_bkey || !iter->end_bkey)
     {
+        castle_objects_rq_iter_cancel(iter);
         iter->err = -ENOMEM;
         return;
     }
@@ -758,7 +786,7 @@ void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
     BUG_ON(c_bio->err != 0);
 
     /* Free the key */
-    castle_free(c_bvec->key);
+    castle_object_bkey_free(c_bvec->key);
 
     /* Deal with error case first */
     if(err)
@@ -824,7 +852,7 @@ void castle_object_replace_multi_complete(struct castle_bio_vec *c_bvec,
     BUG_ON(c_bio->err != 0);
 
     /* Free the key, value and the BIO. */
-    castle_free(c_bvec->key);
+    castle_object_bkey_free(c_bvec->key);
     BUG_ON(CVT_INVALID(cvt) || CVT_ONDISK(cvt));
     if(CVT_INLINE(cvt))
         castle_free(cvt.val);
@@ -925,7 +953,7 @@ int castle_object_replace_multi(struct castle_rxrpc_call *call,
     c_bio_t *c_bio;
 
     btree_key = castle_object_key_convert(key);
-    castle_object_key_free(key);
+    castle_object_okey_free(key);
 
     /* Single c_bvec for the bio */
     c_bio = castle_utils_bio_alloc(1);
@@ -1051,8 +1079,8 @@ int castle_object_iterfinish(castle_object_iterator_t *iterator)
 {
     castle_objects_rq_iter_cancel(iterator);
     debug_rq("Freeing iterators & buffers.\n");
-    castle_free(iterator->start_okey);
-    castle_free(iterator->end_okey);
+    castle_object_okey_free(iterator->start_okey);
+    castle_object_okey_free(iterator->end_okey);
     castle_free(iterator);
 
     return 0;
@@ -1140,7 +1168,8 @@ int castle_object_slice_get(struct castle_rxrpc_call *call,
         okey = castle_object_btree_key_convert(k);
         if(!okey)
         {
-            /* TODO: free all the buffers etc! */
+            castle_objects_rq_iter_cancel(iterator);
+            castle_free(iterator);
             return -ENOMEM;
         }
         /* Prepare the value for marshaling */
@@ -1180,6 +1209,8 @@ int castle_object_slice_get(struct castle_rxrpc_call *call,
             unlock_c2b(data_c2b);
             put_c2b(data_c2b);
         }
+        /* Free the object key once we've constructed the reply */
+        castle_object_okey_free(okey);
         if(max_entries == 0)
             break;
     }
@@ -1219,8 +1250,8 @@ int castle_object_slice_get(struct castle_rxrpc_call *call,
 
     castle_objects_rq_iter_cancel(iterator);
     debug_rq("Freeing iterators & buffers.\n");
-    castle_free(iterator->start_okey);
-    castle_free(iterator->end_okey);
+    castle_object_okey_free(iterator->start_okey);
+    castle_object_okey_free(iterator->end_okey);
     castle_free(iterator);
     vfree(rsp_buffer);
     debug_rq("Returning.\n");
@@ -1405,7 +1436,7 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
     BUG_ON(c_bio->err != 0);
 
     /* Free the key */
-    castle_free(c_bvec->key);
+    castle_object_bkey_free(c_bvec->key);
 
     /* Deal with error case, or non-existant value. */
     if(err || CVT_INVALID(cvt) || CVT_TOMB_STONE(cvt))

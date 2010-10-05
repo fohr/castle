@@ -595,7 +595,7 @@ static int castle_rxrpc_get_decode(struct castle_rxrpc_call *call, struct sk_buf
     call->get.reply_continue = castle_rxrpc_get_reply_continue;
 
     ret = castle_object_get(&call->get, attachment, key);
-    castle_object_key_free(key);
+    castle_object_okey_free(key);
     if(ret)
         goto out;
 
@@ -641,7 +641,7 @@ static int castle_rxrpc_replace_decode(struct castle_rxrpc_call *call, struct sk
         call->replace.data_copy = castle_rxrpc_replace_str_copy;
         
         ret = castle_object_replace(&call->replace, attachment, key, is_tombstone);
-        castle_object_key_free(key);
+        castle_object_okey_free(key);
     } else
     /* Subsequent packet processing */
     {
@@ -853,7 +853,7 @@ static int castle_rxrpc_slice_decode(struct castle_rxrpc_call *call, struct sk_b
     ret = castle_rxrpc_key_get(skb, &end_key);
     if(ret)
     {
-        castle_object_key_free(start_key);
+        castle_object_okey_free(start_key);
         goto out;
     }
     max_entries = SKB_L_GET(skb);
@@ -864,6 +864,8 @@ out:
     
     if(ret)
     {
+        castle_object_okey_free(start_key);
+        castle_object_okey_free(end_key);
         castle_rxrpc_get_slice_reply_start(call, ret, -1, NULL, -1, -1);
         return 0;
     }
