@@ -122,6 +122,11 @@ static void* castle_mtree_key_next(void *key)
     return (void *)(unsigned long)(blk+1);
 }
 
+static void castle_mtree_key_dealloc(void *key)
+{
+    /* No need to do anything in mtree keys, because they are ints (casted to void *). */
+}
+
 static int castle_mtree_entry_get(struct castle_btree_node *node,
                                   int                       idx,
                                   void                    **key_p,            
@@ -288,6 +293,7 @@ struct castle_btree_type castle_mtree = {
     .need_split    = castle_mtree_need_split,
     .key_compare   = castle_mtree_key_compare,
     .key_next      = castle_mtree_key_next,
+    .key_dealloc   = castle_mtree_key_dealloc,
     .entry_get     = castle_mtree_entry_get,
     .entry_add     = castle_mtree_entry_add,
     .entry_replace = castle_mtree_entry_replace,
@@ -400,7 +406,6 @@ static void* castle_batree_key_next(void *keyv)
         return (void *)&BATREE_INVAL_KEY;
      
     /* Finally allocate and return the successor key */ 
-    /* TODO: IMPORTANT THIS CREATES MEMORY LEAK, NEEDS TO BE FIXED */
     succ = castle_malloc(sizeof(bakey_t), GFP_NOIO);
     /* TODO: Should this be handled properly? */
     BUG_ON(!succ);
@@ -410,6 +415,11 @@ static void* castle_batree_key_next(void *keyv)
             break;
     
     return succ;
+}
+
+static void castle_batree_key_dealloc(void *key)
+{
+    castle_free(key);
 }
 
 static int castle_batree_entry_get(struct castle_btree_node *node,
@@ -580,6 +590,7 @@ struct castle_btree_type castle_batree = {
     .need_split    = castle_batree_need_split,
     .key_compare   = castle_batree_key_compare,
     .key_next      = castle_batree_key_next,
+    .key_dealloc   = castle_batree_key_dealloc,
     .entry_get     = castle_batree_entry_get,
     .entry_add     = castle_batree_entry_add,
     .entry_replace = castle_batree_entry_replace,
@@ -868,6 +879,16 @@ static void* castle_vlba_tree_key_next(void *keyv)
         return (void *)&VLBA_TREE_INVAL_KEY; 
 
     return castle_object_btree_key_next(keyv);
+}
+
+static void castle_vlba_tree_key_dealloc(void *keyv)
+{
+    vlba_key_t *key = (vlba_key_t *)keyv;
+    
+    /* Should not free static keys */
+    if(VLBA_TREE_KEY_INVAL(key) || VLBA_TREE_KEY_MAX(key) || VLBA_TREE_KEY_MIN(key))
+        return;
+    castle_object_bkey_free(keyv);
 }
 
 static int castle_vlba_tree_entry_get(struct castle_btree_node *node,
@@ -1260,6 +1281,7 @@ struct castle_btree_type castle_vlba_tree = {
     .need_split    = castle_vlba_tree_need_split,
     .key_compare   = castle_vlba_tree_key_compare,
     .key_next      = castle_vlba_tree_key_next,
+    .key_dealloc   = castle_vlba_tree_key_dealloc,
     .entry_get     = castle_vlba_tree_entry_get,
     .entry_add     = castle_vlba_tree_entry_add,
     .entry_replace = castle_vlba_tree_entry_replace,
@@ -2369,6 +2391,14 @@ static void castle_btree_find_no_clear(c_bvec_t *c_bvec)
 /**********************************************************************************************/
 /* Btree iterator */
 
+static void castle_btree_iter_version_key_dealloc(c_iter_t *c_iter)
+{
+    struct castle_btree_type *btree = castle_btree_type_get(c_iter->tree->btree_type);
+
+    if(c_iter->next_key.need_destroy)
+        btree->key_dealloc(c_iter->next_key.key);    
+}
+
 /* Put c2b's on the path from given depth. from = 0 means put entire path */
 static void castle_btree_iter_path_put(c_iter_t *c_iter, int from)
 {
@@ -2389,6 +2419,8 @@ static void castle_btree_iter_end(c_iter_t *c_iter, int err)
 {
     iter_debug("Putting path, ending\n");
  
+
+    castle_btree_iter_version_key_dealloc(c_iter);
     castle_btree_iter_path_put(c_iter, 0);
 
     /* TODO: this will not work well for double frees/double ends, fix that */
@@ -2752,9 +2784,16 @@ static void castle_btree_iter_version_leaf_process(c_iter_t *c_iter)
     iter_debug("Processing %d entries\n", node->used);
     
     /* We are in a leaf, then save the vblk number we followed to get here */
-    c_iter->next_key = (btree->key_compare(c_iter->parent_key, btree->inv_key) == 0) ? 
-                            btree->inv_key :
-                            btree->key_next(c_iter->parent_key); 
+    castle_btree_iter_version_key_dealloc(c_iter);
+    if(btree->key_compare(c_iter->parent_key, btree->inv_key) == 0)
+    {
+        c_iter->next_key.key          = btree->inv_key;
+        c_iter->next_key.need_destroy = 0;
+    } else
+    {
+        c_iter->next_key.key          = btree->key_next(c_iter->parent_key);
+        c_iter->next_key.need_destroy = 1;
+    }
 
     if (c_iter->node_start != NULL) 
         c_iter->node_start(c_iter);
@@ -2951,7 +2990,7 @@ static void __castle_btree_iter_path_traverse(struct work_struct *work)
              /* If we are enumerating all entries for a particular version,
                fin the occurance of the next key. */
             BUG_ON(VERSION_INVAL(c_iter->version));
-            castle_btree_lub_find(node, c_iter->next_key, c_iter->version, &index, NULL);
+            castle_btree_lub_find(node, c_iter->next_key.key, c_iter->version, &index, NULL);
             iter_debug("Node index=%d\n", index);
             break;
     }
@@ -3080,9 +3119,9 @@ static void __castle_btree_iter_start(c_iter_t *c_iter)
      */
     if ((c_iter->depth == 0) || 
        ((c_iter->type == C_ITER_MATCHING_VERSIONS) && 
-            (btree->key_compare(c_iter->next_key, btree->inv_key) == 0)) ||
+            (btree->key_compare(c_iter->next_key.key, btree->inv_key) == 0)) ||
        ((c_iter->type == C_ITER_ANCESTRAL_VERSIONS) && 
-            (btree->key_compare(c_iter->next_key, btree->inv_key) == 0)) ||
+            (btree->key_compare(c_iter->next_key.key, btree->inv_key) == 0)) ||
         (c_iter->cancelled))
     {
         castle_btree_iter_end(c_iter, c_iter->err);
@@ -3145,7 +3184,8 @@ void castle_btree_iter_init(c_iter_t *c_iter, version_t version, int type)
     c_iter->type = type;
     c_iter->version = version;
     c_iter->parent_key = btree->min_key;
-    c_iter->next_key = btree->min_key;
+    c_iter->next_key.key = btree->min_key;
+    c_iter->next_key.need_destroy = 0;
     c_iter->depth = -1;
     c_iter->err = 0;
     c_iter->cancelled = 0;
@@ -3628,8 +3668,9 @@ void castle_btree_rq_enum_init(c_rq_enum_t *rq_enum, version_t version,
     iter->private    = rq_enum;
     
     castle_btree_iter_init(iter, version, C_ITER_ANCESTRAL_VERSIONS);
-    iter->next_key   = start_key;
-    rq_enum->iter_running = 1;
+    iter->next_key.key          = start_key;
+    iter->next_key.need_destroy = 0;
+    rq_enum->iter_running       = 1;
     castle_btree_iter_start(iter);
     
     return;
@@ -3791,7 +3832,9 @@ void castle_btree_rq_enum_skip(c_rq_enum_t *rq_enum,
     }
 
     castle_btree_rq_enum_buffer_switch(rq_enum);
-    rq_enum->iterator.next_key = key;
+    castle_btree_iter_version_key_dealloc(&rq_enum->iterator);
+    rq_enum->iterator.next_key.key = key;
+    rq_enum->iterator.next_key.need_destroy = 0;
     /* Reset range to handle next key in the middle of a node */
     rq_enum->in_range = 0;
     rq_enum->start_key = key;

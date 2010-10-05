@@ -15,6 +15,7 @@ struct castle_malloc_debug {
     struct list_head list;
     char *file;
     int line;
+    int already_freed;
 };
 
 static spinlock_t           malloc_list_spinlock = SPIN_LOCK_UNLOCKED;
@@ -41,6 +42,7 @@ void* castle_debug_malloc(size_t size, gfp_t flags, char *file, int line)
     INIT_LIST_HEAD(&dobj->list);
     dobj->file = file;
     dobj->line = line;
+    dobj->already_freed = 0;
 
     /* Add ourselves to the list under lock */
     spin_lock(&malloc_list_spinlock);
@@ -76,6 +78,10 @@ void castle_debug_free(void *obj)
     list_del(&dobj->list);
     spin_unlock(&malloc_list_spinlock);
 
+    if(dobj->already_freed)
+        printk("Double free for object allocated from %s:%d.\n",
+                dobj->file, dobj->line);
+    dobj->already_freed = 1;
     kfree(dobj);
 }
 
