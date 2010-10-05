@@ -16,6 +16,7 @@
 #include "castle_events.h"
 #include "castle_rxrpc.h"
 #include "castle_freespace.h"
+#include "castle_back.h"
 
 //#define DEBUG
 #ifndef DEBUG
@@ -308,7 +309,7 @@ static void castle_control_set_target(slave_uuid_t slave_uuid, int value, int *r
     *ret = 0;
 }
 
-int castle_control_ioctl(struct inode *inode, struct file *filp,
+int castle_control_ioctl(struct file *filp,
                          unsigned int cmd, unsigned long arg)
 {
     void __user *udata = (void __user *) arg;
@@ -387,11 +388,25 @@ int castle_control_ioctl(struct inode *inode, struct file *filp,
     return 0;
 }
 
-static struct file_operations castle_control_fops = {
-    .owner   = THIS_MODULE,
-    .ioctl   = castle_control_ioctl,
-};
+long castle_ctrl_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+{
+    long ret = castle_back_unlocked_ioctl(file, cmd, arg);
+    if (ret != -ENOIOCTLCMD)
+        return ret;
+        
+    ret = castle_control_ioctl(file, cmd, arg);
+    
+    return ret;
+}
 
+static struct file_operations castle_control_fops = {
+    .owner          = THIS_MODULE,
+    .mmap           = castle_back_mmap,
+    .unlocked_ioctl = castle_ctrl_unlocked_ioctl,
+    .poll           = castle_back_poll,
+    .open           = castle_back_open,
+    .release        = castle_back_release,
+};
 
 static struct miscdevice castle_control = {
     .minor   = MISC_DYNAMIC_MINOR,
@@ -857,8 +872,6 @@ bad_msg:
 
     return -EBADMSG;
 }
-
-
 
 int castle_control_init(void)
 {

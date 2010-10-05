@@ -2,6 +2,7 @@
 #define __CASTLE_PUBLIC_H__
 
 #include <linux/types.h>
+#include "ring.h"
 
 typedef uint32_t transfer_id_t;
 typedef uint32_t slave_uuid_t;
@@ -141,5 +142,136 @@ typedef struct castle_control_ioctl {
         cctrl_cmd_transfer_destroy_t transfer_destroy;
     };
 } cctrl_ioctl_t;
+
+#ifndef __KERNEL__
+#define PAGE_SIZE 4096
+#define PAGE_SHIFT 12
+// TODO: should link to castle.h
+enum {
+    CVT_TYPE_INLINE          = 0x10,
+    CVT_TYPE_ONDISK          = 0x20,
+    CVT_TYPE_INVALID         = 0x30,
+};
+#else
+
+#endif
+
+/*
+ * BIG TODO - do we need to consider how these structures might work for 32bit
+ * userspace are 64bit kernel?
+ */
+
+/* 
+ * Variable length key, for example used by the btree 
+ */
+#define PACKED               __attribute__((packed))
+ 
+typedef struct castle_var_length_key {
+    uint32_t length;
+    uint8_t key[0];
+} PACKED c_vl_key_t;
+
+typedef struct castle_var_length_object_key {
+    uint32_t nr_dims;
+    c_vl_key_t *dims[0];
+} PACKED c_vl_okey_t;
+
+#define CASTLE_RING_PAGES (2)
+#define CASTLE_RING_SIZE (CASTLE_RING_PAGES << PAGE_SHIFT)
+
+#define CASTLE_IOCTL_POKE_RING 2
+#define CASTLE_IOCTL_WAIT 3
+
+#define CASTLE_RING_ECHO 0
+#define CASTLE_RING_REPLACE 1
+#define CASTLE_RING_BIG_PUT 2
+#define CASTLE_RING_PUT_CHUNK 3
+#define CASTLE_RING_GET 4
+#define CASTLE_RING_BIG_GET 5
+#define CASTLE_RING_GET_CHUNK 6
+#define CASTLE_RING_ITER_START 7
+#define CASTLE_RING_ITER_NEXT 8
+#define CASTLE_RING_ITER_FINISH 9
+#define CASTLE_RING_ITER_SKIP 10
+
+typedef uint32_t castle_interface_token_t;
+
+typedef struct castle_request_echo {
+	unsigned long message;
+	unsigned long size;
+} castle_request_echo_t;
+
+typedef struct castle_request_replace {
+    collection_id_t       collection_id;
+    c_vl_okey_t          *key_ptr;
+    size_t                key_len;
+    void                 *value_ptr;
+    size_t                value_len;
+} castle_request_replace_t;
+
+typedef struct castle_request_get {
+    collection_id_t      collection_id;
+    c_vl_okey_t         *key_ptr;
+    uint32_t             key_len;
+    void                *value_ptr; /* where to put the result */
+    uint32_t             value_len;
+} castle_request_get_t;
+
+typedef struct castle_request_iter_start {
+    collection_id_t      collection_id;
+    c_vl_okey_t         *start_key_ptr;
+    size_t               start_key_len;
+    c_vl_okey_t         *end_key_ptr;
+    size_t               end_key_len;
+    uint64_t             flags;
+} castle_request_iter_start_t;
+
+#define CASTLE_RING_ITER_FLAG_NONE      0x0
+#define CASTLE_RING_ITER_FLAG_NO_VALUES 0x1
+
+typedef struct castle_request_iter_next {
+    castle_interface_token_t token;
+    void   *buffer_ptr;
+    size_t  buffer_len;
+} castle_request_iter_next_t;
+
+typedef struct castle_request_iter_finish {
+    castle_interface_token_t token;
+} castle_request_iter_finish_t;
+
+typedef struct castle_request {
+    uint32_t call_id;
+    uint32_t tag;
+    union {
+        castle_request_echo_t echo;
+        castle_request_replace_t replace;
+        castle_request_get_t get;
+        
+        castle_request_iter_start_t iter_start;
+        castle_request_iter_next_t iter_next;
+        castle_request_iter_finish_t iter_finish;
+    };
+} castle_request_t;
+
+typedef struct castle_response {
+    uint32_t call_id;
+    uint32_t err;
+    size_t   length;
+    castle_interface_token_t token;
+} castle_response_t;
+
+struct castle_iter_val {
+    uint8_t           type;
+    uint32_t          length;
+    uint8_t          *val;
+};
+
+struct castle_key_value_list {
+    struct castle_key_value_list *next;
+    c_vl_okey_t                  *key;
+    struct castle_iter_val       *val;
+} PACKED;
+
+DEFINE_RING_TYPES(castle, castle_request_t, castle_response_t);
 
 #endif /* __CASTLE_PUBLIC_H__ */

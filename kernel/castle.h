@@ -27,7 +27,7 @@
 #endif
 
 #define USED                 __attribute__((used))
-#define PACKED               __attribute__((packed))
+//#define PACKED               __attribute__((packed))
 
 #define STATIC_BUG_ON_HELPER(expr) \
         (!!sizeof (struct { unsigned int static_assertion_error: (expr) ? -1 : 1; }))
@@ -214,17 +214,6 @@ struct castle_btree_node {
 #define BTREE_NODE_PAYLOAD(_node)   ((void *)&(_node)->payload)
 
 #define PLUS_INFINITY_DIM_LENGTH 0xFFFFFFFF
-
-/* Variable length key, for example used by the btree */
-typedef struct castle_var_length_key {
-    uint32_t length;
-    uint8_t key[0];
-} PACKED c_vl_key_t;
-
-typedef struct castle_var_length_object_key {
-    uint32_t nr_dims;
-    c_vl_key_t *dims[0];
-} PACKED c_vl_okey_t;
 
 typedef struct castle_var_length_btree_key {
     uint32_t length;

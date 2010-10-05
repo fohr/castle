@@ -25,6 +25,7 @@
 #include "castle_debug.h"
 #include "castle_events.h"
 #include "castle_rxrpc.h"
+#include "castle_back.h"
 
 struct castle                castle;
 struct castle_slaves         castle_slaves;
@@ -1346,12 +1347,15 @@ static int __init castle_init(void)
     if((ret = castle_control_init()))      goto err_out9;
     if((ret = castle_rxrpc_init()))        goto err_out10;
     if((ret = castle_sysfs_init()))        goto err_out11;
+    if((ret = castle_back_init()))         goto err_out12;
 
     printk("OK.\n");
 
     return 0;
 
-    castle_sysfs_fini(); /* Unreachable */
+    castle_back_fini(); /* Unreachable */
+err_out12:
+    castle_sysfs_fini();
 err_out11:
     castle_rxrpc_fini();
 err_out10:
@@ -1387,6 +1391,7 @@ static void __exit castle_exit(void)
     printk("Castle FS exit ... ");
 
     /* Remove externaly visible interfaces */
+    castle_back_fini();
     castle_rxrpc_fini();
     castle_control_fini();
     castle_sysfs_fini();
