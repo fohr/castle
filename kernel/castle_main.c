@@ -521,7 +521,7 @@ struct castle_slave* castle_claim(uint32_t new_dev)
 #if 0   // FIXME: For sake of debugging
         get_random_bytes(&cs->uuid, sizeof(cs->uuid));
 #else
-        cs->uuid = cs->id + 0x100;
+        cs->uuid = (cs->id + 1) * 0x111;
 #endif
         printk("Will use uuid of: 0x%x\n", cs->uuid);
         cs->new_dev = 1;

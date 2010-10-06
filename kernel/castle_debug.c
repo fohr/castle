@@ -13,6 +13,7 @@ typedef struct castle_debug_watch {
 
 struct castle_malloc_debug {
     struct list_head list;
+    uint32_t size;
     char *file;
     int line;
 };
@@ -41,6 +42,7 @@ void* castle_debug_malloc(size_t size, gfp_t flags, char *file, int line)
     INIT_LIST_HEAD(&dobj->list);
     dobj->file = file;
     dobj->line = line;
+    dobj->size = size;
 
     /* Add ourselves to the list under lock */
     spin_lock(&malloc_list_spinlock);
@@ -77,15 +79,22 @@ void castle_debug_free(void *obj)
 
 static void castle_debug_malloc_fini(void)
 {
+#if 0
     struct castle_malloc_debug *dobj;
     struct list_head *l;
+    uint32_t sum = 0;
+    uint32_t i = 0;
 
     list_for_each(l, &malloc_list)
     {
         dobj = list_entry(l, struct castle_malloc_debug, list);
-        printk("kmalloc/kzalloc from %s:%d hasn't been deallocated.\n",
-                dobj->file, dobj->line);
+        printk("kmalloc/kzalloc of %u bytes from %s:%d hasn't been deallocated.\n",
+                dobj->size, dobj->file, dobj->line);
+        sum += dobj->size;
+        i++;
     }
+    printk("******** Memory Leak: %u bytes / %u objects *********\n", sum, i);
+#endif
 }
 
 static void castle_debug_buffer_init(struct page *pg)

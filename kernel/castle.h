@@ -72,8 +72,8 @@ typedef struct castle_disk_block c_disk_blk_t;
 #define C_CHK_SHIFT                    (20) 
 #define C_CHK_SIZE                     (1 << C_CHK_SHIFT)
 
-#define CHUNK_OFFSET(offset)  ((offset) & ((1 << C_CHK_SHIFT)-1))
-#define BLOCK_OFFSET(offset)  ((offset) & ((1 << C_BLK_SHIFT)-1))
+#define CHUNK_OFFSET(offset)  ((offset) & (C_CHK_SIZE - 1))
+#define BLOCK_OFFSET(offset)  ((offset) & (C_BLK_SIZE - 1))
 #define SECTOR_OFFSET(offset) ((offset) & ((1 << 9)-1))
 #define CHUNK(offset)         ((offset) >> C_CHK_SHIFT)
 #define BLOCK(offset)         ((offset) >> C_BLK_SHIFT)
@@ -126,7 +126,7 @@ typedef struct castle_disk_block c_disk_blk_t;
 #define slave_id_to_sup_ext(_id)       ((_id) + SUP_EXT_ID)
 
 #define LOGICAL_EXTENT(_ext_id)        ((_ext_id) < EXT_SEQ_START)
-#define SUPER_EXTENT(_ext_id)          ((_ext_id) >= SUP_EXT_ID && (_ext_id) < slave_id_to_sup_ext(MAX_NR_SLAVES))
+#define SUPER_EXTENT(_ext_id)          (((_ext_id) >= SUP_EXT_ID) && ((_ext_id) < slave_id_to_sup_ext(MAX_NR_SLAVES)))
 
 typedef uint32_t c_chk_cnt_t;
 typedef uint32_t c_chk_t;

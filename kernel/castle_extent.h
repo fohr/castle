@@ -85,7 +85,7 @@ uint32_t
 castle_extent_kfactor_get(c_ext_id_t ext_id);
 
 /* Sets @chunks to all physical chunks holding the logical chunks from offset */
-void 
+uint32_t
 castle_extent_map_get(c_ext_id_t             ext_id,
                       c_chk_t                offset,
                       c_chk_cnt_t            nr_chunks,

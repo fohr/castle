@@ -274,6 +274,7 @@ static void c2b_multi_io_end(struct bio *bio, int err)
     }
     BUG_ON(err && test_bit(BIO_UPTODATE, &bio->bi_flags));
 #endif
+    BUG_ON(atomic_read(&c2b->remaining) == 0);
     /* End the IO by calling the client's end_io function */ 
     if (atomic_sub_and_test(bio_info->nr_pages, &c2b->remaining))
     {
@@ -295,7 +296,7 @@ c_disk_chk_t read_slave_get(c_ext_id_t ext_id, c_chk_t offset)
 {
     c_disk_chk_t    chunks[MAX_NR_SLAVES];
 
-    castle_extent_map_get(ext_id, offset, 1, chunks);
+    BUG_ON(castle_extent_map_get(ext_id, offset, 1, chunks) >= MAX_NR_SLAVES);
     
     return chunks[0];
     /* Take decision based on disk loads */
@@ -335,6 +336,12 @@ void __submit_bio(int                         rw,
         for (pos = *page_head, i=0; prefetch(pos->next), i < nr_pages; 
                 pos = pos->next, i++)
         {
+            if (unlikely(pos == (&c2b->pages)))
+            {
+                printk("BUG: Exceeded free pages -> c2b: %p, nr_pages: %u, cep: "
+                        cep_fmt_str_nl, c2b, c2b->nr_pages, cep2str(c2b->cep));
+                BUG();
+            }
             pg = list_entry(pos, struct page, lru);
             bio->bi_io_vec[i].bv_page   = pg; 
             bio->bi_io_vec[i].bv_len    = C_BLK_SIZE; 
@@ -392,14 +399,14 @@ int submit_c2b_rda(int rw, c2_block_t *c2b)
     sector_t                 sector;
 
     BUG_ON(atomic_read(&c2b->remaining));
-    if (BLOCK_OFFSET(cep.offset))
+    if (unlikely(BLOCK_OFFSET(cep.offset)))
     {
         printk("RDA %s: nr_pages - %u cep: "cep_fmt_str_nl, 
                 (rw == READ)?"Read":"Write", c2b->nr_pages, __cep2str(cep));
         BUG();
     }
 
-    nr_chunks = CHUNK(cep.offset + (c2b->nr_pages * (1 << C_BLK_SHIFT)) - 1)
+    nr_chunks = CHUNK(cep.offset + (c2b->nr_pages * C_BLK_SIZE) - 1)
                     - CHUNK(cep.offset) + 1;
 
     debug("RDA %s: nr_pages - %u cep: "cep_fmt_str_nl, 
@@ -444,7 +451,7 @@ int submit_c2b_rda(int rw, c2_block_t *c2b)
             if (i == 0)
                 first_pg = BLK_IN_CHK(cur_offset);
             if (i == nr_chunks - 1)
-                last_pg  = BLK_IN_CHK(cep.offset + (c2b->nr_pages * (1 << C_BLK_SHIFT)) - 1);
+                last_pg  = BLK_IN_CHK(cep.offset + (c2b->nr_pages * C_BLK_SIZE) - 1);
             pgs_in_chk = last_pg + 1 - first_pg;
             
             sector      = (sector_t)(chk.offset << (C_CHK_SHIFT - 9)) +
@@ -474,13 +481,13 @@ int submit_c2b_rda(int rw, c2_block_t *c2b)
         if (i == 0)
             first_pg = BLK_IN_CHK(cur_offset);
         if (i == nr_chunks - 1)
-            last_pg  = BLK_IN_CHK(cep.offset + (c2b->nr_pages * (1 << C_BLK_SHIFT)) - 1);
+            last_pg  = BLK_IN_CHK(cep.offset + (c2b->nr_pages * C_BLK_SIZE) - 1);
         pgs_in_chk = last_pg + 1 - first_pg;
             
-        castle_extent_map_get(cep.ext_id,
+        BUG_ON(castle_extent_map_get(cep.ext_id,
                               CHUNK(cep.offset)+i,
                               1,
-                              chunks);
+                              chunks) >= MAX_NR_SLAVES);
 
         page = cur_page;
         for (j=0; j<k_factor; j++)
@@ -561,7 +568,7 @@ static inline int castle_cache_hash_idx(c_ext_pos_t  cep)
     return (BLOCK(cep.offset) % castle_cache_hash_buckets);
 }
 
-static c2_block_t* castle_cache_hash_find(c_ext_pos_t  cep)
+static c2_block_t* castle_cache_hash_find(c_ext_pos_t  cep, uint32_t nr_pages)
 {
     struct list_head *lh;
     c2_block_t *c2b;
@@ -575,18 +582,26 @@ static c2_block_t* castle_cache_hash_find(c_ext_pos_t  cep)
         c2b = list_entry(lh, c2_block_t, list);
         if(EXT_POS_EQUAL(c2b->cep, cep))
             return c2b;
+        if ((c2b->cep.ext_id == cep.ext_id) && 
+            (c2b->cep.offset <= cep.offset + nr_pages) &&
+            (c2b->cep.offset + c2b->nr_pages >= cep.offset))
+        {
+            printk("Overlaping c2bs "cep_fmt_str"/%u - "cep_fmt_str"/%u\n",
+                    cep2str(c2b->cep), c2b->nr_pages, cep2str(cep), nr_pages);
+            BUG();
+        }
     }
 
     return NULL;
 }
 
-static c2_block_t* castle_cache_hash_get(c_ext_pos_t  cep)
+static c2_block_t* castle_cache_hash_get(c_ext_pos_t  cep, uint32_t nr_pages)
 {
     c2_block_t *c2b = NULL;
 
     spin_lock_irq(&castle_cache_hash_lock);
     /* Try to find in the hash first */
-    c2b = castle_cache_hash_find(cep);
+    c2b = castle_cache_hash_find(cep, nr_pages);
     /* If found, get a reference to make sure c2b doesn't get removed.
        Move to the tail of dirty/clean list to get LRU(-like) behaviour. */
     if(c2b) 
@@ -595,6 +610,7 @@ static c2_block_t* castle_cache_hash_get(c_ext_pos_t  cep)
         list_move_tail(&c2b->dirty_or_clean, 
                         c2b_dirty(c2b) ? &castle_cache_dirtylist : 
                                          &castle_cache_cleanlist);
+
     }
     /* If not found, drop the lock, we need to get ourselves a c2b first */
     spin_unlock_irq(&castle_cache_hash_lock);
@@ -609,7 +625,7 @@ static int castle_cache_hash_insert(c2_block_t *c2b)
     spin_lock_irq(&castle_cache_hash_lock);
     /* Check if already in the hash */
     success = 0;
-    if(castle_cache_hash_find(c2b->cep)) goto out;
+    if(castle_cache_hash_find(c2b->cep, c2b->nr_pages)) goto out;
     /* Insert */
     success = 1;
     idx = castle_cache_hash_idx(c2b->cep);
@@ -892,7 +908,7 @@ c2_block_t* castle_cache_block_get(c_ext_pos_t cep, int nr_pages)
         debug("Trying to find buffer for cep="cep_fmt_str_nl,
             __cep2str(cep));
         /* Try to find in the hash first */
-        c2b = castle_cache_hash_get(cep); 
+        c2b = castle_cache_hash_get(cep, nr_pages); 
         debug("Found in hash: %p\n", c2b);
         if(c2b) 
         {
@@ -923,7 +939,7 @@ c2_block_t* castle_cache_block_get(c_ext_pos_t cep, int nr_pages)
         debug("Trying to insert\n");
         if(!castle_cache_hash_insert(c2b))
         {
-            debug("Failed\n");
+            printk("Failed to insert c2b into hash\n");
             put_c2b(c2b);
             castle_cache_block_free(c2b);
         }
@@ -976,9 +992,10 @@ static void castle_cache_flush_endio(c2_block_t *c2b, int uptodate)
         clean_c2b(c2b);
 
     BUG_ON(!c2b_flushing(c2b));
-    test_clear_c2b_flushing(c2b);
+    clear_c2b_flushing(c2b);
     unlock_c2b_read(c2b);
     put_c2b(c2b);
+    BUG_ON(atomic_read(count) == 0);
     atomic_dec(count);
     atomic_inc(&castle_cache_flush_seq);
     wake_up(&castle_cache_flush_wq);

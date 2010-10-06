@@ -328,6 +328,7 @@ int castle_control_ioctl(struct inode *inode, struct file *filp,
             break;
         case CASTLE_CTRL_REQ_TRANSFER_CREATE:
         case CASTLE_CTRL_REQ_TRANSFER_DESTROY:
+            up(&castle_control_lock);
             return -ENOSYS;
         default:
             up(&castle_control_lock);
@@ -640,7 +641,7 @@ int castle_control_packet_process(struct sk_buff *skb, void **reply, size_t *len
         case CASTLE_CTRL_REQ_RESERVE_FOR_TRANSFER:
         case CASTLE_CTRL_REQ_TRANSFER_CREATE:
         case CASTLE_CTRL_REQ_TRANSFER_DESTROY:
-            return -ENOSYS;
+            goto bad_msg;
         case CASTLE_CTRL_REQ_COLLECTION_ATTACH:
         {
             int ret;
@@ -697,7 +698,7 @@ int castle_control_packet_process(struct sk_buff *skb, void **reply, size_t *len
             break;
         }
         case CASTLE_CTRL_REQ_VALID_STATS:
-            return -ENOSYS;
+            goto bad_msg;
 #if 0
         {
             slave_uuid_t slave_uuid;

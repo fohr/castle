@@ -32,7 +32,7 @@
 #define debug(_f, ...)          ((void)0)
 #endif
 
-#define MAP_IDX(_ext, _i, _j)       ((_ext)->k_factor * _i + _j)
+#define MAP_IDX(_ext, _i, _j)       (((_ext)->k_factor * _i) + _j)
 #define CASTLE_EXTENTS_HASH_SIZE    100
 
 #define EXTENTS_MAGIC1  0xABABABAB
@@ -238,7 +238,7 @@ static void castle_extent_micro_maps_destroy(void)
 static int castle_extent_hash_flush2disk(c_ext_t *ext, void *unused) 
 {
     static int                      i = 0;
-    static int                      pg = 1;
+    static int                      pg = 1; /* First page is for extents header */
     static int                      nr_exts = 0;
     static c2_block_t              *c2b = NULL;
     static c_ext_pos_t              cep = {META_EXT_ID, 0};
@@ -371,16 +371,19 @@ int castle_extent_space_alloc(c_ext_t *ext, da_id_t da_id)
         { /* For each replica */
             struct castle_slave *cs = slaves[j];
             uint32_t id = cs->id;
+            uint32_t idx = MAP_IDX(ext, i, j);
+
+            BUG_ON(idx >= (req_space / sizeof(c_disk_chk_t)));
 
             /* FIXME: Try better design */
             BUG_ON(id >= MAX_NR_SLAVES);
 
-            maps_buf[MAP_IDX(ext, i, j)].slave_id = cs->uuid;
+            maps_buf[idx].slave_id = cs->uuid;
             /* If free chunks are available in the buffer, use them. Otherwise,
              * allocate more */
             if (chk_buf[id].count)
             {
-                maps_buf[MAP_IDX(ext, i, j)].offset   = chk_buf[id].first_chk;
+                maps_buf[idx].offset   = chk_buf[id].first_chk;
                 if (--chk_buf[id].count)
                     chk_buf[id].first_chk++;
             }
@@ -405,7 +408,7 @@ int castle_extent_space_alloc(c_ext_t *ext, da_id_t da_id)
                     i--;
                     break;
                 }
-                maps_buf[MAP_IDX(ext, i, j)].offset   = chk_buf[id].first_chk;
+                maps_buf[idx].offset   = chk_buf[id].first_chk;
                 if (--chk_buf[id].count)
                     chk_buf[id].first_chk++;
             }
@@ -430,7 +433,7 @@ int castle_extent_space_alloc(c_ext_t *ext, da_id_t da_id)
         lock_c2b(c2b);
         set_c2b_uptodate(c2b);
         BUG_ON(c2b_dirty(c2b));
-        memcpy(((uint8_t *)c2b->buffer) + i, 
+        memcpy(c2b->buffer, 
                ((uint8_t *)maps_buf) + i, 
                ((req_space - i) > C_BLK_SIZE)?C_BLK_SIZE:(req_space - i));
         dirty_c2b(c2b);
@@ -618,9 +621,10 @@ static c_disk_chk_t * castle_extent_map_buf_get(c_ext_t             *ext,
          * Cache logic can't handle multiple block access conurrency properly. */
         BUG_ON(BLOCK(start) != BLOCK(end));
         cep.ext_id  = ext->maps_cep.ext_id;
+        BUG_ON(BLOCK_OFFSET(ext->maps_cep.offset));
         cep.offset  = MASK_BLK_OFFSET(ext->maps_cep.offset + start);
         c2b         = castle_cache_block_get(cep, 1);
-        buf         = c2b->buffer + BLOCK_OFFSET(start);
+        buf         = (c_disk_chk_t *)(((uint8_t *)c2b->buffer) + BLOCK_OFFSET(start));
         if (!c2b_uptodate(c2b))
         {
             debug("Scheduling read to get chunk mappings for ext: %llu\n",
@@ -646,7 +650,7 @@ static void castle_extent_map_buf_put(c_ext_t *ext, c2_block_t *c2b)
     put_c2b(c2b);
 }
 
-void castle_extent_map_get(c_ext_id_t             ext_id,
+uint32_t castle_extent_map_get(c_ext_id_t             ext_id,
                            c_chk_t                offset,
                            c_chk_cnt_t            nr_chunks, 
                            c_disk_chk_t          *chk_maps)
@@ -670,6 +674,8 @@ void castle_extent_map_get(c_ext_id_t             ext_id,
     buf = castle_extent_map_buf_get(ext, offset, nr_chunks, &c2b);
     memcpy(chk_maps, buf, sizeof(c_disk_chk_t) * nr_chunks * ext->k_factor);
     castle_extent_map_buf_put(ext, c2b);
+
+    return ext->k_factor;
 }
 
 
@@ -812,6 +818,7 @@ c_ext_id_t castle_extent_sup_ext_init(struct castle_slave *cs)
     ext->ext_id      = slave_id_to_sup_ext(cs->id);
     cs->sup_ext_maps = castle_malloc(sizeof(c_disk_chk_t) * ext->size *
                                                     rda_spec->k_factor, GFP_KERNEL);
+    BUG_ON(rda_spec->k_factor != ext->k_factor);
     if (!cs->sup_ext_maps)
     {
         printk("Failed to allocate memory for extent chunk maps of size %u:%u chunks\n", 

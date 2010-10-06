@@ -1712,8 +1712,7 @@ static void castle_btree_slot_insert(c2_block_t  *c2b,
     BUG_ON(index > node->used);
    
     if (CVT_ONDISK(cvt)) 
-        debug("Inserting (0x%x, 0x%x) under index=%d\n", cvt.cep.ext_id,
-              cvt.cep.offset, index);
+        debug("Inserting "cep_fmt_str" under index=%d\n", cep2str(cvt.cep), index);
     else 
         debug("Inserting an inline value under index=%d\n", index);
 
@@ -2127,9 +2126,9 @@ static void castle_btree_read_process(c_bvec_t *c_bvec)
     {
         BUG_ON(CVT_INVALID(lub_cvt));
         if (CVT_ONDISK(lub_cvt))
-            debug(" Is a leaf, found (k,v)=(%p, 0x%x), cep=(0x%x, 0x%x)\n", 
-                    lub_key, lub_version, lub_cvt.cep.ext_id, 
-                    lub_cvt.cep.offset);
+            debug(" Is a leaf, found (k,v)=(%p, 0x%x), cep="cep_fmt_str_nl, 
+                    lub_key, lub_version, lub_cvt.cep.ext_id,
+                    cep2str(lub_cvt.cep));
         else if (CVT_INLINE(lub_cvt))
             debug(" Is a leaf, found (k,v)=(%p, 0x%x), inline value\n",
                     lub_key, lub_version);
@@ -2154,8 +2153,8 @@ static void castle_btree_read_process(c_bvec_t *c_bvec)
     else
     {
         if (CVT_ONDISK(lub_cvt))
-            debug("Leaf ptr or not a leaf. Read and search (disk,blk#)=(0x%x, 0x%x)\n",
-                   lub_cvt.cep.ext_id, lub_cvt.cep.offset);
+            debug("Leaf ptr or not a leaf. Read and search "cep_fmt_str_nl,
+                   cep2str(lub_cvt.cep));
         else if (CVT_INLINE(lub_cvt))
             debug("Leaf ptr or not a leaf. Read and search - inline value\n");
         else if (CVT_TOMB_STONE(lub_cvt))
@@ -2307,8 +2306,8 @@ static void __castle_btree_find(struct castle_btree_type *btree,
     c2_block_t *c2b;
     int ret;
     
-    debug("Asked for key: %p, in version 0x%x, reading ftree node (0x%x, 0x%x)\n", 
-            c_bvec->key, c_bvec->version, node_cep.ext_id, node_cep.offset);
+    debug("Asked for key: %p, in version 0x%x, reading ftree node" cep_fmt_str_nl, 
+            c_bvec->key, c_bvec->version, cep2str(node_cep));
     ret = -ENOMEM;
 
     c_bvec->btree_depth++;
@@ -2399,7 +2398,7 @@ static void castle_btree_iter_end(c_iter_t *c_iter, int err)
     /* TODO: this will not work well for double frees/double ends, fix that */
     if(c_iter->indirect_nodes)
     {
-        castle_free(c_iter->indirect_nodes);
+        vfree(c_iter->indirect_nodes);
         c_iter->indirect_nodes = NULL;
     }
     
@@ -3168,12 +3167,12 @@ void castle_btree_iter_init(c_iter_t *c_iter, version_t version, int type)
         case C_ITER_MATCHING_VERSIONS:
         case C_ITER_ANCESTRAL_VERSIONS:
             c_iter->indirect_nodes = 
-                castle_zalloc(MAX_BTREE_ENTRIES * sizeof(struct castle_indirect_node), 
-                    GFP_KERNEL);
+                vmalloc(MAX_BTREE_ENTRIES * sizeof(struct castle_indirect_node));
             /* If memory allocation failed, cancel the iterator, and set the error condition. 
                This will get picked up by _start() */
             if(!c_iter->indirect_nodes)
                 castle_btree_iter_cancel(c_iter, -ENOMEM);
+            memset(c_iter->indirect_nodes, 0, MAX_BTREE_ENTRIES * sizeof(struct castle_indirect_node));
             return;
         default:
             BUG();
