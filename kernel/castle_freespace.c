@@ -26,7 +26,7 @@ castle_freespace_t * freespace_sblk_get(struct castle_slave *cs)
     BUG_ON(!c2b_uptodate(c2b));
     lock_c2b(c2b);
     
-    return c2b->buffer;
+    return c2b_buffer(c2b);
 }
 
 void freespace_sblk_put(struct castle_slave *cs, int dirty)
@@ -69,7 +69,7 @@ c_chk_seq_t castle_freespace_slave_chunks_alloc(struct castle_slave    *cs,
     if (!c2b_uptodate(c2b))
         BUG_ON(submit_c2b_sync(READ, c2b));
     
-    cons_chk_seq = (c_chk_seq_t *)(((uint8_t *)c2b->buffer) + (cons_off - cep.offset));
+    cons_chk_seq = (c_chk_seq_t *)(((uint8_t *)c2b_buffer(c2b)) + (cons_off - cep.offset));
     BUG_ON(!cons_chk_seq->count);
     BUG_ON(cons_chk_seq->count % CHKS_PER_SLOT);
 
@@ -132,7 +132,7 @@ void castle_freespace_slave_chunk_free(struct castle_slave      *cs,
     if (!c2b_uptodate(c2b))
         BUG_ON(submit_c2b_sync(READ, c2b));
     
-    prod_chk_seq = (c_chk_seq_t *)(((uint8_t *)c2b->buffer) + (prod_off - cep.offset));
+    prod_chk_seq = (c_chk_seq_t *)(((uint8_t *)c2b_buffer(c2b)) + (prod_off - cep.offset));
     prod_chk_seq->first_chk  = chk_seq.first_chk;
     prod_chk_seq->count      = chk_seq.count;
 
@@ -182,7 +182,7 @@ int castle_freespace_slave_init(struct castle_slave *cs, int fresh)
     if (!c2b_uptodate(c2b))
         BUG_ON(submit_c2b_sync(READ, c2b));
     cs->freespace_sblk = c2b;
-    freespace = c2b->buffer;
+    freespace = c2b_buffer(c2b);
     
     if (fresh)
     {
