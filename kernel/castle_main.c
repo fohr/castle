@@ -1399,26 +1399,23 @@ static int __init castle_init(void)
     if((ret = castle_versions_init()))     goto err_out4;
     if((ret = castle_btree_init()))        goto err_out5;
     if((ret = castle_double_array_init())) goto err_out6;
-    //if((ret = castle_freespace_init()))    goto err_out7;
-    if((ret = castle_attachments_init()))  goto err_out8;
-    if((ret = castle_control_init()))      goto err_out9;
-    if((ret = castle_rxrpc_init()))        goto err_out10;
-    if((ret = castle_sysfs_init()))        goto err_out11;
+    if((ret = castle_attachments_init()))  goto err_out7;
+    if((ret = castle_control_init()))      goto err_out8;
+    if((ret = castle_rxrpc_init()))        goto err_out9;
+    if((ret = castle_sysfs_init()))        goto err_out10;
 
     printk("OK.\n");
 
     return 0;
 
     castle_sysfs_fini(); /* Unreachable */
-err_out11:
-    castle_rxrpc_fini();
 err_out10:
-    castle_control_fini();
+    castle_rxrpc_fini();
 err_out9:
-    castle_attachments_free();
+    castle_control_fini();
 err_out8:
-    //castle_freespace_fini();
-//err_out7:
+    castle_attachments_free();
+err_out7:
     castle_double_array_fini();
 err_out6:
     castle_btree_free();
@@ -1427,7 +1424,6 @@ err_out5:
 err_out4:
     BUG_ON(!list_empty(&castle_slaves.slaves));
     castle_slaves_unlock();
-    __castle_extents_fini();
     castle_cache_fini();
 err_out3:
     castle_extents_fini();
@@ -1459,7 +1455,6 @@ static void __exit castle_exit(void)
     castle_double_array_fini();
     castle_btree_free();
     castle_versions_fini();
-    //castle_freespace_fini();
     /* Drop all cache references (superblocks), flush the cache, free the slaves. */ 
     castle_slaves_unlock();
     __castle_extents_fini();
