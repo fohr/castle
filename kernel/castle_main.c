@@ -1139,6 +1139,7 @@ struct castle_attachment* castle_collection_init(version_t version, char *name)
     return collection;
 
 error_out:
+    castle_free(name);
     if(collection) castle_free(collection);
     printk("Failed to init collection.\n");
     return NULL;    

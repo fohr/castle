@@ -1,6 +1,23 @@
 #ifndef __CASTLE_RXRPC_H__
 #define __CASTLE_RXRPC_H__
 
+/* Definitions for RxRPC/XDR marshalling */
+#define CASTLE_OBJ_REQ_GET                       0
+#define CASTLE_OBJ_REQ_REPLACE                   1
+#define CASTLE_OBJ_REQ_SLICE                     5
+#define CASTLE_CTRL_REQ                          7
+
+#define CASTLE_OBJ_REPLY_REPLACE                 2
+#define CASTLE_OBJ_REPLY_GET                     3
+#define CASTLE_OBJ_REPLY_ERROR                   4
+#define CASTLE_OBJ_REPLY_GET_SLICE               6
+#define CASTLE_CTRL_REPLY                        8
+#define CASTLE_OBJ_REQ_REPLACE_MULTI             15
+
+/* Subtypes for CASTLE_REPLACE_REQ */
+#define CASTLE_OBJ_TOMBSTONE                     0
+#define CASTLE_OBJ_VALUE                         1
+
 uint32_t castle_rxrpc_packet_length      (struct castle_rxrpc_call *call);
 void     castle_rxrpc_str_copy           (struct castle_rxrpc_call *call, 
                                           void *buffer, 

@@ -20,6 +20,8 @@
 #include "castle_rxrpc.h"
 #include "castle_ctrl.h"
 #include "castle_objects.h"
+#include "castle_freespace.h"
+#include "castle_versions.h"
 
 //#define DEBUG
 #ifndef DEBUG
@@ -874,70 +876,6 @@ out:
     return castle_object_slice_get(call, attachment, start_key, end_key, max_entries);
 }
 
-static int castle_rxrpc_ctrl_decode(struct castle_rxrpc_call *call, struct sk_buff *skb,  bool last)
-{
-    int ret;
-    size_t len;
-    void *reply = NULL;
-
-    debug("Delivering ctrl packet.\n");
-    ret = castle_control_packet_process(skb, &reply, &len);
-    debug("Ctrl ret=%d\n", ret);
-
-    rxrpc_kernel_data_delivered(skb);
-    /* Advance the state, if we succeeded at decoding the packet */
-    if(ret) 
-    {
-        if(reply) castle_free(reply);
-        return ret;
-    }
-    
-    castle_rxrpc_state_update(call, RXRPC_CALL_REPLYING);
-    debug("Sending reply of length=%ld\n", len);
-    castle_rxrpc_reply_send(call, reply, len, 1 /* last */);
-
-    castle_free(reply);
-    return 0;
-}
-
-
-static const struct castle_rxrpc_call_type castle_rxrpc_op_call =
-{
-    .name    = "op decode",
-    .deliver = castle_rxrpc_op_decode,
-};
-
-static const struct castle_rxrpc_call_type castle_rxrpc_get_call =
-{
-    .name    = "get",
-    .deliver = castle_rxrpc_get_decode,
-};
-
-static const struct castle_rxrpc_call_type castle_rxrpc_replace_call =
-{
-    .name    = "replace",
-    .deliver = castle_rxrpc_replace_decode,
-};
-
-static const struct castle_rxrpc_call_type castle_rxrpc_replace_multi_call =
-{
-    .name    = "multi replace",
-    .deliver = castle_rxrpc_replace_multi_decode,
-};
-
-static const struct castle_rxrpc_call_type castle_rxrpc_slice_call =
-{
-    .name    = "slice",
-    .deliver = castle_rxrpc_slice_decode,
-};
-
-static const struct castle_rxrpc_call_type castle_rxrpc_ctrl_call =
-{
-    .name    = "control",
-    .deliver = castle_rxrpc_ctrl_decode,
-};
-
-
 static void castle_rxrpc_call_free(struct castle_rxrpc_call *call)
 {
     debug("Freeing call: %p\n", call);    
@@ -1263,4 +1201,524 @@ void castle_rxrpc_fini(void)
 	sock_release(socket);
     destroy_workqueue(rxrpc_wq);
 }
+
+static void castle_control_reply_error(uint32_t *reply, 
+                                       int ret_code,
+                                       size_t *len)
+{
+    reply[0] = CASTLE_CTRL_REPLY;
+    reply[1] = CASTLE_CTRL_REPLY_FAIL;
+    reply[2] = ret_code;
+    *len = 3;
+}
+
+static void castle_control_reply_process(uint32_t *reply, size_t len, size_t *length)
+{
+    size_t i;
+    
+    /* Convert to network byte order */
+    for(i=0; i<len; i++)
+        reply[i] = htonl(reply[i]);
+
+    #ifdef DEBUG        
+    debug("Reply message:\n");
+    for(i=0; i<4*len; i++)
+        debug(" [%ld]=%d\n", i, *(((uint8_t *)reply) + i));
+    debug("\n");
+    #endif
+
+    /* length is in bytes */
+    *length = 4*len;
+}
+
+static void castle_control_reply(uint32_t *reply, 
+                                 size_t *length, 
+                                 int op_code, 
+                                 int ret_code, 
+                                 uint32_t token)
+{
+    size_t len;
+
+    /* Deal with error condition first */
+    if(ret_code)
+    {
+        castle_control_reply_error(reply, ret_code, &len);
+    } else
+    /* Next, void replies */
+    if(op_code == CASTLE_CTRL_REPLY_VOID)
+    {
+        reply[0] = CASTLE_CTRL_REPLY;
+        reply[1] = CASTLE_CTRL_REPLY_VOID;
+        len = 2;
+    } else
+    /* All the rest */
+    {
+        reply[0] = CASTLE_CTRL_REPLY;
+        reply[1] = op_code;
+        reply[2] = token;
+        len = 3;
+    } 
+
+    castle_control_reply_process(reply, len, length);
+}
+
+static void castle_control_get_valid_counts(slave_uuid_t slave_uuid, uint32_t *reply, size_t length, size_t *len_p)
+{
+    int ret = 0;
+    size_t count = 0;
+    struct castle_slave *slave = NULL;
+
+    slave = castle_slave_find_by_uuid(slave_uuid);
+
+    debug("castle_control_get_valid_counts slave_uuid=0x%x slave=%p\n", slave_uuid, slave);
+
+    if (!slave)
+    {
+        ret = -ENOENT;
+        goto error;
+    }
+
+    ret = castle_freespace_summary_get(slave, reply + 3, length - 3, &count);
+    if (ret)
+        goto error;
+
+    debug("castle_control_get_valid_counts ret=%d\n", ret);
+
+    reply[0] = CASTLE_CTRL_REPLY;
+    reply[1] = CASTLE_CTRL_REPLY_VALID_COUNTS;
+    reply[2] = count >> 1; // count should only ever be 2^33, so this number will be 2^32
+    count += 3;
+
+error:
+    if (ret)
+        castle_control_reply_error(reply, ret, &count);
+
+    castle_control_reply_process(reply, count, len_p);
+}
+
+static void castle_control_get_invalid_counts(slave_uuid_t slave_uuid, uint32_t *reply, size_t length, size_t *len_p)
+{
+    int ret = 0;
+    size_t count = 0;
+    struct castle_slave *slave = NULL;
+
+    slave = castle_slave_find_by_uuid(slave_uuid);
+
+    debug("castle_control_get_invalid_counts slave_uuid=0x%x slave=%p\n", slave_uuid, slave);
+
+    if (!slave)
+    {
+        ret = -ENOENT;
+        goto error;
+    }
+
+    debug("castle_control_get_invalid_counts castle_freespace_summary_get ret=%d\n", ret);
+
+    reply[0] = CASTLE_CTRL_REPLY;
+    reply[1] = CASTLE_CTRL_REPLY_INVALID_COUNTS;
+    reply[2] = 0;
+    count = 3;
+
+error:
+    if (ret)
+        castle_control_reply_error(reply, ret, &count);
+
+    castle_control_reply_process(reply, count, len_p);
+}
+
+int castle_control_packet_process(struct sk_buff *skb, void **reply, size_t *len_p)
+{
+    uint32_t *reply32; /* For now, all reply values are 32 bit wide */
+    uint32_t ctrl_op;
+    size_t reply32_size = 0;
+
+    debug("Processing control packet (in_atomic=%d).\n", in_atomic());
+#ifdef DEBUG
+    skb_print(skb);
+#endif
+    if(skb->len < 4)
+        return -EBADMSG;
+
+    castle_control_lock_up();
+    ctrl_op = SKB_L_GET(skb);
+    debug("Ctrl op=%d\n", ctrl_op);
+    
+    switch(ctrl_op)
+    {
+        case CASTLE_CTRL_REQ_VALID_STATS:
+        case CASTLE_CTRL_REQ_INVALID_STATS:
+        {
+            // must not forget version zero!
+            int versions = castle_version_max_get() + 1;
+            reply32_size = (versions * 2) + 3;
+            break;
+        }
+        default:
+            reply32_size = 64;
+            break;
+    }
+
+    *reply = reply32 = castle_malloc(reply32_size * sizeof(uint32_t), GFP_KERNEL);
+    if (!reply32)
+        return -ENOMEM;
+    
+    switch(ctrl_op)
+    {
+        case CASTLE_CTRL_REQ_CLAIM:
+        {
+            int ret;
+            slave_uuid_t id;
+
+            if(skb->len != 4) goto bad_msg;
+            castle_control_claim(SKB_L_GET(skb), &ret, &id);
+            castle_control_reply(reply32, 
+                                 len_p, 
+                                 CASTLE_CTRL_REPLY_NEW_SLAVE,
+                                 ret, 
+                                 id);
+            break;
+        }
+        case CASTLE_CTRL_REQ_RELEASE:
+        {
+            int ret/*, i*/;
+
+            if(skb->len != 4) goto bad_msg;
+            castle_control_release(SKB_L_GET(skb), &ret); 
+            castle_control_reply(reply32,
+                                 len_p,
+                                 CASTLE_CTRL_REPLY_VOID,
+                                 ret,
+                                 0);
+
+            break;
+        }
+        case CASTLE_CTRL_REQ_ATTACH:
+        {
+            int ret;
+            uint32_t dev;
+
+            if(skb->len != 4) goto bad_msg;
+            castle_control_attach(SKB_L_GET(skb), 
+                                  &ret, 
+                                  &dev);
+            castle_control_reply(reply32,
+                                 len_p,
+                                 CASTLE_CTRL_REPLY_NEW_DEVICE,
+                                 ret,
+                                 dev);
+            break;
+        }
+        case CASTLE_CTRL_REQ_DETACH:
+        {
+            int ret;
+
+            if(skb->len != 4) goto bad_msg;
+            castle_control_detach(SKB_L_GET(skb), &ret); 
+            castle_control_reply(reply32,
+                                 len_p,
+                                 CASTLE_CTRL_REPLY_VOID,
+                                 ret,
+                                 0);
+            break;
+        }
+        case CASTLE_CTRL_REQ_CREATE:
+        {
+            int ret;
+            version_t version;
+
+            if(skb->len != 8) goto bad_msg;
+            castle_control_create(SKB_LL_GET(skb), 
+                                  &ret, 
+                                  &version);
+            castle_control_reply(reply32,
+                                 len_p,
+                                 CASTLE_CTRL_REPLY_NEW_VERSION,
+                                 ret,
+                                 version);
+            break;
+        }
+        case CASTLE_CTRL_REQ_CLONE:
+        {
+            int ret;
+            version_t version;
+
+            if(skb->len != 4) goto bad_msg;
+            castle_control_clone(SKB_L_GET(skb),
+                                 &ret,
+                                 &version); 
+            castle_control_reply(reply32,
+                                 len_p,
+                                 CASTLE_CTRL_REPLY_NEW_VERSION,
+                                 ret,
+                                 version);
+            break;
+        }
+        case CASTLE_CTRL_REQ_SNAPSHOT:
+        {
+            int ret;
+            version_t version;
+            
+            if(skb->len != 4) goto bad_msg;
+            castle_control_snapshot(SKB_L_GET(skb), 
+                                    &ret, 
+                                    &version);
+            castle_control_reply(reply32,
+                                 len_p,
+                                 CASTLE_CTRL_REPLY_NEW_VERSION,
+                                 ret,
+                                 version);
+            break;
+        }
+        case CASTLE_CTRL_REQ_INIT:
+        {
+            int ret;
+            
+            if(skb->len != 0) goto bad_msg;
+            castle_control_fs_init(&ret);
+            castle_control_reply(reply32,
+                                 len_p,
+                                 CASTLE_CTRL_REPLY_VOID,
+                                 ret,
+                                 0);
+            break;
+        }
+        case CASTLE_CTRL_REQ_RESERVE_FOR_TRANSFER:
+        {
+            int version, type, reservations_count, i;
+            int *reservations_disk, *reservations_length;
+
+            debug("Reserve_for_transfer skb->len=%d", skb->len);
+
+            if(skb->len < 12) goto bad_msg;
+            
+            version = SKB_L_GET(skb);
+            type = SKB_L_GET(skb);
+            reservations_count = SKB_L_GET(skb);
+            
+            debug("Reserve_for_transfer version=0x%x type=0x%x reservations_count=%d", 
+                    version, type, reservations_count);
+            
+            if(skb->len < (reservations_count * 2)) goto bad_msg;
+            
+            reservations_disk = castle_malloc(reservations_count * sizeof(int), GFP_KERNEL);
+            reservations_length = castle_malloc(reservations_count * sizeof(int), GFP_KERNEL);
+            
+            for (i = 0; i < reservations_count; i++) {
+                reservations_disk[i] = SKB_L_GET(skb);
+                reservations_length[i] = SKB_L_GET(skb);
+            }
+            
+            castle_free(reservations_disk);
+            castle_free(reservations_length);
+            
+            castle_control_reply(reply32,
+                                 len_p,
+                                 CASTLE_CTRL_REPLY_VOID,
+                                 -EINVAL,
+                                 0);
+            break;
+        }
+
+        case CASTLE_CTRL_REQ_TRANSFER_CREATE:
+        {
+            int ret;
+            transfer_id_t transfer;
+
+            if(skb->len != 8) goto bad_msg;
+            castle_control_transfer_create(SKB_L_GET(skb),
+                                           SKB_L_GET(skb),
+                                           &ret,
+                                           &transfer);
+            castle_control_reply(reply32,
+                                 len_p,
+                                 CASTLE_CTRL_REPLY_NEW_TRANSFER,
+                                 ret,
+                                 transfer);
+            break;
+        }
+        case CASTLE_CTRL_REQ_TRANSFER_DESTROY:
+        {
+            int ret;
+
+            if(skb->len != 4) goto bad_msg;
+            castle_control_transfer_destroy(SKB_L_GET(skb),
+                                            &ret);
+            castle_control_reply(reply32,
+                                 len_p,
+                                 CASTLE_CTRL_REPLY_VOID,
+                                 ret,
+                                 0);
+            break;
+        }
+        case CASTLE_CTRL_REQ_COLLECTION_ATTACH:
+        {
+            int ret;
+            collection_id_t collection;
+
+            version_t version;
+            char *name;
+
+            if(skb->len < 8) goto bad_msg;
+            version = SKB_L_GET(skb);
+            name = SKB_STR_GET(skb, 128);
+            if(!name) goto bad_msg;
+
+            castle_control_collection_attach(version, name,
+                                             &ret,
+                                             &collection);
+
+            castle_control_reply(reply32,
+                                 len_p,
+                                 CASTLE_CTRL_REPLY_NEW_COLLECTION,
+                                 ret,
+                                 collection);
+            break;
+        }
+        case CASTLE_CTRL_REQ_COLLECTION_DETACH:
+        {
+            int ret;
+            
+            if(skb->len != 4) goto bad_msg;
+            castle_control_collection_detach(SKB_L_GET(skb),
+                                             &ret);
+            castle_control_reply(reply32,
+                                 len_p,
+                                 CASTLE_CTRL_REPLY_VOID,
+                                 ret,
+                                 0);
+            break;
+        }
+        case CASTLE_CTRL_REQ_COLLECTION_SNAPSHOT:
+        {
+            int ret;
+            version_t version;
+
+            if(skb->len != 4) goto bad_msg;
+            castle_control_collection_snapshot(SKB_L_GET(skb),
+                                               &ret,
+                                               &version);
+            castle_control_reply(reply32,
+                                 len_p,
+                                 CASTLE_CTRL_REPLY_NEW_VERSION,
+                                 ret,
+                                 version);
+            break;
+        }
+        case CASTLE_CTRL_REQ_VALID_STATS:
+        {
+            slave_uuid_t slave_uuid;
+            
+            if(skb->len != 4) goto bad_msg;
+
+            slave_uuid = SKB_L_GET(skb);
+            
+            castle_control_get_valid_counts(slave_uuid, reply32, reply32_size, len_p);
+            
+            break;
+        }
+        case CASTLE_CTRL_REQ_INVALID_STATS:
+        {
+            slave_uuid_t slave_uuid;
+            
+            if(skb->len != 4) goto bad_msg;
+
+            slave_uuid = SKB_L_GET(skb);
+            
+            castle_control_get_invalid_counts(slave_uuid, reply32, reply32_size, len_p);
+            
+            break;
+        }
+        case CASTLE_CTRL_REQ_SET_TARGET:
+        {
+            int ret, value;
+            slave_uuid_t slave_uuid;
+            
+            if(skb->len != 8) goto bad_msg;
+
+            slave_uuid = SKB_L_GET(skb);
+            value = SKB_L_GET(skb);
+            
+            castle_control_set_target(slave_uuid,
+                                      value,
+                                      &ret);
+            castle_control_reply(reply32,
+                                 len_p,
+                                 CASTLE_CTRL_REPLY_VOID,
+                                 ret,
+                                 0);
+            break;
+        }
+    }
+    castle_control_lock_down();
+
+    return 0;
+
+bad_msg:
+    castle_control_lock_down();
+
+    return -EBADMSG;
+}
+
+static int castle_rxrpc_ctrl_decode(struct castle_rxrpc_call *call, struct sk_buff *skb,  bool last)
+{
+    int ret;
+    size_t len;
+    void *reply = NULL;
+
+    debug("Delivering ctrl packet.\n");
+    ret = castle_control_packet_process(skb, &reply, &len);
+    debug("Ctrl ret=%d\n", ret);
+
+    rxrpc_kernel_data_delivered(skb);
+    /* Advance the state, if we succeeded at decoding the packet */
+    if(ret) 
+    {
+        if(reply) castle_free(reply);
+        return ret;
+    }
+    
+    castle_rxrpc_state_update(call, RXRPC_CALL_REPLYING);
+    debug("Sending reply of length=%ld\n", len);
+    castle_rxrpc_reply_send(call, reply, len, 1 /* last */);
+
+    castle_free(reply);
+    return 0;
+}
+
+
+static const struct castle_rxrpc_call_type castle_rxrpc_op_call =
+{
+    .name    = "op decode",
+    .deliver = castle_rxrpc_op_decode,
+};
+
+static const struct castle_rxrpc_call_type castle_rxrpc_get_call =
+{
+    .name    = "get",
+    .deliver = castle_rxrpc_get_decode,
+};
+
+static const struct castle_rxrpc_call_type castle_rxrpc_replace_call =
+{
+    .name    = "replace",
+    .deliver = castle_rxrpc_replace_decode,
+};
+
+static const struct castle_rxrpc_call_type castle_rxrpc_replace_multi_call =
+{
+    .name    = "multi replace",
+    .deliver = castle_rxrpc_replace_multi_decode,
+};
+
+static const struct castle_rxrpc_call_type castle_rxrpc_slice_call =
+{
+    .name    = "slice",
+    .deliver = castle_rxrpc_slice_decode,
+};
+
+static const struct castle_rxrpc_call_type castle_rxrpc_ctrl_call =
+{
+    .name    = "control",
+    .deliver = castle_rxrpc_ctrl_decode,
+};
 

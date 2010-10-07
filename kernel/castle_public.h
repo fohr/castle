@@ -11,23 +11,6 @@ typedef uint32_t version_t;
 #define INVAL_VERSION       ((version_t)-1) 
 #define VERSION_INVAL(_v)   ((_v) == INVAL_VERSION) 
 
-/* Definitions for RxRPC/XDR marshalling */
-#define CASTLE_OBJ_REQ_GET                       0
-#define CASTLE_OBJ_REQ_REPLACE                   1
-#define CASTLE_OBJ_REQ_SLICE                     5
-#define CASTLE_CTRL_REQ                          7
-
-#define CASTLE_OBJ_REPLY_REPLACE                 2
-#define CASTLE_OBJ_REPLY_GET                     3
-#define CASTLE_OBJ_REPLY_ERROR                   4
-#define CASTLE_OBJ_REPLY_GET_SLICE               6
-#define CASTLE_CTRL_REPLY                        8
-#define CASTLE_OBJ_REQ_REPLACE_MULTI             15
-
-/* Subtypes for CASTLE_REPLACE_REQ */
-#define CASTLE_OBJ_TOMBSTONE                     0
-#define CASTLE_OBJ_VALUE                         1
-
 /* Subtypes for CASTLE_CTRL_REQ, also used for IOCTLs */
 #define CASTLE_CTRL_REQ_CLAIM                    1
 #define CASTLE_CTRL_REQ_RELEASE                  2
@@ -93,6 +76,31 @@ typedef struct castle_control_cmd_detach {
     int      ret;              /* OUT */
 } cctrl_cmd_detach_t;
 
+typedef struct castle_control_cmd_snapshot {
+    uint32_t  dev;             /* IN  */
+    int       ret;             /* OUT */
+    version_t version;         /* OUT */
+} cctrl_cmd_snapshot_t;
+
+typedef struct castle_control_cmd_collection_attach {
+    version_t           version;         /* IN  */
+    char               *name;            /* IN  */
+    size_t              name_length;     /* IN  */ 
+    int                 ret;             /* OUT */
+    collection_id_t     collection;      /* OUT */
+} cctrl_cmd_collection_attach_t;
+
+typedef struct castle_control_cmd_collection_detach {
+    collection_id_t collection;          /* IN  */
+    int             ret;                 /* OUT */
+} cctrl_cmd_collection_detach_t;
+
+typedef struct castle_control_cmd_collection_snapshot {
+    collection_id_t collection; /* IN  */
+    int       ret;             /* OUT */
+    version_t version;         /* OUT */
+} cctrl_cmd_collection_snapshot_t;
+
 typedef struct castle_control_cmd_create {
     uint64_t  size;            /* IN  */
     int       ret;             /* OUT */
@@ -104,12 +112,6 @@ typedef struct castle_control_cmd_clone {
     int       ret;             /* OUT */
     version_t clone;           /* OUT */
 } cctrl_cmd_clone_t;
-
-typedef struct castle_control_cmd_snapshot {
-    uint32_t  dev;             /* IN  */
-    int       ret;             /* OUT */
-    version_t version;         /* OUT */
-} cctrl_cmd_snapshot_t;
 
 typedef struct castle_control_cmd_init {
     int ret;                   /* OUT */
@@ -132,12 +134,19 @@ typedef struct castle_control_ioctl {
     union {
         cctrl_cmd_claim_t            claim;
         cctrl_cmd_release_t          release;
+        cctrl_cmd_init_t             init;
+        
         cctrl_cmd_attach_t           attach;
         cctrl_cmd_detach_t           detach;
+        cctrl_cmd_snapshot_t         snapshot;
+
+        cctrl_cmd_collection_attach_t           collection_attach;
+        cctrl_cmd_collection_detach_t           collection_detach;
+        cctrl_cmd_collection_snapshot_t         collection_snapshot;        
+
         cctrl_cmd_create_t           create;
         cctrl_cmd_clone_t            clone;
-        cctrl_cmd_snapshot_t         snapshot;
-        cctrl_cmd_init_t             init;
+
         cctrl_cmd_transfer_create_t  transfer_create;
         cctrl_cmd_transfer_destroy_t transfer_destroy;
     };
