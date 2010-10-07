@@ -182,7 +182,6 @@ typedef struct castle_var_length_object_key {
 #define CASTLE_IOCTL_POKE_RING 2
 #define CASTLE_IOCTL_WAIT 3
 
-#define CASTLE_RING_ECHO 0
 #define CASTLE_RING_REPLACE 1
 #define CASTLE_RING_BIG_PUT 2
 #define CASTLE_RING_PUT_CHUNK 3
@@ -193,13 +192,9 @@ typedef struct castle_var_length_object_key {
 #define CASTLE_RING_ITER_NEXT 8
 #define CASTLE_RING_ITER_FINISH 9
 #define CASTLE_RING_ITER_SKIP 10
+#define CASTLE_RING_REMOVE 11
 
 typedef uint32_t castle_interface_token_t;
-
-typedef struct castle_request_echo {
-	unsigned long message;
-	unsigned long size;
-} castle_request_echo_t;
 
 typedef struct castle_request_replace {
     collection_id_t       collection_id;
@@ -208,6 +203,12 @@ typedef struct castle_request_replace {
     void                 *value_ptr;
     size_t                value_len;
 } castle_request_replace_t;
+
+typedef struct castle_request_remove {
+    collection_id_t       collection_id;
+    c_vl_okey_t          *key_ptr;
+    size_t                key_len;
+} castle_request_remove_t;
 
 typedef struct castle_request_get {
     collection_id_t      collection_id;
@@ -243,8 +244,8 @@ typedef struct castle_request {
     uint32_t call_id;
     uint32_t tag;
     union {
-        castle_request_echo_t echo;
         castle_request_replace_t replace;
+        castle_request_remove_t remove;
         castle_request_get_t get;
         
         castle_request_iter_start_t iter_start;

@@ -723,6 +723,49 @@ err1: castle_free(key);
 err0: castle_back_reply(op, err, 0, 0);
 }
 
+static void castle_back_remove_complete(struct castle_object_replace *replace, int err)
+{
+    struct castle_back_op *op = container_of(replace, struct castle_back_op, replace);
+
+    debug("castle_back_remove_complete\n");
+
+    castle_back_buffer_put(op->conn, op->buf);
+
+    castle_back_reply(op, err, 0, 0);
+}
+
+static void castle_back_remove(struct castle_back_conn *conn, struct castle_back_op *op)
+{
+    int err;
+    struct castle_attachment *attachment;
+    c_vl_okey_t *key;
+    
+    // TODO should we ref count attachments?
+    attachment = castle_collection_find(op->req.replace.collection_id);
+    if (attachment == NULL)
+    {
+        ERROR("Collection not found id=%x\n", op->req.replace.collection_id);
+        err = EINVAL;
+        goto err0;
+    }
+
+    err = castle_back_key_copy_get(conn, op->req.replace.key_ptr, op->req.replace.key_len, &key);
+    if (err)
+        goto err0;
+
+    op->replace.value_len = 0;
+    op->replace.replace_continue = NULL;
+    op->replace.complete = castle_back_remove_complete;
+    op->replace.data_length_get = NULL;
+    op->replace.data_copy = NULL;
+
+    castle_object_replace(&op->replace, attachment, key, 1 /* tombstone */);
+    castle_free(key);
+    return;
+
+err0: castle_back_reply(op, err, 0, 0);
+}
+
 void castle_back_get_reply_continue(struct castle_object_get *get,
                                     int err,
                                     void *buffer,
@@ -1241,28 +1284,10 @@ static void castle_back_request_process(struct castle_back_conn *conn, struct ca
     
     switch (op->req.tag)
     {
-        case CASTLE_RING_ECHO:
-        {
-            struct castle_back_buffer *buf;
-            void *message;
-                        
-            buf = castle_back_buffer_get(conn, op->req.echo.message);
-            if (!buf)
-            {
-                ERROR("Bad user pointer %lx\n", op->req.echo.message);
-                return;
-            }
-            
-            message = castle_back_user_to_kernel(buf, op->req.echo.message);
-            //castle_back_print_page(message, req->echo.size);
-            
-            castle_back_buffer_put(conn, buf);
-                        
-            castle_back_reply(op, 0, 0, 0);
-            
+        case CASTLE_RING_REMOVE:
+            castle_back_remove(conn, op);
             break;
-        }
-        
+       
         case CASTLE_RING_REPLACE:
             castle_back_replace(conn, op);
             break;
@@ -1286,6 +1311,7 @@ static void castle_back_request_process(struct castle_back_conn *conn, struct ca
             
         default:
             ERROR("Unknown request tag %d\n", op->req.tag);
+            castle_back_reply(op, -EINVAL, 0, 0);
             break;
     }
 }
