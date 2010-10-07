@@ -137,7 +137,7 @@ c_ext_t sup_ext = {
 
 c_ext_t meta_ext = { 
     .ext_id         = META_EXT_ID,
-    .size           = META_EXT_SIZE,
+    .size           = -1,           /* The size of meta extent is worked out on the first fs init. */ 
     .type           = META_EXT,
     .k_factor       = 2,
     .maps_cep       = INVAL_EXT_POS,
@@ -751,6 +751,9 @@ void castle_extents_load(int first)
             meta_ext.chk_buf[cs->id].count     = META_SPACE_SIZE;
             i++;
         }
+        /* Allocate meta extent size to be however much we allocated in all the
+           slaves, divided by the k-factor (2) */
+        meta_ext.size = META_SPACE_SIZE * i / meta_ext.k_factor;
         meta_ext.maps_cep.ext_id = MICRO_EXT_ID;
         meta_ext.maps_cep.offset = 0;
         /* Allocate freespace for meta extent with K-RDA just like usual
