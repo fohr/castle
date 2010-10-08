@@ -9,7 +9,6 @@
 #include "castle_utils.h"
 #include "castle_freespace.h"
 #include "castle_versions.h"
-#include "castle_block.h"
 #include "castle_da.h"
 #include "castle_debug.h"
 
