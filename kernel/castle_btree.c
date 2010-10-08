@@ -2108,6 +2108,7 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
     c_bvec->cvt_get(c_bvec, lub_cvt, &new_cvt);
     btree->entry_replace(node, lub_idx, key, lub_version, 0,
                          new_cvt);
+    dirty_c2b(c_bvec->btree_node);
     debug("Key already exists, modifying in place.\n");
     castle_btree_io_end(c_bvec, new_cvt, 0);
 
