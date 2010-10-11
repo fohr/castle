@@ -115,7 +115,6 @@ typedef struct castle_disk_block c_disk_blk_t;
 #define MICRO_EXT_SIZE                 (1)   /* Dont change this */
 #define META_SPACE_START               (64)
 #define META_SPACE_SIZE                (300)
-#define META_EXT_SIZE                  (500) /* 2-RDA. Occupies double the space */
 #define EXT_ST_SIZE                    (50)
 #define FREE_SPACE_START               (600)
 #define FREESPACE_OFFSET               (2 * C_CHK_SIZE)
