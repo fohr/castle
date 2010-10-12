@@ -807,7 +807,10 @@ static void castle_back_replace(struct castle_back_conn *conn, struct castle_bac
     op->replace.data_length_get = castle_back_replace_data_length_get;
     op->replace.data_copy = castle_back_replace_data_copy;
 
-    castle_object_replace(&op->replace, attachment, key, 0);
+    err = castle_object_replace(&op->replace, attachment, key, 0);
+    if (err)
+        goto err2;
+        
     castle_free(key);
     return;
     
@@ -852,10 +855,14 @@ static void castle_back_remove(struct castle_back_conn *conn, struct castle_back
     op->replace.data_length_get = NULL;
     op->replace.data_copy = NULL;
 
-    castle_object_replace(&op->replace, attachment, key, 1 /* tombstone */);
+    err = castle_object_replace(&op->replace, attachment, key, 1 /* tombstone */);
+    if (err)
+        goto err1;
+        
     castle_free(key);
     return;
-
+    
+err1: castle_free(key);
 err0: castle_back_reply(op, err, 0, 0);
 }
 
@@ -965,7 +972,10 @@ static void castle_back_get(struct castle_back_conn *conn, struct castle_back_op
     op->get.reply_start = castle_back_get_reply_start;
     op->get.reply_continue = castle_back_get_reply_continue;
 
-    castle_object_get(&op->get, attachment, key);
+    err = castle_object_get(&op->get, attachment, key);
+    if (err)
+        goto err2;
+        
     castle_free(key);
     return;
 

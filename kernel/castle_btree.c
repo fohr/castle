@@ -624,8 +624,6 @@ struct castle_btree_type castle_batree = {
 #define VLBA_TREE_ENTRY_IS_ONDISK(_slot)      ((_slot)->type & VLBA_TREE_ENTRY_ONDISK) 
 #define VLBA_TREE_ENTRY_IS_DISABLED(_slot)    ((_slot)->type & VLBA_TREE_ENTRY_DISABLED) 
 
-#define VLBA_TREE_MAX_KEY_SIZE         512      /* In bytes */
-
 typedef struct vlba_key {
     uint32_t length;
     uint8_t _key[0];

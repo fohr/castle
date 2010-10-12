@@ -108,6 +108,9 @@ static c_vl_bkey_t* castle_object_btree_key_construct(c_vl_bkey_t *src_bkey,
     for(i=okey_first_dim; i<nr_dims; i++)
         key_len += src_okey->dims[i]->length;
 
+    if (key_len - 4 > VLBA_TREE_MAX_KEY_SIZE) /* Length doesn't include length field */
+        return NULL;
+    
     /* Allocate the single-dimensional key */
     btree_key = castle_zalloc(key_len, GFP_KERNEL);
     if(!btree_key)
@@ -912,6 +915,8 @@ int castle_object_replace(struct castle_object_replace *replace,
         BUG_ON(key->dims[i]->length == 0);
     
     btree_key = castle_object_key_convert(key);
+    if (!btree_key)
+        return -EINVAL;
    
     //printk(" value          : %s\n", tombstone ? "tombstone" : "object");
     //printk("Btree key is:");
@@ -956,6 +961,8 @@ int castle_object_replace_multi(struct castle_rxrpc_call *call,
 
     btree_key = castle_object_key_convert(key);
     castle_object_okey_free(key);
+    if (!btree_key)
+        return -EINVAL;
 
     /* Single c_bvec for the bio */
     c_bio = castle_utils_bio_alloc(1);
@@ -1484,6 +1491,8 @@ int castle_object_get(struct castle_object_get *get,
     debug("castle_object_get get=%p\n", get);
 
     btree_key = castle_object_key_convert(key);
+    if (!btree_key)
+        return -EINVAL;
 
     /* Single c_bvec for the bio */
     c_bio = castle_utils_bio_alloc(1);

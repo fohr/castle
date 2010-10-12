@@ -98,6 +98,7 @@ enum {
 };
 
 #define MAX_INLINE_VAL_SIZE 512
+#define VLBA_TREE_MAX_KEY_SIZE         512      /* In bytes */
 
 struct castle_btree_val {
     uint8_t           type;
