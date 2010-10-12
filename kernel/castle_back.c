@@ -93,7 +93,7 @@ struct castle_back_op
     struct castle_back_conn         *conn;
     struct castle_back_buffer       *buf;
     
-    /* use for assembling a get */
+    /* use for assembling a get and partial writes in puts */
     size_t value_length;
     size_t buffer_offset; 
     
@@ -409,6 +409,9 @@ static void castle_back_vm_close(struct vm_area_struct *vma)
     if (buf == NULL)
         return;
     
+    debug("buf=%p, size=%d, vm_end=%ld, vm_start=%ld\n", buf, buf->size, vma->vm_end, vma->vm_start);
+
+    // This is very dangerous (read: WRONG) - what about partial munmaps?
     BUG_ON(buf->size != (vma->vm_end - vma->vm_start));
     
     /* This is the reverse of the ref_count=1 in buffer_map */
@@ -661,14 +664,21 @@ static uint32_t castle_back_replace_data_length_get(struct castle_object_replace
 }
 
 static void castle_back_replace_data_copy(struct castle_object_replace *replace, 
-                                          void *buffer, int str_length, int partial)
+                                          void *buffer, int buffer_length, int not_last)
 {
     struct castle_back_op *op = container_of(replace, struct castle_back_op, replace);
 
+    debug("castle_back_replace_data_copy buffer=%p, buffer_length=%d, not_last=%d, value_len=%ld\n", 
+        buffer, buffer_length, not_last, op->req.replace.value_len);
+
     // TODO: actual zero copy!
 
-    memcpy(buffer, castle_back_user_to_kernel(op->buf, op->req.replace.value_ptr), 
-        op->req.replace.value_len);
+    BUG_ON(op->buffer_offset + buffer_length > op->req.replace.value_len);
+    
+    memcpy(buffer, castle_back_user_to_kernel(op->buf, op->req.replace.value_ptr) + op->buffer_offset, 
+        buffer_length);
+
+    op->buffer_offset += buffer_length;
 }
 
 static void castle_back_replace(struct castle_back_conn *conn, struct castle_back_op *op)
@@ -707,6 +717,8 @@ static void castle_back_replace(struct castle_back_conn *conn, struct castle_bac
         err = EINVAL;
         goto err2;
     }
+
+    op->buffer_offset = 0;
 
     op->replace.value_len = op->req.replace.value_len;
     op->replace.replace_continue = NULL;
@@ -1558,6 +1570,8 @@ static int castle_buffer_map(struct castle_back_conn *conn, struct vm_area_struc
         err = -ENOMEM;
         goto err1;
     }
+
+    debug("castle_buffer_map buffer=%p, size=%ld, vm_start=%ld, vm_end=%ld\n", buffer, size, vma->vm_start, vma->vm_end);
     
     vma->vm_flags |= VM_RESERVED;
     vma->vm_ops = &castle_back_vm_ops;
