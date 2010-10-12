@@ -29,7 +29,7 @@
 #define USED              __attribute__((used))
 #define error             printk
 
-#define DEBUG
+//#define DEBUG
 #ifndef DEBUG
 #define debug(_f, ...)    ((void)0)
 #else
