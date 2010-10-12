@@ -7,13 +7,13 @@
 #include <linux/crc32.h>
 #include <linux/skbuff.h>
 #include <linux/hardirq.h>
+#include <linux/buffer_head.h>
 
 #include "castle_public.h"
 #include "castle_compile.h"
 #include "castle.h"
 #include "castle_utils.h"
 #include "castle_da.h"
-#include "castle_block.h"
 #include "castle_cache.h"
 #include "castle_btree.h"
 #include "castle_freespace.h"
@@ -282,29 +282,24 @@ static int castle_slave_superblock_validate(struct castle_slave_superblock *cs_s
 
 static int castle_slave_superblock_read(struct castle_slave *cs) 
 {
-    struct castle_slave_superblock cs_sb;
+    struct castle_slave_superblock *cs_sb;
     int err;
+    struct buffer_head *bh;
    
     /* We're storing the superblock on the stack, make sure it doesn't
        grow too large */
     BUG_ON(sizeof(struct castle_slave_superblock) > PAGE_SIZE >> 2); 
-    err = castle_sub_block_read(cs,
-                               &cs_sb,
-                                0,
-                                sizeof(struct castle_slave_superblock),
-                                NULL, NULL);
-    if(err) 
-    {
-        printk("Failed to read superblock.\n");
-        return err;
-    }
+    bh = __bread(cs->bdev, 0, C_BLK_SIZE);
+    cs_sb = (struct castle_slave_superblock *)bh->b_data;
 
-    err = castle_slave_superblock_validate(&cs_sb);
+    err = castle_slave_superblock_validate(cs_sb);
     if(err)
         return -EINVAL;
+    else
+        printk("Found super block\n");
     //castle_slave_superblock_print(&cs_sb);
     /* Save the uuid and exit */
-    cs->uuid = cs_sb.uuid;
+    cs->uuid = cs_sb->uuid;
     
     return 0;
 }
