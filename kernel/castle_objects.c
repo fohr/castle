@@ -809,6 +809,8 @@ void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
         replace->data_length = cvt.length;
         
         complete_write = castle_object_data_write(replace);
+    
+        c2b = replace->data_c2b;
     }
     else 
     if(CVT_INLINE(cvt))
@@ -816,8 +818,6 @@ void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
         complete_write = 1;
         castle_free(cvt.val);
     }
-    
-    c2b = replace->data_c2b;
         
     /* Unlock buffers, and complete the call if we are done already */
     if(complete_write)
