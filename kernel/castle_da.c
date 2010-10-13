@@ -135,12 +135,13 @@ static int castle_ct_immut_iter_entry_find(c_immut_iter_t *iter,
                                            struct castle_btree_node *node,
                                            int start_idx) 
 {
-    int leaf_ptr, disabled;
+    int disabled;
+    c_val_tup_t cvt;
 
     for(; start_idx<node->used; start_idx++)
     {
-        disabled = iter->btree->entry_get(node, start_idx, NULL, NULL, &leaf_ptr, NULL);
-        if(!leaf_ptr && !disabled)
+        disabled = iter->btree->entry_get(node, start_idx, NULL, NULL, &cvt);
+        if(!CVT_LEAF_PTR(cvt) && !disabled)
             return start_idx; 
     }
 
@@ -251,7 +252,7 @@ static void castle_ct_immut_iter_next(c_immut_iter_t *iter,
                                       version_t *version_p, 
                                       c_val_tup_t *cvt_p)
 {
-    int is_leaf_ptr, disabled;
+    int disabled;
 
     /* Check if we can read from the curr_node. If not move to the next node. 
        Make sure that if entries exist, they are not leaf pointers. */
@@ -266,10 +267,9 @@ static void castle_ct_immut_iter_next(c_immut_iter_t *iter,
                                       iter->curr_idx, 
                                       key_p, 
                                       version_p, 
-                                      &is_leaf_ptr, 
                                       cvt_p);
     /* curr_idx should have been set to a non-leaf pointer */
-    BUG_ON(is_leaf_ptr || disabled);
+    BUG_ON(CVT_LEAF_PTR(*cvt_p) || disabled);
     iter->curr_idx = castle_ct_immut_iter_entry_find(iter, iter->curr_node, iter->curr_idx + 1);
     debug("Returned next, curr_idx is now=%d / %d.\n", iter->curr_idx, iter->curr_node->used);
 }
@@ -393,7 +393,8 @@ static void castle_ct_modlist_iter_fill(c_modlist_iter_t *iter)
         debug("Dereferencing first 4 bytes of the key (should be length)=0x%x.\n",
                 *((uint32_t *)key));
         debug("Inserting into the node=%d, under idx=%d\n", node_idx, node_offset);
-        btree->entry_add(node, node_offset, key, version, 0, cvt);
+        BUG_ON(CVT_LEAF_PTR(cvt));
+        btree->entry_add(node, node_offset, key, version, cvt);
         iter->sort_idx[item_idx].node        = node_idx;
         iter->sort_idx[item_idx].node_offset = node_offset;
         node_offset++;
@@ -435,7 +436,6 @@ static void castle_ct_modlist_iter_item_get(c_modlist_iter_t *iter,
                      iter->sort_idx[sort_idx].node_offset,
                      key_p,
                      version_p,
-                     NULL,
                      cvt_p);
 }
 
@@ -1254,7 +1254,8 @@ static inline void castle_da_entry_add(struct castle_da_merge *merge,
     debug("Adding an idx=%d, key=%p, *key=%d, version=%d\n", 
             level->next_idx, key, *((uint32_t *)key), version);
     /* Add the entry to the node (this may get dropped later, but leave it here for now */
-    btree->entry_add(node, level->next_idx, key, version, 0, cvt);
+    BUG_ON(CVT_LEAF_PTR(cvt));
+    btree->entry_add(node, level->next_idx, key, version, cvt);
     /* Compare the current key to the last key. Should never be smaller */
     key_cmp = (level->next_idx != 0) ? btree->key_compare(key, level->last_key) : 0;
     debug("Key cmp=%d\n", key_cmp);
@@ -1271,14 +1272,14 @@ static inline void castle_da_entry_add(struct castle_da_merge *merge,
                  may get invalidated on the iterator next() call. 
          */
         level->valid_end_idx = 0;
-        btree->entry_get(node, level->next_idx, &level->last_key, NULL, NULL, NULL);
+        btree->entry_get(node, level->next_idx, &level->last_key, NULL, NULL);
         level->valid_version = version;
     } else
     /* Case 2: We've moved on to a new key. Previous entry is a valid node end. */
     if(key_cmp > 0)
     {
         debug("Node valid_end_idx=%d, Case2.\n", level->next_idx);
-        btree->entry_get(node, level->next_idx, &level->last_key, NULL, NULL, NULL);
+        btree->entry_get(node, level->next_idx, &level->last_key, NULL, NULL);
         level->valid_end_idx = level->next_idx;
         level->valid_version = 0;
     } else
@@ -1310,7 +1311,6 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
     int buffer_idx, node_idx;
     void *key;
     version_t version;
-    int leaf_ptr;
     c_val_tup_t cvt, node_cvt;
 
     debug("Completing node at depth=%d\n", depth);
@@ -1334,9 +1334,9 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
     while(node_idx < node->used) 
     {
         BUG_ON(buffer->used != buffer_idx);
-        btree->entry_get(node,   node_idx,  &key, &version, &leaf_ptr, &cvt);
-        BUG_ON(leaf_ptr);
-        btree->entry_add(buffer, buffer_idx, key, version, 0, cvt);
+        btree->entry_get(node,   node_idx,  &key, &version, &cvt);
+        BUG_ON(CVT_LEAF_PTR(cvt));
+        btree->entry_add(buffer, buffer_idx, key, version, cvt);
         buffer_idx++;
         node_idx++;
     }
@@ -1347,10 +1347,10 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
         btree->entries_drop(node, level->valid_end_idx + 1, node->used - 1);
 
     BUG_ON(node->used != level->valid_end_idx + 1);
-    btree->entry_get(node, level->valid_end_idx, &key, &version, &leaf_ptr, &cvt);
+    btree->entry_get(node, level->valid_end_idx, &key, &version, &cvt);
     debug("Inserting into parent key=%p, *key=%d, version=%d, buffer->used=%d\n",
             key, *((uint32_t*)key), node->version, buffer->used);
-    BUG_ON(leaf_ptr);
+    BUG_ON(CVT_LEAF_PTR(cvt));
  
     /* Insert correct pointer in the parent, unless we've just completed the
        root node at the end of the merge. */ 
@@ -1360,7 +1360,7 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
                 depth);
         goto release_node;
     }
-    CVT_NODE_SET(node_cvt, level->node_c2b->nr_pages, level->node_c2b->cep);
+    CVT_NODE_SET(node_cvt, (level->node_c2b->nr_pages * C_BLK_SIZE), level->node_c2b->cep);
     castle_da_entry_add(merge, depth+1, key, node->version, node_cvt);
 release_node:
     debug("Releasing c2b for cep=(0x%x, 0x%x)\n", 
@@ -1396,7 +1396,7 @@ static inline int castle_da_nodes_complete(struct castle_da_merge *merge, int de
 {
     struct castle_da_merge_level *level;
     struct castle_btree_node *buffer;
-    int i, buffer_idx, leaf_ptr;
+    int i, buffer_idx;
     version_t version;
     void *key;
     
@@ -1430,8 +1430,8 @@ fill_buffers:
             c_val_tup_t cvt;
 
             merge->btree->entry_get(buffer, buffer_idx, &key, &version,
-                                    &leaf_ptr, &cvt);
-            BUG_ON(leaf_ptr);
+                                    &cvt);
+            BUG_ON(CVT_LEAF_PTR(cvt));
             castle_da_entry_add(merge, i, key, version, cvt);
             /* Check if the node completed, it should never do */
             BUG_ON(level->next_idx < 0);
@@ -1513,14 +1513,13 @@ static void castle_da_max_path_complete(struct castle_da_merge *merge)
     {
         void *k;
         version_t v;
-        int is_leaf_ptr;
         c_val_tup_t cvt;
 
         /* Replace right-most entry with (k=max_key, v=0) */
-        btree->entry_get(node, node->used-1, &k, &v, &is_leaf_ptr, &cvt);
-        BUG_ON(!CVT_NODE(cvt) || is_leaf_ptr);
+        btree->entry_get(node, node->used-1, &k, &v, &cvt);
+        BUG_ON(!CVT_NODE(cvt) || CVT_LEAF_PTR(cvt));
         debug("The node is non-leaf, replacing the right most entry with (max_key, 0).\n");
-        btree->entry_replace(node, node->used-1, btree->max_key, 0, 0, cvt);
+        btree->entry_replace(node, node->used-1, btree->max_key, 0, cvt);
         /* Change the version of the node to 0 */
         node->version = 0;
         /* Dirty the c2b */

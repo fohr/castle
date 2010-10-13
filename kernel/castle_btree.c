@@ -139,7 +139,6 @@ static int castle_mtree_entry_get(struct castle_btree_node *node,
                                   int                       idx,
                                   void                    **key_p,            
                                   version_t                *version_p,
-                                  int                      *is_leaf_ptr_p,
                                   c_val_tup_t              *cvt_p)
 {
     struct castle_mtree_entry *entries = 
@@ -150,12 +149,10 @@ static int castle_mtree_entry_get(struct castle_btree_node *node,
 
     if(key_p)         *key_p         = (void *)(unsigned long)entry->block;
     if(version_p)     *version_p     = entry->version;
-    if(is_leaf_ptr_p) *is_leaf_ptr_p = MTREE_ENTRY_IS_LEAF_PTR(entry);
     if(cvt_p)
     {
         *cvt_p = convert_to_cvt(entry->type, entry->val_len, entry->cep);
         BUG_ON(!CVT_MEDIUM_OBJECT(*cvt_p) && !CVT_NODE(*cvt_p) && !CVT_LEAF_PTR(*cvt_p));
-        BUG_ON(is_leaf_ptr_p && __XOR(*is_leaf_ptr_p, CVT_LEAF_PTR(*cvt_p)));
     }
 
     return 0;
@@ -165,7 +162,6 @@ static void castle_mtree_entry_add(struct castle_btree_node *node,
                                    int                       idx,
                                    void                     *key,            
                                    version_t                 version,
-                                   int                       is_leaf_ptr,
                                    c_val_tup_t               cvt)
 {
     struct castle_mtree_entry *entries = 
@@ -175,8 +171,8 @@ static void castle_mtree_entry_add(struct castle_btree_node *node,
     BUG_ON(idx < 0 || idx > node->used);
     BUG_ON(sizeof(*entry) * node->used + sizeof(struct castle_btree_node) > 
                                                 MTREE_NODE_SIZE * C_BLK_SIZE); 
-    BUG_ON(!node->is_leaf && is_leaf_ptr);
-    BUG_ON(__XOR(is_leaf_ptr, CVT_LEAF_PTR(cvt)));
+    BUG_ON(!node->is_leaf && CVT_LEAF_PTR(cvt));
+    BUG_ON(node->is_leaf && CVT_NODE(cvt));
 
     /* Make space for the new entry, noop if we are adding one at the end
        of the node */
@@ -184,11 +180,8 @@ static void castle_mtree_entry_add(struct castle_btree_node *node,
 
     entry->block   = (block_t)(unsigned long)key;
     entry->version = version;
-    entry->type    = node->is_leaf ? 
-                        (is_leaf_ptr ? CVT_TYPE_LEAF_PTR : CVT_TYPE_LEAF_VAL) :
-                        CVT_TYPE_NODE;
     BUG_ON(!CVT_MEDIUM_OBJECT(cvt) && !CVT_NODE(cvt) && !CVT_LEAF_PTR(cvt));
-    entry->type    = entry->type | cvt.type;
+    entry->type    = cvt.type;
     entry->cep     = cvt.cep;
     entry->val_len = cvt.length;
 
@@ -200,7 +193,6 @@ static void castle_mtree_entry_replace(struct castle_btree_node *node,
                                        int                       idx,
                                        void                     *key,            
                                        version_t                 version,
-                                       int                       is_leaf_ptr,
                                        c_val_tup_t               cvt)
 {
     struct castle_mtree_entry *entries = 
@@ -208,16 +200,13 @@ static void castle_mtree_entry_replace(struct castle_btree_node *node,
     struct castle_mtree_entry *entry = entries + idx;
 
     BUG_ON(idx < 0 || idx >= node->used);
-    BUG_ON(!node->is_leaf && is_leaf_ptr);
-    BUG_ON(__XOR(is_leaf_ptr, CVT_LEAF_PTR(cvt)));
+    BUG_ON(!node->is_leaf && CVT_LEAF_PTR(cvt));
+    BUG_ON(node->is_leaf && CVT_NODE(cvt));
 
     entry->block   = (block_t)(unsigned long)key;
     entry->version = version;
-    entry->type    = node->is_leaf ? 
-                        (is_leaf_ptr ? CVT_TYPE_LEAF_PTR : CVT_TYPE_LEAF_VAL) :
-                        CVT_TYPE_NODE;
     BUG_ON(!CVT_MEDIUM_OBJECT(cvt) && !CVT_NODE(cvt) && !CVT_LEAF_PTR(cvt));
-    entry->type    = entry->type | cvt.type;
+    entry->type    = cvt.type;
     entry->cep     = cvt.cep;
     entry->val_len = cvt.length;
 }   
@@ -425,7 +414,6 @@ static int castle_batree_entry_get(struct castle_btree_node *node,
                                    int                       idx,
                                    void                    **key_p,            
                                    version_t                *version_p,
-                                   int                      *is_leaf_ptr_p,
                                    c_val_tup_t              *cvt_p)
 {
     struct castle_batree_entry *entries = 
@@ -436,12 +424,10 @@ static int castle_batree_entry_get(struct castle_btree_node *node,
 
     if(key_p)         *key_p         = (void *)&entry->key;
     if(version_p)     *version_p     = entry->version;
-    if(is_leaf_ptr_p) *is_leaf_ptr_p = BATREE_ENTRY_IS_LEAF_PTR(entry);
     if(cvt_p)
     {
         BUG_ON(!BATREE_ENTRY_IS_ONDISK(entry) && !BATREE_ENTRY_IS_NODE(entry));
         *cvt_p = convert_to_cvt(entry->type, entry->val_len, entry->cep);
-        BUG_ON(is_leaf_ptr_p && __XOR(*is_leaf_ptr_p, CVT_LEAF_PTR(*cvt_p)));
     }
 
     return 0;
@@ -451,7 +437,6 @@ static void castle_batree_entry_add(struct castle_btree_node *node,
                                     int                       idx,
                                     void                     *key,            
                                     version_t                 version,
-                                    int                       is_leaf_ptr,
                                     c_val_tup_t               cvt)
 {
     struct castle_batree_entry *entries = 
@@ -461,8 +446,8 @@ static void castle_batree_entry_add(struct castle_btree_node *node,
     BUG_ON(idx < 0 || idx > node->used);
     BUG_ON(sizeof(*entry) * node->used + sizeof(struct castle_btree_node) > 
                                                 BATREE_NODE_SIZE * C_BLK_SIZE); 
-    BUG_ON(!node->is_leaf && is_leaf_ptr);
-    BUG_ON(__XOR(is_leaf_ptr, CVT_LEAF_PTR(cvt)));
+    BUG_ON(!node->is_leaf && CVT_LEAF_PTR(cvt));
+    BUG_ON(node->is_leaf && CVT_NODE(cvt));
 
     /* Make space for the new entry, noop if we are adding one at the end
        of the node */
@@ -470,11 +455,8 @@ static void castle_batree_entry_add(struct castle_btree_node *node,
 
     memcpy(&entry->key, key, sizeof(bakey_t));
     entry->version = version;
-    entry->type    = node->is_leaf ? 
-                        (is_leaf_ptr ? CVT_TYPE_LEAF_PTR : CVT_TYPE_LEAF_VAL) :
-                        CVT_TYPE_NODE;
     BUG_ON(CVT_INVALID(cvt) || CVT_INLINE(cvt));
-    entry->type    = entry->type | cvt.type;
+    entry->type    = cvt.type;
     entry->cep     = cvt.cep;
     entry->val_len = cvt.length;
 
@@ -486,24 +468,20 @@ static void castle_batree_entry_replace(struct castle_btree_node *node,
                                         int                       idx,
                                         void                     *key,            
                                         version_t                 version,
-                                        int                       is_leaf_ptr,
-                                        c_val_tup_t                 cvt)
+                                        c_val_tup_t               cvt)
 {
     struct castle_batree_entry *entries = 
                 (struct castle_batree_entry *) BTREE_NODE_PAYLOAD(node);
     struct castle_batree_entry *entry = entries + idx;
 
     BUG_ON(idx < 0 || idx >= node->used);
-    BUG_ON(!node->is_leaf && is_leaf_ptr);
-    BUG_ON(__XOR(is_leaf_ptr, CVT_LEAF_PTR(cvt)));
+    BUG_ON(!node->is_leaf && CVT_LEAF_PTR(cvt));
+    BUG_ON(node->is_leaf && CVT_NODE(cvt));
 
     memcpy(&entry->key, key, sizeof(bakey_t));
     entry->version = version;
-    entry->type    = node->is_leaf ? 
-                        (is_leaf_ptr ? CVT_TYPE_LEAF_PTR : CVT_TYPE_LEAF_VAL) :
-                        CVT_TYPE_NODE;
     BUG_ON(CVT_INVALID(cvt) || CVT_INLINE(cvt));
-    entry->type    = entry->type | cvt.type;
+    entry->type    = cvt.type;
     entry->cep     = cvt.cep;
     entry->val_len = cvt.length;
 }   
@@ -879,7 +857,6 @@ static int castle_vlba_tree_entry_get(struct castle_btree_node *node,
                                       int                       idx,
                                       void                    **key_p,            
                                       version_t                *version_p,
-                                      int                      *is_leaf_ptr_p,
                                       c_val_tup_t              *cvt_p)
 {
     struct castle_vlba_tree_node *vlba_node = 
@@ -892,7 +869,6 @@ static int castle_vlba_tree_entry_get(struct castle_btree_node *node,
 
     if(key_p)         *key_p         = (void *)&entry->key;
     if(version_p)     *version_p     = entry->version;
-    if(is_leaf_ptr_p) *is_leaf_ptr_p = VLBA_TREE_ENTRY_IS_LEAF_PTR(entry);
     if(cvt_p)
     {
         *cvt_p = convert_to_cvt(entry->type, entry->val_len, entry->cep);
@@ -902,7 +878,8 @@ static int castle_vlba_tree_entry_get(struct castle_btree_node *node,
             BUG_ON(entry->val_len == 0 || entry->val_len > MAX_INLINE_VAL_SIZE);
             cvt_p->val = VLBA_ENTRY_VAL_PTR(entry);
         }
-        BUG_ON(is_leaf_ptr_p && __XOR(*is_leaf_ptr_p, CVT_LEAF_PTR(*cvt_p)));
+        BUG_ON(!node->is_leaf && (CVT_LEAF_PTR(*cvt_p) || CVT_LEAF_VAL(*cvt_p)));
+        BUG_ON(node->is_leaf && CVT_NODE(*cvt_p));
     }
 
     return VLBA_TREE_ENTRY_IS_DISABLED(entry);
@@ -916,7 +893,6 @@ static void castle_vlba_tree_entry_add(struct castle_btree_node *node,
                                        int                       idx,
                                        void                     *key_v,            
                                        version_t                 version,
-                                       int                       is_leaf_ptr,
                                        c_val_tup_t               cvt)
 {
     struct castle_vlba_tree_node *vlba_node = 
@@ -929,13 +905,17 @@ static void castle_vlba_tree_entry_add(struct castle_btree_node *node,
     uint32_t req_space;
 
     BUG_ON(idx < 0 || idx > node->used);
-    BUG_ON(__XOR(is_leaf_ptr, CVT_LEAF_PTR(cvt)));
+    BUG_ON(!node->is_leaf && (CVT_LEAF_PTR(cvt) || CVT_LEAF_VAL(cvt)));
+#if 0
+    if (node->is_leaf && CVT_NODE(cvt))
+    {
+        printk("%x:%llu\n", (uint32_t)cvt.type, cvt.length);
+        BUG();
+    }
+#endif
 
     new_entry.version    = version;
-    new_entry.type       = node->is_leaf ? 
-                        (is_leaf_ptr ? CVT_TYPE_LEAF_PTR : CVT_TYPE_LEAF_VAL) :
-                        CVT_TYPE_NODE;
-    new_entry.type      |= cvt.type; 
+    new_entry.type       = cvt.type; 
     new_entry.val_len    = cvt.length;
     new_entry.key.length = key_length;
     req_space = VLBA_ENTRY_LENGTH((&new_entry)) + sizeof(uint32_t);
@@ -952,7 +932,6 @@ static void castle_vlba_tree_entry_add(struct castle_btree_node *node,
         
     BUG_ON(key_length > VLBA_TREE_MAX_KEY_SIZE);
     BUG_ON(vlba_node->free_bytes + vlba_node->dead_bytes < req_space);
-    BUG_ON(!node->is_leaf && is_leaf_ptr);
 
     if(vlba_node->free_bytes < req_space) 
     {
@@ -1028,7 +1007,6 @@ static void castle_vlba_tree_entry_replace(struct castle_btree_node *node,
                                            int                       idx,
                                            void                     *key_v,            
                                            version_t                 version,
-                                           int                       is_leaf_ptr,
                                            c_val_tup_t               cvt)
 {
     struct castle_vlba_tree_node *vlba_node = 
@@ -1040,15 +1018,14 @@ static void castle_vlba_tree_entry_replace(struct castle_btree_node *node,
     int old_length, new_length;
 
     BUG_ON(idx < 0 || idx >= node->used);
-    BUG_ON(__XOR(is_leaf_ptr, CVT_LEAF_PTR(cvt)));
-    BUG_ON(!node->is_leaf && is_leaf_ptr);
+    BUG_ON(!node->is_leaf && (CVT_LEAF_PTR(cvt) || CVT_LEAF_VAL(cvt)));
+#if 0
+    BUG_ON(node->is_leaf && CVT_NODE(cvt));
+#endif
     BUG_ON(((uint8_t *)entry) >= EOF_VLBA_NODE(node));
 
     new_entry.version    = version;
-    new_entry.type       = node->is_leaf ? 
-                        (is_leaf_ptr ? CVT_TYPE_LEAF_PTR : CVT_TYPE_LEAF_VAL) :
-                        CVT_TYPE_NODE;
-    new_entry.type      |= cvt.type; 
+    new_entry.type       = cvt.type; 
     new_entry.val_len    = cvt.length;
     new_entry.key.length = key->length;
     new_length = VLBA_ENTRY_LENGTH((&new_entry));
@@ -1073,7 +1050,7 @@ static void castle_vlba_tree_entry_replace(struct castle_btree_node *node,
     else 
     {
         castle_vlba_tree_entries_drop(node, idx, idx);
-        castle_vlba_tree_entry_add(node, idx, key, version, is_leaf_ptr, cvt);
+        castle_vlba_tree_entry_add(node, idx, key, version, cvt);
     }
 }   
 
@@ -1419,7 +1396,7 @@ static void castle_btree_lub_find(struct castle_btree_node *node,
 
         BUG_ON(high <= low);
         mid = (low + high) / 2; 
-        btree->entry_get(node, mid, &key_lub, NULL, NULL, NULL);
+        btree->entry_get(node, mid, &key_lub, NULL, NULL);
         key_cmp = btree->key_compare(key_lub, key);
         debug("mid=%d, key_cmp=%d\n", mid, key_cmp);
         if(key_cmp < 0)
@@ -1435,7 +1412,7 @@ static void castle_btree_lub_find(struct castle_btree_node *node,
         oldest */
     for(lub_idx=high; lub_idx < node->used; lub_idx++)
     {
-        btree->entry_get(node, lub_idx, &key_lub, &version_lub, NULL, NULL);
+        btree->entry_get(node, lub_idx, &key_lub, &version_lub, NULL);
 
         debug(" (k,v) = (%p, 0x%x)\n", key_lub, version_lub); 
 
@@ -1584,12 +1561,11 @@ static c2_block_t* castle_btree_effective_node_create(c_bvec_t *c_bvec,
     {
         void        *entry_key;
         version_t    entry_version;
-        int          entry_is_leaf_ptr;
         c_val_tup_t  entry_cvt;
         int          need_move;
  
         btree->entry_get(node, i, &entry_key, &entry_version,
-                         &entry_is_leaf_ptr, &entry_cvt);
+                         &entry_cvt);
         /* Check if slot->version is ancestoral to version. If not,
            reject straigt away. */
         if(!castle_version_is_ancestor(entry_version, version))
@@ -1610,25 +1586,23 @@ static c2_block_t* castle_btree_effective_node_create(c_bvec_t *c_bvec,
               but different from the old node version)
          */
         need_move = (entry_version == version) && (node->version != version);
-        if(!node->is_leaf || entry_is_leaf_ptr || need_move)
+        if(!node->is_leaf || CVT_LEAF_PTR(entry_cvt) || need_move)
         {
             /* If already a leaf pointer, or a non-leaf entry copy directly. */
             btree->entry_add(eff_node,
                              insert_idx,
                              entry_key,
                              entry_version,
-                             entry_is_leaf_ptr,
                              entry_cvt);
         } else
         {
             c_val_tup_t cvt;
-            CVT_LEAF_PTR_SET(cvt, orig_c2b->nr_pages, orig_c2b->cep);
+            CVT_LEAF_PTR_SET(cvt, orig_c2b->nr_pages * C_BLK_SIZE, orig_c2b->cep);
             /* Otherwise construct a new leaf pointer. */
             btree->entry_add(eff_node,
                              insert_idx,
                              entry_key,
                              entry_version,
-                             1,
                              cvt);
         }
 
@@ -1673,7 +1647,6 @@ static c2_block_t* castle_btree_node_key_split(c_bvec_t *c_bvec, c2_block_t *ori
 
     void        *entry_key;
     version_t    entry_version;
-    int          entry_is_leaf_ptr;
     c_val_tup_t  entry_cvt;
 
     node     = c2b_bnode(orig_c2b);
@@ -1689,9 +1662,9 @@ static c2_block_t* castle_btree_node_key_split(c_bvec_t *c_bvec, c2_block_t *ori
     {
         /* Copy the entries */
         btree->entry_get(node,     i, &entry_key, &entry_version,
-                         &entry_is_leaf_ptr, &entry_cvt);
+                         &entry_cvt);
         btree->entry_add(sec_node, i,  entry_key,  entry_version,
-                         entry_is_leaf_ptr, entry_cvt);
+                         entry_cvt);
     }
 
     BUG_ON(sec_node->used != node->used >> 1);
@@ -1708,14 +1681,13 @@ static void castle_btree_slot_insert(c2_block_t  *c2b,
                                      int          index,
                                      void        *key,
                                      version_t    version,
-                                     int          is_leaf_ptr,
                                      c_val_tup_t  cvt)
 {
     struct castle_btree_node *node = c2b_buffer(c2b);
     struct castle_btree_type *btree = castle_btree_type_get(node->type);
     void      *lub_key      = btree->inv_key;
     version_t  lub_version  = INVAL_VERSION;
-    int        lub_is_leaf_ptr;
+    c_val_tup_t lub_cvt;
 
     BUG_ON(index > node->used);
    
@@ -1725,7 +1697,7 @@ static void castle_btree_slot_insert(c2_block_t  *c2b,
         debug("Inserting an inline value under index=%d\n", index);
 
     if(index < node->used)
-        btree->entry_get(node, index, &lub_key, &lub_version, &lub_is_leaf_ptr, NULL);
+        btree->entry_get(node, index, &lub_key, &lub_version, &lub_cvt);
 
     /* Special case. Newly inserted block may make another entry unreachable.
        This would cause problems with future splits. And therefore unreachable
@@ -1747,14 +1719,15 @@ static void castle_btree_slot_insert(c2_block_t  *c2b,
            because lub_version is strictly ancestoral to the node version.
            It implies that the key hasn't been insterted here, because 
            keys are only inserted to weakly ancestoral nodes */
-        BUG_ON(!lub_is_leaf_ptr && node->is_leaf);
+        BUG_ON(!CVT_LEAF_PTR(lub_cvt) && node->is_leaf);
         /* Replace the slot */
-        btree->entry_replace(node, index, key, version, 0, cvt);
+        BUG_ON(CVT_LEAF_PTR(cvt));
+        btree->entry_replace(node, index, key, version, cvt);
         dirty_c2b(c2b);
         return;
     }
     /* Insert the new entry */ 
-    btree->entry_add(node, index, key, version, is_leaf_ptr, cvt);
+    btree->entry_add(node, index, key, version, cvt);
     BUG_ON(node->used >= MAX_BTREE_ENTRIES);
     dirty_c2b(c2b);
 }
@@ -1771,17 +1744,16 @@ static void castle_btree_node_insert(c2_block_t *parent_c2b,
     c_val_tup_t                  cvt;
     
     BUG_ON(castle_btree_type_get(child->type) != btree);
-    btree->entry_get(child, child->used-1, &key, NULL, NULL, NULL);
+    btree->entry_get(child, child->used-1, &key, NULL, NULL);
 
     castle_btree_lub_find(parent, key, version, NULL, &insert_idx);
     debug("Inserting child node into parent (used=0x%x), will insert (k,v)=(%p, 0x%x) at idx=%d.\n",
             parent->used, key, version, insert_idx);
-    CVT_NODE_SET(cvt, btree->node_size, child_c2b->cep);
+    CVT_NODE_SET(cvt, btree->node_size * C_BLK_SIZE, child_c2b->cep);
     castle_btree_slot_insert(parent_c2b, 
                              insert_idx, 
                              key,
                              version,
-                             0,
                              cvt);
 }
 
@@ -1800,12 +1772,11 @@ static void castle_btree_node_under_key_insert(c2_block_t *parent_c2b,
     debug("Inserting child node into parent (used=0x%x), "
           "will insert (k,v)=(%p, 0x%x) at idx=%d.\n",
             parent->used, key, version, insert_idx); 
-    CVT_NODE_SET(cvt, btree->node_size, child_c2b->cep);
+    CVT_NODE_SET(cvt, btree->node_size * C_BLK_SIZE, child_c2b->cep);
     castle_btree_slot_insert(parent_c2b, 
                              insert_idx, 
                              key,
                              version,
-                             0,
                              cvt);
 }
 
@@ -1888,7 +1859,7 @@ static int castle_btree_node_split(c_bvec_t *c_bvec)
            split node (that's the node that contains left hand side elements
            from the original effective node) is greater-or-equal to the block
            we are looking for */
-        btree->entry_get(split_node, split_node->used-1, &max_split_key, NULL, NULL, NULL);
+        btree->entry_get(split_node, split_node->used-1, &max_split_key, NULL, NULL);
         if(btree->key_compare(max_split_key, key) >= 0)
         {
             debug("Retaing the split node.\n");
@@ -1994,7 +1965,7 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
     struct castle_btree_type    *btree = castle_btree_type_get(node->type);
     void                        *lub_key, *key = c_bvec->key;
     version_t                    lub_version, version = c_bvec->version;
-    int                          lub_idx, lub_is_leaf_ptr, insert_idx, ret;
+    int                          lub_idx, insert_idx, ret;
     c_val_tup_t                  lub_cvt = INVAL_VAL_TUP; 
     c_val_tup_t                  new_cvt = INVAL_VAL_TUP;
 
@@ -2043,7 +2014,7 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
     BUG_ON((insert_idx < 0) || (insert_idx > node->used));
     if(lub_idx >= 0)
         btree->entry_get(node, lub_idx, &lub_key, &lub_version,
-                        &lub_is_leaf_ptr, &lub_cvt);
+                         &lub_cvt);
 
     /* Deal with non-leaf nodes first */
     if(!node->is_leaf)
@@ -2078,11 +2049,11 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
         debug("Need to insert (%p, 0x%x) into node (used: 0x%x, leaf=%d).\n",
                 key, version, node->used, node->is_leaf);
         BUG_ON(btree->key_compare(c_bvec->parent_key, btree->inv_key) == 0);
+        BUG_ON(CVT_LEAF_PTR(new_cvt));
         castle_btree_slot_insert(c_bvec->btree_node,
                                  insert_idx,
                                  key,
                                  version,
-                                 0,
                                  new_cvt);
         castle_btree_io_end(c_bvec, new_cvt, 0);
         return;
@@ -2092,11 +2063,12 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
     BUG_ON((btree->key_compare(lub_key, key) != 0) || 
            (lub_version != version));
     BUG_ON(lub_idx != insert_idx);
-    BUG_ON(lub_is_leaf_ptr);
+    BUG_ON(CVT_LEAF_PTR(lub_cvt));
 
     /* NOP for block devices */
     c_bvec->cvt_get(c_bvec, lub_cvt, &new_cvt);
-    btree->entry_replace(node, lub_idx, key, lub_version, 0,
+    BUG_ON(CVT_LEAF_PTR(new_cvt));
+    btree->entry_replace(node, lub_idx, key, lub_version,
                          new_cvt);
     debug("Key already exists, modifying in place.\n");
     castle_btree_io_end(c_bvec, new_cvt, 0);
@@ -2109,7 +2081,7 @@ static void castle_btree_read_process(c_bvec_t *c_bvec)
     struct castle_btree_type    *btree = castle_btree_type_get(node->type);
     void                        *lub_key, *key = c_bvec->key;
     version_t                    lub_version, version = c_bvec->version;
-    int                          lub_idx, lub_is_leaf_ptr;
+    int                          lub_idx;
     c_val_tup_t                  lub_cvt;
 
     castle_debug_bvec_update(c_bvec, C_BVEC_BTREE_NODE_RPROCESS);
@@ -2126,11 +2098,11 @@ static void castle_btree_read_process(c_bvec_t *c_bvec)
         return;
     }
 
-    btree->entry_get(node, lub_idx, &lub_key, &lub_version, &lub_is_leaf_ptr,
+    btree->entry_get(node, lub_idx, &lub_key, &lub_version,
                      &lub_cvt);
     /* If we found the LUB, either complete the ftree walk (if we are looking 
        at a 'proper' leaf), or go to the next level (possibly following a leaf ptr) */
-    if(node->is_leaf && !lub_is_leaf_ptr)
+    if(node->is_leaf && !CVT_LEAF_PTR(lub_cvt))
     {
         BUG_ON(!CVT_LEAF_VAL(lub_cvt));
         if (CVT_ONDISK(lub_cvt))
@@ -2428,14 +2400,14 @@ static void castle_btree_iter_end(c_iter_t *c_iter, int err)
 ({                                                                           \
     struct castle_btree_node *_n;                                            \
     struct castle_btree_type *_t;                                            \
-    int _is_leaf_ptr;                                                        \
+    c_val_tup_t _cvt;                                                        \
                                                                              \
     (_real_c2b)      = c_iter->path[c_iter->depth];                          \
     _n               = c2b_bnode(_real_c2b);                                 \
     _t               = castle_btree_type_get(_n->type);                      \
     (_real_slot_idx) = (_i);                                                 \
-    _t->entry_get(_n, _i, NULL, NULL, &_is_leaf_ptr, NULL);                  \
-    if(_is_leaf_ptr)                                                         \
+    _t->entry_get(_n, _i, NULL, NULL, &_cvt);                                \
+    if(CVT_LEAF_PTR(_cvt))                                                   \
     {                                                                        \
         (_real_c2b)  = c2b_follow_ptr(_i);                                   \
         (_real_slot_idx) = indirect_node(_i).node_idx;                       \
@@ -2447,7 +2419,7 @@ void castle_btree_iter_replace(c_iter_t *c_iter, int index, c_val_tup_t cvt)
     struct castle_btree_node *real_node;
     struct castle_btree_type *btree = castle_btree_type_get(c_iter->tree->btree_type);
     c2_block_t *real_c2b;
-    int real_entry_idx, prev_is_leaf_ptr;
+    int real_entry_idx;
     void *prev_key;
     c_val_tup_t prev_cvt;
     version_t prev_version;
@@ -2471,10 +2443,9 @@ void castle_btree_iter_replace(c_iter_t *c_iter, int index, c_val_tup_t cvt)
                      real_entry_idx, 
                     &prev_key, 
                     &prev_version, 
-                    &prev_is_leaf_ptr, 
                     &prev_cvt);
     /* We should be looking at a concreate entry, not a leaf pointer now */
-    BUG_ON(prev_is_leaf_ptr);
+    BUG_ON(CVT_LEAF_PTR(prev_cvt));
    
 #if 0
     if (CVT_ONDISK(prev_cvt) && CVT_ONDISK(cvt))
@@ -2488,12 +2459,12 @@ void castle_btree_iter_replace(c_iter_t *c_iter, int index, c_val_tup_t cvt)
                 real_c2b->cep.offset, 
                 real_entry_idx);
 #endif
-    
+
+    BUG_ON(CVT_LEAF_PTR(cvt));
     btree->entry_replace(real_node,
                          real_entry_idx,
                          prev_key,
                          prev_version,
-                         0,
                          cvt);
     dirty_c2b(real_c2b);
 }
@@ -2622,16 +2593,15 @@ static void castle_btree_iter_leaf_ptrs_lock(c_iter_t *c_iter)
     {
         version_t entry_version;
         c_val_tup_t entry_cvt;
-        int entry_is_leaf_ptr; 
 
-        btree->entry_get(node, i, NULL, &entry_version, &entry_is_leaf_ptr,
+        btree->entry_get(node, i, NULL, &entry_version,
                          &entry_cvt);
         if((c_iter->type == C_ITER_MATCHING_VERSIONS && 
             entry_version != c_iter->version) || 
            (c_iter->type == C_ITER_ANCESTRAL_VERSIONS &&
             !castle_version_is_ancestor(entry_version, c_iter->version)))
             continue;
-        if(entry_is_leaf_ptr)
+        if(CVT_LEAF_PTR(entry_cvt))
         {
             BUG_ON(indirect_node(j).c2b);
             indirect_node(j).cep   = entry_cvt.cep;
@@ -2664,20 +2634,20 @@ static void castle_btree_iter_leaf_ptrs_lock(c_iter_t *c_iter)
     for(i=0; i<node->used; i++)
     {
         version_t entry_version;
-        int entry_is_leaf_ptr; 
         void *entry_key;
+        c_val_tup_t entry_cvt;
 
         /* Set the idx to inval to catch bugs early */
         indirect_node(i).node_idx = -1;
 
         btree->entry_get(node, i, &entry_key, &entry_version,
-                         &entry_is_leaf_ptr, NULL);
+                         &entry_cvt);
         if((c_iter->type == C_ITER_MATCHING_VERSIONS && 
             entry_version != c_iter->version) || 
            (c_iter->type == C_ITER_ANCESTRAL_VERSIONS &&
             !castle_version_is_ancestor(entry_version, c_iter->version)))
             continue;
-        if(entry_is_leaf_ptr)
+        if(CVT_LEAF_PTR(entry_cvt))
         {
             version_t real_entry_version;
             void *real_entry_key;
@@ -2694,7 +2664,6 @@ static void castle_btree_iter_leaf_ptrs_lock(c_iter_t *c_iter)
                              lub_idx,
                             &real_entry_key,
                             &real_entry_version,
-                             NULL,
                              NULL);
             BUG_ON((btree->key_compare(entry_key, real_entry_key) != 0) ||
                    (entry_version != real_entry_version));
@@ -2778,7 +2747,7 @@ static void castle_btree_iter_version_leaf_process(c_iter_t *c_iter)
 
     for(i=0; i<node->used; i++)
     {
-        int         entry_is_leaf_ptr, real_slot_idx; 
+        int         real_slot_idx; 
         version_t   entry_version;
         c_val_tup_t entry_cvt;
         void       *entry_key;
@@ -2787,7 +2756,7 @@ static void castle_btree_iter_version_leaf_process(c_iter_t *c_iter)
             break;
 
         btree->entry_get(node, i, &entry_key, &entry_version,
-                         &entry_is_leaf_ptr, &entry_cvt);
+                         &entry_cvt);
 
         if (CVT_ONDISK(entry_cvt))
             iter_debug("Current slot: (b=%p, v=%x)->(cep=0x%x, 0x%x)\n",
@@ -2800,7 +2769,7 @@ static void castle_btree_iter_version_leaf_process(c_iter_t *c_iter)
             c2_block_t *c2b;
 
             slot_follow_ptr(i, c2b, real_slot_idx);
-            btree->entry_get(c2b_bnode(c2b), real_slot_idx, NULL, NULL, NULL,
+            btree->entry_get(c2b_bnode(c2b), real_slot_idx, NULL, NULL,
                              &entry_cvt);
             c_iter->each(c_iter, i, entry_key, entry_version, entry_cvt);
         }
@@ -2837,7 +2806,6 @@ static void castle_btree_iter_all_leaf_process(c_iter_t *c_iter)
     
     for(i=0; i<node->used; i++)
     {
-        int         entry_is_leaf_ptr; 
         version_t   entry_version;
         c_val_tup_t entry_cvt; 
         void       *entry_key;
@@ -2846,13 +2814,13 @@ static void castle_btree_iter_all_leaf_process(c_iter_t *c_iter)
             break;
 
         btree->entry_get(node, i, &entry_key, &entry_version,
-                         &entry_is_leaf_ptr, &entry_cvt);
+                         &entry_cvt);
 
         if (CVT_ONDISK(entry_cvt))
             iter_debug("All entries: current slot: (b=%p, v=%x)->(cep=0x%x, 0x%x)\n",
                        entry_key, entry_version, entry_cvt.cep.ext_id, 
                        entry_cvt.cep.offset);
-        if (!entry_is_leaf_ptr)
+        if (!CVT_LEAF_PTR(entry_cvt))
             c_iter->each(c_iter, i, entry_key, entry_version, entry_cvt);
     }
 
@@ -2970,7 +2938,7 @@ static void __castle_btree_iter_path_traverse(struct work_struct *work)
             iter_debug("Node index=%d\n", index);
             break;
     }
-    btree->entry_get(node, index, &entry_key, NULL, NULL, &cvt);
+    btree->entry_get(node, index, &entry_key, NULL, &cvt);
     entry_cep = cvt.cep;
     if (!CVT_NODE(cvt))
     {
@@ -3263,7 +3231,8 @@ static void castle_enum_iter_each(c_iter_t *c_iter,
     BUG_ON(c_enum->prod_idx != c_enum->buffer->used);
     enum_debug("Entry for iterator: idx=%d, key=%p, version=%d\n", 
                index, key, version);
-    btree->entry_add(c_enum->buffer, c_enum->prod_idx, key, version, 0, cvt);
+    BUG_ON(CVT_LEAF_PTR(cvt));
+    btree->entry_add(c_enum->buffer, c_enum->prod_idx, key, version, cvt);
     c_enum->prod_idx++;
 }
 
@@ -3402,7 +3371,7 @@ void castle_btree_enum_next(c_enum_t *c_enum,
     
     enum_debug("cons_idx %d, prod_idx %d\n", c_enum->cons_idx, c_enum->prod_idx);
     /* Read off the entry we want to return, and increment the consumer index */
-    btree->entry_get(c_enum->buffer, c_enum->cons_idx, key_p, version_p, NULL, cvt_p); 
+    btree->entry_get(c_enum->buffer, c_enum->cons_idx, key_p, version_p, cvt_p); 
     c_enum->cons_idx++;
     /* Check if next node should be read from the iterator */
     if(c_enum->cons_idx == c_enum->prod_idx)
@@ -3555,9 +3524,10 @@ static void castle_rq_enum_iter_each(c_iter_t *c_iter,
     {
         debug("Adding entry to node buffer: %p\n", rq_enum->prod_buf);
         BUG_ON(rq_enum->cur_key && btree->key_compare(rq_enum->cur_key, key) > 0);
-        btree->entry_add(rq_enum->prod_buf->node, rq_enum->prod_idx, key, version, 0, cvt);
+        BUG_ON(CVT_LEAF_PTR(cvt));
+        btree->entry_add(rq_enum->prod_buf->node, rq_enum->prod_idx, key, version, cvt);
         btree->entry_get(rq_enum->prod_buf->node, rq_enum->prod_idx, &rq_enum->cur_key, NULL, 
-                         NULL, NULL);
+                         NULL);
         rq_enum->prod_idx++;
     } 
 }
@@ -3717,7 +3687,7 @@ has_next_again:
     if (cons_idx_prod_idx_compare(rq_enum))
     {
         btree->entry_get(rq_enum->cons_buf->node, rq_enum->cons_idx, &key, NULL,
-                         NULL, NULL);
+                         NULL);
         /* Move this check to rq_enum_each() */
         if (btree->key_compare(rq_enum->end_key, key) < 0)
         {
@@ -3758,7 +3728,7 @@ void castle_btree_rq_enum_next(c_rq_enum_t *rq_enum,
     /* Make sure that consumer index is less than the producer (there is an assert in
        the comparator). */
     cons_idx_prod_idx_compare(rq_enum);
-    btree->entry_get(rq_enum->cons_buf->node, rq_enum->cons_idx, key_p, version_p, NULL, 
+    btree->entry_get(rq_enum->cons_buf->node, rq_enum->cons_idx, key_p, version_p, 
                      cvt_p);
     rq_enum->cons_idx++;
     if (rq_enum->cons_buf != rq_enum->prod_buf && 
@@ -3792,7 +3762,7 @@ void castle_btree_rq_enum_skip(c_rq_enum_t *rq_enum,
         {
             void *buf_key;
 
-            btree->entry_get(rq_enum->cons_buf->node, i, &buf_key, NULL, NULL, NULL);
+            btree->entry_get(rq_enum->cons_buf->node, i, &buf_key, NULL, NULL);
             if (btree->key_compare(buf_key, key) >= 0)
             {
                 rq_enum->cons_idx = i;

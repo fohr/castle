@@ -438,19 +438,16 @@ struct castle_btree_type {
                               int                       idx,
                               void                    **key_p,            
                               version_t                *version_p,
-                              int                      *is_leaf_ptr_p,
                               c_val_tup_t              *cvt_p);
     void    (*entry_add)     (struct castle_btree_node *node,
                               int                       idx,
                               void                     *key,            
                               version_t                 version,
-                              int                       is_leaf_ptr,
                               c_val_tup_t               cvt);
     void    (*entry_replace) (struct castle_btree_node *node,
                               int                       idx,
                               void                     *key,            
                               version_t                 version,
-                              int                       is_leaf_ptr,
                               c_val_tup_t               cvt);
     void    (*entry_disable) (struct castle_btree_node *node,
                               int                       idx);
