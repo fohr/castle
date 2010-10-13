@@ -59,9 +59,6 @@ int
 castle_rda_slave_add(c_rda_type_t            rda_type,
                      struct castle_slave    *slave);
 
-struct castle_slave* castle_slave_find_by_id(uint32_t id);
-struct castle_slave* castle_slave_find_by_uuid(uint32_t uuid);
-
 c_rda_spec_t * 
 castle_rda_spec_get(c_rda_type_t rda_type);
 

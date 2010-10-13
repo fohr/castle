@@ -567,6 +567,7 @@ static void castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
     /* We should be handling a write (possibly a tombstone write). */
     BUG_ON(c_bvec_data_dir(c_bvec) != WRITE); 
     /* Some sanity checks */
+    BUG_ON(!CVT_LEAF_VAL(prev_cvt) && !CVT_INVALID(prev_cvt));
     BUG_ON(CVT_TOMB_STONE(prev_cvt) && (prev_cvt.length != 0));
 
     /* Allocate space for new value, in or out of line */ 
@@ -576,9 +577,9 @@ static void castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
 
         /* Decide whether to use inline, or out-of-line value on the 
            basis of this length. */
-        if (cvt->length <= MAX_INLINE_VAL_SIZE)
+        if (replace->value_len <= MAX_INLINE_VAL_SIZE)
         {
-            cvt->type = CVT_TYPE_INLINE;
+            CVT_INLINE_SET(*cvt, replace->value_len, NULL);
             cvt->val  = castle_malloc(cvt->length, GFP_NOIO);
             /* TODO: Work out how to handle this */
             BUG_ON(!cvt->val);
@@ -589,6 +590,7 @@ static void castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
         else
         {
             uint32_t nr_chunks;
+            c_ext_pos_t cep;
 
             nr_blocks = (cvt->length - 1) / C_BLK_SIZE + 1; 
             nr_chunks = (nr_blocks >> (C_CHK_SHIFT - C_BLK_SHIFT)) + 
@@ -596,12 +598,11 @@ static void castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
             /* Arbitrary limits on the size of the objets (freespace code cannot handle
                huge objects ATM) */
             BUG_ON(nr_blocks > 100); 
-            cvt->type   = CVT_TYPE_ONDISK;
             // FIXME: bhaskar
-            cvt->cep.ext_id = castle_extent_alloc(DEFAULT, c_bvec->tree->da,
+            cep.ext_id = castle_extent_alloc(DEFAULT, c_bvec->tree->da,
                         nr_chunks);
-            cvt->cep.offset = 0;
-            //cvt->cep    = castle_freespace_block_get(c_bvec->version, nr_blocks); 
+            cep.offset = 0;
+            CVT_LARGE_OBJECT_SET(*cvt, replace->value_len, cep);
             /* TODO: Again, work out how to handle failed allocations */ 
             BUG_ON(EXT_POS_INVAL(cvt->cep));
          }
@@ -613,6 +614,7 @@ static void castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
     }
 
     /* If there was an out-of-line object stored under this key, release it. */
+    /* FIXME: Handle Medium objects */
     if (CVT_ONDISK(prev_cvt))
     {
         nr_blocks = (prev_cvt.length - 1) / C_BLK_SIZE + 1; 
@@ -643,11 +645,10 @@ static void castle_object_replace_multi_cvt_get(c_bvec_t    *c_bvec,
     if(!tombstone)
     {
         /* The packet will now contain the length of the data payload */
-        cvt->length = castle_rxrpc_uint32_get_buf(call);
+        CVT_INLINE_SET(*cvt, castle_rxrpc_uint32_get_buf(call), NULL);
         /* Must be inline size for replace_multi */
         BUG_ON(cvt->length > MAX_INLINE_VAL_SIZE);
 
-        cvt->type = CVT_TYPE_INLINE;
         cvt->val  = castle_malloc(cvt->length, GFP_NOIO);
         /* TODO: Work out how to handle this */
         BUG_ON(!cvt->val);
@@ -814,7 +815,7 @@ void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
     }
 
     /* Otherwise, write the entry out. */
-    BUG_ON(CVT_INVALID(cvt));
+    BUG_ON(!CVT_LEAF_VAL(cvt));
     if(CVT_ONDISK(cvt))
     {
         BUG_ON(c_bvec_data_del(c_bvec));
@@ -870,7 +871,7 @@ void castle_object_replace_multi_complete(struct castle_bio_vec *c_bvec,
 
     /* Free the key, value and the BIO. */
     castle_free(c_bvec->key);
-    BUG_ON(CVT_INVALID(cvt) || CVT_ONDISK(cvt));
+    BUG_ON((!CVT_LEAF_VAL(cvt) && !CVT_INVALID(cvt)) || CVT_ONDISK(cvt));
     if(CVT_INLINE(cvt))
         castle_free(cvt.val);
 
@@ -1069,6 +1070,7 @@ int castle_object_slice_get(struct castle_rxrpc_call *call,
         castle_objects_rq_iter.next(iterator, (void **)&k, &v, &cvt);
         debug_rq("Got an entry the range query.\n");
 
+        BUG_ON(!CVT_LEAF_VAL(cvt));
         /* Ignore tombstones, we are not sending these */
         if(CVT_TOMB_STONE(cvt))
             continue;

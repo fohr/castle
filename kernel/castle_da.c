@@ -388,12 +388,12 @@ static void castle_ct_modlist_iter_fill(c_modlist_iter_t *iter)
 
         /* Get the next entry from the comparator */
         castle_ct_immut_iter.next(iter->enumerator, &key, &version, &cvt);
-        debug("In enum got next: k=%p, version=%d, cep=(0x%x, 0x%x)\n",
-                key, version, cvt.cep.ext_id, cvt.cep.offset);
+        debug("In enum got next: k=%p, version=%d, %u/%llu, cep="cep_fmt_str_nl,
+                key, version, (uint32_t)cvt.type, cvt.length, cep2str(cvt.cep));
         debug("Dereferencing first 4 bytes of the key (should be length)=0x%x.\n",
                 *((uint32_t *)key));
         debug("Inserting into the node=%d, under idx=%d\n", node_idx, node_offset);
-        btree->entry_add(node, node_offset, key, version, 1, cvt);
+        btree->entry_add(node, node_offset, key, version, 0, cvt);
         iter->sort_idx[item_idx].node        = node_idx;
         iter->sort_idx[item_idx].node_offset = node_offset;
         node_offset++;
@@ -1235,14 +1235,10 @@ static inline void castle_da_entry_add(struct castle_da_merge *merge,
         BUG_ON(level->valid_end_idx >= 0);
         debug("Allocating a new node at depth: %d\n", depth);
 
-        BUG_ON(atomic64_read(&merge->tree_ext_fs.next_free_byte) % 
-                    (btree->node_size << C_BLK_SHIFT));
-        cep.ext_id = merge->tree_ext_fs.ext_id;
-        cep.offset = atomic64_add_return(btree->node_size << C_BLK_SHIFT,
-                                         &merge->tree_ext_fs.next_free_byte) -
-                     (btree->node_size << C_BLK_SHIFT);
-        BUG_ON((EXT_ID_INVAL(cep.ext_id)) || 
-               (cep.offset > merge->tree_ext_fs.ext_size));
+        BUG_ON(castle_ext_fs_get(&merge->tree_ext_fs, 
+                                 (btree->node_size * C_BLK_SIZE),
+                                 1, 
+                                 &cep) < 0);
         debug("Got (0x%x, 0x%x)\n", cep.ext_id, cep.offset);
 
         level->node_c2b = castle_cache_block_get(cep, btree->node_size);
@@ -1364,7 +1360,7 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
                 depth);
         goto release_node;
     }
-    CEP_TO_CVT(node_cvt, level->node_c2b->cep, level->node_c2b->nr_pages);
+    CVT_NODE_SET(node_cvt, level->node_c2b->nr_pages, level->node_c2b->cep);
     castle_da_entry_add(merge, depth+1, key, node->version, node_cvt);
 release_node:
     debug("Releasing c2b for cep=(0x%x, 0x%x)\n", 
@@ -1522,7 +1518,7 @@ static void castle_da_max_path_complete(struct castle_da_merge *merge)
 
         /* Replace right-most entry with (k=max_key, v=0) */
         btree->entry_get(node, node->used-1, &k, &v, &is_leaf_ptr, &cvt);
-        BUG_ON(!CVT_ONDISK(cvt) || is_leaf_ptr);
+        BUG_ON(!CVT_NODE(cvt) || is_leaf_ptr);
         debug("The node is non-leaf, replacing the right most entry with (max_key, 0).\n");
         btree->entry_replace(node, node->used-1, btree->max_key, 0, 0, cvt);
         /* Change the version of the node to 0 */
@@ -1686,6 +1682,7 @@ static void castle_da_merge_schedule(struct castle_double_array *da,
     struct castle_btree_type *btree;
     struct castle_da_merge *merge;
     int i, ret;
+    c_byte_off_t size;
 
     debug("============ Merging ct=%d (%d) with ct=%d (%d) ============\n", 
             in_tree1->seq, in_tree1->dynamic,
@@ -1722,15 +1719,21 @@ static void castle_da_merge_schedule(struct castle_double_array *da,
         merge->levels[i].valid_end_idx = -1; 
         merge->levels[i].valid_version = INVAL_VERSION;  
     }
-    merge->tree_ext_fs.ext_size = (atomic64_read(&in_tree1->tree_ext_fs.next_free_byte) +
-                            atomic64_read(&in_tree2->tree_ext_fs.next_free_byte));
-    BUG_ON(merge->tree_ext_fs.ext_size % (btree->node_size * C_BLK_SIZE));
-    merge->tree_ext_fs.ext_size = MASK_CHK_OFFSET(merge->tree_ext_fs.ext_size + C_CHK_SIZE);
-    merge->tree_ext_fs.ext_id = castle_extent_alloc(DEFAULT, da->id,
-                                        merge->tree_ext_fs.ext_size >> C_CHK_SHIFT);
-    BUG_ON(EXT_ID_INVAL(merge->tree_ext_fs.ext_id));
-    atomic64_set(&merge->tree_ext_fs.next_free_byte, 0);
-    merge->data_ext_fs = (c_ext_fs_t){INVAL_EXT_ID, 0, {0ULL}};
+    /* Allocate an extent for merged tree for the size equal to sum of both the
+     * trees. */
+    size = (atomic64_read(&in_tree1->tree_ext_fs.next_free_byte) +
+                  atomic64_read(&in_tree2->tree_ext_fs.next_free_byte));
+    BUG_ON(size % (btree->node_size * C_BLK_SIZE));
+    size = MASK_CHK_OFFSET(size + C_CHK_SIZE);
+    BUG_ON(castle_ext_fs_init(&merge->tree_ext_fs, da->id, size) < 0);
+
+    /* Allocate an extent for medium objects of merged tree for the size equal to 
+     * sum of both the trees. */
+    size = (atomic64_read(&in_tree1->data_ext_fs.next_free_byte) +
+                  atomic64_read(&in_tree2->data_ext_fs.next_free_byte));
+    BUG_ON(size % (btree->node_size * C_BLK_SIZE));
+    size = MASK_CHK_OFFSET(size + C_CHK_SIZE);
+    BUG_ON(castle_ext_fs_init(&merge->data_ext_fs, da->id, size) < 0);
 
     CASTLE_INIT_WORK(&merge->work, castle_da_merge_do);
     queue_work(castle_merge_wq, &merge->work);
@@ -2199,18 +2202,16 @@ static int castle_da_rwct_make(struct castle_double_array *da)
     struct castle_component_tree *ct, *old_ct;
     c2_block_t *c2b;
     int ret;
+    c_byte_off_t size;
 
     ret = -ENOMEM;
     ct = castle_ct_alloc(da, 1 /* dynamic tree */, 0 /* level */);
     if(!ct)
         goto out;
 
-    ct->tree_ext_fs.ext_size = MASK_CHK_OFFSET((MAX_DYNAMIC_TREE_SIZE * 1024) + (10 * C_CHK_SIZE));
-    ct->tree_ext_fs.ext_id = castle_extent_alloc(DEFAULT, ct->da, 
-                                        ct->tree_ext_fs.ext_size >> C_CHK_SHIFT);
-    BUG_ON(EXT_ID_INVAL(ct->tree_ext_fs.ext_id));
-    atomic64_set(&ct->tree_ext_fs.next_free_byte, 0);
-    ct->data_ext_fs = (c_ext_fs_t){INVAL_EXT_ID, 0, {0ULL}};
+    size = MASK_CHK_OFFSET((MAX_DYNAMIC_TREE_SIZE * 1024) + (10 * C_CHK_SIZE));
+    BUG_ON(castle_ext_fs_init(&ct->tree_ext_fs, da->id, size) < 0);
+    BUG_ON(castle_ext_fs_init(&ct->data_ext_fs, da->id, size) < 0);
 
     /* Create a root node for this tree, and update the root version */
     c2b = castle_btree_node_create(0, 1 /* is_leaf */, ct);

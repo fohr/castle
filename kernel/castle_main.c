@@ -46,8 +46,8 @@ struct castle_component_tree castle_global_tree = {.seq             = GLOBAL_TRE
                                                    .da_list         = {NULL, NULL},
                                                    .hash_list       = {NULL, NULL},
                                                    .mstore_key      = INVAL_MSTORE_KEY,
-                                                   .tree_ext_fs     = {INVAL_EXT_ID, (1024 << C_CHK_SHIFT), {0ULL}},
-                                                   .data_ext_fs     = {INVAL_EXT_ID, 0,{0ULL}},
+                                                   .tree_ext_fs     = {INVAL_EXT_ID, (1024 * C_CHK_SIZE), {0ULL}},
+                                                   .data_ext_fs     = {INVAL_EXT_ID, (20480ULL * C_CHK_SIZE), {0ULL}},
                                                   }; 
 struct workqueue_struct     *castle_wqs[2*MAX_BTREE_DEPTH+1];
 int                          castle_fs_inited;
@@ -160,6 +160,37 @@ void castle_fs_superblocks_put(struct castle_fs_superblock *sb, int dirty)
     }
 }
 
+int castle_ext_fs_init(c_ext_fs_t       *ext_fs, 
+                       da_id_t           da_id, 
+                       c_byte_off_t      size)
+{
+    ext_fs->ext_id      = castle_extent_alloc(DEFAULT, da_id, (size/C_CHK_SIZE));
+    ext_fs->ext_size    = size;
+    atomic64_set(&ext_fs->next_free_byte, 0);
+
+    if (ext_fs->ext_id == INVAL_EXT_ID)
+        return -1;
+    return 0;
+}
+
+int castle_ext_fs_get(c_ext_fs_t      *ext_fs,
+                      c_byte_off_t     size,
+                      int              aligned,
+                      c_ext_pos_t     *cep)
+{
+    if (aligned)
+        BUG_ON(atomic64_read(&ext_fs->next_free_byte) % size);
+
+    cep->ext_id = ext_fs->ext_id;
+    cep->offset = atomic64_add_return(size, &ext_fs->next_free_byte) - size;
+    BUG_ON(EXT_ID_INVAL(cep->ext_id));
+    
+    if (cep->offset >= ext_fs->ext_size)
+        return -1;
+
+    return 0;
+}
+
 int castle_fs_init(void)
 {
     struct list_head *lh;
@@ -218,14 +249,13 @@ int castle_fs_init(void)
         /* Init the root btree node */
         atomic64_set(&(castle_global_tree.node_count), 0);
         init_rwsem(&castle_global_tree.lock);
-        atomic64_set(&(castle_global_tree.tree_ext_fs.next_free_byte), 0); 
-        atomic64_set(&(castle_global_tree.data_ext_fs.next_free_byte), 0);
 
-        castle_global_tree.tree_ext_fs.ext_id 
-                = castle_extent_alloc(DEFAULT, 
-                                      castle_global_tree.da,
-                                      (castle_global_tree.tree_ext_fs.ext_size >> C_CHK_SHIFT));
-        BUG_ON(castle_global_tree.tree_ext_fs.ext_id == INVAL_EXT_ID);
+        BUG_ON(castle_ext_fs_init(&castle_global_tree.tree_ext_fs,
+                                  castle_global_tree.da,
+                                  castle_global_tree.tree_ext_fs.ext_size) < 0);
+        BUG_ON(castle_ext_fs_init(&castle_global_tree.data_ext_fs,
+                                  castle_global_tree.da,
+                                  castle_global_tree.data_ext_fs.ext_size) < 0);
 
         c2b = castle_btree_node_create(0 /* version */, 1 /* is_leaf */, &castle_global_tree);
         castle_btree_node_save_prepare(&castle_global_tree, c2b->cep);
@@ -846,6 +876,8 @@ static void castle_bio_data_cvt_get(c_bvec_t    *c_bvec,
                                     c_val_tup_t  prev_cvt,
                                     c_val_tup_t *cvt)
 {
+    c_ext_pos_t cep;
+
     BUG_ON(c_bvec_data_dir(c_bvec) != WRITE); 
 
     /* If the block has already been allocated, override it */
@@ -857,11 +889,11 @@ static void castle_bio_data_cvt_get(c_bvec_t    *c_bvec,
     }
 
     /* Otherwise, allocate a new out-of-line block */
-    cvt->type   = CVT_TYPE_ONDISK;
-    cvt->length = C_BLK_SIZE;
-    cvt->cep.ext_id = castle_extent_alloc(DEFAULT, c_bvec->tree->da, 1);
-    cvt->cep.offset = 0;
-    BUG_ON(EXT_POS_INVAL(cvt->cep));
+    BUG_ON(castle_ext_fs_get(&c_bvec->tree->data_ext_fs, 
+                             C_BLK_SIZE,
+                             1,
+                             &cep) < 0);
+    CVT_MEDIUM_OBJECT_SET(*cvt, C_BLK_SIZE, cep);
 }
 
 static void castle_bio_data_io_end(c_bvec_t     *c_bvec, 

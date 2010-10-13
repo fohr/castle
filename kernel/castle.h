@@ -230,47 +230,89 @@ struct castle_fs_superblock {
 } PACKED;
 
 enum {
-    /* NOTE: if you change these, make sure VLBA_TREE_ENTRY_* are also updated */
+    CVT_TYPE_LEAF_VAL        = 0x01,
+    CVT_TYPE_LEAF_PTR        = 0x02,
+    CVT_TYPE_NODE            = 0x04,
+    /* TOMB_STONE points to NULL value (no value). */
     CVT_TYPE_TOMB_STONE      = 0x08,
+    /* Value length is small enough to keep in B-tree node itself. */
     CVT_TYPE_INLINE          = 0x10,
+    /* Set to 1 for both Large and Medium Objects */
     CVT_TYPE_ONDISK          = 0x20,
-    CVT_TYPE_INVALID         = 0x30,
+    /* Valid only when CVT_TYPE_ONDISK is set.
+     * 1 - Large objects
+     * 0 - Medium objects */
+    CVT_TYPE_LARGE_OBJECT    = 0x40,
+    CVT_TYPE_INVALID         = 0x00,
 };
 
 #define MAX_INLINE_VAL_SIZE 512
+#define MEDIUM_OBJECT_LIMIT (20 * C_CHK_SIZE)
 
-struct castle_btree_val {
+struct castle_value_tuple {
     uint8_t           type;
-    uint32_t          length;
+    uint64_t          length;
     union {
         uint8_t      *val;
         c_ext_pos_t   cep;
     };
 } PACKED;
-typedef struct castle_btree_val c_val_tup_t;
+typedef struct castle_value_tuple c_val_tup_t;
 
 #define INVAL_VAL_TUP        ((c_val_tup_t){CVT_TYPE_INVALID, 0, {.cep = INVAL_EXT_POS}})
 
-#define CVT_TOMB_STONE(_cvt) ((_cvt).type == CVT_TYPE_TOMB_STONE)
-#define CVT_INLINE(_cvt)     ((_cvt).type == CVT_TYPE_INLINE)
-#define CVT_ONDISK(_cvt)     ((_cvt).type == CVT_TYPE_ONDISK)
-#define CVT_INVALID(_cvt)    ((_cvt).type == CVT_TYPE_INVALID)
-#define CVT_ONE_BLK(_cvt)    (CVT_ONDISK(_cvt) &&  (_cvt).length == C_BLK_SIZE)
-#define CVT_TOMB_STONE_SET(_cvt)                                                \
-                             {                                                  \
-                                (_cvt).type         = CVT_TYPE_TOMB_STONE;      \
-                                (_cvt).length       = 0;                        \
-                                (_cvt).cep          = INVAL_EXT_POS;            \
-                             }                                                  
-#define CVT_INVALID_SET(_cvt)                                                   \
-                             {                                                  \
-                                (_cvt).type         = CVT_TYPE_INVALID;         \
-                                (_cvt).length       = 0;                        \
-                                (_cvt).cep          = INVAL_EXT_POS;            \
-                             }
-#define CVT_BTREE_NODE(_cvt, _btree)                                            \
-                            (CVT_ONDISK(_cvt) &&                                \
-                            (_cvt).length == (_btree)->node_size * C_BLK_SIZE)
+#define CVT_LEAF_VAL(_cvt)      ((_cvt).type & CVT_TYPE_LEAF_VAL)
+#define CVT_LEAF_PTR(_cvt)      ((_cvt).type & CVT_TYPE_LEAF_PTR)
+#define CVT_NODE(_cvt)          ((_cvt).type & CVT_TYPE_NODE)
+#define CVT_TOMB_STONE(_cvt)    (CVT_LEAF_VAL(_cvt) && ((_cvt).type & CVT_TYPE_TOMB_STONE))
+#define CVT_INLINE(_cvt)        (CVT_LEAF_VAL(_cvt) && ((_cvt).type & CVT_TYPE_INLINE))
+#define CVT_ONDISK(_cvt)        (CVT_LEAF_VAL(_cvt) && ((_cvt).type & CVT_TYPE_ONDISK))
+#define CVT_MEDIUM_OBJECT(_cvt) (CVT_ONDISK(_cvt) && !((_cvt).type & CVT_TYPE_LARGE_OBJECT))
+#define CVT_LARGE_OBJECT(_cvt)  (CVT_ONDISK(_cvt) && ((_cvt).type & CVT_TYPE_LARGE_OBJECT))
+#define CVT_INVALID(_cvt)       ((_cvt).type == CVT_TYPE_INVALID)
+#define CVT_ONE_BLK(_cvt)       (CVT_ONDISK(_cvt) &&  (_cvt).length == C_BLK_SIZE)
+#define CVT_INVALID_SET(_cvt)                                               \
+{                                                                           \
+   (_cvt).type   = CVT_TYPE_INVALID;                                        \
+   (_cvt).length = 0;                                                       \
+   (_cvt).cep    = INVAL_EXT_POS;                                           \
+}
+#define CVT_LEAF_PTR_SET(_cvt, _length, _cep)                               \
+{                                                                           \
+   (_cvt).type   = CVT_TYPE_LEAF_PTR;                                       \
+   (_cvt).length = _length;                                                 \
+   (_cvt).cep    = _cep;                                                    \
+}
+#define CVT_NODE_SET(_cvt, _length, _cep)                                   \
+{                                                                           \
+   (_cvt).type   = CVT_TYPE_NODE;                                           \
+   (_cvt).length = _length;                                                 \
+   (_cvt).cep    = _cep;                                                    \
+}
+#define CVT_TOMB_STONE_SET(_cvt)                                            \
+{                                                                           \
+   (_cvt).type   = (CVT_TYPE_LEAF_VAL | CVT_TYPE_TOMB_STONE);               \
+   (_cvt).length = 0;                                                       \
+   (_cvt).cep    = INVAL_EXT_POS;                                           \
+}                                                  
+#define CVT_INLINE_SET(_cvt, _length, _ptr)                                 \
+{                                                                           \
+   (_cvt).type   = (CVT_TYPE_LEAF_VAL | CVT_TYPE_INLINE);                   \
+   (_cvt).length = _length;                                                 \
+   (_cvt).val    = _ptr;                                                    \
+}                                                  
+#define CVT_MEDIUM_OBJECT_SET(_cvt, _length, _cep)                          \
+{                                                                           \
+    (_cvt).type  = (CVT_TYPE_LEAF_VAL | CVT_TYPE_ONDISK);                   \
+    (_cvt).length= _length;                                                 \
+    (_cvt).cep   = _cep;                                                    \
+}
+#define CVT_LARGE_OBJECT_SET(_cvt, _length, _cep)                           \
+{                                                                           \
+    (_cvt).type  = (CVT_TYPE_LEAF_VAL | CVT_TYPE_ONDISK | CVT_TYPE_LARGE_OBJECT); \
+    (_cvt).length= _length;                                                 \
+    (_cvt).cep   = _cep;                                                    \
+}
 #define CVT_INLINE_VAL_LENGTH(_cvt)                                             \
                              (CVT_INLINE(_cvt)?((_cvt).length):0)
 
@@ -279,13 +321,14 @@ typedef struct castle_btree_val c_val_tup_t;
                               (_cvt1).length    == (_cvt2).length &&            \
                               (!CVT_ONDISK(_cvt1) ||                            \
                                EXT_POS_EQUAL((_cvt1).cep, (_cvt2).cep)))
-
-#define CEP_TO_CVT(_cvt, _cep, _blks)                                           \
+#if 0
+#define CEP_TO_CVT(_cvt, _cep, _blks, _type)                                    \
                                 {                                               \
-                                    (_cvt).type     = CVT_TYPE_ONDISK;          \
-                                    (_cvt).length   =  _blks * C_BLK_SIZE;      \
+                                    (_cvt).type     = _type;                    \
+                                    (_cvt).length   = (_blks) * C_BLK_SIZE;     \
                                     (_cvt).cep      = _cep;                     \
                                 }
+#endif
 
 
 typedef uint8_t c_mstore_id_t;
@@ -870,6 +913,15 @@ struct castle_fs_superblock*
 void                  castle_fs_superblocks_put    (struct castle_fs_superblock *sb, int dirty);
 
 int                   castle_fs_init               (void);
+
+int                   castle_ext_fs_init           (c_ext_fs_t       *ext_fs, 
+                                                    da_id_t           da_id, 
+                                                    c_byte_off_t      size);
+
+int                   castle_ext_fs_get            (c_ext_fs_t       *ext_fs,
+                                                    c_byte_off_t      size,
+                                                    int               aligned,
+                                                    c_ext_pos_t      *cep);
 
 struct castle_cache_block;
 
