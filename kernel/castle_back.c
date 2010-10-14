@@ -561,7 +561,7 @@ static int castle_back_key_copy_get(struct castle_back_conn *conn, c_vl_okey_t *
     if (key_len < sizeof(c_vl_okey_t))
     {
         error("Bad key length %lu\n", key_len);
-        err = EINVAL;        
+        err = -EINVAL;        
         goto err0;
     }
     
@@ -569,7 +569,7 @@ static int castle_back_key_copy_get(struct castle_back_conn *conn, c_vl_okey_t *
     if (!buf)
     {
         error("Bad user pointer %p\n", user_key);
-        err = EINVAL;        
+        err = -EINVAL;        
         goto err0;
     }
 
@@ -579,7 +579,7 @@ static int castle_back_key_copy_get(struct castle_back_conn *conn, c_vl_okey_t *
     if (user_key_long + key_len > buf_end)
     {
         error("Key too big for buffer! (key_len = %lu)\n", key_len);
-        err = EINVAL;
+        err = -EINVAL;
         goto err1;
     }
 
@@ -587,7 +587,7 @@ static int castle_back_key_copy_get(struct castle_back_conn *conn, c_vl_okey_t *
     if (key == NULL)
     {
         error("Could not kmalloc for key copy!\n");
-        err = ENOMEM;
+        err = -ENOMEM;
         goto err1;
     }
 
@@ -596,7 +596,7 @@ static int castle_back_key_copy_get(struct castle_back_conn *conn, c_vl_okey_t *
     if (sizeof(c_vl_okey_t) + (key->nr_dims * sizeof(c_vl_key_t *)) > key_len)
     {
         error("Too many dimensions %d\n", key->nr_dims);
-        err = EINVAL;        
+        err = -EINVAL;        
         goto err2;
     }
 
@@ -614,7 +614,7 @@ static int castle_back_key_copy_get(struct castle_back_conn *conn, c_vl_okey_t *
         {
             error("Bad pointer %p (out of buffer, start=%lu, length=%u)\n", 
                 key->dims[i], buf->user_addr, buf->size);
-            err = EINVAL;
+            err = -EINVAL;
             goto err2;
         }
         
@@ -629,7 +629,7 @@ static int castle_back_key_copy_get(struct castle_back_conn *conn, c_vl_okey_t *
         if (dim_i + dim_size > buf_end)
         {    
             error("Dimension %d goes beyond end of buffer\n", i);
-            err = EINVAL;
+            err = -EINVAL;
             goto err2;
         }
     }
@@ -773,7 +773,7 @@ static void castle_back_replace(struct castle_back_conn *conn, struct castle_bac
     if (attachment == NULL)
     {
         error("Collection not found id=%x\n", op->req.replace.collection_id);
-        err = EINVAL;
+        err = -EINVAL;
         goto err0;
     }
 
@@ -788,14 +788,14 @@ static void castle_back_replace(struct castle_back_conn *conn, struct castle_bac
     if (op->buf == NULL)
     {
         error("Could not get buffer for pointer=%p\n", op->req.replace.value_ptr);
-        err = EINVAL;
+        err = -EINVAL;
         goto err1;
     }
 
     if (!castle_back_user_addr_in_buffer(op->buf, op->req.replace.value_ptr + op->req.replace.value_len))
     {
         error("Pointer not in buffer (%p)\n", op->req.replace.value_ptr + op->req.replace.value_len);
-        err = EINVAL;
+        err = -EINVAL;
         goto err2;
     }
 
@@ -841,7 +841,7 @@ static void castle_back_remove(struct castle_back_conn *conn, struct castle_back
     if (attachment == NULL)
     {
         error("Collection not found id=%x\n", op->req.replace.collection_id);
-        err = EINVAL;
+        err = -EINVAL;
         goto err0;
     }
 
@@ -912,7 +912,7 @@ void castle_back_get_reply_start(struct castle_object_get *get,
     if (!buffer)
     {
         BUG_ON((data_length != 0) || (buffer_length != 0));
-        err_prime = ENOENT;
+        err_prime = -ENOENT;
         goto err;
     }        
         
@@ -945,7 +945,7 @@ static void castle_back_get(struct castle_back_conn *conn, struct castle_back_op
     if (attachment == NULL)
     {
         error("Collection not found id=%x\n", op->req.get.collection_id);
-        err = EINVAL;
+        err = -EINVAL;
         goto err0;
     }
 
@@ -959,13 +959,15 @@ static void castle_back_get(struct castle_back_conn *conn, struct castle_back_op
     op->buf = castle_back_buffer_get(conn, (unsigned long) op->req.get.value_ptr);
     if (op->buf == NULL)
     {
-        err = EINVAL;
+        error("Invalid value ptr %p\n", op->req.get.value_ptr);
+        err = -EINVAL;
         goto err1;
     }
 
     if (!castle_back_user_addr_in_buffer(op->buf, op->req.replace.value_ptr + op->req.replace.value_len))
     {
-        err = EINVAL;
+        error("Invalid value length %d\n", op->req.get.value_len);
+        err = -EINVAL;
         goto err2;
     }
 
@@ -1002,7 +1004,7 @@ static void castle_back_iter_start(struct castle_back_conn *conn, struct castle_
     if (attachment == NULL)
     {
         error("Collection not found id=%x\n", op->req.iter_start.collection_id);
-        err = EINVAL;
+        err = -EINVAL;
         goto err0;
     }
 
@@ -1028,7 +1030,7 @@ static void castle_back_iter_start(struct castle_back_conn *conn, struct castle_
     token = castle_back_get_stateful_op(conn, &stateful_op);
     if (!stateful_op)
     {
-        err = EAGAIN;
+        err = -EAGAIN;
         goto err2;
     }
     stateful_op->tag = CASTLE_RING_ITER_START;
@@ -1105,14 +1107,14 @@ static void castle_back_iter_next(struct work_struct *work)
         if (op->req.iter_next.buffer_len < PAGE_SIZE)
         {
             error("castle_back_iter_next buffer_len smaller than a page\n");
-            err = EINVAL;
+            err = -EINVAL;
             goto err0;
         }
 
         if (stateful_op->tag != CASTLE_RING_ITER_START)
         {
             error("Token %x does not correspond to an iterator\n", op->req.iter_next.token);
-            err = EINVAL;
+            err = -EINVAL;
             goto err0;
         }
 
@@ -1124,7 +1126,7 @@ static void castle_back_iter_next(struct work_struct *work)
         op->buf = castle_back_buffer_get(conn, (unsigned long)op->req.iter_next.buffer_ptr);
         if (op->buf == NULL)
         {
-            err = EINVAL;
+            err = -EINVAL;
             goto err1;
         }
 
@@ -1154,7 +1156,7 @@ static void castle_back_iter_next(struct work_struct *work)
             if (buf_used >= buf_len)
             {
                 error("iterator buffer too small\n");
-                err = EINVAL;
+                err = -EINVAL;
                 goto err2;
             }
 
@@ -1167,7 +1169,7 @@ static void castle_back_iter_next(struct work_struct *work)
             if (key_len == 0)
             {
                 error("iterator buffer too small\n");
-                err = EINVAL;
+                err = -EINVAL;
                 goto err2;
             }
 
@@ -1182,7 +1184,7 @@ static void castle_back_iter_next(struct work_struct *work)
                 if (val_len == 0)
                 {
                     error("iterator buffer too small\n");
-                    err = EINVAL;
+                    err = -EINVAL;
                     goto err2;
                 }
             }
@@ -1290,14 +1292,14 @@ static void castle_back_iter_finish(struct castle_back_conn *conn, struct castle
     if (!stateful_op)
     {
         error("Token not found %x\n", op->req.iter_finish.token);
-        err = EINVAL;
+        err = -EINVAL;
         goto err0;
     }
 
     if (stateful_op->tag != CASTLE_RING_ITER_START)
     {
         error("Token %x does not correspond to an iterator\n", op->req.iter_next.token);
-        err = EINVAL;
+        err = -EINVAL;
         goto err0;
     }
 
@@ -1365,7 +1367,7 @@ static void castle_back_queue_stateful_work(struct castle_back_conn *conn,
     if (!stateful_op)
     {
         error("Token not found %x\n", token);
-        err = EINVAL;
+        err = -EINVAL;
         goto err0;
     }
 
