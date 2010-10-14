@@ -990,7 +990,7 @@ int castle_object_replace_multi(struct castle_rxrpc_call *call,
     return 0;
 }
 
-int castle_object_iterstart(struct castle_attachment *attachment,
+int castle_object_iter_start(struct castle_attachment *attachment,
                             c_vl_okey_t *start_key,
                             c_vl_okey_t *end_key,
                             castle_object_iterator_t **iter)
@@ -1039,9 +1039,7 @@ int castle_object_iterstart(struct castle_attachment *attachment,
     return 0;
 }
 
-EXPORT_SYMBOL(castle_object_iterstart);
-
-int castle_object_iternext(castle_object_iterator_t *iterator,
+int castle_object_iter_next(castle_object_iterator_t *iterator,
                            c_vl_okey_t **key,
                            c_val_tup_t *val)
 {
@@ -1082,20 +1080,14 @@ int castle_object_iternext(castle_object_iterator_t *iterator,
     return 0;
 }
 
-EXPORT_SYMBOL(castle_object_iternext);
-
-int castle_object_iterfinish(castle_object_iterator_t *iterator)
+int castle_object_iter_finish(castle_object_iterator_t *iterator)
 {
     castle_objects_rq_iter_cancel(iterator);
     debug_rq("Freeing iterators & buffers.\n");
-    castle_object_okey_free(iterator->start_okey);
-    castle_object_okey_free(iterator->end_okey);
     castle_free(iterator);
 
     return 0;
 }
-
-EXPORT_SYMBOL(castle_object_iterfinish);
 
 int castle_object_slice_get(struct castle_rxrpc_call *call, 
                             struct castle_attachment *attachment, 

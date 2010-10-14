@@ -107,6 +107,8 @@ struct castle_back_op
 struct castle_back_iterator
 {
     uint64_t                  flags;
+    c_vl_okey_t              *start_key;
+    c_vl_okey_t              *end_key;
     c_vl_okey_t              *saved_key;
     c_val_tup_t               saved_val;
     castle_object_iterator_t *iterator;
@@ -1033,12 +1035,14 @@ static void castle_back_iter_start(struct castle_back_conn *conn, struct castle_
     }
     stateful_op->tag = CASTLE_RING_ITER_START;
 
-    err = castle_object_iterstart(attachment, start_key, end_key, &stateful_op->iterator.iterator);
+    err = castle_object_iter_start(attachment, start_key, end_key, &stateful_op->iterator.iterator);
     if (err)
         goto err3;
 
     stateful_op->iterator.flags = op->req.iter_start.flags;
     stateful_op->iterator.saved_key = NULL;
+    stateful_op->iterator.start_key = start_key;
+    stateful_op->iterator.end_key = end_key;
 
     CASTLE_INIT_WORK(&stateful_op->work, castle_back_iter_next);
 
@@ -1056,16 +1060,6 @@ err1:
     castle_free(start_key);
 err0:
     castle_back_reply(op, err, 0, 0);
-}
-
-static void castle_back_free_vl_okey(c_vl_okey_t *key)
-{
-    uint32_t i;
-
-    for (i = 0; i < key->nr_dims; i++)
-        castle_free(key->dims[i]);
-
-    castle_free(key);
 }
 
 static void castle_back_iter_next(struct work_struct *work)
@@ -1175,7 +1169,8 @@ static void castle_back_iter_next(struct work_struct *work)
                 kv_list_cur->val = NULL;
             else
             {
-                kv_list_cur->val = (struct castle_iter_val *)((unsigned long)kv_list_cur->key + key_len);
+                kv_list_cur->val = (struct castle_iter_val *)
+                    ((unsigned long)kv_list_cur->key + key_len);
                 castle_back_val_kernel_to_user(&stateful_op->iterator.saved_val, op->buf, 
                     (unsigned long)kv_list_cur->val, buf_len - buf_used, &val_len);
                 buf_used += val_len;
@@ -1187,7 +1182,7 @@ static void castle_back_iter_next(struct work_struct *work)
                 }
             }
 
-            castle_back_free_vl_okey(stateful_op->iterator.saved_key);
+            castle_object_okey_free(stateful_op->iterator.saved_key);
             /* we copied it so free it */
             castle_free(stateful_op->iterator.saved_val.val);
 
@@ -1205,7 +1200,7 @@ static void castle_back_iter_next(struct work_struct *work)
             if (buf_used >= buf_len)
                 break;
 
-            err = castle_object_iternext(iterator, &key, &val);
+            err = castle_object_iter_next(iterator, &key, &val);
             if (err)
                 goto err2;
 
@@ -1225,7 +1220,8 @@ static void castle_back_iter_next(struct work_struct *work)
                 kv_list_cur->val = NULL;
             else
             {
-                kv_list_cur->val = (struct castle_iter_val *)((unsigned long)kv_list_cur->key + key_len);
+                kv_list_cur->val = (struct castle_iter_val *)
+                    ((unsigned long)kv_list_cur->key + key_len);
                 castle_back_val_kernel_to_user(&val, op->buf, (unsigned long)kv_list_cur->val, 
                     buf_len - buf_used, &val_len);
                 if (val_len == 0)
@@ -1233,7 +1229,7 @@ static void castle_back_iter_next(struct work_struct *work)
                 buf_used += val_len;
             }
 
-            castle_back_free_vl_okey(key);
+            castle_object_okey_free(key);
             /* don't free the value; it is freed when purged from the cache */
 
             if (kv_list_prev)
@@ -1303,11 +1299,14 @@ static void castle_back_iter_finish(struct castle_back_conn *conn, struct castle
 
     if (stateful_op->iterator.saved_key != NULL)
     {
-        castle_back_free_vl_okey(stateful_op->iterator.saved_key);
+        castle_object_okey_free(stateful_op->iterator.saved_key);
         castle_free(stateful_op->iterator.saved_val.val);
     }
 
-    err = castle_object_iterfinish(stateful_op->iterator.iterator);
+    castle_free(stateful_op->iterator.start_key);
+    castle_free(stateful_op->iterator.end_key);
+
+    err = castle_object_iter_finish(stateful_op->iterator.iterator);
     if (err)
         goto err1;
 
@@ -1559,10 +1558,9 @@ int castle_back_open(struct inode *inode, struct file *file)
     
     INIT_LIST_HEAD(&conn->free_stateful_ops);
     
-    for (i = MAX_STATEFUL_OPS - 1; i >= 0; i--)
+    for (i=0; i<MAX_STATEFUL_OPS; i++)
     {
-        //conn->ops[i].conn = conn;
-        list_add(&conn->stateful_ops[i].list, &conn->free_stateful_ops);
+        list_add_tail(&conn->stateful_ops[i].list, &conn->free_stateful_ops);
     }
 
     file->private_data = conn;
