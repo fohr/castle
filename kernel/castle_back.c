@@ -794,9 +794,9 @@ static void castle_back_replace(struct castle_back_conn *conn, struct castle_bac
         goto err1;
     }
 
-    if (!castle_back_user_addr_in_buffer(op->buf, op->req.replace.value_ptr + op->req.replace.value_len))
+    if (!castle_back_user_addr_in_buffer(op->buf, op->req.replace.value_ptr + op->req.replace.value_len - 1))
     {
-        error("Pointer not in buffer (%p)\n", op->req.replace.value_ptr + op->req.replace.value_len);
+        error("Invalid value length %ld (ptr=%p)\n", op->req.replace.value_len, op->req.replace.value_ptr);
         err = -EINVAL;
         goto err2;
     }
@@ -966,7 +966,7 @@ static void castle_back_get(struct castle_back_conn *conn, struct castle_back_op
         goto err1;
     }
 
-    if (!castle_back_user_addr_in_buffer(op->buf, op->req.get.value_ptr + op->req.get.value_len))
+    if (!castle_back_user_addr_in_buffer(op->buf, op->req.get.value_ptr + op->req.get.value_len - 1))
     {
         error("Invalid value length %d (ptr=%p)\n", op->req.get.value_len, op->req.get.value_ptr);
         err = -EINVAL;
