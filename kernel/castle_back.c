@@ -31,9 +31,11 @@
 
 //#define DEBUG
 #ifndef DEBUG
-#define debug(_f, ...)    ((void)0)
+#define debug(_f, ...)      ((void)0)
+#define debug_iter(_f, ...) ((void)0)
 #else
-#define debug(_f, _a...)  (printk("%ld: " _f, jiffies, ##_a))
+#define debug(_f, _a...)       (printk("%ld: " _f, jiffies, ##_a))
+#define debug_iter(_f, _a...)  (printk("%ld: " _f, jiffies, ##_a))
 #endif
 
 struct proc_dir_entry          *castle_back_procfile = NULL;
@@ -710,6 +712,8 @@ static void castle_back_val_kernel_to_user(c_val_tup_t *val, struct castle_back_
     size_t length;
     struct castle_iter_val *val_copy;
 
+    BUG_ON(val->type != CVT_TYPE_INLINE);
+
     length = sizeof(struct castle_iter_val) + val->length;
 
     if (buf_len < length)
@@ -999,7 +1003,7 @@ static void castle_back_iter_start(struct castle_back_conn *conn, struct castle_
     castle_interface_token_t token;
     struct castle_back_stateful_op *stateful_op;
 
-    debug("castle_back_iter_start\n");
+    debug_iter("castle_back_iter_start\n");
 
     // TODO should we ref count attachments
     attachment = castle_collection_find(op->req.iter_start.collection_id);
@@ -1022,10 +1026,10 @@ static void castle_back_iter_start(struct castle_back_conn *conn, struct castle_
         goto err1;
 
 #ifdef DEBUG
-    debug("start_key: \n");
+    debug_iter("start_key: \n");
     vl_okey_print(start_key);
 
-    debug("end_key: \n");
+    debug_iter("end_key: \n");
     vl_okey_print(end_key);
 #endif
 
@@ -1082,6 +1086,8 @@ static void castle_back_iter_next(struct work_struct *work)
     size_t key_len;
     size_t val_len;
 
+    debug_iter("castle_back_iter_next\n");
+
     stateful_op = container_of(work, struct castle_back_stateful_op, work);
     conn = stateful_op->conn;
 
@@ -1134,17 +1140,17 @@ static void castle_back_iter_next(struct work_struct *work)
         buf_len = op->req.iter_next.buffer_len;
 
     #ifdef DEBUG
-        debug("iter_next start_key\n");
+        debug_iter("iter_next start_key\n");
         vl_okey_print(iterator->start_okey);
 
-        debug("iter_next end_key\n");
+        debug_iter("iter_next end_key\n");
         vl_okey_print(iterator->end_okey);
     #endif
 
         /* if we have a saved key and value from the last call, add them to the buffer */
         if (stateful_op->iterator.saved_key != NULL)
         {
-            debug("iter_next found saved key, adding to buffer\n");
+            debug_iter("iter_next found saved key, adding to buffer\n");
 
             buf_used += sizeof(struct castle_key_value_list);
             if (buf_used >= buf_len)
@@ -1191,7 +1197,7 @@ static void castle_back_iter_next(struct work_struct *work)
             kv_list_prev = kv_list_cur;
             kv_list_cur = (struct castle_key_value_list *)((unsigned long)kv_list_head + buf_used);
 
-            debug("iter_next added saved key\n");
+            debug_iter("iter_next added saved key\n");
 
             stateful_op->iterator.saved_key = NULL;
         }
@@ -1209,6 +1215,13 @@ static void castle_back_iter_next(struct work_struct *work)
             /* there are no more keys */
             if (key == NULL)
                 break;
+
+            if (val.type != CVT_TYPE_INLINE)
+            {
+                debug_iter("ignoring not inlined value, type %d, length %u\n", val.type, val.length);
+                castle_object_okey_free(key);
+                continue;
+            }
 
             kv_list_cur->key = (c_vl_okey_t *) castle_back_kernel_to_user(op->buf, 
                 (unsigned long)kv_list_head + buf_used);
@@ -1251,7 +1264,7 @@ static void castle_back_iter_next(struct work_struct *work)
 
         if (key != NULL)
         {
-            debug("not enough space on buffer, saving a key for next time...\n");
+            debug_iter("not enough space on buffer, saving a key for next time...\n");
             stateful_op->iterator.saved_key = key;
             stateful_op->iterator.saved_val = val;
             /* copy the value since it may get removed from the cache */
@@ -1281,7 +1294,7 @@ static void castle_back_iter_finish(struct castle_back_conn *conn, struct castle
     int err;
     struct castle_back_stateful_op *stateful_op;
 
-    debug("castle_back_iter_finish, token = %x\n", op->req.iter_finish.token);
+    debug_iter("castle_back_iter_finish, token = %x\n", op->req.iter_finish.token);
 
     stateful_op = castle_back_find_stateful_op(conn, op->req.iter_finish.token);
 
