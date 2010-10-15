@@ -732,12 +732,17 @@ void castle_extents_load(int first)
     meta_ext.maps_cep = (c_ext_pos_t){MICRO_EXT_ID, 0};
     castle_extents_hash_add(&meta_ext);
 
+    i = 0;
+    list_for_each(l, &castle_slaves.slaves)
+        i++;
+    /* Allocate meta extent size to be however much we allocated in all the
+       slaves, divided by the k-factor (2) */
+    meta_ext.size = META_SPACE_SIZE * i / meta_ext.k_factor;
+
     /* If it is the first invocation of FS, create meta extent and embed it's
      * chunk mappings into Super extents on each slave */
     if (first)
     {
-        int i = 0;
-
         printk("Initialising meta extent mappings for the first time\n");
 
         /* FIXME: Doesn't work for dynamic disk claim and rebuild. Dont use id
@@ -749,13 +754,7 @@ void castle_extents_load(int first)
 
             meta_ext.chk_buf[cs->id].first_chk = META_SPACE_START;
             meta_ext.chk_buf[cs->id].count     = META_SPACE_SIZE;
-            i++;
         }
-        /* Allocate meta extent size to be however much we allocated in all the
-           slaves, divided by the k-factor (2) */
-        meta_ext.size = META_SPACE_SIZE * i / meta_ext.k_factor;
-        meta_ext.maps_cep.ext_id = MICRO_EXT_ID;
-        meta_ext.maps_cep.offset = 0;
         /* Allocate freespace for meta extent with K-RDA just like usual
          * extents. Except that, the space for meta extent is taken from
          * META_SPACE_START of each disk. */

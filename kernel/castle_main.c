@@ -167,9 +167,51 @@ int castle_ext_fs_init(c_ext_fs_t       *ext_fs,
     ext_fs->ext_id      = castle_extent_alloc(DEFAULT, da_id, (size/C_CHK_SIZE));
     ext_fs->ext_size    = size;
     atomic64_set(&ext_fs->next_free_byte, 0);
+    atomic64_set(&ext_fs->byte_count, 0);
 
     if (ext_fs->ext_id == INVAL_EXT_ID)
         return -1;
+    return 0;
+}
+
+int castle_ext_fs_pre_alloc(c_ext_fs_t       *ext_fs,
+                            c_byte_off_t      size,
+                            int               aligned)
+{
+    uint64_t ret;
+
+    if (aligned)
+    {
+        BUG_ON(atomic64_read(&ext_fs->next_free_byte) % size);
+        BUG_ON(atomic64_read(&ext_fs->byte_count) % size);
+    }
+    BUG_ON(atomic64_read(&ext_fs->byte_count) <
+                            atomic64_read(&ext_fs->next_free_byte));
+    BUG_ON(atomic64_read(&ext_fs->next_free_byte) > ext_fs->ext_size);
+
+    ret = atomic64_add_return(size, &ext_fs->byte_count);
+    if (ret > ext_fs->ext_size)
+    {
+        atomic64_sub(size, &ext_fs->byte_count);
+        return -1;
+    }
+
+    return 0;
+}
+
+int castle_ext_fs_free(c_ext_fs_t       *ext_fs,
+                       c_byte_off_t      size,
+                       int               aligned)
+{
+    if (aligned)
+    {
+        BUG_ON(atomic64_read(&ext_fs->next_free_byte) % size);
+        BUG_ON(atomic64_read(&ext_fs->byte_count) % size);
+    }
+    atomic64_sub(size, &ext_fs->byte_count);
+    BUG_ON(atomic64_read(&ext_fs->byte_count) <
+                            atomic64_read(&ext_fs->next_free_byte));
+
     return 0;
 }
 
@@ -179,16 +221,31 @@ int castle_ext_fs_get(c_ext_fs_t      *ext_fs,
                       c_ext_pos_t     *cep)
 {
     if (aligned)
+    {
         BUG_ON(atomic64_read(&ext_fs->next_free_byte) % size);
+        BUG_ON(atomic64_read(&ext_fs->byte_count) % size);
+    }
 
     cep->ext_id = ext_fs->ext_id;
     cep->offset = atomic64_add_return(size, &ext_fs->next_free_byte) - size;
     BUG_ON(EXT_ID_INVAL(cep->ext_id));
-    
-    if (cep->offset >= ext_fs->ext_size)
-        return -1;
+    BUG_ON(atomic64_read(&ext_fs->byte_count) <
+                            atomic64_read(&ext_fs->next_free_byte));
+    if (atomic64_read(&ext_fs->next_free_byte) > ext_fs->ext_size)
+    {
+        printk("%lu:%lu:%llu:%llu\n", atomic64_read(&ext_fs->byte_count),
+                                      atomic64_read(&ext_fs->next_free_byte),
+                                      ext_fs->ext_size,
+                                      size);
+        BUG();
+    }
 
     return 0;
+}
+
+c_byte_off_t castle_ext_fs_summary_get(c_ext_fs_t *ext_fs)
+{
+    return (ext_fs->ext_size - atomic64_read(&ext_fs->next_free_byte));
 }
 
 int castle_fs_init(void)
@@ -889,6 +946,9 @@ static void castle_bio_data_cvt_get(c_bvec_t    *c_bvec,
     }
 
     /* Otherwise, allocate a new out-of-line block */
+    BUG_ON(castle_ext_fs_pre_alloc(&c_bvec->tree->data_ext_fs, 
+                                   C_BLK_SIZE,
+                                   1) < 0);
     BUG_ON(castle_ext_fs_get(&c_bvec->tree->data_ext_fs, 
                              C_BLK_SIZE,
                              1,
@@ -906,7 +966,21 @@ static void castle_bio_data_io_end(c_bvec_t     *c_bvec,
     if(err) 
         castle_bio_data_io_error(c_bvec, err);
     else
+    {
+        if (!CVT_INVALID(cvt) && !CVT_MEDIUM_OBJECT(cvt))
+        {
+            printk("%u:%llu:"cep_fmt_str_nl, cvt.type, cvt.length, cep2str(cvt.cep));
+            BUG();
+        }
+        if (CVT_MEDIUM_OBJECT(cvt) && 
+               (cvt.cep.ext_id != c_bvec->tree->data_ext_fs.ext_id))
+        {
+            printk("%u:%llu:%llu:"cep_fmt_str_nl, cvt.type, cvt.length,
+                    c_bvec->tree->data_ext_fs.ext_id, cep2str(cvt.cep));
+            BUG();
+        }
         castle_bio_data_io_do(c_bvec, cvt.cep);
+    }
 }
  
 static int castle_bio_validate(struct bio *bio)
@@ -947,6 +1021,7 @@ static void castle_device_c_bvec_make(c_bio_t *c_bio,
     c_bvec->cvt_get     = castle_bio_data_cvt_get;
     c_bvec->endfind     = castle_bio_data_io_end;
     c_bvec->da_endfind  = NULL;
+    atomic_set(&c_bvec->reserv_nodes, 0);
     if(one2one_bvec)
         set_bit(CBV_ONE2ONE_BIT, &c_bvec->flags);
     castle_debug_bvec_update(c_bvec, C_BVEC_INITIALISED);

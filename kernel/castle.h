@@ -185,6 +185,7 @@ typedef struct castle_extent_freespace {
     c_ext_id_t      ext_id;
     c_byte_off_t    ext_size;
     atomic64_t      next_free_byte;
+    atomic64_t      byte_count;
 } c_ext_fs_t;
 
 #define CASTLE_SLAVE_TARGET     (0x00000001)
@@ -502,6 +503,14 @@ struct castle_clist_entry {
     c_ext_pos_t  first_node;
     c_ext_pos_t  last_node;
     uint64_t     node_count;
+    c_ext_id_t   tree_ext_id;
+    c_byte_off_t tree_ext_sz;
+    uint64_t     tree_ext_byte;
+    uint64_t     tree_byte_count;
+    c_ext_id_t   data_ext_id;
+    c_byte_off_t data_ext_sz;
+    uint64_t     data_ext_byte;
+    uint64_t     data_byte_count;
 } PACKED;
 
 struct castle_vlist_entry {
@@ -598,6 +607,7 @@ typedef struct castle_bio_vec {
     /* Completion callback */
     void                           (*endfind)    (struct castle_bio_vec *, int, c_val_tup_t);
     void                           (*da_endfind) (struct castle_bio_vec *, int, c_val_tup_t);
+    atomic_t                       reserv_nodes;
 #ifdef CASTLE_DEBUG              
     unsigned long                    state;
     struct castle_cache_block       *locking;
@@ -915,10 +925,20 @@ int                   castle_ext_fs_init           (c_ext_fs_t       *ext_fs,
                                                     da_id_t           da_id, 
                                                     c_byte_off_t      size);
 
+int                   castle_ext_fs_pre_alloc      (c_ext_fs_t       *ext_fs,
+                                                    c_byte_off_t      size,
+                                                    int               aligned);
+
 int                   castle_ext_fs_get            (c_ext_fs_t       *ext_fs,
                                                     c_byte_off_t      size,
                                                     int               aligned,
                                                     c_ext_pos_t      *cep);
+
+int                   castle_ext_fs_free           (c_ext_fs_t       *ext_fs,
+                                                    c_byte_off_t      size,
+                                                    int               aligned);
+
+c_byte_off_t          castle_ext_fs_summary_get    (c_ext_fs_t *ext_fs);
 
 struct castle_cache_block;
 

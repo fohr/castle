@@ -595,18 +595,29 @@ static void castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
             nr_blocks = (cvt->length - 1) / C_BLK_SIZE + 1; 
             nr_chunks = (nr_blocks >> (C_CHK_SHIFT - C_BLK_SHIFT)) + 
                             (nr_blocks % (C_CHK_SIZE/C_BLK_SIZE));
-            /* Arbitrary limits on the size of the objets (freespace code cannot handle
-               huge objects ATM) */
-            BUG_ON(nr_blocks > 100); 
-            // FIXME: bhaskar
-            cep.ext_id = castle_extent_alloc(DEFAULT, c_bvec->tree->da,
-                        nr_chunks);
-            cep.offset = 0;
-            CVT_LARGE_OBJECT_SET(*cvt, replace->value_len, cep);
-            /* TODO: Again, work out how to handle failed allocations */ 
-            BUG_ON(EXT_POS_INVAL(cvt->cep));
-         }
-
+            if (replace->value_len <= MEDIUM_OBJECT_LIMIT)
+            {
+                // FIXME: Handle Replace.
+                BUG_ON(castle_ext_fs_get(&c_bvec->tree->data_ext_fs,
+                                         nr_blocks * C_BLK_SIZE,
+                                         0,
+                                         &cep) < 0);
+                CVT_MEDIUM_OBJECT_SET(*cvt, replace->value_len, cep);
+            }
+            else 
+            {
+                /* Arbitrary limits on the size of the objets (freespace code 
+                 * cannot handle huge objects ATM) */
+                BUG_ON(nr_blocks > 100); 
+                // FIXME: bhaskar
+                cep.ext_id = castle_extent_alloc(DEFAULT, c_bvec->tree->da,
+                                nr_chunks);
+                cep.offset = 0;
+                CVT_LARGE_OBJECT_SET(*cvt, replace->value_len, cep);
+                /* TODO: Again, work out how to handle failed allocations */ 
+                BUG_ON(EXT_POS_INVAL(cvt->cep));
+            }
+        }
     } else
     /* For tombstones, construct the cvt and exit. */
     {
@@ -618,6 +629,8 @@ static void castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
     if (CVT_ONDISK(prev_cvt))
     {
         nr_blocks = (prev_cvt.length - 1) / C_BLK_SIZE + 1; 
+        BUG_ON(CVT_MEDIUM_OBJECT(prev_cvt) &&
+                (prev_cvt.cep.ext_id != c_bvec->tree->data_ext_fs.ext_id));
         /* FIXME: bhaskar - Free old object */
 #if 0
         castle_extent_free(DEFAULT, c_bvec->tree->da, prev_cvt.cep.ext_id);
@@ -951,6 +964,7 @@ int castle_object_replace(struct castle_object_replace *replace,
     c_bvec->cvt_get    = castle_object_replace_cvt_get;
     c_bvec->endfind    = castle_object_replace_complete;
     c_bvec->da_endfind = NULL; 
+    atomic_set(&c_bvec->reserv_nodes, 0);
     
     /* TODO: add bios to the debugger! */ 
 
@@ -991,6 +1005,7 @@ int castle_object_replace_multi(struct castle_rxrpc_call *call,
     c_bvec->cvt_get    = castle_object_replace_multi_cvt_get;
     c_bvec->endfind    = castle_object_replace_multi_complete;
     c_bvec->da_endfind = NULL;
+    atomic_set(&c_bvec->reserv_nodes, 0);
 
     /* TODO: add bios to the debugger! */
 
@@ -1354,6 +1369,9 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
         return;
     }
 
+    BUG_ON(CVT_MEDIUM_OBJECT(cvt) && 
+            cvt.cep.ext_id != c_bvec->tree->data_ext_fs.ext_id);
+
     debug("Out of line.\n");
     /* Finally, out of line values */
     BUG_ON(!CVT_ONDISK(cvt));
@@ -1389,6 +1407,7 @@ int castle_object_get(struct castle_rxrpc_call *call,
     c_bvec->cvt_get    = NULL;
     c_bvec->endfind    = castle_object_get_complete;
     c_bvec->da_endfind = NULL; 
+    atomic_set(&c_bvec->reserv_nodes, 0);
     
     /* TODO: add bios to the debugger! */ 
 

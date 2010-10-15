@@ -650,6 +650,8 @@ struct castle_vlba_tree_node {
                  VLBA_ENTRY_LENGTH(_entry) -                                \
                  _entry->val_len))
 
+uint32_t max_entry_length = MAX_VLBA_ENTRY_LENGTH;
+
 /* Implementation of heap sort from wiki */
 static void min_heap_swap(uint32_t *a, int i, int j)
 {
@@ -1500,18 +1502,17 @@ void castle_btree_node_save_prepare(struct castle_component_tree *ct, c_ext_pos_
     queue_work(castle_wq, &work_st->work);
 }
 
-c2_block_t* castle_btree_node_create(int version, int is_leaf, struct castle_component_tree *ct)
+c2_block_t* __castle_btree_node_create(int version, int is_leaf, struct castle_component_tree *ct)
 {
     struct castle_btree_type *btree;
     struct castle_btree_node *node;
-    //c_ext_pos_t  cep;
     c2_block_t  *c2b;
     btree_t      type;
     c_ext_pos_t  cep;
 
     type  = ct->btree_type;
     btree = castle_btree_type_get(type);
-  
+
     BUG_ON(castle_ext_fs_get(&ct->tree_ext_fs, 
                              (btree->node_size * C_BLK_SIZE),
                              1,
@@ -1537,6 +1538,35 @@ c2_block_t* castle_btree_node_create(int version, int is_leaf, struct castle_com
     return c2b;
 }
 
+c2_block_t* castle_btree_node_create(int version, int is_leaf, struct castle_component_tree *ct)
+{
+    struct castle_btree_type *btree = castle_btree_type_get(ct->btree_type);
+
+    BUG_ON(castle_ext_fs_pre_alloc(&ct->tree_ext_fs,
+                                   (btree->node_size * C_BLK_SIZE),
+                                   1) < 0);
+
+    return __castle_btree_node_create(version, is_leaf, ct);
+}
+
+c2_block_t* castle_btree_cbvec_node_create(int version, int is_leaf, c_bvec_t *c_bvec)
+{
+    struct castle_component_tree *ct = c_bvec->tree;
+    struct castle_btree_type *btree = castle_btree_type_get(ct->btree_type);
+
+    BUG_ON(c_bvec_data_dir(c_bvec) != WRITE);
+    if (atomic_add_unless(&c_bvec->reserv_nodes, -1, 0) == 0)
+    {
+        if (ct != &castle_global_tree)
+            printk("***Potential Bug***\n");
+        BUG_ON(castle_ext_fs_pre_alloc(&ct->tree_ext_fs, 
+                                       (btree->node_size * C_BLK_SIZE),
+                                       1) < 0);
+    }
+
+    return __castle_btree_node_create(version, is_leaf, c_bvec->tree);
+}
+
 static c2_block_t* castle_btree_effective_node_create(c_bvec_t *c_bvec, 
                                                       c2_block_t *orig_c2b,
                                                       version_t version)
@@ -1550,7 +1580,7 @@ static c2_block_t* castle_btree_effective_node_create(c_bvec_t *c_bvec,
     
     node = c2b_bnode(orig_c2b); 
     btree = castle_btree_type_get(node->type);
-    c2b = castle_btree_node_create(version, node->is_leaf, c_bvec->tree);
+    c2b = castle_btree_cbvec_node_create(version, node->is_leaf, c_bvec);
     eff_node = c2b_buffer(c2b);
 
     last_eff_key = btree->inv_key;
@@ -1651,7 +1681,7 @@ static c2_block_t* castle_btree_node_key_split(c_bvec_t *c_bvec, c2_block_t *ori
 
     node     = c2b_bnode(orig_c2b);
     btree    = castle_btree_type_get(node->type);
-    c2b      = castle_btree_node_create(node->version, node->is_leaf, c_bvec->tree);
+    c2b      = castle_btree_cbvec_node_create(node->version, node->is_leaf, c_bvec);
     castle_btree_node_save_prepare(c_bvec->tree, c2b->cep);
     sec_node = c2b_bnode(c2b);
     /* The original node needs to contain the elements from the right hand side
@@ -1789,7 +1819,7 @@ static void castle_btree_new_root_create(c_bvec_t *c_bvec, btree_t type)
             c_bvec->version);
     BUG_ON(c_bvec->btree_parent_node);
     /* Create the node */
-    c2b = castle_btree_node_create(0, 0, c_bvec->tree);
+    c2b = castle_btree_cbvec_node_create(0, 0, c_bvec);
     castle_btree_node_save_prepare(c_bvec->tree, c2b->cep);
     node = c2b_buffer(c2b);
     /* We should be under write lock here, check if we can read lock it (and BUG) */

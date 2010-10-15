@@ -79,6 +79,7 @@ void castle_debug_free(void *obj)
 
 static void castle_debug_malloc_fini(void)
 {
+    // FIXME: Enable this
 #if 0
     struct castle_malloc_debug *dobj;
     struct list_head *l;
