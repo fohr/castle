@@ -155,12 +155,6 @@ typedef struct castle_control_ioctl {
 #ifndef __KERNEL__
 #define PAGE_SIZE 4096
 #define PAGE_SHIFT 12
-// TODO: should link to castle.h
-enum {
-    CVT_TYPE_INLINE          = 0x10,
-    CVT_TYPE_ONDISK          = 0x20,
-    CVT_TYPE_INVALID         = 0x30,
-};
 #else
 
 #endif
