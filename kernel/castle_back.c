@@ -709,12 +709,15 @@ static void castle_back_val_kernel_to_user(c_val_tup_t *val, struct castle_back_
                                            unsigned long user_buf, size_t buf_len, 
                                            size_t *buf_used)
 {
-    size_t length;
+    size_t length, val_length;
     struct castle_iter_val *val_copy;
 
-    BUG_ON(val->type != CVT_TYPE_INLINE);
+    if (val->type == CVT_TYPE_INLINE)
+        val_length = val->length;
+    else
+        val_length = 0;
 
-    length = sizeof(struct castle_iter_val) + val->length;
+    length = sizeof(struct castle_iter_val) + val_length;
 
     if (buf_len < length)
     {
@@ -726,8 +729,11 @@ static void castle_back_val_kernel_to_user(c_val_tup_t *val, struct castle_back_
 
     val_copy->type = val->type;
     val_copy->length = val->length;
-    val_copy->val = (uint8_t *)(user_buf + sizeof(struct castle_iter_val));
-    memcpy((uint8_t *)castle_back_user_to_kernel(buf, val_copy->val), val->val, val->length);
+    if (val->type == CVT_TYPE_INLINE)
+    {
+        val_copy->val = (uint8_t *)(user_buf + sizeof(struct castle_iter_val));
+        memcpy((uint8_t *)castle_back_user_to_kernel(buf, val_copy->val), val->val, val->length);
+    }
 
     *buf_used = length;
 }
@@ -1215,13 +1221,6 @@ static void castle_back_iter_next(struct work_struct *work)
             /* there are no more keys */
             if (key == NULL)
                 break;
-
-            if (val.type != CVT_TYPE_INLINE)
-            {
-                debug_iter("ignoring not inlined value, type %d, length %u\n", val.type, val.length);
-                castle_object_okey_free(key);
-                continue;
-            }
 
             kv_list_cur->key = (c_vl_okey_t *) castle_back_kernel_to_user(op->buf, 
                 (unsigned long)kv_list_head + buf_used);
