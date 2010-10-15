@@ -28,6 +28,8 @@
 
 static DECLARE_MUTEX(castle_control_lock);
 
+c_mstore_t *castle_attachments_store = NULL;
+
 void castle_control_lock_up()
 {
     down(&castle_control_lock);
@@ -228,6 +230,123 @@ void castle_control_transfer_destroy(transfer_id_t id, int *ret)
     }
 }
 
+int castle_attachments_store_init(int first)
+{
+    if (first)
+    {
+        printk("Creating new mstore for Collection Attachments\n");
+        castle_attachments_store =  castle_mstore_init(MSTORE_ATTACHMENTS_TAG, 
+                                            sizeof(struct castle_alist_entry));
+    }
+    else 
+    {
+        struct castle_mstore_iter *iterator;
+        struct castle_alist_entry mstore_entry;
+ 
+        printk("Openings mstore for Collection Attachments\n");
+        castle_attachments_store = castle_mstore_open(MSTORE_ATTACHMENTS_TAG, 
+                                            sizeof(struct castle_alist_entry));
+
+        iterator = castle_mstore_iterate(castle_attachments_store);
+        if (!iterator)
+            return -EINVAL;
+        while (castle_mstore_iterator_has_next(iterator))
+        {
+            struct castle_attachment *ca;
+            c_mstore_key_t key;
+            char *name = castle_malloc(MAX_NAME_SIZE, GFP_KERNEL);
+
+            BUG_ON(!name);
+            castle_mstore_iterator_next(iterator, &mstore_entry, &key);
+            strcpy(name, mstore_entry.name);
+            ca = castle_collection_init(mstore_entry.version, name);
+            if(!ca)
+            {
+                printk("Failed to create Collection (%s, %u)\n",
+                        mstore_entry.name, mstore_entry.version);
+                return -EINVAL;
+            }
+            printk("Created Collection (%s, %u) with id: %u\n",
+                    mstore_entry.name, mstore_entry.version, ca->col.id);
+        }
+        castle_mstore_iterator_destroy(iterator);
+    }
+
+    if (!castle_attachments_store)
+        return -ENOMEM;
+
+    return 0;
+}
+
+void castle_attachments_store_fini(void)
+{
+    if (castle_attachments_store)
+        castle_mstore_fini(castle_attachments_store);
+}
+
+
+int __castle_attachments_store_find(char *name, version_t version,
+                                    c_mstore_key_t *key)
+{
+    struct castle_mstore_iter *iterator;
+    struct castle_alist_entry mstore_entry;
+    int found = 0;
+
+    iterator = castle_mstore_iterate(castle_attachments_store);
+    if (!iterator)
+        return -EINVAL;
+    while (castle_mstore_iterator_has_next(iterator))
+    {
+        castle_mstore_iterator_next(iterator, &mstore_entry, key);
+        if (!strcmp(mstore_entry.name, name) && 
+            (!version || version == mstore_entry.version))
+        {
+            found = 1;
+            break;
+        }
+    }
+    castle_mstore_iterator_destroy(iterator);
+
+    if (found)
+        return mstore_entry.version;
+
+    return -1;
+}
+
+/* Returns -1, if couldn't find attachments with name. 
+ *        +ve, attached version id. */
+int castle_attachments_store_find(char *name)
+{
+    c_mstore_key_t key;
+
+    return __castle_attachments_store_find(name, 0, &key);
+}
+
+int castle_attachments_store_add(char *name, version_t version)
+{
+    struct castle_alist_entry mstore_entry;
+
+    mstore_entry.version = version;
+    strcpy(mstore_entry.name, name);
+    castle_mstore_entry_insert(castle_attachments_store, &mstore_entry);
+
+    return 0;
+}
+
+int castle_attachments_store_delete(char *name, version_t version)
+{
+    c_mstore_key_t key;
+
+    if (__castle_attachments_store_find(name, version, &key) < 0)
+    {
+        printk("Delete failed: couldnt find collection: %s\n", name);
+        return -1;
+    }
+    castle_mstore_entry_delete(castle_attachments_store, key);
+
+    return 0;
+}
+
 void castle_control_collection_attach(version_t version,
                                              char *name,
                                              int *ret,
@@ -235,9 +354,12 @@ void castle_control_collection_attach(version_t version,
 {
     struct castle_attachment *ca;
 
+    castle_attachments_store_add(name, version);
+    
     ca = castle_collection_init(version, name);
     if(!ca)
     {
+        castle_attachments_store_delete(name, version);
         *ret = -EINVAL;
         return;
     }
@@ -250,7 +372,14 @@ void castle_control_collection_detach(collection_id_t collection,
 {
     struct castle_attachment *ca = castle_collection_find(collection);
     
-    if(ca) castle_collection_free(ca);
+    if(ca) 
+    {
+        BUG_ON(collection != ca->col.id);
+        printk("Deleting collection %u (%s, %u)\n", collection, ca->col.name,
+                                ca->version);
+        castle_attachments_store_delete(ca->col.name, ca->version);
+        castle_collection_free(ca);
+    }
     *ret = (ca ? 0 : -ENODEV);
 }
 
