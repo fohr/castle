@@ -966,9 +966,9 @@ static void castle_back_get(struct castle_back_conn *conn, struct castle_back_op
         goto err1;
     }
 
-    if (!castle_back_user_addr_in_buffer(op->buf, op->req.replace.value_ptr + op->req.replace.value_len))
+    if (!castle_back_user_addr_in_buffer(op->buf, op->req.get.value_ptr + op->req.get.value_len))
     {
-        error("Invalid value length %d\n", op->req.get.value_len);
+        error("Invalid value length %d (ptr=%p)\n", op->req.get.value_len, op->req.get.value_ptr);
         err = -EINVAL;
         goto err2;
     }
