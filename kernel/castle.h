@@ -935,7 +935,7 @@ int                   castle_ext_fs_get            (c_ext_fs_t       *ext_fs,
                                                     c_ext_pos_t      *cep);
 
 int                   castle_ext_fs_free           (c_ext_fs_t       *ext_fs,
-                                                    c_byte_off_t      size,
+                                                    int64_t           size,
                                                     int               aligned);
 
 c_byte_off_t          castle_ext_fs_summary_get    (c_ext_fs_t *ext_fs);

@@ -1513,10 +1513,21 @@ c2_block_t* __castle_btree_node_create(int version, int is_leaf, struct castle_c
     type  = ct->btree_type;
     btree = castle_btree_type_get(type);
 
-    BUG_ON(castle_ext_fs_get(&ct->tree_ext_fs, 
-                             (btree->node_size * C_BLK_SIZE),
-                             1,
-                             &cep) < 0);
+    if (castle_ext_fs_get(&ct->tree_ext_fs, 
+                          (btree->node_size * C_BLK_SIZE),
+                          1,
+                          &cep) < 0)
+    {
+        if (ct != &castle_global_tree);
+            printk("****WARNING: Allocating more nodes than pre-allocated****\n");
+        BUG_ON(castle_ext_fs_pre_alloc(&ct->tree_ext_fs,
+                                       (btree->node_size * C_BLK_SIZE),
+                                       1) < 0);
+        BUG_ON(castle_ext_fs_get(&ct->tree_ext_fs, 
+                                 (btree->node_size * C_BLK_SIZE),
+                                 1,                                  
+                                 &cep) < 0);
+    }
 
     c2b   = castle_cache_block_get(cep, btree->node_size);
     
@@ -1552,18 +1563,9 @@ c2_block_t* castle_btree_node_create(int version, int is_leaf, struct castle_com
 c2_block_t* castle_btree_cbvec_node_create(int version, int is_leaf, c_bvec_t *c_bvec)
 {
     struct castle_component_tree *ct = c_bvec->tree;
-    struct castle_btree_type *btree = castle_btree_type_get(ct->btree_type);
 
-    BUG_ON(c_bvec_data_dir(c_bvec) != WRITE);
-    if (atomic_add_unless(&c_bvec->reserv_nodes, -1, 0) == 0)
-    {
-        if (ct != &castle_global_tree)
-            printk("***Potential Bug***\n");
-        BUG_ON(castle_ext_fs_pre_alloc(&ct->tree_ext_fs, 
-                                       (btree->node_size * C_BLK_SIZE),
-                                       1) < 0);
-    }
-
+    if (ct != &castle_global_tree)
+        atomic_dec(&c_bvec->reserv_nodes);
     return __castle_btree_node_create(version, is_leaf, c_bvec->tree);
 }
 

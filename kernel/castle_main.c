@@ -200,7 +200,7 @@ int castle_ext_fs_pre_alloc(c_ext_fs_t       *ext_fs,
 }
 
 int castle_ext_fs_free(c_ext_fs_t       *ext_fs,
-                       c_byte_off_t      size,
+                       int64_t           size,
                        int               aligned)
 {
     if (aligned)
@@ -229,8 +229,12 @@ int castle_ext_fs_get(c_ext_fs_t      *ext_fs,
     cep->ext_id = ext_fs->ext_id;
     cep->offset = atomic64_add_return(size, &ext_fs->next_free_byte) - size;
     BUG_ON(EXT_ID_INVAL(cep->ext_id));
-    BUG_ON(atomic64_read(&ext_fs->byte_count) <
-                            atomic64_read(&ext_fs->next_free_byte));
+    if (atomic64_read(&ext_fs->byte_count) <
+                            atomic64_read(&ext_fs->next_free_byte))
+    {
+        atomic64_sub(size, &ext_fs->next_free_byte);
+        return -1;
+    }
     if (atomic64_read(&ext_fs->next_free_byte) > ext_fs->ext_size)
     {
         printk("%lu:%lu:%llu:%llu\n", atomic64_read(&ext_fs->byte_count),
