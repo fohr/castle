@@ -728,15 +728,15 @@ static void castle_back_val_kernel_to_user(c_val_tup_t *val, struct castle_back_
 
     val_copy = (struct castle_iter_val *)castle_back_user_to_kernel(buf, user_buf);
 
-    val_copy->collection_id = collection_id;
     val_copy->type = val->type;
     val_copy->length = val->length;
     if (val->type == CVT_TYPE_INLINE)
     {
         val_copy->val = (uint8_t *)(user_buf + sizeof(struct castle_iter_val));
         memcpy((uint8_t *)castle_back_user_to_kernel(buf, val_copy->val), val->val, val->length);
-    } else
-        val_copy->val = NULL;
+    } else {
+        val_copy->collection_id = collection_id;
+    }
 
     *buf_used = length;
 }

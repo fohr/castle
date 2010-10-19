@@ -272,9 +272,11 @@ typedef struct castle_response {
 struct castle_iter_val {
     uint8_t           type;
     uint32_t          length;
-    uint8_t          *val;
-    collection_id_t   collection_id;
-};
+    union {
+        uint8_t          *val;
+        collection_id_t   collection_id;
+    };
+} PACKED;
 
 struct castle_key_value_list {
     struct castle_key_value_list *next;
