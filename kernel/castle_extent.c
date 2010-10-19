@@ -58,12 +58,13 @@ typedef struct {
     /* FIXME: Just offset is enough. cep not requried. */
     c_ext_pos_t         maps_cep;       /* Offset of chunk mapping in logical extent */
     struct list_head    hash_list;      /* Only Dynamic variable */
+    atomic_t            ref_cnt;
 } c_ext_t;
 
 static struct list_head *castle_extents_hash = NULL;
 
-DEFINE_HASH_TBL(castle_extents, castle_extents_hash, CASTLE_EXTENTS_HASH_SIZE,
-                c_ext_t, hash_list, c_ext_id_t, ext_id);
+DEFINE_RHASH_TBL(castle_extents, castle_extents_hash, CASTLE_EXTENTS_HASH_SIZE,
+                c_ext_t, hash_list, c_ext_id_t, ext_id, ref_cnt);
 
 void * castle_rda_extent_init(c_ext_id_t             ext_id, 
                               c_chk_cnt_t            size, 
@@ -185,7 +186,7 @@ static int castle_extent_hash_remove(c_ext_t *ext, void *unused)
 {
     debug("Freeing extent #%llu\n", ext->ext_id);
 
-    list_del(&ext->hash_list);
+    __castle_extents_hash_remove(ext);
     
     if (ext->ext_id == MICRO_EXT_ID || ext->ext_id == META_EXT_ID)
         return 0;
@@ -326,7 +327,7 @@ void __castle_extents_fini(void)
     debug("Finishing castle extents\n");
     castle_extents_hash_iterate(castle_extent_print, NULL);
     /* FIXME: Not safe to do this. Should be fine at end of the module. */
-    castle_extents_hash_iterate_unsafe(castle_extent_hash_flush2disk, NULL);
+    __castle_extents_hash_iterate(castle_extent_hash_flush2disk, NULL);
     castle_extent_hash_flush2disk(NULL, NULL);
     put_c2b(castle_extents_sb_c2b);
     castle_extents_sb_c2b = NULL;
@@ -499,7 +500,7 @@ c_ext_id_t castle_extent_alloc(c_rda_type_t            rda_type,
     }
   
     /* Add extent to hash table */
-    castle_extents_hash_add(ext);
+    castle_extents_rhash_add(ext);
     castle_extent_print(ext, NULL);
 
     return ext->ext_id;
@@ -515,17 +516,41 @@ void castle_extent_free(c_rda_type_t            rda_type,
                         da_id_t                 da_id,
                         c_ext_id_t              ext_id)
 {
-    BUG();
-#if 0
-    c_ext_t *ext = castle_extents_hash_get(ext_id);
-    struct castle_extents_t *castle_extents_sb = NULL;
-    int i,j;
+    c_ext_t                     *ext = castle_extents_rhash_get(ext_id);
+    struct castle_extents_t     *castle_extents_sb = NULL;
+    int                          i, j;
+    uint32_t                     req_space;
+    c_disk_chk_t                *maps_buf = NULL;
+    c_ext_pos_t                  cep;
+    c2_block_t                  *c2b = NULL;
 
+    ext = castle_extents_rhash_get(ext_id);
     if (!ext)
         return;
 
     /* Remove extent from hash table */
+    castle_extents_rhash_put(ext);
     castle_extents_hash_remove(ext);
+    printk("Removed extent %llu from hash\n", ext_id);
+    req_space = (sizeof(c_disk_chk_t) * ext->size * ext->k_factor);
+    maps_buf = vmalloc(req_space);
+    BUG_ON(!maps_buf);
+    cep = ext->maps_cep;
+    for (i=0; i < req_space; i += C_BLK_SIZE)
+    {
+        BUG_ON(cep.offset >= (meta_ext.size * C_CHK_SIZE));
+        c2b = castle_cache_block_get(cep, 1);
+        lock_c2b(c2b);
+        BUG_ON(!c2b_uptodate(c2b));
+        memcpy(((uint8_t *)maps_buf) + i,
+               c2b_buffer(c2b),
+               ((req_space - i) > C_BLK_SIZE)?C_BLK_SIZE:(req_space - i));
+        memset(c2b_buffer(c2b), 0, C_BLK_SIZE);
+        dirty_c2b(c2b);
+        unlock_c2b(c2b);
+        put_c2b(c2b);
+        cep.offset += C_BLK_SIZE;
+    }
 
     /* Free all the physical chunks. Do it in the reverse order, to free chunks in
      * batches */
@@ -582,20 +607,25 @@ void castle_extent_free(c_rda_type_t            rda_type,
         }
     }
 
-    castle_extents_sb   = castle_extents_get_sb();
+    castle_extents_sb = castle_extents_get_sb();
     castle_extents_sb->nr_exts--;
     castle_extents_put_sb(1);
 
-    castle_free(ext->chk_map);
     castle_free(ext);
-#endif
 }
 
 uint32_t castle_extent_kfactor_get(c_ext_id_t ext_id)
 {
-    c_ext_t *ext = castle_extents_hash_get(ext_id);
+    c_ext_t *ext = castle_extents_rhash_get(ext_id);
+    uint32_t ret;
 
-    return ext->k_factor;
+    if (!ext)
+        return 0;
+        
+    ret = ext->k_factor;
+    castle_extents_rhash_put(ext);
+
+    return ret;
 }
 
 static c_disk_chk_t * castle_extent_map_buf_get(c_ext_t             *ext,
@@ -671,9 +701,13 @@ uint32_t castle_extent_map_get(c_ext_id_t             ext_id,
     c_ext_t      *ext;
     c2_block_t   *c2b = NULL;
     c_disk_chk_t *buf;
+    uint32_t      ret;
 
     BUG_ON(ext_id == INVAL_EXT_ID);
-    BUG_ON((ext = castle_extents_hash_get(ext_id)) == NULL);
+    
+    if ((ext = castle_extents_rhash_get(ext_id)) == NULL)
+        return 0;
+
     if ((offset >= ext->size) || ((offset + nr_chunks - 1) >= ext->size))
     {
         printk("BUG in %s\n", __FUNCTION__);
@@ -688,7 +722,10 @@ uint32_t castle_extent_map_get(c_ext_id_t             ext_id,
     memcpy(chk_maps, buf, sizeof(c_disk_chk_t) * nr_chunks * ext->k_factor);
     castle_extent_map_buf_put(ext, c2b);
 
-    return ext->k_factor;
+    ret = ext->k_factor;
+    castle_extents_rhash_put(ext);
+
+    return ret;
 }
 
 
@@ -727,10 +764,10 @@ void castle_extents_load(int first)
     
     castle_extent_micro_maps_set();
     micro_ext.maps_cep = INVAL_EXT_POS;
-    castle_extents_hash_add(&micro_ext);
+    castle_extents_rhash_add(&micro_ext);
     
     meta_ext.maps_cep = (c_ext_pos_t){MICRO_EXT_ID, 0};
-    castle_extents_hash_add(&meta_ext);
+    castle_extents_rhash_add(&meta_ext);
 
     i = 0;
     list_for_each(l, &castle_slaves.slaves)
@@ -801,7 +838,7 @@ void castle_extents_load(int first)
         ext = castle_malloc(sizeof(c_ext_t), GFP_KERNEL);
         BUG_ON(!ext);
         memcpy(ext, &extents[j], sizeof(c_ext_t));
-        castle_extents_hash_add(ext);
+        castle_extents_rhash_add(ext);
         castle_extent_print(ext, NULL);
         j = (j + 1) % exts_per_pg;
         if (!j)
@@ -857,7 +894,7 @@ c_ext_id_t castle_extent_sup_ext_init(struct castle_slave *cs)
         }
     }
     ext->maps_cep = INVAL_EXT_POS;
-    castle_extents_hash_add(ext);
+    castle_extents_rhash_add(ext);
     cs->sup_ext = ext->ext_id;
 
     debug("Created super extent %llu for slave %u\n", ext->ext_id, cs->uuid);

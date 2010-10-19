@@ -1909,6 +1909,8 @@ void castle_ct_put(struct castle_component_tree *ct, int write)
     castle_ct_hash_remove(ct);
     /* TODO: FREE */
     printk("Should release freespace occupied by ct=%d\n", ct->seq);
+    castle_extent_free(DEFAULT, ct->da, ct->tree_ext_fs.ext_id);
+    castle_extent_free(DEFAULT, ct->da, ct->data_ext_fs.ext_id);
     /* Poison ct (note this will be repoisoned by kfree on kernel debug build. */
     memset(ct, 0xde, sizeof(struct castle_component_tree));
     castle_free(ct);
