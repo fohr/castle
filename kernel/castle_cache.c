@@ -254,6 +254,18 @@ static void c2b_multi_io_end(struct bio *bio, int err)
     /* In debugging mode force the end_io to complete in atomic */
     local_irq_save(flags);
 #endif
+
+    if (c2b_zombie(c2b))
+    {
+        BUG_ON(!err || atomic_read(&c2b->remaining));
+        c2b->end_io(c2b, 1);
+#ifdef CASTLE_DEBUG    
+        local_irq_restore(flags);
+#endif
+        castle_free(bio_info);
+        castle_free(bio);
+        return 0;
+    }
     
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,18)
     if (bio->bi_size)
@@ -425,16 +437,20 @@ int submit_c2b_rda(int rw, c2_block_t *c2b)
             uint32_t first_pg, last_pg;
 
             chk = read_slave_get(cep.ext_id, CHUNK(cur_offset));
+#if 0
             if (!SUPER_EXTENT(cep.ext_id) && !chk_valid(chk))
             {
                 printk("Bad chunk: "disk_chk_fmt", cep: "cep_fmt_str_nl,
                         disk_chk2str(chk), cep2str(cep));
                 BUG();
             }
+#endif
             if (DISK_CHK_INVAL(chk))
             {
                 atomic_sub(c2b->nr_pages - rem_pages, &c2b->remaining);
-                return -ENODEV;
+                printk("Bad chunk: "disk_chk_fmt", cep: "cep_fmt_str_nl,
+                        disk_chk2str(chk), cep2str(cep));
+                BUG();
             }
 #if 0
             printk("READ "cep_fmt_str"-"disk_chk_fmt_nl, cep2str(c2b->cep),
@@ -475,6 +491,7 @@ int submit_c2b_rda(int rw, c2_block_t *c2b)
     {
         uint32_t            pgs_in_chk, first_pg, last_pg;
         struct list_head   *page;
+        int                 ret;
         
         first_pg = 0;
         last_pg  = BLKS_PER_CHK - 1;
@@ -484,10 +501,25 @@ int submit_c2b_rda(int rw, c2_block_t *c2b)
             last_pg  = BLK_IN_CHK(cep.offset + (c2b->nr_pages * C_BLK_SIZE) - 1);
         pgs_in_chk = last_pg + 1 - first_pg;
             
-        BUG_ON(castle_extent_map_get(cep.ext_id,
+        BUG_ON((ret = castle_extent_map_get(cep.ext_id,
                               CHUNK(cep.offset)+i,
                               1,
-                              chunks) >= MAX_NR_SLAVES);
+                              chunks)) >= MAX_NR_SLAVES);
+        if (ret == 0)
+        {
+            struct bio *bio = castle_malloc(sizeof(struct bio), GFP_KERNEL);
+            struct bio_info *bio_info = castle_malloc(sizeof(struct bio_info),
+                                                GFP_KERNEL);
+            BUG_ON(!bio || !bio_info);
+            bio->bi_private = bio_info;
+            bio_info->c2b   = c2b;
+
+            set_c2b_zombie(c2b);
+            atomic_sub((c2b->nr_pages * k_factor), &c2b->remaining);
+            c2b_multi_io_end(bio, 0, 1);
+
+            return 0;
+        }
 
         page = cur_page;
         for (j=0; j<k_factor; j++)
@@ -523,6 +555,7 @@ int submit_c2b(int rw, c2_block_t *c2b)
 	BUG_ON(!c2b_locked(c2b));
 	BUG_ON(!c2b->end_io);
     BUG_ON(EXT_POS_INVAL(c2b->cep));
+    BUG_ON(c2b_zombie(c2b));
     
     if (rw == READ)
         atomic_inc(&castle_cache_read_stats);
@@ -1061,6 +1094,9 @@ next_batch:
             c2b = list_entry(l, c2_block_t, dirty_or_clean);
             if(!trylock_c2b_read(c2b))
                 continue;
+            /* In current design, it is possible to try to flush same c2b twice.
+             * We need a bit(C2B_flushing) to know whether a page is already in
+             * flush process. */
             if (test_set_c2b_flushing(c2b))
             {
                 unlock_c2b_read(c2b);

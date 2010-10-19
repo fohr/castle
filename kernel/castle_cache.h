@@ -5,6 +5,7 @@ enum c2b_state_bits {
     C2B_uptodate,
     C2B_dirty,
     C2B_flushing,
+    C2B_zombie,  /* Pages of deleted extents. */
 };
 
 #define INIT_C2B_BITS (0)
@@ -58,6 +59,8 @@ CACHE_FNS(dirty, dirty)
 TAS_CACHE_FNS(dirty, dirty)
 CACHE_FNS(flushing, flushing)
 TAS_CACHE_FNS(flushing, flushing)
+CACHE_FNS(zombie, zombie)
+TAS_CACHE_FNS(zombie, zombie)
 
 void __lock_c2b(c2_block_t *c2b, int write_mode);
 int __trylock_c2b(c2_block_t *c2b, int write_mode);
