@@ -1757,7 +1757,6 @@ static void castle_da_merge_schedule(struct castle_double_array *da,
                   atomic64_read(&in_tree2->data_ext_fs.next_free_byte));
     size = MASK_CHK_OFFSET(size + C_CHK_SIZE);
     BUG_ON(castle_ext_fs_init(&merge->data_ext_fs, da->id, size) < 0);
-    // FIXME: Free the extents used by old trees.
 
     CASTLE_INIT_WORK(&merge->work, castle_da_merge_do);
     queue_work(castle_merge_wq, &merge->work);
