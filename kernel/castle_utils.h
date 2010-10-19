@@ -73,7 +73,7 @@ static inline _struct* _prefix##_hash_get(_key_t key)                           
     return v;                                                                        \
 }                                                                                    \
                                                                                      \
-static inline void _prefix##_hash_iterate_unsafe(int (*fn)(_struct*, void*), void *arg)     \
+static inline void __##_prefix##_hash_iterate(int (*fn)(_struct*, void*), void *arg) \
 {                                                                                    \
     struct list_head *l, *t;                                                         \
     _struct *v;                                                                      \
@@ -93,20 +93,8 @@ out:                                                                            
                                                                                      \
 static inline void _prefix##_hash_iterate(int (*fn)(_struct*, void*), void *arg)     \
 {                                                                                    \
-    struct list_head *l, *t;                                                         \
-    _struct *v;                                                                      \
-    int i;                                                                           \
-                                                                                     \
     spin_lock_irq(&_prefix##_hash_lock);                                             \
-    for(i=0; i<_tab_size; i++)                                                       \
-    {                                                                                \
-        list_for_each_safe(l, t, &_tab[i])                                           \
-        {                                                                            \
-            v = list_entry(l, _struct, hash_list);                                   \
-            if(fn(v, arg)) goto out;                                                 \
-        }                                                                            \
-    }                                                                                \
-out:                                                                                 \
+    __##_prefix##_hash_iterate(fn, arg);                                             \
     spin_unlock_irq(&_prefix##_hash_lock);                                           \
 }                                                                                    \
                                                                                      \
@@ -121,6 +109,59 @@ static void inline _prefix##_hash_init(void)                                    
     for(i=0; i<_tab_size; i++)                                                       \
         INIT_LIST_HEAD(&_tab[i]);                                                    \
 }
+
+/* Reference Hash Table with reference count on each structure */
+#define DEFINE_RHASH_TBL(_prefix, _tab, _tab_size, _struct, _list_mbr, _key_t, _key, _ref_mbr) \
+                                                                                     \
+DEFINE_HASH_TBL(_prefix, _tab, _tab_size, _struct, _list_mbr, _key_t, _key)          \
+static DECLARE_WAIT_QUEUE_HEAD(_prefix##_wait_q);                                    \
+                                                                                     \
+static inline void _prefix##_rhash_add(_struct *v)                                   \
+{                                                                                    \
+    int idx = _prefix##_hash_idx(v->_key);                                           \
+    unsigned long flags;                                                             \
+                                                                                     \
+    spin_lock_irqsave(&_prefix##_hash_lock, flags);                                  \
+    atomic_set(&v->_ref_mbr, 0);                                                     \
+    list_add(&v->_list_mbr, &_tab[idx]);                                             \
+    spin_unlock_irqrestore(&_prefix##_hash_lock, flags);                             \
+}                                                                                    \
+                                                                                     \
+static inline _struct* _prefix##_rhash_get(_key_t key)                               \
+{                                                                                    \
+    _struct *v;                                                                      \
+    unsigned long flags;                                                             \
+                                                                                     \
+    spin_lock_irqsave(&_prefix##_hash_lock, flags);                                  \
+    v = __##_prefix##_hash_get(key);                                                 \
+    if (v)                                                                           \
+        atomic_inc(&v->_ref_mbr);                                                    \
+    spin_unlock_irqrestore(&_prefix##_hash_lock, flags);                             \
+                                                                                     \
+    return v;                                                                        \
+}                                                                                    \
+                                                                                     \
+static inline void _prefix##_rhash_put(_struct *v)                                   \
+{                                                                                    \
+    if (v)                                                                           \
+    {                                                                                \
+        atomic_dec(&v->_ref_mbr);                                                    \
+        wake_up(&_prefix##_wait_q);                                                  \
+    }                                                                                \
+}                                                                                    \
+                                                                                     \
+static inline void _prefix##_rhash_remove(_struct *v)                                \
+{                                                                                    \
+    unsigned long flags;                                                             \
+                                                                                     \
+    spin_lock_irqsave(&_prefix##_hash_lock, flags);                                  \
+    printk("Waiting to delete ext: %llu|ref:%u\n", v->ext_id,                        \
+                                            atomic_read(&v->_ref_mbr));              \
+    wait_event(_prefix##_wait_q, (atomic_read(&v->_ref_mbr) == 0));                  \
+    list_del(&v->_list_mbr);                                                         \
+    spin_unlock_irqrestore(&_prefix##_hash_lock, flags);                             \
+}                                                                                    \
+                                                                                     \
 
 static inline uint32_t BUF_L_GET(const char *buf)
 {
