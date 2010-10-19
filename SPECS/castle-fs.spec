@@ -9,6 +9,8 @@
 %define kerneldir %{_usrsrc}/kernels/%{kverrel}-%{_target_cpu}
 %define krel	%(echo %{kverrel} | sed -e 's/-/_/g')
 
+%define groupname castle
+
 Name:           castle-fs
 Version:        %{buildver}
 Release:        %{buildrev}
@@ -22,6 +24,8 @@ BuildRoot:      %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
 
 Provides: castle-fs-kmod-common = %{version}
 Provides:       %{name}-%{changesetver}
+
+Requires(pre): shadow-utils
 
 %description
 
@@ -60,6 +64,9 @@ make -C "%{kerneldir}" modules_install M=`pwd`/kernel
 
 %clean
 rm -rf %{buildroot}
+
+%pre
+getent group %{groupname} >/dev/null || groupadd -r %{groupname}
 
 %files
 %defattr(-,root,root,-)
