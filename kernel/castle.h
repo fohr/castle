@@ -770,6 +770,12 @@ typedef struct castle_rq_enumerator {
     int                           in_range;
 } c_rq_enum_t;
 
+struct castle_merged_iterator;
+struct component_iterator;
+
+typedef void (*castle_merged_iterator_each_skip) (struct castle_merged_iterator *,
+                                                  struct component_iterator *);
+
 typedef struct castle_merged_iterator {
     int nr_iters;
     struct castle_btree_type *btree;
@@ -786,6 +792,7 @@ typedef struct castle_merged_iterator {
             c_val_tup_t              cvt;
         } cached_entry;
     } *iterators;
+    castle_merged_iterator_each_skip each_skip;
 } c_merged_iter_t;
 
 typedef struct castle_da_rq_iterator {

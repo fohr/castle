@@ -512,9 +512,7 @@ __hell:
     return INVAL_EXT_ID;
 }
 
-void castle_extent_free(c_rda_type_t            rda_type,
-                        da_id_t                 da_id,
-                        c_ext_id_t              ext_id)
+void castle_extent_free(c_ext_id_t ext_id)
 {
     c_ext_t                     *ext = castle_extents_rhash_get(ext_id);
     struct castle_extents_t     *castle_extents_sb = NULL;
@@ -582,7 +580,7 @@ void castle_extent_free(c_rda_type_t            rda_type,
                 }
                 else
                 {
-                    castle_freespace_slave_chunk_free(cs, ext->chk_buf[id], da_id);
+                    castle_freespace_slave_chunk_free(cs, ext->chk_buf[id]);
                     ext->chk_buf[id].first_chk = maps_buf[MAP_IDX(ext, i, j)].offset;
                     ext->chk_buf[id].count = 1;
                 }
@@ -603,7 +601,7 @@ void castle_extent_free(c_rda_type_t            rda_type,
             
             debug("Freeing %llu chunks from %u\n",
                                 ext->chk_buf[i].count, cs->uuid);
-            castle_freespace_slave_chunk_free(cs, ext->chk_buf[i], da_id);
+            castle_freespace_slave_chunk_free(cs, ext->chk_buf[i]);
         }
     }
 

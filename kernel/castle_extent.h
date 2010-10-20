@@ -74,9 +74,7 @@ castle_extent_alloc(c_rda_type_t            rda_type,
                     c_chk_cnt_t             chk_cnt);
 
 void 
-castle_extent_free(c_rda_type_t             rda_type,
-                   da_id_t                  da_id,
-                   c_ext_id_t               ext_id);
+castle_extent_free(c_ext_id_t               ext_id);
 
 uint32_t
 castle_extent_kfactor_get(c_ext_id_t ext_id);

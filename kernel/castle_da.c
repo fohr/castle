@@ -672,6 +672,8 @@ static void castle_ct_merged_iter_next(c_merged_iter_t *iter,
         if(kv_cmp == 0)
         {
             debug("Duplicate entry found. Removing.\n");
+            if (iter->each_skip)
+                iter->each_skip(iter, comp_iter);
             castle_ct_merged_iter_consume(iter, comp_iter);
         }
     }
@@ -725,7 +727,10 @@ static void castle_ct_merged_iter_skip(c_merged_iter_t *iter,
         /* Flush cached entry if it was to small (this doesn't inspect the cached entry
            any more). */
         if(skip_cached)
+        {
+            BUG_ON(iter->each_skip);
             castle_ct_merged_iter_consume(iter, comp_iter);
+        }
         else
         /* Otherwise, if we don't have anything cached, check if the iterator still
            has something to return (this may have changed after the skip */
@@ -742,7 +747,8 @@ static void castle_ct_merged_iter_cancel(c_merged_iter_t *iter)
 /* Constructs a merged iterator out of a set of iterators. */
 static void castle_ct_merged_iter_init(c_merged_iter_t *iter,
                                        void **iterators,
-                                       struct castle_iterator_type **iterator_types)
+                                       struct castle_iterator_type **iterator_types,
+                                       castle_merged_iterator_each_skip each_skip)
 {
     int i;
 
@@ -760,6 +766,7 @@ static void castle_ct_merged_iter_init(c_merged_iter_t *iter,
         iter->err = -ENOMEM;
         return;
     }
+    iter->each_skip = each_skip;
     /* Memory allocated for the iterators array, init the state. 
        Assume that all iterators have something in them, and let the has_next_check() 
        handle the opposite. */
@@ -829,7 +836,8 @@ static USED void castle_ct_sort(struct castle_component_tree *ct1,
     iter_types[1] = &castle_ct_modlist_iter;
     castle_ct_merged_iter_init(&test_miter,
                                iters,
-                               iter_types);
+                               iter_types, 
+                               NULL);
     debug("=============== SORTED ================\n");
     while(castle_ct_merged_iter_has_next(&test_miter))
     {
@@ -962,7 +970,8 @@ again:
     iter->merged_iter.btree    = iter->btree;
     castle_ct_merged_iter_init(&iter->merged_iter,
                                 iters,
-                                iter_types);
+                                iter_types,
+                                NULL);
     castle_free(iters);
     castle_free(iter_types);
 }
@@ -1145,6 +1154,15 @@ static struct castle_iterator_type* castle_da_iter_type_get(struct castle_compon
         return &castle_ct_immut_iter;
 }
 
+static void castle_da_each_skip(c_merged_iter_t *iter,  
+                                struct component_iterator *comp_iter)
+{
+    BUG_ON(!comp_iter->cached);
+
+    if (CVT_LARGE_OBJECT(comp_iter->cached_entry.cvt))
+        castle_extent_free(comp_iter->cached_entry.cvt.cep.ext_id);
+}
+
 static int castle_da_iterators_create(struct castle_da_merge *merge)
 {
     struct castle_btree_type *btree;
@@ -1191,7 +1209,8 @@ static int castle_da_iterators_create(struct castle_da_merge *merge)
     iter_types[1] = castle_da_iter_type_get(merge->in_tree2); 
     castle_ct_merged_iter_init(merge->merged_iter,
                                iters,
-                               iter_types);
+                               iter_types,
+                               castle_da_each_skip);
     ret = merge->merged_iter->err;
     debug("Merged iterator inited with ret=%d.\n", ret);
     if(ret)
@@ -1908,8 +1927,8 @@ void castle_ct_put(struct castle_component_tree *ct, int write)
     castle_ct_hash_remove(ct);
     /* TODO: FREE */
     printk("Should release freespace occupied by ct=%d\n", ct->seq);
-    castle_extent_free(DEFAULT, ct->da, ct->tree_ext_fs.ext_id);
-    castle_extent_free(DEFAULT, ct->da, ct->data_ext_fs.ext_id);
+    castle_extent_free(ct->tree_ext_fs.ext_id);
+    castle_extent_free(ct->data_ext_fs.ext_id);
     /* Poison ct (note this will be repoisoned by kfree on kernel debug build. */
     memset(ct, 0xde, sizeof(struct castle_component_tree));
     castle_free(ct);

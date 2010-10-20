@@ -35,8 +35,7 @@ c_chk_seq_t castle_freespace_slave_chunks_alloc(struct castle_slave *cs,
                                                 c_chk_cnt_t          count);
 
 void castle_freespace_slave_chunk_free(struct castle_slave  *cs, 
-                                       c_chk_seq_t           chk_seq, 
-                                       da_id_t               da_id);
+                                       c_chk_seq_t           chk_seq);
 
 void castle_freespace_print(struct castle_slave *cs);
 #endif // __DEV_FREESPACE_H__
