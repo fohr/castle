@@ -324,6 +324,9 @@ static int castle_extent_print(c_ext_t *ext, void *unused)
 
 void __castle_extents_fini(void)
 {
+    if (!extent_init_done)
+        return;
+
     debug("Finishing castle extents\n");
     castle_extents_hash_iterate(castle_extent_print, NULL);
     /* FIXME: Not safe to do this. Should be fine at end of the module. */
@@ -331,13 +334,13 @@ void __castle_extents_fini(void)
     castle_extent_hash_flush2disk(NULL, NULL);
     put_c2b(castle_extents_sb_c2b);
     castle_extents_sb_c2b = NULL;
+    castle_extent_micro_maps_destroy();
 }
 
 void castle_extents_fini()
 {
     /* Make sure cache flushed all dirty pages */
     castle_extents_hash_iterate(castle_extent_hash_remove, NULL);
-    castle_extent_micro_maps_destroy();
     castle_free(castle_extents_hash);
 }
 
