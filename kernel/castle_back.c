@@ -227,6 +227,8 @@ static inline int __castle_back_buffer_exists(struct castle_back_conn *conn,
     struct castle_back_buffer *buffer;
     struct rb_node *node;
 
+    BUG_ON(!spin_is_locked(&conn->buffers_lock));
+
     node = conn->buffers_rb.rb_node;
 
     while (node)
@@ -236,7 +238,7 @@ static inline int __castle_back_buffer_exists(struct castle_back_conn *conn,
         //debug("Considering buffer (%lx, %ld, %p)\n", buffer->user_addr, 
         //    buffer->size, buffer->buffer);
 
-        if (end < buffer->user_addr)
+        if (end <= buffer->user_addr)
             node = node->rb_left;
         else if (start >= buffer->user_addr + buffer->size)
             node = node->rb_right;
@@ -254,7 +256,9 @@ static inline struct castle_back_buffer *__castle_back_buffer_get(struct castle_
 {
     struct rb_node *node;
     struct castle_back_buffer *buffer;
-    
+
+    BUG_ON(!spin_is_locked(&conn->buffers_lock));
+
     node = conn->buffers_rb.rb_node;
 
     while (node)
@@ -323,9 +327,12 @@ static inline struct castle_back_buffer
                                  unsigned long user_addr,
                                  struct rb_node *node)
 {
-    struct rb_node **p = &conn->buffers_rb.rb_node;
+    struct rb_node **p;
     struct rb_node *parent = NULL;
     struct castle_back_buffer *buffer;
+
+    BUG_ON(!spin_is_locked(&conn->buffers_lock));
+    p = &conn->buffers_rb.rb_node;
 
     while (*p)
     {
@@ -479,6 +486,7 @@ static void castle_back_vm_close(struct vm_area_struct *vma)
     struct castle_back_buffer *buf = NULL;
     
     debug("castle_back_vm_close vm_start=%lx vm_end=%lx\n", vma->vm_start, vma->vm_end);
+    debug("castle_back_vm_close mm->mmap_sem.activity=%d\n", vma->vm_mm->mmap_sem.activity);
     
     if (vma->vm_file != NULL)
         conn = vma->vm_file->private_data;
@@ -497,7 +505,7 @@ static void castle_back_vm_close(struct vm_area_struct *vma)
         return;
     }
     
-    debug("castle_back_vm_close buf=%p, size=%d, vm_end=%lx, vm_start=%lx\n", 
+    debug("castle_back_vm_close buf=%p, size=%d, vm_start=%lx, vm_end=%lx\n",
         buf, buf->size, vma->vm_start, vma->vm_end);
     
     /* Double put - This is the reverse of the ref_count=1 in buffer_map */
