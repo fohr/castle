@@ -617,7 +617,7 @@ static int castle_back_key_copy_get(struct castle_back_conn *conn, c_vl_okey_t *
         
         if (dim_i < buf->user_addr || dim_i > buf_end)
         {
-            error("Bad pointer %p (out of buffer, start=%lu, length=%u)\n", 
+            error("Bad pointer %p (out of buffer, start=%lx, length=%u)\n", 
                 key->dims[i], buf->user_addr, buf->size);
             err = -EINVAL;
             goto err2;
