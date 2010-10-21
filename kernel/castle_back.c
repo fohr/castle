@@ -1086,6 +1086,59 @@ err0:
     castle_back_reply(op, err, 0, 0);
 }
 
+static size_t castle_back_save_key_value_to_list(struct castle_key_value_list *kv_list,
+        c_vl_okey_t *key, c_val_tup_t *val,
+        collection_id_t collection_id,
+        struct castle_back_buffer *back_buf,
+        size_t buf_len, /* space left in the buffer */
+        int save_val /* should values be saved too? */)
+{
+    size_t buf_used, key_len, val_len;
+
+    buf_used = sizeof(struct castle_key_value_list);
+    if (buf_used >= buf_len)
+    {
+        buf_used = 0;
+        goto err0;
+    }
+
+    kv_list->key = (c_vl_okey_t *)castle_back_kernel_to_user(back_buf,
+            (unsigned long)kv_list + buf_used);
+
+    castle_back_key_kernel_to_user(key, back_buf, (unsigned long)kv_list->key,
+            buf_len - buf_used, &key_len);
+    if (key_len == 0)
+    {
+        buf_used = 0;
+        goto err1;
+    }
+    buf_used += key_len;
+
+    if (!save_val)
+        kv_list->val = NULL;
+    else
+    {
+        kv_list->val = (struct castle_iter_val *)((unsigned long)kv_list->key + key_len);
+        castle_back_val_kernel_to_user(val, back_buf,
+            (unsigned long)kv_list->val, buf_len - buf_used, &val_len, collection_id);
+
+        if (val_len == 0)
+        {
+            buf_used = 0;
+            goto err2;
+        }
+        buf_used += val_len;
+    }
+
+    return buf_used;
+
+err2: kv_list->val = NULL;
+err1: kv_list->key = NULL;
+err0:
+
+    return buf_used;
+}
+
 static void castle_back_iter_next(struct work_struct *work)
 {
     int err;
@@ -1096,13 +1149,9 @@ static void castle_back_iter_next(struct work_struct *work)
     struct castle_key_value_list *kv_list_prev;
     struct castle_key_value_list *kv_list_cur;
     castle_object_iterator_t *iterator;
-    size_t buf_used;
-    size_t buf_used_up_to_last;
-    size_t buf_len;
+    size_t buf_used, buf_used_up_to_last, cur_len, buf_len;
     c_vl_okey_t *key;
     c_val_tup_t  val;
-    size_t key_len;
-    size_t val_len;
 
     debug_iter("castle_back_iter_next\n");
 
@@ -1170,43 +1219,19 @@ static void castle_back_iter_next(struct work_struct *work)
         {
             debug_iter("iter_next found saved key, adding to buffer\n");
 
-            buf_used += sizeof(struct castle_key_value_list);
-            if (buf_used >= buf_len)
+            buf_used = castle_back_save_key_value_to_list(kv_list_head,
+                    stateful_op->iterator.saved_key,
+                    &stateful_op->iterator.saved_val,
+                    stateful_op->iterator.collection_id,
+                    op->buf,
+                    buf_len,
+                    !(stateful_op->iterator.flags & CASTLE_RING_ITER_FLAG_NO_VALUES));
+
+            if (buf_used == 0)
             {
                 error("iterator buffer too small\n");
                 err = -EINVAL;
                 goto err2;
-            }
-
-            kv_list_cur->key = (c_vl_okey_t *) castle_back_kernel_to_user(op->buf, 
-                (unsigned long)kv_list_head + buf_used);
-            castle_back_key_kernel_to_user(stateful_op->iterator.saved_key, op->buf, 
-                (unsigned long)kv_list_cur->key, buf_len - buf_used, &key_len);
-            /* we should be able to fit the key in by assumption of sizes */
-            buf_used += key_len;
-            if (key_len == 0)
-            {
-                error("iterator buffer too small\n");
-                err = -EINVAL;
-                goto err2;
-            }
-
-            if (stateful_op->iterator.flags & CASTLE_RING_ITER_FLAG_NO_VALUES)
-                kv_list_cur->val = NULL;
-            else
-            {
-                kv_list_cur->val = (struct castle_iter_val *)
-                    ((unsigned long)kv_list_cur->key + key_len);
-                castle_back_val_kernel_to_user(&stateful_op->iterator.saved_val, op->buf, 
-                    (unsigned long)kv_list_cur->val, buf_len - buf_used, &val_len,
-                    stateful_op->iterator.collection_id);
-                buf_used += val_len;
-                if (val_len == 0)
-                {
-                    error("iterator buffer too small\n");
-                    err = -EINVAL;
-                    goto err2;
-                }
             }
 
             castle_object_okey_free(stateful_op->iterator.saved_key);
@@ -1224,10 +1249,6 @@ static void castle_back_iter_next(struct work_struct *work)
 
         while (1)
         {
-            buf_used += sizeof(struct castle_key_value_list);
-            if (buf_used >= buf_len)
-                break;
-
             err = castle_object_iter_next(iterator, &key, &val);
             if (err)
                 goto err2;
@@ -1236,26 +1257,18 @@ static void castle_back_iter_next(struct work_struct *work)
             if (key == NULL)
                 break;
 
-            kv_list_cur->key = (c_vl_okey_t *) castle_back_kernel_to_user(op->buf, 
-                (unsigned long)kv_list_head + buf_used);
-            castle_back_key_kernel_to_user(key, op->buf, (unsigned long)kv_list_cur->key, 
-                buf_len - buf_used, &key_len);
-            if (key_len == 0)
-                break;
-            buf_used += key_len;
+            cur_len = castle_back_save_key_value_to_list(kv_list_cur,
+                    key,
+                    &val,
+                    stateful_op->iterator.collection_id,
+                    op->buf,
+                    buf_len - buf_used,
+                    !(stateful_op->iterator.flags & CASTLE_RING_ITER_FLAG_NO_VALUES));
 
-            if (stateful_op->iterator.flags & CASTLE_RING_ITER_FLAG_NO_VALUES)
-                kv_list_cur->val = NULL;
-            else
-            {
-                kv_list_cur->val = (struct castle_iter_val *)
-                    ((unsigned long)kv_list_cur->key + key_len);
-                castle_back_val_kernel_to_user(&val, op->buf, (unsigned long)kv_list_cur->val, 
-                    buf_len - buf_used, &val_len, stateful_op->iterator.collection_id);
-                if (val_len == 0)
-                    break;
-                buf_used += val_len;
-            }
+            if (cur_len == 0)
+                break;
+
+            buf_used += cur_len;
 
             castle_object_okey_free(key);
             /* don't free the value; it is freed when purged from the cache */
