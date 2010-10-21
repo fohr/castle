@@ -1,0 +1,9 @@
+#!/bin/bash
+
+# This is a temporary measure until we have mkcastlefs working - we store
+# information about which disks to claim for the fs, outside the fs
+
+# TODO: get rid of /etc/acunu/disks, and replace this script with a
+# tool which scans all the disks and outputs the right data
+
+cat /etc/acunu/disks
