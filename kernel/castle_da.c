@@ -14,9 +14,11 @@
 #ifndef DEBUG
 #define debug(_f, ...)            ((void)0)
 #define debug_verbose(_f, ...)    ((void)0)
+#define merg_itr_dbg(_f, ...)      ((void)0)
 #else
 #define debug(_f, _a...)          (printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
 #define debug_verbose(_f, ...)    ((void)0)
+#define merg_itr_dbg(_f, _a...)     (printk(_f, ##_a))
 //#define debug_verbose(_f, _a...)  (printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
 #endif
 
@@ -306,9 +308,11 @@ static void castle_ct_immut_iter_init(c_immut_iter_t *iter)
 }
 
 struct castle_iterator_type castle_ct_immut_iter = {
-    .has_next = (castle_iterator_has_next_t)castle_ct_immut_iter_has_next,
-    .next     = (castle_iterator_next_t)    castle_ct_immut_iter_next,
-    .skip     = NULL,
+    .register_cb = NULL,
+    .prep_next   = NULL,
+    .has_next    = (castle_iterator_has_next_t)castle_ct_immut_iter_has_next,
+    .next        = (castle_iterator_next_t)    castle_ct_immut_iter_next,
+    .skip        = NULL,
 };
 
 typedef struct castle_modlist_iterator {
@@ -588,33 +592,94 @@ static void castle_ct_modlist_iter_init(c_modlist_iter_t *iter)
 }
 
 struct castle_iterator_type castle_ct_modlist_iter = {
-    .has_next = (castle_iterator_has_next_t)castle_ct_modlist_iter_has_next,
-    .next     = (castle_iterator_next_t)    castle_ct_modlist_iter_next,
-    .skip     = NULL,
+    .register_cb = NULL,
+    .prep_next   = NULL,
+    .has_next    = (castle_iterator_has_next_t)castle_ct_modlist_iter_has_next,
+    .next        = (castle_iterator_next_t)    castle_ct_modlist_iter_next,
+    .skip        = NULL,
 };
 
-static inline void castle_ct_merged_iter_has_next_check(c_merged_iter_t *iter,
-                                                        struct component_iterator *comp_iter)
+static int _castle_ct_merged_iter_prep_next(c_merged_iter_t *iter,
+                                            int sync_call)
 {
-    /* Should not be called if we've got something cached, or the iterator has completed */
-    BUG_ON(comp_iter->cached || comp_iter->completed);
-    /* If the iterator doesn't have more items, set it completed, and decrement non_empty_cnt. */ 
-    if(!comp_iter->iterator_type->has_next(comp_iter->iterator))
+    int i;
+    struct component_iterator *comp_iter;
+
+    merg_itr_dbg("No of comp_iters: %u\n", iter->nr_iters);
+    for(i=0; i<iter->nr_iters; i++)
     {
-        comp_iter->completed = 1;
-        iter->non_empty_cnt--;
-        debug("A component iterator run out of stuff, we are left with %d iterators.\n",
-                iter->non_empty_cnt);
+        comp_iter = iter->iterators + i; 
+
+        merg_itr_dbg("%s:%p:%d\n", __FUNCTION__, iter, i);
+        /* Replenish the cache */
+        if(!comp_iter->completed && !comp_iter->cached)
+        {
+            debug("Reading next entry for iterator: %d.\n", i);
+            if (!sync_call &&
+                !comp_iter->iterator_type->prep_next(comp_iter->iterator)) {
+                merg_itr_dbg("%s:%p:%p:%d - schedule\n", __FUNCTION__, iter, comp_iter->iterator, i);
+                return 0;
+            }
+            //merg_itr_dbg("Calling has_next on %p\n", comp_iter->iterator);
+            if (comp_iter->iterator_type->has_next(comp_iter->iterator))
+            {
+                //merg_itr_dbg("Calling next on %p\n", comp_iter->iterator);
+                comp_iter->iterator_type->next(comp_iter->iterator,
+                                               &comp_iter->cached_entry.k,
+                                               &comp_iter->cached_entry.v,
+                                               &comp_iter->cached_entry.cvt);
+                comp_iter->cached = 1;
+                merg_itr_dbg("%s:%p:%d - cached\n", __FUNCTION__, iter, i);
+            }
+            else
+            {
+                merg_itr_dbg("%s:%p:%d - nothing left\n", __FUNCTION__, iter, i);
+                comp_iter->completed = 1;
+                iter->non_empty_cnt--;
+                debug("A component iterator run out of stuff, we are left with"
+                      "%d iterators.\n",
+                      iter->non_empty_cnt);
+            }
+        }
+    }
+
+    return 1;
+}
+
+static void castle_ct_merged_iter_register_cb(c_merged_iter_t *iter,
+                                              castle_iterator_end_io_t cb,
+                                              void *data)
+{
+    iter->end_io  = cb;
+    iter->private = data;
+}
+
+static int castle_ct_merged_iter_prep_next(c_merged_iter_t *iter)
+{
+    merg_itr_dbg("%s:%p\n", __FUNCTION__, iter);
+    return _castle_ct_merged_iter_prep_next(iter, 0);
+}
+
+static void castle_ct_merged_iter_end_io(void *rq_enum_iter, int err)
+{
+    c_merged_iter_t *iter = ((c_rq_enum_t *) rq_enum_iter)->private;
+
+    merg_itr_dbg("%s:%p\n", __FUNCTION__, iter);
+    if (castle_ct_merged_iter_prep_next(iter))
+    {
+        merg_itr_dbg("%s:%p - Done\n", __FUNCTION__, iter);
+        iter->end_io(iter, 0);
+        return;
     }
 }
 
-static void castle_ct_merged_iter_consume(c_merged_iter_t *iter,
-                                          struct component_iterator *comp_iter)
+static int castle_ct_merged_iter_has_next(c_merged_iter_t *iter)
 {
-    BUG_ON(!comp_iter->cached);
-    /* This will effectively consume the cached entry */
-    comp_iter->cached = 0;
-    castle_ct_merged_iter_has_next_check(iter, comp_iter);
+    merg_itr_dbg("%s:%p\n", __FUNCTION__, iter);
+    BUG_ON(!_castle_ct_merged_iter_prep_next(iter, 1));
+    debug("Merged iterator has next, err=%d, non_empty_cnt=%d\n", 
+            iter->err, iter->non_empty_cnt);
+    return (!iter->err && (iter->non_empty_cnt > 0));
 }
 
 static void castle_ct_merged_iter_next(c_merged_iter_t *iter,
@@ -628,6 +693,7 @@ static void castle_ct_merged_iter_next(c_merged_iter_t *iter,
     version_t smallest_v;
     c_val_tup_t smallest_cvt;
 
+    merg_itr_dbg("%s:%p\n", __FUNCTION__, iter);
     debug("Merged iterator next.\n");
     /* When next is called, we are free to call next on any of the 
        component iterators we do not have an entry cached for */
@@ -636,16 +702,8 @@ static void castle_ct_merged_iter_next(c_merged_iter_t *iter,
         comp_iter = iter->iterators + i; 
 
         /* Replenish the cache */
-        if(!comp_iter->completed && !comp_iter->cached)
-        {
-            debug("Reading next entry for iterator: %d.\n", i);
-            comp_iter->iterator_type->next( comp_iter->iterator,
-                                           &comp_iter->cached_entry.k,
-                                           &comp_iter->cached_entry.v,
-                                           &comp_iter->cached_entry.cvt);
-            comp_iter->cached = 1;
-        }
-
+        BUG_ON(!comp_iter->completed && !comp_iter->cached);
+        
         /* If there is no cached entry by here, the compenennt iterator must be finished */ 
         if(!comp_iter->cached)
         {
@@ -672,7 +730,7 @@ static void castle_ct_merged_iter_next(c_merged_iter_t *iter,
         if(kv_cmp == 0)
         {
             debug("Duplicate entry found. Removing.\n");
-            castle_ct_merged_iter_consume(iter, comp_iter);
+            comp_iter->cached = 0;
         }
     }
 
@@ -682,18 +740,11 @@ static void castle_ct_merged_iter_next(c_merged_iter_t *iter,
     debug("Smallest entry is from iterator: %d.\n", smallest_idx);
     /* The cache for smallest_idx iterator cached entry should be removed */ 
     comp_iter = iter->iterators + smallest_idx;
-    castle_ct_merged_iter_consume(iter, comp_iter);
+    comp_iter->cached = 0;
     /* Return the smallest entry */
     if(key_p) *key_p = smallest_k;
     if(version_p) *version_p = smallest_v;
     if(cvt_p) *cvt_p = smallest_cvt;
-}
-
-static int castle_ct_merged_iter_has_next(c_merged_iter_t *iter)
-{
-    debug("Merged iterator has next, err=%d, non_empty_cnt=%d\n", 
-            iter->err, iter->non_empty_cnt);
-    return (!iter->err && (iter->non_empty_cnt > 0));
 }
 
 static void castle_ct_merged_iter_skip(c_merged_iter_t *iter,
@@ -702,6 +753,7 @@ static void castle_ct_merged_iter_skip(c_merged_iter_t *iter,
     struct component_iterator *comp_iter; 
     int i, skip_cached;
 
+    merg_itr_dbg("%s:%p\n", __FUNCTION__, iter);
     /* Go through iterators, and do the following:
        * call skip in each of the iterators
        * check if we have something cached
@@ -725,12 +777,7 @@ static void castle_ct_merged_iter_skip(c_merged_iter_t *iter,
         /* Flush cached entry if it was to small (this doesn't inspect the cached entry
            any more). */
         if(skip_cached)
-            castle_ct_merged_iter_consume(iter, comp_iter);
-        else
-        /* Otherwise, if we don't have anything cached, check if the iterator still
-           has something to return (this may have changed after the skip */
-        if(!comp_iter->cached)
-            castle_ct_merged_iter_has_next_check(iter, comp_iter);
+            comp_iter->cached = 0;
     }
 }
 
@@ -753,6 +800,7 @@ static void castle_ct_merged_iter_init(c_merged_iter_t *iter,
     BUG_ON(iter->nr_iters <= 0);
     BUG_ON(!iter->btree);
     iter->err = 0;
+    iter->end_io = NULL;
     iter->iterators = castle_malloc(iter->nr_iters * sizeof(struct component_iterator), GFP_KERNEL);
     if(!iter->iterators)
     {
@@ -773,15 +821,20 @@ static void castle_ct_merged_iter_init(c_merged_iter_t *iter,
         comp_iter->cached        = 0;
         comp_iter->completed     = 0;
 
-        castle_ct_merged_iter_has_next_check(iter, comp_iter);
+        if (comp_iter->iterator_type->register_cb)
+            comp_iter->iterator_type->register_cb(comp_iter->iterator,
+                                                  castle_ct_merged_iter_end_io,
+                                                  (void *)iter);
     } 
 }
 
 struct castle_iterator_type castle_ct_merged_iter = {
-    .has_next = (castle_iterator_has_next_t)castle_ct_merged_iter_has_next,
-    .next     = (castle_iterator_next_t)    castle_ct_merged_iter_next,
-    .skip     = (castle_iterator_skip_t)    castle_ct_merged_iter_skip, 
-    .cancel   = (castle_iterator_cancel_t)  castle_ct_merged_iter_cancel, 
+    .register_cb = (castle_iterator_register_cb_t)castle_ct_merged_iter_register_cb,
+    .prep_next   = (castle_iterator_prep_next_t)  castle_ct_merged_iter_prep_next,
+    .has_next    = (castle_iterator_has_next_t)   castle_ct_merged_iter_has_next,
+    .next        = (castle_iterator_next_t)       castle_ct_merged_iter_next,
+    .skip        = (castle_iterator_skip_t)       castle_ct_merged_iter_skip, 
+    .cancel      = (castle_iterator_cancel_t)     castle_ct_merged_iter_cancel, 
 };
 
 
@@ -845,10 +898,38 @@ static USED void castle_ct_sort(struct castle_component_tree *ct1,
 
 /* Has next, next and skip only need to call the corresponding functions on
    the underlying merged iterator */
+
+static void castle_da_rq_iter_register_cb(c_da_rq_iter_t *iter,
+                                          castle_iterator_end_io_t cb,
+                                          void *data)
+{
+    iter->end_io  = cb;
+    iter->private = data;
+}
+
+static int castle_da_rq_iter_prep_next(c_da_rq_iter_t *iter)
+{
+    return castle_ct_merged_iter_prep_next(&iter->merged_iter);
+} 
+
+
 static int castle_da_rq_iter_has_next(c_da_rq_iter_t *iter)
 {
     return castle_ct_merged_iter_has_next(&iter->merged_iter);
 } 
+
+static void castle_da_rq_iter_end_io(void *merged_iter, int err)
+{
+    c_da_rq_iter_t *iter = ((c_merged_iter_t *)merged_iter)->private;
+
+    if (castle_da_rq_iter_prep_next(iter))
+    {
+        iter->end_io(iter, 0);
+        return;
+    }
+    else
+        BUG();
+}
 
 static void castle_da_rq_iter_next(c_da_rq_iter_t *iter,
                                    void **key_p,
@@ -898,6 +979,7 @@ again:
        a spinlock). */
     iter->nr_cts = da->nr_trees;
     iter->err    = 0;
+    iter->end_io = NULL;
     iter->ct_rqs = castle_zalloc(iter->nr_cts * sizeof(struct ct_rq), GFP_KERNEL);
     iters        = castle_malloc(iter->nr_cts * sizeof(void *), GFP_KERNEL);
     iter_types   = castle_malloc(iter->nr_cts * sizeof(struct castle_iterator_type *), GFP_KERNEL);
@@ -963,15 +1045,20 @@ again:
     castle_ct_merged_iter_init(&iter->merged_iter,
                                 iters,
                                 iter_types);
+    castle_ct_merged_iter_register_cb(&iter->merged_iter, 
+                                      castle_da_rq_iter_end_io,
+                                      iter);
     castle_free(iters);
     castle_free(iter_types);
 }
 
 struct castle_iterator_type castle_da_rq_iter = {
-    .has_next = (castle_iterator_has_next_t)castle_da_rq_iter_has_next,
-    .next     = (castle_iterator_next_t)    castle_da_rq_iter_next,
-    .skip     = (castle_iterator_skip_t)    castle_da_rq_iter_skip, 
-    .cancel   = (castle_iterator_cancel_t)  castle_da_rq_iter_cancel, 
+    .register_cb= (castle_iterator_register_cb_t)castle_da_rq_iter_register_cb,
+    .prep_next  = (castle_iterator_prep_next_t)  castle_da_rq_iter_prep_next,
+    .has_next   = (castle_iterator_has_next_t)   castle_da_rq_iter_has_next,
+    .next       = (castle_iterator_next_t)       castle_da_rq_iter_next,
+    .skip       = (castle_iterator_skip_t)       castle_da_rq_iter_skip,
+    .cancel     = (castle_iterator_cancel_t)     castle_da_rq_iter_cancel, 
 };
 
 /**********************************************************************************************/

@@ -843,6 +843,9 @@ static int castle_rxrpc_slice_decode(struct castle_rxrpc_call *call, struct sk_b
     uint32_t max_entries;
     int ret;
 
+    /* This doesn't work any more as old code was removed */
+    BUG();
+
 #ifdef DEBUG
     skb_print(skb);
 #endif
@@ -873,7 +876,8 @@ out:
     }
     
     debug("Executing a range query.\n");
-    return castle_object_slice_get(call, attachment, start_key, end_key, max_entries);
+
+    return 0;
 }
 
 static void castle_rxrpc_call_free(struct castle_rxrpc_call *call)

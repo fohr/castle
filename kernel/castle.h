@@ -440,20 +440,52 @@ typedef struct castle_bio_vec {
 #define c_bvec_btree_fn(_c_bvec, _fn) ((_c_bvec)->c_bio->btree->(_fn))
 
 /* Iterface implemented by various iterators in the module. Skip function is optional. */
+/* 
+ * Sequence of iterator functions to be called 
+ *      -> prep_next()
+ *          <- end_io()
+ *      -> has_next()
+ *      -> next()   
+ */
+/* end_io - gets called after completing the lower level iterator. Call
+ *          prep_next() to make sure buffer is not empty, If so prep_next would
+ *          schedule lower level iterator again. If prep_next() returns 1, then
+ *          call upper level iterator's callback. */
+typedef void (*castle_iterator_end_io_t)(void *iter, 
+                                         int err);
+/* register_cb - sets the calback function to be called after preparing buffer */
+typedef void (*castle_iterator_register_cb_t)(void *iter,
+                                              castle_iterator_end_io_t cb,
+                                              void *data);
+
+/* prep_next - Returns 
+ *         1 - if the iterator has content ready in buffers to respond to next()  
+ *         0 - if the iterator needs to get contents schedule lower level
+ *             iterator; this leads to a call to iterator's end_io() after
+ *             completion of lower level iterator */
+typedef int  (*castle_iterator_prep_next_t)(void *iter);
+/* has_next -  Returns
+          1 -  if the iterator buffer is not empty
+          0 -  if the buffer is empty */
 typedef int  (*castle_iterator_has_next_t)(void *iter);
+/* next - gets called only if buffer is not empty */
 typedef void (*castle_iterator_next_t)    (void *iter, 
                                            void **key_p, 
                                            version_t *version_p, 
                                            c_val_tup_t *cvt_p);
+/* skip - set the low level iterator to skip to the key, but dont run lower
+ *        level iterator. It shouldn't block */
 typedef void (*castle_iterator_skip_t)    (void *iter,
                                            void *key);
 typedef void (*castle_iterator_cancel_t)  (void *iter);
 struct castle_iterator_type {
-    castle_iterator_has_next_t has_next;
-    castle_iterator_next_t     next;
-    castle_iterator_skip_t     skip;
-    castle_iterator_cancel_t   cancel;
-};
+    castle_iterator_register_cb_t register_cb;
+    castle_iterator_prep_next_t   prep_next;
+    castle_iterator_has_next_t    has_next;
+    castle_iterator_next_t        next;
+    castle_iterator_skip_t        skip;
+    castle_iterator_cancel_t      cancel;
+ };
 
 /* Used to lock nodes pointed to by leaf pointers (refered to as 'indirect nodes') */
 struct castle_indirect_node {
@@ -585,6 +617,9 @@ typedef struct castle_rq_enumerator {
     void                         *start_key;
     void                         *end_key;
     int                           in_range;
+    castle_iterator_end_io_t      end_io;
+    void                         *private;
+    int                           sync_call; /* TODO: Cleanup, not requried */
 } c_rq_enum_t;
 
 typedef struct castle_merged_iterator {
@@ -603,6 +638,8 @@ typedef struct castle_merged_iterator {
             c_val_tup_t              cvt;
         } cached_entry;
     } *iterators;
+    castle_iterator_end_io_t   end_io;
+    void                      *private;
 } c_merged_iter_t;
 
 typedef struct castle_da_rq_iterator {
@@ -615,6 +652,8 @@ typedef struct castle_da_rq_iterator {
         struct castle_component_tree *ct;
         c_rq_enum_t                   ct_rq_iter; 
     } *ct_rqs;
+    castle_iterator_end_io_t  end_io;
+    void                     *private;
 } c_da_rq_iter_t;
 
 
@@ -795,6 +834,20 @@ struct castle_object_get {
     
 };
 
+/*
+ * This is the callback to notify when the iterator has the
+ * next key available. The callback should return non-zero if
+ * it wants the next value without calling castle_object_iter_next
+ * again.
+ */
+struct castle_object_iterator;
+typedef int (*castle_object_iter_next_available_t)
+        (struct castle_object_iterator *iter,
+         c_vl_okey_t *key,
+         c_val_tup_t *val,
+         int err,
+         void *data);
+
 typedef struct castle_object_iterator {
     /* Filled in by the client */
     da_id_t             da_id;
@@ -813,6 +866,11 @@ typedef struct castle_object_iterator {
     void               *cached_k;
     version_t           cached_v;
     c_val_tup_t         cached_cvt;
+    castle_iterator_end_io_t end_io;
+    castle_object_iter_next_available_t next_available;
+    void               *next_available_data;
+    void               *data;
+    struct work_struct  work;
 } castle_object_iterator_t;
 
 #endif /* __CASTLE_H__ */

@@ -16,9 +16,11 @@
 #ifndef DEBUG
 #define debug(_f, ...)          ((void)0)
 #define debug_rq(_f, ...)       ((void)0)
+#define debug_obj(_f, ...)      ((void)0)
 #else
 #define debug(_f, _a...)        (printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
 #define debug_rq(_f, _a...)     (printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
+#define debug_obj(_f, _a...)    (printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
 #endif
 
    
@@ -38,6 +40,8 @@ static const uint32_t OBJ_TOMBSTONE = ((uint32_t)-1);
 #define KEY_DIMENSION_OFFSET(_dim_head)     ((_dim_head) >> KEY_DIMENSION_FLAGS_SHIFT)
 #define KEY_DIMENSION_HEADER(_off, _flags)  (((_off)  << KEY_DIMENSION_FLAGS_SHIFT) |     \
                                              ((_flags) & KEY_DIMENSION_FLAGS_MASK))
+
+
 
 static inline uint32_t castle_object_btree_key_dim_length(c_vl_bkey_t *key, int dim)
 {
@@ -402,6 +406,33 @@ void castle_object_okey_free(c_vl_okey_t *obj_key)
     castle_free(obj_key);
 }
 
+c_vl_okey_t *castle_object_okey_copy(c_vl_okey_t *obj_key)
+{
+    c_vl_okey_t *copy;
+    int i, j;
+
+    copy = castle_malloc(sizeof(c_vl_okey_t) + sizeof(c_vl_key_t *) * obj_key->nr_dims, GFP_KERNEL);
+    if (copy == NULL)
+        return NULL;
+
+    copy->nr_dims = obj_key->nr_dims;
+    for(i=0; i < obj_key->nr_dims; i++)
+    {
+        copy->dims[i] = castle_malloc(sizeof(c_vl_key_t) + obj_key->dims[i]->length, GFP_KERNEL);
+        if (copy->dims[i] == NULL)
+            goto err0;
+        memcpy(copy->dims[i], obj_key->dims[i], sizeof(c_vl_key_t) + obj_key->dims[i]->length);
+    }
+
+    return copy;
+
+err0:
+    for (j = 0; j < i; j++)
+        castle_free(copy->dims[j]);
+    castle_free(copy);
+    return NULL;
+}
+
 void castle_object_bkey_free(c_vl_bkey_t *bkey)
 {
     castle_free(bkey);
@@ -409,6 +440,14 @@ void castle_object_bkey_free(c_vl_bkey_t *bkey)
 
 /**********************************************************************************************/
 /* Iterator(s) */
+
+static void castle_objects_rq_iter_register_cb(castle_object_iterator_t *iter,
+                                               castle_iterator_end_io_t cb,
+                                               void *data)
+{
+    iter->data = data;
+    iter->end_io = cb;
+}
 
 static void castle_objects_rq_iter_next(castle_object_iterator_t *iter,
                                         void **k, 
@@ -429,7 +468,8 @@ static void castle_objects_rq_iter_next_key_free(castle_object_iterator_t *iter)
     iter->last_next_key = NULL;
 }
 
-static int castle_objects_rq_iter_has_next(castle_object_iterator_t *iter)
+static int _castle_objects_rq_iter_prep_next(castle_object_iterator_t *iter,
+                                             int sync_call)
 {
     void *k;
     version_t v;
@@ -440,9 +480,13 @@ static int castle_objects_rq_iter_has_next(castle_object_iterator_t *iter)
     {
         if(iter->cached)
             return 1;
-        /* Nothing cached, check if da_rq_iter has anything */
-        if(!castle_da_rq_iter.has_next(&iter->da_rq_iter))
+        if (!sync_call && !castle_da_rq_iter.prep_next(&iter->da_rq_iter))
             return 0;
+        /* Nothing cached, check if da_rq_iter has anything */
+        if(!castle_da_rq_iter.has_next(&iter->da_rq_iter)) 
+        {
+            return 1;
+        }
         /* Nothing cached, but there is something in the da_rq_iter.
            Check if that's within the rq hypercube */
         castle_da_rq_iter.next(&iter->da_rq_iter, &k, &v, &cvt);
@@ -489,6 +533,39 @@ static int castle_objects_rq_iter_has_next(castle_object_iterator_t *iter)
     BUG();
 }
 
+static int castle_objects_rq_iter_prep_next(castle_object_iterator_t *iter)
+{
+    return _castle_objects_rq_iter_prep_next(iter, 0);
+}
+
+static void castle_objects_rq_iter_end_io(void *da_iter,
+                                          int err)
+{
+    castle_object_iterator_t *iter = ((c_da_rq_iter_t *)da_iter)->private;
+
+    if (castle_objects_rq_iter_prep_next(iter))
+        iter->end_io(iter, 0);
+}
+
+static int castle_objects_rq_iter_has_next(castle_object_iterator_t *iter)
+{
+    BUG_ON(!_castle_objects_rq_iter_prep_next(iter, 1));
+
+    debug_obj("%s:%p\n", __FUNCTION__, iter);
+    if(iter->cached)
+        return 1;
+    /* Nothing cached, check if da_rq_iter has anything */
+    if(!castle_da_rq_iter.has_next(&iter->da_rq_iter))
+    {
+        debug_obj("%s:%p - reschedule\n", __FUNCTION__, iter);
+        return 0;
+    }
+    
+    /* We should never get here */
+    BUG();
+    return 0;
+}
+
 static void castle_objects_rq_iter_cancel(castle_object_iterator_t *iter)
 {
     /* Cancel da_rq_iter if it's error free */
@@ -506,6 +583,7 @@ static void castle_objects_rq_iter_init(castle_object_iterator_t *iter)
     BUG_ON(!iter->start_okey || !iter->end_okey);
 
     iter->err = 0;
+    iter->end_io = NULL;
     iter->cached = 0;
     /* Set the error on da_rq_iter, which will get cleared by the init,
        but will prevent castle_object_rq_iter_cancel from cancelling the
@@ -538,6 +616,9 @@ static void castle_objects_rq_iter_init(castle_object_iterator_t *iter)
                             iter->da_id, 
                             iter->start_bkey, 
                             iter->end_bkey);
+    castle_da_rq_iter.register_cb(&iter->da_rq_iter,
+                                  castle_objects_rq_iter_end_io,
+                                  (void *)iter);
     if(iter->da_rq_iter.err)
     {
         iter->err = iter->da_rq_iter.err;
@@ -546,10 +627,12 @@ static void castle_objects_rq_iter_init(castle_object_iterator_t *iter)
 }
 
 struct castle_iterator_type castle_objects_rq_iter = {
-    .has_next = (castle_iterator_has_next_t)castle_objects_rq_iter_has_next,
-    .next     = (castle_iterator_next_t)    castle_objects_rq_iter_next,
-    .skip     = NULL, 
-    .cancel   = (castle_iterator_cancel_t)  castle_objects_rq_iter_cancel,
+    .register_cb= (castle_iterator_register_cb_t)castle_objects_rq_iter_register_cb,
+    .prep_next  = (castle_iterator_prep_next_t)  castle_objects_rq_iter_prep_next,
+    .has_next   = (castle_iterator_has_next_t)   castle_objects_rq_iter_has_next,
+    .next       = (castle_iterator_next_t)       castle_objects_rq_iter_next,
+    .skip       = NULL, 
+    .cancel     = (castle_iterator_cancel_t)     castle_objects_rq_iter_cancel,
 };
 
 /**********************************************************************************************/
@@ -990,6 +1073,8 @@ int castle_object_replace_multi(struct castle_rxrpc_call *call,
     return 0;
 }
 
+void castle_object_slice_get_end_io(void *obj_iter, int err);
+
 int castle_object_iter_start(struct castle_attachment *attachment,
                             c_vl_okey_t *start_key,
                             c_vl_okey_t *end_key,
@@ -1034,47 +1119,80 @@ int castle_object_iter_start(struct castle_attachment *attachment,
         castle_free(iterator);
         return iterator->err;
     }
+
+    castle_objects_rq_iter_register_cb(iterator, castle_object_slice_get_end_io, NULL);
+
     debug_rq("rq_iter_init done.\n");
 
     return 0;
 }
 
 int castle_object_iter_next(castle_object_iterator_t *iterator,
-                           c_vl_okey_t **key,
-                           c_val_tup_t *val)
+                            castle_object_iter_next_available_t callback,
+                            void *data)
 {
     c_vl_bkey_t *k;
-    int found;
+    c_vl_okey_t *key;
+    c_val_tup_t val;
+    version_t v;
+    int has_response;
+    int continue_iterator = 1;
 
-    found = 0;
+    iterator->next_available = callback;
+    iterator->next_available_data = data;
 
-    /* loop until we find something that's not a tombstone */
-    while (!found && castle_objects_rq_iter.has_next(iterator))
+    while (continue_iterator)
     {
-        version_t v;
+        has_response = 0;
+        while (!has_response && castle_objects_rq_iter.prep_next(iterator))
+        {
+            if (!castle_objects_rq_iter.has_next(iterator))
+            {
+                debug_rq("Iterator at end.\n");
+                key = NULL;
+                has_response = 1;
+            }
+            else
+            {
+                debug_rq("Getting an entry for the range query.\n");
+                castle_objects_rq_iter.next(iterator,
+                                            (void **)&k,
+                                            &v,
+                                            &val);
+                debug_rq("Got an entry for the range query.\n");
+                if (!CVT_TOMB_STONE(val))
+                {
+                    has_response = 1;
 
-        debug_rq("Getting an entry the range query.\n");
-        castle_objects_rq_iter.next(iterator, (void **)&k, &v, val);
-        debug_rq("Got an entry the range query.\n");
+                    key = castle_object_btree_key_convert(k);
+                    if (!key)
+                    {
+                        callback(iterator, NULL, NULL, -ENOMEM, iterator->next_available_data);
+                        return 0;
+                    }
+                }
+            }
+        }
 
-        /* Ignore tombstones, we are not sending these */
-        if(!CVT_TOMB_STONE(*val))
-            found = 1;
-    }
+        if (!has_response)
+        {
+            /* we're waiting for the iterator */
+            debug_rq("Waiting for next available.\n");
+            return 0;
+        }
 
-    if (!found)
-    {
-        *key = NULL;
-        return 0;
-    }
-
-    /* Now we know we've got something to send.
-       Prepare the key for marshaling */
-    *key = castle_object_btree_key_convert(k);
-    if(!*key)
-    {
-        /* TODO: free all the buffers etc! */
-        return -ENOMEM;
+        if (!key)
+        {
+            debug_rq("Calling next available callback with NULL key.\n");
+            continue_iterator = callback(iterator, NULL, NULL, 0, iterator->next_available_data);
+        }
+        else
+        {
+            debug_rq("Calling next available callback with key=%p.\n", key);
+            continue_iterator = callback(iterator, key, &val, 0, iterator->next_available_data);
+            castle_object_okey_free(key);
+        }
+        debug_rq("Next available callback gave response %d.\n", continue_iterator);
     }
 
     return 0;
@@ -1089,175 +1207,21 @@ int castle_object_iter_finish(castle_object_iterator_t *iterator)
     return 0;
 }
 
-int castle_object_slice_get(struct castle_rxrpc_call *call, 
-                            struct castle_attachment *attachment, 
-                            c_vl_okey_t *start_key, 
-                            c_vl_okey_t *end_key,
-                            uint32_t max_entries)
+static void castle_object_next_available(struct work_struct *work)
 {
-    castle_object_iterator_t *iterator;
-    char *rsp_buffer;
-    uint32_t rsp_buffer_offset, chunk_size;
-    int nr_vals, i, last_chunk;
-#define SLICE_RSP_BUFFER_LEN    (C_BLK_SIZE * 256)  /* 1MB buffer */
+    castle_object_iterator_t *iter = container_of(work, castle_object_iterator_t, work);
 
-    /* 0 max_entries means infinity, FFFFFFFF should do */
-    if(max_entries == 0)
-        max_entries = (uint32_t)-1;
+    castle_object_iter_next(iter, iter->next_available, iter->next_available_data);
+}
 
-    if(start_key->nr_dims != end_key->nr_dims)
-    {
-        printk("Range query with different # of dimensions.\n");
-        return -EINVAL;
-    }
-    /* Mark the key that this is end key. To notify this is infinity and +ve.
-     * Assuming that end_key will not used anywhere before converting into
-     * btree_key. */
-    for (i=0; i<end_key->nr_dims; i++)
-    {
-        if (end_key->dims[i]->length == 0)
-        {
-            end_key->dims[i]->length = PLUS_INFINITY_DIM_LENGTH;
-            break;
-        }
-    }
+void castle_object_slice_get_end_io(void *obj_iter, int err)
+{
+    castle_object_iterator_t *iter = obj_iter;
 
-    rsp_buffer = vmalloc(SLICE_RSP_BUFFER_LEN); 
-
-    iterator = castle_malloc(sizeof(castle_object_iterator_t), GFP_KERNEL);
-    if(!iterator)
-        return -ENOMEM;
-
-    /* Initialise the iterator */
-    iterator->start_okey = start_key;
-    iterator->end_okey   = end_key;
-    iterator->version    = attachment->version; 
-    iterator->da_id      = castle_version_da_id_get(iterator->version);
-    
-    debug_rq("rq_iter_init.\n");
-    castle_objects_rq_iter_init(iterator);
-    if(iterator->err)
-    {
-        castle_free(iterator);
-        return iterator->err;
-    }
-    debug_rq("rq_iter_init done.\n");
-
-    nr_vals = 0;
-    rsp_buffer_offset = 0;
-    while(castle_objects_rq_iter.has_next(iterator))
-    {
-        c_vl_bkey_t *k;
-        c_vl_okey_t *okey;
-        version_t v;
-        c_val_tup_t cvt;
-        char *value;
-        c2_block_t *data_c2b;
-        int nr_blocks;
-        uint32_t marshalled_len;
-
-        debug_rq("Getting an entry the range query.\n");
-        castle_objects_rq_iter.next(iterator, (void **)&k, &v, &cvt);
-        debug_rq("Got an entry the range query.\n");
-
-        /* Ignore tombstones, we are not sending these */
-        if(CVT_TOMB_STONE(cvt))
-            continue;
-
-        /* Now we know we've got something to send. 
-           Prepare the key for marshaling */
-        okey = castle_object_btree_key_convert(k);
-        if(!okey)
-        {
-            castle_objects_rq_iter_cancel(iterator);
-            castle_free(iterator);
-            return -ENOMEM;
-        }
-        /* Prepare the value for marshaling */
-        if(CVT_INLINE(cvt))
-        {
-            value = cvt.val;
-        } else
-        if(CVT_ONDISK(cvt))
-        {
-            /* We are not handling large values here for the time being 
-               (never, if replaced with iterators?) */
-            BUG_ON(cvt.length > C_BLK_SIZE); 
-            nr_blocks = (cvt.length - 1) / C_BLK_SIZE + 1;
-            data_c2b = castle_cache_block_get(cvt.cdb, nr_blocks);
-            lock_c2b(data_c2b);
-            if(!c2b_uptodate(data_c2b)) 
-                BUG_ON(submit_c2b_sync(READ, data_c2b));
-            value = c2b_buffer(data_c2b);
-        } else
-        {
-            /* Unknown cvt type */
-            BUG();
-        }
-        BUG_ON(castle_rxrpc_get_slice_reply_marshall(call, 
-                                                     okey, 
-                                                     value, 
-                                                     cvt.length, 
-                                                     rsp_buffer + rsp_buffer_offset,
-                                                     SLICE_RSP_BUFFER_LEN - rsp_buffer_offset,
-                                                     &marshalled_len));
-        max_entries--;
-        rsp_buffer_offset += marshalled_len; 
-        nr_vals++;
-        /* Unlock c2b if one was taken out */
-        if(CVT_ONDISK(cvt))
-        {
-            unlock_c2b(data_c2b);
-            put_c2b(data_c2b);
-        }
-        /* Free the object key once we've constructed the reply */
-        castle_object_okey_free(okey);
-        if(max_entries == 0)
-            break;
-    }
-    debug_rq("Ended the rq iterator in objects, replying with nr_vals: %d, rsp_buffer_offset=%d.\n",
-            nr_vals, rsp_buffer_offset);
-#define RSP_CHUNK_SIZE  10000
-    /* Rsp buffer contains responce payload, send it through in RSP_CHUNK_SIZE chunks. */
-    i = 0;
-    do
-    {
-        if(rsp_buffer_offset - i > RSP_CHUNK_SIZE)
-        /* We've got more than 10k to send */
-        {
-            chunk_size = RSP_CHUNK_SIZE;
-            last_chunk = 0;     
-        } else
-        /* We've got <= 10k to send */
-        {
-            chunk_size = rsp_buffer_offset - i;
-            last_chunk = 1;     
-        }
-        /* Send */
-        if(i == 0)
-        {
-            debug_rq("Staring slice reply. Sending %d bytes, is_last=%d\n", chunk_size, last_chunk);
-            castle_rxrpc_get_slice_reply_start(call, 0, nr_vals, rsp_buffer, chunk_size, last_chunk);
-        } else
-        {
-            debug_rq("Continuing slice reply. Sending %d bytes, is_last=%d\n", chunk_size, last_chunk);
-            castle_rxrpc_get_slice_reply_continue(call, rsp_buffer + i, chunk_size, last_chunk); 
-        }
-        i+=chunk_size;
-        if(!last_chunk)
-            msleep(20);
-    } 
-    while(!last_chunk);
-
-    castle_objects_rq_iter_cancel(iterator);
-    debug_rq("Freeing iterators & buffers.\n");
-    castle_object_okey_free(iterator->start_okey);
-    castle_object_okey_free(iterator->end_okey);
-    castle_free(iterator);
-    vfree(rsp_buffer);
-    debug_rq("Returning.\n");
-    
-    return 0;
+    BUG_ON(!castle_objects_rq_iter_prep_next(iter));
+    debug_rq("Done async key read: Re-scheduling slice_get()- iterator: %p\n", iter);
+    CASTLE_INIT_WORK(&iter->work, castle_object_next_available);
+    queue_work(castle_wq, &iter->work);
 }
 
 void castle_object_get_continue(struct castle_bio_vec *c_bvec,
