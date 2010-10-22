@@ -182,7 +182,9 @@ int castle_rda_slave_add(c_rda_type_t rda_type, struct castle_slave *cs)
 
 void castle_rda_slave_remove(c_rda_type_t rda_type, struct castle_slave *cs)
 {
-    /* FIXME: Implementation should take care of cs not being in the list  */
+    if (!cs)
+        return;
+
     printk("Not yet implemented.\n");
     return;
 }

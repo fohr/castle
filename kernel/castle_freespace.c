@@ -148,7 +148,7 @@ void castle_freespace_slave_chunk_free(struct castle_slave      *cs,
     {
         printk("    Free Chunks: %u from slave %u\n", freespace->free_chk_cnt,
                 cs->uuid);
-        BUG(); /* FIXME: shouldn't come here */
+        BUG(); 
     }
     BUG_ON(freespace->nr_entries > freespace->max_entries ||
                 freespace->free_chk_cnt > freespace->disk_size);

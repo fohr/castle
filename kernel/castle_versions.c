@@ -100,11 +100,6 @@ static struct castle_version* castle_version_add(version_t version,
     v = kmem_cache_alloc(castle_versions_cache, GFP_KERNEL);
     if (!v)
         goto out_dealloc;
-#if 0
-    // FIXME - bhaskar
-    if(!v || castle_freespace_version_add(version)) 
-        goto out_dealloc;
-#endif
     
     debug("Adding: (v, p)=(%d,%d)\n", version, parent);
     

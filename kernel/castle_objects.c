@@ -591,29 +591,44 @@ static void castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
         {
             uint32_t nr_chunks;
             c_ext_pos_t cep;
+            uint32_t prev_nr_blocks;
 
             nr_blocks = (cvt->length - 1) / C_BLK_SIZE + 1; 
             nr_chunks = (nr_blocks >> (C_CHK_SHIFT - C_BLK_SHIFT)) + 
                             (nr_blocks % (C_CHK_SIZE/C_BLK_SIZE));
+            prev_nr_blocks = (prev_cvt.length - 1) / C_BLK_SIZE + 1;
+
             if (replace->value_len <= MEDIUM_OBJECT_LIMIT)
             {
-                // FIXME: Handle Replace.
-                BUG_ON(castle_ext_fs_get(&c_bvec->tree->data_ext_fs,
-                                         nr_blocks * C_BLK_SIZE,
-                                         0,
-                                         &cep) < 0);
-                CVT_MEDIUM_OBJECT_SET(*cvt, replace->value_len, cep);
+                if (CVT_MEDIUM_OBJECT(prev_cvt) && (prev_nr_blocks >= nr_blocks))
+                {
+                    castle_ext_fs_free(&c_bvec->tree->data_ext_fs,
+                                        nr_blocks * C_BLK_SIZE, 0);
+                    debug("Freeing %u blks from %p|%p\n", nr_blocks, c_bvec,
+                                                             c_bvec->tree);
+                    CVT_MEDIUM_OBJECT_SET(*cvt, replace->value_len, prev_cvt.cep);
+                }
+                else
+                {
+                    BUG_ON(castle_ext_fs_get(&c_bvec->tree->data_ext_fs,
+                                             nr_blocks * C_BLK_SIZE,
+                                             0,
+                                             &cep) < 0);
+                    CVT_MEDIUM_OBJECT_SET(*cvt, replace->value_len, cep);
+                }
+                debug("Medium Object in %p, cep: "cep_fmt_str_nl, c_bvec->tree,
+                                                   __cep2str(cvt->cep));
             }
             else 
             {
                 /* Arbitrary limits on the size of the objets (freespace code 
                  * cannot handle huge objects ATM) */
                 BUG_ON(nr_blocks > 100); 
-                // FIXME: bhaskar
-                cep.ext_id = castle_extent_alloc(DEFAULT, c_bvec->tree->da,
-                                nr_chunks);
+                cep.ext_id = castle_extent_alloc(DEFAULT, c_bvec->tree->da, 
+                                                 nr_chunks);
                 cep.offset = 0;
                 CVT_LARGE_OBJECT_SET(*cvt, replace->value_len, cep);
+
                 /* TODO: Again, work out how to handle failed allocations */ 
                 BUG_ON(EXT_POS_INVAL(cvt->cep));
             }
@@ -625,19 +640,16 @@ static void castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
     }
 
     /* If there was an out-of-line object stored under this key, release it. */
-    /* FIXME: Handle Medium objects */
-    if (CVT_ONDISK(prev_cvt))
+    /* Note: Not handling Medium objects. They may create holes. But, its fine
+     * as it is just in T0. */
+    BUG_ON(CVT_MEDIUM_OBJECT(prev_cvt) &&
+           (prev_cvt.cep.ext_id != c_bvec->tree->data_ext_fs.ext_id));
+
+    /* Free Old Large Object */
+    if (CVT_LARGE_OBJECT(prev_cvt))
     {
         nr_blocks = (prev_cvt.length - 1) / C_BLK_SIZE + 1; 
-        BUG_ON(CVT_MEDIUM_OBJECT(prev_cvt) &&
-                (prev_cvt.cep.ext_id != c_bvec->tree->data_ext_fs.ext_id));
-        /* FIXME: bhaskar - Free old object */
-#if 0
-        castle_extent_free(DEFAULT, c_bvec->tree->da, prev_cvt.cep.ext_id);
-        castle_freespace_block_free(prev_cvt.cep,
-                                    c_bvec->version,
-                                    nr_blocks);
-#endif
+        castle_extent_free(prev_cvt.cep.ext_id);
     }
     BUG_ON(CVT_INVALID(*cvt));
 }
@@ -732,8 +744,8 @@ static int castle_object_data_write(struct castle_object_replace *replace)
     data_c2b_offset = replace->data_c2b_offset;
     data_length = replace->data_length;
 
-    debug("Data write. call=%p, data_c2b=%p, data_c2b_offset=%d, data_length=%d\n",
-        call, data_c2b, data_c2b_offset, data_length);
+    debug("Data write. data_c2b=%p, data_c2b_offset=%d, data_length=%d\n",
+        data_c2b, data_c2b_offset, data_length);
     data_c2b_length = data_c2b->nr_pages * C_BLK_SIZE;
     packet_length = replace->data_length_get(replace);
 
@@ -1340,7 +1352,7 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
     struct castle_rxrpc_call *call = c_bvec->c_bio->rxrpc_call;
     c_bio_t *c_bio = c_bvec->c_bio;
 
-    debug("Returned from btree walk with value of type 0x%x and length %u\n", 
+    debug("Returned from btree walk with value of type 0x%x and length %llu\n", 
           cvt.type, cvt.length);
     /* Sanity checks on the bio */
     BUG_ON(c_bvec_data_dir(c_bvec) != READ); 

@@ -53,9 +53,7 @@ typedef struct {
     c_chk_cnt_t         size;           /* Number of chunks */
     c_rda_type_t        type;           /* RDA type */
     uint32_t            k_factor;       /* K factor in K-RDA */ 
-    c_chk_seq_t         chk_buf[MAX_NR_SLAVES]; /* FIXME: Give space to client and
-                                                   get-rid off this */
-    /* FIXME: Just offset is enough. cep not requried. */
+    c_chk_seq_t         chk_buf[MAX_NR_SLAVES];     
     c_ext_pos_t         maps_cep;       /* Offset of chunk mapping in logical extent */
     struct list_head    hash_list;      /* Only Dynamic variable */
     atomic_t            ref_cnt;
@@ -291,7 +289,7 @@ static int castle_extent_hash_flush2disk(c_ext_t *ext, void *unused)
     {
         cep.offset = pg * C_BLK_SIZE;
         BUG_ON(cep.offset >= (EXT_ST_SIZE * C_CHK_SIZE));
-        c2b = castle_cache_block_get(cep, 1);
+        c2b = castle_cache_page_block_get(cep);
         set_c2b_uptodate(c2b);
         lock_c2b(c2b);
         extents = c2b_buffer(c2b);
@@ -329,7 +327,7 @@ void __castle_extents_fini(void)
 
     debug("Finishing castle extents\n");
     castle_extents_hash_iterate(castle_extent_print, NULL);
-    /* FIXME: Not safe to do this. Should be fine at end of the module. */
+    /* Note: Not safe to do this. Should be fine at end of the module. */
     __castle_extents_hash_iterate(castle_extent_hash_flush2disk, NULL);
     castle_extent_hash_flush2disk(NULL, NULL);
     put_c2b(castle_extents_sb_c2b);
@@ -403,7 +401,6 @@ int castle_extent_space_alloc(c_ext_t *ext, da_id_t da_id)
             else 
             {
                 BUG_ON(ext->ext_id == META_EXT_ID);
-                /* FIXME: might need to allocate more than one slot */
                 chk_buf[id] = castle_freespace_slave_chunks_alloc(cs, 
                                             da_id, 1);
                 if (!chk_buf[id].count)
@@ -662,7 +659,8 @@ static c_disk_chk_t * castle_extent_map_buf_get(c_ext_t             *ext,
     else
     {
         /* FIXME: Can't handle chunk mappings spanning across multiple blocks.
-         * Cache logic can't handle multiple block access conurrency properly. */
+         * Cache logic can't handle multiple block access conurrency properly.
+         * Can be handled with new cache design. */
         BUG_ON(BLOCK(start) != BLOCK(end));
         cep.ext_id  = ext->maps_cep.ext_id;
         BUG_ON(BLOCK_OFFSET(ext->maps_cep.offset));
@@ -783,9 +781,6 @@ void castle_extents_load(int first)
     {
         printk("Initialising meta extent mappings for the first time\n");
 
-        /* FIXME: Doesn't work for dynamic disk claim and rebuild. Dont use id
-         * for idx */
-        /* Set mappings */
         list_for_each(l, &castle_slaves.slaves)
         {
             struct castle_slave *cs = list_entry(l, struct castle_slave, list);

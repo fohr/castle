@@ -79,8 +79,6 @@ void castle_debug_free(void *obj)
 
 static void castle_debug_malloc_fini(void)
 {
-    // FIXME: Enable this
-#if 0
     struct castle_malloc_debug *dobj;
     struct list_head *l;
     uint32_t sum = 0;
@@ -95,7 +93,6 @@ static void castle_debug_malloc_fini(void)
         i++;
     }
     printk("******** Memory Leak: %u bytes / %u objects *********\n", sum, i);
-#endif
 }
 
 static void castle_debug_buffer_init(struct page *pg)
