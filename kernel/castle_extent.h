@@ -83,7 +83,6 @@ castle_extent_kfactor_get(c_ext_id_t ext_id);
 uint32_t
 castle_extent_map_get(c_ext_id_t             ext_id,
                       c_chk_t                offset,
-                      c_chk_cnt_t            nr_chunks,
                       c_disk_chk_t          *chk_maps);
 
 c_ext_id_t 

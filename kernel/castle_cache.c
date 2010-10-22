@@ -311,15 +311,9 @@ c_disk_chk_t read_slave_get(c_ext_id_t ext_id, c_chk_t offset)
 {
     c_disk_chk_t    chunks[MAX_NR_SLAVES];
 
-    BUG_ON(castle_extent_map_get(ext_id, offset, 1, chunks) >= MAX_NR_SLAVES);
+    BUG_ON(castle_extent_map_get(ext_id, offset, chunks) >= MAX_NR_SLAVES);
     
     return chunks[0];
-    /* Take decision based on disk loads */
-#if 0
-    for (i=0; i<k_factor; i++)
-    {
-    }
-#endif
 }
 
 void __submit_bio(int                         rw,
@@ -506,7 +500,6 @@ int submit_c2b_rda(int rw, c2_block_t *c2b)
             
         BUG_ON((ret = castle_extent_map_get(cep.ext_id,
                               CHUNK(cep.offset)+i,
-                              1,
                               chunks)) >= MAX_NR_SLAVES);
         if (ret == 0)
         {

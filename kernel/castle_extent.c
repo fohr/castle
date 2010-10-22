@@ -626,47 +626,37 @@ uint32_t castle_extent_kfactor_get(c_ext_id_t ext_id)
     return ret;
 }
 
-static c_disk_chk_t * castle_extent_map_buf_get(c_ext_t             *ext,
-                                                c_chk_t              chk_idx,
-                                                c_chk_cnt_t          nr_chunks,
-                                                c2_block_t         **_c2b)
+static void __castle_extent_map_get(c_ext_t             *ext,
+                                    c_chk_t              chk_idx,
+                                    c_disk_chk_t        *chk_map)
 {
     c_ext_pos_t     cep;
-    uint64_t        start, end;
-    c_disk_chk_t   *buf;
+    uint64_t        offset;
     c2_block_t     *c2b = NULL;
 
-    debug("Seeking maps for ext: %llu, %u chunks from %u\n", ext->ext_id,
-                    nr_chunks, chk_idx);
-    BUG_ON(nr_chunks != 1);
-    start = (chk_idx * ext->k_factor * sizeof(c_disk_chk_t));
-    end   = ((chk_idx + nr_chunks) * ext->k_factor * sizeof(c_disk_chk_t)) - 1;
+    debug("Seeking map for ext: %llu, chunk: %u\n", ext->ext_id, chk_idx);
+    offset = (chk_idx * ext->k_factor * sizeof(c_disk_chk_t));
     if (SUPER_EXTENT(ext->ext_id))
     {
         struct castle_slave *cs;
 
         cs = castle_slave_find_by_id(sup_ext_to_slave_id(ext->ext_id));
-        BUG_ON(cs->sup_ext_maps == NULL);
-        buf = cs->sup_ext_maps + (chk_idx * (sup_ext.k_factor));
+        BUG_ON((cs->sup_ext_maps == NULL) || (ext->k_factor != sup_ext.k_factor));
+        memcpy(chk_map,
+               (((uint8_t *)cs->sup_ext_maps) + offset),
+               ext->k_factor * sizeof(c_disk_chk_t));
     }
     else if (ext->ext_id == MICRO_EXT_ID)
     {
-        BUG_ON(nr_chunks != 1);
-        BUG_ON(chk_idx != 0);
-        BUG_ON(!micro_maps);
-        buf = micro_maps;
+        BUG_ON(chk_idx != 0 || !micro_maps);
+        memcpy(chk_map, micro_maps, ext->k_factor * sizeof(c_disk_chk_t));
     }
     else
     {
-        /* FIXME: Can't handle chunk mappings spanning across multiple blocks.
-         * Cache logic can't handle multiple block access conurrency properly.
-         * Can be handled with new cache design. */
-        BUG_ON(BLOCK(start) != BLOCK(end));
         cep.ext_id  = ext->maps_cep.ext_id;
         BUG_ON(BLOCK_OFFSET(ext->maps_cep.offset));
-        cep.offset  = MASK_BLK_OFFSET(ext->maps_cep.offset + start);
+        cep.offset  = MASK_BLK_OFFSET(ext->maps_cep.offset + offset);
         c2b         = castle_cache_block_get(cep, 1);
-        buf         = (c_disk_chk_t *)(((uint8_t *)c2b_buffer(c2b)) + BLOCK_OFFSET(start));
         if (!c2b_uptodate(c2b))
         {
             debug("Scheduling read to get chunk mappings for ext: %llu\n",
@@ -676,30 +666,21 @@ static c_disk_chk_t * castle_extent_map_buf_get(c_ext_t             *ext,
             unlock_c2b(c2b);
         }
         lock_c2b_read(c2b);
+        BUG_ON((C_BLK_SIZE - BLOCK_OFFSET(offset)) < (ext->k_factor * sizeof(c_disk_chk_t)));
+        memcpy(chk_map, 
+               (((uint8_t *)c2b_buffer(c2b)) + BLOCK_OFFSET(offset)),
+               ext->k_factor * sizeof(c_disk_chk_t));
+
+        unlock_c2b_read(c2b);
+        put_c2b(c2b);
     }
-
-    *_c2b = c2b;
-    return buf;
-}
-
-static void castle_extent_map_buf_put(c_ext_t *ext, c2_block_t *c2b)
-{
-    if (SUPER_EXTENT(ext->ext_id) || ext->ext_id == MICRO_EXT_ID)
-        return;
-
-    BUG_ON(c2b == NULL);
-    unlock_c2b_read(c2b);
-    put_c2b(c2b);
 }
 
 uint32_t castle_extent_map_get(c_ext_id_t             ext_id,
                                c_chk_t                offset,
-                               c_chk_cnt_t            nr_chunks, 
-                               c_disk_chk_t          *chk_maps)
+                               c_disk_chk_t          *chk_map)
 {
     c_ext_t      *ext;
-    c2_block_t   *c2b = NULL;
-    c_disk_chk_t *buf;
     uint32_t      ret;
 
     BUG_ON(ext_id == INVAL_EXT_ID);
@@ -707,20 +688,16 @@ uint32_t castle_extent_map_get(c_ext_id_t             ext_id,
     if ((ext = castle_extents_rhash_get(ext_id)) == NULL)
         return 0;
 
-    if ((offset >= ext->size) || ((offset + nr_chunks - 1) >= ext->size))
+    if (offset >= ext->size)
     {
         printk("BUG in %s\n", __FUNCTION__);
         printk("    Extent: %llu\n", ext_id);
         printk("    Offset: %u\n", offset);
-        printk("    Count: %u\n", nr_chunks);
         printk("    Extent Size: %u\n", ext->size);
         BUG();
     }
 
-    buf = castle_extent_map_buf_get(ext, offset, nr_chunks, &c2b);
-    memcpy(chk_maps, buf, sizeof(c_disk_chk_t) * nr_chunks * ext->k_factor);
-    castle_extent_map_buf_put(ext, c2b);
-
+    __castle_extent_map_get(ext, offset, chk_map);
     ret = ext->k_factor;
     castle_extents_rhash_put(ext);
 
