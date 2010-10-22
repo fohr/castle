@@ -68,6 +68,9 @@ static atomic_t                castle_cache_write_stats = ATOMIC_INIT(0);
 
 struct timer_list              castle_cache_stats_timer;
 
+static c_ext_fs_t              mstore_ext_fs;
+static int                     mstore_init_done = 0;
+
 void castle_cache_print_stats(void)
 {
     int reads = atomic_read(&castle_cache_read_stats);
@@ -616,8 +619,8 @@ static c2_block_t* castle_cache_hash_find(c_ext_pos_t  cep, uint32_t nr_pages)
         if(EXT_POS_EQUAL(c2b->cep, cep))
             return c2b;
         if ((c2b->cep.ext_id == cep.ext_id) && 
-            (c2b->cep.offset <= cep.offset + nr_pages) &&
-            (c2b->cep.offset + c2b->nr_pages >= cep.offset))
+            (c2b->cep.offset <= (cep.offset + (nr_pages * C_BLK_SIZE))) &&
+            ((c2b->cep.offset + (c2b->nr_pages * C_BLK_SIZE)) >= cep.offset))
         {
             printk("Overlaping c2bs "cep_fmt_str"/%u - "cep_fmt_str"/%u\n",
                     cep2str(c2b->cep), c2b->nr_pages, cep2str(cep), nr_pages);
@@ -861,7 +864,7 @@ static int castle_cache_hash_clean(void)
     list_for_each_safe(lh, t, &castle_cache_cleanlist)
     {
         c2b = list_entry(lh, c2_block_t, dirty_or_clean);
-        /* FIXME: Pinning all logical extent pages in cache. Make sure cache is
+        /* Note: Pinning all logical extent pages in cache. Make sure cache is 
          * big enough. */
         if(!c2b_busy(c2b) && !LOGICAL_EXTENT(c2b->cep.ext_id)) 
         {
@@ -1552,10 +1555,14 @@ static void castle_mstore_node_add(struct castle_mstore *store)
     /* Check if mutex is locked */
     BUG_ON(down_trylock(&store->mutex) == 0);
 
-    // FIXME: bhaskar
     /* Prepare the node first */
-    cep.ext_id  = castle_extent_alloc(DEFAULT, 0, 1);
-    cep.offset = 0;
+    BUG_ON(castle_ext_fs_pre_alloc(&mstore_ext_fs, 
+                                   C_BLK_SIZE,
+                                   1) < 0);
+    BUG_ON(castle_ext_fs_get(&mstore_ext_fs, 
+                             C_BLK_SIZE,
+                             1,
+                             &cep) < 0);
     c2b = castle_cache_page_block_get(cep);
     debug_mstore("Allocated "cep_fmt_str_nl, cep2str(cep));
     lock_c2b(c2b);
@@ -1701,6 +1708,7 @@ static struct castle_mstore *castle_mstore_alloc(c_mstore_id_t store_id, size_t 
 {
     struct castle_mstore *store;
 
+    BUG_ON(!mstore_init_done);
     debug_mstore("Allocating mstore id=%d.\n", store_id);
     store = castle_zalloc(sizeof(struct castle_mstore), GFP_KERNEL);
     if(!store)
@@ -1722,6 +1730,7 @@ struct castle_mstore* castle_mstore_open(c_mstore_id_t store_id, size_t entry_si
     struct castle_mstore *store;
     struct castle_mstore_iter *iterator;
 
+    BUG_ON(!mstore_init_done);
     debug_mstore("Opening mstore.\n");
     /* Sanity check, to see if store_id isn't too large. */
     if(store_id >= sizeof(fs_sb->mstore) / sizeof(c_ext_pos_t ))
@@ -1756,6 +1765,7 @@ struct castle_mstore* castle_mstore_init(c_mstore_id_t store_id, size_t entry_si
     struct castle_fs_superblock *fs_sb;
     struct castle_mstore *store;
 
+    BUG_ON(!mstore_init_done);
     debug_mstore("Opening mstore id=%d.\n", store_id);
     /* Sanity check, to see if store_id isn't too large. */
     if(store_id >= sizeof(fs_sb->mstore) / sizeof(c_ext_pos_t))
@@ -1779,6 +1789,43 @@ void castle_mstore_fini(struct castle_mstore *store)
 {
     debug_mstore("Closing mstore id=%d.\n", store->store_id);
     castle_free(store);
+}
+
+int castle_mstores_create(void)
+{
+    struct castle_fs_superblock *fs_sb;
+
+    BUG_ON(mstore_init_done);
+    if (castle_ext_fs_init(&mstore_ext_fs, 0, (1024 * C_CHK_SIZE)) < 0)
+        return -EINVAL;
+
+    fs_sb = castle_fs_superblocks_get();
+    fs_sb->mstore_ext_fs.ext_id         = mstore_ext_fs.ext_id;
+    fs_sb->mstore_ext_fs.ext_size       = mstore_ext_fs.ext_size;
+    fs_sb->mstore_ext_fs.next_free_byte = atomic64_read(&mstore_ext_fs.next_free_byte);
+    fs_sb->mstore_ext_fs.byte_count     = atomic64_read(&mstore_ext_fs.byte_count);
+    castle_fs_superblocks_put(fs_sb, 1);
+
+    mstore_init_done = 1;
+
+    return 0;
+}
+
+int castle_mstores_read(void)
+{
+    struct castle_fs_superblock *fs_sb;
+
+    BUG_ON(mstore_init_done);
+    fs_sb = castle_fs_superblocks_get();
+    mstore_ext_fs.ext_id        = fs_sb->mstore_ext_fs.ext_id;
+    mstore_ext_fs.ext_size      = fs_sb->mstore_ext_fs.ext_size;
+    atomic64_set(&mstore_ext_fs.next_free_byte, fs_sb->mstore_ext_fs.next_free_byte);
+    atomic64_set(&mstore_ext_fs.byte_count, fs_sb->mstore_ext_fs.byte_count);
+    castle_fs_superblocks_put(fs_sb, 0);
+
+    mstore_init_done = 1;
+
+    return 0;
 }
 
 int castle_cache_init(void)

@@ -145,6 +145,10 @@ struct castle_mstore*      castle_mstore_init              (c_mstore_id_t store_
                                                             size_t entry_size);
 void                       castle_mstore_fini              (struct castle_mstore *store);
 
+int                        castle_mstores_create           (void);
+
+int                        castle_mstores_read             (void);
+
 void                       castle_cache_print_stats        (void);
 
 /* Cache init/fini */

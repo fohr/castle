@@ -300,13 +300,18 @@ int castle_fs_init(void)
     /* Load extent structures into memory */
     castle_extents_load(first);
 
+    /* Init the fs superblock */
+    if (first) castle_fs_superblocks_init();
+
+    /* Read mstore meta data in. */
+    ret = first ? castle_mstores_create() : castle_mstores_read(); 
+    if(ret) return -EINVAL;
+
     /* If first is still true, we've not found a single non-new cs.
        Init the fs superblock. */
     if(first) {
         c2_block_t *c2b;
 
-        /* Init the fs superblock */
-        castle_fs_superblocks_init();
         /* Init the root btree node */
         atomic64_set(&(castle_global_tree.node_count), 0);
         init_rwsem(&castle_global_tree.lock);
@@ -341,14 +346,9 @@ int castle_fs_init(void)
     memcpy(cs_fs_sb, &fs_sb, sizeof(struct castle_fs_superblock));
     castle_fs_superblocks_put(cs_fs_sb, 1);
 
-    /* Post initialise freespace on all the slaves. */
-    //castle_freespace_slaves_init(first);
-
     /* Read doubling arrays and component trees in. */
-#if 1
     ret = first ? castle_double_array_create() : castle_double_array_read(); 
     if(ret) return -EINVAL;
-#endif
 
     /* Read versions in. This requires component trees. */
     ret = castle_versions_read();
@@ -609,7 +609,7 @@ struct castle_slave* castle_claim(uint32_t new_dev)
     if(err == -EINVAL)
     {
         printk("Invalid superblock. Will initialise a new one.\n");
-#if 0   // FIXME: For sake of debugging
+#if 1
         get_random_bytes(&cs->uuid, sizeof(cs->uuid));
 #else
         cs->uuid = (cs->id + 1) * 0x111;
@@ -902,11 +902,6 @@ static void castle_bio_data_io_do(c_bvec_t *c_bvec, c_ext_pos_t  cep)
         castle_bio_data_copy(c_bvec, NULL);
         return;
     }
-
-#if 0 // FIXME: bhaskar
-    /* Save last_access time in the slave */
-    castle_slave_access(cep.ext_id);
-#endif
 
     c2b = castle_cache_page_block_get(cep);
     castle_debug_bvec_update(c_bvec, C_BVEC_DATA_C2B_GOT);
