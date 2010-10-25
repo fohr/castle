@@ -777,7 +777,7 @@ static int castle_object_data_write(struct castle_object_replace *replace)
         if((data_c2b_offset == data_c2b_length) && (data_length > 0))
         {
             debug("Run out of buffer space, allocating a new one.\n");
-            new_data_cep = castle_object_write_next_cep(data_c2b->cep, data_length); 
+            new_data_cep = castle_object_write_next_cep(data_c2b->cep, data_c2b_length); 
             new_data_c2b = castle_object_write_buffer_alloc(new_data_cep, data_length); 
             data_c2b_length = new_data_c2b->nr_pages * C_BLK_SIZE;
             data_c2b_offset = 0;
