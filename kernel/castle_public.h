@@ -142,4 +142,37 @@ typedef struct castle_control_ioctl {
     };
 } cctrl_ioctl_t;
 
+#define PACKED               __attribute__((packed))
+
+#define CASTLE_SLAVE_MAGIC1     (0x02061985)
+#define CASTLE_SLAVE_MAGIC2     (0x16071983)
+#define CASTLE_SLAVE_MAGIC3     (0x16061981)
+#define CASTLE_SLAVE_VERSION    (1)
+
+struct castle_slave_superblock {
+    uint32_t     magic1;
+    uint32_t     magic2;
+    uint32_t     magic3;
+    uint32_t     version;   /* Super chunk format version */
+    uint32_t     uuid;
+    uint32_t     used;
+    uint32_t     size; /* In blocks */
+	uint32_t     flags; 
+} PACKED;
+
+#define CASTLE_FS_MAGIC1        (0x19731121)
+#define CASTLE_FS_MAGIC2        (0x19880624)
+#define CASTLE_FS_MAGIC3        (0x19821120)
+#define CASTLE_FS_VERSION       (1)
+
+struct castle_fs_superblock_public {
+    uint32_t     magic1;
+    uint32_t     magic2;
+    uint32_t     magic3;
+    uint32_t     uuid;
+    uint32_t     version;   /* Super chunk format version */
+    uint32_t     salt;
+    uint32_t     peper;
+} PACKED;
+
 #endif /* __CASTLE_PUBLIC_H__ */

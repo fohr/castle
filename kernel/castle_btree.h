@@ -7,7 +7,8 @@ struct castle_btree_type*
             castle_btree_type_get     (btree_t type);
 c2_block_t* castle_btree_node_create  (int version, 
                                        int is_leaf, 
-                                       struct castle_component_tree *ct);
+                                       struct castle_component_tree *ct,
+                                       int alloc_done);
 void        castle_btree_node_save_prepare
                                       (struct castle_component_tree *ct, 
                                        c_ext_pos_t  node_cep);
