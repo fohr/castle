@@ -23,7 +23,7 @@
 #define debug_mstore(_f, _a...)  (printk("%s:%.4d:%s " _f, __FILE__, __LINE__ , __func__, ##_a))
 #endif
 
-static int                     castle_cache_size = 100000; /* in pages */
+static int                     castle_cache_size = 1000; /* in pages */
 
 module_param(castle_cache_size, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
 MODULE_PARM_DESC(castle_cache_size, "Cache size");
