@@ -1244,7 +1244,6 @@ static int castle_back_iter_next_callback(struct castle_object_iterator *iterato
 
 err0:
     castle_back_buffer_put(conn, op->buf);
-    castle_back_put_stateful_op(conn, stateful_op);
     castle_back_reply(op, err, 0, 0);
 
     return 0;
@@ -1341,7 +1340,7 @@ static void castle_back_iter_next(struct work_struct *work)
             {
                 error("iterator buffer too small\n");
                 err = -EINVAL;
-                goto err2;
+                goto err1;
             }
 
             castle_object_okey_free(stateful_op->iterator.saved_key);
@@ -1363,10 +1362,8 @@ static void castle_back_iter_next(struct work_struct *work)
 
     return;
 
-err2:
-    castle_back_buffer_put(conn, op->buf);
 err1:
-    castle_back_put_stateful_op(conn, stateful_op);
+    castle_back_buffer_put(conn, op->buf);
 err0:
     castle_back_reply(op, err, 0, 0);
 }
