@@ -245,7 +245,7 @@ static int castle_debug_run(void *unused)
     int something_printed, j, nr_bios;
     unsigned long flags, states_printed;
     int cep_idx;
-    int sleep_time = 10;
+    int sleep_time = 2;
 
     do {
         spin_lock_irqsave(&bio_list_spinlock, flags);
@@ -310,6 +310,9 @@ static int castle_debug_run(void *unused)
         if(something_printed) 
         {
             printk("...\nTotal number of stuck bios=%d\n\n", nr_bios);
+            printk("Cache stats:\n");
+            castle_cache_stats_print();
+            printk("\n");
             sleep_time += 1;
         }
   

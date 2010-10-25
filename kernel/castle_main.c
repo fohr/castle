@@ -107,7 +107,7 @@ static void castle_fs_superblocks_init(void)
 
 static inline struct castle_fs_superblock* castle_fs_superblock_get(struct castle_slave *cs)
 {
-    lock_c2b(cs->fs_sblk);
+    write_lock_c2b(cs->fs_sblk);
     BUG_ON(!c2b_uptodate(cs->fs_sblk));
 
     return ((struct castle_fs_superblock*) c2b_buffer(cs->fs_sblk));
@@ -116,7 +116,7 @@ static inline struct castle_fs_superblock* castle_fs_superblock_get(struct castl
 static inline void castle_fs_superblock_put(struct castle_slave *cs, int dirty)
 {
     if(dirty) dirty_c2b(cs->fs_sblk);
-    unlock_c2b(cs->fs_sblk);
+    write_unlock_c2b(cs->fs_sblk);
 }
 
 /* Get all superblocks */
@@ -146,7 +146,7 @@ void castle_fs_superblocks_put(struct castle_fs_superblock *sb, int dirty)
     {
         cs = list_entry(l, struct castle_slave, list);
         /* The buffer should be locked */
-        BUG_ON(!c2b_locked(cs->fs_sblk));
+        BUG_ON(!c2b_write_locked(cs->fs_sblk));
         /* If superblock has been dirtied, copy it, and dirty the buffer */
         if(dirty)
         {
@@ -156,7 +156,7 @@ void castle_fs_superblocks_put(struct castle_fs_superblock *sb, int dirty)
             dirty_c2b(cs->fs_sblk);
         }
         /* Finally, unlock the buffer */
-        unlock_c2b(cs->fs_sblk);
+        write_unlock_c2b(cs->fs_sblk);
     }
 }
 
@@ -321,7 +321,7 @@ int castle_fs_init(void)
         /* We know that the tree is 1 level deep at the moment */
         castle_global_tree.tree_depth = 1;
         /* Release btree node c2b */
-        unlock_c2b(c2b);
+        write_unlock_c2b(c2b);
         put_c2b(c2b);
         /* Init version list */
         ret = castle_versions_zero_init();
@@ -417,7 +417,7 @@ static int castle_slave_superblock_read(struct castle_slave *cs)
 
 struct castle_slave_superblock* castle_slave_superblock_get(struct castle_slave *cs)
 {
-    lock_c2b(cs->sblk);
+    write_lock_c2b(cs->sblk);
     BUG_ON(!c2b_uptodate(cs->sblk));
     
     return ((struct castle_slave_superblock*) c2b_buffer(cs->sblk));
@@ -426,7 +426,7 @@ struct castle_slave_superblock* castle_slave_superblock_get(struct castle_slave 
 void castle_slave_superblock_put(struct castle_slave *cs, int dirty)
 {
     if(dirty) dirty_c2b(cs->sblk);
-    unlock_c2b(cs->sblk);
+    write_unlock_c2b(cs->sblk);
 }
 
 static int castle_slave_superblocks_cache(struct castle_slave *cs)
@@ -451,12 +451,12 @@ static int castle_slave_superblocks_cache(struct castle_slave *cs)
         /* We expecting the buffer not to be up to date. 
            We check if it got updated later */
         BUG_ON(c2b_uptodate(c2b));
-        lock_c2b(c2b);
+        write_lock_c2b(c2b);
         submit_c2b_sync(READ, c2b);
         if(!c2b_uptodate(c2b))
         {
             for(j=0; j<=i; i++)
-                unlock_c2b(*(c2bp[i]));
+                write_unlock_c2b(*(c2bp[i]));
             return -EIO;
         }
     }
@@ -845,7 +845,7 @@ static void castle_bio_data_copy(c_bvec_t *c_bvec, c2_block_t *c2b)
     /* Unlock buffers */
     if(c2b)
     {
-        unlock_c2b(c2b);
+        write_unlock_c2b(c2b);
         put_c2b(c2b);
     }
     
@@ -861,26 +861,25 @@ static void castle_bio_data_io_error(c_bvec_t *c_bvec, int err)
     castle_bio_put(c_bvec->c_bio);
 }
 
-static void castle_bio_c2b_update(c2_block_t *c2b, int uptodate)
+static void castle_bio_c2b_update(c2_block_t *c2b)
 {
     /* TODO: comment when it gets called */
     c_bvec_t *c_bvec = c2b->private;
 
-    if(uptodate)
+    if(c2b_uptodate(c2b))
     {
         castle_debug_bvec_update(c_bvec, C_BVEC_DATA_C2B_UPTODATE);
-        set_c2b_uptodate(c2b);
         castle_bio_data_copy(c_bvec, c2b);
     } else
     {
         /* Just drop the lock, if we failed to update */
-        unlock_c2b(c2b);
+        write_unlock_c2b(c2b);
         put_c2b(c2b);
         castle_bio_data_io_error(c_bvec, -EIO);
     }
 }
 
-static void castle_bio_data_io_do(c_bvec_t *c_bvec, c_ext_pos_t  cep)
+static void castle_bio_data_io_do(c_bvec_t *c_bvec, c_ext_pos_t cep)
 {
     c2_block_t *c2b;
     int write = (c_bvec_data_dir(c_bvec) == WRITE);
@@ -909,7 +908,7 @@ static void castle_bio_data_io_do(c_bvec_t *c_bvec, c_ext_pos_t  cep)
 #ifdef CASTLE_DEBUG
     c_bvec->locking = c2b;
 #endif
-    lock_c2b(c2b);
+    write_lock_c2b(c2b);
     castle_debug_bvec_update(c_bvec, C_BVEC_DATA_C2B_LOCKED);
 
     /* We don't need to update the c2b if it's already uptodate
@@ -917,7 +916,7 @@ static void castle_bio_data_io_do(c_bvec_t *c_bvec, c_ext_pos_t  cep)
        overwrite previous content anyway */
     if(c2b_uptodate(c2b) || (write && test_bit(CBV_ONE2ONE_BIT, &c_bvec->flags)))
     {
-        set_c2b_uptodate(c2b);
+        update_c2b(c2b);
         castle_debug_bvec_update(c_bvec, C_BVEC_DATA_C2B_UPTODATE);
         castle_bio_data_copy(c_bvec, c2b);
     } else

@@ -190,11 +190,11 @@ static void castle_ct_immut_iter_next_node_find(c_immut_iter_t *iter, c_ext_pos_
         /* Get cache block for the current c2b */
         c2b = castle_cache_block_get(cep, iter->btree->node_size); 
         debug("Node in immut iter.\n");
-        lock_c2b(c2b);
+        write_lock_c2b(c2b);
         /* If c2b is not up to date, issue a blocking READ to update */
         if(!c2b_uptodate(c2b))
             BUG_ON(submit_c2b_sync(READ, c2b));
-        unlock_c2b(c2b);
+        write_unlock_c2b(c2b);
         node = c2b_bnode(c2b);
         if(castle_ct_immut_iter_next_node_init(iter, node))
         {
@@ -1246,8 +1246,8 @@ static inline void castle_da_entry_add(struct castle_da_merge *merge,
 
         level->node_c2b = castle_cache_block_get(cep, btree->node_size);
         debug("Locking the c2b, and setting it up to date.\n");
-        lock_c2b(level->node_c2b);
-        set_c2b_uptodate(level->node_c2b);
+        write_lock_c2b(level->node_c2b);
+        update_c2b(level->node_c2b);
         /* Init the node properly */
         node = c2b_bnode(level->node_c2b);
         castle_da_node_buffer_init(btree, node);
@@ -1376,7 +1376,7 @@ release_node:
     {
         prev_node->next_node = level->node_c2b->cep;
         dirty_c2b(merge->last_node_c2b);
-        unlock_c2b(merge->last_node_c2b);
+        write_unlock_c2b(merge->last_node_c2b);
         put_c2b(merge->last_node_c2b);
     } else
     {
@@ -1535,7 +1535,7 @@ static void castle_da_max_path_complete(struct castle_da_merge *merge)
         debug("Locking next node cep=(0x%x, 0x%x)\n", 
                 cvt.cep.ext_id, cvt.cep.offset);
         next_node_c2b = castle_cache_block_get(cvt.cep, btree->node_size);
-        lock_c2b(next_node_c2b);
+        write_lock_c2b(next_node_c2b);
         /* We unlikely to need a blocking read, because we've just had these
            nodes in the cache. */
         if(!c2b_uptodate(next_node_c2b))
@@ -1545,7 +1545,7 @@ static void castle_da_max_path_complete(struct castle_da_merge *merge)
         {
             debug("Unlocking prev node cep=(0x%x, 0x%x)\n", 
                     node_c2b->cep.ext_id, node_c2b->cep.offset);
-            unlock_c2b(node_c2b);
+            write_unlock_c2b(node_c2b);
             put_c2b(node_c2b);
         }
         node_c2b = next_node_c2b;
@@ -1556,7 +1556,7 @@ static void castle_da_max_path_complete(struct castle_da_merge *merge)
     {
         debug("Unlocking prev node cep=(0x%x, 0x%x)\n", 
                 node_c2b->cep.ext_id, node_c2b->cep.offset);
-        unlock_c2b(node_c2b);
+        write_unlock_c2b(node_c2b);
         put_c2b(node_c2b);
     }
 }
@@ -1602,7 +1602,7 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
     if(merge->last_node_c2b)
     {
         dirty_c2b(merge->last_node_c2b);
-        unlock_c2b(merge->last_node_c2b);
+        write_unlock_c2b(merge->last_node_c2b);
         put_c2b(merge->last_node_c2b);
     }
     
@@ -1612,7 +1612,7 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
         c2_block_t *c2b = merge->levels[i].node_c2b;
         if(c2b)
         {
-            unlock_c2b(c2b);
+            write_unlock_c2b(c2b);
             put_c2b(c2b);
         }
         if(merge->levels[i].buffer)
@@ -2259,7 +2259,7 @@ static int castle_da_rwct_make(struct castle_double_array *da)
     castle_btree_node_save_prepare(ct, c2b->cep);
     ct->root_node = c2b->cep;
     ct->tree_depth = 1;
-    unlock_c2b(c2b);
+    write_unlock_c2b(c2b);
     put_c2b(c2b);
     debug("Added component tree seq=%d, root_node=(0x%x, 0x%x), it's threaded onto da=%p, level=%d\n",
             ct->seq, c2b->cep.ext_id, c2b->cep.offset, da, ct->level);

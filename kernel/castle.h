@@ -50,21 +50,6 @@ typedef uint32_t block_t;
 #define INVAL_BLOCK         ((block_t)-1) 
 #define BLOCK_INVAL(_b)     ((_b) == INVAL_BLOCK) 
 
-#if 0
-/* Disk layout related structures */
-struct castle_disk_block {
-    uint32_t disk;
-    block_t  block;
-} PACKED;
-typedef struct castle_disk_block c_disk_blk_t;
-#define INVAL_DISK_BLK          ((c_disk_blk_t){0,0})
-#define DISK_BLK_INVAL(_blk)    (((_blk).block == 0) && ((_blk).disk == 0))
-#define DISK_BLK_EQUAL(_blk1, _blk2) (((_blk1).disk == (_blk2).disk) && \
-                                      ((_blk1).block == (_blk2).block)) 
-#define blkfmt                  "(0x%x, 0x%x)"
-#define blk2str(_blk)           (_blk).disk, (_blk).block
-#endif
-
 /* New Free space structures */
 
 #define MAX_NR_SLAVES 20
@@ -81,7 +66,6 @@ typedef struct castle_disk_block c_disk_blk_t;
 #define BLKS_PER_CHK          (C_CHK_SIZE / C_BLK_SIZE)
 #define MASK_BLK_OFFSET(offset) (((offset) >> C_BLK_SHIFT) << C_BLK_SHIFT)
 #define MASK_CHK_OFFSET(offset) (((offset) >> C_CHK_SHIFT) << C_CHK_SHIFT)
-//#define SECTOR(offset)        ((offset) >> 9)
 
 #define POWOF2(_n)            (((_n) & ((_n) - 1)) == 0)
 /*  Chunk #                     Description     
@@ -131,6 +115,9 @@ typedef uint32_t c_chk_cnt_t;
 typedef uint32_t c_chk_t;
 typedef uint64_t c_ext_id_t;
 typedef uint32_t c_uuid_t;
+
+#define INVAL_CHK                       ((c_chk_t)-1)
+#define CHK_INVAL(_chk)                 ((_chk) == INVAL_CHK)
 
 #define INVAL_EXT_ID                    (-1)
 #define EXT_ID_INVAL(_id)               ((_id) == INVAL_EXT_ID)
