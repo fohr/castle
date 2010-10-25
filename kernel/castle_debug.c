@@ -45,9 +45,9 @@ void* castle_debug_malloc(size_t size, gfp_t flags, char *file, int line)
     dobj->size = size;
 
     /* Add ourselves to the list under lock */
-    spin_lock(&malloc_list_spinlock);
+    spin_lock_irq(&malloc_list_spinlock);
     list_add(&dobj->list, &malloc_list);
-    spin_unlock(&malloc_list_spinlock);
+    spin_unlock_irq(&malloc_list_spinlock);
 
     return (char *)dobj + sizeof(struct castle_malloc_debug); 
 }
@@ -66,13 +66,14 @@ void* castle_debug_zalloc(size_t size, gfp_t flags, char *file, int line)
 void castle_debug_free(void *obj)
 {
     struct castle_malloc_debug *dobj;
+    unsigned long flags;
 
     dobj = obj;
     dobj--;
     /* Remove from list */
-    spin_lock(&malloc_list_spinlock);
+    spin_lock_irqsave(&malloc_list_spinlock, flags);
     list_del(&dobj->list);
-    spin_unlock(&malloc_list_spinlock);
+    spin_unlock_irqrestore(&malloc_list_spinlock, flags);
 
     kfree(dobj);
 }
