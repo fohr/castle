@@ -292,19 +292,14 @@ static void c2b_multi_io_end(struct bio *bio, int err)
 #endif
 }
 
-c_disk_chk_t read_slave_get(c_ext_id_t ext_id, c_chk_t offset)
+static c_disk_chk_t read_slave_pick(c_ext_id_t ext_id, c_chk_t offset)
 {
-    c_disk_chk_t    chunks[MAX_NR_SLAVES];
+    c_disk_chk_t chunks[MAX_NR_SLAVES];
 
     BUG_ON(castle_extent_map_get(ext_id, offset, 1, chunks) >= MAX_NR_SLAVES);
     
+    /* TODO: could make better decission if we looked at the disk head position and/or load */
     return chunks[0];
-    /* Take decision based on disk loads */
-#if 0
-    for (i=0; i<k_factor; i++)
-    {
-    }
-#endif
 }
 
 void __submit_bio(int                         rw,
@@ -386,90 +381,93 @@ int chk_valid(c_disk_chk_t chk)
     return 1;
 }
 
-int submit_c2b_rda(int rw, c2_block_t *c2b)
+static int submit_c2b_rda_read(c2_block_t *c2b)
 {
     struct castle_slave     *cs;
-    c_ext_pos_t              cep = c2b->cep;
-    c_disk_chk_t             chunks[MAX_NR_SLAVES];
-    uint32_t                 k_factor, i, j;
+    c_ext_pos_t              cep;
     c_chk_cnt_t              nr_chunks;
+    uint32_t                 i, rem_pages, cur_offset;
     struct list_head        *cur_page;
-    uint32_t                 rem_pages;
-    uint32_t                 cur_offset = cep.offset;
+    c_disk_chk_t             chk;
     sector_t                 sector;
 
-    BUG_ON(atomic_read(&c2b->remaining));
-    if (unlikely(BLOCK_OFFSET(cep.offset)))
-    {
-        printk("RDA %s: nr_pages - %u cep: "cep_fmt_str_nl, 
-                (rw == READ)?"Read":"Write", c2b->nr_pages, __cep2str(cep));
-        BUG();
-    }
+    /* Work out how many logical chunks we need to touch (e.g. chunk boundries could be crossed) */
+    cep = c2b->cep;
+    nr_chunks = CHUNK(cep.offset + (c2b->nr_pages * C_BLK_SIZE) - 1) - CHUNK(cep.offset) + 1;
 
-    nr_chunks = CHUNK(cep.offset + (c2b->nr_pages * C_BLK_SIZE) - 1)
-                    - CHUNK(cep.offset) + 1;
-
-    debug("RDA %s: nr_pages - %u cep: "cep_fmt_str_nl, 
-            (rw == READ)?"Read":"Write", c2b->nr_pages, cep2str(cep));
-    if (rw == READ)
-    {
-        c_disk_chk_t        chk;
+    debug("RDA read nr_pages - %u cep: "cep_fmt_str_nl, 
+            c2b->nr_pages, cep2str(cep));
         
-        atomic_add(c2b->nr_pages, &c2b->remaining);
-        rem_pages   = c2b->nr_pages;
-        cur_page    = c2b->pages.next;
+    atomic_add(c2b->nr_pages, &c2b->remaining);
+    rem_pages  = c2b->nr_pages;
+    cur_page   = c2b->pages.next;
+    cur_offset = cep.offset;
+    for (i=0; i<nr_chunks; i++)
+    {
+        uint32_t pgs_in_chk;
+        uint32_t first_pg, last_pg;
 
-        for (i=0; i<nr_chunks; i++)
+        chk = read_slave_pick(cep.ext_id, CHUNK(cur_offset));
+        if (!chk_valid(chk) && !SUPER_EXTENT(cep.ext_id))
         {
-            uint32_t pgs_in_chk;
-            uint32_t first_pg, last_pg;
-
-            chk = read_slave_get(cep.ext_id, CHUNK(cur_offset));
-            if (!SUPER_EXTENT(cep.ext_id) && !chk_valid(chk))
-            {
-                printk("Bad chunk: "disk_chk_fmt", cep: "cep_fmt_str_nl,
-                        disk_chk2str(chk), cep2str(cep));
-                BUG();
-            }
-            if (DISK_CHK_INVAL(chk))
-            {
-                atomic_sub(c2b->nr_pages - rem_pages, &c2b->remaining);
-                return -ENODEV;
-            }
-#if 0
-            printk("READ "cep_fmt_str"-"disk_chk_fmt_nl, cep2str(c2b->cep),
-                        disk_chk2str(chk));
-#endif
-            cs = castle_slave_find_by_uuid(chk.slave_id);
-            if (!cs)
-            {
-                printk("Couldn't find slave for %u\n", chk.slave_id);
-                return -ENODEV;
-            }
-            first_pg = 0;
-            last_pg  = BLKS_PER_CHK - 1;
-            if (i == 0)
-                first_pg = BLK_IN_CHK(cur_offset);
-            if (i == nr_chunks - 1)
-                last_pg  = BLK_IN_CHK(cep.offset + (c2b->nr_pages * C_BLK_SIZE) - 1);
-            pgs_in_chk = last_pg + 1 - first_pg;
-            
-            sector      = (sector_t)(chk.offset << (C_CHK_SHIFT - 9)) +
-                                (BLK_IN_CHK(cur_offset) << (C_BLK_SHIFT - 9));
-            debug("\t%u pages from slave %u at %u\n", pgs_in_chk, chk.slave_id, chk.offset);
-            __submit_bio(rw, cs->bdev, &cur_page, pgs_in_chk, sector, c2b);
-            
-            cur_offset += (pgs_in_chk * C_BLK_SIZE);
-            rem_pages  -= pgs_in_chk;
+            printk("Bad chunk: "disk_chk_fmt", cep: "cep_fmt_str_nl,
+                    disk_chk2str(chk), cep2str(cep));
+            BUG();
         }
-        return 0;
+        if (DISK_CHK_INVAL(chk))
+        {
+            atomic_sub(c2b->nr_pages - rem_pages, &c2b->remaining);
+            return -ENODEV;
+        }
+        debug("READ "cep_fmt_str"-"disk_chk_fmt_nl, cep2str(c2b->cep),
+                    disk_chk2str(chk));
+        cs = castle_slave_find_by_uuid(chk.slave_id);
+        if (!cs)
+        {
+            printk("Couldn't find slave for %u\n", chk.slave_id);
+            return -ENODEV;
+        }
+        /* Work out how many pages we can read from this chunk. */
+        first_pg = 0;
+        last_pg  = BLKS_PER_CHK - 1;
+        if (i == 0)
+            first_pg = BLK_IN_CHK(cur_offset);
+        if (i == nr_chunks - 1)
+            last_pg  = BLK_IN_CHK(cep.offset + (c2b->nr_pages * C_BLK_SIZE) - 1);
+        pgs_in_chk = last_pg + 1 - first_pg;
+       
+        /* Work out what sector should the IO start from */ 
+        sector      = (sector_t)(chk.offset << (C_CHK_SHIFT - 9)) +
+                            (BLK_IN_CHK(cur_offset) << (C_BLK_SHIFT - 9));
+        debug("\t%u pages from slave %u at %u\n", pgs_in_chk, chk.slave_id, chk.offset);
+        /* Submit the BIO */
+        __submit_bio(READ, cs->bdev, &cur_page, pgs_in_chk, sector, c2b);
+        
+        cur_offset += (pgs_in_chk * C_BLK_SIZE);
+        rem_pages  -= pgs_in_chk;
     }
 
-    /* Handle writes */
-    k_factor    = castle_extent_kfactor_get(cep.ext_id);
+    return 0;
+}
+
+static int submit_c2b_rda_write(c2_block_t *c2b)
+{
+    c_disk_chk_t             chunks[MAX_NR_SLAVES];
+    struct castle_slave     *cs;
+    c_ext_pos_t              cep;
+    uint32_t                 k_factor, i, j, rem_pages, cur_offset;
+    c_chk_cnt_t              nr_chunks;
+    struct list_head        *cur_page;
+    sector_t                 sector;
+
+    cep = c2b->cep;
+    nr_chunks = CHUNK(cep.offset + (c2b->nr_pages * C_BLK_SIZE) - 1) - CHUNK(cep.offset) + 1;
+
+    k_factor   = castle_extent_kfactor_get(cep.ext_id);
     atomic_add((c2b->nr_pages * k_factor), &c2b->remaining);
-    rem_pages   = c2b->nr_pages;
-    cur_page    = c2b->pages.next;
+    rem_pages  = c2b->nr_pages;
+    cur_page   = c2b->pages.next;
+    cur_offset = cep.offset;
     debug("Write to %u disks\n", k_factor);
     for (i=0; i<nr_chunks; i++)
     {
@@ -505,16 +503,16 @@ int submit_c2b_rda(int rw, c2_block_t *c2b)
             sector  = (sector_t)(chk.offset << (C_CHK_SHIFT - 9)) +
                                 (BLK_IN_CHK(cur_offset) << (C_BLK_SHIFT - 9));
             cur_page = page;
-#if 0
-            printk("WRITE "cep_fmt_str"-"disk_chk_fmt_nl, cep2str(c2b->cep),
+            debug("WRITE "cep_fmt_str"-"disk_chk_fmt_nl, cep2str(c2b->cep),
                         disk_chk2str(chk));
-#endif
-            debug("\t%u pages from slave %u at %u\n", pgs_in_chk, chk.slave_id, chk.offset);
-            __submit_bio(rw, cs->bdev, &cur_page, pgs_in_chk, sector, (void *)c2b);
+            debug("\t%u pages from slave %u at %u\n", 
+                pgs_in_chk, chk.slave_id, chk.offset);
+            __submit_bio(WRITE, cs->bdev, &cur_page, pgs_in_chk, sector, (void *)c2b);
         }
         rem_pages  -= pgs_in_chk;
         cur_offset += (pgs_in_chk * C_BLK_SIZE);
     }
+
     return 0;
 }
 
@@ -523,13 +521,23 @@ int submit_c2b(int rw, c2_block_t *c2b)
 	BUG_ON(!c2b_locked(c2b));
 	BUG_ON(!c2b->end_io);
     BUG_ON(EXT_POS_INVAL(c2b->cep));
-    
+    BUG_ON(atomic_read(&c2b->remaining));
+    if (unlikely(BLOCK_OFFSET(c2b->cep.offset)))
+    {
+        printk("RDA %s: nr_pages - %u cep: "cep_fmt_str_nl, 
+                (rw == READ)?"Read":"Write", c2b->nr_pages, __cep2str(c2b->cep));
+        BUG();
+    }
+ 
     if (rw == READ)
+    {
         atomic_inc(&castle_cache_read_stats);
-    else if (rw == WRITE)
-        atomic_inc(&castle_cache_write_stats);
+        return submit_c2b_rda_read(c2b);
+    }
 
-    return submit_c2b_rda(rw, c2b);
+    BUG_ON(rw != WRITE);
+    atomic_inc(&castle_cache_write_stats);
+    return submit_c2b_rda_write(c2b);
 }
 
 static void castle_cache_sync_io_end(c2_block_t *c2b, int uptodate)
