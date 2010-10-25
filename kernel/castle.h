@@ -183,16 +183,18 @@ typedef struct castle_extent_position c_ext_pos_t;
 typedef struct castle_extent_freespace {
     c_ext_id_t      ext_id;
     c_byte_off_t    ext_size;
-    atomic64_t      next_free_byte;
-    atomic64_t      byte_count;
+    uint32_t        align;
+    atomic64_t      used;
+    atomic64_t      blocked;
 } c_ext_fs_t;
 
-typedef struct castle_extent_freespace_ondisk {
+typedef struct castle_extent_freespace_byte_stream {
     c_ext_id_t      ext_id;
     c_byte_off_t    ext_size;
-    uint64_t        next_free_byte;
-    uint64_t        byte_count;
-} c_ext_fs_od_t;
+    uint32_t        align;
+    uint64_t        used;
+    uint64_t        blocked;
+} c_ext_fs_bs_t;
 
 #define CASTLE_SLAVE_TARGET     (0x00000001)
 #define CASTLE_SLAVE_SPINNING   (0x00000002)
@@ -233,7 +235,7 @@ struct castle_fs_superblock {
     uint32_t     magic3;
     uint32_t     salt;
     uint32_t     peper;
-    c_ext_fs_od_t mstore_ext_fs;
+    c_ext_fs_bs_t mstore_ext_fs_bs;
     c_ext_pos_t  mstore[16];
 } PACKED;
 
@@ -510,14 +512,8 @@ struct castle_clist_entry {
     c_ext_pos_t  first_node;
     c_ext_pos_t  last_node;
     uint64_t     node_count;
-    c_ext_id_t   tree_ext_id;
-    c_byte_off_t tree_ext_sz;
-    uint64_t     tree_ext_byte;
-    uint64_t     tree_byte_count;
-    c_ext_id_t   data_ext_id;
-    c_byte_off_t data_ext_sz;
-    uint64_t     data_ext_byte;
-    uint64_t     data_byte_count;
+    c_ext_fs_bs_t tree_ext_fs_bs;
+    c_ext_fs_bs_t data_ext_fs_bs;
 } PACKED;
 
 struct castle_vlist_entry {
@@ -937,20 +933,25 @@ int                   castle_fs_init               (void);
 
 int                   castle_ext_fs_init           (c_ext_fs_t       *ext_fs, 
                                                     da_id_t           da_id, 
-                                                    c_byte_off_t      size);
+                                                    c_byte_off_t      size,
+                                                    uint32_t          align);
 
 int                   castle_ext_fs_pre_alloc      (c_ext_fs_t       *ext_fs,
-                                                    c_byte_off_t      size,
-                                                    int               aligned);
+                                                    c_byte_off_t      size);
 
 int                   castle_ext_fs_get            (c_ext_fs_t       *ext_fs,
                                                     c_byte_off_t      size,
-                                                    int               aligned,
+                                                    int               alloc_done,
                                                     c_ext_pos_t      *cep);
 
 int                   castle_ext_fs_free           (c_ext_fs_t       *ext_fs,
-                                                    int64_t           size,
-                                                    int               aligned);
+                                                    int64_t           size);
+
+void                  castle_ext_fs_marshall       (c_ext_fs_t       *ext_fs, 
+                                                    c_ext_fs_bs_t    *ext_fs_bs);
+
+void                  castle_ext_fs_unmarshall     (c_ext_fs_t       *ext_fs, 
+                                                    c_ext_fs_bs_t    *ext_fs_bs);
 
 c_byte_off_t          castle_ext_fs_summary_get    (c_ext_fs_t *ext_fs);
 

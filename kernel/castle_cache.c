@@ -1549,12 +1549,9 @@ static void castle_mstore_node_add(struct castle_mstore *store)
     BUG_ON(down_trylock(&store->mutex) == 0);
 
     /* Prepare the node first */
-    BUG_ON(castle_ext_fs_pre_alloc(&mstore_ext_fs, 
-                                   C_BLK_SIZE,
-                                   1) < 0);
-    BUG_ON(castle_ext_fs_get(&mstore_ext_fs, 
+    BUG_ON(castle_ext_fs_get(&mstore_ext_fs,
                              C_BLK_SIZE,
-                             1,
+                             0,
                              &cep) < 0);
     c2b = castle_cache_page_block_get(cep);
     debug_mstore("Allocated "cep_fmt_str_nl, cep2str(cep));
@@ -1789,14 +1786,11 @@ int castle_mstores_create(void)
     struct castle_fs_superblock *fs_sb;
 
     BUG_ON(mstore_init_done);
-    if (castle_ext_fs_init(&mstore_ext_fs, 0, (1024 * C_CHK_SIZE)) < 0)
+    if (castle_ext_fs_init(&mstore_ext_fs, 0, (1024 * C_CHK_SIZE), C_BLK_SIZE) < 0)
         return -EINVAL;
 
     fs_sb = castle_fs_superblocks_get();
-    fs_sb->mstore_ext_fs.ext_id         = mstore_ext_fs.ext_id;
-    fs_sb->mstore_ext_fs.ext_size       = mstore_ext_fs.ext_size;
-    fs_sb->mstore_ext_fs.next_free_byte = atomic64_read(&mstore_ext_fs.next_free_byte);
-    fs_sb->mstore_ext_fs.byte_count     = atomic64_read(&mstore_ext_fs.byte_count);
+    castle_ext_fs_marshall(&mstore_ext_fs, &fs_sb->mstore_ext_fs_bs);
     castle_fs_superblocks_put(fs_sb, 1);
 
     mstore_init_done = 1;
@@ -1810,13 +1804,24 @@ int castle_mstores_read(void)
 
     BUG_ON(mstore_init_done);
     fs_sb = castle_fs_superblocks_get();
-    mstore_ext_fs.ext_id        = fs_sb->mstore_ext_fs.ext_id;
-    mstore_ext_fs.ext_size      = fs_sb->mstore_ext_fs.ext_size;
-    atomic64_set(&mstore_ext_fs.next_free_byte, fs_sb->mstore_ext_fs.next_free_byte);
-    atomic64_set(&mstore_ext_fs.byte_count, fs_sb->mstore_ext_fs.byte_count);
+    castle_ext_fs_unmarshall(&mstore_ext_fs, &fs_sb->mstore_ext_fs_bs);
     castle_fs_superblocks_put(fs_sb, 0);
 
     mstore_init_done = 1;
+
+    return 0;
+}
+
+int castle_mstores_fini(void)
+{
+    struct castle_fs_superblock *fs_sb;
+
+    if (!mstore_init_done)
+        return 0;
+
+    fs_sb = castle_fs_superblocks_get();
+    castle_ext_fs_marshall(&mstore_ext_fs, &fs_sb->mstore_ext_fs_bs);
+    castle_fs_superblocks_put(fs_sb, 1);
 
     return 0;
 }

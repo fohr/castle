@@ -1502,7 +1502,42 @@ void castle_btree_node_save_prepare(struct castle_component_tree *ct, c_ext_pos_
     queue_work(castle_wq, &work_st->work);
 }
 
-c2_block_t* __castle_btree_node_create(int version, int is_leaf, struct castle_component_tree *ct)
+void castle_btree_node_init(struct castle_btree_node *node, int version, 
+                            int is_leaf, btree_t type)
+{
+    struct castle_btree_type *btree = castle_btree_type_get(type);
+
+    /* memset the node, so that ftree nodes are easily recognisable in hexdump. */
+    memset(node, 0x77, btree->node_size * C_BLK_SIZE);
+    node->magic    = BTREE_NODE_MAGIC;
+    node->type     = type;
+    node->version  = version;
+    node->used     = 0;
+    node->is_leaf  = is_leaf;
+    node->next_node = INVAL_EXT_POS;
+}
+
+static int castle_btree_node_space_get(struct castle_component_tree *ct, 
+                                c_ext_pos_t *cep,
+                                int alloc_done)
+{
+    struct castle_btree_type *btree = castle_btree_type_get(ct->btree_type);
+
+    if (castle_ext_fs_get(&ct->tree_ext_fs, (btree->node_size * C_BLK_SIZE),
+                          alloc_done, cep) < 0)
+    {
+        if (ct != &castle_global_tree)
+            printk("****WARNING: Allocating more nodes than pre-allocated: %u****\n",
+                    ct->seq);
+
+        return castle_ext_fs_get(&ct->tree_ext_fs, (btree->node_size * C_BLK_SIZE),
+                                 0, cep);
+    }
+
+    return 0;
+}
+
+c2_block_t* castle_btree_node_create(int version, int is_leaf, struct castle_component_tree *ct, int alloc_done)
 {
     struct castle_btree_type *btree;
     struct castle_btree_node *node;
@@ -1513,60 +1548,19 @@ c2_block_t* __castle_btree_node_create(int version, int is_leaf, struct castle_c
     type  = ct->btree_type;
     btree = castle_btree_type_get(type);
 
-    if (castle_ext_fs_get(&ct->tree_ext_fs, 
-                          (btree->node_size * C_BLK_SIZE),
-                          1,
-                          &cep) < 0)
-    {
-        if (ct != &castle_global_tree);
-            printk("****WARNING: Allocating more nodes than pre-allocated****\n");
-        BUG_ON(castle_ext_fs_pre_alloc(&ct->tree_ext_fs,
-                                       (btree->node_size * C_BLK_SIZE),
-                                       1) < 0);
-        BUG_ON(castle_ext_fs_get(&ct->tree_ext_fs, 
-                                 (btree->node_size * C_BLK_SIZE),
-                                 1,                                  
-                                 &cep) < 0);
-    }
-
+    BUG_ON(castle_btree_node_space_get(ct, &cep, alloc_done) < 0);
+    
     c2b   = castle_cache_block_get(cep, btree->node_size);
     
     lock_c2b(c2b);
     set_c2b_uptodate(c2b);
 
     node = c2b_buffer(c2b);
-    /* memset the node, so that ftree nodes are easily recognisable in hexdump. */
-    memset(node, 0x77, btree->node_size * C_BLK_SIZE);
-    node->magic    = BTREE_NODE_MAGIC;
-    node->type     = type;
-    node->version  = version;
-    node->used     = 0;
-    node->is_leaf  = is_leaf;
-    node->next_node = INVAL_EXT_POS;
+    castle_btree_node_init(node, version, is_leaf, type);
 
     dirty_c2b(c2b);
 
     return c2b;
-}
-
-c2_block_t* castle_btree_node_create(int version, int is_leaf, struct castle_component_tree *ct)
-{
-    struct castle_btree_type *btree = castle_btree_type_get(ct->btree_type);
-
-    BUG_ON(castle_ext_fs_pre_alloc(&ct->tree_ext_fs,
-                                   (btree->node_size * C_BLK_SIZE),
-                                   1) < 0);
-
-    return __castle_btree_node_create(version, is_leaf, ct);
-}
-
-c2_block_t* castle_btree_cbvec_node_create(int version, int is_leaf, c_bvec_t *c_bvec)
-{
-    struct castle_component_tree *ct = c_bvec->tree;
-
-    if (ct != &castle_global_tree)
-        atomic_dec(&c_bvec->reserv_nodes);
-    return __castle_btree_node_create(version, is_leaf, c_bvec->tree);
 }
 
 static c2_block_t* castle_btree_effective_node_create(c_bvec_t *c_bvec, 
@@ -1582,8 +1576,11 @@ static c2_block_t* castle_btree_effective_node_create(c_bvec_t *c_bvec,
     
     node = c2b_bnode(orig_c2b); 
     btree = castle_btree_type_get(node->type);
-    c2b = castle_btree_cbvec_node_create(version, node->is_leaf, c_bvec);
-    eff_node = c2b_buffer(c2b);
+
+    /* First build effective node in memory and allocate disk space only if it
+     * is not same as original node. */
+    eff_node = vmalloc(btree->node_size * C_BLK_SIZE);
+    castle_btree_node_init(eff_node, version, node->is_leaf, node->type);
 
     last_eff_key = btree->inv_key;
     BUG_ON(eff_node->used != 0);
@@ -1657,13 +1654,17 @@ static c2_block_t* castle_btree_effective_node_create(c_bvec_t *c_bvec,
     if((node->version == version) && (eff_node->used == node->used))
     {
         BUG_ON(moved_cnt > 0);
-        /* TODO: should clean_c2b? */
-        unlock_c2b(c2b);
-        put_c2b(c2b);
-        /* TODO: should also return the allocated disk block, but our allocator
-                 is too simple to handle this ATM */
+        vfree(eff_node);
+
         return NULL;
     }
+
+    /* Effective node is not same as original node - allocate space on the disk
+     * now and copy. */
+    atomic_dec(&c_bvec->reserv_nodes);
+    c2b = castle_btree_node_create(version, node->is_leaf, c_bvec->tree, 1);
+    memcpy(c2b_buffer(c2b), eff_node, btree->node_size * C_BLK_SIZE);
+    vfree(eff_node);
 
     castle_btree_node_save_prepare(c_bvec->tree, c2b->cep);
 
@@ -1683,7 +1684,8 @@ static c2_block_t* castle_btree_node_key_split(c_bvec_t *c_bvec, c2_block_t *ori
 
     node     = c2b_bnode(orig_c2b);
     btree    = castle_btree_type_get(node->type);
-    c2b      = castle_btree_cbvec_node_create(node->version, node->is_leaf, c_bvec);
+    atomic_dec(&c_bvec->reserv_nodes);
+    c2b      = castle_btree_node_create(node->version, node->is_leaf, c_bvec->tree, 1);
     castle_btree_node_save_prepare(c_bvec->tree, c2b->cep);
     sec_node = c2b_bnode(c2b);
     /* The original node needs to contain the elements from the right hand side
@@ -1821,7 +1823,8 @@ static void castle_btree_new_root_create(c_bvec_t *c_bvec, btree_t type)
             c_bvec->version);
     BUG_ON(c_bvec->btree_parent_node);
     /* Create the node */
-    c2b = castle_btree_cbvec_node_create(0, 0, c_bvec);
+    atomic_dec(&c_bvec->reserv_nodes);
+    c2b = castle_btree_node_create(0, 0, c_bvec->tree, 1);
     castle_btree_node_save_prepare(c_bvec->tree, c2b->cep);
     node = c2b_buffer(c2b);
     /* We should be under write lock here, check if we can read lock it (and BUG) */

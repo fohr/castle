@@ -46,8 +46,8 @@ struct castle_component_tree castle_global_tree = {.seq             = GLOBAL_TRE
                                                    .da_list         = {NULL, NULL},
                                                    .hash_list       = {NULL, NULL},
                                                    .mstore_key      = INVAL_MSTORE_KEY,
-                                                   .tree_ext_fs     = {INVAL_EXT_ID, (1024 * C_CHK_SIZE), {0ULL}},
-                                                   .data_ext_fs     = {INVAL_EXT_ID, (20480ULL * C_CHK_SIZE), {0ULL}},
+                                                   .tree_ext_fs     = {INVAL_EXT_ID, (1024 * C_CHK_SIZE), 0, {0ULL}, {0ULL}},
+                                                   .data_ext_fs     = {INVAL_EXT_ID, (20480ULL * C_CHK_SIZE), 0, {0ULL}, {0ULL}},
                                                   }; 
 struct workqueue_struct     *castle_wqs[2*MAX_BTREE_DEPTH+1];
 int                          castle_fs_inited;
@@ -162,12 +162,14 @@ void castle_fs_superblocks_put(struct castle_fs_superblock *sb, int dirty)
 
 int castle_ext_fs_init(c_ext_fs_t       *ext_fs, 
                        da_id_t           da_id, 
-                       c_byte_off_t      size)
+                       c_byte_off_t      size,
+                       uint32_t          align)
 {
     ext_fs->ext_id      = castle_extent_alloc(DEFAULT, da_id, (size/C_CHK_SIZE));
     ext_fs->ext_size    = size;
-    atomic64_set(&ext_fs->next_free_byte, 0);
-    atomic64_set(&ext_fs->byte_count, 0);
+    ext_fs->align       = align;
+    atomic64_set(&ext_fs->used, 0);
+    atomic64_set(&ext_fs->blocked, 0);
 
     if (ext_fs->ext_id == INVAL_EXT_ID)
         return -1;
@@ -175,24 +177,19 @@ int castle_ext_fs_init(c_ext_fs_t       *ext_fs,
 }
 
 int castle_ext_fs_pre_alloc(c_ext_fs_t       *ext_fs,
-                            c_byte_off_t      size,
-                            int               aligned)
+                            c_byte_off_t      size)
 {
     uint64_t ret;
 
-    if (aligned)
-    {
-        BUG_ON(atomic64_read(&ext_fs->next_free_byte) % size);
-        BUG_ON(atomic64_read(&ext_fs->byte_count) % size);
-    }
-    BUG_ON(atomic64_read(&ext_fs->byte_count) <
-                            atomic64_read(&ext_fs->next_free_byte));
-    BUG_ON(atomic64_read(&ext_fs->next_free_byte) > ext_fs->ext_size);
+    BUG_ON(atomic64_read(&ext_fs->used) % ext_fs->align);
+    BUG_ON(atomic64_read(&ext_fs->blocked) % ext_fs->align);
+    BUG_ON(atomic64_read(&ext_fs->blocked) < atomic64_read(&ext_fs->used));
+    BUG_ON(atomic64_read(&ext_fs->used) > ext_fs->ext_size);
 
-    ret = atomic64_add_return(size, &ext_fs->byte_count);
+    ret = atomic64_add_return(size, &ext_fs->blocked);
     if (ret > ext_fs->ext_size)
     {
-        atomic64_sub(size, &ext_fs->byte_count);
+        atomic64_sub(size, &ext_fs->blocked);
         return -1;
     }
 
@@ -200,45 +197,49 @@ int castle_ext_fs_pre_alloc(c_ext_fs_t       *ext_fs,
 }
 
 int castle_ext_fs_free(c_ext_fs_t       *ext_fs,
-                       int64_t           size,
-                       int               aligned)
+                       int64_t           size)
 {
-    if (aligned)
-    {
-        BUG_ON(atomic64_read(&ext_fs->next_free_byte) % size);
-        BUG_ON(atomic64_read(&ext_fs->byte_count) % size);
-    }
-    atomic64_sub(size, &ext_fs->byte_count);
-    BUG_ON(atomic64_read(&ext_fs->byte_count) <
-                            atomic64_read(&ext_fs->next_free_byte));
+    BUG_ON(atomic64_read(&ext_fs->used) % ext_fs->align);
+    BUG_ON(atomic64_read(&ext_fs->blocked) % ext_fs->align);
+
+    atomic64_sub(size, &ext_fs->blocked);
+
+    BUG_ON(atomic64_read(&ext_fs->blocked) < atomic64_read(&ext_fs->used));
 
     return 0;
 }
 
 int castle_ext_fs_get(c_ext_fs_t      *ext_fs,
                       c_byte_off_t     size,
-                      int              aligned,
+                      int              alloc_done,
                       c_ext_pos_t     *cep)
 {
-    if (aligned)
+    BUG_ON(atomic64_read(&ext_fs->used) % ext_fs->align);
+    BUG_ON(atomic64_read(&ext_fs->blocked) % ext_fs->align);
+    BUG_ON(atomic64_read(&ext_fs->blocked) < atomic64_read(&ext_fs->used));
+    BUG_ON(atomic64_read(&ext_fs->used) > ext_fs->ext_size);
+
+    if (!alloc_done)
     {
-        BUG_ON(atomic64_read(&ext_fs->next_free_byte) % size);
-        BUG_ON(atomic64_read(&ext_fs->byte_count) % size);
+        int ret;
+
+        ret = castle_ext_fs_pre_alloc(ext_fs, size);
+        if (ret < 0)
+            return ret;
     }
 
     cep->ext_id = ext_fs->ext_id;
-    cep->offset = atomic64_add_return(size, &ext_fs->next_free_byte) - size;
+    cep->offset = atomic64_add_return(size, &ext_fs->used) - size;
     BUG_ON(EXT_ID_INVAL(cep->ext_id));
-    if (atomic64_read(&ext_fs->byte_count) <
-                            atomic64_read(&ext_fs->next_free_byte))
+    if (atomic64_read(&ext_fs->blocked) < atomic64_read(&ext_fs->used))
     {
-        atomic64_sub(size, &ext_fs->next_free_byte);
+        atomic64_sub(size, &ext_fs->used);
         return -1;
     }
-    if (atomic64_read(&ext_fs->next_free_byte) > ext_fs->ext_size)
+    if (atomic64_read(&ext_fs->used) > ext_fs->ext_size)
     {
-        printk("%lu:%lu:%llu:%llu\n", atomic64_read(&ext_fs->byte_count),
-                                      atomic64_read(&ext_fs->next_free_byte),
+        printk("%lu:%lu:%llu:%llu\n", atomic64_read(&ext_fs->blocked),
+                                      atomic64_read(&ext_fs->used),
                                       ext_fs->ext_size,
                                       size);
         BUG();
@@ -247,9 +248,27 @@ int castle_ext_fs_get(c_ext_fs_t      *ext_fs,
     return 0;
 }
 
+void castle_ext_fs_marshall(c_ext_fs_t *ext_fs, c_ext_fs_bs_t *ext_fs_bs)
+{
+    ext_fs_bs->ext_id    = ext_fs->ext_id;
+    ext_fs_bs->ext_size  = ext_fs->ext_size;
+    ext_fs_bs->align     = ext_fs->align;
+    ext_fs_bs->used      = atomic64_read(&ext_fs->used);
+    ext_fs_bs->blocked   = atomic64_read(&ext_fs->blocked);
+}
+
+void castle_ext_fs_unmarshall(c_ext_fs_t *ext_fs, c_ext_fs_bs_t *ext_fs_bs)
+{
+    ext_fs->ext_id       = ext_fs_bs->ext_id;
+    ext_fs->ext_size     = ext_fs_bs->ext_size;
+    ext_fs->align        = ext_fs_bs->align;
+    atomic64_set(&ext_fs->used, ext_fs_bs->used);
+    atomic64_set(&ext_fs->blocked, ext_fs_bs->blocked);
+}
+
 c_byte_off_t castle_ext_fs_summary_get(c_ext_fs_t *ext_fs)
 {
-    return (ext_fs->ext_size - atomic64_read(&ext_fs->next_free_byte));
+    return (ext_fs->ext_size - atomic64_read(&ext_fs->used));
 }
 
 int castle_fs_init(void)
@@ -311,6 +330,8 @@ int castle_fs_init(void)
        Init the fs superblock. */
     if(first) {
         c2_block_t *c2b;
+        struct castle_btree_type *btree =
+                                castle_btree_type_get(castle_global_tree.btree_type);
 
         /* Init the root btree node */
         atomic64_set(&(castle_global_tree.node_count), 0);
@@ -318,12 +339,14 @@ int castle_fs_init(void)
 
         BUG_ON(castle_ext_fs_init(&castle_global_tree.tree_ext_fs,
                                   castle_global_tree.da,
-                                  castle_global_tree.tree_ext_fs.ext_size) < 0);
+                                  castle_global_tree.tree_ext_fs.ext_size,
+                                  btree->node_size * C_BLK_SIZE) < 0);
         BUG_ON(castle_ext_fs_init(&castle_global_tree.data_ext_fs,
                                   castle_global_tree.da,
-                                  castle_global_tree.data_ext_fs.ext_size) < 0);
+                                  castle_global_tree.data_ext_fs.ext_size,
+                                  C_BLK_SIZE) < 0);
 
-        c2b = castle_btree_node_create(0 /* version */, 1 /* is_leaf */, &castle_global_tree);
+        c2b = castle_btree_node_create(0 /* version */, 1 /* is_leaf */, &castle_global_tree, 0);
         castle_btree_node_save_prepare(&castle_global_tree, c2b->cep);
         /* Save the root node in the global tree */
         castle_global_tree.root_node = c2b->cep; 
@@ -945,13 +968,9 @@ static void castle_bio_data_cvt_get(c_bvec_t    *c_bvec,
     }
 
     /* Otherwise, allocate a new out-of-line block */
-    BUG_ON(castle_ext_fs_pre_alloc(&c_bvec->tree->data_ext_fs, 
-                                   C_BLK_SIZE,
-                                   1) < 0);
     BUG_ON(castle_ext_fs_get(&c_bvec->tree->data_ext_fs, 
                              C_BLK_SIZE,
-                             1,
-                             &cep) < 0);
+                             0, &cep) < 0);
     CVT_MEDIUM_OBJECT_SET(*cvt, C_BLK_SIZE, cep);
 }
 
@@ -1561,6 +1580,7 @@ static void __exit castle_exit(void)
     castle_double_array_fini();
     castle_btree_free();
     castle_versions_fini();
+    castle_mstores_fini();
     /* Drop all cache references (superblocks), flush the cache, free the slaves. */ 
     castle_slaves_unlock();
     __castle_extents_fini();

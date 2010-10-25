@@ -149,6 +149,8 @@ int                        castle_mstores_create           (void);
 
 int                        castle_mstores_read             (void);
 
+int                        castle_mstores_fini             (void);
+
 void                       castle_cache_print_stats        (void);
 
 /* Cache init/fini */

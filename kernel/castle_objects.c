@@ -603,7 +603,7 @@ static void castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
                 if (CVT_MEDIUM_OBJECT(prev_cvt) && (prev_nr_blocks >= nr_blocks))
                 {
                     castle_ext_fs_free(&c_bvec->tree->data_ext_fs,
-                                        nr_blocks * C_BLK_SIZE, 0);
+                                        nr_blocks * C_BLK_SIZE);
                     debug("Freeing %u blks from %p|%p\n", nr_blocks, c_bvec,
                                                              c_bvec->tree);
                     CVT_MEDIUM_OBJECT_SET(*cvt, replace->value_len, prev_cvt.cep);
@@ -612,7 +612,7 @@ static void castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
                 {
                     BUG_ON(castle_ext_fs_get(&c_bvec->tree->data_ext_fs,
                                              nr_blocks * C_BLK_SIZE,
-                                             0,
+                                             1,
                                              &cep) < 0);
                     CVT_MEDIUM_OBJECT_SET(*cvt, replace->value_len, cep);
                 }
