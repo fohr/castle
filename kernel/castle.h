@@ -199,12 +199,6 @@ typedef struct castle_extent_freespace_byte_stream {
 #define CASTLE_SLAVE_TARGET     (0x00000001)
 #define CASTLE_SLAVE_SPINNING   (0x00000002)
 
-#define CASTLE_SLAVE_MAGIC1     (0x02061985)
-#define CASTLE_SLAVE_MAGIC2     (0x16071983)
-#define CASTLE_SLAVE_MAGIC3     (0x16061981)
-
-#define CASTLE_SLAVE_VERSION    (1)
-
 typedef struct {
     uint32_t        max_entries;
     uint32_t        nr_entries;
@@ -214,29 +208,10 @@ typedef struct {
     c_chk_cnt_t     disk_size;
 } castle_freespace_t;
 
-
-struct castle_slave_superblock {
-    uint32_t     magic1;
-    uint32_t     magic2;
-    uint32_t     magic3;
-    uint32_t     version;   /* Super chunk format version */
-    uint32_t     uuid;
-    uint32_t     used;
-    uint32_t     size; /* In blocks */
-	uint32_t     flags; 
-} PACKED;
-
-#define CASTLE_FS_MAGIC1        (0x19731121)
-#define CASTLE_FS_MAGIC2        (0x19880624)
-#define CASTLE_FS_MAGIC3        (0x19821120)
 struct castle_fs_superblock {
-    uint32_t     magic1;
-    uint32_t     magic2;
-    uint32_t     magic3;
-    uint32_t     salt;
-    uint32_t     peper;
-    c_ext_fs_bs_t mstore_ext_fs_bs;
-    c_ext_pos_t  mstore[16];
+    struct castle_fs_superblock_public pub;
+    c_ext_fs_bs_t   mstore_ext_fs_bs;
+    c_ext_pos_t     mstore[16];
 } PACKED;
 
 enum {

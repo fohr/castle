@@ -65,20 +65,25 @@ static void USED castle_fs_superblock_print(struct castle_fs_superblock *fs_sb)
     printk("Magic1: %.8x\n"
            "Magic2: %.8x\n"
            "Magic3: %.8x\n"
+           "UUID: %x\n"
+           "Version: %d\n"
            "Salt:   %x\n"
            "Pepper: %x\n",
-           fs_sb->magic1,
-           fs_sb->magic2,
-           fs_sb->magic3,
-           fs_sb->salt,
-           fs_sb->peper);
+           fs_sb->pub.magic1,
+           fs_sb->pub.magic2,
+           fs_sb->pub.magic3,
+           fs_sb->pub.uuid,
+           fs_sb->pub.version,
+           fs_sb->pub.salt,
+           fs_sb->pub.peper);
 }
 
 static int castle_fs_superblock_validate(struct castle_fs_superblock *fs_sb)
 {
-    if(fs_sb->magic1 != CASTLE_FS_MAGIC1) return -1;
-    if(fs_sb->magic2 != CASTLE_FS_MAGIC2) return -2;
-    if(fs_sb->magic3 != CASTLE_FS_MAGIC3) return -3;
+    if(fs_sb->pub.magic1 != CASTLE_FS_MAGIC1) return -1;
+    if(fs_sb->pub.magic2 != CASTLE_FS_MAGIC2) return -2;
+    if(fs_sb->pub.magic3 != CASTLE_FS_MAGIC3) return -3;
+    if(fs_sb->pub.version != CASTLE_FS_VERSION) return -4;
 
     return 0;
 }
@@ -87,11 +92,13 @@ static void castle_fs_superblock_init(struct castle_fs_superblock *fs_sb)
 {   
     int i;
 
-    fs_sb->magic1 = CASTLE_FS_MAGIC1;
-    fs_sb->magic2 = CASTLE_FS_MAGIC2;
-    fs_sb->magic3 = CASTLE_FS_MAGIC3;
-    get_random_bytes(&fs_sb->salt,  sizeof(fs_sb->salt));
-    get_random_bytes(&fs_sb->peper, sizeof(fs_sb->peper));
+    fs_sb->pub.magic1 = CASTLE_FS_MAGIC1;
+    fs_sb->pub.magic2 = CASTLE_FS_MAGIC2;
+    fs_sb->pub.magic3 = CASTLE_FS_MAGIC3;
+    get_random_bytes(&fs_sb->pub.uuid,  sizeof(fs_sb->pub.uuid));
+    fs_sb->pub.version = CASTLE_FS_VERSION;
+    get_random_bytes(&fs_sb->pub.salt,  sizeof(fs_sb->pub.salt));
+    get_random_bytes(&fs_sb->pub.peper, sizeof(fs_sb->pub.peper));
     for(i=0; i<sizeof(fs_sb->mstore) / sizeof(c_ext_pos_t ); i++)
         fs_sb->mstore[i] = INVAL_EXT_POS;
 }
