@@ -1463,7 +1463,7 @@ static void castle_btree_node_save(struct work_struct *work)
     {
         prev_cep = ct->last_node;
         c2b = castle_cache_block_get(prev_cep, btree->node_size);
-        lock_c2b(c2b);
+        write_lock_c2b(c2b);
    
         /* If c2b is not up to date, issue a blocking READ to update */
         if(!c2b_uptodate(c2b))
@@ -1473,7 +1473,7 @@ static void castle_btree_node_save(struct work_struct *work)
         node->next_node = work_st->cep;
 
         dirty_c2b(c2b);
-        unlock_c2b(c2b);
+        write_unlock_c2b(c2b);
         put_c2b(c2b);
     }
     ct->last_node = work_st->cep;
@@ -1531,8 +1531,8 @@ c2_block_t* __castle_btree_node_create(int version, int is_leaf, struct castle_c
 
     c2b   = castle_cache_block_get(cep, btree->node_size);
     
-    lock_c2b(c2b);
-    set_c2b_uptodate(c2b);
+    write_lock_c2b(c2b);
+    update_c2b(c2b);
 
     node = c2b_buffer(c2b);
     /* memset the node, so that ftree nodes are easily recognisable in hexdump. */
@@ -1658,7 +1658,7 @@ static c2_block_t* castle_btree_effective_node_create(c_bvec_t *c_bvec,
     {
         BUG_ON(moved_cnt > 0);
         /* TODO: should clean_c2b? */
-        unlock_c2b(c2b);
+        write_unlock_c2b(c2b);
         put_c2b(c2b);
         /* TODO: should also return the allocated disk block, but our allocator
                  is too simple to handle this ATM */
@@ -1969,19 +1969,19 @@ static int castle_btree_node_split(c_bvec_t *c_bvec)
     if(retain_c2b != c_bvec->btree_node)
     {
         debug("Unlocking the original node.\n");
-        unlock_c2b(c_bvec->btree_node);
+        write_unlock_c2b(c_bvec->btree_node);
         put_c2b(c_bvec->btree_node);
     }
     if(eff_c2b && (retain_c2b != eff_c2b))
     {
         debug("Unlocking the effective node.\n");
-        unlock_c2b(eff_c2b);
+        write_unlock_c2b(eff_c2b);
         put_c2b(eff_c2b);
     }
     if(split_c2b && (retain_c2b != split_c2b))
     {
         debug("Unlocking the split node.\n");
-        unlock_c2b(split_c2b);
+        write_unlock_c2b(split_c2b);
         put_c2b(split_c2b);
     }
 
@@ -2204,9 +2204,9 @@ static void castle_btree_c2b_forget(c_bvec_t *c_bvec)
     if(c2b_to_forget)
     {
         if(write_unlock)
-            unlock_c2b(c2b_to_forget);
+            write_unlock_c2b(c2b_to_forget);
         else
-            unlock_c2b_read(c2b_to_forget);
+            read_unlock_c2b(c2b_to_forget);
 
         put_c2b(c2b_to_forget);
     }
@@ -2235,12 +2235,17 @@ static void castle_btree_c2b_remember(c_bvec_t *c_bvec, c2_block_t *c2b)
     castle_btree_c2b_forget(c_bvec);
 
     /* Save the new node buffer, and the lock flags */
-    BUG_ON(!c2b_locked(c2b));
     c_bvec->btree_node = c2b;
     if(test_bit(CBV_C2B_WRITE_LOCKED, &c_bvec->flags))
+    {
+        BUG_ON(!c2b_write_locked(c2b));
         set_bit(CBV_CHILD_WRITE_LOCKED, &c_bvec->flags);
+    }
     else
+    {
+        BUG_ON(!c2b_read_locked(c2b));
         clear_bit(CBV_CHILD_WRITE_LOCKED, &c_bvec->flags);
+    }
 }
 
 
@@ -2262,19 +2267,19 @@ static void castle_btree_c2b_lock(c_bvec_t *c_bvec, c2_block_t *c2b)
                   (c_bvec->split_depth <= c_bvec->btree_depth))|| 
                   (c_bvec->btree_depth >= c_bvec->btree_levels))))
     {
-        lock_c2b(c2b);
+        write_lock_c2b(c2b);
         set_bit(CBV_C2B_WRITE_LOCKED, &c_bvec->flags);
     }
     else
     {
-        lock_c2b_read(c2b);
+        read_lock_c2b(c2b);
         clear_bit(CBV_C2B_WRITE_LOCKED, &c_bvec->flags);
     }
     castle_debug_bvec_update(c_bvec, C_BVEC_BTREE_LOCKED_NODE);
 
 }
 
-static void castle_btree_find_io_end(c2_block_t *c2b, int uptodate)
+static void castle_btree_find_io_end(c2_block_t *c2b)
 {
 #ifdef CASTLE_DEBUG    
     struct castle_btree_node *node;
@@ -2286,7 +2291,7 @@ static void castle_btree_find_io_end(c2_block_t *c2b, int uptodate)
             c_bvec->key, c_bvec->version);
     
     /* Callback on error */
-    if(!uptodate) 
+    if(!c2b_uptodate(c2b)) 
     {
         castle_btree_io_end(c_bvec, INVAL_VAL_TUP, -EIO);
         return;
@@ -2300,7 +2305,6 @@ static void castle_btree_find_io_end(c2_block_t *c2b, int uptodate)
     btree->node_validate(node);
 #endif
     castle_debug_bvec_update(c_bvec, C_BVEC_BTREE_NODE_UPTODATE);
-    set_c2b_uptodate(c2b);
 
     BUG_ON(c_bvec->btree_depth > MAX_BTREE_DEPTH);
     /* Put on to the workqueue. Choose a workqueue which corresponds
@@ -2525,7 +2529,7 @@ static void __castle_btree_iter_release(c_iter_t *c_iter)
             iter_debug("===> Trying to unlock indirect node i=%d\n", i);
             if(indirect_node(i).c2b)
             {
-                unlock_c2b(indirect_node(i).c2b);
+                write_unlock_c2b(indirect_node(i).c2b);
                 put_c2b(indirect_node(i).c2b);
                 indirect_node(i).c2b = NULL;
             }
@@ -2535,7 +2539,7 @@ static void __castle_btree_iter_release(c_iter_t *c_iter)
     }
     iter_debug("%p unlocks leaf (0x%x, 0x%x)\n",
         c_iter, leaf->cep.ext_id, leaf->cep.offset);
-    unlock_c2b(leaf);
+    write_unlock_c2b(leaf);
 }
 
 void castle_btree_iter_continue(c_iter_t *c_iter)
@@ -2657,7 +2661,7 @@ static void castle_btree_iter_leaf_ptrs_lock(c_iter_t *c_iter)
             continue;
         }
         c2b = castle_cache_block_get(cep, btree->node_size);
-        lock_c2b(c2b);
+        write_lock_c2b(c2b);
         if(!c2b_uptodate(c2b))
             submit_c2b_sync(READ, c2b);
         indirect_node(i).c2b = c2b; 
@@ -2888,7 +2892,7 @@ static void __castle_btree_iter_path_traverse(struct work_struct *work)
                 c_iter,
                 c_iter->path[c_iter->depth]->cep.ext_id,
                 c_iter->path[c_iter->depth]->cep.offset);
-        unlock_c2b(c_iter->path[c_iter->depth]);
+        write_unlock_c2b(c_iter->path[c_iter->depth]);
         castle_btree_iter_end(c_iter, c_iter->err);
         return;
     }
@@ -2930,7 +2934,7 @@ static void __castle_btree_iter_path_traverse(struct work_struct *work)
                         c_iter, 
                         node_cep.ext_id,
                         node_cep.offset);
-                unlock_c2b(c_iter->path[c_iter->depth]);
+                write_unlock_c2b(c_iter->path[c_iter->depth]);
                 castle_btree_iter_start(c_iter);
                 return;
             }
@@ -2985,24 +2989,23 @@ static void __castle_btree_iter_path_traverse(struct work_struct *work)
     castle_btree_iter_path_traverse(c_iter, entry_cep);
 }
 
-static void _castle_btree_iter_path_traverse(c2_block_t *c2b, int uptodate)
+static void _castle_btree_iter_path_traverse(c2_block_t *c2b)
 {
     c_iter_t *c_iter = c2b->private;
 
     iter_debug("Finished reading btree node.\n");
    
-    if(!uptodate)
+    if(!c2b_uptodate(c2b))
     {
         iter_debug("Error reading the btree node. Cancelling iterator.\n");
         iter_debug("%p unlocking cep: (0x%x, 0x%x).\n", c_iter, c2b->cep.ext_id, c2b->cep.offset);
-        unlock_c2b(c2b);
+        write_unlock_c2b(c2b);
         put_c2b(c2b);
         /* Save the error. This will be handled properly by __path_traverse */
         c_iter->err = -EIO;
     } else
     {
         /* Push the node onto the path 'stack' */
-        set_c2b_uptodate(c2b);
         BUG_ON((c_iter->path[c_iter->depth] != NULL) && (c_iter->path[c_iter->depth] != c2b));
         c_iter->path[c_iter->depth] = c2b;
     }
@@ -3043,7 +3046,7 @@ static void castle_btree_iter_path_traverse(c_iter_t *c_iter, c_ext_pos_t  node_
     iter_debug("%p locking cep=(0x%x, 0x%x)\n", 
         c_iter, c2b->cep.ext_id, c2b->cep.offset);
     
-    lock_c2b(c2b);
+    write_lock_c2b(c2b);
     
     /* Unlock the ftree if we've just locked the root */
     if(c_iter->depth == 0)
@@ -3058,7 +3061,7 @@ static void castle_btree_iter_path_traverse(c_iter_t *c_iter, c_ext_pos_t  node_
         c2_block_t *prev_c2b = c_iter->path[c_iter->depth - 1];
         iter_debug("%p unlocking cep=(0x%x, 0x%x)\n", 
             c_iter, prev_c2b->cep.ext_id, prev_c2b->cep.offset);
-        unlock_c2b(prev_c2b);
+        write_unlock_c2b(prev_c2b);
         /* NOTE: not putting the c2b. Might be useful if we have to walk the tree again */
     }
  
@@ -3076,7 +3079,7 @@ static void castle_btree_iter_path_traverse(c_iter_t *c_iter, c_ext_pos_t  node_
     {
         iter_debug("Uptodate, carrying on\n");
         /* If the buffer is up to date */
-        _castle_btree_iter_path_traverse(c2b, 1);
+        _castle_btree_iter_path_traverse(c2b);
     }
 }
 

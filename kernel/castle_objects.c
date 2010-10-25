@@ -722,8 +722,8 @@ static c2_block_t* castle_object_write_buffer_alloc(c_ext_pos_t new_data_cep,
                                     data_length;
     nr_blocks = (data_c2b_length - 1) / C_BLK_SIZE + 1; 
     new_data_c2b = castle_cache_block_get(new_data_cep, nr_blocks);
-    lock_c2b(new_data_c2b);
-    set_c2b_uptodate(new_data_c2b);
+    write_lock_c2b(new_data_c2b);
+    update_c2b(new_data_c2b);
 #ifdef CASTLE_DEBUG        
     /* Poison the data block */
     memset(c2b_buffer(new_data_c2b), 0xf4, nr_blocks * C_BLK_SIZE);
@@ -789,13 +789,13 @@ static int castle_object_data_write(struct castle_object_replace *replace)
         if((data_c2b_offset == data_c2b_length) && (data_length > 0))
         {
             debug("Run out of buffer space, allocating a new one.\n");
-            new_data_cep = castle_object_write_next_cep(data_c2b->cep, data_length); 
+            new_data_cep = castle_object_write_next_cep(data_c2b->cep, data_c2b_length); 
             new_data_c2b = castle_object_write_buffer_alloc(new_data_cep, data_length); 
             data_c2b_length = new_data_c2b->nr_pages * C_BLK_SIZE;
             data_c2b_offset = 0;
             /* Release the (old) buffer */
             dirty_c2b(data_c2b);
-            unlock_c2b(data_c2b);
+            write_unlock_c2b(data_c2b);
             put_c2b(data_c2b);
             /* Swap the new buffer in, if one was initialised. */
             data_c2b = new_data_c2b;
@@ -867,7 +867,7 @@ void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
         if(c2b)
         {
             dirty_c2b(c2b);
-            unlock_c2b(c2b);
+            write_unlock_c2b(c2b);
             put_c2b(c2b);
         }
  
@@ -928,7 +928,7 @@ int castle_object_replace_continue(struct castle_object_replace *replace, int la
         
         BUG_ON(data_length != 0);
         dirty_c2b(data_c2b);
-        unlock_c2b(data_c2b);
+        write_unlock_c2b(data_c2b);
         put_c2b(data_c2b);
         replace->complete(replace, 0);
     } else
@@ -1122,7 +1122,7 @@ int castle_object_slice_get(struct castle_rxrpc_call *call,
             BUG_ON(cvt.length > C_BLK_SIZE); 
             nr_blocks = (cvt.length - 1) / C_BLK_SIZE + 1;
             data_c2b = castle_cache_block_get(cvt.cep, nr_blocks);
-            lock_c2b(data_c2b);
+            write_lock_c2b(data_c2b);
             if(!c2b_uptodate(data_c2b)) 
                 BUG_ON(submit_c2b_sync(READ, data_c2b));
             value = c2b_buffer(data_c2b);
@@ -1144,7 +1144,7 @@ int castle_object_slice_get(struct castle_rxrpc_call *call,
         /* Unlock c2b if one was taken out */
         if(CVT_ONDISK(cvt))
         {
-            unlock_c2b(data_c2b);
+            write_unlock_c2b(data_c2b);
             put_c2b(data_c2b);
         }
         if(max_entries == 0)
@@ -1257,13 +1257,13 @@ void __castle_object_get_complete(struct work_struct *work)
 out:    
     debug("Finishing with call %p, putting c2b->cep="cep_fmt_str_nl,
         call, cep2str(c2b->cep));
-    unlock_c2b(c2b);
+    write_unlock_c2b(c2b);
     put_c2b(c2b);
 
     castle_utils_bio_free(c_bvec->c_bio);
 }
 
-void castle_object_get_io_end(c2_block_t *c2b, int uptodate)
+void castle_object_get_io_end(c2_block_t *c2b)
 {
     c_bvec_t *c_bvec = c2b->private;
 #ifdef CASTLE_DEBUG    
@@ -1275,11 +1275,8 @@ void castle_object_get_io_end(c2_block_t *c2b, int uptodate)
     castle_rxrpc_get_call_get(call, &data_c2b, &data_c2b_length, &data_length, &first); 
     BUG_ON(c2b != data_c2b);
 #endif
-    debug("IO end for cep "cep_fmt_str", uptodate=%d\n", 
-            cep2str(c2b->cep), uptodate);
-    if(uptodate)
-        set_c2b_uptodate(c2b);
-
+    /* TODO: io error handling. */
+    debug("IO end for cep "cep_fmt_str_nl, cep2str(c2b->cep));
     CASTLE_INIT_WORK(&c_bvec->work, __castle_object_get_complete);
     queue_work(castle_wq, &c_bvec->work); 
 }
@@ -1322,13 +1319,13 @@ void castle_object_get_continue(struct castle_bio_vec *c_bvec,
     
     debug("Locking cep "cep_fmt_str_nl, cep2str(data_cep));
     c2b = castle_cache_block_get(data_cep, nr_blocks);
-    lock_c2b(c2b);
+    write_lock_c2b(c2b);
     castle_rxrpc_get_call_set(call, c2b, data_c2b_length, data_length, first);
     /* Unlock the old c2b if we had one */
     if(old_c2b)
     {
         debug("Unlocking old_cep "cep_fmt_str_nl, cep2str(old_c2b->cep));
-        unlock_c2b(old_c2b);
+        write_unlock_c2b(old_c2b);
         put_c2b(old_c2b);
     }
 

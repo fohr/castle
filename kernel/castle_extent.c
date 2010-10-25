@@ -204,7 +204,7 @@ static int castle_extent_hash_remove(c_ext_t *ext, void *unused)
 static struct castle_extents_t * castle_extents_get_sb(void)
 {
     BUG_ON(castle_extents_sb_c2b == NULL);
-    lock_c2b(castle_extents_sb_c2b);
+    write_lock_c2b(castle_extents_sb_c2b);
     BUG_ON(!c2b_uptodate(castle_extents_sb_c2b));
 
     return ((struct castle_extents_t *) c2b_buffer(castle_extents_sb_c2b));
@@ -215,7 +215,7 @@ static void castle_extents_put_sb(int dirty)
     BUG_ON(castle_extents_sb_c2b == NULL);
     if (dirty)
         dirty_c2b(castle_extents_sb_c2b);
-    unlock_c2b(castle_extents_sb_c2b);
+    write_unlock_c2b(castle_extents_sb_c2b);
 }
 
 static void castle_extent_micro_maps_set(void)
@@ -264,7 +264,7 @@ static int castle_extent_hash_flush2disk(c_ext_t *ext, void *unused)
         if (c2b)
         {
             dirty_c2b(c2b);
-            unlock_c2b(c2b);
+            write_unlock_c2b(c2b);
             put_c2b(c2b);
             c2b = NULL;
             extents = NULL;
@@ -290,8 +290,8 @@ static int castle_extent_hash_flush2disk(c_ext_t *ext, void *unused)
         cep.offset = pg * C_BLK_SIZE;
         BUG_ON(cep.offset >= (EXT_ST_SIZE * C_CHK_SIZE));
         c2b = castle_cache_page_block_get(cep);
-        set_c2b_uptodate(c2b);
-        lock_c2b(c2b);
+        write_lock_c2b(c2b);
+        update_c2b(c2b);
         extents = c2b_buffer(c2b);
     }
     BUG_ON(!extents);
@@ -301,7 +301,7 @@ static int castle_extent_hash_flush2disk(c_ext_t *ext, void *unused)
     if (!i)
     {
         dirty_c2b(c2b);
-        unlock_c2b(c2b);
+        write_unlock_c2b(c2b);
         put_c2b(c2b);
         c2b = NULL;
         extents = NULL;
@@ -335,7 +335,7 @@ void __castle_extents_fini(void)
     castle_extent_micro_maps_destroy();
 }
 
-void castle_extents_fini()
+void castle_extents_fini(void)
 {
     /* Make sure cache flushed all dirty pages */
     castle_extents_hash_iterate(castle_extent_hash_remove, NULL);
@@ -440,14 +440,14 @@ int castle_extent_space_alloc(c_ext_t *ext, da_id_t da_id)
     {
         BUG_ON(cep.offset >= (meta_ext.size * C_CHK_SIZE));
         c2b = castle_cache_block_get(cep, 1);
-        lock_c2b(c2b);
-        set_c2b_uptodate(c2b);
+        write_lock_c2b(c2b);
+        update_c2b(c2b);
         BUG_ON(c2b_dirty(c2b));
         memcpy(c2b_buffer(c2b), 
                ((uint8_t *)maps_buf) + i, 
                ((req_space - i) > C_BLK_SIZE)?C_BLK_SIZE:(req_space - i));
         dirty_c2b(c2b);
-        unlock_c2b(c2b);
+        write_unlock_c2b(c2b);
         put_c2b(c2b);
         cep.offset += C_BLK_SIZE;
     }
@@ -538,14 +538,14 @@ void castle_extent_free(c_ext_id_t ext_id)
     {
         BUG_ON(cep.offset >= (meta_ext.size * C_CHK_SIZE));
         c2b = castle_cache_block_get(cep, 1);
-        lock_c2b(c2b);
+        write_lock_c2b(c2b);
         BUG_ON(!c2b_uptodate(c2b));
         memcpy(((uint8_t *)maps_buf) + i,
                c2b_buffer(c2b),
                ((req_space - i) > C_BLK_SIZE)?C_BLK_SIZE:(req_space - i));
         memset(c2b_buffer(c2b), 0, C_BLK_SIZE);
         dirty_c2b(c2b);
-        unlock_c2b(c2b);
+        write_unlock_c2b(c2b);
         put_c2b(c2b);
         cep.offset += C_BLK_SIZE;
     }
@@ -626,6 +626,13 @@ uint32_t castle_extent_kfactor_get(c_ext_id_t ext_id)
     return ret;
 }
 
+c_chk_cnt_t castle_extent_size_get(c_ext_id_t ext_id)
+{
+    c_ext_t *ext = castle_extents_hash_get(ext_id);
+
+    return ext->size;
+}
+
 static void __castle_extent_map_get(c_ext_t             *ext,
                                     c_chk_t              chk_idx,
                                     c_disk_chk_t        *chk_map)
@@ -661,17 +668,17 @@ static void __castle_extent_map_get(c_ext_t             *ext,
         {
             debug("Scheduling read to get chunk mappings for ext: %llu\n",
                         ext->ext_id);
-            lock_c2b(c2b);
+            write_lock_c2b(c2b);
             BUG_ON(submit_c2b_sync(READ, c2b));
-            unlock_c2b(c2b);
+            write_unlock_c2b(c2b);
         }
-        lock_c2b_read(c2b);
+        read_lock_c2b(c2b);
         BUG_ON((C_BLK_SIZE - BLOCK_OFFSET(offset)) < (ext->k_factor * sizeof(c_disk_chk_t)));
         memcpy(chk_map, 
                (((uint8_t *)c2b_buffer(c2b)) + BLOCK_OFFSET(offset)),
                ext->k_factor * sizeof(c_disk_chk_t));
 
-        unlock_c2b_read(c2b);
+        read_unlock_c2b(c2b);
         put_c2b(c2b);
     }
 }
@@ -776,12 +783,12 @@ void castle_extents_load(int first)
     cep.ext_id = META_EXT_ID;
     cep.offset = 0;
     castle_extents_sb_c2b = castle_cache_block_get(cep, 1);
-    lock_c2b(castle_extents_sb_c2b);
+    write_lock_c2b(castle_extents_sb_c2b);
     if (first)
-        set_c2b_uptodate(castle_extents_sb_c2b);
+        update_c2b(castle_extents_sb_c2b);
     if (!c2b_uptodate(castle_extents_sb_c2b))
         BUG_ON(submit_c2b_sync(READ, castle_extents_sb_c2b));
-    unlock_c2b(castle_extents_sb_c2b);
+    write_unlock_c2b(castle_extents_sb_c2b);
 
     castle_extents_sb = castle_extents_get_sb();
     /* Initialize extent super block incase of fresh FS or invalid block. */
@@ -803,7 +810,7 @@ void castle_extents_load(int first)
             cep.offset = pg * C_BLK_SIZE;
             BUG_ON(cep.offset >= (EXT_ST_SIZE * C_CHK_SIZE));
             c2b = castle_cache_block_get(cep, 1);
-            lock_c2b(c2b);
+            write_lock_c2b(c2b);
             BUG_ON(c2b_uptodate(c2b));
             BUG_ON(submit_c2b_sync(READ, c2b));
             extents = c2b_buffer(c2b);
@@ -816,7 +823,7 @@ void castle_extents_load(int first)
         j = (j + 1) % exts_per_pg;
         if (!j)
         {
-            unlock_c2b(c2b);
+            write_unlock_c2b(c2b);
             put_c2b(c2b);
             c2b = NULL;
             extents = NULL;
@@ -825,7 +832,7 @@ void castle_extents_load(int first)
     }
     if (c2b)
     {
-        unlock_c2b(c2b);
+        write_unlock_c2b(c2b);
         put_c2b(c2b);
     }
     castle_extents_put_sb(1);
