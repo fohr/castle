@@ -80,6 +80,8 @@ castle_extent_free(c_rda_type_t             rda_type,
 
 uint32_t
 castle_extent_kfactor_get(c_ext_id_t ext_id);
+c_chk_cnt_t 
+castle_extent_size_get(c_ext_id_t ext_id);
 
 /* Sets @chunks to all physical chunks holding the logical chunks from offset */
 uint32_t

@@ -598,6 +598,13 @@ uint32_t castle_extent_kfactor_get(c_ext_id_t ext_id)
     return ext->k_factor;
 }
 
+c_chk_cnt_t castle_extent_size_get(c_ext_id_t ext_id)
+{
+    c_ext_t *ext = castle_extents_hash_get(ext_id);
+
+    return ext->size;
+}
+
 static c_disk_chk_t * castle_extent_map_buf_get(c_ext_t             *ext,
                                                 c_chk_t              chk_idx,
                                                 c_chk_cnt_t          nr_chunks,

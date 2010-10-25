@@ -93,6 +93,15 @@ static inline void put_c2b(c2_block_t *c2b)
 }
 
 /**********************************************************************************************
+ * Advising the cache. 
+ */
+typedef uint32_t c2b_advise_t; 
+#define C2B_PREFETCH_FRWD    ((c2b_advise_t)0x00000001) 
+#define C2B_PREFETCH_BACK    ((c2b_advise_t)0x00000002) 
+int castle_cache_block_advise (c2_block_t *c2b, c2b_advise_t advise); 
+
+
+/**********************************************************************************************
  * Misc. 
  */
 #define c2b_buffer(_c2b)    ((_c2b)->buffer)

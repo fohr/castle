@@ -163,6 +163,18 @@ typedef struct castle_extent_position c_ext_pos_t;
 #define EXT_POS_INVAL(_off)         ((_off).ext_id == INVAL_EXT_ID)
 #define EXT_POS_EQUAL(_off1, _off2) (((_off1).ext_id == (_off2).ext_id) && \
                                       ((_off1).offset == (_off2).offset)) 
+static inline int EXT_POS_COMP(c_ext_pos_t cep1, c_ext_pos_t cep2)
+{
+    if(cep1.ext_id < cep2.ext_id)
+        return -1;
+    if(cep1.ext_id > cep2.ext_id)
+        return 1;
+    if(cep1.offset < cep2.offset)
+        return -1;
+    if(cep1.offset > cep2.offset)
+        return 1;
+    return 0;
+}
 #define cep_fmt_str                  "(%llu, 0x%llx)"
 #define cep_fmt_str_nl               "(%llu, 0x%llx). \n"
 #define cep2str(_off)                (_off).ext_id, BLOCK((_off).offset)
