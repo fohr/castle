@@ -16,6 +16,8 @@
 #include <linux/semaphore.h>
 #endif
 
+#include "castle_public.h"
+
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,18)
 #define CASTLE_INIT_WORK(_work, _func) INIT_WORK((_work), (void (*)(void *)) (_func), (void *) (_work))
 #define CASTLE_DECLARE_WORK(_name, _func) DECLARE_WORK((_name), (void (*)(void *)) _func, &(_name))
@@ -48,117 +50,279 @@ typedef uint32_t block_t;
 #define INVAL_BLOCK         ((block_t)-1) 
 #define BLOCK_INVAL(_b)     ((_b) == INVAL_BLOCK) 
 
-/* Disk layout related structures */
-struct castle_disk_block {
-    uint32_t disk;
-    block_t  block;
+/* New Free space structures */
+
+#define MAX_NR_SLAVES 20
+
+#define C_CHK_SHIFT                    (20) 
+#define C_CHK_SIZE                     (1 << C_CHK_SHIFT)
+
+#define CHUNK_OFFSET(offset)  ((offset) & (C_CHK_SIZE - 1))
+#define BLOCK_OFFSET(offset)  ((offset) & (C_BLK_SIZE - 1))
+#define SECTOR_OFFSET(offset) ((offset) & ((1 << 9)-1))
+#define CHUNK(offset)         ((offset) >> C_CHK_SHIFT)
+#define BLOCK(offset)         ((offset) >> C_BLK_SHIFT)
+#define BLK_IN_CHK(offset)    (BLOCK(CHUNK_OFFSET(offset)))
+#define BLKS_PER_CHK          (C_CHK_SIZE / C_BLK_SIZE)
+#define MASK_BLK_OFFSET(offset) (((offset) >> C_BLK_SHIFT) << C_BLK_SHIFT)
+#define MASK_CHK_OFFSET(offset) (((offset) >> C_CHK_SHIFT) << C_CHK_SHIFT)
+
+#define POWOF2(_n)            (((_n) & ((_n) - 1)) == 0)
+/*  Chunk #                     Description     
+ *  =======                     ===========
+ *   0 - 29                     Super Extent
+ *   0                          Super block (Only first 8k)
+ *   1                          Reserved
+ *   2                          Freespace structures
+ *   3 - 29                     Reserved
+ *          
+ *           Leave double the space (Super Extent is 2-RDA)
+ *
+ *   60                         Micro Extent (Maps of meta extent) 
+ *
+ *   61 - 63                    Reserved
+ *
+ *   64 - 563 (on each disk)    Meta extent (Spans across multiple disks)
+ *                              would occupy 1024 logical chunks
+ *    0 -  99                   Extent Structures
+ *  100 - 1023                  Extent maps
+ */
+
+#define SUP_EXT_ID                     (10)
+#define MICRO_EXT_ID                   (332)
+#define META_EXT_ID                    (333)
+#define EXT_SEQ_START                  (1000)
+
+/* Size of special(or logical) extents [in chunks] */
+#define SUP_EXT_SIZE                   (30)  /* 2-RDA. Occupies double the space */
+#define MICRO_EXT_START                (60)
+#define MICRO_EXT_SIZE                 (1)   /* Dont change this */
+#define META_SPACE_START               (64)
+#define META_SPACE_SIZE                (300)
+#define EXT_ST_SIZE                    (50)
+#define FREE_SPACE_START               (600)
+#define FREESPACE_OFFSET               (2 * C_CHK_SIZE)
+#define FREESPACE_SIZE                 (20 * C_CHK_SIZE)
+#define MAX_EXT_SIZE                   (102400) // 100 GB
+
+#define sup_ext_to_slave_id(_id)       ((_id) - SUP_EXT_ID)
+#define slave_id_to_sup_ext(_id)       ((_id) + SUP_EXT_ID)
+
+#define LOGICAL_EXTENT(_ext_id)        ((_ext_id) < EXT_SEQ_START)
+#define SUPER_EXTENT(_ext_id)          (((_ext_id) >= SUP_EXT_ID) && ((_ext_id) < slave_id_to_sup_ext(MAX_NR_SLAVES)))
+
+typedef uint32_t c_chk_cnt_t;
+typedef uint32_t c_chk_t;
+typedef uint64_t c_ext_id_t;
+typedef uint32_t c_uuid_t;
+
+#define INVAL_CHK                       ((c_chk_t)-1)
+#define CHK_INVAL(_chk)                 ((_chk) == INVAL_CHK)
+
+#define INVAL_EXT_ID                    (-1)
+#define EXT_ID_INVAL(_id)               ((_id) == INVAL_EXT_ID)
+#define INVAL_SLAVE_ID                  (0)
+
+struct castle_chunk_sequence {
+    c_chk_t         first_chk;
+    c_chk_cnt_t     count;
 } PACKED;
-typedef struct castle_disk_block c_disk_blk_t;
-#define INVAL_DISK_BLK          ((c_disk_blk_t){0,0})
-#define DISK_BLK_INVAL(_blk)    (((_blk).block == 0) && ((_blk).disk == 0))
-#define DISK_BLK_EQUAL(_blk1, _blk2) (((_blk1).disk == (_blk2).disk) && \
-                                      ((_blk1).block == (_blk2).block)) 
-#define blkfmt                  "(0x%x, 0x%x)"
-#define blk2str(_blk)           (_blk).disk, (_blk).block
+typedef struct castle_chunk_sequence c_chk_seq_t;
+#define INVAL_CHK_SEQ                ((c_chk_seq_t){0,0})
+#define CHK_SEQ_INVAL(_seq)          ((_seq).count == 0)
+#define CHK_SEQ_EQUAL(_seq1, _seq2)  (((_seq1).first_chk == (_seq2).first_chk) && \
+                                      ((_seq1).count == (_seq2).count)) 
+#define chk_seq_fmt                  "(0x%llx, 0x%llx)"
+#define chk_seq2str(_seq)            (_seq).first_chk, (_seq).count
+
+struct castle_disk_chunk {
+    c_uuid_t        slave_id;
+    c_chk_t         offset;
+} PACKED;
+typedef struct castle_disk_chunk c_disk_chk_t;
+#define INVAL_DISK_CHK               ((c_disk_chk_t){INVAL_SLAVE_ID,0})
+#define DISK_CHK_INVAL(_chk)         (((_chk).slave_id == INVAL_SLAVE_ID) &&    \
+                                      ((_chk).offset == 0))
+#define DISK_CHK_EQUAL(_chk1, _chk2) (((_chk1).slave_id == (_chk2).slave_id) && \
+                                      ((_chk1).offset == (_chk2).offset)) 
+#define disk_chk_fmt                  "(0x%x, 0x%x)"
+#define disk_chk_fmt_nl               "(0x%x, 0x%x)\n"
+#define disk_chk2str(_chk)            (_chk).slave_id, (_chk).offset
+
+typedef uint64_t c_byte_off_t; 
+
+/* Disk layout related structures (extent based) */
+struct castle_extent_position {
+    c_ext_id_t      ext_id;
+    c_byte_off_t    offset;
+} PACKED;
+typedef struct castle_extent_position c_ext_pos_t;
+#define __INVAL_EXT_POS             {INVAL_EXT_ID,0}
+#define INVAL_EXT_POS               ((c_ext_pos_t){INVAL_EXT_ID,0})
+#define EXT_POS_INVAL(_off)         ((_off).ext_id == INVAL_EXT_ID)
+#define EXT_POS_EQUAL(_off1, _off2) (((_off1).ext_id == (_off2).ext_id) && \
+                                      ((_off1).offset == (_off2).offset)) 
+static inline int EXT_POS_COMP(c_ext_pos_t cep1, c_ext_pos_t cep2)
+{
+    if(cep1.ext_id < cep2.ext_id)
+        return -1;
+    if(cep1.ext_id > cep2.ext_id)
+        return 1;
+    if(cep1.offset < cep2.offset)
+        return -1;
+    if(cep1.offset > cep2.offset)
+        return 1;
+    return 0;
+}
+#define cep_fmt_str                  "(%llu, 0x%llx)"
+#define cep_fmt_str_nl               "(%llu, 0x%llx). \n"
+#define cep2str(_off)                (_off).ext_id, BLOCK((_off).offset)
+#define __cep2str(_off)              (_off).ext_id, ((_off).offset)
+
+typedef struct castle_extent_freespace {
+    c_ext_id_t      ext_id;
+    c_byte_off_t    ext_size;
+    uint32_t        align;
+    atomic64_t      used;
+    atomic64_t      blocked;
+} c_ext_fs_t;
+
+typedef struct castle_extent_freespace_byte_stream {
+    c_ext_id_t      ext_id;
+    c_byte_off_t    ext_size;
+    uint32_t        align;
+    uint64_t        used;
+    uint64_t        blocked;
+} c_ext_fs_bs_t;
 
 #define CASTLE_SLAVE_TARGET     (0x00000001)
 #define CASTLE_SLAVE_SPINNING   (0x00000002)
 
-#define CASTLE_SLAVE_MAGIC1     (0x02061985)
-#define CASTLE_SLAVE_MAGIC2     (0x16071983)
-#define CASTLE_SLAVE_MAGIC3     (0x16061981)
-struct castle_slave_superblock {
-    uint32_t     magic1;
-    uint32_t     magic2;
-    uint32_t     magic3;
-    uint32_t     uuid;
-    uint32_t     used;
-    uint32_t     size; /* In blocks */
-	uint32_t     flags; 
-} PACKED;
+typedef struct {
+    uint32_t        max_entries;
+    uint32_t        nr_entries;
+    uint32_t        prod;
+    uint32_t        cons;
+    c_chk_cnt_t     free_chk_cnt;
+    c_chk_cnt_t     disk_size;
+} castle_freespace_t;
 
-#define CASTLE_FS_MAGIC1        (0x19731121)
-#define CASTLE_FS_MAGIC2        (0x19880624)
-#define CASTLE_FS_MAGIC3        (0x19821120)
 struct castle_fs_superblock {
-    uint32_t     magic1;
-    uint32_t     magic2;
-    uint32_t     magic3;
-    uint32_t     salt;
-    uint32_t     peper;
-    c_disk_blk_t mstore[16];
+    struct castle_fs_superblock_public pub;
+    c_ext_fs_bs_t   mstore_ext_fs_bs;
+    c_ext_pos_t     mstore[16];
 } PACKED;
 
 enum {
-    /* NOTE: if you change these, make sure VLBA_TREE_ENTRY_* are also updated */
+    CVT_TYPE_LEAF_VAL        = 0x01,
+    CVT_TYPE_LEAF_PTR        = 0x02,
+    CVT_TYPE_NODE            = 0x04,
+    /* TOMB_STONE points to NULL value (no value). */
     CVT_TYPE_TOMB_STONE      = 0x08,
+    /* Value length is small enough to keep in B-tree node itself. */
     CVT_TYPE_INLINE          = 0x10,
+    /* Set to 1 for both Large and Medium Objects */
     CVT_TYPE_ONDISK          = 0x20,
-    CVT_TYPE_INVALID         = 0x30,
+    /* Valid only when CVT_TYPE_ONDISK is set.
+     * 1 - Large objects
+     * 0 - Medium objects */
+    CVT_TYPE_LARGE_OBJECT    = 0x40,
+    CVT_TYPE_INVALID         = 0x00,
 };
 
 #define MAX_INLINE_VAL_SIZE 512
+#define MEDIUM_OBJECT_LIMIT (20 * C_CHK_SIZE)
 
-struct castle_btree_val {
+struct castle_value_tuple {
     uint8_t           type;
-    uint32_t          length;
+    uint64_t          length;
     union {
         uint8_t      *val;
-        c_disk_blk_t  cdb;
+        c_ext_pos_t   cep;
     };
 } PACKED;
-typedef struct castle_btree_val c_val_tup_t;
+typedef struct castle_value_tuple c_val_tup_t;
 
-#define INVAL_VAL_TUP        ((c_val_tup_t){CVT_TYPE_INVALID, 0, {.cdb = {0, 0}}})
+#define INVAL_VAL_TUP        ((c_val_tup_t){CVT_TYPE_INVALID, 0, {.cep = INVAL_EXT_POS}})
 
-#define CVT_TOMB_STONE(_cvt) ((_cvt).type == CVT_TYPE_TOMB_STONE)
-#define CVT_INLINE(_cvt)     ((_cvt).type == CVT_TYPE_INLINE)
-#define CVT_ONDISK(_cvt)     ((_cvt).type == CVT_TYPE_ONDISK)
-#define CVT_INVALID(_cvt)    ((_cvt).type == CVT_TYPE_INVALID)
-#define CVT_ONE_BLK(_cvt)    (CVT_ONDISK(_cvt) &&  (_cvt).length == C_BLK_SIZE)
-#define CVT_TOMB_STONE_SET(_cvt)                                            \
-                             {                                              \
-                                (_cvt).type     = CVT_TYPE_TOMB_STONE;      \
-                                (_cvt).length   = 0;                        \
-                                (_cvt).cdb.disk = 0;                        \
-                                (_cvt).cdb.block= 0;                        \
-                             }
+#define CVT_LEAF_VAL(_cvt)      ((_cvt).type & CVT_TYPE_LEAF_VAL)
+#define CVT_LEAF_PTR(_cvt)      ((_cvt).type & CVT_TYPE_LEAF_PTR)
+#define CVT_NODE(_cvt)          ((_cvt).type & CVT_TYPE_NODE)
+#define CVT_TOMB_STONE(_cvt)    (CVT_LEAF_VAL(_cvt) && ((_cvt).type & CVT_TYPE_TOMB_STONE))
+#define CVT_INLINE(_cvt)        (CVT_LEAF_VAL(_cvt) && ((_cvt).type & CVT_TYPE_INLINE))
+#define CVT_ONDISK(_cvt)        (CVT_LEAF_VAL(_cvt) && ((_cvt).type & CVT_TYPE_ONDISK))
+#define CVT_MEDIUM_OBJECT(_cvt) (CVT_ONDISK(_cvt) && !((_cvt).type & CVT_TYPE_LARGE_OBJECT))
+#define CVT_LARGE_OBJECT(_cvt)  (CVT_ONDISK(_cvt) && ((_cvt).type & CVT_TYPE_LARGE_OBJECT))
+#define CVT_INVALID(_cvt)       ((_cvt).type == CVT_TYPE_INVALID)
+#define CVT_ONE_BLK(_cvt)       (CVT_ONDISK(_cvt) &&  (_cvt).length == C_BLK_SIZE)
 #define CVT_INVALID_SET(_cvt)                                               \
-                             {                                              \
-                                (_cvt).type     = CVT_TYPE_INVALID;         \
-                                (_cvt).length   = 0;                        \
-                                (_cvt).cdb.disk = 0;                        \
-                                (_cvt).cdb.block= 0;                        \
-                             }
-#define CVT_BTREE_NODE(_cvt, _btree)     \
-                            (CVT_ONDISK(_cvt) &&             \
-                            (_cvt).length == (_btree)->node_size * C_BLK_SIZE)
-#define CVT_INLINE_VAL_LENGTH(_cvt)                                      \
+{                                                                           \
+   (_cvt).type   = CVT_TYPE_INVALID;                                        \
+   (_cvt).length = 0;                                                       \
+   (_cvt).cep    = INVAL_EXT_POS;                                           \
+}
+#define CVT_LEAF_PTR_SET(_cvt, _length, _cep)                               \
+{                                                                           \
+   (_cvt).type   = CVT_TYPE_LEAF_PTR;                                       \
+   (_cvt).length = _length;                                                 \
+   (_cvt).cep    = _cep;                                                    \
+}
+#define CVT_NODE_SET(_cvt, _length, _cep)                                   \
+{                                                                           \
+   (_cvt).type   = CVT_TYPE_NODE;                                           \
+   (_cvt).length = _length;                                                 \
+   (_cvt).cep    = _cep;                                                    \
+}
+#define CVT_TOMB_STONE_SET(_cvt)                                            \
+{                                                                           \
+   (_cvt).type   = (CVT_TYPE_LEAF_VAL | CVT_TYPE_TOMB_STONE);               \
+   (_cvt).length = 0;                                                       \
+   (_cvt).cep    = INVAL_EXT_POS;                                           \
+}                                                  
+#define CVT_INLINE_SET(_cvt, _length, _ptr)                                 \
+{                                                                           \
+   (_cvt).type   = (CVT_TYPE_LEAF_VAL | CVT_TYPE_INLINE);                   \
+   (_cvt).length = _length;                                                 \
+   (_cvt).val    = _ptr;                                                    \
+}                                                  
+#define CVT_MEDIUM_OBJECT_SET(_cvt, _length, _cep)                          \
+{                                                                           \
+    (_cvt).type  = (CVT_TYPE_LEAF_VAL | CVT_TYPE_ONDISK);                   \
+    (_cvt).length= _length;                                                 \
+    (_cvt).cep   = _cep;                                                    \
+}
+#define CVT_LARGE_OBJECT_SET(_cvt, _length, _cep)                           \
+{                                                                           \
+    (_cvt).type  = (CVT_TYPE_LEAF_VAL | CVT_TYPE_ONDISK | CVT_TYPE_LARGE_OBJECT); \
+    (_cvt).length= _length;                                                 \
+    (_cvt).cep   = _cep;                                                    \
+}
+#define CVT_INLINE_VAL_LENGTH(_cvt)                                             \
                              (CVT_INLINE(_cvt)?((_cvt).length):0)
 
-#define CVT_EQUAL(_cvt1, _cvt2)                                  \
-                             ((_cvt1).type == (_cvt2).type &&         \
-                              (_cvt1).length == (_cvt2).length &&     \
-                              (!CVT_ONDISK(_cvt1) ||                \
-                               DISK_BLK_EQUAL((_cvt1).cdb, (_cvt2).cdb)))
-
-#define CDB_TO_CVT(_cvt, _cdb, _blks)                         \
-                                {                                 \
-                                    (_cvt).type = CVT_TYPE_ONDISK;    \
-                                    (_cvt).length =  _blks * C_BLK_SIZE;  \
-                                    (_cvt).cdb = _cdb;          \
+#define CVT_EQUAL(_cvt1, _cvt2)                                                 \
+                             ((_cvt1).type      == (_cvt2).type &&              \
+                              (_cvt1).length    == (_cvt2).length &&            \
+                              (!CVT_ONDISK(_cvt1) ||                            \
+                               EXT_POS_EQUAL((_cvt1).cep, (_cvt2).cep)))
+#if 0
+#define CEP_TO_CVT(_cvt, _cep, _blks, _type)                                    \
+                                {                                               \
+                                    (_cvt).type     = _type;                    \
+                                    (_cvt).length   = (_blks) * C_BLK_SIZE;     \
+                                    (_cvt).cep      = _cep;                     \
                                 }
+#endif
 
 
 typedef uint8_t c_mstore_id_t;
 
-#define INVAL_MSTORE_KEY             ((c_mstore_key_t){{0,0},0})
-#define MSTORE_KEY_INVAL(_k)       (((_k).cdb.disk == 0) && ((_k).cdb.block == 0) && ((_k).idx == 0))
-#define MSTORE_KEY_EQUAL(_k1, _k2) (((_k1).cdb.disk  == (_k2).cdb.disk)  && \
-                                    ((_k1).cdb.block == (_k2).cdb.block) && \
-                                    ((_k1).idx       == (_k2).idx))
+#define INVAL_MSTORE_KEY           ((c_mstore_key_t){__INVAL_EXT_POS,0})
+#define MSTORE_KEY_INVAL(_k)       (EXT_POS_INVAL(_k.cep) && ((_k).idx == 0))
+#define MSTORE_KEY_EQUAL(_k1, _k2) (EXT_POS_EQUAL(_k1.cep, _k2.cep)  &&         \
+                                    ((_k1).idx == (_k2).idx))
 typedef struct castle_mstore_key {
-    c_disk_blk_t cdb;
+    c_ext_pos_t  cep;
     int          idx;
 } c_mstore_key_t;
 
@@ -167,7 +331,7 @@ typedef struct castle_mstore {
     size_t                     entry_size;           /* Size of the entries stored       */
     struct semaphore           mutex;                /* Mutex which protects the         */
                                                      /*  last_node_* variables           */
-    c_disk_blk_t               last_node_cdb;        /* Tail of the list, has at least   */
+    c_ext_pos_t                last_node_cep;        /* Tail of the list, has at least   */
                                                      /* one unused entry in it           */
     int                        last_node_unused;     /* Number of unused entries in the  */
                                                      /* last node                        */
@@ -207,7 +371,7 @@ struct castle_btree_node {
     uint8_t         is_leaf;
     /* Payload (i.e. btree entries) depend on the B-tree type */
     btree_t         type;
-    c_disk_blk_t    next_node;
+    c_ext_pos_t     next_node;
     uint8_t         payload[0];
 } PACKED;
 
@@ -250,19 +414,16 @@ struct castle_btree_type {
                               int                       idx,
                               void                    **key_p,            
                               version_t                *version_p,
-                              int                      *is_leaf_ptr_p,
                               c_val_tup_t              *cvt_p);
     void    (*entry_add)     (struct castle_btree_node *node,
                               int                       idx,
                               void                     *key,            
                               version_t                 version,
-                              int                       is_leaf_ptr,
                               c_val_tup_t               cvt);
     void    (*entry_replace) (struct castle_btree_node *node,
                               int                       idx,
                               void                     *key,            
                               version_t                 version,
-                              int                       is_leaf_ptr,
                               c_val_tup_t               cvt);
     void    (*entry_disable) (struct castle_btree_node *node,
                               int                       idx);
@@ -288,13 +449,15 @@ struct castle_component_tree {
     uint8_t             level;
     struct rw_semaphore lock;              /* Protects root_node, tree depth & last_node  */
     uint8_t             tree_depth;
-    c_disk_blk_t        root_node;
-    c_disk_blk_t        first_node;
-    c_disk_blk_t        last_node;
+    c_ext_pos_t         root_node;
+    c_ext_pos_t         first_node;
+    c_ext_pos_t         last_node;
     atomic64_t          node_count;
     struct list_head    da_list;
     struct list_head    hash_list;
     c_mstore_key_t      mstore_key;
+    c_ext_fs_t          tree_ext_fs;
+    c_ext_fs_t          data_ext_fs;
 };
 extern struct castle_component_tree castle_global_tree;
 
@@ -311,10 +474,12 @@ struct castle_clist_entry {
     tree_seq_t   seq;
     uint8_t      level;
     uint8_t      tree_depth;
-    c_disk_blk_t root_node;
-    c_disk_blk_t first_node;
-    c_disk_blk_t last_node;
+    c_ext_pos_t  root_node;
+    c_ext_pos_t  first_node;
+    c_ext_pos_t  last_node;
     uint64_t     node_count;
+    c_ext_fs_bs_t tree_ext_fs_bs;
+    c_ext_fs_bs_t data_ext_fs_bs;
 } PACKED;
 
 struct castle_vlist_entry {
@@ -329,7 +494,7 @@ struct castle_mlist_node {
     uint32_t     magic;
     uint16_t     capacity;
     uint16_t     used;
-    c_disk_blk_t next;
+    c_ext_pos_t  next;
     uint8_t      payload[0];
 } PACKED;
 
@@ -413,6 +578,7 @@ typedef struct castle_bio_vec {
     /* Completion callback */
     void                           (*endfind)    (struct castle_bio_vec *, int, c_val_tup_t);
     void                           (*da_endfind) (struct castle_bio_vec *, int, c_val_tup_t);
+    atomic_t                       reserv_nodes;
 #ifdef CASTLE_DEBUG              
     unsigned long                    state;
     struct castle_cache_block       *locking;
@@ -449,14 +615,14 @@ struct castle_iterator_type {
 
 /* Used to lock nodes pointed to by leaf pointers (refered to as 'indirect nodes') */
 struct castle_indirect_node {
-    /* Will form array of c2b/{cdb, f_idx} for the indirect nodes. Sorted by
-       cdb. May contain holes, if multiple entries in the original node
+    /* Will form array of c2b/{cep, f_idx} for the indirect nodes. Sorted by
+       cep. May contain holes, if multiple entries in the original node
        point to the same indirect node. Will span at most orig_node->used
        entries. */
     union {
         /* Used before entries are locked */
         struct {
-            c_disk_blk_t               cdb;      /* CDB from leaf pointer  */
+            c_ext_pos_t                cep;      /* CEP from leaf pointer  */
             uint16_t                   f_idx;    /* Index in the orig node */
         };                             
         /* Used after entries are locked */
@@ -483,7 +649,8 @@ enum {
 typedef struct castle_iterator {
     /* Fields below should be filled in before iterator is registered with the btree 
        code with btree_iter_init() and start() */ 
-    int                         (*need_visit)(struct castle_iterator *c_iter, c_disk_blk_t node_cdb);
+    int                         (*need_visit)(struct castle_iterator *c_iter,
+    c_ext_pos_t node_cep);
     void                        (*node_start)(struct castle_iterator *c_iter);
     void                        (*each)      (struct castle_iterator *c_iter, 
                                               int index, 
@@ -546,7 +713,7 @@ typedef struct castle_enumerator {
         int                       next_visited;
         int                       max_visited;
         struct castle_visited {
-            c_disk_blk_t          cdb;
+            c_ext_pos_t           cep;
             struct list_head      list;
         } *visited;
     };
@@ -579,6 +746,12 @@ typedef struct castle_rq_enumerator {
     int                           in_range;
 } c_rq_enum_t;
 
+struct castle_merged_iterator;
+struct component_iterator;
+
+typedef void (*castle_merged_iterator_each_skip) (struct castle_merged_iterator *,
+                                                  struct component_iterator *);
+
 typedef struct castle_merged_iterator {
     int nr_iters;
     struct castle_btree_type *btree;
@@ -595,6 +768,7 @@ typedef struct castle_merged_iterator {
             c_val_tup_t              cvt;
         } cached_entry;
     } *iterators;
+    castle_merged_iterator_each_skip each_skip;
 } c_merged_iter_t;
 
 typedef struct castle_da_rq_iterator {
@@ -641,11 +815,17 @@ struct castle_slave {
     struct kobject                  kobj;
     struct list_head                list;
     struct block_device            *bdev;
+    c_ext_id_t                      sup_ext;
+    c_disk_chk_t                   *sup_ext_maps;
+    struct castle_cache_block      *freespace_sblk;
     struct castle_cache_block      *sblk;
     struct castle_cache_block      *fs_sblk;
     block_t                         free_blk;
     struct castle_slave_block_cnts  block_cnts;
     unsigned long                   last_access;
+#ifdef CASTLE_DEBUG
+    c_chk_cnt_t                     disk_size; /* in chunks; max_chk_num + 1 */
+#endif
 };
 
 struct castle_slaves {
@@ -681,34 +861,9 @@ struct castle_attachments {
     struct list_head attachments;
 };
 
-struct castle_transfer {
-    transfer_id_t           id;
-    version_t               version;
-    int                     direction;
-    atomic_t                progress;
-    int                     finished;
-    int                     error;
-
-/*    struct castle_region  **regions;
-    int                     regions_count; */
-    
-    struct kobject          kobj;
-    struct list_head        list;
-    
-    c_iter_t                c_iter;
-    atomic_t                phase;
-    struct completion       completion;
-};
-
-struct castle_transfers {
-    struct kobject   kobj;
-    struct list_head transfers;
-};
-
 extern struct castle              castle;
 extern struct castle_slaves       castle_slaves;
 extern struct castle_attachments  castle_attachments;
-extern struct castle_transfers    castle_transfers;
 extern da_id_t                    castle_next_da_id;
 
 extern struct workqueue_struct *castle_wqs[2*MAX_BTREE_DEPTH+1];
@@ -717,7 +872,7 @@ extern struct workqueue_struct *castle_wqs[2*MAX_BTREE_DEPTH+1];
 /* Various utilities */
 #define C_BLK_SHIFT                    (12) 
 #define C_BLK_SIZE                     (1 << C_BLK_SHIFT)
-#define disk_blk_to_offset(_cdb)     ((_cdb).block * C_BLK_SIZE)
+//#define disk_blk_to_offset(_cdb)     ((_cdb).block * C_BLK_SIZE)
 
 struct castle_attachment*                          
                       castle_device_init           (version_t version);
@@ -738,7 +893,7 @@ void                  castle_slave_access          (uint32_t uuid);
                                                    
 struct castle_slave*  castle_slave_find_by_id      (uint32_t id);
 struct castle_slave*  castle_slave_find_by_uuid    (uint32_t uuid);
-struct castle_slave*  castle_slave_find_by_block   (c_disk_blk_t cdb);
+struct castle_slave*  castle_slave_find_by_block   (c_ext_pos_t cep);
 
 struct castle_slave_superblock* 
                       castle_slave_superblock_get  (struct castle_slave *cs);
@@ -748,6 +903,30 @@ struct castle_fs_superblock*
 void                  castle_fs_superblocks_put    (struct castle_fs_superblock *sb, int dirty);
 
 int                   castle_fs_init               (void);
+
+int                   castle_ext_fs_init           (c_ext_fs_t       *ext_fs, 
+                                                    da_id_t           da_id, 
+                                                    c_byte_off_t      size,
+                                                    uint32_t          align);
+
+int                   castle_ext_fs_pre_alloc      (c_ext_fs_t       *ext_fs,
+                                                    c_byte_off_t      size);
+
+int                   castle_ext_fs_get            (c_ext_fs_t       *ext_fs,
+                                                    c_byte_off_t      size,
+                                                    int               alloc_done,
+                                                    c_ext_pos_t      *cep);
+
+int                   castle_ext_fs_free           (c_ext_fs_t       *ext_fs,
+                                                    int64_t           size);
+
+void                  castle_ext_fs_marshall       (c_ext_fs_t       *ext_fs, 
+                                                    c_ext_fs_bs_t    *ext_fs_bs);
+
+void                  castle_ext_fs_unmarshall     (c_ext_fs_t       *ext_fs, 
+                                                    c_ext_fs_bs_t    *ext_fs_bs);
+
+c_byte_off_t          castle_ext_fs_summary_get    (c_ext_fs_t *ext_fs);
 
 struct castle_cache_block;
 
@@ -786,7 +965,6 @@ struct castle_object_get {
                                   int last);
     
 };
-
 typedef struct castle_object_iterator {
     /* Filled in by the client */
     da_id_t             da_id;

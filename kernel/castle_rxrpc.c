@@ -1183,6 +1183,7 @@ int castle_rxrpc_init(void)
 
     ret = kernel_bind(socket, (struct sockaddr *) &srx, sizeof(srx));
 	if (ret < 0) {
+        printk("Socket binding failed\n");
         destroy_workqueue(rxrpc_wq);
 		sock_release(socket);
         return ret;
@@ -1262,6 +1263,7 @@ static void castle_control_reply(uint32_t *reply,
     castle_control_reply_process(reply, len, length);
 }
 
+#if 0
 static void castle_control_get_valid_counts(slave_uuid_t slave_uuid, uint32_t *reply, size_t length, size_t *len_p)
 {
     int ret = 0;
@@ -1325,6 +1327,7 @@ error:
 
     castle_control_reply_process(reply, count, len_p);
 }
+#endif
 
 int castle_control_packet_process(struct sk_buff *skb, void **reply, size_t *len_p)
 {
@@ -1482,6 +1485,7 @@ int castle_control_packet_process(struct sk_buff *skb, void **reply, size_t *len
                                  0);
             break;
         }
+#if 0
         case CASTLE_CTRL_REQ_RESERVE_FOR_TRANSFER:
         {
             int version, type, reservations_count, i;
@@ -1550,6 +1554,7 @@ int castle_control_packet_process(struct sk_buff *skb, void **reply, size_t *len
                                  0);
             break;
         }
+#endif
         case CASTLE_CTRL_REQ_COLLECTION_ATTACH:
         {
             int ret;
@@ -1604,6 +1609,7 @@ int castle_control_packet_process(struct sk_buff *skb, void **reply, size_t *len
                                  version);
             break;
         }
+#if 0
         case CASTLE_CTRL_REQ_VALID_STATS:
         {
             slave_uuid_t slave_uuid;
@@ -1628,6 +1634,7 @@ int castle_control_packet_process(struct sk_buff *skb, void **reply, size_t *len
             
             break;
         }
+#endif
         case CASTLE_CTRL_REQ_SET_TARGET:
         {
             int ret, value;
