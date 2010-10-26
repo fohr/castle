@@ -403,41 +403,7 @@ void castle_object_key_free(c_vl_okey_t *obj_key)
 /**********************************************************************************************/
 /* Iterator(s) */
 
-typedef struct castle_objects_rq_iterator {
-    /* Filled in by the client */
-    da_id_t             da_id;
-    version_t           version;
-    c_vl_okey_t        *start_okey;
-    c_vl_okey_t        *end_okey;
-
-    /* Rest */
-    int                 err;
-    c_vl_bkey_t        *start_bkey;
-    c_vl_bkey_t        *end_bkey;
-    c_da_rq_iter_t      da_rq_iter;
-    /* Cached entry, guaranteed to fall in the hypercube */
-    int                 cached;
-    void               *cached_k;
-    version_t           cached_v;
-    c_val_tup_t         cached_cvt;
-} c_obj_rq_iter_t;
-
-#if 0 
-typedef struct castle_da_rq_iterator {
-    int                       nr_cts;
-    int                       err;
-    struct castle_btree_type *btree;
-    void                     *min_key;
-    c_merged_iter_t           merged_iter;
-
-    struct ct_rq {
-        struct castle_component_tree *ct;
-        c_rq_enum_t                   ct_rq_iter; 
-    } *ct_rqs;
-} c_da_rq_iter_t;
-#endif
-
-static void castle_objects_rq_iter_next(c_obj_rq_iter_t *iter, 
+static void castle_objects_rq_iter_next(castle_object_iterator_t *iter,
                                         void **k, 
                                         version_t *v, 
                                         c_val_tup_t *cvt) 
@@ -449,7 +415,7 @@ static void castle_objects_rq_iter_next(c_obj_rq_iter_t *iter,
     iter->cached = 0;
 }
 
-static int castle_objects_rq_iter_has_next(c_obj_rq_iter_t *iter)
+static int castle_objects_rq_iter_has_next(castle_object_iterator_t *iter)
 {
     void *k;
     version_t v;
@@ -502,14 +468,14 @@ static int castle_objects_rq_iter_has_next(c_obj_rq_iter_t *iter)
     BUG();
 }
 
-static void castle_objects_rq_iter_cancel(c_obj_rq_iter_t *iter)
+static void castle_objects_rq_iter_cancel(castle_object_iterator_t *iter)
 {
     castle_da_rq_iter.cancel(&iter->da_rq_iter);
     castle_free(iter->start_bkey);
     castle_free(iter->end_bkey);
 }
 
-static void castle_objects_rq_iter_init(c_obj_rq_iter_t *iter)
+static void castle_objects_rq_iter_init(castle_object_iterator_t *iter)
 {
     BUG_ON(!iter->start_okey || !iter->end_okey);
 
@@ -1026,13 +992,120 @@ int castle_object_replace_multi(struct castle_rxrpc_call *call,
     return 0;
 }
 
+int castle_object_iterstart(struct castle_attachment *attachment,
+                            c_vl_okey_t *start_key,
+                            c_vl_okey_t *end_key,
+                            castle_object_iterator_t **iter)
+{
+    castle_object_iterator_t *iterator;
+    int i;
+
+    if(start_key->nr_dims != end_key->nr_dims)
+    {
+        printk("Range query with different # of dimensions.\n");
+        return -EINVAL;
+    }
+    /* Mark the key that this is end key. To notify this is infinity and +ve.
+     * Assuming that end_key will not used anywhere before converting into
+     * btree_key. */
+    for (i=0; i<end_key->nr_dims; i++)
+    {
+        if (end_key->dims[i]->length == 0)
+        {
+            end_key->dims[i]->length = PLUS_INFINITY_DIM_LENGTH;
+            break;
+        }
+    }
+
+    iterator = castle_malloc(sizeof(castle_object_iterator_t), GFP_KERNEL);
+    if(!iterator)
+        return -ENOMEM;
+
+    *iter = iterator;
+
+    /* Initialise the iterator */
+    iterator->start_okey = start_key;
+    iterator->end_okey   = end_key;
+    iterator->version    = attachment->version;
+    iterator->da_id      = castle_version_da_id_get(iterator->version);
+
+    debug_rq("rq_iter_init.\n");
+    castle_objects_rq_iter_init(iterator);
+    if(iterator->err)
+    {
+        castle_free(iterator);
+        return iterator->err;
+    }
+    debug_rq("rq_iter_init done.\n");
+
+    return 0;
+}
+
+EXPORT_SYMBOL(castle_object_iterstart);
+
+int castle_object_iternext(castle_object_iterator_t *iterator,
+                           c_vl_okey_t **key,
+                           c_val_tup_t *val)
+{
+    c_vl_bkey_t *k;
+    int found;
+
+    found = 0;
+
+    /* loop until we find something that's not a tombstone */
+    while (!found && castle_objects_rq_iter.has_next(iterator))
+    {
+        version_t v;
+
+        debug_rq("Getting an entry the range query.\n");
+        castle_objects_rq_iter.next(iterator, (void **)&k, &v, val);
+        debug_rq("Got an entry the range query.\n");
+
+        /* Ignore tombstones, we are not sending these */
+        if(!CVT_TOMB_STONE(*val))
+            found = 1;
+    }
+
+    if (!found)
+    {
+        *key = NULL;
+        return 0;
+    }
+
+    /* Now we know we've got something to send.
+       Prepare the key for marshaling */
+    *key = castle_object_btree_key_convert(k);
+    if(!*key)
+    {
+        /* TODO: free all the buffers etc! */
+        return -ENOMEM;
+    }
+
+    return 0;
+}
+
+EXPORT_SYMBOL(castle_object_iternext);
+
+int castle_object_iterfinish(castle_object_iterator_t *iterator)
+{
+    castle_objects_rq_iter_cancel(iterator);
+    debug_rq("Freeing iterators & buffers.\n");
+    castle_free(iterator->start_okey);
+    castle_free(iterator->end_okey);
+    castle_free(iterator);
+
+    return 0;
+}
+
+EXPORT_SYMBOL(castle_object_iterfinish);
+
 int castle_object_slice_get(struct castle_rxrpc_call *call, 
                             struct castle_attachment *attachment, 
                             c_vl_okey_t *start_key, 
                             c_vl_okey_t *end_key,
                             uint32_t max_entries)
 {
-    c_obj_rq_iter_t *iterator;
+    castle_object_iterator_t *iterator;
     char *rsp_buffer;
     uint32_t rsp_buffer_offset, chunk_size;
     int nr_vals, i, last_chunk;
@@ -1061,7 +1134,7 @@ int castle_object_slice_get(struct castle_rxrpc_call *call,
 
     rsp_buffer = vmalloc(SLICE_RSP_BUFFER_LEN); 
 
-    iterator = castle_malloc(sizeof(c_obj_rq_iter_t), GFP_KERNEL);
+    iterator = castle_malloc(sizeof(castle_object_iterator_t), GFP_KERNEL);
     if(!iterator)
         return -ENOMEM;
 
