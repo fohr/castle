@@ -907,6 +907,8 @@ void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
         complete_write = 1;
         castle_free(cvt.val);
     }
+    else /* tombstone */
+        complete_write = 1;
         
     /* Unlock buffers, and complete the call if we are done already */
     if(complete_write)
