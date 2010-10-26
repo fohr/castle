@@ -5,22 +5,8 @@ set -eu
 
 cd `dirname $0`
 
-# Include utils scripts (it may be in the current directory, on product VM)
-if [ -e utils ]; then
-    . utils
-elif [ -e tests/utils ]; then
-    cd tests
-    . utils
-fi
-# Override CONFIG variables (e.g. DISKS) here 
+. /etc/acunu/fs-utils
 
-case $(hostname) in
-	jarek.theisland.acunu.com|lech.theisland.acunu.com)
-		echo foo;
-		DISKS=`ls /dev/sd*2`;;
-	*)
-		DISKS="disk1 disk2 disk3";;
-esac
 
 DISK_SIZE=2000 # in MB
 
