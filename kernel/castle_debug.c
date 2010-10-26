@@ -13,6 +13,7 @@ typedef struct castle_debug_watch {
 
 struct castle_malloc_debug {
     struct list_head list;
+    uint32_t size;
     char *file;
     int line;
     int already_freed;
@@ -42,12 +43,13 @@ void* castle_debug_malloc(size_t size, gfp_t flags, char *file, int line)
     INIT_LIST_HEAD(&dobj->list);
     dobj->file = file;
     dobj->line = line;
+    dobj->size = size;
     dobj->already_freed = 0;
 
     /* Add ourselves to the list under lock */
-    spin_lock(&malloc_list_spinlock);
+    spin_lock_irq(&malloc_list_spinlock);
     list_add(&dobj->list, &malloc_list);
-    spin_unlock(&malloc_list_spinlock);
+    spin_unlock_irq(&malloc_list_spinlock);
 
     return (char *)dobj + sizeof(struct castle_malloc_debug); 
 }
@@ -70,13 +72,14 @@ EXPORT_SYMBOL(castle_debug_zalloc);
 void castle_debug_free(void *obj)
 {
     struct castle_malloc_debug *dobj;
+    unsigned long flags;
 
     dobj = obj;
     dobj--;
     /* Remove from list */
-    spin_lock(&malloc_list_spinlock);
+    spin_lock_irqsave(&malloc_list_spinlock, flags);
     list_del(&dobj->list);
-    spin_unlock(&malloc_list_spinlock);
+    spin_unlock_irqrestore(&malloc_list_spinlock, flags);
 
     if(dobj->already_freed)
         printk("Double free for object allocated from %s:%d.\n",
@@ -91,13 +94,18 @@ static void castle_debug_malloc_fini(void)
 {
     struct castle_malloc_debug *dobj;
     struct list_head *l;
+    uint32_t sum = 0;
+    uint32_t i = 0;
 
     list_for_each(l, &malloc_list)
     {
         dobj = list_entry(l, struct castle_malloc_debug, list);
-        printk("kmalloc/kzalloc from %s:%d hasn't been deallocated.\n",
-                dobj->file, dobj->line);
+        printk("kmalloc/kzalloc of %u bytes from %s:%d hasn't been deallocated.\n",
+                dobj->size, dobj->file, dobj->line);
+        sum += dobj->size;
+        i++;
     }
+    printk("******** Memory Leak: %u bytes / %u objects *********\n", sum, i);
 }
 
 static void castle_debug_buffer_init(struct page *pg)
@@ -245,12 +253,12 @@ static int castle_debug_run(void *unused)
     struct list_head *l;
     int something_printed, j, nr_bios;
     unsigned long flags, states_printed;
-    int cdb_idx;
-    int sleep_time = 10;
+    int cep_idx;
+    int sleep_time = 2;
 
     do {
         spin_lock_irqsave(&bio_list_spinlock, flags);
-        cdb_idx = 0;
+        cep_idx = 0;
         states_printed = 0;
         something_printed = 0;
         nr_bios = 0;
@@ -298,8 +306,8 @@ static int castle_debug_run(void *unused)
                 {
                     c2_block_t *c2b = c_bvec->locking;
 
-                    printk("Blocked on locking c2b for (0x%x, 0x%x).\n",
-                        c2b->cdb.disk, c2b->cdb.block);
+                    printk("Blocked on locking c2b for "cep_fmt_str_nl,
+                        cep2str(c2b->cep));
                     if(c2b->file != NULL)
                         printk("c2b last locked from: %s:%d\n", c2b->file, c2b->line);
                     else
@@ -311,6 +319,9 @@ static int castle_debug_run(void *unused)
         if(something_printed) 
         {
             printk("...\nTotal number of stuck bios=%d\n\n", nr_bios);
+            printk("Cache stats:\n");
+            castle_cache_stats_print();
+            printk("\n");
             sleep_time += 1;
         }
   

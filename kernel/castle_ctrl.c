@@ -12,10 +12,8 @@
 #include "castle_cache.h"
 #include "castle_btree.h"
 #include "castle_versions.h"
-#include "castle_transfer.h"
 #include "castle_events.h"
 #include "castle_rxrpc.h"
-#include "castle_freespace.h"
 #include "castle_back.h"
 #include "castle_ctrl.h"
 
@@ -192,42 +190,6 @@ void castle_control_fs_init(int *ret)
     *ret = castle_fs_init();
 }
 
-void castle_control_transfer_create(version_t      version,
-                                           uint32_t       direction,
-                                           int           *ret,
-                                           transfer_id_t *id)
-{
-    struct castle_transfer *transfer;
-
-    if(!(transfer = castle_transfer_create(version, direction, ret)))
-        goto err_out;
-
-    /* Return value should have been correctly set by _create() */
-    BUG_ON(*ret != 0);
-    *id = transfer->id;
-
-    return;
-
-err_out:
-    BUG_ON(*ret == 0);
-    *id = (uint32_t)-1;
-}
-
-void castle_control_transfer_destroy(transfer_id_t id, int *ret)
-{
-    struct castle_transfer *transfer;
-    
-    if(!(transfer = castle_transfer_find(id)))
-    {
-        *ret = -EINVAL;
-    }
-    else
-    {
-        castle_transfer_destroy(transfer);
-        *ret = 0;
-    }
-}
-
 void castle_control_collection_attach(version_t version,
                                              char *name,
                                              int *ret,
@@ -337,7 +299,7 @@ int castle_control_ioctl(struct file *filp,
 
     down(&castle_control_lock);
     debug("Lock taken: in_atomic=%d.\n", in_atomic());
-    //printk("Got IOCTL command %d.\n", ioctl.cmd);
+    printk("Got IOCTL command %d.\n", ioctl.cmd);
     switch(ioctl.cmd)
     {
         case CASTLE_CTRL_REQ_CLAIM:
@@ -351,8 +313,7 @@ int castle_control_ioctl(struct file *filp,
             break;
         case CASTLE_CTRL_REQ_INIT:
             castle_control_fs_init(&ioctl.init.ret);
-            break;    
-        
+            break;            
         case CASTLE_CTRL_REQ_ATTACH:
             castle_control_attach( ioctl.attach.version,
                                   &ioctl.attach.ret,
@@ -414,15 +375,10 @@ int castle_control_ioctl(struct file *filp,
             break;
 
         case CASTLE_CTRL_REQ_TRANSFER_CREATE:
-            castle_control_transfer_create( ioctl.transfer_create.version,
-                                            ioctl.transfer_create.direction,
-                                           &ioctl.transfer_create.ret,
-                                           &ioctl.transfer_create.id);
-            break;
         case CASTLE_CTRL_REQ_TRANSFER_DESTROY:
-            castle_control_transfer_destroy( ioctl.transfer_destroy.id,
-                                            &ioctl.transfer_destroy.ret);
-            break;
+            err = -ENOSYS;
+            goto err;
+
         default:
             err = -EINVAL;
             goto err;

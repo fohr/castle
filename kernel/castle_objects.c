@@ -8,9 +8,9 @@
 #include "castle_btree.h"
 #include "castle_cache.h"
 #include "castle_versions.h"
-#include "castle_freespace.h"
 #include "castle_rxrpc.h"
 #include "castle_objects.h"
+#include "castle_extent.h"
 
 //#define DEBUG
 #ifndef DEBUG
@@ -562,6 +562,7 @@ static void castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
     /* We should be handling a write (possibly a tombstone write). */
     BUG_ON(c_bvec_data_dir(c_bvec) != WRITE); 
     /* Some sanity checks */
+    BUG_ON(!CVT_LEAF_VAL(prev_cvt) && !CVT_INVALID(prev_cvt));
     BUG_ON(CVT_TOMB_STONE(prev_cvt) && (prev_cvt.length != 0));
 
     /* Allocate space for new value, in or out of line */ 
@@ -571,9 +572,9 @@ static void castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
 
         /* Decide whether to use inline, or out-of-line value on the 
            basis of this length. */
-        if (cvt->length <= MAX_INLINE_VAL_SIZE)
+        if (replace->value_len <= MAX_INLINE_VAL_SIZE)
         {
-            cvt->type = CVT_TYPE_INLINE;
+            CVT_INLINE_SET(*cvt, replace->value_len, NULL);
             cvt->val  = castle_malloc(cvt->length, GFP_NOIO);
             /* TODO: Work out how to handle this */
             BUG_ON(!cvt->val);
@@ -583,16 +584,50 @@ static void castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
         }
         else
         {
-            nr_blocks = (cvt->length - 1) / C_BLK_SIZE + 1; 
-            /* Arbitrary limits on the size of the objets (freespace code cannot handle
-               huge objects ATM) */
-            BUG_ON(nr_blocks > 100); 
-            cvt->type   = CVT_TYPE_ONDISK;
-            cvt->cdb    = castle_freespace_block_get(c_bvec->version, nr_blocks); 
-            /* TODO: Again, work out how to handle failed allocations */ 
-            BUG_ON(DISK_BLK_INVAL(cvt->cdb));
-         }
+            uint32_t nr_chunks;
+            c_ext_pos_t cep;
+            uint32_t prev_nr_blocks;
 
+            nr_blocks = (cvt->length - 1) / C_BLK_SIZE + 1; 
+            nr_chunks = (nr_blocks >> (C_CHK_SHIFT - C_BLK_SHIFT)) + 
+                            (nr_blocks % (C_CHK_SIZE/C_BLK_SIZE));
+            prev_nr_blocks = (prev_cvt.length - 1) / C_BLK_SIZE + 1;
+
+            if (replace->value_len <= MEDIUM_OBJECT_LIMIT)
+            {
+                if (CVT_MEDIUM_OBJECT(prev_cvt) && (prev_nr_blocks >= nr_blocks))
+                {
+                    castle_ext_fs_free(&c_bvec->tree->data_ext_fs,
+                                        nr_blocks * C_BLK_SIZE);
+                    debug("Freeing %u blks from %p|%p\n", nr_blocks, c_bvec,
+                                                             c_bvec->tree);
+                    CVT_MEDIUM_OBJECT_SET(*cvt, replace->value_len, prev_cvt.cep);
+                }
+                else
+                {
+                    BUG_ON(castle_ext_fs_get(&c_bvec->tree->data_ext_fs,
+                                             nr_blocks * C_BLK_SIZE,
+                                             1,
+                                             &cep) < 0);
+                    CVT_MEDIUM_OBJECT_SET(*cvt, replace->value_len, cep);
+                }
+                debug("Medium Object in %p, cep: "cep_fmt_str_nl, c_bvec->tree,
+                                                   __cep2str(cvt->cep));
+            }
+            else 
+            {
+                /* Arbitrary limits on the size of the objets (freespace code 
+                 * cannot handle huge objects ATM) */
+                BUG_ON(nr_blocks > 100); 
+                cep.ext_id = castle_extent_alloc(DEFAULT, c_bvec->tree->da, 
+                                                 nr_chunks);
+                cep.offset = 0;
+                CVT_LARGE_OBJECT_SET(*cvt, replace->value_len, cep);
+
+                /* TODO: Again, work out how to handle failed allocations */ 
+                BUG_ON(EXT_POS_INVAL(cvt->cep));
+            }
+        }
     } else
     /* For tombstones, construct the cvt and exit. */
     {
@@ -600,12 +635,16 @@ static void castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
     }
 
     /* If there was an out-of-line object stored under this key, release it. */
-    if (CVT_ONDISK(prev_cvt))
+    /* Note: Not handling Medium objects. They may create holes. But, its fine
+     * as it is just in T0. */
+    BUG_ON(CVT_MEDIUM_OBJECT(prev_cvt) &&
+           (prev_cvt.cep.ext_id != c_bvec->tree->data_ext_fs.ext_id));
+
+    /* Free Old Large Object */
+    if (CVT_LARGE_OBJECT(prev_cvt))
     {
         nr_blocks = (prev_cvt.length - 1) / C_BLK_SIZE + 1; 
-        castle_freespace_block_free(prev_cvt.cdb,
-                                    c_bvec->version,
-                                    nr_blocks);
+        castle_extent_free(prev_cvt.cep.ext_id);
     }
     BUG_ON(CVT_INVALID(*cvt));
 }
@@ -626,11 +665,10 @@ static void castle_object_replace_multi_cvt_get(c_bvec_t    *c_bvec,
     if(!tombstone)
     {
         /* The packet will now contain the length of the data payload */
-        cvt->length = castle_rxrpc_uint32_get_buf(call);
+        CVT_INLINE_SET(*cvt, castle_rxrpc_uint32_get_buf(call), NULL);
         /* Must be inline size for replace_multi */
         BUG_ON(cvt->length > MAX_INLINE_VAL_SIZE);
 
-        cvt->type = CVT_TYPE_INLINE;
         cvt->val  = castle_malloc(cvt->length, GFP_NOIO);
         /* TODO: Work out how to handle this */
         BUG_ON(!cvt->val);
@@ -646,11 +684,11 @@ static void castle_object_replace_multi_cvt_get(c_bvec_t    *c_bvec,
 
 #define OBJ_IO_MAX_BUFFER_SIZE      (10)    /* In C_BLK_SIZE blocks */
 
-static c_disk_blk_t castle_object_write_next_cdb(c_disk_blk_t old_cdb,
+static c_ext_pos_t  castle_object_write_next_cep(c_ext_pos_t  old_cep,
                                                  uint32_t data_length)
 {
     uint32_t data_c2b_length;
-    c_disk_blk_t new_data_cdb;
+    c_ext_pos_t new_data_cep;
     int nr_blocks;
 
     /* Work out how large buffer to allocate */
@@ -660,13 +698,13 @@ static c_disk_blk_t castle_object_write_next_cdb(c_disk_blk_t old_cdb,
     nr_blocks = (data_c2b_length - 1) / C_BLK_SIZE + 1; 
     debug("Allocating new buffer of size %d blocks, for data_length=%d\n",
         nr_blocks, data_length);
-    new_data_cdb.disk  = old_cdb.disk; 
-    new_data_cdb.block = old_cdb.block + nr_blocks; 
+    new_data_cep.ext_id  = old_cep.ext_id; 
+    new_data_cep.offset = old_cep.offset + (nr_blocks * C_BLK_SIZE); 
 
-    return new_data_cdb;
+    return new_data_cep;
 }
 
-static c2_block_t* castle_object_write_buffer_alloc(c_disk_blk_t new_data_cdb,
+static c2_block_t* castle_object_write_buffer_alloc(c_ext_pos_t new_data_cep,
                                                     uint32_t data_length)
 {
     uint32_t data_c2b_length;
@@ -678,9 +716,9 @@ static c2_block_t* castle_object_write_buffer_alloc(c_disk_blk_t new_data_cdb,
                                     OBJ_IO_MAX_BUFFER_SIZE * C_BLK_SIZE :
                                     data_length;
     nr_blocks = (data_c2b_length - 1) / C_BLK_SIZE + 1; 
-    new_data_c2b = castle_cache_block_get(new_data_cdb, nr_blocks);
-    lock_c2b(new_data_c2b);
-    set_c2b_uptodate(new_data_c2b);
+    new_data_c2b = castle_cache_block_get(new_data_cep, nr_blocks);
+    write_lock_c2b(new_data_c2b);
+    update_c2b(new_data_c2b);
 #ifdef CASTLE_DEBUG        
     /* Poison the data block */
     memset(c2b_buffer(new_data_c2b), 0xf4, nr_blocks * C_BLK_SIZE);
@@ -694,7 +732,7 @@ static int castle_object_data_write(struct castle_object_replace *replace)
     c2_block_t *data_c2b;
     uint32_t data_c2b_offset, data_c2b_length, data_length, packet_length;
     c2_block_t *new_data_c2b;
-    c_disk_blk_t new_data_cdb;
+    c_ext_pos_t  new_data_cep;
 
     /* Work out how much data we've got, and how far we've got so far */
     data_c2b = replace->data_c2b;
@@ -746,13 +784,13 @@ static int castle_object_data_write(struct castle_object_replace *replace)
         if((data_c2b_offset == data_c2b_length) && (data_length > 0))
         {
             debug("Run out of buffer space, allocating a new one.\n");
-            new_data_cdb = castle_object_write_next_cdb(data_c2b->cdb, data_length); 
-            new_data_c2b = castle_object_write_buffer_alloc(new_data_cdb, data_length); 
+            new_data_cep = castle_object_write_next_cep(data_c2b->cep, data_c2b_length); 
+            new_data_c2b = castle_object_write_buffer_alloc(new_data_cep, data_length); 
             data_c2b_length = new_data_c2b->nr_pages * C_BLK_SIZE;
             data_c2b_offset = 0;
             /* Release the (old) buffer */
             dirty_c2b(data_c2b);
-            unlock_c2b(data_c2b);
+            write_unlock_c2b(data_c2b);
             put_c2b(data_c2b);
             /* Swap the new buffer in, if one was initialised. */
             data_c2b = new_data_c2b;
@@ -797,11 +835,11 @@ void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
     }
 
     /* Otherwise, write the entry out. */
-    BUG_ON(CVT_INVALID(cvt));
+    BUG_ON(!CVT_LEAF_VAL(cvt));
     if(CVT_ONDISK(cvt))
     {
         BUG_ON(c_bvec_data_del(c_bvec));
-        c2b = castle_object_write_buffer_alloc(cvt.cdb, cvt.length); 
+        c2b = castle_object_write_buffer_alloc(cvt.cep, cvt.length); 
         
         replace->data_c2b = c2b;
         replace->data_c2b_offset = 0;
@@ -824,7 +862,7 @@ void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
         if(c2b)
         {
             dirty_c2b(c2b);
-            unlock_c2b(c2b);
+            write_unlock_c2b(c2b);
             put_c2b(c2b);
         }
  
@@ -853,7 +891,7 @@ void castle_object_replace_multi_complete(struct castle_bio_vec *c_bvec,
 
     /* Free the key, value and the BIO. */
     castle_object_bkey_free(c_bvec->key);
-    BUG_ON(CVT_INVALID(cvt) || CVT_ONDISK(cvt));
+    BUG_ON((!CVT_LEAF_VAL(cvt) && !CVT_INVALID(cvt)) || CVT_ONDISK(cvt));
     if(CVT_INLINE(cvt))
         castle_free(cvt.val);
 
@@ -885,7 +923,7 @@ int castle_object_replace_continue(struct castle_object_replace *replace, int la
         
         BUG_ON(data_length != 0);
         dirty_c2b(data_c2b);
-        unlock_c2b(data_c2b);
+        write_unlock_c2b(data_c2b);
         put_c2b(data_c2b);
         replace->complete(replace, 0);
     } else
@@ -933,6 +971,7 @@ int castle_object_replace(struct castle_object_replace *replace,
     c_bvec->cvt_get    = castle_object_replace_cvt_get;
     c_bvec->endfind    = castle_object_replace_complete;
     c_bvec->da_endfind = NULL; 
+    atomic_set(&c_bvec->reserv_nodes, 0);
     
     /* TODO: add bios to the debugger! */ 
 
@@ -973,6 +1012,7 @@ int castle_object_replace_multi(struct castle_rxrpc_call *call,
     c_bvec->cvt_get    = castle_object_replace_multi_cvt_get;
     c_bvec->endfind    = castle_object_replace_multi_complete;
     c_bvec->da_endfind = NULL;
+    atomic_set(&c_bvec->reserv_nodes, 0);
 
     /* TODO: add bios to the debugger! */
 
@@ -1159,6 +1199,7 @@ int castle_object_slice_get(struct castle_rxrpc_call *call,
         castle_objects_rq_iter.next(iterator, (void **)&k, &v, &cvt);
         debug_rq("Got an entry the range query.\n");
 
+        BUG_ON(!CVT_LEAF_VAL(cvt));
         /* Ignore tombstones, we are not sending these */
         if(CVT_TOMB_STONE(cvt))
             continue;
@@ -1183,8 +1224,8 @@ int castle_object_slice_get(struct castle_rxrpc_call *call,
                (never, if replaced with iterators?) */
             BUG_ON(cvt.length > C_BLK_SIZE); 
             nr_blocks = (cvt.length - 1) / C_BLK_SIZE + 1;
-            data_c2b = castle_cache_block_get(cvt.cdb, nr_blocks);
-            lock_c2b(data_c2b);
+            data_c2b = castle_cache_block_get(cvt.cep, nr_blocks);
+            write_lock_c2b(data_c2b);
             if(!c2b_uptodate(data_c2b)) 
                 BUG_ON(submit_c2b_sync(READ, data_c2b));
             value = c2b_buffer(data_c2b);
@@ -1206,7 +1247,7 @@ int castle_object_slice_get(struct castle_rxrpc_call *call,
         /* Unlock c2b if one was taken out */
         if(CVT_ONDISK(cvt))
         {
-            unlock_c2b(data_c2b);
+            write_unlock_c2b(data_c2b);
             put_c2b(data_c2b);
         }
         /* Free the object key once we've constructed the reply */
@@ -1261,19 +1302,17 @@ int castle_object_slice_get(struct castle_rxrpc_call *call,
 
 void castle_object_get_continue(struct castle_bio_vec *c_bvec,
                                 struct castle_object_get *get,
-                                c_disk_blk_t data_cdb,
+                                c_ext_pos_t  data_cep,
                                 uint32_t data_length);
 void __castle_object_get_complete(struct work_struct *work)
 {
     c_bvec_t *c_bvec = container_of(work, c_bvec_t, work);
     struct castle_object_get *get = c_bvec->c_bio->get;
-    
     c2_block_t *c2b = get->data_c2b;
+    c_ext_pos_t cep;
     uint32_t data_c2b_length = get->data_c2b_length;
     uint32_t data_length = get->data_length;
-    int first = get->first;
-    
-    c_disk_blk_t cdb;
+    int first = get->first;    
     int last;
     
     /* Deal with error case first */
@@ -1307,9 +1346,9 @@ void __castle_object_get_complete(struct work_struct *work)
         goto out;
         
     BUG_ON(data_c2b_length != OBJ_IO_MAX_BUFFER_SIZE * C_BLK_SIZE);
-    cdb.disk  = c2b->cdb.disk;
-    cdb.block = c2b->cdb.block + OBJ_IO_MAX_BUFFER_SIZE;
-    debug("Continuing for cdb=(0x%x, 0x%x)\n", cdb.disk, cdb.block);   
+    cep.ext_id = c2b->cep.ext_id;
+    cep.offset = c2b->cep.offset + (OBJ_IO_MAX_BUFFER_SIZE * C_BLK_SIZE);
+    debug("Continuing for cep="cep_fmt_str_nl, cep2str(cep));   
     /* TODO: Work out if we don't go into unbound recursion here */
     
     /* TODO: how much of this is a no-op from above? */
@@ -1320,20 +1359,20 @@ void __castle_object_get_complete(struct work_struct *work)
     
     castle_object_get_continue(c_bvec,
                                get,
-                               cdb,
+                               cep,
                                data_length);
     return;
 
 out:    
-    debug("Finishing with get=%p, putting c2b->cdb=(0x%x, 0x%x)\n",
-        get, c2b->cdb.disk, c2b->cdb.block);
-    unlock_c2b(c2b);
+    debug("Finishing with get %p, putting c2b->cep="cep_fmt_str_nl,
+        get, cep2str(c2b->cep));
+    write_unlock_c2b(c2b);
     put_c2b(c2b);
 
     castle_utils_bio_free(c_bvec->c_bio);
 }
 
-void castle_object_get_io_end(c2_block_t *c2b, int uptodate)
+void castle_object_get_io_end(c2_block_t *c2b)
 {
     c_bvec_t *c_bvec = c2b->private;
 
@@ -1342,19 +1381,15 @@ void castle_object_get_io_end(c2_block_t *c2b, int uptodate)
     c2_block_t *data_c2b = get->data_c2b;
     BUG_ON(c2b != data_c2b);
 #endif
-
-    debug("IO end for cdb (0x%x, 0x%x), uptodate=%d\n", 
-            c2b->cdb.disk, c2b->cdb.block, uptodate);
-    if(uptodate)
-        set_c2b_uptodate(c2b);
-
+    /* TODO: io error handling. */
+    debug("IO end for cep "cep_fmt_str_nl, cep2str(c2b->cep));
     CASTLE_INIT_WORK(&c_bvec->work, __castle_object_get_complete);
     queue_work(castle_wq, &c_bvec->work); 
 }
 
 void castle_object_get_continue(struct castle_bio_vec *c_bvec,
                                 struct castle_object_get *get,
-                                c_disk_blk_t data_cdb,
+                                c_ext_pos_t  data_cep,
                                 uint32_t data_length)
 {
     c2_block_t *c2b;
@@ -1372,8 +1407,8 @@ void castle_object_get_continue(struct castle_bio_vec *c_bvec,
     BUG_ON(data_length != old_data_length);
     /* If old_c2b exists, we must have completed a MAX chunk */
     BUG_ON( old_c2b &&
-           (old_c2b->cdb.disk != data_cdb.disk) &&
-           (old_c2b->cdb.block + OBJ_IO_MAX_BUFFER_SIZE != data_cdb.block));
+           (old_c2b->cep.ext_id != data_cep.ext_id) &&
+           (old_c2b->cep.offset + (OBJ_IO_MAX_BUFFER_SIZE * C_BLK_SIZE) != data_cep.offset));
 
     nr_blocks = (data_length - 1) / C_BLK_SIZE + 1; 
     debug("Nr blocks required for entire data: %d\n", nr_blocks);
@@ -1391,9 +1426,9 @@ void castle_object_get_continue(struct castle_bio_vec *c_bvec,
     debug("data_c2b_length=%d, data_length=%d\n", data_c2b_length, data_length);
     data_length -= data_c2b_length; 
     
-    debug("Locking cdb (0x%x, 0x%x)\n", data_cdb.disk, data_cdb.block);
-    c2b = castle_cache_block_get(data_cdb, nr_blocks);
-    lock_c2b(c2b);
+    debug("Locking cep "cep_fmt_str_nl, cep2str(data_cep));
+    c2b = castle_cache_block_get(data_cep, nr_blocks);
+    write_lock_c2b(c2b);
     
     get->data_c2b        = c2b;
     get->data_c2b_length = data_c2b_length;
@@ -1402,8 +1437,8 @@ void castle_object_get_continue(struct castle_bio_vec *c_bvec,
     /* Unlock the old c2b if we had one */
     if(old_c2b)
     {
-        debug("Unlocking old_cdb (0x%x, 0x%x)\n", old_c2b->cdb.disk, old_c2b->cdb.block);
-        unlock_c2b(old_c2b);
+        debug("Unlocking old_cep "cep_fmt_str_nl, cep2str(old_c2b->cep));
+        write_unlock_c2b(old_c2b);
         put_c2b(old_c2b);
     }
 
@@ -1428,8 +1463,8 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
     struct castle_object_get *get = c_bvec->c_bio->get;
     c_bio_t *c_bio = c_bvec->c_bio;
 
-    debug("Returned from btree walk with value of type get=%p 0x%x and length %u\n", 
-          get, cvt.type, cvt.length);
+    debug("Returned from btree walk with value of type 0x%x and length %llu\n", 
+          cvt.type, cvt.length);
     /* Sanity checks on the bio */
     BUG_ON(c_bvec_data_dir(c_bvec) != READ); 
     BUG_ON(atomic_read(&c_bio->count) != 1);
@@ -1457,6 +1492,9 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
         return;
     }
 
+    BUG_ON(CVT_MEDIUM_OBJECT(cvt) && 
+            cvt.cep.ext_id != c_bvec->tree->data_ext_fs.ext_id);
+
     debug("Out of line.\n");
     /* Finally, out of line values */
     BUG_ON(!CVT_ONDISK(cvt));
@@ -1468,7 +1506,7 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
     get->data_length     = cvt.length;
     get->first           = 1; /* first */
     
-    castle_object_get_continue(c_bvec, get, cvt.cdb, cvt.length);
+    castle_object_get_continue(c_bvec, get, cvt.cep, cvt.length);
 }
 
 int castle_object_get(struct castle_object_get *get,
@@ -1498,6 +1536,7 @@ int castle_object_get(struct castle_object_get *get,
     c_bvec->cvt_get    = NULL;
     c_bvec->endfind    = castle_object_get_complete;
     c_bvec->da_endfind = NULL; 
+    atomic_set(&c_bvec->reserv_nodes, 0);
     
     /* TODO: add bios to the debugger! */ 
 
