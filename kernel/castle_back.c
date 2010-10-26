@@ -31,9 +31,11 @@
 
 //#define DEBUG
 #ifndef DEBUG
-#define debug(_f, ...)    ((void)0)
+#define debug(_f, ...)      ((void)0)
+#define debug_iter(_f, ...) ((void)0)
 #else
-#define debug(_f, _a...)  (printk("%ld: " _f, jiffies, ##_a))
+#define debug(_f, _a...)       (printk("%ld: " _f, jiffies, ##_a))
+#define debug_iter(_f, _a...)  (printk("%ld: " _f, jiffies, ##_a))
 #endif
 
 struct proc_dir_entry          *castle_back_procfile = NULL;
@@ -107,6 +109,7 @@ struct castle_back_op
 struct castle_back_iterator
 {
     uint64_t                  flags;
+    collection_id_t           collection_id;
     c_vl_okey_t              *start_key;
     c_vl_okey_t              *end_key;
     c_vl_okey_t              *saved_key;
@@ -705,12 +708,17 @@ static void castle_back_key_kernel_to_user(c_vl_okey_t *key, struct castle_back_
 /* if doesn't fit into the buffer, *buf_used will be set to 0 */
 static void castle_back_val_kernel_to_user(c_val_tup_t *val, struct castle_back_buffer *buf, 
                                            unsigned long user_buf, size_t buf_len, 
-                                           size_t *buf_used)
+                                           size_t *buf_used, collection_id_t collection_id)
 {
-    size_t length;
+    size_t length, val_length;
     struct castle_iter_val *val_copy;
 
-    length = sizeof(struct castle_iter_val) + val->length;
+    if (val->type == CVT_TYPE_INLINE)
+        val_length = val->length;
+    else
+        val_length = 0;
+
+    length = sizeof(struct castle_iter_val) + val_length;
 
     if (buf_len < length)
     {
@@ -722,8 +730,13 @@ static void castle_back_val_kernel_to_user(c_val_tup_t *val, struct castle_back_
 
     val_copy->type = val->type;
     val_copy->length = val->length;
-    val_copy->val = (uint8_t *)(user_buf + sizeof(struct castle_iter_val));
-    memcpy((uint8_t *)castle_back_user_to_kernel(buf, val_copy->val), val->val, val->length);
+    if (val->type == CVT_TYPE_INLINE)
+    {
+        val_copy->val = (uint8_t *)(user_buf + sizeof(struct castle_iter_val));
+        memcpy((uint8_t *)castle_back_user_to_kernel(buf, val_copy->val), val->val, val->length);
+    } else {
+        val_copy->collection_id = collection_id;
+    }
 
     *buf_used = length;
 }
@@ -794,9 +807,9 @@ static void castle_back_replace(struct castle_back_conn *conn, struct castle_bac
         goto err1;
     }
 
-    if (!castle_back_user_addr_in_buffer(op->buf, op->req.replace.value_ptr + op->req.replace.value_len))
+    if (!castle_back_user_addr_in_buffer(op->buf, op->req.replace.value_ptr + op->req.replace.value_len - 1))
     {
-        error("Pointer not in buffer (%p)\n", op->req.replace.value_ptr + op->req.replace.value_len);
+        error("Invalid value length %ld (ptr=%p)\n", op->req.replace.value_len, op->req.replace.value_ptr);
         err = -EINVAL;
         goto err2;
     }
@@ -966,7 +979,7 @@ static void castle_back_get(struct castle_back_conn *conn, struct castle_back_op
         goto err1;
     }
 
-    if (!castle_back_user_addr_in_buffer(op->buf, op->req.get.value_ptr + op->req.get.value_len))
+    if (!castle_back_user_addr_in_buffer(op->buf, op->req.get.value_ptr + op->req.get.value_len - 1))
     {
         error("Invalid value length %d (ptr=%p)\n", op->req.get.value_len, op->req.get.value_ptr);
         err = -EINVAL;
@@ -999,7 +1012,7 @@ static void castle_back_iter_start(struct castle_back_conn *conn, struct castle_
     castle_interface_token_t token;
     struct castle_back_stateful_op *stateful_op;
 
-    debug("castle_back_iter_start\n");
+    debug_iter("castle_back_iter_start\n");
 
     // TODO should we ref count attachments
     attachment = castle_collection_find(op->req.iter_start.collection_id);
@@ -1022,10 +1035,10 @@ static void castle_back_iter_start(struct castle_back_conn *conn, struct castle_
         goto err1;
 
 #ifdef DEBUG
-    debug("start_key: \n");
+    debug_iter("start_key: \n");
     vl_okey_print(start_key);
 
-    debug("end_key: \n");
+    debug_iter("end_key: \n");
     vl_okey_print(end_key);
 #endif
 
@@ -1042,6 +1055,7 @@ static void castle_back_iter_start(struct castle_back_conn *conn, struct castle_
         goto err3;
 
     stateful_op->iterator.flags = op->req.iter_start.flags;
+    stateful_op->iterator.collection_id = op->req.iter_start.collection_id;
     stateful_op->iterator.saved_key = NULL;
     stateful_op->iterator.start_key = start_key;
     stateful_op->iterator.end_key = end_key;
@@ -1081,6 +1095,8 @@ static void castle_back_iter_next(struct work_struct *work)
     c_val_tup_t  val;
     size_t key_len;
     size_t val_len;
+
+    debug_iter("castle_back_iter_next\n");
 
     stateful_op = container_of(work, struct castle_back_stateful_op, work);
     conn = stateful_op->conn;
@@ -1134,17 +1150,17 @@ static void castle_back_iter_next(struct work_struct *work)
         buf_len = op->req.iter_next.buffer_len;
 
     #ifdef DEBUG
-        debug("iter_next start_key\n");
+        debug_iter("iter_next start_key\n");
         vl_okey_print(iterator->start_okey);
 
-        debug("iter_next end_key\n");
+        debug_iter("iter_next end_key\n");
         vl_okey_print(iterator->end_okey);
     #endif
 
         /* if we have a saved key and value from the last call, add them to the buffer */
         if (stateful_op->iterator.saved_key != NULL)
         {
-            debug("iter_next found saved key, adding to buffer\n");
+            debug_iter("iter_next found saved key, adding to buffer\n");
 
             buf_used += sizeof(struct castle_key_value_list);
             if (buf_used >= buf_len)
@@ -1174,7 +1190,8 @@ static void castle_back_iter_next(struct work_struct *work)
                 kv_list_cur->val = (struct castle_iter_val *)
                     ((unsigned long)kv_list_cur->key + key_len);
                 castle_back_val_kernel_to_user(&stateful_op->iterator.saved_val, op->buf, 
-                    (unsigned long)kv_list_cur->val, buf_len - buf_used, &val_len);
+                    (unsigned long)kv_list_cur->val, buf_len - buf_used, &val_len,
+                    stateful_op->iterator.collection_id);
                 buf_used += val_len;
                 if (val_len == 0)
                 {
@@ -1186,12 +1203,13 @@ static void castle_back_iter_next(struct work_struct *work)
 
             castle_object_okey_free(stateful_op->iterator.saved_key);
             /* we copied it so free it */
-            castle_free(stateful_op->iterator.saved_val.val);
+            if (stateful_op->iterator.saved_val.type == CVT_TYPE_INLINE)
+                castle_free(stateful_op->iterator.saved_val.val);
 
             kv_list_prev = kv_list_cur;
             kv_list_cur = (struct castle_key_value_list *)((unsigned long)kv_list_head + buf_used);
 
-            debug("iter_next added saved key\n");
+            debug_iter("iter_next added saved key\n");
 
             stateful_op->iterator.saved_key = NULL;
         }
@@ -1225,7 +1243,7 @@ static void castle_back_iter_next(struct work_struct *work)
                 kv_list_cur->val = (struct castle_iter_val *)
                     ((unsigned long)kv_list_cur->key + key_len);
                 castle_back_val_kernel_to_user(&val, op->buf, (unsigned long)kv_list_cur->val, 
-                    buf_len - buf_used, &val_len);
+                    buf_len - buf_used, &val_len, stateful_op->iterator.collection_id);
                 if (val_len == 0)
                     break;
                 buf_used += val_len;
@@ -1251,14 +1269,16 @@ static void castle_back_iter_next(struct work_struct *work)
 
         if (key != NULL)
         {
-            debug("not enough space on buffer, saving a key for next time...\n");
+            debug_iter("not enough space on buffer, saving a key for next time...\n");
             stateful_op->iterator.saved_key = key;
             stateful_op->iterator.saved_val = val;
-            /* copy the value since it may get removed from the cache */
-            stateful_op->iterator.saved_val.val = 
-                castle_malloc(stateful_op->iterator.saved_val.length, GFP_KERNEL);
-            memcpy(stateful_op->iterator.saved_val.val, val.val, 
-                stateful_op->iterator.saved_val.length);
+            if (val.type == CVT_TYPE_INLINE)
+            {
+                /* copy the value since it may get removed from the cache */
+                stateful_op->iterator.saved_val.val =
+                    castle_malloc(val.length, GFP_KERNEL);
+                memcpy(stateful_op->iterator.saved_val.val, val.val, val.length);
+            }
         }
 
         castle_back_reply(op, 0, 0, 0);
@@ -1281,7 +1301,7 @@ static void castle_back_iter_finish(struct castle_back_conn *conn, struct castle
     int err;
     struct castle_back_stateful_op *stateful_op;
 
-    debug("castle_back_iter_finish, token = %x\n", op->req.iter_finish.token);
+    debug_iter("castle_back_iter_finish, token = %x\n", op->req.iter_finish.token);
 
     stateful_op = castle_back_find_stateful_op(conn, op->req.iter_finish.token);
 

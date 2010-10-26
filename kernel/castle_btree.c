@@ -3581,6 +3581,7 @@ static void castle_rq_enum_iter_each(c_iter_t *c_iter,
         {
             rq_enum->prod_buf = list_entry(prod_buf->list.next,
                                            struct node_buf_t, list);
+            castle_btree_node_buffer_init(rq_enum->tree, rq_enum->prod_buf->node);
             debug("Moving prod_buf to next node_buf: %p\n", rq_enum->prod_buf);
         }
         rq_enum->prod_idx = 0;

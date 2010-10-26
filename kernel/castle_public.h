@@ -151,14 +151,13 @@ typedef struct castle_control_ioctl {
 #ifndef __KERNEL__
 #define PAGE_SIZE 4096
 #define PAGE_SHIFT 12
-// TODO: should link to castle.h
+/* These must be the same as castle.h in fs.hg */
 enum {
     CVT_TYPE_INLINE          = 0x10,
     CVT_TYPE_ONDISK          = 0x20,
     CVT_TYPE_INVALID         = 0x30,
 };
 #else
-
 #endif
 
 /*
@@ -269,8 +268,11 @@ typedef struct castle_response {
 struct castle_iter_val {
     uint8_t           type;
     uint32_t          length;
-    uint8_t          *val;
-};
+    union {
+        uint8_t          *val;
+        collection_id_t   collection_id;
+    };
+} PACKED;
 
 struct castle_key_value_list {
     struct castle_key_value_list *next;

@@ -349,6 +349,7 @@ enum {
     MSTORE_BLOCK_CNTS,
     MSTORE_DOUBLE_ARRAYS,
     MSTORE_COMPONENT_TREES,
+    MSTORE_ATTACHMENTS_TAG,
 }; 
 
 
@@ -488,6 +489,12 @@ struct castle_vlist_entry {
     uint32_t     parent;
     da_id_t      da_id;
     uint32_t     size;
+} PACKED;
+
+#define MAX_NAME_SIZE 128
+struct castle_alist_entry {
+    version_t   version;
+    char        name[MAX_NAME_SIZE];
 } PACKED;
 
 #define MLIST_NODE_MAGIC  0x0000baca

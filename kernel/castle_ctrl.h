@@ -33,5 +33,7 @@ int  castle_control_ioctl           (struct file *filp,
                                      unsigned long arg);
 int  castle_control_init            (void);
 void castle_control_fini            (void);
+int  castle_attachments_store_init  (int first);
+void castle_attachments_store_fini  (void);
 
 #endif /* __CASTLE_CTRL_H__ */

@@ -384,6 +384,10 @@ int castle_fs_init(void)
     ret = castle_versions_read();
     if(ret) return -EINVAL;
 
+    /* Init mstore for Collection Attachments. */
+    ret = castle_attachments_store_init(first);
+    if (ret) return -EINVAL;
+
     printk("Castle FS inited.\n");
     castle_fs_inited = 1;
 
@@ -1502,6 +1506,7 @@ static void castle_attachments_free(void)
         else
             castle_collection_free(ca);
     }
+    castle_attachments_store_fini();
 
     if (castle_attachments.major)
         unregister_blkdev(castle_attachments.major, "castle-fs");
