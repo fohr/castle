@@ -80,7 +80,7 @@ typedef struct castle_control_cmd_snapshot {
 
 typedef struct castle_control_cmd_collection_attach {
     version_t           version;         /* IN  */
-    char               *name;            /* IN  */
+    const char         *name;            /* IN  */
     size_t              name_length;     /* IN  */ 
     int                 ret;             /* OUT */
     collection_id_t     collection;      /* OUT */

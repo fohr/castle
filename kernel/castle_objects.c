@@ -108,6 +108,9 @@ static c_vl_bkey_t* castle_object_btree_key_construct(c_vl_bkey_t *src_bkey,
     for(i=okey_first_dim; i<nr_dims; i++)
         key_len += src_okey->dims[i]->length;
 
+    if (key_len - 4 > VLBA_TREE_MAX_KEY_SIZE) /* Length doesn't include length field */
+        return NULL;
+    
     /* Allocate the single-dimensional key */
     btree_key = castle_zalloc(key_len, GFP_KERNEL);
     if(!btree_key)
@@ -846,6 +849,8 @@ void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
         replace->data_length = cvt.length;
         
         complete_write = castle_object_data_write(replace);
+    
+        c2b = replace->data_c2b;
     }
     else 
     if(CVT_INLINE(cvt))
@@ -853,8 +858,6 @@ void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
         complete_write = 1;
         castle_free(cvt.val);
     }
-    
-    c2b = replace->data_c2b;
         
     /* Unlock buffers, and complete the call if we are done already */
     if(complete_write)
@@ -949,6 +952,8 @@ int castle_object_replace(struct castle_object_replace *replace,
         BUG_ON(key->dims[i]->length == 0);
     
     btree_key = castle_object_key_convert(key);
+    if (!btree_key)
+        return -EINVAL;
    
     //printk(" value          : %s\n", tombstone ? "tombstone" : "object");
     //printk("Btree key is:");
@@ -994,6 +999,8 @@ int castle_object_replace_multi(struct castle_rxrpc_call *call,
 
     btree_key = castle_object_key_convert(key);
     castle_object_okey_free(key);
+    if (!btree_key)
+        return -EINVAL;
 
     /* Single c_bvec for the bio */
     c_bio = castle_utils_bio_alloc(1);
@@ -1022,7 +1029,7 @@ int castle_object_replace_multi(struct castle_rxrpc_call *call,
     return 0;
 }
 
-int castle_object_iterstart(struct castle_attachment *attachment,
+int castle_object_iter_start(struct castle_attachment *attachment,
                             c_vl_okey_t *start_key,
                             c_vl_okey_t *end_key,
                             castle_object_iterator_t **iter)
@@ -1071,9 +1078,7 @@ int castle_object_iterstart(struct castle_attachment *attachment,
     return 0;
 }
 
-EXPORT_SYMBOL(castle_object_iterstart);
-
-int castle_object_iternext(castle_object_iterator_t *iterator,
+int castle_object_iter_next(castle_object_iterator_t *iterator,
                            c_vl_okey_t **key,
                            c_val_tup_t *val)
 {
@@ -1114,20 +1119,14 @@ int castle_object_iternext(castle_object_iterator_t *iterator,
     return 0;
 }
 
-EXPORT_SYMBOL(castle_object_iternext);
-
-int castle_object_iterfinish(castle_object_iterator_t *iterator)
+int castle_object_iter_finish(castle_object_iterator_t *iterator)
 {
     castle_objects_rq_iter_cancel(iterator);
     debug_rq("Freeing iterators & buffers.\n");
-    castle_object_okey_free(iterator->start_okey);
-    castle_object_okey_free(iterator->end_okey);
     castle_free(iterator);
 
     return 0;
 }
-
-EXPORT_SYMBOL(castle_object_iterfinish);
 
 int castle_object_slice_get(struct castle_rxrpc_call *call, 
                             struct castle_attachment *attachment, 
@@ -1521,6 +1520,8 @@ int castle_object_get(struct castle_object_get *get,
     debug("castle_object_get get=%p\n", get);
 
     btree_key = castle_object_key_convert(key);
+    if (!btree_key)
+        return -EINVAL;
 
     /* Single c_bvec for the bio */
     c_bio = castle_utils_bio_alloc(1);

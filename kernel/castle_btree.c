@@ -8,7 +8,6 @@
 #include "castle_objects.h"
 #include "castle_utils.h"
 #include "castle_versions.h"
-#include "castle_block.h"
 #include "castle_da.h"
 #include "castle_debug.h"
 
@@ -608,8 +607,6 @@ struct castle_btree_type castle_batree = {
 #define VLBA_TREE_ENTRY_IS_ONDISK(_slot)        CVT_ONDISK(*(_slot))
 #define VLBA_TREE_ENTRY_IS_DISABLED(_slot)    ((_slot)->type & VLBA_TREE_ENTRY_DISABLED) 
 
-#define VLBA_TREE_MAX_KEY_SIZE         512      /* In bytes */
-
 typedef struct vlba_key {
     uint32_t length;
     uint8_t _key[0];
@@ -898,7 +895,7 @@ static int castle_vlba_tree_entry_get(struct castle_btree_node *node,
         BUG_ON(VLBA_TREE_ENTRY_IS_TOMB_STONE(entry) && entry->val_len != 0);
         if (VLBA_TREE_ENTRY_IS_INLINE(entry))
         {
-            BUG_ON(entry->val_len == 0 || entry->val_len > MAX_INLINE_VAL_SIZE);
+            BUG_ON(entry->val_len > MAX_INLINE_VAL_SIZE);
             cvt_p->val = VLBA_ENTRY_VAL_PTR(entry);
         }
         BUG_ON(!node->is_leaf && (CVT_LEAF_PTR(*cvt_p) || CVT_LEAF_VAL(*cvt_p)));
@@ -1061,10 +1058,9 @@ static void castle_vlba_tree_entry_replace(struct castle_btree_node *node,
         memcpy(entry, &new_entry, sizeof(struct castle_vlba_tree_entry));
         memcpy(&entry->key, key, sizeof(vlba_key_t) + VLBA_KEY_LENGTH(key));
         BUG_ON(VLBA_TREE_ENTRY_IS_TOMB_STONE(entry) && entry->val_len != 0);
-        BUG_ON(!VLBA_TREE_ENTRY_IS_TOMB_STONE(entry) && entry->val_len == 0);
         if (VLBA_TREE_ENTRY_IS_INLINE(entry))
         {
-            BUG_ON(entry->val_len == 0 || entry->val_len > MAX_INLINE_VAL_SIZE);
+            BUG_ON(entry->val_len > MAX_INLINE_VAL_SIZE);
             memcpy(VLBA_ENTRY_VAL_PTR(entry), cvt.val, cvt.length);
         }
         else 
@@ -1218,7 +1214,6 @@ static void castle_vlba_tree_node_validate(struct castle_btree_node *node)
         }
         
         BUG_ON(VLBA_TREE_ENTRY_IS_TOMB_STONE(entry) && entry->val_len != 0);
-        BUG_ON(VLBA_TREE_ENTRY_IS_INLINE(entry) && entry->val_len == 0);
         BUG_ON(VLBA_INLINE_VAL_LENGTH(entry) > MAX_INLINE_VAL_SIZE);
     }
 
@@ -2127,6 +2122,7 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
     BUG_ON(CVT_LEAF_PTR(new_cvt));
     btree->entry_replace(node, lub_idx, key, lub_version,
                          new_cvt);
+    dirty_c2b(c_bvec->btree_node);
     debug("Key already exists, modifying in place.\n");
     castle_btree_io_end(c_bvec, new_cvt, 0);
 

@@ -230,7 +230,8 @@ enum {
     CVT_TYPE_INVALID         = 0x00,
 };
 
-#define MAX_INLINE_VAL_SIZE 512
+#define MAX_INLINE_VAL_SIZE            512      /* In bytes */
+#define VLBA_TREE_MAX_KEY_SIZE         512      /* In bytes */
 #define MEDIUM_OBJECT_LIMIT (20 * C_CHK_SIZE)
 
 struct castle_value_tuple {
