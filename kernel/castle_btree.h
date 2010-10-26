@@ -7,10 +7,11 @@ struct castle_btree_type*
             castle_btree_type_get     (btree_t type);
 c2_block_t* castle_btree_node_create  (int version, 
                                        int is_leaf, 
-                                       btree_t type);
+                                       struct castle_component_tree *ct,
+                                       int alloc_done);
 void        castle_btree_node_save_prepare
                                       (struct castle_component_tree *ct, 
-                                       c_disk_blk_t node_cdb);
+                                       c_ext_pos_t  node_cep);
 void        castle_btree_find         (c_bvec_t *c_bvec);
          
 void        castle_btree_iter_init    (c_iter_t *c_iter, version_t version, int type);
