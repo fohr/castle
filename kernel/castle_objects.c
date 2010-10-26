@@ -693,7 +693,7 @@ static c_ext_pos_t  castle_object_write_next_cep(c_ext_pos_t  old_cep,
                                                  uint32_t data_length)
 {
     uint32_t data_c2b_length;
-    c_ext_pos_t  new_data_cep;
+    c_ext_pos_t new_data_cep;
     int nr_blocks;
 
     /* Work out how large buffer to allocate */
@@ -744,8 +744,8 @@ static int castle_object_data_write(struct castle_object_replace *replace)
     data_c2b_offset = replace->data_c2b_offset;
     data_length = replace->data_length;
 
-    debug("Data write. data_c2b=%p, data_c2b_offset=%d, data_length=%d\n",
-        data_c2b, data_c2b_offset, data_length);
+    debug("Data write. replace=%p, data_c2b=%p, data_c2b_offset=%d, data_length=%d\n",
+        replace, data_c2b, data_c2b_offset, data_length);
     data_c2b_length = data_c2b->nr_pages * C_BLK_SIZE;
     packet_length = replace->data_length_get(replace);
 
@@ -1196,30 +1196,28 @@ int castle_object_slice_get(struct castle_rxrpc_call *call,
 }
 
 void castle_object_get_continue(struct castle_bio_vec *c_bvec,
-                                struct castle_rxrpc_call *call,
+                                struct castle_object_get *get,
                                 c_ext_pos_t  data_cep,
                                 uint32_t data_length);
 void __castle_object_get_complete(struct work_struct *work)
 {
     c_bvec_t *c_bvec = container_of(work, c_bvec_t, work);
-    struct castle_rxrpc_call *call = c_bvec->c_bio->rxrpc_call;
-    c2_block_t *c2b;
-    uint32_t data_c2b_length, data_length;
-    c_ext_pos_t  cep;
-    int first, last;
-
-    castle_rxrpc_get_call_get(call, &c2b, &data_c2b_length, &data_length, &first);
-    debug("Get complete for call %p, first=%d, c2b->cep"cep_fmt_str
-           ", data_c2b_length=%d, data_length=%d\n", 
-        call, first, cep2str(c2b->cep), data_c2b_length, data_length);
+    struct castle_object_get *get = c_bvec->c_bio->get;
+    c2_block_t *c2b = get->data_c2b;
+    c_ext_pos_t cep;
+    uint32_t data_c2b_length = get->data_c2b_length;
+    uint32_t data_length = get->data_length;
+    int first = get->first;    
+    int last;
+    
     /* Deal with error case first */
     if(!c2b_uptodate(c2b))
     {
         debug("Not up to date.\n");
         if(first)
-            castle_rxrpc_get_reply_start(call, -EIO, 0, NULL, 0);
+            get->reply_start(get, -EIO, 0, NULL, 0);
         else
-            castle_rxrpc_get_reply_continue(call, -EIO, NULL, 0, 1 /* last */);
+            get->reply_continue(get, -EIO, NULL, 0, 1 /* last */);
         goto out;
     }
     
@@ -1227,36 +1225,42 @@ void __castle_object_get_complete(struct work_struct *work)
     last = (data_length == 0);
     debug("Last=%d\n", last);
     if(first)
-        castle_rxrpc_get_reply_start(call, 
-                                     0,
-                                     data_c2b_length + data_length,
-                                     c2b_buffer(c2b), 
-                                     data_c2b_length);
+        get->reply_start(get, 
+                         0,
+                         data_c2b_length + data_length,
+                         c2b_buffer(c2b), 
+                         data_c2b_length);
     else
-        castle_rxrpc_get_reply_continue(call, 
-                                        0, 
-                                        c2b_buffer(c2b), 
-                                        data_c2b_length,
-                                        last);
+        get->reply_continue(get, 
+                            0, 
+                            c2b_buffer(c2b), 
+                            data_c2b_length,
+                            last);
 
     if(last)
         goto out;
         
     BUG_ON(data_c2b_length != OBJ_IO_MAX_BUFFER_SIZE * C_BLK_SIZE);
-    cep.ext_id  = c2b->cep.ext_id;
+    cep.ext_id = c2b->cep.ext_id;
     cep.offset = c2b->cep.offset + (OBJ_IO_MAX_BUFFER_SIZE * C_BLK_SIZE);
     debug("Continuing for cep="cep_fmt_str_nl, cep2str(cep));   
     /* TODO: Work out if we don't go into unbound recursion here */
-    castle_rxrpc_get_call_set(call, c2b, data_c2b_length, data_length, 0 /* not first any more */);
+    
+    /* TODO: how much of this is a no-op from above? */
+    get->data_c2b        = c2b;
+    get->data_c2b_length = data_c2b_length;
+    get->data_length     = data_length;
+    get->first           = 0; /* not first any more */
+    
     castle_object_get_continue(c_bvec,
-                               call,
+                               get,
                                cep,
                                data_length);
     return;
 
 out:    
-    debug("Finishing with call %p, putting c2b->cep="cep_fmt_str_nl,
-        call, cep2str(c2b->cep));
+    debug("Finishing with get %p, putting c2b->cep="cep_fmt_str_nl,
+        get, cep2str(c2b->cep));
     write_unlock_c2b(c2b);
     put_c2b(c2b);
 
@@ -1266,13 +1270,10 @@ out:
 void castle_object_get_io_end(c2_block_t *c2b)
 {
     c_bvec_t *c_bvec = c2b->private;
-#ifdef CASTLE_DEBUG    
-    struct castle_rxrpc_call *call = c_bvec->c_bio->rxrpc_call;
-    c2_block_t *data_c2b;
-    uint32_t data_length, data_c2b_length;
-    int first;
 
-    castle_rxrpc_get_call_get(call, &data_c2b, &data_c2b_length, &data_length, &first); 
+#ifdef CASTLE_DEBUG    
+    struct castle_object_get *get = c_bvec->c_bio->get;
+    c2_block_t *data_c2b = get->data_c2b;
     BUG_ON(c2b != data_c2b);
 #endif
     /* TODO: io error handling. */
@@ -1282,19 +1283,22 @@ void castle_object_get_io_end(c2_block_t *c2b)
 }
 
 void castle_object_get_continue(struct castle_bio_vec *c_bvec,
-                                struct castle_rxrpc_call *call,
+                                struct castle_object_get *get,
                                 c_ext_pos_t  data_cep,
                                 uint32_t data_length)
 {
-    c2_block_t *c2b, *old_c2b;
-    int nr_blocks, first;
-    uint32_t data_c2b_length, old_data_length;
+    c2_block_t *c2b;
+    int nr_blocks;
     
-    BUG_ON(c_bvec->c_bio->rxrpc_call != call);
-    castle_rxrpc_get_call_get(call, &old_c2b, &data_c2b_length, &old_data_length, &first);
-    debug("get_continue for call %p, data_c2b_length=%d, "
+    c2_block_t *old_c2b = get->data_c2b;
+    uint32_t data_c2b_length = get->data_c2b_length;
+    uint32_t old_data_length = get->data_length;
+    
+    BUG_ON(c_bvec->c_bio->get != get);
+
+    debug("get_continue for get=%p, data_c2b_length=%d, "
            "old_data_length=%d, data_length=%d, first=%d\n", 
-        call, data_c2b_length, old_data_length, data_length, first);
+        get, data_c2b_length, old_data_length, data_length, get->first);
     BUG_ON(data_length != old_data_length);
     /* If old_c2b exists, we must have completed a MAX chunk */
     BUG_ON( old_c2b &&
@@ -1320,7 +1324,11 @@ void castle_object_get_continue(struct castle_bio_vec *c_bvec,
     debug("Locking cep "cep_fmt_str_nl, cep2str(data_cep));
     c2b = castle_cache_block_get(data_cep, nr_blocks);
     write_lock_c2b(c2b);
-    castle_rxrpc_get_call_set(call, c2b, data_c2b_length, data_length, first);
+    
+    get->data_c2b        = c2b;
+    get->data_c2b_length = data_c2b_length;
+    get->data_length     = data_length;
+    
     /* Unlock the old c2b if we had one */
     if(old_c2b)
     {
@@ -1346,7 +1354,8 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
                                 int err,
                                 c_val_tup_t cvt)
 {
-    struct castle_rxrpc_call *call = c_bvec->c_bio->rxrpc_call;
+    //struct castle_rxrpc_call *call = c_bvec->c_bio->rxrpc_call;
+    struct castle_object_get *get = c_bvec->c_bio->get;
     c_bio_t *c_bio = c_bvec->c_bio;
 
     debug("Returned from btree walk with value of type 0x%x and length %llu\n", 
@@ -1363,7 +1372,7 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
     if(err || CVT_INVALID(cvt) || CVT_TOMB_STONE(cvt))
     {
         debug("Error, invalid or tombstone.\n");
-        castle_rxrpc_get_reply_start(call, err, 0, NULL, 0);
+        get->reply_start(get, err, 0, NULL, 0);
         castle_utils_bio_free(c_bvec->c_bio);
         return;
     }
@@ -1372,7 +1381,7 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
     if(CVT_INLINE(cvt))
     {
         debug("Inline.\n");
-        castle_rxrpc_get_reply_start(call, 0, cvt.length, cvt.val, cvt.length);
+        get->reply_start(get, 0, cvt.length, cvt.val, cvt.length);
         castle_free(cvt.val);
         castle_utils_bio_free(c_bvec->c_bio);
         return;
@@ -1386,17 +1395,24 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
     BUG_ON(!CVT_ONDISK(cvt));
     /* Init the variables stored in the call correctly, so that _continue() doesn't
        get confused */
-    castle_rxrpc_get_call_set(call, NULL, 0, cvt.length, 1 /* first */);
-    castle_object_get_continue(c_bvec, call, cvt.cep, cvt.length);
+      
+    get->data_c2b        = NULL;
+    get->data_c2b_length = 0;
+    get->data_length     = cvt.length;
+    get->first           = 1; /* first */
+    
+    castle_object_get_continue(c_bvec, get, cvt.cep, cvt.length);
 }
 
-int castle_object_get(struct castle_rxrpc_call *call, 
+int castle_object_get(struct castle_object_get *get,
                       struct castle_attachment *attachment, 
                       c_vl_okey_t *key)
 {
     c_vl_bkey_t *btree_key;
     c_bvec_t *c_bvec;
     c_bio_t *c_bio;
+
+    debug("castle_object_get get=%p\n", get);
 
     btree_key = castle_object_key_convert(key);
     castle_object_key_free(key);
@@ -1406,8 +1422,8 @@ int castle_object_get(struct castle_rxrpc_call *call,
     if(!c_bio)
         return -ENOMEM;
     BUG_ON(!attachment);
-    c_bio->attachment    = attachment; 
-    c_bio->rxrpc_call    = call;
+    c_bio->attachment    = attachment;
+    c_bio->get           = get;
     c_bio->data_dir      = READ;
 
     c_bvec = c_bio->c_bvecs; 
@@ -1424,3 +1440,5 @@ int castle_object_get(struct castle_rxrpc_call *call,
 
     return 0;
 }
+
+EXPORT_SYMBOL(castle_object_get);

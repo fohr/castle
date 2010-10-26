@@ -93,12 +93,7 @@ struct castle_rxrpc_call {
     union
     {
         /* For CASTLE_OBJ_REQ_GET */
-        struct {
-            c2_block_t *data_c2b;
-            uint32_t    data_c2b_length;
-            uint32_t    data_length;
-            int         first;
-        } get;
+        struct castle_object_get get;
         /* For CASTLE_OBJ_REQ_REPLACE */
         struct castle_object_replace replace;
         /* For CASTLE_OBJ_REQ_REPLACE_MULTI */
@@ -112,33 +107,6 @@ struct castle_rxrpc_call {
         } replace_multi;
     };
 };
-
-void castle_rxrpc_get_call_get(struct castle_rxrpc_call *call, 
-                               c2_block_t **data_c2b, 
-                               uint32_t *data_c2b_length,
-                               uint32_t *data_length,
-                               int *first)
-{
-    BUG_ON(call->type != &castle_rxrpc_get_call);
-    BUG_ON(!data_length || !data_c2b || !data_c2b_length || !first);
-    *data_c2b        = call->get.data_c2b;
-    *data_length     = call->get.data_length;
-    *data_c2b_length = call->get.data_c2b_length;
-    *first           = call->get.first;
-}
-
-void castle_rxrpc_get_call_set(struct castle_rxrpc_call *call, 
-                               c2_block_t *data_c2b, 
-                               uint32_t data_c2b_length,
-                               uint32_t data_length,
-                               int first)
-{
-    BUG_ON(call->type != &castle_rxrpc_get_call);
-    call->get.data_c2b        = data_c2b;
-    call->get.data_c2b_length = data_c2b_length;
-    call->get.data_length     = data_length;
-    call->get.first           = first;
-}
 
 static void castle_rxrpc_state_update(struct castle_rxrpc_call *call, int state)
 {
@@ -325,13 +293,16 @@ void castle_rxrpc_get_slice_reply_continue(struct castle_rxrpc_call *call,
     castle_rxrpc_call_reply_continue(call, 0, buffer, buffer_len, last); 
 }
 
-void castle_rxrpc_get_reply_start(struct castle_rxrpc_call *call, 
+void castle_rxrpc_get_reply_start(struct castle_object_get *get, 
                                   int err, 
                                   uint32_t data_length,
                                   void *buffer, 
                                   uint32_t buffer_length)
 {
-    uint32_t reply[2];
+    struct castle_rxrpc_call *call = container_of(get, struct castle_rxrpc_call, get);
+    uint32_t reply[3];
+  
+    debug("castle_rxrpc_get_reply_start call=%p get=%p\n", call, get);
   
     /* Deal with errors first */
     if(err)
@@ -363,12 +334,16 @@ void castle_rxrpc_get_reply_start(struct castle_rxrpc_call *call,
 }
 
 
-void castle_rxrpc_get_reply_continue(struct castle_rxrpc_call *call,
+void castle_rxrpc_get_reply_continue(struct castle_object_get *get,
                                      int err,
                                      void *buffer,
                                      uint32_t buffer_length,
                                      int last)
 {
+    struct castle_rxrpc_call *call = container_of(get, struct castle_rxrpc_call, get);
+    
+    debug("castle_rxrpc_get_reply_continue call=%p get=%p\n", call, get);
+    
     castle_rxrpc_call_reply_continue(call, err, buffer, buffer_length, last); 
 }
 
@@ -614,7 +589,12 @@ static int castle_rxrpc_get_decode(struct castle_rxrpc_call *call, struct sk_buf
     if(ret)
         return ret;
 
-    ret = castle_object_get(call, attachment, key);
+    debug("castle_rxrpc_get_decode call=%p get=%p\n", call, &call->get);
+
+    call->get.reply_start = castle_rxrpc_get_reply_start;
+    call->get.reply_continue = castle_rxrpc_get_reply_continue;
+
+    ret = castle_object_get(&call->get, attachment, key);
     if(ret)
         return ret;
 
@@ -952,6 +932,8 @@ static void castle_rxrpc_msg_send(struct castle_rxrpc_call *call, struct msghdr 
 {
     int n;
 
+    debug("castle_rxrpc_msg_send call=%p\n", call);
+
     if(call->state >= RXRPC_CALL_COMPLETE)
     {
         printk("Warning, trying to sent data on completed call, type=%s.\n",
@@ -1007,7 +989,7 @@ static void castle_rxrpc_double_reply_send(struct castle_rxrpc_call *call,
     struct iovec iov[3];
     uint8_t pad_buff[3] = {0, 0, 0};
     int pad = (4 - (len2 % 4)) % 4;
-
+    
     iov[0].iov_base     = (void *) buf1;
     iov[0].iov_len      = len1;
     iov[1].iov_base     = (void *) buf2;

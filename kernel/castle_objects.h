@@ -8,7 +8,7 @@ void         castle_object_key_free          (c_vl_okey_t *obj_key);
 int          castle_object_btree_key_compare (c_vl_bkey_t *key1, c_vl_bkey_t *key2);
 void        *castle_object_btree_key_next    (c_vl_bkey_t *key);
             
-int          castle_object_get               (struct castle_rxrpc_call *call, 
+int          castle_object_get               (struct castle_object_get *get, 
                                               struct castle_attachment *attachment, 
                                               c_vl_okey_t *key);
 int          castle_object_slice_get         (struct castle_rxrpc_call *call, 
