@@ -2,7 +2,6 @@
 #define __CASTLE_PUBLIC_H__
 
 #include <linux/types.h>
-#include "ring.h"
 
 typedef uint32_t transfer_id_t;
 typedef uint32_t slave_uuid_t;
@@ -162,6 +161,7 @@ enum {
     CVT_TYPE_INVALID         = 0x30,
 };
 #else
+
 #endif
 
 /*
@@ -248,6 +248,31 @@ typedef struct castle_request_iter_finish {
     castle_interface_token_t token;
 } castle_request_iter_finish_t;
 
+typedef struct castle_request_big_get {
+    collection_id_t      collection_id;
+    c_vl_okey_t         *key_ptr;
+    size_t               key_len;
+} castle_request_big_get_t;
+
+typedef struct castle_request_get_chunk {
+    castle_interface_token_t token;
+    void   *buffer_ptr;
+    size_t  buffer_len;
+} castle_request_get_chunk_t;
+
+typedef struct castle_request_big_put {
+    collection_id_t      collection_id;
+    c_vl_okey_t         *key_ptr;
+    size_t               key_len;
+    size_t               value_len;
+} castle_request_big_put_t;
+
+typedef struct castle_request_put_chunk {
+    castle_interface_token_t token;
+    void   *buffer_ptr;
+    size_t  buffer_len;
+} castle_request_put_chunk_t;
+
 typedef struct castle_request {
     uint32_t call_id;
     uint32_t tag;
@@ -255,6 +280,11 @@ typedef struct castle_request {
         castle_request_replace_t replace;
         castle_request_remove_t remove;
         castle_request_get_t get;
+        
+        castle_request_big_get_t big_get;
+        castle_request_get_chunk_t get_chunk;
+        castle_request_big_put_t big_put;
+        castle_request_put_chunk_t put_chunk;
         
         castle_request_iter_start_t iter_start;
         castle_request_iter_next_t iter_next;
@@ -283,7 +313,5 @@ struct castle_key_value_list {
     c_vl_okey_t                  *key;
     struct castle_iter_val       *val;
 } PACKED;
-
-DEFINE_RING_TYPES(castle, castle_request_t, castle_response_t);
 
 #endif /* __CASTLE_PUBLIC_H__ */
