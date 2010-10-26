@@ -1,5 +1,6 @@
 #include <linux/list.h>
 #include <asm/tlbflush.h>
+#include <linux/vmalloc.h>
 
 #include "castle_public.h"
 #include "castle_utils.h"

@@ -20,8 +20,6 @@ typedef uint32_t version_t;
 #define CASTLE_CTRL_REQ_CLONE                    6
 #define CASTLE_CTRL_REQ_SNAPSHOT                 7
 #define CASTLE_CTRL_REQ_INIT                     8
-//#define CASTLE_CTRL_REQ_REGION_CREATE            9
-//#define CASTLE_CTRL_REQ_REGION_DESTROY           10
 #define CASTLE_CTRL_REQ_TRANSFER_CREATE          11
 #define CASTLE_CTRL_REQ_TRANSFER_DESTROY         12
 #define CASTLE_CTRL_REQ_COLLECTION_ATTACH        13
@@ -40,10 +38,8 @@ typedef uint32_t version_t;
 #define CASTLE_CTRL_REPLY_NEW_SLAVE              2
 #define CASTLE_CTRL_REPLY_NEW_VERSION            3
 #define CASTLE_CTRL_REPLY_NEW_DEVICE             4
-//#define CASTLE_CTRL_REPLY_NEW_REGION             5
 #define CASTLE_CTRL_REPLY_NEW_TRANSFER           6
 #define CASTLE_CTRL_REPLY_NEW_COLLECTION         7
-//EXCEPTIONS 8
 #define CASTLE_CTRL_REPLY_VALID_COUNTS           9
 #define CASTLE_CTRL_REPLY_INVALID_COUNTS         10
 
@@ -285,5 +281,37 @@ struct castle_key_value_list {
 } PACKED;
 
 DEFINE_RING_TYPES(castle, castle_request_t, castle_response_t);
+
+#define CASTLE_SLAVE_MAGIC1     (0x02061985)
+#define CASTLE_SLAVE_MAGIC2     (0x16071983)
+#define CASTLE_SLAVE_MAGIC3     (0x16061981)
+#define CASTLE_SLAVE_VERSION    (1)
+
+struct castle_slave_superblock {
+    uint32_t     magic1;
+    uint32_t     magic2;
+    uint32_t     magic3;
+    uint32_t     version;   /* Super chunk format version */
+    uint32_t     uuid;
+    uint32_t     used;
+    uint32_t     size; /* In blocks */
+	uint32_t     flags; 
+} PACKED;
+
+#define CASTLE_FS_MAGIC1        (0x19731121)
+#define CASTLE_FS_MAGIC2        (0x19880624)
+#define CASTLE_FS_MAGIC3        (0x19821120)
+#define CASTLE_FS_VERSION       (1)
+
+struct castle_fs_superblock_public {
+    uint32_t     magic1;
+    uint32_t     magic2;
+    uint32_t     magic3;
+    uint32_t     uuid;
+    uint32_t     version;   /* Super chunk format version */
+    uint32_t     salt;
+    uint32_t     peper;
+} PACKED;
+
 
 #endif /* __CASTLE_PUBLIC_H__ */
