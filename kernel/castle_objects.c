@@ -453,6 +453,7 @@ static int castle_objects_rq_iter_has_next(castle_object_iterator_t *iter)
             //vl_bkey_print(next_key);
             /* TODO: memory leak for next keys! FIX that */
             castle_da_rq_iter.skip(&iter->da_rq_iter, next_key);
+            castle_free(next_key);
         }    
         else 
         {

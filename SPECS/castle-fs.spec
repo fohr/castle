@@ -52,7 +52,7 @@ This package provides the DKMS-ready source code for the castle-fs kernel module
 
 %build
 make -C user/utils
-make -C kernel KVER=%{kversion} KERNEL_DIR=%{kerneldir}
+make -C kernel KVER=%{kversion} KERNEL_DIR=%{kerneldir} DEBUG=n PERF_DEBUG=n
 
 %install
 rm -rf %{buildroot}

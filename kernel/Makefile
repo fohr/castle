@@ -12,7 +12,7 @@ ifeq ($(DEBUG),y)
   DEBFLAGS = -Werror -O0 -g -DCASTLE_DEBUG # "-O" is needed to expand inlines
   $(TARGET)-objs += castle_debug.o
 else
-  DEBFLAGS = -O0 -g
+  DEBFLAGS = -O2 -g
 endif
 
 ifeq ($(PERF_DEBUG),y)
@@ -26,6 +26,8 @@ EXTRA_CFLAGS += -I..
 KVER       ?= $(shell uname -r)
 KERNEL_DIR ?= /lib/modules/$(KVER)/build
 PWD        := $(shell pwd)
+
+INSTALL_MOD_DIR = extra/castle
 
 .PHONY: all
 all: $(TARGET).ko
