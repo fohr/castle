@@ -112,7 +112,7 @@ void vl_bkey_print(c_vl_bkey_t *key)
     }
     printk("Btree key, length=%d\n", key->length);
     vl_okey_print(okey);
-    castle_object_key_free(okey);
+    castle_object_okey_free(okey);
 }
 
 /**********************************************************************************************

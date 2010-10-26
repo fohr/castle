@@ -418,6 +418,9 @@ struct castle_btree_type {
     void*   (*key_next)      (void *key);
                              /* Successor key, succ(MAX) = INVAL,
                                 succ(INVAL) = INVAL                    */
+    void    (*key_dealloc)   (void *key);
+                             /* Destroys the key, frees resources
+                                associated with it                     */
     int     (*entry_get)     (struct castle_btree_node *node,
                               int                       idx,
                               void                    **key_p,            
@@ -676,11 +679,16 @@ typedef struct castle_iterator {
     void                         *parent_key; /* The key we followed to get to the block 
                                                  on the top of the path/stack */
     union {
-        /* Only used by C_ITER_ALL_ENTRIES       */
+        /* Used by C_ITER_ALL_ENTRIES       */
         int                       node_idx[MAX_BTREE_DEPTH];
-        /* Only used by C_ITER_MATCHING_VERSIONS */
-        void                     *next_key;   /* The next key to look for in the iteration 
-                                                 (typically parent_key + 1 when at leafs) */
+        /* Used by C_ITER_MATCHING_VERSIONS & C_ITER_ANCESTORAL_VERSIONS */
+        struct {
+            void                 *key;          /* The next key to look for in the iteration 
+                                                   (typically parent_key + 1 when at leafs) */
+            int                   need_destroy; /* True if allocated by the iterator
+                                                   (and needs destroying at the end) */
+        } next_key;
+                                                 
     };
     int                           cancelled;
     int                           err;
@@ -979,6 +987,7 @@ typedef struct castle_object_iterator {
     int                 err;
     c_vl_bkey_t        *start_bkey;
     c_vl_bkey_t        *end_bkey;
+    c_vl_bkey_t        *last_next_key;
     c_da_rq_iter_t      da_rq_iter;
     /* Cached entry, guaranteed to fall in the hypercube */
     int                 cached;

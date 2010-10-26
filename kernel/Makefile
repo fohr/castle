@@ -43,7 +43,7 @@ $(TARGET).ko: castle_compile.h
 	$(MAKE) -C $(KERNEL_DIR) M=$(PWD) modules
 
 install: $(TARGET).ko
-	$(MAKE) -C $(KERNEL_DIR) M=$(PWD) modules_install
+	$(MAKE) -C $(KERNEL_DIR) M=$(PWD) INSTALL_MOD_DIR=$(INSTALL_MOD_DIR) modules_install
 	depmod -aq $(KVER)
 
 clean:

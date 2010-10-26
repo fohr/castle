@@ -587,7 +587,7 @@ static int castle_rxrpc_get_decode(struct castle_rxrpc_call *call, struct sk_buf
 
     ret = castle_rxrpc_collection_key_get(skb, &attachment, &key);
     if(ret)
-        return ret;
+        goto out;
 
     debug("castle_rxrpc_get_decode call=%p get=%p\n", call, &call->get);
 
@@ -595,11 +595,15 @@ static int castle_rxrpc_get_decode(struct castle_rxrpc_call *call, struct sk_buf
     call->get.reply_continue = castle_rxrpc_get_reply_continue;
 
     ret = castle_object_get(&call->get, attachment, key);
+    castle_object_okey_free(key);
     if(ret)
-        return ret;
+        goto out;
 
+out:
     rxrpc_kernel_data_delivered(skb);
     castle_rxrpc_state_update(call, RXRPC_CALL_REPLYING);
+    if(ret)
+        castle_rxrpc_get_reply_start(&call->get, ret, -1, NULL, -1);
 
     return 0;
 }
@@ -624,7 +628,7 @@ static int castle_rxrpc_replace_decode(struct castle_rxrpc_call *call, struct sk
     {
         ret = castle_rxrpc_collection_key_get(skb, &attachment, &key);
         if(ret)
-            return ret;
+            goto out;
         is_tombstone = SKB_L_GET(skb) == CASTLE_OBJ_TOMBSTONE;
         value_len = is_tombstone ? 0 : SKB_L_GET(skb);
 
@@ -637,7 +641,7 @@ static int castle_rxrpc_replace_decode(struct castle_rxrpc_call *call, struct sk
         call->replace.data_copy = castle_rxrpc_replace_str_copy;
         
         ret = castle_object_replace(&call->replace, attachment, key, is_tombstone);
-        castle_object_key_free(key);
+        castle_object_okey_free(key);
     } else
     /* Subsequent packet processing */
     {
@@ -650,8 +654,9 @@ static int castle_rxrpc_replace_decode(struct castle_rxrpc_call *call, struct sk
         ret = castle_object_replace_continue(&call->replace, last);
     }
 
+out:
     if(ret)
-        return ret;
+        castle_rxrpc_replace_complete(&call->replace, ret);
 
     return 0;
 }
@@ -671,20 +676,27 @@ static int castle_rxrpc_replace_multi_decode(struct castle_rxrpc_call *call,
         debug("Got first packet length %u\n", castle_rxrpc_packet_length(call));
         ret = castle_rxrpc_collection_get(skb, &call->replace_multi.attachment);
         if (ret)
-            return ret;
+            goto out;
         call->replace_multi.num_objects = SKB_L_GET(skb);
         call->replace_multi.objects_processed = 0;
 
         len = castle_rxrpc_packet_length(call);
         call->replace_multi.buf = castle_zalloc(len, GFP_KERNEL);
         if (!call->replace_multi.buf)
-            return -ENOMEM;
+        {
+            ret = -ENOMEM;
+            goto out;
+        }
         call->replace_multi.buf_length = len;
         call->replace_multi.buf_offset = 0;
 
         castle_rxrpc_str_copy(call, call->replace_multi.buf, len, 1);
         castle_rxrpc_state_update(call, RXRPC_CALL_AWAIT_DATA);
         castle_rxrpc_replace_multi_next_process(call, 0);
+
+out:
+        if(ret)
+            castle_rxrpc_replace_multi_complete(call, ret);
 
         return 0;
     }
@@ -834,21 +846,31 @@ static int castle_rxrpc_slice_decode(struct castle_rxrpc_call *call, struct sk_b
 #endif
     ret = castle_rxrpc_collection_get(skb, &attachment);
     if(ret)
-        return ret;
+        goto out;
     ret = castle_rxrpc_key_get(skb, &start_key);
     if(ret)
-        return ret;
+        goto out;
     ret = castle_rxrpc_key_get(skb, &end_key);
     if(ret)
     {
-        castle_object_key_free(start_key);
-        return ret;
+        castle_object_okey_free(start_key);
+        goto out;
     }
     max_entries = SKB_L_GET(skb);
+
+out:
     rxrpc_kernel_data_delivered(skb);
     castle_rxrpc_state_update(call, RXRPC_CALL_REPLYING);
+    
+    if(ret)
+    {
+        castle_object_okey_free(start_key);
+        castle_object_okey_free(end_key);
+        castle_rxrpc_get_slice_reply_start(call, ret, -1, NULL, -1, -1);
+        return 0;
+    }
+    
     debug("Executing a range query.\n");
-
     return castle_object_slice_get(call, attachment, start_key, end_key, max_entries);
 }
 
