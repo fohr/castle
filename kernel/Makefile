@@ -5,14 +5,14 @@ PERF_DEBUG = y
 TARGET = castle-fs
 
 obj-m          := $(TARGET).o
-$(TARGET)-objs := castle_utils.o castle_main.o castle_cache.o castle_block.o castle_btree.o castle_freespace.o castle_versions.o castle_ctrl.o castle_sysfs.o castle_transfer.o castle_events.o castle_rxrpc.o castle_da.o castle_objects.o
+$(TARGET)-objs := castle_utils.o castle_main.o castle_cache.o castle_btree.o castle_freespace.o castle_versions.o castle_ctrl.o castle_sysfs.o castle_transfer.o castle_events.o castle_rxrpc.o castle_da.o castle_objects.o castle_back.o
 
 # Add your debugging flag (or not) to CFLAGS
 ifeq ($(DEBUG),y)
   DEBFLAGS = -Werror -O0 -g -DCASTLE_DEBUG # "-O" is needed to expand inlines
   $(TARGET)-objs += castle_debug.o
 else
-  DEBFLAGS = -O0 -g
+  DEBFLAGS = -O2 -g
 endif
 
 ifeq ($(PERF_DEBUG),y)
@@ -23,9 +23,11 @@ endif
 EXTRA_CFLAGS += $(DEBFLAGS)
 EXTRA_CFLAGS += -I..
 
-KVER       ?= 2.6.18-194.11.3.el5.acunu
+KVER       ?= $(shell uname -r)
 KERNEL_DIR ?= /lib/modules/$(KVER)/build
 PWD        := $(shell pwd)
+
+INSTALL_MOD_DIR = extra/castle
 
 .PHONY: all
 all: $(TARGET).ko
@@ -41,7 +43,7 @@ $(TARGET).ko: castle_compile.h
 	$(MAKE) -C $(KERNEL_DIR) M=$(PWD) modules
 
 install: $(TARGET).ko
-	$(MAKE) -C $(KERNEL_DIR) M=$(PWD) modules_install
+	$(MAKE) -C $(KERNEL_DIR) M=$(PWD) INSTALL_MOD_DIR=$(INSTALL_MOD_DIR) modules_install
 	depmod -aq $(KVER)
 
 clean:

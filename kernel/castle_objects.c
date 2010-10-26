@@ -16,9 +16,11 @@
 #ifndef DEBUG
 #define debug(_f, ...)          ((void)0)
 #define debug_rq(_f, ...)       ((void)0)
+#define debug_obj(_f, ...)      ((void)0)
 #else
 #define debug(_f, _a...)        (printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
 #define debug_rq(_f, _a...)     (printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
+#define debug_obj(_f, _a...)    (printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
 #endif
 
    
@@ -38,6 +40,8 @@ static const uint32_t OBJ_TOMBSTONE = ((uint32_t)-1);
 #define KEY_DIMENSION_OFFSET(_dim_head)     ((_dim_head) >> KEY_DIMENSION_FLAGS_SHIFT)
 #define KEY_DIMENSION_HEADER(_off, _flags)  (((_off)  << KEY_DIMENSION_FLAGS_SHIFT) |     \
                                              ((_flags) & KEY_DIMENSION_FLAGS_MASK))
+
+
 
 static inline uint32_t castle_object_btree_key_dim_length(c_vl_bkey_t *key, int dim)
 {
@@ -108,6 +112,9 @@ static c_vl_bkey_t* castle_object_btree_key_construct(c_vl_bkey_t *src_bkey,
     for(i=okey_first_dim; i<nr_dims; i++)
         key_len += src_okey->dims[i]->length;
 
+    if (key_len - 4 > VLBA_TREE_MAX_KEY_SIZE) /* Length doesn't include length field */
+        return NULL;
+    
     /* Allocate the single-dimensional key */
     btree_key = castle_zalloc(key_len, GFP_KERNEL);
     if(!btree_key)
@@ -289,7 +296,6 @@ void *castle_object_btree_key_next(c_vl_bkey_t *key)
 
     /* Duplicate the key first */
     key_length = key->length + 4;
-    /* TODO: memory leak, fix all clients */
     new_key = castle_malloc(key_length, GFP_KERNEL);
     if(!new_key)
         return NULL;
@@ -391,7 +397,7 @@ static c_vl_bkey_t* castle_object_btree_key_skip(c_vl_bkey_t *old_key,
     return new_key;
 }
 
-void castle_object_key_free(c_vl_okey_t *obj_key)
+void castle_object_okey_free(c_vl_okey_t *obj_key)
 {
     int i;
 
@@ -400,44 +406,50 @@ void castle_object_key_free(c_vl_okey_t *obj_key)
     castle_free(obj_key);
 }
 
+c_vl_okey_t *castle_object_okey_copy(c_vl_okey_t *obj_key)
+{
+    c_vl_okey_t *copy;
+    int i, j;
+
+    copy = castle_malloc(sizeof(c_vl_okey_t) + sizeof(c_vl_key_t *) * obj_key->nr_dims, GFP_KERNEL);
+    if (copy == NULL)
+        return NULL;
+
+    copy->nr_dims = obj_key->nr_dims;
+    for(i=0; i < obj_key->nr_dims; i++)
+    {
+        copy->dims[i] = castle_malloc(sizeof(c_vl_key_t) + obj_key->dims[i]->length, GFP_KERNEL);
+        if (copy->dims[i] == NULL)
+            goto err0;
+        memcpy(copy->dims[i], obj_key->dims[i], sizeof(c_vl_key_t) + obj_key->dims[i]->length);
+    }
+
+    return copy;
+
+err0:
+    for (j = 0; j < i; j++)
+        castle_free(copy->dims[j]);
+    castle_free(copy);
+    return NULL;
+}
+
+void castle_object_bkey_free(c_vl_bkey_t *bkey)
+{
+    castle_free(bkey);
+}
+
 /**********************************************************************************************/
 /* Iterator(s) */
 
-typedef struct castle_objects_rq_iterator {
-    /* Filled in by the client */
-    da_id_t             da_id;
-    version_t           version;
-    c_vl_okey_t        *start_okey;
-    c_vl_okey_t        *end_okey;
+static void castle_objects_rq_iter_register_cb(castle_object_iterator_t *iter,
+                                               castle_iterator_end_io_t cb,
+                                               void *data)
+{
+    iter->data = data;
+    iter->end_io = cb;
+}
 
-    /* Rest */
-    int                 err;
-    c_vl_bkey_t        *start_bkey;
-    c_vl_bkey_t        *end_bkey;
-    c_da_rq_iter_t      da_rq_iter;
-    /* Cached entry, guaranteed to fall in the hypercube */
-    int                 cached;
-    void               *cached_k;
-    version_t           cached_v;
-    c_val_tup_t         cached_cvt;
-} c_obj_rq_iter_t;
-
-#if 0 
-typedef struct castle_da_rq_iterator {
-    int                       nr_cts;
-    int                       err;
-    struct castle_btree_type *btree;
-    void                     *min_key;
-    c_merged_iter_t           merged_iter;
-
-    struct ct_rq {
-        struct castle_component_tree *ct;
-        c_rq_enum_t                   ct_rq_iter; 
-    } *ct_rqs;
-} c_da_rq_iter_t;
-#endif
-
-static void castle_objects_rq_iter_next(c_obj_rq_iter_t *iter, 
+static void castle_objects_rq_iter_next(castle_object_iterator_t *iter,
                                         void **k, 
                                         version_t *v, 
                                         c_val_tup_t *cvt) 
@@ -449,9 +461,17 @@ static void castle_objects_rq_iter_next(c_obj_rq_iter_t *iter,
     iter->cached = 0;
 }
 
-static int castle_objects_rq_iter_has_next(c_obj_rq_iter_t *iter)
+static void castle_objects_rq_iter_next_key_free(castle_object_iterator_t *iter)
 {
-    void *k, *next_key;
+    if(iter->last_next_key)
+        castle_object_bkey_free(iter->last_next_key);
+    iter->last_next_key = NULL;
+}
+
+static int _castle_objects_rq_iter_prep_next(castle_object_iterator_t *iter,
+                                             int sync_call)
+{
+    void *k;
     version_t v;
     c_val_tup_t cvt;
     int offending_dim, bigger;
@@ -460,9 +480,13 @@ static int castle_objects_rq_iter_has_next(c_obj_rq_iter_t *iter)
     {
         if(iter->cached)
             return 1;
-        /* Nothing cached, check if da_rq_iter has anything */
-        if(!castle_da_rq_iter.has_next(&iter->da_rq_iter))
+        if (!sync_call && !castle_da_rq_iter.prep_next(&iter->da_rq_iter))
             return 0;
+        /* Nothing cached, check if da_rq_iter has anything */
+        if(!castle_da_rq_iter.has_next(&iter->da_rq_iter)) 
+        {
+            return 1;
+        }
         /* Nothing cached, but there is something in the da_rq_iter.
            Check if that's within the rq hypercube */
         castle_da_rq_iter.next(&iter->da_rq_iter, &k, &v, &cvt);
@@ -470,20 +494,29 @@ static int castle_objects_rq_iter_has_next(c_obj_rq_iter_t *iter)
                                                       iter->start_okey, 
                                                       iter->end_okey,
                                                       &offending_dim);
-        //printk("Got the following key from da_rq iterator. Is in range: %d, offending_dim=%d\n", 
-        //        bigger, offending_dim);
-        //vl_bkey_print(k);
+#ifdef DEBUG
+        debug("Got the following key from da_rq iterator. Is in range: %d, offending_dim=%d\n", 
+                bigger, offending_dim);
+        vl_bkey_print(k);
+#endif
         if(bigger)
         {
+            c_vl_bkey_t *next_key;
+
             /* We are outside of the rq hypercube, find next intersection point
                and skip to that */
             next_key = castle_object_btree_key_skip(k, 
                                                     iter->start_okey, 
                                                     offending_dim,
                                                     bigger);
-            //printk("Skipping to:\n");
-            //vl_bkey_print(next_key);
-            /* TODO: memory leak for next keys! FIX that */
+            /* Save the key, to be freed the next time around the loop/on cancel */
+            castle_objects_rq_iter_next_key_free(iter);
+            iter->last_next_key = next_key;
+
+#ifdef DEBUG
+            debug("Skipping to:\n");
+            vl_bkey_print(next_key);
+#endif
             castle_da_rq_iter.skip(&iter->da_rq_iter, next_key);
         }    
         else 
@@ -500,22 +533,66 @@ static int castle_objects_rq_iter_has_next(c_obj_rq_iter_t *iter)
     BUG();
 }
 
-static void castle_objects_rq_iter_cancel(c_obj_rq_iter_t *iter)
+static int castle_objects_rq_iter_prep_next(castle_object_iterator_t *iter)
 {
-    castle_da_rq_iter.cancel(&iter->da_rq_iter);
-    castle_free(iter->start_bkey);
-    castle_free(iter->end_bkey);
+    return _castle_objects_rq_iter_prep_next(iter, 0);
 }
 
-static void castle_objects_rq_iter_init(c_obj_rq_iter_t *iter)
+static void castle_objects_rq_iter_end_io(void *da_iter,
+                                          int err)
+{
+    castle_object_iterator_t *iter = ((c_da_rq_iter_t *)da_iter)->private;
+
+    if (castle_objects_rq_iter_prep_next(iter))
+        iter->end_io(iter, 0);
+}
+
+static int castle_objects_rq_iter_has_next(castle_object_iterator_t *iter)
+{
+    BUG_ON(!_castle_objects_rq_iter_prep_next(iter, 1));
+
+    debug_obj("%s:%p\n", __FUNCTION__, iter);
+    if(iter->cached)
+        return 1;
+    /* Nothing cached, check if da_rq_iter has anything */
+    if(!castle_da_rq_iter.has_next(&iter->da_rq_iter))
+    {
+        debug_obj("%s:%p - reschedule\n", __FUNCTION__, iter);
+        return 0;
+    }
+    
+    /* We should never get here */
+    BUG();
+    return 0;
+}
+
+static void castle_objects_rq_iter_cancel(castle_object_iterator_t *iter)
+{
+    /* Cancel da_rq_iter if it's error free */
+    if(!iter->da_rq_iter.err)
+        castle_da_rq_iter.cancel(&iter->da_rq_iter);
+    if(iter->start_bkey);
+        castle_object_bkey_free(iter->start_bkey);
+    if(iter->end_bkey);
+        castle_object_bkey_free(iter->end_bkey);
+    castle_objects_rq_iter_next_key_free(iter);
+}
+
+static void castle_objects_rq_iter_init(castle_object_iterator_t *iter)
 {
     BUG_ON(!iter->start_okey || !iter->end_okey);
 
     iter->err = 0;
+    iter->end_io = NULL;
     iter->cached = 0;
+    /* Set the error on da_rq_iter, which will get cleared by the init,
+       but will prevent castle_object_rq_iter_cancel from cancelling the
+       da_rq_iter unnecessarily */
+    iter->da_rq_iter.err = -EINVAL;
     /* Construct the btree keys for range-query */
-    iter->start_bkey = castle_object_key_convert(iter->start_okey);
-    iter->end_bkey   = castle_object_key_convert(iter->end_okey);
+    iter->start_bkey    = castle_object_key_convert(iter->start_okey);
+    iter->end_bkey      = castle_object_key_convert(iter->end_okey);
+    iter->last_next_key = NULL;
 #ifdef DEBUG
     printk("====================== RQ start keys =======================\n");
     vl_okey_print(iter->start_okey);
@@ -529,6 +606,7 @@ static void castle_objects_rq_iter_init(c_obj_rq_iter_t *iter)
     /* Check if we managed to initialise the btree keys correctly */
     if(!iter->start_bkey || !iter->end_bkey)
     {
+        castle_objects_rq_iter_cancel(iter);
         iter->err = -ENOMEM;
         return;
     }
@@ -538,6 +616,9 @@ static void castle_objects_rq_iter_init(c_obj_rq_iter_t *iter)
                             iter->da_id, 
                             iter->start_bkey, 
                             iter->end_bkey);
+    castle_da_rq_iter.register_cb(&iter->da_rq_iter,
+                                  castle_objects_rq_iter_end_io,
+                                  (void *)iter);
     if(iter->da_rq_iter.err)
     {
         iter->err = iter->da_rq_iter.err;
@@ -546,10 +627,12 @@ static void castle_objects_rq_iter_init(c_obj_rq_iter_t *iter)
 }
 
 struct castle_iterator_type castle_objects_rq_iter = {
-    .has_next = (castle_iterator_has_next_t)castle_objects_rq_iter_has_next,
-    .next     = (castle_iterator_next_t)    castle_objects_rq_iter_next,
-    .skip     = NULL, 
-    .cancel   = (castle_iterator_cancel_t)  castle_objects_rq_iter_cancel,
+    .register_cb= (castle_iterator_register_cb_t)castle_objects_rq_iter_register_cb,
+    .prep_next  = (castle_iterator_prep_next_t)  castle_objects_rq_iter_prep_next,
+    .has_next   = (castle_iterator_has_next_t)   castle_objects_rq_iter_has_next,
+    .next       = (castle_iterator_next_t)       castle_objects_rq_iter_next,
+    .skip       = NULL, 
+    .cancel     = (castle_iterator_cancel_t)     castle_objects_rq_iter_cancel,
 };
 
 /**********************************************************************************************/
@@ -696,16 +779,14 @@ static int castle_object_data_write(struct castle_object_replace *replace)
 {
     c2_block_t *data_c2b;
     uint32_t data_c2b_offset, data_c2b_length, data_length, packet_length;
-    c2_block_t *new_data_c2b;
-    c_disk_blk_t new_data_cdb;
 
     /* Work out how much data we've got, and how far we've got so far */
     data_c2b = replace->data_c2b;
     data_c2b_offset = replace->data_c2b_offset;
     data_length = replace->data_length;
 
-    debug("Data write. call=%p, data_c2b=%p, data_c2b_offset=%d, data_length=%d\n",
-        call, data_c2b, data_c2b_offset, data_length);
+    debug("Data write. replace=%p, data_c2b=%p, data_c2b_offset=%d, data_length=%d\n",
+        replace, data_c2b, data_c2b_offset, data_length);
     data_c2b_length = data_c2b->nr_pages * C_BLK_SIZE;
     packet_length = replace->data_length_get(replace);
 
@@ -748,6 +829,9 @@ static int castle_object_data_write(struct castle_object_replace *replace)
            packet, or in future packets). */
         if((data_c2b_offset == data_c2b_length) && (data_length > 0))
         {
+            c2_block_t *new_data_c2b;
+            c_disk_blk_t new_data_cdb;
+            
             debug("Run out of buffer space, allocating a new one.\n");
             new_data_cdb = castle_object_write_next_cdb(data_c2b->cdb, data_length); 
             new_data_c2b = castle_object_write_buffer_alloc(new_data_cdb, data_length); 
@@ -781,15 +865,17 @@ void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
     struct castle_object_replace *replace = c_bvec->c_bio->replace;
     c_bio_t *c_bio = c_bvec->c_bio;
     c2_block_t *c2b = NULL;
-    int complete_write;
+    int complete_write = 0;
 
     /* Sanity checks on the bio */
     BUG_ON(c_bvec_data_dir(c_bvec) != WRITE); 
     BUG_ON(atomic_read(&c_bio->count) != 1);
     BUG_ON(c_bio->err != 0);
 
+    debug("castle_object_replace_complete\n");
+
     /* Free the key */
-    castle_free(c_bvec->key);
+    castle_object_bkey_free(c_bvec->key);
 
     /* Deal with error case first */
     if(err)
@@ -810,7 +896,10 @@ void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
         replace->data_c2b_offset = 0;
         replace->data_length = cvt.length;
         
-        complete_write = castle_object_data_write(replace);
+        if (replace->data_length_get(replace) > 0)
+            complete_write = castle_object_data_write(replace);
+    
+        c2b = replace->data_c2b;
     }
     else 
     if(CVT_INLINE(cvt))
@@ -818,7 +907,6 @@ void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
         complete_write = 1;
         castle_free(cvt.val);
     }
-        
         
     /* Unlock buffers, and complete the call if we are done already */
     if(complete_write)
@@ -855,7 +943,7 @@ void castle_object_replace_multi_complete(struct castle_bio_vec *c_bvec,
     BUG_ON(c_bio->err != 0);
 
     /* Free the key, value and the BIO. */
-    castle_free(c_bvec->key);
+    castle_object_bkey_free(c_bvec->key);
     BUG_ON(CVT_INVALID(cvt) || CVT_ONDISK(cvt));
     if(CVT_INLINE(cvt))
         castle_free(cvt.val);
@@ -913,6 +1001,8 @@ int castle_object_replace(struct castle_object_replace *replace,
         BUG_ON(key->dims[i]->length == 0);
     
     btree_key = castle_object_key_convert(key);
+    if (!btree_key)
+        return -EINVAL;
    
     //printk(" value          : %s\n", tombstone ? "tombstone" : "object");
     //printk("Btree key is:");
@@ -956,7 +1046,9 @@ int castle_object_replace_multi(struct castle_rxrpc_call *call,
     c_bio_t *c_bio;
 
     btree_key = castle_object_key_convert(key);
-    castle_object_key_free(key);
+    castle_object_okey_free(key);
+    if (!btree_key)
+        return -EINVAL;
 
     /* Single c_bvec for the bio */
     c_bio = castle_utils_bio_alloc(1);
@@ -984,21 +1076,15 @@ int castle_object_replace_multi(struct castle_rxrpc_call *call,
     return 0;
 }
 
-int castle_object_slice_get(struct castle_rxrpc_call *call, 
-                            struct castle_attachment *attachment, 
-                            c_vl_okey_t *start_key, 
-                            c_vl_okey_t *end_key,
-                            uint32_t max_entries)
-{
-    c_obj_rq_iter_t *iterator;
-    char *rsp_buffer;
-    uint32_t rsp_buffer_offset, chunk_size;
-    int nr_vals, i, last_chunk;
-#define SLICE_RSP_BUFFER_LEN    (C_BLK_SIZE * 256)  /* 1MB buffer */
+void castle_object_slice_get_end_io(void *obj_iter, int err);
 
-    /* 0 max_entries means infinity, FFFFFFFF should do */
-    if(max_entries == 0)
-        max_entries = (uint32_t)-1;
+int castle_object_iter_start(struct castle_attachment *attachment,
+                            c_vl_okey_t *start_key,
+                            c_vl_okey_t *end_key,
+                            castle_object_iterator_t **iter)
+{
+    castle_object_iterator_t *iterator;
+    int i;
 
     if(start_key->nr_dims != end_key->nr_dims)
     {
@@ -1017,18 +1103,18 @@ int castle_object_slice_get(struct castle_rxrpc_call *call,
         }
     }
 
-    rsp_buffer = vmalloc(SLICE_RSP_BUFFER_LEN); 
-
-    iterator = castle_malloc(sizeof(c_obj_rq_iter_t), GFP_KERNEL);
+    iterator = castle_malloc(sizeof(castle_object_iterator_t), GFP_KERNEL);
     if(!iterator)
         return -ENOMEM;
+
+    *iter = iterator;
 
     /* Initialise the iterator */
     iterator->start_okey = start_key;
     iterator->end_okey   = end_key;
-    iterator->version    = attachment->version; 
+    iterator->version    = attachment->version;
     iterator->da_id      = castle_version_da_id_get(iterator->version);
-    
+
     debug_rq("rq_iter_init.\n");
     castle_objects_rq_iter_init(iterator);
     if(iterator->err)
@@ -1036,147 +1122,136 @@ int castle_object_slice_get(struct castle_rxrpc_call *call,
         castle_free(iterator);
         return iterator->err;
     }
+
+    castle_objects_rq_iter_register_cb(iterator, castle_object_slice_get_end_io, NULL);
+
     debug_rq("rq_iter_init done.\n");
 
-    nr_vals = 0;
-    rsp_buffer_offset = 0;
-    while(castle_objects_rq_iter.has_next(iterator))
-    {
-        c_vl_bkey_t *k;
-        c_vl_okey_t *okey;
-        version_t v;
-        c_val_tup_t cvt;
-        char *value;
-        c2_block_t *data_c2b;
-        int nr_blocks;
-        uint32_t marshalled_len;
-
-        debug_rq("Getting an entry the range query.\n");
-        castle_objects_rq_iter.next(iterator, (void **)&k, &v, &cvt);
-        debug_rq("Got an entry the range query.\n");
-
-        /* Ignore tombstones, we are not sending these */
-        if(CVT_TOMB_STONE(cvt))
-            continue;
-
-        /* Now we know we've got something to send. 
-           Prepare the key for marshaling */
-        okey = castle_object_btree_key_convert(k);
-        if(!okey)
-        {
-            /* TODO: free all the buffers etc! */
-            return -ENOMEM;
-        }
-        /* Prepare the value for marshaling */
-        if(CVT_INLINE(cvt))
-        {
-            value = cvt.val;
-        } else
-        if(CVT_ONDISK(cvt))
-        {
-            /* We are not handling large values here for the time being 
-               (never, if replaced with iterators?) */
-            BUG_ON(cvt.length > C_BLK_SIZE); 
-            nr_blocks = (cvt.length - 1) / C_BLK_SIZE + 1;
-            data_c2b = castle_cache_block_get(cvt.cdb, nr_blocks);
-            lock_c2b(data_c2b);
-            if(!c2b_uptodate(data_c2b)) 
-                BUG_ON(submit_c2b_sync(READ, data_c2b));
-            value = c2b_buffer(data_c2b);
-        } else
-        {
-            /* Unknown cvt type */
-            BUG();
-        }
-        BUG_ON(castle_rxrpc_get_slice_reply_marshall(call, 
-                                                     okey, 
-                                                     value, 
-                                                     cvt.length, 
-                                                     rsp_buffer + rsp_buffer_offset,
-                                                     SLICE_RSP_BUFFER_LEN - rsp_buffer_offset,
-                                                     &marshalled_len));
-        max_entries--;
-        rsp_buffer_offset += marshalled_len; 
-        nr_vals++;
-        /* Unlock c2b if one was taken out */
-        if(CVT_ONDISK(cvt))
-        {
-            unlock_c2b(data_c2b);
-            put_c2b(data_c2b);
-        }
-        if(max_entries == 0)
-            break;
-    }
-    debug_rq("Ended the rq iterator in objects, replying with nr_vals: %d, rsp_buffer_offset=%d.\n",
-            nr_vals, rsp_buffer_offset);
-#define RSP_CHUNK_SIZE  10000
-    /* Rsp buffer contains responce payload, send it through in RSP_CHUNK_SIZE chunks. */
-    i = 0;
-    do
-    {
-        if(rsp_buffer_offset - i > RSP_CHUNK_SIZE)
-        /* We've got more than 10k to send */
-        {
-            chunk_size = RSP_CHUNK_SIZE;
-            last_chunk = 0;     
-        } else
-        /* We've got <= 10k to send */
-        {
-            chunk_size = rsp_buffer_offset - i;
-            last_chunk = 1;     
-        }
-        /* Send */
-        if(i == 0)
-        {
-            debug_rq("Staring slice reply. Sending %d bytes, is_last=%d\n", chunk_size, last_chunk);
-            castle_rxrpc_get_slice_reply_start(call, 0, nr_vals, rsp_buffer, chunk_size, last_chunk);
-        } else
-        {
-            debug_rq("Continuing slice reply. Sending %d bytes, is_last=%d\n", chunk_size, last_chunk);
-            castle_rxrpc_get_slice_reply_continue(call, rsp_buffer + i, chunk_size, last_chunk); 
-        }
-        i+=chunk_size;
-        if(!last_chunk)
-            msleep(20);
-    } 
-    while(!last_chunk);
-
-    castle_objects_rq_iter_cancel(iterator);
-    debug_rq("Freeing iterators & buffers.\n");
-    castle_free(iterator->start_okey);
-    castle_free(iterator->end_okey);
-    castle_free(iterator);
-    vfree(rsp_buffer);
-    debug_rq("Returning.\n");
-    
     return 0;
 }
 
+int castle_object_iter_next(castle_object_iterator_t *iterator,
+                            castle_object_iter_next_available_t callback,
+                            void *data)
+{
+    c_vl_bkey_t *k;
+    c_vl_okey_t *key;
+    c_val_tup_t val;
+    version_t v;
+    int has_response;
+    int continue_iterator = 1;
+
+    iterator->next_available = callback;
+    iterator->next_available_data = data;
+
+    while (continue_iterator)
+    {
+        has_response = 0;
+        while (!has_response && castle_objects_rq_iter.prep_next(iterator))
+        {
+            if (!castle_objects_rq_iter.has_next(iterator))
+            {
+                debug_rq("Iterator at end.\n");
+                key = NULL;
+                has_response = 1;
+            }
+            else
+            {
+                debug_rq("Getting an entry for the range query.\n");
+                castle_objects_rq_iter.next(iterator,
+                                            (void **)&k,
+                                            &v,
+                                            &val);
+                debug_rq("Got an entry for the range query.\n");
+                if (!CVT_TOMB_STONE(val))
+                {
+                    has_response = 1;
+
+                    key = castle_object_btree_key_convert(k);
+                    if (!key)
+                    {
+                        callback(iterator, NULL, NULL, -ENOMEM, iterator->next_available_data);
+                        return 0;
+                    }
+                }
+            }
+        }
+
+        if (!has_response)
+        {
+            /* we're waiting for the iterator */
+            debug_rq("Waiting for next available.\n");
+            return 0;
+        }
+
+        if (!key)
+        {
+            debug_rq("Calling next available callback with NULL key.\n");
+            continue_iterator = callback(iterator, NULL, NULL, 0, iterator->next_available_data);
+        }
+        else
+        {
+            debug_rq("Calling next available callback with key=%p.\n", key);
+            continue_iterator = callback(iterator, key, &val, 0, iterator->next_available_data);
+            castle_object_okey_free(key);
+        }
+        debug_rq("Next available callback gave response %d.\n", continue_iterator);
+    }
+
+    return 0;
+}
+
+int castle_object_iter_finish(castle_object_iterator_t *iterator)
+{
+    castle_objects_rq_iter_cancel(iterator);
+    debug_rq("Freeing iterators & buffers.\n");
+    castle_free(iterator);
+
+    return 0;
+}
+
+static void castle_object_next_available(struct work_struct *work)
+{
+    castle_object_iterator_t *iter = container_of(work, castle_object_iterator_t, work);
+
+    castle_object_iter_next(iter, iter->next_available, iter->next_available_data);
+}
+
+void castle_object_slice_get_end_io(void *obj_iter, int err)
+{
+    castle_object_iterator_t *iter = obj_iter;
+
+    BUG_ON(!castle_objects_rq_iter_prep_next(iter));
+    debug_rq("Done async key read: Re-scheduling slice_get()- iterator: %p\n", iter);
+    CASTLE_INIT_WORK(&iter->work, castle_object_next_available);
+    queue_work(castle_wq, &iter->work);
+}
+
 void castle_object_get_continue(struct castle_bio_vec *c_bvec,
-                                struct castle_rxrpc_call *call,
+                                struct castle_object_get *get,
                                 c_disk_blk_t data_cdb,
                                 uint32_t data_length);
 void __castle_object_get_complete(struct work_struct *work)
 {
     c_bvec_t *c_bvec = container_of(work, c_bvec_t, work);
-    struct castle_rxrpc_call *call = c_bvec->c_bio->rxrpc_call;
-    c2_block_t *c2b;
-    uint32_t data_c2b_length, data_length;
+    struct castle_object_get *get = c_bvec->c_bio->get;
+    
+    c2_block_t *c2b = get->data_c2b;
+    uint32_t data_c2b_length = get->data_c2b_length;
+    uint32_t data_length = get->data_length;
+    int first = get->first;
+    
     c_disk_blk_t cdb;
-    int first, last;
-
-    castle_rxrpc_get_call_get(call, &c2b, &data_c2b_length, &data_length, &first);
-    debug("Get complete for call %p, first=%d, c2b->cdb=(0x%x, 0x%x), "
-           "data_c2b_length=%d, data_length=%d\n", 
-        call, first, c2b->cdb.disk, c2b->cdb.block, data_c2b_length, data_length);
+    int last;
+    
     /* Deal with error case first */
     if(!c2b_uptodate(c2b))
     {
         debug("Not up to date.\n");
         if(first)
-            castle_rxrpc_get_reply_start(call, -EIO, 0, NULL, 0);
+            get->reply_start(get, -EIO, 0, NULL, 0);
         else
-            castle_rxrpc_get_reply_continue(call, -EIO, NULL, 0, 1 /* last */);
+            get->reply_continue(get, -EIO, NULL, 0, 1 /* last */);
         goto out;
     }
     
@@ -1184,17 +1259,17 @@ void __castle_object_get_complete(struct work_struct *work)
     last = (data_length == 0);
     debug("Last=%d\n", last);
     if(first)
-        castle_rxrpc_get_reply_start(call, 
-                                     0,
-                                     data_c2b_length + data_length,
-                                     c2b_buffer(c2b), 
-                                     data_c2b_length);
+        get->reply_start(get, 
+                         0,
+                         data_c2b_length + data_length,
+                         c2b_buffer(c2b), 
+                         data_c2b_length);
     else
-        castle_rxrpc_get_reply_continue(call, 
-                                        0, 
-                                        c2b_buffer(c2b), 
-                                        data_c2b_length,
-                                        last);
+        get->reply_continue(get, 
+                            0, 
+                            c2b_buffer(c2b), 
+                            data_c2b_length,
+                            last);
 
     if(last)
         goto out;
@@ -1204,16 +1279,22 @@ void __castle_object_get_complete(struct work_struct *work)
     cdb.block = c2b->cdb.block + OBJ_IO_MAX_BUFFER_SIZE;
     debug("Continuing for cdb=(0x%x, 0x%x)\n", cdb.disk, cdb.block);   
     /* TODO: Work out if we don't go into unbound recursion here */
-    castle_rxrpc_get_call_set(call, c2b, data_c2b_length, data_length, 0 /* not first any more */);
+    
+    /* TODO: how much of this is a no-op from above? */
+    get->data_c2b        = c2b;
+    get->data_c2b_length = data_c2b_length;
+    get->data_length     = data_length;
+    get->first           = 0; /* not first any more */
+    
     castle_object_get_continue(c_bvec,
-                               call,
+                               get,
                                cdb,
                                data_length);
     return;
 
 out:    
-    debug("Finishing with call %p, putting c2b->cdb=(0x%x, 0x%x)\n",
-        call, c2b->cdb.disk, c2b->cdb.block);
+    debug("Finishing with get=%p, putting c2b->cdb=(0x%x, 0x%x)\n",
+        get, c2b->cdb.disk, c2b->cdb.block);
     unlock_c2b(c2b);
     put_c2b(c2b);
 
@@ -1223,15 +1304,13 @@ out:
 void castle_object_get_io_end(c2_block_t *c2b, int uptodate)
 {
     c_bvec_t *c_bvec = c2b->private;
-#ifdef CASTLE_DEBUG    
-    struct castle_rxrpc_call *call = c_bvec->c_bio->rxrpc_call;
-    c2_block_t *data_c2b;
-    uint32_t data_length, data_c2b_length;
-    int first;
 
-    castle_rxrpc_get_call_get(call, &data_c2b, &data_c2b_length, &data_length, &first); 
+#ifdef CASTLE_DEBUG    
+    struct castle_object_get *get = c_bvec->c_bio->get;
+    c2_block_t *data_c2b = get->data_c2b;
     BUG_ON(c2b != data_c2b);
 #endif
+
     debug("IO end for cdb (0x%x, 0x%x), uptodate=%d\n", 
             c2b->cdb.disk, c2b->cdb.block, uptodate);
     if(uptodate)
@@ -1242,19 +1321,22 @@ void castle_object_get_io_end(c2_block_t *c2b, int uptodate)
 }
 
 void castle_object_get_continue(struct castle_bio_vec *c_bvec,
-                                struct castle_rxrpc_call *call,
+                                struct castle_object_get *get,
                                 c_disk_blk_t data_cdb,
                                 uint32_t data_length)
 {
-    c2_block_t *c2b, *old_c2b;
-    int nr_blocks, first;
-    uint32_t data_c2b_length, old_data_length;
+    c2_block_t *c2b;
+    int nr_blocks;
     
-    BUG_ON(c_bvec->c_bio->rxrpc_call != call);
-    castle_rxrpc_get_call_get(call, &old_c2b, &data_c2b_length, &old_data_length, &first);
-    debug("get_continue for call %p, data_c2b_length=%d, "
+    c2_block_t *old_c2b = get->data_c2b;
+    uint32_t data_c2b_length = get->data_c2b_length;
+    uint32_t old_data_length = get->data_length;
+    
+    BUG_ON(c_bvec->c_bio->get != get);
+
+    debug("get_continue for get=%p, data_c2b_length=%d, "
            "old_data_length=%d, data_length=%d, first=%d\n", 
-        call, data_c2b_length, old_data_length, data_length, first);
+        get, data_c2b_length, old_data_length, data_length, get->first);
     BUG_ON(data_length != old_data_length);
     /* If old_c2b exists, we must have completed a MAX chunk */
     BUG_ON( old_c2b &&
@@ -1280,7 +1362,11 @@ void castle_object_get_continue(struct castle_bio_vec *c_bvec,
     debug("Locking cdb (0x%x, 0x%x)\n", data_cdb.disk, data_cdb.block);
     c2b = castle_cache_block_get(data_cdb, nr_blocks);
     lock_c2b(c2b);
-    castle_rxrpc_get_call_set(call, c2b, data_c2b_length, data_length, first);
+    
+    get->data_c2b        = c2b;
+    get->data_c2b_length = data_c2b_length;
+    get->data_length     = data_length;
+    
     /* Unlock the old c2b if we had one */
     if(old_c2b)
     {
@@ -1306,24 +1392,25 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
                                 int err,
                                 c_val_tup_t cvt)
 {
-    struct castle_rxrpc_call *call = c_bvec->c_bio->rxrpc_call;
+    //struct castle_rxrpc_call *call = c_bvec->c_bio->rxrpc_call;
+    struct castle_object_get *get = c_bvec->c_bio->get;
     c_bio_t *c_bio = c_bvec->c_bio;
 
-    debug("Returned from btree walk with value of type 0x%x and length %u\n", 
-          cvt.type, cvt.length);
+    debug("Returned from btree walk with value of type get=%p 0x%x and length %u\n", 
+          get, cvt.type, cvt.length);
     /* Sanity checks on the bio */
     BUG_ON(c_bvec_data_dir(c_bvec) != READ); 
     BUG_ON(atomic_read(&c_bio->count) != 1);
     BUG_ON(c_bio->err != 0);
 
     /* Free the key */
-    castle_free(c_bvec->key);
+    castle_object_bkey_free(c_bvec->key);
 
     /* Deal with error case, or non-existant value. */
     if(err || CVT_INVALID(cvt) || CVT_TOMB_STONE(cvt))
     {
         debug("Error, invalid or tombstone.\n");
-        castle_rxrpc_get_reply_start(call, err, 0, NULL, 0);
+        get->reply_start(get, err, 0, NULL, 0);
         castle_utils_bio_free(c_bvec->c_bio);
         return;
     }
@@ -1332,7 +1419,7 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
     if(CVT_INLINE(cvt))
     {
         debug("Inline.\n");
-        castle_rxrpc_get_reply_start(call, 0, cvt.length, cvt.val, cvt.length);
+        get->reply_start(get, 0, cvt.length, cvt.val, cvt.length);
         castle_free(cvt.val);
         castle_utils_bio_free(c_bvec->c_bio);
         return;
@@ -1343,11 +1430,16 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
     BUG_ON(!CVT_ONDISK(cvt));
     /* Init the variables stored in the call correctly, so that _continue() doesn't
        get confused */
-    castle_rxrpc_get_call_set(call, NULL, 0, cvt.length, 1 /* first */);
-    castle_object_get_continue(c_bvec, call, cvt.cdb, cvt.length);
+      
+    get->data_c2b        = NULL;
+    get->data_c2b_length = 0;
+    get->data_length     = cvt.length;
+    get->first           = 1; /* first */
+    
+    castle_object_get_continue(c_bvec, get, cvt.cdb, cvt.length);
 }
 
-int castle_object_get(struct castle_rxrpc_call *call, 
+int castle_object_get(struct castle_object_get *get,
                       struct castle_attachment *attachment, 
                       c_vl_okey_t *key)
 {
@@ -1355,16 +1447,19 @@ int castle_object_get(struct castle_rxrpc_call *call,
     c_bvec_t *c_bvec;
     c_bio_t *c_bio;
 
+    debug("castle_object_get get=%p\n", get);
+
     btree_key = castle_object_key_convert(key);
-    castle_object_key_free(key);
+    if (!btree_key)
+        return -EINVAL;
 
     /* Single c_bvec for the bio */
     c_bio = castle_utils_bio_alloc(1);
     if(!c_bio)
         return -ENOMEM;
     BUG_ON(!attachment);
-    c_bio->attachment    = attachment; 
-    c_bio->rxrpc_call    = call;
+    c_bio->attachment    = attachment;
+    c_bio->get           = get;
     c_bio->data_dir      = READ;
 
     c_bvec = c_bio->c_bvecs; 
@@ -1380,3 +1475,5 @@ int castle_object_get(struct castle_rxrpc_call *call,
 
     return 0;
 }
+
+EXPORT_SYMBOL(castle_object_get);

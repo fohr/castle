@@ -1,0 +1,15 @@
+#!/bin/bash
+
+# This is a temporary measure until we have mkcastlefs working - we store
+# information about which disks to claim for the fs, outside the fs
+
+# TODO: get rid of /etc/acunu/disks, and replace this script with a
+# tool which scans all the disks and outputs the right data
+
+DISKTAB=/etc/acunu/disks
+
+if [ -e ${DISKTAB} ]; then
+	cat ${DISKTAB}
+else
+	echo "disk1 disk2 disk3 disk4"
+fi

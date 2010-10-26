@@ -9,7 +9,6 @@
 #include "castle_utils.h"
 #include "castle_freespace.h"
 #include "castle_versions.h"
-#include "castle_block.h"
 #include "castle_da.h"
 #include "castle_debug.h"
 
@@ -18,10 +17,12 @@
 #define debug(_f, ...)          ((void)0)
 #define iter_debug(_f, ...)     ((void)0)
 #define enum_debug(_f, ...)     ((void)0)
+#define rq_debug(_f, ...)       ((void)0)
 #else
 #define debug(_f, _a...)        (printk("%s:%.60s:%.4d: " _f, __FILE__, __func__, __LINE__ , ##_a))
 #define iter_debug(_f, _a...)   (printk("Iterator  :%.60s:%.4d:  " _f, __func__, __LINE__ , ##_a))
 #define enum_debug(_f, _a...)   (printk("Enumerator:%.60s:%.4d:  " _f, __func__, __LINE__ , ##_a))
+#define rq_debug(_f, _a...)     (printk("Range Query:%.60s:%.4d:  " _f, __func__, __LINE__ , ##_a))
 #endif
 
 static DECLARE_WAIT_QUEUE_HEAD(castle_btree_iters_wq); 
@@ -120,6 +121,11 @@ static void* castle_mtree_key_next(void *key)
 
     /* MTREE_INVAL_BLK is the successor of MTREE_MAX_BLK, conviniently */
     return (void *)(unsigned long)(blk+1);
+}
+
+static void castle_mtree_key_dealloc(void *key)
+{
+    /* No need to do anything in mtree keys, because they are ints (casted to void *). */
 }
 
 static int castle_mtree_entry_get(struct castle_btree_node *node,
@@ -288,6 +294,7 @@ struct castle_btree_type castle_mtree = {
     .need_split    = castle_mtree_need_split,
     .key_compare   = castle_mtree_key_compare,
     .key_next      = castle_mtree_key_next,
+    .key_dealloc   = castle_mtree_key_dealloc,
     .entry_get     = castle_mtree_entry_get,
     .entry_add     = castle_mtree_entry_add,
     .entry_replace = castle_mtree_entry_replace,
@@ -400,7 +407,6 @@ static void* castle_batree_key_next(void *keyv)
         return (void *)&BATREE_INVAL_KEY;
      
     /* Finally allocate and return the successor key */ 
-    /* TODO: IMPORTANT THIS CREATES MEMORY LEAK, NEEDS TO BE FIXED */
     succ = castle_malloc(sizeof(bakey_t), GFP_NOIO);
     /* TODO: Should this be handled properly? */
     BUG_ON(!succ);
@@ -410,6 +416,11 @@ static void* castle_batree_key_next(void *keyv)
             break;
     
     return succ;
+}
+
+static void castle_batree_key_dealloc(void *key)
+{
+    castle_free(key);
 }
 
 static int castle_batree_entry_get(struct castle_btree_node *node,
@@ -580,6 +591,7 @@ struct castle_btree_type castle_batree = {
     .need_split    = castle_batree_need_split,
     .key_compare   = castle_batree_key_compare,
     .key_next      = castle_batree_key_next,
+    .key_dealloc   = castle_batree_key_dealloc,
     .entry_get     = castle_batree_entry_get,
     .entry_add     = castle_batree_entry_add,
     .entry_replace = castle_batree_entry_replace,
@@ -613,8 +625,6 @@ struct castle_btree_type castle_batree = {
 #define VLBA_TREE_ENTRY_IS_INLINE(_slot)      ((_slot)->type & VLBA_TREE_ENTRY_INLINE) 
 #define VLBA_TREE_ENTRY_IS_ONDISK(_slot)      ((_slot)->type & VLBA_TREE_ENTRY_ONDISK) 
 #define VLBA_TREE_ENTRY_IS_DISABLED(_slot)    ((_slot)->type & VLBA_TREE_ENTRY_DISABLED) 
-
-#define VLBA_TREE_MAX_KEY_SIZE         512      /* In bytes */
 
 typedef struct vlba_key {
     uint32_t length;
@@ -870,6 +880,16 @@ static void* castle_vlba_tree_key_next(void *keyv)
     return castle_object_btree_key_next(keyv);
 }
 
+static void castle_vlba_tree_key_dealloc(void *keyv)
+{
+    vlba_key_t *key = (vlba_key_t *)keyv;
+    
+    /* Should not free static keys */
+    if(VLBA_TREE_KEY_INVAL(key) || VLBA_TREE_KEY_MAX(key) || VLBA_TREE_KEY_MIN(key))
+        return;
+    castle_object_bkey_free(keyv);
+}
+
 static int castle_vlba_tree_entry_get(struct castle_btree_node *node,
                                       int                       idx,
                                       void                    **key_p,            
@@ -895,7 +915,7 @@ static int castle_vlba_tree_entry_get(struct castle_btree_node *node,
         BUG_ON(VLBA_TREE_ENTRY_IS_TOMB_STONE(entry) && entry->val_len != 0);
         if (VLBA_TREE_ENTRY_IS_INLINE(entry))
         {
-            BUG_ON(entry->val_len == 0 || entry->val_len > MAX_INLINE_VAL_SIZE);
+            BUG_ON(entry->val_len > MAX_INLINE_VAL_SIZE);
             cvt_p->val = VLBA_ENTRY_VAL_PTR(entry);
         }
         else 
@@ -973,10 +993,9 @@ static void castle_vlba_tree_entry_add(struct castle_btree_node *node,
     memcpy(&entry->key, key, sizeof(vlba_key_t) + key_length);
     
     BUG_ON(VLBA_TREE_ENTRY_IS_TOMB_STONE(entry) && entry->val_len != 0);
-    BUG_ON(!VLBA_TREE_ENTRY_IS_TOMB_STONE(entry) && entry->val_len == 0);
     if (VLBA_TREE_ENTRY_IS_INLINE(entry))
     {
-        BUG_ON(entry->val_len == 0 || entry->val_len > MAX_INLINE_VAL_SIZE);
+        BUG_ON(entry->val_len > MAX_INLINE_VAL_SIZE);
         BUG_ON(VLBA_ENTRY_VAL_PTR(entry)+cvt.length > EOF_VLBA_NODE(node));
         memmove(VLBA_ENTRY_VAL_PTR(entry), cvt.val, cvt.length);
     }
@@ -1052,10 +1071,9 @@ static void castle_vlba_tree_entry_replace(struct castle_btree_node *node,
         memcpy(entry, &new_entry, sizeof(struct castle_vlba_tree_entry));
         memcpy(&entry->key, key, sizeof(vlba_key_t) + VLBA_KEY_LENGTH(key));
         BUG_ON(VLBA_TREE_ENTRY_IS_TOMB_STONE(entry) && entry->val_len != 0);
-        BUG_ON(!VLBA_TREE_ENTRY_IS_TOMB_STONE(entry) && entry->val_len == 0);
         if (VLBA_TREE_ENTRY_IS_INLINE(entry))
         {
-            BUG_ON(entry->val_len == 0 || entry->val_len > MAX_INLINE_VAL_SIZE);
+            BUG_ON(entry->val_len > MAX_INLINE_VAL_SIZE);
             memcpy(VLBA_ENTRY_VAL_PTR(entry), cvt.val, cvt.length);
         }
         else 
@@ -1211,7 +1229,6 @@ static void castle_vlba_tree_node_validate(struct castle_btree_node *node)
         }
         
         BUG_ON(VLBA_TREE_ENTRY_IS_TOMB_STONE(entry) && entry->val_len != 0);
-        BUG_ON(VLBA_TREE_ENTRY_IS_INLINE(entry) && entry->val_len == 0);
         BUG_ON(VLBA_INLINE_VAL_LENGTH(entry) > MAX_INLINE_VAL_SIZE);
     }
 
@@ -1260,6 +1277,7 @@ struct castle_btree_type castle_vlba_tree = {
     .need_split    = castle_vlba_tree_need_split,
     .key_compare   = castle_vlba_tree_key_compare,
     .key_next      = castle_vlba_tree_key_next,
+    .key_dealloc   = castle_vlba_tree_key_dealloc,
     .entry_get     = castle_vlba_tree_entry_get,
     .entry_add     = castle_vlba_tree_entry_add,
     .entry_replace = castle_vlba_tree_entry_replace,
@@ -2086,6 +2104,7 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
     c_bvec->cvt_get(c_bvec, lub_cvt, &new_cvt);
     btree->entry_replace(node, lub_idx, key, lub_version, 0,
                          new_cvt);
+    dirty_c2b(c_bvec->btree_node);
     debug("Key already exists, modifying in place.\n");
     castle_btree_io_end(c_bvec, new_cvt, 0);
 
@@ -2369,6 +2388,14 @@ static void castle_btree_find_no_clear(c_bvec_t *c_bvec)
 /**********************************************************************************************/
 /* Btree iterator */
 
+static void castle_btree_iter_version_key_dealloc(c_iter_t *c_iter)
+{
+    struct castle_btree_type *btree = castle_btree_type_get(c_iter->tree->btree_type);
+
+    if(c_iter->next_key.need_destroy)
+        btree->key_dealloc(c_iter->next_key.key);    
+}
+
 /* Put c2b's on the path from given depth. from = 0 means put entire path */
 static void castle_btree_iter_path_put(c_iter_t *c_iter, int from)
 {
@@ -2389,6 +2416,8 @@ static void castle_btree_iter_end(c_iter_t *c_iter, int err)
 {
     iter_debug("Putting path, ending\n");
  
+
+    castle_btree_iter_version_key_dealloc(c_iter);
     castle_btree_iter_path_put(c_iter, 0);
 
     /* TODO: this will not work well for double frees/double ends, fix that */
@@ -2752,9 +2781,16 @@ static void castle_btree_iter_version_leaf_process(c_iter_t *c_iter)
     iter_debug("Processing %d entries\n", node->used);
     
     /* We are in a leaf, then save the vblk number we followed to get here */
-    c_iter->next_key = (btree->key_compare(c_iter->parent_key, btree->inv_key) == 0) ? 
-                            btree->inv_key :
-                            btree->key_next(c_iter->parent_key); 
+    castle_btree_iter_version_key_dealloc(c_iter);
+    if(btree->key_compare(c_iter->parent_key, btree->inv_key) == 0)
+    {
+        c_iter->next_key.key          = btree->inv_key;
+        c_iter->next_key.need_destroy = 0;
+    } else
+    {
+        c_iter->next_key.key          = btree->key_next(c_iter->parent_key);
+        c_iter->next_key.need_destroy = 1;
+    }
 
     if (c_iter->node_start != NULL) 
         c_iter->node_start(c_iter);
@@ -2951,7 +2987,7 @@ static void __castle_btree_iter_path_traverse(struct work_struct *work)
              /* If we are enumerating all entries for a particular version,
                fin the occurance of the next key. */
             BUG_ON(VERSION_INVAL(c_iter->version));
-            castle_btree_lub_find(node, c_iter->next_key, c_iter->version, &index, NULL);
+            castle_btree_lub_find(node, c_iter->next_key.key, c_iter->version, &index, NULL);
             iter_debug("Node index=%d\n", index);
             break;
     }
@@ -3080,9 +3116,9 @@ static void __castle_btree_iter_start(c_iter_t *c_iter)
      */
     if ((c_iter->depth == 0) || 
        ((c_iter->type == C_ITER_MATCHING_VERSIONS) && 
-            (btree->key_compare(c_iter->next_key, btree->inv_key) == 0)) ||
+            (btree->key_compare(c_iter->next_key.key, btree->inv_key) == 0)) ||
        ((c_iter->type == C_ITER_ANCESTRAL_VERSIONS) && 
-            (btree->key_compare(c_iter->next_key, btree->inv_key) == 0)) ||
+            (btree->key_compare(c_iter->next_key.key, btree->inv_key) == 0)) ||
         (c_iter->cancelled))
     {
         castle_btree_iter_end(c_iter, c_iter->err);
@@ -3121,7 +3157,7 @@ static void _castle_btree_iter_start(struct work_struct *work)
 void castle_btree_iter_start(c_iter_t* c_iter)
 {
     CASTLE_INIT_WORK(&c_iter->work, _castle_btree_iter_start);
-    queue_work(castle_wq, &c_iter->work);
+    queue_work(castle_wqs[19], &c_iter->work);
 }
 
 void castle_btree_iter_cancel(c_iter_t *c_iter, int err)
@@ -3145,7 +3181,8 @@ void castle_btree_iter_init(c_iter_t *c_iter, version_t version, int type)
     c_iter->type = type;
     c_iter->version = version;
     c_iter->parent_key = btree->min_key;
-    c_iter->next_key = btree->min_key;
+    c_iter->next_key.key = btree->min_key;
+    c_iter->next_key.need_destroy = 0;
     c_iter->depth = -1;
     c_iter->err = 0;
     c_iter->cancelled = 0;
@@ -3365,6 +3402,10 @@ static void castle_btree_node_buffer_init(struct castle_component_tree *tree,
 {
     /* Buffers are proper btree nodes understood by castle_btree_node_type function sets.
        Initialise the required bits of the node, so that the types don't complain. */
+#ifdef CASTLE_DEBUG
+    struct castle_btree_type *btree = castle_btree_type_get(tree->btree_type);
+    memset(buffer, 0x88, btree->node_size * C_BLK_SIZE);
+#endif
     buffer->magic   = BTREE_NODE_MAGIC;
     buffer->type    = tree->btree_type;
     buffer->version = 0;
@@ -3468,6 +3509,8 @@ no_mem:
 }
 
 struct castle_iterator_type castle_btree_enum = {
+    .register_cb = NULL,
+    .prep_next   = NULL,
     .has_next = (castle_iterator_has_next_t)castle_btree_enum_has_next,
     .next     = (castle_iterator_next_t)    castle_btree_enum_next,
     .skip     = NULL, 
@@ -3523,6 +3566,7 @@ static void castle_rq_enum_iter_each(c_iter_t *c_iter,
         {
             rq_enum->prod_buf = list_entry(prod_buf->list.next,
                                            struct node_buf_t, list);
+            castle_btree_node_buffer_init(rq_enum->tree, rq_enum->prod_buf->node);
             debug("Moving prod_buf to next node_buf: %p\n", rq_enum->prod_buf);
         }
         rq_enum->prod_idx = 0;
@@ -3547,14 +3591,40 @@ static void castle_rq_enum_iter_each(c_iter_t *c_iter,
     } 
 }
 
+static int castle_btree_rq_enum_prep_next(c_rq_enum_t *rq_enum);
+
 static void castle_rq_enum_iter_node_end(c_iter_t *c_iter)
 {
     c_rq_enum_t *rq_enum = c_iter->private;
 
+    rq_debug("%s:%p\n", __FUNCTION__, rq_enum);
+    /* Check consumer idx for 0 */
+    BUG_ON(rq_enum->cons_idx != 0);
+
+    /* If producer idx also is 0, then schedule iterator again to get entries
+     * and return */
+    if (rq_enum->prod_idx == 0)
+    {
+        rq_debug("%p - reschedule\n", rq_enum);
+        castle_btree_iter_continue(c_iter);
+        return;
+    }
+    
+    /* Release the iterator resources and mark node process completed */
     __castle_btree_iter_release(c_iter);
     rq_enum->iter_running = 0;
     wmb();
     wake_up(&rq_enum->iter_wq);
+
+    if (!rq_enum->sync_call)
+    {
+        BUG_ON(!castle_btree_rq_enum_prep_next(rq_enum));
+        rq_debug("%p - Done\n", rq_enum);
+        /* Call callback of the higher level iterator */
+        rq_enum->end_io(rq_enum, 0);
+        return;
+    }
+    BUG_ON(!rq_enum->sync_call);
 }
 
 static void castle_rq_enum_iter_end(c_iter_t *c_iter, int err)
@@ -3565,7 +3635,16 @@ static void castle_rq_enum_iter_end(c_iter_t *c_iter, int err)
     rq_enum->iter_completed = 1;
     rq_enum->iter_running = 0;
     wmb();
+    rq_debug("Nothing left in %p\n", rq_enum);
     wake_up(&rq_enum->iter_wq);
+    if (!rq_enum->sync_call)
+    {
+        BUG_ON(!castle_btree_rq_enum_prep_next(rq_enum));
+        rq_debug("%p - Done\n", rq_enum);
+        /* Call callback of the higher level iterator */
+        rq_enum->end_io(rq_enum, 0);
+        return;
+    }
 }
 
 static void castle_btree_rq_enum_fini(c_rq_enum_t *rq_enum)
@@ -3601,6 +3680,7 @@ void castle_btree_rq_enum_init(c_rq_enum_t *rq_enum, version_t version,
 
     rq_enum->tree           = tree;
     rq_enum->err            = 0;
+    rq_enum->end_io         = NULL;
     rq_enum->version        = version;
     rq_enum->iter_completed = 0;
     init_waitqueue_head(&rq_enum->iter_wq);
@@ -3628,9 +3708,9 @@ void castle_btree_rq_enum_init(c_rq_enum_t *rq_enum, version_t version,
     iter->private    = rq_enum;
     
     castle_btree_iter_init(iter, version, C_ITER_ANCESTRAL_VERSIONS);
-    iter->next_key   = start_key;
-    rq_enum->iter_running = 1;
-    castle_btree_iter_start(iter);
+    iter->next_key.key          = start_key;
+    iter->next_key.need_destroy = 0;
+    rq_debug("New Iterator - %p\n", iter);
     
     return;
     /* TODO: do we need to handle out of memory condidions better than with BUG_ON? */
@@ -3687,6 +3767,54 @@ int cons_idx_prod_idx_compare(c_rq_enum_t *rq_enum)
     return 0;
 }
 
+static void castle_btree_rq_enum_register_cb(c_rq_enum_t *iter,
+                                             castle_iterator_end_io_t cb,
+                                             void *data)
+{
+    iter->end_io  = cb;
+    iter->private = data;
+}
+
+/* Returns 1 - if ready to call has_next(); 0 - if waiting for some IO operation
+ * to finish */
+static int _castle_btree_rq_enum_prep_next(c_rq_enum_t *rq_enum, int sync_call)
+{
+    struct castle_iterator *iter = &rq_enum->iterator;
+
+    while (1)
+    {
+        /* Wait for the iterator to complete */
+        if (sync_call) /* TODO: review for async calls */
+            wait_event(rq_enum->iter_wq, (rq_enum->iter_running == 0));
+
+        /* Check if castle iterator is running */
+        BUG_ON(rq_enum->iter_running);
+        cons_idx_prod_idx_compare(rq_enum);
+        BUG_ON(rq_enum->end_io == NULL);
+ 
+        rq_debug("Checking for %p\n", rq_enum);
+        /* Return if no IO required before has_next()
+         *      - Iterator is already completed 
+         *      - Few entries left in buffer */
+        if (rq_enum->iter_completed || cons_idx_prod_idx_compare(rq_enum))
+            return 1;
+
+        /* Schedule iterator to get few more entries into buffer */
+        castle_btree_rq_enum_buffer_switch(rq_enum);
+        rq_enum->iter_running   = 1;
+        rq_enum->sync_call = sync_call;
+        castle_btree_iter_start(iter);
+        rq_debug("%p - schedule\n", rq_enum);
+        if (!sync_call) return 0;
+    }
+}
+
+static int castle_btree_rq_enum_prep_next(c_rq_enum_t *rq_enum)
+{
+    rq_debug("%p\n", rq_enum);
+    return _castle_btree_rq_enum_prep_next(rq_enum, 0);
+}
+
 int castle_btree_rq_enum_has_next(c_rq_enum_t *rq_enum)
 {
     struct castle_iterator *iter = &rq_enum->iterator;
@@ -3694,11 +3822,11 @@ int castle_btree_rq_enum_has_next(c_rq_enum_t *rq_enum)
                             castle_btree_type_get(rq_enum->prod_buf->node->type);
     void *key;
 
-has_next_again:
-  
-    /* Wait for the iterator to complete */
-    wait_event(rq_enum->iter_wq, ({int _ret; rmb(); _ret = (rq_enum->iter_running == 0); _ret;}));
+    rq_debug("%p\n", rq_enum);
+    BUG_ON(!_castle_btree_rq_enum_prep_next(rq_enum, 1));
+    BUG_ON(rq_enum->iter_running);
     
+    /* Return 1, if entries left in buffer and entries are smaller than end key */
     if (cons_idx_prod_idx_compare(rq_enum))
     {
         btree->entry_get(rq_enum->cons_buf->node, rq_enum->cons_idx, &key, NULL,
@@ -3706,28 +3834,26 @@ has_next_again:
         /* Move this check to rq_enum_each() */
         if (btree->key_compare(rq_enum->end_key, key) < 0)
         {
-            /* The iterator has noting more of interest, reset the idxs to zero.
-               This will make has_next() reentrant even for completed iterator. */
+            /* These iterator calls will never block; safe to have them in
+             * here */
             rq_enum->cons_buf = rq_enum->prod_buf;
             rq_enum->cons_idx = rq_enum->prod_idx = 0;
             castle_btree_iter_cancel(iter, 0);
             rq_enum->iter_running = 1;
+            rq_enum->sync_call = 1;
             castle_btree_iter_start(iter);
+            /* Safe to call wait_event here. Call shouldn't block */
+            rq_debug("waiting in castle_btree_rq_enum_has_next\n");
+            wait_event(rq_enum->iter_wq, (rq_enum->iter_running == 0));
+            rq_debug("waiting in castle_btree_rq_enum_has_next complete\n");
             return 0;
         }
         return 1;
     }
 
-    /* TODO: iter_completed is set in end(). Make sure this wouldn't lead to a
-     * race condition */
-    if (rq_enum->iter_completed)
-        return 0;
+    BUG_ON(!rq_enum->iter_completed);
 
-    castle_btree_rq_enum_buffer_switch(rq_enum);
-    rq_enum->iter_running = 1;
-    castle_btree_iter_start(iter);
-
-goto has_next_again;
+    return 0;
 }
 
 void castle_btree_rq_enum_next(c_rq_enum_t *rq_enum, 
@@ -3738,8 +3864,8 @@ void castle_btree_rq_enum_next(c_rq_enum_t *rq_enum,
     struct castle_btree_type *btree =
                             castle_btree_type_get(rq_enum->tree->btree_type);
 
-    wait_event(rq_enum->iter_wq, (rq_enum->iter_running == 0));
-
+    rq_debug("%p\n", rq_enum);
+    BUG_ON(rq_enum->iter_running);
     /* Make sure that consumer index is less than the producer (there is an assert in
        the comparator). */
     cons_idx_prod_idx_compare(rq_enum);
@@ -3762,8 +3888,9 @@ void castle_btree_rq_enum_skip(c_rq_enum_t *rq_enum,
                             castle_btree_type_get(rq_enum->tree->btree_type);
     int i;
 
-    /* Wait for the iterator to complete */
-    wait_event(rq_enum->iter_wq, (rq_enum->iter_running == 0));
+    rq_debug("%p\n", rq_enum);
+    BUG_ON(rq_enum->iter_running);
+    cons_idx_prod_idx_compare(rq_enum); 
 
     while(1)
     {
@@ -3791,7 +3918,9 @@ void castle_btree_rq_enum_skip(c_rq_enum_t *rq_enum,
     }
 
     castle_btree_rq_enum_buffer_switch(rq_enum);
-    rq_enum->iterator.next_key = key;
+    castle_btree_iter_version_key_dealloc(&rq_enum->iterator);
+    rq_enum->iterator.next_key.key = key;
+    rq_enum->iterator.next_key.need_destroy = 0;
     /* Reset range to handle next key in the middle of a node */
     rq_enum->in_range = 0;
     rq_enum->start_key = key;
@@ -3808,6 +3937,7 @@ void castle_btree_rq_enum_cancel(c_rq_enum_t *rq_enum)
 
         castle_btree_iter_cancel(iter, 0);
         rq_enum->iter_running = 1;
+        rq_enum->sync_call = 1;
         castle_btree_iter_start(iter);
         wait_event(rq_enum->iter_wq, 
                    (rq_enum->iter_running == 0));
@@ -3817,8 +3947,10 @@ void castle_btree_rq_enum_cancel(c_rq_enum_t *rq_enum)
 }
 
 struct castle_iterator_type castle_btree_rq_iter = {
-    .has_next = (castle_iterator_has_next_t)castle_btree_rq_enum_has_next,
-    .next     = (castle_iterator_next_t)    castle_btree_rq_enum_next,
-    .skip     = (castle_iterator_skip_t)    castle_btree_rq_enum_skip, 
-    .cancel   = (castle_iterator_cancel_t)  castle_btree_rq_enum_cancel, 
+    .register_cb= (castle_iterator_register_cb_t)castle_btree_rq_enum_register_cb,
+    .prep_next  = (castle_iterator_prep_next_t)  castle_btree_rq_enum_prep_next,
+    .has_next   = (castle_iterator_has_next_t)   castle_btree_rq_enum_has_next,
+    .next       = (castle_iterator_next_t)       castle_btree_rq_enum_next,
+    .skip       = (castle_iterator_skip_t)       castle_btree_rq_enum_skip, 
+    .cancel     = (castle_iterator_cancel_t)     castle_btree_rq_enum_cancel, 
 };

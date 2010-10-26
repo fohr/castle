@@ -7,13 +7,13 @@
 #include <linux/crc32.h>
 #include <linux/skbuff.h>
 #include <linux/hardirq.h>
+#include <linux/buffer_head.h>
 
 #include "castle_public.h"
 #include "castle_compile.h"
 #include "castle.h"
 #include "castle_utils.h"
 #include "castle_da.h"
-#include "castle_block.h"
 #include "castle_cache.h"
 #include "castle_btree.h"
 #include "castle_freespace.h"
@@ -25,6 +25,7 @@
 #include "castle_debug.h"
 #include "castle_events.h"
 #include "castle_rxrpc.h"
+#include "castle_back.h"
 
 struct castle                castle;
 struct castle_slaves         castle_slaves;
@@ -246,6 +247,10 @@ int castle_fs_init(void)
     ret = castle_versions_read();
     if(ret) return -EINVAL;
 
+    /* Init mstore for Collection Attachments. */
+    ret = castle_attachments_store_init(first);
+    if (ret) return -EINVAL;
+
     printk("Castle FS inited.\n");
     castle_fs_inited = 1;
 
@@ -281,29 +286,24 @@ static int castle_slave_superblock_validate(struct castle_slave_superblock *cs_s
 
 static int castle_slave_superblock_read(struct castle_slave *cs) 
 {
-    struct castle_slave_superblock cs_sb;
+    struct castle_slave_superblock *cs_sb;
     int err;
+    struct buffer_head *bh;
    
     /* We're storing the superblock on the stack, make sure it doesn't
        grow too large */
     BUG_ON(sizeof(struct castle_slave_superblock) > PAGE_SIZE >> 2); 
-    err = castle_sub_block_read(cs,
-                               &cs_sb,
-                                0,
-                                sizeof(struct castle_slave_superblock),
-                                NULL, NULL);
-    if(err) 
-    {
-        printk("Failed to read superblock.\n");
-        return err;
-    }
+    bh = __bread(cs->bdev, 0, C_BLK_SIZE);
+    cs_sb = (struct castle_slave_superblock *)bh->b_data;
 
-    err = castle_slave_superblock_validate(&cs_sb);
+    err = castle_slave_superblock_validate(cs_sb);
     if(err)
         return -EINVAL;
+    else
+        printk("Found super block\n");
     //castle_slave_superblock_print(&cs_sb);
     /* Save the uuid and exit */
-    cs->uuid = cs_sb.uuid;
+    cs->uuid = cs_sb->uuid;
     
     return 0;
 }
@@ -1138,6 +1138,7 @@ struct castle_attachment* castle_collection_init(version_t version, char *name)
     return collection;
 
 error_out:
+    castle_free(name);
     if(collection) castle_free(collection);
     printk("Failed to init collection.\n");
     return NULL;    
@@ -1321,6 +1322,7 @@ static void castle_attachments_free(void)
         else
             castle_collection_free(ca);
     }
+    castle_attachments_store_fini();
 
     if (castle_attachments.major)
         unregister_blkdev(castle_attachments.major, "castle-fs");
@@ -1346,12 +1348,15 @@ static int __init castle_init(void)
     if((ret = castle_control_init()))      goto err_out9;
     if((ret = castle_rxrpc_init()))        goto err_out10;
     if((ret = castle_sysfs_init()))        goto err_out11;
+    if((ret = castle_back_init()))         goto err_out12;
 
     printk("OK.\n");
 
     return 0;
 
-    castle_sysfs_fini(); /* Unreachable */
+    castle_back_fini(); /* Unreachable */
+err_out12:
+    castle_sysfs_fini();
 err_out11:
     castle_rxrpc_fini();
 err_out10:
@@ -1387,6 +1392,7 @@ static void __exit castle_exit(void)
     printk("Castle FS exit ... ");
 
     /* Remove externaly visible interfaces */
+    castle_back_fini();
     castle_rxrpc_fini();
     castle_control_fini();
     castle_sysfs_fini();
