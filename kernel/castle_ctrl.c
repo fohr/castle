@@ -13,7 +13,6 @@
 #include "castle_btree.h"
 #include "castle_versions.h"
 #include "castle_events.h"
-#include "castle_rxrpc.h"
 #include "castle_back.h"
 #include "castle_ctrl.h"
 

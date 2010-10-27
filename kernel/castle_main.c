@@ -22,7 +22,6 @@
 #include "castle_time.h"
 #include "castle_debug.h"
 #include "castle_events.h"
-#include "castle_rxrpc.h"
 #include "castle_back.h"
 #include "castle_extent.h"
 #include "castle_freespace.h"
@@ -1532,19 +1531,16 @@ static int __init castle_init(void)
     if((ret = castle_double_array_init())) goto err_out6;
     if((ret = castle_attachments_init()))  goto err_out7;
     if((ret = castle_control_init()))      goto err_out8;
-    if((ret = castle_rxrpc_init()))        goto err_out9;
-    if((ret = castle_sysfs_init()))        goto err_out10;
-    if((ret = castle_back_init()))         goto err_out11;
+    if((ret = castle_sysfs_init()))        goto err_out9;
+    if((ret = castle_back_init()))         goto err_out10;
 
     printk("OK.\n");
 
     return 0;
 
     castle_back_fini(); /* Unreachable */
-err_out11:
-    castle_sysfs_fini();
 err_out10:
-    castle_rxrpc_fini();
+    castle_sysfs_fini();
 err_out9:
     castle_control_fini();
 err_out8:
@@ -1581,7 +1577,6 @@ static void __exit castle_exit(void)
 
     /* Remove externaly visible interfaces */
     castle_back_fini();
-    castle_rxrpc_fini();
     castle_control_fini();
     castle_sysfs_fini();
     /* Now, make sure no more IO can be made, internally or externally generated */
