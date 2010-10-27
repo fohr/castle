@@ -961,6 +961,22 @@ int castle_object_replace_continue(struct castle_object_replace *replace, int la
     return 0;
 }
 
+int castle_object_replace_cancel(struct castle_object_replace *replace)
+{
+    c2_block_t *data_c2b = replace->data_c2b;
+
+    debug("Replace cancel.\n");
+
+    dirty_c2b(data_c2b);
+    write_unlock_c2b(data_c2b);
+    put_c2b(data_c2b);
+    replace->complete(replace, 0);
+
+    /* TODO: delete the partially written object */
+
+    return 0;
+}
+
 int castle_object_replace(struct castle_object_replace *replace, 
                           struct castle_attachment *attachment,
                           c_vl_okey_t *key, 

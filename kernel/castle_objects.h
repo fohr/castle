@@ -27,5 +27,6 @@ int          castle_object_replace           (struct castle_object_replace *repl
                                               int tombstone);
 int          castle_object_replace_continue  (struct castle_object_replace *replace, 
                                               int last);
+int          castle_object_replace_cancel    (struct castle_object_replace *replace);
 
 #endif /* __CASTLE_OBJECTS_H__ */
