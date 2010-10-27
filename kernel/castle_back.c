@@ -1717,7 +1717,11 @@ static void castle_back_big_put_continue(struct castle_object_replace *replace)
     
     if (stateful_op->curr_op != NULL);
     {
-        castle_back_reply(stateful_op->curr_op, 0, stateful_op->token, 0);
+        struct castle_back_op *op = stateful_op->curr_op;
+        if (op->req.tag == CASTLE_RING_PUT_CHUNK && op->buf)
+            castle_back_buffer_put(stateful_op->conn, op->buf);
+
+        castle_back_reply(op, 0, stateful_op->token, 0);
         stateful_op->curr_op = NULL;
 
         stateful_op->expire = castle_back_big_put_expire;
@@ -1747,7 +1751,11 @@ static void castle_back_big_put_complete(struct castle_object_replace *replace, 
     
     if (stateful_op->curr_op != NULL);
     {
-        castle_back_reply(stateful_op->curr_op, err, stateful_op->token, 0);
+        struct castle_back_op *op = stateful_op->curr_op;
+        if (op->req.tag == CASTLE_RING_PUT_CHUNK && op->buf)
+            castle_back_buffer_put(stateful_op->conn, op->buf);
+
+        castle_back_reply(op, err, stateful_op->token, 0);
         stateful_op->curr_op = NULL;
     }
     
