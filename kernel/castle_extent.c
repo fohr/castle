@@ -243,7 +243,8 @@ static void castle_extent_micro_maps_set(void)
 
 static void castle_extent_micro_maps_destroy(void)
 {
-    castle_free(micro_maps);
+    if(micro_maps)
+        castle_free(micro_maps);
 }
 
 static int castle_extent_hash_flush2disk(c_ext_t *ext, void *unused) 
@@ -332,11 +333,12 @@ void __castle_extents_fini(void)
     castle_extent_hash_flush2disk(NULL, NULL);
     put_c2b(castle_extents_sb_c2b);
     castle_extents_sb_c2b = NULL;
-    castle_extent_micro_maps_destroy();
 }
 
 void castle_extents_fini(void)
 {
+    /* Destroy micro extent map. */
+    castle_extent_micro_maps_destroy();
     /* Make sure cache flushed all dirty pages */
     castle_extents_hash_iterate(castle_extent_hash_remove, NULL);
     castle_free(castle_extents_hash);

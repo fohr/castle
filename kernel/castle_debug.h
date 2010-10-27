@@ -26,7 +26,7 @@
 
 #define castle_malloc(_s, _f)        castle_debug_malloc(_s, _f, __FILE__, __LINE__)
 #define castle_zalloc(_s, _f)        castle_debug_zalloc(_s, _f, __FILE__, __LINE__)
-#define castle_free(_p)              castle_debug_free(_p)
+#define castle_free(_p)              do {castle_debug_free(_p); (_p) = NULL;} while(0)
 
 void* castle_debug_malloc(size_t size, gfp_t flags, char *file, int line);
 void* castle_debug_zalloc(size_t size, gfp_t flags, char *file, int line);
