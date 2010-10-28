@@ -205,11 +205,14 @@ int castle_freespace_slave_init(struct castle_slave *cs, int fresh)
     if (fresh)
         castle_freespace_slave_chunk_free(cs, 
                          (c_chk_seq_t){FREE_SPACE_START, nr_chunks});
+#ifdef CASTLE_DEBUG
     cs->disk_size = nr_chunks + FREE_SPACE_START;
+#endif
 
     return 0;
 }
 
+#ifdef CASTLE_DEBUG
 void castle_freespace_summary_get(struct castle_slave *cs,
                                   c_chk_cnt_t         *free_cnt,
                                   c_chk_cnt_t         *size)
@@ -218,6 +221,7 @@ void castle_freespace_summary_get(struct castle_slave *cs,
     if (size)
         *size = cs->disk_size;
 }
+#endif
 
 void castle_freespace_slave_close(struct castle_slave *cs)
 {
