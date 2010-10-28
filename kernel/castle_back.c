@@ -39,9 +39,9 @@ DEFINE_RING_TYPES(castle, castle_request_t, castle_response_t);
 #define debug_iter(_f, ...)         ((void)0)
 #define debug_ref_count(_f, ...)    ((void)0)
 #else
-#define debug(_f, _a...)            (printk("%ld: " _f, jiffies, ##_a))
-#define debug_iter(_f, _a...)       (printk("%ld: " _f, jiffies, ##_a))
-#define debug_ref_count(_f, _a...)  (printk("%ld: " _f, jiffies, ##_a))
+#define debug(_f, _a...)            (printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
+#define debug_iter(_f, _a...)       (printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
+#define debug_ref_count(_f, _a...)  (printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
 #endif
 
 static struct workqueue_struct *castle_back_wq;
@@ -161,7 +161,7 @@ struct castle_back_stateful_op
 
     unsigned long                       last_used_jiffies;
     struct work_struct                  expire_work;
-    /* expire is called with the lock held by the caller */
+    /* is called with stateful_op->lock held, and should drop it */
     castle_back_stateful_op_expire_t    expire;
 
     union
@@ -547,11 +547,16 @@ static void castle_back_stateful_op_expire(struct work_struct *work)
         return;
     }
 
+    BUG_ON(!list_empty(&stateful_op->op_queue));
+
     /* check it hasn't been used since expire was queued up */
     if (jiffies - stateful_op->last_used_jiffies > STATEFUL_OP_TIMEOUT)
+    {
+        /* drops the lock */
         stateful_op->expire(stateful_op);
-
-    spin_unlock(&stateful_op->lock);
+    }
+    else
+        spin_unlock(&stateful_op->lock);
 
     debug_ref_count("dec conn ref_count.\n");
     if (atomic_dec_and_test(&conn->ref_count))
@@ -572,6 +577,8 @@ static int castle_back_stateful_op_prod(struct castle_back_stateful_op *stateful
     /* take an op off the queue and process it */
     stateful_op->curr_op = list_first_entry(&stateful_op->op_queue, struct castle_back_op, list);
     list_del(&stateful_op->curr_op->list);
+
+    debug_iter("stateful_op->curr_op = %p\n", stateful_op->curr_op);
 
     return 1;
 }
@@ -1198,13 +1205,15 @@ static void castle_back_iter_call_queued(struct castle_back_stateful_op *statefu
 {
     int call_next;
 
+    BUG_ON(!stateful_op->in_use);
+
     spin_lock(&stateful_op->lock);
     call_next = castle_back_stateful_op_prod(stateful_op);
     spin_unlock(&stateful_op->lock);
 
     if (call_next)
     {
-        debug_iter("castle_back_iter_call_queued queueing next op, token = %x.\n",
+        debug_iter("castle_back_iter_call_queued add next op to work queue, token = %x.\n",
                 stateful_op->token);
         switch (stateful_op->curr_op->req.tag)
         {
@@ -1224,8 +1233,9 @@ static void castle_back_iter_call_queued(struct castle_back_stateful_op *statefu
                 BUG();
         }
     } else
+
         debug_iter("castle_back_iter_call_queued not calling since "
-                "ongoing op, token = %x.\n", stateful_op->token);
+                "ongoing op or no ops in queue, token = %x.\n", stateful_op->token);
 }
 
 static void castle_back_iter_reply(struct castle_back_stateful_op *stateful_op, int err)
@@ -1239,6 +1249,8 @@ static void castle_back_iter_reply(struct castle_back_stateful_op *stateful_op, 
     stateful_op->last_used_jiffies = jiffies;
     stateful_op->expire = castle_back_iter_expire;
     stateful_op->curr_op = NULL;
+
+    debug_iter("stateful_op->curr_op = %p\n", stateful_op->curr_op);
 
     spin_unlock(&stateful_op->lock);
 
@@ -1294,6 +1306,7 @@ static void castle_back_iter_start(struct castle_back_conn *conn, struct castle_
     spin_lock(&stateful_op->lock);
     stateful_op->tag = CASTLE_RING_ITER_START;
     stateful_op->curr_op = NULL;
+    debug_iter("stateful_op->curr_op = %p\n", stateful_op->curr_op);
     stateful_op->last_used_jiffies = jiffies;
     stateful_op->expire = castle_back_iter_expire;
     spin_unlock(&stateful_op->lock);
@@ -1496,6 +1509,8 @@ static void _castle_back_iter_next(void *data)
 
     debug_iter("_castle_back_iter_next, token = %x\n", stateful_op->token);
 
+    BUG_ON(!stateful_op->in_use);
+
     conn = stateful_op->conn;
     op = stateful_op->curr_op;
     BUG_ON(!op);
@@ -1542,7 +1557,7 @@ static void _castle_back_iter_next(void *data)
         {
             error("iterator buffer too small\n");
             err = -EINVAL;
-            goto err1;
+            goto err0;
         }
 
         castle_object_okey_free(stateful_op->iterator.saved_key);
@@ -1564,7 +1579,7 @@ static void _castle_back_iter_next(void *data)
 
     return;
 
-err1:
+err0:
     castle_back_buffer_put(conn, op->buf);
     castle_back_iter_reply(stateful_op, err);
 }
@@ -1797,7 +1812,8 @@ static void castle_back_big_put_data_copy(struct castle_object_replace *replace,
     
     BUG_ON(op == NULL);
 
-    debug("castle_back_big_put_data_copy buffer=%p, buffer_length=%d, not_last=%d, value_len=%ld\n, buffer_offset=%ld", 
+    debug("castle_back_big_put_data_copy buffer=%p, buffer_length=%d,"
+        "not_last=%d, value_len=%ld\n, buffer_offset=%ld\n",
         buffer, buffer_length, not_last, op->req.put_chunk.buffer_len, op->buffer_offset);
 
     BUG_ON(op->req.tag != CASTLE_RING_PUT_CHUNK);
@@ -2389,10 +2405,24 @@ err0:
 static void castle_back_cleanup_conn(void *data)
 {
     struct castle_back_conn *conn = data;
+    struct castle_back_stateful_op *stateful_ops = conn->stateful_ops;
+    uint32_t i;
 
-    debug("castle_back_cleanup_conn\n");
+    debug("castle_back_cleanup_conn for conn %p\n", data);
 
     BUG_ON(atomic_read(&conn->ref_count) > 0);
+
+    for (i = 0; i < MAX_STATEFUL_OPS; i++)
+    {
+        spin_lock(&stateful_ops[i].lock);
+        if (stateful_ops[i].in_use && stateful_ops[i].expire)
+            /* will drop stateful_ops[i].lock */
+            stateful_ops[i].expire(&stateful_ops[i]);
+    }
+
+    /* del the timer and wait until it has finished the callback */
+    conn->restart_timer = 0;
+    del_timer_sync(&conn->stateful_op_timeout_check_timer);
 
     UnReservePages(conn->back_ring.sring, CASTLE_RING_SIZE);
     vfree(conn->back_ring.sring);
@@ -2411,30 +2441,19 @@ static void castle_back_cleanup_conn(void *data)
 static void castle_back_cleanup(void *data)
 {
     struct castle_back_conn *conn = data;
-    struct castle_back_stateful_op *stateful_ops = conn->stateful_ops;
-    uint32_t i;
 
     BUG_ON(conn == NULL);
     
     debug("castle_back_cleanup\n");
 
-    /* del the timer and wait until it has finished the callback */
-    conn->restart_timer = 0;
-    del_timer_sync(&conn->stateful_op_timeout_check_timer);
-
-    for (i = 0; i < MAX_STATEFUL_OPS; i++)
-    {
-        spin_lock(&stateful_ops[i].lock);
-        if (stateful_ops[i].in_use && stateful_ops[i].expire)
-            stateful_ops[i].expire(&stateful_ops[i]);
-        spin_unlock(&stateful_ops[i].lock);
-    }
-
     debug_ref_count("dec conn ref_count.\n");
     if (atomic_dec_and_test(&conn->ref_count))
         castle_back_cleanup_conn(conn);
 
-    debug("castle_back_cleanup done\n");
+    /* TODO: should cancel any ongoing ops. For now, they will carry on
+     * until they complete and castle_back_cleanup_conn will be called
+     * when they complete and decrease the ref count.
+     */
 }
 
 int castle_back_release(struct inode *inode, struct file *file)
