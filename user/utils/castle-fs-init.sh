@@ -8,7 +8,7 @@ cd `dirname $0`
 . /etc/acunu/fs-utils
 
 
-DISK_SIZE=2000 # in MB
+DISK_SIZE=20000 # in MB
 
 umount_fs
 init_disks
