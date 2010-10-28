@@ -307,6 +307,7 @@ static int c2p_write_locked(c2_page_t *c2p)
     return ret;
 }
 
+#ifdef CASTLE_DEBUG
 static int c2p_read_locked(c2_page_t *c2p)
 {
     struct rw_semaphore *sem; 
@@ -320,6 +321,7 @@ static int c2p_read_locked(c2_page_t *c2p)
 
     return ret;
 }
+#endif
 
 static USED int c2p_locked(c2_page_t *c2p)
 {
@@ -751,7 +753,8 @@ static int submit_c2b_rda(int rw, c2_block_t *c2b)
     /* c2b->remaining is effectively a reference count. Get one ref before we start. */
     BUG_ON(atomic_read(&c2b->remaining) != 0);
     atomic_inc(&c2b->remaining);
-    last_chk = INVAL_CHK; 
+    last_chk = INVAL_CHK;
+    cur_chk = INVAL_CHK;
     io_pages_idx = 0;
     c2b_for_each_page_start(page, c2p, cur_cep, c2b)
     {
@@ -2437,8 +2440,6 @@ static int castle_cache_fast_vmap_init(void)
 
 static void castle_cache_fast_vmap_fini(void)
 {
-    int i, nr_slots;
-
     /* If the freelist didn't get allocated, there is nothing to fini. */
     if(!castle_cache_fast_vmap_freelist)
         return;
@@ -2447,9 +2448,9 @@ static void castle_cache_fast_vmap_fini(void)
        When in debug mode, verify that the freelist contains castle_cache_size items. Then,
        map all the cache pages, and let the vmalloc.c destroy vm_area_struct by vmunmping it.
      */ 
-   nr_slots = castle_cache_size / (PAGES_PER_C2P * castle_cache_fast_vmap_c2bs);
 #ifdef CASTLE_DEBUG
-   i = 0;
+   int nr_slots = castle_cache_size / (PAGES_PER_C2P * castle_cache_fast_vmap_c2bs);
+   int i = 0;
    while(castle_cache_fast_vmap_freelist[0] < nr_slots)
    {
        castle_cache_fast_vmap_freelist_get();

@@ -9,11 +9,14 @@ $(TARGET)-objs := castle_utils.o castle_main.o castle_cache.o castle_btree.o cas
 
 # Add your debugging flag (or not) to CFLAGS
 ifeq ($(DEBUG),y)
-  DEBFLAGS = -Werror -O0 -g -DCASTLE_DEBUG # "-O" is needed to expand inlines
+  # "-O" is needed to expand inlines and make warnings work
+  DEBFLAGS = -O1 -DCASTLE_DEBUG
   $(TARGET)-objs += castle_debug.o
 else
-  DEBFLAGS = -O2 -g
+  DEBFLAGS = -O2
 endif
+
+DEBFLAGS += -Wall -Werror -g
 
 ifeq ($(PERF_DEBUG),y)
   EXTRA_CFLAGS += -DCASTLE_PERF_DEBUG 

@@ -55,10 +55,10 @@ int  c2b_write_locked(c2_block_t *c2b);
 }
 #else /* CASTLE_DEBUG */
 #define write_lock_c2b(_c2b)          \
-     __lock_c2b(c2b, 1);
+     __lock_c2b(_c2b, 1);
 
 #define read_lock_c2b(_c2b)           \
-     __lock_c2b(c2b, 0);
+     __lock_c2b(_c2b, 0);
 #endif /* CASTLE_DEBUG */
 
 static inline int write_trylock_c2b(c2_block_t *c2b)
