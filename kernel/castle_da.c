@@ -369,7 +369,7 @@ static struct castle_btree_node* castle_ct_modlist_iter_buffer_get(c_modlist_ite
 static void castle_ct_modlist_iter_fill(c_modlist_iter_t *iter)
 {
     struct castle_btree_type *btree = iter->btree;
-    struct castle_btree_node *node;
+    struct castle_btree_node *node = NULL;
     uint32_t node_idx, node_offset, item_idx;
     version_t version;
     c_val_tup_t cvt;
@@ -689,8 +689,8 @@ static void castle_ct_merged_iter_next(c_merged_iter_t *iter,
 {
     struct component_iterator *comp_iter; 
     int i, smallest_idx, kv_cmp;
-    void *smallest_k;
-    version_t smallest_v;
+    void *smallest_k = NULL;
+    version_t smallest_v = 0;
     c_val_tup_t smallest_cvt;
 
     merg_itr_dbg("%s:%p\n", __FUNCTION__, iter);

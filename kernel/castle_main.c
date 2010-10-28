@@ -601,7 +601,7 @@ static int castle_slave_add(struct castle_slave *cs)
 struct castle_slave* castle_claim(uint32_t new_dev)
 {
     dev_t dev;
-    struct block_device *bdev;
+    struct block_device *bdev = NULL;
     int bdev_claimed = 0, cs_added = 0;
     int err;
     char b[BDEVNAME_SIZE];
@@ -1053,7 +1053,7 @@ static void castle_device_c_bvec_make(c_bio_t *c_bio,
  
 static int castle_device_make_request(struct request_queue *rq, struct bio *bio)
 { 
-    c_bio_t *c_bio;
+    c_bio_t *c_bio = NULL;
     struct castle_attachment *dev = rq->queuedata;
     struct bio_vec *bvec;
     sector_t sector, last_block;

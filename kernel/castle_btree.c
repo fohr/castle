@@ -1590,7 +1590,7 @@ static c2_block_t* castle_btree_effective_node_create(c_bvec_t *c_bvec,
     struct castle_btree_node *node, *eff_node;
     c2_block_t *c2b;
     void *last_eff_key;
-    version_t last_eff_version;
+    version_t last_eff_version = 0;
     int i, insert_idx, moved_cnt;
     
     node = c2b_bnode(orig_c2b); 
@@ -2686,7 +2686,7 @@ static void castle_btree_iter_leaf_ptrs_lock(c_iter_t *c_iter)
     /* Now that leafs have been sorted, lock them all */
     for(i=0; i<nr_ptrs; i++)
     {
-        c_ext_pos_t  cep = indirect_node(i).cep;
+        c_ext_pos_t cep = indirect_node(i).cep;
         /* Skip over the invalid (previously duplicated) blocks */
         if(EXT_POS_INVAL(cep))
         {
@@ -2699,6 +2699,7 @@ static void castle_btree_iter_leaf_ptrs_lock(c_iter_t *c_iter)
             submit_c2b_sync(READ, c2b);
         indirect_node(i).c2b = c2b; 
     }
+    
     /* Finally, find out where in the indirect block the individual ptrs are */
     for(i=0; i<node->used; i++)
     {
@@ -2729,7 +2730,7 @@ static void castle_btree_iter_leaf_ptrs_lock(c_iter_t *c_iter)
                                   NULL); 
             /* Check that we _really_ found the right entry in the indirect node */
             BUG_ON(lub_idx < 0);
-            btree->entry_get(c2b_bnode(c2b),
+            btree->entry_get(c2b_bnode(c2b_follow_ptr(i)),
                              lub_idx,
                             &real_entry_key,
                             &real_entry_version,

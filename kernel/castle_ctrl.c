@@ -1,4 +1,3 @@
-#define __OPTIMIZE__
 #include <linux/genhd.h>
 #include <linux/miscdevice.h>
 #include <linux/skbuff.h>

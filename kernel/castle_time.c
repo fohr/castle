@@ -379,7 +379,7 @@ static void castle_request_timeline_print(c_req_time_t *timeline)
 static int castle_time_run(void *unused)
 {
     c_req_time_t *timeline;
-    int cnt;
+    int cnt = 0;
 
     while(1)
     {

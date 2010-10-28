@@ -68,7 +68,7 @@ static c_vl_bkey_t* castle_object_btree_key_construct(c_vl_bkey_t *src_bkey,
                                                       c_vl_okey_t *src_okey,
                                                       int okey_first_dim)
 {
-    uint32_t key_len, first_okey_offset, payload_offset;
+    uint32_t key_len, first_okey_offset = 0, payload_offset;
     int i, nr_dims;
     c_vl_bkey_t *btree_key;
     int plus_infinity = 0;

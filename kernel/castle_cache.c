@@ -2449,6 +2449,7 @@ static void castle_cache_fast_vmap_fini(void)
        map all the cache pages, and let the vmalloc.c destroy vm_area_struct by vmunmping it.
      */ 
 #ifdef CASTLE_DEBUG
+{
    int nr_slots = castle_cache_size / (PAGES_PER_C2P * castle_cache_fast_vmap_c2bs);
    int i = 0;
    while(castle_cache_fast_vmap_freelist[0] < nr_slots)
@@ -2457,6 +2458,7 @@ static void castle_cache_fast_vmap_fini(void)
        i++;
    }
    BUG_ON(i != nr_slots);
+}
 #endif 
    vunmap(castle_cache_fast_vmap_vstart);
 }

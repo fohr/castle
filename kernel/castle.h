@@ -158,7 +158,7 @@ struct castle_extent_position {
 } PACKED;
 typedef struct castle_extent_position c_ext_pos_t;
 #define __INVAL_EXT_POS             {INVAL_EXT_ID,0}
-#define INVAL_EXT_POS               ((c_ext_pos_t){INVAL_EXT_ID,0})
+#define INVAL_EXT_POS               ((c_ext_pos_t) __INVAL_EXT_POS) 
 #define EXT_POS_INVAL(_off)         ((_off).ext_id == INVAL_EXT_ID)
 #define EXT_POS_EQUAL(_off1, _off2) (((_off1).ext_id == (_off2).ext_id) && \
                                       ((_off1).offset == (_off2).offset)) 
@@ -318,15 +318,15 @@ typedef struct castle_value_tuple c_val_tup_t;
 
 typedef uint8_t c_mstore_id_t;
 
-#define INVAL_MSTORE_KEY           ((c_mstore_key_t){__INVAL_EXT_POS,0})
-#define MSTORE_KEY_INVAL(_k)       (EXT_POS_INVAL(_k.cep) && ((_k).idx == 0))
-#define MSTORE_KEY_EQUAL(_k1, _k2) (EXT_POS_EQUAL(_k1.cep, _k2.cep)  &&         \
-                                    ((_k1).idx == (_k2).idx))
 typedef struct castle_mstore_key {
     c_ext_pos_t  cep;
     int          idx;
 } c_mstore_key_t;
 
+#define INVAL_MSTORE_KEY           ((c_mstore_key_t){.cep = __INVAL_EXT_POS, .idx = 0})
+#define MSTORE_KEY_INVAL(_k)       (EXT_POS_INVAL(_k.cep) && ((_k).idx == 0))
+#define MSTORE_KEY_EQUAL(_k1, _k2) (EXT_POS_EQUAL(_k1.cep, _k2.cep)  &&         \
+                                    ((_k1).idx == (_k2).idx))
 typedef struct castle_mstore {
     c_mstore_id_t              store_id;             /* Id of the store, ptr in fs_sb    */
     size_t                     entry_size;           /* Size of the entries stored       */
