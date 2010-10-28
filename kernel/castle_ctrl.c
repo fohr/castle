@@ -219,6 +219,7 @@ int castle_attachments_store_init(int first)
             BUG_ON(!name);
             castle_mstore_iterator_next(iterator, &mstore_entry, &key);
             strcpy(name, mstore_entry.name);
+            debug("Collection Load: %s\n", name);
             ca = castle_collection_init(mstore_entry.version, name);
             if(!ca)
             {
@@ -287,6 +288,7 @@ int castle_attachments_store_add(char *name, version_t version)
     struct castle_alist_entry mstore_entry;
 
     mstore_entry.version = version;
+    debug("Collection add: %s\n", name);
     strcpy(mstore_entry.name, name);
     castle_mstore_entry_insert(castle_attachments_store, &mstore_entry);
 
@@ -459,6 +461,7 @@ int castle_control_ioctl(struct file *filp,
         case CASTLE_CTRL_REQ_COLLECTION_ATTACH:
         {
             char *collection_name = castle_malloc(ioctl.collection_attach.name_length, GFP_KERNEL);
+
             if (!collection_name)
             {
                 err = -ENOMEM;
@@ -471,7 +474,10 @@ int castle_control_ioctl(struct file *filp,
                 err = -EFAULT;
                 goto err;
             }
-            
+        
+            collection_name[ioctl.collection_attach.name_length-1] = '\0';
+            debug("Collection Attach: %s:%lu\n", collection_name, 
+                                                ioctl.collection_attach.name_length);
             castle_control_collection_attach(ioctl.collection_attach.version,
                                             collection_name,
                                             &ioctl.collection_attach.ret,
