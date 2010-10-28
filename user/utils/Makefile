@@ -19,7 +19,7 @@ CFLAGS          += -g
 
 LIBS = -L/usr/lib$(LIB_POSTFIX)
 
-MAIN_OBJS  = castle-fs-cli 
+MAIN_OBJS  = castle_scan 
 
 ##
 ## "all" Target
