@@ -90,9 +90,13 @@ static ssize_t versions_list_show(struct kobject *kobj,
         len = sprintf(buf,
                 "Id: 0x%x\n"
                 "ParentId: 0x%x\n"
+                "LogicalSize: %d\n"
+                "PhysicalSize: %ld\n"
                 "IsLeaf: %d\n",
                  v->version, 
                  parent, 
+                 -1,
+                 -1L,
                  leaf);
 
         return len;
