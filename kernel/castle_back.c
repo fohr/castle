@@ -985,8 +985,6 @@ static void castle_back_remove_complete(struct castle_object_replace *replace, i
 
     debug("castle_back_remove_complete\n");
 
-    castle_back_buffer_put(op->conn, op->buf);
-
     castle_back_reply(op, err, 0, 0);
 }
 
@@ -1008,6 +1006,7 @@ static void castle_back_remove(struct castle_back_conn *conn, struct castle_back
     if (err)
         goto err0;
 
+    op->buf = NULL;
     op->replace.value_len = 0;
     op->replace.replace_continue = NULL;
     op->replace.complete = castle_back_remove_complete;
