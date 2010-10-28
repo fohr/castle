@@ -54,7 +54,7 @@ mkdir -p %{buildroot}/sbin
 mkdir -p %{buildroot}/etc/acunu
 cp user/udev/castle-fs.rules %{buildroot}/etc/udev/rules.d/
 cp user/udev/udev-watch %{buildroot}/etc/castle-fs/
-cp user/utils/utils/CONFIG %{buildroot}/opt/acunu/castle-fs/bin/
+cp user/utils/CONFIG %{buildroot}/opt/acunu/castle-fs/bin/
 cp user/utils/tests/utils %{buildroot}/opt/acunu/castle-fs/bin/
 cp user/utils/castle-fs-init.sh %{buildroot}/opt/acunu/castle-fs/bin/
 cp user/utils/castle-fs-fini.sh %{buildroot}/opt/acunu/castle-fs/bin/
