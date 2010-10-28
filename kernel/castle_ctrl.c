@@ -408,55 +408,61 @@ void castle_control_set_target(slave_uuid_t slave_uuid, int value, int *ret)
     *ret = 0;
 }
 
-int castle_control_ioctl(struct file *filp,
-                         unsigned int cmd, unsigned long arg)
+int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
     int err;
     void __user *udata = (void __user *) arg;
     cctrl_ioctl_t ioctl;
 
-    if(cmd != CASTLE_CTRL_IOCTL)
+    if(_IOC_TYPE(cmd) != CASTLE_CTRL_IOCTL_TYPE)
     {
-        printk("Unknown IOCTL: %d\n", cmd);
+        printk("Unknown IOCTL: 0x%x\n", cmd);
         return -EINVAL;
     }
 
     if (copy_from_user(&ioctl, udata, sizeof(cctrl_ioctl_t)))
         return -EFAULT;
 
+    if(_IOC_NR(cmd) != ioctl.cmd)
+    {
+        printk("IOCTL number %d, doesn't agree with the command number %d.\n",
+                _IOC_NR(cmd), ioctl.cmd);
+        return -EINVAL;
+    }
+
     down(&castle_control_lock);
     debug("Lock taken: in_atomic=%d.\n", in_atomic());
     printk("Got IOCTL command %d.\n", ioctl.cmd);
     switch(ioctl.cmd)
     {
-        case CASTLE_CTRL_REQ_CLAIM:
+        case CASTLE_CTRL_CLAIM:
             castle_control_claim( ioctl.claim.dev,
                                  &ioctl.claim.ret,
                                  &ioctl.claim.id);
             break;
-        case CASTLE_CTRL_REQ_RELEASE:
+        case CASTLE_CTRL_RELEASE:
             castle_control_release( ioctl.release.id,
                                    &ioctl.release.ret);
             break;
-        case CASTLE_CTRL_REQ_INIT:
+        case CASTLE_CTRL_INIT:
             castle_control_fs_init(&ioctl.init.ret);
             break;            
-        case CASTLE_CTRL_REQ_ATTACH:
+        case CASTLE_CTRL_ATTACH:
             castle_control_attach( ioctl.attach.version,
                                   &ioctl.attach.ret,
                                   &ioctl.attach.dev);
             break;
-        case CASTLE_CTRL_REQ_DETACH:
+        case CASTLE_CTRL_DETACH:
             castle_control_detach( ioctl.detach.dev,
                                   &ioctl.detach.ret);
             break;
-        case CASTLE_CTRL_REQ_SNAPSHOT:
+        case CASTLE_CTRL_SNAPSHOT:
             castle_control_snapshot( ioctl.snapshot.dev,
                                     &ioctl.snapshot.ret,
                                     &ioctl.snapshot.version);
             break;
 
-        case CASTLE_CTRL_REQ_COLLECTION_ATTACH:
+        case CASTLE_CTRL_COLLECTION_ATTACH:
         {
             char *collection_name = castle_malloc(ioctl.collection_attach.name_length, GFP_KERNEL);
             if (!collection_name)
@@ -480,29 +486,29 @@ int castle_control_ioctl(struct file *filp,
             
             break;
         }
-        case CASTLE_CTRL_REQ_COLLECTION_DETACH:
+        case CASTLE_CTRL_COLLECTION_DETACH:
             castle_control_collection_detach(ioctl.collection_detach.collection,
                                   &ioctl.collection_detach.ret);
             break;
-        case CASTLE_CTRL_REQ_COLLECTION_SNAPSHOT:
+        case CASTLE_CTRL_COLLECTION_SNAPSHOT:
             castle_control_collection_snapshot(ioctl.collection_snapshot.collection,
                                     &ioctl.collection_snapshot.ret,
                                     &ioctl.collection_snapshot.version);
             break;
 
-        case CASTLE_CTRL_REQ_CREATE:
+        case CASTLE_CTRL_CREATE:
             castle_control_create( ioctl.create.size,
                                   &ioctl.create.ret,
                                   &ioctl.create.id);
             break;
-        case CASTLE_CTRL_REQ_CLONE:
+        case CASTLE_CTRL_CLONE:
             castle_control_clone( ioctl.clone.version,
                                  &ioctl.clone.ret,
                                  &ioctl.clone.clone);
             break;
 
-        case CASTLE_CTRL_REQ_TRANSFER_CREATE:
-        case CASTLE_CTRL_REQ_TRANSFER_DESTROY:
+        case CASTLE_CTRL_TRANSFER_CREATE:
+        case CASTLE_CTRL_TRANSFER_DESTROY:
             err = -ENOSYS;
             goto err;
 
