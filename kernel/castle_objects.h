@@ -28,5 +28,10 @@ int          castle_object_replace           (struct castle_object_replace *repl
 int          castle_object_replace_continue  (struct castle_object_replace *replace, 
                                               int last);
 int          castle_object_replace_cancel    (struct castle_object_replace *replace);
+int          castle_object_pull              (struct castle_object_pull *pull, 
+                                              struct castle_attachment *attachment, 
+                                              c_vl_okey_t *key);
+void         castle_object_chunk_pull        (struct castle_object_pull *pull, 
+                                              void *buf, size_t len);
 
 #endif /* __CASTLE_OBJECTS_H__ */

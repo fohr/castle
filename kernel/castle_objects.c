@@ -970,9 +970,9 @@ int castle_object_replace_cancel(struct castle_object_replace *replace)
     dirty_c2b(data_c2b);
     write_unlock_c2b(data_c2b);
     put_c2b(data_c2b);
-    replace->complete(replace, 0);
 
     /* TODO: delete the partially written object */
+    /* castle_utils_bio_free(c_bio); ??? */
 
     return 0;
 }
@@ -1404,7 +1404,7 @@ int castle_object_get(struct castle_object_get *get,
     /* Single c_bvec for the bio */
     c_bio = castle_utils_bio_alloc(1);
     if(!c_bio)
-        return -ENOMEM;
+        return -ENOMEM; // TODO leaking btree_key?
     BUG_ON(!attachment);
     c_bio->attachment    = attachment;
     c_bio->get           = get;
@@ -1426,3 +1426,128 @@ int castle_object_get(struct castle_object_get *get,
 }
 
 EXPORT_SYMBOL(castle_object_get);
+
+void __castle_object_chunk_pull_complete(struct work_struct *work)
+{
+    struct castle_object_pull *pull = container_of(work, struct castle_object_pull, work);
+    int to_copy = min(pull->buf_len, pull->remaining);
+
+    BUG_ON(!pull->buf);
+    
+    memcpy(pull->buf, c2b_buffer(pull->curr_c2b), to_copy);
+    
+    pull->offset += to_copy;
+    pull->remaining -= to_copy;
+        
+    debug("Unlocking old_cdb (0x%x, 0x%x)\n", pull->curr_c2b->cdb.disk, pull->curr_c2b->cdb.block);
+    write_unlock_c2b(pull->curr_c2b);
+    put_c2b(pull->curr_c2b);
+    
+    pull->curr_c2b = NULL;
+    pull->buf = NULL;
+    
+    pull->pull_continue(pull, 0, to_copy, pull->remaining == 0);
+}
+
+void castle_object_chunk_pull_io_end(c2_block_t *c2b)
+{
+    struct castle_object_pull *pull = c2b->private;
+
+    debug("IO end for cdb (0x%x, 0x%x), uptodate=%d\n", 
+            c2b->cdb.disk, c2b->cdb.block, uptodate);
+        
+    // TODO deal with not up to date - get error and pass it on?
+
+    CASTLE_INIT_WORK(&pull->work, __castle_object_chunk_pull_complete);
+    queue_work(castle_wq, &pull->work); 
+}
+
+void castle_object_chunk_pull(struct castle_object_pull *pull, void *buf, size_t buf_len)
+{   
+    //TODO currently relies on objects being page aligned.
+    
+    c_ext_pos_t cep;    
+    BUG_ON(buf_len % PAGE_SIZE);
+    BUG_ON(pull->curr_c2b != NULL);
+    BUG_ON(pull->buf != NULL);
+    
+    cep.ext_id = pull->cep.ext_id;
+    cep.offset = pull->cep.offset + pull->offset; // TODO in bytes or blocks?
+    
+    debug("Locking cdb (0x%x, 0x%x)\n", cep.ext_id, cep.offset);
+    pull->curr_c2b = castle_cache_block_get(cep, buf_len / PAGE_SIZE);
+    write_lock_c2b(pull->curr_c2b);
+    
+    pull->buf = buf;
+    pull->buf_len = buf_len;
+    
+    debug("c2b uptodate: %d\n", c2b_uptodate(pull->curr_c2b));
+    if(!c2b_uptodate(pull->curr_c2b))
+    {
+        /* If the buffer doesn't contain up to date data, schedule the IO */
+        pull->curr_c2b->private = pull;
+        pull->curr_c2b->end_io = castle_object_chunk_pull_io_end;
+        BUG_ON(submit_c2b(READ, pull->curr_c2b));
+    } else
+    {
+        __castle_object_chunk_pull_complete(&pull->work);
+    }
+}
+
+static void castle_object_pull_continue(struct castle_bio_vec *c_bvec, int err, c_val_tup_t cvt)
+{
+    struct castle_object_pull *pull = c_bvec->c_bio->data;
+    
+    castle_utils_bio_free(c_bvec->c_bio);
+    
+    if(err || CVT_INVALID(cvt) || CVT_TOMB_STONE(cvt))
+    {
+        debug("Error, invalid or tombstone.\n");
+        pull->pull_continue(pull, err, 0, 1 /* done */);
+        return;
+    }
+    
+    pull->offset = 0;
+    pull->cep = cvt.cep;
+    pull->remaining = cvt.length;    
+    pull->pull_continue(pull, err, 0, 0 /* not done yet */);
+}
+
+int castle_object_pull(struct castle_object_pull *pull, struct castle_attachment *attachment, c_vl_okey_t *key)
+{
+    c_vl_bkey_t *btree_key;
+    c_bvec_t *c_bvec;
+    c_bio_t *c_bio;
+
+    debug("castle_object_pull pull=%p\n", pull);
+
+    btree_key = castle_object_key_convert(key);
+    if (!btree_key)
+        return -EINVAL;
+
+    /* Single c_bvec for the bio */
+    c_bio = castle_utils_bio_alloc(1);
+    if(!c_bio)
+        return -ENOMEM; // TODO leaking btree_key?
+    BUG_ON(!attachment);
+    c_bio->attachment    = attachment;
+    c_bio->data          = pull;
+    c_bio->data_dir      = READ;
+
+    c_bvec = c_bio->c_bvecs; 
+    c_bvec->key        = btree_key; 
+    /* Callback cvt_get() is not required for READ */
+    c_bvec->cvt_get    = NULL;
+    c_bvec->endfind    = castle_object_pull_continue;
+    c_bvec->da_endfind = NULL; 
+    atomic_set(&c_bvec->reserv_nodes, 0);
+    
+    /* TODO: add bios to the debugger! */ 
+
+    castle_double_array_find(c_bvec);
+
+    return 0;
+}
+
+EXPORT_SYMBOL(castle_object_chunk_pull);
+EXPORT_SYMBOL(castle_object_pull);

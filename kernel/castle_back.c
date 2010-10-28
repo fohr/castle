@@ -154,7 +154,6 @@ struct castle_back_stateful_op
     spinlock_t                          lock;
     struct castle_back_conn            *conn;
     
-    int                                 err;
     /* sum of size of all buffers queued up */
     uint32_t                            queued_size;
     struct castle_back_op              *curr_op;
@@ -170,6 +169,7 @@ struct castle_back_stateful_op
         struct castle_back_iterator     iterator;
         struct castle_object_replace    replace;
         struct castle_object_get        get;
+        struct castle_object_pull       pull;
     };
 };
 
@@ -466,13 +466,19 @@ static void castle_back_put_stateful_op(struct castle_back_conn *conn,
     debug("castle_back_put_stateful_op putting: token = %x, use_count = %u, index = %ld\n",
             stateful_op->token, stateful_op->use_count, stateful_op - conn->stateful_ops);
 
+    BUG_ON(!spin_is_locked(&stateful_op->lock));
     BUG_ON(!stateful_op->in_use);
+    BUG_ON(!list_empty(&stateful_op->op_queue));
+    BUG_ON(stateful_op->curr_op != NULL);
+    
     stateful_op->in_use = 0;
 
     /* Put op back on freelist */
     spin_lock(&conn->response_lock);
     list_add_tail(&stateful_op->list, &conn->free_stateful_ops);
     spin_unlock(&conn->response_lock);
+    
+    spin_unlock(&stateful_op->lock);
 
     debug_ref_count("dec conn ref_count.\n");
     if (atomic_dec_and_test(&conn->ref_count))
@@ -568,6 +574,28 @@ static int castle_back_stateful_op_prod(struct castle_back_stateful_op *stateful
     list_del(&stateful_op->curr_op->list);
 
     return 1;
+}
+
+/*
+ * Finish all ops on the stateful op queue, giving them err & closing their buffers
+ */
+static int castle_back_reply(struct castle_back_op *op, int err, 
+     castle_interface_token_t token, int length);
+static void castle_back_stateful_op_finish_all(struct castle_back_stateful_op *stateful_op, int err)
+{
+    struct list_head *pos, *tmp;
+    struct castle_back_op *op;
+    
+    BUG_ON(!spin_is_locked(&stateful_op->lock));
+    
+    /* Return err on all queued ops */
+    
+    list_for_each_safe(pos, tmp, &stateful_op->op_queue) {
+        op = list_entry(pos, struct castle_back_op, list);
+        list_del(pos);
+        castle_back_buffer_put(op->conn, op->buf);
+        castle_back_reply(op, err, 0, 0);
+    }
 }
 
 /******************************************************************
@@ -668,6 +696,9 @@ static int castle_back_reply(struct castle_back_op *op, int err,
     resp.err = err;
     resp.token = token;
     resp.length = length;
+
+    debug("castle_back_reply op=%p, call_id=%d, err=%d, token=%x, length=%d\n",
+        op, op->req.call_id, err, token, length);
 
     // TODO check with GM that this is in the correct place
     spin_lock(&conn->response_lock);
@@ -1147,27 +1178,20 @@ err0: castle_back_reply(op, err, 0, 0);
 
 static void _castle_back_iter_next(void *data);
 static void _castle_back_iter_finish(void *data);
-static int castle_back_iter_cleanup(struct castle_back_stateful_op *stateful_op);
+static void castle_back_iter_cleanup(struct castle_back_stateful_op *stateful_op);
 
 static void castle_back_iter_expire(struct castle_back_stateful_op *stateful_op)
 {
-    int err;
-    castle_interface_token_t token;
-
-    token = stateful_op->token;
-
-    debug("Expiring iterator with token %u.\n", token);
+    debug("castle_back_iter_expire token=%u.\n", stateful_op->token);
 
     BUG_ON(!spin_is_locked(&stateful_op->lock));
+    BUG_ON(!list_empty(&stateful_op->op_queue));
+    BUG_ON(stateful_op->curr_op != NULL);
 
-    /* there might be ops in the op_queue, but no cleanup to do since
-     * there will only be ops if we're here because the client has gone away
-     */
+    castle_object_iter_finish(stateful_op->iterator.iterator);
 
-    err = castle_back_iter_cleanup(stateful_op);
-
-    if (err)
-        printk("Error %d expiring iterator token %u.\n", err, token);
+    // will drop stateful_op->lock
+    castle_back_iter_cleanup(stateful_op);
 }
 
 static void castle_back_iter_call_queued(struct castle_back_stateful_op *stateful_op)
@@ -1289,6 +1313,9 @@ static void castle_back_iter_start(struct castle_back_conn *conn, struct castle_
     return;
 
 err3:
+    // No one could have added another op to queue as we haven't returns token yet
+    spin_lock(&stateful_op->lock);
+    stateful_op->curr_op = NULL;
     castle_back_put_stateful_op(conn, stateful_op);
 err2:
     castle_free(end_key);
@@ -1479,16 +1506,6 @@ static void _castle_back_iter_next(void *data)
     stateful_op->expire = NULL;
     spin_unlock(&stateful_op->lock);
 
-    /*
-     * Get buffer with value in it and save it
-     */
-    op->buf = castle_back_buffer_get(conn, (unsigned long)op->req.iter_next.buffer_ptr);
-    if (op->buf == NULL)
-    {
-        err = -EINVAL;
-        goto err0;
-    }
-
     stateful_op->iterator.kv_list_tail = castle_back_user_to_kernel(op->buf,
             op->req.iter_next.buffer_ptr);
     stateful_op->iterator.kv_list_size = 0;
@@ -1549,7 +1566,6 @@ static void _castle_back_iter_next(void *data)
 
 err1:
     castle_back_buffer_put(conn, op->buf);
-err0:
     castle_back_iter_reply(stateful_op, err);
 }
 
@@ -1577,6 +1593,16 @@ static void castle_back_iter_next(struct castle_back_conn *conn, struct castle_b
         err = -EINVAL;
         goto err0;
     }
+    
+    /*
+     * Get buffer with value in it and save it
+     */
+    op->buf = castle_back_buffer_get(conn, (unsigned long)op->req.iter_next.buffer_ptr);
+    if (op->buf == NULL)
+    {
+        err = -EINVAL;
+        goto err0;
+    }
 
     spin_lock(&stateful_op->lock);
     /* Put this op on the queue for the iterator */
@@ -1593,12 +1619,12 @@ static void castle_back_iter_next(struct castle_back_conn *conn, struct castle_b
 err0: castle_back_iter_reply(stateful_op, err);
 }
 
-static int castle_back_iter_cleanup(struct castle_back_stateful_op *stateful_op)
+static void castle_back_iter_cleanup(struct castle_back_stateful_op *stateful_op)
 {
-    int err = 0;
-
-    if (stateful_op->tag != CASTLE_RING_ITER_START)
-        return -EINVAL;
+    BUG_ON(!spin_is_locked(&stateful_op->lock));
+    BUG_ON(stateful_op->tag != CASTLE_RING_ITER_START);
+    BUG_ON(!list_empty(&stateful_op->op_queue));
+    BUG_ON(stateful_op->curr_op != NULL);
 
     if (stateful_op->iterator.saved_key != NULL)
     {
@@ -1613,36 +1639,28 @@ static int castle_back_iter_cleanup(struct castle_back_stateful_op *stateful_op)
     castle_free(stateful_op->iterator.start_key);
     castle_free(stateful_op->iterator.end_key);
 
-    err = castle_object_iter_finish(stateful_op->iterator.iterator);
-
+    // will drop stateful_op->lock
     castle_back_put_stateful_op(stateful_op->conn, stateful_op);
-
-    return err;
 }
 
 static void _castle_back_iter_finish(void *data)
 {
-    int err;
-    struct list_head *pos, *tmp;
-    struct castle_back_op *op;
     struct castle_back_stateful_op *stateful_op = data;
+    int err;
 
     debug_iter("_castle_back_iter_finish, token = %x\n", stateful_op->token);
 
     spin_lock(&stateful_op->lock);
 
-    /* return errors for anything after this finish in the op queue */
-    list_for_each_safe(pos, tmp, &stateful_op->op_queue) {
-        op = list_entry(pos, struct castle_back_op, list);
-        list_del(pos);
-        castle_back_reply(op, -EINVAL, 0, 0);
-    }
-
-    err = castle_back_iter_cleanup(stateful_op);
-
-    spin_unlock(&stateful_op->lock);
-
+    err = castle_object_iter_finish(stateful_op->iterator.iterator);
+    
     castle_back_reply(stateful_op->curr_op, err, 0, 0);
+    stateful_op->curr_op = NULL;
+
+    castle_back_stateful_op_finish_all(stateful_op, -EINVAL);
+
+    // will drop stateful_op->lock
+    castle_back_iter_cleanup(stateful_op);
 }
 
 static void castle_back_iter_finish(struct castle_back_conn *conn, struct castle_back_op *op)
@@ -1682,36 +1700,15 @@ err0:
 
 static void castle_back_big_put_expire(struct castle_back_stateful_op *stateful_op)
 {
-    castle_interface_token_t token;
-
-    token = stateful_op->token;
-
-    debug("Expiring big put with token %u.\n", token);
-
+    debug("castle_back_big_put_expire token=%u.\n", stateful_op->token);
+    
     BUG_ON(!spin_is_locked(&stateful_op->lock));
-    /* TODO: the op_queue might not be empty, if this is called because the client has gone away */
     BUG_ON(!list_empty(&stateful_op->op_queue));
-
+    BUG_ON(stateful_op->curr_op != NULL);
+    
     castle_object_replace_cancel(&stateful_op->replace);
-
-    castle_back_put_stateful_op(stateful_op->conn, stateful_op);
-}
-
-static void castle_back_big_put_finish(struct castle_back_stateful_op *stateful_op)
-{
-    struct list_head *pos, *tmp;
-    struct castle_back_op *op;
     
-    BUG_ON(!spin_is_locked(&stateful_op->lock));
-    
-    /* Return err on all queued ops */
-    
-    list_for_each_safe(pos, tmp, &stateful_op->op_queue) {
-        op = list_entry(pos, struct castle_back_op, list);
-        list_del(pos);
-        castle_back_reply(op, stateful_op->err, 0, 0);
-    }
-    
+    // Will drop stateful_op->lock
     castle_back_put_stateful_op(stateful_op->conn, stateful_op);
 }
 
@@ -1754,8 +1751,6 @@ static void castle_back_big_put_complete(struct castle_object_replace *replace, 
     debug("castle_back_big_put_complete err=%d\n", err);
 
     spin_lock(&stateful_op->lock);
-
-    stateful_op->err = err;
     
     if (stateful_op->curr_op != NULL);
     {
@@ -1767,9 +1762,10 @@ static void castle_back_big_put_complete(struct castle_object_replace *replace, 
         stateful_op->curr_op = NULL;
     }
     
-    castle_back_big_put_finish(stateful_op);
-    
-    spin_unlock(&stateful_op->lock);
+    castle_back_stateful_op_finish_all(stateful_op, err);
+
+    // Will drop stateful_op->lock
+    castle_back_put_stateful_op(stateful_op->conn, stateful_op);
 }
 
 static uint32_t castle_back_big_put_data_length_get(struct castle_object_replace *replace)
@@ -1875,7 +1871,10 @@ static void castle_back_big_put(struct castle_back_conn *conn, struct castle_bac
 
     return;
 
-err2: castle_back_put_stateful_op(conn, stateful_op);
+err2: // Safe as no-one could have queued up an op - we have not returned token
+      spin_lock(&stateful_op->lock);
+      stateful_op->curr_op = NULL;
+      castle_back_put_stateful_op(conn, stateful_op);
 err1: castle_free(key);
 err0: castle_back_reply(op, err, 0, 0);
 }
@@ -1923,6 +1922,7 @@ static void castle_back_put_chunk(struct castle_back_conn *conn, struct castle_b
     if (op->req.put_chunk.buffer_len + stateful_op->queued_size > stateful_op->replace.value_len)
     {
         spin_unlock(&stateful_op->lock);
+        error("Invalid value length %ld (ptr=%p)\n", op->req.put_chunk.buffer_len, op->req.put_chunk.buffer_ptr);
         err = -EINVAL;
         goto err2;
     }
@@ -1948,14 +1948,183 @@ err2: castle_back_buffer_put(conn, op->buf);
 err1: castle_back_reply(op, err, 0, 0);
 }
 
+/*
+ * BIG GET
+ */
+
+static void castle_back_big_get_do_chunk(struct castle_back_stateful_op *stateful_op)
+{
+    struct castle_back_op *op = stateful_op->curr_op;
+    
+    BUG_ON(stateful_op->tag != CASTLE_RING_BIG_GET);
+    BUG_ON(op == NULL);
+    BUG_ON(op->req.tag != CASTLE_RING_GET_CHUNK);
+    
+    castle_object_chunk_pull(&stateful_op->pull, castle_back_user_to_kernel(op->buf, 
+        op->req.get_chunk.buffer_ptr), op->req.get_chunk.buffer_len);
+}
+
+static void castle_back_big_get_continue(struct castle_object_pull *pull, int err, int length, int done)
+{
+    struct castle_back_stateful_op *stateful_op = 
+        container_of(pull, struct castle_back_stateful_op, pull);
+    int get_continue;
+
+    debug("castle_back_big_get_continue stateful_op=%p err=%d length=%d done=%d\n", 
+        stateful_op, err, length, done);
+    
+    BUG_ON(stateful_op->tag != CASTLE_RING_BIG_GET);
+    BUG_ON(stateful_op->curr_op == NULL);
+    BUG_ON(stateful_op->curr_op->req.tag != CASTLE_RING_GET_CHUNK 
+        && stateful_op->curr_op->req.tag != CASTLE_RING_BIG_GET);
+    
+    castle_back_reply(stateful_op->curr_op, err, stateful_op->token, length);
+
+    spin_lock(&stateful_op->lock);
+
+    stateful_op->curr_op = NULL;
+
+    if (err || done)
+    {
+        castle_back_stateful_op_finish_all(stateful_op, err);
+        // Will drop stateful_op->lock
+        castle_back_put_stateful_op(stateful_op->conn, stateful_op);
+        return;
+    }
+    
+    get_continue = castle_back_stateful_op_prod(stateful_op);
+    spin_unlock(&stateful_op->lock);
+
+    // TODO: BEWARE DEEP RECURSION
+    if (get_continue)
+        castle_back_big_get_do_chunk(stateful_op);
+}
+
 static void castle_back_big_get(struct castle_back_conn *conn, struct castle_back_op *op)
 {
-    
+    int err;
+    struct castle_attachment *attachment;
+    c_vl_okey_t *key;
+    castle_interface_token_t token;
+    struct castle_back_stateful_op *stateful_op;
+
+    debug_iter("castle_back_big_get stateful_op=%p\n", stateful_op);
+
+    // TODO should we ref count attachments
+    attachment = castle_collection_find(op->req.big_get.collection_id);
+    if (attachment == NULL)
+    {
+        error("Collection not found id=%x\n", op->req.big_get.collection_id);
+        err = -EINVAL;
+        goto err0;
+    }
+
+    token = castle_back_get_stateful_op(conn, &stateful_op);
+    if (!stateful_op)
+    {
+        err = -EAGAIN;
+        goto err0;
+    }
+
+    stateful_op->tag = CASTLE_RING_BIG_GET;
+    stateful_op->curr_op = op;    
+
+    stateful_op->pull.pull_continue = castle_back_big_get_continue;
+
+    err = castle_back_key_copy_get(conn, op->req.big_get.key_ptr, 
+        op->req.big_get.key_len, &key);
+    if (err)
+    {
+        error("Error copying key err=%d\n", err);
+        goto err1;
+    }
+
+    #ifdef DEBUG
+    debug_iter("key: \n");
+    vl_okey_print(key);
+    #endif
+
+    err = castle_object_pull(&stateful_op->pull, attachment, key);
+    if (err)
+        goto err2;
+
+    castle_free(key);
+
+    /* TODO: add timeout to cleanup get if client goes away */
+
+    return;
+
+err2: castle_free(key);
+err1: // Safe as no one will have queued up a op - we haven't returned token yet
+      spin_lock(&stateful_op->lock);
+      stateful_op->curr_op = NULL;
+      castle_back_put_stateful_op(conn, stateful_op);
+err0: castle_back_reply(op, err, 0, 0);
 }
 
 static void castle_back_get_chunk(struct castle_back_conn *conn, struct castle_back_op *op)
 {
+    struct castle_back_stateful_op *stateful_op;
+    int get_continue, err;
+
+    stateful_op = castle_back_find_stateful_op(conn, 
+        op->req.get_chunk.token, CASTLE_RING_BIG_GET);
+    if (!stateful_op)
+    {
+        error("Token not found %x\n", op->req.get_chunk.token);
+        err = -EINVAL;
+        goto err1;
+    }
+
+    /*
+     * Get buffer with value in it and save it
+     */
+    op->buf = castle_back_buffer_get(conn, (unsigned long) op->req.get_chunk.buffer_ptr);
+    if (op->buf == NULL)
+    {
+        error("Could not get buffer for pointer=%p\n", op->req.get_chunk.buffer_ptr);
+        err = -EINVAL;
+        goto err1;
+    }
+
+    if (!castle_back_user_addr_in_buffer(op->buf, op->req.get_chunk.buffer_ptr + op->req.get_chunk.buffer_len - 1))
+    {
+        error("Invalid value length %ld (ptr=%p)\n", op->req.get_chunk.buffer_len, op->req.get_chunk.buffer_ptr);
+        err = -EINVAL;
+        goto err2;
+    }
     
+    if (((unsigned long) op->req.get_chunk.buffer_ptr) % PAGE_SIZE)
+    {
+        error("Invalid ptr, not page aligned (ptr=%p)\n", op->req.put_chunk.buffer_ptr);
+        err = -EINVAL;
+        goto err2;
+    }
+
+    if ((op->req.get_chunk.buffer_len) % PAGE_SIZE)
+    {
+        error("Invalid len, not page aligned (len=%ld)\n", op->req.put_chunk.buffer_len);
+        err = -EINVAL;
+        goto err2;
+    }
+
+    /*
+     * Put this op on the queue for the big put
+     */
+    spin_lock(&stateful_op->lock);
+
+    list_add_tail(&op->list, &stateful_op->op_queue);
+    get_continue = castle_back_stateful_op_prod(stateful_op);
+
+    spin_unlock(&stateful_op->lock);
+
+    if (get_continue)
+        castle_back_big_get_do_chunk(stateful_op);
+
+    return;
+
+err2: castle_back_buffer_put(conn, op->buf);
+err1: castle_back_reply(op, err, 0, 0);  
 }
 
 /******************************************************************

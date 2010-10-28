@@ -526,6 +526,7 @@ typedef struct castle_bio {
         struct castle_rxrpc_call *rxrpc_call;
         struct castle_object_replace *replace;
         struct castle_object_get *get;
+        void                     *data;
     };
     struct castle_bio_vec        *c_bvecs; 
     atomic_t                      count;
@@ -1010,7 +1011,22 @@ struct castle_object_get {
                                   void *buffer,
                                   uint32_t buffer_length,
                                   int last);
+};
+
+struct castle_object_pull {
+    uint32_t                    remaining;
+    uint32_t                    offset;
+
+    c_ext_pos_t                 cep;
+    struct castle_cache_block  *curr_c2b;
     
+    void                       *buf;
+    uint32_t                    buf_len;
+    
+    struct work_struct          work;
+    
+    void (*pull_continue)      (struct castle_object_pull *pull, 
+                                int err, int length, int done);
 };
 /*
  * This is the callback to notify when the iterator has the
