@@ -859,7 +859,7 @@ static void castle_back_val_kernel_to_user(c_val_tup_t *val, struct castle_back_
     size_t length, val_length;
     struct castle_iter_val *val_copy;
 
-    if (val->type == CVT_TYPE_INLINE)
+    if (val->type & CVT_TYPE_INLINE)
         val_length = val->length;
     else
         val_length = 0;
@@ -876,7 +876,7 @@ static void castle_back_val_kernel_to_user(c_val_tup_t *val, struct castle_back_
 
     val_copy->type = val->type;
     val_copy->length = val->length;
-    if (val->type == CVT_TYPE_INLINE)
+    if (val->type & CVT_TYPE_INLINE)
     {
         val_copy->val = (uint8_t *)(user_buf + sizeof(struct castle_iter_val));
         memcpy((uint8_t *)castle_back_user_to_kernel(buf, val_copy->val), val->val, val->length);
@@ -1159,7 +1159,10 @@ static void castle_back_iter_expire(struct castle_back_stateful_op *stateful_op)
     debug("Expiring iterator with token %u.\n", token);
 
     BUG_ON(!spin_is_locked(&stateful_op->lock));
-    BUG_ON(!list_empty(&stateful_op->op_queue));
+
+    /* there might be ops in the op_queue, but no cleanup to do since
+     * there will only be ops if we're here because the client has gone away
+     */
 
     err = castle_back_iter_cleanup(stateful_op);
 
@@ -1422,13 +1425,15 @@ static int castle_back_iter_next_callback(struct castle_object_iterator *iterato
             goto err0;
         }
         stateful_op->iterator.saved_val = *val;
-        if (val->type == CVT_TYPE_INLINE)
+        if (val->type & CVT_TYPE_INLINE)
         {
             /* copy the value since it may get removed from the cache */
             stateful_op->iterator.saved_val.val =
                 castle_malloc(val->length, GFP_KERNEL);
             memcpy(stateful_op->iterator.saved_val.val, val->val, val->length);
         }
+        else
+            stateful_op->iterator.saved_val.val = NULL;
 
         castle_back_buffer_put(conn, op->buf);
         castle_back_iter_reply(stateful_op, 0);
@@ -1525,7 +1530,7 @@ static void _castle_back_iter_next(void *data)
 
         castle_object_okey_free(stateful_op->iterator.saved_key);
         /* we copied it so free it */
-        if (stateful_op->iterator.saved_val.type == CVT_TYPE_INLINE)
+        if (stateful_op->iterator.saved_val.type & CVT_TYPE_INLINE)
             castle_free(stateful_op->iterator.saved_val.val);
 
         debug_iter("iter_next added saved key\n");
@@ -1598,7 +1603,11 @@ static int castle_back_iter_cleanup(struct castle_back_stateful_op *stateful_op)
     if (stateful_op->iterator.saved_key != NULL)
     {
         castle_object_okey_free(stateful_op->iterator.saved_key);
-        castle_free(stateful_op->iterator.saved_val.val);
+        if (stateful_op->iterator.saved_val.type & CVT_TYPE_INLINE)
+        {
+            BUG_ON(!stateful_op->iterator.saved_val.val);
+            castle_free(stateful_op->iterator.saved_val.val);
+        }
     }
 
     castle_free(stateful_op->iterator.start_key);
@@ -1680,7 +1689,7 @@ static void castle_back_big_put_expire(struct castle_back_stateful_op *stateful_
     debug("Expiring big put with token %u.\n", token);
 
     BUG_ON(!spin_is_locked(&stateful_op->lock));
-    /* should only be called if the op queue is empty */
+    /* TODO: the op_queue might not be empty, if this is called because the client has gone away */
     BUG_ON(!list_empty(&stateful_op->op_queue));
 
     castle_object_replace_cancel(&stateful_op->replace);
@@ -2235,8 +2244,7 @@ static void castle_back_cleanup(void *data)
     struct castle_back_conn *conn = data;
     struct castle_back_stateful_op *stateful_ops = conn->stateful_ops;
     uint32_t i;
-    //struct rb_node *node;
-    //struct castle_back_buffer *buf;
+
     BUG_ON(conn == NULL);
     
     debug("castle_back_cleanup\n");
