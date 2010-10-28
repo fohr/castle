@@ -1,0 +1,314 @@
+
+function kernel_fs_running {
+	lsmod | grep -q "castle_fs "
+}
+
+function ocaml_fs_running {
+	grep -q "^castle " /proc/mounts || grep -q "^fuse " /proc/mounts
+}
+
+function default_fs {
+	if ocaml_fs_running; then
+		echo ocaml
+	else
+	        echo kernel
+	fi
+}
+
+# if fs not specified, first see which one is running, then assume kernel fs
+if [ "${FS:-undefined}" == "undefined" ]; then
+	FS_CONF=/etc/acunu/fs-type
+	if [ -e $FS_CONF ]; then
+		TMP=$(cat $FS_CONF)
+		case "${TMP}" in
+		    ocaml|kernel) FS=$TMP ;;
+		    *) FS=$(default_fs)
+		esac
+	else
+		FS=$(default_fs)
+	fi
+fi
+
+function read_config {
+	 local dir=${1}
+	 local config=${dir}/config-${FS}
+
+	 if [ -e ${config} ]; then
+	     . ${config}
+	 fi	
+}
+
+for dir in /etc/acunu . ;
+do
+	read_config ${dir}
+done
+
+CLI=castle-cli
+
+set -eu
+
+FUSE_MOUNTPOINT=/fs
+
+case $FS in
+	ocaml)
+		SYSFS_PREFIX=/fs
+		CONTROL_FILE=/fs/sys
+		INIT=init_ocaml_fs
+		MAJMIN_TO_DEV=ocaml_majmin_to_dev
+	;;
+
+	kernel)
+		SYSFS_PREFIX=
+		CONTROL_FILE=/dev/castle-fs/control
+		INIT=init_kernel_fs
+		MAJMIN_TO_DEV=kernel_majmin_to_dev
+	;;
+	
+	*)
+		echo "ERROR invalid filesystem '${FS}'!!!"
+		exit -1
+	;;
+esac
+
+function unmount_kernel_fs {
+	if kernel_fs_running; then 
+		echo "Unmounting Kernel FS..."
+
+	    rmmod castle_fs
+	    # Wait up to 5 seconds for the control file to disappear
+	    for i in `seq 50`; do
+	        if [ ! -e ${CONTROL_FILE} ]; then
+	            break
+	        fi
+	        # Wait 0.1s
+	        usleep 100000
+	    done
+	    if [ -e ${CONTROL_FILE} ]; then
+	        echo "Removed castle_fs module, but the control file is still there!"
+	        exit 1
+	    fi
+	fi
+}
+
+function unmount_ocaml_fs {
+	if ocaml_fs_running; then 
+		echo "Unmounting OCaml FS..."
+
+	    umount ${FUSE_MOUNTPOINT}
+	    # Wait for process to disappear
+	    local CASTLE_PID=`cat /var/run/castle.pid`
+	    for i in `seq 50`; do
+	        if [ ! -d /proc/${CASTLE_PID} ]; then
+	            break
+	        fi
+	        # Wait 0.1s
+	        usleep 100000
+	    done
+	
+	    if ocaml_fs_running; then
+	        echo "Unmounted castle fs, but the process is still there!"
+	        exit 1
+	    fi
+	fi
+}
+
+function umount_fs {
+	unmount_kernel_fs
+	unmount_ocaml_fs
+
+    # Delete the disk loop files
+    for LOOP in `losetup -a | grep "${TEST}" | cut -d":" -f1`; do
+        local LOOP_FILE=`losetup ${LOOP} | cut -d"(" -f2 | cut -d")" -f1`
+        echo "Deleting loop: ${LOOP} (${LOOP_FILE})"
+        losetup -d $LOOP
+    done
+}
+
+
+function init_kernel_fs {
+    if ! kernel_fs_running; then
+        echo "Castle FS kernel module not found, trying to insert."
+        modprobe castle-fs
+        # Wait up to 5 seconds for the control file to appear
+        # udev renaming is sometimes slow
+        for i in `seq 50`; do
+            if [ -e "${CONTROL_FILE}" ]; then
+                break
+            fi
+            # Wait 0.1s
+            usleep 100000
+        done
+        if [ ! -e "${CONTROL_FILE}" ]; then
+            echo "Control file has not been created after kernel module insertion"
+            exit 1
+        fi
+    fi
+}
+
+function init_ocaml_fs {
+        local OCAMLFS=/opt/acunu/castle/bin/castle
+
+	if [ ! -e "${OCAMLFS}" ]; then
+		echo "Cannot find OCamlFS."
+		exit 1
+	fi
+	
+	if ! ocaml_fs_running; then
+	    echo "Castle FS not found, trying to start."
+	    
+		mkdir -p ${FUSE_MOUNTPOINT}
+	
+	   	${OCAMLFS} ${FUSE_MOUNTPOINT}
+		
+		sleep 1
+		
+	    # Wait up to 5 seconds for the control file to appear
+	    # udev renaming is sometimes slow
+	    for i in `seq 50`; do
+			echo "looking for ${CONTROL_FILE}"
+	        if [ -d "${CONTROL_FILE}" ]; then
+	            break
+	        fi
+			echo "${CONTROL_FILE} not there yet"
+	        # Wait 0.1s
+	        usleep 100000
+	    done
+	
+	    if [ ! -d "${CONTROL_FILE}" ]; then
+	        echo "Control file has not been created after OCamlFS started"
+	        exit 1
+	    fi
+	fi
+}
+
+
+function do_control_internal {
+	echo -n "   Command: $@ "
+	local FAILED=0
+	local OUTPUT=/tmp/cli-output.$RANDOM
+	
+	if ! ${CLI} $@ &> ${OUTPUT}; then
+		FAILED=1
+	fi
+	
+	if [ $FAILED -eq 1 ]; then
+		echo
+		cat ${OUTPUT}
+		exit 1
+	fi
+
+	if ! cat ${OUTPUT} | grep "Ret val:" &>/dev/null; then
+		echo
+		cat ${OUTPUT}
+		exit 1
+	fi
+
+	IOCTL_RET=`cat ${OUTPUT} | grep "Ret val:" | sed -e "s/Ret val: \(0x[0-9a-f]*\)\./\1/g"`
+	rm ${OUTPUT}
+	echo "    ret: $IOCTL_RET"
+}
+
+function devid_of_majmin {
+	if [ "x$1" == "x" ]; then
+	echo "Could not find $DEV"
+	    exit 1
+	fi
+	local MAJ=`echo $1 | cut -d":" -f1`
+	local MIN=`echo $1 | cut -d":" -f2`
+	local DEVID=$(( ($MIN & 0xFF) | ( ($MIN & 0xFFF00) << 12 ) | ($MAJ << 8) )) #
+	DEVID_HEX=`printf "0x%X" $DEVID`
+}
+
+function dev_to_majmin {
+    local DEV=$1
+
+    # We only handle loop and castle and hdX devices here 
+    if [ "x`echo $DEV | grep loop`" != "x" ]; then
+        local LOOP_NR=`echo $DEV | sed -e 's#/dev/loop\(.*\)#\1#g'`
+        local MAJMIN=`cat /proc/partitions | grep "loop${LOOP_NR}$" | awk '{print ( $1":"$2) }'`
+		devid_of_majmin $MAJMIN
+		
+    elif [ "x`echo $DEV | grep '^/fs'`" != "x" ]; then
+        local CASTLE_NR=`echo $DEV | sed -e 's#/fs/dev/castle-fs/\(.*\)#\1#g'`
+		DEVID_HEX=0x${CASTLE_NR}
+		
+    elif [ "x`echo $DEV | grep castle-fs`" != "x" ]; then
+        local CASTLE_NR=`echo $DEV | sed -e 's#/dev/castle-fs/castle-fs-\(.*\)#\1#g'`
+        local MAJMIN=`cat /proc/partitions | grep "castle-fs-${CASTLE_NR}$" | awk '{print ( $1":"$2) }'`
+		devid_of_majmin $MAJMIN
+		
+    elif [ "x`echo $DEV | grep hd`" != "x" ]; then
+        local HD=`echo $DEV | sed -e 's#/dev/hd\(.*\)#hd\1#g'`
+        local MAJMIN=`cat /proc/partitions | grep "${HD}$" | awk '{print ( $1":"$2) }'`
+		devid_of_majmin $MAJMIN
+		
+    elif [ "x`echo $DEV | grep sd`" != "x" ]; then
+        local HD=`echo $DEV | sed -e 's#/dev/sd\(.*\)#sd\1#g'`
+        local MAJMIN=`cat /proc/partitions | grep "${HD}$" | awk '{print ( $1":"$2) }'`
+		devid_of_majmin $MAJMIN
+    else
+        echo "Could not dev_to_majmin for dev: $DEV"
+        false
+    fi
+}
+
+## FIXME: don't use a global for a return value(!)
+function do_control_claim {
+    local FILE=$1
+	echo " ===> adding ${FILE}" >&2
+    if [ `echo "${FILE}" | grep "/dev" | wc -l` == 0 ]; then
+        local LOOP=`losetup -f`
+        losetup $LOOP ${TEST}/${FILE}
+        dev_to_majmin $LOOP
+    else
+        dev_to_majmin $FILE
+    fi
+    do_control_internal claim $DEVID_HEX
+    SLAVE_UUID="${IOCTL_RET}"
+}
+
+function do_control_init {
+    do_control_internal init
+}
+
+function init_fs {
+	if [ `whoami` != root ]; then
+	    echo "Please run as root"
+	    exit 1
+	fi
+	
+	if ! type ${CLI} > /dev/null 2>&1; then
+        echo "Command \"${CLI}\" not installed."
+        exit 1
+    fi
+
+    SLAVES=""
+    ${INIT}
+    echo
+    echo "Initing FS..."
+	
+	for DISK in ${DISKS}; do
+		do_control_claim "${DISK}" 
+        if [ "${SLAVES}" != "" ]; then
+            SLAVES=${SLAVES}" "
+        fi
+        SLAVES=${SLAVES}"${SLAVE_UUID}"
+	done
+
+	do_control_init
+}
+
+function init_disks {
+    mkdir -p ${TEST}
+    for DISK in ${DISKS}; do
+        if [ `echo "$DISK" | grep dev | wc -l` == 0 ]; then 
+            echo "Creating backing file: $DISK"
+    	    dd              if=/dev/zero of=${TEST}/${DISK} bs=1M count=1 seek=$DISK_SIZE 2>/dev/null
+    	    dd conv=notrunc if=/dev/zero of=${TEST}/${DISK} bs=4K count=2 2>/dev/null
+        else
+    	    # clear the superblocks
+            echo "Invalidating superblocks in $DISK"
+    	    dd if=/dev/zero of=${DISK} bs=4K count=2 2>/dev/null
+        fi
+    done
+}
