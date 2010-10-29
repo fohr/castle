@@ -1148,7 +1148,7 @@ struct castle_attachment* castle_device_find(dev_t dev)
     return NULL;
 }
 
-struct castle_attachment* castle_collection_get(collection_id_t col_id)
+struct castle_attachment* castle_attachment_get(collection_id_t col_id)
 {
     struct castle_attachment *ca, *result = NULL;
     struct list_head *lh;
@@ -1173,7 +1173,7 @@ struct castle_attachment* castle_collection_get(collection_id_t col_id)
     return result;
 }
 
-void castle_collection_put(struct castle_attachment *ca)
+void castle_attachment_put(struct castle_attachment *ca)
 {
     int to_free = 0;
     
@@ -1204,8 +1204,8 @@ void castle_collection_put(struct castle_attachment *ca)
     }
 }
 
-EXPORT_SYMBOL(castle_collection_get);
-EXPORT_SYMBOL(castle_collection_put);
+EXPORT_SYMBOL(castle_attachment_get);
+EXPORT_SYMBOL(castle_attachment_put);
 
 struct castle_attachment* castle_attachment_init(int device, /* _or_object_collection */
                                                  version_t version,
@@ -1539,9 +1539,8 @@ static void castle_attachments_free(void)
         ca = list_entry(lh, struct castle_attachment, list); 
         if(ca->device)
             castle_device_free(ca);
-        // TODO double put and wait for collections to go away
-        //else
-        //    castle_collection_free(ca);
+        else
+            castle_attachment_put(ca);
     }
     castle_attachments_store_fini();
 

@@ -324,7 +324,7 @@ void castle_control_collection_attach(version_t          version,
 void castle_control_collection_detach(collection_id_t collection,
                                       int            *ret)
 {
-    struct castle_attachment *ca = castle_collection_get(collection);
+    struct castle_attachment *ca = castle_attachment_get(collection);
     if (!ca)
     {
         *ret = -ENODEV;
@@ -339,8 +339,8 @@ void castle_control_collection_detach(collection_id_t collection,
     spin_unlock(&castle_attachments.lock);
 
     /* Double put is opposite of what happens in collection_init */
-    castle_collection_put(ca);
-    castle_collection_put(ca);
+    castle_attachment_put(ca);
+    castle_attachment_put(ca);
 
     *ret = 0;
 }
@@ -349,7 +349,7 @@ void castle_control_collection_snapshot(collection_id_t collection,
                                                int *ret,
                                                version_t *version)
 {
-    struct castle_attachment *ca = castle_collection_get(collection);
+    struct castle_attachment *ca = castle_attachment_get(collection);
     version_t ver, old_version;
 
     if(!ca)
@@ -383,7 +383,7 @@ void castle_control_collection_snapshot(collection_id_t collection,
     up_write(&ca->lock);
     
     castle_events_collection_snapshot(ver, ca->col.id);
-    castle_collection_put(ca);
+    castle_attachment_put(ca);
 }
             
 void castle_control_set_target(slave_uuid_t slave_uuid, int value, int *ret)
