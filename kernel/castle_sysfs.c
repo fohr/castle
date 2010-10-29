@@ -95,8 +95,8 @@ static ssize_t versions_list_show(struct kobject *kobj,
                 "IsLeaf: %d\n",
                  v->version, 
                  parent, 
-                 -1,
-                 -1L,
+                 size,
+                 0L,
                  leaf);
 
         return len;
