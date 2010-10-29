@@ -161,6 +161,7 @@ struct castle_back_stateful_op
 
     unsigned long                       last_used_jiffies;
     struct work_struct                  expire_work;
+    struct castle_attachment           *attachment;
     /* is called with stateful_op->lock held, and should drop it */
     castle_back_stateful_op_expire_t    expire;
 
@@ -448,6 +449,7 @@ castle_back_get_stateful_op(struct castle_back_conn *conn,
     stateful_op->token = (stateful_op - conn->stateful_ops) + (stateful_op->use_count * MAX_STATEFUL_OPS);
     stateful_op->use_count++;
     stateful_op->conn = conn;
+    stateful_op->attachment = NULL;
     INIT_LIST_HEAD(&stateful_op->op_queue);
 
     *op_ptr = stateful_op;
@@ -934,6 +936,8 @@ static void castle_back_replace_complete(struct castle_object_replace *replace, 
     castle_back_buffer_put(op->conn, op->buf);
 
     castle_back_reply(op, err, 0, 0);
+
+    castle_collection_put(castle_collection_find(op->req.replace.collection_id)); 
 }
 
 static uint32_t castle_back_replace_data_length_get(struct castle_object_replace *replace)
@@ -1005,6 +1009,7 @@ static void castle_back_replace(struct castle_back_conn *conn, struct castle_bac
     op->replace.data_length_get = castle_back_replace_data_length_get;
     op->replace.data_copy = castle_back_replace_data_copy;
 
+    castle_collection_get(attachment); 
     err = castle_object_replace(&op->replace, attachment, key, 0);
     if (err)
         goto err2;
@@ -1012,7 +1017,8 @@ static void castle_back_replace(struct castle_back_conn *conn, struct castle_bac
     castle_free(key);
     return;
     
-err2: castle_back_buffer_put(conn, op->buf);
+err2: castle_collection_put(attachment); 
+      castle_back_buffer_put(conn, op->buf);
 err1: castle_free(key);
 err0: castle_back_reply(op, err, 0, 0);
 }
@@ -1024,6 +1030,7 @@ static void castle_back_remove_complete(struct castle_object_replace *replace, i
     debug("castle_back_remove_complete\n");
 
     castle_back_reply(op, err, 0, 0);
+    castle_collection_put(castle_collection_find(op->req.remove.collection_id)); 
 }
 
 static void castle_back_remove(struct castle_back_conn *conn, struct castle_back_op *op)
@@ -1051,6 +1058,7 @@ static void castle_back_remove(struct castle_back_conn *conn, struct castle_back
     op->replace.data_length_get = NULL;
     op->replace.data_copy = NULL;
 
+    castle_collection_get(attachment); 
     err = castle_object_replace(&op->replace, attachment, key, 1 /* tombstone */);
     if (err)
         goto err1;
@@ -1059,6 +1067,7 @@ static void castle_back_remove(struct castle_back_conn *conn, struct castle_back
     return;
     
 err1: castle_free(key);
+      castle_collection_put(attachment); 
 err0: castle_back_reply(op, err, 0, 0);
 }
 
@@ -1076,7 +1085,7 @@ void castle_back_get_reply_continue(struct castle_object_get *get,
     {
         castle_back_buffer_put(op->conn, op->buf);
         castle_back_reply(op, err, 0, 0);
-        return;
+        goto __put_collection;
     }
     
     BUG_ON(!buffer);
@@ -1091,7 +1100,13 @@ void castle_back_get_reply_continue(struct castle_object_get *get,
     {
         castle_back_buffer_put(op->conn, op->buf);
         castle_back_reply(op, 0, 0, op->value_length);
+        goto __put_collection;
     }
+
+    return;
+
+__put_collection:
+    castle_collection_put(castle_collection_find(op->req.get.collection_id)); 
 }
 
 void castle_back_get_reply_start(struct castle_object_get *get, 
@@ -1128,6 +1143,7 @@ void castle_back_get_reply_start(struct castle_object_get *get,
 err:
     castle_back_buffer_put(op->conn, op->buf);
     castle_back_reply(op, err_prime, 0, 0);
+    castle_collection_put(castle_collection_find(op->req.get.collection_id)); 
 }
 
 static void castle_back_get(struct castle_back_conn *conn, struct castle_back_op *op)
@@ -1169,6 +1185,7 @@ static void castle_back_get(struct castle_back_conn *conn, struct castle_back_op
     op->get.reply_start = castle_back_get_reply_start;
     op->get.reply_continue = castle_back_get_reply_continue;
 
+    castle_collection_get(attachment);
     err = castle_object_get(&op->get, attachment, key);
     if (err)
         goto err2;
@@ -1177,6 +1194,7 @@ static void castle_back_get(struct castle_back_conn *conn, struct castle_back_op
     return;
 
 err2: castle_back_buffer_put(conn, op->buf);
+      castle_collection_put(attachment);
 err1: castle_free(key);
 err0: castle_back_reply(op, err, 0, 0);
 }
@@ -1316,7 +1334,9 @@ static void castle_back_iter_start(struct castle_back_conn *conn, struct castle_
     stateful_op->iterator.saved_key = NULL;
     stateful_op->iterator.start_key = start_key;
     stateful_op->iterator.end_key = end_key;
+    stateful_op->attachment = attachment;
 
+    castle_collection_get(attachment);
     err = castle_object_iter_start(attachment, start_key, end_key, &stateful_op->iterator.iterator);
     if (err)
         goto err3;
@@ -1330,6 +1350,7 @@ err3:
     spin_lock(&stateful_op->lock);
     stateful_op->curr_op = NULL;
     castle_back_put_stateful_op(conn, stateful_op);
+    castle_collection_put(attachment);
 err2:
     castle_free(end_key);
 err1:
@@ -1654,6 +1675,8 @@ static void castle_back_iter_cleanup(struct castle_back_stateful_op *stateful_op
     castle_free(stateful_op->iterator.start_key);
     castle_free(stateful_op->iterator.end_key);
 
+    castle_collection_put(stateful_op->attachment);
+
     // will drop stateful_op->lock
     castle_back_put_stateful_op(stateful_op->conn, stateful_op);
 }
@@ -1724,6 +1747,7 @@ static void castle_back_big_put_expire(struct castle_back_stateful_op *stateful_
     castle_object_replace_cancel(&stateful_op->replace);
     
     // Will drop stateful_op->lock
+    castle_collection_put(stateful_op->attachment);
     castle_back_put_stateful_op(stateful_op->conn, stateful_op);
 }
 
@@ -1780,6 +1804,7 @@ static void castle_back_big_put_complete(struct castle_object_replace *replace, 
     castle_back_stateful_op_finish_all(stateful_op, err);
 
     // Will drop stateful_op->lock
+    castle_collection_put(stateful_op->attachment);
     castle_back_put_stateful_op(stateful_op->conn, stateful_op);
 }
 
@@ -1878,7 +1903,9 @@ static void castle_back_big_put(struct castle_back_conn *conn, struct castle_bac
     stateful_op->replace.complete = castle_back_big_put_complete;
     stateful_op->replace.data_length_get = castle_back_big_put_data_length_get;
     stateful_op->replace.data_copy = castle_back_big_put_data_copy;
+    stateful_op->attachment = attachment;
 
+    castle_collection_get(attachment);
     err = castle_object_replace(&stateful_op->replace, attachment, key, 0);
     if (err)
         goto err2;
@@ -1891,6 +1918,7 @@ err2: // Safe as no-one could have queued up an op - we have not returned token
       spin_lock(&stateful_op->lock);
       stateful_op->curr_op = NULL;
       castle_back_put_stateful_op(conn, stateful_op);
+      castle_collection_put(attachment);
 err1: castle_free(key);
 err0: castle_back_reply(op, err, 0, 0);
 }
@@ -2004,6 +2032,7 @@ static void castle_back_big_get_continue(struct castle_object_pull *pull, int er
     {
         castle_back_stateful_op_finish_all(stateful_op, err);
         // Will drop stateful_op->lock
+        castle_collection_put(stateful_op->attachment);
         castle_back_put_stateful_op(stateful_op->conn, stateful_op);
         return;
     }
@@ -2060,6 +2089,7 @@ static void castle_back_big_get(struct castle_back_conn *conn, struct castle_bac
     vl_okey_print(key);
     #endif
 
+    castle_collection_get(attachment);
     err = castle_object_pull(&stateful_op->pull, attachment, key);
     if (err)
         goto err2;
@@ -2071,6 +2101,7 @@ static void castle_back_big_get(struct castle_back_conn *conn, struct castle_bac
     return;
 
 err2: castle_free(key);
+      castle_collection_put(attachment);
 err1: // Safe as no one will have queued up a op - we haven't returned token yet
       spin_lock(&stateful_op->lock);
       stateful_op->curr_op = NULL;
