@@ -987,6 +987,9 @@ int castle_object_replace(struct castle_object_replace *replace,
     c_bio_t *c_bio;
     int i;
 
+    if(!castle_fs_inited)
+        return -ENODEV;
+
     for (i=0; i<key->nr_dims; i++)
         BUG_ON(key->dims[i]->length == 0);
     
@@ -1024,7 +1027,6 @@ int castle_object_replace(struct castle_object_replace *replace,
 
     return 0;
 }
-
 EXPORT_SYMBOL(castle_object_replace);
 
 void castle_object_slice_get_end_io(void *obj_iter, int err);
@@ -1396,6 +1398,9 @@ int castle_object_get(struct castle_object_get *get,
     c_bio_t *c_bio;
 
     debug("castle_object_get get=%p\n", get);
+    
+    if(!castle_fs_inited)
+        return -ENODEV;
 
     btree_key = castle_object_key_convert(key);
     if (!btree_key)
@@ -1424,7 +1429,6 @@ int castle_object_get(struct castle_object_get *get,
 
     return 0;
 }
-
 EXPORT_SYMBOL(castle_object_get);
 
 void __castle_object_chunk_pull_complete(struct work_struct *work)
@@ -1465,8 +1469,11 @@ void castle_object_chunk_pull_io_end(c2_block_t *c2b)
 void castle_object_chunk_pull(struct castle_object_pull *pull, void *buf, size_t buf_len)
 {   
     //TODO currently relies on objects being page aligned.
-    
     c_ext_pos_t cep;    
+    
+    if(!castle_fs_inited)
+        return;
+
     BUG_ON(buf_len % PAGE_SIZE);
     BUG_ON(pull->curr_c2b != NULL);
     BUG_ON(pull->buf != NULL);
@@ -1493,6 +1500,7 @@ void castle_object_chunk_pull(struct castle_object_pull *pull, void *buf, size_t
         __castle_object_chunk_pull_complete(&pull->work);
     }
 }
+EXPORT_SYMBOL(castle_object_chunk_pull);
 
 static void castle_object_pull_continue(struct castle_bio_vec *c_bvec, int err, c_val_tup_t cvt)
 {
@@ -1521,6 +1529,9 @@ int castle_object_pull(struct castle_object_pull *pull, struct castle_attachment
 
     debug("castle_object_pull pull=%p\n", pull);
 
+    if(!castle_fs_inited)
+        return -ENODEV;
+
     btree_key = castle_object_key_convert(key);
     if (!btree_key)
         return -EINVAL;
@@ -1548,6 +1559,4 @@ int castle_object_pull(struct castle_object_pull *pull, struct castle_attachment
 
     return 0;
 }
-
-EXPORT_SYMBOL(castle_object_chunk_pull);
 EXPORT_SYMBOL(castle_object_pull);

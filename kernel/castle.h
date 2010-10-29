@@ -36,6 +36,8 @@
 #define STATIC_BUG_ON(expr) \
         extern int (*assert_function__(void)) [STATIC_BUG_ON_HELPER(expr)]
 
+extern int castle_fs_inited;
+
 typedef uint32_t tree_seq_t;                   
 #define GLOBAL_TREE         ((tree_seq_t)0)
 #define INVAL_TREE          ((tree_seq_t)-1)
