@@ -15,5 +15,5 @@ init_disks
 init_fs $@
 
 echo "Castle initialised successfully"
-castle-fs-cli "create" 0x280000 
-castle-fs-cli "attach" 1
+castle-cli "create" 0x280000 
+castle-cli "attach" 1
