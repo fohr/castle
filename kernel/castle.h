@@ -886,7 +886,7 @@ struct castle_slaves {
 /* Castle attachment represents a block device or an attached object collection */
 struct castle_attachment {
     version_t           version;
-    atomic_t            ref_cnt;
+    int                 ref_cnt; /* protected by castle_attachments.lock */
     struct rw_semaphore lock;
     int                 device; /* !=0 if block device, == 0 if object collection */
     union {
@@ -933,13 +933,10 @@ struct castle_attachment*
                                                    
 struct castle_attachment* 
                       castle_collection_init       (version_t version, char *name);
-void                  castle_collection_free       (struct castle_attachment *ca);
-struct castle_attachment* 
-                      castle_collection_find       (collection_id_t col_id);
 
 struct castle_attachment *
                       castle_collection_get        (collection_id_t collection);
-void                  castle_collection_put        (collection_id_t collection);
+void                  castle_collection_put        (struct castle_attachment *ca);
 
 struct castle_slave*  castle_claim                 (uint32_t new_dev);
 void                  castle_release               (struct castle_slave *cs);

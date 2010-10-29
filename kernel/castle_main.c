@@ -723,14 +723,20 @@ void castle_release(struct castle_slave *cs)
 
 static int castle_open(struct castle_attachment *dev)
 {
-    atomic_inc(&dev->ref_cnt);
+    spin_lock(&castle_attachments.lock);
+    dev->ref_cnt++;
+    spin_unlock(&castle_attachments.lock);
 
 	return 0;
 }
 
 static int castle_close(struct castle_attachment *dev)
 {
-    atomic_dec(&dev->ref_cnt);
+    spin_lock(&castle_attachments.lock);
+    dev->ref_cnt++;
+    spin_unlock(&castle_attachments.lock);
+
+    // TODO should call put, potentially free it?
 
 	return 0;
 }
@@ -1142,10 +1148,12 @@ struct castle_attachment* castle_device_find(dev_t dev)
     return NULL;
 }
 
-struct castle_attachment* castle_collection_find(collection_id_t col_id)
+struct castle_attachment* castle_collection_get(collection_id_t col_id)
 {
-    struct castle_attachment *ca;
+    struct castle_attachment *ca, *result = NULL;
     struct list_head *lh;
+
+    spin_lock(&castle_attachments.lock);
 
     list_for_each(lh, &castle_attachments.attachments)
     {
@@ -1153,12 +1161,51 @@ struct castle_attachment* castle_collection_find(collection_id_t col_id)
         if(ca->device)
             continue;
         if(ca->col.id == col_id)
-            return ca;
+        {
+            result = ca;
+            ca->ref_cnt ++;
+            break;
+        }
     }
-    return NULL;
+    
+    spin_unlock(&castle_attachments.lock);
+    
+    return result;
 }
 
-EXPORT_SYMBOL(castle_collection_find);
+void castle_collection_put(struct castle_attachment *ca)
+{
+    int to_free = 0;
+    
+    spin_lock(&castle_attachments.lock);
+
+    ca->ref_cnt--;
+    
+    BUG_ON(ca->ref_cnt < 0);
+    
+    if (ca->ref_cnt == 0)
+    {
+        to_free = 1;
+        list_del(&ca->list);
+    }
+
+    spin_unlock(&castle_attachments.lock);
+
+    if (to_free)
+    {
+        version_t version = ca->version;
+        
+        castle_events_collection_detach(ca->col.id);
+        castle_sysfs_collection_del(ca);
+
+        castle_free(ca->col.name);
+        castle_free(ca);
+        castle_version_detach(version);
+    }
+}
+
+EXPORT_SYMBOL(castle_collection_get);
+EXPORT_SYMBOL(castle_collection_put);
 
 struct castle_attachment* castle_attachment_init(int device, /* _or_object_collection */
                                                  version_t version,
@@ -1176,7 +1223,7 @@ struct castle_attachment* castle_attachment_init(int device, /* _or_object_colle
     if(!attachment)
         return NULL;
 	init_rwsem(&attachment->lock);
-    atomic_set(&attachment->ref_cnt, 0);
+    attachment->ref_cnt = 1; // Use double put on detach
     attachment->device  = device;
     attachment->version = version;
 
@@ -1189,7 +1236,7 @@ void castle_device_free(struct castle_attachment *cd)
     
     castle_events_device_detach(cd->dev.gd->major, cd->dev.gd->first_minor);
 
-    printk("===> When freeing the number of cd users is: %d\n", atomic_read(&cd->ref_cnt));
+    printk("===> When freeing the number of cd users is: %d\n", cd->ref_cnt);
     castle_sysfs_device_del(cd);
     /* TODO: Should this be done? blk_cleanup_queue(cd->dev.gd->rq); */ 
     del_gendisk(cd->dev.gd);
@@ -1258,25 +1305,6 @@ error_out:
     if(dev) castle_free(dev);
     printk("Failed to init device.\n");
     return NULL;    
-}
-
-void castle_collection_free(struct castle_attachment *ca)
-{
-    version_t version = ca->version;
-    
-    castle_events_collection_detach(ca->col.id);
-
-    if (atomic_read(&ca->ref_cnt))
-    {
-        printk("\n===> When freeing the number of ca users is: %u\n", 
-               atomic_read(&ca->ref_cnt));
-        BUG();
-    }
-    castle_sysfs_collection_del(ca);
-    list_del(&ca->list);
-    castle_free(ca->col.name);
-    castle_free(ca);
-    castle_version_detach(version);
 }
 
 struct castle_attachment* castle_collection_init(version_t version, char *name)
@@ -1511,8 +1539,9 @@ static void castle_attachments_free(void)
         ca = list_entry(lh, struct castle_attachment, list); 
         if(ca->device)
             castle_device_free(ca);
-        else
-            castle_collection_free(ca);
+        // TODO double put and wait for collections to go away
+        //else
+        //    castle_collection_free(ca);
     }
     castle_attachments_store_fini();
 

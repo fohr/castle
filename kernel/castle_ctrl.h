@@ -1,10 +1,6 @@
 #ifndef __CASTLE_CTRL_H__
 #define __CASTLE_CTRL_H__
 
-// TBD Expose these function for RxRPC - remove (and re-static) them when RxRPC has gone
-void castle_control_lock_up(void);
-void castle_control_lock_down(void);
-
 void castle_control_claim           (uint32_t dev, int *ret, slave_uuid_t *id);
 void castle_control_release         (slave_uuid_t id, int *ret);
 void castle_control_attach          (version_t version, int *ret, uint32_t *dev);
