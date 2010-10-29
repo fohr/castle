@@ -1927,7 +1927,7 @@ static void castle_back_put_chunk(struct castle_back_conn *conn, struct castle_b
     {
         error("Token not found %x\n", op->req.put_chunk.token);
         err = -EINVAL;
-        goto err1;
+        goto err0;
     }
     
     /*
@@ -1980,9 +1980,10 @@ static void castle_back_put_chunk(struct castle_back_conn *conn, struct castle_b
     return;
        
 err2: castle_back_buffer_put(conn, op->buf);
-err1: castle_back_reply(op, err, 0, 0);
+err1:
     stateful_op->expire = castle_back_big_put_expire;
     stateful_op->last_used_jiffies = jiffies;
+err0: castle_back_reply(op, err, 0, 0);
 }
 
 /*
@@ -2129,7 +2130,7 @@ static void castle_back_get_chunk(struct castle_back_conn *conn, struct castle_b
     {
         error("Token not found %x\n", op->req.get_chunk.token);
         err = -EINVAL;
-        goto err1;
+        goto err0;
     }
 
     /*
@@ -2180,9 +2181,10 @@ static void castle_back_get_chunk(struct castle_back_conn *conn, struct castle_b
     return;
 
 err2: castle_back_buffer_put(conn, op->buf);
-err1: castle_back_reply(op, err, 0, 0);  
+err1:
     stateful_op->expire = castle_back_big_get_expire;
     stateful_op->last_used_jiffies = jiffies;
+err0: castle_back_reply(op, err, 0, 0);
 }
 
 /******************************************************************
