@@ -886,7 +886,7 @@ struct castle_slaves {
 /* Castle attachment represents a block device or an attached object collection */
 struct castle_attachment {
     version_t           version;
-    int                 users;
+    atomic_t            ref_cnt;
     struct rw_semaphore lock;
     int                 device; /* !=0 if block device, == 0 if object collection */
     union {
@@ -909,6 +909,7 @@ struct castle_attachments {
     struct kobject devices_kobj;
     int major;
     struct list_head attachments;
+    spinlock_t     lock;
 };
 
 extern struct castle              castle;
@@ -935,6 +936,10 @@ struct castle_attachment*
 void                  castle_collection_free       (struct castle_attachment *ca);
 struct castle_attachment* 
                       castle_collection_find       (collection_id_t col_id);
+
+struct castle_attachment *
+                      castle_collection_get        (collection_id_t collection);
+void                  castle_collection_put        (collection_id_t collection);
 
 struct castle_slave*  castle_claim                 (uint32_t new_dev);
 void                  castle_release               (struct castle_slave *cs);

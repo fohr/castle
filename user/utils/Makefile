@@ -14,7 +14,7 @@ CFLAGS          += -Werror
 CFLAGS          += -Wall
 CFLAGS          += -Wno-unused
 CFLAGS          += -D_GNU_SOURCE
-CFLAGS          += -fPIC
+#CFLAGS          += -fPIC
 CFLAGS          += -g
 
 LIBS = -L/usr/lib$(LIB_POSTFIX)

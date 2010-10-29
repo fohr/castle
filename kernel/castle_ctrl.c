@@ -23,6 +23,7 @@
 #endif
 
 static DECLARE_MUTEX(castle_control_lock);
+static DECLARE_WAIT_QUEUE_HEAD(castle_control_wait_q);
 
 c_mstore_t *castle_attachments_store = NULL;
 
@@ -309,15 +310,44 @@ int castle_attachments_store_delete(char *name, version_t version)
     return 0;
 }
 
-void castle_control_collection_attach(version_t version,
-                                             char *name,
-                                             int *ret,
-                                             collection_id_t *collection)
+struct castle_attachment * castle_collection_get(collection_id_t collection)
 {
     struct castle_attachment *ca;
 
-    castle_attachments_store_add(name, version);
-    
+    spin_lock(&castle_attachments.lock);
+
+    ca = castle_collection_find(collection);
+    if (ca)
+        atomic_inc(&ca->ref_cnt);
+
+    spin_unlock(&castle_attachments.lock);
+
+    return ca;
+}
+
+void castle_collection_put(collection_id_t collection)
+{
+    struct castle_attachment *ca;
+
+    spin_lock(&castle_attachments.lock);
+
+    ca = castle_collection_find(collection);
+    if (ca)
+    {
+        atomic_dec(&ca->ref_cnt);
+        wake_up(&castle_control_wait_q);
+    }
+
+    spin_unlock(&castle_attachments.lock);
+}
+
+void castle_control_collection_attach(version_t          version,
+                                      char              *name,
+                                      int               *ret,
+                                      collection_id_t   *collection)
+{
+    struct castle_attachment *ca;
+
     ca = castle_collection_init(version, name);
     if(!ca)
     {
@@ -325,23 +355,32 @@ void castle_control_collection_attach(version_t version,
         *ret = -EINVAL;
         return;
     }
+    castle_attachments_store_add(name, version);
+    printk("Created new Collection Attachment: %s|0x%x\n", name, ca->col.id);
+    
     *collection = ca->col.id; 
     *ret = 0;
 }
             
 void castle_control_collection_detach(collection_id_t collection,
-                                             int *ret)
+                                      int            *ret)
 {
     struct castle_attachment *ca = castle_collection_find(collection);
-    
+
+    spin_lock(&castle_attachments.lock);
+
     if(ca) 
     {
         BUG_ON(collection != ca->col.id);
-        printk("Deleting collection %u (%s, %u)\n", collection, ca->col.name,
-                                ca->version);
+        printk("Deleting Collection Attachment %u (%s, %u)/%u\n", 
+                collection, ca->col.name, ca->version, atomic_read(&ca->ref_cnt));
+        wait_event(castle_control_wait_q, (atomic_read(&ca->ref_cnt) == 0));
         castle_attachments_store_delete(ca->col.name, ca->version);
         castle_collection_free(ca);
     }
+
+    spin_unlock(&castle_attachments.lock);
+
     *ret = (ca ? 0 : -ENODEV);
 }
 
@@ -446,7 +485,6 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 
     down(&castle_control_lock);
     debug("Lock taken: in_atomic=%d.\n", in_atomic());
-    printk("Got IOCTL command %d.\n", ioctl.cmd);
     switch(ioctl.cmd)
     {
         case CASTLE_CTRL_CLAIM:

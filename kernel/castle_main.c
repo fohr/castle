@@ -723,17 +723,14 @@ void castle_release(struct castle_slave *cs)
 
 static int castle_open(struct castle_attachment *dev)
 {
-	down_write(&dev->lock);
-	dev->users++;
-	up_write(&dev->lock);
+    atomic_inc(&dev->ref_cnt);
+
 	return 0;
 }
 
 static int castle_close(struct castle_attachment *dev)
 {
-	down_write(&dev->lock);
-	dev->users--;
-	up_write(&dev->lock);
+    atomic_dec(&dev->ref_cnt);
 
 	return 0;
 }
@@ -1179,6 +1176,7 @@ struct castle_attachment* castle_attachment_init(int device, /* _or_object_colle
     if(!attachment)
         return NULL;
 	init_rwsem(&attachment->lock);
+    atomic_set(&attachment->ref_cnt, 0);
     attachment->device  = device;
     attachment->version = version;
 
@@ -1191,7 +1189,7 @@ void castle_device_free(struct castle_attachment *cd)
     
     castle_events_device_detach(cd->dev.gd->major, cd->dev.gd->first_minor);
 
-    printk("===> When freeing the number of cd users is: %d\n", cd->users);
+    printk("===> When freeing the number of cd users is: %d\n", atomic_read(&cd->ref_cnt));
     castle_sysfs_device_del(cd);
     /* TODO: Should this be done? blk_cleanup_queue(cd->dev.gd->rq); */ 
     del_gendisk(cd->dev.gd);
@@ -1268,7 +1266,12 @@ void castle_collection_free(struct castle_attachment *ca)
     
     castle_events_collection_detach(ca->col.id);
 
-    printk("===> When freeing the number of ca users is: %d\n", ca->users);
+    if (atomic_read(&ca->ref_cnt))
+    {
+        printk("\n===> When freeing the number of ca users is: %u\n", 
+               atomic_read(&ca->ref_cnt));
+        BUG();
+    }
     castle_sysfs_collection_del(ca);
     list_del(&ca->list);
     castle_free(ca->col.name);
@@ -1487,6 +1490,8 @@ static int castle_attachments_init(void)
         printk("Couldn't register castle device\n");
         return -ENOMEM;
     }
+    spin_lock_init(&castle_attachments.lock);
+        
     castle_attachments.major = major;
 
     return 0;

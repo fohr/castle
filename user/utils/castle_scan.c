@@ -5,6 +5,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <string.h>
 
 #include "castle_public.h"
 
@@ -31,46 +32,49 @@ static int castle_fs_superblock_validate(struct castle_fs_superblock_public *fs_
 int main(int argc, char *argv[])
 {
     int    fd, ret;
-    char   fname[128];
     struct castle_slave_superblock cs_sb;
     struct castle_fs_superblock_public fs_sb;
 
     if (argc != 2)
     {
         fprintf(stderr, "Usage: castle-scan <device, e.g. sda3>.\n");
-        return -1;
+        return 2;
     }
 
-    snprintf(fname, 128, "/dev/%s", argv[1]);
-    if ((fd = open(fname, O_RDONLY)) < 0)
     {
-        perror(fname);
-        return -1;
+      int name_len = strlen(argv[1]) + strlen("/dev/") + 1;
+      char fname[name_len];
+      snprintf(fname, name_len, "/dev/%s", argv[1]);
+
+      if ((fd = open(fname, O_RDONLY | O_NOCTTY)) < 0) {
+        fprintf(stderr, "Failed to open %s: %s\n", fname, strerror(errno));
+        return 1;
+      }
     }
 
-    if (read(fd, &cs_sb, sizeof(cs_sb)) < 0)
+    if (read(fd, &cs_sb, sizeof(cs_sb)) != sizeof(cs_sb))
     {
-        perror("Failed to read");
-        return -1;
+        perror("Failed to read cs_sb");
+        return 1;
     }
 
     if ((ret = castle_slave_superblock_validate(&cs_sb)) < 0)
     {
-        fprintf(stderr, "Invalid Disk Superblock: %d\n", ret);
-        return -1;
+        fprintf(stderr, "Invalid Disk Superblock (at %d)\n", -ret);
+        return 1;
     }
 
     lseek(fd, 4096, SEEK_SET);
-    if (read(fd, &fs_sb, sizeof(fs_sb)) < 0)
+    if (read(fd, &fs_sb, sizeof(fs_sb)) != sizeof(fs_sb))
     {
-        perror("Failed to read");
-        return -1;
+        perror("Failed to read fs_sb");
+        return 1;
     }
 
     if (castle_fs_superblock_validate(&fs_sb) < 0)
     {
-        fprintf(stderr, "Invalid File-system Superblock\n");
-        return -1;
+        fprintf(stderr, "Invalid File-system Superblock (at %d)\n", -ret);
+        return 1;
     }
 
     printf("0x%x\n", fs_sb.uuid);

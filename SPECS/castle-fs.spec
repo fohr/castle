@@ -26,6 +26,7 @@ Provides: castle-fs-kmod-common = %{version}
 Provides:       %{name}-%{changesetver}
 
 Requires(pre): shadow-utils
+Requires: castle-cli
 
 %description
 
