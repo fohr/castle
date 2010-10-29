@@ -1490,6 +1490,8 @@ static int castle_attachments_init(void)
         printk("Couldn't register castle device\n");
         return -ENOMEM;
     }
+    spin_lock_init(&castle_attachments.lock);
+        
     castle_attachments.major = major;
 
     return 0;

@@ -907,6 +907,7 @@ struct castle_attachments {
     struct kobject devices_kobj;
     int major;
     struct list_head attachments;
+    spinlock_t     lock;
 };
 
 extern struct castle              castle;
@@ -934,8 +935,9 @@ void                  castle_collection_free       (struct castle_attachment *ca
 struct castle_attachment* 
                       castle_collection_find       (collection_id_t col_id);
 
-void                  castle_collection_get        (struct castle_attachment *ca);
-void                  castle_collection_put        (struct castle_attachment *ca);
+struct castle_attachment *
+                      castle_collection_get        (collection_id_t collection);
+void                  castle_collection_put        (collection_id_t collection);
 
 struct castle_slave*  castle_claim                 (uint32_t new_dev);
 void                  castle_release               (struct castle_slave *cs);
