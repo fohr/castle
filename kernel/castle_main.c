@@ -1354,6 +1354,7 @@ static void castle_slaves_spindown(struct work_struct *work)
             castle_slave_superblock_put(cs, 0);
             continue;
         }
+#ifdef CASTLE_SPINDOWN_DISKS
         /* This slave is spinning, check if there was an access to it within
            the spindown period */
         if((cs->last_access + 5 * HZ < jiffies) &&
@@ -1364,6 +1365,9 @@ static void castle_slaves_spindown(struct work_struct *work)
             castle_events_spindown(cs->uuid);
         } else
             castle_slave_superblock_put(cs, 0);
+#else
+            castle_slave_superblock_put(cs, 0);
+#endif
     }
 }
     
