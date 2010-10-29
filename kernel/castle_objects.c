@@ -1498,6 +1498,7 @@ static void castle_object_pull_continue(struct castle_bio_vec *c_bvec, int err, 
 {
     struct castle_object_pull *pull = c_bvec->c_bio->data;
     
+    castle_object_bkey_free(c_bvec->key);
     castle_utils_bio_free(c_bvec->c_bio);
     
     if(err || CVT_INVALID(cvt) || CVT_TOMB_STONE(cvt))

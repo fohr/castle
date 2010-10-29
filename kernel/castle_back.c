@@ -1323,14 +1323,12 @@ static void castle_back_iter_start(struct castle_back_conn *conn, struct castle_
         err = -EAGAIN;
         goto err2;
     }
-    /* need the lock here as the timer is running */
-    spin_lock(&stateful_op->lock);
+
     stateful_op->tag = CASTLE_RING_ITER_START;
     stateful_op->curr_op = NULL;
     debug_iter("stateful_op->curr_op = %p\n", stateful_op->curr_op);
     stateful_op->last_used_jiffies = jiffies;
     stateful_op->expire = castle_back_iter_expire;
-    spin_unlock(&stateful_op->lock);
 
     stateful_op->iterator.flags = op->req.iter_start.flags;
     stateful_op->iterator.collection_id = op->req.iter_start.collection_id;
@@ -1983,11 +1981,25 @@ static void castle_back_put_chunk(struct castle_back_conn *conn, struct castle_b
        
 err2: castle_back_buffer_put(conn, op->buf);
 err1: castle_back_reply(op, err, 0, 0);
+    stateful_op->expire = castle_back_big_put_expire;
+    stateful_op->last_used_jiffies = jiffies;
 }
 
 /*
  * BIG GET
  */
+
+static void castle_back_big_get_expire(struct castle_back_stateful_op *stateful_op)
+{
+    debug("castle_back_big_get_expire token=%u.\n", stateful_op->token);
+
+    BUG_ON(!spin_is_locked(&stateful_op->lock));
+    BUG_ON(!list_empty(&stateful_op->op_queue));
+    BUG_ON(stateful_op->curr_op != NULL);
+
+    // Will drop stateful_op->lock
+    castle_back_put_stateful_op(stateful_op->conn, stateful_op);
+}
 
 static void castle_back_big_get_do_chunk(struct castle_back_stateful_op *stateful_op)
 {
@@ -2029,6 +2041,9 @@ static void castle_back_big_get_continue(struct castle_object_pull *pull, int er
         return;
     }
     
+    stateful_op->expire = castle_back_big_get_expire;
+    stateful_op->last_used_jiffies = jiffies;
+
     get_continue = castle_back_stateful_op_prod(stateful_op);
     spin_unlock(&stateful_op->lock);
 
@@ -2048,7 +2063,6 @@ static void castle_back_big_get(struct castle_back_conn *conn, struct castle_bac
 
     debug_iter("castle_back_big_get stateful_op=%p\n", stateful_op);
 
-    // TODO should we ref count attachments
     attachment = castle_collection_get(op->req.big_get.collection_id);
     if (attachment == NULL)
     {
@@ -2067,6 +2081,8 @@ static void castle_back_big_get(struct castle_back_conn *conn, struct castle_bac
     stateful_op->tag = CASTLE_RING_BIG_GET;
     stateful_op->curr_op = op;    
     stateful_op->collection_id = op->req.big_get.collection_id;
+    stateful_op->expire = castle_back_big_get_expire;
+    stateful_op->last_used_jiffies = jiffies;
 
     stateful_op->pull.pull_continue = castle_back_big_get_continue;
 
@@ -2088,8 +2104,6 @@ static void castle_back_big_get(struct castle_back_conn *conn, struct castle_bac
         goto err2;
 
     castle_free(key);
-
-    /* TODO: add timeout to cleanup get if client goes away */
 
     return;
 
@@ -2167,6 +2181,8 @@ static void castle_back_get_chunk(struct castle_back_conn *conn, struct castle_b
 
 err2: castle_back_buffer_put(conn, op->buf);
 err1: castle_back_reply(op, err, 0, 0);  
+    stateful_op->expire = castle_back_big_get_expire;
+    stateful_op->last_used_jiffies = jiffies;
 }
 
 /******************************************************************
