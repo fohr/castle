@@ -1032,15 +1032,15 @@ static void castle_back_remove(struct castle_back_conn *conn, struct castle_back
     struct castle_attachment *attachment;
     c_vl_okey_t *key;
     
-    attachment = castle_collection_find(op->req.replace.collection_id);
+    attachment = castle_collection_find(op->req.remove.collection_id);
     if (attachment == NULL)
     {
-        error("Collection not found id=%x\n", op->req.replace.collection_id);
+        error("Collection not found id=%x\n", op->req.remove.collection_id);
         err = -EINVAL;
         goto err0;
     }
 
-    err = castle_back_key_copy_get(conn, op->req.replace.key_ptr, op->req.replace.key_len, &key);
+    err = castle_back_key_copy_get(conn, op->req.remove.key_ptr, op->req.remove.key_len, &key);
     if (err)
         goto err0;
 
