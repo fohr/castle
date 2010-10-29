@@ -27,16 +27,6 @@ static DECLARE_WAIT_QUEUE_HEAD(castle_control_wait_q);
 
 c_mstore_t *castle_attachments_store = NULL;
 
-void castle_control_lock_up()
-{
-    down(&castle_control_lock);
-}
-
-void castle_control_lock_down()
-{
-    up(&castle_control_lock);
-}
-
 void castle_control_claim(uint32_t dev, int *ret, slave_uuid_t *id)
 {
     struct castle_slave *cs;
@@ -310,37 +300,6 @@ int castle_attachments_store_delete(char *name, version_t version)
     return 0;
 }
 
-struct castle_attachment * castle_collection_get(collection_id_t collection)
-{
-    struct castle_attachment *ca;
-
-    spin_lock(&castle_attachments.lock);
-
-    ca = castle_collection_find(collection);
-    if (ca)
-        atomic_inc(&ca->ref_cnt);
-
-    spin_unlock(&castle_attachments.lock);
-
-    return ca;
-}
-
-void castle_collection_put(collection_id_t collection)
-{
-    struct castle_attachment *ca;
-
-    spin_lock(&castle_attachments.lock);
-
-    ca = castle_collection_find(collection);
-    if (ca)
-    {
-        atomic_dec(&ca->ref_cnt);
-        wake_up(&castle_control_wait_q);
-    }
-
-    spin_unlock(&castle_attachments.lock);
-}
-
 void castle_control_collection_attach(version_t          version,
                                       char              *name,
                                       int               *ret,
@@ -365,30 +324,32 @@ void castle_control_collection_attach(version_t          version,
 void castle_control_collection_detach(collection_id_t collection,
                                       int            *ret)
 {
-    struct castle_attachment *ca = castle_collection_find(collection);
-
-    spin_lock(&castle_attachments.lock);
-
-    if(ca) 
+    struct castle_attachment *ca = castle_collection_get(collection);
+    if (!ca)
     {
-        BUG_ON(collection != ca->col.id);
-        printk("Deleting Collection Attachment %u (%s, %u)/%u\n", 
-                collection, ca->col.name, ca->version, atomic_read(&ca->ref_cnt));
-        wait_event(castle_control_wait_q, (atomic_read(&ca->ref_cnt) == 0));
-        castle_attachments_store_delete(ca->col.name, ca->version);
-        castle_collection_free(ca);
+        *ret = -ENODEV;
+        return;
     }
 
+    printk("Deleting Collection Attachment %u (%s, %u)/%u\n", 
+            collection, ca->col.name, ca->version, ca->ref_cnt);
+
+    spin_lock(&castle_attachments.lock);
+    castle_attachments_store_delete(ca->col.name, ca->version);
     spin_unlock(&castle_attachments.lock);
 
-    *ret = (ca ? 0 : -ENODEV);
+    /* Double put is opposite of what happens in collection_init */
+    castle_collection_put(ca);
+    castle_collection_put(ca);
+
+    *ret = 0;
 }
 
 void castle_control_collection_snapshot(collection_id_t collection,
                                                int *ret,
                                                version_t *version)
 {
-    struct castle_attachment *ca = castle_collection_find(collection);
+    struct castle_attachment *ca = castle_collection_get(collection);
     version_t ver, old_version;
 
     if(!ca)
@@ -422,6 +383,7 @@ void castle_control_collection_snapshot(collection_id_t collection,
     up_write(&ca->lock);
     
     castle_events_collection_snapshot(ver, ca->col.id);
+    castle_collection_put(ca);
 }
             
 void castle_control_set_target(slave_uuid_t slave_uuid, int value, int *ret)
