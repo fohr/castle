@@ -2026,6 +2026,8 @@ static void castle_back_big_get_continue(struct castle_object_pull *pull, int er
     BUG_ON(stateful_op->curr_op->req.tag != CASTLE_RING_GET_CHUNK 
         && stateful_op->curr_op->req.tag != CASTLE_RING_BIG_GET);
     
+    if (stateful_op->curr_op->req.tag == CASTLE_RING_GET_CHUNK)
+        castle_back_buffer_put(stateful_op->conn, stateful_op->curr_op->buf);
     castle_back_reply(stateful_op->curr_op, err, stateful_op->token, length);
 
     spin_lock(&stateful_op->lock);
