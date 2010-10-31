@@ -93,7 +93,7 @@ castle_extent_sup_ext_init(struct castle_slave      *cs);
 void 
 castle_extent_sup_ext_close(struct castle_slave     *cs);
 
-void 
+int 
 castle_extents_load(int first);
 
 #endif //__CASTLE_EXTENT_H__

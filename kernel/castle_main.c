@@ -177,9 +177,19 @@ int castle_ext_fs_init(c_ext_fs_t       *ext_fs,
     atomic64_set(&ext_fs->used, 0);
     atomic64_set(&ext_fs->blocked, 0);
 
-    if (ext_fs->ext_id == INVAL_EXT_ID)
-        return -1;
+    if (EXT_ID_INVAL(ext_fs->ext_id))
+        return -ENOSPC;
     return 0;
+}
+
+void castle_ext_fs_fini(c_ext_fs_t      *ext_fs)
+{
+    castle_extent_free(ext_fs->ext_id);
+    ext_fs->ext_id      = INVAL_EXT_ID;
+    ext_fs->ext_size    = 0;
+    ext_fs->align       = 0;
+    atomic64_set(&ext_fs->used, 0);
+    atomic64_set(&ext_fs->blocked, 0);
 }
 
 int castle_ext_fs_pre_alloc(c_ext_fs_t       *ext_fs,
@@ -323,7 +333,8 @@ int castle_fs_init(void)
     }
 
     /* Load extent structures into memory */
-    castle_extents_load(first);
+    if ((ret = castle_extents_load(first)))
+        return ret;
 
     /* Init the fs superblock */
     if (first) castle_fs_superblocks_init();
@@ -343,14 +354,23 @@ int castle_fs_init(void)
         atomic64_set(&(castle_global_tree.node_count), 0);
         init_rwsem(&castle_global_tree.lock);
 
-        BUG_ON(castle_ext_fs_init(&castle_global_tree.tree_ext_fs,
-                                  castle_global_tree.da,
-                                  castle_global_tree.tree_ext_fs.ext_size,
-                                  btree->node_size * C_BLK_SIZE) < 0);
-        BUG_ON(castle_ext_fs_init(&castle_global_tree.data_ext_fs,
-                                  castle_global_tree.da,
-                                  castle_global_tree.data_ext_fs.ext_size,
-                                  C_BLK_SIZE) < 0);
+        if ((ret = castle_ext_fs_init(&castle_global_tree.tree_ext_fs,
+                                      castle_global_tree.da,
+                                      castle_global_tree.tree_ext_fs.ext_size,
+                                      btree->node_size * C_BLK_SIZE)) < 0)
+        {
+            printk("Failed to allocate space for Global Tree.\n");
+            return ret;
+        }
+            
+        if ((ret = castle_ext_fs_init(&castle_global_tree.data_ext_fs,
+                                      castle_global_tree.da,
+                                      castle_global_tree.data_ext_fs.ext_size,
+                                      C_BLK_SIZE)) < 0)
+        {
+            printk("Failed to allocate space for Global Tree Medium Objects.\n");
+            return ret;
+        }
 
         c2b = castle_btree_node_create(0 /* version */, 1 /* is_leaf */, &castle_global_tree, 0);
         castle_btree_node_save_prepare(&castle_global_tree, c2b->cep);
@@ -957,7 +977,7 @@ static void castle_bio_data_io_do(c_bvec_t *c_bvec, c_ext_pos_t cep)
     }
 }
 
-static void castle_bio_data_cvt_get(c_bvec_t    *c_bvec,
+static int castle_bio_data_cvt_get(c_bvec_t    *c_bvec,
                                     c_val_tup_t  prev_cvt,
                                     c_val_tup_t *cvt)
 {
@@ -970,7 +990,7 @@ static void castle_bio_data_cvt_get(c_bvec_t    *c_bvec,
     {
         BUG_ON(!CVT_ONE_BLK(prev_cvt));
         *cvt = prev_cvt;
-        return;
+        return 0;
     }
 
     /* Otherwise, allocate a new out-of-line block */
@@ -978,6 +998,8 @@ static void castle_bio_data_cvt_get(c_bvec_t    *c_bvec,
                              C_BLK_SIZE,
                              0, &cep) < 0);
     CVT_MEDIUM_OBJECT_SET(*cvt, C_BLK_SIZE, cep);
+
+    return 0;
 }
 
 static void castle_bio_data_io_end(c_bvec_t     *c_bvec, 

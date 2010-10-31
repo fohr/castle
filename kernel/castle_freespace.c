@@ -58,7 +58,18 @@ c_chk_seq_t castle_freespace_slave_chunks_alloc(struct castle_slave    *cs,
 
     freespace = freespace_sblk_get(cs);
 
-    BUG_ON(freespace->cons == freespace->prod);
+    if (freespace->cons == freespace->prod)
+    {
+        if (freespace->free_chk_cnt)
+        {
+            printk("Inconsistant Freespace structures - %u:%u - %u\n", 
+                    freespace->cons, freespace->prod, freespace->free_chk_cnt);
+            BUG();
+        }
+
+        freespace_sblk_put(cs, 0);
+        return INVAL_CHK_SEQ;
+    }
 
     cons_off   = FREESPACE_OFFSET + C_BLK_SIZE + freespace->cons * sizeof(c_chk_seq_t);
     cep.ext_id = cs->sup_ext;
@@ -226,4 +237,20 @@ void castle_freespace_summary_get(struct castle_slave *cs,
 void castle_freespace_slave_close(struct castle_slave *cs)
 {
     debug("Closed the module\n");
+}
+
+void castle_freespace_stats_print(void)
+{
+    struct list_head *lh;
+    struct castle_slave *slave;
+    castle_freespace_t  *freespace;
+
+    printk("Freespace stats: \n");
+    list_for_each(lh, &castle_slaves.slaves)
+    {
+        slave = list_entry(lh, struct castle_slave, list);
+        freespace = freespace_sblk_get(slave);
+        printk("\tDisk (0x%x) -> %u\n", slave->uuid, freespace->free_chk_cnt);
+        freespace_sblk_put(slave, 0);
+    }
 }

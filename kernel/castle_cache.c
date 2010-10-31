@@ -2905,10 +2905,11 @@ void castle_mstore_fini(struct castle_mstore *store)
 int castle_mstores_create(void)
 {
     struct castle_fs_superblock *fs_sb;
+    int ret;
 
     BUG_ON(mstore_init_done);
-    if (castle_ext_fs_init(&mstore_ext_fs, 0, (1024 * C_CHK_SIZE), C_BLK_SIZE) < 0)
-        return -EINVAL;
+    if ((ret = castle_ext_fs_init(&mstore_ext_fs, 0, (1024 * C_CHK_SIZE), C_BLK_SIZE)))
+        return ret;
 
     fs_sb = castle_fs_superblocks_get();
     castle_ext_fs_marshall(&mstore_ext_fs, &fs_sb->mstore_ext_fs_bs);

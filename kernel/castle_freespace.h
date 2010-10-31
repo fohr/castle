@@ -33,4 +33,6 @@ void castle_freespace_slave_chunk_free(struct castle_slave  *cs,
                                        c_chk_seq_t           chk_seq);
 
 void castle_freespace_print(struct castle_slave *cs);
+
+void castle_freespace_stats_print(void);
 #endif // __DEV_FREESPACE_H__

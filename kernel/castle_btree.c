@@ -2095,7 +2095,12 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
        (btree->key_compare(lub_key, key) != 0) || 
        (lub_version != version))
     {
-        c_bvec->cvt_get(c_bvec, INVAL_VAL_TUP, &new_cvt);
+        if ((ret = c_bvec->cvt_get(c_bvec, INVAL_VAL_TUP, &new_cvt)))
+        {
+            /* End the IO in failure */
+            castle_btree_io_end(c_bvec, INVAL_VAL_TUP, ret);
+            return;
+        }
 
         atomic64_inc(&c_bvec->tree->item_count);
         /* TODO: should memset the page to zero (because we return zeros on reads)
@@ -2120,7 +2125,12 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
     BUG_ON(CVT_LEAF_PTR(lub_cvt));
 
     /* NOP for block devices */
-    c_bvec->cvt_get(c_bvec, lub_cvt, &new_cvt);
+    if ((ret = c_bvec->cvt_get(c_bvec, lub_cvt, &new_cvt)))
+    {
+       /* End the IO in failure */
+       castle_btree_io_end(c_bvec, INVAL_VAL_TUP, ret);
+       return;
+    }
     BUG_ON(CVT_LEAF_PTR(new_cvt));
     btree->entry_replace(node, lub_idx, key, lub_version,
                          new_cvt);

@@ -583,7 +583,7 @@ typedef struct castle_bio_vec {
     /* Used to thread this bvec onto a workqueue */
     struct work_struct               work;
     /* Value tuple allocation callback */
-    void                           (*cvt_get)    (struct castle_bio_vec *, 
+    int                            (*cvt_get)    (struct castle_bio_vec *, 
                                                   c_val_tup_t,
                                                   c_val_tup_t *);
     /* Completion callback */
@@ -961,6 +961,8 @@ int                   castle_ext_fs_init           (c_ext_fs_t       *ext_fs,
                                                     c_byte_off_t      size,
                                                     uint32_t          align);
 
+void                  castle_ext_fs_fini           (c_ext_fs_t       *ext_fs);
+
 int                   castle_ext_fs_pre_alloc      (c_ext_fs_t       *ext_fs,
                                                     c_byte_off_t      size);
 
@@ -1070,5 +1072,7 @@ typedef struct castle_object_iterator {
     void               *data;
     struct work_struct  work;
 } castle_object_iterator_t;
+
+extern int low_disk_space;
 
 #endif /* __CASTLE_H__ */

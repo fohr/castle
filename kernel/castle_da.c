@@ -1727,6 +1727,11 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
         castle_ct_put(merge->in_tree1, 0);
         castle_ct_put(merge->in_tree2, 0);
     }
+    else
+    {
+        castle_ext_fs_fini(&merge->tree_ext_fs);
+        castle_ext_fs_fini(&merge->data_ext_fs);
+    }
     castle_free(merge->merged_iter);
     castle_free(merge);
 }
@@ -1838,21 +1843,32 @@ static void castle_da_merge_schedule(struct castle_double_array *da,
         merge->levels[i].valid_end_idx = -1; 
         merge->levels[i].valid_version = INVAL_VERSION;  
     }
+    merge->tree_ext_fs.ext_id = INVAL_EXT_ID;
+    merge->data_ext_fs.ext_id = INVAL_EXT_ID;
+
     /* Allocate an extent for merged tree for the size equal to sum of both the
      * trees. */
     size = (atomic64_read(&in_tree1->tree_ext_fs.used) +
                   atomic64_read(&in_tree2->tree_ext_fs.used));
     BUG_ON(size % (btree->node_size * C_BLK_SIZE));
     size = MASK_CHK_OFFSET(size + C_CHK_SIZE);
-    BUG_ON(castle_ext_fs_init(&merge->tree_ext_fs, da->id, size,
-                              (btree->node_size * C_BLK_SIZE)) < 0);
+    if ((ret = castle_ext_fs_init(&merge->tree_ext_fs, da->id, size,
+                                  (btree->node_size * C_BLK_SIZE))))
+    {
+        printk("Merge failed due to space constraint\n");
+        goto error_out;
+    }
 
     /* Allocate an extent for medium objects of merged tree for the size equal to 
      * sum of both the trees. */
     size = (atomic64_read(&in_tree1->data_ext_fs.used) +
                   atomic64_read(&in_tree2->data_ext_fs.used));
     size = MASK_CHK_OFFSET(size + C_CHK_SIZE);
-    BUG_ON(castle_ext_fs_init(&merge->data_ext_fs, da->id, size, C_BLK_SIZE) < 0);
+    if ((ret = castle_ext_fs_init(&merge->data_ext_fs, da->id, size, C_BLK_SIZE)))
+    {
+        printk("Merge failed due to space constraint\n");
+        goto error_out;
+    }
 
     CASTLE_INIT_WORK(&merge->work, castle_da_merge_do);
     queue_work(castle_merge_wq, &merge->work);
@@ -2004,8 +2020,11 @@ void castle_ct_put(struct castle_component_tree *ct, int write)
     castle_ct_hash_remove(ct);
     /* TODO: FREE */
     printk("Should release freespace occupied by ct=%d\n", ct->seq);
-    castle_extent_free(ct->tree_ext_fs.ext_id);
-    castle_extent_free(ct->data_ext_fs.ext_id);
+    if (!EXT_ID_INVAL(ct->tree_ext_fs.ext_id))
+        castle_extent_free(ct->tree_ext_fs.ext_id);
+    if (!EXT_ID_INVAL(ct->data_ext_fs.ext_id))
+        castle_extent_free(ct->data_ext_fs.ext_id);
+
     /* Poison ct (note this will be repoisoned by kfree on kernel debug build. */
     memset(ct, 0xde, sizeof(struct castle_component_tree));
     castle_free(ct);
@@ -2318,6 +2337,8 @@ static struct castle_component_tree* castle_ct_alloc(struct castle_double_array 
     INIT_LIST_HEAD(&ct->hash_list);
     castle_ct_hash_add(ct);
     ct->mstore_key  = INVAL_MSTORE_KEY; 
+    ct->tree_ext_fs.ext_id = INVAL_EXT_ID;
+    ct->data_ext_fs.ext_id = INVAL_EXT_ID;
 
     return ct;
 }
@@ -2338,14 +2359,17 @@ static int castle_da_rwct_make(struct castle_double_array *da)
 
     btree = castle_btree_type_get(ct->btree_type);
     size = MASK_CHK_OFFSET((MAX_DYNAMIC_TREE_SIZE * max_entry_length) + ((2 * MAX_BTREE_DEPTH + 1) * btree->node_size * C_BLK_SIZE) + (2 * C_CHK_SIZE));
-    BUG_ON(castle_ext_fs_init(&ct->tree_ext_fs, 
-                              da->id, 
-                              size, 
-                              btree->node_size * C_BLK_SIZE) < 0);
-    BUG_ON(castle_ext_fs_init(&ct->data_ext_fs, 
-                              da->id, 
-                              size,
-                              C_BLK_SIZE) < 0);
+    if ((ret = castle_ext_fs_init(&ct->tree_ext_fs, 
+                                  da->id, 
+                                  size, 
+                                  btree->node_size * C_BLK_SIZE)))
+        goto error;
+
+    if ((ret = castle_ext_fs_init(&ct->data_ext_fs, 
+                                  da->id, 
+                                  size,
+                                  C_BLK_SIZE)))
+        goto error;
 
     /* Create a root node for this tree, and update the root version */
     c2b = castle_btree_node_create(0, 1 /* is_leaf */, ct, 0);
@@ -2371,7 +2395,11 @@ static int castle_da_rwct_make(struct castle_double_array *da)
     castle_da_merge_check(da);
     castle_da_unlock(da);
     ret = 0;
+    goto out;
 
+error:
+    if (ct)
+        castle_ct_put(ct, 0);
 out:
     castle_da_growing_rw_clear(da);
     return ret;
@@ -2482,14 +2510,21 @@ static void castle_da_bvec_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cvt)
     callback(c_bvec, err, cvt);
 }
 
-void castle_double_array_find(c_bvec_t *c_bvec)
+int castle_double_array_find(c_bvec_t *c_bvec)
 {
     struct castle_attachment *att = c_bvec->c_bio->attachment;
     struct castle_component_tree *ct;
     struct castle_double_array *da;
     da_id_t da_id; 
-    int write;
+    int write, ret = 0;
     
+    write = (c_bvec_data_dir(c_bvec) == WRITE);
+    if (write && low_disk_space)
+    {
+        printk("Not enough space to handle writes\n");
+        return -ENOSPC;
+    }
+
     down_read(&att->lock);
     /* Since the version is attached, it must be found */
     BUG_ON(castle_version_read(att->version, &da_id, NULL, NULL, NULL));
@@ -2500,7 +2535,6 @@ void castle_double_array_find(c_bvec_t *c_bvec)
     /* da_endfind should be null it is for our privte use */
     BUG_ON(c_bvec->da_endfind);
     
-    write = (c_bvec_data_dir(c_bvec) == WRITE);
     debug_verbose("Doing DA %s for da_id=%d, for version=%d\n", 
                   write ? "write" : "read", da_id, att->version);
     BUG_ON(atomic_read(&c_bvec->reserv_nodes) != 0);
@@ -2537,7 +2571,12 @@ __new_ct:
                     debug("Number of items in component tree: %d greater than %d (%ld). "
                           "Adding a new rwct.\n",
                             ct->seq, MAX_DYNAMIC_TREE_SIZE, atomic64_read(&ct->item_count));
-                    castle_da_rwct_make(da);
+                    if ((ret = castle_da_rwct_make(da)))
+                    {
+                        printk("Failed to create new T0\n");
+                        return ret;
+                    }
+
                 }
                 castle_ct_put(ct, write);
                 goto __again;
@@ -2554,6 +2593,8 @@ __new_ct:
     castle_request_timeline_checkpoint_start(c_bvec->timeline);
     debug_verbose("Looking up in ct=%d\n", c_bvec->tree->seq); 
     castle_btree_find(c_bvec);
+
+    return 0;
 }
 
 int castle_double_array_create(void)

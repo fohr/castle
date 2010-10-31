@@ -157,11 +157,16 @@ static inline void _prefix##_rhash_remove(_struct *v)                           
     spin_lock_irqsave(&_prefix##_hash_lock, flags);                                  \
     printk("Waiting to delete ext: %llu|ref:%u\n", v->ext_id,                        \
                                             atomic_read(&v->_ref_mbr));              \
-    wait_event(_prefix##_wait_q, (atomic_read(&v->_ref_mbr) == 0));                  \
+    while (atomic_read(&v->_ref_mbr) != 0)                                           \
+    {                                                                                \
+        spin_unlock_irqrestore(&_prefix##_hash_lock, flags);                         \
+        wait_event(_prefix##_wait_q, (atomic_read(&v->_ref_mbr) == 0));              \
+        spin_lock_irqsave(&_prefix##_hash_lock, flags);                              \
+    }                                                                                \
     list_del(&v->_list_mbr);                                                         \
+    printk("Deleted extent: %llu\n", v->ext_id);                                     \
     spin_unlock_irqrestore(&_prefix##_hash_lock, flags);                             \
 }                                                                                    \
-                                                                                     \
 
 static inline uint32_t BUF_L_GET(const char *buf)
 {

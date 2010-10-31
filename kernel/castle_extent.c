@@ -38,6 +38,8 @@
 #define EXTENTS_MAGIC1  0xABABABAB
 #define EXTENTS_MAGIC2  0xCDCDCDCD
 
+int low_disk_space = 0;
+
 struct castle_extents_t {
     uint32_t        magic1;
     uint32_t        magic2;
@@ -338,7 +340,8 @@ void __castle_extents_fini(void)
 void castle_extents_fini(void)
 {
     /* Destroy micro extent map. */
-    castle_extent_micro_maps_destroy();
+    if (extent_init_done)
+        castle_extent_micro_maps_destroy();
     /* Make sure cache flushed all dirty pages */
     castle_extents_hash_iterate(castle_extent_hash_remove, NULL);
     castle_free(castle_extents_hash);
@@ -403,9 +406,8 @@ int castle_extent_space_alloc(c_ext_t *ext, da_id_t da_id)
             else 
             {
                 BUG_ON(ext->ext_id == META_EXT_ID);
-                chk_buf[id] = castle_freespace_slave_chunks_alloc(cs, 
-                                            da_id, 1);
-                if (!chk_buf[id].count)
+                chk_buf[id] = castle_freespace_slave_chunks_alloc(cs, da_id, 1);
+                if (CHK_SEQ_INVAL(chk_buf[id]))
                 {
                     debug("Failed to allocate chunks from slave: %u\n",
                             cs->uuid);
@@ -418,7 +420,11 @@ int castle_extent_space_alloc(c_ext_t *ext, da_id_t da_id)
                         chk_buf[id].count++;
                     }
                     i--;
-                    break;
+                    /* TODO: Free the space allocated back to disks. */
+                    rda_spec->extent_fini(ext->ext_id, state);
+                    vfree(maps_buf);
+                    low_disk_space = 1;
+                    return -1;
                 }
                 maps_buf[idx].offset = chk_buf[id].first_chk;
                 if (--chk_buf[id].count)
@@ -462,12 +468,20 @@ c_ext_id_t castle_extent_alloc(c_rda_type_t            rda_type,
                                da_id_t                 da_id,
                                c_chk_cnt_t             count)
 {
-    c_ext_t                 *ext;
+    c_ext_t                 *ext = NULL;
     c_rda_spec_t            *rda_spec = castle_rda_spec_get(rda_type);
     struct castle_extents_t *castle_extents_sb = NULL;
 
     BUG_ON(!extent_init_done);
     BUG_ON(count >= MAX_EXT_SIZE);
+
+    if (low_disk_space)
+        goto __hell;
+
+#ifdef DEBUG
+    castle_freespace_stats_print();
+#endif
+    debug("Creating extent of size: %u\n", count);
     ext = castle_zalloc(sizeof(c_ext_t), GFP_KERNEL);
     if (!ext)
     {
@@ -476,7 +490,7 @@ c_ext_id_t castle_extent_alloc(c_rda_type_t            rda_type,
     }
     castle_extents_sb   = castle_extents_get_sb();
 
-    ext->ext_id         = castle_extents_sb->ext_id_seq++;
+    ext->ext_id         = castle_extents_sb->ext_id_seq;
     ext->size           = count;
     ext->type           = rda_type;
     ext->k_factor       = rda_spec->k_factor;
@@ -485,15 +499,14 @@ c_ext_id_t castle_extent_alloc(c_rda_type_t            rda_type,
     BUG_ON(BLOCK_OFFSET(castle_extents_sb->next_free_byte));
     ext->maps_cep.ext_id= META_EXT_ID;
     ext->maps_cep.offset= castle_extents_sb->next_free_byte;
-   
+  
+    /* TODO: Use castle_ext_fs_X functions. */
     castle_extents_sb->next_free_byte += (sizeof(c_disk_chk_t) * count * 
                                                             rda_spec->k_factor);
     if (BLOCK_OFFSET(castle_extents_sb->next_free_byte))
         castle_extents_sb->next_free_byte =
                     MASK_BLK_OFFSET(castle_extents_sb->next_free_byte + C_BLK_SIZE);
     BUG_ON(castle_extents_sb->next_free_byte > (meta_ext.size * C_CHK_SIZE));
-    castle_extents_sb->nr_exts++;
-    castle_extents_put_sb(1);
 
     if (castle_extent_space_alloc(ext, da_id) < 0)
     {
@@ -504,12 +517,18 @@ c_ext_id_t castle_extent_alloc(c_rda_type_t            rda_type,
     /* Add extent to hash table */
     castle_extents_rhash_add(ext);
     castle_extent_print(ext, NULL);
+    
+    castle_extents_sb->nr_exts++;
+    castle_extents_sb->ext_id_seq++;
+    castle_extents_put_sb(1);
 
     return ext->ext_id;
 
 __hell:
     if (ext)
         castle_free(ext);
+    if (castle_extents_sb)
+        castle_extents_put_sb(1);
 
     return INVAL_EXT_ID;
 }
@@ -524,13 +543,16 @@ void castle_extent_free(c_ext_id_t ext_id)
     c_ext_pos_t                  cep;
     c2_block_t                  *c2b = NULL;
 
+    if (EXT_ID_INVAL(ext_id))
+        return;
+
     ext = castle_extents_rhash_get(ext_id);
     if (!ext)
         return;
 
     /* Remove extent from hash table */
     castle_extents_rhash_put(ext);
-    castle_extents_hash_remove(ext);
+    castle_extents_rhash_remove(ext);
     printk("Removed extent %llu from hash\n", ext_id);
     req_space = (sizeof(c_disk_chk_t) * ext->size * ext->k_factor);
     maps_buf = vmalloc(req_space);
@@ -735,7 +757,7 @@ static void castle_extents_super_block_init(struct castle_extents_t *castle_exte
     castle_extents_sb->next_free_byte = EXT_ST_SIZE * C_CHK_SIZE;
 }
 
-void castle_extents_load(int first)
+int castle_extents_load(int first)
 {
     struct list_head *l;
     c2_block_t *c2b;
@@ -744,6 +766,7 @@ void castle_extents_load(int first)
     struct castle_extents_t *castle_extents_sb = NULL;
     uint32_t exts_per_pg;
     c_ext_t *extents = NULL;
+    int ret = 0;
 
     BUG_ON(extent_init_done);
     
@@ -777,7 +800,15 @@ void castle_extents_load(int first)
         /* Allocate freespace for meta extent with K-RDA just like usual
          * extents. Except that, the space for meta extent is taken from
          * META_SPACE_START of each disk. */
-        castle_extent_space_alloc(&meta_ext, 0);
+        if ((ret = castle_extent_space_alloc(&meta_ext, 0)))
+        {
+            printk("Meta Extent Allocation Failed\n");
+            castle_extents_rhash_remove(&meta_ext);
+            castle_extents_rhash_remove(&micro_ext);
+            castle_extent_micro_maps_destroy();
+
+            return ret;
+        }
     }
     debug("Done with intialization of meta extent mappings\n");
 
@@ -840,6 +871,8 @@ void castle_extents_load(int first)
     castle_extents_put_sb(1);
     extent_init_done = 1;
     debug("Loaded %llu extents from disk\n", castle_extents_sb->nr_exts);
+
+    return 0;
 }
 
 c_ext_id_t castle_extent_sup_ext_init(struct castle_slave *cs)
