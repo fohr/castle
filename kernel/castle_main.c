@@ -1336,6 +1336,8 @@ struct castle_attachment* castle_collection_init(version_t version, char *name)
     da_id_t da_id;
     int err;
 
+    BUG_ON(strlen(name) > MAX_NAME_SIZE);
+
     collection = castle_attachment_init(0, version, &da_id, NULL, NULL); 
     if(!collection)
         goto error_out;

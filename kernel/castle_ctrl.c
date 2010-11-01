@@ -277,6 +277,8 @@ int castle_attachments_store_find(char *name)
 int castle_attachments_store_add(char *name, version_t version)
 {
     struct castle_alist_entry mstore_entry;
+    
+    BUG_ON(strlen(name) > MAX_NAME_SIZE);
 
     mstore_entry.version = version;
     debug("Collection add: %s\n", name);
@@ -306,6 +308,8 @@ void castle_control_collection_attach(version_t          version,
                                       collection_id_t   *collection)
 {
     struct castle_attachment *ca;
+
+    BUG_ON(strlen(name) > MAX_NAME_SIZE);
 
     ca = castle_collection_init(version, name);
     if(!ca)
@@ -478,24 +482,40 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 
         case CASTLE_CTRL_COLLECTION_ATTACH:
         {
-            char *collection_name = castle_malloc(ioctl.collection_attach.name_length, GFP_KERNEL);
+            char *collection_name;
+            int name_length = ioctl.collection_attach.name_length;
+            
+            if (name_length > MAX_NAME_SIZE)
+            {
+                err = -EINVAL;
+                goto err;
+            }
+
+            collection_name = castle_malloc(name_length, GFP_KERNEL);
 
             if (!collection_name)
             {
+                castle_free(collection_name);
                 err = -ENOMEM;
                 goto err;
             }
             
             if (copy_from_user(collection_name, ioctl.collection_attach.name, 
-                ioctl.collection_attach.name_length))
+                name_length))
             {
+                castle_free(collection_name);
                 err = -EFAULT;
                 goto err;
             }
+            
+            if (collection_name[name_length - 1] != '\0')
+            {
+                castle_free(collection_name);
+                err = -EINVAL;
+                goto err;
+            }
         
-            collection_name[ioctl.collection_attach.name_length-1] = '\0';
-            debug("Collection Attach: %s:%lu\n", collection_name, 
-                                                ioctl.collection_attach.name_length);
+            debug("Collection Attach: %s:%lu\n", collection_name, name_length);
             castle_control_collection_attach(ioctl.collection_attach.version,
                                             collection_name,
                                             &ioctl.collection_attach.ret,
