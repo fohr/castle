@@ -165,6 +165,9 @@ static c_vl_bkey_t* castle_object_btree_key_construct(c_vl_bkey_t *src_bkey,
 /* Converts 'object key' (i.e. multidimensional key) to btree key (single dimensional) */
 c_vl_bkey_t* castle_object_key_convert(c_vl_okey_t *obj_key)
 {
+    if (obj_key->nr_dims == 0)
+        return NULL;
+
     return castle_object_btree_key_construct(NULL, obj_key, 0);
 }
 

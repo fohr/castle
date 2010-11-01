@@ -800,6 +800,13 @@ static int castle_back_key_copy_get(struct castle_back_conn *conn, c_vl_okey_t *
         goto err2;
     }
 
+    if (key->nr_dims == 0)
+    {
+        error("Zero-dimensional key\n");
+        err = -EINVAL;
+        goto err2;
+    }
+
     debug("Original key pointer %p\n", user_key);
 
     /* translate pointers in the key to be valid in kernelspace */
