@@ -780,6 +780,8 @@ static int submit_c2b_rda(int rw, c2_block_t *c2b)
         /* We have to submit the IO here if last_chk is valid (either because we 
            moved chunks, or because we've run out of space in the io_array). */
             
+        debug("Submitting io array, # pages=%d.\n", io_pages_idx);
+        submit_c2b_io_array(rw, c2b, cep, chunks, k_factor, io_pages, io_pages_idx);
         /* Update chunk map as soon as we move to a new chunk. */ 
         if(cur_chk != last_chk)
         {
@@ -801,13 +803,13 @@ static int submit_c2b_rda(int rw, c2_block_t *c2b)
             
             debug("chunks[0]="disk_chk_fmt_nl, disk_chk2str(chunks[0]));
         }
-        submit_c2b_io_array(rw, c2b, cep, chunks, k_factor, io_pages, io_pages_idx);
 
         /* The current page hasn't been saved in the io_pages array yet, do that, and
            reset all the other vars. */ 
         io_pages_idx = 0;
         if(!skip_c2p)
         {
+            debug("Not skipping.\n");
             cep = cur_cep; 
             last_chk = cur_chk;
             io_pages[0] = page;

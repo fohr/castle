@@ -704,9 +704,6 @@ static int castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
             }
             else 
             {
-                /* Arbitrary limits on the size of the objets (freespace code 
-                 * cannot handle huge objects ATM) */
-                BUG_ON(nr_blocks > 100); 
                 cep.ext_id = castle_extent_alloc(DEFAULT, c_bvec->tree->da, 
                                                  nr_chunks);
                 cep.offset = 0;
@@ -833,11 +830,8 @@ static int castle_object_data_write(struct castle_object_replace *replace)
 
         data_length     -= copy_length;
         data_c2b_offset += copy_length;
-        /* For last copy more bytes might have been pulled, work out how many */
-        if(last_copy)
-            copy_length += (copy_length % 4 == 0 ? 0 : 4 - copy_length % 4);
-        debug("Read %d bytes from the packet.\n", copy_length);
         packet_length   -= copy_length;
+        debug("Read %d bytes from the packet.\n", copy_length);
 
 
         /* Allocate a new buffer if there will be more data (either in the current

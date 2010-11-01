@@ -85,16 +85,20 @@ void vl_key_print(c_vl_key_t *vl_key)
 
 void vl_okey_print(c_vl_okey_t *key)
 {
-    int i, j;
 #define NR_BYTES_PRINT  15
+    int i, j;
+    char key_str[2*NR_BYTES_PRINT+1];
 
-    printk("# key dimensions: %d, key array=%p\n", key->nr_dims, key);
+    printk("# key dimensions: %d\n", key->nr_dims);
     for(i=0; i<key->nr_dims; i++)
     {
-        printk(" dim[%.2d], %p, length=%.3d, first %d bytes: ", i, key->dims[i], key->dims[i]->length, NR_BYTES_PRINT);
         for(j=0; j<NR_BYTES_PRINT && j<key->dims[i]->length; j++)
-            printk("%.2x", key->dims[i]->key[j]);
-        printk("\n");
+            sprintf(key_str + 2*j, "%.2x", key->dims[i]->key[j]);
+        printk(" dim[%.2d], len=%.3d, first %d bytes: %s\n", 
+            i, 
+            key->dims[i]->length, 
+            NR_BYTES_PRINT,
+            key_str);
     }
 }
 
