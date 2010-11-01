@@ -17,6 +17,7 @@ version_t    castle_version_new         (int snap_or_clone,
                                          version_t parent, 
                                          da_id_t da, 
                                          uint32_t size);
+int          castle_version_tree_delete (version_t version);
 
 int          castle_versions_read       (void);
 int          castle_versions_init       (void);

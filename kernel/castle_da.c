@@ -9,6 +9,7 @@
 #include "castle_time.h"
 #include "castle_versions.h"
 #include "castle_extent.h"
+#include "castle_ctrl.h"
 
 //#define DEBUG
 #ifndef DEBUG
@@ -59,6 +60,8 @@ static int                      castle_da_exiting    = 0;
 #define DOUBLE_ARRAY_GROWING_RW_TREE_FLAG   (1 << DOUBLE_ARRAY_GROWING_RW_TREE_BIT)
 #define DOUBLE_ARRAY_MERGING_BIT            (1)
 #define DOUBLE_ARRAY_MERGING_FLAG           (1 << DOUBLE_ARRAY_MERGING_BIT)
+#define DOUBLE_ARRAY_DESTROY_BIT            (2)
+#define DOUBLE_ARRAY_DESTROY_FLAG           (1 << DOUBLE_ARRAY_DESTROY_BIT)
 struct castle_double_array {
     da_id_t          id;
     version_t        root_version;
@@ -69,6 +72,8 @@ struct castle_double_array {
     struct list_head trees[MAX_DA_LEVEL];
     struct list_head hash_list;
     c_mstore_key_t   mstore_key;
+    uint32_t         att_ref_cnt;
+    uint32_t         da_ref_cnt;
 };
 
 DEFINE_HASH_TBL(castle_da, castle_da_hash, CASTLE_DA_HASH_SIZE, struct castle_double_array, hash_list, da_id_t, id);
@@ -89,6 +94,8 @@ static void castle_component_tree_add(struct castle_double_array *da,
 static void castle_da_merge_check(struct castle_double_array *da);
 struct castle_da_merge;
 static void castle_da_merge_budget_consume(struct castle_da_merge *merge);
+int castle_da_get(struct castle_double_array *da, int attachment);
+int castle_da_put(struct castle_double_array *da, int attachment);
 
 /**********************************************************************************************/
 /* Utils */
@@ -1747,6 +1754,7 @@ static void castle_da_merge_do(struct work_struct *work)
     version_t version;
     c_val_tup_t cvt;
     int i, ret;
+    struct castle_double_array *da;
 
     debug("Initialising the iterators.\n");
     /* Create an appropriate iterator for each of the trees */
@@ -1796,7 +1804,9 @@ static void castle_da_merge_do(struct work_struct *work)
 err_out:
     if(ret)
         printk("Merge failed with %d\n", ret);
+    da = merge->da;
     castle_da_merge_dealloc(merge, ret);
+    castle_da_put(da, 0);
 }
 
 static void castle_da_merge_schedule(struct castle_double_array *da,
@@ -1804,13 +1814,19 @@ static void castle_da_merge_schedule(struct castle_double_array *da,
                                      struct castle_component_tree *in_tree2)
 {
     struct castle_btree_type *btree;
-    struct castle_da_merge *merge;
+    struct castle_da_merge *merge = NULL;
     int i, ret;
     c_byte_off_t size;
 
     debug("============ Merging ct=%d (%d) with ct=%d (%d) ============\n", 
             in_tree1->seq, in_tree1->dynamic,
             in_tree2->seq, in_tree2->dynamic);
+
+    if (castle_da_get(da, 0) < 0)
+    {
+        ret = -1;
+        goto error_out;
+    }
 
     /* Work out what type of trees are we going to be merging. Bug if in_tree1/2 don't match. */
     btree = castle_btree_type_get(in_tree1->btree_type);
@@ -1889,8 +1905,10 @@ static void castle_da_merge_check(struct castle_double_array *da)
 
     debug("Checking if to do a merge for da: %d\n", da->id);
     /* Return early if we are already doing a merge. */
-    if(castle_da_merging(da) || castle_da_exiting)
+    if(castle_da_merging(da) || castle_da_exiting || 
+                        test_bit(DOUBLE_ARRAY_DESTROY_BIT, &da->flags))
         return;
+
     /* Go through all the levels >= 1, and check if there is more than one tree 
        there. Schedule the merge if so */
     for(level=1; level<MAX_DA_LEVEL; level++)
@@ -1954,6 +1972,9 @@ static void castle_da_unmarshall(struct castle_double_array *da,
     spin_lock_init(&da->lock);
     da->flags        = 0;
     da->nr_trees     = 0;
+    da->att_ref_cnt  = 0;
+    da->da_ref_cnt   = 0;
+    castle_da_get(da, 1);
 
     for(i=0; i<MAX_DA_LEVEL; i++)
         INIT_LIST_HEAD(&da->trees[i]);
@@ -2422,6 +2443,9 @@ int castle_double_array_make(da_id_t da_id, version_t root_version)
     da->nr_trees     = 0;
     for(i=0; i<MAX_DA_LEVEL; i++)
         INIT_LIST_HEAD(&da->trees[i]);
+    da->att_ref_cnt  = 0;
+    da->da_ref_cnt   = 0;
+    castle_da_get(da, 1);
     ret = castle_da_rwct_make(da);
     if(ret)
     {
@@ -2597,6 +2621,9 @@ __new_ct:
     return 0;
 }
 
+/**************************************/
+/* Double Array Management functions. */
+
 int castle_double_array_create(void)
 {
     castle_da_store   = castle_mstore_init(MSTORE_DOUBLE_ARRAYS,
@@ -2655,4 +2682,143 @@ void castle_double_array_fini(void)
     castle_da_hash_writeback();
     castle_da_hash_destroy();
     castle_ct_hash_destroy();
+}
+
+void castle_da_destroy_complete(struct castle_double_array *da)
+{ /* Called with lock held. */
+    int i;
+
+    /* Sanity Checks. */
+    BUG_ON(da->att_ref_cnt || da->da_ref_cnt ||
+           !test_bit(DOUBLE_ARRAY_DESTROY_BIT, &da->flags) || 
+           castle_da_merging(da));
+
+    printk("Cleaning DA: %u\n", da->id);
+
+    /* Destroy Component Trees. */
+    for(i=0; i<MAX_DA_LEVEL; i++)
+    {
+        struct list_head *l, *lt;
+
+        list_for_each_safe(l, lt, &da->trees[i])
+        {
+            struct castle_component_tree *ct;
+ 
+            ct = list_entry(l, struct castle_component_tree, da_list);
+            /* No out-standing merges and active attachments. Componenet Tree
+             * shouldn't be referenced any-where. */
+            BUG_ON(atomic_read(&ct->ref_count) != 1);
+            BUG_ON(atomic_read(&ct->write_ref_count));
+            castle_ct_put(ct, 0);
+        }
+    }
+
+    /* Destroy Version and Rebuild Version Tree. */
+    castle_version_tree_delete(da->root_version);
+
+    /* Destroy Doubling Array. */
+    castle_da_hash_remove(da);
+    castle_da_unlock(da);
+
+    castle_free(da);
+}
+
+int castle_da_get(struct castle_double_array *da, int attachment)
+{
+    int ret = 0;
+
+    castle_da_lock(da);
+
+    if (test_bit(DOUBLE_ARRAY_DESTROY_BIT, &da->flags))
+    {
+        ret = -1;
+        goto out;
+    }
+
+    if (attachment)
+        da->att_ref_cnt++;
+    else
+        da->da_ref_cnt++;
+
+out:
+    castle_da_unlock(da);
+    return ret;
+}
+
+int castle_da_put(struct castle_double_array *da, int attachment)
+{
+    castle_da_lock(da);
+
+    if (attachment)
+        da->att_ref_cnt--;
+    else
+        da->da_ref_cnt--;
+
+    if (test_bit(DOUBLE_ARRAY_DESTROY_BIT, &da->flags) && !da->att_ref_cnt &&
+                                                !da->da_ref_cnt)
+    {
+        if (!attachment) castle_ctrl_lock();
+        castle_da_destroy_complete(da);
+        if (!attachment) castle_ctrl_unlock();
+    }
+    else
+        castle_da_unlock(da);
+
+    return 0;
+}
+
+int castle_double_array_get(da_id_t da_id)
+{
+    struct castle_double_array *da;
+
+    da = castle_da_hash_get(da_id);
+    if (!da)
+        return -EINVAL;
+
+    return castle_da_get(da, 1);
+}
+
+int castle_double_array_put(da_id_t da_id)
+{
+    struct castle_double_array *da;
+
+    da = castle_da_hash_get(da_id);
+    if (!da)
+        return -EINVAL;
+
+    return castle_da_put(da, 1);
+}
+
+int castle_double_array_destroy(da_id_t da_id)
+{
+    struct castle_double_array *da;
+    int ret = 0;
+
+    da = castle_da_hash_get(da_id);
+    if (!da)
+        return -EINVAL;
+
+    /* Mark DA for deletion. */
+    castle_da_lock(da);
+    if (da->att_ref_cnt > 1)
+    {
+        ret = -EINVAL;
+        goto out;
+    }
+
+    if (test_and_set_bit(DOUBLE_ARRAY_DESTROY_BIT, &da->flags))
+    {
+        ret = -EINVAL;
+        goto out;
+    }
+
+out:
+    castle_da_unlock(da);
+    if (!ret)
+    {
+        printk("Marking DA %u for deletion\n", da_id);
+        castle_da_put(da, 1);
+    }
+
+    return ret;
 }

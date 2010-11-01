@@ -122,7 +122,7 @@ static inline void _prefix##_rhash_add(_struct *v)                              
     unsigned long flags;                                                             \
                                                                                      \
     spin_lock_irqsave(&_prefix##_hash_lock, flags);                                  \
-    atomic_set(&v->_ref_mbr, 0);                                                     \
+    v->_ref_mbr  = 0;                                                                \
     list_add(&v->_list_mbr, &_tab[idx]);                                             \
     spin_unlock_irqrestore(&_prefix##_hash_lock, flags);                             \
 }                                                                                    \
@@ -135,7 +135,7 @@ static inline _struct* _prefix##_rhash_get(_key_t key)                          
     spin_lock_irqsave(&_prefix##_hash_lock, flags);                                  \
     v = __##_prefix##_hash_get(key);                                                 \
     if (v)                                                                           \
-        atomic_inc(&v->_ref_mbr);                                                    \
+        v->_ref_mbr++;                                                               \
     spin_unlock_irqrestore(&_prefix##_hash_lock, flags);                             \
                                                                                      \
     return v;                                                                        \
@@ -143,11 +143,15 @@ static inline _struct* _prefix##_rhash_get(_key_t key)                          
                                                                                      \
 static inline void _prefix##_rhash_put(_struct *v)                                   \
 {                                                                                    \
+    unsigned long flags;                                                             \
+                                                                                     \
+    spin_lock_irqsave(&_prefix##_hash_lock, flags);                                  \
     if (v)                                                                           \
     {                                                                                \
-        atomic_dec(&v->_ref_mbr);                                                    \
+        v->_ref_mbr--;                                                               \
         wake_up(&_prefix##_wait_q);                                                  \
     }                                                                                \
+    spin_unlock_irqrestore(&_prefix##_hash_lock, flags);                             \
 }                                                                                    \
                                                                                      \
 static inline void _prefix##_rhash_remove(_struct *v)                                \
@@ -155,12 +159,11 @@ static inline void _prefix##_rhash_remove(_struct *v)                           
     unsigned long flags;                                                             \
                                                                                      \
     spin_lock_irqsave(&_prefix##_hash_lock, flags);                                  \
-    printk("Waiting to delete ext: %llu|ref:%u\n", v->ext_id,                        \
-                                            atomic_read(&v->_ref_mbr));              \
-    while (atomic_read(&v->_ref_mbr) != 0)                                           \
+    printk("Waiting to delete ext: %llu|ref:%u\n", v->ext_id, v->_ref_mbr);          \
+    while (v->_ref_mbr != 0)                                                         \
     {                                                                                \
         spin_unlock_irqrestore(&_prefix##_hash_lock, flags);                         \
-        wait_event(_prefix##_wait_q, (atomic_read(&v->_ref_mbr) == 0));              \
+        wait_event(_prefix##_wait_q, (v->_ref_mbr == 0));                            \
         spin_lock_irqsave(&_prefix##_hash_lock, flags);                              \
     }                                                                                \
     list_del(&v->_list_mbr);                                                         \

@@ -61,6 +61,12 @@ struct castle_version {
     struct list_head init_list;
 };
 
+enum {
+    NEW_VER,
+    UPDATE_VER,
+    REM_VER,
+};
+
 DEFINE_HASH_TBL(castle_versions, castle_versions_hash, CASTLE_VERSIONS_HASH_SIZE, struct castle_version, hash_list, version_t, version);
 
 static int castle_version_hash_remove(struct castle_version *v, void *unused) 
@@ -88,6 +94,83 @@ static void castle_versions_init_add(struct castle_version *v)
 version_t castle_version_max_get(void)
 {
     return castle_versions_last + 1;
+}
+
+static void castle_versions_drop(struct castle_version *p);
+static void castle_version_writeback(struct castle_version *v, int op);
+
+static struct castle_version * castle_version_delete(struct castle_version *v)
+{
+    struct castle_version *parent;
+
+    if (!v)
+        return NULL;
+
+    /* Sanity check flags. */
+    BUG_ON(test_bit(CV_ATTACHED_BIT, &v->flags));
+    BUG_ON(!test_bit(CV_INITED_BIT, &v->flags));
+
+    parent = v->parent;
+
+    /* Remove version from hash. */
+    castle_version_writeback(v, REM_VER);
+    castle_sysfs_version_del(v->version);
+    castle_versions_drop(v);
+    castle_versions_hash_remove(v);
+    kmem_cache_free(castle_versions_cache, v);
+
+    return parent;
+}
+
+int castle_version_tree_delete(version_t version)
+{
+    struct castle_version *v, *cur;
+    int ret = 0;
+
+    v = castle_versions_hash_get(version);
+    if (!v)
+    {
+        printk("Asked to delete a non-existent version: %u\n", version);
+        ret = -EINVAL;
+        goto error_out;
+    }
+
+    cur = v;
+    while (1)
+    {
+        /* Check if the version is leaf. */
+        if (!cur->first_child)
+        {
+            int done = 0;
+
+            /* If the node to be deleted is cur, then exit. */
+            if (cur == v)
+                done = 1;
+
+            /* Delete version and handle Parent. castle_version_delete()
+             * returns parent of the deleted node. */
+            cur = castle_version_delete(cur);
+            if (cur == NULL)
+            {
+                ret = -EINVAL;
+                goto error_out;
+            }
+
+            if (done)
+                break;
+            else
+                continue;
+        }
+
+        /* For non-leaf nodes, delete first child. */
+        cur = cur->first_child;
+    }
+
+    /* Run processing to re-calculate the version ordering. */
+    castle_versions_process();
+
+error_out:
+    return ret;
 }
 
 static struct castle_version* castle_version_add(version_t version, 
@@ -161,7 +244,7 @@ da_id_t castle_version_da_id_get(version_t version)
 }
 
 /* TODO who should handle errors in writeback? */
-static void castle_version_writeback(struct castle_version *v, int new)
+static void castle_version_writeback(struct castle_version *v, int op)
 {
     struct castle_vlist_entry mstore_ventry;
     c_mstore_key_t key;
@@ -174,16 +257,25 @@ static void castle_version_writeback(struct castle_version *v, int new)
     mstore_ventry.da_id      = v->da_id;
     key                      = v->mstore_key;
 
-    if(new)
+    if (op == NEW_VER)
     {
         debug("New version, inserting.\n");
         v->mstore_key = 
             castle_mstore_entry_insert(castle_versions_mstore, &mstore_ventry);
     }
-    else
+    else if (op == UPDATE_VER) 
     {
         debug("Existing version, updating.\n");
         castle_mstore_entry_update(castle_versions_mstore, key, &mstore_ventry);
+    }
+    else if (op == REM_VER)
+    {
+        debug("Existing version, deleting.\n");
+        castle_mstore_entry_delete(castle_versions_mstore, key);
+    }
+    else
+    {
+        printk("Faulty operation on version writeback\n");
     }
 }
 
@@ -276,7 +368,7 @@ version_t castle_version_new(int snap_or_clone,
        Let's find where to store it on the disk. */
 
     /* TODO: Error handling? */
-    castle_version_writeback(v, 1); 
+    castle_version_writeback(v, NEW_VER); 
     
     return v->version; 
 }
@@ -346,6 +438,31 @@ static void castle_versions_insert(struct castle_version *p,
     BUG_ON(!pprev);
     v->next_sybling = sybling_list;
     *pprev = v;
+}
+
+static void castle_versions_drop(struct castle_version *v)
+{
+    struct castle_version *sybling_list, *prev, *p;
+
+    if (!v)
+        return;
+
+    p = v->parent;
+    prev = NULL;
+    sybling_list = p->first_child;
+    while(sybling_list)
+    {
+        if (sybling_list == v)
+        {
+            if (prev)
+                prev->next_sybling = v->next_sybling;
+            else
+                p->first_child = v->next_sybling;
+        }
+        prev = sybling_list;
+        sybling_list = sybling_list->next_sybling;
+    }
+    v->next_sybling = v->parent = NULL;
 }
 
 static int castle_versions_process(void)

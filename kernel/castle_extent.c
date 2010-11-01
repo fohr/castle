@@ -58,7 +58,7 @@ typedef struct {
     c_chk_seq_t         chk_buf[MAX_NR_SLAVES];     
     c_ext_pos_t         maps_cep;       /* Offset of chunk mapping in logical extent */
     struct list_head    hash_list;      /* Only Dynamic variable */
-    atomic_t            ref_cnt;
+    uint32_t            ref_cnt;
 } c_ext_t;
 
 static struct list_head *castle_extents_hash = NULL;
@@ -535,7 +535,7 @@ __hell:
 
 void castle_extent_free(c_ext_id_t ext_id)
 {
-    c_ext_t                     *ext = castle_extents_rhash_get(ext_id);
+    c_ext_t                     *ext;
     struct castle_extents_t     *castle_extents_sb = NULL;
     int                          i, j;
     uint32_t                     req_space;
@@ -654,7 +654,9 @@ c_chk_cnt_t castle_extent_size_get(c_ext_id_t ext_id)
 {
     c_ext_t *ext = castle_extents_hash_get(ext_id);
 
-    return ext->size;
+    if (ext)
+        return ext->size;
+    return 0;
 }
 
 static void __castle_extent_map_get(c_ext_t             *ext,

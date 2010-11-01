@@ -1185,7 +1185,7 @@ struct castle_attachment* castle_attachment_get(collection_id_t col_id)
         if(ca->col.id == col_id)
         {
             result = ca;
-            ca->ref_cnt ++;
+            ca->ref_cnt++;
             break;
         }
     }
@@ -1216,6 +1216,7 @@ void castle_attachment_put(struct castle_attachment *ca)
     if (to_free)
     {
         version_t version = ca->version;
+        da_id_t da_id = castle_version_da_id_get(version);
         
         castle_events_collection_detach(ca->col.id);
         castle_sysfs_collection_del(ca);
@@ -1223,6 +1224,7 @@ void castle_attachment_put(struct castle_attachment *ca)
         castle_free(ca->col.name);
         castle_free(ca);
         castle_version_detach(version);
+        castle_double_array_put(da_id);
     }
 }
 
@@ -1335,6 +1337,7 @@ struct castle_attachment* castle_collection_init(version_t version, char *name)
     static collection_id_t collection_id = 0;
     da_id_t da_id;
     int err;
+    int da_get = 0;
 
     BUG_ON(strlen(name) > MAX_NAME_SIZE);
 
@@ -1349,6 +1352,9 @@ struct castle_attachment* castle_collection_init(version_t version, char *name)
         castle_version_detach(version);
         goto error_out;
     }
+    if (castle_double_array_get(da_id) < 0)
+        goto error_out;
+    da_get = 1;
 
     collection->col.id   = collection_id++;
     collection->col.name = name;
@@ -1368,6 +1374,7 @@ struct castle_attachment* castle_collection_init(version_t version, char *name)
 error_out:
     castle_free(name);
     if(collection) castle_free(collection);
+    if(da_get) castle_double_array_put(da_id);
     printk("Failed to init collection.\n");
     return NULL;    
 }

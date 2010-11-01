@@ -43,6 +43,7 @@ typedef uint32_t version_t;
 #define CASTLE_CTRL_VALID_STATS              17
 #define CASTLE_CTRL_INVALID_STATS            18
 #define CASTLE_CTRL_SET_TARGET               19
+#define CASTLE_CTRL_DESTROY                  20
 
 #define PACKED               __attribute__((packed))
 typedef struct castle_control_cmd_claim {
@@ -98,6 +99,11 @@ typedef struct castle_control_cmd_create {
     version_t id;              /* OUT */
 } PACKED cctrl_cmd_create_t;
 
+typedef struct castle_control_cmd_destroy {
+    version_t version;         /* IN */
+    int       ret;             /* OUT */
+} cctrl_cmd_destroy_t;
+
 typedef struct castle_control_cmd_clone {
     version_t version;         /* IN  */
     int       ret;             /* OUT */
@@ -136,6 +142,7 @@ typedef struct castle_control_ioctl {
         cctrl_cmd_collection_snapshot_t collection_snapshot;
 
         cctrl_cmd_create_t              create;
+        cctrl_cmd_destroy_t             destroy;
         cctrl_cmd_clone_t               clone;
 
         cctrl_cmd_transfer_create_t     transfer_create;

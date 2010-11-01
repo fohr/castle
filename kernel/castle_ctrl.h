@@ -1,6 +1,8 @@
 #ifndef __CASTLE_CTRL_H__
 #define __CASTLE_CTRL_H__
 
+void castle_ctrl_lock               (void);
+void castle_ctrl_unlock             (void);
 void castle_control_claim           (uint32_t dev, int *ret, slave_uuid_t *id);
 void castle_control_release         (slave_uuid_t id, int *ret);
 void castle_control_attach          (version_t version, int *ret, uint32_t *dev);

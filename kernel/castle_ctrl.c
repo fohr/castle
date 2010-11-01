@@ -27,6 +27,16 @@ static DECLARE_WAIT_QUEUE_HEAD(castle_control_wait_q);
 
 c_mstore_t *castle_attachments_store = NULL;
 
+void castle_ctrl_lock(void)
+{
+    down(&castle_control_lock);
+}
+
+void castle_ctrl_unlock(void)
+{
+    up(&castle_control_lock);
+}
+
 void castle_control_claim(uint32_t dev, int *ret, slave_uuid_t *id)
 {
     struct castle_slave *cs;
@@ -109,6 +119,32 @@ void castle_control_create(uint64_t size, int *ret, version_t *id)
         *id  = version;
         *ret = 0;
     }
+}
+
+void castle_control_destroy(version_t version, int *ret)
+{
+    version_t       parent;
+    da_id_t         da_id;
+
+    printk("Destroying version: %u\n", version);
+    *ret = castle_version_read(version, &da_id, &parent, NULL, NULL);
+    
+    /* Reply immediatly, if the version doesn't correspond to a DA. */
+    if ((*ret < 0) || !da_id || parent)
+    {
+        printk("Invalid version\n");
+        *ret = -EINVAL;
+        return;
+    }
+
+    if (castle_double_array_destroy(da_id) < 0)
+    {
+        printk("Failed to destroy Collection tree: %u\n", version);
+        *ret = -EINVAL;
+        return;
+    }
+
+    *ret = 0;
 }
 
 void castle_control_clone(version_t version, int *ret, version_t *clone)
@@ -537,6 +573,10 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
             castle_control_create( ioctl.create.size,
                                   &ioctl.create.ret,
                                   &ioctl.create.id);
+            break;
+        case CASTLE_CTRL_DESTROY:
+            castle_control_destroy( ioctl.destroy.version,
+                                   &ioctl.destroy.ret);
             break;
         case CASTLE_CTRL_CLONE:
             castle_control_clone( ioctl.clone.version,
