@@ -495,7 +495,6 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 
             if (!collection_name)
             {
-                castle_free(collection_name);
                 err = -ENOMEM;
                 goto err;
             }
