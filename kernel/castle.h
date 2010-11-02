@@ -901,6 +901,7 @@ struct castle_attachment {
     struct kobject      kobj;
     int                 sysfs_registered;
     struct list_head    list;
+    c_mstore_key_t      key;
 };
 
 struct castle_attachments { 

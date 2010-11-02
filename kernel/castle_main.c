@@ -1250,6 +1250,7 @@ struct castle_attachment* castle_attachment_init(int device, /* _or_object_colle
     attachment->ref_cnt = 1; // Use double put on detach
     attachment->device  = device;
     attachment->version = version;
+    attachment->key = INVAL_MSTORE_KEY;
 
     return attachment; 
 }
