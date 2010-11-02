@@ -2084,17 +2084,19 @@ static int castle_da_trees_sort(struct castle_double_array *da, void *unused)
 static c_mstore_key_t castle_da_ct_marshall(struct castle_clist_entry *ctm,
                                             struct castle_component_tree *ct)
 {
-    ctm->da_id       = ct->da; 
-    ctm->item_count  = atomic64_read(&ct->item_count);
-    ctm->btree_type  = ct->btree_type; 
-    ctm->dynamic     = ct->dynamic;
-    ctm->seq         = ct->seq;
-    ctm->level       = ct->level;
-    ctm->tree_depth  = ct->tree_depth;
-    ctm->root_node   = ct->root_node;
-    ctm->first_node  = ct->first_node;
-    ctm->last_node   = ct->last_node;
-    ctm->node_count  = atomic64_read(&ct->node_count);
+    ctm->da_id       		= ct->da; 
+    ctm->item_count  		= atomic64_read(&ct->item_count);
+    ctm->btree_type  		= ct->btree_type; 
+    ctm->dynamic     		= ct->dynamic;
+    ctm->seq         		= ct->seq;
+    ctm->level       		= ct->level;
+    ctm->tree_depth  		= ct->tree_depth;
+    ctm->root_node   		= ct->root_node;
+    ctm->first_node  		= ct->first_node;
+    ctm->last_node   		= ct->last_node;
+    ctm->node_count  		= atomic64_read(&ct->node_count);
+    ctm->large_ext_chk_cnt	= atomic64_read(&ct->large_ext_chk_cnt);
+
     castle_ext_fs_marshall(&ct->tree_ext_fs, &ctm->tree_ext_fs_bs);
     castle_ext_fs_marshall(&ct->data_ext_fs, &ctm->data_ext_fs_bs);
 
@@ -2105,21 +2107,22 @@ static da_id_t castle_da_ct_unmarshall(struct castle_component_tree *ct,
                                        struct castle_clist_entry *ctm,
                                        c_mstore_key_t key)
 {
-    ct->seq         = ctm->seq;
+    ct->seq         		= ctm->seq;
     atomic_set(&ct->ref_count, 1);
     atomic_set(&ct->write_ref_count, 0);
     atomic64_set(&ct->item_count, ctm->item_count);
-    ct->btree_type  = ctm->btree_type; 
-    ct->dynamic     = ctm->dynamic;
-    ct->da          = ctm->da_id; 
-    ct->level       = ctm->level;
-    ct->tree_depth  = ctm->tree_depth;
-    ct->root_node   = ctm->root_node;
-    ct->first_node  = ctm->first_node;
-    ct->last_node   = ctm->last_node;
+    ct->btree_type  		= ctm->btree_type; 
+    ct->dynamic     		= ctm->dynamic;
+    ct->da          		= ctm->da_id; 
+    ct->level       		= ctm->level;
+    ct->tree_depth  		= ctm->tree_depth;
+    ct->root_node   		= ctm->root_node;
+    ct->first_node  		= ctm->first_node;
+    ct->last_node   		= ctm->last_node;
+    atomic64_set(&ct->large_ext_chk_cnt, ctm->large_ext_chk_cnt);
     init_rwsem(&ct->lock);
     atomic64_set(&ct->node_count, ctm->node_count);
-    ct->mstore_key  = key;
+    ct->mstore_key  		= key;
     castle_ext_fs_unmarshall(&ct->tree_ext_fs, &ctm->tree_ext_fs_bs);
     castle_ext_fs_unmarshall(&ct->data_ext_fs, &ctm->data_ext_fs_bs);
     INIT_LIST_HEAD(&ct->da_list);
@@ -2344,6 +2347,7 @@ static struct castle_component_tree* castle_ct_alloc(struct castle_double_array 
     atomic_set(&ct->ref_count, 1);
     atomic_set(&ct->write_ref_count, 0);
     atomic64_set(&ct->item_count, 0); 
+    atomic64_set(&ct->large_ext_chk_cnt, 0);
     ct->btree_type  = VLBA_TREE_TYPE; 
     ct->dynamic     = dynamic;
     ct->da          = da->id;
@@ -2821,4 +2825,41 @@ out:
     }
 
     return ret;
+}
+
+int castle_da_size_get(struct castle_double_array *da, struct castle_component_tree *ct, int level_cnt, void *token)
+{
+    c_byte_off_t *size = (c_byte_off_t *)token;
+    *size += castle_extent_size_get(ct->tree_ext_fs.ext_id);
+    *size += castle_extent_size_get(ct->data_ext_fs.ext_id);
+    *size += atomic64_read(&ct->large_ext_chk_cnt);
+    return 0;
+}
+
+int castle_double_array_size_get(da_id_t da_id, c_byte_off_t *size)
+{
+    struct castle_double_array *da;
+    int err_code = 0;
+    c_byte_off_t s = 0;
+
+    da = castle_da_hash_get(da_id);
+    if (!da)
+    {
+        err_code = -EINVAL;
+	goto out;
+    }
+
+    err_code = castle_da_get(da, 1);
+    if (err_code)
+    {
+        goto out;
+    }
+
+    castle_da_foreach_tree(da, castle_da_size_get, (void *)&s);
+
+    castle_da_put(da, 1);
+
+out:
+    *size = s;
+    return err_code;
 }

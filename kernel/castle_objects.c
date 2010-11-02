@@ -646,6 +646,7 @@ static int castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
     struct castle_object_replace *replace = c_bvec->c_bio->replace;
     int tombstone = c_bvec_data_del(c_bvec); 
     int nr_blocks;
+    int prev_large_ext_chk_cnt;
 
     /* We should be handling a write (possibly a tombstone write). */
     BUG_ON(c_bvec_data_dir(c_bvec) != WRITE); 
@@ -707,11 +708,15 @@ static int castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
                 cep.ext_id = castle_extent_alloc(DEFAULT, c_bvec->tree->da, 
                                                  nr_chunks);
                 cep.offset = 0;
+
                 if (EXT_ID_INVAL(cep.ext_id))
                 {
                     printk("Failed to allocate space for Large Object.\n");
                     return -ENOSPC;
                 }
+
+		/* Update the large object chunk count on the tree */
+		atomic64_add(nr_chunks,&c_bvec->tree->large_ext_chk_cnt);
 
                 CVT_LARGE_OBJECT_SET(*cvt, replace->value_len, cep);
 
@@ -735,6 +740,11 @@ static int castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
     if (CVT_LARGE_OBJECT(prev_cvt))
     {
         nr_blocks = (prev_cvt.length - 1) / C_BLK_SIZE + 1; 
+
+	/* Update the large object chunk count on the tree */
+	prev_large_ext_chk_cnt = castle_extent_size_get(prev_cvt.cep.ext_id);
+	atomic64_sub(prev_large_ext_chk_cnt,&c_bvec->tree->large_ext_chk_cnt);
+
         castle_extent_free(prev_cvt.cep.ext_id);
     }
     BUG_ON(CVT_INVALID(*cvt));

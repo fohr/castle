@@ -8,6 +8,7 @@
 #include "castle_sysfs.h"
 #include "castle_debug.h"
 #include "castle_versions.h"
+#include "castle_da.h"
 
 struct castle_sysfs_versions {
     struct kobject kobj;
@@ -83,20 +84,28 @@ static ssize_t versions_list_show(struct kobject *kobj,
     ssize_t len;
     int leaf;
     int ret;
+    c_byte_off_t phys_size = 0;
+    da_id_t da_id;
 
-    ret = castle_version_read(v->version, NULL, &parent, &size, &leaf);
+    ret = castle_version_read(v->version, &da_id, &parent, &size, &leaf);
     if(ret == 0)
     {
+	if (parent == 0)
+	{	
+		// this is a root collection/device version.  Work out it's size.
+		castle_double_array_size_get(da_id, &phys_size);
+	}
+
         len = sprintf(buf,
                 "Id: 0x%x\n"
                 "ParentId: 0x%x\n"
-                "LogicalSize: %d\n"
-                "PhysicalSize: %ld\n"
+                "LogicalSize: %llu\n"
+                "PhysicalSize: %llu\n"
                 "IsLeaf: %d\n",
                  v->version, 
                  parent, 
-                 size,
-                 0L,
+                 (c_byte_off_t)size,
+                 phys_size * C_CHK_SIZE,
                  leaf);
 
         return len;
