@@ -978,14 +978,9 @@ static void castle_vlba_tree_entry_add(struct castle_btree_node *node,
     memcpy(&entry->key, key, sizeof(vlba_key_t) + key_length);
     
     BUG_ON(VLBA_TREE_ENTRY_IS_TOMB_STONE(entry) && entry->val_len != 0);
-    if (!VLBA_TREE_ENTRY_IS_TOMB_STONE(entry) && entry->val_len == 0)
-    {
-        printk("%x\n", (uint32_t)entry->type);
-        BUG();
-    }
     if (VLBA_TREE_ENTRY_IS_INLINE(entry))
     {
-        BUG_ON(entry->val_len == 0 || entry->val_len > MAX_INLINE_VAL_SIZE);
+        BUG_ON(entry->val_len > MAX_INLINE_VAL_SIZE);
         BUG_ON(VLBA_ENTRY_VAL_PTR(entry)+cvt.length > EOF_VLBA_NODE(node));
         memmove(VLBA_ENTRY_VAL_PTR(entry), cvt.val, cvt.length);
     }
