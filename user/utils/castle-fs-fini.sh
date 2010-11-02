@@ -3,13 +3,8 @@
 
 set -eu
 
-cd `dirname $0`
+. /usr/share/castle-fs/init-utils
 
-. /etc/acunu/fs-utils
+unmount_kernel_fs
 
-# Override CONFIG variables (e.g. DISKS) here 
-
-umount_fs
-
-echo "Castle cleaned up successfully"
-
+echo "castle-fs shut down successfully"

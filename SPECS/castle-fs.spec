@@ -51,18 +51,15 @@ mkdir -p %{buildroot}/etc/udev/rules.d/
 mkdir -p %{buildroot}/etc/castle-fs
 mkdir -p %{buildroot}/opt/acunu/castle-fs/bin
 mkdir -p %{buildroot}/usr/sbin
-mkdir -p %{buildroot}/sbin
-mkdir -p %{buildroot}/etc/acunu
+mkdir -p %{buildroot}/usr/share/castle-fs
 cp user/udev/castle-fs.rules %{buildroot}/etc/udev/rules.d/
 cp user/udev/udev-watch %{buildroot}/etc/castle-fs/
-cp user/utils/CONFIG %{buildroot}/opt/acunu/castle-fs/bin/
 cp user/utils/utils %{buildroot}/opt/acunu/castle-fs/bin/
-cp user/utils/castle-fs-init.sh %{buildroot}/opt/acunu/castle-fs/bin/
-cp user/utils/castle-fs-fini.sh %{buildroot}/opt/acunu/castle-fs/bin/
+cp user/utils/init-utils %{buildroot}/usr/share/castle-fs/
+cp user/utils/castle-fs-init.sh %{buildroot}/usr/share/castle-fs/
+cp user/utils/castle-fs-fini.sh %{buildroot}/user/share/castle-fs/
 cp user/utils/castle-scan %{buildroot}/usr/sbin/
 cp user/utils/castle_probe_device %{buildroot}/usr/sbin/castle-probe-device
-cp user/utils/mkcastlefs %{buildroot}/sbin/
-cp user/utils/fs-utils %{buildroot}/etc/acunu
 
 export INSTALL_MOD_PATH=%{buildroot}
 export INSTALL_MOD_DIR=extra/%{kmod_name}
@@ -81,8 +78,7 @@ getent group %{groupname} >/dev/null || groupadd -r %{groupname}
 /opt/acunu
 /usr/sbin/castle-scan
 /usr/sbin/castle-probe-device
-/sbin/mkcastlefs
-/etc/acunu/fs-utils
+/usr/share/castle-fs
 
 %changelog
 * Thu Sep  9 2010 Andrew Suffield <asuffield@acunu.com> - %{buildver}-%{buildrev}

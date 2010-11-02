@@ -47,8 +47,6 @@ clean:
 .PHONY: install
 install: $(MAIN_OBJS)
 	install $(MAIN_OBJS) /usr/sbin
-	install -D CONFIG /opt/acunu/castle-fs/bin/CONFIG
-	install -D utils  /opt/acunu/castle-fs/bin/utils
-	install -D castle-fs-init.sh /opt/acunu/castle-fs/bin/castle-fs-init.sh
-	install -D castle-fs-fini.sh /opt/acunu/castle-fs/bin/castle-fs-fini.sh
-
+	install -D init-utils /usr/share/castle-fs/init-utils
+	install -D castle-fs-init.sh /usr/share/castle-fs/castle-fs-init
+	install -D castle-fs-fini.sh /usr/share/castle-fs/castle-fs-fini

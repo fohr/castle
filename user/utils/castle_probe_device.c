@@ -41,15 +41,9 @@ int main(int argc, char *argv[])
       return 2;
     }
 
-    {
-      int name_len = strlen(argv[1]) + strlen("/dev/") + 1;
-      char fname[name_len];
-      snprintf(fname, name_len, "/dev/%s", argv[1]);
-
-      if ((fd = open(fname, O_RDONLY | O_NOCTTY)) < 0) {
-        fprintf(stderr, "Failed to open %s: %s\n", fname, strerror(errno));
-        return 1;
-      }
+    if ((fd = open(argv[1], O_RDONLY | O_NOCTTY)) < 0) {
+      fprintf(stderr, "Failed to open %s: %s\n", argv[1], strerror(errno));
+      return 1;
     }
 
     if (read(fd, &cs_sb, sizeof(cs_sb)) != sizeof(cs_sb))
