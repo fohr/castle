@@ -116,7 +116,7 @@ static struct castle_version * castle_version_delete(struct castle_version *v)
     castle_version_writeback(v, REM_VER);
     castle_sysfs_version_del(v->version);
     castle_versions_drop(v);
-    castle_versions_hash_remove(v);
+    __castle_versions_hash_remove(v);
     kmem_cache_free(castle_versions_cache, v);
 
     return parent;
@@ -135,6 +135,8 @@ int castle_version_tree_delete(version_t version)
         goto error_out;
     }
 
+    spin_lock_irq(&castle_versions_hash_lock);
+    BUG_ON(!(v->flags & CV_INITED_MASK));
     cur = v;
     while (1)
     {
@@ -165,6 +167,7 @@ int castle_version_tree_delete(version_t version)
         /* For non-leaf nodes, delete first child. */
         cur = cur->first_child;
     }
+    spin_unlock_irq(&castle_versions_hash_lock);
 
     /* Run processing to re-calculate the version ordering. */
     castle_versions_process();
