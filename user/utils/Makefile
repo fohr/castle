@@ -19,7 +19,7 @@ CFLAGS          += -g
 
 LIBS = -L/usr/lib$(LIB_POSTFIX)
 
-MAIN_OBJS  = castle_scan 
+MAIN_OBJS  = castle_probe_device
 
 ##
 ## "all" Target

@@ -105,7 +105,6 @@ typedef uint32_t block_t;
 #define FREE_SPACE_START               (600)
 #define FREESPACE_OFFSET               (2 * C_CHK_SIZE)
 #define FREESPACE_SIZE                 (20 * C_CHK_SIZE)
-#define MAX_EXT_SIZE                   (102400) // 100 GB
 
 #define sup_ext_to_slave_id(_id)       ((_id) - SUP_EXT_ID)
 #define slave_id_to_sup_ext(_id)       ((_id) + SUP_EXT_ID)
@@ -904,6 +903,7 @@ struct castle_attachment {
     struct kobject      kobj;
     int                 sysfs_registered;
     struct list_head    list;
+    c_mstore_key_t      key;
 };
 
 struct castle_attachments { 

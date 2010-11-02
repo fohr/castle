@@ -60,6 +60,7 @@ cp user/utils/utils %{buildroot}/opt/acunu/castle-fs/bin/
 cp user/utils/castle-fs-init.sh %{buildroot}/opt/acunu/castle-fs/bin/
 cp user/utils/castle-fs-fini.sh %{buildroot}/opt/acunu/castle-fs/bin/
 cp user/utils/castle-scan %{buildroot}/usr/sbin/
+cp user/utils/castle_probe_device %{buildroot}/usr/sbin/castle-probe-device
 cp user/utils/mkcastlefs %{buildroot}/sbin/
 cp user/utils/fs-utils %{buildroot}/etc/acunu
 
@@ -79,6 +80,7 @@ getent group %{groupname} >/dev/null || groupadd -r %{groupname}
 /etc/castle-fs/udev-watch
 /opt/acunu
 /usr/sbin/castle-scan
+/usr/sbin/castle-probe-device
 /sbin/mkcastlefs
 /etc/acunu/fs-utils
 
