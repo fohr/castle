@@ -1358,12 +1358,16 @@ struct castle_attachment* castle_collection_init(version_t version, char *name)
 
     collection->col.id   = collection_id++;
     collection->col.name = name;
+    spin_lock(&castle_attachments.lock);
     list_add(&collection->list, &castle_attachments.attachments);
+    spin_unlock(&castle_attachments.lock);
 
     err = castle_sysfs_collection_add(collection);
     if(err) 
     {
+        spin_lock(&castle_attachments.lock);
         list_del(&collection->list);
+        spin_unlock(&castle_attachments.lock);
         goto error_out;
     }
 

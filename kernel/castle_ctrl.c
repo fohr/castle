@@ -374,9 +374,7 @@ void castle_control_collection_detach(collection_id_t collection,
     printk("Deleting Collection Attachment %u (%s, %u)/%u\n", 
             collection, ca->col.name, ca->version, ca->ref_cnt);
 
-    spin_lock(&castle_attachments.lock);
     castle_attachments_store_delete(ca->col.name, ca->version);
-    spin_unlock(&castle_attachments.lock);
 
     /* Double put is opposite of what happens in collection_init */
     castle_attachment_put(ca);
