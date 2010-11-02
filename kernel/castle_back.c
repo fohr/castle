@@ -3,6 +3,7 @@
 #include <linux/completion.h>
 #include <linux/wait.h>
 #include <linux/workqueue.h>
+#include <linux/kthread.h>
 #include <linux/mm.h>
 #include <linux/miscdevice.h>
 #include <linux/poll.h>
@@ -50,9 +51,7 @@ struct castle_back_op;
 
 #define CASTLE_BACK_CONN_INITIALISED_BIT    (0)
 #define CASTLE_BACK_CONN_INITIALISED_FLAG   (1 << CASTLE_BACK_CONN_INITIALISED_BIT)
-#define CASTLE_BACK_CONN_DISCONNECTING_BIT  (1)
-#define CASTLE_BACK_CONN_DISCONNECTING_FLAG (1 << CASTLE_BACK_CONN_DISCONNECTING_BIT)
-#define CASTLE_BACK_CONN_NOTIFY_BIT         (2)
+#define CASTLE_BACK_CONN_NOTIFY_BIT         (1)
 #define CASTLE_BACK_CONN_NOTIFY_FLAG        (1 << CASTLE_BACK_CONN_NOTIFY_BIT)
 
 struct castle_back_conn 
@@ -64,6 +63,7 @@ struct castle_back_conn
     castle_back_ring_t      back_ring;
     struct work_struct      work;
     wait_queue_head_t       wait;
+    struct task_struct     *work_thread;
     spinlock_t              response_lock;
     atomic_t                ref_count;
     
@@ -2278,10 +2278,9 @@ static void castle_back_request_process(struct castle_back_conn *conn, struct ca
 }
 
 /*
- * We guarantee there is only one running copy of this
- * by using a single threaded workqueue.  TODO make better
+ * This is called once per connection and lives for as long as the connection is alive
  */
-static void castle_back_work_do(void *data) 
+static int castle_back_work_do(void *data)
 {
     struct castle_back_conn *conn = data;
     castle_back_ring_t *back_ring = &conn->back_ring;
@@ -2289,15 +2288,15 @@ static void castle_back_work_do(void *data)
     RING_IDX cons, rp;
     struct castle_back_op *op;
     
-    debug("castle_back: doing work\n");
-    
-    while(!(conn->flags & CASTLE_BACK_CONN_DISCONNECTING_FLAG))
+    debug("castle_back: doing work for conn = %p.\n", conn);
+
+    while(1)
     {
         rp = back_ring->sring->req_prod;
         xen_rmb();
-        
+
         //debug("castle_back: rp=%d\n", rp);
-    
+
         while ((cons = back_ring->req_cons) != rp)
         {
             spin_lock(&conn->response_lock);
@@ -2305,7 +2304,7 @@ static void castle_back_work_do(void *data)
             op = list_entry(conn->free_ops.next, struct castle_back_op, list);
             list_del(&op->list);
             spin_unlock(&conn->response_lock);
-            
+
             memcpy(&op->req, RING_GET_REQUEST(back_ring, cons), sizeof(castle_request_t));
         
             back_ring->req_cons++;
@@ -2316,16 +2315,21 @@ static void castle_back_work_do(void *data)
 
             castle_back_request_process(conn, op);
         }
-    
-        RING_FINAL_CHECK_FOR_REQUESTS(back_ring, more);
-        if(!more) break;
-    }
-    
-    debug_ref_count("dec conn ref_count.\n");
-    if (atomic_dec_and_test(&conn->ref_count))
-        castle_back_cleanup_conn(conn);
 
-    debug("castle_back: done work\n");
+        RING_FINAL_CHECK_FOR_REQUESTS(back_ring, more);
+
+        /* avoid racing with kthread_stop */
+        if (!more)
+            set_current_state(TASK_INTERRUPTIBLE);
+        if (kthread_should_stop())
+            break;
+        else if (!more)
+            schedule();
+    }
+
+    debug("castle_back: done work for conn = %p.\n", conn);
+
+    return 0;
 }
 
 long castle_back_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
@@ -2342,9 +2346,7 @@ long castle_back_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned lo
     switch (cmd)
     {
         case CASTLE_IOCTL_POKE_RING:
-            debug_ref_count("inc conn ref_count.\n");
-            atomic_inc(&conn->ref_count);
-            queue_work(castle_back_wq, &conn->work);
+            wake_up_process(conn->work_thread);
             break;
         
         default:
@@ -2381,7 +2383,7 @@ int castle_back_open(struct inode *inode, struct file *file)
     debug_ref_count("set conn ref_count = 1.\n");
     atomic_set(&conn->ref_count, 1);
     
-    INIT_WORK(&conn->work, castle_back_work_do, conn);
+    INIT_WORK(&conn->work, NULL, NULL);
     init_waitqueue_head(&conn->wait);
     spin_lock_init(&conn->response_lock);
     spin_lock_init(&conn->buffers_lock);
@@ -2404,7 +2406,7 @@ int castle_back_open(struct inode *inode, struct file *file)
     conn->ops = vmalloc(sizeof(struct castle_back_op) * RING_SIZE(&conn->back_ring));
     if (conn->ops == NULL)
     {
-        error("castle_back: failed to vmalloc mirror buffer for ops");
+        error("castle_back: failed to vmalloc mirror buffer for ops\n");
         err = -ENOMEM;
         goto err3;
     }
@@ -2421,7 +2423,7 @@ int castle_back_open(struct inode *inode, struct file *file)
     conn->stateful_ops = vmalloc(sizeof(struct castle_back_stateful_op) * MAX_STATEFUL_OPS);
     if (conn->stateful_ops == NULL)
     {
-        error("castle_back: failed to vmalloc buffer for stateful_ops");
+        error("castle_back: failed to vmalloc buffer for stateful_ops\n");
         err = -ENOMEM;
         goto err3;
     }
@@ -2437,11 +2439,25 @@ int castle_back_open(struct inode *inode, struct file *file)
 
     file->private_data = conn;
 
+    /* Don't increase the reference count here, since we hold a reference count and won't
+     * release it until kthread_stop has returned.
+     */
+    conn->work_thread = kthread_run(castle_back_work_do, conn, "castle_back_work_do");
+    if (!conn->work_thread)
+    {
+        error("Could not start work thread\n");
+        goto err4;
+    }
+
     conn->restart_timer = 1;
     castle_back_start_stateful_op_timeout_check_timer(conn);
 
+    debug("castle_back_open for conn = %p returning.\n", conn);
+
     return 0;
 
+err4:
+    vfree(conn->stateful_ops);
 err3:
     UnReservePages(conn->back_ring.sring, CASTLE_RING_SIZE);
     vfree(conn->back_ring.sring);
@@ -2516,7 +2532,7 @@ int castle_back_release(struct inode *inode, struct file *file)
     
     debug("castle_back_release\n");
     
-    set_bit(CASTLE_BACK_CONN_DISCONNECTING_BIT, &conn->flags);
+    kthread_stop(conn->work_thread);
     
     wake_up(&conn->wait);
     

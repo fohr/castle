@@ -4,7 +4,8 @@ syntax: glob
 *.d
 *~
 *.o
-user/ocaml/castle_ioctl
+user/utils/castle_probe_device
+user/utils/castle_scan
 *.cmi
 *.cmo
 *.cmd
