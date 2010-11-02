@@ -49,15 +49,13 @@ rm -rf %{buildroot}
 
 mkdir -p %{buildroot}/etc/udev/rules.d/
 mkdir -p %{buildroot}/etc/castle-fs
-mkdir -p %{buildroot}/opt/acunu/castle-fs/bin
 mkdir -p %{buildroot}/usr/sbin
 mkdir -p %{buildroot}/usr/share/castle-fs
 cp user/udev/castle-fs.rules %{buildroot}/etc/udev/rules.d/
 cp user/udev/udev-watch %{buildroot}/etc/castle-fs/
-cp user/utils/utils %{buildroot}/opt/acunu/castle-fs/bin/
 cp user/utils/init-utils %{buildroot}/usr/share/castle-fs/
 cp user/utils/castle-fs-init.sh %{buildroot}/usr/share/castle-fs/
-cp user/utils/castle-fs-fini.sh %{buildroot}/user/share/castle-fs/
+cp user/utils/castle-fs-fini.sh %{buildroot}/usr/share/castle-fs/
 cp user/utils/castle-scan %{buildroot}/usr/sbin/
 cp user/utils/castle_probe_device %{buildroot}/usr/sbin/castle-probe-device
 
@@ -75,7 +73,6 @@ getent group %{groupname} >/dev/null || groupadd -r %{groupname}
 %defattr(-,root,root,-)
 /etc/udev/rules.d
 /etc/castle-fs/udev-watch
-/opt/acunu
 /usr/sbin/castle-scan
 /usr/sbin/castle-probe-device
 /usr/share/castle-fs

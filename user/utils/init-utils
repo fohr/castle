@@ -1,7 +1,7 @@
 # Hey, emacs! This is a -*- shell-script -*-
 
 # Size of loopback files to create, in MB (if loopback files are used)
-DISK_SIZE=20000
+DISK_SIZE=1000000
 
 CONTROL_FILE=/dev/castle-fs/control
 
