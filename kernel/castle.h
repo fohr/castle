@@ -461,6 +461,7 @@ struct castle_component_tree {
     c_mstore_key_t      mstore_key;
     c_ext_fs_t          tree_ext_fs;
     c_ext_fs_t          data_ext_fs;
+    atomic64_t		large_ext_chk_cnt;
 };
 extern struct castle_component_tree castle_global_tree;
 
@@ -483,6 +484,7 @@ struct castle_clist_entry {
     uint64_t     node_count;
     c_ext_fs_bs_t tree_ext_fs_bs;
     c_ext_fs_bs_t data_ext_fs_bs;
+    uint64_t	 large_ext_chk_cnt;
 } PACKED;
 
 struct castle_vlist_entry {
