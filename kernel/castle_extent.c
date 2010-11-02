@@ -473,7 +473,6 @@ c_ext_id_t castle_extent_alloc(c_rda_type_t            rda_type,
     struct castle_extents_t *castle_extents_sb = NULL;
 
     BUG_ON(!extent_init_done);
-    BUG_ON(count >= MAX_EXT_SIZE);
 
     if (low_disk_space)
         goto __hell;

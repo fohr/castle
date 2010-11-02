@@ -350,7 +350,7 @@ void castle_control_collection_attach(version_t          version,
     ca = castle_collection_init(version, name);
     if(!ca)
     {
-        castle_attachments_store_delete(name, version);
+        printk("Couldn't find collection for version: %u\n", version);
         *ret = -EINVAL;
         return;
     }
@@ -487,6 +487,7 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 
     down(&castle_control_lock);
     debug("Lock taken: in_atomic=%d.\n", in_atomic());
+    debug("IOCTL Cmd: %u\n", (uint32_t)ioctl.cmd);
     switch(ioctl.cmd)
     {
         case CASTLE_CTRL_CLAIM:
