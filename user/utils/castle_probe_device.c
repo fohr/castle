@@ -37,8 +37,8 @@ int main(int argc, char *argv[])
 
     if (argc != 2)
     {
-        fprintf(stderr, "Usage: castle-scan <device, e.g. sda3>.\n");
-        return 2;
+      fprintf(stderr, "Usage: %s <device>\n", argv[0]);
+      return 2;
     }
 
     {
