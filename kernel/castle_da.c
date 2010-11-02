@@ -1315,6 +1315,65 @@ err_out:
     return ret;
 }
 
+static c_val_tup_t castle_da_medium_obj_copy(struct castle_da_merge *merge,
+                                             c_val_tup_t old_cvt)
+{
+    c_ext_pos_t old_cep, new_cep;
+    c_val_tup_t new_cvt;
+    uint32_t i, nr_blocks;
+    c2_block_t *s_c2b, *c_c2b;
+
+    old_cep = old_cvt.cep;
+    /* Old cvt needs to be a medium object. */
+    BUG_ON(!CVT_MEDIUM_OBJECT(old_cvt));
+    /* It needs to be of the right size. */
+    BUG_ON((old_cvt.length <= MAX_INLINE_VAL_SIZE) || (old_cvt.length > MEDIUM_OBJECT_LIMIT));
+    /* It must belong to one of the in_trees data extent. */
+    BUG_ON((old_cvt.cep.ext_id != merge->in_tree1->data_ext_fs.ext_id) &&
+           (old_cvt.cep.ext_id != merge->in_tree2->data_ext_fs.ext_id));
+    /* We assume objects are page aligned. */
+    BUG_ON(BLOCK_OFFSET(old_cep.offset) != 0);
+
+    /* Allocate space for the new copy. */
+    nr_blocks = (old_cvt.length - 1) / C_BLK_SIZE + 1;
+    BUG_ON(castle_ext_fs_get(&merge->data_ext_fs,
+                              nr_blocks * C_BLK_SIZE,
+                              0,
+                              &new_cep) < 0);
+    BUG_ON(BLOCK_OFFSET(new_cep.offset) != 0);
+    /* Save the cep to return later. */
+    new_cvt = old_cvt;
+    new_cvt.cep = new_cep;
+
+    /* Do the actual copy. */
+    debug("Copying "cep_fmt_str" to "cep_fmt_str_nl,
+            cep2str(old_cep), cep2str(new_cep));
+    for(i=0; i<nr_blocks; i++)
+    {
+        /* Get the block, and schedule prefetch asap. */
+        s_c2b = castle_cache_page_block_get(old_cep);
+        castle_cache_block_advise(s_c2b, C2B_PREFETCH_FRWD);
+        c_c2b = castle_cache_page_block_get(new_cep); 
+        /* Make sure that we lock _after_ prefetch call. */
+        write_lock_c2b(s_c2b);
+        write_lock_c2b(c_c2b);
+        if(!c2b_uptodate(s_c2b))
+            BUG_ON(submit_c2b_sync(READ, s_c2b));
+        update_c2b(c_c2b);
+        memcpy(c2b_buffer(c_c2b), c2b_buffer(s_c2b), PAGE_SIZE);
+        dirty_c2b(c_c2b);
+        write_unlock_c2b(c_c2b);
+        write_unlock_c2b(s_c2b);
+        put_c2b(c_c2b);
+        put_c2b(s_c2b);
+        old_cep.offset += PAGE_SIZE;
+        new_cep.offset += PAGE_SIZE;
+    }
+    debug("Finished copy, i=%d\n", i);
+    
+    return new_cvt;
+}
+
 static inline void castle_da_entry_add(struct castle_da_merge *merge, 
                                        int depth,
                                        void *key, 
@@ -1768,27 +1827,18 @@ static void castle_da_merge_do(struct work_struct *work)
     while(castle_ct_merged_iter_has_next(merge->merged_iter))
     {
         /* TODO: we never check iterator errors. We should! */
-        /* TODO: we never destroy iterator. We may need to! */
         castle_ct_merged_iter_next(merge->merged_iter, &key, &version, &cvt); 
         debug("Merging entry id=%d: k=%p, *k=%d, version=%d, cep=(0x%x, 0x%x)\n",
                 i, key, *((uint32_t *)key), version, cvt.cep.ext_id, cvt.cep.offset);
+        /* Deal with medium objects. */
         if (CVT_MEDIUM_OBJECT(cvt))
-        {
-            c_ext_pos_t cep;
-            uint32_t nr_blocks;
-
-            BUG_ON((cvt.cep.ext_id != merge->in_tree1->data_ext_fs.ext_id) &&
-                    (cvt.cep.ext_id != merge->in_tree2->data_ext_fs.ext_id));
-            BUG_ON(cvt.length > MEDIUM_OBJECT_LIMIT);
-            nr_blocks = (cvt.length - 1) / C_BLK_SIZE + 1;
-            BUG_ON(castle_ext_fs_get(&merge->data_ext_fs,
-                                     nr_blocks * C_BLK_SIZE,
-                                     0,
-                                     &cep) < 0);
-            cvt.cep = cep;
-        }
+            cvt = castle_da_medium_obj_copy(merge, cvt);
+        BUG_ON(CVT_INVALID(cvt));
+        /* Add entry to level 0 node (and recursively up the tree). */
         castle_da_entry_add(merge, 0, key, version, cvt);
+        /* Increment the number of entries stored in the output tree. */
         merge->nr_entries++;
+        /* Try to complete node. */
         if((ret = castle_da_nodes_complete(merge, 0)))
             goto err_out;
         castle_da_merge_budget_consume(merge);
