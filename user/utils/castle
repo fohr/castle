@@ -1,0 +1,92 @@
+#! /bin/sh  
+#
+# castle Acunu castle filesystem
+#
+# chkconfig:   2345 5 95
+# description: Acunu castle filesystem
+
+### BEGIN INIT INFO
+# Provides:          castle
+# Required-Start:    $local_fs $remote_fs $time $network acunu_host
+# Required-Stop:     
+# Default-Start: 2 3 4 5 
+# Default-Stop: 0 1 2 6      
+# Short-Description: Acunu castle filesystem
+# Description: Acunu castle filesystem
+### END INIT INFO
+
+# Source function library.
+. /etc/rc.d/init.d/functions
+. /usr/share/castle-fs/init-utils
+
+set +u
+set +e # necessary as /etc/init.d/functions is badly written
+
+start() {
+    echo -n "Starting $prog: "
+    /usr/share/castle-fs/castle-fs-init
+    retval=$?
+    echo
+    return $retval
+}
+
+stop() {
+    echo -n $"Stopping $prog: "
+    /usr/share/castle-fs/castle-fs-fini
+    retval=$?
+    echo
+    return $retval
+}
+
+restart() {
+    stop
+    start
+}
+
+reload() {
+    restart
+}
+
+force_reload() {
+    restart
+}
+
+rh_status() {
+    # run checks to determine if the service is running or use generic status
+    kernel_fs_running
+}
+
+rh_status_q() {
+    rh_status >/dev/null 2>&1
+}
+
+
+case "$1" in
+    start)
+        $1
+        ;;
+    stop)
+        $1
+        ;;
+    restart)
+        $1
+        ;;
+    reload)
+        $1
+        ;;
+    force-reload)
+        force_reload
+        ;;
+    status)
+        rh_status
+        ;;
+    condrestart|try-restart)
+        rh_status_q || exit 0
+        restart
+        ;;
+    *)
+        echo $"Usage: $0 {start|stop|status|restart|condrestart|try-restart|reload|force-reload}"
+        exit 2
+esac
+exit $?
+

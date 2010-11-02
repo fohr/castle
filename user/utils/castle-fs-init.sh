@@ -1,18 +1,18 @@
 #!/bin/bash
 # Relies on tests script machinery to do that 
 
-set -eu
+set -e
 
 . /usr/share/castle-fs/init-utils
 
-if [ -e "/dev/castle-fs/control" ] || lsmod | grep -q '^castle_fs$'
+if kernel_fs_running
 then
     echo "castle-fs is already running"
     exit 0
 fi
 
 disks=$(castle-scan)
-declare -a devids loops
+declare -a devids=() loops=()
 
 for disk in $disks
 do
@@ -25,13 +25,15 @@ do
 
   if ! [ -e "$disk" ]
   then
-      if echo $disk | grep -q '^/dev/' then
+      if echo $disk | grep -q '^/dev/'
+      then
           # Presumably block special device (not existing)
           echo "Device $disk does not exist, aborting"
           exit 1
       fi
 
       # Loopback file (not existing)
+      mkdir -p $(dirname "$disk")
       dd conv=excl if=/dev/zero of=$disk bs=1M count=1 seek=$DISK_SIZE 2>/dev/null
   fi
 
@@ -49,6 +51,9 @@ do
   losetup "$loop" "$disk"
   devids=("${devids[@]}" $(devid_of_disk "$loop"))
 done
+
+# Load kernel module
+init_kernel_fs
 
 # Claim devices
 for devid in "${devids[@]}"

@@ -7,4 +7,14 @@ set -eu
 
 unmount_kernel_fs
 
+disks=$(castle-scan)
+
+for disk in $disks
+do
+  for loop in $(losetup -a | grep "($disk)" | cut -d: -f1)
+  do
+    losetup -d "$loop"
+  done
+done
+
 echo "castle-fs shut down successfully"

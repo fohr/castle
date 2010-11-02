@@ -5,6 +5,10 @@ DISK_SIZE=1000000
 
 CONTROL_FILE=/dev/castle-fs/control
 
+function kernel_fs_running {
+    [ -e "/dev/castle-fs/control" ] || lsmod | grep -q '^castle_fs$'
+}
+
 function init_kernel_fs {
     if ! kernel_fs_running; then
         echo "Castle FS kernel module not found, trying to insert."

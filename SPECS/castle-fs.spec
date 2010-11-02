@@ -47,15 +47,17 @@ make -C kernel KVER=%{kversion} KERNEL_DIR=%{kerneldir} DEBUG=n PERF_DEBUG=n
 %install
 rm -rf %{buildroot}
 
+mkdir -p %{buildroot}/etc/rc.d/init.d
 mkdir -p %{buildroot}/etc/udev/rules.d/
 mkdir -p %{buildroot}/etc/castle-fs
 mkdir -p %{buildroot}/usr/sbin
 mkdir -p %{buildroot}/usr/share/castle-fs
 cp user/udev/castle-fs.rules %{buildroot}/etc/udev/rules.d/
 cp user/udev/udev-watch %{buildroot}/etc/castle-fs/
+cp user/utils/castle %{buildroot}/etc/rc.d/init.d/
 cp user/utils/init-utils %{buildroot}/usr/share/castle-fs/
-cp user/utils/castle-fs-init.sh %{buildroot}/usr/share/castle-fs/
-cp user/utils/castle-fs-fini.sh %{buildroot}/usr/share/castle-fs/
+cp user/utils/castle-fs-init.sh %{buildroot}/usr/share/castle-fs/castle-fs-init
+cp user/utils/castle-fs-fini.sh %{buildroot}/usr/share/castle-fs/castle-fs-fini
 cp user/utils/castle-scan %{buildroot}/usr/sbin/
 cp user/utils/castle_probe_device %{buildroot}/usr/sbin/castle-probe-device
 
@@ -66,11 +68,22 @@ make -C "%{kerneldir}" modules_install M=`pwd`/kernel
 %clean
 rm -rf %{buildroot}
 
+%post
+# This adds the proper /etc/rc*.d links for the script
+/sbin/chkconfig --add castle
+
+%preun
+if [ $1 = 0 ] ; then
+    /sbin/service castle stop >/dev/null 2>&1
+    /sbin/chkconfig --del castle
+fi
+
 %pre
 getent group %{groupname} >/dev/null || groupadd -r %{groupname}
 
 %files
 %defattr(-,root,root,-)
+/etc/rc.d/init.d/*
 /etc/udev/rules.d
 /etc/castle-fs/udev-watch
 /usr/sbin/castle-scan
