@@ -80,6 +80,7 @@ getent group %{groupname} >/dev/null || groupadd -r %{groupname}
 /etc/castle-fs/udev-watch
 /opt/acunu
 /usr/sbin/castle-scan
+/usr/sbin/castle-probe-device
 /sbin/mkcastlefs
 /etc/acunu/fs-utils
 
