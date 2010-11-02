@@ -171,7 +171,9 @@ int castle_ext_fs_init(c_ext_fs_t       *ext_fs,
                        c_byte_off_t      size,
                        uint32_t          align)
 {
-    ext_fs->ext_id      = castle_extent_alloc(DEFAULT, da_id, (size/C_CHK_SIZE));
+    uint32_t nr_chunks = ((size  - 1) / C_CHK_SIZE) + 1;
+
+    ext_fs->ext_id      = castle_extent_alloc(DEFAULT, da_id, nr_chunks);
     ext_fs->ext_size    = size;
     ext_fs->align       = align;
     atomic64_set(&ext_fs->used, 0);
