@@ -98,7 +98,7 @@ void vl_okey_print(c_vl_okey_t *key)
             i, 
             key->dims[i]->length, 
             NR_BYTES_PRINT,
-            key_str);
+            key->dims[i]->length == 0 ? "" : key_str);
     }
 }
 

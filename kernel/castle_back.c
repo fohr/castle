@@ -413,7 +413,7 @@ static struct castle_back_stateful_op *castle_back_find_stateful_op(struct castl
     if (!stateful_op->in_use || stateful_op->token != token || stateful_op->tag != tag)
         return NULL;
 
-    debug("castle_back_find_stateful_op returning: token = %x, use_count = %u, index = %ld\n",
+    debug("castle_back_find_stateful_op returning: token = 0x%x, use_count = %u, index = %ld\n",
             stateful_op->token, stateful_op->use_count, stateful_op - conn->stateful_ops);
 
     return stateful_op;
@@ -472,7 +472,7 @@ static void castle_back_cleanup_conn(void *data);
 static void castle_back_put_stateful_op(struct castle_back_conn *conn,
                                         struct castle_back_stateful_op *stateful_op)
 {
-    debug("castle_back_put_stateful_op putting: token = %x, use_count = %u, index = %ld\n",
+    debug("castle_back_put_stateful_op putting: token = 0x%x, use_count = %u, index = %ld\n",
             stateful_op->token, stateful_op->use_count, stateful_op - conn->stateful_ops);
 
     BUG_ON(!spin_is_locked(&stateful_op->lock));
@@ -721,7 +721,7 @@ static int castle_back_reply(struct castle_back_op *op, int err,
     resp.token = token;
     resp.length = length;
 
-    debug("castle_back_reply op=%p, call_id=%d, err=%d, token=%x, length=%d\n",
+    debug("castle_back_reply op=%p, call_id=%d, err=%d, token=0x%x, length=%d\n",
         op, op->req.call_id, err, token, length);
 
     // TODO check with GM that this is in the correct place
@@ -997,7 +997,7 @@ static void castle_back_replace(void *data)
     op->attachment = castle_attachment_get(op->req.replace.collection_id);
     if (op->attachment == NULL)
     {
-        error("Collection not found id=%x\n", op->req.replace.collection_id);
+        error("Collection not found id=0x%x\n", op->req.replace.collection_id);
         err = -EINVAL;
         goto err0;
     }
@@ -1065,7 +1065,7 @@ static void castle_back_remove(void *data)
     op->attachment = castle_attachment_get(op->req.remove.collection_id);
     if (op->attachment == NULL)
     {
-        error("Collection not found id=%x\n", op->req.remove.collection_id);
+        error("Collection not found id=0x%x\n", op->req.remove.collection_id);
         err = -EINVAL;
         goto err0;
     }
@@ -1175,7 +1175,7 @@ static void castle_back_get(void *data)
     op->attachment = castle_attachment_get(op->req.get.collection_id);
     if (op->attachment == NULL)
     {
-        error("Collection not found id=%x\n", op->req.get.collection_id);
+        error("Collection not found id=0x%x\n", op->req.get.collection_id);
         err = -EINVAL;
         goto err0;
     }
@@ -1250,7 +1250,7 @@ static void castle_back_iter_call_queued(struct castle_back_stateful_op *statefu
 
     if (call_next)
     {
-        debug_iter("castle_back_iter_call_queued add next op to work queue, token = %x.\n",
+        debug_iter("castle_back_iter_call_queued add next op to work queue, token = 0x%x.\n",
                 stateful_op->token);
         switch (stateful_op->curr_op->req.tag)
         {
@@ -1272,12 +1272,12 @@ static void castle_back_iter_call_queued(struct castle_back_stateful_op *statefu
     } else
 
         debug_iter("castle_back_iter_call_queued not calling since "
-                "ongoing op or no ops in queue, token = %x.\n", stateful_op->token);
+                "ongoing op or no ops in queue, token = 0x%x.\n", stateful_op->token);
 }
 
 static void castle_back_iter_reply(struct castle_back_stateful_op *stateful_op, int err)
 {
-    debug_iter("castle_back_iter_reply, token = %x.\n", stateful_op->token);
+    debug_iter("castle_back_iter_reply, token = 0x%x.\n", stateful_op->token);
 
     castle_back_reply(stateful_op->curr_op, err, 0, 0);
 
@@ -1318,7 +1318,7 @@ static void castle_back_iter_start(void *data)
     attachment = castle_attachment_get(op->req.iter_start.collection_id);
     if (attachment == NULL)
     {
-        error("Collection not found id=%x\n", op->req.iter_start.collection_id);
+        error("Collection not found id=0x%x\n", op->req.iter_start.collection_id);
         err = -EINVAL;
         goto err1;
     }
@@ -1543,7 +1543,7 @@ static void _castle_back_iter_next(void *data)
     int                             err;
     struct castle_back_stateful_op *stateful_op = data;
 
-    debug_iter("_castle_back_iter_next, token = %x\n", stateful_op->token);
+    debug_iter("_castle_back_iter_next, token = 0x%x\n", stateful_op->token);
 
     BUG_ON(!stateful_op->in_use);
 
@@ -1622,14 +1622,14 @@ static void castle_back_iter_next(void *data)
     int err;
     struct castle_back_stateful_op *stateful_op;
 
-    debug_iter("castle_back_iter_next, token = %x\n", op->req.iter_finish.token);
+    debug_iter("castle_back_iter_next, token = 0x%x\n", op->req.iter_finish.token);
 
     stateful_op = castle_back_find_stateful_op(conn,
             op->req.iter_next.token, CASTLE_RING_ITER_START);
 
     if (!stateful_op)
     {
-        error("Token not found %x\n", op->req.iter_next.token);
+        error("Token not found 0x%x\n", op->req.iter_next.token);
         err = -EINVAL;
         castle_back_reply(op, err, 0, 0);
         return;
@@ -1696,7 +1696,7 @@ static void _castle_back_iter_finish(void *data)
     struct castle_back_stateful_op *stateful_op = data;
     int err;
 
-    debug_iter("_castle_back_iter_finish, token = %x\n", stateful_op->token);
+    debug_iter("_castle_back_iter_finish, token = 0x%x\n", stateful_op->token);
 
     spin_lock(&stateful_op->lock);
 
@@ -1718,14 +1718,14 @@ static void castle_back_iter_finish(void *data)
     int err;
     struct castle_back_stateful_op *stateful_op;
 
-    debug_iter("castle_back_iter_finish, token = %x\n", op->req.iter_finish.token);
+    debug_iter("castle_back_iter_finish, token = 0x%x\n", op->req.iter_finish.token);
 
     stateful_op = castle_back_find_stateful_op(conn,
             op->req.iter_finish.token, CASTLE_RING_ITER_START);
 
     if (!stateful_op)
     {
-        error("Token not found %x\n", op->req.iter_finish.token);
+        error("Token not found 0x%x\n", op->req.iter_finish.token);
         err = -EINVAL;
         goto err0;
     }
@@ -1889,7 +1889,7 @@ static void castle_back_big_put(void *data)
     attachment = castle_attachment_get(op->req.big_put.collection_id);
     if (attachment == NULL)
     {
-        error("Collection not found id=%x\n", op->req.big_put.collection_id);
+        error("Collection not found id=0x%x\n", op->req.big_put.collection_id);
         err = -EINVAL;
         goto err1;
     }
@@ -1949,7 +1949,7 @@ static void castle_back_put_chunk(void *data)
 
     if (!stateful_op)
     {
-        error("Token not found %x\n", op->req.put_chunk.token);
+        error("Token not found 0x%x\n", op->req.put_chunk.token);
         err = -EINVAL;
         goto err0;
     }
@@ -2105,7 +2105,7 @@ static void castle_back_big_get(void *data)
     attachment = castle_attachment_get(op->req.big_get.collection_id);
     if (attachment == NULL)
     {
-        error("Collection not found id=%x\n", op->req.big_get.collection_id);
+        error("Collection not found id=0x%x\n", op->req.big_get.collection_id);
         err = -EINVAL;
         goto err1;
     }
@@ -2161,7 +2161,7 @@ static void castle_back_get_chunk(void *data)
         op->req.get_chunk.token, CASTLE_RING_BIG_GET);
     if (!stateful_op)
     {
-        error("Token not found %x\n", op->req.get_chunk.token);
+        error("Token not found 0x%x\n", op->req.get_chunk.token);
         err = -EINVAL;
         goto err0;
     }
