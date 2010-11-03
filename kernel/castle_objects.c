@@ -393,7 +393,7 @@ static c_vl_bkey_t* castle_object_btree_key_skip(c_vl_bkey_t *old_key,
 
     /* If the offending dimension was bigger than the bounds, we need to set 
        the NEXT_FLAG for it */ 
-    if(bigger)
+    if(bigger > 0)
         castle_object_btree_key_dim_inc(new_key, offending_dim);
 
     return new_key;
