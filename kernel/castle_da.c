@@ -2877,7 +2877,7 @@ out:
     return ret;
 }
 
-int castle_da_size_get(struct castle_double_array *da, struct castle_component_tree *ct, int level_cnt, void *token)
+static int castle_da_size_get(struct castle_double_array *da, struct castle_component_tree *ct, int level_cnt, void *token)
 {
     c_byte_off_t *size = (c_byte_off_t *)token;
     *size += castle_extent_size_get(ct->tree_ext_fs.ext_id);
