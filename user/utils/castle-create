@@ -11,7 +11,7 @@ then
 fi
 
 compute_devids "$@"
-setup_loops
+setup_loopbacks
 init_kernel_fs
 claim_all
 castle-cli init

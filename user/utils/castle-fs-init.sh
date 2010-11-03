@@ -14,7 +14,7 @@ fi
 disks=$(castle-scan)
 
 compute_devids $disks
-setup_loops
+setup_loopbacks
 init_kernel_fs
 claim_all
 castle-cli init
