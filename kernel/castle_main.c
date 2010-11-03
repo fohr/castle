@@ -447,26 +447,51 @@ static int castle_slave_superblock_validate(struct castle_slave_superblock *cs_s
 
 static int castle_slave_superblock_read(struct castle_slave *cs) 
 {
-    struct castle_slave_superblock *cs_sb;
-    struct buffer_head *bh;
-    int err;
-   
-    /* We're storing the superblock on the stack, make sure it doesn't
-       grow too large */
-    BUG_ON(sizeof(struct castle_slave_superblock) > PAGE_SIZE >> 2); 
-    bh = __bread(cs->bdev, 0, C_BLK_SIZE);
-    cs_sb = (struct castle_slave_superblock *)bh->b_data;
+    struct castle_slave_superblock *cs_sb = NULL;
+    struct castle_fs_superblock *fs_sb = NULL;
+    struct buffer_head *cs_sb_bh = NULL, *fs_sb_bh = NULL;
+    int err = -EINVAL;
+    int block_size = cs->bdev->bd_block_size;
 
-    err = castle_slave_superblock_validate(cs_sb);
-    if(err)
-        return -EINVAL;
+    if ((block_size > C_BLK_SIZE) || (block_size % C_BLK_SIZE))
+    {
+        printk("Couldn't support block_size %u\n", block_size);
+        goto error_out;
+    }
+
+    if (!(cs_sb_bh = __bread(cs->bdev, 0, C_BLK_SIZE)))
+        goto error_out;
+    if (!(fs_sb_bh = __bread(cs->bdev, C_BLK_SIZE/block_size, C_BLK_SIZE)))
+        goto error_out;
+
+    /* Validate Slave Superblock. */
+    cs_sb = (struct castle_slave_superblock *)cs_sb_bh->b_data;
+    if ((err = castle_slave_superblock_validate(cs_sb)) < 0)
+    {
+        printk("%d\n", err);
+        goto error_out;
+    }
+
+    /* Validate File-system Superblock. */
+    fs_sb = (struct castle_fs_superblock *)fs_sb_bh->b_data;
+    if ((err = castle_fs_superblock_validate(fs_sb)) < 0 && 
+                                !(cs_sb->flags & CASTLE_SLAVE_NEWDEV))
+        goto error_out;
+
     printk("Superblock found.\n");
     /* castle_slave_superblock_print(cs_sb); */
     /* Save the uuid and exit */
     cs->uuid = cs_sb->uuid;
     cs->new_dev = cs_sb->flags & CASTLE_SLAVE_NEWDEV;
+	err = 0;
 
-    return 0;
+error_out:
+    if (cs_sb_bh)
+        brelse(cs_sb_bh);
+    if (fs_sb_bh)
+        brelse(fs_sb_bh);
+
+    return err;
 }
 
 struct castle_slave_superblock* castle_slave_superblock_get(struct castle_slave *cs)
@@ -547,7 +572,7 @@ static int castle_slave_superblocks_init(struct castle_slave *cs)
         if (ret)
         {
             printk("Invalid Slave Superblock\n");
-            goto out;
+            BUG();
         }
         else 
         {
@@ -555,7 +580,7 @@ static int castle_slave_superblocks_init(struct castle_slave *cs)
             if (ret)
             {
                 printk("Invalid FS Superblock\n");
-                goto out;
+                BUG();
             }
         }
     } else
@@ -575,7 +600,6 @@ static int castle_slave_superblocks_init(struct castle_slave *cs)
     debug("Before slave init: in_atomic()=%d\n", in_atomic());
     castle_freespace_slave_init(cs, cs->new_dev);
 
-out:
     castle_slave_superblock_put(cs, cs->new_dev);
     castle_fs_superblock_put(cs, 0);
     return ret;
@@ -698,14 +722,6 @@ struct castle_slave* castle_claim(uint32_t new_dev)
     cs_added = 1;
     nr_slaves++;
     
-    debug("Initing superblocks: in_atomic=%d.\n", in_atomic());
-    err = castle_slave_superblocks_init(cs);
-    if(err)
-    {
-        printk("Could not cache the superblocks.\n");
-        goto err_out;
-    }
-
     err = castle_sysfs_slave_add(cs);
     if(err)
     {
@@ -715,9 +731,18 @@ struct castle_slave* castle_claim(uint32_t new_dev)
     
     castle_events_slave_claim(cs->uuid);
 
+    debug("Initing superblocks: in_atomic=%d.\n", in_atomic());
+    err = castle_slave_superblocks_init(cs);
+    if(err)
+    {
+        printk("Could not cache the superblocks.\n");
+        goto err_out;
+    }
+
     return cs;
 err_out:
-    castle_extent_sup_ext_close(cs);
+    if (!EXT_ID_INVAL(cs->sup_ext))
+        castle_extent_sup_ext_close(cs);
     castle_rda_slave_remove(DEFAULT, cs);
     if(cs_added)     list_del(&cs->list);
     if(cs->sblk)     put_c2b(cs->sblk);

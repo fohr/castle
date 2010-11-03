@@ -928,7 +928,17 @@ __hell:
 
 void castle_extent_sup_ext_close(struct castle_slave *cs)
 {
-    printk("Not yet implemented %s\n", __FUNCTION__);
+    c_ext_id_t ext_id;
+    c_ext_t *ext;
+
+    ext_id = slave_id_to_sup_ext(cs->id);
+    ext = castle_extents_hash_get(ext_id);
+    if (ext)
+    {
+        castle_extents_rhash_remove(ext);
+        castle_free(ext);
+    }
+    castle_free(cs->sup_ext_maps);
 
     return;
 }
