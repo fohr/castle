@@ -464,7 +464,8 @@ static int castle_slave_superblock_read(struct castle_slave *cs)
     /* castle_slave_superblock_print(cs_sb); */
     /* Save the uuid and exit */
     cs->uuid = cs_sb->uuid;
-    
+    cs->new_dev = cs_sb->flags & CASTLE_SLAVE_NEWDEV;
+
     return 0;
 }
 
@@ -669,24 +670,11 @@ struct castle_slave* castle_claim(uint32_t new_dev)
     bdev_claimed = 1;
     cs->bdev = bdev;
 
-    err = castle_slave_superblock_read(cs); 
-    if(err == -EINVAL)
-    {
-        printk("Invalid superblock. Will initialise a new one.\n");
-#if 1
-        get_random_bytes(&cs->uuid, sizeof(cs->uuid));
-#else
-        cs->uuid = (cs->id + 1) * 0x111;
-#endif
-        printk("Will use uuid of: 0x%x\n", cs->uuid);
-        cs->new_dev = 1;
-        err = 0;
-    }
-    if(err)
-    {
+    if(castle_slave_superblock_read(cs))
+	{
         printk("Invalid superblock.\n");
         goto err_out;
-    }
+	}
 
     cs->sup_ext = castle_extent_sup_ext_init(cs);
     if (cs->sup_ext == INVAL_EXT_ID)

@@ -10,6 +10,7 @@ CC := gcc
 ## Build options
 ##
 
+CFLAGS			+= -I../../kernel
 CFLAGS          += -Werror
 CFLAGS          += -Wall
 CFLAGS          += -Wno-unused
@@ -25,7 +26,7 @@ MAIN_OBJS  = castle_probe_device
 ## "all" Target
 ##
 
-all: $(MAIN_OBJS)
+all: $(MAIN_OBJS) mkcastlefs
 
 ##
 ## Other targets
@@ -33,6 +34,8 @@ all: $(MAIN_OBJS)
 
 $(MAIN_OBJS): $(OBJECT_FILES) $(HEADER_FILES)
 	$(CC) $(CFLAGS) $@.o $(LIBS) -o $@
+
+mkcastlefs: mkcastlefs.o
 
 %.o: %.c $(HEADER_FILES)
 	$(CC) $(CFLAGS) -c -o $*.o $*.c
@@ -42,7 +45,7 @@ tags: $(SOURCE_FILES) $(HEADER_FILES)
 
 .PHONY: clean
 clean:
-	rm -f *.o $(MAIN_OBJS) 
+	rm -f *.o $(MAIN_OBJS) mkcastlefs
 
 .PHONY: install
 install: $(MAIN_OBJS)

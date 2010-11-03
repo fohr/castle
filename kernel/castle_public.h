@@ -338,6 +338,10 @@ struct castle_key_value_list {
 #define CASTLE_SLAVE_MAGIC3     (0x16061981)
 #define CASTLE_SLAVE_VERSION    (1)
 
+#define CASTLE_SLAVE_TARGET     (0x00000001)
+#define CASTLE_SLAVE_SPINNING   (0x00000002)
+#define CASTLE_SLAVE_NEWDEV     (0x00000004)
+
 struct castle_slave_superblock {
     uint32_t magic1;
     uint32_t magic2;

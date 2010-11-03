@@ -1108,7 +1108,7 @@ int castle_object_iter_next(castle_object_iterator_t *iterator,
                             void *data)
 {
     c_vl_bkey_t *k;
-    c_vl_okey_t *key;
+    c_vl_okey_t *key = NULL;
     c_val_tup_t val;
     version_t v;
     int has_response;

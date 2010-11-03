@@ -196,9 +196,6 @@ typedef struct castle_extent_freespace_byte_stream {
     uint64_t        blocked;
 } c_ext_fs_bs_t;
 
-#define CASTLE_SLAVE_TARGET     (0x00000001)
-#define CASTLE_SLAVE_SPINNING   (0x00000002)
-
 typedef struct {
     uint32_t        max_entries;
     uint32_t        nr_entries;
