@@ -1337,14 +1337,16 @@ static int castle_cache_block_hash_clean(void)
     struct hlist_node *le, *te;
     HLIST_HEAD(victims);
     c2_block_t *c2b;
-    int nr_victims;
+    int nr_victims, nr_pages;
 
     spin_lock_irq(&castle_cache_block_hash_lock);
     /* Find victim buffers. */ 
     nr_victims = 0;
+    nr_pages = 0;
     list_for_each_safe(lh, th, &castle_cache_cleanlist)
     {
         c2b = list_entry(lh, c2_block_t, clean);
+        nr_pages += c2b->nr_pages;
         /* Note: Pinning all logical extent pages in cache. Make sure cache is 
          * big enough. 
          * TODO: gm281: this is temporary solution. Introduce pools to deal with the
@@ -1367,6 +1369,15 @@ static int castle_cache_block_hash_clean(void)
     /* We couldn't find any victims */
     if(hlist_empty(&victims))
     {
+        if(nr_pages > castle_cache_size / 2)
+        {
+            static atomic_t nr_allowed = ATOMIC_INIT(1000);
+            
+            printk("Couldn't find a victim page in %d pages, cache size %d\n",
+                    nr_pages, castle_cache_size);
+            if(atomic_dec_and_test(&nr_allowed)) 
+                BUG();
+        }
         debug("No victims found!!\n");
         return 0;
     }
@@ -2055,8 +2066,6 @@ void castle_cache_debug_fini(void)
 static void castle_cache_flush_endio(c2_block_t *c2b)
 {
     atomic_t *count = c2b->private;
-    if(!c2b_uptodate(c2b))
-        printk("Could not write out a page!\n");
 
     BUG_ON(!c2b_flushing(c2b));
     clear_c2b_flushing(c2b);
@@ -2165,14 +2174,17 @@ next_batch:
             if(batch_idx == FLUSH_BATCH)
                 goto next_batch; 
             /* If we still have buffers to flush, but we could not lock 
-               enough dirty buffers print a warning message, and stop */
-            printk("WARNING: Could not find enough dirty pages to flush\n"
-                   "  Stats: dirty=%d, clean=%d, free=%d\n"
-                   "         target=%d, to_flush=%d, blocks=%d\n",
-                atomic_read(&castle_cache_dirty_pages), 
-                atomic_read(&castle_cache_clean_pages),
-                castle_cache_page_freelist_size * PAGES_PER_C2P,
-                target_dirty_pgs, to_flush, batch_idx); 
+               enough dirty buffers print a warning message, and stop.
+               Warn if the # of dirty pages is greater than a constant.
+               If it is not, the pages are likely write locked. */
+            if(dirty_pgs > 100)
+                printk("WARNING: Could not find enough dirty pages to flush\n"
+                       "  Stats: dirty=%d, clean=%d, free=%d\n"
+                       "         target=%d, to_flush=%d, blocks=%d\n",
+                    atomic_read(&castle_cache_dirty_pages), 
+                    atomic_read(&castle_cache_clean_pages),
+                    castle_cache_page_freelist_size * PAGES_PER_C2P,
+                    target_dirty_pgs, to_flush, batch_idx); 
         }
         
         /* Finally check if we should still continue */
