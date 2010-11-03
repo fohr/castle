@@ -510,6 +510,7 @@ static int castle_slave_superblocks_cache(struct castle_slave *cs)
         {
             for(j=0; j<=i; i++)
                 write_unlock_c2b(*(c2bp[i]));
+            printk("Disk super block already exists in disk\n");
             return -EIO;
         }
     }
@@ -541,8 +542,21 @@ static int castle_slave_superblocks_init(struct castle_slave *cs)
     debug("In superblocks_init: in_atomic()=%d\n", in_atomic());
     if(!cs->new_dev)
     {
-                 ret = castle_slave_superblock_validate(cs_sb);
-        if(!ret) ret = castle_fs_superblock_validate(fs_sb);
+        ret = castle_slave_superblock_validate(cs_sb);
+        if (ret)
+        {
+            printk("Invalid Slave Superblock\n");
+            goto out;
+        }
+        else 
+        {
+            ret = castle_fs_superblock_validate(fs_sb);
+            if (ret)
+            {
+                printk("Invalid FS Superblock\n");
+                goto out;
+            }
+        }
     } else
     {
         printk("Initing slave superblock.\n");
@@ -557,11 +571,12 @@ static int castle_slave_superblocks_init(struct castle_slave *cs)
         castle_slave_superblock_print(cs_sb);
         printk("Done.\n");
     }
-    castle_slave_superblock_put(cs, cs->new_dev);
     debug("Before slave init: in_atomic()=%d\n", in_atomic());
     castle_freespace_slave_init(cs, cs->new_dev);
-    castle_fs_superblock_put(cs, 0);
 
+out:
+    castle_slave_superblock_put(cs, cs->new_dev);
+    castle_fs_superblock_put(cs, 0);
     return ret;
 }
 

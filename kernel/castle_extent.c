@@ -929,7 +929,6 @@ __hell:
 void castle_extent_sup_ext_close(struct castle_slave *cs)
 {
     printk("Not yet implemented %s\n", __FUNCTION__);
-    BUG();
 
     return;
 }
