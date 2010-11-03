@@ -615,6 +615,8 @@ static void c2b_multi_io_end(struct bio *bio, int err)
     BUG_ON((!err) && (completed != C_BLK_SIZE * bio_info->nr_pages));
     if( (err) && (completed != 0))
     {
+        printk("NOTE: you've likely run out of space on disk for sparse loopback files. "
+               "If so, this is not strictly a bug and will not be fixed.!\n");
         printk("Bio error=%d, completed=%d, bio->bi_size=%d\n", err, completed, bio->bi_size);
         BUG();
     }
