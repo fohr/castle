@@ -23,7 +23,7 @@ function init_kernel_fs {
             usleep 100000
         done
         if [ ! -e "${CONTROL_FILE}" ]; then
-            echo "Control file has not been created after kernel module insertion"
+            echo "ERROR: control file '${CONTROL_FILE}' has not been created after kernel module insertion. Exiting."
             exit 1
         fi
     fi
@@ -44,7 +44,7 @@ function unmount_kernel_fs {
             usleep 100000
         done
         if [ -e ${CONTROL_FILE} ]; then
-            echo "Removed castle_fs module, but the control file is still there!"
+            echo "EROOR: removed castle_fs module, but the control file '${CONTROL_FILE}' is still there. Exiting."
             exit 1
         fi
     fi
