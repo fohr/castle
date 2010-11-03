@@ -58,7 +58,7 @@ function devid_of_disk {
     printf '0x%x' "$devid"
 }
 
-function compute_devids {
+function load_fs_and_claim {
     declare -a devids=() loops=()
 
     for disk in "$@"
@@ -90,18 +90,16 @@ function compute_devids {
           loops=("${loops[@]}" "$disk")
       fi
     done
-}
 
-function setup_loopbacks {
     for disk in "${loops[@]}"
     do
       loop=$(losetup -f)
       losetup "$loop" "$disk"
       devids=("${devids[@]}" $(devid_of_disk "$loop"))
     done
-}
 
-function claim_all {
+    init_kernel_fs
+
     for devid in "${devids[@]}"
     do
       castle-cli claim "$devid" > /dev/null

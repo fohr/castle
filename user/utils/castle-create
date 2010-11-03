@@ -10,10 +10,7 @@ then
     exit 0
 fi
 
-compute_devids "$@"
-setup_loopbacks
-init_kernel_fs
-claim_all
+load_fs_and_claim "$@"
 castle-cli init
 /usr/share/castle-fs/castle-fs-fini
 

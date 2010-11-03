@@ -13,10 +13,7 @@ fi
 
 disks=$(castle-scan)
 
-compute_devids $disks
-setup_loopbacks
-init_kernel_fs
-claim_all
+load_fs_and_claim $disks
 castle-cli init
 
 echo "castle-fs initialised successfully"
