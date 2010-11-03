@@ -10,8 +10,9 @@ then
     exit 0
 fi
 
-load_fs_and_claim "$@"
-castle-cli init
-/usr/share/castle-fs/castle-fs-fini
+for disk in "$@"
+do
+  mkcastlefs "$disk"
+done
 
 echo "Created superblocks on devices: $@"
