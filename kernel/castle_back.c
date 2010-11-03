@@ -100,6 +100,7 @@ struct castle_back_op
 {
     struct list_head                 list;
     struct work_struct               work;
+    int                              cpu;
     
     castle_request_t                 req; /* contains call_id etc */
     struct castle_back_conn         *conn;
@@ -424,7 +425,8 @@ static void castle_back_stateful_op_expire(struct work_struct *work);
 /* *op_ptr is NULL if there are no free ones */
 static castle_interface_token_t 
 castle_back_get_stateful_op(struct castle_back_conn *conn,
-                            struct castle_back_stateful_op **op_ptr)
+                            struct castle_back_stateful_op **op_ptr,
+                            int cpu)
 {
     struct castle_back_stateful_op *stateful_op;
 
@@ -446,7 +448,7 @@ castle_back_get_stateful_op(struct castle_back_conn *conn,
 
     spin_lock(&stateful_op->lock);
     BUG_ON(stateful_op->in_use);
-    stateful_op->cpu = conn->cpu;
+    stateful_op->cpu = cpu;
     stateful_op->last_used_jiffies = jiffies;
     stateful_op->expire = NULL;
     CASTLE_INIT_WORK(&stateful_op->expire_work, castle_back_stateful_op_expire);
@@ -1256,12 +1258,12 @@ static void castle_back_iter_call_queued(struct castle_back_stateful_op *statefu
         {
             case CASTLE_RING_ITER_NEXT:
                 INIT_WORK(&stateful_op->work, _castle_back_iter_next, stateful_op);
-                queue_work(castle_back_wq, &stateful_op->work);
+                queue_work_on(stateful_op->cpu, castle_back_wq, &stateful_op->work);
                 break;
 
             case CASTLE_RING_ITER_FINISH:
                 INIT_WORK(&stateful_op->work, _castle_back_iter_finish, stateful_op);
-                queue_work(castle_back_wq, &stateful_op->work);
+                queue_work_on(stateful_op->cpu, castle_back_wq, &stateful_op->work);
                 break;
 
             default:
@@ -1307,7 +1309,7 @@ static void castle_back_iter_start(void *data)
 
     debug_iter("castle_back_iter_start\n");
 
-    token = castle_back_get_stateful_op(conn, &stateful_op);
+    token = castle_back_get_stateful_op(conn, &stateful_op, op->cpu);
     if (!stateful_op)
     {
         error("castle_back: no more free stateful ops!\n");
@@ -1879,7 +1881,7 @@ static void castle_back_big_put(void *data)
 
     debug_iter("castle_back_big_put\n");
 
-    token = castle_back_get_stateful_op(conn, &stateful_op);
+    token = castle_back_get_stateful_op(conn, &stateful_op, op->cpu);
     if (!stateful_op)
     {
         err = -EAGAIN;
@@ -2095,7 +2097,7 @@ static void castle_back_big_get(void *data)
 
     debug_iter("castle_back_big_get stateful_op=%p\n", stateful_op);
 
-    token = castle_back_get_stateful_op(conn, &stateful_op);
+    token = castle_back_get_stateful_op(conn, &stateful_op, op->cpu);
     if (!stateful_op)
     {
         err = -EAGAIN;
@@ -2271,6 +2273,8 @@ static void castle_back_request_process(struct castle_back_conn *conn, struct ca
 
     debug("Got a request call=%d tag=%d\n", op->req.call_id, op->req.tag);
 
+    op->cpu = conn->cpu;
+
     switch (op->req.tag)
     {
         case CASTLE_RING_REMOVE:
@@ -2295,14 +2299,16 @@ static void castle_back_request_process(struct castle_back_conn *conn, struct ca
 
         case CASTLE_RING_ITER_NEXT:
             INIT_WORK(&op->work, castle_back_iter_next, op);
-            queue_work_on(castle_back_get_stateful_op_cpu(conn, op->req.iter_next.token,
-                    CASTLE_RING_ITER_START), castle_back_wq, &op->work);
+            op->cpu = castle_back_get_stateful_op_cpu(conn, op->req.iter_next.token,
+                    CASTLE_RING_ITER_START);
+            queue_work_on(op->cpu, castle_back_wq, &op->work);
             break;
 
         case CASTLE_RING_ITER_FINISH:
             INIT_WORK(&op->work, castle_back_iter_finish, op);
-            queue_work_on(castle_back_get_stateful_op_cpu(conn, op->req.iter_finish.token,
-                    CASTLE_RING_ITER_START), castle_back_wq, &op->work);
+            op->cpu = castle_back_get_stateful_op_cpu(conn, op->req.iter_finish.token,
+                    CASTLE_RING_ITER_START);
+            queue_work_on(op->cpu, castle_back_wq, &op->work);
             break;
 
         case CASTLE_RING_BIG_PUT:
@@ -2312,8 +2318,9 @@ static void castle_back_request_process(struct castle_back_conn *conn, struct ca
             
         case CASTLE_RING_PUT_CHUNK:
             INIT_WORK(&op->work, castle_back_put_chunk, op);
-            queue_work_on(castle_back_get_stateful_op_cpu(conn, op->req.put_chunk.token,
-                    CASTLE_RING_BIG_PUT), castle_back_wq, &op->work);
+            op->cpu = castle_back_get_stateful_op_cpu(conn, op->req.put_chunk.token,
+                    CASTLE_RING_BIG_PUT);
+            queue_work_on(op->cpu, castle_back_wq, &op->work);
             break;
 
         case CASTLE_RING_BIG_GET:
@@ -2323,8 +2330,9 @@ static void castle_back_request_process(struct castle_back_conn *conn, struct ca
 
         case CASTLE_RING_GET_CHUNK:
             INIT_WORK(&op->work, castle_back_get_chunk, op);
-            queue_work_on(castle_back_get_stateful_op_cpu(conn, op->req.get_chunk.token,
-                    CASTLE_RING_BIG_GET), castle_back_wq, &op->work);
+            op->cpu = castle_back_get_stateful_op_cpu(conn, op->req.get_chunk.token,
+                    CASTLE_RING_BIG_GET);
+            queue_work_on(op->cpu, castle_back_wq, &op->work);
             break;
             
         default:
