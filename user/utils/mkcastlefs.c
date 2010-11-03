@@ -5,6 +5,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <string.h>
 
 #include "castle_public.h"
 
@@ -18,18 +19,20 @@ uint32_t get_random_uuid()
 	const int len = sizeof(uint32_t);
 	char data[len];
 	int fd, bytes;
+	uint32_t i;
 	
 	if((fd = open("/dev/urandom", O_RDONLY)) == -1) {
 		perror("Can't open /dev/urandom");
 		exit(-4);
 	}
 	
-	if(read(fd, &data, len) != len) {
+	if(read(fd, data, len) != len) {
 		perror("Error reading /dev/urandom");
 		exit(-4);
 	}
 	close(fd);
-	return (uint32_t) *data;
+	memcpy(&i, data, sizeof(i));
+	return i;
 }
 
 void init_superblock(struct castle_slave_superblock *super)
