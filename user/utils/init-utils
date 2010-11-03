@@ -82,6 +82,7 @@ function load_fs_and_claim {
           # Loopback file (not existing)
           mkdir -p $(dirname "$disk")
           dd conv=excl if=/dev/zero of=$disk bs=1M count=1 seek=$DISK_SIZE 2>/dev/null
+          mkcastlefs "$disk"
       fi
 
       if [ -e "$disk" ] && [ -f "$disk" ]

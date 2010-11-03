@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <string.h>
+#include <errno.h>
 
 #include "castle_public.h"
 
@@ -22,13 +23,13 @@ uint32_t get_random_uuid()
 	uint32_t i;
 	
 	if((fd = open("/dev/urandom", O_RDONLY)) == -1) {
-		perror("Can't open /dev/urandom");
-		exit(-4);
+          fprintf(stderr, "Failed to open /dev/urandom: %s\n", strerror(errno));
+          exit(1);
 	}
 	
 	if(read(fd, data, len) != len) {
-		perror("Error reading /dev/urandom");
-		exit(-4);
+          fprintf(stderr, "Error reading /dev/urandom: %s\n", strerror(errno));
+          exit(1);
 	}
 	close(fd);
 	memcpy(&i, data, sizeof(i));
@@ -79,39 +80,39 @@ int main(int argc, char *argv[])
 	/* check args */
 	if(argc != 2) {
 		usage();
-		exit(-1);
+		exit(2);
 	}
 
 	node = argv[1];
 
 	if(stat(node, &st)) {
-		perror("mkcastlefs");
-		exit(-2);
+          fprintf(stderr, "%s: failed to stat %s: %s\n", argv[0], node, strerror(errno));
+          exit(2);
 	}
 
+#if 0
 	if(!st.st_rdev) {
-		fprintf(stderr, "Warning: %s does not seem to be a device node\n", node);
+          fprintf(stderr, "Warning: %s does not seem to be a device node\n", node);
 	}
+#endif
 
 	init_superblock(&super);
 
 	/* write */
 	if((fd = open(node, O_RDWR|O_LARGEFILE|O_SYNC)) == -1) {
-		/* open failed */
-		perror("mkcastlefs");
-		exit(-3);
+          /* open failed */
+          fprintf(stderr, "%s: failed to open %s: %s\n", argv[0], node, strerror(errno));
+          exit(1);
 	}
 
 	if(!write_superblock(fd, &super)) {
-		fprintf(stderr, "Error writing superblock on %s", node);
-		perror("write");
-		exit(-6);
+          fprintf(stderr, "%s: Error writing superblock on %s: %s", argv[0], node, strerror(errno));
+          exit(1);
 	}
 
 	if(close(fd)) {
-		fprintf(stderr, "Warning: error closing %s", node);
-		perror("close");
-		exit(-7);
+          fprintf(stderr, "%s: Warning: error closing %s: %s", argv[0], node, strerror(errno));
+          exit(1);
 	}
 
 	exit(0);
