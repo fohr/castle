@@ -185,6 +185,6 @@ void castle_rda_slave_remove(c_rda_type_t rda_type, struct castle_slave *cs)
     if (!cs)
         return;
 
-    printk("Not yet implemented.\n");
+    //printk("Not yet implemented.\n");
     return;
 }
