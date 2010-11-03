@@ -58,10 +58,10 @@ init_kernel_fs
 # Claim devices
 for devid in "${devids[@]}"
 do
-  runcli claim "$devid"
+  castle-cli claim "$devid" > /dev/null
 done
 
 # Init filesystem
-runcli init
+castle-cli init
 
 echo "castle-fs initialised successfully"

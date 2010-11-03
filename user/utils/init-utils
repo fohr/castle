@@ -50,32 +50,6 @@ function unmount_kernel_fs {
     fi
 }
 
-function runcli {
-    echo -n "   Command: $@ "
-    local FAILED=0
-    local OUTPUT=$(mktemp /tmp/cli-output.XXXXXXXXXX)
-
-    if ! castle-cli "$@" &> ${OUTPUT}; then
-        FAILED=1
-    fi
-
-    if [ $FAILED -eq 1 ]; then
-        echo
-        cat ${OUTPUT}
-        exit 1
-    fi
-
-    if ! grep -q "Ret val:" "$OUTPUT"; then
-        echo
-        cat ${OUTPUT}
-        exit 1
-    fi
-
-    IOCTL_RET=$(grep "Ret val:" "$OUTPUT" | sed -e "s/Ret val: \(0x[0-9a-f]*\)\./\1/g")
-    rm ${OUTPUT}
-    echo "    ret: $IOCTL_RET"
-}
-
 function devid_of_disk {
     local disk="$1"
     major=$(stat -c '%t' "$disk")
