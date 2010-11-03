@@ -57,3 +57,53 @@ function devid_of_disk {
     devid=$(( (0x$minor & 0xFF) | ( (0x$minor & 0xFFF00) << 12 ) | (0x$major << 8) ))
     printf '0x%x' "$devid"
 }
+
+function compute_devids {
+    declare -a devids=() loops=()
+
+    for disk in "$@"
+    do
+      if [ -e "$disk" ] && [ -b "$disk" ]
+          then
+          # Block special
+          devids=("${devids[@]}" $(devid_of_disk "$disk"))
+          continue
+      fi
+
+      if ! [ -e "$disk" ]
+      then
+          if echo $disk | grep -q '^/dev/'
+          then
+          # Presumably block special device (not existing)
+              echo "Device $disk does not exist, aborting"
+              exit 1
+          fi
+
+          # Loopback file (not existing)
+          mkdir -p $(dirname "$disk")
+          dd conv=excl if=/dev/zero of=$disk bs=1M count=1 seek=$DISK_SIZE 2>/dev/null
+      fi
+
+      if [ -e "$disk" ] && [ -f "$disk" ]
+      then
+          # Loopback file (existing)
+          loops=("${loops[@]}" "$disk")
+      fi
+    done
+}
+
+function setup_loopbacks {
+    for disk in "${loops[@]}"
+    do
+      loop=$(losetup -f)
+      losetup "$loop" "$disk"
+      devids=("${devids[@]}" $(devid_of_disk "$loop"))
+    done
+}
+
+function claim_all {
+    for devid in "${devids[@]}"
+    do
+      castle-cli claim "$devid" > /dev/null
+    done
+}

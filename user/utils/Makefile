@@ -51,3 +51,4 @@ install: $(MAIN_OBJS)
 	install -D init-utils /usr/share/castle-fs/init-utils
 	install -D castle-fs-init.sh /usr/share/castle-fs/castle-fs-init
 	install -D castle-fs-fini.sh /usr/share/castle-fs/castle-fs-fini
+	install -D castle-create /usr/sbin/castle-create

@@ -1,0 +1,20 @@
+#!/bin/bash
+
+set -e
+
+. /usr/share/castle-fs/init-utils
+
+if kernel_fs_running
+then
+    echo "$0 cannot be used when castle-fs is running"
+    exit 0
+fi
+
+compute_devids "$@"
+setup_loops
+init_kernel_fs
+claim_all
+castle-cli init
+/usr/share/castle-fs/castle-fs-fini
+
+echo "Created superblocks on devices: $@"
