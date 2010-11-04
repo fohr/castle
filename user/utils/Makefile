@@ -55,5 +55,5 @@ install: all
 	install -D castle-fs-init.sh /usr/share/castle-fs/castle-fs-init
 	install -D castle-fs-fini.sh /usr/share/castle-fs/castle-fs-fini
 	install -D castle-create /usr/sbin/castle-create
-	install -D mkcastlefs /usr/sbin/mkcastlefs
+	install -D mkcastlefs /sbin/mkcastlefs
 	install -D castle_probe_device /usr/sbin/castle-probe-device
