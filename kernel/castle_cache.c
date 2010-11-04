@@ -809,11 +809,11 @@ static int submit_c2b_rda(int rw, c2_block_t *c2b)
         /* The current page hasn't been saved in the io_pages array yet, do that, and
            reset all the other vars. */ 
         io_pages_idx = 0;
+        cep = cur_cep; 
+        last_chk = cur_chk;
         if(!skip_c2p)
         {
             debug("Not skipping.\n");
-            cep = cur_cep; 
-            last_chk = cur_chk;
             io_pages[0] = page;
             io_pages_idx = 1;
         }
