@@ -9,6 +9,8 @@ fi
 
 for dev in /dev/sd*[0-9]* /dev/hd*[0-9]* /dev/xv*[0-9]*
 do
+  [ -e "$dev" ] || continue
+
   if castle-probe-device "$dev" >/dev/null 2>&1
   then
       echo "$dev"

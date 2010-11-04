@@ -54,7 +54,7 @@ int main(int argc, char *argv[])
 
     if ((ret = castle_slave_superblock_validate(&cs_sb)) < 0)
     {
-        fprintf(stderr, "Invalid Disk Superblock (at %d)\n", -ret);
+        fprintf(stderr, "Invalid disk superblock (at %d)\n", -ret);
         return 1;
     }
 
@@ -65,13 +65,18 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    if (castle_fs_superblock_validate(&fs_sb) < 0)
+    if (cs_sb.flags & CASTLE_SLAVE_NEWDEV) {
+      fprintf(stdout, "New disk - no filesystem superblock\n");
+    }
+    else if ((ret = castle_fs_superblock_validate(&fs_sb)) < 0)
     {
-        fprintf(stderr, "Invalid File-system Superblock (at %d)\n", -ret);
-        return 1;
+      fprintf(stderr, "Invalid filesystem superblock (at %d)\n", -ret);
+    }
+    else {
+      fprintf(stdout, "Filesystem uuid: 0x%x\n", fs_sb.uuid);
     }
 
-    printf("0x%x\n", fs_sb.uuid);
+    fprintf(stdout, "Disk uuid: 0x%x\n", cs_sb.uuid);
 
     close(fd);
 
