@@ -445,52 +445,70 @@ static int castle_slave_superblock_validate(struct castle_slave_superblock *cs_s
     return 0;
 }
 
-static int castle_slave_superblock_read(struct castle_slave *cs) 
+static int castle_block_read(struct block_device *bdev, sector_t sector, 
+                                                        uint32_t size, char *buffer)
 {
-    struct castle_slave_superblock *cs_sb = NULL;
-    struct castle_fs_superblock *fs_sb = NULL;
-    struct buffer_head *cs_sb_bh = NULL, *fs_sb_bh = NULL;
-    int err = -EINVAL;
-    int block_size = cs->bdev->bd_block_size;
+    int block_size;
+    struct buffer_head *bh;
+    sector_t block;
+    
+    if (!bdev)
+        return -1;
 
-    if ((block_size > C_BLK_SIZE) || (C_BLK_SIZE % block_size))
+    block_size = bdev->bd_block_size;
+    block = sector / (block_size / 512);
+
+    if (size > block_size)
     {
-        printk("Couldn't support block_size %u\n", block_size);
-        goto error_out;
+        printk("Very small block size not supported: %u\n", block_size);
+        return -1;
     }
 
-    if (!(cs_sb_bh = __bread(cs->bdev, 0, C_BLK_SIZE)))
-        goto error_out;
-    if (!(fs_sb_bh = __bread(cs->bdev, C_BLK_SIZE/block_size, C_BLK_SIZE)))
+    printk("Reading %u bytes from block %llu.\n", block_size, block);
+    if (!(bh = __bread(bdev, block, block_size)))
+        return -1;
+
+    memcpy(buffer, bh->b_data, size);
+
+    bforget(bh);
+
+    return 0;
+
+}
+
+static int castle_slave_superblock_read(struct castle_slave *cs) 
+{
+    struct castle_slave_superblock cs_sb;
+    struct castle_fs_superblock fs_sb;
+    int err = -EINVAL;
+
+    if ((err = castle_block_read(cs->bdev, 0, sizeof(cs_sb), (char *)&cs_sb)) < 0)
         goto error_out;
 
-    /* Validate Slave Superblock. */
-    cs_sb = (struct castle_slave_superblock *)cs_sb_bh->b_data;
-    if ((err = castle_slave_superblock_validate(cs_sb)) < 0)
+    if ((err = castle_slave_superblock_validate(&cs_sb)) < 0)
     {
         printk("%d\n", err);
         goto error_out;
     }
 
-    /* Validate File-system Superblock. */
-    fs_sb = (struct castle_fs_superblock *)fs_sb_bh->b_data;
-    if ((err = castle_fs_superblock_validate(fs_sb)) < 0 && 
-                                !(cs_sb->flags & CASTLE_SLAVE_NEWDEV))
+    if ((err = castle_block_read(cs->bdev, 8, sizeof(fs_sb), (char *)&fs_sb)) < 0)
         goto error_out;
 
-    printk("Superblock found.\n");
-    /* castle_slave_superblock_print(cs_sb); */
+    if (((err = castle_fs_superblock_validate(&fs_sb)) < 0) && 
+                        !(cs_sb.flags & CASTLE_SLAVE_NEWDEV))
+    {
+        printk("%d\n", err);
+        goto error_out;
+    }
+
+    printk("Disk Superblock found.\n");
+
     /* Save the uuid and exit */
-    cs->uuid = cs_sb->uuid;
-    cs->new_dev = cs_sb->flags & CASTLE_SLAVE_NEWDEV;
-	err = 0;
+    cs->uuid = cs_sb.uuid;
+    cs->new_dev = cs_sb.flags & CASTLE_SLAVE_NEWDEV;
+    return 0;
 
 error_out:
-    if (cs_sb_bh)
-        brelse(cs_sb_bh);
-    if (fs_sb_bh)
-        brelse(fs_sb_bh);
-
     return err;
 }
 
@@ -685,13 +703,6 @@ struct castle_slave* castle_claim(uint32_t new_dev)
         printk("Could not open %s.\n", __bdevname(dev, b));
         goto err_out;
     }
-    err = bd_claim(bdev, &castle);
-    if (err) 
-    {
-        printk("Could not bd_claim %s, err=%d.\n", bdevname(bdev, b), err);
-        goto err_out;
-    }
-    bdev_claimed = 1;
     cs->bdev = bdev;
 
     if(castle_slave_superblock_read(cs))
@@ -699,6 +710,14 @@ struct castle_slave* castle_claim(uint32_t new_dev)
         printk("Invalid superblock.\n");
         goto err_out;
 	}
+
+    err = bd_claim(bdev, &castle);
+    if (err) 
+    {
+        printk("Could not bd_claim %s, err=%d.\n", bdevname(bdev, b), err);
+        goto err_out;
+    }
+    bdev_claimed = 1;
 
     cs->sup_ext = castle_extent_sup_ext_init(cs);
     if (cs->sup_ext == INVAL_EXT_ID)
