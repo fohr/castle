@@ -701,6 +701,7 @@ struct castle_slave* castle_claim(uint32_t new_dev)
     if (IS_ERR(bdev)) 
     {
         printk("Could not open %s.\n", __bdevname(dev, b));
+        bdev = NULL;
         goto err_out;
     }
     cs->bdev = bdev;
@@ -766,10 +767,11 @@ err_out:
     if(cs_added)     list_del(&cs->list);
     if(cs->sblk)     put_c2b(cs->sblk);
     if(cs->fs_sblk)  put_c2b(cs->fs_sblk);
+    if(bdev_claimed) bd_release(bdev);
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,24)
-    if(bdev_claimed) blkdev_put(bdev);
+    if(bdev) blkdev_put(bdev);
 #else
-    if(bdev_claimed) blkdev_put(bdev, FMODE_READ|FMODE_WRITE);
+    if(bdev) blkdev_put(bdev, FMODE_READ|FMODE_WRITE);
 #endif
     if(cs)           castle_free(cs);
     return NULL;    
