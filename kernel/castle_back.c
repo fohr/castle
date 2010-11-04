@@ -2395,14 +2395,18 @@ static int castle_back_work_do(void *data)
             castle_back_request_process(conn, op);
         }
 
+        /* this ensures that if we get an ioctl in between checking the ring
+         * for more and calling schedule, we don't sleep and miss it
+         */
+        set_current_state(TASK_INTERRUPTIBLE);
+        xen_rmb();
         RING_FINAL_CHECK_FOR_REQUESTS(back_ring, more);
 
-        /* avoid racing with kthread_stop */
-        if (!more)
-            set_current_state(TASK_INTERRUPTIBLE);
+        if (more)
+            set_current_state(TASK_RUNNING);
         if (kthread_should_stop())
             break;
-        else if (!more)
+        if (!more)
             schedule();
     }
 
