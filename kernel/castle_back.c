@@ -1883,6 +1883,13 @@ static void castle_back_big_put(void *data)
 
     debug_iter("castle_back_big_put\n");
 
+    /* TODO: this indicates we don't know the value, but not supported yet */
+    if (op->req.big_put.value_len == 0)
+    {
+        err = -EINVAL;
+        goto err0;
+    }
+
     token = castle_back_get_stateful_op(conn, &stateful_op, op->cpu);
     if (!stateful_op)
     {
