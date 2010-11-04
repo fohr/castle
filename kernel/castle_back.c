@@ -1286,8 +1286,8 @@ static void castle_back_iter_reply(struct castle_back_stateful_op *stateful_op, 
     spin_lock(&stateful_op->lock);
 
     stateful_op->last_used_jiffies = jiffies;
-    stateful_op->expire = castle_back_iter_expire;
     stateful_op->curr_op = NULL;
+    stateful_op->expire = castle_back_iter_expire;
 
     debug_iter("stateful_op->curr_op = %p\n", stateful_op->curr_op);
 
@@ -1347,8 +1347,6 @@ static void castle_back_iter_start(void *data)
     stateful_op->tag = CASTLE_RING_ITER_START;
     stateful_op->curr_op = NULL;
     debug_iter("stateful_op->curr_op = %p\n", stateful_op->curr_op);
-    stateful_op->last_used_jiffies = jiffies;
-    stateful_op->expire = castle_back_iter_expire;
 
     stateful_op->iterator.flags = op->req.iter_start.flags;
     stateful_op->iterator.collection_id = op->req.iter_start.collection_id;
@@ -1360,6 +1358,10 @@ static void castle_back_iter_start(void *data)
     err = castle_object_iter_start(attachment, start_key, end_key, &stateful_op->iterator.iterator);
     if (err)
         goto err4;
+
+    stateful_op->last_used_jiffies = jiffies;
+    BUG_ON(stateful_op->curr_op);
+    stateful_op->expire = castle_back_iter_expire;
 
     castle_back_reply(op, 0, token, 0);
 
@@ -1910,8 +1912,6 @@ static void castle_back_big_put(void *data)
     stateful_op->tag = CASTLE_RING_BIG_PUT;
     stateful_op->queued_size = 0;
     stateful_op->curr_op = op;
-    stateful_op->expire = castle_back_big_put_expire;
-    stateful_op->last_used_jiffies = jiffies;
     stateful_op->attachment = attachment;
         
     stateful_op->replace.value_len = op->req.big_put.value_len;
@@ -2007,6 +2007,7 @@ static void castle_back_put_chunk(void *data)
        
 err2: castle_back_buffer_put(conn, op->buf);
 err1:
+    stateful_op->curr_op = NULL;
     stateful_op->expire = castle_back_big_put_expire;
     stateful_op->last_used_jiffies = jiffies;
 err0: castle_back_reply(op, err, 0, 0);
@@ -2115,9 +2116,6 @@ static void castle_back_big_get(void *data)
     stateful_op->tag = CASTLE_RING_BIG_GET;
     stateful_op->curr_op = op;    
     stateful_op->attachment = attachment;
-    stateful_op->expire = castle_back_big_get_expire;
-    stateful_op->last_used_jiffies = jiffies;
-    stateful_op->attachment = attachment;
 
     stateful_op->pull.pull_continue = castle_back_big_get_continue;
 
@@ -2217,6 +2215,7 @@ static void castle_back_get_chunk(void *data)
 
 err2: castle_back_buffer_put(conn, op->buf);
 err1:
+    stateful_op->curr_op = NULL;
     stateful_op->expire = castle_back_big_get_expire;
     stateful_op->last_used_jiffies = jiffies;
 err0: castle_back_reply(op, err, 0, 0);
