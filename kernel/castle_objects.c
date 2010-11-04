@@ -885,6 +885,8 @@ void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
     c2_block_t *c2b = NULL;
     int complete_write = 0;
 
+    castle_debug_bio_deregister(c_bio);
+
     /* Sanity checks on the bio */
     BUG_ON(c_bvec_data_dir(c_bvec) != WRITE); 
     BUG_ON(atomic_read(&c_bio->count) != 1);
@@ -1035,8 +1037,6 @@ int castle_object_replace(struct castle_object_replace *replace,
     c_bvec->endfind    = castle_object_replace_complete;
     c_bvec->da_endfind = NULL; 
     atomic_set(&c_bvec->reserv_nodes, 0);
-    
-    /* TODO: add bios to the debugger! */ 
 
     ret = castle_double_array_find(c_bvec);
     if (ret)
@@ -1044,6 +1044,8 @@ int castle_object_replace(struct castle_object_replace *replace,
         castle_utils_bio_free(c_bio);
         castle_object_bkey_free(btree_key);
     }
+    else
+        castle_debug_bio_register(c_bio, attachment->version, 1);
 
     return ret;
 }

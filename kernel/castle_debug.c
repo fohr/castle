@@ -211,14 +211,12 @@ static void castle_debug_watches_update(struct bio *bio, uint32_t version)
     }
 }
 
-void castle_debug_bio_add(c_bio_t *c_bio, uint32_t version, int nr_bvecs)
+void castle_debug_bio_register(c_bio_t *c_bio, uint32_t version, int nr_bvecs)
 {
     unsigned long flags;
     int i;
 
     c_bio->nr_bvecs = nr_bvecs; 
-    /* Take the reference to the c_bio by adding 1 to the count */
-    atomic_inc(&c_bio->count);
     spin_lock_irqsave(&bio_list_spinlock, flags);
     c_bio->id = bio_id++;
     c_bio->stuck = 0;
@@ -231,20 +229,13 @@ void castle_debug_bio_add(c_bio_t *c_bio, uint32_t version, int nr_bvecs)
     spin_unlock_irqrestore(&bio_list_spinlock, flags);
 }
 
-void castle_debug_bio_put(c_bio_t *c_bio)
+void castle_debug_bio_deregister(c_bio_t *c_bio)
 {
-    extern void castle_bio_put(c_bio_t *cbio);
     unsigned long flags;
          
-    if(atomic_read(&c_bio->count) == 1)
-    {
-        spin_lock_irqsave(&bio_list_spinlock, flags);
-        list_del(&c_bio->list);
-        spin_unlock_irqrestore(&bio_list_spinlock, flags);
-
-        /* Drop the reference */
-        castle_bio_put(c_bio);
-    }
+    spin_lock_irqsave(&bio_list_spinlock, flags);
+    list_del(&c_bio->list);
+    spin_unlock_irqrestore(&bio_list_spinlock, flags);
 }
 
 static int castle_debug_run(void *unused)
