@@ -48,7 +48,7 @@ clean:
 	rm -f *.o $(MAIN_OBJS) mkcastlefs
 
 .PHONY: install
-install: $(MAIN_OBJS)
+install: all
 	install $(MAIN_OBJS) /usr/sbin
 	install -D castle /etc/rc.d/init.d/
 	install -D init-utils /usr/share/castle-fs/init-utils
