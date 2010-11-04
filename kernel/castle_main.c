@@ -865,9 +865,10 @@ void castle_bio_put(c_bio_t *c_bio)
     int finished, err = c_bio->err;
 
     finished = atomic_dec_and_test(&c_bio->count);
-    castle_debug_bio_put(c_bio);
     if(!finished)
         return;
+
+    castle_debug_bio_deregister(c_bio);
 
     castle_utils_bio_free(c_bio);
 
@@ -1185,7 +1186,7 @@ static int castle_device_make_request(struct request_queue *rq, struct bio *bio)
         /* Advance the sector counter */
         sector += bv_secs;
     }
-    castle_debug_bio_add(c_bio, dev->version, j);
+    castle_debug_bio_register(c_bio, dev->version, j);
     castle_bio_put(c_bio);
 
     return 0;
