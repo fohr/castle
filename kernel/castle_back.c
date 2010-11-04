@@ -108,8 +108,8 @@ struct castle_back_op
     struct castle_attachment        *attachment;
     
     /* use for assembling a get and partial writes in puts */
-    size_t value_length;
-    size_t buffer_offset; 
+    uint64_t value_length;
+    uint32_t buffer_offset;
     
     union 
     {
@@ -131,9 +131,9 @@ struct castle_back_iterator
     /* the tail of the kv_list being built by this iterator */
     struct castle_key_value_list *kv_list_tail;
     /* the amount of buffer the kv_list is using */
-    size_t                        kv_list_size;
+    uint32_t                      kv_list_size;
     /* the amount of buffer the kv_list can fill */
-    size_t                        buf_len;
+    uint32_t                      buf_len;
 };
 
 typedef void (*castle_back_stateful_op_expire_t) (struct castle_back_stateful_op *stateful_op);
@@ -162,7 +162,7 @@ struct castle_back_stateful_op
     struct castle_back_conn            *conn;
     
     /* sum of size of all buffers queued up */
-    uint32_t                            queued_size;
+    uint64_t                            queued_size;
     struct castle_back_op              *curr_op;
     struct work_struct                  work;
 
@@ -606,7 +606,7 @@ static int castle_back_stateful_op_prod(struct castle_back_stateful_op *stateful
  * Finish all ops on the stateful op queue, giving them err & closing their buffers
  */
 static int castle_back_reply(struct castle_back_op *op, int err, 
-     castle_interface_token_t token, int length);
+     castle_interface_token_t token, uint64_t length);
 static void castle_back_stateful_op_finish_all(struct castle_back_stateful_op *stateful_op, int err)
 {
     struct list_head *pos, *tmp;
@@ -711,7 +711,7 @@ static struct vm_operations_struct castle_back_vm_ops = {
  */
 
 static int castle_back_reply(struct castle_back_op *op, int err, 
-                             castle_interface_token_t token, int length)
+                             castle_interface_token_t token, uint64_t length)
 {
     struct castle_back_conn *conn = op->conn;
     castle_back_ring_t *back_ring = &conn->back_ring;
@@ -752,7 +752,7 @@ static int castle_back_reply(struct castle_back_op *op, int err,
 }
 
 static int castle_back_key_copy_get(struct castle_back_conn *conn, c_vl_okey_t *user_key, 
-                                    size_t key_len, c_vl_okey_t **key_out)
+                                    uint32_t key_len, c_vl_okey_t **key_out)
 {
     struct castle_back_buffer *buf;
     unsigned long buf_end;
@@ -768,7 +768,7 @@ static int castle_back_key_copy_get(struct castle_back_conn *conn, c_vl_okey_t *
     
     if (key_len < sizeof(c_vl_okey_t))
     {
-        error("Bad key length %lu\n", key_len);
+        error("Bad key length %u\n", key_len);
         err = -EINVAL;        
         goto err0;
     }
@@ -786,7 +786,7 @@ static int castle_back_key_copy_get(struct castle_back_conn *conn, c_vl_okey_t *
 
     if (user_key_long + key_len > buf_end)
     {
-        error("Key too big for buffer! (key_len = %lu)\n", key_len);
+        error("Key too big for buffer! (key_len = %u)\n", key_len);
         err = -EINVAL;
         goto err1;
     }
@@ -866,12 +866,12 @@ err0: return err;
 
 /* if doesn't fit into the buffer, *buf_used will be set to 0 */
 static void castle_back_key_kernel_to_user(c_vl_okey_t *key, struct castle_back_buffer *buf, 
-                                           unsigned long user_buf, size_t buf_len, 
-                                           size_t *buf_used)
+                                           unsigned long user_buf, uint32_t buf_len,
+                                           uint32_t *buf_used)
 {
     uint32_t i;
     c_vl_okey_t *key_copy;
-    size_t total_size;
+    uint32_t total_size;
 
 #ifdef DEBUG
     debug("castle_back_key_kernel_to_user copying key:\n");
@@ -891,7 +891,7 @@ static void castle_back_key_kernel_to_user(c_vl_okey_t *key, struct castle_back_
 
     for (i = 0; i < key->nr_dims; i++)
     {
-        size_t sub_key_size;
+        uint32_t sub_key_size;
         c_vl_key_t *vlk;
 
         sub_key_size = sizeof(c_vl_key_t) + key->dims[i]->length;
@@ -917,10 +917,10 @@ static void castle_back_key_kernel_to_user(c_vl_okey_t *key, struct castle_back_
 
 /* if doesn't fit into the buffer, *buf_used will be set to 0 */
 static void castle_back_val_kernel_to_user(c_val_tup_t *val, struct castle_back_buffer *buf, 
-                                           unsigned long user_buf, size_t buf_len, 
-                                           size_t *buf_used, collection_id_t collection_id)
+                                           unsigned long user_buf, uint32_t buf_len,
+                                           uint32_t *buf_used, collection_id_t collection_id)
 {
-    size_t length, val_length;
+    uint32_t length, val_length;
     struct castle_iter_val *val_copy;
 
     if (val->type & CVT_TYPE_INLINE)
@@ -972,7 +972,7 @@ static uint32_t castle_back_replace_data_length_get(struct castle_object_replace
 }
 
 static void castle_back_replace_data_copy(struct castle_object_replace *replace, 
-                                          void *buffer, int buffer_length, int not_last)
+                                          void *buffer, uint32_t buffer_length, int not_last)
 {
     struct castle_back_op *op = container_of(replace, struct castle_back_op, replace);
 
@@ -1021,7 +1021,7 @@ static void castle_back_replace(void *data)
 
     if (!castle_back_user_addr_in_buffer(op->buf, op->req.replace.value_ptr + op->req.replace.value_len - 1))
     {
-        error("Invalid value length %ld (ptr=%p)\n", op->req.replace.value_len, op->req.replace.value_ptr);
+        error("Invalid value length %u (ptr=%p)\n", op->req.replace.value_len, op->req.replace.value_ptr);
         err = -EINVAL;
         goto err3;
     }
@@ -1378,14 +1378,14 @@ err1: // No one could have added another op to queue as we haven't returns token
 err0: castle_back_reply(op, err, 0, 0);    
 }
 
-static size_t castle_back_save_key_value_to_list(struct castle_key_value_list *kv_list,
+static uint32_t castle_back_save_key_value_to_list(struct castle_key_value_list *kv_list,
         c_vl_okey_t *key, c_val_tup_t *val,
         collection_id_t collection_id,
         struct castle_back_buffer *back_buf,
-        size_t buf_len, /* space left in the buffer */
+        uint32_t buf_len, /* space left in the buffer */
         int save_val /* should values be saved too? */)
 {
-    size_t buf_used, key_len, val_len;
+    uint32_t buf_used, key_len, val_len;
 
     BUG_ON(!kv_list);
 
@@ -1442,9 +1442,9 @@ static int castle_back_iter_next_callback(struct castle_object_iterator *iterato
     struct castle_back_stateful_op *stateful_op;
     struct castle_back_conn *conn;
     struct castle_back_op *op;
-    size_t cur_len;
+    uint32_t cur_len;
     struct castle_key_value_list *kv_list_cur;
-    size_t buf_len, buf_used;
+    uint32_t buf_len, buf_used;
 
     BUG_ON(!data);
     stateful_op = (struct castle_back_stateful_op *)data;
@@ -1542,8 +1542,8 @@ static void _castle_back_iter_next(void *data)
     struct castle_back_op          *op;
     struct castle_key_value_list   *kv_list_head;
     castle_object_iterator_t       *iterator;
-    size_t                          buf_used;
-    size_t                          buf_len;
+    uint32_t                        buf_used;
+    uint32_t                        buf_len;
     int                             err;
     struct castle_back_stateful_op *stateful_op = data;
 
@@ -1830,7 +1830,7 @@ static uint32_t castle_back_big_put_data_length_get(struct castle_object_replace
     struct castle_back_stateful_op *stateful_op = 
         container_of(replace, struct castle_back_stateful_op, replace);
 
-    uint32_t length = 0; 
+    uint32_t length = 0;
 
     spin_lock(&stateful_op->lock);
     // curr_op could be the BIG_PUT
@@ -1842,7 +1842,7 @@ static uint32_t castle_back_big_put_data_length_get(struct castle_object_replace
 }
 
 static void castle_back_big_put_data_copy(struct castle_object_replace *replace, 
-                                          void *buffer, int buffer_length, int not_last)
+                                          void *buffer, uint32_t buffer_length, int not_last)
 {
     struct castle_back_stateful_op *stateful_op = 
         container_of(replace, struct castle_back_stateful_op, replace);
@@ -1969,7 +1969,7 @@ static void castle_back_put_chunk(void *data)
 
     if (!castle_back_user_addr_in_buffer(op->buf, op->req.put_chunk.buffer_ptr + op->req.put_chunk.buffer_len - 1))
     {
-        error("Invalid value length %ld (ptr=%p)\n", op->req.put_chunk.buffer_len, op->req.put_chunk.buffer_ptr);
+        error("Invalid value length %u (ptr=%p)\n", op->req.put_chunk.buffer_len, op->req.put_chunk.buffer_ptr);
         err = -EINVAL;
         goto err2;
     }
@@ -1984,7 +1984,7 @@ static void castle_back_put_chunk(void *data)
     if (op->req.put_chunk.buffer_len + stateful_op->queued_size > stateful_op->replace.value_len)
     {
         spin_unlock(&stateful_op->lock);
-        error("Invalid value length %ld (ptr=%p)\n", op->req.put_chunk.buffer_len, op->req.put_chunk.buffer_ptr);
+        error("Invalid value length %u (ptr=%p)\n", op->req.put_chunk.buffer_len, op->req.put_chunk.buffer_ptr);
         err = -EINVAL;
         goto err2;
     }
@@ -2044,7 +2044,7 @@ static void castle_back_big_get_do_chunk(struct castle_back_stateful_op *statefu
         op->req.get_chunk.buffer_ptr), op->req.get_chunk.buffer_len);
 }
 
-static void castle_back_big_get_continue(struct castle_object_pull *pull, int err, int length, int done)
+static void castle_back_big_get_continue(struct castle_object_pull *pull, int err, uint64_t length, int done)
 {
     struct castle_back_stateful_op *stateful_op = 
         container_of(pull, struct castle_back_stateful_op, pull);
@@ -2179,7 +2179,7 @@ static void castle_back_get_chunk(void *data)
 
     if (!castle_back_user_addr_in_buffer(op->buf, op->req.get_chunk.buffer_ptr + op->req.get_chunk.buffer_len - 1))
     {
-        error("Invalid value length %ld (ptr=%p)\n", op->req.get_chunk.buffer_len, op->req.get_chunk.buffer_ptr);
+        error("Invalid value length %u (ptr=%p)\n", op->req.get_chunk.buffer_len, op->req.get_chunk.buffer_ptr);
         err = -EINVAL;
         goto err2;
     }
@@ -2193,7 +2193,7 @@ static void castle_back_get_chunk(void *data)
 
     if ((op->req.get_chunk.buffer_len) % PAGE_SIZE)
     {
-        error("Invalid len, not page aligned (len=%ld)\n", op->req.put_chunk.buffer_len);
+        error("Invalid len, not page aligned (len=%u)\n", op->req.put_chunk.buffer_len);
         err = -EINVAL;
         goto err2;
     }

@@ -1460,7 +1460,7 @@ EXPORT_SYMBOL(castle_object_get);
 void __castle_object_chunk_pull_complete(struct work_struct *work)
 {
     struct castle_object_pull *pull = container_of(work, struct castle_object_pull, work);
-    int to_copy = min(pull->buf_len, pull->remaining);
+    uint64_t to_copy = min((uint64_t)pull->buf_len, pull->remaining);
 
     BUG_ON(!pull->buf);
     
@@ -1545,7 +1545,7 @@ static void castle_object_pull_continue(struct castle_bio_vec *c_bvec, int err, 
     pull->offset = 0;
     pull->cep = cvt.cep;
     pull->remaining = cvt.length;    
-    pull->pull_continue(pull, err, 0, 0 /* not done yet */);
+    pull->pull_continue(pull, err, cvt.length, 0 /* not done yet */);
 }
 
 int castle_object_pull(struct castle_object_pull *pull, struct castle_attachment *attachment, c_vl_okey_t *key)

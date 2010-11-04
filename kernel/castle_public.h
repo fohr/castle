@@ -186,6 +186,8 @@ enum {
         _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_INVALID_STATS, cctrl_ioctl_t),
     CASTLE_CTRL_SET_TARGET_IOCTL =
         _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_SET_TARGET, cctrl_ioctl_t),
+    CASTLE_CTRL_DESTROY_IOCTL =
+        _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_DESTROY, cctrl_ioctl_t),
 };
 
 /*
@@ -225,15 +227,15 @@ typedef uint32_t castle_interface_token_t;
 typedef struct castle_request_replace {
     collection_id_t       collection_id;
     c_vl_okey_t          *key_ptr;
-    size_t                key_len;
+    uint32_t              key_len;
     void                 *value_ptr;
-    size_t                value_len;
+    uint32_t              value_len;
 } castle_request_replace_t;
 
 typedef struct castle_request_remove {
     collection_id_t       collection_id;
     c_vl_okey_t          *key_ptr;
-    size_t                key_len;
+    uint32_t              key_len;
 } castle_request_remove_t;
 
 typedef struct castle_request_get {
@@ -247,9 +249,9 @@ typedef struct castle_request_get {
 typedef struct castle_request_iter_start {
     collection_id_t      collection_id;
     c_vl_okey_t         *start_key_ptr;
-    size_t               start_key_len;
+    uint32_t             start_key_len;
     c_vl_okey_t         *end_key_ptr;
-    size_t               end_key_len;
+    uint32_t             end_key_len;
     uint64_t             flags;
 } castle_request_iter_start_t;
 
@@ -259,7 +261,7 @@ typedef struct castle_request_iter_start {
 typedef struct castle_request_iter_next {
     castle_interface_token_t  token;
     void                     *buffer_ptr;
-    size_t                    buffer_len;
+    uint32_t                  buffer_len;
 } castle_request_iter_next_t;
 
 typedef struct castle_request_iter_finish {
@@ -269,26 +271,26 @@ typedef struct castle_request_iter_finish {
 typedef struct castle_request_big_get {
     collection_id_t  collection_id;
     c_vl_okey_t     *key_ptr;
-    size_t           key_len;
+    uint32_t         key_len;
 } castle_request_big_get_t;
 
 typedef struct castle_request_get_chunk {
     castle_interface_token_t  token;
     void                     *buffer_ptr;
-    size_t                    buffer_len;
+    uint32_t                  buffer_len;
 } castle_request_get_chunk_t;
 
 typedef struct castle_request_big_put {
     collection_id_t  collection_id;
     c_vl_okey_t     *key_ptr;
-    size_t           key_len;
-    size_t           value_len;
+    uint32_t         key_len;
+    uint64_t         value_len;
 } castle_request_big_put_t;
 
 typedef struct castle_request_put_chunk {
     castle_interface_token_t  token;
     void                     *buffer_ptr;
-    size_t                    buffer_len;
+    uint32_t                  buffer_len;
 } castle_request_put_chunk_t;
 
 typedef struct castle_request {
@@ -313,7 +315,7 @@ typedef struct castle_request {
 typedef struct castle_response {
     uint32_t                 call_id;
     uint32_t                 err;
-    size_t                   length;
+    uint64_t                 length;
     castle_interface_token_t token;
 } castle_response_t;
 

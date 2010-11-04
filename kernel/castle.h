@@ -984,7 +984,7 @@ c_byte_off_t          castle_ext_fs_summary_get    (c_ext_fs_t *ext_fs);
 struct castle_cache_block;
 
 struct castle_object_replace {
-    uint32_t    value_len; // total value length
+    uint64_t    value_len; // total value length
 
     void        (*complete)        (struct castle_object_replace *op,
                                     int                           err);
@@ -992,7 +992,7 @@ struct castle_object_replace {
     uint32_t    (*data_length_get) (struct castle_object_replace *op);
     void        (*data_copy)       (struct castle_object_replace *op, 
                                     void                         *buffer, 
-                                    int                           str_length, 
+                                    uint32_t                      str_length,
                                     int                           partial);
 
     struct castle_cache_block *data_c2b;
@@ -1019,8 +1019,8 @@ struct castle_object_get {
 };
 
 struct castle_object_pull {
-    uint32_t                    remaining;
-    uint32_t                    offset;
+    uint64_t                    remaining;
+    uint64_t                    offset;
 
     c_ext_pos_t                 cep;
     struct castle_cache_block  *curr_c2b;
@@ -1031,7 +1031,7 @@ struct castle_object_pull {
     struct work_struct          work;
     
     void (*pull_continue)      (struct castle_object_pull *pull, 
-                                int err, int length, int done);
+                                int err, uint64_t length, int done);
 };
 /*
  * This is the callback to notify when the iterator has the
