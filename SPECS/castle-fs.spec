@@ -41,6 +41,8 @@ Requires: castle-cli
 %setup -q -n "castle-fs"
 
 %build
+echo '%{version}-%{release}' > .hg-rev
+
 make -C user/utils
 make -C kernel KVER=%{kversion} KERNEL_DIR=%{kerneldir} DEBUG=n PERF_DEBUG=n
 
