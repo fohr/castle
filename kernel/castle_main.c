@@ -453,7 +453,7 @@ static int castle_slave_superblock_read(struct castle_slave *cs)
     int err = -EINVAL;
     int block_size = cs->bdev->bd_block_size;
 
-    if ((block_size > C_BLK_SIZE) || (block_size % C_BLK_SIZE))
+    if ((block_size > C_BLK_SIZE) || (C_BLK_SIZE % block_size))
     {
         printk("Couldn't support block_size %u\n", block_size);
         goto error_out;
