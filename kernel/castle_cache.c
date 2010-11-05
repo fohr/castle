@@ -879,8 +879,6 @@ static void castle_cache_sync_io_end(c2_block_t *c2b)
 {
     struct completion *completion = c2b->private;
     
-    if(c2b_uptodate(c2b) && c2b_dirty(c2b)) 
-        clean_c2b(c2b);
     complete(completion);
 }
 
