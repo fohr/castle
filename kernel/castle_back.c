@@ -2032,10 +2032,12 @@ static void castle_back_big_get_expire(struct castle_back_stateful_op *stateful_
     BUG_ON(!spin_is_locked(&stateful_op->lock));
     BUG_ON(!list_empty(&stateful_op->op_queue));
     BUG_ON(stateful_op->curr_op != NULL);
+    BUG_ON(stateful_op->tag != CASTLE_RING_BIG_GET);
 
     castle_attachment_put(stateful_op->attachment);
     stateful_op->attachment = NULL;
 
+    castle_object_pull_finish(&stateful_op->pull);
     // Will drop stateful_op->lock
     castle_back_put_stateful_op(stateful_op->conn, stateful_op);
 }
@@ -2052,7 +2054,10 @@ static void castle_back_big_get_do_chunk(struct castle_back_stateful_op *statefu
         op->req.get_chunk.buffer_ptr), op->req.get_chunk.buffer_len);
 }
 
-static void castle_back_big_get_continue(struct castle_object_pull *pull, int err, uint64_t length, int done)
+static void castle_back_big_get_continue(struct castle_object_pull *pull, 
+                                         int err, 
+                                         uint64_t length, 
+                                         int done)
 {
     struct castle_back_stateful_op *stateful_op = 
         container_of(pull, struct castle_back_stateful_op, pull);
@@ -2079,6 +2084,7 @@ static void castle_back_big_get_continue(struct castle_object_pull *pull, int er
         castle_back_stateful_op_finish_all(stateful_op, err);
         castle_attachment_put(stateful_op->attachment);
         stateful_op->attachment = NULL;
+        castle_object_pull_finish(&stateful_op->pull);
         castle_back_put_stateful_op(stateful_op->conn, stateful_op);
         return;
     }

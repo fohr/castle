@@ -2595,7 +2595,7 @@ static void castle_da_bvec_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cvt)
     BUG_ON((CVT_MEDIUM_OBJECT(cvt) && cvt.cep.ext_id !=
                                         c_bvec->tree->data_ext_fs.ext_id));
 
-    castle_ct_put(ct, write);
+    /* Don't release the ct reference in order to hold on to medium objects array, etc. */
     callback(c_bvec, err, cvt);
 }
 

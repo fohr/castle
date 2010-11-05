@@ -100,8 +100,8 @@ static void castle_debug_malloc_fini(void)
     list_for_each(l, &malloc_list)
     {
         dobj = list_entry(l, struct castle_malloc_debug, list);
-        printk("kmalloc/kzalloc of %u bytes from %s:%d hasn't been deallocated.\n",
-                dobj->size, dobj->file, dobj->line);
+        //printk("kmalloc/kzalloc of %u bytes from %s:%d hasn't been deallocated.\n",
+        //        dobj->size, dobj->file, dobj->line);
         sum += dobj->size;
         i++;
     }

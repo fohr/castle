@@ -995,12 +995,14 @@ struct castle_object_replace {
                                     uint32_t                      str_length,
                                     int                           partial);
 
+    struct castle_component_tree *ct;
     struct castle_cache_block *data_c2b;
     uint32_t    data_c2b_offset;
     uint32_t    data_length;
 };
 
 struct castle_object_get {
+    struct castle_component_tree *ct;
     struct castle_cache_block *data_c2b;
     uint32_t    data_c2b_length;
     uint32_t    data_length;
@@ -1023,6 +1025,7 @@ struct castle_object_pull {
     uint64_t                    offset;
 
     c_ext_pos_t                 cep;
+    struct castle_component_tree *ct;
     struct castle_cache_block  *curr_c2b;
     
     void                       *buf;

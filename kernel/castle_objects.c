@@ -883,6 +883,7 @@ void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
     c2_block_t *c2b = NULL;
     int complete_write = 0;
 
+    replace->ct = c_bvec->tree;
     castle_debug_bio_deregister(c_bio);
 
     /* Sanity checks on the bio */
@@ -898,6 +899,7 @@ void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
     /* Deal with error case first */
     if(err)
     {
+        castle_ct_put(replace->ct, 1);
         replace->complete(replace, err);
         castle_utils_bio_free(c_bio);
         return;
@@ -939,6 +941,7 @@ void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
             put_c2b(c2b);
         }
  
+        castle_ct_put(replace->ct, 1);
         replace->complete(replace, 0);
     } else
     /* Complete the packet, so that the client sends us more. */
@@ -967,6 +970,7 @@ int castle_object_replace_continue(struct castle_object_replace *replace, int la
         dirty_c2b(data_c2b);
         write_unlock_c2b(data_c2b);
         put_c2b(data_c2b);
+        castle_ct_put(replace->ct, 1);
         replace->complete(replace, 0);
     } else
     {
@@ -978,10 +982,12 @@ int castle_object_replace_continue(struct castle_object_replace *replace, int la
 
 int castle_object_replace_cancel(struct castle_object_replace *replace)
 {
+    struct castle_component_tree *ct = replace->ct;
     c2_block_t *data_c2b = replace->data_c2b;
 
     debug("Replace cancel.\n");
 
+    castle_ct_put(ct, 1);
     dirty_c2b(data_c2b);
     write_unlock_c2b(data_c2b);
     put_c2b(data_c2b);
@@ -1213,6 +1219,7 @@ void __castle_object_get_complete(struct work_struct *work)
     uint32_t data_c2b_length = get->data_c2b_length;
     uint32_t data_length = get->data_length;
     int first = get->first;    
+    struct castle_component_tree *ct = get->ct;
     int last;
     
     /* Deal with error case first */
@@ -1269,6 +1276,8 @@ out:
     write_unlock_c2b(c2b);
     put_c2b(c2b);
 
+    printk("=========> Finishing the get.\n");
+    castle_ct_put(ct, 0);
     castle_utils_bio_free(c_bvec->c_bio);
 }
 
@@ -1365,6 +1374,7 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
 
     debug("Returned from btree walk with value of type 0x%x and length %llu\n", 
           cvt.type, cvt.length);
+    get->ct = c_bvec->tree;
     /* Sanity checks on the bio */
     BUG_ON(c_bvec_data_dir(c_bvec) != READ); 
     BUG_ON(atomic_read(&c_bio->count) != 1);
@@ -1377,6 +1387,7 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
     if(err || CVT_INVALID(cvt) || CVT_TOMB_STONE(cvt))
     {
         debug("Error, invalid or tombstone.\n");
+        castle_ct_put(get->ct, 0);
         get->reply_start(get, err, 0, NULL, 0);
         castle_utils_bio_free(c_bvec->c_bio);
         return;
@@ -1386,12 +1397,14 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
     if(CVT_INLINE(cvt))
     {
         debug("Inline.\n");
+        castle_ct_put(get->ct, 0);
         get->reply_start(get, 0, cvt.length, cvt.val, cvt.length);
         castle_free(cvt.val);
         castle_utils_bio_free(c_bvec->c_bio);
         return;
     }
 
+    printk("Getting object from cep="cep_fmt_str_nl, cep2str(cvt.cep));
     BUG_ON(CVT_MEDIUM_OBJECT(cvt) && 
             cvt.cep.ext_id != c_bvec->tree->data_ext_fs.ext_id);
 
@@ -1446,6 +1459,8 @@ int castle_object_get(struct castle_object_get *get,
     
     /* TODO: add bios to the debugger! */ 
 
+    printk("Getting key:\n");
+    vl_bkey_print(btree_key);
     ret = castle_double_array_find(c_bvec);
     if (ret)
     {
@@ -1456,6 +1471,12 @@ int castle_object_get(struct castle_object_get *get,
     return ret;
 }
 EXPORT_SYMBOL(castle_object_get);
+
+void castle_object_pull_finish(struct castle_object_pull *pull)
+{
+    castle_ct_put(pull->ct, 0);
+}
+
 
 void __castle_object_chunk_pull_complete(struct work_struct *work)
 {
@@ -1532,12 +1553,15 @@ static void castle_object_pull_continue(struct castle_bio_vec *c_bvec, int err, 
 {
     struct castle_object_pull *pull = c_bvec->c_bio->data;
     
+    pull->ct = c_bvec->tree;
     castle_object_bkey_free(c_bvec->key);
     castle_utils_bio_free(c_bvec->c_bio);
     
     if(err || CVT_INVALID(cvt) || CVT_TOMB_STONE(cvt))
     {
         debug("Error, invalid or tombstone.\n");
+
+        castle_ct_put(pull->ct, 0);
         pull->pull_continue(pull, err, 0, 1 /* done */);
         return;
     }
