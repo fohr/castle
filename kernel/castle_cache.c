@@ -651,7 +651,27 @@ void submit_c2b_io(int           rw,
     struct bio *bio;
     struct bio_info *bio_info;
     int i;
-   
+
+#ifdef CASTLE_DEBUG    
+    /* Check that we are submitting IO to the right ceps. */
+    c_ext_pos_t dcep = cep;
+    c2_page_t *c2p;
+
+    /* Only works for 1 page c2ps. */
+    BUG_ON(PAGES_PER_C2P != 1);
+    for(i=0; i<nr_pages; i++)
+    {
+        c2p = (c2_page_t *)pages[i]->lru.next;
+        if(!EXT_POS_EQUAL(c2p->cep, dcep))
+        {
+            printk("Unmattching ceps "cep_fmt_str", "cep_fmt_str_nl,
+                cep2str(c2p->cep), cep2str(dcep));
+            BUG();
+        }
+        dcep.offset += PAGE_SIZE;
+    }
+#endif
+  
     /* Work out the slave structure. */ 
     cs = castle_slave_find_by_uuid(disk_chk.slave_id);
     debug("slave_id=%d, cs=%p\n", disk_chk.slave_id, cs);
@@ -928,6 +948,7 @@ static inline void __castle_cache_c2p_get(c2_page_t *c2p)
     c2p->count++;
 }
 
+#define MIN(_a, _b)     ((_a) < (_b) ? (_a) : (_b)) 
 /* Must be called with the page_hash lock held */
 static inline void __castle_cache_c2p_put(c2_page_t *c2p, struct list_head *accumulator)
 {
@@ -938,6 +959,18 @@ static inline void __castle_cache_c2p_put(c2_page_t *c2p, struct list_head *accu
        so that they get freed later on. */
     if(c2p->count == 0)
     {
+#ifdef CASTLE_DEBUG
+        char *buf, *poison="dead-page";
+        int i, j, str_len;
+
+        str_len = strlen(poison);
+        for(i=0; i<PAGES_PER_C2P; i++)
+        {
+            buf = pfn_to_kaddr(page_to_pfn(c2p->pages[i]));
+            for(j=0; j<PAGE_SIZE; j+=str_len)
+                memcpy(buf, poison, MIN(PAGE_SIZE-j, str_len));
+        }
+#endif
         debug("Freeing c2p for cep="cep_fmt_str_nl, cep2str(c2p->cep));
         BUG_ON(c2p_dirty(c2p));
         atomic_sub(PAGES_PER_C2P, &castle_cache_clean_pages);
@@ -2303,6 +2336,10 @@ static int castle_cache_c2p_init(c2_page_t *c2p)
 
         /* Add page to the c2p */
         c2p->pages[j] = page;
+#ifdef CASTLE_DEBUG
+        /* For debugging, save the c2p pointer in usude lru list. */
+        page->lru.next = (void *)c2p;
+#endif
     }
 
     return 0;
