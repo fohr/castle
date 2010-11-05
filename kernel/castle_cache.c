@@ -1242,7 +1242,7 @@ static void castle_cache_block_init(c2_block_t *c2b,
     BUG_ON(atomic_read(&c2b->count) != 0);
     atomic_set(&c2b->remaining, 0);
     c2b->cep = cep;
-    c2b->state = INIT_C2B_BITS | (uptodate ? C2B_uptodate : 0);
+    c2b->state = INIT_C2B_BITS | (uptodate ? (1 << C2B_uptodate) : 0);
     c2b->nr_pages = nr_pages;
     c2b->c2ps = c2ps;
 
