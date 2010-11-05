@@ -731,58 +731,110 @@ int chk_valid(c_disk_chk_t chk)
 }
 #endif
 
-static inline void submit_c2b_io_array(int rw, 
-                                       c2_block_t *c2b, 
-                                       c_ext_pos_t cep, 
-                                       c_disk_chk_t *chunks, 
-                                       int k_factor,
-                                       struct page **io_pages,
-                                       int nr_pages)
+#define MAX_BIO_PAGES        16
+typedef struct castle_io_array {
+    struct page *io_pages[MAX_BIO_PAGES];
+    c_ext_pos_t start_cep;
+    c_chk_t chunk;
+    int next_idx;
+} c_io_array_t;
+
+static inline void c_io_array_submit(int rw, 
+                                     c2_block_t *c2b, 
+                                     c_disk_chk_t *chunks, 
+                                     int k_factor,
+                                     c_io_array_t *array)
 {
-    int i;
+    int i, nr_pages;
 
+    nr_pages = array->next_idx;
     debug("Submitting io_array of %d pages, for cep "cep_fmt_str", k_factor=%d, rw=%s\n",
-        nr_pages, __cep2str(cep), k_factor, (rw == READ) ? "read" : "write");
+        nr_pages, 
+        cep2str(array->start_cep), 
+        k_factor, 
+        (rw == READ) ? "read" : "write");
 
-    if(nr_pages <= 0)
-        return;
+    BUG_ON((nr_pages <= 0) || (nr_pages > MAX_BIO_PAGES));
     /* Submit the IO */
     for(i=0; i<(rw == WRITE ? k_factor : 1); i++)
     {
         /* Debugging checks, the first one could be turned into a vaild error. */
 #ifdef CASTLE_DEBUG
         BUG_ON(DISK_CHK_INVAL(chunks[i]));
-        BUG_ON(!SUPER_EXTENT(cep.ext_id) && !chk_valid(chunks[i]));
+        BUG_ON(!SUPER_EXTENT(array->start_cep.ext_id) && !chk_valid(chunks[i]));
 #endif
         atomic_add(nr_pages, &c2b->remaining);
-        submit_c2b_io(rw, c2b, cep, chunks[i], io_pages, nr_pages); 
+        submit_c2b_io(rw, c2b, array->start_cep, chunks[i], array->io_pages, nr_pages); 
     }
+}
+
+static inline void c_io_array_init(c_io_array_t *array)
+{
+    array->start_cep = INVAL_EXT_POS; 
+    array->chunk = INVAL_CHK;
+    array->next_idx = 0;
+}
+
+static inline int c_io_array_page_add(c_io_array_t *array, 
+                                      c_ext_pos_t cep, 
+                                      c_chk_t logical_chunk, 
+                                      struct page *page)
+{
+    c_ext_pos_t cur_cep;
+
+    /* We cannot accept any more pages, if we already have MAX_BIO_PAGES. */
+    if(array->next_idx >= MAX_BIO_PAGES)
+        return -1;
+    /* If it is an established array, reject pages for different chunks, or non-sequential ceps. */
+    if(array->next_idx > 0)
+    {
+        cur_cep = array->start_cep;
+        cur_cep.offset += array->next_idx * PAGE_SIZE;
+        if(logical_chunk != array->chunk)
+            return -2; 
+        if(!EXT_POS_EQUAL(cur_cep, cep))
+            return -3;
+    }
+    /* If it is a new array, initialise start_cep and chunk. */ 
+    if(array->next_idx == 0)
+    {
+        array->start_cep = cep;
+        array->chunk = logical_chunk;
+        cur_cep = cep;
+    }
+    /* Add the page, increment the index. */
+    array->io_pages[array->next_idx] = page;
+    array->next_idx++;
+
+    return 0;
 }
 
 static int submit_c2b_rda(int rw, c2_block_t *c2b)
 {
-#define MAX_BIO_PAGES        16
-    c2_page_t            *c2p;
-    struct page          *io_pages[MAX_BIO_PAGES], *page;
-    int                   io_pages_idx, skip_c2p;
-    c_ext_pos_t           cur_cep, cep = c2b->cep;
-    c_chk_t               last_chk, cur_chk;
-    uint32_t              k_factor = castle_extent_kfactor_get(cep.ext_id);
-    c_disk_chk_t          chunks[k_factor];
+    c2_page_t    *c2p;
+    c_io_array_t  io_array;
+    struct page  *page;
+    int           skip_c2p;
+    c_ext_pos_t   cur_cep;
+    c_chk_t       last_chk, cur_chk;
+    uint32_t      k_factor = castle_extent_kfactor_get(c2b->cep.ext_id);
+    c_disk_chk_t  chunks[k_factor];
 
     debug("Submitting c2b "cep_fmt_str", for %s\n", 
             __cep2str(c2b->cep), (rw == READ) ? "read" : "write");
+
     /* c2b->remaining is effectively a reference count. Get one ref before we start. */
     BUG_ON(atomic_read(&c2b->remaining) != 0);
     atomic_inc(&c2b->remaining);
     last_chk = INVAL_CHK;
     cur_chk = INVAL_CHK;
-    io_pages_idx = 0;
+    c_io_array_init(&io_array);
+    /* Everything initialised, go through each page in the c2p. */
     c2b_for_each_page_start(page, c2p, cur_cep, c2b)
     {
         cur_chk = CHUNK(cur_cep.offset);
-        debug("Processing a c2b page, io_pages_idx=%d, last_chk=%d, cur_chk=%d\n",
-                io_pages_idx, last_chk, cur_chk);
+        debug("Processing a c2b page, last_chk=%d, cur_chk=%d\n", last_chk, cur_chk);
+        
         /* Do not read into uptodate pages, do not write out of clean pages. */
         skip_c2p = ((rw == READ)  && c2p_uptodate(c2p)) ||
                    ((rw == WRITE) && !c2p_dirty(c2p));
@@ -790,21 +842,25 @@ static int submit_c2b_rda(int rw, c2_block_t *c2b)
                     (skip_c2p ? "Skipping" : "Not skipping"),
                     (rw == READ ? "read" : "write"), 
                     cep2str(c2p->cep));
-        /* Continue collecting pages into io_pages array for as long as there
-           is space in it, and we continue looking at the same chunk */
-        if((!skip_c2p) && (io_pages_idx < MAX_BIO_PAGES) && (cur_chk == last_chk))
-        {
-            io_pages[io_pages_idx] = page;
-            io_pages_idx++;
-            goto cont;
-        } 
+        /* Move to the next page, if we are not supposed to do IO on this page. */
+        if(skip_c2p)
+            goto next_page;
 
-        /* We have to submit the IO here if last_chk is valid (either because we 
-           moved chunks, or because we've run out of space in the io_array). */
-            
-        debug("Submitting io array, # pages=%d.\n", io_pages_idx);
-        submit_c2b_io_array(rw, c2b, cep, chunks, k_factor, io_pages, io_pages_idx);
-        /* Update chunk map as soon as we move to a new chunk. */ 
+        /* If we are not skipping, add the page to io array. */ 
+        if(c_io_array_page_add(&io_array, cur_cep, cur_chk, page))
+        {
+            /* We've got physical chunks for last_chk (logical chunk), this should
+               match with the logical chunk stored in io_array. */ 
+            BUG_ON(io_array.chunk != last_chk);
+            /* Submit the array. */
+            c_io_array_submit(rw, c2b, chunks, k_factor, &io_array);
+            /* Reinit the array, and re-try adding the current page. This should not
+               fail any more. */
+            c_io_array_init(&io_array);
+            BUG_ON(c_io_array_page_add(&io_array, cur_cep, cur_chk, page));
+        }
+         
+        /* Update chunk map when we move to a new chunk. */ 
         if(cur_chk != last_chk)
         {
             int ret;
@@ -824,30 +880,22 @@ static int submit_c2b_rda(int rw, c2_block_t *c2b)
             }
             
             debug("chunks[0]="disk_chk_fmt_nl, disk_chk2str(chunks[0]));
-        }
-
-        /* The current page hasn't been saved in the io_pages array yet, do that, and
-           reset all the other vars. */ 
-        io_pages_idx = 0;
-        cep = cur_cep; 
-        last_chk = cur_chk;
-        if(!skip_c2p)
-        {
-            debug("Not skipping.\n");
-            io_pages[0] = page;
-            io_pages_idx = 1;
+            last_chk = cur_chk;
         }
     }
-cont:        
+next_page:
     c2b_for_each_page_end(page, c2p, cur_cep, c2b);
-    /* Chunk map must be up-to-date, because we either exited after a continue above (which 
-       implies that (cur_chk == last_chk), or fell through the bottom of the loop above,
-       which again implies that (cur_chk == last_chk) */ 
-    BUG_ON((io_pages_idx > 0) && (CHK_INVAL(last_chk) || (cur_chk != last_chk)));
-    submit_c2b_io_array(rw, c2b, cep, chunks, k_factor, io_pages, io_pages_idx);
+
+    /* IO array may contain leftover pages, submit those too. */
+    if(io_array.next_idx > 0)
+    {
+        /* Chunks array is always initialised for last_chk. */
+        BUG_ON(io_array.chunk != last_chk);
+        c_io_array_submit(rw, c2b, chunks, k_factor, &io_array);
+    }
     /* Drop the 1 ref. */
     c2b_remaining_io_sub(rw, 1, c2b);
-
+    
     return 0;
 }
 
