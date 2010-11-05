@@ -2592,6 +2592,9 @@ static void castle_da_bvec_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cvt)
         castle_ext_fs_free(&ct->tree_ext_fs, 
                            atomic_read(&c_bvec->reserv_nodes) * btree->node_size * C_BLK_SIZE);
     }
+    BUG_ON((CVT_MEDIUM_OBJECT(cvt) && cvt.cep.ext_id !=
+                                        c_bvec->tree->data_ext_fs.ext_id));
+
     castle_ct_put(ct, write);
     callback(c_bvec, err, cvt);
 }
