@@ -1277,11 +1277,12 @@ static void castle_back_iter_call_queued(struct castle_back_stateful_op *statefu
                 "ongoing op or no ops in queue, token = 0x%x.\n", stateful_op->token);
 }
 
-static void castle_back_iter_reply(struct castle_back_stateful_op *stateful_op, int err)
+/* in error cases op != stateful_op->curr_op */
+static void castle_back_iter_reply(struct castle_back_stateful_op *stateful_op, struct castle_back_op *op, int err)
 {
     debug_iter("castle_back_iter_reply, token = 0x%x.\n", stateful_op->token);
 
-    castle_back_reply(stateful_op->curr_op, err, 0, 0);
+    castle_back_reply(op, err, 0, 0);
 
     spin_lock(&stateful_op->lock);
 
@@ -1476,7 +1477,7 @@ static int castle_back_iter_next_callback(struct castle_object_iterator *iterato
                 stateful_op->iterator.kv_list_size);
 
         castle_back_buffer_put(conn, op->buf);
-        castle_back_iter_reply(stateful_op, 0);
+        castle_back_iter_reply(stateful_op, op, 0);
 
         return 0;
     }
@@ -1516,7 +1517,7 @@ static int castle_back_iter_next_callback(struct castle_object_iterator *iterato
             stateful_op->iterator.saved_val.val = NULL;
 
         castle_back_buffer_put(conn, op->buf);
-        castle_back_iter_reply(stateful_op, 0);
+        castle_back_iter_reply(stateful_op, op, 0);
 
         return 0;
     }
@@ -1531,7 +1532,7 @@ static int castle_back_iter_next_callback(struct castle_object_iterator *iterato
 
 err0:
     castle_back_buffer_put(conn, op->buf);
-    castle_back_iter_reply(stateful_op, err);
+    castle_back_iter_reply(stateful_op, op, err);
 
     return 0;
 }
@@ -1616,7 +1617,7 @@ static void _castle_back_iter_next(void *data)
 
 err0:
     castle_back_buffer_put(conn, op->buf);
-    castle_back_iter_reply(stateful_op, err);
+    castle_back_iter_reply(stateful_op, op, err);
 }
 
 static void castle_back_iter_next(void *data)
@@ -1666,7 +1667,7 @@ static void castle_back_iter_next(void *data)
 
     return;
 
-err0: castle_back_iter_reply(stateful_op, err);
+err0: castle_back_iter_reply(stateful_op, op, err);
 }
 
 static void castle_back_iter_cleanup(struct castle_back_stateful_op *stateful_op)
