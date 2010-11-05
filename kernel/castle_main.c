@@ -1269,6 +1269,7 @@ void castle_attachment_put(struct castle_attachment *ca)
     {
         version_t version = ca->version;
         da_id_t da_id = castle_version_da_id_get(version);
+        collection_id_t ca_id = ca->col.id;
         
         castle_events_collection_detach(ca->col.id);
         castle_sysfs_collection_del(ca);
@@ -1277,6 +1278,7 @@ void castle_attachment_put(struct castle_attachment *ca)
         castle_free(ca);
         castle_version_detach(version);
         castle_double_array_put(da_id);
+        printk("Attachment %u is completly removed\n", ca_id);
     }
 }
 

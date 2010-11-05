@@ -159,7 +159,7 @@ static inline void _prefix##_rhash_remove(_struct *v)                           
     unsigned long flags;                                                             \
                                                                                      \
     spin_lock_irqsave(&_prefix##_hash_lock, flags);                                  \
-    printk("Waiting to delete ext: %llu|ref:%u\n", v->ext_id, v->_ref_mbr);          \
+    debug("Waiting to delete ext: %llu|ref:%u\n", v->ext_id, v->_ref_mbr);           \
     while (v->_ref_mbr != 0)                                                         \
     {                                                                                \
         spin_unlock_irqrestore(&_prefix##_hash_lock, flags);                         \
@@ -167,7 +167,7 @@ static inline void _prefix##_rhash_remove(_struct *v)                           
         spin_lock_irqsave(&_prefix##_hash_lock, flags);                              \
     }                                                                                \
     list_del(&v->_list_mbr);                                                         \
-    printk("Deleted extent: %llu\n", v->ext_id);                                     \
+    debug("Deleted extent: %llu\n", v->ext_id);                                      \
     spin_unlock_irqrestore(&_prefix##_hash_lock, flags);                             \
 }                                                                                    \
 

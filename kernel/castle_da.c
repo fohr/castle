@@ -737,6 +737,8 @@ static void castle_ct_merged_iter_next(c_merged_iter_t *iter,
         if(kv_cmp == 0)
         {
             debug("Duplicate entry found. Removing.\n");
+            if (iter->each_skip)
+                iter->each_skip(iter, comp_iter);
             comp_iter->cached = 0;
         }
     }
@@ -784,7 +786,10 @@ static void castle_ct_merged_iter_skip(c_merged_iter_t *iter,
         /* Flush cached entry if it was to small (this doesn't inspect the cached entry
            any more). */
         if(skip_cached)
+        {
+            BUG_ON(iter->each_skip);
             comp_iter->cached = 0;
+        }
     }
 }
 
@@ -1249,7 +1254,10 @@ static void castle_da_each_skip(c_merged_iter_t *iter,
     BUG_ON(!comp_iter->cached);
 
     if (CVT_LARGE_OBJECT(comp_iter->cached_entry.cvt))
+    {
+        debug("Freeing Duplicate Large Object.\n");
         castle_extent_free(comp_iter->cached_entry.cvt.cep.ext_id);
+    }
 }
 
 static int castle_da_iterators_create(struct castle_da_merge *merge)

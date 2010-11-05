@@ -671,19 +671,18 @@ static int castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
             BUG_ON(replace->data_length_get(replace) < cvt->length);
             replace->data_copy(replace, cvt->val, cvt->length, 0 /* not partial */); 
         }
-        else
+        else /* On-disk objects. (Medium or Large Objects) */
         {
             uint32_t nr_chunks;
             c_ext_pos_t cep;
             uint32_t prev_nr_blocks;
 
             nr_blocks = (cvt->length - 1) / C_BLK_SIZE + 1; 
-            nr_chunks = (nr_blocks >> (C_CHK_SHIFT - C_BLK_SHIFT)) + 
-                            (nr_blocks % (C_CHK_SIZE/C_BLK_SIZE));
+            nr_chunks = (cvt->length - 1) / C_CHK_SIZE + 1; 
             prev_nr_blocks = (prev_cvt.length - 1) / C_BLK_SIZE + 1;
 
             if (replace->value_len <= MEDIUM_OBJECT_LIMIT)
-            {
+            { /* Medium Objects. */
                 if (CVT_MEDIUM_OBJECT(prev_cvt) && (prev_nr_blocks >= nr_blocks))
                 {
                     castle_ext_fs_free(&c_bvec->tree->data_ext_fs,
@@ -704,7 +703,7 @@ static int castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
                                                    __cep2str(cvt->cep));
             }
             else 
-            {
+            { /* Large Objects. */
                 cep.ext_id = castle_extent_alloc(DEFAULT, c_bvec->tree->da, 
                                                  nr_chunks);
                 cep.offset = 0;
@@ -715,11 +714,12 @@ static int castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
                     return -ENOSPC;
                 }
 
-		/* Update the large object chunk count on the tree */
-		atomic64_add(nr_chunks,&c_bvec->tree->large_ext_chk_cnt);
+                /* Update the large object chunk count on the tree */
+                atomic64_add(nr_chunks, &c_bvec->tree->large_ext_chk_cnt);
 
                 CVT_LARGE_OBJECT_SET(*cvt, replace->value_len, cep);
 
+                debug("Creating Large Object of size - %u\n", nr_chunks);
                 /* TODO: Again, work out how to handle failed allocations */ 
                 BUG_ON(EXT_POS_INVAL(cvt->cep));
             }
@@ -739,12 +739,10 @@ static int castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
     /* Free Old Large Object */
     if (CVT_LARGE_OBJECT(prev_cvt))
     {
-        nr_blocks = (prev_cvt.length - 1) / C_BLK_SIZE + 1; 
-
-	/* Update the large object chunk count on the tree */
-	prev_large_ext_chk_cnt = castle_extent_size_get(prev_cvt.cep.ext_id);
-	atomic64_sub(prev_large_ext_chk_cnt,&c_bvec->tree->large_ext_chk_cnt);
-
+        /* Update the large object chunk count on the tree */
+        prev_large_ext_chk_cnt = castle_extent_size_get(prev_cvt.cep.ext_id);
+        atomic64_sub(prev_large_ext_chk_cnt, &c_bvec->tree->large_ext_chk_cnt);
+        debug("Freeing Large Object of size - %u\n", prev_large_ext_chk_cnt);
         castle_extent_free(prev_cvt.cep.ext_id);
     }
     BUG_ON(CVT_INVALID(*cvt));
