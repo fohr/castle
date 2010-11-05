@@ -976,7 +976,7 @@ static void castle_back_replace_data_copy(struct castle_object_replace *replace,
 {
     struct castle_back_op *op = container_of(replace, struct castle_back_op, replace);
 
-    debug("castle_back_replace_data_copy buffer=%p, buffer_length=%d, not_last=%d, value_len=%llu\n",
+    debug("castle_back_replace_data_copy buffer=%p, buffer_length=%u, not_last=%d, value_len=%u\n",
         buffer, buffer_length, not_last, op->req.replace.value_len);
 
     // TODO: actual zero copy!
@@ -1855,7 +1855,7 @@ static void castle_back_big_put_data_copy(struct castle_object_replace *replace,
     
     BUG_ON(op == NULL);
 
-    debug("castle_back_big_put_data_copy buffer=%p, buffer_length=u,"
+    debug("castle_back_big_put_data_copy buffer=%p, buffer_length=%u,"
         "not_last=%d, value_len=%u\n, buffer_offset=%u\n",
         buffer, buffer_length, not_last, op->req.put_chunk.buffer_len, op->buffer_offset);
 
@@ -2063,7 +2063,7 @@ static void castle_back_big_get_continue(struct castle_object_pull *pull,
         container_of(pull, struct castle_back_stateful_op, pull);
     int get_continue;
 
-    debug("castle_back_big_get_continue stateful_op=%p err=%d length=%u done=%d\n",
+    debug("castle_back_big_get_continue stateful_op=%p err=%d length=%llu done=%d\n",
         stateful_op, err, length, done);
     
     BUG_ON(stateful_op->tag != CASTLE_RING_BIG_GET);

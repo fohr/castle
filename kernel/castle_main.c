@@ -90,16 +90,28 @@ static int castle_fs_superblock_validate(struct castle_fs_superblock *fs_sb)
 static void castle_fs_superblock_init(struct castle_fs_superblock *fs_sb)
 {   
     int i;
+    struct list_head *lh;
+    struct castle_slave *cs;
 
     fs_sb->pub.magic1 = CASTLE_FS_MAGIC1;
     fs_sb->pub.magic2 = CASTLE_FS_MAGIC2;
     fs_sb->pub.magic3 = CASTLE_FS_MAGIC3;
-    get_random_bytes(&fs_sb->pub.uuid,  sizeof(fs_sb->pub.uuid));
+    do {
+        get_random_bytes(&fs_sb->pub.uuid,  sizeof(fs_sb->pub.uuid));
+    } while (fs_sb->pub.uuid == 0);
     fs_sb->pub.version = CASTLE_FS_VERSION;
     get_random_bytes(&fs_sb->pub.salt,  sizeof(fs_sb->pub.salt));
     get_random_bytes(&fs_sb->pub.peper, sizeof(fs_sb->pub.peper));
     for(i=0; i<sizeof(fs_sb->mstore) / sizeof(c_ext_pos_t ); i++)
         fs_sb->mstore[i] = INVAL_EXT_POS;
+
+    i = 0;
+    list_for_each(lh, &castle_slaves.slaves)
+    {
+        cs = list_entry(lh, struct castle_slave, list);
+        fs_sb->slaves[i++] = cs->uuid;
+    }
+    fs_sb->nr_slaves = i;
 }
 
 static void castle_fs_superblocks_init(void)
@@ -294,7 +306,8 @@ int castle_fs_init(void)
     struct list_head *lh;
     struct castle_slave *cs;
     struct castle_fs_superblock fs_sb, *cs_fs_sb;
-    int ret, first;
+    int ret, first, prev_new_dev = -1;
+    uint32_t i, nr_fs_slaves = 0, slave_count = 0;
 
     if(castle_fs_inited)
         return -EEXIST;
@@ -308,6 +321,17 @@ int castle_fs_init(void)
     list_for_each(lh, &castle_slaves.slaves)
     {
         cs = list_entry(lh, struct castle_slave, list);
+        slave_count++;
+
+        /* Either all disks should be new or none. */
+        if (prev_new_dev < 0)
+            prev_new_dev = cs->new_dev;
+        if (cs->new_dev != prev_new_dev)
+        {
+            printk("Few disks are marked new and few are not\n");
+            return -EINVAL;
+        }
+
         if(cs->new_dev)
             continue;
 
@@ -321,7 +345,7 @@ int castle_fs_init(void)
             first = 0;
         }
         else
-        /* Check if fs superblock the save as the one we already know about */
+        /* Check if fs superblock the same as the one we already know about */
         {
             if(memcmp(&fs_sb, cs_fs_sb, 
                       sizeof(struct castle_fs_superblock)) != 0)
@@ -331,7 +355,35 @@ int castle_fs_init(void)
                 return -EINVAL;
             }
         }
+
+        /* Check whether the slave is already in FS slaves list. */
+        for (i=0; i<fs_sb.nr_slaves; i++)
+        {
+            if (fs_sb.slaves[i] == cs->uuid)
+            {
+                nr_fs_slaves++;
+                break;
+            }
+        }
+
+        if (i == fs_sb.nr_slaves)
+        {
+            printk("Slave %u doesn't belong to this File system.\n", cs->uuid);
+            return -EINVAL;
+        }
         castle_fs_superblock_put(cs, 0);
+    }
+
+    if (slave_count < 2)
+    {
+        printk("ERROR: Need minimum two disks.\n");
+        return -EINVAL;
+    }
+
+    if (!first && (nr_fs_slaves != fs_sb.nr_slaves))
+    {
+        printk("Couldn't find all slaves of the filesystem.\n");
+        return -EINVAL;
     }
 
     /* Load extent structures into memory */
