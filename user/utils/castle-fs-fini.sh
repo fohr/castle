@@ -6,6 +6,7 @@ set -eu
 . /usr/share/castle-fs/init-utils
 
 unmount_kernel_fs
+rm -f /var/lib/castle-fs/dirty
 
 disks=$(castle-scan)
 

@@ -55,6 +55,7 @@ mkdir -p %{buildroot}/etc/castle-fs
 mkdir -p %{buildroot}/sbin
 mkdir -p %{buildroot}/usr/sbin
 mkdir -p %{buildroot}/usr/share/castle-fs
+mkdir -p %{buildroot}/var/lib/castle-fs
 cp user/udev/castle-fs.rules %{buildroot}/etc/udev/rules.d/
 cp user/udev/udev-watch %{buildroot}/etc/castle-fs/
 cp user/utils/castle %{buildroot}/etc/rc.d/init.d/
@@ -96,6 +97,7 @@ getent group %{groupname} >/dev/null || groupadd -r %{groupname}
 /usr/share/castle-fs
 /usr/sbin/castle-create
 /sbin/mkcastlefs
+/var/lib/castle-fs
 
 %changelog
 * Thu Sep  9 2010 Andrew Suffield <asuffield@acunu.com> - %{buildver}-%{buildrev}
