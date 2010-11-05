@@ -512,11 +512,11 @@ static int castle_block_read(struct block_device *bdev, sector_t sector,
 
     if (size > block_size)
     {
-        printk("Very small block size not supported: %u\n", block_size);
+        printk("Block size: %u too small. Not supported\n", block_size);
         return -1;
     }
 
-    printk("Reading %u bytes from block %llu.\n", block_size, block);
+    debug("Reading %u bytes from block %llu.\n", block_size, block);
     if (!(bh = __bread(bdev, block, block_size)))
         return -1;
 
@@ -553,7 +553,7 @@ static int castle_slave_superblock_read(struct castle_slave *cs)
         goto error_out;
     }
 
-    printk("Disk Superblock found.\n");
+    printk("Disk superblock found.\n");
 
     /* Save the uuid and exit */
     cs->uuid = cs_sb.uuid;
