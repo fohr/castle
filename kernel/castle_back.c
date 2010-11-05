@@ -1883,8 +1883,8 @@ static void castle_back_big_put(void *data)
 
     debug_iter("castle_back_big_put\n");
 
-    /* TODO: this indicates we don't know the value, but not supported yet */
-    if (op->req.big_put.value_len == 0)
+    /* TODO: 0 indicates we don't know the value, but not supported yet */
+    if (op->req.big_put.value_len <= MAX_INLINE_VAL_SIZE)
     {
         err = -EINVAL;
         goto err0;
