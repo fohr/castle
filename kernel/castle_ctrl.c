@@ -62,7 +62,14 @@ void castle_control_release(slave_uuid_t id, int *ret)
 void castle_control_attach(version_t version, int *ret, uint32_t *dev)
 {
     struct castle_attachment *cd;
-  
+ 
+    if (!DA_INVAL(castle_version_da_id_get(version)))
+    {
+        printk("Couldn't attach device to collection.\n");
+        *ret = -EINVAL;
+        return;
+    }
+
     *dev = 0;
     cd = castle_device_init(version);
     if(!cd)
