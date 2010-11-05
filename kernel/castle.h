@@ -207,6 +207,8 @@ typedef struct {
 
 struct castle_fs_superblock {
     struct castle_fs_superblock_public pub;
+    uint32_t        nr_slaves;
+    uint32_t        slaves[MAX_NR_SLAVES];
     c_ext_fs_bs_t   mstore_ext_fs_bs;
     c_ext_pos_t     mstore[16];
 } PACKED;
