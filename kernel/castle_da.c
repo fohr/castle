@@ -1665,6 +1665,11 @@ static struct castle_component_tree* castle_da_merge_package(struct castle_da_me
        over their functionality. */
     list_del(&merge->in_tree1->da_list);
     list_del(&merge->in_tree2->da_list);
+    /* Invalidate the list_head, used for debugging purposes in castle_ct_put(). */
+    merge->in_tree1->da_list.next = NULL;
+    merge->in_tree1->da_list.prev = NULL;
+    merge->in_tree2->da_list.next = NULL;
+    merge->in_tree2->da_list.prev = NULL;
     merge->da->nr_trees -= 2;
     castle_component_tree_add(merge->da, out_tree, 0 /* not in init */);
     castle_da_merging_clear(merge->da);
@@ -2093,7 +2098,12 @@ void castle_ct_put(struct castle_component_tree *ct, int write)
         return;
 
     debug("Ref count for ct id=%d went to 0, releasing.\n", ct->seq);
-
+    /* If the ct still on the da list, this must be an error. */
+    if(ct->da_list.next != NULL)
+    {
+        printk("CT=%d, still on DA list, but trying to remove.\n", ct->seq);
+        BUG();
+    }
     /* Destroy the component tree */
     BUG_ON(TREE_GLOBAL(ct->seq) || TREE_INVAL(ct->seq));
     castle_ct_hash_remove(ct);
@@ -2215,12 +2225,37 @@ out:
     castle_da_unlock(da);
 }
 
+static int castle_ct_hash_destroy_check(struct castle_component_tree *ct, void *ct_hash)
+{
+    /* Only the global component tree should remain when we destroy DA hash. */ 
+    if(((unsigned long)ct_hash > 0) && !TREE_GLOBAL(ct->seq))
+        printk("Error: Found CT=%d not on any DA's list, it claims DA=%d\n", 
+            ct->seq, ct->da);
+
+   /* All CTs apart of global are expected to be on a DA list. */
+   if(!TREE_GLOBAL(ct->seq) && (ct->da_list.next == NULL))
+       printk("Error: CT=%d is not on DA list, for DA=%d\n", 
+               ct->seq, ct->da);
+   if(TREE_GLOBAL(ct->seq) && (ct->da_list.next != NULL))
+       printk("Error: Global CT=%d is on DA list, for DA=%d\n", 
+               ct->seq, ct->da);
+   
+   /* Ref count should be 1 by now. */
+   if(atomic_read(&ct->ref_count) != 1)
+       printk("Error: Bogus ref count=%d for ct=%d, da=%d when exiting.\n", 
+               atomic_read(&ct->ref_count), ct->seq, ct->da);
+
+    return 0;
+}
+
 static int castle_da_ct_dealloc(struct castle_double_array *da,
                                 struct castle_component_tree *ct,
                                 int level_cnt,
                                 void *unused)
 {
+    castle_ct_hash_destroy_check(ct, (void*)0UL);
     list_del(&ct->da_list);
+    list_del(&ct->hash_list);
     castle_free(ct);
 
     return 0;
@@ -2243,6 +2278,7 @@ static void castle_da_hash_destroy(void)
 
 static void castle_ct_hash_destroy(void)
 {
+    castle_ct_hash_iterate(castle_ct_hash_destroy_check, (void *)1UL);
     castle_free(castle_ct_hash);
 }
 
@@ -2573,8 +2609,9 @@ static void castle_da_bvec_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cvt)
             callback(c_bvec, err, INVAL_VAL_TUP); 
             return;
         }
-        /* If there is the next tree, try searching in it now */
+        /* Put the previous tree, now that we know we've got a ref to the next. */
         castle_ct_put(ct, 0);
+        /* If there is the next tree, try searching in it now */
         c_bvec->tree = next_ct;
         debug_verbose("Scheduling btree read in %s tree: %d.\n", 
                 ct->dynamic ? "dynamic" : "static", ct->seq);
