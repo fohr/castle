@@ -1276,7 +1276,6 @@ out:
     write_unlock_c2b(c2b);
     put_c2b(c2b);
 
-    printk("=========> Finishing the get.\n");
     castle_ct_put(ct, 0);
     castle_utils_bio_free(c_bvec->c_bio);
 }
@@ -1404,7 +1403,6 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
         return;
     }
 
-    printk("Getting object from cep="cep_fmt_str_nl, cep2str(cvt.cep));
     BUG_ON(CVT_MEDIUM_OBJECT(cvt) && 
             cvt.cep.ext_id != c_bvec->tree->data_ext_fs.ext_id);
 
@@ -1458,9 +1456,6 @@ int castle_object_get(struct castle_object_get *get,
     atomic_set(&c_bvec->reserv_nodes, 0);
     
     /* TODO: add bios to the debugger! */ 
-
-    printk("Getting key:\n");
-    vl_bkey_print(btree_key);
     ret = castle_double_array_find(c_bvec);
     if (ret)
     {
