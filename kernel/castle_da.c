@@ -2568,13 +2568,13 @@ static void castle_da_bvec_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cvt)
         debug_verbose("Checking next ct.\n");
         next_ct = castle_da_ct_next(ct);
         BUG_ON(atomic_read(&c_bvec->reserv_nodes));
-        castle_ct_put(ct, 0);
         if(!next_ct)
         {
             callback(c_bvec, err, INVAL_VAL_TUP); 
             return;
         }
         /* If there is the next tree, try searching in it now */
+        castle_ct_put(ct, 0);
         c_bvec->tree = next_ct;
         debug_verbose("Scheduling btree read in %s tree: %d.\n", 
                 ct->dynamic ? "dynamic" : "static", ct->seq);
