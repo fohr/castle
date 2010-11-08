@@ -2193,7 +2193,8 @@ static da_id_t castle_da_ct_unmarshall(struct castle_component_tree *ct,
     ct->mstore_key  		= key;
     castle_ext_fs_unmarshall(&ct->tree_ext_fs, &ctm->tree_ext_fs_bs);
     castle_ext_fs_unmarshall(&ct->data_ext_fs, &ctm->data_ext_fs_bs);
-    INIT_LIST_HEAD(&ct->da_list);
+    ct->da_list.next = NULL;
+    ct->da_list.prev = NULL;
 
     return ctm->da_id;
 }
