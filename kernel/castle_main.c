@@ -376,7 +376,7 @@ int castle_fs_init(void)
 
     if (slave_count < 2)
     {
-        printk("ERROR: Need minimum two disks.\n");
+        printk("Need minimum two disks.\n");
         return -EINVAL;
     }
 
