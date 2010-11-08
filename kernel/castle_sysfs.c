@@ -102,7 +102,7 @@ static ssize_t versions_list_show(struct kobject *kobj,
                 "IsLeaf: %d\n",
                  v->version, 
                  parent, 
-                 (c_byte_off_t)size,
+                 (c_byte_off_t)size * C_BLK_SIZE_,
                  phys_size * C_CHK_SIZE,
                  leaf);
 
