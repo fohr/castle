@@ -39,6 +39,8 @@ void* castle_debug_malloc(size_t size, gfp_t flags, char *file, int line)
     size += sizeof(struct castle_malloc_debug);
     /* Alloc the object */
     dobj = kmalloc(size, flags); 
+    if(!dobj)
+        return NULL;
     /* Init all fields */
     INIT_LIST_HEAD(&dobj->list);
     dobj->file = file;
