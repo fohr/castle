@@ -1119,6 +1119,7 @@ static c2_page_t** castle_cache_page_freelist_get(int nr_pages)
     if(castle_cache_page_freelist_size * PAGES_PER_C2P < nr_pages)
     {
         spin_unlock(&castle_cache_freelist_lock);
+        castle_free(c2ps);
         debug("Freelist too small to allocate %d pages.\n", nr_pages);
         return NULL;
     }
