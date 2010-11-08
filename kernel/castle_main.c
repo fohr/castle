@@ -210,16 +210,24 @@ int castle_ext_fs_pre_alloc(c_ext_fs_t       *ext_fs,
                             c_byte_off_t      size)
 {
     uint64_t ret;
+    uint64_t used;
+    uint64_t blocked;
 
-    BUG_ON(atomic64_read(&ext_fs->used) % ext_fs->align);
-    BUG_ON(atomic64_read(&ext_fs->blocked) % ext_fs->align);
-    BUG_ON(atomic64_read(&ext_fs->blocked) < atomic64_read(&ext_fs->used));
-    BUG_ON(atomic64_read(&ext_fs->used) > ext_fs->ext_size);
+    used = atomic64_read(&ext_fs->used);
+    barrier();
+    blocked = atomic64_read(&ext_fs->blocked);
+
+    BUG_ON(used % ext_fs->align);
+    BUG_ON(blocked % ext_fs->align);
+    BUG_ON(blocked < used);
+    BUG_ON(used > ext_fs->ext_size);
 
     ret = atomic64_add_return(size, &ext_fs->blocked);
+    barrier();
     if (ret > ext_fs->ext_size)
     {
         atomic64_sub(size, &ext_fs->blocked);
+        barrier();
         return -1;
     }
 
@@ -233,8 +241,7 @@ int castle_ext_fs_free(c_ext_fs_t       *ext_fs,
     BUG_ON(atomic64_read(&ext_fs->blocked) % ext_fs->align);
 
     atomic64_sub(size, &ext_fs->blocked);
-
-    BUG_ON(atomic64_read(&ext_fs->blocked) < atomic64_read(&ext_fs->used));
+    barrier();
 
     return 0;
 }
@@ -244,10 +251,17 @@ int castle_ext_fs_get(c_ext_fs_t      *ext_fs,
                       int              alloc_done,
                       c_ext_pos_t     *cep)
 {
-    BUG_ON(atomic64_read(&ext_fs->used) % ext_fs->align);
-    BUG_ON(atomic64_read(&ext_fs->blocked) % ext_fs->align);
-    BUG_ON(atomic64_read(&ext_fs->blocked) < atomic64_read(&ext_fs->used));
-    BUG_ON(atomic64_read(&ext_fs->used) > ext_fs->ext_size);
+    uint64_t used;
+    uint64_t blocked;
+
+    used = atomic64_read(&ext_fs->used);
+    barrier();
+    blocked = atomic64_read(&ext_fs->blocked);
+
+    BUG_ON(used % ext_fs->align);
+    BUG_ON(blocked % ext_fs->align);
+    BUG_ON(blocked < used);
+    BUG_ON(used > ext_fs->ext_size);
 
     if (!alloc_done)
     {
@@ -257,22 +271,21 @@ int castle_ext_fs_get(c_ext_fs_t      *ext_fs,
         if (ret < 0)
             return ret;
     }
-
+    
     cep->ext_id = ext_fs->ext_id;
     cep->offset = atomic64_add_return(size, &ext_fs->used) - size;
+    barrier();
     BUG_ON(EXT_ID_INVAL(cep->ext_id));
-    if (atomic64_read(&ext_fs->blocked) < atomic64_read(&ext_fs->used))
+    
+    used = atomic64_read(&ext_fs->used);
+    barrier();
+    blocked = atomic64_read(&ext_fs->blocked);
+
+    if (blocked < used)
     {
         atomic64_sub(size, &ext_fs->used);
-        return -1;
-    }
-    if (atomic64_read(&ext_fs->used) > ext_fs->ext_size)
-    {
-        printk("%lu:%lu:%llu:%llu\n", atomic64_read(&ext_fs->blocked),
-                                      atomic64_read(&ext_fs->used),
-                                      ext_fs->ext_size,
-                                      size);
-        BUG();
+        barrier();
+        return -2;
     }
 
     return 0;
@@ -1082,10 +1095,11 @@ static void castle_bio_data_io_do(c_bvec_t *c_bvec, c_ext_pos_t cep)
 }
 
 static int castle_bio_data_cvt_get(c_bvec_t    *c_bvec,
-                                    c_val_tup_t  prev_cvt,
-                                    c_val_tup_t *cvt)
+                                   c_val_tup_t  prev_cvt,
+                                   c_val_tup_t *cvt)
 {
     c_ext_pos_t cep;
+    int ret;
 
     BUG_ON(c_bvec_data_dir(c_bvec) != WRITE); 
 
@@ -1098,9 +1112,16 @@ static int castle_bio_data_cvt_get(c_bvec_t    *c_bvec,
     }
 
     /* Otherwise, allocate a new out-of-line block */
-    BUG_ON(castle_ext_fs_get(&c_bvec->tree->data_ext_fs, 
+    ret = castle_ext_fs_get(&c_bvec->tree->data_ext_fs, 
                              C_BLK_SIZE,
-                             0, &cep) < 0);
+                             0, &cep);
+    if (ret < 0)
+    {
+        printk("Pre-alloc: %lu, Alloc: %lu\n",
+               atomic64_read(&c_bvec->tree->data_ext_fs.blocked)/4096,
+               atomic64_read(&c_bvec->tree->data_ext_fs.used)/4096);
+        BUG();
+    }
     CVT_MEDIUM_OBJECT_SET(*cvt, C_BLK_SIZE, cep);
 
     return 0;
