@@ -2945,7 +2945,7 @@ int castle_double_array_size_get(da_id_t da_id, c_byte_off_t *size)
     if (!da)
     {
         err_code = -EINVAL;
-	goto out;
+        goto out;
     }
 
     err_code = castle_da_get(da, 1);

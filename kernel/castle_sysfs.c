@@ -90,11 +90,9 @@ static ssize_t versions_list_show(struct kobject *kobj,
     ret = castle_version_read(v->version, &da_id, &parent, &size, &leaf);
     if(ret == 0)
     {
-	if (parent == 0)
-	{	
-		// this is a root collection/device version.  Work out it's size.
-		castle_double_array_size_get(da_id, &phys_size);
-	}
+		/* Work out the size for DA roots. */
+	    if ((parent == 0) && !DA_INVAL(da_id))
+		    castle_double_array_size_get(da_id, &phys_size);
 
         len = sprintf(buf,
                 "Id: 0x%x\n"
