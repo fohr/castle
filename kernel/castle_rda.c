@@ -58,6 +58,12 @@ void* castle_rda_extent_init(c_ext_id_t             ext_id,
     c_rda_state_t   *state;
     c_rda_spec_t    *rda_spec = castle_rda_spec_get(rda_type);
 
+    if (def_rda_spec.nr_act_slaves < rda_spec->k_factor)
+    {
+        printk("Do not have enough disks to support %d-RDA\n", rda_spec->k_factor);
+        return NULL;
+    }
+
     state = castle_malloc(sizeof(c_rda_state_t) + 
                           sizeof(struct castle_slave *) * rda_spec->k_factor, 
                           GFP_KERNEL);

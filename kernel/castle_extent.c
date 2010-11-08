@@ -367,8 +367,8 @@ int castle_extent_space_alloc(c_ext_t *ext, da_id_t da_id)
     state  = rda_spec->extent_init(ext->ext_id, count, ext->type);
     if (!state)
     {
-        printk("Failed to allocate memory in %s\n", __FUNCTION__);
-        return -ENOMEM;
+        debug("RDA returned error for extent_alloc()\n");
+        return -EINVAL;
     }
 
     req_space = (sizeof(c_disk_chk_t) * count * rda_spec->k_factor);
