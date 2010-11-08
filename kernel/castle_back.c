@@ -2537,7 +2537,7 @@ int castle_back_open(struct inode *inode, struct file *file)
     /* Don't increase the reference count here, since we hold a reference count and won't
      * release it until kthread_stop has returned.
      */
-    conn->work_thread = kthread_run(castle_back_work_do, conn, "castle_back_work_do");
+    conn->work_thread = kthread_run(castle_back_work_do, conn, "castle_client");
     if (!conn->work_thread)
     {
         error("Could not start work thread\n");
