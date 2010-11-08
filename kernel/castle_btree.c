@@ -3646,15 +3646,14 @@ static void castle_rq_enum_iter_node_end(c_iter_t *c_iter)
     wmb();
     wake_up(&rq_enum->iter_wq);
 
-    if (!rq_enum->sync_call)
+    /* prep_next() cancels the iterator, if end_key is found. Iterator
+     * cancellation is executed on different thread. */
+    if (!rq_enum->sync_call && castle_btree_rq_enum_prep_next(rq_enum))
     {
-        BUG_ON(!castle_btree_rq_enum_prep_next(rq_enum));
-        rq_debug("%p - Done\n", rq_enum);
         /* Call callback of the higher level iterator */
+        rq_debug("%p - Done\n", rq_enum);
         rq_enum->end_io(rq_enum, 0);
-        return;
     }
-    BUG_ON(!rq_enum->sync_call);
 }
 
 static void castle_rq_enum_iter_end(c_iter_t *c_iter, int err)
@@ -3810,29 +3809,55 @@ static void castle_btree_rq_enum_register_cb(c_rq_enum_t *iter,
 static int _castle_btree_rq_enum_prep_next(c_rq_enum_t *rq_enum, int sync_call)
 {
     struct castle_iterator *iter = &rq_enum->iterator;
+    struct castle_btree_type *btree =
+                            castle_btree_type_get(rq_enum->prod_buf->node->type);
+    void *key;
 
     while (1)
     {
         /* Wait for the iterator to complete */
-        if (sync_call) /* TODO: review for async calls */
+        if (sync_call) 
             wait_event(rq_enum->iter_wq, (rq_enum->iter_running == 0));
 
         /* Check if castle iterator is running */
         BUG_ON(rq_enum->iter_running);
         cons_idx_prod_idx_compare(rq_enum);
         BUG_ON(rq_enum->end_io == NULL);
+        BUG_ON(rq_enum->iter_completed && cons_idx_prod_idx_compare(rq_enum));
  
         rq_debug("Checking for %p\n", rq_enum);
-        /* Return if no IO required before has_next()
-         *      - Iterator is already completed 
-         *      - Few entries left in buffer */
-        if (rq_enum->iter_completed || cons_idx_prod_idx_compare(rq_enum))
+        /* Return if iterator is already completed */
+        if (rq_enum->iter_completed)
             return 1;
+
+        /* Check if the first entry in buffer is smaller than end key. */
+        if (cons_idx_prod_idx_compare(rq_enum))
+        {
+            btree->entry_get(rq_enum->cons_buf->node, rq_enum->cons_idx, &key, NULL,
+                             NULL);
+            if (btree->key_compare(rq_enum->end_key, key) < 0)
+            {
+                rq_enum->cons_buf = rq_enum->prod_buf;
+                rq_enum->cons_idx = rq_enum->prod_idx = 0;
+                castle_btree_iter_cancel(iter, 0);
+                rq_enum->iter_running = 1;
+                rq_enum->sync_call = sync_call;
+                wmb();
+                castle_btree_iter_start(iter);
+
+                if (rq_enum->sync_call)
+                    wait_event(rq_enum->iter_wq, (rq_enum->iter_running == 0));
+                else
+                    return 0;
+            }
+            return 1;
+        }
 
         /* Schedule iterator to get few more entries into buffer */
         castle_btree_rq_enum_buffer_switch(rq_enum);
         rq_enum->iter_running   = 1;
         rq_enum->sync_call = sync_call;
+        wmb();
         castle_btree_iter_start(iter);
         rq_debug("%p - schedule\n", rq_enum);
         if (!sync_call) return 0;
@@ -3847,39 +3872,12 @@ static int castle_btree_rq_enum_prep_next(c_rq_enum_t *rq_enum)
 
 int castle_btree_rq_enum_has_next(c_rq_enum_t *rq_enum)
 {
-    struct castle_iterator *iter = &rq_enum->iterator;
-    struct castle_btree_type *btree =
-                            castle_btree_type_get(rq_enum->prod_buf->node->type);
-    void *key;
-
-    rq_debug("%p\n", rq_enum);
     BUG_ON(!_castle_btree_rq_enum_prep_next(rq_enum, 1));
     BUG_ON(rq_enum->iter_running);
-    
-    /* Return 1, if entries left in buffer and entries are smaller than end key */
+   
+    /* Return 1, if buffer has entries. */
     if (cons_idx_prod_idx_compare(rq_enum))
-    {
-        btree->entry_get(rq_enum->cons_buf->node, rq_enum->cons_idx, &key, NULL,
-                         NULL);
-        /* Move this check to rq_enum_each() */
-        if (btree->key_compare(rq_enum->end_key, key) < 0)
-        {
-            /* These iterator calls will never block; safe to have them in
-             * here */
-            rq_enum->cons_buf = rq_enum->prod_buf;
-            rq_enum->cons_idx = rq_enum->prod_idx = 0;
-            castle_btree_iter_cancel(iter, 0);
-            rq_enum->iter_running = 1;
-            rq_enum->sync_call = 1;
-            castle_btree_iter_start(iter);
-            /* Safe to call wait_event here. Call shouldn't block */
-            rq_debug("waiting in castle_btree_rq_enum_has_next\n");
-            wait_event(rq_enum->iter_wq, (rq_enum->iter_running == 0));
-            rq_debug("waiting in castle_btree_rq_enum_has_next complete\n");
-            return 0;
-        }
         return 1;
-    }
 
     BUG_ON(!rq_enum->iter_completed);
 
@@ -3968,6 +3966,7 @@ void castle_btree_rq_enum_cancel(c_rq_enum_t *rq_enum)
         castle_btree_iter_cancel(iter, 0);
         rq_enum->iter_running = 1;
         rq_enum->sync_call = 1;
+        wmb();
         castle_btree_iter_start(iter);
         wait_event(rq_enum->iter_wq, 
                    (rq_enum->iter_running == 0));
