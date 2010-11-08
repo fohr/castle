@@ -259,6 +259,7 @@ int castle_attachments_store_init(int first)
             {
                 printk("Failed to create Collection (%s, %u)\n",
                         mstore_entry.name, mstore_entry.version);
+                castle_mstore_iterator_destroy(iterator);
                 return -EINVAL;
             }
             ca->key = key;
