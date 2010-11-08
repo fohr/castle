@@ -2274,6 +2274,17 @@ next_batch:
             break;
     }
 
+    /* We not really expecting any in-flight IO, because # of dirty pages is already 0.
+       But we could be racing castle_cache_flush_endio decrementing in_flight timer.
+       Therefore, wait for 10 seconds, and then BUG_ON. */
+    if(atomic_read(&in_flight) != 0)
+        printk("WARNING: Non-zero in_flight at the end of flush loop. Cache info:\n"
+               "Size=%d, dirty=%d, clean=%d, free=%d\n",
+               castle_cache_size,
+               atomic_read(&castle_cache_dirty_pages),
+               atomic_read(&castle_cache_clean_pages),
+               castle_cache_page_freelist_size);
+    wait_event_timeout(castle_cache_flush_wq, atomic_read(&in_flight) == 0, 10*HZ);
     BUG_ON(atomic_read(&in_flight) != 0);
     debug("====> Castle cache flush loop EXITING.\n");
 
