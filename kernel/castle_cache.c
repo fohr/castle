@@ -1747,7 +1747,7 @@ static void c2_pref_window_remove(c2_pref_window_t *window)
     spin_unlock(&c2_prefetch_lock);
 }
 
-static int c2_pref_window_insert(c2_pref_window_t *new_window)
+static int c2_pref_window_insert(c2_pref_window_t *new_window, c2_block_t *cur_c2b)
 {
     struct rb_node **p, *parent = NULL;
     c2_pref_window_t *cur_window;
@@ -1757,8 +1757,15 @@ static int c2_pref_window_insert(c2_pref_window_t *new_window)
     debug("Asked to insert %s\n", c2_pref_window_to_str(new_window));
     BUG_ON(!mutex_is_locked(&new_window->lock));
     if(new_window->state & PREF_WINDOW_INSERTED)
+    {
+        if(cur_c2b)
+            put_c2b(cur_c2b);
         return 0;
+    }
 
+    /* If the window hasn't been inserted yet, we MUST have a ref to cur_c2b, 
+       in order to stop c2b destruction racing with insert. */
+    BUG_ON(!cur_c2b);
     debug("Not in the tree. Inserting.\n");
     new_cep.ext_id = new_window->ext_id;
     new_cep.offset = new_window->cur_off;
@@ -1783,6 +1790,7 @@ static int c2_pref_window_insert(c2_pref_window_t *new_window)
                Do not insert. Return error. */
             spin_unlock(&c2_prefetch_lock);
             debug("Found the same starting point in the tree. Not inserting.\n");
+            put_c2b(cur_c2b);
             return -EINVAL;                  
         }
     }                     
@@ -1791,7 +1799,8 @@ static int c2_pref_window_insert(c2_pref_window_t *new_window)
     rb_insert_color(&new_window->rb_node, &c2p_rb_root);
     spin_unlock(&c2_prefetch_lock);
     new_window->state |= PREF_WINDOW_INSERTED;
-    
+    put_c2b(cur_c2b);
+
     return 0;
 }
 
@@ -1959,7 +1968,7 @@ static int c2_pref_new_window_init(c2_pref_window_t *window,
     return c2_pref_submit(window);
 }
 
-static int c2_pref_window_advance(c2_pref_window_t *window)
+static int c2_pref_window_advance(c2_pref_window_t *window, c2_block_t **c2b_p)
 {
     c2_block_t *c2b;
     c_ext_pos_t cep;
@@ -1980,7 +1989,7 @@ static int c2_pref_window_advance(c2_pref_window_t *window)
     cep.offset = window->cur_off;
     c2b = castle_cache_block_get(cep, window->cur_pages);
     set_c2b_prefetch(c2b);
-    put_c2b(c2b);
+    *c2b_p = c2b;
 
     return c2_pref_submit(window);
 }
@@ -1990,6 +1999,7 @@ static int c2_pref_window_advance(c2_pref_window_t *window)
          in the tree (this would cause problems in the tree walks). */
 static int c2_pref_window_schedule(c2_pref_window_t *window, c_ext_pos_t cep)
 {
+    c2_block_t *cur_c2b;
     int new_window, dead_window, ret;
 
     /* Lock the window, so that we are not racing others changing things. */
@@ -2030,13 +2040,14 @@ static int c2_pref_window_schedule(c2_pref_window_t *window, c_ext_pos_t cep)
         return -EINVAL;
     }
 
+    cur_c2b = NULL;
     /* Check if the window has to be moved along. */
-    if((c2_pref_next_compare(window, cep) == 0) && (c2_pref_window_advance(window)))
+    if((c2_pref_next_compare(window, cep) == 0) && (c2_pref_window_advance(window, &cur_c2b)))
     {
         /* Cur window c2b exists/existed. Make sure that the window is in the tree, and drop 
            our ref. */
         debug("WARNING: we couldn't advance the window.\n");
-        ret = c2_pref_window_insert(window); 
+        ret = c2_pref_window_insert(window, cur_c2b); 
         /* If we failed to insert, we must delete the window ourselves. */
         if(ret)
         {
@@ -2055,7 +2066,7 @@ static int c2_pref_window_schedule(c2_pref_window_t *window, c_ext_pos_t cep)
 
     /* Try to insert the window back into the tree. This is a noop if the window is 
        already in the tree. */
-    ret = c2_pref_window_insert(window); 
+    ret = c2_pref_window_insert(window, cur_c2b); 
     if(ret)
     {
         BUG_ON(ret != -EINVAL);
