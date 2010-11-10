@@ -11,6 +11,7 @@
 #include "castle_sysfs.h"
 #include "castle_cache.h"
 #include "castle_events.h"
+#include "castle_ctrl.h"
 
 //#define DEBUG
 #ifndef DEBUG
@@ -97,7 +98,7 @@ version_t castle_version_max_get(void)
 }
 
 static void castle_versions_drop(struct castle_version *p);
-static void castle_version_writeback(struct castle_version *v, int op);
+static int castle_version_writeback(struct castle_version *v, void *unused);
 
 static struct castle_version * castle_version_delete(struct castle_version *v)
 {
@@ -113,7 +114,6 @@ static struct castle_version * castle_version_delete(struct castle_version *v)
     parent = v->parent;
 
     /* Remove version from hash. */
-    castle_version_writeback(v, REM_VER);
     castle_sysfs_version_del(v->version);
     castle_versions_drop(v);
     __castle_versions_hash_remove(v);
@@ -198,6 +198,7 @@ static struct castle_version* castle_version_add(version_t version,
     v->da_id        = da_id;
     v->size         = size; 
     v->flags        = 0;
+    v->mstore_key   = INVAL_MSTORE_KEY;
     INIT_LIST_HEAD(&v->hash_list);
     INIT_LIST_HEAD(&v->init_list);
 
@@ -247,10 +248,9 @@ da_id_t castle_version_da_id_get(version_t version)
 }
 
 /* TODO who should handle errors in writeback? */
-static void castle_version_writeback(struct castle_version *v, int op)
+static int castle_version_writeback(struct castle_version *v, void *unused)
 {
     struct castle_vlist_entry mstore_ventry;
-    c_mstore_key_t key;
     
     debug("Writing back version %d\n", v->version);
 
@@ -258,28 +258,22 @@ static void castle_version_writeback(struct castle_version *v, int op)
     mstore_ventry.parent     = (v->parent ? v->parent->version : 0);
     mstore_ventry.size       = v->size;
     mstore_ventry.da_id      = v->da_id;
-    key                      = v->mstore_key;
 
-    if (op == NEW_VER)
-    {
-        debug("New version, inserting.\n");
-        v->mstore_key = 
-            castle_mstore_entry_insert(castle_versions_mstore, &mstore_ventry);
-    }
-    else if (op == UPDATE_VER) 
-    {
-        debug("Existing version, updating.\n");
-        castle_mstore_entry_update(castle_versions_mstore, key, &mstore_ventry);
-    }
-    else if (op == REM_VER)
-    {
-        debug("Existing version, deleting.\n");
-        castle_mstore_entry_delete(castle_versions_mstore, key);
-    }
-    else
-    {
-        printk("Faulty operation on version writeback\n");
-    }
+    BUG_ON(!MSTORE_KEY_INVAL(v->mstore_key));
+    v->mstore_key = castle_mstore_entry_insert(castle_versions_mstore, 
+                                               &mstore_ventry);
+
+    return 0;
+}
+
+int castle_versions_writeback(void)
+{
+    castle_ctrl_lock();
+    /* Writeback new copy. */
+    castle_versions_hash_iterate(castle_version_writeback, NULL);
+    castle_ctrl_unlock();
+
+    return 0;
 }
 
 /***** External functions *****/
@@ -370,9 +364,6 @@ version_t castle_version_new(int snap_or_clone,
     /* We've succeeded at creating a new version number.
        Let's find where to store it on the disk. */
 
-    /* TODO: Error handling? */
-    castle_version_writeback(v, NEW_VER); 
-    
     return v->version; 
 }
 
@@ -659,8 +650,8 @@ int castle_version_compare(version_t version1, version_t version2)
 
 int castle_versions_zero_init(void)
 {
-    struct castle_vlist_entry mstore_ventry;
-    
+    struct castle_version *v;
+
     debug("Initialising version root.\n");
     castle_versions_mstore = 
         castle_mstore_init(MSTORE_VERSIONS_ID, sizeof(struct castle_vlist_entry));
@@ -668,11 +659,24 @@ int castle_versions_zero_init(void)
     if(!castle_versions_mstore)
         return -ENOMEM;
 
-    mstore_ventry.version_nr = 0;
-    mstore_ventry.parent     = 0;
-    mstore_ventry.size       = 0;
-    mstore_ventry.da_id      = INVAL_DA;
-    castle_mstore_entry_insert(castle_versions_mstore, &mstore_ventry); 
+    v = castle_version_add(0, 0, INVAL_DA, 0);
+    if (!v)
+    {
+        printk("Failed to create verion ZERO\n");
+        return -1;
+    }
+    castle_versions_last = v->version;
+
+    return 0;
+}
+
+static int castle_version_mstore_remove(struct castle_version *v, void *unused)
+{
+    if (MSTORE_KEY_INVAL(v->mstore_key))
+        return 0;
+
+    castle_mstore_entry_delete(castle_versions_mstore, v->mstore_key);
+    v->mstore_key = INVAL_MSTORE_KEY;
 
     return 0;
 }
@@ -712,6 +716,10 @@ int castle_versions_read(void)
         v->mstore_key = key;
     }
     castle_mstore_iterator_destroy(iterator);
+    /* TODO: Delete old copies of versions in mstore. Should remove this afte
+     * rcompleting Crash Consistency. */
+    castle_versions_hash_iterate(castle_version_mstore_remove, NULL);
+
 
     return castle_versions_process(); 
 }
@@ -758,6 +766,7 @@ err_out:
 
 void castle_versions_fini(void)
 {
+    castle_versions_writeback();
     castle_versions_hash_destroy();
     kmem_cache_destroy(castle_versions_cache);
 }

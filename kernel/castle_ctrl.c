@@ -235,10 +235,8 @@ static int castle_collection_writeback(struct castle_attachment *ca)
     mstore_entry.version = ca->version;
     strcpy(mstore_entry.name, ca->col.name);
 
-    if (MSTORE_KEY_INVAL(ca->key))
-        ca->key = castle_mstore_entry_insert(castle_attachments_store, &mstore_entry);
-    else
-        castle_mstore_entry_update(castle_attachments_store, ca->key, &mstore_entry);
+    BUG_ON(!MSTORE_KEY_INVAL(ca->key));
+    ca->key = castle_mstore_entry_insert(castle_attachments_store, &mstore_entry);
 
     return 0;
 }
@@ -269,6 +267,9 @@ static int castle_attachments_writeback(void)
 
 int castle_attachments_store_init(int first)
 {
+    struct castle_attachment *ca;
+    struct list_head *lh;
+
     if (first)
     {
         printk("Creating new mstore for Collection Attachments\n");
@@ -310,6 +311,20 @@ int castle_attachments_store_init(int first)
                     mstore_entry.name, mstore_entry.version, ca->col.id);
         }
         castle_mstore_iterator_destroy(iterator);
+    }
+
+    /* TODO: Delete old copies of attachments in mstore. Should remove this afte
+     * rcompleting Crash Consistency. */
+    list_for_each(lh, &castle_attachments.attachments)
+    {
+        ca = list_entry(lh, struct castle_attachment, list);
+        if(ca->device)
+            continue;
+
+        if (!MSTORE_KEY_INVAL(ca->key))
+            castle_mstore_entry_delete(castle_attachments_store, ca->key);
+
+        ca->key = INVAL_MSTORE_KEY;
     }
 
     if (!castle_attachments_store)
