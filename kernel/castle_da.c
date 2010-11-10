@@ -2812,6 +2812,8 @@ void castle_da_destroy_complete(struct castle_double_array *da)
              * shouldn't be referenced any-where. */
             BUG_ON(atomic_read(&ct->ref_count) != 1);
             BUG_ON(atomic_read(&ct->write_ref_count));
+            list_del(&ct->da_list);
+            ct->da_list.next = ct->da_list.prev = NULL;
             castle_ct_put(ct, 0);
         }
     }
