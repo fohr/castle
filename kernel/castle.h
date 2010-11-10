@@ -406,6 +406,9 @@ struct castle_btree_type {
     int     (*key_compare)   (void *key1, void *key2);
                              /* Returns negative if key1 < key2, zero 
                                 if equal, positive otherwise           */
+    void*   (*key_duplicate) (void *key);
+                             /* Returns duplicate of key. Need to call 
+                              * a dealloc later to free resources      */
     void*   (*key_next)      (void *key);
                              /* Successor key, succ(MAX) = INVAL,
                                 succ(INVAL) = INVAL                    */

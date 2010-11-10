@@ -291,17 +291,26 @@ static void castle_object_btree_key_dim_inc(c_vl_bkey_t *key, int dim)
     key->dim_head[dim] = KEY_DIMENSION_HEADER(offset, flags | KEY_DIMENSION_NEXT_FLAG);
 }
 
-void *castle_object_btree_key_next(c_vl_bkey_t *key)
+void *castle_object_btree_key_duplicate(c_vl_bkey_t *key)
 {
     c_vl_bkey_t *new_key;
     uint32_t key_length;
 
-    /* Duplicate the key first */
     key_length = key->length + 4;
     new_key = castle_malloc(key_length, GFP_KERNEL);
     if(!new_key)
         return NULL;
     memcpy(new_key, key, key_length);
+
+    return new_key;
+}
+
+void *castle_object_btree_key_next(c_vl_bkey_t *key)
+{
+    c_vl_bkey_t *new_key;
+
+    /* Duplicate the key first */
+    new_key = castle_object_btree_key_duplicate(key);
 
     /* Increment the least significant dimension */
     castle_object_btree_key_dim_inc(new_key, new_key->nr_dims-1);

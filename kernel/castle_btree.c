@@ -124,6 +124,12 @@ static int castle_mtree_key_compare(void *key1, void *key2)
     return 0;
 }
     
+static void* castle_mtree_key_duplicate(void *key)
+{
+    /* No need to do anything in mtree keys, because they are ints (casted to void *). */
+    return key;
+}
+
 static void* castle_mtree_key_next(void *key)
 {
     block_t blk = (block_t)(unsigned long)key;
@@ -297,6 +303,7 @@ struct castle_btree_type castle_mtree = {
     .inv_key       = (void *)MTREE_INVAL_BLK,
     .need_split    = castle_mtree_need_split,
     .key_compare   = castle_mtree_key_compare,
+    .key_duplicate = castle_mtree_key_duplicate,
     .key_next      = castle_mtree_key_next,
     .key_dealloc   = castle_mtree_key_dealloc,
     .entry_get     = castle_mtree_entry_get,
@@ -334,6 +341,8 @@ static const bakey_t BATREE_MIN_KEY   = (bakey_t){._key = {[0 ... (BATREE_KEY_SI
 static const bakey_t BATREE_MAX_KEY   = (bakey_t){._key = {[0 ... (BATREE_KEY_SIZE-2)] = 0xFF,
                                                            [      (BATREE_KEY_SIZE-1)] = 0xFE}};
 #define BATREE_KEY_INVAL(_key)          ((_key) == &BATREE_INVAL_KEY)
+#define BATREE_KEY_MIN(_key)            ((_key) == &BATREE_MIN_KEY)
+#define BATREE_KEY_MAX(_key)            ((_key) == &BATREE_MAX_KEY)
 
 struct castle_batree_entry {
     uint8_t      type;
@@ -390,6 +399,21 @@ static int castle_batree_key_compare(void *keyv1, void *keyv2)
     return ret;
 }
     
+static void* castle_batree_key_duplicate(void *keyv)
+{
+    bakey_t *key = (bakey_t *)keyv; 
+    bakey_t *new_key;
+
+    if (BATREE_KEY_INVAL(key) || BATREE_KEY_MIN(key) || BATREE_KEY_MAX(key))
+        return key;
+
+    new_key = castle_malloc(sizeof(bakey_t), GFP_NOIO);
+    BUG_ON(!new_key);
+    memcpy(new_key, key, sizeof(bakey_t));
+
+    return new_key;
+}
+
 static void* castle_batree_key_next(void *keyv)
 {
     bakey_t *key = (bakey_t *)keyv;
@@ -418,6 +442,9 @@ static void* castle_batree_key_next(void *keyv)
 
 static void castle_batree_key_dealloc(void *key)
 {
+    if (BATREE_KEY_INVAL(key) || BATREE_KEY_MIN(key) || BATREE_KEY_MAX(key))
+        return;
+
     castle_free(key);
 }
 
@@ -579,6 +606,7 @@ struct castle_btree_type castle_batree = {
     .inv_key       = (void *)&BATREE_INVAL_KEY,
     .need_split    = castle_batree_need_split,
     .key_compare   = castle_batree_key_compare,
+    .key_duplicate = castle_batree_key_duplicate,
     .key_next      = castle_batree_key_next,
     .key_dealloc   = castle_batree_key_dealloc,
     .entry_get     = castle_batree_entry_get,
@@ -773,6 +801,10 @@ static void castle_vlba_tree_node_compact(struct castle_btree_node *node)
 
     vlba_node->free_bytes += vlba_node->dead_bytes;
     vlba_node->dead_bytes = 0;
+#ifdef CASTLE_DEBUG
+    memset(EOF_VLBA_NODE(node) - cur_loc - vlba_node->free_bytes, 0xef,
+           vlba_node->free_bytes);
+#endif
 
     castle_free(a);
     castle_free(idx);
@@ -865,13 +897,34 @@ static void* castle_vlba_tree_key_next(void *keyv)
     return castle_object_btree_key_next(keyv);
 }
 
+static void* castle_vlba_tree_key_duplicate(void *keyv)
+{
+    vlba_key_t *key = (vlba_key_t *)keyv;
+
+    /* No need to duplicate static keys */
+    if (VLBA_TREE_KEY_INVAL(key))
+        return (void *)&VLBA_TREE_INVAL_KEY;
+    if (VLBA_TREE_KEY_MIN(key))
+        return (void *)&VLBA_TREE_MIN_KEY;
+    if (VLBA_TREE_KEY_MAX(key))
+        return (void *)&VLBA_TREE_MAX_KEY;
+
+    keyv = ((void *)castle_object_btree_key_duplicate(keyv));
+
+    return keyv;
+}
+
 static void castle_vlba_tree_key_dealloc(void *keyv)
 {
     vlba_key_t *key = (vlba_key_t *)keyv;
     
     /* Should not free static keys */
     if(VLBA_TREE_KEY_INVAL(key) || VLBA_TREE_KEY_MAX(key) || VLBA_TREE_KEY_MIN(key))
+    {
+        BUG_ON(!((key == &VLBA_TREE_INVAL_KEY) || (key == &VLBA_TREE_MIN_KEY) ||
+                 (key == &VLBA_TREE_MAX_KEY)));
         return;
+    }
     castle_object_bkey_free(keyv);
 }
 
@@ -1257,6 +1310,7 @@ struct castle_btree_type castle_vlba_tree = {
     .inv_key       = (void *)&VLBA_TREE_INVAL_KEY, 
     .need_split    = castle_vlba_tree_need_split,
     .key_compare   = castle_vlba_tree_key_compare,
+    .key_duplicate = castle_vlba_tree_key_duplicate,
     .key_next      = castle_vlba_tree_key_next,
     .key_dealloc   = castle_vlba_tree_key_dealloc,
     .entry_get     = castle_vlba_tree_entry_get,
@@ -1357,6 +1411,8 @@ static void castle_btree_io_end(c_bvec_t    *c_bvec,
                                 c_val_tup_t    cvt,
                                 int          err)
 {
+    struct castle_btree_type *btree = castle_btree_type_get(c_bvec->tree->btree_type);
+
     castle_debug_bvec_update(c_bvec, C_BVEC_BTREE_NODE_IO_END);
     /* We allow:
        -   valid block and no error
@@ -1368,6 +1424,14 @@ static void castle_btree_io_end(c_bvec_t    *c_bvec,
      */
     BUG_ON((!CVT_INVALID(cvt)) && (err));
     BUG_ON((c_bvec_data_dir(c_bvec) == WRITE) && (CVT_INVALID(cvt)) && (!err));
+
+    /* Deallocate parent_key. */
+    if ((c_bvec_data_dir(c_bvec) == WRITE) && c_bvec->parent_key)
+    {
+        btree->key_dealloc(c_bvec->parent_key);
+        c_bvec->parent_key = NULL;
+    }
+
     /* Free the c2bs correctly. Call twice to release parent and child
        (if both exist) */
     castle_btree_c2b_forget(c_bvec);
@@ -2350,13 +2414,21 @@ static void __castle_btree_find(struct castle_btree_type *btree,
 {
     c2_block_t *c2b;
     int ret;
+    int write = (c_bvec_data_dir(c_bvec) == WRITE);
     
     debug("Asked for key: %p, in version 0x%x, reading ftree node" cep_fmt_str_nl, 
             c_bvec->key, c_bvec->version, cep2str(node_cep));
     ret = -ENOMEM;
 
     c_bvec->btree_depth++;
-    c_bvec->parent_key = parent_key;
+
+    if (write)
+    {
+        if (c_bvec->parent_key)
+            btree->key_dealloc(c_bvec->parent_key);
+        c_bvec->parent_key = btree->key_duplicate(parent_key);
+    }
+
     castle_debug_bvec_btree_walk(c_bvec);
 
     c2b = castle_cache_block_get(node_cep, btree->node_size);
@@ -2403,6 +2475,7 @@ static void _castle_btree_find(struct work_struct *work)
 
 void castle_btree_find(c_bvec_t *c_bvec)
 {
+    c_bvec->parent_key = NULL;
     clear_bit(CBV_DOING_SPLITS, &c_bvec->flags);
     CASTLE_INIT_WORK(&c_bvec->work, _castle_btree_find);
     queue_work(castle_wqs[19], &c_bvec->work); 
