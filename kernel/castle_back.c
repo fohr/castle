@@ -766,7 +766,7 @@ static int castle_back_key_copy_get(struct castle_back_conn *conn, c_vl_okey_t *
      * a valid key
      */
     
-    if (key_len < sizeof(c_vl_okey_t))
+    if (key_len < sizeof(c_vl_okey_t) || key_len > VLBA_TREE_MAX_KEY_SIZE)
     {
         error("Bad key length %u\n", key_len);
         err = -EINVAL;        
