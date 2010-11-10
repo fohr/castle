@@ -224,6 +224,49 @@ void castle_control_fs_init(int *ret)
     *ret = castle_fs_init();
 }
 
+static int castle_collection_writeback(struct castle_attachment *ca)
+{
+    struct castle_alist_entry mstore_entry;
+    
+    BUG_ON(strlen(ca->col.name) > MAX_NAME_SIZE);
+
+    debug("Collection add: %s,%u\n", ca->col.name, ca->version);
+
+    mstore_entry.version = ca->version;
+    strcpy(mstore_entry.name, ca->col.name);
+
+    if (MSTORE_KEY_INVAL(ca->key))
+        ca->key = castle_mstore_entry_insert(castle_attachments_store, &mstore_entry);
+    else
+        castle_mstore_entry_update(castle_attachments_store, ca->key, &mstore_entry);
+
+    return 0;
+}
+
+static int castle_attachments_writeback(void)
+{
+    struct castle_attachment *ca;
+    struct list_head *lh;
+
+    castle_ctrl_lock();
+    spin_lock(&castle_attachments.lock);
+
+    list_for_each(lh, &castle_attachments.attachments)
+    {
+        ca = list_entry(lh, struct castle_attachment, list);
+        if(ca->device)
+            continue;
+        if(castle_collection_writeback(ca))
+            printk("Failed to writeback collection: (%u, %s)\n", 
+                    ca->col.id, ca->col.name);
+    }
+    
+    spin_unlock(&castle_attachments.lock);
+    castle_ctrl_unlock();
+
+    return 0;
+}
+
 int castle_attachments_store_init(int first)
 {
     if (first)
@@ -278,87 +321,10 @@ int castle_attachments_store_init(int first)
 void castle_attachments_store_fini(void)
 {
     if (castle_attachments_store)
+    {
+        castle_attachments_writeback();
         castle_mstore_fini(castle_attachments_store);
-}
-
-
-static int __castle_attachments_store_find(char *name, version_t version,
-                                    c_mstore_key_t *key)
-{
-    struct castle_mstore_iter *iterator;
-    struct castle_alist_entry mstore_entry;
-    int found = 0;
-
-    iterator = castle_mstore_iterate(castle_attachments_store);
-    if (!iterator)
-        return -EINVAL;
-    while (castle_mstore_iterator_has_next(iterator))
-    {
-        castle_mstore_iterator_next(iterator, &mstore_entry, key);
-        if (!strcmp(mstore_entry.name, name) && 
-            (!version || version == mstore_entry.version))
-        {
-            found = 1;
-            break;
-        }
     }
-    castle_mstore_iterator_destroy(iterator);
-
-    if (found)
-        return mstore_entry.version;
-
-    return -1;
-}
-
-/* Returns -1, if couldn't find attachments with name. 
- *        +ve, attached version id. */
-static USED int castle_attachments_store_find(char *name)
-{
-    c_mstore_key_t key;
-
-    return __castle_attachments_store_find(name, 0, &key);
-}
-
-static int castle_attachments_store_add(struct castle_attachment *ca)
-{
-    struct castle_alist_entry mstore_entry;
-    
-    BUG_ON(strlen(ca->col.name) > MAX_NAME_SIZE);
-
-    mstore_entry.version = ca->version;
-    debug("Collection add: %s,%u\n", ca->col.name, ca->version);
-    strcpy(mstore_entry.name, ca->col.name);
-    ca->key = castle_mstore_entry_insert(castle_attachments_store, &mstore_entry);
-
-    return 0;
-}
-
-static int castle_attachments_store_delete(struct castle_attachment *ca)
-{
-    c_mstore_key_t key;
-
-    if (__castle_attachments_store_find(ca->col.name, ca->version, &key) < 0)
-    {
-        printk("Couldn't find attachment for %s, %u\n", ca->col.name , ca->version);
-        return -1;
-    }
-    castle_mstore_entry_delete(castle_attachments_store, ca->key);
-
-    return 0;
-}
-
-static int castle_attachments_store_update(struct castle_attachment *ca)
-{
-    struct castle_alist_entry mstore_entry;
-    
-    BUG_ON(strlen(ca->col.name) > MAX_NAME_SIZE);
-
-    mstore_entry.version = ca->version;
-    debug("Collection update: %s,%u\n", ca->col.name, ca->version);
-    strcpy(mstore_entry.name, ca->col.name);
-    castle_mstore_entry_update(castle_attachments_store, ca->key, &mstore_entry);
-
-    return 0;
 }
 
 void castle_control_collection_attach(version_t          version,
@@ -377,7 +343,6 @@ void castle_control_collection_attach(version_t          version,
         *ret = -EINVAL;
         return;
     }
-    castle_attachments_store_add(ca);
     printk("Creating new Collection Attachment %u (%s, %u)\n", 
             ca->col.id, ca->col.name, ca->version);
     
@@ -397,12 +362,6 @@ void castle_control_collection_detach(collection_id_t collection,
 
     printk("Deleting Collection Attachment %u (%s, %u)/%u\n", 
             collection, ca->col.name, ca->version, ca->ref_cnt);
-
-    if (castle_attachments_store_delete(ca) < 0)
-    {
-        *ret = -ENODEV;
-        return;
-    }
 
     /* Double put is opposite of what happens in collection_init */
     castle_attachment_put(ca);
@@ -443,8 +402,6 @@ void castle_control_collection_snapshot(collection_id_t collection,
         ca->version    = ver;
         /* Release the old version */
         castle_version_detach(old_version);
-        /* Update attachment store for collection attachments. */
-        castle_attachments_store_update(ca);
         *version = ver;
         *ret     = 0;
     }

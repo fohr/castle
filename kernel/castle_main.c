@@ -1650,7 +1650,7 @@ err_out:
 }
 
 static void castle_slaves_free(void)
-{                                                                                        
+{
     struct list_head *lh, *th;
     struct castle_slave *slave;
 
@@ -1693,10 +1693,11 @@ static int castle_attachments_init(void)
 }
 
 static void castle_attachments_free(void)
-{                                                                                        
+{
     struct list_head *lh, *th;
     struct castle_attachment *ca;
 
+    castle_attachments_store_fini();
     list_for_each_safe(lh, th, &castle_attachments.attachments)
     {
         ca = list_entry(lh, struct castle_attachment, list); 
@@ -1705,7 +1706,6 @@ static void castle_attachments_free(void)
         else
             castle_attachment_put(ca);
     }
-    castle_attachments_store_fini();
 
     if (castle_attachments.major)
         unregister_blkdev(castle_attachments.major, "castle-fs");
