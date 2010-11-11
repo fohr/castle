@@ -1682,9 +1682,9 @@ static inline int c2_pref_window_compare(c2_pref_window_t *window, c_ext_pos_t c
 
     BUG_ON(!forward);
     /* Compare the extent ids. */
-    if(window->ext_id > cep.ext_id)
+    if(cep.ext_id < window->ext_id)
         return -1;
-    if(window->ext_id < cep.ext_id)
+    if(cep.ext_id > window->ext_id)
         return 1;
     /* Extents are the same. Check whether cep is to the left, inside, or to the right of the
        entire window. */ 
@@ -1712,6 +1712,40 @@ static inline int c2_pref_window_compare(c2_pref_window_t *window, c_ext_pos_t c
     /* cep to the right of the next window (and the entire window too). */
     return 1;
 }
+
+static inline c2_pref_window_t* c2_pref_window_closest_find(struct rb_node *n, 
+                                                            c_ext_pos_t cep, 
+                                                            int forward)
+{
+    c2_pref_window_t *window;
+    struct rb_node *p;
+    int cmp;
+
+    /* The logic below is (probably) broken for back prefetch. */
+    BUG_ON(!forward);
+    BUG_ON(!spin_is_locked(&c2_prefetch_lock));
+        
+
+    do { 
+        /* Save the current window's rb_node pointer. This window is guaranteed to cover
+           the cep. */
+        p = n;
+        /* Check whether the next entry exists, and is still small enough. */
+        n = rb_next(n);
+        if(!n)
+            break;
+        window = rb_entry(n, c2_pref_window_t, rb_node);
+        cmp = c2_pref_window_compare(window, cep, forward);
+        /* We should never find a window which is smaller than the cep. */
+        BUG_ON(cmp > 0);
+    } 
+    while(cmp == 0);
+    /* n is now NULL, or in the first window that doesn't cover the cep, return the window
+       associated with p. */
+    window = rb_entry(p, c2_pref_window_t, rb_node);
+
+    return window;
+} 
 
 static c2_pref_window_t *c2_pref_window_find(c_ext_pos_t cep, int forward, int exact_match)
 {
@@ -1741,8 +1775,16 @@ static c2_pref_window_t *c2_pref_window_find(c_ext_pos_t cep, int forward, int e
             n = n->rb_right;
         else
         {
+            /* If we are not looking for an exact match, we should return the window
+               that covers the cep we are looking for, but is furthest along as well.
+               This prevents corner cases, where we find a window, try to advance it
+               but then fail to insert into the tree, because its already there. */
+            if(!exact_match)
+                window = c2_pref_window_closest_find(n, cep, forward); 
             /* Get a reference to the window. Reference count should be strictly > 1. 
                Otherwise the window should not be in the tree. */
+            BUG_ON(!window);
+            BUG_ON(c2_pref_window_compare(window, cep, forward) != 0);
             BUG_ON(atomic_inc_return(&window->count) <= 1);
             BUG_ON(!(window->state & PREF_WINDOW_INSERTED));
             spin_unlock(&c2_prefetch_lock);
@@ -1966,7 +2008,9 @@ static void c2_pref_c2b_destroy(c2_block_t *c2b)
     cur_cep.offset = window->cur_off;
     if(window->cur_c2b != c2b)
     {
-        printk("WARNING: prefetch window delete was racing an advance?\n");
+        debug("WARNING: prefetch window delete was racing an advance, or new c2b created.\n"
+               "c2b->cep="cep_fmt_str", window start cep="cep_fmt_str_nl,
+               cep2str(c2b->cep), cep2str(cur_cep));
         mutex_unlock(&window->lock);
         c2_pref_window_put(window);
         return;
