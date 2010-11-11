@@ -208,15 +208,16 @@ enum {
 
 typedef struct castle_var_length_key {
     uint32_t length;
-    uint8_t key[0];
+    uint8_t key[];
 } PACKED c_vl_key_t;
 
 typedef struct castle_var_length_object_key {
     uint32_t nr_dims;
-    c_vl_key_t *dims[0];
+    c_vl_key_t *dims[];
 } PACKED c_vl_okey_t;
 
 #define CASTLE_RING_PAGES (2)
+/* CASTLE_RING_SIZE must be a power of 2, or code will silently break */
 #define CASTLE_RING_SIZE (CASTLE_RING_PAGES << PAGE_SHIFT)
 
 #define CASTLE_IOCTL_POKE_RING 2
