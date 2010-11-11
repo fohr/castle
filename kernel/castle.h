@@ -463,7 +463,7 @@ struct castle_component_tree {
     c_mstore_key_t      mstore_key;
     c_ext_fs_t          tree_ext_fs;
     c_ext_fs_t          data_ext_fs;
-    atomic64_t		large_ext_chk_cnt;
+    atomic64_t          large_ext_chk_cnt;
 };
 extern struct castle_component_tree castle_global_tree;
 

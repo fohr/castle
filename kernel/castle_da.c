@@ -1093,6 +1093,7 @@ struct castle_da_merge {
     int                           completing;
     uint64_t                      nr_entries;
     uint64_t                      nr_nodes;
+    uint64_t                      large_chunks; 
     struct castle_da_merge_level {
         /* Node we are currently generating, and book-keeping variables about the node. */
         c2_block_t               *node_c2b;
@@ -1393,6 +1394,15 @@ static inline void castle_da_entry_add(struct castle_da_merge *merge,
     struct castle_btree_node *node;
     int key_cmp;
 
+
+    /* Deal with medium and large objects first. For medium objects, we need to copy them
+       into our new medium object extent. For large objects, we need to save the aggregate
+       size. TODO plus take refs to extents? */
+    if(CVT_MEDIUM_OBJECT(cvt))
+        cvt = castle_da_medium_obj_copy(merge, cvt);
+    if(CVT_LARGE_OBJECT(cvt))
+        merge->large_chunks += castle_extent_size_get(cvt.cep.ext_id); 
+
     debug("Adding an entry at depth: %d\n", depth);
     BUG_ON(depth >= MAX_BTREE_DEPTH);
     /* Alloc a new block if we need one */
@@ -1638,6 +1648,7 @@ static struct castle_component_tree* castle_da_merge_package(struct castle_da_me
     atomic_set(&out_tree->write_ref_count, 0);
     atomic64_set(&out_tree->item_count, merge->nr_entries);
     atomic64_set(&out_tree->node_count, merge->nr_nodes);
+    atomic64_set(&out_tree->large_ext_chk_cnt, merge->large_chunks);
     out_tree->tree_ext_fs = merge->tree_ext_fs;
     out_tree->data_ext_fs = merge->data_ext_fs;
     atomic64_set(&out_tree->tree_ext_fs.used, 
@@ -1843,9 +1854,6 @@ static void castle_da_merge_do(struct work_struct *work)
         castle_ct_merged_iter_next(merge->merged_iter, &key, &version, &cvt); 
         debug("Merging entry id=%d: k=%p, *k=%d, version=%d, cep=(0x%x, 0x%x)\n",
                 i, key, *((uint32_t *)key), version, cvt.cep.ext_id, cvt.cep.offset);
-        /* Deal with medium objects. */
-        if (CVT_MEDIUM_OBJECT(cvt))
-            cvt = castle_da_medium_obj_copy(merge, cvt);
         BUG_ON(CVT_INVALID(cvt));
         /* Add entry to level 0 node (and recursively up the tree). */
         castle_da_entry_add(merge, 0, key, version, cvt);
@@ -1909,6 +1917,7 @@ static void castle_da_merge_schedule(struct castle_double_array *da,
     merge->completing        = 0;
     merge->nr_entries        = 0;
     merge->nr_nodes          = 0;
+    merge->large_chunks      = 0;
     merge->budget_cons_rate  = 1; 
     merge->budget_cons_units = 0; 
     for(i=0; i<MAX_BTREE_DEPTH; i++)
