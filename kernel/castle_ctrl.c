@@ -461,9 +461,9 @@ void castle_control_set_target(slave_uuid_t slave_uuid, int value, int *ret)
     sb = castle_slave_superblock_get(slave);
     
     if (value)
-        sb->flags |= CASTLE_SLAVE_TARGET;
+        sb->pub.flags |= CASTLE_SLAVE_TARGET;
     else
-        sb->flags &= ~CASTLE_SLAVE_TARGET;
+        sb->pub.flags &= ~CASTLE_SLAVE_TARGET;
     
     castle_slave_superblock_put(slave, 1);
 

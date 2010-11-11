@@ -491,21 +491,21 @@ static void castle_slave_superblock_print(struct castle_slave_superblock *cs_sb)
            "Uuid:   %x\n"
            "Used:   %x\n"
            "Size:   %x\n",
-           cs_sb->magic1,
-           cs_sb->magic2,
-           cs_sb->magic3,
-           cs_sb->version,
-           cs_sb->uuid,
-           cs_sb->used,
-           cs_sb->size);
+           cs_sb->pub.magic1,
+           cs_sb->pub.magic2,
+           cs_sb->pub.magic3,
+           cs_sb->pub.version,
+           cs_sb->pub.uuid,
+           cs_sb->pub.used,
+           cs_sb->pub.size);
 }
 
 static int castle_slave_superblock_validate(struct castle_slave_superblock *cs_sb)
 {
-    if(cs_sb->magic1 != CASTLE_SLAVE_MAGIC1) return -1;
-    if(cs_sb->magic2 != CASTLE_SLAVE_MAGIC2) return -2;
-    if(cs_sb->magic3 != CASTLE_SLAVE_MAGIC3) return -3;
-    if(cs_sb->version != CASTLE_SLAVE_VERSION) return -4;
+    if(cs_sb->pub.magic1 != CASTLE_SLAVE_MAGIC1) return -1;
+    if(cs_sb->pub.magic2 != CASTLE_SLAVE_MAGIC2) return -2;
+    if(cs_sb->pub.magic3 != CASTLE_SLAVE_MAGIC3) return -3;
+    if(cs_sb->pub.version != CASTLE_SLAVE_VERSION) return -4;
 
     return 0;
 }
@@ -560,7 +560,7 @@ static int castle_slave_superblock_read(struct castle_slave *cs)
         goto error_out;
 
     if (((err = castle_fs_superblock_validate(&fs_sb)) < 0) && 
-                        !(cs_sb.flags & CASTLE_SLAVE_NEWDEV))
+                        !(cs_sb.pub.flags & CASTLE_SLAVE_NEWDEV))
     {
         printk("%d\n", err);
         goto error_out;
@@ -569,8 +569,8 @@ static int castle_slave_superblock_read(struct castle_slave *cs)
     printk("Disk superblock found.\n");
 
     /* Save the uuid and exit */
-    cs->uuid = cs_sb.uuid;
-    cs->new_dev = cs_sb.flags & CASTLE_SLAVE_NEWDEV;
+    cs->uuid = cs_sb.pub.uuid;
+    cs->new_dev = cs_sb.pub.flags & CASTLE_SLAVE_NEWDEV;
     return 0;
 
 error_out:
@@ -669,22 +669,23 @@ static int castle_slave_superblocks_init(struct castle_slave *cs)
     } else
     {
         printk("Initing slave superblock.\n");
-        cs_sb->magic1 = CASTLE_SLAVE_MAGIC1;
-        cs_sb->magic2 = CASTLE_SLAVE_MAGIC2;
-        cs_sb->magic3 = CASTLE_SLAVE_MAGIC3;
-        cs_sb->version= CASTLE_SLAVE_VERSION;
-        cs_sb->used   = 2; /* Two blocks used for the superblocks */
-        cs_sb->uuid   = cs->uuid;
-        cs_sb->size   = get_bd_capacity(cs->bdev) >> (C_BLK_SHIFT - 9);
-        cs_sb->flags  = CASTLE_SLAVE_TARGET | CASTLE_SLAVE_SPINNING;
+        cs_sb->pub.magic1 = CASTLE_SLAVE_MAGIC1;
+        cs_sb->pub.magic2 = CASTLE_SLAVE_MAGIC2;
+        cs_sb->pub.magic3 = CASTLE_SLAVE_MAGIC3;
+        cs_sb->pub.version= CASTLE_SLAVE_VERSION;
+        cs_sb->pub.used   = 2; /* Two blocks used for the superblocks */
+        cs_sb->pub.uuid   = cs->uuid;
+        cs_sb->pub.size   = get_bd_capacity(cs->bdev) >> (C_BLK_SHIFT - 9);
+        cs_sb->pub.flags  = CASTLE_SLAVE_TARGET | CASTLE_SLAVE_SPINNING;
         castle_slave_superblock_print(cs_sb);
         printk("Done.\n");
     }
     debug("Before slave init: in_atomic()=%d\n", in_atomic());
-    castle_freespace_slave_init(cs, cs->new_dev);
-
     castle_slave_superblock_put(cs, cs->new_dev);
     castle_fs_superblock_put(cs, 0);
+
+    castle_freespace_slave_init(cs, cs->new_dev);
+
     return ret;
 }
 
@@ -1521,9 +1522,9 @@ void castle_slave_access(uint32_t uuid)
     cs->last_access = jiffies; 
         
     sb = castle_slave_superblock_get(cs);
-    if(!(sb->flags & CASTLE_SLAVE_SPINNING))
+    if(!(sb->pub.flags & CASTLE_SLAVE_SPINNING))
     {
-        sb->flags |= CASTLE_SLAVE_SPINNING;
+        sb->pub.flags |= CASTLE_SLAVE_SPINNING;
         castle_slave_superblock_put(cs, 1);
         castle_events_spinup(cs->uuid);
     } else
@@ -1540,7 +1541,7 @@ static void castle_slaves_spindown(struct work_struct *work)
         struct castle_slave *cs = list_entry(l, struct castle_slave, list);
 
         sb = castle_slave_superblock_get(cs);
-        if(!(sb->flags & CASTLE_SLAVE_SPINNING))
+        if(!(sb->pub.flags & CASTLE_SLAVE_SPINNING))
         {
             castle_slave_superblock_put(cs, 0);
             continue;
@@ -1597,13 +1598,12 @@ static void castle_slaves_unlock(void)
     cancel_work_sync(&spindown_work_item);
 #endif
 
+    castle_freespace_writeback();
     list_for_each_safe(lh, th, &castle_slaves.slaves)
     {
         slave = list_entry(lh, struct castle_slave, list); 
         put_c2b(slave->sblk);
         put_c2b(slave->fs_sblk);
-        put_c2b(slave->freespace_sblk);
-        slave->freespace_sblk = NULL;
     }
 }
 

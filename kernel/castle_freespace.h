@@ -15,8 +15,8 @@
 /* Load on-disk structures into memory */
 int castle_freespace_slave_init(struct castle_slave *cs, int fresh);
 
-/* Free in-memory structures */
-void castle_freespace_slave_close(struct castle_slave *cs);
+/* Writeback Freespace meta data back onto disk. */
+int castle_freespace_writeback(void);
 
 #ifdef CASTLE_DEBUG
 void castle_freespace_summary_get(struct castle_slave *cs,

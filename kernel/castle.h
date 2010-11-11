@@ -205,12 +205,24 @@ typedef struct {
     c_chk_cnt_t     disk_size;
 } castle_freespace_t;
 
+struct castle_extents_sb_t {
+    c_ext_id_t      ext_id_seq;
+    uint64_t        nr_exts;
+    c_byte_off_t    next_free_byte;
+};
+
+struct castle_slave_superblock {
+    struct castle_slave_superblock_public   pub;
+    castle_freespace_t                      freespace;
+} PACKED;
+
 struct castle_fs_superblock {
-    struct castle_fs_superblock_public pub;
-    uint32_t        nr_slaves;
-    uint32_t        slaves[MAX_NR_SLAVES];
-    c_ext_fs_bs_t   mstore_ext_fs_bs;
-    c_ext_pos_t     mstore[16];
+    struct castle_fs_superblock_public      pub;
+    uint32_t                                nr_slaves;
+    uint32_t                                slaves[MAX_NR_SLAVES];
+    struct castle_extents_sb_t              extents_sb;
+    c_ext_fs_bs_t                           mstore_ext_fs_bs;
+    c_ext_pos_t                             mstore[16];
 } PACKED;
 
 enum {
@@ -870,7 +882,8 @@ struct castle_slave {
     struct block_device            *bdev;
     c_ext_id_t                      sup_ext;
     c_disk_chk_t                   *sup_ext_maps;
-    struct castle_cache_block      *freespace_sblk;
+    struct mutex                    freespace_lock;
+    castle_freespace_t              freespace;
     struct castle_cache_block      *sblk;
     struct castle_cache_block      *fs_sblk;
     block_t                         free_blk;

@@ -229,7 +229,7 @@ static ssize_t slave_size_show(struct kobject *kobj,
     uint32_t size;
 
     sb = castle_slave_superblock_get(slave);
-    size = sb->size;
+    size = sb->pub.size;
     castle_slave_superblock_put(slave, 0);
 
     return sprintf(buf, "%d\n", size);
@@ -244,7 +244,7 @@ static ssize_t slave_used_show(struct kobject *kobj,
     uint32_t used;
 
     sb = castle_slave_superblock_get(slave);
-    used = sb->used;
+    used = sb->pub.used;
     castle_slave_superblock_put(slave, 0);
 
     return sprintf(buf, "%d\n", used);
@@ -259,7 +259,7 @@ static ssize_t slave_target_show(struct kobject *kobj,
     int target;
     
     sb = castle_slave_superblock_get(slave);
-    target = sb->flags & CASTLE_SLAVE_TARGET ? 1 : 0;
+    target = sb->pub.flags & CASTLE_SLAVE_TARGET ? 1 : 0;
     castle_slave_superblock_put(slave, 0);
 
     return sprintf(buf, "%d\n", target);
@@ -274,7 +274,7 @@ static ssize_t slave_spinning_show(struct kobject *kobj,
     int spinning;
     
     sb = castle_slave_superblock_get(slave);
-    spinning = !!(sb->flags & CASTLE_SLAVE_SPINNING);
+    spinning = !!(sb->pub.flags & CASTLE_SLAVE_SPINNING);
     castle_slave_superblock_put(slave, 0);
 
     return sprintf(buf, "%d\n", spinning);
