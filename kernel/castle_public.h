@@ -4,6 +4,8 @@
 #include <linux/types.h>
 #include <asm/ioctl.h>
 
+#define CASTLE_PROTOCOL_VERSION 1
+
 #ifndef __KERNEL__
 #define PAGE_SIZE 4096
 #define PAGE_SHIFT 12
@@ -44,6 +46,7 @@ typedef uint32_t version_t;
 #define CASTLE_CTRL_INVALID_STATS            18
 #define CASTLE_CTRL_SET_TARGET               19
 #define CASTLE_CTRL_DESTROY                  20
+#define CASTLE_CTRL_PROTOCOL_VERSION         21
 
 #define PACKED               __attribute__((packed))
 typedef struct castle_control_cmd_claim {
@@ -126,6 +129,11 @@ typedef struct castle_control_cmd_transfer_destroy {
     int           ret;         /* OUT */
 } PACKED cctrl_cmd_transfer_destroy_t;
 
+typedef struct castle_control_cmd_protocol_version {
+    int ret;                   /* OUT */
+    uint32_t version;          /* OUT */
+} PACKED cctrl_cmd_protocol_version_t;
+
 typedef struct castle_control_ioctl {
     uint16_t cmd;
     union {
@@ -147,6 +155,8 @@ typedef struct castle_control_ioctl {
 
         cctrl_cmd_transfer_create_t     transfer_create;
         cctrl_cmd_transfer_destroy_t    transfer_destroy;
+
+        cctrl_cmd_protocol_version_t    protocol_version;
     };
 } PACKED cctrl_ioctl_t;
 
@@ -188,6 +198,8 @@ enum {
         _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_SET_TARGET, cctrl_ioctl_t),
     CASTLE_CTRL_DESTROY_IOCTL =
         _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_DESTROY, cctrl_ioctl_t),
+    CASTLE_CTRL_PROTOCOL_VERSION_IOCTL =
+        _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_PROTOCOL_VERSION, cctrl_ioctl_t),
 };
 
 /*

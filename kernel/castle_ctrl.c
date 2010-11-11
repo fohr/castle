@@ -451,6 +451,12 @@ void castle_control_set_target(slave_uuid_t slave_uuid, int value, int *ret)
     *ret = 0;
 }
 
+void castle_control_protocol_version(int *ret, uint32_t *version)
+{
+    *ret = 0;
+    *version = CASTLE_PROTOCOL_VERSION;
+}
+
 int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
     int err;
@@ -502,6 +508,9 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
         case CASTLE_CTRL_INIT:
             castle_control_fs_init(&ioctl.init.ret);
             break;            
+        case CASTLE_CTRL_PROTOCOL_VERSION:
+            castle_control_protocol_version(&ioctl.protocol_version.ret, &ioctl.protocol_version.version);
+            break;
         case CASTLE_CTRL_ATTACH:
             castle_control_attach( ioctl.attach.version,
                                   &ioctl.attach.ret,
