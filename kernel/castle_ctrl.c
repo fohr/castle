@@ -247,8 +247,19 @@ static int castle_attachments_writeback(void)
     struct list_head *lh;
 
     castle_ctrl_lock();
-    spin_lock(&castle_attachments.lock);
 
+    /* Increment reference count of all attachments. */
+    spin_lock(&castle_attachments.lock);
+    list_for_each(lh, &castle_attachments.attachments)
+    {
+        ca = list_entry(lh, struct castle_attachment, list);
+        if(ca->device)
+            continue;
+        ca->ref_cnt++;
+    }
+    spin_unlock(&castle_attachments.lock);
+
+    /* Writeback attachments. */
     list_for_each(lh, &castle_attachments.attachments)
     {
         ca = list_entry(lh, struct castle_attachment, list);
@@ -259,7 +270,17 @@ static int castle_attachments_writeback(void)
                     ca->col.id, ca->col.name);
     }
     
+    /* Decrement reference count of all attachments. */
+    spin_lock(&castle_attachments.lock);
+    list_for_each(lh, &castle_attachments.attachments)
+    {
+        ca = list_entry(lh, struct castle_attachment, list);
+        if(ca->device)
+            continue;
+        ca->ref_cnt--;
+    }
     spin_unlock(&castle_attachments.lock);
+
     castle_ctrl_unlock();
 
     return 0;
