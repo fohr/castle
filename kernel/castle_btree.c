@@ -665,9 +665,9 @@ struct castle_vlba_tree_node {
     uint32_t    key_idx[0];
 } PACKED;
 
-#define VLBA_TREE_NODE_SIZE                 (2) 
-#define VLBA_TREE_NODE_LENGTH               (VLBA_TREE_NODE_SIZE * C_BLK_SIZE)
-#define EOF_VLBA_NODE(_node)                (((uint8_t *)_node) + VLBA_TREE_NODE_LENGTH)
+#define VLBA_TREE_NODE_SIZE(_node)          (castle_btree_type_get((_node)->type)->node_size)
+#define VLBA_TREE_NODE_LENGTH(_node)        (VLBA_TREE_NODE_SIZE(_node) * C_BLK_SIZE)
+#define EOF_VLBA_NODE(_node)                (((uint8_t *)_node) + VLBA_TREE_NODE_LENGTH(_node))
 #define VLBA_KEY_LENGTH(_key)               (VLBA_TREE_KEY_MAX(_key) ? 0 : (_key)->length)
 #define VLBA_INLINE_VAL_LENGTH(_entry)                                      \
                 (VLBA_TREE_ENTRY_IS_INLINE(_entry)?(_entry)->val_len:0)
@@ -770,7 +770,7 @@ static void castle_vlba_tree_node_compact(struct castle_btree_node *node)
     /* node header + vlba header + index table + free bytes + sum of entries + dead bytes */
     BUG_ON( sizeof(struct castle_btree_node) + sizeof(struct castle_vlba_tree_node) +
             + sizeof(uint32_t) * node->used + vlba_node->free_bytes + count +
-            vlba_node->dead_bytes != VLBA_TREE_NODE_LENGTH);
+            vlba_node->dead_bytes != VLBA_TREE_NODE_LENGTH(node));
 
     /* Store index for each entry to update entries index in the table */
     min_heap_heapify(a, idx, node->used);
@@ -839,7 +839,7 @@ static int castle_vlba_tree_need_split(struct castle_btree_node *node,
             break;
         case 1:
             if ((vlba_node->free_bytes + vlba_node->dead_bytes) < 
-                (VLBA_TREE_NODE_LENGTH - sizeof(struct castle_btree_node) - 
+                (VLBA_TREE_NODE_LENGTH(node) - sizeof(struct castle_btree_node) - 
                  sizeof(struct castle_vlba_tree_node)) / 3)
                 return 1;
             return 0;
@@ -999,10 +999,10 @@ static void castle_vlba_tree_entry_add(struct castle_btree_node *node,
     if (node->used == 0) 
     {
         vlba_node->dead_bytes = 0;
-        vlba_node->free_bytes = VLBA_TREE_NODE_LENGTH - sizeof(struct castle_btree_node) -
+        vlba_node->free_bytes = VLBA_TREE_NODE_LENGTH(node) - sizeof(struct castle_btree_node) -
                                 sizeof(struct castle_vlba_tree_node);
         BUG_ON( sizeof(struct castle_btree_node) + sizeof(struct castle_vlba_tree_node) +
-                vlba_node->free_bytes + vlba_node->dead_bytes != VLBA_TREE_NODE_LENGTH);
+                vlba_node->free_bytes + vlba_node->dead_bytes != VLBA_TREE_NODE_LENGTH(node));
     }
         
     BUG_ON(key_length > VLBA_TREE_MAX_KEY_SIZE);
@@ -1166,7 +1166,7 @@ static void castle_vlba_tree_node_validate(struct castle_btree_node *node)
     /* node header + vlba header + index table + free bytes + sum of entries + dead bytes */
     if ( sizeof(struct castle_btree_node) + sizeof(struct castle_vlba_tree_node) +
             sizeof(uint32_t) * node->used + vlba_node->free_bytes + count +
-            vlba_node->dead_bytes != VLBA_TREE_NODE_LENGTH) 
+            vlba_node->dead_bytes != VLBA_TREE_NODE_LENGTH(node)) 
     {
         printk("sizeof(struct castle_btree_node) + sizeof(struct castle_vlba_tree_node) +"
                 "Index Table + Free Bytes + Sum of entries + Dead Bytes\n");
@@ -1302,9 +1302,9 @@ static void castle_vlba_tree_node_print(struct castle_btree_node *node)
 }
 
 
-struct castle_btree_type castle_vlba_tree = {
-    .magic         = VLBA_TREE_TYPE,
-    .node_size     = VLBA_TREE_NODE_SIZE,
+struct castle_btree_type castle_rw_tree = {
+    .magic         = RW_VLBA_TREE_TYPE,
+    .node_size     = 2, 
     .min_key       = (void *)&VLBA_TREE_MIN_KEY,
     .max_key       = (void *)&VLBA_TREE_MAX_KEY, 
     .inv_key       = (void *)&VLBA_TREE_INVAL_KEY, 
@@ -1324,15 +1324,36 @@ struct castle_btree_type castle_vlba_tree = {
 #endif
 }; 
 
-
+struct castle_btree_type castle_ro_tree = {
+    .magic         = RO_VLBA_TREE_TYPE,
+    .node_size     = 256, 
+    .min_key       = (void *)&VLBA_TREE_MIN_KEY,
+    .max_key       = (void *)&VLBA_TREE_MAX_KEY, 
+    .inv_key       = (void *)&VLBA_TREE_INVAL_KEY, 
+    .need_split    = castle_vlba_tree_need_split,
+    .key_compare   = castle_vlba_tree_key_compare,
+    .key_duplicate = castle_vlba_tree_key_duplicate,
+    .key_next      = castle_vlba_tree_key_next,
+    .key_dealloc   = castle_vlba_tree_key_dealloc,
+    .entry_get     = castle_vlba_tree_entry_get,
+    .entry_add     = castle_vlba_tree_entry_add,
+    .entry_replace = castle_vlba_tree_entry_replace,
+    .entry_disable = castle_vlba_tree_entry_disable,
+    .entries_drop  = castle_vlba_tree_entries_drop,
+    .node_print    = castle_vlba_tree_node_print,
+#ifdef CASTLE_DEBUG    
+    .node_validate = castle_vlba_tree_node_validate,
+#endif
+};
 
 /**********************************************************************************************/
 /* Array of btree types */
 
 static struct castle_btree_type *castle_btrees[1<<(8 * sizeof(btree_t))] = 
-                                                       {[MTREE_TYPE]     = &castle_mtree,
-                                                        [BATREE_TYPE]    = &castle_batree,
-                                                        [VLBA_TREE_TYPE] = &castle_vlba_tree};
+                                                       {[MTREE_TYPE]        = &castle_mtree,
+                                                        [BATREE_TYPE]       = &castle_batree,
+                                                        [RW_VLBA_TREE_TYPE] = &castle_rw_tree,
+                                                        [RO_VLBA_TREE_TYPE] = &castle_ro_tree};
 
 
 struct castle_btree_type *castle_btree_type_get(btree_t type)
@@ -1340,7 +1361,8 @@ struct castle_btree_type *castle_btree_type_get(btree_t type)
 #ifdef CASTLE_DEBUG
     BUG_ON((type != MTREE_TYPE) &&
            (type != BATREE_TYPE) &&
-           (type != VLBA_TREE_TYPE));
+           (type != RW_VLBA_TREE_TYPE) &&
+           (type != RO_VLBA_TREE_TYPE));
 #endif
     return castle_btrees[type];
 }
@@ -2473,8 +2495,11 @@ static void _castle_btree_find(struct work_struct *work)
     __castle_btree_find(btree, c_bvec, root_cep, btree->max_key);
 }
 
+int first_time = 1;
 void castle_btree_find(c_bvec_t *c_bvec)
 {
+    if(c_bvec->tree->btree_type == RO_VLBA_TREE_TYPE)
+        printk("Btree find for RO tree.\n\n\n\n\n\n\n");
     c_bvec->parent_key = NULL;
     clear_bit(CBV_DOING_SPLITS, &c_bvec->flags);
     CASTLE_INIT_WORK(&c_bvec->work, _castle_btree_find);

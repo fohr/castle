@@ -2085,6 +2085,7 @@ static void castle_back_big_get_continue(struct castle_object_pull *pull,
         castle_attachment_put(stateful_op->attachment);
         stateful_op->attachment = NULL;
         castle_object_pull_finish(&stateful_op->pull);
+        /* This drops the spinlock. */
         castle_back_put_stateful_op(stateful_op->conn, stateful_op);
         return;
     }

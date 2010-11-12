@@ -1571,6 +1571,8 @@ static void castle_object_pull_continue(struct castle_bio_vec *c_bvec, int err, 
     }
     
     pull->offset = 0;
+    pull->curr_c2b = NULL;
+    pull->buf = NULL;
     pull->cep = cvt.cep;
     pull->remaining = cvt.length;    
     pull->pull_continue(pull, err, cvt.length, 0 /* not done yet */);

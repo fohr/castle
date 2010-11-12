@@ -1324,6 +1324,7 @@ void castle_attachment_put(struct castle_attachment *ca)
 {
     int to_free = 0;
     
+    BUG_ON(in_atomic());
     spin_lock(&castle_attachments.lock);
 
     ca->ref_cnt--;
