@@ -1021,7 +1021,8 @@ int castle_object_replace(struct castle_object_replace *replace,
         return -ENODEV;
 
     for (i=0; i<key->nr_dims; i++)
-        BUG_ON(key->dims[i]->length == 0);
+        if(key->dims[i]->length == 0)
+            return -EINVAL;
     
     btree_key = castle_object_key_convert(key);
     if (!btree_key)
