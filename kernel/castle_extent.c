@@ -471,9 +471,9 @@ c_ext_id_t castle_extent_alloc(c_rda_type_t            rda_type,
                                da_id_t                 da_id,
                                c_chk_cnt_t             count)
 {
-    c_ext_t                 *ext = NULL;
-    c_rda_spec_t            *rda_spec = castle_rda_spec_get(rda_type);
-    struct castle_extents_sb_t *castle_extents_sb = NULL;
+    c_ext_t                     *ext = NULL;
+    c_rda_spec_t                *rda_spec = castle_rda_spec_get(rda_type);
+    struct castle_extents_sb_t  *castle_extents_sb = NULL;
 
     BUG_ON(!extent_init_done);
 
@@ -538,7 +538,7 @@ __hell:
 void castle_extent_free(c_ext_id_t ext_id)
 {
     c_ext_t                     *ext;
-    struct castle_extents_sb_t     *castle_extents_sb = NULL;
+    struct castle_extents_sb_t  *castle_extents_sb = NULL;
     int                          i, j;
     uint32_t                     req_space;
     c_disk_chk_t                *maps_buf = NULL;
@@ -565,7 +565,7 @@ void castle_extent_free(c_ext_id_t ext_id)
         BUG_ON(cep.offset >= (meta_ext.size * C_CHK_SIZE));
         c2b = castle_cache_block_get(cep, 1);
         write_lock_c2b(c2b);
-        BUG_ON(!c2b_uptodate(c2b));
+        if (!c2b_uptodate(c2b)) BUG_ON(submit_c2b_sync(READ, c2b));
         memcpy(((uint8_t *)maps_buf) + i,
                c2b_buffer(c2b),
                ((req_space - i) > C_BLK_SIZE)?C_BLK_SIZE:(req_space - i));
