@@ -502,10 +502,10 @@ struct castle_clist_entry {
 } PACKED;
 
 struct castle_vlist_entry {
-    uint32_t     version_nr;
-    uint32_t     parent;
+    version_t    version_nr;
+    version_t    parent;
     da_id_t      da_id;
-    uint32_t     size;
+    uint64_t     size;
 } PACKED;
 
 #define MAX_NAME_SIZE 128

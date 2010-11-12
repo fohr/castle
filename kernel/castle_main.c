@@ -490,7 +490,7 @@ static void castle_slave_superblock_print(struct castle_slave_superblock *cs_sb)
            "Version:%x\n"
            "Uuid:   %x\n"
            "Used:   %x\n"
-           "Size:   %x\n",
+           "Size:   %llx\n",
            cs_sb->pub.magic1,
            cs_sb->pub.magic2,
            cs_sb->pub.magic3,
@@ -1362,7 +1362,7 @@ EXPORT_SYMBOL(castle_attachment_put);
 struct castle_attachment* castle_attachment_init(int device, /* _or_object_collection */
                                                  version_t version,
                                                  da_id_t *da_id,
-                                                 uint32_t *size,
+                                                 c_byte_off_t *size,
                                                  int *leaf)
 {
     struct castle_attachment *attachment = NULL;
@@ -1405,7 +1405,7 @@ struct castle_attachment* castle_device_init(version_t version)
     struct request_queue *rq      = NULL;
     struct gendisk *gd            = NULL;
     static int minor = 0;
-    uint32_t size;
+    c_byte_off_t size;
     int leaf;
     int err;
 
@@ -1434,7 +1434,7 @@ struct castle_attachment* castle_device_init(version_t version)
     list_add(&dev->list, &castle_attachments.attachments);
     dev->dev.gd = gd;
     
-    set_capacity(gd, (size << (C_BLK_SHIFT - 9)));
+    set_capacity(gd, size >> 9);
     add_disk(gd);
 
     bdget(MKDEV(gd->major, gd->first_minor));

@@ -364,7 +364,7 @@ struct castle_slave_superblock_public {
     uint32_t version;   /* Super chunk format version */
     uint32_t uuid;
     uint32_t used;
-    uint32_t size; /* In blocks */
+    uint64_t size;      /* In blocks. */
 	uint32_t flags;
 } PACKED;
 

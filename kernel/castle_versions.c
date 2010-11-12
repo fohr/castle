@@ -54,7 +54,7 @@ struct castle_version {
     version_t        o_order;
     version_t        r_order;
     da_id_t          da_id;
-    uint32_t         size;
+    c_byte_off_t     size;
 
     /* Lists for storing versions the hash table & the init list*/
     struct list_head hash_list; 
@@ -179,7 +179,7 @@ error_out:
 static struct castle_version* castle_version_add(version_t version, 
                                                  version_t parent, 
                                                  da_id_t da_id,
-                                                 uint32_t size)
+                                                 c_byte_off_t size)
 {
     struct castle_version *v;
     
@@ -280,10 +280,10 @@ int castle_versions_writeback(void)
 static struct castle_version* castle_version_new_create(int snap_or_clone,
                                                         version_t parent,
                                                         da_id_t da_id,
-                                                        uint32_t size)
+                                                        c_byte_off_t size)
 {
     struct castle_version *v, *p;
-    uint32_t parent_size;
+    c_byte_off_t parent_size;
     version_t version;
 
     /* Read ftree root from the parent (also, make sure parent exists) */
@@ -342,11 +342,11 @@ static struct castle_version* castle_version_new_create(int snap_or_clone,
 version_t castle_version_new(int snap_or_clone,
                              version_t parent,
                              da_id_t da_id,
-                             uint32_t size)
+                             c_byte_off_t size)
 {
     struct castle_version *v;
     
-    debug("New version: snap_or_clone=%d, parent=%d, size=%d\n",
+    debug("New version: snap_or_clone=%d, parent=%d, size=%lld\n",
             snap_or_clone, parent, size);
     /* Get a new version number */
     v = castle_version_new_create(snap_or_clone,
@@ -384,7 +384,7 @@ int castle_version_attach(version_t version)
 int castle_version_read(version_t version, 
                         da_id_t *da,
                         version_t *parent,
-                        uint32_t *size,
+                        c_byte_off_t *size,
                         int *leaf)
 {
     struct castle_version *v;
