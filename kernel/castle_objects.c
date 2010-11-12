@@ -1266,7 +1266,6 @@ void __castle_object_get_complete(struct work_struct *work)
     cep.ext_id = c2b->cep.ext_id;
     cep.offset = c2b->cep.offset + (OBJ_IO_MAX_BUFFER_SIZE * C_BLK_SIZE);
     debug("Continuing for cep="cep_fmt_str_nl, cep2str(cep));   
-    /* TODO: Work out if we don't go into unbound recursion here */
     
     /* TODO: how much of this is a no-op from above? */
     get->data_c2b        = c2b;
@@ -1369,7 +1368,8 @@ void castle_object_get_continue(struct castle_bio_vec *c_bvec,
         BUG_ON(submit_c2b(READ, c2b));
     } else
     {
-        __castle_object_get_complete(&c_bvec->work);
+        CASTLE_INIT_WORK(&c_bvec->work, __castle_object_get_complete);
+        queue_work(castle_wq, &c_bvec->work);
     }
 }
 
@@ -1486,10 +1486,10 @@ void castle_object_pull_finish(struct castle_object_pull *pull)
 void __castle_object_chunk_pull_complete(struct work_struct *work)
 {
     struct castle_object_pull *pull = container_of(work, struct castle_object_pull, work);
-    uint64_t to_copy = min((uint64_t)pull->buf_len, pull->remaining);
+    uint32_t to_copy = pull->to_copy;
 
     BUG_ON(!pull->buf);
-    
+
     memcpy(pull->buf, c2b_buffer(pull->curr_c2b), to_copy);
     
     pull->offset += to_copy;
@@ -1501,6 +1501,7 @@ void __castle_object_chunk_pull_complete(struct work_struct *work)
     
     pull->curr_c2b = NULL;
     pull->buf = NULL;
+    pull->to_copy = 0;
     
     pull->pull_continue(pull, 0, to_copy, pull->remaining == 0);
 }
@@ -1509,8 +1510,7 @@ void castle_object_chunk_pull_io_end(c2_block_t *c2b)
 {
     struct castle_object_pull *pull = c2b->private;
 
-    debug("IO end for cdb (0x%x, 0x%x), uptodate=%d\n", 
-            c2b->cdb.disk, c2b->cdb.block, uptodate);
+    debug("IO end for cdb, c2b->nr_pages=%d, cep" cep_fmt_str_nl, c2b->nr_pages, cep2str(c2b->cep));
         
     // TODO deal with not up to date - get error and pass it on?
 
@@ -1521,8 +1521,8 @@ void castle_object_chunk_pull_io_end(c2_block_t *c2b)
 void castle_object_chunk_pull(struct castle_object_pull *pull, void *buf, size_t buf_len)
 {   
     //TODO currently relies on objects being page aligned.
-    c_ext_pos_t cep;    
-    
+    c_ext_pos_t cep;
+
     if(!castle_fs_inited)
         return;
 
@@ -1530,15 +1530,18 @@ void castle_object_chunk_pull(struct castle_object_pull *pull, void *buf, size_t
     BUG_ON(pull->curr_c2b != NULL);
     BUG_ON(pull->buf != NULL);
     
+    pull->to_copy = min(pull->remaining, (uint64_t)buf_len);
+
+    BUG_ON(pull->to_copy == 0);
+
     cep.ext_id = pull->cep.ext_id;
     cep.offset = pull->cep.offset + pull->offset; // TODO in bytes or blocks?
-    
+
     debug("Locking cdb (0x%x, 0x%x)\n", cep.ext_id, cep.offset);
-    pull->curr_c2b = castle_cache_block_get(cep, buf_len / PAGE_SIZE);
+    pull->curr_c2b = castle_cache_block_get(cep, (pull->to_copy - 1) / PAGE_SIZE + 1);
     write_lock_c2b(pull->curr_c2b);
     
     pull->buf = buf;
-    pull->buf_len = buf_len;
     
     debug("c2b uptodate: %d\n", c2b_uptodate(pull->curr_c2b));
     if(!c2b_uptodate(pull->curr_c2b))
@@ -1572,6 +1575,8 @@ static void castle_object_pull_continue(struct castle_bio_vec *c_bvec, int err, 
     }
     
     pull->offset = 0;
+    pull->curr_c2b = NULL;
+    pull->buf = NULL;
     pull->cep = cvt.cep;
     pull->remaining = cvt.length;    
     pull->pull_continue(pull, err, cvt.length, 0 /* not done yet */);

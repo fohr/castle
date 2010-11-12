@@ -2589,7 +2589,7 @@ static int castle_cache_fast_vmap_init(void)
     /* Work out the fast vmap unit size in # of c2ps. Make sure that VLBA tree nodes can
        handled. */
     castle_cache_fast_vmap_c2bs = castle_cache_pages_to_c2ps(
-                                        castle_btree_type_get(VLBA_TREE_TYPE)->node_size);
+                                        castle_btree_type_get(RW_VLBA_TREE_TYPE)->node_size);
     /* We need cache_castle_size / 512 for this array, if that's too big, we
        could use the cache pages themselves */
     pgs_array = vmalloc(PAGES_PER_C2P * castle_cache_page_freelist_size * sizeof(struct page *));

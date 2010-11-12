@@ -367,10 +367,9 @@ enum {
 
 #define MTREE_TYPE                 0x33
 #define MTREE_BVEC_BLOCK(_bvec)   ((sector_t)(_bvec)->key)
-
 #define BATREE_TYPE                0x44
-
-#define VLBA_TREE_TYPE             0x55
+#define RW_VLBA_TREE_TYPE          0x55
+#define RO_VLBA_TREE_TYPE          0x66
                                   
 #define MAX_BTREE_DEPTH           (10)
 #define MAX_BTREE_ENTRIES         (2500)
@@ -1047,7 +1046,7 @@ struct castle_object_pull {
     struct castle_cache_block  *curr_c2b;
     
     void                       *buf;
-    uint32_t                    buf_len;
+    uint32_t                    to_copy;
     
     struct work_struct          work;
     

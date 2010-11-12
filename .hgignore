@@ -22,7 +22,9 @@ user/utils/castle_scan
 *.patch
 kernel/.tmp_versions/castle-fs.mod
 kernel/Module.symvers
+kernel/Module.markers
 kernel/castle-fs.ko
 kernel/castle-fs.mod.c
 kernel/castle_compile.h
 user/utils/castle-fs-cli
+user/utils/mkcastlefs

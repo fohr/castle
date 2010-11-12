@@ -527,7 +527,7 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
         return -EINVAL;
     }
 
-    if(!castle_fs_inited && (ioctl.cmd != CASTLE_CTRL_CLAIM) && (ioctl.cmd != CASTLE_CTRL_INIT))
+    if(!castle_fs_inited && (ioctl.cmd != CASTLE_CTRL_CLAIM) && (ioctl.cmd != CASTLE_CTRL_INIT) && (ioctl.cmd != CASTLE_CTRL_PROTOCOL_VERSION))
     {
         printk("Disallowed ctrl op %d, before fs gets inited.\n", ioctl.cmd);
         return -EINVAL;
