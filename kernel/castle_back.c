@@ -1692,6 +1692,8 @@ err0: castle_back_iter_reply(stateful_op, op, err);
 
 static void castle_back_iter_cleanup(struct castle_back_stateful_op *stateful_op)
 {
+    struct castle_attachment *attachment;
+
     BUG_ON(!spin_is_locked(&stateful_op->lock));
     BUG_ON(stateful_op->tag != CASTLE_RING_ITER_START);
     BUG_ON(!list_empty(&stateful_op->op_queue));
@@ -1709,11 +1711,13 @@ static void castle_back_iter_cleanup(struct castle_back_stateful_op *stateful_op
 
     castle_free(stateful_op->iterator.start_key);
     castle_free(stateful_op->iterator.end_key);
-    castle_attachment_put(stateful_op->attachment);
+    attachment = stateful_op->attachment;
     stateful_op->attachment = NULL;
 
     // will drop stateful_op->lock
     castle_back_put_stateful_op(stateful_op->conn, stateful_op);
+
+    castle_attachment_put(attachment);
 }
 
 static void _castle_back_iter_finish(void *data)
@@ -1776,6 +1780,8 @@ err0:
 
 static void castle_back_big_put_expire(struct castle_back_stateful_op *stateful_op)
 {
+    struct castle_attachment *attachment;
+
     debug("castle_back_big_put_expire token=%u.\n", stateful_op->token);
     
     BUG_ON(!spin_is_locked(&stateful_op->lock));
@@ -1783,11 +1789,13 @@ static void castle_back_big_put_expire(struct castle_back_stateful_op *stateful_
     BUG_ON(stateful_op->curr_op != NULL);
     
     castle_object_replace_cancel(&stateful_op->replace);
-    castle_attachment_put(stateful_op->attachment);
+    attachment = stateful_op->attachment;
     stateful_op->attachment = NULL;
     
     // Will drop stateful_op->lock
     castle_back_put_stateful_op(stateful_op->conn, stateful_op);
+
+    castle_attachment_put(attachment);
 }
 
 static void castle_back_put_chunk_contine(void *data);
@@ -1830,6 +1838,7 @@ static void castle_back_big_put_complete(struct castle_object_replace *replace, 
 {
     struct castle_back_stateful_op *stateful_op = 
         container_of(replace, struct castle_back_stateful_op, replace);
+    struct castle_attachment *attachment;
 
     debug("castle_back_big_put_complete err=%d\n", err);
 
@@ -1846,11 +1855,13 @@ static void castle_back_big_put_complete(struct castle_object_replace *replace, 
     }
     
     castle_back_stateful_op_finish_all(stateful_op, err);
-    castle_attachment_put(stateful_op->attachment);
+    attachment = stateful_op->attachment;
     stateful_op->attachment = NULL;
 
     // Will drop stateful_op->lock
     castle_back_put_stateful_op(stateful_op->conn, stateful_op);
+
+    castle_attachment_put(attachment);
 }
 
 static uint32_t castle_back_big_put_data_length_get(struct castle_object_replace *replace)
@@ -2068,6 +2079,7 @@ static void castle_back_put_chunk_contine(void *data)
 
 static void castle_back_big_get_expire(struct castle_back_stateful_op *stateful_op)
 {
+    struct castle_attachment *attachment;
     debug("castle_back_big_get_expire token=%u.\n", stateful_op->token);
 
     BUG_ON(!spin_is_locked(&stateful_op->lock));
@@ -2075,12 +2087,14 @@ static void castle_back_big_get_expire(struct castle_back_stateful_op *stateful_
     BUG_ON(stateful_op->curr_op != NULL);
     BUG_ON(stateful_op->tag != CASTLE_RING_BIG_GET);
 
-    castle_attachment_put(stateful_op->attachment);
+    attachment = stateful_op->attachment;
     stateful_op->attachment = NULL;
 
     castle_object_pull_finish(&stateful_op->pull);
     // Will drop stateful_op->lock
     castle_back_put_stateful_op(stateful_op->conn, stateful_op);
+
+    castle_attachment_put(attachment);
 }
 
 static void castle_back_big_get_do_chunk(void *data)
@@ -2104,6 +2118,7 @@ static void castle_back_big_get_continue(struct castle_object_pull *pull,
     struct castle_back_stateful_op *stateful_op = 
         container_of(pull, struct castle_back_stateful_op, pull);
     int get_continue;
+    struct castle_attachment *attachment;
 
     debug("castle_back_big_get_continue stateful_op=%p err=%d length=%llu done=%d\n",
         stateful_op, err, length, done);
@@ -2125,11 +2140,17 @@ static void castle_back_big_get_continue(struct castle_object_pull *pull,
     if (err || done)
     {
         castle_back_stateful_op_finish_all(stateful_op, err);
-        castle_attachment_put(stateful_op->attachment);
+
+        attachment = stateful_op->attachment;
         stateful_op->attachment = NULL;
+
         castle_object_pull_finish(&stateful_op->pull);
+
         /* This drops the spinlock. */
         castle_back_put_stateful_op(stateful_op->conn, stateful_op);
+
+        castle_attachment_put(attachment);
+
         return;
     }
     
