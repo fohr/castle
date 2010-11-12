@@ -8,7 +8,7 @@ void         castle_version_detach      (version_t version);
 int          castle_version_read        (version_t version, 
                                          da_id_t *da,
                                          version_t *parent,
-                                         uint32_t *size,
+                                         c_byte_off_t *size,
                                          int *leaf);
 da_id_t      castle_version_da_id_get   (version_t version);
 
@@ -16,7 +16,7 @@ int          castle_versions_zero_init  (void);
 version_t    castle_version_new         (int snap_or_clone, 
                                          version_t parent, 
                                          da_id_t da, 
-                                         uint32_t size);
+                                         c_byte_off_t size);
 int          castle_version_tree_delete (version_t version);
 
 int          castle_versions_read       (void);

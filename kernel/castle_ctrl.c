@@ -101,6 +101,14 @@ void castle_control_create(uint64_t size, int *ret, version_t *id)
     {
         printk("Creating a collection version tree.\n");
         da_id = castle_next_da_id++;
+    } 
+
+    /* If size isn't zero, make sure its multiple of block size. */
+    if(size % C_BLK_SIZE != 0)
+    {
+        printk("When creating a block device size must be a multiple of %d, got %lld.\n",
+                C_BLK_SIZE, size);
+        goto err_out;
     }
 
     /* Create a new version which will act as the root for this version tree */
@@ -118,14 +126,14 @@ void castle_control_create(uint64_t size, int *ret, version_t *id)
     }
 
     if(VERSION_INVAL(version))
-    {
-        *id  = -1;
-        *ret = -EINVAL;
-    } else
-    {
-        *id  = version;
-        *ret = 0;
-    }
+        goto err_out;
+    *id  = version;
+    *ret = 0;
+    return;
+
+err_out:
+    *id  = -1;
+    *ret = -EINVAL;
 }
 
 void castle_control_destroy(version_t version, int *ret)
@@ -461,9 +469,9 @@ void castle_control_set_target(slave_uuid_t slave_uuid, int value, int *ret)
     sb = castle_slave_superblock_get(slave);
     
     if (value)
-        sb->flags |= CASTLE_SLAVE_TARGET;
+        sb->pub.flags |= CASTLE_SLAVE_TARGET;
     else
-        sb->flags &= ~CASTLE_SLAVE_TARGET;
+        sb->pub.flags &= ~CASTLE_SLAVE_TARGET;
     
     castle_slave_superblock_put(slave, 1);
 

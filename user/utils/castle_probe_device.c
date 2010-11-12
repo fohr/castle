@@ -9,7 +9,7 @@
 
 #include "castle_public.h"
 
-static int castle_slave_superblock_validate(struct castle_slave_superblock *cs_sb)
+static int castle_slave_superblock_validate(struct castle_slave_superblock_public *cs_sb)
 {
     if(cs_sb->magic1 != CASTLE_SLAVE_MAGIC1) return -1;
     if(cs_sb->magic2 != CASTLE_SLAVE_MAGIC2) return -2;
@@ -32,7 +32,7 @@ static int castle_fs_superblock_validate(struct castle_fs_superblock_public *fs_
 int main(int argc, char *argv[])
 {
     int    fd, ret;
-    struct castle_slave_superblock cs_sb;
+    struct castle_slave_superblock_public cs_sb;
     struct castle_fs_superblock_public fs_sb;
 
     if (argc != 2)

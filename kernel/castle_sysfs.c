@@ -80,7 +80,7 @@ static ssize_t versions_list_show(struct kobject *kobj,
     struct castle_sysfs_version *v =
                 container_of(csys_entry, struct castle_sysfs_version, csys_entry);
     version_t parent;
-    uint32_t size;
+    c_byte_off_t size;
     ssize_t len;
     int leaf;
     int ret;
@@ -102,7 +102,7 @@ static ssize_t versions_list_show(struct kobject *kobj,
                 "IsLeaf: %d\n",
                  v->version, 
                  parent, 
-                 (c_byte_off_t)size * C_BLK_SIZE,
+                 size,
                  phys_size * C_CHK_SIZE,
                  leaf);
 
@@ -226,13 +226,14 @@ static ssize_t slave_size_show(struct kobject *kobj,
 {
     struct castle_slave *slave = container_of(kobj, struct castle_slave, kobj); 
     struct castle_slave_superblock *sb;
-    uint32_t size;
+    uint64_t size;
 
     sb = castle_slave_superblock_get(slave);
-    size = sb->size;
+    size = sb->pub.size;
     castle_slave_superblock_put(slave, 0);
+    size *= C_BLK_SIZE;
 
-    return sprintf(buf, "%d\n", size);
+    return sprintf(buf, "%lld\n", size);
 }
 
 static ssize_t slave_used_show(struct kobject *kobj, 
@@ -244,7 +245,7 @@ static ssize_t slave_used_show(struct kobject *kobj,
     uint32_t used;
 
     sb = castle_slave_superblock_get(slave);
-    used = sb->used;
+    used = sb->pub.used;
     castle_slave_superblock_put(slave, 0);
 
     return sprintf(buf, "%d\n", used);
@@ -259,7 +260,7 @@ static ssize_t slave_target_show(struct kobject *kobj,
     int target;
     
     sb = castle_slave_superblock_get(slave);
-    target = sb->flags & CASTLE_SLAVE_TARGET ? 1 : 0;
+    target = sb->pub.flags & CASTLE_SLAVE_TARGET ? 1 : 0;
     castle_slave_superblock_put(slave, 0);
 
     return sprintf(buf, "%d\n", target);
@@ -274,7 +275,7 @@ static ssize_t slave_spinning_show(struct kobject *kobj,
     int spinning;
     
     sb = castle_slave_superblock_get(slave);
-    spinning = !!(sb->flags & CASTLE_SLAVE_SPINNING);
+    spinning = !!(sb->pub.flags & CASTLE_SLAVE_SPINNING);
     castle_slave_superblock_put(slave, 0);
 
     return sprintf(buf, "%d\n", spinning);

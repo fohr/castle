@@ -357,14 +357,14 @@ struct castle_key_value_list {
 #define CASTLE_SLAVE_SPINNING   (0x00000002)
 #define CASTLE_SLAVE_NEWDEV     (0x00000004)
 
-struct castle_slave_superblock {
+struct castle_slave_superblock_public {
     uint32_t magic1;
     uint32_t magic2;
     uint32_t magic3;
     uint32_t version;   /* Super chunk format version */
     uint32_t uuid;
     uint32_t used;
-    uint32_t size; /* In blocks */
+    uint64_t size;      /* In blocks. */
 	uint32_t flags;
 } PACKED;
 

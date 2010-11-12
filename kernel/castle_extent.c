@@ -40,15 +40,8 @@
 
 int low_disk_space = 0;
 
-struct castle_extents_t {
-    uint32_t        magic1;
-    uint32_t        magic2;
-    c_ext_id_t      ext_id_seq;
-    uint64_t        nr_exts;
-    c_byte_off_t    next_free_byte;
-};
-
-c2_block_t *castle_extents_sb_c2b = NULL;
+struct castle_extents_sb_t castle_extents_global_sb;
+static DEFINE_MUTEX(castle_extents_mutex);
 
 typedef struct {
     c_ext_id_t          ext_id;         /* Unique extent ID */
@@ -203,21 +196,16 @@ static int castle_extent_hash_remove(c_ext_t *ext, void *unused)
     return 0;
 }
 
-static struct castle_extents_t * castle_extents_get_sb(void)
+static struct castle_extents_sb_t * castle_extents_get_sb(void)
 {
-    BUG_ON(castle_extents_sb_c2b == NULL);
-    write_lock_c2b(castle_extents_sb_c2b);
-    BUG_ON(!c2b_uptodate(castle_extents_sb_c2b));
+    mutex_lock(&castle_extents_mutex);
 
-    return ((struct castle_extents_t *) c2b_buffer(castle_extents_sb_c2b));
+    return &castle_extents_global_sb;
 }
 
 static void castle_extents_put_sb(int dirty)
 {
-    BUG_ON(castle_extents_sb_c2b == NULL);
-    if (dirty)
-        dirty_c2b(castle_extents_sb_c2b);
-    write_unlock_c2b(castle_extents_sb_c2b);
+    mutex_unlock(&castle_extents_mutex);
 }
 
 static void castle_extent_micro_maps_set(void)
@@ -262,7 +250,7 @@ static int castle_extent_hash_flush2disk(c_ext_t *ext, void *unused)
     /* Finish extent flush operation. */
     if (ext == NULL)
     {
-        struct castle_extents_t *castle_extents_sb = castle_extents_get_sb();
+        struct castle_extents_sb_t *castle_extents_sb = castle_extents_get_sb();
 
         if (c2b)
         {
@@ -323,6 +311,22 @@ static int castle_extent_print(c_ext_t *ext, void *unused)
     return 0;
 }
 
+int castle_extents_writeback(void)
+{
+    struct castle_fs_superblock *sblk;
+
+    sblk = castle_fs_superblocks_get();
+    mutex_lock(&castle_extents_mutex);
+
+    memcpy(&sblk->extents_sb, &castle_extents_global_sb,
+           sizeof(struct castle_extents_sb_t));
+
+    mutex_unlock(&castle_extents_mutex);
+    castle_fs_superblocks_put(sblk, 1);
+
+    return 0;
+}
+
 void __castle_extents_fini(void)
 {
     if (!extent_init_done)
@@ -333,8 +337,7 @@ void __castle_extents_fini(void)
     /* Note: Not safe to do this. Should be fine at end of the module. */
     __castle_extents_hash_iterate(castle_extent_hash_flush2disk, NULL);
     castle_extent_hash_flush2disk(NULL, NULL);
-    put_c2b(castle_extents_sb_c2b);
-    castle_extents_sb_c2b = NULL;
+    castle_extents_writeback();
 }
 
 void castle_extents_fini(void)
@@ -468,9 +471,9 @@ c_ext_id_t castle_extent_alloc(c_rda_type_t            rda_type,
                                da_id_t                 da_id,
                                c_chk_cnt_t             count)
 {
-    c_ext_t                 *ext = NULL;
-    c_rda_spec_t            *rda_spec = castle_rda_spec_get(rda_type);
-    struct castle_extents_t *castle_extents_sb = NULL;
+    c_ext_t                     *ext = NULL;
+    c_rda_spec_t                *rda_spec = castle_rda_spec_get(rda_type);
+    struct castle_extents_sb_t  *castle_extents_sb = NULL;
 
     BUG_ON(!extent_init_done);
 
@@ -535,7 +538,7 @@ __hell:
 void castle_extent_free(c_ext_id_t ext_id)
 {
     c_ext_t                     *ext;
-    struct castle_extents_t     *castle_extents_sb = NULL;
+    struct castle_extents_sb_t  *castle_extents_sb = NULL;
     int                          i, j;
     uint32_t                     req_space;
     c_disk_chk_t                *maps_buf = NULL;
@@ -562,7 +565,7 @@ void castle_extent_free(c_ext_id_t ext_id)
         BUG_ON(cep.offset >= (meta_ext.size * C_CHK_SIZE));
         c2b = castle_cache_block_get(cep, 1);
         write_lock_c2b(c2b);
-        BUG_ON(!c2b_uptodate(c2b));
+        if (!c2b_uptodate(c2b)) BUG_ON(submit_c2b_sync(READ, c2b));
         memcpy(((uint8_t *)maps_buf) + i,
                c2b_buffer(c2b),
                ((req_space - i) > C_BLK_SIZE)?C_BLK_SIZE:(req_space - i));
@@ -737,25 +740,21 @@ uint32_t castle_extent_map_get(c_ext_id_t             ext_id,
 }
 
 
-static int castle_extents_super_block_validate(struct castle_extents_t *castle_extents_sb)
+static void castle_extents_super_block_init(void)
 {
-    if (castle_extents_sb->magic1 != EXTENTS_MAGIC1 ||
-        castle_extents_sb->magic2 != EXTENTS_MAGIC2)
-    {
-        printk("Invalid Extent Super Block\n");
-        return 0;
-    }
-
-    return 1;
+    castle_extents_global_sb.ext_id_seq     = EXT_SEQ_START;
+    castle_extents_global_sb.nr_exts        = 0;
+    castle_extents_global_sb.next_free_byte = EXT_ST_SIZE * C_CHK_SIZE;
 }
 
-static void castle_extents_super_block_init(struct castle_extents_t *castle_extents_sb)
+static void castle_extents_super_block_load(void)
 {
-    castle_extents_sb->magic1         =   EXTENTS_MAGIC1;
-    castle_extents_sb->magic2         =   EXTENTS_MAGIC2;
-    castle_extents_sb->ext_id_seq     =   EXT_SEQ_START;
-    castle_extents_sb->nr_exts        =   0;
-    castle_extents_sb->next_free_byte = EXT_ST_SIZE * C_CHK_SIZE;
+    struct castle_fs_superblock *sblk;
+
+    sblk = castle_fs_superblocks_get();
+    memcpy(&castle_extents_global_sb, &sblk->extents_sb,
+           sizeof(struct castle_extents_sb_t));
+    castle_fs_superblocks_put(sblk, 0);
 }
 
 int castle_extents_load(int first)
@@ -764,7 +763,7 @@ int castle_extents_load(int first)
     c2_block_t *c2b;
     int i, j, pg;
     c_ext_pos_t cep;
-    struct castle_extents_t *castle_extents_sb = NULL;
+    struct castle_extents_sb_t *castle_extents_sb = NULL;
     uint32_t exts_per_pg;
     c_ext_t *extents = NULL;
     int ret = 0;
@@ -816,19 +815,14 @@ int castle_extents_load(int first)
     /* Read extents super block from first block of meta extent. */
     cep.ext_id = META_EXT_ID;
     cep.offset = 0;
-    castle_extents_sb_c2b = castle_cache_block_get(cep, 1);
-    write_lock_c2b(castle_extents_sb_c2b);
+
+    /* Initialize extent super block incase of fresh FS or invalid block. */
     if (first)
-        update_c2b(castle_extents_sb_c2b);
-    if (!c2b_uptodate(castle_extents_sb_c2b))
-        BUG_ON(submit_c2b_sync(READ, castle_extents_sb_c2b));
-    write_unlock_c2b(castle_extents_sb_c2b);
+        castle_extents_super_block_init();
+    else
+        castle_extents_super_block_load();
 
     castle_extents_sb = castle_extents_get_sb();
-    /* Initialize extent super block incase of fresh FS or invalid block. */
-    if (first || !castle_extents_super_block_validate(castle_extents_sb))
-        castle_extents_super_block_init(castle_extents_sb);
-
     /* Read extents meta data page by page from meta extent's page 2. */
     j  = 0;
     pg = 1;

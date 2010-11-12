@@ -36,7 +36,7 @@ uint32_t get_random_uuid()
 	return i;
 }
 
-void init_superblock(struct castle_slave_superblock *super)
+void init_superblock(struct castle_slave_superblock_public *super)
 {
 	super->magic1 = CASTLE_SLAVE_MAGIC1;
 	super->magic2 = CASTLE_SLAVE_MAGIC2;
@@ -49,10 +49,10 @@ void init_superblock(struct castle_slave_superblock *super)
 	super->size = -1;
 }
 
-int write_superblock(int fd, struct castle_slave_superblock *super)
+int write_superblock(int fd, struct castle_slave_superblock_public *super)
 {
 	const int max = 4096;
-	const int len = sizeof(struct castle_slave_superblock);
+	const int len = sizeof(struct castle_slave_superblock_public);
 
 	if(len > max) {
 		fprintf(stderr, "superblock too big to fit in disk block\n");
@@ -75,7 +75,7 @@ int main(int argc, char *argv[])
 	int rv, fd;
 	char *node;
 	struct stat st;
-	struct castle_slave_superblock super;
+	struct castle_slave_superblock_public super;
 
 	/* check args */
 	if(argc != 2) {
