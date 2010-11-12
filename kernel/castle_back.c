@@ -163,6 +163,7 @@ struct castle_back_stateful_op
     
     /* sum of size of all buffers queued up */
     uint64_t                            queued_size;
+    int                                 is_last;
     struct castle_back_op              *curr_op;
     struct work_struct                  work;
 
@@ -1768,11 +1769,13 @@ static void castle_back_big_put_expire(struct castle_back_stateful_op *stateful_
     castle_back_put_stateful_op(stateful_op->conn, stateful_op);
 }
 
+static void castle_back_put_chunk_contine(void *data);
+
 static void castle_back_big_put_continue(struct castle_object_replace *replace)
 {
     struct castle_back_stateful_op *stateful_op = 
         container_of(replace, struct castle_back_stateful_op, replace);
-    int replace_continue, is_last;
+    int replace_continue;
     
     spin_lock(&stateful_op->lock);
     
@@ -1790,13 +1793,16 @@ static void castle_back_big_put_continue(struct castle_object_replace *replace)
     }
 
     replace_continue = castle_back_stateful_op_prod(stateful_op);
-    is_last = stateful_op->queued_size == stateful_op->replace.value_len
+    stateful_op->is_last = stateful_op->queued_size == stateful_op->replace.value_len
         && list_empty(&stateful_op->op_queue);
     
     spin_unlock(&stateful_op->lock);
     
     if (replace_continue)
-        castle_object_replace_continue(&stateful_op->replace, is_last);
+    {
+        INIT_WORK(&stateful_op->work, castle_back_put_chunk_contine, stateful_op);
+        queue_work_on(stateful_op->cpu, castle_back_wq, &stateful_op->work);
+    }
 }
 
 static void castle_back_big_put_complete(struct castle_object_replace *replace, int err)
@@ -1952,7 +1958,7 @@ static void castle_back_put_chunk(void *data)
     struct castle_back_op *op = data;
     struct castle_back_conn *conn = op->conn;
     struct castle_back_stateful_op *stateful_op;
-    int replace_continue, is_last, err;
+    int replace_continue, err;
 
     stateful_op = castle_back_find_stateful_op(conn,
             op->req.put_chunk.token, CASTLE_RING_BIG_PUT);
@@ -2002,14 +2008,16 @@ static void castle_back_put_chunk(void *data)
     list_add_tail(&op->list, &stateful_op->op_queue);
     
     replace_continue = castle_back_stateful_op_prod(stateful_op);
-    is_last = stateful_op->queued_size == stateful_op->replace.value_len
+    stateful_op->is_last = stateful_op->queued_size == stateful_op->replace.value_len
         && list_empty(&stateful_op->op_queue);
 
     spin_unlock(&stateful_op->lock);
     
-    // TODO: BEWARE DEEP RECURSION
     if (replace_continue)
-        castle_object_replace_continue(&stateful_op->replace, is_last);
+    {
+        INIT_WORK(&stateful_op->work, castle_back_put_chunk_contine, stateful_op);
+        queue_work_on(stateful_op->cpu, castle_back_wq, &stateful_op->work);
+    }
 
     return;
        
@@ -2019,6 +2027,13 @@ err1:
     stateful_op->expire = castle_back_big_put_expire;
     stateful_op->last_used_jiffies = jiffies;
 err0: castle_back_reply(op, err, 0, 0);
+}
+
+static void castle_back_put_chunk_contine(void *data)
+{
+    struct castle_back_stateful_op *stateful_op = data;
+
+    castle_object_replace_continue(&stateful_op->replace, stateful_op->is_last);
 }
 
 /*
@@ -2042,8 +2057,9 @@ static void castle_back_big_get_expire(struct castle_back_stateful_op *stateful_
     castle_back_put_stateful_op(stateful_op->conn, stateful_op);
 }
 
-static void castle_back_big_get_do_chunk(struct castle_back_stateful_op *stateful_op)
+static void castle_back_big_get_do_chunk(void *data)
 {
+    struct castle_back_stateful_op *stateful_op = data;
     struct castle_back_op *op = stateful_op->curr_op;
     
     BUG_ON(stateful_op->tag != CASTLE_RING_BIG_GET);
@@ -2096,9 +2112,11 @@ static void castle_back_big_get_continue(struct castle_object_pull *pull,
     get_continue = castle_back_stateful_op_prod(stateful_op);
     spin_unlock(&stateful_op->lock);
 
-    // TODO: BEWARE DEEP RECURSION
     if (get_continue)
-        castle_back_big_get_do_chunk(stateful_op);
+    {
+        INIT_WORK(&stateful_op->work, castle_back_big_get_do_chunk, stateful_op);
+        queue_work_on(stateful_op->cpu, castle_back_wq, &stateful_op->work);
+    }
 }
 
 static void castle_back_big_get(void *data)
@@ -2224,7 +2242,10 @@ static void castle_back_get_chunk(void *data)
     spin_unlock(&stateful_op->lock);
 
     if (get_continue)
-        castle_back_big_get_do_chunk(stateful_op);
+    {
+        INIT_WORK(&stateful_op->work, castle_back_big_get_do_chunk, stateful_op);
+        queue_work_on(stateful_op->cpu, castle_back_wq, &stateful_op->work);
+    }
 
     return;
 

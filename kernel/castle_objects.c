@@ -1266,7 +1266,6 @@ void __castle_object_get_complete(struct work_struct *work)
     cep.ext_id = c2b->cep.ext_id;
     cep.offset = c2b->cep.offset + (OBJ_IO_MAX_BUFFER_SIZE * C_BLK_SIZE);
     debug("Continuing for cep="cep_fmt_str_nl, cep2str(cep));   
-    /* TODO: Work out if we don't go into unbound recursion here */
     
     /* TODO: how much of this is a no-op from above? */
     get->data_c2b        = c2b;
@@ -1369,7 +1368,8 @@ void castle_object_get_continue(struct castle_bio_vec *c_bvec,
         BUG_ON(submit_c2b(READ, c2b));
     } else
     {
-        __castle_object_get_complete(&c_bvec->work);
+        CASTLE_INIT_WORK(&c_bvec->work, __castle_object_get_complete);
+        queue_work(castle_wq, &c_bvec->work);
     }
 }
 
