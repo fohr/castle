@@ -1046,7 +1046,7 @@ struct castle_object_pull {
     struct castle_cache_block  *curr_c2b;
     
     void                       *buf;
-    uint32_t                    buf_len;
+    uint32_t                    to_copy;
     
     struct work_struct          work;
     
