@@ -2585,9 +2585,22 @@ static struct castle_component_tree* castle_da_ct_next(struct castle_component_t
     debug_verbose("Asked for component tree after %d\n", ct->seq);
     BUG_ON(!da);
     castle_da_lock(da);
-    for(level = ct->level, ct_list = &ct->da_list; 
-        level < MAX_DA_LEVEL; 
-        level++, ct_list = &da->trees[level])
+    /* Start from the current list, from wherever the current ct is in the da_list. */
+    level = ct->level;
+    ct_list = &ct->da_list;
+    /* CT may have got removed from the DA (da_list is NULL-ified then).
+       We can then safely move on to the next level, because merge always 
+       removes two _oldest_ trees. So there are no trees in the current level
+       for us to inspect. */
+    if(ct_list->next == NULL)
+    {
+        BUG_ON(ct_list->prev != NULL);
+        /* Advance to the next level. */
+        level++;
+        ct_list = &da->trees[level];
+    }
+    /* Loop through all levels trying to find a tree. */
+    while(level < MAX_DA_LEVEL)
     {
         if(!list_is_last(ct_list, &da->trees[level]))
         {
@@ -2598,6 +2611,9 @@ static struct castle_component_tree* castle_da_ct_next(struct castle_component_t
 
             return next_ct;
         }
+        /* Advance to the next level. */
+        level++;
+        ct_list = &da->trees[level];
     }     
     castle_da_unlock(da);
 
