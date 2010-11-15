@@ -545,9 +545,9 @@ static void castle_ct_modlist_iter_free(c_modlist_iter_t *iter)
     if(iter->enumerator)
         castle_free(iter->enumerator);
     if(iter->node_buffer)
-        vfree(iter->node_buffer);
+        castle_vfree(iter->node_buffer);
     if(iter->sort_idx)
-        vfree(iter->sort_idx);
+        castle_vfree(iter->sort_idx);
 }
 
 static int castle_ct_modlist_iter_has_next(c_modlist_iter_t *iter)
@@ -577,8 +577,8 @@ static void castle_ct_modlist_iter_init(c_modlist_iter_t *iter)
     /* Allocate slighly more than number of nodes in the tree, to make sure everything
        fits, even if we unlucky, and waste parts of the node in each node */
     iter->nr_nodes = 1.1 * (atomic64_read(&ct->node_count) + 1);
-    iter->node_buffer = vmalloc(iter->nr_nodes * iter->btree->node_size * C_BLK_SIZE);
-    iter->sort_idx = vmalloc(atomic64_read(&ct->item_count) * sizeof(struct item_idx));
+    iter->node_buffer = castle_vmalloc(iter->nr_nodes * iter->btree->node_size * C_BLK_SIZE);
+    iter->sort_idx = castle_vmalloc(atomic64_read(&ct->item_count) * sizeof(struct item_idx));
     if(!iter->enumerator || !iter->node_buffer || !iter->sort_idx)
     {
         castle_ct_modlist_iter_free(iter);       
@@ -1803,7 +1803,7 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
             put_c2b(c2b);
         }
         if(merge->levels[i].buffer)
-            vfree(merge->levels[i].buffer);
+            castle_vfree(merge->levels[i].buffer);
     }
     castle_da_iterator_destroy(merge->in_tree1, merge->iter1);
     castle_da_iterator_destroy(merge->in_tree2, merge->iter2);
@@ -1921,7 +1921,7 @@ static void castle_da_merge_schedule(struct castle_double_array *da,
     merge->budget_cons_units = 0; 
     for(i=0; i<MAX_BTREE_DEPTH; i++)
     {
-        merge->levels[i].buffer        = vmalloc(btree->node_size * C_BLK_SIZE);
+        merge->levels[i].buffer        = castle_vmalloc(btree->node_size * C_BLK_SIZE);
         if(!merge->levels[i].buffer)
             goto error_out;
         castle_da_node_buffer_init(btree, merge->levels[i].buffer);

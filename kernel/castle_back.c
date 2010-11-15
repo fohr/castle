@@ -355,7 +355,7 @@ static void castle_back_buffer_put(struct castle_back_conn *conn,
     debug("Freeing buffer %lx\n", buf->user_addr);
     
     UnReservePages(buf->buffer, buf->size);
-    vfree(buf->buffer);
+    castle_vfree(buf->buffer);
     castle_free(buf);
 }
 
@@ -2558,7 +2558,7 @@ int castle_back_open(struct inode *inode, struct file *file)
     spin_lock_init(&conn->buffers_lock);
     conn->buffers_rb = RB_ROOT;
 
-    sring = (castle_sring_t *)vmalloc(CASTLE_RING_SIZE);
+    sring = (castle_sring_t *)castle_vmalloc(CASTLE_RING_SIZE);
     if (conn == NULL)
     {
         error("castle_back: failed to vmalloc shared ring\n");
@@ -2572,7 +2572,7 @@ int castle_back_open(struct inode *inode, struct file *file)
     BACK_RING_INIT(&conn->back_ring, sring, CASTLE_RING_SIZE);
 
     /* init the ops pool */
-    conn->ops = vmalloc(sizeof(struct castle_back_op) * RING_SIZE(&conn->back_ring));
+    conn->ops = castle_vmalloc(sizeof(struct castle_back_op) * RING_SIZE(&conn->back_ring));
     if (conn->ops == NULL)
     {
         error("castle_back: failed to vmalloc mirror buffer for ops\n");
@@ -2589,7 +2589,7 @@ int castle_back_open(struct inode *inode, struct file *file)
     }
 
     /* init the stateful ops pool */
-    conn->stateful_ops = vmalloc(sizeof(struct castle_back_stateful_op) * MAX_STATEFUL_OPS);
+    conn->stateful_ops = castle_vmalloc(sizeof(struct castle_back_stateful_op) * MAX_STATEFUL_OPS);
     if (conn->stateful_ops == NULL)
     {
         error("castle_back: failed to vmalloc buffer for stateful_ops\n");
@@ -2630,10 +2630,10 @@ int castle_back_open(struct inode *inode, struct file *file)
     return 0;
 
 err4:
-    vfree(conn->stateful_ops);
+    castle_vfree(conn->stateful_ops);
 err3:
     UnReservePages(conn->back_ring.sring, CASTLE_RING_SIZE);
-    vfree(conn->back_ring.sring);
+    castle_vfree(conn->back_ring.sring);
 err2:
     castle_free(conn);
 err1:
@@ -2663,9 +2663,9 @@ static void castle_back_cleanup_conn(void *data)
     debug("castle_back_cleanup_conn for conn = %p cleaned up and freeing\n", data);
 
     UnReservePages(conn->back_ring.sring, CASTLE_RING_SIZE);
-    vfree(conn->back_ring.sring);
-    vfree(conn->ops);
-    vfree(conn->stateful_ops);
+    castle_vfree(conn->back_ring.sring);
+    castle_vfree(conn->ops);
+    castle_vfree(conn->stateful_ops);
 
     /*
      * We don't clean up buffers (buffer_put does that),
@@ -2760,7 +2760,7 @@ static int castle_buffer_map(struct castle_back_conn *conn, struct vm_area_struc
     buffer->user_addr = vma->vm_start;
     buffer->size = size;
     buffer->ref_count = 1;
-    buffer->buffer = vmalloc(size);
+    buffer->buffer = castle_vmalloc(size);
     if (!buffer->buffer)
     {
         error("castle_back: failed to alloc memory for buffer\n");
@@ -2805,7 +2805,7 @@ static int castle_buffer_map(struct castle_back_conn *conn, struct vm_area_struc
 err4:
     UnReservePages(buffer->buffer, buffer->size);
 err3:
-    vfree(buffer->buffer);
+    castle_vfree(buffer->buffer);
 err2:
     castle_free(buffer);
 err1:

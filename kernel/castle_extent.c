@@ -375,7 +375,7 @@ int castle_extent_space_alloc(c_ext_t *ext, da_id_t da_id)
     }
 
     req_space = (sizeof(c_disk_chk_t) * count * rda_spec->k_factor);
-    maps_buf = vmalloc(req_space);
+    maps_buf = castle_vmalloc(req_space);
     BUG_ON(!maps_buf);
 
     for (i=0; i<count; i++)
@@ -384,6 +384,7 @@ int castle_extent_space_alloc(c_ext_t *ext, da_id_t da_id)
         if (rda_spec->next_slave_get(slaves, state, i, ext->type) < 0)
         {
             printk("Failed to get next slave for extent: %llu\n", ext->ext_id);
+            castle_vfree(maps_buf);
             return -1;
         }
 
@@ -425,7 +426,7 @@ int castle_extent_space_alloc(c_ext_t *ext, da_id_t da_id)
                     i--;
                     /* TODO: Free the space allocated back to disks. */
                     rda_spec->extent_fini(ext->ext_id, state);
-                    vfree(maps_buf);
+                    castle_vfree(maps_buf);
                     low_disk_space = 1;
                     return -1;
                 }
@@ -462,7 +463,7 @@ int castle_extent_space_alloc(c_ext_t *ext, da_id_t da_id)
         put_c2b(c2b);
         cep.offset += C_BLK_SIZE;
     }
-    vfree(maps_buf);
+    castle_vfree(maps_buf);
 
     return 0;
 }
@@ -557,7 +558,7 @@ void castle_extent_free(c_ext_id_t ext_id)
     castle_extents_rhash_remove(ext);
     printk("Removed extent %llu from hash\n", ext_id);
     req_space = (sizeof(c_disk_chk_t) * ext->size * ext->k_factor);
-    maps_buf = vmalloc(req_space);
+    maps_buf = castle_vmalloc(req_space);
     BUG_ON(!maps_buf);
     cep = ext->maps_cep;
     for (i=0; i < req_space; i += C_BLK_SIZE)
@@ -636,6 +637,7 @@ void castle_extent_free(c_ext_id_t ext_id)
     castle_extents_put_sb(1);
 
     castle_free(ext);
+    castle_vfree(maps_buf);
 }
 
 uint32_t castle_extent_kfactor_get(c_ext_id_t ext_id)
