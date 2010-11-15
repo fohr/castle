@@ -499,7 +499,7 @@ static void castle_back_put_stateful_op(struct castle_back_conn *conn,
 }
 
 #define STATEFUL_OP_TIMEOUT_CHECK_INTERVAL 1 * HZ
-#define STATEFUL_OP_TIMEOUT 10 * HZ
+#define STATEFUL_OP_TIMEOUT 60 * HZ
 
 static void castle_back_stateful_op_timeout_check(unsigned long data);
 
@@ -570,6 +570,7 @@ static void castle_back_stateful_op_expire(struct work_struct *work)
     /* check it hasn't been used since expire was queued up */
     if (jiffies - stateful_op->last_used_jiffies > STATEFUL_OP_TIMEOUT)
     {
+        printk("Stateful operation with token 0x%x has expired.\n", stateful_op->token);
         /* drops the lock */
         stateful_op->expire(stateful_op);
     }
@@ -604,7 +605,10 @@ static int castle_back_stateful_op_prod(struct castle_back_stateful_op *stateful
     BUG_ON(!spin_is_locked(&stateful_op->lock));
 
     if (stateful_op->curr_op != NULL)
+    {
+        stateful_op->expire = NULL;
         return 0;
+    }
 
     if (list_empty(&stateful_op->op_queue))
         return 0;
