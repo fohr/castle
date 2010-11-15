@@ -50,23 +50,15 @@ function unmount_kernel_fs {
     fi
 }
 
-function devid_of_disk {
-    local disk="$1"
-    major=$(stat -c '%t' "$disk")
-    minor=$(stat -c '%T' "$disk")
-    devid=$(( (0x$minor & 0xFF) | ( (0x$minor & 0xFFF00) << 12 ) | (0x$major << 8) ))
-    printf '0x%x' "$devid"
-}
-
 function load_fs_and_claim {
-    declare -a devids=() loops=()
+    declare -a devs=() loops=()
 
     for disk in "$@"
     do
       if [ -e "$disk" ] && [ -b "$disk" ]
           then
           # Block special
-          devids=("${devids[@]}" $(devid_of_disk "$disk"))
+          devs=("${devs[@]}" "$disk")
           continue
       fi
 
@@ -96,13 +88,13 @@ function load_fs_and_claim {
     do
       loop=$(losetup -f)
       losetup "$loop" "$disk"
-      devids=("${devids[@]}" $(devid_of_disk "$loop"))
+      devs=("${devs[@]}" "$loop")
     done
 
     init_kernel_fs
 
-    for devid in "${devids[@]}"
+    for dev in "${devs[@]}"
     do
-      castle-cli claim "$devid" > /dev/null
+      castle-cli claim_dev "$dev" > /dev/null
     done
 }
