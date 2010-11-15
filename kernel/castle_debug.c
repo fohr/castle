@@ -15,6 +15,7 @@ struct castle_malloc_debug {
     struct list_head list;
     uint32_t size;
     char *file;
+    int vmalloced;
     int line;
     int already_freed;
 };
@@ -29,6 +30,25 @@ static cd_watch_t           watches[] = {{0x41, 0x3}};
 static int                  nr_watches = 0;
 static struct page        **watched_data;
 
+static void __castle_debug_dobj_add(struct castle_malloc_debug *dobj, 
+                                    size_t size, 
+                                    char *file, 
+                                    int line,
+                                    int vmalloced) 
+{
+    /* Init all fields */
+    INIT_LIST_HEAD(&dobj->list);
+    dobj->file = file;
+    dobj->line = line;
+    dobj->size = size;
+    dobj->already_freed = 0;
+    dobj->vmalloced = vmalloced;
+
+    /* Add ourselves to the list under lock */
+    spin_lock_irq(&malloc_list_spinlock);
+    list_add(&dobj->list, &malloc_list);
+    spin_unlock_irq(&malloc_list_spinlock);
+}
 
 void* castle_debug_malloc(size_t size, gfp_t flags, char *file, int line)
 {
@@ -41,21 +61,11 @@ void* castle_debug_malloc(size_t size, gfp_t flags, char *file, int line)
     dobj = kmalloc(size, flags); 
     if(!dobj)
         return NULL;
-    /* Init all fields */
-    INIT_LIST_HEAD(&dobj->list);
-    dobj->file = file;
-    dobj->line = line;
-    dobj->size = size;
-    dobj->already_freed = 0;
-
-    /* Add ourselves to the list under lock */
-    spin_lock_irq(&malloc_list_spinlock);
-    list_add(&dobj->list, &malloc_list);
-    spin_unlock_irq(&malloc_list_spinlock);
+    /* Init and add the object to the list. */
+    __castle_debug_dobj_add(dobj, size, file, line, 0);
 
     return (char *)dobj + sizeof(struct castle_malloc_debug); 
 }
-
 EXPORT_SYMBOL(castle_debug_malloc);
 
 void* castle_debug_zalloc(size_t size, gfp_t flags, char *file, int line)
@@ -68,7 +78,6 @@ void* castle_debug_zalloc(size_t size, gfp_t flags, char *file, int line)
 
     return obj; 
 }
-
 EXPORT_SYMBOL(castle_debug_zalloc);
 
 void castle_debug_free(void *obj)
@@ -78,6 +87,7 @@ void castle_debug_free(void *obj)
 
     dobj = obj;
     dobj--;
+
     /* Remove from list */
     spin_lock_irqsave(&malloc_list_spinlock, flags);
     list_del(&dobj->list);
@@ -86,11 +96,59 @@ void castle_debug_free(void *obj)
     if(dobj->already_freed)
         printk("Double free for object allocated from %s:%d.\n",
                 dobj->file, dobj->line);
+    if(dobj->vmalloced)
+    {
+        printk("Trying to kfree() vmalloced object.\n");
+        BUG();
+    }
     dobj->already_freed = 1;
     kfree(dobj);
 }
-
 EXPORT_SYMBOL(castle_debug_free);
+
+void* castle_debug_vmalloc(unsigned long size, char *file, int line)
+{
+    struct castle_malloc_debug *dobj;
+
+    BUG_ON(in_atomic());
+
+    size += PAGE_SIZE;
+    /* Alloc the object */
+    dobj = vmalloc(size); 
+    if(!dobj)
+        return NULL;
+
+    /* Init and add the object to the list. */
+    __castle_debug_dobj_add(dobj, size, file, line, 1);
+
+    return (char *)dobj + PAGE_SIZE; 
+}
+EXPORT_SYMBOL(castle_debug_vmalloc);
+
+void castle_debug_vfree(void *obj)
+{
+    struct castle_malloc_debug *dobj;
+    unsigned long flags;
+
+    dobj = (struct castle_malloc_debug *)((char *)obj - PAGE_SIZE);
+
+    /* Remove from list */
+    spin_lock_irqsave(&malloc_list_spinlock, flags);
+    list_del(&dobj->list);
+    spin_unlock_irqrestore(&malloc_list_spinlock, flags);
+
+    if(dobj->already_freed)
+        printk("Double free for object allocated from %s:%d.\n",
+                dobj->file, dobj->line);
+    if(!dobj->vmalloced)
+    {
+        printk("Trying to vfree() kmalloced object.\n");
+        BUG();
+    }
+    dobj->already_freed = 1;
+    vfree(dobj);
+}
+EXPORT_SYMBOL(castle_debug_vfree);
 
 static void castle_debug_malloc_fini(void)
 {
@@ -102,8 +160,11 @@ static void castle_debug_malloc_fini(void)
     list_for_each(l, &malloc_list)
     {
         dobj = list_entry(l, struct castle_malloc_debug, list);
-        printk("kmalloc/kzalloc of %u bytes from %s:%d hasn't been deallocated.\n",
-                dobj->size, dobj->file, dobj->line);
+        printk("%s of %u bytes from %s:%d hasn't been deallocated.\n",
+                dobj->vmalloced ? "vmalloc" : "kmalloc/kzalloc",
+                dobj->size, 
+                dobj->file, 
+                dobj->line);
         sum += dobj->size;
         i++;
     }

@@ -2422,9 +2422,9 @@ static void castle_cache_hashes_fini(void)
     if(!castle_cache_block_hash || !castle_cache_page_hash) 
     {
         if(castle_cache_block_hash)
-            vfree(castle_cache_block_hash);
+            castle_vfree(castle_cache_block_hash);
         if(castle_cache_page_hash)
-            vfree(castle_cache_page_hash);
+            castle_vfree(castle_cache_page_hash);
         return;
     }
 
@@ -2555,9 +2555,9 @@ static void castle_cache_freelists_fini(void)
     if(!castle_cache_blks || !castle_cache_pgs)
     {
         if(castle_cache_blks)
-            vfree(castle_cache_blks);
+            castle_vfree(castle_cache_blks);
         if(castle_cache_pgs)
-            vfree(castle_cache_pgs);
+            castle_vfree(castle_cache_pgs);
         return;
     }
 
@@ -2576,7 +2576,7 @@ static void castle_cache_freelists_fini(void)
         c2b = list_entry(l, c2_block_t, free);
         BUG_ON(c2b->c2ps != NULL);
     }
-#endif    
+#endif
 }
 
 static int castle_cache_fast_vmap_init(void)
@@ -2592,15 +2592,17 @@ static int castle_cache_fast_vmap_init(void)
                                         castle_btree_type_get(RW_VLBA_TREE_TYPE)->node_size);
     /* We need cache_castle_size / 512 for this array, if that's too big, we
        could use the cache pages themselves */
-    pgs_array = vmalloc(PAGES_PER_C2P * castle_cache_page_freelist_size * sizeof(struct page *));
+    pgs_array = castle_vmalloc(PAGES_PER_C2P * 
+                               castle_cache_page_freelist_size * 
+                               sizeof(struct page *));
     if(!pgs_array)
         return -ENOMEM;
 
     nr_fast_vmap_slots = castle_cache_page_freelist_size / castle_cache_fast_vmap_c2bs;
-    castle_cache_fast_vmap_freelist = vmalloc((nr_fast_vmap_slots + 1) * sizeof(uint32_t)); 
+    castle_cache_fast_vmap_freelist = castle_vmalloc((nr_fast_vmap_slots + 1) * sizeof(uint32_t)); 
     if(!castle_cache_fast_vmap_freelist)
     {
-        vfree(pgs_array);
+        castle_vfree(pgs_array);
         return -ENOMEM;
     }
     memset(castle_cache_fast_vmap_freelist, 0xFA, (nr_fast_vmap_slots + 1) * sizeof(uint32_t));
@@ -2635,6 +2637,9 @@ static int castle_cache_fast_vmap_init(void)
     for(i=0; i<nr_fast_vmap_slots; i++)
         castle_cache_fast_vmap_freelist_add(i);
 
+    /* Free the page array. */
+    castle_vfree(pgs_array);
+
     return 0;
 }
 
@@ -2650,17 +2655,18 @@ static void castle_cache_fast_vmap_fini(void)
      */ 
 #ifdef CASTLE_DEBUG
 {
-   int nr_slots = castle_cache_size / (PAGES_PER_C2P * castle_cache_fast_vmap_c2bs);
-   int i = 0;
-   while(castle_cache_fast_vmap_freelist[0] < nr_slots)
-   {
-       castle_cache_fast_vmap_freelist_get();
-       i++;
-   }
-   BUG_ON(i != nr_slots);
+    int nr_slots = castle_cache_size / (PAGES_PER_C2P * castle_cache_fast_vmap_c2bs);
+    int i = 0;
+    while(castle_cache_fast_vmap_freelist[0] < nr_slots)
+    {
+        castle_cache_fast_vmap_freelist_get();
+        i++;
+    }
+    BUG_ON(i != nr_slots);
 }
 #endif 
-   vunmap(castle_cache_fast_vmap_vstart);
+    vunmap(castle_cache_fast_vmap_vstart);
+    castle_vfree(castle_cache_fast_vmap_freelist); 
 }
 
 /**********************************************************************************************
@@ -3161,10 +3167,14 @@ int castle_cache_init(void)
     castle_cache_block_freelist_size = castle_cache_page_freelist_size;
     castle_cache_block_hash_buckets  = castle_cache_block_freelist_size / 2; 
     /* Allocate memory for c2bs, c2ps and hash tables */
-    castle_cache_page_hash  = vmalloc(castle_cache_page_hash_buckets  * sizeof(struct hlist_head));
-    castle_cache_block_hash = vmalloc(castle_cache_block_hash_buckets * sizeof(struct hlist_head));
-    castle_cache_blks       = vmalloc(castle_cache_block_freelist_size * sizeof(c2_block_t));
-    castle_cache_pgs        = vmalloc(castle_cache_page_freelist_size  * sizeof(c2_page_t));
+    castle_cache_page_hash  = castle_vmalloc(castle_cache_page_hash_buckets  * 
+                                             sizeof(struct hlist_head));
+    castle_cache_block_hash = castle_vmalloc(castle_cache_block_hash_buckets * 
+                                             sizeof(struct hlist_head));
+    castle_cache_blks       = castle_vmalloc(castle_cache_block_freelist_size * 
+                                             sizeof(c2_block_t));
+    castle_cache_pgs        = castle_vmalloc(castle_cache_page_freelist_size  * 
+                                             sizeof(c2_page_t));
     /* Init other variables */
     castle_cache_fast_vmap_freelist = NULL;
     castle_cache_fast_vmap_vstart   = NULL;
@@ -3197,8 +3207,9 @@ void castle_cache_fini(void)
 
     if(castle_cache_stats_timer_interval) del_timer(&castle_cache_stats_timer);
 
-    if(castle_cache_page_hash)  vfree(castle_cache_page_hash);
-    if(castle_cache_block_hash) vfree(castle_cache_block_hash);
-    if(castle_cache_blks)       vfree(castle_cache_blks);
+    if(castle_cache_page_hash)  castle_vfree(castle_cache_page_hash);
+    if(castle_cache_block_hash) castle_vfree(castle_cache_block_hash);
+    if(castle_cache_blks)       castle_vfree(castle_cache_blks);
+    if(castle_cache_pgs)        castle_vfree(castle_cache_pgs);
 }
 
