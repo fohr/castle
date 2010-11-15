@@ -2495,11 +2495,8 @@ static void _castle_btree_find(struct work_struct *work)
     __castle_btree_find(btree, c_bvec, root_cep, btree->max_key);
 }
 
-int first_time = 1;
 void castle_btree_find(c_bvec_t *c_bvec)
 {
-    if(c_bvec->tree->btree_type == RO_VLBA_TREE_TYPE)
-        printk("Btree find for RO tree.\n\n\n\n\n\n\n");
     c_bvec->parent_key = NULL;
     clear_bit(CBV_DOING_SPLITS, &c_bvec->flags);
     CASTLE_INIT_WORK(&c_bvec->work, _castle_btree_find);
