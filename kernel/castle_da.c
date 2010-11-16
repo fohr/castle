@@ -1194,7 +1194,7 @@ static void castle_da_queue_restart(struct work_struct *work)
 
     castle_da_lock(da);
     /* Throttle writes to 10000s. */
-    da->ios_budget += 10000/REPLENISH_REQUENCY;
+    da->ios_budget += 10000/REPLENISH_FREQUENCY;
     castle_da_unlock(da);
 
     castle_da_queue_kick(da);
