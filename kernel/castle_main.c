@@ -45,8 +45,8 @@ struct castle_component_tree castle_global_tree = {.seq             = GLOBAL_TRE
                                                    .da_list         = {NULL, NULL},
                                                    .hash_list       = {NULL, NULL},
                                                    .mstore_key      = INVAL_MSTORE_KEY,
-                                                   .tree_ext_fs     = {INVAL_EXT_ID, (1024 * C_CHK_SIZE), 0, {0ULL}, {0ULL}},
-                                                   .data_ext_fs     = {INVAL_EXT_ID, (20480ULL * C_CHK_SIZE), 0, {0ULL}, {0ULL}},
+                                                   .tree_ext_fs     = {INVAL_EXT_ID, (100 * C_CHK_SIZE), 0, {0ULL}, {0ULL}},
+                                                   .data_ext_fs     = {INVAL_EXT_ID, (512ULL * C_CHK_SIZE), 0, {0ULL}, {0ULL}},
                                                   }; 
 struct workqueue_struct     *castle_wqs[2*MAX_BTREE_DEPTH+1];
 int                          castle_fs_inited = 0;
