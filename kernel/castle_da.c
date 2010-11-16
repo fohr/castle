@@ -78,9 +78,11 @@ struct castle_double_array {
     /* Queue of write IOs queued up on this DA. */
     struct list_head   ios_waiting;
     int                ios_waiting_cnt;
-    int                ios_budget;
+    uint32_t           ios_budget;
+    uint32_t           ios_rate;
     struct work_struct queue_restart;
     /* Merge throttling. DISABLED ATM. */
+    
     atomic_t           epoch_ios;
     atomic_t           merge_budget;
     wait_queue_head_t  merge_budget_wq;
@@ -1158,7 +1160,7 @@ static void castle_da_merge_budget_consume(struct castle_da_merge *merge)
     }
 }
 
-#define REPLENISH_FREQUENCY (10) /* Replenish budgets every 100ms. */
+#define REPLENISH_FREQUENCY (10)        /* Replenish budgets every 100ms. */
 static int castle_da_merge_budget_replenish(struct castle_double_array *da, void *unused)
 {
 #define MAX_IOS             (1000) /* Arbitrary constants */
@@ -1193,8 +1195,7 @@ static void castle_da_queue_restart(struct work_struct *work)
     struct castle_double_array *da = container_of(work, struct castle_double_array, queue_restart);
 
     castle_da_lock(da);
-    /* Throttle writes to 10000s. */
-    da->ios_budget += 10000/REPLENISH_FREQUENCY;
+    da->ios_budget = da->ios_rate;
     castle_da_unlock(da);
 
     castle_da_queue_kick(da);
@@ -2011,19 +2012,17 @@ static void castle_da_merge_check(struct castle_double_array *da)
 {
     struct castle_component_tree *ct1, *ct2;
     struct list_head *l;
-    int level;
+    int level, merge_measure, merge_measure_threashold, nr_trees;
 
     debug("Checking if to do a merge for da: %d\n", da->id);
-    /* Return early if we are already doing a merge. */
-    if(castle_da_merging(da) || castle_da_exiting || 
-                        test_bit(DOUBLE_ARRAY_DESTROY_BIT, &da->flags))
-        return;
-
     /* Go through all the levels >= 1, and check if there is more than one tree 
        there. Schedule the merge if so */
+    ct1 = ct2 = NULL;
+    merge_measure = 0;
+    merge_measure_threashold = 0;
     for(level=1; level<MAX_DA_LEVEL; level++)
     {
-        ct1 = ct2 = NULL;
+        nr_trees = 0;
         list_for_each_prev(l, &da->trees[level])
         {
             if(!ct2)
@@ -2031,21 +2030,52 @@ static void castle_da_merge_check(struct castle_double_array *da)
             else
             if(!ct1)
                 ct1 = list_entry(l, struct castle_component_tree, da_list);
-            if(ct1 && ct2)
-            {
-                printk("Found two trees for merge: ct1=%d, ct2=%d.\n",
-                    ct1->seq, ct2->seq);
-                /* Schedule the merge, but make sure the lock is not held then
-                   (merge_schedule() calls a bunch of sleeping functions). Set merge flag
-                   beforehand, which will stop further merges in this da being scheduled.
-                 */
-                castle_da_merging_set(da);
-                castle_da_unlock(da);
-                castle_da_merge_schedule(da, ct1, ct2);
-                castle_da_lock(da);
-                return;
-            }
+            nr_trees++;
         }
+        /* If we haven't found two CTs in the list, reset them to NULL back again. */
+        if(!(ct1 && ct2))
+            ct1 = ct2 = NULL;
+        /* Merge measure for the level (non-zero iff there is at least one outstanding merge). */
+        if(nr_trees > 1)
+            merge_measure        += level * nr_trees * nr_trees;
+        /* We stop when there is an outstanding merge at each level. */
+        merge_measure_threashold += level * 4; 
+    }
+    /* Set the write throughput allowed on the DA. */
+    if(merge_measure == 0)
+    {
+        /* Effectively no limit. */
+        da->ios_rate = (uint32_t)-1;   
+    } 
+    else
+    if(merge_measure < merge_measure_threashold)
+    {
+        /* Constant of 50000 was chosen to give 1M ios rate for a single 
+           outstanding level 1 merge. */
+        da->ios_rate = 50000 * (merge_measure_threashold / merge_measure - 1) / REPLENISH_FREQUENCY;
+    }
+    else
+        da->ios_rate = 0;
+    debug("Setting rate to %u\n", da->ios_rate);
+
+    /* Do not schedule the merge (even if we found CTs), if we are already merging, 
+       the FS is exiting, or we want to destroy this DA. */ 
+    if(castle_da_merging(da) || castle_da_exiting || test_bit(DOUBLE_ARRAY_DESTROY_BIT, &da->flags))
+        return;
+
+    /* Schedule merge. */
+    if(ct1 && ct2)
+    {
+        printk("Found two trees for merge: ct1=%d, ct2=%d.\n",
+            ct1->seq, ct2->seq);
+        /* Schedule the merge, but make sure the lock is not held then
+           (merge_schedule() calls a bunch of sleeping functions). Set merge flag
+           beforehand, which will stop further merges in this da being scheduled.
+         */
+        castle_da_merging_set(da);
+        castle_da_unlock(da);
+        castle_da_merge_schedule(da, ct1, ct2);
+        castle_da_lock(da);
     }
 }
 
@@ -2096,6 +2126,7 @@ static struct castle_double_array* castle_da_alloc(void)
     INIT_LIST_HEAD(&da->ios_waiting);
     da->ios_waiting_cnt = 0;
     da->ios_budget      = 0;
+    da->ios_rate        = 0;
     CASTLE_INIT_WORK(&da->queue_restart, castle_da_queue_restart);
     atomic_set(&da->epoch_ios, 0);
     atomic_set(&da->merge_budget, 0);
@@ -2212,6 +2243,15 @@ static int castle_da_trees_sort(struct castle_double_array *da, void *unused)
     castle_da_lock(da);
     for(i=0; i<MAX_DA_LEVEL; i++)
         list_sort(&da->trees[i], castle_da_ct_dec_cmp);
+    castle_da_unlock(da);
+
+    return 0;
+}
+
+static int castle_da_merge_restart(struct castle_double_array *da, void *unused)
+{
+    castle_da_lock(da);
+    castle_da_merge_check(da);
     castle_da_unlock(da);
 
     return 0;
@@ -2487,6 +2527,8 @@ int castle_double_array_read(void)
 
     /* Sort all the tree lists by the sequence number */
     castle_da_hash_iterate(castle_da_trees_sort, NULL); 
+    /* Check if any merges need to be done. */
+    castle_da_hash_iterate(castle_da_merge_restart, NULL); 
 
     return 0;
 
@@ -2740,7 +2782,7 @@ new_ct:
     castle_ct_put(ct, write);
     da = castle_da_hash_get(ct->da);  
     BUG_ON(!da);
-    debug("Number of items in component tree %d. Trying to add a new rwct.\n",
+    debug("Number of items in component tree %d, # items %ld. Trying to add a new rwct.\n",
             ct->seq, atomic64_read(&ct->item_count));
     if((ret = castle_da_rwct_make(da)))
         printk("Warning: failed to create RWCT with errno=%d\n", ret);
