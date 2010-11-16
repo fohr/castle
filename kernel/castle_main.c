@@ -778,6 +778,14 @@ struct castle_slave* castle_claim(uint32_t new_dev)
         goto err_out;
 	}
 
+    /* Make sure that the disk is at least 200M big. */
+    if(get_bd_capacity(bdev) < (200 << (20 - 9))) 
+    {
+        printk("Disk %s capacity too small. Must be at least 200M, got %lldM\n",
+                 __bdevname(dev, b), get_bd_capacity(bdev) >> (20 - 9));
+        goto err_out;
+    }
+
     err = bd_claim(bdev, &castle);
     if (err) 
     {
