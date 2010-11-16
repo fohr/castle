@@ -594,10 +594,11 @@ void castle_extent_free(c_ext_id_t ext_id)
                 BUG();
             }
             id = cs->id;
-            debug("Freeing chunk %llu from %u - %llu\%llu\n",
-            maps_buf[MAP_IDX(ext, i, j)].offset,
-            maps_buf[MAP_IDX(ext, i, j)].slave_id, ext->chk_buf[id].first_chk,
-            ext->chk_buf[id].count);
+            debug("Freeing chunk %u from %u - %u\%u\n",
+                maps_buf[MAP_IDX(ext, i, j)].offset,
+                maps_buf[MAP_IDX(ext, i, j)].slave_id, 
+                ext->chk_buf[id].first_chk,
+                ext->chk_buf[id].count);
             if (ext->chk_buf[id].count)
             {
                 if (ext->chk_buf[id].first_chk - 1 == maps_buf[MAP_IDX(ext, i, j)].offset)
@@ -626,8 +627,7 @@ void castle_extent_free(c_ext_id_t ext_id)
         {
             struct castle_slave *cs = castle_slave_find_by_id(i);
             
-            debug("Freeing %llu chunks from %u\n",
-                                ext->chk_buf[i].count, cs->uuid);
+            debug("Freeing %u chunks from %u\n", ext->chk_buf[i].count, cs->uuid);
             castle_freespace_slave_chunk_free(cs, ext->chk_buf[i]);
         }
     }
