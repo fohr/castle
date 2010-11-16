@@ -2783,7 +2783,10 @@ new_ct:
     debug("Number of items in component tree %d, # items %ld. Trying to add a new rwct.\n",
             ct->seq, atomic64_read(&ct->item_count));
     if((ret = castle_da_rwct_make(da)))
+    {
         printk("Warning: failed to create RWCT with errno=%d\n", ret);
+        return NULL;
+    }
 
     goto again;
 }
