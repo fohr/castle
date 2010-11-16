@@ -2222,8 +2222,7 @@ void castle_ct_put(struct castle_component_tree *ct, int write)
     /* Destroy the component tree */
     BUG_ON(TREE_GLOBAL(ct->seq) || TREE_INVAL(ct->seq));
     castle_ct_hash_remove(ct);
-    /* TODO: FREE */
-    printk("Should release freespace occupied by ct=%d\n", ct->seq);
+    printk("Releasing freespace occupied by ct=%d\n", ct->seq);
     if (!EXT_ID_INVAL(ct->tree_ext_fs.ext_id))
         castle_extent_free(ct->tree_ext_fs.ext_id);
     if (!EXT_ID_INVAL(ct->data_ext_fs.ext_id))
@@ -2562,7 +2561,8 @@ static struct castle_component_tree* castle_ct_alloc(struct castle_double_array 
     ct->last_node   = INVAL_EXT_POS;
     init_rwsem(&ct->lock);
     atomic64_set(&ct->node_count, 0); 
-    INIT_LIST_HEAD(&ct->da_list);
+    ct->da_list.next = NULL;
+    ct->da_list.prev = NULL;
     INIT_LIST_HEAD(&ct->hash_list);
     castle_ct_hash_add(ct);
     ct->mstore_key  = INVAL_MSTORE_KEY; 
