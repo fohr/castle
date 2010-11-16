@@ -199,7 +199,7 @@ int castle_freespace_slave_init(struct castle_slave *cs, int fresh)
     {
         debug("Initialising new device\n");
         memset(freespace, 0, sizeof(castle_freespace_t));
-        freespace->disk_size   = ((disk_sz - 1) / C_CHK_SIZE) -  FREE_SPACE_START;
+        freespace->disk_size   = disk_sz / C_CHK_SIZE - FREE_SPACE_START;
         freespace->disk_size  -= (freespace->disk_size % CHKS_PER_SLOT);
         freespace->max_entries = freespace->disk_size / CHKS_PER_SLOT;
     }
