@@ -102,7 +102,7 @@ typedef uint32_t block_t;
 #define META_SPACE_START               (64)
 #define META_SPACE_SIZE                (300)
 #define EXT_ST_SIZE                    (50)
-#define FREE_SPACE_START               (600)
+#define FREE_SPACE_START               (400) /* This must be >= to META_EXT_STRAT + METAEXT_SIZE. */
 #define FREESPACE_OFFSET               (2 * C_CHK_SIZE)
 #define FREESPACE_SIZE                 (20 * C_CHK_SIZE)
 
