@@ -837,7 +837,6 @@ typedef struct castle_merged_iterator {
 typedef struct castle_da_rq_iterator {
     int                       nr_cts;
     int                       err;
-    struct castle_btree_type *btree;
     c_merged_iter_t           merged_iter;
 
     struct ct_rq {

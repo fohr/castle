@@ -1009,7 +1009,6 @@ void castle_da_rq_iter_init(c_da_rq_iter_t *iter,
     da = castle_da_hash_get(da_id);
     BUG_ON(!da);
     BUG_ON(!castle_version_is_ancestor(da->root_version, version));
-    iter->btree = NULL;
 again:
     /* Try to allocate the right amount of memory, but remember that nr_trees
        may change, because we are not holding the da lock (cannot kmalloc holding
@@ -1049,9 +1048,8 @@ again:
             ct = list_entry(l, struct castle_component_tree, da_list);
             iter->ct_rqs[j].ct = ct; 
             castle_ct_get(ct, 0);
-            if(!iter->btree)
-                iter->btree = castle_btree_type_get(ct->btree_type);
-            BUG_ON(iter->btree->magic != ct->btree_type);
+            BUG_ON((castle_btree_type_get(ct->btree_type)->magic != RW_VLBA_TREE_TYPE) &&
+                   (castle_btree_type_get(ct->btree_type)->magic != RO_VLBA_TREE_TYPE));
             j++;
         }
     }
@@ -1078,7 +1076,7 @@ again:
 
     /* Iterators have been initialised, now initialise the merged iterator */
     iter->merged_iter.nr_iters = iter->nr_cts;
-    iter->merged_iter.btree    = iter->btree;
+    iter->merged_iter.btree    = castle_btree_type_get(RO_VLBA_TREE_TYPE);
     castle_ct_merged_iter_init(&iter->merged_iter,
                                 iters,
                                 iter_types,
