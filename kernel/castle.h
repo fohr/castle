@@ -534,24 +534,24 @@ struct castle_object_replace;
 struct castle_object_get;
 
 typedef struct castle_bio {
-    struct castle_attachment     *attachment;
+    struct castle_attachment         *attachment;
     /* castle_bio is created to handle a bio, or an rxrpc call (never both) */
-    int                           data_dir;
+    int                               data_dir;
+    /* Pointer to the op that created this c_bio. */
     union {
-        struct bio               *bio;
-        struct castle_rxrpc_call *rxrpc_call;
+        struct bio                   *bio;
         struct castle_object_replace *replace;
-        struct castle_object_get *get;
-        void                     *data;
+        struct castle_object_get     *get;
+        struct castle_object_pull    *pull;
     };
-    struct castle_bio_vec        *c_bvecs; 
-    atomic_t                      count;
-    int                           err;
-#ifdef CASTLE_DEBUG              
-    int                           stuck;
-    int                           id;
-    int                           nr_bvecs;
-    struct list_head              list;
+    struct castle_bio_vec            *c_bvecs; 
+    atomic_t                          count;
+    int                               err;
+#ifdef CASTLE_DEBUG                  
+    int                               stuck;
+    int                               id;
+    int                               nr_bvecs;
+    struct list_head                  list;
 #endif
 } c_bio_t;
 
@@ -603,7 +603,8 @@ typedef struct castle_bio_vec {
     /* Completion callback */
     void                           (*endfind)    (struct castle_bio_vec *, int, c_val_tup_t);
     void                           (*da_endfind) (struct castle_bio_vec *, int, c_val_tup_t);
-    atomic_t                       reserv_nodes;
+    atomic_t                         reserv_nodes;
+    struct list_head                 io_list; 
 #ifdef CASTLE_DEBUG              
     unsigned long                    state;
     struct castle_cache_block       *locking;

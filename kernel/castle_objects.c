@@ -1015,7 +1015,7 @@ int castle_object_replace(struct castle_object_replace *replace,
     c_vl_bkey_t *btree_key;
     c_bvec_t *c_bvec;
     c_bio_t *c_bio;
-    int i, ret;
+    int i;
 
     if(!castle_fs_inited)
         return -ENODEV;
@@ -1052,16 +1052,10 @@ int castle_object_replace(struct castle_object_replace *replace,
     c_bvec->da_endfind = NULL; 
     atomic_set(&c_bvec->reserv_nodes, 0);
 
-    ret = castle_double_array_find(c_bvec);
-    if (ret)
-    {
-        castle_utils_bio_free(c_bio);
-        castle_object_bkey_free(btree_key);
-    }
-    else
-        castle_debug_bio_register(c_bio, attachment->version, 1);
+    castle_debug_bio_register(c_bio, attachment->version, 1);
+    castle_double_array_find(c_bvec);
 
-    return ret;
+    return 0;
 }
 EXPORT_SYMBOL(castle_object_replace);
 
@@ -1437,7 +1431,6 @@ int castle_object_get(struct castle_object_get *get,
     c_vl_bkey_t *btree_key;
     c_bvec_t *c_bvec;
     c_bio_t *c_bio;
-    int ret;
 
     debug("castle_object_get get=%p\n", get);
     
@@ -1466,14 +1459,9 @@ int castle_object_get(struct castle_object_get *get,
     atomic_set(&c_bvec->reserv_nodes, 0);
     
     /* TODO: add bios to the debugger! */ 
-    ret = castle_double_array_find(c_bvec);
-    if (ret)
-    {
-        castle_utils_bio_free(c_bio);
-        castle_object_bkey_free(btree_key);
-    }
+    castle_double_array_find(c_bvec);
 
-    return ret;
+    return 0;
 }
 EXPORT_SYMBOL(castle_object_get);
 
@@ -1512,6 +1500,7 @@ void castle_object_chunk_pull_io_end(c2_block_t *c2b)
 
     debug("IO end for cdb, c2b->nr_pages=%d, cep" cep_fmt_str_nl, c2b->nr_pages, cep2str(c2b->cep));
         
+        
     // TODO deal with not up to date - get error and pass it on?
 
     CASTLE_INIT_WORK(&pull->work, __castle_object_chunk_pull_complete);
@@ -1539,6 +1528,7 @@ void castle_object_chunk_pull(struct castle_object_pull *pull, void *buf, size_t
 
     debug("Locking cdb (0x%x, 0x%x)\n", cep.ext_id, cep.offset);
     pull->curr_c2b = castle_cache_block_get(cep, (pull->to_copy - 1) / PAGE_SIZE + 1);
+    castle_cache_block_advise(pull->curr_c2b, C2B_PREFETCH_FRWD);
     write_lock_c2b(pull->curr_c2b);
     
     pull->buf = buf;
@@ -1559,7 +1549,7 @@ EXPORT_SYMBOL(castle_object_chunk_pull);
 
 static void castle_object_pull_continue(struct castle_bio_vec *c_bvec, int err, c_val_tup_t cvt)
 {
-    struct castle_object_pull *pull = c_bvec->c_bio->data;
+    struct castle_object_pull *pull = c_bvec->c_bio->pull;
     
     pull->ct = c_bvec->tree;
     castle_object_bkey_free(c_bvec->key);
@@ -1587,7 +1577,6 @@ int castle_object_pull(struct castle_object_pull *pull, struct castle_attachment
     c_vl_bkey_t *btree_key;
     c_bvec_t *c_bvec;
     c_bio_t *c_bio;
-    int ret = 0;
 
     debug("castle_object_pull pull=%p\n", pull);
 
@@ -1604,7 +1593,7 @@ int castle_object_pull(struct castle_object_pull *pull, struct castle_attachment
         return -ENOMEM; // TODO leaking btree_key?
     BUG_ON(!attachment);
     c_bio->attachment    = attachment;
-    c_bio->data          = pull;
+    c_bio->pull          = pull;
     c_bio->data_dir      = READ;
 
     c_bvec = c_bio->c_bvecs; 
@@ -1616,14 +1605,8 @@ int castle_object_pull(struct castle_object_pull *pull, struct castle_attachment
     atomic_set(&c_bvec->reserv_nodes, 0);
     
     /* TODO: add bios to the debugger! */ 
+    castle_double_array_find(c_bvec);
 
-    ret = castle_double_array_find(c_bvec);
-    if (ret)
-    {
-        castle_utils_bio_free(c_bio);
-        castle_object_bkey_free(btree_key);
-    }
-
-    return ret;
+    return 0;
 }
 EXPORT_SYMBOL(castle_object_pull);

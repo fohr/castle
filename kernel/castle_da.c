@@ -24,7 +24,8 @@
 #endif
 
 #define MAX_DA_LEVEL                    (20)
-#define MAX_DYNAMIC_TREE_SIZE           (100000)
+#define MAX_DYNAMIC_TREE_SIZE           (100) /* In C_CHK_SIZE. */ 
+#define MAX_DYNAMIC_DATA_SIZE           (100) /* In C_CHK_SIZE. */ 
 
 #define CASTLE_DA_HASH_SIZE             (1000)
 #define CASTLE_CT_HASH_SIZE             (4000)
@@ -63,17 +64,26 @@ static int                      castle_da_exiting    = 0;
 #define DOUBLE_ARRAY_DESTROY_BIT            (2)
 #define DOUBLE_ARRAY_DESTROY_FLAG           (1 << DOUBLE_ARRAY_DESTROY_BIT)
 struct castle_double_array {
-    da_id_t          id;
-    version_t        root_version;
+    da_id_t            id;
+    version_t          root_version;
     /* Lock protects the trees list */
-    spinlock_t       lock;
-    unsigned long    flags;
-    int              nr_trees;
-    struct list_head trees[MAX_DA_LEVEL];
-    struct list_head hash_list;
-    c_mstore_key_t   mstore_key;
-    uint32_t         att_ref_cnt;
-    uint32_t         da_ref_cnt;
+    spinlock_t         lock;
+    unsigned long      flags;
+    int                nr_trees;
+    struct list_head   trees[MAX_DA_LEVEL];
+    struct list_head   hash_list;
+    c_mstore_key_t     mstore_key;
+    uint32_t           att_ref_cnt;
+    uint32_t           da_ref_cnt;
+    /* Queue of write IOs queued up on this DA. */
+    struct list_head   ios_waiting;
+    int                ios_waiting_cnt;
+    int                ios_budget;
+    struct work_struct queue_restart;
+    /* Merge throttling. DISABLED ATM. */
+    atomic_t           epoch_ios;
+    atomic_t           merge_budget;
+    wait_queue_head_t  merge_budget_wq;
 };
 
 DEFINE_HASH_TBL(castle_da, castle_da_hash, CASTLE_DA_HASH_SIZE, struct castle_double_array, hash_list, da_id_t, id);
@@ -91,9 +101,14 @@ void castle_ct_put(struct castle_component_tree *ct, int write);
 static void castle_component_tree_add(struct castle_double_array *da,
                                       struct castle_component_tree *ct,
                                       int in_init);
+static void castle_component_tree_del(struct castle_double_array *da,
+                                      struct castle_component_tree *ct);
 static void castle_da_merge_check(struct castle_double_array *da);
 struct castle_da_merge;
 static void castle_da_merge_budget_consume(struct castle_da_merge *merge);
+static void castle_da_queue_restart(struct work_struct *work);
+static void castle_da_queue_kick(struct castle_double_array *da);
+static void castle_da_bvec_start(struct castle_double_array *da, c_bvec_t *c_bvec);
 int castle_da_get(struct castle_double_array *da, int attachment);
 int castle_da_put(struct castle_double_array *da, int attachment);
 
@@ -122,10 +137,17 @@ static inline int castle_da_growing_rw_test_and_set(struct castle_double_array *
     return test_and_set_bit(DOUBLE_ARRAY_GROWING_RW_TREE_BIT, &da->flags);
 }
 
+static inline int castle_da_growing_rw_test(struct castle_double_array *da)
+{
+    return test_bit(DOUBLE_ARRAY_GROWING_RW_TREE_BIT, &da->flags);
+}
+
 static inline void castle_da_growing_rw_clear(struct castle_double_array *da)
 {
     clear_bit(DOUBLE_ARRAY_GROWING_RW_TREE_BIT, &da->flags);
 }
+
+
 
 /**********************************************************************************************/
 /* Iterators */
@@ -627,10 +649,8 @@ static int _castle_ct_merged_iter_prep_next(c_merged_iter_t *iter,
                 merg_itr_dbg("%s:%p:%p:%d - schedule\n", __FUNCTION__, iter, comp_iter->iterator, i);
                 return 0;
             }
-            //merg_itr_dbg("Calling has_next on %p\n", comp_iter->iterator);
             if (comp_iter->iterator_type->has_next(comp_iter->iterator))
             {
-                //merg_itr_dbg("Calling next on %p\n", comp_iter->iterator);
                 comp_iter->iterator_type->next(comp_iter->iterator,
                                                &comp_iter->cached_entry.k,
                                                &comp_iter->cached_entry.v,
@@ -1115,13 +1135,9 @@ struct castle_da_merge {
 
 /************************************/
 /* Marge rate control functionality */
-static DEFINE_SPINLOCK(merge_budget_lock);
-static DECLARE_WAIT_QUEUE_HEAD(merge_budget_wq); 
-static int merge_budget = 0;
-
 static void castle_da_merge_budget_consume(struct castle_da_merge *merge)
 {
-    unsigned long flags;
+    struct castle_double_array *da;
 
     if(castle_da_exiting)
         return;
@@ -1131,62 +1147,86 @@ static void castle_da_merge_budget_consume(struct castle_da_merge *merge)
     if(merge->budget_cons_units < merge->budget_cons_rate)
         return;
 
-try_again:
-    /* We need to consume a single unit from the budget, check if there is something there */
-    spin_lock_irqsave(&merge_budget_lock, flags);
-    if(merge_budget > 0)
+    da = merge->da;
+    /* Consume a single unit of budget. */
+    while(atomic_dec_return(&da->merge_budget) < 0)
     {
-        merge_budget--;
-        spin_unlock_irqrestore(&merge_budget_lock, flags);
-        return;
+        /* We failed to get merge budget, readd the unit, and wait for some to appear. */
+        atomic_inc(&da->merge_budget);
+        printk("Throttling merge. Unexpected.\n");
+        wait_event(da->merge_budget_wq, atomic_read(&da->merge_budget) > 0);
     }
-    spin_unlock_irqrestore(&merge_budget_lock, flags);
-    /* We haven't found anything, sleep until next replenish. */
-    wait_event(merge_budget_wq, (merge_budget > 0));
-
-    goto try_again;
 }
 
-static atomic_t epoch_ios = ATOMIC_INIT(0); 
-static void castle_da_merge_budget_replenish(void)
+#define REPLENISH_FREQUENCY (10) /* Replenish budgets every 100ms. */
+static int castle_da_merge_budget_replenish(struct castle_double_array *da, void *unused)
 {
-#define MAX_IOS             (10000) /* Arbitrary constants */
-#define MIN_BUDGET_DELTA    (500)
+#define MAX_IOS             (1000) /* Arbitrary constants */
+/* TODO: Merges are now effectively always full throughput, because MIN is set high. */ 
+#define MIN_BUDGET_DELTA    (100000)
 #define MAX_BUDGET          (1000000)
-    int ios = atomic_read(&epoch_ios);
-    int budget_delta = 0;
+    int ios = atomic_read(&da->epoch_ios);
+    int budget_delta = 0, merge_budget;
 
-    atomic_set(&epoch_ios, 0);
+    atomic_set(&da->epoch_ios, 0);
     debug("Merge replenish, number of ios in last second=%d.\n", ios);
     if(ios < MAX_IOS) 
         budget_delta = MAX_IOS - ios;
     if(budget_delta < MIN_BUDGET_DELTA)
         budget_delta = MIN_BUDGET_DELTA;
     BUG_ON(budget_delta <= 0);
-    spin_lock_irq(&merge_budget_lock);
-    merge_budget += budget_delta;
+    merge_budget = atomic_add_return(budget_delta, &da->merge_budget);
     if(merge_budget > MAX_BUDGET)
-        merge_budget = MAX_BUDGET;
-    spin_unlock_irq(&merge_budget_lock);
-    wake_up(&merge_budget_wq);
+        atomic_sub(merge_budget - MAX_BUDGET, &da->merge_budget);
+    wake_up(&da->merge_budget_wq);
+
+    return 0;
+}
+
+static void castle_merge_budgets_replenish(void)
+{
+   castle_da_hash_iterate(castle_da_merge_budget_replenish, NULL); 
+}
+
+static void castle_da_queue_restart(struct work_struct *work)
+{
+    struct castle_double_array *da = container_of(work, struct castle_double_array, queue_restart);
+
+    castle_da_lock(da);
+    /* Throttle writes to 10000s. */
+    da->ios_budget += 10000/REPLENISH_REQUENCY;
+    castle_da_unlock(da);
+
+    castle_da_queue_kick(da);
+} 
+
+static int castle_da_ios_budget_replenish(struct castle_double_array *da, void *unused)
+{
+    queue_work(castle_wq, &da->queue_restart);
+
+    return 0;
+}
+
+static void castle_ios_budgets_replenish(void)
+{
+   castle_da_hash_iterate(castle_da_ios_budget_replenish, NULL); 
 }
 
 static inline void castle_da_merge_budget_io_end(struct castle_double_array *da)
 {
-    atomic_inc(&epoch_ios);
+    atomic_inc(&da->epoch_ios);
 }
 
 /************************************/
-/* Marge rate timers */
-static struct timer_list merge_rate_timer; 
-static void castle_da_merge_budget_add(unsigned long first)
+/* Throttling timers */
+static struct timer_list throttle_timer; 
+static void castle_throttle_timer_fire(unsigned long first)
 {
-    unsigned long sleep = 1; /* In seconds */
-
-    castle_da_merge_budget_replenish();
+    castle_merge_budgets_replenish();
+    castle_ios_budgets_replenish();
     /* Reschedule ourselves */
-    setup_timer(&merge_rate_timer, castle_da_merge_budget_add, 0);
-    mod_timer(&merge_rate_timer, jiffies + sleep * HZ);
+    setup_timer(&throttle_timer, castle_throttle_timer_fire, 0);
+    mod_timer(&throttle_timer, jiffies + HZ/REPLENISH_FREQUENCY);
 }
 
 /************************************/
@@ -1673,14 +1713,8 @@ static struct castle_component_tree* castle_da_merge_package(struct castle_da_me
        a lot of IOs and will only be destroyed on the last ct_put()). But
        we want to remove it from the DA straight away. The out_tree now takes
        over their functionality. */
-    list_del(&merge->in_tree1->da_list);
-    list_del(&merge->in_tree2->da_list);
-    /* Invalidate the list_head, used for debugging purposes in castle_ct_put(). */
-    merge->in_tree1->da_list.next = NULL;
-    merge->in_tree1->da_list.prev = NULL;
-    merge->in_tree2->da_list.next = NULL;
-    merge->in_tree2->da_list.prev = NULL;
-    merge->da->nr_trees -= 2;
+    castle_component_tree_del(merge->da, merge->in_tree1);
+    castle_component_tree_del(merge->da, merge->in_tree2);
     castle_component_tree_add(merge->da, out_tree, 0 /* not in init */);
     castle_da_merging_clear(merge->da);
     castle_da_merge_check(merge->da);
@@ -2018,6 +2052,21 @@ static void castle_da_merge_check(struct castle_double_array *da)
 /**********************************************************************************************/
 /* Generic DA code */
 
+static inline void castle_da_lock(struct castle_double_array *da)
+{
+    spin_lock(&da->lock);
+}
+
+static inline void castle_da_unlock(struct castle_double_array *da)
+{
+    spin_unlock(&da->lock);
+}
+
+static inline int castle_da_is_locked(struct castle_double_array *da)
+{
+    return spin_is_locked(&da->lock);
+}
+
 static int castle_da_ct_dec_cmp(struct list_head *l1, struct list_head *l2)
 {
     struct castle_component_tree *ct1 = list_entry(l1, struct castle_component_tree, da_list);
@@ -2025,6 +2074,37 @@ static int castle_da_ct_dec_cmp(struct list_head *l1, struct list_head *l2)
     BUG_ON(ct1->seq == ct2->seq);
 
     return ct1->seq > ct2->seq ? -1 : 1;
+}
+
+static struct castle_double_array* castle_da_alloc(void)
+{
+    struct castle_double_array *da;
+    int i;
+
+    da = castle_zalloc(sizeof(struct castle_double_array), GFP_KERNEL); 
+    if(!da)
+        return NULL; 
+
+    da->id              = INVAL_DA; 
+    da->root_version    = INVAL_VERSION;
+    da->mstore_key      = INVAL_MSTORE_KEY;
+    spin_lock_init(&da->lock);
+    da->flags           = 0;
+    da->nr_trees        = 0;
+    da->att_ref_cnt     = 0;
+    da->da_ref_cnt      = 0;
+    INIT_LIST_HEAD(&da->ios_waiting);
+    da->ios_waiting_cnt = 0;
+    da->ios_budget      = 0;
+    CASTLE_INIT_WORK(&da->queue_restart, castle_da_queue_restart);
+    atomic_set(&da->epoch_ios, 0);
+    atomic_set(&da->merge_budget, 0);
+    init_waitqueue_head(&da->merge_budget_wq);
+    castle_da_get(da, 1);
+    for(i=0; i<MAX_DA_LEVEL; i++)
+        INIT_LIST_HEAD(&da->trees[i]);
+
+    return da;
 }
 
 static c_mstore_key_t castle_da_marshall(struct castle_dlist_entry *dam,
@@ -2040,20 +2120,9 @@ static void castle_da_unmarshall(struct castle_double_array *da,
                                  struct castle_dlist_entry *dam,
                                  c_mstore_key_t key)
 {
-    int i;
-
     da->id           = dam->id;
     da->root_version = dam->root_version;
     da->mstore_key   = key;
-    spin_lock_init(&da->lock);
-    da->flags        = 0;
-    da->nr_trees     = 0;
-    da->att_ref_cnt  = 0;
-    da->da_ref_cnt   = 0;
-    castle_da_get(da, 1);
-
-    for(i=0; i<MAX_DA_LEVEL; i++)
-        INIT_LIST_HEAD(&da->trees[i]);
 }
 
 struct castle_component_tree* castle_component_tree_get(tree_seq_t seq)
@@ -2070,6 +2139,7 @@ static void castle_component_tree_add(struct castle_double_array *da,
 
     BUG_ON(da->id != ct->da);
     BUG_ON(ct->level >= MAX_DA_LEVEL);
+    BUG_ON(!castle_da_is_locked(da));
     /* If there is something on the list, check that the sequence number 
        of the tree we are inserting is greater (i.e. enforce rev seq number
        ordering in component trees in a given level). Don't check that during
@@ -2085,14 +2155,16 @@ static void castle_component_tree_add(struct castle_double_array *da,
     da->nr_trees++;
 }
 
-static inline void castle_da_lock(struct castle_double_array *da)
+static void castle_component_tree_del(struct castle_double_array *da,
+                                      struct castle_component_tree *ct)
 {
-    spin_lock(&da->lock);
-}
-
-static inline void castle_da_unlock(struct castle_double_array *da)
-{
-    spin_unlock(&da->lock);
+    BUG_ON(da->id != ct->da);
+    BUG_ON(!castle_da_is_locked(da));
+   
+    list_del(&ct->da_list); 
+    ct->da_list.next = NULL;
+    ct->da_list.prev = NULL;
+    da->nr_trees--;
 }
 
 void castle_ct_get(struct castle_component_tree *ct, int write)
@@ -2131,24 +2203,6 @@ void castle_ct_put(struct castle_component_tree *ct, int write)
     /* Poison ct (note this will be repoisoned by kfree on kernel debug build. */
     memset(ct, 0xde, sizeof(struct castle_component_tree));
     castle_free(ct);
-}
-
-static struct castle_component_tree* castle_da_rwct_get(struct castle_double_array *da, int write)
-{
-    struct castle_component_tree *ct;
-    struct list_head *h, *l;
-
-    castle_da_lock(da);
-    h = &da->trees[0]; 
-    l = h->next; 
-    /* There should be precisely one entry in the list */
-    BUG_ON((h == l) || (l->next != h));
-    ct = list_entry(l, struct castle_component_tree, da_list);
-    /* Get a ref to this tree so that it doesn't go away while we are doing an IO on it */
-    castle_ct_get(ct, write);
-    castle_da_unlock(da);
-        
-    return ct; 
 }
 
 static int castle_da_trees_sort(struct castle_double_array *da, void *unused)
@@ -2385,7 +2439,7 @@ int castle_double_array_read(void)
     while(castle_mstore_iterator_has_next(iterator))
     {
         castle_mstore_iterator_next(iterator, &mstore_dentry, &key);
-        da = castle_malloc(sizeof(struct castle_double_array), GFP_KERNEL);
+        da = castle_da_alloc(); 
         if(!da) 
             goto out_iter_destroy;
         castle_da_unmarshall(da, &mstore_dentry, key);
@@ -2483,26 +2537,35 @@ static int castle_da_rwct_make(struct castle_double_array *da)
     struct castle_component_tree *ct, *old_ct;
     c2_block_t *c2b;
     int ret;
-    c_byte_off_t size;
     struct castle_btree_type *btree;
-    extern uint32_t max_entry_length;
 
+    /* Only allow one rwct_make() at any point in time. If we fail to acquire the bit lock
+       wait for whoever is doing it, to create the RWCT.
+       TODO: use bit wait instead of msleep here. */ 
+    if(castle_da_growing_rw_test_and_set(da))
+    {
+        printk("Racing RWCT make on da=%d\n", da->id);
+        while(castle_da_growing_rw_test(da))
+            msleep(1);
+        return -EBUSY; 
+    }
+
+    /* We've acquired the 'growing' lock. Proceed. */
     ret = -ENOMEM;
     ct = castle_ct_alloc(da, RW_VLBA_TREE_TYPE, 0 /* level */);
     if(!ct)
         goto out;
 
     btree = castle_btree_type_get(ct->btree_type);
-    size = MASK_CHK_OFFSET((MAX_DYNAMIC_TREE_SIZE * max_entry_length) + ((2 * MAX_BTREE_DEPTH + 1) * btree->node_size * C_BLK_SIZE) + (2 * C_CHK_SIZE));
     if ((ret = castle_ext_fs_init(&ct->tree_ext_fs, 
                                   da->id, 
-                                  size, 
+                                  MAX_DYNAMIC_TREE_SIZE * C_CHK_SIZE, 
                                   btree->node_size * C_BLK_SIZE)))
         goto error;
 
     if ((ret = castle_ext_fs_init(&ct->data_ext_fs, 
                                   da->id, 
-                                  size,
+                                  MAX_DYNAMIC_DATA_SIZE * C_CHK_SIZE, 
                                   C_BLK_SIZE)))
         goto error;
 
@@ -2520,8 +2583,7 @@ static int castle_da_rwct_make(struct castle_double_array *da)
     if(!list_empty(&da->trees[0]))
     {
         old_ct = list_entry(da->trees[0].next, struct castle_component_tree, da_list);
-        list_del(&old_ct->da_list);
-        da->nr_trees--;
+        castle_component_tree_del(da, old_ct);
         old_ct->level = 1;
         castle_component_tree_add(da, old_ct, 0 /* not in init */);
     }
@@ -2543,23 +2605,16 @@ out:
 int castle_double_array_make(da_id_t da_id, version_t root_version)
 {
     struct castle_double_array *da;
-    int ret, i;
+    int ret;
 
     debug("Creating doubling array for da_id=%d, version=%d\n", da_id, root_version);
-    da = castle_zalloc(sizeof(struct castle_double_array), GFP_KERNEL); 
+    da = castle_da_alloc();
     if(!da)
         return -ENOMEM;
+    /* Write out the id, and the root version. */
     da->id = da_id;
     da->root_version = root_version;
-    da->mstore_key   = INVAL_MSTORE_KEY;
-    spin_lock_init(&da->lock);
-    da->flags        = 0;
-    da->nr_trees     = 0;
-    for(i=0; i<MAX_DA_LEVEL; i++)
-        INIT_LIST_HEAD(&da->trees[i]);
-    da->att_ref_cnt  = 0;
-    da->da_ref_cnt   = 0;
-    castle_da_get(da, 1);
+    /* Make RW tree. */
     ret = castle_da_rwct_make(da);
     if(ret)
     {
@@ -2620,22 +2675,135 @@ static struct castle_component_tree* castle_da_ct_next(struct castle_component_t
     return NULL;
 }
 
+static struct castle_component_tree* castle_da_rwct_get(struct castle_double_array *da, 
+                                                        int write)
+{
+    struct castle_component_tree *ct;
+    struct list_head *h, *l;
+
+    castle_da_lock(da);
+    h = &da->trees[0]; 
+    l = h->next; 
+    /* There should be precisely one entry in the list */
+    BUG_ON((h == l) || (l->next != h));
+    ct = list_entry(l, struct castle_component_tree, da_list);
+    /* Get a ref to this tree so that it doesn't go away while we are doing an IO on it */
+    castle_ct_get(ct, write);
+    castle_da_unlock(da);
+        
+    return ct; 
+}
+
+static struct castle_component_tree* castle_da_rwct_acquire(struct castle_double_array *da,
+                                                            c_bvec_t *c_bvec)
+{
+    uint64_t value_len, req_btree_space, req_medium_space;
+    struct castle_component_tree *ct;
+    struct castle_btree_type *btree;
+    int write, nr_nodes, ret;
+
+    write = (c_bvec_data_dir(c_bvec) == WRITE);
+again:
+    ct = castle_da_rwct_get(da, write);
+    /* For reads, this is the right starting point. Exit immediately. */ 
+    if(!write)
+        return ct;
+
+    /* For writes, try to preallocate space in the btree and medium object extents.
+       B-Tree first. */
+    btree = castle_btree_type_get(ct->btree_type);
+    /* Allocate the worst case number of nodes we may have to create handling this
+       write. */
+    nr_nodes = (2 * ct->tree_depth + 3);
+    req_btree_space = nr_nodes * btree->node_size * C_BLK_SIZE;
+    if (castle_ext_fs_pre_alloc(&ct->tree_ext_fs, req_btree_space) < 0)
+        goto new_ct;
+    /* Save how many nodes we've pre-allocated. */
+    atomic_set(&c_bvec->reserv_nodes, nr_nodes);
+
+    /* Pre-allocate space for Medium objects. */
+    value_len = c_bvec->c_bio->replace->value_len;
+    /* If not a medium object, we are done. */
+    if ((value_len <= MAX_INLINE_VAL_SIZE) || (value_len > MEDIUM_OBJECT_LIMIT))
+        return ct;
+
+    /* Preallocate (ceil to C_BLK_SIZE) space for the medium object. */
+    req_medium_space = ((value_len - 1) / C_BLK_SIZE + 1) * C_BLK_SIZE;
+    if (castle_ext_fs_pre_alloc(&ct->data_ext_fs, req_medium_space) >= 0)
+        return ct;
+
+    /* We failed to preallocate space for the medium object. Free the space in btree extent. */
+    castle_ext_fs_free(&ct->tree_ext_fs, req_btree_space);
+
+new_ct:
+    /* Drop the old tree reference, try to allocate a new RWCT. */
+    castle_ct_put(ct, write);
+    da = castle_da_hash_get(ct->da);  
+    BUG_ON(!da);
+    debug("Number of items in component tree %d. Trying to add a new rwct.\n",
+            ct->seq, atomic64_read(&ct->item_count));
+    if((ret = castle_da_rwct_make(da)))
+        printk("Warning: failed to create RWCT with errno=%d\n", ret);
+
+    goto again;
+}
+
+static void castle_da_bvec_queue(struct castle_double_array *da, c_bvec_t *c_bvec)
+{
+    castle_da_lock(da);
+    list_add_tail(&c_bvec->io_list, &da->ios_waiting);
+    da->ios_waiting_cnt++;
+    castle_da_unlock(da);
+}
+
+static void castle_da_queue_kick(struct castle_double_array *da)
+{
+    LIST_HEAD(submit_list);
+    struct list_head *l, *t;
+    c_bvec_t *bvec; 
+
+    /* Get as many bvec as we have the budget for onto the submit list. */
+    castle_da_lock(da);
+    while(!list_empty(&da->ios_waiting) && (da->ios_budget > 0))
+    {
+        bvec = list_first_entry(&da->ios_waiting, c_bvec_t, io_list); 
+        list_del(&bvec->io_list);
+        list_add(&bvec->io_list, &submit_list);
+        da->ios_waiting_cnt--;
+        da->ios_budget--;
+    } 
+    castle_da_unlock(da);
+
+    /* Submit them all. */
+    list_for_each_safe(l, t, &submit_list)
+    {
+        bvec = list_entry(l, c_bvec_t, io_list);
+        /* Remove from the list (the bvec may get freed by the time we return
+           from the submit call. */
+        list_del(&bvec->io_list);
+        castle_da_bvec_start(da, bvec);
+    }
+}
+
 static void castle_da_bvec_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cvt)
 {
     void (*callback) (struct castle_bio_vec *c_bvec, int err, c_val_tup_t cvt);
     struct castle_component_tree *ct, *next_ct;
-    int write; 
+    struct castle_double_array *da;
+    int read; 
     
     callback = c_bvec->da_endfind;
     ct = c_bvec->tree;
-   
-    write = (c_bvec_data_dir(c_bvec) == WRITE);
-    /* If the key hasn't been found, check in the next tree. */
-    if(CVT_INVALID(cvt) && (!err) && (!write))
+    da = castle_da_hash_get(ct->da);
+
+    read = (c_bvec_data_dir(c_bvec) == READ);
+    BUG_ON(read && atomic_read(&c_bvec->reserv_nodes));
+    /* For reads, if the key hasn't been found, check in the next tree. */
+    if(read && CVT_INVALID(cvt) && (!err))
     {
         debug_verbose("Checking next ct.\n");
         next_ct = castle_da_ct_next(ct);
-        BUG_ON(atomic_read(&c_bvec->reserv_nodes));
+        /* We've finished looking through all the trees. */
         if(!next_ct)
         {
             callback(c_bvec, err, INVAL_VAL_TUP); 
@@ -2643,7 +2811,6 @@ static void castle_da_bvec_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cvt)
         }
         /* Put the previous tree, now that we know we've got a ref to the next. */
         castle_ct_put(ct, 0);
-        /* If there is the next tree, try searching in it now */
         c_bvec->tree = next_ct;
         debug_verbose("Scheduling btree read in %s tree: %d.\n", 
                 ct->dynamic ? "dynamic" : "static", ct->seq);
@@ -2654,6 +2821,7 @@ static void castle_da_bvec_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cvt)
     castle_request_timeline_destroy(c_bvec->timeline);
     debug_verbose("Finished with DA, calling back.\n");
     castle_da_merge_budget_io_end(castle_da_hash_get(ct->da));
+    /* Release the preallocated space in the btree extent. */
     if (atomic_read(&c_bvec->reserv_nodes))
     {
         struct castle_btree_type *btree = castle_btree_type_get(ct->btree_type);
@@ -2661,28 +2829,44 @@ static void castle_da_bvec_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cvt)
         castle_ext_fs_free(&ct->tree_ext_fs, 
                            atomic_read(&c_bvec->reserv_nodes) * btree->node_size * C_BLK_SIZE);
     }
-    BUG_ON((CVT_MEDIUM_OBJECT(cvt) && cvt.cep.ext_id !=
-                                        c_bvec->tree->data_ext_fs.ext_id));
+    BUG_ON(CVT_MEDIUM_OBJECT(cvt) && (cvt.cep.ext_id != c_bvec->tree->data_ext_fs.ext_id));
 
     /* Don't release the ct reference in order to hold on to medium objects array, etc. */
     callback(c_bvec, err, cvt);
 }
 
-int castle_double_array_find(c_bvec_t *c_bvec)
+static void castle_da_bvec_start(struct castle_double_array *da, c_bvec_t *c_bvec)
+{ 
+    struct castle_component_tree *ct;
+
+    debug_verbose("Doing DA %s for da_id=%d\n", write ? "write" : "read", da_id);
+    BUG_ON(atomic_read(&c_bvec->reserv_nodes) != 0);
+    /* This will get a reference to current RW tree, or create a new one if neccessary.
+       It also preallocates space in that tree. */
+    ct = castle_da_rwct_acquire(da, c_bvec);
+    /* If RW component tree does not exist, exit with error. */
+    if(!ct)
+    {
+        c_bvec->endfind(c_bvec, -ENOSPC, INVAL_VAL_TUP);
+        return;
+    }
+    /* Otherwise, replace endfind function pointer, and start the btree walk. */
+    c_bvec->tree       = ct; 
+    c_bvec->da_endfind = c_bvec->endfind;
+    c_bvec->endfind    = castle_da_bvec_complete;
+
+    //castle_request_timeline_create(c_bvec->timeline);
+    castle_request_timeline_checkpoint_start(c_bvec->timeline);
+    debug_verbose("Looking up in ct=%d\n", c_bvec->tree->seq); 
+    castle_btree_find(c_bvec);
+}
+
+void castle_double_array_find(c_bvec_t *c_bvec)
 {
     struct castle_attachment *att = c_bvec->c_bio->attachment;
-    struct castle_component_tree *ct;
     struct castle_double_array *da;
     da_id_t da_id; 
-    int write, ret = 0;
     
-    write = (c_bvec_data_dir(c_bvec) == WRITE);
-    if (write && low_disk_space)
-    {
-        printk("Not enough space to handle writes\n");
-        return -ENOSPC;
-    }
-
     down_read(&att->lock);
     /* Since the version is attached, it must be found */
     BUG_ON(castle_version_read(att->version, &da_id, NULL, NULL, NULL));
@@ -2692,68 +2876,16 @@ int castle_double_array_find(c_bvec_t *c_bvec)
     BUG_ON(!da);
     /* da_endfind should be null it is for our privte use */
     BUG_ON(c_bvec->da_endfind);
-    
-    debug_verbose("Doing DA %s for da_id=%d, for version=%d\n", 
-                  write ? "write" : "read", da_id, att->version);
-    BUG_ON(atomic_read(&c_bvec->reserv_nodes) != 0);
-__again:
-    ct = castle_da_rwct_get(da, write);
-    if (write)
+    /* Always submit writes to the queue, reads get started immediately. */
+    if(c_bvec_data_dir(c_bvec) == WRITE)
     {
-        uint64_t req_space = 0;
-        struct castle_btree_type *btree;
-        int nr_nodes = (2 * ct->tree_depth + 3);
-
-        /* Pre-allocate space for B-Tree nodes. */
-        btree = castle_btree_type_get(ct->btree_type);
-        req_space = nr_nodes * btree->node_size * C_BLK_SIZE;
-        if (castle_ext_fs_pre_alloc(&ct->tree_ext_fs, req_space) < 0)
-            goto __new_ct;
-
-        /* Pre-allocate space for Medium objects. */
-        req_space = c_bvec->c_bio->replace->value_len;
-        if ((req_space > MAX_INLINE_VAL_SIZE) && (req_space <= MEDIUM_OBJECT_LIMIT))
-        {
-            req_space = ((req_space - 1) / C_BLK_SIZE + 1) * C_BLK_SIZE;
-            if (castle_ext_fs_pre_alloc(&ct->data_ext_fs, req_space) < 0)
-            {
-                castle_ext_fs_free(&ct->tree_ext_fs, 
-                                   nr_nodes * btree->node_size * C_BLK_SIZE);
-__new_ct:            
-                if (!castle_da_growing_rw_test_and_set(da))
-                {
-                    struct castle_double_array *da = castle_da_hash_get(ct->da);  
- 
-                    printk("Creating new ct\n");
-                    BUG_ON(!da);
-                    debug("Number of items in component tree: %d greater than %d (%ld). "
-                          "Adding a new rwct.\n",
-                            ct->seq, MAX_DYNAMIC_TREE_SIZE, atomic64_read(&ct->item_count));
-                    if ((ret = castle_da_rwct_make(da)))
-                    {
-                        printk("Failed to create new T0\n");
-                        return ret;
-                    }
-
-                }
-                castle_ct_put(ct, write);
-                goto __again;
-            }
-        }
-        atomic_set(&c_bvec->reserv_nodes, nr_nodes);
+        castle_da_bvec_queue(da, c_bvec);
+        castle_da_queue_kick(da);
     }
-
-    c_bvec->tree       = ct; 
-    c_bvec->da_endfind = c_bvec->endfind;
-    c_bvec->endfind    = castle_da_bvec_complete;
-
-    //castle_request_timeline_create(c_bvec->timeline);
-    castle_request_timeline_checkpoint_start(c_bvec->timeline);
-    debug_verbose("Looking up in ct=%d\n", c_bvec->tree->seq); 
-    castle_btree_find(c_bvec);
-
-    return 0;
+    else
+        castle_da_bvec_start(da, c_bvec);
 }
+ 
 
 /**************************************/
 /* Double Array Management functions. */
@@ -2779,8 +2911,8 @@ int castle_double_array_init(void)
     int ret;
 
     printk("\n========= Double Array init ==========\n");
-    /* Start up the timer which replenishes merge budget */
-    castle_da_merge_budget_add(1); 
+    /* Start up the timer which replenishes merge and write IOs budget */
+    castle_throttle_timer_fire(1); 
     ret = -ENOMEM;
     castle_da_hash = castle_da_hash_alloc();
     if(!castle_da_hash)
@@ -2798,7 +2930,7 @@ int castle_double_array_init(void)
  
 err_out:
     BUG_ON(!ret);
-    del_singleshot_timer_sync(&merge_rate_timer);
+    del_singleshot_timer_sync(&throttle_timer);
     if(castle_ct_hash)
         castle_free(castle_ct_hash);
     if(castle_da_hash)
@@ -2812,7 +2944,7 @@ void castle_double_array_fini(void)
     printk("\n========= Double Array fini ==========\n");
     castle_da_exiting = 1;
     destroy_workqueue(castle_merge_wq);
-    del_singleshot_timer_sync(&merge_rate_timer);
+    del_singleshot_timer_sync(&throttle_timer);
     castle_da_hash_writeback();
     castle_da_hash_destroy();
     castle_ct_hash_destroy();

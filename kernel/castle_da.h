@@ -13,7 +13,7 @@ void castle_da_rq_iter_init    (c_da_rq_iter_t *iter,
                                 void *end_key);
 extern struct castle_iterator_type castle_da_rq_iter;
 
-int  castle_double_array_find  (c_bvec_t *c_bvec);
+void castle_double_array_find  (c_bvec_t *c_bvec);
 int  castle_double_array_make  (da_id_t da_id, version_t root_version);
 
 int  castle_double_array_read  (void);

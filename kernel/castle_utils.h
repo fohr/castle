@@ -79,6 +79,7 @@ static inline void __##_prefix##_hash_iterate(int (*fn)(_struct*, void*), void *
     _struct *v;                                                                      \
     int i;                                                                           \
                                                                                      \
+    if(!_tab) goto out;                                                              \
     for(i=0; i<_tab_size; i++)                                                       \
     {                                                                                \
         list_for_each_safe(l, t, &_tab[i])                                           \
