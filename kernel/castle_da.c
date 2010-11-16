@@ -2777,7 +2777,6 @@ again:
 
 new_ct:
     /* Drop the old tree reference, try to allocate a new RWCT. */
-    castle_ct_put(ct, write);
     da = castle_da_hash_get(ct->da);  
     BUG_ON(!da);
     debug("Number of items in component tree %d, # items %ld. Trying to add a new rwct.\n",
@@ -2787,6 +2786,7 @@ new_ct:
         printk("Warning: failed to create RWCT with errno=%d\n", ret);
         return NULL;
     }
+    castle_ct_put(ct, write);
 
     goto again;
 }
