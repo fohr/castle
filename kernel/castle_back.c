@@ -592,7 +592,7 @@ static int castle_back_stateful_op_queue_op(struct castle_back_stateful_op *stat
     if (!stateful_op->in_use || stateful_op->token != token)
     {
         error("Token expired 0x%x\n", token);
-        return -EINVAL;
+        return -EBADFD;
     }
     list_add_tail(&op->list, &stateful_op->op_queue);
 
@@ -791,7 +791,7 @@ static int castle_back_key_copy_get(struct castle_back_conn *conn, c_vl_okey_t *
     if (key_len < sizeof(c_vl_okey_t) || key_len > VLBA_TREE_MAX_KEY_SIZE)
     {
         error("Bad key length %u\n", key_len);
-        err = -EINVAL;        
+        err = -ENAMETOOLONG;        
         goto err0;
     }
     
@@ -1022,7 +1022,7 @@ static void castle_back_replace(void *data)
     if (op->attachment == NULL)
     {
         error("Collection not found id=0x%x\n", op->req.replace.collection_id);
-        err = -EINVAL;
+        err = -ENOENT;
         goto err0;
     }
 
@@ -1090,7 +1090,7 @@ static void castle_back_remove(void *data)
     if (op->attachment == NULL)
     {
         error("Collection not found id=0x%x\n", op->req.remove.collection_id);
-        err = -EINVAL;
+        err = -ENOENT;
         goto err0;
     }
 
@@ -1200,7 +1200,7 @@ static void castle_back_get(void *data)
     if (op->attachment == NULL)
     {
         error("Collection not found id=0x%x\n", op->req.get.collection_id);
-        err = -EINVAL;
+        err = -ENOENT;
         goto err0;
     }
 
@@ -1344,7 +1344,7 @@ static void castle_back_iter_start(void *data)
     if (attachment == NULL)
     {
         error("Collection not found id=0x%x\n", op->req.iter_start.collection_id);
-        err = -EINVAL;
+        err = -ENOENT;
         goto err1;
     }
 
@@ -1657,7 +1657,7 @@ static void castle_back_iter_next(void *data)
     if (!stateful_op)
     {
         error("Token not found 0x%x\n", op->req.iter_next.token);
-        err = -EINVAL;
+        err = -EBADFD;
         castle_back_reply(op, err, 0, 0);
         return;
     }
@@ -1665,7 +1665,7 @@ static void castle_back_iter_next(void *data)
     if (op->req.iter_next.buffer_len < PAGE_SIZE)
     {
         error("castle_back_iter_next buffer_len smaller than a page\n");
-        err = -EINVAL;
+        err = -ENOBUFS;
         goto err0;
     }
     
@@ -1759,7 +1759,7 @@ static void castle_back_iter_finish(void *data)
     if (!stateful_op)
     {
         error("Token not found 0x%x\n", op->req.iter_finish.token);
-        err = -EINVAL;
+        err = -EBADFD;
         goto err0;
     }
 
@@ -1944,7 +1944,7 @@ static void castle_back_big_put(void *data)
     if (attachment == NULL)
     {
         error("Collection not found id=0x%x\n", op->req.big_put.collection_id);
-        err = -EINVAL;
+        err = -ENOENT;
         goto err1;
     }
 
@@ -2002,7 +2002,7 @@ static void castle_back_put_chunk(void *data)
     if (!stateful_op)
     {
         error("Token not found 0x%x\n", op->req.put_chunk.token);
-        err = -EINVAL;
+        err = -EBADFD;
         goto err0;
     }
     
@@ -2194,7 +2194,7 @@ static void castle_back_big_get(void *data)
     if (attachment == NULL)
     {
         error("Collection not found id=0x%x\n", op->req.big_get.collection_id);
-        err = -EINVAL;
+        err = -ENOENT;
         goto err1;
     }
 
@@ -2247,7 +2247,7 @@ static void castle_back_get_chunk(void *data)
     if (!stateful_op)
     {
         error("Token not found 0x%x\n", op->req.get_chunk.token);
-        err = -EINVAL;
+        err = -EBADFD;
         goto err0;
     }
 
@@ -2428,7 +2428,7 @@ static void castle_back_request_process(struct castle_back_conn *conn, struct ca
             
         default:
             error("Unknown request tag %d\n", op->req.tag);
-            castle_back_reply(op, -EINVAL, 0, 0);
+            castle_back_reply(op, -ENOSYS, 0, 0);
             break;
     }
 
@@ -2728,19 +2728,19 @@ static int castle_buffer_map(struct castle_back_conn *conn, struct vm_area_struc
     if (size > MAX_BUFFER_SIZE) 
     {
         error("castle_back: you tried to map %ld bytes, max is %d!\n", size, MAX_BUFFER_SIZE);
-        err = -EAGAIN;
+        err = -EINVAL;
         goto err1;     
     }
     else if (vma->vm_start % PAGE_SIZE)
     {
         error("castle_back: you tried to map at addr %ld, not page aligned!\n", vma->vm_start);
-        err = -EAGAIN;
+        err = -EINVAL;
         goto err1;
     }
     else if (size % PAGE_SIZE)
     {
         error("castle_back: you tried to map %ld bytes, not multiple of page size!\n", size);
-        err = -EAGAIN;
+        err = -EINVAL;
         goto err1;
     }
 
@@ -2822,12 +2822,12 @@ static int castle_ring_map(struct castle_back_conn *conn, struct vm_area_struct 
     {
         error("castle_back: you _must_ map exactly %d bytes (you asked for %ld)!\n", 
             CASTLE_RING_SIZE, size);
-        return -EAGAIN;
+        return -EINVAL;
     }
     else if (vma->vm_start % PAGE_SIZE)
     {
         error("castle_back: you tried to map at addr %ld, not page aligned!\n", vma->vm_start);
-        return -EAGAIN;
+        return -EINVAL;
     }
     
     vma->vm_flags |= VM_RESERVED;
