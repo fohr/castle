@@ -1153,8 +1153,8 @@ static void castle_da_merge_budget_consume(struct castle_da_merge *merge)
     {
         /* We failed to get merge budget, readd the unit, and wait for some to appear. */
         atomic_inc(&da->merge_budget);
-        printk("Throttling merge. Unexpected.\n");
-        wait_event(da->merge_budget_wq, atomic_read(&da->merge_budget) > 0);
+        //printk("Throttling merge. Unexpected.\n");
+        //wait_event(da->merge_budget_wq, atomic_read(&da->merge_budget) > 0);
     }
 }
 
