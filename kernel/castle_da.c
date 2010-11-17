@@ -2587,7 +2587,7 @@ static int castle_da_rwct_make(struct castle_double_array *da)
         printk("Racing RWCT make on da=%d\n", da->id);
         while(castle_da_growing_rw_test(da))
             msleep(1);
-        return -EBUSY; 
+        return -EAGAIN; 
     }
 
     /* We've acquired the 'growing' lock. Proceed. */
@@ -2781,14 +2781,15 @@ new_ct:
     BUG_ON(!da);
     debug("Number of items in component tree %d, # items %ld. Trying to add a new rwct.\n",
             ct->seq, atomic64_read(&ct->item_count));
-    if((ret = castle_da_rwct_make(da)))
+    ret = castle_da_rwct_make(da);
+    if((ret == 0) || (ret == -EAGAIN))
     {
-        printk("Warning: failed to create RWCT with errno=%d\n", ret);
-        return NULL;
+        castle_ct_put(ct, write);
+        goto again;
     }
-    castle_ct_put(ct, write);
-
-    goto again;
+    
+    printk("Warning: failed to create RWCT with errno=%d\n", ret);
+    return NULL;
 }
 
 static void castle_da_bvec_queue(struct castle_double_array *da, c_bvec_t *c_bvec)
