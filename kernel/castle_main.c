@@ -510,35 +510,40 @@ static int castle_slave_superblock_validate(struct castle_slave_superblock *cs_s
     return 0;
 }
 
-static int castle_block_read(struct block_device *bdev, sector_t sector, 
-                                                        uint32_t size, char *buffer)
+static int castle_block_read(struct block_device *bdev, sector_t sector, uint32_t size, char *buffer)
 {
-    int block_size;
-    struct buffer_head *bh;
+    struct   buffer_head *bh;
+    int      nr_blocks, block_size, i;
     sector_t block;
-    
-    if (!bdev)
+
+    if (!bdev || (size > C_BLK_SIZE))
         return -1;
 
     block_size = bdev->bd_block_size;
-    block = sector / (block_size / 512);
-
-    if (size > block_size)
+    if (block_size < 512)
     {
-        printk("Block size: %u too small. Not supported\n", block_size);
+        printk("Block size(%u) < 512 bytes. Not supported\n", block_size);
         return -1;
     }
+    nr_blocks = ((size - 1) / block_size) + 1;
+    block = sector / (block_size / 512);
 
-    debug("Reading %u bytes from block %llu.\n", block_size, block);
-    if (!(bh = __bread(bdev, block, block_size)))
-        return -1;
+    debug("Reading %u bytes from block %llu.\n", (nr_blocks * block_size), block);
+    for (i=0; i<nr_blocks; i++)
+    {
+        int length;
 
-    memcpy(buffer, bh->b_data, size);
+        /* Each buffer head can't be bigger than a block. */
+        if (!(bh = __bread(bdev, block+i, block_size)))
+            return -1;
 
-    bforget(bh);
+        length = (size < block_size)?size:block_size;
+        size  -= length;
+        memcpy((buffer + (i * block_size)), bh->b_data, length);
+        bforget(bh);
+    }
 
     return 0;
-
 }
 
 static int castle_slave_superblock_read(struct castle_slave *cs) 
