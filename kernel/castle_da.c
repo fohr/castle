@@ -3084,6 +3084,18 @@ static void castle_da_put(struct castle_double_array *da)
     }
 }
 
+static void castle_da_put_locked(struct castle_double_array *da)
+{
+    if(atomic_dec_return(&da->ref_cnt) == 0)
+    {
+        /* Ref count dropped to zero -> delete. There should be no outstanding attachments. */
+        BUG_ON(da->attachment_cnt != 0);
+        BUG_ON((da->hash_list.next != NULL) || (da->hash_list.prev != NULL));
+        BUG_ON(!castle_da_deleted(da));
+        castle_da_destroy_complete(da);
+    }
+}
+
 static struct castle_double_array* castle_da_ref_get(da_id_t da_id)
 {
     struct castle_double_array *da;
@@ -3164,7 +3176,7 @@ int castle_double_array_destroy(da_id_t da_id)
     /* Set the destruction bit, which will stop further merges. */
     castle_da_deleted_set(da);
     /* Put the (usually) last reference to the DA. */
-    castle_da_put(da);
+    castle_da_put_locked(da);
 
     return 0;
 
