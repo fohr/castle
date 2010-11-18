@@ -449,7 +449,7 @@ static void castle_ct_modlist_iter_fill(c_modlist_iter_t *iter)
                "Item_idx=%d, item_count=%ld\n",
             iter->tree->seq, iter->tree->dynamic,
             item_idx, atomic64_read(&iter->tree->item_count));
-        BUG();
+        WARN_ON(1);
     }
     iter->nr_items = item_idx;
     //iter->err = iter->enumerator->err;
