@@ -1072,7 +1072,7 @@ static c2_block_t* castle_cache_block_hash_get(c_ext_pos_t cep, uint32_t nr_page
     return c2b;
 }
 
-static int castle_cache_block_hash_insert(c2_block_t *c2b)
+static int castle_cache_block_hash_insert(c2_block_t *c2b, int transient)
 {
     int idx, success;
 
@@ -1085,7 +1085,10 @@ static int castle_cache_block_hash_insert(c2_block_t *c2b)
     idx = castle_cache_block_hash_idx(c2b->cep);
     hlist_add_head(&c2b->hlist, &castle_cache_block_hash[idx]);
     BUG_ON(c2b_dirty(c2b));
-    list_add_tail(&c2b->clean, &castle_cache_cleanlist);
+    if (transient)
+        list_add(&c2b->clean, &castle_cache_cleanlist);
+    else
+        list_add_tail(&c2b->clean, &castle_cache_cleanlist);
 out:
     spin_unlock_irq(&castle_cache_block_hash_lock);
     return success;
@@ -1514,7 +1517,7 @@ static inline void castle_cache_page_freelist_grow(int nr_pages)
     castle_cache_freelists_grow(0, nr_pages);
 }
 
-c2_block_t* castle_cache_block_get(c_ext_pos_t cep, int nr_pages)
+c2_block_t* _castle_cache_block_get(c_ext_pos_t cep, int nr_pages, int transient)
 {
     c2_block_t *c2b;
     c2_page_t **c2ps;
@@ -1565,7 +1568,7 @@ c2_block_t* castle_cache_block_get(c_ext_pos_t cep, int nr_pages)
         get_c2b(c2b);
         /* Try to insert into the hash, can fail if it is already there */
         debug("Trying to insert\n");
-        if(!castle_cache_block_hash_insert(c2b))
+        if(!castle_cache_block_hash_insert(c2b, transient))
         {
             printk("Failed to insert c2b into hash\n");
             put_c2b(c2b);
@@ -1579,6 +1582,10 @@ c2_block_t* castle_cache_block_get(c_ext_pos_t cep, int nr_pages)
     }
 }
 
+c2_block_t* castle_cache_block_get(c_ext_pos_t cep, int nr_pages)
+{
+    return _castle_cache_block_get(cep, nr_pages, 0);
+}
 /**********************************************************************************************
  * Prefetching.
  *
@@ -2385,6 +2392,66 @@ next_batch:
 void castle_cache_flush_wakeup(void)
 {
     wake_up_process(castle_cache_flush_thread);
+}
+
+static void castle_cache_extent_flush_endio(c2_block_t *c2b)
+{
+    atomic_t *outst_pgs = c2b->private;
+    
+    read_unlock_c2b(c2b);
+    put_c2b(c2b);
+    if (atomic_dec_and_test(outst_pgs))
+        wake_up(&castle_cache_flush_wq);
+}
+
+int castle_cache_extent_flush(c_ext_id_t ext_id, uint64_t start, uint64_t size)
+{
+    c2_block_t *c2b;
+    c_ext_pos_t cep;
+    atomic_t    outst_pgs = ATOMIC(0);
+    uint64_t    i, first_pg, nr_pages, dirty_pgs = 0;
+
+    if (EXT_ID_INVAL(ext_id))
+        return 0;
+
+    cep.ext_id = ext_id;
+    first_pg   = (start >> C_BLK_SHIFT);
+    nr_pages   = (size - 1) / C_BLK_SIZE + 1;
+    BUG_ON((first_pg + nr_pages) > (castle_extent_size_get(ext_id) * BLKS_PER_CHK));
+
+    printk("Extent flush: (%llu) -> %llu\n", ext_id, nr_pages/BLKS_PER_CHK);
+    for (i=first_pg; i<nr_pages; i++)
+    {
+        cep.offset = i * C_BLK_SIZE;
+        c2b = _castle_cache_block_get(cep, 1, 1);
+        if (!c2b)
+            return -EIO;
+        /* c2b_flushing bit makes sure that flush thread doesnt submit parallel
+         * writes. */
+        if (test_set_c2b_flushing(c2b))
+            goto skip_page;
+        if (!c2b_uptodate(c2b) || !c2b_dirty(c2b))
+        {
+            clear_c2b_flushing(c2b);
+            goto skip_page;
+        }
+        read_lock_c2b(c2b);
+        c2b->end_io  = castle_cache_extent_flush_endio;
+        c2b->private = (void *)&outst_pgs;
+        atomic_inc(&outst_pgs);
+        dirty_pgs++;
+        BUG_ON(submit_c2b(WRITE, c2b));
+        continue;
+skip_page:
+        put_c2b(c2b);
+    }
+
+    wait_event(castle_cache_flush_wq, (atomic_read(&outst_pgs) == 0));
+
+    printk("Extent flush complete: (%llu) -> %llu/%llu\n", 
+            ext_id, dirty_pgs, nr_pages);
+
+    return 0;
 }
 
 /***** Init/fini functions *****/
