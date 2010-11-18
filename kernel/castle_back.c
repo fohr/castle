@@ -1924,7 +1924,7 @@ static void castle_back_big_put(void *data)
     castle_interface_token_t token;
     struct castle_back_stateful_op *stateful_op;
 
-    debug_iter("castle_back_big_put\n");
+    debug("castle_back_big_put\n");
 
     /* TODO: 0 indicates we don't know the length, but not supported yet */
     if (op->req.big_put.value_len <= MAX_INLINE_VAL_SIZE)
@@ -2148,7 +2148,8 @@ static void castle_back_big_get_continue(struct castle_object_pull *pull,
         attachment = stateful_op->attachment;
         stateful_op->attachment = NULL;
 
-        castle_object_pull_finish(&stateful_op->pull);
+        if (!err)
+            castle_object_pull_finish(&stateful_op->pull);
 
         /* This drops the spinlock. */
         castle_back_put_stateful_op(stateful_op->conn, stateful_op);
@@ -2181,7 +2182,7 @@ static void castle_back_big_get(void *data)
     castle_interface_token_t token;
     struct castle_back_stateful_op *stateful_op;
 
-    debug_iter("castle_back_big_get stateful_op=%p\n", stateful_op);
+    debug("castle_back_big_get\n");
 
     token = castle_back_get_stateful_op(conn, &stateful_op, op->cpu);
     if (!stateful_op)
