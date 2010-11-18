@@ -1024,6 +1024,12 @@ again:
     iter_types   = castle_malloc(iter->nr_cts * sizeof(struct castle_iterator_type *), GFP_KERNEL);
     if(!iter->ct_rqs || !iters || !iter_types)
     {
+        if(iter->ct_rqs)
+            castle_kfree(iter->ct_rqs);
+        if(iters)
+            castle_kfree(iters);
+        if(iter_types)
+            castle_kfree(iter_types);
         iter->err = -ENOMEM;
         return;
     }
