@@ -503,6 +503,12 @@ c_ext_id_t castle_extent_alloc(c_rda_type_t            rda_type,
     ext->maps_cep.ext_id= META_EXT_ID;
     ext->maps_cep.offset= castle_extents_sb->next_free_byte;
   
+    if(castle_extents_sb->next_free_byte + 
+       (sizeof(c_disk_chk_t) * count * rda_spec->k_factor) > (meta_ext.size * C_CHK_SIZE))
+    {
+        printk("Too big of an extent/crossing the boundry.\n");
+        goto __hell;
+    }
     /* TODO: Use castle_ext_fs_X functions. */
     castle_extents_sb->next_free_byte += (sizeof(c_disk_chk_t) * count * 
                                                             rda_spec->k_factor);

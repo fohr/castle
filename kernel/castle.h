@@ -1014,20 +1014,20 @@ struct castle_object_replace {
 
     struct castle_component_tree *ct;
     struct castle_cache_block *data_c2b;
-    uint32_t    data_c2b_offset;
-    uint32_t    data_length;
+    uint64_t    data_c2b_offset;
+    uint64_t    data_length;
 };
 
 struct castle_object_get {
     struct castle_component_tree *ct;
     struct castle_cache_block *data_c2b;
-    uint32_t    data_c2b_length;
-    uint32_t    data_length;
+    uint64_t    data_c2b_length;
+    uint64_t    data_length;
     int         first;
     
     void      (*reply_start)     (struct castle_object_get *get, 
                                   int err, 
-                                  uint32_t data_length,
+                                  uint64_t data_length,
                                   void *buffer, 
                                   uint32_t buffer_length);
     void      (*reply_continue)  (struct castle_object_get *get,

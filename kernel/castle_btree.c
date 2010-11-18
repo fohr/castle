@@ -653,7 +653,7 @@ static const vlba_key_t VLBA_TREE_MAX_KEY = (vlba_key_t){.length = 0xFFFFFFFE};
 struct castle_vlba_tree_entry {
     uint8_t      type;
     version_t    version;
-    uint32_t     val_len;
+    uint64_t     val_len;
     c_ext_pos_t  cep;   
     vlba_key_t   key;
     /* Inline values are stored at the end of entry */
@@ -1288,7 +1288,7 @@ static void castle_vlba_tree_node_print(struct castle_btree_node *node)
         struct castle_vlba_tree_entry *entry;
         entry = (struct castle_vlba_tree_entry *)VLBA_ENTRY_PTR(node, vlba_node, i);
 
-        printk("[%d] key_idx[%d]=%d, key_length=%d, val_len=%d, entry_size=%ld (", 
+        printk("[%d] key_idx[%d]=%d, key_length=%d, val_len=%lld, entry_size=%lld (", 
                 i, i, vlba_node->key_idx[i], VLBA_KEY_LENGTH(&entry->key),
                 entry->val_len,
                 VLBA_ENTRY_LENGTH(entry)); 

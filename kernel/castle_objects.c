@@ -782,9 +782,9 @@ static c_ext_pos_t  castle_object_write_next_cep(c_ext_pos_t  old_cep,
 }
 
 static c2_block_t* castle_object_write_buffer_alloc(c_ext_pos_t new_data_cep,
-                                                    uint32_t data_length)
+                                                    uint64_t data_length)
 {
-    uint32_t data_c2b_length;
+    uint64_t data_c2b_length;
     c2_block_t *new_data_c2b;
     int nr_blocks;
 
@@ -807,7 +807,7 @@ static c2_block_t* castle_object_write_buffer_alloc(c_ext_pos_t new_data_cep,
 static int castle_object_data_write(struct castle_object_replace *replace)
 {
     c2_block_t *data_c2b;
-    uint32_t data_c2b_offset, data_c2b_length, data_length, packet_length;
+    uint64_t data_c2b_offset, data_c2b_length, data_length, packet_length;
 
     /* Work out how much data we've got, and how far we've got so far */
     data_c2b = replace->data_c2b;
@@ -1213,15 +1213,15 @@ void castle_object_slice_get_end_io(void *obj_iter, int err)
 void castle_object_get_continue(struct castle_bio_vec *c_bvec,
                                 struct castle_object_get *get,
                                 c_ext_pos_t  data_cep,
-                                uint32_t data_length);
+                                uint64_t data_length);
 void __castle_object_get_complete(struct work_struct *work)
 {
     c_bvec_t *c_bvec = container_of(work, c_bvec_t, work);
     struct castle_object_get *get = c_bvec->c_bio->get;
     c2_block_t *c2b = get->data_c2b;
     c_ext_pos_t cep;
-    uint32_t data_c2b_length = get->data_c2b_length;
-    uint32_t data_length = get->data_length;
+    uint64_t data_c2b_length = get->data_c2b_length;
+    uint64_t data_length = get->data_length;
     int first = get->first;    
     struct castle_component_tree *ct = get->ct;
     int last;
@@ -1301,14 +1301,14 @@ void castle_object_get_io_end(c2_block_t *c2b)
 void castle_object_get_continue(struct castle_bio_vec *c_bvec,
                                 struct castle_object_get *get,
                                 c_ext_pos_t  data_cep,
-                                uint32_t data_length)
+                                uint64_t data_length)
 {
     c2_block_t *c2b;
     int nr_blocks;
     
     c2_block_t *old_c2b = get->data_c2b;
-    uint32_t data_c2b_length = get->data_c2b_length;
-    uint32_t old_data_length = get->data_length;
+    uint64_t data_c2b_length = get->data_c2b_length;
+    uint64_t old_data_length = get->data_length;
     
     BUG_ON(c_bvec->c_bio->get != get);
 
@@ -1321,19 +1321,19 @@ void castle_object_get_continue(struct castle_bio_vec *c_bvec,
            (old_c2b->cep.ext_id != data_cep.ext_id) &&
            (old_c2b->cep.offset + (OBJ_IO_MAX_BUFFER_SIZE * C_BLK_SIZE) != data_cep.offset));
 
-    nr_blocks = (data_length - 1) / C_BLK_SIZE + 1; 
-    debug("Nr blocks required for entire data: %d\n", nr_blocks);
     /* Work out if we can read the (remaining part of the) object in full,
        or if we are going to be reading just a part of it */
-    if(nr_blocks > OBJ_IO_MAX_BUFFER_SIZE)
+    if(data_length > OBJ_IO_MAX_BUFFER_SIZE * C_BLK_SIZE)
     {
         nr_blocks = OBJ_IO_MAX_BUFFER_SIZE;
         data_c2b_length = nr_blocks * C_BLK_SIZE;
         debug("Too many blocks required, reducing to %d\n", nr_blocks);
     } else
     {
+        nr_blocks = (data_length - 1) / C_BLK_SIZE + 1; 
         data_c2b_length = data_length;
     }
+    debug("Nr blocks this time around: %d\n", nr_blocks);
     debug("data_c2b_length=%d, data_length=%d\n", data_c2b_length, data_length);
     data_length -= data_c2b_length; 
     

@@ -1154,7 +1154,7 @@ void castle_back_get_reply_continue(struct castle_object_get *get,
 
 void castle_back_get_reply_start(struct castle_object_get *get, 
                                   int err, 
-                                  uint32_t data_length,
+                                  uint64_t data_length,
                                   void *buffer, 
                                   uint32_t buffer_length)
 {

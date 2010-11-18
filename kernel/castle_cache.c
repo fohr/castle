@@ -203,7 +203,7 @@ static inline int castle_cache_c2b_to_pages(c2_block_t *c2b)
 /**********************************************************************************************
  * Static variables. 
  */
-static int                     castle_cache_size = 20000; /* In pages */ 
+static int                     castle_cache_size = 1000000; /* In pages */ 
 
 module_param(castle_cache_size, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
 MODULE_PARM_DESC(castle_cache_size, "Cache size");
