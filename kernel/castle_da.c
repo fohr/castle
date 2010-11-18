@@ -409,6 +409,7 @@ static void castle_ct_modlist_iter_fill(c_modlist_iter_t *iter)
     item_idx = node_idx = node_offset = 0;
     while(castle_ct_immut_iter.has_next(iter->enumerator))
     {
+        might_resched();
         if(iter->merge)
             castle_da_merge_budget_consume(iter->merge);
         /* Check if we moved on to a new node. If so, init that. */
@@ -536,6 +537,7 @@ static void castle_ct_modlist_iter_heapify(c_modlist_iter_t *iter)
 
     while(true)
     {
+        might_resched();
         if(iter->merge)
             castle_da_merge_budget_consume(iter->merge);
         castle_ct_modlist_iter_sift_down(iter, start, iter->nr_items - 1);
@@ -554,6 +556,7 @@ static void castle_ct_modlist_iter_heapsort(c_modlist_iter_t *iter)
     {
         struct item_idx tmp_idx;
 
+        might_resched();
         if(iter->merge)
             castle_da_merge_budget_consume(iter->merge);
         /* Head is the greatest item, swap with last, and sift down */
@@ -1893,6 +1896,7 @@ static void castle_da_merge_do(struct work_struct *work)
     debug("Starting the merge.\n");
     while(castle_ct_merged_iter_has_next(merge->merged_iter))
     {
+        might_resched();
         /* TODO: we never check iterator errors. We should! */
         castle_ct_merged_iter_next(merge->merged_iter, &key, &version, &cvt); 
         debug("Merging entry id=%d: k=%p, *k=%d, version=%d, cep=(0x%x, 0x%x)\n",
