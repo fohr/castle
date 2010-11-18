@@ -3086,6 +3086,7 @@ static void castle_da_put(struct castle_double_array *da)
 
 static void castle_da_put_locked(struct castle_double_array *da)
 {
+    BUG_ON(!castle_ctrl_is_locked());
     if(atomic_dec_return(&da->ref_cnt) == 0)
     {
         /* Ref count dropped to zero -> delete. There should be no outstanding attachments. */
