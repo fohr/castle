@@ -115,6 +115,7 @@ int         submit_c2b_sync           (int rw, c2_block_t *c2b);
             castle_cache_block_get    (_cep, 1)
 c2_block_t* castle_cache_block_get    (c_ext_pos_t  cep, int nr_pages);
 void        castle_cache_flush_wakeup (void);
+int         castle_cache_extent_flush (c_ext_id_t ext_id, uint64_t start, uint64_t size);
 
 /**********************************************************************************************
  * MStore related functions 

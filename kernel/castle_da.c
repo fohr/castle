@@ -1848,6 +1848,14 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
         debug("Destroying old CTs.\n");
         castle_ct_put(merge->in_tree1, 0);
         castle_ct_put(merge->in_tree2, 0);
+
+        /* Flush the new CT onto disk. */
+        castle_cache_extent_flush(merge->tree_ext_fs.ext_id, 0,
+                                  atomic64_read(&merge->tree_ext_fs.used));
+#if 0   /* For now, Crash Consistency is for Trees only. */
+        castle_cache_extent_flush(merge->data_ext_fs.ext_id, 0,
+                                  atomic64_read(&merge->data_ext_fs.used));
+#endif
     }
     else
     {
