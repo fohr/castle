@@ -334,7 +334,7 @@ typedef struct castle_response {
 
 struct castle_iter_val {
     uint8_t              type;
-    uint32_t             length;
+    uint64_t             length;
     union {
         uint8_t         *val;
         collection_id_t  collection_id;
