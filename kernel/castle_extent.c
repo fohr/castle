@@ -705,7 +705,9 @@ static void __castle_extent_map_get(c_ext_t             *ext,
             debug("Scheduling read to get chunk mappings for ext: %llu\n",
                         ext->ext_id);
             write_lock_c2b(c2b);
-            BUG_ON(submit_c2b_sync(READ, c2b));
+            /* Need to recheck whether it's uptodate after getting the lock. */
+            if(!c2b_uptodate(c2b))
+                BUG_ON(submit_c2b_sync(READ, c2b));
             write_unlock_c2b(c2b);
         }
         read_lock_c2b(c2b);
