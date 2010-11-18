@@ -55,14 +55,16 @@ static int                      castle_da_exiting    = 0;
    may be ongoing writes to this component tree. This is safe, because all further reads to 
    the tree (either doubling array reads, or merge) chain lock the tree nodes appropriately.
    RW tree creation and merges are serialised using the flags field.
+
+   For DAs, only an attached DA is guaranteed to be in the hash.
  */
 
 #define DOUBLE_ARRAY_GROWING_RW_TREE_BIT    (0)
 #define DOUBLE_ARRAY_GROWING_RW_TREE_FLAG   (1 << DOUBLE_ARRAY_GROWING_RW_TREE_BIT)
 #define DOUBLE_ARRAY_MERGING_BIT            (1)
 #define DOUBLE_ARRAY_MERGING_FLAG           (1 << DOUBLE_ARRAY_MERGING_BIT)
-#define DOUBLE_ARRAY_DESTROY_BIT            (2)
-#define DOUBLE_ARRAY_DESTROY_FLAG           (1 << DOUBLE_ARRAY_DESTROY_BIT)
+#define DOUBLE_ARRAY_DELETED_BIT            (2)
+#define DOUBLE_ARRAY_DELETED_FLAG           (1 << DOUBLE_ARRAY_DELETED_BIT)
 struct castle_double_array {
     da_id_t            id;
     version_t          root_version;
@@ -73,8 +75,8 @@ struct castle_double_array {
     struct list_head   trees[MAX_DA_LEVEL];
     struct list_head   hash_list;
     c_mstore_key_t     mstore_key;
-    uint32_t           att_ref_cnt;
-    uint32_t           da_ref_cnt;
+    atomic_t           ref_cnt;
+    uint32_t           attachment_cnt;
     /* Queue of write IOs queued up on this DA. */
     struct list_head   ios_waiting;
     int                ios_waiting_cnt;
@@ -111,8 +113,8 @@ static void castle_da_merge_budget_consume(struct castle_da_merge *merge);
 static void castle_da_queue_restart(struct work_struct *work);
 static void castle_da_queue_kick(struct castle_double_array *da);
 static void castle_da_bvec_start(struct castle_double_array *da, c_bvec_t *c_bvec);
-int castle_da_get(struct castle_double_array *da, int attachment);
-int castle_da_put(struct castle_double_array *da, int attachment);
+static void castle_da_get(struct castle_double_array *da);
+static void castle_da_put(struct castle_double_array *da);
 
 /**********************************************************************************************/
 /* Utils */
@@ -150,6 +152,15 @@ static inline void castle_da_growing_rw_clear(struct castle_double_array *da)
 }
 
 
+static inline int castle_da_deleted(struct castle_double_array *da)
+{
+    return test_bit(DOUBLE_ARRAY_DELETED_BIT, &da->flags);
+}
+
+static inline void castle_da_deleted_set(struct castle_double_array *da)
+{
+    set_bit(DOUBLE_ARRAY_DELETED_BIT, &da->flags);
+}
 
 /**********************************************************************************************/
 /* Iterators */
@@ -1207,13 +1218,12 @@ static void castle_da_queue_restart(struct work_struct *work)
     castle_da_unlock(da);
 
     castle_da_queue_kick(da);
-    castle_da_put(da, 0);
+    castle_da_put(da);
 } 
 
 static int castle_da_ios_budget_replenish(struct castle_double_array *da, void *unused)
 {
-    if(castle_da_get(da, 0) != 0)
-        return 0;
+    castle_da_get(da);
     queue_work(castle_wq, &da->queue_restart);
 
     return 0;
@@ -1729,6 +1739,7 @@ static struct castle_component_tree* castle_da_merge_package(struct castle_da_me
     castle_component_tree_del(merge->da, merge->in_tree2);
     castle_component_tree_add(merge->da, out_tree, 0 /* not in init */);
     castle_da_merging_clear(merge->da);
+    /* We are holding ref to this DA, therefore it is safe to schedule the check. */
     castle_da_merge_check(merge->da);
     castle_da_unlock(merge->da);
 
@@ -1931,7 +1942,7 @@ err_out:
         printk("Merge failed with %d\n", ret);
     da = merge->da;
     castle_da_merge_dealloc(merge, ret);
-    castle_da_put(da, 0);
+    castle_da_put(da);
 }
 
 static void castle_da_merge_schedule(struct castle_double_array *da,
@@ -1947,12 +1958,8 @@ static void castle_da_merge_schedule(struct castle_double_array *da,
             in_tree1->seq, in_tree1->dynamic,
             in_tree2->seq, in_tree2->dynamic);
 
-    if (castle_da_get(da, 0) < 0)
-    {
-        ret = -1;
-        goto error_out;
-    }
-
+    /* Get ref to this DA, we'll only drop this when merge is finished. */
+    castle_da_get(da);
     /* Work out what type of trees are we going to be merging. Bug if in_tree1/2 don't match. */
     btree = castle_btree_type_get(in_tree1->btree_type);
     BUG_ON(btree != castle_btree_type_get(in_tree2->btree_type));
@@ -2024,6 +2031,7 @@ static void castle_da_merge_schedule(struct castle_double_array *da,
 error_out:
     BUG_ON(!ret);
     castle_da_merge_dealloc(merge, ret);
+    castle_da_put(da);
     printk("Failed a merge with ret=%d\n", ret);
 }
 
@@ -2080,7 +2088,7 @@ static void castle_da_merge_check(struct castle_double_array *da)
 
     /* Do not schedule the merge (even if we found CTs), if we are already merging, 
        the FS is exiting, or we want to destroy this DA. */ 
-    if(castle_da_merging(da) || castle_da_exiting || test_bit(DOUBLE_ARRAY_DESTROY_BIT, &da->flags))
+    if(castle_da_merging(da) || castle_da_deleted(da) || castle_da_exiting)
         return;
 
     /* Schedule merge. */
@@ -2141,8 +2149,8 @@ static struct castle_double_array* castle_da_alloc(void)
     spin_lock_init(&da->lock);
     da->flags           = 0;
     da->nr_trees        = 0;
-    da->att_ref_cnt     = 0;
-    da->da_ref_cnt      = 0;
+    atomic_set(&da->ref_cnt, 1);
+    da->attachment_cnt  = 0;
     INIT_LIST_HEAD(&da->ios_waiting);
     da->ios_waiting_cnt = 0;
     da->ios_budget      = 0;
@@ -2151,7 +2159,6 @@ static struct castle_double_array* castle_da_alloc(void)
     atomic_set(&da->epoch_ios, 0);
     atomic_set(&da->merge_budget, 0);
     init_waitqueue_head(&da->merge_budget_wq);
-    castle_da_get(da, 1);
     for(i=0; i<MAX_DA_LEVEL; i++)
         INIT_LIST_HEAD(&da->trees[i]);
 
@@ -2267,6 +2274,7 @@ static int castle_da_trees_sort(struct castle_double_array *da, void *unused)
     return 0;
 }
 
+/* This only happens at the start of day. */
 static int castle_da_merge_restart(struct castle_double_array *da, void *unused)
 {
     castle_da_lock(da);
@@ -2651,6 +2659,8 @@ static int castle_da_rwct_make(struct castle_double_array *da)
     }
     /* Thread CT onto level 0 list */
     castle_component_tree_add(da, ct, 0 /* not in init */);
+    /* DA is attached, therefore we must be holding a ref, therefore it is safe to schedule
+       the merge check. */
     castle_da_merge_check(da);
     castle_da_unlock(da);
     ret = 0;
@@ -3021,9 +3031,8 @@ void castle_da_destroy_complete(struct castle_double_array *da)
     int i;
 
     /* Sanity Checks. */
-    BUG_ON(da->att_ref_cnt || da->da_ref_cnt ||
-           !test_bit(DOUBLE_ARRAY_DESTROY_BIT, &da->flags) || 
-           castle_da_merging(da));
+    BUG_ON(castle_da_merging(da));
+    BUG_ON(!castle_da_deleted(da));
 
     printk("Cleaning DA: %u\n", da->id);
 
@@ -3050,122 +3059,129 @@ void castle_da_destroy_complete(struct castle_double_array *da)
     /* Destroy Version and Rebuild Version Tree. */
     castle_version_tree_delete(da->root_version);
 
-    /* Destroy Doubling Array. */
-    castle_da_unlock(da);
-
+    /* Poison and free (may be repoisoned on debug kernel builds). */
+    memset(da, 0xa7, sizeof(struct castle_double_array));
     castle_free(da);
 }
 
-int castle_da_get(struct castle_double_array *da, int attachment)
+static void castle_da_get(struct castle_double_array *da)
 {
-    int ret = 0;
-
-    castle_da_lock(da);
-
-    if (test_bit(DOUBLE_ARRAY_DESTROY_BIT, &da->flags))
-    {
-        ret = -1;
-        goto out;
-    }
-
-    if (attachment)
-        da->att_ref_cnt++;
-    else
-        da->da_ref_cnt++;
-
-out:
-    castle_da_unlock(da);
-    return ret;
+    /* Increment ref count, it should never be zero when we get here. */
+    BUG_ON(atomic_inc_return(&da->ref_cnt) <= 1);
 }
 
-int castle_da_put(struct castle_double_array *da, int attachment)
+static void castle_da_put(struct castle_double_array *da)
 {
-    int destroy;
-
-    castle_da_lock(da);
-
-    if (attachment)
-        da->att_ref_cnt--;
-    else
-        da->da_ref_cnt--;
-    
-    destroy = (da->att_ref_cnt == 0) && (da->da_ref_cnt == 0);
-    BUG_ON(destroy && !test_bit(DOUBLE_ARRAY_DESTROY_BIT, &da->flags));
-    castle_da_unlock(da);
-
-    if(destroy)
+    if(atomic_dec_return(&da->ref_cnt) == 0)
     {
-        if (!attachment) castle_ctrl_lock();
+        /* Ref count dropped to zero -> delete. There should be no outstanding attachments. */
+        BUG_ON(da->attachment_cnt != 0);
+        BUG_ON((da->hash_list.next != NULL) || (da->hash_list.prev != NULL));
+        BUG_ON(!castle_da_deleted(da));
+        castle_ctrl_lock();
         castle_da_destroy_complete(da);
-        if (!attachment) castle_ctrl_unlock();
+        castle_ctrl_unlock();
     }
+}
 
-    return 0;
+static struct castle_double_array* castle_da_ref_get(da_id_t da_id)
+{
+    struct castle_double_array *da;
+    unsigned long flags;
+
+    spin_lock_irqsave(&castle_da_hash_lock, flags);
+    da = __castle_da_hash_get(da_id);
+    if(!da)
+        goto out;
+    castle_da_get(da);
+out:
+    spin_unlock_irqrestore(&castle_da_hash_lock, flags);
+
+    return da;
 }
 
 int castle_double_array_get(da_id_t da_id)
 {
     struct castle_double_array *da;
+    unsigned long flags;
 
-    da = castle_da_hash_get(da_id);
-    if (!da)
-        return -EINVAL;
+    spin_lock_irqsave(&castle_da_hash_lock, flags);
+    da = __castle_da_hash_get(da_id);
+    if(!da)
+        goto out;
+    castle_da_get(da);
+    da->attachment_cnt++;
+out:
+    spin_unlock_irqrestore(&castle_da_hash_lock, flags);
 
-    return castle_da_get(da, 1);
+    return (da == NULL ? -EINVAL : 0);
 }
 
-int castle_double_array_put(da_id_t da_id)
+void castle_double_array_put(da_id_t da_id)
 {
     struct castle_double_array *da;
 
+    /* We only call this for attached DAs which _must_ be in the hash. */
     da = castle_da_hash_get(da_id);
-    if (!da)
-        return -EINVAL;
-
-    return castle_da_put(da, 1);
+    BUG_ON(!da);
+    /* DA allocated + our ref count on it. */
+    BUG_ON(atomic_read(&da->ref_cnt) < 2);
+    castle_da_lock(da);
+    da->attachment_cnt--;
+    castle_da_unlock(da);
+    /* Put the ref cnt too. */
+    castle_da_put(da);
 }
 
 int castle_double_array_destroy(da_id_t da_id)
 {
     struct castle_double_array *da;
-    int ret = 0;
+    unsigned long flags;
+    int ret;
 
-    da = castle_da_hash_get(da_id);
-    if (!da)
-        return -EINVAL;
-
-    /* Mark DA for deletion. */
-    castle_da_lock(da);
-    if (da->att_ref_cnt > 1)
+    spin_lock_irqsave(&castle_da_hash_lock, flags);
+    da = __castle_da_hash_get(da_id);
+    /* Fail if we cannot find the da in the hash. */
+    if(!da)
     {
         ret = -EINVAL;
-        goto out;
+        goto err_out;
     }
-
-    if (test_and_set_bit(DOUBLE_ARRAY_DESTROY_BIT, &da->flags))
+    BUG_ON(da->attachment_cnt < 0);
+    /* Fail if there are attachments to the DA. */
+    if(da->attachment_cnt > 0)
     {
-        ret = -EINVAL;
-        goto out;
+        ret = -EBUSY;
+        goto err_out;
     }
+    /* Now we are happy to delete the DA. Remove it from the hash. */ 
+    BUG_ON(castle_da_deleted(da));
+    __castle_da_hash_remove(da); 
+    spin_unlock_irqrestore(&castle_da_hash_lock, flags);
 
-out:
-    castle_da_unlock(da);
-    if (!ret)
-    {
-        printk("Marking DA %u for deletion\n", da_id);
-        castle_da_hash_remove(da);
-        castle_da_put(da, 1);
-    }
+    printk("Marking DA %u for deletion\n", da_id);
+    /* Set the destruction bit, which will stop further merges. */
+    castle_da_deleted_set(da);
+    /* Put the (usually) last reference to the DA. */
+    castle_da_put(da);
 
+    return 0;
+
+err_out:
+    spin_unlock_irqrestore(&castle_da_hash_lock, flags);
     return ret;
 }
 
-static int castle_da_size_get(struct castle_double_array *da, struct castle_component_tree *ct, int level_cnt, void *token)
+static int castle_da_size_get(struct castle_double_array *da, 
+                              struct castle_component_tree *ct, 
+                              int level_cnt, 
+                              void *token)
 {
     c_byte_off_t *size = (c_byte_off_t *)token;
     *size += castle_extent_size_get(ct->tree_ext_fs.ext_id);
     *size += castle_extent_size_get(ct->data_ext_fs.ext_id);
     *size += atomic64_read(&ct->large_ext_chk_cnt);
+
     return 0;
 }
 
@@ -3175,22 +3191,16 @@ int castle_double_array_size_get(da_id_t da_id, c_byte_off_t *size)
     int err_code = 0;
     c_byte_off_t s = 0;
 
-    da = castle_da_hash_get(da_id);
+    da = castle_da_ref_get(da_id);
     if (!da)
     {
         err_code = -EINVAL;
         goto out;
     }
 
-    err_code = castle_da_get(da, 1);
-    if (err_code)
-    {
-        goto out;
-    }
-
     castle_da_foreach_tree(da, castle_da_size_get, (void *)&s);
 
-    castle_da_put(da, 1);
+    castle_da_put(da);
 
 out:
     *size = s;
