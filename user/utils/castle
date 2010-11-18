@@ -24,11 +24,18 @@
 set +u
 set +e # necessary as /etc/init.d/functions is badly written
 
+prog="castle"
+
+[ -e /etc/sysconfig/$prog ] && . /etc/sysconfig/$prog
+
+lockfile=/var/lock/subsys/$prog
+
 start() {
     echo -n "Starting $prog: "
     /usr/share/castle-fs/castle-fs-init
     retval=$?
     echo
+    [ $retval -eq 0 ] && touch $lockfile
     return $retval
 }
 
@@ -37,6 +44,7 @@ stop() {
     /usr/share/castle-fs/castle-fs-fini
     retval=$?
     echo
+    [ $retval -eq 0 ] && rm -f $lockfile
     return $retval
 }
 
