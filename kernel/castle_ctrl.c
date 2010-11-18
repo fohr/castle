@@ -3,6 +3,7 @@
 #include <linux/skbuff.h>
 #include <asm/uaccess.h>
 #include <linux/hardirq.h>
+#include <linux/mutex.h>
 
 #include "castle_public.h"
 #include "castle_utils.h"
@@ -22,19 +23,24 @@
 #define debug(_f, _a...)  (printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
 #endif
 
-static DECLARE_MUTEX(castle_control_lock);
+static DEFINE_MUTEX(castle_control_lock);
 static DECLARE_WAIT_QUEUE_HEAD(castle_control_wait_q);
 
 c_mstore_t *castle_attachments_store = NULL;
 
 void castle_ctrl_lock(void)
 {
-    down(&castle_control_lock);
+    mutex_lock(&castle_control_lock);
 }
 
 void castle_ctrl_unlock(void)
 {
-    up(&castle_control_lock);
+    mutex_unlock(&castle_control_lock);
+}
+
+int castle_ctrl_is_locked(void)
+{
+    return mutex_is_locked(&castle_control_lock); 
 }
 
 void castle_control_claim(uint32_t dev, int *ret, slave_uuid_t *id)
@@ -539,7 +545,7 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
         return -EINVAL;
     }
 
-    down(&castle_control_lock);
+    castle_ctrl_lock();
     debug("Lock taken: in_atomic=%d.\n", in_atomic());
     debug("IOCTL Cmd: %u\n", (uint32_t)ioctl.cmd);
     switch(ioctl.cmd)
@@ -651,7 +657,7 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
             err = -EINVAL;
             goto err;
     }
-    up(&castle_control_lock);
+    castle_ctrl_unlock();
 
     /* Copy the results back */
     if(copy_to_user(udata, &ioctl, sizeof(cctrl_ioctl_t)))
@@ -660,7 +666,7 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
     return 0;
     
 err:
-    up(&castle_control_lock);
+    castle_ctrl_unlock();
     return err;
 }
 
@@ -707,6 +713,6 @@ void castle_control_fini(void)
     if((ret = misc_deregister(&castle_control))) 
         printk("Could not unregister castle control node (%d).\n", ret);
     /* Sleep waiting for the last ctrl op to complete, if there is one */
-    down(&castle_control_lock);
-    up(&castle_control_lock);
+    castle_ctrl_lock();
+    castle_ctrl_unlock();
 }

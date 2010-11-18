@@ -1197,10 +1197,13 @@ static void castle_da_queue_restart(struct work_struct *work)
     castle_da_unlock(da);
 
     castle_da_queue_kick(da);
+    castle_da_put(da, 0);
 } 
 
 static int castle_da_ios_budget_replenish(struct castle_double_array *da, void *unused)
 {
+    if(castle_da_get(da, 0) != 0)
+        return 0;
     queue_work(castle_wq, &da->queue_restart);
 
     return 0;
@@ -3037,7 +3040,6 @@ void castle_da_destroy_complete(struct castle_double_array *da)
     castle_version_tree_delete(da->root_version);
 
     /* Destroy Doubling Array. */
-    castle_da_hash_remove(da);
     castle_da_unlock(da);
 
     castle_free(da);
@@ -3067,22 +3069,25 @@ out:
 
 int castle_da_put(struct castle_double_array *da, int attachment)
 {
+    int destroy;
+
     castle_da_lock(da);
 
     if (attachment)
         da->att_ref_cnt--;
     else
         da->da_ref_cnt--;
+    
+    destroy = (da->att_ref_cnt == 0) && (da->da_ref_cnt == 0);
+    BUG_ON(destroy && !test_bit(DOUBLE_ARRAY_DESTROY_BIT, &da->flags));
+    castle_da_unlock(da);
 
-    if (test_bit(DOUBLE_ARRAY_DESTROY_BIT, &da->flags) && !da->att_ref_cnt &&
-                                                !da->da_ref_cnt)
+    if(destroy)
     {
         if (!attachment) castle_ctrl_lock();
         castle_da_destroy_complete(da);
         if (!attachment) castle_ctrl_unlock();
     }
-    else
-        castle_da_unlock(da);
 
     return 0;
 }
@@ -3137,6 +3142,7 @@ out:
     if (!ret)
     {
         printk("Marking DA %u for deletion\n", da_id);
+        castle_da_hash_remove(da);
         castle_da_put(da, 1);
     }
 
