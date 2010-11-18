@@ -3157,6 +3157,7 @@ int castle_double_array_destroy(da_id_t da_id)
     /* Now we are happy to delete the DA. Remove it from the hash. */ 
     BUG_ON(castle_da_deleted(da));
     __castle_da_hash_remove(da); 
+    da->hash_list.next = da->hash_list.prev = NULL;
     spin_unlock_irqrestore(&castle_da_hash_lock, flags);
 
     printk("Marking DA %u for deletion\n", da_id);
