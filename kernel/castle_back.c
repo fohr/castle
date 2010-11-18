@@ -1022,7 +1022,7 @@ static void castle_back_replace(void *data)
     if (op->attachment == NULL)
     {
         error("Collection not found id=0x%x\n", op->req.replace.collection_id);
-        err = -ENOENT;
+        err = -ENOTCONN;
         goto err0;
     }
 
@@ -1090,7 +1090,7 @@ static void castle_back_remove(void *data)
     if (op->attachment == NULL)
     {
         error("Collection not found id=0x%x\n", op->req.remove.collection_id);
-        err = -ENOENT;
+        err = -ENOTCONN;
         goto err0;
     }
 
@@ -1200,7 +1200,7 @@ static void castle_back_get(void *data)
     if (op->attachment == NULL)
     {
         error("Collection not found id=0x%x\n", op->req.get.collection_id);
-        err = -ENOENT;
+        err = -ENOTCONN;
         goto err0;
     }
 
@@ -1344,7 +1344,7 @@ static void castle_back_iter_start(void *data)
     if (attachment == NULL)
     {
         error("Collection not found id=0x%x\n", op->req.iter_start.collection_id);
-        err = -ENOENT;
+        err = -ENOTCONN;
         goto err1;
     }
 
@@ -1944,7 +1944,7 @@ static void castle_back_big_put(void *data)
     if (attachment == NULL)
     {
         error("Collection not found id=0x%x\n", op->req.big_put.collection_id);
-        err = -ENOENT;
+        err = -ENOTCONN;
         goto err1;
     }
 
@@ -2194,7 +2194,7 @@ static void castle_back_big_get(void *data)
     if (attachment == NULL)
     {
         error("Collection not found id=0x%x\n", op->req.big_get.collection_id);
-        err = -ENOENT;
+        err = -ENOTCONN;
         goto err1;
     }
 
