@@ -2559,11 +2559,17 @@ static void castle_btree_iter_end(c_iter_t *c_iter, int err)
     wake_up(&castle_btree_iters_wq);
 }
 
-#define indirect_node(_i)      (c_iter->indirect_nodes[(_i)]) 
-#define cep_lt(_cep1, _cep2) ( ((_cep1).ext_id  < (_cep2).ext_id ) ||        \
-                              (((_cep1).ext_id == (_cep2).ext_id ) &&        \
-                               ((_cep1).offset < (_cep2).offset)) )           
-#define c2b_follow_ptr(_i)     indirect_node(indirect_node(_i).r_idx).c2b
+#ifdef CASTLE_DEBUG
+#define indirect_node(_i)      ({struct castle_indirect_node *_n;            \
+                                 BUG_ON(!c_iter->indirect_nodes);            \
+                                 BUG_ON(_i >= MAX_BTREE_ENTRIES);            \
+                                 _n = &c_iter->indirect_nodes[(_i)];         \
+                                 _n;})
+#else
+#define indirect_node(_i)      (&c_iter->indirect_nodes[(_i)]) 
+#endif
+#define cep_lt(_cep1, _cep2)   (EXT_POS_COMP(_cep1, _cep2) < 0)
+#define c2b_follow_ptr(_i)     indirect_node(indirect_node(_i)->r_idx)->c2b
 
 #define slot_follow_ptr(_i, _real_c2b, _real_slot_idx)                       \
 ({                                                                           \
@@ -2578,8 +2584,9 @@ static void castle_btree_iter_end(c_iter_t *c_iter, int err)
     _t->entry_get(_n, _i, NULL, NULL, &_cvt);                                \
     if(CVT_LEAF_PTR(_cvt))                                                   \
     {                                                                        \
+        BUG_ON(btree == &castle_ro_tree);                                    \
         (_real_c2b)  = c2b_follow_ptr(_i);                                   \
-        (_real_slot_idx) = indirect_node(_i).node_idx;                       \
+        (_real_slot_idx) = indirect_node(_i)->node_idx;                      \
     }                                                                        \
  })
 
@@ -2653,18 +2660,17 @@ static void __castle_btree_iter_release(c_iter_t *c_iter)
     node = c2b_bnode(leaf);
     BUG_ON(!node->is_leaf);
     
-    if(c_iter->type == C_ITER_MATCHING_VERSIONS || 
-        c_iter->type == C_ITER_ANCESTRAL_VERSIONS)
+    if(c_iter->indirect_nodes != NULL)
     { 
         /* Unlock all the indirect nodes. */
         for(i=node->used - 1; i>=0; i--)
         {
             iter_debug("===> Trying to unlock indirect node i=%d\n", i);
-            if(indirect_node(i).c2b)
+            if(indirect_node(i)->c2b)
             {
-                write_unlock_c2b(indirect_node(i).c2b);
-                put_c2b(indirect_node(i).c2b);
-                indirect_node(i).c2b = NULL;
+                write_unlock_c2b(indirect_node(i)->c2b);
+                put_c2b(indirect_node(i)->c2b);
+                indirect_node(i)->c2b = NULL;
             }
         }
         iter_debug("Unlocking cep=(0x%x, 0x%x)\n", 
@@ -2687,32 +2693,32 @@ static void castle_btree_iter_leaf_ptrs_sort(c_iter_t *c_iter, int nr_ptrs)
     c_ext_pos_t  last_cep;
 
     /* We use heapsort, using Wikipedia's pseudo-code as the reference */
-#define heap_swap(_i, _j)                                                 \
-           {c_ext_pos_t  tmp_cep;                                         \
-            uint8_t      tmp_f_idx;                                       \
-            tmp_cep   = indirect_node(_i).cep;                            \
-            tmp_f_idx = indirect_node(_i).f_idx;                          \
-            indirect_node(_i).cep   = indirect_node(_j).cep;              \
-            indirect_node(_i).f_idx = indirect_node(_j).f_idx;            \
-            indirect_node(_j).cep   = tmp_cep;                            \
-            indirect_node(_j).f_idx = tmp_f_idx;}
-    
-#define sift_down(_start, _end)                                           \
-   {root = (_start);                                                      \
-    while((2*root + 1) <= (_end))                                         \
-    {                                                                     \
-        child = 2 * root + 1;                                             \
-        if((child < (_end)) &&                                            \
-            cep_lt(indirect_node(child).cep, indirect_node(child+1).cep)) \
-                child = child+1;                                          \
-        if(cep_lt(indirect_node(root).cep, indirect_node(child).cep))     \
-        {                                                                 \
-            heap_swap(root, child);                                       \
-            root = child;                                                 \
-        } else                                                            \
-        {                                                                 \
-            break;                                                        \
-        }                                                                 \
+#define heap_swap(_i, _j)                                                   \
+           {c_ext_pos_t  tmp_cep;                                           \
+            uint8_t      tmp_f_idx;                                         \
+            tmp_cep   = indirect_node(_i)->cep;                             \
+            tmp_f_idx = indirect_node(_i)->f_idx;                           \
+            indirect_node(_i)->cep   = indirect_node(_j)->cep;              \
+            indirect_node(_i)->f_idx = indirect_node(_j)->f_idx;            \
+            indirect_node(_j)->cep   = tmp_cep;                             \
+            indirect_node(_j)->f_idx = tmp_f_idx;}                  
+                                                                    
+#define sift_down(_start, _end)                                             \
+   {root = (_start);                                                        \
+    while((2*root + 1) <= (_end))                                           \
+    {                                                                       \
+        child = 2 * root + 1;                                               \
+        if((child < (_end)) &&                                              \
+            cep_lt(indirect_node(child)->cep, indirect_node(child+1)->cep)) \
+                child = child+1;                                            \
+        if(cep_lt(indirect_node(root)->cep, indirect_node(child)->cep))     \
+        {                                                                   \
+            heap_swap(root, child);                                         \
+            root = child;                                                   \
+        } else                                                              \
+        {                                                                   \
+            break;                                                          \
+        }                                                                   \
     }}
 
     /* Arrange the array into a heap */
@@ -2731,15 +2737,15 @@ static void castle_btree_iter_leaf_ptrs_sort(c_iter_t *c_iter, int nr_ptrs)
     last_r_idx = -1;
     for(i=0; i < nr_ptrs; i++)
     {
-        if(EXT_POS_EQUAL(indirect_node(i).cep, last_cep))
+        if(EXT_POS_EQUAL(indirect_node(i)->cep, last_cep))
         {
             BUG_ON(last_r_idx < 0);
-            indirect_node(indirect_node(i).f_idx).r_idx = last_r_idx;
-            indirect_node(i).cep = INVAL_EXT_POS;
+            indirect_node(indirect_node(i)->f_idx)->r_idx = last_r_idx;
+            indirect_node(i)->cep = INVAL_EXT_POS;
         } else
         {
-            indirect_node(indirect_node(i).f_idx).r_idx = i;
-            last_cep   = indirect_node(i).cep;
+            indirect_node(indirect_node(i)->f_idx)->r_idx = i;
+            last_cep   = indirect_node(i)->cep;
             last_r_idx = i;
         }
     }
@@ -2752,6 +2758,12 @@ static void castle_btree_iter_leaf_ptrs_lock(c_iter_t *c_iter)
     c2_block_t *c2b;
     int i, j, nr_ptrs;
 
+    /* RO trees don't have leaf pointers. */
+    if(btree == &castle_ro_tree)
+    {
+        BUG_ON(c_iter->indirect_nodes != NULL);
+        return;
+    }
     node = c2b_bnode(c_iter->path[c_iter->depth]);
     /* Make sure that node->used is smaller than what we can index in 1 byte f/r_idx */
     BUG_ON(node->used >= 1<<(8*sizeof(uint16_t)));
@@ -2772,9 +2784,9 @@ static void castle_btree_iter_leaf_ptrs_lock(c_iter_t *c_iter)
             continue;
         if(CVT_LEAF_PTR(entry_cvt))
         {
-            BUG_ON(indirect_node(j).c2b);
-            indirect_node(j).cep   = entry_cvt.cep;
-            indirect_node(j).f_idx = i;
+            BUG_ON(indirect_node(j)->c2b);
+            indirect_node(j)->cep   = entry_cvt.cep;
+            indirect_node(j)->f_idx = i;
             j++;
         }
     }
@@ -2786,18 +2798,18 @@ static void castle_btree_iter_leaf_ptrs_lock(c_iter_t *c_iter)
     /* Now that leafs have been sorted, lock them all */
     for(i=0; i<nr_ptrs; i++)
     {
-        c_ext_pos_t cep = indirect_node(i).cep;
+        c_ext_pos_t cep = indirect_node(i)->cep;
         /* Skip over the invalid (previously duplicated) blocks */
         if(EXT_POS_INVAL(cep))
         {
-            indirect_node(i).c2b = NULL; 
+            indirect_node(i)->c2b = NULL; 
             continue;
         }
         c2b = castle_cache_block_get(cep, btree->node_size);
         write_lock_c2b(c2b);
         if(!c2b_uptodate(c2b))
             submit_c2b_sync(READ, c2b);
-        indirect_node(i).c2b = c2b; 
+        indirect_node(i)->c2b = c2b; 
     }
     
     /* Finally, find out where in the indirect block the individual ptrs are */
@@ -2808,7 +2820,7 @@ static void castle_btree_iter_leaf_ptrs_lock(c_iter_t *c_iter)
         c_val_tup_t entry_cvt;
 
         /* Set the idx to inval to catch bugs early */
-        indirect_node(i).node_idx = -1;
+        indirect_node(i)->node_idx = -1;
 
         btree->entry_get(node, i, &entry_key, &entry_version,
                          &entry_cvt);
@@ -2837,7 +2849,7 @@ static void castle_btree_iter_leaf_ptrs_lock(c_iter_t *c_iter)
                              NULL);
             BUG_ON((btree->key_compare(entry_key, real_entry_key) != 0) ||
                    (entry_version != real_entry_version));
-            indirect_node(i).node_idx = lub_idx;
+            indirect_node(i)->node_idx = lub_idx;
         }
     }
 }
@@ -3322,6 +3334,9 @@ void castle_btree_iter_init(c_iter_t *c_iter, version_t version, int type)
             return;
         case C_ITER_MATCHING_VERSIONS:
         case C_ITER_ANCESTRAL_VERSIONS:
+            /* RO trees don't have leaf pointers (and have much larger nodes). */
+            if(btree == &castle_ro_tree)
+                return;
             c_iter->indirect_nodes = 
                 castle_vmalloc(MAX_BTREE_ENTRIES * sizeof(struct castle_indirect_node));
             /* If memory allocation failed, cancel the iterator, and set the error condition. 
