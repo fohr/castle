@@ -993,6 +993,7 @@ void castle_da_rq_iter_cancel(c_da_rq_iter_t *iter)
     {
         struct ct_rq *ct_rq = iter->ct_rqs + i;
         castle_btree_rq_enum_cancel(&ct_rq->ct_rq_iter);
+        castle_ct_put(ct_rq->ct, 0);
     }
     castle_free(iter->ct_rqs);
 }
@@ -1025,11 +1026,11 @@ again:
     if(!iter->ct_rqs || !iters || !iter_types)
     {
         if(iter->ct_rqs)
-            castle_kfree(iter->ct_rqs);
+            castle_free(iter->ct_rqs);
         if(iters)
-            castle_kfree(iters);
+            castle_free(iters);
         if(iter_types)
-            castle_kfree(iter_types);
+            castle_free(iter_types);
         iter->err = -ENOMEM;
         return;
     }
