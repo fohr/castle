@@ -1041,13 +1041,17 @@ struct castle_object_pull {
     uint64_t                    remaining;
     uint64_t                    offset;
 
-    c_ext_pos_t                 cep;
+    int                         is_inline;
+    union {
+        c_ext_pos_t             cep;
+        char                   *inline_val;
+    };
     struct castle_component_tree *ct;
     struct castle_cache_block  *curr_c2b;
     
     void                       *buf;
     uint32_t                    to_copy;
-    
+
     struct work_struct          work;
     
     void (*pull_continue)      (struct castle_object_pull *pull, 

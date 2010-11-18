@@ -1523,6 +1523,16 @@ void castle_object_chunk_pull(struct castle_object_pull *pull, void *buf, size_t
 
     BUG_ON(pull->to_copy == 0);
 
+    if(pull->is_inline)
+    {
+        /* this is assured since buf_len >= PAGE_SIZE > MAX_INLINE_VAL_SIZE */
+        BUG_ON(buf_len < pull->remaining);
+        memcpy(buf, pull->inline_val, pull->remaining);
+        castle_free(pull->inline_val);
+        pull->pull_continue(pull, 0, pull->remaining, 1 /* done */);
+        return;
+    }
+
     cep.ext_id = pull->cep.ext_id;
     cep.offset = pull->cep.offset + pull->offset; // TODO in bytes or blocks?
 
@@ -1563,11 +1573,21 @@ static void castle_object_pull_continue(struct castle_bio_vec *c_bvec, int err, 
         pull->pull_continue(pull, err, 0, 1 /* done */);
         return;
     }
-    
+
+    if(CVT_INLINE(cvt))
+    {
+        pull->is_inline = 1;
+        pull->inline_val = cvt.val;
+    }
+    else
+    {
+        pull->is_inline = 0;
+        pull->cep = cvt.cep;
+    }
+
     pull->offset = 0;
     pull->curr_c2b = NULL;
     pull->buf = NULL;
-    pull->cep = cvt.cep;
     pull->remaining = cvt.length;    
     pull->pull_continue(pull, err, cvt.length, 0 /* not done yet */);
 }
