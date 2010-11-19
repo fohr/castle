@@ -10,6 +10,13 @@
  * buddy-list allocation.
  */
 
+#define CHKS_PER_SLOT  10
+#define SUPER_CHUNK(chk) ((chk) / CHKS_PER_SLOT)
+
+#define castle_freespace_slave_super_chunk_free(_cs, _super_chk)        \
+    castle_freespace_slave_chunk_free(_cs,                              \
+    (c_chk_seq_t){((_super_chk)*CHKS_PER_SLOT), CHKS_PER_SLOT})
+
 //void castle_freespace_slaves_init(int fresh_fs);
 
 /* Load on-disk structures into memory */

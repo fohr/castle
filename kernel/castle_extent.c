@@ -551,6 +551,7 @@ void castle_extent_free(c_ext_id_t ext_id)
     c_disk_chk_t                *maps_buf = NULL;
     c_ext_pos_t                  cep;
     c2_block_t                  *c2b = NULL;
+    c_chk_t                      super_chk[MAX_NR_SLAVES];
 
     if (EXT_ID_INVAL(ext_id))
         return;
@@ -583,58 +584,46 @@ void castle_extent_free(c_ext_id_t ext_id)
         cep.offset += C_BLK_SIZE;
     }
 
+    /* Note: Super Chunk 0 is pre-allocated for super extent. No extent contains
+     * mappings for Super Chunk 0. */
+    memset(super_chk, 0, sizeof(c_chk_t) * MAX_NR_SLAVES);
     /* Free all the physical chunks. Do it in the reverse order, to free chunks in
      * batches */
     for (i=ext->size-1; i>=0; i--) 
     { /* For each logical chunk */
         for (j=0; j<ext->k_factor; j++) 
         { /* For each replica */
-            struct castle_slave *cs;
-            uint32_t id;
+            struct      castle_slave *cs;
+            uint32_t    id;
+            uint32_t    uuid = maps_buf[MAP_IDX(ext, i, j)].slave_id;
+            c_chk_t     chk = maps_buf[MAP_IDX(ext, i, j)].offset;
 
-            cs = castle_slave_find_by_uuid(maps_buf[MAP_IDX(ext, i, j)].slave_id);
+            cs = castle_slave_find_by_uuid(uuid);
             if (!cs)
             {
-                printk("FATAL: Extent is corrupted pointing to uuid: %u\n", 
-                        maps_buf[MAP_IDX(ext, i, j)].slave_id);
+                printk("FATAL: Extent is corrupted pointing to uuid: %u\n",
+                        uuid);
                 BUG();
             }
             id = cs->id;
-            debug("Freeing chunk %u from %u - %u\%u\n",
-                maps_buf[MAP_IDX(ext, i, j)].offset,
-                maps_buf[MAP_IDX(ext, i, j)].slave_id, 
-                ext->chk_buf[id].first_chk,
-                ext->chk_buf[id].count);
-            if (ext->chk_buf[id].count)
+            debug("Freeing chunk %u from %u - %u\n", chk, uuid, super_chk[id]);
+            if (super_chk[id] != SUPER_CHUNK(chk))
             {
-                if (ext->chk_buf[id].first_chk - 1 == maps_buf[MAP_IDX(ext, i, j)].offset)
-                {
-                    ext->chk_buf[id].first_chk--;
-                    ext->chk_buf[id].count++;
-                }
-                else
-                {
-                    castle_freespace_slave_chunk_free(cs, ext->chk_buf[id]);
-                    ext->chk_buf[id].first_chk = maps_buf[MAP_IDX(ext, i, j)].offset;
-                    ext->chk_buf[id].count = 1;
-                }
-            } 
-            else 
-            {
-                ext->chk_buf[id].first_chk = maps_buf[MAP_IDX(ext, i, j)].offset;
-                ext->chk_buf[id].count++;
+                if (super_chk[id]) 
+                    castle_freespace_slave_super_chunk_free(cs, super_chk[id]); 
+                super_chk[id] = SUPER_CHUNK(chk);
             }
         }
     }
 
     for (i=0; i<MAX_NR_SLAVES; i++)
     {
-        if (ext->chk_buf[i].count)
+        if (super_chk[i])
         {
             struct castle_slave *cs = castle_slave_find_by_id(i);
             
-            debug("Freeing %u chunks from %u\n", ext->chk_buf[i].count, cs->uuid);
-            castle_freespace_slave_chunk_free(cs, ext->chk_buf[i]);
+            debug("Freeing super chunk %u from %u\n", super_chk[i], cs->uuid);
+            castle_freespace_slave_super_chunk_free(cs, super_chk[i]);
         }
     }
 

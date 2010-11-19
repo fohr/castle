@@ -13,7 +13,6 @@
 #define debug(_f, ...)          ((void)0)
 #endif
 
-#define CHKS_PER_SLOT  10
 #define DISK_NO_SPACE(_fs) (((_fs)->prod == (_fs)->cons) &&            \
                             ((_fs)->nr_entries == 0))
 #define DISK_NOT_USED(_fs) (((_fs)->prod == (_fs)->cons) &&            \
