@@ -118,6 +118,9 @@ static struct castle_version * castle_version_delete(struct castle_version *v)
     castle_versions_drop(v);
     __castle_versions_hash_remove(v);
     kmem_cache_free(castle_versions_cache, v);
+    
+    /* raise event */
+    castle_events_version_destroy(v->version);
 
     return parent;
 }

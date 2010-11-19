@@ -181,9 +181,6 @@ void castle_control_destroy(version_t version, int *ret)
         return;
     }
 
-    /* raise event */
-    castle_events_version_destroy(version);
-
     *ret = 0;
 }
 
