@@ -8,6 +8,7 @@
 #include "castle_sysfs.h"
 #include "castle_debug.h"
 #include "castle_versions.h"
+#include "castle_freespace.h"
 #include "castle_da.h"
 
 struct castle_sysfs_versions {
@@ -241,14 +242,15 @@ static ssize_t slave_used_show(struct kobject *kobj,
                                char *buf)
 {
     struct castle_slave *slave = container_of(kobj, struct castle_slave, kobj); 
-    struct castle_slave_superblock *sb;
-    uint32_t used;
+    c_chk_cnt_t free_chunks;
+    c_chk_cnt_t size_chunks;
+    uint64_t used;
 
-    sb = castle_slave_superblock_get(slave);
-    used = sb->pub.used;
-    castle_slave_superblock_put(slave, 0);
+    castle_freespace_summary_get(slave, &free_chunks, &size_chunks);
 
-    return sprintf(buf, "%d\n", used);
+    used = (size_chunks - free_chunks) * C_CHK_SIZE;
+
+    return sprintf(buf, "%llu\n", used);
 }
 
 static ssize_t slave_target_show(struct kobject *kobj, 
