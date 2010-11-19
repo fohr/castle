@@ -308,7 +308,7 @@ static int c2p_write_locked(c2_page_t *c2p)
 }
 
 #ifdef CASTLE_DEBUG
-static int c2p_read_locked(c2_page_t *c2p)
+static USED int c2p_read_locked(c2_page_t *c2p)
 {
     struct rw_semaphore *sem; 
     unsigned long flags;                                                                               
@@ -366,9 +366,6 @@ static void dirty_c2p(c2_page_t *c2p)
 
 static void clean_c2p(c2_page_t *c2p)
 {
-#ifdef CASTLE_DEBUG
-    BUG_ON(!c2p_read_locked(c2p));
-#endif
     if(test_clear_c2p_dirty(c2p))
     {
         atomic_sub(PAGES_PER_C2P, &castle_cache_dirty_pages);
