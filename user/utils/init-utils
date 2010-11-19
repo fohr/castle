@@ -4,15 +4,24 @@
 DISK_SIZE=1000000
 
 CONTROL_FILE=/dev/castle-fs/control
+CACHE_CFG=/etc/acunu/cache_size
 
 function kernel_fs_running {
     [ -e "/dev/castle-fs/control" ] || lsmod | grep -q '^castle_fs$'
 }
 
+function get_cache_size {
+    if [ -e ${CACHE_CFG} ]; then
+        cat ${CACHE_CFG}
+    else
+        awk '/MemTotal/ { halfram = $2 / 2 } END { min = 200000; if (halfram < min) { print halfram } else { print min } }' /proc/meminfo
+    fi
+}
+
 function init_kernel_fs {
     if ! kernel_fs_running; then
         echo "Castle FS kernel module not found, trying to insert."
-        modprobe castle-fs
+        modprobe castle-fs castle_cache_size=$(get_cache_size)
         # Wait up to 5 seconds for the control file to appear
         # udev renaming is sometimes slow
         for i in `seq 50`; do
