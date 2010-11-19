@@ -84,4 +84,9 @@ castle_extents_read_complete(void);
 int 
 castle_extents_writeback(void);
 
+int 
+castle_extent_get(c_ext_id_t ext_id);
+
+int 
+castle_extent_put(c_ext_id_t ext_id);
 #endif //__CASTLE_EXTENT_H__

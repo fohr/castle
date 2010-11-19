@@ -40,14 +40,16 @@
         (_ext)->size        = (_me)->size;                                  \
         (_ext)->type        = (_me)->type;                                  \
         (_ext)->k_factor    = (_me)->k_factor;                              \
-        (_ext)->maps_cep    = (_me)->maps_cep;                              
+        (_ext)->maps_cep    = (_me)->maps_cep;                              \
+        (_ext)->obj_refs    = (_me)->obj_refs;                              
 
 #define CONVERT_EXTENT_TO_MENTRY(_ext, _me)                                 \
         (_me)->ext_id       = (_ext)->ext_id;                               \
         (_me)->size         = (_ext)->size;                                 \
         (_me)->type         = (_ext)->type;                                 \
         (_me)->k_factor     = (_ext)->k_factor;                             \
-        (_me)->maps_cep     = (_ext)->maps_cep;                              
+        (_me)->maps_cep     = (_ext)->maps_cep;                             \
+        (_me)->obj_refs     = (_ext)->obj_refs;                              
  
 int low_disk_space = 0;
 
@@ -65,6 +67,7 @@ typedef struct {
     c_ext_pos_t         maps_cep;       /* Offset of chunk mapping in logical extent */
     struct list_head    hash_list;      /* Only Dynamic variable */
     uint32_t            ref_cnt;
+    uint32_t            obj_refs;
 } c_ext_t;
 
 static struct list_head *castle_extents_hash = NULL;
@@ -262,7 +265,7 @@ static int castle_extent_micro_ext_create(void)
     c_disk_chk_t *micro_maps = castle_extents_sb->micro_maps;
     c_ext_t      *micro_ext;
 
-    micro_ext = castle_malloc(sizeof(c_ext_t), GFP_KERNEL);
+    micro_ext = castle_zalloc(sizeof(c_ext_t), GFP_KERNEL);
     if (!micro_ext)
     {
         castle_extents_super_block_put(0);
@@ -273,6 +276,7 @@ static int castle_extent_micro_ext_create(void)
     micro_ext->size     = MICRO_EXT_SIZE;
     micro_ext->type     = MICRO_EXT;
     micro_ext->maps_cep = INVAL_EXT_POS;
+    micro_ext->obj_refs = 1;
 
     memset(micro_maps, 0, sizeof(castle_extents_sb->micro_maps));
     list_for_each(l, &castle_slaves.slaves)
@@ -303,7 +307,7 @@ static int castle_extent_meta_ext_create(void)
     int      ret;
     struct castle_extents_sb_t *castle_extents_sb;
 
-    meta_ext = castle_malloc(sizeof(c_ext_t), GFP_KERNEL);
+    meta_ext = castle_zalloc(sizeof(c_ext_t), GFP_KERNEL);
     if (!meta_ext)
         return -ENOMEM;
 
@@ -312,6 +316,7 @@ static int castle_extent_meta_ext_create(void)
     meta_ext->type     = META_EXT;
     meta_ext->k_factor = 2;
     meta_ext->maps_cep = (c_ext_pos_t){MICRO_EXT_ID, 0};
+    meta_ext->obj_refs = 1;
 
     i = 0;
     list_for_each(l, &castle_slaves.slaves)
@@ -424,6 +429,10 @@ static int castle_extent_writeback(c_ext_t *ext, void *store)
    
     if (LOGICAL_EXTENT(ext->ext_id))
         return 0;
+
+    if (ext->obj_refs != 1)
+        printk("Unexpected extents ref count: (%llu, %u)\n", ext->ext_id,
+                ext->obj_refs);
 
     debug("Writing back extent %llu\n", ext->ext_id);
 
@@ -726,6 +735,7 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t            rda_type,
     ext->size           = count;
     ext->type           = rda_type;
     ext->k_factor       = rda_spec->k_factor;
+    ext->obj_refs       = 1;
     
     /* Block aligned chunk maps for each extent. */
     BUG_ON(BLOCK_OFFSET(castle_extents_sb->next_free_byte));
@@ -776,7 +786,11 @@ __hell:
 
 void castle_extent_free(c_ext_id_t ext_id)
 {
-    c_ext_t                     *ext;
+    castle_extent_put(ext_id);
+}
+
+void _castle_extent_free(c_ext_t *ext)
+{
     struct castle_extents_sb_t  *castle_extents_sb = NULL;
     int                          i, j;
     uint32_t                     req_space;
@@ -784,16 +798,14 @@ void castle_extent_free(c_ext_id_t ext_id)
     c_ext_pos_t                  cep;
     c2_block_t                  *c2b = NULL;
     c_chk_t                      super_chk[MAX_NR_SLAVES];
+    c_ext_id_t                   ext_id = ext->ext_id;
 
-    if (EXT_ID_INVAL(ext_id))
+    if (ext->obj_refs)
+    {
+        printk("Couldnt delete the referenced extent %llu\n", ext_id);
         return;
+    }
 
-    ext = castle_extents_rhash_get(ext_id);
-    if (!ext)
-        return;
-
-    /* Remove extent from hash table */
-    castle_extents_rhash_put(ext);
     castle_extents_rhash_remove(ext);
     printk("Removed extent %llu from hash\n", ext_id);
     req_space = (sizeof(c_disk_chk_t) * ext->size * ext->k_factor);
@@ -987,6 +999,7 @@ c_ext_id_t castle_extent_sup_ext_init(struct castle_slave *cs)
     memcpy(ext, &sup_ext, sizeof(c_ext_t));
     
     ext->ext_id      = slave_id_to_sup_ext(cs->id);
+    ext->obj_refs    = 1;
     cs->sup_ext_maps = castle_malloc(sizeof(c_disk_chk_t) * ext->size *
                                                     rda_spec->k_factor, GFP_KERNEL);
     BUG_ON(rda_spec->k_factor != ext->k_factor);
@@ -1037,4 +1050,52 @@ void castle_extent_sup_ext_close(struct castle_slave *cs)
     castle_free(cs->sup_ext_maps);
 
     return;
+}
+
+int castle_extent_get(c_ext_id_t ext_id)
+{
+    c_ext_t *ext;
+    unsigned long flags;
+
+    if (EXT_ID_INVAL(ext_id))
+        return -EINVAL;
+
+    spin_lock_irqsave(&castle_extents_hash_lock, flags);
+
+    ext = __castle_extents_hash_get(ext_id);
+    BUG_ON(!ext);
+    ext->obj_refs++;
+
+    spin_unlock_irqrestore(&castle_extents_hash_lock, flags);
+
+    return 0;
+}
+
+int castle_extent_put(c_ext_id_t ext_id)
+{
+    c_ext_t *ext = castle_extents_hash_get(ext_id);
+    unsigned long flags;
+    int free_ext = 0;
+
+    if (EXT_ID_INVAL(ext_id))
+        return -EINVAL;
+
+    BUG_ON(ext == NULL);
+
+    spin_lock_irqsave(&castle_extents_hash_lock, flags);
+
+    ext = __castle_extents_hash_get(ext_id);
+    BUG_ON(!ext);
+    ext->obj_refs--;
+
+    debug("Object Refrence for %llu: %u\n", ext_id, ext->obj_refs);
+    if (ext->obj_refs == 0)
+        free_ext = 1;
+
+    spin_unlock_irqrestore(&castle_extents_hash_lock, flags);
+
+    if (free_ext)
+        _castle_extent_free(ext);
+
+    return 0;
 }

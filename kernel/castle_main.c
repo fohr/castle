@@ -44,6 +44,7 @@ struct castle_component_tree castle_global_tree = {.seq             = GLOBAL_TRE
                                                    .node_count      = {0ULL},
                                                    .da_list         = {NULL, NULL},
                                                    .hash_list       = {NULL, NULL},
+                                                   .large_objs      = {NULL, NULL},
                                                    .tree_ext_fs     = {INVAL_EXT_ID, (100 * C_CHK_SIZE), 0, {0ULL}, {0ULL}},
                                                    .data_ext_fs     = {INVAL_EXT_ID, (512ULL * C_CHK_SIZE), 0, {0ULL}, {0ULL}},
                                                   }; 
@@ -429,6 +430,8 @@ int castle_fs_init(void)
         /* Init the root btree node */
         atomic64_set(&(castle_global_tree.node_count), 0);
         init_rwsem(&castle_global_tree.lock);
+        mutex_init(&castle_global_tree.lo_mutex);
+        INIT_LIST_HEAD(&castle_global_tree.large_objs);
 
         if ((ret = castle_ext_fs_init(&castle_global_tree.tree_ext_fs,
                                       castle_global_tree.da,

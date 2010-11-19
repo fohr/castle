@@ -225,6 +225,7 @@ struct castle_elist_entry {
     c_rda_type_t    type;
     uint32_t        k_factor;
     c_ext_pos_t     maps_cep;
+    uint32_t        obj_refs;
 } PACKED;
 
 struct castle_extents_sb_t {
@@ -389,6 +390,7 @@ enum {
     MSTORE_COMPONENT_TREES,
     MSTORE_ATTACHMENTS_TAG,
     MSTORE_EXTENTS,
+    MSTORE_LARGE_OBJECTS,
 }; 
 
 
@@ -498,11 +500,19 @@ struct castle_component_tree {
     atomic64_t          node_count;
     struct list_head    da_list;
     struct list_head    hash_list;
+    struct list_head    large_objs;
+    struct mutex        lo_mutex;          /* Protects Large Object List. */
     c_ext_fs_t          tree_ext_fs;
     c_ext_fs_t          data_ext_fs;
     atomic64_t          large_ext_chk_cnt;
 };
 extern struct castle_component_tree castle_global_tree;
+
+struct castle_large_obj_entry {
+    c_ext_id_t          ext_id;
+    uint64_t            length;
+    struct list_head    list;
+};
 
 struct castle_dlist_entry {
     da_id_t     id;
@@ -552,6 +562,12 @@ struct castle_flist_entry {
     uint32_t        slave_uuid;
     version_t       version;
     block_t         blocks;
+} PACKED;
+
+struct castle_lolist_entry {
+    c_ext_id_t      ext_id;
+    uint64_t        length;
+    tree_seq_t      ct_seq;
 } PACKED;
 
 /* IO related structures */
