@@ -1514,14 +1514,18 @@ static void castle_btree_lub_find(struct castle_btree_node *node,
         oldest */
     for(lub_idx=high; lub_idx < node->used; lub_idx++)
     {
+        int cmp;
+
         btree->entry_get(node, lub_idx, &key_lub, &version_lub, NULL);
 
         debug(" (k,v) = (%p, 0x%x)\n", key_lub, version_lub); 
 
         /* First (k,v) that's an upper bound is guaranteed to be the correct lub,
            because versions are arranged from newest to oldest */ 
-        if(btree->key_compare(key_lub, key) < 0)
-            continue;
+        cmp = btree->key_compare(key_lub, key);
+        BUG_ON(cmp < 0);
+        if(cmp > 0)
+            break;
         if(castle_version_is_ancestor(version_lub, version))
             break;
     } 
