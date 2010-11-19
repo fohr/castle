@@ -206,6 +206,16 @@ void castle_ext_fs_fini(c_ext_fs_t      *ext_fs)
     atomic64_set(&ext_fs->blocked, 0);
 }
 
+int castle_ext_fs_consistent(c_ext_fs_t *ext_fs)
+{
+    uint64_t used = atomic64_read(&ext_fs->used);
+    uint64_t blocked = atomic64_read(&ext_fs->blocked);
+
+    if (used == blocked)
+        return 1;
+    return 0;
+}
+
 int castle_ext_fs_pre_alloc(c_ext_fs_t       *ext_fs,
                             c_byte_off_t      size)
 {
@@ -269,7 +279,11 @@ int castle_ext_fs_get(c_ext_fs_t      *ext_fs,
 
         ret = castle_ext_fs_pre_alloc(ext_fs, size);
         if (ret < 0)
+        {
+            debug("1: %s Failed (%llu, %llu, %llu)\n", __FUNCTION__, used,
+                   blocked, size);
             return ret;
+        }
     }
     
     cep->ext_id = ext_fs->ext_id;
@@ -285,6 +299,8 @@ int castle_ext_fs_get(c_ext_fs_t      *ext_fs,
     {
         atomic64_sub(size, &ext_fs->used);
         barrier();
+        debug("2: %s Failed (%llu, %llu, %llu)\n", __FUNCTION__, used, blocked,
+               size);
         return -2;
     }
 

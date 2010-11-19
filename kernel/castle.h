@@ -977,6 +977,8 @@ int                   castle_ext_fs_init           (c_ext_fs_t       *ext_fs,
                                                     c_byte_off_t      size,
                                                     uint32_t          align);
 
+int                   castle_ext_fs_consistent     (c_ext_fs_t       *ext_fs);
+
 void                  castle_ext_fs_fini           (c_ext_fs_t       *ext_fs);
 
 int                   castle_ext_fs_pre_alloc      (c_ext_fs_t       *ext_fs,

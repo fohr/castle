@@ -1330,6 +1330,7 @@ static int castle_da_iterators_create(struct castle_da_merge *merge)
     int ret;
     void *iters[2];
     struct castle_iterator_type *iter_types[2];
+    c_byte_off_t size;
 
     printk("Creating iterators for the merge.\n");
     BUG_ON( merge->iter1    ||  merge->iter2);
@@ -1377,6 +1378,35 @@ static int castle_da_iterators_create(struct castle_da_merge *merge)
     if(ret)
         goto err_out;
     
+    /* Allocate an extent for merged tree for the size equal to sum of both the
+     * trees. */
+    BUG_ON(!castle_ext_fs_consistent(&merge->in_tree1->tree_ext_fs));
+    BUG_ON(!castle_ext_fs_consistent(&merge->in_tree2->tree_ext_fs));
+    size = (atomic64_read(&merge->in_tree1->tree_ext_fs.used) +
+            atomic64_read(&merge->in_tree2->tree_ext_fs.used));
+    BUG_ON(size % (btree->node_size * C_BLK_SIZE));
+    size = MASK_CHK_OFFSET(size + C_CHK_SIZE);
+    if ((ret = castle_ext_fs_init(&merge->tree_ext_fs, merge->da->id, size,
+                                  (btree->node_size * C_BLK_SIZE))))
+    {
+        printk("Merge failed due to space constraint\n");
+        goto err_out;
+    }
+
+    /* Allocate an extent for medium objects of merged tree for the size equal to 
+     * sum of both the trees. */
+    BUG_ON(!castle_ext_fs_consistent(&merge->in_tree1->data_ext_fs));
+    BUG_ON(!castle_ext_fs_consistent(&merge->in_tree2->data_ext_fs));
+    size = (atomic64_read(&merge->in_tree1->data_ext_fs.used) +
+            atomic64_read(&merge->in_tree2->data_ext_fs.used));
+    size = MASK_CHK_OFFSET(size + C_CHK_SIZE);
+    if ((ret = castle_ext_fs_init(&merge->data_ext_fs, merge->da->id, size, 
+                                  C_BLK_SIZE)))
+    {
+        printk("Merge failed due to space constraint\n");
+        goto err_out;
+    }
+
     /* Success */
     return 0;
 
@@ -1953,12 +1983,12 @@ static void castle_da_merge_schedule(struct castle_double_array *da,
     struct castle_btree_type *btree;
     struct castle_da_merge *merge = NULL;
     int i, ret;
-    c_byte_off_t size;
 
     debug("============ Merging ct=%d (%d) with ct=%d (%d) ============\n", 
             in_tree1->seq, in_tree1->dynamic,
             in_tree2->seq, in_tree2->dynamic);
 
+    /* Note: There could be outstanding read/write I/O going on. */ 
     /* Get ref to this DA, we'll only drop this when merge is finished. */
     castle_da_get(da);
     /* Work out what type of trees are we going to be merging. Bug if in_tree1/2 don't match. */
@@ -1995,35 +2025,6 @@ static void castle_da_merge_schedule(struct castle_double_array *da,
     }
     merge->tree_ext_fs.ext_id = INVAL_EXT_ID;
     merge->data_ext_fs.ext_id = INVAL_EXT_ID;
-
-    /* Allocate an extent for merged tree for the size equal to sum of both the
-     * trees. */
-    size = (atomic64_read(&in_tree1->tree_ext_fs.used) +
-            atomic64_read(&in_tree2->tree_ext_fs.used));
-    if(size % (btree->node_size * C_BLK_SIZE))
-    {
-        printk("Size = %lld, node size=%d, =%lld\n",
-            size, btree->node_size, size % (btree->node_size * C_BLK_SIZE));
-    }
-    BUG_ON(size % (btree->node_size * C_BLK_SIZE));
-    size = MASK_CHK_OFFSET(size + C_CHK_SIZE);
-    if ((ret = castle_ext_fs_init(&merge->tree_ext_fs, da->id, size,
-                                  (btree->node_size * C_BLK_SIZE))))
-    {
-        printk("Merge failed due to space constraint\n");
-        goto error_out;
-    }
-
-    /* Allocate an extent for medium objects of merged tree for the size equal to 
-     * sum of both the trees. */
-    size = (atomic64_read(&in_tree1->data_ext_fs.used) +
-                  atomic64_read(&in_tree2->data_ext_fs.used));
-    size = MASK_CHK_OFFSET(size + C_CHK_SIZE);
-    if ((ret = castle_ext_fs_init(&merge->data_ext_fs, da->id, size, C_BLK_SIZE)))
-    {
-        printk("Merge failed due to space constraint\n");
-        goto error_out;
-    }
 
     CASTLE_INIT_WORK(&merge->work, castle_da_merge_do);
     queue_work(castle_merge_wq, &merge->work);
