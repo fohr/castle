@@ -47,6 +47,9 @@ struct castle_component_tree castle_global_tree = {.seq             = GLOBAL_TRE
                                                    .tree_ext_fs     = {INVAL_EXT_ID, (100 * C_CHK_SIZE), 0, {0ULL}, {0ULL}},
                                                    .data_ext_fs     = {INVAL_EXT_ID, (512ULL * C_CHK_SIZE), 0, {0ULL}, {0ULL}},
                                                   }; 
+
+static DEFINE_MUTEX(castle_sblk_lock);
+struct castle_fs_superblock global_fs_superblock;
 struct workqueue_struct     *castle_wqs[2*MAX_BTREE_DEPTH+1];
 int                          castle_fs_inited = 0;
 
@@ -122,59 +125,33 @@ static void castle_fs_superblocks_init(void)
     castle_fs_superblocks_put(fs_sb, 1);
 }
 
+static void castle_fs_superblocks_load(struct castle_fs_superblock *fs_sb)
+{
+    memcpy(&global_fs_superblock, fs_sb, sizeof(struct castle_fs_superblock));
+}
+
 static inline struct castle_fs_superblock* castle_fs_superblock_get(struct castle_slave *cs)
 {
-    write_lock_c2b(cs->fs_sblk);
-    BUG_ON(!c2b_uptodate(cs->fs_sblk));
-
-    return ((struct castle_fs_superblock*) c2b_buffer(cs->fs_sblk));
+    mutex_lock(&cs->sblk_lock);
+    return &cs->fs_superblock;
 }
 
 static inline void castle_fs_superblock_put(struct castle_slave *cs, int dirty)
 {
-    if(dirty) dirty_c2b(cs->fs_sblk);
-    write_unlock_c2b(cs->fs_sblk);
+    mutex_unlock(&cs->sblk_lock);
 }
 
 /* Get all superblocks */
 struct castle_fs_superblock* castle_fs_superblocks_get(void)
 {
-    struct list_head *l;
-    struct castle_slave *cs;
-    struct castle_fs_superblock *sb = NULL;
-
-    list_for_each(l, &castle_slaves.slaves)
-    {
-        cs = list_entry(l, struct castle_slave, list);
-        sb = castle_fs_superblock_get(cs);
-    }
-
-    return sb;
+    mutex_lock(&castle_sblk_lock);
+    return &global_fs_superblock;
 }
 
 /* Put all superblocks */
 void castle_fs_superblocks_put(struct castle_fs_superblock *sb, int dirty)
 {
-    struct list_head *l;
-    struct castle_slave *cs;
-    struct castle_fs_superblock *curr_sb;
-
-    list_for_each(l, &castle_slaves.slaves)
-    {
-        cs = list_entry(l, struct castle_slave, list);
-        /* The buffer should be locked */
-        BUG_ON(!c2b_write_locked(cs->fs_sblk));
-        /* If superblock has been dirtied, copy it, and dirty the buffer */
-        if(dirty)
-        {
-            curr_sb = c2b_buffer(cs->fs_sblk);
-            /* Note, we can be possibly copying from ourselves, memmove is safer */
-            memmove(curr_sb, sb, sizeof(struct castle_fs_superblock)); 
-            dirty_c2b(cs->fs_sblk);
-        }
-        /* Finally, unlock the buffer */
-        write_unlock_c2b(cs->fs_sblk);
-    }
+    mutex_unlock(&castle_sblk_lock);
 }
 
 int _castle_ext_fs_init(c_ext_fs_t       *ext_fs, 
@@ -381,7 +358,6 @@ int castle_fs_init(void)
             continue;
 
         cs_fs_sb = castle_fs_superblock_get(cs);
-        BUG_ON(!c2b_uptodate(cs->fs_sblk));
 
         /* Save fs superblock if the first slave. */
         if(first)
@@ -433,6 +409,7 @@ int castle_fs_init(void)
 
     /* Init the fs superblock */
     if(first) castle_fs_superblocks_init();
+    else      castle_fs_superblocks_load(&fs_sb);
 
     /* Load extent structures of logical extents into memory */
     ret = first ? castle_extents_create() : castle_extents_read(); 
@@ -582,6 +559,30 @@ static int castle_block_read(struct block_device *bdev, sector_t sector, uint32_
     return 0;
 }
 
+sector_t get_bd_capacity(struct block_device *bd)
+{
+    return bd->bd_contains == bd ? get_capacity(bd->bd_disk) : bd->bd_part->nr_sects;
+}
+
+static void castle_slave_superblock_init(struct   castle_slave *cs, 
+                                         struct   castle_slave_superblock *cs_sb,
+                                         uint32_t uuid)
+{
+    printk("Initing slave superblock.\n");
+
+    cs_sb->pub.magic1 = CASTLE_SLAVE_MAGIC1;
+    cs_sb->pub.magic2 = CASTLE_SLAVE_MAGIC2;
+    cs_sb->pub.magic3 = CASTLE_SLAVE_MAGIC3;
+    cs_sb->pub.version= CASTLE_SLAVE_VERSION;
+    cs_sb->pub.used   = 2; /* Two blocks used for the superblocks */
+    cs_sb->pub.uuid   = uuid;
+    cs_sb->pub.size   = get_bd_capacity(cs->bdev) >> (C_BLK_SHIFT - 9);
+    cs_sb->pub.flags  = CASTLE_SLAVE_TARGET | CASTLE_SLAVE_SPINNING;
+    castle_slave_superblock_print(cs_sb);
+
+    printk("Done.\n");
+}
+
 static int castle_slave_superblock_read(struct castle_slave *cs) 
 {
     struct castle_slave_superblock cs_sb;
@@ -609,9 +610,14 @@ static int castle_slave_superblock_read(struct castle_slave *cs)
 
     printk("Disk superblock found.\n");
 
+    memcpy(&cs->cs_superblock, &cs_sb, sizeof(struct castle_slave_superblock));
+    memcpy(&cs->fs_superblock, &fs_sb, sizeof(struct castle_fs_superblock));
     /* Save the uuid and exit */
     cs->uuid = cs_sb.pub.uuid;
     cs->new_dev = cs_sb.pub.flags & CASTLE_SLAVE_NEWDEV;
+
+    if (cs->new_dev)
+        castle_slave_superblock_init(cs, &cs->cs_superblock, cs->uuid);
     return 0;
 
 error_out:
@@ -620,114 +626,74 @@ error_out:
 
 struct castle_slave_superblock* castle_slave_superblock_get(struct castle_slave *cs)
 {
-    write_lock_c2b(cs->sblk);
-    BUG_ON(!c2b_uptodate(cs->sblk));
-    
-    return ((struct castle_slave_superblock*) c2b_buffer(cs->sblk));
+    mutex_lock(&cs->sblk_lock);
+    return &cs->cs_superblock;
 }
 
 void castle_slave_superblock_put(struct castle_slave *cs, int dirty)
 {
-    if(dirty) dirty_c2b(cs->sblk);
-    write_unlock_c2b(cs->sblk);
+    mutex_unlock(&cs->sblk_lock);
 }
 
-static int castle_slave_superblocks_cache(struct castle_slave *cs)
-/* NOTE: This function leaves superblocks locked. This prevents init races */
+int castle_slave_superblocks_writeback(struct castle_slave *cs)
 {
-    c2_block_t *c2b, **c2bp[2];
-    c_ext_pos_t  cep;
-    block_t i, j;
+    c2_block_t *c2b;
+    c_ext_pos_t cep;
+    char       *buf;
+    struct castle_slave_superblock *cs_sb;
+    struct castle_fs_superblock *fs_sb;
 
-    /* We want to read the first two 4K blocks of the slave device
-       Frist is the slave superblock, the second is the fs superblock */
-    c2bp[0] = &cs->sblk;
-    c2bp[1] = &cs->fs_sblk;
+    cep.ext_id = cs->sup_ext;
+    cep.offset = 0;
 
-    for(i=0; i<2; i++)
+    c2b = castle_cache_block_get(cep, 2);
+    if (!c2b)
+        return -ENOMEM;
+
+    cs_sb = castle_slave_superblock_get(cs);
+    fs_sb = castle_fs_superblocks_get();
+
+    write_lock_c2b(c2b);
+    update_c2b(c2b);
+    buf = c2b_buffer(c2b);
+
+    memcpy(buf, cs_sb, sizeof(struct castle_slave_superblock));
+    memcpy(buf + C_BLK_SIZE, fs_sb, sizeof(struct castle_fs_superblock));
+
+    dirty_c2b(c2b);
+    write_unlock_c2b(c2b);
+    put_c2b(c2b);
+
+    printk("Free chunks: %u|%u|%u\n", cs_sb->freespace.free_chk_cnt,
+        cs_sb->freespace.prod,
+        cs_sb->freespace.cons);
+
+    if (castle_cache_extent_flush(cs->sup_ext, 0, 2 * C_BLK_SIZE))
     {
-        /* Read the superblock */
-        cep.ext_id = cs->sup_ext;
-        cep.offset = i * C_BLK_SIZE;
-        c2b = castle_cache_page_block_get(cep);
-        *(c2bp[i]) = c2b;
-        /* We expecting the buffer not to be up to date. 
-           We check if it got updated later */
-        BUG_ON(c2b_uptodate(c2b));
-        write_lock_c2b(c2b);
-        submit_c2b_sync(READ, c2b);
-        if(!c2b_uptodate(c2b))
-        {
-            for(j=0; j<=i; i++)
-                write_unlock_c2b(*(c2bp[i]));
-            printk("Disk super block already exists in disk\n");
-            return -EIO;
-        }
+        castle_slave_superblock_put(cs, 1);
+        castle_fs_superblocks_put(fs_sb, 1);
+        return -EIO;
     }
+
+    castle_slave_superblock_put(cs, 1);
+    castle_fs_superblocks_put(fs_sb, 1);
 
     return 0;
 }
 
-sector_t get_bd_capacity(struct block_device *bd)
+int castle_superblocks_writeback(void)
 {
-    return bd->bd_contains == bd ? get_capacity(bd->bd_disk) : bd->bd_part->nr_sects;
-}
+    struct list_head *lh;
+    struct castle_slave *slave;
 
-static int castle_slave_superblocks_init(struct castle_slave *cs)
-{
-    struct castle_slave_superblock *cs_sb;
-    struct castle_fs_superblock *fs_sb;
-    int ret = castle_slave_superblocks_cache(cs);
-
-    if(ret) return ret;
-
-    /* If both superblock have been read correctly. Validate or write. 
-       *_superblock_get() functions are not used, because superblocks are
-       already locked for us by superblocks_cache function. */
-    BUG_ON(!c2b_uptodate(cs->sblk));
-    cs_sb = ((struct castle_slave_superblock*) c2b_buffer(cs->sblk)); 
-    BUG_ON(!c2b_uptodate(cs->fs_sblk));
-    fs_sb = ((struct castle_fs_superblock*) c2b_buffer(cs->fs_sblk));
-
-    debug("In superblocks_init: in_atomic()=%d\n", in_atomic());
-    if(!cs->new_dev)
+    list_for_each(lh, &castle_slaves.slaves)
     {
-        ret = castle_slave_superblock_validate(cs_sb);
-        if (ret)
-        {
-            printk("Invalid Slave Superblock\n");
-            BUG();
-        }
-        else 
-        {
-            ret = castle_fs_superblock_validate(fs_sb);
-            if (ret)
-            {
-                printk("Invalid FS Superblock\n");
-                BUG();
-            }
-        }
-    } else
-    {
-        printk("Initing slave superblock.\n");
-        cs_sb->pub.magic1 = CASTLE_SLAVE_MAGIC1;
-        cs_sb->pub.magic2 = CASTLE_SLAVE_MAGIC2;
-        cs_sb->pub.magic3 = CASTLE_SLAVE_MAGIC3;
-        cs_sb->pub.version= CASTLE_SLAVE_VERSION;
-        cs_sb->pub.used   = 2; /* Two blocks used for the superblocks */
-        cs_sb->pub.uuid   = cs->uuid;
-        cs_sb->pub.size   = get_bd_capacity(cs->bdev) >> (C_BLK_SHIFT - 9);
-        cs_sb->pub.flags  = CASTLE_SLAVE_TARGET | CASTLE_SLAVE_SPINNING;
-        castle_slave_superblock_print(cs_sb);
-        printk("Done.\n");
+        slave = list_entry(lh, struct castle_slave, list);
+        if (castle_slave_superblocks_writeback(slave))
+            return -EIO;
     }
-    debug("Before slave init: in_atomic()=%d\n", in_atomic());
-    castle_slave_superblock_put(cs, cs->new_dev);
-    castle_fs_superblock_put(cs, 0);
 
-    castle_freespace_slave_init(cs, cs->new_dev);
-
-    return ret;
+    return 0;
 }
 
 struct castle_slave* castle_slave_find_by_id(uint32_t id)
@@ -802,6 +768,7 @@ struct castle_slave* castle_claim(uint32_t new_dev)
     cs->id          = slave_id++;
     cs->last_access = jiffies;
     cs->sup_ext     = INVAL_EXT_ID;
+    mutex_init(&cs->sblk_lock);
 
     dev = new_decode_dev(new_dev);
     bdev = open_by_devnum(dev, FMODE_READ|FMODE_WRITE);
@@ -864,15 +831,14 @@ struct castle_slave* castle_claim(uint32_t new_dev)
         goto err_out;
     }
     
-    castle_events_slave_claim(cs->uuid);
-
-    debug("Initing superblocks: in_atomic=%d.\n", in_atomic());
-    err = castle_slave_superblocks_init(cs);
+    err = castle_freespace_slave_init(cs, cs->new_dev);
     if(err)
     {
-        printk("Could not cache the superblocks.\n");
+        printk("Could not init freespace.\n");
         goto err_out;
     }
+
+    castle_events_slave_claim(cs->uuid);
 
     return cs;
 err_out:
@@ -880,8 +846,6 @@ err_out:
         castle_extent_sup_ext_close(cs);
     castle_rda_slave_remove(DEFAULT, cs);
     if(cs_added)     list_del(&cs->list);
-    if(cs->sblk)     put_c2b(cs->sblk);
-    if(cs->fs_sblk)  put_c2b(cs->fs_sblk);
     if(bdev_claimed) bd_release(bdev);
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,24)
     if(bdev) blkdev_put(bdev);
@@ -1635,9 +1599,6 @@ static void castle_slaves_spindowns_check(unsigned long first)
 
 static void castle_slaves_unlock(void)
 {
-    struct list_head *lh, *th;
-    struct castle_slave *slave;
-
     del_singleshot_timer_sync(&spindown_timer);
 
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,18)
@@ -1648,12 +1609,7 @@ static void castle_slaves_unlock(void)
 #endif
 
     castle_freespace_writeback();
-    list_for_each_safe(lh, th, &castle_slaves.slaves)
-    {
-        slave = list_entry(lh, struct castle_slave, list); 
-        put_c2b(slave->sblk);
-        put_c2b(slave->fs_sblk);
-    }
+    castle_superblocks_writeback();
 }
 
 static char *wq_names[2*MAX_BTREE_DEPTH+1];
@@ -1838,8 +1794,8 @@ static void __exit castle_exit(void)
     castle_versions_fini();
     castle_mstores_fini();
     /* Drop all cache references (superblocks), flush the cache, free the slaves. */ 
-    castle_slaves_unlock();
     __castle_extents_fini();
+    castle_slaves_unlock();
     castle_cache_fini();
     castle_extents_fini();
     castle_slaves_free();

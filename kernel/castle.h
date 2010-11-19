@@ -909,11 +909,11 @@ struct castle_slave {
     c_disk_chk_t                   *sup_ext_maps;
     struct mutex                    freespace_lock;
     castle_freespace_t              freespace;
-    struct castle_cache_block      *sblk;
-    struct castle_cache_block      *fs_sblk;
-    block_t                         free_blk;
     struct castle_slave_block_cnts  block_cnts;
     unsigned long                   last_access;
+    struct castle_slave_superblock  cs_superblock;
+    struct castle_fs_superblock     fs_superblock;
+    struct mutex                    sblk_lock;
 #ifdef CASTLE_DEBUG
     c_chk_cnt_t                     disk_size; /* in chunks; max_chk_num + 1 */
 #endif
