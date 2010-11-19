@@ -247,6 +247,9 @@ static int castle_freespace_slave_writeback(struct castle_slave *cs, void *unuse
     memcpy(&sblk->freespace, freespace, sizeof(castle_freespace_t));
     castle_slave_superblock_put(cs, 1);
 
+    castle_cache_extent_flush(cs->sup_ext, FREESPACE_OFFSET, 
+                              freespace->nr_entries * sizeof(c_chk_t));
+
     freespace_sblk_put(cs, 0);
     return 0;
 }

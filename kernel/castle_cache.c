@@ -2411,6 +2411,13 @@ int castle_cache_extent_flush(c_ext_id_t ext_id, uint64_t start, uint64_t size)
     if (EXT_ID_INVAL(ext_id))
         return 0;
 
+    /* Flush complete extent, if size is 0. */
+    if (size == 0)
+    {
+        size  = castle_extent_size_get(ext_id);
+        start = 0;
+    }
+
     cep.ext_id = ext_id;
     first_pg   = (start >> C_BLK_SHIFT);
     nr_pages   = (size - 1) / C_BLK_SIZE + 1;

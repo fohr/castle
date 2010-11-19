@@ -349,6 +349,9 @@ static int castle_extent_meta_ext_create(void)
     castle_extents_super_block_put(1);
 
     castle_extents_rhash_add(meta_ext);
+
+    /* Make sure that micro extent is persistent. */
+    castle_cache_extent_flush(MICRO_EXT_ID, 0, 0);
     debug("Done with intialization of meta extent mappings\n");
 
     return 0;
@@ -467,6 +470,9 @@ int castle_extents_writeback(void)
     castle_extents_super_block_put(0);
 
     castle_mstore_fini(castle_extents_mstore);
+
+    /* Flush the complete meta extent onto disk, before completing writeback. */
+    castle_cache_extent_flush(META_EXT_ID, 0, 0);
 
     castle_extents_super_block_writeback();
 
