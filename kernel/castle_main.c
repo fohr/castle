@@ -504,8 +504,8 @@ int castle_fs_init(void)
     if(ret) return -EINVAL;
 
     /* Read versions in. This requires component trees. */
-    ret = castle_versions_read();
-    if(ret) return -EINVAL;
+    if (!first && castle_versions_read())
+        return -EINVAL;
 
     /* Read Collection Attachments. */
     if (!first && castle_attachments_read())
