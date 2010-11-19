@@ -1481,6 +1481,7 @@ static void castle_btree_lub_find(struct castle_btree_node *node,
     void *key_lub;
     int lub_idx, insert_idx, low, high, mid;
 
+#define insert_candidate(_x)    if(insert_idx < 0) insert_idx=(_x)
     debug("Looking for (k,v) = (%p, 0x%x), node->used=%d\n",
             key, version, node->used);
     /* We should not search for an invalid key */
@@ -1511,7 +1512,11 @@ static void castle_btree_lub_find(struct castle_btree_node *node,
         of it in the node), or past the end of the node.
         We should start scanning to the right starting with the entry pointed by high (if 
         one exists). Going this direction keys increase and versions go from newest to 
-        oldest */
+        oldest. 
+        Set the insertion_index as soon as we find a key greater than what we are looking 
+        for, or if equal keys, when the version is ancestoral (then insert_idx == lub_idx).
+     */
+    insert_idx = -1;
     for(lub_idx=high; lub_idx < node->used; lub_idx++)
     {
         int cmp;
@@ -1525,17 +1530,15 @@ static void castle_btree_lub_find(struct castle_btree_node *node,
         cmp = btree->key_compare(key_lub, key);
         BUG_ON(cmp < 0);
         if(cmp > 0)
-            break;
+            insert_candidate(lub_idx);
         if(castle_version_is_ancestor(version_lub, version))
+        {
+            insert_candidate(lub_idx);
             break;
+        }
     } 
     BUG_ON(lub_idx > node->used);
-    /* insert_idx equals lub_idx because we are guaranteed to be inserting
-       a newer entry (it should go to the left of lub) of a smaller or equal 
-       key (which also should go to the left). 
-       If there is no LUB, lub_idx will equal node->used, which also is the
-       correct insertion point */
-    insert_idx = lub_idx;
+    insert_candidate(node->used);
     if(lub_idx == node->used)
         lub_idx = -1;
     /* Return the indices */
