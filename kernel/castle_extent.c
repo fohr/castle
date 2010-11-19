@@ -437,7 +437,11 @@ static int castle_extent_writeback(c_ext_t *ext, void *store)
     debug("Writing back extent %llu\n", ext->ext_id);
 
     CONVERT_EXTENT_TO_MENTRY(ext, &mstore_entry);
+
+    spin_unlock_irq(&castle_extents_hash_lock);
     castle_mstore_entry_insert(castle_extents_mstore, &mstore_entry);
+    spin_lock_irq(&castle_extents_hash_lock);
+
     nr_exts++;
 
     return 0;
@@ -455,7 +459,9 @@ int castle_extents_writeback(void)
         castle_mstore_init(MSTORE_EXTENTS, sizeof(struct castle_elist_entry));
     if(!castle_extents_mstore)
         return -ENOMEM;
-   
+  
+    /* Note: This is important to make sure, nothing changes in extents. And
+     * writeback() relinquishes hash spin_lock() while doing writeback. */
     /* Writeback new copy. */
     nr_exts = 0;
     castle_extents_hash_iterate(castle_extent_writeback, castle_extents_mstore);
