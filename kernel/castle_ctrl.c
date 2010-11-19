@@ -265,30 +265,26 @@ static int castle_collection_writeback(struct castle_attachment *ca)
     mstore_entry.version = ca->version;
     strcpy(mstore_entry.name, ca->col.name);
 
-    BUG_ON(!MSTORE_KEY_INVAL(ca->key));
-    ca->key = castle_mstore_entry_insert(castle_attachments_store, &mstore_entry);
+    castle_mstore_entry_insert(castle_attachments_store, &mstore_entry);
 
     return 0;
 }
 
-static int castle_attachments_writeback(void)
-{
+int castle_attachments_writeback(void)
+{ /* Should be called with castle_ctrl_lock() held. */
     struct castle_attachment *ca;
     struct list_head *lh;
 
-    castle_ctrl_lock();
+    BUG_ON(castle_attachments_store);
 
-    /* Increment reference count of all attachments. */
-    spin_lock(&castle_attachments.lock);
-    list_for_each(lh, &castle_attachments.attachments)
-    {
-        ca = list_entry(lh, struct castle_attachment, list);
-        if(ca->device)
-            continue;
-        ca->ref_cnt++;
-    }
-    spin_unlock(&castle_attachments.lock);
-
+    castle_attachments_store = 
+        castle_mstore_init(MSTORE_ATTACHMENTS_TAG, sizeof(struct castle_alist_entry));
+    if(!castle_attachments_store)
+        return -ENOMEM;
+    
+    /* Note: Shouldn't take attachments lock here. Writeback function can sleep.
+     * This function should be called with castle_ctrl_lock() and it guarentees
+     * no changes to attachments list. */
     /* Writeback attachments. */
     list_for_each(lh, &castle_attachments.attachments)
     {
@@ -300,97 +296,64 @@ static int castle_attachments_writeback(void)
                     ca->col.id, ca->col.name);
     }
     
-    /* Decrement reference count of all attachments. */
-    spin_lock(&castle_attachments.lock);
-    list_for_each(lh, &castle_attachments.attachments)
-    {
-        ca = list_entry(lh, struct castle_attachment, list);
-        if(ca->device)
-            continue;
-        ca->ref_cnt--;
-    }
-    spin_unlock(&castle_attachments.lock);
-
-    castle_ctrl_unlock();
+    castle_mstore_fini(castle_attachments_store);
+    castle_attachments_store = NULL;
 
     return 0;
 }
 
-int castle_attachments_store_init(int first)
+int castle_attachments_read(void)
 {
-    struct castle_attachment *ca;
-    struct list_head *lh;
-
-    if (first)
-    {
-        printk("Creating new mstore for Collection Attachments\n");
-        castle_attachments_store =  castle_mstore_init(MSTORE_ATTACHMENTS_TAG, 
-                                            sizeof(struct castle_alist_entry));
-    }
-    else 
-    {
-        struct castle_mstore_iter *iterator;
-        struct castle_alist_entry mstore_entry;
+    struct castle_mstore_iter *iterator = NULL;
+    struct castle_alist_entry mstore_entry;
+    int ret = 0;
  
-        printk("Openings mstore for Collection Attachments\n");
-        castle_attachments_store = castle_mstore_open(MSTORE_ATTACHMENTS_TAG, 
-                                            sizeof(struct castle_alist_entry));
+    BUG_ON(castle_attachments_store);
 
-        iterator = castle_mstore_iterate(castle_attachments_store);
-        if (!iterator)
-            return -EINVAL;
-        while (castle_mstore_iterator_has_next(iterator))
-        {
-            struct castle_attachment *ca;
-            c_mstore_key_t key;
-            char *name = castle_malloc(MAX_NAME_SIZE, GFP_KERNEL);
-
-            BUG_ON(!name);
-            castle_mstore_iterator_next(iterator, &mstore_entry, &key);
-            strcpy(name, mstore_entry.name);
-            debug("Collection Load: %s\n", name);
-            ca = castle_collection_init(mstore_entry.version, name);
-            if(!ca)
-            {
-                printk("Failed to create Collection (%s, %u)\n",
-                        mstore_entry.name, mstore_entry.version);
-                castle_mstore_iterator_destroy(iterator);
-                return -EINVAL;
-            }
-            ca->key = key;
-            printk("Created Collection (%s, %u) with id: %u\n",
-                    mstore_entry.name, mstore_entry.version, ca->col.id);
-        }
-        castle_mstore_iterator_destroy(iterator);
-    }
-
-    /* TODO: Delete old copies of attachments in mstore. Should remove this afte
-     * rcompleting Crash Consistency. */
-    list_for_each(lh, &castle_attachments.attachments)
-    {
-        ca = list_entry(lh, struct castle_attachment, list);
-        if(ca->device)
-            continue;
-
-        if (!MSTORE_KEY_INVAL(ca->key))
-            castle_mstore_entry_delete(castle_attachments_store, ca->key);
-
-        ca->key = INVAL_MSTORE_KEY;
-    }
-
+    printk("Openings mstore for Collection Attachments\n");
+    castle_attachments_store = castle_mstore_open(MSTORE_ATTACHMENTS_TAG, 
+                                        sizeof(struct castle_alist_entry));
     if (!castle_attachments_store)
-        return -ENOMEM;
+    {
+        ret = -ENOMEM;
+        goto out;
+    }
+
+    iterator = castle_mstore_iterate(castle_attachments_store);
+    if (!iterator)
+    {
+        ret = -EINVAL;
+        goto out;
+    }
+
+    while (castle_mstore_iterator_has_next(iterator))
+    {
+        struct castle_attachment *ca;
+        c_mstore_key_t key;
+        char *name = castle_malloc(MAX_NAME_SIZE, GFP_KERNEL);
+
+        BUG_ON(!name);
+        castle_mstore_iterator_next(iterator, &mstore_entry, &key);
+        strcpy(name, mstore_entry.name);
+        debug("Collection Load: %s\n", name);
+        ca = castle_collection_init(mstore_entry.version, name);
+        if(!ca)
+        {
+            printk("Failed to create Collection (%s, %u)\n",
+                    mstore_entry.name, mstore_entry.version);
+            ret = -EINVAL;
+            goto out;
+        }
+        printk("Created Collection (%s, %u) with id: %u\n",
+                mstore_entry.name, mstore_entry.version, ca->col.id);
+    }
+
+out:
+    if (iterator)                 castle_mstore_iterator_destroy(iterator);
+    if (castle_attachments_store) castle_mstore_fini(castle_attachments_store);
+    castle_attachments_store = NULL;
 
     return 0;
-}
-
-void castle_attachments_store_fini(void)
-{
-    if (castle_attachments_store)
-    {
-        castle_attachments_writeback();
-        castle_mstore_fini(castle_attachments_store);
-    }
 }
 
 void castle_control_collection_attach(version_t          version,

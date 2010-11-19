@@ -10,6 +10,7 @@
 #include "castle_versions.h"
 #include "castle_extent.h"
 #include "castle_ctrl.h"
+#include "castle_da.h"
 
 //#define DEBUG
 #ifndef DEBUG
@@ -33,6 +34,7 @@ static struct list_head        *castle_da_hash       = NULL;
 static struct list_head        *castle_ct_hash       = NULL;
 static struct castle_mstore    *castle_da_store      = NULL;
 static struct castle_mstore    *castle_tree_store    = NULL;
+static struct castle_mstore    *castle_lo_store      = NULL;
        da_id_t                  castle_next_da_id    = 1; 
 static tree_seq_t               castle_next_tree_seq = 1; 
 static struct workqueue_struct *castle_merge_wq;
@@ -74,7 +76,6 @@ struct castle_double_array {
     int                nr_trees;
     struct list_head   trees[MAX_DA_LEVEL];
     struct list_head   hash_list;
-    c_mstore_key_t     mstore_key;
     atomic_t           ref_cnt;
     uint32_t           attachment_cnt;
     /* Queue of write IOs queued up on this DA. */
@@ -1153,6 +1154,7 @@ struct castle_da_merge {
     int                           budget_cons_units;
     c_ext_fs_t                    tree_ext_fs;
     c_ext_fs_t                    data_ext_fs;
+    struct list_head              large_objs;
 };
 
 /************************************/
@@ -1319,8 +1321,8 @@ static void castle_da_each_skip(c_merged_iter_t *iter,
 
     if (CVT_LARGE_OBJECT(comp_iter->cached_entry.cvt))
     {
-        debug("Freeing Duplicate Large Object.\n");
-        castle_extent_free(comp_iter->cached_entry.cvt.cep.ext_id);
+        /* No need to remove this large object, it gets deleted part of Tree
+         * deletion. */
     }
 }
 
@@ -1490,11 +1492,15 @@ static inline void castle_da_entry_add(struct castle_da_merge *merge,
 
     /* Deal with medium and large objects first. For medium objects, we need to copy them
        into our new medium object extent. For large objects, we need to save the aggregate
-       size. TODO plus take refs to extents? */
+       size. plus take refs to extents? */
     if(CVT_MEDIUM_OBJECT(cvt))
         cvt = castle_da_medium_obj_copy(merge, cvt);
     if(CVT_LARGE_OBJECT(cvt))
-        merge->large_chunks += castle_extent_size_get(cvt.cep.ext_id); 
+    {
+        merge->large_chunks += castle_extent_size_get(cvt.cep.ext_id);
+        castle_ct_large_obj_add(cvt.cep.ext_id, cvt.length, &merge->large_objs, NULL);
+        castle_extent_get(cvt.cep.ext_id);
+    }
 
     debug("Adding an entry at depth: %d\n", depth);
     BUG_ON(depth >= MAX_BTREE_DEPTH);
@@ -1751,6 +1757,11 @@ static struct castle_component_tree* castle_da_merge_package(struct castle_da_me
                  atomic64_read(&merge->tree_ext_fs.blocked));
     atomic64_set(&out_tree->data_ext_fs.blocked, 
                  atomic64_read(&merge->data_ext_fs.blocked));
+
+    /* Add list of large objects to CT. */
+    list_replace(&merge->large_objs, &out_tree->large_objs);
+    merge->large_objs.prev = merge->large_objs.next = NULL;
+
     debug("Number of entries=%ld, number of nodes=%ld\n",
             atomic64_read(&out_tree->item_count),
             atomic64_read(&out_tree->node_count));
@@ -1904,6 +1915,8 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
         castle_ct_put(merge->in_tree1, 0);
         castle_ct_put(merge->in_tree2, 0);
 
+        /* TODO: Do this before adding new tree to DA. Check for locks on new
+         * tree. */
         /* Flush the new CT onto disk. */
         castle_cache_extent_flush(merge->tree_ext_fs.ext_id, 0,
                                   atomic64_read(&merge->tree_ext_fs.used));
@@ -2025,6 +2038,7 @@ static void castle_da_merge_schedule(struct castle_double_array *da,
     }
     merge->tree_ext_fs.ext_id = INVAL_EXT_ID;
     merge->data_ext_fs.ext_id = INVAL_EXT_ID;
+    INIT_LIST_HEAD(&merge->large_objs);
 
     CASTLE_INIT_WORK(&merge->work, castle_da_merge_do);
     queue_work(castle_merge_wq, &merge->work);
@@ -2158,7 +2172,6 @@ static struct castle_double_array* castle_da_alloc(void)
 
     da->id              = INVAL_DA; 
     da->root_version    = INVAL_VERSION;
-    da->mstore_key      = INVAL_MSTORE_KEY;
     spin_lock_init(&da->lock);
     da->flags           = 0;
     da->nr_trees        = 0;
@@ -2178,22 +2191,18 @@ static struct castle_double_array* castle_da_alloc(void)
     return da;
 }
 
-static c_mstore_key_t castle_da_marshall(struct castle_dlist_entry *dam,
-                                         struct castle_double_array *da)
+void castle_da_marshall(struct castle_dlist_entry *dam,
+                        struct castle_double_array *da)
 {
     dam->id           = da->id;
     dam->root_version = da->root_version;
-
-    return da->mstore_key;
 }
  
 static void castle_da_unmarshall(struct castle_double_array *da,
-                                 struct castle_dlist_entry *dam,
-                                 c_mstore_key_t key)
+                                 struct castle_dlist_entry *dam)
 {
     da->id           = dam->id;
     da->root_version = dam->root_version;
-    da->mstore_key   = key;
 }
 
 struct castle_component_tree* castle_component_tree_get(tree_seq_t seq)
@@ -2238,6 +2247,58 @@ static void castle_component_tree_del(struct castle_double_array *da,
     da->nr_trees--;
 }
 
+static void castle_ct_large_obj_writeback(struct castle_large_obj_entry *lo, 
+                                          struct castle_component_tree *ct)
+{
+    struct castle_lolist_entry mstore_entry;
+
+    mstore_entry.ext_id = lo->ext_id;
+    mstore_entry.length = lo->length;
+    mstore_entry.ct_seq = ct->seq;
+
+    castle_mstore_entry_insert(castle_lo_store, &mstore_entry);
+}
+
+static void castle_ct_large_objs_remove(struct castle_component_tree *ct)
+{
+    struct list_head *lh, *tmp;
+
+    list_for_each_safe(lh, tmp, &ct->large_objs)
+    {
+        struct castle_large_obj_entry *lo = 
+                            list_entry(lh, struct castle_large_obj_entry, list);
+
+        /* No need of locks as it is done in the removal context of CT. */
+        list_del(&lo->list);
+        castle_extent_put(lo->ext_id);
+        castle_free(lo);
+    }
+}
+
+int castle_ct_large_obj_add(c_ext_id_t              ext_id, 
+                            uint64_t                length, 
+                            struct list_head       *head,
+                            struct mutex           *mutex)
+{
+    struct castle_large_obj_entry *lo;
+
+    if (EXT_ID_INVAL(ext_id))
+        return -EINVAL;
+
+    lo = castle_malloc(sizeof(struct castle_large_obj_entry), GFP_KERNEL);
+    if (!lo)
+        return -ENOMEM;
+
+    lo->ext_id = ext_id;
+    lo->length = length;
+
+    if (mutex) mutex_lock(mutex);
+    list_add(&lo->list, head);
+    if (mutex) mutex_unlock(mutex);
+
+    return 0;
+}
+
 void castle_ct_get(struct castle_component_tree *ct, int write)
 {
     atomic_inc(&ct->ref_count);
@@ -2264,7 +2325,11 @@ void castle_ct_put(struct castle_component_tree *ct, int write)
     /* Destroy the component tree */
     BUG_ON(TREE_GLOBAL(ct->seq) || TREE_INVAL(ct->seq));
     castle_ct_hash_remove(ct);
+
     printk("Releasing freespace occupied by ct=%d\n", ct->seq);
+    /* Freeing all large objects. */
+    castle_ct_large_objs_remove(ct);
+
     if (!EXT_ID_INVAL(ct->tree_ext_fs.ext_id))
         castle_extent_free(ct->tree_ext_fs.ext_id);
     if (!EXT_ID_INVAL(ct->data_ext_fs.ext_id))
@@ -2300,8 +2365,8 @@ static int castle_da_merge_restart(struct castle_double_array *da, void *unused)
     return 0;
 }
 
-static c_mstore_key_t castle_da_ct_marshall(struct castle_clist_entry *ctm,
-                                            struct castle_component_tree *ct)
+void castle_da_ct_marshall(struct castle_clist_entry *ctm,
+                           struct castle_component_tree *ct)
 {
     ctm->da_id       		= ct->da; 
     ctm->item_count  		= atomic64_read(&ct->item_count);
@@ -2318,13 +2383,10 @@ static c_mstore_key_t castle_da_ct_marshall(struct castle_clist_entry *ctm,
 
     castle_ext_fs_marshall(&ct->tree_ext_fs, &ctm->tree_ext_fs_bs);
     castle_ext_fs_marshall(&ct->data_ext_fs, &ctm->data_ext_fs_bs);
-
-    return ct->mstore_key;
 }
 
 static da_id_t castle_da_ct_unmarshall(struct castle_component_tree *ct,
-                                       struct castle_clist_entry *ctm,
-                                       c_mstore_key_t key)
+                                       struct castle_clist_entry *ctm)
 {
     ct->seq         		= ctm->seq;
     atomic_set(&ct->ref_count, 1);
@@ -2340,12 +2402,13 @@ static da_id_t castle_da_ct_unmarshall(struct castle_component_tree *ct,
     ct->last_node   		= ctm->last_node;
     atomic64_set(&ct->large_ext_chk_cnt, ctm->large_ext_chk_cnt);
     init_rwsem(&ct->lock);
+    mutex_init(&ct->lo_mutex);
     atomic64_set(&ct->node_count, ctm->node_count);
-    ct->mstore_key  		= key;
     castle_ext_fs_unmarshall(&ct->tree_ext_fs, &ctm->tree_ext_fs_bs);
     castle_ext_fs_unmarshall(&ct->data_ext_fs, &ctm->data_ext_fs_bs);
     ct->da_list.next = NULL;
     ct->da_list.prev = NULL;
+    INIT_LIST_HEAD(&ct->large_objs);
 
     return ctm->da_id;
 }
@@ -2440,20 +2503,20 @@ static int castle_da_tree_writeback(struct castle_double_array *da,
                                     void *unused)
 {
     struct castle_clist_entry mstore_entry;
-    c_mstore_key_t key;
+    struct list_head *lh, *tmp;
 
-    key = castle_da_ct_marshall(&mstore_entry, ct); 
-    if(MSTORE_KEY_INVAL(key))
+    mutex_lock(&ct->lo_mutex);
+    list_for_each_safe(lh, tmp, &ct->large_objs)
     {
-        debug("Inserting CT seq=%d\n", ct->seq);
-        ct->mstore_key = 
-            castle_mstore_entry_insert(castle_tree_store, &mstore_entry);
+        struct castle_large_obj_entry *lo = 
+                            list_entry(lh, struct castle_large_obj_entry, list);
+
+        castle_ct_large_obj_writeback(lo, ct);
     }
-    else
-    {
-        debug("Updating CT seq=%d\n", ct->seq);
-        castle_mstore_entry_update(castle_tree_store, key, &mstore_entry);
-    }
+    mutex_unlock(&ct->lo_mutex);
+
+    castle_da_ct_marshall(&mstore_entry, ct); 
+    castle_mstore_entry_insert(castle_tree_store, &mstore_entry);
 
     return 0;
 }
@@ -2461,71 +2524,83 @@ static int castle_da_tree_writeback(struct castle_double_array *da,
 static int castle_da_writeback(struct castle_double_array *da, void *unused) 
 {
     struct castle_dlist_entry mstore_dentry;
-    c_mstore_key_t key;
 
-    key = castle_da_marshall(&mstore_dentry, da);
+    castle_da_marshall(&mstore_dentry, da);
 
     /* We get here with hash spinlock held. But since we're calling sleeping functions
        we need to drop it. Hash consitancy is guaranteed, because by this point 
        noone should be modifying it anymore */
     spin_unlock_irq(&castle_da_hash_lock);
+
     castle_da_foreach_tree(da, castle_da_tree_writeback, NULL);
-    if(MSTORE_KEY_INVAL(key))
-    {
-        debug("Inserting a DA id=%d\n", da->id);
-        da->mstore_key = 
-            castle_mstore_entry_insert(castle_da_store, &mstore_dentry);
-    }
-    else
-    {
-        debug("Updating a DA id=%d.\n", da->id);
-        castle_mstore_entry_update(castle_da_store, key, &mstore_dentry);
-    }
+
+    debug("Inserting a DA id=%d\n", da->id);
+    castle_mstore_entry_insert(castle_da_store, &mstore_dentry);
+
     spin_lock_irq(&castle_da_hash_lock);
 
     return 0;
 }
 
-static void castle_da_hash_writeback(void)
+void castle_double_arrays_writeback(void)
 {
-    /* Do not write back if the fs hasn't been inited */
-    if(!castle_tree_store || !castle_da_store)
-        return;
+    BUG_ON(castle_da_store || castle_tree_store || castle_lo_store);
+
+    castle_da_store   = castle_mstore_init(MSTORE_DOUBLE_ARRAYS,
+                                         sizeof(struct castle_dlist_entry));
+    castle_tree_store = castle_mstore_init(MSTORE_COMPONENT_TREES,
+                                         sizeof(struct castle_clist_entry));
+    castle_lo_store   = castle_mstore_init(MSTORE_LARGE_OBJECTS,
+                                         sizeof(struct castle_lolist_entry));
+
+    if(!castle_da_store || !castle_tree_store || !castle_lo_store)
+        goto out;
+
     castle_da_hash_iterate(castle_da_writeback, NULL); 
     castle_da_tree_writeback(NULL, &castle_global_tree, -1, NULL);
-    castle_mstore_fini(castle_tree_store);
-    castle_mstore_fini(castle_da_store);
+
+out:
+    if (castle_lo_store)    castle_mstore_fini(castle_lo_store);
+    if (castle_tree_store)  castle_mstore_fini(castle_tree_store);
+    if (castle_da_store)    castle_mstore_fini(castle_da_store);
+
+    castle_da_store = castle_tree_store = NULL;
 }
     
 int castle_double_array_read(void)
 {
     struct castle_dlist_entry mstore_dentry;
     struct castle_clist_entry mstore_centry;
-    struct castle_mstore_iter *iterator;
+    struct castle_lolist_entry mstore_loentry;
+    struct castle_mstore_iter *iterator = NULL;
     struct castle_component_tree *ct;
     struct castle_double_array *da;
     c_mstore_key_t key;
     da_id_t da_id;
+    int ret = 0;
 
     castle_da_store   = castle_mstore_open(MSTORE_DOUBLE_ARRAYS,
                                          sizeof(struct castle_dlist_entry));
     castle_tree_store = castle_mstore_open(MSTORE_COMPONENT_TREES,
                                          sizeof(struct castle_clist_entry));
+    castle_lo_store   = castle_mstore_open(MSTORE_LARGE_OBJECTS,
+                                         sizeof(struct castle_lolist_entry));
 
-    if(!castle_da_store || !castle_tree_store)
-        return -ENOMEM;
+    if(!castle_da_store || !castle_tree_store || !castle_lo_store)
+        goto error_out;
     
     /* Read doubling arrays */
     iterator = castle_mstore_iterate(castle_da_store);
     if(!iterator)
-        return -EINVAL;
+        goto error_out;
+
     while(castle_mstore_iterator_has_next(iterator))
     {
         castle_mstore_iterator_next(iterator, &mstore_dentry, &key);
         da = castle_da_alloc(); 
         if(!da) 
-            goto out_iter_destroy;
-        castle_da_unmarshall(da, &mstore_dentry, key);
+            goto error_out;
+        castle_da_unmarshall(da, &mstore_dentry);
         castle_da_hash_add(da);
         debug("Read DA id=%d\n", da->id);
         castle_next_da_id = (da->id >= castle_next_da_id) ? da->id + 1 : castle_next_da_id;
@@ -2535,7 +2610,7 @@ int castle_double_array_read(void)
     /* Read component trees */
     iterator = castle_mstore_iterate(castle_tree_store);
     if(!iterator)
-        return -EINVAL;
+        goto error_out;
    
     while(castle_mstore_iterator_has_next(iterator))
     {
@@ -2543,7 +2618,7 @@ int castle_double_array_read(void)
         /* Special case for castle_global_tree, it doesn't have a da associated with it. */
         if(TREE_GLOBAL(mstore_centry.seq))
         {
-            da_id = castle_da_ct_unmarshall(&castle_global_tree, &mstore_centry, key);
+            da_id = castle_da_ct_unmarshall(&castle_global_tree, &mstore_centry);
             BUG_ON(!DA_INVAL(da_id));
             castle_ct_hash_add(&castle_global_tree);
             continue;
@@ -2551,12 +2626,12 @@ int castle_double_array_read(void)
         /* Otherwise allocate a ct structure */
         ct = castle_malloc(sizeof(struct castle_component_tree), GFP_KERNEL);
         if(!ct)
-            goto out_iter_destroy;
-        da_id = castle_da_ct_unmarshall(ct, &mstore_centry, key);
+            goto error_out;
+        da_id = castle_da_ct_unmarshall(ct, &mstore_centry);
         castle_ct_hash_add(ct);
         da = castle_da_hash_get(da_id);
         if(!da)
-            goto out_iter_destroy;
+            goto error_out;
         debug("Read CT seq=%d\n", ct->seq);
         castle_da_lock(da);
         castle_component_tree_add(da, ct, 1 /* in init */);
@@ -2564,20 +2639,51 @@ int castle_double_array_read(void)
         castle_next_tree_seq = (ct->seq >= castle_next_tree_seq) ? ct->seq + 1 : castle_next_tree_seq;
     }
     castle_mstore_iterator_destroy(iterator);
+    iterator = NULL;
     debug("castle_next_da_id = %d, castle_next_tree_id=%d\n", 
             castle_next_da_id, 
             castle_next_tree_seq);
+
+    /* Read all Large Objects lists. */
+    iterator = castle_mstore_iterate(castle_lo_store);
+    if(!iterator)
+        goto error_out;
+
+    while(castle_mstore_iterator_has_next(iterator))
+    {
+        struct castle_component_tree *ct;
+
+        castle_mstore_iterator_next(iterator, &mstore_loentry, &key);
+        ct = castle_component_tree_get(mstore_loentry.ct_seq);
+        if (castle_ct_large_obj_add(mstore_loentry.ext_id,
+                                    mstore_loentry.length,
+                                    &ct->large_objs, NULL))
+        {
+            printk("Failed to add Large Object %llu to CT: %u\n", 
+                    mstore_loentry.ext_id,
+                    mstore_loentry.ct_seq);
+            goto error_out;
+        }
+    }
+    castle_mstore_iterator_destroy(iterator);
+    iterator = NULL;
 
     /* Sort all the tree lists by the sequence number */
     castle_da_hash_iterate(castle_da_trees_sort, NULL); 
     /* Check if any merges need to be done. */
     castle_da_hash_iterate(castle_da_merge_restart, NULL); 
+    goto out;
 
-    return 0;
-
-out_iter_destroy:
-    castle_mstore_iterator_destroy(iterator);
-    return -EINVAL;
+error_out:
+    ret = -EINVAL;;
+out:
+    if (iterator)           castle_mstore_iterator_destroy(iterator);
+    if (castle_da_store)    castle_mstore_fini(castle_da_store);
+    if (castle_tree_store)  castle_mstore_fini(castle_tree_store);
+    if (castle_lo_store)    castle_mstore_fini(castle_lo_store);
+    castle_da_store = castle_tree_store = castle_lo_store = NULL;
+    
+    return ret;
 }
 
 static struct castle_component_tree* castle_ct_alloc(struct castle_double_array *da, 
@@ -2606,12 +2712,13 @@ static struct castle_component_tree* castle_ct_alloc(struct castle_double_array 
     ct->first_node  = INVAL_EXT_POS;
     ct->last_node   = INVAL_EXT_POS;
     init_rwsem(&ct->lock);
+    mutex_init(&ct->lo_mutex);
     atomic64_set(&ct->node_count, 0); 
     ct->da_list.next = NULL;
     ct->da_list.prev = NULL;
     INIT_LIST_HEAD(&ct->hash_list);
+    INIT_LIST_HEAD(&ct->large_objs);
     castle_ct_hash_add(ct);
-    ct->mstore_key  = INVAL_MSTORE_KEY; 
     ct->tree_ext_fs.ext_id = INVAL_EXT_ID;
     ct->data_ext_fs.ext_id = INVAL_EXT_ID;
 
@@ -2984,14 +3091,6 @@ void castle_double_array_find(c_bvec_t *c_bvec)
 
 int castle_double_array_create(void)
 {
-    castle_da_store   = castle_mstore_init(MSTORE_DOUBLE_ARRAYS,
-                                         sizeof(struct castle_dlist_entry));
-    castle_tree_store = castle_mstore_init(MSTORE_COMPONENT_TREES,
-                                         sizeof(struct castle_clist_entry));
-
-    if(!castle_da_store || !castle_tree_store)
-        return -ENOMEM;
-
     /* Make sure that the global tree is in the ct hash */
     castle_ct_hash_add(&castle_global_tree);
 
@@ -3031,13 +3130,16 @@ err_out:
     return ret;
 }
 
-void castle_double_array_fini(void)
+void castle_double_array_merges_fini(void)
 {
     printk("\n========= Double Array fini ==========\n");
     castle_da_exiting = 1;
     destroy_workqueue(castle_merge_wq);
     del_singleshot_timer_sync(&throttle_timer);
-    castle_da_hash_writeback();
+}
+
+void castle_double_array_fini(void)
+{
     castle_da_hash_destroy();
     castle_ct_hash_destroy();
 }

@@ -655,7 +655,7 @@ static int castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
     struct castle_object_replace *replace = c_bvec->c_bio->replace;
     int tombstone = c_bvec_data_del(c_bvec); 
     int nr_blocks;
-    int prev_large_ext_chk_cnt;
+    //int prev_large_ext_chk_cnt;
 
     /* We should be handling a write (possibly a tombstone write). */
     BUG_ON(c_bvec_data_dir(c_bvec) != WRITE); 
@@ -723,10 +723,19 @@ static int castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
                     return -ENOSPC;
                 }
 
+                if (castle_ct_large_obj_add(cep.ext_id, replace->value_len,
+                                            &c_bvec->tree->large_objs,
+                                            &c_bvec->tree->lo_mutex))
+                {
+                    printk("Failed to intialize large object\n");
+                    return -ENOMEM;
+                }
+
                 /* Update the large object chunk count on the tree */
                 atomic64_add(nr_chunks, &c_bvec->tree->large_ext_chk_cnt);
 
                 CVT_LARGE_OBJECT_SET(*cvt, replace->value_len, cep);
+
 
                 debug("Creating Large Object of size - %u\n", nr_chunks);
                 /* TODO: Again, work out how to handle failed allocations */ 
@@ -748,11 +757,16 @@ static int castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
     /* Free Old Large Object */
     if (CVT_LARGE_OBJECT(prev_cvt))
     {
+        /* Note: Do nothing. This LO will get deleted while deleting this tree.
+         * Deleting here is not good, as there could be few out-standing i/os
+         * going on this object. */
+#if 0
         /* Update the large object chunk count on the tree */
         prev_large_ext_chk_cnt = castle_extent_size_get(prev_cvt.cep.ext_id);
         atomic64_sub(prev_large_ext_chk_cnt, &c_bvec->tree->large_ext_chk_cnt);
         debug("Freeing Large Object of size - %u\n", prev_large_ext_chk_cnt);
         castle_extent_free(prev_cvt.cep.ext_id);
+#endif
     }
     BUG_ON(CVT_INVALID(*cvt));
 

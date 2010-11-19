@@ -50,7 +50,6 @@ struct castle_version {
     struct castle_version     *next_sybling;
 
     /* Aux data */
-    c_mstore_key_t   mstore_key;
     version_t        o_order;
     version_t        r_order;
     da_id_t          da_id;
@@ -82,8 +81,6 @@ static void castle_versions_hash_destroy(void)
 {
     castle_versions_hash_iterate(castle_version_hash_remove, NULL); 
     castle_free(castle_versions_hash);
-    if(castle_versions_mstore)
-        castle_mstore_fini(castle_versions_mstore);
 }
 
 static void castle_versions_init_add(struct castle_version *v)
@@ -201,7 +198,6 @@ static struct castle_version* castle_version_add(version_t version,
     v->da_id        = da_id;
     v->size         = size; 
     v->flags        = 0;
-    v->mstore_key   = INVAL_MSTORE_KEY;
     INIT_LIST_HEAD(&v->hash_list);
     INIT_LIST_HEAD(&v->init_list);
 
@@ -262,19 +258,27 @@ static int castle_version_writeback(struct castle_version *v, void *unused)
     mstore_ventry.size       = v->size;
     mstore_ventry.da_id      = v->da_id;
 
-    BUG_ON(!MSTORE_KEY_INVAL(v->mstore_key));
-    v->mstore_key = castle_mstore_entry_insert(castle_versions_mstore, 
-                                               &mstore_ventry);
+    spin_unlock_irq(&castle_versions_hash_lock);
+    castle_mstore_entry_insert(castle_versions_mstore, &mstore_ventry);
+    spin_lock_irq(&castle_versions_hash_lock);
 
     return 0;
 }
 
 int castle_versions_writeback(void)
-{
-    castle_ctrl_lock();
+{ /* Should be called with castle_ctrl_lock() held. */
+    BUG_ON(castle_versions_mstore);
+
+    castle_versions_mstore = 
+        castle_mstore_init(MSTORE_VERSIONS_ID, sizeof(struct castle_vlist_entry));
+    if(!castle_versions_mstore)
+        return -ENOMEM;
+    
     /* Writeback new copy. */
     castle_versions_hash_iterate(castle_version_writeback, NULL);
-    castle_ctrl_unlock();
+
+    castle_mstore_fini(castle_versions_mstore);
+    castle_versions_mstore = NULL;
 
     return 0;
 }
@@ -656,11 +660,6 @@ int castle_versions_zero_init(void)
     struct castle_version *v;
 
     debug("Initialising version root.\n");
-    castle_versions_mstore = 
-        castle_mstore_init(MSTORE_VERSIONS_ID, sizeof(struct castle_vlist_entry));
-
-    if(!castle_versions_mstore)
-        return -ENOMEM;
 
     v = castle_version_add(0, 0, INVAL_DA, 0);
     if (!v)
@@ -673,34 +672,30 @@ int castle_versions_zero_init(void)
     return 0;
 }
 
-static int castle_version_mstore_remove(struct castle_version *v, void *unused)
-{
-    if (MSTORE_KEY_INVAL(v->mstore_key))
-        return 0;
-
-    castle_mstore_entry_delete(castle_versions_mstore, v->mstore_key);
-    v->mstore_key = INVAL_MSTORE_KEY;
-
-    return 0;
-}
-
 int castle_versions_read(void)
 {
     struct castle_vlist_entry mstore_ventry;
-    struct castle_mstore_iter* iterator;
+    struct castle_mstore_iter* iterator = NULL;
     struct castle_version* v; 
     c_mstore_key_t key;
+    int ret = 0;
+
+    BUG_ON(castle_versions_mstore);
+    castle_versions_mstore = 
+        castle_mstore_open(MSTORE_VERSIONS_ID, sizeof(struct castle_vlist_entry));
 
     if(!castle_versions_mstore)
-        castle_versions_mstore = 
-            castle_mstore_open(MSTORE_VERSIONS_ID, sizeof(struct castle_vlist_entry));
-
-    if(!castle_versions_mstore)
-        return -ENOMEM;
+    {
+        ret = -ENOMEM;
+        goto out;
+    }
 
     iterator = castle_mstore_iterate(castle_versions_mstore);
     if(!iterator)
-        return -EINVAL;
+    {
+        ret = -EINVAL;
+        goto out;
+    }
 
     while(castle_mstore_iterator_has_next(iterator))
     {
@@ -711,20 +706,20 @@ int castle_versions_read(void)
                                mstore_ventry.size);
         if(!v)
         {
-            castle_mstore_iterator_destroy(iterator);
-            return -ENOMEM;
+            ret = -ENOMEM;
+            goto out;
         }
         if(VERSION_INVAL(castle_versions_last) || v->version > castle_versions_last)
             castle_versions_last = v->version;
-        v->mstore_key = key;
     }
-    castle_mstore_iterator_destroy(iterator);
-    /* TODO: Delete old copies of versions in mstore. Should remove this afte
-     * rcompleting Crash Consistency. */
-    castle_versions_hash_iterate(castle_version_mstore_remove, NULL);
+    ret = castle_versions_process(); 
 
+out:
+    if (iterator)               castle_mstore_iterator_destroy(iterator);
+    if (castle_versions_mstore) castle_mstore_fini(castle_versions_mstore);
+    castle_versions_mstore = NULL;
 
-    return castle_versions_process(); 
+    return ret; 
 }
 
 /***** Init/fini functions *****/
@@ -769,7 +764,6 @@ err_out:
 
 void castle_versions_fini(void)
 {
-    castle_versions_writeback();
     castle_versions_hash_destroy();
     kmem_cache_destroy(castle_versions_cache);
 }

@@ -3,27 +3,6 @@
 
 #include "castle.h"
 
-typedef enum {
-    DEFAULT,
-    JOURNAL,
-    FS_META,
-    LOG_FREEZER,
-    META_EXT,
-    MICRO_EXT,
-    SUPER_EXT,
-    NR_RDA_SPEC
-} c_rda_type_t;
-
-#if 0
-static char *rda_type_str[] = {
-    "DEFAULT",
-    "JOURNAL",
-    "FS_META",
-    "LOG_FREEZER",
-    "NR_RDA_SPEC"
-};
-#endif
-
 /* Get a slave to allocate next chunk.
  *
  * rda_type - RDA spec to be used to allocate the chunk
@@ -94,6 +73,20 @@ void
 castle_extent_sup_ext_close(struct castle_slave     *cs);
 
 int 
-castle_extents_load(int first);
+castle_extents_create(void);
 
+int 
+castle_extents_read(void);
+
+int 
+castle_extents_read_complete(void);
+
+int 
+castle_extents_writeback(void);
+
+int 
+castle_extent_get(c_ext_id_t ext_id);
+
+int 
+castle_extent_put(c_ext_id_t ext_id);
 #endif //__CASTLE_EXTENT_H__

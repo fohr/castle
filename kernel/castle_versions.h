@@ -24,5 +24,6 @@ int          castle_versions_init       (void);
 void         castle_versions_fini       (void);
 
 version_t    castle_version_max_get     (void);
+int          castle_versions_writeback  (void);
 
 #endif /*__CASTLE_VERSIONS_H__ */
