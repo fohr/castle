@@ -3007,7 +3007,6 @@ int castle_double_array_init(void)
  
 err_out:
     BUG_ON(!ret);
-    del_singleshot_timer_sync(&throttle_timer);
     if(castle_ct_hash)
         castle_free(castle_ct_hash);
     if(castle_da_hash)
