@@ -178,22 +178,39 @@ void castle_fs_superblocks_put(struct castle_fs_superblock *sb, int dirty)
     }
 }
 
-int castle_ext_fs_init(c_ext_fs_t       *ext_fs, 
-                       da_id_t           da_id, 
-                       c_byte_off_t      size,
-                       uint32_t          align)
+int _castle_ext_fs_init(c_ext_fs_t       *ext_fs, 
+                        da_id_t           da_id, 
+                        c_byte_off_t      size,
+                        uint32_t          align,
+                        c_ext_id_t        ext_id)
 {
     uint32_t nr_chunks = ((size  - 1) / C_CHK_SIZE) + 1;
 
-    ext_fs->ext_id      = castle_extent_alloc(DEFAULT, da_id, nr_chunks);
-    ext_fs->ext_size    = size;
-    ext_fs->align       = align;
+    if (!EXT_ID_INVAL(ext_id))
+    {
+        ext_fs->ext_id  = ext_id;
+        ext_fs->ext_size= castle_extent_size_get(ext_id) * C_CHK_SIZE;
+    }
+    else
+    {
+        ext_fs->ext_id  = castle_extent_alloc(DEFAULT, da_id, nr_chunks);
+        ext_fs->ext_size= size;
+    }
+    ext_fs->align = align;
     atomic64_set(&ext_fs->used, 0);
     atomic64_set(&ext_fs->blocked, 0);
 
     if (EXT_ID_INVAL(ext_fs->ext_id))
         return -ENOSPC;
     return 0;
+}
+
+int castle_ext_fs_init(c_ext_fs_t       *ext_fs, 
+                       da_id_t           da_id, 
+                       c_byte_off_t      size,
+                       uint32_t          align)
+{
+    return _castle_ext_fs_init(ext_fs, da_id, size, align, INVAL_EXT_ID);
 }
 
 void castle_ext_fs_fini(c_ext_fs_t      *ext_fs)
@@ -415,16 +432,20 @@ int castle_fs_init(void)
         return -EINVAL;
     }
 
-    /* Load extent structures into memory */
-    if ((ret = castle_extents_load(first)))
-        return ret;
-
     /* Init the fs superblock */
-    if (first) castle_fs_superblocks_init();
+    if(first) castle_fs_superblocks_init();
+
+    /* Load extent structures of logical extents into memory */
+    ret = first ? castle_extents_create() : castle_extents_read(); 
+    if(ret) return -EINVAL;
 
     /* Read mstore meta data in. */
     ret = first ? castle_mstores_create() : castle_mstores_read(); 
     if(ret) return -EINVAL;
+
+    /* Load all extents into memory. */
+    if (!first && castle_extents_read_complete())
+        return -EINVAL;
 
     /* If first is still true, we've not found a single non-new cs.
        Init the fs superblock. */

@@ -3180,7 +3180,7 @@ int castle_mstores_create(void)
     int ret;
 
     BUG_ON(mstore_init_done);
-    if ((ret = castle_ext_fs_init(&mstore_ext_fs, 0, (1024 * C_CHK_SIZE), C_BLK_SIZE)))
+    if ((ret = _castle_ext_fs_init(&mstore_ext_fs, 0, 0, C_BLK_SIZE, MSTORE_EXT_ID)))
         return ret;
 
     fs_sb = castle_fs_superblocks_get();

@@ -93,6 +93,7 @@ typedef uint32_t block_t;
 #define SUP_EXT_ID                     (10)
 #define MICRO_EXT_ID                   (332)
 #define META_EXT_ID                    (333)
+#define MSTORE_EXT_ID                  (444) /* Two extents use 444 and 445. */
 #define EXT_SEQ_START                  (1000)
 
 /* Size of special(or logical) extents [in chunks] */
@@ -101,7 +102,7 @@ typedef uint32_t block_t;
 #define MICRO_EXT_SIZE                 (1)   /* Dont change this */
 #define META_SPACE_START               (64)
 #define META_SPACE_SIZE                (300)
-#define EXT_ST_SIZE                    (50)
+#define MSTORE_SPACE_SIZE              (50)
 #define FREE_SPACE_START               (400) /* This must be >= to META_EXT_STRAT + METAEXT_SIZE. */
 #define FREESPACE_OFFSET               (2 * C_CHK_SIZE)
 #define FREESPACE_SIZE                 (20 * C_CHK_SIZE)
@@ -109,8 +110,21 @@ typedef uint32_t block_t;
 #define sup_ext_to_slave_id(_id)       ((_id) - SUP_EXT_ID)
 #define slave_id_to_sup_ext(_id)       ((_id) + SUP_EXT_ID)
 
-#define LOGICAL_EXTENT(_ext_id)        ((_ext_id) < EXT_SEQ_START)
+/* Logical extent structures are stored seperatly from normal extents. They are 
+ * stored in extent superblock itself. */
+#define LOGICAL_EXTENT(_ext_id)        ((_ext_id) < EXT_SEQ_START && !EXT_ID_INVAL(_ext_id))
 #define SUPER_EXTENT(_ext_id)          (((_ext_id) >= SUP_EXT_ID) && ((_ext_id) < slave_id_to_sup_ext(MAX_NR_SLAVES)))
+
+typedef enum {
+    DEFAULT,
+    JOURNAL,
+    FS_META,
+    LOG_FREEZER,
+    META_EXT,
+    MICRO_EXT,
+    SUPER_EXT,
+    NR_RDA_SPEC
+} c_rda_type_t;
 
 typedef uint32_t c_chk_cnt_t;
 typedef uint32_t c_chk_t;
@@ -205,10 +219,22 @@ typedef struct {
     c_chk_cnt_t     disk_size;
 } castle_freespace_t;
 
+struct castle_elist_entry {
+    c_ext_id_t      ext_id;
+    c_chk_cnt_t     size;
+    c_rda_type_t    type;
+    uint32_t        k_factor;
+    c_ext_pos_t     maps_cep;
+} PACKED;
+
 struct castle_extents_sb_t {
-    c_ext_id_t      ext_id_seq;
-    uint64_t        nr_exts;
-    c_byte_off_t    next_free_byte;
+    c_ext_id_t                              ext_id_seq;
+    uint64_t                                nr_exts;
+    c_byte_off_t                            next_free_byte;
+    c_disk_chk_t                            micro_maps[MAX_NR_SLAVES];
+    struct castle_elist_entry               micro_ext;
+    struct castle_elist_entry               meta_ext;
+    struct castle_elist_entry               mstore_ext[2];
 };
 
 struct castle_slave_superblock {
@@ -362,6 +388,7 @@ enum {
     MSTORE_DOUBLE_ARRAYS,
     MSTORE_COMPONENT_TREES,
     MSTORE_ATTACHMENTS_TAG,
+    MSTORE_EXTENTS,
 }; 
 
 
@@ -978,6 +1005,12 @@ int                   castle_ext_fs_init           (c_ext_fs_t       *ext_fs,
                                                     uint32_t          align);
 
 int                   castle_ext_fs_consistent     (c_ext_fs_t       *ext_fs);
+
+int                  _castle_ext_fs_init           (c_ext_fs_t       *ext_fs, 
+                                                    da_id_t           da_id, 
+                                                    c_byte_off_t      size,
+                                                    uint32_t          align,
+                                                    c_ext_id_t        ext_id);
 
 void                  castle_ext_fs_fini           (c_ext_fs_t       *ext_fs);
 
