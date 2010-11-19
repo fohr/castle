@@ -1904,6 +1904,8 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
         castle_ct_put(merge->in_tree1, 0);
         castle_ct_put(merge->in_tree2, 0);
 
+        /* TODO: Do this before adding new tree to DA. Check for locks on new
+         * tree. */
         /* Flush the new CT onto disk. */
         castle_cache_extent_flush(merge->tree_ext_fs.ext_id, 0,
                                   atomic64_read(&merge->tree_ext_fs.used));
