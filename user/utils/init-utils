@@ -14,7 +14,7 @@ function get_cache_size {
     if [ -e ${CACHE_CFG} ]; then
         cat ${CACHE_CFG}
     else
-        awk '/MemTotal/ { halfram = $2 / 2 } END { min = 200000; if (halfram < min) { print halfram } else { print min } }' /proc/meminfo
+        awk '/MemTotal/ { halfram = $2 / 2 } END { min = 200000; if (halfram > min) { print halfram } else { print min } }' /proc/meminfo
     fi
 }
 
