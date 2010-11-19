@@ -228,15 +228,15 @@ void castle_freespace_summary_get(struct castle_slave *cs,
                                   c_chk_cnt_t         *free_cnt,
                                   c_chk_cnt_t         *size)
 {
+    castle_freespace_t *freespace = freespace_sblk_get(cs);
+
     if (free_cnt)
-    {
-        castle_freespace_t *freespace = freespace_sblk_get(cs);
         *free_cnt = freespace->free_chk_cnt;
-        freespace_sblk_put(cs, 0);
-    }
     
     if (size)
-        *size = cs->disk_size;
+        *size = freespace->disk_size;
+
+    freespace_sblk_put(cs, 0);
 }
 
 static int castle_freespace_slave_writeback(struct castle_slave *cs, void *unused)
