@@ -498,7 +498,6 @@ struct castle_component_tree {
     atomic64_t          node_count;
     struct list_head    da_list;
     struct list_head    hash_list;
-    c_mstore_key_t      mstore_key;
     c_ext_fs_t          tree_ext_fs;
     c_ext_fs_t          data_ext_fs;
     atomic64_t          large_ext_chk_cnt;

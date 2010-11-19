@@ -74,7 +74,6 @@ struct castle_double_array {
     int                nr_trees;
     struct list_head   trees[MAX_DA_LEVEL];
     struct list_head   hash_list;
-    c_mstore_key_t     mstore_key;
     atomic_t           ref_cnt;
     uint32_t           attachment_cnt;
     /* Queue of write IOs queued up on this DA. */
@@ -2160,7 +2159,6 @@ static struct castle_double_array* castle_da_alloc(void)
 
     da->id              = INVAL_DA; 
     da->root_version    = INVAL_VERSION;
-    da->mstore_key      = INVAL_MSTORE_KEY;
     spin_lock_init(&da->lock);
     da->flags           = 0;
     da->nr_trees        = 0;
@@ -2180,22 +2178,18 @@ static struct castle_double_array* castle_da_alloc(void)
     return da;
 }
 
-static c_mstore_key_t castle_da_marshall(struct castle_dlist_entry *dam,
-                                         struct castle_double_array *da)
+void castle_da_marshall(struct castle_dlist_entry *dam,
+                        struct castle_double_array *da)
 {
     dam->id           = da->id;
     dam->root_version = da->root_version;
-
-    return da->mstore_key;
 }
  
 static void castle_da_unmarshall(struct castle_double_array *da,
-                                 struct castle_dlist_entry *dam,
-                                 c_mstore_key_t key)
+                                 struct castle_dlist_entry *dam)
 {
     da->id           = dam->id;
     da->root_version = dam->root_version;
-    da->mstore_key   = key;
 }
 
 struct castle_component_tree* castle_component_tree_get(tree_seq_t seq)
@@ -2302,8 +2296,8 @@ static int castle_da_merge_restart(struct castle_double_array *da, void *unused)
     return 0;
 }
 
-static c_mstore_key_t castle_da_ct_marshall(struct castle_clist_entry *ctm,
-                                            struct castle_component_tree *ct)
+void castle_da_ct_marshall(struct castle_clist_entry *ctm,
+                           struct castle_component_tree *ct)
 {
     ctm->da_id       		= ct->da; 
     ctm->item_count  		= atomic64_read(&ct->item_count);
@@ -2320,13 +2314,10 @@ static c_mstore_key_t castle_da_ct_marshall(struct castle_clist_entry *ctm,
 
     castle_ext_fs_marshall(&ct->tree_ext_fs, &ctm->tree_ext_fs_bs);
     castle_ext_fs_marshall(&ct->data_ext_fs, &ctm->data_ext_fs_bs);
-
-    return ct->mstore_key;
 }
 
 static da_id_t castle_da_ct_unmarshall(struct castle_component_tree *ct,
-                                       struct castle_clist_entry *ctm,
-                                       c_mstore_key_t key)
+                                       struct castle_clist_entry *ctm)
 {
     ct->seq         		= ctm->seq;
     atomic_set(&ct->ref_count, 1);
@@ -2343,7 +2334,6 @@ static da_id_t castle_da_ct_unmarshall(struct castle_component_tree *ct,
     atomic64_set(&ct->large_ext_chk_cnt, ctm->large_ext_chk_cnt);
     init_rwsem(&ct->lock);
     atomic64_set(&ct->node_count, ctm->node_count);
-    ct->mstore_key  		= key;
     castle_ext_fs_unmarshall(&ct->tree_ext_fs, &ctm->tree_ext_fs_bs);
     castle_ext_fs_unmarshall(&ct->data_ext_fs, &ctm->data_ext_fs_bs);
     ct->da_list.next = NULL;
@@ -2442,20 +2432,9 @@ static int castle_da_tree_writeback(struct castle_double_array *da,
                                     void *unused)
 {
     struct castle_clist_entry mstore_entry;
-    c_mstore_key_t key;
 
-    key = castle_da_ct_marshall(&mstore_entry, ct); 
-    if(MSTORE_KEY_INVAL(key))
-    {
-        debug("Inserting CT seq=%d\n", ct->seq);
-        ct->mstore_key = 
-            castle_mstore_entry_insert(castle_tree_store, &mstore_entry);
-    }
-    else
-    {
-        debug("Updating CT seq=%d\n", ct->seq);
-        castle_mstore_entry_update(castle_tree_store, key, &mstore_entry);
-    }
+    castle_da_ct_marshall(&mstore_entry, ct); 
+    castle_mstore_entry_insert(castle_tree_store, &mstore_entry);
 
     return 0;
 }
@@ -2463,51 +2442,67 @@ static int castle_da_tree_writeback(struct castle_double_array *da,
 static int castle_da_writeback(struct castle_double_array *da, void *unused) 
 {
     struct castle_dlist_entry mstore_dentry;
-    c_mstore_key_t key;
 
-    key = castle_da_marshall(&mstore_dentry, da);
+    castle_da_marshall(&mstore_dentry, da);
 
     /* We get here with hash spinlock held. But since we're calling sleeping functions
        we need to drop it. Hash consitancy is guaranteed, because by this point 
        noone should be modifying it anymore */
     spin_unlock_irq(&castle_da_hash_lock);
+
     castle_da_foreach_tree(da, castle_da_tree_writeback, NULL);
-    if(MSTORE_KEY_INVAL(key))
-    {
-        debug("Inserting a DA id=%d\n", da->id);
-        da->mstore_key = 
-            castle_mstore_entry_insert(castle_da_store, &mstore_dentry);
-    }
-    else
-    {
-        debug("Updating a DA id=%d.\n", da->id);
-        castle_mstore_entry_update(castle_da_store, key, &mstore_dentry);
-    }
+
+    debug("Inserting a DA id=%d\n", da->id);
+    castle_mstore_entry_insert(castle_da_store, &mstore_dentry);
+
     spin_lock_irq(&castle_da_hash_lock);
 
     return 0;
 }
 
-static void castle_da_hash_writeback(void)
+void castle_double_arrays_writeback(void)
 {
-    /* Do not write back if the fs hasn't been inited */
-    if(!castle_tree_store || !castle_da_store)
-        return;
+    BUG_ON(castle_da_store || castle_tree_store);
+
+#if 1 /* TODO: Get-rid off this with new mstore. */
+    {
+        struct castle_fs_superblock *fs_sb;
+
+        fs_sb = castle_fs_superblocks_get(); 
+        fs_sb->mstore[MSTORE_DOUBLE_ARRAYS] = INVAL_EXT_POS;
+        fs_sb->mstore[MSTORE_COMPONENT_TREES] = INVAL_EXT_POS;
+        castle_fs_superblocks_put(fs_sb, 1); 
+    }
+#endif
+
+    castle_da_store   = castle_mstore_init(MSTORE_DOUBLE_ARRAYS,
+                                         sizeof(struct castle_dlist_entry));
+    castle_tree_store = castle_mstore_init(MSTORE_COMPONENT_TREES,
+                                         sizeof(struct castle_clist_entry));
+
+    if(!castle_da_store || !castle_tree_store)
+        goto out;
+
     castle_da_hash_iterate(castle_da_writeback, NULL); 
     castle_da_tree_writeback(NULL, &castle_global_tree, -1, NULL);
-    castle_mstore_fini(castle_tree_store);
-    castle_mstore_fini(castle_da_store);
+
+out:
+    if (castle_tree_store)  castle_mstore_fini(castle_tree_store);
+    if (castle_da_store)    castle_mstore_fini(castle_da_store);
+
+    castle_da_store = castle_tree_store = NULL;
 }
     
 int castle_double_array_read(void)
 {
     struct castle_dlist_entry mstore_dentry;
     struct castle_clist_entry mstore_centry;
-    struct castle_mstore_iter *iterator;
+    struct castle_mstore_iter *iterator = NULL;
     struct castle_component_tree *ct;
     struct castle_double_array *da;
     c_mstore_key_t key;
     da_id_t da_id;
+    int ret = 0;
 
     castle_da_store   = castle_mstore_open(MSTORE_DOUBLE_ARRAYS,
                                          sizeof(struct castle_dlist_entry));
@@ -2515,19 +2510,20 @@ int castle_double_array_read(void)
                                          sizeof(struct castle_clist_entry));
 
     if(!castle_da_store || !castle_tree_store)
-        return -ENOMEM;
+        goto error_out;
     
     /* Read doubling arrays */
     iterator = castle_mstore_iterate(castle_da_store);
     if(!iterator)
-        return -EINVAL;
+        goto error_out;
+
     while(castle_mstore_iterator_has_next(iterator))
     {
         castle_mstore_iterator_next(iterator, &mstore_dentry, &key);
         da = castle_da_alloc(); 
         if(!da) 
-            goto out_iter_destroy;
-        castle_da_unmarshall(da, &mstore_dentry, key);
+            goto error_out;
+        castle_da_unmarshall(da, &mstore_dentry);
         castle_da_hash_add(da);
         debug("Read DA id=%d\n", da->id);
         castle_next_da_id = (da->id >= castle_next_da_id) ? da->id + 1 : castle_next_da_id;
@@ -2537,7 +2533,7 @@ int castle_double_array_read(void)
     /* Read component trees */
     iterator = castle_mstore_iterate(castle_tree_store);
     if(!iterator)
-        return -EINVAL;
+        goto error_out;
    
     while(castle_mstore_iterator_has_next(iterator))
     {
@@ -2545,7 +2541,7 @@ int castle_double_array_read(void)
         /* Special case for castle_global_tree, it doesn't have a da associated with it. */
         if(TREE_GLOBAL(mstore_centry.seq))
         {
-            da_id = castle_da_ct_unmarshall(&castle_global_tree, &mstore_centry, key);
+            da_id = castle_da_ct_unmarshall(&castle_global_tree, &mstore_centry);
             BUG_ON(!DA_INVAL(da_id));
             castle_ct_hash_add(&castle_global_tree);
             continue;
@@ -2553,12 +2549,12 @@ int castle_double_array_read(void)
         /* Otherwise allocate a ct structure */
         ct = castle_malloc(sizeof(struct castle_component_tree), GFP_KERNEL);
         if(!ct)
-            goto out_iter_destroy;
-        da_id = castle_da_ct_unmarshall(ct, &mstore_centry, key);
+            goto error_out;
+        da_id = castle_da_ct_unmarshall(ct, &mstore_centry);
         castle_ct_hash_add(ct);
         da = castle_da_hash_get(da_id);
         if(!da)
-            goto out_iter_destroy;
+            goto error_out;
         debug("Read CT seq=%d\n", ct->seq);
         castle_da_lock(da);
         castle_component_tree_add(da, ct, 1 /* in init */);
@@ -2566,6 +2562,7 @@ int castle_double_array_read(void)
         castle_next_tree_seq = (ct->seq >= castle_next_tree_seq) ? ct->seq + 1 : castle_next_tree_seq;
     }
     castle_mstore_iterator_destroy(iterator);
+    iterator = NULL;
     debug("castle_next_da_id = %d, castle_next_tree_id=%d\n", 
             castle_next_da_id, 
             castle_next_tree_seq);
@@ -2574,12 +2571,17 @@ int castle_double_array_read(void)
     castle_da_hash_iterate(castle_da_trees_sort, NULL); 
     /* Check if any merges need to be done. */
     castle_da_hash_iterate(castle_da_merge_restart, NULL); 
+    goto out;
 
-    return 0;
-
-out_iter_destroy:
-    castle_mstore_iterator_destroy(iterator);
-    return -EINVAL;
+error_out:
+    ret = -EINVAL;;
+out:
+    if (iterator)           castle_mstore_iterator_destroy(iterator);
+    if (castle_da_store)    castle_mstore_fini(castle_da_store);
+    if (castle_tree_store)  castle_mstore_fini(castle_tree_store);
+    castle_da_store = castle_tree_store = NULL;
+    
+    return ret;
 }
 
 static struct castle_component_tree* castle_ct_alloc(struct castle_double_array *da, 
@@ -2613,7 +2615,6 @@ static struct castle_component_tree* castle_ct_alloc(struct castle_double_array 
     ct->da_list.prev = NULL;
     INIT_LIST_HEAD(&ct->hash_list);
     castle_ct_hash_add(ct);
-    ct->mstore_key  = INVAL_MSTORE_KEY; 
     ct->tree_ext_fs.ext_id = INVAL_EXT_ID;
     ct->data_ext_fs.ext_id = INVAL_EXT_ID;
 
@@ -2986,14 +2987,6 @@ void castle_double_array_find(c_bvec_t *c_bvec)
 
 int castle_double_array_create(void)
 {
-    castle_da_store   = castle_mstore_init(MSTORE_DOUBLE_ARRAYS,
-                                         sizeof(struct castle_dlist_entry));
-    castle_tree_store = castle_mstore_init(MSTORE_COMPONENT_TREES,
-                                         sizeof(struct castle_clist_entry));
-
-    if(!castle_da_store || !castle_tree_store)
-        return -ENOMEM;
-
     /* Make sure that the global tree is in the ct hash */
     castle_ct_hash_add(&castle_global_tree);
 
@@ -3033,13 +3026,17 @@ err_out:
     return ret;
 }
 
-void castle_double_array_fini(void)
+void castle_double_array_merges_fini(void)
 {
     printk("\n========= Double Array fini ==========\n");
     castle_da_exiting = 1;
     destroy_workqueue(castle_merge_wq);
     del_singleshot_timer_sync(&throttle_timer);
-    castle_da_hash_writeback();
+    castle_double_arrays_writeback();
+}
+
+void castle_double_array_fini(void)
+{
     castle_da_hash_destroy();
     castle_ct_hash_destroy();
 }

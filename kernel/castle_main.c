@@ -44,7 +44,6 @@ struct castle_component_tree castle_global_tree = {.seq             = GLOBAL_TRE
                                                    .node_count      = {0ULL},
                                                    .da_list         = {NULL, NULL},
                                                    .hash_list       = {NULL, NULL},
-                                                   .mstore_key      = INVAL_MSTORE_KEY,
                                                    .tree_ext_fs     = {INVAL_EXT_ID, (100 * C_CHK_SIZE), 0, {0ULL}, {0ULL}},
                                                    .data_ext_fs     = {INVAL_EXT_ID, (512ULL * C_CHK_SIZE), 0, {0ULL}, {0ULL}},
                                                   }; 
@@ -1796,6 +1795,7 @@ err_out9:
 err_out8:
     castle_attachments_free();
 err_out7:
+    castle_double_array_merges_fini();
     castle_double_array_fini();
 err_out6:
     castle_btree_free();
@@ -1830,6 +1830,7 @@ static void __exit castle_exit(void)
     castle_control_fini();
     castle_sysfs_fini();
     /* Now, make sure no more IO can be made, internally or externally generated */
+    castle_double_array_merges_fini();  /* Completes all internal i/o - merges. */
     castle_attachments_free();
     /* Cleanup/writeout all metadata */ 
     castle_double_array_fini();
