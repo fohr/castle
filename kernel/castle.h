@@ -1131,4 +1131,6 @@ typedef struct castle_object_iterator {
 
 extern int low_disk_space;
 
+int castle_superblocks_writeback(uint32_t version);
+
 #endif /* __CASTLE_H__ */

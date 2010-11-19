@@ -442,16 +442,6 @@ int castle_extents_writeback(void)
     if (!extent_init_done)
         return 0;
 
-#if 1 /* TODO: Get-rid off this with new mstore. */
-    {
-        struct castle_fs_superblock *fs_sb;
-
-        fs_sb = castle_fs_superblocks_get(); 
-        fs_sb->mstore[MSTORE_EXTENTS] = INVAL_EXT_POS;
-        castle_fs_superblocks_put(fs_sb, 1); 
-    }
-#endif
-
     castle_extents_mstore = 
         castle_mstore_init(MSTORE_EXTENTS, sizeof(struct castle_elist_entry));
     if(!castle_extents_mstore)
@@ -571,16 +561,6 @@ error_out:
     if (castle_extents_mstore)  castle_mstore_fini(castle_extents_mstore);
 
     return -1;
-}
-
-void __castle_extents_fini(void)
-{
-    if (!extent_init_done)
-        return;
-
-    debug("Finishing castle extents\n");
-    castle_extents_hash_iterate(castle_extent_print, NULL);
-    castle_extents_writeback();
 }
 
 void castle_extents_fini(void)

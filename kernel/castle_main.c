@@ -415,10 +415,6 @@ int castle_fs_init(void)
     ret = first ? castle_extents_create() : castle_extents_read(); 
     if(ret) return -EINVAL;
 
-    /* Read mstore meta data in. */
-    ret = first ? castle_mstores_create() : castle_mstores_read(); 
-    if(ret) return -EINVAL;
-
     /* Load all extents into memory. */
     if (!first && castle_extents_read_complete())
         return -EINVAL;
@@ -681,7 +677,7 @@ int castle_slave_superblocks_writeback(struct castle_slave *cs)
     return 0;
 }
 
-int castle_superblocks_writeback(void)
+int castle_superblocks_writeback(uint32_t version)
 {
     struct list_head *lh;
     struct castle_slave *slave;
@@ -1607,9 +1603,6 @@ static void castle_slaves_unlock(void)
 #else
     cancel_work_sync(&spindown_work_item);
 #endif
-
-    castle_freespace_writeback();
-    castle_superblocks_writeback();
 }
 
 static char *wq_names[2*MAX_BTREE_DEPTH+1];
@@ -1702,7 +1695,6 @@ static void castle_attachments_free(void)
     struct list_head *lh, *th;
     struct castle_attachment *ca;
 
-    castle_attachments_writeback();
     list_for_each_safe(lh, th, &castle_attachments.attachments)
     {
         ca = list_entry(lh, struct castle_attachment, list); 
@@ -1715,8 +1707,6 @@ static void castle_attachments_free(void)
     if (castle_attachments.major)
         unregister_blkdev(castle_attachments.major, "castle-fs");
 }
-
-void __castle_extents_fini(void);
 
 static int __init castle_init(void)
 {
@@ -1787,14 +1777,14 @@ static void __exit castle_exit(void)
     castle_sysfs_fini();
     /* Now, make sure no more IO can be made, internally or externally generated */
     castle_double_array_merges_fini();  /* Completes all internal i/o - merges. */
+    castle_checkpoint_do(); 
+    /* Note: Changes from here are not persistent. */
     castle_attachments_free();
     /* Cleanup/writeout all metadata */ 
     castle_double_array_fini();
     castle_btree_free();
     castle_versions_fini();
-    castle_mstores_fini();
     /* Drop all cache references (superblocks), flush the cache, free the slaves. */ 
-    __castle_extents_fini();
     castle_slaves_unlock();
     castle_cache_fini();
     castle_extents_fini();

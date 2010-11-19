@@ -2464,17 +2464,6 @@ void castle_double_arrays_writeback(void)
 {
     BUG_ON(castle_da_store || castle_tree_store);
 
-#if 1 /* TODO: Get-rid off this with new mstore. */
-    {
-        struct castle_fs_superblock *fs_sb;
-
-        fs_sb = castle_fs_superblocks_get(); 
-        fs_sb->mstore[MSTORE_DOUBLE_ARRAYS] = INVAL_EXT_POS;
-        fs_sb->mstore[MSTORE_COMPONENT_TREES] = INVAL_EXT_POS;
-        castle_fs_superblocks_put(fs_sb, 1); 
-    }
-#endif
-
     castle_da_store   = castle_mstore_init(MSTORE_DOUBLE_ARRAYS,
                                          sizeof(struct castle_dlist_entry));
     castle_tree_store = castle_mstore_init(MSTORE_COMPONENT_TREES,
@@ -3032,7 +3021,6 @@ void castle_double_array_merges_fini(void)
     castle_da_exiting = 1;
     destroy_workqueue(castle_merge_wq);
     del_singleshot_timer_sync(&throttle_timer);
-    castle_double_arrays_writeback();
 }
 
 void castle_double_array_fini(void)

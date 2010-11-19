@@ -14,6 +14,10 @@
 #include "castle_btree.h"
 #include "castle_extent.h"
 #include "castle_freespace.h"
+#include "castle_da.h"
+#include "castle_ctrl.h"
+#include "castle_versions.h"
+
 
 //#define DEBUG
 #ifndef DEBUG
@@ -255,7 +259,8 @@ static atomic_t                castle_cache_write_stats = ATOMIC_INIT(0);
 struct timer_list              castle_cache_stats_timer;
 
 static c_ext_fs_t              mstore_ext_fs;
-static int                     mstore_init_done = 0;
+
+static atomic_t                mstores_ref_cnt = ATOMIC_INIT(0);
 
 /**********************************************************************************************
  * Prototypes. 
@@ -3098,7 +3103,6 @@ static struct castle_mstore *castle_mstore_alloc(c_mstore_id_t store_id, size_t 
 {
     struct castle_mstore *store;
 
-    BUG_ON(!mstore_init_done);
     debug_mstore("Allocating mstore id=%d.\n", store_id);
     store = castle_zalloc(sizeof(struct castle_mstore), GFP_KERNEL);
     if(!store)
@@ -3120,7 +3124,6 @@ struct castle_mstore* castle_mstore_open(c_mstore_id_t store_id, size_t entry_si
     struct castle_mstore *store;
     struct castle_mstore_iter *iterator;
 
-    BUG_ON(!mstore_init_done);
     debug_mstore("Opening mstore.\n");
     /* Sanity check, to see if store_id isn't too large. */
     if(store_id >= sizeof(fs_sb->mstore) / sizeof(c_ext_pos_t ))
@@ -3147,6 +3150,8 @@ struct castle_mstore* castle_mstore_open(c_mstore_id_t store_id, size_t entry_si
     debug_mstore("Destroying iterator and exiting.\n");
     castle_mstore_iterator_destroy(iterator);
     
+    atomic_inc(&mstores_ref_cnt);
+    
     return store;
 }
 
@@ -3155,7 +3160,6 @@ struct castle_mstore* castle_mstore_init(c_mstore_id_t store_id, size_t entry_si
     struct castle_fs_superblock *fs_sb;
     struct castle_mstore *store;
 
-    BUG_ON(!mstore_init_done);
     debug_mstore("Opening mstore id=%d.\n", store_id);
     /* Sanity check, to see if store_id isn't too large. */
     if(store_id >= sizeof(fs_sb->mstore) / sizeof(c_ext_pos_t))
@@ -3172,6 +3176,8 @@ struct castle_mstore* castle_mstore_init(c_mstore_id_t store_id, size_t entry_si
     castle_mstore_node_add(store);
     up(&store->mutex);
      
+    atomic_inc(&mstores_ref_cnt);
+
     return store;
 }
 
@@ -3179,50 +3185,69 @@ void castle_mstore_fini(struct castle_mstore *store)
 {
     debug_mstore("Closing mstore id=%d.\n", store->store_id);
     castle_free(store);
+
+    atomic_dec(&mstores_ref_cnt);
 }
 
-int castle_mstores_create(void)
+int castle_mstores_writeback(uint32_t version)
 {
     struct castle_fs_superblock *fs_sb;
-    int ret;
+    int i;
 
-    BUG_ON(mstore_init_done);
-    if ((ret = _castle_ext_fs_init(&mstore_ext_fs, 0, 0, C_BLK_SIZE, MSTORE_EXT_ID)))
-        return ret;
-
-    fs_sb = castle_fs_superblocks_get();
-    castle_ext_fs_marshall(&mstore_ext_fs, &fs_sb->mstore_ext_fs_bs);
-    castle_fs_superblocks_put(fs_sb, 1);
-
-    mstore_init_done = 1;
-
-    return 0;
-}
-
-int castle_mstores_read(void)
-{
-    struct castle_fs_superblock *fs_sb;
-
-    BUG_ON(mstore_init_done);
-    fs_sb = castle_fs_superblocks_get();
-    castle_ext_fs_unmarshall(&mstore_ext_fs, &fs_sb->mstore_ext_fs_bs);
-    castle_fs_superblocks_put(fs_sb, 0);
-
-    mstore_init_done = 1;
-
-    return 0;
-}
-
-int castle_mstores_fini(void)
-{
-    struct castle_fs_superblock *fs_sb;
-
-    if (!mstore_init_done)
+    if (!castle_fs_inited)
         return 0;
 
+    BUG_ON(atomic_read(&mstores_ref_cnt));
+
+    /* Setup mstore for writeback. */
     fs_sb = castle_fs_superblocks_get();
-    castle_ext_fs_marshall(&mstore_ext_fs, &fs_sb->mstore_ext_fs_bs);
+    for(i=0; i<sizeof(fs_sb->mstore) / sizeof(c_ext_pos_t ); i++)
+        fs_sb->mstore[i] = INVAL_EXT_POS;
     castle_fs_superblocks_put(fs_sb, 1);
+
+    _castle_ext_fs_init(&mstore_ext_fs, 0, 0,
+                        C_BLK_SIZE, MSTORE_EXT_ID + (version % 2));
+    /* Call writebacks of components. */
+    castle_attachments_writeback();
+    castle_double_arrays_writeback();
+    castle_versions_writeback();
+    castle_extents_writeback();
+
+    castle_cache_extent_flush(MSTORE_EXT_ID, 0, 0);
+
+    return 0;
+}
+
+int castle_checkpoint_do(void)
+{
+    uint32_t version = 0;
+
+    if (!castle_fs_inited)
+        return 0;
+
+    castle_ctrl_lock();
+
+    if (castle_mstores_writeback(version))
+    {
+        printk("Mstore writeback failed\n");
+        return -1;
+    }
+
+    /* Writeback Slave Freespace. */
+    if (castle_freespace_writeback())
+    {
+        printk("Freespace writeback failed\n");
+        return -1;
+    }
+
+    /* Writeback superblocks. */
+    if (castle_superblocks_writeback(version))
+    {
+        printk("Superblock writeback failed\n");
+        return -1;
+    }
+
+    castle_ctrl_unlock();
 
     return 0;
 }

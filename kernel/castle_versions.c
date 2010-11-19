@@ -269,16 +269,6 @@ int castle_versions_writeback(void)
 { /* Should be called with castle_ctrl_lock() held. */
     BUG_ON(castle_versions_mstore);
 
-#if 1 /* TODO: Get-rid off this with new mstore. */
-    {
-        struct castle_fs_superblock *fs_sb;
-
-        fs_sb = castle_fs_superblocks_get(); 
-        fs_sb->mstore[MSTORE_VERSIONS_ID] = INVAL_EXT_POS;
-        castle_fs_superblocks_put(fs_sb, 1); 
-    }
-#endif
-
     castle_versions_mstore = 
         castle_mstore_init(MSTORE_VERSIONS_ID, sizeof(struct castle_vlist_entry));
     if(!castle_versions_mstore)
@@ -774,7 +764,6 @@ err_out:
 
 void castle_versions_fini(void)
 {
-    castle_versions_writeback();
     castle_versions_hash_destroy();
     kmem_cache_destroy(castle_versions_cache);
 }
