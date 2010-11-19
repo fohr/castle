@@ -234,6 +234,7 @@ static void castle_ct_immut_iter_next_node_find(c_immut_iter_t *iter, c_ext_pos_
         /* Get cache block for the current c2b */
         c2b = castle_cache_block_get(cep, iter->btree->node_size); 
         debug("Node in immut iter.\n");
+        castle_cache_block_advise(c2b, C2B_PREFETCH_FRWD);
         write_lock_c2b(c2b);
         /* If c2b is not up to date, issue a blocking READ to update */
         if(!c2b_uptodate(c2b))
@@ -2072,18 +2073,29 @@ static void castle_da_merge_check(struct castle_double_array *da)
     /* Set the write throughput allowed on the DA. */
     if(merge_measure == 0)
     {
+        if(da->ios_rate == 0)
+            printk("WARNING: Reenabling inserts.\n");
         /* Effectively no limit. */
         da->ios_rate = (uint32_t)-1;   
     } 
     else
     if(merge_measure < merge_measure_threashold)
     {
+        uint32_t old_rate = da->ios_rate;
         /* Constant of 50000 was chosen to give 1M ios rate for a single 
            outstanding level 1 merge. */
         da->ios_rate = 50000 * (merge_measure_threashold / merge_measure - 1) / REPLENISH_FREQUENCY;
+        if((old_rate == 0) && (da->ios_rate != 0))
+            printk("WARNING: Reenabling inserts..\n");
+        if((old_rate != 0) && (da->ios_rate == 0))
+            printk("WARNING: Disabling inserts completly.\n");
     }
     else
+    {
+        if(da->ios_rate != 0)
+            printk("WARNING: Disabling inserts completly..\n");
         da->ios_rate = 0;
+    }
     debug("Setting rate to %u\n", da->ios_rate);
 
     /* Do not schedule the merge (even if we found CTs), if we are already merging, 
@@ -2274,12 +2286,15 @@ static int castle_da_trees_sort(struct castle_double_array *da, void *unused)
     return 0;
 }
 
-/* This only happens at the start of day. */
+/* This only happens at the start of day. 
+   Disabled at the moment, because we need to deal with the hash lock. */
 static int castle_da_merge_restart(struct castle_double_array *da, void *unused)
 {
+#if 0
     castle_da_lock(da);
     castle_da_merge_check(da);
     castle_da_unlock(da);
+#endif
 
     return 0;
 }
@@ -2614,7 +2629,7 @@ static int castle_da_rwct_make(struct castle_double_array *da)
        TODO: use bit wait instead of msleep here. */ 
     if(castle_da_growing_rw_test_and_set(da))
     {
-        printk("Racing RWCT make on da=%d\n", da->id);
+        debug("Racing RWCT make on da=%d\n", da->id);
         while(castle_da_growing_rw_test(da))
             msleep(1);
         return -EAGAIN; 
