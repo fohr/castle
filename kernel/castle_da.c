@@ -2987,8 +2987,6 @@ int castle_double_array_init(void)
     int ret;
 
     printk("\n========= Double Array init ==========\n");
-    /* Start up the timer which replenishes merge and write IOs budget */
-    castle_throttle_timer_fire(1); 
     ret = -ENOMEM;
     castle_da_hash = castle_da_hash_alloc();
     if(!castle_da_hash)
@@ -3002,6 +3000,9 @@ int castle_double_array_init(void)
 
     castle_da_hash_init();
     castle_ct_hash_init();
+    /* Start up the timer which replenishes merge and write IOs budget */
+    castle_throttle_timer_fire(1); 
+
     return 0;
  
 err_out:
