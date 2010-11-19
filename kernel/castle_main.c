@@ -507,10 +507,10 @@ int castle_fs_init(void)
     ret = castle_versions_read();
     if(ret) return -EINVAL;
 
-    /* Init mstore for Collection Attachments. */
-    ret = castle_attachments_store_init(first);
-    if (ret) return -EINVAL;
-
+    /* Read Collection Attachments. */
+    if (!first && castle_attachments_read())
+        return -EINVAL;
+ 
     castle_events_init();
     
     printk("Castle FS inited.\n");
@@ -1429,7 +1429,6 @@ struct castle_attachment* castle_attachment_init(int device, /* _or_object_colle
     attachment->ref_cnt = 1; // Use double put on detach
     attachment->device  = device;
     attachment->version = version;
-    attachment->key = INVAL_MSTORE_KEY;
 
     return attachment; 
 }
@@ -1748,7 +1747,7 @@ static void castle_attachments_free(void)
     struct list_head *lh, *th;
     struct castle_attachment *ca;
 
-    castle_attachments_store_fini();
+    castle_attachments_writeback();
     list_for_each_safe(lh, th, &castle_attachments.attachments)
     {
         ca = list_entry(lh, struct castle_attachment, list); 

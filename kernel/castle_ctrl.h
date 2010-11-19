@@ -25,14 +25,14 @@ void castle_control_collection_detach(collection_id_t collection, int *ret);
 void castle_control_collection_snapshot(collection_id_t collection,
                                         int *ret,
                                         version_t *version);
-void castle_control_set_target      (slave_uuid_t slave_uuid, int value, int *ret);                               
+void castle_control_set_target      (slave_uuid_t slave_uuid, int value, int *ret);
 
 int  castle_control_ioctl           (struct file *filp,
                                      unsigned int cmd, 
                                      unsigned long arg);
 int  castle_control_init            (void);
 void castle_control_fini            (void);
-int  castle_attachments_store_init  (int first);
-void castle_attachments_store_fini  (void);
+int  castle_attachments_read        (void);
+int  castle_attachments_writeback   (void);
 
 #endif /* __CASTLE_CTRL_H__ */
