@@ -3189,10 +3189,41 @@ void castle_mstore_fini(struct castle_mstore *store)
     atomic_dec(&mstores_ref_cnt);
 }
 
+int castle_checkpoint_version_inc(void)
+{
+    struct   castle_fs_superblock *fs_sb;
+    struct   castle_slave_superblock *cs_sb;
+    struct   list_head *lh;
+    struct   castle_slave *cs = NULL;
+    uint32_t fs_version;
+
+    /* Goto next version. */
+    fs_sb = castle_fs_superblocks_get();
+    fs_sb->fs_version++;
+    fs_version = fs_sb->fs_version;
+    castle_fs_superblocks_put(fs_sb, 1);
+
+    list_for_each(lh, &castle_slaves.slaves)
+    {
+        cs = list_entry(lh, struct castle_slave, list);
+        cs_sb = castle_slave_superblock_get(cs); 
+        cs_sb->fs_version++;
+        if (fs_version != cs_sb->fs_version)
+        {
+            printk("%x:%x\n", fs_version, cs_sb->fs_version);
+            BUG();
+        }
+        castle_slave_superblock_put(cs, 1);
+    }
+
+    return 0;
+}
+
 int castle_mstores_writeback(uint32_t version)
 {
     struct castle_fs_superblock *fs_sb;
-    int i;
+    int    i;
+    int    slot = version % 2;
 
     if (!castle_fs_inited)
         return 0;
@@ -3206,14 +3237,14 @@ int castle_mstores_writeback(uint32_t version)
     castle_fs_superblocks_put(fs_sb, 1);
 
     _castle_ext_fs_init(&mstore_ext_fs, 0, 0,
-                        C_BLK_SIZE, MSTORE_EXT_ID + (version % 2));
+                        C_BLK_SIZE, MSTORE_EXT_ID + slot);
     /* Call writebacks of components. */
     castle_attachments_writeback();
     castle_double_arrays_writeback();
     castle_versions_writeback();
     castle_extents_writeback();
 
-    castle_cache_extent_flush(MSTORE_EXT_ID, 0, 0);
+    castle_cache_extent_flush(MSTORE_EXT_ID + slot, 0, 0);
 
     return 0;
 }
@@ -3221,11 +3252,16 @@ int castle_mstores_writeback(uint32_t version)
 int castle_checkpoint_do(void)
 {
     uint32_t version = 0;
+    struct   castle_fs_superblock *fs_sb;
 
     if (!castle_fs_inited)
         return 0;
 
     castle_ctrl_lock();
+
+    fs_sb = castle_fs_superblocks_get();
+    version = fs_sb->fs_version;
+    castle_fs_superblocks_put(fs_sb, 1);
 
     if (castle_mstores_writeback(version))
     {
@@ -3247,6 +3283,8 @@ int castle_checkpoint_do(void)
         return -1;
     }
 
+    castle_checkpoint_version_inc();
+    
     castle_ctrl_unlock();
 
     return 0;

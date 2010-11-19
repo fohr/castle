@@ -240,6 +240,7 @@ struct castle_extents_sb_t {
 
 struct castle_slave_superblock {
     struct castle_slave_superblock_public   pub;
+    uint32_t                                fs_version;
     castle_freespace_t                      freespace;
 } PACKED;
 
@@ -248,7 +249,7 @@ struct castle_fs_superblock {
     uint32_t                                nr_slaves;
     uint32_t                                slaves[MAX_NR_SLAVES];
     struct castle_extents_sb_t              extents_sb;
-    c_ext_fs_bs_t                           mstore_ext_fs_bs;
+    uint32_t                                fs_version;
     c_ext_pos_t                             mstore[16];
 } PACKED;
 

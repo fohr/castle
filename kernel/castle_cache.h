@@ -140,6 +140,7 @@ struct castle_mstore*      castle_mstore_init              (c_mstore_id_t store_
 void                       castle_mstore_fini              (struct castle_mstore *store);
 
 int                        castle_checkpoint_do            (void);
+int                        castle_checkpoint_version_inc   (void);
 
 void                       castle_cache_stats_print        (void);
 
