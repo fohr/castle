@@ -2400,6 +2400,7 @@ static void castle_cache_extent_flush_endio(c2_block_t *c2b)
 {
     atomic_t *outst_pgs = c2b->private;
     
+    clear_c2b_flushing(c2b);
     read_unlock_c2b(c2b);
     put_c2b(c2b);
     if (atomic_dec_and_test(outst_pgs))
@@ -2437,6 +2438,7 @@ int castle_cache_extent_flush(c_ext_id_t ext_id, uint64_t start, uint64_t size)
             return -EIO;
         /* c2b_flushing bit makes sure that flush thread doesnt submit parallel
          * writes. */
+        read_lock_c2b(c2b);
         if (test_set_c2b_flushing(c2b))
             goto skip_page;
         if (!c2b_uptodate(c2b) || !c2b_dirty(c2b))
@@ -2444,7 +2446,6 @@ int castle_cache_extent_flush(c_ext_id_t ext_id, uint64_t start, uint64_t size)
             clear_c2b_flushing(c2b);
             goto skip_page;
         }
-        read_lock_c2b(c2b);
         c2b->end_io  = castle_cache_extent_flush_endio;
         c2b->private = (void *)&outst_pgs;
         atomic_inc(&outst_pgs);
@@ -2452,6 +2453,7 @@ int castle_cache_extent_flush(c_ext_id_t ext_id, uint64_t start, uint64_t size)
         BUG_ON(submit_c2b(WRITE, c2b));
         continue;
 skip_page:
+        read_unlock_c2b(c2b);
         put_c2b(c2b);
     }
 
