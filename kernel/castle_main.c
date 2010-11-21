@@ -82,11 +82,22 @@ static void USED castle_fs_superblock_print(struct castle_fs_superblock *fs_sb)
 
 static int castle_fs_superblock_validate(struct castle_fs_superblock *fs_sb)
 {
+    uint32_t checksum = fs_sb->pub.checksum;
+
     if(fs_sb->pub.magic1 != CASTLE_FS_MAGIC1) return -1;
     if(fs_sb->pub.magic2 != CASTLE_FS_MAGIC2) return -2;
     if(fs_sb->pub.magic3 != CASTLE_FS_MAGIC3) return -3;
     if(fs_sb->pub.version != CASTLE_FS_VERSION) return -4;
     if(fs_sb->fs_version == 0)                  return -5;
+
+    fs_sb->pub.checksum = 0;
+    if (fletcher32((uint16_t *)fs_sb, sizeof(struct castle_fs_superblock)) 
+                        != checksum)
+    {
+        fs_sb->pub.checksum = checksum;
+        return -6;
+    }
+    fs_sb->pub.checksum = checksum;
 
     return 0;
 }
@@ -566,12 +577,27 @@ static void castle_slave_superblock_print(struct castle_slave_superblock *cs_sb)
 
 static int castle_slave_superblock_validate(struct castle_slave_superblock *cs_sb)
 {
+    uint32_t checksum = cs_sb->pub.checksum;
+
     if(cs_sb->pub.magic1 != CASTLE_SLAVE_MAGIC1) return -1;
     if(cs_sb->pub.magic2 != CASTLE_SLAVE_MAGIC2) return -2;
     if(cs_sb->pub.magic3 != CASTLE_SLAVE_MAGIC3) return -3;
     if(cs_sb->pub.version != CASTLE_SLAVE_VERSION) return -4;
     if(!(cs_sb->pub.flags & CASTLE_SLAVE_NEWDEV) && (cs_sb->fs_version == 0))
         return -5;
+
+    /* Dont check checksum for new device. */
+    if((cs_sb->pub.flags & CASTLE_SLAVE_NEWDEV) && (cs_sb->pub.checksum == 0))
+        return 0;
+
+    cs_sb->pub.checksum = 0;
+    if(fletcher32((uint16_t *)cs_sb, sizeof(struct castle_slave_superblock)) 
+                                != checksum)
+    {
+        cs_sb->pub.checksum = checksum;
+        return -6;
+    }
+    cs_sb->pub.checksum = checksum;
 
     return 0;
 }
@@ -643,6 +669,9 @@ static int castle_slave_superblock_read(struct castle_slave *cs)
     int err = 0, errs[2];
     int fs_version;
     int i;
+
+    BUG_ON(sizeof(struct castle_slave_superblock) > C_BLK_SIZE);
+    BUG_ON(sizeof(struct castle_fs_superblock) > C_BLK_SIZE);
 
     cs_sb = castle_malloc(sizeof(struct castle_slave_superblock) * 2, GFP_KERNEL);
     fs_sb = castle_malloc(sizeof(struct castle_fs_superblock) * 2, GFP_KERNEL);
@@ -832,6 +861,14 @@ int castle_slave_superblocks_writeback(struct castle_slave *cs, uint32_t version
     update_c2b(c2b);
     buf = c2b_buffer(c2b);
 
+    /* Calculate checksum for superblocks - with checksum bytes set to 0. */
+    cs_sb->pub.checksum = fs_sb->pub.checksum = 0;
+    cs_sb->pub.checksum = fletcher32((uint16_t *)cs_sb, 
+                                     sizeof(struct castle_slave_superblock));
+    fs_sb->pub.checksum = fletcher32((uint16_t *)fs_sb, 
+                                     sizeof(struct castle_fs_superblock));
+
+    /* Copy superblocks with valid checksums. */
     memcpy(buf, cs_sb, sizeof(struct castle_slave_superblock));
     memcpy(buf + C_BLK_SIZE, fs_sb, sizeof(struct castle_fs_superblock));
 
@@ -1833,6 +1870,10 @@ static void castle_slaves_free(void)
 
 static int castle_slaves_init(void)
 {
+    /* Validate superblock size. */
+    BUG_ON(sizeof(struct castle_slave_superblock) % 2);
+    BUG_ON(sizeof(struct castle_fs_superblock) % 2);
+
     /* Init the slaves structures */
     memset(&castle_slaves, 0, sizeof(struct castle_slaves));
     INIT_LIST_HEAD(&castle_slaves.slaves);

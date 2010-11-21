@@ -366,6 +366,7 @@ struct castle_slave_superblock_public {
     uint32_t used;
     uint64_t size;      /* In blocks. */
 	uint32_t flags;
+    uint32_t checksum;
 } PACKED;
 
 #define CASTLE_FS_MAGIC1        (0x19731121)
@@ -381,6 +382,31 @@ struct castle_fs_superblock_public {
     uint32_t version;   /* Super chunk format version */
     uint32_t salt;
     uint32_t peper;
+    uint32_t checksum;
 } PACKED;
 
+/* Ref: This code is taken from wikipedia. */
+static uint32_t __attribute__((used)) fletcher32( uint16_t *data, size_t len )
+{
+        uint32_t sum1 = 0xffff, sum2 = 0xffff;
+
+        /* Length should be in terms if 16-bit words. */
+        if (len % 2) *((size_t *)(uint64_t)(sum1 - sum2)) = len;
+        len = (len / 2);
+ 
+        while (len) {
+                unsigned tlen = len > 360 ? 360 : len;
+                len -= tlen;
+                do {
+                        sum1 += *data++;
+                        sum2 += sum1;
+                } while (--tlen);
+                sum1 = (sum1 & 0xffff) + (sum1 >> 16);
+                sum2 = (sum2 & 0xffff) + (sum2 >> 16);
+        }
+        /* Second reduction step to reduce sums to 16 bits */
+        sum1 = (sum1 & 0xffff) + (sum1 >> 16);
+        sum2 = (sum2 & 0xffff) + (sum2 >> 16);
+        return sum2 << 16 | sum1;
+}
 #endif /* __CASTLE_PUBLIC_H__ */

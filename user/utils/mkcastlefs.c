@@ -10,6 +10,8 @@
 
 #include "castle_public.h"
 
+#define MB (1024 * 1024)
+
 void usage(void)
 {
 	printf("Usage: mkcastlefs /dev/sdXY\n");
@@ -47,6 +49,7 @@ void init_superblock(struct castle_slave_superblock_public *super)
 				slave's superblock */
 	super->flags = CASTLE_SLAVE_TARGET | CASTLE_SLAVE_NEWDEV;
 	super->size = -1;
+    super->checksum = 0;
 }
 
 int write_superblock(int fd, struct castle_slave_superblock_public *super)
@@ -72,10 +75,11 @@ int write_superblock(int fd, struct castle_slave_superblock_public *super)
 
 int main(int argc, char *argv[])
 {
-	int rv, fd;
+	int rv, fd, i;
 	char *node;
 	struct stat st;
 	struct castle_slave_superblock_public super;
+    char buf[4096];
 
 	/* check args */
 	if(argc != 2) {
@@ -104,6 +108,16 @@ int main(int argc, char *argv[])
           fprintf(stderr, "%s: failed to open %s: %s\n", argv[0], node, strerror(errno));
           exit(1);
 	}
+
+    /* Set first MB of the disk to 0. */
+    memset(buf, 0 , 4096);
+    for(i=0; i<(MB / 4096); i++) {
+		if(write(fd, buf, 4096) != 4096) {
+			fprintf(stderr, "Failure setting up disk!\n");
+			return 0;
+		}
+    }
+    lseek(fd, 0, SEEK_SET);
 
 	if(!write_superblock(fd, &super)) {
           fprintf(stderr, "%s: Error writing superblock on %s: %s", argv[0], node, strerror(errno));
