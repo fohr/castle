@@ -1736,9 +1736,19 @@ static struct castle_component_tree* castle_da_merge_package(struct castle_da_me
 
     debug("Allocated component tree id=%d\n", out_tree->seq);
     /* Root node is the last node that gets completed, and therefore will be saved in last_node */
-    out_tree->root_node = merge->last_node_c2b->cep; 
+    out_tree->root_node = merge->last_node_c2b->cep;
     out_tree->first_node = merge->first_node;
     out_tree->last_node = INVAL_EXT_POS;
+
+    /* Release the last node c2b */
+    if(merge->last_node_c2b)
+    {
+        dirty_c2b(merge->last_node_c2b);
+        write_unlock_c2b(merge->last_node_c2b);
+        put_c2b(merge->last_node_c2b);
+        merge->last_node_c2b = NULL;
+    }
+    
     debug("Root for that tree is: (0x%x, 0x%x)\n", 
             out_tree->root_node.disk, out_tree->root_node.block);
     /* Write counts out */
@@ -1765,6 +1775,13 @@ static struct castle_component_tree* castle_da_merge_package(struct castle_da_me
     debug("Number of entries=%ld, number of nodes=%ld\n",
             atomic64_read(&out_tree->item_count),
             atomic64_read(&out_tree->node_count));
+
+    /* Flush the new CT onto disk. */
+    castle_cache_extent_flush(merge->tree_ext_fs.ext_id, 0,
+                              atomic64_read(&merge->tree_ext_fs.used));
+    castle_cache_extent_flush(merge->data_ext_fs.ext_id, 0,
+                              atomic64_read(&merge->data_ext_fs.used));
+
     /* Add the new tree to the doubling array */
     BUG_ON(merge->da->id != out_tree->da); 
     printk("Finishing merge of ct1=%d, ct2=%d, new tree=%d\n", 
@@ -1914,16 +1931,6 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
         debug("Destroying old CTs.\n");
         castle_ct_put(merge->in_tree1, 0);
         castle_ct_put(merge->in_tree2, 0);
-
-        /* TODO: Do this before adding new tree to DA. Check for locks on new
-         * tree. */
-        /* Flush the new CT onto disk. */
-        castle_cache_extent_flush(merge->tree_ext_fs.ext_id, 0,
-                                  atomic64_read(&merge->tree_ext_fs.used));
-#if 0   /* For now, Crash Consistency is for Trees only. */
-        castle_cache_extent_flush(merge->data_ext_fs.ext_id, 0,
-                                  atomic64_read(&merge->data_ext_fs.used));
-#endif
     }
     else
     {
