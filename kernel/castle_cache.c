@@ -5,6 +5,7 @@
 #include <linux/kthread.h>
 #include <linux/vmalloc.h>
 #include <linux/rbtree.h>
+#include <linux/delay.h>
 
 #include "castle_public.h"
 #include "castle.h"
@@ -262,6 +263,8 @@ static c_ext_fs_t              mstore_ext_fs;
 
 static atomic_t                mstores_ref_cnt = ATOMIC_INIT(0);
 
+#define CHECKPOINT_FREQUENCY (60)        /* Checkpoint once in every 60secs. */
+static struct                  task_struct  *checkpoint_thread;
 /**********************************************************************************************
  * Prototypes. 
  */
@@ -2429,7 +2432,7 @@ int castle_cache_extent_flush(c_ext_id_t ext_id, uint64_t start, uint64_t size)
     nr_pages   = (size - 1) / C_BLK_SIZE + 1;
     BUG_ON((first_pg + nr_pages) > (castle_extent_size_get(ext_id) * BLKS_PER_CHK));
 
-    printk("Extent flush: (%llu) -> %llu\n", ext_id, nr_pages/BLKS_PER_CHK);
+    debug("Extent flush: (%llu) -> %llu\n", ext_id, nr_pages/BLKS_PER_CHK);
     for (i=first_pg; i<nr_pages; i++)
     {
         cep.offset = i * C_BLK_SIZE;
@@ -2459,7 +2462,7 @@ skip_page:
 
     wait_event(castle_cache_flush_wq, (atomic_read(&outst_pgs) == 0));
 
-    printk("Extent flush complete: (%llu) -> %llu/%llu\n", 
+    printk("Extent flush completed: (%llu) -> %llu/%llu\n", 
             ext_id, dirty_pgs, nr_pages);
 
     return 0;
@@ -3251,45 +3254,71 @@ int castle_mstores_writeback(uint32_t version)
     return 0;
 }
 
-int castle_checkpoint_do(void)
+static int castle_periodic_checkpoint(void *unused)
 {
     uint32_t version = 0;
     struct   castle_fs_superblock *fs_sb;
+    int      i; 
+    int      exit_loop = 0;
 
-    if (!castle_fs_inited)
-        return 0;
+    do {
+        /* Wakes-up once in a second just to check whether to stop the thread.
+         * After every 10 seconds checkpoints the filesystem. */
+        for (i=0; i<CHECKPOINT_FREQUENCY; i++)
+        {
+            if (!kthread_should_stop())
+                msleep(1000);
+            else
+                exit_loop = 1;
+        }
 
-    castle_ctrl_lock();
+        if (!castle_fs_inited)
+            continue;
 
-    fs_sb = castle_fs_superblocks_get();
-    version = fs_sb->fs_version;
-    castle_fs_superblocks_put(fs_sb, 1);
+        printk("*****Checkpoint start**********\n");
+        castle_ctrl_lock();
+ 
+        fs_sb = castle_fs_superblocks_get();
+        version = fs_sb->fs_version;
+        castle_fs_superblocks_put(fs_sb, 1);
+ 
+        if (castle_mstores_writeback(version))
+        {
+            printk("Mstore writeback failed\n");
+            return -1;
+        }
+ 
+        /* Writeback superblocks. */
+        if (castle_superblocks_writeback(version))
+        {
+            printk("Superblock writeback failed\n");
+            return -1;
+        }
+        castle_checkpoint_version_inc();
+        
+        castle_ctrl_unlock();
 
-    if (castle_mstores_writeback(version))
-    {
-        printk("Mstore writeback failed\n");
-        return -1;
-    }
-
-    /* Writeback Slave Freespace. */
-    if (castle_freespace_writeback())
-    {
-        printk("Freespace writeback failed\n");
-        return -1;
-    }
-
-    /* Writeback superblocks. */
-    if (castle_superblocks_writeback(version))
-    {
-        printk("Superblock writeback failed\n");
-        return -1;
-    }
-
-    castle_checkpoint_version_inc();
-    
-    castle_ctrl_unlock();
+        printk("*****Completed checkpoint of version: %u*****\n", version);
+    } while (!exit_loop);
 
     return 0;
+}
+
+int castle_chk_disk(void)
+{
+    return castle_extents_restore();
+}
+
+int castle_checkpoint_init(void)
+{
+    checkpoint_thread = kthread_run(castle_periodic_checkpoint, NULL, 
+                                    "castle-checkpoint");
+    return 0;
+}
+
+void castle_checkpoint_fini(void)
+{
+    kthread_stop(checkpoint_thread);
 }
 
 int castle_cache_init(void)

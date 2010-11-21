@@ -1794,9 +1794,13 @@ static struct castle_component_tree* castle_da_merge_package(struct castle_da_me
        a lot of IOs and will only be destroyed on the last ct_put()). But
        we want to remove it from the DA straight away. The out_tree now takes
        over their functionality. */
+    /* Note: Control lock works as transaction lock. DA structure modifications
+     * don't race with checkpointing. */
+    castle_ctrl_lock();
     castle_component_tree_del(merge->da, merge->in_tree1);
     castle_component_tree_del(merge->da, merge->in_tree2);
     castle_component_tree_add(merge->da, out_tree, 0 /* not in init */);
+    castle_ctrl_unlock();
     castle_da_merging_clear(merge->da);
     /* We are holding ref to this DA, therefore it is safe to schedule the check. */
     castle_da_merge_check(merge->da);
@@ -2413,6 +2417,8 @@ static da_id_t castle_da_ct_unmarshall(struct castle_component_tree *ct,
     atomic64_set(&ct->node_count, ctm->node_count);
     castle_ext_fs_unmarshall(&ct->tree_ext_fs, &ctm->tree_ext_fs_bs);
     castle_ext_fs_unmarshall(&ct->data_ext_fs, &ctm->data_ext_fs_bs);
+    castle_extent_mark_live(ct->tree_ext_fs.ext_id);
+    castle_extent_mark_live(ct->data_ext_fs.ext_id);
     ct->da_list.next = NULL;
     ct->da_list.prev = NULL;
     INIT_LIST_HEAD(&ct->large_objs);
@@ -2431,7 +2437,8 @@ static void castle_da_foreach_tree(struct castle_double_array *da,
     struct list_head *lh, *t;
     int i, j;
 
-    castle_da_lock(da);
+    /* No need to get DA lock any more. Tree additions and deletions are done
+     * under castle_ctrl_lock. */
     for(i=0; i<MAX_DA_LEVEL; i++)
     {
         j = 0;
@@ -2439,12 +2446,10 @@ static void castle_da_foreach_tree(struct castle_double_array *da,
         {
             ct = list_entry(lh, struct castle_component_tree, da_list); 
             if(fn(da, ct, j, token))
-                goto out;
+                return;
             j++;
         }
     }
-out:
-    castle_da_unlock(da);
 }
 
 static int castle_ct_hash_destroy_check(struct castle_component_tree *ct, void *ct_hash)
@@ -2512,6 +2517,10 @@ static int castle_da_tree_writeback(struct castle_double_array *da,
     struct castle_clist_entry mstore_entry;
     struct list_head *lh, *tmp;
 
+    /* Don't flush RW trees in periodic checkpoints. */
+    if ((ct->btree_type == RW_VLBA_TREE_TYPE) && !castle_da_exiting)
+        return 0;
+
     mutex_lock(&ct->lo_mutex);
     list_for_each_safe(lh, tmp, &ct->large_objs)
     {
@@ -2571,7 +2580,7 @@ out:
     if (castle_tree_store)  castle_mstore_fini(castle_tree_store);
     if (castle_da_store)    castle_mstore_fini(castle_da_store);
 
-    castle_da_store = castle_tree_store = NULL;
+    castle_da_store = castle_tree_store = castle_lo_store = NULL;
 }
     
 int castle_double_array_read(void)
@@ -2662,6 +2671,12 @@ int castle_double_array_read(void)
 
         castle_mstore_iterator_next(iterator, &mstore_loentry, &key);
         ct = castle_component_tree_get(mstore_loentry.ct_seq);
+        if (!ct)
+        {
+            printk("Found zomby Large Object(%llu, %u)\n",
+                    mstore_loentry.ext_id, mstore_loentry.ct_seq);
+            BUG();
+        }
         if (castle_ct_large_obj_add(mstore_loentry.ext_id,
                                     mstore_loentry.length,
                                     &ct->large_objs, NULL))
@@ -2671,6 +2686,7 @@ int castle_double_array_read(void)
                     mstore_loentry.ct_seq);
             goto error_out;
         }
+        castle_extent_mark_live(mstore_loentry.ext_id);
     }
     castle_mstore_iterator_destroy(iterator);
     iterator = NULL;

@@ -68,6 +68,7 @@ typedef struct {
     struct list_head    hash_list;      /* Only Dynamic variable */
     uint32_t            ref_cnt;
     uint32_t            obj_refs;
+    uint8_t             alive;
 } c_ext_t;
 
 static struct list_head *castle_extents_hash = NULL;
@@ -168,6 +169,14 @@ static int castle_extent_print(c_ext_t *ext, void *unused)
     return 0;
 }
 
+void castle_extent_mark_live(c_ext_id_t ext_id)
+{
+    c_ext_t *ext = castle_extents_hash_get(ext_id);
+
+    if (ext)
+        ext->alive = 1;
+}
+
 int castle_extents_init()
 {
     int ret = 0;
@@ -233,17 +242,15 @@ static void castle_extents_super_block_read(void)
 }
 
 static void castle_extents_super_block_writeback(void)
-{
+{ /* Should be called with castle_extents_mutex held. */
     struct castle_fs_superblock *sblk;
 
-    mutex_lock(&castle_extents_mutex);
     sblk = castle_fs_superblocks_get();
 
     memcpy(&sblk->extents_sb, &castle_extents_global_sb,
            sizeof(struct castle_extents_sb_t));
 
     castle_fs_superblocks_put(sblk, 1);
-    mutex_unlock(&castle_extents_mutex);
 }
 
 static struct castle_extents_sb_t * castle_extents_super_block_get(void)
@@ -277,6 +284,7 @@ static int castle_extent_micro_ext_create(void)
     micro_ext->type     = MICRO_EXT;
     micro_ext->maps_cep = INVAL_EXT_POS;
     micro_ext->obj_refs = 1;
+    micro_ext->alive    = 1;
 
     memset(micro_maps, 0, sizeof(castle_extents_sb->micro_maps));
     list_for_each(l, &castle_slaves.slaves)
@@ -317,6 +325,7 @@ static int castle_extent_meta_ext_create(void)
     meta_ext->k_factor = 2;
     meta_ext->maps_cep = (c_ext_pos_t){MICRO_EXT_ID, 0};
     meta_ext->obj_refs = 1;
+    meta_ext->alive    = 1;
 
     i = 0;
     list_for_each(l, &castle_slaves.slaves)
@@ -462,24 +471,28 @@ int castle_extents_writeback(void)
   
     /* Note: This is important to make sure, nothing changes in extents. And
      * writeback() relinquishes hash spin_lock() while doing writeback. */
+    ext_sblk = castle_extents_super_block_get();
     /* Writeback new copy. */
     nr_exts = 0;
     castle_extents_hash_iterate(castle_extent_writeback, castle_extents_mstore);
 
-    ext_sblk = castle_extents_super_block_get();
     if (ext_sblk->nr_exts != nr_exts)
     {
         printk("%llx:%x\n", ext_sblk->nr_exts, nr_exts);
         BUG();
     }
-    castle_extents_super_block_put(0);
 
     castle_mstore_fini(castle_extents_mstore);
 
     /* Flush the complete meta extent onto disk, before completing writeback. */
     castle_cache_extent_flush(META_EXT_ID, 0, 0);
 
+    /* It is important to complete freespace_writeback() under extent lock, to
+     * make sure freesapce and extents are in sync. */ 
+    castle_freespace_writeback();
+
     castle_extents_super_block_writeback();
+    castle_extents_super_block_put(0);
 
     return 0;
 }
@@ -524,6 +537,10 @@ int castle_extents_read(void)
     if (load_extent_from_mentry(&ext_sblk->mstore_ext[1]))
         goto error_out;
 
+    castle_extent_mark_live(MICRO_EXT_ID);
+    castle_extent_mark_live(META_EXT_ID);
+    castle_extent_mark_live(MSTORE_EXT_ID);
+    castle_extent_mark_live(MSTORE_EXT_ID+1);
     meta_ext_size = castle_extent_size_get(META_EXT_ID);
     castle_extents_super_block_put(0);
     extent_init_done = 1;
@@ -742,6 +759,7 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t            rda_type,
     ext->type           = rda_type;
     ext->k_factor       = rda_spec->k_factor;
     ext->obj_refs       = 1;
+    ext->alive          = 1;
     
     /* Block aligned chunk maps for each extent. */
     BUG_ON(BLOCK_OFFSET(castle_extents_sb->next_free_byte));
@@ -812,6 +830,7 @@ void _castle_extent_free(c_ext_t *ext)
         return;
     }
 
+    castle_extents_sb = castle_extents_super_block_get();
     castle_extents_rhash_remove(ext);
     printk("Removed extent %llu from hash\n", ext_id);
     req_space = (sizeof(c_disk_chk_t) * ext->size * ext->k_factor);
@@ -877,7 +896,6 @@ void _castle_extent_free(c_ext_t *ext)
         }
     }
 
-    castle_extents_sb = castle_extents_super_block_get();
     castle_extents_sb->nr_exts--;
     castle_extents_super_block_put(1);
 
@@ -1006,6 +1024,7 @@ c_ext_id_t castle_extent_sup_ext_init(struct castle_slave *cs)
     
     ext->ext_id      = slave_id_to_sup_ext(cs->id);
     ext->obj_refs    = 1;
+    ext->alive       = 1;
     cs->sup_ext_maps = castle_malloc(sizeof(c_disk_chk_t) * ext->size *
                                                     rda_spec->k_factor, GFP_KERNEL);
     BUG_ON(rda_spec->k_factor != ext->k_factor);
@@ -1103,5 +1122,24 @@ int castle_extent_put(c_ext_id_t ext_id)
     if (free_ext)
         _castle_extent_free(ext);
 
+    return 0;
+}
+
+static int castle_extent_check_alive(c_ext_t *ext, void *unused)
+{
+    if (ext->alive == 0)
+    {
+        printk("Found a dead extent: %llu - Cleaning it\n", ext->ext_id);
+        BUG_ON(ext->obj_refs != 1);
+        spin_unlock_irq(&castle_extents_hash_lock);
+        castle_extent_put(ext->ext_id);
+        spin_lock_irq(&castle_extents_hash_lock);
+    }
+    return 0;
+}
+
+int castle_extents_restore(void)
+{
+    castle_extents_hash_iterate(castle_extent_check_alive, NULL);
     return 0;
 }

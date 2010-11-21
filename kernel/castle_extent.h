@@ -89,4 +89,10 @@ castle_extent_get(c_ext_id_t ext_id);
 
 int 
 castle_extent_put(c_ext_id_t ext_id);
+
+void 
+castle_extent_mark_live(c_ext_id_t ext_id);
+
+int
+castle_extents_restore(void);
 #endif //__CASTLE_EXTENT_H__

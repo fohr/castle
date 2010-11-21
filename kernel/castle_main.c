@@ -547,10 +547,16 @@ int castle_fs_init(void)
     if (!first && castle_attachments_read())
         return -EINVAL;
  
-    castle_events_init();
+    if (!first && castle_chk_disk())
+    {
+        printk("Failed to bring-up sane FS from disks\n");
+        return -EINVAL;
+    }
 
     castle_checkpoint_version_inc();
     
+    castle_events_init();
+
     printk("Castle FS inited.\n");
     castle_fs_inited = 1;
 
@@ -1938,6 +1944,7 @@ static int __init castle_init(void)
     if((ret = castle_btree_init()))        goto err_out5;
     if((ret = castle_double_array_init())) goto err_out6;
     if((ret = castle_attachments_init()))  goto err_out7;
+    if((ret = castle_checkpoint_init()))   goto err_out71;
     if((ret = castle_control_init()))      goto err_out8;
     if((ret = castle_sysfs_init()))        goto err_out9;
     if((ret = castle_back_init()))         goto err_out10;
@@ -1952,6 +1959,8 @@ err_out10:
 err_out9:
     castle_control_fini();
 err_out8:
+    castle_checkpoint_fini();
+err_out71:
     castle_attachments_free();
 err_out7:
     castle_double_array_merges_fini();
@@ -1990,7 +1999,7 @@ static void __exit castle_exit(void)
     castle_sysfs_fini();
     /* Now, make sure no more IO can be made, internally or externally generated */
     castle_double_array_merges_fini();  /* Completes all internal i/o - merges. */
-    castle_checkpoint_do(); 
+    castle_checkpoint_fini(); 
     /* Note: Changes from here are not persistent. */
     castle_attachments_free();
     /* Cleanup/writeout all metadata */ 
