@@ -1310,8 +1310,6 @@ static void castle_back_iter_reply(struct castle_back_stateful_op *stateful_op, 
     stateful_op->curr_op = NULL;
     stateful_op->expire = castle_back_iter_expire;
 
-    debug_iter("stateful_op->curr_op = %p\n", stateful_op->curr_op);
-
     spin_unlock(&stateful_op->lock);
 
     castle_back_iter_call_queued(stateful_op);
@@ -1692,7 +1690,7 @@ static void castle_back_iter_next(void *data)
 
     return;
 
-err0: castle_back_iter_reply(stateful_op, op, err);
+err0: castle_back_reply(op, err, 0, 0);
 }
 
 static void castle_back_iter_cleanup(struct castle_back_stateful_op *stateful_op)
