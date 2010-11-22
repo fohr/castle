@@ -1787,6 +1787,7 @@ static struct castle_component_tree* castle_da_merge_package(struct castle_da_me
     printk("Finishing merge of ct1=%d, ct2=%d, new tree=%d\n", 
             merge->in_tree1->seq, merge->in_tree2->seq, out_tree->seq);
     debug("Adding to doubling array, level: %d\n", out_tree->level);
+    castle_ctrl_lock();
     castle_da_lock(merge->da);
     BUG_ON((merge->da->id != merge->in_tree1->da) ||
            (merge->da->id != merge->in_tree2->da));
@@ -1796,7 +1797,6 @@ static struct castle_component_tree* castle_da_merge_package(struct castle_da_me
        over their functionality. */
     /* Note: Control lock works as transaction lock. DA structure modifications
      * don't race with checkpointing. */
-    castle_ctrl_lock();
     castle_component_tree_del(merge->da, merge->in_tree1);
     castle_component_tree_del(merge->da, merge->in_tree2);
     castle_component_tree_add(merge->da, out_tree, 0 /* not in init */);
