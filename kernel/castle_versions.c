@@ -182,7 +182,14 @@ static struct castle_version* castle_version_add(version_t version,
                                                  c_byte_off_t size)
 {
     struct castle_version *v;
+    static atomic_t version_cnt = ATOMIC(0);
     
+    if(atomic_inc_return(&version_cnt) > 900)
+    {
+        printk("Beta cannot create more than 900 versions.\n");
+        return NULL;
+    }
+
     v = kmem_cache_alloc(castle_versions_cache, GFP_KERNEL);
     if (!v)
         goto out_dealloc;
