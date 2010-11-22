@@ -1082,13 +1082,14 @@ int castle_extent_get(c_ext_id_t ext_id)
     c_ext_t *ext;
     unsigned long flags;
 
-    if (EXT_ID_INVAL(ext_id))
-        return -EINVAL;
-
     spin_lock_irqsave(&castle_extents_hash_lock, flags);
 
     ext = __castle_extents_hash_get(ext_id);
-    BUG_ON(!ext);
+    if (!ext)
+    {
+        spin_unlock_irqrestore(&castle_extents_hash_lock, flags);
+        return -EINVAL;
+    }
     ext->obj_refs++;
 
     spin_unlock_irqrestore(&castle_extents_hash_lock, flags);

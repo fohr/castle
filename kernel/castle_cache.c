@@ -37,6 +37,7 @@ enum c2b_state_bits {
     C2B_dirty,
     C2B_flushing,
     C2B_prefetch,
+    C2B_transient,
 };
 
 #define INIT_C2B_BITS (0)
@@ -70,6 +71,8 @@ TAS_C2B_FNS(dirty, dirty)
 C2B_FNS(flushing, flushing)
 TAS_C2B_FNS(flushing, flushing)
 C2B_FNS(prefetch, prefetch)
+C2B_FNS(transient, transient)
+TAS_C2B_FNS(transient, transient)
 
 /* c2p encapsulates multiple memory pages (in order to reduce overheads).
    NOTE: In order for this to work, c2bs must necessarily be allocated in
@@ -1442,7 +1445,7 @@ static int castle_cache_block_hash_clean(void)
          * TODO: gm281: this is temporary solution. Introduce pools to deal with the
          * issue properly.
          */
-        if(!c2b_busy(c2b) && !LOGICAL_EXTENT(c2b->cep.ext_id)) 
+        if(!c2b_busy(c2b) && (c2b_transient(c2b) || !LOGICAL_EXTENT(c2b->cep.ext_id))) 
         {
             debug("Found a victim.\n");
             hlist_del(&c2b->hlist);
@@ -1582,6 +1585,8 @@ c2_block_t* _castle_cache_block_get(c_ext_pos_t cep, int nr_pages, int transient
         else
         {
             BUG_ON(c2b->nr_pages != nr_pages);
+            /* Mark c2b as transient, if required. */
+            if (transient)  set_c2b_transient(c2b);
             return c2b;
         }
     }
@@ -2416,29 +2421,30 @@ int castle_cache_extent_flush(c_ext_id_t ext_id, uint64_t start, uint64_t size)
     c_ext_pos_t cep;
     atomic_t    outst_pgs = ATOMIC(0);
     uint64_t    i, first_pg, nr_pages, dirty_pgs = 0;
-
-    if (EXT_ID_INVAL(ext_id))
-        return 0;
+    c_chk_cnt_t ext_size;
+    
+    ext_size = castle_extent_size_get(ext_id);
+    if (!ext_size)
+        return -EINVAL;
 
     /* Flush complete extent, if size is 0. */
     if (size == 0)
     {
-        size  = castle_extent_size_get(ext_id);
+        size  = ext_size * C_CHK_SIZE;
         start = 0;
     }
 
     cep.ext_id = ext_id;
     first_pg   = (start >> C_BLK_SHIFT);
     nr_pages   = (size - 1) / C_BLK_SIZE + 1;
-    BUG_ON((first_pg + nr_pages) > (castle_extent_size_get(ext_id) * BLKS_PER_CHK));
+    BUG_ON((first_pg + nr_pages) > (ext_size * BLKS_PER_CHK));
 
     debug("Extent flush: (%llu) -> %llu\n", ext_id, nr_pages/BLKS_PER_CHK);
     for (i=first_pg; i<nr_pages; i++)
     {
         cep.offset = i * C_BLK_SIZE;
         c2b = _castle_cache_block_get(cep, 1, 1);
-        if (!c2b)
-            return -EIO;
+        BUG_ON(!c2b);
         /* c2b_flushing bit makes sure that flush thread doesnt submit parallel
          * writes. */
         read_lock_c2b(c2b);

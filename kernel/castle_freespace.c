@@ -239,18 +239,16 @@ void castle_freespace_summary_get(struct castle_slave *cs,
 }
 
 static int castle_freespace_slave_writeback(struct castle_slave *cs, void *unused)
-{
-    castle_freespace_t *freespace = freespace_sblk_get(cs);
+{/* Should be called with extent lock held. Keeps freespace and extents in sync. */
     struct castle_slave_superblock *sblk;
 
     sblk = castle_slave_superblock_get(cs);
-    memcpy(&sblk->freespace, freespace, sizeof(castle_freespace_t));
+    memcpy(&sblk->freespace, &cs->freespace, sizeof(castle_freespace_t));
     castle_slave_superblock_put(cs, 1);
 
     castle_cache_extent_flush(cs->sup_ext, FREESPACE_OFFSET, 
-                              freespace->nr_entries * sizeof(c_chk_t));
-
-    freespace_sblk_put(cs, 0);
+                              cs->freespace.nr_entries * sizeof(c_chk_t));
+    
     return 0;
 }
 
