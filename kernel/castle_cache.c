@@ -110,6 +110,13 @@ enum c2p_state_bits {
     C2P_dirty,
 };
 
+struct castle_cache_flush_entry {
+    c_ext_id_t          ext_id;
+    uint64_t            start;
+    uint64_t            count;
+    struct list_head    list;
+};
+
 #define INIT_C2P_BITS (0)
 #define C2P_FNS(bit, name)					                        \
 inline void set_c2p_##name(c2_page_t *c2p)		                    \
@@ -265,6 +272,7 @@ struct timer_list              castle_cache_stats_timer;
 static c_ext_fs_t              mstore_ext_fs;
 
 static atomic_t                mstores_ref_cnt = ATOMIC_INIT(0);
+static               LIST_HEAD(castle_cache_flush_list);
 
 #define CHECKPOINT_FREQUENCY (60)        /* Checkpoint once in every 60secs. */
 static struct                  task_struct  *checkpoint_thread;
@@ -3255,7 +3263,43 @@ int castle_mstores_writeback(uint32_t version)
     castle_versions_writeback();
     castle_extents_writeback();
 
-    castle_cache_extent_flush(MSTORE_EXT_ID + slot, 0, 0);
+    castle_cache_extent_flush_schedule(MSTORE_EXT_ID + slot, 0, 0);
+
+    return 0;
+}
+
+int castle_cache_extent_flush_schedule(c_ext_id_t ext_id, uint64_t start, 
+                                       uint64_t count)
+{
+    struct castle_cache_flush_entry *entry;
+
+    entry = castle_malloc(sizeof(struct castle_cache_flush_entry), GFP_KERNEL);
+    if (!entry)
+        return -1;
+
+    entry->ext_id = ext_id;
+    entry->start  = start;
+    entry->count  = count;
+    list_add_tail(&entry->list, &castle_cache_flush_list);
+
+    return 0;
+}
+
+int castle_cache_extents_flush(struct list_head *flush_list)
+{
+    struct list_head *lh, *tmp;
+    struct castle_cache_flush_entry *entry;
+
+    list_for_each_safe(lh, tmp, flush_list)
+    {
+        entry = list_entry(lh, struct castle_cache_flush_entry, list);
+        castle_cache_extent_flush(entry->ext_id, entry->start, entry->count);
+
+        list_del(lh);
+        castle_free(entry);
+    }
+
+    BUG_ON(!list_empty(&castle_cache_flush_list));
 
     return 0;
 }
@@ -3266,6 +3310,7 @@ static int castle_periodic_checkpoint(void *unused)
     struct   castle_fs_superblock *fs_sb;
     int      i; 
     int      exit_loop = 0;
+    struct   list_head flush_list;
 
     do {
         /* Wakes-up once in a second just to check whether to stop the thread.
@@ -3293,6 +3338,13 @@ static int castle_periodic_checkpoint(void *unused)
             printk("Mstore writeback failed\n");
             return -1;
         }
+
+        list_replace(&castle_cache_flush_list, &flush_list);
+        INIT_LIST_HEAD(&castle_cache_flush_list);
+        castle_ctrl_unlock();
+
+        /* Flush all marked extents from cache. */
+        castle_cache_extents_flush(&flush_list);
  
         /* Writeback superblocks. */
         if (castle_superblocks_writeback(version))
@@ -3302,8 +3354,6 @@ static int castle_periodic_checkpoint(void *unused)
         }
         castle_checkpoint_version_inc();
         
-        castle_ctrl_unlock();
-
         printk("*****Completed checkpoint of version: %u*****\n", version);
     } while (!exit_loop);
 

@@ -1776,18 +1776,18 @@ static struct castle_component_tree* castle_da_merge_package(struct castle_da_me
             atomic64_read(&out_tree->item_count),
             atomic64_read(&out_tree->node_count));
 
-    /* Flush the new CT onto disk. */
-    castle_cache_extent_flush(merge->tree_ext_fs.ext_id, 0,
-                              atomic64_read(&merge->tree_ext_fs.used));
-    castle_cache_extent_flush(merge->data_ext_fs.ext_id, 0,
-                              atomic64_read(&merge->data_ext_fs.used));
-
     /* Add the new tree to the doubling array */
     BUG_ON(merge->da->id != out_tree->da); 
     printk("Finishing merge of ct1=%d, ct2=%d, new tree=%d\n", 
             merge->in_tree1->seq, merge->in_tree2->seq, out_tree->seq);
     debug("Adding to doubling array, level: %d\n", out_tree->level);
     castle_ctrl_lock();
+    /* Schedule flush of new CT onto disk. */
+    castle_cache_extent_flush_schedule(merge->tree_ext_fs.ext_id, 0,
+                                       atomic64_read(&merge->tree_ext_fs.used));
+    castle_cache_extent_flush_schedule(merge->data_ext_fs.ext_id, 0,
+                                       atomic64_read(&merge->data_ext_fs.used));
+
     castle_da_lock(merge->da);
     BUG_ON((merge->da->id != merge->in_tree1->da) ||
            (merge->da->id != merge->in_tree2->da));
