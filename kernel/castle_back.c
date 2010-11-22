@@ -2024,14 +2024,14 @@ static void castle_back_put_chunk(void *data)
     {
         error("Could not get buffer for pointer=%p\n", op->req.put_chunk.buffer_ptr);
         err = -EINVAL;
-        goto err1;
+        goto err0;
     }
 
     if (!castle_back_user_addr_in_buffer(op->buf, op->req.put_chunk.buffer_ptr + op->req.put_chunk.buffer_len - 1))
     {
         error("Invalid value length %u (ptr=%p)\n", op->req.put_chunk.buffer_len, op->req.put_chunk.buffer_ptr);
         err = -EINVAL;
-        goto err2;
+        goto err1;
     }
     
     op->buffer_offset = 0;
@@ -2047,7 +2047,7 @@ static void castle_back_put_chunk(void *data)
         spin_unlock(&stateful_op->lock);
         error("Invalid value length %u (ptr=%p)\n", op->req.put_chunk.buffer_len, op->req.put_chunk.buffer_ptr);
         err = -EINVAL;
-        goto err2;
+        goto err1;
     }
     
     stateful_op->queued_size += op->req.put_chunk.buffer_len;
@@ -2056,7 +2056,7 @@ static void castle_back_put_chunk(void *data)
     if (err)
     {
         spin_unlock(&stateful_op->lock);
-        goto err0;
+        goto err1;
     }
     
     castle_back_big_put_call_queued(stateful_op);
@@ -2065,14 +2065,7 @@ static void castle_back_put_chunk(void *data)
 
     return;
        
-err2: castle_back_buffer_put(conn, op->buf);
-err1:
-    spin_lock(&stateful_op->lock);
-    stateful_op->curr_op = NULL;
-    stateful_op->expire = castle_back_big_put_expire;
-    stateful_op->last_used_jiffies = jiffies;
-    castle_back_big_put_call_queued(stateful_op);
-    spin_unlock(&stateful_op->lock);
+err1: castle_back_buffer_put(conn, op->buf);
 err0: castle_back_reply(op, err, 0, 0);
 }
 
@@ -2274,28 +2267,28 @@ static void castle_back_get_chunk(void *data)
     {
         error("Could not get buffer for pointer=%p\n", op->req.get_chunk.buffer_ptr);
         err = -EINVAL;
-        goto err1;
+        goto err0;
     }
 
     if (!castle_back_user_addr_in_buffer(op->buf, op->req.get_chunk.buffer_ptr + op->req.get_chunk.buffer_len - 1))
     {
         error("Invalid value length %u (ptr=%p)\n", op->req.get_chunk.buffer_len, op->req.get_chunk.buffer_ptr);
         err = -EINVAL;
-        goto err2;
+        goto err1;
     }
     
     if (((unsigned long) op->req.get_chunk.buffer_ptr) % PAGE_SIZE)
     {
         error("Invalid ptr, not page aligned (ptr=%p)\n", op->req.put_chunk.buffer_ptr);
         err = -EINVAL;
-        goto err2;
+        goto err1;
     }
 
     if ((op->req.get_chunk.buffer_len) % PAGE_SIZE)
     {
         error("Invalid len, not page aligned (len=%u)\n", op->req.put_chunk.buffer_len);
         err = -EINVAL;
-        goto err2;
+        goto err1;
     }
 
     /*
@@ -2306,7 +2299,7 @@ static void castle_back_get_chunk(void *data)
     if (err)
     {
         spin_unlock(&stateful_op->lock);
-        goto err2;
+        goto err1;
     }
 
     castle_back_big_get_call_queued(stateful_op);
@@ -2315,14 +2308,7 @@ static void castle_back_get_chunk(void *data)
 
     return;
 
-err2: castle_back_buffer_put(conn, op->buf);
-err1:
-    spin_lock(&stateful_op->lock);
-    stateful_op->curr_op = NULL;
-    stateful_op->expire = castle_back_big_get_expire;
-    stateful_op->last_used_jiffies = jiffies;
-    castle_back_big_get_call_queued(stateful_op);
-    spin_unlock(&stateful_op->lock);
+err1: castle_back_buffer_put(conn, op->buf);
 err0: castle_back_reply(op, err, 0, 0);
 }
 
