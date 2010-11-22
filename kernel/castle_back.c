@@ -2071,6 +2071,7 @@ err1:
     castle_back_reply(op, err, 0, 0);
 
     spin_lock(&stateful_op->lock);
+    stateful_op->curr_op = NULL;
     stateful_op->expire = castle_back_big_put_expire;
     stateful_op->last_used_jiffies = jiffies;
     castle_back_big_put_call_queued(stateful_op);
@@ -2325,6 +2326,7 @@ err1:
     castle_back_reply(op, err, 0, 0);
 
     spin_lock(&stateful_op->lock);
+    stateful_op->curr_op = NULL;
     stateful_op->expire = castle_back_big_get_expire;
     stateful_op->last_used_jiffies = jiffies;
     castle_back_big_get_call_queued(stateful_op);
