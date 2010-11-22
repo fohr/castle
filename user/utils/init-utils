@@ -70,7 +70,7 @@ function unmount_kernel_fs {
             usleep 100000
         done
         if [ -e ${CONTROL_FILE} ]; then
-            echo "EROOR: removed castle_fs module, but the control file '${CONTROL_FILE}' is still there. Exiting."
+            echo "ERROR: removed castle_fs module, but the control file '${CONTROL_FILE}' is still there. Exiting."
             exit 1
         fi
     fi
