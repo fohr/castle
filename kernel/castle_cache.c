@@ -2438,7 +2438,7 @@ int castle_cache_extent_flush(c_ext_id_t ext_id, uint64_t start, uint64_t size)
     /* Flush complete extent, if size is 0. */
     if (size == 0)
     {
-        size  = ext_size * C_CHK_SIZE;
+        size  = ext_size * C_CHK_SIZE * BLKS_PER_CHK;
         start = 0;
     }
 
