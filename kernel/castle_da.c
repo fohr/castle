@@ -2100,7 +2100,7 @@ static void castle_da_merge_check(struct castle_double_array *da)
     if(merge_measure == 0)
     {
         if(da->ios_rate == 0)
-            printk("WARNING: Reenabling inserts.\n");
+            printk("Reenabling inserts.\n");
         /* Effectively no limit. */
         da->ios_rate = (uint32_t)-1;   
     } 
@@ -2112,14 +2112,14 @@ static void castle_da_merge_check(struct castle_double_array *da)
            outstanding level 1 merge. */
         da->ios_rate = 50000 * (merge_measure_threashold / merge_measure - 1) / REPLENISH_FREQUENCY;
         if((old_rate == 0) && (da->ios_rate != 0))
-            printk("WARNING: Reenabling inserts..\n");
+            printk("Reenabling inserts..\n");
         if((old_rate != 0) && (da->ios_rate == 0))
-            printk("WARNING: Disabling inserts completly.\n");
+            printk("Disabling inserts completly.\n");
     }
     else
     {
         if(da->ios_rate != 0)
-            printk("WARNING: Disabling inserts completly..\n");
+            printk("Disabling inserts completly..\n");
         da->ios_rate = 0;
     }
     debug("Setting rate to %u\n", da->ios_rate);
@@ -2363,15 +2363,12 @@ static int castle_da_trees_sort(struct castle_double_array *da, void *unused)
     return 0;
 }
 
-/* This only happens at the start of day. 
-   Disabled at the moment, because we need to deal with the hash lock. */
+/* This only happens at the start of day. */ 
 static int castle_da_merge_restart(struct castle_double_array *da, void *unused)
 {
-#if 0
     castle_da_lock(da);
     castle_da_merge_check(da);
     castle_da_unlock(da);
-#endif
 
     return 0;
 }
@@ -2694,7 +2691,7 @@ int castle_double_array_read(void)
     /* Sort all the tree lists by the sequence number */
     castle_da_hash_iterate(castle_da_trees_sort, NULL); 
     /* Check if any merges need to be done. */
-    castle_da_hash_iterate(castle_da_merge_restart, NULL); 
+    __castle_da_hash_iterate(castle_da_merge_restart, NULL); 
     goto out;
 
 error_out:
