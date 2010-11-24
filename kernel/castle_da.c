@@ -3004,7 +3004,7 @@ static void castle_da_queue_kick(struct castle_double_array *da)
     }
 }
 
-static void castle_da_bvec_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cvt)
+static void castle_da_ct_walk_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cvt)
 {
     void (*callback) (struct castle_bio_vec *c_bvec, int err, c_val_tup_t cvt);
     struct castle_component_tree *ct, *next_ct;
@@ -3072,7 +3072,7 @@ static void castle_da_bvec_start(struct castle_double_array *da, c_bvec_t *c_bve
     /* Otherwise, replace endfind function pointer, and start the btree walk. */
     c_bvec->tree       = ct; 
     c_bvec->da_endfind = c_bvec->endfind;
-    c_bvec->endfind    = castle_da_bvec_complete;
+    c_bvec->endfind    = castle_da_ct_walk_complete;
 
     //castle_request_timeline_create(c_bvec->timeline);
     castle_request_timeline_checkpoint_start(c_bvec->timeline);
