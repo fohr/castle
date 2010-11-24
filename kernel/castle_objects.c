@@ -1067,7 +1067,7 @@ int castle_object_replace(struct castle_object_replace *replace,
     atomic_set(&c_bvec->reserv_nodes, 0);
 
     castle_debug_bio_register(c_bio, attachment->version, 1);
-    castle_double_array_find(c_bvec);
+    castle_double_array_submit(c_bvec);
 
     return 0;
 }
@@ -1473,7 +1473,7 @@ int castle_object_get(struct castle_object_get *get,
     atomic_set(&c_bvec->reserv_nodes, 0);
     
     /* TODO: add bios to the debugger! */ 
-    castle_double_array_find(c_bvec);
+    castle_double_array_submit(c_bvec);
 
     return 0;
 }
@@ -1639,7 +1639,7 @@ int castle_object_pull(struct castle_object_pull *pull, struct castle_attachment
     atomic_set(&c_bvec->reserv_nodes, 0);
     
     /* TODO: add bios to the debugger! */ 
-    castle_double_array_find(c_bvec);
+    castle_double_array_submit(c_bvec);
 
     return 0;
 }

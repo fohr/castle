@@ -1423,7 +1423,7 @@ static void castle_device_c_bvec_make(c_bio_t *c_bio,
     castle_debug_bvec_update(c_bvec, C_BVEC_INITIALISED);
 
     /* Submit the c_bvec for processing */
-    castle_btree_find(c_bvec); 
+    castle_btree_submit(c_bvec); 
 }
  
 static int castle_device_make_request(struct request_queue *rq, struct bio *bio)

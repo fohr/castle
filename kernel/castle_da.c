@@ -3033,7 +3033,7 @@ static void castle_da_ct_walk_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cv
         c_bvec->tree = next_ct;
         debug_verbose("Scheduling btree read in %s tree: %d.\n", 
                 ct->dynamic ? "dynamic" : "static", ct->seq);
-        castle_btree_find(c_bvec);
+        castle_btree_submit(c_bvec);
         return;
     }
     castle_request_timeline_checkpoint_stop(c_bvec->timeline);
@@ -3077,10 +3077,10 @@ static void castle_da_bvec_start(struct castle_double_array *da, c_bvec_t *c_bve
     //castle_request_timeline_create(c_bvec->timeline);
     castle_request_timeline_checkpoint_start(c_bvec->timeline);
     debug_verbose("Looking up in ct=%d\n", c_bvec->tree->seq); 
-    castle_btree_find(c_bvec);
+    castle_btree_submit(c_bvec);
 }
 
-void castle_double_array_find(c_bvec_t *c_bvec)
+void castle_double_array_submit(c_bvec_t *c_bvec)
 {
     struct castle_attachment *att = c_bvec->c_bio->attachment;
     struct castle_double_array *da;

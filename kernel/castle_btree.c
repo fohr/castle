@@ -1422,11 +1422,11 @@ static inline c_ext_pos_t  castle_btree_root_get(c_bvec_t *c_bvec)
 }
   
 static void castle_btree_c2b_forget(c_bvec_t *c_bvec);
-static void __castle_btree_find(struct castle_btree_type *btree,
+static void __castle_btree_submit(struct castle_btree_type *btree,
                                 c_bvec_t *c_bvec,
                                 c_ext_pos_t  node_cep,
                                 void *parent_key);
-static void castle_btree_find_no_clear(c_bvec_t *c_bvec);
+static void castle_btree_submit_no_clear(c_bvec_t *c_bvec);
 
 
 static void castle_btree_io_end(c_bvec_t    *c_bvec,
@@ -2133,7 +2133,7 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
             /* Set the flag AFTER releasing the lock (which could confuse ct_unlock) */
             set_bit(CBV_DOING_SPLITS, &c_bvec->flags);
             c_bvec->split_depth = c_bvec->btree_depth - 1;
-            castle_btree_find_no_clear(c_bvec);  
+            castle_btree_submit_no_clear(c_bvec);  
 
             return;
         }
@@ -2171,7 +2171,7 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
                    cep2str(lub_cvt.cep));
             BUG();
         }
-        __castle_btree_find(btree, c_bvec, lub_cvt.cep, lub_key);
+        __castle_btree_submit(btree, c_bvec, lub_cvt.cep, lub_key);
         return;
     }
 
@@ -2295,7 +2295,7 @@ static void castle_btree_read_process(c_bvec_t *c_bvec)
             BUG();
         /* parent_key is not needed when reading (also, we might be looking at a leaf ptr)
            use INVAL key instead. */
-        __castle_btree_find(btree, c_bvec, lub_cvt.cep, btree->inv_key);
+        __castle_btree_submit(btree, c_bvec, lub_cvt.cep, btree->inv_key);
     }
 }
 
@@ -2400,7 +2400,7 @@ static void castle_btree_c2b_lock(c_bvec_t *c_bvec, c2_block_t *c2b)
 
 }
 
-static void castle_btree_find_io_end(c2_block_t *c2b)
+static void castle_btree_submit_io_end(c2_block_t *c2b)
 {
 #ifdef CASTLE_DEBUG    
     struct castle_btree_node *node;
@@ -2436,7 +2436,7 @@ static void castle_btree_find_io_end(c2_block_t *c2b)
     queue_work(castle_wqs[c_bvec->btree_depth], &c_bvec->work); 
 }
 
-static void __castle_btree_find(struct castle_btree_type *btree,
+static void __castle_btree_submit(struct castle_btree_type *btree,
                                 c_bvec_t *c_bvec,
                                 c_ext_pos_t  node_cep,
                                 void *parent_key)
@@ -2467,7 +2467,7 @@ static void __castle_btree_find(struct castle_btree_type *btree,
         /* If the buffer doesn't contain up to date data, schedule the IO */
         castle_debug_bvec_update(c_bvec, C_BVEC_BTREE_NODE_OUTOFDATE);
         c2b->private = c_bvec;
-        c2b->end_io = castle_btree_find_io_end;
+        c2b->end_io = castle_btree_submit_io_end;
         BUG_ON(submit_c2b(READ, c2b));
     } else
     {
@@ -2480,7 +2480,7 @@ static void __castle_btree_find(struct castle_btree_type *btree,
     }
 }
 
-static void _castle_btree_find(struct work_struct *work)
+static void _castle_btree_submit(struct work_struct *work)
 {
     c_bvec_t *c_bvec = container_of(work, c_bvec_t, work);
     struct castle_btree_type *btree = castle_btree_type_get(c_bvec->tree->btree_type);
@@ -2499,20 +2499,20 @@ static void _castle_btree_find(struct work_struct *work)
     c_bvec->btree_levels = c_bvec->tree->tree_depth;
     BUG_ON(EXT_POS_INVAL(root_cep));
     castle_debug_bvec_update(c_bvec, C_BVEC_VERSION_FOUND);
-    __castle_btree_find(btree, c_bvec, root_cep, btree->max_key);
+    __castle_btree_submit(btree, c_bvec, root_cep, btree->max_key);
 }
 
-void castle_btree_find(c_bvec_t *c_bvec)
+void castle_btree_submit(c_bvec_t *c_bvec)
 {
     c_bvec->parent_key = NULL;
     clear_bit(CBV_DOING_SPLITS, &c_bvec->flags);
-    CASTLE_INIT_WORK(&c_bvec->work, _castle_btree_find);
+    CASTLE_INIT_WORK(&c_bvec->work, _castle_btree_submit);
     queue_work(castle_wqs[19], &c_bvec->work); 
 }
 
-static void castle_btree_find_no_clear(c_bvec_t *c_bvec)
+static void castle_btree_submit_no_clear(c_bvec_t *c_bvec)
 {
-    CASTLE_INIT_WORK(&c_bvec->work, _castle_btree_find);
+    CASTLE_INIT_WORK(&c_bvec->work, _castle_btree_submit);
     queue_work(castle_wqs[18], &c_bvec->work); 
 }
 
