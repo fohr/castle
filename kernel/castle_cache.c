@@ -1557,6 +1557,25 @@ c2_block_t* _castle_cache_block_get(c_ext_pos_t cep, int nr_pages, int transient
         }
 
         /* If we couldn't find in the hash, try allocating from the freelists. Get c2b first. */ 
+        /* TODO: Return NULL if extent doesn't exist any more. Make sure this
+         * doesnt break any of the clients. */
+#ifdef CASTLE_DEBUG
+        {
+            uint64_t ext_size;
+
+            /* Check sanity of CEP. */
+            ext_size = (uint64_t)castle_extent_size_get(cep.ext_id);
+            if (ext_size && 
+                ((ext_size * C_CHK_SIZE) < (cep.offset + (nr_pages * C_BLK_SIZE))))
+            {
+                printk("Couldnt create cache page of size %d at cep: "cep_fmt_str
+                       "on extent of size %llu chunks\n", nr_pages, __cep2str(cep), ext_size);
+                WARN_ON(1);
+                msleep(10000);
+                BUG();
+            }
+        }
+#endif
         do {
             debug("Trying to allocate c2b from freelist.\n");
             c2b = castle_cache_block_freelist_get();

@@ -834,7 +834,14 @@ static int castle_object_data_write(struct castle_object_replace *replace)
     packet_length = replace->data_length_get(replace);
 
     debug("Packet length=%d, data_length=%d\n", packet_length, data_length);
-    BUG_ON(packet_length <= 0);
+
+    if (((int64_t)packet_length < 0) || (packet_length > replace->value_len))
+    {
+        printk("Unexpected Packet length=%llu, data_length=%llu\n", 
+                packet_length, data_length);
+        BUG();
+    }
+
     do {
         char *data_c2b_buffer;
         int copy_length;
@@ -854,6 +861,12 @@ static int castle_object_data_write(struct castle_object_replace *replace)
             last_copy = 1;
             copy_length = data_length;
         }
+        if (copy_length < 0 || copy_length > (OBJ_IO_MAX_BUFFER_SIZE * C_BLK_SIZE))
+        {
+            printk("Unexpected copy_length %d\n", copy_length);
+            BUG();
+        }
+
         replace->data_copy(replace, 
                           data_c2b_buffer,
                           copy_length,
@@ -873,6 +886,12 @@ static int castle_object_data_write(struct castle_object_replace *replace)
             c_ext_pos_t new_data_cep;
             debug("Run out of buffer space, allocating a new one.\n");
             new_data_cep = castle_object_write_next_cep(data_c2b->cep, data_c2b_length); 
+            if (EXT_POS_COMP(new_data_cep, data_c2b->cep) <= 0)
+            {
+                printk("Unexpected change in CEP while copy"cep_fmt_str
+                        cep_fmt_str_nl, cep2str(data_c2b->cep), cep2str(new_data_cep));
+                BUG();
+            }
             new_data_c2b = castle_object_write_buffer_alloc(new_data_cep, data_length); 
             data_c2b_length = new_data_c2b->nr_pages * C_BLK_SIZE;
             data_c2b_offset = 0;
