@@ -253,13 +253,13 @@ static void castle_extents_super_block_writeback(void)
     castle_fs_superblocks_put(sblk, 1);
 }
 
-static struct castle_extents_sb_t * castle_extents_super_block_get(void)
+struct castle_extents_sb_t * castle_extents_super_block_get(void)
 {
     mutex_lock(&castle_extents_mutex);
     return &castle_extents_global_sb;
 }
  
-static void castle_extents_super_block_put(int dirty)
+void castle_extents_super_block_put(int dirty)
 {
     mutex_unlock(&castle_extents_mutex);
 }

@@ -3241,6 +3241,9 @@ int castle_checkpoint_version_inc(void)
     fs_version = fs_sb->fs_version;
     castle_fs_superblocks_put(fs_sb, 1);
 
+    /* Makes sure no parallel freespace operations happening. */
+    (void) castle_extents_super_block_get();
+
     list_for_each(lh, &castle_slaves.slaves)
     {
         cs = list_entry(lh, struct castle_slave, list);
@@ -3251,8 +3254,15 @@ int castle_checkpoint_version_inc(void)
             printk("%x:%x\n", fs_version, cs_sb->fs_version);
             BUG();
         }
+
+        /* As the flushed version is consistent now on disk, It is okay to
+         * overwrite the previous version now. Change freespace producer
+         * accordingly. */
+        cs->prev_prod = cs->frozen_prod;
         castle_slave_superblock_put(cs, 1);
     }
+
+    castle_extents_super_block_put(0);
 
     return 0;
 }
@@ -3318,7 +3328,7 @@ int castle_cache_extents_flush(struct list_head *flush_list)
         castle_free(entry);
     }
 
-    BUG_ON(!list_empty(&castle_cache_flush_list));
+    BUG_ON(!list_empty(flush_list));
 
     return 0;
 }

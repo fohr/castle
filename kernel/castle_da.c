@@ -1343,7 +1343,7 @@ static int castle_da_iterators_create(struct castle_da_merge *merge)
     while(atomic_read(&merge->in_tree1->write_ref_count) || 
           atomic_read(&merge->in_tree2->write_ref_count) )
     {
-        printk("Found non-zero write ref count on a tree scheduled for merge (%d, %d)\n",
+        debug("Found non-zero write ref count on a tree scheduled for merge (%d, %d)\n",
                 atomic_read(&merge->in_tree1->write_ref_count), 
                 atomic_read(&merge->in_tree2->write_ref_count));
         msleep(10);

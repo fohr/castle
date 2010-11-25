@@ -932,6 +932,8 @@ struct castle_slave {
     c_disk_chk_t                   *sup_ext_maps;
     struct mutex                    freespace_lock;
     castle_freespace_t              freespace;
+    c_chk_cnt_t                     prev_prod;
+    c_chk_cnt_t                     frozen_prod;
     struct castle_slave_block_cnts  block_cnts;
     unsigned long                   last_access;
     struct castle_slave_superblock  cs_superblock;

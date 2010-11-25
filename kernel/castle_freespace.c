@@ -45,18 +45,23 @@ c_chk_seq_t castle_freespace_slave_chunks_alloc(struct castle_slave    *cs,
 
     freespace = freespace_sblk_get(cs);
 
-    if (DISK_NO_SPACE(freespace))
+    /* Check if any freespace left. Don't allocate from freespace freed after
+     * last checkpoint. */
+    if (freespace->cons == cs->prev_prod)
     {
-        if (freespace->free_chk_cnt)
+#if 0
+        if (freespace->free_chk_cnt || freespace->nr_entries)
         {
             printk("Inconsistant Freespace structures - %u:%u - %u\n", 
                     freespace->cons, freespace->prod, freespace->free_chk_cnt);
             BUG();
         }
+#endif
 
         freespace_sblk_put(cs, 0);
         return INVAL_CHK_SEQ;
     }
+    BUG_ON(!freespace->free_chk_cnt || !freespace->nr_entries);
 
     cons_off   = FREESPACE_OFFSET + freespace->cons * sizeof(c_chk_t);
     cep.ext_id = cs->sup_ext;
@@ -146,6 +151,7 @@ void castle_freespace_slave_chunk_free(struct castle_slave      *cs,
         j = (j + 1) % (C_BLK_SIZE / sizeof(c_chk_t));
         i++;
         freespace->prod = (freespace->prod + 1) % freespace->max_entries;
+        BUG_ON(freespace->prod == freespace->cons);
     }
 
     if (c2b)
@@ -158,8 +164,8 @@ void castle_freespace_slave_chunk_free(struct castle_slave      *cs,
     freespace->free_chk_cnt += chk_seq.count;
     freespace->nr_entries += nr_sup_chunks;
 
-    if ((freespace->cons == freespace->prod) && 
-        (freespace->nr_entries != freespace->max_entries))
+    if ((freespace->cons == ((freespace->prod + 1) % freespace->max_entries)) && 
+        (freespace->nr_entries != freespace->max_entries - 1))
     {
         printk("    Free Chunks: %u from slave %u\n", freespace->free_chk_cnt,
                 cs->uuid);
@@ -200,7 +206,7 @@ int castle_freespace_slave_init(struct castle_slave *cs, int fresh)
         memset(freespace, 0, sizeof(castle_freespace_t));
         freespace->disk_size   = disk_sz / C_CHK_SIZE - FREE_SPACE_START;
         freespace->disk_size  -= (freespace->disk_size % CHKS_PER_SLOT);
-        freespace->max_entries = freespace->disk_size / CHKS_PER_SLOT;
+        freespace->max_entries = (freespace->disk_size / CHKS_PER_SLOT) + 1;
     }
     mutex_init(&cs->freespace_lock);
 
@@ -216,6 +222,8 @@ int castle_freespace_slave_init(struct castle_slave *cs, int fresh)
     if (fresh)
         castle_freespace_slave_chunk_free(cs, 
                          (c_chk_seq_t){FREE_SPACE_START, nr_chunks});
+
+    cs->frozen_prod = cs->prev_prod = freespace->prod;
 #ifdef CASTLE_DEBUG
     cs->disk_size = nr_chunks + FREE_SPACE_START;
 #endif
@@ -243,7 +251,10 @@ static int castle_freespace_slave_writeback(struct castle_slave *cs, void *unuse
     struct castle_slave_superblock *sblk;
 
     sblk = castle_slave_superblock_get(cs);
+
     memcpy(&sblk->freespace, &cs->freespace, sizeof(castle_freespace_t));
+    cs->frozen_prod = cs->freespace.prod;
+
     castle_slave_superblock_put(cs, 1);
 
     castle_cache_extent_flush_schedule(cs->sup_ext, FREESPACE_OFFSET, 
