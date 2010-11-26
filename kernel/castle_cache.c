@@ -1428,12 +1428,12 @@ static void castle_cache_block_free(c2_block_t *c2b)
 {
     struct list_head *lh, *lt;
     LIST_HEAD(freed_c2ps);
-    c2_page_t *c2p;
-    int i, c2ps;
+    c2_page_t *c2p, **c2ps;
+    int i, nr_c2ps;
 
-    c2ps = castle_cache_pages_to_c2ps(c2b->nr_pages);
-    if(c2ps == castle_cache_fast_vmap_c2bs)
-        castle_cache_fast_vunmap(c2b->buffer, PAGES_PER_C2P * c2ps);
+    nr_c2ps = castle_cache_pages_to_c2ps(c2b->nr_pages);
+    if(nr_c2ps == castle_cache_fast_vmap_c2bs)
+        castle_cache_fast_vunmap(c2b->buffer, PAGES_PER_C2P * nr_c2ps);
     else
     if(c2b->nr_pages > 1)
         vunmap(c2b->buffer);
@@ -1452,11 +1452,13 @@ static void castle_cache_block_free(c2_block_t *c2b)
         c2_pref_c2b_destroy(c2b);
     /* Add the pages back to the freelist */
     spin_lock(&castle_cache_page_hash_lock);
-    for(i=0; i<c2ps; i++)
+    for(i=0; i<nr_c2ps; i++)
         __castle_cache_c2p_put(c2b->c2ps[i], &freed_c2ps);
     spin_unlock(&castle_cache_page_hash_lock);
     /* For debugging only: it will be spotted quickly if nr_pages isn't reinited properly */
     c2b->nr_pages = 0xFFFF;
+    c2ps = c2b->c2ps;
+    c2b->c2ps = NULL;
     /* Changes to freelists under freelist_lock */
     spin_lock(&castle_cache_freelist_lock);
     /* Free all the c2ps. */
@@ -1469,9 +1471,8 @@ static void castle_cache_block_free(c2_block_t *c2b)
     /* Then put the block on its freelist */
     __castle_cache_block_freelist_add(c2b);
     spin_unlock(&castle_cache_freelist_lock);
-    /* Free the c2ps array */
-    castle_free(c2b->c2ps);
-    c2b->c2ps = NULL;
+    /* Free the c2ps array. By this point, we must not use c2b any more. */
+    castle_free(c2ps);
 }
 
 static inline int c2b_busy(c2_block_t *c2b)
