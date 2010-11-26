@@ -500,6 +500,8 @@ struct castle_component_tree {
     uint8_t             dynamic;           /* 1 - dynamic modlist btree, 0 - merge result */ 
     da_id_t             da;
     uint8_t             level;
+    uint8_t             new_ct;            /* Marked for cts which are not yet
+                                            * flushed onto disk. */
     struct rw_semaphore lock;              /* Protects root_node, tree depth & last_node  */
     uint8_t             tree_depth;
     c_ext_pos_t         root_node;
