@@ -2434,8 +2434,7 @@ static void castle_da_foreach_tree(struct castle_double_array *da,
     struct list_head *lh, *t;
     int i, j;
 
-    /* No need to get DA lock any more. Tree additions and deletions are done
-     * under castle_ctrl_lock. */
+    castle_da_lock(da);
     for(i=0; i<MAX_DA_LEVEL; i++)
     {
         j = 0;
@@ -2443,10 +2442,15 @@ static void castle_da_foreach_tree(struct castle_double_array *da,
         {
             ct = list_entry(lh, struct castle_component_tree, da_list); 
             if(fn(da, ct, j, token))
+            {
+                goto out;
                 return;
+            }
             j++;
         }
     }
+out:
+    castle_da_unlock(da);
 }
 
 static int castle_ct_hash_destroy_check(struct castle_component_tree *ct, void *ct_hash)
@@ -2518,6 +2522,8 @@ static int castle_da_tree_writeback(struct castle_double_array *da,
     if ((ct->btree_type == RW_VLBA_TREE_TYPE) && !castle_da_exiting)
         return 0;
 
+    if (da) castle_da_unlock(da);
+
     mutex_lock(&ct->lo_mutex);
     list_for_each_safe(lh, tmp, &ct->large_objs)
     {
@@ -2530,6 +2536,8 @@ static int castle_da_tree_writeback(struct castle_double_array *da,
 
     castle_da_ct_marshall(&mstore_entry, ct); 
     castle_mstore_entry_insert(castle_tree_store, &mstore_entry);
+
+    if (da) castle_da_lock(da);
 
     return 0;
 }
