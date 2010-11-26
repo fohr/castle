@@ -940,9 +940,8 @@ struct castle_slave {
     struct castle_slave_superblock  cs_superblock;
     struct castle_fs_superblock     fs_superblock;
     struct mutex                    sblk_lock;
-#ifdef CASTLE_DEBUG
     c_chk_cnt_t                     disk_size; /* in chunks; max_chk_num + 1 */
-#endif
+    atomic_t                        free_chk_cnt;
 };
 
 struct castle_slaves {

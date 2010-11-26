@@ -78,6 +78,7 @@ c_chk_seq_t castle_freespace_slave_chunks_alloc(struct castle_slave    *cs,
     chk_seq.first_chk        = *cons_chk;
     chk_seq.count            = CHKS_PER_SLOT;
     freespace->free_chk_cnt -= CHKS_PER_SLOT;
+    atomic_sub(CHKS_PER_SLOT, &cs->free_chk_cnt);
     freespace->cons          = (freespace->cons + 1) % freespace->max_entries;
     freespace->nr_entries--;
     
@@ -162,6 +163,7 @@ void castle_freespace_slave_chunk_free(struct castle_slave      *cs,
     }
 
     freespace->free_chk_cnt += chk_seq.count;
+    atomic_add(chk_seq.count, &cs->free_chk_cnt);
     freespace->nr_entries += nr_sup_chunks;
 
     if ((freespace->cons == ((freespace->prod + 1) % freespace->max_entries)) && 
@@ -210,6 +212,8 @@ int castle_freespace_slave_init(struct castle_slave *cs, int fresh)
     }
     mutex_init(&cs->freespace_lock);
 
+    cs->disk_size = freespace->disk_size;
+    atomic_set(&cs->free_chk_cnt, freespace->free_chk_cnt);
     printk("Init Disk %d\n\tsize %u chunks\n\tlist size: %u\n", 
           cs->id, 
           freespace->disk_size,
@@ -224,9 +228,6 @@ int castle_freespace_slave_init(struct castle_slave *cs, int fresh)
                          (c_chk_seq_t){FREE_SPACE_START, nr_chunks});
 
     cs->frozen_prod = cs->prev_prod = freespace->prod;
-#ifdef CASTLE_DEBUG
-    cs->disk_size = nr_chunks + FREE_SPACE_START;
-#endif
 
     return 0;
 }
@@ -235,15 +236,11 @@ void castle_freespace_summary_get(struct castle_slave *cs,
                                   c_chk_cnt_t         *free_cnt,
                                   c_chk_cnt_t         *size)
 {
-    castle_freespace_t *freespace = freespace_sblk_get(cs);
-
     if (free_cnt)
-        *free_cnt = freespace->free_chk_cnt;
+        *free_cnt = atomic_read(&cs->free_chk_cnt);
     
     if (size)
-        *size = freespace->disk_size;
-
-    freespace_sblk_put(cs, 0);
+        *size = cs->disk_size;
 }
 
 static int castle_freespace_slave_writeback(struct castle_slave *cs, void *unused)
