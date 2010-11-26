@@ -528,6 +528,9 @@ int c2b_locked(c2_block_t *c2b)
     return atomic_read(&c2b->lock_cnt) != 0;
 }
 
+/**
+ * dirty_c2b: mark c2b and associated c2ps dirty
+ */
 void dirty_c2b(c2_block_t *c2b)
 {
     unsigned long flags;
@@ -655,6 +658,12 @@ static void c2b_multi_io_end(struct bio *bio, int err)
 #endif
 }
 
+/**
+ * submit_c2b_io: allocate bio for pages & hand-off to Linux block layer
+ * @disk_chk: Chunk to be IOed to
+ * @pages:    Array of pages to be used for IO 
+ * @nr_pages: Size of @pages array
+ */
 void submit_c2b_io(int           rw, 
                    c2_block_t   *c2b, 
                    c_ext_pos_t   cep, 
@@ -680,7 +689,7 @@ void submit_c2b_io(int           rw,
         c2p = (c2_page_t *)pages[i]->lru.next;
         if(!EXT_POS_EQUAL(c2p->cep, dcep))
         {
-            printk("Unmattching ceps "cep_fmt_str", "cep_fmt_str_nl,
+            printk("Unmatching ceps "cep_fmt_str", "cep_fmt_str_nl,
                 cep2str(c2p->cep), cep2str(dcep));
             BUG();
         }
@@ -719,7 +728,7 @@ void submit_c2b_io(int           rw,
     bio->bi_end_io  = c2b_multi_io_end;
     bio->bi_private = bio_info;
  
-    /* Submit. */
+    /* Hand off to Linux block layer */
     submit_bio(rw, bio);
 }
 
@@ -755,6 +764,11 @@ typedef struct castle_io_array {
     int next_idx;
 } c_io_array_t;
 
+/**
+ * c_io_array_submit: dispatches k copies of the I/O
+ *
+ * See also submit_c2b_io().
+ */
 static inline void c_io_array_submit(int rw, 
                                      c2_block_t *c2b, 
                                      c_disk_chk_t *chunks, 
@@ -791,6 +805,9 @@ static inline void c_io_array_init(c_io_array_t *array)
     array->next_idx = 0;
 }
 
+/**
+ * c_io_array_page_add: add page to array
+ */
 static inline int c_io_array_page_add(c_io_array_t *array, 
                                       c_ext_pos_t cep, 
                                       c_chk_t logical_chunk, 
@@ -822,9 +839,20 @@ static inline int c_io_array_page_add(c_io_array_t *array,
     array->io_pages[array->next_idx] = page;
     array->next_idx++;
 
-    return 0;
+    return EXIT_SUCCESS;
 }
 
+/**
+ * submit_c2b_rda: generates I/O for disk block(s) associated with the c2b.
+ *
+ * Iterates over passed c2b's c2ps (ignoring those that are clean/uptodate for WRITEs/READs)
+ * Populates array of pages from c2ps
+ * Dispatches array once it reaches the a chunk boundry
+ * Continues until whole c2b has been dispatched
+ *
+ * See also c_io_array_init(), c_io_array_page_add(), c_io_array_submit().
+ *
+ */
 static int submit_c2b_rda(int rw, c2_block_t *c2b)
 {
     c2_page_t    *c2p;
@@ -863,9 +891,13 @@ static int submit_c2b_rda(int rw, c2_block_t *c2b)
             goto next_page;
 
         /* If we are not skipping, add the page to io array. */ 
-        if(c_io_array_page_add(&io_array, cur_cep, cur_chk, page))
+        if(c_io_array_page_add(&io_array, cur_cep, cur_chk, page) != EXIT_SUCCESS)
         {
-            /* We've got physical chunks for last_chk (logical chunk), this should
+	        /* Failed to add this page to the array (see return code for reason).
+	         * Dispatch the current array, initialise a new one and
+	         * attempt to add the page to the new array.
+             *
+             * We've got physical chunks for last_chk (logical chunk), this should
                match with the logical chunk stored in io_array. */ 
             BUG_ON(io_array.chunk != last_chk);
             /* Submit the array. */
@@ -915,6 +947,13 @@ next_page:
     return 0;
 }
 
+/**
+ * submit_c2b: submit asynchronous c2b I/O
+ *
+ * Updates statistics before passing I/O to submit_c2b_rda().
+ *
+ * See also submit_c2b_rda().
+ */
 int submit_c2b(int rw, c2_block_t *c2b)
 {
 	BUG_ON(!c2b->end_io);
@@ -939,6 +978,12 @@ int submit_c2b(int rw, c2_block_t *c2b)
     return submit_c2b_rda(rw, c2b);
 }
 
+/**
+ * castle_cache_sync_io_end: callback for synchronous c2b I/O completion
+ * @c2b: completed c2b I/O
+ *
+ * Wakes thread that dispatched the synchronous I/O
+ */
 static void castle_cache_sync_io_end(c2_block_t *c2b)
 {
     struct completion *completion = c2b->private;
@@ -946,6 +991,13 @@ static void castle_cache_sync_io_end(c2_block_t *c2b)
     complete(completion);
 }
 
+/**
+ * submit_c2b_sync: submit synchronous c2b I/O
+ *
+ * Dispatches cache block-I/O then blocks for completion.
+ *
+ * See also submit_c2b().
+ */
 int submit_c2b_sync(int rw, c2_block_t *c2b)
 {
     struct completion completion;
