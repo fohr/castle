@@ -1158,4 +1158,12 @@ extern int low_disk_space;
 
 int castle_superblocks_writeback(uint32_t version);
 
+void castle_ctrl_lock               (void);
+void castle_ctrl_unlock             (void);
+int  castle_ctrl_is_locked          (void);
+
+#define CASTLE_TRANSACTION_BEGIN    castle_ctrl_lock()
+#define CASTLE_TRANSACTION_END      castle_ctrl_unlock()
+#define CASTLE_IN_TRANSACTION       castle_ctrl_is_locked()
+
 #endif /* __CASTLE_H__ */

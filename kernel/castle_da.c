@@ -1781,7 +1781,7 @@ static struct castle_component_tree* castle_da_merge_package(struct castle_da_me
     printk("Finishing merge of ct1=%d, ct2=%d, new tree=%d\n", 
             merge->in_tree1->seq, merge->in_tree2->seq, out_tree->seq);
     debug("Adding to doubling array, level: %d\n", out_tree->level);
-    castle_ctrl_lock();
+    CASTLE_TRANSACTION_BEGIN;
     /* Schedule flush of new CT onto disk. */
     castle_cache_extent_flush_schedule(merge->tree_ext_fs.ext_id, 0,
                                        atomic64_read(&merge->tree_ext_fs.used));
@@ -1800,7 +1800,7 @@ static struct castle_component_tree* castle_da_merge_package(struct castle_da_me
     castle_component_tree_del(merge->da, merge->in_tree1);
     castle_component_tree_del(merge->da, merge->in_tree2);
     castle_component_tree_add(merge->da, out_tree, 0 /* not in init */);
-    castle_ctrl_unlock();
+    CASTLE_TRANSACTION_END;
     castle_da_merging_clear(merge->da);
     /* We are holding ref to this DA, therefore it is safe to schedule the check. */
     castle_da_merge_check(merge->da);
@@ -3224,15 +3224,15 @@ static void castle_da_put(struct castle_double_array *da)
         BUG_ON(da->attachment_cnt != 0);
         BUG_ON((da->hash_list.next != NULL) || (da->hash_list.prev != NULL));
         BUG_ON(!castle_da_deleted(da));
-        castle_ctrl_lock();
+        CASTLE_TRANSACTION_BEGIN;
         castle_da_destroy_complete(da);
-        castle_ctrl_unlock();
+        CASTLE_TRANSACTION_END;
     }
 }
 
 static void castle_da_put_locked(struct castle_double_array *da)
 {
-    BUG_ON(!castle_ctrl_is_locked());
+    BUG_ON(!CASTLE_IN_TRANSACTION);
     if(atomic_dec_return(&da->ref_cnt) == 0)
     {
         /* Ref count dropped to zero -> delete. There should be no outstanding attachments. */

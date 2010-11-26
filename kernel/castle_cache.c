@@ -3408,7 +3408,7 @@ static int castle_periodic_checkpoint(void *unused)
             continue;
 
         printk("*****Checkpoint start**********\n");
-        castle_ctrl_lock();
+        CASTLE_TRANSACTION_BEGIN;
  
         fs_sb = castle_fs_superblocks_get();
         version = fs_sb->fs_version;
@@ -3422,7 +3422,8 @@ static int castle_periodic_checkpoint(void *unused)
 
         list_replace(&castle_cache_flush_list, &flush_list);
         INIT_LIST_HEAD(&castle_cache_flush_list);
-        castle_ctrl_unlock();
+
+        CASTLE_TRANSACTION_END;
 
         /* Flush all marked extents from cache. */
         castle_cache_extents_flush(&flush_list);

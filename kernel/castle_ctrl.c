@@ -271,7 +271,7 @@ static int castle_collection_writeback(struct castle_attachment *ca)
 }
 
 int castle_attachments_writeback(void)
-{ /* Should be called with castle_ctrl_lock() held. */
+{ /* Should be called in CASTLE_TRANSACTION. */
     struct castle_attachment *ca;
     struct list_head *lh;
 
@@ -283,7 +283,7 @@ int castle_attachments_writeback(void)
         return -ENOMEM;
     
     /* Note: Shouldn't take attachments lock here. Writeback function can sleep.
-     * This function should be called with castle_ctrl_lock() and it guarentees
+     * This function should be called in CASTLE_TRANSACTION and it guarentees
      * no changes to attachments list. */
     /* Writeback attachments. */
     list_for_each(lh, &castle_attachments.attachments)
@@ -505,7 +505,7 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
         return -EINVAL;
     }
 
-    castle_ctrl_lock();
+    CASTLE_TRANSACTION_BEGIN;
     debug("Lock taken: in_atomic=%d.\n", in_atomic());
     debug("IOCTL Cmd: %u\n", (uint32_t)ioctl.cmd);
     switch(ioctl.cmd)
@@ -617,7 +617,7 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
             err = -EINVAL;
             goto err;
     }
-    castle_ctrl_unlock();
+    CASTLE_TRANSACTION_END;
 
     /* Copy the results back */
     if(copy_to_user(udata, &ioctl, sizeof(cctrl_ioctl_t)))
@@ -626,7 +626,7 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
     return 0;
     
 err:
-    castle_ctrl_unlock();
+    CASTLE_TRANSACTION_END;
     return err;
 }
 
@@ -673,6 +673,6 @@ void castle_control_fini(void)
     if((ret = misc_deregister(&castle_control))) 
         printk("Could not unregister castle control node (%d).\n", ret);
     /* Sleep waiting for the last ctrl op to complete, if there is one */
-    castle_ctrl_lock();
-    castle_ctrl_unlock();
+    CASTLE_TRANSACTION_BEGIN;
+    CASTLE_TRANSACTION_END;
 }

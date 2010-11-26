@@ -273,7 +273,7 @@ static int castle_version_writeback(struct castle_version *v, void *unused)
 }
 
 int castle_versions_writeback(void)
-{ /* Should be called with castle_ctrl_lock() held. */
+{ /* Should be called in CASTLE_TRANSACTION. */
     BUG_ON(castle_versions_mstore);
 
     castle_versions_mstore = 
