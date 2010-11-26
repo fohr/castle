@@ -1,7 +1,7 @@
 #!/bin/bash
 # Relies on tests script machinery to do that 
 
-set -eu
+set -e
 
 . /usr/share/castle-fs/init-utils
 
