@@ -36,6 +36,7 @@
 
 #define USED                 __attribute__((used))
 //#define PACKED               __attribute__((packed))
+#define EXIT_SUCCESS         (0)
 
 #define STATIC_BUG_ON_HELPER(expr) \
         (!!sizeof (struct { unsigned int static_assertion_error: (expr) ? -1 : 1; }))
