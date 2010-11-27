@@ -1231,8 +1231,8 @@ static c2_block_t* castle_cache_block_freelist_get(void)
         lh = castle_cache_block_freelist.next;
         list_del(lh);
         c2b = list_entry(lh, c2_block_t, free);
+        castle_cache_block_freelist_size--;
     }
-    castle_cache_block_freelist_size--;
     spin_unlock(&castle_cache_freelist_lock);
 
     return c2b;
