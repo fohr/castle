@@ -2676,6 +2676,9 @@ static void castle_cache_freelists_fini(void)
 #endif
 }
 
+/* For the moment, use double the vmap space to allow for overlapping cache blocks */
+#define FUDGE castle_cache_fast_vmap_c2bs
+
 static int castle_cache_fast_vmap_init(void)
 {
     struct page **pgs_array;
@@ -2689,13 +2692,13 @@ static int castle_cache_fast_vmap_init(void)
                                         castle_btree_type_get(RW_VLBA_TREE_TYPE)->node_size);
     /* We need cache_castle_size / 512 for this array, if that's too big, we
        could use the cache pages themselves */
-    pgs_array = castle_vmalloc(PAGES_PER_C2P * 
+    pgs_array = castle_vmalloc(FUDGE * PAGES_PER_C2P * 
                                castle_cache_page_freelist_size * 
                                sizeof(struct page *));
     if(!pgs_array)
         return -ENOMEM;
 
-    nr_fast_vmap_slots = castle_cache_page_freelist_size / castle_cache_fast_vmap_c2bs;
+    nr_fast_vmap_slots = FUDGE *castle_cache_page_freelist_size / castle_cache_fast_vmap_c2bs;
     castle_cache_fast_vmap_freelist = castle_vmalloc((nr_fast_vmap_slots + 1) * sizeof(uint32_t)); 
     if(!castle_cache_fast_vmap_freelist)
     {
@@ -2709,17 +2712,20 @@ static int castle_cache_fast_vmap_init(void)
     list_for_each(l, &castle_cache_page_freelist)
     {
         c2p = list_entry(l, c2_page_t, list);
-        for(j=0; j<PAGES_PER_C2P; j++) 
+        for(j=0; j<PAGES_PER_C2P; j++)
+	{
             pgs_array[i++] = c2p->pages[j];
+            pgs_array[i++] = c2p->pages[j];
+	}
     }
 
     castle_cache_fast_vmap_vstart = vmap(pgs_array, 
-                                         PAGES_PER_C2P * castle_cache_page_freelist_size, 
+                                         FUDGE * PAGES_PER_C2P * castle_cache_page_freelist_size, 
                                          VM_READ|VM_WRITE, 
                                          PAGE_KERNEL);
 #ifdef CASTLE_DEBUG
     castle_cache_fast_vmap_vend = castle_cache_fast_vmap_vstart + 
-                                  castle_cache_page_freelist_size * PAGES_PER_C2P * PAGE_SIZE;
+                                  FUDGE * castle_cache_page_freelist_size * PAGES_PER_C2P * PAGE_SIZE;
 #endif
     /* This gives as an area in virtual memory in which we'll keep mapping multi-page c2bs.
        In order for this to work we need to unmap all the pages, but tricking the vmalloc.c
@@ -2728,7 +2734,7 @@ static int castle_cache_fast_vmap_init(void)
      */
     BUG_ON(!castle_cache_fast_vmap_vstart);
     castle_unmap_vm_area(castle_cache_fast_vmap_vstart, 
-                         PAGES_PER_C2P * castle_cache_page_freelist_size);
+                         FUDGE * PAGES_PER_C2P * castle_cache_page_freelist_size);
     /* Init the freelist. The freelist needs to contain ids which will always put us within
        the vmap area created above. */
     for(i=0; i<nr_fast_vmap_slots; i++)
