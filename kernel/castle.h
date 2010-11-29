@@ -21,7 +21,11 @@
 #undef BUG
 #undef BUG_ON
 
-#define BUG()            panic("castle panic %s:%d\n", __FILE__, __LINE__)
+#define BUG()                                                           \
+            do {                                                        \
+                    WARN_ON(1);                                         \
+                    panic("castle panic %s:%d\n", __FILE__, __LINE__);  \
+            } while(0)
 #define BUG_ON(_cond)    do{if(_cond) BUG();} while(0)
 
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,18)
@@ -36,6 +40,7 @@
 
 #define USED                 __attribute__((used))
 //#define PACKED               __attribute__((packed))
+#define EXIT_SUCCESS         (0)
 
 #define STATIC_BUG_ON_HELPER(expr) \
         (!!sizeof (struct { unsigned int static_assertion_error: (expr) ? -1 : 1; }))
@@ -499,6 +504,8 @@ struct castle_component_tree {
     uint8_t             dynamic;           /* 1 - dynamic modlist btree, 0 - merge result */ 
     da_id_t             da;
     uint8_t             level;
+    uint8_t             new_ct;            /* Marked for cts which are not yet
+                                            * flushed onto disk. */
     struct rw_semaphore lock;              /* Protects root_node, tree depth & last_node  */
     uint8_t             tree_depth;
     c_ext_pos_t         root_node;
@@ -932,14 +939,15 @@ struct castle_slave {
     c_disk_chk_t                   *sup_ext_maps;
     struct mutex                    freespace_lock;
     castle_freespace_t              freespace;
+    c_chk_cnt_t                     prev_prod;
+    c_chk_cnt_t                     frozen_prod;
     struct castle_slave_block_cnts  block_cnts;
     unsigned long                   last_access;
     struct castle_slave_superblock  cs_superblock;
     struct castle_fs_superblock     fs_superblock;
     struct mutex                    sblk_lock;
-#ifdef CASTLE_DEBUG
     c_chk_cnt_t                     disk_size; /* in chunks; max_chk_num + 1 */
-#endif
+    atomic_t                        free_chk_cnt;
 };
 
 struct castle_slaves {
@@ -1155,5 +1163,13 @@ typedef struct castle_object_iterator {
 extern int low_disk_space;
 
 int castle_superblocks_writeback(uint32_t version);
+
+void castle_ctrl_lock               (void);
+void castle_ctrl_unlock             (void);
+int  castle_ctrl_is_locked          (void);
+
+#define CASTLE_TRANSACTION_BEGIN    castle_ctrl_lock()
+#define CASTLE_TRANSACTION_END      castle_ctrl_unlock()
+#define CASTLE_IN_TRANSACTION       castle_ctrl_is_locked()
 
 #endif /* __CASTLE_H__ */

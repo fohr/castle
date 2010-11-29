@@ -1343,7 +1343,7 @@ static int castle_da_iterators_create(struct castle_da_merge *merge)
     while(atomic_read(&merge->in_tree1->write_ref_count) || 
           atomic_read(&merge->in_tree2->write_ref_count) )
     {
-        printk("Found non-zero write ref count on a tree scheduled for merge (%d, %d)\n",
+        debug("Found non-zero write ref count on a tree scheduled for merge (%d, %d)\n",
                 atomic_read(&merge->in_tree1->write_ref_count), 
                 atomic_read(&merge->in_tree2->write_ref_count));
         msleep(10);
@@ -1781,12 +1781,8 @@ static struct castle_component_tree* castle_da_merge_package(struct castle_da_me
     printk("Finishing merge of ct1=%d, ct2=%d, new tree=%d\n", 
             merge->in_tree1->seq, merge->in_tree2->seq, out_tree->seq);
     debug("Adding to doubling array, level: %d\n", out_tree->level);
-    castle_ctrl_lock();
-    /* Schedule flush of new CT onto disk. */
-    castle_cache_extent_flush_schedule(merge->tree_ext_fs.ext_id, 0,
-                                       atomic64_read(&merge->tree_ext_fs.used));
-    castle_cache_extent_flush_schedule(merge->data_ext_fs.ext_id, 0,
-                                       atomic64_read(&merge->data_ext_fs.used));
+
+    CASTLE_TRANSACTION_BEGIN;
 
     castle_da_lock(merge->da);
     BUG_ON((merge->da->id != merge->in_tree1->da) ||
@@ -1800,7 +1796,9 @@ static struct castle_component_tree* castle_da_merge_package(struct castle_da_me
     castle_component_tree_del(merge->da, merge->in_tree1);
     castle_component_tree_del(merge->da, merge->in_tree2);
     castle_component_tree_add(merge->da, out_tree, 0 /* not in init */);
-    castle_ctrl_unlock();
+
+    CASTLE_TRANSACTION_END;
+
     castle_da_merging_clear(merge->da);
     /* We are holding ref to this DA, therefore it is safe to schedule the check. */
     castle_da_merge_check(merge->da);
@@ -2231,6 +2229,7 @@ static void castle_component_tree_add(struct castle_double_array *da,
     BUG_ON(da->id != ct->da);
     BUG_ON(ct->level >= MAX_DA_LEVEL);
     BUG_ON(!castle_da_is_locked(da));
+    BUG_ON(!CASTLE_IN_TRANSACTION);
     /* If there is something on the list, check that the sequence number 
        of the tree we are inserting is greater (i.e. enforce rev seq number
        ordering in component trees in a given level). Don't check that during
@@ -2251,6 +2250,7 @@ static void castle_component_tree_del(struct castle_double_array *da,
 {
     BUG_ON(da->id != ct->da);
     BUG_ON(!castle_da_is_locked(da));
+    BUG_ON(!CASTLE_IN_TRANSACTION);
    
     list_del(&ct->da_list); 
     ct->da_list.next = NULL;
@@ -2310,6 +2310,7 @@ int castle_ct_large_obj_add(c_ext_id_t              ext_id,
     return 0;
 }
 
+/* Note: Should be called with castle_da_lock held. */
 void castle_ct_get(struct castle_component_tree *ct, int write)
 {
     atomic_inc(&ct->ref_count);
@@ -2408,6 +2409,7 @@ static da_id_t castle_da_ct_unmarshall(struct castle_component_tree *ct,
     ct->root_node   		= ctm->root_node;
     ct->first_node  		= ctm->first_node;
     ct->last_node   		= ctm->last_node;
+    ct->new_ct              = 0;
     atomic64_set(&ct->large_ext_chk_cnt, ctm->large_ext_chk_cnt);
     init_rwsem(&ct->lock);
     mutex_init(&ct->lo_mutex);
@@ -2434,8 +2436,7 @@ static void castle_da_foreach_tree(struct castle_double_array *da,
     struct list_head *lh, *t;
     int i, j;
 
-    /* No need to get DA lock any more. Tree additions and deletions are done
-     * under castle_ctrl_lock. */
+    castle_da_lock(da);
     for(i=0; i<MAX_DA_LEVEL; i++)
     {
         j = 0;
@@ -2443,10 +2444,15 @@ static void castle_da_foreach_tree(struct castle_double_array *da,
         {
             ct = list_entry(lh, struct castle_component_tree, da_list); 
             if(fn(da, ct, j, token))
+            {
+                goto out;
                 return;
+            }
             j++;
         }
     }
+out:
+    castle_da_unlock(da);
 }
 
 static int castle_ct_hash_destroy_check(struct castle_component_tree *ct, void *ct_hash)
@@ -2514,9 +2520,30 @@ static int castle_da_tree_writeback(struct castle_double_array *da,
     struct castle_clist_entry mstore_entry;
     struct list_head *lh, *tmp;
 
-    /* Don't flush RW trees in periodic checkpoints. */
-    if ((ct->btree_type == RW_VLBA_TREE_TYPE) && !castle_da_exiting)
-        return 0;
+    /* For periodic checkpoints flush component trees onto disk. */
+    if (!castle_da_exiting)
+    {
+        /* Don't write back T0. */
+        if (ct->level == 0)
+            return 0;
+
+        /* Don't write back trees with outstanding writes. */
+        if (atomic_read(&ct->write_ref_count) != 0)
+            return 0;
+
+        /* Mark new trees for flush. */
+        if (ct->new_ct)
+        {
+            /* Schedule flush of new CT onto disk. */
+            castle_cache_extent_flush_schedule(ct->tree_ext_fs.ext_id, 0,
+                                               atomic64_read(&ct->tree_ext_fs.used));
+            castle_cache_extent_flush_schedule(ct->data_ext_fs.ext_id, 0,
+                                               atomic64_read(&ct->data_ext_fs.used));
+            ct->new_ct = 0;
+        }
+    }
+
+    if (da) castle_da_unlock(da);
 
     mutex_lock(&ct->lo_mutex);
     list_for_each_safe(lh, tmp, &ct->large_objs)
@@ -2530,6 +2557,8 @@ static int castle_da_tree_writeback(struct castle_double_array *da,
 
     castle_da_ct_marshall(&mstore_entry, ct); 
     castle_mstore_entry_insert(castle_tree_store, &mstore_entry);
+
+    if (da) castle_da_lock(da);
 
     return 0;
 }
@@ -2731,6 +2760,7 @@ static struct castle_component_tree* castle_ct_alloc(struct castle_double_array 
     ct->root_node   = INVAL_EXT_POS;
     ct->first_node  = INVAL_EXT_POS;
     ct->last_node   = INVAL_EXT_POS;
+    ct->new_ct      = 1;
     init_rwsem(&ct->lock);
     mutex_init(&ct->lo_mutex);
     atomic64_set(&ct->node_count, 0); 
@@ -2745,7 +2775,7 @@ static struct castle_component_tree* castle_ct_alloc(struct castle_double_array 
     return ct;
 }
     
-static int castle_da_rwct_make(struct castle_double_array *da)
+static int castle_da_rwct_make(struct castle_double_array *da, int new_da)
 {
     struct castle_component_tree *ct, *old_ct;
     c2_block_t *c2b;
@@ -2792,6 +2822,7 @@ static int castle_da_rwct_make(struct castle_double_array *da)
     debug("Added component tree seq=%d, root_node=(0x%x, 0x%x), it's threaded onto da=%p, level=%d\n",
             ct->seq, c2b->cep.ext_id, c2b->cep.offset, da, ct->level);
     /* Move the last rwct (if one exists) to level 1 */
+    if (!new_da) CASTLE_TRANSACTION_BEGIN;
     castle_da_lock(da);
     if(!list_empty(&da->trees[0]))
     {
@@ -2802,6 +2833,7 @@ static int castle_da_rwct_make(struct castle_double_array *da)
     }
     /* Thread CT onto level 0 list */
     castle_component_tree_add(da, ct, 0 /* not in init */);
+    if (!new_da) CASTLE_TRANSACTION_END;
     /* DA is attached, therefore we must be holding a ref, therefore it is safe to schedule
        the merge check. */
     castle_da_merge_check(da);
@@ -2830,7 +2862,7 @@ int castle_double_array_make(da_id_t da_id, version_t root_version)
     da->id = da_id;
     da->root_version = root_version;
     /* Make RW tree. */
-    ret = castle_da_rwct_make(da);
+    ret = castle_da_rwct_make(da, 1);
     if(ret)
     {
         printk("Exiting from failed ct create.\n");
@@ -2956,7 +2988,7 @@ new_ct:
     BUG_ON(!da);
     debug("Number of items in component tree %d, # items %ld. Trying to add a new rwct.\n",
             ct->seq, atomic64_read(&ct->item_count));
-    ret = castle_da_rwct_make(da);
+    ret = castle_da_rwct_make(da, 0);
     if((ret == 0) || (ret == -EAGAIN))
     {
         castle_ct_put(ct, write);
@@ -3216,15 +3248,15 @@ static void castle_da_put(struct castle_double_array *da)
         BUG_ON(da->attachment_cnt != 0);
         BUG_ON((da->hash_list.next != NULL) || (da->hash_list.prev != NULL));
         BUG_ON(!castle_da_deleted(da));
-        castle_ctrl_lock();
+        CASTLE_TRANSACTION_BEGIN;
         castle_da_destroy_complete(da);
-        castle_ctrl_unlock();
+        CASTLE_TRANSACTION_END;
     }
 }
 
 static void castle_da_put_locked(struct castle_double_array *da)
 {
-    BUG_ON(!castle_ctrl_is_locked());
+    BUG_ON(!CASTLE_IN_TRANSACTION);
     if(atomic_dec_return(&da->ref_cnt) == 0)
     {
         /* Ref count dropped to zero -> delete. There should be no outstanding attachments. */

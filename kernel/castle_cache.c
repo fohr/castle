@@ -528,6 +528,9 @@ int c2b_locked(c2_block_t *c2b)
     return atomic_read(&c2b->lock_cnt) != 0;
 }
 
+/**
+ * dirty_c2b: mark c2b and associated c2ps dirty
+ */
 void dirty_c2b(c2_block_t *c2b)
 {
     unsigned long flags;
@@ -655,6 +658,12 @@ static void c2b_multi_io_end(struct bio *bio, int err)
 #endif
 }
 
+/**
+ * submit_c2b_io: allocate bio for pages & hand-off to Linux block layer
+ * @disk_chk: Chunk to be IOed to
+ * @pages:    Array of pages to be used for IO 
+ * @nr_pages: Size of @pages array
+ */
 void submit_c2b_io(int           rw, 
                    c2_block_t   *c2b, 
                    c_ext_pos_t   cep, 
@@ -680,7 +689,7 @@ void submit_c2b_io(int           rw,
         c2p = (c2_page_t *)pages[i]->lru.next;
         if(!EXT_POS_EQUAL(c2p->cep, dcep))
         {
-            printk("Unmattching ceps "cep_fmt_str", "cep_fmt_str_nl,
+            printk("Unmatching ceps "cep_fmt_str", "cep_fmt_str_nl,
                 cep2str(c2p->cep), cep2str(dcep));
             BUG();
         }
@@ -719,7 +728,7 @@ void submit_c2b_io(int           rw,
     bio->bi_end_io  = c2b_multi_io_end;
     bio->bi_private = bio_info;
  
-    /* Submit. */
+    /* Hand off to Linux block layer */
     submit_bio(rw, bio);
 }
 
@@ -755,6 +764,11 @@ typedef struct castle_io_array {
     int next_idx;
 } c_io_array_t;
 
+/**
+ * c_io_array_submit: dispatches k copies of the I/O
+ *
+ * See also submit_c2b_io().
+ */
 static inline void c_io_array_submit(int rw, 
                                      c2_block_t *c2b, 
                                      c_disk_chk_t *chunks, 
@@ -791,6 +805,9 @@ static inline void c_io_array_init(c_io_array_t *array)
     array->next_idx = 0;
 }
 
+/**
+ * c_io_array_page_add: add page to array
+ */
 static inline int c_io_array_page_add(c_io_array_t *array, 
                                       c_ext_pos_t cep, 
                                       c_chk_t logical_chunk, 
@@ -822,9 +839,20 @@ static inline int c_io_array_page_add(c_io_array_t *array,
     array->io_pages[array->next_idx] = page;
     array->next_idx++;
 
-    return 0;
+    return EXIT_SUCCESS;
 }
 
+/**
+ * submit_c2b_rda: generates I/O for disk block(s) associated with the c2b.
+ *
+ * Iterates over passed c2b's c2ps (ignoring those that are clean/uptodate for WRITEs/READs)
+ * Populates array of pages from c2ps
+ * Dispatches array once it reaches the a chunk boundry
+ * Continues until whole c2b has been dispatched
+ *
+ * See also c_io_array_init(), c_io_array_page_add(), c_io_array_submit().
+ *
+ */
 static int submit_c2b_rda(int rw, c2_block_t *c2b)
 {
     c2_page_t    *c2p;
@@ -863,9 +891,13 @@ static int submit_c2b_rda(int rw, c2_block_t *c2b)
             goto next_page;
 
         /* If we are not skipping, add the page to io array. */ 
-        if(c_io_array_page_add(&io_array, cur_cep, cur_chk, page))
+        if(c_io_array_page_add(&io_array, cur_cep, cur_chk, page) != EXIT_SUCCESS)
         {
-            /* We've got physical chunks for last_chk (logical chunk), this should
+	        /* Failed to add this page to the array (see return code for reason).
+	         * Dispatch the current array, initialise a new one and
+	         * attempt to add the page to the new array.
+             *
+             * We've got physical chunks for last_chk (logical chunk), this should
                match with the logical chunk stored in io_array. */ 
             BUG_ON(io_array.chunk != last_chk);
             /* Submit the array. */
@@ -915,6 +947,13 @@ next_page:
     return 0;
 }
 
+/**
+ * submit_c2b: submit asynchronous c2b I/O
+ *
+ * Updates statistics before passing I/O to submit_c2b_rda().
+ *
+ * See also submit_c2b_rda().
+ */
 int submit_c2b(int rw, c2_block_t *c2b)
 {
 	BUG_ON(!c2b->end_io);
@@ -939,6 +978,12 @@ int submit_c2b(int rw, c2_block_t *c2b)
     return submit_c2b_rda(rw, c2b);
 }
 
+/**
+ * castle_cache_sync_io_end: callback for synchronous c2b I/O completion
+ * @c2b: completed c2b I/O
+ *
+ * Wakes thread that dispatched the synchronous I/O
+ */
 static void castle_cache_sync_io_end(c2_block_t *c2b)
 {
     struct completion *completion = c2b->private;
@@ -946,6 +991,13 @@ static void castle_cache_sync_io_end(c2_block_t *c2b)
     complete(completion);
 }
 
+/**
+ * submit_c2b_sync: submit synchronous c2b I/O
+ *
+ * Dispatches cache block-I/O then blocks for completion.
+ *
+ * See also submit_c2b().
+ */
 int submit_c2b_sync(int rw, c2_block_t *c2b)
 {
     struct completion completion;
@@ -1179,8 +1231,8 @@ static c2_block_t* castle_cache_block_freelist_get(void)
         lh = castle_cache_block_freelist.next;
         list_del(lh);
         c2b = list_entry(lh, c2_block_t, free);
+        castle_cache_block_freelist_size--;
     }
-    castle_cache_block_freelist_size--;
     spin_unlock(&castle_cache_freelist_lock);
 
     return c2b;
@@ -1194,11 +1246,14 @@ static void castle_cache_fast_vmap_freelist_add(uint32_t id)
     castle_cache_fast_vmap_freelist[0]    = id; 
 }
 
+/* For the moment, use double the vmap space to allow for overlapping cache blocks */
+#define FUDGE castle_cache_fast_vmap_c2bs
+
 static uint32_t castle_cache_fast_vmap_freelist_get(void)
 {
     uint32_t id;
 #ifdef CASTLE_DEBUG
-    int nr_vmap_slots = castle_cache_size / (PAGES_PER_C2P * castle_cache_fast_vmap_c2bs);
+    int nr_vmap_slots = FUDGE * castle_cache_size / (PAGES_PER_C2P * castle_cache_fast_vmap_c2bs);
 #endif
    
     id = castle_cache_fast_vmap_freelist[0];
@@ -1376,12 +1431,12 @@ static void castle_cache_block_free(c2_block_t *c2b)
 {
     struct list_head *lh, *lt;
     LIST_HEAD(freed_c2ps);
-    c2_page_t *c2p;
-    int i, c2ps;
+    c2_page_t *c2p, **c2ps;
+    int i, nr_c2ps;
 
-    c2ps = castle_cache_pages_to_c2ps(c2b->nr_pages);
-    if(c2ps == castle_cache_fast_vmap_c2bs)
-        castle_cache_fast_vunmap(c2b->buffer, PAGES_PER_C2P * c2ps);
+    nr_c2ps = castle_cache_pages_to_c2ps(c2b->nr_pages);
+    if(nr_c2ps == castle_cache_fast_vmap_c2bs)
+        castle_cache_fast_vunmap(c2b->buffer, PAGES_PER_C2P * nr_c2ps);
     else
     if(c2b->nr_pages > 1)
         vunmap(c2b->buffer);
@@ -1400,11 +1455,13 @@ static void castle_cache_block_free(c2_block_t *c2b)
         c2_pref_c2b_destroy(c2b);
     /* Add the pages back to the freelist */
     spin_lock(&castle_cache_page_hash_lock);
-    for(i=0; i<c2ps; i++)
+    for(i=0; i<nr_c2ps; i++)
         __castle_cache_c2p_put(c2b->c2ps[i], &freed_c2ps);
     spin_unlock(&castle_cache_page_hash_lock);
     /* For debugging only: it will be spotted quickly if nr_pages isn't reinited properly */
     c2b->nr_pages = 0xFFFF;
+    c2ps = c2b->c2ps;
+    c2b->c2ps = NULL;
     /* Changes to freelists under freelist_lock */
     spin_lock(&castle_cache_freelist_lock);
     /* Free all the c2ps. */
@@ -1417,9 +1474,8 @@ static void castle_cache_block_free(c2_block_t *c2b)
     /* Then put the block on its freelist */
     __castle_cache_block_freelist_add(c2b);
     spin_unlock(&castle_cache_freelist_lock);
-    /* Free the c2ps array */
-    castle_free(c2b->c2ps);
-    c2b->c2ps = NULL;
+    /* Free the c2ps array. By this point, we must not use c2b any more. */
+    castle_free(c2ps);
 }
 
 static inline int c2b_busy(c2_block_t *c2b)
@@ -1557,6 +1613,25 @@ c2_block_t* _castle_cache_block_get(c_ext_pos_t cep, int nr_pages, int transient
         }
 
         /* If we couldn't find in the hash, try allocating from the freelists. Get c2b first. */ 
+        /* TODO: Return NULL if extent doesn't exist any more. Make sure this
+         * doesnt break any of the clients. */
+#ifdef CASTLE_DEBUG
+        {
+            uint64_t ext_size;
+
+            /* Check sanity of CEP. */
+            ext_size = (uint64_t)castle_extent_size_get(cep.ext_id);
+            if (ext_size && 
+                ((ext_size * C_CHK_SIZE) < (cep.offset + (nr_pages * C_BLK_SIZE))))
+            {
+                printk("Couldnt create cache page of size %d at cep: "cep_fmt_str
+                       "on extent of size %llu chunks\n", nr_pages, __cep2str(cep), ext_size);
+                WARN_ON(1);
+                msleep(10000);
+                BUG();
+            }
+        }
+#endif
         do {
             debug("Trying to allocate c2b from freelist.\n");
             c2b = castle_cache_block_freelist_get();
@@ -2676,9 +2751,6 @@ static void castle_cache_freelists_fini(void)
 #endif
 }
 
-/* For the moment, use double the vmap space to allow for overlapping cache blocks */
-#define FUDGE castle_cache_fast_vmap_c2bs
-
 static int castle_cache_fast_vmap_init(void)
 {
     struct page **pgs_array;
@@ -2758,7 +2830,7 @@ static void castle_cache_fast_vmap_fini(void)
      */ 
 #ifdef CASTLE_DEBUG
 {
-    int nr_slots = castle_cache_size / (PAGES_PER_C2P * castle_cache_fast_vmap_c2bs);
+    int nr_slots = FUDGE * castle_cache_size / (PAGES_PER_C2P * castle_cache_fast_vmap_c2bs);
     int i = 0;
     while(castle_cache_fast_vmap_freelist[0] < nr_slots)
     {
@@ -3228,6 +3300,9 @@ int castle_checkpoint_version_inc(void)
     fs_version = fs_sb->fs_version;
     castle_fs_superblocks_put(fs_sb, 1);
 
+    /* Makes sure no parallel freespace operations happening. */
+    (void) castle_extents_super_block_get();
+
     list_for_each(lh, &castle_slaves.slaves)
     {
         cs = list_entry(lh, struct castle_slave, list);
@@ -3238,8 +3313,15 @@ int castle_checkpoint_version_inc(void)
             printk("%x:%x\n", fs_version, cs_sb->fs_version);
             BUG();
         }
+
+        /* As the flushed version is consistent now on disk, It is okay to
+         * overwrite the previous version now. Change freespace producer
+         * accordingly. */
+        cs->prev_prod = cs->frozen_prod;
         castle_slave_superblock_put(cs, 1);
     }
+
+    castle_extents_super_block_put(0);
 
     return 0;
 }
@@ -3305,7 +3387,7 @@ int castle_cache_extents_flush(struct list_head *flush_list)
         castle_free(entry);
     }
 
-    BUG_ON(!list_empty(&castle_cache_flush_list));
+    BUG_ON(!list_empty(flush_list));
 
     return 0;
 }
@@ -3333,7 +3415,7 @@ static int castle_periodic_checkpoint(void *unused)
             continue;
 
         printk("*****Checkpoint start**********\n");
-        castle_ctrl_lock();
+        CASTLE_TRANSACTION_BEGIN;
  
         fs_sb = castle_fs_superblocks_get();
         version = fs_sb->fs_version;
@@ -3347,7 +3429,8 @@ static int castle_periodic_checkpoint(void *unused)
 
         list_replace(&castle_cache_flush_list, &flush_list);
         INIT_LIST_HEAD(&castle_cache_flush_list);
-        castle_ctrl_unlock();
+
+        CASTLE_TRANSACTION_END;
 
         /* Flush all marked extents from cache. */
         castle_cache_extents_flush(&flush_list);

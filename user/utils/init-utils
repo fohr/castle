@@ -59,16 +59,26 @@ function unmount_kernel_fs {
     if kernel_fs_running; then 
         echo "Unmounting Kernel FS..."
 
-        rmmod castle_fs
-        
-        # Wait up to 5 seconds for the control file to disappear
-        for i in `seq 50`; do
-            if [ ! -e ${CONTROL_FILE} ]; then
-                break
-            fi
+        if [ "$RUNLEVEL" = 0 ] || [ "$RUNLEVEL" = 6 ]
+        then
+            echo "Looks like we're shutting down, will wait until castle-fs is unloaded (maybe forever)"
+            while [ -e $CONTROL_FILE ]
+            do
+              rmmod castle_fs || true
+              sleep 1
+            done
+        else
+            rmmod castle_fs
+
+            # Wait up to 65 seconds for the control file to disappear
+            for i in `seq 650`; do
+                if [ ! -e ${CONTROL_FILE} ]; then
+                    break
+                fi
                 # Wait 0.1s
-            usleep 100000
-        done
+                usleep 100000
+            done
+        fi
         if [ -e ${CONTROL_FILE} ]; then
             echo "ERROR: removed castle_fs module, but the control file '${CONTROL_FILE}' is still there. Exiting."
             exit 1
