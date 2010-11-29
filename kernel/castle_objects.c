@@ -808,11 +808,13 @@ static c2_block_t* castle_object_write_buffer_alloc(c_ext_pos_t new_data_cep,
                                     data_length;
     nr_blocks = (data_c2b_length - 1) / C_BLK_SIZE + 1; 
     new_data_c2b = castle_cache_block_get(new_data_cep, nr_blocks);
+#ifdef CASTLE_DEBUG        
     write_lock_c2b(new_data_c2b);
     update_c2b(new_data_c2b);
-#ifdef CASTLE_DEBUG        
     /* Poison the data block */
     memset(c2b_buffer(new_data_c2b), 0xf4, nr_blocks * C_BLK_SIZE);
+    dirty_c2b(new_data_c2b);
+    write_unlock_c2b(new_data_c2b);
 #endif
  
     return new_data_c2b;
@@ -822,6 +824,7 @@ static int castle_object_data_write(struct castle_object_replace *replace)
 {
     c2_block_t *data_c2b;
     uint64_t data_c2b_offset, data_c2b_length, data_length, packet_length;
+    int c2b_locked = 0;
 
     /* Work out how much data we've got, and how far we've got so far */
     data_c2b = replace->data_c2b;
@@ -867,6 +870,10 @@ static int castle_object_data_write(struct castle_object_replace *replace)
             BUG();
         }
 
+        write_lock_c2b(data_c2b);
+        update_c2b(data_c2b);
+        c2b_locked = 1;
+
         replace->data_copy(replace, 
                           data_c2b_buffer,
                           copy_length,
@@ -899,6 +906,7 @@ static int castle_object_data_write(struct castle_object_replace *replace)
             dirty_c2b(data_c2b);
             write_unlock_c2b(data_c2b);
             put_c2b(data_c2b);
+            c2b_locked = 0;
             /* Swap the new buffer in, if one was initialised. */
             data_c2b = new_data_c2b;
         } 
@@ -908,10 +916,17 @@ static int castle_object_data_write(struct castle_object_replace *replace)
     debug("Exiting data_write with data_c2b_offset=%d, data_length=%d, data_c2b=%p\n", 
             data_c2b_offset, data_length, data_c2b);
     
+    /* Release the locks on c2b. */
+    if (c2b_locked)
+    {
+        dirty_c2b(data_c2b);
+        write_unlock_c2b(data_c2b);
+    }
+    
     replace->data_c2b = data_c2b;
     replace->data_c2b_offset = data_c2b_offset;
     replace->data_length = data_length;
-    
+
     return (data_length == 0);
 }
                                      
@@ -977,11 +992,7 @@ void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
     {
         debug("Completing the write. c2b=%p\n", c2b);
         if(c2b)
-        {
-            dirty_c2b(c2b);
-            write_unlock_c2b(c2b);
             put_c2b(c2b);
-        }
  
         castle_ct_put(replace->ct, 1);
         replace->complete(replace, 0);
@@ -1009,8 +1020,6 @@ int castle_object_replace_continue(struct castle_object_replace *replace, int la
         uint32_t data_length = replace->data_length;
         
         BUG_ON(data_length != 0);
-        dirty_c2b(data_c2b);
-        write_unlock_c2b(data_c2b);
         put_c2b(data_c2b);
         castle_ct_put(replace->ct, 1);
         replace->complete(replace, 0);
@@ -1030,8 +1039,6 @@ int castle_object_replace_cancel(struct castle_object_replace *replace)
     debug("Replace cancel.\n");
 
     castle_ct_put(ct, 1);
-    dirty_c2b(data_c2b);
-    write_unlock_c2b(data_c2b);
     put_c2b(data_c2b);
 
     /* TODO: delete the partially written object */
