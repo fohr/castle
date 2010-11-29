@@ -21,7 +21,11 @@
 #undef BUG
 #undef BUG_ON
 
-#define BUG()            panic("castle panic %s:%d\n", __FILE__, __LINE__)
+#define BUG()                                                           \
+            do {                                                        \
+                    WARN_ON(1);                                         \
+                    panic("castle panic %s:%d\n", __FILE__, __LINE__);  \
+            } while(0)
 #define BUG_ON(_cond)    do{if(_cond) BUG();} while(0)
 
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,18)
