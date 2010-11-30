@@ -218,7 +218,8 @@ static inline int castle_cache_c2b_to_pages(c2_block_t *c2b)
 /**********************************************************************************************
  * Static variables. 
  */
-static int                     castle_cache_size = 20000; /* In pages */ 
+#define               CASTLE_CACHE_MIN_SIZE   25     /* In MB */ 
+static int            castle_cache_size     = 20000; /* In pages */ 
 
 module_param(castle_cache_size, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
 MODULE_PARM_DESC(castle_cache_size, "Cache size");
@@ -3468,10 +3469,37 @@ void castle_checkpoint_fini(void)
 
 int castle_cache_init(void)
 {
+    unsigned long max_ram;
+    struct sysinfo i;
     int ret;
 
-    debug("Castle cache init, #c2ps=%d, pages per c2p=%d, #pages=%d\n", 
-           castle_cache_size, PAGES_PER_C2P, castle_cache_size * PAGES_PER_C2P);
+    /* Find out how much memory there is in the system. */
+    si_meminfo(&i);
+    max_ram = i.totalram;
+    max_ram = max_ram / 2;
+
+    /* Fail if we are trying to use too much. */
+    if(castle_cache_size > max_ram) 
+    {
+        printk("Cache size too large, configured with %d pages, maximum is %ld pages (%ld MB)\n",
+                castle_cache_size,
+                max_ram,
+                max_ram >> (20 - PAGE_SHIFT));
+        return -EINVAL;
+    }
+
+    if(castle_cache_size < (CASTLE_CACHE_MIN_SIZE << (20 - PAGE_SHIFT)))
+    {
+        printk("Cache size too small, configured with %d pages, minimum is %d pages (%d MB)\n",
+                castle_cache_size,
+                CASTLE_CACHE_MIN_SIZE << (20 - PAGE_SHIFT),
+                CASTLE_CACHE_MIN_SIZE);
+        return -EINVAL;
+    }
+
+    printk("Cache size: %d pages (%ld MB).\n", 
+            castle_cache_size, 
+            ((unsigned long)castle_cache_size * PAGE_SIZE) >> 20);
 
     /* Work out the # of c2bs and c2ps, as well as the hash sizes */
     castle_cache_page_freelist_size  = castle_cache_size / PAGES_PER_C2P;
