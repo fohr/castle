@@ -978,7 +978,6 @@ struct castle_slave* castle_claim(uint32_t new_dev)
     char b[BDEVNAME_SIZE];
     struct castle_slave *cs = NULL;
     static int slave_id = 0;
-    static int nr_slaves = 0;
 
     debug("Claiming: in_atomic=%d.\n", in_atomic());
     if(!(cs = castle_zalloc(sizeof(struct castle_slave), GFP_KERNEL)))
@@ -1027,12 +1026,6 @@ struct castle_slave* castle_claim(uint32_t new_dev)
         goto err_out;
     }
 
-    err = castle_rda_slave_add(DEFAULT, cs);
-    if (err)
-    {
-        printk("Could not add slave to DEFAULT RDA.\n");
-        goto err_out;
-    }
     err = castle_slave_add(cs);
     if(err)
     {
@@ -1040,7 +1033,13 @@ struct castle_slave* castle_claim(uint32_t new_dev)
         goto err_out;
     }
     cs_added = 1;
-    nr_slaves++;
+
+    err = castle_rda_slave_add(DEFAULT, cs);
+    if (err)
+    {
+        printk("Could not add slave to DEFAULT RDA.\n");
+        goto err_out;
+    }
     
     err = castle_sysfs_slave_add(cs);
     if(err)
@@ -1063,7 +1062,9 @@ err_out:
 #else
     if(bdev) blkdev_put(bdev, FMODE_READ|FMODE_WRITE);
 #endif
-    if(cs)           castle_free(cs);
+    if(cs)   castle_free(cs);
+    slave_id--;
+
     return NULL;    
 }
 
