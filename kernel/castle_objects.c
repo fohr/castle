@@ -1006,15 +1006,13 @@ void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
     castle_utils_bio_free(c_bio);
 }
 
-int castle_object_replace_continue(struct castle_object_replace *replace, int last)
+int castle_object_replace_continue(struct castle_object_replace *replace)
 {
     int copy_end;
 
     debug("Replace continue.\n");
     copy_end = castle_object_data_write(replace);
-    if(copy_end != last)
-        printk("Warning packet for completed replace!!.\n");
-    if(last)
+    if(copy_end)
     {
         c2_block_t *data_c2b = replace->data_c2b;
         uint32_t data_length = replace->data_length;
