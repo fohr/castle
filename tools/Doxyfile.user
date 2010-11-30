@@ -1,0 +1,5 @@
+@INCLUDE = Doxyfile.proto
+PROJECT_NAME	       = fs.hg/user
+INPUT                  = ../user
+OUTPUT_DIRECTORY       = /usr/groups/docs/fs.hg/user
+STRIP_FROM_PATH	       = /usr/groups/docs/fs.hg/source/user
