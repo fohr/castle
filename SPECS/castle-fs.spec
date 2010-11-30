@@ -5,7 +5,7 @@
 
 %define kmod_name castle
 %define kverrel %(%{kmodtool} verrel %{?kversion} 2>/dev/null)
-%define kvariants "" debug xen
+%define kvariants "" xen
 %define kerneldir %{_usrsrc}/kernels/%{kverrel}-%{_target_cpu}
 %define krel	%(echo %{kverrel} | sed -e 's/-/_/g')
 
