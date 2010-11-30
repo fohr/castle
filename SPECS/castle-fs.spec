@@ -6,7 +6,6 @@
 %define kmod_name castle
 %define kverrel %(%{kmodtool} verrel %{?kversion} 2>/dev/null)
 %define kvariants "" xen
-%define kerneldir %{_usrsrc}/kernels/%{kverrel}-%{_target_cpu}
 %define krel	%(echo %{kverrel} | sed -e 's/-/_/g')
 
 %define groupname castle
@@ -39,12 +38,22 @@ Requires: castle-cli
 
 %prep
 %setup -q -n "castle-fs"
+for kvariant in %{kvariants} ; do
+    cp -a kernel _kmod_build_$kvariant
+done
 
 %build
 echo '%{version}-%{release}' > .hg-rev
 
 make -C user/utils
-make -C kernel KVER=%{kversion} KERNEL_DIR=%{kerneldir} DEBUG=n PERF_DEBUG=n
+
+for kvariant in %{kvariants}
+do
+    ksrc=%{_usrsrc}/kernels/%{kverrel}${kvariant:+-$kvariant}-%{_target_cpu}
+    pushd _kmod_build_$kvariant
+    make KVER=%{kversion} KERNEL_DIR="${ksrc}" DEBUG=n PERF_DEBUG=n
+    popd
+done
 
 %install
 rm -rf %{buildroot}
@@ -69,7 +78,13 @@ cp user/utils/mkcastlefs %{buildroot}/sbin
 
 export INSTALL_MOD_PATH=%{buildroot}
 export INSTALL_MOD_DIR=extra/%{kmod_name}
-make -C "%{kerneldir}" modules_install M=`pwd`/kernel
+for kvariant in %{kvariants}
+do
+    ksrc=%{_usrsrc}/kernels/%{kverrel}${kvariant:+-$kvariant}-%{_target_cpu}
+    pushd _kmod_build_$kvariant
+    make -C "${ksrc}" modules_install M=$PWD
+    popd
+done
 
 %clean
 rm -rf %{buildroot}
