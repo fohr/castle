@@ -2098,7 +2098,7 @@ static void castle_da_merge_check(struct castle_double_array *da)
     if(merge_measure == 0)
     {
         if(da->ios_rate == 0)
-            printk("Reenabling inserts.\n");
+            printk("Reenabling inserts on da=%d.\n", da->id);
         /* Effectively no limit. */
         da->ios_rate = (uint32_t)-1;   
     } 
@@ -2110,14 +2110,14 @@ static void castle_da_merge_check(struct castle_double_array *da)
            outstanding level 1 merge. */
         da->ios_rate = 50000 * (merge_measure_threashold / merge_measure - 1) / REPLENISH_FREQUENCY;
         if((old_rate == 0) && (da->ios_rate != 0))
-            printk("Reenabling inserts..\n");
+            printk("Reenabling inserts on da=%d.\n", da->id);
         if((old_rate != 0) && (da->ios_rate == 0))
-            printk("Disabling inserts completly.\n");
+            printk("Disabling inserts on da=%d.\n", da->id);
     }
     else
     {
         if(da->ios_rate != 0)
-            printk("Disabling inserts completly..\n");
+            printk("Disabling inserts on da=%d\n\n", da->id);
         da->ios_rate = 0;
     }
     debug("Setting rate to %u\n", da->ios_rate);
@@ -3153,7 +3153,6 @@ int castle_double_array_init(void)
 {
     int ret;
 
-    printk("\n========= Double Array init ==========\n");
     ret = -ENOMEM;
     castle_da_hash = castle_da_hash_alloc();
     if(!castle_da_hash)
@@ -3184,7 +3183,6 @@ err_out:
 
 void castle_double_array_merges_fini(void)
 {
-    printk("\n========= Double Array fini ==========\n");
     castle_da_exiting = 1;
     destroy_workqueue(castle_merge_wq);
     del_singleshot_timer_sync(&throttle_timer);

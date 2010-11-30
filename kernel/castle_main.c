@@ -347,6 +347,7 @@ int castle_fs_init(void)
     int      ret, first, prev_new_dev = -1;
     uint32_t i, nr_fs_slaves = 0, slave_count = 0, fs_version = 0;
 
+    printk("Castle FS start.\n");
     if(castle_fs_inited)
     {
         printk("FS is already inited\n");
@@ -557,7 +558,7 @@ int castle_fs_init(void)
     
     castle_events_init();
 
-    printk("Castle FS inited.\n");
+    printk("Castle FS started.\n");
     castle_fs_inited = 1;
 
     return 0;
@@ -1808,18 +1809,6 @@ static void castle_slaves_spindowns_check(unsigned long first)
     mod_timer(&spindown_timer, jiffies + sleep);
 }
 
-static void castle_slaves_unlock(void)
-{
-    del_singleshot_timer_sync(&spindown_timer);
-
-#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,18)
-    cancel_delayed_work(&spindown_work_item);
-    flush_scheduled_work();
-#else
-    cancel_work_sync(&spindown_work_item);
-#endif
-}
-
 static char *wq_names[2*MAX_BTREE_DEPTH+1];
 static void castle_wqs_fini(void)
 {
@@ -1866,6 +1855,16 @@ static void castle_slaves_free(void)
 {
     struct list_head *lh, *th;
     struct castle_slave *slave;
+
+    /* Delete the spindown timer. */
+    del_singleshot_timer_sync(&spindown_timer);
+
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,18)
+    cancel_delayed_work(&spindown_work_item);
+    flush_scheduled_work();
+#else
+    cancel_work_sync(&spindown_work_item);
+#endif
 
     list_for_each_safe(lh, th, &castle_slaves.slaves)
     {
@@ -1931,7 +1930,7 @@ static int __init castle_init(void)
 {
     int ret;
 
-    printk("Castle FS init (build: %s) ... ", CASTLE_COMPILE_CHANGESET);
+    printk("Castle FS init (build: %s).\n", CASTLE_COMPILE_CHANGESET);
 
     castle_fs_inited = 0;
               castle_debug_init();
@@ -1949,7 +1948,7 @@ static int __init castle_init(void)
     if((ret = castle_sysfs_init()))        goto err_out9;
     if((ret = castle_back_init()))         goto err_out10;
 
-    printk("OK.\n");
+    printk("Castle FS init done.\n");
 
     return 0;
 
@@ -1971,7 +1970,6 @@ err_out5:
     castle_versions_fini();
 err_out4:
     BUG_ON(!list_empty(&castle_slaves.slaves));
-    castle_slaves_unlock();
     castle_cache_fini();
 err_out3:
     castle_extents_fini();
@@ -1983,7 +1981,6 @@ err_out0:
     castle_time_fini();
     castle_debug_fini();
     
-    /* TODO: check if kernel will accept any non-zero return value to mean: we want to exit */
     return ret;
 }
 
@@ -1991,7 +1988,7 @@ void castle_rda_slaves_free(void);
 
 static void __exit castle_exit(void)
 {
-    printk("Castle FS exit ... ");
+    printk("Castle FS exit.\n");
 
     /* Remove externaly visible interfaces */
     castle_back_fini();
@@ -2006,8 +2003,7 @@ static void __exit castle_exit(void)
     castle_double_array_fini();
     castle_btree_free();
     castle_versions_fini();
-    /* Drop all cache references (superblocks), flush the cache, free the slaves. */ 
-    castle_slaves_unlock();
+    /* Flush the cache, free the slaves. */ 
     castle_cache_fini();
     castle_extents_fini();
     castle_slaves_free();
@@ -2016,7 +2012,7 @@ static void __exit castle_exit(void)
     castle_time_fini();
     castle_debug_fini();
 
-    printk("done.\n\n\n");
+    printk("Castle FS exit done.\n");
 }
 
 module_init(castle_init);
