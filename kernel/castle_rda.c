@@ -177,6 +177,8 @@ int castle_rda_slave_add(c_rda_type_t rda_type, struct castle_slave *cs)
 {
     def_rda_spec.slaves[def_rda_spec.nr_slaves]          = cs;
     def_rda_spec.act_slaves[def_rda_spec.nr_act_slaves]  = cs;
+    BUG_ON(def_rda_spec.nr_slaves != def_rda_spec.nr_act_slaves);
+    BUG_ON(def_rda_spec.nr_slaves != cs->id);
 
     def_rda_spec.nr_slaves++;
     def_rda_spec.nr_act_slaves++;
@@ -191,6 +193,12 @@ void castle_rda_slave_remove(c_rda_type_t rda_type, struct castle_slave *cs)
     if (!cs)
         return;
 
-    //printk("Not yet implemented.\n");
+    /* Check if slave is already added to the RDA list. */
+    if (cs->id != (def_rda_spec.nr_slaves - 1))
+        return;
+
+    def_rda_spec.nr_slaves--;
+    def_rda_spec.nr_act_slaves--;
+
     return;
 }
