@@ -127,6 +127,11 @@ function load_fs_and_claim {
       devs=("${devs[@]}" "$loop")
     done
 
+    for dev in "${devs[@]}"
+    do
+      castle-probe-device "$dev"
+    done
+
     init_kernel_fs
 
     for dev in "${devs[@]}"
