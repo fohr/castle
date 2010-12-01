@@ -240,7 +240,7 @@ void castle_freespace_summary_get(struct castle_slave *cs,
         *free_cnt = atomic_read(&cs->free_chk_cnt);
     
     if (size)
-        *size = cs->disk_size;
+        *size = (cs->disk_size + FREE_SPACE_START);
 }
 
 static int castle_freespace_slave_writeback(struct castle_slave *cs, void *unused)
