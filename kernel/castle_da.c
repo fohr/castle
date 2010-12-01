@@ -2538,6 +2538,11 @@ static int castle_da_tree_writeback(struct castle_double_array *da,
     /* For periodic checkpoints flush component trees onto disk. */
     if (!castle_da_exiting)
     {
+        /* Always writeback Global tree structure but, dont writeback. */
+        /* Note: Global Tree is not Crash-Consistent. */
+        if (TREE_GLOBAL(ct->seq))
+            goto mstore_writeback;
+
         /* Don't write back T0. */
         if (ct->level == 0)
             return 0;
@@ -2557,6 +2562,11 @@ static int castle_da_tree_writeback(struct castle_double_array *da,
             ct->new_ct = 0;
         }
     }
+
+mstore_writeback:
+
+    /* Never writeback T0 in periodic checkpoints. */
+    BUG_ON((ct->level == 0) && !castle_da_exiting);
 
     if (da) castle_da_unlock(da);
 
@@ -2623,7 +2633,38 @@ out:
 
     castle_da_store = castle_tree_store = castle_lo_store = NULL;
 }
-    
+
+static int castle_da_rwct_make(struct castle_double_array *da, int in_tran);
+
+static int castle_da_t0_create(struct castle_double_array *da, void *unused)
+{
+    castle_da_lock(da);
+    if (list_empty(&da->trees[0]))
+    {
+        castle_da_unlock(da);
+        printk("Creating new T0 for da: %u\n", da->id);
+        if (castle_da_rwct_make(da, 1))
+        {
+            printk("Failed to create T0 for DA: %u\n", da->id);
+            return -EINVAL;
+        }
+    }
+    castle_da_unlock(da);
+
+    return 0;
+}
+
+int castle_double_array_start(void)
+{
+    /* Create T0, if it doesn't exist. */
+    castle_da_hash_iterate(castle_da_t0_create, NULL);
+
+    /* Check if any merges need to be done. */
+    __castle_da_hash_iterate(castle_da_merge_restart, NULL); 
+
+    return 0;
+}
+
 int castle_double_array_read(void)
 {
     struct castle_dlist_entry mstore_dentry;
@@ -2734,8 +2775,6 @@ int castle_double_array_read(void)
 
     /* Sort all the tree lists by the sequence number */
     castle_da_hash_iterate(castle_da_trees_sort, NULL); 
-    /* Check if any merges need to be done. */
-    __castle_da_hash_iterate(castle_da_merge_restart, NULL); 
     goto out;
 
 error_out:
@@ -2790,7 +2829,7 @@ static struct castle_component_tree* castle_ct_alloc(struct castle_double_array 
     return ct;
 }
     
-static int castle_da_rwct_make(struct castle_double_array *da, int new_da)
+static int castle_da_rwct_make(struct castle_double_array *da, int in_tran)
 {
     struct castle_component_tree *ct, *old_ct;
     c2_block_t *c2b;
@@ -2837,7 +2876,7 @@ static int castle_da_rwct_make(struct castle_double_array *da, int new_da)
     debug("Added component tree seq=%d, root_node=(0x%x, 0x%x), it's threaded onto da=%p, level=%d\n",
             ct->seq, c2b->cep.ext_id, c2b->cep.offset, da, ct->level);
     /* Move the last rwct (if one exists) to level 1 */
-    if (!new_da) CASTLE_TRANSACTION_BEGIN;
+    if (!in_tran) CASTLE_TRANSACTION_BEGIN;
     castle_da_lock(da);
     if(!list_empty(&da->trees[0]))
     {
@@ -2848,7 +2887,7 @@ static int castle_da_rwct_make(struct castle_double_array *da, int new_da)
     }
     /* Thread CT onto level 0 list */
     castle_component_tree_add(da, ct, 0 /* not in init */);
-    if (!new_da) CASTLE_TRANSACTION_END;
+    if (!in_tran) CASTLE_TRANSACTION_END;
     /* DA is attached, therefore we must be holding a ref, therefore it is safe to schedule
        the merge check. */
     castle_da_merge_check(da);

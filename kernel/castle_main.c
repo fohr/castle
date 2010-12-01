@@ -555,6 +555,12 @@ int castle_fs_init(void)
     }
 
     castle_checkpoint_version_inc();
+
+    if (castle_double_array_start() < 0)
+    {
+        printk("Failed to start Doubling Arrays\n");
+        return -EINVAL;
+    }
     
     castle_events_init();
 
