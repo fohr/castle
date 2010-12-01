@@ -84,6 +84,8 @@ struct castle_double_array {
     uint32_t           ios_budget;
     uint32_t           ios_rate;
     struct work_struct queue_restart;
+    /* Merge deamortisation */
+    int                max_merge_level;
     /* Merge throttling. DISABLED ATM. */
     
     atomic_t           epoch_ios;
@@ -2068,7 +2070,7 @@ static void castle_da_merge_check(struct castle_double_array *da)
 {
     struct castle_component_tree *ct1, *ct2;
     struct list_head *l;
-    int level, merge_measure, merge_measure_threashold, nr_trees;
+    int max_level, max_level_mergable, level, merge_measure, merge_measure_threashold, nr_trees;
 
     debug("Checking if to do a merge for da: %d\n", da->id);
     /* Go through all the levels >= 1, and check if there is more than one tree 
@@ -2076,6 +2078,8 @@ static void castle_da_merge_check(struct castle_double_array *da)
     ct1 = ct2 = NULL;
     merge_measure = 0;
     merge_measure_threashold = 0;
+    max_level = 0;
+    max_level_mergable = 0;
     for(level=1; level<MAX_DA_LEVEL; level++)
     {
         nr_trees = 0;
@@ -2086,6 +2090,10 @@ static void castle_da_merge_check(struct castle_double_array *da)
             else
             if(!ct1)
                 ct1 = list_entry(l, struct castle_component_tree, da_list);
+            /* max_level == level iff there are at least 2 trees at this level. 
+               This means that max_level is mergable. */
+            max_level_mergable = (max_level == level);
+            max_level = level;
             nr_trees++;
         }
         /* If we haven't found two CTs in the list, reset them to NULL back again. */
@@ -2097,6 +2105,9 @@ static void castle_da_merge_check(struct castle_double_array *da)
         /* We stop when there is an outstanding merge at each level. */
         merge_measure_threashold += level * 4; 
     }
+    /* Set the max merge level variable. This either equals to max_level, if it is mergable,
+       or max_level-1 otherwise. */
+    da->max_merge_level = max_level_mergable ? max_level : max_level - 1;
     /* Set the write throughput allowed on the DA. */
     if(merge_measure == 0)
     {
@@ -2194,6 +2205,7 @@ static struct castle_double_array* castle_da_alloc(void)
     da->ios_budget      = 0;
     da->ios_rate        = 0;
     CASTLE_INIT_WORK(&da->queue_restart, castle_da_queue_restart);
+    da->max_merge_level = -1;
     atomic_set(&da->epoch_ios, 0);
     atomic_set(&da->merge_budget, 0);
     init_waitqueue_head(&da->merge_budget_wq);
