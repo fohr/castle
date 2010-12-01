@@ -2552,8 +2552,8 @@ skip_page:
 
     wait_event(castle_cache_flush_wq, (atomic_read(&outst_pgs) == 0));
 
-    printk("Extent flush completed: (%llu) -> %llu/%llu\n", 
-            ext_id, dirty_pgs, nr_pages);
+    debug("Extent flush completed: (%llu) -> %llu/%llu\n", 
+           ext_id, dirty_pgs, nr_pages);
 
     return 0;
 }

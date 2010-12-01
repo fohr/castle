@@ -889,9 +889,9 @@ int castle_slave_superblocks_writeback(struct castle_slave *cs, uint32_t version
     write_unlock_c2b(c2b);
     put_c2b(c2b);
 
-    printk("Free chunks: %u|%u|%u\n", cs_sb->freespace.free_chk_cnt,
-            cs_sb->freespace.prod,
-            cs_sb->freespace.cons);
+    debug("Free chunks: %u|%u|%u\n", cs_sb->freespace.free_chk_cnt,
+           cs_sb->freespace.prod,
+           cs_sb->freespace.cons);
 
     if (castle_cache_extent_flush(cs->sup_ext, 0, length * 2))
     {
