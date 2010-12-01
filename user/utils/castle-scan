@@ -7,7 +7,7 @@ if [ -e ${DISKTAB} ]; then
     exit 0
 fi
 
-for dev in /dev/sd*[0-9]* /dev/hd*[0-9]* /dev/xv*[0-9]*
+for dev in /dev/sd*[0-9]* /dev/hd*[0-9]* /dev/xvd*[0-9]*
 do
   [ -e "$dev" ] || continue
 
