@@ -1953,11 +1953,12 @@ static void castle_da_merge_do(struct work_struct *work)
     void *key;
     version_t version;
     c_val_tup_t cvt;
-    int i, ret;
+    int i, ret, level;
     struct castle_double_array *da;
 
     debug("Initialising the iterators.\n");
     /* Create an appropriate iterator for each of the trees */
+    level = merge->in_tree1->level;
     ret = castle_da_iterators_create(merge);
     if(ret)
         goto err_out;
@@ -1965,6 +1966,7 @@ static void castle_da_merge_do(struct work_struct *work)
     /* Do the merge by iterating through all the entries. */
     i = 0;
     debug("Starting the merge.\n");
+    perf_event("m-%d-beg", level);
     while(castle_ct_merged_iter_has_next(merge->merged_iter))
     {
         might_resched();
@@ -1996,6 +1998,7 @@ err_out:
     da = merge->da;
     castle_da_merge_dealloc(merge, ret);
     castle_da_put(da);
+    perf_event("m-%d-end", level);
 }
 
 static void castle_da_merge_schedule(struct castle_double_array *da,
