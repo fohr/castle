@@ -846,8 +846,6 @@ void _castle_extent_free(c_ext_t *ext)
         memcpy(((uint8_t *)maps_buf) + i,
                c2b_buffer(c2b),
                ((req_space - i) > C_BLK_SIZE)?C_BLK_SIZE:(req_space - i));
-        memset(c2b_buffer(c2b), 0, C_BLK_SIZE);
-        dirty_c2b(c2b);
         write_unlock_c2b(c2b);
         put_c2b(c2b);
         cep.offset += C_BLK_SIZE;
