@@ -2644,6 +2644,8 @@ static int castle_da_t0_create(struct castle_double_array *da, void *unused)
             printk("Failed to create T0 for DA: %u\n", da->id);
             return -EINVAL;
         }
+
+        return 0;
     }
     castle_da_unlock(da);
 
