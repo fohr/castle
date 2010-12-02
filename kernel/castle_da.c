@@ -1947,14 +1947,12 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
 
 static void castle_da_merge_progress_update(struct castle_da_merge *merge)
 {
-        /* For merges at level >= 3, print progress every 10%. */
-        items_completed = merge->merged_iter->src_items_completed;
-        if((next_print_percent * total_items)/100ULL < items_completed)
-        {
-            printk("For DA=%d, merge at level=%d, completed %lld%%\n",
-                    merge->da->id, level, (100ULL * items_completed) / total_items);
-            next_print_percent += 10; 
-        }
+    uint64_t items_completed, total_items;
+
+    total_items  = atomic64_read(&merge->in_tree1->item_count);
+    total_items += atomic64_read(&merge->in_tree2->item_count);
+    items_completed = merge->merged_iter->src_items_completed;
+    /* Nothing more to be done just yet. */ 
 }
 
 static void castle_da_merge_do(struct work_struct *work)
@@ -1967,22 +1965,18 @@ static void castle_da_merge_do(struct work_struct *work)
     version_t version;
     c_val_tup_t cvt;
     int ret, level;
-    uint64_t i, total_items;
-    uint64_t next_print_percent, items_completed;
+    uint64_t i;
     struct castle_double_array *da;
 
     debug("Initialising the iterators.\n");
     /* Create an appropriate iterator for each of the trees */
     level = merge->in_tree1->level;
-    total_items  = atomic64_read(&merge->in_tree1->item_count);
-    total_items += atomic64_read(&merge->in_tree2->item_count);
     ret = castle_da_iterators_create(merge);
     if(ret)
         goto err_out;
 
     /* Do the merge by iterating through all the entries. */
     i = 0;
-    next_print_percent = 0;
     debug("Starting the merge.\n");
     perf_event("m-%d-beg", level);
     while(castle_ct_merged_iter_has_next(merge->merged_iter))
@@ -1990,7 +1984,7 @@ static void castle_da_merge_do(struct work_struct *work)
         might_resched();
         /* TODO: we never check iterator errors. We should! */
         castle_ct_merged_iter_next(merge->merged_iter, &key, &version, &cvt); 
-        debug("Merging entry id=%d: k=%p, *k=%d, version=%d, cep="cep_fmt_str_nl,
+        debug("Merging entry id=%lld: k=%p, *k=%d, version=%d, cep="cep_fmt_str_nl,
                 i, key, *((uint32_t *)key), version, cep2str(cvt.cep));
         BUG_ON(CVT_INVALID(cvt));
         /* Add entry to level 0 node (and recursively up the tree). */
