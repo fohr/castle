@@ -291,6 +291,7 @@ void castle_freespace_print(struct castle_slave *cs)
     printk("\tFreespace (0x%x) -> %u\n", cs->uuid, freespace->free_chk_cnt);
     printk("\t\tprod: %d\n", freespace->prod);
     printk("\t\tcons: %d\n", freespace->cons);
+    printk("\t\tprev_prod: %d\n", cs->prev_prod);
     printk("\t\tnr_entries: %d\n", freespace->nr_entries);
     printk("\t\tmax_entries: %d\n", freespace->max_entries);
     freespace_sblk_put(cs, 0);

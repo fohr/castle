@@ -65,7 +65,6 @@ typedef struct {
     c_chk_cnt_t         size;           /* Number of chunks */
     c_rda_type_t        type;           /* RDA type */
     uint32_t            k_factor;       /* K factor in K-RDA */ 
-    c_chk_seq_t         chk_buf[MAX_NR_SLAVES];     
     c_ext_pos_t         maps_cep;       /* Offset of chunk mapping in logical extent */
     struct list_head    hash_list;      /* Only Dynamic variable */
     uint32_t            ref_cnt;
@@ -74,6 +73,7 @@ typedef struct {
 } c_ext_t;
 
 static struct list_head *castle_extents_hash = NULL;
+static c_ext_fs_t meta_ext_fs;
 
 DEFINE_RHASH_TBL(castle_extents, castle_extents_hash, CASTLE_EXTENTS_HASH_SIZE,
                 c_ext_t, hash_list, c_ext_id_t, ext_id, ref_cnt);
@@ -89,8 +89,6 @@ int castle_rda_next_slave_get(struct castle_slave  *cs[],
 
 void castle_rda_extent_fini(c_ext_id_t    ext_id,
                             void         *_state);
-
-int castle_extent_space_alloc(c_ext_t *ext, da_id_t da_id);
 
 static c_ext_id_t _castle_extent_alloc(c_rda_type_t            rda_type,
                                        da_id_t                 da_id,
@@ -222,7 +220,6 @@ static void castle_extents_super_block_init(void)
 {
     castle_extents_global_sb.ext_id_seq           = EXT_SEQ_START;
     castle_extents_global_sb.nr_exts              = 0;
-    castle_extents_global_sb.next_free_byte       = 0;
     castle_extents_global_sb.micro_ext.ext_id     = INVAL_EXT_ID;
     castle_extents_global_sb.meta_ext.ext_id      = INVAL_EXT_ID;
     castle_extents_global_sb.mstore_ext[0].ext_id = INVAL_EXT_ID;
@@ -316,57 +313,30 @@ static int castle_extent_meta_ext_create(void)
     struct   list_head *l;
     int      i = 0;
     c_ext_t *meta_ext;
-    int      ret;
-    struct castle_extents_sb_t *castle_extents_sb;
+    struct   castle_extents_sb_t *castle_extents_sb;
+    c_ext_id_t ext_id;
+    int      k_factor = (castle_rda_spec_get(META_EXT))->k_factor;
 
-    meta_ext = castle_zalloc(sizeof(c_ext_t), GFP_KERNEL);
-    if (!meta_ext)
-        return -ENOMEM;
-
-    meta_ext->ext_id   = META_EXT_ID;
-    meta_ext->size     = 0;
-    meta_ext->type     = META_EXT;
-    meta_ext->k_factor = 2;
-    meta_ext->maps_cep = (c_ext_pos_t){MICRO_EXT_ID, 0};
-    meta_ext->obj_refs = 1;
-    meta_ext->alive    = 1;
-
-    i = 0;
     list_for_each(l, &castle_slaves.slaves)
         i++;
 
     /* Allocate meta extent size to be however much we allocated in all the
        slaves, divided by the k-factor (2) */
-    meta_ext->size = META_SPACE_SIZE * i / meta_ext->k_factor;
-    meta_ext_size = meta_ext->size;
+    meta_ext_size = META_SPACE_SIZE * i / k_factor;
 
-    /* Create meta extent and embed it's chunk mappings into Super extents 
-     * on each slave */
-    printk("Initialising meta extent mappings for the first time\n");
-    list_for_each(l, &castle_slaves.slaves)
-    {
-        struct castle_slave *cs = list_entry(l, struct castle_slave, list);
-
-        meta_ext->chk_buf[cs->id].first_chk = META_SPACE_START;
-        meta_ext->chk_buf[cs->id].count     = META_SPACE_SIZE;
-    }
-
-    /* Allocate freespace for meta extent with K-RDA just like usual
-     * extents. Except that, the space for meta extent is taken from
-     * META_SPACE_START of each disk. */
-    if ((ret = castle_extent_space_alloc(meta_ext, 0)))
+    ext_id = _castle_extent_alloc(META_EXT, 0, 
+                                  meta_ext_size,
+                                  META_EXT_ID);
+    if (ext_id != META_EXT_ID)
     {
         printk("Meta Extent Allocation Failed\n");
-        castle_free(meta_ext);
-
-        return ret;
+        return -ENOSPC;
     }
 
     castle_extents_sb = castle_extents_super_block_get();
+    meta_ext = castle_extents_hash_get(META_EXT_ID);
     CONVERT_EXTENT_TO_MENTRY(meta_ext, &castle_extents_sb->meta_ext);
     castle_extents_super_block_put(1);
-
-    castle_extents_rhash_add(meta_ext);
 
     /* Make sure that micro extent is persistent. */
     castle_cache_extent_flush_schedule(MICRO_EXT_ID, 0, 0);
@@ -424,12 +394,14 @@ int castle_extents_create(void)
     if (castle_extent_meta_ext_create())
         return -EINVAL;
 
+    _castle_ext_fs_init(&meta_ext_fs, 0, 0, C_BLK_SIZE, META_EXT_ID);
+
     INJECT_FAULT;
-    extent_init_done = 1;
 
     if (castle_extent_mstore_ext_create())
         return -EINVAL;
 
+    extent_init_done = 1;
     return 0;
 }
 
@@ -490,6 +462,9 @@ int castle_extents_writeback(void)
 
     castle_mstore_fini(castle_extents_mstore);
 
+    /* Writeback maps freespace structure into extent superblock. */
+    castle_ext_fs_marshall(&meta_ext_fs, &ext_sblk->meta_ext_fs_bs);
+
     /* Flush the complete meta extent onto disk, before completing writeback. */
     castle_cache_extent_flush_schedule(META_EXT_ID, 0, 0);
 
@@ -533,6 +508,9 @@ int castle_extents_read(void)
 
     ext_sblk = castle_extents_super_block_get();
 
+    /* Read maps freespace structure from extents superblock. */
+    castle_ext_fs_unmarshall(&meta_ext_fs, &ext_sblk->meta_ext_fs_bs);
+
     if (load_extent_from_mentry(&ext_sblk->micro_ext))
         goto error_out;
 
@@ -545,6 +523,7 @@ int castle_extents_read(void)
     if (load_extent_from_mentry(&ext_sblk->mstore_ext[1]))
         goto error_out;
 
+    /* Mark Logical extents as alive. */
     castle_extent_mark_live(MICRO_EXT_ID);
     castle_extent_mark_live(META_EXT_ID);
     castle_extent_mark_live(MSTORE_EXT_ID);
@@ -612,105 +591,158 @@ void castle_extents_fini(void)
     castle_free(castle_extents_hash);
 }
 
+int castle_extents_maps_free(c_disk_chk_t *maps_buf, uint32_t count)
+{
+    int         i;
+    uint32_t    id;
+    c_chk_t     super_chk[MAX_NR_SLAVES];
+
+    /* Note: Super Chunk 0 is pre-allocated for super extent. No extent contains
+     * mappings for Super Chunk 0. */
+    memset(super_chk, 0, sizeof(super_chk));
+
+    /* Free all the physical chunks. */
+    for (i=0; i<count; i++)
+    {
+        struct      castle_slave *cs;
+        uint32_t    uuid = maps_buf[i].slave_id;
+        c_chk_t     chk  = maps_buf[i].offset;
+
+        cs = castle_slave_find_by_uuid(uuid);
+        BUG_ON(!cs);
+
+        id = cs->id;
+        debug("Freeing chunk %u from 0x%x - %u\n", chk, uuid, super_chk[id]);
+        if (super_chk[id] != SUPER_CHUNK(chk))
+        {
+            if (super_chk[id]) 
+                castle_freespace_slave_super_chunk_free(cs, super_chk[id]); 
+            super_chk[id] = SUPER_CHUNK(chk);
+        }
+    }
+
+    for (id=0; id<MAX_NR_SLAVES; id++)
+    {
+        struct castle_slave *cs;
+
+        if (super_chk[id])
+        {
+            cs = castle_slave_find_by_id(id);
+            castle_freespace_slave_super_chunk_free(cs, super_chk[id]);
+        }
+    }
+
+    return 0;
+}
+
+int castle_extents_maps_alloc(c_disk_chk_t *maps_buf, da_id_t da_id, uint32_t count)
+{
+    int         i;
+    uint32_t    id;
+    c_chk_t     free_chk[MAX_NR_SLAVES];
+    c_chk_seq_t chk_seq;
+
+    memset(free_chk, 0, sizeof(free_chk));
+
+    /* Allocate physical chunks from slaves */
+    for (i=0; i<count; i++)
+    {
+        uint32_t    uuid             = maps_buf[i].slave_id;
+        struct      castle_slave *cs = castle_slave_find_by_uuid(uuid);
+
+        BUG_ON(!cs);
+        id = cs->id;
+
+        /* If free chunks are available in the buffer, use them. */       
+        if (free_chk[id])
+        {
+            maps_buf[i].offset = free_chk[id];
+            free_chk[id]++;
+            if (SUPER_CHUNK(free_chk[id]) != SUPER_CHUNK(maps_buf[i].offset))
+                free_chk[id] = 0;
+        }
+        else
+        {
+            /* Allocate more freespace. */
+            chk_seq = castle_freespace_slave_chunks_alloc(cs, da_id, 1);
+            if (CHK_SEQ_INVAL(chk_seq))
+            {
+                printk("Failed to get freespace from slave: 0x%x\n", cs->uuid);
+                castle_freespace_stats_print();
+                low_disk_space = 1;
+                break;
+            }
+            BUG_ON(chk_seq.count != CHKS_PER_SLOT);
+
+            free_chk[id] = chk_seq.first_chk;
+            maps_buf[i].offset = free_chk[id];
+            free_chk[id]++;
+        }
+        debug("Alloc chunk %u on 0x%x\n", maps_buf[i].offset, maps_buf[i].slave_id);
+    }
+
+    if (i != count)
+    {
+        castle_extents_maps_free(maps_buf, i);
+        return -ENOSPC;
+    }
+
+    return 0;
+}
+
 int castle_extent_space_alloc(c_ext_t *ext, da_id_t da_id)
 {
     c_chk_cnt_t             count = ext->size;
     c_rda_spec_t           *rda_spec = castle_rda_spec_get(ext->type);
     struct castle_slave    *slaves[MAX_NR_SLAVES];
-    int                     i, j, k;
-    void                   *state;
-    c_chk_seq_t            *chk_buf;
+    int                     i = 0, j = 0, k = 0, err = 0;
+    void                   *state = NULL;
     c_disk_chk_t           *maps_buf = NULL;
     c2_block_t             *c2b = NULL;
-    uint32_t                req_space ;
+    uint32_t                req_space, idx = 0;
     c_ext_pos_t             cep;
 
     BUG_ON(!POWOF2(ext->k_factor * sizeof(c_disk_chk_t)));
     BUG_ON(LOGICAL_EXTENT(ext->ext_id) && (ext->ext_id < META_EXT_ID));
-    
-    chk_buf= &ext->chk_buf[0];
+
     state  = rda_spec->extent_init(ext->ext_id, count, ext->type);
     if (!state)
     {
-        debug("RDA returned error for extent_alloc()\n");
-        return -EINVAL;
+        printk("RDA returned error for extent_alloc()\n");
+        err = -EINVAL;
+        goto out;
     }
 
     req_space = (sizeof(c_disk_chk_t) * count * rda_spec->k_factor);
     maps_buf = castle_vmalloc(req_space);
-    BUG_ON(!maps_buf);
+    if (!maps_buf)
+    {
+        printk("Failed to vmalloc memory for extents\n");
+        err = -ENOMEM;
+        goto out;
+    }
 
+    /* For each logical chunk */
     for (i=0; i<count; i++)
-    { /* For each logical chunk */
+    {
         /* Get k num of slaves for each logical chunk */
         if (rda_spec->next_slave_get(slaves, state, i, ext->type) < 0)
         {
             printk("Failed to get next slave for extent: %llu\n", ext->ext_id);
-            castle_vfree(maps_buf);
-            return -1;
+            err = -ENOSPC;
+            goto out;
         }
 
-        /* Allocate physical chunks from slaves */
         for (j=0; j<rda_spec->k_factor; j++)
-        { /* For each replica */
-            struct castle_slave *cs = slaves[j];
-            uint32_t id = cs->id;
-            uint32_t idx = MAP_IDX(ext, i, j);
-
-            BUG_ON(idx >= (req_space / sizeof(c_disk_chk_t)));
-            BUG_ON(id >= MAX_NR_SLAVES);
-
-            maps_buf[idx].slave_id = cs->uuid;
-            /* If free chunks are available in the buffer, use them. Otherwise,
-             * allocate more */
-            if (chk_buf[id].count)
-            {
-                maps_buf[idx].offset = chk_buf[id].first_chk;
-                if (--chk_buf[id].count)
-                    chk_buf[id].first_chk++;
-            }
-            else 
-            {
-                BUG_ON(ext->ext_id == META_EXT_ID);
-                chk_buf[id] = castle_freespace_slave_chunks_alloc(cs, da_id, 1);
-                if (CHK_SEQ_INVAL(chk_buf[id]))
-                {
-                    debug("Failed to allocate chunks from slave: %u\n",
-                            cs->uuid);
-                    /* Rollback allocations from other slaves for this chunk*/
-                    for (k=0; k<j; k++)
-                    {
-                        BUG_ON(chk_buf[id].count == 0);
-                        maps_buf[MAP_IDX(ext, i, k)] = INVAL_DISK_CHK;
-                        chk_buf[id].first_chk--;
-                        chk_buf[id].count++;
-                    }
-                    i--;
-                    /* TODO: Free the space allocated back to disks. */
-                    rda_spec->extent_fini(ext->ext_id, state);
-                    castle_vfree(maps_buf);
-                    low_disk_space = 1;
-                    return -1;
-                }
-                maps_buf[idx].offset = chk_buf[id].first_chk;
-                if (--chk_buf[id].count)
-                    chk_buf[id].first_chk++;
-            }
-        }
+            maps_buf[idx++].slave_id = slaves[j]->uuid;
     }
-    rda_spec->extent_fini(ext->ext_id, state);
 
-    castle_extent_print(ext, NULL);
-    for (i=0; i<ext->size; i++)
-    {
-        for (j=0; j<ext->k_factor; j++)
-            debug("%u - %u |", maps_buf[MAP_IDX(ext, i, j)].slave_id,
-                                    maps_buf[MAP_IDX(ext, i, j)].offset);
-        debug("\n ");
-    }
+    /* Allocate physical chunks from slaves */
+    if ((err = castle_extents_maps_alloc(maps_buf, da_id, idx)))
+        goto out;
 
     cep = ext->maps_cep;
-    for (i=0; i < req_space; i += C_BLK_SIZE)
+    for (k=0; k < req_space; k += C_BLK_SIZE)
     {
         BUG_ON(cep.offset >= (meta_ext_size * C_CHK_SIZE));
         c2b = castle_cache_block_get(cep, 1);
@@ -718,8 +750,8 @@ int castle_extent_space_alloc(c_ext_t *ext, da_id_t da_id)
         update_c2b(c2b);
         BUG_ON(c2b_dirty(c2b));
         memcpy(c2b_buffer(c2b), 
-               ((uint8_t *)maps_buf) + i, 
-               ((req_space - i) > C_BLK_SIZE)?C_BLK_SIZE:(req_space - i));
+               ((uint8_t *)maps_buf) + k, 
+               ((req_space - k) > C_BLK_SIZE)?C_BLK_SIZE:(req_space - k));
         dirty_c2b(c2b);
         write_unlock_c2b(c2b);
         put_c2b(c2b);
@@ -727,9 +759,12 @@ int castle_extent_space_alloc(c_ext_t *ext, da_id_t da_id)
         INJECT_FAULT;
         cep.offset += C_BLK_SIZE;
     }
-    castle_vfree(maps_buf);
 
-    return 0;
+out:
+    if (state)          rda_spec->extent_fini(ext->ext_id, state);
+    if (maps_buf)       castle_vfree(maps_buf);
+
+    return err;
 }
   
 c_ext_id_t castle_extent_alloc(c_rda_type_t            rda_type,
@@ -747,15 +782,16 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t            rda_type,
     c_ext_t                     *ext = NULL;
     c_rda_spec_t                *rda_spec = castle_rda_spec_get(rda_type);
     struct castle_extents_sb_t  *castle_extents_sb = NULL;
+    uint32_t                     map_size = sizeof(c_disk_chk_t) * count * rda_spec->k_factor;
 
-    BUG_ON(!extent_init_done);
+    BUG_ON(!extent_init_done && !LOGICAL_EXTENT(ext_id));
 
     if (low_disk_space)
         goto __hell;
 
-#ifdef DEBUG
-    castle_freespace_stats_print();
-#endif
+    if (castle_extents_hash_get(ext_id))
+        goto __hell;
+
     debug("Creating extent of size: %u\n", count);
     ext = castle_zalloc(sizeof(c_ext_t), GFP_KERNEL);
     if (!ext)
@@ -774,24 +810,22 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t            rda_type,
     ext->alive          = 1;
     
     /* Block aligned chunk maps for each extent. */
-    BUG_ON(BLOCK_OFFSET(castle_extents_sb->next_free_byte));
-    ext->maps_cep.ext_id= META_EXT_ID;
-    ext->maps_cep.offset= castle_extents_sb->next_free_byte;
-  
-    if(castle_extents_sb->next_free_byte + 
-       (sizeof(c_disk_chk_t) * count * rda_spec->k_factor) > (meta_ext_size * C_CHK_SIZE))
+    if (ext->ext_id == META_EXT_ID)
     {
-        printk("Too big of an extent/crossing the boundry.\n");
-        goto __hell;
+        ext->maps_cep.ext_id = MICRO_EXT_ID;
+        ext->maps_cep.offset = 0;
     }
-    /* TODO: Use castle_ext_fs_X functions. */
-    castle_extents_sb->next_free_byte += (sizeof(c_disk_chk_t) * count * 
-                                                            rda_spec->k_factor);
-    if (BLOCK_OFFSET(castle_extents_sb->next_free_byte))
-        castle_extents_sb->next_free_byte =
-                    MASK_BLK_OFFSET(castle_extents_sb->next_free_byte + C_BLK_SIZE);
-    BUG_ON(castle_extents_sb->next_free_byte > (meta_ext_size * C_CHK_SIZE));
+    else
+    {
+        uint32_t nr_blocks = (map_size  - 1) / C_BLK_SIZE + 1;
 
+        if (castle_ext_fs_get(&meta_ext_fs, (nr_blocks * C_BLK_SIZE), 0, &ext->maps_cep))
+        {
+            printk("Too big of an extent/crossing the boundry.\n");
+            goto __hell;
+        }
+    }
+  
     if (castle_extent_space_alloc(ext, da_id) < 0)
     {
         printk("Extent alloc failed\n");
@@ -828,12 +862,11 @@ void castle_extent_free(c_ext_id_t ext_id)
 void _castle_extent_free(c_ext_t *ext)
 {
     struct castle_extents_sb_t  *castle_extents_sb = NULL;
-    int                          i, j;
+    int                          i;
     uint32_t                     req_space;
     c_disk_chk_t                *maps_buf = NULL;
     c_ext_pos_t                  cep;
     c2_block_t                  *c2b = NULL;
-    c_chk_t                      super_chk[MAX_NR_SLAVES];
     c_ext_id_t                   ext_id = ext->ext_id;
 
     if (ext->obj_refs)
@@ -863,50 +896,7 @@ void _castle_extent_free(c_ext_t *ext)
         cep.offset += C_BLK_SIZE;
     }
 
-    /* Note: Super Chunk 0 is pre-allocated for super extent. No extent contains
-     * mappings for Super Chunk 0. */
-    memset(super_chk, 0, sizeof(c_chk_t) * MAX_NR_SLAVES);
-    /* Free all the physical chunks. Do it in the reverse order, to free chunks in
-     * batches */
-    for (i=ext->size-1; i>=0; i--) 
-    { /* For each logical chunk */
-        for (j=0; j<ext->k_factor; j++) 
-        { /* For each replica */
-            struct      castle_slave *cs;
-            uint32_t    id;
-            uint32_t    uuid = maps_buf[MAP_IDX(ext, i, j)].slave_id;
-            c_chk_t     chk = maps_buf[MAP_IDX(ext, i, j)].offset;
-
-            cs = castle_slave_find_by_uuid(uuid);
-            if (!cs)
-            {
-                printk("FATAL: Extent is corrupted pointing to uuid: %u\n",
-                        uuid);
-                BUG();
-            }
-            id = cs->id;
-            debug("Freeing chunk %u from %u - %u\n", chk, uuid, super_chk[id]);
-            if (super_chk[id] != SUPER_CHUNK(chk))
-            {
-                if (super_chk[id]) 
-                    castle_freespace_slave_super_chunk_free(cs, super_chk[id]); 
-                super_chk[id] = SUPER_CHUNK(chk);
-            }
-        }
-
-        INJECT_FAULT;
-    }
-
-    for (i=0; i<MAX_NR_SLAVES; i++)
-    {
-        if (super_chk[i])
-        {
-            struct castle_slave *cs = castle_slave_find_by_id(i);
-            
-            debug("Freeing super chunk %u from %u\n", super_chk[i], cs->uuid);
-            castle_freespace_slave_super_chunk_free(cs, super_chk[i]);
-        }
-    }
+    castle_extents_maps_free(maps_buf, ext->size * ext->k_factor);
 
     castle_extents_sb->nr_exts--;
     castle_extents_super_block_put(1);

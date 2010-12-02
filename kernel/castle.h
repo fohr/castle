@@ -111,10 +111,9 @@ typedef uint32_t block_t;
 #define SUP_EXT_SIZE                   (30)  /* 2-RDA. Occupies double the space */
 #define MICRO_EXT_START                (60)
 #define MICRO_EXT_SIZE                 (1)   /* Dont change this */
-#define META_SPACE_START               (64)
 #define META_SPACE_SIZE                (300)
 #define MSTORE_SPACE_SIZE              (50)
-#define FREE_SPACE_START               (400) /* This must be >= to META_EXT_STRAT + METAEXT_SIZE. */
+#define FREE_SPACE_START               (100) 
 #define FREESPACE_OFFSET               (2 * C_CHK_SIZE)
 #define FREESPACE_SIZE                 (20 * C_CHK_SIZE)
 
@@ -242,11 +241,11 @@ struct castle_elist_entry {
 struct castle_extents_sb_t {
     c_ext_id_t                              ext_id_seq;
     uint64_t                                nr_exts;
-    c_byte_off_t                            next_free_byte;
     c_disk_chk_t                            micro_maps[MAX_NR_SLAVES];
     struct castle_elist_entry               micro_ext;
     struct castle_elist_entry               meta_ext;
     struct castle_elist_entry               mstore_ext[2];
+    c_ext_fs_bs_t                           meta_ext_fs_bs;
 };
 
 struct castle_slave_superblock {
