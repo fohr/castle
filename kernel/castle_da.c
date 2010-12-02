@@ -12,7 +12,7 @@
 #include "castle_ctrl.h"
 #include "castle_da.h"
 
-#define DEBUG
+//#define DEBUG
 #ifndef DEBUG
 #define debug(_f, ...)            ((void)0)
 #define debug_verbose(_f, ...)    ((void)0)
