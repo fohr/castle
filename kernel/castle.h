@@ -874,6 +874,7 @@ typedef struct castle_merged_iterator {
     struct castle_btree_type *btree;
     int err;
     int non_empty_cnt;
+    uint64_t src_items_completed;
     struct component_iterator {
         int                          completed;
         void                        *iterator;

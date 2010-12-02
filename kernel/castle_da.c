@@ -675,6 +675,7 @@ static int _castle_ct_merged_iter_prep_next(c_merged_iter_t *iter,
                                                &comp_iter->cached_entry.v,
                                                &comp_iter->cached_entry.cvt);
                 comp_iter->cached = 1;
+                iter->src_items_completed++;
                 merg_itr_dbg("%s:%p:%d - cached\n", __FUNCTION__, iter, i);
             }
             else
@@ -852,6 +853,7 @@ static void castle_ct_merged_iter_init(c_merged_iter_t *iter,
     BUG_ON(iter->nr_iters <= 0);
     BUG_ON(!iter->btree);
     iter->err = 0;
+    iter->src_items_completed = 0;
     iter->end_io = NULL;
     iter->iterators = castle_malloc(iter->nr_iters * sizeof(struct component_iterator), GFP_KERNEL);
     if(!iter->iterators)
@@ -1943,6 +1945,17 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
     castle_free(merge);
 }
 
+static void castle_da_merge_progress_update(struct castle_da_merge *merge)
+{
+        /* For merges at level >= 3, print progress every 10%. */
+        items_completed = merge->merged_iter->src_items_completed;
+        if((next_print_percent * total_items)/100ULL < items_completed)
+        {
+            printk("For DA=%d, merge at level=%d, completed %lld%%\n",
+                    merge->da->id, level, (100ULL * items_completed) / total_items);
+            next_print_percent += 10; 
+        }
+}
 
 static void castle_da_merge_do(struct work_struct *work)
 {
@@ -1953,18 +1966,23 @@ static void castle_da_merge_do(struct work_struct *work)
     void *key;
     version_t version;
     c_val_tup_t cvt;
-    int i, ret, level;
+    int ret, level;
+    uint64_t i, total_items;
+    uint64_t next_print_percent, items_completed;
     struct castle_double_array *da;
 
     debug("Initialising the iterators.\n");
     /* Create an appropriate iterator for each of the trees */
     level = merge->in_tree1->level;
+    total_items  = atomic64_read(&merge->in_tree1->item_count);
+    total_items += atomic64_read(&merge->in_tree2->item_count);
     ret = castle_da_iterators_create(merge);
     if(ret)
         goto err_out;
 
     /* Do the merge by iterating through all the entries. */
     i = 0;
+    next_print_percent = 0;
     debug("Starting the merge.\n");
     perf_event("m-%d-beg", level);
     while(castle_ct_merged_iter_has_next(merge->merged_iter))
@@ -1983,6 +2001,7 @@ static void castle_da_merge_do(struct work_struct *work)
         if((ret = castle_da_nodes_complete(merge, 0)))
             goto err_out;
         castle_da_merge_budget_consume(merge);
+        castle_da_merge_progress_update(merge);
         i++;
 
         FAULT(MERGE_FAULT);
