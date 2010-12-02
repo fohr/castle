@@ -47,6 +47,7 @@ typedef uint32_t version_t;
 #define CASTLE_CTRL_SET_TARGET               19
 #define CASTLE_CTRL_DESTROY                  20
 #define CASTLE_CTRL_PROTOCOL_VERSION         21
+#define CASTLE_CTRL_FAULT                    22
 
 #define PACKED               __attribute__((packed))
 typedef struct castle_control_cmd_claim {
@@ -134,6 +135,11 @@ typedef struct castle_control_cmd_protocol_version {
     uint32_t version;          /* OUT */
 } PACKED cctrl_cmd_protocol_version_t;
 
+typedef struct castle_control_cmd_fault {
+    uint32_t fault_id;         /* IN  */
+    int      ret;              /* OUT */
+} PACKED cctrl_cmd_fault_t;
+
 typedef struct castle_control_ioctl {
     uint16_t cmd;
     union {
@@ -157,6 +163,8 @@ typedef struct castle_control_ioctl {
         cctrl_cmd_transfer_destroy_t    transfer_destroy;
 
         cctrl_cmd_protocol_version_t    protocol_version;
+
+        cctrl_cmd_fault_t               fault;
     };
 } PACKED cctrl_ioctl_t;
 
@@ -200,6 +208,8 @@ enum {
         _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_DESTROY, cctrl_ioctl_t),
     CASTLE_CTRL_PROTOCOL_VERSION_IOCTL =
         _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_PROTOCOL_VERSION, cctrl_ioctl_t),
+    CASTLE_CTRL_FAULT_IOCTL =
+        _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_FAULT, cctrl_ioctl_t),
 };
 
 /*
@@ -384,6 +394,22 @@ struct castle_fs_superblock_public {
     uint32_t peper;
     uint32_t checksum;
 } PACKED;
+
+typedef enum {
+    NO_FAULT,
+    CLAIM_FAULT,
+    FS_INIT_FAULT,
+    FS_RESTORE_FAULT,
+    FINI_FAULT,
+    REPLACE_FAULT,
+    GET_FAULT,
+    BIG_PUT_FAULT,
+    BIG_GET_FAULT,
+    MERGE_FAULT,
+    EXTENT_FAULT,
+    FREESPACE_FAULT,
+    CHECKPOINT_FAULT,
+} c_fault_t;
 
 /* Ref: This code is taken from wikipedia. */
 static uint32_t __attribute__((used)) fletcher32( uint16_t *data, size_t len )

@@ -51,6 +51,8 @@
         (_me)->maps_cep     = (_ext)->maps_cep;                             \
         (_me)->obj_refs     = (_ext)->obj_refs;                              
  
+#define FAULT_CODE EXTENT_FAULT
+
 int low_disk_space = 0;
 
 c_chk_cnt_t meta_ext_size = 0;
@@ -251,6 +253,8 @@ static void castle_extents_super_block_writeback(void)
            sizeof(struct castle_extents_sb_t));
 
     castle_fs_superblocks_put(sblk, 1);
+
+    INJECT_FAULT;
 }
 
 struct castle_extents_sb_t * castle_extents_super_block_get(void)
@@ -420,6 +424,7 @@ int castle_extents_create(void)
     if (castle_extent_meta_ext_create())
         return -EINVAL;
 
+    INJECT_FAULT;
     extent_init_done = 1;
 
     if (castle_extent_mstore_ext_create())
@@ -453,6 +458,7 @@ static int castle_extent_writeback(c_ext_t *ext, void *store)
 
     nr_exts++;
 
+    INJECT_FAULT;
     return 0;
 }
 
@@ -486,6 +492,8 @@ int castle_extents_writeback(void)
 
     /* Flush the complete meta extent onto disk, before completing writeback. */
     castle_cache_extent_flush_schedule(META_EXT_ID, 0, 0);
+
+    INJECT_FAULT;
 
     /* It is important to complete freespace_writeback() under extent lock, to
      * make sure freesapce and extents are in sync. */ 
@@ -585,6 +593,8 @@ int castle_extents_read_complete(void)
     ext_sblk = castle_extents_super_block_get();
     BUG_ON(ext_sblk->nr_exts != nr_exts);
     castle_extents_super_block_put(0);
+
+    INJECT_FAULT;
 
     return 0;
 
@@ -713,6 +723,8 @@ int castle_extent_space_alloc(c_ext_t *ext, da_id_t da_id)
         dirty_c2b(c2b);
         write_unlock_c2b(c2b);
         put_c2b(c2b);
+
+        INJECT_FAULT;
         cep.offset += C_BLK_SIZE;
     }
     castle_vfree(maps_buf);
@@ -881,6 +893,8 @@ void _castle_extent_free(c_ext_t *ext)
                 super_chk[id] = SUPER_CHUNK(chk);
             }
         }
+
+        INJECT_FAULT;
     }
 
     for (i=0; i<MAX_NR_SLAVES; i++)
@@ -975,6 +989,8 @@ static void __castle_extent_map_get(c_ext_t             *ext,
 
         read_unlock_c2b(c2b);
         put_c2b(c2b);
+
+        INJECT_FAULT;
     }
 }
 

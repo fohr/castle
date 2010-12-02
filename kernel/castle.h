@@ -1172,4 +1172,15 @@ int  castle_ctrl_is_locked          (void);
 #define CASTLE_TRANSACTION_END      castle_ctrl_unlock()
 #define CASTLE_IN_TRANSACTION       castle_ctrl_is_locked()
 
+#define FAULT(_fault)                                           \
+    if (castle_fault == _fault)                                 \
+    {                                                           \
+        printk("User asked for fault\n");                       \
+        BUG();                                                  \
+    }
+
+#define INJECT_FAULT                FAULT(FAULT_CODE)
+
+extern c_fault_t castle_fault;
+
 #endif /* __CASTLE_H__ */

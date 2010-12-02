@@ -18,6 +18,8 @@
 #define DISK_NOT_USED(_fs) (((_fs)->prod == (_fs)->cons) &&            \
                             ((_fs)->nr_entries == (_fs)->max_entries))
 
+#define FAULT_CODE FREESPACE_FAULT
+
 castle_freespace_t * freespace_sblk_get(struct castle_slave *cs)
 {
     mutex_lock(&cs->freespace_lock);
@@ -90,6 +92,8 @@ c_chk_seq_t castle_freespace_slave_chunks_alloc(struct castle_slave    *cs,
 
     BUG_ON((chk_seq.first_chk + chk_seq.count - 1) >= (freespace->disk_size + FREE_SPACE_START));
     freespace_sblk_put(cs, 1);
+
+    INJECT_FAULT;
 
     debug("Allocating %u chunks from slave %u at %u chunk\n", chk_seq.count, 
           cs->uuid,
@@ -178,6 +182,8 @@ void castle_freespace_slave_chunk_free(struct castle_slave      *cs,
     BUG_ON(freespace->nr_entries > freespace->max_entries ||
                 freespace->free_chk_cnt > freespace->disk_size);
 
+    INJECT_FAULT;
+
     freespace_sblk_put(cs, 1);
 }
 
@@ -214,15 +220,12 @@ int castle_freespace_slave_init(struct castle_slave *cs, int fresh)
 
     cs->disk_size = freespace->disk_size;
     atomic_set(&cs->free_chk_cnt, freespace->free_chk_cnt);
-    printk("Init Disk %d\n\tsize %u chunks\n\tlist size: %u\n", 
-          cs->id, 
-          freespace->disk_size,
-          freespace->max_entries);
-    debug("     Free chunks: %u\n", freespace->free_chk_cnt);
-    debug("     nr_entries: %u\n", freespace->nr_entries);
+    castle_freespace_print(cs);
 
     nr_chunks = freespace->disk_size;
   
+    INJECT_FAULT;
+
     if (fresh)
         castle_freespace_slave_chunk_free(cs, 
                          (c_chk_seq_t){FREE_SPACE_START, nr_chunks});
@@ -256,7 +259,8 @@ static int castle_freespace_slave_writeback(struct castle_slave *cs, void *unuse
 
     castle_cache_extent_flush_schedule(cs->sup_ext, FREESPACE_OFFSET, 
                                        cs->freespace.nr_entries * sizeof(c_chk_t));
-    
+    INJECT_FAULT;
+
     return 0;
 }
 
@@ -279,22 +283,28 @@ void castle_freespace_slave_close(struct castle_slave *cs)
     debug("Closed the module\n");
 }
 
+void castle_freespace_print(struct castle_slave *cs)
+{
+    castle_freespace_t  *freespace;
+
+    freespace = freespace_sblk_get(cs);
+    printk("\tFreespace (0x%x) -> %u\n", cs->uuid, freespace->free_chk_cnt);
+    printk("\t\tprod: %d\n", freespace->prod);
+    printk("\t\tcons: %d\n", freespace->cons);
+    printk("\t\tnr_entries: %d\n", freespace->nr_entries);
+    printk("\t\tmax_entries: %d\n", freespace->max_entries);
+    freespace_sblk_put(cs, 0);
+}
+
 void castle_freespace_stats_print(void)
 {
     struct list_head *lh;
     struct castle_slave *slave;
-    castle_freespace_t  *freespace;
 
     printk("Freespace stats: \n");
     list_for_each(lh, &castle_slaves.slaves)
     {
         slave = list_entry(lh, struct castle_slave, list);
-        freespace = freespace_sblk_get(slave);
-        printk("\tDisk (0x%x) -> %u\n", slave->uuid, freespace->free_chk_cnt);
-        printk("\t\tprod: %d\n", freespace->prod);
-        printk("\t\tcons: %d\n", freespace->cons);
-        printk("\t\tnr_entries: %d\n", freespace->nr_entries);
-        printk("\t\tmax_entries: %d\n", freespace->max_entries);
-        freespace_sblk_put(slave, 0);
+        castle_freespace_print(slave);
     }
 }

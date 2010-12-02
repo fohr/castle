@@ -471,6 +471,12 @@ void castle_control_protocol_version(int *ret, uint32_t *version)
     *version = CASTLE_PROTOCOL_VERSION;
 }
 
+void castle_control_fault(uint32_t fault, int *ret)
+{
+    *ret = 0;
+    castle_fault = fault;
+}
+
 int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
     int err;
@@ -493,7 +499,10 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
         return -EINVAL;
     }
 
-    if(!castle_fs_inited && (ioctl.cmd != CASTLE_CTRL_CLAIM) && (ioctl.cmd != CASTLE_CTRL_INIT) && (ioctl.cmd != CASTLE_CTRL_PROTOCOL_VERSION))
+    if(!castle_fs_inited && (ioctl.cmd != CASTLE_CTRL_CLAIM) && 
+                            (ioctl.cmd != CASTLE_CTRL_INIT) && 
+                            (ioctl.cmd != CASTLE_CTRL_PROTOCOL_VERSION) &&
+                            (ioctl.cmd != CASTLE_CTRL_FAULT))
     {
         printk("Disallowed ctrl op %d, before fs gets inited.\n", ioctl.cmd);
         return -EINVAL;
@@ -612,6 +621,11 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
         case CASTLE_CTRL_TRANSFER_DESTROY:
             err = -ENOSYS;
             goto err;
+
+        case CASTLE_CTRL_FAULT:
+            castle_control_fault( ioctl.fault.fault_id,
+                                 &ioctl.fault.ret);
+            break;
 
         default:
             err = -EINVAL;

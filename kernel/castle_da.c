@@ -12,7 +12,7 @@
 #include "castle_ctrl.h"
 #include "castle_da.h"
 
-//#define DEBUG
+#define DEBUG
 #ifndef DEBUG
 #define debug(_f, ...)            ((void)0)
 #define debug_verbose(_f, ...)    ((void)0)
@@ -1780,6 +1780,8 @@ static struct castle_component_tree* castle_da_merge_package(struct castle_da_me
             merge->in_tree1->seq, merge->in_tree2->seq, out_tree->seq);
     debug("Adding to doubling array, level: %d\n", out_tree->level);
 
+    FAULT(MERGE_FAULT);
+
     CASTLE_TRANSACTION_BEGIN;
 
     castle_da_lock(merge->da);
@@ -1982,6 +1984,8 @@ static void castle_da_merge_do(struct work_struct *work)
             goto err_out;
         castle_da_merge_budget_consume(merge);
         i++;
+
+        FAULT(MERGE_FAULT);
     }
     debug("Flushing the last nodes.\n");
     /* Complete the merge, by flushing all the buffered entries */
@@ -2644,6 +2648,7 @@ static int castle_da_t0_create(struct castle_double_array *da, void *unused)
             printk("Failed to create T0 for DA: %u\n", da->id);
             return -EINVAL;
         }
+        printk("Done with T0\n");
 
         return 0;
     }
@@ -2885,6 +2890,9 @@ static int castle_da_rwct_make(struct castle_double_array *da, int in_tran)
     }
     /* Thread CT onto level 0 list */
     castle_component_tree_add(da, ct, 0 /* not in init */);
+
+    FAULT(MERGE_FAULT);
+
     if (!in_tran) CASTLE_TRANSACTION_END;
     /* DA is attached, therefore we must be holding a ref, therefore it is safe to schedule
        the merge check. */
