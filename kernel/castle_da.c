@@ -1484,6 +1484,8 @@ static inline void castle_da_entry_add(struct castle_da_merge *merge,
     if(CVT_LARGE_OBJECT(cvt))
     {
         merge->large_chunks += castle_extent_size_get(cvt.cep.ext_id);
+        /* No need to add Large Objects under lock as merge is done in
+         * sequence. No concurrency issues on the tree. */
         castle_ct_large_obj_add(cvt.cep.ext_id, cvt.length, &merge->large_objs, NULL);
         castle_extent_get(cvt.cep.ext_id);
     }
@@ -2556,6 +2558,8 @@ out:
 
 static int castle_ct_hash_destroy_check(struct castle_component_tree *ct, void *ct_hash)
 {
+    struct list_head *lh, *t;
+
     /* Only the global component tree should remain when we destroy DA hash. */ 
     if(((unsigned long)ct_hash > 0) && !TREE_GLOBAL(ct->seq))
         printk("Error: Found CT=%d not on any DA's list, it claims DA=%d\n", 
@@ -2568,6 +2572,15 @@ static int castle_ct_hash_destroy_check(struct castle_component_tree *ct, void *
    if(TREE_GLOBAL(ct->seq) && (ct->da_list.next != NULL))
        printk("Error: Global CT=%d is on DA list, for DA=%d\n", 
                ct->seq, ct->da);
+
+   /* Free large object structures. */
+   list_for_each_safe(lh, t, &ct->large_objs)
+   {
+       struct castle_large_obj_entry *lo = 
+                list_entry(lh, struct castle_large_obj_entry, list);
+       list_del(lh);
+       castle_free(lo);
+   }
    
    /* Ref count should be 1 by now. */
    if(atomic_read(&ct->ref_count) != 1)
