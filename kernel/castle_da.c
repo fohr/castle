@@ -66,29 +66,33 @@ static int                      castle_da_exiting    = 0;
 #define DOUBLE_ARRAY_DELETED_BIT            (1)
 #define DOUBLE_ARRAY_DELETED_FLAG           (1 << DOUBLE_ARRAY_DELETED_BIT)
 struct castle_double_array {
-    da_id_t             id;
-    version_t           root_version;
+    da_id_t                 id;
+    version_t               root_version;
     /* Lock protects the trees list */
-    spinlock_t          lock;
-    unsigned long       flags;
-    int                 nr_trees;
-    struct list_head    trees[MAX_DA_LEVEL];
-    struct task_struct *merge_threads[MAX_DA_LEVEL];
-    struct list_head    hash_list;
-    atomic_t            ref_cnt;
-    uint32_t            attachment_cnt;
+    spinlock_t              lock;
+    unsigned long           flags;
+    int                     nr_trees;
+    struct {
+        int                 nr_trees;
+        struct list_head    trees;
+        struct task_struct *merge_thread;
+    } levels[MAX_DA_LEVEL];
+    struct list_head        hash_list;
+    atomic_t                ref_cnt;
+    uint32_t                attachment_cnt;
     /* Queue of write IOs queued up on this DA. */
-    struct list_head    ios_waiting;
-    int                 ios_waiting_cnt;
-    uint32_t            ios_budget;
-    uint32_t            ios_rate;
-    struct work_struct  queue_restart;
+    struct list_head        ios_waiting;
+    int                     ios_waiting_cnt;
+    uint32_t                ios_budget;
+    uint32_t                ios_rate;
+    struct work_struct      queue_restart;
     /* Merge deamortisation */
-    int                 max_merge_level;
+    wait_queue_head_t       merge_waitq;
+    int                     max_merge_level;
     /* Merge throttling. DISABLED ATM. */
-    atomic_t            epoch_ios;
-    atomic_t            merge_budget;
-    wait_queue_head_t   merge_budget_wq;
+    atomic_t                epoch_ios;
+    atomic_t                merge_budget;
+    wait_queue_head_t       merge_budget_waitq;
 };
 
 DEFINE_HASH_TBL(castle_da, castle_da_hash, CASTLE_DA_HASH_SIZE, struct castle_double_array, hash_list, da_id_t, id);
@@ -1050,7 +1054,7 @@ again:
     j=0;
     for(i=0; i<MAX_DA_LEVEL; i++)
     {
-        list_for_each(l, &da->trees[i])
+        list_for_each(l, &da->levels[i].trees)
         {
             struct castle_component_tree *ct;
 
@@ -1165,7 +1169,7 @@ static void castle_da_merge_budget_consume(struct castle_da_merge *merge)
         /* We failed to get merge budget, readd the unit, and wait for some to appear. */
         atomic_inc(&da->merge_budget);
         //printk("Throttling merge. Unexpected.\n");
-        //wait_event(da->merge_budget_wq, atomic_read(&da->merge_budget) > 0);
+        //wait_event(da->merge_budget_waitq, atomic_read(&da->merge_budget) > 0);
     }
 }
 
@@ -1189,7 +1193,7 @@ static int castle_da_merge_budget_replenish(struct castle_double_array *da, void
     merge_budget = atomic_add_return(budget_delta, &da->merge_budget);
     if(merge_budget > MAX_BUDGET)
         atomic_sub(merge_budget - MAX_BUDGET, &da->merge_budget);
-    wake_up(&da->merge_budget_wq);
+    wake_up(&da->merge_budget_waitq);
 
     return 0;
 }
@@ -2061,20 +2065,27 @@ static int castle_da_merge_run(void *da_p)
     struct castle_double_array *da = (struct castle_double_array *)da_p;
     struct castle_component_tree *in_tree1, *in_tree2;
     struct list_head *l;
-    int level, do_merge;
+    int level;
 
+#define exit_cond (castle_da_exiting || castle_da_deleted(da))
     /* Work out the level at which we are supposed to be doing merges.
        Do that by working out where is this thread in threads array. */
     for(level=1; level<MAX_DA_LEVEL; level++)
-        if(da->merge_threads[level] == current)
+        if(da->levels[level].merge_thread == current)
             break;
     BUG_ON(level >= MAX_DA_LEVEL);
     printk("Starting merge thread for DA=%d, level=%d\n", da->id, level);
     do {
-        /* Check whether there are >= 2 trees at this level, to do a merge. */ 
+        /* Wait for 2+ trees to appear at this level. */
+        wait_event(da->merge_waitq, exit_cond || (da->levels[level].nr_trees >= 2));
+        /* Exit without doing a merge, if we are stopping execution, or da has been deleted. */ 
+        if(exit_cond)
+            break;
+
+        /* Otherwise do a merge. */
         in_tree1 = in_tree2 = NULL;
         castle_da_lock(da);
-        list_for_each_prev(l, &da->trees[level])
+        list_for_each_prev(l, &da->levels[level].trees)
         {
             if(!in_tree2)
                 in_tree2 = list_entry(l, struct castle_component_tree, da_list);
@@ -2083,32 +2094,21 @@ static int castle_da_merge_run(void *da_p)
                 in_tree1 = list_entry(l, struct castle_component_tree, da_list);
         }
         /* Do the merge, if both trees exist. */
-        do_merge = in_tree1 && in_tree2; 
-        if(!do_merge)
-            set_task_state(current, TASK_INTERRUPTIBLE);
         castle_da_unlock(da);
 
-        if(do_merge)
-        {
-            printk("Doing merge for DA=%d, level=%d\n", da->id, level);
-            /* Do the merge. */
-            BUG_ON(castle_da_merge_schedule(da, in_tree1, in_tree2));
-            printk("Done merge for DA=%d, level=%d\n", da->id, level);
-            /* Do another check, without going to sleep. */
-            if(!castle_da_exiting && !castle_da_deleted(da))
-                continue;
-        } else
-        {
-            /* Go to sleep, we'll be woken up when tree lists get updated. */
-            schedule();
-        }
-    } while(!castle_da_exiting && !castle_da_deleted(da));
+        BUG_ON(!in_tree1 || !in_tree2);
+            
+        printk("Doing merge for DA=%d, level=%d\n", da->id, level);
+        /* Do the merge. */
+        BUG_ON(castle_da_merge_schedule(da, in_tree1, in_tree2));
+        printk("Done merge for DA=%d, level=%d\n", da->id, level);
+    } while(1);
 
     printk("Merge thread for DA=%d, at level=%d exiting.\n", da->id, level);
 
     castle_da_lock(da);
     /* Remove ourselves from the da merge threads array to indicate that we are finished. */  
-    da->merge_threads[level] = NULL;
+    da->levels[level].merge_thread = NULL;
     castle_da_unlock(da);
     /* castle_da_alloc() took a reference for us, we have to drop it now. */
     castle_da_put(da);
@@ -2122,48 +2122,21 @@ static int castle_da_merge_stop(struct castle_double_array *da, void *unused)
 
     /* castle_da_exiting should have been set by now. */
     BUG_ON(!castle_da_exiting);
-    castle_da_lock(da);
+    wake_up(&da->merge_waitq);
     for(i=1; i<MAX_DA_LEVEL; i++)
     {
-        struct task_struct *thread;
-            
-        do {
-            thread = da->merge_threads[i];
-            /* If thread exists, make sure it is woken up, wait for a little while, and recheck. */
-            if(thread)
-            {
-                wake_up_process(thread);
-                castle_da_unlock(da);
-                msleep(10);
-                castle_da_lock(da);
-            }
-        } while(thread);
+        while(da->levels[i].merge_thread)
+            msleep(10);
         printk("Stopped merge thread for DA=%d, level=%d\n", da->id, i);
     }
-    castle_da_unlock(da);
 
     return 0;
 }
 
 static int castle_da_merge_restart(struct castle_double_array *da, void *unused)
 {
-    int i;
-
     printk("Restarting merge for DA=%d\n", da->id);
-    castle_da_lock(da);
-    for(i=1; i<MAX_DA_LEVEL; i++)
-    {
-        struct task_struct *thread;
-
-        thread = da->merge_threads[i];
-        if(thread)
-            wake_up_process(thread);
-        else
-            /* We should always have merge threads, unless the DA got deleted, 
-               or we are exiting. */
-            BUG_ON(!castle_da_exiting && !castle_da_deleted(da));
-    }
-    castle_da_unlock(da);
+    wake_up(&da->merge_waitq);
 
     return 0;
 }
@@ -2185,7 +2158,7 @@ static void castle_da_merge_check(struct castle_double_array *da)
     for(level=1; level<MAX_DA_LEVEL; level++)
     {
         nr_trees = 0;
-        list_for_each_prev(l, &da->trees[level])
+        list_for_each_prev(l, &da->levels[level].trees)
         {
             /* max_level == level iff there are at least 2 trees at this level. 
                This means that max_level is mergable. */
@@ -2286,25 +2259,33 @@ static struct castle_double_array* castle_da_alloc(da_id_t da_id)
     da->max_merge_level = -1;
     atomic_set(&da->epoch_ios, 0);
     atomic_set(&da->merge_budget, 0);
-    init_waitqueue_head(&da->merge_budget_wq);
-    INIT_LIST_HEAD(&da->trees[0]);
-    for(i=1; i<MAX_DA_LEVEL; i++)
+    init_waitqueue_head(&da->merge_waitq);
+    init_waitqueue_head(&da->merge_budget_waitq);
+    for(i=0; i<MAX_DA_LEVEL; i++)
     {
-        INIT_LIST_HEAD(&da->trees[i]);
-        /* Get a reference for each of the merge threads. They drop them when they finish executing. */
-        castle_da_get(da);
-        da->merge_threads[i] = kthread_create(castle_da_merge_run, da, "castle-m-%d-%.2d", da_id, i);
-        if(!da->merge_threads[i])
-            goto err_out;
+        INIT_LIST_HEAD(&da->levels[i].trees);
+        da->levels[i].nr_trees = 0;
+        /* Create merge threads, and take da ref for all levels >= 1. */
+        if(i>0)
+        {
+            castle_da_get(da);
+            da->levels[i].merge_thread = 
+                kthread_create(castle_da_merge_run, da, "castle-m-%d-%.2d", da_id, i);
+            if(!da->levels[i].merge_thread)
+                goto err_out;
+        }
     }
     printk("Allocated DA=%d successfully.\n", da_id);
+    /* Start all of the merge threads. */
+    for(i=1; i<MAX_DA_LEVEL; i++)
+        wake_up_process(da->levels[i].merge_thread);
 
     return da;
 
 err_out:
     for(i--; i>0; i--)
     {
-        kthread_stop(da->merge_threads[i]);
+        kthread_stop(da->levels[i].merge_thread);
         /* Doesn't really need to be done, since we are going to free the structure anyway. */
         BUG_ON(atomic_read(&da->ref_cnt) < 2);
         castle_da_put(da);
@@ -2348,14 +2329,15 @@ static void castle_component_tree_add(struct castle_double_array *da,
        of the tree we are inserting is greater (i.e. enforce rev seq number
        ordering in component trees in a given level). Don't check that during
        init (when we are storting the trees afterwards). */
-    if(!in_init && !list_empty(&da->trees[ct->level]))
+    if(!in_init && !list_empty(&da->levels[ct->level].trees))
     {
-        next_ct = list_entry(da->trees[ct->level].next, 
+        next_ct = list_entry(da->levels[ct->level].trees.next, 
                              struct castle_component_tree,
                              da_list);
         BUG_ON(next_ct->seq >= ct->seq);
     }
-    list_add(&ct->da_list, &da->trees[ct->level]);
+    list_add(&ct->da_list, &da->levels[ct->level].trees);
+    da->levels[ct->level].nr_trees++;
     da->nr_trees++;
 }
 
@@ -2369,6 +2351,7 @@ static void castle_component_tree_del(struct castle_double_array *da,
     list_del(&ct->da_list); 
     ct->da_list.next = NULL;
     ct->da_list.prev = NULL;
+    da->levels[ct->level].nr_trees--;
     da->nr_trees--;
 }
 
@@ -2472,7 +2455,7 @@ static int castle_da_trees_sort(struct castle_double_array *da, void *unused)
 
     castle_da_lock(da);
     for(i=0; i<MAX_DA_LEVEL; i++)
-        list_sort(&da->trees[i], castle_da_ct_dec_cmp);
+        list_sort(&da->levels[i].trees, castle_da_ct_dec_cmp);
     castle_da_unlock(da);
 
     return 0;
@@ -2544,7 +2527,7 @@ static void castle_da_foreach_tree(struct castle_double_array *da,
     for(i=0; i<MAX_DA_LEVEL; i++)
     {
         j = 0;
-        list_for_each_safe(lh, t, &da->trees[i])
+        list_for_each_safe(lh, t, &da->levels[i].trees)
         {
             ct = list_entry(lh, struct castle_component_tree, da_list); 
             if(fn(da, ct, j, token))
@@ -2755,7 +2738,7 @@ static int castle_da_rwct_make(struct castle_double_array *da, int in_tran);
 static int castle_da_t0_create(struct castle_double_array *da, void *unused)
 {
     castle_da_lock(da);
-    if (list_empty(&da->trees[0]))
+    if (list_empty(&da->levels[0].trees))
     {
         castle_da_unlock(da);
         printk("Creating new T0 for da: %u\n", da->id);
@@ -2998,9 +2981,9 @@ static int castle_da_rwct_make(struct castle_double_array *da, int in_tran)
     /* Move the last rwct (if one exists) to level 1 */
     if (!in_tran) CASTLE_TRANSACTION_BEGIN;
     castle_da_lock(da);
-    if(!list_empty(&da->trees[0]))
+    if(!list_empty(&da->levels[0].trees))
     {
-        old_ct = list_entry(da->trees[0].next, struct castle_component_tree, da_list);
+        old_ct = list_entry(da->levels[0].trees.next, struct castle_component_tree, da_list);
         castle_component_tree_del(da, old_ct);
         old_ct->level = 1;
         castle_component_tree_add(da, old_ct, 0 /* not in init */);
@@ -3076,12 +3059,12 @@ static struct castle_component_tree* castle_da_ct_next(struct castle_component_t
         BUG_ON(ct_list->prev != NULL);
         /* Advance to the next level. */
         level++;
-        ct_list = &da->trees[level];
+        ct_list = &da->levels[level].trees;
     }
     /* Loop through all levels trying to find a tree. */
     while(level < MAX_DA_LEVEL)
     {
-        if(!list_is_last(ct_list, &da->trees[level]))
+        if(!list_is_last(ct_list, &da->levels[level].trees))
         {
             next_ct = list_entry(ct_list->next, struct castle_component_tree, da_list); 
             debug_verbose("Found component tree %d\n", next_ct->seq);
@@ -3092,7 +3075,7 @@ static struct castle_component_tree* castle_da_ct_next(struct castle_component_t
         }
         /* Advance to the next level. */
         level++;
-        ct_list = &da->trees[level];
+        ct_list = &da->levels[level].trees;
     }     
     castle_da_unlock(da);
 
@@ -3106,7 +3089,7 @@ static struct castle_component_tree* castle_da_rwct_get(struct castle_double_arr
     struct list_head *h, *l;
 
     castle_da_lock(da);
-    h = &da->trees[0]; 
+    h = &da->levels[0].trees; 
     l = h->next; 
     /* There should be precisely one entry in the list */
     BUG_ON((h == l) || (l->next != h));
@@ -3393,7 +3376,7 @@ void castle_da_destroy_complete(struct castle_double_array *da)
     {
         struct list_head *l, *lt;
 
-        list_for_each_safe(l, lt, &da->trees[i])
+        list_for_each_safe(l, lt, &da->levels[i].trees)
         {
             struct castle_component_tree *ct;
  
