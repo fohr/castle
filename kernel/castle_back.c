@@ -2083,7 +2083,7 @@ static void castle_back_put_chunk(void *data)
             op->req.put_chunk.buffer_len == 0)
     {
         spin_unlock(&stateful_op->lock);
-        error("Invalid value length %u (ptr=%p)\n", op->req.put_chunk.buffer_len, op->req.put_chunk.buffer_ptr);
+        error("Invalid buffer length %u (ptr=%p)\n", op->req.put_chunk.buffer_len, op->req.put_chunk.buffer_ptr);
         err = -EINVAL;
         goto err1;
     }
