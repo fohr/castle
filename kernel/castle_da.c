@@ -2158,7 +2158,9 @@ static int castle_da_merge_restart(struct castle_double_array *da, void *unused)
         if(thread)
             wake_up_process(thread);
         else
-            BUG_ON(!castle_da_exiting || !castle_da_deleted(da));
+            /* We should always have merge threads, unless the DA got deleted, 
+               or we are exiting. */
+            BUG_ON(!castle_da_exiting && !castle_da_deleted(da));
     }
     castle_da_unlock(da);
 
