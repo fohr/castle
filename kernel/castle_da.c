@@ -3369,8 +3369,6 @@ void castle_da_destroy_complete(struct castle_double_array *da)
 
     /* Sanity Checks. */
     BUG_ON(!castle_da_deleted(da));
-    /* Delete the DA from the list of deleted DAs. */
-    list_del(&da->hash_list);
 
     printk("Cleaning DA: %u\n", da->id);
 
@@ -3396,6 +3394,9 @@ void castle_da_destroy_complete(struct castle_double_array *da)
 
     /* Destroy Version and Rebuild Version Tree. */
     castle_version_tree_delete(da->root_version);
+
+    /* Delete the DA from the list of deleted DAs. */
+    list_del(&da->hash_list);
 
     /* Poison and free (may be repoisoned on debug kernel builds). */
     memset(da, 0xa7, sizeof(struct castle_double_array));
