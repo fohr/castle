@@ -2561,19 +2561,40 @@ out:
 static int castle_ct_hash_destroy_check(struct castle_component_tree *ct, void *ct_hash)
 {
     struct list_head *lh, *t;
+    int    err = 0;
 
     /* Only the global component tree should remain when we destroy DA hash. */ 
     if(((unsigned long)ct_hash > 0) && !TREE_GLOBAL(ct->seq))
+    {
         printk("Error: Found CT=%d not on any DA's list, it claims DA=%d\n", 
             ct->seq, ct->da);
+        err = -1;
+    }
 
    /* All CTs apart of global are expected to be on a DA list. */
    if(!TREE_GLOBAL(ct->seq) && (ct->da_list.next == NULL))
+   {
        printk("Error: CT=%d is not on DA list, for DA=%d\n", 
                ct->seq, ct->da);
+       err = -2;
+   }
+
    if(TREE_GLOBAL(ct->seq) && (ct->da_list.next != NULL))
+   {
        printk("Error: Global CT=%d is on DA list, for DA=%d\n", 
                ct->seq, ct->da);
+       err = -3;
+   }
+
+   /* Ref count should be 1 by now. */
+   if(atomic_read(&ct->ref_count) != 1)
+   {
+       printk("Error: Bogus ref count=%d for ct=%d, da=%d when exiting.\n", 
+               atomic_read(&ct->ref_count), ct->seq, ct->da);
+       err = -4;
+   }
+
+   BUG_ON(err);
 
    /* Free large object structures. */
    list_for_each_safe(lh, t, &ct->large_objs)
@@ -2584,11 +2605,6 @@ static int castle_ct_hash_destroy_check(struct castle_component_tree *ct, void *
        castle_free(lo);
    }
    
-   /* Ref count should be 1 by now. */
-   if(atomic_read(&ct->ref_count) != 1)
-       printk("Error: Bogus ref count=%d for ct=%d, da=%d when exiting.\n", 
-               atomic_read(&ct->ref_count), ct->seq, ct->da);
-
     return 0;
 }
 
