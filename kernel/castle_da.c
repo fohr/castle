@@ -93,6 +93,7 @@ struct castle_double_array {
 
 DEFINE_HASH_TBL(castle_da, castle_da_hash, CASTLE_DA_HASH_SIZE, struct castle_double_array, hash_list, da_id_t, id);
 DEFINE_HASH_TBL(castle_ct, castle_ct_hash, CASTLE_CT_HASH_SIZE, struct castle_component_tree, hash_list, tree_seq_t, seq);
+static LIST_HEAD(castle_deleted_das);
 
 /**********************************************************************************************/
 /* Prototypes */
@@ -3356,10 +3357,20 @@ err_out:
 
 void castle_double_array_merges_fini(void)
 {
+    int deleted_das;
+
     castle_da_exiting = 1;
     del_singleshot_timer_sync(&throttle_timer);
     /* This is happening at the end of execution. No need for the hash lock. */
     __castle_da_hash_iterate(castle_da_merge_stop, NULL);
+    /* Also, wait for merges on deleted DAs. Merges will hold the last references to those DAs. */
+    do {
+        CASTLE_TRANSACTION_BEGIN;
+        deleted_das = !list_empty(&castle_deleted_das);
+        CASTLE_TRANSACTION_END;
+        if(deleted_das)
+            msleep(10);
+    } while(deleted_das);
 }
 
 void castle_double_array_fini(void)
@@ -3399,6 +3410,9 @@ void castle_da_destroy_complete(struct castle_double_array *da)
 
     /* Destroy Version and Rebuild Version Tree. */
     castle_version_tree_delete(da->root_version);
+
+    /* Delete the DA from the list of deleted DAs. */
+    list_del(&da->hash_list);
 
     /* Poison and free (may be repoisoned on debug kernel builds). */
     memset(da, 0xa7, sizeof(struct castle_double_array));
@@ -3519,6 +3533,8 @@ int castle_double_array_destroy(da_id_t da_id)
     castle_da_deleted_set(da);
     /* Restart the merge threads, so that they get to exit, and drop their da refs. */
     castle_da_merge_restart(da, NULL);
+    /* Add it to the list of deleted DAs. */
+    list_add(&da->hash_list, &castle_deleted_das);
     /* Put the (usually) last reference to the DA. */
     castle_da_put_locked(da);
 
