@@ -1943,27 +1943,15 @@ static void castle_da_merge_progress_update(struct castle_da_merge *merge)
     /* Nothing more to be done just yet. */ 
 }
 
-static void castle_da_merge_do(struct castle_da_merge *merge)
+static int castle_da_merge_quantum_do(struct castle_da_merge *merge)
 {
-    struct castle_component_tree *out_tree;
     void *key;
     version_t version;
     c_val_tup_t cvt;
-    int ret, level;
     uint64_t i;
-    struct castle_double_array *da;
+    int ret;
 
-    debug("Initialising the iterators.\n");
-    /* Create an appropriate iterator for each of the trees */
-    level = merge->in_tree1->level;
-    ret = castle_da_iterators_create(merge);
-    if(ret)
-        goto err_out;
-
-    /* Do the merge by iterating through all the entries. */
     i = 0;
-    debug("Starting the merge.\n");
-    perf_event("m-%d-beg", level);
     while(castle_ct_merged_iter_has_next(merge->merged_iter))
     {
         might_resched();
@@ -1981,28 +1969,26 @@ static void castle_da_merge_do(struct castle_da_merge *merge)
             goto err_out;
         castle_da_merge_budget_consume(merge);
         castle_da_merge_progress_update(merge);
-        i++;
+        if(++i > 1000)
+            return EAGAIN;
 
         FAULT(MERGE_FAULT);
     }
-    debug("Flushing the last nodes.\n");
-    /* Complete the merge, by flushing all the buffered entries */
-    out_tree = castle_da_merge_complete(merge);
-    if(!out_tree)
-        ret = -EFAULT;
-    debug("============ Merge completed ============\n"); 
+
+    /* Return success, if we are finished with the merge. */
+    return EXIT_SUCCESS;
 
 err_out:
     if(ret)
         printk("Merge failed with %d\n", ret);
-    da = merge->da;
     castle_da_merge_dealloc(merge, ret);
-    perf_event("m-%d-end", level);
+
+    return ret; 
 }
 
-static int castle_da_merge_schedule(struct castle_double_array *da,
-                                    struct castle_component_tree *in_tree1,
-                                    struct castle_component_tree *in_tree2)
+static struct castle_da_merge* castle_da_merge_init(struct castle_double_array *da,
+                                                    struct castle_component_tree *in_tree1,
+                                                    struct castle_component_tree *in_tree2)
 {
     struct castle_btree_type *btree;
     struct castle_da_merge *merge = NULL;
@@ -2049,23 +2035,27 @@ static int castle_da_merge_schedule(struct castle_double_array *da,
     merge->data_ext_fs.ext_id = INVAL_EXT_ID;
     INIT_LIST_HEAD(&merge->large_objs);
 
-    castle_da_merge_do(merge);
-    return 0;
+    ret = castle_da_iterators_create(merge);
+    if(ret)
+        goto error_out;
+    
+    return merge;
 
 error_out:
     BUG_ON(!ret);
     castle_da_merge_dealloc(merge, ret);
     printk("Failed a merge with ret=%d\n", ret);
 
-    return ret;
+    return NULL;
 }
 
 static int castle_da_merge_run(void *da_p)
 {
     struct castle_double_array *da = (struct castle_double_array *)da_p;
-    struct castle_component_tree *in_tree1, *in_tree2;
+    struct castle_component_tree *in_tree1, *in_tree2, *out_tree;
+    struct castle_da_merge *merge;
     struct list_head *l;
-    int level;
+    int level, ret, loops;
 
 #define exit_cond (castle_da_exiting || castle_da_deleted(da))
     /* Work out the level at which we are supposed to be doing merges.
@@ -2093,15 +2083,44 @@ static int castle_da_merge_run(void *da_p)
             if(!in_tree1)
                 in_tree1 = list_entry(l, struct castle_component_tree, da_list);
         }
-        /* Do the merge, if both trees exist. */
         castle_da_unlock(da);
-
+        /* We should only get here, if we are supposed to do a merge => we have in_trees. */
         BUG_ON(!in_tree1 || !in_tree2);
             
         printk("Doing merge for DA=%d, level=%d\n", da->id, level);
+        perf_event("m-%d-beg", level);
+        merge = castle_da_merge_init(da, in_tree1, in_tree2);
+        if(!merge)
+        {
+            printk("Could not start a merge for DA=%d, level=%d.\n", da->id, level);
+            /* Retry after 10s. */
+            msleep(10000);
+            continue;
+        }
         /* Do the merge. */
-        BUG_ON(castle_da_merge_schedule(da, in_tree1, in_tree2));
-        printk("Done merge for DA=%d, level=%d\n", da->id, level);
+        loops = 0;
+        do {
+            ret = castle_da_merge_quantum_do(merge);
+            if(ret < 0)
+                goto merge_failed;
+            /* Only ret>0 we are expecting is to continue, i.e. EAGAIN. */
+            BUG_ON(ret && (ret != EAGAIN));
+            loops++;
+        } while(ret);
+        /* Package up the merge into the new tree. */
+        out_tree = castle_da_merge_complete(merge);
+        if(!out_tree)
+            ret = -EINVAL;
+merge_failed:
+        castle_da_merge_dealloc(merge, ret);
+        perf_event("m-%d-end", level);
+        printk("Done merge for DA=%d, level=%d, loops=%d\n", da->id, level, loops);
+        if(ret)
+        {
+            printk("Merge for DA=%d, level=%d, failed to merge err=%d.\n", da->id, level, ret);
+            /* Retry after 10s. */
+            msleep(10000);
+        }
     } while(1);
 
     printk("Merge thread for DA=%d, at level=%d exiting.\n", da->id, level);
