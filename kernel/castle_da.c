@@ -75,7 +75,11 @@ struct castle_double_array {
     struct {
         int                 nr_trees;
         struct list_head    trees;
-        struct task_struct *merge_thread;
+        /* Merge related veriables. */
+        struct {
+            uint32_t            units_commited; 
+            struct task_struct *thread;
+        } merge;
     } levels[MAX_DA_LEVEL];
     struct list_head        hash_list;
     atomic_t                ref_cnt;
@@ -1116,6 +1120,7 @@ struct castle_iterator_type castle_da_rq_iter = {
 struct castle_da_merge {
     struct castle_double_array   *da;
     struct castle_btree_type     *out_btree;
+    int                           level;
     struct castle_component_tree *in_tree1;
     struct castle_component_tree *in_tree2;
     void                         *iter1;
@@ -1933,25 +1938,32 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
     castle_free(merge);
 }
 
-static void castle_da_merge_progress_update(struct castle_da_merge *merge)
+static int castle_da_merge_progress_update(struct castle_da_merge *merge, uint32_t unit_nr)
 {
-    uint64_t items_completed, total_items;
+    uint64_t items_completed, total_items, unit_items;
+    uint32_t total_units;
 
+    total_units = 1 << merge->level;
+    /* Don't stop the last merge unit, let it run out of iterator. */
+    if(unit_nr >= total_units)
+        return 0;
+    /* Otherwise, check whether we've got far enough. */
     total_items  = atomic64_read(&merge->in_tree1->item_count);
     total_items += atomic64_read(&merge->in_tree2->item_count);
+    unit_items   = total_items * (uint64_t)unit_nr / (uint64_t)total_units;
     items_completed = merge->merged_iter->src_items_completed;
-    /* Nothing more to be done just yet. */ 
+    if(items_completed >= unit_items)
+        return 1;
+    return 0;
 }
 
-static int castle_da_merge_quantum_do(struct castle_da_merge *merge)
+static int castle_da_merge_unit_do(struct castle_da_merge *merge, uint32_t unit_nr)
 {
     void *key;
     version_t version;
     c_val_tup_t cvt;
-    uint64_t i;
     int ret;
 
-    i = 0;
     while(castle_ct_merged_iter_has_next(merge->merged_iter))
     {
         might_resched();
@@ -1968,8 +1980,8 @@ static int castle_da_merge_quantum_do(struct castle_da_merge *merge)
         if((ret = castle_da_nodes_complete(merge, 0)))
             goto err_out;
         castle_da_merge_budget_consume(merge);
-        castle_da_merge_progress_update(merge);
-        if(++i > 1000)
+        /* Update the progress, returns non-zero if we've completed the current unit. */
+        if(castle_da_merge_progress_update(merge, unit_nr))
             return EAGAIN;
 
         FAULT(MERGE_FAULT);
@@ -1986,7 +1998,13 @@ err_out:
     return ret; 
 }
 
+static inline uint32_t castle_da_merge_units_inc_return(struct castle_double_array *da, int level)
+{
+    return (++da->levels[level].merge.units_commited); 
+}
+
 static struct castle_da_merge* castle_da_merge_init(struct castle_double_array *da,
+                                                    int level,
                                                     struct castle_component_tree *in_tree1,
                                                     struct castle_component_tree *in_tree2)
 {
@@ -1998,6 +2016,11 @@ static struct castle_da_merge* castle_da_merge_init(struct castle_double_array *
             in_tree1->seq, in_tree1->dynamic,
             in_tree2->seq, in_tree2->dynamic);
 
+    /* Set DA merge variables. */
+    da->levels[level].merge.units_commited = 0;
+    /* Make sure that the level is correct. */
+    BUG_ON(in_tree1->level != level);
+    BUG_ON(in_tree2->level != level);
     /* Note: There could be outstanding read/write I/O going on. */ 
     /* Work out what type of trees are we going to be merging. Bug if in_tree1/2 don't match. */
     btree = castle_btree_type_get(in_tree1->btree_type);
@@ -2009,6 +2032,7 @@ static struct castle_da_merge* castle_da_merge_init(struct castle_double_array *
         goto error_out;
     merge->da                = da;
     merge->out_btree         = castle_btree_type_get(RO_VLBA_TREE_TYPE);
+    merge->level             = level;
     merge->in_tree1          = in_tree1;
     merge->in_tree2          = in_tree2;
     merge->root_depth        = -1;
@@ -2049,19 +2073,20 @@ error_out:
     return NULL;
 }
 
+
 static int castle_da_merge_run(void *da_p)
 {
     struct castle_double_array *da = (struct castle_double_array *)da_p;
     struct castle_component_tree *in_tree1, *in_tree2, *out_tree;
     struct castle_da_merge *merge;
     struct list_head *l;
-    int level, ret, loops;
+    int level, ret;
 
 #define exit_cond (castle_da_exiting || castle_da_deleted(da))
     /* Work out the level at which we are supposed to be doing merges.
        Do that by working out where is this thread in threads array. */
     for(level=1; level<MAX_DA_LEVEL; level++)
-        if(da->levels[level].merge_thread == current)
+        if(da->levels[level].merge.thread == current)
             break;
     BUG_ON(level >= MAX_DA_LEVEL);
     printk("Starting merge thread for DA=%d, level=%d\n", da->id, level);
@@ -2089,7 +2114,7 @@ static int castle_da_merge_run(void *da_p)
             
         printk("Doing merge for DA=%d, level=%d\n", da->id, level);
         perf_event("m-%d-beg", level);
-        merge = castle_da_merge_init(da, in_tree1, in_tree2);
+        merge = castle_da_merge_init(da, level, in_tree1, in_tree2);
         if(!merge)
         {
             printk("Could not start a merge for DA=%d, level=%d.\n", da->id, level);
@@ -2097,15 +2122,17 @@ static int castle_da_merge_run(void *da_p)
             msleep(10000);
             continue;
         }
+        
         /* Do the merge. */
-        loops = 0;
         do {
-            ret = castle_da_merge_quantum_do(merge);
+            uint32_t units_cnt;
+           
+            units_cnt = castle_da_merge_units_inc_return(da, level);
+            ret = castle_da_merge_unit_do(merge, units_cnt);
             if(ret < 0)
                 goto merge_failed;
             /* Only ret>0 we are expecting is to continue, i.e. EAGAIN. */
             BUG_ON(ret && (ret != EAGAIN));
-            loops++;
         } while(ret);
         /* Package up the merge into the new tree. */
         out_tree = castle_da_merge_complete(merge);
@@ -2114,7 +2141,7 @@ static int castle_da_merge_run(void *da_p)
 merge_failed:
         castle_da_merge_dealloc(merge, ret);
         perf_event("m-%d-end", level);
-        printk("Done merge for DA=%d, level=%d, loops=%d\n", da->id, level, loops);
+        printk("Done merge for DA=%d, level=%d\n", da->id, level);
         if(ret)
         {
             printk("Merge for DA=%d, level=%d, failed to merge err=%d.\n", da->id, level, ret);
@@ -2127,7 +2154,7 @@ merge_failed:
 
     castle_da_lock(da);
     /* Remove ourselves from the da merge threads array to indicate that we are finished. */  
-    da->levels[level].merge_thread = NULL;
+    da->levels[level].merge.thread = NULL;
     castle_da_unlock(da);
     /* castle_da_alloc() took a reference for us, we have to drop it now. */
     castle_da_put(da);
@@ -2144,7 +2171,7 @@ static int castle_da_merge_stop(struct castle_double_array *da, void *unused)
     wake_up(&da->merge_waitq);
     for(i=1; i<MAX_DA_LEVEL; i++)
     {
-        while(da->levels[i].merge_thread)
+        while(da->levels[i].merge.thread)
             msleep(10);
         printk("Stopped merge thread for DA=%d, level=%d\n", da->id, i);
     }
@@ -2283,28 +2310,30 @@ static struct castle_double_array* castle_da_alloc(da_id_t da_id)
     for(i=0; i<MAX_DA_LEVEL; i++)
     {
         INIT_LIST_HEAD(&da->levels[i].trees);
-        da->levels[i].nr_trees = 0;
+        da->levels[i].nr_trees             = 0;
+        da->levels[i].merge.units_commited = 0;
+        da->levels[i].merge.thread         = NULL;
         /* Create merge threads, and take da ref for all levels >= 1. */
         if(i>0)
         {
             castle_da_get(da);
-            da->levels[i].merge_thread = 
+            da->levels[i].merge.thread = 
                 kthread_create(castle_da_merge_run, da, "castle-m-%d-%.2d", da_id, i);
-            if(!da->levels[i].merge_thread)
+            if(!da->levels[i].merge.thread)
                 goto err_out;
         }
     }
     printk("Allocated DA=%d successfully.\n", da_id);
     /* Start all of the merge threads. */
     for(i=1; i<MAX_DA_LEVEL; i++)
-        wake_up_process(da->levels[i].merge_thread);
+        wake_up_process(da->levels[i].merge.thread);
 
     return da;
 
 err_out:
     for(i--; i>0; i--)
     {
-        kthread_stop(da->levels[i].merge_thread);
+        kthread_stop(da->levels[i].merge.thread);
         /* Doesn't really need to be done, since we are going to free the structure anyway. */
         BUG_ON(atomic_read(&da->ref_cnt) < 2);
         castle_da_put(da);
