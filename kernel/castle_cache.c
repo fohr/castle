@@ -3322,6 +3322,9 @@ int castle_checkpoint_version_inc(void)
         castle_slave_superblock_put(cs, 1);
     }
 
+    /* We must have created some freespace, unfreeze DAs. */
+    castle_double_arrays_unfreeze();
+
     castle_extents_super_block_put(0);
 
     return 0;

@@ -264,6 +264,7 @@ static inline c_bio_t* castle_utils_bio_alloc(int nr_bvecs)
     for(i=0; i<nr_bvecs; i++)
     {
         c_bvecs[i].c_bio = c_bio;
+        c_bvecs[i].tree  = NULL;
 #ifdef CASTLE_PERF_DEBUG    
         c_bvecs[i].timeline = NULL;
 #endif
