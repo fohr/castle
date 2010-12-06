@@ -956,7 +956,8 @@ void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
     /* Deal with error case first */
     if(err)
     {
-        castle_ct_put(replace->ct, 1);
+        if (replace->ct)
+            castle_ct_put(replace->ct, 1);
         replace->complete(replace, err);
         castle_utils_bio_free(c_bio);
         return;
