@@ -1,11 +1,11 @@
 # Comment/uncomment the following line to disable/enable debugging
-DEBUG = y
+DEBUG = n
 PERF_DEBUG = y
 
 TARGET = castle-fs
 
 obj-m          := $(TARGET).o
-$(TARGET)-objs := castle_utils.o castle_main.o castle_cache.o castle_btree.o castle_freespace.o castle_versions.o castle_ctrl.o castle_sysfs.o castle_events.o castle_da.o castle_objects.o castle_extent.o castle_rda.o castle_back.o
+$(TARGET)-objs := castle_utils.o castle_main.o castle_cache.o castle_btree.o castle_freespace.o castle_versions.o castle_ctrl.o castle_sysfs.o castle_events.o castle_da.o castle_objects.o castle_extent.o castle_rda.o castle_back.o castle_vmap.o
 
 # Add your debugging flag (or not) to CFLAGS
 ifeq ($(DEBUG),y)
