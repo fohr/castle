@@ -25,8 +25,18 @@
 #define debug(_f, ...)           ((void)0)
 #define debug_mstore(_f, _a...)  ((void)0)
 #else
+#define PREF_DEBUG  /* ensure pref_debug* messages are printed too. */
 #define debug(_f, _a...)         (printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
 #define debug_mstore(_f, _a...)  (printk("%s:%.4d:%s " _f, __FILE__, __LINE__ , __func__, ##_a))
+#endif
+
+//#define PREF_DEBUG
+#ifndef PREF_DEBUG
+#define pref_debug(_f, ...)           ((void)0)
+#define pref_debug_mstore(_f, _a...)  ((void)0)
+#else
+#define pref_debug(_f, _a...)         (printk("%s:%.4d: " _f, FLE, __LINE__ , ##_a))
+#define pref_debug_mstore(_f, _a...)  (printk("%s:%.4d %s: " _f, FLE, __LINE__ , __func__, ##_a))
 #endif
 
 /**********************************************************************************************
@@ -41,28 +51,28 @@ enum c2b_state_bits {
 };
 
 #define INIT_C2B_BITS (0)
-#define C2B_FNS(bit, name)					                        \
-inline void set_c2b_##name(c2_block_t *c2b)		                    \
-{									                                \
-	set_bit(C2B_##bit, &(c2b)->state);				                \
-}									                                \
-inline void clear_c2b_##name(c2_block_t *c2b)		                \
-{									                                \
-	clear_bit(C2B_##bit, &(c2b)->state);				            \
-}									                                \
-inline int c2b_##name(c2_block_t *c2b)		                        \
-{									                                \
-	return test_bit(C2B_##bit, &(c2b)->state);			            \
+#define C2B_FNS(bit, name)                                          \
+inline void set_c2b_##name(c2_block_t *c2b)                         \
+{                                                                   \
+    set_bit(C2B_##bit, &(c2b)->state);                              \
+}                                                                   \
+inline void clear_c2b_##name(c2_block_t *c2b)                       \
+{                                                                   \
+    clear_bit(C2B_##bit, &(c2b)->state);                            \
+}                                                                   \
+inline int c2b_##name(c2_block_t *c2b)                              \
+{                                                                   \
+    return test_bit(C2B_##bit, &(c2b)->state);                      \
 }
 
-#define TAS_C2B_FNS(bit, name)					                    \
-inline int test_set_c2b_##name(c2_block_t *c2b)	                    \
-{									                                \
-	return test_and_set_bit(C2B_##bit, &(c2b)->state);		        \
-}									                                \
-inline int test_clear_c2b_##name(c2_block_t *c2b)	                \
-{									                                \
-	return test_and_clear_bit(C2B_##bit, &(c2b)->state);		    \
+#define TAS_C2B_FNS(bit, name)                                      \
+inline int test_set_c2b_##name(c2_block_t *c2b)                     \
+{                                                                   \
+    return test_and_set_bit(C2B_##bit, &(c2b)->state);              \
+}                                                                   \
+inline int test_clear_c2b_##name(c2_block_t *c2b)                   \
+{                                                                   \
+    return test_and_clear_bit(C2B_##bit, &(c2b)->state);            \
 }
 
 C2B_FNS(uptodate, uptodate)
@@ -118,28 +128,28 @@ struct castle_cache_flush_entry {
 };
 
 #define INIT_C2P_BITS (0)
-#define C2P_FNS(bit, name)					                        \
-inline void set_c2p_##name(c2_page_t *c2p)		                    \
-{									                                \
-	set_bit(C2P_##bit, &(c2p)->state);				                \
-}									                                \
-inline void clear_c2p_##name(c2_page_t *c2p)		                \
-{									                                \
-	clear_bit(C2P_##bit, &(c2p)->state);				            \
-}									                                \
-inline int c2p_##name(c2_page_t *c2p)		                        \
-{									                                \
-	return test_bit(C2P_##bit, &(c2p)->state);			            \
+#define C2P_FNS(bit, name)                                          \
+inline void set_c2p_##name(c2_page_t *c2p)                          \
+{                                                                   \
+    set_bit(C2P_##bit, &(c2p)->state);                              \
+}                                                                   \
+inline void clear_c2p_##name(c2_page_t *c2p)                        \
+{                                                                   \
+    clear_bit(C2P_##bit, &(c2p)->state);                            \
+}                                                                   \
+inline int c2p_##name(c2_page_t *c2p)                               \
+{                                                                   \
+    return test_bit(C2P_##bit, &(c2p)->state);                      \
 }
 
-#define TAS_C2P_FNS(bit, name)					                    \
-inline int test_set_c2p_##name(c2_page_t *c2p)	                    \
-{									                                \
-	return test_and_set_bit(C2P_##bit, &(c2p)->state);		        \
-}									                                \
-inline int test_clear_c2p_##name(c2_page_t *c2p)	                \
-{									                                \
-	return test_and_clear_bit(C2P_##bit, &(c2p)->state);		    \
+#define TAS_C2P_FNS(bit, name)                                      \
+inline int test_set_c2p_##name(c2_page_t *c2p)                      \
+{                                                                   \
+    return test_and_set_bit(C2P_##bit, &(c2p)->state);              \
+}                                                                   \
+inline int test_clear_c2p_##name(c2_page_t *c2p)                    \
+{                                                                   \
+    return test_and_clear_bit(C2P_##bit, &(c2p)->state);            \
 }
 
 C2P_FNS(uptodate, uptodate)
@@ -530,7 +540,7 @@ int c2b_locked(c2_block_t *c2b)
 }
 
 /**
- * dirty_c2b: mark c2b and associated c2ps dirty
+ * Mark c2b and associated c2ps dirty.
  */
 void dirty_c2b(c2_block_t *c2b)
 {
@@ -603,7 +613,7 @@ static void c2b_remaining_io_sub(int rw, int nr_pages, c2_block_t *c2b)
             update_c2b(c2b);
         else
             clean_c2b(c2b);
-	    c2b->end_io(c2b);
+        c2b->end_io(c2b);
     }
 }
 
@@ -614,7 +624,7 @@ static void c2b_multi_io_end(struct bio *bio, int err)
 #endif
 {
     struct bio_info *bio_info = bio->bi_private;
-	c2_block_t *c2b = bio_info->c2b;
+    c2_block_t *c2b = bio_info->c2b;
 #ifdef CASTLE_DEBUG    
     unsigned long flags;
     
@@ -652,18 +662,19 @@ static void c2b_multi_io_end(struct bio *bio, int err)
     local_irq_restore(flags);
 #endif
     kfree(bio_info);
-	bio_put(bio);
-	
+    bio_put(bio);
+    
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,18)
     return 0;
 #endif
 }
 
 /**
- * submit_c2b_io: allocate bio for pages & hand-off to Linux block layer
- * @disk_chk: Chunk to be IOed to
- * @pages:    Array of pages to be used for IO 
- * @nr_pages: Size of @pages array
+ * Allocate bio for pages & hand-off to Linux block layer.
+ *
+ * @param disk_chk  Chunk to be IOed to
+ * @param pages     Array of pages to be used for IO 
+ * @param nr_pages  Size of @pages array
  */
 void submit_c2b_io(int           rw, 
                    c2_block_t   *c2b, 
@@ -766,9 +777,9 @@ typedef struct castle_io_array {
 } c_io_array_t;
 
 /**
- * c_io_array_submit: dispatches k copies of the I/O
+ * Dispatches k copies of the I/O.
  *
- * See also submit_c2b_io().
+ * @see submit_c2b_io()
  */
 static inline void c_io_array_submit(int rw, 
                                      c2_block_t *c2b, 
@@ -807,7 +818,7 @@ static inline void c_io_array_init(c_io_array_t *array)
 }
 
 /**
- * c_io_array_page_add: add page to array
+ * Add page to I/O array.
  */
 static inline int c_io_array_page_add(c_io_array_t *array, 
                                       c_ext_pos_t cep, 
@@ -844,14 +855,16 @@ static inline int c_io_array_page_add(c_io_array_t *array,
 }
 
 /**
- * submit_c2b_rda: generates I/O for disk block(s) associated with the c2b.
+ * Generates I/O for disk block(s) associated with the c2b.
  *
  * Iterates over passed c2b's c2ps (ignoring those that are clean/uptodate for WRITEs/READs)
  * Populates array of pages from c2ps
  * Dispatches array once it reaches the a chunk boundry
  * Continues until whole c2b has been dispatched
  *
- * See also c_io_array_init(), c_io_array_page_add(), c_io_array_submit().
+ * @see c_io_array_init()
+ * @see c_io_array_page_add()
+ * @see c_io_array_submit()
  *
  */
 static int submit_c2b_rda(int rw, c2_block_t *c2b)
@@ -894,9 +907,9 @@ static int submit_c2b_rda(int rw, c2_block_t *c2b)
         /* If we are not skipping, add the page to io array. */ 
         if(c_io_array_page_add(&io_array, cur_cep, cur_chk, page) != EXIT_SUCCESS)
         {
-	        /* Failed to add this page to the array (see return code for reason).
-	         * Dispatch the current array, initialise a new one and
-	         * attempt to add the page to the new array.
+            /* Failed to add this page to the array (see return code for reason).
+             * Dispatch the current array, initialise a new one and
+             * attempt to add the page to the new array.
              *
              * We've got physical chunks for last_chk (logical chunk), this should
                match with the logical chunk stored in io_array. */ 
@@ -949,15 +962,15 @@ next_page:
 }
 
 /**
- * submit_c2b: submit asynchronous c2b I/O
+ * Submit asynchronous c2b I/O.
  *
  * Updates statistics before passing I/O to submit_c2b_rda().
  *
- * See also submit_c2b_rda().
+ * @see submit_c2b_rda()
  */
 int submit_c2b(int rw, c2_block_t *c2b)
 {
-	BUG_ON(!c2b->end_io);
+    BUG_ON(!c2b->end_io);
     BUG_ON(EXT_POS_INVAL(c2b->cep));
     BUG_ON(atomic_read(&c2b->remaining));
     /* If we are reading into the c2b block, we need to hold the write lock */
@@ -980,10 +993,11 @@ int submit_c2b(int rw, c2_block_t *c2b)
 }
 
 /**
- * castle_cache_sync_io_end: callback for synchronous c2b I/O completion
- * @c2b: completed c2b I/O
+ * Callback for synchronous c2b I/O completion.
  *
  * Wakes thread that dispatched the synchronous I/O
+ *
+ * @param c2b   completed c2b I/O
  */
 static void castle_cache_sync_io_end(c2_block_t *c2b)
 {
@@ -993,23 +1007,23 @@ static void castle_cache_sync_io_end(c2_block_t *c2b)
 }
 
 /**
- * submit_c2b_sync: submit synchronous c2b I/O
+ * Submit synchronous c2b I/O.
  *
  * Dispatches cache block-I/O then blocks for completion.
  *
- * See also submit_c2b().
+ * @see submit_c2b()
  */
 int submit_c2b_sync(int rw, c2_block_t *c2b)
 {
     struct completion completion;
     int ret;
 
-	BUG_ON((rw == READ)  &&  c2b_uptodate(c2b));
-	BUG_ON((rw == WRITE) && !c2b_dirty(c2b));
+    BUG_ON((rw == READ)  &&  c2b_uptodate(c2b));
+    BUG_ON((rw == WRITE) && !c2b_dirty(c2b));
     c2b->end_io = castle_cache_sync_io_end;
     c2b->private = &completion;
     init_completion(&completion);
-    if((ret = submit_c2b(rw, c2b)))
+    if((ret = submit_c2b(rw, c2b)) != EXIT_SUCCESS)
         return ret;
     wait_for_completion(&completion);
 
@@ -1116,29 +1130,96 @@ static c2_block_t* castle_cache_block_hash_find(c_ext_pos_t cep, uint32_t nr_pag
     return NULL;
 }
 
-static c2_block_t* castle_cache_block_hash_get(c_ext_pos_t cep, uint32_t nr_pages)
+/**
+ * Gets c2b matching (cep, nr_pages) and adjusts its dirty/freelist position.
+ *
+ * @arg cep         Specifies the c2b offset and extent
+ * @arg nr_pages    Specifies size of block
+ * @arg promote     If set: advises LRU mechanism we will use this block
+ *                  If unset: advises LRU mechanism we will free this block
+ *
+ * @return Matching c2b with an additional reference
+ * @return NULL if no matches were found
+ */
+static inline c2_block_t* _castle_cache_block_hash_get(c_ext_pos_t cep,
+                               uint32_t nr_pages,
+                               int promote)
 {
     c2_block_t *c2b = NULL;
 
+    /* Hold the hash lock. */
     spin_lock_irq(&castle_cache_block_hash_lock);
-    /* Try to find in the hash first */
-    c2b = castle_cache_block_hash_find(cep, nr_pages);
-    /* If found, get a reference to make sure c2b doesn't get removed.
-       Move to the tail of dirty/clean list to get LRU(-like) behaviour. */
-    if(c2b) 
-    {
-        get_c2b(c2b);
-        /* Move to the end of the apprapriate list */
-        if(c2b_dirty(c2b))
-            list_move_tail(&c2b->dirty, &castle_cache_dirtylist);
-        else
-            list_move_tail(&c2b->clean, &castle_cache_cleanlist);
 
+    /* Try and get the matching block from the hash. */
+    c2b = castle_cache_block_hash_find(cep, nr_pages);
+
+    if (c2b)
+    {
+        /* We found a matching block. */
+
+        if (promote)
+        {
+            /* We are obtaining this block to be used.  We should push it to
+             * the end of the LRU list indicating that it is recently used
+             * and should not be freed any time soon.
+             *
+             * We're going to return this block to the caller so hold a
+             * reference for them so it doesn't get removed. */
+            get_c2b(c2b);
+
+            /* Move to the end of the appropriate list. */
+            if(c2b_dirty(c2b))
+                list_move_tail(&c2b->dirty, &castle_cache_dirtylist);
+            else
+                list_move_tail(&c2b->clean, &castle_cache_cleanlist);
+        }
+        else if (atomic_read(&c2b->count) == 0)
+        {
+            /* No references on this block means it's not in use.
+             * If clean: demote so it gets reused next
+             * If dirty: don't touch it - let LRU mechanism handle it */
+            if (!c2b_dirty(c2b))
+                list_move(&c2b->clean, &castle_cache_cleanlist);
+        }
     }
-    /* If not found, drop the lock, we need to get ourselves a c2b first */
+
+    /* Release the hash lock. */
     spin_unlock_irq(&castle_cache_block_hash_lock);
 
     return c2b;
+}
+
+/**
+ * Get c2b matching (cep, nr_pages).
+ *
+ * @arg cep     Specifies the c2b offset and extent
+ * @arg nr_pages    Specifies size of block
+ *
+ * @return Matching c2b with an additional reference
+ * @return NULL if no matches were found
+ */
+static inline c2_block_t* castle_cache_block_hash_get(c_ext_pos_t cep,
+                               uint32_t nr_pages)
+{
+    return _castle_cache_block_hash_get(cep, nr_pages, 1);
+}
+
+/**
+ * Find block matching (cep, nr_pages) and demote it in the clean/dirtylist.
+ *
+ * NOTE: does not obtain an addition reference on any block returned.  The
+ * caller is responsible for obtaining this if required.
+ *
+ * @arg cep         Specifies the c2b offset and extent
+ * @arg nr_pages    Specifies size of block
+ *
+ * @return Matching c2b without an additional reference
+ * @return NULL if no matches were found
+ */
+static inline void castle_cache_block_hash_demote(c_ext_pos_t cep,
+                                                         uint32_t nr_pages)
+{
+    _castle_cache_block_hash_get(cep, nr_pages, 0);
 }
 
 static int castle_cache_block_hash_insert(c2_block_t *c2b, int transient)
@@ -1482,8 +1563,8 @@ static void castle_cache_block_free(c2_block_t *c2b)
 static inline int c2b_busy(c2_block_t *c2b)
 {
     /* c2b_locked() implies (c2b->count > 0) */
-	return atomic_read(&c2b->count) |
-		  (c2b->state & (1 << C2B_dirty)) |
+    return atomic_read(&c2b->count) |
+          (c2b->state & (1 << C2B_dirty)) |
            c2b_locked(c2b);
 }
 
@@ -1662,7 +1743,7 @@ c2_block_t* _castle_cache_block_get(c_ext_pos_t cep, int nr_pages, int transient
         debug("Trying to insert\n");
         if(!castle_cache_block_hash_insert(c2b, transient))
         {
-            printk("Failed to insert c2b into hash\n");
+            printk("Failed to insert c2b into hash "cep_fmt_str"\n", cep2str(cep));
             put_c2b(c2b);
             castle_cache_block_free(c2b);
         }
@@ -1702,21 +1783,37 @@ c2_block_t* castle_cache_block_get(c_ext_pos_t cep, int nr_pages)
  * 6. Pointer to the cur_c2b is stored in the window. This makes it possible to avoid
  *    races in allocating c2bs for the same start point, and destroying windows. 
  */
-#define PREF_WINDOW_NEW               (0x01)            /* Window is new, no IO has been sched yet. */ 
-#define PREF_WINDOW_DEAD              (0x02)            /* Set when the alloc ref is dropped.       */
-#define PREF_WINDOW_FORWARD           (0x04)            /* Prefetching forwards or backwards.       */
-#define PREF_WINDOW_INSERTED          (0x08)            /* Is the window inserted into the rbtree.  */
+#define PREF_WINDOW_NEW             (0x01)            /* Window is new, no IO has been sched yet. */ 
+#define PREF_WINDOW_DEAD            (0x02)            /* Set when the alloc ref is dropped.       */
+#define PREF_WINDOW_FORWARD         (0x04)            /* Prefetching forwards or backwards.       */
+#define PREF_WINDOW_INSERTED        (0x08)            /* Is the window inserted into the rbtree.  */
+#define PREF_WINDOW_ADAPTIVE        (0x10)            /* Whether this is an adaptive window.      */
+#define PREF_ADAPTIVE                                 /* Enable adaptive prefetching.             */
+#define PREF_CHUNKS                 4                 /* #chunks to non-adaptive prefetch.        */
+#define PREF_ADAP_INITIAL_CHUNKS    1                 /* Initial #chunks to adaptive prefetch.    */
+#define PREF_ADAP_MAX_CHUNKS        16                /* Maximum #chunks to adaptive prefetch.    */
+#define PREF_ADAP_MAX_PAGES         PREF_ADAP_MAX_CHUNKS * BLKS_PER_CHK
+#define PREF_ADAP_INITIAL_PAGES     PREF_ADAP_INITIAL_CHUNKS * BLKS_PER_CHK
+#define PREF_PAGES                  PREF_CHUNKS * BLKS_PER_CHK
+
+/**
+ * Prefetch window definition.
+ *
+ * start_off to end_off defines the range within ext_id that we have already
+ * issued prefetching for.
+ */
 typedef struct castle_cache_prefetch_window {
-    uint8_t        state;
-    c2_block_t    *cur_c2b;
-    c_ext_id_t     ext_id;
-    c_byte_off_t   cur_off;    /* Start point of the current c2b (even for back prefetch). */
-    uint16_t       cur_pages;  /* Size of the current c2b in pages.                        */ 
-    uint16_t       next_pages; /* 'Next' window follows 'current' window (fwrd, or back).  */ 
-    struct rb_node rb_node;
-    atomic_t       count;      /* Ref count.                                               */
-    struct mutex   lock;
-} c2_pref_window_t; 
+    uint8_t         state;      /**< State of the prefetch window.                          */
+    c2_block_t      *cur_c2b;   /**< Allows c2b free mechanism to identify this window when
+                                     it wants to free blocks and associated pref windows.   */
+    c_ext_id_t      ext_id;     /**< Extent this window describes.                          */
+    c_byte_off_t    start_off;  /**< Start of range that has been prefetched.               */
+    c_byte_off_t    end_off;    /**< End of range that has been prefetched.  Chunk aligned. */
+    uint16_t        pref_pages; /**< Number of pages we prefetch.                           */
+    struct rb_node  rb_node;    /**< RB-node for this window.                               */
+    atomic_t        count;      /**< Reference count.                                       */
+    struct mutex    lock;       /**< Hold while changing start_off, end_off, pref_pages.    */
+} c2_pref_window_t;
 
 static DEFINE_SPINLOCK(c2_prefetch_lock);
 static struct rb_root c2p_rb_root = RB_ROOT; 
@@ -1728,13 +1825,15 @@ static USED char* c2_pref_window_to_str(c2_pref_window_t *window)
     c_ext_pos_t cep;
     
     cep.ext_id = window->ext_id;
-    cep.offset = window->cur_off;
+    cep.offset = window->start_off;
 
     snprintf(win_str, PREF_WINDOW_STR_LEN, 
-             "pref win: {cep="cep_fmt_str", cur_pgs=%d, next_pgs=%d, st=0x%.2x, cnt=%d", 
+        "%spref win: {cep="cep_fmt_str", start_off=%lld, end_off=%lld, pref_pages=%d, st=0x%.2x, cnt=%d",
+         window->state & PREF_WINDOW_ADAPTIVE ? "adaptive " : "",
              cep2str(cep), 
-             window->cur_pages, 
-             window->next_pages, 
+             window->start_off, 
+             window->end_off, 
+             window->pref_pages, 
              window->state, 
              atomic_read(&window->count));
     win_str[PREF_WINDOW_STR_LEN-1] = '\0';
@@ -1742,6 +1841,11 @@ static USED char* c2_pref_window_to_str(c2_pref_window_t *window)
     return win_str;
 } 
 
+/**
+ * Decrement reference counter on prefetch window.
+ *
+ * Frees the window if the counter reaches 0.
+ */
 static void c2_pref_window_put(c2_pref_window_t *window)
 {
     int cnt;
@@ -1758,64 +1862,57 @@ static void c2_pref_window_put(c2_pref_window_t *window)
     }
 }
 
-/* Is cep within cur window */
-static inline int c2_pref_cur_compare(c2_pref_window_t *window, c_ext_pos_t cep)
-{
-    if(cep.offset < window->cur_off)
-        return -1;
-    if(cep.offset >= window->cur_off + window->cur_pages * PAGE_SIZE)
-        return 1;
-    return 0;
-}
-
-static inline int c2_pref_next_compare(c2_pref_window_t *window, c_ext_pos_t cep)
-{
-    if(cep.offset < window->cur_off + window->cur_pages * PAGE_SIZE)
-        return -1;
-    if(cep.offset >= window->cur_off + (window->cur_pages + window->next_pages) * PAGE_SIZE)
-        return 1;
-    return 0;
-} 
-
+/**
+ * Compare extent offset (cep) to a prefetch window.
+ *
+ * - Check the extent ID
+ * - Return whether offset is prior, within or after window
+ *
+ * @param window    window to check.
+ * @param cep       position to check for.
+ *
+ * @return <0:  cep is prior to window
+ * @return  0:  cep is within the window
+ * @return >0:  cep is after next window
+ */
 static inline int c2_pref_window_compare(c2_pref_window_t *window, c_ext_pos_t cep, int forward)
 {
-    int cur_cmp, next_cmp;
-
     BUG_ON(!forward);
-    /* Compare the extent ids. */
-    if(cep.ext_id < window->ext_id)
-        return -1;
-    if(cep.ext_id > window->ext_id)
-        return 1;
-    /* Extents are the same. Check whether cep is to the left, inside, or to the right of the
-       entire window. */ 
-    cur_cmp = c2_pref_cur_compare(window, cep);
-    next_cmp = c2_pref_next_compare(window, cep);
-    /* cep to the left to cur window (also to the left of next window). */
-    if(cur_cmp < 0)
-    {
-        BUG_ON(next_cmp >= 0);
-        return -1;
-    }
-    /* cep in the cur window (to the left of next window). */
-    if(cur_cmp == 0)
-    {
-        BUG_ON(next_cmp >= 0);
-        return 0;
-    }
-    /* Since next window is just to the rigth of cur window, cep cannot be to the left of next
-       window any more. */
-    BUG_ON(next_cmp < 0);
-    /* cep in the next window. */
-    if(next_cmp == 0)
-       return 0; 
 
-    /* cep to the right of the next window (and the entire window too). */
-    return 1;
+    /* Check if cep and this window describe the same extent. */
+    if (cep.ext_id < window->ext_id)
+        return -1;
+    if (cep.ext_id > window->ext_id)
+        return 1;
+
+    if (cep.offset < window->start_off)
+        return -1;
+
+    else if (cep.offset < window->end_off)
+        return 0;
+
+    else
+        return 1;
 }
 
-static inline c2_pref_window_t* c2_pref_window_closest_find(struct rb_node *n, 
-                                                            c_ext_pos_t cep, 
+/**
+ * Find prefetch window with furthest start_off that matches cep.
+ *
+ * @FIXME This logic is likely broken for adaptive prefetch windows.
+ * Specifically a given cep might match two overlapping windows:
+ * - One with a start_off of 10 and end_off of 200
+ * - Another with a start_off of 15 and end_off of 30
+ * This function will return the second (smaller, but more 'advanced') for a
+ * cep.offset 20.  This behaviour is not ideal but is not incorrect.
+ *
+ * @arg n       Starting point for search
+ * @arg cep     Offset
+ * @arg forward Direction to prefetch
+ *
+ * @return Most advanced window matching cep
+ */
+static inline c2_pref_window_t* c2_pref_window_closest_find(struct rb_node *n,
+                                                            c_ext_pos_t cep,
                                                             int forward)
 {
     c2_pref_window_t *window;
@@ -1825,11 +1922,10 @@ static inline c2_pref_window_t* c2_pref_window_closest_find(struct rb_node *n,
     /* The logic below is (probably) broken for back prefetch. */
     BUG_ON(!forward);
     BUG_ON(!spin_is_locked(&c2_prefetch_lock));
-        
 
     do { 
-        /* Save the current window's rb_node pointer. This window is guaranteed to cover
-           the cep. */
+        /* Save the current window's rb_node pointer. This window is guaranteed
+         * to cover the cep. */
         p = n;
         /* Check whether the next entry exists, and is still small enough. */
         n = rb_next(n);
@@ -1841,38 +1937,59 @@ static inline c2_pref_window_t* c2_pref_window_closest_find(struct rb_node *n,
         BUG_ON(cmp > 0);
     } 
     while(cmp == 0);
-    /* n is now NULL, or in the first window that doesn't cover the cep, return the window
-       associated with p. */
+
+    /* n is now NULL, or in the first window that doesn't cover the cep, return
+     * the window associated with p. */
     window = rb_entry(p, c2_pref_window_t, rb_node);
 
     return window;
 } 
 
+/**
+ * Find prefetch window from tree whose range encompasses cep.
+ *
+ * @param cep           Position to find a window for.
+ * @param forward       Direction to prefetch.
+ * @param exact_match   Whether a window that exactly matches cep is required.
+ *                      If false, return the most advanced matching window.
+ *
+ * @return Valid prefetch window if found.
+ * @return NULL if no matching windows were found.
+ *
+ * @see c2_pref_window_compare()
+ * @see c2_pref_window_closest_find()
+ */
 static c2_pref_window_t *c2_pref_window_find(c_ext_pos_t cep, int forward, int exact_match)
 {
     struct rb_node *n;
     c2_pref_window_t *window;
     int cmp;
 
-    debug("Looking for pref window cep="cep_fmt_str", forward=%d, exact_match=%d\n",
+    pref_debug_mstore("Looking for pref window cep="cep_fmt_str", forward=%d, exact_match=%d\n",
             cep2str(cep), forward, exact_match);
     spin_lock(&c2_prefetch_lock);
     n = c2p_rb_root.rb_node;
     while (n)
     {
         c_ext_pos_t window_cep;
+
+    /* Get prefetch window from tree and initialise cep. */
         window = rb_entry(n, c2_pref_window_t, rb_node);
         window_cep.ext_id = window->ext_id;
-        window_cep.offset = window->cur_off;
+        window_cep.offset = window->start_off;
 
         if(exact_match)
+        /* Do they have identical offsets? */
             cmp = EXT_POS_COMP(cep, window_cep);
         else
+        /* Does the offset fall within the window? */
             cmp = c2_pref_window_compare(window, cep, forward);
 
         if(cmp < 0)
+        /* Window is prior to cep; go left. */
             n = n->rb_left;
         else if (cmp > 0)
+        /* Window is after cep; go right. */
             n = n->rb_right;
         else
         {
@@ -1895,24 +2012,42 @@ static c2_pref_window_t *c2_pref_window_find(c_ext_pos_t cep, int forward, int e
         }
     }
     spin_unlock(&c2_prefetch_lock);
-    debug("Prefetch window not found.\n");
+
+    pref_debug_mstore("No existing prefetch window found.\n");
 
     return NULL;
 }
 
+/**
+ * Remove prefetch window from tree.
+ *
+ * @param window    Window to remove
+ */
 static void c2_pref_window_remove(c2_pref_window_t *window)
 {
-    debug("Asked to remove %s\n", c2_pref_window_to_str(window));
+    pref_debug_mstore("Asked to remove %s\n", c2_pref_window_to_str(window));
     BUG_ON(!mutex_is_locked(&window->lock));
+
     if(!(window->state & PREF_WINDOW_INSERTED))
         return;
-    debug("Window in the tree, removing.\n");
+
+    pref_debug_mstore("Window in the tree, removing.\n");
+
     spin_lock(&c2_prefetch_lock);
     rb_erase(&window->rb_node, &c2p_rb_root);
     window->state &= ~PREF_WINDOW_INSERTED;
     spin_unlock(&c2_prefetch_lock);
 }
 
+/**
+ * Insert prefetch window into tree.
+ *
+ * @param new_window    Window to insert.
+ * @param cur_c2b       c2b that identifies the window.
+ *
+ * @also c2_pref_window_advance() for cur_c2b initialisation.
+ * @also castle_cache_block_free().
+ */
 static int c2_pref_window_insert(c2_pref_window_t *new_window, c2_block_t *cur_c2b)
 {
     struct rb_node **p, *parent = NULL;
@@ -1920,7 +2055,7 @@ static int c2_pref_window_insert(c2_pref_window_t *new_window, c2_block_t *cur_c
     c_ext_pos_t cur_cep, new_cep;
     int cmp;
 
-    debug("Asked to insert %s\n", c2_pref_window_to_str(new_window));
+    pref_debug_mstore("Asked to insert %s\n", c2_pref_window_to_str(new_window));
     BUG_ON(!mutex_is_locked(&new_window->lock));
     BUG_ON(new_window->state & PREF_WINDOW_DEAD);
     if(new_window->state & PREF_WINDOW_INSERTED)
@@ -1933,9 +2068,9 @@ static int c2_pref_window_insert(c2_pref_window_t *new_window, c2_block_t *cur_c
     /* If the window hasn't been inserted yet, we MUST have a ref to cur_c2b, 
        in order to stop c2b destruction racing with insert. */
     BUG_ON(!cur_c2b);
-    debug("Not in the tree. Inserting.\n");
+    pref_debug_mstore("Not in the tree. Inserting.\n");
     new_cep.ext_id = new_window->ext_id;
-    new_cep.offset = new_window->cur_off;
+    new_cep.offset = new_window->start_off;
 
     spin_lock(&c2_prefetch_lock);
     p = &c2p_rb_root.rb_node;
@@ -1944,7 +2079,7 @@ static int c2_pref_window_insert(c2_pref_window_t *new_window, c2_block_t *cur_c
         parent = *p;
         cur_window = rb_entry(parent, c2_pref_window_t, rb_node);
         cur_cep.ext_id = cur_window->ext_id;
-        cur_cep.offset = cur_window->cur_off;
+        cur_cep.offset = cur_window->start_off;
 
         cmp = EXT_POS_COMP(new_cep, cur_cep);
         if(cmp < 0)
@@ -1953,10 +2088,11 @@ static int c2_pref_window_insert(c2_pref_window_t *new_window, c2_block_t *cur_c
             p = &(*p)->rb_right;
         else 
         {
-            /* We found precisely the same starting point. We require these to be unique.
-               Do not insert. Return error. */
+            /* We found precisely the same starting point. We require these to
+             * be unique.  Do not insert.  Return error. */
             spin_unlock(&c2_prefetch_lock);
-            debug("Found the same starting point in the tree. Not inserting.\n");
+            pref_debug_mstore("Found the same starting point in the tree."
+           "Not inserting.\n");
             new_window->cur_c2b = NULL;
             put_c2b(cur_c2b);
             return -EINVAL;                  
@@ -1973,6 +2109,53 @@ static int c2_pref_window_insert(c2_pref_window_t *new_window, c2_block_t *cur_c
     return 0;
 }
 
+#ifdef PREF_DEBUG
+/**
+ * Walk and print entries in the prefetch window RB-tree.
+ *
+ * For debug purposes.
+ */
+static void c2_pref_window_dump(void)
+{
+    struct rb_node **p, *parent = NULL;
+    c2_pref_window_t *cur_window;
+    int entries = 0;
+
+    /* We must hold the c2_prefetch_lock while working. */
+    spin_lock(&c2_prefetch_lock);
+
+    /* Find the leftmost node. */
+    p = &c2p_rb_root.rb_node;
+    while(*p)
+    {
+        parent = *p;
+        p = &(*p)->rb_left;
+    }
+
+    /* Traverse through all of the entries with rb_entry(). */
+    while(parent)
+    {
+        cur_window = rb_entry(parent, c2_pref_window_t, rb_node);
+        pref_debug_mstore("%s\n", c2_pref_window_to_str(cur_window));
+        parent = rb_next(parent);
+
+        /* Record how many entries we find. */
+        entries++;
+    }
+
+    pref_debug_mstore("Found %d prefetch window(s).\n", entries);
+
+    /* Release the lock. */
+    spin_unlock(&c2_prefetch_lock);
+}
+#endif
+
+/**
+ * Allocate new prefetch window for ext_id & initialise as PREF_WINDOW_NEW.
+ *
+ * @return A freshly allocated & initialised prefetch window.
+ * @return NULL if we could not allocate enough memory.
+ */
 static c2_pref_window_t * c2_pref_window_alloc(c2_pref_window_t *window, 
                                                c_ext_id_t ext_id, 
                                                int forward)
@@ -1981,98 +2164,170 @@ static c2_pref_window_t * c2_pref_window_alloc(c2_pref_window_t *window,
     if(!window)
         return NULL;
 
-    debug("Creating a new window.\n");
-    window->state      = PREF_WINDOW_NEW | (forward ? PREF_WINDOW_FORWARD : 0);
-    window->cur_c2b    = NULL;
-    window->ext_id     = ext_id;
-    window->cur_off    = 0; 
-    window->cur_pages  = 0; 
-    window->next_pages = 0; 
+    window->state       = PREF_WINDOW_NEW | (forward ? PREF_WINDOW_FORWARD : 0);
+    window->cur_c2b     = NULL;
+    window->ext_id      = ext_id;
+    window->start_off   = 0;
+    window->end_off     = 0;
+#ifdef PREF_ADAPTIVE
+    window->pref_pages  = PREF_ADAP_INITIAL_PAGES;
+    window->state      |= PREF_WINDOW_ADAPTIVE;
+#else
+    window->pref_pages  = PREF_PAGES;
+#endif
     mutex_init(&window->lock);
     atomic_set(&window->count, 2); /* Window gets destroyed when the refcount reaches 0,
                                       therefore count=1 means allocated. Here we explicitly
                                       take a single reference too. */
 
+    pref_debug_mstore ("Allocated a new window.\n");
+
     return window;
 }
 
+/**
+ * Looks up and returns an existing prefetch window or allocates a new one.
+ *
+ * @param cep       Extent position to prefetch from.
+ * @param forward   Whether to look for a forward fetching window.
+ *
+ * @also c2_pref_window_find()
+ * @also c2_pref_window_alloc()
+ */
 static c2_pref_window_t* c2_pref_window_get(c_ext_pos_t cep, int forward)
 {
     c2_pref_window_t *window;
     
-    debug("Looking for window for cep="cep_fmt_str_nl, cep2str(cep));
-    window = c2_pref_window_find(cep, forward, 0);
-    if(window)
+    /* Look for existing prefetch window. */
+    pref_debug_mstore("Looking for window for cep="cep_fmt_str_nl, cep2str(cep));
+    if ((window = c2_pref_window_find(cep, forward, 0)))
     {
-        debug("Found %s, in tree\n", c2_pref_window_to_str(window));
+        /* Found a matching prefetch window. */
+        pref_debug_mstore("Found %s\n", c2_pref_window_to_str(window));
         return window;
     }
 
-    /* Haven't found a window, allocate a new one */
-    window = c2_pref_window_alloc(window, cep.ext_id, forward);
-    if(!window)
+    /* No matching prefetch windows exist.  Allocate one. */
+    pref_debug_mstore("Failed to find window for cep="cep_fmt_str_nl, cep2str(cep));
+#ifdef PREF_DEBUG
+    c2_pref_window_dump();
+#endif
+
+    if ((window = c2_pref_window_alloc(window, cep.ext_id, forward)) == NULL)
     {
-        debug("Failed to allocate the window.\n");
+        /* Failed to allocate a new window. */
+        pref_debug_mstore("Failed to allocate new window.\n");
         return NULL;
     }
 
+    /* Return the newly allocate prefetch window. */ 
     return window;
 }
 
+/**
+ * Prefetch I/O completion callback handler.
+ */
 static void c2_pref_io_end(c2_block_t *c2b)
 {
-    debug("Finished prefetch io at cep="cep_fmt_str", nr_pages=%d.\n",
+    pref_debug_mstore("Finished prefetch io at cep="cep_fmt_str", nr_pages=%d.\n",
             cep2str(c2b->cep), c2b->nr_pages);
     write_unlock_c2b(c2b);
     put_c2b(c2b);
 }
 
-static int c2_pref_submit(c2_pref_window_t *window)
+/**
+ * Issue c2b I/O to prefetch requested chunks.
+ *
+ * - Prefetches to the end of the current chunk for new windows.
+ * - For existing windows prefetches new chunks beyond end_off that lie within
+ *   the range specified by end_off to start_off+pref_pages.
+ *
+ * @param window    Window to prefetch
+ * @param pages     Number of additional pages to prefetch
+ *
+ * @return ENOSPC: End of extent reached.  Cannot prefetch further.
+ */
+static int c2_pref_submit(c2_pref_window_t *window, int pages)
 {
     c2_block_t *c2b;
     c_ext_pos_t cep;
     int nr_pages;
 
-    debug("Submitting next window for %s\n", 
-            c2_pref_window_to_str(window));
-    /* When submiting IO, the window must not be in the tree. And we must have it locked. */
     BUG_ON(!mutex_is_locked(&window->lock));
     BUG_ON(window->state & PREF_WINDOW_INSERTED);
-    /* We are always submitting next window for IO. */
-    cep.ext_id = window->ext_id;     
-    cep.offset = window->cur_off + window->cur_pages * PAGE_SIZE;
-    nr_pages = window->next_pages;
-    debug("Next window cep="cep_fmt_str", nr_pages=%d\n",
-            cep2str(cep), nr_pages);
-    /* We want cur/next window to be contained within one chunk. */
-    BUG_ON(CHUNK(cep.offset) != CHUNK(cep.offset + nr_pages * PAGE_SIZE - 1));
-    /* Check that this chunk exists. */
-    if(castle_extent_size_get(cep.ext_id) <= CHUNK(cep.offset))
+
+    pref_debug_mstore("Prefetching %d pages from %s\n",
+        pages, c2_pref_window_to_str(window));
+
+    cep.ext_id = window->ext_id;
+    cep.offset = window->end_off;
+
+    pref_debug_mstore("Pushing end_off from %d to %d\n",
+        (int)window->end_off, (int)(window->end_off + (pages * PAGE_SIZE)));
+    /* Update the window to reflect where we (will below) prefetch to. */
+    window->end_off += pages * PAGE_SIZE;
+
+    /* Prefetch the required range. */
+    while (pages > 0)
     {
-        debug("Extent too small for that!\n");
-        return -EINVAL;
+        pref_debug_mstore("while loop pages = %d\n", pages);
+        /* Stay chunk aligned. */
+        if (pages >= BLKS_PER_CHK)
+            nr_pages = BLKS_PER_CHK;
+        else
+        {
+            /* should only be chunk misaligned for new windows */
+            BUG_ON(!window->state & PREF_WINDOW_NEW);
+            nr_pages = pages;
+        }
+
+        pages -= nr_pages;
+        BUG_ON(pages < 0);
+
+        /* We want cur/next window to be contained within one chunk. */
+        BUG_ON(CHUNK(cep.offset) != CHUNK(cep.offset + nr_pages * PAGE_SIZE - 1));
+        /* Check that this chunk exists. */
+        if(castle_extent_size_get(cep.ext_id) <= CHUNK(cep.offset))
+        {
+            pref_debug_mstore("Extent too small: %s\n",
+                c2_pref_window_to_str(window));
+            pref_debug_mstore("Extent too small: extent %d chunks big, just requested chunk %d\n",
+                (int)castle_extent_size_get(cep.ext_id), (int)CHUNK(cep.offset));
+            return -ENOSPC;
+        }
+        /* We'll succeed now, get c2b, and submit. */
+        c2b = castle_cache_block_get(cep, nr_pages);
+        set_c2b_prefetch(c2b);
+        /* If already up-to-date, we don't need to do anything. */
+        if(c2b_uptodate(c2b))
+        {
+            pref_debug_mstore("c2b already up-to-date for chunk %d of %d from extent %d\n",
+            (int)CHUNK(cep.offset), (int)castle_extent_size_get(cep.ext_id), (int)cep.ext_id);
+            put_c2b(c2b);
+            continue;
+        }
+        pref_debug_mstore("Scheduling read for chunk %d (of %d) from extent %d\n",
+            (int)CHUNK(cep.offset), (int)castle_extent_size_get(cep.ext_id), (int)cep.ext_id);
+        write_lock_c2b(c2b);
+        c2b->end_io = c2_pref_io_end;
+        BUG_ON(submit_c2b(READ, c2b));
+
+        cep.offset += nr_pages * PAGE_SIZE;
     }
-    /* We'll succeed now, get c2b, and submit. */
-    c2b = castle_cache_block_get(cep, nr_pages);
-    set_c2b_prefetch(c2b);
-    /* If already up-to-date, we don't need to do anything. */
-    if(c2b_uptodate(c2b))
-    {
-        debug("Found an up-to-date c2b already.\n");
-        put_c2b(c2b);
-        return 0;
-    }
-    debug("Scheduling a read.\n");
-    write_lock_c2b(c2b);
-    c2b->end_io = c2_pref_io_end;
-    BUG_ON(submit_c2b(READ, c2b));
+
+    pref_debug_mstore("Window now %s\n", c2_pref_window_to_str(window));
 
     return 0;
 }
 
+/**
+ * Delete prefetch window.
+ *
+ * @param window    Window to delete.
+ */
 static void c2_pref_window_drop(c2_pref_window_t *window)
 {
-    debug("Deleting window %s\n", c2_pref_window_to_str(window));
+    debug("Deleting %s\n", c2_pref_window_to_str(window));
     /* Window must not be in the tree, and it must be alive. */
     BUG_ON(window->state & PREF_WINDOW_INSERTED);
     /* Must be locked. */
@@ -2087,29 +2342,41 @@ static void c2_pref_window_drop(c2_pref_window_t *window)
     c2_pref_window_put(window);
 }
 
+/**
+ * Destroy prefetch window associated with c2b (if it exists).
+ *
+ * - Find prefetch window exactly matching c2b's offset
+ * - Compare against window's cur_c2b pointer
+ * - Destroy window if it matches
+ *
+ * @param c2b   Callback block to try and match against windows.
+ *
+ * @also c2_pref_window_remove()
+ * @also c2_pref_window_drop()
+ */
 static void c2_pref_c2b_destroy(c2_block_t *c2b)
 {
     c2_pref_window_t *window;
     c_ext_pos_t cur_cep;
 
-    debug("Destroying a prefetch c2b->cep"cep_fmt_str", nr_pages=%d.\n",
+    pref_debug_mstore("Destroying a prefetch c2b->cep"cep_fmt_str", nr_pages=%d.\n",
             cep2str(c2b->cep), c2b->nr_pages);
     /* Try to get reference to the window, for which this c2b corresponds to cur window. */ 
     window = c2_pref_window_find(c2b->cep, -1, 1);
     /* Exit if it's not there. */
     if(!window)
     {
-        debug("Didn't find a window for this c2b.\n");
+        pref_debug_mstore("Didn't find a window for this c2b.\n");
         return;
     }
     mutex_lock(&window->lock);
-    debug("Found %s\n", c2_pref_window_to_str(window));
+    pref_debug_mstore("Found %s\n", c2_pref_window_to_str(window));
     /* Check that cur window matches c2b under lock. */
     cur_cep.ext_id = window->ext_id;
-    cur_cep.offset = window->cur_off;
+    cur_cep.offset = window->start_off;
     if(window->cur_c2b != c2b)
     {
-        debug("WARNING: prefetch window delete was racing an advance, or new c2b created.\n"
+        pref_debug_mstore("WARNING: prefetch window delete was racing an advance, or new c2b created.\n"
                "c2b->cep="cep_fmt_str", window start cep="cep_fmt_str_nl,
                cep2str(c2b->cep), cep2str(cur_cep));
         mutex_unlock(&window->lock);
@@ -2120,112 +2387,151 @@ static void c2_pref_c2b_destroy(c2_block_t *c2b)
     /* If cur_c2b is the same as c2b, ceps must agree too. */
     BUG_ON(EXT_POS_COMP(cur_cep, c2b->cep) != 0);
     window->cur_c2b = NULL;
-    debug("Destroying the window.\n");
+    pref_debug_mstore("Destroying the window.\n");
     /* Remove it from the tree first. */
     c2_pref_window_remove(window);
     /* Drop the window. */
     c2_pref_window_drop(window);
 }
 
-static int c2_pref_window_advance(c2_pref_window_t *window, c2_block_t **c2b_p)
+/**
+ * Advance the window and kick off prefetch I/O.
+ *
+ * - Inform cache that old prefetch blocks are no longer needed
+ * - Update current window's start_off
+ * - Calculate the number of additional pages to be prefetched
+ * - Ensure c2b exists in the cache for the updated window
+ * - Submit the new window for I/O
+ *
+ * NOTE: the window must not be in the tree when this function is called.
+ *
+ * @param window    The prefetch window to be advanced.
+ * @param cep       Requested offset.
+ * @param c2b_p     Returns c2b that identifies the window.
+ *
+ * @return See c2_pref_submit()
+ *
+ * @also c2_pref_window_remove()
+ * @also set_c2b_prefetch()
+ * @also c2_pref_submit()
+ */
+static int c2_pref_window_advance(c2_pref_window_t *window, c_ext_pos_t cep, c2_block_t **c2b_p)
 {
     c2_block_t *c2b;
-    c_ext_pos_t cep;
-    int ret;
+    c_ext_pos_t get_cep;
+    int i;
+    uint64_t pages;
 
     BUG_ON(!mutex_is_locked(&window->lock));
-    debug("Advancing %s\n", c2_pref_window_to_str(window));
-    /* Remove the window from the tree first (so that we don't race any tree walks). */
-    c2_pref_window_remove(window);
-    /* Make next window the current window. */
-    window->cur_off += window->cur_pages * PAGE_SIZE;
-    window->cur_pages = window->next_pages;
-    /* Make new window that covers entire chunk. */
-    BUG_ON(CHUNK_OFFSET(window->cur_off + window->cur_pages * PAGE_SIZE) != 0); 
-    window->next_pages = BLKS_PER_CHK; 
-    debug("Now %s\n", c2_pref_window_to_str(window));
-    /* We have to make sure that c2b for the new window exists, because otherwise
-       the window may never get deleted. */
-    cep.ext_id = window->ext_id;
-    cep.offset = window->cur_off;
-    c2b = castle_cache_block_get(cep, window->cur_pages);
+    BUG_ON(cep.ext_id != window->ext_id);
+    BUG_ON(window->state & PREF_WINDOW_INSERTED);
+    BUG_ON(CHUNK_OFFSET(window->end_off) != 0); /* should be chunk aligned */
+    pref_debug_mstore("Advancing %s\n", c2_pref_window_to_str(window));
+
+    /* Get the prefetch c2bs we used in this window.  This covers a range from
+     * start_off to the chunk that cep.offset lies within.  We're moving the
+     * window forward we should let the cache know we're done with these c2bs.
+     * cur_c2b may no longer be allocated, but we can check that it existed.
+     *
+     * It may seem more sensible to store the prefetch c2bs within the window.
+     * In fact this method would require that we either: a) hold a reference,
+     * thereby preventing the c2bs from being freed under memory pressure; or
+     * b) perform the same steps we do here to verify they still exist within
+     * the cache. */
+    if (window->cur_c2b)
+    {
+        pref_debug_mstore("Window CHUNK(start_off) = %lld, CHUNK(end_off) = %lld,"
+                "CHUNK(cep.offset) = %lld\n", CHUNK(window->start_off),
+                CHUNK(window->end_off), CHUNK(cep.offset));
+        get_cep.ext_id = cep.ext_id;
+        get_cep.offset = window->start_off;
+        pages = (C_CHK_SIZE - CHUNK_OFFSET(window->start_off)) >> PAGE_SHIFT;
+        castle_cache_block_hash_demote(get_cep, pages);
+        pref_debug_mstore("Demoted cur_c2b chunk %lld\n", CHUNK(get_cep.offset));
+
+        for (i = CHUNK(window->start_off) + 1; i < CHUNK(cep.offset); i++)
+        {
+            get_cep.offset = i * C_CHK_SIZE;
+            castle_cache_block_hash_demote(get_cep, 256);
+            pref_debug_mstore("Demoted chunk %lld\n", CHUNK(get_cep.offset));
+        }
+    }
+
+    /* Update the window's start offset and calculate number of pages
+     * to prefetch. */
+    window->start_off = cep.offset;
+    pages = window->start_off + window->pref_pages * PAGE_SIZE;
+    pages = CHUNK(pages) - (CHUNK(window->end_off) - 1);
+    pages = pages * BLKS_PER_CHK;
+
+    pref_debug_mstore("Will prefetch %lld pages from %lld\n", pages, window->end_off);
+
+    /* pages should be a whole chunk. */
+    BUG_ON(pages % 256 != 0);
+
+    /* Increase the adaptive prefetch if necessary. */
+    if ((window->state & PREF_WINDOW_ADAPTIVE) && (window->pref_pages < PREF_ADAP_MAX_PAGES))
+    {
+        /* Double the number of pages to prefetch. */
+        pref_debug_mstore("Increasing prefetch from %d to %d chunks.\n",
+            window->pref_pages / BLKS_PER_CHK, window->pref_pages * 2 / BLKS_PER_CHK);
+        window->pref_pages *= 2;
+        if (window->pref_pages > PREF_ADAP_MAX_PAGES)
+            window->pref_pages = PREF_ADAP_MAX_PAGES;
+    }
+
+    /* Get the first c2b we prefetched in this window.  This covers a range
+     * from start_off to the end of the chunk it lies within.
+     * We will perform no I/O on this block but we require it is: allocated,
+     * marked as a prefetch block, and exists within the cache.
+     *
+     * This semantic is required so that prefetch windows are freed (see
+     * castle_cache_block_free() and c2_pref_c2b_destroy()). */
+    get_cep.ext_id = window->ext_id;
+    get_cep.offset = window->start_off;
+    c2b = castle_cache_block_get(get_cep,
+            (C_CHK_SIZE - CHUNK_OFFSET(window->start_off)) >> PAGE_SHIFT);
     set_c2b_prefetch(c2b);
     *c2b_p = c2b;
-    /* Submit. */
-    if((ret = c2_pref_submit(window)) == 0)
-        return 0;
-    /* If we couldn't submit the next chunk, make sure than next_pages is set back to 0. */
-    window->next_pages = 0;
-    return ret;
+
+    /* Start the prefetch. */
+    return c2_pref_submit(window, pages);
 }
 
-static int c2_pref_new_window_schedule(c2_pref_window_t *window, c_ext_pos_t cep)
-{
-    c2_block_t *cur_c2b;
-
-    /* Various sanity checking asserts. */
-    BUG_ON(!mutex_is_locked(&window->lock));
-    BUG_ON(window->state & PREF_WINDOW_DEAD);
-    BUG_ON(window->state & PREF_WINDOW_INSERTED); 
-    BUG_ON(atomic_read(&window->count) != 2);
-    BUG_ON((window->cur_pages != 0) || (window->next_pages != 0));
-
-    /* The window should go up to the end of the chunk with the current window. */
-    window->cur_off = cep.offset;
-    window->next_pages = (C_CHK_SIZE - CHUNK_OFFSET(window->cur_off)) >> PAGE_SHIFT;
-    window->state &= ~PREF_WINDOW_NEW;
-    debug("Inited a new window: %s\n", c2_pref_window_to_str(window));
-
-    /* Submit the 'next' window, which is == to cur window because, cur_pages == 0. */
-    if(c2_pref_submit(window))
-    {
-        debug("Failed to submit the new window: %s\n", c2_pref_window_to_str(window));
-        c2_pref_window_drop(window);
-        return -EINVAL;
-    }
-
-    cur_c2b = NULL;
-    /* Now, advance the window, so that next chunk also gets prefetched. */
-    if(c2_pref_window_advance(window, &cur_c2b))
-        debug("Couldn't advance the new window.\n");
-
-    /* Finally, instert the window into the tree. */
-    BUG_ON(!cur_c2b);
-    if(!c2_pref_window_insert(window, cur_c2b))
-    {
-        /* Success. Drop our ref, and exit. */
-        mutex_unlock(&window->lock);
-        c2_pref_window_put(window);
-        return 0;
-    } else
-    {
-        /* Delete the window altogether. */
-        c2_pref_window_drop(window);
-        return -EINVAL;
-    }
-}
-
-/* NOTE: when any modifications to the cur/next windows are made, the window must NOT be
-         in the tree (this would cause problems in the tree walks). */
+/**
+ * Determine whether we need to issue a prefetch based on cep and window.
+ *
+ * - Determine whether to advance the window
+ * - Schedule prefetch if the window was advanced
+ *
+ * NOTE: when any modifications are made to (start_off, end_off, pref_pages) the
+ * window MUST NOT be in the tree (this would break tree walks).
+ *
+ * @return EINVAL: failed to prefetch.
+ * @return EAGAIN: cep not within the window.
+ * @return EEXIST: we failed to reinsert after advancing window.
+ * @return EXIT_SUCCESS: window scheduled.
+ *
+ * @also c2_pref_submit()
+ * @also c2_pref_window_advance()
+ * @also c2_pref_new_window_schedule()
+ */
 static int c2_pref_window_schedule(c2_pref_window_t *window, c_ext_pos_t cep)
 {
     c2_block_t *cur_c2b;
-    int ret;
 
-    /* Lock the window, so that we are not racing others changing things. */
+    /* Hold the window lock to prevent a race. */
     mutex_lock(&window->lock);
-    debug("Scheduling prefetch for cep="cep_fmt_str", in window %s\n", 
+
+    pref_debug_mstore("Determining whether to prefetch more for cep="cep_fmt_str", in %s\n", 
             cep2str(cep), c2_pref_window_to_str(window));
     BUG_ON(window->ext_id != cep.ext_id);
 
-    if(window->state & PREF_WINDOW_NEW)
-        return c2_pref_new_window_schedule(window, cep);
-    
-    /* If cep isn't within the window, we must have raced someone (it must have
-       changed since we found this window in the tree). This is unlikely,
-       so there is no point retrying. */
-    if(window->state & PREF_WINDOW_DEAD || 
-       c2_pref_window_compare(window, cep, (window->state & PREF_WINDOW_FORWARD ? 1 : 0)))
+    /* If the window isn't new it could have changed since we found it in the
+     * tree.  To verify that it hasn't (or that we still have a valid window)
+     * we compare cep to the window. */
+    if (window->state & PREF_WINDOW_DEAD ||
+            c2_pref_window_compare(window, cep, (window->state & PREF_WINDOW_FORWARD ? 1 : 0)))
     {
         printk("WARNING: it seems we have raced to access prefetch window, dead=%d.\n",
                 !!(window->state & PREF_WINDOW_DEAD));
@@ -2235,39 +2541,162 @@ static int c2_pref_window_schedule(c2_pref_window_t *window, c_ext_pos_t cep)
         return -EAGAIN;
     }
 
-    cur_c2b = NULL;
-    /* Check if the window has to be moved along. */
-    if(c2_pref_next_compare(window, cep) == 0) 
-        c2_pref_window_advance(window, &cur_c2b);
-        
-    /* Cep should be in cur window now. Always. */
-    BUG_ON(c2_pref_cur_compare(window, cep));
-
-    /* Try to insert the window back into the tree. This is a noop if the window is 
-       already in the tree. */
-    ret = c2_pref_window_insert(window, cur_c2b); 
-    if(ret)
+    /* We need to prefetch more data if the block cep lies within is beyond the
+     * block start_off lies within.  Or if this is a new window. */
+    if (CHUNK(cep.offset) > CHUNK(window->start_off))
     {
+        /* cep is not within the window's first block.  We need to prefetch
+         * more data. */
+
+        int ret;    /* for debugging porpoises. */
+
+        pref_debug_mstore("Prefetching for %s\n", c2_pref_window_to_str(window));
+
+        /* Slide the window forward & kick off prefetch.
+         * The window cannot be in the tree while we are making changes as this
+         * breaks walks. */
+        c2_pref_window_remove(window);
+        if (c2_pref_window_advance(window, cep, &cur_c2b) != EXIT_SUCCESS)
+        {
+            /* Probably an extent overrun and nothing to worry about. */
+            pref_debug_mstore("Failed to advance %s\n",
+                c2_pref_window_to_str(window));
+
+            BUG_ON(window->state & PREF_WINDOW_INSERTED);
+        }
+        if ((ret = c2_pref_window_insert(window, cur_c2b)) != EXIT_SUCCESS)
+        { 
+            BUG_ON(ret != -EINVAL);
+            BUG_ON(window->state & PREF_WINDOW_INSERTED);
+            /* We failed to insert, because there already is a window at that
+             * location.  Deallocate the window. */
+            printk("WARNING: window %s already exists in the tree.\n",
+                c2_pref_window_to_str(window));
+            c2_pref_window_drop(window);
+
+            return -EEXIST; 
+        }
+    }
+
+    /* cep is now guaranteed to be within current window. */
+    BUG_ON(c2_pref_window_compare(window, cep, (window->state & PREF_WINDOW_FORWARD ? 1 : 0)));
+
+    /* We succeeded doing everything.  Release the lock.  Put the window. */
+    pref_debug_mstore("Releasing window lock, putting the reference down.\n");
+    mutex_unlock(&window->lock);
+    c2_pref_window_put(window);
+
+    return EXIT_SUCCESS;
+}
+
+/**
+ * Initialise and schedule a new prefetch window.
+ *
+ * Schedules I/O to the end of the window's first chunk, ensuring that end_off
+ * is chunk-aligned.  At this point we have a valid window that needs advancing.
+ *
+ * - Initialise the window
+ * - Prefetch to the end of the first chunk
+ * - Advance the window
+ * - Insert into the tree
+ *
+ * NOTE: c2_pref_window_schedule() code duplication for readability.
+ *
+ * @return EINVAL: failed to prefetch.
+ * @return EAGAIN: cep not within the window.
+ * @return EEXIST: we failed to reinsert after advancing window.
+ * @return EXIT_SUCCESS: window scheduled.
+ *
+ * @also c2_pref_submit()
+ * @also c2_pref_window_schedule()
+ */
+static int c2_pref_new_window_schedule(c2_pref_window_t *window, c_ext_pos_t cep)
+{
+    int pages, ret;
+    c2_block_t *cur_c2b;
+
+    /* Hold the window lock as called functions require it.  There's no chance
+     * of a race as this is a new window (not in the tree) hence we have can
+     * have the only reference. */
+    mutex_lock(&window->lock);
+
+    BUG_ON(!window->state & PREF_WINDOW_NEW);
+    BUG_ON(window->state & PREF_WINDOW_INSERTED);
+    BUG_ON(!mutex_is_locked(&window->lock));
+    BUG_ON(window->ext_id != cep.ext_id);
+
+    /* This is a new window and cep.offset may not be chunk aligned.
+     * We'll fetch to the end of the block that cep.offset lies within. */
+    window->state &= ~PREF_WINDOW_NEW;
+    window->start_off = cep.offset;
+    window->end_off = cep.offset;
+    pages = (C_CHK_SIZE - CHUNK_OFFSET(window->start_off)) >> PAGE_SHIFT;
+
+    pref_debug_mstore("Initialised %s\n", c2_pref_window_to_str(window));
+    pref_debug_mstore("%d pages to end of chunk.\n", pages);
+
+    /* Pass off for the initial chunk to be prefetched. */
+    if (c2_pref_submit(window, pages) != EXIT_SUCCESS)
+    {
+        pref_debug_mstore("Failed to submit %s\n",
+            c2_pref_window_to_str(window));
+        c2_pref_window_drop(window);
+        return -EINVAL;
+    }
+    pref_debug_mstore("Completed prefetch of initial chunk.\n");
+
+    /* Slide the window forward & kick off prefetch.
+     * The window cannot be in the tree while we are making changes as this
+     * breaks walks. */
+    if (c2_pref_window_advance(window, cep, &cur_c2b) != EXIT_SUCCESS)
+    {
+        /* Probably an extent overrun and nothing to worry about. */
+        pref_debug_mstore("Failed to advance %s\n",
+            c2_pref_window_to_str(window));
+
+        BUG_ON(window->state & PREF_WINDOW_INSERTED);
+    }
+    if ((ret = c2_pref_window_insert(window, cur_c2b)) != EXIT_SUCCESS)
+    { 
         BUG_ON(ret != -EINVAL);
         BUG_ON(window->state & PREF_WINDOW_INSERTED);
-        /* We failed to insert, because there already is a window at that location.
-           Deallocate the window (by putting it twice). */ 
-        printk("WARNING: window already exists in the tree.\n");
+        /* We failed to insert, because there already is a window at that
+         * location.  Deallocate the window. */
+        printk("WARNING: window %s already exists in the tree.\n",
+            c2_pref_window_to_str(window));
         c2_pref_window_drop(window);
 
         return -EEXIST; 
     }
 
-    debug("Releasing the lock, putting the reference down.\n");
-    /* We succeeded doing everything. Release the lock. Put the window. */
+    /* cep is now guaranteed to be within current window. */
+    BUG_ON(c2_pref_window_compare(window, cep, (window->state & PREF_WINDOW_FORWARD ? 1 : 0)));
+
+    /* We succeeded doing everything.  Release the lock.  Put the window. */
+    pref_debug_mstore("Releasing window lock, putting the reference down.\n");
     mutex_unlock(&window->lock);
     c2_pref_window_put(window);
 
-    return 0;
+    return EXIT_SUCCESS;
 }
 
-
-/* Main entry function to the prefetch code */
+/**
+ * Advise prefetcher of intention to begin read.
+ *
+ * This is the main entry point into the prefetcher.
+ *
+ * - Get prefetch window for c2b->cep
+ * - Schedules prefetch via c2_pref_window_schedule()
+ *
+ * @param c2b       c2b to start prefetching.
+ * @param forward   Whether we are prefetching forwards.
+ *
+ * @return ENOMEM: Failed to allocate a new prefetch window.
+ * @return See c2_pref_window_schedule()
+ *
+ * @see c2_pref_window_get()
+ * @see c2_pref_window_schedule()
+ */
 static int castle_cache_prefetch_advise(c2_block_t *c2b, int forward)
 {
     c2_pref_window_t *window;
@@ -2275,21 +2704,30 @@ static int castle_cache_prefetch_advise(c2_block_t *c2b, int forward)
 
     /* Back prefetch not implemented yet. */
     BUG_ON(!forward);
+
     cep = c2b->cep;
     BUG_ON(BLOCK_OFFSET(cep.offset));
-    debug("Asking to prefetch frwd cep: "cep_fmt_str_nl, __cep2str(cep));
+    pref_debug_mstore("\n\n");
+    pref_debug_mstore("Asking to prefetch frwd cep: "cep_fmt_str_nl, __cep2str(cep));
 
     /* Find the prefetch window for this c2b */
     window = c2_pref_window_get(cep, forward);
     if(!window)
     {
-        debug("Warning: failed to allocate prefetch window.\n");
+        pref_debug_mstore("Warning: failed to allocate prefetch window.\n");
         return -ENOMEM;
     }
 
-    return c2_pref_window_schedule(window, cep);
+    /* Hand off the real work. */
+    if (window->state & PREF_WINDOW_NEW)
+        return c2_pref_new_window_schedule(window, cep);
+    else
+        return c2_pref_window_schedule(window, cep);
 }
 
+/**
+ * Advise the cache of intention to perform specific operation on a block.
+ */
 int castle_cache_block_advise(c2_block_t *c2b, c2b_advise_t advise) 
 {
     switch(advise)
@@ -2786,10 +3224,10 @@ static int castle_cache_fast_vmap_init(void)
     {
         c2p = list_entry(l, c2_page_t, list);
         for(j=0; j<PAGES_PER_C2P; j++)
-	{
+        {
             pgs_array[i++] = c2p->pages[j];
             pgs_array[i++] = c2p->pages[j];
-	}
+        }
     }
 
     castle_cache_fast_vmap_vstart = vmap(pgs_array, 
