@@ -3462,7 +3462,6 @@ static void castle_da_put(struct castle_double_array *da)
     {
         /* Ref count dropped to zero -> delete. There should be no outstanding attachments. */
         BUG_ON(da->attachment_cnt != 0);
-        BUG_ON((da->hash_list.next != NULL) || (da->hash_list.prev != NULL));
         BUG_ON(!castle_da_deleted(da));
         CASTLE_TRANSACTION_BEGIN;
         castle_da_destroy_complete(da);
