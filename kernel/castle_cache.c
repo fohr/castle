@@ -1922,21 +1922,24 @@ static inline c2_pref_window_t* c2_pref_window_closest_find(struct rb_node *n,
     /* The logic below is (probably) broken for back prefetch. */
     BUG_ON(!forward);
     BUG_ON(!spin_is_locked(&c2_prefetch_lock));
+    BUG_ON(c2_pref_window_compare(rb_entry(n, c2_pref_window_t, rb_node), cep, forward) != 0);
+
+    /* Save provided window rb_node ptr.  It is guaranteed to satisfy cep. */
+    p = n;
 
     do { 
-        /* Save the current window's rb_node pointer. This window is guaranteed
-         * to cover the cep. */
-        p = n;
-        /* Check whether the next entry exists, and is still small enough. */
+        /* Check next entry satisfies cep. */
         n = rb_next(n);
         if(!n)
             break;
         window = rb_entry(n, c2_pref_window_t, rb_node);
+
         cmp = c2_pref_window_compare(window, cep, forward);
-        /* We should never find a window which is smaller than the cep. */
-        BUG_ON(cmp > 0);
+        if (cmp == 0)
+            /* Greater start_off, still satisfies cep. */
+            p = n;
     } 
-    while(cmp == 0);
+    while (cmp >= 0);
 
     /* n is now NULL, or in the first window that doesn't cover the cep, return
      * the window associated with p. */
