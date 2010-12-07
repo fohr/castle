@@ -1213,13 +1213,13 @@ static inline c2_block_t* castle_cache_block_hash_get(c_ext_pos_t cep,
  * @arg cep         Specifies the c2b offset and extent
  * @arg nr_pages    Specifies size of block
  *
- * @return Matching c2b without an additional reference
- * @return NULL if no matches were found
+ * @return 1 c2b found
+ * @return 0 c2b not found
  */
-static inline void castle_cache_block_hash_demote(c_ext_pos_t cep,
+static inline int castle_cache_block_hash_demote(c_ext_pos_t cep,
                                                          uint32_t nr_pages)
 {
-    _castle_cache_block_hash_get(cep, nr_pages, 0);
+    return _castle_cache_block_hash_get(cep, nr_pages, 0) ? 1 : 0;
 }
 
 static int castle_cache_block_hash_insert(c2_block_t *c2b, int transient)
@@ -1761,27 +1761,76 @@ c2_block_t* castle_cache_block_get(c_ext_pos_t cep, int nr_pages)
 {
     return _castle_cache_block_get(cep, nr_pages, 0);
 }
-/**********************************************************************************************
- * Prefetching.
+
+/*******************************************************************************
+ * PREFETCHING
  *
- * Prefetching code follows the following rules:
- * 1. Prefetch windows get added in response to castle_cache_block_advise() calls (which
- *    could of course be racing with each other). Each window encapsulates two prefetch
- *    c2bs. One starting from the cep provided by the client, up to the end of the chunk.
- *    The second, covers the following chunk. When _advise() cep moves to the second
- *    c2b, we advance the window, by discarding the first c2b, and adding a new one at
- *    the back. We don't hold references to the cache blocks (except during the
- *    IO). Windows get destroyed when the first of the c2bs gets removed from the 
- *    cache (we mark c2bs as prefetch c2bs, so that we get an appropriate callback).
- * 2. All windows are stored in a global rb tree, protected by a spinlock.
- * 3. Windows are ref counted, and when the ref drops to zero, they are deleted. If 
- *    multiple execution therads race to delete a window, we let only one through, 
- *    using PREF_WINDOW_DEAD bit.
- * 4. All changes to a window state (e.g. modifying start points, changing state bits)
- *    must happen with window->lock held.
- * 5. Windows are sorted by the start point cep. The start points in the tree are unique.
- * 6. Pointer to the cur_c2b is stored in the window. This makes it possible to avoid
- *    races in allocating c2bs for the same start point, and destroying windows. 
+ * castle_cache_prefetch_window / c2_pref_window_t:
+ *    See structure definition for full description of members.
+ *
+ *  - start_off->end_off: Range within extent ext_id that has been prefetched.
+ *  - pref_pages: Number of pages from a requested offset (cep) that will be
+ *    prefetched.
+ *  - adv_thresh: Number of chunks from end_off we get before prefetching.
+ *  - cur_c2b: c2b pointer for the range: start_off to end of start_off's chunk.
+ *
+ * Window storage:
+ *    All windows are stored in a global RB tree, protected by a spinlock.
+ *
+ * Deprecation of windows:
+ *    cur_c2b is recalculated, fetched and marked as a prefetch c2b whenever the
+ *    window is advanced.  It provides a callback link between c2b and window.
+ *    When the block is due to be freed (via a castle_cache_block_free() call)
+ *    c2_pref_c2b_destroy() is called if the c2b is marked as a prefetch block.
+ *    Here we look through the prefetch window tree for the window that matches
+ *    cur_c2b and free it.
+ *    Windows are ref counted.  When the ref drops to 0, they are deleted.  If
+ *    multiple execution threads race to delete a window, we let only one
+ *    through via the PREF_WINDOW_DEAD state bit.
+ *
+ * Invocation:
+ *    Consumer's call castle_cache_block_advise().  These consumer calls could
+ *    potentially race.
+ *
+ * Prefetch algorithm and variables:
+ *    Algorithm and variables: see comments in c2_pref_window_schedule().
+ *    c2b references are held only during I/O.  When the window is moved forward
+ *    we inform the LRU cache to deprecate the blocks that fall off the front.
+ *
+ * General rules / observations:
+ *
+ * 1. All changes to a window state (e.g. modifying start_off, end_off, state,
+ *    etc.) must happen with window->lock held.
+ *
+ * 2. Windows must not be in the tree while modifying start_off/end_off as this
+ *    breaks tree walks.
+ *
+ * 3. Within the tree windows are sorted according to start_off.  The start
+ *    points in the tree are unique.
+ *
+ * 4. Within the tree windows ranges (start_off->end_off) may overlap.
+ *
+ * 5. If the requested cep.offset is not chunk-aligned then we prefetch to the
+ *    end of the chunk it lies within.
+ *
+ * 6. We prefetch whole chunks (with the exception of the start_off chunk).
+ *
+ * Code flow:
+ *
+ *    A very rough flow of control for updating an existing prefetch window.
+ *
+ *      castle_cache_block_advise()
+ *          // calls straight into:
+ *      castle_cache_prefetch_advise()
+ *        c2_pref_window_get()
+ *            // gets existing or allocates a new window
+ *      c2_pref_window_schedule()
+ *          // determines whether the window needs to be advanced
+ *      c2_pref_window_advance()
+ *          // calculates the number of pages to prefetch
+ *          // updates the window (including cur_c2b)
+ *      c2_pref_submit()
+ *          // issues chunk-aligned I/O
  */
 #define PREF_WINDOW_NEW             (0x01)            /* Window is new, no IO has been sched yet. */ 
 #define PREF_WINDOW_DEAD            (0x02)            /* Set when the alloc ref is dropped.       */
@@ -1792,6 +1841,7 @@ c2_block_t* castle_cache_block_get(c_ext_pos_t cep, int nr_pages)
 #define PREF_CHUNKS                 4                 /* #chunks to non-adaptive prefetch.        */
 #define PREF_ADAP_INITIAL_CHUNKS    1                 /* Initial #chunks to adaptive prefetch.    */
 #define PREF_ADAP_MAX_CHUNKS        16                /* Maximum #chunks to adaptive prefetch.    */
+#define PREF_ADVANCE_THRESHOLD      4                 /* #chunks from end before we prefetch.     */
 #define PREF_ADAP_MAX_PAGES         PREF_ADAP_MAX_CHUNKS * BLKS_PER_CHK
 #define PREF_ADAP_INITIAL_PAGES     PREF_ADAP_INITIAL_CHUNKS * BLKS_PER_CHK
 #define PREF_PAGES                  PREF_CHUNKS * BLKS_PER_CHK
@@ -1809,7 +1859,8 @@ typedef struct castle_cache_prefetch_window {
     c_ext_id_t      ext_id;     /**< Extent this window describes.                          */
     c_byte_off_t    start_off;  /**< Start of range that has been prefetched.               */
     c_byte_off_t    end_off;    /**< End of range that has been prefetched.  Chunk aligned. */
-    uint16_t        pref_pages; /**< Number of pages we prefetch.                           */
+    uint32_t        pref_pages; /**< Number of pages we prefetch.                           */
+    uint8_t         adv_thresh; /**< #Chunks from end_off before we prefetch.               */
     struct rb_node  rb_node;    /**< RB-node for this window.                               */
     atomic_t        count;      /**< Reference count.                                       */
     struct mutex    lock;       /**< Hold while changing start_off, end_off, pref_pages.    */
@@ -1828,12 +1879,15 @@ static USED char* c2_pref_window_to_str(c2_pref_window_t *window)
     cep.offset = window->start_off;
 
     snprintf(win_str, PREF_WINDOW_STR_LEN, 
-        "%spref win: {cep="cep_fmt_str", start_off=%lld, end_off=%lld, pref_pages=%d, st=0x%.2x, cnt=%d",
+        "%spref win: {cep="cep_fmt_str", start_off=%lld (%lld), end_off=%lld (%lld), pref_pages=%d (%d), st=0x%.2x, cnt=%d",
          window->state & PREF_WINDOW_ADAPTIVE ? "adaptive " : "",
              cep2str(cep), 
              window->start_off, 
+             CHUNK(window->start_off),
              window->end_off, 
+             CHUNK(window->end_off),
              window->pref_pages, 
+             window->pref_pages / 256,
              window->state, 
              atomic_read(&window->count));
     win_str[PREF_WINDOW_STR_LEN-1] = '\0';
@@ -1976,7 +2030,7 @@ static c2_pref_window_t *c2_pref_window_find(c_ext_pos_t cep, int forward, int e
     {
         c_ext_pos_t window_cep;
 
-    /* Get prefetch window from tree and initialise cep. */
+        /* Get prefetch window from tree and initialise cep. */
         window = rb_entry(n, c2_pref_window_t, rb_node);
         window_cep.ext_id = window->ext_id;
         window_cep.offset = window->start_off;
@@ -2178,6 +2232,7 @@ static c2_pref_window_t * c2_pref_window_alloc(c2_pref_window_t *window,
 #else
     window->pref_pages  = PREF_PAGES;
 #endif
+    window->adv_thresh  = PREF_ADVANCE_THRESHOLD;
     mutex_init(&window->lock);
     atomic_set(&window->count, 2); /* Window gets destroyed when the refcount reaches 0,
                                       therefore count=1 means allocated. Here we explicitly
@@ -2229,6 +2284,8 @@ static c2_pref_window_t* c2_pref_window_get(c_ext_pos_t cep, int forward)
 
 /**
  * Prefetch I/O completion callback handler.
+ *
+ * @param c2b   Cache block I/O has been completed on
  */
 static void c2_pref_io_end(c2_block_t *c2b)
 {
@@ -2443,20 +2500,28 @@ static int c2_pref_window_advance(c2_pref_window_t *window, c_ext_pos_t cep, c2_
      * the cache. */
     if (window->cur_c2b)
     {
-        pref_debug_mstore("Window CHUNK(start_off) = %lld, CHUNK(end_off) = %lld,"
+        pref_debug_mstore("Window CHUNK(start_off) = %lld, CHUNK(end_off) = %lld, "
                 "CHUNK(cep.offset) = %lld\n", CHUNK(window->start_off),
                 CHUNK(window->end_off), CHUNK(cep.offset));
         get_cep.ext_id = cep.ext_id;
         get_cep.offset = window->start_off;
         pages = (C_CHK_SIZE - CHUNK_OFFSET(window->start_off)) >> PAGE_SHIFT;
-        castle_cache_block_hash_demote(get_cep, pages);
-        pref_debug_mstore("Demoted cur_c2b chunk %lld\n", CHUNK(get_cep.offset));
+        if (castle_cache_block_hash_demote(get_cep, pages))
+            pref_debug_mstore("Demoted cur_c2b chunk %lld\n", CHUNK(get_cep.offset));
+        else
+            pref_debug_mstore("Unable to demote cur_c2b chunk %lld (not found)\n",
+                    CHUNK(get_cep.offset));
 
         for (i = CHUNK(window->start_off) + 1; i < CHUNK(cep.offset); i++)
         {
             get_cep.offset = i * C_CHK_SIZE;
             castle_cache_block_hash_demote(get_cep, 256);
-            pref_debug_mstore("Demoted chunk %lld\n", CHUNK(get_cep.offset));
+            if (castle_cache_block_hash_demote(get_cep, pages))
+                pref_debug_mstore("Demoted chunk %lld\n",
+                        CHUNK(get_cep.offset));
+            else
+                pref_debug_mstore("Unable to demote chunk %lld (not found)\n",
+                        CHUNK(get_cep.offset));
         }
     }
 
@@ -2476,7 +2541,7 @@ static int c2_pref_window_advance(c2_pref_window_t *window, c_ext_pos_t cep, c2_
     if ((window->state & PREF_WINDOW_ADAPTIVE) && (window->pref_pages < PREF_ADAP_MAX_PAGES))
     {
         /* Double the number of pages to prefetch. */
-        pref_debug_mstore("Increasing prefetch from %d to %d chunks.\n",
+        pref_debug_mstore("Next prefetch will be increased from %d to %d chunks.\n",
             window->pref_pages / BLKS_PER_CHK, window->pref_pages * 2 / BLKS_PER_CHK);
         window->pref_pages *= 2;
         if (window->pref_pages > PREF_ADAP_MAX_PAGES)
@@ -2522,6 +2587,7 @@ static int c2_pref_window_advance(c2_pref_window_t *window, c_ext_pos_t cep, c2_
 static int c2_pref_window_schedule(c2_pref_window_t *window, c_ext_pos_t cep)
 {
     c2_block_t *cur_c2b;
+    int size;
 
     /* Hold the window lock to prevent a race. */
     mutex_lock(&window->lock);
@@ -2544,13 +2610,33 @@ static int c2_pref_window_schedule(c2_pref_window_t *window, c_ext_pos_t cep)
         return -EAGAIN;
     }
 
-    /* We need to prefetch more data if the block cep lies within is beyond the
-     * block start_off lies within.  Or if this is a new window. */
-    if (CHUNK(cep.offset) > CHUNK(window->start_off))
+    /* The point at which we advance the prefetch window depends on the prefetch
+     * behaviour we require.  When we do call c2_pref_window_advance() we always
+     * fetch enough blocks from end_off so that there are pref_pages available
+     * from the requested cep.offset.
+     *
+     * We have the following behaviours:
+     *
+     * 1. No ganging of chunks.  Advance as soon as requested cep.offset exceeds
+     *    start_off.
+     *    This generally results in one chunk being fetched at a time.
+     *
+     * 2. Ganging of chunks but the window size (end_off-start_off) is not yet
+     *    large enough to use the advance threshold (adv_thresh) that dictates
+     *    how far cep.offset must be from end_off before we prefetch again.
+     *    Fall back to behaviour (1).
+     *
+     * 3. Ganging of chunks and we have a large enough window size.  Advance the
+     *    window when cep.offset is adv_thresh from end_off.
+     *    This generally results in multiple chunks being fetched at a time,
+     *    hopefully reducing the need for multiple seeks as required for (1).
+     */
+    size = CHUNK(window->end_off) - CHUNK(window->start_off);   /* of window */
+    if (((!window->adv_thresh || size <= window->adv_thresh)    /* (1) & (2) */
+                && CHUNK(cep.offset) > CHUNK(window->start_off))
+            || ((size > window->adv_thresh)                     /* (3) */
+                && CHUNK(cep.offset) > CHUNK(window->end_off) - window->adv_thresh))
     {
-        /* cep is not within the window's first block.  We need to prefetch
-         * more data. */
-
         int ret;    /* for debugging porpoises. */
 
         pref_debug_mstore("Prefetching for %s\n", c2_pref_window_to_str(window));
