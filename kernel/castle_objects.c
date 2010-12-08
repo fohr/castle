@@ -956,7 +956,8 @@ void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
     /* Deal with error case first */
     if(err)
     {
-        castle_ct_put(replace->ct, 1);
+        if (replace->ct)
+            castle_ct_put(replace->ct, 1);
         replace->complete(replace, err);
         castle_utils_bio_free(c_bio);
         return;
@@ -1607,7 +1608,8 @@ static void castle_object_pull_continue(struct castle_bio_vec *c_bvec, int err, 
     {
         debug("Error, invalid or tombstone.\n");
 
-        castle_ct_put(pull->ct, 0);
+        if (err)
+            castle_ct_put(pull->ct, 0);
         pull->pull_continue(pull, err, 0, 1 /* done */);
         return;
     }

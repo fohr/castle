@@ -7,6 +7,7 @@
 #include "castle_freespace.h"
 #include "castle_extent.h"
 #include "castle_cache.h"
+#include "castle_da.h"
 
 /* Extent manager - Every disk reserves few chunks in the begining of the disk to 
  * store meta data. Meta data for freespace management (for each disk) would be
@@ -828,7 +829,7 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t            rda_type,
   
     if (castle_extent_space_alloc(ext, da_id) < 0)
     {
-        printk("Extent alloc failed\n");
+        printk("Extent alloc failed for %u chunks\n", count);
         goto __hell;
     }
   

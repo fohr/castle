@@ -1019,7 +1019,8 @@ static void castle_back_replace_complete(struct castle_object_replace *replace, 
 
     debug("castle_back_replace_complete\n");
 
-    castle_back_buffer_put(op->conn, op->buf);
+    if (op->replace.value_len > 0)
+        castle_back_buffer_put(op->conn, op->buf);
 
     castle_attachment_put(op->attachment); 
 
@@ -1040,6 +1041,9 @@ static void castle_back_replace_data_copy(struct castle_object_replace *replace,
 
     debug("castle_back_replace_data_copy buffer=%p, buffer_length=%u, not_last=%d, value_len=%u\n",
         buffer, buffer_length, not_last, op->req.replace.value_len);
+
+    if (op->req.replace.value_len == 0)
+        return;
 
     // TODO: actual zero copy!
 
@@ -1073,20 +1077,25 @@ static void castle_back_replace(void *data)
     /*
      * Get buffer with value in it and save it
      */
-    op->buf = castle_back_buffer_get(conn, (unsigned long) op->req.replace.value_ptr);
-    if (op->buf == NULL)
+    if (op->req.replace.value_len > 0)
     {
-        error("Could not get buffer for pointer=%p\n", op->req.replace.value_ptr);
-        err = -EINVAL;
-        goto err2;
-    }
+        op->buf = castle_back_buffer_get(conn, (unsigned long) op->req.replace.value_ptr);
+        if (op->buf == NULL)
+        {
+            error("Could not get buffer for pointer=%p\n", op->req.replace.value_ptr);
+            err = -EINVAL;
+            goto err2;
+        }
 
-    if (!castle_back_user_addr_in_buffer(op->buf, op->req.replace.value_ptr + op->req.replace.value_len - 1))
-    {
-        error("Invalid value length %u (ptr=%p)\n", op->req.replace.value_len, op->req.replace.value_ptr);
-        err = -EINVAL;
-        goto err3;
+        if (!castle_back_user_addr_in_buffer(op->buf, op->req.replace.value_ptr + op->req.replace.value_len - 1))
+        {
+            error("Invalid value length %u (ptr=%p)\n", op->req.replace.value_len, op->req.replace.value_ptr);
+            err = -EINVAL;
+            goto err3;
+        }
     }
+    else
+        op->buf = NULL;
 
     op->buffer_offset = 0;
 

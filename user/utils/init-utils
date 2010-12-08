@@ -134,6 +134,8 @@ function load_fs_and_claim {
 
     init_kernel_fs
 
+    touch /var/lib/castle-fs/dirty
+
     for dev in "${devs[@]}"
     do
       castle-cli claim_dev "$dev" > /dev/null

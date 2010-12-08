@@ -27,7 +27,6 @@ fi
 
 disks=$(castle-scan)
 
-touch /var/lib/castle-fs/dirty
 load_fs_and_claim $disks
 sync
 castle-cli init

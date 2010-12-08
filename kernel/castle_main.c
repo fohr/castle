@@ -1012,10 +1012,10 @@ struct castle_slave* castle_claim(uint32_t new_dev)
     cs->bdev = bdev;
 
     if(castle_slave_superblock_read(cs))
-	{
+    {
         printk("Invalid superblock.\n");
         goto err_out;
-	}
+    }
 
     /* Make sure that the disk is at least FREE_SPACE_START big. */
     if(get_bd_capacity(bdev) < (FREE_SPACE_START << (20 - 9))) 
@@ -1105,7 +1105,7 @@ static int castle_open(struct castle_attachment *dev)
     dev->ref_cnt++;
     spin_unlock(&castle_attachments.lock);
 
-	return 0;
+    return 0;
 }
 
 static int castle_close(struct castle_attachment *dev)
@@ -1116,7 +1116,7 @@ static int castle_close(struct castle_attachment *dev)
 
     // TODO should call put, potentially free it?
 
-	return 0;
+    return 0;
 }
 
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,24)
@@ -1131,11 +1131,11 @@ static int castle_old_close(struct inode *inode, struct file *filp)
 }
 
 static struct block_device_operations castle_bd_ops = {
-	.owner           = THIS_MODULE,
-	.open 	         = castle_old_open,
-	.release 	     = castle_old_close,
-	.media_changed   = NULL,
-	.revalidate_disk = NULL,
+    .owner           = THIS_MODULE,
+    .open            = castle_old_open,
+    .release         = castle_old_close,
+    .media_changed   = NULL,
+    .revalidate_disk = NULL,
 };
 #else
 static int castle_new_open(struct block_device *bdev, fmode_t mode)
@@ -1149,11 +1149,11 @@ static int castle_new_close(struct gendisk *gendisk, fmode_t mode)
 }
 
 static struct block_device_operations castle_bd_ops = {
-	.owner           = THIS_MODULE,
-	.open 	         = castle_new_open,
-	.release 	     = castle_new_close,
-	.media_changed   = NULL,
-	.revalidate_disk = NULL,
+    .owner           = THIS_MODULE,
+    .open            = castle_new_open,
+    .release         = castle_new_close,
+    .media_changed   = NULL,
+    .revalidate_disk = NULL,
 };
 #endif
 
@@ -1616,7 +1616,7 @@ struct castle_attachment* castle_attachment_init(int device, /* _or_object_colle
     attachment = castle_malloc(sizeof(struct castle_attachment), GFP_KERNEL); 
     if(!attachment)
         return NULL;
-	init_rwsem(&attachment->lock);
+    init_rwsem(&attachment->lock);
     attachment->ref_cnt = 1; // Use double put on detach
     attachment->device  = device;
     attachment->version = version;
@@ -1660,14 +1660,14 @@ struct castle_attachment* castle_device_init(version_t version)
     sprintf(gd->disk_name, "castle-fs-%d", minor);
     gd->major        = castle_attachments.major;
     gd->first_minor  = minor++;
-	gd->fops         = &castle_bd_ops;
+    gd->fops         = &castle_bd_ops;
     gd->private_data = dev;
 
-	rq = blk_alloc_queue(GFP_KERNEL);
+    rq = blk_alloc_queue(GFP_KERNEL);
     if (!rq)
         goto error_out;
-	blk_queue_make_request(rq, castle_device_make_request);
-	rq->queuedata    = dev;
+    blk_queue_make_request(rq, castle_device_make_request);
+    rq->queuedata    = dev;
     gd->queue        = rq;
     if(!leaf) 
         set_disk_ro(gd, 1);
