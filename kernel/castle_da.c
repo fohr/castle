@@ -17,12 +17,18 @@
 #ifndef DEBUG
 #define debug(_f, ...)            ((void)0)
 #define debug_verbose(_f, ...)    ((void)0)
-#define merg_itr_dbg(_f, ...)      ((void)0)
+#define debug_iter(_f, ...)       ((void)0)
+#define debug_merges(_f, ...)     ((void)0)
+#if 0
+#define debug_merges(_f, _a...)   (printk("%s:%.4d: DA=%d, level=%d: " \
+                                        _f, __FILE__, __LINE__ , da->id, level, ##_a))
+#endif
 #else
 #define debug(_f, _a...)          (printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
-#define debug_verbose(_f, ...)    ((void)0)
-#define merg_itr_dbg(_f, _a...)     (printk(_f, ##_a))
-//#define debug_verbose(_f, _a...)  (printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
+#define debug_verbose(_f, ...)    (printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
+#define debug_iter(_f, _a...)     (printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
+#define debug_merges(_f, _a...)   (printk("%s:%.4d: DA=%d, level=%d: " \
+                                        _f, __FILE__, __LINE__ , da->id, level, ##_a))
 #endif
 
 #define MAX_DA_LEVEL                    (20)
@@ -60,43 +66,53 @@ static int                      castle_da_exiting    = 0;
 
    For DAs, only an attached DA is guaranteed to be in the hash.
  */
+struct castle_merge_token {
+    int driver_level;
+    struct list_head list;
+};
 
 #define DOUBLE_ARRAY_GROWING_RW_TREE_BIT    (0)
 #define DOUBLE_ARRAY_GROWING_RW_TREE_FLAG   (1 << DOUBLE_ARRAY_GROWING_RW_TREE_BIT)
 #define DOUBLE_ARRAY_DELETED_BIT            (1)
 #define DOUBLE_ARRAY_DELETED_FLAG           (1 << DOUBLE_ARRAY_DELETED_BIT)
 struct castle_double_array {
-    da_id_t                 id;
-    version_t               root_version;
+    da_id_t                     id;
+    version_t                   root_version;
     /* Lock protects the trees list */
-    spinlock_t              lock;
-    unsigned long           flags;
-    int                     nr_trees;
-    struct {
-        int                 nr_trees;
-        struct list_head    trees;
-        /* Merge related veriables. */
+    spinlock_t                  lock;
+    unsigned long               flags;
+    int                         nr_trees;
+    struct {                    
+        int                     nr_trees;
+        struct list_head        trees;
+        /* Merge related variables. */
         struct {
+            struct list_head    merge_tokens;
+            struct castle_merge_token
+                               *active_token;
+            struct castle_merge_token
+                               *driver_token;
             uint32_t            units_commited; 
             struct task_struct *thread;
         } merge;
     } levels[MAX_DA_LEVEL];
-    struct list_head        hash_list;
-    atomic_t                ref_cnt;
-    uint32_t                attachment_cnt;
+    struct castle_merge_token   merge_tokens_array[MAX_DA_LEVEL];
+    struct list_head            merge_tokens; 
+    struct list_head            hash_list;
+    atomic_t                    ref_cnt;
+    uint32_t                    attachment_cnt;
     /* Queue of write IOs queued up on this DA. */
-    struct list_head        ios_waiting;
-    int                     ios_waiting_cnt;
-    uint32_t                ios_budget;
-    uint32_t                ios_rate;
-    struct work_struct      queue_restart;
+    struct list_head            ios_waiting;
+    int                         ios_waiting_cnt;
+    uint32_t                    ios_budget;
+    uint32_t                    ios_rate;
+    struct work_struct          queue_restart;
     /* Merge deamortisation */
-    wait_queue_head_t       merge_waitq;
-    int                     max_merge_level;
+    wait_queue_head_t           merge_waitq;
     /* Merge throttling. DISABLED ATM. */
-    atomic_t                epoch_ios;
-    atomic_t                merge_budget;
-    wait_queue_head_t       merge_budget_waitq;
+    atomic_t                    epoch_ios;
+    atomic_t                    merge_budget;
+    wait_queue_head_t           merge_budget_waitq;
 };
 
 DEFINE_HASH_TBL(castle_da, castle_da_hash, CASTLE_DA_HASH_SIZE, struct castle_double_array, hash_list, da_id_t, id);
@@ -119,6 +135,7 @@ static void castle_component_tree_add(struct castle_double_array *da,
 static void castle_component_tree_del(struct castle_double_array *da,
                                       struct castle_component_tree *ct);
 struct castle_da_merge;
+static USED void castle_da_merges_print(struct castle_double_array *da);
 static void castle_da_merge_check(struct castle_double_array *da);
 void castle_double_array_merges_fini(void);
 static void castle_da_merge_budget_consume(struct castle_da_merge *merge);
@@ -645,19 +662,19 @@ static int _castle_ct_merged_iter_prep_next(c_merged_iter_t *iter,
     int i;
     struct component_iterator *comp_iter;
 
-    merg_itr_dbg("No of comp_iters: %u\n", iter->nr_iters);
+    debug_iter("No of comp_iters: %u\n", iter->nr_iters);
     for(i=0; i<iter->nr_iters; i++)
     {
         comp_iter = iter->iterators + i; 
 
-        merg_itr_dbg("%s:%p:%d\n", __FUNCTION__, iter, i);
+        debug_iter("%s:%p:%d\n", __FUNCTION__, iter, i);
         /* Replenish the cache */
         if(!comp_iter->completed && !comp_iter->cached)
         {
             debug("Reading next entry for iterator: %d.\n", i);
             if (!sync_call &&
                 !comp_iter->iterator_type->prep_next(comp_iter->iterator)) {
-                merg_itr_dbg("%s:%p:%p:%d - schedule\n", __FUNCTION__, iter, comp_iter->iterator, i);
+                debug_iter("%s:%p:%p:%d - schedule\n", __FUNCTION__, iter, comp_iter->iterator, i);
                 return 0;
             }
             if (comp_iter->iterator_type->has_next(comp_iter->iterator))
@@ -668,11 +685,11 @@ static int _castle_ct_merged_iter_prep_next(c_merged_iter_t *iter,
                                                &comp_iter->cached_entry.cvt);
                 comp_iter->cached = 1;
                 iter->src_items_completed++;
-                merg_itr_dbg("%s:%p:%d - cached\n", __FUNCTION__, iter, i);
+                debug_iter("%s:%p:%d - cached\n", __FUNCTION__, iter, i);
             }
             else
             {
-                merg_itr_dbg("%s:%p:%d - nothing left\n", __FUNCTION__, iter, i);
+                debug_iter("%s:%p:%d - nothing left\n", __FUNCTION__, iter, i);
                 comp_iter->completed = 1;
                 iter->non_empty_cnt--;
                 debug("A component iterator run out of stuff, we are left with"
@@ -695,7 +712,7 @@ static void castle_ct_merged_iter_register_cb(c_merged_iter_t *iter,
 
 static int castle_ct_merged_iter_prep_next(c_merged_iter_t *iter)
 {
-    merg_itr_dbg("%s:%p\n", __FUNCTION__, iter);
+    debug_iter("%s:%p\n", __FUNCTION__, iter);
     return _castle_ct_merged_iter_prep_next(iter, 0);
 }
 
@@ -703,10 +720,10 @@ static void castle_ct_merged_iter_end_io(void *rq_enum_iter, int err)
 {
     c_merged_iter_t *iter = ((c_rq_enum_t *) rq_enum_iter)->private;
 
-    merg_itr_dbg("%s:%p\n", __FUNCTION__, iter);
+    debug_iter("%s:%p\n", __FUNCTION__, iter);
     if (castle_ct_merged_iter_prep_next(iter))
     {
-        merg_itr_dbg("%s:%p - Done\n", __FUNCTION__, iter);
+        debug_iter("%s:%p - Done\n", __FUNCTION__, iter);
         iter->end_io(iter, 0);
         return;
     }
@@ -714,7 +731,7 @@ static void castle_ct_merged_iter_end_io(void *rq_enum_iter, int err)
 
 static int castle_ct_merged_iter_has_next(c_merged_iter_t *iter)
 {
-    merg_itr_dbg("%s:%p\n", __FUNCTION__, iter);
+    debug_iter("%s:%p\n", __FUNCTION__, iter);
     BUG_ON(!_castle_ct_merged_iter_prep_next(iter, 1));
     debug("Merged iterator has next, err=%d, non_empty_cnt=%d\n", 
             iter->err, iter->non_empty_cnt);
@@ -732,7 +749,7 @@ static void castle_ct_merged_iter_next(c_merged_iter_t *iter,
     version_t smallest_v = 0;
     c_val_tup_t smallest_cvt;
 
-    merg_itr_dbg("%s:%p\n", __FUNCTION__, iter);
+    debug_iter("%s:%p\n", __FUNCTION__, iter);
     debug("Merged iterator next.\n");
     /* When next is called, we are free to call next on any of the 
        component iterators we do not have an entry cached for */
@@ -794,7 +811,7 @@ static void castle_ct_merged_iter_skip(c_merged_iter_t *iter,
     struct component_iterator *comp_iter; 
     int i, skip_cached;
 
-    merg_itr_dbg("%s:%p\n", __FUNCTION__, iter);
+    debug_iter("%s:%p\n", __FUNCTION__, iter);
     /* Go through iterators, and do the following:
        * call skip in each of the iterators
        * check if we have something cached
@@ -1779,26 +1796,6 @@ static struct castle_component_tree* castle_da_merge_package(struct castle_da_me
 
     FAULT(MERGE_FAULT);
 
-    CASTLE_TRANSACTION_BEGIN;
-
-    castle_da_lock(merge->da);
-    BUG_ON((merge->da->id != merge->in_tree1->da) ||
-           (merge->da->id != merge->in_tree2->da));
-    /* Delete the old trees from DA list (note that it may still be used by
-       a lot of IOs and will only be destroyed on the last ct_put()). But
-       we want to remove it from the DA straight away. The out_tree now takes
-       over their functionality. */
-    /* Note: Control lock works as transaction lock. DA structure modifications
-     * don't race with checkpointing. */
-    castle_component_tree_del(merge->da, merge->in_tree1);
-    castle_component_tree_del(merge->da, merge->in_tree2);
-    castle_component_tree_add(merge->da, out_tree, 0 /* not in init */);
-
-    CASTLE_TRANSACTION_END;
-    /* We are holding ref to this DA, therefore it is safe to schedule the check. */
-    castle_da_unlock(merge->da);
-    castle_da_merge_check(merge->da);
-
     return out_tree;
 }
 
@@ -1998,10 +1995,269 @@ err_out:
     return ret; 
 }
 
+static inline void castle_da_merge_token_activate(struct castle_double_array *da, 
+                                                  int level,
+                                                  struct castle_merge_token *token)
+{
+    /* Token is activated by pushing it to the next level up, if that level is in merge,
+       or storing it as the active token at this level. */
+    BUG_ON(level+1 >= MAX_DA_LEVEL);
+    if(da->levels[level+1].nr_trees >= 2)
+        list_add(&token->list, &da->levels[level+1].merge.merge_tokens);
+    else
+        da->levels[level].merge.active_token = token; 
+}
+
+static inline void castle_da_merge_token_return(struct castle_double_array *da, 
+                                                int level,
+                                                struct castle_merge_token *token)
+{
+    int driver_level;
+
+    driver_level = token->driver_level;
+    /* Return the token to the driver level => anihilate the token. */
+    BUG_ON(da->levels[driver_level].merge.driver_token != token);
+    da->levels[driver_level].merge.driver_token = NULL;
+    token->driver_level = -1;
+    list_add(&token->list, &da->merge_tokens);
+}
+
+static inline void castle_da_merge_token_push(struct castle_double_array *da, 
+                                              int level,
+                                              struct castle_merge_token *token)
+{
+    /* Token push moves the token to the next level, if that level is in a merge, 
+       or returns it to the driver level if not. */
+    BUG_ON(level+1 >= MAX_DA_LEVEL);
+    if(da->levels[level+1].nr_trees >= 2)
+        list_add(&token->list, &da->levels[level+1].merge.merge_tokens);
+    else
+        castle_da_merge_token_return(da, level, token); 
+}
+
+static inline struct castle_merge_token* castle_da_merge_token_get(struct castle_double_array *da,
+                                                                   int level)
+{
+    struct castle_merge_token *token;
+
+    if(list_empty(&da->levels[level].merge.merge_tokens))
+        return NULL;
+
+    token = list_first_entry(&da->levels[level].merge.merge_tokens, 
+                              struct castle_merge_token, 
+                              list);
+    /* Remove the token from list of inactive tokens. */
+    list_del(&token->list);
+
+    return token;
+}
+
+static inline struct castle_merge_token* castle_da_merge_token_generate(struct castle_double_array *da,
+                                                                        int level)
+{
+    struct castle_merge_token *token;
+
+    BUG_ON(list_empty(&da->merge_tokens));
+    BUG_ON(da->levels[level].merge.driver_token); 
+    /* Get a token out of the list. */
+    token = list_first_entry(&da->merge_tokens, struct castle_merge_token, list);
+    list_del(&token->list);
+    /* Initialise the token. */
+    token->driver_level = level;
+    /* Save the token as our driver token. */
+    da->levels[level].merge.driver_token = token; 
+
+    return token;
+}
+
+#define exit_cond (castle_da_exiting || castle_da_deleted(da))
+static inline int castle_da_merge_wait_event(struct castle_double_array *da, int level)
+{
+    int32_t this_level_units, prev_level_units, nr_trees, backlog;
+    struct castle_merge_token *token;
+    int not_ready_wake;
+
+    not_ready_wake = 0;
+    /* Protect the reads/updates to merge variables with DA lock. */
+    castle_da_lock(da);
+    this_level_units = da->levels[level].merge.units_commited;
+    prev_level_units = da->levels[level-1].merge.units_commited;
+    nr_trees = da->levels[level].nr_trees;
+    BUG_ON(nr_trees < 2);
+    backlog = (1U << (level - 1)) * (nr_trees - 2) + prev_level_units - this_level_units;
+
+    debug_merges("Checking whether to merge the next unit. tlu=%d, plu=%d, nt=%d\n",
+            this_level_units, prev_level_units, nr_trees);
+
+    /* We should not have any active tokens (tokens are returned to the driver merge on unit 
+       complete). */
+    BUG_ON(da->levels[level].merge.active_token != NULL);
+
+    /* If we have merge backlog of more than 1 unit, schedule it without any further checks. */ 
+    if(exit_cond || (backlog > 1)) 
+    {
+        debug_merges("Unthrottled merge.\n");
+        goto ready_out;
+    }
+
+    /* Otherwise, there are two cases. Either this merge is a driver merge, or not. */
+    if((level==1) && (da->levels[level-1].nr_trees < 2))
+    {
+        debug_merges("This is a driver merge.\n");
+        /* Return any tokens that we may have. Should that actually every happen?. */
+        while((token = castle_da_merge_token_get(da, level)))
+        {
+            printk("WARNING: merge token in a driver merge!.\n");
+            castle_da_merge_token_return(da, level, token);
+            not_ready_wake = 1;
+        }
+        /* If we are a driver merge, check whether we can generate a token to make progress. */ 
+        if(da->levels[level].merge.driver_token != NULL)
+        {
+            debug_merges("The merge has an outstanding driver token.\n");
+            goto not_ready_out;
+        }
+        /* Generate the token. */
+        token = castle_da_merge_token_generate(da, level);
+        /* Activate the token. */
+        castle_da_merge_token_activate(da, level, token); 
+        goto ready_out;
+    }
+    
+    /* We are not driving merges, and the backlog <= 1. We are only allowed to make progress
+       if backlog==1 _and_ we can activate a token. */
+    if(backlog == 1)
+    {
+        token = castle_da_merge_token_get(da, level);
+        if(!token)
+        {
+            debug_merges("Backlog of 1, but no token.\n");
+            goto not_ready_out;
+        }
+
+        debug_merges("Deamortised merge currently at %d units, token from driver level %d.\n", 
+                this_level_units, token->driver_level);
+        /* Activate the token. */
+        castle_da_merge_token_activate(da, level, token); 
+
+        goto ready_out;
+    }
+
+    debug_merges("The merge is ahead (backlog=%d)\n", backlog);
+    /* We are not driving merges, and the backlog <= 0. We are therefore ahead of other merges,
+       and therefore we shoud not hold on to any tokens we may have on our inactive token list. */
+    BUG_ON(backlog > 0);
+    while((token = castle_da_merge_token_get(da, level)))
+    {
+        debug_merges("Pushing token for driver_level=%d\n", token->driver_level);
+        castle_da_merge_token_push(da, level, token);
+        not_ready_wake = 1;
+    }
+
+not_ready_out:
+    castle_da_unlock(da);
+    if(not_ready_wake)
+        wake_up(&da->merge_waitq);
+    return 0;
+
+ready_out:
+    da->levels[level].merge.units_commited = this_level_units+1; 
+    castle_da_unlock(da);
+    wake_up(&da->merge_waitq);
+    return 1;
+}
+
 static inline uint32_t castle_da_merge_units_inc_return(struct castle_double_array *da, int level)
 {
-    return (++da->levels[level].merge.units_commited); 
+    /* Wait until we are allowed to proceed with the merge. */
+    __wait_event(da->merge_waitq, castle_da_merge_wait_event(da, level));
+    debug_merges("Merging unit %d.\n", da->levels[level].merge.units_commited);
+
+    return da->levels[level].merge.units_commited;
 }
+
+static inline void castle_da_merge_unit_complete(struct castle_double_array *da, int level)
+{
+    struct castle_merge_token *token;
+
+    debug_merges("Completing unit %d\n", da->levels[level].merge.units_commited);
+    BUG_ON(!castle_da_is_locked(da));
+    /* We'll be looking at level+1, make sure we don't go out of bounds. */
+    BUG_ON(level+1 >= MAX_DA_LEVEL);
+
+    /* Return the token back to the driver merge, if we've got one. */ 
+    if((token = da->levels[level].merge.active_token))
+    {
+        debug_merges("Returning an active merge token for driver_level=%d\n", token->driver_level);
+        /* Next level must not be in merge, otherwise we should have pushed the token up
+           rather than stored it here. */
+        BUG_ON(da->levels[level+1].nr_trees > 2);
+        castle_da_merge_token_return(da, level, token); 
+        da->levels[level].merge.active_token = NULL;
+    }
+    /* Wakeup everyone waiting on merge state update. */
+    wake_up(&da->merge_waitq);
+}
+
+static inline void castle_da_merge_intermediate_unit_complete(struct castle_double_array *da, 
+                                                              int level)
+{
+    castle_da_lock(da);
+    castle_da_merge_unit_complete(da, level);
+    castle_da_unlock(da);
+}
+
+static inline int castle_da_merge_last_unit_complete(struct castle_double_array *da, 
+                                                     int level, 
+                                                     struct castle_da_merge *merge)
+{
+    struct castle_component_tree *out_tree;
+    struct castle_merge_token *token;
+    
+    out_tree = castle_da_merge_complete(merge);
+    if(!out_tree)
+        return -EINVAL;
+
+    /* If we succeeded at creating the last tree, remove the in_trees, and add the out_tree.
+       All under appropriate locks. */
+    CASTLE_TRANSACTION_BEGIN;
+
+    /* Get the lock. */
+    castle_da_lock(merge->da);
+    /* Notify interested parties about merge completion, _before_ moving trees around. */ 
+    castle_da_merge_unit_complete(da, level);
+    BUG_ON((merge->da->id != merge->in_tree1->da) ||
+           (merge->da->id != merge->in_tree2->da));
+    /* Delete the old trees from DA list (note that it may still be used by
+       a lot of IOs and will only be destroyed on the last ct_put()). But
+       we want to remove it from the DA straight away. The out_tree now takes
+       over their functionality. */
+    /* Note: Control lock works as transaction lock. DA structure modifications
+     * don't race with checkpointing. */
+    castle_component_tree_del(merge->da, merge->in_tree1);
+    castle_component_tree_del(merge->da, merge->in_tree2);
+    castle_component_tree_add(merge->da, out_tree, 0 /* not in init */);
+    /* Reset the number of completed units. */ 
+    BUG_ON(da->levels[level].merge.units_commited != (1U << level));
+    da->levels[level].merge.units_commited = 0;
+    /* Return any merge tokens we may still hold if we are not going to be doing more merges. */ 
+    if(da->levels[level].nr_trees < 2)
+    {
+        while((token = castle_da_merge_token_get(da, level)))
+        {
+            debug_merges("Returning merge token from completed merge, driver_level=%d\n",
+                    token->driver_level);
+            castle_da_merge_token_return(da, level, token);
+        }
+    }
+    /* Release the lock. */
+    castle_da_unlock(merge->da);
+
+    CASTLE_TRANSACTION_END;
+    castle_da_merge_check(da);
+
+    return 0;
+} 
 
 static struct castle_da_merge* castle_da_merge_init(struct castle_double_array *da,
                                                     int level,
@@ -2012,15 +2268,13 @@ static struct castle_da_merge* castle_da_merge_init(struct castle_double_array *
     struct castle_da_merge *merge = NULL;
     int i, ret;
 
-    debug("============ Merging ct=%d (%d) with ct=%d (%d) ============\n", 
-            in_tree1->seq, in_tree1->dynamic,
-            in_tree2->seq, in_tree2->dynamic);
+    debug_merges("Merging ct=%d (dynamic=%d) with ct=%d (dynamic=%d)\n", 
+            in_tree1->seq, in_tree1->dynamic, in_tree2->seq, in_tree2->dynamic);
 
-    /* Set DA merge variables. */
-    da->levels[level].merge.units_commited = 0;
-    /* Make sure that the level is correct. */
+    /* Sanity checks. */
     BUG_ON(in_tree1->level != level);
     BUG_ON(in_tree2->level != level);
+    BUG_ON(da->levels[level].merge.units_commited != 0);
     /* Note: There could be outstanding read/write I/O going on. */ 
     /* Work out what type of trees are we going to be merging. Bug if in_tree1/2 don't match. */
     btree = castle_btree_type_get(in_tree1->btree_type);
@@ -2068,7 +2322,7 @@ static struct castle_da_merge* castle_da_merge_init(struct castle_double_array *
 error_out:
     BUG_ON(!ret);
     castle_da_merge_dealloc(merge, ret);
-    printk("Failed a merge with ret=%d\n", ret);
+    debug_merges("Failed a merge with ret=%d\n", ret);
 
     return NULL;
 }
@@ -2077,22 +2331,23 @@ error_out:
 static int castle_da_merge_run(void *da_p)
 {
     struct castle_double_array *da = (struct castle_double_array *)da_p;
-    struct castle_component_tree *in_tree1, *in_tree2, *out_tree;
+    struct castle_component_tree *in_tree1, *in_tree2;
     struct castle_da_merge *merge;
     struct list_head *l;
+    uint32_t units_cnt;
     int level, ret;
 
-#define exit_cond (castle_da_exiting || castle_da_deleted(da))
     /* Work out the level at which we are supposed to be doing merges.
        Do that by working out where is this thread in threads array. */
     for(level=1; level<MAX_DA_LEVEL; level++)
         if(da->levels[level].merge.thread == current)
             break;
     BUG_ON(level >= MAX_DA_LEVEL);
-    printk("Starting merge thread for DA=%d, level=%d\n", da->id, level);
+    debug_merges("Starting merge thread.\n");
     do {
         /* Wait for 2+ trees to appear at this level. */
-        wait_event(da->merge_waitq, exit_cond || (da->levels[level].nr_trees >= 2));
+        __wait_event(da->merge_waitq, (exit_cond || da->levels[level].nr_trees >= 2));
+        
         /* Exit without doing a merge, if we are stopping execution, or da has been deleted. */ 
         if(exit_cond)
             break;
@@ -2112,7 +2367,7 @@ static int castle_da_merge_run(void *da_p)
         /* We should only get here, if we are supposed to do a merge => we have in_trees. */
         BUG_ON(!in_tree1 || !in_tree2);
             
-        printk("Doing merge for DA=%d, level=%d\n", da->id, level);
+        debug_merges("Doing merge.\n");
         perf_event("m-%d-beg", level);
         merge = castle_da_merge_init(da, level, in_tree1, in_tree2);
         if(!merge)
@@ -2125,23 +2380,26 @@ static int castle_da_merge_run(void *da_p)
         
         /* Do the merge. */
         do {
-            uint32_t units_cnt;
-           
+            /* Wait until we are allowed to do next unit of merge. */
             units_cnt = castle_da_merge_units_inc_return(da, level);
+            /* Do the unit. */
             ret = castle_da_merge_unit_do(merge, units_cnt);
+            /* Exit on errors. */
             if(ret < 0)
                 goto merge_failed;
-            /* Only ret>0 we are expecting is to continue, i.e. EAGAIN. */
+            /* Only ret>0 we are expecting to continue, i.e. ret==EAGAIN. */
             BUG_ON(ret && (ret != EAGAIN));
+            /* Notify interested parties that we've completed current merge unit. */
+            if(ret == EAGAIN)
+                castle_da_merge_intermediate_unit_complete(da, level);
         } while(ret);
-        /* Package up the merge into the new tree. */
-        out_tree = castle_da_merge_complete(merge);
-        if(!out_tree)
-            ret = -EINVAL;
+
+        /* Finish tha last unit, packaging the output tree. */
+        ret = castle_da_merge_last_unit_complete(da, level, merge);
 merge_failed:
         castle_da_merge_dealloc(merge, ret);
         perf_event("m-%d-end", level);
-        printk("Done merge for DA=%d, level=%d\n", da->id, level);
+        debug_merges("Done merge.\n");
         if(ret)
         {
             printk("Merge for DA=%d, level=%d, failed to merge err=%d.\n", da->id, level, ret);
@@ -2150,7 +2408,7 @@ merge_failed:
         }
     } while(1);
 
-    printk("Merge thread for DA=%d, at level=%d exiting.\n", da->id, level);
+    debug_merges("Merge thread exiting.\n");
 
     castle_da_lock(da);
     /* Remove ourselves from the da merge threads array to indicate that we are finished. */  
@@ -2187,69 +2445,57 @@ static int castle_da_merge_restart(struct castle_double_array *da, void *unused)
     return 0;
 }
 
+static void castle_da_merges_print(struct castle_double_array *da)
+{
+    struct castle_merge_token *token;
+    struct list_head *l;
+    int level, print;
+    struct timeval time;
+                       
+    print = 0;
+    do_gettimeofday(&time);
+    castle_da_lock(da);
+    printk("\nPrinting merging stats for DA=%d, t=(%ld,%ld)\n", 
+            da->id, time.tv_sec, time.tv_usec/1000);
+    for(level=MAX_DA_LEVEL-1; level>0; level--)
+    {
+        if(!print && (da->levels[level].nr_trees == 0))
+            continue;
+        print = 1;
+        printk(" level[%.2d]: nr_trees=%d, units_commited=%.3d,"
+              " active_token_dl=%.2d, driver_token_dl=%.2d\n",
+              level,
+              da->levels[level].nr_trees,
+              da->levels[level].merge.units_commited,
+              da->levels[level].merge.active_token ? 
+                da->levels[level].merge.active_token->driver_level : 0,
+              da->levels[level].merge.driver_token ? 
+                da->levels[level].merge.driver_token->driver_level : 0);
+        list_for_each(l, &da->levels[level].merge.merge_tokens)
+        {
+            token = list_entry(l, struct castle_merge_token, list);
+            printk("  merge_token_dl=%d\n", token->driver_level);
+        }
+    }
+    printk("\n");
+    castle_da_unlock(da);
+}
+
 static void castle_da_merge_check(struct castle_double_array *da)
 {
-    struct list_head *l;
-    int max_level, max_level_mergable, level, merge_measure, merge_measure_threashold, nr_trees;
-
-    BUG_ON(castle_da_is_locked(da));
-    debug("Checking if to do a merge for da: %d\n", da->id);
-    printk("Checking if to do a merge for da: %d\n", da->id);
-    merge_measure = 0;
-    merge_measure_threashold = 0;
-    max_level = 0;
-    max_level_mergable = 0;
-
     castle_da_lock(da);
-    for(level=1; level<MAX_DA_LEVEL; level++)
+    printk("==> Nr trees: %d\n", da->nr_trees);
+    if(da->levels[1].nr_trees >= 4)
     {
-        nr_trees = 0;
-        list_for_each_prev(l, &da->levels[level].trees)
-        {
-            /* max_level == level iff there are at least 2 trees at this level. 
-               This means that max_level is mergable. */
-            max_level_mergable = (max_level == level);
-            max_level = level;
-            nr_trees++;
-        }
-        /* Merge measure for the level (non-zero iff there is at least one outstanding merge). */
-        if(nr_trees > 1)
-            merge_measure        += level * nr_trees * nr_trees;
-        /* We stop when there is an outstanding merge at each level. */
-        merge_measure_threashold += level * 4; 
+        printk("Disabling inserts on da=%d.\n", da->id);
+        da->ios_rate = 0; 
     }
-    /* Set the max merge level variable. This either equals to max_level, if it is mergable,
-       or max_level-1 otherwise. */
-    da->max_merge_level = max_level_mergable ? max_level : max_level - 1;
-    /* Set the write throughput allowed on the DA. */
-    if(merge_measure == 0)
+    else
     {
-        if(da->ios_rate == 0)
-            printk("Reenabling inserts on da=%d.\n", da->id);
-        /* Effectively no limit. */
+        printk("Enabling inserts on da=%d.\n", da->id);
         da->ios_rate = (uint32_t)-1;   
-    } 
-    else
-    if(merge_measure < merge_measure_threashold)
-    {
-        uint32_t old_rate = da->ios_rate;
-        /* Constant of 50000 was chosen to give 1M ios rate for a single 
-           outstanding level 1 merge. */
-        da->ios_rate = 50000 * (merge_measure_threashold / merge_measure - 1) / REPLENISH_FREQUENCY;
-        if((old_rate == 0) && (da->ios_rate != 0))
-            printk("Reenabling inserts on da=%d.\n", da->id);
-        if((old_rate != 0) && (da->ios_rate == 0))
-            printk("Disabling inserts on da=%d.\n", da->id);
     }
-    else
-    {
-        if(da->ios_rate != 0)
-            printk("Disabling inserts on da=%d\n\n", da->id);
-        da->ios_rate = 0;
-    }
-    debug("Setting rate to %u\n", da->ios_rate);
     castle_da_unlock(da);
-
     castle_da_merge_restart(da, NULL);
 }
 
@@ -2302,15 +2548,24 @@ static struct castle_double_array* castle_da_alloc(da_id_t da_id)
     da->ios_budget      = 0;
     da->ios_rate        = 0;
     CASTLE_INIT_WORK(&da->queue_restart, castle_da_queue_restart);
-    da->max_merge_level = -1;
     atomic_set(&da->epoch_ios, 0);
     atomic_set(&da->merge_budget, 0);
     init_waitqueue_head(&da->merge_waitq);
     init_waitqueue_head(&da->merge_budget_waitq);
+    /* Initialise the merge tokens list. */
+    INIT_LIST_HEAD(&da->merge_tokens);
+    for(i=0; i<MAX_DA_LEVEL; i++)
+    {
+        da->merge_tokens_array[i].driver_level = -1; 
+        list_add(&da->merge_tokens_array[i].list, &da->merge_tokens);
+    }
     for(i=0; i<MAX_DA_LEVEL; i++)
     {
         INIT_LIST_HEAD(&da->levels[i].trees);
         da->levels[i].nr_trees             = 0;
+        INIT_LIST_HEAD(&da->levels[i].merge.merge_tokens);
+        da->levels[i].merge.active_token   = NULL;
+        da->levels[i].merge.driver_token   = NULL;
         da->levels[i].merge.units_commited = 0;
         da->levels[i].merge.thread         = NULL;
         /* Create merge threads, and take da ref for all levels >= 1. */
