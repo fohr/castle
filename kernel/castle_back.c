@@ -555,8 +555,23 @@ static void castle_back_stateful_op_timeout_check(unsigned long data)
         castle_back_start_stateful_op_timeout_check_timer(conn);
 }
 
-#define castle_back_stateful_op_enable_expire(stateful_op)   stateful_op->expire_enabled = 1
-#define castle_back_stateful_op_disable_expire(stateful_op)  stateful_op->expire_enabled = 0
+static inline void castle_back_stateful_op_enable_expire(struct castle_back_stateful_op *stateful_op)
+{
+    BUG_ON(!spin_is_locked(&stateful_op->lock));
+
+    /* only reset last_used_jiffies if was disabled before */
+    if (!stateful_op->expire_enabled)
+    {
+        stateful_op->last_used_jiffies = jiffies;
+        stateful_op->expire_enabled = 1;
+    }
+}
+
+static inline void castle_back_stateful_op_disable_expire(struct castle_back_stateful_op *stateful_op)
+{
+    BUG_ON(!spin_is_locked(&stateful_op->lock));
+    stateful_op->expire_enabled = 0;
+}
 
 static void castle_back_stateful_op_expire(struct work_struct *work)
 {
@@ -637,12 +652,16 @@ static int castle_back_stateful_op_prod(struct castle_back_stateful_op *stateful
 
     if (stateful_op->curr_op != NULL)
     {
-        castle_back_stateful_op_disable_expire(stateful_op);
+        BUG_ON(stateful_op->expire_enabled);
         return 0;
     }
 
     if (list_empty(&stateful_op->op_queue))
+    {
+        /* there is no ongoing op and nothing in the queue - set to expire */
+        castle_back_stateful_op_enable_expire(stateful_op);
         return 0;
+    }
 
     castle_back_stateful_op_disable_expire(stateful_op);
 
@@ -1355,8 +1374,6 @@ static void castle_back_iter_reply(struct castle_back_stateful_op *stateful_op,
     if (castle_back_stateful_op_completed_op(stateful_op))
         return;
 
-    castle_back_stateful_op_enable_expire(stateful_op);
-
     castle_back_iter_call_queued(stateful_op);
 
     spin_unlock(&stateful_op->lock);
@@ -1427,7 +1444,10 @@ static void castle_back_iter_start(void *data)
     if (err)
         goto err4;
 
+    /* get the lock, since castle_back_stateful_op_enable_expire requires it */
+    spin_lock(&stateful_op->lock);
     castle_back_stateful_op_enable_expire(stateful_op);
+    spin_unlock(&stateful_op->lock);
 
     castle_back_reply(op, 0, token, 0);
 
@@ -1884,8 +1904,6 @@ static void castle_back_big_put_continue(struct castle_object_replace *replace)
     if (castle_back_stateful_op_completed_op(stateful_op))
         return;
 
-    castle_back_stateful_op_enable_expire(stateful_op);
-
     castle_back_big_put_call_queued(stateful_op);
 
     spin_unlock(&stateful_op->lock);
@@ -2214,8 +2232,6 @@ static void castle_back_big_get_continue(struct castle_object_pull *pull,
     /* drops the lock if return non-zero */
     if (castle_back_stateful_op_completed_op(stateful_op))
         return;
-
-    castle_back_stateful_op_enable_expire(stateful_op);
 
     castle_back_big_get_call_queued(stateful_op);
 
