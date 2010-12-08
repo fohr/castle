@@ -123,7 +123,7 @@ static void castle_component_tree_add(struct castle_double_array *da,
 static void castle_component_tree_del(struct castle_double_array *da,
                                       struct castle_component_tree *ct);
 struct castle_da_merge;
-static void castle_da_merge_check(struct castle_double_array *da);
+static int castle_da_merge_check(struct castle_double_array *da, void *unused);
 void castle_double_array_merges_fini(void);
 static void castle_da_merge_budget_consume(struct castle_da_merge *merge);
 static void castle_da_queue_restart(struct work_struct *work);
@@ -1884,7 +1884,7 @@ static struct castle_component_tree* castle_da_merge_package(struct castle_da_me
     CASTLE_TRANSACTION_END;
     /* We are holding ref to this DA, therefore it is safe to schedule the check. */
     castle_da_unlock(merge->da);
-    castle_da_merge_check(merge->da);
+    castle_da_merge_check(merge->da, NULL);
 
     return out_tree;
 }
@@ -2277,12 +2277,11 @@ static int castle_da_merge_restart(struct castle_double_array *da, void *unused)
     return 0;
 }
 
-static void castle_da_merge_check(struct castle_double_array *da)
+static int castle_da_merge_check(struct castle_double_array *da, void *unused)
 {
     struct list_head *l;
     int max_level, max_level_mergable, level, merge_measure, merge_measure_threashold, nr_trees;
 
-    BUG_ON(castle_da_is_locked(da));
     debug("Checking if to do a merge for da: %d\n", da->id);
     printk("Checking if to do a merge for da: %d\n", da->id);
     merge_measure = 0;
@@ -2341,6 +2340,8 @@ static void castle_da_merge_check(struct castle_double_array *da)
     castle_da_unlock(da);
 
     castle_da_merge_restart(da, NULL);
+
+    return 0;
 }
 
 /**********************************************************************************************/
@@ -2900,7 +2901,7 @@ int castle_double_array_start(void)
     castle_da_hash_iterate(castle_da_t0_create, NULL);
 
     /* Check if any merges need to be done. */
-    castle_da_hash_iterate(castle_da_merge_restart, NULL); 
+    castle_da_hash_iterate(castle_da_merge_check, NULL); 
 
     return 0;
 }
@@ -3141,7 +3142,7 @@ static int castle_da_rwct_make(struct castle_double_array *da, int in_tran)
     /* DA is attached, therefore we must be holding a ref, therefore it is safe to schedule
        the merge check. */
     castle_da_unlock(da);
-    castle_da_merge_check(da);
+    castle_da_merge_check(da, NULL);
     ret = 0;
     goto out;
 
