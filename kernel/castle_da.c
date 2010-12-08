@@ -2186,7 +2186,7 @@ static inline int castle_da_merge_wait_event(struct castle_double_array *da, int
     }
 
     /* Otherwise, there are two cases. Either this merge is a driver merge, or not. */
-    if((level==1) && (da->levels[level-1].nr_trees < 2))
+    if(da->levels[level-1].nr_trees < 2)
     {
         debug_merges("This is a driver merge.\n");
         /* Return any tokens that we may have. Should that actually every happen?. */
