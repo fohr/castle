@@ -77,7 +77,7 @@ int castle_vmap_fast_map_init(void)
         list_add(&castle_vmap_freelist->list, castle_vmap_fast_maps_ptr+freelist_bucket_idx);
 
         /* Init the mutex for this bucket */
-        init_MUTEX(&castle_vmap_lock[freelist_bucket_idx]);
+        init_MUTEX(castle_vmap_lock+freelist_bucket_idx);
     }
 
     return EXIT_SUCCESS;
@@ -237,7 +237,7 @@ void *castle_vmap_fast_map(struct page **pgs, int nr_pages)
 
     freelist_bucket_idx = order_base_2(nr_pages);
 
-    down(&castle_vmap_lock[freelist_bucket_idx]);
+    down(castle_vmap_lock+freelist_bucket_idx);
 
     /* We always map from the freelist at the head of the bucket */
     castle_vmap_freelist = get_freelist_head(freelist_bucket_idx);
@@ -263,7 +263,7 @@ void *castle_vmap_fast_map(struct page **pgs, int nr_pages)
         castle_vmap_freelist_add(castle_vmap_freelist, vmap_slot);
         vaddr = NULL;
     }
-    up(&castle_vmap_lock[freelist_bucket_idx]);
+    up(castle_vmap_lock+freelist_bucket_idx);
     return vaddr;
 }
 
@@ -276,7 +276,7 @@ void castle_vmap_fast_unmap(void *vaddr, int nr_pages)
 
     freelist_bucket_idx = order_base_2(nr_pages);
 
-    down(&castle_vmap_lock[freelist_bucket_idx]);
+    down(castle_vmap_lock+freelist_bucket_idx);
 
     /* We could be unmapping from any freelist in the bucket */
     list_for_each(pos, castle_vmap_fast_maps_ptr+freelist_bucket_idx)
@@ -301,7 +301,7 @@ void castle_vmap_fast_unmap(void *vaddr, int nr_pages)
             }
             castle_unmap_vm_area(vaddr, nr_pages);
 
-            up(&castle_vmap_lock[freelist_bucket_idx]);
+            up(castle_vmap_lock+freelist_bucket_idx);
 
             return;
         }
@@ -315,7 +315,7 @@ static castle_vmap_freelist_t *castle_vmap_freelist_grow(int freelist_bucket_idx
     castle_vmap_freelist_t  *castle_vmap_freelist, *new;
     int                     cur_nr_slots;
 
-    BUG_ON(down_trylock(&castle_vmap_lock[freelist_bucket_idx]) == 0);
+    BUG_ON(down_trylock(castle_vmap_lock+freelist_bucket_idx) == 0);
 
     castle_vmap_freelist = get_freelist_head(freelist_bucket_idx);
 
