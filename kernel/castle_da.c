@@ -2525,7 +2525,7 @@ static int castle_da_merge_stop(struct castle_double_array *da, void *unused)
 
 static int castle_da_merge_restart(struct castle_double_array *da, void *unused)
 {
-    debug_merges("Restarting merge for DA=%d\n", da->id);
+    debug("Restarting merge for DA=%d\n", da->id);
     castle_da_lock(da);
     if(da->levels[1].nr_trees >= 4)
     {
