@@ -2469,7 +2469,9 @@ static int castle_da_merge_run(void *da_p)
             /* Wait until we are allowed to do next unit of merge. */
             units_cnt = castle_da_merge_units_inc_return(da, level);
             /* Do the unit. */
+            perf_event("m-%d-unit-beg", level);
             ret = castle_da_merge_unit_do(merge, units_cnt);
+            perf_event("m-%d-unit-end", level);
             /* Exit on errors. */
             if(ret < 0)
                 goto merge_failed;

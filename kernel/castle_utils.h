@@ -311,7 +311,7 @@ static USED void check_stack_usage(void)
 }
 #endif
 
-#ifdef PERF_DEBUG
+#ifdef CASTLE_PERF_DEBUG
 #define perf_event(_f, _a...)  do {                                                \
                                   struct timeval time;                             \
                                   do_gettimeofday(&time);                          \
