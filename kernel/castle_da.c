@@ -75,6 +75,10 @@ struct castle_merge_token {
 #define DOUBLE_ARRAY_GROWING_RW_TREE_FLAG   (1 << DOUBLE_ARRAY_GROWING_RW_TREE_BIT)
 #define DOUBLE_ARRAY_DELETED_BIT            (1)
 #define DOUBLE_ARRAY_DELETED_FLAG           (1 << DOUBLE_ARRAY_DELETED_BIT)
+#define DOUBLE_ARRAY_FROZEN_BIT             (2)
+#define DOUBLE_ARRAY_FROZEN_FLAG            (1 << DOUBLE_ARRAY_FROZEN_BIT)
+#define DOUBLE_ARRAY_UNFROZEN_BIT           (3)
+#define DOUBLE_ARRAY_UNFROZEN_FLAG          (1 << DOUBLE_ARRAY_UNFROZEN_BIT)
 struct castle_double_array {
     da_id_t                     id;
     version_t                   root_version;
@@ -136,7 +140,7 @@ static void castle_component_tree_del(struct castle_double_array *da,
                                       struct castle_component_tree *ct);
 struct castle_da_merge;
 static USED void castle_da_merges_print(struct castle_double_array *da);
-static void castle_da_merge_check(struct castle_double_array *da);
+static int castle_da_merge_restart(struct castle_double_array *da, void *unused);
 void castle_double_array_merges_fini(void);
 static void castle_da_merge_budget_consume(struct castle_da_merge *merge);
 static void castle_da_queue_restart(struct work_struct *work);
@@ -172,6 +176,85 @@ static inline int castle_da_deleted(struct castle_double_array *da)
 static inline void castle_da_deleted_set(struct castle_double_array *da)
 {
     set_bit(DOUBLE_ARRAY_DELETED_BIT, &da->flags);
+}
+
+/* Note: Freezing of DA and unfreezing it could be racing. Unfreeze can happen
+ * between failed castle_extent_alloc() and set_bit(FROZEN), consequently we
+ * would miss a wake-up cycle. We need two bits to de-couple freezing and
+ * un-freezing. Unfreezing just sets a bit. Freezing first checks if some one
+ * did a unfreeze, if so dont set freeze and clear unfreeze. 
+ *
+ * All these functions should be called with castle_da_lock() held. */
+
+/* Should be called with castle_da_lock(). */
+static inline int castle_da_unfrozen(struct castle_double_array *da)
+{
+    return test_bit(DOUBLE_ARRAY_UNFROZEN_BIT, &da->flags);
+}
+
+static int castle_da_unfrozen_set(struct castle_double_array *da, void *unused)
+{
+    castle_da_lock(da);
+
+    if (test_bit(DOUBLE_ARRAY_FROZEN_BIT, &da->flags))
+    {
+        printk("Un-freezing Doubling Array: %u\n", da->id);
+        set_bit(DOUBLE_ARRAY_UNFROZEN_BIT, &da->flags);
+        castle_da_unlock(da);
+        castle_da_merge_restart(da, NULL);
+    }
+    else
+        castle_da_unlock(da);
+
+    return 0;
+}
+
+static inline int _castle_da_frozen(struct castle_double_array *da)
+{
+    if (castle_da_unfrozen(da))
+    {
+        clear_bit(DOUBLE_ARRAY_FROZEN_BIT, &da->flags);
+        clear_bit(DOUBLE_ARRAY_UNFROZEN_BIT, &da->flags);
+    }
+
+    return test_bit(DOUBLE_ARRAY_FROZEN_BIT, &da->flags);
+}
+
+static inline int castle_da_frozen(struct castle_double_array *da)
+{
+    int ret;
+
+    castle_da_lock(da);
+    ret = _castle_da_frozen(da);
+    castle_da_unlock(da);
+
+    return ret;
+}
+
+static inline void castle_da_frozen_set(struct castle_double_array *da)
+{
+    castle_da_lock(da);
+
+    if (castle_da_unfrozen(da))
+    {
+        clear_bit(DOUBLE_ARRAY_FROZEN_BIT, &da->flags);
+        clear_bit(DOUBLE_ARRAY_UNFROZEN_BIT, &da->flags);
+
+        castle_da_unlock(da);
+        return;
+    }
+
+    printk("Freezing Doubling Array: %u\n", da->id);
+    set_bit(DOUBLE_ARRAY_FROZEN_BIT, &da->flags);
+
+    castle_da_unlock(da);
+}
+
+int castle_double_arrays_unfreeze(void)
+{
+    castle_da_hash_iterate(castle_da_unfrozen_set, NULL); 
+
+    return 0;
 }
 
 /**********************************************************************************************/
@@ -1404,8 +1487,8 @@ static int castle_da_iterators_create(struct castle_da_merge *merge)
     if ((ret = castle_ext_fs_init(&merge->tree_ext_fs, merge->da->id, size,
                                   (btree->node_size * C_BLK_SIZE))))
     {
-        printk("Merge failed due to space constraint\n");
-        goto err_out;
+        printk("Merge failed due to space constraint for tree\n");
+        goto no_space;
     }
 
     /* Allocate an extent for medium objects of merged tree for the size equal to 
@@ -1418,13 +1501,15 @@ static int castle_da_iterators_create(struct castle_da_merge *merge)
     if ((ret = castle_ext_fs_init(&merge->data_ext_fs, merge->da->id, size, 
                                   C_BLK_SIZE)))
     {
-        printk("Merge failed due to space constraint\n");
-        goto err_out;
+        printk("Merge failed due to space constraint for data\n");
+        goto no_space;
     }
 
     /* Success */
     return 0;
 
+no_space:
+    castle_da_frozen_set(merge->da);
 err_out:
     debug("Failed to create iterators. Ret=%d\n", ret);
 
@@ -2254,7 +2339,7 @@ static inline int castle_da_merge_last_unit_complete(struct castle_double_array 
     castle_da_unlock(merge->da);
 
     CASTLE_TRANSACTION_END;
-    castle_da_merge_check(da);
+    castle_da_merge_restart(da, NULL);
 
     return 0;
 } 
@@ -2345,8 +2430,9 @@ static int castle_da_merge_run(void *da_p)
     BUG_ON(level >= MAX_DA_LEVEL);
     debug_merges("Starting merge thread.\n");
     do {
-        /* Wait for 2+ trees to appear at this level. */
-        __wait_event(da->merge_waitq, (exit_cond || da->levels[level].nr_trees >= 2));
+        /* Wait for 2+ trees to appear at this level. DA must not be frozen either. */
+        __wait_event(da->merge_waitq,  exit_cond || 
+                                     (!castle_da_frozen(da) && (da->levels[level].nr_trees >= 2)));
         
         /* Exit without doing a merge, if we are stopping execution, or da has been deleted. */ 
         if(exit_cond)
@@ -2367,7 +2453,7 @@ static int castle_da_merge_run(void *da_p)
         /* We should only get here, if we are supposed to do a merge => we have in_trees. */
         BUG_ON(!in_tree1 || !in_tree2);
             
-        debug_merges("Doing merge.\n");
+        debug_merges("Doing merge, trees=[%u]+[%u]\n", in_tree1->seq, in_tree2->seq);
         perf_event("m-%d-beg", level);
         merge = castle_da_merge_init(da, level, in_tree1, in_tree2);
         if(!merge)
@@ -2439,7 +2525,19 @@ static int castle_da_merge_stop(struct castle_double_array *da, void *unused)
 
 static int castle_da_merge_restart(struct castle_double_array *da, void *unused)
 {
-    printk("Restarting merge for DA=%d\n", da->id);
+    debug_merges("Restarting merge for DA=%d\n", da->id);
+    castle_da_lock(da);
+    if(da->levels[1].nr_trees >= 4)
+    {
+        printk("Disabling inserts on da=%d.\n", da->id);
+        da->ios_rate = 0; 
+    }
+    else
+    {
+        printk("Enabling inserts on da=%d.\n", da->id);
+        da->ios_rate = (uint32_t)-1;   
+    }
+    castle_da_unlock(da);
     wake_up(&da->merge_waitq);
 
     return 0;
@@ -2479,24 +2577,6 @@ static void castle_da_merges_print(struct castle_double_array *da)
     }
     printk("\n");
     castle_da_unlock(da);
-}
-
-static void castle_da_merge_check(struct castle_double_array *da)
-{
-    castle_da_lock(da);
-    printk("==> Nr trees: %d\n", da->nr_trees);
-    if(da->levels[1].nr_trees >= 4)
-    {
-        printk("Disabling inserts on da=%d.\n", da->id);
-        da->ios_rate = 0; 
-    }
-    else
-    {
-        printk("Enabling inserts on da=%d.\n", da->id);
-        da->ios_rate = (uint32_t)-1;   
-    }
-    castle_da_unlock(da);
-    castle_da_merge_restart(da, NULL);
 }
 
 /**********************************************************************************************/
@@ -3264,13 +3344,19 @@ static int castle_da_rwct_make(struct castle_double_array *da, int in_tran)
                                   da->id, 
                                   MAX_DYNAMIC_TREE_SIZE * C_CHK_SIZE, 
                                   btree->node_size * C_BLK_SIZE)))
-        goto error;
+    {
+        printk("Failed to get space for T0 tree\n");
+        goto no_space;
+    }
 
     if ((ret = castle_ext_fs_init(&ct->data_ext_fs, 
                                   da->id, 
                                   MAX_DYNAMIC_DATA_SIZE * C_CHK_SIZE, 
                                   C_BLK_SIZE)))
-        goto error;
+    {
+        printk("Failed to get space for T0 data\n");
+        goto no_space;
+    }
 
     /* Create a root node for this tree, and update the root version */
     c2b = castle_btree_node_create(0, 1 /* is_leaf */, ct, 0);
@@ -3300,11 +3386,12 @@ static int castle_da_rwct_make(struct castle_double_array *da, int in_tran)
     /* DA is attached, therefore we must be holding a ref, therefore it is safe to schedule
        the merge check. */
     castle_da_unlock(da);
-    castle_da_merge_check(da);
+    castle_da_merge_restart(da, NULL);
     ret = 0;
     goto out;
 
-error:
+no_space:
+    castle_da_frozen_set(da);
     if (ct)
         castle_ct_put(ct, 0);
 out:
@@ -3414,6 +3501,9 @@ static struct castle_component_tree* castle_da_rwct_acquire(struct castle_double
 
     write = (c_bvec_data_dir(c_bvec) == WRITE);
 again:
+    if (castle_da_frozen(da))
+        return NULL;
+
     ct = castle_da_rwct_get(da, write);
     /* For reads, this is the right starting point. Exit immediately. */ 
     if(!write)
@@ -3452,12 +3542,12 @@ new_ct:
     debug("Number of items in component tree %d, # items %ld. Trying to add a new rwct.\n",
             ct->seq, atomic64_read(&ct->item_count));
     ret = castle_da_rwct_make(da, 0);
+
+    /* Drop reference for old CT. */
+    castle_ct_put(ct, write);
     if((ret == 0) || (ret == -EAGAIN))
-    {
-        castle_ct_put(ct, write);
         goto again;
-    }
-    
+  
     printk("Warning: failed to create RWCT with errno=%d\n", ret);
     return NULL;
 }
@@ -3717,7 +3807,6 @@ static void castle_da_put(struct castle_double_array *da)
     {
         /* Ref count dropped to zero -> delete. There should be no outstanding attachments. */
         BUG_ON(da->attachment_cnt != 0);
-        BUG_ON((da->hash_list.next != NULL) || (da->hash_list.prev != NULL));
         BUG_ON(!castle_da_deleted(da));
         CASTLE_TRANSACTION_BEGIN;
         castle_da_destroy_complete(da);

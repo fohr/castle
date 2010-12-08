@@ -188,6 +188,7 @@ void castle_freespace_slave_chunk_free(struct castle_slave      *cs,
 }
 
 sector_t get_bd_capacity(struct block_device *bd);
+static int castle_freespace_print(struct castle_slave *cs, void *unused);
 
 /* Load on-disk structures into memory */
 int castle_freespace_slave_init(struct castle_slave *cs, int fresh)
@@ -220,7 +221,7 @@ int castle_freespace_slave_init(struct castle_slave *cs, int fresh)
 
     cs->disk_size = freespace->disk_size;
     atomic_set(&cs->free_chk_cnt, freespace->free_chk_cnt);
-    castle_freespace_print(cs);
+    castle_freespace_print(cs, NULL);
 
     nr_chunks = freespace->disk_size;
   
@@ -246,6 +247,19 @@ void castle_freespace_summary_get(struct castle_slave *cs,
         *size = (cs->disk_size + FREE_SPACE_START);
 }
 
+static void castle_freespace_foreach_slave(int (*fn)(struct castle_slave *cs, void *data), 
+                                    void *data)
+{
+    struct list_head *lh;
+    struct castle_slave *slave;
+
+    list_for_each(lh, &castle_slaves.slaves)
+    {
+        slave = list_entry(lh, struct castle_slave, list);
+        fn(slave, data);
+    }
+}
+
 static int castle_freespace_slave_writeback(struct castle_slave *cs, void *unused)
 {/* Should be called with extent lock held. Keeps freespace and extents in sync. */
     struct castle_slave_superblock *sblk;
@@ -266,14 +280,7 @@ static int castle_freespace_slave_writeback(struct castle_slave *cs, void *unuse
 
 int castle_freespace_writeback(void)
 {
-    struct list_head *lh;
-    struct castle_slave *slave;
-
-    list_for_each(lh, &castle_slaves.slaves)
-    {
-        slave = list_entry(lh, struct castle_slave, list);
-        castle_freespace_slave_writeback(slave, NULL);
-    }
+    castle_freespace_foreach_slave(castle_freespace_slave_writeback, NULL);
 
     return 0;
 }
@@ -283,7 +290,7 @@ void castle_freespace_slave_close(struct castle_slave *cs)
     debug("Closed the module\n");
 }
 
-void castle_freespace_print(struct castle_slave *cs)
+static int castle_freespace_print(struct castle_slave *cs, void *unused)
 {
     castle_freespace_t  *freespace;
 
@@ -295,17 +302,33 @@ void castle_freespace_print(struct castle_slave *cs)
     printk("\t\tnr_entries: %d\n", freespace->nr_entries);
     printk("\t\tmax_entries: %d\n", freespace->max_entries);
     freespace_sblk_put(cs, 0);
+
+    return 0;
 }
 
 void castle_freespace_stats_print(void)
 {
-    struct list_head *lh;
-    struct castle_slave *slave;
-
     printk("Freespace stats: \n");
-    list_for_each(lh, &castle_slaves.slaves)
-    {
-        slave = list_entry(lh, struct castle_slave, list);
-        castle_freespace_print(slave);
-    }
+    castle_freespace_foreach_slave(castle_freespace_print, NULL);
+}
+
+static int castle_freespace_get(struct castle_slave *cs, void *_space)
+{
+    c_chk_cnt_t *space = (c_chk_cnt_t *)_space;
+    castle_freespace_t *freespace;
+
+    freespace = freespace_sblk_get(cs);
+    (*space) += freespace->free_chk_cnt;
+    freespace_sblk_put(cs,0);
+
+    return 0;
+}
+
+c_chk_cnt_t castle_freespace_space_get(void)
+{
+    c_chk_cnt_t space;
+
+    castle_freespace_foreach_slave(castle_freespace_get, &space);
+
+    return space;
 }

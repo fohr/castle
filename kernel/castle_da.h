@@ -34,4 +34,5 @@ int  castle_ct_large_obj_add    (c_ext_id_t              ext_id,
                                  uint64_t                length, 
                                  struct list_head       *head,
                                  struct mutex           *mutex);
+int castle_double_arrays_unfreeze(void);
 #endif /* __CASTLE_DA_H__ */

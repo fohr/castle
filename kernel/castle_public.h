@@ -4,7 +4,7 @@
 #include <linux/types.h>
 #include <asm/ioctl.h>
 
-#define CASTLE_PROTOCOL_VERSION 1
+#define CASTLE_PROTOCOL_VERSION 2
 
 #ifndef __KERNEL__
 #define PAGE_SIZE 4096
