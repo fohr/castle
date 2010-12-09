@@ -29,6 +29,7 @@ disks=$(castle-scan)
 
 load_fs_and_claim $disks
 sync
+echo "All disks claimed"
 castle-cli init
 
 echo "castle-fs initialised successfully"
