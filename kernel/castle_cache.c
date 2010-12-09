@@ -290,18 +290,24 @@ static void c2_pref_c2b_destroy(c2_block_t *c2b);
 /**********************************************************************************************
  * Core cache. 
  */
-void castle_cache_stats_print(void)
+void castle_cache_stats_print(int verbose)
 {
     int reads = atomic_read(&castle_cache_read_stats);
     int writes = atomic_read(&castle_cache_write_stats);
     atomic_sub(reads, &castle_cache_read_stats);
     atomic_sub(writes, &castle_cache_write_stats);
     
-    printk("%d, %d, %d, %d, %d", 
-        atomic_read(&castle_cache_dirty_pages), 
-        atomic_read(&castle_cache_clean_pages),
-        castle_cache_page_freelist_size * PAGES_PER_C2P,
-        reads, writes);
+    if(verbose)
+        printk("%d, %d, %d, %d, %d", 
+            atomic_read(&castle_cache_dirty_pages), 
+            atomic_read(&castle_cache_clean_pages),
+            castle_cache_page_freelist_size * PAGES_PER_C2P,
+            reads, writes);
+    perf_value(atomic_read(&castle_cache_dirty_pages), "dirty_pgs");
+    perf_value(atomic_read(&castle_cache_clean_pages), "clean_pgs");
+    perf_value(castle_cache_page_freelist_size * PAGES_PER_C2P, "free_pgs");
+    perf_value(reads, "reads");
+    perf_value(writes, "writes");
 }
 
 EXPORT_SYMBOL(castle_cache_stats_print);
@@ -311,7 +317,7 @@ static void castle_cache_stats_timer_tick(unsigned long foo)
     BUG_ON(castle_cache_stats_timer_interval <= 0);
 
     printk("castle_cache_stats_timer_tick: ");
-    castle_cache_stats_print();
+    castle_cache_stats_print(1);
     printk("\n");
 
     setup_timer(&castle_cache_stats_timer, castle_cache_stats_timer_tick, 0);
@@ -790,8 +796,14 @@ static inline void c_io_array_submit(int rw,
         cep2str(array->start_cep), 
         k_factor, 
         (rw == READ) ? "read" : "write");
-
+ 
     BUG_ON((nr_pages <= 0) || (nr_pages > MAX_BIO_PAGES));
+    /* Account. */
+    if (rw == READ)
+        atomic_add(nr_pages, &castle_cache_read_stats);
+    else
+        atomic_add(nr_pages, &castle_cache_write_stats);
+
     /* Submit the IO */
     for(i=0; i<(rw == WRITE ? k_factor : 1); i++)
     {
@@ -978,12 +990,7 @@ int submit_c2b(int rw, c2_block_t *c2b)
                 (rw == READ)?"Read":"Write", c2b->nr_pages, __cep2str(c2b->cep));
         BUG();
     }
- 
-    if (rw == READ)
-        atomic_inc(&castle_cache_read_stats);
-    else
-        atomic_inc(&castle_cache_write_stats);
-    
+
     return submit_c2b_rda(rw, c2b);
 }
 
@@ -3890,7 +3897,9 @@ int castle_cache_init(void)
     if((ret = castle_cache_freelists_init())) goto err_out; 
     if((ret = castle_vmap_fast_map_init()))   goto err_out;
     if((ret = castle_cache_flush_init()))     goto err_out;
-
+#ifdef CASTLE_PERF_DEBUG
+    castle_cache_stats_timer_interval = 1;
+#endif
     if(castle_cache_stats_timer_interval) castle_cache_stats_timer_tick(0);
 
     return 0;

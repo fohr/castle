@@ -146,7 +146,7 @@ void                       castle_checkpoint_fini          (void);
 int                        castle_checkpoint_version_inc   (void);
 int                        castle_chk_disk                 (void);
 
-void                       castle_cache_stats_print        (void);
+void                       castle_cache_stats_print        (int verbose);
 
 /**********************************************************************************************
  * Cache init/fini. 
