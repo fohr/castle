@@ -38,7 +38,7 @@ function get_cache_size {
 function init_kernel_fs {
     if ! kernel_fs_running; then
         echo "Castle FS kernel module not found, trying to insert."
-        modprobe castle-fs castle_cache_size=$(get_cache_size)
+        modprobe castle-fs castle_cache_size=$(get_cache_size) $CASTLE_MODULE_PARAMS
         echo "Inserted kernel module"
         # Wait up to 5 seconds for the control file to appear
         # udev renaming is sometimes slow
