@@ -373,11 +373,9 @@ static int castle_debug_run(void *unused)
         if(something_printed) 
         {
             printk("...\nTotal number of stuck bios=%d\n\n", nr_bios);
-            printk("Cache stats:\n");
-            castle_cache_stats_print();
-            printk("\n");
             sleep_time += 1;
         }
+        castle_cache_stats_print(something_printed);
   
         set_task_state(current, TASK_INTERRUPTIBLE);
         schedule_timeout(sleep_time * HZ);
