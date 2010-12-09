@@ -2267,8 +2267,10 @@ ready_out:
 
 static inline uint32_t castle_da_merge_units_inc_return(struct castle_double_array *da, int level)
 {
+    int ignore;
+
     /* Wait until we are allowed to proceed with the merge. */
-    __wait_event(da->merge_waitq, castle_da_merge_wait_event(da, level));
+    __wait_event_interruptible(da->merge_waitq, castle_da_merge_wait_event(da, level), ignore);
     debug_merges("Merging unit %d.\n", da->levels[level].merge.units_commited);
 
     return da->levels[level].merge.units_commited;
