@@ -68,6 +68,7 @@ static int                      castle_da_exiting    = 0;
  */
 struct castle_merge_token {
     int driver_level;
+    int ref_cnt;
     struct list_head list;
 };
 
@@ -2080,19 +2081,6 @@ err_out:
     return ret; 
 }
 
-static inline void castle_da_merge_token_activate(struct castle_double_array *da, 
-                                                  int level,
-                                                  struct castle_merge_token *token)
-{
-    /* Token is activated by pushing it to the next level up, if that level is in merge,
-       or storing it as the active token at this level. */
-    BUG_ON(level+1 >= MAX_DA_LEVEL);
-    if(da->levels[level+1].nr_trees >= 2)
-        list_add(&token->list, &da->levels[level+1].merge.merge_tokens);
-    else
-        da->levels[level].merge.active_token = token; 
-}
-
 static inline void castle_da_merge_token_return(struct castle_double_array *da, 
                                                 int level,
                                                 struct castle_merge_token *token)
@@ -2100,11 +2088,16 @@ static inline void castle_da_merge_token_return(struct castle_double_array *da,
     int driver_level;
 
     driver_level = token->driver_level;
-    /* Return the token to the driver level => anihilate the token. */
-    BUG_ON(da->levels[driver_level].merge.driver_token != token);
-    da->levels[driver_level].merge.driver_token = NULL;
-    token->driver_level = -1;
-    list_add(&token->list, &da->merge_tokens);
+    token->ref_cnt--;
+    if(token->ref_cnt == 0)
+    {
+        /* Return the token to the driver level => anihilate the token. */
+        BUG_ON(da->levels[driver_level].merge.driver_token != token);
+        da->levels[driver_level].merge.driver_token = NULL;
+        token->driver_level = -1;
+        token->ref_cnt      = 0;
+        list_add(&token->list, &da->merge_tokens);
+    }
 }
 
 static inline void castle_da_merge_token_push(struct castle_double_array *da, 
@@ -2114,10 +2107,25 @@ static inline void castle_da_merge_token_push(struct castle_double_array *da,
     /* Token push moves the token to the next level, if that level is in a merge, 
        or returns it to the driver level if not. */
     BUG_ON(level+1 >= MAX_DA_LEVEL);
+    token->ref_cnt++;
     if(da->levels[level+1].nr_trees >= 2)
         list_add(&token->list, &da->levels[level+1].merge.merge_tokens);
     else
         castle_da_merge_token_return(da, level, token); 
+}
+
+static inline void castle_da_merge_token_activate(struct castle_double_array *da, 
+                                                  int level,
+                                                  struct castle_merge_token *token)
+{
+    /* Token is activated by pushing it to the next level up, and saving it as the active
+       token at this level. */
+    BUG_ON(level+1 >= MAX_DA_LEVEL);
+    /* Take a ref for this active token. */
+    token->ref_cnt++;
+    da->levels[level].merge.active_token = token; 
+    /* Attempt to push it to the higher level. */
+    castle_da_merge_token_push(da, level, token); 
 }
 
 static inline struct castle_merge_token* castle_da_merge_token_get(struct castle_double_array *da,
@@ -2149,6 +2157,7 @@ static inline struct castle_merge_token* castle_da_merge_token_generate(struct c
     list_del(&token->list);
     /* Initialise the token. */
     token->driver_level = level;
+    token->ref_cnt      = 0;
     /* Save the token as our driver token. */
     da->levels[level].merge.driver_token = token; 
 
@@ -2224,6 +2233,10 @@ static inline int castle_da_merge_wait_event(struct castle_double_array *da, int
                 this_level_units, token->driver_level);
         /* Activate the token. */
         castle_da_merge_token_activate(da, level, token); 
+        /* We already had a ref to this token, before doing activate. Activate took one more,
+           return one of them back. */
+        BUG_ON(token->ref_cnt < 2);
+        token->ref_cnt--;
 
         goto ready_out;
     }
@@ -2274,9 +2287,6 @@ static inline void castle_da_merge_unit_complete(struct castle_double_array *da,
     if((token = da->levels[level].merge.active_token))
     {
         debug_merges("Returning an active merge token for driver_level=%d\n", token->driver_level);
-        /* Next level must not be in merge, otherwise we should have pushed the token up
-           rather than stored it here. */
-        BUG_ON(da->levels[level+1].nr_trees > 2);
         castle_da_merge_token_return(da, level, token); 
         da->levels[level].merge.active_token = NULL;
     }
@@ -2420,7 +2430,7 @@ static int castle_da_merge_run(void *da_p)
     struct castle_da_merge *merge;
     struct list_head *l;
     uint32_t units_cnt;
-    int level, ret;
+    int level, ret, ignore;
 
     /* Work out the level at which we are supposed to be doing merges.
        Do that by working out where is this thread in threads array. */
@@ -2431,8 +2441,9 @@ static int castle_da_merge_run(void *da_p)
     debug_merges("Starting merge thread.\n");
     do {
         /* Wait for 2+ trees to appear at this level. DA must not be frozen either. */
-        __wait_event(da->merge_waitq,  exit_cond || 
-                                     (!castle_da_frozen(da) && (da->levels[level].nr_trees >= 2)));
+        __wait_event_interruptible(da->merge_waitq,
+                    exit_cond || (!castle_da_frozen(da) && (da->levels[level].nr_trees >= 2)),
+                                   ignore);
         
         /* Exit without doing a merge, if we are stopping execution, or da has been deleted. */ 
         if(exit_cond)
@@ -2639,6 +2650,7 @@ static struct castle_double_array* castle_da_alloc(da_id_t da_id)
     for(i=0; i<MAX_DA_LEVEL; i++)
     {
         da->merge_tokens_array[i].driver_level = -1; 
+        da->merge_tokens_array[i].ref_cnt      = 0; 
         list_add(&da->merge_tokens_array[i].list, &da->merge_tokens);
     }
     for(i=0; i<MAX_DA_LEVEL; i++)
