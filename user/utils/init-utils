@@ -11,28 +11,29 @@ function kernel_fs_running {
 }
 
 function get_cache_size_kb {
-	local TOTAL_RAM=$(awk '/MemTotal/ { print $2 }' /proc/meminfo)
-	local MIN_FREE=$(( 600 * 1024 ))
-	local MIN_CACHE=$(( 200 * 1024 ))
-	local CANDIDATE_SIZE=$(( ${TOTAL_RAM} / 2 ))
+    local TOTAL_RAM=$(awk '/MemTotal/ { print $2 }' /proc/meminfo)
+    local MIN_FREE=$(( 600 * 1024 ))
+    local MIN_CACHE=$(( 200 * 1024 ))
+    local CANDIDATE_SIZE=$(( "${TOTAL_RAM}" / 2 ))
 
     if [ -e ${CACHE_CFG} ]; then
         cat ${CACHE_CFG}
     else
-		if [ "$(( ${MIN_FREE} + ${MIN_CACHE} ))" -gt "${TOTAL_RAM}" ]; then
-			exit 1
-		elif [ "$(( ${TOTAL_RAM} - ${CANDIDATE_SIZE} ))" -lt "${MIN_FREE}" ]; then
-			echo $(( ${TOTAL_RAM} - ${MIN_FREE} ))
-		else
-			echo ${CANDIDATE_SIZE}
-		fi 
+        if [ "$(( ${MIN_FREE} + ${MIN_CACHE} ))" -gt "${TOTAL_RAM}" ]; then
+            exit 1
+        elif [ "$(( ${TOTAL_RAM} - ${CANDIDATE_SIZE} ))" -lt "${MIN_FREE}" ]; then
+            echo $(( "${TOTAL_RAM}" - "${MIN_FREE}" ))
+        else
+            echo ${CANDIDATE_SIZE}
+        fi 
     fi
 }
 
 function get_cache_size {
-	local PAGE_SIZE=$(getconf PAGESIZE)
-	local KBS_PER_PAGE=$(( ${PAGE_SIZE} / (1 * 1024) ))
-	echo $(( $(get_cache_size_kb) / ${KBS_PER_PAGE} ))
+    local PAGE_SIZE=$(getconf PAGESIZE)
+    local KBS_PER_PAGE=$(( ${PAGE_SIZE} / (1 * 1024) ))
+    local cache_size=$(get_cache_size_kb)
+    echo $(( "$cache_size" / "$KBS_PER_PAGE" ))
 }
 
 function init_kernel_fs {
