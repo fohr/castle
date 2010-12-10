@@ -298,7 +298,7 @@ void castle_cache_stats_print(int verbose)
     atomic_sub(writes, &castle_cache_write_stats);
     
     if(verbose)
-        printk("%d, %d, %d, %d, %d", 
+        printk("%d, %d, %d, %d, %d\n", 
             atomic_read(&castle_cache_dirty_pages), 
             atomic_read(&castle_cache_clean_pages),
             castle_cache_page_freelist_size * PAGES_PER_C2P,
