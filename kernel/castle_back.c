@@ -832,8 +832,7 @@ static int castle_back_key_copy_get(struct castle_back_conn *conn, c_vl_okey_t *
                                     uint32_t key_len, c_vl_okey_t **key_out)
 {
     struct castle_back_buffer *buf;
-    unsigned long buf_end;
-    unsigned long user_key_long = (unsigned long) user_key;
+    unsigned long user_key_start, user_key_end, buf_end;
     c_vl_okey_t *key;
     int i, err;
     
@@ -850,7 +849,11 @@ static int castle_back_key_copy_get(struct castle_back_conn *conn, c_vl_okey_t *
         goto err0;
     }
     
-    buf = castle_back_buffer_get(conn, user_key_long);
+    /* Work out the start (inclusive), and the end point (exclusive) of the key block
+       in user memory. */
+    user_key_start = (unsigned long)user_key;
+    user_key_end = user_key_start + (unsigned long)key_len;
+    buf = castle_back_buffer_get(conn, user_key_start);
     if (!buf)
     {
         error("Bad user pointer %p\n", user_key);
@@ -860,8 +863,7 @@ static int castle_back_key_copy_get(struct castle_back_conn *conn, c_vl_okey_t *
 
     /* buf_end is the end address of the buffer in userspace */
     buf_end = buf->user_addr + buf->size;
-
-    if (user_key_long + key_len > buf_end)
+    if (user_key_end > buf_end)
     {
         error("Key too big for buffer! (key_len = %u)\n", key_len);
         err = -EINVAL;
@@ -894,7 +896,7 @@ static int castle_back_key_copy_get(struct castle_back_conn *conn, c_vl_okey_t *
 
     debug("Original key pointer %p\n", user_key);
 
-    /* translate pointers in the key to be valid in kernelspace */
+    /* Translate pointers in so that they are fully contained in the kernel buffer. */
     for (i=0; i < key->nr_dims; i++)
     {
         unsigned long dim_i = (unsigned long) key->dims[i];
@@ -902,23 +904,23 @@ static int castle_back_key_copy_get(struct castle_back_conn *conn, c_vl_okey_t *
         
         debug("  dim[%d] = %p (user)\n", i, key->dims[i]);
         
-        if (dim_i < buf->user_addr || dim_i > buf_end)
+        /* Check that the dimension [i] is contained in our private copy. */ 
+        if((dim_i < user_key_start) || (dim_i + sizeof(c_vl_key_t) > user_key_end)) 
         {
-            error("Bad pointer %p (out of buffer, start=%lx, length=%u)\n", 
-                key->dims[i], buf->user_addr, buf->size);
+            error("Bad pointer 0x%lx (out of key, start=0x%lx, length=%u)\n", 
+                dim_i, user_key_start, key_len);
             err = -EINVAL;
             goto err2;
         }
         
-        key->dims[i] = (c_vl_key_t *)((unsigned long)key + 
-            (unsigned long)key->dims[i] - user_key_long);
+        /* dim_i - user_key_start is the offset of the dimension within (both of) the buffers. */
+        key->dims[i] = (c_vl_key_t *)((unsigned long)key + (dim_i - user_key_start));
         
         debug("  dim[%d] = %p (kernel)\n", i, key->dims[i]);
 
-        /* This compares old pointer + length (found by following new pointer)
-           to address in userspace of the end of the buffer */
-        dim_size = sizeof(c_vl_key_t) + (key->dims[i]->length * sizeof(uint8_t));
-        if (dim_i + dim_size > buf_end)
+        /* The entire dimension must fit in the key buffer. */
+        dim_size = sizeof(c_vl_key_t) + key->dims[i]->length;
+        if (dim_i + dim_size > user_key_end)
         {    
             error("Dimension %d goes beyond end of buffer\n", i);
             err = -EINVAL;
