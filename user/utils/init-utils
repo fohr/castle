@@ -10,36 +10,45 @@ function kernel_fs_running {
     [ -e "/dev/castle-fs/control" ] || lsmod | grep -q '^castle_fs$'
 }
 
-function get_cache_size_kb {
+function get_cache_size {
     local TOTAL_RAM=$(awk '/MemTotal/ { print $2 }' /proc/meminfo)
     local MIN_FREE=$(( 600 * 1024 ))
     local MIN_CACHE=$(( 200 * 1024 ))
-    local CANDIDATE_SIZE=$(( "${TOTAL_RAM}" / 2 ))
+    local CANDIDATE_SIZE=$(( ${TOTAL_RAM} / 2 ))
 
-    if [ -e ${CACHE_CFG} ]; then
-        cat ${CACHE_CFG}
+    local size_in_kb=
+
+    if [ -e "${CACHE_CFG}" ]; then
+        size_in_kb=$(cat "${CACHE_CFG}")
     else
         if [ "$(( ${MIN_FREE} + ${MIN_CACHE} ))" -gt "${TOTAL_RAM}" ]; then
-            exit 1
+            return
         elif [ "$(( ${TOTAL_RAM} - ${CANDIDATE_SIZE} ))" -lt "${MIN_FREE}" ]; then
-            echo $(( "${TOTAL_RAM}" - "${MIN_FREE}" ))
+            size_in_kb=$(( ${TOTAL_RAM} - ${MIN_FREE} ))
         else
-            echo ${CANDIDATE_SIZE}
+            size_in_kb="$CANDIDATE_SIZE"
         fi 
     fi
-}
 
-function get_cache_size {
     local PAGE_SIZE=$(getconf PAGESIZE)
     local KBS_PER_PAGE=$(( ${PAGE_SIZE} / (1 * 1024) ))
-    local cache_size=$(get_cache_size_kb)
-    echo $(( "$cache_size" / "$KBS_PER_PAGE" ))
+    if [ "$size_in_kb" != "" ]
+    then
+        echo $(( $size_in_kb / $KBS_PER_PAGE ))
+    fi
 }
 
 function init_kernel_fs {
     if ! kernel_fs_running; then
+        cache_size=$(get_cache_size)
+        if [ "$cache_size" = "" ]
+        then
+            echo "Insufficient memory available to load castle-fs"
+            exit 1
+        fi
+
         echo "Castle FS kernel module not found, trying to insert."
-        modprobe castle-fs castle_cache_size=$(get_cache_size) $CASTLE_MODULE_PARAMS
+        modprobe castle-fs castle_cache_size="$cache_size" $CASTLE_MODULE_PARAMS
         echo "Inserted kernel module"
         # Wait up to 5 seconds for the control file to appear
         # udev renaming is sometimes slow

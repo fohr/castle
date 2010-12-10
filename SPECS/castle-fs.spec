@@ -5,7 +5,7 @@
 
 %define kmod_name castle
 %define kverrel %(%{kmodtool} verrel %{?kversion} 2>/dev/null)
-%define kvariants "" xen
+%define kvariants "" xen debug
 %define krel	%(echo %{kverrel} | sed -e 's/-/_/g')
 
 %define groupname castle
