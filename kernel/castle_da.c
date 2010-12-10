@@ -1260,6 +1260,7 @@ static void castle_da_merge_budget_consume(struct castle_da_merge *merge)
 {
     struct castle_double_array *da;
 
+    BUG_ON(in_atomic());
     if(castle_da_exiting)
         return;
 
