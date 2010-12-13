@@ -2472,7 +2472,7 @@ static int castle_da_merge_run(void *da_p)
         BUG_ON(!in_tree1 || !in_tree2);
             
         debug_merges("Doing merge, trees=[%u]+[%u]\n", in_tree1->seq, in_tree2->seq);
-        perf_event("m-%d-beg", level);
+        perf_start("m-%d", level);
         merge = castle_da_merge_init(da, level, in_tree1, in_tree2);
         if(!merge)
         {
@@ -2487,9 +2487,9 @@ static int castle_da_merge_run(void *da_p)
             /* Wait until we are allowed to do next unit of merge. */
             units_cnt = castle_da_merge_units_inc_return(da, level);
             /* Do the unit. */
-            perf_event("m-%d-unit-beg", level);
+            perf_start("m-%d-unit", level);
             ret = castle_da_merge_unit_do(merge, units_cnt);
-            perf_event("m-%d-unit-end", level);
+            perf_end("m-%d-unit", level);
             /* Exit on errors. */
             if(ret < 0)
                 goto merge_failed;
@@ -2504,7 +2504,7 @@ static int castle_da_merge_run(void *da_p)
         ret = castle_da_merge_last_unit_complete(da, level, merge);
 merge_failed:
         castle_da_merge_dealloc(merge, ret);
-        perf_event("m-%d-end", level);
+        perf_end("m-%d", level);
         debug_merges("Done merge.\n");
         if(ret)
         {

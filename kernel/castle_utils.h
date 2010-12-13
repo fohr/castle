@@ -318,6 +318,18 @@ static USED void check_stack_usage(void)
                                   printk("***mark("_f", %ld, %ld)\n",                        \
                                       ##_a, time.tv_sec, time.tv_usec);                      \
                                } while(0)
+#define perf_start(_f, _a...)  do {                                                          \
+                                  struct timeval time;                                       \
+                                  do_gettimeofday(&time);                                    \
+                                  printk("***start("_f", %ld, %ld)\n",                        \
+                                      ##_a, time.tv_sec, time.tv_usec);                      \
+                               } while(0)
+#define perf_end(_f, _a...)  do {                                                          \
+                                  struct timeval time;                                       \
+                                  do_gettimeofday(&time);                                    \
+                                  printk("***end("_f", %ld, %ld)\n",                        \
+                                      ##_a, time.tv_sec, time.tv_usec);                      \
+                               } while(0)
 #define perf_value(_val, _f, _a...)  do {                                                    \
                                         struct timeval time;                                 \
                                         do_gettimeofday(&time);                              \
