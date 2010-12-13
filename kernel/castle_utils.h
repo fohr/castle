@@ -340,6 +340,8 @@ static USED void check_stack_usage(void)
 #else
 #define perf_event(_f, ...)    ((void)0)
 #define perf_value(_f, ...)    ((void)0)
+#define perf_start(_f, ...)    ((void)0)
+#define perf_end(_f, ...)    ((void)0)
 #endif
 
 void inline list_swap(struct list_head *t1, struct list_head *t2);
