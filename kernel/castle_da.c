@@ -1254,6 +1254,11 @@ struct castle_da_merge {
     struct list_head              large_objs;
 };
 
+#define MAX_IOS             (1000) /* Arbitrary constants */
+/* TODO: Merges are now effectively always full throughput, because MIN is set high. */ 
+#define MIN_BUDGET_DELTA    (1000000)
+#define MAX_BUDGET          (1000000)
+
 /************************************/
 /* Marge rate control functionality */
 static void castle_da_merge_budget_consume(struct castle_da_merge *merge)
@@ -1275,7 +1280,9 @@ static void castle_da_merge_budget_consume(struct castle_da_merge *merge)
     {
         /* We failed to get merge budget, readd the unit, and wait for some to appear. */
         atomic_inc(&da->merge_budget);
+        /* Extra warning message, which we shouldn't see. Increase the MIN, if we do. */
         printk("WARNING, possible error: Merges running fast, but not throttling.\n");
+        atomic_add(MIN_BUDGET_DELTA, &da->merge_budget);
         return;
         //wait_event(da->merge_budget_waitq, atomic_read(&da->merge_budget) > 0);
     }
@@ -1284,10 +1291,6 @@ static void castle_da_merge_budget_consume(struct castle_da_merge *merge)
 #define REPLENISH_FREQUENCY (10)        /* Replenish budgets every 100ms. */
 static int castle_da_merge_budget_replenish(struct castle_double_array *da, void *unused)
 {
-#define MAX_IOS             (1000) /* Arbitrary constants */
-/* TODO: Merges are now effectively always full throughput, because MIN is set high. */ 
-#define MIN_BUDGET_DELTA    (100000)
-#define MAX_BUDGET          (1000000)
     int ios = atomic_read(&da->epoch_ios);
     int budget_delta = 0, merge_budget;
 
