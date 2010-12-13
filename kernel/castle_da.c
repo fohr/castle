@@ -3704,6 +3704,11 @@ void castle_double_array_submit(c_bvec_t *c_bvec)
     /* Always submit writes to the queue, reads get started immediately. */
     if(c_bvec_data_dir(c_bvec) == WRITE)
     {
+        if (castle_da_frozen(da))
+        {
+            c_bvec->endfind(c_bvec, -ENOSPC, INVAL_VAL_TUP);
+            return;
+        }
         castle_da_bvec_queue(da, c_bvec);
         castle_da_queue_kick(da);
     }
