@@ -704,7 +704,7 @@ void castle_control_fini(void)
     /* Sleep waiting for the last ctrl op to complete, if there is one */
     CASTLE_TRANSACTION_BEGIN;
     /* Free all environment strings. */
-    for(i=0; i<256; i++)
+    for(i=0; i<NR_ENV_VARS; i++)
         if(castle_environment[i])
             castle_free(castle_environment[i]);
     CASTLE_TRANSACTION_END;
