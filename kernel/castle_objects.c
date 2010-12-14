@@ -1279,6 +1279,7 @@ void __castle_object_get_complete(struct work_struct *work)
     /* If data_length is zero, it means we are supposed to finish this get call */
     last = (data_length == 0);
     debug("Last=%d\n", last);
+    read_lock_c2b(c2b);
     if(first)
         get->reply_start(get, 
                          0,
@@ -1291,6 +1292,7 @@ void __castle_object_get_complete(struct work_struct *work)
                             c2b_buffer(c2b), 
                             data_c2b_length,
                             last);
+    read_unlock_c2b(c2b);
 
     if(last)
         goto out;
@@ -1315,7 +1317,6 @@ void __castle_object_get_complete(struct work_struct *work)
 out:    
     debug("Finishing with get %p, putting c2b->cep="cep_fmt_str_nl,
         get, cep2str(c2b->cep));
-    write_unlock_c2b(c2b);
     put_c2b(c2b);
 
     castle_ct_put(ct, 0);
@@ -1331,6 +1332,7 @@ void castle_object_get_io_end(c2_block_t *c2b)
     c2_block_t *data_c2b = get->data_c2b;
     BUG_ON(c2b != data_c2b);
 #endif
+    write_unlock_c2b(c2b);
     /* TODO: io error handling. */
     debug("IO end for cep "cep_fmt_str_nl, cep2str(c2b->cep));
     CASTLE_INIT_WORK(&c_bvec->work, __castle_object_get_complete);
@@ -1387,8 +1389,7 @@ void castle_object_get_continue(struct castle_bio_vec *c_bvec,
     /* Unlock the old c2b if we had one */
     if(old_c2b)
     {
-        debug("Unlocking old_cep "cep_fmt_str_nl, cep2str(old_c2b->cep));
-        write_unlock_c2b(old_c2b);
+        debug("Putting old_cep "cep_fmt_str_nl, cep2str(old_c2b->cep));
         put_c2b(old_c2b);
     }
 
@@ -1401,6 +1402,7 @@ void castle_object_get_continue(struct castle_bio_vec *c_bvec,
         BUG_ON(submit_c2b(READ, c2b));
     } else
     {
+        write_unlock_c2b(c2b);
         CASTLE_INIT_WORK(&c_bvec->work, __castle_object_get_complete);
         queue_work(castle_wq, &c_bvec->work);
     }
@@ -1517,13 +1519,14 @@ void __castle_object_chunk_pull_complete(struct work_struct *work)
 
     BUG_ON(!pull->buf);
 
+    read_lock_c2b(pull->curr_c2b);
     memcpy(pull->buf, c2b_buffer(pull->curr_c2b), to_copy);
     
     pull->offset += to_copy;
     pull->remaining -= to_copy;
         
     debug("Unlocking old_cdb (0x%x, 0x%x)\n", pull->curr_c2b->cdb.disk, pull->curr_c2b->cdb.block);
-    write_unlock_c2b(pull->curr_c2b);
+    read_unlock_c2b(pull->curr_c2b);
     put_c2b(pull->curr_c2b);
     
     pull->curr_c2b = NULL;
@@ -1538,6 +1541,7 @@ void castle_object_chunk_pull_io_end(c2_block_t *c2b)
     struct castle_object_pull *pull = c2b->private;
 
     debug("IO end for cdb, c2b->nr_pages=%d, cep" cep_fmt_str_nl, c2b->nr_pages, cep2str(c2b->cep));
+    write_unlock_c2b(pull->curr_c2b);
         
         
     // TODO deal with not up to date - get error and pass it on?
@@ -1591,6 +1595,7 @@ void castle_object_chunk_pull(struct castle_object_pull *pull, void *buf, size_t
         BUG_ON(submit_c2b(READ, pull->curr_c2b));
     } else
     {
+        write_unlock_c2b(pull->curr_c2b);
         __castle_object_chunk_pull_complete(&pull->work);
     }
 }
