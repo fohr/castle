@@ -470,6 +470,25 @@ void castle_control_protocol_version(int *ret, uint32_t *version)
     *ret = 0;
     *version = CASTLE_PROTOCOL_VERSION;
 }
+            
+void castle_control_environment_set(c_env_var_t var_id, char *var_str, int *ret)
+{
+    /* Check that the id is in range. */
+    if(var_id >= NR_ENV_VARS)
+    {
+        castle_free(var_str);
+        *ret = -EINVAL;
+        return;
+    }
+
+    /* Free current variable, if one exists. */
+    if(castle_environment[var_id])
+       castle_free(castle_environment[var_id]); 
+
+    /* Assign the new one. */
+    castle_environment[var_id] = var_str;
+    *ret = 0;
+}
 
 void castle_control_fault(uint32_t fault, int *ret)
 {
@@ -532,7 +551,8 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
             castle_control_fs_init(&ioctl.init.ret);
             break;            
         case CASTLE_CTRL_PROTOCOL_VERSION:
-            castle_control_protocol_version(&ioctl.protocol_version.ret, &ioctl.protocol_version.version);
+            castle_control_protocol_version(&ioctl.protocol_version.ret, 
+                                            &ioctl.protocol_version.version);
             break;
         case CASTLE_CTRL_ATTACH:
             castle_control_attach( ioctl.attach.version,
@@ -552,44 +572,19 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
         case CASTLE_CTRL_COLLECTION_ATTACH:
         {
             char *collection_name;
-            int name_length = ioctl.collection_attach.name_length;
             
-            if (name_length > MAX_NAME_SIZE)
-            {
-                err = -EINVAL;
+            err = castle_from_user_copy( ioctl.collection_attach.name,
+                                         ioctl.collection_attach.name_length,
+                                         MAX_NAME_SIZE,
+                                        &collection_name);
+            if(err)
                 goto err;
-            }
-
-            collection_name = castle_malloc(name_length, GFP_KERNEL);
-
-            if (!collection_name)
-            {
-                err = -ENOMEM;
-                goto err;
-            }
-            
-            if (copy_from_user(collection_name, ioctl.collection_attach.name, 
-                name_length))
-            {
-                castle_free(collection_name);
-                err = -EFAULT;
-                goto err;
-            }
-            
-            if (collection_name[name_length - 1] != '\0')
-            {
-                castle_free(collection_name);
-                err = -EINVAL;
-                goto err;
-            }
         
-            debug("Collection Attach: %s:%lu\n", collection_name, name_length);
+            debug("Collection Attach: %s\n", collection_name);
             castle_control_collection_attach(ioctl.collection_attach.version,
                                             collection_name,
                                             &ioctl.collection_attach.ret,
                                             &ioctl.collection_attach.collection);
-                                            
-            
             break;
         }
         case CASTLE_CTRL_COLLECTION_DETACH:
@@ -626,6 +621,26 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
             castle_control_fault( ioctl.fault.fault_id,
                                  &ioctl.fault.ret);
             break;
+
+        case CASTLE_CTRL_ENVIRONMENT_SET:
+        {
+            char *var_str;
+            c_env_var_t var_id;
+            
+            err = castle_from_user_copy( ioctl.environment_set.var_str,
+                                         ioctl.environment_set.var_len,
+                                         128,
+                                        &var_str);
+            if(err)
+                goto err;
+        
+            var_id = ioctl.environment_set.var_id;
+            debug("Setting environment var[%d]=%s\n", var_id, var_str);
+            castle_control_environment_set( var_id,
+                                            var_str, 
+                                           &ioctl.environment_set.ret);
+            break;
+        }
 
         default:
             err = -EINVAL;
@@ -682,11 +697,15 @@ int castle_control_init(void)
 
 void castle_control_fini(void)
 {
-    int ret;
+    int i, ret;
 
     if((ret = misc_deregister(&castle_control))) 
         printk("Could not unregister castle control node (%d).\n", ret);
     /* Sleep waiting for the last ctrl op to complete, if there is one */
     CASTLE_TRANSACTION_BEGIN;
+    /* Free all environment strings. */
+    for(i=0; i<256; i++)
+        if(castle_environment[i])
+            castle_free(castle_environment[i]);
     CASTLE_TRANSACTION_END;
 }

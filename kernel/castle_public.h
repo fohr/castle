@@ -4,7 +4,7 @@
 #include <linux/types.h>
 #include <asm/ioctl.h>
 
-#define CASTLE_PROTOCOL_VERSION 2
+#define CASTLE_PROTOCOL_VERSION 3
 
 #ifndef __KERNEL__
 #define PAGE_SIZE 4096
@@ -16,6 +16,27 @@ enum {
     CVT_TYPE_INVALID         = 0x30,
 };
 #endif
+
+typedef enum {
+    NO_FAULT,
+    CLAIM_FAULT,
+    FS_INIT_FAULT,
+    FS_RESTORE_FAULT,
+    FINI_FAULT,
+    REPLACE_FAULT,
+    GET_FAULT,
+    BIG_PUT_FAULT,
+    BIG_GET_FAULT,
+    MERGE_FAULT,
+    EXTENT_FAULT,
+    FREESPACE_FAULT,
+    CHECKPOINT_FAULT,
+} c_fault_t;
+
+typedef enum {
+    BUILD_ID            = 0,
+    LAST_ENV_VAR_ID,
+} c_env_var_t; 
 
 typedef uint32_t transfer_id_t;
 typedef uint32_t slave_uuid_t;
@@ -48,6 +69,7 @@ typedef uint32_t version_t;
 #define CASTLE_CTRL_DESTROY                  20
 #define CASTLE_CTRL_PROTOCOL_VERSION         21
 #define CASTLE_CTRL_FAULT                    22
+#define CASTLE_CTRL_ENVIRONMENT_SET          23
 
 #define PACKED               __attribute__((packed))
 typedef struct castle_control_cmd_claim {
@@ -135,9 +157,16 @@ typedef struct castle_control_cmd_protocol_version {
     uint32_t version;          /* OUT */
 } PACKED cctrl_cmd_protocol_version_t;
 
+typedef struct castle_control_cmd_environment_set {
+    c_env_var_t var_id;        /* IN */
+    const char *var_str;       /* IN  */
+    size_t      var_len;       /* IN  */
+    int         ret;           /* OUT */
+} PACKED cctrl_cmd_environment_set_t;
+
 typedef struct castle_control_cmd_fault {
-    uint32_t fault_id;         /* IN  */
-    int      ret;              /* OUT */
+    c_fault_t fault_id;        /* IN  */
+    int       ret;             /* OUT */
 } PACKED cctrl_cmd_fault_t;
 
 typedef struct castle_control_ioctl {
@@ -163,6 +192,7 @@ typedef struct castle_control_ioctl {
         cctrl_cmd_transfer_destroy_t    transfer_destroy;
 
         cctrl_cmd_protocol_version_t    protocol_version;
+        cctrl_cmd_environment_set_t     environment_set;
 
         cctrl_cmd_fault_t               fault;
     };
@@ -208,6 +238,8 @@ enum {
         _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_DESTROY, cctrl_ioctl_t),
     CASTLE_CTRL_PROTOCOL_VERSION_IOCTL =
         _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_PROTOCOL_VERSION, cctrl_ioctl_t),
+    CASTLE_CTRL_ENVIRONMENT_SET_IOCTL =
+        _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_ENVIRONMENT_SET, cctrl_ioctl_t),
     CASTLE_CTRL_FAULT_IOCTL =
         _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_FAULT, cctrl_ioctl_t),
 };
@@ -395,19 +427,4 @@ struct castle_fs_superblock_public {
     uint32_t checksum;
 } PACKED;
 
-typedef enum {
-    NO_FAULT,
-    CLAIM_FAULT,
-    FS_INIT_FAULT,
-    FS_RESTORE_FAULT,
-    FINI_FAULT,
-    REPLACE_FAULT,
-    GET_FAULT,
-    BIG_PUT_FAULT,
-    BIG_GET_FAULT,
-    MERGE_FAULT,
-    EXTENT_FAULT,
-    FREESPACE_FAULT,
-    CHECKPOINT_FAULT,
-} c_fault_t;
 #endif /* __CASTLE_PUBLIC_H__ */

@@ -119,6 +119,55 @@ void vl_bkey_print(c_vl_bkey_t *key)
     castle_object_okey_free(okey);
 }
 
+/**
+ * Copies a string out of the userspace, performing checks to verify that string
+ * isn't too long or malformed.
+ *
+ * @param from    Userspace string pointer
+ * @param len     String length
+ * @param max_len Maximum length allowed
+ * @param to      Pointer to the return char pointer
+ */
+int castle_from_user_copy(const char __user *from, int len, int max_len, char **to)
+{
+    char *out_str;
+    int ret;
+
+    ret = 0;
+    /* Check that the string isn't too long. */
+    if(len > max_len)
+        return -E2BIG;
+            
+    /* Allocate memory for the string. */ 
+    out_str = castle_malloc(len, GFP_KERNEL);
+    if(!out_str)
+        return -ENOMEM;
+
+    /* Copy it from userspace. */
+    if(copy_from_user(out_str, from, len)) 
+    {
+        ret = -EFAULT; 
+        goto err_out;
+    }
+    
+    /* Check that the string finishes with '\0'. */
+    if (out_str[len-1] != '\0')
+    {
+        ret = -EINVAL;
+        goto err_out;
+    }
+
+    /* Succeeded, returning. */
+    *to = out_str;
+    return 0;
+
+err_out:
+    /* Non-zero return code should have been set. */
+    BUG_ON(ret == 0);
+    castle_free(out_str);
+    return ret;
+} 
+
 /**********************************************************************************************
  * Utilities for vmapping/vunmapping pages. Assumes that virtual address to map/unmap is known.
  * Copied from RHEL mm/vmalloc.c.

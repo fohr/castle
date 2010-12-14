@@ -1853,8 +1853,8 @@ static void c2_pref_window_put(c2_pref_window_t *window)
  * - Check the extent ID
  * - Return whether offset is prior, within or after window
  *
- * @param window    window to check.
- * @param cep       position to check for.
+ * @param window    Window to check.
+ * @param cep       Position to check for.
  *
  * @return <0:  cep is prior to window
  * @return  0:  cep is within the window

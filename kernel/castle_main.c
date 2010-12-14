@@ -52,6 +52,7 @@ struct castle_component_tree castle_global_tree = {.seq             = GLOBAL_TRE
 static DEFINE_MUTEX(castle_sblk_lock);
 struct castle_fs_superblock global_fs_superblock;
 struct workqueue_struct     *castle_wqs[2*MAX_BTREE_DEPTH+1];
+char*                        castle_environment[NR_ENV_VARS] = {[0 ... (NR_ENV_VARS-1)] = NULL};
 int                          castle_fs_inited = 0;
 c_fault_t                    castle_fault = NO_FAULT;
 

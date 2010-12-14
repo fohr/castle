@@ -352,6 +352,7 @@ void        vl_okey_print(c_vl_okey_t *key);
 void        vl_bkey_print(c_vl_bkey_t *key);
 void        skb_print(struct sk_buff *skb);
 
+int         castle_from_user_copy(const char __user *from, int len, int max_len, char **to);
 
 void        castle_unmap_vm_area(void *addr_p, int nr_pages);
 int         castle_map_vm_area(void *addr_p, struct page **pages, int nr_pages, pgprot_t prot);
