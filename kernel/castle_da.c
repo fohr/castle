@@ -2092,6 +2092,8 @@ static inline void castle_da_merge_token_return(struct castle_double_array *da,
 {
     int driver_level;
 
+    BUG_ON(!castle_da_is_locked(da));
+    BUG_ON(token->ref_cnt <= 0);
     driver_level = token->driver_level;
     token->ref_cnt--;
     if(token->ref_cnt == 0)
@@ -2109,6 +2111,7 @@ static inline void castle_da_merge_token_push(struct castle_double_array *da,
                                               int level,
                                               struct castle_merge_token *token)
 {
+    BUG_ON(!castle_da_is_locked(da));
     /* Token push moves the token to the next level, if that level is in a merge, 
        or returns it to the driver level if not. */
     BUG_ON(level+1 >= MAX_DA_LEVEL);
@@ -2123,6 +2126,7 @@ static inline void castle_da_merge_token_activate(struct castle_double_array *da
                                                   int level,
                                                   struct castle_merge_token *token)
 {
+    BUG_ON(!castle_da_is_locked(da));
     /* Token is activated by pushing it to the next level up, and saving it as the active
        token at this level. */
     BUG_ON(level+1 >= MAX_DA_LEVEL);
@@ -2241,7 +2245,8 @@ static inline int castle_da_merge_wait_event(struct castle_double_array *da, int
         /* We already had a ref to this token, before doing activate. Activate took one more,
            return one of them back. */
         BUG_ON(token->ref_cnt < 2);
-        token->ref_cnt--;
+        /* This only does ref_cnt--, because ref_cnt is >= 2 */
+        castle_da_merge_token_return(da, level, token);
 
         goto ready_out;
     }
@@ -2254,6 +2259,8 @@ static inline int castle_da_merge_wait_event(struct castle_double_array *da, int
     {
         debug_merges("Pushing token for driver_level=%d\n", token->driver_level);
         castle_da_merge_token_push(da, level, token);
+        /* We are getting rid of the token, therefore we must drop the ref to it. */
+        castle_da_merge_token_return(da, level, token);
         not_ready_wake = 1;
     }
 
