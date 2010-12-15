@@ -2289,6 +2289,10 @@ static int c2_pref_submit(c2_pref_window_t *window, int pages)
         /* We'll succeed now, get c2b, and submit. */
         c2b = castle_cache_block_get(cep, nr_pages);
         set_c2b_prefetch(c2b);
+
+        /* Update the offset of the next block. */
+        cep.offset += nr_pages * PAGE_SIZE;
+
         /* If already up-to-date, we don't need to do anything. */
         if(c2b_uptodate(c2b))
         {
@@ -2302,8 +2306,6 @@ static int c2_pref_submit(c2_pref_window_t *window, int pages)
         write_lock_c2b(c2b);
         c2b->end_io = c2_pref_io_end;
         BUG_ON(submit_c2b(READ, c2b));
-
-        cep.offset += nr_pages * PAGE_SIZE;
     }
 
     pref_debug_mstore("Window now %s\n", c2_pref_window_to_str(window));
