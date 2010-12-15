@@ -147,7 +147,14 @@ function load_fs_and_claim {
     init_kernel_fs
 
     buildid=$(cat /etc/acunu/build_id.txt)
+    modulehash=$(sha1sum /lib/modules/$(uname -r)/extra/castle/castle-fs.ko | cut -f1 -d' ')
     castle-cli environment buildid "$buildid"
+    castle-cli environment modulehash "$modulehash"
+    if [ -e /etc/acunu/status_description.txt ]
+    then
+        description=$(cat /etc/acunu/status_description.txt)
+        castle-cli environment description "$description"
+    fi
 
     touch /var/lib/castle-fs/dirty
 
