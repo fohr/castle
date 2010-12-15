@@ -3162,8 +3162,9 @@ static int castle_da_t0_create(struct castle_double_array *da, void *unused)
 
 int castle_double_array_start(void)
 {
-    /* Create T0, if it doesn't exist. */
-    castle_da_hash_iterate(castle_da_t0_create, NULL);
+    /* Create T0, if it doesn't exist. This gets called only at the start of
+     * module. It is okay to be called without lock. */
+    __castle_da_hash_iterate(castle_da_t0_create, NULL);
 
     /* Check if any merges need to be done. */
     castle_da_hash_iterate(castle_da_merge_restart, NULL); 
