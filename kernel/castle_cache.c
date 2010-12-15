@@ -3725,7 +3725,9 @@ int castle_mstores_writeback(uint32_t version)
     castle_versions_writeback();
     castle_extents_writeback();
 
-    castle_cache_extent_flush_schedule(MSTORE_EXT_ID + slot, 0, 0);
+    BUG_ON(!castle_ext_fs_consistent(&mstore_ext_fs));
+    castle_cache_extent_flush_schedule(MSTORE_EXT_ID + slot, 0, 
+                                       atomic64_read(&mstore_ext_fs.used));
 
     return 0;
 }
