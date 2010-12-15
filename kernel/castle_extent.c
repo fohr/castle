@@ -467,7 +467,9 @@ int castle_extents_writeback(void)
     castle_ext_fs_marshall(&meta_ext_fs, &ext_sblk->meta_ext_fs_bs);
 
     /* Flush the complete meta extent onto disk, before completing writeback. */
-    castle_cache_extent_flush_schedule(META_EXT_ID, 0, 0);
+    BUG_ON(!castle_ext_fs_consistent(&meta_ext_fs));
+    castle_cache_extent_flush_schedule(META_EXT_ID, 0,
+                                       atomic64_read(&meta_ext_fs.used));
 
     INJECT_FAULT;
 
