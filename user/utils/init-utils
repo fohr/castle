@@ -146,6 +146,9 @@ function load_fs_and_claim {
 
     init_kernel_fs
 
+    buildid=$(cat /etc/acunu/build_id.txt)
+    castle-cli environment buildid "$buildid"
+
     touch /var/lib/castle-fs/dirty
 
     for dev in "${devs[@]}"
