@@ -30,6 +30,9 @@ Requires(preun): chkconfig
 Requires(preun): initscripts
 Requires: castle-cli
 
+BuildRequires: doxygen
+BuildRequires: graphviz-gd
+
 %description
 
 # magic hidden here:
@@ -57,6 +60,10 @@ do
     make KVER=%{kversion} KERNEL_DIR="${ksrc}" DEBUG=n PERF_DEBUG=n
     popd
 done
+
+mkdir -p tools/docs
+(cd tools && doxygen Doxyfile.kernel)
+(cd tools && doxygen Doxyfile.user)
 
 %install
 rm -rf %{buildroot}
@@ -116,6 +123,17 @@ getent group %{groupname} >/dev/null || groupadd -r %{groupname}
 /usr/sbin/castle-create
 /sbin/mkcastlefs
 /var/lib/castle-fs
+
+%package doc
+
+Summary: castle-fs documentation
+Group: Documentation
+
+%description doc
+
+%files doc
+%doc tools/docs/kernel
+%doc tools/docs/user
 
 %changelog
 * Thu Sep  9 2010 Andrew Suffield <asuffield@acunu.com> - %{buildver}-%{buildrev}

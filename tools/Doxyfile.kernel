@@ -1,5 +1,4 @@
 @INCLUDE = Doxyfile.proto
 PROJECT_NAME	       = fs.hg/kernel
 INPUT                  = ../kernel
-OUTPUT_DIRECTORY       = /usr/groups/docs/fs.hg/kernel
-STRIP_FROM_PATH        = /usr/groups/docs/fs.hg/source/kernel
+OUTPUT_DIRECTORY       = docs/kernel
