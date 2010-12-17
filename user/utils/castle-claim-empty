@@ -1,0 +1,54 @@
+#!/bin/bash
+#
+# This script should run mkcastlefs on each device
+# that is a raw device (not a partition), unformatted,
+# unpartitioned and not already got castlefs on
+#
+# TODO: check members of raid sets?
+
+function should_claim {
+    local device=$1
+
+    # Check this is a real device, not a partition
+    if ! [ -d "/sys/block/${device}" ]; then
+	echo "Not claiming ${device} - no sysfs entry!"  
+	return 1
+    fi
+
+    if ! [ -b "/dev/${device}" ]; then
+        echo "Not claiming ${device} - /dev/${device} not a block special file!"
+        return 1
+    fi
+
+    # Check to see if device has any partitions on it
+    local num_partitions=$(( $(cat /proc/partitions | grep ${device} | wc -l) - 1 ))
+    if [ "${num_partitions}" -gt 0 ]; then
+	echo "Not claiming ${device} - it has ${num_partitions} partitions!"
+	return 1
+    fi
+    
+    # Check to see if device is already in castlefs
+    if castle-probe-device "/dev/${device}" > /dev/null 2>&1; then
+	echo "Not claiming ${device} - already been claimed!"
+	return 1
+    fi
+    
+    # Check to see if device has some other FS on it	
+    if blkid "/dev/${device}" > /dev/null; then
+	echo "Not claiming ${device} - already contains FS!"
+	return 1
+    fi
+    
+    return 0
+}
+
+for dev in /dev/sd* /dev/hd* /dev/xvd*
+do
+    [ -e "$dev" ] || continue
+
+    dev=$(echo ${dev} | sed "s,^/dev/,,")
+    if should_claim ${dev}; then
+	echo "* mkcastlefs /dev/${dev}"
+	mkcastlefs /dev/${dev}
+    fi
+done

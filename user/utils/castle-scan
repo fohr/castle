@@ -7,7 +7,8 @@ if [ -e ${DISKTAB} ]; then
     exit 0
 fi
 
-for dev in /dev/sd*[0-9]* /dev/hd*[0-9]* /dev/xvd*[0-9]*
+# keep this for loop in sync with castle-claim
+for dev in /dev/sd* /dev/hd* /dev/xvd*
 do
   [ -e "$dev" ] || continue
 
