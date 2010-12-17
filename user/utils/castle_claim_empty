@@ -1,0 +1,29 @@
+#!/bin/bash
+#
+# castle_claim_empty: Automatically claim empty disks for Castle FS
+#
+# chkconfig:   2345 4 95
+# description: Automatically claim empty disks for Castle FS
+
+### BEGIN INIT INFO
+# Provides:          castle_claim_empty
+# Required-Start:    $local_fs
+# Required-Stop:     
+# Default-Start: 2 3 4 5 
+# Default-Stop: 0 1 2 6      
+# Short-Description: Automatically claim empty disks for Castle FS
+# Description: Automatically claim empty disks for Castle FS
+### END INIT INFO
+
+set -e
+
+case "$1" in
+    start)
+	castle-claim-empty
+        ;;
+
+    *)
+        ;;
+esac
+
+exit 0

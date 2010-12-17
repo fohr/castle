@@ -51,6 +51,7 @@ clean:
 install: all
 	install $(MAIN_OBJS) /usr/sbin
 	install -D castle /etc/rc.d/init.d/
+	install -D castle_claim_empty /etc/rc.d/init.d/
 	install -D init-utils /usr/share/castle-fs/init-utils
 	install -D castle-fs-init.sh /usr/share/castle-fs/castle-fs-init
 	install -D castle-fs-fini.sh /usr/share/castle-fs/castle-fs-fini

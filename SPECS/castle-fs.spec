@@ -102,11 +102,13 @@ rm -rf %{buildroot}
 %post
 # This adds the proper /etc/rc*.d links for the script
 /sbin/chkconfig --add castle
+/sbin/chkconfig --add castle_claim_empty
 
 %preun
 if [ $1 = 0 ] ; then
     /sbin/service castle stop >/dev/null 2>&1
     /sbin/chkconfig --del castle
+    /sbin/chkconfig --del castle_claim_empty
 fi
 
 %pre
