@@ -8,7 +8,7 @@
 ### BEGIN INIT INFO
 # Provides:          castle
 # Required-Start:    $local_fs $remote_fs $time $network acunu_host
-# Should-Start:      netconsole
+# Should-Start:      netconsole castle_claim_empty
 # Should-Stop:       netconsole
 # Required-Stop:     
 # Default-Start: 2 3 4 5 
