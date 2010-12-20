@@ -956,7 +956,7 @@ void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
         mutex_lock(&c_bvec->tree->last_key_mutex);
 
         if (c_bvec->tree->last_key)
-            castle_free(c_bvec->tree->last_key);
+            castle_object_okey_free(c_bvec->tree->last_key);
         c_bvec->tree->last_key = castle_object_btree_key_convert(c_bvec->key);
 
         mutex_unlock(&c_bvec->tree->last_key_mutex);

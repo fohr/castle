@@ -13,6 +13,7 @@
 #include "castle_ctrl.h"
 #include "castle_da.h"
 #include "castle_sysfs.h"
+#include "castle_objects.h"
 
 //#define DEBUG
 #ifndef DEBUG
@@ -2818,7 +2819,7 @@ void castle_ct_put(struct castle_component_tree *ct, int write)
         castle_extent_free(ct->data_ext_fs.ext_id);
 
     if (ct->last_key)
-        castle_free(ct->last_key);
+        castle_object_okey_free(ct->last_key);
 
     /* Poison ct (note this will be repoisoned by kfree on kernel debug build. */
     memset(ct, 0xde, sizeof(struct castle_component_tree));
@@ -2979,7 +2980,7 @@ static int castle_da_ct_dealloc(struct castle_double_array *da,
     list_del(&ct->da_list);
     list_del(&ct->hash_list);
     if (ct->last_key)
-        castle_free(ct->last_key);
+        castle_object_okey_free(ct->last_key);
     castle_free(ct);
 
     return 0;
