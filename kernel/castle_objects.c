@@ -769,6 +769,7 @@ static int castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
 #endif
     }
     BUG_ON(CVT_INVALID(*cvt));
+    FAULT(REPLACE_FAULT);
 
     return 0;
 }
@@ -949,6 +950,17 @@ void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
     BUG_ON(c_bio->err != 0);
 
     debug("castle_object_replace_complete\n");
+
+    if (!err)
+    {
+        mutex_lock(&c_bvec->tree->last_key_mutex);
+
+        if (c_bvec->tree->last_key)
+            castle_free(c_bvec->tree->last_key);
+        c_bvec->tree->last_key = castle_object_btree_key_convert(c_bvec->key);
+
+        mutex_unlock(&c_bvec->tree->last_key_mutex);
+    }
 
     /* Free the key */
     castle_object_bkey_free(c_bvec->key);
@@ -1445,6 +1457,8 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
         get->reply_start(get, 0, cvt.length, cvt.val, cvt.length);
         castle_free(cvt.val);
         castle_utils_bio_free(c_bvec->c_bio);
+
+        FAULT(GET_FAULT);
         return;
     }
 
@@ -1463,6 +1477,8 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
     get->first           = 1; /* first */
     
     castle_object_get_continue(c_bvec, get, cvt.cep, cvt.length);
+
+    FAULT(GET_FAULT);
 }
 
 int castle_object_get(struct castle_object_get *get,

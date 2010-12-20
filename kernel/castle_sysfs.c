@@ -10,7 +10,9 @@
 #include "castle_versions.h"
 #include "castle_freespace.h"
 #include "castle_da.h"
+#include "castle_utils.h"
 
+static struct kobject  double_arrays_kobj;
 struct castle_sysfs_versions {
     struct kobject kobj;
     struct list_head version_list;
@@ -195,6 +197,50 @@ int castle_sysfs_version_del(version_t version)
 
     castle_free(v);
     return 0;
+}
+
+/* Double Array functions could race with DA deletion. */
+static ssize_t double_array_number_show(struct kobject *kobj, 
+						                struct attribute *attr, 
+							            char *buf)
+{
+    return sprintf(buf, "%d\n", castle_da_count());
+}
+
+static ssize_t da_id_show(struct kobject *kobj, 
+						  struct attribute *attr, 
+						  char *buf)
+{
+    struct castle_double_array *da = container_of(kobj, struct castle_double_array, kobj); 
+
+    return sprintf(buf, "0x%x\n", da->id);
+}
+
+static ssize_t da_version_show(struct kobject *kobj, 
+							   struct attribute *attr, 
+							   char *buf)
+{
+    struct castle_double_array *da = container_of(kobj, struct castle_double_array, kobj); 
+
+    return sprintf(buf, "0x%x\n", da->root_version);
+}
+
+static ssize_t da_last_key_show(struct kobject *kobj, 
+							    struct attribute *attr, 
+							    char *buf)
+{
+    struct castle_double_array *da = container_of(kobj, struct castle_double_array, kobj); 
+
+    if (da->last_key)
+    {
+        vl_okey_to_buf(da->last_key, buf);
+        //vl_okey_print(da->last_key);
+        //sprintf(buf, "Got one\n");
+    }
+    else
+        sprintf(buf, "None");
+
+    return strlen(buf);
 }
 
 static ssize_t slaves_number_show(struct kobject *kobj, 
@@ -420,6 +466,63 @@ static struct kobj_type castle_versions_ktype = {
     .sysfs_ops      = &castle_sysfs_ops,
     .default_attrs  = castle_versions_attrs,
 };
+
+/* Definition of Double array sysfs directory attributes */
+static struct castle_sysfs_entry double_array_number =
+__ATTR(number, S_IRUGO|S_IWUSR, double_array_number_show, NULL);
+
+static struct attribute *castle_double_array_attrs[] = {
+    &double_array_number.attr,
+    NULL,
+};
+
+static struct kobj_type castle_double_array_ktype = {
+    .sysfs_ops      = &castle_sysfs_ops,
+    .default_attrs  = castle_double_array_attrs,
+};
+
+/* Definition of each da sysfs directory attributes */
+static struct castle_sysfs_entry da_id =
+__ATTR(id, S_IRUGO|S_IWUSR, da_id_show, NULL);
+
+static struct castle_sysfs_entry da_version =
+__ATTR(version, S_IRUGO|S_IWUSR, da_version_show, NULL);
+
+static struct castle_sysfs_entry da_last_key =
+__ATTR(last_key, S_IRUGO|S_IWUSR, da_last_key_show, NULL);
+
+static struct attribute *castle_da_attrs[] = {
+    &da_id.attr,
+    &da_version.attr,
+    &da_last_key.attr,
+    NULL,
+};
+
+static struct kobj_type castle_da_ktype = {
+    .sysfs_ops      = &castle_sysfs_ops,
+    .default_attrs  = castle_da_attrs,
+};
+
+int castle_sysfs_da_add(struct castle_double_array *da)
+{
+    int ret;
+    
+    memset(&da->kobj, 0, sizeof(struct kobject));
+    ret = kobject_tree_add(&da->kobj, 
+                           &double_arrays_kobj, 
+                           &castle_da_ktype, 
+                           "%x", da->root_version);
+
+    if (ret < 0)
+        return ret;
+
+    return 0;
+}
+
+void castle_sysfs_da_del(struct castle_double_array *da)
+{
+    kobject_remove(&da->kobj);
+}
 
 /* Definition of slaves sysfs directory attributes */
 static struct castle_sysfs_entry slaves_number =
@@ -663,8 +766,17 @@ int castle_sysfs_init(void)
                            "%s", "collections");
     if(ret < 0) goto out5;
 
+    memset(&double_arrays_kobj, 0, sizeof(struct kobject));
+    ret = kobject_tree_add(&double_arrays_kobj, 
+                           &castle.kobj, 
+                           &castle_double_array_ktype, 
+                           "%s", "double-arrays");
+    if(ret < 0) goto out6;
+
     return 0;
-    
+
+    kobject_remove(&double_arrays_kobj); /* Unreachable */
+out6:
     kobject_remove(&castle_attachments.collections_kobj); /* Unreachable */
 out5:
     kobject_remove(&castle_attachments.devices_kobj);

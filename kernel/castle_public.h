@@ -18,19 +18,19 @@ enum {
 #endif
 
 typedef enum {
-    NO_FAULT,
-    CLAIM_FAULT,
-    FS_INIT_FAULT,
-    FS_RESTORE_FAULT,
-    FINI_FAULT,
-    REPLACE_FAULT,
-    GET_FAULT,
-    BIG_PUT_FAULT,
-    BIG_GET_FAULT,
-    MERGE_FAULT,
-    EXTENT_FAULT,
-    FREESPACE_FAULT,
-    CHECKPOINT_FAULT,
+    NO_FAULT,           /* 0 */
+    MERGE_FAULT,        /* 1 */
+    EXTENT_FAULT,       /* 2 */ 
+    FREESPACE_FAULT,    /* 3 */
+    REPLACE_FAULT,      /* 4 */
+    GET_FAULT,          /* 5 */
+    BIG_PUT_FAULT,      /* 6 */
+    BIG_GET_FAULT,      /* 7 */
+    CHECKPOINT_FAULT,   /* 8 */
+    CLAIM_FAULT,        /* 9 */
+    FS_INIT_FAULT,      /*10 */
+    FS_RESTORE_FAULT,   /*11 */
+    FINI_FAULT,         /*12 */
 } c_fault_t;
 
 typedef enum {

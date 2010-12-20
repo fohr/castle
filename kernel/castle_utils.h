@@ -351,6 +351,7 @@ void        vl_key_print(c_vl_key_t *vl_key);
 void        vl_okey_print(c_vl_okey_t *key);
 void        vl_bkey_print(c_vl_bkey_t *key);
 void        skb_print(struct sk_buff *skb);
+void        vl_okey_to_buf(c_vl_okey_t *key, char *buf);
 
 int         castle_from_user_copy(const char __user *from, int len, int max_len, char **to);
 

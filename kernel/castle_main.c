@@ -47,6 +47,7 @@ struct castle_component_tree castle_global_tree = {.seq             = GLOBAL_TRE
                                                    .large_objs      = {NULL, NULL},
                                                    .tree_ext_fs     = {INVAL_EXT_ID, (100 * C_CHK_SIZE), 0, {0ULL}, {0ULL}},
                                                    .data_ext_fs     = {INVAL_EXT_ID, (512ULL * C_CHK_SIZE), 0, {0ULL}, {0ULL}},
+                                                   .last_key        = NULL,
                                                   }; 
 
 static DEFINE_MUTEX(castle_sblk_lock);
@@ -495,6 +496,7 @@ int castle_fs_init(void)
         atomic64_set(&(castle_global_tree.node_count), 0);
         init_rwsem(&castle_global_tree.lock);
         mutex_init(&castle_global_tree.lo_mutex);
+        mutex_init(&castle_global_tree.last_key_mutex);
         INIT_LIST_HEAD(&castle_global_tree.large_objs);
 
         if ((ret = castle_ext_fs_init(&castle_global_tree.tree_ext_fs,
@@ -2011,6 +2013,7 @@ static void __exit castle_exit(void)
     castle_back_fini();
     castle_control_fini();
     castle_sysfs_fini();
+    FAULT(FINI_FAULT);
     /* Now, make sure no more IO can be made, internally or externally generated */
     castle_double_array_merges_fini();  /* Completes all internal i/o - merges. */
     castle_checkpoint_fini(); 

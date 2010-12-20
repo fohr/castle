@@ -538,6 +538,8 @@ struct castle_component_tree {
     c_ext_fs_t          tree_ext_fs;
     c_ext_fs_t          data_ext_fs;
     atomic64_t          large_ext_chk_cnt;
+    c_vl_okey_t        *last_key;
+    struct mutex        last_key_mutex;
 };
 extern struct castle_component_tree castle_global_tree;
 
@@ -1227,4 +1229,63 @@ static uint32_t __attribute__((used)) fletcher32( uint16_t *data, size_t len )
         sum2 = (sum2 & 0xffff) + (sum2 >> 16);
         return sum2 << 16 | sum1;
 }
+
+
+struct castle_merge_token {
+    int driver_level;
+    int ref_cnt;
+    struct list_head list;
+};
+
+#define MAX_DA_LEVEL                    (20)
+#define DOUBLE_ARRAY_GROWING_RW_TREE_BIT    (0)
+#define DOUBLE_ARRAY_GROWING_RW_TREE_FLAG   (1 << DOUBLE_ARRAY_GROWING_RW_TREE_BIT)
+#define DOUBLE_ARRAY_DELETED_BIT            (1)
+#define DOUBLE_ARRAY_DELETED_FLAG           (1 << DOUBLE_ARRAY_DELETED_BIT)
+#define DOUBLE_ARRAY_FROZEN_BIT             (2)
+#define DOUBLE_ARRAY_FROZEN_FLAG            (1 << DOUBLE_ARRAY_FROZEN_BIT)
+#define DOUBLE_ARRAY_UNFROZEN_BIT           (3)
+#define DOUBLE_ARRAY_UNFROZEN_FLAG          (1 << DOUBLE_ARRAY_UNFROZEN_BIT)
+struct castle_double_array {
+    da_id_t                     id;
+    version_t                   root_version;
+    /* Lock protects the trees list */
+    spinlock_t                  lock;
+    struct kobject              kobj;
+    unsigned long               flags;
+    int                         nr_trees;
+    struct {                    
+        int                     nr_trees;
+        struct list_head        trees;
+        /* Merge related variables. */
+        struct {
+            struct list_head    merge_tokens;
+            struct castle_merge_token
+                               *active_token;
+            struct castle_merge_token
+                               *driver_token;
+            uint32_t            units_commited; 
+            struct task_struct *thread;
+        } merge;
+    } levels[MAX_DA_LEVEL];
+    struct castle_merge_token   merge_tokens_array[MAX_DA_LEVEL];
+    struct list_head            merge_tokens; 
+    struct list_head            hash_list;
+    atomic_t                    ref_cnt;
+    uint32_t                    attachment_cnt;
+    /* Queue of write IOs queued up on this DA. */
+    struct list_head            ios_waiting;
+    int                         ios_waiting_cnt;
+    uint32_t                    ios_budget;
+    uint32_t                    ios_rate;
+    struct work_struct          queue_restart;
+    /* Merge deamortisation */
+    wait_queue_head_t           merge_waitq;
+    /* Merge throttling. DISABLED ATM. */
+    atomic_t                    epoch_ios;
+    atomic_t                    merge_budget;
+    wait_queue_head_t           merge_budget_waitq;
+    c_vl_okey_t                *last_key;
+};
+
 #endif /* __CASTLE_H__ */

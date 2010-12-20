@@ -83,6 +83,23 @@ void vl_key_print(c_vl_key_t *vl_key)
     print_hex_dump_bytes("", DUMP_PREFIX_NONE, vl_key->key, vl_key->length);
 }
 
+void vl_okey_to_buf(c_vl_okey_t *key, char *buf)
+{
+    int i, j;
+
+    *buf++ = '|';
+    for(i=0; i<key->nr_dims; i++)
+    {
+        for(j=0; j<key->dims[i]->length; j++)
+        {
+            sprintf(buf, "%.2x", key->dims[i]->key[j]);
+            buf += 2;
+        }
+        *buf++ = '|';
+    }
+    *buf++ = '\0';
+}
+
 void vl_okey_print(c_vl_okey_t *key)
 {
 #define NR_BYTES_PRINT  15
@@ -92,7 +109,7 @@ void vl_okey_print(c_vl_okey_t *key)
     printk("# key dimensions: %d\n", key->nr_dims);
     for(i=0; i<key->nr_dims; i++)
     {
-        for(j=0; j<NR_BYTES_PRINT && j<key->dims[i]->length; j++)
+        for(j=0; j<key->dims[i]->length; j++)
             sprintf(key_str + 2*j, "%.2x", key->dims[i]->key[j]);
         printk(" dim[%.2d], len=%.3d, first %d bytes: %s\n", 
             i, 
