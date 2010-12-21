@@ -2388,49 +2388,28 @@ static void c2_pref_c2b_destroy(c2_block_t *c2b)
 }
 
 /**
- * Advance the window and kick off prefetch I/O.
+ * Demote c2bs between the start of the window and cep.
  *
- * - Inform cache that old prefetch blocks are no longer needed
- * - Update current window's start_off
- * - Calculate the number of additional pages to be prefetched
- * - Ensure c2b exists in the cache for the updated window
- * - Submit the new window for I/O
+ * @param window    Prefetch window whose c2bs to demote.
+ * @param cep       c2bs prior to this offset to demote.
  *
- * NOTE: the window must not be in the tree when this function is called.
+ * Get the prefetch c2bs we used in this window.  This covers a range from
+ * start_off to the chunk that cep.offset lies within.  We're moving the
+ * window forward we should let the cache know we're done with these c2bs.
+ * cur_c2b may no longer be allocated, but we can check that it existed.
  *
- * @param window    The prefetch window to be advanced.
- * @param cep       Requested offset.
- * @param c2b_p     Returns c2b that identifies the window.
- *
- * @return See c2_pref_submit()
- *
- * @also c2_pref_window_remove()
- * @also set_c2b_prefetch()
- * @also c2_pref_submit()
+ * It may seem more sensible to store the prefetch c2bs within the window.
+ * In fact this method would require that we either: a) hold a reference,
+ * thereby preventing the c2bs from being freed under memory pressure; or
+ * b) perform the same steps we do here to verify they still exist within
+ * the cache.
  */
-static int c2_pref_window_advance(c2_pref_window_t *window, c_ext_pos_t cep, c2_block_t **c2b_p)
+static void c2_pref_window_demote(c2_pref_window_t *window, c_ext_pos_t cep)
 {
-    c2_block_t *c2b;
     c_ext_pos_t get_cep;
     int i;
     uint64_t pages;
 
-    BUG_ON(!mutex_is_locked(&window->lock));
-    BUG_ON(cep.ext_id != window->ext_id);
-    BUG_ON(window->state & PREF_WINDOW_INSERTED);
-    BUG_ON(CHUNK_OFFSET(window->end_off) != 0); /* should be chunk aligned */
-    pref_debug_mstore("Advancing %s\n", c2_pref_window_to_str(window));
-
-    /* Get the prefetch c2bs we used in this window.  This covers a range from
-     * start_off to the chunk that cep.offset lies within.  We're moving the
-     * window forward we should let the cache know we're done with these c2bs.
-     * cur_c2b may no longer be allocated, but we can check that it existed.
-     *
-     * It may seem more sensible to store the prefetch c2bs within the window.
-     * In fact this method would require that we either: a) hold a reference,
-     * thereby preventing the c2bs from being freed under memory pressure; or
-     * b) perform the same steps we do here to verify they still exist within
-     * the cache. */
     if (window->cur_c2b)
     {
         pref_debug_mstore("Window CHUNK(start_off) = %lld, CHUNK(end_off) = %lld, "
@@ -2457,6 +2436,43 @@ static int c2_pref_window_advance(c2_pref_window_t *window, c_ext_pos_t cep, c2_
                         CHUNK(get_cep.offset));
         }
     }
+}
+
+/**
+ * Advance the window and kick off prefetch I/O.
+ *
+ * - Inform cache that old prefetch blocks are no longer needed
+ * - Update current window's start_off
+ * - Calculate the number of additional pages to be prefetched
+ * - Ensure c2b exists in the cache for the updated window
+ * - Submit the new window for I/O
+ *
+ * NOTE: the window must not be in the tree when this function is called.
+ *
+ * @param window    The prefetch window to be advanced.
+ * @param cep       Requested offset.
+ * @param c2b_p     Returns c2b that identifies the window.
+ *
+ * @return See c2_pref_submit()
+ *
+ * @also c2_pref_window_remove()
+ * @also set_c2b_prefetch()
+ * @also c2_pref_submit()
+ */
+static int c2_pref_window_advance(c2_pref_window_t *window, c_ext_pos_t cep, c2_block_t **c2b_p)
+{
+    c2_block_t *c2b;
+    c_ext_pos_t get_cep;
+    uint64_t pages;
+
+    BUG_ON(!mutex_is_locked(&window->lock));
+    BUG_ON(cep.ext_id != window->ext_id);
+    BUG_ON(window->state & PREF_WINDOW_INSERTED);
+    BUG_ON(CHUNK_OFFSET(window->end_off) != 0); /* should be chunk aligned */
+    pref_debug_mstore("Advancing %s\n", c2_pref_window_to_str(window));
+
+    /* Demote c2bs that will fall off the front when we advance the window. */
+    c2_pref_window_demote(window, cep);
 
     /* Update the window's start offset and calculate number of pages
      * to prefetch. */
