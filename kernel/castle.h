@@ -540,6 +540,11 @@ struct castle_component_tree {
     atomic64_t          large_ext_chk_cnt;
     c_vl_okey_t        *last_key;
     struct mutex        last_key_mutex;
+#ifdef CASTLE_PERF_DEBUG
+    u64                 bt_c2bsync_ns;
+    u64                 data_c2bsync_ns;
+    u64                 get_c2b_ns;
+#endif
 };
 extern struct castle_component_tree castle_global_tree;
 
