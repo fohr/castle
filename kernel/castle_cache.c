@@ -2939,6 +2939,69 @@ static int c2_pref_new_window_schedule(c2_pref_window_t *window, c_ext_pos_t cep
 }
 
 /**
+ * Lock c2bs covering extent to prevent them being evicted from cache.
+ *
+ * @param ext_id    The extent to lock
+ *
+ * @also castle_cache_prefetch_extent_unlock()
+ */
+void castle_cache_prefetch_extent_lock(c_ext_id_t ext_id)
+{
+    c2_block_t *c2b;
+    c_ext_pos_t cep;
+    int chunks;
+
+    /* Initialise cep. */
+    cep.ext_id = ext_id;
+    cep.offset = 0;
+
+    /* Get number of chunks in extent. */
+    chunks = castle_extent_size_get(cep.ext_id);
+
+    while (chunks > 0)
+    {
+        /* Get block, lock it and update offset. */
+        c2b = castle_cache_block_get(cep, 256);
+        cep.offset += 256 * PAGE_SIZE;
+        chunks--;
+    }
+}
+
+/**
+ * Unlock c2bs covering extent to allow them to be evicted from cache.
+ *
+ * @param ext_id    The extent to unlock
+ *
+ * @warning The extent must previously have been locked with
+ *          castle_cache_prefetch_extent_unlock().
+ *
+ * @also castle_cache_prefetch_extent_lock()
+ */
+void castle_cache_prefetch_extent_unlock(c_ext_id_t ext_id)
+{
+    c2_block_t *c2b;
+    c_ext_pos_t cep;
+    int chunks;
+
+    /* Initialise cep. */
+    cep.ext_id = ext_id;
+    cep.offset = 0;
+
+    /* Get number of chunks in extent. */
+    chunks = castle_extent_size_get(cep.ext_id);
+
+    while (chunks > 0)
+    {
+        /* Get block, lock it and update offset. */
+        c2b = castle_cache_block_get(cep, 256);
+        put_c2b(c2b);
+        put_c2b(c2b); /* will cause problems if they weren't prefetch-locked. */
+        cep.offset += 256 * PAGE_SIZE;
+        chunks--;
+    }
+}
+
+/**
  * Advise prefetcher of intention to begin read.
  *
  * This is the main entry point into the prefetcher.

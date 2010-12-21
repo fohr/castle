@@ -2528,7 +2528,17 @@ static int castle_da_merge_run(void *da_p)
             units_cnt = castle_da_merge_units_inc_return(da, level);
             /* Do the unit. */
             perf_start("m-%02d-unit", level);
+            if (level == 1)
+            {
+                castle_cache_prefetch_extent_lock(in_tree1->data_ext_fs.ext_id);
+                castle_cache_prefetch_extent_lock(in_tree2->data_ext_fs.ext_id);
+            }
             ret = castle_da_merge_unit_do(merge, units_cnt);
+            if (level == 1)
+            {
+                castle_cache_prefetch_extent_unlock(in_tree1->data_ext_fs.ext_id);
+                castle_cache_prefetch_extent_unlock(in_tree2->data_ext_fs.ext_id);
+            }
             perf_end("m-%02d-unit", level);
 #ifdef CASTLE_PERF_DEBUG
             /* Print & reset performance stats. */
