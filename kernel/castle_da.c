@@ -15,6 +15,12 @@
 #include "castle_sysfs.h"
 #include "castle_objects.h"
 
+//#define CASTLE_PERF_DEBUG
+#ifdef CASTLE_PERF_DEBUG
+#define ts_delta_ns(a, b)         (timespec_to_ns(&a) - timespec_to_ns(&b))
+#endif
+//#endif
+
 //#define DEBUG
 #ifndef DEBUG
 #define debug(_f, ...)            ((void)0)
@@ -266,6 +272,9 @@ static void castle_ct_immut_iter_next_node_find(c_immut_iter_t *iter, c_ext_pos_
 {
     struct castle_btree_node *node;
     c2_block_t *c2b;
+#ifdef CASTLE_PERF_DEBUG
+    struct timespec ts_start, ts_end;
+#endif
      
     debug("Looking for next node starting with "cep_fmt_str_nl, cep2str(cep));
     BUG_ON(iter->next_c2b);
@@ -276,13 +285,30 @@ static void castle_ct_immut_iter_next_node_find(c_immut_iter_t *iter, c_ext_pos_
         if(c2b)
             put_c2b(c2b);
         /* Get cache block for the current c2b */
+#ifdef CASTLE_PERF_DEBUG
+        getnstimeofday(&ts_start);
+#endif
         c2b = castle_cache_block_get(cep, iter->btree->node_size); 
+#ifdef CASTLE_PERF_DEBUG
+        getnstimeofday(&ts_end);
+        /* Update time spent obtaining c2bs. */
+        iter->tree->get_c2b_ns += ts_delta_ns(ts_end, ts_start);
+#endif
         debug("Node in immut iter.\n");
         castle_cache_block_advise(c2b, C2B_PREFETCH_FRWD);
         write_lock_c2b(c2b);
         /* If c2b is not up to date, issue a blocking READ to update */
         if(!c2b_uptodate(c2b))
+        {
+#ifdef CASTLE_PERF_DEBUG
+            getnstimeofday(&ts_start);
+#endif
             BUG_ON(submit_c2b_sync(READ, c2b));
+#ifdef CASTLE_PERF_DEBUG
+            getnstimeofday(&ts_end);
+            iter->tree->bt_c2bsync_ns += ts_delta_ns(ts_end, ts_start);
+#endif
+        }
         write_unlock_c2b(c2b);
         node = c2b_bnode(c2b);
         if(castle_ct_immut_iter_next_node_init(iter, node))
@@ -1200,6 +1226,9 @@ struct castle_da_merge {
     c_ext_fs_t                    tree_ext_fs;
     c_ext_fs_t                    data_ext_fs;
     struct list_head              large_objs;
+#ifdef CASTLE_PERF_DEBUG
+    u64                           get_c2b_ns;       /**< ns in castle_cache_block_get() */
+#endif
 };
 
 #define MAX_IOS             (1000) /* Arbitrary constants */
@@ -1478,6 +1507,10 @@ static c_val_tup_t castle_da_medium_obj_copy(struct castle_da_merge *merge,
     c_val_tup_t new_cvt;
     uint32_t i, nr_blocks;
     c2_block_t *s_c2b, *c_c2b;
+#ifdef CASTLE_PERF_DEBUG
+    struct castle_component_tree *tree;
+    struct timespec ts_start, ts_end;
+#endif
 
     old_cep = old_cvt.cep;
     /* Old cvt needs to be a medium object. */
@@ -1504,17 +1537,41 @@ static c_val_tup_t castle_da_medium_obj_copy(struct castle_da_merge *merge,
     /* Do the actual copy. */
     debug("Copying "cep_fmt_str" to "cep_fmt_str_nl,
             cep2str(old_cep), cep2str(new_cep));
+#ifdef CASTLE_PERF_DEBUG
+    /* Figure out which tree to update stats for. */
+    if (old_cep.ext_id == merge->in_tree1->data_ext_fs.ext_id)
+        tree = merge->in_tree1;
+    else
+        tree = merge->in_tree2;
+#endif
     for(i=0; i<nr_blocks; i++)
     {
         /* Get the block, and schedule prefetch asap. */
+
+#ifdef CASTLE_PERF_DEBUG
+        getnstimeofday(&ts_start);
+#endif
         s_c2b = castle_cache_page_block_get(old_cep);
+        c_c2b = castle_cache_page_block_get(new_cep);
+#ifdef CASTLE_PERF_DEBUG
+        getnstimeofday(&ts_end);
+        tree->get_c2b_ns += ts_delta_ns(ts_end, ts_start);
+#endif
         castle_cache_block_advise(s_c2b, C2B_PREFETCH_FRWD);
-        c_c2b = castle_cache_page_block_get(new_cep); 
         /* Make sure that we lock _after_ prefetch call. */
         write_lock_c2b(s_c2b);
         write_lock_c2b(c_c2b);
         if(!c2b_uptodate(s_c2b))
+        {
+#ifdef CASTLE_PERF_DEBUG
+            getnstimeofday(&ts_start);
+#endif
             BUG_ON(submit_c2b_sync(READ, s_c2b));
+#ifdef CASTLE_PERF_DEBUG
+            getnstimeofday(&ts_end);
+            tree->data_c2bsync_ns += ts_delta_ns(ts_end, ts_start);
+#endif
+        }
         update_c2b(c_c2b);
         memcpy(c2b_buffer(c_c2b), c2b_buffer(s_c2b), PAGE_SIZE);
         dirty_c2b(c_c2b);
@@ -1541,7 +1598,6 @@ static inline void castle_da_entry_add(struct castle_da_merge *merge,
     struct castle_btree_node *node;
     int key_cmp;
 
-
     /* Deal with medium and large objects first. For medium objects, we need to copy them
        into our new medium object extent. For large objects, we need to save the aggregate
        size. plus take refs to extents? */
@@ -1562,6 +1618,9 @@ static inline void castle_da_entry_add(struct castle_da_merge *merge,
     if(!level->node_c2b)
     {
         c_ext_pos_t  cep;
+#ifdef CASTLE_PERF_DEBUG
+        struct timespec ts_start, ts_end;
+#endif
         
         if(merge->root_depth < depth)
         {
@@ -1579,7 +1638,14 @@ static inline void castle_da_entry_add(struct castle_da_merge *merge,
                                  &cep) < 0);
         debug("Got "cep_fmt_str_nl, cep2str(cep));
 
+#ifdef CASTLE_PERF_DEBUG
+        getnstimeofday(&ts_start);
+#endif
         level->node_c2b = castle_cache_block_get(cep, btree->node_size);
+#ifdef CASTLE_PERF_DEBUG
+        getnstimeofday(&ts_end);
+        merge->get_c2b_ns += ts_delta_ns(ts_end, ts_start);
+#endif
         debug("Locking the c2b, and setting it up to date.\n");
         write_lock_c2b(level->node_c2b);
         update_c2b(level->node_c2b);
@@ -2382,6 +2448,9 @@ static struct castle_da_merge* castle_da_merge_init(struct castle_double_array *
     merge->tree_ext_fs.ext_id = INVAL_EXT_ID;
     merge->data_ext_fs.ext_id = INVAL_EXT_ID;
     INIT_LIST_HEAD(&merge->large_objs);
+#ifdef CASTLE_PERF_DEBUG
+    merge->get_c2b_ns        = 0;
+#endif
 
     ret = castle_da_iterators_create(merge);
     if(ret)
@@ -2452,12 +2521,37 @@ static int castle_da_merge_run(void *da_p)
         
         /* Do the merge. */
         do {
+#ifdef CASTLE_PERF_DEBUG
+            u64 ns;
+#endif
             /* Wait until we are allowed to do next unit of merge. */
             units_cnt = castle_da_merge_units_inc_return(da, level);
             /* Do the unit. */
             perf_start("m-%02d-unit", level);
             ret = castle_da_merge_unit_do(merge, units_cnt);
             perf_end("m-%02d-unit", level);
+#ifdef CASTLE_PERF_DEBUG
+            /* Print & reset performance stats. */
+
+            /* Aggregate c2b_sync() time. */
+//            ns = in_tree1->bt_c2bsync_ns + in_tree2->bt_c2bsync_ns
+//                + in_tree1->data_c2bsync_ns + in_tree2->data_c2bsync_ns;
+//            perf_value(ns, "m-%02d-c2b_sync_wait_ns", level);
+
+            /* Btree c2b_sync() time. */
+            ns = in_tree1->bt_c2bsync_ns + in_tree2->bt_c2bsync_ns;
+            perf_value(ns, "m-%02d-bt_c2b_sync_wait_ns", level);
+            in_tree1->bt_c2bsync_ns = in_tree2->bt_c2bsync_ns = 0;
+
+            /* Data c2b_sync() time. */
+            ns = in_tree1->data_c2bsync_ns + in_tree2->data_c2bsync_ns;
+            perf_value(ns, "m-%02d-data_c2b_sync_wait_ns", level);
+            in_tree1->data_c2bsync_ns = in_tree2->data_c2bsync_ns = 0;
+
+            /* castle_cache_block_get() time. */
+            perf_value(merge->get_c2b_ns, "m-%02d-get_c2b_ns", level);
+            merge->get_c2b_ns = 0;
+#endif
             /* Exit on errors. */
             if(ret < 0)
                 goto merge_failed;
@@ -3335,6 +3429,11 @@ static struct castle_component_tree* castle_ct_alloc(struct castle_double_array 
     ct->data_ext_fs.ext_id = INVAL_EXT_ID;
     ct->last_key           = NULL;
     mutex_init(&ct->last_key_mutex);
+#ifdef CASTLE_PERF_DEBUG
+    ct->bt_c2bsync_ns   = 0;
+    ct->data_c2bsync_ns = 0;
+    ct->get_c2b_ns      = 0;
+#endif
 
     return ct;
 }
