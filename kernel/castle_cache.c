@@ -2388,10 +2388,10 @@ static void c2_pref_c2b_destroy(c2_block_t *c2b)
 }
 
 /**
- * Demote c2bs between the start of the window and cep.
+ * Perform operations on c2bs that fall off front of prefetch window.
  *
- * @param window    Prefetch window whose c2bs to demote.
- * @param cep       c2bs prior to this offset to demote.
+ * @param window    Prefetch window to operate on.
+ * @param cep       c2bs prior to this offset will be operated on.
  *
  * Get the prefetch c2bs we used in this window.  This covers a range from
  * start_off to the chunk that cep.offset lies within.  We're moving the
@@ -2404,37 +2404,34 @@ static void c2_pref_c2b_destroy(c2_block_t *c2b)
  * b) perform the same steps we do here to verify they still exist within
  * the cache.
  */
-static void c2_pref_window_demote(c2_pref_window_t *window, c_ext_pos_t cep)
+static void c2_pref_window_falloff(c2_pref_window_t *window, c_ext_pos_t cep)
 {
-    c_ext_pos_t get_cep;
-    int i;
-    uint64_t pages;
+    c2_block_t *c2b;
+    int total_pages, pages;
 
-    if (window->cur_c2b)
+    /* cep must be within the window. */
+    BUG_ON(cep.offset < window->start_off);
+    BUG_ON(cep.offset > window->end_off);
+
+    cep.offset = CHUNK(cep.offset) * C_CHK_SIZE;
+    total_pages = (cep.offset - window->start_off) >> PAGE_SHIFT;
+
+    while (total_pages > 0)
     {
-        pref_debug_mstore("Window CHUNK(start_off) = %lld, CHUNK(end_off) = %lld, "
-                "CHUNK(cep.offset) = %lld\n", CHUNK(window->start_off),
-                CHUNK(window->end_off), CHUNK(cep.offset));
-        get_cep.ext_id = cep.ext_id;
-        get_cep.offset = window->start_off;
-        pages = (C_CHK_SIZE - CHUNK_OFFSET(window->start_off)) >> PAGE_SHIFT;
-        if (castle_cache_block_hash_demote(get_cep, pages))
-            pref_debug_mstore("Demoted cur_c2b chunk %lld\n", CHUNK(get_cep.offset));
+        if (total_pages >= BLKS_PER_CHK)
+            pages = BLKS_PER_CHK;
         else
-            pref_debug_mstore("Unable to demote cur_c2b chunk %lld (not found)\n",
-                    CHUNK(get_cep.offset));
+            pages = total_pages;
+        total_pages -= pages;
 
-        for (i = CHUNK(window->start_off) + 1; i < CHUNK(cep.offset); i++)
-        {
-            get_cep.offset = i * C_CHK_SIZE;
-            castle_cache_block_hash_demote(get_cep, 256);
-            if (castle_cache_block_hash_demote(get_cep, pages))
-                pref_debug_mstore("Demoted chunk %lld\n",
-                        CHUNK(get_cep.offset));
-            else
-                pref_debug_mstore("Unable to demote chunk %lld (not found)\n",
-                        CHUNK(get_cep.offset));
-        }
+        cep.offset -= pages * PAGE_SIZE;
+//        printk("CHUNK_OFFSET(cep.offset) == %llx\n", CHUNK_OFFSET(cep.offset));
+
+        /** @FIXME we should have a castle_cache_block_get_dont_create() */
+        c2b = castle_cache_block_get(cep, pages);
+        unsoftpin_c2b(c2b);
+        put_c2b(c2b);
+        castle_cache_block_hash_demote(cep, C_CHK_SIZE);
     }
 }
 
@@ -2455,6 +2452,7 @@ static void c2_pref_window_demote(c2_pref_window_t *window, c_ext_pos_t cep)
  *
  * @return See c2_pref_submit()
  *
+ * @also c2_pref_window_falloff()
  * @also c2_pref_window_remove()
  * @also set_c2b_prefetch()
  * @also c2_pref_submit()
@@ -2471,8 +2469,8 @@ static int c2_pref_window_advance(c2_pref_window_t *window, c_ext_pos_t cep, c2_
     BUG_ON(CHUNK_OFFSET(window->end_off) != 0); /* should be chunk aligned */
     pref_debug_mstore("Advancing %s\n", c2_pref_window_to_str(window));
 
-    /* Demote c2bs that will fall off the front when we advance the window. */
-    c2_pref_window_demote(window, cep);
+    /* Unsoftpin and demote c2bs that fall off the front of the window. */
+    c2_pref_window_falloff(window, cep);
 
     /* Update the window's start offset and calculate number of pages
      * to prefetch. */
