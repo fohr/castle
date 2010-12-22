@@ -98,11 +98,13 @@ void castle_vmap_fast_map_fini(void)
     }
 }
 
+#define DUMMY_PAGE_SHIFT 15 /* Max number of vmap pages we can back per dummy page */
+
 static castle_vmap_freelist_t *castle_vmap_freelist_init(int slot_size, int slots)
 {
-    int                     nr_vmap_array_pages;
+    int                     nr_vmap_array_pages, nr_dummy_pages;
     struct page             **pgs_array;
-    struct page             *dummy_page;
+    struct page             **dummy_pages;
     castle_vmap_freelist_t  *castle_vmap_freelist;
     int i;
 
@@ -115,27 +117,38 @@ static castle_vmap_freelist_t *castle_vmap_freelist_init(int slot_size, int slot
        each entry. For n entries of size p this is (n * p) + n - 1 pages */
     nr_vmap_array_pages = (slots * slot_size + slots - 1);
     pgs_array = castle_vmalloc(nr_vmap_array_pages * sizeof(struct page *));
-
     if(!pgs_array)
         goto errout_2;
+
+    /* Due to a restriction on early versions of xen, there is a limit to the number of times
+       a page can be used as backing for a vmap (dummy pages). We will use each dummy page a
+       maximum of 1<<DUMMY_PAGE_SHIFT times to workaround this limit */
+    nr_dummy_pages = (nr_vmap_array_pages>>DUMMY_PAGE_SHIFT) + 1;
+    dummy_pages = castle_vmalloc(nr_dummy_pages * sizeof(struct page *));
+    if(!dummy_pages)
+        goto errout_3;
+    memset(dummy_pages, 0, nr_dummy_pages * sizeof(struct page *));
 
     /* Freelist contains one slot per mapping, plus one extra as an end-of-freelist marker */
     castle_vmap_freelist->freelist = castle_vmalloc((slots + 1) * sizeof(uint32_t)); 
 
     if(!castle_vmap_freelist->freelist)
-        goto errout_3;
+        goto errout_4;
 
     memset(castle_vmap_freelist->freelist, 0xFA, (slots + 1) * sizeof(uint32_t));
 
     castle_vmap_freelist->slots_free = 0;
 
-    /* Populate the pages in pgs_array. This can be any arbitrary page - they are only used to allow
-       vmap() to create us a vm area, and we subsequently unmap them all anyway. */
-    dummy_page = alloc_page(GFP_KERNEL);
-    if (!dummy_page)
-        goto errout_4;
+    /* Populate the pages in pgs_array. This can be any arbitrary 'dummy' page - they are only
+       used to allow vmap() to create us a vm area, and we subsequently unmap them all anyway. */
+    for (i=0;i<nr_dummy_pages;i++)
+    {
+        dummy_pages[i] = alloc_page(GFP_KERNEL);
+        if (!dummy_pages[i])
+            goto errout_5;
+    }
     for (i=0; i<nr_vmap_array_pages; i++)
-        pgs_array[i] = dummy_page;
+        pgs_array[i] = dummy_pages[i>>DUMMY_PAGE_SHIFT];
 
     castle_vmap_freelist->vstart = vmap(pgs_array, nr_vmap_array_pages,
                     VM_READ|VM_WRITE, PAGE_KERNEL);
@@ -158,16 +171,22 @@ static castle_vmap_freelist_t *castle_vmap_freelist_init(int slot_size, int slot
     for(i=0; i<slots; i++)
         castle_vmap_freelist_add(castle_vmap_freelist, i);
 
-    castle_vfree(pgs_array);
+    for (i=0;i<nr_dummy_pages;i++)
+        __free_page(dummy_pages[i]);
 
-    __free_page(dummy_page);
+    castle_vfree(dummy_pages);
+
+    castle_vfree(pgs_array);
 
     return castle_vmap_freelist;
 
 errout_5:
-    __free_page(dummy_page);
-errout_4:
+    for (i=0;i<nr_dummy_pages;i++)
+        if (dummy_pages[i])
+            __free_page(dummy_pages[i]);
     castle_vfree(castle_vmap_freelist->freelist);
+errout_4:
+    castle_vfree(dummy_pages);
 errout_3:
     castle_vfree(pgs_array);
 errout_2:
