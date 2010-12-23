@@ -398,6 +398,7 @@ static int castle_ct_immut_iter_has_next(c_immut_iter_t *iter)
         iter->completed = 1;
         BUG_ON(!iter->curr_c2b);
         put_c2b(iter->curr_c2b);
+        iter->curr_c2b = NULL;
 
         return 0;
     }
@@ -419,12 +420,22 @@ static void castle_ct_immut_iter_init(c_immut_iter_t *iter)
     castle_ct_immut_iter_next_node(iter);
 }
 
+static void castle_ct_immut_iter_cancel(c_immut_iter_t *iter)
+{
+    debug("Cancelling immut enumerator for ct id=%d\n", iter->tree->seq);
+    if (iter->curr_c2b)
+        put_c2b(iter->curr_c2b);
+    if (iter->next_c2b)
+        put_c2b(iter->next_c2b);
+}
+
 struct castle_iterator_type castle_ct_immut_iter = {
     .register_cb = NULL,
     .prep_next   = NULL,
     .has_next    = (castle_iterator_has_next_t)castle_ct_immut_iter_has_next,
     .next        = (castle_iterator_next_t)    castle_ct_immut_iter_next,
     .skip        = NULL,
+    .cancel      = (castle_iterator_cancel_t)castle_ct_immut_iter_cancel,
 };
 
 typedef struct castle_modlist_iterator {
@@ -651,7 +662,10 @@ static void castle_ct_modlist_iter_heapsort(c_modlist_iter_t *iter)
 static void castle_ct_modlist_iter_free(c_modlist_iter_t *iter)
 {
     if(iter->enumerator)
+    {
+        castle_ct_immut_iter.cancel(iter->enumerator);
         castle_free(iter->enumerator);
+    }
     if(iter->node_buffer)
         castle_vfree(iter->node_buffer);
     if(iter->sort_idx)
@@ -1385,8 +1399,9 @@ static void castle_da_iterator_destroy(struct castle_component_tree *tree,
         castle_free(iter);
     } else
     {
-        /* For static trees, we are using immut iterator. It's enough to free it */
+        /* For static trees, we are using immut iterator. */
         /* TODO: do we need to do better resource release here? */
+        castle_ct_immut_iter_cancel(iter);
         castle_free(iter);
     }
 }
