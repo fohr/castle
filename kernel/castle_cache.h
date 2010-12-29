@@ -95,13 +95,11 @@ static inline void put_c2b(c2_block_t *c2b)
 /**********************************************************************************************
  * Advising the cache. 
  */
-typedef uint32_t c2b_advise_t;
-#define C2B_PREFETCH_FRWD    ((c2b_advise_t)0x00000001)
-#define C2B_PREFETCH_BACK    ((c2b_advise_t)0x00000002)
-int castle_cache_block_advise (c2_block_t *c2b, c2b_advise_t advise);
-/** @FIXME make these advise targets */
-void castle_cache_prefetch_extent_lock (c_ext_id_t ext_id);
-void castle_cache_prefetch_extent_unlock (c_ext_id_t ext_id);
+typedef uint32_t c2b_advise_t; 
+#define C2B_PREFETCH_FRWD    ((c2b_advise_t)0x00000001) 
+#define C2B_PREFETCH_BACK    ((c2b_advise_t)0x00000002) 
+int castle_cache_block_advise (c2_block_t *c2b, c2b_advise_t advise); 
+
 
 /**********************************************************************************************
  * Misc. 
