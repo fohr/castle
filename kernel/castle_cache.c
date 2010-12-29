@@ -49,6 +49,7 @@ enum c2b_state_bits {
     C2B_flushing,
     C2B_prefetch,
     C2B_transient,
+    C2B_softpin,
 };
 
 #define INIT_C2B_BITS (0)
@@ -84,6 +85,8 @@ TAS_C2B_FNS(flushing, flushing)
 C2B_FNS(prefetch, prefetch)
 C2B_FNS(transient, transient)
 TAS_C2B_FNS(transient, transient)
+C2B_FNS(softpin, softpin)
+TAS_C2B_FNS(softpin, softpin)
 
 /* c2p encapsulates multiple memory pages (in order to reduce overheads).
    NOTE: In order for this to work, c2bs must necessarily be allocated in
@@ -253,10 +256,14 @@ static struct hlist_head      *castle_cache_page_hash = NULL;
 
 static               LIST_HEAD(castle_cache_dirtylist);
 static               LIST_HEAD(castle_cache_cleanlist);
+static atomic_t                castle_cache_cleanlist_size;         /**< Blocks on the cleanlist    */
+static atomic_t                castle_cache_cleanlist_softpin_size; /**< Softpin blocks on cleanlist*/
+static atomic_t                castle_cache_block_victims;          /**< #clean blocks evicted      */
+static atomic_t                castle_cache_softpin_block_victims;  /**< #softpin blocks evicted    */
 static atomic_t                castle_cache_dirty_pages;
 static atomic_t                castle_cache_clean_pages;
 
-static         DEFINE_SPINLOCK(castle_cache_freelist_lock); /* Lock for the two freelists below */
+static         DEFINE_SPINLOCK(castle_cache_freelist_lock); /**< Lock for the two freelists below */
 static int                     castle_cache_page_freelist_size;
 static               LIST_HEAD(castle_cache_page_freelist);
 static int                     castle_cache_block_freelist_size;
@@ -290,8 +297,15 @@ static void c2_pref_c2b_destroy(c2_block_t *c2b);
 /**********************************************************************************************
  * Core cache. 
  */
+
+/**
+ * Report various cache statistics.
+ *
+ * @also castle_cache_stats_timer_tick()
+ */
 void castle_cache_stats_print(int verbose)
 {
+    int count;
     int reads = atomic_read(&castle_cache_read_stats);
     int writes = atomic_read(&castle_cache_write_stats);
     atomic_sub(reads, &castle_cache_read_stats);
@@ -306,12 +320,26 @@ void castle_cache_stats_print(int verbose)
     perf_value(atomic_read(&castle_cache_dirty_pages), "dirty_pgs");
     perf_value(atomic_read(&castle_cache_clean_pages), "clean_pgs");
     perf_value(castle_cache_page_freelist_size * PAGES_PER_C2P, "free_pgs");
+    perf_value(castle_cache_block_freelist_size, "free_blks");
+    perf_value(atomic_read(&castle_cache_cleanlist_size), "clean_blks");
+    perf_value(atomic_read(&castle_cache_cleanlist_softpin_size), "softpin_blks");
+    count = atomic_read(&castle_cache_block_victims);
+    atomic_sub(count, &castle_cache_block_victims);
+    perf_value(count, "victim_blks");
+    count = atomic_read(&castle_cache_softpin_block_victims);
+    atomic_sub(count, &castle_cache_softpin_block_victims);
+    perf_value(count, "victim_softpins");
     perf_value(reads, "reads");
     perf_value(writes, "writes");
 }
 
 EXPORT_SYMBOL(castle_cache_stats_print);
 
+/**
+ * Tick handler for cache stats.
+ *
+ * @also castle_cache_stats_print()
+ */
 static void castle_cache_stats_timer_tick(unsigned long foo)
 {
     BUG_ON(castle_cache_stats_timer_interval <= 0);
@@ -326,8 +354,8 @@ static void castle_cache_stats_timer_tick(unsigned long foo)
 
 static int c2p_write_locked(c2_page_t *c2p)
 {
-    struct rw_semaphore *sem; 
-    unsigned long flags;                                                                               
+    struct rw_semaphore *sem;
+    unsigned long flags;
     int ret;
 
     sem = &c2p->lock;
@@ -341,8 +369,8 @@ static int c2p_write_locked(c2_page_t *c2p)
 #ifdef CASTLE_DEBUG
 static USED int c2p_read_locked(c2_page_t *c2p)
 {
-    struct rw_semaphore *sem; 
-    unsigned long flags;                                                                               
+    struct rw_semaphore *sem;
+    unsigned long flags;
     int ret;
 
     sem = &c2p->lock;
@@ -541,7 +569,16 @@ int c2b_locked(c2_block_t *c2b)
 }
 
 /**
- * Mark c2b and associated c2ps dirty.
+ * Mark c2b and associated c2ps dirty and place on dirtylist.
+ *
+ * @param c2b   c2b to mark as dirty.
+ *
+ * - Remove c2b from cleanlist
+ *   (also occurs when we free blocks in hash_clean())
+ * - Place c2b on dirtylist
+ * - Update cleanlist accounting.
+ *
+ * @also castle_cache_block_hash_clean()
  */
 void dirty_c2b(c2_block_t *c2b)
 {
@@ -555,27 +592,58 @@ void dirty_c2b(c2_block_t *c2b)
     for(i=0; i<nr_c2ps; i++)
         dirty_c2p(c2b->c2ps[i]);
 
-    spin_lock_irqsave(&castle_cache_block_hash_lock, flags);
-    list_move_tail(&c2b->dirty, &castle_cache_dirtylist);
-    set_c2b_dirty(c2b); 
-    spin_unlock_irqrestore(&castle_cache_block_hash_lock, flags);
+    if (!c2b_dirty(c2b))
+    {
+        spin_lock_irqsave(&castle_cache_block_hash_lock, flags);
+
+        list_move_tail(&c2b->dirty, &castle_cache_dirtylist);
+        /* Cleanlist accounting. */
+        BUG_ON(atomic_read(&castle_cache_cleanlist_size) <= 0);
+        atomic_dec(&castle_cache_cleanlist_size);
+        if (c2b_softpin(c2b))
+            atomic_dec(&castle_cache_cleanlist_softpin_size);
+        set_c2b_dirty(c2b);
+
+        spin_unlock_irqrestore(&castle_cache_block_hash_lock, flags);
+    }
 }
 
+/**
+ * Mark c2b and associated c2ps clean and place on cleanlist.
+ *
+ * @param c2b   c2b to mark as clean.
+ *
+ * - Remove c2b from dirtylist
+ * - Place c2b on cleanlist
+ *   (also occurs in hash_insert() for new c2bs)
+ * - Update cleanlist accounting.
+ *
+ * @also castle_cache_block_hash_insert()
+ * @also I/O callback handlers (callers)
+ */
 static void clean_c2b(c2_block_t *c2b)
 {
     unsigned long flags;
     int i, nr_c2ps;
 
+    BUG_ON(!c2b_locked(c2b));
+    BUG_ON(!c2b_dirty(c2b));
+
     /* Clean all c2ps. */
     nr_c2ps = castle_cache_pages_to_c2ps(c2b->nr_pages);
     for(i=0; i<nr_c2ps; i++)
         clean_c2p(c2b->c2ps[i]);
+
     /* Clean the c2b. */
     spin_lock_irqsave(&castle_cache_block_hash_lock, flags);
-    BUG_ON(!c2b_locked(c2b));
-    BUG_ON(!c2b_dirty(c2b));
+
     list_move_tail(&c2b->clean, &castle_cache_cleanlist);
+    /* Cleanlist accounting. */
+    atomic_inc(&castle_cache_cleanlist_size);
+    if (c2b_softpin(c2b))
+        atomic_inc(&castle_cache_cleanlist_softpin_size);
     clear_c2b_dirty(c2b); 
+
     spin_unlock_irqrestore(&castle_cache_block_hash_lock, flags);
 }
 
@@ -584,6 +652,7 @@ void update_c2b(c2_block_t *c2b)
     int i, nr_c2ps;
     
     BUG_ON(!c2b_write_locked(c2b));
+
     /* Update all c2ps. */
     nr_c2ps = castle_cache_pages_to_c2ps(c2b->nr_pages);
     for(i=0; i<nr_c2ps; i++)
@@ -595,6 +664,48 @@ void update_c2b(c2_block_t *c2b)
     }
     /* Finally set the entire c2b uptodate. */
     set_c2b_uptodate(c2b);
+}
+
+/**
+ * Softpin a c2b in the cache.
+ *
+ * - Set softpin bit
+ * - Do necessary cleanlist accounting
+ *
+ * @also c2_pref_submit() (our primary caller)
+ */
+static void softpin_c2b(c2_block_t *c2b)
+{
+    if (test_set_c2b_softpin(c2b) == EXIT_SUCCESS)
+    {
+        /* Softpin bit is now set. */
+
+        if (!c2b_dirty(c2b))
+            atomic_inc(&castle_cache_cleanlist_softpin_size);
+    }
+    /* else softpin bit was already set */
+}
+
+/**
+ * Unsoftpin a c2b from the cache.
+ *
+ * - Clears the softpin bit on c2b
+ * - Does cleanlist accounting if necessary
+ *
+ * @warning Call this function ONLY to unsoftpin an active block.  This is not
+ *          to be called when freeing a block or to handle softpin accounting.
+ */
+static void unsoftpin_c2b(c2_block_t *c2b)
+{
+    if (test_clear_c2b_softpin(c2b) != EXIT_SUCCESS)
+    {
+        /* Softpin bit is now cleared. */
+        BUG_ON(atomic_read(&castle_cache_cleanlist_softpin_size) <= 0);
+
+        if (!c2b_dirty(c2b))
+            atomic_dec(&castle_cache_cleanlist_softpin_size);
+    }
+    /* else softpin bit was not set */
 }
 
 struct bio_info {
@@ -1224,23 +1335,39 @@ static inline int castle_cache_block_hash_demote(c_ext_pos_t cep,
     return _castle_cache_block_hash_get(cep, nr_pages, 0) ? 1 : 0;
 }
 
+/**
+ * Insert a clean block into the hash.
+ *
+ * - Insert the block into the hash
+ * - Cleanlist accounting
+ *
+ * @warning The block must not be dirty.
+ *
+ * @return >0   on success
+ * @return  0   on failure
+ */
 static int castle_cache_block_hash_insert(c2_block_t *c2b, int transient)
 {
     int idx, success;
 
     spin_lock_irq(&castle_cache_block_hash_lock);
+
     /* Check if already in the hash */
     success = 0;
     if(castle_cache_block_hash_find(c2b->cep, c2b->nr_pages)) goto out;
+
     /* Insert */
     success = 1;
     idx = castle_cache_block_hash_idx(c2b->cep);
     hlist_add_head(&c2b->hlist, &castle_cache_block_hash[idx]);
     BUG_ON(c2b_dirty(c2b));
+    BUG_ON(c2b_softpin(c2b));
     if (transient)
         list_add(&c2b->clean, &castle_cache_cleanlist);
     else
         list_add_tail(&c2b->clean, &castle_cache_cleanlist);
+    /* Cleanlist accounting. */
+    atomic_inc(&castle_cache_cleanlist_size);
 out:
     spin_unlock_irq(&castle_cache_block_hash_lock);
     return success;
@@ -1253,6 +1380,9 @@ static inline void __castle_cache_page_freelist_add(c2_page_t *c2p)
     castle_cache_page_freelist_size++;
 }
 
+/**
+ * Add block to the freelist and do freelist accounting.
+ */
 static inline void __castle_cache_block_freelist_add(c2_block_t *c2b)
 {
     list_add_tail(&c2b->free, &castle_cache_block_freelist);
@@ -1303,6 +1433,12 @@ static c2_page_t** castle_cache_page_freelist_get(int nr_pages)
     return c2ps;
 }
 
+/**
+ * Get a c2b from the freelist.
+ *
+ * @return c2b from freelist.
+ * @return NULL if the freelist is empty.
+ */
 static c2_block_t* castle_cache_block_freelist_get(void)
 {
     struct list_head *lh;
@@ -1386,6 +1522,12 @@ static int castle_cache_pages_get(c_ext_pos_t cep,
     return all_uptodate;
 }
 
+/**
+ * Initialises a c2b to meet cep, nr_pages.
+ *
+ * NOTE: c2b passed in could have come from the freelist so it is necessary
+ * to fully initialise all fields.
+ */
 static void castle_cache_block_init(c2_block_t *c2b,
                                     c_ext_pos_t cep, 
                                     c2_page_t **c2ps,
@@ -1438,12 +1580,25 @@ static void castle_cache_block_init(c2_block_t *c2b,
     BUG_ON(!c2b->buffer);
 }
 
+/**
+ * Return clean c2b to the freelist.
+ *
+ * @param c2b   c2b to go to the freelist
+ *
+ * - Unmap buffer (linear mapping of pages)
+ * - Destroy any associated prefetch window
+ * - Drop reference on each c2p
+ * - Place on the freelist
+ */
 static void castle_cache_block_free(c2_block_t *c2b)
 {
     struct list_head *lh, *lt;
     LIST_HEAD(freed_c2ps);
     c2_page_t *c2p, **c2ps;
     int i, nr_c2ps;
+
+    BUG_ON(c2b_locked(c2b));
+    BUG_ON(atomic_read(&c2b->count) != 0);
 
     nr_c2ps = castle_cache_pages_to_c2ps(c2b->nr_pages);
     if (c2b->nr_pages > 1)
@@ -1466,6 +1621,7 @@ static void castle_cache_block_free(c2_block_t *c2b)
     /* For prefetch c2bs call their deallocator function. */
     if(c2b_prefetch(c2b))
         c2_pref_c2b_destroy(c2b);
+
     /* Add the pages back to the freelist */
     spin_lock(&castle_cache_page_hash_lock);
     for(i=0; i<nr_c2ps; i++)
@@ -1499,40 +1655,75 @@ static inline int c2b_busy(c2_block_t *c2b)
            c2b_locked(c2b);
 }
 
+/**
+ * Return c2bs (and associated c2ps) from the cleanlist to the freelist.
+ *
+ * @FIXME describe the algorithm
+ * @FIXME describe the softpin algorithm
+ */
 static int castle_cache_block_hash_clean(void)
 {
-#define BATCH_FREE 200
-    
+#define MAX_SOFTPIN_RATIO   (3/4)
+#define BATCH_FREE          200
+
     struct list_head *lh, *th;
     struct hlist_node *le, *te;
     HLIST_HEAD(victims);
     c2_block_t *c2b;
-    int nr_victims, nr_pages;
+    int nr_victims, nr_pages, softpin;
+
+    /* Determine whether to victimise softpinned blocks. */
+    softpin = atomic_read(&castle_cache_cleanlist_softpin_size);
+    if (softpin <= (atomic_read(&castle_cache_cleanlist_size) * MAX_SOFTPIN_RATIO))
+        softpin = 0;
+    /* else softpin > 0 */
 
     spin_lock_irq(&castle_cache_block_hash_lock);
     /* Find victim buffers. */ 
     nr_victims = 0;
     nr_pages = 0;
+search:
     list_for_each_safe(lh, th, &castle_cache_cleanlist)
     {
         c2b = list_entry(lh, c2_block_t, clean);
         nr_pages += c2b->nr_pages;
         /* Note: Pinning all logical extent pages in cache. Make sure cache is 
          * big enough. 
-         * TODO: gm281: this is temporary solution. Introduce pools to deal with the
+         * @TODO: gm281: this is temporary solution. Introduce pools to deal with the
          * issue properly.
          */
-        if(!c2b_busy(c2b) && (c2b_transient(c2b) || !LOGICAL_EXTENT(c2b->cep.ext_id))) 
+//        if(!c2b_busy(c2b) && (c2b_transient(c2b) || !LOGICAL_EXTENT(c2b->cep.ext_id)))
+        if (!c2b_busy(c2b)
+                && (softpin || !c2b_softpin(c2b))
+                && (c2b_transient(c2b) || !LOGICAL_EXTENT(c2b->cep.ext_id)))
         {
-            debug("Found a victim.\n");
+            debug("Found a %svictim.\n", c2b_softpin(c2b) ? "softpin " : "");
+
             hlist_del(&c2b->hlist);
             list_del(&c2b->clean);
             hlist_add_head(&c2b->hlist, &victims);
+
+            /* Cleanlist accounting and victimisation stats. */
+            BUG_ON(atomic_read(&castle_cache_cleanlist_size) == 0);
+            atomic_dec(&castle_cache_cleanlist_size);
+            if (c2b_softpin(c2b))
+            {
+                atomic_dec(&castle_cache_cleanlist_softpin_size);
+                atomic_inc(&castle_cache_softpin_block_victims);
+            }
+            else
+                atomic_inc(&castle_cache_block_victims);
             nr_victims++;
         }
+        // @FIXME all !softpinned blocks are busy, what happens
         
         if(nr_victims > BATCH_FREE)
             break;
+    }
+    if (!softpin && nr_victims < BATCH_FREE)
+    {
+        softpin = 1;
+        goto search;
     }
     spin_unlock_irq(&castle_cache_block_hash_lock);
 
@@ -1562,6 +1753,14 @@ static int castle_cache_block_hash_clean(void)
     return 1;
 }
 
+/**
+ * Grow the freelists until we have nr_c2bs and nr_pages free.
+ *
+ * @param nr_c2bs   Minimum number of c2bs we need freed up
+ * @param nr_pages  Minimum number of pages we need freed up
+ *
+ * @also castle_cache_block_hash_clean()
+ */
 static void castle_cache_freelists_grow(int nr_c2bs, int nr_pages)
 {
     int flush_seq, success = 0;
@@ -1592,11 +1791,17 @@ static void castle_cache_freelists_grow(int nr_c2bs, int nr_pages)
     debug("Grown the list.\n");
 }
 
+/**
+ * Grow castle_cache_block_freelist by (a minimum of) one block.
+ */
 static inline void castle_cache_block_freelist_grow(void)
 {
     castle_cache_freelists_grow(1, 0);
 }
 
+/**
+ * Grow castle_cache_page_freelist_size by nr_pages/PAGES_PER_C2P.
+ */
 static inline void castle_cache_page_freelist_grow(int nr_pages)
 {
     castle_cache_freelists_grow(0, nr_pages);
@@ -1688,6 +1893,11 @@ c2_block_t* _castle_cache_block_get(c_ext_pos_t cep, int nr_pages, int transient
     }
 }
 
+/**
+ * Get block starting at cep, size nr_pages.
+ *
+ * @return  Block matching cep, nr_pages.
+ */
 c2_block_t* castle_cache_block_get(c_ext_pos_t cep, int nr_pages)
 {
     return _castle_cache_block_get(cep, nr_pages, 0);
@@ -1763,16 +1973,17 @@ c2_block_t* castle_cache_block_get(c_ext_pos_t cep, int nr_pages)
  *      c2_pref_submit()
  *          // issues chunk-aligned I/O
  */
-#define PREF_WINDOW_NEW             (0x01)            /* Window is new, no IO has been sched yet. */ 
-#define PREF_WINDOW_DEAD            (0x02)            /* Set when the alloc ref is dropped.       */
-#define PREF_WINDOW_FORWARD         (0x04)            /* Prefetching forwards or backwards.       */
-#define PREF_WINDOW_INSERTED        (0x08)            /* Is the window inserted into the rbtree.  */
-#define PREF_WINDOW_ADAPTIVE        (0x10)            /* Whether this is an adaptive window.      */
-#define PREF_ADAPTIVE                                 /* Enable adaptive prefetching.             */
-#define PREF_CHUNKS                 4                 /* #chunks to non-adaptive prefetch.        */
-#define PREF_ADAP_INITIAL_CHUNKS    1                 /* Initial #chunks to adaptive prefetch.    */
-#define PREF_ADAP_MAX_CHUNKS        16                /* Maximum #chunks to adaptive prefetch.    */
-#define PREF_ADVANCE_THRESHOLD      4                 /* #chunks from end before we prefetch.     */
+#define PREF_WINDOW_NEW             (0x01)          /**< Window is new, no IO has been sched yet. */
+#define PREF_WINDOW_DEAD            (0x02)          /**< Set when the alloc ref is dropped.       */
+#define PREF_WINDOW_FORWARD         (0x04)          /**< Prefetching forwards or backwards.       */
+#define PREF_WINDOW_INSERTED        (0x08)          /**< Is the window inserted into the rbtree.  */
+#define PREF_WINDOW_ADAPTIVE        (0x10)          /**< Whether this is an adaptive window.      */
+#define PREF_WINDOW_SOFTPIN         (0x20)          /**< Keep c2bs in cache if possible.          */
+#define PREF_ADAPTIVE                               /**< Enable adaptive prefetching.             */
+#define PREF_CHUNKS                 4               /**< #chunks to non-adaptive prefetch.        */
+#define PREF_ADAP_INITIAL_CHUNKS    1               /**< Initial #chunks to adaptive prefetch.    */
+#define PREF_ADAP_MAX_CHUNKS        16              /**< Maximum #chunks to adaptive prefetch.    */
+#define PREF_ADVANCE_THRESHOLD      4               /**< #chunks from end before we prefetch.     */
 #define PREF_ADAP_MAX_PAGES         PREF_ADAP_MAX_CHUNKS * BLKS_PER_CHK
 #define PREF_ADAP_INITIAL_PAGES     PREF_ADAP_INITIAL_CHUNKS * BLKS_PER_CHK
 #define PREF_PAGES                  PREF_CHUNKS * BLKS_PER_CHK
@@ -2163,6 +2374,7 @@ static c2_pref_window_t * c2_pref_window_alloc(c2_pref_window_t *window,
 #else
     window->pref_pages  = PREF_PAGES;
 #endif
+    window->state      |= PREF_WINDOW_SOFTPIN;
     window->adv_thresh  = PREF_ADVANCE_THRESHOLD;
     mutex_init(&window->lock);
     atomic_set(&window->count, 2); /* Window gets destroyed when the refcount reaches 0,
@@ -2304,6 +2516,11 @@ static int c2_pref_submit(c2_pref_window_t *window, int pages)
         pref_debug_mstore("Scheduling read for chunk %d (of %d) from extent %d\n",
             (int)CHUNK(cep.offset), (int)castle_extent_size_get(cep.ext_id), (int)cep.ext_id);
         write_lock_c2b(c2b);
+
+        if (window->state & PREF_WINDOW_SOFTPIN)
+            /* @FIXME have concept of 'level'? */
+            softpin_c2b(c2b);
+
         c2b->end_io = c2_pref_io_end;
         BUG_ON(submit_c2b(READ, c2b));
     }
@@ -2388,6 +2605,55 @@ static void c2_pref_c2b_destroy(c2_block_t *c2b)
 }
 
 /**
+ * Perform operations on c2bs that fall off front of prefetch window.
+ *
+ * @param window    Prefetch window to operate on.
+ * @param cep       c2bs prior to this offset will be operated on.
+ *
+ * Get the prefetch c2bs we used in this window.  This covers a range from
+ * start_off to the chunk that cep.offset lies within.  We're moving the
+ * window forward we should let the cache know we're done with these c2bs.
+ * cur_c2b may no longer be allocated, but we can check that it existed.
+ *
+ * It may seem more sensible to store the prefetch c2bs within the window.
+ * In fact this method would require that we either: a) hold a reference,
+ * thereby preventing the c2bs from being freed under memory pressure; or
+ * b) perform the same steps we do here to verify they still exist within
+ * the cache.
+ */
+static void c2_pref_window_falloff(c2_pref_window_t *window, c_ext_pos_t cep)
+{
+    c2_block_t *c2b;
+    int total_pages, pages;
+
+    /* cep must be within the window. */
+    BUG_ON(cep.offset < window->start_off);
+    BUG_ON(cep.offset > window->end_off);
+
+    cep.offset = CHUNK(cep.offset) * C_CHK_SIZE;
+    total_pages = (cep.offset - window->start_off) >> PAGE_SHIFT;
+
+    while (total_pages > 0)
+    {
+        if (total_pages >= BLKS_PER_CHK)
+            pages = BLKS_PER_CHK;
+        else
+            pages = total_pages;
+        total_pages -= pages;
+
+        cep.offset -= pages * PAGE_SIZE;
+//        printk("CHUNK_OFFSET(cep.offset) == %llx\n", CHUNK_OFFSET(cep.offset));
+
+        if ((c2b = castle_cache_block_hash_get(cep, pages)))
+        {
+            unsoftpin_c2b(c2b);
+            put_c2b(c2b);
+            castle_cache_block_hash_demote(cep, C_CHK_SIZE);
+        }
+    }
+}
+
+/**
  * Advance the window and kick off prefetch I/O.
  *
  * - Inform cache that old prefetch blocks are no longer needed
@@ -2404,6 +2670,7 @@ static void c2_pref_c2b_destroy(c2_block_t *c2b)
  *
  * @return See c2_pref_submit()
  *
+ * @also c2_pref_window_falloff()
  * @also c2_pref_window_remove()
  * @also set_c2b_prefetch()
  * @also c2_pref_submit()
@@ -2412,7 +2679,6 @@ static int c2_pref_window_advance(c2_pref_window_t *window, c_ext_pos_t cep, c2_
 {
     c2_block_t *c2b;
     c_ext_pos_t get_cep;
-    int i;
     uint64_t pages;
 
     BUG_ON(!mutex_is_locked(&window->lock));
@@ -2421,42 +2687,8 @@ static int c2_pref_window_advance(c2_pref_window_t *window, c_ext_pos_t cep, c2_
     BUG_ON(CHUNK_OFFSET(window->end_off) != 0); /* should be chunk aligned */
     pref_debug_mstore("Advancing %s\n", c2_pref_window_to_str(window));
 
-    /* Get the prefetch c2bs we used in this window.  This covers a range from
-     * start_off to the chunk that cep.offset lies within.  We're moving the
-     * window forward we should let the cache know we're done with these c2bs.
-     * cur_c2b may no longer be allocated, but we can check that it existed.
-     *
-     * It may seem more sensible to store the prefetch c2bs within the window.
-     * In fact this method would require that we either: a) hold a reference,
-     * thereby preventing the c2bs from being freed under memory pressure; or
-     * b) perform the same steps we do here to verify they still exist within
-     * the cache. */
-    if (window->cur_c2b)
-    {
-        pref_debug_mstore("Window CHUNK(start_off) = %lld, CHUNK(end_off) = %lld, "
-                "CHUNK(cep.offset) = %lld\n", CHUNK(window->start_off),
-                CHUNK(window->end_off), CHUNK(cep.offset));
-        get_cep.ext_id = cep.ext_id;
-        get_cep.offset = window->start_off;
-        pages = (C_CHK_SIZE - CHUNK_OFFSET(window->start_off)) >> PAGE_SHIFT;
-        if (castle_cache_block_hash_demote(get_cep, pages))
-            pref_debug_mstore("Demoted cur_c2b chunk %lld\n", CHUNK(get_cep.offset));
-        else
-            pref_debug_mstore("Unable to demote cur_c2b chunk %lld (not found)\n",
-                    CHUNK(get_cep.offset));
-
-        for (i = CHUNK(window->start_off) + 1; i < CHUNK(cep.offset); i++)
-        {
-            get_cep.offset = i * C_CHK_SIZE;
-            castle_cache_block_hash_demote(get_cep, 256);
-            if (castle_cache_block_hash_demote(get_cep, pages))
-                pref_debug_mstore("Demoted chunk %lld\n",
-                        CHUNK(get_cep.offset));
-            else
-                pref_debug_mstore("Unable to demote chunk %lld (not found)\n",
-                        CHUNK(get_cep.offset));
-        }
-    }
+    /* Unsoftpin and demote c2bs that fall off the front of the window. */
+    c2_pref_window_falloff(window, cep);
 
     /* Update the window's start offset and calculate number of pages
      * to prefetch. */
@@ -2493,6 +2725,10 @@ static int c2_pref_window_advance(c2_pref_window_t *window, c_ext_pos_t cep, c2_
     c2b = castle_cache_block_get(get_cep,
             (C_CHK_SIZE - CHUNK_OFFSET(window->start_off)) >> PAGE_SHIFT);
     set_c2b_prefetch(c2b);
+    /** @FIXME c2_pref_submit() should get this same c2b.  this means it will
+     * also set_c2b_prefetch() (and softpin, if necessary).  this needs
+     * verifying in practise but we might also take advantage of this fact and
+     * have c2_pref_submit() return cur_c2b for us. */
     *c2b_p = c2b;
 
     /* Start the prefetch. */
@@ -2703,6 +2939,69 @@ static int c2_pref_new_window_schedule(c2_pref_window_t *window, c_ext_pos_t cep
 }
 
 /**
+ * Lock c2bs covering extent to prevent them being evicted from cache.
+ *
+ * @param ext_id    The extent to lock
+ *
+ * @also castle_cache_prefetch_extent_unlock()
+ */
+void castle_cache_prefetch_extent_lock(c_ext_id_t ext_id)
+{
+    c2_block_t *c2b;
+    c_ext_pos_t cep;
+    int chunks;
+
+    /* Initialise cep. */
+    cep.ext_id = ext_id;
+    cep.offset = 0;
+
+    /* Get number of chunks in extent. */
+    chunks = castle_extent_size_get(cep.ext_id);
+
+    while (chunks > 0)
+    {
+        /* Get block, lock it and update offset. */
+        c2b = castle_cache_block_get(cep, 256);
+        cep.offset += 256 * PAGE_SIZE;
+        chunks--;
+    }
+}
+
+/**
+ * Unlock c2bs covering extent to allow them to be evicted from cache.
+ *
+ * @param ext_id    The extent to unlock
+ *
+ * @warning The extent must previously have been locked with
+ *          castle_cache_prefetch_extent_unlock().
+ *
+ * @also castle_cache_prefetch_extent_lock()
+ */
+void castle_cache_prefetch_extent_unlock(c_ext_id_t ext_id)
+{
+    c2_block_t *c2b;
+    c_ext_pos_t cep;
+    int chunks;
+
+    /* Initialise cep. */
+    cep.ext_id = ext_id;
+    cep.offset = 0;
+
+    /* Get number of chunks in extent. */
+    chunks = castle_extent_size_get(cep.ext_id);
+
+    while (chunks > 0)
+    {
+        /* Get block, lock it and update offset. */
+        c2b = castle_cache_block_get(cep, 256);
+        put_c2b(c2b);
+        put_c2b(c2b); /* will cause problems if they weren't prefetch-locked. */
+        cep.offset += 256 * PAGE_SIZE;
+        chunks--;
+    }
+}
+
+/**
  * Advise prefetcher of intention to begin read.
  *
  * This is the main entry point into the prefetcher.
@@ -2809,6 +3108,18 @@ static void castle_cache_flush_endio(c2_block_t *c2b)
     wake_up(&castle_cache_flush_wq);
 }
 
+/**
+ * Flush dirty c2bs (c2ps) out to disk.
+ *
+ * - kthread runs periodically, or woken up via castle_cache_flush_wakeup().
+ * - Dirty blocks are passed to submit_c2b() for I/O.
+ * - I/O callback handler subsequently marks blocks as clean.
+ *
+ * @FIXME provide more detail on this function
+ *
+ * @also castle_cache_flush_wakeup()
+ * @also submit_c2b()
+ */
 static int castle_cache_flush(void *unused)
 {
     int target_dirty_pgs, to_flush, flush_size, dirty_pgs, batch_idx, exiting, i;
@@ -2830,7 +3141,7 @@ static int castle_cache_flush(void *unused)
     for(;;)
     {
         /* We know that we should flush everything out, and exit when cache_fini()
-           asked us to stop. */ 
+           asked us to stop. */
         exiting = kthread_should_stop();
         /* Wait for 95% of IOs to complete (or all of them if we are exiting). 
            When exiting, we need to wait for all the IO, because otherwise we may
@@ -3046,6 +3357,11 @@ static int castle_cache_hashes_init(void)
     return 0;
 }
 
+/**
+ * Release all items and tear down hashes.
+ *
+ * - All items should have 0 reference counts (anything else indicates a leak).
+ */
 static void castle_cache_hashes_fini(void)
 {
     struct hlist_node *l, *t;
@@ -3076,12 +3392,20 @@ static void castle_cache_hashes_fini(void)
                     printk("Locked from: %s:%d\n", c2b->file, c2b->line);
 #endif
             }
+            BUG_ON(c2b_dirty(c2b));
 
-            BUG_ON(c2b_locked(c2b));
-            BUG_ON(atomic_read(&c2b->count) != 0);
+            /* Cleanlist accounting. */
+            atomic_dec(&castle_cache_cleanlist_size);
+            if (c2b_softpin(c2b))
+                atomic_dec(&castle_cache_cleanlist_softpin_size);
+
             castle_cache_block_free(c2b);
         }
     }
+
+    /* Ensure cleanlist accounting is in order. */
+    BUG_ON(atomic_read(&castle_cache_cleanlist_size) != 0);
+    BUG_ON(atomic_read(&castle_cache_cleanlist_softpin_size) != 0);
 
 #ifdef CASTLE_DEBUG
     /* All cache pages should have been removed from the hash by now (there are no c2bs left) */
@@ -3096,7 +3420,6 @@ static void castle_cache_hashes_fini(void)
             BUG();
         } 
     }
-
 #endif
 }
 
@@ -3213,7 +3536,7 @@ static void castle_cache_freelists_fini(void)
 }
 
 /**********************************************************************************************
- * Generic storage functionality for (usually small) persisted data (e.g. versions in 
+ * Generic storage functionality for (usually small) persistent data (e.g. versions in
  * version tree, double arrays).
  */
 #define CASTLE_MSTORE_ENTRY_DELETED     (1<<1)
@@ -3404,10 +3727,14 @@ struct castle_mstore_iter* castle_mstore_iterate(struct castle_mstore *store)
     return iter;
 }
 
+/**
+ * @FIXME needs a concise description.
+ *
+ * NOTE: Needs to be called with store mutex locked. Otherwise two/more racing
+ * node_adds may be generated due to the lock-free period between
+ * last_node_unused check, and node_add.
+ */
 static void castle_mstore_node_add(struct castle_mstore *store)
-/* Needs to be called with store mutex locked. Otherwise two/more racing node_adds may 
-   be generated due to the lock-free period between last_node_unused check, and 
-   node_add. */
 {
     struct castle_mlist_node *node, *prev_node;
     struct castle_fs_superblock *fs_sb;
@@ -3896,6 +4223,10 @@ int castle_cache_init(void)
     atomic_set(&castle_cache_dirty_pages, 0);
     atomic_set(&castle_cache_clean_pages, 0);
     atomic_set(&castle_cache_flush_seq, 0);
+    atomic_set(&castle_cache_cleanlist_size, 0);
+    atomic_set(&castle_cache_cleanlist_softpin_size, 0);
+    atomic_set(&castle_cache_block_victims, 0);
+    atomic_set(&castle_cache_softpin_block_victims, 0);
 
     if((ret = castle_cache_hashes_init()))    goto err_out;
     if((ret = castle_cache_freelists_init())) goto err_out; 
@@ -3914,6 +4245,9 @@ err_out:
     return ret;
 }
 
+/**
+ * Tear down the castle cache.
+ */
 void castle_cache_fini(void)
 {
     castle_cache_debug_fini();
@@ -3929,4 +4263,3 @@ void castle_cache_fini(void)
     if(castle_cache_blks)       castle_vfree(castle_cache_blks);
     if(castle_cache_pgs)        castle_vfree(castle_cache_pgs);
 }
-
