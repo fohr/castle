@@ -4,7 +4,9 @@
 #include <linux/types.h>
 #include <asm/ioctl.h>
 
-#define CASTLE_PROTOCOL_VERSION 3
+#define CASTLE_PROTOCOL_VERSION 4
+
+#define PACKED               __attribute__((packed))
 
 #ifndef __KERNEL__
 #define PAGE_SIZE 4096
@@ -38,6 +40,56 @@ typedef enum {
     LAST_ENV_VAR_ID,
 } c_env_var_t; 
 
+typedef enum {
+    TRACE_CACHE_ID,
+    TRACE_MERGE_ID,
+    TRACE_MERGE_UNIT_ID,
+} c_trace_id_t;
+
+typedef enum {
+    TRACE_CACHE_DIRTY_PGS_ID,
+    TRACE_CACHE_CLEAN_PGS_ID,
+    TRACE_CACHE_FREE_PGS_ID,
+    TRACE_CACHE_READS_ID,
+    TRACE_CACHE_WRITES_ID,
+} c_trc_cache_var_id_t;
+
+typedef struct castle_trace_cache_event {
+    c_trc_cache_var_id_t var_id;
+    uint32_t             var_val;
+} PACKED c_trc_cache_evt_t;
+
+#define MERGE_START_FLAG    (1U<<0)
+#define MERGE_END_FLAG      (1U<<1)
+typedef struct castle_trace_merge_event {
+    uint32_t da;
+    uint8_t  level;
+    uint8_t  flags;
+    uint32_t tree_id1;
+    uint32_t tree_id2;
+} PACKED c_trc_mrg_evt_t;
+
+typedef struct castle_trace_merge_unit_event {
+    uint32_t da;
+    uint8_t  level;
+    uint8_t  flags;
+    uint64_t unit;
+} PACKED c_trc_mrg_unit_evt_t;
+
+/* Bump the magic version byte (LSB) when c_trc_evt_t changes. */
+#define CASTLE_TRACE_MAGIC          0xCAE5E100
+typedef struct castle_trace_event {
+    uint32_t                    magic;
+    struct timeval              timestamp;
+    c_trace_id_t                id;
+    int                         cpu;
+    union {
+        c_trc_cache_evt_t       cache;
+        c_trc_mrg_evt_t         merge;
+        c_trc_mrg_unit_evt_t    merge_unit;
+    };
+} PACKED c_trc_evt_t;
+
 typedef uint32_t transfer_id_t;
 typedef uint32_t slave_uuid_t;
 typedef uint32_t collection_id_t;
@@ -70,8 +122,11 @@ typedef uint32_t version_t;
 #define CASTLE_CTRL_PROTOCOL_VERSION         21
 #define CASTLE_CTRL_FAULT                    22
 #define CASTLE_CTRL_ENVIRONMENT_SET          23
+#define CASTLE_CTRL_TRACE_SETUP              24
+#define CASTLE_CTRL_TRACE_START              25
+#define CASTLE_CTRL_TRACE_STOP               26
+#define CASTLE_CTRL_TRACE_TEARDOWN           27
 
-#define PACKED               __attribute__((packed))
 typedef struct castle_control_cmd_claim {
     uint32_t     dev;          /* IN  */
     int          ret;          /* OUT */
@@ -169,6 +224,24 @@ typedef struct castle_control_cmd_fault {
     int       ret;             /* OUT */
 } PACKED cctrl_cmd_fault_t;
 
+typedef struct castle_control_cmd_trace_setup {
+    const char *dir_str;       /* IN  */
+    size_t      dir_len;       /* IN  */
+    int         ret;           /* OUT */
+} PACKED cctrl_cmd_trace_setup_t;
+
+typedef struct castle_control_cmd_trace_start {
+    int         ret;           /* OUT */
+} PACKED cctrl_cmd_trace_start_t;
+
+typedef struct castle_control_cmd_trace_stop {
+    int         ret;           /* OUT */
+} PACKED cctrl_cmd_trace_stop_t;
+
+typedef struct castle_control_cmd_trace_teardown {
+    int         ret;           /* OUT */
+} PACKED cctrl_cmd_trace_teardown_t;
+
 typedef struct castle_control_ioctl {
     uint16_t cmd;
     union {
@@ -195,6 +268,12 @@ typedef struct castle_control_ioctl {
         cctrl_cmd_environment_set_t     environment_set;
 
         cctrl_cmd_fault_t               fault;
+
+        cctrl_cmd_trace_setup_t         trace_setup;
+        cctrl_cmd_trace_start_t         trace_start;
+        cctrl_cmd_trace_stop_t          trace_stop;
+        cctrl_cmd_trace_teardown_t      trace_teardown;
+
     };
 } PACKED cctrl_ioctl_t;
 
@@ -242,6 +321,14 @@ enum {
         _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_ENVIRONMENT_SET, cctrl_ioctl_t),
     CASTLE_CTRL_FAULT_IOCTL =
         _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_FAULT, cctrl_ioctl_t),
+    CASTLE_CTRL_TRACE_SETUP_IOCTL =
+        _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_TRACE_SETUP, cctrl_ioctl_t),
+    CASTLE_CTRL_TRACE_START_IOCTL =
+        _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_TRACE_START, cctrl_ioctl_t),
+    CASTLE_CTRL_TRACE_STOP_IOCTL =
+        _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_TRACE_STOP, cctrl_ioctl_t),
+    CASTLE_CTRL_TRACE_TEARDOWN_IOCTL =
+        _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_TRACE_TEARDOWN, cctrl_ioctl_t),
 };
 
 /*
