@@ -12,6 +12,7 @@
 #include "castle_cache.h"
 #include "castle_vmap.h"
 #include "castle_debug.h"
+#include "castle_trace.h"
 #include "castle_utils.h"
 #include "castle_btree.h"
 #include "castle_extent.h"
@@ -303,11 +304,11 @@ void castle_cache_stats_print(int verbose)
             atomic_read(&castle_cache_clean_pages),
             castle_cache_page_freelist_size * PAGES_PER_C2P,
             reads, writes);
-    perf_value(atomic_read(&castle_cache_dirty_pages), "dirty_pgs");
-    perf_value(atomic_read(&castle_cache_clean_pages), "clean_pgs");
-    perf_value(castle_cache_page_freelist_size * PAGES_PER_C2P, "free_pgs");
-    perf_value(reads, "reads");
-    perf_value(writes, "writes");
+    castle_trace_cache(TRACE_CACHE_CLEAN_PGS_ID, atomic_read(&castle_cache_clean_pages));
+    castle_trace_cache(TRACE_CACHE_DIRTY_PGS_ID, atomic_read(&castle_cache_dirty_pages));
+    castle_trace_cache(TRACE_CACHE_FREE_PGS_ID,  castle_cache_page_freelist_size * PAGES_PER_C2P);
+    castle_trace_cache(TRACE_CACHE_READS_ID,     reads);
+    castle_trace_cache(TRACE_CACHE_WRITES_ID,    writes);
 }
 
 EXPORT_SYMBOL(castle_cache_stats_print);
@@ -318,7 +319,6 @@ static void castle_cache_stats_timer_tick(unsigned long foo)
 
     printk("castle_cache_stats_timer_tick: ");
     castle_cache_stats_print(1);
-    printk("\n");
 
     setup_timer(&castle_cache_stats_timer, castle_cache_stats_timer_tick, 0);
     mod_timer(&castle_cache_stats_timer, jiffies + (HZ * castle_cache_stats_timer_interval));
@@ -2782,6 +2782,7 @@ void castle_cache_debug(void)
                "       #dirty_pgs=%d, #clean_pgs=%d, #freelist_pgs=%d\n",
                 dirty, clean, free);
     }
+    castle_cache_stats_print(1);
 }
 
 void castle_cache_debug_fini(void)

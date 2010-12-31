@@ -419,14 +419,18 @@ no_timelines:
     }
 }
 
-void castle_time_init(void)
+int castle_time_init(void)
 {
     time_thread = kthread_run(castle_time_run, NULL, "castle-perf-debug");
-    BUG_ON(!time_thread);
+    if(!time_thread)
+        return -ENOMEM;
+
     atomic_set(&castle_checkpoint_create_seq, 0);
     castle_checkpoint_collisions_print = 1;
     castle_checkpoint_seq = 0;
     memset(castle_checkpoint_stats, 0, sizeof(castle_checkpoint_stats));
+
+    return 0;
 }
 
 void castle_time_fini(void)

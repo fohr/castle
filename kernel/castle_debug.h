@@ -39,7 +39,7 @@ void  castle_debug_bvec_update(c_bvec_t *c_bvec, unsigned long state_flag);
 void  castle_debug_bvec_btree_walk(c_bvec_t *c_bvec);
 void  castle_debug_bio_register(c_bio_t *c_bio, uint32_t version, int nr_cbvecs);
 void  castle_debug_bio_deregister(c_bio_t *c_bio);
-void  castle_debug_init(void);
+int   castle_debug_init(void);
 void  castle_debug_fini(void);
 
 #else /* !CASTLE_DEBUG */
@@ -48,7 +48,7 @@ void  castle_debug_fini(void);
 #define castle_debug_bvec_btree_walk(_a)  ((void)0) 
 #define castle_debug_bio_register(_a, _b, _c)  ((void)0)
 #define castle_debug_bio_deregister(_a)          ((void)0)
-#define castle_debug_init()               ((void)0)
+#define castle_debug_init()               (0)
 #define castle_debug_fini()               ((void)0)
 #define castle_malloc(_s, _f)             kmalloc(_s, _f)
 #define castle_zalloc(_s, _f)             kzalloc(_s, _f)

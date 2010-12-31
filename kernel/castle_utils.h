@@ -311,39 +311,6 @@ static USED void check_stack_usage(void)
 }
 #endif
 
-#ifdef CASTLE_PERF_DEBUG
-#define perf_event(_f, _a...)  do {                                                          \
-                                  struct timeval time;                                       \
-                                  do_gettimeofday(&time);                                    \
-                                  printk("***mark("_f", %ld, %ld)\n",                        \
-                                      ##_a, time.tv_sec, time.tv_usec);                      \
-                               } while(0)
-#define perf_start(_f, _a...)  do {                                                          \
-                                  struct timeval time;                                       \
-                                  do_gettimeofday(&time);                                    \
-                                  printk("***start("_f", %ld, %ld)\n",                        \
-                                      ##_a, time.tv_sec, time.tv_usec);                      \
-                               } while(0)
-#define perf_end(_f, _a...)  do {                                                          \
-                                  struct timeval time;                                       \
-                                  do_gettimeofday(&time);                                    \
-                                  printk("***end("_f", %ld, %ld)\n",                        \
-                                      ##_a, time.tv_sec, time.tv_usec);                      \
-                               } while(0)
-#define perf_value(_val, _f, _a...)  do {                                                    \
-                                        struct timeval time;                                 \
-                                        do_gettimeofday(&time);                              \
-                                        printk("***value("_f", %ld, %ld, %ld)\n",            \
-                                            ##_a, (long)_val, time.tv_sec, time.tv_usec);    \
-                                     } while(0)
-
-#else
-#define perf_event(_f, ...)    ((void)0)
-#define perf_value(_f, ...)    ((void)0)
-#define perf_start(_f, ...)    ((void)0)
-#define perf_end(_f, ...)    ((void)0)
-#endif
-
 void inline list_swap(struct list_head *t1, struct list_head *t2);
 void        list_sort(struct list_head *list, 
                       int (*compare)(struct list_head *l1, struct list_head *l2));

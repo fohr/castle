@@ -12,6 +12,7 @@
 #include "castle_extent.h"
 #include "castle_ctrl.h"
 #include "castle_da.h"
+#include "castle_trace.h"
 #include "castle_sysfs.h"
 #include "castle_objects.h"
 
@@ -2292,17 +2293,19 @@ static inline void castle_da_merge_intermediate_unit_complete(struct castle_doub
     castle_da_unlock(da);
 }
 
-static inline int castle_da_merge_last_unit_complete(struct castle_double_array *da, 
-                                                     int level, 
-                                                     struct castle_da_merge *merge)
+static inline tree_seq_t castle_da_merge_last_unit_complete(struct castle_double_array *da, 
+                                                            int level, 
+                                                            struct castle_da_merge *merge)
 {
     struct castle_component_tree *out_tree;
     struct castle_merge_token *token;
+    tree_seq_t out_tree_id;
     
     out_tree = castle_da_merge_complete(merge);
     if(!out_tree)
-        return -EINVAL;
+        return INVAL_TREE;
 
+    out_tree_id = out_tree->seq;
     /* If we succeeded at creating the last tree, remove the in_trees, and add the out_tree.
        All under appropriate locks. */
     CASTLE_TRANSACTION_BEGIN;
@@ -2341,7 +2344,7 @@ static inline int castle_da_merge_last_unit_complete(struct castle_double_array 
     CASTLE_TRANSACTION_END;
     castle_da_merge_restart(da, NULL);
 
-    return 0;
+    return out_tree_id;
 } 
 
 static struct castle_da_merge* castle_da_merge_init(struct castle_double_array *da,
@@ -2421,6 +2424,7 @@ static int castle_da_merge_run(void *da_p)
     struct list_head *l;
     uint32_t units_cnt;
     int level, ret, ignore;
+    tree_seq_t out_tree_id;
 
     /* Work out the level at which we are supposed to be doing merges.
        Do that by working out where is this thread in threads array. */
@@ -2455,7 +2459,7 @@ static int castle_da_merge_run(void *da_p)
         BUG_ON(!in_tree1 || !in_tree2);
             
         debug_merges("Doing merge, trees=[%u]+[%u]\n", in_tree1->seq, in_tree2->seq);
-        perf_start("m-%02d", level);
+        castle_trace_merge_start(da->id, level, in_tree1->seq, in_tree2->seq);
         merge = castle_da_merge_init(da, level, in_tree1, in_tree2);
         if(!merge)
         {
@@ -2466,13 +2470,14 @@ static int castle_da_merge_run(void *da_p)
         }
         
         /* Do the merge. */
+        out_tree_id = INVAL_TREE;
         do {
             /* Wait until we are allowed to do next unit of merge. */
             units_cnt = castle_da_merge_units_inc_return(da, level);
             /* Do the unit. */
-            perf_start("m-%02d-unit", level);
+            castle_trace_merge_unit_start(da->id, level, units_cnt);
             ret = castle_da_merge_unit_do(merge, units_cnt);
-            perf_end("m-%02d-unit", level);
+            castle_trace_merge_unit_finish(da->id, level, units_cnt);
             /* Exit on errors. */
             if(ret < 0)
                 goto merge_failed;
@@ -2484,10 +2489,11 @@ static int castle_da_merge_run(void *da_p)
         } while(ret);
 
         /* Finish tha last unit, packaging the output tree. */
-        ret = castle_da_merge_last_unit_complete(da, level, merge);
+        out_tree_id = castle_da_merge_last_unit_complete(da, level, merge);
+        ret = TREE_INVAL(out_tree_id) ? -ENOMEM : 0;
 merge_failed:
         castle_da_merge_dealloc(merge, ret);
-        perf_end("m-%02d", level);
+        castle_trace_merge_finish(da->id, level, out_tree_id);
         debug_merges("Done merge.\n");
         if(ret)
         {

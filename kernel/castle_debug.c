@@ -398,11 +398,13 @@ static void castle_debug_watches_free(void)
     }
 }
 
-void castle_debug_init(void)
+int castle_debug_init(void)
 {
     int i;
 
     debug_thread = kthread_run(castle_debug_run, NULL, "castle-debug");
+    if(!debug_thread)
+        return -ENOMEM;
    
     /* Try to allocate buffers for watched pages */
     watched_data = castle_zalloc(sizeof(struct page*) * nr_watches, GFP_KERNEL); 
@@ -413,11 +415,13 @@ void castle_debug_init(void)
         if(!watched_data[i]) goto alloc_failed;
         castle_debug_buffer_init(watched_data[i]);
     }
-    return;
+    return 0;
 
 alloc_failed:    
     printk("Failed to allocate buffers for debug watches.\n");
     castle_debug_watches_free();
+
+    return -ENOMEM;
 }
 
 void castle_debug_fini(void)

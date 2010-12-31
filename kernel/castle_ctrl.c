@@ -15,6 +15,7 @@
 #include "castle_events.h"
 #include "castle_back.h"
 #include "castle_ctrl.h"
+#include "castle_trace.h"
 
 //#define DEBUG
 #ifndef DEBUG
@@ -496,6 +497,26 @@ void castle_control_fault(uint32_t fault, int *ret)
     castle_fault = fault;
 }
 
+void castle_control_trace_setup(char *dir, int *ret)
+{
+    *ret = castle_trace_setup(dir);
+}
+
+void castle_control_trace_start(int *ret)
+{
+    *ret = castle_trace_start();
+}
+
+void castle_control_trace_stop(int *ret)
+{
+    *ret = castle_trace_stop();
+}
+
+void castle_control_trace_teardown(int *ret)
+{
+    *ret = castle_trace_teardown();
+}
+
 int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
     int err;
@@ -642,6 +663,32 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
                                            &ioctl.environment_set.ret);
             break;
         }
+        case CASTLE_CTRL_TRACE_SETUP:
+        {
+            char *dir_str;
+
+            err = castle_from_user_copy( ioctl.trace_setup.dir_str,
+                                         ioctl.trace_setup.dir_len,
+                                         128,
+                                        &dir_str);
+
+            if(err)
+                goto err;
+
+            castle_control_trace_setup( dir_str,
+                                       &ioctl.trace_setup.ret);
+
+            break;
+        }
+        case CASTLE_CTRL_TRACE_START:
+            castle_control_trace_start(&ioctl.trace_start.ret);
+            break;
+        case CASTLE_CTRL_TRACE_STOP:
+            castle_control_trace_stop(&ioctl.trace_stop.ret);
+            break;
+        case CASTLE_CTRL_TRACE_TEARDOWN:
+            castle_control_trace_teardown(&ioctl.trace_teardown.ret);
+            break;
 
         default:
             err = -EINVAL;

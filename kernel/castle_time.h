@@ -39,7 +39,7 @@ void           castle_request_timeline_destroy(c_req_time_t *timeline);
     _castle_request_timeline_checkpoint_start(_ptr, __FILE__, __LINE__)
 void           castle_request_timeline_checkpoint_stop(c_req_time_t *timeline);
 
-void           castle_time_init(void);
+int            castle_time_init(void);
 void           castle_time_fini(void);
 
 #else /* !CASTLE_PERF_DEBUG */
@@ -49,7 +49,7 @@ void           castle_time_fini(void);
 #define castle_request_timeline_checkpoint_start(_a)  ((void)0)
 #define castle_request_timeline_checkpoint_stop(_a)   ((void)0)
 
-#define castle_time_init()                            ((void)0)
+#define castle_time_init()                            (0)
 #define castle_time_fini()                            ((void)0)
 
 #endif /* CASTLE_PERF_DEBUG */
