@@ -931,6 +931,22 @@ c_chk_cnt_t castle_extent_size_get(c_ext_id_t ext_id)
     return 0;
 }
 
+/**
+ * Determines whether an extent ID exists.
+ *
+ * @param   ext_id  Extent ID to check
+ *
+ * @return  1   Extent exists
+ * @return  0   No such extent
+ */
+int castle_extent_exists(c_ext_id_t ext_id)
+{
+    if (castle_extents_hash_get(ext_id))
+        return 1;
+
+    return 0;
+}
+
 static void __castle_extent_map_get(c_ext_t             *ext,
                                     c_chk_t              chk_idx,
                                     c_disk_chk_t        *chk_map)

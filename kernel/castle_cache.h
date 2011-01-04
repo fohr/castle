@@ -18,8 +18,9 @@ typedef struct castle_cache_block {
     };
                              
     unsigned long              state;
-    atomic_t                   lock_cnt;
 	atomic_t                   count;
+    atomic_t                   lock_cnt;
+    atomic_t                   softpin_cnt;
     void                     (*end_io)(struct castle_cache_block *c2b);
     void                      *private; /* Can only be used if c2b is locked */
 #ifdef CASTLE_DEBUG            
@@ -95,11 +96,37 @@ static inline void put_c2b(c2_block_t *c2b)
 /**********************************************************************************************
  * Advising the cache. 
  */
-typedef uint32_t c2b_advise_t; 
-#define C2B_PREFETCH_FRWD    ((c2b_advise_t)0x00000001) 
-#define C2B_PREFETCH_BACK    ((c2b_advise_t)0x00000002) 
-int castle_cache_block_advise (c2_block_t *c2b, c2b_advise_t advise); 
+enum c2_advise_bits {
+    C2_ADV_cep,
+    C2_ADV_extent,  /** @FIXME needs to be folded into C2_ADV_cep */
+    C2_ADV_frwd,
+    C2_ADV_back,    /** @FIXME needs to be folded into C2_ADV_frwd */
+    C2_ADV_prefetch,
+    C2_ADV_hardpin,
+    C2_ADV_softpin,
+    C2_ADV_static,
+    C2_ADV_adaptive,
+};
 
+    
+typedef uint32_t c2_advise_t;
+#define C2_ADV_CEP          ((c2_advise_t) (1<<C2_ADV_cep))
+#define C2_ADV_EXTENT       ((c2_advise_t) (1<<C2_ADV_extent))
+
+#define C2_ADV_FRWD         ((c2_advise_t) (1<<C2_ADV_frwd))
+#define C2_ADV_BACK         ((c2_advise_t) (1<<C2_ADV_back))
+
+#define C2_ADV_PREFETCH     ((c2_advise_t) (1<<C2_ADV_prefetch))
+#define C2_ADV_HARDPIN      ((c2_advise_t) (1<<C2_ADV_hardpin))
+#define C2_ADV_SOFTPIN      ((c2_advise_t) (1<<C2_ADV_softpin))
+
+#define C2_ADV_STATIC       ((c2_advise_t) (1<<C2_ADV_static))
+#define C2_ADV_ADAPTIVE     ((c2_advise_t) (1<<C2_ADV_adaptive))
+
+int castle_cache_advise (c_ext_pos_t s_cep, c2_advise_t advise, int chunks,
+                         int priority, int debug);
+int castle_cache_advise_clear (c_ext_pos_t s_cep, c2_advise_t advise, int chunks,
+                               int priority, int debug);
 
 /**********************************************************************************************
  * Misc. 

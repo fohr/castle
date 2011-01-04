@@ -25,7 +25,7 @@ static c_trc_evt_t* castle_trace_buffer_alloc(c_trace_id_t id)
     t->magic = CASTLE_TRACE_MAGIC;
     do_gettimeofday(&t->timestamp);
     t->id = id;
-    t->cpu = smp_processor_id(); 
+    t->cpu = smp_processor_id();
 
     return t;
 }
@@ -40,8 +40,8 @@ static void castle_trace_cache_event(c_trc_cache_var_id_t var_id, uint32_t var_v
     t = castle_trace_buffer_alloc(TRACE_CACHE_ID);
     if(t)
     {
-        t->cache.var_id  = var_id; 
-        t->cache.var_val = var_val; 
+        t->cache.var_id  = var_id;
+        t->cache.var_val = var_val;
     }
     local_irq_restore(flags);
 }
@@ -58,11 +58,11 @@ static void castle_trace_merge_start_event(da_id_t da,
     t = castle_trace_buffer_alloc(TRACE_MERGE_ID);
     if(t)
     {
-        t->merge.da       = da; 
-        t->merge.level    = level; 
-        t->merge.flags    = MERGE_START_FLAG; 
-        t->merge.tree_id1 = in_tree1; 
-        t->merge.tree_id2 = in_tree2; 
+        t->merge.da       = da;
+        t->merge.level    = level;
+        t->merge.flags    = MERGE_START_FLAG;
+        t->merge.tree_id1 = in_tree1;
+        t->merge.tree_id2 = in_tree2;
     }
     local_irq_restore(flags);
 }
@@ -76,10 +76,10 @@ static void castle_trace_merge_finish_event(da_id_t da, uint8_t level, tree_seq_
     t = castle_trace_buffer_alloc(TRACE_MERGE_ID);
     if(t)
     {
-        t->merge.da       = da; 
-        t->merge.level    = level; 
-        t->merge.flags    = MERGE_END_FLAG; 
-        t->merge.tree_id1 = out_tree; 
+        t->merge.da       = da;
+        t->merge.level    = level;
+        t->merge.flags    = MERGE_END_FLAG;
+        t->merge.tree_id1 = out_tree;
     }
     local_irq_restore(flags);
 }
@@ -93,10 +93,10 @@ static void castle_trace_merge_unit_start_event(da_id_t da, uint8_t level, uint6
     t = castle_trace_buffer_alloc(TRACE_MERGE_UNIT_ID);
     if(t)
     {
-        t->merge_unit.da       = da; 
-        t->merge_unit.level    = level; 
-        t->merge_unit.flags    = MERGE_START_FLAG; 
-        t->merge_unit.unit     = unit; 
+        t->merge_unit.da       = da;
+        t->merge_unit.level    = level;
+        t->merge_unit.flags    = MERGE_START_FLAG;
+        t->merge_unit.unit     = unit;
     }
     local_irq_restore(flags);
 }
@@ -110,10 +110,29 @@ static void castle_trace_merge_unit_finish_event(da_id_t da, uint8_t level, uint
     t = castle_trace_buffer_alloc(TRACE_MERGE_UNIT_ID);
     if(t)
     {
-        t->merge_unit.da       = da; 
-        t->merge_unit.level    = level; 
-        t->merge_unit.flags    = MERGE_END_FLAG; 
-        t->merge_unit.unit     = unit; 
+        t->merge_unit.da       = da;
+        t->merge_unit.level    = level;
+        t->merge_unit.flags    = MERGE_END_FLAG;
+        t->merge_unit.unit     = unit;
+    }
+    local_irq_restore(flags);
+}
+
+static void castle_trace_merge_unit_stat_event(da_id_t da, uint8_t level, uint64_t unit,
+                                               c_trc_merge_var_id_t var_id, uint32_t val)
+{
+    unsigned long flags;
+    c_trc_evt_t *t;
+
+    local_irq_save(flags);
+    t = castle_trace_buffer_alloc(TRACE_MERGE_UNIT_STAT_ID);
+    if(t)
+    {
+        t->merge_unit_stat.da      = da;
+        t->merge_unit_stat.level   = level;
+        t->merge_unit_stat.unit    = unit;
+        t->merge_unit_stat.var_id  = var_id;
+        t->merge_unit_stat.val     = val;
     }
     local_irq_restore(flags);
 }
@@ -186,10 +205,12 @@ static int castle_trace_tracepoints_register(void)
     trace_register(merge_start);
     trace_register(merge_finish);
     trace_register(merge_unit_start);
+    trace_register(merge_unit_stat);
     last_trace_register(merge_unit_finish);
 
     return 0;
 
+    trace_register_fail(merge_unit_stat);
     trace_register_fail(merge_unit_start);
     trace_register_fail(merge_finish);
     trace_register_fail(merge_start);
@@ -205,6 +226,7 @@ static void castle_trace_tracepoints_unregister(void)
     castle_trace_merge_finish_unregister(castle_trace_merge_finish_event);
     castle_trace_merge_unit_start_unregister(castle_trace_merge_unit_start_event);
     castle_trace_merge_unit_finish_unregister(castle_trace_merge_unit_finish_event);
+    castle_trace_merge_unit_stat_unregister(castle_trace_merge_unit_stat_event);
 }
 
 int castle_trace_setup(char *dir_str)

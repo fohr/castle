@@ -44,15 +44,28 @@ typedef enum {
     TRACE_CACHE_ID,
     TRACE_MERGE_ID,
     TRACE_MERGE_UNIT_ID,
+    TRACE_MERGE_UNIT_STAT_ID,
 } c_trace_id_t;
 
 typedef enum {
     TRACE_CACHE_DIRTY_PGS_ID,
     TRACE_CACHE_CLEAN_PGS_ID,
     TRACE_CACHE_FREE_PGS_ID,
+    TRACE_CACHE_FREE_BLKS_ID,
+    TRACE_CACHE_CLEAN_BLKS_ID,
+    TRACE_CACHE_SOFTPIN_BLKS_ID,
+    TRACE_CACHE_BLOCK_VICTIMS_ID,
+    TRACE_CACHE_SOFTPIN_VICTIMS_ID,
     TRACE_CACHE_READS_ID,
     TRACE_CACHE_WRITES_ID,
 } c_trc_cache_var_id_t;
+
+typedef enum {
+    TRACE_MERGE_UNIT_C2B_SYNC_WAIT_BT_NS,
+    TRACE_MERGE_UNIT_C2B_SYNC_WAIT_DATA_NS,
+    TRACE_MERGE_UNIT_GET_C2B_NS,
+    TRACE_MERGE_UNIT_DA_MEDIUM_OBJ_COPY_NS,
+} c_trc_merge_var_id_t;
 
 typedef struct castle_trace_cache_event {
     c_trc_cache_var_id_t var_id;
@@ -76,8 +89,16 @@ typedef struct castle_trace_merge_unit_event {
     uint64_t unit;
 } PACKED c_trc_mrg_unit_evt_t;
 
+typedef struct castle_trace_merge_unit_stat {
+    uint32_t da;
+    uint8_t  level;
+    uint64_t unit;
+    c_trc_merge_var_id_t var_id;
+    uint32_t val;
+} PACKED c_trc_mrg_unit_stat_t;
+
 /* Bump the magic version byte (LSB) when c_trc_evt_t changes. */
-#define CASTLE_TRACE_MAGIC          0xCAE5E100
+#define CASTLE_TRACE_MAGIC          0xCAE5E101
 typedef struct castle_trace_event {
     uint32_t                    magic;
     struct timeval              timestamp;
@@ -87,6 +108,7 @@ typedef struct castle_trace_event {
         c_trc_cache_evt_t       cache;
         c_trc_mrg_evt_t         merge;
         c_trc_mrg_unit_evt_t    merge_unit;
+        c_trc_mrg_unit_stat_t   merge_unit_stat;
     };
 } PACKED c_trc_evt_t;
 

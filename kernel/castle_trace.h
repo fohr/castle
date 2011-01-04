@@ -33,6 +33,10 @@ CASTLE_DEFINE_TRACE(merge_unit_start,
 CASTLE_DEFINE_TRACE(merge_unit_finish,
                     TPPROTO(da_id_t da, uint8_t level, uint64_t unit),
                     TPARGS(da, level, unit));
+CASTLE_DEFINE_TRACE(merge_unit_stat,
+                    TPPROTO(da_id_t da, uint8_t level, uint64_t unit,
+                        c_trc_merge_var_id_t var_id, uint32_t val),
+                    TPARGS(da, level, unit, var_id, val));
 
 int castle_trace_setup   (char *dir);
 int castle_trace_start   (void);

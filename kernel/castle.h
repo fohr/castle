@@ -219,10 +219,10 @@ static inline int EXT_POS_COMP(c_ext_pos_t cep1, c_ext_pos_t cep2)
     else
 	return 0;
 }
-#define cep_fmt_str                  "(%llu, 0x%llx)"
-#define cep_fmt_str_nl               "(%llu, 0x%llx). \n"
-#define cep2str(_off)                (_off).ext_id, BLOCK((_off).offset)
-#define __cep2str(_off)              (_off).ext_id, ((_off).offset)
+#define cep_fmt_str                  "(%llu, 0x%llx (chunk %lld chunk_off 0x%llx))"
+#define cep_fmt_str_nl               "(%llu, 0x%llx (chunk %lld chunk_off 0x%llx)).\n"
+#define cep2str(_off)                (_off).ext_id, BLOCK((_off).offset), CHUNK((_off).offset), CHUNK_OFFSET((_off).offset)
+#define __cep2str(_off)              (_off).ext_id, ((_off).offset), CHUNK((_off).offset), CHUNK_OFFSET((_off).offset)
 
 typedef struct castle_extent_freespace {
     c_ext_id_t      ext_id;
@@ -540,6 +540,11 @@ struct castle_component_tree {
     atomic64_t          large_ext_chk_cnt;
     c_vl_okey_t        *last_key;
     struct mutex        last_key_mutex;
+#ifdef CASTLE_PERF_DEBUG
+    u64                 bt_c2bsync_ns;
+    u64                 data_c2bsync_ns;
+    u64                 get_c2b_ns;
+#endif
 };
 extern struct castle_component_tree castle_global_tree;
 
