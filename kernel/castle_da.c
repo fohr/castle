@@ -103,7 +103,6 @@ static USED void castle_da_merges_print(struct castle_double_array *da);
 static int castle_da_merge_restart(struct castle_double_array *da, void *unused);
 void castle_double_array_merges_fini(void);
 static void castle_da_merge_budget_consume(struct castle_da_merge *merge);
-static void castle_da_queue_restart(struct work_struct *work);
 static void castle_da_queue_kick(struct castle_double_array *da);
 static void castle_da_bvec_start(struct castle_double_array *da, c_bvec_t *c_bvec);
 static void castle_da_get(struct castle_double_array *da);
@@ -1304,32 +1303,25 @@ static int castle_da_merge_budget_replenish(struct castle_double_array *da, void
     return 0;
 }
 
-static void castle_merge_budgets_replenish(void)
+static void castle_merge_budgets_replenish(void *unused)
 {
    castle_da_hash_iterate(castle_da_merge_budget_replenish, NULL); 
 }
 
-static void castle_da_queue_restart(struct work_struct *work)
+static int castle_da_ios_budget_replenish(struct castle_double_array *da, void *unused)
 {
-    struct castle_double_array *da = container_of(work, struct castle_double_array, queue_restart);
-
+    castle_da_get(da);
     castle_da_lock(da);
     da->ios_budget = da->ios_rate;
     castle_da_unlock(da);
 
     castle_da_queue_kick(da);
     castle_da_put(da);
-} 
-
-static int castle_da_ios_budget_replenish(struct castle_double_array *da, void *unused)
-{
-    castle_da_get(da);
-    queue_work(castle_wq, &da->queue_restart);
 
     return 0;
 }
 
-static void castle_ios_budgets_replenish(void)
+static void castle_ios_budgets_replenish(void *unused)
 {
    castle_da_hash_iterate(castle_da_ios_budget_replenish, NULL); 
 }
@@ -1339,13 +1331,16 @@ static inline void castle_da_merge_budget_io_end(struct castle_double_array *da)
     atomic_inc(&da->epoch_ios);
 }
 
+static DECLARE_WORK(merge_budgets_replenish_work, castle_merge_budgets_replenish, NULL);
+static DECLARE_WORK(ios_budgets_replenish_work, castle_ios_budgets_replenish, NULL);
+
 /************************************/
 /* Throttling timers */
 static struct timer_list throttle_timer; 
 static void castle_throttle_timer_fire(unsigned long first)
 {
-    castle_merge_budgets_replenish();
-    castle_ios_budgets_replenish();
+    schedule_work(&merge_budgets_replenish_work);
+    schedule_work(&ios_budgets_replenish_work);
     /* Reschedule ourselves */
     setup_timer(&throttle_timer, castle_throttle_timer_fire, 0);
     mod_timer(&throttle_timer, jiffies + HZ/REPLENISH_FREQUENCY);
@@ -2792,7 +2787,6 @@ static struct castle_double_array* castle_da_alloc(da_id_t da_id)
     da->ios_budget      = 0;
     da->ios_rate        = 0;
     da->last_key        = NULL;
-    CASTLE_INIT_WORK(&da->queue_restart, castle_da_queue_restart);
     atomic_set(&da->epoch_ios, 0);
     atomic_set(&da->merge_budget, 0);
     init_waitqueue_head(&da->merge_waitq);
@@ -3174,7 +3168,8 @@ static int castle_da_hash_dealloc(struct castle_double_array *da, void *unused)
 
 static void castle_da_hash_destroy(void)
 {
-   castle_da_hash_iterate(castle_da_hash_dealloc, NULL); 
+    /* No need for the lock, end-of-day stuff. */
+   __castle_da_hash_iterate(castle_da_hash_dealloc, NULL); 
    castle_free(castle_da_hash);
 }
 
