@@ -228,8 +228,9 @@ static inline int castle_cache_c2b_to_pages(c2_block_t *c2b)
 /**********************************************************************************************
  * Static variables. 
  */
-#define               CASTLE_CACHE_MIN_SIZE   25     /* In MB */ 
-static int            castle_cache_size     = 20000; /* In pages */ 
+#define               CASTLE_CACHE_MIN_SIZE         25      /* In MB */
+#define               CASTLE_CACHE_MIN_HARDPIN_SIZE 1000    /* In MB */
+static int            castle_cache_size           = 20000;  /* In pages */
 
 module_param(castle_cache_size, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
 MODULE_PARM_DESC(castle_cache_size, "Cache size");
@@ -258,6 +259,7 @@ static atomic_t                castle_cache_block_victims;          /**< #clean 
 static atomic_t                castle_cache_softpin_block_victims;  /**< #softpin blocks evicted  */
 static atomic_t                castle_cache_dirty_pages;
 static atomic_t                castle_cache_clean_pages;
+static int                     castle_cache_allow_hardpinning;      /**< Is hardpinning allowed?  */
 
 static         DEFINE_SPINLOCK(castle_cache_freelist_lock); /**< Lock for the two freelists below */
 static int                     castle_cache_page_freelist_size;
@@ -603,12 +605,12 @@ static int _unsoftpin_c2b(c2_block_t *c2b, int clear)
          * the cache and marked as softpin.  As a result we have this mess. */
         softpin_cnt = atomic_dec_return(&c2b->softpin_cnt);
         if (softpin_cnt < 0)
-            softpin_cnt = atomic_inc_return(&c2b->softpin_cnt);
+            atomic_inc(&c2b->softpin_cnt);
         /* We can't BUG_ON(softpin_cnt < 0) because between the dec and inc
          * somebody else might have done another dec! */
     }
 
-    if (!softpin_cnt)
+    if (softpin_cnt == 0)
     {
         /* We just put the last remaining softpin hold. */
         BUG_ON(atomic_read(&castle_cache_cleanlist_softpin_size) <= 0);
@@ -2727,6 +2729,7 @@ static void castle_cache_prefetch_pin(c_ext_pos_t cep, int chunks, int type)
     c2_block_t *c2b;
 
     BUG_ON(cep.offset % BLKS_PER_CHK != 0);
+    BUG_ON(type & C2_ADV_HARDPIN);
 
     while (chunks > 0)
     {
@@ -3057,6 +3060,10 @@ int castle_cache_advise(c_ext_pos_t cep, c2_advise_t advise, int chunks, int pri
 
     BUG_ON(advise & C2_ADV_BACK);
 
+    /* Return if we're trying to hardpin and it's disabled. */
+    if (!castle_cache_allow_hardpinning && (advise & C2_ADV_HARDPIN))
+        return EXIT_SUCCESS;
+
     if (advise & C2_ADV_EXTENT)
     {
         /* We are going to operate on a whole extent.
@@ -3102,6 +3109,10 @@ int castle_cache_advise_clear(c_ext_pos_t cep, c2_advise_t advise, int chunks,
                               int priority, int debug)
 {
     BUG_ON(advise & C2_ADV_BACK);
+
+    /* Return if we're trying to hardpin and it's disabled. */
+    if (!castle_cache_allow_hardpinning && (advise & C2_ADV_HARDPIN))
+        return EXIT_SUCCESS;
 
     if (advise & C2_ADV_EXTENT)
     {
@@ -4296,6 +4307,10 @@ int castle_cache_init(void)
     atomic_set(&castle_cache_cleanlist_softpin_size, 0);
     atomic_set(&castle_cache_block_victims, 0);
     atomic_set(&castle_cache_softpin_block_victims, 0);
+    castle_cache_allow_hardpinning = castle_cache_size > CASTLE_CACHE_MIN_HARDPIN_SIZE << (20 - PAGE_SHIFT);
+    if (!castle_cache_allow_hardpinning)
+        printk("Cache size too small, hardpinning disabled.  Minimum %d MB required.\n",
+                CASTLE_CACHE_MIN_HARDPIN_SIZE);
 
     if((ret = castle_cache_hashes_init()))    goto err_out;
     if((ret = castle_cache_freelists_init())) goto err_out; 
