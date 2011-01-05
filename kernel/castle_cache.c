@@ -923,7 +923,7 @@ int chk_valid(c_disk_chk_t chk)
 }
 #endif
 
-#define MAX_BIO_PAGES        16
+#define MAX_BIO_PAGES        10
 typedef struct castle_io_array {
     struct page *io_pages[MAX_BIO_PAGES];
     c_ext_pos_t start_cep;
