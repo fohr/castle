@@ -2729,7 +2729,6 @@ static void castle_cache_prefetch_pin(c_ext_pos_t cep, int chunks, int type)
     c2_block_t *c2b;
 
     BUG_ON(cep.offset % BLKS_PER_CHK != 0);
-    BUG_ON(type & C2_ADV_HARDPIN);
 
     while (chunks > 0)
     {
