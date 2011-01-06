@@ -2686,7 +2686,7 @@ static void c2_pref_c2b_destroy(c2_block_t *c2b)
     }
 
     /* We found a match, lock the window. */
-    mutex_lock(&window->lock);
+    mutex_lock_nested(&window->lock, 1);
 
     pref_debug(0, "Found %s\n", c2_pref_window_to_str(window));
 
@@ -3011,7 +3011,7 @@ static int castle_cache_prefetch_advise(c_ext_pos_t cep, c2_advise_t advise,
                 c2_pref_window_to_str(window), cep2str(cep));
 
         /* Lock the window to prevent a race. */
-        mutex_lock(&window->lock);
+        mutex_lock_nested(&window->lock, 0);
 
         /* If the window isn't new it could have changed since we found it in the
          * tree.  To verify that it hasn't (or that we still have a valid window)
