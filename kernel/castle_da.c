@@ -1308,6 +1308,14 @@ static void castle_merge_budgets_replenish(void *unused)
    castle_da_hash_iterate(castle_da_merge_budget_replenish, NULL); 
 }
 
+static void castle_da_queue_restart(struct work_struct *work)
+{
+    struct castle_double_array *da = container_of(work, struct castle_double_array, queue_restart);
+    
+    castle_da_queue_kick(da);
+    castle_da_put(da);
+}
+
 static int castle_da_ios_budget_replenish(struct castle_double_array *da, void *unused)
 {
     castle_da_get(da);
@@ -1315,8 +1323,8 @@ static int castle_da_ios_budget_replenish(struct castle_double_array *da, void *
     da->ios_budget = da->ios_rate;
     castle_da_unlock(da);
 
-    castle_da_queue_kick(da);
-    castle_da_put(da);
+    /* Defer the restart, since we are operating with spin_lock_irq(&castle_da_hash_lock). */
+    queue_work(castle_wq, &da->queue_restart);
 
     return 0;
 }
@@ -2787,6 +2795,7 @@ static struct castle_double_array* castle_da_alloc(da_id_t da_id)
     da->ios_budget      = 0;
     da->ios_rate        = 0;
     da->last_key        = NULL;
+    CASTLE_INIT_WORK(&da->queue_restart, castle_da_queue_restart);
     atomic_set(&da->epoch_ios, 0);
     atomic_set(&da->merge_budget, 0);
     init_waitqueue_head(&da->merge_waitq);
