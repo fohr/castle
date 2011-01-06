@@ -3737,9 +3737,6 @@ again:
     castle_ext_fs_free(&ct->tree_ext_fs, req_btree_space);
 
 new_ct:
-    /* Drop the old tree reference, try to allocate a new RWCT. */
-    da = castle_da_hash_get(ct->da);  
-    BUG_ON(!da);
     debug("Number of items in component tree %d, # items %ld. Trying to add a new rwct.\n",
             ct->seq, atomic64_read(&ct->item_count));
     ret = castle_da_rwct_make(da, 0);
