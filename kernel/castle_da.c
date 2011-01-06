@@ -3574,7 +3574,8 @@ static int castle_da_rwct_make(struct castle_double_array *da, int in_tran)
     ct->tree_depth = 1;
     write_unlock_c2b(c2b);
     put_c2b(c2b);
-    debug("Added component tree seq=%d, root_node="cep_fmt_str", it's threaded onto da=%p, level=%d\n",
+    debug("Added component tree seq=%d, root_node="cep_fmt_str
+          ", it's threaded onto da=%p, level=%d\n",
             ct->seq, cep2str(c2b->cep), da, ct->level);
     /* Move the last rwct (if one exists) to level 1 */
     if (!in_tran) CASTLE_TRANSACTION_BEGIN;
