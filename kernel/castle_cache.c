@@ -3225,7 +3225,7 @@ static int castle_cache_flush(void *unused)
            When exiting, we need to wait for all the IO, because otherwise we may
            end up busy looping (because wait_event below never sleeps). */
         debug("====> Waiting for 95%% of outstanding IOs to complete.\n");
-        wait_event_interruptible(castle_cache_flush_wq, 
+        wait_event(castle_cache_flush_wq, 
                (exiting ? (atomic_read(&in_flight) == 0)
                         : (atomic_read(&in_flight) <= flush_size / 20)));
 
