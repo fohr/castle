@@ -247,8 +247,9 @@ static int                     castle_cache_block_hash_buckets;
 static         DEFINE_SPINLOCK(castle_cache_block_hash_lock);
 static struct hlist_head      *castle_cache_block_hash = NULL;
 
+#define PAGE_HASH_LOCK_PERIOD  1024
 static int                     castle_cache_page_hash_buckets;
-static         DEFINE_SPINLOCK(castle_cache_page_hash_lock);
+static spinlock_t             *castle_cache_page_hash_locks = NULL;
 static struct hlist_head      *castle_cache_page_hash = NULL;
 
 static               LIST_HEAD(castle_cache_dirtylist);
@@ -1188,9 +1189,27 @@ int submit_c2b_sync(int rw, c2_block_t *c2b)
     return !c2b_uptodate(c2b);
 }
 
-static inline int castle_cache_page_hash_idx(c_ext_pos_t cep)
+static inline void castle_cache_page_hash_idx(c_ext_pos_t cep, int *hash_idx_p, int *lock_idx_p)
 {
-    return (BLOCK(cep.offset) % castle_cache_page_hash_buckets);
+    int hash_idx; 
+
+    hash_idx = (BLOCK(cep.offset) % castle_cache_page_hash_buckets);
+    if(hash_idx_p)
+        *hash_idx_p = hash_idx;
+    if(lock_idx_p)
+        *lock_idx_p = hash_idx / PAGE_HASH_LOCK_PERIOD;
+}
+
+/* Must be called with the page_hash lock held */
+static inline void __castle_cache_c2p_get(c2_page_t *c2p)
+{
+#ifdef CASTLE_DEBUG 
+    int lock_idx;
+
+    castle_cache_page_hash_idx(c2p->cep, NULL, &lock_idx);
+    BUG_ON(!spin_is_locked(&castle_cache_page_hash_locks[lock_idx]));
+#endif
+    c2p->count++;
 }
 
 static c2_page_t* castle_cache_page_hash_find(c_ext_pos_t cep)
@@ -1199,7 +1218,7 @@ static c2_page_t* castle_cache_page_hash_find(c_ext_pos_t cep)
     c2_page_t *c2p;
     int idx;
 
-    idx = castle_cache_page_hash_idx(cep);
+    castle_cache_page_hash_idx(cep, &idx, NULL);
     debug("Idx = %d\n", idx);
     hlist_for_each_entry(c2p, lh, &castle_cache_page_hash[idx], hlist)
     {
@@ -1210,35 +1229,43 @@ static c2_page_t* castle_cache_page_hash_find(c_ext_pos_t cep)
     return NULL;
 }
 
-static c2_page_t* __castle_cache_page_hash_insert(c2_page_t *c2p)
+static c2_page_t* castle_cache_page_hash_insert_get(c2_page_t *c2p)
 {
     c2_page_t *existing_c2p;
-    int idx;
+    spinlock_t *lock;
+    int idx, lock_idx;
+
+    /* Work out the index, and the lock. */
+    castle_cache_page_hash_idx(c2p->cep, &idx, &lock_idx);
+    lock = castle_cache_page_hash_locks + lock_idx; 
 
     /* Check if already in the hash */
+    spin_lock_irq(lock);
     existing_c2p = castle_cache_page_hash_find(c2p->cep);
     if(existing_c2p)
+    {
+        __castle_cache_c2p_get(existing_c2p);
+        spin_unlock_irq(lock);
         return existing_c2p;
-    
-    /* Insert */
-    idx = castle_cache_page_hash_idx(c2p->cep);
-    hlist_add_head(&c2p->hlist, &castle_cache_page_hash[idx]);
-
-    return c2p;
-}
-
-/* Must be called with the page_hash lock held */
-static inline void __castle_cache_c2p_get(c2_page_t *c2p)
-{
-    BUG_ON(!spin_is_locked(&castle_cache_page_hash_lock));
-    c2p->count++;
+    }
+    else
+    {
+        __castle_cache_c2p_get(c2p);
+        hlist_add_head(&c2p->hlist, &castle_cache_page_hash[idx]);
+        spin_unlock_irq(lock);
+        return c2p;
+    }
 }
 
 #define MIN(_a, _b)     ((_a) < (_b) ? (_a) : (_b)) 
-/* Must be called with the page_hash lock held */
-static inline void __castle_cache_c2p_put(c2_page_t *c2p, struct list_head *accumulator)
+static inline void castle_cache_c2p_put(c2_page_t *c2p, struct list_head *accumulator)
 {
-    BUG_ON(!spin_is_locked(&castle_cache_page_hash_lock));
+    spinlock_t *lock;
+    int idx, lock_idx;
+
+    castle_cache_page_hash_idx(c2p->cep, &idx, &lock_idx);
+    lock = castle_cache_page_hash_locks + lock_idx; 
+    spin_lock_irq(lock);
 
     c2p->count--;
     /* If the count reached zero, delete fromt the hash, add to the accumulator list,
@@ -1263,6 +1290,7 @@ static inline void __castle_cache_c2p_put(c2_page_t *c2p, struct list_head *accu
         hlist_del(&c2p->hlist);
         list_add(&c2p->list, accumulator);
     }
+    spin_unlock_irq(lock);
 }
 
 static inline int castle_cache_block_hash_idx(c_ext_pos_t cep)
@@ -1523,14 +1551,11 @@ static int castle_cache_pages_get(c_ext_pos_t cep,
 
     all_uptodate = 1;
     freed_c2ps_cnt = 0;
-    spin_lock_irq(&castle_cache_page_hash_lock);
     for(i=0; i<nr_c2ps; i++)
     {
         castle_cache_page_init(cep, c2ps[i]);
         debug("c2p for cep="cep_fmt_str_nl, cep2str(c2ps[i]->cep));
-        c2p = __castle_cache_page_hash_insert(c2ps[i]);
-        /* If c2p for this cep was found in the cache already, use it. Release the one 
-           from c2ps array back onto the freelist. */
+        c2p = castle_cache_page_hash_insert_get(c2ps[i]);
         if(c2p != c2ps[i])
         {
             debug("Found c2p in the hash\n");
@@ -1539,14 +1564,11 @@ static int castle_cache_pages_get(c_ext_pos_t cep,
             c2ps[i] = c2p;
         } else
             atomic_add(PAGES_PER_C2P, &castle_cache_clean_pages);
-        /* Get the reference to the right c2p. */
-        __castle_cache_c2p_get(c2ps[i]);
         /* Check if this page is clean. */
         if(!c2p_uptodate(c2ps[i]))
             all_uptodate = 0;
         cep.offset += PAGES_PER_C2P * PAGE_SIZE;
     }
-    spin_unlock_irq(&castle_cache_page_hash_lock);
 
     /* Return all the freed_c2ps back onto the freelist */
     BUG_ON(!list_empty(&freed_c2ps) && (freed_c2ps_cnt == 0));
@@ -1672,10 +1694,8 @@ static void castle_cache_block_free(c2_block_t *c2b)
         c2_pref_c2b_destroy(c2b);
 
     /* Add the pages back to the freelist */
-    spin_lock(&castle_cache_page_hash_lock);
     for(i=0; i<nr_c2ps; i++)
-        __castle_cache_c2p_put(c2b->c2ps[i], &freed_c2ps);
-    spin_unlock(&castle_cache_page_hash_lock);
+        castle_cache_c2p_put(c2b->c2ps[i], &freed_c2ps);
     /* For debugging only: it will be spotted quickly if nr_pages isn't reinited properly */
     c2b->nr_pages = 0xFFFF;
     c2ps = c2b->c2ps;
@@ -3423,12 +3443,14 @@ static int castle_cache_hashes_init(void)
 {
     int i;
 
-    if(!castle_cache_page_hash || !castle_cache_block_hash)
+    if(!castle_cache_page_hash || !castle_cache_page_hash_locks || !castle_cache_block_hash)
         return -ENOMEM;
     
     /* Init the tables. */
     for(i=0; i<castle_cache_page_hash_buckets; i++)
         INIT_HLIST_HEAD(&castle_cache_page_hash[i]);
+    for(i=0; i<(castle_cache_page_hash_buckets / PAGE_HASH_LOCK_PERIOD + 1); i++)
+        spin_lock_init(&castle_cache_page_hash_locks[i]);
     for(i=0; i<castle_cache_block_hash_buckets; i++)
         INIT_HLIST_HEAD(&castle_cache_block_hash[i]);
 
@@ -3452,6 +3474,8 @@ static void castle_cache_hashes_fini(void)
             castle_vfree(castle_cache_block_hash);
         if(castle_cache_page_hash)
             castle_vfree(castle_cache_page_hash);
+        if(castle_cache_page_hash_locks)
+            castle_vfree(castle_cache_page_hash_locks);
         return;
     }
 
@@ -4292,6 +4316,9 @@ int castle_cache_init(void)
     /* Allocate memory for c2bs, c2ps and hash tables */
     castle_cache_page_hash  = castle_vmalloc(castle_cache_page_hash_buckets  * 
                                              sizeof(struct hlist_head));
+    castle_cache_page_hash_locks 
+        = castle_vmalloc((castle_cache_page_hash_buckets / PAGE_HASH_LOCK_PERIOD + 1) * 
+                                             sizeof(spinlock_t));
     castle_cache_block_hash = castle_vmalloc(castle_cache_block_hash_buckets * 
                                              sizeof(struct hlist_head));
     castle_cache_blks       = castle_vmalloc(castle_cache_block_freelist_size * 
