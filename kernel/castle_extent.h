@@ -29,6 +29,14 @@ typedef struct {
     c_extent_fini_t             extent_fini;
 } c_rda_spec_t;
 
+/**
+ * Extent dirtylist structure.
+ */
+typedef struct {
+    spinlock_t                  lock;           /**< Dirtylist lock. */
+    struct rb_root              rb_root;        /**< Dirtylist RB root. */
+} c_ext_dirtylist_t;
+
 
 void 
 castle_rda_slave_remove(c_rda_type_t         rda_type, 
@@ -90,6 +98,12 @@ castle_extent_get(c_ext_id_t ext_id);
 
 int 
 castle_extent_put(c_ext_id_t ext_id);
+
+c_ext_dirtylist_t *
+castle_extent_dirtylist_get(c_ext_id_t ext_id);
+
+void
+castle_extent_dirtylist_put(c_ext_id_t ext_id);
 
 void 
 castle_extent_mark_live(c_ext_id_t ext_id);

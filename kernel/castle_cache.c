@@ -20,6 +20,7 @@
 #include "castle_da.h"
 #include "castle_ctrl.h"
 #include "castle_versions.h"
+#include "castle_time.h"
 
 #ifndef DEBUG
 #define debug(_f, ...)           ((void)0)
@@ -657,14 +658,113 @@ static int c2b_softpin(c2_block_t *c2b)
 }
 
 /**
+ * Remove a c2b from its per-extent dirtylist.
+ *
+ * @param c2b   Block to remove
+ */
+static int c2_dirtylist_remove(c2_block_t *c2b)
+{
+    c_ext_dirtylist_t *dirtylist;
+    unsigned long flags;
+
+    BUG_ON(!atomic_read(&c2b->count));
+
+    dirtylist = castle_extent_dirtylist_get(c2b->cep.ext_id);
+    if (dirtylist == NULL)
+        return -EINVAL;
+
+    /* Hold the dirtylist lock while we manipulate the tree. */
+    spin_lock_irqsave(&dirtylist->lock, flags);
+
+    rb_erase(&c2b->rb_dirtylist, &dirtylist->rb_root);
+
+    /* Release dirtylist lock. */
+    spin_unlock_irqrestore(&dirtylist->lock, flags);
+    castle_extent_dirtylist_put(c2b->cep.ext_id);
+
+    return EXIT_SUCCESS;
+}
+
+/**
+ * Place a c2b onto its per-extent dirtylist.
+ *
+ * @param c2b   Block to place
+ */
+static int c2_dirtylist_insert(c2_block_t *c2b)
+{
+    struct rb_node **p, *parent = NULL;
+    c_ext_dirtylist_t *dirtylist;
+    c2_block_t *tree_c2b;
+    unsigned long flags;
+    int cmp;
+
+    BUG_ON(!atomic_read(&c2b->count));
+
+    dirtylist = castle_extent_dirtylist_get(c2b->cep.ext_id);
+    if (dirtylist == NULL)
+        return -EINVAL;
+
+    /* Hold the dirtylist lock while we manipulate the tree. */
+    spin_lock_irqsave(&dirtylist->lock, flags);
+
+    p = &dirtylist->rb_root.rb_node;
+    while (*p)
+    {
+        parent = *p;
+        tree_c2b = rb_entry(parent, c2_block_t, rb_dirtylist);
+
+        cmp = EXT_POS_COMP(c2b->cep, tree_c2b->cep);
+        if (cmp < 0)
+            p = &(*p)->rb_left;
+        else if (cmp > 0)
+            p = &(*p)->rb_right;
+        else
+        {
+            /* We found a c2b with the same offset.  Larger to the right. */
+            /** @FIXME would it make more sense to have C2B_COMP() above that calls
+             * EXT_POS_COMP and does below if result == 0? */
+
+            if (c2b->nr_pages < tree_c2b->nr_pages)
+                p = &(*p)->rb_left;
+            else if (c2b->nr_pages > tree_c2b->nr_pages)
+                p = &(*p)->rb_right;
+            else
+            {
+                /* this can't happen? */
+                printk("Found an identical c2b in the tree already.  Not inserting.\n");
+                WARN_ON(1);
+                spin_unlock(&dirtylist->lock);
+                castle_extent_dirtylist_put(c2b->cep.ext_id);
+
+                return -EINVAL;
+            }
+        }
+    }
+
+    /* Insert c2b into the tree. */
+    rb_link_node(&c2b->rb_dirtylist, parent, p);
+    rb_insert_color(&c2b->rb_dirtylist, &dirtylist->rb_root);
+
+    /* Release dirtylist lock. */
+    spin_unlock_irqrestore(&dirtylist->lock, flags);
+
+    castle_extent_dirtylist_put(c2b->cep.ext_id);
+
+    return EXIT_SUCCESS;
+}
+
+/**
  * Mark c2b and associated c2ps dirty and place on dirtylist.
  *
  * @param c2b   c2b to mark as dirty.
  *
- * - Remove c2b from cleanlist
+ * - Insert c2b into per-extent RB-tree dirtylist
+ * - Move c2b from cleanlist to dirtylist
  *   (also occurs when we free blocks in hash_clean())
- * - Place c2b on dirtylist
  * - Update cleanlist accounting.
+ *
+ * By maintaining a per-extent list of dirty c2bs we can flush dirty data out
+ * in a contiguous fashion to reduce disk seeks.
  *
  * @also castle_cache_block_hash_clean()
  */
@@ -682,6 +782,8 @@ void dirty_c2b(c2_block_t *c2b)
 
     if (!c2b_dirty(c2b))
     {
+        c2_dirtylist_insert(c2b);
+
         spin_lock_irqsave(&castle_cache_block_hash_lock, flags);
 
         list_move_tail(&c2b->dirty, &castle_cache_dirtylist);
@@ -701,12 +803,13 @@ void dirty_c2b(c2_block_t *c2b)
  *
  * @param c2b   c2b to mark as clean.
  *
- * - Remove c2b from dirtylist
- * - Place c2b on cleanlist
+ * - Remove c2b from per-extent RB-tree dirtylist
+ * - Move c2b from cache dirtylist to cache cleanlist
  *   (also occurs in hash_insert() for new c2bs)
  * - Update cleanlist accounting.
  *
  * @also castle_cache_block_hash_insert()
+ * @also c2_dirtylist_remove()
  * @also I/O callback handlers (callers)
  */
 static void clean_c2b(c2_block_t *c2b)
@@ -723,6 +826,8 @@ static void clean_c2b(c2_block_t *c2b)
         clean_c2p(c2b->c2ps[i]);
 
     /* Clean the c2b. */
+    c2_dirtylist_remove(c2b);
+
     spin_lock_irqsave(&castle_cache_block_hash_lock, flags);
 
     list_move_tail(&c2b->clean, &castle_cache_cleanlist);
@@ -2253,9 +2358,11 @@ static void c2_pref_window_put(c2_pref_window_t *window)
 
         pref_debug(0, "Deallocating prefetch window %s\n", c2_pref_window_to_str(window));
 
-        pages = (window->end_off - window->start_off) >> PAGE_SHIFT;
-        c2_pref_window_falloff(window->cur_c2b->cep, pages, window, 0);
-        window->cur_c2b = NULL;
+        if (window->cur_c2b)
+        {
+            pages = (window->end_off - window->start_off) >> PAGE_SHIFT;
+            c2_pref_window_falloff(window->cur_c2b->cep, pages, window, 0);
+        }
         castle_free(window);
     }
 }
@@ -3359,72 +3466,135 @@ void castle_cache_flush_wakeup(void)
 
 static void castle_cache_extent_flush_endio(c2_block_t *c2b)
 {
-    atomic_t *outst_pgs = c2b->private;
+    atomic_t *outst_blks = c2b->private;
     
     clear_c2b_flushing(c2b);
     read_unlock_c2b(c2b);
     put_c2b(c2b);
-    if (atomic_dec_and_test(outst_pgs))
+    if (atomic_dec_and_test(outst_blks))
         wake_up(&castle_cache_flush_wq);
+}
+
+/**
+ * Flush all dirty pages from beginning of extent to offset start+size.
+ *
+ * NOTE: start is currently ignored; we always flush from the beginning of the
+ * extent.
+ *
+ * @param ext_id    Extent to flush
+ * @param start     Offset to flush from (Byte)
+ * @param size      Bytes to flush from start
+ */
+int _castle_cache_extent_flush(c_ext_id_t ext_id, uint64_t start, uint64_t size, int sync)
+{
+    c2_block_t *c2b;
+    c_byte_off_t end_offset;
+    c_ext_dirtylist_t *dirtylist;
+    struct rb_node **p, *parent = NULL;
+    int i, batch_idx;
+    atomic_t in_flight = ATOMIC(0);
+#define EXT_FLUSH_BATCH     256
+    c2_block_t *c2b_batch[EXT_FLUSH_BATCH];
+
+    /* We always flush from the beginning of the extent to start+size.
+     * If size is not specified, flush the entire extent. */
+    if (size == 0)
+    {
+        size = castle_extent_size_get(ext_id);
+        if (size == 0)
+            return -EINVAL;
+        end_offset = size * C_CHK_SIZE;
+    }
+    else
+        end_offset = start + size;
+
+    debug("Extent flush: (%llu) -> %llu\n", ext_id, nr_pages/BLKS_PER_CHK);
+
+    do
+    {
+        batch_idx = 0;
+
+        /* Get dirtylist and hold its lock. */
+        dirtylist = castle_extent_dirtylist_get(ext_id);
+        if (dirtylist == NULL)
+            return -EINVAL;
+        spin_lock_irq(&dirtylist->lock);
+
+        /* Find c2b closest to the beginning of the extent. */
+        p = &dirtylist->rb_root.rb_node;
+        while (*p)
+        {
+            parent = *p;
+            p = &(*p)->rb_left;
+        }
+
+        /* Traverse dirty c2bs until we reach end_offset. */
+        while (parent)
+        {
+            c2b = rb_entry(parent, c2_block_t, rb_dirtylist);
+
+            /* We're done if we reach end_offset. */
+            if (c2b->cep.offset > end_offset)
+            {
+                parent = NULL; /* outer loop while clause */
+                break;
+            }
+
+            if (!read_trylock_c2b(c2b))
+                goto next_pg;
+            if (test_set_c2b_flushing(c2b))
+                goto next_pg_2;
+            if (!c2b_uptodate(c2b) || !c2b_dirty(c2b))
+                goto next_pg_1;
+
+            get_c2b(c2b);
+            c2b_batch[batch_idx++] = c2b;
+
+            /* Perform flush if the batch is complete. */
+            if (batch_idx >= EXT_FLUSH_BATCH)
+                break;
+
+            goto next_pg;
+
+            /* Clean up state. */
+next_pg_1:  clear_c2b_flushing(c2b);
+next_pg_2:  read_unlock_c2b(c2b);
+
+            /* Advance to next c2b. */
+next_pg:    parent = rb_next(parent);
+        }
+
+        /* Release holds. */
+        spin_unlock_irq(&dirtylist->lock);
+        castle_extent_dirtylist_put(ext_id);
+
+        /* Flush batch of c2bs. */
+        for (i = 0; i < batch_idx; i++)
+        {
+            atomic_inc(&in_flight);
+            c2b_batch[i]->end_io  = castle_cache_extent_flush_endio;
+            c2b_batch[i]->private = (void *)&in_flight;
+            BUG_ON(submit_c2b(WRITE, c2b_batch[i]));
+        }
+    } while (parent);
+
+    /* Wait for flush to complete. */
+    if (sync)
+        wait_event(castle_cache_flush_wq, (atomic_read(&in_flight) == 0));
+        /* @FIXME do we want to pass a ptr to in_flight to the caller and let
+         * them handle the wait? */
+
+    return 0;
 }
 
 int castle_cache_extent_flush(c_ext_id_t ext_id, uint64_t start, uint64_t size)
 {
-    c2_block_t *c2b;
-    c_ext_pos_t cep;
-    atomic_t    outst_pgs = ATOMIC(0);
-    uint64_t    i, first_pg, nr_pages, dirty_pgs = 0;
-    c_chk_cnt_t ext_size;
-    
-    ext_size = castle_extent_size_get(ext_id);
-    if (!ext_size)
-        return -EINVAL;
+    return _castle_cache_extent_flush(ext_id, start, size, 0);
+}
 
-    /* Flush complete extent, if size is 0. */
-    if (size == 0)
-    {
-        size  = ext_size * C_CHK_SIZE;
-        start = 0;
-    }
-
-    cep.ext_id = ext_id;
-    first_pg   = (start >> C_BLK_SHIFT);
-    nr_pages   = (size - 1) / C_BLK_SIZE + 1;
-    BUG_ON((first_pg + nr_pages) > (ext_size * BLKS_PER_CHK));
-
-    debug("Extent flush: (%llu) -> %llu\n", ext_id, nr_pages/BLKS_PER_CHK);
-    for (i=first_pg; i<nr_pages; i++)
-    {
-        cep.offset = i * C_BLK_SIZE;
-        c2b = _castle_cache_block_get(cep, 1, 1);
-        BUG_ON(!c2b);
-        /* c2b_flushing bit makes sure that flush thread doesnt submit parallel
-         * writes. */
-        read_lock_c2b(c2b);
-        if (test_set_c2b_flushing(c2b))
-            goto skip_page;
-        if (!c2b_uptodate(c2b) || !c2b_dirty(c2b))
-        {
-            clear_c2b_flushing(c2b);
-            goto skip_page;
-        }
-        c2b->end_io  = castle_cache_extent_flush_endio;
-        c2b->private = (void *)&outst_pgs;
-        atomic_inc(&outst_pgs);
-        dirty_pgs++;
-        BUG_ON(submit_c2b(WRITE, c2b));
-        continue;
-skip_page:
-        read_unlock_c2b(c2b);
-        put_c2b(c2b);
-    }
-
-    wait_event(castle_cache_flush_wq, (atomic_read(&outst_pgs) == 0));
-
-    debug("Extent flush completed: (%llu) -> %llu/%llu\n", 
-           ext_id, dirty_pgs, nr_pages);
-
-    return 0;
+int castle_cache_extent_flush_sync(c_ext_id_t ext_id, uint64_t start, uint64_t size)
+{
+    return _castle_cache_extent_flush(ext_id, start, size, 1);
 }
 
 /***** Init/fini functions *****/
@@ -4187,7 +4357,7 @@ int castle_cache_extents_flush(struct list_head *flush_list)
     list_for_each_safe(lh, tmp, flush_list)
     {
         entry = list_entry(lh, struct castle_cache_flush_entry, list);
-        castle_cache_extent_flush(entry->ext_id, entry->start, entry->count);
+        castle_cache_extent_flush_sync(entry->ext_id, entry->start, entry->count);
 
         list_del(lh);
         castle_free(entry);
