@@ -1,5 +1,7 @@
 #include <linux/mm.h>
 #include <linux/vmalloc.h>
+#include <linux/rbtree.h>
+#include <linux/spinlock.h>
 
 #include "castle.h"
 #include "castle_debug.h"
@@ -42,7 +44,9 @@
         (_ext)->type        = (_me)->type;                                  \
         (_ext)->k_factor    = (_me)->k_factor;                              \
         (_ext)->maps_cep    = (_me)->maps_cep;                              \
-        (_ext)->obj_refs    = (_me)->obj_refs;                              
+        (_ext)->obj_refs    = (_me)->obj_refs;                              \
+        (_ext)->dirtylist.rb_root = RB_ROOT;                                \
+        spin_lock_init(&ext->dirtylist.lock);
 
 #define CONVERT_EXTENT_TO_MENTRY(_ext, _me)                                 \
         (_me)->ext_id       = (_ext)->ext_id;                               \
@@ -71,6 +75,7 @@ typedef struct {
     uint32_t            ref_cnt;
     uint32_t            obj_refs;
     uint8_t             alive;
+    c_ext_dirtylist_t   dirtylist;      /**< Extent c2b dirtylist */
 } c_ext_t;
 
 static struct list_head *castle_extents_hash = NULL;
@@ -287,6 +292,8 @@ static int castle_extent_micro_ext_create(void)
     micro_ext->maps_cep = INVAL_EXT_POS;
     micro_ext->obj_refs = 1;
     micro_ext->alive    = 1;
+    micro_ext->dirtylist.rb_root = RB_ROOT;
+    spin_lock_init(&micro_ext->dirtylist.lock);
 
     memset(micro_maps, 0, sizeof(castle_extents_sb->micro_maps));
     list_for_each(l, &castle_slaves.slaves)
@@ -777,6 +784,17 @@ c_ext_id_t castle_extent_alloc(c_rda_type_t            rda_type,
     return _castle_extent_alloc(rda_type, da_id, count, INVAL_EXT_ID);
 }
 
+/**
+ * Allocate a new extent.
+ *
+ * @return  Extent ID of the newly created extent.
+ *
+ * Extents are also allocated in:
+ *
+ * @also CONVERT_MENTRY_TO_EXTENT()
+ * @also castle_extent_micro_ext_create()
+ * @also castle_extent_sup_ext_init()
+ */
 static c_ext_id_t _castle_extent_alloc(c_rda_type_t            rda_type,
                                        da_id_t                 da_id,
                                        c_chk_cnt_t             count,
@@ -811,6 +829,8 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t            rda_type,
     ext->k_factor       = rda_spec->k_factor;
     ext->obj_refs       = 1;
     ext->alive          = 1;
+    ext->dirtylist.rb_root = RB_ROOT;
+    spin_lock_init(&ext->dirtylist.lock);
     
     /* Block aligned chunk maps for each extent. */
     if (ext->ext_id == META_EXT_ID)
@@ -1048,6 +1068,8 @@ c_ext_id_t castle_extent_sup_ext_init(struct castle_slave *cs)
     ext->ext_id      = slave_id_to_sup_ext(cs->id);
     ext->obj_refs    = 1;
     ext->alive       = 1;
+    ext->dirtylist.rb_root = RB_ROOT;
+    spin_lock_init(&ext->dirtylist.lock);
     cs->sup_ext_maps = castle_malloc(sizeof(c_disk_chk_t) * ext->size *
                                                     rda_spec->k_factor, GFP_KERNEL);
     BUG_ON(rda_spec->k_factor != ext->k_factor);
@@ -1147,6 +1169,37 @@ int castle_extent_put(c_ext_id_t ext_id)
         _castle_extent_free(ext);
 
     return 0;
+}
+
+/**
+ * Hold a reference on the extent and return the dirtylist RB-tree.
+ */
+c_ext_dirtylist_t* castle_extent_dirtylist_get(c_ext_id_t ext_id)
+{
+    c_ext_t *ext;
+    unsigned long flags;
+
+    spin_lock_irqsave(&castle_extents_hash_lock, flags);
+
+    ext = __castle_extents_hash_get(ext_id);
+    if (!ext)
+    {
+        spin_unlock_irqrestore(&castle_extents_hash_lock, flags);
+        return NULL;
+    }
+    ext->obj_refs++;
+
+    spin_unlock_irqrestore(&castle_extents_hash_lock, flags);
+
+    return &ext->dirtylist;
+}
+
+/**
+ * Release reference on the extent.
+ */
+void castle_extent_dirtylist_put(c_ext_id_t ext_id)
+{
+    castle_extent_put(ext_id);
 }
 
 static int castle_extent_check_alive(c_ext_t *ext, void *unused)

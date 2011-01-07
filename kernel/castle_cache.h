@@ -9,20 +9,21 @@ typedef struct castle_cache_block {
 
     struct castle_cache_page **c2ps; 
 
-    void                      *buffer; /* Linear mapping of the pages */
+    void                      *buffer;          /**< Linear mapping of the pages */
     struct hlist_node          hlist;
     union {
         struct list_head       dirty;
         struct list_head       clean;
         struct list_head       free;
     };
-                             
+    struct rb_node             rb_dirtylist;    /**< Per-extent dirtylist RB-node */
+
     unsigned long              state;
 	atomic_t                   count;
     atomic_t                   lock_cnt;
     atomic_t                   softpin_cnt;
     void                     (*end_io)(struct castle_cache_block *c2b);
-    void                      *private; /* Can only be used if c2b is locked */
+    void                      *private;         /**< Can only be used if c2b is locked */
 #ifdef CASTLE_DEBUG            
     char                      *file;
     int                        line;
@@ -143,6 +144,7 @@ int         submit_c2b_sync           (int rw, c2_block_t *c2b);
 c2_block_t* castle_cache_block_get    (c_ext_pos_t  cep, int nr_pages);
 void        castle_cache_flush_wakeup (void);
 int         castle_cache_extent_flush (c_ext_id_t ext_id, uint64_t start, uint64_t size);
+int         castle_cache_extent_flush_sync (c_ext_id_t ext_id, uint64_t start, uint64_t size);
 int         castle_cache_extent_flush_schedule (c_ext_id_t ext_id, uint64_t start, uint64_t size);
 
 
