@@ -2351,10 +2351,6 @@ static void castle_btree_c2b_forget(c_bvec_t *c_bvec)
 
 static void castle_btree_c2b_remember(c_bvec_t *c_bvec, c2_block_t *c2b)
 {
-
-    /* Forget the parent node buffer first */
-    castle_btree_c2b_forget(c_bvec);
-
     /* Save the new node buffer, and the lock flags */
     c_bvec->btree_node = c2b;
     if(test_bit(CBV_C2B_WRITE_LOCKED, &c_bvec->flags))
@@ -2459,6 +2455,9 @@ static void __castle_btree_submit(struct castle_btree_type *btree,
     }
 
     castle_debug_bvec_btree_walk(c_bvec);
+    
+    /* Forget the parent node buffer first */
+    castle_btree_c2b_forget(c_bvec);
 
     c2b = castle_cache_block_get(node_cep, btree->node_size);
     castle_btree_c2b_lock(c_bvec, c2b);
