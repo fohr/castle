@@ -3849,21 +3849,18 @@ static void castle_da_ct_walk_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cv
 
 static void castle_da_bvec_start(struct castle_double_array *da, c_bvec_t *c_bvec)
 { 
-    struct castle_component_tree *ct;
-
     debug_verbose("Doing DA %s for da_id=%d\n", write ? "write" : "read", da_id);
     BUG_ON(atomic_read(&c_bvec->reserv_nodes) != 0);
     /* This will get a reference to current RW tree, or create a new one if neccessary.
        It also preallocates space in that tree. */
-    ct = castle_da_rwct_acquire(da, c_bvec);
+    c_bvec->tree = castle_da_rwct_acquire(da, c_bvec);
     /* If RW component tree does not exist, exit with error. */
-    if(!ct)
+    if(!c_bvec->tree)
     {
         c_bvec->endfind(c_bvec, -ENOSPC, INVAL_VAL_TUP);
         return;
     }
     /* Otherwise, replace endfind function pointer, and start the btree walk. */
-    c_bvec->tree       = ct; 
     c_bvec->da_endfind = c_bvec->endfind;
     c_bvec->endfind    = castle_da_ct_walk_complete;
 

@@ -1443,11 +1443,13 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
     if(err || CVT_INVALID(cvt) || CVT_TOMB_STONE(cvt))
     {
         debug("Error, invalid or tombstone.\n");
-        castle_ct_put(get->ct, 0);
+        if(get->ct)
+            castle_ct_put(get->ct, 0);
         get->reply_start(get, err, 0, NULL, 0);
         castle_utils_bio_free(c_bvec->c_bio);
         return;
     }
+    BUG_ON(!get->ct);
 
     /* Next, handle inline values, since we already have them in memory */
     if(CVT_INLINE(cvt))
