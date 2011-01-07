@@ -1281,7 +1281,7 @@ static inline void castle_cache_c2p_put(c2_page_t *c2p, struct list_head *accumu
         {
             buf = pfn_to_kaddr(page_to_pfn(c2p->pages[i]));
             for(j=0; j<PAGE_SIZE; j+=str_len)
-                memcpy(buf, poison, MIN(PAGE_SIZE-j, str_len));
+                memcpy(buf+j, poison, MIN(PAGE_SIZE-j, str_len));
         }
 #endif
         debug("Freeing c2p for cep="cep_fmt_str_nl, cep2str(c2p->cep));
