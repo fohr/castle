@@ -2358,9 +2358,11 @@ static void c2_pref_window_put(c2_pref_window_t *window)
 
         pref_debug(0, "Deallocating prefetch window %s\n", c2_pref_window_to_str(window));
 
-        pages = (window->end_off - window->start_off) >> PAGE_SHIFT;
-        c2_pref_window_falloff(window->cur_c2b->cep, pages, window, 0);
-        window->cur_c2b = NULL;
+        if (window->cur_c2b)
+        {
+            pages = (window->end_off - window->start_off) >> PAGE_SHIFT;
+            c2_pref_window_falloff(window->cur_c2b->cep, pages, window, 0);
+        }
         castle_free(window);
     }
 }
