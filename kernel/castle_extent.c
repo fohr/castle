@@ -1173,33 +1173,36 @@ int castle_extent_put(c_ext_id_t ext_id)
 
 /**
  * Hold a reference on the extent and return the dirtylist RB-tree.
+ *
+ * castle_extents_rhash_get() holds a reference to the extent for us.
+ *
+ * @also castle_extents_rhash_get()
+ * @also castle_extent_dirtylist_put()
  */
 c_ext_dirtylist_t* castle_extent_dirtylist_get(c_ext_id_t ext_id)
 {
     c_ext_t *ext;
-    unsigned long flags;
 
-    spin_lock_irqsave(&castle_extents_hash_lock, flags);
-
-    ext = __castle_extents_hash_get(ext_id);
-    if (!ext)
-    {
-        spin_unlock_irqrestore(&castle_extents_hash_lock, flags);
+    if ((ext = castle_extents_rhash_get(ext_id)) == NULL)
         return NULL;
-    }
-    ext->obj_refs++;
-
-    spin_unlock_irqrestore(&castle_extents_hash_lock, flags);
 
     return &ext->dirtylist;
 }
 
 /**
  * Release reference on the extent.
+ *
+ * @also castle_extents_rhash_put()
+ * @also castle_extent_dirtylist_get()
  */
 void castle_extent_dirtylist_put(c_ext_id_t ext_id)
 {
-    castle_extent_put(ext_id);
+    c_ext_t *ext;
+
+    if ((ext = castle_extents_hash_get(ext_id)) == NULL)
+        return;
+
+    castle_extents_rhash_put(ext);
 }
 
 static int castle_extent_check_alive(c_ext_t *ext, void *unused)
