@@ -104,7 +104,6 @@ int castle_rda_next_slave_get(struct castle_slave  *cs[],
 {
     c_rda_state_t *state    = _state;
     c_rda_spec_t  *rda_spec = castle_rda_spec_get(rda_type);
-    uint8_t        slave_flags[MAX_NR_SLAVES];
     uint32_t       nr_act_slaves = def_rda_spec.nr_act_slaves;
     uint32_t       n;
     int i;
@@ -120,52 +119,19 @@ int castle_rda_next_slave_get(struct castle_slave  *cs[],
         BUG();
     }
 
-    n = nr_act_slaves - state->permut_idx; 
-    if (n < rda_spec->k_factor)
+    if(state->permut_idx >= nr_act_slaves)
     {
-        uint8_t *next_permut;
-__again:
-        debug("Getting new permutation\n");
-        next_permut = (state->permut == &state->permut1[0])?
-                       &state->permut2[0]:&state->permut1[0];
-        knuth_shuffle(next_permut, nr_act_slaves);
-        memset(&slave_flags[0], 0, sizeof(slave_flags));
-        for (i=state->permut_idx; i < nr_act_slaves; i++)
-        {
-            uint32_t idx = state->permut[i];
-
-            BUG_ON(slave_flags[idx]);
-            slave_flags[idx] = 1;
-        }
-        for (i=0; i < (rda_spec->k_factor - n); i++)
-        {
-            uint32_t idx = next_permut[i];
-
-            if (slave_flags[idx])
-            {
-                BUG_ON(slave_flags[idx] == 2);
-                goto __again;
-            }
-            slave_flags[idx] = 2;
-        }
+        /* Repermute. */
+        knuth_shuffle(state->permut, nr_act_slaves);
+        state->permut_idx=0;
     }
     for (i=0; i<rda_spec->k_factor; i++)
     {
-        if (state->permut_idx >= nr_act_slaves)
-        {
-            state->permut     = (state->permut == &state->permut1[0])?
-                                 &state->permut2[0]:&state->permut1[0];
-            state->permut_idx = 0;
-        }
-        n     = state->permut[state->permut_idx++];
-        //printk("Disk: %u\n", n);
-        BUG_ON(n >= nr_act_slaves);
+        n = (state->permut[state->permut_idx] + i) % nr_act_slaves;
         cs[i] = def_rda_spec.act_slaves[n];
     }
-    memcpy(&state->prev_set[0], &cs[0], sizeof(struct castle_slave *) *
-                                            rda_spec->k_factor);
-    state->prev_chk++;
-    BUG_ON(state->prev_chk != chk_num);
+
+    state->permut_idx++;
 
     return 0;
 
