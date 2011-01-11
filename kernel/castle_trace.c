@@ -13,7 +13,50 @@ static struct rchan  *castle_trace_rchan          = NULL;
 static struct dentry *castle_trace_dir            = NULL;
 static char          *castle_trace_dir_str        = NULL;
 
-static c_trc_evt_t* castle_trace_buffer_alloc(c_trace_id_t id)
+/**********************************************************************************************
+ * Using castle_trace.c
+ *
+ * XXX
+ * XXX Don't forget to bump CASTLE_TRACE_MAGIC in castle_public.h!
+ * XXX Once bumped add #include <sys/time.h> and copy to acunutils.hg/libcastle
+ * XXX
+ *
+ * Trace events are broken down by:
+ *    provider (e.g. DA, CACHE, etc.)
+ *    event (TRACE_START, TRACE_STOP, TRACE_VALUE)
+ *    variable (e.g. TRACE_CACHE_DIRTY_PGS, TRACE_MERGE_UNIT_GET_C2B_NS, etc.)
+ *    values (v1, v2, v3, v4, v5)
+ * Generally value reporting should be handled by a top-level provider function, e.g.
+ * castle_trace_cache() or castle_trace_merge().
+ *
+ * ADDING A NEW PROVIDER (e.g. foo provider):
+ *
+ * kernel hg: fs.hg/kernel:
+ * 1. castle_public.h: bump CASTLE_TRACE_MAGIC
+ * 2. castle_public.h: add TRACE_FOO to c_trc_prov_t
+ * 3. castle_public.h: create c_trc_foo_var_t enum in similar style to c_trc_cache_var_t
+ * 4. castle_trace.h: Add new CASTLE_DEFINE_TRACE(foo, ...) macro call
+ * 5. castle_trace.c: Add trace_register(foo), trace_register_fail(foo) to
+ *                    castle_trace_tracepoints_register()
+ * 6. castle_trace.c: Add castle_trace_foo_unregister(castle_trace_foo_event) to
+ *                    castle_trace_tracepoints_unregister()
+ * 7. castle_trace.c: Write castle_trace_foo_event(...) which should call _castle_trace_event()
+ *                    to allocate and dispatch the event
+ * userland hg: acunutils.hg/castle-trace:
+ * 1. Copy castle_public.h from fs.hg/kernel to acunutils.hg/libcastle and add #include <sys/time.h>
+
+ * 2. castle_trace.c: Add foo_var_name[] string index array (see cache_var_name[])
+ * 3. castle_trace.c: Add TRACE_FOO provider to decode_trace()'s main switch statement
+ *
+ * ADDING A NEW REPORTING VALUE (e.g. clean pages to TRACE_CACHE provider):
+ *
+ * 1. fs.hg/kernel/castle_public.h: bump CASTLE_TRACE_MAGIC
+ * 2. fs.hg/kernel/castle_public.h: add TRACE_CACHE_CLEAN_PGS to c_trc_cache_var_t enum
+ * 3. Update castle_public.h in acunutils.hg/libcastle (see above)
+ * 4. acunutils.hg/castle-trace/castle_trace.c: add TRACE_CACHE_CLEAN_PGS to cache_var_name[]
+ */
+
+static c_trc_evt_t* castle_trace_buffer_alloc(void)
 {
     c_trc_evt_t *t;
 
@@ -24,117 +67,81 @@ static c_trc_evt_t* castle_trace_buffer_alloc(c_trace_id_t id)
 
     t->magic = CASTLE_TRACE_MAGIC;
     do_gettimeofday(&t->timestamp);
-    t->id = id;
     t->cpu = smp_processor_id();
 
     return t;
 }
 
-static void castle_trace_cache_event(c_trc_cache_var_id_t var_id, uint32_t var_val)
+/**
+ * Trace an event.
+ *
+ * @param provider          Event provider (e.g. TRACE_CACHE, TRACE_DA, etc.)
+ * @param type              Event type (TRACE_VALUE, TRACE_START, TRACE_STOP)
+ * @param var               Event variable (e.g. TRACE_MERGE_UNIT, TRACE_CACHE_READS)
+ * @param da                Doubling Array ID
+ * @param v1,v2,v3,v4,v5    Consumer defined
+ */
+static void _castle_trace_event(c_trc_prov_t provider, c_trc_evt_type_t evt_type, int var,
+                               uint64_t v1, uint64_t v2, uint64_t v3, uint64_t v4, uint64_t v5)
 {
     unsigned long flags;
-    c_trc_evt_t *t;
+    c_trc_evt_t *evt;
 
-    /* TODO: what if we are racing probe remove, with a call here?. */
     local_irq_save(flags);
-    t = castle_trace_buffer_alloc(TRACE_CACHE_ID);
-    if(t)
+    evt = castle_trace_buffer_alloc();
+    if (evt)
     {
-        t->cache.var_id  = var_id;
-        t->cache.var_val = var_val;
+        evt->provider   = provider;
+        evt->evt_type   = evt_type;
+        evt->var        = var;
+        evt->v1         = v1;
+        evt->v2         = v2;
+        evt->v3         = v3;
+        evt->v4         = v4;
+        evt->v5         = v5;
     }
+    else
+        printk("castle_trace_buffer_alloc() failed.\n");
     local_irq_restore(flags);
 }
 
-static void castle_trace_merge_start_event(da_id_t da, 
-                                           uint8_t level, 
-                                           tree_seq_t in_tree1, 
+static void castle_trace_merge_start_event(da_id_t da,
+                                           uint8_t level,
+                                           tree_seq_t in_tree1,
                                            tree_seq_t in_tree2)
 {
-    unsigned long flags;
-    c_trc_evt_t *t;
-
-    local_irq_save(flags);
-    t = castle_trace_buffer_alloc(TRACE_MERGE_ID);
-    if(t)
-    {
-        t->merge.da       = da;
-        t->merge.level    = level;
-        t->merge.flags    = MERGE_START_FLAG;
-        t->merge.tree_id1 = in_tree1;
-        t->merge.tree_id2 = in_tree2;
-    }
-    local_irq_restore(flags);
+    _castle_trace_event(TRACE_DA, TRACE_START, TRACE_MERGE, da, level, in_tree1, in_tree2, 0);
 }
 
-static void castle_trace_merge_finish_event(da_id_t da, uint8_t level, tree_seq_t out_tree)
+static void castle_trace_merge_stop_event(da_id_t da,
+                                          uint8_t level,
+                                          tree_seq_t out_tree)
 {
-    unsigned long flags;
-    c_trc_evt_t *t;
-
-    local_irq_save(flags);
-    t = castle_trace_buffer_alloc(TRACE_MERGE_ID);
-    if(t)
-    {
-        t->merge.da       = da;
-        t->merge.level    = level;
-        t->merge.flags    = MERGE_END_FLAG;
-        t->merge.tree_id1 = out_tree;
-    }
-    local_irq_restore(flags);
+    _castle_trace_event(TRACE_DA, TRACE_STOP, TRACE_MERGE, da, level, out_tree, 0, 0);
 }
 
 static void castle_trace_merge_unit_start_event(da_id_t da, uint8_t level, uint64_t unit)
 {
-    unsigned long flags;
-    c_trc_evt_t *t;
-
-    local_irq_save(flags);
-    t = castle_trace_buffer_alloc(TRACE_MERGE_UNIT_ID);
-    if(t)
-    {
-        t->merge_unit.da       = da;
-        t->merge_unit.level    = level;
-        t->merge_unit.flags    = MERGE_START_FLAG;
-        t->merge_unit.unit     = unit;
-    }
-    local_irq_restore(flags);
+    _castle_trace_event(TRACE_DA, TRACE_START, TRACE_MERGE_UNIT, da, level, unit, 0,0);
 }
 
-static void castle_trace_merge_unit_finish_event(da_id_t da, uint8_t level, uint64_t unit)
+static void castle_trace_merge_unit_stop_event(da_id_t da, uint8_t level, uint64_t unit)
 {
-    unsigned long flags;
-    c_trc_evt_t *t;
-
-    local_irq_save(flags);
-    t = castle_trace_buffer_alloc(TRACE_MERGE_UNIT_ID);
-    if(t)
-    {
-        t->merge_unit.da       = da;
-        t->merge_unit.level    = level;
-        t->merge_unit.flags    = MERGE_END_FLAG;
-        t->merge_unit.unit     = unit;
-    }
-    local_irq_restore(flags);
+    _castle_trace_event(TRACE_DA, TRACE_STOP, TRACE_MERGE_UNIT, da, level, unit, 0,0);
 }
 
-static void castle_trace_merge_unit_stat_event(da_id_t da, uint8_t level, uint64_t unit,
-                                               c_trc_merge_var_id_t var_id, uint32_t val)
+static void castle_trace_merge_unit_event(da_id_t da,
+                                          uint8_t level,
+                                          uint64_t unit,
+                                          c_trc_merge_var_t var_id,
+                                          uint32_t val)
 {
-    unsigned long flags;
-    c_trc_evt_t *t;
+    _castle_trace_event(TRACE_DA, TRACE_VALUE, var_id, da, level, unit, val, 0);
+}
 
-    local_irq_save(flags);
-    t = castle_trace_buffer_alloc(TRACE_MERGE_UNIT_STAT_ID);
-    if(t)
-    {
-        t->merge_unit_stat.da      = da;
-        t->merge_unit_stat.level   = level;
-        t->merge_unit_stat.unit    = unit;
-        t->merge_unit_stat.var_id  = var_id;
-        t->merge_unit_stat.val     = val;
-    }
-    local_irq_restore(flags);
+static void castle_trace_cache_event(c_trc_cache_var_t var_id, uint32_t var_val)
+{
+    _castle_trace_event(TRACE_CACHE, TRACE_VALUE, var_id, var_val, 0,0,0,0);
 }
 
 static int castle_trace_subbuf_start(struct rchan_buf *buf, 
@@ -196,6 +203,11 @@ static struct rchan_callbacks castle_trace_relay_callbacks = {
     fail_unregister_probe_##tpoint:                                            \
         castle_trace_##tpoint##_unregister(castle_trace_##tpoint##_event)
 
+/**
+ * Register tracepoints.
+ *
+ * @also castle_trace_tracepoints_unregister()
+ */
 static int castle_trace_tracepoints_register(void)
 {
     int ret;
@@ -203,30 +215,39 @@ static int castle_trace_tracepoints_register(void)
 
     trace_register(cache);
     trace_register(merge_start);
-    trace_register(merge_finish);
+    trace_register(merge_stop);
+    trace_register(merge_unit);
     trace_register(merge_unit_start);
-    trace_register(merge_unit_stat);
-    last_trace_register(merge_unit_finish);
+    last_trace_register(merge_unit_stop);
 
     return 0;
 
-    trace_register_fail(merge_unit_stat);
     trace_register_fail(merge_unit_start);
-    trace_register_fail(merge_finish);
+    trace_register_fail(merge_unit);
+    trace_register_fail(merge_stop);
     trace_register_fail(merge_start);
     trace_register_fail(cache);
 error:
     return ret;
 }
 
+/**
+ * Unregister tracepoints.
+ *
+ * NOTE: pass the name of the function that gets created by trace_register() to
+ * the _unregister() function.  This is the name of the function that was
+ * registered with _event suffixed.
+ *
+ * @also castle_trace_tracepoints_register()
+ */
 static void castle_trace_tracepoints_unregister(void)
 {
     castle_trace_cache_unregister(castle_trace_cache_event);
     castle_trace_merge_start_unregister(castle_trace_merge_start_event);
-    castle_trace_merge_finish_unregister(castle_trace_merge_finish_event);
+    castle_trace_merge_stop_unregister(castle_trace_merge_stop_event);
+    castle_trace_merge_unit_unregister(castle_trace_merge_unit_event);
     castle_trace_merge_unit_start_unregister(castle_trace_merge_unit_start_event);
-    castle_trace_merge_unit_finish_unregister(castle_trace_merge_unit_finish_event);
-    castle_trace_merge_unit_stat_unregister(castle_trace_merge_unit_stat_event);
+    castle_trace_merge_unit_stop_unregister(castle_trace_merge_unit_stop_event);
 }
 
 int castle_trace_setup(char *dir_str)

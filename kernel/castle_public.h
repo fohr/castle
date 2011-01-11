@@ -40,76 +40,69 @@ typedef enum {
     LAST_ENV_VAR_ID,
 } c_env_var_t; 
 
+/**
+ * Trace providers.
+ */
 typedef enum {
-    TRACE_CACHE_ID,
-    TRACE_MERGE_ID,
-    TRACE_MERGE_UNIT_ID,
-    TRACE_MERGE_UNIT_STAT_ID,
-} c_trace_id_t;
+    TRACE_CACHE,        /**< Cache events           */
+    TRACE_DA,           /**< Merge events           */
+} c_trc_prov_t;
 
+/**
+ * Event types.
+ */
 typedef enum {
-    TRACE_CACHE_DIRTY_PGS_ID,
-    TRACE_CACHE_CLEAN_PGS_ID,
-    TRACE_CACHE_FREE_PGS_ID,
-    TRACE_CACHE_FREE_BLKS_ID,
-    TRACE_CACHE_CLEAN_BLKS_ID,
-    TRACE_CACHE_SOFTPIN_BLKS_ID,
-    TRACE_CACHE_BLOCK_VICTIMS_ID,
-    TRACE_CACHE_SOFTPIN_VICTIMS_ID,
-    TRACE_CACHE_READS_ID,
-    TRACE_CACHE_WRITES_ID,
-} c_trc_cache_var_id_t;
+    TRACE_VALUE,        /**< Reporting              */
+    TRACE_START,        /**< Event has started      */
+    TRACE_STOP,         /**< Event has stopped      */
+} c_trc_evt_type_t;
 
+/**
+ * Cache trace variables.
+ */
 typedef enum {
+    TRACE_CACHE_DIRTY_PGS,
+    TRACE_CACHE_CLEAN_PGS,
+    TRACE_CACHE_FREE_PGS,
+    TRACE_CACHE_FREE_BLKS,
+    TRACE_CACHE_CLEAN_BLKS,
+    TRACE_CACHE_SOFTPIN_BLKS,
+    TRACE_CACHE_BLOCK_VICTIMS,
+    TRACE_CACHE_SOFTPIN_VICTIMS,
+    TRACE_CACHE_READS,
+    TRACE_CACHE_WRITES,
+} c_trc_cache_var_t;
+
+/**
+ * Merge trace variables.
+ */
+typedef enum {
+    TRACE_MERGE,        /**< Merge                  */
+    TRACE_MERGE_UNIT,   /**< Merge unit             */
+    /* Merge unit stats */
     TRACE_MERGE_UNIT_C2B_SYNC_WAIT_BT_NS,
     TRACE_MERGE_UNIT_C2B_SYNC_WAIT_DATA_NS,
     TRACE_MERGE_UNIT_GET_C2B_NS,
     TRACE_MERGE_UNIT_DA_MEDIUM_OBJ_COPY_NS,
-} c_trc_merge_var_id_t;
-
-typedef struct castle_trace_cache_event {
-    c_trc_cache_var_id_t var_id;
-    uint32_t             var_val;
-} PACKED c_trc_cache_evt_t;
+} c_trc_merge_var_t;
 
 #define MERGE_START_FLAG    (1U<<0)
 #define MERGE_END_FLAG      (1U<<1)
-typedef struct castle_trace_merge_event {
-    uint32_t da;
-    uint8_t  level;
-    uint8_t  flags;
-    uint32_t tree_id1;
-    uint32_t tree_id2;
-} PACKED c_trc_mrg_evt_t;
-
-typedef struct castle_trace_merge_unit_event {
-    uint32_t da;
-    uint8_t  level;
-    uint8_t  flags;
-    uint64_t unit;
-} PACKED c_trc_mrg_unit_evt_t;
-
-typedef struct castle_trace_merge_unit_stat {
-    uint32_t da;
-    uint8_t  level;
-    uint64_t unit;
-    c_trc_merge_var_id_t var_id;
-    uint32_t val;
-} PACKED c_trc_mrg_unit_stat_t;
 
 /* Bump the magic version byte (LSB) when c_trc_evt_t changes. */
-#define CASTLE_TRACE_MAGIC          0xCAE5E101
+#define CASTLE_TRACE_MAGIC          0xCAE5E102
 typedef struct castle_trace_event {
     uint32_t                    magic;
     struct timeval              timestamp;
-    c_trace_id_t                id;
-    int                         cpu;
-    union {
-        c_trc_cache_evt_t       cache;
-        c_trc_mrg_evt_t         merge;
-        c_trc_mrg_unit_evt_t    merge_unit;
-        c_trc_mrg_unit_stat_t   merge_unit_stat;
-    };
+    int                         cpu;        /**< CPU ID that allocated structure.       */
+    c_trc_prov_t                provider;   /**< Event provider                         */
+    c_trc_evt_type_t            evt_type;   /**< Event type                             */
+    int                         var;        /**< Event variable                         */
+    uint64_t                    v1;
+    uint64_t                    v2;
+    uint64_t                    v3;
+    uint64_t                    v4;
+    uint64_t                    v5;
 } PACKED c_trc_evt_t;
 
 typedef uint32_t transfer_id_t;

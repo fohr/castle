@@ -317,20 +317,20 @@ void castle_cache_stats_print(int verbose)
             atomic_read(&castle_cache_clean_pages),
             castle_cache_page_freelist_size * PAGES_PER_C2P,
             reads, writes);
-    castle_trace_cache(TRACE_CACHE_CLEAN_PGS_ID,        atomic_read(&castle_cache_clean_pages));
-    castle_trace_cache(TRACE_CACHE_DIRTY_PGS_ID,        atomic_read(&castle_cache_dirty_pages));
-    castle_trace_cache(TRACE_CACHE_FREE_PGS_ID,         castle_cache_page_freelist_size * PAGES_PER_C2P);
-    castle_trace_cache(TRACE_CACHE_FREE_BLKS_ID,        castle_cache_block_freelist_size);
-    castle_trace_cache(TRACE_CACHE_CLEAN_BLKS_ID,       atomic_read(&castle_cache_cleanlist_size));
-    castle_trace_cache(TRACE_CACHE_SOFTPIN_BLKS_ID,     atomic_read(&castle_cache_cleanlist_softpin_size));
+    castle_trace_cache(TRACE_CACHE_CLEAN_PGS, atomic_read(&castle_cache_clean_pages));
+    castle_trace_cache(TRACE_CACHE_DIRTY_PGS, atomic_read(&castle_cache_dirty_pages));
+    castle_trace_cache(TRACE_CACHE_FREE_PGS, castle_cache_page_freelist_size * PAGES_PER_C2P);
+    castle_trace_cache(TRACE_CACHE_FREE_BLKS, castle_cache_block_freelist_size);
+    castle_trace_cache(TRACE_CACHE_CLEAN_BLKS, atomic_read(&castle_cache_cleanlist_size));
+    castle_trace_cache(TRACE_CACHE_SOFTPIN_BLKS, atomic_read(&castle_cache_cleanlist_softpin_size));
     count = atomic_read(&castle_cache_block_victims);
     atomic_sub(count, &castle_cache_block_victims);
-    castle_trace_cache(TRACE_CACHE_BLOCK_VICTIMS_ID,    count);
+    castle_trace_cache(TRACE_CACHE_BLOCK_VICTIMS, count);
     count = atomic_read(&castle_cache_softpin_block_victims);
     atomic_sub(count, &castle_cache_softpin_block_victims);
-    castle_trace_cache(TRACE_CACHE_SOFTPIN_VICTIMS_ID,  count);
-    castle_trace_cache(TRACE_CACHE_READS_ID,            reads);
-    castle_trace_cache(TRACE_CACHE_WRITES_ID,           writes);
+    castle_trace_cache(TRACE_CACHE_SOFTPIN_VICTIMS, count);
+    castle_trace_cache(TRACE_CACHE_READS, reads);
+    castle_trace_cache(TRACE_CACHE_WRITES, writes);
 }
 
 EXPORT_SYMBOL(castle_cache_stats_print);

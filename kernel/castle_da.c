@@ -2594,29 +2594,29 @@ static int castle_da_merge_run(void *da_p)
             /* Do the unit. */
             castle_trace_merge_unit_start(da->id, level, units_cnt);
             ret = castle_da_merge_unit_do(merge, units_cnt);
-            castle_trace_merge_unit_finish(da->id, level, units_cnt);
+            castle_trace_merge_unit_stop(da->id, level, units_cnt);
 #ifdef CASTLE_PERF_DEBUG
             /* Print & reset performance stats. */
 
             /* Btree c2b_sync() time. */
             ns = in_tree1->bt_c2bsync_ns + in_tree2->bt_c2bsync_ns;
-            castle_trace_merge_unit_stat(da->id, level, units_cnt,
+            castle_trace_merge_unit(da->id, level, units_cnt,
                     TRACE_MERGE_UNIT_C2B_SYNC_WAIT_BT_NS, ns);
             in_tree1->bt_c2bsync_ns = in_tree2->bt_c2bsync_ns = 0;
 
             /* Data c2b_sync() time. */
             ns = in_tree1->data_c2bsync_ns + in_tree2->data_c2bsync_ns;
-            castle_trace_merge_unit_stat(da->id, level, units_cnt,
+            castle_trace_merge_unit(da->id, level, units_cnt,
                     TRACE_MERGE_UNIT_C2B_SYNC_WAIT_DATA_NS, ns);
             in_tree1->data_c2bsync_ns = in_tree2->data_c2bsync_ns = 0;
 
             /* castle_cache_block_get() time. */
-            castle_trace_merge_unit_stat(da->id, level, units_cnt,
+            castle_trace_merge_unit(da->id, level, units_cnt,
                     TRACE_MERGE_UNIT_GET_C2B_NS, merge->get_c2b_ns);
             merge->get_c2b_ns = 0;
 
             /* Merge time. */
-            castle_trace_merge_unit_stat(da->id, level, units_cnt,
+            castle_trace_merge_unit(da->id, level, units_cnt,
                     TRACE_MERGE_UNIT_DA_MEDIUM_OBJ_COPY_NS, merge->da_medium_obj_copy_ns);
             merge->da_medium_obj_copy_ns = 0;
 #endif
@@ -2645,7 +2645,7 @@ merge_failed:
 
         castle_da_merge_dealloc(merge, ret);
 
-        castle_trace_merge_finish(da->id, level, out_tree_id);
+        castle_trace_merge_stop(da->id, level, out_tree_id);
         debug_merges("Done merge.\n");
         if(ret)
         {
