@@ -713,7 +713,7 @@ static int castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
             }
             else 
             { /* Large Objects. */
-                cep.ext_id = castle_extent_alloc(DEFAULT, c_bvec->tree->da, 
+                cep.ext_id = castle_extent_alloc(DEFAULT_RDA, c_bvec->tree->da, 
                                                  nr_chunks);
                 cep.offset = 0;
 

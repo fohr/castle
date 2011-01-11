@@ -2207,8 +2207,8 @@ typedef struct castle_cache_prefetch_window {
     c_ext_id_t      ext_id;     /**< Extent this window describes.                                */
     c_byte_off_t    start_off;  /**< Start of range that has been prefetched.                     */
     c_byte_off_t    end_off;    /**< End of range that has been prefetched.  Chunk aligned.       */
-    uint16_t        pref_pages; /**< Number of pages we prefetch.                                 */
-    uint16_t        adv_thresh; /**< #pages from end_off before we prefetch.                      */
+    uint32_t        pref_pages; /**< Number of pages we prefetch.                                 */
+    uint32_t        adv_thresh; /**< #pages from end_off before we prefetch.                      */
     struct rb_node  rb_node;    /**< RB-node for this window.                                     */
     atomic_t        count;      /**< Reference count.                                             */
     struct mutex    lock;       /**< Hold while changing start_off, end_off, pref_pages.          */
@@ -2687,12 +2687,12 @@ static c2_pref_window_t * c2_pref_window_alloc(c2_pref_window_t *window,
     window->adv_thresh      = PREF_ADV_THRESH;
 
     if (advise & C2_ADV_STATIC)
-        window->pref_pages  = PREF_ADAP_INITIAL;
+        window->pref_pages  = PREF_PAGES;
     else// if (advise & C2_ADV_ADAPTIVE)
     {
         /* By default, prefetch windows are adaptive. */
         window->state      |= PREF_WINDOW_ADAPTIVE;
-        window->pref_pages  = PREF_PAGES;
+        window->pref_pages  = PREF_ADAP_INITIAL;
     }
     if (advise & C2_ADV_FRWD)
         window->state  |= PREF_WINDOW_FRWD;

@@ -102,7 +102,7 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t            rda_type,
                                        c_ext_id_t              ext_id);
 
 static c_rda_spec_t castle_default_rda = {
-    .type               = DEFAULT,
+    .type               = DEFAULT_RDA,
     .k_factor           = 2,
     .next_slave_get     = castle_rda_next_slave_get,
     .extent_init        = castle_rda_extent_init,
@@ -142,7 +142,7 @@ static c_rda_spec_t castle_meta_ext_rda = {
 };
 
 c_rda_spec_t *castle_rda_specs[] =  {
-    [DEFAULT]           = &castle_default_rda,
+    [DEFAULT_RDA]       = &castle_default_rda,
     [JOURNAL]           = &castle_journal_rda,
     [FS_META]           = &castle_fs_meta_rda,
     [LOG_FREEZER]       = &castle_log_freezer_rda,
@@ -360,19 +360,19 @@ static int castle_extent_mstore_ext_create(void)
     c_ext_t *mstore_ext;
     struct   castle_extents_sb_t *castle_extents_sb;
     c_ext_id_t ext_id;
-    int      k_factor = (castle_rda_spec_get(DEFAULT))->k_factor; 
+    int      k_factor = (castle_rda_spec_get(DEFAULT_RDA))->k_factor; 
 
     i = 0;
     list_for_each(l, &castle_slaves.slaves)
         i++;
 
-    ext_id = _castle_extent_alloc(DEFAULT, 0, 
+    ext_id = _castle_extent_alloc(DEFAULT_RDA, 0, 
                                   MSTORE_SPACE_SIZE * i / k_factor,
                                   MSTORE_EXT_ID);
     if (ext_id != MSTORE_EXT_ID)
         return -ENOSPC;
 
-    ext_id = _castle_extent_alloc(DEFAULT, 0, 
+    ext_id = _castle_extent_alloc(DEFAULT_RDA, 0, 
                                   MSTORE_SPACE_SIZE * i / k_factor,
                                   MSTORE_EXT_ID+1);
     if (ext_id != MSTORE_EXT_ID+1)
@@ -601,27 +601,32 @@ void castle_extents_fini(void)
     castle_free(castle_extents_hash);
 }
 
-int castle_extents_maps_free(c_disk_chk_t *maps_buf, uint32_t count)
+int castle_extents_maps_free(c_disk_chk_t *maps_buf, uint32_t count, c_rda_type_t  rda_type)
 {
-    int         i;
-    uint32_t    id;
-    c_chk_t     super_chk[MAX_NR_SLAVES];
+    int         i, j;
+    c_chk_t    *super_chk;
+    uint32_t    nr_copies = (castle_rda_spec_get(rda_type))->k_factor;
+
+    super_chk = castle_malloc(sizeof(c_chk_t) * MAX_NR_SLAVES * nr_copies, GFP_KERNEL);
+    if (!super_chk)
+        return -ENOMEM;
 
     /* Note: Super Chunk 0 is pre-allocated for super extent. No extent contains
      * mappings for Super Chunk 0. */
-    memset(super_chk, 0, sizeof(super_chk));
+    memset(super_chk, 0, sizeof(c_chk_t) * MAX_NR_SLAVES * nr_copies);
 
     /* Free all the physical chunks. */
     for (i=0; i<count; i++)
     {
         struct      castle_slave *cs;
-        uint32_t    uuid = maps_buf[i].slave_id;
+        uint32_t    id, uuid = maps_buf[i].slave_id;
         c_chk_t     chk  = maps_buf[i].offset;
+        uint32_t    copy = (i % nr_copies);
 
         cs = castle_slave_find_by_uuid(uuid);
         BUG_ON(!cs);
 
-        id = cs->id;
+        id = (cs->id * nr_copies) + copy;
         debug("Freeing chunk %u from 0x%x - %u\n", chk, uuid, super_chk[id]);
         if (super_chk[id] != SUPER_CHUNK(chk))
         {
@@ -631,39 +636,49 @@ int castle_extents_maps_free(c_disk_chk_t *maps_buf, uint32_t count)
         }
     }
 
-    for (id=0; id<MAX_NR_SLAVES; id++)
+    for (i=0; i<MAX_NR_SLAVES; i++)
     {
         struct castle_slave *cs;
 
-        if (super_chk[id])
+        cs = castle_slave_find_by_id(i);
+        for (j=0; j<nr_copies; j++)
         {
-            cs = castle_slave_find_by_id(id);
-            castle_freespace_slave_super_chunk_free(cs, super_chk[id]);
+            uint32_t idx = (i * nr_copies) + j;
+
+            if (super_chk[idx])
+                castle_freespace_slave_super_chunk_free(cs, super_chk[idx]);
         }
     }
 
+    castle_free(super_chk);
     return 0;
 }
 
-int castle_extents_maps_alloc(c_disk_chk_t *maps_buf, da_id_t da_id, uint32_t count)
+int castle_extents_maps_alloc(c_disk_chk_t *maps_buf, 
+                              da_id_t da_id, 
+                              uint32_t count, 
+                              c_rda_type_t rda_type)
 {
     int         i;
     uint32_t    id;
-    c_chk_t     free_chk[MAX_NR_SLAVES];
+    c_chk_t    *free_chk;
     c_chk_seq_t chk_seq;
+    uint32_t    nr_copies = (castle_rda_spec_get(rda_type))->k_factor;
 
-    memset(free_chk, 0, sizeof(free_chk));
+    free_chk = castle_malloc(sizeof(c_chk_t) * MAX_NR_SLAVES * nr_copies, GFP_KERNEL);
+    memset(free_chk, 0, sizeof(c_chk_t) * MAX_NR_SLAVES * nr_copies);
 
     /* Allocate physical chunks from slaves */
     for (i=0; i<count; i++)
     {
         uint32_t    uuid             = maps_buf[i].slave_id;
         struct      castle_slave *cs = castle_slave_find_by_uuid(uuid);
+        uint32_t    copy             = (i % nr_copies);
 
         BUG_ON(!cs);
-        id = cs->id;
+        id = (cs->id * nr_copies) + copy;
 
-        /* If free chunks are available in the buffer, use them. */       
+        /* If free chunks are available in the buffer, use them. */
         if (free_chk[id])
         {
             maps_buf[i].offset = free_chk[id];
@@ -693,10 +708,12 @@ int castle_extents_maps_alloc(c_disk_chk_t *maps_buf, da_id_t da_id, uint32_t co
 
     if (i != count)
     {
-        castle_extents_maps_free(maps_buf, i);
+        castle_extents_maps_free(maps_buf, i, rda_type);
+        castle_free(free_chk);
         return -ENOSPC;
     }
 
+    castle_free(free_chk);
     return 0;
 }
 
@@ -748,7 +765,7 @@ int castle_extent_space_alloc(c_ext_t *ext, da_id_t da_id)
     }
 
     /* Allocate physical chunks from slaves */
-    if ((err = castle_extents_maps_alloc(maps_buf, da_id, idx)))
+    if ((err = castle_extents_maps_alloc(maps_buf, da_id, idx, ext->type)))
         goto out;
 
     cep = ext->maps_cep;
@@ -919,7 +936,7 @@ void _castle_extent_free(c_ext_t *ext)
         cep.offset += C_BLK_SIZE;
     }
 
-    castle_extents_maps_free(maps_buf, ext->size * ext->k_factor);
+    castle_extents_maps_free(maps_buf, ext->size * ext->k_factor, ext->type);
 
     castle_extents_sb->nr_exts--;
     castle_extents_super_block_put(1);

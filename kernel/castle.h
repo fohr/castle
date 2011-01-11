@@ -131,7 +131,7 @@ typedef uint32_t block_t;
 #define SUPER_EXTENT(_ext_id)          (((_ext_id) >= SUP_EXT_ID) && ((_ext_id) < slave_id_to_sup_ext(MAX_NR_SLAVES)))
 
 typedef enum {
-    DEFAULT,
+    DEFAULT_RDA,
     JOURNAL,
     FS_META,
     LOG_FREEZER,
