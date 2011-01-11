@@ -2567,7 +2567,8 @@ static int castle_da_merge_run(void *da_p)
         BUG_ON(!in_tree1 || !in_tree2);
             
         debug_merges("Doing merge, trees=[%u]+[%u]\n", in_tree1->seq, in_tree2->seq);
-        castle_trace_merge_start(da->id, level, in_tree1->seq, in_tree2->seq);
+        castle_trace_da_merge(TRACE_START, TRACE_DA_MERGE_ID,
+                da->id, level, in_tree1->seq, in_tree2->seq);
         merge = castle_da_merge_init(da, level, in_tree1, in_tree2);
         if(!merge)
         {
@@ -2592,32 +2593,34 @@ static int castle_da_merge_run(void *da_p)
             /* Wait until we are allowed to do next unit of merge. */
             units_cnt = castle_da_merge_units_inc_return(da, level);
             /* Do the unit. */
-            castle_trace_merge_unit_start(da->id, level, units_cnt);
+            castle_trace_da_merge_unit(TRACE_START, TRACE_DA_MERGE_UNIT_ID,
+                    da->id, level, units_cnt, 0);
             ret = castle_da_merge_unit_do(merge, units_cnt);
-            castle_trace_merge_unit_stop(da->id, level, units_cnt);
+            castle_trace_da_merge_unit(TRACE_END, TRACE_DA_MERGE_UNIT_ID,
+                    da->id, level, units_cnt, 0);
 #ifdef CASTLE_PERF_DEBUG
             /* Print & reset performance stats. */
 
             /* Btree c2b_sync() time. */
             ns = in_tree1->bt_c2bsync_ns + in_tree2->bt_c2bsync_ns;
-            castle_trace_merge_unit(da->id, level, units_cnt,
-                    TRACE_MERGE_UNIT_C2B_SYNC_WAIT_BT_NS, ns);
+            castle_trace_da_merge_unit(TRACE_VALUE, TRACE_DA_MERGE_UNIT_C2B_SYNC_WAIT_BT_NS_ID,
+                    da->id, level, units_cnt, ns);
             in_tree1->bt_c2bsync_ns = in_tree2->bt_c2bsync_ns = 0;
 
             /* Data c2b_sync() time. */
             ns = in_tree1->data_c2bsync_ns + in_tree2->data_c2bsync_ns;
-            castle_trace_merge_unit(da->id, level, units_cnt,
-                    TRACE_MERGE_UNIT_C2B_SYNC_WAIT_DATA_NS, ns);
+            castle_trace_da_merge_unit(TRACE_VALUE, TRACE_DA_MERGE_UNIT_C2B_SYNC_WAIT_DATA_NS_ID,
+                    da->id, level, units_cnt, ns);
             in_tree1->data_c2bsync_ns = in_tree2->data_c2bsync_ns = 0;
 
             /* castle_cache_block_get() time. */
-            castle_trace_merge_unit(da->id, level, units_cnt,
-                    TRACE_MERGE_UNIT_GET_C2B_NS, merge->get_c2b_ns);
+            castle_trace_da_merge_unit(TRACE_VALUE, TRACE_DA_MERGE_UNIT_GET_C2B_NS_ID,
+                    da->id, level, units_cnt, merge->get_c2b_ns);
             merge->get_c2b_ns = 0;
 
             /* Merge time. */
-            castle_trace_merge_unit(da->id, level, units_cnt,
-                    TRACE_MERGE_UNIT_DA_MEDIUM_OBJ_COPY_NS, merge->da_medium_obj_copy_ns);
+            castle_trace_da_merge_unit(TRACE_VALUE, TRACE_DA_MERGE_UNIT_MOBJ_COPY_NS_ID,
+                    da->id, level, units_cnt, merge->da_medium_obj_copy_ns);
             merge->da_medium_obj_copy_ns = 0;
 #endif
             /* Exit on errors. */
@@ -2645,7 +2648,7 @@ merge_failed:
 
         castle_da_merge_dealloc(merge, ret);
 
-        castle_trace_merge_stop(da->id, level, out_tree_id);
+        castle_trace_da_merge(TRACE_END, TRACE_DA_MERGE_ID, da->id, level, out_tree_id, 0);
         debug_merges("Done merge.\n");
         if(ret)
         {
@@ -2691,17 +2694,15 @@ static int castle_da_merge_restart(struct castle_double_array *da, void *unused)
     if(da->levels[1].nr_trees >= 4)
     {
         printk("Disabling inserts on da=%d.\n", da->id);
-        /* @FIXME convert this to relayfs:
         if (da->ios_rate != 0)
-            perf_end("da-%02d-inserts_enabled", da->id); */
+            castle_trace_da(TRACE_START, TRACE_DA_INSERTS_DISABLED_ID, da->id, 0);
         da->ios_rate = 0; 
     }
     else
     {
         printk("Enabling inserts on da=%d.\n", da->id);
-        /* @FIXME convert this to relayfs:
         if (da->ios_rate == 0)
-            perf_start("da-%02d-inserts_enabled", da->id); */
+            castle_trace_da(TRACE_END, TRACE_DA_INSERTS_DISABLED_ID, da->id, 0);
         da->ios_rate = (uint32_t)-1;   
     }
     castle_da_unlock(da);

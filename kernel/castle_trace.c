@@ -23,7 +23,7 @@ static char          *castle_trace_dir_str        = NULL;
  *
  * Trace events are broken down by:
  *    provider (e.g. DA, CACHE, etc.)
- *    event (TRACE_START, TRACE_STOP, TRACE_VALUE)
+ *    event (TRACE_START, TRACE_END, TRACE_VALUE)
  *    variable (e.g. TRACE_CACHE_DIRTY_PGS, TRACE_MERGE_UNIT_GET_C2B_NS, etc.)
  *    values (v1, v2, v3, v4, v5)
  * Generally value reporting should be handled by a top-level provider function, e.g.
@@ -76,13 +76,15 @@ static c_trc_evt_t* castle_trace_buffer_alloc(void)
  * Trace an event.
  *
  * @param provider          Event provider (e.g. TRACE_CACHE, TRACE_DA, etc.)
- * @param type              Event type (TRACE_VALUE, TRACE_START, TRACE_STOP)
+ * @param type              Event type (TRACE_VALUE, TRACE_START, TRACE_END)
  * @param var               Event variable (e.g. TRACE_MERGE_UNIT, TRACE_CACHE_READS)
  * @param da                Doubling Array ID
  * @param v1,v2,v3,v4,v5    Consumer defined
  */
-static void _castle_trace_event(c_trc_prov_t provider, c_trc_evt_type_t evt_type, int var,
-                               uint64_t v1, uint64_t v2, uint64_t v3, uint64_t v4, uint64_t v5)
+static void _castle_trace_event(c_trc_prov_t provider,
+                                c_trc_type_t type,
+                                int var,
+                                uint64_t v1, uint64_t v2, uint64_t v3, uint64_t v4, uint64_t v5)
 {
     unsigned long flags;
     c_trc_evt_t *evt;
@@ -92,7 +94,7 @@ static void _castle_trace_event(c_trc_prov_t provider, c_trc_evt_type_t evt_type
     if (evt)
     {
         evt->provider   = provider;
-        evt->evt_type   = evt_type;
+        evt->type       = type;
         evt->var        = var;
         evt->v1         = v1;
         evt->v2         = v2;
@@ -100,49 +102,49 @@ static void _castle_trace_event(c_trc_prov_t provider, c_trc_evt_type_t evt_type
         evt->v4         = v4;
         evt->v5         = v5;
     }
-    else
-        printk("castle_trace_buffer_alloc() failed.\n");
     local_irq_restore(flags);
 }
 
-static void castle_trace_merge_start_event(da_id_t da,
-                                           uint8_t level,
-                                           tree_seq_t in_tree1,
-                                           tree_seq_t in_tree2)
+/**************************************************************************************************/
+
+/* castle_trace_cache() */
+static void castle_trace_cache_event(c_trc_type_t type, c_trc_cache_var_t var, uint64_t v1)
 {
-    _castle_trace_event(TRACE_DA, TRACE_START, TRACE_MERGE, da, level, in_tree1, in_tree2, 0);
+    _castle_trace_event(TRACE_CACHE, type, var, v1, 0, 0, 0, 0);
 }
 
-static void castle_trace_merge_stop_event(da_id_t da,
-                                          uint8_t level,
-                                          tree_seq_t out_tree)
+/* castle_trace_da() */
+static void castle_trace_da_event(c_trc_type_t type,
+                                  c_trc_cache_var_t var,
+                                  da_id_t da,
+                                  uint64_t v2)
 {
-    _castle_trace_event(TRACE_DA, TRACE_STOP, TRACE_MERGE, da, level, out_tree, 0, 0);
+    _castle_trace_event(TRACE_DA, type, var, da, v2, 0, 0, 0);
 }
 
-static void castle_trace_merge_unit_start_event(da_id_t da, uint8_t level, uint64_t unit)
+/* castle_trace_da_merge() */
+static void castle_trace_da_merge_event(c_trc_type_t type,
+                                        c_trc_cache_var_t var,
+                                        da_id_t da,
+                                        uint8_t level,
+                                        uint64_t v4,
+                                        uint64_t v5)
 {
-    _castle_trace_event(TRACE_DA, TRACE_START, TRACE_MERGE_UNIT, da, level, unit, 0,0);
+    _castle_trace_event(TRACE_DA_MERGE, type, var, da, level, 0, v4, v5);
 }
 
-static void castle_trace_merge_unit_stop_event(da_id_t da, uint8_t level, uint64_t unit)
+/* castle_trace_da_merge_unit() */
+static void castle_trace_da_merge_unit_event(c_trc_type_t type,
+                                             c_trc_cache_var_t var,
+                                             da_id_t da,
+                                             uint8_t level,
+                                             uint64_t unit,
+                                             uint64_t v4)
 {
-    _castle_trace_event(TRACE_DA, TRACE_STOP, TRACE_MERGE_UNIT, da, level, unit, 0,0);
+    _castle_trace_event(TRACE_DA_MERGE_UNIT, type, var, da, level, unit, v4, 0);
 }
 
-static void castle_trace_merge_unit_event(da_id_t da,
-                                          uint8_t level,
-                                          uint64_t unit,
-                                          c_trc_merge_var_t var_id,
-                                          uint32_t val)
-{
-    _castle_trace_event(TRACE_DA, TRACE_VALUE, var_id, da, level, unit, val, 0);
-}
-
-static void castle_trace_cache_event(c_trc_cache_var_t var_id, uint32_t var_val)
-{
-    _castle_trace_event(TRACE_CACHE, TRACE_VALUE, var_id, var_val, 0,0,0,0);
-}
+/**************************************************************************************************/
 
 static int castle_trace_subbuf_start(struct rchan_buf *buf, 
                                      void *subbuf,
@@ -214,18 +216,14 @@ static int castle_trace_tracepoints_register(void)
     void *exit_point = &&error;
 
     trace_register(cache);
-    trace_register(merge_start);
-    trace_register(merge_stop);
-    trace_register(merge_unit);
-    trace_register(merge_unit_start);
-    last_trace_register(merge_unit_stop);
+    trace_register(da);
+    trace_register(da_merge);
+    last_trace_register(da_merge_unit);
 
     return 0;
 
-    trace_register_fail(merge_unit_start);
-    trace_register_fail(merge_unit);
-    trace_register_fail(merge_stop);
-    trace_register_fail(merge_start);
+    trace_register_fail(da_merge);
+    trace_register_fail(da);
     trace_register_fail(cache);
 error:
     return ret;
@@ -243,11 +241,9 @@ error:
 static void castle_trace_tracepoints_unregister(void)
 {
     castle_trace_cache_unregister(castle_trace_cache_event);
-    castle_trace_merge_start_unregister(castle_trace_merge_start_event);
-    castle_trace_merge_stop_unregister(castle_trace_merge_stop_event);
-    castle_trace_merge_unit_unregister(castle_trace_merge_unit_event);
-    castle_trace_merge_unit_start_unregister(castle_trace_merge_unit_start_event);
-    castle_trace_merge_unit_stop_unregister(castle_trace_merge_unit_stop_event);
+    castle_trace_da_unregister(castle_trace_da_event);
+    castle_trace_da_merge_unregister(castle_trace_da_merge_event);
+    castle_trace_da_merge_unit_unregister(castle_trace_da_merge_unit_event);
 }
 
 int castle_trace_setup(char *dir_str)

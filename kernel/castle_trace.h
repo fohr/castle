@@ -35,25 +35,29 @@
  * is generally expected to pass a point in time statistic, e.g. number of dirty
  * pages or number of outstanding IO operations.
  */
-CASTLE_DEFINE_TRACE(cache,              /* castle_trace_cache() */
-                    TPPROTO(c_trc_cache_var_t var_id, uint32_t var_val),
-                    TPARGS(var_id, var_val));
-CASTLE_DEFINE_TRACE(merge_start,        /* castle_trace_merge_start() */
-                    TPPROTO(da_id_t da, uint8_t level, tree_seq_t in_tree1, tree_seq_t in_tree2),
-                    TPARGS(da, level, in_tree1, in_tree2));
-CASTLE_DEFINE_TRACE(merge_stop,         /* castle_trace_merge_stop() */
-                    TPPROTO(da_id_t da, uint8_t level, tree_seq_t out_tree),
-                    TPARGS(da, level, out_tree));
-CASTLE_DEFINE_TRACE(merge_unit_start,   /* castle_trace_merge_unit_start() */
-                    TPPROTO(da_id_t da, uint8_t level, uint64_t unit),
-                    TPARGS(da, level, unit));
-CASTLE_DEFINE_TRACE(merge_unit_stop,    /* castle_trace_merge_unit_stop() */
-                    TPPROTO(da_id_t da, uint8_t level, uint64_t unit),
-                    TPARGS(da, level, unit));
-CASTLE_DEFINE_TRACE(merge_unit,         /* castle_trace_merge_unit() */
-                    TPPROTO(da_id_t da, uint8_t level, uint64_t unit,
-                        c_trc_merge_var_t var_id, uint32_t val),
-                    TPARGS(da, level, unit, var_id, val));
+
+/* castle_trace_cache() */
+CASTLE_DEFINE_TRACE(cache,
+                    TPPROTO(c_trc_type_t type, c_trc_cache_var_t var, uint64_t v1),
+                    TPARGS(type, var, v1));
+
+/* castle_trace_da() */
+CASTLE_DEFINE_TRACE(da,
+                    TPPROTO(c_trc_type_t type, c_trc_cache_var_t var,
+                        da_id_t da, uint64_t v2),
+                    TPARGS(type, var, da, v2));
+
+/* castle_trace_da_merge() */
+CASTLE_DEFINE_TRACE(da_merge,
+                    TPPROTO(c_trc_type_t type, c_trc_cache_var_t var,
+                        da_id_t da, uint8_t level, uint64_t v4, uint64_t v5),
+                    TPARGS(type, var, da, level, v4, v5));
+
+/* castle_trace_da_merge_unit() */
+CASTLE_DEFINE_TRACE(da_merge_unit,
+                    TPPROTO(c_trc_type_t type, c_trc_cache_var_t var,
+                        da_id_t da, uint8_t level, uint64_t unit, uint64_t v4),
+                    TPARGS(type, var, da, level, unit, v4));
 
 int castle_trace_setup   (char *dir);
 int castle_trace_start   (void);

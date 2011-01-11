@@ -44,59 +44,63 @@ typedef enum {
  * Trace providers.
  */
 typedef enum {
-    TRACE_CACHE,        /**< Cache events           */
-    TRACE_DA,           /**< Merge events           */
+    TRACE_CACHE,            /**< Cache events       */
+    TRACE_DA,               /**< DA events          */
+    TRACE_DA_MERGE,         /**< Merge events       */
+    TRACE_DA_MERGE_UNIT,    /**< Merge unit events  */
 } c_trc_prov_t;
 
 /**
  * Event types.
  */
 typedef enum {
-    TRACE_VALUE,        /**< Reporting              */
+    TRACE_VALUE,        /**< Value being reported   */
+    TRACE_MARK,         /**< Event has occurred     */
     TRACE_START,        /**< Event has started      */
-    TRACE_STOP,         /**< Event has stopped      */
-} c_trc_evt_type_t;
+    TRACE_END,          /**< Event has ended        */
+} c_trc_type_t;
 
 /**
  * Cache trace variables.
  */
 typedef enum {
-    TRACE_CACHE_DIRTY_PGS,
-    TRACE_CACHE_CLEAN_PGS,
-    TRACE_CACHE_FREE_PGS,
-    TRACE_CACHE_FREE_BLKS,
-    TRACE_CACHE_CLEAN_BLKS,
-    TRACE_CACHE_SOFTPIN_BLKS,
-    TRACE_CACHE_BLOCK_VICTIMS,
-    TRACE_CACHE_SOFTPIN_VICTIMS,
-    TRACE_CACHE_READS,
-    TRACE_CACHE_WRITES,
+    TRACE_CACHE_CHECKPOINT_ID,          /**< Checkpoint running.                                */
+    TRACE_CACHE_DIRTY_PGS_ID,
+    TRACE_CACHE_CLEAN_PGS_ID,
+    TRACE_CACHE_FREE_PGS_ID,
+    TRACE_CACHE_FREE_BLKS_ID,
+    TRACE_CACHE_CLEAN_BLKS_ID,
+    TRACE_CACHE_SOFTPIN_BLKS_ID,
+    TRACE_CACHE_BLOCK_VICTIMS_ID,
+    TRACE_CACHE_SOFTPIN_VICTIMS_ID,
+    TRACE_CACHE_READS_ID,
+    TRACE_CACHE_WRITES_ID,
 } c_trc_cache_var_t;
 
 /**
- * Merge trace variables.
+ * DA trace variables.
  */
 typedef enum {
-    TRACE_MERGE,        /**< Merge                  */
-    TRACE_MERGE_UNIT,   /**< Merge unit             */
-    /* Merge unit stats */
-    TRACE_MERGE_UNIT_C2B_SYNC_WAIT_BT_NS,
-    TRACE_MERGE_UNIT_C2B_SYNC_WAIT_DATA_NS,
-    TRACE_MERGE_UNIT_GET_C2B_NS,
-    TRACE_MERGE_UNIT_DA_MEDIUM_OBJ_COPY_NS,
-} c_trc_merge_var_t;
+    TRACE_DA_INSERTS_DISABLED_ID,                   /**< Whether inserts are enabled or not.    */
+    TRACE_DA_MERGE_ID,                              /**< Merge                                  */
+    TRACE_DA_MERGE_UNIT_ID,                         /**< Merge unit                             */
+    TRACE_DA_MERGE_UNIT_C2B_SYNC_WAIT_BT_NS_ID,
+    TRACE_DA_MERGE_UNIT_C2B_SYNC_WAIT_DATA_NS_ID,
+    TRACE_DA_MERGE_UNIT_GET_C2B_NS_ID,
+    TRACE_DA_MERGE_UNIT_MOBJ_COPY_NS_ID,
+} c_trc_da_var_t;
 
 #define MERGE_START_FLAG    (1U<<0)
 #define MERGE_END_FLAG      (1U<<1)
 
 /* Bump the magic version byte (LSB) when c_trc_evt_t changes. */
-#define CASTLE_TRACE_MAGIC          0xCAE5E102
+#define CASTLE_TRACE_MAGIC          0xCAE5E10C
 typedef struct castle_trace_event {
     uint32_t                    magic;
     struct timeval              timestamp;
     int                         cpu;        /**< CPU ID that allocated structure.       */
     c_trc_prov_t                provider;   /**< Event provider                         */
-    c_trc_evt_type_t            evt_type;   /**< Event type                             */
+    c_trc_type_t                type;       /**< Event type                             */
     int                         var;        /**< Event variable                         */
     uint64_t                    v1;
     uint64_t                    v2;
