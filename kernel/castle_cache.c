@@ -3471,8 +3471,22 @@ static void castle_cache_extent_flush_endio(c2_block_t *c2b)
     clear_c2b_flushing(c2b);
     read_unlock_c2b(c2b);
     put_c2b(c2b);
+#ifndef CASTLE_DEBUG
     if (atomic_dec_and_test(outst_blks))
         wake_up(&castle_cache_flush_wq);
+#else
+    {
+        int cnt = atomic_dec_return(outst_blks);
+        if(cnt < 0)
+        {
+            printk("Outstanding IO counter has gone negative (cnt=%d, c2b=%p).\n", 
+                    cnt, c2b);
+            BUG();
+        }
+        if(cnt == 0)
+            wake_up(&castle_cache_flush_wq);
+    }
+#endif
 }
 
 /**
@@ -3491,7 +3505,7 @@ int castle_cache_extent_flush(c_ext_id_t ext_id, uint64_t start, uint64_t size)
     c_byte_off_t end_offset;
     c_ext_dirtylist_t *dirtylist;
     struct rb_node **p, *parent = NULL;
-    int i, batch_idx;
+    int i, batch_idx, ret;
     atomic_t in_flight = ATOMIC(0);
 #define EXT_FLUSH_BATCH     256
     c2_block_t *c2b_batch[EXT_FLUSH_BATCH];
@@ -3510,6 +3524,7 @@ int castle_cache_extent_flush(c_ext_id_t ext_id, uint64_t start, uint64_t size)
 
     debug("Extent flush: (%llu) -> %llu\n", ext_id, nr_pages/BLKS_PER_CHK);
 
+    ret = -EINVAL;
     do
     {
         batch_idx = 0;
@@ -3517,7 +3532,7 @@ int castle_cache_extent_flush(c_ext_id_t ext_id, uint64_t start, uint64_t size)
         /* Get dirtylist and hold its lock. */
         dirtylist = castle_extent_dirtylist_get(ext_id);
         if (dirtylist == NULL)
-            return -EINVAL;
+            goto out; 
         spin_lock_irq(&dirtylist->lock);
 
         /* Find c2b closest to the beginning of the extent. */
@@ -3577,11 +3592,13 @@ next_pg:    parent = rb_next(parent);
             BUG_ON(submit_c2b(WRITE, c2b_batch[i]));
         }
     } while (parent);
+    ret = 0;
 
+out:
     /* Wait for flush to complete. */
     wait_event(castle_cache_flush_wq, (atomic_read(&in_flight) == 0));
 
-    return 0;
+    return ret;
 }
 
 /***** Init/fini functions *****/
