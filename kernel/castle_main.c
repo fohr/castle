@@ -904,7 +904,7 @@ int castle_slave_superblocks_writeback(struct castle_slave *cs, uint32_t version
            cs_sb->freespace.prod,
            cs_sb->freespace.cons);
 
-    if (castle_cache_extent_flush_sync(cs->sup_ext, 0, length * 2))
+    if (castle_cache_extent_flush(cs->sup_ext, 0, length * 2))
     {
         castle_slave_superblock_put(cs, 1);
         castle_fs_superblocks_put(fs_sb, 1);

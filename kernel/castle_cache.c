@@ -3485,7 +3485,7 @@ static void castle_cache_extent_flush_endio(c2_block_t *c2b)
  * @param start     Offset to flush from (Byte)
  * @param size      Bytes to flush from start
  */
-int _castle_cache_extent_flush(c_ext_id_t ext_id, uint64_t start, uint64_t size, int sync)
+int castle_cache_extent_flush(c_ext_id_t ext_id, uint64_t start, uint64_t size)
 {
     c2_block_t *c2b;
     c_byte_off_t end_offset;
@@ -3579,22 +3579,9 @@ next_pg:    parent = rb_next(parent);
     } while (parent);
 
     /* Wait for flush to complete. */
-    if (sync)
-        wait_event(castle_cache_flush_wq, (atomic_read(&in_flight) == 0));
-        /* @FIXME do we want to pass a ptr to in_flight to the caller and let
-         * them handle the wait? */
+    wait_event(castle_cache_flush_wq, (atomic_read(&in_flight) == 0));
 
     return 0;
-}
-
-int castle_cache_extent_flush(c_ext_id_t ext_id, uint64_t start, uint64_t size)
-{
-    return _castle_cache_extent_flush(ext_id, start, size, 0);
-}
-
-int castle_cache_extent_flush_sync(c_ext_id_t ext_id, uint64_t start, uint64_t size)
-{
-    return _castle_cache_extent_flush(ext_id, start, size, 1);
 }
 
 /***** Init/fini functions *****/
@@ -4357,7 +4344,7 @@ int castle_cache_extents_flush(struct list_head *flush_list)
     list_for_each_safe(lh, tmp, flush_list)
     {
         entry = list_entry(lh, struct castle_cache_flush_entry, list);
-        castle_cache_extent_flush_sync(entry->ext_id, entry->start, entry->count);
+        castle_cache_extent_flush(entry->ext_id, entry->start, entry->count);
 
         list_del(lh);
         castle_free(entry);
