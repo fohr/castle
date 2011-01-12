@@ -101,6 +101,7 @@ static void castle_component_tree_del(struct castle_double_array *da,
 struct castle_da_merge;
 static USED void castle_da_merges_print(struct castle_double_array *da);
 static int castle_da_merge_restart(struct castle_double_array *da, void *unused);
+static int castle_da_merge_start(struct castle_double_array *da, void *unused);
 void castle_double_array_merges_fini(void);
 static void castle_da_merge_budget_consume(struct castle_da_merge *merge);
 static void castle_da_queue_kick(struct castle_double_array *da);
@@ -2670,12 +2671,23 @@ merge_failed:
     return 0;
 }
 
+static int castle_da_merge_start(struct castle_double_array *da, void *unused)
+{
+    int i;
+
+    /* Wake up all of the merge threads. */
+    for(i=1; i<MAX_DA_LEVEL; i++)
+        wake_up_process(da->levels[i].merge.thread);
+
+    return 0;
+}
+
 static int castle_da_merge_stop(struct castle_double_array *da, void *unused)
 {
     int i;
 
     /* castle_da_exiting should have been set by now. */
-    BUG_ON(!castle_da_exiting);
+    BUG_ON(!exit_cond);
     wake_up(&da->merge_waitq);
     for(i=1; i<MAX_DA_LEVEL; i++)
     {
@@ -2774,6 +2786,18 @@ static int castle_da_ct_dec_cmp(struct list_head *l1, struct list_head *l2)
     return ct1->seq > ct2->seq ? -1 : 1;
 }
 
+static void castle_da_dealloc(struct castle_double_array *da)
+{
+    int i;
+
+    for(i=1; i<MAX_DA_LEVEL; i++)
+    {
+        if(da->levels[i].merge.thread != NULL)
+            kthread_stop(da->levels[i].merge.thread);
+    }
+    castle_free(da);
+}
+
 static struct castle_double_array* castle_da_alloc(da_id_t da_id)
 {
     struct castle_double_array *da;
@@ -2829,21 +2853,21 @@ static struct castle_double_array* castle_da_alloc(da_id_t da_id)
         }
     }
     printk("Allocated DA=%d successfully.\n", da_id);
-    /* Start all of the merge threads. */
-    for(i=1; i<MAX_DA_LEVEL; i++)
-        wake_up_process(da->levels[i].merge.thread);
 
     return da;
 
 err_out:
-    for(i--; i>0; i--)
+#ifdef CASTLE_DEBUG
     {
-        kthread_stop(da->levels[i].merge.thread);
-        /* Doesn't really need to be done, since we are going to free the structure anyway. */
-        BUG_ON(atomic_read(&da->ref_cnt) < 2);
-        castle_da_put(da);
+        int j;
+        for(j=1; j<MAX_DA_LEVEL; j++)
+        {
+            BUG_ON((j<i)  && (da->levels[j].merge.thread == NULL));
+            BUG_ON((j>=i) && (da->levels[j].merge.thread != NULL));
+        }
     }
-    castle_free(da);
+#endif
+    castle_da_dealloc(da);
 
     return NULL;
 }
@@ -3171,7 +3195,7 @@ static int castle_da_hash_dealloc(struct castle_double_array *da, void *unused)
     castle_sysfs_da_del(da);
     castle_da_foreach_tree(da, castle_da_ct_dealloc, NULL);
     list_del(&da->hash_list);
-    castle_free(da);
+    castle_da_dealloc(da);
 
     return 0;
 }
@@ -3463,6 +3487,7 @@ int castle_double_array_read(void)
 
     /* Sort all the tree lists by the sequence number */
     castle_da_hash_iterate(castle_da_trees_sort, NULL); 
+    castle_da_hash_iterate(castle_da_merge_start, NULL); 
     goto out;
 
 error_out:
@@ -3627,10 +3652,12 @@ int castle_double_array_make(da_id_t da_id, version_t root_version)
     if(ret)
     {
         printk("Exiting from failed ct create.\n");
-        castle_free(da);
+        castle_da_dealloc(da);
         
         return ret;
     }
+    /* DA make succeeded, start merge threads. */
+    castle_da_merge_start(da, NULL);
     debug("Successfully made a new doubling array, id=%d, for version=%d\n",
         da_id, root_version);
     castle_da_hash_add(da);
@@ -4003,7 +4030,7 @@ void castle_da_destroy_complete(struct castle_double_array *da)
 
     /* Poison and free (may be repoisoned on debug kernel builds). */
     memset(da, 0xa7, sizeof(struct castle_double_array));
-    castle_free(da);
+    castle_da_dealloc(da);
 }
 
 static void castle_da_get(struct castle_double_array *da)
