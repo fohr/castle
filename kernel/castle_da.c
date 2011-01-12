@@ -3656,12 +3656,12 @@ int castle_double_array_make(da_id_t da_id, version_t root_version)
         
         return ret;
     }
-    /* DA make succeeded, start merge threads. */
-    castle_da_merge_start(da, NULL);
     debug("Successfully made a new doubling array, id=%d, for version=%d\n",
         da_id, root_version);
     castle_da_hash_add(da);
     castle_sysfs_da_add(da);
+    /* DA make succeeded, start merge threads. */
+    castle_da_merge_start(da, NULL);
 
     return 0;
 }
