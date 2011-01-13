@@ -294,7 +294,7 @@ static ssize_t slave_used_show(struct kobject *kobj,
 
     castle_freespace_summary_get(slave, &free_chunks, &size_chunks);
 
-    used = (size_chunks - free_chunks) * C_CHK_SIZE;
+    used = (uint64_t)(size_chunks - free_chunks) * C_CHK_SIZE;
 
     return sprintf(buf, "%llu\n", used);
 }
