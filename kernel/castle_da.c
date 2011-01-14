@@ -2795,6 +2795,8 @@ static void castle_da_dealloc(struct castle_double_array *da)
         if(da->levels[i].merge.thread != NULL)
             kthread_stop(da->levels[i].merge.thread);
     }
+    /* Poison and free (may be repoisoned on debug kernel builds). */
+    memset(da, 0xa7, sizeof(struct castle_double_array));
     castle_free(da);
 }
 
@@ -4028,8 +4030,7 @@ void castle_da_destroy_complete(struct castle_double_array *da)
     /* Delete the DA from the list of deleted DAs. */
     list_del(&da->hash_list);
 
-    /* Poison and free (may be repoisoned on debug kernel builds). */
-    memset(da, 0xa7, sizeof(struct castle_double_array));
+    /* Dealloc the DA. */
     castle_da_dealloc(da);
 }
 
