@@ -932,6 +932,8 @@ static void c2b_multi_io_end(struct bio *bio, int err)
 #endif
 }
 
+#define MAX_BIO_PAGES        128
+
 /**
  * Allocate bio for pages & hand-off to Linux block layer.
  *
@@ -950,7 +952,7 @@ void submit_c2b_io(int           rw,
     sector_t sector;
     struct bio *bio;
     struct bio_info *bio_info;
-    int i;
+    int i, j, batch;
 
 #ifdef CASTLE_DEBUG    
     /* Check that we are submitting IO to the right ceps. */
@@ -979,32 +981,45 @@ void submit_c2b_io(int           rw,
     sector = ((sector_t)disk_chk.offset << (C_CHK_SHIFT - 9)) +
               (BLK_IN_CHK(cep.offset) << (C_BLK_SHIFT - 9));
 
-    /* Allocate BIO and bio_info struct */
-    bio = bio_alloc(GFP_KERNEL, nr_pages);
-    bio_info = kmalloc(sizeof(struct bio_info), GFP_KERNEL);
-    BUG_ON(!bio_info);
+    BUG_ON(nr_pages > MAX_BIO_PAGES);
+    j = 0;
+    while (nr_pages > 0) {
+        /*
+         * We may have more pages than we are allowed to submit in one bio. Each time we submit
+         * we re-calculate what we can send, because bio_get_nr_vecs can change dynamically.
+         */
+        batch = min(nr_pages, bio_get_nr_vecs(cs->bdev));
 
-    /* Init BIO and bio_info */
-    bio_info->rw       = rw;
-    bio_info->bio      = bio;
-    bio_info->c2b      = c2b;
-    bio_info->nr_pages = nr_pages;
-    for(i=0; i<nr_pages; i++)
-    {
-        bio->bi_io_vec[i].bv_page   = pages[i];
-        bio->bi_io_vec[i].bv_len    = PAGE_SIZE; 
-        bio->bi_io_vec[i].bv_offset = 0;
+        /* Allocate BIO and bio_info struct */
+        bio = bio_alloc(GFP_KERNEL, batch);
+        bio_info = kmalloc(sizeof(struct bio_info), GFP_KERNEL);
+        BUG_ON(!bio_info);
+
+        /* Init BIO and bio_info */
+        bio_info->rw       = rw;
+        bio_info->bio      = bio;
+        bio_info->c2b      = c2b;
+        bio_info->nr_pages = batch;
+        for(i=0; i < batch; i++)
+        {
+            bio->bi_io_vec[i].bv_page   = pages[i + j];
+            bio->bi_io_vec[i].bv_len    = PAGE_SIZE;
+            bio->bi_io_vec[i].bv_offset = 0;
+        }
+        bio->bi_sector  = sector + (sector_t)(j * 8);
+        bio->bi_bdev    = cs->bdev;
+        bio->bi_vcnt    = batch;
+        bio->bi_idx     = 0;
+        bio->bi_size    = batch * C_BLK_SIZE;
+        bio->bi_end_io  = c2b_multi_io_end;
+        bio->bi_private = bio_info;
+
+        /* Hand off to Linux block layer */
+        submit_bio(rw, bio);
+
+        j += batch;
+        nr_pages -= batch;
     }
-    bio->bi_sector  = sector;
-    bio->bi_bdev    = cs->bdev;
-    bio->bi_vcnt    = nr_pages;
-    bio->bi_idx     = 0;
-    bio->bi_size    = nr_pages * C_BLK_SIZE;
-    bio->bi_end_io  = c2b_multi_io_end;
-    bio->bi_private = bio_info;
- 
-    /* Hand off to Linux block layer */
-    submit_bio(rw, bio);
 }
 
 #ifdef CASTLE_DEBUG
@@ -1031,7 +1046,6 @@ int chk_valid(c_disk_chk_t chk)
 }
 #endif
 
-#define MAX_BIO_PAGES        10
 typedef struct castle_io_array {
     struct page *io_pages[MAX_BIO_PAGES];
     c_ext_pos_t start_cep;
