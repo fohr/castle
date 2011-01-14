@@ -2047,7 +2047,6 @@ static void __exit castle_exit(void)
     castle_time_fini();
     castle_debug_fini();
 
-    BUG();
     printk("Castle FS exit done.\n");
 }
 
