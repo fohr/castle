@@ -1725,13 +1725,24 @@ static void castle_cache_block_init(c2_block_t *c2b,
 
     debug("Initing c2b for cep="cep_fmt_str", nr_pages=%d\n",
             cep2str(cep), nr_pages);
+    /* c2b should only be initialised if it's not used */
+    BUG_ON(nr_pages > CASTLE_CACHE_VMAP_PGS);
+#ifdef CASTLE_DEBUG
+    /* On debug builds, unpoison the fields. */
+    atomic_set(&c2b->count, 0);
+    atomic_set(&c2b->lock_cnt, 0);
+    atomic_set(&c2b->softpin_cnt, 0);
+#else
+    /* On non-debug builds, those fields should all be zero. */
+    BUG_ON(c2b->c2ps != NULL);
+    BUG_ON(atomic_read(&c2b->count) != 0);
+    BUG_ON(atomic_read(&c2b->lock_cnt) != 0);
+    BUG_ON(atomic_read(&c2b->softpin_cnt) != 0);
+#endif
     /* Init the page array (note: this may substitute some c2ps, 
        if they aleady exist in the hash. */
     uptodate = castle_cache_pages_get(cep, c2ps, castle_cache_pages_to_c2ps(nr_pages));
-
-    /* c2b should only be initialised if it's not used */
-    BUG_ON(nr_pages > CASTLE_CACHE_VMAP_PGS);
-    BUG_ON(c2b->c2ps != NULL);
+    /* Initialise c2b. */
     atomic_set(&c2b->remaining, 0);
     c2b->cep = cep;
     c2b->state = INIT_C2B_BITS | (uptodate ? (1 << C2B_uptodate) : 0);
@@ -1814,8 +1825,6 @@ static void castle_cache_block_free(c2_block_t *c2b)
     /* Add the pages back to the freelist */
     for(i=0; i<nr_c2ps; i++)
         castle_cache_c2p_put(c2b->c2ps[i], &freed_c2ps);
-    /* Ref count should be zero. */
-    BUG_ON(atomic_read(&c2b->count) != 0);
     /* Save the array of c2ps. */
     c2ps = c2b->c2ps;
     /* Poison the c2b. */
