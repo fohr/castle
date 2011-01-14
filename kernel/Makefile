@@ -1,5 +1,5 @@
 # Comment/uncomment the following line to disable/enable debugging
-DEBUG = n
+DEBUG = y
 PERF_DEBUG = y
 
 TARGET = castle-fs

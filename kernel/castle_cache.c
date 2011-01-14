@@ -1732,7 +1732,6 @@ static void castle_cache_block_init(c2_block_t *c2b,
     /* c2b should only be initialised if it's not used */
     BUG_ON(nr_pages > CASTLE_CACHE_VMAP_PGS);
     BUG_ON(c2b->c2ps != NULL);
-    BUG_ON(atomic_read(&c2b->count) != 0);
     atomic_set(&c2b->remaining, 0);
     c2b->cep = cep;
     c2b->state = INIT_C2B_BITS | (uptodate ? (1 << C2B_uptodate) : 0);
@@ -1815,13 +1814,16 @@ static void castle_cache_block_free(c2_block_t *c2b)
     /* Add the pages back to the freelist */
     for(i=0; i<nr_c2ps; i++)
         castle_cache_c2p_put(c2b->c2ps[i], &freed_c2ps);
-    /* For debugging only: it will be spotted quickly if nr_pages isn't reinited properly */
-    c2b->nr_pages = 0xFFFF;
+    /* Ref count should be zero. */
+    BUG_ON(atomic_read(&c2b->count) != 0);
+    /* Save the array of c2ps. */
     c2ps = c2b->c2ps;
-    c2b->c2ps = NULL;
+    /* Poison the c2b. */
 #ifdef CASTLE_DEBUG
     memset(c2b, 0x0D, sizeof(c2_block_t));
 #endif
+    /* Set c2ps array to NULL, BUGed_ON in _init(). */
+    c2b->c2ps = NULL;
     /* Changes to freelists under freelist_lock */
     spin_lock(&castle_cache_freelist_lock);
     /* Free all the c2ps. */
