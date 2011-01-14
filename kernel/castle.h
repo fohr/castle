@@ -49,9 +49,10 @@
 #define STATIC_BUG_ON(expr) \
         extern int (*assert_function__(void)) [STATIC_BUG_ON_HELPER(expr)]
 
-#define NR_ENV_VARS          16
+#define NR_ENV_VARS          8
+#define MAX_ENV_LEN          128
 STATIC_BUG_ON(LAST_ENV_VAR_ID >= NR_ENV_VARS);
-extern char* castle_environment[NR_ENV_VARS];
+extern char *castle_environment[NR_ENV_VARS];
 extern int   castle_fs_inited;
 
 typedef uint32_t tree_seq_t;                   

@@ -54,7 +54,16 @@ struct castle_component_tree castle_global_tree = {.seq             = GLOBAL_TRE
 static DEFINE_MUTEX(castle_sblk_lock);
 struct castle_fs_superblock global_fs_superblock;
 struct workqueue_struct     *castle_wqs[2*MAX_BTREE_DEPTH+1];
-char*                        castle_environment[NR_ENV_VARS] = {[0 ... (NR_ENV_VARS-1)] = NULL};
+char                         castle_environment_block[NR_ENV_VARS * MAX_ENV_LEN];
+char                        *castle_environment[NR_ENV_VARS] 
+                                = {[0] = &castle_environment_block[0 * MAX_ENV_LEN], 
+                                   [1] = &castle_environment_block[1 * MAX_ENV_LEN], 
+                                   [2] = &castle_environment_block[2 * MAX_ENV_LEN], 
+                                   [3] = &castle_environment_block[3 * MAX_ENV_LEN], 
+                                   [4] = &castle_environment_block[4 * MAX_ENV_LEN], 
+                                   [5] = &castle_environment_block[5 * MAX_ENV_LEN], 
+                                   [6] = &castle_environment_block[6 * MAX_ENV_LEN], 
+                                   [7] = &castle_environment_block[7 * MAX_ENV_LEN]};
 int                          castle_fs_inited = 0;
 c_fault_t                    castle_fault = NO_FAULT;
 
@@ -64,7 +73,6 @@ c_fault_t                    castle_fault = NO_FAULT;
 #else
 #define debug(_f, _a...)  (printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
 #endif
-
 
 static void USED castle_fs_superblock_print(struct castle_fs_superblock *fs_sb)
 {
@@ -2039,6 +2047,7 @@ static void __exit castle_exit(void)
     castle_time_fini();
     castle_debug_fini();
 
+    BUG();
     printk("Castle FS exit done.\n");
 }
 

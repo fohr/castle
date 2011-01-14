@@ -482,12 +482,10 @@ void castle_control_environment_set(c_env_var_t var_id, char *var_str, int *ret)
         return;
     }
 
-    /* Free current variable, if one exists. */
-    if(castle_environment[var_id])
-       castle_free(castle_environment[var_id]); 
+    /* Save the environment var. */
+    strncpy(castle_environment[var_id], var_str, MAX_ENV_LEN);
+    castle_free(var_str); 
 
-    /* Assign the new one. */
-    castle_environment[var_id] = var_str;
     *ret = 0;
 }
 
@@ -651,7 +649,7 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
             
             err = castle_from_user_copy( ioctl.environment_set.var_str,
                                          ioctl.environment_set.var_len,
-                                         128,
+                                         MAX_ENV_LEN-1,
                                         &var_str);
             if(err)
                 goto err;
@@ -745,15 +743,11 @@ int castle_control_init(void)
 
 void castle_control_fini(void)
 {
-    int i, ret;
+    int ret;
 
     if((ret = misc_deregister(&castle_control))) 
         printk("Could not unregister castle control node (%d).\n", ret);
     /* Sleep waiting for the last ctrl op to complete, if there is one */
     CASTLE_TRANSACTION_BEGIN;
-    /* Free all environment strings. */
-    for(i=0; i<NR_ENV_VARS; i++)
-        if(castle_environment[i])
-            castle_free(castle_environment[i]);
     CASTLE_TRANSACTION_END;
 }
