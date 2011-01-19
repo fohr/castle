@@ -222,12 +222,13 @@ int castle_double_arrays_unfreeze(void)
 typedef struct castle_immut_iterator {
     struct castle_component_tree *tree;
     struct castle_btree_type     *btree;
-    int                           completed;
-    c2_block_t                   *curr_c2b;
-    struct castle_btree_node     *curr_node;
-    int                           curr_idx;
-    c2_block_t                   *next_c2b;
-    int                           next_idx;
+    int                           completed;/**< set to 1 when iterator is exhausted              */
+    c2_block_t                   *curr_c2b; /**< node c2b currently providing entries             */
+    struct castle_btree_node     *curr_node;/**< btree node (curr_c2b->buffer)                    */
+    int                           curr_idx; /**< offset within curr_node of current entry
+                                                 (where current is really next())                 */
+    c2_block_t                   *next_c2b; /**< node c2b to provide next entires                 */
+    int                           next_idx; /**< offset within next_c2b of first entry to return  */
 } c_immut_iter_t;
 
 static int castle_ct_immut_iter_entry_find(c_immut_iter_t *iter,
@@ -247,7 +248,15 @@ static int castle_ct_immut_iter_entry_find(c_immut_iter_t *iter,
     return -1;
 }
 
-
+/**
+ * Update iterator with new btree node.
+ *
+ * @param iter  Iterator to update
+ * @param node  Proposed next node
+ *
+ * @return 0    Node is not leaf or has no entries.
+ * @return 1    Node is leaf and has entries.
+ */
 static int castle_ct_immut_iter_next_node_init(c_immut_iter_t *iter,
                                                struct castle_btree_node *node)
 {
@@ -273,6 +282,11 @@ static int castle_ct_immut_iter_next_node_init(c_immut_iter_t *iter,
     return 0;
 }
 
+/**
+ * Find the next leaf node starting from cep.
+ *
+ * @also castle_ct_immut_iter_next_node_init()
+ */
 static void castle_ct_immut_iter_next_node_find(c_immut_iter_t *iter, c_ext_pos_t  cep)
 {
     struct castle_btree_node *node;
@@ -308,11 +322,12 @@ static void castle_ct_immut_iter_next_node_find(c_immut_iter_t *iter, c_ext_pos_
         }
         write_unlock_c2b(c2b);
         node = c2b_bnode(c2b);
+        /* Determine if this is a leaf-node with entries */
         if(castle_ct_immut_iter_next_node_init(iter, node))
         {
+            /* It is */
             debug("Cep "cep_fmt_str " will be used next, exiting.\n",
                    cep2str(cep));
-            /* Found */
             iter->next_c2b = c2b;
             return;
         }
@@ -326,6 +341,11 @@ static void castle_ct_immut_iter_next_node_find(c_immut_iter_t *iter, c_ext_pos_
         put_c2b(c2b);
 }
 
+/**
+ * Find the next leaf node for iter.
+ *
+ * @also castle_ct_immut_iter_next_node_find()
+ */
 static void castle_ct_immut_iter_next_node(c_immut_iter_t *iter)
 {
     BUG_ON(!iter->next_c2b);
