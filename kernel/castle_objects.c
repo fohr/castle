@@ -1058,6 +1058,13 @@ int castle_object_replace_cancel(struct castle_object_replace *replace)
     return 0;
 }
 
+/**
+ * Insert new or replace existing object.
+ *
+ * @also castle_back_replace()
+ * @also castle_back_remove()
+ * @also castle_back_big_put()
+ */
 int castle_object_replace(struct castle_object_replace *replace, 
                           struct castle_attachment *attachment,
                           c_vl_okey_t *key, 

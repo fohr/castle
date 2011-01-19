@@ -1004,7 +1004,7 @@ static void castle_vlba_tree_entry_add(struct castle_btree_node *node,
         BUG_ON( sizeof(struct castle_btree_node) + sizeof(struct castle_vlba_tree_node) +
                 vlba_node->free_bytes + vlba_node->dead_bytes != VLBA_TREE_NODE_LENGTH(node));
     }
-        
+
     BUG_ON(key_length > VLBA_TREE_MAX_KEY_SIZE);
     BUG_ON(vlba_node->free_bytes + vlba_node->dead_bytes < req_space);
 
@@ -1644,6 +1644,9 @@ static int castle_btree_node_space_get(struct castle_component_tree *ct,
     return 0;
 }
 
+/**
+ * Allocate and initialise c2b for a ct->type btree node.
+ */
 c2_block_t* castle_btree_node_create(int version, int is_leaf, struct castle_component_tree *ct, int alloc_done)
 {
     struct castle_btree_type *btree;
@@ -2501,6 +2504,9 @@ static void _castle_btree_submit(struct work_struct *work)
     __castle_btree_submit(btree, c_bvec, root_cep, btree->max_key);
 }
 
+/**
+ * Submit request to the btree.
+ */
 void castle_btree_submit(c_bvec_t *c_bvec)
 {
     c_bvec->parent_key = NULL;

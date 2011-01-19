@@ -403,6 +403,9 @@ static int castle_ct_immut_iter_has_next(c_immut_iter_t *iter)
     return 1;
 } 
 
+/**
+ * Initialise iterator for immutable btrees.
+ */
 static void castle_ct_immut_iter_init(c_immut_iter_t *iter)
 {
     debug("Initialising immut enumerator for ct id=%d\n", iter->tree->seq);
@@ -435,6 +438,13 @@ struct castle_iterator_type castle_ct_immut_iter = {
     .cancel      = (castle_iterator_cancel_t)castle_ct_immut_iter_cancel,
 };
 
+/**
+ * Modlist B-tree iterator structure.
+ *
+ * Once populated item_idx[] offers a layer of indirection to the underlying
+ * data.  As such, data can be sorted by updating the item_idx ptr rather than
+ * updating data in-place within the node.
+ */
 typedef struct castle_modlist_iterator {
     struct castle_btree_type *btree;
     struct castle_component_tree *tree;
@@ -444,7 +454,7 @@ typedef struct castle_modlist_iterator {
     uint32_t nr_nodes;          /* Number of nodes in the buffer   */
     void *node_buffer;          /* Buffer to store all the nodes   */
     uint32_t nr_items;          /* Number of items in the buffer   */
-    uint32_t next_item;         /* Next item to return in iterator */ 
+    uint32_t next_item;         /* Next item to return in iterator */
     struct item_idx {
         uint32_t node;          /* Which node                      */
         uint32_t node_offset;   /* Where in the node               */
@@ -486,6 +496,13 @@ static struct castle_btree_node* castle_ct_modlist_iter_buffer_get(c_modlist_ite
     return (struct castle_btree_node *)(buffer + idx * btree->node_size * C_BLK_SIZE); 
 }
 
+/**
+ * Populate the iter's node_buffer with leaf nodes from the tree.
+ *
+ * - Enumerate iter->tree with iter->enumerator
+ * - Add key,version,cvt to iter->btree
+ * - Update iter->sort_idx[] indirection layer to point to new btree entry
+ */
 static void castle_ct_modlist_iter_fill(c_modlist_iter_t *iter)
 {
     struct castle_btree_type *btree = iter->btree;
@@ -683,6 +700,18 @@ static void castle_ct_modlist_iter_next(c_modlist_iter_t *iter,
     iter->next_item++;
 }
 
+/**
+ * Initialise iterator for modlist B-tree.
+ *
+ * - Allocate members of the iterator
+ *   - buffer for nodes: node_buffer, item indirection: sort_idx
+ * - Initialise the output B-tree (iter->btree)
+ * - Initialise enumerator (iter->enumerator) for the existing CT (iter->tree)
+ * - Fill node_buffer (castle_ct_modlist_iter_fill())
+ * - Sort node_buffer (heapsort/mergesort)
+ *
+ * @return iter Iterator that will return sorted results for iter->tree via node_buffer
+ */
 static void castle_ct_modlist_iter_init(c_modlist_iter_t *iter)
 {
     struct castle_component_tree *ct = iter->tree;
@@ -916,7 +945,14 @@ static void castle_ct_merged_iter_cancel(c_merged_iter_t *iter)
     castle_free(iter->iterators);
 }
 
-/* Constructs a merged iterator out of a set of iterators. */
+/**
+ * Initialise a meta iterator from a number of component iterators.
+ *
+ * Once initialised the iterator will return the smallest entry from any of the
+ * component trees when castle_ct_merged_iter_next() is called.
+ *
+ * This iterator is used for merges and range queries (non-exhaustive list).
+ */
 static void castle_ct_merged_iter_init(c_merged_iter_t *iter,
                                        void **iterators,
                                        struct castle_iterator_type **iterator_types,
@@ -1377,6 +1413,12 @@ static void castle_da_iterator_destroy(struct castle_component_tree *tree,
     }
 }
 
+/**
+ * Allocate/initialise correct iterator type for level of merge.
+ *
+ * - Allocate a castle_ct_modlist_iter for T1 merges
+ * - Allocate a castle_ct_immut_iter for all higher level merges
+ */
 static void castle_da_iterator_create(struct castle_da_merge *merge,
                                       struct castle_component_tree *tree,
                                       void **iter_p)
@@ -3552,6 +3594,11 @@ static struct castle_component_tree* castle_ct_alloc(struct castle_double_array 
     return ct;
 }
     
+/**
+ * Allocate and initialise a T0 component tree.
+ *
+ * @also castle_ct_alloc()
+ */
 static int castle_da_rwct_make(struct castle_double_array *da, int in_tran)
 {
     struct castle_component_tree *ct, *old_ct;
@@ -3900,6 +3947,13 @@ static void castle_da_bvec_start(struct castle_double_array *da, c_bvec_t *c_bve
     castle_btree_submit(c_bvec);
 }
 
+/**
+ * Submit bvec to doubling array.
+ *
+ * @also castle_object_replace()
+ * @also castle_object_get()
+ * @also castle_object_pull()
+ */
 void castle_double_array_submit(c_bvec_t *c_bvec)
 {
     struct castle_attachment *att = c_bvec->c_bio->attachment;
