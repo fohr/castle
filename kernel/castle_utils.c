@@ -109,7 +109,7 @@ void vl_okey_print(c_vl_okey_t *key)
     printk("# key dimensions: %d\n", key->nr_dims);
     for(i=0; i<key->nr_dims; i++)
     {
-        for(j=0; j<key->dims[i]->length; j++)
+        for(j=0; j<key->dims[i]->length && j<NR_BYTES_PRINT; j++)
             sprintf(key_str + 2*j, "%.2x", key->dims[i]->key[j]);
         printk(" dim[%.2d], len=%.3d, first %d bytes: %s\n", 
             i, 
