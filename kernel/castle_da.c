@@ -948,12 +948,14 @@ static void castle_ct_merged_iter_skip(c_merged_iter_t *iter,
                      (iter->btree->key_compare(comp_iter->cached_entry.k, key) < 0);
         /* Next skip in the component iterator */
         BUG_ON(!comp_iter->iterator_type->skip);
-        comp_iter->iterator_type->skip(comp_iter->iterator, key);
 
+        /* If cached entry is not being skipped, bigger than the skip key, then no
+         * need to call skip on low level iterator. */
         /* Flush cached entry if it was to small (this doesn't inspect the cached entry
            any more). */
-        if(skip_cached)
+        if (skip_cached) 
         {
+            comp_iter->iterator_type->skip(comp_iter->iterator, key);
             BUG_ON(iter->each_skip);
             comp_iter->cached = 0;
         }
