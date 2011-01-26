@@ -6,6 +6,7 @@
 #include <linux/vmalloc.h>
 #include <linux/rbtree.h>
 #include <linux/delay.h>
+#include <linux/blkdev.h>
 
 #include "castle_public.h"
 #include "castle.h"
@@ -1270,6 +1271,21 @@ int submit_c2b(int rw, c2_block_t *c2b)
 }
 
 /**
+ * Unplug all slave queues. Useful if you know that a sequence of submit_c2b()s
+ * has been completed.
+ */
+static void castle_slaves_unplug(void)
+{
+    struct list_head *lh;
+
+    list_for_each(lh, &castle_slaves.slaves)
+    {
+        struct castle_slave *cs = list_entry(lh, struct castle_slave, list);
+        generic_unplug_device(bdev_get_queue(cs->bdev));
+    }
+}
+
+/**
  * Callback for synchronous c2b I/O completion.
  *
  * Wakes thread that dispatched the synchronous I/O
@@ -2252,7 +2268,8 @@ static USED char* c2_pref_window_to_str(c2_pref_window_t *window)
     cep.offset = window->start_off;
 
     snprintf(win_str, PREF_WINDOW_STR_LEN, 
-        "%s%s%s pref win: {cep="cep_fmt_str", start_off=0x%llx (%lld), end_off=0x%llx (%lld), pref_pages=%d (%d), st=0x%.2x, cnt=%d",
+        "%s%s%s pref win: {cep="cep_fmt_str", start_off=0x%llx (%lld), "
+        "end_off=0x%llx (%lld), pref_pages=%d (%d), st=0x%.2x, cnt=%d",
         window->state & PREF_WINDOW_NEW ? "N": "",
         window->state & PREF_WINDOW_SOFTPIN ? "S": "",
         window->state & PREF_WINDOW_ADAPTIVE ? "A" : "",
@@ -2269,6 +2286,8 @@ static USED char* c2_pref_window_to_str(c2_pref_window_t *window)
 
     return win_str;
 } 
+
+
 
 /**
  * Get a c2b for use by the prefetcher setting necessary bits.
@@ -2999,6 +3018,7 @@ static void c2_pref_window_submit(c2_pref_window_t *window, c_ext_pos_t cep, int
         pages -= BLKS_PER_CHK;
         cep.offset += C_CHK_SIZE;
     }
+    castle_slaves_unplug();
 }
 
 /*
