@@ -785,6 +785,32 @@ static int castle_slave_superblock_read(struct castle_slave *cs)
     if (!errs[1])    printk("[%u]", cs_sb[1].fs_version);
     printk("\n");
 
+    if (!errs[0] && !errs[1])
+    {
+        /* Check if the versions are non-consecutive. */
+        if (abs(cs_sb[0].fs_version - cs_sb[1].fs_version) != 1)        
+        {
+            printk("Disk 0x%x has non-consequtive versions\n",
+                    cs_sb[0].pub.uuid);
+#ifdef DEBUG
+            BUG();
+#endif
+            err = -EINVAL;
+            goto error_out;
+        }
+        /* Check for the uuids of both versions to match. */
+        if (cs_sb[0].pub.uuid != cs_sb[1].pub.uuid)
+        {
+            printk("Found versions with different uuids 0x%x:0x%x\n",
+                    cs_sb[0].pub.uuid, cs_sb[1].pub.uuid);
+#ifdef DEBUG
+            BUG();
+#endif
+            err = -EINVAL;
+            goto error_out;
+        }
+    }
+
     printk("Disk superblock found.\n");
     memcpy(&cs->cs_superblock, &cs_sb[fs_version], sizeof(struct castle_slave_superblock));
     memcpy(&cs->fs_superblock, &fs_sb[fs_version], sizeof(struct castle_fs_superblock));
