@@ -1392,18 +1392,9 @@ static void castle_bio_data_io_end(c_bvec_t     *c_bvec,
         castle_bio_data_io_error(c_bvec, err);
     else
     {
-        if (!CVT_INVALID(cvt) && !CVT_MEDIUM_OBJECT(cvt))
-        {
-            printk("%u:%llu:"cep_fmt_str_nl, cvt.type, cvt.length, cep2str(cvt.cep));
-            BUG();
-        }
-        if (CVT_MEDIUM_OBJECT(cvt) && 
-               (cvt.cep.ext_id != c_bvec->tree->data_ext_fs.ext_id))
-        {
-            printk("%u:%llu:%llu:"cep_fmt_str_nl, cvt.type, cvt.length,
-                    c_bvec->tree->data_ext_fs.ext_id, cep2str(cvt.cep));
-            BUG();
-        }
+        BUG_ON(!CVT_INVALID(cvt) && !CVT_MEDIUM_OBJECT(cvt));
+        BUG_ON(CVT_MEDIUM_OBJECT(cvt) && 
+               (cvt.cep.ext_id != c_bvec->tree->data_ext_fs.ext_id));
         castle_bio_data_io_do(c_bvec, cvt.cep);
     }
 }

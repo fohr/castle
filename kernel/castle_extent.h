@@ -111,7 +111,7 @@ castle_extent_mark_live(c_ext_id_t ext_id);
 int
 castle_extents_restore(void);
 
-struct castle_extents_sb_t * 
+struct castle_extents_superblock* 
 castle_extents_super_block_get(void);
 
 void 

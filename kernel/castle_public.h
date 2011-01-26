@@ -4,7 +4,7 @@
 #include <linux/types.h>
 #include <asm/ioctl.h>
 
-#define CASTLE_PROTOCOL_VERSION 4
+#define CASTLE_PROTOCOL_VERSION 5
 
 #define PACKED               __attribute__((packed))
 
@@ -107,7 +107,7 @@ typedef struct castle_trace_event {
     uint64_t                    v3;
     uint64_t                    v4;
     uint64_t                    v5;
-} PACKED c_trc_evt_t;
+} c_trc_evt_t;
 
 typedef uint32_t transfer_id_t;
 typedef uint32_t slave_uuid_t;
@@ -150,29 +150,29 @@ typedef struct castle_control_cmd_claim {
     uint32_t     dev;          /* IN  */
     int          ret;          /* OUT */
     slave_uuid_t id;           /* OUT */
-} PACKED cctrl_cmd_claim_t;
+} cctrl_cmd_claim_t;
 
 typedef struct castle_control_cmd_release {
     slave_uuid_t id;           /* IN  */
     int          ret;          /* OUT */
-} PACKED cctrl_cmd_release_t;
+} cctrl_cmd_release_t;
 
 typedef struct castle_control_cmd_attach {
     version_t version;         /* IN  */
     int       ret;             /* OUT */
     uint32_t  dev;             /* OUT */
-} PACKED cctrl_cmd_attach_t;
+} cctrl_cmd_attach_t;
 
 typedef struct castle_control_cmd_detach {
     uint32_t dev;              /* IN  */
     int      ret;              /* OUT */
-} PACKED cctrl_cmd_detach_t;
+} cctrl_cmd_detach_t;
 
 typedef struct castle_control_cmd_snapshot {
     uint32_t  dev;             /* IN  */
     int       ret;             /* OUT */
     version_t version;         /* OUT */
-} PACKED cctrl_cmd_snapshot_t;
+} cctrl_cmd_snapshot_t;
 
 typedef struct castle_control_cmd_collection_attach {
     version_t           version;         /* IN  */
@@ -180,24 +180,24 @@ typedef struct castle_control_cmd_collection_attach {
     size_t              name_length;     /* IN  */
     int                 ret;             /* OUT */
     collection_id_t     collection;      /* OUT */
-} PACKED cctrl_cmd_collection_attach_t;
+} cctrl_cmd_collection_attach_t;
 
 typedef struct castle_control_cmd_collection_detach {
     collection_id_t collection;          /* IN  */
     int             ret;                 /* OUT */
-} PACKED cctrl_cmd_collection_detach_t;
+} cctrl_cmd_collection_detach_t;
 
 typedef struct castle_control_cmd_collection_snapshot {
     collection_id_t collection; /* IN  */
     int       ret;             /* OUT */
     version_t version;         /* OUT */
-} PACKED cctrl_cmd_collection_snapshot_t;
+} cctrl_cmd_collection_snapshot_t;
 
 typedef struct castle_control_cmd_create {
     uint64_t  size;            /* IN  */
     int       ret;             /* OUT */
     version_t id;              /* OUT */
-} PACKED cctrl_cmd_create_t;
+} cctrl_cmd_create_t;
 
 typedef struct castle_control_cmd_destroy {
     version_t version;         /* IN */
@@ -208,58 +208,58 @@ typedef struct castle_control_cmd_clone {
     version_t version;         /* IN  */
     int       ret;             /* OUT */
     version_t clone;           /* OUT */
-} PACKED cctrl_cmd_clone_t;
+} cctrl_cmd_clone_t;
 
 typedef struct castle_control_cmd_init {
     int ret;                   /* OUT */
-} PACKED cctrl_cmd_init_t;
+} cctrl_cmd_init_t;
 
 typedef struct castle_control_cmd_transfer_create {
     version_t     version;     /* IN  */
     uint32_t      direction;   /* IN  */
     int           ret;         /* OUT */
     transfer_id_t id;          /* OUT */
-} PACKED cctrl_cmd_transfer_create_t;
+} cctrl_cmd_transfer_create_t;
 
 typedef struct castle_control_cmd_transfer_destroy {
     transfer_id_t id;          /* IN  */
     int           ret;         /* OUT */
-} PACKED cctrl_cmd_transfer_destroy_t;
+} cctrl_cmd_transfer_destroy_t;
 
 typedef struct castle_control_cmd_protocol_version {
     int ret;                   /* OUT */
     uint32_t version;          /* OUT */
-} PACKED cctrl_cmd_protocol_version_t;
+} cctrl_cmd_protocol_version_t;
 
 typedef struct castle_control_cmd_environment_set {
     c_env_var_t var_id;        /* IN */
     const char *var_str;       /* IN  */
     size_t      var_len;       /* IN  */
     int         ret;           /* OUT */
-} PACKED cctrl_cmd_environment_set_t;
+} cctrl_cmd_environment_set_t;
 
 typedef struct castle_control_cmd_fault {
     c_fault_t fault_id;        /* IN  */
     int       ret;             /* OUT */
-} PACKED cctrl_cmd_fault_t;
+} cctrl_cmd_fault_t;
 
 typedef struct castle_control_cmd_trace_setup {
     const char *dir_str;       /* IN  */
     size_t      dir_len;       /* IN  */
     int         ret;           /* OUT */
-} PACKED cctrl_cmd_trace_setup_t;
+} cctrl_cmd_trace_setup_t;
 
 typedef struct castle_control_cmd_trace_start {
     int         ret;           /* OUT */
-} PACKED cctrl_cmd_trace_start_t;
+} cctrl_cmd_trace_start_t;
 
 typedef struct castle_control_cmd_trace_stop {
     int         ret;           /* OUT */
-} PACKED cctrl_cmd_trace_stop_t;
+} cctrl_cmd_trace_stop_t;
 
 typedef struct castle_control_cmd_trace_teardown {
     int         ret;           /* OUT */
-} PACKED cctrl_cmd_trace_teardown_t;
+} cctrl_cmd_trace_teardown_t;
 
 typedef struct castle_control_ioctl {
     uint16_t cmd;
@@ -294,7 +294,7 @@ typedef struct castle_control_ioctl {
         cctrl_cmd_trace_teardown_t      trace_teardown;
 
     };
-} PACKED cctrl_ioctl_t;
+} cctrl_ioctl_t;
 
 /* IOCTL definitions. */
 enum {
@@ -481,40 +481,43 @@ typedef struct castle_response {
 } castle_response_t;
 
 struct castle_iter_val {
-    uint8_t              type;
     uint64_t             length;
+    uint8_t              type;
     union {
         uint8_t         *val;
         collection_id_t  collection_id;
     };
-} PACKED;
+};
 
 struct castle_key_value_list {
     struct castle_key_value_list *next;
     c_vl_okey_t                  *key;
     struct castle_iter_val       *val;
-} PACKED;
+};
 
 
 #define CASTLE_SLAVE_MAGIC1     (0x02061985)
 #define CASTLE_SLAVE_MAGIC2     (0x16071983)
 #define CASTLE_SLAVE_MAGIC3     (0x16061981)
-#define CASTLE_SLAVE_VERSION    (1)
+#define CASTLE_SLAVE_VERSION    (2)
 
 #define CASTLE_SLAVE_TARGET     (0x00000001)
 #define CASTLE_SLAVE_SPINNING   (0x00000002)
 #define CASTLE_SLAVE_NEWDEV     (0x00000004)
 
 struct castle_slave_superblock_public {
-    uint32_t magic1;
-    uint32_t magic2;
-    uint32_t magic3;
-    uint32_t version;   /* Super chunk format version */
-    uint32_t uuid;
-    uint32_t used;
-    uint64_t size;      /* In blocks. */
-	uint32_t flags;
-    uint32_t checksum;
+    /* align:   8 */
+    /* offset:  0 */ uint32_t magic1;
+    /*          4 */ uint32_t magic2;
+    /*          8 */ uint32_t magic3;
+    /*         12 */ uint32_t version;   /* Super chunk format version */
+    /*         16 */ uint32_t uuid;
+    /*         20 */ uint32_t used;
+    /*         24 */ uint64_t size;      /* In blocks. */
+    /*         32 */ uint32_t flags;
+    /*         36 */ uint32_t checksum;
+    /*         40 */ uint8_t  _unused[88];
+    /*        128 */
 } PACKED;
 
 #define CASTLE_FS_MAGIC1        (0x19731121)
@@ -523,14 +526,17 @@ struct castle_slave_superblock_public {
 #define CASTLE_FS_VERSION       (1)
 
 struct castle_fs_superblock_public {
-    uint32_t magic1;
-    uint32_t magic2;
-    uint32_t magic3;
-    uint32_t uuid;
-    uint32_t version;   /* Super chunk format version */
-    uint32_t salt;
-    uint32_t peper;
-    uint32_t checksum;
+    /* align:   4 */
+    /* offset:  0 */ uint32_t magic1;
+    /*          4 */ uint32_t magic2;
+    /*          8 */ uint32_t magic3;
+    /*         12 */ uint32_t uuid;
+    /*         16 */ uint32_t version;   /* Super chunk format version */
+    /*         20 */ uint32_t salt;
+    /*         24 */ uint32_t peper;
+    /*         28 */ uint32_t checksum;
+    /*         32 */ uint8_t  _unused[96];
+    /*        128 */
 } PACKED;
 
 #endif /* __CASTLE_PUBLIC_H__ */
