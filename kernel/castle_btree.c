@@ -3865,6 +3865,7 @@ void castle_btree_rq_enum_init(c_rq_enum_t *rq_enum, version_t version,
     debug("0: Creating new node buffer: %p\n", rq_enum->prod_buf);
     rq_enum->cons_buf       = rq_enum->buf_head;
     rq_enum->cur_key        = NULL;
+    rq_enum->last_key       = NULL;
     rq_enum->start_key      = start_key;
     rq_enum->end_key        = end_key;
     rq_enum->in_range       = 0;
@@ -4041,6 +4042,7 @@ void castle_btree_rq_enum_next(c_rq_enum_t *rq_enum,
     cons_idx_prod_idx_compare(rq_enum);
     btree->entry_get(rq_enum->cons_buf->node, rq_enum->cons_idx, key_p, version_p, 
                      cvt_p);
+    rq_enum->last_key = *key_p;
     rq_enum->cons_idx++;
     if (rq_enum->cons_buf != rq_enum->prod_buf && 
         rq_enum->cons_idx == rq_enum->cons_buf->node->used)
@@ -4062,6 +4064,15 @@ void castle_btree_rq_enum_skip(c_rq_enum_t *rq_enum,
     BUG_ON(rq_enum->iter_running);
     cons_idx_prod_idx_compare(rq_enum); 
 
+    /* Should never try to skip to the key before last key returned. */
+    if (rq_enum->last_key && (btree->key_compare(key, rq_enum->last_key) <= 0))
+    {
+        printk("Trying to skip to a key[%p] smaller than last_key [%p], iter - %p\n", key,
+                rq_enum->last_key, rq_enum);
+        BUG();
+    }
+
+    /* Go through all buffers and skip keys smaller than the key to be skipped to. */
     while(1)
     {
         int last_idx;
@@ -4083,9 +4094,16 @@ void castle_btree_rq_enum_skip(c_rq_enum_t *rq_enum,
         }
         if (rq_enum->cons_buf == rq_enum->prod_buf)
             break;
+
+        /* Move consumer to next buffer. */
         rq_enum->cons_buf = list_entry(rq_enum->cons_buf->list.next,
                                        struct node_buf_t, list);
+        rq_enum->cons_idx = 0;
     }
+
+    /* Key that iterator is skipping to must be bigger than last key of the node
+     * (which is stored in rq_enum->cur_key). */
+    BUG_ON(btree->key_compare(rq_enum->cur_key, key) >= 0);
 
     castle_btree_rq_enum_buffer_switch(rq_enum);
     castle_btree_iter_version_key_dealloc(&rq_enum->iterator);

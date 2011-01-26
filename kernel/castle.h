@@ -932,6 +932,7 @@ typedef struct castle_rq_enumerator {
     void                         *cur_key;
     void                         *start_key;
     void                         *end_key;
+    void                         *last_key;  /* Last key returned by next(). */
     int                           in_range;
     castle_iterator_end_io_t      end_io;
     void                         *private;
@@ -1222,6 +1223,7 @@ typedef struct castle_object_iterator {
     int                 err;
     c_vl_bkey_t        *start_bkey;
     c_vl_bkey_t        *end_bkey;
+    int                 completed;
     c_vl_bkey_t        *last_next_key;
     c_da_rq_iter_t      da_rq_iter;
     /* Cached entry, guaranteed to fall in the hypercube */

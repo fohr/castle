@@ -390,7 +390,7 @@ static int castle_object_btree_key_bounds_check(c_vl_bkey_t *key,
 static c_vl_bkey_t* castle_object_btree_key_skip(c_vl_bkey_t *old_key, 
                                                  c_vl_okey_t *start, 
                                                  int offending_dim,
-                                                 int bigger)
+                                                 int out_of_range)
 {
     c_vl_bkey_t *new_key;
 
@@ -400,10 +400,10 @@ static c_vl_bkey_t* castle_object_btree_key_skip(c_vl_bkey_t *old_key,
     if(!new_key)
         return NULL;
 
-    /* If the offending dimension was bigger than the bounds, we need to set 
+    /* If the offending dimension was out_of_range than the bounds, we need to set 
        the NEXT_FLAG for it */ 
-    if(bigger > 0)
-        castle_object_btree_key_dim_inc(new_key, offending_dim);
+    if(out_of_range > 0)
+        castle_object_btree_key_dim_inc(new_key, offending_dim - 1);
 
     return new_key;
 }
@@ -485,41 +485,46 @@ static int _castle_objects_rq_iter_prep_next(castle_object_iterator_t *iter,
     void *k;
     version_t v;
     c_val_tup_t cvt;
-    int offending_dim, bigger;
+    int offending_dim=0, out_of_range;
 
     while(1)
     {
-        if(iter->cached)
+        if(iter->cached || iter->completed)
             return 1;
-        if (!sync_call && !castle_da_rq_iter.prep_next(&iter->da_rq_iter))
+        if(!sync_call && !castle_da_rq_iter.prep_next(&iter->da_rq_iter))
             return 0;
         /* Nothing cached, check if da_rq_iter has anything */
         if(!castle_da_rq_iter.has_next(&iter->da_rq_iter)) 
-        {
             return 1;
-        }
+
         /* Nothing cached, but there is something in the da_rq_iter.
            Check if that's within the rq hypercube */
         castle_da_rq_iter.next(&iter->da_rq_iter, &k, &v, &cvt);
-        bigger = castle_object_btree_key_bounds_check(k, 
-                                                      iter->start_okey, 
-                                                      iter->end_okey,
-                                                      &offending_dim);
+        out_of_range = castle_object_btree_key_bounds_check(k, 
+                                                            iter->start_okey, 
+                                                            iter->end_okey,
+                                                            &offending_dim);
 #ifdef DEBUG
         debug("Got the following key from da_rq iterator. Is in range: %d, offending_dim=%d\n", 
-                bigger, offending_dim);
+                out_of_range, offending_dim);
         vl_bkey_print(k);
 #endif
-        if(bigger)
+        if(out_of_range)
         {
             c_vl_bkey_t *next_key;
+
+            if (offending_dim == 0)
+            {
+                iter->completed = 1;
+                return 1;
+            }
 
             /* We are outside of the rq hypercube, find next intersection point
                and skip to that */
             next_key = castle_object_btree_key_skip(k, 
                                                     iter->start_okey, 
                                                     offending_dim,
-                                                    bigger);
+                                                    out_of_range);
             /* Save the key, to be freed the next time around the loop/on cancel */
             castle_objects_rq_iter_next_key_free(iter);
             iter->last_next_key = next_key;
@@ -565,15 +570,15 @@ static int castle_objects_rq_iter_has_next(castle_object_iterator_t *iter)
     debug_obj("%s:%p\n", __FUNCTION__, iter);
     if(iter->cached)
         return 1;
-    /* Nothing cached, check if da_rq_iter has anything */
-    if(!castle_da_rq_iter.has_next(&iter->da_rq_iter))
-    {
-        debug_obj("%s:%p - reschedule\n", __FUNCTION__, iter);
+
+    /* End of iterator. */
+    if(iter->completed)
         return 0;
-    }
-    
-    /* We should never get here */
-    BUG();
+
+    /* Nothing cached, check if da_rq_iter has anything */
+    BUG_ON(castle_da_rq_iter.has_next(&iter->da_rq_iter));
+    debug_obj("%s:%p - reschedule\n", __FUNCTION__, iter);
+
     return 0;
 }
 
@@ -604,6 +609,7 @@ static void castle_objects_rq_iter_init(castle_object_iterator_t *iter)
     iter->start_bkey    = castle_object_key_convert(iter->start_okey);
     iter->end_bkey      = castle_object_key_convert(iter->end_okey);
     iter->last_next_key = NULL;
+    iter->completed     = 0;
 #ifdef DEBUG
     printk("====================== RQ start keys =======================\n");
     vl_okey_print(iter->start_okey);

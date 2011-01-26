@@ -48,7 +48,7 @@ clean:
 	rm -f *.o $(MAIN_OBJS) mkcastlefs
 
 .PHONY: install
-install: all
+install: castle_probe_device mkcastlefs
 	install $(MAIN_OBJS) /usr/sbin
 	install -D castle /etc/rc.d/init.d/
 	install -D castle_claim_empty /etc/rc.d/init.d/
