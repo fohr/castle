@@ -1655,12 +1655,12 @@ c2_block_t* castle_btree_node_create(int version, int is_leaf, struct castle_com
     btree_t      type;
     c_ext_pos_t  cep;
 
-    type  = ct->btree_type;
+    type = ct->btree_type;
     btree = castle_btree_type_get(type);
 
     BUG_ON(castle_btree_node_space_get(ct, &cep, alloc_done) < 0);
     
-    c2b   = castle_cache_block_get(cep, btree->node_size);
+    c2b = castle_cache_block_get(cep, btree->node_size);
     
     write_lock_c2b(c2b);
     update_c2b(c2b);
@@ -2170,7 +2170,9 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
         debug("Following write down the tree.\n");
         if (!CVT_NODE(lub_cvt)) 
         {
-            printk("0x%x-%llu-"cep_fmt_str_nl, lub_cvt.type, lub_cvt.length,
+            printk("0x%x-%llu-"cep_fmt_str_nl, 
+                    lub_cvt.type, 
+                    (uint64_t)lub_cvt.length,
                    cep2str(lub_cvt.cep));
             BUG();
         }
@@ -3143,7 +3145,9 @@ static void __castle_btree_iter_path_traverse(struct work_struct *work)
     entry_cep = cvt.cep;
     if (!CVT_NODE(cvt))
     {
-        printk("0x%x-%llu-"cep_fmt_str_nl, cvt.type, cvt.length,
+        printk("0x%x-%llu-"cep_fmt_str_nl, 
+                cvt.type, 
+                (uint64_t)cvt.length,
                 cep2str(cvt.cep));
         BUG();
     }
@@ -3184,7 +3188,7 @@ static void _castle_btree_iter_path_traverse(c2_block_t *c2b)
     queue_work(castle_wqs[c_iter->depth+MAX_BTREE_DEPTH], &c_iter->work);
 }
 
-static void castle_btree_iter_path_traverse(c_iter_t *c_iter, c_ext_pos_t  node_cep)
+static void castle_btree_iter_path_traverse(c_iter_t *c_iter, c_ext_pos_t node_cep)
 {
     struct castle_btree_type *btree = castle_btree_type_get(c_iter->tree->btree_type);
     c2_block_t *c2b = NULL;

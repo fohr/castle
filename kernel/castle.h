@@ -41,7 +41,6 @@
 #endif
 
 #define USED                 __attribute__((used))
-//#define PACKED               __attribute__((packed))
 #define EXIT_SUCCESS         (0)
 
 #define STATIC_BUG_ON_HELPER(expr) \
@@ -71,7 +70,8 @@ typedef uint32_t block_t;
 
 /* New Free space structures */
 
-#define MAX_NR_SLAVES 20
+/* WARNING: be careful about changing that. It's used to define various on-disk datastructures. */
+#define MAX_NR_SLAVES 64
 
 #define C_CHK_SHIFT                    (20) 
 #define C_CHK_SIZE                     (1 << C_CHK_SHIFT)
@@ -155,8 +155,10 @@ typedef uint32_t c_uuid_t;
 #define INVAL_SLAVE_ID                  (0)
 
 struct castle_chunk_sequence {
-    c_chk_t         first_chk;
-    c_chk_cnt_t     count;
+    /* align:   4 */
+    /* offset:  0 */ c_chk_t         first_chk;
+    /*          4 */ c_chk_cnt_t     count;
+    /*          8 */
 } PACKED;
 typedef struct castle_chunk_sequence c_chk_seq_t;
 #define INVAL_CHK_SEQ                ((c_chk_seq_t){0,0})
@@ -167,8 +169,10 @@ typedef struct castle_chunk_sequence c_chk_seq_t;
 #define chk_seq2str(_seq)            (_seq).first_chk, (_seq).count
 
 struct castle_disk_chunk {
-    c_uuid_t        slave_id;
-    c_chk_t         offset;
+    /* align:   4 */
+    /* offset:  0 */ c_uuid_t        slave_id;
+    /*          4 */ c_chk_t         offset;
+    /*          8 */
 } PACKED;
 typedef struct castle_disk_chunk c_disk_chk_t;
 #define INVAL_DISK_CHK               ((c_disk_chk_t){INVAL_SLAVE_ID,0})
@@ -184,8 +188,10 @@ typedef uint64_t c_byte_off_t;
 
 /* Disk layout related structures (extent based) */
 struct castle_extent_position {
-    c_ext_id_t      ext_id;
-    c_byte_off_t    offset;
+    /* align:   8 */
+    /* offset:  0 */ c_ext_id_t      ext_id;
+    /*          8 */ c_byte_off_t    offset;
+    /*         16 */
 } PACKED;
 typedef struct castle_extent_position c_ext_pos_t;
 #define __INVAL_EXT_POS             {INVAL_EXT_ID,0}
@@ -234,54 +240,72 @@ typedef struct castle_extent_freespace {
 } c_ext_fs_t;
 
 typedef struct castle_extent_freespace_byte_stream {
-    c_ext_id_t      ext_id;
-    c_byte_off_t    ext_size;
-    uint32_t        align;
-    uint64_t        used;
-    uint64_t        blocked;
-} c_ext_fs_bs_t;
+    /* align:   8 */   
+    /* offset:  0 */ c_ext_id_t      ext_id;
+    /*          8 */ c_byte_off_t    ext_size;
+    /*         16 */ uint64_t        used;
+    /*         24 */ uint64_t        blocked;
+    /*         32 */ uint32_t        align;
+    /*         36 */ uint8_t         _unused[28]; 
+    /*         64 */ 
+} PACKED c_ext_fs_bs_t;
 
 typedef struct {
-    uint32_t        max_entries;
-    uint32_t        nr_entries;
-    uint32_t        prod;
-    uint32_t        cons;
-    c_chk_cnt_t     free_chk_cnt;
-    c_chk_cnt_t     disk_size;
-} castle_freespace_t;
+    /* align:   4 */  
+    /* offset:  0 */ uint32_t        max_entries;
+    /*          4 */ uint32_t        nr_entries;
+    /*          8 */ uint32_t        prod;
+    /*         12 */ uint32_t        cons;
+    /*         16 */ c_chk_cnt_t     free_chk_cnt;
+    /*         20 */ c_chk_cnt_t     disk_size;
+    /*         24 */ uint8_t         _unused[40]; 
+    /*         64 */ 
+} PACKED castle_freespace_t;
 
 struct castle_elist_entry {
-    c_ext_id_t      ext_id;
-    c_chk_cnt_t     size;
-    c_rda_type_t    type;
-    uint32_t        k_factor;
-    c_ext_pos_t     maps_cep;
-    uint32_t        obj_refs;
+    /* align:   8 */ 
+    /* offset:  0 */ c_ext_id_t      ext_id;
+    /*          8 */ c_chk_cnt_t     size;
+    /*         12 */ c_rda_type_t    type;
+    /*         16 */ uint32_t        k_factor;
+    /*         20 */ uint32_t        obj_refs;
+    /*         24 */ c_ext_pos_t     maps_cep;
+    /*         40 */ uint8_t         _unused[24]; 
+    /*         64 */
 } PACKED;
 
-struct castle_extents_sb_t {
-    c_ext_id_t                              ext_id_seq;
-    uint64_t                                nr_exts;
-    c_disk_chk_t                            micro_maps[MAX_NR_SLAVES];
-    struct castle_elist_entry               micro_ext;
-    struct castle_elist_entry               meta_ext;
-    struct castle_elist_entry               mstore_ext[2];
-    c_ext_fs_bs_t                           meta_ext_fs_bs;
-};
+struct castle_extents_superblock {
+    /* align:   8 */
+    /* offset:  0 */ c_ext_id_t                 ext_id_seq;
+    /*          8 */ uint64_t                   nr_exts;
+    /*         16 */ struct castle_elist_entry  micro_ext;
+    /*         80 */ struct castle_elist_entry  meta_ext;
+    /*        144 */ struct castle_elist_entry  mstore_ext[2];
+    /*        272 */ c_ext_fs_bs_t              meta_ext_fs_bs;
+    /*        336 */ c_disk_chk_t               micro_maps[MAX_NR_SLAVES];
+    /*        848 */ uint8_t                    _unused[176];
+    /*       1024 */
+} PACKED;
 
 struct castle_slave_superblock {
-    struct castle_slave_superblock_public   pub;
-    uint32_t                                fs_version;
-    castle_freespace_t                      freespace;
+    /* align:   8 */
+    /* offset:  0 */ struct castle_slave_superblock_public pub;
+    /*        128 */ uint32_t                              fs_version;
+    /*        132 */ castle_freespace_t                    freespace;
+    /*        196 */ uint8_t                               _unused[60]; 
+    /*        256 */ 
 } PACKED;
 
 struct castle_fs_superblock {
-    struct castle_fs_superblock_public      pub;
-    uint32_t                                nr_slaves;
-    uint32_t                                slaves[MAX_NR_SLAVES];
-    struct castle_extents_sb_t              extents_sb;
-    uint32_t                                fs_version;
-    c_ext_pos_t                             mstore[16];
+    /* align:   8 */
+    /* offset:  0 */ struct castle_fs_superblock_public      pub;
+    /*        128 */ uint32_t                                fs_version;
+    /*        132 */ uint32_t                                nr_slaves;
+    /*        136 */ uint32_t                                slaves[MAX_NR_SLAVES];
+    /*        392 */ struct castle_extents_superblock        extents_sb;
+    /*       1416 */ c_ext_pos_t                             mstore[16];
+    /*       1672 */ uint8_t                                 _unused[376];
+    /*       2048 */ 
 } PACKED;
 
 enum {
@@ -306,16 +330,20 @@ enum {
 #define MEDIUM_OBJECT_LIMIT (20 * C_CHK_SIZE)
 
 struct castle_value_tuple {
-    uint8_t           type;
-    uint64_t          length;
-    union {
-        uint8_t      *val;
-        c_ext_pos_t   cep;
-    };
+    /* align:   8 */ 
+    /* offset:  0 */ struct {
+    /*          0 */     uint64_t      type:8;
+    /*          1 */     uint64_t      length:56;
+    /*          8 */ };
+    /*          8 */ union {
+    /*          8 */     c_ext_pos_t   cep;
+    /*          8 */     uint8_t      *val;
+    /*         24 */ };
+    /*         24 */ 
 } PACKED;
 typedef struct castle_value_tuple c_val_tup_t;
 
-#define INVAL_VAL_TUP        ((c_val_tup_t){CVT_TYPE_INVALID, 0, {.cep = INVAL_EXT_POS}})
+#define INVAL_VAL_TUP        ((c_val_tup_t){{CVT_TYPE_INVALID, 0}, {.cep = INVAL_EXT_POS}})
 
 #define CVT_LEAF_VAL(_cvt)      ((_cvt).type & CVT_TYPE_LEAF_VAL)
 #define CVT_LEAF_PTR(_cvt)      ((_cvt).type & CVT_TYPE_LEAF_PTR)
@@ -439,14 +467,18 @@ typedef uint8_t btree_t;
 
 #define BTREE_NODE_MAGIC  0x0000cdab
 struct castle_btree_node {
-    uint32_t        magic;
-    uint32_t        version;
-    uint32_t        used;
-    uint8_t         is_leaf;
-    /* Payload (i.e. btree entries) depend on the B-tree type */
-    btree_t         type;
-    c_ext_pos_t     next_node;
-    uint8_t         payload[0];
+    /* align:   8 */
+    /* offset:  0 */ uint32_t        magic;
+    /*          4 */ uint32_t        version;
+    /*          8 */ uint32_t        used;
+    /*         12 */ btree_t         type;
+    /*         13 */ uint8_t         is_leaf;
+    /*         14 */ uint8_t         _pad[2];
+    /*         16 */ c_ext_pos_t     next_node;
+                     /* Payload (i.e. btree entries) depend on the B-tree type */
+    /*         32 */ uint8_t         _unused[32];
+    /*         64 */ uint8_t         payload[0];
+    /*         64 */
 } PACKED;
 
 #define BTREE_NODE_PAYLOAD(_node)   ((void *)&(_node)->payload)
@@ -454,10 +486,13 @@ struct castle_btree_node {
 #define PLUS_INFINITY_DIM_LENGTH 0xFFFFFFFF
 
 typedef struct castle_var_length_btree_key {
-    uint32_t length;
-    uint32_t nr_dims;
-    uint32_t dim_head[0];
-    /* uint8_t dims[][] */
+    /* align:   4 */
+    /* offset:  0 */ uint32_t length;
+    /*          4 */ uint32_t nr_dims;
+    /*          8 */ uint8_t  _unused[8];
+    /*         16 */ uint32_t dim_head[0];
+    /*         16 */
+    /* Dimension header is followed by individual dimensions. */
 } PACKED c_vl_bkey_t;
 
 /* Below encapsulates the internal btree node structure, different type of
@@ -556,59 +591,72 @@ struct castle_large_obj_entry {
 };
 
 struct castle_dlist_entry {
-    da_id_t     id;
-    version_t   root_version;
+    /* align:   4 */
+    /* offset:  0 */ da_id_t     id;
+    /*          4 */ version_t   root_version;
+    /*          8 */ uint8_t     _unused[248]; 
+    /*        256 */ 
 } PACKED;
 
 struct castle_clist_entry {
-    da_id_t      da_id;
-    uint64_t     item_count;
-    btree_t      btree_type;
-    uint8_t      dynamic;
-    tree_seq_t   seq;
-    uint8_t      level;
-    uint8_t      tree_depth;
-    c_ext_pos_t  root_node;
-    c_ext_pos_t  first_node;
-    c_ext_pos_t  last_node;
-    uint64_t     node_count;
-    c_ext_fs_bs_t tree_ext_fs_bs;
-    c_ext_fs_bs_t data_ext_fs_bs;
-    uint64_t	 large_ext_chk_cnt;
+    /* align:   8 */
+    /* offset:  0 */ da_id_t       da_id;
+    /*          4 */ btree_t       btree_type;
+    /*          5 */ uint8_t       dynamic;
+    /*          6 */ uint8_t       level;
+    /*          7 */ uint8_t       tree_depth;
+    /*          8 */ uint64_t      item_count;
+    /*         16 */ c_ext_pos_t   root_node;
+    /*         32 */ c_ext_pos_t   first_node;
+    /*         48 */ c_ext_pos_t   last_node;
+    /*         64 */ c_ext_fs_bs_t tree_ext_fs_bs;
+    /*        128 */ c_ext_fs_bs_t data_ext_fs_bs;
+    /*        192 */ uint64_t      node_count;
+    /*        200 */ uint64_t	   large_ext_chk_cnt;
+    /*        208 */ tree_seq_t    seq;
+    /*        212 */ uint8_t       _unused[44]; 
+    /*        256 */ 
 } PACKED;
 
 struct castle_vlist_entry {
-    version_t    version_nr;
-    version_t    parent;
-    da_id_t      da_id;
-    uint64_t     size;
+    /* align:   8 */
+    /* offset:  0 */ version_t    version_nr;
+    /*          4 */ version_t    parent;
+    /*          8 */ da_id_t      da_id;
+    /*         12 */ uint8_t      _pad[4];
+    /*         16 */ uint64_t     size;
+    /*         24 */ uint8_t      _unused[232]; 
+    /*        256 */ 
 } PACKED;
 
 #define MAX_NAME_SIZE 128
 struct castle_alist_entry {
-    version_t   version;
-    char        name[MAX_NAME_SIZE];
+    /* align:   4 */
+    /* offset:  0 */ version_t   version;
+    /*          4 */ char        name[MAX_NAME_SIZE];
+    /*        132 */ uint8_t     _unused[124]; 
+    /*        256 */ 
 } PACKED;
 
 #define MLIST_NODE_MAGIC  0x0000baca
 struct castle_mlist_node {
-    uint32_t     magic;
-    uint16_t     capacity;
-    uint16_t     used;
-    c_ext_pos_t  next;
-    uint8_t      payload[0];
-} PACKED;
-
-struct castle_flist_entry {
-    uint32_t        slave_uuid;
-    version_t       version;
-    block_t         blocks;
+    /* align:   8 */
+    /* offset:  0 */ uint32_t    magic;
+    /*          4 */ uint16_t    capacity;
+    /*          6 */ uint16_t    used;
+    /*          8 */ c_ext_pos_t next;
+    /*         24 */ uint8_t     _unused[40]; 
+    /*         64 */ uint8_t     payload[0];
+    /*         64 */ 
 } PACKED;
 
 struct castle_lolist_entry {
-    c_ext_id_t      ext_id;
-    uint64_t        length;
-    tree_seq_t      ct_seq;
+    /* align:   8 */
+    /* offset:  0 */ c_ext_id_t  ext_id;
+    /*          8 */ uint64_t    length;
+    /*         16 */ tree_seq_t  ct_seq;
+    /*         20 */ uint8_t     _unused[12]; 
+    /*         32 */ 
 } PACKED;
 
 /* IO related structures */
@@ -791,7 +839,7 @@ typedef struct castle_iterator {
     /* Fields below should be filled in before iterator is registered with the btree 
        code with btree_iter_init() and start() */ 
     int                         (*need_visit)(struct castle_iterator *c_iter,
-    c_ext_pos_t node_cep);
+                                              c_ext_pos_t node_cep);
     void                        (*node_start)(struct castle_iterator *c_iter);
     void                        (*each)      (struct castle_iterator *c_iter, 
                                               int index, 
@@ -826,9 +874,9 @@ typedef struct castle_iterator {
     struct castle_cache_block    *path[MAX_BTREE_DEPTH];
     int                           depth;
 
-    struct castle_indirect_node *indirect_nodes; /* If allocated, MAX_BTREE_ENTRIES */
-                                
-    struct work_struct           work;
+    struct castle_indirect_node  *indirect_nodes; /* If allocated, MAX_BTREE_ENTRIES */
+                                 
+    struct work_struct            work;
 } c_iter_t;
 
 /* Enumerates all entries in a modlist btree */

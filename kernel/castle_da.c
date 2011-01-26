@@ -287,7 +287,7 @@ static int castle_ct_immut_iter_next_node_init(c_immut_iter_t *iter,
  *
  * @also castle_ct_immut_iter_next_node_init()
  */
-static void castle_ct_immut_iter_next_node_find(c_immut_iter_t *iter, c_ext_pos_t  cep)
+static void castle_ct_immut_iter_next_node_find(c_immut_iter_t *iter, c_ext_pos_t cep)
 {
     struct castle_btree_node *node;
     c2_block_t *c2b;

@@ -62,7 +62,7 @@ int low_disk_space = 0;
 
 c_chk_cnt_t meta_ext_size = 0;
 
-struct castle_extents_sb_t castle_extents_global_sb;
+struct castle_extents_superblock castle_extents_global_sb;
 static DEFINE_MUTEX(castle_extents_mutex);
 
 typedef struct {
@@ -240,7 +240,7 @@ static void castle_extents_super_block_read(void)
 
     sblk = castle_fs_superblocks_get();
     memcpy(&castle_extents_global_sb, &sblk->extents_sb,
-           sizeof(struct castle_extents_sb_t));
+           sizeof(struct castle_extents_superblock));
     castle_fs_superblocks_put(sblk, 0);
 
     mutex_unlock(&castle_extents_mutex);
@@ -253,14 +253,14 @@ static void castle_extents_super_block_writeback(void)
     sblk = castle_fs_superblocks_get();
 
     memcpy(&sblk->extents_sb, &castle_extents_global_sb,
-           sizeof(struct castle_extents_sb_t));
+           sizeof(struct castle_extents_superblock));
 
     castle_fs_superblocks_put(sblk, 1);
 
     INJECT_FAULT;
 }
 
-struct castle_extents_sb_t * castle_extents_super_block_get(void)
+struct castle_extents_superblock* castle_extents_super_block_get(void)
 {
     mutex_lock(&castle_extents_mutex);
     return &castle_extents_global_sb;
@@ -273,11 +273,11 @@ void castle_extents_super_block_put(int dirty)
 
 static int castle_extent_micro_ext_create(void)
 {
-    struct list_head *l;
-    struct castle_extents_sb_t *castle_extents_sb = castle_extents_super_block_get();
-    int    i = 0;
+    struct castle_extents_superblock *castle_extents_sb = castle_extents_super_block_get();
     c_disk_chk_t *micro_maps = castle_extents_sb->micro_maps;
-    c_ext_t      *micro_ext;
+    c_ext_t *micro_ext;
+    struct list_head *l;
+    int i = 0;
 
     micro_ext = castle_zalloc(sizeof(c_ext_t), GFP_KERNEL);
     if (!micro_ext)
@@ -318,12 +318,11 @@ static int castle_extent_micro_ext_create(void)
 
 static int castle_extent_meta_ext_create(void)
 {
-    struct   list_head *l;
-    int      i = 0;
+    int k_factor = (castle_rda_spec_get(META_EXT))->k_factor, i = 0;
+    struct castle_extents_superblock *castle_extents_sb;
+    struct list_head *l;
     c_ext_t *meta_ext;
-    struct   castle_extents_sb_t *castle_extents_sb;
     c_ext_id_t ext_id;
-    int      k_factor = (castle_rda_spec_get(META_EXT))->k_factor;
 
     list_for_each(l, &castle_slaves.slaves)
         i++;
@@ -358,7 +357,7 @@ static int castle_extent_mstore_ext_create(void)
     struct   list_head *l;
     int      i = 0;
     c_ext_t *mstore_ext;
-    struct   castle_extents_sb_t *castle_extents_sb;
+    struct   castle_extents_superblock *castle_extents_sb;
     c_ext_id_t ext_id;
     int      k_factor = (castle_rda_spec_get(DEFAULT_RDA))->k_factor; 
 
@@ -444,7 +443,7 @@ static int castle_extent_writeback(c_ext_t *ext, void *store)
 
 int castle_extents_writeback(void)
 {
-    struct castle_extents_sb_t *ext_sblk;
+    struct castle_extents_superblock *ext_sblk;
     c_mstore_t *castle_extents_mstore = NULL;
 
     if (!extent_init_done)
@@ -510,7 +509,7 @@ static int load_extent_from_mentry(struct castle_elist_entry *mstore_entry)
 
 int castle_extents_read(void)
 {
-    struct castle_extents_sb_t *ext_sblk = NULL;
+    struct castle_extents_superblock *ext_sblk = NULL;
 
     BUG_ON(extent_init_done);
 
@@ -551,8 +550,8 @@ error_out:
 int castle_extents_read_complete(void)
 {
     struct castle_elist_entry mstore_entry;
-    struct castle_extents_sb_t *ext_sblk = NULL;
-    struct castle_mstore_iter  *iterator = NULL;
+    struct castle_extents_superblock *ext_sblk = NULL;
+    struct castle_mstore_iter *iterator = NULL;
     c_mstore_t *castle_extents_mstore = NULL;
     c_mstore_key_t key;
 
@@ -794,9 +793,9 @@ out:
     return err;
 }
   
-c_ext_id_t castle_extent_alloc(c_rda_type_t            rda_type,
-                               da_id_t                 da_id,
-                               c_chk_cnt_t             count)
+c_ext_id_t castle_extent_alloc(c_rda_type_t rda_type,
+                               da_id_t      da_id,
+                               c_chk_cnt_t  count)
 {
     return _castle_extent_alloc(rda_type, da_id, count, INVAL_EXT_ID);
 }
@@ -812,15 +811,15 @@ c_ext_id_t castle_extent_alloc(c_rda_type_t            rda_type,
  * @also castle_extent_micro_ext_create()
  * @also castle_extent_sup_ext_init()
  */
-static c_ext_id_t _castle_extent_alloc(c_rda_type_t            rda_type,
-                                       da_id_t                 da_id,
-                                       c_chk_cnt_t             count,
-                                       c_ext_id_t              ext_id)
+static c_ext_id_t _castle_extent_alloc(c_rda_type_t rda_type,
+                                       da_id_t      da_id,
+                                       c_chk_cnt_t  count,
+                                       c_ext_id_t   ext_id)
 {
-    c_ext_t                     *ext = NULL;
-    c_rda_spec_t                *rda_spec = castle_rda_spec_get(rda_type);
-    struct castle_extents_sb_t  *castle_extents_sb = NULL;
-    uint32_t                     map_size = sizeof(c_disk_chk_t) * count * rda_spec->k_factor;
+    c_ext_t *ext = NULL;
+    c_rda_spec_t *rda_spec = castle_rda_spec_get(rda_type);
+    uint32_t map_size = sizeof(c_disk_chk_t) * count * rda_spec->k_factor;
+    struct castle_extents_superblock *castle_extents_sb = NULL;
 
     BUG_ON(!extent_init_done && !LOGICAL_EXTENT(ext_id));
 
@@ -901,7 +900,7 @@ void castle_extent_free(c_ext_id_t ext_id)
 
 void _castle_extent_free(c_ext_t *ext)
 {
-    struct castle_extents_sb_t  *castle_extents_sb = NULL;
+    struct castle_extents_superblock *castle_extents_sb = NULL;
     int                          i;
     uint32_t                     req_space;
     c_disk_chk_t                *maps_buf = NULL;
