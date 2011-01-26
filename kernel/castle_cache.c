@@ -3863,8 +3863,11 @@ static void castle_cache_freelists_fini(void)
  */
 #define CASTLE_MSTORE_ENTRY_DELETED     (1<<1)
 struct castle_mstore_entry {
-    uint8_t flags;
-    char payload[0];
+    /* align:   1 */ 
+    /* offset:  0 */ uint8_t flags;
+    /*          1 */ uint8_t _unused[7];
+    /*          8 */ char payload[0];
+    /*          8 */ 
 } PACKED;
 
 static inline struct castle_mstore_entry* castle_mstore_entry_get(struct castle_mstore *mstore,

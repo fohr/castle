@@ -54,7 +54,7 @@ struct castle_btree_node_save {
     struct castle_component_tree   *ct;
     c_ext_pos_t                     cep;
     struct work_struct              work;
-} PACKED;
+};
 
 
 /**********************************************************************************************/
@@ -75,11 +75,14 @@ struct castle_btree_node_save {
 #define MTREE_BLK_INVAL(_blk)    ((_blk) == MTREE_INVAL_BLK)
 
 struct castle_mtree_entry {
-    uint8_t         type;
-    block_t         block;
-    version_t       version;
-    uint32_t        val_len;
-    c_ext_pos_t     cep;
+    /* align:   8 */ 
+    /* offset:  0 */ uint8_t     type;
+    /*          1 */ uint8_t     _pad[3];
+    /*          4 */ block_t     block;
+    /*          8 */ version_t   version;
+    /*         12 */ uint32_t    val_len;
+    /*         16 */ c_ext_pos_t cep;
+    /*         32 */ 
 } PACKED;
 
 #define MTREE_NODE_SIZE     (10) /* In blocks */
@@ -333,7 +336,9 @@ struct castle_btree_type castle_mtree = {
 
 #define BATREE_KEY_SIZE         128      /* In bytes */
 typedef struct bakey {
-    uint8_t _key[BATREE_KEY_SIZE];
+    /* align:   1 */  
+    /* offset:  0 */ uint8_t _key[BATREE_KEY_SIZE];
+    /*        128 */ 
 } PACKED bakey_t;
 
 static const bakey_t BATREE_INVAL_KEY = (bakey_t){._key = {[0 ... (BATREE_KEY_SIZE-1)] = 0xFF}};
@@ -345,11 +350,15 @@ static const bakey_t BATREE_MAX_KEY   = (bakey_t){._key = {[0 ... (BATREE_KEY_SI
 #define BATREE_KEY_MAX(_key)            ((_key) == &BATREE_MAX_KEY)
 
 struct castle_batree_entry {
-    uint8_t      type;
-    bakey_t      key;
-    version_t    version;
-    uint32_t     val_len;
-    c_ext_pos_t  cep;
+    /* align:   8 */ 
+    /* offset:  0 */ uint8_t      type;
+    /*          1 */ uint8_t      _pad1[3]; 
+    /*          4 */ bakey_t      key;
+    /*        132 */ version_t    version;
+    /*        136 */ uint32_t     val_len;
+    /*        140 */ uint8_t      _pad2[4]; 
+    /*        144 */ c_ext_pos_t  cep;
+    /*        160 */ 
 } PACKED;
 
 #define BATREE_NODE_SIZE     (20) /* In blocks */
@@ -638,8 +647,10 @@ struct castle_btree_type castle_batree = {
 #define VLBA_TREE_ENTRY_IS_DISABLED(_slot)    ((_slot)->type & VLBA_TREE_ENTRY_DISABLED) 
 
 typedef struct vlba_key {
-    uint32_t length;
-    uint8_t _key[0];
+    /* align:   4 */
+    /* offset:  0 */ uint32_t length;
+    /*          4 */ uint8_t _key[0];
+    /*          4 */ 
 } PACKED vlba_key_t;
 
 static const vlba_key_t VLBA_TREE_INVAL_KEY = (vlba_key_t){.length = 0xFFFFFFFF};
@@ -651,18 +662,23 @@ static const vlba_key_t VLBA_TREE_MAX_KEY = (vlba_key_t){.length = 0xFFFFFFFE};
 #define VLBA_TREE_KEY_MAX(_key)            ((_key)->length == VLBA_TREE_MAX_KEY.length) 
 
 struct castle_vlba_tree_entry {
-    uint8_t      type;
-    version_t    version;
-    uint64_t     val_len;
-    c_ext_pos_t  cep;   
-    vlba_key_t   key;
-    /* Inline values are stored at the end of entry */
+    /* align:   8 */
+    /* offset:  0 */ uint8_t      type;
+    /*          1 */ uint8_t      _pad[3];
+    /*          4 */ version_t    version;
+    /*          8 */ uint64_t     val_len;
+    /*         16 */ c_ext_pos_t  cep;   
+    /*         32 */ vlba_key_t   key;
+    /*         36 *//* Inline values are stored at the end of entry */
 } PACKED;
 
 struct castle_vlba_tree_node {
-    uint32_t    dead_bytes;
-    uint32_t    free_bytes;
-    uint32_t    key_idx[0];
+    /* align:   4 */
+    /* offset:  0 */ uint32_t    dead_bytes;
+    /*          4 */ uint32_t    free_bytes;
+    /*          8 */ uint8_t     _unused[56]; 
+    /*         64 */ uint32_t    key_idx[0];
+    /*         64 */ 
 } PACKED;
 
 #define VLBA_TREE_NODE_SIZE(_node)          (castle_btree_type_get((_node)->type)->node_size)
