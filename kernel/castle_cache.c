@@ -7,6 +7,7 @@
 #include <linux/rbtree.h>
 #include <linux/delay.h>
 #include <linux/blkdev.h>
+#include <linux/hash.h>
 
 #include "castle_public.h"
 #include "castle.h"
@@ -1324,11 +1325,20 @@ int submit_c2b_sync(int rw, c2_block_t *c2b)
     return !c2b_uptodate(c2b);
 }
 
+static inline unsigned long castle_cache_hash_idx(c_ext_pos_t cep, int nr_buckets)
+{
+    unsigned long hash_idx = (cep.ext_id ^ cep.offset);
+
+    hash_idx = hash_long(hash_idx, 32);
+    return (hash_idx % nr_buckets);
+}
+
 static inline void castle_cache_page_hash_idx(c_ext_pos_t cep, int *hash_idx_p, int *lock_idx_p)
 {
     int hash_idx; 
 
-    hash_idx = (BLOCK(cep.offset) % castle_cache_page_hash_buckets);
+    hash_idx = castle_cache_hash_idx(cep, castle_cache_page_hash_buckets);
+    
     if(hash_idx_p)
         *hash_idx_p = hash_idx;
     if(lock_idx_p)
@@ -1430,7 +1440,7 @@ static inline void castle_cache_c2p_put(c2_page_t *c2p, struct list_head *accumu
 
 static inline int castle_cache_block_hash_idx(c_ext_pos_t cep)
 {
-    return (BLOCK(cep.offset) % castle_cache_block_hash_buckets);
+    return castle_cache_hash_idx(cep, castle_cache_block_hash_buckets);
 }
 
 static c2_block_t* castle_cache_block_hash_find(c_ext_pos_t cep, uint32_t nr_pages)
