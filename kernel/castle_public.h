@@ -499,11 +499,12 @@ struct castle_key_value_list {
 #define CASTLE_SLAVE_MAGIC1     (0x02061985)
 #define CASTLE_SLAVE_MAGIC2     (0x16071983)
 #define CASTLE_SLAVE_MAGIC3     (0x16061981)
-#define CASTLE_SLAVE_VERSION    (3)
+#define CASTLE_SLAVE_VERSION    (4)
 
 #define CASTLE_SLAVE_TARGET     (0x00000001)
 #define CASTLE_SLAVE_SPINNING   (0x00000002)
 #define CASTLE_SLAVE_NEWDEV     (0x00000004)
+#define CASTLE_SLAVE_SSD        (0x00000008)
 
 struct castle_slave_superblock_public {
     /* align:   8 */
@@ -513,7 +514,7 @@ struct castle_slave_superblock_public {
     /*         12 */ uint32_t version;   /* Super chunk format version */
     /*         16 */ uint32_t uuid;
     /*         20 */ uint32_t used;
-    /*         24 */ uint64_t size;      /* In blocks. */
+    /*         24 */ uint64_t size;      /* In 4K blocks. */
     /*         32 */ uint32_t flags;
     /*         36 */ uint32_t checksum;
     /*         40 */ uint8_t  _unused[88];

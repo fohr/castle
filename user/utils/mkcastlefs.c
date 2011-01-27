@@ -10,6 +10,9 @@
 
 #include "castle_public.h"
 
+#define NR_SUPPORTED_SSDS   2 
+static char* supported_ssds[NR_SUPPORTED_SSDS] = {"SSDSA2SH032G1GN INTEL", "INTEL SSDSA2M160G2GC"};
+
 #define MB (1024 * 1024)
 
 void usage(void)
@@ -38,7 +41,7 @@ uint32_t get_random_uuid()
 	return i;
 }
 
-void init_superblock(struct castle_slave_superblock_public *super)
+void init_superblock(struct castle_slave_superblock_public *super, int is_ssd)
 {
 	super->magic1 = CASTLE_SLAVE_MAGIC1;
 	super->magic2 = CASTLE_SLAVE_MAGIC2;
@@ -47,7 +50,7 @@ void init_superblock(struct castle_slave_superblock_public *super)
 	super->uuid = get_random_uuid();
 	super->used = 1; /* we are responsible for writing JUST the
 				slave's superblock */
-	super->flags = CASTLE_SLAVE_TARGET | CASTLE_SLAVE_NEWDEV;
+	super->flags = CASTLE_SLAVE_TARGET | CASTLE_SLAVE_NEWDEV | (is_ssd ? CASTLE_SLAVE_SSD : 0);
 	super->size = -1;
     super->checksum = 0;
 }
@@ -73,9 +76,51 @@ int write_superblock(int fd, struct castle_slave_superblock_public *super)
 
 }
 
+static int check_ssd(char *node)
+{
+#define BUFFER_SIZE     256
+#define HDPARM_COMMAND  "hdparm -I "
+#define SEARCH_STR      "Model Number:"
+    FILE *p = NULL;
+    char buffer[BUFFER_SIZE];
+    int i, ret;
+
+    ret = 0;
+    /* Make sure that the command will fit in the buffer. */
+    if(strlen(node) > BUFFER_SIZE - strlen(HDPARM_COMMAND) - 10)
+        goto out;
+    sprintf(buffer, HDPARM_COMMAND"%s", node);
+    p = popen(buffer, "r");
+    if(!p)
+    {
+        printf("Failed to execute: %s\n", buffer);
+        goto out;
+    }
+    while(fgets(buffer, BUFFER_SIZE, p))
+    {
+        char *model;
+        if((model = strstr(buffer, SEARCH_STR)) != NULL)
+        {
+            model += strlen(SEARCH_STR);
+            while(*model == ' ' || *model == '\0')
+                model++;
+            for(i=0; i<NR_SUPPORTED_SSDS; i++)
+            {   
+                if(strstr(model, supported_ssds[i]))
+                    ret = 1;
+            }
+            goto out;
+        }
+    }
+    
+out:
+    if(p) fclose(p);
+    return ret;
+}
+
 int main(int argc, char *argv[])
 {
-	int rv, fd, i;
+	int rv, fd, i, is_ssd;
 	char *node;
 	struct stat st;
 	struct castle_slave_superblock_public super;
@@ -99,8 +144,9 @@ int main(int argc, char *argv[])
           fprintf(stderr, "Warning: %s does not seem to be a device node\n", node);
 	}
 #endif
-
-	init_superblock(&super);
+    
+    is_ssd = check_ssd(node);
+	init_superblock(&super, is_ssd);
 
 	/* write */
 	if((fd = open(node, O_RDWR|O_LARGEFILE|O_SYNC)) == -1) {
