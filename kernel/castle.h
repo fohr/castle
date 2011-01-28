@@ -131,17 +131,6 @@ typedef uint32_t block_t;
 #define LOGICAL_EXTENT(_ext_id)        ((_ext_id) < EXT_SEQ_START && !EXT_ID_INVAL(_ext_id))
 #define SUPER_EXTENT(_ext_id)          (((_ext_id) >= SUP_EXT_ID) && ((_ext_id) < slave_id_to_sup_ext(MAX_NR_SLAVES)))
 
-typedef enum {
-    DEFAULT_RDA,
-    JOURNAL,
-    FS_META,
-    LOG_FREEZER,
-    META_EXT,
-    MICRO_EXT,
-    SUPER_EXT,
-    NR_RDA_SPEC
-} c_rda_type_t;
-
 typedef uint32_t c_chk_cnt_t;
 typedef uint32_t c_chk_t;
 typedef uint64_t c_ext_id_t;
@@ -230,6 +219,14 @@ static inline int EXT_POS_COMP(c_ext_pos_t cep1, c_ext_pos_t cep2)
 #define cep_fmt_str_nl               "(%llu, 0x%llx (chunk %lld chunk_off 0x%llx)).\n"
 #define cep2str(_off)                (_off).ext_id, BLOCK((_off).offset), CHUNK((_off).offset), CHUNK_OFFSET((_off).offset)
 #define __cep2str(_off)              (_off).ext_id, ((_off).offset), CHUNK((_off).offset), CHUNK_OFFSET((_off).offset)
+
+typedef enum {
+    DEFAULT_RDA,
+    META_EXT,
+    MICRO_EXT,
+    SUPER_EXT,
+    NR_RDA_SPECS
+} c_rda_type_t;
 
 typedef struct castle_extent_freespace {
     c_ext_id_t      ext_id;

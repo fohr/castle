@@ -3,32 +3,6 @@
 
 #include "castle.h"
 
-/* Get a slave to allocate next chunk.
- *
- * rda_type - RDA spec to be used to allocate the chunk
- * slave_id - Retruns the slave to be used
- * state    - State to be passed b/w multiple calls. NULL for first call.
- */
-typedef int  (*c_next_slave_get_t)(struct castle_slave **cs,
-                                   void                 *state,
-                                   c_chk_t               chk_num,
-                                   c_rda_type_t          rda_type);
-
-typedef void* (*c_extent_init_t)(c_ext_id_t         ext_id, 
-                                 c_chk_cnt_t        size,
-                                 c_rda_type_t       rda_type);
-
-typedef void (*c_extent_fini_t)(c_ext_id_t         ext_id, 
-                                void              *state);
-typedef struct {
-    c_rda_type_t                type;           /* RDA type */
-    uint32_t                    k_factor;       /* K in K-RDA. [in order of 2] */
-    c_next_slave_get_t          next_slave_get; /* fn() to get sequence of
-                                                 * slaves to allocate freespace */
-    c_extent_init_t             extent_init;
-    c_extent_fini_t             extent_fini;
-} c_rda_spec_t;
-
 /**
  * Extent dirtylist structure.
  */
@@ -38,74 +12,35 @@ typedef struct {
 } c_ext_dirtylist_t;
 
 
-c_rda_spec_t * 
-castle_rda_spec_get(c_rda_type_t rda_type);
-
-int
-castle_extents_init(void);
-
-void
-castle_extents_fini(void);
-
-c_ext_id_t 
-castle_extent_alloc(c_rda_type_t            rda_type,
-                    da_id_t                 da_id,
-                    c_chk_cnt_t             chk_cnt);
-
-void 
-castle_extent_free(c_ext_id_t               ext_id);
-
-uint32_t
-castle_extent_kfactor_get(c_ext_id_t ext_id);
-c_chk_cnt_t 
-castle_extent_size_get(c_ext_id_t ext_id);
-int castle_extent_exists(c_ext_id_t ext_id);
-
+c_ext_id_t         castle_extent_alloc         (c_rda_type_t  rda_type,
+                                                da_id_t       da_id,
+                                                c_chk_cnt_t   chk_cnt);
+void               castle_extent_free          (c_ext_id_t    ext_id);
+int                castle_extent_exists        (c_ext_id_t    ext_id);
+void               castle_extent_mark_live     (c_ext_id_t    ext_id);
+int                castle_extent_get           (c_ext_id_t    ext_id);
+int                castle_extent_put           (c_ext_id_t    ext_id);
+uint32_t           castle_extent_kfactor_get   (c_ext_id_t    ext_id);
+c_chk_cnt_t        castle_extent_size_get      (c_ext_id_t    ext_id);
 /* Sets @chunks to all physical chunks holding the logical chunks from offset */
-uint32_t
-castle_extent_map_get(c_ext_id_t             ext_id,
-                      c_chk_t                offset,
-                      c_disk_chk_t          *chk_maps);
+uint32_t           castle_extent_map_get       (c_ext_id_t    ext_id,
+                                                c_chk_t       offset,
+                                                c_disk_chk_t *chk_maps);
+c_ext_dirtylist_t *castle_extent_dirtylist_get (c_ext_id_t    ext_id);
+void               castle_extent_dirtylist_put (c_ext_id_t    ext_id);
 
-c_ext_id_t 
-castle_extent_sup_ext_init(struct castle_slave      *cs);
 
-void 
-castle_extent_sup_ext_close(struct castle_slave     *cs);
+struct castle_extents_superblock* castle_extents_super_block_get (void);
+void                              castle_extents_super_block_put (int dirty);
+c_ext_id_t                        castle_extent_sup_ext_init     (struct castle_slave *cs);
+void                              castle_extent_sup_ext_close    (struct castle_slave *cs);
 
-int 
-castle_extents_create(void);
+int  castle_extents_create       (void);
+int  castle_extents_read         (void);
+int  castle_extents_read_complete(void);
+int  castle_extents_writeback    (void);
+int  castle_extents_restore      (void);
+int  castle_extents_init         (void);
+void castle_extents_fini         (void);
 
-int 
-castle_extents_read(void);
-
-int 
-castle_extents_read_complete(void);
-
-int 
-castle_extents_writeback(void);
-
-int 
-castle_extent_get(c_ext_id_t ext_id);
-
-int 
-castle_extent_put(c_ext_id_t ext_id);
-
-c_ext_dirtylist_t *
-castle_extent_dirtylist_get(c_ext_id_t ext_id);
-
-void
-castle_extent_dirtylist_put(c_ext_id_t ext_id);
-
-void 
-castle_extent_mark_live(c_ext_id_t ext_id);
-
-int
-castle_extents_restore(void);
-
-struct castle_extents_superblock* 
-castle_extents_super_block_get(void);
-
-void 
-castle_extents_super_block_put(int dirty);
-#endif //__CASTLE_EXTENT_H__
+#endif /* __CASTLE_EXTENT_H__ */

@@ -6,6 +6,7 @@
 #include "castle.h"
 #include "castle_debug.h"
 #include "castle_utils.h"
+#include "castle_rda.h"
 #include "castle_freespace.h"
 #include "castle_extent.h"
 #include "castle_cache.h"
@@ -81,90 +82,24 @@ typedef struct {
 static struct list_head *castle_extents_hash = NULL;
 static c_ext_fs_t meta_ext_fs;
 
+static c_ext_id_t _castle_extent_alloc(c_rda_type_t rda_type,
+                                       da_id_t      da_id,
+                                       c_chk_cnt_t  count,
+                                       c_ext_id_t   ext_id);
+
 DEFINE_RHASH_TBL(castle_extents, castle_extents_hash, CASTLE_EXTENTS_HASH_SIZE,
                 c_ext_t, hash_list, c_ext_id_t, ext_id, ref_cnt);
 
-void * castle_rda_extent_init(c_ext_id_t          ext_id, 
-                              c_chk_cnt_t         size, 
-                              c_rda_type_t        rda_type);
-
-int castle_rda_next_slave_get(struct castle_slave *cs[],
-                              void                *state_p,
-                              c_chk_t              chk_num,
-                              c_rda_type_t         rda_type);
-
-void castle_rda_extent_fini(c_ext_id_t    ext_id,
-                            void         *_state);
-
-static c_ext_id_t _castle_extent_alloc(c_rda_type_t            rda_type,
-                                       da_id_t                 da_id,
-                                       c_chk_cnt_t             count,
-                                       c_ext_id_t              ext_id);
-
-static c_rda_spec_t castle_default_rda = {
-    .type               = DEFAULT_RDA,
-    .k_factor           = 2,
-    .next_slave_get     = castle_rda_next_slave_get,
-    .extent_init        = castle_rda_extent_init,
-    .extent_fini        = castle_rda_extent_fini,
-};
-
-static c_rda_spec_t castle_journal_rda = {
-    .type               = JOURNAL,
-    .k_factor           = 2,
-    .next_slave_get     = NULL,
-    .extent_init        = NULL,
-    .extent_fini        = NULL,
-};
-
-static c_rda_spec_t castle_fs_meta_rda = {
-    .type               = FS_META,
-    .k_factor           = 2,
-    .next_slave_get     = NULL,
-    .extent_init        = NULL,
-    .extent_fini        = NULL,
-};
-
-static c_rda_spec_t castle_log_freezer_rda = {
-    .type               = LOG_FREEZER,
-    .k_factor           = 2,
-    .next_slave_get     = NULL,
-    .extent_init        = NULL,
-    .extent_fini        = NULL,
-};
-
-static c_rda_spec_t castle_meta_ext_rda = {
-    .type               = META_EXT,
-    .k_factor           = 2,
-    .next_slave_get     = castle_rda_next_slave_get,
-    .extent_init        = castle_rda_extent_init,
-    .extent_fini        = castle_rda_extent_fini,
-};
-
-c_rda_spec_t *castle_rda_specs[] =  {
-    [DEFAULT_RDA]       = &castle_default_rda,
-    [JOURNAL]           = &castle_journal_rda,
-    [FS_META]           = &castle_fs_meta_rda,
-    [LOG_FREEZER]       = &castle_log_freezer_rda,
-    [META_EXT]          = &castle_meta_ext_rda,
-    [MICRO_EXT]         = NULL,
-    [SUPER_EXT]         = NULL,
-};
 
 c_ext_t sup_ext = { 
     .ext_id         = SUP_EXT_ID,
     .size           = SUP_EXT_SIZE,
-    .type           = FS_META,
+    .type           = SUPER_EXT,
     .k_factor       = 2,
     .maps_cep       = INVAL_EXT_POS,
 };
 
 uint8_t extent_init_done = 0;
-
-c_rda_spec_t * castle_rda_spec_get(c_rda_type_t rda_type)
-{
-    return castle_rda_specs[rda_type];
-}
 
 static int castle_extent_print(c_ext_t *ext, void *unused) 
 {
@@ -183,7 +118,7 @@ void castle_extent_mark_live(c_ext_id_t ext_id)
         ext->alive = 1;
 }
 
-int castle_extents_init()
+int castle_extents_init(void)
 {
     int ret = 0;
 
@@ -1069,9 +1004,9 @@ uint32_t castle_extent_map_get(c_ext_id_t             ext_id,
 
 c_ext_id_t castle_extent_sup_ext_init(struct castle_slave *cs)
 {
-    c_ext_t        *ext;
-    c_rda_spec_t   *rda_spec = castle_rda_spec_get(FS_META);
-    int             i, j;
+    c_ext_t      *ext;
+    c_rda_spec_t *rda_spec = castle_rda_spec_get(SUPER_EXT);
+    int           i, j;
 
     ext = castle_zalloc(sizeof(c_ext_t), GFP_KERNEL);
     if (!ext)

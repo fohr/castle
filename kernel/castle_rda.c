@@ -3,6 +3,7 @@
 #include <linux/random.h>
 
 #include "castle.h"
+#include "castle_rda.h"
 #include "castle_debug.h"
 #include "castle_extent.h"
 
@@ -143,4 +144,42 @@ int castle_rda_next_slave_get(struct castle_slave *cs[],
     state->prev_chk = chk_num;
 
     return 0;
+}
+
+/* RDA specs. */
+static c_rda_spec_t castle_default_rda = {
+    .type               = DEFAULT_RDA,
+    .k_factor           = 2,
+    .next_slave_get     = castle_rda_next_slave_get,
+    .extent_init        = castle_rda_extent_init,
+    .extent_fini        = castle_rda_extent_fini,
+};
+
+static c_rda_spec_t castle_super_ext_rda = {
+    .type               = SUPER_EXT,
+    .k_factor           = 2,
+    .next_slave_get     = NULL, 
+    .extent_init        = NULL, 
+    .extent_fini        = NULL, 
+};
+
+static c_rda_spec_t castle_meta_ext_rda = {
+    .type               = META_EXT,
+    .k_factor           = 2,
+    .next_slave_get     = castle_rda_next_slave_get,
+    .extent_init        = castle_rda_extent_init,
+    .extent_fini        = castle_rda_extent_fini,
+};
+
+c_rda_spec_t *castle_rda_specs[] = {
+    [DEFAULT_RDA]       = &castle_default_rda,
+    [SUPER_EXT]         = &castle_super_ext_rda,
+    [META_EXT]          = &castle_meta_ext_rda,
+    [MICRO_EXT]         = NULL,
+};
+
+c_rda_spec_t *castle_rda_spec_get(c_rda_type_t rda_type)
+{
+    BUG_ON((rda_type < 0) || (rda_type >= NR_RDA_SPECS));
+    return castle_rda_specs[rda_type];
 }
