@@ -219,16 +219,23 @@ int castle_double_arrays_unfreeze(void)
 
 /**********************************************************************************************/
 /* Iterators */
+struct castle_immut_iterator;
+
+typedef void (*castle_immut_iter_node_start) (struct castle_immut_iterator *);
+
 typedef struct castle_immut_iterator {
     struct castle_component_tree *tree;
     struct castle_btree_type     *btree;
-    int                           completed;/**< set to 1 when iterator is exhausted              */
-    c2_block_t                   *curr_c2b; /**< node c2b currently providing entries             */
-    struct castle_btree_node     *curr_node;/**< btree node (curr_c2b->buffer)                    */
-    int                           curr_idx; /**< offset within curr_node of current entry
-                                                 (where current is really next())                 */
-    c2_block_t                   *next_c2b; /**< node c2b to provide next entires                 */
-    int                           next_idx; /**< offset within next_c2b of first entry to return  */
+    int                           completed;  /**< set to 1 when iterator is exhausted            */
+    c2_block_t                   *curr_c2b;   /**< node c2b currently providing entries           */
+    struct castle_btree_node     *curr_node;  /**< btree node (curr_c2b->buffer)                  */
+    int                           curr_idx;   /**< offset within curr_node of current entry
+                                                   (where current is really next())               */
+    c2_block_t                   *next_c2b;   /**< node c2b to provide next entires               */
+    int                           next_idx;   /**< offset within next_c2b of first entry to return*/
+    castle_immut_iter_node_start  node_start; /**< callback handler to fire whenever iterator moves
+                                                   to a new node within the btree                 */
+    void                         *private;    /**< callback handler private data                  */
 } c_immut_iter_t;
 
 static int castle_ct_immut_iter_entry_find(c_immut_iter_t *iter,
@@ -373,6 +380,10 @@ static void castle_ct_immut_iter_next_node(c_immut_iter_t *iter)
     iter->curr_idx  = iter->next_idx;
     debug("Moved to cep="cep_fmt_str_nl, cep2str(iter->curr_c2b->cep));
 
+    /* Fire the node_start callback. */
+    if (iter->node_start)
+        iter->node_start(iter);
+
     /* Find next c2b following the list pointers */
     iter->next_c2b = NULL;
     castle_ct_immut_iter_next_node_find(iter, iter->curr_node->next_node);
@@ -425,14 +436,22 @@ static int castle_ct_immut_iter_has_next(c_immut_iter_t *iter)
 
 /**
  * Initialise iterator for immutable btrees.
+ *
+ * @param iter          Iterator to initialise
+ * @param node_start    CB handler when iterator moves to a new btree node
+ * @param private       Private data to pass to CB handler
  */
-static void castle_ct_immut_iter_init(c_immut_iter_t *iter)
+static void castle_ct_immut_iter_init(c_immut_iter_t *iter,
+                                      castle_immut_iter_node_start node_start,
+                                      void *private)
 {
     debug("Initialising immut enumerator for ct id=%d\n", iter->tree->seq);
     iter->btree     = castle_btree_type_get(iter->tree->btree_type);
     iter->completed = 0;
     iter->curr_c2b  = NULL;
     iter->next_c2b  = NULL;
+    iter->node_start= node_start;
+    iter->private   = private;
     castle_ct_immut_iter_next_node_find(iter, iter->tree->first_node);
     /* Check if we succeeded at finding at least a single node */
     BUG_ON(!iter->next_c2b);
@@ -459,28 +478,18 @@ struct castle_iterator_type castle_ct_immut_iter = {
 };
 
 /**
- * Modlist B-tree iterator structure.
+ * Compare verion tuples k1,v1 against k2,v2.
  *
- * Once populated item_idx[] offers a layer of indirection to the underlying
- * data.  As such, data can be sorted by updating the item_idx ptr rather than
- * updating data in-place within the node.
+ * @param btree Source btree (for compare function)
+ * @param k1    Key to compare against
+ * @param v1    Version to compare against
+ * @param k2    Key to compare with
+ * @param v2    Version to compare with
+ *
+ * @return -1   k2,v2 is smaller than k1,v1
+ * @return  0   k2,v2 is equal to k1,v1
+ * @return  1   k2,v2 is larger than k1,v1
  */
-typedef struct castle_modlist_iterator {
-    struct castle_btree_type *btree;
-    struct castle_component_tree *tree;
-    struct castle_da_merge *merge;
-    c_immut_iter_t *enumerator;
-    int err;
-    uint32_t nr_nodes;          /* Number of nodes in the buffer   */
-    void *node_buffer;          /* Buffer to store all the nodes   */
-    uint32_t nr_items;          /* Number of items in the buffer   */
-    uint32_t next_item;         /* Next item to return in iterator */
-    struct item_idx {
-        uint32_t node;          /* Which node                      */
-        uint32_t node_offset;   /* Where in the node               */
-    } *sort_idx;
-} c_modlist_iter_t;
-
 static int castle_kv_compare(struct castle_btree_type *btree,
                              void *k1, version_t v1,
                              void *k2, version_t v2)
@@ -507,6 +516,57 @@ static void castle_da_node_buffer_init(struct castle_btree_type *btree,
     buffer->next_node = INVAL_EXT_POS;
 }
 
+/**
+ * Modlist B-tree iterator structure.
+ *
+ * @also castle_ct_modlist_iter_init()
+ */
+typedef struct castle_modlist_iterator {
+    struct castle_btree_type *btree;
+    struct castle_component_tree *tree;
+    struct castle_da_merge *merge;
+    c_immut_iter_t *enumerator;
+    uint8_t enum_advanced;          /**< Set if enumerator has advanced to a new node             */
+    int err;
+    uint32_t nr_nodes;              /**< Number of nodes in the buffer                            */
+    void *node_buffer;              /**< Buffer to store all the nodes                            */
+    uint32_t nr_items;              /**< Number of items in the buffer                            */
+    uint32_t next_item;             /**< Next item to return in iterator                          */
+    struct item_idx {
+        uint32_t node;              /**< Which btree node                                         */
+        uint32_t node_offset;       /**< Offset within btree node                                 */
+    } *src_entry_idx;               /**< 1 of 2 arrays of entry pointers (used for sort)          */
+    struct item_idx *dst_entry_idx; /**< 2nd array of entry pointers                              */
+    struct entry_range {            /**< Entry range describes start,end within *_entry_idx       */
+        uint32_t start;
+        uint32_t end;
+    } *ranges;
+    uint32_t nr_ranges;             /**< Number of elements in node_ranges                        */
+} c_modlist_iter_t;
+
+/**
+ * Free all memory allocated by the iterator.
+ */
+static void castle_ct_modlist_iter_free(c_modlist_iter_t *iter)
+{
+    if(iter->enumerator)
+    {
+        castle_ct_immut_iter.cancel(iter->enumerator);
+        castle_free(iter->enumerator);
+    }
+    if(iter->node_buffer)
+        castle_vfree(iter->node_buffer);
+    if (iter->src_entry_idx)
+        castle_vfree(iter->src_entry_idx);
+    if (iter->dst_entry_idx)
+        castle_vfree(iter->dst_entry_idx);
+    if (iter->ranges)
+        castle_vfree(iter->ranges);
+}
+
+/**
+ * Get requested btree node from the node_buffer.
+ */
 static struct castle_btree_node* castle_ct_modlist_iter_buffer_get(c_modlist_iter_t *iter, 
                                                                    uint32_t idx)
 {
@@ -517,70 +577,8 @@ static struct castle_btree_node* castle_ct_modlist_iter_buffer_get(c_modlist_ite
 }
 
 /**
- * Populate the iter's node_buffer with leaf nodes from the tree.
- *
- * - Enumerate iter->tree with iter->enumerator
- * - Add key,version,cvt to iter->btree
- * - Update iter->sort_idx[] indirection layer to point to new btree entry
+ * Return key, version, cvt for entry sort_idx within iter->src_entry_idx[].
  */
-static void castle_ct_modlist_iter_fill(c_modlist_iter_t *iter)
-{
-    struct castle_btree_type *btree = iter->btree;
-    struct castle_btree_node *node = NULL;
-    uint32_t node_idx, node_offset, item_idx;
-    version_t version;
-    c_val_tup_t cvt;
-    void *key;
-
-    item_idx = node_idx = node_offset = 0;
-    while(castle_ct_immut_iter.has_next(iter->enumerator))
-    {
-        might_resched();
-        if(iter->merge)
-            castle_da_merge_budget_consume(iter->merge);
-        /* Check if we moved on to a new node. If so, init that. */
-        if(node_offset == 0)
-        {
-            node = castle_ct_modlist_iter_buffer_get(iter, node_idx);
-            castle_da_node_buffer_init(btree, node);
-        } else
-        {
-            BUG_ON(btree->need_split(node, 0)); 
-        }
-
-        /* Get the next entry from the comparator */
-        castle_ct_immut_iter.next(iter->enumerator, &key, &version, &cvt);
-        debug("In enum got next: k=%p, version=%d, %u/%llu, cep="cep_fmt_str_nl,
-                key, version, (uint32_t)cvt.type, cvt.length, cep2str(cvt.cep));
-        debug("Dereferencing first 4 bytes of the key (should be length)=0x%x.\n",
-                *((uint32_t *)key));
-        debug("Inserting into the node=%d, under idx=%d\n", node_idx, node_offset);
-        BUG_ON(CVT_LEAF_PTR(cvt));
-        btree->entry_add(node, node_offset, key, version, cvt);
-        iter->sort_idx[item_idx].node        = node_idx;
-        iter->sort_idx[item_idx].node_offset = node_offset;
-        node_offset++;
-        item_idx++;
-        /* Check if the node is full */
-        if(btree->need_split(node, 0))
-        {
-            debug("Node %d full, moving to the next one.\n", node_idx);
-            node_idx++; 
-            node_offset = 0;
-        }
-    }
-    if(item_idx != atomic64_read(&iter->tree->item_count))
-    {
-        printk("Error. Different number of items than expected in CT=%d (dynamic=%d). "
-               "Item_idx=%d, item_count=%ld\n",
-            iter->tree->seq, iter->tree->dynamic,
-            item_idx, atomic64_read(&iter->tree->item_count));
-        WARN_ON(1);
-    }
-    iter->nr_items = item_idx;
-    //iter->err = iter->enumerator->err;
-}
-
 static void castle_ct_modlist_iter_item_get(c_modlist_iter_t *iter, 
                                             uint32_t sort_idx,
                                             void **key_p,
@@ -593,124 +591,22 @@ static void castle_ct_modlist_iter_item_get(c_modlist_iter_t *iter,
     debug_verbose("Node_idx=%d, offset=%d\n", 
                   iter->sort_idx[sort_idx].node,
                   iter->sort_idx[sort_idx].node_offset);
-    node = castle_ct_modlist_iter_buffer_get(iter, iter->sort_idx[sort_idx].node);
+    node = castle_ct_modlist_iter_buffer_get(iter, iter->src_entry_idx[sort_idx].node);
     btree->entry_get(node,
-                     iter->sort_idx[sort_idx].node_offset,
+                     iter->src_entry_idx[sort_idx].node_offset,
                      key_p,
                      version_p,
                      cvt_p);
 }
 
-static void castle_ct_modlist_iter_sift_down(c_modlist_iter_t *iter, uint32_t start, uint32_t end)
-{
-    struct castle_btree_type *btree = iter->btree;
-    version_t root_version, child_version;
-    void *root_key, *child_key;
-    uint32_t root, child;
-   
-    root = start;
-    /* Work out root key and version */
-    castle_ct_modlist_iter_item_get(iter, root, &root_key, &root_version, NULL);
-    while(2*root + 1 <= end)
-    {
-        /* First child MUST exist */
-        child = 2*root + 1;
-        castle_ct_modlist_iter_item_get(iter, child, &child_key, &child_version, NULL);
-        /* Check if the second child is greater than the first (MAX heap). If exists */
-        if(child < end)
-        {
-            version_t child2_version;
-            void *child2_key;
-
-            castle_ct_modlist_iter_item_get(iter, child+1, &child2_key, &child2_version, NULL);
-            if(castle_kv_compare(btree,
-                                 child2_key, child2_version, 
-                                 child_key, child_version) > 0)
-            {
-                child++;
-                /* Adjust pointers to point to child2 */
-                child_key = child2_key;
-                child_version = child2_version;
-            } 
-        }
-        /* Finally check whether greater child isn't greatest than the root */
-        if(castle_kv_compare(btree,
-                             child_key, child_version,
-                             root_key, root_version) > 0)
-        {
-            struct item_idx tmp_idx;
-            
-            /* Swap root and child, by swapping the respective sort_idx-es */
-            tmp_idx = iter->sort_idx[child];
-            iter->sort_idx[child] = iter->sort_idx[root];
-            iter->sort_idx[root] = tmp_idx;
-            /* Adjust root idx to point to the child, this should now be considered
-               for sifting down. 
-               NOTE: root_key & root_version are still correct. i.e.
-               castle_ct_modlist_iter_item_get(root) would still return the same values.
-               This is because we swapped the indicies. Also, in sifting you have to
-               keep perculating the SAME value down until it is in the right place.
-             */
-            root = child;
-        } else
-            return;
-    }
-}
-
-static void castle_ct_modlist_iter_heapify(c_modlist_iter_t *iter)
-{
-    uint32_t start = (iter->nr_items - 2)/2;
-
-    while(true)
-    {
-        might_resched();
-        if(iter->merge)
-            castle_da_merge_budget_consume(iter->merge);
-        castle_ct_modlist_iter_sift_down(iter, start, iter->nr_items - 1);
-        /* Check for start == 0 here, beacuse it's unsigned, and we cannot check
-           for < 0 in the loop condition */
-        if(start-- == 0)
-            return;
-    }
-}
-
-static void castle_ct_modlist_iter_heapsort(c_modlist_iter_t *iter)
-{
-    uint32_t last;
-
-    for(last = iter->nr_items-1; last > 0; last--)
-    {
-        struct item_idx tmp_idx;
-
-        might_resched();
-        if(iter->merge)
-            castle_da_merge_budget_consume(iter->merge);
-        /* Head is the greatest item, swap with last, and sift down */
-        tmp_idx = iter->sort_idx[last];
-        iter->sort_idx[last] = iter->sort_idx[0];
-        iter->sort_idx[0] = tmp_idx;
-        castle_ct_modlist_iter_sift_down(iter, 0, last-1); 
-    }
-}
-
-static void castle_ct_modlist_iter_free(c_modlist_iter_t *iter)
-{
-    if(iter->enumerator)
-    {
-        castle_ct_immut_iter.cancel(iter->enumerator);
-        castle_free(iter->enumerator);
-    }
-    if(iter->node_buffer)
-        castle_vfree(iter->node_buffer);
-    if(iter->sort_idx)
-        castle_vfree(iter->sort_idx);
-}
-
-static int castle_ct_modlist_iter_has_next(c_modlist_iter_t *iter)
-{
-    return (!iter->err && (iter->next_item < iter->nr_items));
-}
-
+/**
+ * Return the next entry from the iterator.
+ *
+ * - Uses the final sorted src_entry_idx[].
+ *
+ * @also castle_ct_modlist_iter_fill()
+ * @also castle_ct_modlist_iter_mergesort()
+ */
 static void castle_ct_modlist_iter_next(c_modlist_iter_t *iter, 
                                         void **key_p, 
                                         version_t *version_p, 
@@ -721,49 +617,406 @@ static void castle_ct_modlist_iter_next(c_modlist_iter_t *iter,
 }
 
 /**
- * Initialise iterator for modlist B-tree.
+ * Does the iterator have further entries.
  *
- * - Allocate members of the iterator
- *   - buffer for nodes: node_buffer, item indirection: sort_idx
- * - Initialise the output B-tree (iter->btree)
- * - Initialise enumerator (iter->enumerator) for the existing CT (iter->tree)
- * - Fill node_buffer (castle_ct_modlist_iter_fill())
- * - Sort node_buffer (heapsort/mergesort)
+ * @return 1    Entry has more entries
+ * @return 0    No further entries
+ */
+static int castle_ct_modlist_iter_has_next(c_modlist_iter_t *iter)
+{
+    return (!iter->err && (iter->next_item < iter->nr_items));
+}
+
+/**
+ * Fill count entry pointers in dst_entry_idx from src_entry_idx.
  *
- * @return iter Iterator that will return sorted results for iter->tree via node_buffer
+ * @param iter  Modlist iterator (provides src_entry_idx, dst_entry_idx)
+ * @param src   Starting src_entry_idx entry to source entry pointers from
+ * @param dst   Starting dst_entry_idx entry to populate from
+ * @param count Number of entries to populate
+ */
+static inline void castle_ct_modlist_iter_merge_index_fill(c_modlist_iter_t *iter,
+                                                           uint32_t src,
+                                                           uint32_t dst,
+                                                           uint32_t count)
+{
+    uint32_t i;
+
+    for (i = 0; i < count; i++, src++, dst++)
+    {
+        iter->dst_entry_idx[dst].node        = iter->src_entry_idx[src].node;
+        iter->dst_entry_idx[dst].node_offset = iter->src_entry_idx[src].node_offset;
+    }
+}
+
+/**
+ * Mergesort two contiguous entry ptr ranges (r1, r2) from src_entry_idx into dst_entry_idx.
+ *
+ * @param iter  Modlist iterator (provides src_entry_idx, dst_entry_idx)
+ * @param r1    First range of node entry pointers
+ * @param r2    Second range of node entry pointers
+ *
+ * - Iterate over entries pointed to by r1->start,r1->end and r2->start,r2->end
+ *   from src_entry_idx[]
+ * - Write out entry pointers in smallest to largest order into dst_entry_idx[]
+ *   starting at index r1->start
+ * - Result is that dst_entry_idx[r1->start] to dst_entry_idx[r2->end] will be
+ *   sorted in smallest to largest order
+ *
+ * @also castle_ct_modlist_iter_mergesort()
+ */
+static void castle_ct_modlist_iter_merge_ranges(c_modlist_iter_t *iter,
+                                                struct entry_range *r1,
+                                                struct entry_range *r2)
+{
+    uint32_t r1_idx = r1->start;    /* current index for r1 */
+    uint32_t r2_idx = r2->start;    /* current index for r2 */
+    uint32_t dst_idx = r1->start;   /* output index */
+    uint32_t src_idx = 0;           /* index of next smallest entry (from r1 or r2) */
+    void *r1_key, *r2_key;
+    version_t r1_ver, r2_ver;
+
+    BUG_ON(r1->end+1 != r2->start); /* ranges *MUST* be contiguous */
+
+    for (dst_idx = r1->start; dst_idx <= r2->end; dst_idx++)
+    {
+        /* Both ranges have more entries if their indexes lie within the range. */
+        if (r1_idx <= r1->end && r2_idx <= r2->end)
+        {
+            /* Both ranges have more entries, we need to do a comparison to
+             * determine which range has the next smallest value. */
+            castle_ct_modlist_iter_item_get(iter, r1_idx, &r1_key, &r1_ver, NULL);
+            castle_ct_modlist_iter_item_get(iter, r2_idx, &r2_key, &r2_ver, NULL);
+
+            if (castle_kv_compare(iter->btree, r1_key, r1_ver, r2_key, r2_ver) < 0)
+            {
+                /* r1 smaller than r2. */
+                src_idx = r1_idx;
+                r1_idx++;
+            }
+            else
+            {
+                /* r1 larger than or equal to r2. */
+                src_idx = r2_idx;
+                r2_idx++;
+            }
+
+            /* Update dst_entry_idx with the smallest available entry pointer. */
+            castle_ct_modlist_iter_merge_index_fill(iter, src_idx, dst_idx, 1);
+
+            continue;
+        }
+
+        /* If we reached here then one of the two entry ranges has been
+         * exhausted.  We need do no more comparisons and can just populate
+         * the remainder of the output index with the entries from the range
+         * that has not yet been exhausted. */
+
+        if (r1_idx <= r1->end)
+            castle_ct_modlist_iter_merge_index_fill(iter, r1_idx, dst_idx, r1->end-r1_idx+1);
+        else if (r2_idx <= r2->end)
+            castle_ct_modlist_iter_merge_index_fill(iter, r2_idx, dst_idx, r2->end-r2_idx+1);
+        else
+            BUG();
+
+        /* We're done. */
+        break;
+    }
+}
+
+/**
+ * Handler called when immutable iterator advances to a new source btree node.
+ *
+ * - Set modlist_iter->enum_advanced
+ * - Provides a mechanism for the modlist iterator to know when the immutable
+ *   iterator has advanced to a new node
+ * - Used for sorting efficiency
+ *
+ * @also castle_ct_modlist_iter_fill()
+ */
+static void castle_ct_modlist_iter_next_node(c_immut_iter_t *immut_iter)
+{
+    c_modlist_iter_t *modlist_iter = immut_iter->private;
+    modlist_iter->enum_advanced = 1;
+}
+
+/**
+ * Populate node_buffer with leaf btree nodes, set up entry indexes and node ranges.
+ *
+ * - Using immutable iterator (iter->enumerator) iterate over entries in the
+ *   unsorted btree
+ * - Immutable iterator has a callback when it advances to a new btree node.
+ *   castle_ct_modlist_iter_next_node() is registered as the callback handler
+ *   and sets iter->enum_advanced whenever a new source node is used
+ * - Get a new buffer btree node whenever the source iterator advances to a new
+ *   node or we fill one of ours (should never happen)
+ * - Keep getting (unsorted) entries from the immutable iterator and store them
+ *   in the node_buffer.  Put an entry in dst_entry_idx[] pointing to the node
+ *   and node_offset
+ * - As we move to a new node when the immutable iterator moves, we are
+ *   guaranteed that individual btree nodes are sorted.  Fill ranges[] with
+ *   start and end index within dst_entry_idx[]
+ *
+ * @also castle_ct_modlist_iter_mergesort()
+ */
+static void castle_ct_modlist_iter_fill(c_modlist_iter_t *iter)
+{
+    struct castle_btree_type *btree = iter->btree;
+    struct castle_btree_node *node = NULL;
+    uint32_t node_idx, item_idx, node_offset;
+    version_t version;
+    c_val_tup_t cvt;
+    void *key;
+
+    node_idx = item_idx = node_offset = 0;
+    while (castle_ct_immut_iter.has_next(iter->enumerator))
+    {
+        might_resched();
+
+        /* Get the next (unsorted) entry from the immutable iterator. */
+        castle_ct_immut_iter.next(iter->enumerator, &key, &version, &cvt);
+        debug("In enum got next: k=%p, version=%d, %u/%llu, cep="cep_fmt_str_nl,
+                key, version, (uint32_t)cvt.type, cvt.length, cep2str(cvt.cep));
+        debug("Dereferencing first 4 bytes of the key (should be length)=0x%x.\n",
+                *((uint32_t *)key));
+        debug("Inserting into the node=%d, under idx=%d\n", node_idx, node_offset);
+        BUG_ON(CVT_LEAF_PTR(cvt));
+
+        /* If the immutable iterator advanced to a new node then our callback
+         * handler will have set enum_advanced, indicating that we should also
+         * move to a new node internally.  Equally if node_offset is 0 this
+         * indicates that we have filled a buffer node - as our buffer nodes are
+         * the same size as the source nodes, this should never happen
+         * independently of the enum_advanced bit. */
+        if (iter->enum_advanced || node_offset == 0)
+        {
+            BUG_ON(iter->enum_advanced == 0 && node_offset == 0);
+
+            /* Set end entry for node range we just completed. */
+            if (likely(node_idx))
+                iter->ranges[node_idx-1].end = item_idx-1;
+            /* Set start entry for node range we're moving to. */
+            iter->ranges[node_idx].start = item_idx;
+
+            /* Get a new node. */
+            node = castle_ct_modlist_iter_buffer_get(iter, node_idx);
+            castle_da_node_buffer_init(btree, node);
+
+            /* We've advance, initialise a good state. */
+            iter->enum_advanced = 0;
+            node_offset = 0;
+            node_idx++;
+        }
+        else
+            BUG_ON(btree->need_split(node, 0));
+
+        /* Insert entry into node. */
+        btree->entry_add(node, node_offset, key, version, cvt);
+        iter->dst_entry_idx[item_idx].node        = node_idx-1;
+        iter->dst_entry_idx[item_idx].node_offset = node_offset;
+        node_offset++;
+        item_idx++;
+
+        /* Check whether we have filled the node. */
+        if (btree->need_split(node, 0))
+            node_offset = 0;
+    }
+
+    if (likely(node_idx))
+        iter->ranges[node_idx-1].end = item_idx-1;    /* FIXME this should be tidier */
+
+    if (item_idx != atomic64_read(&iter->tree->item_count))
+    {
+        printk("Error. Different number of items than expected in CT=%d (dynamic=%d). "
+               "Item_idx=%d, item_count=%ld\n",
+            iter->tree->seq, iter->tree->dynamic,
+            item_idx, atomic64_read(&iter->tree->item_count));
+        WARN_ON(1);
+    }
+    iter->nr_items = item_idx;
+    iter->nr_ranges = node_idx;
+    //iter->err = iter->enumerator->err;
+}
+
+/**
+ * Mergesort the underlying component tree into smallest->largest k,<-v order.
+ *
+ * T1 btrees are in insertion order but individual nodes have entries sorted in
+ * k,<-v order.  To iterate over the btree we must first sort the whole tree.
+ * This is done by merging leaf-nodes together repeatedly until we have a single
+ * large k,<-v sorted set of entries.
+ *
+ * Internally the iterator uses:
+ *
+ * - node_buffer: contiguous buffer of btree leaf-nodes with entries
+ * - src_entry_idx[], dst_entry_idx[]: two indirect indexes of entries within
+ *   node_buffer.  We sort the data indirectly and hence for simplicity
+ *   alternate src_entry_idx[] and dst_entry_idx[] for each round of merges
+ * - ranges: ranges of entries within src_entry_idx[] that are guaranteed to
+ *   be k,<-v sorted
+ * - nr_ranges: number of ranges in src_entry_idx[]
+ *
+ * Mergesort implementation as follows:
+ *
+ * castle_ct_modlist_iter_fill() fills iter->entry_buffer with leaf-nodes from
+ * the source btree.  For each entry that gets inserted into the buffer a
+ * pointer to that entry goes into dst_entry_idx[].  Individual source btree
+ * nodes are k,<-v sorted so we define ranges of entries on top of
+ * dst_entry_idx[].  Each range encompasses the entries from a single source
+ * btree node.  iter->nr_ranges contains the number of active ranges in
+ * src_entry_idx[] (except after a fill when it is valid for dst_entry_idx[]).
+ *
+ * We go through the main mergesort loop until nr_ranges has reached 1 (single
+ * sorted range of entries).  Each time we go through the loop we swap the src
+ * and dst entry_idx[] such that src_entry_idx[] contains the most up-to-date
+ * sorted data we have available.
+ *
+ * Take two ranges of entries and merge them together in _merge_ranges().  This
+ * takes the entries from src_entry_idx[] and writes out sorted entries into
+ * dst_entry_idx[].
+ *
+ * Update ranges[] with the new range start and end (new range start will be
+ * range1.start and end will be range2.end - ranges must be contiguous).
+ *
+ * If we have an uneven number of ranges move the entry pointers from src_
+ * to dst_entry_idx[] and ensure the range points to the correct entries.  No
+ * merge is performed in this instance.  @FIXME this is inefficient
+ *
+ * Update the total number of ranges and go again if necessary.
+ *
+ * @also castle_ct_modlist_iter_fill()
+ * @also castle_ct_modlist_iter_merge_ranges()
+ * @also castle_ct_modlist_iter_init()
+ */
+static void castle_ct_modlist_iter_mergesort(c_modlist_iter_t *iter)
+{
+    uint32_t src_range, dst_range;
+    void *tmp_entry_idx;
+
+    /* Populate internal entry buffer and initialise dst_entry_idx[] and the
+     * initial node ranges for sorting. */
+    castle_ct_modlist_iter_fill(iter);
+
+    /* Repeatedly merge ranges of entry pointers until we have a single
+     * all-encompassing smallest->largest sorted range we can use to return
+     * entries when the iterator .has_next(), .next() functions are called. */
+    while (iter->nr_ranges > 1)
+    {
+        /* Another merge.  Swap the src and dst entry indexes around.
+         * We will now be sourcing from the previous iteration's dst_entry_idx
+         * (also used by castle_ct_modlist_iter_fill()) and writing our values
+         * out to our previous source. */
+        tmp_entry_idx = iter->src_entry_idx;
+        iter->src_entry_idx = iter->dst_entry_idx;  /* src = dst */
+        iter->dst_entry_idx = tmp_entry_idx;        /* dst = src */
+
+        src_range = dst_range = 0;
+
+        /* So long as we have two remaining entry ranges, mergesort the entries
+         * together to create a single range spanning the capacity of both. */
+        while (src_range+1 < iter->nr_ranges)
+        {
+            /* Mergesort. */
+            castle_ct_modlist_iter_merge_ranges(iter,
+                                                &iter->ranges[src_range],
+                                                &iter->ranges[src_range+1]);
+
+            /* Update the destination range. */
+            iter->ranges[dst_range].start = iter->ranges[src_range].start;
+            iter->ranges[dst_range].end   = iter->ranges[src_range+1].end;
+
+            src_range += 2;
+            dst_range++;
+        }
+
+        /* Above we merged pairs of ranges.  Part of the merge process (handled
+         * within castle_ct_modlist_iter_merge_ranges() is to populate the
+         * dst_entry_idx.  If we started with an odd number of ranges we must
+         * deal with the straggling range as a special case. */
+        if (src_range < iter->nr_ranges)
+        {
+            /* We only have one range to merge so we fake up a range that
+             * castle_ct_modlist_iter_merge_ranges() will determine to be
+             * exhausted and therefore will populate dst_entry_idx with only
+             * those entries from our one remaining src_range. */
+            struct entry_range null_range;
+
+            /* Mergesort. */
+            null_range.start = iter->ranges[src_range].end+1;
+            null_range.end   = iter->ranges[src_range].end;
+            castle_ct_modlist_iter_merge_ranges(iter,
+                                                &iter->ranges[src_range],
+                                                &null_range);
+
+            /* Update the destination range. */
+            iter->ranges[dst_range].start = iter->ranges[src_range].start;
+            iter->ranges[dst_range].end   = iter->ranges[src_range].end;
+
+            src_range++;
+            dst_range++;
+        }
+        /* else even number of source ranges */
+
+        iter->nr_ranges = dst_range;
+    }
+
+    /* Finally ensure dst_entry_idx points to the final sorted index and free
+     * the other temporary index right now. */
+    castle_vfree(iter->src_entry_idx);
+    iter->src_entry_idx = iter->dst_entry_idx;
+    iter->dst_entry_idx = NULL;
+}
+
+/**
+ * Initialise modlist btree iterator.
+ *
+ * See castle_ct_modlist_iter_mergesort() for full implementation details.
+ *
+ * - Initialise members
+ * - Allocate memory for node_buffer, src_ and dst_entry_idx[] and ranges
+ * - Initialise immutable iterator (for sort)
+ * - Kick of mergesort
+ *
+ * @also castle_ct_modlist_iter_mergesort()
  */
 static void castle_ct_modlist_iter_init(c_modlist_iter_t *iter)
 {
     struct castle_component_tree *ct = iter->tree;
 
     BUG_ON(atomic64_read(&ct->item_count) == 0);
-    /* Component tree has to be provided */
-    BUG_ON(!iter->tree);
+    BUG_ON(!iter->tree); /* component tree must be provided */
+
     iter->err = 0;
     iter->btree = castle_btree_type_get(iter->tree->btree_type);
+
+    /* Allocate immutable iterator.
+     * For iterating over source entries during sort. */
     iter->enumerator = castle_malloc(sizeof(c_immut_iter_t), GFP_KERNEL);
-    /* Allocate slighly more than number of nodes in the tree, to make sure everything
-       fits, even if we unlucky, and waste parts of the node in each node */
-    iter->nr_nodes = 1.1 * (atomic64_read(&ct->node_count) + 1);
+
+    /* Allocate btre-entry buffer, two indexes for the buffer (for sorting)
+     * and space to define ranges of sorted nodes within the index. */
+    iter->nr_nodes = 1.1 * (atomic64_read(&ct->node_count) + 1); /* a few extra for luck! */
     iter->node_buffer = castle_vmalloc(iter->nr_nodes * iter->btree->node_size * C_BLK_SIZE);
-    iter->sort_idx = castle_vmalloc(atomic64_read(&ct->item_count) * sizeof(struct item_idx));
-    if(!iter->enumerator || !iter->node_buffer || !iter->sort_idx)
+    iter->src_entry_idx = castle_vmalloc(atomic64_read(&ct->item_count) * sizeof(struct item_idx));
+    iter->dst_entry_idx = castle_vmalloc(atomic64_read(&ct->item_count) * sizeof(struct item_idx));
+    iter->ranges = castle_vmalloc(iter->nr_nodes * sizeof(struct entry_range));
+    if(!iter->enumerator || !iter->node_buffer || !iter->src_entry_idx || !iter->dst_entry_idx)
     {
-        castle_ct_modlist_iter_free(iter);       
+        castle_ct_modlist_iter_free(iter);
         iter->err = -ENOMEM;
         return;
     }
-    /* Start up the child enumerator */
+
+    /* Initialise the immutable iterator */
     iter->enumerator->tree = ct;
-    castle_ct_immut_iter_init(iter->enumerator); 
+    castle_ct_immut_iter_init(iter->enumerator, castle_ct_modlist_iter_next_node, iter);
+
+    /* Finally, sort the data so we can return sorted entries to the caller. */
+    castle_ct_modlist_iter_mergesort(iter);
+
+    /* Good state before we accept requests. */
+    iter->err = 0;
     iter->next_item = 0;
-    /* Run the enumerator, sort the output. */
-    castle_ct_modlist_iter_fill(iter);
-    /* Fill may fail if the enumerator underneath fails */
-    if(iter->err)
-        return;
-    castle_ct_modlist_iter_heapify(iter);
-    castle_ct_modlist_iter_heapsort(iter);
 }
 
 struct castle_iterator_type castle_ct_modlist_iter = {
@@ -1466,7 +1719,7 @@ static void castle_da_iterator_create(struct castle_da_merge *merge,
         if(!iter)
             return;
         iter->tree = tree;
-        castle_ct_immut_iter_init(iter);
+        castle_ct_immut_iter_init(iter, NULL, NULL);
         /* TODO: after init errors? */
         *iter_p = iter;
     }
