@@ -53,6 +53,32 @@ static void castle_rda_slaves_shuffle(c_rda_state_t *state)
     debug("\n");
 }
 
+/**
+ * Determines whether a slave should be used by given rda_spec.
+ *
+ * @param rda_spec RDA spec used.
+ * @param slave    Slave to be tested.
+ */
+static int castle_rda_slave_usable(c_rda_spec_t *rda_spec, struct castle_slave *slave)
+{
+    /* Any extra tests (e.g. disk dead) should go here. */
+
+    switch(rda_spec->type)
+    {
+        case DEFAULT_RDA:
+            /* Default RDA doesn't use SSD disks. */
+            if(slave->cs_superblock.pub.flags & CASTLE_SLAVE_SSD)
+                return 0;
+            break;
+        /* No special tests for other RDA types. */
+        default:
+            break;
+    }
+
+    /* By default, use the disk. */
+    return 1;
+}
+
 void* castle_rda_extent_init(c_ext_id_t   ext_id, 
                              c_chk_cnt_t  size, 
                              c_rda_type_t rda_type)
@@ -82,8 +108,8 @@ void* castle_rda_extent_init(c_ext_id_t   ext_id,
     list_for_each(l, &castle_slaves.slaves)
     {
         slave = list_entry(l, struct castle_slave, list);
-        /* Here go any test which could prevent us using this disk (e.g. disk being dead). */
-        state->permuted_slaves[state->nr_slaves++] = slave;
+        if(castle_rda_slave_usable(rda_spec, slave))
+            state->permuted_slaves[state->nr_slaves++] = slave;
     }
     /* Check whether we've got enough slaves to make this extent. */
     if (state->nr_slaves < rda_spec->k_factor)
