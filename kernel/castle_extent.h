@@ -38,14 +38,6 @@ typedef struct {
 } c_ext_dirtylist_t;
 
 
-void 
-castle_rda_slave_remove(c_rda_type_t         rda_type, 
-                        struct castle_slave *slave);
-
-int 
-castle_rda_slave_add(c_rda_type_t            rda_type,
-                     struct castle_slave    *slave);
-
 c_rda_spec_t * 
 castle_rda_spec_get(c_rda_type_t rda_type);
 

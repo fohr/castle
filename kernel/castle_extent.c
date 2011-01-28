@@ -84,14 +84,14 @@ static c_ext_fs_t meta_ext_fs;
 DEFINE_RHASH_TBL(castle_extents, castle_extents_hash, CASTLE_EXTENTS_HASH_SIZE,
                 c_ext_t, hash_list, c_ext_id_t, ext_id, ref_cnt);
 
-void * castle_rda_extent_init(c_ext_id_t             ext_id, 
-                              c_chk_cnt_t            size, 
-                              c_rda_type_t           rda_type);
+void * castle_rda_extent_init(c_ext_id_t          ext_id, 
+                              c_chk_cnt_t         size, 
+                              c_rda_type_t        rda_type);
 
-int castle_rda_next_slave_get(struct castle_slave  *cs[],
-                              void                 *_state,
-                              c_chk_t               chk_num,
-                              c_rda_type_t          rda_type);
+int castle_rda_next_slave_get(struct castle_slave *cs[],
+                              void                *state_p,
+                              c_chk_t              chk_num,
+                              c_rda_type_t         rda_type);
 
 void castle_rda_extent_fini(c_ext_id_t    ext_id,
                             void         *_state);

@@ -14,102 +14,110 @@
 #endif
 
 typedef struct {
-    uint32_t                nr_slaves;                  /* Total # of slaves */
-    uint32_t                nr_act_slaves;              /* # of active slaves */
-    struct castle_slave    *slaves[MAX_NR_SLAVES];      /* List of slaves */
-    struct castle_slave    *act_slaves[MAX_NR_SLAVES];  /* List of active slaves */
-} c_rda_spec_ext_t;
-
-static c_rda_spec_ext_t def_rda_spec;
-
-typedef struct {
-    c_ext_id_t              ext_id;
-    c_chk_t                 prev_chk;
-    c_chk_cnt_t             size;
-    uint8_t                 permut1[MAX_NR_SLAVES];
-    uint8_t                 permut2[MAX_NR_SLAVES];
-    uint8_t                *permut;
-    uint8_t                 permut_idx;
-    struct castle_slave    *prev_set[0];
+    c_ext_id_t             ext_id;
+    c_chk_t                prev_chk;
+    c_chk_cnt_t            size;
+    int                    nr_slaves;
+    struct castle_slave   *permuted_slaves[MAX_NR_SLAVES];
+    uint8_t                permut_idx;
 } c_rda_state_t;
 
-void knuth_shuffle(uint8_t *a, int n)
+/**
+ * (Re)permute the array of castle_slave pointers, used to contruct the extent. Uses Fisher-Yates 
+ * shuffle.
+ *
+ * @param state Current state for onginig extent construction. 
+ */
+static void castle_rda_slaves_shuffle(c_rda_state_t *state)
 {
-    uint32_t i, j;
+    struct castle_slave *tmp_slave;
+    uint16_t i, j;
 
-    a[0] = 0;
-    for (i=1; i<=(n-1); i++)
+    /* Be careful with comparisons to zero, i&j are unsigned. */ 
+    for(i=state->nr_slaves-1; i>=1; i--)
     {
-        get_random_bytes(&j, 4);
-        j = j % (i+1);
-        a[i] = a[j];
-        a[j] = i;
+        /* Initialise j to a random number in inclusive range [0, i] */
+        get_random_bytes(&j, 2);
+        /* Very slight non-uniformity due to %. Safely ignorable. */
+        j = j % (i+1); 
+        /* Swap. */
+        tmp_slave = state->permuted_slaves[i];
+        state->permuted_slaves[i] = state->permuted_slaves[j];
+        state->permuted_slaves[j] = tmp_slave;
     }
+    state->permut_idx = 0;
     debug("Permuation:\n\t");
-    for (i=0; i<n; i++)
-        debug("%u ", (uint32_t)a[i]);
+    for(i=0; i<state->nr_slaves; i++)
+        debug("%u ", state->permuted_slaves[i]->uuid);
     debug("\n");
 }
 
-void* castle_rda_extent_init(c_ext_id_t             ext_id, 
-                             c_chk_cnt_t            size, 
-                             c_rda_type_t           rda_type)
+void* castle_rda_extent_init(c_ext_id_t   ext_id, 
+                             c_chk_cnt_t  size, 
+                             c_rda_type_t rda_type)
 {
-    c_rda_state_t   *state;
-    c_rda_spec_t    *rda_spec = castle_rda_spec_get(rda_type);
+    c_rda_spec_t *rda_spec = castle_rda_spec_get(rda_type);
+    struct castle_slave *slave;
+    c_rda_state_t *state;
+    struct list_head *l;
 
-    if (def_rda_spec.nr_act_slaves < rda_spec->k_factor)
-    {
-        printk("Do not have enough disks to support %d-RDA\n", rda_spec->k_factor);
-        return NULL;
-    }
-
-    state = castle_malloc(sizeof(c_rda_state_t) + 
-                          sizeof(struct castle_slave *) * rda_spec->k_factor, 
-                          GFP_KERNEL);
+    /* Allocate memory for the state structure. */
+    state = castle_malloc(sizeof(c_rda_state_t), GFP_KERNEL);
     if (!state)
     {
         printk("Failed to allocate memory for RDA state\n");
-        goto __hell;
+        goto err_out;
     }
+    
+    /* Initialise state structure. */
+    state->ext_id     = ext_id;
+    state->prev_chk   = -1;
+    state->size       = size;
+    state->nr_slaves  = 0;
+    memset(&state->permuted_slaves, 0, sizeof(struct castle_slave *) * MAX_NR_SLAVES);
+    state->permut_idx = 0;
 
-    state->ext_id       = ext_id;
-    state->prev_chk     = -1;
-    state->size         = size;
-    state->permut_idx   = 0;
-    knuth_shuffle(&state->permut1[0], def_rda_spec.nr_act_slaves);
-    state->permut       = &state->permut1[0];
+    /* Initialise the slaves array. */
+    list_for_each(l, &castle_slaves.slaves)
+    {
+        slave = list_entry(l, struct castle_slave, list);
+        /* Here go any test which could prevent us using this disk (e.g. disk being dead). */
+        state->permuted_slaves[state->nr_slaves++] = slave;
+    }
+    /* Check whether we've got enough slaves to make this extent. */
+    if (state->nr_slaves < rda_spec->k_factor)
+    {
+        printk("Do not have enough disks to support %d-RDA\n", rda_spec->k_factor);
+        goto err_out;
+    }
+    /* Permute the list of slaves the first time around. */
+    castle_rda_slaves_shuffle(state);
 
     return state;
 
-__hell:
+err_out:
     if (state)
         castle_free(state);
 
     return NULL;
 }
 
-void castle_rda_extent_fini(c_ext_id_t    ext_id,
-                            void         *_state)
+void castle_rda_extent_fini(c_ext_id_t ext_id, void *state)
 {
-    c_rda_state_t   *state = _state;
-
     castle_free(state);
 }
 
-int castle_rda_next_slave_get(struct castle_slave  *cs[],
-                              void                 *_state,
-                              c_chk_t               chk_num,
-                              c_rda_type_t          rda_type)
+int castle_rda_next_slave_get(struct castle_slave *cs[],
+                              void                *state_p,
+                              c_chk_t              chk_num,
+                              c_rda_type_t         rda_type)
 {
-    c_rda_state_t *state    = _state;
-    c_rda_spec_t  *rda_spec = castle_rda_spec_get(rda_type);
-    uint32_t       nr_act_slaves = def_rda_spec.nr_act_slaves;
-    uint32_t       n;
+    c_rda_spec_t *rda_spec = castle_rda_spec_get(rda_type);
+    c_rda_state_t *state = state_p;
     int i;
 
     if (state == NULL)
-        goto __hell;
+        return -1;
 
     BUG_ON(state->size <= chk_num);
     if (chk_num == state->prev_chk)
@@ -119,52 +127,20 @@ int castle_rda_next_slave_get(struct castle_slave  *cs[],
         BUG();
     }
 
-    if(state->permut_idx >= nr_act_slaves)
-    {
-        /* Repermute. */
-        knuth_shuffle(state->permut, nr_act_slaves);
-        state->permut_idx=0;
-    }
-    for (i=0; i<rda_spec->k_factor; i++)
-    {
-        n = (state->permut[state->permut_idx] + i) % nr_act_slaves;
-        cs[i] = def_rda_spec.act_slaves[n];
-    }
+    /* Repermute, if permut_idx is greater than the number of slaves we are using. */
+    if(state->permut_idx >= state->nr_slaves)
+        castle_rda_slaves_shuffle(state);
 
+    /* Fill the cs array. Use current permutation slave pointer for the first slave,
+       and simple modulo shift for the other ones. */
+    for (i=0; i<rda_spec->k_factor; i++)
+        cs[i] = state->permuted_slaves[(state->permut_idx + i) % state->nr_slaves];
+
+    /* Advance the permutation index. */
     state->permut_idx++;
 
+    /* Remeber what chunk we've just dealt with. */
+    state->prev_chk = chk_num;
+
     return 0;
-
-__hell:
-    return -1;
-}
-
-int castle_rda_slave_add(c_rda_type_t rda_type, struct castle_slave *cs)
-{
-    def_rda_spec.slaves[def_rda_spec.nr_slaves]          = cs;
-    def_rda_spec.act_slaves[def_rda_spec.nr_act_slaves]  = cs;
-    BUG_ON(def_rda_spec.nr_slaves != def_rda_spec.nr_act_slaves);
-    BUG_ON(def_rda_spec.nr_slaves != cs->id);
-
-    def_rda_spec.nr_slaves++;
-    def_rda_spec.nr_act_slaves++;
-    debug("Added another slave to \"default\" rda spec\n");
-    debug("     # of active disks: %d/%d\n", def_rda_spec.nr_slaves,
-                            def_rda_spec.nr_act_slaves);
-    return 0;
-}
-
-void castle_rda_slave_remove(c_rda_type_t rda_type, struct castle_slave *cs)
-{
-    if (!cs)
-        return;
-
-    /* Check if slave is already added to the RDA list. */
-    if (cs->id != (def_rda_spec.nr_slaves - 1))
-        return;
-
-    def_rda_spec.nr_slaves--;
-    def_rda_spec.nr_act_slaves--;
-
-    return;
 }

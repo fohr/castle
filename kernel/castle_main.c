@@ -1088,13 +1088,6 @@ struct castle_slave* castle_claim(uint32_t new_dev)
     }
     cs_added = 1;
 
-    err = castle_rda_slave_add(DEFAULT_RDA, cs);
-    if (err)
-    {
-        printk("Could not add slave to DEFAULT RDA.\n");
-        goto err_out;
-    }
-    
     err = castle_sysfs_slave_add(cs);
     if(err)
     {
@@ -1108,7 +1101,6 @@ struct castle_slave* castle_claim(uint32_t new_dev)
 err_out:
     if (!EXT_ID_INVAL(cs->sup_ext))
         castle_extent_sup_ext_close(cs);
-    castle_rda_slave_remove(DEFAULT_RDA, cs);
     if(cs_added)     list_del(&cs->list);
     if(bdev_claimed) bd_release(bdev);
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,24)
@@ -1124,7 +1116,6 @@ err_out:
 
 void castle_release(struct castle_slave *cs)
 {
-    castle_rda_slave_remove(DEFAULT_RDA, cs);
     castle_events_slave_release(cs->uuid);
     castle_sysfs_slave_del(cs);
     bd_release(cs->bdev);
