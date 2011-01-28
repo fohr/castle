@@ -222,6 +222,7 @@ static inline int EXT_POS_COMP(c_ext_pos_t cep1, c_ext_pos_t cep2)
 
 typedef enum {
     DEFAULT_RDA,
+    SSD_RDA,
     META_EXT,
     MICRO_EXT,
     SUPER_EXT,

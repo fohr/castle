@@ -663,7 +663,6 @@ int castle_extent_space_alloc(c_ext_t *ext, da_id_t da_id)
     uint32_t                req_space, idx = 0;
     c_ext_pos_t             cep;
 
-    BUG_ON(!POWOF2(ext->k_factor * sizeof(c_disk_chk_t)));
     BUG_ON(LOGICAL_EXTENT(ext->ext_id) && (ext->ext_id < META_EXT_ID));
 
     state  = rda_spec->extent_init(ext->ext_id, count, ext->type);
@@ -950,7 +949,8 @@ static void __castle_extent_map_get(c_ext_t             *ext,
         cep.ext_id  = ext->maps_cep.ext_id;
         BUG_ON(BLOCK_OFFSET(ext->maps_cep.offset));
         cep.offset  = MASK_BLK_OFFSET(ext->maps_cep.offset + offset);
-        c2b         = castle_cache_block_get(cep, 1);
+        /* Map may straddle page boundry. 2 page block means we won't have to worry about that. */
+        c2b = castle_cache_block_get(cep, 2);
         if (!c2b_uptodate(c2b))
         {
             debug("Scheduling read to get chunk mappings for ext: %llu\n",
@@ -962,7 +962,7 @@ static void __castle_extent_map_get(c_ext_t             *ext,
             write_unlock_c2b(c2b);
         }
         read_lock_c2b(c2b);
-        BUG_ON((C_BLK_SIZE - BLOCK_OFFSET(offset)) < (ext->k_factor * sizeof(c_disk_chk_t)));
+        BUG_ON((2*C_BLK_SIZE - BLOCK_OFFSET(offset)) < (ext->k_factor * sizeof(c_disk_chk_t)));
         memcpy(chk_map, 
                (((uint8_t *)c2b_buffer(c2b)) + BLOCK_OFFSET(offset)),
                ext->k_factor * sizeof(c_disk_chk_t));
