@@ -255,6 +255,8 @@ static int                     castle_cache_page_hash_buckets;
 static spinlock_t             *castle_cache_page_hash_locks = NULL;
 static struct hlist_head      *castle_cache_page_hash = NULL;
 
+static struct kmem_cache      *castle_io_array_cache = NULL;
+
 static               LIST_HEAD(castle_cache_dirtylist);
 static               LIST_HEAD(castle_cache_cleanlist);
 static atomic_t                castle_cache_cleanlist_size;         /**< Blocks on the cleanlist  */
@@ -1154,7 +1156,7 @@ static inline int c_io_array_page_add(c_io_array_t *array,
 static int submit_c2b_rda(int rw, c2_block_t *c2b)
 {
     c2_page_t    *c2p;
-    c_io_array_t  io_array;
+    c_io_array_t *io_array;
     struct page  *page;
     int           skip_c2p;
     c_ext_pos_t   cur_cep;
@@ -1165,12 +1167,16 @@ static int submit_c2b_rda(int rw, c2_block_t *c2b)
     debug("Submitting c2b "cep_fmt_str", for %s\n", 
             __cep2str(c2b->cep), (rw == READ) ? "read" : "write");
 
+    io_array = kmem_cache_alloc(castle_io_array_cache, GFP_KERNEL);
+    if (!io_array)
+        return -1;
+
     /* c2b->remaining is effectively a reference count. Get one ref before we start. */
     BUG_ON(atomic_read(&c2b->remaining) != 0);
     atomic_inc(&c2b->remaining);
     last_chk = INVAL_CHK;
     cur_chk = INVAL_CHK;
-    c_io_array_init(&io_array);
+    c_io_array_init(io_array);
     /* Everything initialised, go through each page in the c2p. */
     c2b_for_each_page_start(page, c2p, cur_cep, c2b)
     {
@@ -1189,7 +1195,7 @@ static int submit_c2b_rda(int rw, c2_block_t *c2b)
             goto next_page;
 
         /* If we are not skipping, add the page to io array. */ 
-        if(c_io_array_page_add(&io_array, cur_cep, cur_chk, page) != EXIT_SUCCESS)
+        if(c_io_array_page_add(io_array, cur_cep, cur_chk, page) != EXIT_SUCCESS)
         {
             /* Failed to add this page to the array (see return code for reason).
              * Dispatch the current array, initialise a new one and
@@ -1197,13 +1203,13 @@ static int submit_c2b_rda(int rw, c2_block_t *c2b)
              *
              * We've got physical chunks for last_chk (logical chunk), this should
                match with the logical chunk stored in io_array. */ 
-            BUG_ON(io_array.chunk != last_chk);
+            BUG_ON(io_array->chunk != last_chk);
             /* Submit the array. */
-            c_io_array_submit(rw, c2b, chunks, k_factor, &io_array);
+            c_io_array_submit(rw, c2b, chunks, k_factor, io_array);
             /* Reinit the array, and re-try adding the current page. This should not
                fail any more. */
-            c_io_array_init(&io_array);
-            BUG_ON(c_io_array_page_add(&io_array, cur_cep, cur_chk, page));
+            c_io_array_init(io_array);
+            BUG_ON(c_io_array_page_add(io_array, cur_cep, cur_chk, page));
         }
          
         /* Update chunk map when we move to a new chunk. */ 
@@ -1222,7 +1228,7 @@ static int submit_c2b_rda(int rw, c2_block_t *c2b)
             {
                 /* Complete the IO by dropping our reference, return early. */
                 c2b_remaining_io_sub(rw, 1, c2b);
-                return 0;
+                goto out;
             }
             
             debug("chunks[0]="disk_chk_fmt_nl, disk_chk2str(chunks[0]));
@@ -1233,15 +1239,17 @@ next_page:
     c2b_for_each_page_end(page, c2p, cur_cep, c2b);
 
     /* IO array may contain leftover pages, submit those too. */
-    if(io_array.next_idx > 0)
+    if(io_array->next_idx > 0)
     {
         /* Chunks array is always initialised for last_chk. */
-        BUG_ON(io_array.chunk != last_chk);
-        c_io_array_submit(rw, c2b, chunks, k_factor, &io_array);
+        BUG_ON(io_array->chunk != last_chk);
+        c_io_array_submit(rw, c2b, chunks, k_factor, io_array);
     }
     /* Drop the 1 ref. */
     c2b_remaining_io_sub(rw, 1, c2b);
     
+out:
+    kmem_cache_free(castle_io_array_cache, io_array);
     return 0;
 }
 
@@ -4578,6 +4586,23 @@ int castle_cache_init(void)
     if((ret = castle_cache_freelists_init())) goto err_out; 
     if((ret = castle_vmap_fast_map_init()))   goto err_out;
     if((ret = castle_cache_flush_init()))     goto err_out;
+
+    /* Init kmem_cache for io_array (Structure is too big to fit in stack). */
+    castle_io_array_cache = kmem_cache_create("castle_io_array",
+                                               sizeof(c_io_array_t),
+                                               0,   /* align */
+                                               0,   /* flags */
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,18)
+                                               NULL, NULL); /* ctor, dtor */
+#else                                               
+                                               NULL); /* ctor */
+#endif
+    if (!castle_io_array_cache)
+    {
+        printk("Could not allocate kmem cache for castle cache io arrays.\n");
+        goto err_out;
+    }
+
 #ifdef CASTLE_PERF_DEBUG
     castle_cache_stats_timer_interval = 1;
 #endif
@@ -4602,6 +4627,7 @@ void castle_cache_fini(void)
     castle_vmap_fast_map_fini();
     castle_cache_freelists_fini();
 
+    if(castle_io_array_cache)   kmem_cache_destroy(castle_io_array_cache);
     if(castle_cache_stats_timer_interval) del_timer(&castle_cache_stats_timer);
 
     if(castle_cache_page_hash)  castle_vfree(castle_cache_page_hash);
