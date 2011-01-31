@@ -1845,7 +1845,7 @@ static c_val_tup_t castle_da_medium_obj_copy(struct castle_da_merge *merge,
 {
     c_ext_pos_t old_cep, new_cep;
     c_val_tup_t new_cvt;
-    uint32_t i, nr_blocks;
+    int total_blocks, blocks;
     c2_block_t *s_c2b, *c_c2b;
 #ifdef CASTLE_PERF_DEBUG
     struct castle_component_tree *tree;
@@ -1864,9 +1864,9 @@ static c_val_tup_t castle_da_medium_obj_copy(struct castle_da_merge *merge,
     BUG_ON(BLOCK_OFFSET(old_cep.offset) != 0);
 
     /* Allocate space for the new copy. */
-    nr_blocks = (old_cvt.length - 1) / C_BLK_SIZE + 1;
+    total_blocks = (old_cvt.length - 1) / C_BLK_SIZE + 1;
     BUG_ON(castle_ext_fs_get(&merge->data_ext_fs,
-                              nr_blocks * C_BLK_SIZE,
+                              total_blocks * C_BLK_SIZE,
                               0,
                               &new_cep) < 0);
     BUG_ON(BLOCK_OFFSET(new_cep.offset) != 0);
@@ -1884,13 +1884,28 @@ static c_val_tup_t castle_da_medium_obj_copy(struct castle_da_merge *merge,
     else
         tree = merge->in_tree2;
 #endif
-    for(i=0; i<nr_blocks; i++)
+
+    while (total_blocks > 0)
     {
-        /* Get the block, and schedule prefetch asap. */
+        int chk_off, pgs_to_end;
+
+        /* Chunk-align blocks if total_blocks is large enough to make it worthwhile. */
+        chk_off = CHUNK_OFFSET(old_cep.offset);
+        if (chk_off)
+            pgs_to_end = (C_CHK_SIZE - chk_off) >> PAGE_SHIFT;
+
+        if (chk_off && ((total_blocks - pgs_to_end) >= 2*BLKS_PER_CHK))
+            /* Align for a minimum of 2 full blocks (1 can be inefficient) */
+            blocks = pgs_to_end;
+        else if (total_blocks > BLKS_PER_CHK)
+            blocks = BLKS_PER_CHK;
+        else
+            blocks = total_blocks;
+        total_blocks -= blocks;
 
         castle_perf_debug_getnstimeofday(&ts_start);
-        s_c2b = castle_cache_page_block_get(old_cep);
-        c_c2b = castle_cache_page_block_get(new_cep);
+        s_c2b = castle_cache_block_get(old_cep, blocks);
+        c_c2b = castle_cache_block_get(new_cep, blocks);
         castle_perf_debug_getnstimeofday(&ts_end);
         castle_perf_debug_bump_ctr(tree->get_c2b_ns, ts_end, ts_start);
         if (merge->level > 1)
@@ -1919,14 +1934,14 @@ static c_val_tup_t castle_da_medium_obj_copy(struct castle_da_merge *merge,
             castle_perf_debug_bump_ctr(tree->data_c2bsync_ns, ts_end, ts_start);
         }
         update_c2b(c_c2b);
-        memcpy(c2b_buffer(c_c2b), c2b_buffer(s_c2b), PAGE_SIZE);
+        memcpy(c2b_buffer(c_c2b), c2b_buffer(s_c2b), blocks * PAGE_SIZE);
         dirty_c2b(c_c2b);
         write_unlock_c2b(c_c2b);
         write_unlock_c2b(s_c2b);
         put_c2b(c_c2b);
         put_c2b(s_c2b);
-        old_cep.offset += PAGE_SIZE;
-        new_cep.offset += PAGE_SIZE;
+        old_cep.offset += blocks * PAGE_SIZE;
+        new_cep.offset += blocks * PAGE_SIZE;
     }
     debug("Finished copy, i=%d\n", i);
     
