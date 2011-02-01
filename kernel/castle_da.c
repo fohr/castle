@@ -2898,18 +2898,10 @@ static int castle_da_merge_run(void *da_p)
         castle_da_unlock(da);
         /* We should only get here, if we are supposed to do a merge => we have in_trees. */
         BUG_ON(!in_tree1 || !in_tree2);
-            
+
         debug_merges("Doing merge, trees=[%u]+[%u]\n", in_tree1->seq, in_tree2->seq);
         castle_trace_da_merge(TRACE_START, TRACE_DA_MERGE_ID,
                 da->id, level, in_tree1->seq, in_tree2->seq);
-        merge = castle_da_merge_init(da, level, in_tree1, in_tree2);
-        if(!merge)
-        {
-            printk("Could not start a merge for DA=%d, level=%d.\n", da->id, level);
-            /* Retry after 10s. */
-            msleep(10000);
-            continue;
-        }
 
         if (level == 1)
         {
@@ -2919,7 +2911,16 @@ static int castle_da_merge_run(void *da_p)
             castle_cache_advise((c_ext_pos_t){in_tree2->data_ext_fs.ext_id, 0},
                     C2_ADV_EXTENT|C2_ADV_HARDPIN, -1, -1, 0);
         }
-        
+
+        merge = castle_da_merge_init(da, level, in_tree1, in_tree2);
+        if(!merge)
+        {
+            printk("Could not start a merge for DA=%d, level=%d.\n", da->id, level);
+            /* Retry after 10s. */
+            msleep(10000);
+            continue;
+        }
+
         /* Do the merge. */
         out_tree_id = INVAL_TREE;
         do {
@@ -2970,6 +2971,8 @@ static int castle_da_merge_run(void *da_p)
         out_tree_id = castle_da_merge_last_unit_complete(da, level, merge);
         ret = TREE_INVAL(out_tree_id) ? -ENOMEM : 0;
 merge_failed:
+        castle_da_merge_dealloc(merge, ret);
+
         if (level == 1)
         {
             /* Unhard-pin T1s in the cache. */
@@ -2978,8 +2981,6 @@ merge_failed:
             castle_cache_advise_clear((c_ext_pos_t){in_tree2->data_ext_fs.ext_id, 0},
                     C2_ADV_EXTENT|C2_ADV_HARDPIN, -1, -1, 0);
         }
-
-        castle_da_merge_dealloc(merge, ret);
 
         castle_trace_da_merge(TRACE_END, TRACE_DA_MERGE_ID, da->id, level, out_tree_id, 0);
         debug_merges("Done merge.\n");
