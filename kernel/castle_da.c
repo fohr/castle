@@ -2971,17 +2971,17 @@ static int castle_da_merge_run(void *da_p)
         out_tree_id = castle_da_merge_last_unit_complete(da, level, merge);
         ret = TREE_INVAL(out_tree_id) ? -ENOMEM : 0;
 merge_failed:
-        castle_da_merge_dealloc(merge, ret);
-
         if (level == 1)
         {
-            /* Unhard-pin T1s in the cache. */
+            /* Unhard-pin T1s in the cache.
+             * Do this before we deallocate the merge and extents. */
             castle_cache_advise_clear((c_ext_pos_t){in_tree1->data_ext_fs.ext_id, 0},
                     C2_ADV_EXTENT|C2_ADV_HARDPIN, -1, -1, 0);
             castle_cache_advise_clear((c_ext_pos_t){in_tree2->data_ext_fs.ext_id, 0},
                     C2_ADV_EXTENT|C2_ADV_HARDPIN, -1, -1, 0);
         }
 
+        castle_da_merge_dealloc(merge, ret);
         castle_trace_da_merge(TRACE_END, TRACE_DA_MERGE_ID, da->id, level, out_tree_id, 0);
         debug_merges("Done merge.\n");
         if(ret)
