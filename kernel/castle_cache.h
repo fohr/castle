@@ -5,25 +5,27 @@ struct castle_cache_page;
 typedef struct castle_cache_block {
     c_ext_pos_t                cep;
     atomic_t                   remaining;
-    int                        nr_pages;
+    int                        nr_pages;        /**< Number of c2ps mapped by the block           */
 
-    struct castle_cache_page **c2ps; 
+    struct castle_cache_page **c2ps;            /**< Array of c2ps backing the buffer             */
 
-    void                      *buffer;          /**< Linear mapping of the pages */
-    struct hlist_node          hlist;
+    void                      *buffer;          /**< Linear mapping of the pages                  */
+    struct hlist_node          hlist;           /**< Hash-list node                               */
     union {
         struct list_head       dirty;
         struct list_head       clean;
         struct list_head       free;
     };
-    struct rb_node             rb_dirtylist;    /**< Per-extent dirtylist RB-node */
+    struct rb_node             rb_dirtylist;    /**< Per-extent dirtylist RB-node                 */
 
-    unsigned long              state;
-	atomic_t                   count;
+    struct c2b_state {
+        unsigned long          bits:56;         /**< State bitfield                               */
+        unsigned long          softpin_cnt:8;   /**< Softpin count                                */
+    } state;
+    atomic_t                   count;           /**< Count of active consumers                    */
     atomic_t                   lock_cnt;
-    atomic_t                   softpin_cnt;
-    void                     (*end_io)(struct castle_cache_block *c2b);
-    void                      *private;         /**< Can only be used if c2b is locked */
+    void                     (*end_io)(struct castle_cache_block *c2b); /**< IO CB handler routine*/
+    void                      *private;         /**< Can only be used if c2b is locked            */
 #ifdef CASTLE_DEBUG            
     char                      *file;
     int                        line;
@@ -43,14 +45,14 @@ int  c2b_write_locked(c2_block_t *c2b);
 #ifdef CASTLE_DEBUG
 #define write_lock_c2b(_c2b)          \
 {                                     \
-	might_sleep();                    \
+    might_sleep();                    \
      __lock_c2b(_c2b, 1);             \
     (_c2b)->file = __FILE__;          \
     (_c2b)->line = __LINE__;          \
 }
 #define read_lock_c2b(_c2b)           \
 {                                     \
-	might_sleep();                    \
+    might_sleep();                    \
      __lock_c2b(_c2b, 0);             \
     (_c2b)->file = __FILE__;          \
     (_c2b)->line = __LINE__;          \
