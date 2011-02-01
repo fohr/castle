@@ -17,62 +17,62 @@ static char* supported_ssds[NR_SUPPORTED_SSDS] = {"SSDSA2SH032G1GN INTEL", "INTE
 
 void usage(void)
 {
-	printf("Usage: mkcastlefs /dev/sdXY\n");
+  printf("Usage: mkcastlefs /dev/sdXY\n");
 }
 
 uint32_t get_random_uuid()
 {
-	const int len = sizeof(uint32_t);
-	char data[len];
-	int fd, bytes;
-	uint32_t i;
+  const int len = sizeof(uint32_t);
+  char data[len];
+  int fd, bytes;
+  uint32_t i;
 	
-	if((fd = open("/dev/urandom", O_RDONLY)) == -1) {
-          fprintf(stderr, "Failed to open /dev/urandom: %s\n", strerror(errno));
-          exit(1);
-	}
+  if((fd = open("/dev/urandom", O_RDONLY)) == -1) {
+    fprintf(stderr, "Failed to open /dev/urandom: %s\n", strerror(errno));
+    exit(1);
+  }
 	
-	if(read(fd, data, len) != len) {
-          fprintf(stderr, "Error reading /dev/urandom: %s\n", strerror(errno));
-          exit(1);
-	}
-	close(fd);
-	memcpy(&i, data, sizeof(i));
-	return i;
+  if(read(fd, data, len) != len) {
+    fprintf(stderr, "Error reading /dev/urandom: %s\n", strerror(errno));
+    exit(1);
+  }
+  close(fd);
+  memcpy(&i, data, sizeof(i));
+  return i;
 }
 
 void init_superblock(struct castle_slave_superblock_public *super, int is_ssd)
 {
-	super->magic1 = CASTLE_SLAVE_MAGIC1;
-	super->magic2 = CASTLE_SLAVE_MAGIC2;
-	super->magic3 = CASTLE_SLAVE_MAGIC3;
-	super->version = CASTLE_SLAVE_VERSION;
-	super->uuid = get_random_uuid();
-	super->used = 1; /* we are responsible for writing JUST the
-				slave's superblock */
-	super->flags = CASTLE_SLAVE_TARGET | CASTLE_SLAVE_NEWDEV | (is_ssd ? CASTLE_SLAVE_SSD : 0);
-	super->size = -1;
-    super->checksum = 0;
+  super->magic1 = CASTLE_SLAVE_MAGIC1;
+  super->magic2 = CASTLE_SLAVE_MAGIC2;
+  super->magic3 = CASTLE_SLAVE_MAGIC3;
+  super->version = CASTLE_SLAVE_VERSION;
+  super->uuid = get_random_uuid();
+  super->used = 1; /* we are responsible for writing JUST the
+                      slave's superblock */
+  super->flags = CASTLE_SLAVE_TARGET | CASTLE_SLAVE_NEWDEV | (is_ssd ? CASTLE_SLAVE_SSD : 0);
+  super->size = -1;
+  super->checksum = 0;
 }
 
 int write_superblock(int fd, struct castle_slave_superblock_public *super)
 {
-	const int max = 4096;
-	const int len = sizeof(struct castle_slave_superblock_public);
+  const int max = 4096;
+  const int len = sizeof(struct castle_slave_superblock_public);
 
-	if(len > max) {
-		fprintf(stderr, "superblock too big to fit in disk block\n");
-		return 0;
-	}
+  if(len > max) {
+    fprintf(stderr, "superblock too big to fit in disk block\n");
+    return 0;
+  }
 
-	if(write(fd, super, len) != len) {
-		fprintf(stderr, "Failure writing superblock!\n");
-		return 0;
-	}
+  if(write(fd, super, len) != len) {
+    fprintf(stderr, "Failure writing superblock!\n");
+    return 0;
+  }
 	
-	fsync(fd);
+  fsync(fd);
 
-	return 1;
+  return 1;
 
 }
 
@@ -81,99 +81,99 @@ static int check_ssd(char *node)
 #define BUFFER_SIZE     256
 #define HDPARM_COMMAND  "hdparm -I "
 #define SEARCH_STR      "Model Number:"
-    FILE *p = NULL;
-    char buffer[BUFFER_SIZE];
-    int i, ret;
+  FILE *p = NULL;
+  char buffer[BUFFER_SIZE];
+  int i, ret;
 
-    ret = 0;
-    /* Make sure that the command will fit in the buffer. */
-    if(strlen(node) > BUFFER_SIZE - strlen(HDPARM_COMMAND) - 10)
-        goto out;
-    sprintf(buffer, HDPARM_COMMAND"%s", node);
-    p = popen(buffer, "r");
-    if(!p)
+  ret = 0;
+  /* Make sure that the command will fit in the buffer. */
+  if(strlen(node) > BUFFER_SIZE - strlen(HDPARM_COMMAND) - 10)
+    goto out;
+  sprintf(buffer, HDPARM_COMMAND"%s", node);
+  p = popen(buffer, "r");
+  if(!p)
     {
-        printf("Failed to execute: %s\n", buffer);
-        goto out;
+      printf("Failed to execute: %s\n", buffer);
+      goto out;
     }
-    while(fgets(buffer, BUFFER_SIZE, p))
+  while(fgets(buffer, BUFFER_SIZE, p))
     {
-        char *model;
-        if((model = strstr(buffer, SEARCH_STR)) != NULL)
+      char *model;
+      if((model = strstr(buffer, SEARCH_STR)) != NULL)
         {
-            model += strlen(SEARCH_STR);
-            while(*model == ' ' || *model == '\0')
-                model++;
-            for(i=0; i<NR_SUPPORTED_SSDS; i++)
+          model += strlen(SEARCH_STR);
+          while(*model == ' ' || *model == '\0')
+            model++;
+          for(i=0; i<NR_SUPPORTED_SSDS; i++)
             {   
-                if(strstr(model, supported_ssds[i]))
-                    ret = 1;
+              if(strstr(model, supported_ssds[i]))
+                ret = 1;
             }
-            goto out;
+          goto out;
         }
     }
     
-out:
-    if(p) fclose(p);
-    return ret;
+ out:
+  if(p) fclose(p);
+  return ret;
 }
 
 int main(int argc, char *argv[])
 {
-	int rv, fd, i, is_ssd;
-	char *node;
-	struct stat st;
-	struct castle_slave_superblock_public super;
-    char buf[4096];
+  int rv, fd, i, is_ssd;
+  char *node;
+  struct stat st;
+  struct castle_slave_superblock_public super;
+  char buf[4096];
 
-	/* check args */
-	if(argc != 2) {
-		usage();
-		exit(2);
-	}
+  /* check args */
+  if(argc != 2) {
+    usage();
+    exit(2);
+  }
 
-	node = argv[1];
+  node = argv[1];
 
-	if(stat(node, &st)) {
-          fprintf(stderr, "%s: failed to stat %s: %s\n", argv[0], node, strerror(errno));
-          exit(2);
-	}
+  if(stat(node, &st)) {
+    fprintf(stderr, "%s: failed to stat %s: %s\n", argv[0], node, strerror(errno));
+    exit(2);
+  }
 
 #if 0
-	if(!st.st_rdev) {
-          fprintf(stderr, "Warning: %s does not seem to be a device node\n", node);
-	}
+  if(!st.st_rdev) {
+    fprintf(stderr, "Warning: %s does not seem to be a device node\n", node);
+  }
 #endif
     
-    is_ssd = check_ssd(node);
-	init_superblock(&super, is_ssd);
+  is_ssd = check_ssd(node);
+  init_superblock(&super, is_ssd);
 
-	/* write */
-	if((fd = open(node, O_RDWR|O_LARGEFILE|O_SYNC)) == -1) {
-          /* open failed */
-          fprintf(stderr, "%s: failed to open %s: %s\n", argv[0], node, strerror(errno));
-          exit(1);
-	}
+  /* write */
+  if((fd = open(node, O_RDWR|O_LARGEFILE|O_SYNC)) == -1) {
+    /* open failed */
+    fprintf(stderr, "%s: failed to open %s: %s\n", argv[0], node, strerror(errno));
+    exit(1);
+  }
 
-    /* Set first MB of the disk to 0. */
-    memset(buf, 0 , 4096);
-    for(i=0; i<(MB / 4096); i++) {
-		if(write(fd, buf, 4096) != 4096) {
-			fprintf(stderr, "Failure setting up disk!\n");
-			return 0;
-		}
+  /* Set first MB of the disk to 0. */
+  memset(buf, 0 , 4096);
+  for(i=0; i<(MB / 4096); i++) {
+    if(write(fd, buf, 4096) != 4096) {
+      fprintf(stderr, "Failure setting up disk!\n");
+      return 0;
     }
-    lseek(fd, 0, SEEK_SET);
+  }
+  lseek(fd, 0, SEEK_SET);
 
-	if(!write_superblock(fd, &super)) {
-          fprintf(stderr, "%s: Error writing superblock on %s: %s", argv[0], node, strerror(errno));
-          exit(1);
-	}
+  if(!write_superblock(fd, &super)) {
+    fprintf(stderr, "%s: Error writing superblock on %s: %s", argv[0], node, strerror(errno));
+    exit(1);
+  }
 
-	if(close(fd)) {
-          fprintf(stderr, "%s: Warning: error closing %s: %s", argv[0], node, strerror(errno));
-          exit(1);
-	}
+  if(close(fd)) {
+    fprintf(stderr, "%s: Warning: error closing %s: %s", argv[0], node, strerror(errno));
+    exit(1);
+  }
 
-	exit(0);
+  exit(0);
 }
