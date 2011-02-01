@@ -45,7 +45,7 @@
 enum c2b_state_bits {
     C2B_uptodate,           /*<< Block is uptodate within the cache.                              */
     C2B_dirty,              /*<< Block is dirty within the cache.                                 */
-    C2B_flushing,
+    C2B_flushing,           /*<< Block is being flushed out to disk.                              */
     C2B_transient,
     C2B_prefetch,           /*<< Block is part of an active prefetch window.                      */
     C2B_prefetched,         /*<< Block was prefetched.                                            */
@@ -85,7 +85,7 @@ C2B_TAS_FNS(flushing, flushing)
 C2B_FNS(transient, transient)
 C2B_TAS_FNS(transient, transient)
 C2B_FNS(prefetch, prefetch)
-C2B_FNS(prefetched, prefetched);
+C2B_FNS(prefetched, prefetched)
 C2B_FNS(windowstart, windowstart)
 
 /* c2p encapsulates multiple memory pages (in order to reduce overheads).
@@ -574,58 +574,69 @@ int c2b_locked(c2_block_t *c2b)
 /**
  * Increment c2b softpin count and do cleanlist accounting.
  *
- * - Increment softpin count
- * - Do necessary cleanlist accounting
+ * - Atomically increment softpin count
+ * - Do softpin cleanlist accounting if necessary
  *
  * @also c2_pref_window_submit() (our primary caller)
  */
 static void softpin_c2b(c2_block_t *c2b)
 {
-    /* We can't BUG_ON(atomic_read(&c2b->softpin_cnt) < 0)...
-     * see _unsoftpin_c2b() for the reasons. */
-    if (atomic_inc_return(&c2b->softpin_cnt) == 1)
-    {
-        /* This is the first time this c2b has been softpinned. */
+    unsigned long old, new;
+    struct c2b_state *p_old, *p_new;
+    p_old = (struct c2b_state *)&old;
+    p_new = (struct c2b_state *)&new;
 
-        if (!c2b_dirty(c2b))
-            atomic_inc(&castle_cache_cleanlist_softpin_size);
-    }
+    do {
+        *p_old = *p_new = c2b->state;
+        p_new->softpin_cnt++;
+    } while (cmpxchg((unsigned long*)&c2b->state, old, new) != old);
+
+    /* Increment softpin cleanlist if it wasn't already softpinnined
+     * and if it is a clean block. */
+    if ((p_old->softpin_cnt == 0) && !c2b_dirty(c2b))
+        atomic_inc(&castle_cache_cleanlist_softpin_size);
 }
 
+/**
+ * Decrement or clear c2b softpin count and do cleanlist accounting.
+ *
+ * @param clear Set clears count, otherwise decrements
+ *
+ * @return  Softpin count following operation
+ */
 static int _unsoftpin_c2b(c2_block_t *c2b, int clear)
 {
-    int softpin_cnt;
-
-    if (clear)
+    if (c2b->state.softpin_cnt)
     {
-        softpin_cnt = atomic_read(&c2b->softpin_cnt);
-        softpin_cnt = !softpin_cnt; /* cleanlist accounting */
-        atomic_set(&c2b->softpin_cnt, 0);
-    }
-    else
-    {
-        /* Softpin c2bs can be evicted from the cache.  The window they were
-         * prefetched for is not necessarily removed.  This means that if a c2b
-         * that satisfies a softpin prefetch window exists, there is no
-         * guarantee that it is the 'same' c2b that was originally obtained from
-         * the cache and marked as softpin.  As a result we have this mess. */
-        softpin_cnt = atomic_dec_return(&c2b->softpin_cnt);
-        if (softpin_cnt < 0)
-            atomic_inc(&c2b->softpin_cnt);
-        /* We can't BUG_ON(softpin_cnt < 0) because between the dec and inc
-         * somebody else might have done another dec! */
+        /* The block is currently softpinned but this could change while
+         * we're attempting to either clear or decrement the count.  If
+         * this happens we must detect it and return immediately, without
+         * making any adjustments to the softpin cleanlist. */
+
+        unsigned long old, new;
+        struct c2b_state *p_old, *p_new;
+        p_old = (struct c2b_state *)&old;
+        p_new = (struct c2b_state *)&new;
+
+        do {
+            *p_old = *p_new = c2b->state;
+            if (p_new->softpin_cnt && clear)    /* clear the count */
+                p_new->softpin_cnt = 0;
+            else if (p_new->softpin_cnt)        /* decrement count */
+                p_new->softpin_cnt--;
+            else                                /* zeroed - return */
+                return 0;
+        } while (cmpxchg((unsigned long*)&c2b->state, old, new) != old);
+
+        /* Decrement softpin cleanlist if we decremented the last
+         * softpin hold on a clean block. */
+        if ((p_new->softpin_cnt == 0) && !c2b_dirty(c2b))
+            BUG_ON(atomic_dec_and_test(&castle_cache_cleanlist_softpin_size) < 0);
+        else
+            return p_new->softpin_cnt;
     }
 
-    if (softpin_cnt == 0)
-    {
-        /* We just put the last remaining softpin hold. */
-        BUG_ON(atomic_read(&castle_cache_cleanlist_softpin_size) <= 0);
-
-        if (!c2b_dirty(c2b))
-            atomic_dec(&castle_cache_cleanlist_softpin_size);
-    }
-
-    return softpin_cnt;
+    return 0;
 }
 
 /**
@@ -653,12 +664,12 @@ static void clearsoftpin_c2b(c2_block_t *c2b)
 /**
  * Is c2b softpinned.
  *
- * @return  1   c2b is softpinned
+ * @return >0   c2b is softpinned
  * @return  0   c2b is not softpinned
  */
-static int c2b_softpin(c2_block_t *c2b)
+static inline int c2b_softpin(c2_block_t *c2b)
 {
-    return atomic_read(&c2b->softpin_cnt) > 0;
+    return c2b->state.softpin_cnt;
 }
 
 /**
@@ -1765,13 +1776,13 @@ static void castle_cache_block_init(c2_block_t *c2b,
     /* On debug builds, unpoison the fields. */
     atomic_set(&c2b->count, 0);
     atomic_set(&c2b->lock_cnt, 0);
-    atomic_set(&c2b->softpin_cnt, 0);
+    c2b->state.softpin_cnt = 0;
 #else
     /* On non-debug builds, those fields should all be zero. */
     BUG_ON(c2b->c2ps != NULL);
     BUG_ON(atomic_read(&c2b->count) != 0);
     BUG_ON(atomic_read(&c2b->lock_cnt) != 0);
-    BUG_ON(atomic_read(&c2b->softpin_cnt) != 0);
+    BUG_ON(c2b->state.softpin_cnt != 0);
 #endif
     /* Init the page array (note: this may substitute some c2ps, 
        if they aleady exist in the hash. */
@@ -1779,7 +1790,7 @@ static void castle_cache_block_init(c2_block_t *c2b,
     /* Initialise c2b. */
     atomic_set(&c2b->remaining, 0);
     c2b->cep = cep;
-    c2b->state = INIT_C2B_BITS | (uptodate ? (1 << C2B_uptodate) : 0);
+    c2b->state.bits = INIT_C2B_BITS | (uptodate ? (1 << C2B_uptodate) : 0);
     c2b->nr_pages = nr_pages;
     c2b->c2ps = c2ps;
 
@@ -1887,7 +1898,7 @@ static inline int c2b_busy(c2_block_t *c2b)
 {
     /* c2b_locked() implies (c2b->count > 0) */
     return atomic_read(&c2b->count) |
-          (c2b->state & (1 << C2B_dirty)) |
+          (c2b->state.bits & (1 << C2B_dirty)) |
            c2b_locked(c2b);
 }
 
