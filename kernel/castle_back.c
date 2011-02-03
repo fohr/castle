@@ -172,6 +172,7 @@ struct castle_back_stateful_op
     castle_back_stateful_op_expire_t    expire;
     /* expire is only called if expire_enabled != 0 */
     int                                 expire_enabled;
+    int                                 outstanding_expire;
     /* Set this to non-zero to disable any more ops to be added to op_queue
      * and to cause the stateful_op to be put when curr_op completes. If changed
      * to non-zero when curr_op==NULL will just disable new ops to be added
@@ -465,6 +466,7 @@ castle_back_get_stateful_op(struct castle_back_conn *conn,
     stateful_op->last_used_jiffies = jiffies;
     stateful_op->expire = expire;
     stateful_op->expire_enabled = 0;
+    stateful_op->outstanding_expire = 0;
     stateful_op->cancel_on_op_complete = 0;
     CASTLE_INIT_WORK(&stateful_op->expire_work, castle_back_stateful_op_expire);
     stateful_op->in_use = 1;
@@ -541,12 +543,14 @@ static void castle_back_stateful_op_timeout_check(unsigned long data)
          * when we shouldn't, but it's checked later on.
          */
         if (stateful_ops[i].in_use &&
+                !stateful_ops[i].outstanding_expire &&
                 jiffies - stateful_ops[i].last_used_jiffies > STATEFUL_OP_TIMEOUT &&
                 stateful_ops[i].expire)
         {
             debug("stateful_op index %u, token %u has expired.\n", i, stateful_ops[i].token);
             castle_back_conn_get(conn);
             queue_work(castle_back_wq, &stateful_ops[i].expire_work);
+            stateful_ops[i].outstanding_expire = 1;
         }
     }
 
@@ -600,6 +604,7 @@ static void castle_back_stateful_op_expire(struct work_struct *work)
         spin_unlock(&stateful_op->lock);
 
     castle_back_conn_put(conn);
+    stateful_op->outstanding_expire = 0;
 }
 
 /**
