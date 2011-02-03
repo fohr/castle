@@ -589,6 +589,8 @@ static void castle_back_stateful_op_expire(struct work_struct *work)
 
     spin_lock(&stateful_op->lock);
 
+    stateful_op->outstanding_expire = 0;
+
     /* check it hasn't been used since expire was queued up */
     if (stateful_op->in_use && stateful_op->expire_enabled &&
             jiffies - stateful_op->last_used_jiffies > STATEFUL_OP_TIMEOUT)
@@ -604,7 +606,6 @@ static void castle_back_stateful_op_expire(struct work_struct *work)
         spin_unlock(&stateful_op->lock);
 
     castle_back_conn_put(conn);
-    stateful_op->outstanding_expire = 0;
 }
 
 /**
