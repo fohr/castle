@@ -12,22 +12,24 @@ typedef struct {
 } c_ext_dirtylist_t;
 
 
-c_ext_id_t         castle_extent_alloc         (c_rda_type_t  rda_type,
-                                                da_id_t       da_id,
-                                                c_chk_cnt_t   chk_cnt);
-void               castle_extent_free          (c_ext_id_t    ext_id);
-int                castle_extent_exists        (c_ext_id_t    ext_id);
-void               castle_extent_mark_live     (c_ext_id_t    ext_id);
-int                castle_extent_get           (c_ext_id_t    ext_id);
-int                castle_extent_put           (c_ext_id_t    ext_id);
-uint32_t           castle_extent_kfactor_get   (c_ext_id_t    ext_id);
-c_chk_cnt_t        castle_extent_size_get      (c_ext_id_t    ext_id);
+c_ext_id_t          castle_extent_alloc                     (c_rda_type_t   rda_type,
+                                                             da_id_t        da_id,
+                                                             c_chk_cnt_t    chk_cnt);
+void                castle_extent_free                      (c_ext_id_t     ext_id);
+int                 castle_extent_exists                    (c_ext_id_t     ext_id);
+void                castle_extent_mark_live                 (c_ext_id_t     ext_id);
+int                 castle_extent_get                       (c_ext_id_t     ext_id);
+int                 castle_extent_put                       (c_ext_id_t     ext_id);
+uint32_t            castle_extent_kfactor_get               (c_ext_id_t     ext_id);
+c_chk_cnt_t         castle_extent_size_get                  (c_ext_id_t     ext_id);
+int                 castle_extent_slave_count_get           (c_ext_id_t     ext_id);
+int                 castle_extent_active_slave_count_get    (c_ext_id_t     ext_id);
 /* Sets @chunks to all physical chunks holding the logical chunks from offset */
-uint32_t           castle_extent_map_get       (c_ext_id_t    ext_id,
-                                                c_chk_t       offset,
-                                                c_disk_chk_t *chk_maps);
-c_ext_dirtylist_t *castle_extent_dirtylist_get (c_ext_id_t    ext_id);
-void               castle_extent_dirtylist_put (c_ext_id_t    ext_id);
+uint32_t            castle_extent_map_get                   (c_ext_id_t     ext_id,
+                                                             c_chk_t        offset,
+                                                             c_disk_chk_t  *chk_maps);
+c_ext_dirtylist_t  *castle_extent_dirtylist_get             (c_ext_id_t     ext_id);
+void                castle_extent_dirtylist_put             (c_ext_id_t     ext_id);
 
 
 struct castle_extents_superblock* castle_extents_super_block_get (void);

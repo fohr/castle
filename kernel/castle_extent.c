@@ -893,6 +893,9 @@ uint32_t castle_extent_kfactor_get(c_ext_id_t ext_id)
     return ret;
 }
 
+/**
+ * Return the size of extent ext_id in chunks.
+ */
 c_chk_cnt_t castle_extent_size_get(c_ext_id_t ext_id)
 {
     c_ext_t *ext = castle_extents_hash_get(ext_id);
@@ -900,6 +903,53 @@ c_chk_cnt_t castle_extent_size_get(c_ext_id_t ext_id)
     if (ext)
         return ext->size;
     return 0;
+}
+
+/**
+ * Return the number of (optionally active) slaves for ext_id.
+ *
+ * @param ext_id        Extent ID to return slave count for
+ * @param only_active   Return only active slaves if set
+ *
+ * @FIXME this function is incomplete and needs to be updated to return
+ * the actual number of active slaves and not a constant
+ */
+static int _castle_extent_slave_count_get(c_ext_id_t ext_id, int only_active)
+{
+    c_ext_t *ext = castle_extents_hash_get(ext_id);
+
+    if (ext)
+    {
+        /* @FIXME currently we return the total number of slaves, this needs to
+         * be updated to return the number of slaves for a given extent. */
+        struct list_head *lh;
+        int slaves = 0;
+
+        list_for_each(lh, &castle_slaves.slaves)
+        {
+            slaves++;
+        }
+
+        return slaves;
+    }
+    else
+        return 0;
+}
+
+/**
+ * Return the total number of slaves for ext_id.
+ */
+int castle_extent_slave_count_get(c_ext_id_t ext_id)
+{
+    return _castle_extent_slave_count_get(ext_id, 0);
+}
+
+/**
+ * Return the number of active slaves for ext_id.
+ */
+int castle_extent_active_slave_count_get(c_ext_id_t ext_id)
+{
+    return _castle_extent_slave_count_get(ext_id, 1);
 }
 
 /**

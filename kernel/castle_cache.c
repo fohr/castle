@@ -85,6 +85,7 @@ C2B_TAS_FNS(flushing, flushing)
 C2B_FNS(transient, transient)
 C2B_TAS_FNS(transient, transient)
 C2B_FNS(prefetch, prefetch)
+C2B_TAS_FNS(prefetch, prefetch)
 C2B_FNS(prefetched, prefetched)
 C2B_FNS(windowstart, windowstart)
 
@@ -265,6 +266,12 @@ static atomic_t                castle_cache_block_victims;          /**< #clean 
 static atomic_t                castle_cache_softpin_block_victims;  /**< #softpin blocks evicted  */
 static atomic_t                castle_cache_dirty_pages;
 static atomic_t                castle_cache_clean_pages;
+static atomic_t                c2_pref_active_window_size;  /**< Number of chunk-sized c2bs that are
+                                                    marked as C2B_prefetch and covered by a prefetch
+                                                    window currently in the tree.                 */
+static int                     c2_pref_total_window_size;   /**< Sum of all windows in the tree in
+                                                    chunks.  Overlapping blocks are counted multiple
+                                                    times.  Protected by c2_prefetch_lock.        */
 static int                     castle_cache_allow_hardpinning;      /**< Is hardpinning allowed?  */
 
 static         DEFINE_SPINLOCK(castle_cache_freelist_lock); /**< Lock for the two freelists below */
@@ -1291,8 +1298,12 @@ int submit_c2b(int rw, c2_block_t *c2b)
 }
 
 /**
- * Unplug all slave queues. Useful if you know that a sequence of submit_c2b()s
- * has been completed.
+ * Unplug all slave queues.
+ *
+ * Useful if you know that a sequence of submit_c2b()s has been completed.
+ *
+ * @FIXME we should be more intelligent about this and unplug just those slaves
+ * that need to be.
  */
 static void castle_slaves_unplug(void)
 {
@@ -1863,6 +1874,9 @@ static void castle_cache_block_free(c2_block_t *c2b)
     }
 #endif
 
+    /* Maintain cache statistics for number of active prefetch chunks. */
+    if (c2b_prefetch(c2b))
+        atomic_dec(&c2_pref_active_window_size);
     /* Call deallocator function for all prefetch window start c2bs. */
     if (c2b_windowstart(c2b))
         c2_pref_c2b_destroy(c2b);
@@ -2285,7 +2299,7 @@ typedef struct castle_cache_prefetch_window {
 } c2_pref_window_t;
 
 static DEFINE_SPINLOCK(c2_prefetch_lock);
-static struct rb_root c2p_rb_root = RB_ROOT; 
+static struct rb_root c2p_rb_root = RB_ROOT;    /**< Window tree.  Protected by c2_prefetch_lock. */
     
 static USED char* c2_pref_window_to_str(c2_pref_window_t *window)
 {
@@ -2316,8 +2330,6 @@ static USED char* c2_pref_window_to_str(c2_pref_window_t *window)
     return win_str;
 } 
 
-
-
 /**
  * Get a c2b for use by the prefetcher setting necessary bits.
  *
@@ -2334,7 +2346,8 @@ static c2_block_t* c2_pref_block_chunk_get(c_ext_pos_t cep, c2_pref_window_t *wi
     if ((c2b = castle_cache_block_get(cep, BLKS_PER_CHK)))
     {
         /* Set c2b status bits. */
-        set_c2b_prefetch(c2b);
+        if (!test_set_c2b_prefetch(c2b))
+            atomic_inc(&c2_pref_active_window_size);
         if (window->state & PREF_WINDOW_SOFTPIN)
             softpin_c2b(c2b);
     }
@@ -2350,8 +2363,9 @@ static c2_block_t* c2_pref_block_chunk_get(c_ext_pos_t cep, c2_pref_window_t *wi
  * Put a c2b used by the prefetcher, unsetting necessary bits.
  *
  * - Lookup c2b, if one exists:
- * - Decrement prefetch count
- * - Decrement softpin count if necessary
+ * - Clear prefetch bit
+ *   - Maintain prefetch_chunks stats if the bit was previously set
+ * - Handle softpin blocks
  * - Position for eviction in LRU if prefetch & softpin counts reach 0
  */
 static void c2_pref_block_chunk_put(c_ext_pos_t cep, c2_pref_window_t *window, int debug)
@@ -2362,8 +2376,11 @@ static void c2_pref_block_chunk_put(c_ext_pos_t cep, c2_pref_window_t *window, i
     if ((c2b = castle_cache_block_hash_get(cep, BLKS_PER_CHK)))
     {
         /* Clear c2b status bits. */
-        clear_c2b_prefetch(c2b);
-        set_c2b_prefetched(c2b);
+        if (test_clear_c2b_prefetch(c2b))
+        {
+            atomic_dec(&c2_pref_active_window_size);
+            set_c2b_prefetched(c2b);
+        }
         if (window->state & PREF_WINDOW_SOFTPIN)
             demote = demote || unsoftpin_c2b(c2b);
         
@@ -2617,9 +2634,16 @@ static void c2_pref_window_remove(c2_pref_window_t *window)
 
     pref_debug(0, "Window in the tree, removing.\n");
 
+    /* We must hold the prefetch lock while manipulating the tree. */
     spin_lock(&c2_prefetch_lock);
+
     rb_erase(&window->rb_node, &c2p_rb_root);
     window->state &= ~PREF_WINDOW_INSERTED;
+
+    /* Update count of pages covered by windows in the tree. */
+    c2_pref_total_window_size -= ((window->end_off - window->start_off) >> PAGE_SHIFT) / BLKS_PER_CHK;
+
+    /* Release the lock. */
     spin_unlock(&c2_prefetch_lock);
 }
 
@@ -2678,6 +2702,10 @@ static int c2_pref_window_insert(c2_pref_window_t *window)
     window->state |= PREF_WINDOW_INSERTED;
     rb_link_node(&window->rb_node, parent, p);
     rb_insert_color(&window->rb_node, &c2p_rb_root);
+
+    /* Update count of pages covered by windows in the tree.  This window might
+     * overlap an existing window but we don't account for that (@FIXME?). */
+    c2_pref_total_window_size += ((window->end_off - window->start_off) >> PAGE_SHIFT) / BLKS_PER_CHK;
 
     /* Release the lock. */
     spin_unlock(&c2_prefetch_lock);
@@ -3757,6 +3785,8 @@ static void castle_cache_hashes_fini(void)
     /* Ensure cleanlist accounting is in order. */
     BUG_ON(atomic_read(&castle_cache_cleanlist_size) != 0);
     BUG_ON(atomic_read(&castle_cache_cleanlist_softpin_size) != 0);
+    BUG_ON(atomic_read(&c2_pref_active_window_size) != 0);
+    BUG_ON(c2_pref_total_window_size != 0);
 
 #ifdef CASTLE_DEBUG
     /* All cache pages should have been removed from the hash by now (there are no c2bs left) */
@@ -4588,6 +4618,8 @@ int castle_cache_init(void)
     atomic_set(&castle_cache_cleanlist_softpin_size, 0);
     atomic_set(&castle_cache_block_victims, 0);
     atomic_set(&castle_cache_softpin_block_victims, 0);
+    atomic_set(&c2_pref_active_window_size, 0);
+    c2_pref_total_window_size = 0;
     castle_cache_allow_hardpinning = castle_cache_size > CASTLE_CACHE_MIN_HARDPIN_SIZE << (20 - PAGE_SHIFT);
     if (!castle_cache_allow_hardpinning)
         printk("Cache size too small, hardpinning disabled.  Minimum %d MB required.\n",

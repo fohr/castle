@@ -73,8 +73,8 @@ typedef uint32_t block_t;
 /* WARNING: be careful about changing that. It's used to define various on-disk datastructures. */
 #define MAX_NR_SLAVES 64
 
-#define C_CHK_SHIFT                    (20) 
-#define C_CHK_SIZE                     (1 << C_CHK_SHIFT)
+#define C_CHK_SHIFT                    (20)
+#define C_CHK_SIZE                     (1 << C_CHK_SHIFT)       /**< Bytes per chunk.             */
 
 #define CHUNK_OFFSET(offset)  ((offset) & (C_CHK_SIZE - 1))
 #define BLOCK_OFFSET(offset)  ((offset) & (C_BLK_SIZE - 1))
@@ -82,7 +82,7 @@ typedef uint32_t block_t;
 #define CHUNK(offset)         ((offset) >> C_CHK_SHIFT)
 #define BLOCK(offset)         ((offset) >> C_BLK_SHIFT)
 #define BLK_IN_CHK(offset)    (BLOCK(CHUNK_OFFSET(offset)))
-#define BLKS_PER_CHK          (C_CHK_SIZE / C_BLK_SIZE)
+#define BLKS_PER_CHK          (C_CHK_SIZE / C_BLK_SIZE)         /**< Blocks(/pages) per chunk.    */
 #define MASK_BLK_OFFSET(offset) (((offset) >> C_BLK_SHIFT) << C_BLK_SHIFT)
 #define MASK_CHK_OFFSET(offset) (((offset) >> C_CHK_SHIFT) << C_CHK_SHIFT)
 
