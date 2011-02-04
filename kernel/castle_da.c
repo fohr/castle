@@ -1698,25 +1698,32 @@ static void castle_da_iterator_create(struct castle_da_merge *merge,
                                       struct castle_component_tree *tree,
                                       void **iter_p)
 {
-    if(tree->dynamic)
+    if (tree->dynamic)
     {
         c_modlist_iter_t *iter = castle_malloc(sizeof(c_modlist_iter_t), GFP_KERNEL);
-        if(!iter)
+        if (!iter)
             return;
         iter->tree = tree;
         iter->merge = merge; 
+        if (tree->level == 1)
+            castle_trace_da_merge(TRACE_START, TRACE_DA_MERGE_MODLIST_ITER_INIT_ID,
+                    merge->da->id, tree->level, 0, 0);
         castle_ct_modlist_iter_init(iter);
-        if(iter->err)
+        if (tree->level == 1)
+            castle_trace_da_merge(TRACE_END, TRACE_DA_MERGE_MODLIST_ITER_INIT_ID,
+                    merge->da->id, tree->level, 0, 0);
+        if (iter->err)
         {
             castle_da_iterator_destroy(tree, iter);
             return;
         }
         /* Success */
         *iter_p = iter; 
-    } else
+    }
+    else
     {
         c_immut_iter_t *iter = castle_malloc(sizeof(c_immut_iter_t), GFP_KERNEL);
-        if(!iter)
+        if (!iter)
             return;
         iter->tree = tree;
         castle_ct_immut_iter_init(iter, NULL, NULL);

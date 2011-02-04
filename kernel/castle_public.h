@@ -3,6 +3,9 @@
 
 #include <linux/types.h>
 #include <asm/ioctl.h>
+#ifndef __KERNEL__
+#include <sys/time.h>
+#endif
 
 #define CASTLE_PROTOCOL_VERSION 5
 
@@ -83,6 +86,7 @@ typedef enum {
 typedef enum {
     TRACE_DA_INSERTS_DISABLED_ID,                   /**< Whether inserts are enabled or not.    */
     TRACE_DA_MERGE_ID,                              /**< Merge                                  */
+    TRACE_DA_MERGE_MODLIST_ITER_INIT_ID,            /**< Modlist iter init                      */
     TRACE_DA_MERGE_UNIT_ID,                         /**< Merge unit                             */
     TRACE_DA_MERGE_UNIT_C2B_SYNC_WAIT_BT_NS_ID,
     TRACE_DA_MERGE_UNIT_C2B_SYNC_WAIT_DATA_NS_ID,
