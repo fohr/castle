@@ -1325,6 +1325,7 @@ struct castle_double_array {
     struct castle_merge_token   merge_tokens_array[MAX_DA_LEVEL];
     struct list_head            merge_tokens; 
     struct list_head            hash_list;
+    int                         driver_merge;
     atomic_t                    ref_cnt;
     uint32_t                    attachment_cnt;
     /* Queue of write IOs queued up on this DA. */

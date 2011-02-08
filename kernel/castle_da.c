@@ -58,6 +58,11 @@ static struct castle_mstore    *castle_lo_store      = NULL;
 static tree_seq_t               castle_next_tree_seq = 1; 
 static int                      castle_da_exiting    = 0;
 
+static int                      castle_dynamic_driver_merge = 1; 
+
+module_param(castle_dynamic_driver_merge, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
+MODULE_PARM_DESC(castle_dynamic_driver_merge, "Dynamic driver merge");
+
 
 /**********************************************************************************************/
 /* Notes about the locking on doubling arrays & component trees.
@@ -2616,7 +2621,7 @@ static inline int castle_da_merge_wait_event(struct castle_double_array *da, int
     }
 
     /* Otherwise, there are two cases. Either this merge is a driver merge, or not. */
-    if((level == 1) && (da->levels[level-1].nr_trees < 2))
+    if((level == da->driver_merge) && (da->levels[level-1].nr_trees < 2))
     {
         debug_merges("This is a driver merge.\n");
         /* Return any tokens that we may have. Should that actually every happen?. */
@@ -2728,6 +2733,32 @@ static inline void castle_da_merge_intermediate_unit_complete(struct castle_doub
     castle_da_unlock(da);
 }
 
+static inline void castle_da_driver_merge_reset(struct castle_double_array *da)
+{
+    int level;
+
+    /* Function should be called with DA locked. */
+    BUG_ON(!castle_da_is_locked(da));
+
+    if (!castle_dynamic_driver_merge)
+    {
+        da->driver_merge = 1;
+        return;
+    }
+
+    /* Set the lowest level with two fullygrown trees as driver. */
+    for (level=1; level<MAX_DA_LEVEL; level++)
+    {
+        if (da->levels[level].nr_trees >= 2)
+        {
+            if (level != da->driver_merge)
+                printk("Changing driver merge %d -> %d\n", da->driver_merge, level);
+            da->driver_merge = level;
+            break;
+        }
+    }
+}
+
 static inline tree_seq_t castle_da_merge_last_unit_complete(struct castle_double_array *da, 
                                                             int level, 
                                                             struct castle_da_merge *merge)
@@ -2773,6 +2804,7 @@ static inline tree_seq_t castle_da_merge_last_unit_complete(struct castle_double
             castle_da_merge_token_return(da, level, token);
         }
     }
+    castle_da_driver_merge_reset(da);
     /* Release the lock. */
     castle_da_unlock(merge->da);
 
@@ -3162,6 +3194,8 @@ static struct castle_double_array* castle_da_alloc(da_id_t da_id)
     da->ios_budget      = 0;
     da->ios_rate        = 0;
     da->last_key        = NULL;
+    /* For existing double arrays driver merge has to be reset after loading it. */
+    da->driver_merge    = -1;
     CASTLE_INIT_WORK(&da->queue_restart, castle_da_queue_restart);
     atomic_set(&da->epoch_ios, 0);
     atomic_set(&da->merge_budget, 0);
@@ -3707,11 +3741,23 @@ static int castle_da_t0_create(struct castle_double_array *da, void *unused)
     return 0;
 }
 
+static int __castle_da_driver_merge_reset(struct castle_double_array *da, void *unused)
+{
+    castle_da_lock(da);
+    castle_da_driver_merge_reset(da);
+    castle_da_unlock(da);
+
+    return 0;
+}
+
 int castle_double_array_start(void)
 {
     /* Create T0, if it doesn't exist. This gets called only at the start of
      * module. It is okay to be called without lock. */
     __castle_da_hash_iterate(castle_da_t0_create, NULL);
+
+    /* Reset driver merge. */
+    castle_da_hash_iterate(__castle_da_driver_merge_reset, NULL);
 
     /* Check if any merges need to be done. */
     castle_da_hash_iterate(castle_da_merge_restart, NULL); 
@@ -3830,6 +3876,7 @@ int castle_double_array_read(void)
     /* Sort all the tree lists by the sequence number */
     castle_da_hash_iterate(castle_da_trees_sort, NULL); 
     castle_da_hash_iterate(castle_da_merge_start, NULL); 
+
     goto out;
 
 error_out:
@@ -3959,6 +4006,9 @@ static int castle_da_rwct_make(struct castle_double_array *da, int in_tran)
         castle_component_tree_del(da, old_ct);
         old_ct->level = 1;
         castle_component_tree_add(da, old_ct, 0 /* not in init */);
+        /* Recompute driver merge. */
+        castle_da_driver_merge_reset(da);
+
     }
     /* Thread CT onto level 0 list */
     castle_component_tree_add(da, ct, 0 /* not in init */);
