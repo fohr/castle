@@ -54,10 +54,6 @@ enum c2b_state_bits {
     C2B_windowstart,        /*<< Block is the first chunk of an active prefetch window.           */
     C2B_bio_error,          /*<< Block had at least one bio I/O error.                            */
     C2B_no_resubmit,        /*<< Block must not be resubmitted after I/O error.                   */
-#define RESUBMIT_BIOERROR_DEBUG
-#ifdef RESUBMIT_BIOERROR_DEBUG
-    C2B_bioerror_debug,     /*<< c2b can be resubmitted after I/O error.                          */
-#endif // RESUBMIT_BIOERROR_DEBUG
 };
 
 #define INIT_C2B_BITS (0)
@@ -98,9 +94,6 @@ C2B_FNS(prefetched, prefetched)
 C2B_FNS(windowstart, windowstart)
 C2B_FNS(bio_error, bio_error)
 C2B_FNS(no_resubmit, no_resubmit)
-#ifdef RESUBMIT_BIOERROR_DEBUG
-C2B_FNS(bioerror_debug, bioerror_debug)
-#endif // RESUBMIT_BIOERROR_DEBUG
 
 /* c2p encapsulates multiple memory pages (in order to reduce overheads).
    NOTE: In order for this to work, c2bs must necessarily be allocated in
@@ -935,11 +928,6 @@ static void c2b_remaining_io_sub(int rw, int nr_pages, c2_block_t *c2b)
     c2b->end_io(c2b);
 }
 
-#ifdef RESUBMIT_BIOERROR_DEBUG
-unsigned long resubmit_bioerror_trigger = 0;
-uint32_t resubmit_bioerror_uuid = 0;
-#endif // RESUBMIT_BIOERROR_DEBUG
-
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,18)
 static int c2b_multi_io_end(struct bio *bio, unsigned int completed, int err)
 #else
@@ -978,23 +966,11 @@ static void c2b_multi_io_end(struct bio *bio, int err)
 #endif
     BUG_ON(atomic_read(&c2b->remaining) == 0);
 
-#ifdef RESUBMIT_BIOERROR_DEBUG
-    if ((!test_bit(BIO_UPTODATE, &bio->bi_flags)) || c2b_bioerror_debug(c2b))
-#else
     if (!test_bit(BIO_UPTODATE, &bio->bi_flags))
-#endif // RESUBMIT_BIOERROR_DEBUG
     {
-#ifdef RESUBMIT_BIOERROR_DEBUG
-        if (c2b_bioerror_debug(c2b))
-            printk("Debug was set on c2b %p\n", c2b);
-        clear_c2b_bioerror_debug(c2b);
-#endif // RESUBMIT_BIOERROR_DEBUG
         /* I/O has failed for this bio */
         slave = castle_slave_find_by_bdev(bio_info->bdev);
         BUG_ON(!slave);
-#ifdef RESUBMIT_BIOERROR_DEBUG
-        printk("I/O has failed for disk uuid %x\n", slave->uuid);
-#endif // RESUBMIT_BIOERROR_DEBUG
 
         /*
          * If this is the first time a bio for this slave has failed, mark the slave as oos
@@ -1008,10 +984,6 @@ static void c2b_multi_io_end(struct bio *bio, int err)
             /* TBD kick rebuild thread */
         }
 
-#ifdef RESUBMIT_BIOERROR_DEBUG
-        // From now on we should not be getting any io to this slave
-        resubmit_bioerror_uuid = slave->uuid;
-#endif // RESUBMIT_BIOERROR_DEBUG
         /* We may need to re-submit I/O for the c2b. Mark this c2b as 'bio_error' */
         set_c2b_bio_error(((struct bio_info *)bio->bi_private)->c2b);
     }
@@ -1077,10 +1049,6 @@ void submit_c2b_io(int           rw,
   
     /* Work out the slave structure. */ 
     cs = castle_slave_find_by_uuid(disk_chk.slave_id);
-#ifdef RESUBMIT_BIOERROR_DEBUG
-    if (cs->uuid == resubmit_bioerror_uuid)
-        printk("BAD: got an I/O for slave %x\n", cs->uuid);
-#endif // RESUBMIT_BIOERROR_DEBUG
     debug("slave_id=%d, cs=%p\n", disk_chk.slave_id, cs);
     /* Work out the sector on the slave. */
     sector = ((sector_t)disk_chk.offset << (C_CHK_SHIFT - 9)) +
@@ -1120,15 +1088,6 @@ void submit_c2b_io(int           rw,
         bio->bi_end_io  = c2b_multi_io_end;
         bio->bi_private = bio_info;
 
-#ifdef RESUBMIT_BIOERROR_DEBUG
-        // Simulate an error every RESUBMIT_BIOERROR_INTERVAL'th c2b that allows resubmission
-#define RESUBMIT_BIOERROR_INTERVAL 500
-        if (resubmit_bioerror_trigger++ == RESUBMIT_BIOERROR_INTERVAL)
-        {
-            printk("Setting debug flag on c2b %p\n", c2b);
-            set_c2b_bioerror_debug(c2b);
-        }
-#endif // RESUBMIT_BIOERROR_DEBUG
         /* Hand off to Linux block layer */
         submit_bio(rw, bio);
 
