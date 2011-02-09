@@ -1006,6 +1006,7 @@ struct castle_slave {
                                              needed here, because we cannot cache
                                              the superblock without being able to
                                              _find_by_uuid */
+    unsigned long                   flags;
     int                             new_dev;
     struct kobject                  kobj;
     struct list_head                list;
@@ -1024,6 +1025,9 @@ struct castle_slave {
     c_chk_cnt_t                     disk_size; /* in chunks; max_chk_num + 1 */
     atomic_t                        free_chk_cnt;
 };
+/* castle_slave flags bits */
+#define CASTLE_SLAVE_OOS_BIT        0 /* Slave is out-of-service */
+#define CASTLE_SLAVE_EVACUATE_BIT   1 /* Slave has been evacuated */
 
 struct castle_slaves {
     struct kobject   kobj;
@@ -1092,6 +1096,7 @@ void                  castle_slave_access          (uint32_t uuid);
                                                    
 struct castle_slave*  castle_slave_find_by_id      (uint32_t id);
 struct castle_slave*  castle_slave_find_by_uuid    (uint32_t uuid);
+struct castle_slave*  castle_slave_find_by_bdev    (struct block_device *bdev);
 struct castle_slave*  castle_slave_find_by_block   (c_ext_pos_t cep);
 
 struct castle_slave_superblock* 

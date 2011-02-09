@@ -44,5 +44,4 @@ int  castle_extents_writeback    (void);
 int  castle_extents_restore      (void);
 int  castle_extents_init         (void);
 void castle_extents_fini         (void);
-
 #endif /* __CASTLE_EXTENT_H__ */

@@ -26,9 +26,11 @@
 #include "castle_back.h"
 #include "castle_extent.h"
 #include "castle_freespace.h"
+#include "castle_rebuild.h"
 
-struct castle                castle;
-struct castle_slaves         castle_slaves;
+struct castle               castle;
+struct castle_slaves        castle_slaves;
+
 struct castle_attachments    castle_attachments;
 struct castle_component_tree castle_global_tree = {.seq             = GLOBAL_TREE,
                                                    .ref_count       = {1},
@@ -990,6 +992,21 @@ struct castle_slave* castle_slave_find_by_uuid(uint32_t uuid)
     {
         slave = list_entry(lh, struct castle_slave, list);
         if(slave->uuid == uuid)
+            return slave;
+    }
+
+    return NULL;
+}
+
+struct castle_slave* castle_slave_find_by_bdev(struct block_device *bdev)
+{
+    struct list_head *lh;
+    struct castle_slave *slave;
+
+    list_for_each(lh, &castle_slaves.slaves)
+    {
+        slave = list_entry(lh, struct castle_slave, list);
+        if(slave->bdev == bdev)
             return slave;
     }
 
@@ -1975,39 +1992,42 @@ static int __init castle_init(void)
     if((ret = castle_wqs_init()))          goto err_out4;
     if((ret = castle_slaves_init()))       goto err_out5;
     if((ret = castle_extents_init()))      goto err_out6;
-    if((ret = castle_cache_init()))        goto err_out7;
-    if((ret = castle_versions_init()))     goto err_out8;
-    if((ret = castle_btree_init()))        goto err_out9;
-    if((ret = castle_double_array_init())) goto err_out10;
-    if((ret = castle_attachments_init()))  goto err_out11;
-    if((ret = castle_checkpoint_init()))   goto err_out12;
-    if((ret = castle_control_init()))      goto err_out13;
-    if((ret = castle_sysfs_init()))        goto err_out14;
-    if((ret = castle_back_init()))         goto err_out15;
+    if((ret = castle_resubmit_init()))     goto err_out7;
+    if((ret = castle_cache_init()))        goto err_out8;
+    if((ret = castle_versions_init()))     goto err_out9;
+    if((ret = castle_btree_init()))        goto err_out10;
+    if((ret = castle_double_array_init())) goto err_out11;
+    if((ret = castle_attachments_init()))  goto err_out12;
+    if((ret = castle_checkpoint_init()))   goto err_out13;
+    if((ret = castle_control_init()))      goto err_out14;
+    if((ret = castle_sysfs_init()))        goto err_out15;
+    if((ret = castle_back_init()))         goto err_out16;
 
     printk("Castle FS init done.\n");
 
     return 0;
 
     castle_back_fini(); /* Unreachable */
-err_out15:
+err_out16:
     castle_sysfs_fini();
-err_out14:
+err_out15:
     castle_control_fini();
-err_out13:
+err_out14:
     castle_checkpoint_fini();
-err_out12:
+err_out13:
     castle_attachments_free();
-err_out11:
+err_out12:
     castle_double_array_merges_fini();
     castle_double_array_fini();
-err_out10:
+err_out11:
     castle_btree_free();
-err_out9:
+err_out10:
     castle_versions_fini();
-err_out8:
+err_out9:
     BUG_ON(!list_empty(&castle_slaves.slaves));
     castle_cache_fini();
+err_out8:
+    castle_resubmit_fini();
 err_out7:
     castle_extents_fini();
 err_out6:
@@ -2047,6 +2067,8 @@ static void __exit castle_exit(void)
     castle_versions_fini();
     /* Flush the cache, free the slaves. */ 
     castle_cache_fini();
+    /* Make sure all resubmitted I/O is handled before exit */
+    castle_resubmit_fini();
     castle_extents_fini();
     castle_slaves_free();
     castle_wqs_fini();

@@ -149,6 +149,7 @@ typedef uint32_t version_t;
 #define CASTLE_CTRL_TRACE_START              25
 #define CASTLE_CTRL_TRACE_STOP               26
 #define CASTLE_CTRL_TRACE_TEARDOWN           27
+#define CASTLE_CTRL_SLAVE_EVACUATE           28
 
 typedef struct castle_control_cmd_claim {
     uint32_t     dev;          /* IN  */
@@ -265,6 +266,11 @@ typedef struct castle_control_cmd_trace_teardown {
     int         ret;           /* OUT */
 } cctrl_cmd_trace_teardown_t;
 
+typedef struct castle_control_slave_evacuate {
+    slave_uuid_t id;           /* IN  */
+    int          ret;          /* OUT */
+} PACKED cctrl_cmd_slave_evacuate_t;
+
 typedef struct castle_control_ioctl {
     uint16_t cmd;
     union {
@@ -296,6 +302,8 @@ typedef struct castle_control_ioctl {
         cctrl_cmd_trace_start_t         trace_start;
         cctrl_cmd_trace_stop_t          trace_stop;
         cctrl_cmd_trace_teardown_t      trace_teardown;
+
+        cctrl_cmd_slave_evacuate_t      slave_evacuate;
 
     };
 } cctrl_ioctl_t;
@@ -352,6 +360,8 @@ enum {
         _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_TRACE_STOP, cctrl_ioctl_t),
     CASTLE_CTRL_TRACE_TEARDOWN_IOCTL =
         _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_TRACE_TEARDOWN, cctrl_ioctl_t),
+    CASTLE_CTRL_SLAVE_EVACUATE_IOCTL =
+        _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_SLAVE_EVACUATE, cctrl_ioctl_t),
 };
 
 /*

@@ -23,6 +23,7 @@
 #include "castle_ctrl.h"
 #include "castle_versions.h"
 #include "castle_time.h"
+#include "castle_rebuild.h"
 
 #ifndef DEBUG
 #define debug(_f, ...)           ((void)0)
@@ -39,6 +40,7 @@
 #define pref_debug(_d, _f, _a...) if (_d) printk("%s:%.4d %s: " _f, FLE, __LINE__ , __func__, ##_a);
 #endif
 
+
 /**********************************************************************************************
  * Cache descriptor structures (c2b & c2p), and related accessor functions. 
  */
@@ -50,6 +52,12 @@ enum c2b_state_bits {
     C2B_prefetch,           /*<< Block is part of an active prefetch window.                      */
     C2B_prefetched,         /*<< Block was prefetched.                                            */
     C2B_windowstart,        /*<< Block is the first chunk of an active prefetch window.           */
+    C2B_bio_error,          /*<< Block had at least one bio I/O error.                            */
+    C2B_no_resubmit,        /*<< Block must not be resubmitted after I/O error.                   */
+#define RESUBMIT_BIOERROR_DEBUG
+#ifdef RESUBMIT_BIOERROR_DEBUG
+    C2B_bioerror_debug,     /*<< c2b can be resubmitted after I/O error.                          */
+#endif // RESUBMIT_BIOERROR_DEBUG
 };
 
 #define INIT_C2B_BITS (0)
@@ -88,6 +96,11 @@ C2B_FNS(prefetch, prefetch)
 C2B_TAS_FNS(prefetch, prefetch)
 C2B_FNS(prefetched, prefetched)
 C2B_FNS(windowstart, windowstart)
+C2B_FNS(bio_error, bio_error)
+C2B_FNS(no_resubmit, no_resubmit)
+#ifdef RESUBMIT_BIOERROR_DEBUG
+C2B_FNS(bioerror_debug, bioerror_debug)
+#endif // RESUBMIT_BIOERROR_DEBUG
 
 /* c2p encapsulates multiple memory pages (in order to reduce overheads).
    NOTE: In order for this to work, c2bs must necessarily be allocated in
@@ -882,25 +895,50 @@ void update_c2b(c2_block_t *c2b)
 }
 
 struct bio_info {
-    int         rw;
-    struct bio *bio;
-    c2_block_t *c2b;
-    uint32_t    nr_pages;
+    int                 rw;
+    struct bio          *bio;
+    c2_block_t          *c2b;
+    uint32_t            nr_pages;
+    struct block_device *bdev;
 };
 
 static void c2b_remaining_io_sub(int rw, int nr_pages, c2_block_t *c2b)
 {
-    if (atomic_sub_and_test(nr_pages, &c2b->remaining))
+    if(!atomic_sub_and_test(nr_pages, &c2b->remaining))
+        return;
+
+    debug("Completed io on c2b"cep_fmt_str_nl, cep2str(c2b->cep));
+
+    /* At least one of the bios for this c2b had an error. Handle that first. */
+    if(c2b_bio_error(c2b))     
     {
-        debug("Completed io on c2b"cep_fmt_str_nl, cep2str(c2b->cep));
-        /* On reads, update the c2b */
-        if(rw == READ)
-            update_c2b(c2b);
+        clear_c2b_bio_error(c2b);
+        if (!c2b_no_resubmit(c2b)) /* This c2b can be resubmitted */
+            castle_resubmit_c2b(rw, c2b);
         else
-            clean_c2b(c2b);
-        c2b->end_io(c2b);
+        {
+            /*
+             * Caller has set no_resubmit on c2b and is responsible for checking the c2b for
+             * I/O error via !uptodate or dirty flags.
+             */
+            debug("c2b %p had bio error(s) - returning error\n", c2b);
+            c2b->end_io(c2b);
+        }
+        return;
     }
+
+    /* All bios succeeded for this c2b. On reads, update the c2b, on writes clean it. */
+    if(rw == READ)
+        update_c2b(c2b);
+    else
+        clean_c2b(c2b);
+    c2b->end_io(c2b);
 }
+
+#ifdef RESUBMIT_BIOERROR_DEBUG
+unsigned long resubmit_bioerror_trigger = 0;
+uint32_t resubmit_bioerror_uuid = 0;
+#endif // RESUBMIT_BIOERROR_DEBUG
 
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,18)
 static int c2b_multi_io_end(struct bio *bio, unsigned int completed, int err)
@@ -908,8 +946,9 @@ static int c2b_multi_io_end(struct bio *bio, unsigned int completed, int err)
 static void c2b_multi_io_end(struct bio *bio, int err)
 #endif
 {
-    struct bio_info *bio_info = bio->bi_private;
-    c2_block_t *c2b = bio_info->c2b;
+    struct bio_info     *bio_info = bio->bi_private;
+    struct castle_slave *slave;
+    c2_block_t          *c2b = bio_info->c2b;
 #ifdef CASTLE_DEBUG    
     unsigned long flags;
     
@@ -938,9 +977,45 @@ static void c2b_multi_io_end(struct bio *bio, int err)
     BUG_ON(err && test_bit(BIO_UPTODATE, &bio->bi_flags));
 #endif
     BUG_ON(atomic_read(&c2b->remaining) == 0);
-    /* We cannot handle errors proprely at the moment in the clients. BUG_ON here. */
-    BUG_ON(err);
-    BUG_ON(!test_bit(BIO_UPTODATE, &bio->bi_flags));
+
+#ifdef RESUBMIT_BIOERROR_DEBUG
+    if ((!test_bit(BIO_UPTODATE, &bio->bi_flags)) || c2b_bioerror_debug(c2b))
+#else
+    if (!test_bit(BIO_UPTODATE, &bio->bi_flags))
+#endif // RESUBMIT_BIOERROR_DEBUG
+    {
+#ifdef RESUBMIT_BIOERROR_DEBUG
+        if (c2b_bioerror_debug(c2b))
+            printk("Debug was set on c2b %p\n", c2b);
+        clear_c2b_bioerror_debug(c2b);
+#endif // RESUBMIT_BIOERROR_DEBUG
+        /* I/O has failed for this bio */
+        slave = castle_slave_find_by_bdev(bio_info->bdev);
+        BUG_ON(!slave);
+#ifdef RESUBMIT_BIOERROR_DEBUG
+        printk("I/O has failed for disk uuid %x\n", slave->uuid);
+#endif // RESUBMIT_BIOERROR_DEBUG
+
+        /*
+         * If this is the first time a bio for this slave has failed, mark the slave as oos
+         * and trigger a rebuild.
+         */
+        if (!test_and_set_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags))
+        {
+            char b[BDEVNAME_SIZE];
+            printk("Disabling slave 0x%x (%s), due to IO errors. Starting rebuild.\n", 
+                    slave->uuid, bdevname(bio_info->bdev, b));
+            /* TBD kick rebuild thread */
+        }
+
+#ifdef RESUBMIT_BIOERROR_DEBUG
+        // From now on we should not be getting any io to this slave
+        resubmit_bioerror_uuid = slave->uuid;
+#endif // RESUBMIT_BIOERROR_DEBUG
+        /* We may need to re-submit I/O for the c2b. Mark this c2b as 'bio_error' */
+        set_c2b_bio_error(((struct bio_info *)bio->bi_private)->c2b);
+    }
+        
     /* Record how many pages we've completed, potentially ending the c2b io. */ 
     c2b_remaining_io_sub(bio_info->rw, bio_info->nr_pages, c2b);
 #ifdef CASTLE_DEBUG    
@@ -977,6 +1052,10 @@ void submit_c2b_io(int           rw,
     int i, j, batch;
 
 #ifdef CASTLE_DEBUG    
+    /* This first one could be turned into a valid error. */
+    BUG_ON(DISK_CHK_INVAL(disk_chk));
+    BUG_ON(!SUPER_EXTENT(array->start_cep.ext_id) && !chk_valid(disk_chk));
+
     /* Check that we are submitting IO to the right ceps. */
     c_ext_pos_t dcep = cep;
     c2_page_t *c2p;
@@ -998,6 +1077,10 @@ void submit_c2b_io(int           rw,
   
     /* Work out the slave structure. */ 
     cs = castle_slave_find_by_uuid(disk_chk.slave_id);
+#ifdef RESUBMIT_BIOERROR_DEBUG
+    if (cs->uuid == resubmit_bioerror_uuid)
+        printk("BAD: got an I/O for slave %x\n", cs->uuid);
+#endif // RESUBMIT_BIOERROR_DEBUG
     debug("slave_id=%d, cs=%p\n", disk_chk.slave_id, cs);
     /* Work out the sector on the slave. */
     sector = ((sector_t)disk_chk.offset << (C_CHK_SHIFT - 9)) +
@@ -1022,6 +1105,7 @@ void submit_c2b_io(int           rw,
         bio_info->bio      = bio;
         bio_info->c2b      = c2b;
         bio_info->nr_pages = batch;
+        bio_info->bdev     = cs->bdev;
         for(i=0; i < batch; i++)
         {
             bio->bi_io_vec[i].bv_page   = pages[i + j];
@@ -1036,6 +1120,15 @@ void submit_c2b_io(int           rw,
         bio->bi_end_io  = c2b_multi_io_end;
         bio->bi_private = bio_info;
 
+#ifdef RESUBMIT_BIOERROR_DEBUG
+        // Simulate an error every RESUBMIT_BIOERROR_INTERVAL'th c2b that allows resubmission
+#define RESUBMIT_BIOERROR_INTERVAL 500
+        if (resubmit_bioerror_trigger++ == RESUBMIT_BIOERROR_INTERVAL)
+        {
+            printk("Setting debug flag on c2b %p\n", c2b);
+            set_c2b_bioerror_debug(c2b);
+        }
+#endif // RESUBMIT_BIOERROR_DEBUG
         /* Hand off to Linux block layer */
         submit_bio(rw, bio);
 
@@ -1075,18 +1168,48 @@ typedef struct castle_io_array {
     int next_idx;
 } c_io_array_t;
 
+/*
+ * For best performance we should carefully select the slave to read from (depending on whether
+ * I/O is sequential or random etc.) This function returns the chunk index for that slave.
+ */
+static int c_io_next_slave_get(c_disk_chk_t *chunks, int k_factor, int *idx)
+{
+    struct castle_slave *slave;
+    int i;
+
+    /*
+     * At some point we'll have a proper read slave scheduler to optimise read I/O as mentioned
+     * above, but for the moment just return the first working slave.
+     */
+    for(i=0; i<k_factor; i++)
+    {
+        slave = castle_slave_find_by_uuid(chunks[i].slave_id);
+        if (!test_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags))
+        {
+            *idx = i;
+            /* Slave is not oos - we can use it. */
+            return EXIT_SUCCESS;         
+        }
+    }
+    /* Could not find a slave to read from. */
+    return ENOENT;
+}
+    
 /**
  * Dispatches k copies of the I/O.
  *
  * @see submit_c2b_io()
  */
-static inline void c_io_array_submit(int rw, 
-                                     c2_block_t *c2b, 
-                                     c_disk_chk_t *chunks, 
-                                     int k_factor,
-                                     c_io_array_t *array)
+static int c_io_array_submit(int rw, 
+                             c2_block_t *c2b, 
+                             c_disk_chk_t *chunks, 
+                             int k_factor,
+                             c_io_array_t *array,
+                             c_ext_id_t ext_id)
 {
-    int i, nr_pages;
+    int                  i, nr_pages, read_idx, found;
+    struct castle_slave *slave;
+    int                  ret = 0;
 
     nr_pages = array->next_idx;
     debug("Submitting io_array of %d pages, for cep "cep_fmt_str", k_factor=%d, rw=%s\n",
@@ -1096,23 +1219,55 @@ static inline void c_io_array_submit(int rw,
         (rw == READ) ? "read" : "write");
  
     BUG_ON((nr_pages <= 0) || (nr_pages > MAX_BIO_PAGES));
-    /* Account. */
-    if (rw == READ)
-        atomic_add(nr_pages, &castle_cache_read_stats);
-    else
-        atomic_add(nr_pages, &castle_cache_write_stats);
 
-    /* Submit the IO */
-    for(i=0; i<(rw == WRITE ? k_factor : 1); i++)
+    if (rw == READ) /* Read from one slave only */
     {
-        /* Debugging checks, the first one could be turned into a vaild error. */
-#ifdef CASTLE_DEBUG
-        BUG_ON(DISK_CHK_INVAL(chunks[i]));
-        BUG_ON(!SUPER_EXTENT(array->start_cep.ext_id) && !chk_valid(chunks[i]));
-#endif
+        /* Accounting */
+        atomic_add(nr_pages, &castle_cache_read_stats);
+        /* Call the slave scheduler to find the next slave to read from */
+        ret = c_io_next_slave_get(chunks, k_factor, &read_idx);
+        /*
+         * If there is a read failure here (no live slaves found) then we return error.
+         * Callers must check for read failure. For non-superblock extents this will be fatal.
+         * For superblock extents this is non-fatal, but the caller needs to know not to use the
+         * returned buffers.
+         */
+        if (ret)
+            return ret;
+        /* Only increment remaining count once we know we'll submit the IO. */
         atomic_add(nr_pages, &c2b->remaining);
-        submit_c2b_io(rw, c2b, array->start_cep, chunks[i], array->io_pages, nr_pages); 
+        /* Submit the IO. */
+        submit_c2b_io(READ, c2b, array->start_cep, chunks[read_idx], array->io_pages, nr_pages); 
+
+        /* Return with success. */
+        return EXIT_SUCCESS;
+    } 
+    
+    /* Write to all slaves */
+    BUG_ON(rw != WRITE);
+    found = 0;
+    for(i=0; i<k_factor; i++)
+    {
+        slave = castle_slave_find_by_uuid(chunks[i].slave_id);
+        if (!test_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags))
+        {
+            found = 1;
+            /* Slave is not oos - submit the IO */
+            atomic_add(nr_pages, &castle_cache_write_stats);
+            atomic_add(nr_pages, &c2b->remaining);
+            submit_c2b_io(WRITE, c2b, array->start_cep, chunks[i], array->io_pages, nr_pages);
+        }
     }
+    /*
+     * There's no need to return write failure here if no live slave found. If the extent is
+     * for a superblock then we can treat this as successful because we don't care if writes
+     * fail to a to the superblock of a now-dead disk. We won't have incremented c2b->remaining
+     * so doing nothing here is safe.
+     * For all other extent types finding no live slave to write to is fatal, so bug out.
+     */
+    BUG_ON(!found && !SUPER_EXTENT(ext_id)); 
+
+    return EXIT_SUCCESS;
 }
 
 static inline void c_io_array_init(c_io_array_t *array)
@@ -1176,10 +1331,11 @@ static int submit_c2b_rda(int rw, c2_block_t *c2b)
     c2_page_t    *c2p;
     c_io_array_t *io_array;
     struct page  *page;
-    int           skip_c2p;
+    int           skip_c2p, ret = 0;
     c_ext_pos_t   cur_cep;
     c_chk_t       last_chk, cur_chk;
-    uint32_t      k_factor = castle_extent_kfactor_get(c2b->cep.ext_id);
+    c_ext_id_t    ext_id = c2b->cep.ext_id;
+    uint32_t      k_factor = castle_extent_kfactor_get(ext_id);
     c_disk_chk_t  chunks[k_factor];
 
     debug("Submitting c2b "cep_fmt_str", for %s\n", 
@@ -1223,7 +1379,16 @@ static int submit_c2b_rda(int rw, c2_block_t *c2b)
                match with the logical chunk stored in io_array. */ 
             BUG_ON(io_array->chunk != last_chk);
             /* Submit the array. */
-            c_io_array_submit(rw, c2b, chunks, k_factor, io_array);
+            ret = c_io_array_submit(rw, c2b, chunks, k_factor, io_array, ext_id);
+            if (ret)
+            {
+                /*
+                 * Could not submit the IO, possibly due to a slave going oos. Drop our reference
+                 * and return early.
+                 */
+                c2b_remaining_io_sub(rw, 1, c2b);
+                goto out;
+            }
             /* Reinit the array, and re-try adding the current page. This should not
                fail any more. */
             c_io_array_init(io_array);
@@ -1236,7 +1401,7 @@ static int submit_c2b_rda(int rw, c2_block_t *c2b)
             int ret;
             debug("Asking extent manager for "cep_fmt_str_nl,
                     cep2str(cur_cep));
-            ret = castle_extent_map_get(cur_cep.ext_id,
+            ret = castle_extent_map_get(ext_id,
                                         CHUNK(cur_cep.offset),
                                         chunks);
             /* Return value is supposed to be k_factor, unless the
@@ -1248,7 +1413,7 @@ static int submit_c2b_rda(int rw, c2_block_t *c2b)
                 c2b_remaining_io_sub(rw, 1, c2b);
                 goto out;
             }
-            
+
             debug("chunks[0]="disk_chk_fmt_nl, disk_chk2str(chunks[0]));
             last_chk = cur_chk;
         }
@@ -1261,14 +1426,23 @@ next_page:
     {
         /* Chunks array is always initialised for last_chk. */
         BUG_ON(io_array->chunk != last_chk);
-        c_io_array_submit(rw, c2b, chunks, k_factor, io_array);
+        ret = c_io_array_submit(rw, c2b, chunks, k_factor, io_array, ext_id);
+        if (ret)
+        {
+            /*
+             * Could not submit the IO, possibly due to a slave going oos. Drop our reference
+             * and return early.
+             */
+            c2b_remaining_io_sub(rw, 1, c2b);
+            goto out;
+        }
     }
     /* Drop the 1 ref. */
     c2b_remaining_io_sub(rw, 1, c2b);
     
 out:
     kmem_cache_free(castle_io_array_cache, io_array);
-    return 0;
+    return ret;
 }
 
 /**

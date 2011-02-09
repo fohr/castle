@@ -11,6 +11,7 @@
 #include "castle_extent.h"
 #include "castle_cache.h"
 #include "castle_da.h"
+#include "castle_rebuild.h"
 
 /* Extent manager - Every disk reserves few chunks in the begining of the disk to 
  * store meta data. Meta data for freespace management (for each disk) would be
@@ -70,7 +71,7 @@ typedef struct {
     c_ext_id_t          ext_id;         /* Unique extent ID */
     c_chk_cnt_t         size;           /* Number of chunks */
     c_rda_type_t        type;           /* RDA type */
-    uint32_t            k_factor;       /* K factor in K-RDA */ 
+    uint32_t            k_factor;       /* K factor in K-RDA */
     c_ext_pos_t         maps_cep;       /* Offset of chunk mapping in logical extent */
     struct list_head    hash_list;      /* Only Dynamic variable */
     uint32_t            ref_cnt;
@@ -1008,7 +1009,21 @@ static void __castle_extent_map_get(c_ext_t             *ext,
             write_lock_c2b(c2b);
             /* Need to recheck whether it's uptodate after getting the lock. */
             if(!c2b_uptodate(c2b))
-                BUG_ON(submit_c2b_sync(READ, c2b));
+            {
+                set_c2b_no_resubmit(c2b);
+                submit_c2b_sync(READ, c2b);
+                if (!c2b_uptodate(c2b))
+                {
+                    /*
+                     * The I/O has failed. This may be because we had a slave die on us. That I/O
+                     * fail should have resulted in future I/O submissions by-passing that dead
+                     * slave. So, try again, just once, and we should be able to read successfully
+                     * from the other slave for this c2b. Assumes no_resubmit still set on c2b.
+                     */
+                    BUG_ON(submit_c2b_sync(READ, c2b));
+                }
+                clear_c2b_no_resubmit(c2b);
+            }
             write_unlock_c2b(c2b);
         }
         read_lock_c2b(c2b);

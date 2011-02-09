@@ -16,6 +16,7 @@
 #include "castle_back.h"
 #include "castle_ctrl.h"
 #include "castle_trace.h"
+#include "castle_rebuild.h"
 
 //#define DEBUG
 #ifndef DEBUG
@@ -515,6 +516,39 @@ void castle_control_trace_teardown(int *ret)
     *ret = castle_trace_teardown();
 }
 
+void castle_control_slave_evacuate(uint32_t uuid, int *ret)
+{
+    struct castle_slave *slave;
+
+    slave = castle_slave_find_by_uuid(uuid);
+
+    if (slave)
+    {
+        /*
+        * Mark that this slave is oos. Allocations from this slave should now stop, and
+        * all future I/O submissions should ignore this slave.
+        */
+        if (test_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags))
+        {
+            /* Slave is already marked as oos - ignore */
+            printk("Warning: slave %x has already been marked bad. Ignoring\n", slave->uuid);
+            *ret = -EINVAL;
+        } else if (test_bit(CASTLE_SLAVE_EVACUATE_BIT, &slave->flags))
+        {
+            /* Slave is already marked as evacuated - ignore */
+            printk("Warning: slave %x has already been evacuated. Ignoring\n", slave->uuid);
+            *ret = -EEXIST;
+        } else
+        {
+            set_bit(CASTLE_SLAVE_EVACUATE_BIT, &slave->flags);
+            printk("Slave %x has been marked as out-of-service\n", slave->uuid);
+            /* TBD kick rebuild thread */
+            *ret = EXIT_SUCCESS;
+        }
+    } else
+        *ret = -ENOENT;
+}
+
 int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
     int err;
@@ -541,7 +575,8 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
                             (ioctl.cmd != CASTLE_CTRL_INIT) && 
                             (ioctl.cmd != CASTLE_CTRL_PROTOCOL_VERSION) &&
                             (ioctl.cmd != CASTLE_CTRL_ENVIRONMENT_SET) &&
-                            (ioctl.cmd != CASTLE_CTRL_FAULT))
+                            (ioctl.cmd != CASTLE_CTRL_FAULT) &&
+                            (ioctl.cmd != CASTLE_CTRL_SLAVE_EVACUATE))
     {
         printk("Disallowed ctrl op %d, before fs gets inited.\n", ioctl.cmd);
         return -EINVAL;
@@ -686,6 +721,9 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
             break;
         case CASTLE_CTRL_TRACE_TEARDOWN:
             castle_control_trace_teardown(&ioctl.trace_teardown.ret);
+            break;
+        case CASTLE_CTRL_SLAVE_EVACUATE:
+            castle_control_slave_evacuate(ioctl.slave_evacuate.id, &ioctl.slave_evacuate.ret);
             break;
 
         default:

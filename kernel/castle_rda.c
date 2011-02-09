@@ -68,7 +68,11 @@ static void castle_rda_slaves_shuffle(struct castle_slave **slaves_array, int nr
  */
 static int castle_rda_slave_usable(c_rda_type_t rda_type, struct castle_slave *slave)
 {
-    /* Any extra tests (e.g. disk dead) should go here. */
+    /* Any extra tests should go here. */
+
+    if ((test_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags)) ||
+        (test_bit(CASTLE_SLAVE_EVACUATE_BIT, &slave->flags)))
+        return 0;
 
     switch(rda_type)
     {
