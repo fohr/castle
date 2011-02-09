@@ -777,6 +777,7 @@ int castle_extent_space_alloc(c_ext_t *ext, da_id_t da_id)
 {
     struct castle_extent_state *ext_state;
     struct castle_slave *slaves[ext->k_factor];
+    int schk_ids[ext->k_factor];
     c_rda_spec_t *rda_spec;
     c_chk_cnt_t chunk;
     void *rda_state;
@@ -848,7 +849,7 @@ int castle_extent_space_alloc(c_ext_t *ext, da_id_t da_id)
         }
 
         /* Ask the RDA spec which slaves to use. */
-        if (rda_spec->next_slave_get(slaves, rda_state, chunk) < 0)
+        if (rda_spec->next_slave_get(slaves, schk_ids, rda_state, chunk) < 0)
         {
             printk("Failed to get next slave for extent: %llu\n", ext->ext_id);
             err = -ENOSPC;
@@ -858,7 +859,7 @@ int castle_extent_space_alloc(c_ext_t *ext, da_id_t da_id)
         /* Allocate disk chunks from each slave designated by the rda spec. */
         for (j=0; j<ext->k_factor; j++)
         {
-            disk_chk = castle_extent_disk_chk_alloc(da_id, ext_state, slaves[j], j);
+            disk_chk = castle_extent_disk_chk_alloc(da_id, ext_state, slaves[j], schk_ids[j]);
             debug("Allocation for (logical_chunk=%d, copy=%d) -> (slave=0x%x, "disk_chk_fmt")\n",
                 chunk, j, slaves[j]->uuid, disk_chk2str(disk_chk)); 
             if(DISK_CHK_INVAL(disk_chk))

@@ -2,13 +2,17 @@
 #define __CASTLE_RDA_H__
 
 /** 
- * Get a slave to allocate next chunk.
+ * Get a slave to allocate next chunk. Slave array determines which slave should be used
+ * for the allocation, superchunk ids determine whether to allocate multiple superchunks
+ * from a given slave, and which one to use.
  *
  * @param cs        Array of slave pointers to be filled in.  
+ * @param seq_ids   Array of superchunk ids. Ids are never greater than k_factor. 
  * @param state     RDA state structure obtained from @see c_extent_init_t().
  * @param chk_num   Logical chunk number for which we are allocating space. 
  */
 typedef int  (*c_next_slave_get_t)(struct castle_slave **cs,
+                                   int                  *schk_ids,
                                    void                 *state,
                                    c_chk_t               chk_num);
 
