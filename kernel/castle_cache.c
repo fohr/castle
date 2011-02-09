@@ -1128,9 +1128,15 @@ typedef struct castle_io_array {
     int next_idx;
 } c_io_array_t;
 
-/*
- * For best performance we should carefully select the slave to read from (depending on whether
- * I/O is sequential or random etc.) This function returns the chunk index for that slave.
+/**
+ * Select the next slave to read from.
+ *
+ * @param chunks    The chunk for which a slave is to be selected
+ * @param k_factor  k_factor for the chunk
+ * @param idx       Returns the index in the chunk for the slave to use
+ *
+ * @return          ENOENT if no slave found, EXIT_SUCCESS if found
+ *                  EXIT_SUCCESS if a slave was found
  */
 static int c_io_next_slave_get(c_disk_chk_t *chunks, int k_factor, int *idx)
 {
@@ -1153,7 +1159,7 @@ static int c_io_next_slave_get(c_disk_chk_t *chunks, int k_factor, int *idx)
         }
     }
     /* Could not find a slave to read from. */
-    return ENOENT;
+    return -ENOENT;
 }
     
 /**

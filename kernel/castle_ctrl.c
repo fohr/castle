@@ -516,6 +516,15 @@ void castle_control_trace_teardown(int *ret)
     *ret = castle_trace_teardown();
 }
 
+/**
+ * Initiate evacuation (removal from service) of a slave
+ *
+ * @param uuid      The slave to evacuate
+ * @param ret       Returns EINVAL if slave is already marked as out-of-service
+ *                  Returns EEXIST if slave is already marked as evacuated
+ *                  Returns ENOENT if slave was not found
+ *                  Returns EXIT_SUCCESS if slave is now marked as evacuated
+ */
 void castle_control_slave_evacuate(uint32_t uuid, int *ret)
 {
     struct castle_slave *slave;

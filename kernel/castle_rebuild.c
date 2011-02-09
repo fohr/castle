@@ -12,6 +12,7 @@
 #define debug(_f, ...)          ((void)0)
 #endif
 
+/* The elements of the resubmit list */
 struct resubmit_c2b {
     struct list_head    list;
     c2_block_t          *c2b;
@@ -24,6 +25,12 @@ DEFINE_SPINLOCK         (resubmit_list_lock);
 
 wait_queue_head_t       resubmit_wq;
 
+/**
+ * Add a c2b to the resubmit list.
+ *
+ * @param rw    Read or write the block
+ * @param c2b   Block to resubmit
+ */
 void castle_resubmit_c2b(int rw, c2_block_t * c2b)
 {
     struct resubmit_c2b *rc2b;
@@ -42,6 +49,11 @@ void castle_resubmit_c2b(int rw, c2_block_t * c2b)
 
 static struct task_struct   *resubmit_thread;
 
+/**
+ * Check if there are blocks on the resubmit list.
+ *
+ * @return      True if there are blocks on the resubmit list
+ */
 static int c2bs_to_resubmit(void)
 {
     int ret;
@@ -53,6 +65,11 @@ static int c2bs_to_resubmit(void)
     return ret;
 }
 
+/**
+ * Main block resubmit kthread loop. Walks resubmit list and resubmits blocks.
+ *
+ * @return      True when kthread has been stopped successfully.
+ */
 static int castle_resubmit_run(void *unused)
 {
     debug("Starting resubmit thread ...\n");
@@ -98,6 +115,11 @@ static int castle_resubmit_run(void *unused)
     return EXIT_SUCCESS;
 }
 
+/**
+ * Start resubmit kthread.
+ *
+ * @return      True if kthread has been started successfully.
+ */
 int castle_resubmit_init(void)
 {
     init_waitqueue_head(&resubmit_wq);
@@ -111,6 +133,10 @@ int castle_resubmit_init(void)
     return EXIT_SUCCESS;
 }
 
+/**
+ * Stop resubmit kthread.
+ *
+ */
 void castle_resubmit_fini(void)
 {
     kthread_stop(resubmit_thread);
