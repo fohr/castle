@@ -1,16 +1,16 @@
 #ifndef __CASTLE_RDA_H__
 #define __CASTLE_RDA_H__
 
-/* Get a slave to allocate next chunk.
+/** 
+ * Get a slave to allocate next chunk.
  *
- * rda_type - RDA spec to be used to allocate the chunk
- * slave_id - Retruns the slave to be used
- * state    - State to be passed b/w multiple calls. NULL for first call.
+ * @param cs        Array of slave pointers to be filled in.  
+ * @param state     RDA state structure obtained from @see c_extent_init_t().
+ * @param chk_num   Logical chunk number for which we are allocating space. 
  */
 typedef int  (*c_next_slave_get_t)(struct castle_slave **cs,
                                    void                 *state,
-                                   c_chk_t               chk_num,
-                                   c_rda_type_t          rda_type);
+                                   c_chk_t               chk_num);
 
 typedef void* (*c_extent_init_t)(c_ext_id_t   ext_id, 
                                  c_chk_cnt_t  size,
@@ -18,6 +18,7 @@ typedef void* (*c_extent_init_t)(c_ext_id_t   ext_id,
 
 typedef void (*c_extent_fini_t)(c_ext_id_t  ext_id, 
                                 void       *state);
+
 typedef struct {
     c_rda_type_t                type;           /* RDA type */
     uint32_t                    k_factor;       /* K in K-RDA. [in order of 2] */

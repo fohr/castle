@@ -848,7 +848,7 @@ int castle_extent_space_alloc(c_ext_t *ext, da_id_t da_id)
         }
 
         /* Ask the RDA spec which slaves to use. */
-        if (rda_spec->next_slave_get(slaves, rda_state, chunk, ext->type) < 0)
+        if (rda_spec->next_slave_get(slaves, rda_state, chunk) < 0)
         {
             printk("Failed to get next slave for extent: %llu\n", ext->ext_id);
             err = -ENOSPC;

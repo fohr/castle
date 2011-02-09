@@ -15,6 +15,7 @@
 #endif
 
 typedef struct {
+    c_rda_spec_t          *rda_spec;
     c_ext_id_t             ext_id;
     c_chk_t                prev_chk;
     c_chk_cnt_t            size;
@@ -63,10 +64,10 @@ static void castle_rda_slaves_shuffle(struct castle_slave **slaves_array, int nr
 /**
  * Determines whether a slave should be used by given rda_spec.
  *
- * @param rda_type Type of the rda spec.
+ * @param rda_spec RDA spec used to allocate disks. 
  * @param slave    Slave to be tested.
  */
-static int castle_rda_slave_usable(c_rda_type_t rda_type, struct castle_slave *slave)
+static int castle_rda_slave_usable(c_rda_spec_t *rda_spec, struct castle_slave *slave)
 {
     /* Any extra tests should go here. */
 
@@ -74,7 +75,7 @@ static int castle_rda_slave_usable(c_rda_type_t rda_type, struct castle_slave *s
         (test_bit(CASTLE_SLAVE_EVACUATE_BIT, &slave->flags)))
         return 0;
 
-    switch(rda_type)
+    switch(rda_spec->type)
     {
         case DEFAULT_RDA:
             /* Default RDA doesn't use SSD disks. */
@@ -112,6 +113,7 @@ void* castle_def_rda_extent_init(c_ext_id_t ext_id,
     }
     
     /* Initialise state structure. */
+    state->rda_spec   = rda_spec;
     state->ext_id     = ext_id;
     state->prev_chk   = -1;
     state->size       = size;
@@ -123,7 +125,7 @@ void* castle_def_rda_extent_init(c_ext_id_t ext_id,
     list_for_each(l, &castle_slaves.slaves)
     {
         slave = list_entry(l, struct castle_slave, list);
-        if(castle_rda_slave_usable(rda_type, slave))
+        if(castle_rda_slave_usable(rda_spec, slave))
             state->permuted_slaves[state->nr_slaves++] = slave;
     }
     /* Check whether we've got enough slaves to make this extent. */
@@ -151,11 +153,10 @@ void castle_def_rda_extent_fini(c_ext_id_t ext_id, void *state)
 
 int castle_def_rda_next_slave_get(struct castle_slave *cs[],
                                   void                *state_p,
-                                  c_chk_t              chk_num,
-                                  c_rda_type_t         rda_type)
+                                  c_chk_t              chk_num)
 {
-    c_rda_spec_t *rda_spec = castle_rda_spec_get(rda_type);
     c_def_rda_state_t *state = state_p;
+    c_rda_spec_t *rda_spec = state->rda_spec; 
     int i;
 
     if (state == NULL)
@@ -204,10 +205,12 @@ void* castle_ssd_rda_extent_init(c_ext_id_t ext_id,
 {
     struct castle_slave *slave;
     c_ssd_rda_state_t *state;
+    c_rda_spec_t *rda_spec;
     struct list_head *l;
 
     /* This function is only expected to be invoked for SSD_RDA spec type. */
     BUG_ON(rda_type != SSD_RDA);
+    rda_spec = castle_rda_spec_get(rda_type);
     /* Allocate state structure, and corresponding default RDA spec state. */
     state = castle_zalloc(sizeof(c_ssd_rda_state_t), GFP_KERNEL);
     if(!state)
@@ -219,7 +222,7 @@ void* castle_ssd_rda_extent_init(c_ext_id_t ext_id,
     list_for_each(l, &castle_slaves.slaves)
     {
         slave = list_entry(l, struct castle_slave, list);
-        if(castle_rda_slave_usable(rda_type, slave))
+        if(castle_rda_slave_usable(rda_spec, slave))
             state->permuted_slaves[state->nr_slaves++] = slave;
     }
     castle_rda_slaves_shuffle(state->permuted_slaves, state->nr_slaves);
@@ -246,14 +249,13 @@ void castle_ssd_rda_extent_fini(c_ext_id_t ext_id, void *state_v)
 
 int castle_ssd_rda_next_slave_get(struct castle_slave *cs[],
                                   void                *state_v,
-                                  c_chk_t              chk_num,
-                                  c_rda_type_t         rda_type)
+                                  c_chk_t              chk_num)
 {
     c_ssd_rda_state_t *state = state_v;
     int ret;
 
     /* Fill the non-ssd slaves first. */
-    ret = castle_def_rda_next_slave_get(&cs[1], state->def_state, chk_num, DEFAULT_RDA);
+    ret = castle_def_rda_next_slave_get(&cs[1], state->def_state, chk_num);
     if(ret)
         return ret;
 
