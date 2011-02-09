@@ -1050,6 +1050,7 @@ void submit_c2b_io(int           rw,
     /* Work out the slave structure. */ 
     cs = castle_slave_find_by_uuid(disk_chk.slave_id);
     debug("slave_id=%d, cs=%p\n", disk_chk.slave_id, cs);
+    BUG_ON(!cs);
     /* Work out the sector on the slave. */
     sector = ((sector_t)disk_chk.offset << (C_CHK_SHIFT - 9)) +
               (BLK_IN_CHK(cep.offset) << (C_BLK_SHIFT - 9));
@@ -1143,6 +1144,7 @@ static int c_io_next_slave_get(c_disk_chk_t *chunks, int k_factor, int *idx)
     for(i=0; i<k_factor; i++)
     {
         slave = castle_slave_find_by_uuid(chunks[i].slave_id);
+        BUG_ON(!slave);
         if (!test_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags))
         {
             *idx = i;
@@ -1208,6 +1210,7 @@ static int c_io_array_submit(int rw,
     for(i=0; i<k_factor; i++)
     {
         slave = castle_slave_find_by_uuid(chunks[i].slave_id);
+        BUG_ON(!slave);
         if (!test_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags))
         {
             found = 1;

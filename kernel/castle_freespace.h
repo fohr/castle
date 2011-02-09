@@ -1,5 +1,5 @@
-#ifndef __DEV_FREESPACE_H__
-#define __DEV_FREESPACE_H__
+#ifndef __CASTLE_FREESPACE_H__
+#define __CASTLE_FREESPACE_H__
 
 #include "castle.h"
 
@@ -11,14 +11,8 @@
  */
 
 #define CHKS_PER_SLOT  10
-#define SUPER_CHUNK(chk)        ((chk) / CHKS_PER_SLOT)
-#define FIRST_CHUNK(sup_chk)    ((sup_chk) * CHKS_PER_SLOT)
-
-#define castle_freespace_slave_super_chunk_free(_cs, _super_chk)        \
-    castle_freespace_slave_chunk_free(_cs,                              \
-    (c_chk_seq_t){((_super_chk)*CHKS_PER_SLOT), CHKS_PER_SLOT})
-
-//void castle_freespace_slaves_init(int fresh_fs);
+#define SUPER_CHUNK(chk)           ((chk) / CHKS_PER_SLOT)
+#define FIRST_CHUNK(sup_chk)       ((sup_chk) * CHKS_PER_SLOT)
 
 /* Load on-disk structures into memory */
 int         castle_freespace_slave_init             (struct castle_slave *cs, int fresh);
@@ -31,14 +25,13 @@ void        castle_freespace_summary_get            (struct castle_slave *cs,
                                                      c_chk_cnt_t         *size);
 
 /* Allocate chunks */
-c_chk_seq_t castle_freespace_slave_chunks_alloc     (struct castle_slave *cs,
-                                                     da_id_t              da_id, 
-                                                     c_chk_cnt_t          count);
+c_chk_seq_t castle_freespace_slave_superchunk_alloc (struct castle_slave *cs,
+                                                     da_id_t              da_id); 
 
-void        castle_freespace_slave_chunk_free       (struct castle_slave  *cs, 
+void        castle_freespace_slave_superchunk_free  (struct castle_slave  *cs, 
                                                      c_chk_seq_t           chk_seq);
 
 void        castle_freespace_stats_print            (void);
 
 c_chk_cnt_t castle_freespace_space_get              (void);
-#endif // __DEV_FREESPACE_H__
+#endif /* __CASTLE_FREESPACE_H__ */

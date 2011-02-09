@@ -31,9 +31,8 @@ void freespace_sblk_put(struct castle_slave *cs, int dirty)
     mutex_unlock(&cs->freespace_lock);
 }
 
-c_chk_seq_t castle_freespace_slave_chunks_alloc(struct castle_slave    *cs,
-                                                da_id_t                 da_id, 
-                                                c_chk_cnt_t             count)
+c_chk_seq_t castle_freespace_slave_superchunk_alloc(struct castle_slave *cs,
+                                                    da_id_t              da_id) 
 {
     castle_freespace_t  *freespace;
     c_chk_seq_t          chk_seq;
@@ -41,9 +40,6 @@ c_chk_seq_t castle_freespace_slave_chunks_alloc(struct castle_slave    *cs,
     c_byte_off_t         cons_off;
     c2_block_t          *c2b;
     c_chk_t             *cons_chk;
-
-    if (!count)
-        return INVAL_CHK_SEQ;
 
     freespace = freespace_sblk_get(cs);
 
@@ -102,8 +98,8 @@ c_chk_seq_t castle_freespace_slave_chunks_alloc(struct castle_slave    *cs,
     return chk_seq;
 }
 
-void castle_freespace_slave_chunk_free(struct castle_slave      *cs, 
-                                       c_chk_seq_t               chk_seq)
+void castle_freespace_slave_superchunk_free(struct castle_slave *cs, 
+                                            c_chk_seq_t          chk_seq)
 {
     castle_freespace_t  *freespace;
     c2_block_t          *c2b;
@@ -228,8 +224,7 @@ int castle_freespace_slave_init(struct castle_slave *cs, int fresh)
     INJECT_FAULT;
 
     if (fresh)
-        castle_freespace_slave_chunk_free(cs, 
-                         (c_chk_seq_t){FREE_SPACE_START, nr_chunks});
+        castle_freespace_slave_superchunk_free(cs, (c_chk_seq_t){FREE_SPACE_START, nr_chunks});
 
     cs->frozen_prod = cs->prev_prod = freespace->prod;
 
