@@ -6,6 +6,7 @@
 #include "castle_rda.h"
 #include "castle_debug.h"
 #include "castle_extent.h"
+#include "castle_freespace.h"
 
 //#define DEBUG
 #ifdef DEBUG
@@ -19,14 +20,14 @@ typedef struct {
     c_ext_id_t             ext_id;
     c_chk_t                prev_chk;
     c_chk_cnt_t            size;
-    int                    nr_slaves;
+    uint32_t               nr_slaves;
     struct castle_slave   *permuted_slaves[MAX_NR_SLAVES];
     uint8_t                permut_idx;
 } c_def_rda_state_t;
 
 typedef struct {
     c_def_rda_state_t     *def_state;
-    int                    nr_slaves;
+    uint32_t               nr_slaves;
     struct castle_slave   *permuted_slaves[MAX_NR_SLAVES];
     uint8_t                permut_idx;
 } c_ssd_rda_state_t;
@@ -136,6 +137,11 @@ void* castle_def_rda_extent_init(c_ext_id_t ext_id,
     }
     /* Permute the list of slaves the first time around. */
     castle_rda_slaves_shuffle(state->permuted_slaves, state->nr_slaves);
+
+    /* When allocating small extents, limit the number of disks, which reduces the wasted space. */
+    BUG_ON(state->size == 0);
+    state->nr_slaves = min(state->nr_slaves, SUPER_CHUNK(state->size - 1) + 1);
+    state->nr_slaves = max(state->nr_slaves, rda_spec->k_factor);
 
     return state;
 
