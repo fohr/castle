@@ -543,8 +543,7 @@ struct castle_extent_state {
 };
 
 #define map_chks_per_page(_k_factor)    (PAGE_SIZE / (_k_factor * sizeof(c_disk_chk_t)))
-#define map_size(_ext_chks, _k_factor)  (PAGE_SIZE *                                           \
-                                          (1 + (_ext_chks-1) / map_chks_per_page(_k_factor))) 
+#define map_size(_ext_chks, _k_factor)  (1 + (_ext_chks-1) / map_chks_per_page(_k_factor))
 
 /**
  * Allocates structure used during the extent allocation/destruction in order to
