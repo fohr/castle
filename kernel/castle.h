@@ -226,6 +226,7 @@ typedef enum {
     META_EXT,
     MICRO_EXT,
     SUPER_EXT,
+    SSD_ONLY_EXT,
     NR_RDA_SPECS
 } c_rda_type_t;
 

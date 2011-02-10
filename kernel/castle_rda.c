@@ -26,11 +26,14 @@ typedef struct {
 } c_def_rda_state_t;
 
 typedef struct {
+    c_rda_spec_t          *rda_spec;
     c_def_rda_state_t     *def_state;
     uint32_t               nr_slaves;
     struct castle_slave   *permuted_slaves[MAX_NR_SLAVES];
     uint8_t                permut_idx;
 } c_ssd_rda_state_t;
+
+static c_rda_spec_t castle_default_rda;
 
 /**
  * (Re)permute the array of castle_slave pointers, used to contruct the extent. Uses Fisher-Yates 
@@ -84,6 +87,7 @@ static int castle_rda_slave_usable(c_rda_spec_t *rda_spec, struct castle_slave *
                 return 0;
             break;
         case SSD_RDA:
+        case SSD_ONLY_EXT:
             if(!(slave->cs_superblock.pub.flags & CASTLE_SLAVE_SSD))
                 return 0;
             break;
@@ -202,12 +206,13 @@ int castle_def_rda_next_slave_get(struct castle_slave **cs,
 }
 
 /**
- * Initialise RDA state structure for SSD_RDA rda spec type. Piggybacks on DEFAULT_RDA,
- * to generate most of the extent map, and only adds an extra on SSD copy. 
+ * Initialise RDA state structure for SSD_RDA or SSD_ONLY_RDA rda spec type. 
+ * For SSD_RDA it piggybacks on DEFAULT_RDA, to generate most of the extent map, 
+ * and only adds an extra on SSD copy. 
  * 
  * @param ext_id   Extent id this RDA spec will be generating. 
  * @param size     Size of the extent.
- * @param rda_type Must be set to SSD_RDA.  
+ * @param rda_type Must be set to SSD_RDA or SSD_ONLY_EXT. 
  */
 void* castle_ssd_rda_extent_init(c_ext_id_t ext_id, 
                                  c_chk_cnt_t size, 
@@ -218,16 +223,23 @@ void* castle_ssd_rda_extent_init(c_ext_id_t ext_id,
     c_rda_spec_t *rda_spec;
     struct list_head *l;
 
-    /* This function is only expected to be invoked for SSD_RDA spec type. */
-    BUG_ON(rda_type != SSD_RDA);
+    /* This function is only expected to be invoked for SSD_RDA or SSD_ONLY_EXT spec type. */
+    BUG_ON((rda_type != SSD_RDA) && (rda_type != SSD_ONLY_EXT));
     rda_spec = castle_rda_spec_get(rda_type);
+    /* Make sure that the k_factor is correct. */
+    BUG_ON((rda_type == SSD_RDA)      && (rda_spec->k_factor != 1 + castle_default_rda.k_factor));
+    BUG_ON((rda_type == SSD_ONLY_EXT) && (rda_spec->k_factor != 1));
     /* Allocate state structure, and corresponding default RDA spec state. */
     state = castle_zalloc(sizeof(c_ssd_rda_state_t), GFP_KERNEL);
     if(!state)
         goto err_out;
-    state->def_state = castle_def_rda_extent_init(ext_id, size, DEFAULT_RDA);
-    if(!state->def_state)
-        goto err_out;
+    state->rda_spec = rda_spec;
+    if(rda_type != SSD_ONLY_EXT)
+    {
+        state->def_state = castle_def_rda_extent_init(ext_id, size, DEFAULT_RDA);
+        if(!state->def_state)
+            goto err_out;
+    }
     /* Initialise the slave list. */ 
     list_for_each(l, &castle_slaves.slaves)
     {
@@ -253,7 +265,8 @@ void castle_ssd_rda_extent_fini(c_ext_id_t ext_id, void *state_v)
 {
     c_ssd_rda_state_t *state = state_v; 
     
-    castle_def_rda_extent_fini(ext_id, state->def_state);
+    if(state->def_state)
+        castle_def_rda_extent_fini(ext_id, state->def_state);
     castle_free(state);
 }
 
@@ -265,10 +278,14 @@ int castle_ssd_rda_next_slave_get(struct castle_slave **cs,
     c_ssd_rda_state_t *state = state_v;
     int ret;
 
-    /* Fill the non-ssd slaves first. */
-    ret = castle_def_rda_next_slave_get(&cs[1], &schk_ids[1], state->def_state, chk_num);
-    if(ret)
-        return ret;
+    /* Fill the non-ssd slaves first, if we are handling non-SSD_ONLY_EXT */
+    if(state->rda_spec->type != SSD_ONLY_EXT)
+    {
+        BUG_ON(!state->def_state);
+        ret = castle_def_rda_next_slave_get(&cs[1], &schk_ids[1], state->def_state, chk_num);
+        if(ret)
+            return ret;
+    }
 
     /* Repermute, if permut_idx is greater than the number of slaves we are using. */
     if(state->permut_idx >= state->nr_slaves)
@@ -302,6 +319,14 @@ static c_rda_spec_t castle_ssd_rda = {
     .extent_fini        = castle_ssd_rda_extent_fini,
 };
 
+static c_rda_spec_t castle_ssd_only_rda = {
+    .type               = SSD_ONLY_EXT, 
+    .k_factor           = 1,
+    .extent_init        = castle_ssd_rda_extent_init,
+    .next_slave_get     = castle_ssd_rda_next_slave_get,
+    .extent_fini        = castle_ssd_rda_extent_fini,
+};
+
 static c_rda_spec_t castle_super_ext_rda = {
     .type               = SUPER_EXT,
     .k_factor           = 2,
@@ -321,6 +346,7 @@ static c_rda_spec_t castle_meta_ext_rda = {
 c_rda_spec_t *castle_rda_specs[] = {
     [DEFAULT_RDA]       = &castle_default_rda,
     [SSD_RDA]           = &castle_ssd_rda,
+    [SSD_ONLY_EXT]      = &castle_ssd_only_rda,
     [SUPER_EXT]         = &castle_super_ext_rda,
     [META_EXT]          = &castle_meta_ext_rda,
     [MICRO_EXT]         = NULL,
