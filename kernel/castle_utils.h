@@ -325,5 +325,8 @@ int         castle_from_user_copy(const char __user *from, int len, int max_len,
 void        castle_unmap_vm_area(void *addr_p, int nr_pages);
 int         castle_map_vm_area(void *addr_p, struct page **pages, int nr_pages, pgprot_t prot);
 
+uint32_t    murmur_hash_32(const void *key, int len, uint32_t seed);
+uint64_t    murmur_hash_64(const void *key, int len, uint32_t seed);
+
 #endif /* __CASTLE_UTILS_H__ */
 
