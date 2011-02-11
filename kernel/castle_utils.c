@@ -237,7 +237,7 @@ int castle_map_vm_area(void *addr_p, struct page **pages, int nr_pages, pgprot_t
 
 /* Murmur hash */
 
-#define _rotl64(n,X) ( ( ( X ) << n ) | ( ( X ) >> ( 64 - n ) ) )
+#define _rotl64(X,n) ( ( ( X ) << n ) | ( ( X ) >> ( 64 - n ) ) )
 
 //----------
 // Block mix - combine the key bits with the hash bits and scramble everything
