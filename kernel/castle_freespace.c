@@ -67,9 +67,15 @@ c_chk_seq_t castle_freespace_slave_superchunk_alloc(struct castle_slave *cs,
     c2b = castle_cache_page_block_get(cep);
     write_lock_c2b(c2b);
     
-    if (!c2b_uptodate(c2b))
-        BUG_ON(submit_c2b_sync(READ, c2b));
-    
+    if ((!c2b_uptodate(c2b)) && (submit_c2b_sync(READ, c2b)))
+    {
+        debug("Failed to read superblock from slave %x\n", cs->uuid);
+        write_unlock_c2b(c2b);
+        put_c2b(c2b);
+        freespace_sblk_put(cs, 0);
+        return INVAL_CHK_SEQ;
+    }
+
     cons_chk = (c_chk_t *)(((uint8_t *)c2b_buffer(c2b)) + BLOCK_OFFSET(cons_off));
     BUG_ON((*cons_chk == -1) || (*cons_chk % CHKS_PER_SLOT));
 

@@ -723,10 +723,18 @@ static c_disk_chk_t castle_extent_disk_chk_alloc(da_id_t da_id,
     chk_seq = castle_freespace_slave_superchunk_alloc(slave, da_id);
     if (CHK_SEQ_INVAL(chk_seq))
     {
-        printk("Failed to get freespace from slave: 0x%x\n", slave->uuid);
-        castle_freespace_stats_print();
-        low_disk_space = 1;
-        return INVAL_DISK_CHK; 
+       /*
+        * We get an here if the slave is either out-or-service, or out of space. If the slave is
+        * out-of-service then just return INVAL_DISK_CHK so calling stack can retry.
+        */
+        if (!test_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags))
+        {
+            /* Slave is not out-of-service so we are out of space */
+            printk("Failed to get freespace from slave: 0x%x\n", slave->uuid);
+            castle_freespace_stats_print();
+            low_disk_space = 1;
+        }
+        return INVAL_DISK_CHK;
     }
     /* Chunk sequence must represent a single superchunk. */
     BUG_ON(chk_seq.count != CHKS_PER_SLOT);
@@ -815,6 +823,8 @@ int castle_extent_space_alloc(c_ext_t *ext, da_id_t da_id)
     debug("Allocating physical space for extent: %lld, k_factor: %d\n", ext->ext_id, ext->k_factor);
     /* Get k_factor disk chunks for each logical chunk, and save them in the meta extent. */
     max_map_page_idx = map_chks_per_page(ext->k_factor);
+
+retry:
     map_cep = ext->maps_cep;
     map_page_idx = max_map_page_idx; 
     map_page = NULL;
@@ -838,8 +848,6 @@ int castle_extent_space_alloc(c_ext_t *ext, da_id_t da_id)
             map_c2b = castle_cache_page_block_get(map_cep);
             write_lock_c2b(map_c2b);
             update_c2b(map_c2b);
-            /* The block shouldn't be dirty, yet. */
-            BUG_ON(c2b_dirty(map_c2b));
             /* Reset the index, and the map pointer. */
             map_page_idx = 0; 
             map_page = c2b_buffer(map_c2b);
@@ -870,6 +878,12 @@ int castle_extent_space_alloc(c_ext_t *ext, da_id_t da_id)
                 put_c2b(map_c2b);
                 map_c2b = NULL;
                 castle_extent_space_free(ext, ext->k_factor * chunk + j);
+                if (test_bit(CASTLE_SLAVE_OOS_BIT, &slaves[j]->flags))
+                    /*
+                     * The slave went out-of-service since the 'next_slave_get'. Retry, and the
+                     * next time around the slave should be excluded from the map.
+                     */
+                    goto retry;
                 err = -ENOSPC;
                 goto out;
             }
