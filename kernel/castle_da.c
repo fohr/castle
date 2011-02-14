@@ -1542,8 +1542,6 @@ struct castle_da_merge {
         int                       next_idx;
         int                       valid_end_idx;
         version_t                 valid_version;
-        /* Buffer node used when completing a node (will contain spill-over entries). */
-        struct castle_btree_node *buffer;
     } levels[MAX_BTREE_DEPTH];
 
     /* Deamortization variables */
@@ -2083,96 +2081,108 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
 {
     struct castle_da_merge_level *level = merge->levels + depth;
     struct castle_btree_type *btree = merge->out_btree;
-    struct castle_btree_node *node, *prev_node, *buffer;
-    int buffer_idx, node_idx;
+    struct castle_btree_node *node, *prev_node;
+    int node_idx;
     void *key;
     version_t version;
     c_val_tup_t cvt, node_cvt;
+    static int is_recursion = 0;
+    c2_block_t *node_c2b;
+    int valid_end_idx;
+
+    /* Make sure we are not in recursion. */
+    BUG_ON(is_recursion);
+    is_recursion = 1;
 
     debug("Completing node at depth=%d\n", depth);
     BUG_ON(depth >= MAX_BTREE_DEPTH);
     node      = c2b_bnode(level->node_c2b);
     BUG_ON(!node);
-    buffer  = level->buffer;
     /* Version of the node should be the last valid_version */
     debug("Node version=%d\n", level->valid_version);
     node->version = level->valid_version;
     if(depth > 0)
         node->is_leaf = 0;
-    /* When a node is complete, we need to copy the entires after valid_end_idx to 
+
+    /* Note: This code calls castle_da_entry_add(), which would change all
+     * parameters in level. Taking a copy of required members. */
+    node_c2b        = level->node_c2b;
+    valid_end_idx   = level->valid_end_idx;
+
+    /* Reset the variables to the correct state for castle_da_entry_add(). */
+    level->node_c2b      = NULL;
+    level->last_key      = NULL; 
+    level->next_idx      = 0;
+    level->valid_end_idx = -1;
+    level->valid_version = INVAL_VERSION;  
+
+    /* When a node is complete, we need to copy the entries after valid_end_idx to 
        the corresponding buffer */
-    BUG_ON(buffer->used != 0);
-    buffer_idx = 0;
-    node_idx = level->valid_end_idx + 1;
+    node_idx = valid_end_idx + 1;
     BUG_ON(node_idx <= 0 || node_idx > node->used);
     debug("Entries to be copied to the buffer are in range [%d, %d)\n",
             node_idx, node->used);
     while(node_idx < node->used) 
     {
-        BUG_ON(buffer->used != buffer_idx);
         btree->entry_get(node,   node_idx,  &key, &version, &cvt);
         BUG_ON(CVT_LEAF_PTR(cvt));
-        btree->entry_add(buffer, buffer_idx, key, version, cvt);
-        buffer_idx++;
+        castle_da_entry_add(merge, depth, key, version, cvt); 
         node_idx++;
+        BUG_ON(level->node_c2b == NULL);
+        /* Check if the node completed, it should never do */
+        BUG_ON(level->next_idx < 0);
     }
     debug("Dropping entries [%d, %d] from the original node\n",
-            level->valid_end_idx + 1, node->used - 1);
-    /* Now that entries are safely in the buffer, drop them from the node */ 
-    if((level->valid_end_idx + 1) <= (node->used - 1))
-        btree->entries_drop(node, level->valid_end_idx + 1, node->used - 1);
+            valid_end_idx + 1, node->used - 1);
+    /* Now that entries are safely in the new node, drop them from the node */ 
+    if((valid_end_idx + 1) <= (node->used - 1))
+        btree->entries_drop(node, valid_end_idx + 1, node->used - 1);
 
-    BUG_ON(node->used != level->valid_end_idx + 1);
-    btree->entry_get(node, level->valid_end_idx, &key, &version, &cvt);
-    debug("Inserting into parent key=%p, *key=%d, version=%d, buffer->used=%d\n",
-            key, *((uint32_t*)key), node->version, buffer->used);
+    BUG_ON(node->used != valid_end_idx + 1);
+    btree->entry_get(node, valid_end_idx, &key, &version, &cvt);
+    debug("Inserting into parent key=%p, *key=%d, version=%d\n",
+            key, *((uint32_t*)key), node->version);
     BUG_ON(CVT_LEAF_PTR(cvt));
  
     /* Insert correct pointer in the parent, unless we've just completed the
        root node at the end of the merge. */ 
-    if(merge->completing && (merge->root_depth == depth) && (buffer->used == 0)) 
+    if(merge->completing && (merge->root_depth == depth) && (level->node_c2b == NULL)) 
     {
         debug("Just completed the root node (depth=%d), at the end of the merge.\n",
                 depth);
         goto release_node;
     }
-    CVT_NODE_SET(node_cvt, (level->node_c2b->nr_pages * C_BLK_SIZE), level->node_c2b->cep);
+    CVT_NODE_SET(node_cvt, (node_c2b->nr_pages * C_BLK_SIZE), node_c2b->cep);
     castle_da_entry_add(merge, depth+1, key, node->version, node_cvt);
 release_node:
-    debug("Releasing c2b for cep=" cep_fmt_str_nl, cep2str(level->node_c2b->cep));
+    debug("Releasing c2b for cep=" cep_fmt_str_nl, cep2str(node_c2b->cep));
     /* Write the list pointer into the previous node we've completed (if one exists).
        Then release it. */
     prev_node = merge->last_node_c2b ? c2b_bnode(merge->last_node_c2b) : NULL; 
     if(prev_node)
     {
-        prev_node->next_node = level->node_c2b->cep;
+        prev_node->next_node = node_c2b->cep;
         dirty_c2b(merge->last_node_c2b);
         write_unlock_c2b(merge->last_node_c2b);
         put_c2b(merge->last_node_c2b);
     } else
     {
         /* We've just created the first node, save it */
-        merge->first_node = level->node_c2b->cep;
+        merge->first_node = node_c2b->cep;
     }
     /* Save this node as the last node now */
-    merge->last_node_c2b = level->node_c2b;
-    /* Reset the variables to the correct state */
-    level->node_c2b      = NULL;
-    level->last_key      = NULL; 
-    level->next_idx      = 0;
-    level->valid_end_idx = -1;
-    level->valid_version = INVAL_VERSION;  
+    merge->last_node_c2b = node_c2b;
+
     /* Increment node count */
     merge->nr_nodes++;
+
+    is_recursion = 0;
 }
        
 static inline int castle_da_nodes_complete(struct castle_da_merge *merge, int depth)
 {
     struct castle_da_merge_level *level;
-    struct castle_btree_node *buffer;
-    int i, buffer_idx;
-    version_t version;
-    void *key;
+    int i;
     
     debug("Checking if we need to complete nodes starting at level: %d\n", depth);
     /* Check if the level 'depth' node has been completed, which may trigger a cascade of
@@ -2185,33 +2195,14 @@ static inline int castle_da_nodes_complete(struct castle_da_merge *merge, int de
             castle_da_node_complete(merge, i);
         else
             /* As soon as we see an incomplete node, we need to break out: */
-            goto fill_buffers;
+            goto out;
     }
     /* If we reached the top of the tree, we must fail the merge */
     if(i == MAX_BTREE_DEPTH - 1)
         return -EINVAL;
-fill_buffers:
-    debug("We got as far as depth=%d\n", i);
-    /* Go through all the nodes we've completed, and check re-add all the entries from 
-       the buffers */
-    for(i--; i>=0; i--)
-    {
-        level = merge->levels + i;
-        buffer = level->buffer; 
-        debug("Buffer at depth=%d, has %d entries\n", i, buffer->used);
-        for(buffer_idx=0; buffer_idx<buffer->used; buffer_idx++) 
-        {
-            c_val_tup_t cvt;
 
-            merge->out_btree->entry_get(buffer, buffer_idx, &key, &version, &cvt);
-            BUG_ON(CVT_LEAF_PTR(cvt));
-            castle_da_entry_add(merge, i, key, version, cvt);
-            /* Check if the node completed, it should never do */
-            BUG_ON(level->next_idx < 0);
-        }
-        /* Buffer now consumed, reset it */
-        castle_da_node_buffer_init(merge->out_btree, buffer);
-    } 
+out:
+    debug("We got as far as depth=%d\n", i);
 
     return 0;
 }
@@ -2402,8 +2393,6 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
             write_unlock_c2b(c2b);
             put_c2b(c2b);
         }
-        if(merge->levels[i].buffer)
-            castle_vfree(merge->levels[i].buffer);
     }
     castle_da_iterator_destroy(merge->in_tree1, merge->iter1);
     castle_da_iterator_destroy(merge->in_tree2, merge->iter2);
@@ -2855,10 +2844,6 @@ static struct castle_da_merge* castle_da_merge_init(struct castle_double_array *
     merge->budget_cons_units = 0; 
     for(i=0; i<MAX_BTREE_DEPTH; i++)
     {
-        merge->levels[i].buffer        = castle_vmalloc(btree->node_size * C_BLK_SIZE);
-        if(!merge->levels[i].buffer)
-            goto error_out;
-        castle_da_node_buffer_init(btree, merge->levels[i].buffer);
         merge->levels[i].last_key      = NULL; 
         merge->levels[i].next_idx      = 0; 
         merge->levels[i].valid_end_idx = -1; 
