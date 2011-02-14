@@ -1024,6 +1024,7 @@ struct castle_slave {
     struct castle_fs_superblock     fs_superblock;
     struct mutex                    sblk_lock;
     c_chk_cnt_t                     disk_size; /* in chunks; max_chk_num + 1 */
+    c_chk_cnt_t                     reserved_schks;
     atomic_t                        free_chk_cnt;
 };
 /* castle_slave flags bits */

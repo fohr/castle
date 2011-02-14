@@ -693,11 +693,13 @@ static void castle_extent_space_free(c_ext_t *ext, c_chk_cnt_t count)
  * @param da_id     Doubling array id for which the extent is to be allocated.
  * @param slave     Disk slave to allocate disk chunk from. 
  * @param copy_id   Which copy in the k-RDA set we are trying to allocate.
+ * @param token     Reservation token, required to allocate freespace.
  */
 static c_disk_chk_t castle_extent_disk_chk_alloc(da_id_t da_id,
                                                  struct castle_extent_state *ext_state,
                                                  struct castle_slave *slave,
-                                                 int copy_id)
+                                                 int copy_id,
+                                                 struct castle_freespace_reservation *token)
 {
     c_disk_chk_t disk_chk;
     c_chk_seq_t chk_seq;
@@ -720,7 +722,7 @@ static c_disk_chk_t castle_extent_disk_chk_alloc(da_id_t da_id,
         return disk_chk;
     }
     /* If we got here, we need to allocate a new superchunk. */
-    chk_seq = castle_freespace_slave_superchunk_alloc(slave, da_id);
+    chk_seq = castle_freespace_slave_superchunk_alloc(slave, da_id, token);
     if (CHK_SEQ_INVAL(chk_seq))
     {
        /*
@@ -783,6 +785,7 @@ static inline c_ext_pos_t castle_extent_map_cep_get(c_ext_pos_t map_start,
 int castle_extent_space_alloc(c_ext_t *ext, da_id_t da_id)
 {
     struct castle_extent_state *ext_state;
+    struct castle_freespace_reservation *reservation_token;
     struct castle_slave *slaves[ext->k_factor];
     int schk_ids[ext->k_factor];
     c_rda_spec_t *rda_spec;
@@ -856,7 +859,11 @@ retry:
         }
 
         /* Ask the RDA spec which slaves to use. */
-        if (rda_spec->next_slave_get(slaves, schk_ids, rda_state, chunk) < 0)
+        if (rda_spec->next_slave_get( slaves, 
+                                      schk_ids, 
+                                     &reservation_token,
+                                      rda_state, 
+                                      chunk) < 0)
         {
             printk("Failed to get next slave for extent: %llu\n", ext->ext_id);
             err = -ENOSPC;
@@ -866,7 +873,11 @@ retry:
         /* Allocate disk chunks from each slave designated by the rda spec. */
         for (j=0; j<ext->k_factor; j++)
         {
-            disk_chk = castle_extent_disk_chk_alloc(da_id, ext_state, slaves[j], schk_ids[j]);
+            disk_chk = castle_extent_disk_chk_alloc(da_id, 
+                                                    ext_state, 
+                                                    slaves[j], 
+                                                    schk_ids[j],
+                                                    reservation_token);
             debug("Allocation for (logical_chunk=%d, copy=%d) -> (slave=0x%x, "disk_chk_fmt")\n",
                 chunk, j, slaves[j]->uuid, disk_chk2str(disk_chk)); 
             if(DISK_CHK_INVAL(disk_chk))

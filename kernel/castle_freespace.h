@@ -24,9 +24,26 @@ void        castle_freespace_summary_get            (struct castle_slave *cs,
                                                      c_chk_cnt_t         *free_cnt,
                                                      c_chk_cnt_t         *size);
 
-/* Allocate chunks */
+/* Superchunk allocation. */
+
+/**
+ * Structure representing freespace reservation from the slaves.
+ */
+struct castle_freespace_reservation {
+    int inited;
+    c_chk_cnt_t reserved_schks[MAX_NR_SLAVES]; 
+};
+
+int         castle_freespace_slave_superchunks_reserve 
+                                                    (struct castle_slave *cs, 
+                                                     c_chk_cnt_t nr_schks,
+                                                     struct castle_freespace_reservation *token);
+void        castle_freespace_slave_superchunks_unreserve
+                                                    (struct castle_slave *cs,
+                                                     struct castle_freespace_reservation *token);
 c_chk_seq_t castle_freespace_slave_superchunk_alloc (struct castle_slave *cs,
-                                                     da_id_t              da_id); 
+                                                     da_id_t da_id,
+                                                     struct castle_freespace_reservation *token);
 
 void        castle_freespace_slave_superchunk_free  (struct castle_slave  *cs, 
                                                      c_chk_seq_t           chk_seq);
