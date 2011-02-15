@@ -1561,6 +1561,9 @@ struct castle_da_merge {
     u64                           merged_iter_next_hasnext_ns;
     u64                           merged_iter_next_compare_ns;
 #endif
+#ifdef CASTLE_DEBUG
+    uint8_t                       is_recursion;
+#endif
 };
 
 #define MAX_IOS             (1000) /* Arbitrary constants */
@@ -2086,13 +2089,14 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
     void *key;
     version_t version;
     c_val_tup_t cvt, node_cvt;
-    static int is_recursion = 0;
     c2_block_t *node_c2b;
     int valid_end_idx;
 
     /* Make sure we are not in recursion. */
-    BUG_ON(is_recursion);
-    is_recursion = 1;
+#ifdef CASTLE_DEBUG
+    BUG_ON(merge->is_recursion);
+    merge->is_recursion = 1;
+#endif
 
     debug("Completing node at depth=%d\n", depth);
     BUG_ON(depth >= MAX_BTREE_DEPTH);
@@ -2176,7 +2180,9 @@ release_node:
     /* Increment node count */
     merge->nr_nodes++;
 
-    is_recursion = 0;
+#ifdef CASTLE_DEBUG
+    merge->is_recursion = 0;
+#endif
 }
        
 static inline int castle_da_nodes_complete(struct castle_da_merge *merge, int depth)
@@ -2861,6 +2867,9 @@ static struct castle_da_merge* castle_da_merge_init(struct castle_double_array *
     merge->progress_update_ns           = 0;
     merge->merged_iter_next_hasnext_ns  = 0;
     merge->merged_iter_next_compare_ns  = 0;
+#endif
+#ifdef CASTLE_DEBUG
+    merge->is_recursion                 = 0;
 #endif
 
     ret = castle_da_iterators_create(merge);
