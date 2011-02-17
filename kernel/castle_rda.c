@@ -119,6 +119,7 @@ static c_chk_cnt_t castle_rda_reservation_size_get(c_chk_cnt_t ext_size,
 
     /* Work out how many separate, nr_slaves big, permutations are needed. */ 
     BUG_ON(ext_size == 0);
+    BUG_ON(nr_slaves == 0);
     nr_permutations = (ext_size - 1) / nr_slaves + 1;
     /* Each permutation allocates one chunk, work out how many superchunks
        does that correspond to. */
@@ -357,6 +358,11 @@ void* castle_ssd_rda_extent_init(c_ext_id_t ext_id,
         slave = list_entry(l, struct castle_slave, list);
         if(castle_rda_slave_usable(rda_spec, slave))
             state->permuted_slaves[state->nr_slaves++] = slave;
+    }
+    if(state->nr_slaves == 0)
+    {
+        printk("Could not allocate SSD extent size: %d. No SSDs found.\n", size);
+        goto unreserve_err_out;
     }
     castle_rda_slaves_shuffle(state->permuted_slaves, state->nr_slaves);
     /* Reserve space from each of the disks. */
