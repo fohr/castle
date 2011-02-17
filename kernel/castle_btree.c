@@ -1342,7 +1342,7 @@ struct castle_btree_type castle_rw_tree = {
 
 struct castle_btree_type castle_ro_tree = {
     .magic         = RO_VLBA_TREE_TYPE,
-    .node_size     = 256, 
+    .node_size     = 64, 
     .min_key       = (void *)&VLBA_TREE_MIN_KEY,
     .max_key       = (void *)&VLBA_TREE_MAX_KEY, 
     .inv_key       = (void *)&VLBA_TREE_INVAL_KEY, 
