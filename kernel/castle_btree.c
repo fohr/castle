@@ -150,6 +150,11 @@ static void castle_mtree_key_dealloc(void *key)
     /* No need to do anything in mtree keys, because they are ints (casted to void *). */
 }
 
+static uint32_t castle_mtree_key_hash(void *key, uint32_t seed)
+{
+    BUG();
+}
+
 static int castle_mtree_entry_get(struct castle_btree_node *node,
                                   int                       idx,
                                   void                    **key_p,            
@@ -299,24 +304,26 @@ static void castle_mtree_node_print(struct castle_btree_node *node)
 
 
 struct castle_btree_type castle_mtree = {
-    .magic         = MTREE_TYPE,
-    .node_size     = MTREE_NODE_SIZE,
-    .min_key       = (void *)0,
-    .max_key       = (void *)MTREE_MAX_BLK,
-    .inv_key       = (void *)MTREE_INVAL_BLK,
-    .need_split    = castle_mtree_need_split,
-    .key_compare   = castle_mtree_key_compare,
-    .key_duplicate = castle_mtree_key_duplicate,
-    .key_next      = castle_mtree_key_next,
-    .key_dealloc   = castle_mtree_key_dealloc,
-    .entry_get     = castle_mtree_entry_get,
-    .entry_add     = castle_mtree_entry_add,
-    .entry_replace = castle_mtree_entry_replace,
-    .entry_disable = castle_mtree_entry_disable,
-    .entries_drop  = castle_mtree_entries_drop,
-    .node_print    = castle_mtree_node_print,
+    .magic          = MTREE_TYPE,
+    .node_size      = MTREE_NODE_SIZE,
+    .nr_max_entries = MTREE_NODE_ENTRIES,
+    .min_key        = (void *)0,
+    .max_key        = (void *)MTREE_MAX_BLK,
+    .inv_key        = (void *)MTREE_INVAL_BLK,
+    .need_split     = castle_mtree_need_split,
+    .key_compare    = castle_mtree_key_compare,
+    .key_duplicate  = castle_mtree_key_duplicate,
+    .key_next       = castle_mtree_key_next,
+    .key_dealloc    = castle_mtree_key_dealloc,
+    .key_hash       = castle_mtree_key_hash,
+    .entry_get      = castle_mtree_entry_get,
+    .entry_add      = castle_mtree_entry_add,
+    .entry_replace  = castle_mtree_entry_replace,
+    .entry_disable  = castle_mtree_entry_disable,
+    .entries_drop   = castle_mtree_entries_drop,
+    .node_print     = castle_mtree_node_print,
 #ifdef CASTLE_DEBUG    
-    .node_validate = castle_mtree_node_validate,
+    .node_validate  = castle_mtree_node_validate,
 #endif
 }; 
 
@@ -455,6 +462,11 @@ static void castle_batree_key_dealloc(void *key)
         return;
 
     castle_free(key);
+}
+
+static uint32_t castle_batree_key_hash(void *key, uint32_t seed)
+{
+    BUG();
 }
 
 static int castle_batree_entry_get(struct castle_btree_node *node,
@@ -608,24 +620,26 @@ static void castle_batree_node_print(struct castle_btree_node *node)
 
 
 struct castle_btree_type castle_batree = {
-    .magic         = BATREE_TYPE,
-    .node_size     = BATREE_NODE_SIZE,
-    .min_key       = (void *)&BATREE_MIN_KEY,
-    .max_key       = (void *)&BATREE_MAX_KEY,
-    .inv_key       = (void *)&BATREE_INVAL_KEY,
-    .need_split    = castle_batree_need_split,
-    .key_compare   = castle_batree_key_compare,
-    .key_duplicate = castle_batree_key_duplicate,
-    .key_next      = castle_batree_key_next,
-    .key_dealloc   = castle_batree_key_dealloc,
-    .entry_get     = castle_batree_entry_get,
-    .entry_add     = castle_batree_entry_add,
-    .entry_replace = castle_batree_entry_replace,
-    .entry_disable = castle_batree_entry_disable,
-    .entries_drop  = castle_batree_entries_drop,
-    .node_print    = castle_batree_node_print,
+    .magic          = BATREE_TYPE,
+    .node_size      = BATREE_NODE_SIZE,
+    .nr_max_entries = BATREE_NODE_ENTRIES,
+    .min_key        = (void *)&BATREE_MIN_KEY,
+    .max_key        = (void *)&BATREE_MAX_KEY,
+    .inv_key        = (void *)&BATREE_INVAL_KEY,
+    .need_split     = castle_batree_need_split,
+    .key_compare    = castle_batree_key_compare,
+    .key_duplicate  = castle_batree_key_duplicate,
+    .key_next       = castle_batree_key_next,
+    .key_dealloc    = castle_batree_key_dealloc,
+    .key_hash       = castle_batree_key_hash,
+    .entry_get      = castle_batree_entry_get,
+    .entry_add      = castle_batree_entry_add,
+    .entry_replace  = castle_batree_entry_replace,
+    .entry_disable  = castle_batree_entry_disable,
+    .entries_drop   = castle_batree_entries_drop,
+    .node_print     = castle_batree_node_print,
 #ifdef CASTLE_DEBUG    
-    .node_validate = castle_batree_node_validate,
+    .node_validate  = castle_batree_node_validate,
 #endif
 }; 
 
@@ -696,6 +710,9 @@ struct castle_vlba_tree_node {
                  VLBA_TREE_MAX_KEY_SIZE +                                   \
                  MAX_INLINE_VAL_SIZE +                                      \
                  sizeof(uint32_t))
+#define VLBA_NR_MAX_ENTRIES(_node_size)                                     \
+                (_node_size * PAGE_SIZE - sizeof(struct castle_btree_node)) \
+                 / MAX_VLBA_ENTRY_LENGTH
 
 #define VLBA_ENTRY_PTR(__node, _vlba_node, _i)                              \
                 (EOF_VLBA_NODE(__node) - _vlba_node->key_idx[_i])
@@ -942,6 +959,12 @@ static void castle_vlba_tree_key_dealloc(void *keyv)
         return;
     }
     castle_object_bkey_free(keyv);
+}
+
+static uint32_t castle_vlba_tree_key_hash(void *keyv, uint32_t seed) {
+    vlba_key_t *key = (vlba_key_t *)keyv;
+
+    return murmur_hash_32(key->_key, key->length, seed);
 }
 
 static int castle_vlba_tree_entry_get(struct castle_btree_node *node,
@@ -1319,46 +1342,50 @@ static void castle_vlba_tree_node_print(struct castle_btree_node *node)
 
 
 struct castle_btree_type castle_rw_tree = {
-    .magic         = RW_VLBA_TREE_TYPE,
-    .node_size     = 2, 
-    .min_key       = (void *)&VLBA_TREE_MIN_KEY,
-    .max_key       = (void *)&VLBA_TREE_MAX_KEY, 
-    .inv_key       = (void *)&VLBA_TREE_INVAL_KEY, 
-    .need_split    = castle_vlba_tree_need_split,
-    .key_compare   = castle_vlba_tree_key_compare,
-    .key_duplicate = castle_vlba_tree_key_duplicate,
-    .key_next      = castle_vlba_tree_key_next,
-    .key_dealloc   = castle_vlba_tree_key_dealloc,
-    .entry_get     = castle_vlba_tree_entry_get,
-    .entry_add     = castle_vlba_tree_entry_add,
-    .entry_replace = castle_vlba_tree_entry_replace,
-    .entry_disable = castle_vlba_tree_entry_disable,
-    .entries_drop  = castle_vlba_tree_entries_drop,
-    .node_print    = castle_vlba_tree_node_print,
+    .magic          = RW_VLBA_TREE_TYPE,
+    .node_size      = 2,
+    .nr_max_entries = VLBA_NR_MAX_ENTRIES(2),
+    .min_key        = (void *)&VLBA_TREE_MIN_KEY,
+    .max_key        = (void *)&VLBA_TREE_MAX_KEY,
+    .inv_key        = (void *)&VLBA_TREE_INVAL_KEY,
+    .need_split     = castle_vlba_tree_need_split,
+    .key_compare    = castle_vlba_tree_key_compare,
+    .key_duplicate  = castle_vlba_tree_key_duplicate,
+    .key_next       = castle_vlba_tree_key_next,
+    .key_dealloc    = castle_vlba_tree_key_dealloc,
+    .key_hash       = castle_vlba_tree_key_hash,
+    .entry_get      = castle_vlba_tree_entry_get,
+    .entry_add      = castle_vlba_tree_entry_add,
+    .entry_replace  = castle_vlba_tree_entry_replace,
+    .entry_disable  = castle_vlba_tree_entry_disable,
+    .entries_drop   = castle_vlba_tree_entries_drop,
+    .node_print     = castle_vlba_tree_node_print,
 #ifdef CASTLE_DEBUG    
-    .node_validate = castle_vlba_tree_node_validate,
+    .node_validate  = castle_vlba_tree_node_validate,
 #endif
 }; 
 
 struct castle_btree_type castle_ro_tree = {
-    .magic         = RO_VLBA_TREE_TYPE,
-    .node_size     = 64, 
-    .min_key       = (void *)&VLBA_TREE_MIN_KEY,
-    .max_key       = (void *)&VLBA_TREE_MAX_KEY, 
-    .inv_key       = (void *)&VLBA_TREE_INVAL_KEY, 
-    .need_split    = castle_vlba_tree_need_split,
-    .key_compare   = castle_vlba_tree_key_compare,
-    .key_duplicate = castle_vlba_tree_key_duplicate,
-    .key_next      = castle_vlba_tree_key_next,
-    .key_dealloc   = castle_vlba_tree_key_dealloc,
-    .entry_get     = castle_vlba_tree_entry_get,
-    .entry_add     = castle_vlba_tree_entry_add,
-    .entry_replace = castle_vlba_tree_entry_replace,
-    .entry_disable = castle_vlba_tree_entry_disable,
-    .entries_drop  = castle_vlba_tree_entries_drop,
-    .node_print    = castle_vlba_tree_node_print,
+    .magic          = RO_VLBA_TREE_TYPE,
+    .node_size      = 64,
+    .nr_max_entries = VLBA_NR_MAX_ENTRIES(64),
+    .min_key        = (void *)&VLBA_TREE_MIN_KEY,
+    .max_key        = (void *)&VLBA_TREE_MAX_KEY,
+    .inv_key        = (void *)&VLBA_TREE_INVAL_KEY,
+    .need_split     = castle_vlba_tree_need_split,
+    .key_compare    = castle_vlba_tree_key_compare,
+    .key_duplicate  = castle_vlba_tree_key_duplicate,
+    .key_next       = castle_vlba_tree_key_next,
+    .key_dealloc    = castle_vlba_tree_key_dealloc,
+    .key_hash       = castle_vlba_tree_key_hash,
+    .entry_get      = castle_vlba_tree_entry_get,
+    .entry_add      = castle_vlba_tree_entry_add,
+    .entry_replace  = castle_vlba_tree_entry_replace,
+    .entry_disable  = castle_vlba_tree_entry_disable,
+    .entries_drop   = castle_vlba_tree_entries_drop,
+    .node_print     = castle_vlba_tree_node_print,
 #ifdef CASTLE_DEBUG    
-    .node_validate = castle_vlba_tree_node_validate,
+    .node_validate  = castle_vlba_tree_node_validate,
 #endif
 };
 
@@ -1486,7 +1513,7 @@ static void USED castle_btree_node_print(struct castle_btree_type *t, struct cas
     t->node_print(node);
 }
 
-static void castle_btree_lub_find(struct castle_btree_node *node,
+void castle_btree_lub_find(struct castle_btree_node *node,
                                   void *key,
                                   version_t version,
                                   int *lub_idx_p,

@@ -180,6 +180,7 @@ int                        castle_checkpoint_version_inc   (void);
 int                        castle_chk_disk                 (void);
 
 void                       castle_cache_stats_print        (int verbose);
+int                        castle_cache_size_get           (void);
 
 /**********************************************************************************************
  * Cache init/fini. 

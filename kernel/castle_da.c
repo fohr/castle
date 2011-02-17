@@ -15,6 +15,7 @@
 #include "castle_trace.h"
 #include "castle_sysfs.h"
 #include "castle_objects.h"
+#include "castle_bloom.h"
 
 #ifndef CASTLE_PERF_DEBUG
 #define ts_delta_ns(a, b)                       ((void)0)
@@ -113,6 +114,9 @@ static void castle_da_queue_kick(struct castle_double_array *da);
 static void castle_da_bvec_start(struct castle_double_array *da, c_bvec_t *c_bvec);
 static void castle_da_get(struct castle_double_array *da);
 static void castle_da_put(struct castle_double_array *da);
+
+struct workqueue_struct *castle_da_wqs[NR_CASTLE_DA_WQS];
+char *castle_da_wqs_names[NR_CASTLE_DA_WQS] = {"castle_da0", "castle_da1"};
 
 /**********************************************************************************************/
 /* Utils */
@@ -1550,6 +1554,8 @@ struct castle_da_merge {
     int                           budget_cons_units;
     c_ext_fs_t                    tree_ext_fs;
     c_ext_fs_t                    data_ext_fs;
+    int                           bloom_exists;
+    castle_bloom_t                bloom;
     struct list_head              large_objs;
 #ifdef CASTLE_PERF_DEBUG
     u64                           get_c2b_ns;       /**< ns in castle_cache_block_get() */
@@ -1844,6 +1850,13 @@ static int castle_da_iterators_create(struct castle_da_merge *merge)
         printk("Merge failed due to space constraint for data\n");
         goto no_space;
     }
+    
+    size = atomic64_read(&merge->in_tree1->item_count) + 
+           atomic64_read(&merge->in_tree2->item_count);
+    if ((ret = castle_bloom_create(&merge->bloom, merge->da->id, size)))
+        merge->bloom_exists = 0;
+    else
+        merge->bloom_exists = 1;
 
     /* Success */
     return 0;
@@ -2247,6 +2260,8 @@ static struct castle_component_tree* castle_da_merge_package(struct castle_da_me
     out_tree->root_node = merge->last_node_c2b->cep;
     out_tree->first_node = merge->first_node;
     out_tree->last_node = INVAL_EXT_POS;
+    out_tree->bloom_exists = merge->bloom_exists;
+    out_tree->bloom = merge->bloom;
 
     /* Release the last node c2b */
     if(merge->last_node_c2b)
@@ -2397,6 +2412,9 @@ static struct castle_component_tree* castle_da_merge_complete(struct castle_da_m
     }
     castle_da_max_path_complete(merge);
 
+    if (merge->bloom_exists)
+        castle_bloom_complete(&merge->bloom);
+
     return castle_da_merge_package(merge);
 
 err_out:
@@ -2444,6 +2462,9 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
     {
         castle_ext_fs_fini(&merge->tree_ext_fs);
         castle_ext_fs_fini(&merge->data_ext_fs);
+
+        if (merge->bloom_exists)
+            castle_bloom_destroy(&merge->bloom);
     }
     castle_free(merge->merged_iter);
     castle_free(merge);
@@ -2491,6 +2512,9 @@ static int castle_da_merge_unit_do(struct castle_da_merge *merge, uint32_t unit_
         BUG_ON(CVT_INVALID(cvt));
         /* Add entry to level 0 node (and recursively up the tree). */
         castle_da_entry_add(merge, 0, key, version, cvt, 0);
+        /* Add entry to bloom filter */
+        if (merge->bloom_exists)
+            castle_bloom_add(&merge->bloom, merge->out_btree, key);
         /* Increment the number of entries stored in the output tree. */
         merge->nr_entries++;
         /* Try to complete node. */
@@ -3424,6 +3448,9 @@ void castle_ct_put(struct castle_component_tree *ct, int write)
     if (ct->last_key)
         castle_object_okey_free(ct->last_key);
 
+    if (ct->bloom_exists)
+        castle_bloom_destroy(&ct->bloom);
+
     /* Poison ct (note this will be repoisoned by kfree on kernel debug build. */
     memset(ct, 0xde, sizeof(struct castle_component_tree));
     castle_free(ct);
@@ -3459,6 +3486,10 @@ void castle_da_ct_marshall(struct castle_clist_entry *ctm,
 
     castle_ext_fs_marshall(&ct->tree_ext_fs, &ctm->tree_ext_fs_bs);
     castle_ext_fs_marshall(&ct->data_ext_fs, &ctm->data_ext_fs_bs);
+
+    ctm->bloom_exists = ct->bloom_exists;
+    if (ct->bloom_exists)
+        castle_bloom_marshall(&ct->bloom, ctm);
 }
 
 static da_id_t castle_da_ct_unmarshall(struct castle_component_tree *ct,
@@ -3490,6 +3521,9 @@ static da_id_t castle_da_ct_unmarshall(struct castle_component_tree *ct,
     INIT_LIST_HEAD(&ct->large_objs);
     mutex_init(&ct->last_key_mutex);
     ct->last_key = NULL;
+    ct->bloom_exists = ctm->bloom_exists;
+    if (ctm->bloom_exists)
+        castle_bloom_unmarshall(&ct->bloom, ctm);
 
     return ctm->da_id;
 }
@@ -3953,6 +3987,7 @@ static struct castle_component_tree* castle_ct_alloc(struct castle_double_array 
     ct->data_ext_fs.ext_id = INVAL_EXT_ID;
     ct->last_key           = NULL;
     mutex_init(&ct->last_key_mutex);
+    ct->bloom_exists = 0;
 #ifdef CASTLE_PERF_DEBUG
     ct->bt_c2bsync_ns   = 0;
     ct->data_c2bsync_ns = 0;
@@ -4086,7 +4121,7 @@ int castle_double_array_make(da_id_t da_id, version_t root_version)
     return 0;
 }
 
-static struct castle_component_tree* castle_da_ct_next(struct castle_component_tree *ct)
+struct castle_component_tree* castle_da_ct_next(struct castle_component_tree *ct)
 {
     struct castle_double_array *da = castle_da_hash_get(ct->da);
     struct castle_component_tree *next_ct;
@@ -4261,6 +4296,13 @@ static void castle_da_ct_walk_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cv
     /* For reads, if the key hasn't been found, check in the next tree. */
     if(read && CVT_INVALID(cvt) && (!err))
     {
+#ifdef CASTLE_BLOOM_FP_STATS
+        if (ct->bloom_exists && c_bvec->bloom_positive)
+        {
+            atomic64_inc(&ct->bloom.false_positives);
+            c_bvec->bloom_positive = 0;
+        }
+#endif
         debug_verbose("Checking next ct.\n");
         next_ct = castle_da_ct_next(ct);
         /* We've finished looking through all the trees. */
@@ -4274,7 +4316,7 @@ static void castle_da_ct_walk_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cv
         c_bvec->tree = next_ct;
         debug_verbose("Scheduling btree read in %s tree: %d.\n", 
                 ct->dynamic ? "dynamic" : "static", ct->seq);
-        castle_btree_submit(c_bvec);
+        castle_bloom_submit(c_bvec);
         return;
     }
     castle_request_timeline_checkpoint_stop(c_bvec->timeline);
@@ -4297,6 +4339,8 @@ static void castle_da_ct_walk_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cv
 
 static void castle_da_bvec_start(struct castle_double_array *da, c_bvec_t *c_bvec)
 { 
+    int write = c_bvec_data_dir(c_bvec) == WRITE;
+
     debug_verbose("Doing DA %s for da_id=%d\n", write ? "write" : "read", da_id);
     BUG_ON(atomic_read(&c_bvec->reserv_nodes) != 0);
     /* This will get a reference to current RW tree, or create a new one if neccessary.
@@ -4315,7 +4359,16 @@ static void castle_da_bvec_start(struct castle_double_array *da, c_bvec_t *c_bve
     //castle_request_timeline_create(c_bvec->timeline);
     castle_request_timeline_checkpoint_start(c_bvec->timeline);
     debug_verbose("Looking up in ct=%d\n", c_bvec->tree->seq); 
-    castle_btree_submit(c_bvec);
+
+    if (write)
+        castle_btree_submit(c_bvec);
+    else
+    {
+#ifdef CASTLE_BLOOM_FP_STATS
+        c_bvec->bloom_positive = 0;
+#endif
+        castle_bloom_submit(c_bvec);
+    }
 }
 
 /**
@@ -4369,15 +4422,26 @@ int castle_double_array_create(void)
     
 int castle_double_array_init(void)
 {
-    int ret;
+    int ret, i, j;
 
     ret = -ENOMEM;
+
+    for (i = 0; i < NR_CASTLE_DA_WQS; i++)
+    {
+        castle_da_wqs[i] = create_workqueue(castle_da_wqs_names[i]);
+        if (!castle_da_wqs[i])
+        {
+            printk(KERN_ALERT "Error: Could not alloc wq\n");
+            goto err0;
+        }
+    }
+
     castle_da_hash = castle_da_hash_alloc();
     if(!castle_da_hash)
-        goto err_out;
+        goto err0;
     castle_ct_hash = castle_ct_hash_alloc();
     if(!castle_ct_hash)
-        goto err_out;
+        goto err1;
 
     castle_da_hash_init();
     castle_ct_hash_init();
@@ -4386,13 +4450,12 @@ int castle_double_array_init(void)
 
     return 0;
  
-err_out:
+err1:
+    castle_free(castle_da_hash);
+err0:
+    for (j = 0; j < i; j++)
+        destroy_workqueue(castle_da_wqs[j]);
     BUG_ON(!ret);
-    if(castle_ct_hash)
-        castle_free(castle_ct_hash);
-    if(castle_da_hash)
-        castle_free(castle_da_hash);
-
     return ret;
 }
 
@@ -4416,8 +4479,12 @@ void castle_double_array_merges_fini(void)
 
 void castle_double_array_fini(void)
 {
+    int i;
     castle_da_hash_destroy();
     castle_ct_hash_destroy();
+
+    for (i = 0; i < NR_CASTLE_DA_WQS; i++)
+        destroy_workqueue(castle_da_wqs[i]);
 }
 
 void castle_da_destroy_complete(struct castle_double_array *da)
