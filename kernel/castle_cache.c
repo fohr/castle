@@ -1493,8 +1493,11 @@ int submit_c2b_sync(int rw, c2_block_t *c2b)
         return ret;
     wait_for_completion(&completion);
 
-    /* Success (ret=0) if uptodate now */
-    return !c2b_uptodate(c2b);
+    /* Success (ret=0) if c2b is uptodate now for READ, or dirty now for WRITE */
+    if (rw == READ)
+        return !c2b_uptodate(c2b);
+    else
+        return c2b_dirty(c2b);
 }
 
 static inline unsigned long castle_cache_hash_idx(c_ext_pos_t cep, int nr_buckets)
