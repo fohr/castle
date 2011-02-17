@@ -1001,6 +1001,30 @@ static void c2b_multi_io_end(struct bio *bio, int err)
 #endif
 }
 
+#ifdef CASTLE_DEBUG
+int chk_valid(c_disk_chk_t chk)
+{
+    struct castle_slave *cs = castle_slave_find_by_uuid(chk.slave_id);
+    c_chk_t size;
+    
+    if (!cs)
+    {
+        printk("Couldn't find disk with uuid: %u\n", chk.slave_id);
+        return 0;
+    }
+
+    castle_freespace_summary_get(cs, NULL, &size);
+    if (chk.offset >= size)
+    {
+        printk("Unexpected chunk "disk_chk_fmt", Disk Size: 0x%x\n",
+                disk_chk2str(chk), size);
+        return 0;
+    }
+
+    return 1;
+}
+#endif
+
 #define MAX_BIO_PAGES        128
 
 /**
@@ -1024,13 +1048,13 @@ void submit_c2b_io(int           rw,
     int i, j, batch;
 
 #ifdef CASTLE_DEBUG    
-    /* This first one could be turned into a valid error. */
-    BUG_ON(DISK_CHK_INVAL(disk_chk));
-    BUG_ON(!SUPER_EXTENT(array->start_cep.ext_id) && !chk_valid(disk_chk));
-
     /* Check that we are submitting IO to the right ceps. */
     c_ext_pos_t dcep = cep;
     c2_page_t *c2p;
+
+    /* This first one could be turned into a valid error. */
+    BUG_ON(DISK_CHK_INVAL(disk_chk));
+    BUG_ON(!SUPER_EXTENT(cep.ext_id) && !chk_valid(disk_chk));
 
     /* Only works for 1 page c2ps. */
     BUG_ON(PAGES_PER_C2P != 1);
@@ -1096,30 +1120,6 @@ void submit_c2b_io(int           rw,
         nr_pages -= batch;
     }
 }
-
-#ifdef CASTLE_DEBUG
-int chk_valid(c_disk_chk_t chk)
-{
-    struct castle_slave *cs = castle_slave_find_by_uuid(chk.slave_id);
-    c_chk_t size;
-    
-    if (!cs)
-    {
-        printk("Couldn't find disk with uuid: %u\n", chk.slave_id);
-        return 0;
-    }
-
-    castle_freespace_summary_get(cs, NULL, &size);
-    if (chk.offset >= size)
-    {
-        printk("Unexpected chunk "disk_chk_fmt", Disk Size: 0x%x\n",
-                disk_chk2str(chk), size);
-        return 0;
-    }
-
-    return 1;
-}
-#endif
 
 typedef struct castle_io_array {
     struct page *io_pages[MAX_BIO_PAGES];
