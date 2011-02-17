@@ -500,6 +500,8 @@ struct castle_btree_type {
     btree_t   magic;         /* Also used as an index to castle_btrees
                                 array.                                 */
     int       node_size;     /* in C_BLK_SIZE                          */
+    int       nr_max_entries;/* Number of entries of max length that
+                                can fit in one node                    */
     void     *min_key;       /* Minimum key                            */
     void     *max_key;       /* Maximum used as the end of node marker */
     void     *inv_key;       /* An invalid key, comparison with it 
@@ -521,6 +523,8 @@ struct castle_btree_type {
     void    (*key_dealloc)   (void *key);
                              /* Destroys the key, frees resources
                                 associated with it                     */
+    uint32_t(*key_hash)      (void *key, uint32_t seed);
+                             /* Get hash of key with seed              */
     int     (*entry_get)     (struct castle_btree_node *node,
                               int                       idx,
                               void                    **key_p,            
@@ -549,6 +553,22 @@ struct castle_btree_type {
 #endif        
 };
 
+typedef struct castle_boom_filter {
+    uint8_t                   num_hashes;
+    uint32_t                  block_size_pages;
+    uint32_t                  num_chunks;
+    uint32_t                  num_blocks_last_chunk;
+    uint64_t                  chunks_offset;
+    uint32_t                  num_btree_nodes;
+    struct castle_btree_type *btree;
+    c_ext_id_t                ext_id;
+    void                     *private; /* used for builds */
+#ifdef CASTLE_BLOOM_FP_STATS
+    atomic64_t                queries;
+    atomic64_t                false_positives;
+#endif
+} castle_bloom_t;
+
 struct castle_component_tree {
     tree_seq_t          seq;
     atomic_t            ref_count;
@@ -575,6 +595,8 @@ struct castle_component_tree {
     atomic64_t          large_ext_chk_cnt;
     c_vl_okey_t        *last_key;
     struct mutex        last_key_mutex;
+    uint8_t             bloom_exists;
+    castle_bloom_t      bloom;
 #ifdef CASTLE_PERF_DEBUG
     u64                 bt_c2bsync_ns;
     u64                 data_c2bsync_ns;
@@ -612,9 +634,17 @@ struct castle_clist_entry {
     /*        128 */ c_ext_fs_bs_t data_ext_fs_bs;
     /*        192 */ uint64_t      node_count;
     /*        200 */ uint64_t	   large_ext_chk_cnt;
-    /*        208 */ tree_seq_t    seq;
-    /*        212 */ uint8_t       _unused[44]; 
-    /*        256 */ 
+    /*        208 */ uint32_t      bloom_num_chunks;
+    /*        212 */ uint32_t      bloom_num_blocks_last_chunk;
+    /*        216 */ uint64_t      bloom_chunks_offset;
+    /*        224 */ c_ext_id_t    bloom_ext_id;
+    /*        232 */ uint32_t      bloom_num_btree_nodes;
+    /*        236 */ uint32_t      bloom_block_size_pages;
+    /*        240 */ tree_seq_t    seq;
+    /*        244 */ uint8_t       bloom_exists;
+    /*        245 */ uint8_t       bloom_num_hashes;
+    /*        246 */ uint8_t       _unused[10];
+    /*        256 */
 } PACKED;
 
 struct castle_vlist_entry {
@@ -722,6 +752,10 @@ typedef struct castle_bio_vec {
                locked concurrently. */
             struct castle_cache_block *btree_node;
             struct castle_cache_block *btree_parent_node;
+            struct castle_cache_block *bloom_c2b;
+#ifdef CASTLE_BLOOM_FP_STATS
+            int bloom_positive;
+#endif
         };
     };
     /* Used to thread this bvec onto a workqueue */

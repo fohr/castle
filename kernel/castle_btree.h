@@ -21,6 +21,12 @@ void        castle_btree_iter_replace (c_iter_t *c_iter, int index,
 void        castle_btree_iter_continue(c_iter_t *c_iter);
 void        castle_btree_iter_cancel  (c_iter_t *c_iter, int err);
 
+void        castle_btree_lub_find     (struct castle_btree_node *node,
+                                       void *key,
+                                       version_t version,
+                                       int *lub_idx_p,
+                                       int *insert_idx_p);
+
 /* Iterator to enumerate latest ancestral entries */
 void        castle_btree_rq_enum_init (c_rq_enum_t *c_rq_enum, 
                                        version_t    version, 
