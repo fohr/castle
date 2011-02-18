@@ -315,7 +315,6 @@ static struct castle_freespace_reservation *castle_ssd_rda_reservation_token_get
 
     /* Unknown RDA type. */ 
     BUG();
-    return NULL;
 }
 
 /**
