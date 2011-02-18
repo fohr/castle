@@ -18,15 +18,12 @@
 
 #include "castle_public.h"
 
+/* BUG and BUG_ON redefined to cause reliable crash-dumpable crashes. */
 #undef BUG
 #undef BUG_ON
 
-#define BUG()                                                           \
-            do {                                                        \
-                    WARN_ON(1);                                         \
-                    panic("castle panic %s:%d\n", __FILE__, __LINE__);  \
-            } while(0)
-#define BUG_ON(_cond)    do{if(_cond) BUG();} while(0)
+#define BUG()            do { *((unsigned long *)0xca511e) = 0xca511e; } while(0)
+#define BUG_ON(_cond)    do { if(_cond) BUG(); } while(0)
 
 #define FLE strrchr(__FILE__, '/') ? strrchr(__FILE__, '/') + 1 : __FILE__ 
 

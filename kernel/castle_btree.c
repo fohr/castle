@@ -153,6 +153,7 @@ static void castle_mtree_key_dealloc(void *key)
 static uint32_t castle_mtree_key_hash(void *key, uint32_t seed)
 {
     BUG();
+    return 0;
 }
 
 static int castle_mtree_entry_get(struct castle_btree_node *node,
@@ -467,6 +468,7 @@ static void castle_batree_key_dealloc(void *key)
 static uint32_t castle_batree_key_hash(void *key, uint32_t seed)
 {
     BUG();
+    return 0;
 }
 
 static int castle_batree_entry_get(struct castle_btree_node *node,
