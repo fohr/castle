@@ -158,6 +158,7 @@ function load_fs_and_claim {
     fi
 
     touch /var/lib/castle-fs/dirty
+    sync
 
     for dev in "${devs[@]}"
     do
