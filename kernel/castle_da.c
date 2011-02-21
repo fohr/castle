@@ -757,8 +757,7 @@ static void castle_ct_modlist_iter_next_node(c_immut_iter_t *immut_iter)
  * - Immutable iterator has a callback when it advances to a new btree node.
  *   castle_ct_modlist_iter_next_node() is registered as the callback handler
  *   and sets iter->enum_advanced whenever a new source node is used
- * - Get a new buffer btree node whenever the source iterator advances to a new
- *   node or we fill one of ours (should never happen)
+ * - Get a new buffer btree node whenever the source iterator node advances
  * - Keep getting (unsorted) entries from the immutable iterator and store them
  *   in the node_buffer.  Put an entry in dst_entry_idx[] pointing to the node
  *   and node_offset
@@ -791,16 +790,11 @@ static void castle_ct_modlist_iter_fill(c_modlist_iter_t *iter)
         debug("Inserting into the node=%d, under idx=%d\n", node_idx, node_offset);
         BUG_ON(CVT_LEAF_PTR(cvt));
 
-        /* If the immutable iterator advanced to a new node then our callback
-         * handler will have set enum_advanced, indicating that we should also
-         * move to a new node internally.  Equally if node_offset is 0 this
-         * indicates that we have filled a buffer node - as our buffer nodes are
-         * the same size as the source nodes, this should never happen
-         * independently of the enum_advanced bit. */
-        if (iter->enum_advanced || node_offset == 0)
+        /* Advance to a new node if the immutable iterator has moved on.  This
+         * is handled via the immutable iterator callback.  We rely on source
+         * nodes being identically sized to our destination nodes. */
+        if (iter->enum_advanced)
         {
-            BUG_ON(iter->enum_advanced == 0 && node_offset == 0);
-
             /* Set end entry for node range we just completed. */
             if (likely(node_idx))
                 iter->ranges[node_idx-1].end = item_idx-1;
@@ -816,8 +810,6 @@ static void castle_ct_modlist_iter_fill(c_modlist_iter_t *iter)
             node_offset = 0;
             node_idx++;
         }
-        else
-            BUG_ON(btree->need_split(node, 0));
 
         /* Insert entry into node. */
         btree->entry_add(node, node_offset, key, version, cvt);
@@ -825,10 +817,6 @@ static void castle_ct_modlist_iter_fill(c_modlist_iter_t *iter)
         iter->dst_entry_idx[item_idx].node_offset = node_offset;
         node_offset++;
         item_idx++;
-
-        /* Check whether we have filled the node. */
-        if (btree->need_split(node, 0))
-            node_offset = 0;
     }
 
     if (likely(node_idx))
