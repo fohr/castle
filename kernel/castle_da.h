@@ -1,7 +1,7 @@
 #ifndef __CASTLE_DA_H__
 #define __CASTLE_DA_H__
 
-#define NR_CASTLE_DA_WQS 2
+#define NR_CASTLE_DA_WQS 1
 extern struct workqueue_struct *castle_da_wqs[NR_CASTLE_DA_WQS];
 
 struct castle_component_tree*

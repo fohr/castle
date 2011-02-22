@@ -23,7 +23,12 @@ static int castle_bloom_hdd = 0; /* 0: SSD, 1: HDD */
 module_param(castle_bloom_hdd, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
 MODULE_PARM_DESC(castle_bloom_hdd, "Use bloom filters on SSD");
 
-/* the expected fp probability is 2^{-ln 2 * BITS_PER_ELEMENTS} */
+/*
+ * Changing *ANY* of these constants will change the format of the persisted bloom filters
+ * so must be accompanied by a change to castle_public.h/CASTLE_SLAVE_VERSION
+ */
+
+/* the expected fp probability for a block is 2^{-ln 2 * BITS_PER_ELEMENTS} */
 #define BLOOM_BITS_PER_ELEMENT        8
 #define BLOOM_MAX_BITS_PER_ELEMENT    16
 /* ensure CHUNK_SIZE % BLOCK_SIZE == 0 */
@@ -42,6 +47,8 @@ MODULE_PARM_DESC(castle_bloom_hdd, "Use bloom filters on SSD");
 /* The seed to use when calculating the hash for the block ID. Should be different to the
  * seed (which is 0) given to the first hash function for within the block. */
 #define BLOOM_BLOCK_HASH_SEED         1
+#define BLOOM_INDEX_NODE_SIZE         (uint32_t)(BLOOM_INDEX_NODE_SIZE_PAGES * PAGE_SIZE)
+#define BLOOM_INDEX_NODE_SIZE_PAGES   64
 
 /* the maximum number of chunks in a bloom filter for which we softpin */
 #define BLOOM_MAX_SOFTPIN_CHUNKS      (castle_cache_size_get() / (5 * BLOOM_CHUNK_SIZE_PAGES))
@@ -124,7 +131,8 @@ int castle_bloom_create(castle_bloom_t *bf, da_id_t da_id, uint64_t num_elements
     num_blocks = ceiling(num_elements, BLOOM_ELEMENTS_PER_BLOCK(bf));
     bf->num_chunks = ceiling(num_blocks, BLOOM_BLOCKS_PER_CHUNK(bf));
     /* Estimated, will be updated to correct number in castle_bloom_complete */
-    bf->num_btree_nodes = ceiling(bf->num_chunks, btree->nr_max_entries);
+    bf->num_btree_nodes = ceiling(bf->num_chunks,
+                                  castle_btree_vlba_max_nr_entries_get(BLOOM_INDEX_NODE_SIZE_PAGES));
     blocks_remainder = num_blocks % BLOOM_BLOCKS_PER_CHUNK(bf);
     if (blocks_remainder == 0)
         bf->num_blocks_last_chunk = BLOOM_BLOCKS_PER_CHUNK(bf);
@@ -132,7 +140,7 @@ int castle_bloom_create(castle_bloom_t *bf, da_id_t da_id, uint64_t num_elements
         bf->num_blocks_last_chunk = blocks_remainder;
     bf->btree = btree;
 
-    nodes_size = bf->num_btree_nodes * btree->node_size * C_BLK_SIZE;
+    nodes_size = bf->num_btree_nodes * BLOOM_INDEX_NODE_SIZE;
     chunks_size = num_blocks * BLOOM_BLOCK_SIZE(bf);
     size = nodes_size + chunks_size;
 
@@ -166,7 +174,7 @@ int castle_bloom_create(castle_bloom_t *bf, da_id_t da_id, uint64_t num_elements
 
 err1:
 #ifdef DEBUG
-    castle_free(bf->private->elements_inserted_per_block);
+   castle_free(((struct castle_bloom_build_params*)bf->private)->elements_inserted_per_block);
 #endif
     castle_free(bf->private);
     bf->private = NULL;
@@ -193,6 +201,7 @@ static void castle_bloom_node_buffer_init(struct castle_btree_type *btree, struc
     buffer->used = 0;
     buffer->is_leaf = 1;
     buffer->next_node = INVAL_EXT_POS;
+    //buffer->size = BLOOM_INDEX_NODE_SIZE_PAGES;
 }
 
 /**
@@ -210,7 +219,7 @@ static void castle_bloom_complete_btree_node(castle_bloom_t *bf)
 
     debug("btree_node completed, offset was %llu, ", bf_bp->node_cep.offset);
 
-    bf_bp->node_cep.offset += bf->btree->node_size * C_BLK_SIZE;
+    bf_bp->node_cep.offset += BLOOM_INDEX_NODE_SIZE;
     bf_bp->nodes_complete++;
 
     debug("now %llu.\n", bf_bp->node_cep.offset);
@@ -226,7 +235,7 @@ static void castle_bloom_next_btree_node(castle_bloom_t *bf)
     if (bf_bp->cur_node != NULL)
         castle_bloom_complete_btree_node(bf);
 
-    bf_bp->node_c2b = castle_cache_block_get(bf_bp->node_cep, ceiling(bf->btree->node_size * C_BLK_SIZE, PAGE_SIZE));
+    bf_bp->node_c2b = castle_cache_block_get(bf_bp->node_cep, BLOOM_INDEX_NODE_SIZE_PAGES);
     write_lock_c2b(bf_bp->node_c2b);
     castle_cache_advise(bf_bp->node_c2b->cep, C2_ADV_SOFTPIN, -1, -1, 0);
     update_c2b(bf_bp->node_c2b);
@@ -370,7 +379,7 @@ void castle_bloom_destroy(castle_bloom_t *bf)
     for (i = 0; i < bf->num_btree_nodes; i++)
     {
         castle_cache_advise_clear(cep, C2_ADV_SOFTPIN, -1, -1, 0);
-        cep.offset += bf->btree->node_size * C_BLK_SIZE;
+        cep.offset += BLOOM_INDEX_NODE_SIZE;
     }
 
     /* chunks are only softpinned if the BF is small enough */
@@ -464,7 +473,7 @@ void castle_bloom_add(castle_bloom_t *bf, struct castle_btree_type *btree, void 
  *
  * @return 0 if out of range, non-zero otherwise. cep and chunk_id_out are set if not NULL.
  */
-static int castle_bloom_get_chunk_id(castle_bloom_t *bf, void *key, c2_block_t *btree_nodes_c2b, c_ext_pos_t *cep, uint32_t *chunk_id_out)
+static int castle_bloom_get_chunk_id(castle_bloom_t *bf, void *key, c2_block_t **btree_nodes_c2bs, c_ext_pos_t *cep, uint32_t *chunk_id_out)
 {
     uint32_t chunk_id = 0;
     uint32_t node_index;
@@ -475,12 +484,11 @@ static int castle_bloom_get_chunk_id(castle_bloom_t *bf, void *key, c2_block_t *
     struct castle_btree_type *btree = bf->btree;
 
     BUG_ON(cep == NULL && chunk_id_out == NULL);
-    BUG_ON(!c2b_uptodate(btree_nodes_c2b));
-
-    buffer = c2b_buffer(btree_nodes_c2b);
 
     for (node_index = 0; node_index < bf->num_btree_nodes; node_index++)
     {
+        BUG_ON(!c2b_uptodate(btree_nodes_c2bs[node_index]));
+        buffer = c2b_buffer(btree_nodes_c2bs[node_index]);
         node = (struct castle_btree_node *)buffer;
 
         BUG_ON(node->used == 0);
@@ -496,7 +504,6 @@ static int castle_bloom_get_chunk_id(castle_bloom_t *bf, void *key, c2_block_t *
         }
 
         chunk_id += node->used;
-        buffer += bf->btree->node_size * C_BLK_SIZE;
     }
 
     /* it was never found i.e. greater than the last chunk key */
@@ -523,7 +530,7 @@ static int castle_bloom_get_chunk_id(castle_bloom_t *bf, void *key, c2_block_t *
 /**
  * Call graph.
  *
- * Have three workqueues: a, b and c.  These are used to ensure the c2b write_locks are not taken by the thread
+ * Have two workqueues: a and b.  These are used to ensure the c2b write_locks are not taken by the thread
  * that unlocks them.
  *
  * castle_bloom_submit
@@ -535,19 +542,16 @@ static int castle_bloom_get_chunk_id(castle_bloom_t *bf, void *key, c2_block_t *
  *   v
  * castle_bloom_index_read
  *   |                |
- *   | in cache       | not in cache, schedule I/O. This should happen very rarely.
+ *   | in cache       | not in cache, do sync I/O. This should happen very rarely.
  *   |                |
- *   |                v
- *   |              castle_bloom_end_index_io
- *   |                |
- *   |                |  schedule on workqueue b
- *   |                v
- *   |      _castle_bloom_end_index_io
- *    \        /
- *     \      /
- *      \    /
- *       \  /
- *        \/
+ *    \              /
+ *     \            /
+ *      \          /
+ *       \        /
+ *        \      /
+ *         \    /
+ *          \  /
+ *           \/
  * castle_bloom_index_process
  *   |                   |
  *   | found chunk ID    | not in any chunk
@@ -563,7 +567,7 @@ static int castle_bloom_get_chunk_id(castle_bloom_t *bf, void *key, c2_block_t *
  *   |                 v
  *   |               castle_bloom_end_block_io
  *   |                 |
- *   |                 | schedule on workqueue c
+ *   |                 | schedule on workqueue b
  *   |                 v
  *   |       _castle_bloom_end_block_io
  *    \        /
@@ -718,7 +722,7 @@ static void castle_bloom_end_block_io(c2_block_t *c2b)
     c_bvec_t *c_bvec = c2b->private;
 
     INIT_WORK(&c_bvec->work, _castle_bloom_end_block_io, c_bvec);
-    queue_work(castle_da_wqs[1], &c_bvec->work);
+    queue_work(castle_da_wqs[0], &c_bvec->work);
 }
 
 /**
@@ -764,23 +768,16 @@ static void castle_bloom_chunk_read(c_bvec_t *c_bvec, uint32_t chunk_id)
 /**
  * Process the bloom filter index to find the chunk
  */
-static void castle_bloom_index_process(c_bvec_t *c_bvec)
+static void castle_bloom_index_process(c_bvec_t *c_bvec, c2_block_t **btree_nodes_c2bs)
 {
     uint32_t chunk_id = 0;
     castle_bloom_t *bf;
-    c2_block_t *btree_nodes_c2b;
     void *key = c_bvec->key;
     int found;
 
     bf = &c_bvec->tree->bloom;
-    btree_nodes_c2b = c_bvec->bloom_c2b;
-    c_bvec->bloom_c2b = NULL;
 
-    BUG_ON(!c2b_uptodate(btree_nodes_c2b));
-
-    found = castle_bloom_get_chunk_id(bf, key, btree_nodes_c2b, NULL, &chunk_id);
-
-    put_c2b(btree_nodes_c2b);
+    found = castle_bloom_get_chunk_id(bf, key, btree_nodes_c2bs, NULL, &chunk_id);
 
     if (!found)
         castle_bloom_lookup_next_ct(c_bvec);
@@ -789,72 +786,58 @@ static void castle_bloom_index_process(c_bvec_t *c_bvec)
 }
 
 /**
- * Callback when the index nodes have been retrieved.
- */
-static void _castle_bloom_end_index_io(void *data)
-{
-    c_bvec_t *c_bvec = data;
-
-    BUG_ON(!c_bvec->bloom_c2b);
-    BUG_ON(!c2b_uptodate(c_bvec->bloom_c2b));
-
-    write_unlock_c2b(c_bvec->bloom_c2b);
-
-    castle_bloom_index_process(c_bvec);
-}
-
-/**
- * Callback from doing I/O to get partition index.
- * Could be in the interrupt context.
- */
-static void castle_bloom_end_index_io(c2_block_t *c2b)
-{
-    c_bvec_t *c_bvec = c2b->private;
-
-    INIT_WORK(&c_bvec->work, _castle_bloom_end_index_io, c_bvec);
-    queue_work(castle_da_wqs[0], &c_bvec->work);
-}
-
-/**
- * Reads the btree node from cache/disk
+ * Reads the btree node from cache/disk. Does it synchronously since the index will
+ * nearly always be in cache.
  */
 static void castle_bloom_index_read(c_bvec_t *c_bvec)
 {
     castle_bloom_t *bf;
     c_ext_pos_t btree_nodes_cep;
-    c2_block_t *btree_nodes_c2b;
+    c2_block_t **btree_nodes_c2bs;
+    uint32_t i;
 
     bf = &c_bvec->tree->bloom;
     btree_nodes_cep.ext_id = bf->ext_id;
     btree_nodes_cep.offset = 0;
-    btree_nodes_c2b = castle_cache_block_get(btree_nodes_cep,
-            ceiling(bf->num_btree_nodes * bf->btree->node_size * C_BLK_SIZE, PAGE_SIZE));
 
-    c_bvec->bloom_c2b = btree_nodes_c2b;
-
-    if (!c2b_uptodate(btree_nodes_c2b))
+    btree_nodes_c2bs = castle_malloc(sizeof(c2_block_t*) * bf->num_btree_nodes, GFP_KERNEL);
+    if (!btree_nodes_c2bs)
     {
-        /* we expect to not get here very often as this will require 2 I/Os per lookup */
-
-        write_lock_c2b(btree_nodes_c2b);
-        /* now we have the lock, it might be up to date */
-        if (c2b_uptodate(btree_nodes_c2b))
-        {
-            write_unlock_c2b(btree_nodes_c2b);
-            castle_bloom_index_process(c_bvec);
-            return;
-        }
-        castle_cache_advise(btree_nodes_c2b->cep, C2_ADV_SOFTPIN, -1, -1, 0);
-        btree_nodes_c2b->end_io = castle_bloom_end_index_io;
-        btree_nodes_c2b->private = c_bvec;
-
-        printk("Bloom filter partition index not in cache, scheduling I/O at offset %llu for bf %p.\n", btree_nodes_c2b->cep.offset, bf);
-
-        BUG_ON(submit_c2b(READ, btree_nodes_c2b));
-    } else
-    {
-        castle_bloom_index_process(c_bvec);
+        printk("Failed to alloc btree_nodes_c2bs.\n");
+        c_bvec->endfind(c_bvec, -ENOMEM, INVAL_VAL_TUP);
+        return;
     }
+
+    for (i = 0; i < bf->num_btree_nodes; i++)
+    {
+        btree_nodes_c2bs[i] = castle_cache_block_get(btree_nodes_cep,
+                                             bf->num_btree_nodes * BLOOM_INDEX_NODE_SIZE_PAGES);
+
+        if (!c2b_uptodate(btree_nodes_c2bs[i]))
+        {
+            /* we expect to not get here very often as this will require 2 I/Os per lookup */
+
+            write_lock_c2b(btree_nodes_c2bs[i]);
+            /* now we have the lock, it might be up to date */
+            if (!c2b_uptodate(btree_nodes_c2bs[i]))
+            {
+                castle_cache_advise(btree_nodes_c2bs[i]->cep, C2_ADV_SOFTPIN, -1, -1, 0);
+
+                printk("Bloom filter partition index not in cache, scheduling I/O at offset %llu for bf %p.\n", btree_nodes_c2bs[i]->cep.offset, bf);
+
+                BUG_ON(submit_c2b_sync(READ, btree_nodes_c2bs[i]));
+            }
+            write_unlock_c2b(btree_nodes_c2bs[i]);
+        }
+        btree_nodes_cep.offset += BLOOM_INDEX_NODE_SIZE;
+    }
+
+    castle_bloom_index_process(c_bvec, btree_nodes_c2bs);
+
+    for (i = 0; i < bf->num_btree_nodes; i++)
+        put_c2b(btree_nodes_c2bs[i]);
+
+    castle_free(btree_nodes_c2bs);
 }
 
 /**

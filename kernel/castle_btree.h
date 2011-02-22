@@ -5,6 +5,8 @@
 
 struct castle_btree_type* 
             castle_btree_type_get     (btree_t type);
+uint32_t    castle_btree_vlba_max_nr_entries_get
+                                      (uint16_t node_size);
 c2_block_t* castle_btree_node_create  (int version, 
                                        int is_leaf, 
                                        struct castle_component_tree *ct,

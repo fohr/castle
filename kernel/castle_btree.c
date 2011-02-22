@@ -721,7 +721,11 @@ struct castle_vlba_tree_node {
                  VLBA_ENTRY_LENGTH(_entry) -                                \
                  _entry->val_len))
 
-uint32_t max_entry_length = MAX_VLBA_ENTRY_LENGTH;
+uint32_t castle_btree_vlba_max_nr_entries_get(uint16_t node_size)
+{
+    return (((size_t)node_size) * PAGE_SIZE - sizeof(struct castle_btree_node))
+                 / MAX_VLBA_ENTRY_LENGTH;
+}
 
 /* Implementation of heap sort from wiki */
 static void min_heap_swap(uint32_t *a, int i, int j)

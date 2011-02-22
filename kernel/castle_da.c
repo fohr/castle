@@ -116,7 +116,7 @@ static void castle_da_get(struct castle_double_array *da);
 static void castle_da_put(struct castle_double_array *da);
 
 struct workqueue_struct *castle_da_wqs[NR_CASTLE_DA_WQS];
-char *castle_da_wqs_names[NR_CASTLE_DA_WQS] = {"castle_da0", "castle_da1"};
+char *castle_da_wqs_names[NR_CASTLE_DA_WQS] = {"castle_da0"};
 
 /**********************************************************************************************/
 /* Utils */
