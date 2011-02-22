@@ -466,12 +466,15 @@ enum {
 #define RW_VLBA_TREE_TYPE          0x55
 #define RO_VLBA_TREE_TYPE          0x66
                                   
-#define MAX_BTREE_DEPTH           (10)
-#define MAX_BTREE_ENTRIES         (2500)
+#define MAX_BTREE_DEPTH           (10)               /**< Maximum depth of btrees.
+                                                          This is used in on-disk datastructures.
+                                                          For example castle_clist_entry.
+                                                          If modified, those need to be reviewed. 
+                                                      */ 
 
 typedef uint8_t btree_t;
 
-#define BTREE_NODE_MAGIC  0x0000cdab
+#define BTREE_NODE_MAGIC  0x0100cdab
 struct castle_btree_node {
     /* align:   8 */
     /* offset:  0 */ uint32_t        magic;
@@ -479,10 +482,11 @@ struct castle_btree_node {
     /*          8 */ uint32_t        used;
     /*         12 */ btree_t         type;
     /*         13 */ uint8_t         is_leaf;
-    /*         14 */ uint8_t         _pad[2];
+    /*         14 */ uint16_t        size;           /**< Size of this btree node in pages.     */
     /*         16 */ c_ext_pos_t     next_node;
+    /*         32 */ uint16_t        next_node_size; /**< Size of the next btree node in pages. */
                      /* Payload (i.e. btree entries) depend on the B-tree type */
-    /*         32 */ uint8_t         _unused[32];
+    /*         34 */ uint8_t         _unused[30];
     /*         64 */ uint8_t         payload[0];
     /*         64 */
 } PACKED;
@@ -503,62 +507,70 @@ typedef struct castle_var_length_btree_key {
 
 /* Below encapsulates the internal btree node structure, different type of
    nodes may be used for different trees */
+struct castle_component_tree;
 struct castle_btree_type {
-    btree_t   magic;         /* Also used as an index to castle_btrees
-                                array.                                 */
-    int       node_size;     /* in C_BLK_SIZE                          */
-    int       nr_max_entries;/* Number of entries of max length that
-                                can fit in one node                    */
-    void     *min_key;       /* Minimum key                            */
-    void     *max_key;       /* Maximum used as the end of node marker */
-    void     *inv_key;       /* An invalid key, comparison with it 
-                                should always return a negative number
-                                except if also compared to invalid key
-                                in which case cmp should return zero   */
-    int     (*need_split)    (struct castle_btree_node *node,
-                              int                       version_or_key);
-                             /* 0 - version split, 1 - key split       */
-    int     (*key_compare)   (void *key1, void *key2);
-                             /* Returns negative if key1 < key2, zero 
-                                if equal, positive otherwise           */
-    void*   (*key_duplicate) (void *key);
-                             /* Returns duplicate of key. Need to call 
-                              * a dealloc later to free resources      */
-    void*   (*key_next)      (void *key);
-                             /* Successor key, succ(MAX) = INVAL,
-                                succ(INVAL) = INVAL                    */
-    void    (*key_dealloc)   (void *key);
-                             /* Destroys the key, frees resources
-                                associated with it                     */
-    uint32_t(*key_hash)      (void *key, uint32_t seed);
-                             /* Get hash of key with seed              */
-    int     (*entry_get)     (struct castle_btree_node *node,
-                              int                       idx,
-                              void                    **key_p,            
-                              version_t                *version_p,
-                              c_val_tup_t              *cvt_p);
-    void    (*entry_add)     (struct castle_btree_node *node,
-                              int                       idx,
-                              void                     *key,            
-                              version_t                 version,
-                              c_val_tup_t               cvt);
-    void    (*entry_replace) (struct castle_btree_node *node,
-                              int                       idx,
-                              void                     *key,            
-                              version_t                 version,
-                              c_val_tup_t               cvt);
-    void    (*entry_disable) (struct castle_btree_node *node,
-                              int                       idx);
-    void    (*entries_drop)  (struct castle_btree_node *node,
-                              int                       idx_start,
-                              int                       idx_end);
-                             /* Drop all entries between idx_start and
-                                idx_stop. Inclusive                    */ 
-    void    (*node_print)    (struct castle_btree_node *node);
+    btree_t    magic;         /* Also used as an index to castle_btrees
+                                 array.                                 */
+    void      *min_key;       /* Minimum key                            */
+    void      *max_key;       /* Maximum used as the end of node marker */
+    void      *inv_key;       /* An invalid key, comparison with it 
+                                 should always return a negative number
+                                 except if also compared to invalid key
+                                 in which case cmp should return zero   */
+    uint16_t (*node_size)     (struct castle_component_tree *ct,
+                               uint8_t level);
+                              /**< Gives btree node size at the given 
+                                   level. Levels are counted in reverse
+                                   order. I.e. leaf level is 0, etc. 
+                                   This makes it possible to grow the tree
+                                   without renumbering all the existing
+                                   levels. */
+    int      (*need_split)    (struct castle_btree_node *node,
+                               int                       version_or_key);
+                              /* 0 - version split, 1 - key split       */
+    int      (*key_compare)   (void *key1, void *key2);
+                              /* Returns negative if key1 < key2, zero 
+                                 if equal, positive otherwise           */
+    void*    (*key_duplicate) (void *key);
+                              /* Returns duplicate of key. Need to call 
+                               * a dealloc later to free resources      */
+    void*    (*key_next)      (void *key);
+                              /* Successor key, succ(MAX) = INVAL,
+                                 succ(INVAL) = INVAL                    */
+    void     (*key_dealloc)   (void *key);
+                              /* Destroys the key, frees resources
+                                 associated with it                     */
+    uint32_t (*key_hash)      (void *key, uint32_t seed);
+                              /* Get hash of key with seed              */
+    int      (*entry_get)     (struct castle_btree_node *node,
+                               int                       idx,
+                               void                    **key_p,            
+                               version_t                *version_p,
+                               c_val_tup_t              *cvt_p);
+    void     (*entry_add)     (struct castle_btree_node *node,
+                               int                       idx,
+                               void                     *key,            
+                               version_t                 version,
+                               c_val_tup_t               cvt);
+    void     (*entry_replace) (struct castle_btree_node *node,
+                               int                       idx,
+                               void                     *key,            
+                               version_t                 version,
+                               c_val_tup_t               cvt);
+    void     (*entry_disable) (struct castle_btree_node *node,
+                               int                       idx);
+    void     (*entries_drop)  (struct castle_btree_node *node,
+                               int                       idx_start,
+                               int                       idx_end);
+                              /* Drop all entries between idx_start and
+                                 idx_stop. Inclusive                    */ 
+    void     (*node_print)    (struct castle_btree_node *node);
 #ifdef CASTLE_DEBUG    
-    void    (*node_validate) (struct castle_btree_node *node);
+    void     (*node_validate) (struct castle_btree_node *node);
 #endif        
 };
+
+#define MTREE_NODE_SIZE     (10) /* In blocks */
 
 typedef struct castle_boom_filter {
     uint8_t                   num_hashes;
@@ -582,21 +594,30 @@ struct castle_component_tree {
     atomic_t            write_ref_count;
     atomic64_t          item_count;
     btree_t             btree_type;
-    uint8_t             dynamic;           /* 1 - dynamic modlist btree, 0 - merge result */ 
+    uint8_t             dynamic;           /**< 1 - dynamic modlist btree, 0 - merge result.  */ 
     da_id_t             da;
-    uint8_t             level;
-    uint8_t             new_ct;            /* Marked for cts which are not yet
-                                            * flushed onto disk. */
-    struct rw_semaphore lock;              /* Protects root_node, tree depth & last_node  */
+    uint8_t             level;             /**< Level in the doubling array.                  */
+    uint16_t            node_sizes[MAX_BTREE_DEPTH];
+                                           /**< Size of nodes in each level in the b-tree,
+                                                in pages. Only used for !dynamic (i.e. RO) 
+                                                trees. Stored in reverse order, 
+                                                i.e. node_sizes[0] is the size of leaf level, 
+                                                node_sizes[tree_depth-1] is the size of the 
+                                                root node. */
+    uint8_t             new_ct;            /**< Marked for cts which are not yet flushed onto
+                                                the disk.                                     */
+    struct rw_semaphore lock;              /**< Protects root_node, tree depth & last_node.   */
     uint8_t             tree_depth;
     c_ext_pos_t         root_node;
-    c_ext_pos_t         first_node;
+    c_ext_pos_t         first_node;        /**< Pointer to the first node in the linked list. */
+    uint16_t            first_node_size; 
     c_ext_pos_t         last_node;
+    uint16_t            last_node_size;    /**< Size of the last node, in pages.              */
     atomic64_t          node_count;
     struct list_head    da_list;
     struct list_head    hash_list;
     struct list_head    large_objs;
-    struct mutex        lo_mutex;          /* Protects Large Object List. */
+    struct mutex        lo_mutex;          /**< Protects Large Object List.                   */
     c_ext_fs_t          tree_ext_fs;
     c_ext_fs_t          data_ext_fs;
     atomic64_t          large_ext_chk_cnt;
@@ -650,8 +671,9 @@ struct castle_clist_entry {
     /*        240 */ tree_seq_t    seq;
     /*        244 */ uint8_t       bloom_exists;
     /*        245 */ uint8_t       bloom_num_hashes;
-    /*        246 */ uint8_t       _unused[10];
-    /*        256 */
+    /*        246 */ uint16_t      node_sizes[MAX_BTREE_DEPTH];
+    /*        266 */ uint8_t       _unused[246];
+    /*        512 */
 } PACKED;
 
 struct castle_vlist_entry {

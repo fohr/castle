@@ -7,13 +7,15 @@ struct castle_btree_type*
             castle_btree_type_get     (btree_t type);
 uint32_t    castle_btree_vlba_max_nr_entries_get
                                       (uint16_t node_size);
-c2_block_t* castle_btree_node_create  (int version, 
+c2_block_t* castle_btree_node_create  (struct castle_component_tree *ct,
+                                       int version,
+                                       uint16_t level,
                                        int is_leaf, 
-                                       struct castle_component_tree *ct,
                                        int alloc_done);
 void        castle_btree_node_save_prepare
                                       (struct castle_component_tree *ct, 
-                                       c_ext_pos_t  node_cep);
+                                       c_ext_pos_t node_cep,
+                                       uint16_t node_size);
 void        castle_btree_submit       (c_bvec_t *c_bvec);
          
 void        castle_btree_iter_init    (c_iter_t *c_iter, version_t version, int type);

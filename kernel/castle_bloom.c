@@ -201,7 +201,7 @@ static void castle_bloom_node_buffer_init(struct castle_btree_type *btree, struc
     buffer->used = 0;
     buffer->is_leaf = 1;
     buffer->next_node = INVAL_EXT_POS;
-    //buffer->size = BLOOM_INDEX_NODE_SIZE_PAGES;
+    buffer->size = BLOOM_INDEX_NODE_SIZE_PAGES;
 }
 
 /**

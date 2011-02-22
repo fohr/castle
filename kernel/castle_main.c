@@ -500,8 +500,6 @@ int castle_fs_init(void)
        Init the fs superblock. */
     if(first) {
         c2_block_t *c2b;
-        struct castle_btree_type *btree =
-                                castle_btree_type_get(castle_global_tree.btree_type);
 
         /* Init the root btree node */
         atomic64_set(&(castle_global_tree.node_count), 0);
@@ -513,7 +511,7 @@ int castle_fs_init(void)
         if ((ret = castle_ext_fs_init(&castle_global_tree.tree_ext_fs,
                                       castle_global_tree.da,
                                       castle_global_tree.tree_ext_fs.ext_size,
-                                      btree->node_size * C_BLK_SIZE)) < 0)
+                                      MTREE_NODE_SIZE * C_BLK_SIZE)) < 0)
         {
             printk("Failed to allocate space for Global Tree.\n");
             return ret;
@@ -528,8 +526,12 @@ int castle_fs_init(void)
             return ret;
         }
 
-        c2b = castle_btree_node_create(0 /* version */, 1 /* is_leaf */, &castle_global_tree, 0);
-        castle_btree_node_save_prepare(&castle_global_tree, c2b->cep);
+        c2b = castle_btree_node_create(&castle_global_tree,
+                                       0 /* version */, 
+                                       0 /* level */,
+                                       1 /* is_leaf */, 
+                                       0 /* was preallocated */);
+        castle_btree_node_save_prepare(&castle_global_tree, c2b->cep, MTREE_NODE_SIZE);
         /* Save the root node in the global tree */
         castle_global_tree.root_node = c2b->cep; 
         /* We know that the tree is 1 level deep at the moment */
