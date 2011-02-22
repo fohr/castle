@@ -22,13 +22,17 @@
 #undef BUG
 #undef BUG_ON
 
-static inline ATTRIB_NORET void bug_fn(void)
+static inline ATTRIB_NORET void bug_fn(unsigned long line)
 {
-    *((unsigned long *)0xca511e) = 0xca511e;
+    /* Write the line number into R15, but push it onto the stack first. */
+    __asm__ __volatile__ ("pushq %%r15\n\t"
+                          "movq %0, %%r15;\n\t"
+                          "movq $0x0,0xca511e\n\t"
+                            : : "i" (line) : "%r15" );
     /* Will never get here. */
     while(1){};
 } 
-#define BUG()            do { bug_fn(); } while(0)
+#define BUG()            do { bug_fn(__LINE__); } while(0)
 #define BUG_ON(_cond)    do { if(_cond) BUG(); } while(0)
 
 #define FLE strrchr(__FILE__, '/') ? strrchr(__FILE__, '/') + 1 : __FILE__ 
