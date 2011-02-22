@@ -15,7 +15,7 @@
 #define debug(_f, ...)          ((void)0)
 #endif
 
-typedef struct {
+typedef struct c_def_rda_state {
     c_rda_spec_t                        *rda_spec;
     c_ext_id_t                           ext_id;
     c_chk_t                              prev_chk;
@@ -26,7 +26,7 @@ typedef struct {
     struct castle_freespace_reservation  freespace_reservation; 
 } c_def_rda_state_t;
 
-typedef struct {
+typedef struct c_ssd_rda_state {
     c_rda_spec_t                        *rda_spec;
     c_def_rda_state_t                   *def_state;
     uint32_t                             nr_slaves;

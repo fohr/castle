@@ -27,7 +27,7 @@ typedef void* (*c_extent_init_t)  (c_ext_id_t   ext_id,
 typedef void (*c_extent_fini_t)   (c_ext_id_t  ext_id, 
                                    void       *state);
 
-typedef struct {
+typedef struct c_rda_spec {
     c_rda_type_t                type;           /* RDA type */
     uint32_t                    k_factor;       /* K in K-RDA. [in order of 2] */
     c_next_slave_get_t          next_slave_get; /* fn() to get sequence of

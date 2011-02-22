@@ -67,7 +67,7 @@ c_chk_cnt_t meta_ext_size = 0;
 struct castle_extents_superblock castle_extents_global_sb;
 static DEFINE_MUTEX(castle_extents_mutex);
 
-typedef struct {
+typedef struct castle_extent {
     c_ext_id_t          ext_id;         /* Unique extent ID */
     c_chk_cnt_t         size;           /* Number of chunks */
     c_rda_type_t        type;           /* RDA type */

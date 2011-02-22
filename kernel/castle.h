@@ -256,7 +256,7 @@ typedef struct castle_extent_freespace_byte_stream {
     /*         64 */ 
 } PACKED c_ext_fs_bs_t;
 
-typedef struct {
+typedef struct castle_freespace {
     /* align:   4 */  
     /* offset:  0 */ uint32_t        max_entries;
     /*          4 */ uint32_t        nr_entries;

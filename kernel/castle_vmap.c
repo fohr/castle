@@ -26,7 +26,7 @@
             (list_first_entry(castle_vmap_fast_maps_ptr+bucket_index, castle_vmap_freelist_t, list))
 
 /* One struct per freelist, multiple freelists per bucket */
-typedef struct {
+typedef struct castle_vmap_freelist {
     struct list_head    list;                   /* List of freelists for this bucket */
     uint32_t            *freelist;              /* The freelist */
     void                *vstart;                /* Start vaddr */

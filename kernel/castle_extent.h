@@ -6,7 +6,7 @@
 /**
  * Extent dirtylist structure.
  */
-typedef struct {
+typedef struct c_ext_dirtylist {
     spinlock_t                  lock;           /**< Dirtylist lock. */
     struct rb_root              rb_root;        /**< Dirtylist RB root. */
 } c_ext_dirtylist_t;
