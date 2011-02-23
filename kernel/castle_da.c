@@ -812,7 +812,7 @@ static void castle_ct_modlist_iter_fill(c_modlist_iter_t *iter)
 
             /* Get a new node. */
             node = castle_ct_modlist_iter_buffer_get(iter, node_idx);
-            castle_da_node_buffer_init(btree, node, 2);
+            castle_da_node_buffer_init(btree, node, btree->node_size(iter->tree, 0));
 
             /* We've advance, initialise a good state. */
             iter->enum_advanced = 0;
@@ -2062,7 +2062,7 @@ static inline void castle_da_entry_add(struct castle_da_merge *merge,
         update_c2b(level->node_c2b);
         /* Init the node properly */
         node = c2b_bnode(level->node_c2b);
-        castle_da_node_buffer_init(btree, node, 64);
+        castle_da_node_buffer_init(btree, node, node_size);
     }
 
     node = c2b_bnode(level->node_c2b);
