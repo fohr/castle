@@ -83,7 +83,7 @@ typedef struct castle_extent {
 } c_ext_t;
 
 static struct list_head *castle_extents_hash = NULL;
-static c_ext_fs_t meta_ext_fs;
+static c_ext_free_t meta_ext_free;
 
 static c_ext_id_t _castle_extent_alloc(c_rda_type_t rda_type,
                                        da_id_t      da_id,
@@ -339,7 +339,7 @@ int castle_extents_create(void)
     if (castle_extent_meta_ext_create())
         return -EINVAL;
 
-    _castle_ext_fs_init(&meta_ext_fs, 0, 0, C_BLK_SIZE, META_EXT_ID);
+    _castle_ext_freespace_init(&meta_ext_free, 0, 0, C_BLK_SIZE, META_EXT_ID);
 
     INJECT_FAULT;
 
@@ -408,12 +408,12 @@ int castle_extents_writeback(void)
     castle_mstore_fini(castle_extents_mstore);
 
     /* Writeback maps freespace structure into extent superblock. */
-    castle_ext_fs_marshall(&meta_ext_fs, &ext_sblk->meta_ext_fs_bs);
+    castle_ext_freespace_marshall(&meta_ext_free, &ext_sblk->meta_ext_free_bs);
 
     /* Flush the complete meta extent onto disk, before completing writeback. */
-    BUG_ON(!castle_ext_fs_consistent(&meta_ext_fs));
+    BUG_ON(!castle_ext_freespace_consistent(&meta_ext_free));
     castle_cache_extent_flush_schedule(META_EXT_ID, 0,
-                                       atomic64_read(&meta_ext_fs.used));
+                                       atomic64_read(&meta_ext_free.used));
 
     INJECT_FAULT;
 
@@ -456,7 +456,7 @@ int castle_extents_read(void)
     ext_sblk = castle_extents_super_block_get();
 
     /* Read maps freespace structure from extents superblock. */
-    castle_ext_fs_unmarshall(&meta_ext_fs, &ext_sblk->meta_ext_fs_bs);
+    castle_ext_freespace_unmarshall(&meta_ext_free, &ext_sblk->meta_ext_free_bs);
 
     if (load_extent_from_mentry(&ext_sblk->micro_ext))
         goto error_out;
@@ -989,7 +989,7 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t rda_type,
     {
         uint32_t nr_blocks = map_size(count, rda_spec->k_factor);
 
-        if (castle_ext_fs_get(&meta_ext_fs, (nr_blocks * C_BLK_SIZE), 0, &ext->maps_cep))
+        if (castle_ext_freespace_get(&meta_ext_free, (nr_blocks * C_BLK_SIZE), 0, &ext->maps_cep))
         {
             printk("Too big of an extent/crossing the boundry.\n");
             goto __hell;

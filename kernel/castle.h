@@ -243,7 +243,7 @@ typedef struct castle_extent_freespace {
     uint32_t        align;
     atomic64_t      used;
     atomic64_t      blocked;
-} c_ext_fs_t;
+} c_ext_free_t;
 
 typedef struct castle_extent_freespace_byte_stream {
     /* align:   8 */   
@@ -254,7 +254,7 @@ typedef struct castle_extent_freespace_byte_stream {
     /*         32 */ uint32_t        align;
     /*         36 */ uint8_t         _unused[28]; 
     /*         64 */ 
-} PACKED c_ext_fs_bs_t;
+} PACKED c_ext_free_bs_t;
 
 typedef struct castle_freespace {
     /* align:   4 */  
@@ -287,7 +287,7 @@ struct castle_extents_superblock {
     /*         16 */ struct castle_elist_entry  micro_ext;
     /*         80 */ struct castle_elist_entry  meta_ext;
     /*        144 */ struct castle_elist_entry  mstore_ext[2];
-    /*        272 */ c_ext_fs_bs_t              meta_ext_fs_bs;
+    /*        272 */ c_ext_free_bs_t            meta_ext_free_bs;
     /*        336 */ c_disk_chk_t               micro_maps[MAX_NR_SLAVES];
     /*        848 */ uint8_t                    _unused[176];
     /*       1024 */
@@ -618,8 +618,9 @@ struct castle_component_tree {
     struct list_head    hash_list;
     struct list_head    large_objs;
     struct mutex        lo_mutex;          /**< Protects Large Object List.                   */
-    c_ext_fs_t          tree_ext_fs;
-    c_ext_fs_t          data_ext_fs;
+    c_ext_free_t        internal_ext_free;
+    c_ext_free_t        tree_ext_free;
+    c_ext_free_t        data_ext_free;
     atomic64_t          large_ext_chk_cnt;
     c_vl_okey_t        *last_key;
     struct mutex        last_key_mutex;
@@ -649,32 +650,32 @@ struct castle_dlist_entry {
 
 struct castle_clist_entry {
     /* align:   8 */
-    /* offset:  0 */ da_id_t       da_id;
-    /*          4 */ btree_t       btree_type;
-    /*          5 */ uint8_t       dynamic;
-    /*          6 */ uint8_t       level;
-    /*          7 */ uint8_t       tree_depth;
-    /*          8 */ uint64_t      item_count;
-    /*         16 */ c_ext_pos_t   root_node;
-    /*         32 */ c_ext_pos_t   first_node;
-    /*         48 */ c_ext_pos_t   last_node;
-    /*         64 */ c_ext_fs_bs_t tree_ext_fs_bs;
-    /*        128 */ c_ext_fs_bs_t data_ext_fs_bs;
-    /*        192 */ uint64_t      node_count;
-    /*        200 */ uint64_t	   large_ext_chk_cnt;
-    /*        208 */ uint32_t      bloom_num_chunks;
-    /*        212 */ uint32_t      bloom_num_blocks_last_chunk;
-    /*        216 */ uint64_t      bloom_chunks_offset;
-    /*        224 */ c_ext_id_t    bloom_ext_id;
-    /*        232 */ uint32_t      bloom_num_btree_nodes;
-    /*        236 */ uint32_t      bloom_block_size_pages;
-    /*        240 */ tree_seq_t    seq;
-    /*        244 */ uint8_t       bloom_exists;
-    /*        245 */ uint8_t       bloom_num_hashes;
-    /*        246 */ uint16_t      node_sizes[MAX_BTREE_DEPTH];
-    /*        266 */ uint16_t      first_node_size;
-    /*        268 */ uint16_t      last_node_size;
-    /*        270 */ uint8_t       _unused[242];
+    /* offset:  0 */ da_id_t         da_id;
+    /*          4 */ btree_t         btree_type;
+    /*          5 */ uint8_t         dynamic;
+    /*          6 */ uint8_t         level;
+    /*          7 */ uint8_t         tree_depth;
+    /*          8 */ uint64_t        item_count;
+    /*         16 */ c_ext_pos_t     root_node;
+    /*         32 */ c_ext_pos_t     first_node;
+    /*         48 */ c_ext_pos_t     last_node;
+    /*         64 */ c_ext_free_bs_t tree_ext_free_bs;
+    /*        128 */ c_ext_free_bs_t data_ext_free_bs;
+    /*        192 */ uint64_t        node_count;
+    /*        200 */ uint64_t        large_ext_chk_cnt;
+    /*        208 */ uint32_t        bloom_num_chunks;
+    /*        212 */ uint32_t        bloom_num_blocks_last_chunk;
+    /*        216 */ uint64_t        bloom_chunks_offset;
+    /*        224 */ c_ext_id_t      bloom_ext_id;
+    /*        232 */ uint32_t        bloom_num_btree_nodes;
+    /*        236 */ uint32_t        bloom_block_size_pages;
+    /*        240 */ tree_seq_t      seq;
+    /*        244 */ uint8_t         bloom_exists;
+    /*        245 */ uint8_t         bloom_num_hashes;
+    /*        246 */ uint16_t        node_sizes[MAX_BTREE_DEPTH];
+    /*        266 */ uint16_t        first_node_size;
+    /*        268 */ uint16_t        last_node_size;
+    /*        270 */ uint8_t         _unused[242];
     /*        512 */
 } PACKED;
 
@@ -1179,39 +1180,42 @@ void                  castle_fs_superblocks_put    (struct castle_fs_superblock 
 
 int                   castle_fs_init               (void);
 
-int                   castle_ext_fs_init           (c_ext_fs_t       *ext_fs, 
+int                   castle_ext_freespace_init    (c_ext_free_t     *ext_freespace, 
                                                     da_id_t           da_id, 
                                                     c_byte_off_t      size,
                                                     uint32_t          align);
 
-int                   castle_ext_fs_consistent     (c_ext_fs_t       *ext_fs);
+int                   castle_ext_freespace_consistent     
+                                                   (c_ext_free_t     *ext_freespace);
 
-int                  _castle_ext_fs_init           (c_ext_fs_t       *ext_fs, 
+int                  _castle_ext_freespace_init    (c_ext_free_t     *ext_freespace, 
                                                     da_id_t           da_id, 
                                                     c_byte_off_t      size,
                                                     uint32_t          align,
                                                     c_ext_id_t        ext_id);
 
-void                  castle_ext_fs_fini           (c_ext_fs_t       *ext_fs);
+void                  castle_ext_freespace_fini    (c_ext_free_t     *ext_free);
 
-int                   castle_ext_fs_pre_alloc      (c_ext_fs_t       *ext_fs,
+int                   castle_ext_freespace_prealloc(c_ext_free_t     *ext_free,
                                                     c_byte_off_t      size);
 
-int                   castle_ext_fs_get            (c_ext_fs_t       *ext_fs,
+int                   castle_ext_freespace_get     (c_ext_free_t     *ext_free,
                                                     c_byte_off_t      size,
                                                     int               alloc_done,
                                                     c_ext_pos_t      *cep);
 
-int                   castle_ext_fs_free           (c_ext_fs_t       *ext_fs,
+int                   castle_ext_freespace_free    (c_ext_free_t     *ext_free,
                                                     int64_t           size);
 
-void                  castle_ext_fs_marshall       (c_ext_fs_t       *ext_fs, 
-                                                    c_ext_fs_bs_t    *ext_fs_bs);
+void                  castle_ext_freespace_marshall(c_ext_free_t     *ext_free, 
+                                                    c_ext_free_bs_t  *ext_free_bs);
 
-void                  castle_ext_fs_unmarshall     (c_ext_fs_t       *ext_fs, 
-                                                    c_ext_fs_bs_t    *ext_fs_bs);
+void                  castle_ext_freespace_unmarshall     
+                                                   (c_ext_free_t     *ext_free, 
+                                                    c_ext_free_bs_t  *ext_free_bs);
 
-c_byte_off_t          castle_ext_fs_summary_get    (c_ext_fs_t *ext_fs);
+c_byte_off_t          castle_ext_freespace_summary_get    
+                                                   (c_ext_free_t     *ext_free);
 
 struct castle_cache_block;
 

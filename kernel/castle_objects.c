@@ -700,18 +700,18 @@ static int castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
             { /* Medium Objects. */
                 if (CVT_MEDIUM_OBJECT(prev_cvt) && (prev_nr_blocks >= nr_blocks))
                 {
-                    castle_ext_fs_free(&c_bvec->tree->data_ext_fs,
-                                        nr_blocks * C_BLK_SIZE);
+                    castle_ext_freespace_free(&c_bvec->tree->data_ext_free,
+                                               nr_blocks * C_BLK_SIZE);
                     debug("Freeing %u blks from %p|%p\n", nr_blocks, c_bvec,
                                                              c_bvec->tree);
                     CVT_MEDIUM_OBJECT_SET(*cvt, replace->value_len, prev_cvt.cep);
                 }
                 else
                 {
-                    BUG_ON(castle_ext_fs_get(&c_bvec->tree->data_ext_fs,
-                                             nr_blocks * C_BLK_SIZE,
-                                             1,
-                                             &cep) < 0);
+                    BUG_ON(castle_ext_freespace_get(&c_bvec->tree->data_ext_free,
+                                                     nr_blocks * C_BLK_SIZE,
+                                                     1,
+                                                    &cep) < 0);
                     CVT_MEDIUM_OBJECT_SET(*cvt, replace->value_len, cep);
                 }
                 debug("Medium Object in %p, cep: "cep_fmt_str_nl, c_bvec->tree,
@@ -758,7 +758,7 @@ static int castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
     /* Note: Not handling Medium objects. They may create holes. But, its fine
      * as it is just in T0. */
     BUG_ON(CVT_MEDIUM_OBJECT(prev_cvt) &&
-           (prev_cvt.cep.ext_id != c_bvec->tree->data_ext_fs.ext_id));
+           (prev_cvt.cep.ext_id != c_bvec->tree->data_ext_free.ext_id));
 
     /* Free Old Large Object */
     if (CVT_LARGE_OBJECT(prev_cvt))
@@ -1478,7 +1478,7 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
     }
 
     BUG_ON(CVT_MEDIUM_OBJECT(cvt) && 
-            cvt.cep.ext_id != c_bvec->tree->data_ext_fs.ext_id);
+            cvt.cep.ext_id != c_bvec->tree->data_ext_free.ext_id);
 
     debug("Out of line.\n");
     /* Finally, out of line values */

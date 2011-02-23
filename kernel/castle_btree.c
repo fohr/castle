@@ -1742,19 +1742,19 @@ static int castle_btree_node_space_get(struct castle_component_tree *ct,
                                        uint16_t node_size,
                                        int was_preallocated)
 {
-    if (castle_ext_fs_get(&ct->tree_ext_fs, 
-                           node_size * C_BLK_SIZE,
-                           was_preallocated, 
-                           cep) < 0)
+    if (castle_ext_freespace_get(&ct->tree_ext_free, 
+                                  node_size * C_BLK_SIZE,
+                                  was_preallocated, 
+                                  cep) < 0)
     {
         if (ct != &castle_global_tree)
             printk("****WARNING: Allocating more nodes than pre-allocated: %u****\n",
                     ct->seq);
 
-        return castle_ext_fs_get(&ct->tree_ext_fs,
-                                  node_size * C_BLK_SIZE,
-                                  0, 
-                                  cep);
+        return castle_ext_freespace_get(&ct->tree_ext_free,
+                                         node_size * C_BLK_SIZE,
+                                         0, 
+                                         cep);
     }
 
     return 0;

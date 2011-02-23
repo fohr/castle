@@ -299,7 +299,7 @@ static atomic_t                castle_cache_write_stats = ATOMIC_INIT(0);
 
 struct timer_list              castle_cache_stats_timer;
 
-static c_ext_fs_t              mstore_ext_fs;
+static c_ext_free_t            mstore_ext_free;
 
 static atomic_t                mstores_ref_cnt = ATOMIC_INIT(0);
 static               LIST_HEAD(castle_cache_flush_list);
@@ -4287,10 +4287,10 @@ static void castle_mstore_node_add(struct castle_mstore *store)
     BUG_ON(down_trylock(&store->mutex) == 0);
 
     /* Prepare the node first */
-    BUG_ON(castle_ext_fs_get(&mstore_ext_fs,
-                             C_BLK_SIZE,
-                             0,
-                             &cep) < 0);
+    BUG_ON(castle_ext_freespace_get(&mstore_ext_free,
+                                     C_BLK_SIZE,
+                                     0,
+                                     &cep) < 0);
     c2b = castle_cache_page_block_get(cep);
     debug_mstore("Allocated "cep_fmt_str_nl, cep2str(cep));
     write_lock_c2b(c2b);
@@ -4582,8 +4582,8 @@ int castle_mstores_writeback(uint32_t version)
         fs_sb->mstore[i] = INVAL_EXT_POS;
     castle_fs_superblocks_put(fs_sb, 1);
 
-    _castle_ext_fs_init(&mstore_ext_fs, 0, 0,
-                        C_BLK_SIZE, MSTORE_EXT_ID + slot);
+    _castle_ext_freespace_init(&mstore_ext_free, 0, 0,
+                                C_BLK_SIZE, MSTORE_EXT_ID + slot);
     /* Call writebacks of components. */
     castle_attachments_writeback();
     castle_double_arrays_writeback();
@@ -4593,9 +4593,9 @@ int castle_mstores_writeback(uint32_t version)
     castle_versions_writeback();
     castle_extents_writeback();
 
-    BUG_ON(!castle_ext_fs_consistent(&mstore_ext_fs));
+    BUG_ON(!castle_ext_freespace_consistent(&mstore_ext_free));
     castle_cache_extent_flush_schedule(MSTORE_EXT_ID + slot, 0, 
-                                       atomic64_read(&mstore_ext_fs.used));
+                                       atomic64_read(&mstore_ext_free.used));
 
     return 0;
 }
