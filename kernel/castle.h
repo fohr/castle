@@ -1423,4 +1423,6 @@ struct castle_double_array {
     c_vl_okey_t                *last_key;
 };
 
+extern int castle_latest_key;
+
 #endif /* __CASTLE_H__ */

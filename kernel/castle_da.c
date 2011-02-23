@@ -2333,16 +2333,19 @@ static struct castle_component_tree* castle_da_merge_package(struct castle_da_me
                  atomic64_read(&merge->data_ext_free.blocked));
 
     /* Calculate latest key in both trees. */
-    BUG_ON(merge->in_tree1->seq <=  merge->in_tree2->seq);
-    if (merge->in_tree1->last_key)
+    if (castle_latest_key)
     {
-        out_tree->last_key = merge->in_tree1->last_key;
-        merge->in_tree1->last_key = NULL;
-    }
-    else
-    {
-        out_tree->last_key = merge->in_tree2->last_key;
-        merge->in_tree2->last_key = NULL;
+        BUG_ON(merge->in_tree1->seq <=  merge->in_tree2->seq);
+        if (merge->in_tree1->last_key)
+        {
+            out_tree->last_key = merge->in_tree1->last_key;
+            merge->in_tree1->last_key = NULL;
+        }
+        else
+        {
+            out_tree->last_key = merge->in_tree2->last_key;
+            merge->in_tree2->last_key = NULL;
+        }
     }
 
     /* Add list of large objects to CT. */

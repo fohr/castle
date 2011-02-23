@@ -77,6 +77,12 @@ char                        *castle_environment[NR_ENV_VARS]
 int                          castle_fs_inited = 0;
 c_fault_t                    castle_fault = NO_FAULT;
 
+int  castle_latest_key = 0; /**< maintain latest key for each CT. Useful to test
+                              *  crash consistency.*/
+
+module_param(castle_latest_key, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
+MODULE_PARM_DESC(castle_latest_key, "castle_latest_key");
+
 //#define DEBUG
 #ifndef DEBUG
 #define debug(_f, ...)  ((void)0)

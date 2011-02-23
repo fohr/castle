@@ -957,7 +957,7 @@ void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
 
     debug("castle_object_replace_complete\n");
 
-    if (!err)
+    if (castle_latest_key && !err)
     {
         mutex_lock(&c_bvec->tree->last_key_mutex);
 
