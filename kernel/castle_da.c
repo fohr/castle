@@ -3772,7 +3772,7 @@ static int castle_da_writeback(struct castle_double_array *da, void *unused)
     /* We get here with hash spinlock held. But since we're calling sleeping functions
        we need to drop it. Hash consitancy is guaranteed, because by this point 
        noone should be modifying it anymore */
-    spin_unlock_irq(&castle_da_hash_lock);
+    read_unlock_irq(&castle_da_hash_lock);
 
     if (da->last_key)
         da->last_key = NULL;
@@ -3782,7 +3782,7 @@ static int castle_da_writeback(struct castle_double_array *da, void *unused)
     debug("Inserting a DA id=%d\n", da->id);
     castle_mstore_entry_insert(castle_da_store, &mstore_dentry);
 
-    spin_lock_irq(&castle_da_hash_lock);
+    read_lock_irq(&castle_da_hash_lock);
 
     return 0;
 }
@@ -4607,13 +4607,13 @@ static struct castle_double_array* castle_da_ref_get(da_id_t da_id)
     struct castle_double_array *da;
     unsigned long flags;
 
-    spin_lock_irqsave(&castle_da_hash_lock, flags);
+    read_lock_irqsave(&castle_da_hash_lock, flags);
     da = __castle_da_hash_get(da_id);
     if(!da)
         goto out;
     castle_da_get(da);
 out:
-    spin_unlock_irqrestore(&castle_da_hash_lock, flags);
+    read_unlock_irqrestore(&castle_da_hash_lock, flags);
 
     return da;
 }
@@ -4623,14 +4623,14 @@ int castle_double_array_get(da_id_t da_id)
     struct castle_double_array *da;
     unsigned long flags;
 
-    spin_lock_irqsave(&castle_da_hash_lock, flags);
+    read_lock_irqsave(&castle_da_hash_lock, flags);
     da = __castle_da_hash_get(da_id);
     if(!da)
         goto out;
     castle_da_get(da);
     da->attachment_cnt++;
 out:
-    spin_unlock_irqrestore(&castle_da_hash_lock, flags);
+    read_unlock_irqrestore(&castle_da_hash_lock, flags);
 
     return (da == NULL ? -EINVAL : 0);
 }
@@ -4657,7 +4657,7 @@ int castle_double_array_destroy(da_id_t da_id)
     unsigned long flags;
     int ret;
 
-    spin_lock_irqsave(&castle_da_hash_lock, flags);
+    write_lock_irqsave(&castle_da_hash_lock, flags);
     da = __castle_da_hash_get(da_id);
     /* Fail if we cannot find the da in the hash. */
     if(!da)
@@ -4676,7 +4676,7 @@ int castle_double_array_destroy(da_id_t da_id)
     BUG_ON(castle_da_deleted(da));
     __castle_da_hash_remove(da); 
     da->hash_list.next = da->hash_list.prev = NULL;
-    spin_unlock_irqrestore(&castle_da_hash_lock, flags);
+    write_unlock_irqrestore(&castle_da_hash_lock, flags);
 
     castle_sysfs_da_del(da);
 
@@ -4693,7 +4693,7 @@ int castle_double_array_destroy(da_id_t da_id)
     return 0;
 
 err_out:
-    spin_unlock_irqrestore(&castle_da_hash_lock, flags);
+    write_unlock_irqrestore(&castle_da_hash_lock, flags);
     return ret;
 }
 

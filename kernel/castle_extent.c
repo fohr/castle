@@ -46,7 +46,7 @@
         (_ext)->type        = (_me)->type;                                  \
         (_ext)->k_factor    = (_me)->k_factor;                              \
         (_ext)->maps_cep    = (_me)->maps_cep;                              \
-        (_ext)->obj_refs    = (_me)->obj_refs;                              \
+        atomic_set(&(_ext)->obj_refs, (_me)->obj_refs);                     \
         (_ext)->dirtylist.rb_root = RB_ROOT;                                \
         spin_lock_init(&ext->dirtylist.lock);
 
@@ -56,7 +56,7 @@
         (_me)->type         = (_ext)->type;                                 \
         (_me)->k_factor     = (_ext)->k_factor;                             \
         (_me)->maps_cep     = (_ext)->maps_cep;                             \
-        (_me)->obj_refs     = (_ext)->obj_refs;                              
+        (_me)->obj_refs     = atomic_read(&(_ext)->obj_refs);                              
  
 #define FAULT_CODE EXTENT_FAULT
 
@@ -74,8 +74,10 @@ typedef struct castle_extent {
     uint32_t            k_factor;       /* K factor in K-RDA */
     c_ext_pos_t         maps_cep;       /* Offset of chunk mapping in logical extent */
     struct list_head    hash_list;      /* Only Dynamic variable */
-    uint32_t            ref_cnt;
-    uint32_t            obj_refs;
+    atomic_t            ref_cnt;
+    atomic_t            obj_refs;       /**< Number of references from DA. Gets
+                                             updated with extents hash read lock. 
+                                             Need to be atomic_t. */
     uint8_t             alive;
     c_ext_dirtylist_t   dirtylist;      /**< Extent c2b dirtylist */
 } c_ext_t;
@@ -226,7 +228,7 @@ static int castle_extent_micro_ext_create(void)
     micro_ext->size     = MICRO_EXT_SIZE;
     micro_ext->type     = MICRO_EXT;
     micro_ext->maps_cep = INVAL_EXT_POS;
-    micro_ext->obj_refs = 1;
+    atomic_set(&micro_ext->obj_refs, 1);
     micro_ext->alive    = 1;
     micro_ext->dirtylist.rb_root = RB_ROOT;
     spin_lock_init(&micro_ext->dirtylist.lock);
@@ -359,17 +361,17 @@ static int castle_extent_writeback(c_ext_t *ext, void *store)
     if (LOGICAL_EXTENT(ext->ext_id))
         return 0;
 
-    if (ext->obj_refs != 1)
+    if (atomic_read(&ext->obj_refs) != 1)
         printk("Unexpected extents ref count: (%llu, %u)\n", ext->ext_id,
-                ext->obj_refs);
+                atomic_read(&ext->obj_refs));
 
     debug("Writing back extent %llu\n", ext->ext_id);
 
     CONVERT_EXTENT_TO_MENTRY(ext, &mstore_entry);
 
-    spin_unlock_irq(&castle_extents_hash_lock);
+    read_unlock_irq(&castle_extents_hash_lock);
     castle_mstore_entry_insert(castle_extents_mstore, &mstore_entry);
-    spin_lock_irq(&castle_extents_hash_lock);
+    read_lock_irq(&castle_extents_hash_lock);
 
     nr_exts++;
 
@@ -532,7 +534,9 @@ error_out:
 void castle_extents_fini(void)
 {
     /* Make sure cache flushed all dirty pages */
-    castle_extents_hash_iterate(castle_extent_hash_remove, NULL);
+    /* Iterate over extents hash with exclusive access. Indeed, we dont need a
+     * lock here as this happenes in the module end. */
+    castle_extents_hash_iterate_exclusive(castle_extent_hash_remove, NULL);
     castle_free(castle_extents_hash);
 }
 
@@ -970,7 +974,7 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t rda_type,
     ext->size           = count;
     ext->type           = rda_type;
     ext->k_factor       = rda_spec->k_factor;
-    ext->obj_refs       = 1;
+    atomic_set(&ext->obj_refs, 1);
     ext->alive          = 1;
     ext->dirtylist.rb_root = RB_ROOT;
     spin_lock_init(&ext->dirtylist.lock);
@@ -1031,7 +1035,7 @@ void _castle_extent_free(c_ext_t *ext)
     struct castle_extents_superblock *castle_extents_sb = NULL;
     c_ext_id_t ext_id = ext->ext_id;
 
-    if (ext->obj_refs)
+    if (atomic_read(&ext->obj_refs))
     {
         printk("Couldnt delete the referenced extent %llu\n", ext_id);
         return;
@@ -1264,7 +1268,7 @@ c_ext_id_t castle_extent_sup_ext_init(struct castle_slave *cs)
     memcpy(ext, &sup_ext, sizeof(c_ext_t));
     
     ext->ext_id      = slave_id_to_sup_ext(cs->id);
-    ext->obj_refs    = 1;
+    atomic_set(&ext->obj_refs, 1);
     ext->alive       = 1;
     ext->dirtylist.rb_root = RB_ROOT;
     spin_lock_init(&ext->dirtylist.lock);
@@ -1325,17 +1329,17 @@ int castle_extent_get(c_ext_id_t ext_id)
     c_ext_t *ext;
     unsigned long flags;
 
-    spin_lock_irqsave(&castle_extents_hash_lock, flags);
+    read_lock_irqsave(&castle_extents_hash_lock, flags);
 
     ext = __castle_extents_hash_get(ext_id);
     if (!ext)
     {
-        spin_unlock_irqrestore(&castle_extents_hash_lock, flags);
+        read_unlock_irqrestore(&castle_extents_hash_lock, flags);
         return -EINVAL;
     }
-    ext->obj_refs++;
+    atomic_inc(&ext->obj_refs);
 
-    spin_unlock_irqrestore(&castle_extents_hash_lock, flags);
+    read_unlock_irqrestore(&castle_extents_hash_lock, flags);
 
     return 0;
 }
@@ -1351,17 +1355,16 @@ int castle_extent_put(c_ext_id_t ext_id)
 
     BUG_ON(ext == NULL);
 
-    spin_lock_irqsave(&castle_extents_hash_lock, flags);
+    read_lock_irqsave(&castle_extents_hash_lock, flags);
 
     ext = __castle_extents_hash_get(ext_id);
     BUG_ON(!ext);
-    ext->obj_refs--;
 
-    debug("Object Refrence for %llu: %u\n", ext_id, ext->obj_refs);
-    if (ext->obj_refs == 0)
+    if (atomic_dec_return(&ext->obj_refs) == 0)
         free_ext = 1;
+    debug("Object Refrence for %llu: %u\n", ext_id, ext->obj_refs);
 
-    spin_unlock_irqrestore(&castle_extents_hash_lock, flags);
+    read_unlock_irqrestore(&castle_extents_hash_lock, flags);
 
     if (free_ext)
         _castle_extent_free(ext);
@@ -1408,10 +1411,10 @@ static int castle_extent_check_alive(c_ext_t *ext, void *unused)
     if (ext->alive == 0)
     {
         printk("Found a dead extent: %llu - Cleaning it\n", ext->ext_id);
-        BUG_ON(ext->obj_refs != 1);
-        spin_unlock_irq(&castle_extents_hash_lock);
+        BUG_ON(atomic_read(&ext->obj_refs) != 1);
+        read_unlock_irq(&castle_extents_hash_lock);
         castle_extent_put(ext->ext_id);
-        spin_lock_irq(&castle_extents_hash_lock);
+        read_lock_irq(&castle_extents_hash_lock);
     }
     return 0;
 }
