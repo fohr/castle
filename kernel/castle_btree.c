@@ -3731,8 +3731,7 @@ static void castle_btree_node_buffer_init(struct castle_component_tree *tree,
     /* Buffers are proper btree nodes understood by castle_btree_node_type function sets.
        Initialise the required bits of the node, so that the types don't complain. */
 #ifdef CASTLE_DEBUG
-    struct castle_btree_type *btree = castle_btree_type_get(tree->btree_type);
-    memset(buffer, 0x88, btree->node_size * C_BLK_SIZE);
+    memset(buffer, 0x88, node_size * C_BLK_SIZE);
 #endif
     buffer->magic   = BTREE_NODE_MAGIC;
     buffer->type    = tree->btree_type;
