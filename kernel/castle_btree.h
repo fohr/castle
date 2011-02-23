@@ -10,8 +10,7 @@ uint32_t    castle_btree_vlba_max_nr_entries_get
 c2_block_t* castle_btree_node_create  (struct castle_component_tree *ct,
                                        int version,
                                        uint16_t level,
-                                       int is_leaf, 
-                                       int alloc_done);
+                                       int was_preallocated);
 void        castle_btree_node_save_prepare
                                       (struct castle_component_tree *ct, 
                                        c_ext_pos_t node_cep,

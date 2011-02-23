@@ -278,7 +278,7 @@ int castle_ext_fs_free(c_ext_fs_t       *ext_fs,
 
 int castle_ext_fs_get(c_ext_fs_t      *ext_fs,
                       c_byte_off_t     size,
-                      int              alloc_done,
+                      int              was_preallocated,
                       c_ext_pos_t     *cep)
 {
     uint64_t used;
@@ -293,7 +293,7 @@ int castle_ext_fs_get(c_ext_fs_t      *ext_fs,
     BUG_ON(blocked < used);
     BUG_ON(used > ext_fs->ext_size);
 
-    if (!alloc_done)
+    if (!was_preallocated)
     {
         int ret;
 
@@ -529,8 +529,7 @@ int castle_fs_init(void)
         c2b = castle_btree_node_create(&castle_global_tree,
                                        0 /* version */, 
                                        0 /* level */,
-                                       1 /* is_leaf */, 
-                                       0 /* was preallocated */);
+                                       0 /* wasn't preallocated */);
         castle_btree_node_save_prepare(&castle_global_tree, c2b->cep, MTREE_NODE_SIZE);
         /* Save the root node in the global tree */
         castle_global_tree.root_node = c2b->cep; 

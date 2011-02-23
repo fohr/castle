@@ -1706,25 +1706,33 @@ void castle_btree_node_save_prepare(struct castle_component_tree *ct,
     queue_work(castle_wq, &work_st->work);
 }
 
+/**
+ * Initialises btree node header.
+ *
+ * @param ct          Component tree this node will belong to.
+ * @param node        Pointer to where the node lives in memory.
+ * @param version     Version of the node. 
+ * @param rev_level   Level at which this node will be used. Important: counted from the leaves,
+ *                    same as for btree_type->node_size(). 
+ */
 static void castle_btree_node_init(struct castle_component_tree *ct,
                                    struct castle_btree_node *node, 
                                    int version,
-                                   uint8_t level,
-                                   int is_leaf)
+                                   uint8_t rev_level)
 {
     struct castle_btree_type *btree;
     uint16_t node_size;
 
     /* This function should only be called for RW vlba trees. */ 
     btree = castle_btree_type_get(ct->btree_type);
-    node_size = btree->node_size(ct, level); 
+    node_size = btree->node_size(ct, rev_level); 
     /* memset the node, so that ftree nodes are easily recognisable in hexdump. */
     memset(node, 0x77, node_size * C_BLK_SIZE);
     node->magic     = BTREE_NODE_MAGIC;
     node->type      = ct->btree_type;
     node->version   = version;
     node->used      = 0;
-    node->is_leaf   = is_leaf;
+    node->is_leaf   = (rev_level == 0);
     node->size      = node_size;
     node->next_node = INVAL_EXT_POS;
 }
@@ -1732,11 +1740,11 @@ static void castle_btree_node_init(struct castle_component_tree *ct,
 static int castle_btree_node_space_get(struct castle_component_tree *ct, 
                                        c_ext_pos_t *cep,
                                        uint16_t node_size,
-                                       int alloc_done)
+                                       int was_preallocated)
 {
     if (castle_ext_fs_get(&ct->tree_ext_fs, 
                            node_size * C_BLK_SIZE,
-                           alloc_done, 
+                           was_preallocated, 
                            cep) < 0)
     {
         if (ct != &castle_global_tree)
@@ -1754,12 +1762,17 @@ static int castle_btree_node_space_get(struct castle_component_tree *ct,
 
 /**
  * Allocate and initialise c2b for a ct->type btree node.
+ *
+ * @param ct               Component tree this node will belong to.
+ * @param version          Version of the node.
+ * @param rev_level        Level at which this node will be used. Important: counted from leafs,
+ *                         same as in btree_type->node_size().
+ * @param was_preallocated Has the space for this node been preallocated.
  */
 c2_block_t* castle_btree_node_create(struct castle_component_tree *ct, 
                                      int version, 
-                                     uint16_t level,
-                                     int is_leaf, 
-                                     int alloc_done)
+                                     uint16_t rev_level,
+                                     int was_preallocated)
 {
     struct castle_btree_type *btree;
     struct castle_btree_node *node;
@@ -1771,10 +1784,10 @@ c2_block_t* castle_btree_node_create(struct castle_component_tree *ct,
     /* Work out the node size. */
     type = ct->btree_type;
     btree = castle_btree_type_get(type);
-    node_size = btree->node_size(ct, level);
+    node_size = btree->node_size(ct, rev_level);
 
     /* Allocate freespace for it. */
-    BUG_ON(castle_btree_node_space_get(ct, &cep, node_size, alloc_done) < 0);
+    BUG_ON(castle_btree_node_space_get(ct, &cep, node_size, was_preallocated) < 0);
 
     /* Bet the cache block. */
     c2b = castle_cache_block_get(cep, node_size);
@@ -1784,7 +1797,7 @@ c2_block_t* castle_btree_node_create(struct castle_component_tree *ct,
     node = c2b_buffer(c2b);
 
     /* Initialise it. */
-    castle_btree_node_init(ct, node, version, level, is_leaf);
+    castle_btree_node_init(ct, node, version, rev_level);
 
     return c2b;
 }
@@ -1802,15 +1815,19 @@ static c2_block_t* castle_btree_effective_node_create(struct castle_component_tr
     version_t last_eff_version = 0;
     int i, insert_idx, moved_cnt;
     uint16_t node_size;
+    uint8_t rev_level;
     
+    rev_level = c_bvec->btree_levels - level;
     node = c2b_bnode(orig_c2b); 
     btree = castle_btree_type_get(node->type);
-    node_size = btree->node_size(ct, level);
+    node_size = btree->node_size(ct, rev_level);
 
     /* First build effective node in memory and allocate disk space only if it
      * is not same as original node. */
     eff_node = castle_vmalloc(node_size * C_BLK_SIZE);
-    castle_btree_node_init(ct, eff_node, version, level, node->is_leaf);
+    /* rev_level == 0 should be equivalent to node->is_leaf test */ 
+    BUG_ON((rev_level == 0) ^ (node->is_leaf));
+    castle_btree_node_init(ct, eff_node, version, rev_level);
 
     last_eff_key = btree->inv_key;
     BUG_ON(eff_node->used != 0);
@@ -1892,7 +1909,7 @@ static c2_block_t* castle_btree_effective_node_create(struct castle_component_tr
     /* Effective node is not same as original node - allocate space on the disk
      * now and copy. */
     atomic_dec(&c_bvec->reserv_nodes);
-    c2b = castle_btree_node_create(c_bvec->tree, version, level, node->is_leaf, 1);
+    c2b = castle_btree_node_create(c_bvec->tree, version, rev_level, 1 /* was_preallocated. */);
     memcpy(c2b_buffer(c2b), eff_node, node_size * C_BLK_SIZE);
     castle_vfree(eff_node);
 
@@ -1910,18 +1927,20 @@ static c2_block_t* castle_btree_node_key_split(c_bvec_t *c_bvec,
     struct castle_btree_type *btree;
     uint16_t node_size;
     c2_block_t *c2b;
+    uint8_t rev_level;
     int i;
 
     void        *entry_key;
     version_t    entry_version;
     c_val_tup_t  entry_cvt;
 
+    rev_level = c_bvec->btree_levels - level;
     node      = c2b_bnode(orig_c2b);
     ct        = c_bvec->tree;
     btree     = castle_btree_type_get(ct->btree_type);
-    node_size = btree->node_size(ct, level); 
+    node_size = btree->node_size(ct, rev_level); 
     atomic_dec(&c_bvec->reserv_nodes);
-    c2b       = castle_btree_node_create(ct, node->version, level, node->is_leaf, 1);
+    c2b       = castle_btree_node_create(ct, node->version, rev_level, 1 /* was_preallocated */);
     castle_btree_node_save_prepare(ct, c2b->cep, node_size);
     sec_node  = c2b_bnode(c2b);
     /* The original node needs to contain the elements from the right hand side
@@ -2053,23 +2072,24 @@ static void castle_btree_new_root_create(c_bvec_t *c_bvec, btree_t type)
 {
     c2_block_t *c2b;
     struct castle_btree_node *node;
+    struct castle_component_tree *ct;
     
     debug("Creating a new root node, while handling write to version: %d.\n",
             c_bvec->version);
     BUG_ON(c_bvec->btree_parent_node);
     /* Create the node */
     atomic_dec(&c_bvec->reserv_nodes);
-    c2b = castle_btree_node_create(c_bvec->tree, 
-                                   0 /* version */, 
-                                   0 /* level */,
-                                   0 /* is_leaf */,
-                                   1 /* preallocated */);
-    castle_btree_node_save_prepare(c_bvec->tree, c2b->cep, c2b->nr_pages);
+    ct = c_bvec->tree;
+    c2b = castle_btree_node_create(ct, 
+                                   0              /* version */, 
+                                   ct->tree_depth /* level */,
+                                   1              /* was preallocated */);
+    castle_btree_node_save_prepare(ct, c2b->cep, c2b->nr_pages);
     node = c2b_buffer(c2b);
     /* We should be under write lock here, check if we can read lock it (and BUG) */
-    BUG_ON(down_read_trylock(&c_bvec->tree->lock));
-    c_bvec->tree->root_node = c2b->cep;
-    c_bvec->tree->tree_depth++;
+    BUG_ON(down_read_trylock(&ct->lock));
+    ct->root_node = c2b->cep;
+    ct->tree_depth++;
     /* If all succeeded save the new node as the parent in bvec */
     c_bvec->btree_parent_node = c2b;
     /* Release the version lock (c2b_forget will no longer do that, 
@@ -2601,7 +2621,9 @@ static void __castle_btree_submit(c_bvec_t *c_bvec,
     /* Forget the parent node buffer first */
     castle_btree_c2b_forget(c_bvec);
     /* Get the cache block for the next node. */
-    c2b = castle_cache_block_get(node_cep, btree->node_size(ct, c_bvec->btree_depth));
+    c2b = castle_cache_block_get(node_cep, 
+                                 btree->node_size(ct, 
+                                                  c_bvec->btree_levels - c_bvec->btree_depth));
     castle_btree_c2b_lock(c_bvec, c2b);
     if(!c2b_uptodate(c2b))
     {
@@ -2963,7 +2985,8 @@ static void castle_btree_iter_leaf_ptrs_lock(c_iter_t *c_iter)
             indirect_node(i)->c2b = NULL; 
             continue;
         }
-        c2b = castle_cache_block_get(cep, btree->node_size(c_iter->tree, c_iter->depth));
+        BUG_ON(c_iter->depth + 1 != c_iter->btree_levels);
+        c2b = castle_cache_block_get(cep, btree->node_size(c_iter->tree, 0)); 
         write_lock_c2b(c2b);
         if(!c2b_uptodate(c2b))
             submit_c2b_sync(READ, c2b);
@@ -3354,14 +3377,16 @@ static void castle_btree_iter_path_traverse(c_iter_t *c_iter, c_ext_pos_t node_c
     
     /* If we haven't found node_cep in path, get it from the cache instead */
     if(c2b == NULL)
-        c2b = castle_cache_block_get(node_cep, btree->node_size(c_iter->tree, c_iter->depth));
+        c2b = castle_cache_block_get(node_cep, 
+                                     btree->node_size(c_iter->tree, 
+                                                      c_iter->btree_levels - c_iter->depth - 1));
   
     iter_debug("%p locking cep=(0x%x, 0x%x)\n", 
         c_iter, c2b->cep.ext_id, c2b->cep.offset);
     
     write_lock_c2b(c2b);
     
-    /* Unlock the ftree if we've just locked the root */
+    /* Unlock the tree if we've just locked the root */
     if(c_iter->depth == 0)
     {
         /* We have just started the iteration - lets unlock the version tree */
@@ -3423,11 +3448,12 @@ static void __castle_btree_iter_start(c_iter_t *c_iter)
     /*
      * Let's start from the root again...
      */
-    c_iter->depth = 0;
-    
     iter_debug("Locking version tree for version: %d\n", c_iter->version);
     
     down_read(&c_iter->tree->lock);
+
+    c_iter->depth = 0;
+    c_iter->btree_levels = c_iter->tree->tree_depth;
     root_cep = c_iter->tree->root_node;
     if(EXT_POS_INVAL(root_cep))
     {
@@ -3760,7 +3786,7 @@ void castle_btree_enum_init(c_enum_t *c_enum)
 
     ct = c_enum->tree;
     btype = castle_btree_type_get(ct->btree_type);
-    leaf_node_size = btype->node_size(ct, ct->tree_depth-1);
+    leaf_node_size = btype->node_size(ct, 0);
     /* We no longer need to support multiple iterators, this should simplify a lot of
        this code.
         TODO: go through it all and remove unneccessary code */
@@ -3832,7 +3858,7 @@ static struct node_buf_t* node_buf_alloc(c_rq_enum_t *rq_enum)
 
     ct = rq_enum->tree;
     btype = castle_btree_type_get(ct->btree_type);
-    leaf_node_size = btype->node_size(ct, ct->tree_depth-1);
+    leaf_node_size = btype->node_size(ct, 0);
     node_buf = castle_malloc(sizeof(struct node_buf_t), GFP_KERNEL);
     BUG_ON(!node_buf);
     node_buf->node = castle_vmalloc(leaf_node_size * C_BLK_SIZE);

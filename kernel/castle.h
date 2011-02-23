@@ -672,7 +672,9 @@ struct castle_clist_entry {
     /*        244 */ uint8_t       bloom_exists;
     /*        245 */ uint8_t       bloom_num_hashes;
     /*        246 */ uint16_t      node_sizes[MAX_BTREE_DEPTH];
-    /*        266 */ uint8_t       _unused[246];
+    /*        266 */ uint16_t      first_node_size;
+    /*        268 */ uint16_t      last_node_size;
+    /*        270 */ uint8_t       _unused[242];
     /*        512 */
 } PACKED;
 
@@ -935,6 +937,10 @@ typedef struct castle_iterator {
     
     struct castle_cache_block    *path[MAX_BTREE_DEPTH];
     int                           depth;
+    int                           btree_levels;   /**< Private copy of ct->tree_depth, recorded
+                                                       at the time when the walk started.
+                                                       Used to prevent races with root node
+                                                       splits. */
 
     struct castle_indirect_node  *indirect_nodes; /* If allocated, MAX_BTREE_ENTRIES */
                                  
