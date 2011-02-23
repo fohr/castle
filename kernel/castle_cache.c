@@ -3621,8 +3621,15 @@ static int castle_cache_flush(void *unused)
 
         /* Check if we should still continue. NOTE: we know that there is no outstanding IO,
            because we've waited for all of it to complete in the first wait_event. */
-        if(exiting && (dirty_pgs == 0))
-            break;
+        if (exiting)
+        {
+            int returning;
+            spin_lock_irq(&castle_cache_block_hash_lock);
+            returning = list_empty(&castle_cache_dirtylist);
+            spin_unlock_irq(&castle_cache_block_hash_lock);
+            if (returning)
+                 break;
+        }
  
         /* 
          * Work out how many pages to flush.
@@ -3644,7 +3651,7 @@ next_batch:
         spin_lock_irq(&castle_cache_block_hash_lock);
         list_for_each_safe(l, t, &castle_cache_dirtylist)
         {
-            if(to_flush <= 0)
+            if(!exiting && (to_flush <= 0))
                 break;
             c2b = list_entry(l, c2_block_t, dirty);
             if(!read_trylock_c2b(c2b))
@@ -3666,7 +3673,7 @@ next_batch:
             /* It's possible that not all the pages in the c2b are dirty.
                So we may actually flush less than we wanted to, but this only affects the
                effective batch size. */ 
-               to_flush -= castle_cache_c2b_to_pages(c2b);
+            to_flush -= castle_cache_c2b_to_pages(c2b);
             c2b_batch[batch_idx++] = c2b;
             if(batch_idx >= FLUSH_BATCH)
                 break;
@@ -3684,7 +3691,7 @@ next_batch:
         }
 
         /* We may have to flush more than one batch */
-        if(to_flush > 0)
+        if(exiting || (to_flush > 0))
         {
             if(batch_idx == FLUSH_BATCH)
                 goto next_batch; 
