@@ -376,17 +376,26 @@ version_t castle_version_new(int snap_or_clone,
 int castle_version_attach(version_t version) 
 {
     struct castle_version *v;
+    int ret = 0;
 
     write_lock_irq(&castle_versions_hash_lock);
     v = __castle_versions_hash_get(version);
     if(!v)
-        return -EINVAL;
+    {
+        ret = -EINVAL;
+        goto out;
+    }
 
     if(test_and_set_bit(CV_ATTACHED_BIT, &v->flags))
-        return -EAGAIN;
-    write_unlock_irq(&castle_versions_hash_lock);
+    {
+        printk("attach bit not valid\n");
+        ret = -EAGAIN;
+        goto out;
+    }
 
-    return 0;
+out:
+    write_unlock_irq(&castle_versions_hash_lock);
+    return ret;
 }
 
 int castle_version_read(version_t version, 
