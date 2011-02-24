@@ -19,10 +19,6 @@ static int castle_bloom_use = 1; /* 1 or 0 */
 module_param(castle_bloom_use, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
 MODULE_PARM_DESC(castle_bloom_use, "Use bloom filters");
 
-static int castle_bloom_hdd = 0; /* 0: SSD, 1: HDD */
-module_param(castle_bloom_hdd, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
-MODULE_PARM_DESC(castle_bloom_hdd, "Use bloom filters on SSD");
-
 /*
  * Changing *ANY* of these constants will change the format of the persisted bloom filters
  * so must be accompanied by a change to castle_public.h/CASTLE_SLAVE_VERSION
@@ -36,7 +32,6 @@ MODULE_PARM_DESC(castle_bloom_hdd, "Use bloom filters on SSD");
 #define BLOOM_CHUNK_SIZE_PAGES        (BLOOM_CHUNK_SIZE / PAGE_SIZE)
 #define BLOOM_BLOCK_SIZE_HDD_PAGES    64
 #define BLOOM_BLOCK_SIZE_SSD_PAGES    2
-#define BLOOM_BLOCK_SIZE_PAGES        (castle_bloom_hdd ? BLOOM_BLOCK_SIZE_HDD_PAGES : BLOOM_BLOCK_SIZE_SSD_PAGES)
 #define BLOOM_BLOCK_SIZE(_bf)         (uint32_t)(_bf->block_size_pages * PAGE_SIZE)
 #define BLOOM_MAX_HASHES              opt_hashes_per_bit[BLOOM_MAX_BITS_PER_ELEMENT-1]
 #define BLOOM_CHUNK_SIZE_BITS         (BLOOM_CHUNK_SIZE * 8)
@@ -48,7 +43,7 @@ MODULE_PARM_DESC(castle_bloom_hdd, "Use bloom filters on SSD");
  * seed (which is 0) given to the first hash function for within the block. */
 #define BLOOM_BLOCK_HASH_SEED         1
 #define BLOOM_INDEX_NODE_SIZE         (uint32_t)(BLOOM_INDEX_NODE_SIZE_PAGES * PAGE_SIZE)
-#define BLOOM_INDEX_NODE_SIZE_PAGES   64
+#define BLOOM_INDEX_NODE_SIZE_PAGES   256
 
 /* the maximum number of chunks in a bloom filter for which we softpin */
 #define BLOOM_MAX_SOFTPIN_CHUNKS      (castle_cache_size_get() / (5 * BLOOM_CHUNK_SIZE_PAGES))
@@ -101,14 +96,11 @@ int castle_bloom_create(castle_bloom_t *bf, da_id_t da_id, uint64_t num_elements
     int ret = 0;
     struct castle_bloom_build_params *bf_bp;
     struct castle_btree_type *btree = castle_btree_type_get(RO_VLBA_TREE_TYPE);
-    c_rda_type_t rda_type = castle_bloom_hdd ? DEFAULT_RDA : SSD_ONLY_EXT;
 
     BUG_ON(num_elements == 0);
 
     if (!castle_bloom_use)
         return -ENOSYS;
-
-    bf->block_size_pages = BLOOM_BLOCK_SIZE_PAGES;
 
     bf->private = castle_malloc(sizeof(struct castle_bloom_build_params), GFP_KERNEL);
     if (!bf->private)
@@ -120,42 +112,53 @@ int castle_bloom_create(castle_bloom_t *bf, da_id_t da_id, uint64_t num_elements
     bf_bp = bf->private;
     memset(bf_bp, 0, sizeof(struct castle_bloom_build_params));
 
+    /* The given number of elements may be less so this is a maximum.
+     * bf->num_chunks is updated to the actual number in castle_bloom_complete */
+    bf->num_chunks = ceiling(num_elements, BLOOM_ELEMENTS_PER_CHUNK);
+
+    /* Again this is estimated, will be updated to correct number in castle_bloom_complete */
+    bf->num_btree_nodes = ceiling(bf->num_chunks,
+              castle_btree_vlba_max_nr_entries_get(BLOOM_INDEX_NODE_SIZE_PAGES));
+
+    nodes_size = bf->num_btree_nodes * BLOOM_INDEX_NODE_SIZE;
+    chunks_size = bf->num_chunks * BLOOM_CHUNK_SIZE;
+    size = nodes_size + chunks_size;
+
+    /* Try for SSD extent. If fails, go for DEFAULT_RDA */
+    bf->ext_id = castle_extent_alloc(SSD_ONLY_EXT, da_id, ceiling(size, C_CHK_SIZE));
+    if (EXT_ID_INVAL(bf->ext_id))
+    {
+        bf->block_size_pages = BLOOM_BLOCK_SIZE_HDD_PAGES;
+
+        bf->ext_id = castle_extent_alloc(DEFAULT_RDA, da_id, ceiling(size, C_CHK_SIZE));
+        if (EXT_ID_INVAL(bf->ext_id))
+        {
+            printk("Failed to create extent for bloom\n");
+            ret = -ENOSPC;
+            goto err1;
+        }
+    } else
+        bf->block_size_pages = BLOOM_BLOCK_SIZE_SSD_PAGES;
+
 #ifdef DEBUG
     bf_bp->elements_inserted_per_block = castle_malloc(sizeof(uint32_t) * BLOOM_BLOCKS_PER_CHUNK(bf), GFP_KERNEL);
 #endif
 
     bf_bp->expected_num_elements = num_elements;
     bf->num_hashes = num_hashes;
-    /* The given number of elements may be less so this is a maximum.
-     * bf->num_chunks is updated to the actual number in castle_bloom_complete */
+    bf->chunks_offset = nodes_size;
+
     num_blocks = ceiling(num_elements, BLOOM_ELEMENTS_PER_BLOCK(bf));
-    bf->num_chunks = ceiling(num_blocks, BLOOM_BLOCKS_PER_CHUNK(bf));
-    /* Estimated, will be updated to correct number in castle_bloom_complete */
-    bf->num_btree_nodes = ceiling(bf->num_chunks,
-                                  castle_btree_vlba_max_nr_entries_get(BLOOM_INDEX_NODE_SIZE_PAGES));
     blocks_remainder = num_blocks % BLOOM_BLOCKS_PER_CHUNK(bf);
+
     if (blocks_remainder == 0)
         bf->num_blocks_last_chunk = BLOOM_BLOCKS_PER_CHUNK(bf);
     else
         bf->num_blocks_last_chunk = blocks_remainder;
     bf->btree = btree;
 
-    nodes_size = bf->num_btree_nodes * BLOOM_INDEX_NODE_SIZE;
-    chunks_size = num_blocks * BLOOM_BLOCK_SIZE(bf);
-    size = nodes_size + chunks_size;
-
     debug("castle_bloom_create num_elements=%llu num_chunks=%u num_blocks=%u size=%llu num_blocks_last_chunk=%u num_btree_nodes=%u\n",
             num_elements, bf->num_chunks, num_blocks, size, bf->num_blocks_last_chunk, bf->num_btree_nodes);
-
-    bf->ext_id = castle_extent_alloc(rda_type, da_id, ceiling(size, C_CHK_SIZE));
-    if (EXT_ID_INVAL(bf->ext_id))
-    {
-        printk("Failed to create extent for bloom\n");
-        ret = -ENOSPC;
-        goto err1;
-    }
-
-    bf->chunks_offset = nodes_size;
 
     bf_bp->node_cep.ext_id = bf->ext_id;
     bf_bp->node_cep.offset = 0;
@@ -173,9 +176,6 @@ int castle_bloom_create(castle_bloom_t *bf, da_id_t da_id, uint64_t num_elements
     return 0;
 
 err1:
-#ifdef DEBUG
-   castle_free(((struct castle_bloom_build_params*)bf->private)->elements_inserted_per_block);
-#endif
     castle_free(bf->private);
     bf->private = NULL;
 err0: return ret;
