@@ -50,7 +50,8 @@
         (_ext)->maps_cep    = (_me)->maps_cep;                              \
         atomic_set(&(_ext)->obj_refs, (_me)->obj_refs);                     \
         (_ext)->dirtylist.rb_root = RB_ROOT;                                \
-        spin_lock_init(&ext->dirtylist.lock);
+        spin_lock_init(&ext->dirtylist.lock);                               \
+        spin_lock_init(&ext->shadow_map_lock);
 
 #define CONVERT_EXTENT_TO_MENTRY(_ext, _me)                                 \
         (_me)->ext_id       = (_ext)->ext_id;                               \
