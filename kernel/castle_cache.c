@@ -978,15 +978,15 @@ static void c2b_multi_io_end(struct bio *bio, int err)
         BUG_ON(!slave);
 
         /*
-         * If this is the first time a bio for this slave has failed, mark the slave as oos
-         * and trigger a rebuild.
+         * If this is the first time a bio for this slave has failed, mark the slave as
+         * out-of-service and trigger a rebuild.
          */
         if (!test_and_set_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags))
         {
             char b[BDEVNAME_SIZE];
             printk("Disabling slave 0x%x (%s), due to IO errors. Starting rebuild.\n", 
                     slave->uuid, bdevname(bio_info->bdev, b));
-            /* TBD kick rebuild thread */
+            castle_extents_rebuild_start();
         }
 
         /* We may need to re-submit I/O for the c2b. Mark this c2b as 'bio_error' */
@@ -1159,7 +1159,7 @@ static int c_io_next_slave_get(c_disk_chk_t *chunks, int k_factor, int *idx)
         if (!test_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags))
         {
             *idx = i;
-            /* Slave is not oos - we can use it. */
+            /* Slave is not out-of-service - we can use it. */
             return EXIT_SUCCESS;         
         }
     }
@@ -1225,7 +1225,7 @@ static int c_io_array_submit(int rw,
         if (!test_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags))
         {
             found = 1;
-            /* Slave is not oos - submit the IO */
+            /* Slave is not out-of-sevice - submit the IO */
             atomic_add(nr_pages, &castle_cache_write_stats);
             atomic_add(nr_pages, &c2b->remaining);
             submit_c2b_io(WRITE, c2b, array->start_cep, chunks[i], array->io_pages, nr_pages);
@@ -1356,8 +1356,8 @@ static int submit_c2b_rda(int rw, c2_block_t *c2b)
             if (ret)
             {
                 /*
-                 * Could not submit the IO, possibly due to a slave going oos. Drop our reference
-                 * and return early.
+                 * Could not submit the IO, possibly due to a slave going out-of-service. Drop
+                 * our reference and return early.
                  */
                 c2b_remaining_io_sub(rw, 1, c2b);
                 goto out;
@@ -1376,7 +1376,8 @@ static int submit_c2b_rda(int rw, c2_block_t *c2b)
                     cep2str(cur_cep));
             ret = castle_extent_map_get(ext_id,
                                         CHUNK(cur_cep.offset),
-                                        chunks);
+                                        chunks,
+                                        rw);
             /* Return value is supposed to be k_factor, unless the
                extent has been deleted. */
             BUG_ON((ret != 0) && (ret != k_factor));
@@ -1403,8 +1404,8 @@ next_page:
         if (ret)
         {
             /*
-             * Could not submit the IO, possibly due to a slave going oos. Drop our reference
-             * and return early.
+             * Could not submit the IO, possibly due to a slave going out-of-service. Drop
+             * our reference and return early.
              */
             c2b_remaining_io_sub(rw, 1, c2b);
             goto out;
@@ -2058,10 +2059,11 @@ static void castle_cache_block_free(c2_block_t *c2b)
     castle_free(c2ps);
 }
 
-static inline int c2b_busy(c2_block_t *c2b)
+static inline int c2b_busy(c2_block_t *c2b, int expected_count)
 {
+    BUG_ON(!spin_is_locked(&castle_cache_block_hash_lock));
     /* c2b_locked() implies (c2b->count > 0) */
-    return atomic_read(&c2b->count) |
+    return (atomic_read(&c2b->count) != expected_count) |
           (c2b->state.bits & (1 << C2B_dirty)) |
            c2b_locked(c2b);
 }
@@ -2122,7 +2124,7 @@ static int castle_cache_block_hash_clean(void)
              *     extents that have now been removed - by targetting the start of window block we
              *     unpin and demote those other blocks from the window.
              * (4) Must be either transient or non-logical.  @TODO Long term solution: pools. */
-            if (!c2b_busy(c2b) /* (1) */
+            if (!c2b_busy(c2b, 0) /* (1) */
                     && (victimise_softpin || !c2b_softpin(c2b) /* (2) */
                         || (c2b_windowstart(c2b) && !castle_extent_exists(c2b->cep.ext_id))) /*(3)*/
                     && (c2b_transient(c2b) || !LOGICAL_EXTENT(c2b->cep.ext_id))) /* (4) */
@@ -2181,6 +2183,52 @@ static int castle_cache_block_hash_clean(void)
     }
 
     return 1;
+}
+
+/**
+ * Frees up the c2b specified. Only succeeds if the c2b there is preciesly one
+ * outstanding reference to the c2b (held by the caller), it is not dirty, and
+ * it is not locked.
+ *
+ * @param c2b       Block to free.
+ * @return 0:       Success.
+ * @return -EINVAL: Failed, due to c2b not being freeable.
+ */
+int USED castle_cache_block_destroy(c2_block_t *c2b)
+{
+    int ret;
+
+    /* Check whether the c2b is busy, under the hash lock so that no other references
+       can be taken. */
+    spin_lock_irq(&castle_cache_block_hash_lock);
+    ret = c2b_busy(c2b, 1) ? -EINVAL : 0;
+    if(!ret)
+    {
+        hlist_del(&c2b->hlist);
+        list_del(&c2b->clean);
+        /* Update bookkeeping info. */
+        atomic_dec(&castle_cache_cleanlist_size);
+        if (c2b_softpin(c2b))
+        {
+            clearsoftpin_c2b(c2b);
+            atomic_inc(&castle_cache_softpin_block_victims);
+        }
+        else
+            atomic_inc(&castle_cache_block_victims);
+    }
+    spin_unlock_irq(&castle_cache_block_hash_lock);
+    /* If the c2b was busy, exit early. */
+    if(ret)
+        return ret;
+    /* Succeeded deleting the c2b from the hash, and cleanlist. Decrement the ref count. */
+    put_c2b(c2b);
+    BUG_ON(atomic_read(&c2b->count) != 0);
+    BUG_ON(c2b_dirty(c2b));
+    /* Free the block. */
+    castle_cache_block_free(c2b);
+
+    BUG_ON(ret != 0);
+    return ret;
 }
 
 /**
@@ -3699,7 +3747,7 @@ next_batch:
                enough dirty buffers print a warning message, and stop.
                Warn if the # of dirty pages is greater than a constant.
                If it is not, the pages are likely write locked. */
-            if(dirty_pgs > 100)
+            if(dirty_pgs > 257)
                 printk("WARNING: Could not find enough dirty pages to flush\n"
                        "  Stats: dirty=%d, clean=%d, free=%d, in_flight=%d\n"
                        "         target=%d, to_flush=%d, blocks=%d\n",

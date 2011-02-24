@@ -181,6 +181,7 @@ int                        castle_chk_disk                 (void);
 
 void                       castle_cache_stats_print        (int verbose);
 int                        castle_cache_size_get           (void);
+int                        castle_cache_block_destroy      (c2_block_t *c2b);
 
 /**********************************************************************************************
  * Cache init/fini. 

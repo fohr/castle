@@ -11,7 +11,6 @@ typedef struct c_ext_dirtylist {
     struct rb_root              rb_root;        /**< Dirtylist RB root. */
 } c_ext_dirtylist_t;
 
-
 c_ext_id_t          castle_extent_alloc                     (c_rda_type_t   rda_type,
                                                              da_id_t        da_id,
                                                              c_chk_cnt_t    chk_cnt);
@@ -27,7 +26,8 @@ int                 castle_extent_active_slave_count_get    (c_ext_id_t     ext_
 /* Sets @chunks to all physical chunks holding the logical chunks from offset */
 uint32_t            castle_extent_map_get                   (c_ext_id_t     ext_id,
                                                              c_chk_t        offset,
-                                                             c_disk_chk_t  *chk_maps);
+                                                             c_disk_chk_t  *chk_maps,
+                                                             int            rw);
 c_ext_dirtylist_t  *castle_extent_dirtylist_get             (c_ext_id_t     ext_id);
 void                castle_extent_dirtylist_put             (c_ext_id_t     ext_id);
 
@@ -37,11 +37,15 @@ void                              castle_extents_super_block_put (int dirty);
 c_ext_id_t                        castle_extent_sup_ext_init     (struct castle_slave *cs);
 void                              castle_extent_sup_ext_close    (struct castle_slave *cs);
 
-int  castle_extents_create       (void);
-int  castle_extents_read         (void);
-int  castle_extents_read_complete(void);
-int  castle_extents_writeback    (void);
-int  castle_extents_restore      (void);
-int  castle_extents_init         (void);
-void castle_extents_fini         (void);
+int                 castle_extents_create                   (void);
+int                 castle_extents_read                     (void);
+int                 castle_extents_read_complete            (void);
+int                 castle_extents_writeback                (void);
+int                 castle_extents_restore                  (void);
+int                 castle_extents_init                     (void);
+void                castle_extents_fini                     (void);
+int                 castle_extents_rebuild_init             (void);
+void                castle_extents_rebuild_fini             (void);
+void                castle_extents_rebuild_start            (void);
+
 #endif /* __CASTLE_EXTENT_H__ */

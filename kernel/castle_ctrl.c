@@ -16,6 +16,7 @@
 #include "castle_back.h"
 #include "castle_ctrl.h"
 #include "castle_trace.h"
+#include "castle_extent.h"
 #include "castle_rebuild.h"
 
 //#define DEBUG
@@ -528,34 +529,44 @@ void castle_control_trace_teardown(int *ret)
 void castle_control_slave_evacuate(uint32_t uuid, int *ret)
 {
     struct castle_slave *slave;
+    char b[BDEVNAME_SIZE];
 
     slave = castle_slave_find_by_uuid(uuid);
-
-    if (slave)
+    if(!slave)
     {
-        /*
-        * Mark that this slave is oos. Allocations from this slave should now stop, and
-        * all future I/O submissions should ignore this slave.
-        */
-        if (test_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags))
-        {
-            /* Slave is already marked as oos - ignore */
-            printk("Warning: slave %x has already been marked bad. Ignoring\n", slave->uuid);
-            *ret = -EINVAL;
-        } else if (test_bit(CASTLE_SLAVE_EVACUATE_BIT, &slave->flags))
-        {
-            /* Slave is already marked as evacuated - ignore */
-            printk("Warning: slave %x has already been evacuated. Ignoring\n", slave->uuid);
-            *ret = -EEXIST;
-        } else
-        {
-            set_bit(CASTLE_SLAVE_EVACUATE_BIT, &slave->flags);
-            printk("Slave %x has been marked as out-of-service\n", slave->uuid);
-            /* TBD kick rebuild thread */
-            *ret = EXIT_SUCCESS;
-        }
-    } else
         *ret = -ENOENT;
+        return;
+    }
+
+    /*
+    * Mark that this slave is out-of-service. Allocations from this slave should now stop,
+    * and all future I/O submissions should ignore this slave.
+    */
+    if (test_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags))
+    {
+        /* Slave is already marked as out-of-service - ignore */
+        printk("Warning: slave 0x%x (%s) has already been marked out-of-service. Ignoring.\n",
+                slave->uuid, bdevname(slave->bdev, b));
+        *ret = -EINVAL;
+        return;
+    } 
+
+    /* All of the below is happening under the ioctl lock, so we don't have to use atomic
+       test_and_set. */
+    if (test_bit(CASTLE_SLAVE_EVACUATE_BIT, &slave->flags))
+    {
+        /* Slave is already marked as evacuated - ignore */
+        printk("Warning: slave 0x%x (%s) has already been evacuated. Ignoring.\n",
+                slave->uuid, bdevname(slave->bdev, b));
+        *ret = -EEXIST;
+        return;
+    } 
+        
+    set_bit(CASTLE_SLAVE_EVACUATE_BIT, &slave->flags);
+    printk("Slave 0x%x (%s) has been marked as evacuating.\n",
+            slave->uuid, bdevname(slave->bdev, b));
+    castle_extents_rebuild_start();
+    *ret = EXIT_SUCCESS;
 }
 
 int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
