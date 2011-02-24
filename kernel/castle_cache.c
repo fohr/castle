@@ -4630,8 +4630,8 @@ int castle_mstores_writeback(uint32_t version)
         fs_sb->mstore[i] = INVAL_EXT_POS;
     castle_fs_superblocks_put(fs_sb, 1);
 
-    _castle_ext_freespace_init(&mstore_ext_free, 0, 0,
-                                C_BLK_SIZE, MSTORE_EXT_ID + slot);
+    castle_ext_freespace_init(&mstore_ext_free, MSTORE_EXT_ID + slot, C_BLK_SIZE);
+
     /* Call writebacks of components. */
     castle_attachments_writeback();
     castle_double_arrays_writeback();

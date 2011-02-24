@@ -195,43 +195,65 @@ void castle_fs_superblocks_put(struct castle_fs_superblock *sb, int dirty)
     mutex_unlock(&castle_sblk_lock);
 }
 
-int _castle_ext_freespace_init(c_ext_free_t *ext_free, 
-                               da_id_t       da_id, 
-                               c_byte_off_t  size,
-                               uint32_t      align,
-                               c_ext_id_t    ext_id)
+/**
+ * Initialises the freespace structure for an extent provided.
+ *
+ * @param ext_free  Pointer to the freespace structure.
+ * @param ext_id    Id of the extent for which to initalise the freespace struct.
+ * @param align     How are the allocations from this extent going to be aligned. 
+ */
+void castle_ext_freespace_init(c_ext_free_t *ext_free, 
+                               c_ext_id_t    ext_id,
+                               uint32_t      align)
 {
-    uint32_t nr_chunks = ((size  - 1) / C_CHK_SIZE) + 1;
+    /* Extent id must be valid. */ 
+    BUG_ON(EXT_ID_INVAL(ext_id));
 
-    if (!EXT_ID_INVAL(ext_id))
-    {
-        ext_free->ext_id = ext_id;
-        ext_free->ext_size = castle_extent_size_get(ext_id) * C_CHK_SIZE;
-    }
-    else
-    {
-        ext_free->ext_id = castle_extent_alloc(DEFAULT_RDA, da_id, nr_chunks);
-        ext_free->ext_size = size;
-    }
+    /* Init the structure. */ 
+    ext_free->ext_id = ext_id;
+    ext_free->ext_size = castle_extent_size_get(ext_id) * C_CHK_SIZE;
     ext_free->align = align;
     atomic64_set(&ext_free->used, 0);
     atomic64_set(&ext_free->blocked, 0);
-
-    if (EXT_ID_INVAL(ext_free->ext_id))
-        return -ENOSPC;
-    return 0;
 }
 
-int castle_ext_freespace_init(c_ext_free_t *ext_free, 
-                              da_id_t       da_id, 
-                              c_byte_off_t  size,
-                              uint32_t      align)
+/**
+ * Allocates a new extent, and initialises the freespace structure for it.
+ *
+ * @param ext_free  Pointer to the freespace structure.
+ * @param da_id     Which DA will the new extent belong to.
+ * @param size      Size of the extent, in bytes.
+ * @param align     How are the allocations from the new extent going to be aligned. 
+ *
+ * @return 0:       On success.
+ * @return -ENOSPC: If extent could not be allocated.
+ */
+int castle_new_ext_freespace_init(c_ext_free_t *ext_free, 
+                                  da_id_t       da_id, 
+                                  c_byte_off_t  size,
+                                  uint32_t      align)
 {
-    return _castle_ext_freespace_init(ext_free, da_id, size, align, INVAL_EXT_ID);
+    uint32_t nr_chunks;
+    c_ext_id_t ext_id;
+
+    /* Calculate the number of chunks requried. */ 
+    nr_chunks = ((size - 1) / C_CHK_SIZE) + 1;
+    /* Try allocating the extent of the requested size. */
+    ext_id = castle_extent_alloc(DEFAULT_RDA, da_id, nr_chunks);
+    if(EXT_ID_INVAL(ext_id))
+        return -ENOSPC;
+
+    /* Initialise the freespace structure. */
+    castle_ext_freespace_init(ext_free, ext_id, align);
+
+    /* Succees. */
+    return 0;
 }
 
 void castle_ext_freespace_fini(c_ext_free_t *ext_free)
 {
+    if(EXT_ID_INVAL(ext_free->ext_id))
+        return;
     castle_extent_free(ext_free->ext_id);
     ext_free->ext_id      = INVAL_EXT_ID;
     ext_free->ext_size    = 0;
@@ -522,19 +544,19 @@ int castle_fs_init(void)
         mutex_init(&castle_global_tree.last_key_mutex);
         INIT_LIST_HEAD(&castle_global_tree.large_objs);
 
-        if ((ret = castle_ext_freespace_init(&castle_global_tree.tree_ext_free,
-                                              castle_global_tree.da,
-                                              castle_global_tree.tree_ext_free.ext_size,
-                                              MTREE_NODE_SIZE * C_BLK_SIZE)) < 0)
+        if ((ret = castle_new_ext_freespace_init(&castle_global_tree.tree_ext_free,
+                                                  castle_global_tree.da,
+                                                  castle_global_tree.tree_ext_free.ext_size,
+                                                  MTREE_NODE_SIZE * C_BLK_SIZE)) < 0)
         {
             printk("Failed to allocate space for Global Tree.\n");
             return ret;
         }
             
-        if ((ret = castle_ext_freespace_init(&castle_global_tree.data_ext_free,
-                                              castle_global_tree.da,
-                                              castle_global_tree.data_ext_free.ext_size,
-                                              C_BLK_SIZE)) < 0)
+        if ((ret = castle_new_ext_freespace_init(&castle_global_tree.data_ext_free,
+                                                  castle_global_tree.da,
+                                                  castle_global_tree.data_ext_free.ext_size,
+                                                  C_BLK_SIZE)) < 0)
         {
             printk("Failed to allocate space for Global Tree Medium Objects.\n");
             return ret;

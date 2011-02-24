@@ -219,7 +219,6 @@ static inline int EXT_POS_COMP(c_ext_pos_t cep1, c_ext_pos_t cep2)
     if(cep1.offset > cep2.offset)
         return 1;
 
-    else
 	return 0;
 }
 #define cep_fmt_str                  "(%llu, 0x%llx (chunk %lld chunk_off 0x%llx))"
@@ -659,23 +658,24 @@ struct castle_clist_entry {
     /*         16 */ c_ext_pos_t     root_node;
     /*         32 */ c_ext_pos_t     first_node;
     /*         48 */ c_ext_pos_t     last_node;
-    /*         64 */ c_ext_free_bs_t tree_ext_free_bs;
-    /*        128 */ c_ext_free_bs_t data_ext_free_bs;
-    /*        192 */ uint64_t        node_count;
-    /*        200 */ uint64_t        large_ext_chk_cnt;
-    /*        208 */ uint32_t        bloom_num_chunks;
-    /*        212 */ uint32_t        bloom_num_blocks_last_chunk;
-    /*        216 */ uint64_t        bloom_chunks_offset;
-    /*        224 */ c_ext_id_t      bloom_ext_id;
-    /*        232 */ uint32_t        bloom_num_btree_nodes;
-    /*        236 */ uint32_t        bloom_block_size_pages;
-    /*        240 */ tree_seq_t      seq;
-    /*        244 */ uint8_t         bloom_exists;
-    /*        245 */ uint8_t         bloom_num_hashes;
-    /*        246 */ uint16_t        node_sizes[MAX_BTREE_DEPTH];
-    /*        266 */ uint16_t        first_node_size;
-    /*        268 */ uint16_t        last_node_size;
-    /*        270 */ uint8_t         _unused[242];
+    /*         64 */ c_ext_free_bs_t internal_ext_free_bs;
+    /*        128 */ c_ext_free_bs_t tree_ext_free_bs;
+    /*        192 */ c_ext_free_bs_t data_ext_free_bs;
+    /*        256 */ uint64_t        node_count;
+    /*        264 */ uint64_t        large_ext_chk_cnt;
+    /*        272 */ uint32_t        bloom_num_chunks;
+    /*        276 */ uint32_t        bloom_num_blocks_last_chunk;
+    /*        280 */ uint64_t        bloom_chunks_offset;
+    /*        288 */ c_ext_id_t      bloom_ext_id;
+    /*        296 */ uint32_t        bloom_num_btree_nodes;
+    /*        300 */ uint32_t        bloom_block_size_pages;
+    /*        304 */ tree_seq_t      seq;
+    /*        308 */ uint8_t         bloom_exists;
+    /*        309 */ uint8_t         bloom_num_hashes;
+    /*        310 */ uint16_t        node_sizes[MAX_BTREE_DEPTH];
+    /*        330 */ uint16_t        first_node_size;
+    /*        332 */ uint16_t        last_node_size;
+    /*        334 */ uint8_t         _unused[178];
     /*        512 */
 } PACKED;
 
@@ -1180,19 +1180,17 @@ void                  castle_fs_superblocks_put    (struct castle_fs_superblock 
 
 int                   castle_fs_init               (void);
 
-int                   castle_ext_freespace_init    (c_ext_free_t     *ext_freespace, 
+void                  castle_ext_freespace_init    (c_ext_free_t     *ext_free, 
+                                                    c_ext_id_t        ext_id,
+                                                    uint32_t          align);
+
+int                   castle_new_ext_freespace_init(c_ext_free_t     *ext_free, 
                                                     da_id_t           da_id, 
                                                     c_byte_off_t      size,
                                                     uint32_t          align);
 
 int                   castle_ext_freespace_consistent     
-                                                   (c_ext_free_t     *ext_freespace);
-
-int                  _castle_ext_freespace_init    (c_ext_free_t     *ext_freespace, 
-                                                    da_id_t           da_id, 
-                                                    c_byte_off_t      size,
-                                                    uint32_t          align,
-                                                    c_ext_id_t        ext_id);
+                                                   (c_ext_free_t     *ext_frees);
 
 void                  castle_ext_freespace_fini    (c_ext_free_t     *ext_free);
 
