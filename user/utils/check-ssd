@@ -1,0 +1,20 @@
+#!/bin/bash
+
+SSDS="SSDSA2SH032G1GN SSDSA2M160G2GC"
+
+dev=`basename $1 | cut -b 1-3`
+filename=/sys/block/$dev/device/model
+
+if [ -e $filename ]; then
+    # trim any whitespace from the end
+    model=`cat $filename | sed -e 's/  *$//'`
+    for ssd in $SSDS; do
+        if [[ "$ssd" == "$model" ]]; then
+            exit 1
+        fi
+    done
+fi
+
+# didn't find it
+exit 0
+
