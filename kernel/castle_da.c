@@ -1555,6 +1555,8 @@ struct castle_da_merge {
     struct work_struct            work;
     int                           budget_cons_rate;
     int                           budget_cons_units;
+    int                           ssds_used;       /**< set to true if at least some btree
+                                                        nodes will be stored on SSDs.   */
     c_ext_free_t                  internal_ext_free;
     c_ext_free_t                  tree_ext_free;
     c_ext_free_t                  data_ext_free;
@@ -1875,6 +1877,10 @@ static int castle_da_merge_extents_alloc(struct castle_da_merge *merge)
 
     /* TODO: change the alignment back to the actual node size, once we worked
              out which levels we'll be storing in this extent. */
+    BUG_ON(!EXT_ID_INVAL(merge->internal_ext_free.ext_id) || 
+           !EXT_ID_INVAL(merge->tree_ext_free.ext_id));
+    /* Assume that SSDs will be used first. */
+    merge->ssds_used = 1;
     /* First, attempt to allocate an SSD extent for the entire tree. */
     merge->tree_ext_free.ext_id = castle_extent_alloc(SSD_RDA,
                                                       merge->da->id,
@@ -1893,6 +1899,7 @@ static int castle_da_merge_extents_alloc(struct castle_da_merge *merge)
     /* If the tree extent is still invalid, there is no space even on HDDs, go out. */
     if(EXT_ID_INVAL(merge->tree_ext_free.ext_id))
     {
+        merge->ssds_used = 0;
         printk("Merge failed due to space constraint for tree\n");
         goto no_space;
     }
@@ -2048,6 +2055,49 @@ static c_val_tup_t castle_da_medium_obj_copy(struct castle_da_merge *merge,
     return new_cvt;
 }
 
+/**
+ * Works out which extent, and what node size should be used for given level in the btree
+ * in a given merge. 
+ *
+ * @param merge     Merge state structure.
+ * @param level     Level counted from leaves. 
+ * @param node_size Return argument: size of the node.
+ * @param ext_free  Return argument: extent freespace structure.
+ */
+static inline void castle_da_merge_node_info_get(struct castle_da_merge *merge,
+                                                 uint8_t level,
+                                                 uint16_t *node_size,
+                                                 c_ext_free_t **ext_free)
+{
+    /* Initialise the return variables, assuming that nodes will be stored on HDDs. */
+    *node_size = VLBA_HDD_RO_TREE_NODE_SIZE;
+    *ext_free = &merge->tree_ext_free;
+
+    /* If SSDs are not used, the node must be on HDDs. */
+    if(!merge->ssds_used)
+    {
+        /* There shouldn't be an extent for internal nodes if SSDs aren't used. */
+        BUG_ON(!EXT_ID_INVAL(merge->internal_ext_free.ext_id));
+        return;
+    }
+    
+    /* SSDs are used, but the node may still live on HDDs, but only if there is a 
+       separate extent for internal nodes, and level is 0 (leaf). */
+    if(!EXT_ID_INVAL(merge->internal_ext_free.ext_id) && (level == 0))
+    {
+        /* There should be an extent for leaf nodes on HDDs. */
+        BUG_ON(EXT_ID_INVAL(merge->tree_ext_free.ext_id));
+        return;
+    }
+
+    /* Node must be stored on SSDs. Change the size appropriately. */
+    *node_size = VLBA_SSD_RO_TREE_NODE_SIZE;
+
+    /* Internal nodes extent should be used if it exists, and level>0. */
+    if(!EXT_ID_INVAL(merge->internal_ext_free.ext_id) && (level > 0))
+        *ext_free = &merge->internal_ext_free;
+}
+
 /* Note: if is_re_add flag is set, then the data wont be processed again, just
  * the key gets added.  Used when entry is being moved from one node to another
  * node.
@@ -2102,24 +2152,26 @@ static inline void castle_da_entry_add(struct castle_da_merge *merge,
     /* Alloc a new block if we need one */
     if(!level->node_c2b)
     {
-        c_ext_pos_t  cep;
+        c_ext_free_t *ext_free;
         uint16_t node_size;
+        c_ext_pos_t cep;
 
+        castle_da_merge_node_info_get(merge, depth, &node_size, &ext_free);
         if(merge->root_depth < depth)
         {
             debug("Creating a new root level: %d\n", depth);
             BUG_ON(merge->root_depth != depth - 1);
             merge->root_depth = depth;
-            merge->out_tree->node_sizes[depth] = VLBA_HDD_RO_TREE_NODE_SIZE;
+            merge->out_tree->node_sizes[depth] = node_size;
         }
         BUG_ON(level->next_idx      != 0);
         BUG_ON(level->valid_end_idx >= 0);
 
         debug("Allocating a new node at depth: %d\n", depth);
-        node_size = btree->node_size(merge->out_tree, depth);
-        BUG_ON(castle_ext_freespace_get(&merge->tree_ext_free,
-                                         node_size * C_BLK_SIZE,
-                                         0,
+        BUG_ON(node_size != btree->node_size(merge->out_tree, depth));
+        BUG_ON(castle_ext_freespace_get(ext_free,
+                                        node_size * C_BLK_SIZE,
+                                        0,
                                         &cep) < 0);
         debug("Got "cep_fmt_str_nl, cep2str(cep));
 
@@ -3015,6 +3067,7 @@ static struct castle_da_merge* castle_da_merge_init(struct castle_double_array *
         merge->levels[i].valid_end_idx = -1; 
         merge->levels[i].valid_version = INVAL_VERSION;  
     }
+    merge->internal_ext_free.ext_id = INVAL_EXT_ID;
     merge->tree_ext_free.ext_id = INVAL_EXT_ID;
     merge->data_ext_free.ext_id = INVAL_EXT_ID;
     INIT_LIST_HEAD(&merge->large_objs);
