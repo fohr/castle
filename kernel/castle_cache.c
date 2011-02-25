@@ -1149,28 +1149,43 @@ typedef struct castle_io_array {
  * @return          ENOENT if no slave found, EXIT_SUCCESS if found
  *                  EXIT_SUCCESS if a slave was found
  */
-static int c_io_next_slave_get(c_disk_chk_t *chunks, int k_factor, int *idx)
+static int c_io_next_slave_get(c2_block_t *c2b, c_disk_chk_t *chunks, int k_factor, int *idx)
 {
     struct castle_slave *slave;
-    int i;
+    int i, try_second, disk_idx;
 
     /*
      * At some point we'll have a proper read slave scheduler to optimise read I/O as mentioned
      * above, but for the moment just return the first working slave.
+     *
+     * At the moment, when prefetching, avoid using the first copy, which may be stored on SSDs.
      */
+    try_second = c2b_prefetch(c2b); 
+    /* Loop around, searching for disks in service. */
+    disk_idx = -1;
     for(i=0; i<k_factor; i++)
     {
         slave = castle_slave_find_by_uuid(chunks[i].slave_id);
         BUG_ON(!slave);
         if (!test_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags))
         {
-            *idx = i;
-            /* Slave is not out-of-service - we can use it. */
-            return EXIT_SUCCESS;         
+            disk_idx = i;
+            /* If we are not looking for second copy, or we are already looking past the first
+               copy, terminate. */
+            if(!try_second || i != 0)
+                goto out;
         }
     }
+out:
+    if(disk_idx >= 0)
+    {
+        *idx = i;
+        return EXIT_SUCCESS;         
+    }
+    BUG_ON(disk_idx != -1);
     /* Could not find a slave to read from. */
     return -ENOENT;
+            
 }
     
 /**
@@ -1178,9 +1193,9 @@ static int c_io_next_slave_get(c_disk_chk_t *chunks, int k_factor, int *idx)
  *
  * @see submit_c2b_io()
  */
-static int c_io_array_submit(int rw, 
-                             c2_block_t *c2b, 
-                             c_disk_chk_t *chunks, 
+static int c_io_array_submit(int rw,
+                             c2_block_t *c2b,
+                             c_disk_chk_t *chunks,
                              int k_factor,
                              c_io_array_t *array,
                              c_ext_id_t ext_id)
@@ -1191,11 +1206,11 @@ static int c_io_array_submit(int rw,
 
     nr_pages = array->next_idx;
     debug("Submitting io_array of %d pages, for cep "cep_fmt_str", k_factor=%d, rw=%s\n",
-        nr_pages, 
-        cep2str(array->start_cep), 
-        k_factor, 
+        nr_pages,
+        cep2str(array->start_cep),
+        k_factor,
         (rw == READ) ? "read" : "write");
- 
+
     BUG_ON((nr_pages <= 0) || (nr_pages > MAX_BIO_PAGES));
 
     if (rw == READ) /* Read from one slave only */
@@ -1203,7 +1218,7 @@ static int c_io_array_submit(int rw,
         /* Accounting */
         atomic_add(nr_pages, &castle_cache_read_stats);
         /* Call the slave scheduler to find the next slave to read from */
-        ret = c_io_next_slave_get(chunks, k_factor, &read_idx);
+        ret = c_io_next_slave_get(c2b, chunks, k_factor, &read_idx);
         /*
          * If there is a read failure here (no live slaves found) then we return error.
          * Callers must check for read failure. For non-superblock extents this will be fatal.
@@ -1215,12 +1230,12 @@ static int c_io_array_submit(int rw,
         /* Only increment remaining count once we know we'll submit the IO. */
         atomic_add(nr_pages, &c2b->remaining);
         /* Submit the IO. */
-        submit_c2b_io(READ, c2b, array->start_cep, chunks[read_idx], array->io_pages, nr_pages); 
+        submit_c2b_io(READ, c2b, array->start_cep, chunks[read_idx], array->io_pages, nr_pages);
 
         /* Return with success. */
         return EXIT_SUCCESS;
-    } 
-    
+    }
+
     /* Write to all slaves */
     BUG_ON(rw != WRITE);
     found = 0;
@@ -1244,7 +1259,7 @@ static int c_io_array_submit(int rw,
      * so doing nothing here is safe.
      * For all other extent types finding no live slave to write to is fatal, so bug out.
      */
-    BUG_ON(!found && !SUPER_EXTENT(ext_id)); 
+    BUG_ON(!found && !SUPER_EXTENT(ext_id));
 
     return EXIT_SUCCESS;
 }
