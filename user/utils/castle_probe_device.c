@@ -76,7 +76,7 @@ int main(int argc, char *argv[])
       fprintf(stdout, "Filesystem uuid: 0x%x\n", fs_sb.uuid);
     }
 
-    fprintf(stdout, "Disk uuid: 0x%x\n", cs_sb.uuid);
+    fprintf(stdout, "Disk uuid: 0x%x%s\n", cs_sb.uuid, (cs_sb.flags & CASTLE_SLAVE_SSD) ? ", SSD" : "");
 
     close(fd);
 

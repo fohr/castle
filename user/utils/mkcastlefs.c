@@ -10,9 +10,6 @@
 
 #include "castle_public.h"
 
-#define NR_SUPPORTED_SSDS   2 
-static char* supported_ssds[NR_SUPPORTED_SSDS] = {"SSDSA2SH032G1GN INTEL", "INTEL SSDSA2M160G2GC"};
-
 #define MB (1024 * 1024)
 
 void usage(void)
@@ -79,42 +76,27 @@ int write_superblock(int fd, struct castle_slave_superblock_public *super)
 static int check_ssd(char *node)
 {
 #define BUFFER_SIZE     256
-#define HDPARM_COMMAND  "hdparm -I "
-#define SEARCH_STR      "Model Number:"
+#define MODEL_COMMAND   "check-ssd "
+
   FILE *p = NULL;
   char buffer[BUFFER_SIZE];
   int i, ret;
 
   ret = 0;
   /* Make sure that the command will fit in the buffer. */
-  if(strlen(node) > BUFFER_SIZE - strlen(HDPARM_COMMAND) - 10)
+  if(strlen(node) > BUFFER_SIZE - strlen(MODEL_COMMAND) - 10)
     goto out;
-  sprintf(buffer, HDPARM_COMMAND"%s", node);
+  sprintf(buffer, MODEL_COMMAND"%s", node);
   p = popen(buffer, "r");
   if(!p)
     {
       printf("Failed to execute: %s\n", buffer);
       goto out;
     }
-  while(fgets(buffer, BUFFER_SIZE, p))
-    {
-      char *model;
-      if((model = strstr(buffer, SEARCH_STR)) != NULL)
-        {
-          model += strlen(SEARCH_STR);
-          while(*model == ' ' || *model == '\0')
-            model++;
-          for(i=0; i<NR_SUPPORTED_SSDS; i++)
-            {   
-              if(strstr(model, supported_ssds[i]))
-                ret = 1;
-            }
-          goto out;
-        }
-    }
-    
- out:
-  if(p) fclose(p);
+
+  ret = pclose(p);
+
+out:
   return ret;
 }
 

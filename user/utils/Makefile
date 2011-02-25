@@ -58,5 +58,6 @@ install: castle_probe_device mkcastlefs
 	install -D castle-scan /usr/sbin/castle-scan
 	install -D castle-claim-empty /usr/sbin/castle-claim-empty
 	install -D castle-create /usr/sbin/castle-create
+	install -D check-ssd /usr/sbin/check-ssd
 	install -D mkcastlefs /sbin/mkcastlefs
 	install -D castle_probe_device /usr/sbin/castle-probe-device

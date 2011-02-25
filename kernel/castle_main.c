@@ -794,6 +794,8 @@ static int castle_slave_superblock_read(struct castle_slave *cs)
     if ((!errs[0] && errs[1]) && (cs_sb[0].pub.flags & CASTLE_SLAVE_NEWDEV))
     {
         castle_slave_superblock_init(cs, &cs->cs_superblock, cs_sb[0].pub.uuid);
+        /* keep the SSD flag */
+        cs->cs_superblock.pub.flags |= cs_sb[0].pub.flags & CASTLE_SLAVE_SSD;
         fs_version = 0;
         goto out;
     }
