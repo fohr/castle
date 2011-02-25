@@ -48,6 +48,7 @@
         (_ext)->type        = (_me)->type;                                  \
         (_ext)->k_factor    = (_me)->k_factor;                              \
         (_ext)->maps_cep    = (_me)->maps_cep;                              \
+        (_ext)->curr_rebuild_seqno = (_me)->curr_rebuild_seqno;             \
         atomic_set(&(_ext)->obj_refs, (_me)->obj_refs);                     \
         (_ext)->dirtylist.rb_root = RB_ROOT;                                \
         spin_lock_init(&ext->dirtylist.lock);                               \
@@ -59,6 +60,7 @@
         (_me)->type         = (_ext)->type;                                 \
         (_me)->k_factor     = (_ext)->k_factor;                             \
         (_me)->maps_cep     = (_ext)->maps_cep;                             \
+        (_me)->curr_rebuild_seqno = (_ext)->curr_rebuild_seqno;             \
         (_me)->obj_refs     = atomic_read(&(_ext)->obj_refs);                              
  
 #define FAULT_CODE EXTENT_FAULT
@@ -2081,7 +2083,14 @@ out:
  */
 void castle_extents_rebuild_start(void)
 {
+    struct castle_fs_superblock* fs_sb;
+
     atomic_inc(&current_rebuild_seqo);
+
+    fs_sb = castle_fs_superblocks_get();
+    fs_sb->extents_sb.current_rebuild_seqo = atomic_read(&current_rebuild_seqo);
+    castle_fs_superblocks_put(fs_sb, 1);
+
     wake_up(&rebuild_wq);
 }
 

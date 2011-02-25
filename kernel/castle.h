@@ -275,7 +275,8 @@ struct castle_elist_entry {
     /*         16 */ uint32_t        k_factor;
     /*         20 */ uint32_t        obj_refs;
     /*         24 */ c_ext_pos_t     maps_cep;
-    /*         40 */ uint8_t         _unused[24]; 
+    /*         40 */ uint32_t        curr_rebuild_seqno;
+    /*         44 */ uint8_t         _unused[20]; 
     /*         64 */
 } PACKED;
 
@@ -288,7 +289,8 @@ struct castle_extents_superblock {
     /*        144 */ struct castle_elist_entry  mstore_ext[2];
     /*        272 */ c_ext_free_bs_t            meta_ext_free_bs;
     /*        336 */ c_disk_chk_t               micro_maps[MAX_NR_SLAVES];
-    /*        848 */ uint8_t                    _unused[176];
+    /*        848 */ uint32_t                   current_rebuild_seqo;
+    /*        852 */ uint8_t                    _unused[172];
     /*       1024 */
 } PACKED;
 
