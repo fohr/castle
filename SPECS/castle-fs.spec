@@ -86,6 +86,7 @@ cp user/utils/castle-scan %{buildroot}/usr/sbin/
 cp user/utils/castle_probe_device %{buildroot}/usr/sbin/castle-probe-device
 cp user/utils/castle-create %{buildroot}/usr/sbin/
 cp user/utils/castle-claim-empty %{buildroot}/usr/sbin/
+cp user/utils/check-ssd %{buildroot}/usr/sbin/
 cp user/utils/mkcastlefs %{buildroot}/sbin
 
 export INSTALL_MOD_PATH=%{buildroot}
