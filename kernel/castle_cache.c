@@ -2635,7 +2635,7 @@ static USED char* c2_pref_window_to_str(c2_pref_window_t *window)
 
     snprintf(win_str, PREF_WINDOW_STR_LEN, 
         "%s%s%s pref win: {cep="cep_fmt_str", start_off=0x%llx (%lld), "
-        "end_off=0x%llx (%lld), pref_pages=%d (%d), st=0x%.2x, cnt=%d",
+        "end_off=0x%llx (%lld), pref_pages=%d (%lld), st=0x%.2x, cnt=%d",
         window->state & PREF_WINDOW_NEW ? "N": "",
         window->state & PREF_WINDOW_SOFTPIN ? "S": "",
         window->state & PREF_WINDOW_ADAPTIVE ? "A" : "",
