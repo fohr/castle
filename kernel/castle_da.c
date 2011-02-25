@@ -1887,19 +1887,19 @@ static int castle_da_merge_extents_alloc(struct castle_da_merge *merge)
                                                       CHUNK(size));
     /* If failed, try to allocate SSD extent for the internal nodes. */
     if(EXT_ID_INVAL(merge->tree_ext_free.ext_id))
+    {
         merge->internal_ext_free.ext_id = castle_extent_alloc(SSD_RDA,
                                                               merge->da->id,
                                                               CHUNK(internal_size));
-    /* If that still failed, allocate standard extent for the entire tree. */
-    if(EXT_ID_INVAL(merge->tree_ext_free.ext_id) &&
-       EXT_ID_INVAL(merge->internal_ext_free.ext_id))
-    {
-        merge->ssds_used = 0;
+        /* If the internal nodes extent is still invalid, we failed to
+           allocate from SSDs. */
+        if(EXT_ID_INVAL(merge->internal_ext_free.ext_id))
+            merge->ssds_used = 0;
+        /* HDD extent has to be allocated. */
         merge->tree_ext_free.ext_id = castle_extent_alloc(DEFAULT_RDA,
                                                           merge->da->id,
                                                           CHUNK(size));
     }
-
     /* If the tree extent is still invalid, there is no space even on HDDs, go out. */
     if(EXT_ID_INVAL(merge->tree_ext_free.ext_id))
     {
