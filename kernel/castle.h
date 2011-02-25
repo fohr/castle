@@ -81,7 +81,7 @@ typedef uint32_t block_t;
 #define MAX_NR_SLAVES 64
 
 #define C_CHK_SHIFT                    (20)
-#define C_CHK_SIZE                     (1 << C_CHK_SHIFT)       /**< Bytes per chunk.             */
+#define C_CHK_SIZE                     (1ULL << C_CHK_SHIFT)   /**< Bytes per chunk.             */
 
 #define CHUNK_OFFSET(offset)  ((offset) & (C_CHK_SIZE - 1))
 #define BLOCK_OFFSET(offset)  ((offset) & (C_BLK_SIZE - 1))
