@@ -1764,7 +1764,7 @@ static int slave_needs_remapping(uint32_t slave_id)
 static int castle_extent_remap(c_ext_t *ext)
 {
     uint32_t            k_factor = castle_extent_kfactor_get(ext->ext_id);
-    int                 chunkno, idx, chunk_remapped;
+    int                 chunkno, idx, remap_idx, no_remap_idx;
 
     debug("\nRemapping extent %llu size: %u, from seqno: %u to seqno: %u\n",
             ext->ext_id, ext->size, ext->curr_rebuild_seqno, rebuild_to_seqno);
@@ -1809,13 +1809,27 @@ static int castle_extent_remap(c_ext_t *ext)
     /* Scan the shadow map, chunk by chunk, remapping slaves as necessary. */
     for (chunkno = 0; chunkno<ext->size; chunkno++)
     {
-        chunk_remapped = 0;
-        for (idx=0; idx<k_factor; idx++)
+        /*
+         * Populate the remap chunks array that will be used to write out remapped data.
+         * Disk chunks for remapped slaves go at the start. Disk chunks for non-remapped slaves
+         * go at the end. This split allows lower level code to submit I/O only for remapped
+         * slaves, or for all slaves, as required. Remap_idx will define the boundary between
+         * the two sets in the remap chunks array.
+         */
+        c_disk_chk_t remap_chunks[k_factor];
+        for (idx=0, remap_idx=0, no_remap_idx=k_factor-1; idx<k_factor; idx++)
         {
             c_disk_chk_t *disk_chk;
 
+            /* Chunks that don't need remapping go to the end of the remap_chunks array. */
             if (!slave_needs_remapping(ext->shadow_map[(chunkno*k_factor)+idx].slave_id))
+            {
+                remap_chunks[no_remap_idx].slave_id =
+                                        ext->shadow_map[(chunkno*k_factor)+idx].slave_id;
+                remap_chunks[no_remap_idx--].offset =
+                                        ext->shadow_map[(chunkno*k_factor)+idx].offset;
                 continue;
+            }
 
             /* This slave needs remapping. Get a replacement disk chunk. */
             disk_chk = castle_extent_remap_disk_chunk_alloc(ext, chunkno);
@@ -1828,10 +1842,15 @@ static int castle_extent_remap(c_ext_t *ext)
             ext->shadow_map[(chunkno*k_factor)+idx].offset = disk_chk->offset;
             spin_unlock(&ext->shadow_map_lock);
 
-            chunk_remapped = 1; /* So we know we have to write out the new chunk mapping */
+            /* Chunks that need remapping go to the start of the remap_chunks array. */
+            remap_chunks[remap_idx].slave_id = disk_chk->slave_id;
+            remap_chunks[remap_idx++].offset = disk_chk->offset;
         }
 
-        if (chunk_remapped)
+        /*
+         * The remap_chunks array now contains all the disk chunks for this chunkno.
+         */
+        if (remap_idx)
         {
             c_ext_pos_t cep;
             c2_block_t  *c2b;
@@ -1839,8 +1858,8 @@ static int castle_extent_remap(c_ext_t *ext)
             c2_block_t * map_c2b;
 
             /*
-             * If a chunk has been remapped, read it in (via the old map) and write it out (via the
-             * shadow map).
+             * If a chunk has been remapped, read it in (via the old map) and write it out (using
+             * the remap_chunks array as the map).
              */
             cep.ext_id = ext->ext_id;
             cep.offset = chunkno*C_CHK_SIZE;
@@ -1849,29 +1868,30 @@ static int castle_extent_remap(c_ext_t *ext)
             write_lock_c2b(c2b);
 
             /*
+             * Remap c2bs are handled slightly differently in the cache, as we can
+             * have clean c2bs with dirty pages.
+            */
+            set_c2b_remap(c2b);
+
+            /*
              * If c2b is not up to date, issue a blocking READ to update.
              * READ uses the existing map.
              */
             if(!c2b_uptodate(c2b))
                 BUG_ON(submit_c2b_sync(READ, c2b));
 
-            /*
-             * Force the write to push out to disk. The cache may think that the block is not
-             * dirty, but we know better.
-             */
-            dirty_c2b(c2b);
-
-            /* Write will use the shadow map */
-            BUG_ON(submit_c2b_sync(WRITE, c2b));
+            /* Submit the write. */
+            BUG_ON(submit_c2b_remap_rda(c2b, remap_chunks, remap_idx));
 
             write_unlock_c2b(c2b);
 
             /* This c2b is not needed any more, and it pollutes the cache, so destroy it. */
             BUG_ON(castle_cache_block_destroy(c2b) && LOGICAL_EXTENT(ext->ext_id));
 
-            /* Now write out the shadow map entry for this chunk. */
-
-            /* First, get the cep for the map for this chunk */
+            /*
+             * Now write out the shadow map entry for this chunk.
+             * First, get the cep for the map for this chunk.
+             */
             map_cep = castle_extent_map_cep_get(ext->maps_cep, chunkno, ext->k_factor);
             /* Make the map_page_cep offset block aligned. */
             memcpy(&map_page_cep, &map_cep, sizeof(c_ext_pos_t));

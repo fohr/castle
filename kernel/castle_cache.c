@@ -54,6 +54,7 @@ enum c2b_state_bits {
     C2B_windowstart,        /*<< Block is the first chunk of an active prefetch window.           */
     C2B_bio_error,          /*<< Block had at least one bio I/O error.                            */
     C2B_no_resubmit,        /*<< Block must not be resubmitted after I/O error.                   */
+    C2B_remap,              /*<< Block is for a remap                                             */
 };
 
 #define INIT_C2B_BITS (0)
@@ -94,6 +95,7 @@ C2B_FNS(prefetched, prefetched)
 C2B_FNS(windowstart, windowstart)
 C2B_FNS(bio_error, bio_error)
 C2B_FNS(no_resubmit, no_resubmit)
+C2B_FNS(remap, remap)
 
 /* c2p encapsulates multiple memory pages (in order to reduce overheads).
    NOTE: In order for this to work, c2bs must necessarily be allocated in
@@ -840,6 +842,7 @@ void dirty_c2b(c2_block_t *c2b)
  * - Move c2b from cache dirtylist to cache cleanlist
  *   (also occurs in hash_insert() for new c2bs)
  * - Update cleanlist accounting.
+ * - Handles special case of remap c2bs which can have a clean c2b but dirty c2ps
  *
  * @also castle_cache_block_hash_insert()
  * @also c2_dirtylist_remove()
@@ -851,12 +854,15 @@ static void clean_c2b(c2_block_t *c2b)
     int i, nr_c2ps;
 
     BUG_ON(!c2b_locked(c2b));
-    BUG_ON(!c2b_dirty(c2b));
+    BUG_ON(!c2b_dirty(c2b) && (!c2b_remap(c2b)));
 
     /* Clean all c2ps. */
     nr_c2ps = castle_cache_pages_to_c2ps(c2b->nr_pages);
     for(i=0; i<nr_c2ps; i++)
         clean_c2p(c2b->c2ps[i]);
+
+    if (c2b_remap(c2b))
+        return;
 
     /* Clean the c2b. */
     c2_dirtylist_remove(c2b);
@@ -1288,6 +1294,139 @@ static inline int c_io_array_page_add(c_io_array_t *array,
 }
 
 /**
+ * Callback for synchronous c2b I/O completion.
+ *
+ * Wakes thread that dispatched the synchronous I/O
+ *
+ * @param c2b   completed c2b I/O
+ */
+static void castle_cache_sync_io_end(c2_block_t *c2b)
+{
+    struct completion *completion = c2b->private;
+
+    complete(completion);
+}
+
+/**
+ * Generates synchronous write I/O for disk block(s) associated with a remap c2b.
+ * A remap c2b maps just one logical chunk.
+ *
+ * Iterates over passed c2b's c2ps
+ * Populates array of pages from c2ps
+ * Dispatches array to all disk chunks if a dirty page was found
+ * Dispatches array to remap disk chunks only if a dirty page was not found
+ * Continues until whole c2b has been dispatched
+ *
+ * @param c2b       The c2b to be written
+ * @param chunks    The array of disk chunks for this logical chunk
+ * @param nr_remaps The number of disk chunks that are for remaps
+ *
+ * @see c_io_array_init()
+ * @see c_io_array_page_add()
+ * @see c_io_array_submit()
+ */
+int submit_c2b_remap_rda(c2_block_t *c2b, c_disk_chk_t *chunks, int nr_remaps)
+{
+    c2_page_t           *c2p;
+    c_io_array_t        *io_array;
+    struct page         *page;
+    int                 ret = 0;
+    c_ext_pos_t         cur_cep;
+    c_ext_id_t          ext_id = c2b->cep.ext_id;
+    uint32_t            k_factor = castle_extent_kfactor_get(ext_id);
+    int                 found_dirty_page = 0;
+    struct completion   completion;
+
+    /* This can only be called with chunks populated, and nr_remaps > 0 */
+    BUG_ON(!chunks || !nr_remaps);
+
+    BUG_ON(!c2b_locked(c2b));
+
+    debug("Submitting remap write c2b "cep_fmt_str", for %s\n", __cep2str(c2b->cep));
+
+    io_array = kmem_cache_alloc(castle_io_array_cache, GFP_KERNEL);
+    if (!io_array)
+        return -1;
+
+    /* c2b->remaining is effectively a reference count. Get one ref before we start. */
+    BUG_ON(atomic_read(&c2b->remaining) != 0);
+    atomic_inc(&c2b->remaining);
+    c_io_array_init(io_array);
+
+    c2b->end_io = castle_cache_sync_io_end;
+    c2b->private = &completion;
+    init_completion(&completion);
+
+    found_dirty_page = 0;
+    /* Everything initialised, go through each page in the c2p. */
+    c2b_for_each_page_start(page, c2p, cur_cep, c2b)
+    {
+        /* If any page is found to be dirty, the next c_io_array_submit must write to all slaves */
+        if (c2p_dirty(c2p))
+            found_dirty_page = 1;
+
+        /* Add the page to the io array. */
+        if(c_io_array_page_add(io_array, cur_cep, 0, page) != EXIT_SUCCESS)
+        {
+            /*
+             * Failed to add this page to the array (see return code for reason).
+             * Dispatch the current array, initialise a new one and
+             * attempt to add the page to the new array.
+             */
+            debug("%s on c2p->cep="cep_fmt_str_nl,
+                    (found_dirty_page ? "Writing to all slaves" : "Writing to remap slaves only"),
+                    cep2str(c2p->cep));
+
+            /* Submit the array. */
+            ret = c_io_array_submit(WRITE, c2b, chunks, (found_dirty_page ? k_factor : nr_remaps),
+                                io_array, ext_id);
+            if (ret)
+            {
+                /*
+                 * Could not submit the IO, possibly due to a slave going out-of-service. Drop
+                 * our reference and return early.
+                 */
+                c2b_remaining_io_sub(WRITE, 1, c2b);
+                goto out;
+            }
+            /* Reinit the array, and re-try adding the current page. This should not
+               fail any more. */
+            c_io_array_init(io_array);
+            found_dirty_page = 0;
+            BUG_ON(c_io_array_page_add(io_array, cur_cep, 0, page));
+        }
+    }
+    c2b_for_each_page_end(page, c2p, cur_cep, c2b);
+
+    /* IO array may contain leftover pages, submit those too. */
+    if(io_array->next_idx > 0)
+    {
+        ret = c_io_array_submit(WRITE, c2b, chunks, (found_dirty_page ? k_factor : nr_remaps),
+                                io_array, ext_id);
+        if (ret)
+        {
+            /*
+             * Could not submit the IO, possibly due to a slave going out-of-service. Drop
+             * our reference and return early.
+             */
+            c2b_remaining_io_sub(WRITE, 1, c2b);
+            goto out;
+        }
+    }
+    /* Drop the 1 ref. */
+    c2b_remaining_io_sub(WRITE, 1, c2b);
+
+    wait_for_completion(&completion);
+
+out:
+    kmem_cache_free(castle_io_array_cache, io_array);
+    if (ret)
+        return ret;
+    else
+        return(c2b_dirty(c2b));
+}
+
+/**
  * Generates I/O for disk block(s) associated with the c2b.
  *
  * Iterates over passed c2b's c2ps (ignoring those that are clean/uptodate for WRITEs/READs)
@@ -1462,20 +1601,6 @@ static void castle_slaves_unplug(void)
         struct castle_slave *cs = list_entry(lh, struct castle_slave, list);
         generic_unplug_device(bdev_get_queue(cs->bdev));
     }
-}
-
-/**
- * Callback for synchronous c2b I/O completion.
- *
- * Wakes thread that dispatched the synchronous I/O
- *
- * @param c2b   completed c2b I/O
- */
-static void castle_cache_sync_io_end(c2_block_t *c2b)
-{
-    struct completion *completion = c2b->private;
-    
-    complete(completion);
 }
 
 /**

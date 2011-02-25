@@ -84,6 +84,9 @@ void update_c2b             (c2_block_t *c2b);
 int  c2b_bio_error          (c2_block_t *c2b);
 void set_c2b_no_resubmit    (c2_block_t *c2b);
 void clear_c2b_no_resubmit  (c2_block_t *c2b);
+int  c2b_remap              (c2_block_t *c2b);
+void set_c2b_remap          (c2_block_t *c2b);
+void clear_c2b_remap        (c2_block_t *c2b);
 
 /**********************************************************************************************
  * Refcounts. 
@@ -144,6 +147,8 @@ int castle_cache_advise_clear (c_ext_pos_t s_cep, c2_advise_t advise, int chunks
  */
 int         submit_c2b                (int rw, c2_block_t *c2b);
 int         submit_c2b_sync           (int rw, c2_block_t *c2b);
+int         submit_c2b_remap_rda      (c2_block_t *c2b, c_disk_chk_t *remap_chunks, int nr_remaps);
+
 #define     castle_cache_page_block_get(_cep) \
             castle_cache_block_get    (_cep, 1)
 c2_block_t* castle_cache_block_get    (c_ext_pos_t  cep, int nr_pages);
