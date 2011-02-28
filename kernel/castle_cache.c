@@ -966,13 +966,6 @@ static void c2b_multi_io_end(struct bio *bio, int err)
     /* Check if we always complete the entire BIO. Likely yes, since
        the interface in >= 2.6.24 removes the completed variable */
     BUG_ON((!err) && (completed != C_BLK_SIZE * bio_info->nr_pages));
-    if( (err) && (completed != 0))
-    {
-        printk("NOTE: you've likely run out of space on disk for sparse loopback files. "
-               "If so, this is not strictly a bug and will not be fixed.!\n");
-        printk("Bio error=%d, completed=%d, bio->bi_size=%d\n", err, completed, bio->bi_size);
-        BUG();
-    }
     BUG_ON(err && test_bit(BIO_UPTODATE, &bio->bi_flags));
 #endif
     BUG_ON(atomic_read(&c2b->remaining) == 0);
