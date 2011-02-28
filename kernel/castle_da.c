@@ -3591,6 +3591,8 @@ void castle_ct_put(struct castle_component_tree *ct, int write)
     if(likely(!atomic_dec_and_test(&ct->ref_count)))
         return;
 
+    BUG_ON(atomic_read(&ct->write_ref_count) != 0);
+
     debug("Ref count for ct id=%d went to 0, releasing.\n", ct->seq);
     /* If the ct still on the da list, this must be an error. */
     if(ct->da_list.next != NULL)
@@ -4532,7 +4534,7 @@ static void castle_da_bvec_start(struct castle_double_array *da, c_bvec_t *c_bve
 
     debug_verbose("Doing DA %s for da_id=%d\n", write ? "write" : "read", da_id);
     BUG_ON(atomic_read(&c_bvec->reserv_nodes) != 0);
-    /* This will get a reference to current RW tree, or create a new one if neccessary.
+    /* This will get a reference to current RW tree, or create a new one if necessary.
        It also preallocates space in that tree. */
     c_bvec->tree = castle_da_rwct_acquire(da, c_bvec);
     /* If RW component tree does not exist, exit with error. */

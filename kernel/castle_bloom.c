@@ -473,7 +473,8 @@ void castle_bloom_add(castle_bloom_t *bf, struct castle_btree_type *btree, void 
  *
  * @return 0 if out of range, non-zero otherwise. cep and chunk_id_out are set if not NULL.
  */
-static int castle_bloom_get_chunk_id(castle_bloom_t *bf, void *key, c2_block_t **btree_nodes_c2bs, c_ext_pos_t *cep, uint32_t *chunk_id_out)
+static int castle_bloom_get_chunk_id(castle_bloom_t *bf, void *key,
+        c2_block_t **btree_nodes_c2bs, c_ext_pos_t *cep, uint32_t *chunk_id_out)
 {
     uint32_t chunk_id = 0;
     uint32_t node_index;
@@ -797,6 +798,8 @@ static void castle_bloom_index_read(c_bvec_t *c_bvec)
     uint32_t i;
 
     bf = &c_bvec->tree->bloom;
+    BUG_ON(bf->num_btree_nodes == 0);
+
     btree_nodes_cep.ext_id = bf->ext_id;
     btree_nodes_cep.offset = 0;
 
