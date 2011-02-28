@@ -2296,7 +2296,7 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
     {
         /* If merge is completing, there shouldnt be any splits any more. */
         BUG_ON(merge->completing);
-        btree->entry_get(node,   node_idx,  &key, &version, &cvt);
+        btree->entry_get(node, node_idx,  &key, &version, &cvt);
         BUG_ON(CVT_LEAF_PTR(cvt));
         castle_da_entry_add(merge, depth, key, version, cvt, 1); 
         node_idx++;
@@ -2531,42 +2531,48 @@ static void castle_da_max_path_complete(struct castle_da_merge *merge)
 static struct castle_component_tree* castle_da_merge_complete(struct castle_da_merge *merge)
 {
     struct castle_da_merge_level *level;
-    int i;
+    struct castle_btree_node *node;
+    int next_idx, i;
 
     merge->completing = 1;
     debug("Complete merge at level: %d|%d\n", merge->level, merge->root_depth);
-    /* Force the nodes to complete by setting next_idx negative. Deal with the
-       leaf level first (this may require multiple node completes). Then move
-       on to the second level etc. Prevent node overflows using nodes_complete(). */ 
+    /* Force the nodes to complete by setting next_idx negative. Valid node idx
+       can be set to the last entry in the node safely, because it happens in
+       conjunction with setting the version to 0. This guarantees that all
+       versions in the node are decendant of the node version. */
     for(i=0; i<MAX_BTREE_DEPTH; i++)
     {
-        level = merge->levels + i;
         debug("Flushing at depth: %d\n", i);
-        while(level->next_idx > 0)
+        level = merge->levels + i;
+        /* Node index == 0 indicates that there is no node at this level,
+           therefore we don't have to complete anything. */
+        next_idx = level->next_idx;
+        if(next_idx != 0)
         {
             debug("Artificially completing the node at depth: %d\n", i);
 
             /* Complete the node by marking last entry as valid end. Also, mark
              * the version of this node to 0, as the node might contain multiple
              * entries. */
-            level->valid_end_idx = level->next_idx - 1;
+            node = c2b_bnode(level->node_c2b);
+            /* Point the valid_end_idx past the last entry ... */
+            level->valid_end_idx = next_idx < 0 ? node->used : level->next_idx;
+            /* ... and now point it at the last entry. */ 
+            level->valid_end_idx--;
             level->valid_version = 0;
-
             level->next_idx = -1;
-            if(castle_da_nodes_complete(merge, i))
-                goto err_out;
+            castle_da_node_complete(merge, i);
         } 
     }
+    /* Write out the max keys along the max path. */
     castle_da_max_path_complete(merge);
 
+    /* Complete Bloom filters. */
     if (merge->bloom_exists)
         castle_bloom_complete(&merge->bloom);
 
+    /* Package the merge result. */ 
     return castle_da_merge_package(merge);
-
-err_out:
-    printk("Failed the merge in merge_complete().\n");
-    return NULL;
 }
 
 static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
