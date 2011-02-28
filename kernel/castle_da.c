@@ -2004,7 +2004,9 @@ static c_val_tup_t castle_da_medium_obj_copy(struct castle_da_merge *merge,
         if (chk_off)
             pgs_to_end = (C_CHK_SIZE - chk_off) >> PAGE_SHIFT;
 
-        if (chk_off && ((total_blocks - pgs_to_end) >= 2*BLKS_PER_CHK))
+        /* Be careful about subtraction, if it goes negative, and is compared to 
+           BLKS_PER_CHK the test is likely not to work correctly. */
+        if (chk_off && (total_blocks >= 2*BLKS_PER_CHK + pgs_to_end))
             /* Align for a minimum of 2 full blocks (1 can be inefficient) */
             blocks = pgs_to_end;
         else if (total_blocks > BLKS_PER_CHK)
