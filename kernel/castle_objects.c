@@ -1067,6 +1067,8 @@ int castle_object_replace_cancel(struct castle_object_replace *replace)
 /**
  * Insert new or replace existing object.
  *
+ * @param cpu_index     CPU index (to determine correct T0 CT)
+ *
  * @also castle_back_replace()
  * @also castle_back_remove()
  * @also castle_back_big_put()
@@ -1074,6 +1076,7 @@ int castle_object_replace_cancel(struct castle_object_replace *replace)
 int castle_object_replace(struct castle_object_replace *replace, 
                           struct castle_attachment *attachment,
                           c_vl_okey_t *key, 
+                          int cpu_index,
                           int tombstone)
 {
     c_vl_bkey_t *btree_key;
@@ -1110,6 +1113,8 @@ int castle_object_replace(struct castle_object_replace *replace,
     
     c_bvec = c_bio->c_bvecs; 
     c_bvec->key        = btree_key; 
+    c_bvec->cpu_index  = cpu_index;
+    c_bvec->cpu        = castle_double_array_request_cpu(c_bvec->cpu_index);
     c_bvec->flags      = 0;
     c_bvec->cvt_get    = castle_object_replace_cvt_get;
     c_bvec->endfind    = castle_object_replace_complete;
@@ -1496,9 +1501,13 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
     FAULT(GET_FAULT);
 }
 
+/**
+ * @FIXME do something with cpu_index
+ */
 int castle_object_get(struct castle_object_get *get,
-                      struct castle_attachment *attachment, 
-                      c_vl_okey_t *key)
+                      struct castle_attachment *attachment,
+                      c_vl_okey_t *key,
+                      int cpu_index)
 {
     c_vl_bkey_t *btree_key;
     c_bvec_t *c_bvec;
@@ -1524,6 +1533,8 @@ int castle_object_get(struct castle_object_get *get,
 
     c_bvec = c_bio->c_bvecs; 
     c_bvec->key        = btree_key; 
+    c_bvec->cpu_index  = cpu_index;
+    c_bvec->cpu        = castle_double_array_request_cpu(c_bvec->cpu_index);
     /* Callback cvt_get() is not required for READ */
     c_bvec->cvt_get    = NULL;
     c_bvec->endfind    = castle_object_get_complete;
@@ -1668,7 +1679,10 @@ static void castle_object_pull_continue(struct castle_bio_vec *c_bvec, int err, 
     pull->pull_continue(pull, err, cvt.length, 0 /* not done yet */);
 }
 
-int castle_object_pull(struct castle_object_pull *pull, struct castle_attachment *attachment, c_vl_okey_t *key)
+int castle_object_pull(struct castle_object_pull *pull,
+                       struct castle_attachment *attachment,
+                       c_vl_okey_t *key,
+                       int cpu_index)
 {
     c_vl_bkey_t *btree_key;
     c_bvec_t *c_bvec;
@@ -1694,6 +1708,8 @@ int castle_object_pull(struct castle_object_pull *pull, struct castle_attachment
 
     c_bvec = c_bio->c_bvecs; 
     c_bvec->key        = btree_key; 
+    c_bvec->cpu_index  = cpu_index;
+    c_bvec->cpu        = castle_double_array_request_cpu(c_bvec->cpu_index);
     /* Callback cvt_get() is not required for READ */
     c_bvec->cvt_get    = NULL;
     c_bvec->endfind    = castle_object_pull_continue;

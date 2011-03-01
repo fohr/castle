@@ -66,6 +66,7 @@ typedef uint32_t tree_seq_t;
 #define INVAL_TREE          ((tree_seq_t)-1)
 #define TREE_GLOBAL(_t)     ((_t) == GLOBAL_TREE)
 #define TREE_INVAL(_t)      ((_t) == INVAL_TREE)
+#define TREE_SEQ_SHIFT      (24)                    /**< Shift for RWCTs (at levels 0,1)        */
 
 typedef uint32_t da_id_t;                   
 #define INVAL_DA            ((da_id_t)-1)
@@ -761,29 +762,23 @@ struct castle_request_timeline;
 #define CBV_C2B_WRITE_LOCKED          (5) 
 
 typedef struct castle_bio_vec {
-    /* Where did this IO originate from */
-    c_bio_t                      *c_bio;
+    c_bio_t                      *c_bio;        /**< Where this IO originated                   */
     
-    /* What (key, version) do we want to read */
-    void                         *key;
-    version_t                     version;
-    /* Component tree in which to perform the search */
-    struct castle_component_tree *tree;
-    /* Flags */
-    unsigned long                 flags;
-    /* Used to walk the B-Tree */
-    union {
+    void                         *key;          /**< Key we want to read                        */
+    version_t                     version;      /**< Version of key we want to read             */
+    int                           cpu;          /**< CPU id for this request                    */
+    int                           cpu_index;    /**< CPU index (for determining correct CT)     */
+    struct castle_component_tree *tree;         /**< CT to search                               */
+    unsigned long                 flags;        /**< Flags                                      */
+    union {                                     /**< Used to walk the Btree                     */
         struct {
-            /* How far down the tree we've gone so far */
-            int                        btree_depth;
-            int                        split_depth;
-            /* What's the number of levels in the tree, private copy needed in case
-               someone splits the root node while we are lower down in the tree */
-            int                        btree_levels;
-            /* Key in the parent node under which we found btree_node */
-            void                      *parent_key;
-            /* When writing, B-Tree node and its parent have to be 
-               locked concurrently. */
+            int                        btree_depth; /**< How far down we've gone so far         */
+            int                        split_depth; /**< How far down we've gone so far         */
+            int                        btree_levels;/**< Levels in the tree (private copy in case
+                                                         someone splits root node while we are
+                                                         lower down in the tree                 */
+            void                      *parent_key;  /**< Key in parent node btree_node is from  */
+            /* When writing, B-Tree node and its parent have to be locked concurrently. */
             struct castle_cache_block *btree_node;
             struct castle_cache_block *btree_parent_node;
             struct castle_cache_block *bloom_c2b;
@@ -792,8 +787,7 @@ typedef struct castle_bio_vec {
 #endif
         };
     };
-    /* Used to thread this bvec onto a workqueue */
-    struct work_struct               work;
+    struct work_struct               work;      /**< Used to thread this bvec onto a workqueue  */
     /* Value tuple allocation callback */
     int                            (*cvt_get)    (struct castle_bio_vec *, 
                                                   c_val_tup_t,
@@ -1371,7 +1365,7 @@ struct castle_merge_token {
     struct list_head list;
 };
 
-#define MAX_DA_LEVEL                    (20)
+#define MAX_DA_LEVEL                        (20)
 #define DOUBLE_ARRAY_GROWING_RW_TREE_BIT    (0)
 #define DOUBLE_ARRAY_GROWING_RW_TREE_FLAG   (1 << DOUBLE_ARRAY_GROWING_RW_TREE_BIT)
 #define DOUBLE_ARRAY_DELETED_BIT            (1)
@@ -1383,14 +1377,13 @@ struct castle_merge_token {
 struct castle_double_array {
     da_id_t                     id;
     version_t                   root_version;
-    /* Lock protects the trees list */
-    spinlock_t                  lock;
+    rwlock_t                    lock;               /**< Protects levels[].trees lists          */
     struct kobject              kobj;
     unsigned long               flags;
     int                         nr_trees;
-    struct {                    
-        int                     nr_trees;
-        struct list_head        trees;
+    struct {
+        int                     nr_trees;           /**< Number of trees at level               */
+        struct list_head        trees;              /**< List of (nr_trees) at level            */
         /* Merge related variables. */
         struct {
             struct list_head    merge_tokens;

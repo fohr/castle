@@ -48,8 +48,8 @@
 #define VLBA_HDD_RO_TREE_NODE_SIZE      (64)  /**< Size of the default RO tree node size. */
 #define VLBA_SSD_RO_TREE_NODE_SIZE      (2)   /**< Size of the RO tree node size on SSDs. */
 
-#define MAX_DYNAMIC_TREE_SIZE           (100) /* In C_CHK_SIZE. */
-#define MAX_DYNAMIC_DATA_SIZE           (100) /* In C_CHK_SIZE. */
+#define MAX_DYNAMIC_TREE_SIZE           (20) /* In C_CHK_SIZE. */
+#define MAX_DYNAMIC_DATA_SIZE           (20) /* In C_CHK_SIZE. */
 
 #define CASTLE_DA_HASH_SIZE             (1000)
 #define CASTLE_CT_HASH_SIZE             (4000)
@@ -63,6 +63,12 @@ static tree_seq_t               castle_next_tree_seq = 1;
 static int                      castle_da_exiting    = 0;
 
 static int                      castle_dynamic_driver_merge = 1; 
+
+static struct
+{
+    int                     nr;     /**< Size of cpus array.                        */
+    int                    *cpus;   /**< Array of CPU ids for handling requests.    */
+} request_cpus;
 
 module_param(castle_dynamic_driver_merge, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
 MODULE_PARM_DESC(castle_dynamic_driver_merge, "Dynamic driver merge");
@@ -109,6 +115,7 @@ void castle_ct_get(struct castle_component_tree *ct, int write);
 void castle_ct_put(struct castle_component_tree *ct, int write);
 static void castle_component_tree_add(struct castle_double_array *da,
                                       struct castle_component_tree *ct,
+                                      struct list_head *head,
                                       int in_init);
 static void castle_component_tree_del(struct castle_double_array *da,
                                       struct castle_component_tree *ct);
@@ -2868,7 +2875,7 @@ static inline int castle_da_merge_wait_event(struct castle_double_array *da, int
     }
 
     /* Otherwise, there are two cases. Either this merge is a driver merge, or not. */
-    if((level == da->driver_merge) && (da->levels[level-1].nr_trees < 2))
+    if ((level == da->driver_merge) && (level == 1 || da->levels[level-1].nr_trees < 2))
     {
         debug_merges("This is a driver merge.\n");
         /* Return any tokens that we may have. Should that actually every happen?. */
@@ -3037,7 +3044,7 @@ static inline tree_seq_t castle_da_merge_last_unit_complete(struct castle_double
      * don't race with checkpointing. */
     castle_component_tree_del(merge->da, merge->in_tree1);
     castle_component_tree_del(merge->da, merge->in_tree2);
-    castle_component_tree_add(merge->da, out_tree, 0 /* not in init */);
+    castle_component_tree_add(merge->da, out_tree, NULL /*head*/, 0 /*not in init*/);
     /* Reset the number of completed units. */ 
     BUG_ON(da->levels[level].merge.units_commited != (1U << level));
     da->levels[level].merge.units_commited = 0;
@@ -3328,7 +3335,8 @@ static int castle_da_merge_restart(struct castle_double_array *da, void *unused)
 {
     debug("Restarting merge for DA=%d\n", da->id);
     castle_da_lock(da);
-    if(da->levels[1].nr_trees >= 4)
+//    if(da->levels[1].nr_trees >= 4)
+    if (da->levels[1].nr_trees >= 4 * request_cpus.nr)
     {
         printk("Disabling inserts on da=%d.\n", da->id);
         if (da->ios_rate != 0)
@@ -3389,17 +3397,18 @@ static void castle_da_merges_print(struct castle_double_array *da)
 
 static inline void castle_da_lock(struct castle_double_array *da)
 {
-    spin_lock(&da->lock);
+    write_lock(&da->lock);
 }
 
 static inline void castle_da_unlock(struct castle_double_array *da)
 {
-    spin_unlock(&da->lock);
+    write_unlock(&da->lock);
 }
 
 static inline int castle_da_is_locked(struct castle_double_array *da)
 {
-    return spin_is_locked(&da->lock);
+    /* must be write-locked if readers can't get a lock, or we have 2^24 readers */
+    return !read_can_lock(&da->lock);
 }
 
 static int castle_da_ct_dec_cmp(struct list_head *l1, struct list_head *l2)
@@ -3409,6 +3418,40 @@ static int castle_da_ct_dec_cmp(struct list_head *l1, struct list_head *l2)
     BUG_ON(ct1->seq == ct2->seq);
 
     return ct1->seq > ct2->seq ? -1 : 1;
+}
+
+/**
+ * Calculate hash of userland key (okey) length key_len and modulo for cpu_index.
+ *
+ * @FIXME named wrongly?
+ *
+ * @return  Offset into request_cpus.cpus[]
+ */
+int castle_double_array_okey_cpu_index(c_vl_okey_t *okey, uint32_t key_len)
+{
+    return murmur_hash_32(okey, key_len, (uint32_t)0xDA82B27204D27F7) % request_cpus.nr;
+}
+
+/**
+ * Get cpu id for specified cpu_index.
+ *
+ * @FIXME named wrongly?
+ *
+ * @return  CPU id
+ */
+int castle_double_array_request_cpu(int cpu_index)
+{
+    return request_cpus.cpus[cpu_index];
+}
+
+/**
+ * Get number of cpus handling requests.
+ *
+ * @return  Number of cpus handling requests.
+ */
+int castle_double_array_request_cpus(void)
+{
+    return request_cpus.nr;
 }
 
 static void castle_da_dealloc(struct castle_double_array *da)
@@ -3437,7 +3480,7 @@ static struct castle_double_array* castle_da_alloc(da_id_t da_id)
     printk("Allocating DA=%d\n", da_id);
     da->id              = da_id; 
     da->root_version    = INVAL_VERSION;
-    spin_lock_init(&da->lock);
+    rwlock_init(&da->lock);
     da->flags           = 0;
     da->nr_trees        = 0;
     atomic_set(&da->ref_cnt, 1);
@@ -3521,33 +3564,81 @@ struct castle_component_tree* castle_component_tree_get(tree_seq_t seq)
     return castle_ct_hash_get(seq);
 }
 
+/**
+ * Insert ct into da->levels[ct->level].trees list at index.
+ *
+ * @param   da      To insert onto
+ * @param   ct      To be inserted
+ * @param   head    List head to add ct after (or NULL)
+ * @param   in_init @FIXME
+ *
+ * WARNING: Caller must hold da->lock
+ */
 static void castle_component_tree_add(struct castle_double_array *da,
                                       struct castle_component_tree *ct,
+                                      struct list_head *head,
                                       int in_init)
-/* Needs to be called with da->lock held */
 {
-    struct castle_component_tree *next_ct; 
+    struct castle_component_tree *cmp_ct;
 
     BUG_ON(da->id != ct->da);
     BUG_ON(ct->level >= MAX_DA_LEVEL);
     BUG_ON(!castle_da_is_locked(da));
     BUG_ON(!CASTLE_IN_TRANSACTION);
-    /* If there is something on the list, check that the sequence number 
-       of the tree we are inserting is greater (i.e. enforce rev seq number
-       ordering in component trees in a given level). Don't check that during
-       init (when we are storting the trees afterwards). */
-    if(!in_init && !list_empty(&da->levels[ct->level].trees))
+
+    /* Default insert point is the front of the list. */
+    if (!head)
+        head = &da->levels[ct->level].trees;
+
+    /* CTs are sorted by decreasing seq number (newer trees towards the front
+     * of the list) to guarantee newest values are returned during gets.
+     *
+     * Levels 0,1 are a special case as their seq numbers are 'prefixed' with
+     * the cpu_index.  This means an older CT would appear before a newer CT if
+     * it had a greater cpu_index prefixed.
+     *
+     * At level 0 this is valid because inserts are disjoint (they go to a
+     * specific CT based on the key->cpu_index hash).
+     * At level 1 this is valid because CTs from a given cpu_index are still in
+     * order, and for the same reasons it is valid at level 0.
+     *
+     * Skip ordering checks during init (we sort the tree afterwards). */
+    if (!in_init && !list_empty(&da->levels[ct->level].trees))
     {
-        next_ct = list_entry(da->levels[ct->level].trees.next, 
-                             struct castle_component_tree,
-                             da_list);
-        BUG_ON(next_ct->seq >= ct->seq);
+        struct list_head *l;
+
+        /* RWCTs at level 0 are promoted to level 1 in a random order based on how
+         * many keys get hashed to which CPU.  As a result for inserts at level 1
+         * we search the list to find the correct place to insert these trees. */
+        if (ct->level == 1)
+        {
+            list_for_each(l, &da->levels[ct->level].trees)
+            {
+                cmp_ct = list_entry(l, struct castle_component_tree, da_list);
+                //printk("level 1 cmp_ct->seq %d\n", cmp_ct->seq);
+                if (ct->seq > cmp_ct->seq)
+                    break; /* list_for_each() */
+                head = l;
+            }
+        }
+
+        /* CT seq should be < head->next seq (skip if head is the last elephant) */
+        if (!list_is_last(head, &da->levels[ct->level].trees))
+        {
+            cmp_ct = list_entry(head->next, struct castle_component_tree, da_list);
+            //printk("ct->level %d ct->seq %d cmp_ct->seq %d\n", ct->level, ct->seq, cmp_ct->seq);
+            BUG_ON(ct->seq <= cmp_ct->seq);
+        }
     }
-    list_add(&ct->da_list, &da->levels[ct->level].trees);
+
+    list_add(&ct->da_list, head);
     da->levels[ct->level].nr_trees++;
     da->nr_trees++;
 }
 
+/**
+ * Unlink ct from da->level[ct->level].trees list.
+ */
 static void castle_component_tree_del(struct castle_double_array *da,
                                       struct castle_component_tree *ct)
 {
@@ -3998,25 +4089,49 @@ out:
     castle_da_store = castle_tree_store = castle_lo_store = NULL;
 }
 
-static int castle_da_rwct_make(struct castle_double_array *da, int in_tran);
+static int castle_da_rwct_make(struct castle_double_array *da, int cpu_index, int in_tran);
 
+/**
+ * Create T0 for specified DA if it does not already exist.
+ *
+ * - Make one CT per CPU handling requests
+ *
+ * When any of these CTs subsequently get exhausted a new CT is allocated and
+ * the old CT promoted in an atomic fashion (da->lock held).  This means we are
+ * guaranteed to have none or all of the CTs at level 0.
+ *
+ * @FIXME currently the system will panic if the filesystem is imported on a
+ * machine with a different number of CPUs
+ *
+ * @also castle_double_array_start()
+ */
 static int castle_da_t0_create(struct castle_double_array *da, void *unused)
 {
     castle_da_lock(da);
     if (list_empty(&da->levels[0].trees))
     {
+        int cpu_index;
+
+        BUG_ON(da->levels[0].nr_trees != 0);
+
+        /* There are no existing CTs at level 0 in this DA.
+         * Create one CT per CPU handling requests. */
         castle_da_unlock(da);
-        printk("Creating new T0 for da: %u\n", da->id);
-        if (castle_da_rwct_make(da, 1))
+        for (cpu_index = 0; cpu_index < request_cpus.nr; cpu_index++)
         {
-            printk("Failed to create T0 for DA: %u\n", da->id);
-            return -EINVAL;
+            if (castle_da_rwct_make(da, cpu_index, 1 /* in_tran */) != EXIT_SUCCESS)
+            {
+                printk("Failed to create T0 %d for DA %u\n", cpu_index, da->id);
+                return -EINVAL;
+            }
         }
-        printk("Done with T0\n");
+
+        printk("Created %d CTs for DA %u T0\n", cpu_index, da->id);
 
         return 0;
     }
-    castle_da_unlock(da);
+    else
+        BUG_ON(da->levels[0].nr_trees != request_cpus.nr);
 
     return 0;
 }
@@ -4030,16 +4145,22 @@ static int __castle_da_driver_merge_reset(struct castle_double_array *da, void *
     return 0;
 }
 
+/**
+ * Start existing doubling arrays.
+ *
+ * - Called during module initialisation only
+ *
+ * @also castle_fs_init()
+ */
 int castle_double_array_start(void)
 {
-    /* Create T0, if it doesn't exist. This gets called only at the start of
-     * module. It is okay to be called without lock. */
+    /* Create T0 for all DAs that don't have them (don't need to hold lock). */
     __castle_da_hash_iterate(castle_da_t0_create, NULL);
 
-    /* Reset driver merge. */
+    /* Reset driver merge for all DAs. */
     castle_da_hash_iterate(__castle_da_driver_merge_reset, NULL);
 
-    /* Check if any merges need to be done. */
+    /* Check all DAs to see whether any merges need to be done. */
     castle_da_hash_iterate(castle_da_merge_restart, NULL); 
 
     return 0;
@@ -4112,7 +4233,7 @@ int castle_double_array_read(void)
             goto error_out;
         debug("Read CT seq=%d\n", ct->seq);
         castle_da_lock(da);
-        castle_component_tree_add(da, ct, 1 /* in init */);
+        castle_component_tree_add(da, ct, NULL /*head*/, 1 /*in init*/);
         castle_da_unlock(da);
         castle_next_tree_seq = (ct->seq >= castle_next_tree_seq) ? ct->seq + 1 : castle_next_tree_seq;
     }
@@ -4172,6 +4293,13 @@ out:
     return ret;
 }
 
+/**
+ * Allocate and initialise a CT.
+ *
+ * - Does not allocate extents
+ *
+ * @return NULL (CT could not be allocated) or pointer to new CT
+ */
 static struct castle_component_tree* castle_ct_alloc(struct castle_double_array *da, 
                                                      btree_t type,  
                                                      int level)
@@ -4222,18 +4350,32 @@ static struct castle_component_tree* castle_ct_alloc(struct castle_double_array 
 
     return ct;
 }
-    
+
 /**
  * Allocate and initialise a T0 component tree.
  *
+ * @param da        DA to create new T0 for
+ * @param cpu_index Offset within list to insert newly allocated CT
+ * @param in_tran   Set if the caller is already within CASTLE_TRANSACTION
+ *
+ * Holds the DA growing lock while:
+ *
+ * - Allocating a new CT
+ * - Allocating data and btree extents
+ * - Initialises root btree node
+ * - Places allocated CT/extents onto DA list of level 0 CTs
+ * - Restarts merges as necessary
+ *
  * @also castle_ct_alloc()
+ * @also castle_ext_fs_init()
  */
-static int castle_da_rwct_make(struct castle_double_array *da, int in_tran)
+static int castle_da_rwct_make(struct castle_double_array *da, int cpu_index, int in_tran)
 {
     struct castle_component_tree *ct, *old_ct;
+    struct castle_btree_type *btree;
+    struct list_head *l = NULL;
     c2_block_t *c2b;
     int ret;
-    struct castle_btree_type *btree;
 
     /* Only allow one rwct_make() at any point in time. If we fail to acquire the bit lock
        wait for whoever is doing it, to create the RWCT.
@@ -4253,6 +4395,14 @@ static int castle_da_rwct_make(struct castle_double_array *da, int in_tran)
         goto out;
 
     btree = castle_btree_type_get(ct->btree_type);
+
+    /* RWCTs are present only at levels 0,1 in the DA.
+     * Prefix these CTs with cpu_index to preserve operation ordering when
+     * inserting into the DA trees list at RWCT levels. */
+    BUG_ON(sizeof(ct->seq) != 4);
+    ct->seq = (cpu_index << TREE_SEQ_SHIFT) + ct->seq;
+
+    /* Allocate data and btree extents. */
     if ((ret = castle_new_ext_freespace_init(&ct->tree_ext_free,
                                               da->id,
                                               MAX_DYNAMIC_TREE_SIZE * C_CHK_SIZE,
@@ -4281,24 +4431,41 @@ static int castle_da_rwct_make(struct castle_double_array *da, int in_tran)
     ct->tree_depth = 1;
     write_unlock_c2b(c2b);
     put_c2b(c2b);
+
+    if (!in_tran) CASTLE_TRANSACTION_BEGIN;
+    castle_da_lock(da);
+
+    /* Find cpu_index^th element from back and promote to level 1. */
+    // @FIXME multi-t0-rwct-cpu-count-mismatch
+    if (cpu_index < da->levels[0].nr_trees)
+    {
+        int index = 0;
+        list_for_each_prev(l, &da->levels[0].trees)
+        {
+            //old_ct = list_entry(l, struct castle_component_tree, da_list);
+            //printk("level 0 index -%d old_ct->seq %d\n", index, old_ct->seq);
+            //old_ct = NULL;
+
+            if (index++ == cpu_index)
+            {
+                /* Found cpu_index^th element. */
+                old_ct = list_entry(l, struct castle_component_tree, da_list);
+                l = old_ct->da_list.prev; /* Position to insert new CT. */
+                castle_component_tree_del(da, old_ct);
+                old_ct->level = 1;
+                castle_component_tree_add(da, old_ct, NULL /* append */, 0 /* not in init */);
+                /* Recompute merge driver. */
+                castle_da_driver_merge_reset(da);
+                break;
+            }
+        }
+    }
+    /* Insert new CT onto list.  l will be the previous element (from delete above) or NULL. */
+    castle_component_tree_add(da, ct, l, 0 /* not in init */);
+
     debug("Added component tree seq=%d, root_node="cep_fmt_str
           ", it's threaded onto da=%p, level=%d\n",
             ct->seq, cep2str(c2b->cep), da, ct->level);
-    /* Move the last rwct (if one exists) to level 1 */
-    if (!in_tran) CASTLE_TRANSACTION_BEGIN;
-    castle_da_lock(da);
-    if(!list_empty(&da->levels[0].trees))
-    {
-        old_ct = list_entry(da->levels[0].trees.next, struct castle_component_tree, da_list);
-        castle_component_tree_del(da, old_ct);
-        old_ct->level = 1;
-        castle_component_tree_add(da, old_ct, 0 /* not in init */);
-        /* Recompute driver merge. */
-        castle_da_driver_merge_reset(da);
-
-    }
-    /* Thread CT onto level 0 list */
-    castle_component_tree_add(da, ct, 0 /* not in init */);
 
     FAULT(MERGE_FAULT);
 
@@ -4331,9 +4498,9 @@ int castle_double_array_make(da_id_t da_id, version_t root_version)
     /* Write out the id, and the root version. */
     da->id = da_id;
     da->root_version = root_version;
-    /* Make RW tree. */
-    ret = castle_da_rwct_make(da, 1);
-    if(ret)
+    /* Allocate T0s. */
+    ret = castle_da_t0_create(da, NULL);
+    if (ret != EXIT_SUCCESS)
     {
         printk("Exiting from failed ct create.\n");
         castle_da_dealloc(da);
@@ -4395,25 +4562,52 @@ struct castle_component_tree* castle_da_ct_next(struct castle_component_tree *ct
     return NULL;
 }
 
+/**
+ * Get cpu_index^th CT from the back of da's level 0 CT list.
+ *
+ * @return  cpu_index^th element from back of da->levels[0].trees list
+ */
 static struct castle_component_tree* castle_da_rwct_get(struct castle_double_array *da, 
-                                                        int write)
+                                                        int write,
+                                                        int cpu_index)
 {
-    struct castle_component_tree *ct;
-    struct list_head *h, *l;
+    struct castle_component_tree *ct = NULL;
+    struct list_head *l;
+    int index = 0;
 
-    castle_da_lock(da);
-    h = &da->levels[0].trees; 
-    l = h->next; 
-    /* There should be precisely one entry in the list */
-    BUG_ON((h == l) || (l->next != h));
-    ct = list_entry(l, struct castle_component_tree, da_list);
-    /* Get a ref to this tree so that it doesn't go away while we are doing an IO on it */
-    castle_ct_get(ct, write);
-    castle_da_unlock(da);
-        
+    read_lock(&da->lock);
+    BUG_ON(cpu_index >= da->levels[0].nr_trees);
+    list_for_each_prev(l, &da->levels[0].trees)
+    {
+        if (index++ == cpu_index)
+        {
+            /* Found cpu_index^th element. */
+            ct = list_entry(l, struct castle_component_tree, da_list);
+            /* Get ref so it persists while we do IO. */
+            castle_ct_get(ct, write);
+            break;
+        }
+    }
+    BUG_ON(index > da->levels[0].nr_trees);
+    BUG_ON(ct == NULL);
+    read_unlock(&da->lock);
+
     return ct; 
 }
 
+/**
+ * Get T0 CT from da, preallocate and promote (if necessary) for writes.
+ *
+ * - Get CT for c_bvec->cpu_index
+ * - Return CT immediately for reads
+ * - Preallocate space in CT for writes
+ *   - Promote and get fresh CT if it cannot satisfy preallocation
+ *
+ * @return Read case:   T0 CT to use as starting point for search
+ * @return Write case:  T0 CT preallocated for write
+ *
+ * @also castle_da_rwct_get()
+ */
 static struct castle_component_tree* castle_da_rwct_acquire(struct castle_double_array *da,
                                                             c_bvec_t *c_bvec)
 {
@@ -4427,7 +4621,7 @@ again:
     if (castle_da_frozen(da))
         return NULL;
 
-    ct = castle_da_rwct_get(da, write);
+    ct = castle_da_rwct_get(da, write, c_bvec->cpu_index);
     /* For reads, this is the right starting point. Exit immediately. */ 
     if(!write)
         return ct;
@@ -4461,7 +4655,7 @@ again:
 new_ct:
     debug("Number of items in component tree %d, # items %ld. Trying to add a new rwct.\n",
             ct->seq, atomic64_read(&ct->item_count));
-    ret = castle_da_rwct_make(da, 0);
+    ret = castle_da_rwct_make(da, c_bvec->cpu_index, 0 /* in_tran */);
 
     /* Drop reference for old CT. */
     castle_ct_put(ct, write);
@@ -4568,6 +4762,16 @@ static void castle_da_ct_walk_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cv
     callback(c_bvec, err, cvt);
 }
 
+/**
+ * Hand-of request (bvec) to DA via bloom filter (if necessary).
+ *
+ * - Get T0 CT for bvec
+ * - Writes are submitted immediately to the btree
+ * - Reads are submitted via the bloom layer
+ *
+ * @also castle_btree_submit()
+ * @also castle_bloom_submit()
+ */
 static void castle_da_bvec_start(struct castle_double_array *da, c_bvec_t *c_bvec)
 { 
     int write = c_bvec_data_dir(c_bvec) == WRITE;
@@ -4578,7 +4782,7 @@ static void castle_da_bvec_start(struct castle_double_array *da, c_bvec_t *c_bve
        It also preallocates space in that tree. */
     c_bvec->tree = castle_da_rwct_acquire(da, c_bvec);
     /* If RW component tree does not exist, exit with error. */
-    if(!c_bvec->tree)
+    if (!c_bvec->tree)
     {
         c_bvec->endfind(c_bvec, -ENOSPC, INVAL_VAL_TUP);
         return;
@@ -4603,7 +4807,14 @@ static void castle_da_bvec_start(struct castle_double_array *da, c_bvec_t *c_bve
 }
 
 /**
- * Submit bvec to doubling array.
+ * Submit request (bvec) to DA.
+ *
+ * - Queue writes (and then start drain)
+ * - Submit reads immediately
+ *
+ * @also castle_da_bvec_queue()
+ * @also castle_da_queue_kick()
+ * @also castle_da_bvec_start()
  *
  * @also castle_object_replace()
  * @also castle_object_get()
@@ -4650,10 +4861,10 @@ int castle_double_array_create(void)
 
     return 0;
 }
-    
+
 int castle_double_array_init(void)
 {
-    int ret, i, j;
+    int ret, cpu, i, j;
 
     ret = -ENOMEM;
 
@@ -4667,12 +4878,23 @@ int castle_double_array_init(void)
         }
     }
 
+    /* Populate request_cpus with CPU ids ready to handle requests. */
+    request_cpus.cpus = castle_malloc(sizeof(int) * num_online_cpus(), GFP_KERNEL);
+    if (!request_cpus.cpus)
+        goto err0;
+    request_cpus.nr = 0;
+    for_each_online_cpu(cpu)
+    {
+        request_cpus.cpus[request_cpus.nr] = cpu;
+        request_cpus.nr++;
+    }
+
     castle_da_hash = castle_da_hash_alloc();
     if(!castle_da_hash)
-        goto err0;
+        goto err1;
     castle_ct_hash = castle_ct_hash_alloc();
     if(!castle_ct_hash)
-        goto err1;
+        goto err2;
 
     castle_da_hash_init();
     castle_ct_hash_init();
@@ -4681,8 +4903,10 @@ int castle_double_array_init(void)
 
     return 0;
  
-err1:
+err2:
     castle_free(castle_da_hash);
+err1:
+    castle_free(request_cpus.cpus);
 err0:
     for (j = 0; j < i; j++)
         destroy_workqueue(castle_da_wqs[j]);
@@ -4713,6 +4937,8 @@ void castle_double_array_fini(void)
     int i;
     castle_da_hash_destroy();
     castle_ct_hash_destroy();
+
+    castle_free(request_cpus.cpus);
 
     for (i = 0; i < NR_CASTLE_DA_WQS; i++)
         destroy_workqueue(castle_da_wqs[i]);

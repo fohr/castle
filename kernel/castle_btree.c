@@ -1499,7 +1499,7 @@ void castle_btree_ct_unlock(c_bvec_t *c_bvec)
     clear_bit(CBV_ROOT_LOCKED_BIT, &c_bvec->flags);
 }
 
-static inline c_ext_pos_t  castle_btree_root_get(c_bvec_t *c_bvec)
+static inline c_ext_pos_t castle_btree_root_get(c_bvec_t *c_bvec)
 {
     struct castle_attachment *att = c_bvec->c_bio->attachment;
 
@@ -2258,6 +2258,12 @@ static int castle_btree_node_split(c_bvec_t *c_bvec)
     return 0;
 }
 
+/**
+ * Perform write (insert/replace/delete) on btree specified by c_bvec.
+ *
+ * @also castle_btree_process()
+ * @also castle_btree_read_process()
+ */
 static void castle_btree_write_process(c_bvec_t *c_bvec)
 {
     struct castle_btree_node    *node = c_bvec_bnode(c_bvec);
@@ -2387,6 +2393,12 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
 
 }
 
+/**
+ * Perform read on btree specified by c_bvec.
+ *
+ * @also castle_btree_process()
+ * @also castle_btree_write_process()
+ */
 static void castle_btree_read_process(c_bvec_t *c_bvec)
 {
     struct castle_btree_node    *node = c_bvec_bnode(c_bvec);
@@ -2458,12 +2470,19 @@ static void castle_btree_read_process(c_bvec_t *c_bvec)
     }
 }
 
+/**
+ * Perform actual query on btree.
+ *
+ * @also __castle_btree_submit()
+ * @also castle_btree_write_process()
+ * @also castle_btree_read_process()
+ */
 void castle_btree_process(struct work_struct *work)
 {
     c_bvec_t *c_bvec = container_of(work, c_bvec_t, work);
     int write = (c_bvec_data_dir(c_bvec) == WRITE);
 
-    if(write)
+    if (write)
         castle_btree_write_process(c_bvec);
     else
         castle_btree_read_process(c_bvec);
@@ -2588,7 +2607,7 @@ static void castle_btree_submit_io_end(c2_block_t *c2b)
        A single queue cannot be used, because a request blocked on 
        lock_c2b() would block the entire queue (=> deadlock). */
     CASTLE_INIT_WORK(&c_bvec->work, castle_btree_process);
-    queue_work(castle_wqs[c_bvec->btree_depth], &c_bvec->work); 
+    queue_work_on(c_bvec->cpu, castle_wqs[c_bvec->btree_depth], &c_bvec->work);
 }
 
 static void __castle_btree_submit(c_bvec_t *c_bvec,
@@ -2632,7 +2651,8 @@ static void __castle_btree_submit(c_bvec_t *c_bvec,
         c2b->private = c_bvec;
         c2b->end_io = castle_btree_submit_io_end;
         BUG_ON(submit_c2b(READ, c2b));
-    } else
+    }
+    else
     {
         /* If the buffer is up to date, copy data, and call the node processing
            function directly. c2b_remember should not return an error, because
@@ -2643,6 +2663,13 @@ static void __castle_btree_submit(c_bvec_t *c_bvec,
     }
 }
 
+/**
+ * Submit request to btree (workqueue function).
+ *
+ * - Queuer should have placed us such that we are running on the request_cpus.cpus[]
+ *   cpu that matches c_bvec->tree (CPU-affinity for T0 CT)
+ * - Except for some stateful ops and gets we expect to go largely uncontended for CT locks
+ */
 static void _castle_btree_submit(struct work_struct *work)
 {
     struct castle_component_tree *ct;
@@ -2674,13 +2701,15 @@ static void _castle_btree_submit(struct work_struct *work)
 
 /**
  * Submit request to the btree.
+ *
+ * - Queue work to CPU specified in c_bvec
  */
 void castle_btree_submit(c_bvec_t *c_bvec)
 {
     c_bvec->parent_key = NULL;
     clear_bit(CBV_DOING_SPLITS, &c_bvec->flags);
     CASTLE_INIT_WORK(&c_bvec->work, _castle_btree_submit);
-    queue_work(castle_wqs[19], &c_bvec->work); 
+    queue_work_on(c_bvec->cpu, castle_wqs[19], &c_bvec->work);
 }
 
 static void castle_btree_submit_no_clear(c_bvec_t *c_bvec)
