@@ -1449,6 +1449,8 @@ static void castle_back_iter_reply(struct castle_back_stateful_op *stateful_op,
 /**
  * Begin stateful op iterating for values in specified key,version range in DA.
  *
+ * @FIXME-lewis make RQs work with new T0 structure
+ *
  * @also castle_object_iter_start()
  * @also castle_back_iter_next()
  */
@@ -2539,7 +2541,10 @@ static void castle_back_request_process(struct castle_back_conn *conn, struct ca
 
     switch (op->req.tag)
     {
-        /* Point ops. */
+        /* Point ops
+         *
+         * Have CPU affinity based on hash of the key.  They must hit the
+         * correct CPU (op->cpu) and CT (op->cpu_index). */
 
         case CASTLE_RING_REMOVE:
             INIT_WORK(&op->work, castle_back_remove, op);
@@ -2559,27 +2564,38 @@ static void castle_back_request_process(struct castle_back_conn *conn, struct ca
             castle_back_key_copy_get(conn, op->req.get.key_ptr, key_len, &key);
             break;
 
-        /* Stateful op initialisers (initialise CPU affinity). */
+        /* Stateful op initialisers
+         *
+         * Initialise CPU affinity but are broken down into two categories:
+         *
+         * 1. Ops that require CPU affinity (as per point ops)
+         * 2. Ops that pick a CPU via a round-robin method (e.g. iterators)
+         *    - Hashing the key could result in a poor balance of ops as iters
+         *      are more likely to start/end on a frequently-used key
+         *
+         * Regardless of type, subsequent stateful ops will use the same CPU. */
 
-        case CASTLE_RING_ITER_START:
-            INIT_WORK(&op->work, castle_back_iter_start, op);
-            key_len = op->req.iter_start.end_key_len;
-            castle_back_key_copy_get(conn, op->req.iter_start.end_key_ptr, key_len, &key);
-            break;
-
-        case CASTLE_RING_BIG_PUT:
+        case CASTLE_RING_BIG_PUT: /* put, key-hash CPU-affinity */
             INIT_WORK(&op->work, castle_back_big_put, op);
             key_len = op->req.big_put.key_len;
             castle_back_key_copy_get(conn, op->req.big_put.key_ptr, key_len, &key);
             break;
 
-        case CASTLE_RING_BIG_GET:
+        case CASTLE_RING_BIG_GET: /* get, key-hash CPU-affinity */
             INIT_WORK(&op->work, castle_back_big_get, op);
             key_len = op->req.big_get.key_len;
             castle_back_key_copy_get(conn, op->req.big_get.key_ptr, key_len, &key);
             break;
 
-        /* Stateful op continuations (maintain CPU affinity). */
+        case CASTLE_RING_ITER_START: /* iterator, round-robin CPU selection */
+            INIT_WORK(&op->work, castle_back_iter_start, op);
+            key_len = op->req.iter_start.end_key_len;
+            op->cpu_index = conn->cpu_index;
+            break;
+
+        /* Stateful op continuations
+         *
+         * Maintain existing CPU affinity. */
 
         case CASTLE_RING_ITER_NEXT:
             INIT_WORK(&op->work, castle_back_iter_next, op);

@@ -1444,6 +1444,11 @@ void castle_da_rq_iter_cancel(c_da_rq_iter_t *iter)
     castle_free(iter->ct_rqs);
 }
 
+/**
+ * Range query iterator initialiser.
+ *
+ * Implemented as a merged iterator of CTs at every level of the doubling array.
+ */
 void castle_da_rq_iter_init(c_da_rq_iter_t *iter,
                             version_t version,
                             da_id_t da_id,
