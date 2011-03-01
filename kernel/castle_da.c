@@ -67,6 +67,11 @@ static int                      castle_dynamic_driver_merge = 1;
 module_param(castle_dynamic_driver_merge, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
 MODULE_PARM_DESC(castle_dynamic_driver_merge, "Dynamic driver merge");
 
+/* set to 0 to disable using SSDs for btree leaf nodes */
+static int                      castle_use_ssd_leaf_nodes = 1;
+
+module_param(castle_use_ssd_leaf_nodes, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
+MODULE_PARM_DESC(castle_use_ssd_leaf_nodes, "Use SSDs for btree leaf nodes");
 
 /**********************************************************************************************/
 /* Notes about the locking on doubling arrays & component trees.
@@ -1882,10 +1887,13 @@ static int castle_da_merge_extents_alloc(struct castle_da_merge *merge)
     /* Assume that SSDs will be used first. */
     merge->ssds_used = 1;
     /* First, attempt to allocate an SSD extent for the entire tree. */
-    merge->tree_ext_free.ext_id = castle_extent_alloc(SSD_RDA,
+    if (castle_use_ssd_leaf_nodes)
+    {
+        merge->tree_ext_free.ext_id = castle_extent_alloc(SSD_RDA,
                                                       merge->da->id,
                                                       CHUNK(size));
-    /* If failed, try to allocate SSD extent for the internal nodes. */
+    }
+    /* If failed or disabled, try to allocate SSD extent for the internal nodes. */
     if(EXT_ID_INVAL(merge->tree_ext_free.ext_id))
     {
         merge->internal_ext_free.ext_id = castle_extent_alloc(SSD_RDA,
