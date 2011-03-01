@@ -66,7 +66,7 @@ static int                      castle_dynamic_driver_merge = 1;
 
 static struct
 {
-    int                     nr;     /**< Size of cpus array.                        */
+    int                     cnt;    /**< Size of cpus array.                        */
     int                    *cpus;   /**< Array of CPU ids for handling requests.    */
 } request_cpus;
 
@@ -123,7 +123,7 @@ static int castle_da_merge_restart(struct castle_double_array *da, void *unused)
 static int castle_da_merge_start(struct castle_double_array *da, void *unused);
 void castle_double_array_merges_fini(void);
 static void castle_da_merge_budget_consume(struct castle_da_merge *merge);
-static void castle_da_queue_kick(struct castle_double_array *da);
+static void castle_da_queue_kick(struct work_struct *work);
 static void castle_da_bvec_start(struct castle_double_array *da, c_bvec_t *c_bvec);
 static void castle_da_get(struct castle_double_array *da);
 static void castle_da_put(struct castle_double_array *da);
@@ -1669,27 +1669,54 @@ static void castle_merge_budgets_replenish(void *unused)
    castle_da_hash_iterate(castle_da_merge_budget_replenish, NULL); 
 }
 
-static void castle_da_queue_restart(struct work_struct *work)
-{
-    struct castle_double_array *da = container_of(work, struct castle_double_array, queue_restart);
-    
-    castle_da_queue_kick(da);
-    castle_da_put(da);
-}
-
+/**
+ * Replenish ios_budget from ios_rate and schedule IO wait queue kicks.
+ *
+ * NOTE: This might remove rather than replenish the budget, depending on
+ * whether inserts are enabled/disabled(/throttled) on the DA.
+ *
+ * ios_rate is used to throttle inserts into the btree.  It is used as an
+ * initialiser for ios_budget.
+ *
+ * This function is expected to be called periodically (e.g. via a timer) with
+ * values of ios_rate that maintain a sustainable flow of inserts.
+ *
+ * - Update ios_budget
+ * - Schedule queue kicks for all IO wait queues that have elements
+ *
+ * @also struct castle_double_array
+ * @also castle_da_queue_kick()
+ */
 static int castle_da_ios_budget_replenish(struct castle_double_array *da, void *unused)
 {
-    castle_da_get(da);
-    write_lock(&da->lock);
-    da->ios_budget = da->ios_rate;
-    write_unlock(&da->lock);
+    int i;
 
-    /* Defer the restart, since we are operating with spin_lock_irq(&castle_da_hash_lock). */
-    queue_work(castle_wq, &da->queue_restart);
+    atomic_set(&da->ios_budget, da->ios_rate);
+
+    if (da->ios_rate)
+    {
+        /* We just replenished the DA's ios_budget.
+         *
+         * We need to kick all of the write IO wait queues.  In the current
+         * context we hold spin_lock_irq(&castle_da_hash_lock) so schedule this
+         * work so we can drop the lock and return immediately. */
+        for (i = 0; i < request_cpus.cnt; i++)
+        {
+            struct castle_da_io_wait_queue *wq = &da->ios_waiting[i];
+
+            spin_lock(&wq->lock);
+            if (!list_empty(&wq->list))
+                queue_work_on(request_cpus.cpus[i], castle_wqs[19], &wq->work);
+            spin_unlock(&wq->lock);
+        }
+    }
 
     return 0;
 }
 
+/**
+ * Replenish ios_budget for all DAs on the system.
+ */
 static void castle_ios_budgets_replenish(void *unused)
 {
    castle_da_hash_iterate(castle_da_ios_budget_replenish, NULL); 
@@ -3364,7 +3391,7 @@ static int castle_da_merge_restart(struct castle_double_array *da, void *unused)
     debug("Restarting merge for DA=%d\n", da->id);
 
     write_lock(&da->lock);
-    if (da->levels[1].nr_trees >= 4 * request_cpus.nr)
+    if (da->levels[1].nr_trees >= 4 * request_cpus.cnt)
     {
         if (da->ios_rate != 0)
         {
@@ -3380,7 +3407,7 @@ static int castle_da_merge_restart(struct castle_double_array *da, void *unused)
             printk("Enabling inserts on da=%d.\n", da->id);
             castle_trace_da(TRACE_END, TRACE_DA_INSERTS_DISABLED_ID, da->id, 0);
         }
-        da->ios_rate = (uint32_t)-1;   
+        da->ios_rate = INT_MAX;
     }
     write_unlock(&da->lock);
     wake_up(&da->merge_waitq);
@@ -3451,7 +3478,7 @@ static int castle_da_ct_dec_cmp(struct list_head *l1, struct list_head *l2)
  */
 int castle_double_array_okey_cpu_index(c_vl_okey_t *okey, uint32_t key_len)
 {
-    return murmur_hash_32(okey, key_len, (uint32_t)0xDA82B27204D27F7) % request_cpus.nr;
+    return murmur_hash_32(okey, key_len, (uint32_t)0xDA82B27204D27F7) % request_cpus.cnt;
 }
 
 /**
@@ -3473,18 +3500,57 @@ int castle_double_array_request_cpu(int cpu_index)
  */
 int castle_double_array_request_cpus(void)
 {
-    return request_cpus.nr;
+    return request_cpus.cnt;
 }
 
+/**
+ * Allocate write IO wait queues for specified DA.
+ *
+ * @return  EXIT_SUCCESS    Successfully allocated wait queues
+ * @return  1               Failed to allocate wait queues
+ *
+ * @also castle_da_t0_create()
+ */
+static int castle_da_wait_queue_create(struct castle_double_array *da, void *unused)
+{
+    int i;
+
+    da->ios_waiting = castle_malloc(request_cpus.cnt * sizeof(struct castle_da_io_wait_queue),
+            GFP_KERNEL);
+    if (!da->ios_waiting)
+        return 1;
+
+    for (i = 0; i < request_cpus.cnt; i++)
+    {
+        spin_lock_init(&da->ios_waiting[i].lock);
+        INIT_LIST_HEAD(&da->ios_waiting[i].list);
+        CASTLE_INIT_WORK(&da->ios_waiting[i].work, castle_da_queue_kick);
+        da->ios_waiting[i].cnt = 0;
+        da->ios_waiting[i].da = da;
+    }
+
+    return 0;
+}
+
+/**
+ * Deallocate doubling array and all associated data.
+ *
+ * @param da    Doubling array for deallocate
+ *
+ * - Merge threads
+ * - IO wait queues
+ */
 static void castle_da_dealloc(struct castle_double_array *da)
 {
     int i;
 
-    for(i=1; i<MAX_DA_LEVEL; i++)
+    for (i=1; i<MAX_DA_LEVEL; i++)
     {
         if(da->levels[i].merge.thread != NULL)
             kthread_stop(da->levels[i].merge.thread);
     }
+    if (da->ios_waiting)
+        castle_free(da->ios_waiting);
     /* Poison and free (may be repoisoned on debug kernel builds). */
     memset(da, 0xa7, sizeof(struct castle_double_array));
     castle_free(da);
@@ -3507,14 +3573,14 @@ static struct castle_double_array* castle_da_alloc(da_id_t da_id)
     da->nr_trees        = 0;
     atomic_set(&da->ref_cnt, 1);
     da->attachment_cnt  = 0;
-    INIT_LIST_HEAD(&da->ios_waiting);
-    da->ios_waiting_cnt = 0;
-    da->ios_budget      = 0;
+    atomic_set(&da->ios_waiting_cnt, 0);
+    if (castle_da_wait_queue_create(da, NULL) != EXIT_SUCCESS)
+        return NULL;
+    atomic_set(&da->ios_budget, 0);
     da->ios_rate        = 0;
     da->last_key        = NULL;
     /* For existing double arrays driver merge has to be reset after loading it. */
     da->driver_merge    = -1;
-    CASTLE_INIT_WORK(&da->queue_restart, castle_da_queue_restart);
     atomic_set(&da->epoch_ios, 0);
     atomic_set(&da->merge_budget, 0);
     init_waitqueue_head(&da->merge_waitq);
@@ -3637,7 +3703,6 @@ static void castle_component_tree_add(struct castle_double_array *da,
             list_for_each(l, &da->levels[ct->level].trees)
             {
                 cmp_ct = list_entry(l, struct castle_component_tree, da_list);
-                //printk("level 1 cmp_ct->seq %d\n", cmp_ct->seq);
                 if (ct->seq > cmp_ct->seq)
                     break; /* list_for_each() */
                 head = l;
@@ -3648,7 +3713,6 @@ static void castle_component_tree_add(struct castle_double_array *da,
         if (!list_is_last(head, &da->levels[ct->level].trees))
         {
             cmp_ct = list_entry(head->next, struct castle_component_tree, da_list);
-            //printk("ct->level %d ct->seq %d cmp_ct->seq %d\n", ct->level, ct->seq, cmp_ct->seq);
             BUG_ON(ct->seq <= cmp_ct->seq);
         }
     }
@@ -4148,7 +4212,7 @@ static int castle_da_t0_create(struct castle_double_array *da, void *unused)
         /* There are no existing CTs at level 0 in this DA.
          * Create one CT per CPU handling requests. */
         write_unlock(&da->lock); /* castle_da_rwct_make() gets da lock */
-        for (cpu_index = 0; cpu_index < request_cpus.nr; cpu_index++)
+        for (cpu_index = 0; cpu_index < request_cpus.cnt; cpu_index++)
         {
             if (castle_da_rwct_make(da, cpu_index, 1 /* in_tran */) != EXIT_SUCCESS)
             {
@@ -4163,7 +4227,7 @@ static int castle_da_t0_create(struct castle_double_array *da, void *unused)
     }
     else
     {
-        BUG_ON(da->levels[0].nr_trees != request_cpus.nr);
+        BUG_ON(da->levels[0].nr_trees != request_cpus.cnt);
         write_unlock(&da->lock);
     }
 
@@ -4188,7 +4252,7 @@ static int __castle_da_driver_merge_reset(struct castle_double_array *da, void *
  */
 int castle_double_array_start(void)
 {
-    /* Create T0 for all DAs that don't have them (don't need to hold lock). */
+    /* Create T0 for all DAs that don't have them (function acquires lock). */
     __castle_da_hash_iterate(castle_da_t0_create, NULL);
 
     /* Reset driver merge for all DAs. */
@@ -4476,10 +4540,6 @@ static int castle_da_rwct_make(struct castle_double_array *da, int cpu_index, in
         int index = 0;
         list_for_each_prev(l, &da->levels[0].trees)
         {
-            //old_ct = list_entry(l, struct castle_component_tree, da_list);
-            //printk("level 0 index -%d old_ct->seq %d\n", index, old_ct->seq);
-            //old_ct = NULL;
-
             if (index++ == cpu_index)
             {
                 /* Found cpu_index^th element. */
@@ -4520,6 +4580,16 @@ out:
     return ret;
 }
 
+/**
+ * Allocate a new doubling array.
+ *
+ * - Called when userland creates a new doubling array
+ *
+ * @param da_id         id of doubling array (unique)
+ * @param root_version  Root version
+ *
+ * @also castle_control_create()
+ */
 int castle_double_array_make(da_id_t da_id, version_t root_version)
 {
     struct castle_double_array *da;
@@ -4707,46 +4777,70 @@ new_ct:
 }
 
 /**
- * @FIXME-lewis
+ * Queue a write IO for later submission.
+ *
+ * @param da        Doubling array to queue IO for
+ * @param c_bvec    IO to queue
+ *
+ * WARNING: Caller must hold c_bvec's wait queue lock.
  */
 static void castle_da_bvec_queue(struct castle_double_array *da, c_bvec_t *c_bvec)
 {
-    // @FIXME do we want a different lock for the IOs list?
-    write_lock(&da->lock);
-    list_add_tail(&c_bvec->io_list, &da->ios_waiting);
-    da->ios_waiting_cnt++;
-    write_unlock(&da->lock);
+    struct castle_da_io_wait_queue *wq = &da->ios_waiting[c_bvec->cpu_index];
+
+    BUG_ON(!spin_is_locked(&wq->lock));
+
+    /* Queue the bvec. */
+    list_add_tail(&c_bvec->io_list, &wq->list);
+
+    /* Increment IO waiting counters. */
+    wq->cnt++;
+    atomic_inc(&da->ios_waiting_cnt);
 }
 
 /**
- * @FIXME-lewis
+ * Submit write IOs queued on wait queue to btree.
+ *
+ * @param work  Embedded in struct castle_da_io_wait_queue
+ *
+ * - Remove pending IOs from the wait queue so long as ios_budget is positive
+ * - Place pending IOs on a new list of IOs to be submitted to the appropriate
+ *   btree
+ * - We use an intermediate list to minimise the amount of time we hold the
+ *   wait queue lock (although subsequent IOs should be hitting the same CPU)
+ *
+ * @also struct castle_da_io_wait_queue
+ * @also castle_da_ios_budget_replenish()
  */
-static void castle_da_queue_kick(struct castle_double_array *da)
+static void castle_da_queue_kick(struct work_struct *work)
 {
-    LIST_HEAD(submit_list);
+    struct castle_da_io_wait_queue *wq = container_of(work, struct castle_da_io_wait_queue, work);
     struct list_head *l, *t;
-    c_bvec_t *bvec; 
+    LIST_HEAD(submit_list);
+    c_bvec_t *c_bvec;
 
-    /* Get as many bvec as we have the budget for onto the submit list. */
-    write_lock(&da->lock);
-    while(!list_empty(&da->ios_waiting) && (da->ios_budget > 0))
+    /* Get as many c_bvecs as we can and place them on the submit list. */
+    spin_lock(&wq->lock);
+    while ((atomic_dec_return(&wq->da->ios_budget) >= 0) && !list_empty(&wq->list))
     {
-        bvec = list_first_entry(&da->ios_waiting, c_bvec_t, io_list); 
-        list_del(&bvec->io_list);
-        list_add(&bvec->io_list, &submit_list);
-        da->ios_waiting_cnt--;
-        da->ios_budget--;
-    } 
-    write_unlock(&da->lock);
+        /* New IOs are queued at the end of the list.  Always pull from the
+         * front of the list to preserve ordering. */
+        c_bvec = list_first_entry(&wq->list, c_bvec_t, io_list);
+        list_del(&c_bvec->io_list);
+        list_add(&c_bvec->io_list, &submit_list);
 
-    /* Submit them all. */
+        /* Decrement IO waiting counters. */
+        BUG_ON(--wq->cnt < 0);
+        BUG_ON(atomic_dec_return(&wq->da->ios_waiting_cnt) < 0);
+    }
+    spin_unlock(&wq->lock);
+
+    /* Submit c_bvecs to the btree. */
     list_for_each_safe(l, t, &submit_list)
     {
-        bvec = list_entry(l, c_bvec_t, io_list);
-        /* Remove from the list (the bvec may get freed by the time we return
-           from the submit call. */
-        list_del(&bvec->io_list);
-        castle_da_bvec_start(da, bvec);
+        c_bvec = list_entry(l, c_bvec_t, io_list);
+        list_del(&c_bvec->io_list);
+        castle_da_bvec_start(wq->da, c_bvec);
     }
 }
 
@@ -4810,7 +4904,7 @@ static void castle_da_ct_walk_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cv
 }
 
 /**
- * Hand-of request (bvec) to DA via bloom filter (if necessary).
+ * Hand-off request (bvec) to DA via bloom filter (if necessary).
  *
  * - Get T0 CT for bvec
  * - Writes are submitted immediately to the btree
@@ -4854,25 +4948,26 @@ static void castle_da_bvec_start(struct castle_double_array *da, c_bvec_t *c_bve
 }
 
 /**
- * Submit request (bvec) to DA.
+ * Submit request to DA, queueing write IOs that are not within the DA ios_budget.
  *
- * - Queue writes (and then start drain)
- * - Submit reads immediately
+ * Read requests:
+ * - Processed immediately
+ *
+ * Write requests:
+ * - Hold appropriate write queue spinlock to guarantee ordering
+ * - If we're within ios_budget and there write queue is empty, queue the write
+ *   IO immediately
+ * - Otherwise queue write IO and wait for the ios_budget to be replenished
  *
  * @also castle_da_bvec_queue()
- * @also castle_da_queue_kick()
  * @also castle_da_bvec_start()
- *
- * @also castle_object_replace()
- * @also castle_object_get()
- * @also castle_object_pull()
  */
 void castle_double_array_submit(c_bvec_t *c_bvec)
 {
     struct castle_attachment *att = c_bvec->c_bio->attachment;
     struct castle_double_array *da;
     da_id_t da_id; 
-    
+
     down_read(&att->lock);
     /* Since the version is attached, it must be found */
     BUG_ON(castle_version_read(att->version, &da_id, NULL, NULL, NULL));
@@ -4882,21 +4977,48 @@ void castle_double_array_submit(c_bvec_t *c_bvec)
     BUG_ON(!da);
     /* da_endfind should be null it is for our privte use */
     BUG_ON(c_bvec->da_endfind);
-    /* Always submit writes to the queue, reads get started immediately. */
-    if(c_bvec_data_dir(c_bvec) == WRITE)
+
+    /* Write requests must operate within the ios_budget but reads can be
+     * scheduled immediately. */
+    if (c_bvec_data_dir(c_bvec) == WRITE)
     {
+        struct castle_da_io_wait_queue *wq;
+
+        /* If the DA is frozen the best we can do is return an error. */
         if (castle_da_frozen(da))
         {
             c_bvec->endfind(c_bvec, -ENOSPC, INVAL_VAL_TUP);
             return;
         }
-        castle_da_bvec_queue(da, c_bvec);
-        castle_da_queue_kick(da);
+
+        wq = &da->ios_waiting[c_bvec->cpu_index];
+
+        spin_lock(&wq->lock);
+        if ((atomic_dec_return(&da->ios_budget) >= 0) && list_empty(&wq->list))
+        {
+            /* We're within the budget and there are no other IOs on the queue,
+             * schedule this write IO immediately. */
+            spin_unlock(&wq->lock);
+            castle_da_bvec_start(da, c_bvec);
+        }
+        else
+        {
+            /* Either the budget is exhausted or there are other IOs pending on
+             * the write queue.  Queue this write IO.
+             *
+             * Don't do a manual queue kick as if/when ios_budget is replenished
+             * kicks for all of the DA's write queues will be scheduled.  The
+             * kick for 'our' write queue will block on the spinlock we hold.
+             *
+             * ios_budget will be replenished; save an atomic op and leave it
+             * in a negative state. */
+            castle_da_bvec_queue(da, c_bvec);
+            spin_unlock(&wq->lock);
+        }
     }
-    else
+    else /* !WRITE */
         castle_da_bvec_start(da, c_bvec);
 }
- 
 
 /**************************************/
 /* Double Array Management functions. */
@@ -4929,11 +5051,11 @@ int castle_double_array_init(void)
     request_cpus.cpus = castle_malloc(sizeof(int) * num_online_cpus(), GFP_KERNEL);
     if (!request_cpus.cpus)
         goto err0;
-    request_cpus.nr = 0;
+    request_cpus.cnt = 0;
     for_each_online_cpu(cpu)
     {
-        request_cpus.cpus[request_cpus.nr] = cpu;
-        request_cpus.nr++;
+        request_cpus.cpus[request_cpus.cnt] = cpu;
+        request_cpus.cnt++;
     }
 
     castle_da_hash = castle_da_hash_alloc();

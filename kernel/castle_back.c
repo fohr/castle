@@ -67,8 +67,8 @@ struct castle_back_conn
     struct task_struct     *work_thread;
     spinlock_t              response_lock;
     atomic_t                ref_count;
-    int                     cpu;            /**< CPU id for this op                 */
-    int                     cpu_index;      /**< CPU index for this op              */
+    int                     cpu;            /**< CPU id for this conn               */
+    int                     cpu_index;      /**< CPU index for this conn            */
     
     /* 
      * in kernel state for each operation 

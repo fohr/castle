@@ -99,7 +99,19 @@ void castle_control_detach(uint32_t dev, int *ret)
     *ret = (cd ? 0 : -ENODEV);
 }
 
-/* Size == 0 means that a collection tree is supposed to be created */ 
+/**
+ * Create a new doubling array.
+ *
+ * @param size  Size of new doubling array (as a multiple of C_BLK_SIZE)
+ *              If size == 0 a new collection tree is to be created
+ *
+ * @return ret  0   SUCCESS
+ *              -1  FAILURE
+ * @return id   Root version of newly created doubling array
+ *              -1 in case of failure
+ *
+ * @also castle_double_array_make()
+ */
 void castle_control_create(uint64_t size, int *ret, version_t *id)
 {
     int collection_tree = (size == 0);
@@ -112,7 +124,7 @@ void castle_control_create(uint64_t size, int *ret, version_t *id)
         da_id = castle_next_da_id++;
     } 
 
-    /* If size isn't zero, make sure its multiple of block size. */
+    /* If size isn't zero, make sure it's a multiple of block size. */
     if(size % C_BLK_SIZE != 0)
     {
         printk("When creating a block device size must be a multiple of %d, got %lld.\n",
@@ -127,8 +139,7 @@ void castle_control_create(uint64_t size, int *ret, version_t *id)
                                  size);
 
     /* We use doubling arrays for collection trees */
-    if(collection_tree &&
-       castle_double_array_make(da_id, version))
+    if (collection_tree && castle_double_array_make(da_id, version))
     {
         printk("Failed creating doubling array for version: %d\n", version);
         version = INVAL_VERSION; 
@@ -145,6 +156,16 @@ err_out:
     *ret = -EINVAL;
 }
 
+/**
+ * Destroy version (version) from doubling array.
+ *
+ * @TODO Does this destroy an individual version or a whole DA with root version (version)?
+ *
+ * @param version   Version to destroy
+ *
+ * @return ret      0       Version destroyed
+ * @return ret      -EINVAL Failed to destroy specified version
+ */
 void castle_control_destroy(version_t version, int *ret)
 {
     version_t       parent;

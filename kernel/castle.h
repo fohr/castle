@@ -1382,9 +1382,9 @@ struct castle_double_array {
     rwlock_t                    lock;               /**< Protects levels[].trees lists          */
     struct kobject              kobj;
     unsigned long               flags;
-    int                         nr_trees;
+    int                         nr_trees;           /**< Total number of CTs in the da          */
     struct {
-        int                     nr_trees;           /**< Number of trees at level               */
+        int                     nr_trees;           /**< Number of CTs at level                 */
         struct list_head        trees;              /**< List of (nr_trees) at level            */
         /* Merge related variables. */
         struct {
@@ -1403,14 +1403,24 @@ struct castle_double_array {
     int                         driver_merge;
     atomic_t                    ref_cnt;
     uint32_t                    attachment_cnt;
-    /* Queue of write IOs queued up on this DA. */
-    struct list_head            ios_waiting;
-    int                         ios_waiting_cnt;
-    uint32_t                    ios_budget;
-    uint32_t                    ios_rate;
-    struct work_struct          queue_restart;
-    /* Merge deamortisation */
-    wait_queue_head_t           merge_waitq;
+
+    /* Write IO wait queue members */
+    struct castle_da_io_wait_queue {
+        spinlock_t              lock;               /**< Protects list,cnt (accessed by 1 CPU so
+                                                         should be no need for rwlock)          */
+        int                     cnt;                /**< Number of pending write IOs            */
+        struct list_head        list;               /**< List of pending write IOs              */
+        struct castle_double_array *da;             /**< Back pointer to parent DA              */
+        struct work_struct      work;               /**< For queue kicks                        */
+    } *ios_waiting;                                 /**< Array of pending write IO queues,
+                                                         1 queue per request-handling CPU       */
+    atomic_t                    ios_waiting_cnt;    /**< Total number of pending write IOs      */
+    atomic_t                    ios_budget;         /**< Remaining number of write IOs that can
+                                                         hit T0 before they get queued          */
+    int                         ios_rate;           /**< ios_budget initialiser; for throttling
+                                                         writes to the btrees                   */
+
+    wait_queue_head_t           merge_waitq;        /**< Merge deamortisation wait queue        */
     /* Merge throttling. DISABLED ATM. */
     atomic_t                    epoch_ios;
     atomic_t                    merge_budget;
