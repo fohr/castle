@@ -119,13 +119,13 @@ static wait_queue_head_t    rebuild_wq;
 static struct task_struct   *rebuild_thread;
 
 /*
- * A difference between current_rebuild_seqo and rebuild_to_seqno indicates that
- * current_rebuild_seqo has changed doing a rebuild. This can be due to a slave going
+ * A difference between current_rebuild_seqno and rebuild_to_seqno indicates that
+ * current_rebuild_seqno has changed doing a rebuild. This can be due to a slave going
  * out-of-service or being evacuated. If a difference is discovered the rebuild is
  * restarted when it finishes it's current run to pick up and remap any extents that
- * have already been remapped to the (old) current_rebuild_seqo.
+ * have already been remapped to the (old) current_rebuild_seqno.
  */
-static atomic_t             current_rebuild_seqo; /* The latest rebuild sequence number */
+static atomic_t             current_rebuild_seqno;/* The latest rebuild sequence number */
 static int                  rebuild_to_seqno;     /* The sequence number being rebuilt to */
 
 static int                  castle_extents_rescan_required = 0;
@@ -1008,7 +1008,7 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t rda_type,
     spin_lock_init(&ext->shadow_map_lock);
 
     /* The rebuild sequence number that this extent starts off at */
-    ext->curr_rebuild_seqno = atomic_read(&current_rebuild_seqo);
+    ext->curr_rebuild_seqno = atomic_read(&current_rebuild_seqno);
     
     /* Block aligned chunk maps for each extent. */
     if (ext->ext_id == META_EXT_ID)
@@ -1038,11 +1038,11 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t rda_type,
     castle_extents_rhash_add(ext);
 
     /*
-     * If current_rebuild_seqo has changed, then the mappings for this extent may contain
+     * If current_rebuild_seqno has changed, then the mappings for this extent may contain
      * out-of-service slaves. Set the rescan flag and kick the rebuild thread so that the  extent
      * list is rescanned by the rebuild thread. This extent will then be remapped if required.
      */
-    if (ext->curr_rebuild_seqno != atomic_read(&current_rebuild_seqo))
+    if (ext->curr_rebuild_seqno != atomic_read(&current_rebuild_seqno))
     {
         castle_extents_rescan_required = 1;
         wake_up(&rebuild_wq);
@@ -1499,10 +1499,10 @@ static int castle_extent_rebuild_list_add(c_ext_t *ext, void *unused)
 {
     /* We are not handling logical extents. */
     if ((!SUPER_EXTENT(ext->ext_id) && !(ext->ext_id == MICRO_EXT_ID)) &&
-        (ext->curr_rebuild_seqno < atomic_read(&current_rebuild_seqo)))
+        (ext->curr_rebuild_seqno < atomic_read(&current_rebuild_seqno)))
     {
         debug("Adding extent %llu to rebuild list for seqno %u\n",
-               ext->ext_id, atomic_read(&current_rebuild_seqo));
+               ext->ext_id, atomic_read(&current_rebuild_seqno));
         list_add_tail(&ext->rebuild_list, &rebuild_list);
         /*
          * Take a reference to the extent. We will drop this when we have finished remapping
@@ -1783,7 +1783,7 @@ static int castle_extent_remap(c_ext_t *ext)
     for (chunkno = 0; chunkno<ext->size; chunkno++)
         __castle_extent_map_get(ext, chunkno, &ext->shadow_map[chunkno*k_factor]);
 
-    if (rebuild_to_seqno != atomic_read(&current_rebuild_seqo))
+    if (rebuild_to_seqno != atomic_read(&current_rebuild_seqno))
     {
         /*
          * Sequence number has changed. Set rebuild_to_seqno, which is the sequence number we will
@@ -1793,7 +1793,7 @@ static int castle_extent_remap(c_ext_t *ext)
          */
         castle_extents_rescan_required = 1;
 
-        rebuild_to_seqno = atomic_read(&current_rebuild_seqo);
+        rebuild_to_seqno = atomic_read(&current_rebuild_seqno);
 
         /*
          * Refresh the live slaves array to reflect the change, and use that from now on.
@@ -1970,7 +1970,7 @@ static int castle_extents_rebuild_run(void *unused)
     int                 i, nr_evacuated_slaves=0;
 
     // TBD - load this from superblock
-    atomic_set(&current_rebuild_seqo, 0);
+    atomic_set(&current_rebuild_seqno, 0);
 
     /* Initialise the rebuild list. */
     INIT_LIST_HEAD(&rebuild_list);
@@ -1978,7 +1978,7 @@ static int castle_extents_rebuild_run(void *unused)
     debug("Starting rebuild thread ...\n");
     do {
         wait_event_interruptible(rebuild_wq,
-                                 ((atomic_read(&current_rebuild_seqo) > rebuild_to_seqno) ||
+                                 ((atomic_read(&current_rebuild_seqno) > rebuild_to_seqno) ||
                                   kthread_should_stop()));
 
         if (kthread_should_stop())
@@ -1990,7 +1990,7 @@ static int castle_extents_rebuild_run(void *unused)
 restart:
         castle_extents_rescan_required = 0;
 
-        rebuild_to_seqno = atomic_read(&current_rebuild_seqo);
+        rebuild_to_seqno = atomic_read(&current_rebuild_seqno);
 
         castle_extents_remap_state_init();
 
@@ -2022,7 +2022,7 @@ restart:
         /* Finished with the extent list - delete it */
         castle_extent_rebuild_deletelist();
 
-        if ((rebuild_to_seqno == atomic_read(&current_rebuild_seqo)) &&
+        if ((rebuild_to_seqno == atomic_read(&current_rebuild_seqno)) &&
             !castle_extents_rescan_required)
         {
             /*
@@ -2042,10 +2042,10 @@ restart:
         }
 
         /*
-         * If current_rebuild_seqo has changed during the run then start again to pick up any
+         * If current_rebuild_seqno has changed during the run then start again to pick up any
          * extents which have not been remapped to the new sequence number.
          */
-        if ((rebuild_to_seqno != atomic_read(&current_rebuild_seqo)) ||
+        if ((rebuild_to_seqno != atomic_read(&current_rebuild_seqno)) ||
             castle_extents_rescan_required)
         {
             debug("Rebuild extent rescan required (seqno has changed)\n");
@@ -2085,10 +2085,10 @@ void castle_extents_rebuild_start(void)
 {
     struct castle_fs_superblock* fs_sb;
 
-    atomic_inc(&current_rebuild_seqo);
+    atomic_inc(&current_rebuild_seqno);
 
     fs_sb = castle_fs_superblocks_get();
-    fs_sb->extents_sb.current_rebuild_seqo = atomic_read(&current_rebuild_seqo);
+    fs_sb->extents_sb.current_rebuild_seqno = atomic_read(&current_rebuild_seqno);
     castle_fs_superblocks_put(fs_sb, 1);
 
     wake_up(&rebuild_wq);

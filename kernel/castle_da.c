@@ -2004,7 +2004,9 @@ static c_val_tup_t castle_da_medium_obj_copy(struct castle_da_merge *merge,
         if (chk_off)
             pgs_to_end = (C_CHK_SIZE - chk_off) >> PAGE_SHIFT;
 
-        if (chk_off && ((total_blocks - pgs_to_end) >= 2*BLKS_PER_CHK))
+        /* Be careful about subtraction, if it goes negative, and is compared to 
+           BLKS_PER_CHK the test is likely not to work correctly. */
+        if (chk_off && (total_blocks >= 2*BLKS_PER_CHK + pgs_to_end))
             /* Align for a minimum of 2 full blocks (1 can be inefficient) */
             blocks = pgs_to_end;
         else if (total_blocks > BLKS_PER_CHK)
@@ -2101,11 +2103,20 @@ static inline void castle_da_merge_node_info_get(struct castle_da_merge *merge,
         *ext_free = &merge->internal_ext_free;
 }
 
-/* Note: if is_re_add flag is set, then the data wont be processed again, just
+/**
+ * Add an entry to the nodes that are being constructed in merge. 
+ *
+ * @param merge [in, out] Doubling array merge structure
+ * @param depth [in] B-tree depth at which entry should be added. 0 being leaf nodes. 
+ * @param key [in] key of the entry to be added
+ * @param version [in]  version of the entry to be added
+ * @param cvt [in] value tuple of the entry to be added
+ * @param is_re_add [in] are we trying to re-add the entry to output tree?
+ *                       (possible when we are trying to move entries from one node to 
+ *                       another node while completing the former node.)
+ * Note: if is_re_add flag is set, then the data wont be processed again, just
  * the key gets added.  Used when entry is being moved from one node to another
  * node.
- * TODO: Instead of passing is_re_add, check whether cvt->cdb is already in the
- * output extent. This removes the need for the inelegant flag passing.
  */
 static inline void castle_da_entry_add(struct castle_da_merge *merge,
                                        int depth,
@@ -2294,7 +2305,7 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
     {
         /* If merge is completing, there shouldnt be any splits any more. */
         BUG_ON(merge->completing);
-        btree->entry_get(node,   node_idx,  &key, &version, &cvt);
+        btree->entry_get(node, node_idx,  &key, &version, &cvt);
         BUG_ON(CVT_LEAF_PTR(cvt));
         castle_da_entry_add(merge, depth, key, version, cvt, 1); 
         node_idx++;
@@ -2526,45 +2537,66 @@ static void castle_da_max_path_complete(struct castle_da_merge *merge)
     }
 }
 
+/**
+ * Complete merge process. 
+ *
+ * Each level can have atmost one uncompleted node. Complete each node with the 
+ * entries we got now, and link the node to its parent. During this process, each 
+ * non-leaf node can get one extra entry in worst case. Mark valid_end_idx in each 
+ * level to used-1. And call castle_da_node_complete on every level, which would
+ * complete the node and might add one entry in next higher level.
+ *
+ * @param merge [in, out] merge strucutre to be completed.
+ *
+ * @return ct Complete out tree
+ *
+ * @see castle_da_node_complete
+ */
 static struct castle_component_tree* castle_da_merge_complete(struct castle_da_merge *merge)
 {
     struct castle_da_merge_level *level;
-    int i;
+    struct castle_btree_node *node;
+    int next_idx, i;
 
     merge->completing = 1;
     debug("Complete merge at level: %d|%d\n", merge->level, merge->root_depth);
-    /* Force the nodes to complete by setting next_idx negative. Deal with the
-       leaf level first (this may require multiple node completes). Then move
-       on to the second level etc. Prevent node overflows using nodes_complete(). */ 
+    /* Force the nodes to complete by setting next_idx negative. Valid node idx
+       can be set to the last entry in the node safely, because it happens in
+       conjunction with setting the version to 0. This guarantees that all
+       versions in the node are decendant of the node version. */
     for(i=0; i<MAX_BTREE_DEPTH; i++)
     {
-        level = merge->levels + i;
         debug("Flushing at depth: %d\n", i);
-        while(level->next_idx > 0)
+        level = merge->levels + i;
+        /* Node index == 0 indicates that there is no node at this level,
+           therefore we don't have to complete anything. */
+        next_idx = level->next_idx;
+        if(next_idx != 0)
         {
             debug("Artificially completing the node at depth: %d\n", i);
 
             /* Complete the node by marking last entry as valid end. Also, mark
              * the version of this node to 0, as the node might contain multiple
              * entries. */
-            level->valid_end_idx = level->next_idx - 1;
+            node = c2b_bnode(level->node_c2b);
+            /* Point the valid_end_idx past the last entry ... */
+            level->valid_end_idx = next_idx < 0 ? node->used : level->next_idx;
+            /* ... and now point it at the last entry. */ 
+            level->valid_end_idx--;
             level->valid_version = 0;
-
             level->next_idx = -1;
-            if(castle_da_nodes_complete(merge, i))
-                goto err_out;
+            castle_da_node_complete(merge, i);
         } 
     }
+    /* Write out the max keys along the max path. */
     castle_da_max_path_complete(merge);
 
+    /* Complete Bloom filters. */
     if (merge->bloom_exists)
         castle_bloom_complete(&merge->bloom);
 
+    /* Package the merge result. */ 
     return castle_da_merge_package(merge);
-
-err_out:
-    printk("Failed the merge in merge_complete().\n");
-    return NULL;
 }
 
 static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
@@ -3591,6 +3623,8 @@ void castle_ct_put(struct castle_component_tree *ct, int write)
     if(likely(!atomic_dec_and_test(&ct->ref_count)))
         return;
 
+    BUG_ON(atomic_read(&ct->write_ref_count) != 0);
+
     debug("Ref count for ct id=%d went to 0, releasing.\n", ct->seq);
     /* If the ct still on the da list, this must be an error. */
     if(ct->da_list.next != NULL)
@@ -4532,7 +4566,7 @@ static void castle_da_bvec_start(struct castle_double_array *da, c_bvec_t *c_bve
 
     debug_verbose("Doing DA %s for da_id=%d\n", write ? "write" : "read", da_id);
     BUG_ON(atomic_read(&c_bvec->reserv_nodes) != 0);
-    /* This will get a reference to current RW tree, or create a new one if neccessary.
+    /* This will get a reference to current RW tree, or create a new one if necessary.
        It also preallocates space in that tree. */
     c_bvec->tree = castle_da_rwct_acquire(da, c_bvec);
     /* If RW component tree does not exist, exit with error. */

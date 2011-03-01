@@ -289,7 +289,7 @@ struct castle_extents_superblock {
     /*        144 */ struct castle_elist_entry  mstore_ext[2];
     /*        272 */ c_ext_free_bs_t            meta_ext_free_bs;
     /*        336 */ c_disk_chk_t               micro_maps[MAX_NR_SLAVES];
-    /*        848 */ uint32_t                   current_rebuild_seqo;
+    /*        848 */ uint32_t                   current_rebuild_seqno;
     /*        852 */ uint8_t                    _unused[172];
     /*       1024 */
 } PACKED;
@@ -573,7 +573,7 @@ struct castle_btree_type {
 
 #define MTREE_NODE_SIZE     (10) /* In blocks */
 
-typedef struct castle_boom_filter {
+typedef struct castle_bloom_filter {
     uint8_t                   num_hashes;
     uint32_t                  block_size_pages;
     uint32_t                  num_chunks;
