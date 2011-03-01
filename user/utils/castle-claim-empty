@@ -20,6 +20,14 @@ function should_claim {
         return 1
     fi
 
+    # if we're on ec2, then claim disks 
+    if [ -e "/etc/acunu/ec2-ephemeral-disks" ]; then
+	if grep "${device}" /etc/acunu/ec2-ephemeral-disks; then 
+	    echo "Device ${device} in /etc/acunu/ec2-ephemeral-disks, claiming"
+	    return 0
+	fi
+    fi
+
     # Check to see if device has any partitions on it
     local num_partitions=$(( $(cat /proc/partitions | grep ${device} | wc -l) - 1 ))
     if [ "${num_partitions}" -gt 0 ]; then
