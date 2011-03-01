@@ -365,35 +365,10 @@ void castle_bloom_complete(castle_bloom_t *bf)
  */
 void castle_bloom_destroy(castle_bloom_t *bf)
 {
-    c_ext_pos_t cep;
-    uint32_t i, j;
-
     debug("castle_bloom_destroy.\n");
     BUG_ON(bf->private);
 
-    /* unsoftpin everything from the cache */
-    cep.ext_id = bf->ext_id;
-    cep.offset = 0;
-
-    /* btree nodes are always softpinned */
-    for (i = 0; i < bf->num_btree_nodes; i++)
-    {
-        castle_cache_advise_clear(cep, C2_ADV_SOFTPIN, -1, -1, 0);
-        cep.offset += BLOOM_INDEX_NODE_SIZE;
-    }
-
-    /* chunks are only softpinned if the BF is small enough */
-    if (bf->num_chunks <= BLOOM_MAX_SOFTPIN_CHUNKS)
-    {
-        for (i = 0; i < bf->num_chunks; i++)
-        {
-            for (j = 0; j < BLOCKS_IN_CHUNK(bf, i); j++)
-            {
-                castle_cache_advise_clear(cep, C2_ADV_SOFTPIN, -1, -1, 0);
-                cep.offset += BLOOM_BLOCK_SIZE(bf);
-            }
-        }
-    }
+    castle_cache_advise_clear((c_ext_pos_t){bf->ext_id, 0}, C2_ADV_EXTENT|C2_ADV_SOFTPIN, -1,-1,0);
 
     castle_extent_free(bf->ext_id);
 }
