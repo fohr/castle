@@ -4622,7 +4622,14 @@ int castle_double_array_make(da_id_t da_id, version_t root_version)
 }
 
 /**
- * Get the CT that follows ct in the doubling array, from the next level, if necessary.
+ * Return CT that logically follows passed ct, from the next level, if necessary.
+ *
+ * @param ct    Current CT to use as basis for finding next CT
+ *
+ * - Advance to the next level if the current CT has been removed from the DA or
+ *   if the current CT is from level 0 (keys are hashed to specific CTs at level
+ *   0 so there's no point searching other CTs)
+ * - Keep going up the levels until a CT is found (or none)
  *
  * @return  Next CT with a reference held
  * @return  NULL if no more trees
@@ -4640,22 +4647,30 @@ struct castle_component_tree* castle_da_ct_next(struct castle_component_tree *ct
     /* Start from the current list, from wherever the current ct is in the da_list. */
     level = ct->level;
     ct_list = &ct->da_list;
-    /* CT may have got removed from the DA (da_list is NULL-ified then).
-       We can then safely move on to the next level, because merge always 
-       removes two _oldest_ trees. So there are no trees in the current level
-       for us to inspect. */
-    if(ct_list->next == NULL)
+
+    /* Advance to the next level of the DA if:
+     *
+     * - Current CT is level 0: each CT at level 0 handles inserts for a
+     *   specific hash of keys.  The only CT at this level that could contain a
+     *   hit is the one the key hashed to (i.e. the current CT).
+     * - Current CT was removed from the DA (da_list is NULL): we can safely
+     *   move to the next level as merges always remove the two oldest trees.
+     *   Any other trees in the current CT's level will be newer and therefore
+     *   predate a lookup. */
+    if (level == 0 || ct_list->next == NULL)
     {
-        BUG_ON(ct_list->prev != NULL);
-        /* Advance to the next level. */
+        BUG_ON(ct_list->next == NULL && ct_list->prev != NULL);
+
         level++;
         ct_list = &da->levels[level].trees;
     }
-    /* Loop through all levels trying to find a tree. */
-    while(level < MAX_DA_LEVEL)
+
+    /* Loop through all levels trying to find the next tree. */
+    while (level < MAX_DA_LEVEL)
     {
-        if(!list_is_last(ct_list, &da->levels[level].trees))
+        if (!list_is_last(ct_list, &da->levels[level].trees))
         {
+            /* CT found at (level), return it. */
             next_ct = list_entry(ct_list->next, struct castle_component_tree, da_list); 
             debug_verbose("Found component tree %d\n", next_ct->seq);
             castle_ct_get(next_ct, 0);
@@ -4663,7 +4678,8 @@ struct castle_component_tree* castle_da_ct_next(struct castle_component_tree *ct
 
             return next_ct;
         }
-        /* Advance to the next level. */
+
+        /* No CT found at (level), advance to the next level. */
         level++;
         ct_list = &da->levels[level].trees;
     }     

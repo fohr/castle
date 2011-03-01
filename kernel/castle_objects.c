@@ -1502,7 +1502,11 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
 }
 
 /**
- * @FIXME do something with cpu_index
+ * Lookup and return an object from btree.
+ *
+ * @param cpu_index CPU index (to determine correct T0 CT)
+ *
+ * @also castle_back_get()
  */
 int castle_object_get(struct castle_object_get *get,
                       struct castle_attachment *attachment,

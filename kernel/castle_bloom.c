@@ -839,7 +839,7 @@ void castle_bloom_submit(c_bvec_t *c_bvec)
     else
     {
         INIT_WORK(&c_bvec->work, _castle_bloom_submit, c_bvec);
-        queue_work(castle_wqs[19], &c_bvec->work);
+        queue_work_on(c_bvec->cpu, castle_wqs[19], &c_bvec->work);
     }
 }
 

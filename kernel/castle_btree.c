@@ -2666,9 +2666,10 @@ static void __castle_btree_submit(c_bvec_t *c_bvec,
 /**
  * Submit request to btree (workqueue function).
  *
- * - Queuer should have placed us such that we are running on the request_cpus.cpus[]
- *   cpu that matches c_bvec->tree (CPU-affinity for T0 CT)
- * - Except for some stateful ops and gets we expect to go largely uncontended for CT locks
+ * - Queuer should have placed us such that we are running on the
+ *   request_cpus.cpus[] cpu that matches c_bvec->tree (CPU-affinity for T0 CT)
+ * - Except for some stateful ops and gets we expect to go largely uncontended
+ *   for CT locks
  */
 static void _castle_btree_submit(struct work_struct *work)
 {
