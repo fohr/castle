@@ -2103,11 +2103,20 @@ static inline void castle_da_merge_node_info_get(struct castle_da_merge *merge,
         *ext_free = &merge->internal_ext_free;
 }
 
-/* Note: if is_re_add flag is set, then the data wont be processed again, just
+/**
+ * Add an entry to the nodes that are being constructed in merge. 
+ *
+ * @param merge [in, out] Doubling array merge structure
+ * @param depth [in] B-tree depth at which entry should be added. 0 being leaf nodes. 
+ * @param key [in] key of the entry to be added
+ * @param version [in]  version of the entry to be added
+ * @param cvt [in] value tuple of the entry to be added
+ * @param is_re_add [in] are we trying to re-add the entry to output tree?
+ *                       (possible when we are trying to move entries from one node to 
+ *                       another node while completing the former node.)
+ * Note: if is_re_add flag is set, then the data wont be processed again, just
  * the key gets added.  Used when entry is being moved from one node to another
  * node.
- * TODO: Instead of passing is_re_add, check whether cvt->cdb is already in the
- * output extent. This removes the need for the inelegant flag passing.
  */
 static inline void castle_da_entry_add(struct castle_da_merge *merge,
                                        int depth,
@@ -2528,6 +2537,21 @@ static void castle_da_max_path_complete(struct castle_da_merge *merge)
     }
 }
 
+/**
+ * Complete merge process. 
+ *
+ * Each level can have atmost one uncompleted node. Complete each node with the 
+ * entries we got now, and link the node to its parent. During this process, each 
+ * non-leaf node can get one extra entry in worst case. Mark valid_end_idx in each 
+ * level to used-1. And call castle_da_node_complete on every level, which would
+ * complete the node and might add one entry in next higher level.
+ *
+ * @param merge [in, out] merge strucutre to be completed.
+ *
+ * @return ct Complete out tree
+ *
+ * @see castle_da_node_complete
+ */
 static struct castle_component_tree* castle_da_merge_complete(struct castle_da_merge *merge)
 {
     struct castle_da_merge_level *level;
