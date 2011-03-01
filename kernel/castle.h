@@ -755,7 +755,9 @@ struct castle_cache_block;
 struct castle_request_timeline;
 #define CBV_ONE2ONE_BIT               (0) 
 #define CBV_ROOT_LOCKED_BIT           (1) 
-#define CBV_DOING_SPLITS              (2) 
+#define CBV_DOING_SPLITS              (2)       /**< Indicates btree walk is doing node splits.
+                                                     With this bit set the walk will write-lock
+                                                     all nodes on the walk.                     */
 #define CBV_PARENT_WRITE_LOCKED       (3) 
 #define CBV_CHILD_WRITE_LOCKED        (4) 
 /* Temporary variable used to set the above correctly, at the right point in time */ 

@@ -2702,22 +2702,45 @@ static void _castle_btree_submit(struct work_struct *work)
 /**
  * Submit request to the btree.
  *
- * - Queue work to CPU specified in c_bvec
+ * - Clear CBV_DOING_SPLITS to prevent the walker getting write locks on btree
+ *   nodes (unless the walk is for a write, in which case explicitly set it in
+ *   case a node-split is required)
+ * - Queue the request to the c_bvec-specified CPU
  */
 void castle_btree_submit(c_bvec_t *c_bvec)
 {
     c_bvec->parent_key = NULL;
-    clear_bit(CBV_DOING_SPLITS, &c_bvec->flags);
+
+    /* To prevent double walks of the btree (first getting read locks, later
+     * getting write locks in case a node-split is required), force the walk to
+     * get write locks from off the bat.
+     * @FIXME clean this up and make the walk always grab write locks in the
+     * case of a btree write */
+    if (c_bvec_data_dir(c_bvec) == WRITE)
+    {
+        set_bit(CBV_DOING_SPLITS, &c_bvec->flags);
+        c_bvec->split_depth = 0;
+    }
+    else
+        clear_bit(CBV_DOING_SPLITS, &c_bvec->flags);
+
     CASTLE_INIT_WORK(&c_bvec->work, _castle_btree_submit);
     queue_work_on(c_bvec->cpu, castle_wqs[19], &c_bvec->work);
 }
 
+/**
+ * Re-submit request to the btree without clearing CBV_DOING_SPLITS.
+ *
+ * Called when a write op has traversed the tree obtaining read locks and
+ * detects a btree node that needs to be split.
+ *
+ * We expect the caller to have set CBV_DOING_SPLITS.
+ */
 static void castle_btree_submit_no_clear(c_bvec_t *c_bvec)
 {
     CASTLE_INIT_WORK(&c_bvec->work, _castle_btree_submit);
-    queue_work(castle_wqs[18], &c_bvec->work); 
+    queue_work_on(c_bvec->cpu, castle_wqs[18], &c_bvec->work);
 }
-
 
 /**********************************************************************************************/
 /* Btree iterator */

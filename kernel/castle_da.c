@@ -108,8 +108,6 @@ static LIST_HEAD(castle_deleted_das);
 static struct castle_component_tree* castle_ct_alloc(struct castle_double_array *da, 
                                                      btree_t type, 
                                                      int level);
-static inline void castle_da_lock(struct castle_double_array *da);
-static inline void castle_da_unlock(struct castle_double_array *da);
 static inline int castle_da_is_locked(struct castle_double_array *da);
 void castle_ct_get(struct castle_component_tree *ct, int write);
 void castle_ct_put(struct castle_component_tree *ct, int write);
@@ -168,31 +166,43 @@ static inline void castle_da_deleted_set(struct castle_double_array *da)
  * un-freezing. Unfreezing just sets a bit. Freezing first checks if some one
  * did a unfreeze, if so dont set freeze and clear unfreeze. 
  *
- * All these functions should be called with castle_da_lock() held. */
+ * All freeze/unfreeze functions require a hold on da->lock. */
 
-/* Should be called with castle_da_lock(). */
+/**
+ * Is the doubling array unfrozen.
+ *
+ * WARNING: Caller must have at least a read lock on the da.
+ */
 static inline int castle_da_unfrozen(struct castle_double_array *da)
 {
     return test_bit(DOUBLE_ARRAY_UNFROZEN_BIT, &da->flags);
 }
 
+/**
+ * Unfreze the doubling array.
+ */
 static int castle_da_unfrozen_set(struct castle_double_array *da, void *unused)
 {
-    castle_da_lock(da);
+    write_lock(&da->lock);
 
     if (test_bit(DOUBLE_ARRAY_FROZEN_BIT, &da->flags))
     {
         printk("Un-freezing Doubling Array: %u\n", da->id);
         set_bit(DOUBLE_ARRAY_UNFROZEN_BIT, &da->flags);
-        castle_da_unlock(da);
+        write_unlock(&da->lock);
         castle_da_merge_restart(da, NULL);
     }
     else
-        castle_da_unlock(da);
+        write_unlock(&da->lock);
 
     return 0;
 }
 
+/**
+ * @FIXME
+ *
+ * WARNING: Caller must have at least a read lock on the da.
+ */
 static inline int _castle_da_frozen(struct castle_double_array *da)
 {
     if (castle_da_unfrozen(da))
@@ -204,36 +214,45 @@ static inline int _castle_da_frozen(struct castle_double_array *da)
     return test_bit(DOUBLE_ARRAY_FROZEN_BIT, &da->flags);
 }
 
+/**
+ * Is the doubling array frozen.
+ */
 static inline int castle_da_frozen(struct castle_double_array *da)
 {
     int ret;
 
-    castle_da_lock(da);
+    read_lock(&da->lock);
     ret = _castle_da_frozen(da);
-    castle_da_unlock(da);
+    read_unlock(&da->lock);
 
     return ret;
 }
 
+/**
+ * Freeze the doubling array.
+ */
 static inline void castle_da_frozen_set(struct castle_double_array *da)
 {
-    castle_da_lock(da);
+    write_lock(&da->lock);
 
     if (castle_da_unfrozen(da))
     {
         clear_bit(DOUBLE_ARRAY_FROZEN_BIT, &da->flags);
         clear_bit(DOUBLE_ARRAY_UNFROZEN_BIT, &da->flags);
 
-        castle_da_unlock(da);
+        write_unlock(&da->lock);
         return;
     }
 
     printk("Freezing Doubling Array: %u\n", da->id);
     set_bit(DOUBLE_ARRAY_FROZEN_BIT, &da->flags);
 
-    castle_da_unlock(da);
+    write_unlock(&da->lock);
 }
 
+/**
+ * Unfreeze all doubling arrays.
+ */
 int castle_double_arrays_unfreeze(void)
 {
     castle_da_hash_iterate(castle_da_unfrozen_set, NULL); 
@@ -1462,11 +1481,11 @@ again:
         return;
     }
 
-    castle_da_lock(da);
+    read_lock(&da->lock);
     /* Check the number of trees under lock. Retry again if # changed. */ 
     if(iter->nr_cts != da->nr_trees)
     {
-        castle_da_unlock(da);
+        read_unlock(&da->lock);
         printk("Warning. Untested path. # of cts changed while allocating memory for rq.\n");
         castle_free(iter->ct_rqs);
         castle_free(iters);
@@ -1490,7 +1509,7 @@ again:
             j++;
         }
     }
-    castle_da_unlock(da);
+    read_unlock(&da->lock);
     BUG_ON(j != iter->nr_cts);
 
     /* Initialise range queries for individual cts */
@@ -1661,9 +1680,9 @@ static void castle_da_queue_restart(struct work_struct *work)
 static int castle_da_ios_budget_replenish(struct castle_double_array *da, void *unused)
 {
     castle_da_get(da);
-    castle_da_lock(da);
+    write_lock(&da->lock);
     da->ios_budget = da->ios_rate;
-    castle_da_unlock(da);
+    write_unlock(&da->lock);
 
     /* Defer the restart, since we are operating with spin_lock_irq(&castle_da_hash_lock). */
     queue_work(castle_wq, &da->queue_restart);
@@ -2853,7 +2872,7 @@ static inline int castle_da_merge_wait_event(struct castle_double_array *da, int
 
     not_ready_wake = 0;
     /* Protect the reads/updates to merge variables with DA lock. */
-    castle_da_lock(da);
+    write_lock(&da->lock);
     this_level_units = da->levels[level].merge.units_commited;
     prev_level_units = da->levels[level-1].merge.units_commited;
     nr_trees = da->levels[level].nr_trees;
@@ -2936,14 +2955,14 @@ static inline int castle_da_merge_wait_event(struct castle_double_array *da, int
     }
 
 not_ready_out:
-    castle_da_unlock(da);
+    write_unlock(&da->lock);
     if(not_ready_wake)
         wake_up(&da->merge_waitq);
     return 0;
 
 ready_out:
     da->levels[level].merge.units_commited = this_level_units+1; 
-    castle_da_unlock(da);
+    write_unlock(&da->lock);
     wake_up(&da->merge_waitq);
     return 1;
 }
@@ -2982,11 +3001,15 @@ static inline void castle_da_merge_unit_complete(struct castle_double_array *da,
 static inline void castle_da_merge_intermediate_unit_complete(struct castle_double_array *da, 
                                                               int level)
 {
-    castle_da_lock(da);
+    write_lock(&da->lock);
     castle_da_merge_unit_complete(da, level);
-    castle_da_unlock(da);
+    write_unlock(&da->lock);
 }
 
+/**
+ *
+ * WARNING: Caller must hold da write lock.
+ */
 static inline void castle_da_driver_merge_reset(struct castle_double_array *da)
 {
     int level;
@@ -3031,7 +3054,7 @@ static inline tree_seq_t castle_da_merge_last_unit_complete(struct castle_double
     CASTLE_TRANSACTION_BEGIN;
 
     /* Get the lock. */
-    castle_da_lock(merge->da);
+    write_lock(&merge->da->lock);
     /* Notify interested parties about merge completion, _before_ moving trees around. */ 
     castle_da_merge_unit_complete(da, level);
     BUG_ON((merge->da->id != merge->in_tree1->da) ||
@@ -3060,7 +3083,7 @@ static inline tree_seq_t castle_da_merge_last_unit_complete(struct castle_double
     }
     castle_da_driver_merge_reset(da);
     /* Release the lock. */
-    castle_da_unlock(merge->da);
+    write_unlock(&merge->da->lock);
 
     CASTLE_TRANSACTION_END;
     castle_da_merge_restart(da, NULL);
@@ -3185,7 +3208,7 @@ static int castle_da_merge_run(void *da_p)
 
         /* Otherwise do a merge. */
         in_tree1 = in_tree2 = NULL;
-        castle_da_lock(da);
+        read_lock(&da->lock);
         list_for_each_prev(l, &da->levels[level].trees)
         {
             if(!in_tree2)
@@ -3194,7 +3217,7 @@ static int castle_da_merge_run(void *da_p)
             if(!in_tree1)
                 in_tree1 = list_entry(l, struct castle_component_tree, da_list);
         }
-        castle_da_unlock(da);
+        read_unlock(&da->lock);
         /* We should only get here, if we are supposed to do a merge => we have in_trees. */
         BUG_ON(!in_tree1 || !in_tree2);
 
@@ -3293,10 +3316,10 @@ merge_failed:
 
     debug_merges("Merge thread exiting.\n");
 
-    castle_da_lock(da);
+    write_lock(&da->lock);
     /* Remove ourselves from the da merge threads array to indicate that we are finished. */  
     da->levels[level].merge.thread = NULL;
-    castle_da_unlock(da);
+    write_unlock(&da->lock);
     /* castle_da_alloc() took a reference for us, we have to drop it now. */
     castle_da_put(da);
 
@@ -3331,26 +3354,35 @@ static int castle_da_merge_stop(struct castle_double_array *da, void *unused)
     return 0;
 }
 
+/**
+ * Enable/disable inserts for da and wake-up merge thread.
+ *
+ * @param da    Doubling array to throttle and merge
+ */
 static int castle_da_merge_restart(struct castle_double_array *da, void *unused)
 {
     debug("Restarting merge for DA=%d\n", da->id);
-    castle_da_lock(da);
-//    if(da->levels[1].nr_trees >= 4)
+
+    write_lock(&da->lock);
     if (da->levels[1].nr_trees >= 4 * request_cpus.nr)
     {
-        printk("Disabling inserts on da=%d.\n", da->id);
         if (da->ios_rate != 0)
+        {
+            printk("Disabling inserts on da=%d.\n", da->id);
             castle_trace_da(TRACE_START, TRACE_DA_INSERTS_DISABLED_ID, da->id, 0);
+        }
         da->ios_rate = 0; 
     }
     else
     {
-        printk("Enabling inserts on da=%d.\n", da->id);
         if (da->ios_rate == 0)
+        {
+            printk("Enabling inserts on da=%d.\n", da->id);
             castle_trace_da(TRACE_END, TRACE_DA_INSERTS_DISABLED_ID, da->id, 0);
+        }
         da->ios_rate = (uint32_t)-1;   
     }
-    castle_da_unlock(da);
+    write_unlock(&da->lock);
     wake_up(&da->merge_waitq);
 
     return 0;
@@ -3365,7 +3397,7 @@ static void castle_da_merges_print(struct castle_double_array *da)
                        
     print = 0;
     do_gettimeofday(&time);
-    castle_da_lock(da);
+    read_lock(&da->lock);
     printk("\nPrinting merging stats for DA=%d, t=(%ld,%ld)\n", 
             da->id, time.tv_sec, time.tv_usec/1000);
     for(level=MAX_DA_LEVEL-1; level>0; level--)
@@ -3389,21 +3421,11 @@ static void castle_da_merges_print(struct castle_double_array *da)
         }
     }
     printk("\n");
-    castle_da_unlock(da);
+    read_unlock(&da->lock);
 }
 
 /**********************************************************************************************/
 /* Generic DA code */
-
-static inline void castle_da_lock(struct castle_double_array *da)
-{
-    write_lock(&da->lock);
-}
-
-static inline void castle_da_unlock(struct castle_double_array *da)
-{
-    write_unlock(&da->lock);
-}
 
 static inline int castle_da_is_locked(struct castle_double_array *da)
 {
@@ -3759,10 +3781,10 @@ static int castle_da_trees_sort(struct castle_double_array *da, void *unused)
 {
     int i;
 
-    castle_da_lock(da);
+    write_lock(&da->lock);
     for(i=0; i<MAX_DA_LEVEL; i++)
         list_sort(&da->levels[i].trees, castle_da_ct_dec_cmp);
-    castle_da_unlock(da);
+    write_unlock(&da->lock);
 
     return 0;
 }
@@ -3842,6 +3864,13 @@ static da_id_t castle_da_ct_unmarshall(struct castle_component_tree *ct,
     return ctm->da_id;
 }
 
+/**
+ * Run fn() on each CT in the doubling array.
+ *
+ * @param da    Doubling array's CTs to enumerate
+ * @param fn    Function to pass each of the da's CTs too
+ * @param token @FIXME
+ */
 static void castle_da_foreach_tree(struct castle_double_array *da,
                                    int (*fn)(struct castle_double_array *da,
                                              struct castle_component_tree *ct,
@@ -3853,7 +3882,7 @@ static void castle_da_foreach_tree(struct castle_double_array *da,
     struct list_head *lh, *t;
     int i, j;
 
-    castle_da_lock(da);
+    write_lock(&da->lock);
     for(i=0; i<MAX_DA_LEVEL; i++)
     {
         j = 0;
@@ -3869,7 +3898,7 @@ static void castle_da_foreach_tree(struct castle_double_array *da,
         }
     }
 out:
-    castle_da_unlock(da);
+    write_unlock(&da->lock);
 }
 
 static int castle_ct_hash_destroy_check(struct castle_component_tree *ct, void *ct_hash)
@@ -4003,7 +4032,7 @@ mstore_writeback:
     /* Never writeback T0 in periodic checkpoints. */
     BUG_ON((ct->level == 0) && !castle_da_exiting);
 
-    if (da) castle_da_unlock(da);
+    if (da) write_unlock(&da->lock);
 
     mutex_lock(&ct->lo_mutex);
     list_for_each_safe(lh, tmp, &ct->large_objs)
@@ -4018,7 +4047,7 @@ mstore_writeback:
     castle_da_ct_marshall(&mstore_entry, ct); 
     castle_mstore_entry_insert(castle_tree_store, &mstore_entry);
 
-    if (da) castle_da_lock(da);
+    if (da) write_lock(&da->lock);
 
     return 0;
 }
@@ -4094,7 +4123,7 @@ static int castle_da_rwct_make(struct castle_double_array *da, int cpu_index, in
 /**
  * Create T0 for specified DA if it does not already exist.
  *
- * - Make one CT per CPU handling requests
+ * - Allocate one CT per CPU handling requests
  *
  * When any of these CTs subsequently get exhausted a new CT is allocated and
  * the old CT promoted in an atomic fashion (da->lock held).  This means we are
@@ -4103,11 +4132,13 @@ static int castle_da_rwct_make(struct castle_double_array *da, int cpu_index, in
  * @FIXME currently the system will panic if the filesystem is imported on a
  * machine with a different number of CPUs
  *
+ * @FIXME is the locking here correct?  could these be read_locks()?
+ *
  * @also castle_double_array_start()
  */
 static int castle_da_t0_create(struct castle_double_array *da, void *unused)
 {
-    castle_da_lock(da);
+    write_lock(&da->lock);
     if (list_empty(&da->levels[0].trees))
     {
         int cpu_index;
@@ -4116,7 +4147,7 @@ static int castle_da_t0_create(struct castle_double_array *da, void *unused)
 
         /* There are no existing CTs at level 0 in this DA.
          * Create one CT per CPU handling requests. */
-        castle_da_unlock(da);
+        write_unlock(&da->lock); /* castle_da_rwct_make() gets da lock */
         for (cpu_index = 0; cpu_index < request_cpus.nr; cpu_index++)
         {
             if (castle_da_rwct_make(da, cpu_index, 1 /* in_tran */) != EXIT_SUCCESS)
@@ -4131,16 +4162,19 @@ static int castle_da_t0_create(struct castle_double_array *da, void *unused)
         return 0;
     }
     else
+    {
         BUG_ON(da->levels[0].nr_trees != request_cpus.nr);
+        write_unlock(&da->lock);
+    }
 
     return 0;
 }
 
 static int __castle_da_driver_merge_reset(struct castle_double_array *da, void *unused)
 {
-    castle_da_lock(da);
+    write_lock(&da->lock);
     castle_da_driver_merge_reset(da);
-    castle_da_unlock(da);
+    write_unlock(&da->lock);
 
     return 0;
 }
@@ -4232,9 +4266,9 @@ int castle_double_array_read(void)
         if(!da)
             goto error_out;
         debug("Read CT seq=%d\n", ct->seq);
-        castle_da_lock(da);
+        write_lock(&da->lock);
         castle_component_tree_add(da, ct, NULL /*head*/, 1 /*in init*/);
-        castle_da_unlock(da);
+        write_unlock(&da->lock);
         castle_next_tree_seq = (ct->seq >= castle_next_tree_seq) ? ct->seq + 1 : castle_next_tree_seq;
     }
     castle_mstore_iterator_destroy(iterator);
@@ -4433,7 +4467,7 @@ static int castle_da_rwct_make(struct castle_double_array *da, int cpu_index, in
     put_c2b(c2b);
 
     if (!in_tran) CASTLE_TRANSACTION_BEGIN;
-    castle_da_lock(da);
+    write_lock(&da->lock);
 
     /* Find cpu_index^th element from back and promote to level 1. */
     // @FIXME multi-t0-rwct-cpu-count-mismatch
@@ -4472,7 +4506,7 @@ static int castle_da_rwct_make(struct castle_double_array *da, int cpu_index, in
     if (!in_tran) CASTLE_TRANSACTION_END;
     /* DA is attached, therefore we must be holding a ref, therefore it is safe to schedule
        the merge check. */
-    castle_da_unlock(da);
+    write_unlock(&da->lock);
     castle_da_merge_restart(da, NULL);
     ret = 0;
     goto out;
@@ -4517,6 +4551,12 @@ int castle_double_array_make(da_id_t da_id, version_t root_version)
     return 0;
 }
 
+/**
+ * Get the CT that follows ct in the doubling array, from the next level, if necessary.
+ *
+ * @return  Next CT with a reference held
+ * @return  NULL if no more trees
+ */
 struct castle_component_tree* castle_da_ct_next(struct castle_component_tree *ct)
 {
     struct castle_double_array *da = castle_da_hash_get(ct->da);
@@ -4526,7 +4566,7 @@ struct castle_component_tree* castle_da_ct_next(struct castle_component_tree *ct
 
     debug_verbose("Asked for component tree after %d\n", ct->seq);
     BUG_ON(!da);
-    castle_da_lock(da);
+    read_lock(&da->lock);
     /* Start from the current list, from wherever the current ct is in the da_list. */
     level = ct->level;
     ct_list = &ct->da_list;
@@ -4549,7 +4589,7 @@ struct castle_component_tree* castle_da_ct_next(struct castle_component_tree *ct
             next_ct = list_entry(ct_list->next, struct castle_component_tree, da_list); 
             debug_verbose("Found component tree %d\n", next_ct->seq);
             castle_ct_get(next_ct, 0);
-            castle_da_unlock(da);
+            read_unlock(&da->lock);
 
             return next_ct;
         }
@@ -4557,7 +4597,7 @@ struct castle_component_tree* castle_da_ct_next(struct castle_component_tree *ct
         level++;
         ct_list = &da->levels[level].trees;
     }     
-    castle_da_unlock(da);
+    read_unlock(&da->lock);
 
     return NULL;
 }
@@ -4666,14 +4706,21 @@ new_ct:
     return NULL;
 }
 
+/**
+ * @FIXME-lewis
+ */
 static void castle_da_bvec_queue(struct castle_double_array *da, c_bvec_t *c_bvec)
 {
-    castle_da_lock(da);
+    // @FIXME do we want a different lock for the IOs list?
+    write_lock(&da->lock);
     list_add_tail(&c_bvec->io_list, &da->ios_waiting);
     da->ios_waiting_cnt++;
-    castle_da_unlock(da);
+    write_unlock(&da->lock);
 }
 
+/**
+ * @FIXME-lewis
+ */
 static void castle_da_queue_kick(struct castle_double_array *da)
 {
     LIST_HEAD(submit_list);
@@ -4681,7 +4728,7 @@ static void castle_da_queue_kick(struct castle_double_array *da)
     c_bvec_t *bvec; 
 
     /* Get as many bvec as we have the budget for onto the submit list. */
-    castle_da_lock(da);
+    write_lock(&da->lock);
     while(!list_empty(&da->ios_waiting) && (da->ios_budget > 0))
     {
         bvec = list_first_entry(&da->ios_waiting, c_bvec_t, io_list); 
@@ -4690,7 +4737,7 @@ static void castle_da_queue_kick(struct castle_double_array *da)
         da->ios_waiting_cnt--;
         da->ios_budget--;
     } 
-    castle_da_unlock(da);
+    write_unlock(&da->lock);
 
     /* Submit them all. */
     list_for_each_safe(l, t, &submit_list)
@@ -5057,9 +5104,9 @@ void castle_double_array_put(da_id_t da_id)
     BUG_ON(!da);
     /* DA allocated + our ref count on it. */
     BUG_ON(atomic_read(&da->ref_cnt) < 2);
-    castle_da_lock(da);
+    write_lock(&da->lock);
     da->attachment_cnt--;
-    castle_da_unlock(da);
+    write_unlock(&da->lock);
     /* Put the ref cnt too. */
     castle_da_put(da);
 }
