@@ -56,6 +56,12 @@ struct castle_back_op;
 #define CASTLE_BACK_CONN_NOTIFY_BIT         (1)
 #define CASTLE_BACK_CONN_NOTIFY_FLAG        (1 << CASTLE_BACK_CONN_NOTIFY_BIT)
 
+struct
+{
+    int                     num;                /**< Size of cpus array.                        */
+    int                    *cpus;               /**< Array of CPU ids for handling requests.    */
+} request_cpus;
+
 struct castle_back_conn 
 {
     unsigned long           flags;
@@ -2465,37 +2471,59 @@ static int castle_back_get_stateful_op_cpu(struct castle_back_conn *conn,
     return stateful_op->cpu;
 }
 
+/**
+ * Return hash of okey length key_len.
+ */
+static inline int castle_back_okey_hash(c_vl_okey_t *okey, uint32_t key_len)
+{
+    return murmur_hash_32(okey, key_len, (uint32_t)0xDA82B27204D27F7);
+}
+
+/**
+ * Hash okey and return CPU id to queue request on.
+ *
+ * @return  id of CPU
+ */
+static inline int castle_back_request_cpu(c_vl_okey_t *okey, uint32_t key_len)
+{
+    return request_cpus.cpus[castle_back_okey_hash(okey, key_len) % request_cpus.num];
+}
+
+/**
+ * Queue request on key-hash specified CPU with appropriate op function.
+ *
+ * - Hash okey and select appropriate CPU to queue request onto
+ * - Stateful ops maintain CPU affinity
+ */
 static void castle_back_request_process(struct castle_back_conn *conn, struct castle_back_op *op)
 {
-    /*
-     * This adds ops to castle_back_wq using round-robin scheduling. Stateful ops are
-     * assigned their own CPU that all subsequent ops for that stateful op must use.
-     */
-
     debug("Got a request call=%d tag=%d\n", op->req.call_id, op->req.tag);
-
-    op->cpu = conn->cpu;
 
     switch (op->req.tag)
     {
         case CASTLE_RING_REMOVE:
             INIT_WORK(&op->work, castle_back_remove, op);
-            queue_work_on(conn->cpu, castle_back_wq, &op->work);
+            op->cpu = castle_back_request_cpu(op->req.remove.key_ptr, op->req.remove.key_len);
+            queue_work_on(op->cpu, castle_back_wq, &op->work);
             break;
        
         case CASTLE_RING_REPLACE:
             INIT_WORK(&op->work, castle_back_replace, op);
-            queue_work_on(conn->cpu, castle_back_wq, &op->work);
+            op->cpu = castle_back_request_cpu(op->req.replace.key_ptr, op->req.replace.key_len);
+            queue_work_on(op->cpu, castle_back_wq, &op->work);
             break;
 
         case CASTLE_RING_GET:
             INIT_WORK(&op->work, castle_back_get, op);
-            queue_work_on(conn->cpu, castle_back_wq, &op->work);
+            op->cpu = castle_back_request_cpu(op->req.get.key_ptr, op->req.get.key_len);
+            queue_work_on(op->cpu, castle_back_wq, &op->work);
             break;
 
         case CASTLE_RING_ITER_START:
             INIT_WORK(&op->work, castle_back_iter_start, op);
-            queue_work_on(conn->cpu, castle_back_wq, &op->work);
+            op->cpu = castle_back_request_cpu(op->req.iter_start.start_key_ptr,
+                    op->req.iter_start.start_key_len);
+            queue_work_on(op->cpu, castle_back_wq, &op->work);
             break;
 
         case CASTLE_RING_ITER_NEXT:
@@ -2514,7 +2542,8 @@ static void castle_back_request_process(struct castle_back_conn *conn, struct ca
 
         case CASTLE_RING_BIG_PUT:
             INIT_WORK(&op->work, castle_back_big_put, op);
-            queue_work_on(conn->cpu, castle_back_wq, &op->work);
+            op->cpu = castle_back_request_cpu(op->req.big_put.key_ptr, op->req.big_put.key_len);
+            queue_work_on(op->cpu, castle_back_wq, &op->work);
             break;
             
         case CASTLE_RING_PUT_CHUNK:
@@ -2526,7 +2555,8 @@ static void castle_back_request_process(struct castle_back_conn *conn, struct ca
 
         case CASTLE_RING_BIG_GET:
             INIT_WORK(&op->work, castle_back_big_get, op);
-            queue_work_on(conn->cpu, castle_back_wq, &op->work);
+            op->cpu = castle_back_request_cpu(op->req.big_get.key_ptr, op->req.big_get.key_len);
+            queue_work_on(op->cpu, castle_back_wq, &op->work);
             break;
 
         case CASTLE_RING_GET_CHUNK:
@@ -2543,12 +2573,12 @@ static void castle_back_request_process(struct castle_back_conn *conn, struct ca
     }
 
     /* increment CPU for next op */
-    do {
+/*    do {
         if (conn->cpu >= NR_CPUS)
             conn->cpu = first_cpu(cpu_online_map);
         else
             conn->cpu = next_cpu(conn->cpu, cpu_online_map);
-    } while (conn->cpu >= NR_CPUS);
+    } while (conn->cpu >= NR_CPUS);*/
 }
 
 /*
@@ -3016,7 +3046,8 @@ err_out:
 
 int castle_back_init(void)
 {
-    int err;
+    int err, cpu;
+
     debug("castle_back initing...");
         
 	castle_back_wq = create_workqueue("castle_back");
@@ -3030,8 +3061,17 @@ int castle_back_init(void)
 	init_waitqueue_head(&conn_close_wait);
 	atomic_set(&conn_count, 0);
 
+    /* Populate request_cpus with CPU ids ready to handle requests. */
+    request_cpus.cpus = castle_malloc(sizeof(int) * num_online_cpus(), GFP_KERNEL);
+    request_cpus.num = 0;
+    for_each_online_cpu(cpu)
+    {
+        request_cpus.cpus[request_cpus.num] = cpu;
+        request_cpus.num++;
+    }
+
 	debug("done!\n");
-	
+
     return 0;
 
     destroy_workqueue(castle_back_wq); /* unreachable */
@@ -3046,6 +3086,8 @@ void castle_back_fini(void)
     /* wait for all connections to be closed */
     debug("castle_back_fini, connection count = %u.\n", atomic_read(&conn_count));
     wait_event(conn_close_wait, (atomic_read(&conn_count) == 0));
+
+    castle_free(request_cpus.cpus);
 
     destroy_workqueue(castle_back_wq);
 
