@@ -3580,7 +3580,7 @@ static struct castle_double_array* castle_da_alloc(da_id_t da_id)
     da->attachment_cnt  = 0;
     atomic_set(&da->ios_waiting_cnt, 0);
     if (castle_da_wait_queue_create(da, NULL) != EXIT_SUCCESS)
-        return NULL;
+        goto err_out;
     atomic_set(&da->ios_budget, 0);
     da->ios_rate        = 0;
     da->last_key        = NULL;
