@@ -4207,36 +4207,59 @@ static int castle_da_rwct_make(struct castle_double_array *da, int cpu_index, in
  */
 static int castle_da_t0_create(struct castle_double_array *da, void *unused)
 {
+    struct list_head *l, *p;
+    LIST_HEAD(list);
+    int cpu_index;
+
     write_lock(&da->lock);
-    if (list_empty(&da->levels[0].trees))
-    {
-        int cpu_index;
-
-        BUG_ON(da->levels[0].nr_trees != 0);
-
-        /* There are no existing CTs at level 0 in this DA.
-         * Create one CT per CPU handling requests. */
-        write_unlock(&da->lock); /* castle_da_rwct_make() gets da lock */
-        for (cpu_index = 0; cpu_index < request_cpus.cnt; cpu_index++)
-        {
-            if (castle_da_rwct_make(da, cpu_index, 1 /* in_tran */) != EXIT_SUCCESS)
-            {
-                printk("Failed to create T0 %d for DA %u\n", cpu_index, da->id);
-                return -EINVAL;
-            }
-        }
-
-        printk("Created %d CTs for DA %u T0\n", cpu_index, da->id);
-
-        return 0;
-    }
-    else
+    /* Early exit if we already have T0s. */
+    if (!list_empty(&da->levels[0].trees))
     {
         BUG_ON(da->levels[0].nr_trees != request_cpus.cnt);
         write_unlock(&da->lock);
+        return 0;
     }
 
+    /* Otherwise, there should be no trees at this level. */
+    BUG_ON(da->levels[0].nr_trees != 0);
+    write_unlock(&da->lock); /* castle_da_rwct_make() gets da lock */
+
+    /* There are no existing CTs at level 0 in this DA.
+     * Create one CT per CPU handling requests. */
+    for (cpu_index = 0; cpu_index < request_cpus.cnt; cpu_index++)
+    {
+        if (castle_da_rwct_make(da, cpu_index, 1 /* in_tran */) != EXIT_SUCCESS)
+        {
+            printk("Failed to create T0 %d for DA %u\n", cpu_index, da->id);
+            goto err_out;
+        }
+    }
+
+    printk("Created %d CTs for DA %u T0\n", cpu_index, da->id);
+
     return 0;
+
+err_out:
+    /* We couldn't create all T0s we need, free the ones we managed to alloc.
+       Remove them frot the da list into our private list first. */
+    write_lock(&da->lock);
+    list_splice_init(&da->levels[0].trees, &list);
+    write_unlock(&da->lock);
+
+    /* Put them all. */
+    list_for_each_safe(l, p, &list)
+    {
+        struct castle_component_tree *ct;
+        list_del(l);
+        /* Nullify the list head. Expected by castle_ct_put. */
+        l->next = NULL;
+        l->prev = NULL;
+        /* Work out the CT, and put it. */
+        ct = list_entry(l, struct castle_component_tree, da_list);
+        castle_ct_put(ct, 0);
+    }
+
+    return -EINVAL;
 }
 
 static int __castle_da_driver_merge_reset(struct castle_double_array *da, void *unused)
