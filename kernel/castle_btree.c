@@ -2574,6 +2574,19 @@ static void castle_btree_c2b_lock(c_bvec_t *c_bvec, c2_block_t *c2b)
 
 }
 
+/**
+ * Queues bvec on the right workqueue, on the right CPU (if one was specified).
+ *
+ * @param c_bvec    Castle bio vec to queue.
+ */
+static void castle_btree_bvec_queue(c_bvec_t *c_bvec)
+{
+    if(c_bvec->cpu >= 0)
+        queue_work_on(c_bvec->cpu, castle_wqs[c_bvec->btree_depth], &c_bvec->work);
+    else
+        queue_work(castle_wqs[c_bvec->btree_depth], &c_bvec->work);
+}
+
 static void castle_btree_submit_io_end(c2_block_t *c2b)
 {
 #ifdef CASTLE_DEBUG    
@@ -2607,7 +2620,7 @@ static void castle_btree_submit_io_end(c2_block_t *c2b)
        A single queue cannot be used, because a request blocked on 
        lock_c2b() would block the entire queue (=> deadlock). */
     CASTLE_INIT_WORK(&c_bvec->work, castle_btree_process);
-    queue_work_on(c_bvec->cpu, castle_wqs[c_bvec->btree_depth], &c_bvec->work);
+    castle_btree_bvec_queue(c_bvec);
 }
 
 static void __castle_btree_submit(c_bvec_t *c_bvec,
@@ -2688,9 +2701,6 @@ static void _castle_btree_submit(struct work_struct *work)
     clear_bit(CBV_PARENT_WRITE_LOCKED, &c_bvec->flags);
     clear_bit(CBV_CHILD_WRITE_LOCKED, &c_bvec->flags);
     clear_bit(CBV_C2B_WRITE_LOCKED, &c_bvec->flags);
-    c_bvec->btree_depth       = 0;
-    c_bvec->btree_node        = NULL;
-    c_bvec->btree_parent_node = NULL;
     /* This will lock the component tree. */
     root_cep = castle_btree_root_get(c_bvec);
     /* Number of levels in the tree can be read safely now */
@@ -2710,7 +2720,10 @@ static void _castle_btree_submit(struct work_struct *work)
  */
 void castle_btree_submit(c_bvec_t *c_bvec)
 {
-    c_bvec->parent_key = NULL;
+    c_bvec->btree_depth       = 0;
+    c_bvec->btree_node        = NULL;
+    c_bvec->btree_parent_node = NULL;
+    c_bvec->parent_key        = NULL;
 
     /* To prevent double walks of the btree (first getting read locks, later
      * getting write locks in case a node-split is required), force the walk to
@@ -2726,7 +2739,7 @@ void castle_btree_submit(c_bvec_t *c_bvec)
         clear_bit(CBV_DOING_SPLITS, &c_bvec->flags);
 
     CASTLE_INIT_WORK(&c_bvec->work, _castle_btree_submit);
-    queue_work_on(c_bvec->cpu, castle_wqs[19], &c_bvec->work);
+    castle_btree_bvec_queue(c_bvec);
 }
 
 /**
@@ -2740,7 +2753,7 @@ void castle_btree_submit(c_bvec_t *c_bvec)
 static void castle_btree_submit_no_clear(c_bvec_t *c_bvec)
 {
     CASTLE_INIT_WORK(&c_bvec->work, _castle_btree_submit);
-    queue_work_on(c_bvec->cpu, castle_wqs[18], &c_bvec->work);
+    castle_btree_bvec_queue(c_bvec);
 }
 
 /**********************************************************************************************/
