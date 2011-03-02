@@ -4101,7 +4101,7 @@ static void castle_cache_hashes_fini(void)
             /* Buffers should not be in use any more (devices do not exist) */
             if((atomic_read(&c2b->count) != 0) || c2b_locked(c2b))
             {
-                printk("cep="cep_fmt_str"not dropped count=%d, locked=%d.\n",
+                printk("cep="cep_fmt_str" not dropped count=%d, locked=%d.\n",
                     cep2str(c2b->cep), atomic_read(&c2b->count), c2b_locked(c2b));
 #ifdef CASTLE_DEBUG
                 if(c2b_locked(c2b))
