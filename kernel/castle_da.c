@@ -3514,7 +3514,7 @@ int castle_double_array_request_cpus(void)
  * @return  EXIT_SUCCESS    Successfully allocated wait queues
  * @return  1               Failed to allocate wait queues
  *
- * @also castle_da_t0_create()
+ * @also castle_da_rwct_create()
  */
 static int castle_da_wait_queue_create(struct castle_double_array *da, void *unused)
 {
@@ -4205,7 +4205,7 @@ static int castle_da_rwct_make(struct castle_double_array *da, int cpu_index, in
  *
  * @also castle_double_array_start()
  */
-static int castle_da_t0_create(struct castle_double_array *da, void *unused)
+static int castle_da_rwct_create(struct castle_double_array *da)
 {
     struct list_head *l, *p;
     LIST_HEAD(list);
@@ -4262,6 +4262,17 @@ err_out:
     return -EINVAL;
 }
 
+/**
+ * Called at start of day from the hash iterator. Tries to allocate RWCTs for a DA.
+ * It ignores errors, and returns 0 in order to continue the iterator.
+ */
+static int castle_da_rwct_init(struct castle_double_array *da, void *unused)
+{
+    castle_da_rwct_create(da);
+
+    return 0;
+}
+
 static int __castle_da_driver_merge_reset(struct castle_double_array *da, void *unused)
 {
     write_lock(&da->lock);
@@ -4281,7 +4292,7 @@ static int __castle_da_driver_merge_reset(struct castle_double_array *da, void *
 int castle_double_array_start(void)
 {
     /* Create T0 for all DAs that don't have them (function acquires lock). */
-    __castle_da_hash_iterate(castle_da_t0_create, NULL);
+    __castle_da_hash_iterate(castle_da_rwct_init, NULL);
 
     /* Reset driver merge for all DAs. */
     castle_da_hash_iterate(__castle_da_driver_merge_reset, NULL);
@@ -4631,7 +4642,7 @@ int castle_double_array_make(da_id_t da_id, version_t root_version)
     da->id = da_id;
     da->root_version = root_version;
     /* Allocate T0s. */
-    ret = castle_da_t0_create(da, NULL);
+    ret = castle_da_rwct_create(da);
     if (ret != EXIT_SUCCESS)
     {
         printk("Exiting from failed ct create.\n");
