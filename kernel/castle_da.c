@@ -3257,9 +3257,9 @@ static int castle_da_merge_run(void *da_p)
         castle_trace_da_merge(TRACE_START, TRACE_DA_MERGE_ID,
                 da->id, level, in_tree1->seq, in_tree2->seq);
 
+        /* Hard-pin T1s in the cache.  Do this before _merge_init() so T0 sort benefits. */
         if (level == 1)
         {
-            /* Hard-pin T1s in the cache. */
             castle_cache_advise((c_ext_pos_t){in_tree1->data_ext_free.ext_id, 0},
                     C2_ADV_EXTENT|C2_ADV_HARDPIN, -1, -1, 0);
             castle_cache_advise((c_ext_pos_t){in_tree2->data_ext_free.ext_id, 0},
@@ -3270,6 +3270,18 @@ static int castle_da_merge_run(void *da_p)
         if(!merge)
         {
             printk("Could not start a merge for DA=%d, level=%d.\n", da->id, level);
+
+            /* Unpin the T1s to prevent a double pin when we retry.
+             * We could flag they're already pinned but 10s is a long time to prevent
+             * data not actively being used from being evicted from the cache. */
+            if (level == 1)
+            {
+                castle_cache_advise_clear((c_ext_pos_t){in_tree1->data_ext_free.ext_id, 0},
+                        C2_ADV_EXTENT|C2_ADV_HARDPIN, -1, -1, 0);
+                castle_cache_advise_clear((c_ext_pos_t){in_tree2->data_ext_free.ext_id, 0},
+                        C2_ADV_EXTENT|C2_ADV_HARDPIN, -1, -1, 0);
+            }
+
             /* Retry after 10s. */
             msleep(10000);
             continue;

@@ -3281,6 +3281,8 @@ static void c2_pref_c2b_destroy(c2_block_t *c2b)
  * @param cep       Extent and offset to pin
  * @param chunks    Number of chunks from cep to pin
  *
+ * WARNING: There must be an accompanying _unpin() call for every _pin().
+ *
  * @also castle_cache_prefetch_unpin()
  */
 static void castle_cache_prefetch_pin(c_ext_pos_t cep, int chunks, int type)
