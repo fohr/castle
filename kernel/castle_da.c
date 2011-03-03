@@ -3491,11 +3491,22 @@ static int castle_da_ct_dec_cmp(struct list_head *l1, struct list_head *l2)
  *
  * @FIXME named wrongly?
  *
+ * @FIXME Currently hashes just the first dimension of the key which will not
+ *        be terribly even in distributing load among the btrees under certain
+ *        circumstances.  This will likely go away when we hash the bkey as part
+ *        of the T0 hash refactoring that is scheduled.
+ *
  * @return  Offset into request_cpus.cpus[]
  */
 int castle_double_array_okey_cpu_index(c_vl_okey_t *okey, uint32_t key_len)
 {
-    return murmur_hash_32(okey, key_len, (uint32_t)0xDA82B27204D27F7) % request_cpus.cnt;
+    if (likely(okey->nr_dims > 0))
+        return murmur_hash_32(okey->dims[0],
+                              okey->dims[0]->length,
+                              (uint32_t)0xDA82B27204D27F7)
+            % request_cpus.cnt;
+    else
+        return 0;
 }
 
 /**
