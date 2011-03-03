@@ -771,6 +771,7 @@ static void castle_bloom_index_read(c_bvec_t *c_bvec)
     c_ext_pos_t btree_nodes_cep;
     c2_block_t **btree_nodes_c2bs;
     uint32_t i;
+    uint32_t num_btree_nodes;
 
     bf = &c_bvec->tree->bloom;
     BUG_ON(bf->num_btree_nodes == 0);
@@ -778,7 +779,12 @@ static void castle_bloom_index_read(c_bvec_t *c_bvec)
     btree_nodes_cep.ext_id = bf->ext_id;
     btree_nodes_cep.offset = 0;
 
-    btree_nodes_c2bs = castle_malloc(sizeof(c2_block_t*) * bf->num_btree_nodes, GFP_KERNEL);
+    /* We need a local copy of this because at the end we've put the ct
+     * so bf may have been freed.
+     */
+    num_btree_nodes = bf->num_btree_nodes;
+
+    btree_nodes_c2bs = castle_malloc(sizeof(c2_block_t*) * num_btree_nodes, GFP_KERNEL);
     if (!btree_nodes_c2bs)
     {
         printk("Failed to alloc btree_nodes_c2bs.\n");
@@ -786,10 +792,10 @@ static void castle_bloom_index_read(c_bvec_t *c_bvec)
         return;
     }
 
-    for (i = 0; i < bf->num_btree_nodes; i++)
+    for (i = 0; i < num_btree_nodes; i++)
     {
         btree_nodes_c2bs[i] = castle_cache_block_get(btree_nodes_cep,
-                                             bf->num_btree_nodes * BLOOM_INDEX_NODE_SIZE_PAGES);
+                num_btree_nodes * BLOOM_INDEX_NODE_SIZE_PAGES);
 
         if (!c2b_uptodate(btree_nodes_c2bs[i]))
         {
@@ -812,7 +818,9 @@ static void castle_bloom_index_read(c_bvec_t *c_bvec)
 
     castle_bloom_index_process(c_bvec, btree_nodes_c2bs);
 
-    for (i = 0; i < bf->num_btree_nodes; i++)
+    /* now the ct may have been put so accessing bf is unsafe */
+
+    for (i = 0; i < num_btree_nodes; i++)
         put_c2b(btree_nodes_c2bs[i]);
 
     castle_free(btree_nodes_c2bs);
