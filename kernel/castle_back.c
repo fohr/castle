@@ -86,17 +86,17 @@ struct castle_back_conn
     struct work_struct               timeout_check_work;
         
     /* details of the shared buffers */
-    spinlock_t                       buffers_lock;
-    struct rb_root                   buffers_rb; /* red-black tree of castle_back_buffers */
+    rwlock_t                         buffers_lock;  /**< Protects buffers_rb                */
+    struct rb_root                   buffers_rb;    /**< RB tree for castle_back_buffers    */
 };
 
 struct castle_back_buffer
 {
     struct rb_node     rb_node;
-    unsigned long      user_addr; /* address in user process TODO should this be a void*? */
+    unsigned long      user_addr;   /**< Userland address (@TODO should this be void*?)     */
     uint32_t           size;
-    uint32_t           ref_count;
-    void              *buffer; /* pointer to buffer in kernel address space */
+    atomic_t           ref_count;   /**< Ref count                                          */
+    void              *buffer;      /**< Pointer to buffer in kernel address space          */
 };
 
 struct castle_back_op
@@ -270,13 +270,22 @@ static USED void castle_back_print_page(char *buff, int length)
 #define castle_back_user_addr_in_buffer(__buffer, __user_addr) \
     ((unsigned long) __user_addr < (__buffer->user_addr + __buffer->size))
 
+/**
+ * Return whether a buffer satisfying start-end exists in conn's RB tree.
+ *
+ * NOTE: Caller must hold a read-lock on the conn's buffers_lock.
+ *
+ * NOTE: See comment for __castle_back_buffer_get() regarding potential race.
+ *
+ * @also __castle_back_buffer_get()
+ */
 static inline int __castle_back_buffer_exists(struct castle_back_conn *conn,
                                               unsigned long start, unsigned long end)
 {
     struct castle_back_buffer *buffer;
     struct rb_node *node;
 
-    BUG_ON(!spin_is_locked(&conn->buffers_lock));
+    BUG_ON(!read_can_lock(&conn->buffers_lock)); /* not quite an 'is read locked' test */
 
     node = conn->buffers_rb.rb_node;
 
@@ -293,20 +302,42 @@ static inline int __castle_back_buffer_exists(struct castle_back_conn *conn,
             node = node->rb_right;
         else
         {
-            return 1; /* Found buffer between start and end */
+            /* Found a matching buffer.
+             *
+             * It's only valid if it has a non-zero ref_count. */
+            if (atomic_read(&buffer->ref_count) > 0)
+                return 1; /* Found buffer between start and end */
+            else
+                return 0;
         }
     }
 
     return 0;
 }
 
+/**
+ * Look up buffer matching user_addr in conn's RB tree.
+ *
+ * @param conn      Connection to search for user buffers
+ * @param user_addr Userland buffer address to find
+ *
+ * NOTE: Caller must hold a read-lock on the conn's buffers_lock.
+ *
+ * NOTE: Because we hold a read-lock we could potentially race with a thread
+ *       calling castle_back_buffer_put() who has decremented a buffer's
+ *       reference count to 0.  If we come across a matching buffer in the tree
+ *       with a 0 ref_count, pretend we never saw it.
+ *
+ * @also castle_back_buffer_get()
+ * @also castle_back_buffer_put()
+ */
 static inline struct castle_back_buffer *__castle_back_buffer_get(struct castle_back_conn *conn,
                                                                   unsigned long user_addr)
 {
     struct rb_node *node;
     struct castle_back_buffer *buffer;
 
-    BUG_ON(!spin_is_locked(&conn->buffers_lock));
+    BUG_ON(!read_can_lock(&conn->buffers_lock)); /* not quite an 'is read locked' test */
 
     node = conn->buffers_rb.rb_node;
 
@@ -323,49 +354,72 @@ static inline struct castle_back_buffer *__castle_back_buffer_get(struct castle_
             node = node->rb_right;
         else
         {
-            buffer->ref_count++;
-            debug("__castle_back_buffer_get ref_count is now %d\n", buffer->ref_count);
-            return buffer;
+            /* We found a matching buffer.
+             * If it's ref_count is 0 then ignore it, otherwise increment by 1
+             * and return it to the caller. */
+            if (atomic_add_unless(&buffer->ref_count, 1, 0))
+            {
+                debug("__castle_back_buffer_get ref_count is now %d\n",
+                        atomic_read(&buffer->ref_count));
+                return buffer;
+            }
+            else
+                return NULL;
         }
     }
     
     return NULL;
 }
 
+/**
+ * Look up buffer matching user_addr in conn's RB tree.
+ *
+ * - Hold a read-lock on conn->buffers_lock to prevent the tree changing beneath
+ *   us during our search
+ *
+ * @also __castle_back_buffer_get()
+ */
 static inline struct castle_back_buffer *castle_back_buffer_get(struct castle_back_conn *conn,
                                                                 unsigned long user_addr)
 {
     struct castle_back_buffer *buffer;
-    
-    spin_lock(&conn->buffers_lock);
+
+    read_lock(&conn->buffers_lock);
     buffer = __castle_back_buffer_get(conn, user_addr);
-    spin_unlock(&conn->buffers_lock);
+    read_unlock(&conn->buffers_lock);
     
     return buffer;
 }
 
+/**
+ * Put a reference to one of conn's buffers (buf), freeing it if necessary.
+ *
+ * NOTE: See comment for __castle_back_buffer_get() regarding potential race.
+ *
+ * @also __castle_back_buffer_get()
+ */
 static void castle_back_buffer_put(struct castle_back_conn *conn,
                                    struct castle_back_buffer *buf)
 {
-    spin_lock(&conn->buffers_lock);
-    
-    debug("castle_back_buffer_put ref_count=%i, buf=%p\n", buf->ref_count, buf);
+    int use_cnt;
 
-    buf->ref_count--;
-    /* remove buffer from rb tree so no-one else can find it
-       this allows us to free it outside the lock */
-    if (buf->ref_count <= 0)
-        rb_erase(&buf->rb_node, &conn->buffers_rb);
+    use_cnt = atomic_sub_return(1, &buf->ref_count);
+    debug("castle_back_buffer_put ref_count=%i, buf=%p\n", use_cnt, buf);
 
-    debug("castle_back_buffer_put ref_count=%i, buf=%p\n", buf->ref_count, buf);
-
-    spin_unlock(&conn->buffers_lock);
-    
-    if (buf->ref_count > 0)
+    if (use_cnt > 0)
+        /* Other references exist, return now. */
         return;
-        
-    debug("Freeing buffer %lx\n", buf->user_addr);
-    
+
+    /* We just put the last reference.
+     *
+     * Hold the write lock while removing it from the RB-tree.  Once removed we
+     * are safe to free it lock-free. */
+    write_lock(&conn->buffers_lock);
+    rb_erase(&buf->rb_node, &conn->buffers_rb);
+    write_unlock(&conn->buffers_lock);
+
+    debug("castle_back_buffer_put freeing buffer %lx\n", buf->user_addr);
+
     UnReservePages(buf->buffer, buf->size);
     castle_vfree(buf->buffer);
     castle_free(buf);
@@ -380,7 +434,7 @@ static inline struct castle_back_buffer
     struct rb_node *parent = NULL;
     struct castle_back_buffer *buffer;
 
-    BUG_ON(!spin_is_locked(&conn->buffers_lock));
+    BUG_ON(read_can_lock(&conn->buffers_lock)); /* can't be write-locked if readers can lock */
     p = &conn->buffers_rb.rb_node;
 
     while (*p)
@@ -785,9 +839,7 @@ static void castle_back_vm_open(struct vm_area_struct *vma)
     debug("castle_back_vm_open buf=%p, size=%d, vm_start=%lx, vm_end=%lx\n", 
         buf, buf->size, vma->vm_start, vma->vm_end);
     
-    spin_lock(&conn->buffers_lock);
-    buf->ref_count++;
-    spin_unlock(&conn->buffers_lock);
+    atomic_inc(&buf->ref_count);
     
     castle_back_buffer_put(conn, buf);
 }
@@ -2756,7 +2808,7 @@ int castle_back_open(struct inode *inode, struct file *file)
     
     init_waitqueue_head(&conn->wait);
     spin_lock_init(&conn->response_lock);
-    spin_lock_init(&conn->buffers_lock);
+    rwlock_init(&conn->buffers_lock);
     spin_lock_init(&conn->restart_timer_lock);
     conn->buffers_rb = RB_ROOT;
 
@@ -2992,7 +3044,7 @@ static int castle_buffer_map(struct castle_back_conn *conn, struct vm_area_struc
 
     buffer->user_addr = vma->vm_start;
     buffer->size = size;
-    buffer->ref_count = 1;
+    atomic_set(&buffer->ref_count, 1);
     buffer->buffer = castle_vmalloc(size);
     if (!buffer->buffer)
     {
@@ -3005,15 +3057,15 @@ static int castle_buffer_map(struct castle_back_conn *conn, struct vm_area_struc
      * Add entry to our rb tree so we can find the buffer later 
      * there is only one mmap at once, so no worries about concurrency here
      */
-    spin_lock(&conn->buffers_lock);
+    read_lock(&conn->buffers_lock);
     if (__castle_back_buffer_exists(conn, vma->vm_start, vma->vm_end))
     {
-        spin_unlock(&conn->buffers_lock);
+        read_unlock(&conn->buffers_lock);
         error("castle_back: mapping exists!\n");
         err = -EEXIST;
         goto err3;
     } 
-    spin_unlock(&conn->buffers_lock);
+    read_unlock(&conn->buffers_lock);
 
     ReservePages(buffer->buffer, size);
     
@@ -3026,9 +3078,9 @@ static int castle_buffer_map(struct castle_back_conn *conn, struct vm_area_struc
         goto err4;
     }
      
-    spin_lock(&conn->buffers_lock);
+    write_lock(&conn->buffers_lock);
     BUG_ON(castle_back_buffers_rb_insert(conn, vma->vm_start, &buffer->rb_node) != NULL);   
-    spin_unlock(&conn->buffers_lock);
+    write_unlock(&conn->buffers_lock);
         
     debug("Create shared buffer kernel=%p, user=%lx, size=%u\n", 
         buffer->buffer, buffer->user_addr, buffer->size);
