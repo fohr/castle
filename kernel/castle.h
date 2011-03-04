@@ -124,7 +124,7 @@ typedef uint32_t block_t;
 /* Size of special(or logical) extents [in chunks] */
 #define SUP_EXT_SIZE                   (30)  /* 2-RDA. Occupies double the space */
 #define MICRO_EXT_START                (60)
-#define MICRO_EXT_SIZE                 (1)   /* Dont change this */
+#define MICRO_EXT_SIZE                 (1)   /* Don't change this */
 #define META_SPACE_SIZE                (300)
 #define MSTORE_SPACE_SIZE              (50)
 #define FREE_SPACE_START               (100) 
@@ -682,6 +682,9 @@ struct castle_clist_entry {
     /*        512 */
 } PACKED;
 
+/**
+ * Ondisk Serialized structure for castle versions.  
+ */
 struct castle_vlist_entry {
     /* align:   8 */
     /* offset:  0 */ version_t    version_nr;
@@ -689,7 +692,8 @@ struct castle_vlist_entry {
     /*          8 */ da_id_t      da_id;
     /*         12 */ uint8_t      _pad[4];
     /*         16 */ uint64_t     size;
-    /*         24 */ uint8_t      _unused[232]; 
+    /*         24 */ uint64_t     flags;    /**< Flags for version LEAF & DELETED. */
+    /*         32 */ uint8_t      _unused[224]; 
     /*        256 */ 
 } PACKED;
 
@@ -851,7 +855,7 @@ typedef void (*castle_iterator_next_t)    (void *iter,
                                            void **key_p, 
                                            version_t *version_p, 
                                            c_val_tup_t *cvt_p);
-/* skip - set the low level iterator to skip to the key, but dont run lower
+/* skip - set the low level iterator to skip to the key, but don't run lower
  *        level iterator. It shouldn't block */
 typedef void (*castle_iterator_skip_t)    (void *iter,
                                            void *key);
@@ -1430,4 +1434,13 @@ struct castle_double_array {
 
 extern int castle_latest_key;
 
+/**
+ * State for Snapshot delete. Gets reset for each new key on the merge stream. 
+ */
+struct castle_version_delete_state {
+    char                         *occupied;         /**< v'th bit set if key exists for version v. */
+    char                         *need_parent;      /**< v'th bit set if version v depends on parent for the current key. */
+    struct list_head             *next_deleted;     /**< Next version in list of reverse DFS order of deleted versions. */
+    int                           last_version;     /**< last version that is created before starting the merge. */
+};
 #endif /* __CASTLE_H__ */

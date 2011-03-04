@@ -181,6 +181,17 @@ static inline void _prefix##_rhash_remove(_struct *v)                           
     write_unlock_irqrestore(&_prefix##_hash_lock, flags);                            \
 }                                                                                    \
 
+/**
+ * list_for_each_from - iterate over list of given type from the current point
+ * @from:   curren point to start from
+ * @pos:	the &struct list_head to use as a loop cursor.
+ * @head:	the head for your list.
+ *
+ * Iterate over list of given type, continuing from current position.
+ */
+#define list_for_each_from(from, pos, head)                    \
+	for (pos = (from); prefetch(pos->next), pos != (head); pos = pos->next)
+
 static inline uint32_t BUF_L_GET(const char *buf)
 {
     __be32 word;

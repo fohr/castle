@@ -7,7 +7,7 @@
 #include <sys/time.h>
 #endif
 
-#define CASTLE_PROTOCOL_VERSION 5
+#define CASTLE_PROTOCOL_VERSION 6
 
 #define PACKED               __attribute__((packed))
 
@@ -204,9 +204,14 @@ typedef struct castle_control_cmd_create {
     version_t id;              /* OUT */
 } cctrl_cmd_create_t;
 
+enum {
+    CASTLE_DESTROY_TREE = 0,
+    CASTLE_DESTROY_VERSION = 1,
+};
 typedef struct castle_control_cmd_destroy {
-    version_t version;         /* IN */
-    int       ret;             /* OUT */
+    version_t   version;         /* IN */
+    int         flag;            /* IN */
+    int         ret;             /* OUT */
 } cctrl_cmd_destroy_t;
 
 typedef struct castle_control_cmd_clone {

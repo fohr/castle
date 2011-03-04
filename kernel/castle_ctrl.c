@@ -217,6 +217,14 @@ void castle_control_clone(version_t version, int *ret, version_t *clone)
         *ret   = -EINVAL;
         return;
     }
+
+    if (castle_version_deleted(version))
+    {
+        printk("Version is already marked for deletion. Can't clone it.\n");
+        *clone = 0;
+        *ret = -EINVAL;
+        return;
+    }
     
     /* Try to create a new version in the version tree */
     version = castle_version_new(0,        /* clone */ 
@@ -389,6 +397,13 @@ void castle_control_collection_attach(version_t          version,
 
     BUG_ON(strlen(name) > MAX_NAME_SIZE);
 
+    if (castle_version_deleted(version))
+    {
+        printk("Version is already marked for deletion. Can't be deleted\n");
+        *ret = -EINVAL;
+        return;
+    }
+
     ca = castle_collection_init(version, name);
     if(!ca)
     {
@@ -463,7 +478,31 @@ void castle_control_collection_snapshot(collection_id_t collection,
     castle_events_collection_snapshot(ver, ca->col.id);
     castle_attachment_put(ca);
 }
-            
+
+/**
+ * Marks a version for delete. Attached version couldn't be marked for deletion.
+ * Data gets deleted during merges (or occassional compaction).
+ *
+ * @param version [in] Version to delete.
+ * @param ret [out] Returns non-zero on failure.
+ *
+ * @see castle_control_destroy
+ */
+void castle_control_collection_snapshot_delete(version_t version,
+                                               int *ret)
+{
+    if (castle_version_attached(version))
+    {
+        printk("Version %d is attached. Couldn't be deleted.\n", version);
+        *ret = -EINVAL;
+        return;
+    }
+
+    *ret = castle_version_delete(version);
+
+    return;
+}
+
 void castle_control_set_target(slave_uuid_t slave_uuid, int value, int *ret)
 {
     struct castle_slave *slave = castle_slave_find_by_uuid(slave_uuid);
@@ -692,16 +731,27 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
                                     &ioctl.collection_snapshot.ret,
                                     &ioctl.collection_snapshot.version);
             break;
-
         case CASTLE_CTRL_CREATE:
             castle_control_create( ioctl.create.size,
                                   &ioctl.create.ret,
                                   &ioctl.create.id);
             break;
         case CASTLE_CTRL_DESTROY:
-            castle_control_destroy( ioctl.destroy.version,
-                                   &ioctl.destroy.ret);
+            if (ioctl.destroy.flag == CASTLE_DESTROY_TREE)
+                castle_control_destroy(ioctl.destroy.version,
+                                      &ioctl.destroy.ret);
+            else if (ioctl.destroy.flag == CASTLE_DESTROY_VERSION)
+                castle_control_collection_snapshot_delete(ioctl.destroy.version,
+                                                         &ioctl.destroy.ret);
+            else
+            {
+                printk("Flag for destroy is none of version[0]/tree[1]\n");
+                err = -ENOSYS;
+                goto err;
+            }
+
             break;
+
         case CASTLE_CTRL_CLONE:
             castle_control_clone( ioctl.clone.version,
                                  &ioctl.clone.ret,

@@ -657,7 +657,7 @@ static int castle_slave_superblock_validate(struct castle_slave_superblock *cs_s
     if(!(cs_sb->pub.flags & CASTLE_SLAVE_NEWDEV) && (cs_sb->fs_version == 0))
         return -5;
 
-    /* Dont check checksum for new device. */
+    /* Don't check checksum for new device. */
     if((cs_sb->pub.flags & CASTLE_SLAVE_NEWDEV) && (cs_sb->pub.checksum == 0))
         return 0;
 

@@ -560,7 +560,7 @@ error_out:
 void castle_extents_fini(void)
 {
     /* Make sure cache flushed all dirty pages */
-    /* Iterate over extents hash with exclusive access. Indeed, we dont need a
+    /* Iterate over extents hash with exclusive access. Indeed, we don't need a
      * lock here as this happenes in the module end. */
     castle_extents_hash_iterate_exclusive(castle_extent_hash_remove, NULL);
     castle_free(castle_extents_hash);
@@ -1080,7 +1080,7 @@ void _castle_extent_free(c_ext_t *ext)
 
     if (atomic_read(&ext->obj_refs))
     {
-        printk("Couldnt delete the referenced extent %llu\n", ext_id);
+        printk("Couldn't delete the referenced extent %llu\n", ext_id);
         return;
     }
 

@@ -31,14 +31,20 @@ static          LIST_HEAD(castle_versions_init_list);
 static version_t          castle_versions_last   = INVAL_VERSION;
 static c_mstore_t        *castle_versions_mstore = NULL;
 
+LIST_HEAD(castle_versions_deleted);
+atomic_t                  castle_versions_nr_deleted = ATOMIC(0);
+
 #define CV_INITED_BIT             (0)
 #define CV_INITED_MASK            (1 << CV_INITED_BIT)
 #define CV_ATTACHED_BIT           (1)
 #define CV_ATTACHED_MASK          (1 << CV_ATTACHED_BIT)
-#define CV_SNAP_BIT               (2)
-#define CV_SNAP_MASK              (1 << CV_SNAP_BIT)
-#define CV_FTREE_LOCKED_BIT       (3)
-#define CV_FTREE_LOCKED_MASK      (1 << CV_FTREE_LOCKED_BIT)
+#define CV_DELETED_BIT            (2)
+#define CV_DELETED_MASK           (1 << CV_DELETED_BIT)
+/* If a version has no children or if all children are marked as deleted, then
+ * it is marked as leaf. */
+#define CV_LEAF_BIT               (3)
+#define CV_LEAF_MASK              (1 << CV_LEAF_BIT)
+
 struct castle_version {
     /* Various tree links */
     version_t                  version;
@@ -59,6 +65,7 @@ struct castle_version {
     struct list_head hash_list; 
     unsigned long    flags;
     struct list_head init_list;
+    struct list_head del_list;
 };
 
 DEFINE_HASH_TBL(castle_versions, castle_versions_hash, CASTLE_VERSIONS_HASH_SIZE, struct castle_version, hash_list, version_t, version);
@@ -85,13 +92,270 @@ static void castle_versions_init_add(struct castle_version *v)
 
 version_t castle_version_max_get(void)
 {
-    return castle_versions_last + 1;
+    int last;
+
+    read_lock_irq(&castle_versions_hash_lock);
+    last = castle_versions_last + 1;
+    read_unlock_irq(&castle_versions_hash_lock);
+
+    return last;
 }
 
 static void castle_versions_drop(struct castle_version *p);
 static int castle_version_writeback(struct castle_version *v, void *unused);
 
-static struct castle_version * castle_version_delete(struct castle_version *v)
+int castle_version_attached(version_t version)
+{
+    struct castle_version *v;
+
+    v = castle_versions_hash_get(version);
+    if(!v)
+        return -EINVAL;
+
+    return test_bit(CV_ATTACHED_BIT, &v->flags);
+}
+
+int castle_version_deleted(version_t version)
+{
+    struct castle_version *v;
+
+    v = castle_versions_hash_get(version);
+    if(!v)
+        return -EINVAL;
+
+    return test_bit(CV_DELETED_BIT, &v->flags);
+}
+
+int castle_version_is_leaf(version_t version)
+{
+    struct castle_version *v;
+
+    v = castle_versions_hash_get(version);
+    if(!v)
+        return -EINVAL;
+
+    return test_bit(CV_LEAF_BIT, &v->flags);
+}
+
+/**
+ * Determines whether the version v depends on its parent for the current key. 
+ *
+ * @param v [in] version to be determined
+ * @param state [in] state of snapshot delete for current key
+ *
+ * @return 1 if v depends on parent
+ */
+static int castle_version_needs_parent(struct castle_version *v, struct castle_version_delete_state *state)
+{
+    struct castle_version *w;
+
+    /* If version is occupied (key exists in the version), not dependent on parent. */
+    if (test_bit(v->version, state->occupied))
+        return 0;
+
+    /* Version is not occupied. */
+    /* Version is not marked for deletion, dependent on parent. */
+    if (!test_bit(CV_DELETED_BIT, &v->flags))
+        return 1;
+
+    /* Not occupied and Marked for deletion. */
+    /* Marked as leaf, no more live descendents; just respond from here. */
+    if (test_bit(CV_LEAF_BIT, &v->flags))
+        return 0;
+
+    /* Check if there is a child that has dependency on parent. Even if one child
+     * is dependent on parent, keep the parent alive. */
+    for (w=v->first_child; w; w=w->next_sybling)
+    {
+        version_t ver_id = w->version;
+
+        if (test_bit(ver_id, state->occupied))
+            continue;
+
+        if (!test_bit(CV_DELETED_BIT, &w->flags) || test_bit(ver_id, state->need_parent))
+            return 1;
+    }
+
+    return 0;
+}
+
+/**
+ * Determines if any strictly descendant version depends on the current version (all, 
+ * for the particular key being processed at the moment). Assumption is that occupied 
+ * bit is valid for all versions. But, need_parent bit is valid only for deleted versions. 
+ * For other versions, need_parent doesnt represent any thing.
+ *
+ * @param state [in] state of the snapshot delete for current key
+ * @param version [in] version of the current entry
+ *
+ * @return 1 if, version is deletable. 
+ */
+int castle_version_is_deletable(struct castle_version_delete_state *state, version_t version)
+{
+    struct castle_version *cur_v = NULL, *w;
+    struct list_head *list;
+    int ret = 1;
+
+    /* Set occupied bit for this version. Merge is single-threaded and runs on
+     * same processor. No need of set_bit. */
+    BUG_ON(version >= state->last_version);
+    __set_bit(version, state->occupied);
+
+    read_lock_irq(&castle_versions_hash_lock);
+
+    cur_v = __castle_versions_hash_get(version);
+    BUG_ON(!cur_v);
+
+    /* Version is not deleted, keep the entry. */
+    if (!test_bit(CV_DELETED_BIT, &cur_v->flags))
+    {
+        ret = 0;
+        goto out;
+    }
+
+    /* If the version is marked as LEAF, it is safe to delete the entry. No need to
+     * calculate need_parent bit(f-value) for this version now. */
+    if (test_bit(CV_LEAF_BIT, &cur_v->flags))
+        goto out;
+
+    if (state->next_deleted == NULL)
+        state->next_deleted = castle_versions_deleted.next;
+
+    /* Go through all deleted versions in reverse-DFS order until the current version. */
+    list_for_each_from(state->next_deleted, list, &castle_versions_deleted)
+    {
+        struct castle_version *del_v = list_entry(list, struct castle_version, del_list);
+
+        /* dont look at versions created after merge started. */
+        if (del_v->version > state->last_version)
+            continue;
+
+        if (del_v->o_order < cur_v->o_order)
+            break;
+
+        BUG_ON(!test_bit(CV_DELETED_BIT, &del_v->flags));
+
+        if (castle_version_needs_parent(del_v, state))
+        {
+            if (del_v->version >= state->last_version)
+            {
+                printk("del_v: %p, state: %p, v1: %d, v2: %d\n",
+                        del_v, state, del_v->version, state->last_version);
+                BUG_ON(1);
+            }
+
+            __set_bit(del_v->version, state->need_parent);
+        }
+    }
+    state->next_deleted = list;
+   
+    /* Check the version required by childs. For undeleted childs, dont look
+     * at need_parent bit (its not calculated for them). */
+    for (w=cur_v->first_child; w; w=w->next_sybling)
+    {
+        if (test_bit(w->version, state->occupied))
+            continue;
+
+        if (!test_bit(CV_DELETED_BIT, &w->flags) || 
+                test_bit(w->version, state->need_parent))
+        {
+            ret = 0;
+            goto out;
+        }
+    }
+
+out:
+    read_unlock_irq(&castle_versions_hash_lock);
+
+    return ret;
+}
+
+/**
+ * Mark the version for deletion. Data gets deleted while doing merges. 
+ *
+ * @param version [in] version to be deleted
+ *
+ * @return non-zero if version couldn't be deleted
+ */
+int castle_version_delete(version_t version)
+{
+    struct castle_version *v, *p, *sybling;
+    struct list_head *pos;
+
+    write_lock_irq(&castle_versions_hash_lock);
+
+    v = __castle_versions_hash_get(version);
+    if(!v)
+        return -EINVAL;
+
+    /* Sanity check flags. */
+    BUG_ON(test_bit(CV_ATTACHED_BIT, &v->flags));
+    BUG_ON(!test_bit(CV_INITED_BIT, &v->flags));
+
+    if(test_and_set_bit(CV_DELETED_BIT, &v->flags))
+        return -EAGAIN;
+
+    /* Add to list of deleted versions in reverse-DFS order. */
+    list_for_each(pos, &castle_versions_deleted)
+    {
+        struct castle_version *d = list_entry(pos, struct castle_version, del_list);
+
+        if (d->o_order < v->o_order)
+            break;
+
+        BUG_ON(d->o_order == v->o_order);
+    }
+    list_add_tail(&v->del_list, pos);
+    atomic_inc(&castle_versions_nr_deleted);
+
+    printk("Marked version %d for deletion\n", version);
+
+    /* Check if ancestors can be marked as leaf. Go upto root. */
+    while(v->version != 0)
+    {
+        p = v->parent;
+
+        /* Check if version P can be marked as leaf. */
+        for (sybling = p->first_child; sybling; sybling = sybling->next_sybling)
+        {
+            /* Don't mark P as leaf if any of the children are non-leafs or
+             * alive. */
+            if (!test_bit(CV_LEAF_BIT, &sybling->flags) || !test_bit(CV_DELETED_BIT, &sybling->flags))
+            {
+                debug("Version %d is still parent of %d\n", p->version, sybling->version);
+                break;
+            }
+        }
+ 
+        /* If all children are leafs and marked for deletion mark P as leaf. */
+        if (!sybling)
+        {
+            printk("Marking verion %d as leaf\n", p->version);
+            set_bit(CV_LEAF_BIT, &p->flags);
+        }
+        else
+            break;
+
+        /* Check the parent also. */
+        v = p;
+    }
+
+    write_unlock_irq(&castle_versions_hash_lock);
+
+    castle_sysfs_version_del(version);
+
+    return 0;
+}
+
+/** 
+ * Delete a version from version tree. Only possible, while deleting complete
+ * collection. 
+ *
+ * @param v [in] delete structure for version v from version tree.
+ *
+ * @return parent of version v.
+ * */
+static struct castle_version * castle_version_subtree_delete(struct castle_version *v)
 {
     struct castle_version *parent;
 
@@ -116,6 +380,14 @@ static struct castle_version * castle_version_delete(struct castle_version *v)
     return parent;
 }
 
+/** 
+ * Delete the complete version subtree from the tree. Can be done only while
+ * deleting complete collection. 
+ * 
+ * @param version [in] delete version sub-tree with root version from version tree.
+ *
+ * @return non-zero if, failed to destroy version sub-tree.
+ */
 int castle_version_tree_delete(version_t version)
 {
     struct castle_version *v, *cur;
@@ -143,9 +415,9 @@ int castle_version_tree_delete(version_t version)
             if (cur == v)
                 done = 1;
 
-            /* Delete version and handle Parent. castle_version_delete()
+            /* Delete version and handle Parent. castle_version_subtree_delete()
              * returns parent of the deleted node. */
-            cur = castle_version_delete(cur);
+            cur = castle_version_subtree_delete(cur);
             if (cur == NULL)
             {
                 ret = -EINVAL;
@@ -258,6 +530,7 @@ static int castle_version_writeback(struct castle_version *v, void *unused)
     mstore_ventry.parent     = (v->parent ? v->parent->version : 0);
     mstore_ventry.size       = v->size;
     mstore_ventry.da_id      = v->da_id;
+    mstore_ventry.flags      = (v->flags & (CV_DELETED_MASK | CV_LEAF_MASK));
 
     read_unlock_irq(&castle_versions_hash_lock);
     castle_mstore_entry_insert(castle_versions_mstore, &mstore_ventry);
@@ -321,12 +594,6 @@ static struct castle_version* castle_version_new_create(int snap_or_clone,
     if(parent_size != 0)
         v->size = parent_size;
     
-    /* Set clone/snap bit in flags */ 
-    if(snap_or_clone)
-        v->flags |= CV_SNAP_MASK;
-    else
-        v->flags &= ~CV_SNAP_MASK;
-
     /* Run processing (which will thread the new version into the tree,
        and recalculate the order numbers) */
     castle_versions_process(); 
@@ -340,6 +607,10 @@ static struct castle_version* castle_version_new_create(int snap_or_clone,
         return NULL;
     }
 
+    /* Set is_leaf bit for the the child and clear for parent. */
+    set_bit(CV_LEAF_BIT, &v->flags);
+    clear_bit(CV_LEAF_BIT, &p->flags);
+
     castle_events_version_create(version);
 
     return v;
@@ -351,7 +622,22 @@ version_t castle_version_new(int snap_or_clone,
                              c_byte_off_t size)
 {
     struct castle_version *v;
+    int is_leaf = castle_version_is_leaf(parent);
     
+    /* Snapshot is not possible on non-leafs. */
+    if (snap_or_clone && !is_leaf)
+    {
+        printk("Couldn't snapshot non-leaf version: %d.\n", parent);
+        return INVAL_VERSION;
+    }
+
+    /* Clone is not possible on leafs. */
+    if (!snap_or_clone && is_leaf)
+    {
+        printk("Couldn't clone leaf versions: %d.\n", parent);
+        return INVAL_VERSION;
+    }
+
     debug("New version: snap_or_clone=%d, parent=%d, size=%lld\n",
             snap_or_clone, parent, size);
     /* Get a new version number */
@@ -500,26 +786,6 @@ process_version:
         p = __castle_versions_hash_get(v->parent_v);
         BUG_ON(!p);
         debug("Processing version: %d, parent: %d\n", v->version, p->version);
-        /* We can only snapshot leaf nodes */ 
-        if((v->flags & CV_SNAP_MASK) &&   /* version is a snapshot    */
-           (p->first_child != NULL))      /* there already is a child */
-        {
-            printk("Warn: ignoring snapshot: %d, parent: %d has a child %d already.\n",
-                    v->version, p->version, p->first_child->version);
-            err = -1;
-            continue;
-        }
-        /* Clones can only be made if the parent isn't attached writeably
-           Which is the same as to say that the parent is a leaf */
-        if(!(v->flags & CV_SNAP_MASK) &&        /* version is a clone */
-            (p->flags & CV_ATTACHED_MASK) &&    /* parent is attached */
-            (p->first_child == NULL))           /* parent is a leaf   */
-        {
-            printk("Warn: ignoring clone: %d, parent: %d is a leaf.\n",
-                    v->version, p->version);
-            err = -2;
-            continue;
-        }
         /* If the parent hasn't been initialised yet, initialise it instead */
         if(!(p->flags & CV_INITED_MASK))
         {
@@ -540,7 +806,9 @@ process_version:
         debug(" Parent initialised, (v,p)=(%d,%d)\n", v->version, p->version);
         /* Insert v at the start of the sybling list. */
         castle_versions_insert(p, v);
-        list_add(&v->init_list, &sysfs_list);
+
+        if (!test_bit(CV_DELETED_BIT, &v->flags))
+            list_add(&v->init_list, &sysfs_list);
 
         /* We are done setting this version up. */
         v->flags |= CV_INITED_MASK;
@@ -719,6 +987,9 @@ int castle_versions_read(void)
             ret = -ENOMEM;
             goto out;
         }
+        else
+            v->flags |= mstore_ventry.flags;
+
         if(VERSION_INVAL(castle_versions_last) || v->version > castle_versions_last)
             castle_versions_last = v->version;
     }

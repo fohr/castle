@@ -18,6 +18,10 @@ version_t    castle_version_new         (int snap_or_clone,
                                          da_id_t da, 
                                          c_byte_off_t size);
 int          castle_version_tree_delete (version_t version);
+int          castle_version_delete      (version_t version);
+int          castle_version_deleted     (version_t version);
+int          castle_version_attached    (version_t version);
+int          castle_version_is_deletable(struct castle_version_delete_state *state, version_t version);
 
 int          castle_versions_read       (void);
 int          castle_versions_init       (void);

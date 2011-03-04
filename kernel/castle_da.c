@@ -164,7 +164,7 @@ static inline void castle_da_deleted_set(struct castle_double_array *da)
  * between failed castle_extent_alloc() and set_bit(FROZEN), consequently we
  * would miss a wake-up cycle. We need two bits to de-couple freezing and
  * un-freezing. Unfreezing just sets a bit. Freezing first checks if some one
- * did a unfreeze, if so dont set freeze and clear unfreeze. 
+ * did a unfreeze, if so don't set freeze and clear unfreeze. 
  *
  * All freeze/unfreeze functions require a hold on da->lock. */
 
@@ -1572,6 +1572,9 @@ struct castle_da_merge {
     c_merged_iter_t              *merged_iter;
     int                           root_depth;
     c2_block_t                   *last_node_c2b;
+    c2_block_t                   *last_leaf_node_c2b; /**< Previous node c2b at depth 0. */
+    void                         *last_key;           /**< last_key added to
+                                                           out tree at depth 0. */
     c_ext_pos_t                   first_node;
     uint16_t                      first_node_size;
     int                           completing;
@@ -1599,6 +1602,9 @@ struct castle_da_merge {
     int                           bloom_exists;
     castle_bloom_t                bloom;
     struct list_head              large_objs;
+
+    struct castle_version_delete_state snapshot_delete; /**< snapshot delete state. */
+
 #ifdef CASTLE_PERF_DEBUG
     u64                           get_c2b_ns;       /**< ns in castle_cache_block_get() */
     u64                           merged_iter_next_ns;
@@ -1612,6 +1618,7 @@ struct castle_da_merge {
 #ifdef CASTLE_DEBUG
     uint8_t                       is_recursion;
 #endif
+    uint32_t                      skipped_count;    /**< num of entries from deleted versions. */
 };
 
 #define MAX_IOS             (1000) /* Arbitrary constants */
@@ -2319,6 +2326,13 @@ static inline void castle_da_entry_add(struct castle_da_merge *merge,
     else
         /* Go to the next node_idx */
         level->next_idx++;
+
+    /* Get the last_key stored in leaf nodes. */
+    if (depth == 0)
+    {
+        merge->last_key = level->last_key;
+        BUG_ON(merge->last_key == NULL);
+    }
 }
 
 static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
@@ -2356,7 +2370,7 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
 
     /* Reset the variables to the correct state for castle_da_entry_add(). */
     level->node_c2b      = NULL;
-    level->last_key      = NULL; 
+    level->last_key      = NULL;
     level->next_idx      = 0;
     level->valid_end_idx = -1;
     level->valid_version = INVAL_VERSION;  
@@ -2404,6 +2418,16 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
 release_node:
     debug("Releasing c2b for cep=" cep_fmt_str_nl, cep2str(node_c2b->cep));
     debug("Completing a node with %d entries at depth %d\n", node->used, depth);
+    /* Hold on to last leaf node for the sake of last_key. No need of lock, this
+     * is a immutable node. */
+    if (depth == 0)
+    {
+        if (merge->last_leaf_node_c2b)
+            put_c2b(merge->last_leaf_node_c2b);
+
+        merge->last_leaf_node_c2b = node_c2b;
+        get_c2b(node_c2b);
+    }
     /* Write the list pointer into the previous node we've completed (if one exists).
        Then release it. */
     prev_node = merge->last_node_c2b ? c2b_bnode(merge->last_node_c2b) : NULL; 
@@ -2672,6 +2696,10 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
     if(!merge)
         return;
 
+    /* Release the last leaf node c2b. */
+    if (merge->last_leaf_node_c2b)
+        put_c2b(merge->last_leaf_node_c2b);
+
     /* Release the last node c2b */
     if(merge->last_node_c2b)
     {
@@ -2681,6 +2709,11 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
     }
     
     /* Free all the buffers */
+    if (merge->snapshot_delete.occupied)
+        castle_free(merge->snapshot_delete.occupied);
+    if (merge->snapshot_delete.need_parent)
+        castle_free(merge->snapshot_delete.need_parent);
+
     for(i=0; i<MAX_BTREE_DEPTH; i++)
     {
         c2_block_t *c2b = merge->levels[i].node_c2b;
@@ -2746,6 +2779,40 @@ static int castle_da_merge_progress_update(struct castle_da_merge *merge, uint32
     return 0;
 }
 
+/**
+ * Determines whether the entry can be deleted, if the version is marked for
+ * deletion. 
+ *
+ * @param merge [in] merge stream that entry comes from
+ * @param key [in] key of the entry
+ * @param version [in] version of the entry
+ *
+ * @return return 1, if the entry needs to be skipped
+ *
+ * @see castle_version_is_deletable
+ */
+static int castle_da_entry_skip(struct castle_da_merge *merge, 
+                                void *key,
+                                version_t version)
+{
+    struct castle_btree_type *btree = merge->out_btree;
+    struct castle_version_delete_state *state = &merge->snapshot_delete;
+    void *last_key = merge->levels[0].last_key;
+
+    /* Compare the keys. If looking at new key then reset data
+     * structures. */
+    if (!last_key || (btree->key_compare(last_key, key) != 0))
+    {
+        int nr_bytes = state->last_version/8 + 1;
+
+        memset(state->occupied, 0, nr_bytes);
+        memset(state->need_parent, 0, nr_bytes);
+        state->next_deleted = NULL;
+    }
+
+    return castle_version_is_deletable(state, version);
+}
+
 static int castle_da_merge_unit_do(struct castle_da_merge *merge, uint32_t unit_nr)
 {
     void *key;
@@ -2767,6 +2834,14 @@ static int castle_da_merge_unit_do(struct castle_da_merge *merge, uint32_t unit_
         debug("Merging entry id=%lld: k=%p, *k=%d, version=%d, cep="cep_fmt_str_nl,
                 i, key, *((uint32_t *)key), version, cep2str(cvt.cep));
         BUG_ON(CVT_INVALID(cvt));
+        /* Check whether we need to skip the entry.
+         * Note: Nothing to be done to delete the skipped keys. They would get
+         * deleted while dropping the component tree. */
+        if (castle_da_entry_skip(merge, key, version))
+        {
+            merge->skipped_count++;
+            goto entry_done;
+        }
         /* Add entry to level 0 node (and recursively up the tree). */
         castle_da_entry_add(merge, 0, key, version, cvt, 0);
         /* Add entry to bloom filter */
@@ -2781,6 +2856,7 @@ static int castle_da_merge_unit_do(struct castle_da_merge *merge, uint32_t unit_
         castle_perf_debug_bump_ctr(merge->nodes_complete_ns, ts_end, ts_start);
         if (ret != EXIT_SUCCESS)
             goto err_out;
+entry_done:            
         castle_perf_debug_getnstimeofday(&ts_start);
         castle_da_merge_budget_consume(merge);
         castle_perf_debug_getnstimeofday(&ts_end);
@@ -3120,6 +3196,9 @@ static inline tree_seq_t castle_da_merge_last_unit_complete(struct castle_double
     CASTLE_TRANSACTION_END;
     castle_da_merge_restart(da, NULL);
 
+    printk("Completed merge at level: %d and deleted %u entries\n",
+            merge->level, merge->skipped_count);
+
     return out_tree_id;
 } 
 
@@ -3158,6 +3237,8 @@ static struct castle_da_merge* castle_da_merge_init(struct castle_double_array *
     merge->in_tree2          = in_tree2;
     merge->root_depth        = -1;
     merge->last_node_c2b     = NULL;
+    merge->last_leaf_node_c2b= NULL;
+    merge->last_key          = NULL;
     merge->first_node        = INVAL_EXT_POS;
     merge->completing        = 0;
     merge->nr_entries        = 0;
@@ -3189,6 +3270,17 @@ static struct castle_da_merge* castle_da_merge_init(struct castle_double_array *
 #ifdef CASTLE_DEBUG
     merge->is_recursion                 = 0;
 #endif
+    merge->skipped_count                = 0;
+    /* Bit-arrays for snapshot delete algorithm. */
+    merge->snapshot_delete.last_version = castle_version_max_get();
+    printk("MERGE Level: %d, #versions: %d\n", level, merge->snapshot_delete.last_version);
+    merge->snapshot_delete.occupied     = castle_malloc(merge->snapshot_delete.last_version / 8 + 1, GFP_KERNEL);
+    if (!merge->snapshot_delete.occupied)
+        goto error_out;
+    merge->snapshot_delete.need_parent  = castle_malloc(merge->snapshot_delete.last_version / 8 + 1, GFP_KERNEL);
+    if (!merge->snapshot_delete.need_parent)
+        goto error_out;
+    merge->snapshot_delete.next_deleted = NULL;
 
     ret = castle_da_iterators_create(merge);
     if(ret)
@@ -4092,7 +4184,7 @@ static int castle_da_tree_writeback(struct castle_double_array *da,
     /* For periodic checkpoints flush component trees onto disk. */
     if (!castle_da_exiting)
     {
-        /* Always writeback Global tree structure but, dont writeback. */
+        /* Always writeback Global tree structure but, don't writeback. */
         /* Note: Global Tree is not Crash-Consistent. */
         if (TREE_GLOBAL(ct->seq))
             goto mstore_writeback;
@@ -4536,6 +4628,7 @@ static int castle_da_rwct_make(struct castle_double_array *da, int cpu_index, in
     struct list_head *l = NULL;
     c2_block_t *c2b;
     int ret;
+    static int t0_count = 0;
 
     /* Only allow one rwct_make() at any point in time. If we fail to acquire the bit lock
        wait for whoever is doing it, to create the RWCT.
@@ -4626,6 +4719,8 @@ static int castle_da_rwct_make(struct castle_double_array *da, int cpu_index, in
     FAULT(MERGE_FAULT);
 
     if (!in_tran) CASTLE_TRANSACTION_END;
+
+    printk("Created T0: %d\n", ++t0_count);
     /* DA is attached, therefore we must be holding a ref, therefore it is safe to schedule
        the merge check. */
     write_unlock(&da->lock);
