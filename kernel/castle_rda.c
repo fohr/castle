@@ -41,6 +41,8 @@ static c_rda_spec_t castle_default_rda;
  * (Re)permute the array of castle_slave pointers, used to contruct the extent. Uses Fisher-Yates 
  * shuffle.
  *
+ * Correctness experimentally validated as of 4c488c2459d8
+ *
  * @param slaves_array Array of castle_slave pointers to permute. 
  * @param nr_slaves    Length of slaves array.
  */
