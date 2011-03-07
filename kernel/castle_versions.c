@@ -623,6 +623,7 @@ version_t castle_version_new(int snap_or_clone,
 {
     struct castle_version *v;
     int is_leaf = castle_version_is_leaf(parent);
+    int is_attached = castle_version_attached(parent);
     
     /* Snapshot is not possible on non-leafs. */
     if (snap_or_clone && !is_leaf)
@@ -631,8 +632,8 @@ version_t castle_version_new(int snap_or_clone,
         return INVAL_VERSION;
     }
 
-    /* Clone is not possible on leafs. */
-    if (!snap_or_clone && is_leaf)
+    /* Clone is not possible on leafs which are attached. */
+    if (!snap_or_clone && is_leaf && is_attached)
     {
         printk("Couldn't clone leaf versions: %d.\n", parent);
         return INVAL_VERSION;
