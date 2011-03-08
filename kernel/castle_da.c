@@ -4055,18 +4055,17 @@ static da_id_t castle_da_ct_unmarshall(struct castle_component_tree *ct,
  * @param fn    Function to pass each of the da's CTs too
  * @param token @FIXME
  */
-static void castle_da_foreach_tree(struct castle_double_array *da,
-                                   int (*fn)(struct castle_double_array *da,
-                                             struct castle_component_tree *ct,
-                                             int level_cnt,
-                                             void *token), 
-                                   void *token)
+static void __castle_da_foreach_tree(struct castle_double_array *da,
+                                     int (*fn)(struct castle_double_array *da,
+                                               struct castle_component_tree *ct,
+                                               int level_cnt,
+                                               void *token), 
+                                     void *token)
 {
     struct castle_component_tree *ct;
     struct list_head *lh, *t;
     int i, j;
 
-    write_lock(&da->lock);
     for(i=0; i<MAX_DA_LEVEL; i++)
     {
         j = 0;
@@ -4074,14 +4073,21 @@ static void castle_da_foreach_tree(struct castle_double_array *da,
         {
             ct = list_entry(lh, struct castle_component_tree, da_list); 
             if(fn(da, ct, j, token))
-            {
-                goto out;
                 return;
-            }
             j++;
         }
     }
-out:
+}
+
+static void castle_da_foreach_tree(struct castle_double_array *da,
+                                   int (*fn)(struct castle_double_array *da,
+                                             struct castle_component_tree *ct,
+                                             int level_cnt,
+                                             void *token), 
+                                   void *token)
+{
+    write_lock(&da->lock);
+    __castle_da_foreach_tree(da, fn, token);
     write_unlock(&da->lock);
 }
 
@@ -4216,8 +4222,6 @@ mstore_writeback:
     /* Never writeback T0 in periodic checkpoints. */
     BUG_ON((ct->level == 0) && !castle_da_exiting);
 
-    if (da) write_unlock(&da->lock);
-
     mutex_lock(&ct->lo_mutex);
     list_for_each_safe(lh, tmp, &ct->large_objs)
     {
@@ -4230,8 +4234,6 @@ mstore_writeback:
 
     castle_da_ct_marshall(&mstore_entry, ct); 
     castle_mstore_entry_insert(castle_tree_store, &mstore_entry);
-
-    if (da) write_lock(&da->lock);
 
     return 0;
 }
@@ -4267,7 +4269,9 @@ static int castle_da_writeback(struct castle_double_array *da, void *unused)
     if (da->last_key)
         da->last_key = NULL;
 
-    castle_da_foreach_tree(da, castle_da_tree_writeback, NULL);
+    /* Writeback is happening under CASTLE_TRANSACTION LOCK, which guarentees no
+     * addition/deletions to component tree list, no need of DA lock here. */
+    __castle_da_foreach_tree(da, castle_da_tree_writeback, NULL);
 
     debug("Inserting a DA id=%d\n", da->id);
     castle_mstore_entry_insert(castle_da_store, &mstore_dentry);
