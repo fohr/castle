@@ -590,13 +590,13 @@ int castle_fs_init(void)
     memcpy(cs_fs_sb, &fs_sb, sizeof(struct castle_fs_superblock));
     castle_fs_superblocks_put(cs_fs_sb, 1);
 
+    /* Read versions in. */
+    if (!first && castle_versions_read())
+        return -EINVAL;
+
     /* Read doubling arrays and component trees in. */
     ret = first ? castle_double_array_create() : castle_double_array_read(); 
     if(ret) return -EINVAL;
-
-    /* Read versions in. This requires component trees. */
-    if (!first && castle_versions_read())
-        return -EINVAL;
 
     /* Read Collection Attachments. */
     if (!first && castle_attachments_read())
