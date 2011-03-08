@@ -1032,7 +1032,9 @@ typedef struct castle_merged_iterator {
             version_t                v;
             c_val_tup_t              cvt;
         } cached_entry;
+        struct rb_node               rb_node;
     } *iterators;
+    struct rb_root                   rb_root;
     castle_merged_iterator_each_skip each_skip;
     castle_iterator_end_io_t         end_io;
     void                            *private;

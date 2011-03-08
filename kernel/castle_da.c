@@ -536,9 +536,9 @@ struct castle_iterator_type castle_ct_immut_iter = {
  * @param k2    Key to compare with
  * @param v2    Version to compare with
  *
- * @return -1   k2,v2 is smaller than k1,v1
- * @return  0   k2,v2 is equal to k1,v1
- * @return  1   k2,v2 is larger than k1,v1
+ * @return -1   (k1, v1) <  (k2, v2)
+ * @return  0   (k1, v1) == (k2, v2)
+ * @return  1   (k1, v1) >  (k2, v2)
  */
 static int castle_kv_compare(struct castle_btree_type *btree,
                              void *k1, version_t v1,
@@ -1068,6 +1068,94 @@ struct castle_iterator_type castle_ct_modlist_iter = {
     .skip        = NULL,
 };
 
+/**
+ * Insert a kv pair into RB tree. Delete the oldest entry if found a duplicate. 
+ *
+ * @param iter [in] merged iterator that the RB tree belongs to
+ * @param comp_iter [in] component iterator that the new kv pair belongs to
+ */
+static void castle_ct_merged_iter_rbtree_insert(c_merged_iter_t *iter, 
+                                               struct component_iterator *comp_iter)
+{
+    struct rb_root *root = &iter->rb_root;
+	struct rb_node **p = &root->rb_node;
+	struct rb_node *parent = NULL;
+    struct rb_node *node = &comp_iter->rb_node;
+    int nr_cmps = 0;
+
+    /* Go until end of the tree. */
+	while (*p)
+	{
+        struct component_iterator *c_iter, *dup_iter = NULL;
+        int kv_cmp;
+
+		parent = *p;
+        c_iter = rb_entry(parent, struct component_iterator, rb_node);
+
+        BUG_ON(!c_iter->cached);
+        BUG_ON(c_iter == comp_iter);
+
+        /* Compare the entry in RB Tree with new entry. */
+        kv_cmp = castle_kv_compare(iter->btree,
+                                   comp_iter->cached_entry.k,
+                                   comp_iter->cached_entry.v,
+                                   c_iter->cached_entry.k,
+                                   c_iter->cached_entry.v);
+        nr_cmps++;
+
+        /* New key is smaller than the key in tree. Traverse left. */
+        if (kv_cmp < 0)
+			p = &(*p)->rb_left;
+        /* New key is bigger than the key in tree. Traverse right. */
+        else if (kv_cmp > 0)
+			p = &(*p)->rb_right;
+        /* Both kv pairs are equal. Find the newest element. Iterators are
+         * allocated in an array with the iterator of latest CT coming first.
+         * So, compare pointers and smallest pointer is latest. */
+        else if (c_iter > comp_iter)
+        {
+            /* If the new key is the latest, then jsut replace the one in
+             * rb-tree with the new key. */
+            rb_replace_node(&c_iter->rb_node, &comp_iter->rb_node, root);
+            dup_iter = c_iter;
+        }
+        else
+            dup_iter = comp_iter;
+
+        /* Skip the duplicated entry and clear cached bit of the component
+         * iterator. */
+        if (dup_iter)
+        {
+            debug("Duplicate entry found. Removing.\n");
+            if (iter->each_skip)
+                iter->each_skip(iter, dup_iter);
+            dup_iter->cached = 0;
+            return;
+        }
+	}
+
+    /* Link the node to tree. */
+	rb_link_node(node, parent, p);
+    /* Set color and inturn balance the tree. */
+	rb_insert_color(node, root);
+}
+
+static struct component_iterator * castle_ct_merge_iter_rbtree_min_del(c_merged_iter_t *iter)
+{
+    struct rb_root *root = &iter->rb_root;
+    struct rb_node *min;
+
+    /* Get the first element in the sorted order(minimum). */
+    min = rb_first(root);
+    BUG_ON(!min);
+
+    /* Erase the element from tree. */
+    rb_erase(min, root);
+
+    /* Return component tree. */
+    return rb_entry(min, struct component_iterator, rb_node);
+}
+
 static int _castle_ct_merged_iter_prep_next(c_merged_iter_t *iter,
                                             int sync_call)
 {
@@ -1098,6 +1186,12 @@ static int _castle_ct_merged_iter_prep_next(c_merged_iter_t *iter,
                 comp_iter->cached = 1;
                 iter->src_items_completed++;
                 debug_iter("%s:%p:%d - cached\n", __FUNCTION__, iter, i);
+                /* Insert the kv pair into RB tree. */ 
+                /* It is possible that, this call could delete kv pairs inserted
+                 * by earlier component iterators from RB tree, if they are
+                 * found as duplicates. So, when has_next calls prep_next, we
+                 * could go through the same loop again for missing keys. */
+                castle_ct_merged_iter_rbtree_insert(iter, comp_iter);
             }
             else
             {
@@ -1156,65 +1250,19 @@ static void castle_ct_merged_iter_next(c_merged_iter_t *iter,
                                        c_val_tup_t *cvt_p)
 {
     struct component_iterator *comp_iter; 
-    int i, smallest_idx, kv_cmp;
-    void *smallest_k = NULL;
-    version_t smallest_v = 0;
-    c_val_tup_t smallest_cvt;
 
     debug_iter("%s:%p\n", __FUNCTION__, iter);
     debug("Merged iterator next.\n");
-    /* When next is called, we are free to call next on any of the 
-       component iterators we do not have an entry cached for */
-    for(i=0, smallest_idx=-1; i<iter->nr_iters; i++)
-    {
-        comp_iter = iter->iterators + i; 
 
-        /* Replenish the cache */
-        BUG_ON(!comp_iter->completed && !comp_iter->cached);
-        
-        /* If there is no cached entry by here, the compenennt iterator must be finished */ 
-        if(!comp_iter->cached)
-        {
-            BUG_ON(comp_iter->iterator_type->has_next(comp_iter->iterator));
-            continue;
-        }
-
-        /* Check how does the smallest entry so far compare to this entry */
-        kv_cmp = (smallest_idx >= 0) ? castle_kv_compare(iter->btree,
-                                                         comp_iter->cached_entry.k,
-                                                         comp_iter->cached_entry.v,
-                                                         smallest_k,
-                                                         smallest_v)
-                                     : -1;
-        if(kv_cmp < 0)
-        {
-            debug("So far the smallest entry is from iterator: %d.\n", i);
-            smallest_idx = i;
-            smallest_k = comp_iter->cached_entry.k;
-            smallest_v = comp_iter->cached_entry.v;
-            smallest_cvt = comp_iter->cached_entry.cvt;
-        }
-
-        if(kv_cmp == 0)
-        {
-            debug("Duplicate entry found. Removing.\n");
-            if (iter->each_skip)
-                iter->each_skip(iter, comp_iter);
-            comp_iter->cached = 0;
-        }
-    }
-
-    /* Smallest value should have been found by now */
-    BUG_ON(smallest_idx < 0);
-
-    debug("Smallest entry is from iterator: %d.\n", smallest_idx);
-    /* The cache for smallest_idx iterator cached entry should be removed */ 
-    comp_iter = iter->iterators + smallest_idx;
+    /* Get the smallest kv pair from RB tree. */ 
+    comp_iter = castle_ct_merge_iter_rbtree_min_del(iter);
+    debug("Smallest entry is from iterator: %p.\n", comp_iter);
     comp_iter->cached = 0;
+
     /* Return the smallest entry */
-    if(key_p) *key_p = smallest_k;
-    if(version_p) *version_p = smallest_v;
-    if(cvt_p) *cvt_p = smallest_cvt;
+    if(key_p) *key_p = comp_iter->cached_entry.k;
+    if(version_p) *version_p = comp_iter->cached_entry.v;
+    if(cvt_p) *cvt_p = comp_iter->cached_entry.cvt;
 }
 
 static void castle_ct_merged_iter_skip(c_merged_iter_t *iter,
@@ -1285,6 +1333,7 @@ static void castle_ct_merged_iter_init(c_merged_iter_t *iter,
     iter->err = 0;
     iter->src_items_completed = 0;
     iter->end_io = NULL;
+    iter->rb_root = RB_ROOT;
     iter->iterators = castle_malloc(iter->nr_iters * sizeof(struct component_iterator), GFP_KERNEL);
     if(!iter->iterators)
     {
