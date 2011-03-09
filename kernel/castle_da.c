@@ -3728,7 +3728,7 @@ static void castle_da_dealloc(struct castle_double_array *da)
 static struct castle_double_array* castle_da_alloc(da_id_t da_id)
 {
     struct castle_double_array *da;
-    int i;
+    int i = 0;
 
     da = castle_zalloc(sizeof(struct castle_double_array), GFP_KERNEL); 
     if(!da)
