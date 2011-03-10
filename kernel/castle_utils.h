@@ -8,6 +8,8 @@
 
 #define ATOMIC(_i)  ((atomic_t)ATOMIC_INIT(_i))
 
+#define order_base_2(_n) ilog2(roundup_pow_of_two(_n))
+
 /* Uses RW spinlock for synchronization. Use iterate_exclusive() for exclusive
  * access while iterating over the hash table. */
 #define DEFINE_HASH_TBL(_prefix, _tab, _tab_size, _struct, _list_mbr, _key_t, _key)  \

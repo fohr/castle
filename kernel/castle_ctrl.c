@@ -399,7 +399,7 @@ void castle_control_collection_attach(version_t          version,
 
     if (castle_version_deleted(version))
     {
-        printk("Version is already marked for deletion. Can't be deleted\n");
+        printk("Version is already marked for deletion. Can't be attached\n");
         *ret = -EINVAL;
         return;
     }

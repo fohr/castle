@@ -20,8 +20,6 @@
 
 #define SLOT_SIZE(idx)                 (1 << idx) /* Convert slot (order no) to slot size */
 
-#define order_base_2(n) ilog2(roundup_pow_of_two(n))
-
 #define get_freelist_head(bucket_index)                                                            \
             (list_first_entry(castle_vmap_fast_maps_ptr+bucket_index, castle_vmap_freelist_t, list))
 

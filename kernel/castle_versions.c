@@ -123,6 +123,7 @@ int castle_version_deleted(version_t version)
     if(!v)
         return -EINVAL;
 
+    printk("Flags in version %d: 0x%lx\n", version, v->flags);
     return test_bit(CV_DELETED_BIT, &v->flags);
 }
 
@@ -281,19 +282,26 @@ int castle_version_delete(version_t version)
 {
     struct castle_version *v, *p, *sybling;
     struct list_head *pos;
+    da_id_t da_id;
 
     write_lock_irq(&castle_versions_hash_lock);
 
     v = __castle_versions_hash_get(version);
     if(!v)
+    {
+        write_unlock_irq(&castle_versions_hash_lock);
         return -EINVAL;
+    }
 
     /* Sanity check flags. */
     BUG_ON(test_bit(CV_ATTACHED_BIT, &v->flags));
     BUG_ON(!test_bit(CV_INITED_BIT, &v->flags));
 
     if(test_and_set_bit(CV_DELETED_BIT, &v->flags))
+    {
+        write_unlock_irq(&castle_versions_hash_lock);
         return -EAGAIN;
+    }
 
     /* Add to list of deleted versions in reverse-DFS order. */
     list_for_each(pos, &castle_versions_deleted)
@@ -308,7 +316,8 @@ int castle_version_delete(version_t version)
     list_add_tail(&v->del_list, pos);
     atomic_inc(&castle_versions_nr_deleted);
 
-    printk("Marked version %d for deletion\n", version);
+    printk("Marked version %d for deletion: 0x%lx\n", version, v->flags);
+    da_id = v->da_id;
 
     /* Check if ancestors can be marked as leaf. Go upto root. */
     while(v->version != 0)
@@ -344,8 +353,11 @@ int castle_version_delete(version_t version)
 
     castle_sysfs_version_del(version);
 
+    castle_da_version_delete(da_id);
+
     return 0;
 }
+
 
 /** 
  * Delete a version from version tree. Only possible, while deleting complete

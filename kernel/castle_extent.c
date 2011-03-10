@@ -1086,7 +1086,7 @@ void _castle_extent_free(c_ext_t *ext)
 
     castle_extents_sb = castle_extents_super_block_get();
     castle_extents_rhash_remove(ext);
-    printk("Removed extent %llu from hash\n", ext_id);
+    debug("Removed extent %llu from hash\n", ext_id);
 
     castle_extent_space_free(ext, ext->k_factor * ext->size);
     debug("Completed deleting ext: %lld\n", ext_id);

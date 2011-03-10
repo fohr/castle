@@ -608,6 +608,7 @@ struct castle_component_tree {
                                                 root node. */
     uint8_t             new_ct;            /**< Marked for cts which are not yet flushed onto
                                                 the disk.                                     */
+    uint8_t             compacting;        /**< compaction is going on this CT.*/
     struct rw_semaphore lock;              /**< Protects root_node, tree depth & last_node.   */
     uint8_t             tree_depth;
     c_ext_pos_t         root_node;
@@ -1391,6 +1392,7 @@ struct castle_double_array {
     int                         nr_trees;           /**< Total number of CTs in the da          */
     struct {
         int                     nr_trees;           /**< Number of CTs at level                 */
+        int                     nr_compac_trees;    /**< #trees that need to be merged          */
         struct list_head        trees;              /**< List of (nr_trees) at level            */
         /* Merge related variables. */
         struct {
@@ -1401,6 +1403,7 @@ struct castle_double_array {
                                *driver_token;
             uint32_t            units_commited; 
             struct task_struct *thread;
+            int                 deamortize;
         } merge;
     } levels[MAX_DA_LEVEL];
     struct castle_merge_token   merge_tokens_array[MAX_DA_LEVEL];
@@ -1432,6 +1435,12 @@ struct castle_double_array {
     atomic_t                    merge_budget;
     wait_queue_head_t           merge_budget_waitq;
     c_vl_okey_t                *last_key;
+    /* Compaction (Big-merge) */
+    int                         top_level;          /**< height of doubling array */
+    atomic_t                    nr_del_versions;    /**< #versions deleted since 
+                                                         last compaction. */
+    int                         compacting;         /**< marked when DA has to
+                                                         start compaction. */
 };
 
 extern int castle_latest_key;
