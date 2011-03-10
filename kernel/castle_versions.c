@@ -716,7 +716,7 @@ int castle_version_read(version_t version,
     if(da)     *da     =  v->da_id;
     if(size)   *size   =  v->size;
     if(parent) *parent =  v->parent ? v->parent->version : 0;
-    if(leaf)   *leaf   = (v->first_child == NULL);
+    if(leaf)   *leaf   =  test_bit(CV_LEAF_BIT, &v->flags);
 
     return 0;
 } 
