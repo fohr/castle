@@ -356,7 +356,7 @@ int castle_version_delete(version_t version)
     castle_da_version_delete(da_id);
 
     /* raise event */
-    castle_events_version_destroy(v->version, CASTLE_DESTROY_VERSION);
+    castle_events_version_destroy(version);
 
     return 0;
 }
@@ -390,7 +390,7 @@ static struct castle_version * castle_version_subtree_delete(struct castle_versi
     kmem_cache_free(castle_versions_cache, v);
     
     /* raise event */
-    castle_events_version_destroy(v->version, CASTLE_DESTROY_TREE);
+    castle_events_version_destroy(v->version);
 
     return parent;
 }
@@ -716,7 +716,7 @@ int castle_version_read(version_t version,
     if(da)     *da     =  v->da_id;
     if(size)   *size   =  v->size;
     if(parent) *parent =  v->parent ? v->parent->version : 0;
-    if(leaf)   *leaf   =  test_bit(CV_LEAF_BIT, &v->flags);
+    if(leaf)   *leaf   = (v->first_child == NULL);
 
     return 0;
 } 
