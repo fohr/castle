@@ -4544,6 +4544,7 @@ static da_id_t castle_da_ct_unmarshall(struct castle_component_tree *ct,
     ct->last_node   		= ctm->last_node;
     ct->last_node_size      = ctm->last_node_size;
     ct->new_ct              = 0;
+    ct->compacting          = 0;
     atomic64_set(&ct->large_ext_chk_cnt, ctm->large_ext_chk_cnt);
     init_rwsem(&ct->lock);
     mutex_init(&ct->lo_mutex);
