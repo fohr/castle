@@ -38,8 +38,8 @@ void castle_uevent1(uint16_t cmd, uint64_t arg1);
 #define castle_events_version_create(_version_id) \
     castle_uevent2(CASTLE_CTRL_CREATE, CASTLE_EVENTS_SUCCESS, _version_id)
 
-#define castle_events_version_destroy(_version_id) \
-    castle_uevent2(CASTLE_CTRL_DESTROY, CASTLE_EVENTS_SUCCESS, _version_id)
+#define castle_events_version_destroy(_version_id, _flag) \
+    castle_uevent3(CASTLE_CTRL_DESTROY, CASTLE_EVENTS_SUCCESS, _version_id, _flag)
 
 #define castle_events_version_clone(_version_id) \
     castle_uevent2(CASTLE_CTRL_CLONE, CASTLE_EVENTS_SUCCESS, _version_id)
