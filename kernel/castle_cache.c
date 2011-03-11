@@ -331,8 +331,7 @@ void castle_cache_stats_print(int verbose)
     atomic_sub(writes, &castle_cache_write_stats);
     
     if(verbose)
-        printk("%d, %d, %d, %d, %d\n", 
-            atomic_read(&castle_cache_dirty_pages), 
+        printk("%d, %d, %d, %d, %d\n", atomic_read(&castle_cache_dirty_pages),
             atomic_read(&castle_cache_clean_pages),
             castle_cache_page_freelist_size * PAGES_PER_C2P,
             reads, writes);
@@ -4986,10 +4985,9 @@ int castle_cache_init(void)
         goto err_out;
     }
 
-#ifdef CASTLE_PERF_DEBUG
+    /* Always trace cache stats. */
     castle_cache_stats_timer_interval = 1;
-#endif
-    if(castle_cache_stats_timer_interval) castle_cache_stats_timer_tick(0);
+    if (castle_cache_stats_timer_interval) castle_cache_stats_timer_tick(0);
 
     return 0;
 
