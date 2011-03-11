@@ -337,8 +337,6 @@ static inline struct castle_back_buffer *__castle_back_buffer_get(struct castle_
     struct rb_node *node;
     struct castle_back_buffer *buffer;
 
-    BUG_ON(!read_can_lock(&conn->buffers_lock)); /* not quite an 'is read locked' test */
-
     node = conn->buffers_rb.rb_node;
 
     while (node)
