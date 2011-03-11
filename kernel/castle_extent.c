@@ -116,7 +116,7 @@ uint8_t extent_init_done = 0;
 
 static struct list_head     rebuild_list;
 static wait_queue_head_t    rebuild_wq;
-static struct task_struct   *rebuild_thread;
+struct task_struct   *rebuild_thread;
 
 /*
  * A difference between current_rebuild_seqno and rebuild_to_seqno indicates that

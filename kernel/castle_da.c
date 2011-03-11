@@ -3960,6 +3960,8 @@ static int castle_da_merge_run(void *da_p)
     return 0;
 }
 
+static int __castle_da_threads_priority_set(struct castle_double_array *da, void *_value);
+
 static int castle_da_merge_start(struct castle_double_array *da, void *unused)
 {
     int i;
@@ -3967,6 +3969,8 @@ static int castle_da_merge_start(struct castle_double_array *da, void *unused)
     /* Wake up all of the merge threads. */
     for(i=0; i<MAX_DA_LEVEL; i++)
         wake_up_process(da->levels[i].merge.thread);
+
+    __castle_da_threads_priority_set(da, &castle_nice_value);
 
     return 0;
 }
@@ -6011,4 +6015,34 @@ int castle_double_array_size_get(da_id_t da_id, c_byte_off_t *size)
 out:
     *size = s;
     return err_code;
+}
+
+/**
+ * Set nice value for all merge threads within a DA.
+ */
+static int __castle_da_threads_priority_set(struct castle_double_array *da, void *_value)
+{
+    int i;
+    int nice_value = *((int *)_value);
+
+    for (i=0; i<MAX_DA_LEVEL; i++)
+    {
+        if (da->levels[i].merge.thread)
+            set_user_nice(da->levels[i].merge.thread, nice_value);
+    }
+
+    return 0;
+}
+
+/**
+ * Change the priority of merge threads for all doubling arrays.
+ */
+void castle_da_threads_priority_set(int nice_value)
+{
+    int i;
+
+    castle_da_hash_iterate(__castle_da_threads_priority_set, &nice_value);
+
+    for(i=0; i<NR_CASTLE_DA_WQS; i++)
+        castle_wq_priority_set(castle_da_wqs[i]);
 }

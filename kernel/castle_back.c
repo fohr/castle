@@ -45,7 +45,7 @@ DEFINE_RING_TYPES(castle, castle_request_t, castle_response_t);
 #define debug_iter(_f, _a...)       (printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
 #endif
 
-static struct workqueue_struct *castle_back_wq;
+struct workqueue_struct *castle_back_wq;
 static wait_queue_head_t        conn_close_wait;
 atomic_t                        conn_count;
 

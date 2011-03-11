@@ -21,7 +21,7 @@ static             LIST_HEAD(castle_timelines_list);
 static             LIST_HEAD(castle_dead_timelines_list);
 static int                   castle_checkpoint_collisions_print;
 static uint32_t              castle_checkpoint_seq;
-static struct task_struct   *time_thread;
+struct task_struct   *time_thread;
 static c_check_stats_t       castle_checkpoint_stats[MAX_CHECK_POINTS + 1]; 
                                                     /* +1 for the stats on timeline duration */
 static atomic_t              castle_checkpoint_create_seq;

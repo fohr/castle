@@ -629,6 +629,102 @@ void castle_control_slave_evacuate(uint32_t uuid, int *ret)
     *ret = EXIT_SUCCESS;
 }
 
+int castle_nice_value = 0;
+
+/**
+ * Change priority of a work thread. This function gets scheduled by driver
+ * function castle_wq_priority_set.
+ */
+static void castle_thread_priority_set(struct work_struct *work)
+{
+    int nice_value;
+
+    memcpy(&nice_value, &work->data, sizeof(int));
+    set_user_nice(current, castle_nice_value);
+    /* It is safe to free work structure here. Kernel is not going to use it
+     * anymore.*/
+    castle_free(work);
+}
+
+/**
+ * Set nice value for all threads in a WQ to global nice value. 
+ *
+ * This function just schedules the priority_set() whihc would change the
+ * priority later. 
+ */
+void castle_wq_priority_set(struct workqueue_struct *wq)
+{
+    int cpu;
+
+    if (!wq)
+        return;
+
+    for_each_online_cpu(cpu)
+    {
+        struct work_struct *work;
+       
+        work = castle_malloc(sizeof(struct work_struct), GFP_KERNEL);
+        if (!work)
+        {
+            printk("Couldn't allocate memory for work structures, not able to"
+                   "change nice value\n");
+            return;
+        }
+
+        CASTLE_INIT_WORK(work, castle_thread_priority_set);
+        queue_work_on(cpu, wq, work);
+    }
+}
+
+extern struct workqueue_struct *castle_back_wq;
+extern struct task_struct *castle_cache_flush_thread;
+extern struct task_struct *checkpoint_thread;
+extern struct task_struct *rebuild_thread;
+extern struct task_struct *resubmit_thread;
+#ifdef CASTLE_DEBUG
+extern struct task_struct *debug_thread;
+#endif
+#ifdef CASTLE_PERF_DEBUG
+extern struct task_struct *time_thread;
+#endif
+
+/**
+ * Change nice value of merge threads and castle_back threads
+ *
+ * @param nice_value [in] nice value that the merge process has to be set to.
+ *                        (High priority) -19 < nice_value < 19 (Low priority)
+ * @param ret [out] return value
+ */
+void castle_control_thread_priority(int nice_value, int *ret)
+{
+    int i;
+
+    /* Set the global nice value. */
+    castle_nice_value = nice_value;
+
+    /* Change nice value for DA threads. */
+    castle_da_threads_priority_set(nice_value);
+
+    /* Casatle back threads. */
+    castle_wq_priority_set(castle_back_wq);
+
+    /* B-Tree work queues. */
+    for(i=0; i<=2*MAX_BTREE_DEPTH; i++)
+        castle_wq_priority_set(castle_wqs[i]);
+
+    /* Cache threads. */
+    set_user_nice(castle_cache_flush_thread, nice_value);
+
+    /* Checkpoint thread. */
+    set_user_nice(checkpoint_thread, nice_value);
+
+    /* Rebuild threads. */
+    set_user_nice(rebuild_thread, nice_value);
+    set_user_nice(resubmit_thread, nice_value);
+
+    *ret = 0;
+}
+
 int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
     int err;
@@ -815,6 +911,10 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
             break;
         case CASTLE_CTRL_SLAVE_EVACUATE:
             castle_control_slave_evacuate(ioctl.slave_evacuate.id, &ioctl.slave_evacuate.ret);
+            break;
+        case CASTLE_CTRL_THREAD_PRIORITY:
+            castle_control_thread_priority(ioctl.thread_priority.nice_value, 
+                                          &ioctl.thread_priority.ret);
             break;
 
         default:

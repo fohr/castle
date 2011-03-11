@@ -31,5 +31,6 @@ int  castle_control_init            (void);
 void castle_control_fini            (void);
 int  castle_attachments_read        (void);
 int  castle_attachments_writeback   (void);
+void castle_wq_priority_set         (struct workqueue_struct *wq);
 
 #endif /* __CASTLE_CTRL_H__ */

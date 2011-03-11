@@ -25,7 +25,7 @@ static            LIST_HEAD(malloc_list);
 static spinlock_t           bio_list_spinlock = SPIN_LOCK_UNLOCKED;
 static int                  bio_id = 0;
 static            LIST_HEAD(bio_list);
-static struct task_struct  *debug_thread;
+struct task_struct  *debug_thread;
 static cd_watch_t           watches[] = {{0x41, 0x3}};
 static int                  nr_watches = 0;
 static struct page        **watched_data;

@@ -47,4 +47,5 @@ int castle_double_arrays_unfreeze(void);
 void castle_da_version_delete   (da_id_t da_id);
 
 uint32_t castle_da_count(void);
+void castle_da_threads_priority_set(int nice_value);
 #endif /* __CASTLE_DA_H__ */

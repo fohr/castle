@@ -292,7 +292,7 @@ static               LIST_HEAD(castle_cache_block_freelist);
 static struct page            *castle_cache_vmap_pgs[CASTLE_CACHE_VMAP_PGS]; 
 static           DECLARE_MUTEX(castle_cache_vmap_lock);
 
-static struct task_struct     *castle_cache_flush_thread;
+struct task_struct     *castle_cache_flush_thread;
 static DECLARE_WAIT_QUEUE_HEAD(castle_cache_flush_wq); 
 static atomic_t                castle_cache_flush_seq;
 
@@ -307,7 +307,7 @@ static atomic_t                mstores_ref_cnt = ATOMIC_INIT(0);
 static               LIST_HEAD(castle_cache_flush_list);
 
 #define CHECKPOINT_FREQUENCY (60)        /* Checkpoint once in every 60secs. */
-static struct                  task_struct  *checkpoint_thread;
+struct                  task_struct  *checkpoint_thread;
 /**********************************************************************************************
  * Prototypes. 
  */

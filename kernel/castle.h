@@ -1454,4 +1454,6 @@ struct castle_version_delete_state {
     struct list_head             *next_deleted;     /**< Next version in list of reverse DFS order of deleted versions. */
     int                           last_version;     /**< last version that is created before starting the merge. */
 };
+
+extern int castle_nice_value;
 #endif /* __CASTLE_H__ */

@@ -47,7 +47,7 @@ void castle_resubmit_c2b(int rw, c2_block_t * c2b)
     wake_up(&resubmit_wq);
 }
 
-static struct task_struct   *resubmit_thread;
+struct task_struct   *resubmit_thread;
 
 /**
  * Check if there are blocks on the resubmit list.
