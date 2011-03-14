@@ -275,17 +275,15 @@ static USED void castle_back_print_page(char *buff, int length)
  *
  * NOTE: Caller must hold a read-lock on the conn's buffers_lock.
  *
- * NOTE: See comment for __castle_back_buffer_get() regarding potential race.
+ * NOTE: See comment for castle_back_buffer_get() regarding potential race.
  *
- * @also __castle_back_buffer_get()
+ * @also castle_back_buffer_get()
  */
 static inline int __castle_back_buffer_exists(struct castle_back_conn *conn,
                                               unsigned long start, unsigned long end)
 {
     struct castle_back_buffer *buffer;
     struct rb_node *node;
-
-    BUG_ON(!read_can_lock(&conn->buffers_lock)); /* not quite an 'is read locked' test */
 
     node = conn->buffers_rb.rb_node;
 
@@ -321,7 +319,8 @@ static inline int __castle_back_buffer_exists(struct castle_back_conn *conn,
  * @param conn      Connection to search for user buffers
  * @param user_addr Userland buffer address to find
  *
- * NOTE: Caller must hold a read-lock on the conn's buffers_lock.
+ * - Hold a read-lock on conn->buffers_lock to prevent the tree changing beneath
+ *   us during our search
  *
  * NOTE: Because we hold a read-lock we could potentially race with a thread
  *       calling castle_back_buffer_put() who has decremented a buffer's
@@ -331,14 +330,15 @@ static inline int __castle_back_buffer_exists(struct castle_back_conn *conn,
  * @also castle_back_buffer_get()
  * @also castle_back_buffer_put()
  */
-static inline struct castle_back_buffer *__castle_back_buffer_get(struct castle_back_conn *conn,
+static inline struct castle_back_buffer *castle_back_buffer_get(struct castle_back_conn *conn,
                                                                   unsigned long user_addr)
 {
     struct rb_node *node;
-    struct castle_back_buffer *buffer;
+    struct castle_back_buffer *buffer = NULL;
 
     node = conn->buffers_rb.rb_node;
 
+    read_lock(&conn->buffers_lock);
     while (node)
     {
         buffer = rb_entry(node, struct castle_back_buffer, rb_node);
@@ -356,34 +356,14 @@ static inline struct castle_back_buffer *__castle_back_buffer_get(struct castle_
              * If it's ref_count is 0 then ignore it, otherwise increment by 1
              * and return it to the caller. */
             if (atomic_add_unless(&buffer->ref_count, 1, 0))
-            {
-                debug("__castle_back_buffer_get ref_count is now %d\n",
+                debug("castle_back_buffer_get ref_count is now %d\n",
                         atomic_read(&buffer->ref_count));
-                return buffer;
-            }
             else
-                return NULL;
+                buffer = NULL;
+
+            break;
         }
     }
-    
-    return NULL;
-}
-
-/**
- * Look up buffer matching user_addr in conn's RB tree.
- *
- * - Hold a read-lock on conn->buffers_lock to prevent the tree changing beneath
- *   us during our search
- *
- * @also __castle_back_buffer_get()
- */
-static inline struct castle_back_buffer *castle_back_buffer_get(struct castle_back_conn *conn,
-                                                                unsigned long user_addr)
-{
-    struct castle_back_buffer *buffer;
-
-    read_lock(&conn->buffers_lock);
-    buffer = __castle_back_buffer_get(conn, user_addr);
     read_unlock(&conn->buffers_lock);
     
     return buffer;
@@ -392,9 +372,9 @@ static inline struct castle_back_buffer *castle_back_buffer_get(struct castle_ba
 /**
  * Put a reference to one of conn's buffers (buf), freeing it if necessary.
  *
- * NOTE: See comment for __castle_back_buffer_get() regarding potential race.
+ * NOTE: See comment for castle_back_buffer_get() regarding potential race.
  *
- * @also __castle_back_buffer_get()
+ * @also castle_back_buffer_get()
  */
 static void castle_back_buffer_put(struct castle_back_conn *conn,
                                    struct castle_back_buffer *buf)

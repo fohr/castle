@@ -4065,6 +4065,12 @@ static void castle_da_merges_print(struct castle_double_array *da)
 /**********************************************************************************************/
 /* Generic DA code */
 
+/**
+ * Return whether the da is write-locked.
+ *
+ * NOTE: Calling read_can_lock() with a write-lock should be race safe, unlike
+ *       calling it with just a read-lock.
+ */
 static inline int castle_da_is_locked(struct castle_double_array *da)
 {
     /* must be write-locked if readers can't get a lock, or we have 2^24 readers */
