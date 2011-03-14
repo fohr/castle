@@ -1631,6 +1631,8 @@ struct castle_da_merge {
     uint64_t                      nr_entries;
     uint64_t                      nr_nodes;
     uint64_t                      large_chunks; 
+    int                           is_new_key;      /**< Is the current key different
+                                                        from last key added to out_tree. */
     struct castle_da_merge_level {
         /* Node we are currently generating, and book-keeping variables about the node. */
         c2_block_t               *node_c2b;
@@ -2355,7 +2357,17 @@ static inline void castle_da_entry_add(struct castle_da_merge *merge,
     BUG_ON(CVT_LEAF_PTR(cvt));
     btree->entry_add(node, level->next_idx, key, version, cvt);
     /* Compare the current key to the last key. Should never be smaller */
-    key_cmp = (level->next_idx != 0) ? btree->key_compare(key, level->last_key) : 0;
+    /* key_compare() is a costly function. Trying to avoid duplicates. We already
+     * did comparision between last key added to the out_tree and current key in
+     * snapshot_delete algorithm (in castle_da_entry_skip()). Reuse the result
+     * of it here again. */
+    /* Note: In case of re-adds is_new_key doesnt represent comparision between key being 
+     * added and last key added to the node. But, it repesents the comparision between last 
+     * 2 keys added to the tree. Still, it is okay as in case of re-adds both the comparisions
+     * yield same value. */
+    key_cmp = (level->next_idx != 0) ? 
+               ((depth == 0)? merge->is_new_key: btree->key_compare(key, level->last_key)) :
+               0;
     debug("Key cmp=%d\n", key_cmp);
     BUG_ON(key_cmp < 0);
 
@@ -2880,11 +2892,12 @@ static int castle_da_entry_skip(struct castle_da_merge *merge,
 {
     struct castle_btree_type *btree = merge->out_btree;
     struct castle_version_delete_state *state = &merge->snapshot_delete;
-    void *last_key = merge->levels[0].last_key;
+    void *last_key = merge->last_key;
 
+    merge->is_new_key = (last_key)? btree->key_compare(key, last_key): 1;
     /* Compare the keys. If looking at new key then reset data
      * structures. */
-    if (!last_key || (btree->key_compare(last_key, key) != 0))
+    if (merge->is_new_key)
     {
         int nr_bytes = state->last_version/8 + 1;
 
@@ -3399,6 +3412,7 @@ static struct castle_da_merge* castle_da_merge_init(struct castle_double_array *
     merge->large_chunks      = 0;
     merge->budget_cons_rate  = 1; 
     merge->budget_cons_units = 0; 
+    merge->is_new_key        = 1;
     for(i=0; i<MAX_BTREE_DEPTH; i++)
     {
         merge->levels[i].last_key      = NULL; 
