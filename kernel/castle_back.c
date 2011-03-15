@@ -607,9 +607,9 @@ static void _castle_back_stateful_op_timeout_check(void *data)
          * we schedule expiry after the connection is potentially freed.
          */
         spin_lock(&stateful_ops[i].lock);
-        if (stateful_ops[i].in_use &&
+        if (stateful_ops[i].in_use && stateful_ops[i].expire_enabled &&
                 jiffies - stateful_ops[i].last_used_jiffies > STATEFUL_OP_TIMEOUT &&
-                stateful_ops[i].expire && !stateful_ops[i].expiring)
+                !stateful_ops[i].expiring)
         {
             printk("stateful_op index %u, token %u has expired.\n", i, stateful_ops[i].token);
             /*
@@ -2333,19 +2333,22 @@ static void castle_back_big_get_continue(struct castle_object_pull *pull,
         castle_back_buffer_put(stateful_op->conn, stateful_op->curr_op->buf);
     castle_back_reply(stateful_op->curr_op, err, stateful_op->token, length);
 
-    spin_lock(&stateful_op->lock);
-
-    stateful_op->curr_op = NULL;
-
     if (err || done)
     {
+        spin_lock(&stateful_op->lock);
         castle_back_stateful_op_finish_all(stateful_op, err);
+        spin_unlock(&stateful_op->lock);
 
         attachment = stateful_op->attachment;
         stateful_op->attachment = NULL;
 
         if (!err)
+            /* May sleep so do not hold the spinlock. Safe because curr_op is still not null */
             castle_object_pull_finish(&stateful_op->pull);
+
+        spin_lock(&stateful_op->lock);
+
+        stateful_op->curr_op = NULL;
 
         /* This drops the spinlock. */
         castle_back_put_stateful_op(stateful_op->conn, stateful_op);
@@ -2355,6 +2358,10 @@ static void castle_back_big_get_continue(struct castle_object_pull *pull,
         return;
     }
     
+    spin_lock(&stateful_op->lock);
+
+    stateful_op->curr_op = NULL;
+
     /* drops the lock if return non-zero */
     if (castle_back_stateful_op_completed_op(stateful_op))
         return;
