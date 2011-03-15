@@ -1081,18 +1081,18 @@ static void castle_ct_merged_iter_rbtree_insert(c_merged_iter_t *iter,
                                                struct component_iterator *comp_iter)
 {
     struct rb_root *root = &iter->rb_root;
-	struct rb_node **p = &root->rb_node;
-	struct rb_node *parent = NULL;
+    struct rb_node **p = &root->rb_node;
+    struct rb_node *parent = NULL;
     struct rb_node *node = &comp_iter->rb_node;
     int nr_cmps = 0;
 
     /* Go until end of the tree. */
-	while (*p)
-	{
+    while (*p)
+    {
         struct component_iterator *c_iter, *dup_iter = NULL;
         int kv_cmp;
 
-		parent = *p;
+        parent = *p;
         c_iter = rb_entry(parent, struct component_iterator, rb_node);
 
         BUG_ON(!c_iter->cached);
@@ -1108,10 +1108,10 @@ static void castle_ct_merged_iter_rbtree_insert(c_merged_iter_t *iter,
 
         /* New key is smaller than the key in tree. Traverse left. */
         if (kv_cmp < 0)
-			p = &(*p)->rb_left;
+            p = &(*p)->rb_left;
         /* New key is bigger than the key in tree. Traverse right. */
         else if (kv_cmp > 0)
-			p = &(*p)->rb_right;
+            p = &(*p)->rb_right;
         /* Both kv pairs are equal. Find the newest element. Iterators are
          * allocated in an array with the iterator of latest CT coming first.
          * So, compare pointers and smallest pointer is latest. */
@@ -1135,12 +1135,12 @@ static void castle_ct_merged_iter_rbtree_insert(c_merged_iter_t *iter,
             dup_iter->cached = 0;
             return;
         }
-	}
+    }
 
     /* Link the node to tree. */
-	rb_link_node(node, parent, p);
+    rb_link_node(node, parent, p);
     /* Set color and inturn balance the tree. */
-	rb_insert_color(node, root);
+    rb_insert_color(node, root);
 }
 
 static struct component_iterator * castle_ct_merge_iter_rbtree_min_del(c_merged_iter_t *iter)
@@ -1157,6 +1157,16 @@ static struct component_iterator * castle_ct_merge_iter_rbtree_min_del(c_merged_
 
     /* Return component tree. */
     return rb_entry(min, struct component_iterator, rb_node);
+}
+
+static void castle_ct_merge_iter_rbtree_remove(c_merged_iter_t *iter,
+                                               struct component_iterator *comp_iter)
+{
+    struct rb_root *root = &iter->rb_root;
+    struct rb_node *node = &comp_iter->rb_node;
+
+    /* Erase the element from tree. */
+    rb_erase(node, root);
 }
 
 static int _castle_ct_merged_iter_prep_next(c_merged_iter_t *iter,
@@ -1302,7 +1312,11 @@ static void castle_ct_merged_iter_skip(c_merged_iter_t *iter,
         {
             comp_iter->iterator_type->skip(comp_iter->iterator, key);
             BUG_ON(iter->each_skip);
-            comp_iter->cached = 0;
+            if (comp_iter->cached)
+            {
+                castle_ct_merge_iter_rbtree_remove(iter, comp_iter);
+                comp_iter->cached = 0;
+            }
         }
     }
 }
