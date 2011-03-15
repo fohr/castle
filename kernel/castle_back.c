@@ -336,9 +336,8 @@ static inline struct castle_back_buffer *castle_back_buffer_get(struct castle_ba
     struct rb_node *node;
     struct castle_back_buffer *buffer, *ret = NULL;
 
-    node = conn->buffers_rb.rb_node;
-
     read_lock(&conn->buffers_lock);
+    node = conn->buffers_rb.rb_node;
     while (node)
     {
         buffer = rb_entry(node, struct castle_back_buffer, rb_node);
