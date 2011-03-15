@@ -1342,9 +1342,6 @@ static void castle_ct_merged_iter_init(c_merged_iter_t *iter,
     int i;
 
     debug("Initing merged iterator for %d component iterators.\n", iter->nr_iters);
-    /* nr_iters should be given in the iterator, and we expecting it to be in [1,10] range */
-    if(iter->nr_iters > 10)
-        printk("Merged iterator for %d > 10 trees.\n", iter->nr_iters);
     BUG_ON(iter->nr_iters <= 0);
     BUG_ON(!iter->btree);
     iter->err = 0;
