@@ -5779,6 +5779,7 @@ static void castle_da_read_bvec_start(struct castle_double_array *da, c_bvec_t *
 void castle_double_array_submit(c_bvec_t *c_bvec)
 {
     struct castle_attachment *att = c_bvec->c_bio->attachment;
+    struct castle_da_io_wait_queue *wq;
     struct castle_double_array *da;
     da_id_t da_id; 
 
@@ -5793,46 +5794,46 @@ void castle_double_array_submit(c_bvec_t *c_bvec)
     BUG_ON(c_bvec->da_endfind);
     BUG_ON(atomic_read(&c_bvec->reserv_nodes) != 0);
 
+    /* Start the read bvecs without any queueing. */
+    if(c_bvec_data_dir(c_bvec) == READ)
+    {
+        castle_da_read_bvec_start(da, c_bvec);
+        return;
+    }
+
+    /* If the DA is frozen the best we can do is return an error. */
+    if (castle_da_frozen(da))
+    {
+        c_bvec->endfind(c_bvec, -ENOSPC, INVAL_VAL_TUP);
+        return;
+    }
+
     /* Write requests must operate within the ios_budget but reads can be
      * scheduled immediately. */
-    if (c_bvec_data_dir(c_bvec) == WRITE)
+    wq = &da->ios_waiting[c_bvec->cpu_index];
+
+    spin_lock(&wq->lock);
+    if ((atomic_dec_return(&da->ios_budget) >= 0) && list_empty(&wq->list))
     {
-        struct castle_da_io_wait_queue *wq;
-
-        /* If the DA is frozen the best we can do is return an error. */
-        if (castle_da_frozen(da))
-        {
-            c_bvec->endfind(c_bvec, -ENOSPC, INVAL_VAL_TUP);
-            return;
-        }
-
-        wq = &da->ios_waiting[c_bvec->cpu_index];
-
-        spin_lock(&wq->lock);
-        if ((atomic_dec_return(&da->ios_budget) >= 0) && list_empty(&wq->list))
-        {
-            /* We're within the budget and there are no other IOs on the queue,
-             * schedule this write IO immediately. */
-            spin_unlock(&wq->lock);
-            castle_da_write_bvec_start(da, c_bvec);
-        }
-        else
-        {
-            /* Either the budget is exhausted or there are other IOs pending on
-             * the write queue.  Queue this write IO.
-             *
-             * Don't do a manual queue kick as if/when ios_budget is replenished
-             * kicks for all of the DA's write queues will be scheduled.  The
-             * kick for 'our' write queue will block on the spinlock we hold.
-             *
-             * ios_budget will be replenished; save an atomic op and leave it
-             * in a negative state. */
-            castle_da_bvec_queue(da, c_bvec);
-            spin_unlock(&wq->lock);
-        }
+        /* We're within the budget and there are no other IOs on the queue,
+         * schedule this write IO immediately. */
+        spin_unlock(&wq->lock);
+        castle_da_write_bvec_start(da, c_bvec);
     }
-    else /* !WRITE */
-        castle_da_read_bvec_start(da, c_bvec);
+    else
+    {
+        /* Either the budget is exhausted or there are other IOs pending on
+         * the write queue.  Queue this write IO.
+         *
+         * Don't do a manual queue kick as if/when ios_budget is replenished
+         * kicks for all of the DA's write queues will be scheduled.  The
+         * kick for 'our' write queue will block on the spinlock we hold.
+         *
+         * ios_budget will be replenished; save an atomic op and leave it
+         * in a negative state. */
+        castle_da_bvec_queue(da, c_bvec);
+        spin_unlock(&wq->lock);
+    }
 }
 
 /**************************************/
