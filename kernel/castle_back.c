@@ -334,7 +334,7 @@ static inline struct castle_back_buffer *castle_back_buffer_get(struct castle_ba
                                                                   unsigned long user_addr)
 {
     struct rb_node *node;
-    struct castle_back_buffer *buffer = NULL;
+    struct castle_back_buffer *buffer, *ret = NULL;
 
     node = conn->buffers_rb.rb_node;
 
@@ -356,17 +356,18 @@ static inline struct castle_back_buffer *castle_back_buffer_get(struct castle_ba
              * If it's ref_count is 0 then ignore it, otherwise increment by 1
              * and return it to the caller. */
             if (atomic_add_unless(&buffer->ref_count, 1, 0))
+            {
                 debug("castle_back_buffer_get ref_count is now %d\n",
                         atomic_read(&buffer->ref_count));
-            else
-                buffer = NULL;
+                ret = buffer;
+            }
 
             break;
         }
     }
     read_unlock(&conn->buffers_lock);
     
-    return buffer;
+    return ret;
 }
 
 /**
