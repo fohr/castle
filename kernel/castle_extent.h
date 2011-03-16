@@ -19,12 +19,14 @@ int                 castle_extent_exists                    (c_ext_id_t     ext_
 void                castle_extent_mark_live                 (c_ext_id_t     ext_id);
 int                 castle_extent_get                       (c_ext_id_t     ext_id);
 int                 castle_extent_put                       (c_ext_id_t     ext_id);
+void*               castle_extent_light_get                 (c_ext_id_t     ext_id);
+void                castle_extent_light_put                 (c_ext_id_t     ext_id);
 uint32_t            castle_extent_kfactor_get               (c_ext_id_t     ext_id);
 c_chk_cnt_t         castle_extent_size_get                  (c_ext_id_t     ext_id);
 int                 castle_extent_slave_count_get           (c_ext_id_t     ext_id);
 int                 castle_extent_active_slave_count_get    (c_ext_id_t     ext_id);
 /* Sets @chunks to all physical chunks holding the logical chunks from offset */
-uint32_t            castle_extent_map_get                   (c_ext_id_t     ext_id,
+uint32_t            castle_extent_map_get                   (void*          ext_p,
                                                              c_chk_t        offset,
                                                              c_disk_chk_t  *chk_maps,
                                                              int            rw);

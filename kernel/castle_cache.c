@@ -921,6 +921,9 @@ static void c2b_remaining_io_sub(int rw, int nr_pages, c2_block_t *c2b)
 
     debug("Completed io on c2b"cep_fmt_str_nl, cep2str(c2b->cep));
 
+    /* Release the extent. */
+    castle_extent_light_put(c2b->cep.ext_id);
+
     /* At least one of the bios for this c2b had an error. Handle that first. */
     if(c2b_bio_error(c2b))     
     {
@@ -1351,6 +1354,7 @@ int submit_c2b_remap_rda(c2_block_t *c2b, c_disk_chk_t *chunks, int nr_remaps)
     c_ext_id_t          ext_id = c2b->cep.ext_id;
     uint32_t            k_factor = castle_extent_kfactor_get(ext_id);
     int                 found_dirty_page = 0;
+    void                *ext_p;
     struct completion   completion;
 
     /* This can only be called with chunks populated, and nr_remaps > 0 */
@@ -1368,6 +1372,8 @@ int submit_c2b_remap_rda(c2_block_t *c2b, c_disk_chk_t *chunks, int nr_remaps)
     BUG_ON(atomic_read(&c2b->remaining) != 0);
     atomic_inc(&c2b->remaining);
     c_io_array_init(io_array);
+    /* Get extent reference (so that extent doesn't disappear under underneath us. */
+    ext_p = castle_extent_light_get(c2b->cep.ext_id);
 
     c2b->end_io = castle_cache_sync_io_end;
     c2b->private = &completion;
@@ -1465,6 +1471,7 @@ static int submit_c2b_rda(int rw, c2_block_t *c2b)
     c_ext_id_t    ext_id = c2b->cep.ext_id;
     uint32_t      k_factor = castle_extent_kfactor_get(ext_id);
     c_disk_chk_t  chunks[k_factor];
+    void         *ext_p;
 
     debug("Submitting c2b "cep_fmt_str", for %s\n", 
             __cep2str(c2b->cep), (rw == READ) ? "read" : "write");
@@ -1479,6 +1486,8 @@ static int submit_c2b_rda(int rw, c2_block_t *c2b)
     last_chk = INVAL_CHK;
     cur_chk = INVAL_CHK;
     c_io_array_init(io_array);
+    /* Get extent reference (so that extent doesn't disappear under underneath us. */
+    ext_p = castle_extent_light_get(c2b->cep.ext_id);
     /* Everything initialised, go through each page in the c2p. */
     c2b_for_each_page_start(page, c2p, cur_cep, c2b)
     {
@@ -1529,7 +1538,7 @@ static int submit_c2b_rda(int rw, c2_block_t *c2b)
             int ret;
             debug("Asking extent manager for "cep_fmt_str_nl,
                     cep2str(cur_cep));
-            ret = castle_extent_map_get(ext_id,
+            ret = castle_extent_map_get(ext_p,
                                         CHUNK(cur_cep.offset),
                                         chunks,
                                         rw);

@@ -1268,23 +1268,21 @@ static void __castle_extent_map_get(c_ext_t *ext, c_chk_t chk_idx, c_disk_chk_t 
     }
 }
 
-uint32_t castle_extent_map_get(c_ext_id_t             ext_id,
-                               c_chk_t                offset,
-                               c_disk_chk_t          *chk_map,
-                               int                   rw)
+uint32_t castle_extent_map_get(void          *ext_p,
+                               c_chk_t        offset,
+                               c_disk_chk_t  *chk_map,
+                               int            rw)
 {
-    c_ext_t      *ext;
-    uint32_t      ret;
+    c_ext_t *ext = ext_p;
+    uint32_t ret;
 
-    BUG_ON(ext_id == INVAL_EXT_ID);
-    
-    if ((ext = castle_extents_rhash_get(ext_id)) == NULL)
+    if(ext == NULL)
         return 0;
 
     if (offset >= ext->size)
     {
         printk("BUG in %s\n", __FUNCTION__);
-        printk("    Extent: %llu\n", ext_id);
+        printk("    Extent: %llu\n", ext->ext_id);
         printk("    Offset: %u\n", offset);
         printk("    Extent Size: %u\n", ext->size);
         BUG();
@@ -1310,7 +1308,6 @@ uint32_t castle_extent_map_get(c_ext_id_t             ext_id,
 
 map_done:
     ret = ext->k_factor;
-    castle_extents_rhash_put(ext);
 
     return ret;
 }
@@ -1433,6 +1430,30 @@ int castle_extent_put(c_ext_id_t ext_id)
 
     return 0;
 }
+
+/**
+ * Gets a 'light' reference to the extent. This is one that won't stop the extent from
+ * being scheduled for removal, but it'll preserve the extent structure in the hashtable
+ * and stop the freespace from being released.
+ */
+void* castle_extent_light_get(c_ext_id_t ext_id)
+{
+    return castle_extents_rhash_get(ext_id);
+}
+
+/**
+ * Puts the light reference.
+ */
+void castle_extent_light_put(c_ext_id_t ext_id)
+{
+    c_ext_t *ext;
+
+    if ((ext = castle_extents_hash_get(ext_id)) == NULL)
+        return;
+
+    castle_extents_rhash_put(ext);
+}
+
 
 /**
  * Hold a reference on the extent and return the dirtylist RB-tree.
