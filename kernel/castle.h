@@ -22,8 +22,10 @@
 #undef BUG
 #undef BUG_ON
 
-static inline ATTRIB_NORET void bug_fn(unsigned long line)
+static inline ATTRIB_NORET void bug_fn(char *file, unsigned long line)
 {
+    panic("Castle BUG, from: %s:%ld\n", file, line);
+#if 0
     /* Write the line number into R15, but push it onto the stack first. */
     __asm__ __volatile__ ("pushq %%r15\n\t"
                           "movq %0, %%r15;\n\t"
@@ -31,8 +33,9 @@ static inline ATTRIB_NORET void bug_fn(unsigned long line)
                             : : "i" (line) : "%r15" );
     /* Will never get here. */
     while(1){};
+#endif
 } 
-#define BUG()            do { bug_fn(__LINE__); } while(0)
+#define BUG()            do { bug_fn(__FILE__, __LINE__); } while(0)
 #define BUG_ON(_cond)    do { if(_cond) BUG(); } while(0)
 
 #define FLE strrchr(__FILE__, '/') ? strrchr(__FILE__, '/') + 1 : __FILE__ 
