@@ -3396,7 +3396,8 @@ static struct castle_da_merge* castle_da_merge_init(struct castle_double_array *
     btree = castle_btree_type_get(in_trees[0]->btree_type);
     for (i=0; i<nr_trees; i++)
     {
-        BUG_ON(btree != castle_btree_type_get(in_trees[i]->btree_type));
+        /* Btree types may, and often will be different during big merges. */
+        BUG_ON((level != BIG_MERGE) && btree != castle_btree_type_get(in_trees[i]->btree_type));
         BUG_ON((level != BIG_MERGE) && (in_trees[i]->level != level));
     }
 
