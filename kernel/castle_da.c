@@ -3967,7 +3967,8 @@ static int castle_da_merge_run(void *da_p)
 
             /* If there are any trees being compacted, they must be older than the
                two trees we want to merge here. */
-            BUG_ON(ct->compacting);
+            if (ct->compacting)
+                continue;
 
             if(!in_trees[1])
                 in_trees[1] = ct;
