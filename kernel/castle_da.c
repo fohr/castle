@@ -1077,7 +1077,7 @@ struct castle_iterator_type castle_ct_modlist_iter = {
  * @param iter [in] merged iterator that the RB tree belongs to
  * @param comp_iter [in] component iterator that the new kv pair belongs to
  */
-static void castle_ct_merged_iter_rbtree_insert(c_merged_iter_t *iter, 
+static int castle_ct_merged_iter_rbtree_insert(c_merged_iter_t *iter, 
                                                struct component_iterator *comp_iter)
 {
     struct rb_root *root = &iter->rb_root;
@@ -1085,6 +1085,7 @@ static void castle_ct_merged_iter_rbtree_insert(c_merged_iter_t *iter,
     struct rb_node *parent = NULL;
     struct rb_node *node = &comp_iter->rb_node;
     int nr_cmps = 0;
+    int ret = 0;
 
     /* Go until end of the tree. */
     while (*p)
@@ -1123,7 +1124,10 @@ static void castle_ct_merged_iter_rbtree_insert(c_merged_iter_t *iter,
             dup_iter = c_iter;
         }
         else
+        {
+            ret = 1;
             dup_iter = comp_iter;
+        }
 
         /* Skip the duplicated entry and clear cached bit of the component
          * iterator. */
@@ -1133,7 +1137,7 @@ static void castle_ct_merged_iter_rbtree_insert(c_merged_iter_t *iter,
             if (iter->each_skip)
                 iter->each_skip(iter, dup_iter);
             dup_iter->cached = 0;
-            return;
+            return ret;
         }
     }
 
@@ -1141,6 +1145,8 @@ static void castle_ct_merged_iter_rbtree_insert(c_merged_iter_t *iter,
     rb_link_node(node, parent, p);
     /* Set color and inturn balance the tree. */
     rb_insert_color(node, root);
+
+    return ret;
 }
 
 static struct component_iterator * castle_ct_merge_iter_rbtree_min_del(c_merged_iter_t *iter)
@@ -1200,11 +1206,16 @@ static int _castle_ct_merged_iter_prep_next(c_merged_iter_t *iter,
                 iter->src_items_completed++;
                 debug_iter("%s:%p:%d - cached\n", __FUNCTION__, iter, i);
                 /* Insert the kv pair into RB tree. */ 
-                /* It is possible that, this call could delete kv pairs inserted
-                 * by earlier component iterators from RB tree, if they are
-                 * found as duplicates. So, when has_next calls prep_next, we
-                 * could go through the same loop again for missing keys. */
-                castle_ct_merged_iter_rbtree_insert(iter, comp_iter);
+                /* It is possible that. this call could delete kv pairs of the component
+                 * iterators (which is fine, as we go through that component iterator anyway)
+                 * coming after this or it could delete the current kv pair itself. */
+                if (castle_ct_merged_iter_rbtree_insert(iter, comp_iter))
+                {
+                    /* If the current kv pair is deleted, get the next entry in this 
+                     * iterator. */
+                    i--;
+                    continue;
+                }
             }
             else
             {
