@@ -359,6 +359,17 @@ int castle_cache_size_get()
 }
 
 /**
+ * Workqueue-queued function which prints cache stats.
+ */
+static void castle_cache_stats_print_queue(void *unused)
+{
+    printk("castle_cache_stats_timer_tick: ");
+    castle_cache_stats_print(1);
+}
+
+static DECLARE_WORK(castle_cache_stats_print_work, castle_cache_stats_print_queue, NULL);
+
+/**
  * Tick handler for cache stats.
  *
  * @also castle_cache_stats_print()
@@ -367,9 +378,7 @@ static void castle_cache_stats_timer_tick(unsigned long foo)
 {
     BUG_ON(castle_cache_stats_timer_interval <= 0);
 
-    printk("castle_cache_stats_timer_tick: ");
-    castle_cache_stats_print(1);
-
+    schedule_work(&castle_cache_stats_print_work);
     setup_timer(&castle_cache_stats_timer, castle_cache_stats_timer_tick, 0);
     mod_timer(&castle_cache_stats_timer, jiffies + (HZ * castle_cache_stats_timer_interval));
 }
