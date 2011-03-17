@@ -387,10 +387,6 @@ static int castle_extent_writeback(c_ext_t *ext, void *store)
     if (LOGICAL_EXTENT(ext->ext_id))
         return 0;
 
-    if (atomic_read(&ext->obj_refs) != 1)
-        printk("Unexpected extents ref count: (%llu, %u)\n", ext->ext_id,
-                atomic_read(&ext->obj_refs));
-
     debug("Writing back extent %llu\n", ext->ext_id);
 
     CONVERT_EXTENT_TO_MENTRY(ext, &mstore_entry);
