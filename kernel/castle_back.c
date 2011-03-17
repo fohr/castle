@@ -381,6 +381,8 @@ static void castle_back_buffer_put(struct castle_back_conn *conn,
 {
     int use_cnt;
 
+    BUG_ON(buf == NULL);
+
     use_cnt = atomic_sub_return(1, &buf->ref_count);
     debug("castle_back_buffer_put ref_count=%i, buf=%p\n", use_cnt, buf);
 
@@ -1216,7 +1218,7 @@ static void castle_back_replace(void *data)
     castle_free(key);
     return;
     
-err3: castle_back_buffer_put(conn, op->buf);
+err3: if (op->buf) castle_back_buffer_put(conn, op->buf);
 err2: castle_free(key);
 err1: castle_attachment_put(op->attachment);
 err0: castle_back_reply(op, err, 0, 0);
