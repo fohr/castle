@@ -122,67 +122,6 @@ static void inline _prefix##_hash_init(void)                                    
         INIT_LIST_HEAD(&_tab[i]);                                                    \
 }
 
-/* Reference Hash Table with reference count on each structure */
-#define DEFINE_RHASH_TBL(_prefix, _tab, _tab_size, _struct, _list_mbr, _key_t, _key, _ref_mbr) \
-                                                                                     \
-DEFINE_HASH_TBL(_prefix, _tab, _tab_size, _struct, _list_mbr, _key_t, _key)          \
-static DECLARE_WAIT_QUEUE_HEAD(_prefix##_wait_q);                                    \
-                                                                                     \
-static inline void _prefix##_rhash_add(_struct *v)                                   \
-{                                                                                    \
-    int idx = _prefix##_hash_idx(v->_key);                                           \
-    unsigned long flags;                                                             \
-                                                                                     \
-    write_lock_irqsave(&_prefix##_hash_lock, flags);                                  \
-    atomic_set(&v->_ref_mbr, 0);                                                     \
-    list_add(&v->_list_mbr, &_tab[idx]);                                             \
-    write_unlock_irqrestore(&_prefix##_hash_lock, flags);                             \
-}                                                                                    \
-                                                                                     \
-static inline _struct* _prefix##_rhash_get(_key_t key)                               \
-{                                                                                    \
-    _struct *v;                                                                      \
-    unsigned long flags;                                                             \
-                                                                                     \
-    read_lock_irqsave(&_prefix##_hash_lock, flags);                                  \
-    v = __##_prefix##_hash_get(key);                                                 \
-    if (v)                                                                           \
-        atomic_inc(&v->_ref_mbr);                                                    \
-    read_unlock_irqrestore(&_prefix##_hash_lock, flags);                             \
-                                                                                     \
-    return v;                                                                        \
-}                                                                                    \
-                                                                                     \
-static inline void _prefix##_rhash_put(_struct *v)                                   \
-{                                                                                    \
-    unsigned long flags;                                                             \
-                                                                                     \
-    read_lock_irqsave(&_prefix##_hash_lock, flags);                                  \
-    if (v)                                                                           \
-    {                                                                                \
-        atomic_dec(&v->_ref_mbr);                                                    \
-        wake_up(&_prefix##_wait_q);                                                  \
-    }                                                                                \
-    read_unlock_irqrestore(&_prefix##_hash_lock, flags);                             \
-}                                                                                    \
-                                                                                     \
-static inline void _prefix##_rhash_remove(_struct *v)                                \
-{                                                                                    \
-    unsigned long flags;                                                             \
-                                                                                     \
-    write_lock_irqsave(&_prefix##_hash_lock, flags);                                 \
-    debug("Waiting to delete ext: %llu|ref:%u\n", v->ext_id, v->_ref_mbr);           \
-    while (atomic_read(&v->_ref_mbr) != 0)                                                         \
-    {                                                                                \
-        write_unlock_irqrestore(&_prefix##_hash_lock, flags);                        \
-        wait_event(_prefix##_wait_q, (atomic_read(&v->_ref_mbr) == 0));                            \
-        write_lock_irqsave(&_prefix##_hash_lock, flags);                             \
-    }                                                                                \
-    list_del(&v->_list_mbr);                                                         \
-    debug("Deleted extent: %llu\n", v->ext_id);                                      \
-    write_unlock_irqrestore(&_prefix##_hash_lock, flags);                            \
-}                                                                                    \
-
 /**
  * list_for_each_from - iterate over list of given type from the current point
  * @from:   curren point to start from
