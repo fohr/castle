@@ -65,6 +65,11 @@ static int                      castle_da_exiting    = 0;
 
 static int                      castle_dynamic_driver_merge = 1; 
 
+static int                      castle_merges_abortable = 0; /* 0 or 1, default=disabled */
+module_param(castle_merges_abortable, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
+MODULE_PARM_DESC(castle_merges_abortable, "Allow on-going merges to abort upon exit condition");
+
+
 static struct
 {
     int                     cnt;    /**< Size of cpus array.                        */
@@ -2857,8 +2862,11 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
         castle_ext_freespace_fini(&merge->data_ext_free);
 
         if (merge->bloom_exists)
+        {
+            /* Abort (i.e. free) incomplete bloom filters */
+            castle_bloom_abort(&merge->bloom);
             castle_bloom_destroy(&merge->bloom);
-
+        }
         out_tree = merge->out_tree;
         /* Free the component tree, if one was allocated. */
         if(out_tree)
@@ -3573,7 +3581,7 @@ static int castle_da_merge_do(struct castle_double_array *da,
 {
     struct castle_da_merge *merge;
     uint32_t units_cnt;
-    tree_seq_t out_tree_id;
+    tree_seq_t out_tree_id=0;
     int ret;
 
     castle_trace_da_merge(TRACE_START,
@@ -3615,6 +3623,14 @@ static int castle_da_merge_do(struct castle_double_array *da,
                                    level,
                                    units_cnt,
                                    0);
+        /* Check for castle stop and merge abort */
+        if((castle_merges_abortable)&&(exit_cond))
+        {
+            printk("Merge for DA=%d, level=%d, aborted.\n", da->id, level);
+            ret = -ESHUTDOWN; 
+            goto merge_aborted;
+        }
+
         /* Perform the merge work. */
         ret = castle_da_merge_unit_do(merge, units_cnt);
         /* Trace event. */
@@ -3646,6 +3662,7 @@ static int castle_da_merge_do(struct castle_double_array *da,
     /* Finish the last unit, packaging the output tree. */
     out_tree_id = castle_da_merge_last_unit_complete(da, level, merge);
     ret = TREE_INVAL(out_tree_id) ? -ENOMEM : 0;
+merge_aborted:
 merge_failed:
     /* Unhard-pin T1s in the cache. Do this before we deallocate the merge and extents. */
     if (level == 1)
@@ -3659,6 +3676,7 @@ merge_failed:
     debug_merges("MERGE END - L%d -> [%u]\n", level, out_tree_id);
     castle_da_merge_dealloc(merge, ret);
     castle_trace_da_merge(TRACE_END, TRACE_DA_MERGE_ID, da->id, level, out_tree_id, 0);
+    if(ret==-ESHUTDOWN) return -ESHUTDOWN; /* merge abort */
     if(ret)
     {
         printk("Merge for DA=%d, level=%d, failed to merge err=%d.\n", da->id, level, ret);
@@ -3934,7 +3952,7 @@ static int castle_da_merge_run(void *da_p)
     struct castle_double_array *da = (struct castle_double_array *)da_p;
     struct castle_component_tree *in_trees[2];
     struct list_head *l;
-    int level, ignore;
+    int level, ignore, ret;
 
     /* Work out the level at which we are supposed to be doing merges.
        Do that by working out where is this thread in threads array. */
@@ -3984,14 +4002,16 @@ static int castle_da_merge_run(void *da_p)
 
         debug_merges("Doing merge, trees=[%u]+[%u]\n", in_trees[0]->seq, in_trees[1]->seq);
 
-        /* Do the merge. If fails, retry after 10s. */
-        if (castle_da_merge_do(da, 2, in_trees, level))
+        /* Do the merge. If fails, retry after 10s (unless it's a merge abort). */
+        ret=castle_da_merge_do(da, 2, in_trees, level);
+        if(ret==-ESHUTDOWN) goto exit_thread; /* -ESHUTDOWN can only mean merge abort */
+        if (ret)
         {
             msleep(10000);
             continue;
         }
     } while(1);
-
+exit_thread:
     debug_merges("Merge thread exiting.\n");
 
     write_lock(&da->lock);
