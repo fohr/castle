@@ -834,7 +834,7 @@ int castle_extent_space_alloc(c_ext_t *ext, da_id_t da_id)
     rda_state = rda_spec->extent_init(ext->ext_id, ext->size, ext->type);
     if (!rda_state)
     {
-        printk("Couldn't initialise RDA state.\n");
+        debug("Couldn't initialise RDA state.\n");
         err = -EINVAL;
         goto out;
     }
@@ -1010,7 +1010,7 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t rda_type,
   
     if (castle_extent_space_alloc(ext, da_id) < 0)
     {
-        printk("Extent alloc failed for %u chunks\n", count);
+        debug("Extent alloc failed for %u chunks\n", count);
         goto __hell;
     }
   
@@ -1479,7 +1479,7 @@ static int castle_extent_check_alive(c_ext_t *ext, void *unused)
     if (ext->alive == 0)
     {
         printk("Found a dead extent: %llu - Cleaning it\n", ext->ext_id);
-        read_unlock_irq(&castle_extents_hash_lock);a
+        read_unlock_irq(&castle_extents_hash_lock);
         /* Extent is dead and not referenced any of the structures. Free it. */
         castle_extent_free(ext->ext_id);
         read_lock_irq(&castle_extents_hash_lock);

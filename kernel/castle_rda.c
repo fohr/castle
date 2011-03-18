@@ -363,7 +363,7 @@ void* castle_ssd_rda_extent_init(c_ext_id_t ext_id,
     }
     if(state->nr_slaves == 0)
     {
-        printk("Could not allocate SSD extent size: %d. No SSDs found.\n", size);
+        debug("Could not allocate SSD extent size: %d. No SSDs found.\n", size);
         goto unreserve_err_out;
     }
     castle_rda_slaves_shuffle(state->permuted_slaves, state->nr_slaves);
