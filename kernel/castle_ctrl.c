@@ -663,7 +663,7 @@ void castle_control_slave_evacuate(uint32_t uuid, int *ret)
     *ret = EXIT_SUCCESS;
 }
 
-int castle_nice_value = 0;
+int castle_nice_value = -5;
 
 /**
  * Change priority of a work thread. This function gets scheduled by driver

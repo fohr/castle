@@ -392,9 +392,8 @@ typedef struct castle_var_length_object_key {
     c_vl_key_t *dims[];
 } PACKED c_vl_okey_t;
 
-#define CASTLE_RING_PAGES (2)
-/* CASTLE_RING_SIZE must be a power of 2, or code will silently break */
-#define CASTLE_RING_SIZE (CASTLE_RING_PAGES << PAGE_SHIFT)
+#define CASTLE_RING_PAGES (16)                              /**< 64 requests/page.                */
+#define CASTLE_RING_SIZE (CASTLE_RING_PAGES << PAGE_SHIFT)  /**< Must be ^2 or things break.      */
 
 #define CASTLE_IOCTL_POKE_RING 2
 #define CASTLE_IOCTL_WAIT 3

@@ -735,6 +735,8 @@ static void castle_ct_modlist_iter_merge_ranges(c_modlist_iter_t *iter,
 
     for (dst_idx = r1->start; dst_idx <= r2->end; dst_idx++)
     {
+        might_resched();
+
         /* Both ranges have more entries if their indexes lie within the range. */
         if (r1_idx <= r1->end && r2_idx <= r2->end)
         {
@@ -6168,7 +6170,7 @@ static int __castle_da_threads_priority_set(struct castle_double_array *da, void
     for (i=0; i<MAX_DA_LEVEL; i++)
     {
         if (da->levels[i].merge.thread)
-            set_user_nice(da->levels[i].merge.thread, nice_value);
+            set_user_nice(da->levels[i].merge.thread, nice_value + 15);
     }
 
     return 0;
