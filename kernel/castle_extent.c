@@ -49,8 +49,7 @@
         (_ext)->type        = (_me)->type;                                  \
         (_ext)->k_factor    = (_me)->k_factor;                              \
         (_ext)->maps_cep    = (_me)->maps_cep;                              \
-        (_ext)->curr_rebuild_seqno = (_me)->curr_rebuild_seqno;             \
-        atomic_set(&(_ext)->obj_refs, (_me)->obj_refs);                     
+        (_ext)->curr_rebuild_seqno = (_me)->curr_rebuild_seqno;             
 
 #define CONVERT_EXTENT_TO_MENTRY(_ext, _me)                                 \
         (_me)->ext_id       = (_ext)->ext_id;                               \
@@ -58,8 +57,7 @@
         (_me)->type         = (_ext)->type;                                 \
         (_me)->k_factor     = (_ext)->k_factor;                             \
         (_me)->maps_cep     = (_ext)->maps_cep;                             \
-        (_me)->curr_rebuild_seqno = (_ext)->curr_rebuild_seqno;             \
-        (_me)->obj_refs     = atomic_read(&(_ext)->obj_refs);                              
+        (_me)->curr_rebuild_seqno = (_ext)->curr_rebuild_seqno;             
  
 #define FAULT_CODE EXTENT_FAULT
 
@@ -85,9 +83,6 @@ typedef struct castle_extent {
     c_disk_chk_t        *shadow_map;
     int                 use_shadow_map; /* Extent is currently being remapped */
     atomic_t            ref_cnt;
-    atomic_t            obj_refs;       /**< Number of references to extent. Gets
-                                             updated with extents hash read lock. 
-                                             Need to be atomic_t. */
     uint8_t             alive;
     c_ext_dirtylist_t   dirtylist;      /**< Extent c2b dirtylist */
     struct work_struct  work;           /**< work structure to schedule extent free. */
@@ -150,7 +145,6 @@ static c_ext_t * castle_ext_alloc(c_ext_id_t ext_id)
     ext->dirtylist.rb_root  = RB_ROOT;
     ext->deleted            = 0;
     ext->maps_cep           = INVAL_EXT_POS;
-    atomic_set(&ext->obj_refs, 1);
     atomic_set(&ext->ref_cnt, 1);
     spin_lock_init(&ext->dirtylist.lock);
     spin_lock_init(&ext->shadow_map_lock);
@@ -1065,11 +1059,10 @@ static void _castle_extent_free(struct work_struct *work)
     struct castle_extents_superblock *castle_extents_sb = NULL;
     c_ext_id_t ext_id = ext->ext_id;
 
-    if (atomic_read(&ext->obj_refs) || atomic_read(&ext->ref_cnt))
+    if (atomic_read(&ext->ref_cnt))
     {
-        printk("Couldn't delete the referenced extent %llu, %d, %d\n", 
+        printk("Couldn't delete the referenced extent %llu, %d\n", 
                 ext_id,
-                atomic_read(&ext->obj_refs),
                 atomic_read(&ext->ref_cnt));
         BUG();
     }
@@ -1375,61 +1368,13 @@ void castle_extent_sup_ext_close(struct castle_slave *cs)
     return;
 }
 
-int castle_extent_get(c_ext_id_t ext_id)
-{
-    c_ext_t *ext;
-    unsigned long flags;
-
-    read_lock_irqsave(&castle_extents_hash_lock, flags);
-
-    ext = __castle_extents_hash_get(ext_id);
-    if (!ext)
-    {
-        read_unlock_irqrestore(&castle_extents_hash_lock, flags);
-        return -EINVAL;
-    }
-    atomic_inc(&ext->obj_refs);
-
-    read_unlock_irqrestore(&castle_extents_hash_lock, flags);
-
-    return 0;
-}
-
-int castle_extent_put(c_ext_id_t ext_id)
-{
-    c_ext_t *ext = castle_extents_hash_get(ext_id);
-    unsigned long flags;
-    int free_ext = 0;
-
-    if (EXT_ID_INVAL(ext_id))
-        return -EINVAL;
-
-    BUG_ON(ext == NULL);
-
-    read_lock_irqsave(&castle_extents_hash_lock, flags);
-
-    ext = __castle_extents_hash_get(ext_id);
-    BUG_ON(!ext);
-
-    if (atomic_dec_return(&ext->obj_refs) == 0)
-        free_ext = 1;
-    debug("Object Refrence for %llu: %u\n", ext_id, ext->obj_refs);
-
-    read_unlock_irqrestore(&castle_extents_hash_lock, flags);
-
-    if (free_ext)
-        castle_extent_light_put(ext_id);
-
-    return 0;
-}
-
 #define LIVE_EXTENT(_ext) ((_ext) && !(_ext)->deleted)
 /**
  * Gets a 'light' reference to the extent. This is one that won't stop the extent from
  * being scheduled for removal, but it'll preserve the extent structure in the hashtable
  * and stop the freespace from being released.
  */
-void* castle_extent_light_get(c_ext_id_t ext_id)
+void* castle_extent_get(c_ext_id_t ext_id)
 {
     unsigned long flags;
     c_ext_t *ext;
@@ -1460,7 +1405,7 @@ void* castle_extent_light_get(c_ext_id_t ext_id)
  * should happen atomically under extents global mutex (as a transaction for the sake of 
  * checkpoiting).
  */
-void castle_extent_light_put(c_ext_id_t ext_id)
+void castle_extent_put(c_ext_id_t ext_id)
 {
     unsigned long flags;
     c_ext_t *ext;
@@ -1472,8 +1417,7 @@ void castle_extent_light_put(c_ext_id_t ext_id)
     ext = __castle_extents_hash_get(ext_id);
 
     /* Dont do put on deleted extents. */
-    if (LIVE_EXTENT(ext) && 
-        (atomic_dec_return(&ext->ref_cnt) == 0) && (atomic_read(&ext->obj_refs) == 0))
+    if (LIVE_EXTENT(ext) &&  atomic_dec_return(&ext->ref_cnt) == 0)
     {
         /* Increment the count of scheduled extents for deletion. Last checkpoint, conseqeuntly,
          * castle_exit waits for all outstanding dead extents to get destroyed. */
@@ -1503,7 +1447,7 @@ c_ext_dirtylist_t* castle_extent_dirtylist_get(c_ext_id_t ext_id)
 {
     c_ext_t *ext;
 
-    if ((ext = castle_extent_light_get(ext_id)) == NULL)
+    if ((ext = castle_extent_get(ext_id)) == NULL)
         return NULL;
 
     return &ext->dirtylist;
@@ -1517,17 +1461,27 @@ c_ext_dirtylist_t* castle_extent_dirtylist_get(c_ext_id_t ext_id)
  */
 void castle_extent_dirtylist_put(c_ext_id_t ext_id)
 {
-    castle_extent_light_put(ext_id);
+    castle_extent_put(ext_id);
 }
 
+/* Check if the extent is alive or not. 
+ * Extent is alive if it referenced by one of 
+ *  - Component Trees in a DA
+ *      - Tree Extent
+ *      - Medium Object Extent
+ *      - Large Object Extent
+ *  - Logical Extents
+ *
+ *  Other wise free it.
+ */
 static int castle_extent_check_alive(c_ext_t *ext, void *unused)
 {
     if (ext->alive == 0)
     {
         printk("Found a dead extent: %llu - Cleaning it\n", ext->ext_id);
-        BUG_ON(atomic_read(&ext->obj_refs) != 1);
-        read_unlock_irq(&castle_extents_hash_lock);
-        castle_extent_put(ext->ext_id);
+        read_unlock_irq(&castle_extents_hash_lock);a
+        /* Extent is dead and not referenced any of the structures. Free it. */
+        castle_extent_free(ext->ext_id);
         read_lock_irq(&castle_extents_hash_lock);
     }
     return 0;
@@ -1560,7 +1514,7 @@ static int castle_extent_rebuild_list_add(c_ext_t *ext, void *unused)
          * Take a reference to the extent. We will drop this when we have finished remapping
          * the extent.
          */
-        castle_extent_light_get(ext->ext_id);
+        castle_extent_get(ext->ext_id);
     }
     return 0;
 }
@@ -2083,7 +2037,7 @@ static int castle_extent_remap(c_ext_t *ext)
     castle_vfree(ext->shadow_map);
 
     /* Release the hold we took in castle_rebuild_extent_add */
-    castle_extent_light_put(ext->ext_id);
+    castle_extent_put(ext->ext_id);
     return EXIT_SUCCESS;
 }
 
@@ -2163,7 +2117,7 @@ restart:
             }
             /* We don't need the extent list any more - drop refs to remaining extents. */
             if (exit_early)
-                castle_extent_light_put(ext->ext_id);
+                castle_extent_put(ext->ext_id);
         }
 
         if (exit_early)
