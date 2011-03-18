@@ -130,7 +130,7 @@ struct task_struct   *rebuild_thread;
  * restarted when it finishes it's current run to pick up and remap any extents that
  * have already been remapped to the (old) current_rebuild_seqno.
  */
-static atomic_t             current_rebuild_seqno;/* The latest rebuild sequence number */
+atomic_t                    current_rebuild_seqno;/* The latest rebuild sequence number */
 static int                  rebuild_to_seqno;     /* The sequence number being rebuilt to */
 
 static int                  castle_extents_rescan_required = 0;
@@ -290,6 +290,10 @@ static int castle_extent_micro_ext_create(void)
     list_for_each(l, &castle_slaves.slaves)
     {
         struct castle_slave *cs = list_entry(l, struct castle_slave, list);
+
+        /* Don't add maps for ghost slaves. */
+        if (test_bit(CASTLE_SLAVE_REMAPPED_BIT, &cs->flags))
+            continue;
 
         BUG_ON(MICRO_EXT_SIZE != 1);
         
@@ -508,13 +512,12 @@ int castle_extents_read(void)
 
     castle_extents_super_block_read();
 
+    castle_extent_micro_ext_create();
+
     ext_sblk = castle_extents_super_block_get();
 
     /* Read maps freespace structure from extents superblock. */
     castle_ext_freespace_unmarshall(&meta_ext_free, &ext_sblk->meta_ext_free_bs);
-
-    if (load_extent_from_mentry(&ext_sblk->micro_ext))
-        goto error_out;
 
     if (load_extent_from_mentry(&ext_sblk->meta_ext))
         goto error_out;
@@ -524,6 +527,8 @@ int castle_extents_read(void)
 
     if (load_extent_from_mentry(&ext_sblk->mstore_ext[1]))
         goto error_out;
+
+    atomic_set(&current_rebuild_seqno, ext_sblk->current_rebuild_seqno);
 
     /* Mark Logical extents as alive. */
     castle_extent_mark_live(MICRO_EXT_ID);
@@ -628,69 +633,23 @@ static struct castle_extent_state *castle_extent_state_alloc(c_ext_t *ext)
 }
 
 /**
- * Collects disk chunks to be freed from an extent into superchunks, and frees the superchunks
- * to the freespace layer.
- *
- * @param ext_state     State structure passed to every call to this function for a given 
- *                      extent.
- * @param disk_chk      Disk chunk to be freed.
- * @param copy          Which k-RDA copy did this chunk belong to.
- */
-static void castle_extent_disk_chk_free(struct castle_extent_state *ext_state,
-                                        c_disk_chk_t disk_chk,
-                                        int copy)
-{
-    struct castle_slave *cs;
-    c_chk_t *chk;
-#define SUPER_CHUNK_STRUCT(chk_idx)  ((c_chk_seq_t){chk_idx, CHKS_PER_SLOT})
-
-    cs = castle_slave_find_by_uuid(disk_chk.slave_id);
-    if(!cs)
-    {
-        printk("When freeing extent=%lld, couldn't free disk chk="disk_chk_fmt", disk not found.\n",
-                ext_state->ext->ext_id, disk_chk2str(disk_chk));
-        return;
-    }
-    chk = &ext_state->chunks[cs->id][copy];
-    /* Check whether we are moving to a different superchunk. */
-    BUG_ON(CHK_INVAL(*chk) && (SUPER_CHUNK(*chk) == SUPER_CHUNK(disk_chk.offset)));
-    if(SUPER_CHUNK(*chk) != SUPER_CHUNK(disk_chk.offset))
-    {
-        debug("Freeing superchunk: "disk_chk_fmt", from ext_id: %lld\n", 
-                disk_chk2str(disk_chk), ext_state->ext->ext_id);
-        /* Chunk should be super chunk aligned. */
-        BUG_ON(disk_chk.offset % CHKS_PER_SLOT != 0);
-        /* Previous chunk freed for that (slave, copy_id), should have been last
-           superchunk chunk. */
-        BUG_ON(!CHK_INVAL(*chk) && (((*chk+1) % CHKS_PER_SLOT) != 0));
-        /* Free the superchunk. */
-        castle_freespace_slave_superchunk_free(cs, SUPER_CHUNK_STRUCT(disk_chk.offset));
-        /* Invalidate the chunk stored in state structure, so that it get reset
-           correctly below. */
-        *chk = INVAL_CHK;
-    }
-    /* We expect disk chunk to follow previous chunk. */
-    BUG_ON(!CHK_INVAL(*chk) && (*chk+1 != disk_chk.offset));
-    *chk = disk_chk.offset;
-}
-
-/**
  * Frees specified number of disk chunks allocated to the specified extent. Called when destroying
  * extents, or during failed allocations, to return already allocated disk space.
  *
  * @param ext   Extent to free the disk space for.
  * @param count Number of chunks to free.
  * 
- * @FIXME Cannot handle kmallac failure. We should retry freeing extent freespace, 
+ * @FIXME Cannot handle kmalloc failure. We should retry freeing extent freespace, 
  * once memory becomes available. 
  */
 static void castle_extent_space_free(c_ext_t *ext, c_chk_cnt_t count)
 {
-    struct castle_extent_state *ext_state; 
-    c_chk_cnt_t chks_per_page;
-    c_ext_pos_t map_cep;
-    c2_block_t *map_c2b;
-    c_disk_chk_t *map_buf;
+    struct castle_extent_state  *ext_state; 
+    c_chk_cnt_t                 chks_per_page;
+    c_ext_pos_t                 map_cep;
+    c2_block_t                  *map_c2b;
+    c_disk_chk_t                *map_buf;
+    struct castle_slave         *cs;
 
     debug("Freeing %d disk chunks from extent %lld\n", count, ext->ext_id);
     ext_state = castle_extent_state_alloc(ext);
@@ -716,22 +675,26 @@ static void castle_extent_space_free(c_ext_t *ext, c_chk_cnt_t count)
                             chks_per_page :
                             (count - 1) / ext->k_factor + 1; 
         /* For each logical chunk, look through each copy. */
-        for( logical_chunk=0; 
-            (logical_chunk<chks_per_page) && (count > 0); 
-             logical_chunk++)
+        for( logical_chunk=0; (logical_chunk<chks_per_page) && (count > 0); logical_chunk++)
         {
             int copy;
-            for( copy=0; 
-                (copy<ext->k_factor) && (count > 0); 
-                 copy++)
+            for(copy=0; (copy<ext->k_factor) && (count > 0); copy++)
             {
-                debug("Freeing logical_chunk=%d, copy=%d, disk_chk="disk_chk_fmt_nl,
-                        logical_chunk, 
-                        copy, 
-                        disk_chk2str(map_buf[logical_chunk * ext->k_factor + copy]));
-                castle_extent_disk_chk_free(ext_state, 
-                                            map_buf[logical_chunk * ext->k_factor + copy],
-                                            copy);
+#define SUPER_CHUNK_STRUCT(chk_idx)  ((c_chk_seq_t){chk_idx, CHKS_PER_SLOT})
+                cs = castle_slave_find_by_uuid(
+                    map_buf[logical_chunk*ext->k_factor + copy].slave_id);
+                if (!test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags))
+                {
+                    if (map_buf[logical_chunk * ext->k_factor + copy].offset % CHKS_PER_SLOT == 0)
+                    {
+                        /* If chunk is super chunk aligned, free that superchunk. */
+                        debug("Freeing superchunk: "disk_chk_fmt", from ext_id: %lld\n",
+                            disk_chk2str(map_buf[logical_chunk * ext->k_factor + copy]),
+                                        ext_state->ext->ext_id);
+                        castle_freespace_slave_superchunk_free(cs,
+                            SUPER_CHUNK_STRUCT(map_buf[logical_chunk * ext->k_factor + copy].offset));
+                    }
+                }
                 count--;
             }
         }
@@ -784,18 +747,18 @@ static c_disk_chk_t castle_extent_disk_chk_alloc(da_id_t da_id,
     chk_seq = castle_freespace_slave_superchunk_alloc(slave, da_id, token);
     if (CHK_SEQ_INVAL(chk_seq))
     {
-       /*
-        * We get an here if the slave is either out-or-service, or out of space. If the slave is
-        * out-of-service then just return INVAL_DISK_CHK so calling stack can retry.
-        */
-        if (!test_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags))
-        {
-            /* Slave is not out-of-service so we are out of space */
-            printk("Failed to get freespace from slave: 0x%x\n", slave->uuid);
-            castle_freespace_stats_print();
-            low_disk_space = 1;
-        }
-        return INVAL_DISK_CHK;
+        /*
+         * We get here if the slave is either out-or-service, or out of space. If the slave is
+         * out-of-service then just return INVAL_DISK_CHK so calling stack can retry.
+         */
+         if (!test_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags))
+         {
+             /* Slave is not out-of-service so we are out of space */
+             printk("Failed to get freespace from slave: 0x%x\n", slave->uuid);
+             castle_freespace_stats_print();
+             low_disk_space = 1;
+         }
+         return INVAL_DISK_CHK;
     }
     /* Chunk sequence must represent a single superchunk. */
     BUG_ON(chk_seq.count != CHKS_PER_SLOT);
@@ -1590,14 +1553,14 @@ static int castle_extent_rebuild_list_add(c_ext_t *ext, void *unused)
     if ((!SUPER_EXTENT(ext->ext_id) && !(ext->ext_id == MICRO_EXT_ID)) &&
         (ext->curr_rebuild_seqno < atomic_read(&current_rebuild_seqno)))
     {
-        debug("Adding extent %llu to rebuild list for seqno %u\n",
-               ext->ext_id, atomic_read(&current_rebuild_seqno));
+        debug("Adding extent %llu to rebuild list for extent seqno %u, global seqno %u\n",
+               ext->ext_id, ext->curr_rebuild_seqno, atomic_read(&current_rebuild_seqno));
         list_add_tail(&ext->rebuild_list, &rebuild_list);
         /*
          * Take a reference to the extent. We will drop this when we have finished remapping
          * the extent.
          */
-        atomic_inc(&ext->obj_refs);
+        castle_extent_light_get(ext->ext_id);
     }
     return 0;
 }
@@ -1607,72 +1570,83 @@ static int castle_extent_rebuild_list_add(c_ext_t *ext, void *unused)
  * remapping, and for each of those slaves a set of chunks to use for remapping, and an indication
  * of which chunk to use next.
  */
+typedef struct live_slave {
+    c_disk_chk_t    chunks[CHKS_PER_SLOT];  /* Chunk mappings (slave, offset) for slave. */
+    int             next_chk;               /* The next chunk to use. */
+    uint32_t        uuid;                   /* Uuid for slave. */
+} live_slave_t;
+
 static struct remap_state {
-    c_disk_chk_t    *chunks[MAX_NR_SLAVES];      /* chunk mappings (slave, offset) for all slaves. */
-    int             next_chk[MAX_NR_SLAVES];     /* For each 'live' slave, the next chunk to use. */
     int             nr_live_slaves;              /* Number of slaves available for remapping. */
-    uint32_t        live_slaves[MAX_NR_SLAVES];  /* uuids for all 'live' slaves. */
+    live_slave_t    *live_slaves[MAX_NR_SLAVES];
 } remap_state;
 
 /*
  * (Re-)populate the list of 'live' slaves. This is the list that can currently be used as a
  * source of replacement slaves for remapping.
  */
-static void populate_live_slaves(void)
+static void castle_extents_remap_state_init(void)
 {
     struct list_head        *lh;
     struct castle_slave     *cs;
     int                     i;
 
-    remap_state.nr_live_slaves = 0;
-    list_for_each(lh, &castle_slaves.slaves)
+    if (remap_state.nr_live_slaves)
     {
-        cs = list_entry(lh, struct castle_slave, list);
-        if ((!test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags)) &&
-            (!test_bit(CASTLE_SLAVE_EVACUATE_BIT, &cs->flags)))
-            remap_state.live_slaves[remap_state.nr_live_slaves++] = cs->uuid;
+        /* This is a re-population - a slave has become unavailable as a source for remapping. */
+        for (i=0; i<remap_state.nr_live_slaves; i++)
+        {
+            /* Previous re-population may have left 'holes' in remap_state.live_slaves. */
+            if (remap_state.live_slaves[i])
+            {
+                cs = castle_slave_find_by_uuid(remap_state.live_slaves[i]->uuid);
+                if ((test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags)) ||
+                    (test_bit(CASTLE_SLAVE_EVACUATE_BIT, &cs->flags)))
+                {
+                    /*
+                     * A previously-live slave is now no longer available for remapping.
+                     * Leave the slave as a 'hole' in remap_state.live_slaves.
+                     */
+                    BUG_ON(!remap_state.live_slaves[i]);
+                    castle_free(remap_state.live_slaves[i]);
+                    remap_state.live_slaves[i] = NULL;
+                }
+                /* Still alive - leave it as it is. */
+            }
+        }
+    } else
+    {
+        /* Initial population at startup. */
+        list_for_each(lh, &castle_slaves.slaves)
+        {
+            cs = list_entry(lh, struct castle_slave, list);
+            if ((!test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags)) &&
+                (!test_bit(CASTLE_SLAVE_EVACUATE_BIT, &cs->flags)))
+                {
+                    remap_state.live_slaves[remap_state.nr_live_slaves] =
+                        castle_zalloc(sizeof(live_slave_t), GFP_KERNEL);
+                    BUG_ON(!remap_state.live_slaves[remap_state.nr_live_slaves]);
+                    remap_state.live_slaves[remap_state.nr_live_slaves]->uuid = cs->uuid;
+                    remap_state.nr_live_slaves++;
+                }
+        }
+        for (i=remap_state.nr_live_slaves; i<MAX_NR_SLAVES; i++)
+            remap_state.live_slaves[i++] = NULL;
     }
-    for (i=remap_state.nr_live_slaves; i<MAX_NR_SLAVES; i++)
-        remap_state.live_slaves[i++] = 0;
 }
 
 /*
- * Initialises the remap_state structure
- */
-static void castle_extents_remap_state_init(void)
-{
-    int i;
-    
-    /* Initialise the remap_state structure. */
-    for (i=0; i<MAX_NR_SLAVES; i++)
-        remap_state.next_chk[i] = 0;    /* 0 means that no chunks are allocated yet. */
-
-    /* Create the array and counter of live slaves that can be used for remapping. */
-    populate_live_slaves();
-
-    /*
-     * Allocate space for disk chunks for each 'live' slave. This doesn't need to change even if
-     * nr_live_slaves does, because nr_live_slaves can only decrease.
-     */
-    for (i=0; i<remap_state.nr_live_slaves; i++)
-    {
-        remap_state.chunks[i] = castle_malloc(sizeof(c_disk_chk_t)*CHKS_PER_SLOT, GFP_KERNEL);
-        BUG_ON(!remap_state.chunks[i]);
-    }
-
-    /* Note: we don't actually allocate any disk chunks until they are needed. */
-}
-
-/*
- * Frees any data associated withthe remap_state structure.
+ * Frees any data associated with the remap_state structure.
  */
 static void castle_extents_remap_state_fini(void)
 {
     int i;
 
     for (i=0; i<MAX_NR_SLAVES; i++)
-        if (remap_state.chunks[i])
-            castle_free(remap_state.chunks[i]);
+    {
+        if (remap_state.live_slaves[i])
+            castle_free(remap_state.live_slaves[i]);
+    }
 }
 
 /*
@@ -1686,14 +1660,15 @@ static void castle_extents_remap_state_fini(void)
  */
 static int castle_extent_remap_superchunks_alloc(int slave_idx)
 {
-    c_disk_chk_t        *chunkp = remap_state.chunks[slave_idx];
+    c_disk_chk_t        *chunkp = remap_state.live_slaves[slave_idx]->chunks;
     int                 chunk;
     c_chk_seq_t         chk_seq;
     c_chk_t             offset;
     struct castle_slave *cs;
 
-    cs = castle_slave_find_by_uuid(remap_state.live_slaves[slave_idx]);
+    cs = castle_slave_find_by_uuid(remap_state.live_slaves[slave_idx]->uuid);
     BUG_ON(!cs);
+    BUG_ON(test_bit(CASTLE_SLAVE_GHOST_BIT, &cs->flags));
 
     /*
      * Allocate a superchunk. We do not want to pre-reserve space, so use a NULL token.
@@ -1703,11 +1678,10 @@ static int castle_extent_remap_superchunks_alloc(int slave_idx)
     {
         char b[BDEVNAME_SIZE];
         /*
-         * We get here if the slave is either out-or-service, or out of space.
+         * We get here if the slave is either out-of-service, or out of space.
          */
         if (!test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags))
         {
-
             /* Slave is not out-of-service so we are out of space */
             printk("Error: failed to get freespace from slave: 0x%x (%s).",
                     cs->uuid, bdevname(cs->bdev, b));
@@ -1720,10 +1694,9 @@ static int castle_extent_remap_superchunks_alloc(int slave_idx)
             printk("Warning - Failed allocating superchunk from out-of-service slave: 0x%x (%s).",
                     cs->uuid, bdevname(cs->bdev, b));
             /*
-             * Slave is now out-of-service.
+             * Slave is now out-of-service. Re-initialise remap state and retry.
              */
-            /* TBD - handle this properly - stop / restart rebuild (of this extent)?  */
-            BUG();
+            return -EAGAIN;
         }
     }
  
@@ -1733,7 +1706,7 @@ static int castle_extent_remap_superchunks_alloc(int slave_idx)
     /* Fill in the chunks for this slave. */
     for (chunk=0, offset=chk_seq.first_chk; chunk<chk_seq.count; chunk++, offset++)
     {
-        (chunkp+chunk)->slave_id = remap_state.live_slaves[slave_idx];
+        (chunkp+chunk)->slave_id = remap_state.live_slaves[slave_idx]->uuid;
         (chunkp+chunk)->offset = offset;
     }
     return EXIT_SUCCESS;
@@ -1754,16 +1727,19 @@ static int castle_extent_replacement_slave_get(c_ext_t *ext, int chunkno)
     int         slaves_to_use[MAX_NR_SLAVES];
     uint16_t    r;
 
-    /* For each slave in remap_state.live_slaves (the list of potential slave. */
+    /* For each slave in remap_state.live_slaves (the list of potential remap slaves). */
     nr_slaves_to_use = 0;
     for (slave_idx=0; slave_idx<remap_state.nr_live_slaves; slave_idx++)
     {
+        if (remap_state.live_slaves[slave_idx] == NULL)
+            /* This slave is no longer available - skip it. */
+            continue;
         already_used = 0;
         /* Scan through all the slaves in this logical chunk. */
         for (chunk_idx=0; chunk_idx<ext->k_factor; chunk_idx++)
         {
             if (ext->shadow_map[(chunkno*ext->k_factor)+chunk_idx].slave_id ==
-                remap_state.live_slaves[slave_idx])
+                remap_state.live_slaves[slave_idx]->uuid)
             {
                 /* This slave is already used in this logical chunk - ignore it. */
                 already_used = 1;
@@ -1799,18 +1775,48 @@ static int castle_extent_replacement_slave_get(c_ext_t *ext, int chunkno)
  */
 static c_disk_chk_t *castle_extent_remap_disk_chunk_alloc(c_ext_t *ext, int chunkno)
 {
-    c_disk_chk_t    *disk_chk;
-    int             slave_idx;
+    c_disk_chk_t        *disk_chk;
+    int                 slave_idx;
+    struct castle_slave *cs;
+    int                 ret;
 
+retry:
     /* Get the replacement slave */
     slave_idx = castle_extent_replacement_slave_get(ext, chunkno);
     BUG_ON(slave_idx == -1);
 
-    if (!remap_state.next_chk[slave_idx])
-        /* We've run out of chunks on this slave, allocate another set. */
-        castle_extent_remap_superchunks_alloc(slave_idx);
+    cs = castle_slave_find_by_uuid(remap_state.live_slaves[slave_idx]->uuid);
+    BUG_ON(!cs);
 
-    disk_chk = &remap_state.chunks[slave_idx][remap_state.next_chk[slave_idx]];
+    if ((test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags)) ||
+        (test_bit(CASTLE_SLAVE_EVACUATE_BIT, &cs->flags)))
+    {
+        /* Tried to use a now-dead slave for remapping. Repopulate the remap_state and retry. */
+        debug("Rebuild tried using a now-dead slave - repopulating remap state\n");
+        castle_extents_remap_state_init();
+        goto retry;
+    }
+
+    if (!remap_state.live_slaves[slave_idx]->next_chk)
+    {
+        /* We've run out of chunks on this slave, allocate another set. */
+        ret = castle_extent_remap_superchunks_alloc(slave_idx);
+        if (ret == -EAGAIN)
+        {
+            /*
+             * Tried to use a now-dead slave for superchunk allocation.
+             * Repopulate the remap_state and retry.
+             */
+            debug("Rebuild tried using a now-dead slave - repopulating remap state\n");
+            castle_extents_remap_state_init();
+            goto retry;
+        } else if (ret == -ENOSPC)
+            return NULL;
+        BUG_ON(ret);
+    }
+
+    disk_chk =
+        &remap_state.live_slaves[slave_idx]->chunks[remap_state.live_slaves[slave_idx]->next_chk];
 
     BUG_ON(DISK_CHK_INVAL(*disk_chk));
 
@@ -1819,8 +1825,8 @@ static c_disk_chk_t *castle_extent_remap_disk_chunk_alloc(c_ext_t *ext, int chun
      * this is a trigger to allocate another set of superchunks and repopulate the array (see above)
      * if a new disk chunk request is made.
      */
-    remap_state.next_chk[slave_idx] =
-                        ++remap_state.next_chk[slave_idx] % CHKS_PER_SLOT;
+    remap_state.live_slaves[slave_idx]->next_chk =
+                        ++remap_state.live_slaves[slave_idx]->next_chk % CHKS_PER_SLOT;
 
     return disk_chk; 
 }
@@ -1835,13 +1841,19 @@ static c_disk_chk_t *castle_extent_remap_disk_chunk_alloc(c_ext_t *ext, int chun
  */
 static int slave_needs_remapping(uint32_t slave_id)
 {
-    int i;
+    struct castle_slave *cs;
 
-    /* If it's not a live slave, it needs remapping */
-    for (i=0; i<remap_state.nr_live_slaves; i++)
-        if (remap_state.live_slaves[i] == slave_id)
-            return 0;
-    return 1;
+    cs = castle_slave_find_by_uuid(slave_id);
+    /*
+     * If we find an an unknown slave_id, we can't use it.
+     * We'll assume that this is a genuine 'missing' slave, and mark it for remapping.
+     */
+    if (!cs ||
+        (test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags)) ||
+        (test_bit(CASTLE_SLAVE_EVACUATE_BIT, &cs->flags)))
+        return 1;
+    else
+        return 0;
 }
 
 /*
@@ -1855,12 +1867,12 @@ static int slave_needs_remapping(uint32_t slave_id)
 static int castle_extent_remap(c_ext_t *ext)
 {
     uint32_t            k_factor = castle_extent_kfactor_get(ext->ext_id);
-    int                 chunkno, idx, remap_idx, no_remap_idx;
+    int                 chunkno, idx, remap_idx, no_remap_idx, i;
 
     debug("\nRemapping extent %llu size: %u, from seqno: %u to seqno: %u\n",
             ext->ext_id, ext->size, ext->curr_rebuild_seqno, rebuild_to_seqno);
 
-    ext->shadow_map = castle_malloc(ext->size*k_factor*sizeof(c_disk_chk_t), GFP_KERNEL);
+    ext->shadow_map = castle_vmalloc(ext->size*k_factor*sizeof(c_disk_chk_t));
     if (!ext->shadow_map)
     {
         printk("ERROR: could not allocate rebuild shadow map of size %lu\n",
@@ -1887,8 +1899,16 @@ static int castle_extent_remap(c_ext_t *ext)
         /*
          * Refresh the live slaves array to reflect the change, and use that from now on.
          */
-        populate_live_slaves();
+        castle_extents_remap_state_init();
     }
+
+    /*
+     * As we are remapping a new extent, we need to stop using any pre-existing superchunks.
+     * Setting next_chk to 0 will force new superchunk(s) to be allocated for this extent.
+     */
+    for (i=0; i<remap_state.nr_live_slaves; i++)
+        if (remap_state.live_slaves[i])
+            remap_state.live_slaves[i]->next_chk = 0;
 
     /*
      * From this point, we will start using the shadow map to remap the extent. All write I/O must
@@ -1924,6 +1944,16 @@ static int castle_extent_remap(c_ext_t *ext)
 
             /* This slave needs remapping. Get a replacement disk chunk. */
             disk_chk = castle_extent_remap_disk_chunk_alloc(ext, chunkno);
+            if (!disk_chk)
+            {
+                /* Failed to allocate a disk chunk (slave out of space is most likely cause). */
+                printk("Rebuild could not allocate a disk chunk.\n");
+                spin_lock(&ext->shadow_map_lock);
+                ext->use_shadow_map = 0;
+                spin_unlock(&ext->shadow_map_lock);
+                castle_vfree(ext->shadow_map);
+                return 1;
+            }
             /*
              * Lock the shadow map here because we don't want the read/write path to access
              * a chunk in mid-remap.
@@ -1937,7 +1967,6 @@ static int castle_extent_remap(c_ext_t *ext)
             remap_chunks[remap_idx].slave_id = disk_chk->slave_id;
             remap_chunks[remap_idx++].offset = disk_chk->offset;
         }
-
         /*
          * The remap_chunks array now contains all the disk chunks for this chunkno.
          */
@@ -2014,35 +2043,48 @@ static int castle_extent_remap(c_ext_t *ext)
             spin_lock(&ext->shadow_map_lock);
             ext->use_shadow_map = 0;
             spin_unlock(&ext->shadow_map_lock);
-            castle_free(ext->shadow_map);
-            /* Release the hold we took in castle_rebuild_extent_add */
-            castle_extent_put(ext->ext_id);
+            castle_vfree(ext->shadow_map);
             return 1;
         }
     }
 
     /* This is the rebuild sequence number we have rebuilt the extent to. */
+    debug("Setting extent %llu to rebuild seqno %d\n", ext->ext_id, rebuild_to_seqno);
     ext->curr_rebuild_seqno = rebuild_to_seqno;
+
+    /*
+     * For superblock meta extents, update the superblock too, because that's what will get
+     * written out to disk.
+     */
+    if ((ext->ext_id == META_EXT_ID) ||
+        (ext->ext_id == MSTORE_EXT_ID) ||
+        (ext->ext_id == MSTORE_EXT_ID+1))
+    {
+        struct castle_extents_superblock* castle_extents_sb;
+        castle_extents_sb = castle_extents_super_block_get();
+        switch (ext->ext_id) {
+            case META_EXT_ID:
+                castle_extents_sb->meta_ext.curr_rebuild_seqno = rebuild_to_seqno;
+                break;
+            case MSTORE_EXT_ID:
+                castle_extents_sb->mstore_ext[0].curr_rebuild_seqno = rebuild_to_seqno;
+                break;
+            case MSTORE_EXT_ID+1:
+                castle_extents_sb->mstore_ext[1].curr_rebuild_seqno = rebuild_to_seqno;
+                break;
+        }
+        castle_extents_super_block_put(1);
+    }
 
     /* Now the shadow map has become the default map, we can stop redirecting write I/O. */
     spin_lock(&ext->shadow_map_lock);
     ext->use_shadow_map = 0;
     spin_unlock(&ext->shadow_map_lock);
-    castle_free(ext->shadow_map);
+    castle_vfree(ext->shadow_map);
 
     /* Release the hold we took in castle_rebuild_extent_add */
-    castle_extent_put(ext->ext_id);
+    castle_extent_light_put(ext->ext_id);
     return EXIT_SUCCESS;
-}
-
-/*
- * Remove all entries from the rebuild list.
- */
-static void castle_extent_rebuild_deletelist(void)
-{
-    struct list_head *entry, *tmp;
-    list_for_each_safe(entry, tmp, &rebuild_list)
-        list_del(entry);
 }
 
 /*
@@ -2053,13 +2095,11 @@ static void castle_extent_rebuild_deletelist(void)
 
 static int castle_extents_rebuild_run(void *unused)
 {
-    struct list_head    *l;
-    c_ext_t             *ext;
-    struct castle_slave *cs, *evacuated_slaves[MAX_NR_SLAVES];
-    int                 i, nr_evacuated_slaves=0;
-
-    // TBD - load this from superblock
-    atomic_set(&current_rebuild_seqno, 0);
+    struct list_head            *entry, *tmp;
+    c_ext_t                     *ext;
+    struct castle_slave         *cs, *evacuated_slaves[MAX_NR_SLAVES], *oos_slaves[MAX_NR_SLAVES];
+    int                         i, nr_evacuated_slaves=0, nr_oos_slaves=0, exit_early=0;
+    struct castle_fs_superblock *fs_sb;
 
     /* Initialise the rebuild list. */
     INIT_LIST_HEAD(&rebuild_list);
@@ -2077,6 +2117,12 @@ static int castle_extents_rebuild_run(void *unused)
         }
 
 restart:
+        printk("Rebuild thread starting run.\n");
+
+        fs_sb = castle_fs_superblocks_get();
+        fs_sb->fs_in_rebuild = 1;
+        castle_fs_superblocks_put(fs_sb, 1);
+
         castle_extents_rescan_required = 0;
 
         rebuild_to_seqno = atomic_read(&current_rebuild_seqno);
@@ -2086,47 +2132,61 @@ restart:
         /* Build the list of extents to remap. */
         castle_extents_hash_iterate(castle_extent_rebuild_list_add, NULL);
 
-        /* Iterate over the list, remapping as necessary. */
-        list_for_each(l, &rebuild_list)
+        if (list_empty(&rebuild_list))
         {
-            ext = list_entry(l, c_ext_t, rebuild_list);
-            BUG_ON(ext->curr_rebuild_seqno >= rebuild_to_seqno);
-
-            /*
-             * Allow rebuild to be suspended in-between extent remappings.
-             * The only 'error' castle_extent_remap should return is when it discovers that
-             * kthread_should_stop().
-             */
-            if (castle_extent_remap(ext) || kthread_should_stop())
-            {
-                // TBD Write restart info to superblock
-                printk("Warning: rebuild terminating early ...\n");
-
-                /* We don't need the extent list any more - delete it */
-                castle_extent_rebuild_deletelist();
-                goto out;
-            }
+            printk("Rebuild: no extents found.\n");
+            continue;
         }
 
-        /* Finished with the extent list - delete it */
-        castle_extent_rebuild_deletelist();
+        /*
+         * Iterate over the list, remapping as necessary. If exit_early gets set, we'll just
+         * 'put' the remaining extents in the list.
+         */
+        list_for_each_safe(entry, tmp, &rebuild_list)
+        {
+            ext = list_entry(entry, c_ext_t, rebuild_list);
+            list_del(entry);
+            BUG_ON(ext->curr_rebuild_seqno >= rebuild_to_seqno);
+
+            if (!exit_early)
+            {
+                /*
+                 * Allow rebuild to be suspended in-between extent remappings.
+                 * The only 'error' castle_extent_remap should return is when it discovers that
+                 * kthread_should_stop().
+                 */
+                if (castle_extent_remap(ext) || kthread_should_stop())
+                {
+                    printk("Warning: rebuild terminating early ...\n");
+                    exit_early = 1;
+                }
+            }
+            /* We don't need the extent list any more - drop refs to remaining extents. */
+            if (exit_early)
+                castle_extent_light_put(ext->ext_id);
+        }
+
+        if (exit_early)
+            goto out;
 
         if ((rebuild_to_seqno == atomic_read(&current_rebuild_seqno)) &&
             !castle_extents_rescan_required)
         {
             /*
-             * No further remapping required. We can now convert any evacuating slaves to
-             * out-of-service state. First, create the list of evacuated slaves.
+             * No further remapping required. We can now convert any evacuating or out-of-service
+             * slaves to remapped state. First, create the list of evacuated / oos slaves.
              */
             for (i=0; i<MAX_NR_SLAVES; i++)
-                evacuated_slaves[i] = 0;    
-            nr_evacuated_slaves = 0;
+                oos_slaves[i] = evacuated_slaves[i] = 0;    
+            nr_oos_slaves = nr_evacuated_slaves = 0;
     
-            list_for_each(l, &castle_slaves.slaves)
+            list_for_each(entry, &castle_slaves.slaves)
             {
-                cs = list_entry(l, struct castle_slave, list);
+                cs = list_entry(entry, struct castle_slave, list);
                 if (test_bit(CASTLE_SLAVE_EVACUATE_BIT, &cs->flags))
                     evacuated_slaves[nr_evacuated_slaves++] = cs;
+                if (test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags))
+                    oos_slaves[nr_oos_slaves++] = cs;
             }
         }
 
@@ -2139,23 +2199,37 @@ restart:
         {
             debug("Rebuild extent rescan required (seqno has changed)\n");
             goto restart;
-        } else
-        {
-            /*
-             * Nothing more to do. Now we can be sure that the set of evacuated_slaves built
-             * earlier is correct. Use it to convert evacualted slave to out-of-service.
-             */
-            for (i=0; i<nr_evacuated_slaves; i++)
-                if (evacuated_slaves[i])
-                {
-                    char b[BDEVNAME_SIZE];
-                    printk("Finished remapping evacuated slave 0x%x (%s)."
-                            " Converting to out-of-service.\n",
-                            evacuated_slaves[i]->uuid, bdevname(evacuated_slaves[i]->bdev, b));
-                    set_bit(CASTLE_SLAVE_OOS_BIT, &evacuated_slaves[i]->flags);
-                    clear_bit(CASTLE_SLAVE_EVACUATE_BIT, &evacuated_slaves[i]->flags);
-                }
         }
+
+        /*
+         * Nothing more to do. Now we can be sure that the set of evacuated_slaves and oos_slaves
+         * built earlier is correct. Use them to convert to oos / remapped.
+         */
+        for (i=0; i<nr_oos_slaves; i++)
+        {
+            if (oos_slaves[i])
+            {
+                printk("Finished remapping out-of-service slave 0x%x.\n", oos_slaves[i]->uuid);
+                set_bit(CASTLE_SLAVE_REMAPPED_BIT, &oos_slaves[i]->flags);
+            }
+        }
+        for (i=0; i<nr_evacuated_slaves; i++)
+        {
+            if (evacuated_slaves[i])
+            {
+                printk("Finished remapping evacuated slave 0x%x.\n", evacuated_slaves[i]->uuid);
+                set_bit(CASTLE_SLAVE_OOS_BIT, &evacuated_slaves[i]->flags);
+                set_bit(CASTLE_SLAVE_REMAPPED_BIT, &evacuated_slaves[i]->flags);
+                clear_bit(CASTLE_SLAVE_EVACUATE_BIT, &evacuated_slaves[i]->flags);
+            }
+        }
+
+        /* Rebuild has finished. Mark it so in the superblock. */
+        fs_sb = castle_fs_superblocks_get();
+        fs_sb->fs_in_rebuild = 0;
+        castle_fs_superblocks_put(fs_sb, 1);
+
+        printk("Rebuild completed.\n");
 
     } while (1);
 
@@ -2164,7 +2238,7 @@ restart:
 
 out:
     castle_extents_remap_state_fini();
-    return 0;
+    return EXIT_SUCCESS;
 }
 
 /*
@@ -2172,14 +2246,7 @@ out:
  */
 void castle_extents_rebuild_start(void)
 {
-    struct castle_fs_superblock* fs_sb;
-
     atomic_inc(&current_rebuild_seqno);
-
-    fs_sb = castle_fs_superblocks_get();
-    fs_sb->extents_sb.current_rebuild_seqno = atomic_read(&current_rebuild_seqno);
-    castle_fs_superblocks_put(fs_sb, 1);
-
     wake_up(&rebuild_wq);
 }
 
@@ -2190,6 +2257,8 @@ void castle_extents_rebuild_start(void)
  */
 int castle_extents_rebuild_init(void)
 {
+    atomic_set(&current_rebuild_seqno, 0);
+
     init_waitqueue_head(&rebuild_wq);
 
     rebuild_thread = kthread_run(castle_extents_rebuild_run, NULL, "castle-rebuild");
@@ -2206,4 +2275,34 @@ void castle_extents_rebuild_fini(void)
 {
     kthread_stop(rebuild_thread);
     castle_extents_exiting = 1;
+}
+
+/*
+ * Check if rebuild needs to be started on fs startup.
+ */
+void castle_extents_rebuild_startup_check(int need_rebuild)
+{
+    struct castle_fs_superblock *fs_sb;
+
+    /*
+     * If fs init decided that we need a rebuild, then bumping current_rebuild_seqno will force all
+     * extents to be checked.
+     */
+    if (need_rebuild)
+        atomic_inc(&current_rebuild_seqno);
+
+    fs_sb = castle_fs_superblocks_get();
+    /*
+     * If fs_in_rebuild is non-zero or need_rebuild is set we need to (re)start rebuild. Setting
+     * rebuild_to_seqno to current_rebuild_seqno-1 will force the rebuild thread to start the rebuild.
+     */
+    if (fs_sb->fs_in_rebuild || need_rebuild)
+    {
+        rebuild_to_seqno = atomic_read(&current_rebuild_seqno) - 1;
+        printk("Rebuild startup check: Restarting rebuild.\n");
+
+        /* Wake the rebuild thread */
+        wake_up(&rebuild_wq);
+    }
+    castle_fs_superblocks_put(fs_sb, 1);
 }

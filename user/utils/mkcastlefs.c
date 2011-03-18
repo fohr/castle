@@ -66,7 +66,17 @@ int write_superblock(int fd, struct castle_slave_superblock_public *super)
     fprintf(stderr, "Failure writing superblock!\n");
     return 0;
   }
+
+  if (lseek(fd, 8192, SEEK_SET) == -1) {
+    fprintf(stderr, "Failure seeking to second superblock!\n");
+    return 0;
+  }
 	
+  if(write(fd, super, len) != len) {
+    fprintf(stderr, "Failure writing second superblock!\n");
+    return 0;
+  }
+
   fsync(fd);
 
   return 1;

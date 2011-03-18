@@ -81,8 +81,16 @@ typedef uint32_t block_t;
 
 /* New Free space structures */
 
-/* WARNING: be careful about changing that. It's used to define various on-disk datastructures. */
-#define MAX_NR_SLAVES 64
+/*
+ * WARNING: be careful about changing MAX_NR_SLAVES. It's used to define various on-disk
+ * datastructures.
+ */
+#define MAX_NR_SLAVES   64
+/*
+ * The minimum number of live slaves we can safely run with. For N-rda this is N.
+ * This is hard coded for 2-rda at the moment.
+ */
+#define MIN_LIVE_SLAVES 2
 
 #define C_CHK_SHIFT                    (20)
 #define C_CHK_SIZE                     (1ULL << C_CHK_SHIFT)   /**< Bytes per chunk.             */
@@ -313,9 +321,11 @@ struct castle_fs_superblock {
     /*        128 */ uint32_t                                fs_version;
     /*        132 */ uint32_t                                nr_slaves;
     /*        136 */ uint32_t                                slaves[MAX_NR_SLAVES];
-    /*        392 */ struct castle_extents_superblock        extents_sb;
-    /*       1416 */ c_ext_pos_t                             mstore[16];
-    /*       1672 */ uint8_t                                 _unused[376];
+    /*        392 */ uint8_t                                 slaves_flags[MAX_NR_SLAVES];
+    /*        456 */ struct castle_extents_superblock        extents_sb;
+    /*       1480 */ c_ext_pos_t                             mstore[16];
+    /*       1736 */ int                                     fs_in_rebuild;
+    /*       1740 */ uint8_t                                 _unused[308];
     /*       2048 */ 
 } PACKED;
 
@@ -1100,6 +1110,7 @@ struct castle_slave {
     unsigned long                   last_access;
     struct castle_slave_superblock  cs_superblock;
     struct castle_fs_superblock     fs_superblock;
+    uint32_t                        fs_versions[2]; /* The fs versions for this slave. */
     struct mutex                    sblk_lock;
     c_chk_cnt_t                     disk_size; /* in chunks; max_chk_num + 1 */
     c_chk_cnt_t                     reserved_schks;
@@ -1108,6 +1119,8 @@ struct castle_slave {
 /* castle_slave flags bits */
 #define CASTLE_SLAVE_OOS_BIT        0 /* Slave is out-of-service */
 #define CASTLE_SLAVE_EVACUATE_BIT   1 /* Slave has been evacuated */
+#define CASTLE_SLAVE_GHOST_BIT      2 /* Slave is missing or invalid (on reboot) */
+#define CASTLE_SLAVE_REMAPPED_BIT   3 /* Slave has been remapped */
 
 struct castle_slaves {
     struct kobject   kobj;
@@ -1185,6 +1198,8 @@ void                  castle_slave_superblock_put  (struct castle_slave *cs, int
 struct castle_fs_superblock* 
                       castle_fs_superblocks_get    (void);
 void                  castle_fs_superblocks_put    (struct castle_fs_superblock *sb, int dirty);
+void                  castle_fs_superblock_slaves_update
+                                                   (struct castle_fs_superblock *fs_sb);
 
 int                   castle_fs_init               (void);
 

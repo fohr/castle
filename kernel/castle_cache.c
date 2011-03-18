@@ -869,7 +869,7 @@ static void clean_c2b(c2_block_t *c2b)
     for(i=0; i<nr_c2ps; i++)
         clean_c2p(c2b->c2ps[i]);
 
-    if (c2b_remap(c2b))
+    if (c2b_remap(c2b) && !c2b_dirty(c2b))
         return;
 
     /* Clean the c2b. */
@@ -957,8 +957,9 @@ static void c2b_multi_io_end(struct bio *bio, int err)
 #endif
 {
     struct bio_info     *bio_info = bio->bi_private;
-    struct castle_slave *slave;
+    struct castle_slave *slave, *io_slave;
     c2_block_t          *c2b = bio_info->c2b;
+    struct list_head    *lh;
 #ifdef CASTLE_DEBUG    
     unsigned long flags;
     
@@ -984,16 +985,27 @@ static void c2b_multi_io_end(struct bio *bio, int err)
     if (!test_bit(BIO_UPTODATE, &bio->bi_flags))
     {
         /* I/O has failed for this bio */
-        slave = castle_slave_find_by_bdev(bio_info->bdev);
-        BUG_ON(!slave);
-
-        /*
-         * If this is the first time a bio for this slave has failed, mark the slave as
-         * out-of-service and trigger a rebuild.
-         */
-        if (!test_and_set_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags))
+        io_slave = castle_slave_find_by_bdev(bio_info->bdev);
+        BUG_ON(!io_slave);
+        if (!test_and_set_bit(CASTLE_SLAVE_OOS_BIT, &io_slave->flags))
         {
+            int nr_live_slaves=0;
             char b[BDEVNAME_SIZE];
+
+            /*
+             * This is the first time a bio for this slave has failed. If removing this slave
+             * from service would leave us with less than the minimum number of live slaves,
+             * then BUG out. Otherwise, mark the slave as out-of-service and trigger a rebuild.
+             */
+            list_for_each(lh, &castle_slaves.slaves)
+            {
+                slave = list_entry(lh, struct castle_slave, list);
+                if (!test_bit(CASTLE_SLAVE_EVACUATE_BIT, &slave->flags) &&
+                    !test_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags))
+                    nr_live_slaves++;
+            }
+            BUG_ON(nr_live_slaves < MIN_LIVE_SLAVES);
+
             printk("Disabling slave 0x%x (%s), due to IO errors. Starting rebuild.\n", 
                     slave->uuid, bdevname(bio_info->bdev, b));
             castle_extents_rebuild_start();
@@ -1028,6 +1040,7 @@ int chk_valid(c_disk_chk_t chk)
         return 0;
     }
 
+    BUG_ON(test_bit(CASTLE_SLAVE_GHOST_BIT, &cs->flags));
     castle_freespace_summary_get(cs, NULL, &size);
     if (chk.offset >= size)
     {
@@ -1090,6 +1103,7 @@ void submit_c2b_io(int           rw,
     cs = castle_slave_find_by_uuid(disk_chk.slave_id);
     debug("slave_id=%d, cs=%p\n", disk_chk.slave_id, cs);
     BUG_ON(!cs);
+    BUG_ON(test_bit(CASTLE_SLAVE_GHOST_BIT, &cs->flags));
     /* Work out the sector on the slave. */
     sector = ((sector_t)disk_chk.offset << (C_CHK_SHIFT - 9)) +
               (BLK_IN_CHK(cep.offset) << (C_BLK_SHIFT - 9));
@@ -1610,7 +1624,7 @@ int submit_c2b(int rw, c2_block_t *c2b)
 }
 
 /**
- * Unplug all slave queues.
+ * Unplug queues on all live slaves.
  *
  * Useful if you know that a sequence of submit_c2b()s has been completed.
  *
@@ -1624,7 +1638,8 @@ static void castle_slaves_unplug(void)
     list_for_each(lh, &castle_slaves.slaves)
     {
         struct castle_slave *cs = list_entry(lh, struct castle_slave, list);
-        generic_unplug_device(bdev_get_queue(cs->bdev));
+        if (!test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags))
+            generic_unplug_device(bdev_get_queue(cs->bdev));
     }
 }
 
@@ -4742,6 +4757,9 @@ int castle_checkpoint_version_inc(void)
     list_for_each(lh, &castle_slaves.slaves)
     {
         cs = list_entry(lh, struct castle_slave, list);
+        /* Do not checkpoint out-of-service slaves. */
+        if (test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags))
+            continue;
         cs_sb = castle_slave_superblock_get(cs); 
         cs_sb->fs_version++;
         if (fs_version != cs_sb->fs_version)
@@ -4836,17 +4854,21 @@ int castle_cache_extents_flush(struct list_head *flush_list)
     return 0;
 }
 
+extern atomic_t current_rebuild_seqno;
+
 static int castle_periodic_checkpoint(void *unused)
 {
     uint32_t version = 0;
-    struct   castle_fs_superblock *fs_sb;
+    struct castle_fs_superblock         *fs_sb;
+    struct castle_extents_superblock    *castle_extents_sb;
+
     int      i; 
     int      exit_loop = 0;
     struct   list_head flush_list;
 
     do {
         /* Wakes-up once in a second just to check whether to stop the thread.
-         * After every 10 seconds checkpoints the filesystem. */
+         * After every CHECKPOINT_FREQUENCY seconds checkpoints the filesystem. */
         for (i=0; i<CHECKPOINT_FREQUENCY; i++)
         {
             if (!kthread_should_stop())
@@ -4864,7 +4886,13 @@ static int castle_periodic_checkpoint(void *unused)
  
         fs_sb = castle_fs_superblocks_get();
         version = fs_sb->fs_version;
+        /* Update rebuild superblock information. */
+        castle_fs_superblock_slaves_update(fs_sb);
         castle_fs_superblocks_put(fs_sb, 1);
+
+        castle_extents_sb = castle_extents_super_block_get();
+        castle_extents_sb->current_rebuild_seqno = atomic_read(&current_rebuild_seqno);
+        castle_extents_super_block_put(1);
  
         if (castle_mstores_writeback(version))
         {

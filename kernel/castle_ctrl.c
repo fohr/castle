@@ -342,7 +342,7 @@ int castle_attachments_read(void)
  
     BUG_ON(castle_attachments_store);
 
-    printk("Openings mstore for Collection Attachments\n");
+    printk("Opening mstore for Collection Attachments\n");
     castle_attachments_store = castle_mstore_open(MSTORE_ATTACHMENTS_TAG, 
                                         sizeof(struct castle_alist_entry));
     if (!castle_attachments_store)
@@ -577,6 +577,10 @@ void castle_control_trace_teardown(int *ret)
     *ret = castle_trace_teardown();
 }
 
+/*
+ * The minimum number of live slaves we can safely run with. For N-rda this is N.
+ * This is hard coded for 2-rda at the moment.
+ */
 /**
  * Initiate evacuation (removal from service) of a slave
  *
@@ -588,24 +592,50 @@ void castle_control_trace_teardown(int *ret)
  */
 void castle_control_slave_evacuate(uint32_t uuid, int *ret)
 {
-    struct castle_slave *slave;
-    char b[BDEVNAME_SIZE];
+    struct  castle_slave *slave;
+    char    b[BDEVNAME_SIZE];
+    struct  list_head *lh;
+    int     nr_live_slaves=0;
+
+    list_for_each(lh, &castle_slaves.slaves)
+    {
+        slave = list_entry(lh, struct castle_slave, list);
+        if (!test_bit(CASTLE_SLAVE_EVACUATE_BIT, &slave->flags) &&
+            !test_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags))
+            nr_live_slaves++;
+    }
+
+    BUG_ON(nr_live_slaves < MIN_LIVE_SLAVES);
+
+    if (nr_live_slaves == MIN_LIVE_SLAVES)
+    {
+        printk("Error: evacuation rejected to preserve minimum number of working slaves.\n");
+        *ret = -EPERM;
+        return;
+    }
 
     slave = castle_slave_find_by_uuid(uuid);
     if(!slave)
     {
+        printk("Error: slave not found. Ignoring request.\n");
         *ret = -ENOENT;
         return;
     }
 
-    /*
-    * Mark that this slave is out-of-service. Allocations from this slave should now stop,
-    * and all future I/O submissions should ignore this slave.
-    */
+    if (test_bit(CASTLE_SLAVE_GHOST_BIT, &slave->flags))
+    {
+        /* Slave is a 'ghost' - missing from the expected set of slaves - error */
+        printk("Error: slave 0x%x (%s) is missing. Ignoring.\n",
+                slave->uuid, bdevname(slave->bdev, b));
+        *ret = -ENOSYS;
+        return;
+    } 
+
     if (test_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags))
     {
         /* Slave is already marked as out-of-service - ignore */
-        printk("Warning: slave 0x%x (%s) has already been marked out-of-service. Ignoring.\n",
+        printk("Warning: slave 0x%x (%s) has already been marked out-of-service. "
+               "Ignoring request.\n",
                 slave->uuid, bdevname(slave->bdev, b));
         *ret = -EINVAL;
         return;
@@ -622,6 +652,10 @@ void castle_control_slave_evacuate(uint32_t uuid, int *ret)
         return;
     } 
         
+    /*
+    * Mark that this slave is out-of-service. Allocations from this slave should now stop,
+    * and all future I/O submissions should ignore this slave.
+    */
     set_bit(CASTLE_SLAVE_EVACUATE_BIT, &slave->flags);
     printk("Slave 0x%x (%s) has been marked as evacuating.\n",
             slave->uuid, bdevname(slave->bdev, b));

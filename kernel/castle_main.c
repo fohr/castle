@@ -130,6 +130,52 @@ static int castle_fs_superblock_validate(struct castle_fs_superblock *fs_sb)
     return 0;
 }
 
+/*
+ * Scans castle_slaves and updates the fs superblock with the slave states. This allows the 
+ * service state of slaves to be persistent across fs shutdowns and crashes.
+ * 
+ * The fs superblock lock must by held on entry to this function.
+ *
+ * @param fs_sb  Pointer to the fs superblock.
+ */
+void castle_fs_superblock_slaves_update(struct castle_fs_superblock *fs_sb)
+{
+    struct castle_slave         *cs;
+    struct list_head            *lh;
+    int                         i;
+
+    list_for_each(lh, &castle_slaves.slaves)
+    {
+        cs = list_entry(lh, struct castle_slave, list);
+        for (i=0; i<fs_sb->nr_slaves; i++)
+        {
+            /* Find the index in the fs superblock slave array with this uuid. */
+            if (fs_sb->slaves[i] == cs->uuid)
+            {
+                if (test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags))
+                {
+                    debug("Setting slave 0x%x out-of-service bit in fs_sb slaves\n", cs->uuid);
+                    set_bit(CASTLE_SLAVE_OOS_BIT, &fs_sb->slaves_flags[i]);
+                }
+                if (test_bit(CASTLE_SLAVE_EVACUATE_BIT, &cs->flags))
+                {
+                    debug("Setting slave 0x%x evacuating bit in fs_sb slaves\n", cs->uuid);
+                    set_bit(CASTLE_SLAVE_EVACUATE_BIT, &fs_sb->slaves_flags[i]);
+                } else
+                {
+                    debug("Clearing slave 0x%x evacuating bit in fs_sb slaves\n", cs->uuid);
+                    clear_bit(CASTLE_SLAVE_EVACUATE_BIT, &fs_sb->slaves_flags[i]);
+                }
+                if (test_bit(CASTLE_SLAVE_REMAPPED_BIT, &cs->flags))
+                {
+                    debug("Setting slave 0x%x out-of-service bit in fs_sb slaves\n", cs->uuid);
+                    set_bit(CASTLE_SLAVE_REMAPPED_BIT, &fs_sb->slaves_flags[i]);
+                }
+            }
+        }
+    }
+}
+
 static void castle_fs_superblock_init(struct castle_fs_superblock *fs_sb)
 {   
     int i;
@@ -389,13 +435,46 @@ c_byte_off_t castle_ext_freespace_summary_get(c_ext_free_t *ext_free)
 static int castle_slave_version_load(struct castle_slave *cs, uint32_t fs_version);
 static void castle_slave_superblock_print(struct castle_slave_superblock *cs_sb);
 
+static int slave_id = 0;
+
+/**
+ * Allocates a 'ghost' castle_slave and inserts it into the list of castle_slaves.
+ * A 'ghost' entry is inserted for all slaves that used to be, but no longer are,
+ * active members of the filesystem. The 'ghost' castle_slave is a light version
+ * that is not fully initialised (e.g. no bdev). It allows the filesystem to determine
+ * if a slave uuid it encounters (e.g. in a chunk mapping) is for a valid, but no longer
+ * used, slave.
+ *
+ * @param uuid      The uuid for the slave to be added.
+ */
+static void castle_slave_ghost_add(uint32_t uuid)
+{
+    struct castle_slave *slave;
+
+    if (!(slave = castle_zalloc(sizeof(struct castle_slave), GFP_KERNEL)))
+        BUG_ON(!slave);
+    slave->uuid = uuid;
+    slave->id = slave_id++;
+    slave->sup_ext = INVAL_EXT_ID;
+    mutex_init(&slave->sblk_lock);
+    set_bit(CASTLE_SLAVE_GHOST_BIT, &slave->flags);
+    set_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags);
+    list_add(&slave->list, &castle_slaves.slaves);
+    return;
+}
+
+extern atomic_t current_rebuild_seqno;
+
+#define MAX_VERSION -1
 int castle_fs_init(void)
 {
-    struct   list_head *lh;
+    struct   list_head *lh, *tmp;
     struct   castle_slave *cs;
     struct   castle_fs_superblock fs_sb, *cs_fs_sb;
     int      ret, first, prev_new_dev = -1;
-    uint32_t i, nr_fs_slaves = 0, slave_count = 0, fs_version = 0;
+    int      i, version_found=0, last;
+    uint32_t slave_count=0, nr_fs_slaves=0, nr_live_slaves=0, need_rebuild = 0;
+    uint32_t bcv=0, last_version_checked=MAX_VERSION, potential_bcv=0;
 
     printk("Castle FS start.\n");
     if(castle_fs_inited)
@@ -410,15 +489,120 @@ int castle_fs_init(void)
         return -ENOENT;
     }
 
+    /*
+     * Search for best common fs version. This is the greatest fs version that is supported
+     * by preferrably (1) all the slaves, or less preferrably (2) all bar one of the slaves.
+     */
+    last = 0;
+    while (!bcv)
+    {
+        uint32_t version_to_check=0;
+        int nr_slaves = 0;
+        int hits;
+
+        /*
+         * Each time we pass through this loop, we'll calculate the next-highest fs version on
+         * any slave. Also not how many slaves we have found.
+         */
+        list_for_each(lh, &castle_slaves.slaves)
+        {
+            cs = list_entry(lh, struct castle_slave, list);
+            for (i=0; i<2; i++)
+                if ((version_to_check <= cs->fs_versions[i]) &&
+                    (cs->fs_versions[i] < last_version_checked))
+                    version_to_check = cs->fs_versions[i];
+            nr_slaves++;
+        }
+
+        /* No lower version found, so this is the lowest. */
+        if (version_to_check == last_version_checked)
+            last = 1;
+
+        last_version_checked = version_to_check;
+
+        /* Find how many slaves support this fs version. */
+        hits = 0;
+        list_for_each(lh, &castle_slaves.slaves)
+        {
+            cs = list_entry(lh, struct castle_slave, list);
+            for (i=0; i<2; i++)
+            {
+                if (cs->fs_versions[i] == version_to_check)
+                {
+                    hits++;
+                    break;
+                }
+            }
+        }
+
+        if (hits == nr_slaves)
+        {
+            /* All slaves support this fs version - use it. */
+            bcv = version_to_check;
+            printk("Found Best Common Version %d on all live slaves.\n", version_to_check);
+            version_found = 1;
+            break;
+        } else if (potential_bcv)
+        {
+            /*
+             * The previous fs version was supported by all slaves bar one. As not all slaves
+             * support this version, potential_bcv is the next best version to use.
+             */
+            bcv = potential_bcv;
+            printk("Best Common Filesystem Version %d on quorum of live slaves.\n", version_to_check);
+            version_found = 1;
+            break;
+        } else if (hits == nr_slaves-1)
+        {
+            /*
+             * All slaves bar one support this fs version. If this is the last version to check,
+             * then this is the version to use. If not, this *could* be the best version
+             * to use, unless the next lower fs version is supported by all slaves. Mark it as
+             * a potential fs version to use, and it will be checked the next time through the loop.
+             */
+            if (last)
+            {
+                printk("Best Common Filesystem Version %d on quorum of live slaves.\n",
+                        version_to_check);
+                bcv = version_to_check;
+                version_found = 1;
+                break;
+            }
+            potential_bcv = version_to_check;
+            debug("Found potential Best Common Filesystem Version %d on quorum of live slaves.\n",
+                   potential_bcv);
+        }
+        if (last)
+        {
+            printk("Error: could not find quorum of slaves to start filesystem.\n");
+            return -EINVAL;
+        }
+    }
+
+    /* If there is a slave which did not support the version, mark it as out-of-service. */
+    list_for_each_safe(lh, tmp, &castle_slaves.slaves)
+    {
+        cs = list_entry(lh, struct castle_slave, list);
+        if ((cs->fs_versions[0] != bcv) && (cs->fs_versions[1] != bcv))
+        {
+            char                        b[BDEVNAME_SIZE];
+
+            BUG_ON(need_rebuild); /* We should only find one slave. */
+
+            printk("Slave 0x%x [%s] is not in quorum of live slaves. Setting as out-of-service.\n",
+                cs->uuid, bdevname(cs->bdev, b));
+            set_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags);
+        }
+    }
+
     /* 1. Either all disks should be new or none.
      * 2. Find the Greatest Common Version. */
     prev_new_dev = -1;
-    first = 1;
     list_for_each(lh, &castle_slaves.slaves)
     {
-        uint32_t slave_ver;
-
         cs = list_entry(lh, struct castle_slave, list);
+        if (test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags))
+            continue;
 
         if (prev_new_dev < 0)
             prev_new_dev = cs->new_dev;
@@ -427,28 +611,18 @@ int castle_fs_init(void)
             printk("Few disks are marked new and few are not\n");
             return -EINVAL;
         }
-
-        slave_ver = cs->cs_superblock.fs_version;
-        printk("Found FS version %u on slave 0x%x\n", slave_ver, cs->uuid);
-        if (first)
-        { 
-            fs_version = slave_ver; 
-            first = 0; 
-        }
-        else
-            fs_version = (slave_ver < fs_version)?slave_ver:fs_version;
     }
-    printk("Greatest Common Version on slaves: %u\n", fs_version);
 
-    /* Load super blocks for the Greatest Common Version from all slaves. */
+    /* Load super blocks for the Best Common Version from all valid slaves. */
     list_for_each(lh, &castle_slaves.slaves)
     {
         cs = list_entry(lh, struct castle_slave, list);
-        if ((cs->cs_superblock.fs_version != fs_version) && 
-                (castle_slave_version_load(cs, fs_version)))
+        if (test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags))
+            continue;
+        if ((cs->cs_superblock.fs_version != bcv) && 
+                (castle_slave_version_load(cs, bcv)))
         {
-            printk("Couldn't find version %u on slave: 0x%x\n", 
-                    fs_version, cs->uuid);
+            printk("Couldn't find version %u on slave: 0x%x\n", bcv, cs->uuid);
             return -EINVAL;
         }
         if (castle_freespace_slave_init(cs, cs->new_dev))
@@ -465,6 +639,8 @@ int castle_fs_init(void)
     list_for_each(lh, &castle_slaves.slaves)
     {
         cs = list_entry(lh, struct castle_slave, list);
+        if (test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags))
+            continue;
         slave_count++;
 
         if(cs->new_dev)
@@ -490,12 +666,14 @@ int castle_fs_init(void)
             }
         }
 
-        /* Check whether the slave is already in FS slaves list. */
+        /* Check whether the slave is already in FS slaves list and it is not out-of-service. */
         for (i=0; i<fs_sb.nr_slaves; i++)
         {
             if (fs_sb.slaves[i] == cs->uuid)
             {
                 nr_fs_slaves++;
+                if (!test_bit(CASTLE_SLAVE_OOS_BIT, &fs_sb.slaves_flags[i]))
+                    nr_live_slaves++;
                 break;
             }
         }
@@ -508,16 +686,57 @@ int castle_fs_init(void)
         castle_fs_superblock_put(cs, 0);
     }
 
+    debug("FS init found %d live slaves out of a total of %d slaves\n", nr_live_slaves, nr_fs_slaves);
     if (slave_count < 2)
     {
-        printk("Need minimum two disks.\n");
+        printk("Error: Need a minimum of two disks.\n");
         return -EINVAL;
     }
 
-    if (!first && (nr_fs_slaves != fs_sb.nr_slaves))
+    if (!first)
     {
-        printk("Couldn't find all slaves of the filesystem.\n");
-        return -EINVAL;
+        if (nr_live_slaves == nr_fs_slaves - 1)
+            printk("Warning: Starting filesystem with one slave missing.\n");
+        else if (nr_live_slaves < nr_fs_slaves)
+        {
+            printk("Error: could not find enough slaves to start the filesystem\n");
+            return -EINVAL;
+        }
+
+        /*
+         * Scan the list of slaves in the superblock, and mark any castle_slave which is
+         * out-of-service or evacuating.
+         */
+        for (i=0; i<fs_sb.nr_slaves; i++)
+        {
+            char b[BDEVNAME_SIZE];
+
+            cs = castle_slave_find_by_uuid(fs_sb.slaves[i]);
+            if (!cs)
+            {
+                printk("Warning: slave 0x%x is no longer a live member of this filesystem.\n",
+                            fs_sb.slaves[i]);
+                castle_slave_ghost_add(fs_sb.slaves[i]);
+                if (!test_bit(CASTLE_SLAVE_REMAPPED_BIT, &fs_sb.slaves_flags[i]))
+                {
+                    printk("Slave 0x%x has not been remapped. Forcing rebuild\n", fs_sb.slaves[i]);
+                    need_rebuild++;
+                }
+            }
+            if (cs)
+            {
+                if (test_bit(CASTLE_SLAVE_OOS_BIT, &fs_sb.slaves_flags[i]))
+                    set_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags);
+                /* If EVACUATE is set, but not OOS, then evacuation has not completed. */
+                if ((test_bit(CASTLE_SLAVE_EVACUATE_BIT, &fs_sb.slaves_flags[i])) &&
+                    (!test_bit(CASTLE_SLAVE_OOS_BIT, &fs_sb.slaves_flags[i])))
+                {
+                    printk("Slave 0x%x [%s] is still in evacuation\n",
+                            cs->uuid, bdevname(cs->bdev, b));
+                    set_bit(CASTLE_SLAVE_EVACUATE_BIT, &cs->flags);
+                }
+            }
+        }
     }
 
     /* Init the fs superblock */
@@ -624,6 +843,8 @@ int castle_fs_init(void)
 
     printk("Castle FS started.\n");
     castle_fs_inited = 1;
+
+    castle_extents_rebuild_startup_check(need_rebuild);
 
     return 0;
 }
@@ -826,6 +1047,9 @@ static int castle_slave_superblock_read(struct castle_slave *cs)
     if (!errs[1])    printk("[%u]", cs_sb[1].fs_version);
     printk("\n");
 
+    cs->fs_versions[0] = cs_sb[0].fs_version;
+    cs->fs_versions[1] = cs_sb[1].fs_version;
+
     if (!errs[0] && !errs[1])
     {
         /* Check if the versions are non-consecutive. */
@@ -1000,6 +1224,11 @@ int castle_superblocks_writeback(uint32_t version)
     list_for_each(lh, &castle_slaves.slaves)
     {
         slave = list_entry(lh, struct castle_slave, list);
+
+        /* Do not attempt writeback to out-of-service slaves. */
+        if ((test_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags)))
+            continue;
+
         if (castle_slave_superblocks_writeback(slave, version))
             return -EIO;
     }
@@ -1085,7 +1314,6 @@ struct castle_slave* castle_claim(uint32_t new_dev)
     int err;
     char b[BDEVNAME_SIZE];
     struct castle_slave *cs = NULL;
-    static int slave_id = 0;
 
     debug("Claiming: in_atomic=%d.\n", in_atomic());
     if(!(cs = castle_zalloc(sizeof(struct castle_slave), GFP_KERNEL)))
@@ -1172,14 +1400,18 @@ err_out:
 
 void castle_release(struct castle_slave *cs)
 {
-    castle_events_slave_release(cs->uuid);
-    castle_sysfs_slave_del(cs);
-    bd_release(cs->bdev);
+    /* Ghost slaves are only partially initialised */
+    if (!test_bit(CASTLE_SLAVE_GHOST_BIT, &cs->flags))
+    {
+        castle_events_slave_release(cs->uuid);
+        castle_sysfs_slave_del(cs);
+        bd_release(cs->bdev);
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,24)
-    blkdev_put(cs->bdev);
+        blkdev_put(cs->bdev);
 #else
-    blkdev_put(cs->bdev, FMODE_READ|FMODE_WRITE);
+        blkdev_put(cs->bdev, FMODE_READ|FMODE_WRITE);
 #endif
+    }
     list_del(&cs->list);
     castle_free(cs);
 }
@@ -1836,6 +2068,8 @@ void castle_slave_access(uint32_t uuid)
 
     cs = castle_slave_find_by_uuid(uuid);
     BUG_ON(!cs);
+    BUG_ON(test_bit(CASTLE_SLAVE_GHOST_BIT, &cs->flags));
+
     cs->last_access = jiffies; 
         
     sb = castle_slave_superblock_get(cs);

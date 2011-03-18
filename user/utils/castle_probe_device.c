@@ -46,6 +46,13 @@ int main(int argc, char *argv[])
       return 1;
     }
 
+    /* Note: Use second copy of the cs superblock, as this will be the first to be checkpointed. */
+    if (lseek(fd, 8192, SEEK_SET) == -1)
+    {
+        perror("Failed to seek to cs_sb");
+        return 1;
+    }
+
     if (read(fd, &cs_sb, sizeof(cs_sb)) != sizeof(cs_sb))
     {
         perror("Failed to read cs_sb");
@@ -58,7 +65,13 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    lseek(fd, 4096, SEEK_SET);
+    /* Note: Use second copy of the fs superblock, as this will be the first to be checkpointed. */
+    if (lseek(fd, 12288, SEEK_SET) == -1)
+    {
+        perror("Failed to seek to cs_sb");
+        return 1;
+    }
+
     if (read(fd, &fs_sb, sizeof(fs_sb)) != sizeof(fs_sb))
     {
         perror("Failed to read fs_sb");
