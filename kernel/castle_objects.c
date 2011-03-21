@@ -661,7 +661,7 @@ static int castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
     struct castle_object_replace *replace = c_bvec->c_bio->replace;
     int tombstone = c_bvec_data_del(c_bvec); 
     int nr_blocks;
-    //int prev_large_ext_chk_cnt;
+    int prev_large_ext_chk_cnt;
 
     /* We should be handling a write (possibly a tombstone write). */
     BUG_ON(c_bvec_data_dir(c_bvec) != WRITE); 
@@ -763,21 +763,36 @@ static int castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
     /* Free Old Large Object */
     if (CVT_LARGE_OBJECT(prev_cvt))
     {
-        /* Note: Do nothing. This LO will get deleted while deleting this tree.
-         * Deleting here is not good, as there could be few out-standing i/os
-         * going on this object. */
-#if 0
         /* Update the large object chunk count on the tree */
         prev_large_ext_chk_cnt = castle_extent_size_get(prev_cvt.cep.ext_id);
         atomic64_sub(prev_large_ext_chk_cnt, &c_bvec->tree->large_ext_chk_cnt);
         debug("Freeing Large Object of size - %u\n", prev_large_ext_chk_cnt);
-        castle_extent_free(prev_cvt.cep.ext_id);
-#endif
+        castle_ct_large_obj_remove(prev_cvt.cep.ext_id, 
+                                  &c_bvec->tree->large_objs, 
+                                  &c_bvec->tree->lo_mutex);
     }
     BUG_ON(CVT_INVALID(*cvt));
     FAULT(REPLACE_FAULT);
 
     return 0;
+}
+
+static int castle_object_reference_get(c_bvec_t    *c_bvec,
+                                       c_val_tup_t  cvt)
+{
+    BUG_ON(c_bvec_data_dir(c_bvec) != READ);
+    BUG_ON(CVT_INVALID(cvt));
+
+    if (CVT_LARGE_OBJECT(cvt))
+        BUG_ON(!castle_extent_get(cvt.cep.ext_id));
+
+    return 0;
+}
+
+static void castle_object_reference_release(c_val_tup_t cvt)
+{
+    if (CVT_LARGE_OBJECT(cvt))
+        castle_extent_put(cvt.cep.ext_id);
 }
 
 #define OBJ_IO_MAX_BUFFER_SIZE      (10)    /* In C_BLK_SIZE blocks */
@@ -1350,6 +1365,7 @@ out:
     put_c2b(c2b);
 
     castle_ct_put(ct, 0);
+    castle_object_reference_release(get->cvt);
     castle_utils_bio_free(c_bvec->c_bio);
 }
 
@@ -1449,6 +1465,7 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
     debug("Returned from btree walk with value of type 0x%x and length %llu\n", 
           cvt.type, cvt.length);
     get->ct = c_bvec->tree;
+    get->cvt = cvt;
     /* Sanity checks on the bio */
     BUG_ON(c_bvec_data_dir(c_bvec) != READ); 
     BUG_ON(atomic_read(&c_bio->count) != 1);
@@ -1461,8 +1478,11 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
     if(err || CVT_INVALID(cvt) || CVT_TOMB_STONE(cvt))
     {
         debug("Error, invalid or tombstone.\n");
+        /* Dont have any object returned, no need to release reference of object. */
+        /* Release reference of Component Tree. */
         if(get->ct)
             castle_ct_put(get->ct, 0);
+        CVT_INVALID_SET(get->cvt);
         get->reply_start(get, err, 0, NULL, 0);
         castle_utils_bio_free(c_bvec->c_bio);
         return;
@@ -1473,6 +1493,7 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
     if(CVT_INLINE(cvt))
     {
         debug("Inline.\n");
+        /* Release reference of Component Tree. */
         castle_ct_put(get->ct, 0);
         get->reply_start(get, 0, cvt.length, cvt.val, cvt.length);
         castle_free(cvt.val);
@@ -1539,8 +1560,7 @@ int castle_object_get(struct castle_object_get *get,
     c_bvec->key        = btree_key; 
     c_bvec->cpu_index  = cpu_index;
     c_bvec->cpu        = castle_double_array_request_cpu(c_bvec->cpu_index);
-    /* Callback cvt_get() is not required for READ */
-    c_bvec->cvt_get    = NULL;
+    c_bvec->ref_get    = castle_object_reference_get;
     c_bvec->endfind    = castle_object_get_complete;
     c_bvec->da_endfind = NULL; 
     atomic_set(&c_bvec->reserv_nodes, 0);
@@ -1555,6 +1575,7 @@ EXPORT_SYMBOL(castle_object_get);
 void castle_object_pull_finish(struct castle_object_pull *pull)
 {
     castle_ct_put(pull->ct, 0);
+    castle_object_reference_release(pull->cvt);
 }
 
 
@@ -1652,6 +1673,7 @@ static void castle_object_pull_continue(struct castle_bio_vec *c_bvec, int err, 
     struct castle_object_pull *pull = c_bvec->c_bio->pull;
     
     pull->ct = c_bvec->tree;
+    pull->cvt = cvt;
     castle_object_bkey_free(c_bvec->key);
     castle_utils_bio_free(c_bvec->c_bio);
     
@@ -1661,6 +1683,7 @@ static void castle_object_pull_continue(struct castle_bio_vec *c_bvec, int err, 
 
         if (err)
             castle_ct_put(pull->ct, 0);
+        CVT_INVALID_SET(pull->cvt);
         pull->pull_continue(pull, err, 0, 1 /* done */);
         return;
     }
@@ -1714,8 +1737,7 @@ int castle_object_pull(struct castle_object_pull *pull,
     c_bvec->key        = btree_key; 
     c_bvec->cpu_index  = cpu_index;
     c_bvec->cpu        = castle_double_array_request_cpu(c_bvec->cpu_index);
-    /* Callback cvt_get() is not required for READ */
-    c_bvec->cvt_get    = NULL;
+    c_bvec->ref_get    = castle_object_reference_get;
     c_bvec->endfind    = castle_object_pull_continue;
     c_bvec->da_endfind = NULL; 
     atomic_set(&c_bvec->reserv_nodes, 0);

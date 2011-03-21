@@ -2662,7 +2662,7 @@ static struct castle_component_tree* castle_da_merge_package(struct castle_da_me
 
     /* Add list of large objects to CT. */
     list_replace(&merge->large_objs, &out_tree->large_objs);
-    merge->large_objs.prev = merge->large_objs.next = NULL;
+    INIT_LIST_HEAD(&merge->large_objs);
 
     debug("Number of entries=%ld, number of nodes=%ld\n",
             atomic64_read(&out_tree->item_count),
@@ -2873,7 +2873,6 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
         /* Free the list of large objects referenced by merge. Old CT also has a reference, 
          * so the large object should be alive after this. */
         castle_ct_large_objs_remove(&merge->large_objs);
-        INIT_LIST_HEAD(&merge->large_objs);
 
         out_tree = merge->out_tree;
         /* Free the component tree, if one was allocated. */
@@ -4473,20 +4472,60 @@ static void castle_ct_large_obj_writeback(struct castle_large_obj_entry *lo,
     castle_mstore_entry_insert(castle_lo_store, &mstore_entry);
 }
 
+static void __castle_ct_large_obj_remove(struct list_head *lh)
+{
+    struct castle_large_obj_entry *lo = list_entry(lh, struct castle_large_obj_entry, list);
+
+    /* Remove LO from list. */
+    list_del(&lo->list);
+
+    /* Free-up LO extent. */
+    castle_extent_free(lo->ext_id);
+
+    /* Free memory. */
+    castle_free(lo);
+}
+
+/* Remove a large object from list attached to the CT. This gets called only from T0 replaces. 
+ * This call could be inefficient due to linear search for LO through the complete list. But, 
+ * this gets called for only LO replaces. 
+ * Also this remove blocks new LO insertions as it is holding the mutex. Instead it might be a 
+ * good idea to not maintain LO list for T0. (that would make T0 persistence hard) */
+int castle_ct_large_obj_remove(c_ext_id_t           ext_id, 
+                               struct list_head    *lo_list_head, 
+                               struct mutex        *mutex)
+{
+    struct list_head *lh, *tmp;
+    int ret = -1;
+
+    /* Get mutex on LO list. */
+    if (mutex) mutex_lock(mutex);
+
+    /* Search for LO we are trying to remove in the list. */
+    list_for_each_safe(lh, tmp, lo_list_head)
+    {
+        struct castle_large_obj_entry *lo = list_entry(lh, struct castle_large_obj_entry, list);
+
+        if (lo->ext_id == ext_id)
+        {
+            /* Remove LO from list. */
+            __castle_ct_large_obj_remove(lh);
+            ret = 0;
+            break;
+        }
+    }
+    if (mutex) mutex_unlock(mutex);
+
+    return ret;
+}
+
 static void castle_ct_large_objs_remove(struct list_head *lo_list_head)
 {
     struct list_head *lh, *tmp;
 
+    /* no need of lock. Called from castle_ct_put. There shouldnt be any parallel operations. */
     list_for_each_safe(lh, tmp, lo_list_head)
-    {
-        struct castle_large_obj_entry *lo = 
-                            list_entry(lh, struct castle_large_obj_entry, list);
-
-        /* No need of locks as it is done in the removal context of CT. */
-        list_del(&lo->list);
-        castle_extent_put(lo->ext_id);
-        castle_free(lo);
-    }
+        __castle_ct_large_obj_remove(lh);
 }
 
 int castle_ct_large_obj_add(c_ext_id_t              ext_id, 

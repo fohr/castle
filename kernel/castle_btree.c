@@ -1545,6 +1545,13 @@ static void castle_btree_io_end(c_bvec_t    *c_bvec,
         c_bvec->parent_key = NULL;
     }
 
+    /* Get reference on objects before reads. */
+    if (!err && (c_bvec_data_dir(c_bvec) == READ))
+    {
+        BUG_ON(!c_bvec->ref_get);
+        c_bvec->ref_get(c_bvec, cvt);
+    }
+
     /* Free the c2bs correctly. Call twice to release parent and child
        (if both exist) */
     castle_btree_c2b_forget(c_bvec);
