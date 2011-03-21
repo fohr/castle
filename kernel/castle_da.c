@@ -2807,6 +2807,8 @@ static struct castle_component_tree* castle_da_merge_complete(struct castle_da_m
     return castle_da_merge_package(merge);
 }
 
+static void castle_ct_large_objs_remove(struct list_head *);
+
 static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
 {
     int i;
@@ -2867,6 +2869,12 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
             castle_bloom_abort(&merge->bloom);
             castle_bloom_destroy(&merge->bloom);
         }
+
+        /* Free the list of large objects referenced by merge. Old CT also has a reference, 
+         * so the large object should be alive after this. */
+        castle_ct_large_objs_remove(&merge->large_objs);
+        INIT_LIST_HEAD(&merge->large_objs);
+
         out_tree = merge->out_tree;
         /* Free the component tree, if one was allocated. */
         if(out_tree)
@@ -4465,11 +4473,11 @@ static void castle_ct_large_obj_writeback(struct castle_large_obj_entry *lo,
     castle_mstore_entry_insert(castle_lo_store, &mstore_entry);
 }
 
-static void castle_ct_large_objs_remove(struct castle_component_tree *ct)
+static void castle_ct_large_objs_remove(struct list_head *lo_list_head)
 {
     struct list_head *lh, *tmp;
 
-    list_for_each_safe(lh, tmp, &ct->large_objs)
+    list_for_each_safe(lh, tmp, lo_list_head)
     {
         struct castle_large_obj_entry *lo = 
                             list_entry(lh, struct castle_large_obj_entry, list);
@@ -4545,7 +4553,7 @@ void castle_ct_put(struct castle_component_tree *ct, int write)
 
     debug("Releasing freespace occupied by ct=%d\n", ct->seq);
     /* Freeing all large objects. */
-    castle_ct_large_objs_remove(ct);
+    castle_ct_large_objs_remove(&ct->large_objs);
 
     /* Free the extents. */
     castle_ext_freespace_fini(&ct->internal_ext_free);
