@@ -4653,6 +4653,11 @@ void castle_da_ct_marshall(struct castle_clist_entry *ctm,
         castle_bloom_marshall(&ct->bloom, ctm);
 }
 
+/**
+ * Read an existing component tree from disk.
+ *
+ * - Prefetches btree extent for T0s.
+ */
 static da_id_t castle_da_ct_unmarshall(struct castle_component_tree *ct,
                                        struct castle_clist_entry *ctm)
 {
@@ -4694,6 +4699,15 @@ static da_id_t castle_da_ct_unmarshall(struct castle_component_tree *ct,
     ct->bloom_exists = ctm->bloom_exists;
     if (ctm->bloom_exists)
         castle_bloom_unmarshall(&ct->bloom, ctm);
+    /* Pre-warm cache for T0 btree extents. */
+    if (ct->level == 0)
+    {
+        /* CHUNK() will give us the offset of the last btree node (from chunk 0)
+         * so bump it by 1 to get the number of chunks to prefetch. */
+        int chunks = CHUNK(ct->last_node.offset) + 1;
+        castle_cache_advise((c_ext_pos_t){ct->tree_ext_free.ext_id, 0},
+                C2_ADV_EXTENT|C2_ADV_PREFETCH, chunks, -1, 0);
+    }
 
     return ctm->da_id;
 }
@@ -5057,6 +5071,7 @@ static int __castle_da_driver_merge_reset(struct castle_double_array *da, void *
  * - Called during module initialisation only
  *
  * @also castle_fs_init()
+ * @also castle_double_array_read()
  */
 int castle_double_array_start(void)
 {
@@ -5072,6 +5087,13 @@ int castle_double_array_start(void)
     return 0;
 }
 
+/**
+ * Read doubling arrays and serialised component trees in from disk.
+ *
+ * - Called during module initialisation only
+ *
+ * @also castle_fs_init()
+ */
 int castle_double_array_read(void)
 {
     struct castle_dlist_entry mstore_dentry;

@@ -898,6 +898,12 @@ void castle_bloom_marshall(castle_bloom_t *bf, struct castle_clist_entry *ctm)
     ctm->bloom_ext_id = bf->ext_id;
 }
 
+/**
+ * Read an existing bloom filter from disk.
+ *
+ * - Prefetch bloom filter extent where the total number of chunks satisfies our
+ *   cache requirements
+ */
 void castle_bloom_unmarshall(castle_bloom_t *bf, struct castle_clist_entry *ctm)
 {
     bf->num_hashes = ctm->bloom_num_hashes;
@@ -915,6 +921,17 @@ void castle_bloom_unmarshall(castle_bloom_t *bf, struct castle_clist_entry *ctm)
     castle_extent_mark_live(bf->ext_id);
 
     bf->private = NULL;
+
+    /* Pre-warm cache for bloom filters. */
+    if (bf->num_chunks <= BLOOM_MAX_SOFTPIN_CHUNKS)
+    {
+        /* A bf chunk is not the same as a c2b chunk.
+         * CHUNK() will give us an offset starting from 0, bump it by 1 to get
+         * the number of chunks we need to prefetch & pin. */
+        int chunks = CHUNK(bf->chunks_offset + bf->num_chunks * BLOOM_CHUNK_SIZE) + 1;
+        castle_cache_advise((c_ext_pos_t){bf->ext_id, 0},
+                C2_ADV_EXTENT|C2_ADV_PREFETCH|C2_ADV_SOFTPIN, chunks, -1, 0);
+    }
 
 #ifdef CASTLE_BLOOM_FP_STATS
     atomic64_set(&bf->queries, 0);

@@ -3316,7 +3316,7 @@ static void c2_pref_c2b_destroy(c2_block_t *c2b)
  *
  * @also castle_cache_prefetch_unpin()
  */
-static void castle_cache_prefetch_pin(c_ext_pos_t cep, int chunks, int type)
+static void castle_cache_prefetch_pin(c_ext_pos_t cep, int chunks, c2_advise_t advise)
 {
     c2_block_t *c2b;
 
@@ -3326,20 +3326,34 @@ static void castle_cache_prefetch_pin(c_ext_pos_t cep, int chunks, int type)
     {
         /* Get block, lock it and update offset. */
         c2b = castle_cache_block_get(cep, BLKS_PER_CHK);
-        if (type & C2_ADV_SOFTPIN)
+
+        if (advise & C2_ADV_PREFETCH)
+        {
+            get_c2b(c2b); /* will drop this in c2_pref_io_end() */
+            write_lock_c2b(c2b);
+            c2b->end_io = c2_pref_io_end;
+
+            BUG_ON(submit_c2b(READ, c2b));
+        }
+
+        if (advise & C2_ADV_SOFTPIN)
         {
             softpin_c2b(c2b);
+            put_c2b(c2b);
+        }
+        else if (!(advise & C2_ADV_HARDPIN))
+        {
             put_c2b(c2b);
         }
         cep.offset += BLKS_PER_CHK * PAGE_SIZE;
         chunks--;
     }
 
-    if (type & C2_ADV_HARDPIN)
+    if (advise & C2_ADV_HARDPIN)
     {
         pref_debug(0, "Hardpinning for ext_id %llu\n", cep.ext_id);
     }
-    else if (type & C2_ADV_SOFTPIN)
+    else if (advise & C2_ADV_SOFTPIN)
     {
         pref_debug(0, "Softpinning for ext_id %llu\n", cep.ext_id);
     }
@@ -3356,7 +3370,7 @@ static void castle_cache_prefetch_pin(c_ext_pos_t cep, int chunks, int type)
  *
  * @also castle_cache_prefetch_pin()
  */
-static void castle_cache_prefetch_unpin(c_ext_pos_t cep, int chunks, int type)
+static void castle_cache_prefetch_unpin(c_ext_pos_t cep, int chunks, c2_advise_t advise)
 {
     c2_block_t *c2b;
 
@@ -3365,12 +3379,12 @@ static void castle_cache_prefetch_unpin(c_ext_pos_t cep, int chunks, int type)
     while (chunks > 0)
     {
         /* Get block, lock it and update offset. */
-        if (type & C2_ADV_SOFTPIN)
+        if (advise & C2_ADV_SOFTPIN)
         {
             if ((c2b = castle_cache_block_hash_get(cep, BLKS_PER_CHK)))
                 clearsoftpin_c2b(c2b);
         }
-        else //if (type & C2_ADV_HARDPIN)
+        else //if (advise & C2_ADV_HARDPIN)
         {
             c2b = castle_cache_block_get(cep, BLKS_PER_CHK);
             put_c2b(c2b); /* will cause problems if they weren't prefetch-locked. */
@@ -3382,11 +3396,11 @@ static void castle_cache_prefetch_unpin(c_ext_pos_t cep, int chunks, int type)
         chunks--;
     }
 
-    if (type & C2_ADV_HARDPIN)
+    if (advise & C2_ADV_HARDPIN)
     {
         pref_debug(0, "Unhardpinning for ext_id %llu\n", cep.ext_id);
     }
-    else if (type & C2_ADV_SOFTPIN)
+    else if (advise & C2_ADV_SOFTPIN)
     {
         pref_debug(0, "Unsoftpinning for ext_id %llu\n", cep.ext_id);
     }
@@ -3648,37 +3662,27 @@ static int castle_cache_prefetch_advise(c_ext_pos_t cep, c2_advise_t advise,
  */
 int castle_cache_advise(c_ext_pos_t cep, c2_advise_t advise, int chunks, int priority, int debug)
 {
-    int ret = -ENOSYS;
-
     BUG_ON(advise & C2_ADV_BACK);
 
     /* Return if we're trying to hardpin and it's disabled. */
     if (!castle_cache_allow_hardpinning && (advise & C2_ADV_HARDPIN))
         return EXIT_SUCCESS;
 
+    /* Prefetching is handled via a _prefetch_advise() call. */
+    if ((advise & C2_ADV_PREFETCH) && !(advise & C2_ADV_EXTENT))
+        return castle_cache_prefetch_advise(cep, advise, chunks, priority, 0);
+
+    /* Pinning, etc. is handled via _prefetch_pin() call. */
     if (advise & C2_ADV_EXTENT)
     {
         /* We are going to operate on a whole extent.
          * Massage cep & chunks to match. */
         cep.offset = 0;
         chunks = castle_extent_size_get(cep.ext_id);
-
-        if (advise & C2_ADV_HARDPIN)
-            castle_cache_prefetch_pin(cep, chunks, C2_ADV_HARDPIN);
-        else if (advise & C2_ADV_SOFTPIN)
-            castle_cache_prefetch_pin(cep, chunks, C2_ADV_SOFTPIN);
-
-        ret = EXIT_SUCCESS;
     }
-    else /*if (advise & C2_ADV_CEP)*/
-    {
-        /* We're operating on 'chunks' c2bs. */
+    castle_cache_prefetch_pin(cep, chunks, advise);
 
-        if (advise & C2_ADV_PREFETCH)
-            castle_cache_prefetch_advise(cep, advise, chunks, priority, 0);
-    }
-
-    return ret;
+    return EXIT_SUCCESS;
 }
 
 /**
@@ -3706,28 +3710,21 @@ int castle_cache_advise_clear(c_ext_pos_t cep, c2_advise_t advise, int chunks,
     if (!castle_cache_allow_hardpinning && (advise & C2_ADV_HARDPIN))
         return EXIT_SUCCESS;
 
+    /* There's no such thing as 'unprefetching'. */
+    if (advise & C2_ADV_PREFETCH && !(advise & C2_ADV_EXTENT))
+        return -ENOSYS;
+
+    /* Unpinning, etc. is handled via _prefetch_unpin() call. */
     if (advise & C2_ADV_EXTENT)
     {
         /* We are going to operate on a whole extent.
          * Massage cep & chunks to match. */
         cep.offset = 0;
         chunks = castle_extent_size_get(cep.ext_id);
-
-        if (advise & C2_ADV_HARDPIN)
-            castle_cache_prefetch_unpin(cep, chunks, C2_ADV_HARDPIN);
-        else if (advise & C2_ADV_SOFTPIN)
-            castle_cache_prefetch_unpin(cep, chunks, C2_ADV_SOFTPIN);
-
-        return EXIT_SUCCESS;
     }
-    else /*if (advise & C2_ADV_CEP)*/
-    {
-        /* We're operating on 'chunks' c2bs. */
+    castle_cache_prefetch_unpin(cep, chunks, advise);
 
-        // do nothing (yet)
-    }
-
-    return -ENOSYS;
+    return EXIT_SUCCESS;
 }
 
 #ifdef CASTLE_DEBUG
