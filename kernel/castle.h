@@ -773,9 +773,6 @@ struct castle_cache_block;
 struct castle_request_timeline;
 #define CBV_ONE2ONE_BIT               (0) 
 #define CBV_ROOT_LOCKED_BIT           (1) 
-#define CBV_DOING_SPLITS              (2)       /**< Indicates btree walk is doing node splits.
-                                                     With this bit set the walk will write-lock
-                                                     all nodes on the walk.                     */
 #define CBV_PARENT_WRITE_LOCKED       (3) 
 #define CBV_CHILD_WRITE_LOCKED        (4) 
 /* Temporary variable used to set the above correctly, at the right point in time */ 
@@ -789,24 +786,24 @@ typedef struct castle_bio_vec {
     int                           cpu;          /**< CPU id for this request                    */
     int                           cpu_index;    /**< CPU index (for determining correct CT)     */
     struct castle_component_tree *tree;         /**< CT to search                               */
+
+    /* Btree walk variables. */
     unsigned long                 flags;        /**< Flags                                      */
-    union {                                     /**< Used to walk the Btree                     */
-        struct {
-            int                        btree_depth; /**< How far down we've gone so far         */
-            int                        split_depth; /**< How far down we've gone so far         */
-            int                        btree_levels;/**< Levels in the tree (private copy in case
-                                                         someone splits root node while we are
-                                                         lower down in the tree                 */
-            void                      *parent_key;  /**< Key in parent node btree_node is from  */
-            /* When writing, B-Tree node and its parent have to be locked concurrently. */
-            struct castle_cache_block *btree_node;
-            struct castle_cache_block *btree_parent_node;
-            struct castle_cache_block *bloom_c2b;
+    int                        btree_depth;     /**< How far down the btree we've gone so far   */
+    int                        btree_levels;    /**< Levels in the tree (private copy in case
+                                                     someone splits root node while we are
+                                                     lower down in the tree                     */
+    void                      *parent_key;      /**< Key in parent node btree_node is from      */
+    /* When writing, B-Tree node and its parent have to be locked concurrently. */
+    struct castle_cache_block *btree_node;
+    struct castle_cache_block *btree_parent_node;
+
+    /* Bloom filters. */
+    struct castle_cache_block *bloom_c2b;
 #ifdef CASTLE_BLOOM_FP_STATS
-            int bloom_positive;
+    int bloom_positive;
 #endif
-        };
-    };
+
     struct work_struct               work;      /**< Used to thread this bvec onto a workqueue  */
     /* Value tuple allocation callback */
     int                            (*cvt_get)    (struct castle_bio_vec *, 
