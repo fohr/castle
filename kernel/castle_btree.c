@@ -1466,7 +1466,7 @@ void castle_btree_ct_lock(c_bvec_t *c_bvec)
 {
     int write = (c_bvec_data_dir(c_bvec) == WRITE);
 
-    if(write && test_bit(CBV_DOING_SPLITS, &c_bvec->flags) && (c_bvec->split_depth == 0))
+    if(write)
     {
         down_write(&c_bvec->tree->lock);
         set_bit(CBV_CHILD_WRITE_LOCKED, &c_bvec->flags);
@@ -1484,15 +1484,14 @@ void castle_btree_ct_unlock(c_bvec_t *c_bvec)
 {
     int write = (c_bvec_data_dir(c_bvec) == WRITE);
 
-    if(write && test_bit(CBV_DOING_SPLITS, &c_bvec->flags) && (c_bvec->split_depth == 0))
+    if(write)
     {
         BUG_ON(!test_bit(CBV_PARENT_WRITE_LOCKED, &c_bvec->flags));
         up_write(&c_bvec->tree->lock);
     }
     else
     {
-        BUG_ON( (write && test_bit(CBV_PARENT_WRITE_LOCKED, &c_bvec->flags)) ||
-               (!write && test_bit(CBV_CHILD_WRITE_LOCKED, &c_bvec->flags)) );
+        BUG_ON(test_bit(CBV_CHILD_WRITE_LOCKED, &c_bvec->flags));
         up_read(&c_bvec->tree->lock);
     }
 
@@ -1517,7 +1516,6 @@ static void castle_btree_c2b_forget(c_bvec_t *c_bvec);
 static void __castle_btree_submit(c_bvec_t *c_bvec,
                                   c_ext_pos_t  node_cep,
                                   void *parent_key);
-static void castle_btree_submit_no_clear(c_bvec_t *c_bvec);
 
 
 static void castle_btree_io_end(c_bvec_t    *c_bvec,
@@ -2292,22 +2290,6 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
     if((btree->key_compare(c_bvec->parent_key, btree->inv_key) != 0) &&
        (btree->need_split(node, 0 /* version split */)))
     {
-        /* If the DOING_SPLITS flag is not set, the locks were likely not
-           acquired in the write mode, restart the entire btree_find,
-           now with the flag set */
-        if(!test_bit(CBV_DOING_SPLITS, &c_bvec->flags) ||
-            (c_bvec->split_depth >= c_bvec->btree_depth))
-        {
-            castle_btree_c2b_forget(c_bvec);
-            castle_btree_c2b_forget(c_bvec);
-            /* Set the flag AFTER releasing the lock (which could confuse ct_unlock) */
-            set_bit(CBV_DOING_SPLITS, &c_bvec->flags);
-            c_bvec->split_depth = c_bvec->btree_depth - 1;
-            castle_btree_submit_no_clear(c_bvec);
-
-            return;
-        }
-
         debug("===> Splitting node: leaf=%d, used=%d\n",
                 node->is_leaf, node->used);
         ret = castle_btree_node_split(c_bvec);
@@ -2525,10 +2507,10 @@ static void castle_btree_c2b_forget(c_bvec_t *c_bvec)
     if(write)
     {
         c_bvec->btree_parent_node = c_bvec->btree_node;
-       if(test_bit(CBV_CHILD_WRITE_LOCKED, &c_bvec->flags))
-           set_bit(CBV_PARENT_WRITE_LOCKED, &c_bvec->flags);
-       else
-           clear_bit(CBV_PARENT_WRITE_LOCKED, &c_bvec->flags);
+        if(test_bit(CBV_CHILD_WRITE_LOCKED, &c_bvec->flags))
+            set_bit(CBV_PARENT_WRITE_LOCKED, &c_bvec->flags);
+        else
+            clear_bit(CBV_PARENT_WRITE_LOCKED, &c_bvec->flags);
     }
     /* Forget */
     c_bvec->btree_node = NULL;
@@ -2564,10 +2546,7 @@ static void castle_btree_c2b_lock(c_bvec_t *c_bvec, c2_block_t *c2b)
        - on writes, if we reached leaf level (possibly following leaf pointers)
        - on writes, if we are doing splits
      */
-    if(!c2b_uptodate(c2b) ||
-       (write && ((test_bit(CBV_DOING_SPLITS, &c_bvec->flags) &&
-                  (c_bvec->split_depth <= c_bvec->btree_depth))||
-                  (c_bvec->btree_depth >= c_bvec->btree_levels))))
+    if(!c2b_uptodate(c2b) || write)
     {
         write_lock_c2b(c2b);
         set_bit(CBV_C2B_WRITE_LOCKED, &c_bvec->flags);
@@ -2578,7 +2557,6 @@ static void castle_btree_c2b_lock(c_bvec_t *c_bvec, c2_block_t *c2b)
         clear_bit(CBV_C2B_WRITE_LOCKED, &c_bvec->flags);
     }
     castle_debug_bvec_update(c_bvec, C_BVEC_BTREE_LOCKED_NODE);
-
 }
 
 /**
@@ -2720,9 +2698,6 @@ static void _castle_btree_submit(struct work_struct *work)
 /**
  * Submit request to the btree.
  *
- * - Clear CBV_DOING_SPLITS to prevent the walker getting write locks on btree
- *   nodes (unless the walk is for a write, in which case explicitly set it in
- *   case a node-split is required)
  * - Queue the request to the c_bvec-specified CPU
  */
 void castle_btree_submit(c_bvec_t *c_bvec)
@@ -2732,33 +2707,6 @@ void castle_btree_submit(c_bvec_t *c_bvec)
     c_bvec->btree_parent_node = NULL;
     c_bvec->parent_key        = NULL;
 
-    /* To prevent double walks of the btree (first getting read locks, later
-     * getting write locks in case a node-split is required), force the walk to
-     * get write locks from off the bat.
-     * @FIXME clean this up and make the walk always grab write locks in the
-     * case of a btree write */
-    if (c_bvec_data_dir(c_bvec) == WRITE)
-    {
-        set_bit(CBV_DOING_SPLITS, &c_bvec->flags);
-        c_bvec->split_depth = 0;
-    }
-    else
-        clear_bit(CBV_DOING_SPLITS, &c_bvec->flags);
-
-    CASTLE_INIT_WORK(&c_bvec->work, _castle_btree_submit);
-    castle_btree_bvec_queue(c_bvec);
-}
-
-/**
- * Re-submit request to the btree without clearing CBV_DOING_SPLITS.
- *
- * Called when a write op has traversed the tree obtaining read locks and
- * detects a btree node that needs to be split.
- *
- * We expect the caller to have set CBV_DOING_SPLITS.
- */
-static void castle_btree_submit_no_clear(c_bvec_t *c_bvec)
-{
     CASTLE_INIT_WORK(&c_bvec->work, _castle_btree_submit);
     castle_btree_bvec_queue(c_bvec);
 }
