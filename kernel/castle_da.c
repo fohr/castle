@@ -4248,7 +4248,7 @@ int castle_double_array_request_cpus(void)
  * @return  EXIT_SUCCESS    Successfully allocated wait queues
  * @return  1               Failed to allocate wait queues
  *
- * @also castle_da_rwct_create()
+ * @also castle_da_all_rwcts_create()
  */
 static int castle_da_wait_queue_create(struct castle_double_array *da, void *unused)
 {
@@ -5010,10 +5010,10 @@ out:
     castle_da_store = castle_tree_store = castle_lo_store = NULL;
 }
 
-static int castle_da_rwct_make(struct castle_double_array *da, int cpu_index, int in_tran);
+static int castle_da_rwct_create(struct castle_double_array *da, int cpu_index, int in_tran);
 
 /**
- * Create T0 for specified DA if it does not already exist.
+ * Create one RWCT per strand for specified DA if they do not already exist.
  *
  * - Allocate one CT per CPU handling requests
  *
@@ -5027,8 +5027,9 @@ static int castle_da_rwct_make(struct castle_double_array *da, int cpu_index, in
  * @FIXME is the locking here correct?  could these be read_locks()?
  *
  * @also castle_double_array_start()
+ * @also castle_da_rwct_create()
  */
-static int castle_da_rwct_create(struct castle_double_array *da)
+static int castle_da_all_rwcts_create(struct castle_double_array *da)
 {
     struct list_head *l, *p;
     LIST_HEAD(list);
@@ -5045,13 +5046,13 @@ static int castle_da_rwct_create(struct castle_double_array *da)
 
     /* Otherwise, there should be no trees at this level. */
     BUG_ON(da->levels[0].nr_trees != 0);
-    write_unlock(&da->lock); /* castle_da_rwct_make() gets da lock */
+    write_unlock(&da->lock); /* castle_da_rwct_create() gets da lock */
 
     /* There are no existing CTs at level 0 in this DA.
      * Create one CT per CPU handling requests. */
     for (cpu_index = 0; cpu_index < request_cpus.cnt; cpu_index++)
     {
-        if (castle_da_rwct_make(da, cpu_index, 1 /* in_tran */) != EXIT_SUCCESS)
+        if (castle_da_rwct_create(da, cpu_index, 1 /* in_tran */) != EXIT_SUCCESS)
         {
             castle_printk("Failed to create T0 %d for DA %u\n", cpu_index, da->id);
             goto err_out;
@@ -5086,12 +5087,14 @@ err_out:
 }
 
 /**
- * Called at start of day from the hash iterator. Tries to allocate RWCTs for a DA.
- * It ignores errors, and returns 0 in order to continue the iterator.
+ * Wrapper for castle_da_all_rwcts_create() to be called from castle_double_array_start().
+ *
+ * - Ignores errors
+ * - Always returns 0 (to force iterator to continue)
  */
 static int castle_da_rwct_init(struct castle_double_array *da, void *unused)
 {
-    castle_da_rwct_create(da);
+    castle_da_all_rwcts_create(da);
 
     return 0;
 }
@@ -5115,7 +5118,8 @@ static int __castle_da_driver_merge_reset(struct castle_double_array *da, void *
  */
 int castle_double_array_start(void)
 {
-    /* Create T0 for all DAs that don't have them (function acquires lock). */
+    /* Create T0 RWCTs for all DAs that don't have them (acquires lock).
+     * castle_da_rwct_init() wraps castle_da_rwcts_create() for hash_iter. */
     __castle_da_hash_iterate(castle_da_rwct_init, NULL);
 
     /* Reset driver merge for all DAs. */
@@ -5338,7 +5342,7 @@ static struct castle_component_tree* castle_ct_alloc(struct castle_double_array 
  * @also castle_ct_alloc()
  * @also castle_ext_fs_init()
  */
-static int castle_da_rwct_make(struct castle_double_array *da, int cpu_index, int in_tran)
+static int castle_da_rwct_create(struct castle_double_array *da, int cpu_index, int in_tran)
 {
     struct castle_component_tree *ct, *old_ct;
     struct castle_btree_type *btree;
@@ -5463,6 +5467,7 @@ out:
  * @param root_version  Root version
  *
  * @also castle_control_create()
+ * @also castle_da_all_rwcts_create()
  */
 int castle_double_array_make(da_id_t da_id, version_t root_version)
 {
@@ -5476,8 +5481,8 @@ int castle_double_array_make(da_id_t da_id, version_t root_version)
     /* Write out the id, and the root version. */
     da->id = da_id;
     da->root_version = root_version;
-    /* Allocate T0s. */
-    ret = castle_da_rwct_create(da);
+    /* Allocate all T0 RWCTs. */
+    ret = castle_da_all_rwcts_create(da);
     if (ret != EXIT_SUCCESS)
     {
         castle_printk("Exiting from failed ct create.\n");
@@ -5708,7 +5713,7 @@ again:
 new_ct:
     debug("Number of items in component tree %d, # items %ld. Trying to add a new rwct.\n",
             ct->seq, atomic64_read(&ct->item_count));
-    ret = castle_da_rwct_make(da, c_bvec->cpu_index, 0 /* in_tran */);
+    ret = castle_da_rwct_create(da, c_bvec->cpu_index, 0 /* in_tran */);
 
     /* Drop reference for old CT. */
     castle_ct_put(ct, 1 /*write*/);
