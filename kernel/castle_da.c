@@ -69,7 +69,6 @@ static int                      castle_merges_abortable = 0; /* 0 or 1, default=
 module_param(castle_merges_abortable, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
 MODULE_PARM_DESC(castle_merges_abortable, "Allow on-going merges to abort upon exit condition");
 
-
 static struct
 {
     int                     cnt;    /**< Size of cpus array.                        */
@@ -605,11 +604,18 @@ typedef struct castle_modlist_iterator {
     uint32_t nr_ranges;             /**< Number of elements in node_ranges                        */
 } c_modlist_iter_t;
 
+struct mutex    castle_da_level1_merge_init;            /**< For level 1 merges serialise entry to
+                                                             castle_da_merge_init()               */
+atomic_t        castle_ct_modlist_iter_byte_budget;     /**< Byte budget remaining for in-flight
+                                                             sorted modlist iter node buffers.    */
+
 /**
- * Free all memory allocated by the iterator.
+ * Free memory allocated by iterator and replenish byte budget.
  */
 static void castle_ct_modlist_iter_free(c_modlist_iter_t *iter)
 {
+    int buffer_size;
+
     if(iter->enumerator)
     {
         castle_ct_immut_iter.cancel(iter->enumerator);
@@ -623,6 +629,10 @@ static void castle_ct_modlist_iter_free(c_modlist_iter_t *iter)
         castle_vfree(iter->dst_entry_idx);
     if (iter->ranges)
         castle_vfree(iter->ranges);
+
+    /* Replenish the budget - no need to serialise. */
+    buffer_size = iter->nr_nodes * iter->leaf_node_size * C_BLK_SIZE;
+    atomic_add(buffer_size, &castle_ct_modlist_iter_byte_budget);
 }
 
 /**
@@ -891,7 +901,7 @@ static void castle_ct_modlist_iter_fill(c_modlist_iter_t *iter)
 /**
  * Mergesort the underlying component tree into smallest->largest k,<-v order.
  *
- * T1 btrees are in insertion order but individual nodes have entries sorted in
+ * L1 btrees are in insertion order but individual nodes have entries sorted in
  * k,<-v order.  To iterate over the btree we must first sort the whole tree.
  * This is done by merging leaf-nodes together repeatedly until we have a single
  * large k,<-v sorted set of entries.
@@ -1023,16 +1033,21 @@ static void castle_ct_modlist_iter_mergesort(c_modlist_iter_t *iter)
  * See castle_ct_modlist_iter_mergesort() for full implementation details.
  *
  * - Initialise members
+ * - Consume bytes from the global modlist iter byte budget
  * - Allocate memory for node_buffer, src_ and dst_entry_idx[] and ranges
  * - Initialise immutable iterator (for sort)
  * - Kick of mergesort
+ *
+ * NOTE: Caller must hold castle_da_level1_merge_init mutex.
  *
  * @also castle_ct_modlist_iter_mergesort()
  */
 static void castle_ct_modlist_iter_init(c_modlist_iter_t *iter)
 {
     struct castle_component_tree *ct = iter->tree;
+    int buffer_size;
 
+    BUG_ON(!mutex_is_locked(&castle_da_level1_merge_init));
     BUG_ON(atomic64_read(&ct->item_count) == 0);
     BUG_ON(!ct); /* component tree must be provided */
 
@@ -1040,17 +1055,31 @@ static void castle_ct_modlist_iter_init(c_modlist_iter_t *iter)
     iter->btree = castle_btree_type_get(ct->btree_type);
     iter->leaf_node_size = iter->btree->node_size(ct, 0);
 
+    /* To prevent sudden kernel memory ballooning we have an imposed modlist
+     * byte budget which is shared between all DAs.  Verify that the node buffer
+     * can be satisfied by the remaining budget before doing allocations. */
+    iter->nr_nodes = 1.1 * (atomic64_read(&ct->node_count) + 1); /* a few extra for luck! */
+    buffer_size = iter->nr_nodes * iter->leaf_node_size * C_BLK_SIZE;
+    if (atomic_sub_return(buffer_size, &castle_ct_modlist_iter_byte_budget) < 0)
+    {
+        printk("Couldn't allocate enough bytes for _modlist_iter_init from bytes budget.\n");
+        atomic_add(buffer_size, &castle_ct_modlist_iter_byte_budget);
+        iter->err = -ENOMEM;    // @FIXME a more descriptive error for budget underflow?
+        return;
+    }
+
     /* Allocate immutable iterator.
      * For iterating over source entries during sort. */
     iter->enumerator = castle_malloc(sizeof(c_immut_iter_t), GFP_KERNEL);
 
-    /* Allocate btre-entry buffer, two indexes for the buffer (for sorting)
+    /* Allocate btree-entry buffer, two indexes for the buffer (for sorting)
      * and space to define ranges of sorted nodes within the index. */
-    iter->nr_nodes = 1.1 * (atomic64_read(&ct->node_count) + 1); /* a few extra for luck! */
-    iter->node_buffer = castle_vmalloc(iter->nr_nodes * iter->leaf_node_size * C_BLK_SIZE);
+    iter->node_buffer = castle_vmalloc(buffer_size);
     iter->src_entry_idx = castle_vmalloc(atomic64_read(&ct->item_count) * sizeof(struct item_idx));
     iter->dst_entry_idx = castle_vmalloc(atomic64_read(&ct->item_count) * sizeof(struct item_idx));
     iter->ranges = castle_vmalloc(iter->nr_nodes * sizeof(struct entry_range));
+
+    /* Return ENOMEM if we failed any of our allocations. */
     if(!iter->enumerator || !iter->node_buffer || !iter->src_entry_idx || !iter->dst_entry_idx)
     {
         castle_ct_modlist_iter_free(iter);
@@ -1341,7 +1370,8 @@ static void castle_ct_merged_iter_skip(c_merged_iter_t *iter,
 
 static void castle_ct_merged_iter_cancel(c_merged_iter_t *iter)
 {
-    castle_free(iter->iterators);
+    if (iter->iterators)
+        castle_free(iter->iterators);
 }
 
 /**
@@ -1885,7 +1915,7 @@ static void castle_da_iterator_create(struct castle_da_merge *merge,
                     merge->da->id, tree->level, 0, 0);
         if (iter->err)
         {
-            castle_da_iterator_destroy(tree, iter);
+            castle_free(iter);
             return;
         }
         /* Success */
@@ -1928,7 +1958,7 @@ static void castle_da_each_skip(c_merged_iter_t *iter,
  * construct the output tree.
  *
  * Doesn't cleanup half-created state on failure. It is done by castle_da_merge_dealloc() 
- * which would be called from castle_da_merge_init.
+ * which would be called from castle_da_merge_init().
  *
  * @param merge [in] merge to be created
  *
@@ -1944,7 +1974,7 @@ static int castle_da_iterators_create(struct castle_da_merge *merge)
     struct castle_iterator_type *iter_types[merge->nr_trees]; 
     int i;
 
-    /* Make sure iter_types is not too big. Its on stack. */
+    /* Make sure iter_types is not too big.  It's on stack. */
     BUG_ON(sizeof(iter_types) > 512);
 
     castle_printk("Creating iterators for the merge.\n");
@@ -2845,8 +2875,10 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
     }
     FOR_EACH_MERGE_TREE(i, merge) 
         castle_da_iterator_destroy(merge->in_trees[i], merge->iters[i]);
-    castle_free(merge->iters);
-    castle_ct_merged_iter_cancel(merge->merged_iter);
+    if (merge->iters)
+        castle_free(merge->iters);
+    if (merge->merged_iter)
+        castle_ct_merged_iter_cancel(merge->merged_iter);
     /* If succeeded at merging, old trees need to be destroyed (they've already been removed
        from the DA by castle_da_merge_package(). */
     if(!err)
@@ -3446,6 +3478,7 @@ static struct castle_da_merge* castle_da_merge_init(struct castle_double_array *
     merge->level             = level;
     merge->nr_trees          = nr_trees;
     merge->in_trees          = in_trees;
+    merge->merged_iter       = NULL;
     merge->root_depth        = -1;
     merge->last_node_c2b     = NULL;
     merge->last_leaf_node_c2b= NULL;
@@ -3599,7 +3632,13 @@ static int castle_da_merge_do(struct castle_double_array *da,
                           in_trees[0]->seq,
                           in_trees[1]->seq);
 
+    /* Initialise the merge, including merged iterator and component iterators.
+     * Level 1 merges have modlist component btrees that need sorting - this is
+     * currently done using a malloc'd buffer.  Serialise function entry across
+     * all DAs to prevent races decrementing the modlist mem budget. */
+    if (level == 1) mutex_lock(&castle_da_level1_merge_init);
     merge = castle_da_merge_init(da, level, nr_trees, in_trees);
+    if (level == 1) mutex_unlock(&castle_da_level1_merge_init);
     if(!merge)
     {
         castle_printk("Could not start a merge for DA=%d, level=%d.\n", da->id, level);
@@ -5966,12 +6005,17 @@ int castle_double_array_create(void)
     return 0;
 }
 
+/**
+ * Initialise global doubling array state.
+ */
 int castle_double_array_init(void)
 {
     int ret, cpu, i, j;
+    int min_budget, budget;
 
     ret = -ENOMEM;
 
+    /* Allocate merge workqueues. */
     for (i = 0; i < NR_CASTLE_DA_WQS; i++)
     {
         castle_da_wqs[i] = create_workqueue(castle_da_wqs_names[i]);
@@ -5981,6 +6025,16 @@ int castle_double_array_init(void)
             goto err0;
         }
     }
+
+    /* Initialise modlist iter mergesort buffer based on cache size.
+     * As a minimum we need to be able to merge two full T0s. */
+    min_budget = 2 * MAX_DYNAMIC_TREE_SIZE * C_CHK_SIZE;                /* Two full T0s. */
+    budget     = (castle_cache_size_get() * PAGE_SIZE) / 10;            /* 10% of cache. */
+    if (budget < min_budget)
+        budget = min_budget;
+    printk("Allocating %lluMB for modlist iter byte budget.\n", budget / C_CHK_SIZE);
+    atomic_set(&castle_ct_modlist_iter_byte_budget, budget);
+    mutex_init(&castle_da_level1_merge_init);
 
     /* Populate request_cpus with CPU ids ready to handle requests. */
     request_cpus.cpus = castle_malloc(sizeof(int) * num_online_cpus(), GFP_KERNEL);

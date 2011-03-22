@@ -368,6 +368,9 @@ void castle_cache_stats_print(int verbose)
 
 EXPORT_SYMBOL(castle_cache_stats_print);
 
+/**
+ * Get size of castle cache (in pages).
+ */
 int castle_cache_size_get()
 {
     return castle_cache_size;
