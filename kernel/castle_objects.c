@@ -781,7 +781,6 @@ static int castle_object_reference_get(c_bvec_t    *c_bvec,
                                        c_val_tup_t  cvt)
 {
     BUG_ON(c_bvec_data_dir(c_bvec) != READ);
-    BUG_ON(CVT_INVALID(cvt));
 
     if (CVT_LARGE_OBJECT(cvt))
         BUG_ON(!castle_extent_get(cvt.cep.ext_id));
