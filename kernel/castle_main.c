@@ -1653,6 +1653,13 @@ static void castle_bio_data_io_do(c_bvec_t *c_bvec, c_ext_pos_t cep)
     }
 }
 
+static int castle_bio_data_ref_get(c_bvec_t    *c_bvec,
+                                   c_val_tup_t  cvt)
+{
+    BUG_ON(CVT_LARGE_OBJECT(cvt));
+    return 0;
+}
+
 static int castle_bio_data_cvt_get(c_bvec_t    *c_bvec,
                                    c_val_tup_t  prev_cvt,
                                    c_val_tup_t *cvt)
@@ -1739,7 +1746,11 @@ static void castle_device_c_bvec_make(c_bio_t *c_bio,
     c_bvec->version     = INVAL_VERSION; 
     c_bvec->flags       = 0; 
     c_bvec->tree        = &castle_global_tree;
-    c_bvec->cvt_get     = castle_bio_data_cvt_get;
+    /* cvt_get() only for writes. */
+    if (c_bvec_data_dir(c_bvec)==WRITE)
+        c_bvec->cvt_get = castle_bio_data_cvt_get;
+    else
+        c_bvec->ref_get = castle_bio_data_ref_get;
     c_bvec->endfind     = castle_bio_data_io_end;
     c_bvec->da_endfind  = NULL;
     atomic_set(&c_bvec->reserv_nodes, 0);
