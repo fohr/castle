@@ -38,6 +38,8 @@ static inline ATTRIB_NORET void bug_fn(char *file, unsigned long line)
 #define BUG()            do { bug_fn(__FILE__, __LINE__); } while(0)
 #define BUG_ON(_cond)    do { if(_cond) BUG(); } while(0)
 
+/* Printk implementation used in the entire filesystem. */
+#define castle_printk    printk
 #define FLE strrchr(__FILE__, '/') ? strrchr(__FILE__, '/') + 1 : __FILE__ 
 
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,18)
@@ -1356,7 +1358,7 @@ int  castle_ctrl_is_locked          (void);
 #define FAULT(_fault)                                           \
     if (castle_fault == _fault)                                 \
     {                                                           \
-        printk("User asked for fault\n");                       \
+        castle_printk("User asked for fault\n");                \
         BUG();                                                  \
     }
 

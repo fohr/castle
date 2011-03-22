@@ -7,7 +7,7 @@
 #include <linux/bio.h>
 
 #ifdef DEBUG
-#define debug(_f, _a...)        (printk(_f, ##_a))
+#define debug(_f, _a...)        (castle_printk(_f, ##_a))
 #else
 #define debug(_f, ...)          ((void)0)
 #endif

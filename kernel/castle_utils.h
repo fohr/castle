@@ -266,7 +266,7 @@ static USED void check_stack_usage(void)
         n++;
     free = (unsigned long)n - (unsigned long)end_of_stack(current);
 
-    printk("%s used greatest stack depth: %lu bytes left, currently left %lu\n",
+    castle_printk("%s used greatest stack depth: %lu bytes left, currently left %lu\n",
                 current->comm, 
                 free,
                 (unsigned long)&free - (unsigned long)end_of_stack(current));

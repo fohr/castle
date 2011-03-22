@@ -17,7 +17,7 @@
 #ifndef DEBUG
 #define debug(_f, ...)  ((void)0)
 #else
-#define debug(_f, _a...)  (printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
+#define debug(_f, _a...)  (castle_printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
 #endif
 
 static int castle_versions_process(void);
@@ -123,7 +123,7 @@ int castle_version_deleted(version_t version)
     if(!v)
         return -EINVAL;
 
-    printk("Flags in version %d: 0x%lx\n", version, v->flags);
+    castle_printk("Flags in version %d: 0x%lx\n", version, v->flags);
     return test_bit(CV_DELETED_BIT, &v->flags);
 }
 
@@ -240,7 +240,7 @@ int castle_version_is_deletable(struct castle_version_delete_state *state, versi
         {
             if (del_v->version >= state->last_version)
             {
-                printk("del_v: %p, state: %p, v1: %d, v2: %d\n",
+                castle_printk("del_v: %p, state: %p, v1: %d, v2: %d\n",
                         del_v, state, del_v->version, state->last_version);
                 BUG_ON(1);
             }
@@ -316,7 +316,7 @@ int castle_version_delete(version_t version)
     list_add_tail(&v->del_list, pos);
     atomic_inc(&castle_versions_nr_deleted);
 
-    printk("Marked version %d for deletion: 0x%lx\n", version, v->flags);
+    castle_printk("Marked version %d for deletion: 0x%lx\n", version, v->flags);
     da_id = v->da_id;
 
     /* Check if ancestors can be marked as leaf. Go upto root. */
@@ -339,7 +339,7 @@ int castle_version_delete(version_t version)
         /* If all children are leafs and marked for deletion mark P as leaf. */
         if (!sybling)
         {
-            printk("Marking verion %d as leaf\n", p->version);
+            castle_printk("Marking verion %d as leaf\n", p->version);
             set_bit(CV_LEAF_BIT, &p->flags);
         }
         else
@@ -411,7 +411,7 @@ int castle_version_tree_delete(version_t version)
     v = castle_versions_hash_get(version);
     if (!v)
     {
-        printk("Asked to delete a non-existent version: %u\n", version);
+        castle_printk("Asked to delete a non-existent version: %u\n", version);
         ret = -EINVAL;
         goto error_out;
     }
@@ -467,7 +467,7 @@ static struct castle_version* castle_version_add(version_t version,
     
     if(atomic_inc_return(&version_cnt) > 900)
     {
-        printk("Beta cannot create more than 900 versions.\n");
+        castle_printk("Beta cannot create more than 900 versions.\n");
         return NULL;
     }
 
@@ -586,7 +586,7 @@ static struct castle_version* castle_version_new_create(int snap_or_clone,
     p = castle_versions_hash_get(parent);
     if(!p)
     {
-        printk("Asked to create a child of non-existant parent: %d\n",
+        castle_printk("Asked to create a child of non-existant parent: %d\n",
             parent);
         return NULL;
     }
@@ -643,14 +643,14 @@ version_t castle_version_new(int snap_or_clone,
     /* Snapshot is not possible on non-leafs. */
     if (snap_or_clone && !is_leaf)
     {
-        printk("Couldn't snapshot non-leaf version: %d.\n", parent);
+        castle_printk("Couldn't snapshot non-leaf version: %d.\n", parent);
         return INVAL_VERSION;
     }
 
     /* Clone is not possible on leafs which are attached. */
     if (!snap_or_clone && is_leaf && is_attached)
     {
-        printk("Couldn't clone leaf versions: %d.\n", parent);
+        castle_printk("Couldn't clone leaf versions: %d.\n", parent);
         return INVAL_VERSION;
     }
 
@@ -690,7 +690,7 @@ int castle_version_attach(version_t version)
 
     if(test_and_set_bit(CV_ATTACHED_BIT, &v->flags))
     {
-        printk("attach bit not valid\n");
+        castle_printk("attach bit not valid\n");
         ret = -EAGAIN;
         goto out;
     }
@@ -893,7 +893,7 @@ process_version:
         ret = castle_sysfs_version_add(v->version);
         if(ret)
         {
-            printk("Could not add version %d to sysfs. Errno=%d.\n", v->version, ret);
+            castle_printk("Could not add version %d to sysfs. Errno=%d.\n", v->version, ret);
             err = -3;
             continue; 
         }
@@ -958,7 +958,7 @@ int castle_versions_zero_init(void)
     v = castle_version_add(0, 0, INVAL_DA, 0);
     if (!v)
     {
-        printk("Failed to create verion ZERO\n");
+        castle_printk("Failed to create verion ZERO\n");
         return -1;
     }
     castle_versions_last = v->version;
@@ -1037,14 +1037,14 @@ int castle_versions_init(void)
 
     if(!castle_versions_cache)
     {
-        printk("Could not allocate kmem cache for castle versions.\n");
+        castle_printk("Could not allocate kmem cache for castle versions.\n");
         goto err_out;
     }
     
     castle_versions_hash = castle_versions_hash_alloc();
     if(!castle_versions_hash)
     {
-        printk("Could not allocate versions hash\n");
+        castle_printk("Could not allocate versions hash\n");
         goto err_out;
     }
     castle_versions_hash_init();

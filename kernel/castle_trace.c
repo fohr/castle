@@ -159,7 +159,7 @@ static int castle_trace_subbuf_start(struct rchan_buf *buf,
 
 static int castle_trace_buf_file_remove(struct dentry *dentry)
 {
-    printk("Deleting a buf file (%p), ref count in parent (%p) = %d\n",
+    castle_printk("Deleting a buf file (%p), ref count in parent (%p) = %d\n",
             dentry, castle_trace_dir, atomic_read(&castle_trace_dir->d_count));
     debugfs_remove(dentry);
     atomic_dec(&castle_trace_files_cnt);
@@ -176,7 +176,7 @@ static struct dentry *castle_trace_buf_file_create(const char *filename,
     struct dentry *dentry;
 
     dentry = debugfs_create_file(filename, mode, parent, buf, &relay_file_operations);
-    printk("Opened a buf file, ref count in parent (%p) = %d\n",
+    castle_printk("Opened a buf file, ref count in parent (%p) = %d\n",
             parent, atomic_read(&parent->d_count));
     if(dentry)
         atomic_inc(&castle_trace_files_cnt);
@@ -193,7 +193,7 @@ static struct rchan_callbacks castle_trace_relay_callbacks = {
 #define last_trace_register(tpoint)                                            \
     ret = castle_trace_##tpoint##_register(castle_trace_##tpoint##_event);     \
     if (ret) {                                                                 \
-        printk("Failed to register trace point: %s\n", #tpoint);               \
+        castle_printk("Failed to register trace point: %s\n", #tpoint);        \
         goto *exit_point;                                                      \
     }
 
@@ -341,7 +341,7 @@ int castle_trace_teardown(void)
     }
     else
     {
-        printk("Not all trace files have been closed, failing the teardown.\n");
+        castle_printk("Not all trace files have been closed, failing the teardown.\n");
         return -EEXIST;
     }
 }

@@ -65,21 +65,21 @@ void skb_print(struct sk_buff *skb)
     int i;
     uint8_t byte;
 
-    printk("\nPacket length=%d\n", skb->len);
+    castle_printk("\nPacket length=%d\n", skb->len);
     for(i=0; i<skb->len; i++)
     {
         BUG_ON(skb_copy_bits(skb, i, &byte, 1) < 0);
         if((byte >= 32) && (byte <= 126))
-            printk(" [%d]=%d (%c)\n", i, byte, byte);
+            castle_printk(" [%d]=%d (%c)\n", i, byte, byte);
         else
-            printk(" [%d]=%d\n", i, byte);
+            castle_printk(" [%d]=%d\n", i, byte);
     }
-    printk("\n");
+    castle_printk("\n");
 }
 
 void vl_key_print(c_vl_key_t *vl_key)
 {
-    printk(" key len=%d: ", vl_key->length);
+    castle_printk(" key len=%d: ", vl_key->length);
     print_hex_dump_bytes("", DUMP_PREFIX_NONE, vl_key->key, vl_key->length);
 }
 
@@ -106,12 +106,12 @@ void vl_okey_print(c_vl_okey_t *key)
     int i, j;
     char key_str[2*NR_BYTES_PRINT+1];
 
-    printk("# key dimensions: %d\n", key->nr_dims);
+    castle_printk("# key dimensions: %d\n", key->nr_dims);
     for(i=0; i<key->nr_dims; i++)
     {
         for(j=0; j<key->dims[i]->length && j<NR_BYTES_PRINT; j++)
             sprintf(key_str + 2*j, "%.2x", key->dims[i]->key[j]);
-        printk(" dim[%.2d], len=%.3d, first %d bytes: %s\n", 
+        castle_printk(" dim[%.2d], len=%.3d, first %d bytes: %s\n", 
             i, 
             key->dims[i]->length, 
             NR_BYTES_PRINT,
@@ -128,10 +128,10 @@ void vl_bkey_print(c_vl_bkey_t *key)
     okey = castle_object_btree_key_convert(key);
     if(!okey)
     {
-        printk("Couldn't convert btree key for printing.\n");
+        castle_printk("Couldn't convert btree key for printing.\n");
         return;
     }
-    printk("Btree key, length=%d\n", key->length);
+    castle_printk("Btree key, length=%d\n", key->length);
     vl_okey_print(okey);
     castle_object_okey_free(okey);
 }

@@ -35,14 +35,14 @@
 #if 1
 #define debug_merges(_f, ...)     ((void)0)
 #else
-#define debug_merges(_f, _a...)   (printk("%s:%.4d: DA=%d, level=%d: " \
+#define debug_merges(_f, _a...)   (castle_printk("%s:%.4d: DA=%d, level=%d: " \
                                         _f, __FILE__, __LINE__ , da->id, level, ##_a))
 #endif
 #else
-#define debug(_f, _a...)          (printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
-#define debug_verbose(_f, ...)    (printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
-#define debug_iter(_f, _a...)     (printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
-#define debug_merges(_f, _a...)   (printk("%s:%.4d: DA=%d, level=%d: " \
+#define debug(_f, _a...)          (castle_printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
+#define debug_verbose(_f, ...)    (castle_printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
+#define debug_iter(_f, _a...)     (castle_printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
+#define debug_merges(_f, _a...)   (castle_printk("%s:%.4d: DA=%d, level=%d: " \
                                         _f, __FILE__, __LINE__ , da->id, level, ##_a))
 #endif
 
@@ -195,7 +195,7 @@ static int castle_da_unfrozen_set(struct castle_double_array *da, void *unused)
 
     if (test_bit(DOUBLE_ARRAY_FROZEN_BIT, &da->flags))
     {
-        printk("Un-freezing Doubling Array: %u\n", da->id);
+        castle_printk("Un-freezing Doubling Array: %u\n", da->id);
         set_bit(DOUBLE_ARRAY_UNFROZEN_BIT, &da->flags);
         write_unlock(&da->lock);
         castle_da_merge_restart(da, NULL);
@@ -252,7 +252,7 @@ static inline void castle_da_frozen_set(struct castle_double_array *da)
         return;
     }
 
-    printk("Freezing Doubling Array: %u\n", da->id);
+    castle_printk("Freezing Doubling Array: %u\n", da->id);
     set_bit(DOUBLE_ARRAY_FROZEN_BIT, &da->flags);
 
     write_unlock(&da->lock);
@@ -424,7 +424,7 @@ static void castle_ct_immut_iter_next_node(c_immut_iter_t *iter)
     if(!iter->curr_node->is_leaf ||
            (iter->curr_node->used <= iter->next_idx))
     {
-        printk("curr_node=%d, used=%d, next_idx=%d\n",
+        castle_printk("curr_node=%d, used=%d, next_idx=%d\n",
                 iter->curr_node->is_leaf,
                 iter->curr_node->used,
                 iter->next_idx);
@@ -877,7 +877,7 @@ static void castle_ct_modlist_iter_fill(c_modlist_iter_t *iter)
 
     if (item_idx != atomic64_read(&iter->tree->item_count))
     {
-        printk("Error. Different number of items than expected in CT=%d (dynamic=%d). "
+        castle_printk("Error. Different number of items than expected in CT=%d (dynamic=%d). "
                "Item_idx=%d, item_count=%ld\n",
             iter->tree->seq, iter->tree->dynamic,
             item_idx, atomic64_read(&iter->tree->item_count));
@@ -1369,7 +1369,7 @@ static void castle_ct_merged_iter_init(c_merged_iter_t *iter,
     iter->iterators = castle_malloc(iter->nr_iters * sizeof(struct component_iterator), GFP_KERNEL);
     if(!iter->iterators)
     {
-        printk("Failed to allocate memory for merged iterator.\n");
+        castle_printk("Failed to allocate memory for merged iterator.\n");
         iter->err = -ENOMEM;
         return;
     }
@@ -1572,7 +1572,7 @@ again:
     if(iter->nr_cts != da->nr_trees)
     {
         read_unlock(&da->lock);
-        printk("Warning. Untested path. # of cts changed while allocating memory for rq.\n");
+        castle_printk("Warning. Untested. # of cts changed while allocating memory for rq.\n");
         castle_free(iter->ct_rqs);
         castle_free(iters);
         castle_free(iter_types);
@@ -1731,7 +1731,7 @@ static void castle_da_merge_budget_consume(struct castle_da_merge *merge)
         /* We failed to get merge budget, readd the unit, and wait for some to appear. */
         atomic_inc(&da->merge_budget);
         /* Extra warning message, which we shouldn't see. Increase the MIN, if we do. */
-        printk("WARNING, possible error: Merges running fast, but not throttling.\n");
+        castle_printk("WARNING, possible error: Merges running fast, but not throttling.\n");
         atomic_add(MIN_BUDGET_DELTA, &da->merge_budget);
         return;
         //wait_event(da->merge_budget_waitq, atomic_read(&da->merge_budget) > 0);
@@ -1947,7 +1947,7 @@ static int castle_da_iterators_create(struct castle_da_merge *merge)
     /* Make sure iter_types is not too big. Its on stack. */
     BUG_ON(sizeof(iter_types) > 512);
 
-    printk("Creating iterators for the merge.\n");
+    castle_printk("Creating iterators for the merge.\n");
     FOR_EACH_MERGE_TREE(i, merge)
         BUG_ON(!merge->in_trees[i]);
 
@@ -2087,7 +2087,7 @@ static int castle_da_merge_extents_alloc(struct castle_da_merge *merge)
     /* If the tree extent is still invalid, there is no space even on HDDs, go out. */
     if(EXT_ID_INVAL(merge->tree_ext_free.ext_id))
     {
-        printk("Merge failed due to space constraint for tree\n");
+        castle_printk("Merge failed due to space constraint for tree\n");
         goto no_space;
     }
 
@@ -2109,7 +2109,7 @@ static int castle_da_merge_extents_alloc(struct castle_da_merge *merge)
                                               data_size,
                                               C_BLK_SIZE)))
     {
-        printk("Merge failed due to space constraint for data\n");
+        castle_printk("Merge failed due to space constraint for data\n");
         goto no_space;
     }
 
@@ -2608,7 +2608,7 @@ static struct castle_component_tree* castle_da_merge_package(struct castle_da_me
     debug("Using component tree id=%d to package the merge.\n", out_tree->seq);
     /* Root node is the last node that gets completed, and therefore will be saved in last_node */
     out_tree->tree_depth = merge->root_depth+1;
-    printk("Depth of ct=%d (%p) is: %d\n", out_tree->seq, out_tree, out_tree->tree_depth);
+    castle_printk("Depth of ct=%d (%p) is: %d\n", out_tree->seq, out_tree, out_tree->tree_depth);
     out_tree->root_node = merge->last_node_c2b->cep;
     out_tree->first_node = merge->first_node;
     out_tree->first_node_size = merge->first_node_size;
@@ -2670,10 +2670,10 @@ static struct castle_component_tree* castle_da_merge_package(struct castle_da_me
 
     /* Add the new tree to the doubling array */
     BUG_ON(merge->da->id != out_tree->da); 
-    printk("Finishing merge of ");
+    castle_printk("Finishing merge of ");
     FOR_EACH_MERGE_TREE(i, merge)
-        printk("ct%d=%d, ", i, merge->in_trees[i]->seq);
-    printk("new_tree=%d\n", out_tree->seq);
+        castle_printk("ct%d=%d, ", i, merge->in_trees[i]->seq);
+    castle_printk("new_tree=%d\n", out_tree->seq);
     debug("Adding to doubling array, level: %d\n", out_tree->level);
 
     FAULT(MERGE_FAULT);
@@ -2692,7 +2692,7 @@ static void castle_da_max_path_complete(struct castle_da_merge *merge)
     BUG_ON(!merge->completing);
     /* Root stored in last_node_c2b at the end of the merge */
     root_c2b = merge->last_node_c2b;
-    printk("Maxifying the right most path, starting with root_cep="cep_fmt_str_nl,
+    castle_printk("Maxifying the right most path, starting with root_cep="cep_fmt_str_nl,
             cep2str(root_c2b->cep));
     /* Start of with root node */
     node_c2b = root_c2b;
@@ -3014,7 +3014,7 @@ entry_done:
 
 err_out:
     if(ret)
-        printk("Merge failed with %d\n", ret);
+        castle_printk("Merge failed with %d\n", ret);
     castle_da_merge_dealloc(merge, ret);
 
     return ret; 
@@ -3155,7 +3155,7 @@ static inline int castle_da_merge_wait_event(struct castle_double_array *da, int
         /* Return any tokens that we may have. Should that actually every happen?. */
         while((token = castle_da_merge_token_get(da, level)))
         {
-            printk("WARNING: merge token in a driver merge!.\n");
+            castle_printk("WARNING: merge token in a driver merge!.\n");
             castle_da_merge_token_return(da, level, token);
             not_ready_wake = 1;
         }
@@ -3284,7 +3284,7 @@ static inline void castle_da_driver_merge_reset(struct castle_double_array *da)
         if (da->levels[level].nr_trees >= 2)
         {
             if (level != da->driver_merge)
-                printk("Changing driver merge %d -> %d\n", da->driver_merge, level);
+                castle_printk("Changing driver merge %d -> %d\n", da->driver_merge, level);
             da->driver_merge = level;
             break;
         }
@@ -3318,13 +3318,14 @@ static int castle_da_total_merge_output_level_get(struct castle_double_array *da
        types in level 1, and of course we don't want to put it in level 0 either. */
     if(out_tree_level <= 1)
         out_tree_level = 2;
-    printk("Total merge: #units: %d, size appropriate for level: %d\n", nr_units, out_tree_level);
+    castle_printk("Total merge: #units: %d, size appropriate for level: %d\n",
+                   nr_units, out_tree_level);
     /* Make sure no other trees exist above this level. */
     for (i=MAX_DA_LEVEL-1; i>=out_tree_level; i--)
         if (da->levels[i].nr_trees)
             break;
     out_tree_level = i+1;
-    printk("Outputting at level: %d\n", out_tree_level);
+    castle_printk("Outputting at level: %d\n", out_tree_level);
 
     return out_tree_level;
 }
@@ -3390,7 +3391,7 @@ static tree_seq_t castle_da_merge_last_unit_complete(struct castle_double_array 
     CASTLE_TRANSACTION_END;
     castle_da_merge_restart(da, NULL);
 
-    printk("Completed merge at level: %d and deleted %u entries\n",
+    castle_printk("Completed merge at level: %d and deleted %u entries\n",
             merge->level, merge->skipped_count);
 
     return out_tree_id;
@@ -3484,7 +3485,7 @@ static struct castle_da_merge* castle_da_merge_init(struct castle_double_array *
     merge->skipped_count                = 0;
     /* Bit-arrays for snapshot delete algorithm. */
     merge->snapshot_delete.last_version = castle_version_max_get();
-    printk("MERGE Level: %d, #versions: %d\n", level, merge->snapshot_delete.last_version);
+    castle_printk("MERGE Level: %d, #versions: %d\n", level, merge->snapshot_delete.last_version);
     merge->snapshot_delete.occupied     = castle_malloc(merge->snapshot_delete.last_version / 8 + 1,
                                                         GFP_KERNEL);
     if (!merge->snapshot_delete.occupied)
@@ -3601,7 +3602,7 @@ static int castle_da_merge_do(struct castle_double_array *da,
     merge = castle_da_merge_init(da, level, nr_trees, in_trees);
     if(!merge)
     {
-        printk("Could not start a merge for DA=%d, level=%d.\n", da->id, level);
+        castle_printk("Could not start a merge for DA=%d, level=%d.\n", da->id, level);
         return -EAGAIN;
     }
 #ifdef DEBUG
@@ -3633,7 +3634,7 @@ static int castle_da_merge_do(struct castle_double_array *da,
         /* Check for castle stop and merge abort */
         if((castle_merges_abortable)&&(exit_cond))
         {
-            printk("Merge for DA=%d, level=%d, aborted.\n", da->id, level);
+            castle_printk("Merge for DA=%d, level=%d, aborted.\n", da->id, level);
             ret = -ESHUTDOWN; 
             goto merge_aborted;
         }
@@ -3686,7 +3687,7 @@ merge_failed:
     if(ret==-ESHUTDOWN) return -ESHUTDOWN; /* merge abort */
     if(ret)
     {
-        printk("Merge for DA=%d, level=%d, failed to merge err=%d.\n", da->id, level, ret);
+        castle_printk("Merge for DA=%d, level=%d, failed to merge err=%d.\n", da->id, level, ret);
         return -EAGAIN;
     }
 
@@ -3802,7 +3803,7 @@ static int castle_da_big_merge_run(void *da_p)
             break;
 
         /* Otherwise do a merge. */
-        printk("Triggered a total merge.\n");
+        castle_printk("Triggered a total merge.\n");
 
         /* Allocate array for in_tree pointers, but do that without holding the lock. */
         in_trees = NULL;
@@ -3865,13 +3866,13 @@ read_trees_again:
         /* Wakeup everyone waiting on merge state update. */
         wake_up(&da->merge_waitq);
 
-        printk("Starting total merge on %d trees\n", nr_trees);
+        castle_printk("Starting total merge on %d trees\n", nr_trees);
 
         /* Do the merge. If fails, retry after 10s. */
         if (castle_da_merge_do(da, nr_trees, in_trees, BIG_MERGE))
         {
 wait_and_try:
-            printk("Total merge failed\n");
+            castle_printk("Total merge failed\n");
             /* If the merge was actually scheduled (i.e. some trees were collected),
                but failed afterward (e.g. due to NOSPC), readjust the counters again. */
             if (in_trees)
@@ -4057,7 +4058,7 @@ static int castle_da_merge_stop(struct castle_double_array *da, void *unused)
     {
         while(da->levels[i].merge.thread)
             msleep(10);
-        printk("Stopped merge thread for DA=%d, level=%d\n", da->id, i);
+        castle_printk("Stopped merge thread for DA=%d, level=%d\n", da->id, i);
     }
 
     return 0;
@@ -4077,7 +4078,7 @@ static int castle_da_merge_restart(struct castle_double_array *da, void *unused)
     {
         if (da->ios_rate != 0)
         {
-            printk("Disabling inserts on da=%d.\n", da->id);
+            castle_printk("Disabling inserts on da=%d.\n", da->id);
             castle_trace_da(TRACE_START, TRACE_DA_INSERTS_DISABLED_ID, da->id, 0);
         }
         da->ios_rate = 0; 
@@ -4086,7 +4087,7 @@ static int castle_da_merge_restart(struct castle_double_array *da, void *unused)
     {
         if (da->ios_rate == 0)
         {
-            printk("Enabling inserts on da=%d.\n", da->id);
+            castle_printk("Enabling inserts on da=%d.\n", da->id);
             castle_trace_da(TRACE_END, TRACE_DA_INSERTS_DISABLED_ID, da->id, 0);
         }
         da->ios_rate = INT_MAX;
@@ -4107,14 +4108,14 @@ static void castle_da_merges_print(struct castle_double_array *da)
     print = 0;
     do_gettimeofday(&time);
     read_lock(&da->lock);
-    printk("\nPrinting merging stats for DA=%d, t=(%ld,%ld)\n", 
+    castle_printk("\nPrinting merging stats for DA=%d, t=(%ld,%ld)\n", 
             da->id, time.tv_sec, time.tv_usec/1000);
     for(level=MAX_DA_LEVEL-1; level>0; level--)
     {
         if(!print && (da->levels[level].nr_trees == 0))
             continue;
         print = 1;
-        printk(" level[%.2d]: nr_trees=%d, units_commited=%.3d,"
+        castle_printk(" level[%.2d]: nr_trees=%d, units_commited=%.3d,"
               " active_token_dl=%.2d, driver_token_dl=%.2d\n",
               level,
               da->levels[level].nr_trees,
@@ -4126,10 +4127,10 @@ static void castle_da_merges_print(struct castle_double_array *da)
         list_for_each(l, &da->levels[level].merge.merge_tokens)
         {
             token = list_entry(l, struct castle_merge_token, list);
-            printk("  merge_token_dl=%d\n", token->driver_level);
+            castle_printk("  merge_token_dl=%d\n", token->driver_level);
         }
     }
-    printk("\n");
+    castle_printk("\n");
     read_unlock(&da->lock);
 }
 
@@ -4264,7 +4265,7 @@ static struct castle_double_array* castle_da_alloc(da_id_t da_id)
     if(!da)
         return NULL; 
 
-    printk("Allocating DA=%d\n", da_id);
+    castle_printk("Allocating DA=%d\n", da_id);
     da->id              = da_id; 
     da->root_version    = INVAL_VERSION;
     rwlock_init(&da->lock);
@@ -4308,7 +4309,7 @@ static struct castle_double_array* castle_da_alloc(da_id_t da_id)
 
         /* Create merge threads, and take da ref for all levels >= 1. */
         castle_da_get(da);
-        printk("Starting thread: %d\n", i);
+        castle_printk("Starting thread: %d\n", i);
         da->levels[i].merge.thread = 
             kthread_create((i == BIG_MERGE)? castle_da_big_merge_run: castle_da_merge_run, 
                            da, "castle-m-%d-%.2d", da_id, i);
@@ -4316,7 +4317,7 @@ static struct castle_double_array* castle_da_alloc(da_id_t da_id)
         if(!da->levels[i].merge.thread)
             goto err_out;
     }
-    printk("Allocated DA=%d successfully.\n", da_id);
+    castle_printk("Allocated DA=%d successfully.\n", da_id);
 
     return da;
 
@@ -4429,11 +4430,11 @@ static void castle_component_tree_add(struct castle_double_array *da,
     {
         BUG_ON(!in_init && (da->top_level + 1 != ct->level));
         da->top_level = ct->level;
-        printk("DA: %d growing one level to %d, del_vers: %d\n", 
+        castle_printk("DA: %d growing one level to %d, del_vers: %d\n", 
                 da->id, ct->level, atomic_read(&da->nr_del_versions));
         if (!in_init && atomic_read(&da->nr_del_versions))
         {
-            printk("Marking DA for compaction\n");
+            castle_printk("Marking DA for compaction\n");
             da->compacting = 1;
             wake_up(&da->merge_waitq);
         }
@@ -4583,7 +4584,7 @@ void castle_ct_put(struct castle_component_tree *ct, int write)
     /* If the ct still on the da list, this must be an error. */
     if(ct->da_list.next != NULL)
     {
-        printk("CT=%d, still on DA list, but trying to remove.\n", ct->seq);
+        castle_printk("CT=%d, still on DA list, but trying to remove.\n", ct->seq);
         BUG();
     }
     /* Destroy the component tree */
@@ -4763,7 +4764,7 @@ static int castle_ct_hash_destroy_check(struct castle_component_tree *ct, void *
     /* Only the global component tree should remain when we destroy DA hash. */ 
     if(((unsigned long)ct_hash > 0) && !TREE_GLOBAL(ct->seq))
     {
-        printk("Error: Found CT=%d not on any DA's list, it claims DA=%d\n", 
+        castle_printk("Error: Found CT=%d not on any DA's list, it claims DA=%d\n", 
             ct->seq, ct->da);
         err = -1;
     }
@@ -4771,14 +4772,14 @@ static int castle_ct_hash_destroy_check(struct castle_component_tree *ct, void *
    /* All CTs apart of global are expected to be on a DA list. */
    if(!TREE_GLOBAL(ct->seq) && (ct->da_list.next == NULL))
    {
-       printk("Error: CT=%d is not on DA list, for DA=%d\n", 
+       castle_printk("Error: CT=%d is not on DA list, for DA=%d\n", 
                ct->seq, ct->da);
        err = -2;
    }
 
    if(TREE_GLOBAL(ct->seq) && (ct->da_list.next != NULL))
    {
-       printk("Error: Global CT=%d is on DA list, for DA=%d\n", 
+       castle_printk("Error: Global CT=%d is on DA list, for DA=%d\n", 
                ct->seq, ct->da);
        err = -3;
    }
@@ -4786,7 +4787,7 @@ static int castle_ct_hash_destroy_check(struct castle_component_tree *ct, void *
    /* Ref count should be 1 by now. */
    if(atomic_read(&ct->ref_count) != 1)
    {
-       printk("Error: Bogus ref count=%d for ct=%d, da=%d when exiting.\n", 
+       castle_printk("Error: Bogus ref count=%d for ct=%d, da=%d when exiting.\n", 
                atomic_read(&ct->ref_count), ct->seq, ct->da);
        err = -4;
    }
@@ -5013,12 +5014,12 @@ static int castle_da_rwct_create(struct castle_double_array *da)
     {
         if (castle_da_rwct_make(da, cpu_index, 1 /* in_tran */) != EXIT_SUCCESS)
         {
-            printk("Failed to create T0 %d for DA %u\n", cpu_index, da->id);
+            castle_printk("Failed to create T0 %d for DA %u\n", cpu_index, da->id);
             goto err_out;
         }
     }
 
-    printk("Created %d CTs for DA %u T0\n", cpu_index, da->id);
+    castle_printk("Created %d CTs for DA %u T0\n", cpu_index, da->id);
 
     return 0;
 
@@ -5184,7 +5185,7 @@ int castle_double_array_read(void)
         ct = castle_component_tree_get(mstore_loentry.ct_seq);
         if (!ct)
         {
-            printk("Found zombi Large Object(%llu, %u)\n",
+            castle_printk("Found zombi Large Object(%llu, %u)\n",
                     mstore_loentry.ext_id, mstore_loentry.ct_seq);
             BUG();
         }
@@ -5192,7 +5193,7 @@ int castle_double_array_read(void)
                                     mstore_loentry.length,
                                     &ct->large_objs, NULL))
         {
-            printk("Failed to add Large Object %llu to CT: %u\n", 
+            castle_printk("Failed to add Large Object %llu to CT: %u\n", 
                     mstore_loentry.ext_id,
                     mstore_loentry.ct_seq);
             goto error_out;
@@ -5338,7 +5339,7 @@ static int castle_da_rwct_make(struct castle_double_array *da, int cpu_index, in
                                               MAX_DYNAMIC_TREE_SIZE * C_CHK_SIZE,
                                               btree->node_size(ct, 0) * C_BLK_SIZE)))
     {
-        printk("Failed to get space for T0 tree\n");
+        castle_printk("Failed to get space for T0 tree\n");
         goto no_space;
     }
 
@@ -5347,7 +5348,7 @@ static int castle_da_rwct_make(struct castle_double_array *da, int cpu_index, in
                                               MAX_DYNAMIC_DATA_SIZE * C_CHK_SIZE,
                                               C_BLK_SIZE)))
     {
-        printk("Failed to get space for T0 data\n");
+        castle_printk("Failed to get space for T0 data\n");
         goto no_space;
     }
 
@@ -5397,7 +5398,7 @@ static int castle_da_rwct_make(struct castle_double_array *da, int cpu_index, in
 
     if (!in_tran) CASTLE_TRANSACTION_END;
 
-    printk("Created T0: %d\n", ++t0_count);
+    castle_printk("Created T0: %d\n", ++t0_count);
     /* DA is attached, therefore we must be holding a ref, therefore it is safe to schedule
        the merge check. */
     write_unlock(&da->lock);
@@ -5440,7 +5441,7 @@ int castle_double_array_make(da_id_t da_id, version_t root_version)
     ret = castle_da_rwct_create(da);
     if (ret != EXIT_SUCCESS)
     {
-        printk("Exiting from failed ct create.\n");
+        castle_printk("Exiting from failed ct create.\n");
         castle_da_dealloc(da);
         
         return ret;
@@ -5675,7 +5676,7 @@ new_ct:
     if((ret == 0) || (ret == -EAGAIN))
         goto again;
   
-    printk("Warning: failed to create RWCT with errno=%d\n", ret);
+    castle_printk("Warning: failed to create RWCT with errno=%d\n", ret);
     return NULL;
 }
 
@@ -5976,7 +5977,7 @@ int castle_double_array_init(void)
         castle_da_wqs[i] = create_workqueue(castle_da_wqs_names[i]);
         if (!castle_da_wqs[i])
         {
-            printk(KERN_ALERT "Error: Could not alloc wq\n");
+            castle_printk(KERN_ALERT "Error: Could not alloc wq\n");
             goto err0;
         }
     }
@@ -6054,7 +6055,7 @@ void castle_da_destroy_complete(struct castle_double_array *da)
     /* Sanity Checks. */
     BUG_ON(!castle_da_deleted(da));
 
-    printk("Cleaning DA: %u\n", da->id);
+    castle_printk("Cleaning DA: %u\n", da->id);
 
     /* Destroy Component Trees. */
     for(i=0; i<MAX_DA_LEVEL; i++)
@@ -6196,7 +6197,7 @@ int castle_double_array_destroy(da_id_t da_id)
 
     castle_sysfs_da_del(da);
 
-    printk("Marking DA %u for deletion\n", da_id);
+    castle_printk("Marking DA %u for deletion\n", da_id);
     /* Set the destruction bit, which will stop further merges. */
     castle_da_deleted_set(da);
     /* Restart the merge threads, so that they get to exit, and drop their da refs. */

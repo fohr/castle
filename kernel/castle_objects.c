@@ -17,9 +17,9 @@
 #define debug_rq(_f, ...)       ((void)0)
 #define debug_obj(_f, ...)      ((void)0)
 #else
-#define debug(_f, _a...)        (printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
-#define debug_rq(_f, _a...)     (printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
-#define debug_obj(_f, _a...)    (printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
+#define debug(_f, _a...)        (castle_printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
+#define debug_rq(_f, _a...)     (castle_printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
+#define debug_obj(_f, _a...)    (castle_printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
 #endif
 
    
@@ -194,7 +194,7 @@ c_vl_okey_t* castle_object_btree_key_convert(c_vl_bkey_t *btree_key)
         dim = castle_malloc(dim_len + 4, GFP_KERNEL);
         if(!dim)
         {
-        printk("Couldn't malloc dim_len=%d, dim=%p\n", dim_len, dim);
+        castle_printk("Couldn't malloc dim_len=%d, dim=%p\n", dim_len, dim);
             goto err_out;
         }
         dim->length = dim_len;
@@ -205,7 +205,7 @@ c_vl_okey_t* castle_object_btree_key_convert(c_vl_bkey_t *btree_key)
     return obj_key;
 
 err_out:
-printk("Error!\n");
+castle_printk("Error!\n");
     for(i--; i>0; i--)
         castle_free(obj_key->dims[i]);
     castle_free(obj_key);
@@ -331,7 +331,7 @@ static int castle_object_btree_key_bounds_check(c_vl_bkey_t *key,
 
     if((key->nr_dims != start->nr_dims) || (key->nr_dims != end->nr_dims))
     {
-        printk("Nonmatching # of dimensions: key=%d, start_key=%d, end_key=%d\n",
+        castle_printk("Nonmatching # of dimensions: key=%d, start_key=%d, end_key=%d\n",
                 key->nr_dims, start->nr_dims, end->nr_dims);
         BUG();
     }
@@ -611,13 +611,13 @@ static void castle_objects_rq_iter_init(castle_object_iterator_t *iter)
     iter->last_next_key = NULL;
     iter->completed     = 0;
 #ifdef DEBUG
-    printk("====================== RQ start keys =======================\n");
+    castle_printk("====================== RQ start keys =======================\n");
     vl_okey_print(iter->start_okey);
     vl_bkey_print(iter->start_bkey);
-    printk("======================= RQ end keys ========================\n");
+    castle_printk("======================= RQ end keys ========================\n");
     vl_okey_print(iter->end_okey);
     vl_bkey_print(iter->end_bkey);
-    printk("============================================================\n");
+    castle_printk("============================================================\n");
 #endif
 
     /* Check if we managed to initialise the btree keys correctly */
@@ -725,7 +725,7 @@ static int castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
 
                 if (EXT_ID_INVAL(cep.ext_id))
                 {
-                    printk("Failed to allocate space for Large Object.\n");
+                    castle_printk("Failed to allocate space for Large Object.\n");
                     return -ENOSPC;
                 }
 
@@ -733,7 +733,7 @@ static int castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
                                             &c_bvec->tree->large_objs,
                                             &c_bvec->tree->lo_mutex))
                 {
-                    printk("Failed to intialize large object\n");
+                    castle_printk("Failed to intialize large object\n");
                     return -ENOMEM;
                 }
 
@@ -861,7 +861,7 @@ static int castle_object_data_write(struct castle_object_replace *replace)
 
     if (((int64_t)packet_length < 0) || (packet_length > replace->value_len))
     {
-        printk("Unexpected Packet length=%llu, data_length=%llu\n", 
+        castle_printk("Unexpected Packet length=%llu, data_length=%llu\n", 
                 packet_length, data_length);
         BUG();
     }
@@ -887,7 +887,7 @@ static int castle_object_data_write(struct castle_object_replace *replace)
         }
         if (copy_length < 0 || copy_length > (OBJ_IO_MAX_BUFFER_SIZE * C_BLK_SIZE))
         {
-            printk("Unexpected copy_length %d\n", copy_length);
+            castle_printk("Unexpected copy_length %d\n", copy_length);
             BUG();
         }
 
@@ -916,7 +916,7 @@ static int castle_object_data_write(struct castle_object_replace *replace)
             new_data_cep = castle_object_write_next_cep(data_c2b->cep, data_c2b_length); 
             if (EXT_POS_COMP(new_data_cep, data_c2b->cep) <= 0)
             {
-                printk("Unexpected change in CEP while copy"cep_fmt_str
+                castle_printk("Unexpected change in CEP while copy"cep_fmt_str
                         cep_fmt_str_nl, cep2str(data_c2b->cep), cep2str(new_data_cep));
                 BUG();
             }
@@ -1109,8 +1109,8 @@ int castle_object_replace(struct castle_object_replace *replace,
     if (!btree_key)
         return -EINVAL;
    
-    //printk(" value          : %s\n", tombstone ? "tombstone" : "object");
-    //printk("Btree key is:");
+    //castle_printk(" value          : %s\n", tombstone ? "tombstone" : "object");
+    //castle_printk("Btree key is:");
     //vl_key_print(btree_key);
 
     /* Single c_bvec for the bio */
@@ -1154,7 +1154,7 @@ int castle_object_iter_start(struct castle_attachment *attachment,
 
     if(start_key->nr_dims != end_key->nr_dims)
     {
-        printk("Range query with different # of dimensions.\n");
+        castle_printk("Range query with different # of dimensions.\n");
         return -EINVAL;
     }
     /* Mark the key that this is end key. To notify this is infinity and +ve.

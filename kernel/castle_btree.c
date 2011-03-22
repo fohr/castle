@@ -18,10 +18,14 @@
 #define enum_debug(_f, ...)     ((void)0)
 #define rq_debug(_f, ...)       ((void)0)
 #else
-#define debug(_f, _a...)        (printk("%s:%.60s:%.4d: " _f, __FILE__, __func__, __LINE__ , ##_a))
-#define iter_debug(_f, _a...)   (printk("Iterator  :%.60s:%.4d:  " _f, __func__, __LINE__ , ##_a))
-#define enum_debug(_f, _a...)   (printk("Enumerator:%.60s:%.4d:  " _f, __func__, __LINE__ , ##_a))
-#define rq_debug(_f, _a...)     (printk("Range Query:%.60s:%.4d:  " _f, __func__, __LINE__ , ##_a))
+#define debug(_f, _a...)        (castle_printk("%s:%.60s:%.4d: " _f,                        \
+                                                __FILE__, __func__, __LINE__ , ##_a))
+#define iter_debug(_f, _a...)   (castle_printk("Iterator  :%.60s:%.4d:  " _f,               \
+                                                __func__, __LINE__ , ##_a))
+#define enum_debug(_f, _a...)   (castle_printk("Enumerator:%.60s:%.4d:  " _f,               \
+                                                __func__, __LINE__ , ##_a))
+#define rq_debug(_f, _a...)     (castle_printk("Range Query:%.60s:%.4d:  " _f,              \
+                                                __func__, __LINE__ , ##_a))
 #endif
 
 #define __XOR(a, b) (((a) && !(b)) || (!(a) && (b)))
@@ -278,7 +282,7 @@ static void castle_mtree_node_validate(struct castle_btree_node *node)
     if((node->used     > MTREE_NODE_ENTRIES) ||
       ((node->used     == 0) && (node->version != 0)))
     {
-        printk("Invalid mtree node used=%d and/or node version=%d\n",
+        castle_printk("Invalid mtree node used=%d and/or node version=%d\n",
                node->used, node->version);
         BUG();
     }
@@ -299,16 +303,16 @@ static void castle_mtree_node_print(struct castle_btree_node *node)
                 (struct castle_mtree_entry *) BTREE_NODE_PAYLOAD(node);
     int i;
 
-    printk("Node: used=%d, version=%d, is_leaf=%d\n",
+    castle_printk("Node: used=%d, version=%d, is_leaf=%d\n",
         node->used, node->version, node->is_leaf);
     for(i=0; i<node->used; i++)
-        printk("[%d] (0x%x, 0x%x, %s) -> "cep_fmt_str_nl,
+        castle_printk("[%d] (0x%x, 0x%x, %s) -> "cep_fmt_str_nl,
             i,
             entries[i].block,
             entries[i].version,
             MTREE_ENTRY_IS_LEAF_PTR(entries + i) ? "leafptr" : "direct ",
             cep2str(entries[i].cep));
-    printk("\n");
+    castle_printk("\n");
 }
 
 
@@ -385,7 +389,7 @@ static void inline castle_batree_key_print(bakey_t *key)
     int i;
 
     for(i=0; i<BATREE_KEY_SIZE; i++)
-        printk("%.2x", key->_key[i]);
+        castle_printk("%.2x", key->_key[i]);
 }
 
 /**
@@ -600,7 +604,7 @@ static void castle_batree_node_validate(struct castle_btree_node *node)
     if((node->used     > BATREE_NODE_ENTRIES) ||
       ((node->used     == 0) && (node->version != 0)))
     {
-        printk("Invalid batree node used=%d and/or node version=%d\n",
+        castle_printk("Invalid batree node used=%d and/or node version=%d\n",
                node->used, node->version);
         BUG();
     }
@@ -625,14 +629,14 @@ static void castle_batree_node_print(struct castle_btree_node *node)
     {
         struct castle_batree_entry *entry = entries + i;
 
-        printk("[%d] (", i);
+        castle_printk("[%d] (", i);
         for(j=0; j<BATREE_KEY_SIZE; j++)
-            printk("%.2x", entry->key._key[j]);
-        printk(", 0x%x) -> "cep_fmt_str_nl,
+            castle_printk("%.2x", entry->key._key[j]);
+        castle_printk(", 0x%x) -> "cep_fmt_str_nl,
             entries[i].version,
             cep2str(entries[i].cep));
     }
-    printk("\n");
+    castle_printk("\n");
 }
 
 
@@ -1072,7 +1076,7 @@ static void castle_vlba_tree_entry_add(struct castle_btree_node *node,
 #if 0
     if (node->is_leaf && CVT_NODE(cvt))
     {
-        printk("%x:%llu\n", (uint32_t)cvt.type, cvt.length);
+        castle_printk("%x:%llu\n", (uint32_t)cvt.type, cvt.length);
         BUG();
     }
 #endif
@@ -1256,9 +1260,9 @@ static void castle_vlba_tree_node_validate(struct castle_btree_node *node)
             sizeof(uint32_t) * node->used + vlba_node->free_bytes + count +
             vlba_node->dead_bytes != VLBA_TREE_NODE_LENGTH(node))
     {
-        printk("sizeof(struct castle_btree_node) + sizeof(struct castle_vlba_tree_node) +"
+        castle_printk("sizeof(struct castle_btree_node) + sizeof(struct castle_vlba_tree_node) +"
                 "Index Table + Free Bytes + Sum of entries + Dead Bytes\n");
-        printk("%u-%u-%u-%u-%u-%u\n", (uint32_t)sizeof(struct castle_btree_node)
+        castle_printk("%u-%u-%u-%u-%u-%u\n", (uint32_t)sizeof(struct castle_btree_node)
                                     , (uint32_t)sizeof(struct castle_vlba_tree_node)
                                     , (uint32_t)sizeof(uint32_t) * node->used
                                     , vlba_node->free_bytes
@@ -1286,18 +1290,18 @@ static void castle_vlba_tree_node_validate(struct castle_btree_node *node)
 
         if (((uint8_t *)entry) + ent_len > EOF_VLBA_NODE(node))
         {
-            printk("Entry Overflow: Entry-%p; Length-%u; NodeEnd-%p\n",
+            castle_printk("Entry Overflow: Entry-%p; Length-%u; NodeEnd-%p\n",
                    entry, ent_len, EOF_VLBA_NODE(node));
             BUG();
         }
         if (entry_offset != a[count])
         {
-            printk("Heap sort error\n");
+            castle_printk("Heap sort error\n");
             BUG();
         }
         if ((prev_offset != -1) && (prev_offset + ent_len > entry_offset))
         {
-            printk("Entry overlap: offset:length -> %u:%u-%u:%u\n", prev_offset, prev_len,
+            castle_printk("Entry overlap: offset:length -> %u:%u-%u:%u\n", prev_offset, prev_len,
                    entry_offset, ent_len);
             BUG();
         }
@@ -1327,19 +1331,19 @@ static void castle_vlba_tree_node_validate(struct castle_btree_node *node)
         {
             int j;
 
-            printk("Entry 1:\n");
-            printk("[%d] (", i-1);
+            castle_printk("Entry 1:\n");
+            castle_printk("[%d] (", i-1);
             for(j=0; j<VLBA_KEY_LENGTH(&prev_entry->key); j++)
-                printk("%.2x", prev_entry->key._key[j]);
-            printk(", 0x%x) -> "cep_fmt_str_nl,
+                castle_printk("%.2x", prev_entry->key._key[j]);
+            castle_printk(", 0x%x) -> "cep_fmt_str_nl,
                 prev_entry->version,
                 cep2str(prev_entry->cep));
 
-            printk("Entry 2:\n");
-            printk("[%d] (", i);
+            castle_printk("Entry 2:\n");
+            castle_printk("[%d] (", i);
             for(j=0; j<VLBA_KEY_LENGTH(&entry->key); j++)
-                printk("%.2x", entry->key._key[j]);
-            printk(", 0x%x) -> "cep_fmt_str_nl,
+                castle_printk("%.2x", entry->key._key[j]);
+            castle_printk(", 0x%x) -> "cep_fmt_str_nl,
                 entry->version,
                 cep2str(entry->cep));
             BUG();
@@ -1347,7 +1351,7 @@ static void castle_vlba_tree_node_validate(struct castle_btree_node *node)
 
         if (VLBA_TREE_ENTRY_IS_LEAF_PTR(entry) && !node->is_leaf)
         {
-            printk("Entry is leaf ptr but node is not a leaf\n");
+            castle_printk("Entry is leaf ptr but node is not a leaf\n");
             BUG();
         }
 
@@ -1366,7 +1370,7 @@ static void castle_vlba_tree_node_print(struct castle_btree_node *node)
         (struct castle_vlba_tree_node*) BTREE_NODE_PAYLOAD(node);
     int i, j;
 
-    printk("node->used=%d, node=%p, vlba_node=%p, payload=%p\n",
+    castle_printk("node->used=%d, node=%p, vlba_node=%p, payload=%p\n",
             node->used,
             node,
             vlba_node,
@@ -1376,17 +1380,17 @@ static void castle_vlba_tree_node_print(struct castle_btree_node *node)
         struct castle_vlba_tree_entry *entry;
         entry = (struct castle_vlba_tree_entry *)VLBA_ENTRY_PTR(node, vlba_node, i);
 
-        printk("[%d] key_idx[%d]=%d, key_length=%d, val_len=%lld, entry_size=%lld (",
+        castle_printk("[%d] key_idx[%d]=%d, key_length=%d, val_len=%lld, entry_size=%lld (",
                 i, i, vlba_node->key_idx[i], VLBA_KEY_LENGTH(&entry->key),
                 entry->val_len,
                 VLBA_ENTRY_LENGTH(entry));
         for(j=0; j<VLBA_KEY_LENGTH(&entry->key); j++)
-            printk("%.2x", entry->key._key[j]);
-        printk(", 0x%x) -> "cep_fmt_str_nl,
+            castle_printk("%.2x", entry->key._key[j]);
+        castle_printk(", 0x%x) -> "cep_fmt_str_nl,
             entry->version,
             cep2str(entry->cep));
     }
-    printk("\n");
+    castle_printk("\n");
 }
 
 
@@ -1560,7 +1564,7 @@ static void castle_btree_io_end(c_bvec_t    *c_bvec,
 
 static void USED castle_btree_node_print(struct castle_btree_type *t, struct castle_btree_node *node)
 {
-    printk("Printing node version=%d with used=%d, is_leaf=%d\n",
+    castle_printk("Printing node version=%d with used=%d, is_leaf=%d\n",
         node->version, node->used, node->is_leaf);
 
     t->node_print(node);
@@ -1753,7 +1757,7 @@ static int castle_btree_node_space_get(struct castle_component_tree *ct,
                                   cep) < 0)
     {
         if (ct != &castle_global_tree)
-            printk("****WARNING: Allocating more nodes than pre-allocated: %u****\n",
+            castle_printk("****WARNING: Allocating more nodes than pre-allocated: %u****\n",
                     ct->seq);
 
         return castle_ext_freespace_get(&ct->tree_ext_free,
@@ -2319,7 +2323,7 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
         debug("Following write down the tree.\n");
         if (!CVT_NODE(lub_cvt))
         {
-            printk("0x%x-%llu-"cep_fmt_str_nl,
+            castle_printk("0x%x-%llu-"cep_fmt_str_nl,
                     lub_cvt.type,
                     (uint64_t)lub_cvt.length,
                    cep2str(lub_cvt.cep));
@@ -3090,7 +3094,7 @@ static void castle_btree_iter_parent_node_idx_increment(c_iter_t *c_iter)
         {
             if(c_iter->node_idx[i] == -1)
                 continue;
-            printk("ERROR: non -1 node_idx (%d) in idx_increment. "
+            castle_printk("ERROR: non -1 node_idx (%d) in idx_increment. "
                    "at c_iter->depth=%d, found non -1 at depth=%d\n",
                 c_iter->node_idx[i], c_iter->depth, i);
             BUG();
@@ -3333,7 +3337,7 @@ static void __castle_btree_iter_path_traverse(struct work_struct *work)
     entry_cep = cvt.cep;
     if (!CVT_NODE(cvt))
     {
-        printk("0x%x-%llu-"cep_fmt_str_nl,
+        castle_printk("0x%x-%llu-"cep_fmt_str_nl,
                 cvt.type,
                 (uint64_t)cvt.length,
                 cep2str(cvt.cep));
@@ -3647,7 +3651,7 @@ static void castle_enum_iter_node_end(c_iter_t *c_iter)
        schedule the next node read, and exit early */
     if(c_enum->prod_idx == 0)
     {
-        printk("There were no useful entries in the node. How is that possible?? Error?.\n");
+        castle_printk("There were no useful entries in the node. How is that possible? Error?.\n");
         castle_btree_iter_continue(c_iter);
         return;
     }
@@ -4257,7 +4261,7 @@ void castle_btree_rq_enum_skip(c_rq_enum_t *rq_enum,
     /* Should never try to skip to the key before last key returned. */
     if (rq_enum->last_key && (btree->key_compare(key, rq_enum->last_key) <= 0))
     {
-        printk("Trying to skip to a key[%p] smaller than last_key [%p], iter - %p\n", key,
+        castle_printk("Trying to skip to a key[%p] smaller than last_key [%p], iter - %p\n", key,
                 rq_enum->last_key, rq_enum);
         BUG();
     }

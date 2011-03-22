@@ -8,7 +8,7 @@
 
 //#define DEBUG
 #ifdef DEBUG
-#define debug(_f, _a...)        (printk(_f, ##_a))
+#define debug(_f, _a...)        (castle_printk(_f, ##_a))
 #else
 #define debug(_f, ...)          ((void)0)
 #endif
@@ -313,7 +313,7 @@ void castle_freespace_slave_superchunk_free(struct castle_slave *cs,
     if ((freespace->cons == ((freespace->prod + 1) % freespace->max_entries)) && 
         (freespace->nr_entries != freespace->max_entries - 1))
     {
-        printk("    Free Chunks: %u from slave %u\n", freespace->free_chk_cnt,
+        castle_printk("    Free Chunks: %u from slave %u\n", freespace->free_chk_cnt,
                 cs->uuid);
         freespace_sblk_put(cs, 1);
         castle_freespace_stats_print();
@@ -435,12 +435,12 @@ static int castle_freespace_print(struct castle_slave *cs, void *unused)
     castle_freespace_t  *freespace;
 
     freespace = freespace_sblk_get(cs);
-    printk("\tFreespace (0x%x) -> %u\n", cs->uuid, freespace->free_chk_cnt);
-    printk("\t\tprod: %d\n", freespace->prod);
-    printk("\t\tcons: %d\n", freespace->cons);
-    printk("\t\tprev_prod: %d\n", cs->prev_prod);
-    printk("\t\tnr_entries: %d\n", freespace->nr_entries);
-    printk("\t\tmax_entries: %d\n", freespace->max_entries);
+    castle_printk("\tFreespace (0x%x) -> %u\n", cs->uuid, freespace->free_chk_cnt);
+    castle_printk("\t\tprod: %d\n", freespace->prod);
+    castle_printk("\t\tcons: %d\n", freespace->cons);
+    castle_printk("\t\tprev_prod: %d\n", cs->prev_prod);
+    castle_printk("\t\tnr_entries: %d\n", freespace->nr_entries);
+    castle_printk("\t\tmax_entries: %d\n", freespace->max_entries);
     freespace_sblk_put(cs, 0);
 
     return 0;
@@ -448,7 +448,7 @@ static int castle_freespace_print(struct castle_slave *cs, void *unused)
 
 void castle_freespace_stats_print(void)
 {
-    printk("Freespace stats: \n");
+    castle_printk("Freespace stats: \n");
     castle_freespace_foreach_slave(castle_freespace_print, NULL);
 }
 
