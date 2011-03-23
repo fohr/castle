@@ -1027,7 +1027,7 @@ static void castle_ct_modlist_iter_init(c_modlist_iter_t *iter)
     buffer_size = iter->nr_nodes * iter->leaf_node_size * C_BLK_SIZE;
     if (atomic_sub_return(buffer_size, &castle_ct_modlist_iter_byte_budget) < 0)
     {
-        printk("Couldn't allocate enough bytes for _modlist_iter_init from bytes budget.\n");
+        castle_printk("Couldn't allocate enough bytes for _modlist_iter_init from bytes budget.\n");
         atomic_add(buffer_size, &castle_ct_modlist_iter_byte_budget);
         iter->err = -ENOMEM;    // @FIXME a more descriptive error for budget underflow?
         return;
@@ -6030,7 +6030,7 @@ int castle_double_array_init(void)
     budget     = (castle_cache_size_get() * PAGE_SIZE) / 10;            /* 10% of cache. */
     if (budget < min_budget)
         budget = min_budget;
-    printk("Allocating %lluMB for modlist iter byte budget.\n", budget / C_CHK_SIZE);
+    castle_printk("Allocating %lluMB for modlist iter byte budget.\n", budget / C_CHK_SIZE);
     atomic_set(&castle_ct_modlist_iter_byte_budget, budget);
     mutex_init(&castle_da_level1_merge_init);
 
