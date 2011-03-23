@@ -140,16 +140,31 @@ char *castle_da_wqs_names[NR_CASTLE_DA_WQS] = {"castle_da0"};
 /**********************************************************************************************/
 /* Utils */
 
+/**
+ * Set DA's growing bit and return previous state.
+ *
+ * @return  0   DA was not being grown (but is now)
+ * @return  1   DA was already being grown
+ */
 static inline int castle_da_growing_rw_test_and_set(struct castle_double_array *da)
 {
     return test_and_set_bit(DOUBLE_ARRAY_GROWING_RW_TREE_BIT, &da->flags);
 }
 
+/**
+ * Is the growing bit set on DA?
+ *
+ * @return  0   DA is currently growing
+ * @return  1   DA is not currently being grown
+ */
 static inline int castle_da_growing_rw_test(struct castle_double_array *da)
 {
     return test_bit(DOUBLE_ARRAY_GROWING_RW_TREE_BIT, &da->flags);
 }
 
+/**
+ * Clear DA's growing bit.
+ */
 static inline void castle_da_growing_rw_clear(struct castle_double_array *da)
 {
     clear_bit(DOUBLE_ARRAY_GROWING_RW_TREE_BIT, &da->flags);
@@ -195,8 +210,8 @@ static inline void castle_da_freeze(struct castle_double_array *da)
  */
 static int castle_da_unfreeze(struct castle_double_array *da, void *unused)
 {
-    castle_printk("Unfreezing DA %u\n", da->id);
-    clear_bit(DOUBLE_ARRAY_FROZEN_BIT, &da->flags);
+    if (test_and_clear_bit(DOUBLE_ARRAY_FROZEN_BIT, &da->flags))
+        castle_printk("Unfreezing DA %u\n", da->id);
     castle_da_merge_restart(da, NULL);
 
     return 0;
@@ -4960,7 +4975,7 @@ out:
     castle_da_store = castle_tree_store = castle_lo_store = NULL;
 }
 
-static int castle_da_rwct_create(struct castle_double_array *da, int cpu_index, int in_tran);
+static int __castle_da_rwct_create(struct castle_double_array *da, int cpu_index, int in_tran);
 
 /**
  * Create one RWCT per strand for specified DA if they do not already exist.
@@ -4974,8 +4989,6 @@ static int castle_da_rwct_create(struct castle_double_array *da, int cpu_index, 
  * @FIXME currently the system will panic if the filesystem is imported on a
  * machine with a different number of CPUs
  *
- * @FIXME is the locking here correct?  could these be read_locks()?
- *
  * @also castle_double_array_start()
  * @also castle_da_rwct_create()
  */
@@ -4983,56 +4996,66 @@ static int castle_da_all_rwcts_create(struct castle_double_array *da)
 {
     struct list_head *l, *p;
     LIST_HEAD(list);
-    int cpu_index;
+    int cpu_index, had_to_wait = 0;
 
-    write_lock(&da->lock);
-    /* Early exit if we already have T0s. */
+    /* Wait until *we* set the growing bit. */
+    while (castle_da_growing_rw_test_and_set(da) != EXIT_SUCCESS)
+    {
+        had_to_wait = 1;
+        msleep(1);
+    }
+
+    /* We can return immediately if:
+     * - the RWCTs already exist (yay!)
+     * - we had to wait to get the growing lock (another thread just tried to
+     *   create the RWCTs and failed; most likely we will also fail) */
+    read_lock(&da->lock);
     if (!list_empty(&da->levels[0].trees))
     {
         BUG_ON(da->levels[0].nr_trees != request_cpus.cnt);
-        write_unlock(&da->lock);
-        return 0;
+        read_unlock(&da->lock);
+        goto out;
     }
+    else if (had_to_wait)
+        goto err_out;
+    else
+        BUG_ON(da->levels[0].nr_trees != 0);
+    read_unlock(&da->lock);
 
-    /* Otherwise, there should be no trees at this level. */
-    BUG_ON(da->levels[0].nr_trees != 0);
-    write_unlock(&da->lock); /* castle_da_rwct_create() gets da lock */
-
-    /* There are no existing CTs at level 0 in this DA.
-     * Create one CT per CPU handling requests. */
+    /* No RWCTs at level 0 in this DA.  Create on per request-handling CPU. */
     for (cpu_index = 0; cpu_index < request_cpus.cnt; cpu_index++)
     {
-        if (castle_da_rwct_create(da, cpu_index, 1 /* in_tran */) != EXIT_SUCCESS)
+        if (__castle_da_rwct_create(da, cpu_index, 1 /* in_tran */) != EXIT_SUCCESS)
         {
             castle_printk("Failed to create T0 %d for DA %u\n", cpu_index, da->id);
             goto err_out;
         }
     }
 
+    /* Clear the growing bit and return success. */
     castle_printk("Created %d CTs for DA %u T0\n", cpu_index, da->id);
-
+out:
+    castle_da_growing_rw_clear(da);
     return 0;
 
 err_out:
-    /* We couldn't create all T0s we need, free the ones we managed to alloc.
-       Remove them frot the da list into our private list first. */
+    /* We were unable to allocate all of the T0s we need.  Free the ones we did
+     * manage to allocate.  Splice them into a private list first. */
     write_lock(&da->lock);
     list_splice_init(&da->levels[0].trees, &list);
     write_unlock(&da->lock);
-
-    /* Put them all. */
     list_for_each_safe(l, p, &list)
     {
         struct castle_component_tree *ct;
         list_del(l);
-        /* Nullify the list head. Expected by castle_ct_put. */
-        l->next = NULL;
-        l->prev = NULL;
-        /* Work out the CT, and put it. */
+        l->next = NULL; /* for castle_ct_put() */
+        l->prev = NULL; /* for castle_ct_put() */
         ct = list_entry(l, struct castle_component_tree, da_list);
         castle_ct_put(ct, 0);
     }
 
+    /* Clear the growing bit and return failure. */
+    castle_da_growing_rw_clear(da);
     return -EINVAL;
 }
 
@@ -5292,7 +5315,7 @@ static struct castle_component_tree* castle_ct_alloc(struct castle_double_array 
  * @also castle_ct_alloc()
  * @also castle_ext_fs_init()
  */
-static int castle_da_rwct_create(struct castle_double_array *da, int cpu_index, int in_tran)
+static int __castle_da_rwct_create(struct castle_double_array *da, int cpu_index, int in_tran)
 {
     struct castle_component_tree *ct, *old_ct;
     struct castle_btree_type *btree;
@@ -5301,18 +5324,9 @@ static int castle_da_rwct_create(struct castle_double_array *da, int cpu_index, 
     int ret;
     static int t0_count = 0;
 
-    /* Only allow one rwct_make() at any point in time. If we fail to acquire the bit lock
-       wait for whoever is doing it, to create the RWCT.
-       TODO: use bit wait instead of msleep here. */ 
-    if(castle_da_growing_rw_test_and_set(da))
-    {
-        debug("Racing RWCT make on da=%d\n", da->id);
-        while(castle_da_growing_rw_test(da))
-            msleep(1);
-        return -EAGAIN; 
-    }
+    /* Caller must have set the DA's growing bit. */
+    BUG_ON(!castle_da_growing_rw_test(da));
 
-    /* We've acquired the 'growing' lock. Proceed. */
     ret = -ENOMEM;
     ct = castle_ct_alloc(da, RW_VLBA_TREE_TYPE, 0 /* level */);
     if(!ct)
@@ -5405,6 +5419,35 @@ no_space:
         castle_ct_put(ct, 0);
 out:
     castle_da_growing_rw_clear(da);
+    return ret;
+}
+
+/**
+ * Allocate and initialise a T0 component tree.
+ *
+ * - Attempts to set DA's growing bit
+ * - Calls __castle_da_rwct_create() if it set the bit
+ * - Otherwise waits for other thread to complete and then exits
+ *
+ * @also __castle_da_rwct_create()
+ */
+static int castle_da_rwct_create(struct castle_double_array *da, int cpu_index, int in_tran)
+{
+    int ret;
+
+    /* Serialise per-DA RWCT creation using the growing bit.
+     * If it was already set then wait for whomever is already creating a new T0
+     * RWCT to complete and return with EAGAIN.  Otherwise create a new T0. */
+    if (castle_da_growing_rw_test_and_set(da))
+    {
+        debug("Racing RWCT make on da=%d\n", da->id);
+        while (castle_da_growing_rw_test(da))
+            msleep(1); // @TODO use out_of_line_wait_on_bit(_lock)() here instead
+        return -EAGAIN; 
+    }
+    ret = __castle_da_rwct_create(da, cpu_index, in_tran);
+    castle_da_growing_rw_clear(da);
+
     return ret;
 }
 
