@@ -3822,7 +3822,7 @@ static int castle_da_big_merge_run(void *da_p)
     struct castle_component_tree **in_trees;
     struct list_head *l;
     int level=0, ignore;
-    int nr_trees, nr_trees_estimate;
+    int nr_trees=0, nr_trees_estimate;
     int i;
 
     /* Disable deamortization of total merges. */
