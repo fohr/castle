@@ -3657,8 +3657,10 @@ static int castle_cache_prefetch_advise(c_ext_pos_t cep, c2_advise_t advise,
     }
     while (window_race);
 
-    /* Window advice must not change. */
-    WARN_ON(((advise & C2_ADV_SOFTPIN) > 0) != ((window->state & PREF_WINDOW_SOFTPIN) > 0));
+    /* Update window advice to match prefetch advice.  Do this once we know we
+     * aren't racing so we don't pollute other bystanding windows. */
+    if (advise & C2_ADV_SOFTPIN)
+        window->state |= PREF_WINDOW_SOFTPIN;
 
     /* Advance the window if necessary. */
     return c2_pref_window_advance(window, cep, advise, chunks, priority, debug);
