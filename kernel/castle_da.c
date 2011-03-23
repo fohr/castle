@@ -167,102 +167,52 @@ static inline void castle_da_deleted_set(struct castle_double_array *da)
     set_bit(DOUBLE_ARRAY_DELETED_BIT, &da->flags);
 }
 
-/* Note: Freezing of DA and unfreezing it could be racing. Unfreeze can happen
- * between failed castle_extent_alloc() and set_bit(FROZEN), consequently we
- * would miss a wake-up cycle. We need two bits to de-couple freezing and
- * un-freezing. Unfreezing just sets a bit. Freezing first checks if some one
- * did a unfreeze, if so don't set freeze and clear unfreeze. 
+/**
+ * Is the doubling array frozen?
  *
- * All freeze/unfreeze functions require a hold on da->lock. */
-
-/**
- * Is the doubling array unfrozen.
- *
- * WARNING: Caller must have at least a read lock on the da.
- */
-static inline int castle_da_unfrozen(struct castle_double_array *da)
-{
-    return test_bit(DOUBLE_ARRAY_UNFROZEN_BIT, &da->flags);
-}
-
-/**
- * Unfreze the doubling array.
- */
-static int castle_da_unfrozen_set(struct castle_double_array *da, void *unused)
-{
-    write_lock(&da->lock);
-
-    if (test_bit(DOUBLE_ARRAY_FROZEN_BIT, &da->flags))
-    {
-        castle_printk("Un-freezing Doubling Array: %u\n", da->id);
-        set_bit(DOUBLE_ARRAY_UNFROZEN_BIT, &da->flags);
-        write_unlock(&da->lock);
-        castle_da_merge_restart(da, NULL);
-    }
-    else
-        write_unlock(&da->lock);
-
-    return 0;
-}
-
-/**
- * @FIXME
- *
- * WARNING: Caller must have at least a read lock on the da.
- */
-static inline int _castle_da_frozen(struct castle_double_array *da)
-{
-    if (castle_da_unfrozen(da))
-    {
-        clear_bit(DOUBLE_ARRAY_FROZEN_BIT, &da->flags);
-        clear_bit(DOUBLE_ARRAY_UNFROZEN_BIT, &da->flags);
-    }
-
-    return test_bit(DOUBLE_ARRAY_FROZEN_BIT, &da->flags);
-}
-
-/**
- * Is the doubling array frozen.
+ * @return  0   DA is not frozen
+ * @return  1   DA is frozen
  */
 static inline int castle_da_frozen(struct castle_double_array *da)
 {
-    int ret;
-
-    read_lock(&da->lock);
-    ret = _castle_da_frozen(da);
-    read_unlock(&da->lock);
-
-    return ret;
+    return test_bit(DOUBLE_ARRAY_FROZEN_BIT, &da->flags);
 }
 
 /**
  * Freeze the doubling array.
  */
-static inline void castle_da_frozen_set(struct castle_double_array *da)
+static inline void castle_da_freeze(struct castle_double_array *da)
 {
-    write_lock(&da->lock);
-
-    if (castle_da_unfrozen(da))
-    {
-        clear_bit(DOUBLE_ARRAY_FROZEN_BIT, &da->flags);
-        clear_bit(DOUBLE_ARRAY_UNFROZEN_BIT, &da->flags);
-
-        write_unlock(&da->lock);
-        return;
-    }
-
-    castle_printk("Freezing Doubling Array: %u\n", da->id);
+    castle_printk("Freezing DA %u\n", da->id);
     set_bit(DOUBLE_ARRAY_FROZEN_BIT, &da->flags);
+}
 
-    write_unlock(&da->lock);
+/**
+ * Unfreeze the doubling array and restart merges.
+ *
+ * @param   unused  See @castle_double_arrays_unfreeze(), @castle_da_hash_iterate()
+ *
+ */
+static int castle_da_unfreeze(struct castle_double_array *da, void *unused)
+{
+    castle_printk("Unfreezing DA %u\n", da->id);
+    clear_bit(DOUBLE_ARRAY_FROZEN_BIT, &da->flags);
+    castle_da_merge_restart(da, NULL);
+
+    return 0;
 }
 
 /**
  * Unfreeze all doubling arrays.
+ *
+ * NOTE: A freeze could race with an unfreeze resulting in a DA being
+ *       unnecessarily frozen for a period of time.  We accept this possibility
+ *       as the checkpoint thread calls this function at the end of every run.
+ *       This should limit us to 60s where the DA is unnecessarily frozen.
  */
 int castle_double_arrays_unfreeze(void)
 {
-    castle_da_hash_iterate(castle_da_unfrozen_set, NULL); 
+    castle_da_hash_iterate(castle_da_unfreeze, NULL); 
 
     return 0;
 }
@@ -2152,7 +2102,7 @@ static int castle_da_merge_extents_alloc(struct castle_da_merge *merge)
     return 0;
 
 no_space:
-    castle_da_frozen_set(merge->da);
+    castle_da_freeze(merge->da);
 
     return -ENOSPC;
 }
@@ -3784,7 +3734,7 @@ static int castle_da_big_merge_trigger(struct castle_double_array *da)
 
     write_lock(&da->lock);
 
-    if (_castle_da_frozen(da))
+    if (castle_da_frozen(da))
         goto out;
 
     /* Check if marked for compaction. */
@@ -3967,7 +3917,7 @@ static int castle_da_merge_trigger(struct castle_double_array *da, int level)
 
     read_lock(&da->lock);
 
-    if (_castle_da_frozen(da))
+    if (castle_da_frozen(da))
         goto out;
 
     if (da->levels[level].nr_trees < 2)
@@ -5450,7 +5400,7 @@ static int castle_da_rwct_create(struct castle_double_array *da, int cpu_index, 
     goto out;
 
 no_space:
-    castle_da_frozen_set(da);
+    castle_da_freeze(da);
     if (ct)
         castle_ct_put(ct, 0);
 out:

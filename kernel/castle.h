@@ -1410,8 +1410,6 @@ struct castle_merge_token {
 #define DOUBLE_ARRAY_DELETED_FLAG           (1 << DOUBLE_ARRAY_DELETED_BIT)
 #define DOUBLE_ARRAY_FROZEN_BIT             (2)
 #define DOUBLE_ARRAY_FROZEN_FLAG            (1 << DOUBLE_ARRAY_FROZEN_BIT)
-#define DOUBLE_ARRAY_UNFROZEN_BIT           (3)
-#define DOUBLE_ARRAY_UNFROZEN_FLAG          (1 << DOUBLE_ARRAY_UNFROZEN_BIT)
 struct castle_double_array {
     da_id_t                     id;
     version_t                   root_version;
