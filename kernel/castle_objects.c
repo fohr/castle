@@ -1308,6 +1308,7 @@ void __castle_object_get_complete(struct work_struct *work)
     int first = get->first;    
     struct castle_component_tree *ct = get->ct;
     int last;
+    c_val_tup_t cvt = get->cvt;
     
     /* Deal with error case first */
     if(!c2b_uptodate(c2b))
@@ -1364,7 +1365,7 @@ out:
     put_c2b(c2b);
 
     castle_ct_put(ct, 0);
-    castle_object_reference_release(get->cvt);
+    castle_object_reference_release(cvt);
     castle_utils_bio_free(c_bvec->c_bio);
 }
 
