@@ -325,6 +325,21 @@ static ssize_t slave_spinning_show(struct kobject *kobj,
     return sprintf(buf, "%d\n", spinning);
 }
 
+static ssize_t slave_ssd_show(struct kobject *kobj, 
+                              struct attribute *attr, 
+                              char *buf)
+{
+    struct castle_slave *slave = container_of(kobj, struct castle_slave, kobj); 
+    struct castle_slave_superblock *sb;
+    int spinning;
+    
+    sb = castle_slave_superblock_get(slave);
+    spinning = !!(sb->pub.flags & CASTLE_SLAVE_SSD);
+    castle_slave_superblock_put(slave, 0);
+
+    return sprintf(buf, "%d\n", spinning);
+}
+
 static ssize_t devices_number_show(struct kobject *kobj, 
 						           struct attribute *attr, 
                                    char *buf)
@@ -550,12 +565,16 @@ __ATTR(target, S_IRUGO|S_IWUSR, slave_target_show, NULL);
 static struct castle_sysfs_entry slave_spinning =
 __ATTR(spinning, S_IRUGO|S_IWUSR, slave_spinning_show, NULL);
 
+static struct castle_sysfs_entry slave_ssd =
+__ATTR(ssd, S_IRUGO|S_IWUSR, slave_ssd_show, NULL);
+
 static struct attribute *castle_slave_attrs[] = {
     &slave_uuid.attr,
     &slave_size.attr,
     &slave_used.attr,
     &slave_target.attr,
     &slave_spinning.attr,
+    &slave_ssd.attr,
     NULL,
 };
 
