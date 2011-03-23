@@ -34,7 +34,7 @@ DEFINE_RING_TYPES(castle, castle_request_t, castle_response_t);
 
 #define USED              __attribute__((used))
 #define WARN_UNUSED_RET   __attribute__((warn_unused_result))
-#define error(_f, _a...)  (castle_printk(KERN_ERR "%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
+#define error(_f, _a...)  castle_printk(KERN_ERR "%s:%.4d: " _f, __FILE__, __LINE__ , ##_a)
 
 //#define DEBUG
 #ifndef DEBUG

@@ -39,7 +39,12 @@ static inline ATTRIB_NORET void bug_fn(char *file, unsigned long line)
 #define BUG_ON(_cond)    do { if(_cond) BUG(); } while(0)
 
 /* Printk implementation used in the entire filesystem. */
-#define castle_printk    printk
+#define PRINTKS_PER_SEC_STEADY_STATE    5
+#define PRINTKS_IN_BURST                100
+#define castle_printk(_f, _a...)    do { if(__printk_ratelimit(                     \
+                                                HZ/PRINTKS_PER_SEC_STEADY_STATE,    \
+                                                PRINTKS_IN_BURST))                  \
+                                            printk(_f, ##_a); } while(0)
 #define FLE strrchr(__FILE__, '/') ? strrchr(__FILE__, '/') + 1 : __FILE__ 
 
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,18)
