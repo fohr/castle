@@ -4876,10 +4876,16 @@ static int castle_da_tree_writeback(struct castle_double_array *da,
         if (ct->new_ct)
         {
             /* Schedule flush of new CT onto disk. */
+            if(!EXT_ID_INVAL(ct->internal_ext_free.ext_id))
+                castle_cache_extent_flush_schedule(ct->internal_ext_free.ext_id, 0,
+                                               atomic64_read(&ct->internal_ext_free.used));
             castle_cache_extent_flush_schedule(ct->tree_ext_free.ext_id, 0,
                                                atomic64_read(&ct->tree_ext_free.used));
             castle_cache_extent_flush_schedule(ct->data_ext_free.ext_id, 0,
                                                atomic64_read(&ct->data_ext_free.used));
+            if(ct->bloom_exists)
+                castle_cache_extent_flush_schedule(ct->bloom.ext_id, 0, 0);
+
             ct->new_ct = 0;
         }
     }

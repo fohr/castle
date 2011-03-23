@@ -232,11 +232,7 @@ static ssize_t da_last_key_show(struct kobject *kobj,
     struct castle_double_array *da = container_of(kobj, struct castle_double_array, kobj); 
 
     if (da->last_key)
-    {
         vl_okey_to_buf(da->last_key, buf);
-        //vl_okey_print(da->last_key);
-        //sprintf(buf, "Got one\n");
-    }
     else
         sprintf(buf, "None");
 
