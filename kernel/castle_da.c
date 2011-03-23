@@ -6033,7 +6033,7 @@ int castle_double_array_init(void)
 
     /* Initialise modlist iter mergesort buffer based on cache size.
      * As a minimum we need to be able to merge two full T0s. */
-    min_budget = 2 * MAX_DYNAMIC_TREE_SIZE * C_CHK_SIZE;                /* Two full T0s. */
+    min_budget = 2.2 * MAX_DYNAMIC_TREE_SIZE * C_CHK_SIZE;              /* More than two full T0s. */
     budget     = (castle_cache_size_get() * PAGE_SIZE) / 10;            /* 10% of cache. */
     if (budget < min_budget)
         budget = min_budget;
