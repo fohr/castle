@@ -870,7 +870,13 @@ static void castle_slave_superblock_print(struct castle_slave_superblock *cs_sb)
            cs_sb->pub.size);
 }
 
-static int castle_slave_superblock_validate(struct castle_slave_superblock *cs_sb)
+sector_t get_bd_capacity(struct block_device *bd)
+{
+    return bd->bd_contains == bd ? get_capacity(bd->bd_disk) : bd->bd_part->nr_sects;
+}
+
+static int castle_slave_superblock_validate(struct castle_slave *cs,
+                                            struct castle_slave_superblock *cs_sb)
 {
     uint32_t checksum = cs_sb->pub.checksum;
 
@@ -893,6 +899,10 @@ static int castle_slave_superblock_validate(struct castle_slave_superblock *cs_s
         return -6;
     }
     cs_sb->pub.checksum = checksum;
+
+    if((!(cs_sb->pub.flags & CASTLE_SLAVE_NEWDEV)) &&
+        (cs_sb->pub.size != get_bd_capacity(cs->bdev) >> (C_BLK_SHIFT - 9)))
+        return -7;
 
     return 0;
 }
@@ -931,11 +941,6 @@ static int castle_block_read(struct block_device *bdev, sector_t sector, uint32_
     }
 
     return 0;
-}
-
-sector_t get_bd_capacity(struct block_device *bd)
-{
-    return bd->bd_contains == bd ? get_capacity(bd->bd_disk) : bd->bd_part->nr_sects;
 }
 
 static void castle_slave_superblock_init(struct   castle_slave *cs, 
@@ -987,7 +992,7 @@ static int castle_slave_superblock_read(struct castle_slave *cs)
                         (char *)&fs_sb[i])) < 0)
             goto error_out;
 
-        errs[i] = castle_slave_superblock_validate(&cs_sb[i]);
+        errs[i] = castle_slave_superblock_validate(cs, &cs_sb[i]);
         if (errs[i])
         {
             debug("Slave superblock %u is not valid: %d\n", i, errs[i]);
@@ -1118,7 +1123,7 @@ static int castle_slave_version_load(struct castle_slave *cs, uint32_t fs_versio
         goto out;
     if (castle_block_read(cs->bdev, sector+8, sizeof(struct castle_fs_superblock), (char *)&cs->fs_superblock))
         goto out;
-    if (castle_slave_superblock_validate(&cs->cs_superblock))
+    if (castle_slave_superblock_validate(cs, &cs->cs_superblock))
         goto out;
 
     /* If the version doesn't match, return error. */
