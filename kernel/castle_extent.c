@@ -1114,9 +1114,6 @@ c_chk_cnt_t castle_extent_size_get(c_ext_id_t ext_id)
  *
  * @param ext_id        Extent ID to return slave count for
  * @param only_active   Return only active slaves if set
- *
- * @FIXME this function is incomplete and needs to be updated to return
- * the actual number of active slaves and not a constant
  */
 static int _castle_extent_slave_count_get(c_ext_id_t ext_id, int only_active)
 {
@@ -1124,7 +1121,7 @@ static int _castle_extent_slave_count_get(c_ext_id_t ext_id, int only_active)
 
     if (ext)
     {
-        /* @FIXME currently we return the total number of slaves, this needs to
+        /* @TODO currently we return the total number of slaves, this needs to
          * be updated to return the number of slaves for a given extent. */
         struct list_head *lh;
         int slaves = 0;

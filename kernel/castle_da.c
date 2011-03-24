@@ -848,7 +848,7 @@ static void castle_ct_modlist_iter_fill(c_modlist_iter_t *iter)
     }
 
     if (likely(node_idx))
-        iter->ranges[node_idx-1].end = item_idx-1;    /* FIXME this should be tidier */
+        iter->ranges[node_idx-1].end = item_idx-1;    /* @TODO this should be tidier */
 
     if (item_idx != atomic64_read(&iter->tree->item_count))
     {
@@ -905,7 +905,7 @@ static void castle_ct_modlist_iter_fill(c_modlist_iter_t *iter)
  *
  * If we have an uneven number of ranges move the entry pointers from src_
  * to dst_entry_idx[] and ensure the range points to the correct entries.  No
- * merge is performed in this instance.  @FIXME this is inefficient
+ * merge is performed in this instance.  @TODO this is inefficient
  *
  * Update the total number of ranges and go again if necessary.
  *
@@ -1029,7 +1029,7 @@ static void castle_ct_modlist_iter_init(c_modlist_iter_t *iter)
     {
         castle_printk("Couldn't allocate enough bytes for _modlist_iter_init from bytes budget.\n");
         atomic_add(buffer_size, &castle_ct_modlist_iter_byte_budget);
-        iter->err = -ENOMEM;    // @FIXME a more descriptive error for budget underflow?
+        iter->err = -ENOMEM;
         return;
     }
 
@@ -4174,8 +4174,6 @@ static int castle_da_ct_dec_cmp(struct list_head *l1, struct list_head *l2)
 /**
  * Calculate hash of userland key (okey) length key_len and modulo for cpu_index.
  *
- * @FIXME named wrongly?
- *
  * @FIXME Currently hashes just the first dimension of the key which will not
  *        be terribly even in distributing load among the btrees under certain
  *        circumstances.  This will likely go away when we hash the bkey as part
@@ -4196,8 +4194,6 @@ int castle_double_array_okey_cpu_index(c_vl_okey_t *okey, uint32_t key_len)
 
 /**
  * Get cpu id for specified cpu_index.
- *
- * @FIXME named wrongly?
  *
  * @return  CPU id
  */
@@ -4376,7 +4372,7 @@ struct castle_component_tree* castle_component_tree_get(tree_seq_t seq)
  * @param   da      To insert onto
  * @param   ct      To be inserted
  * @param   head    List head to add ct after (or NULL)
- * @param   in_init @FIXME
+ * @param   in_init ???
  *
  * WARNING: Caller must hold da->lock
  */
@@ -4731,7 +4727,7 @@ static da_id_t castle_da_ct_unmarshall(struct castle_component_tree *ct,
  *
  * @param da    Doubling array's CTs to enumerate
  * @param fn    Function to pass each of the da's CTs too
- * @param token @FIXME
+ * @param token ???
  */
 static void __castle_da_foreach_tree(struct castle_double_array *da,
                                      int (*fn)(struct castle_double_array *da,
@@ -5688,7 +5684,7 @@ again:
         return NULL;
 
     ct = castle_da_rwct_get(da, c_bvec->cpu_index);
-    // @FIXME some sort of error handling here if we can't allocate a new RWCT
+    BUG_ON(!ct);
 
     /* Attempt to preallocate space in the btree and m-obj extents for writes. */
     btree = castle_btree_type_get(ct->btree_type);
