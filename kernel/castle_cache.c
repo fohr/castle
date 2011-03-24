@@ -2073,6 +2073,7 @@ static int castle_cache_pages_get(c_ext_pos_t cep,
             list_add(&c2ps[i]->list, &freed_c2ps); 
             freed_c2ps_cnt++;
             c2ps[i] = c2p;
+            BUG_ON(c2p == NULL);
         } else
             atomic_add(PAGES_PER_C2P, &castle_cache_clean_pages);
         /* Check if this page is clean. */
@@ -5077,8 +5078,9 @@ void castle_cache_fini(void)
     if(castle_io_array_cache)   kmem_cache_destroy(castle_io_array_cache);
     if(castle_cache_stats_timer_interval) del_timer(&castle_cache_stats_timer);
 
-    if(castle_cache_page_hash)  castle_vfree(castle_cache_page_hash);
-    if(castle_cache_block_hash) castle_vfree(castle_cache_block_hash);
-    if(castle_cache_blks)       castle_vfree(castle_cache_blks);
-    if(castle_cache_pgs)        castle_vfree(castle_cache_pgs);
+    if(castle_cache_page_hash)       castle_vfree(castle_cache_page_hash);
+    if(castle_cache_block_hash)      castle_vfree(castle_cache_block_hash);
+    if(castle_cache_page_hash_locks) castle_vfree(castle_cache_page_hash_locks);
+    if(castle_cache_blks)            castle_vfree(castle_cache_blks);
+    if(castle_cache_pgs)             castle_vfree(castle_cache_pgs);
 }
