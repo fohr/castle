@@ -72,8 +72,6 @@ struct castle_version {
 
 /**
  * Maintains the number of active versions in each doubling array.
- *
- * @FIXME Protected by the CASTLE_TRANSACTION lock.
  */
 struct castle_version_count {
     da_id_t             da_id;      /**< DA we are counting live versions for.          */
@@ -135,7 +133,8 @@ static void castle_version_counts_hash_destroy(void)
  *
  * @param   da_id   DA to increment version count for
  *
- * NOTE: castle_versions_counts_hash members protected by CASTLE_TRANSACTION.
+ * NOTE: Must be called during a CASTLE_TRANSACTION
+ * NOTE: castle_versions_counts_hash members protected by CASTLE_TRANSACTION
  *
  * @return  0       Successfully incremented version count
  * @return -ENOMEM  Couldn't allocate castle_version_count structure
@@ -144,6 +143,8 @@ static void castle_version_counts_hash_destroy(void)
 static int castle_versions_count_inc(da_id_t da_id)
 {
     struct castle_version_count *vc;
+
+    BUG_ON(!CASTLE_IN_TRANSACTION);
 
     vc = castle_versions_counts_hash_get(da_id);
     if (!vc)
@@ -172,13 +173,16 @@ static int castle_versions_count_inc(da_id_t da_id)
  *
  * @param   da_id   DA to decrement version count for
  *
- * NOTE: castle_versions_counts_hash members protected by CASTLE_TRANSACTION.
+ * NOTE: Must be called during a CASTLE_TRANSACTION
+ * NOTE: castle_versions_counts_hash members protected by CASTLE_TRANSACTION
  *
  * @return  0   Successfully decremented version count
  */
 static int castle_versions_count_dec(da_id_t da_id)
 {
     struct castle_version_count *vc;
+
+    BUG_ON(!CASTLE_IN_TRANSACTION);
 
     vc = castle_versions_counts_hash_get(da_id);
     BUG_ON(!vc); /* must always exist for decrements */
