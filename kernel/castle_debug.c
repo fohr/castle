@@ -17,7 +17,6 @@ struct castle_malloc_debug {
     char *file;
     int vmalloced;
     int line;
-    int already_freed;
 };
 
 static spinlock_t           malloc_list_spinlock = SPIN_LOCK_UNLOCKED;
@@ -41,7 +40,6 @@ static void __castle_debug_dobj_add(struct castle_malloc_debug *dobj,
     dobj->file = file;
     dobj->line = line;
     dobj->size = size;
-    dobj->already_freed = 0;
     dobj->vmalloced = vmalloced;
 
     /* Add ourselves to the list under lock */
@@ -93,15 +91,12 @@ void castle_debug_free(void *obj)
     list_del(&dobj->list);
     spin_unlock_irqrestore(&malloc_list_spinlock, flags);
 
-    if(dobj->already_freed)
-        castle_printk("Double free for object allocated from %s:%d.\n",
-                dobj->file, dobj->line);
     if(dobj->vmalloced)
     {
         castle_printk("Trying to kfree() vmalloced object.\n");
         BUG();
     }
-    dobj->already_freed = 1;
+    memset(dobj, 0xf5, sizeof(struct castle_malloc_debug));
     kfree(dobj);
 }
 EXPORT_SYMBOL(castle_debug_free);
@@ -137,15 +132,12 @@ void castle_debug_vfree(void *obj)
     list_del(&dobj->list);
     spin_unlock_irqrestore(&malloc_list_spinlock, flags);
 
-    if(dobj->already_freed)
-        castle_printk("Double free for object allocated from %s:%d.\n",
-                dobj->file, dobj->line);
     if(!dobj->vmalloced)
     {
         castle_printk("Trying to vfree() kmalloced object.\n");
         BUG();
     }
-    dobj->already_freed = 1;
+    memset(dobj, 0xf6, sizeof(struct castle_malloc_debug));
     vfree(dobj);
 }
 EXPORT_SYMBOL(castle_debug_vfree);
