@@ -122,6 +122,9 @@ static void castle_component_tree_add(struct castle_double_array *da,
                                       int in_init);
 static void castle_component_tree_del(struct castle_double_array *da,
                                       struct castle_component_tree *ct);
+static void castle_component_tree_promote(struct castle_double_array *da,
+                                          struct castle_component_tree *ct,
+                                          int in_init);
 struct castle_da_merge;
 static USED void castle_da_merges_print(struct castle_double_array *da);
 static int castle_da_merge_restart(struct castle_double_array *da, void *unused);
@@ -848,7 +851,7 @@ static void castle_ct_modlist_iter_fill(c_modlist_iter_t *iter)
     }
 
     if (likely(node_idx))
-        iter->ranges[node_idx-1].end = item_idx-1;    /* FIXME this should be tidier */
+        iter->ranges[node_idx-1].end = item_idx-1;    /* @TODO this should be tidier */
 
     if (item_idx != atomic64_read(&iter->tree->item_count))
     {
@@ -905,7 +908,7 @@ static void castle_ct_modlist_iter_fill(c_modlist_iter_t *iter)
  *
  * If we have an uneven number of ranges move the entry pointers from src_
  * to dst_entry_idx[] and ensure the range points to the correct entries.  No
- * merge is performed in this instance.  @FIXME this is inefficient
+ * merge is performed in this instance.  @TODO this is inefficient
  *
  * Update the total number of ranges and go again if necessary.
  *
@@ -1029,7 +1032,7 @@ static void castle_ct_modlist_iter_init(c_modlist_iter_t *iter)
     {
         castle_printk("Couldn't allocate enough bytes for _modlist_iter_init from bytes budget.\n");
         atomic_add(buffer_size, &castle_ct_modlist_iter_byte_budget);
-        iter->err = -ENOMEM;    // @FIXME a more descriptive error for budget underflow?
+        iter->err = -ENOMEM;
         return;
     }
 
@@ -1790,7 +1793,7 @@ static int castle_da_ios_budget_replenish(struct castle_double_array *da, void *
          * We need to kick all of the write IO wait queues.  In the current
          * context we hold spin_lock_irq(&castle_da_hash_lock) so schedule this
          * work so we can drop the lock and return immediately. */
-        for (i = 0; i < request_cpus.cnt; i++)
+        for (i = 0; i < castle_double_array_request_cpus(); i++)
         {
             struct castle_da_io_wait_queue *wq = &da->ios_waiting[i];
 
@@ -4087,7 +4090,7 @@ static int castle_da_merge_restart(struct castle_double_array *da, void *unused)
     debug("Restarting merge for DA=%d\n", da->id);
 
     write_lock(&da->lock);
-    if (da->levels[1].nr_trees >= 4 * request_cpus.cnt)
+    if (da->levels[1].nr_trees >= 4 * castle_double_array_request_cpus())
     {
         if (da->ios_rate != 0)
         {
@@ -4174,8 +4177,6 @@ static int castle_da_ct_dec_cmp(struct list_head *l1, struct list_head *l2)
 /**
  * Calculate hash of userland key (okey) length key_len and modulo for cpu_index.
  *
- * @FIXME named wrongly?
- *
  * @FIXME Currently hashes just the first dimension of the key which will not
  *        be terribly even in distributing load among the btrees under certain
  *        circumstances.  This will likely go away when we hash the bkey as part
@@ -4188,16 +4189,14 @@ int castle_double_array_okey_cpu_index(c_vl_okey_t *okey, uint32_t key_len)
     if (likely(okey->nr_dims > 0))
         return murmur_hash_32(okey->dims[0],
                               okey->dims[0]->length,
-                              (uint32_t)0xDA82B27204D27F7)
-            % request_cpus.cnt;
+                              (uint32_t)0x0)
+            % castle_double_array_request_cpus();
     else
         return 0;
 }
 
 /**
  * Get cpu id for specified cpu_index.
- *
- * @FIXME named wrongly?
  *
  * @return  CPU id
  */
@@ -4228,12 +4227,12 @@ static int castle_da_wait_queue_create(struct castle_double_array *da, void *unu
 {
     int i;
 
-    da->ios_waiting = castle_malloc(request_cpus.cnt * sizeof(struct castle_da_io_wait_queue),
-            GFP_KERNEL);
+    da->ios_waiting = castle_malloc(castle_double_array_request_cpus()
+            * sizeof(struct castle_da_io_wait_queue), GFP_KERNEL);
     if (!da->ios_waiting)
         return 1;
 
-    for (i = 0; i < request_cpus.cnt; i++)
+    for (i = 0; i < castle_double_array_request_cpus(); i++)
     {
         spin_lock_init(&da->ios_waiting[i].lock);
         INIT_LIST_HEAD(&da->ios_waiting[i].list);
@@ -4376,7 +4375,7 @@ struct castle_component_tree* castle_component_tree_get(tree_seq_t seq)
  * @param   da      To insert onto
  * @param   ct      To be inserted
  * @param   head    List head to add ct after (or NULL)
- * @param   in_init @FIXME
+ * @param   in_init Set if we are adding a just demarshalled CT from disk
  *
  * WARNING: Caller must hold da->lock
  */
@@ -4472,6 +4471,22 @@ static void castle_component_tree_del(struct castle_double_array *da,
     else
         da->levels[ct->level].nr_trees--;
     da->nr_trees--;
+}
+
+/**
+ * Promote ct to next level.
+ *
+ * @param   da      Doubling array to promote ct in
+ * @param   level   CT to promote
+ * @param   in_init Set if we are adding a just demarshalled CT from disk
+ */
+static void castle_component_tree_promote(struct castle_double_array *da,
+                                          struct castle_component_tree *ct,
+                                          int in_init)
+{
+    castle_component_tree_del(da, ct);
+    ct->level++;
+    castle_component_tree_add(da, ct, NULL /* append */, in_init);
 }
 
 static void castle_ct_large_obj_writeback(struct castle_large_obj_entry *lo, 
@@ -4624,6 +4639,33 @@ void castle_ct_put(struct castle_component_tree *ct, int write)
     castle_free(ct);
 }
 
+/**
+ * Promote level 0 RWCTs if they number differently to request-handling CPUS.
+ *
+ * @param   da  Doubling array to verify promotions for
+ */
+static int castle_da_level0_check_promote(struct castle_double_array *da, void *unused)
+{
+    write_lock(&da->lock);
+    if (da->levels[0].nr_trees != castle_double_array_request_cpus())
+    {
+        struct castle_component_tree *ct;
+        struct list_head *l, *tmp;
+
+        castle_printk("DA previously imported on system with different CPU "
+                "count.  Promoting RWCTs at level 0 to level 1.\n");
+
+        list_for_each_safe(l, tmp, &da->levels[0].trees)
+        {
+            ct = list_entry(l, struct castle_component_tree, da_list);
+            castle_component_tree_promote(da, ct, 1);
+        }
+    }
+    write_unlock(&da->lock);
+
+    return 0;
+}
+
 static int castle_da_trees_sort(struct castle_double_array *da, void *unused)
 {
     int i;
@@ -4731,7 +4773,7 @@ static da_id_t castle_da_ct_unmarshall(struct castle_component_tree *ct,
  *
  * @param da    Doubling array's CTs to enumerate
  * @param fn    Function to pass each of the da's CTs too
- * @param token @FIXME
+ * @param token ???
  */
 static void __castle_da_foreach_tree(struct castle_double_array *da,
                                      int (*fn)(struct castle_double_array *da,
@@ -5001,9 +5043,6 @@ static int __castle_da_rwct_create(struct castle_double_array *da, int cpu_index
  * the old CT promoted in an atomic fashion (da->lock held).  This means we are
  * guaranteed to have none or all of the CTs at level 0.
  *
- * @FIXME currently the system will panic if the filesystem is imported on a
- * machine with a different number of CPUs
- *
  * @also castle_double_array_start()
  * @also castle_da_rwct_create()
  */
@@ -5027,7 +5066,7 @@ static int castle_da_all_rwcts_create(struct castle_double_array *da)
     read_lock(&da->lock);
     if (!list_empty(&da->levels[0].trees))
     {
-        BUG_ON(da->levels[0].nr_trees != request_cpus.cnt);
+        BUG_ON(da->levels[0].nr_trees != castle_double_array_request_cpus());
         read_unlock(&da->lock);
         goto out;
     }
@@ -5038,7 +5077,7 @@ static int castle_da_all_rwcts_create(struct castle_double_array *da)
     read_unlock(&da->lock);
 
     /* No RWCTs at level 0 in this DA.  Create on per request-handling CPU. */
-    for (cpu_index = 0; cpu_index < request_cpus.cnt; cpu_index++)
+    for (cpu_index = 0; cpu_index < castle_double_array_request_cpus(); cpu_index++)
     {
         if (__castle_da_rwct_create(da, cpu_index, 1 /* in_tran */) != EXIT_SUCCESS)
         {
@@ -5193,7 +5232,7 @@ int castle_double_array_read(void)
             goto error_out;
         debug("Read CT seq=%d\n", ct->seq);
         write_lock(&da->lock);
-        castle_component_tree_add(da, ct, NULL /*head*/, 1 /*in init*/);
+        castle_component_tree_add(da, ct, NULL /*head*/, 1 /*in_init*/);
         write_unlock(&da->lock);
         castle_next_tree_seq = (ct->seq >= castle_next_tree_seq) ? ct->seq + 1 : castle_next_tree_seq;
     }
@@ -5234,6 +5273,8 @@ int castle_double_array_read(void)
     castle_mstore_iterator_destroy(iterator);
     iterator = NULL;
 
+    /* Promote level 0 RWCTs if necessary. */
+    castle_da_hash_iterate(castle_da_level0_check_promote, NULL);
     /* Sort all the tree lists by the sequence number */
     castle_da_hash_iterate(castle_da_trees_sort, NULL); 
     castle_da_hash_iterate(castle_da_merge_start, NULL); 
@@ -5388,7 +5429,6 @@ static int __castle_da_rwct_create(struct castle_double_array *da, int cpu_index
     write_lock(&da->lock);
 
     /* Find cpu_index^th element from back and promote to level 1. */
-    // @FIXME multi-t0-rwct-cpu-count-mismatch
     if (cpu_index < da->levels[0].nr_trees)
     {
         int index = 0;
@@ -5399,9 +5439,7 @@ static int __castle_da_rwct_create(struct castle_double_array *da, int cpu_index
                 /* Found cpu_index^th element. */
                 old_ct = list_entry(l, struct castle_component_tree, da_list);
                 l = old_ct->da_list.prev; /* Position to insert new CT. */
-                castle_component_tree_del(da, old_ct);
-                old_ct->level = 1;
-                castle_component_tree_add(da, old_ct, NULL /* append */, 0 /* not in init */);
+                castle_component_tree_promote(da, old_ct, 0 /*in_init*/);
                 /* Recompute merge driver. */
                 castle_da_driver_merge_reset(da);
                 break;
@@ -5688,7 +5726,7 @@ again:
         return NULL;
 
     ct = castle_da_rwct_get(da, c_bvec->cpu_index);
-    // @FIXME some sort of error handling here if we can't allocate a new RWCT
+    BUG_ON(!ct);
 
     /* Attempt to preallocate space in the btree and m-obj extents for writes. */
     btree = castle_btree_type_get(ct->btree_type);

@@ -178,15 +178,16 @@ int castle_sysfs_version_add(version_t version)
 
 int castle_sysfs_version_del(version_t version)
 {
-    struct castle_sysfs_version *v = NULL;
+    struct castle_sysfs_version *v = NULL, *k;
     struct list_head *pos, *tmp;
 
     list_for_each_safe(pos, tmp, &castle_sysfs_versions.version_list)
     {
-        v = list_entry(pos, struct castle_sysfs_version, list);
-        if (v->version == version)
+        k = list_entry(pos, struct castle_sysfs_version, list);
+        if (k->version == version)
         {
             list_del(pos);
+            v = k;
             break;
         }
     }

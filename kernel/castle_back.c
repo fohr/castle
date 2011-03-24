@@ -1482,8 +1482,6 @@ static void castle_back_iter_reply(struct castle_back_stateful_op *stateful_op,
 /**
  * Begin stateful op iterating for values in specified key,version range in DA.
  *
- * @FIXME-lewis make RQs work with new T0 structure
- *
  * @also castle_object_iter_start()
  * @also castle_back_iter_next()
  */

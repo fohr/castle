@@ -784,7 +784,7 @@ static int c2_dirtylist_insert(c2_block_t *c2b)
         else
         {
             /* We found a c2b with the same offset.  Larger to the right. */
-            /** @FIXME would it make more sense to have C2B_COMP() above that calls
+            /** @TODO would it make more sense to have C2B_COMP() above that calls
              * EXT_POS_COMP and does below if result == 0? */
 
             if (c2b->nr_pages < tree_c2b->nr_pages)
@@ -1648,7 +1648,7 @@ int submit_c2b(int rw, c2_block_t *c2b)
  *
  * Useful if you know that a sequence of submit_c2b()s has been completed.
  *
- * @FIXME we should be more intelligent about this and unplug just those slaves
+ * @TODO we should be more intelligent about this and unplug just those slaves
  * that need to be.
  */
 static void castle_slaves_unplug(void)
@@ -2879,7 +2879,7 @@ static inline int c2_pref_window_compare(c2_pref_window_t *window, c_ext_pos_t c
 /**
  * Find prefetch window with furthest start_off that matches cep.
  *
- * @FIXME This logic is likely broken for adaptive prefetch windows.
+ * @TODO This logic is likely broken for adaptive prefetch windows.
  * Specifically a given cep might match two overlapping windows:
  * - One with a start_off of 10 and end_off of 200
  * - Another with a start_off of 15 and end_off of 30
@@ -3088,7 +3088,7 @@ static int c2_pref_window_insert(c2_pref_window_t *window)
     rb_insert_color(&window->rb_node, &c2p_rb_root);
 
     /* Update count of pages covered by windows in the tree.  This window might
-     * overlap an existing window but we don't account for that (@FIXME?). */
+     * overlap an existing window but we don't account for that (@TODO?). */
     c2_pref_total_window_size += ((window->end_off - window->start_off) >> PAGE_SHIFT) / BLKS_PER_CHK;
 
     /* Release the lock. */
@@ -3807,7 +3807,7 @@ static void castle_cache_flush_endio(c2_block_t *c2b)
  * - Dirty blocks are passed to submit_c2b() for I/O.
  * - I/O callback handler subsequently marks blocks as clean.
  *
- * @FIXME provide more detail on this function
+ * @TODO provide more detail on this function
  *
  * @also castle_cache_flush_wakeup()
  * @also submit_c2b()
@@ -4504,7 +4504,7 @@ struct castle_mstore_iter* castle_mstore_iterate(struct castle_mstore *store)
 }
 
 /**
- * @FIXME needs a concise description.
+ * Place node on mstore list.
  *
  * NOTE: Needs to be called with store mutex locked. Otherwise two/more racing
  * node_adds may be generated due to the lock-free period between
