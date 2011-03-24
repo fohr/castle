@@ -183,21 +183,27 @@ int castle_sysfs_version_del(version_t version)
 
     list_for_each_safe(pos, tmp, &castle_sysfs_versions.version_list)
     {
-        v = list_entry(pos, struct castle_sysfs_version, list);
-        if (v->version == version)
+        k = list_entry(pos, struct castle_sysfs_version, list);
+        if (k->version == version)
         {
-            printk("Deleted version %d from sysfs\n", v->version);
+            //printk("Deleted version %d from sysfs\n", k->version);
             list_del(pos);
+            v = k;
             break;
         }
     }
+#if 0
     list_for_each_safe(pos, tmp, &castle_sysfs_versions.version_list)
     {
         k = list_entry(pos, struct castle_sysfs_version, list);
         printk("%p\n", k);
     }
+#endif
     if (!v)
+    {
+        printk("Version %d is already deleted\n", version);
         return -1;
+    }
 
     sysfs_remove_file(&castle_sysfs_versions.kobj, &v->csys_entry.attr);
 

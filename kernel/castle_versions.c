@@ -565,6 +565,7 @@ int castle_version_tree_delete(version_t version)
     {
         struct castle_version *del_v = list_entry(pos, struct castle_version, free_list);
 
+        printk("%d\n", del_v->version);
         castle_sysfs_version_del(del_v->version);
         castle_events_version_destroy(del_v->version);
         list_del(pos);
