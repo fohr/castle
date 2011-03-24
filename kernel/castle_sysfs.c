@@ -178,7 +178,7 @@ int castle_sysfs_version_add(version_t version)
 
 int castle_sysfs_version_del(version_t version)
 {
-    struct castle_sysfs_version *v = NULL;
+    struct castle_sysfs_version *v = NULL, *k;
     struct list_head *pos, *tmp;
 
     list_for_each_safe(pos, tmp, &castle_sysfs_versions.version_list)
@@ -186,9 +186,15 @@ int castle_sysfs_version_del(version_t version)
         v = list_entry(pos, struct castle_sysfs_version, list);
         if (v->version == version)
         {
+            printk("Deleted version %d from sysfs\n", v->version);
             list_del(pos);
             break;
         }
+    }
+    list_for_each_safe(pos, tmp, &castle_sysfs_versions.version_list)
+    {
+        k = list_entry(pos, struct castle_sysfs_version, list);
+        printk("%p\n", k);
     }
     if (!v)
         return -1;

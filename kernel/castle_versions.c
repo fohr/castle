@@ -66,7 +66,10 @@ struct castle_version {
     /* Lists for storing versions the hash table & the init list*/
     struct list_head hash_list; 
     unsigned long    flags;
-    struct list_head init_list;
+    union {
+        struct list_head init_list;
+        struct list_head free_list;
+    };
     struct list_head del_list;
 };
 
@@ -424,7 +427,7 @@ int castle_version_delete(version_t version)
     list_add_tail(&v->del_list, pos);
     castle_versions_count_dec(v->da_id);
 
-    castle_printk("Marked version %d for deletion: 0x%lx\n", version, v->flags);
+    printk("Marked version %d for deletion: 0x%lx\n", version, v->flags);
     da_id = v->da_id;
 
     /* Check if ancestors can be marked as leaf. Go upto root. */
@@ -478,7 +481,8 @@ int castle_version_delete(version_t version)
  *
  * @return parent of version v.
  * */
-static struct castle_version * castle_version_subtree_delete(struct castle_version *v)
+static struct castle_version * castle_version_subtree_delete(struct castle_version *v, 
+                                                             struct list_head *version_list)
 {
     struct castle_version *parent;
 
@@ -491,15 +495,12 @@ static struct castle_version * castle_version_subtree_delete(struct castle_versi
 
     parent = v->parent;
 
+    printk("Deleting %d\n", v->version);
     /* Remove version from hash. */
-    castle_sysfs_version_del(v->version);
     castle_versions_drop(v);
     __castle_versions_hash_remove(v);
-    kmem_cache_free(castle_versions_cache, v);
+    list_add_tail(&v->free_list, version_list);
     
-    /* raise event */
-    castle_events_version_destroy(v->version);
-
     return parent;
 }
 
@@ -515,6 +516,8 @@ int castle_version_tree_delete(version_t version)
 {
     struct castle_version *v, *cur;
     int ret = 0;
+    struct list_head *pos, *tmp;
+    LIST_HEAD(version_list);
 
     v = castle_versions_hash_get(version);
     if (!v)
@@ -540,7 +543,7 @@ int castle_version_tree_delete(version_t version)
 
             /* Delete version and handle Parent. castle_version_subtree_delete()
              * returns parent of the deleted node. */
-            cur = castle_version_subtree_delete(cur);
+            cur = castle_version_subtree_delete(cur, &version_list);
             if (cur == NULL)
             {
                 ret = -EINVAL;
@@ -557,6 +560,16 @@ int castle_version_tree_delete(version_t version)
         cur = cur->first_child;
     }
     write_unlock_irq(&castle_versions_hash_lock);
+
+    list_for_each_safe(pos, tmp, &version_list)
+    {
+        struct castle_version *del_v = list_entry(pos, struct castle_version, free_list);
+
+        castle_sysfs_version_del(del_v->version);
+        castle_events_version_destroy(del_v->version);
+        list_del(pos);
+        kmem_cache_free(castle_versions_cache, del_v);
+    }
 
     /* Run processing to re-calculate the version ordering. */
     castle_versions_process();
@@ -718,6 +731,7 @@ static struct castle_version* castle_version_new_create(int snap_or_clone,
     if(!v) 
         return NULL;
     
+    printk("Version %d->%d\n", parent, v->version);
     /* If our parent has the size set, inherit it (ignores the size argument) */
     if(parent_size != 0)
         v->size = parent_size;
