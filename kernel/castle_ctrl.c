@@ -393,9 +393,24 @@ void castle_control_collection_attach(version_t          version,
                                       int               *ret,
                                       collection_id_t   *collection)
 {
+    struct list_head            *lh;
     struct castle_attachment *ca;
 
     BUG_ON(strlen(name) > MAX_NAME_SIZE);
+
+    /* Check for, and reject, duplicate collection names. */
+    list_for_each(lh, &castle_attachments.attachments)
+    {
+        ca = list_entry(lh, struct castle_attachment, list);
+        if (ca->device)
+            continue;
+        if (strcmp(name, ca->col.name) == 0)
+        {
+            castle_printk("Collection name %s already exists\n", ca->col.name);
+            *ret = -EEXIST;
+            return;
+        }
+    }
 
     if (castle_version_deleted(version))
     {
