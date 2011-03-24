@@ -3006,6 +3006,15 @@ entry_done:
         FAULT(MERGE_FAULT);
     }
 
+    /* If we got few number of entries than the number of units. We might need to do few empty units 
+     * at the end to be in sync with other merges. */
+    if (unit_nr != (1U << merge->level))
+    {
+        BUG_ON(merge->nr_entries > (1U << merge->level));
+        debug_merges("Going through an empty unit\n");
+        return EAGAIN;
+    }
+
     /* Return success, if we are finished with the merge. */
     return EXIT_SUCCESS;
 
