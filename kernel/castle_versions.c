@@ -427,7 +427,7 @@ int castle_version_delete(version_t version)
     list_add_tail(&v->del_list, pos);
     castle_versions_count_dec(v->da_id);
 
-    printk("Marked version %d for deletion: 0x%lx\n", version, v->flags);
+    castle_printk("Marked version %d for deletion: 0x%lx\n", version, v->flags);
     da_id = v->da_id;
 
     /* Check if ancestors can be marked as leaf. Go upto root. */
@@ -495,7 +495,6 @@ static struct castle_version * castle_version_subtree_delete(struct castle_versi
 
     parent = v->parent;
 
-    printk("Deleting %d\n", v->version);
     /* Remove version from hash. */
     castle_versions_drop(v);
     __castle_versions_hash_remove(v);
@@ -565,7 +564,6 @@ int castle_version_tree_delete(version_t version)
     {
         struct castle_version *del_v = list_entry(pos, struct castle_version, free_list);
 
-        printk("%d\n", del_v->version);
         castle_sysfs_version_del(del_v->version);
         castle_events_version_destroy(del_v->version);
         list_del(pos);
@@ -732,7 +730,6 @@ static struct castle_version* castle_version_new_create(int snap_or_clone,
     if(!v) 
         return NULL;
     
-    printk("Version %d->%d\n", parent, v->version);
     /* If our parent has the size set, inherit it (ignores the size argument) */
     if(parent_size != 0)
         v->size = parent_size;
