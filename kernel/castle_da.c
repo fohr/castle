@@ -5767,9 +5767,11 @@ static void castle_da_queue_kick(struct work_struct *work)
     LIST_HEAD(submit_list);
     c_bvec_t *c_bvec;
 
-    /* Get as many c_bvecs as we can and place them on the submit list. */
+    /* Get as many c_bvecs as we can and place them on the submit list.
+       Take them all on module exit. */
     spin_lock(&wq->lock);
-    while ((atomic_dec_return(&wq->da->ios_budget) >= 0) && !list_empty(&wq->list))
+    while (((atomic_dec_return(&wq->da->ios_budget) >= 0) || castle_fs_exiting) &&
+           !list_empty(&wq->list))
     {
         /* New IOs are queued at the end of the list.  Always pull from the
          * front of the list to preserve ordering. */

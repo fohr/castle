@@ -70,6 +70,7 @@ static inline ATTRIB_NORET void bug_fn(char *file, unsigned long line)
 STATIC_BUG_ON(LAST_ENV_VAR_ID >= NR_ENV_VARS);
 extern char *castle_environment[NR_ENV_VARS];
 extern int   castle_fs_inited;
+extern int   castle_fs_exiting;
 
 typedef uint32_t tree_seq_t;                   
 #define GLOBAL_TREE         ((tree_seq_t)0)

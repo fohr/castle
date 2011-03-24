@@ -75,6 +75,7 @@ char                        *castle_environment[NR_ENV_VARS]
                                    [6] = &castle_environment_block[6 * MAX_ENV_LEN], 
                                    [7] = &castle_environment_block[7 * MAX_ENV_LEN]};
 int                          castle_fs_inited = 0;
+int                          castle_fs_exiting = 0;
 c_fault_t                    castle_fault = NO_FAULT;
 
 int  castle_latest_key = 0; /**< maintain latest key for each CT. Useful to test
@@ -2346,9 +2347,11 @@ static void __exit castle_exit(void)
 {
     castle_printk("Castle FS exit.\n");
 
-    /* Remove externaly visible interfaces */
-    castle_back_fini();
+    castle_fs_exiting = 1;
+    /* Remove externaly visible interfaces. Starting with the control file
+       (so that no new connections can be created). */
     castle_control_fini();
+    castle_back_fini();
     castle_sysfs_fini();
     FAULT(FINI_FAULT);
     /* Now, make sure no more IO can be made, internally or externally generated */
