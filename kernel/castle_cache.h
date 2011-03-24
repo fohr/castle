@@ -54,8 +54,6 @@ int  c2b_write_locked(c2_block_t *c2b);
 {                                     \
     might_sleep();                    \
      __lock_c2b(_c2b, 0);             \
-    (_c2b)->file = __FILE__;          \
-    (_c2b)->line = __LINE__;          \
 }
 #else /* CASTLE_DEBUG */
 #define write_lock_c2b(_c2b)          \

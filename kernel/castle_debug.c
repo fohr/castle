@@ -363,9 +363,9 @@ static int castle_debug_run(void *unused)
                     castle_printk("Blocked on locking c2b for "cep_fmt_str_nl,
                         cep2str(c2b->cep));
                     if(c2b->file != NULL)
-                        castle_printk("c2b last locked from: %s:%d\n", c2b->file, c2b->line);
+                        castle_printk("c2b last write locked from: %s:%d\n", c2b->file, c2b->line);
                     else
-                        castle_printk("has never been locked before?\n");
+                        castle_printk("has never been write locked before?\n");
                 }
             }
         }

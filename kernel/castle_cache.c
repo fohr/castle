@@ -578,8 +578,11 @@ static inline void __unlock_c2b(c2_block_t *c2b, int write)
     c2_page_t *c2p;
 
 #ifdef CASTLE_DEBUG    
-    c2b->file = "none";
-    c2b->line = 0;
+    if (write)
+    {
+        c2b->file = "none";
+        c2b->line = 0;
+    }
 #endif
 
     unlock_c2b_counter(c2b, write);
