@@ -5327,16 +5327,15 @@ static int __castle_da_rwct_create(struct castle_double_array *da, int cpu_index
     struct castle_btree_type *btree;
     struct list_head *l = NULL;
     c2_block_t *c2b;
-    int ret;
+    int err;
     static int t0_count = 0;
 
     /* Caller must have set the DA's growing bit. */
     BUG_ON(!castle_da_growing_rw_test(da));
 
-    ret = -ENOMEM;
     ct = castle_ct_alloc(da, RW_VLBA_TREE_TYPE, 0 /* level */);
-    if(!ct)
-        goto out;
+    if (!ct)
+        return -ENOMEM;
 
     btree = castle_btree_type_get(ct->btree_type);
 
@@ -5347,7 +5346,7 @@ static int __castle_da_rwct_create(struct castle_double_array *da, int cpu_index
     ct->seq = (cpu_index << TREE_SEQ_SHIFT) + ct->seq;
 
     /* Allocate data and btree extents. */
-    if ((ret = castle_new_ext_freespace_init(&ct->tree_ext_free,
+    if ((err = castle_new_ext_freespace_init(&ct->tree_ext_free,
                                               da->id,
                                               MAX_DYNAMIC_TREE_SIZE * C_CHK_SIZE,
                                               btree->node_size(ct, 0) * C_BLK_SIZE)))
@@ -5356,7 +5355,7 @@ static int __castle_da_rwct_create(struct castle_double_array *da, int cpu_index
         goto no_space;
     }
 
-    if ((ret = castle_new_ext_freespace_init(&ct->data_ext_free,
+    if ((err = castle_new_ext_freespace_init(&ct->data_ext_free,
                                               da->id,
                                               MAX_DYNAMIC_DATA_SIZE * C_CHK_SIZE,
                                               C_BLK_SIZE)))
@@ -5416,16 +5415,13 @@ static int __castle_da_rwct_create(struct castle_double_array *da, int cpu_index
        the merge check. */
     write_unlock(&da->lock);
     castle_da_merge_restart(da, NULL);
-    ret = 0;
-    goto out;
+    return 0;
 
 no_space:
     castle_da_freeze(da);
     if (ct)
         castle_ct_put(ct, 0);
-out:
-    castle_da_growing_rw_clear(da);
-    return ret;
+    return err;
 }
 
 /**
