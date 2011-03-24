@@ -697,7 +697,7 @@ static void castle_extent_space_free(c_ext_t *ext, c_chk_cnt_t count)
         put_c2b(map_c2b);
         map_cep.offset += C_BLK_SIZE;
     }
-    kfree(ext_state);
+    castle_free(ext_state);
 }
 
 /**
