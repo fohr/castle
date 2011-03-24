@@ -24,15 +24,17 @@ static int castle_versions_process(void);
 
 static struct kmem_cache *castle_versions_cache  = NULL;
 
-#define CASTLE_VERSIONS_HASH_SIZE       (1000)
-static struct list_head  *castle_versions_hash   = NULL;
+#define CASTLE_VERSIONS_MAX                 (200)   /**< Maximum number of versions per-DA.     */
+#define CASTLE_VERSIONS_HASH_SIZE           (1000)  /**< Size of castle_versions_hash.          */
+#define CASTLE_VERSIONS_COUNTS_HASH_SIZE    (1000)  /**< Size of castle_versions_counts_hash.   */
+static struct list_head  *castle_versions_hash          = NULL;
 static          LIST_HEAD(castle_versions_init_list);
+static struct list_head  *castle_versions_counts_hash   = NULL;
 
 static version_t          castle_versions_last   = INVAL_VERSION;
 static c_mstore_t        *castle_versions_mstore = NULL;
 
 LIST_HEAD(castle_versions_deleted);
-atomic_t                  castle_versions_nr_deleted = ATOMIC(0);
 
 #define CV_INITED_BIT             (0)
 #define CV_INITED_MASK            (1 << CV_INITED_BIT)
@@ -68,8 +70,21 @@ struct castle_version {
     struct list_head del_list;
 };
 
-DEFINE_HASH_TBL(castle_versions, castle_versions_hash, CASTLE_VERSIONS_HASH_SIZE, struct castle_version, hash_list, version_t, version);
+/**
+ * Maintains the number of active versions in each doubling array.
+ */
+struct castle_version_count {
+    da_id_t             da_id;      /**< DA we are counting live versions for.          */
+    int                 count;      /**< Number of live versions for da_id.             */
+    struct list_head    hash_list;  /**< Threading onto castle_versions_counts_hash.    */
+};
 
+DEFINE_HASH_TBL(castle_versions, castle_versions_hash, CASTLE_VERSIONS_HASH_SIZE, struct castle_version, hash_list, version_t, version);
+DEFINE_HASH_TBL(castle_versions_counts, castle_versions_counts_hash, CASTLE_VERSIONS_COUNTS_HASH_SIZE, struct castle_version_count, hash_list, da_id_t, da_id);
+
+/**
+ * Disassociate all castle_versions from hash and free them.
+ */
 static int castle_version_hash_remove(struct castle_version *v, void *unused) 
 {
     list_del(&v->hash_list);
@@ -78,6 +93,9 @@ static int castle_version_hash_remove(struct castle_version *v, void *unused)
     return 0;
 }
 
+/**
+ * Free castle_versions_hash and all members.
+ */
 static void castle_versions_hash_destroy(void)
 {
     castle_versions_hash_iterate(castle_version_hash_remove, NULL); 
@@ -88,6 +106,96 @@ static void castle_versions_init_add(struct castle_version *v)
 {
     v->flags &= (~CV_INITED_MASK);
     list_add(&v->init_list, &castle_versions_init_list);
+}
+
+/**
+ * Disassociate all castle_version_count from hash and free them.
+ */
+static int castle_version_counts_hash_remove(struct castle_version_count *vc, void *unused)
+{
+    list_del(&vc->hash_list);
+    castle_free(vc);
+
+    return 0;
+}
+
+/**
+ * Free castle_versions_counts_hash and all members.
+ */
+static void castle_version_counts_hash_destroy(void)
+{
+    castle_versions_counts_hash_iterate(castle_version_counts_hash_remove, NULL);
+    castle_free(castle_versions_counts_hash);
+}
+
+/**
+ * Increment the active version count for DA.
+ *
+ * @param   da_id   DA to increment version count for
+ *
+ * NOTE: Must be called during a CASTLE_TRANSACTION
+ * NOTE: castle_versions_counts_hash members protected by CASTLE_TRANSACTION
+ *
+ * @return  0       Successfully incremented version count
+ * @return -ENOMEM  Couldn't allocate castle_version_count structure
+ * @return -EINVAL  Already at maximum number of versions per DA
+ */
+static int castle_versions_count_inc(da_id_t da_id)
+{
+    struct castle_version_count *vc;
+
+    BUG_ON(!CASTLE_IN_TRANSACTION);
+
+    vc = castle_versions_counts_hash_get(da_id);
+    if (!vc)
+    {
+        /* No castle_version_count for da_id.  Create a new one. */
+        vc = castle_malloc(sizeof(struct castle_version_count), GFP_KERNEL);
+        if (!vc)
+            return -ENOMEM;
+        vc->da_id = da_id;
+        vc->count = 1;
+        INIT_LIST_HEAD(&vc->hash_list);
+        castle_versions_counts_hash_add(vc);
+    }
+    else if (vc->count < CASTLE_VERSIONS_MAX)
+        /* Increment count for existing castle_version_count. */
+        vc->count++;
+    else
+        /* DA is already at maximum number of versions. */
+        return -E2BIG;
+
+    return EXIT_SUCCESS;
+}
+
+/**
+ * Decrement the active version count for DA.
+ *
+ * @param   da_id   DA to decrement version count for
+ *
+ * NOTE: Must be called during a CASTLE_TRANSACTION
+ * NOTE: castle_versions_counts_hash members protected by CASTLE_TRANSACTION
+ *
+ * @return  0   Successfully decremented version count
+ */
+static int castle_versions_count_dec(da_id_t da_id)
+{
+    struct castle_version_count *vc;
+
+    BUG_ON(!CASTLE_IN_TRANSACTION);
+
+    vc = castle_versions_counts_hash_get(da_id);
+    BUG_ON(!vc); /* must always exist for decrements */
+    vc->count--;
+    if (vc->count == 0)
+    {
+        list_del(&vc->hash_list);
+        castle_free(vc);
+    }
+    else
+        BUG_ON(vc->count < 0);
+
+    return EXIT_SUCCESS;
 }
 
 version_t castle_version_max_get(void)
@@ -272,7 +380,7 @@ out:
 }
 
 /**
- * Mark the version for deletion. Data gets deleted while doing merges. 
+ * Mark version for deletion during merges.
  *
  * @param version [in] version to be deleted
  *
@@ -314,7 +422,7 @@ int castle_version_delete(version_t version)
         BUG_ON(d->o_order == v->o_order);
     }
     list_add_tail(&v->del_list, pos);
-    atomic_inc(&castle_versions_nr_deleted);
+    castle_versions_count_dec(v->da_id);
 
     castle_printk("Marked version %d for deletion: 0x%lx\n", version, v->flags);
     da_id = v->da_id;
@@ -463,11 +571,14 @@ static struct castle_version* castle_version_add(version_t version,
                                                  c_byte_off_t size)
 {
     struct castle_version *v;
-    static atomic_t version_cnt = ATOMIC(0);
-    
-    if(atomic_inc_return(&version_cnt) > 900)
+    int ret;
+
+    /* Check we are under the per-DA version limit. */
+    if ((ret = castle_versions_count_inc(da_id)) != EXIT_SUCCESS)
     {
-        castle_printk("Beta cannot create more than 900 versions.\n");
+        if (ret == -E2BIG)
+            castle_printk("Beta cannot create more than %d versions per DA.\n",
+                    CASTLE_VERSIONS_MAX);
         return NULL;
     }
 
@@ -491,7 +602,7 @@ static struct castle_version* castle_version_add(version_t version,
 
     /* Initialise version 0 fully, defer full init of all other versions by 
        putting it on the init list. */ 
-    if(v->version == 0)
+    if (v->version == 0)
     {
         if(castle_sysfs_version_add(v->version))
             goto out_dealloc;
@@ -502,7 +613,8 @@ static struct castle_version* castle_version_add(version_t version,
         v->flags       |= CV_INITED_MASK;
 
         castle_versions_hash_add(v);
-    } else
+    }
+    else
     {
         /* Defer the initialisation until all the ancestral nodes are
            available. */
@@ -514,6 +626,7 @@ static struct castle_version* castle_version_add(version_t version,
 
 out_dealloc:
     kmem_cache_free(castle_versions_cache, v);
+    castle_versions_count_dec(da_id);
 
     return NULL;
 }
@@ -1035,32 +1148,43 @@ int castle_versions_init(void)
                                                NULL); /* ctor */
 #endif
 
-    if(!castle_versions_cache)
+    if (!castle_versions_cache)
     {
         castle_printk("Could not allocate kmem cache for castle versions.\n");
         goto err_out;
     }
     
     castle_versions_hash = castle_versions_hash_alloc();
-    if(!castle_versions_hash)
+    if (!castle_versions_hash)
     {
-        castle_printk("Could not allocate versions hash\n");
+        castle_printk("Could not allocate versions hash.\n");
         goto err_out;
     }
     castle_versions_hash_init();
 
+    castle_versions_counts_hash = castle_versions_counts_hash_alloc();
+    if (!castle_versions_counts_hash)
+    {
+        castle_printk("Could not allocate version counts hash.\n");
+        goto err_out;
+    }
+    castle_versions_counts_hash_init();
+
     return 0;
 
 err_out:
-    if(castle_versions_cache)
+    if (castle_versions_cache)
         kmem_cache_destroy(castle_versions_cache);
-    if(castle_versions_hash)
+    if (castle_versions_hash)
         castle_free(castle_versions_hash);
+    if (castle_versions_counts_hash)
+        castle_free(castle_versions_counts_hash);
     return ret;
 }
 
 void castle_versions_fini(void)
 {
     castle_versions_hash_destroy();
+    castle_version_counts_hash_destroy();
     kmem_cache_destroy(castle_versions_cache);
 }

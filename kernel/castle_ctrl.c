@@ -182,20 +182,20 @@ void castle_control_destroy(version_t version, int *ret)
         return;
     }
 
-    /* Reply immediatly, if we can't find an associated DA */
+    /* Reply immediately, if we can't find an associated DA */
     if (!da_id)
     {
-	castle_printk("Version does not correspond to a DA");
+        castle_printk("Version does not correspond to a DA.\n");
         *ret = -EINVAL;
-	return;
+        return;
     }
 
-    /* Reply immediatly, if this is not the root version */
+    /* Reply immediately, if this is not the root version */
     if (parent)
     {
-	castle_printk("Cannot delete version with parent");
+        castle_printk("Cannot delete version with parent.\n");
         *ret = -EINVAL;
-	return;
+        return;
     }
 
     if (castle_double_array_destroy(da_id) < 0)
