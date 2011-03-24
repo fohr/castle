@@ -12,11 +12,13 @@ typedef struct castle_debug_watch {
 } cd_watch_t;
 
 struct castle_malloc_debug {
+    uint32_t cannary1;
     struct list_head list;
     uint32_t size;
     char *file;
     int vmalloced;
     int line;
+    uint32_t cannary2;
 };
 
 static spinlock_t           malloc_list_spinlock = SPIN_LOCK_UNLOCKED;
@@ -29,6 +31,8 @@ static cd_watch_t           watches[] = {{0x41, 0x3}};
 static int                  nr_watches = 0;
 static struct page        **watched_data;
 
+#define CANNARY1 0xabcd0123
+#define CANNARY2 0x456789ab
 static void __castle_debug_dobj_add(struct castle_malloc_debug *dobj, 
                                     size_t size, 
                                     char *file, 
@@ -37,10 +41,12 @@ static void __castle_debug_dobj_add(struct castle_malloc_debug *dobj,
 {
     /* Init all fields */
     INIT_LIST_HEAD(&dobj->list);
+    dobj->cannary1 = CANNARY1;
     dobj->file = file;
     dobj->line = line;
     dobj->size = size;
     dobj->vmalloced = vmalloced;
+    dobj->cannary2 = CANNARY2;
 
     /* Add ourselves to the list under lock */
     spin_lock_irq(&malloc_list_spinlock);
@@ -86,12 +92,17 @@ void castle_debug_free(void *obj)
     dobj = obj;
     dobj--;
 
+    if((dobj->cannary1 != CANNARY1) || (dobj->cannary2 != CANNARY2))
+    {
+        castle_printk("Cannaries dead, for %p, double free?\n", dobj);
+        BUG();
+    }
     /* Remove from list */
     spin_lock_irqsave(&malloc_list_spinlock, flags);
     list_del(&dobj->list);
     spin_unlock_irqrestore(&malloc_list_spinlock, flags);
 
-    if(dobj->vmalloced)
+   if(dobj->vmalloced)
     {
         castle_printk("Trying to kfree() vmalloced object.\n");
         BUG();
@@ -127,7 +138,12 @@ void castle_debug_vfree(void *obj)
 
     dobj = (struct castle_malloc_debug *)((char *)obj - PAGE_SIZE);
 
-    /* Remove from list */
+    if((dobj->cannary1 != CANNARY1) || (dobj->cannary2 != CANNARY2))
+    {
+        castle_printk("Cannaries dead, for %p, double free?\n", dobj);
+        BUG();
+    }
+     /* Remove from list */
     spin_lock_irqsave(&malloc_list_spinlock, flags);
     list_del(&dobj->list);
     spin_unlock_irqrestore(&malloc_list_spinlock, flags);
