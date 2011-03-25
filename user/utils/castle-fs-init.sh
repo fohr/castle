@@ -16,11 +16,11 @@ then
     cat <<EOF
 castle-fs was not cleanly shut down
 
-At this stage of beta, starting castle-fs on a dirty filesystem is not
-supported and will probably crash your kernel. To erase all the stored
-data and start over, please run:
-
-   acunu_nuke all
+Please help us to debug the problem by notifying Acunu of the problem.
+You can force the filesystem to restart from the last successful checkpoint
+by removing the dirty flag:
+	# rm /var/lib/castle-fs/dirty
+followed by restart of the system.
 EOF
     exit 1
 fi
