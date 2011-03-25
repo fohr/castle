@@ -225,7 +225,7 @@ static inline int castle_vma_map(struct vm_area_struct *vma, void *buffer, unsig
         if (err)
         {
             error("castle_back: mapping failed!\n");
-            err = -ENOMEM; // TODO should I do this or just return remap_pfn_range?
+            err = -ENOMEM; /* @TODO should I do this or just return remap_pfn_range? */
             goto err_out;
         }
     }
@@ -464,10 +464,10 @@ static struct castle_back_stateful_op *castle_back_find_stateful_op(struct castl
     spin_lock(&stateful_op->lock);
     if (stateful_op->in_use && stateful_op->token == token && stateful_op->tag == tag && !stateful_op->expiring)
     {
-    	debug("castle_back_find_stateful_op returning: token = 0x%x, use_count = %u, index = %ld\n",
-    	            stateful_op->token, stateful_op->use_count, stateful_op - conn->stateful_ops);
-    	spin_unlock(&stateful_op->lock);
-    	return stateful_op;
+        debug("castle_back_find_stateful_op returning: token = 0x%x, use_count = %u, index = %ld\n",
+                    stateful_op->token, stateful_op->use_count, stateful_op - conn->stateful_ops);
+        spin_unlock(&stateful_op->lock);
+        return stateful_op;
     }
 
     spin_unlock(&stateful_op->lock);
@@ -772,8 +772,8 @@ static void castle_back_stateful_op_finish_all(struct castle_back_stateful_op *s
         op = list_entry(pos, struct castle_back_op, list);
         list_del(pos);
         castle_back_buffer_put(op->conn, op->buf);
-        // even though we have the lock, this is safe since conn reference count cannot be
-        // decremented to 0 since the stateful_op has a count
+        /* even though we have the lock, this is safe since conn reference count cannot be
+         * decremented to 0 since the stateful_op has a count */
         castle_back_reply(op, err, 0, 0);
 #ifdef DEBUG
         cancelled++;
@@ -1425,8 +1425,7 @@ static void castle_back_iter_expire(struct castle_back_stateful_op *stateful_op)
     castle_object_iter_finish(stateful_op->iterator.iterator);
 
     spin_lock(&stateful_op->lock);
-    // will drop stateful_op->lock
-    castle_back_iter_cleanup(stateful_op);
+    castle_back_iter_cleanup(stateful_op); /* drops stateful_op->lock */
 }
 
 static void castle_back_iter_call_queued(struct castle_back_stateful_op *stateful_op)
@@ -1566,7 +1565,7 @@ err4: castle_free(end_key);
 err3: castle_free(start_key);
 err2: castle_attachment_put(attachment);
       stateful_op->attachment = NULL;
-err1: // No one could have added another op to queue as we haven't returns token yet
+err1: /* No one could have added another op to queue as we haven't returns token yet */
       spin_lock(&stateful_op->lock);
       castle_back_put_stateful_op(conn, stateful_op);
 err0: castle_back_reply(op, err, 0, 0);    
@@ -1894,8 +1893,7 @@ static void castle_back_iter_cleanup(struct castle_back_stateful_op *stateful_op
     attachment = stateful_op->attachment;
     stateful_op->attachment = NULL;
 
-    // will drop stateful_op->lock
-    castle_back_put_stateful_op(stateful_op->conn, stateful_op);
+    castle_back_put_stateful_op(stateful_op->conn, stateful_op); /* drops stateful_op->lock */
 
     castle_attachment_put(attachment);
 }
@@ -1916,8 +1914,7 @@ static void _castle_back_iter_finish(void *data)
 
     castle_back_stateful_op_finish_all(stateful_op, -EINVAL);
 
-    // will drop stateful_op->lock
-    castle_back_iter_cleanup(stateful_op);
+    castle_back_iter_cleanup(stateful_op); /* drops stateful_op->lock */
 }
 
 static void castle_back_iter_finish(void *data)
@@ -1979,8 +1976,7 @@ static void castle_back_big_put_expire(struct castle_back_stateful_op *stateful_
     attachment = stateful_op->attachment;
     stateful_op->attachment = NULL;
     
-    // Will drop stateful_op->lock
-    castle_back_put_stateful_op(stateful_op->conn, stateful_op);
+    castle_back_put_stateful_op(stateful_op->conn, stateful_op); /* drops stateful_op->lock */
 
     castle_attachment_put(attachment);
 }
@@ -2057,7 +2053,7 @@ static uint32_t castle_back_big_put_data_length_get(struct castle_object_replace
     uint32_t length = 0;
 
     spin_lock(&stateful_op->lock);
-    // curr_op could be the BIG_PUT
+    /* curr_op could be the BIG_PUT */
     if (stateful_op->curr_op != NULL && stateful_op->curr_op->req.tag == CASTLE_RING_PUT_CHUNK)
         length = stateful_op->curr_op->req.put_chunk.buffer_len;
     spin_unlock(&stateful_op->lock);
@@ -2180,10 +2176,10 @@ static void castle_back_big_put(void *data)
 err3: castle_free(key);
 err2: castle_attachment_put(attachment);
       stateful_op->attachment = NULL;
-err1: // Safe as no-one could have queued up an op - we have not returned token
+err1: /* Safe as no-one could have queued up an op - we have not returned token */
       spin_lock(&stateful_op->lock);
       stateful_op->curr_op = NULL;
-      // will drop stateful_op->lock
+      /* will drop stateful_op->lock */
       castle_back_put_stateful_op(conn, stateful_op);
 err0: castle_back_reply(op, err, 0, 0);
 }
@@ -2285,8 +2281,7 @@ static void castle_back_big_get_expire(struct castle_back_stateful_op *stateful_
     attachment = stateful_op->attachment;
     stateful_op->attachment = NULL;
 
-    // Will drop stateful_op->lock
-    castle_back_put_stateful_op(stateful_op->conn, stateful_op);
+    castle_back_put_stateful_op(stateful_op->conn, stateful_op); /* drops stateful_op->lock */
 
     castle_attachment_put(attachment);
 }
@@ -2434,7 +2429,7 @@ static void castle_back_big_get(void *data)
 err3: castle_free(key);
 err2: castle_attachment_put(attachment);
       stateful_op->attachment = NULL;
-err1: // Safe as no one will have queued up a op - we haven't returned token yet
+err1: /* Safe as no one will have queued up a op - we haven't returned token yet */
       spin_lock(&stateful_op->lock);
       stateful_op->curr_op = NULL;
       castle_back_put_stateful_op(conn, stateful_op);
@@ -3101,7 +3096,7 @@ static int castle_ring_map(struct castle_back_conn *conn, struct vm_area_struct 
     }
     
     vma->vm_flags |= VM_RESERVED;
-    // ring doesn't really need our VM ops
+    /* ring doesn't really need our VM ops */
     // vma->vm_ops = &castle_vm_ops;
     
     conn->rings_vstart = vma->vm_start;
@@ -3158,18 +3153,18 @@ int castle_back_init(void)
 
     debug("castle_back initing...");
         
-	castle_back_wq = create_workqueue("castle_back");
-	if (!castle_back_wq)
-	{
-		error(KERN_ALERT "Error: Could not alloc wq\n");
-		err = -ENOMEM;
-		goto err1;
-	}
-	
-	init_waitqueue_head(&conn_close_wait);
-	atomic_set(&conn_count, 0);
+    castle_back_wq = create_workqueue("castle_back");
+    if (!castle_back_wq)
+    {
+        error(KERN_ALERT "Error: Could not alloc wq\n");
+        err = -ENOMEM;
+        goto err1;
+    }
+    
+    init_waitqueue_head(&conn_close_wait);
+    atomic_set(&conn_count, 0);
 
-	debug("done!\n");
+    debug("done!\n");
 
     return 0;
 
