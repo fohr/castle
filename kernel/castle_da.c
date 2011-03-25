@@ -1022,8 +1022,12 @@ static void castle_ct_modlist_iter_init(c_modlist_iter_t *iter)
 
     /* To prevent sudden kernel memory ballooning we have an imposed modlist
      * byte budget which is shared between all DAs.  Verify that the node buffer
-     * can be satisfied by the remaining budget before doing allocations. */
-    iter->nr_nodes = 1.1 * (atomic64_read(&ct->node_count) + 1); /* a few extra for luck! */
+     * can be satisfied by the remaining budget before doing allocations.
+     * We are allocating 1.1 the amonut of space. But we want to avoid using
+     * floating point arythmetics. Therefore we multiply by 11 and later divide
+     * by 10.
+     */
+    iter->nr_nodes = 11 * (atomic64_read(&ct->node_count) + 1) / 10; /* a few extra for luck! */
     buffer_size = iter->nr_nodes * iter->leaf_node_size * C_BLK_SIZE;
     if (atomic_sub_return(buffer_size, &castle_ct_modlist_iter_byte_budget) < 0)
     {
