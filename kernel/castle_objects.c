@@ -680,7 +680,7 @@ static int castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
         {
             CVT_INLINE_SET(*cvt, replace->value_len, NULL);
             cvt->val  = castle_malloc(cvt->length, GFP_NOIO);
-            /* TODO: Work out how to handle this */
+            /* @TODO: Work out how to handle this */
             BUG_ON(!cvt->val);
             /* We should not inline values which do not fit in a packet */
             BUG_ON(replace->data_length_get(replace) < cvt->length);
@@ -744,7 +744,7 @@ static int castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
 
 
                 debug("Creating Large Object of size - %u\n", nr_chunks);
-                /* TODO: Again, work out how to handle failed allocations */ 
+                /* @TODO: Again, work out how to handle failed allocations */ 
                 BUG_ON(EXT_POS_INVAL(cvt->cep));
             }
         }
@@ -1072,7 +1072,7 @@ int castle_object_replace_cancel(struct castle_object_replace *replace)
     castle_ct_put(ct, 1);
     put_c2b(data_c2b);
 
-    /* TODO: delete the partially written object */
+    /* @TODO: delete the partially written object */
     /* castle_utils_bio_free(c_bio); ??? */
 
     return 0;
@@ -1347,7 +1347,7 @@ void __castle_object_get_complete(struct work_struct *work)
     cep.offset = c2b->cep.offset + (OBJ_IO_MAX_BUFFER_SIZE * C_BLK_SIZE);
     debug("Continuing for cep="cep_fmt_str_nl, cep2str(cep));   
     
-    /* TODO: how much of this is a no-op from above? */
+    /* @TODO: how much of this is a no-op from above? */
     get->data_c2b        = c2b;
     get->data_c2b_length = data_c2b_length;
     get->data_length     = data_length;
@@ -1379,7 +1379,7 @@ void castle_object_get_io_end(c2_block_t *c2b)
     BUG_ON(c2b != data_c2b);
 #endif
     write_unlock_c2b(c2b);
-    /* TODO: io error handling. */
+    /* @TODO: io error handling. */
     debug("IO end for cep "cep_fmt_str_nl, cep2str(c2b->cep));
     CASTLE_INIT_WORK(&c_bvec->work, __castle_object_get_complete);
     queue_work(castle_wq, &c_bvec->work); 
@@ -1550,7 +1550,7 @@ int castle_object_get(struct castle_object_get *get,
     /* Single c_bvec for the bio */
     c_bio = castle_utils_bio_alloc(1);
     if(!c_bio)
-        return -ENOMEM; // TODO leaking btree_key?
+        return -ENOMEM; // @TODO leaking btree_key?
     BUG_ON(!attachment);
     c_bio->attachment    = attachment;
     c_bio->get           = get;
@@ -1565,7 +1565,7 @@ int castle_object_get(struct castle_object_get *get,
     c_bvec->da_endfind = NULL; 
     atomic_set(&c_bvec->reserv_nodes, 0);
     
-    /* TODO: add bios to the debugger! */ 
+    /* @TODO: add bios to the debugger! */ 
     castle_double_array_submit(c_bvec);
 
     return 0;
@@ -1611,7 +1611,7 @@ void castle_object_chunk_pull_io_end(c2_block_t *c2b)
     write_unlock_c2b(pull->curr_c2b);
         
         
-    // TODO deal with not up to date - get error and pass it on?
+    /* @TODO deal with not up to date - get error and pass it on? */
 
     CASTLE_INIT_WORK(&pull->work, __castle_object_chunk_pull_complete);
     queue_work(castle_wq, &pull->work); 
@@ -1619,7 +1619,7 @@ void castle_object_chunk_pull_io_end(c2_block_t *c2b)
 
 void castle_object_chunk_pull(struct castle_object_pull *pull, void *buf, size_t buf_len)
 {   
-    //TODO currently relies on objects being page aligned.
+    /* @TODO currently relies on objects being page aligned. */
     c_ext_pos_t cep;
 
     if(!castle_fs_inited)
@@ -1644,7 +1644,7 @@ void castle_object_chunk_pull(struct castle_object_pull *pull, void *buf, size_t
     }
 
     cep.ext_id = pull->cep.ext_id;
-    cep.offset = pull->cep.offset + pull->offset; // TODO in bytes or blocks?
+    cep.offset = pull->cep.offset + pull->offset; /* @TODO in bytes or blocks? */
 
     debug("Locking cdb (0x%x, 0x%x)\n", cep.ext_id, cep.offset);
     pull->curr_c2b = castle_cache_block_get(cep, (pull->to_copy - 1) / PAGE_SIZE + 1);
@@ -1727,7 +1727,7 @@ int castle_object_pull(struct castle_object_pull *pull,
     /* Single c_bvec for the bio */
     c_bio = castle_utils_bio_alloc(1);
     if(!c_bio)
-        return -ENOMEM; // TODO leaking btree_key?
+        return -ENOMEM; /* @TODO leaking btree_key? */
     BUG_ON(!attachment);
     c_bio->attachment    = attachment;
     c_bio->pull          = pull;
@@ -1742,7 +1742,7 @@ int castle_object_pull(struct castle_object_pull *pull,
     c_bvec->da_endfind = NULL; 
     atomic_set(&c_bvec->reserv_nodes, 0);
     
-    /* TODO: add bios to the debugger! */ 
+    /* @TODO: add bios to the debugger! */ 
     castle_double_array_submit(c_bvec);
 
     return 0;

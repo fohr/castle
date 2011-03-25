@@ -1,5 +1,5 @@
-/* TODO: when castle disk mounted, and then castle-fs-test run, later bd_claims on
-         disk devices fail (multiple castle_fs_cli 'claim' cause problems?) */
+/* @TODO: when castle disk mounted, and then castle-fs-test run, later bd_claims on
+          disk devices fail (multiple castle_fs_cli 'claim' cause problems?) */
 #include <linux/bio.h>
 #include <linux/kobject.h>
 #include <linux/blkdev.h>
@@ -1440,7 +1440,7 @@ static int castle_close(struct castle_attachment *dev)
     dev->ref_cnt++;
     spin_unlock(&castle_attachments.lock);
 
-    // TODO should call put, potentially free it?
+    /* @TODO should call put, potentially free it? */
 
     return 0;
 }
@@ -1561,7 +1561,7 @@ static void castle_bio_data_copy(c_bvec_t *c_bvec, c2_block_t *c2b)
         /* If invalid block, we are handling non-allocated block read */
         if(c2b)
         {
-            /* TODO use better macros than page_to_pfn etc */
+            /* @TODO use better macros than page_to_pfn etc */
             buf  = c2b_buffer(c2b); 
             buf += (first_sec - cbv_first_sec) << 9;
 
@@ -1602,7 +1602,7 @@ static void castle_bio_data_io_error(c_bvec_t *c_bvec, int err)
 
 static void castle_bio_c2b_update(c2_block_t *c2b)
 {
-    /* TODO: comment when it gets called */
+    /* @TODO: comment when it gets called */
     c_bvec_t *c_bvec = c2b->private;
 
     if(c2b_uptodate(c2b))
@@ -1627,7 +1627,7 @@ static void castle_bio_data_io_do(c_bvec_t *c_bvec, c_ext_pos_t cep)
      * Invalid pointer to on slave data means that it's never been written before.
      * Memset BIO buffer page to zero.
      * This should not happen on writes, since btree handling code should have 
-     * allocated a new block (TODO: what if we've just run out of capacity ...)
+     * allocated a new block (@TODO: what if we've just run out of capacity ...)
      */
     if(EXT_POS_INVAL(cep))
     {
@@ -1945,7 +1945,7 @@ struct castle_attachment* castle_attachment_init(int device, /* _or_object_colle
     if(!attachment)
         return NULL;
     init_rwsem(&attachment->lock);
-    attachment->ref_cnt = 1; // Use double put on detach
+    attachment->ref_cnt = 1; /* Use double put on detach */
     attachment->device  = device;
     attachment->version = version;
 
@@ -1960,7 +1960,7 @@ void castle_device_free(struct castle_attachment *cd)
 
     castle_printk("===> When freeing the number of cd users is: %d\n", cd->ref_cnt);
     castle_sysfs_device_del(cd);
-    /* TODO: Should this be done? blk_cleanup_queue(cd->dev.gd->rq); */ 
+    /* @TODO: Should this be done? blk_cleanup_queue(cd->dev.gd->rq); */ 
     del_gendisk(cd->dev.gd);
     put_disk(cd->dev.gd);
     list_del(&cd->list);
@@ -2010,8 +2010,8 @@ struct castle_attachment* castle_device_init(version_t version)
     err = castle_sysfs_device_add(dev);
     if(err) 
     {
-        /* TODO: this doesn't do bdput. device_free doesn't 
-                 do this neither, and it works ... */
+        /* @TODO: this doesn't do bdput. device_free doesn't 
+                  do this neither, and it works ... */
         del_gendisk(gd);
         list_del(&dev->list);
         goto error_out;

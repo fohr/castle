@@ -2495,7 +2495,7 @@ c2_block_t* _castle_cache_block_get(c_ext_pos_t cep, int nr_pages, int transient
         }
 
         /* If we couldn't find in the hash, try allocating from the freelists. Get c2b first. */ 
-        /* TODO: Return NULL if extent doesn't exist any more. Make sure this
+        /* @TODO: Return NULL if extent doesn't exist any more. Make sure this
          * doesnt break any of the clients. */
 #ifdef CASTLE_DEBUG
         {

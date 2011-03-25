@@ -883,7 +883,6 @@ static int castle_back_reply(struct castle_back_op *op, int err,
     debug("castle_back_reply op=%p, call_id=%d, err=%d, token=0x%x, length=%llu\n",
         op, op->req.call_id, err, token, length);
 
-    // TODO check with GM that this is in the correct place
     spin_lock(&conn->response_lock);
 
     memcpy(RING_GET_RESPONSE(back_ring, back_ring->rsp_prod_pvt), &resp, sizeof(resp));
@@ -891,12 +890,12 @@ static int castle_back_reply(struct castle_back_op *op, int err,
 
     RING_PUSH_RESPONSES_AND_CHECK_NOTIFY(back_ring, notify);
     
-    // Put op back on freelist
+    /* Put op back on freelist. */
     list_add(&op->list, &conn->free_ops);
     
     spin_unlock(&conn->response_lock);
 
-    // TODO if(notify)?
+    /* @TODO if (notify) ? */
     debug(">>>notifying user\n");
     set_bit(CASTLE_BACK_CONN_NOTIFY_BIT, &conn->flags);
     wake_up(&conn->wait);
@@ -1144,7 +1143,7 @@ static void castle_back_replace_data_copy(struct castle_object_replace *replace,
     if (op->req.replace.value_len == 0)
         return;
 
-    // TODO: actual zero copy!
+    /* @TODO: actual zero copy! */
 
     BUG_ON(op->buffer_offset + buffer_length > op->req.replace.value_len);
     
@@ -2045,7 +2044,7 @@ static void castle_back_big_put_complete(struct castle_object_replace *replace, 
     attachment = stateful_op->attachment;
     stateful_op->attachment = NULL;
 
-    // Will drop stateful_op->lock
+    /* Will drop stateful_op->lock. */
     castle_back_put_stateful_op(stateful_op->conn, stateful_op);
 
     castle_attachment_put(attachment);
@@ -2088,7 +2087,7 @@ static void castle_back_big_put_data_copy(struct castle_object_replace *replace,
     BUG_ON(op->req.tag != CASTLE_RING_PUT_CHUNK);
     BUG_ON(op->buffer_offset + buffer_length > op->req.put_chunk.buffer_len);
 
-    // TODO: actual zero copy!
+    /* @TODO: actual zero copy! */
 
     memcpy(buffer, castle_back_user_to_kernel(op->buf, op->req.put_chunk.buffer_ptr)
         + op->buffer_offset, buffer_length);
@@ -2116,7 +2115,7 @@ static void castle_back_big_put(void *data)
 
     debug("castle_back_big_put\n");
 
-    /* TODO: 0 indicates we don't know the length, but not supported yet */
+    /* @TODO: 0 indicates we don't know the length, but not supported yet */
     if (op->req.big_put.value_len <= MAX_INLINE_VAL_SIZE)
     {
         err = -EINVAL;

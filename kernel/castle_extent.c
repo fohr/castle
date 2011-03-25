@@ -86,7 +86,7 @@ typedef struct castle_extent {
     uint8_t             alive;
     c_ext_dirtylist_t   dirtylist;      /**< Extent c2b dirtylist */
     struct work_struct  work;           /**< work structure to schedule extent free. */
-    /* TODO: Ideally this work structure should be allcoated dynamically. kmalloc() cant be 
+    /* @TODO: Ideally this work structure should be allcoated dynamically. kmalloc() cant be 
      * called from light_put(). This could be allocated in extent_put() or extent_free(). */
     uint8_t             deleted;        /**< Marked when an extent is not refrenced by 
                                              anybody anymore. Safe to free it now. */
@@ -403,7 +403,7 @@ int castle_extents_create(void)
 
 int nr_exts = 0;
 
-/* TODO who should handle errors in writeback? */
+/* @TODO who should handle errors in writeback? */
 static int castle_extent_writeback(c_ext_t *ext, void *store)
 {
     struct castle_elist_entry mstore_entry;
@@ -2187,7 +2187,7 @@ restart:
 
     } while (1);
 
-    // NOTREACHED
+    /* NOTREACHED */
     BUG();
 
 out:

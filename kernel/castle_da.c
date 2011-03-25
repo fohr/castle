@@ -1597,7 +1597,7 @@ again:
     BUG_ON(j != iter->nr_cts);
 
     /* Initialise range queries for individual cts */
-    /* TODO: Better to re-organize the code, such that these iterators belong to
+    /* @TODO: Better to re-organize the code, such that these iterators belong to
      * merged iterator. Easy to manage resources - Talk to Gregor */
     for(i=0; i<iter->nr_cts; i++)
     {
@@ -1608,7 +1608,7 @@ again:
                                    ct_rq->ct,
                                    start_key,
                                    end_key);
-        /* TODO: handle errors! Don't know how to destroy ct_rq_iter ATM. */
+        /* @TODO: handle errors! Don't know how to destroy ct_rq_iter ATM. */
         BUG_ON(ct_rq->ct_rq_iter.err);
         iters[i]        = &ct_rq->ct_rq_iter;
         iter_types[i]   = &castle_btree_rq_iter;
@@ -1702,7 +1702,7 @@ struct castle_da_merge {
 };
 
 #define MAX_IOS             (1000) /* Arbitrary constants */
-/* TODO: Merges are now effectively always full throughput, because MIN is set high. */ 
+/* @TODO: Merges are now effectively always full throughput, because MIN is set high. */ 
 #define MIN_BUDGET_DELTA    (1000000)
 #define MAX_BUDGET          (1000000)
 #define BIG_MERGE           (0)
@@ -1851,7 +1851,7 @@ static void castle_da_iterator_destroy(struct castle_component_tree *tree,
     } else
     {
         /* For static trees, we are using immut iterator. */
-        /* TODO: do we need to do better resource release here? */
+        /* @TODO: do we need to do better resource release here? */
         castle_ct_immut_iter_cancel(iter);
         castle_free(iter);
     }
@@ -1896,7 +1896,7 @@ static void castle_da_iterator_create(struct castle_da_merge *merge,
             return;
         iter->tree = tree;
         castle_ct_immut_iter_init(iter, NULL, NULL);
-        /* TODO: after init errors? */
+        /* @TODO: after init errors? */
         *iter_p = iter;
     }
 }
@@ -2054,7 +2054,7 @@ static int castle_da_merge_extents_alloc(struct castle_da_merge *merge)
     /* ... factor of 2 explosion, just as before ... */
     internal_tree_size *= 2;
 
-    /* TODO: change the alignment back to the actual node size, once we worked
+    /* @TODO: change the alignment back to the actual node size, once we worked
              out which levels we'll be storing in this extent. */
     BUG_ON(!EXT_ID_INVAL(merge->internal_ext_free.ext_id) || 
            !EXT_ID_INVAL(merge->tree_ext_free.ext_id));
@@ -2962,7 +2962,7 @@ static int castle_da_merge_unit_do(struct castle_da_merge *merge, uint32_t unit_
     while(castle_ct_merged_iter_has_next(merge->merged_iter))
     {
         might_resched();
-        /* TODO: we never check iterator errors. We should! */
+        /* @TODO: we never check iterator errors. We should! */
         castle_perf_debug_getnstimeofday(&ts_start);
         castle_ct_merged_iter_next(merge->merged_iter, &key, &version, &cvt);
         castle_perf_debug_getnstimeofday(&ts_end);
@@ -5485,7 +5485,7 @@ static int castle_da_rwct_create(struct castle_double_array *da, int cpu_index, 
     {
         debug("Racing RWCT make on da=%d\n", da->id);
         while (castle_da_growing_rw_test(da))
-            msleep(1); // @TODO use out_of_line_wait_on_bit(_lock)() here instead
+            msleep(1); /* @TODO use out_of_line_wait_on_bit(_lock)() here instead */
         return -EAGAIN; 
     }
     ret = __castle_da_rwct_create(da, cpu_index, in_tran);

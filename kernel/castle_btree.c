@@ -467,7 +467,7 @@ static void* castle_batree_key_next(void *keyv)
 
     /* Finally allocate and return the successor key */
     succ = castle_malloc(sizeof(bakey_t), GFP_NOIO);
-    /* TODO: Should this be handled properly? */
+    /* @TODO: Should this be handled properly? */
     BUG_ON(!succ);
     memcpy(succ, key, sizeof(bakey_t));
     for (i=sizeof(bakey_t)-1; i >= 0; i--)
@@ -1237,7 +1237,7 @@ static void castle_vlba_tree_node_validate(struct castle_btree_node *node)
     uint32_t count;
     struct castle_vlba_tree_entry *prev_entry;
 
-    /* TODO: node_validate called in interrupt context, cannot kmalloc GFP_NOIO here */
+    /* @TODO: node_validate called in interrupt context, cannot kmalloc GFP_NOIO here */
     if(0 == 0)
         return;
     a = castle_malloc(sizeof(uint32_t) * node->used, GFP_NOIO);
@@ -2349,8 +2349,8 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
         }
 
         atomic64_inc(&c_bvec->tree->item_count);
-        /* TODO: should memset the page to zero (because we return zeros on reads)
-                 this can be done here, or beter still in _main.c, in data_copy */
+        /* @TODO: should memset the page to zero (because we return zeros on reads)
+                  this can be done here, or beter still in _main.c, in data_copy */
         debug("Need to insert (%p, 0x%x) into node (used: 0x%x, leaf=%d).\n",
                 key, version, node->used, node->is_leaf);
         BUG_ON(btree->key_compare(c_bvec->parent_key, btree->inv_key) == 0);
@@ -2597,7 +2597,7 @@ static void castle_btree_submit_io_end(c2_block_t *c2b)
 #ifdef CASTLE_DEBUG
     node = c_bvec_bnode(c_bvec);
     btree = castle_btree_type_get(node->type);
-    /* TODO: This function runs in interrupt context and node_validate might
+    /* @TODO: This function runs in interrupt context and node_validate might
      * block due to kmalloc() */
     btree->node_validate(node);
 #endif
@@ -2750,7 +2750,7 @@ static void castle_btree_iter_end(c_iter_t *c_iter, int err)
     castle_btree_iter_version_key_dealloc(c_iter);
     castle_btree_iter_path_put(c_iter, 0);
 
-    /* TODO: this will not work well for double frees/double ends, fix that */
+    /* @TODO: this will not work well for double frees/double ends, fix that */
     if(c_iter->indirect_nodes)
     {
         castle_vfree(c_iter->indirect_nodes);
@@ -3813,7 +3813,7 @@ void castle_btree_enum_init(c_enum_t *c_enum)
     leaf_node_size = btype->node_size(ct, 0);
     /* We no longer need to support multiple iterators, this should simplify a lot of
        this code.
-        TODO: go through it all and remove unneccessary code */
+        @TODO: go through it all and remove unneccessary code */
     c_enum->err            = 0;
     init_waitqueue_head(&c_enum->iterator_wq);
     c_enum->iterator_outs  = 0;
@@ -4077,7 +4077,7 @@ void castle_btree_rq_enum_init(c_rq_enum_t *rq_enum, version_t version,
     rq_debug("New Iterator - %p\n", iter);
 
     return;
-    /* TODO: do we need to handle out of memory condidions better than with BUG_ON? */
+    /* @TODO: do we need to handle out of memory condidions better than with BUG_ON? */
 #if 0
 no_mem:
     rq_enum->err = -ENOMEM;
@@ -4091,7 +4091,7 @@ static void castle_btree_rq_enum_buffer_switch(c_rq_enum_t *rq_enum)
        this prevents problems when the iterator below hasn't returned anything
        in the range we are interested in (double buffer swap will start invalidating
        the memory area used by the key pointer returned by previous _next()) */
-    /* TODO: check if enumerator also suffers from the same problem */
+    /* @TODO: check if enumerator also suffers from the same problem */
     if(rq_enum->prod_idx > 0)
     {
         if (rq_enum->prod_buf->list.next == &rq_enum->prod_buf->list)
