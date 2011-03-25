@@ -46,6 +46,7 @@ static inline ATTRIB_NORET void bug_fn(char *file, unsigned long line)
                                                 PRINTKS_IN_BURST))                  \
                                             printk(_f, ##_a); } while(0)
 #define FLE strrchr(__FILE__, '/') ? strrchr(__FILE__, '/') + 1 : __FILE__ 
+#pragma GCC poison printk
 
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,18)
 #define CASTLE_INIT_WORK(_work, _func) INIT_WORK((_work), (void (*)(void *)) (_func), (void *) (_work))
