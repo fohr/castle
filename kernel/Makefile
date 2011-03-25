@@ -25,7 +25,6 @@ endif
 
 EXTRA_CFLAGS += $(DEBFLAGS)
 EXTRA_CFLAGS += -I..
-EXTRA_CFLAGS += -mfpmath=sse
 
 KVER       ?= $(shell uname -r)
 KERNEL_DIR ?= /lib/modules/$(KVER)/build
