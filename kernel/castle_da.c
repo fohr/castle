@@ -4177,22 +4177,16 @@ static int castle_da_ct_dec_cmp(struct list_head *l1, struct list_head *l2)
 /**
  * Calculate hash of userland key (okey) length key_len and modulo for cpu_index.
  *
- * @FIXME Currently hashes just the first dimension of the key which will not
- *        be terribly even in distributing load among the btrees under certain
- *        circumstances.  This will likely go away when we hash the bkey as part
- *        of the T0 hash refactoring that is scheduled.
- *
  * @return  Offset into request_cpus.cpus[]
  */
 int castle_double_array_okey_cpu_index(c_vl_okey_t *okey, uint32_t key_len)
 {
-    if (likely(okey->nr_dims > 0))
-        return murmur_hash_32(okey->dims[0],
-                              okey->dims[0]->length,
-                              (uint32_t)0x0)
-            % castle_double_array_request_cpus();
-    else
-        return 0;
+    int i, seed = 0;
+
+    for (i = 0; i < okey->nr_dims; i++)
+        seed = murmur_hash_32(okey->dims[i], okey->dims[i]->length, seed);
+
+    return seed % castle_double_array_request_cpus();
 }
 
 /**
