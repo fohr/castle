@@ -12,6 +12,7 @@
 #include "castle_cache.h"
 #include "castle_events.h"
 #include "castle_ctrl.h"
+#include "castle_btree.h"
 
 //#define DEBUG
 #ifndef DEBUG
@@ -1149,6 +1150,9 @@ int castle_versions_init(void)
 {
     int ret;
 
+    /* Check that the version limit is set correctly (i.e. below the number of
+       entries we are guanateed to fit into leaf nodes). */
+    BUG_ON(castle_btree_vlba_max_nr_entries_get(VLBA_HDD_RO_TREE_NODE_SIZE) < CASTLE_VERSIONS_MAX);
     ret = -ENOMEM;
     castle_versions_cache = kmem_cache_create("castle_versions",
                                                sizeof(struct castle_version),

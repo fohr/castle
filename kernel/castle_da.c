@@ -46,9 +46,6 @@
                                         _f, __FILE__, __LINE__ , da->id, level, ##_a))
 #endif
 
-#define VLBA_HDD_RO_TREE_NODE_SIZE      (64)  /**< Size of the default RO tree node size. */
-#define VLBA_SSD_RO_TREE_NODE_SIZE      (2)   /**< Size of the RO tree node size on SSDs. */
-
 #define MAX_DYNAMIC_TREE_SIZE           (20) /* In C_CHK_SIZE. */
 #define MAX_DYNAMIC_DATA_SIZE           (20) /* In C_CHK_SIZE. */
 

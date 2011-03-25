@@ -494,6 +494,8 @@ enum {
                                                           For example castle_clist_entry.
                                                           If modified, those need to be reviewed. 
                                                       */ 
+#define VLBA_HDD_RO_TREE_NODE_SIZE      (64)  /**< Size of the default RO tree node size. */
+#define VLBA_SSD_RO_TREE_NODE_SIZE      (2)   /**< Size of the RO tree node size on SSDs. */
 
 typedef uint8_t btree_t;
 
