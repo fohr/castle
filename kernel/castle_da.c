@@ -4182,8 +4182,8 @@ static int castle_da_ct_dec_cmp(struct list_head *l1, struct list_head *l2)
  */
 int castle_double_array_okey_cpu_index(c_vl_okey_t *okey, uint32_t key_len)
 {
-    int i;
     uint32_t seed = 0;
+    int i;
 
     for (i = 0; i < okey->nr_dims; i++)
         seed = murmur_hash_32(okey->dims[i], okey->dims[i]->length, seed);
