@@ -2693,6 +2693,7 @@ static int castle_back_work_do(void *data)
     int more;
     RING_IDX cons, rp;
     struct castle_back_op *op;
+    uint32_t ring_size = __RING_SIZE(back_ring->sring, CASTLE_RING_SIZE);
     
     debug("castle_back: doing work for conn = %p.\n", conn);
 
@@ -2705,6 +2706,12 @@ static int castle_back_work_do(void *data)
 
         while ((cons = back_ring->req_cons) != rp)
         {
+            if (rp - cons > ring_size)
+            {
+                castle_printk("Detected ring corruption, skipping ring contents.\n");
+                back_ring->req_cons = rp;
+                break;
+            }
             spin_lock(&conn->response_lock);
             BUG_ON(list_empty(&conn->free_ops));
             op = list_entry(conn->free_ops.next, struct castle_back_op, list);
