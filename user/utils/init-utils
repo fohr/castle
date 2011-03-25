@@ -150,7 +150,7 @@ function load_fs_and_claim {
     modulehash=$(sha1sum /lib/modules/$(uname -r)/extra/castle/castle-fs.ko | cut -f1 -d' ')
     castle-cli environment buildid "$buildid"
     castle-cli environment modulehash "$modulehash"
-    castle-cli environment hostname $(hostname -s)
+    castle-cli environment hostname $(hostname | cut -d. -f1)
     if [ -e /etc/acunu/status_description.txt ]
     then
         description=$(cat /etc/acunu/status_description.txt)
