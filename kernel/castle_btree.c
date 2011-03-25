@@ -751,7 +751,9 @@ struct castle_vlba_tree_node {
  */
 uint32_t castle_btree_vlba_max_nr_entries_get(uint16_t node_size)
 {
-    return (((size_t)node_size) * PAGE_SIZE - sizeof(struct castle_btree_node))
+    return (((size_t)node_size) * PAGE_SIZE -
+             sizeof(struct castle_btree_node) -
+             sizeof(struct castle_vlba_tree_node))
                  / MAX_VLBA_ENTRY_LENGTH;
 }
 
