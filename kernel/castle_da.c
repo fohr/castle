@@ -76,7 +76,7 @@ module_param(castle_dynamic_driver_merge, int, S_IRUSR | S_IWUSR | S_IRGRP | S_I
 MODULE_PARM_DESC(castle_dynamic_driver_merge, "Dynamic driver merge");
 
 /* set to 0 to disable using SSDs for btree leaf nodes */
-static int                      castle_use_ssd_leaf_nodes = 1;
+static int                      castle_use_ssd_leaf_nodes = 0;
 
 module_param(castle_use_ssd_leaf_nodes, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
 MODULE_PARM_DESC(castle_use_ssd_leaf_nodes, "Use SSDs for btree leaf nodes");
