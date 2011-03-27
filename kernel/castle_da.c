@@ -46,8 +46,9 @@
                                         _f, __FILE__, __LINE__ , da->id, level, ##_a))
 #endif
 
-#define MAX_DYNAMIC_TREE_SIZE           (20) /* In C_CHK_SIZE. */
-#define MAX_DYNAMIC_DATA_SIZE           (20) /* In C_CHK_SIZE. */
+#define MAX_DYNAMIC_INTERNAL_SIZE       (5)     /* In C_CHK_SIZE. */
+#define MAX_DYNAMIC_TREE_SIZE           (20)    /* In C_CHK_SIZE. */
+#define MAX_DYNAMIC_DATA_SIZE           (20)    /* In C_CHK_SIZE. */
 
 #define CASTLE_DA_HASH_SIZE             (1000)
 #define CASTLE_CT_HASH_SIZE             (4000)
@@ -276,15 +277,14 @@ static int castle_ct_immut_iter_entry_find(c_immut_iter_t *iter,
  * @param iter  Iterator to update
  * @param node  Proposed next node
  *
- * @return 0    Node is not leaf or has no entries.
- * @return 1    Node is leaf and has entries.
+ * @return 0    Node has no entries.
+ * @return 1    Node has entries.
  */
 static int castle_ct_immut_iter_next_node_init(c_immut_iter_t *iter,
                                                struct castle_btree_node *node)
 {
-    /* Non-leaf nodes do not contain any entries for the enumerator, continue straight through */
-    if(!node->is_leaf)
-        return 0;
+    /* We should never encounter a non-leaf node. */
+    BUG_ON(!node->is_leaf);
 
     /* Non-dynamic trees do not contain leaf pointers => the node must be non-empty, 
        and will not contain leaf pointers */
@@ -302,6 +302,36 @@ static int castle_ct_immut_iter_next_node_init(c_immut_iter_t *iter,
         return 1;
 
     return 0;
+}
+
+/**
+ * Returns the extent position of the next leaf node after the cep specified.
+ * If one isn't avilable it returns the invalid position.
+ */
+static c_ext_pos_t castle_ct_immut_iter_next_node_cep_find(c_immut_iter_t *iter,
+                                                           c_ext_pos_t cep,
+                                                           uint16_t node_size)
+{
+    uint16_t btree_node_size;
+
+    if(EXT_POS_INVAL(cep))
+        return INVAL_EXT_POS;
+
+    /* We should only be inspecting leaf nodes, work out the node size. */ 
+    btree_node_size = iter->btree->node_size(iter->tree, 0); 
+    
+    /* Work out the position of the next node. */
+    cep.offset += ((c_byte_off_t)node_size) * C_BLK_SIZE;
+    
+    /* If this cep is past the extent allocation end, return invalid cep. */
+    if(cep.offset >= atomic64_read(&iter->tree->tree_ext_free.used))
+        return INVAL_EXT_POS;
+    
+    /* Make sure that node size provided agrees with leaf node size worked out. */
+    BUG_ON(btree_node_size != node_size);
+
+    /* Otherwise return the cep. */
+    return cep;
 }
 
 /**
@@ -355,11 +385,10 @@ static void castle_ct_immut_iter_next_node_find(c_immut_iter_t *iter,
             iter->next_c2b = c2b;
             return;
         }
-        cep = node->next_node;
-        node_size = node->next_node_size;
+        cep = castle_ct_immut_iter_next_node_cep_find(iter, cep, node_size);
         debug("Node non-leaf or no non-leaf-ptr entries, moving to " cep_fmt_str_nl, 
                cep2str(cep));
-    } 
+    }
     /* Drop c2b if we failed to find a leaf node, but have an outstanding reference to 
        a non-leaf node */
     if(c2b)
@@ -402,10 +431,13 @@ static void castle_ct_immut_iter_next_node(c_immut_iter_t *iter)
     if (iter->node_start)
         iter->node_start(iter);
 
-    /* Find next c2b following the list pointers */
+    /* Find next c2b following the extent order. */
     iter->next_c2b = NULL;
-    castle_ct_immut_iter_next_node_find(iter, 
-                                        iter->curr_node->next_node,
+    castle_ct_immut_iter_next_node_find(iter,
+                                        castle_ct_immut_iter_next_node_cep_find(
+                                            iter,
+                                            iter->curr_c2b->cep,
+                                            iter->curr_node->next_node_size),
                                         iter->curr_node->next_node_size);
 }
 
@@ -465,6 +497,9 @@ static void castle_ct_immut_iter_init(c_immut_iter_t *iter,
                                       castle_immut_iter_node_start node_start,
                                       void *private)
 {
+    c_ext_pos_t first_node_cep;
+    uint16_t first_node_size;
+
     debug("Initialising immut enumerator for ct id=%d\n", iter->tree->seq);
     iter->btree     = castle_btree_type_get(iter->tree->btree_type);
     iter->completed = 0;
@@ -472,9 +507,13 @@ static void castle_ct_immut_iter_init(c_immut_iter_t *iter,
     iter->next_c2b  = NULL;
     iter->node_start= node_start;
     iter->private   = private;
+
+    first_node_cep.ext_id = iter->tree->tree_ext_free.ext_id;
+    first_node_cep.offset = 0;
+    first_node_size = iter->btree->node_size(iter->tree, 0);
     castle_ct_immut_iter_next_node_find(iter, 
-                                        iter->tree->first_node,
-                                        iter->tree->first_node_size);
+                                        first_node_cep,
+                                        first_node_size);
     /* Check if we succeeded at finding at least a single node */
     BUG_ON(!iter->next_c2b);
     /* Init curr_c2b correctly */
@@ -1675,7 +1714,9 @@ struct castle_da_merge {
     struct work_struct            work;
     int                           budget_cons_rate;
     int                           budget_cons_units;
-    int                           ssds_used;       /**< set to true if at least some btree
+    int                           leafs_on_ssds;       /**< set to true if leaf btree
+                                                        nodes will be stored on SSDs.   */
+    int                           internals_on_ssds;   /**< set to true if internal btree
                                                         nodes will be stored on SSDs.   */
     c_ext_free_t                  internal_ext_free;
     c_ext_free_t                  tree_ext_free;
@@ -2054,39 +2095,60 @@ static int castle_da_merge_extents_alloc(struct castle_da_merge *merge)
     internal_tree_size  = MASK_CHK_OFFSET(internal_tree_size + C_CHK_SIZE);
     /* ... factor of 2 explosion, just as before ... */
     internal_tree_size *= 2;
+    /* NOTE: Internal nodes on HDDs will always require less space than internal nodes
+       on SSDs, because the overheads are smaller (node headers amortised between greater
+       number of entries in the node). */
 
     /* @TODO: change the alignment back to the actual node size, once we worked
              out which levels we'll be storing in this extent. */
     BUG_ON(!EXT_ID_INVAL(merge->internal_ext_free.ext_id) || 
            !EXT_ID_INVAL(merge->tree_ext_free.ext_id));
-    /* Assume that SSDs will be used first. */
-    merge->ssds_used = 1;
-    /* First, attempt to allocate an SSD extent for the entire tree. */
-    if (castle_use_ssd_leaf_nodes)
-    {
-        merge->tree_ext_free.ext_id = castle_extent_alloc(SSD_RDA,
+
+    /* Attempt to allocate an SSD extent for internal nodes. */
+    merge->internals_on_ssds = 1;
+    merge->internal_ext_free.ext_id = castle_extent_alloc(SSD_RDA,
                                                           merge->da->id,
-                                                          CHUNK(tree_size));
-    }
-    /* If failed or disabled, try to allocate SSD extent for the internal nodes. */
-    if(EXT_ID_INVAL(merge->tree_ext_free.ext_id))
+                                                          CHUNK(internal_tree_size));
+    if (EXT_ID_INVAL(merge->internal_ext_free.ext_id))
     {
-        merge->internal_ext_free.ext_id = castle_extent_alloc(SSD_RDA,
+        /* FAILED to allocate internal node SSD extent.
+         * ATTEMPT to allocate internal node HDD extent. */
+        merge->internals_on_ssds = 0;
+        merge->internal_ext_free.ext_id = castle_extent_alloc(DEFAULT_RDA,
                                                               merge->da->id,
-                                                              CHUNK(internal_tree_size));
-        /* If the internal nodes extent is still invalid, we failed to
-           allocate from SSDs. */
-        if(EXT_ID_INVAL(merge->internal_ext_free.ext_id))
-            merge->ssds_used = 0;
-        /* HDD extent has to be allocated. */
+                                                              CHUNK(tree_size));
+        if (EXT_ID_INVAL(merge->internal_ext_free.ext_id))
+        {
+            /* FAILED to allocate internal node HDD extent. */
+            castle_printk("Merge failed due to space constraint for internal node tree.\n");
+            goto no_space;
+        }
+    }
+    else
+    {
+        /* SUCCEEDED allocating internal node SSD extent.
+         * ATTEMPT to allocate leaf node SSD extent, but only if explicitly requested. */
+        if(castle_use_ssd_leaf_nodes)
+            merge->tree_ext_free.ext_id = castle_extent_alloc(SSD_RDA,
+                                                              merge->da->id,
+                                                              CHUNK(tree_size));
+    }
+
+    merge->leafs_on_ssds = 1;
+    if (EXT_ID_INVAL(merge->tree_ext_free.ext_id))
+    {
+        /* FAILED to allocate leaf node SSD extent.
+         * ATTEMPT to allocate leaf node HDD extent. */
+        merge->leafs_on_ssds = 0;
         merge->tree_ext_free.ext_id = castle_extent_alloc(DEFAULT_RDA,
                                                           merge->da->id,
                                                           CHUNK(tree_size));
     }
-    /* If the tree extent is still invalid, there is no space even on HDDs, go out. */
-    if(EXT_ID_INVAL(merge->tree_ext_free.ext_id))
+
+    if (EXT_ID_INVAL(merge->tree_ext_free.ext_id))
     {
-        castle_printk("Merge failed due to space constraint for tree\n");
+        /* FAILED to allocate leaf node HDD extent. */
+        castle_printk("Merge failed due to space constraint for leaf node tree.\n");
         goto no_space;
     }
 
@@ -2252,33 +2314,28 @@ static inline void castle_da_merge_node_info_get(struct castle_da_merge *merge,
                                                  uint16_t *node_size,
                                                  c_ext_free_t **ext_free)
 {
-    /* Initialise the return variables, assuming that nodes will be stored on HDDs. */
-    *node_size = VLBA_HDD_RO_TREE_NODE_SIZE;
-    *ext_free = &merge->tree_ext_free;
-
-    /* If SSDs are not used, the node must be on HDDs. */
-    if(!merge->ssds_used)
+    /* If level is zero, we are allocating from tree_ext. Size depends on whether the
+       extent is on SSDs or HDDs. */ 
+    if(level > 0)
     {
-        /* There shouldn't be an extent for internal nodes if SSDs aren't used. */
-        BUG_ON(!EXT_ID_INVAL(merge->internal_ext_free.ext_id));
-        return;
-    }
-    
-    /* SSDs are used, but the node may still live on HDDs, but only if there is a 
-       separate extent for internal nodes, and level is 0 (leaf). */
-    if(!EXT_ID_INVAL(merge->internal_ext_free.ext_id) && (level == 0))
-    {
-        /* There should be an extent for leaf nodes on HDDs. */
-        BUG_ON(EXT_ID_INVAL(merge->tree_ext_free.ext_id));
-        return;
-    }
-
-    /* Node must be stored on SSDs. Change the size appropriately. */
-    *node_size = VLBA_SSD_RO_TREE_NODE_SIZE;
-
-    /* Internal nodes extent should be used if it exists, and level>0. */
-    if(!EXT_ID_INVAL(merge->internal_ext_free.ext_id) && (level > 0))
+        /* Internal nodes extent should always exist. */
+        BUG_ON(EXT_ID_INVAL(merge->internal_ext_free.ext_id));
         *ext_free = &merge->internal_ext_free;
+        if(merge->internals_on_ssds)
+            *node_size = VLBA_SSD_RO_TREE_NODE_SIZE;
+        else
+            *node_size = VLBA_HDD_RO_TREE_NODE_SIZE;
+        return;
+    }
+
+    BUG_ON(level != 0);
+    /* Leaf nodes extent should always exist. */
+    BUG_ON(EXT_ID_INVAL(merge->tree_ext_free.ext_id));
+    *ext_free = &merge->tree_ext_free;
+    if(merge->leafs_on_ssds)
+        *node_size = VLBA_SSD_RO_TREE_NODE_SIZE;
+    else
+        *node_size = VLBA_HDD_RO_TREE_NODE_SIZE;
 }
 
 /**
@@ -5391,7 +5448,15 @@ static int __castle_da_rwct_create(struct castle_double_array *da, int cpu_index
     BUG_ON(sizeof(ct->seq) != 4);
     ct->seq = (cpu_index << TREE_SEQ_SHIFT) + ct->seq;
 
-    /* Allocate data and btree extents. */
+    /* Allocate internal, btree and data extents. */
+    if ((err = castle_new_ext_freespace_init(&ct->internal_ext_free,
+                                             da->id,
+                                             MAX_DYNAMIC_TREE_SIZE * C_CHK_SIZE,
+                                             btree->node_size(ct, 0) * C_BLK_SIZE)))
+    {
+        castle_printk("Failed to get space for T0 internal\n");
+        goto no_space;
+    }
     if ((err = castle_new_ext_freespace_init(&ct->tree_ext_free,
                                               da->id,
                                               MAX_DYNAMIC_TREE_SIZE * C_CHK_SIZE,
@@ -5400,7 +5465,6 @@ static int __castle_da_rwct_create(struct castle_double_array *da, int cpu_index
         castle_printk("Failed to get space for T0 tree\n");
         goto no_space;
     }
-
     if ((err = castle_new_ext_freespace_init(&ct->data_ext_free,
                                               da->id,
                                               MAX_DYNAMIC_DATA_SIZE * C_CHK_SIZE,
@@ -5411,6 +5475,7 @@ static int __castle_da_rwct_create(struct castle_double_array *da, int cpu_index
     }
 
     /* Create a root node for this tree, and update the root version */
+    ct->tree_depth = 0;
     c2b = castle_btree_node_create(ct,
                                    0 /* version */,
                                    0 /* level */,
@@ -5713,7 +5778,7 @@ static struct castle_component_tree* castle_da_rwct_acquire(struct castle_double
     uint64_t value_len, req_btree_space, req_medium_space;
     struct castle_component_tree *ct;
     struct castle_btree_type *btree;
-    int nr_nodes, ret;
+    int ret;
 
     BUG_ON(c_bvec_data_dir(c_bvec) != WRITE);
 
@@ -5726,13 +5791,13 @@ again:
 
     /* Attempt to preallocate space in the btree and m-obj extents for writes. */
     btree = castle_btree_type_get(ct->btree_type);
-    /* Allocate worst case number of nodes we may need to create for this write. */
-    nr_nodes = (2 * ct->tree_depth + 3);
-    req_btree_space = nr_nodes * btree->node_size(ct, 0) * C_BLK_SIZE;
+    /* We may have to create up to 2 new leaf nodes in this write. Preallocate
+       the space for this. */
+    req_btree_space = 2 * btree->node_size(ct, 0) * C_BLK_SIZE;
     if (castle_ext_freespace_prealloc(&ct->tree_ext_free, req_btree_space) < 0)
         goto new_ct;
     /* Save how many nodes we've pre-allocated. */
-    atomic_set(&c_bvec->reserv_nodes, nr_nodes);
+    atomic_set(&c_bvec->reserv_nodes, 2);
 
     /* Pre-allocate space for Medium objects. */
     value_len = c_bvec->c_bio->replace->value_len;
