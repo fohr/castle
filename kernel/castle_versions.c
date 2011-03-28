@@ -64,12 +64,12 @@ struct castle_version {
     da_id_t          da_id;
     c_byte_off_t     size;
 
-    /* Lists for storing versions the hash table & the init list*/
-    struct list_head hash_list; 
+    struct list_head hash_list;          /**< List for hash table, protected by hash lock. */
     unsigned long    flags;
-    union {
-        struct list_head init_list;
-        struct list_head free_list;
+    union {                              /**< All lists in this union are protected by the
+                                              ctrl mutex. */
+        struct list_head init_list;      /**< Used when the version is being initialised. */
+        struct list_head free_list;      /**< Uesd when the version is being removed. */
     };
     struct list_head del_list;
 };
@@ -392,10 +392,18 @@ out:
  */
 int castle_version_delete(version_t version)
 {
-    struct castle_version *v, *p, *sybling;
+    struct castle_version *v, *p, *n, *d, *sybling;
     struct list_head *pos;
     da_id_t da_id;
+    int children_first, event_vs_idx;
+    version_t *event_vs;
 
+    /* Allocate memory for event notifications before taking the spinlock. */
+    event_vs = castle_vmalloc(sizeof(version_t) * CASTLE_VERSIONS_MAX);
+    if(!event_vs)
+        castle_printk("Cannot allocate memory to notify of version deletions.\n");
+
+    /* Lock. */
     write_lock_irq(&castle_versions_hash_lock);
 
     v = __castle_versions_hash_get(version);
@@ -441,7 +449,8 @@ int castle_version_delete(version_t version)
         {
             /* Don't mark P as leaf if any of the children are non-leafs or
              * alive. */
-            if (!test_bit(CV_LEAF_BIT, &sybling->flags) || !test_bit(CV_DELETED_BIT, &sybling->flags))
+            if (!test_bit(CV_LEAF_BIT, &sybling->flags) ||
+                !test_bit(CV_DELETED_BIT, &sybling->flags))
             {
                 debug("Version %d is still parent of %d\n", p->version, sybling->version);
                 break;
@@ -461,9 +470,60 @@ int castle_version_delete(version_t version)
         v = p;
     }
 
+    /* Collect all live children versions, for which we need to send the notifications. */
+    d = v = __castle_versions_hash_get(version);
+    event_vs_idx = 0;
+    children_first = !test_bit(CV_LEAF_BIT, &v->flags);
+    /* Keep walking until 'v' goes back to the root of the subtree, by which time
+       children_first will not be set. */
+    while((v != d) || children_first)
+    {
+        /* Select the next node in the following order of preference:
+           If children_first is true (i.e. we are trying to walk down the tree)
+           - first child, if child is deleted
+           - next sybling
+           - parent
+           If child first is false
+           - next sybling
+           - parent
+           This walk approximates the DFS walk to assign order numbers in
+           castle_versions_process().
+         */
+        n = NULL;
+        if(children_first)
+            n = v->first_child;
+        children_first = 1;
+        if(!n)
+            n = v->next_sybling;
+        if(!n)
+        {
+            n = v->parent;
+            BUG_ON(!n);
+            BUG_ON(!test_bit(CV_DELETED_BIT, &n->flags));
+            /* Stop the walk from gowing down the tree, if we are going back to the parent. */
+            children_first = 0;
+        }
+        /* Next version must always exist, at the end of the walk we'll get back to 'd'. */
+        BUG_ON(!n);
+        /* Stop the walk from going down the tree, if 'n' is not deleted. */
+        if(!test_bit(CV_DELETED_BIT, &n->flags))
+        {
+            children_first = 0;
+            /* Add next version to the list of notifications. */
+            BUG_ON(event_vs_idx >= CASTLE_VERSIONS_MAX);
+            if(event_vs)
+                event_vs[event_vs_idx++] = n->version;
+        }
+        v = n;
+    }
+
     write_unlock_irq(&castle_versions_hash_lock);
 
     castle_sysfs_version_del(version);
+    for(event_vs_idx--; event_vs_idx >= 0; event_vs_idx--)
+        castle_events_version_changed(event_vs[event_vs_idx]);
+    if(event_vs)
+        castle_vfree(event_vs);
 
     castle_da_version_delete(da_id);
 

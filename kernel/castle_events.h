@@ -38,6 +38,10 @@ void castle_uevent1(uint16_t cmd, uint64_t arg1);
 #define castle_events_version_create(_version_id) \
     castle_uevent2(CASTLE_CTRL_CREATE, CASTLE_EVENTS_SUCCESS, _version_id)
 
+/* Version changed event piggybacks on CREATE id. */
+#define castle_events_version_changed(_version_id) \
+    castle_uevent2(CASTLE_CTRL_CREATE, CASTLE_EVENTS_SUCCESS, _version_id)
+
 #define castle_events_version_destroy(_version_id) \
     castle_uevent2(CASTLE_CTRL_DESTROY, CASTLE_EVENTS_SUCCESS, _version_id)
 
