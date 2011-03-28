@@ -321,7 +321,7 @@ static c_ext_pos_t castle_ct_immut_iter_next_node_cep_find(c_immut_iter_t *iter,
     btree_node_size = iter->btree->node_size(iter->tree, 0); 
     
     /* Work out the position of the next node. */
-    cep.offset += ((c_byte_off_t)node_size) * C_BLK_SIZE;
+    cep.offset += ((c_byte_off_t)btree_node_size) * C_BLK_SIZE;
     
     /* If this cep is past the extent allocation end, return invalid cep. */
     if(cep.offset >= atomic64_read(&iter->tree->tree_ext_free.used))
@@ -402,6 +402,8 @@ static void castle_ct_immut_iter_next_node_find(c_immut_iter_t *iter,
  */
 static void castle_ct_immut_iter_next_node(c_immut_iter_t *iter)
 {
+    uint16_t node_size;
+
     BUG_ON(!iter->next_c2b);
     /* Drop the current c2b, if one exists. */
     if(iter->curr_c2b)
@@ -411,7 +413,8 @@ static void castle_ct_immut_iter_next_node(c_immut_iter_t *iter)
         put_c2b(iter->curr_c2b);
     }
     /* next_c2b becomes curr_c2b */ 
-    iter->curr_c2b  = iter->next_c2b;
+    iter->curr_c2b = iter->next_c2b;
+    node_size = iter->curr_c2b->nr_pages;
     BUG_ON(!c2b_uptodate(iter->curr_c2b));
     iter->curr_node = c2b_bnode(iter->curr_c2b); 
     if(!iter->curr_node->is_leaf ||
@@ -437,8 +440,8 @@ static void castle_ct_immut_iter_next_node(c_immut_iter_t *iter)
                                         castle_ct_immut_iter_next_node_cep_find(
                                             iter,
                                             iter->curr_c2b->cep,
-                                            iter->curr_node->next_node_size),
-                                        iter->curr_node->next_node_size);
+                                            node_size),
+                                        node_size);
 }
 
 static void castle_ct_immut_iter_next(c_immut_iter_t *iter, 
