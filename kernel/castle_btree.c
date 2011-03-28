@@ -1799,8 +1799,12 @@ static int castle_btree_node_space_get(struct castle_component_tree *ct,
 /**
  * DA code preallocated space for the leafs, but not for the internal nodes.
  */
-static int castle_btree_node_was_preallocated(uint16_t rev_level)
+static int castle_btree_node_was_preallocated(struct castle_component_tree *ct, uint16_t rev_level)
 {
+    /* Block allocations are never preallocated. */
+    if(ct == &castle_global_tree)
+        return 0;
+
     return (rev_level == 0 ? 1 : 0);
 }
 
@@ -1952,7 +1956,7 @@ static c2_block_t* castle_btree_effective_node_create(struct castle_component_tr
 
     /* Effective node is not same as original node - allocate space on the disk
      * now and copy. */
-    was_preallocated = castle_btree_node_was_preallocated(rev_level);
+    was_preallocated = castle_btree_node_was_preallocated(c_bvec->tree, rev_level);
     if(was_preallocated)
         atomic_dec(&c_bvec->reserv_nodes);
     c2b = castle_btree_node_create(c_bvec->tree, 
@@ -1989,7 +1993,7 @@ static c2_block_t* castle_btree_node_key_split(c_bvec_t *c_bvec,
     btree     = castle_btree_type_get(ct->btree_type);
     node_size = btree->node_size(ct, rev_level);
     was_preallocated 
-              = castle_btree_node_was_preallocated(rev_level);
+              = castle_btree_node_was_preallocated(c_bvec->tree, rev_level);
     c2b       = castle_btree_node_create(ct, 
                                          node->version, 
                                          rev_level, 
@@ -2134,7 +2138,7 @@ static void castle_btree_new_root_create(c_bvec_t *c_bvec, btree_t type)
             c_bvec->version);
     BUG_ON(c_bvec->btree_parent_node);
     /* Internal nodes (and the root node always is), are never preallocated. */
-    BUG_ON(castle_btree_node_was_preallocated(ct->tree_depth));
+    BUG_ON(castle_btree_node_was_preallocated(c_bvec->tree, ct->tree_depth));
     /* Create the node */
     c2b = castle_btree_node_create(ct,
                                    0              /* version */,
