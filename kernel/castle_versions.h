@@ -8,6 +8,7 @@ void         castle_version_detach      (version_t version);
 int          castle_version_read        (version_t version, 
                                          da_id_t *da,
                                          version_t *parent,
+                                         version_t *live_parent,
                                          c_byte_off_t *size,
                                          int *leaf);
 da_id_t      castle_version_da_id_get   (version_t version);
@@ -21,7 +22,8 @@ int          castle_version_tree_delete (version_t version);
 int          castle_version_delete      (version_t version);
 int          castle_version_deleted     (version_t version);
 int          castle_version_attached    (version_t version);
-int          castle_version_is_deletable(struct castle_version_delete_state *state, version_t version);
+int          castle_version_is_deletable(struct castle_version_delete_state *state,
+                                         version_t version);
 
 int          castle_versions_read       (void);
 int          castle_versions_init       (void);

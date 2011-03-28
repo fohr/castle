@@ -6056,7 +6056,7 @@ void castle_double_array_submit(c_bvec_t *c_bvec)
 
     down_read(&att->lock);
     /* Since the version is attached, it must be found */
-    BUG_ON(castle_version_read(att->version, &da_id, NULL, NULL, NULL));
+    BUG_ON(castle_version_read(att->version, &da_id, NULL, NULL, NULL, NULL));
     up_read(&att->lock);
 
     da = castle_da_hash_get(da_id);

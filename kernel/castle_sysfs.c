@@ -82,7 +82,7 @@ static ssize_t versions_list_show(struct kobject *kobj,
                 container_of(attr, struct castle_sysfs_entry, attr);
     struct castle_sysfs_version *v =
                 container_of(csys_entry, struct castle_sysfs_version, csys_entry);
-    version_t parent;
+    version_t live_parent;
     c_byte_off_t size;
     ssize_t len;
     int leaf;
@@ -90,11 +90,11 @@ static ssize_t versions_list_show(struct kobject *kobj,
     c_byte_off_t phys_size = 0;
     da_id_t da_id;
 
-    ret = castle_version_read(v->version, &da_id, &parent, &size, &leaf);
+    ret = castle_version_read(v->version, &da_id, NULL, &live_parent, &size, &leaf);
     if(ret == 0)
     {
 		/* Work out the size for DA roots. */
-	    if ((parent == 0) && !DA_INVAL(da_id))
+	    if ((live_parent == 0) && !DA_INVAL(da_id))
 		    castle_double_array_size_get(da_id, &phys_size);
 
         len = sprintf(buf,
@@ -104,7 +104,7 @@ static ssize_t versions_list_show(struct kobject *kobj,
                 "PhysicalSize: %llu\n"
                 "IsLeaf: %d\n",
                  v->version, 
-                 parent, 
+                 live_parent,
                  size,
                  phys_size * C_CHK_SIZE,
                  leaf);

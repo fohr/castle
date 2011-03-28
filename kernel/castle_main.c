@@ -1939,7 +1939,7 @@ struct castle_attachment* castle_attachment_init(int device, /* _or_object_colle
 
     if(castle_version_attach(version))
         return NULL;
-    BUG_ON(castle_version_read(version, da_id, NULL, size, leaf));
+    BUG_ON(castle_version_read(version, da_id, NULL, NULL, size, leaf));
 
     attachment = castle_malloc(sizeof(struct castle_attachment), GFP_KERNEL); 
     if(!attachment)

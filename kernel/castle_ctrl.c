@@ -172,7 +172,7 @@ void castle_control_destroy(version_t version, int *ret)
     da_id_t         da_id;
 
     castle_printk("Destroying version: %u\n", version);
-    *ret = castle_version_read(version, &da_id, &parent, NULL, NULL);
+    *ret = castle_version_read(version, &da_id, &parent, NULL, NULL, NULL);
     
     /* Reply immediatly, if we can't find the version */
     if ((*ret < 0))

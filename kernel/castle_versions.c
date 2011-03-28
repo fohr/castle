@@ -829,20 +829,34 @@ out:
 int castle_version_read(version_t version, 
                         da_id_t *da,
                         version_t *parent,
+                        version_t *live_parent,
                         c_byte_off_t *size,
                         int *leaf)
 {
     struct castle_version *v;
 
-    v = castle_versions_hash_get(version);
+    read_lock_irq(&castle_versions_hash_lock);
+    v = __castle_versions_hash_get(version);
     if(!v)
+    {
+        read_unlock_irq(&castle_versions_hash_lock);
         return -EINVAL;
+    }
     
     /* Set these even if we fail to set the attached bit */
     if(da)     *da     =  v->da_id;
     if(size)   *size   =  v->size;
     if(parent) *parent =  v->parent ? v->parent->version : 0;
     if(leaf)   *leaf   =  test_bit(CV_LEAF_BIT, &v->flags);
+    /* Walk the tree up to the root, searching for first live ancestor. */
+    if(live_parent)
+    {
+        v = v->parent;
+        while(v && test_bit(CV_DELETED_BIT, &v->flags))
+            v = v->parent;
+        *live_parent = v ? v->version : 0;
+    }
+    read_unlock_irq(&castle_versions_hash_lock);
 
     return 0;
 } 
