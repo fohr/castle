@@ -559,6 +559,7 @@ static struct castle_version * castle_version_subtree_delete(struct castle_versi
     /* Remove version from hash. */
     castle_versions_drop(v);
     __castle_versions_hash_remove(v);
+    list_del(&v->del_list);
     list_add_tail(&v->free_list, version_list);
     
     return parent;
@@ -672,6 +673,7 @@ static struct castle_version* castle_version_add(version_t version,
     v->flags        = 0;
     INIT_LIST_HEAD(&v->hash_list);
     INIT_LIST_HEAD(&v->init_list);
+    INIT_LIST_HEAD(&v->del_list);
 
     /* Initialise version 0 fully, defer full init of all other versions by 
        putting it on the init list. */ 
