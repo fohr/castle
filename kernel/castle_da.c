@@ -4377,7 +4377,6 @@ static struct castle_double_array* castle_da_alloc(da_id_t da_id)
 
         /* Create merge threads, and take da ref for all levels >= 1. */
         castle_da_get(da);
-        castle_printk("Starting thread: %d\n", i);
         da->levels[i].merge.thread = 
             kthread_create((i == BIG_MERGE)? castle_da_big_merge_run: castle_da_merge_run, 
                            da, "castle-m-%d-%.2d", da_id, i);
