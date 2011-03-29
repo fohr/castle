@@ -2348,7 +2348,7 @@ static int castle_cache_block_hash_clean(void)
                 break;
         }
         /* Put all the unevictable pages back on the clean list, but at the tail of the list. */
-        list_splice(&unevictable, castle_cache_cleanlist.prev);
+        list_splice_init(&unevictable, castle_cache_cleanlist.prev);
     }
     /* If we weren't able to clean BATCH_FREE c2bs to the freelist then begin
      * victimising softpin c2bs if we have not already done so. */
