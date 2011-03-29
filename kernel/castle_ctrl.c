@@ -506,6 +506,13 @@ void castle_control_collection_snapshot(collection_id_t collection,
 void castle_control_collection_snapshot_delete(version_t version,
                                                int *ret)
 {
+    if (DA_INVAL(castle_version_da_id_get(version)))
+    {
+        castle_printk("Version %d is not deletable. DA doesn't exist.\n", version);
+        *ret = -EINVAL;
+        return;
+    }
+
     if (castle_version_attached(version))
     {
         castle_printk("Version %d is attached. Couldn't be deleted.\n", version);
