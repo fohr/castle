@@ -1062,15 +1062,10 @@ static void castle_ct_modlist_iter_init(c_modlist_iter_t *iter)
     iter->btree = castle_btree_type_get(ct->btree_type);
     iter->leaf_node_size = iter->btree->node_size(ct, 0);
 
-    /* To prevent sudden kernel memory ballooning we have an imposed modlist
-     * byte budget which is shared between all DAs.  Verify that the node buffer
-     * can be satisfied by the remaining budget before doing allocations.
-     * We are allocating 1.1 the amonut of space. But we want to avoid using
-     * floating point arythmetics. Therefore we multiply by 11 and later divide
-     * by 10.
-     */
-    iter->nr_nodes = 11 * (atomic64_read(&ct->node_count) + 1) / 10; /* a few extra for luck! */
-    buffer_size = iter->nr_nodes * iter->leaf_node_size * C_BLK_SIZE;
+    /* To prevent sudden kernel memory ballooning we impose a modlist byte
+     * budget for all DAs.  Size the node buffer based on leaf nodes only. */
+    buffer_size = atomic64_read(&ct->tree_ext_free.used);
+    iter->nr_nodes = buffer_size / (iter->leaf_node_size * C_BLK_SIZE);
     if (atomic_sub_return(buffer_size, &castle_ct_modlist_iter_byte_budget) < 0)
     {
         castle_printk("Couldn't allocate enough bytes for _modlist_iter_init from bytes budget.\n");
@@ -6141,7 +6136,7 @@ int castle_double_array_init(void)
 
     /* Initialise modlist iter mergesort buffer based on cache size.
      * As a minimum we need to be able to merge two full T0s. */
-    min_budget = 22 * MAX_DYNAMIC_TREE_SIZE * C_CHK_SIZE / 10;      /* More than two full T0s. */
+    min_budget = 2 * MAX_DYNAMIC_TREE_SIZE * C_CHK_SIZE;            /* Two full T0s. */
     budget     = (castle_cache_size_get() * PAGE_SIZE) / 10;        /* 10% of cache. */
     if (budget < min_budget)
         budget = min_budget;
