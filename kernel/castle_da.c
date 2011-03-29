@@ -58,7 +58,7 @@ static struct castle_mstore    *castle_da_store      = NULL;
 static struct castle_mstore    *castle_tree_store    = NULL;
 static struct castle_mstore    *castle_lo_store      = NULL;
        da_id_t                  castle_next_da_id    = 1; 
-static tree_seq_t               castle_next_tree_seq = 1; 
+static atomic_t                 castle_next_tree_seq = ATOMIC(0); 
 static int                      castle_da_exiting    = 0;
 
 static int                      castle_dynamic_driver_merge = 1; 
@@ -5277,13 +5277,14 @@ int castle_double_array_read(void)
         write_lock(&da->lock);
         castle_component_tree_add(da, ct, NULL /*head*/, 1 /*in_init*/);
         write_unlock(&da->lock);
-        castle_next_tree_seq = (ct->seq >= castle_next_tree_seq) ? ct->seq + 1 : castle_next_tree_seq;
+        if (ct->seq >= atomic_read(&castle_next_tree_seq))
+            atomic_set(&castle_next_tree_seq, ct->seq+1);
     }
     castle_mstore_iterator_destroy(iterator);
     iterator = NULL;
     debug("castle_next_da_id = %d, castle_next_tree_id=%d\n", 
             castle_next_da_id, 
-            castle_next_tree_seq);
+            atomic_read(&castle_next_tree_seq));
 
     /* Read all Large Objects lists. */
     iterator = castle_mstore_iterate(castle_lo_store);
@@ -5364,7 +5365,7 @@ static struct castle_component_tree* castle_ct_alloc(struct castle_double_array 
         return NULL;
     
     /* Allocate an id for the tree, init the ct. */
-    ct->seq             = castle_next_tree_seq++;
+    ct->seq             = atomic_inc_return(&castle_next_tree_seq);
     atomic_set(&ct->ref_count, 1);
     atomic_set(&ct->write_ref_count, 0);
     atomic64_set(&ct->item_count, 0); 
