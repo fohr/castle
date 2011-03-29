@@ -3069,7 +3069,6 @@ entry_done:
      * at the end to be in sync with other merges. */
     if (unit_nr != (1U << merge->level))
     {
-        BUG_ON(merge->nr_entries > (1U << merge->level));
         debug_merges("Going through an empty unit\n");
         return EAGAIN;
     }
