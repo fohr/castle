@@ -5200,13 +5200,6 @@ static int __castle_da_driver_merge_reset(struct castle_double_array *da, void *
  */
 int castle_double_array_start(void)
 {
-    /* Create T0 RWCTs for all DAs that don't have them (acquires lock).
-     * castle_da_rwct_init() wraps castle_da_rwcts_create() for hash_iter. */
-    __castle_da_hash_iterate(castle_da_rwct_init, NULL);
-
-    /* Reset driver merge for all DAs. */
-    castle_da_hash_iterate(__castle_da_driver_merge_reset, NULL);
-
     /* Check all DAs to see whether any merges need to be done. */
     castle_da_hash_iterate(castle_da_merge_restart, NULL); 
 
@@ -5332,6 +5325,14 @@ int castle_double_array_read(void)
     castle_da_hash_iterate(castle_da_level0_check_promote, NULL);
     /* Sort all the tree lists by the sequence number */
     castle_da_hash_iterate(castle_da_trees_sort, NULL); 
+
+    /* Create T0 RWCTs for all DAs that don't have them (acquires lock).
+     * castle_da_rwct_init() wraps castle_da_rwcts_create() for hash_iter. */
+    __castle_da_hash_iterate(castle_da_rwct_init, NULL);
+
+    /* Reset driver merge for all DAs. */
+    castle_da_hash_iterate(__castle_da_driver_merge_reset, NULL);
+
     castle_da_hash_iterate(castle_da_merge_start, NULL); 
 
     goto out;

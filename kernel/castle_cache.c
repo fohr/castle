@@ -4877,6 +4877,35 @@ int castle_cache_extents_flush(struct list_head *flush_list)
 
 extern atomic_t current_rebuild_seqno;
 
+/**
+ * Checkpoints system state with given frequency. 
+ *
+ * Notes: Checkpointing maintains metadata structures of all modules in memory. And checkpoints them 
+ * in hierarchy, ending with superblocks on slaves. When we completed making superblocks persistent on 
+ * all slaves, we are done with checkpoint.
+ *  
+ *  START
+ *
+ *      CHECKPOINT START
+ *     
+ *          Notes: During the transaction, no high level modifications can happen like
+ *                  - no additions/deletions of trees from DA
+ *                  - no additions/deletions of attachments
+ *                  - no additions/deletions of versions
+ *
+ *          TRANSACTION START
+ *              - Writedown all meta data structures into a new mstore
+ *          TRANSACTION END
+ *      
+ *          - Flush all data (extents belong to previous version) and mstore on to disk
+ *          - Flush superblocks onto all slaves
+ *
+ *      CHECKPOINT END
+ *
+ *          - Increment version, goto next version
+ *
+ *  END
+ */
 static int castle_periodic_checkpoint(void *unused)
 {
     uint32_t version = 0;
