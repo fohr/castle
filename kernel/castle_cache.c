@@ -2272,6 +2272,7 @@ static int castle_cache_block_hash_clean(void)
     struct list_head *lh, *th;
     struct hlist_node *le, *te;
     HLIST_HEAD(victims);
+    LIST_HEAD(unevictable);
     c2_block_t *c2b;
     int clean, dirty, softpin;
     int nr_victims, nr_pages, victimise_softpin;
@@ -2333,10 +2334,21 @@ static int castle_cache_block_hash_clean(void)
                     atomic_inc(&castle_cache_block_victims);
                 nr_victims++;
             }
+            else
+            {
+                /* Remove the unevictable block from its current location, and stick it
+                   at the end of the list. This will prevent the clean list accumulating
+                   unevictable blocks at the start, and this function having to go
+                   through them every time. */
+                list_del(&c2b->clean);
+                list_add(&c2b->clean, &unevictable);
+            }
 
             if (nr_victims >= BATCH_FREE)
                 break;
         }
+        /* Put all the unevictable pages back on the clean list, but at the tail of the list. */
+        list_splice(&unevictable, castle_cache_cleanlist.prev);
     }
     /* If we weren't able to clean BATCH_FREE c2bs to the freelist then begin
      * victimising softpin c2bs if we have not already done so. */
