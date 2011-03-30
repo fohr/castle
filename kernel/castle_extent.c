@@ -437,6 +437,8 @@ int castle_extents_writeback(void)
     if (!extent_init_done)
         return 0;
 
+    /* Don't exit with out-standing dead extents. They are scheduled to get freed on 
+     * system work queue. */
     if (castle_extents_exiting)
         while (atomic_read(&castle_extents_dead_count)) msleep(1000);
 
@@ -692,9 +694,16 @@ static void castle_extent_space_free(c_ext_t *ext, c_chk_cnt_t count)
                 count--;
             }
         }
-                         
+    
+        /* We are done with maps. No need of flushing maps onto disk anymore. Mark them clean. */
+        if (c2b_dirty(map_c2b))
+            clean_c2b(map_c2b);
+
         write_unlock_c2b(map_c2b);
-        put_c2b(map_c2b);
+
+        /* Destroy maps c2b. dont need this anymore. */
+        BUG_ON(unlikely(castle_cache_block_destroy(map_c2b)));
+
         map_cep.offset += C_BLK_SIZE;
     }
     castle_free(ext_state);
@@ -1053,12 +1062,20 @@ void castle_extent_free(c_ext_id_t ext_id)
     castle_extent_put(ext_id);
 }
 
+/* Free the resources taken by extent. This function gets executed on system work queue. 
+ *
+ * @param work work structure for the extent to be freed. 
+ *
+ * @also castle_extent_put 
+ * @also castle_extent_free 
+ */
 static void _castle_extent_free(struct work_struct *work)
 {
     c_ext_t *ext = container_of(work, c_ext_t, work);
     struct castle_extents_superblock *castle_extents_sb = NULL;
     c_ext_id_t ext_id = ext->ext_id;
 
+    /* Reference count should be zero. */
     if (atomic_read(&ext->ref_cnt))
     {
         castle_printk("Couldn't delete the referenced extent %llu, %d\n", 
@@ -1067,16 +1084,24 @@ static void _castle_extent_free(struct work_struct *work)
         BUG();
     }
 
+    /* Get the extent lock, to prevent checkpoint happening parallely. */
     castle_extents_sb = castle_extents_super_block_get();
 
+    /* Remove extent from hash and free the space. Both should happen in atomic with respect 
+     * to checkpoint. */
     castle_extents_hash_remove(ext);
     castle_extent_space_free(ext, ext->k_factor * ext->size);
+
     debug("Completed deleting ext: %lld\n", ext_id);
 
     castle_extents_sb->nr_exts--;
+
+    /* Release extent lock. */
     castle_extents_super_block_put(1);
 
     castle_free(ext);
+
+    /* Decrement the dead count. Module can't exit with outstanding dead extents.  */
     atomic_dec(&castle_extents_dead_count);
 }
 
@@ -1401,6 +1426,8 @@ void* castle_extent_get(c_ext_id_t ext_id)
  * but doesnt remove it from hash. As removing from hash table and freeing freespace on disk
  * should happen atomically under extents global mutex (as a transaction for the sake of 
  * checkpoiting).
+ *
+ * @also: _castle_extent_free
  */
 void castle_extent_put(c_ext_id_t ext_id)
 {
@@ -1422,6 +1449,13 @@ void castle_extent_put(c_ext_id_t ext_id)
 
         /* Extent shouldn't be already marked for deletion. */
         BUG_ON(ext->deleted);
+
+        /* Mark for deletion. But, dont remove it from hash. 
+         *
+         * Notes: Removing it from hash and freeing space should happen together under extent 
+         * lock. If we remove it from hash wihtout freeing sapce, then checkpoint would skip the
+         * extent but counts freespace occupied by extent. In case of crash, this would leak
+         * the freespace. */
         ext->deleted = 1;
 
         /* Schedule extent deletion on system WQ. */

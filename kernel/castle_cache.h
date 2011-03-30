@@ -77,6 +77,7 @@ static inline int read_trylock_c2b(c2_block_t *c2b)
  */
 int  c2b_dirty              (c2_block_t *c2b);
 void dirty_c2b              (c2_block_t *c2b);
+void clean_c2b              (c2_block_t *c2b);
 int  c2b_uptodate           (c2_block_t *c2b);
 void update_c2b             (c2_block_t *c2b);
 int  c2b_bio_error          (c2_block_t *c2b);

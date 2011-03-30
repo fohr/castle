@@ -308,6 +308,8 @@ static c_ext_free_t            mstore_ext_free;
 static atomic_t                mstores_ref_cnt = ATOMIC_INIT(0);
 static               LIST_HEAD(castle_cache_flush_list);
 
+static atomic_t                castle_cache_logical_ext_pages = ATOMIC_INIT(0);
+
 #define CHECKPOINT_FREQUENCY (60)        /* Checkpoint once in every 60secs. */
 struct                  task_struct  *checkpoint_thread;
 /**********************************************************************************************
@@ -876,7 +878,7 @@ void dirty_c2b(c2_block_t *c2b)
  * @also c2_dirtylist_remove()
  * @also I/O callback handlers (callers)
  */
-static void clean_c2b(c2_block_t *c2b)
+void clean_c2b(c2_block_t *c2b)
 {
     unsigned long flags;
     int i, nr_c2ps;
@@ -1795,6 +1797,8 @@ static inline void castle_cache_c2p_put(c2_page_t *c2p, struct list_head *accumu
                 memcpy(buf+j, poison, MIN(PAGE_SIZE-j, str_len));
         }
 #endif
+        if (LOGICAL_EXTENT(c2p->cep.ext_id))
+            atomic_sub(PAGES_PER_C2P, &castle_cache_logical_ext_pages);
         debug("Freeing c2p for cep="cep_fmt_str_nl, cep2str(c2p->cep));
         BUG_ON(c2p_dirty(c2p));
         atomic_sub(PAGES_PER_C2P, &castle_cache_clean_pages);
@@ -2075,7 +2079,11 @@ static int castle_cache_pages_get(c_ext_pos_t cep,
             c2ps[i] = c2p;
             BUG_ON(c2p == NULL);
         } else
+        {
             atomic_add(PAGES_PER_C2P, &castle_cache_clean_pages);
+            if (LOGICAL_EXTENT(cep.ext_id))
+                atomic_add(PAGES_PER_C2P, &castle_cache_logical_ext_pages);
+        }
         /* Check if this page is clean. */
         if(!c2p_uptodate(c2ps[i]))
             all_uptodate = 0;
@@ -2249,8 +2257,8 @@ static inline int c2b_busy(c2_block_t *c2b, int expected_count)
 {
     BUG_ON(!spin_is_locked(&castle_cache_block_hash_lock));
     /* c2b_locked() implies (c2b->count > 0) */
-    return (atomic_read(&c2b->count) != expected_count) |
-          (c2b->state.bits & (1 << C2B_dirty)) |
+    return (atomic_read(&c2b->count) != expected_count) ||
+          (c2b->state.bits & (1 << C2B_dirty)) ||
            c2b_locked(c2b);
 }
 
@@ -4812,6 +4820,9 @@ int castle_checkpoint_version_inc(void)
     castle_double_arrays_unfreeze();
 
     castle_extents_super_block_put(0);
+
+    castle_printk("Number of logical extent pages: %u\n", 
+                                    atomic_read(&castle_cache_logical_ext_pages));
 
     return 0;
 }
