@@ -619,29 +619,40 @@ void castle_control_slave_evacuate(uint32_t uuid, int *ret)
     struct  list_head *lh;
     int     nr_live_slaves=0;
 
-    list_for_each(lh, &castle_slaves.slaves)
-    {
-        slave = list_entry(lh, struct castle_slave, list);
-        if (!test_bit(CASTLE_SLAVE_EVACUATE_BIT, &slave->flags) &&
-            !test_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags))
-            nr_live_slaves++;
-    }
-
-    BUG_ON(nr_live_slaves < MIN_LIVE_SLAVES);
-
-    if (nr_live_slaves == MIN_LIVE_SLAVES)
-    {
-        castle_printk("Error: evacuation rejected to preserve minimum number of working disks.\n");
-        *ret = -EPERM;
-        return;
-    }
-
     slave = castle_slave_find_by_uuid(uuid);
     if(!slave)
     {
         castle_printk("Error: slave not found. Ignoring request.\n");
         *ret = -ENOENT;
         return;
+    }
+
+    /*
+     * If this slave is not an SSD, make sure that we will preserve the minimum number of working
+     * disks.
+     */
+    if (!(slave->cs_superblock.pub.flags & CASTLE_SLAVE_SSD))
+    {
+        struct  castle_slave *cs;
+
+        list_for_each(lh, &castle_slaves.slaves)
+        {
+            cs = list_entry(lh, struct castle_slave, list);
+            if (!test_bit(CASTLE_SLAVE_EVACUATE_BIT, &cs->flags) &&
+                !test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags) &&
+                !(cs->cs_superblock.pub.flags & CASTLE_SLAVE_SSD))
+                    nr_live_slaves++;
+        }
+
+        BUG_ON(nr_live_slaves < MIN_LIVE_SLAVES);
+
+        if (nr_live_slaves == MIN_LIVE_SLAVES)
+        {
+            castle_printk("Error: evacuation rejected to preserve minimum "
+                          "number of working disks.\n");
+            *ret = -EPERM;
+            return;
+        }
     }
 
     if (test_bit(CASTLE_SLAVE_GHOST_BIT, &slave->flags))

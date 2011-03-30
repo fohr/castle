@@ -1011,25 +1011,31 @@ static void c2b_multi_io_end(struct bio *bio, int err)
         BUG_ON(!io_slave);
         if (!test_and_set_bit(CASTLE_SLAVE_OOS_BIT, &io_slave->flags))
         {
-            int nr_live_slaves=0;
             char b[BDEVNAME_SIZE];
 
             /*
              * This is the first time a bio for this slave has failed. If removing this slave
              * from service would leave us with less than the minimum number of live slaves,
              * then BUG out. Otherwise, mark the slave as out-of-service and trigger a rebuild.
+             * Note: We only look at non-SSD slaves here, as SSD slaves can be remapped to
+             * non-SSD slaves.
              */
-            list_for_each(lh, &castle_slaves.slaves)
+            if (!(io_slave->cs_superblock.pub.flags & CASTLE_SLAVE_SSD))
             {
-                slave = list_entry(lh, struct castle_slave, list);
-                if (!test_bit(CASTLE_SLAVE_EVACUATE_BIT, &slave->flags) &&
-                    !test_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags))
-                    nr_live_slaves++;
-            }
-            BUG_ON(nr_live_slaves < MIN_LIVE_SLAVES);
+                int nr_live_slaves=0;
 
+                list_for_each(lh, &castle_slaves.slaves)
+                {
+                    slave = list_entry(lh, struct castle_slave, list);
+                    if (!test_bit(CASTLE_SLAVE_EVACUATE_BIT, &slave->flags) &&
+                        !test_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags) &&
+                        !(slave->cs_superblock.pub.flags & CASTLE_SLAVE_SSD))
+                        nr_live_slaves++;
+                }
+                BUG_ON(nr_live_slaves < MIN_LIVE_SLAVES);
+            }
             castle_printk("Disabling slave 0x%x (%s), due to IO errors. Starting rebuild.\n", 
-                    slave->uuid, bdevname(bio_info->bdev, b));
+                    io_slave->uuid, bdevname(bio_info->bdev, b));
             castle_extents_rebuild_start();
         }
 

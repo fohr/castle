@@ -753,15 +753,17 @@ static c_disk_chk_t castle_extent_disk_chk_alloc(da_id_t da_id,
         /*
          * We get here if the slave is either out-or-service, or out of space. If the slave is
          * out-of-service then just return INVAL_DISK_CHK so calling stack can retry.
+         * If it's out of space then set the low_disk_space condition, except for SSDs, which
+         * can run out of space while non-SSDs still have free space.
          */
-         if (!test_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags))
-         {
-             /* Slave is not out-of-service so we are out of space */
-             castle_printk("Failed to get freespace from slave: 0x%x\n", slave->uuid);
-             castle_freespace_stats_print();
-             low_disk_space = 1;
-         }
-         return INVAL_DISK_CHK;
+        if ((!test_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags)) && (!(slave->cs_superblock.pub.flags & CASTLE_SLAVE_SSD)))
+        {
+            /* Slave is not out-of-service so we are out of space.  */
+            castle_printk("Failed to get freespace from slave: 0x%x\n", slave->uuid);
+            castle_freespace_stats_print();
+            low_disk_space = 1;
+        }
+        return INVAL_DISK_CHK;
     }
     /* Chunk sequence must represent a single superchunk. */
     BUG_ON(chk_seq.count != CHKS_PER_SLOT);
@@ -1559,6 +1561,7 @@ typedef struct live_slave {
     c_disk_chk_t    chunks[CHKS_PER_SLOT];  /* Chunk mappings (slave, offset) for slave. */
     int             next_chk;               /* The next chunk to use. */
     uint32_t        uuid;                   /* Uuid for slave. */
+    uint32_t        flags;                  /* State flags for slave. */
 } live_slave_t;
 
 static struct remap_state {
@@ -1607,13 +1610,15 @@ static void castle_extents_remap_state_init(void)
             cs = list_entry(lh, struct castle_slave, list);
             if ((!test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags)) &&
                 (!test_bit(CASTLE_SLAVE_EVACUATE_BIT, &cs->flags)))
-                {
-                    remap_state.live_slaves[remap_state.nr_live_slaves] =
-                        castle_zalloc(sizeof(live_slave_t), GFP_KERNEL);
-                    BUG_ON(!remap_state.live_slaves[remap_state.nr_live_slaves]);
-                    remap_state.live_slaves[remap_state.nr_live_slaves]->uuid = cs->uuid;
-                    remap_state.nr_live_slaves++;
-                }
+            {
+                remap_state.live_slaves[remap_state.nr_live_slaves] =
+                    castle_zalloc(sizeof(live_slave_t), GFP_KERNEL);
+                BUG_ON(!remap_state.live_slaves[remap_state.nr_live_slaves]);
+                remap_state.live_slaves[remap_state.nr_live_slaves]->uuid = cs->uuid;
+                if (cs->cs_superblock.pub.flags & CASTLE_SLAVE_SSD)
+                    remap_state.live_slaves[remap_state.nr_live_slaves]->flags |= CASTLE_SLAVE_SSD;
+                remap_state.nr_live_slaves++;
+            }
         }
         for (i=remap_state.nr_live_slaves; i<MAX_NR_SLAVES; i++)
             remap_state.live_slaves[i++] = NULL;
@@ -1663,9 +1668,13 @@ static int castle_extent_remap_superchunks_alloc(int slave_idx)
     {
         char b[BDEVNAME_SIZE];
         /*
-         * We get here if the slave is either out-of-service, or out of space.
+         * We get here if the slave is either out-or-service, or out of space. If the slave is
+         * out-of-service then just return ENOSPC so calling stack can retry.
+         * If it's out of space then set the low_disk_space condition, except for SSDs, which
+         * can run out of space while non-SSDs still have free space.
+
          */
-        if (!test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags))
+        if ((!test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags)) && (!(cs->cs_superblock.pub.flags & CASTLE_SLAVE_SSD)))
         {
             /* Slave is not out-of-service so we are out of space */
             castle_printk("Error: failed to get freespace from slave: 0x%x (%s).",
@@ -1702,24 +1711,48 @@ static int castle_extent_remap_superchunks_alloc(int slave_idx)
  * Return the slave index to use for remapping a chunk. Scans the remap_state.live_slaves
  * array for a slave which is not already used in the disk chunk.
  *
- * @param ext       The extent for which the remapping is being done.
- * @param chunkno   The logical chunk being remapped.
+ * @param ext           The extent for which the remapping is being done.
+ * @param chunkno       The logical chunk being remapped.
+ * @param want_ssd      Flag set if we want to remap onto an SSD (if possible).
+ * @param ssds_tried    The number of SSDs we have tried, but failed to allocate space from.
  *
  * @return          The index into the remap_state arrays to use for allocation
  */
-static int castle_extent_replacement_slave_get(c_ext_t *ext, int chunkno)
+static int castle_extent_replacement_slave_get(c_ext_t *ext,
+                                               int chunkno,
+                                               int *want_ssd,
+                                               int ssds_tried)
 {
     int         chunk_idx, slave_idx, nr_slaves_to_use, already_used;
     int         slaves_to_use[MAX_NR_SLAVES];
     uint16_t    r;
+    int         is_ssd=0;
 
     /* For each slave in remap_state.live_slaves (the list of potential remap slaves). */
+retry:
     nr_slaves_to_use = 0;
     for (slave_idx=0; slave_idx<remap_state.nr_live_slaves; slave_idx++)
     {
         if (remap_state.live_slaves[slave_idx] == NULL)
             /* This slave is no longer available - skip it. */
             continue;
+
+        is_ssd = remap_state.live_slaves[slave_idx]->flags & CASTLE_SLAVE_SSD;
+
+        if ((is_ssd && !*want_ssd) || (!is_ssd && *want_ssd))
+            /*
+             * Slave is an SSD, but we want to allocate from non-SSD slaves, or slave is not an
+             * SSD, but we want to allocate from SSD slaves. Do not use this slave.
+             */
+            continue;
+
+        if (is_ssd && ssds_tried)
+        {
+            /* Skip SSDs that caller has already tried, but failed to allocate space from. */
+            ssds_tried--;
+            continue;
+        }
+
         already_used = 0;
         /* Scan through all the slaves in this logical chunk. */
         for (chunk_idx=0; chunk_idx<ext->k_factor; chunk_idx++)
@@ -1738,6 +1771,14 @@ static int castle_extent_replacement_slave_get(c_ext_t *ext, int chunkno)
              * target slaves for remapping this chunk.
              */
             slaves_to_use[nr_slaves_to_use++] = slave_idx;
+    }
+
+    if (!nr_slaves_to_use && *want_ssd)
+    {
+        /* We want an SSD, but we could not find one - retry for a non-SSD. */
+        debug("Wanted to remap to SSD, but failed to find one. Retrying from non-SSD\n");
+        *want_ssd = 0;
+        goto retry;
     }
 
     BUG_ON(!nr_slaves_to_use);
@@ -1759,23 +1800,24 @@ static int castle_extent_replacement_slave_get(c_ext_t *ext, int chunkno)
  *
  * @return          The disk chunk to use.
  */
-static c_disk_chk_t *castle_extent_remap_disk_chunk_alloc(c_ext_t *ext, int chunkno)
+static c_disk_chk_t *castle_extent_remap_disk_chunk_alloc(c_ext_t *ext, int chunkno, int want_ssd)
 {
     c_disk_chk_t        *disk_chk;
     int                 slave_idx;
-    struct castle_slave *cs;
+    struct castle_slave *target_slave;
     int                 ret;
+    int                 ssds_tried=0;
 
 retry:
     /* Get the replacement slave */
-    slave_idx = castle_extent_replacement_slave_get(ext, chunkno);
+    slave_idx = castle_extent_replacement_slave_get(ext, chunkno, &want_ssd, ssds_tried);
     BUG_ON(slave_idx == -1);
 
-    cs = castle_slave_find_by_uuid(remap_state.live_slaves[slave_idx]->uuid);
-    BUG_ON(!cs);
+    target_slave = castle_slave_find_by_uuid(remap_state.live_slaves[slave_idx]->uuid);
+    BUG_ON(!target_slave);
 
-    if ((test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags)) ||
-        (test_bit(CASTLE_SLAVE_EVACUATE_BIT, &cs->flags)))
+    if ((test_bit(CASTLE_SLAVE_OOS_BIT, &target_slave->flags)) ||
+        (test_bit(CASTLE_SLAVE_EVACUATE_BIT, &target_slave->flags)))
     {
         /* Tried to use a now-dead slave for remapping. Repopulate the remap_state and retry. */
         debug("Rebuild tried using a now-dead slave - repopulating remap state\n");
@@ -1796,9 +1838,21 @@ retry:
             debug("Rebuild tried using a now-dead slave - repopulating remap state\n");
             castle_extents_remap_state_init();
             goto retry;
-        } else if (ret == -ENOSPC)
+        } 
+        else 
+        if ((ret == -ENOSPC) && want_ssd)
+        {
+            /*
+             * ssds_tried keeps count of the number of SSDs we have tried, and failed, to allocate
+             * from. We'll keep retrying other SSDs until castle_extent_replacement_slave_get
+             * determines that we have tried all SSDs.
+             */
+            ssds_tried++;
+            goto retry;
+        }
+        
+        if(ret) 
             return NULL;
-        BUG_ON(ret);
     }
 
     disk_chk =
@@ -1822,24 +1876,20 @@ retry:
  *
  * @param slave_id  The slave uuid.
  *
- * @return 0:       Slave does not need remapping.
- * @return 1:       Slave needs remapping.
+ * @return:         A pointer to the castle_slave if it needs remapping, else NULL.
  */
-static int slave_needs_remapping(uint32_t slave_id)
+static struct castle_slave *slave_needs_remapping(uint32_t slave_id)
 {
     struct castle_slave *cs;
 
     cs = castle_slave_find_by_uuid(slave_id);
-    /*
-     * If we find an an unknown slave_id, we can't use it.
-     * We'll assume that this is a genuine 'missing' slave, and mark it for remapping.
-     */
-    if (!cs ||
-        (test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags)) ||
+    BUG_ON(!cs);
+
+    if ((test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags)) ||
         (test_bit(CASTLE_SLAVE_EVACUATE_BIT, &cs->flags)))
-        return 1;
+        return cs;
     else
-        return 0;
+        return NULL;
 }
 
 /*
@@ -1854,6 +1904,7 @@ static int castle_extent_remap(c_ext_t *ext)
 {
     uint32_t            k_factor = castle_extent_kfactor_get(ext->ext_id);
     int                 chunkno, idx, remap_idx, no_remap_idx, i;
+    struct castle_slave *cs;
 
     debug("\nRemapping extent %llu size: %u, from seqno: %u to seqno: %u\n",
             ext->ext_id, ext->size, ext->curr_rebuild_seqno, rebuild_to_seqno);
@@ -1919,7 +1970,7 @@ static int castle_extent_remap(c_ext_t *ext)
             c_disk_chk_t *disk_chk;
 
             /* Chunks that don't need remapping go to the end of the remap_chunks array. */
-            if (!slave_needs_remapping(ext->shadow_map[(chunkno*k_factor)+idx].slave_id))
+            if (!(cs = slave_needs_remapping(ext->shadow_map[(chunkno*k_factor)+idx].slave_id)))
             {
                 remap_chunks[no_remap_idx].slave_id =
                                         ext->shadow_map[(chunkno*k_factor)+idx].slave_id;
@@ -1929,7 +1980,8 @@ static int castle_extent_remap(c_ext_t *ext)
             }
 
             /* This slave needs remapping. Get a replacement disk chunk. */
-            disk_chk = castle_extent_remap_disk_chunk_alloc(ext, chunkno);
+            disk_chk = castle_extent_remap_disk_chunk_alloc(ext, chunkno,
+                                            cs->cs_superblock.pub.flags & CASTLE_SLAVE_SSD);
             if (!disk_chk)
             {
                 /* Failed to allocate a disk chunk (slave out of space is most likely cause). */
