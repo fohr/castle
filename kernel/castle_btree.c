@@ -1861,7 +1861,7 @@ static c2_block_t* castle_btree_effective_node_create(struct castle_component_tr
     c2_block_t *c2b;
     void *last_eff_key;
     version_t last_eff_version = 0;
-    int i, insert_idx, moved_cnt, was_preallocated;
+    int i, insert_idx, moved_cnt, was_preallocated, need_dirty;
     uint16_t node_size;
     uint8_t rev_level;
 
@@ -1881,6 +1881,7 @@ static c2_block_t* castle_btree_effective_node_create(struct castle_component_tr
     BUG_ON(eff_node->used != 0);
     insert_idx = 0;
     moved_cnt = 0;
+    need_dirty = 0;
     for(i=0; i<node->used; i++)
     {
         void        *entry_key;
@@ -1888,8 +1889,7 @@ static c2_block_t* castle_btree_effective_node_create(struct castle_component_tr
         c_val_tup_t  entry_cvt;
         int          need_move;
 
-        btree->entry_get(node, i, &entry_key, &entry_version,
-                         &entry_cvt);
+        btree->entry_get(node, i, &entry_key, &entry_version, &entry_cvt);
         /* Check if slot->version is ancestoral to version. If not,
            reject straigt away. */
         if(!castle_version_is_ancestor(entry_version, version))
@@ -1936,7 +1936,10 @@ static c2_block_t* castle_btree_effective_node_create(struct castle_component_tr
         last_eff_version = entry_version;
         /* If we _moved_ something, we need to remove it from the old node */
         if(need_move)
+        {
+            need_dirty = 1;
             btree->entry_disable(node, i);
+        }
 
         insert_idx++;
     }
@@ -1949,11 +1952,14 @@ static c2_block_t* castle_btree_effective_node_create(struct castle_component_tr
     if((node->version == version) && (eff_node->used == node->used))
     {
         BUG_ON(moved_cnt > 0);
+        BUG_ON(need_dirty);
         castle_vfree(eff_node);
 
         return NULL;
     }
 
+    if(need_dirty)
+        dirty_c2b(orig_c2b);
     /* Effective node is not same as original node - allocate space on the disk
      * now and copy. */
     was_preallocated = castle_btree_node_was_preallocated(c_bvec->tree, rev_level);
