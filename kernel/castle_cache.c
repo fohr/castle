@@ -2401,12 +2401,15 @@ static int castle_cache_block_hash_clean(void)
  * Frees up the c2b specified. Only succeeds if the c2b there is preciesly one
  * outstanding reference to the c2b (held by the caller), it is not dirty, and
  * it is not locked.
+ * This function will put the reference to the c2b regardless of whether is
+ * succeeded at destroying the block (under the assumption that the caller
+ * is no longer interested in that c2b).
  *
  * @param c2b       Block to free.
  * @return 0:       Success.
  * @return -EINVAL: Failed, due to c2b not being freeable.
  */
-int USED castle_cache_block_destroy(c2_block_t *c2b)
+int castle_cache_block_destroy(c2_block_t *c2b)
 {
     int ret;
 
@@ -2431,7 +2434,10 @@ int USED castle_cache_block_destroy(c2_block_t *c2b)
     spin_unlock_irq(&castle_cache_block_hash_lock);
     /* If the c2b was busy, exit early. */
     if(ret)
+    {
+        put_c2b(c2b);
         return ret;
+    }
     /* Succeeded deleting the c2b from the hash, and cleanlist. Decrement the ref count. */
     put_c2b(c2b);
     BUG_ON(atomic_read(&c2b->count) != 0);
