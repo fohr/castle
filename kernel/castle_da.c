@@ -1826,7 +1826,7 @@ static int castle_da_ios_budget_replenish(struct castle_double_array *da, void *
 
     atomic_set(&da->ios_budget, da->ios_rate);
 
-    if (da->ios_rate)
+    if (da->ios_rate || castle_fs_exiting)
     {
         /* We just replenished the DA's ios_budget.
          *
