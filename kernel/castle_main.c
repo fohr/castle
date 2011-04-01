@@ -663,7 +663,7 @@ int castle_fs_init(void)
             if(memcmp(&fs_sb, cs_fs_sb, 
                       sizeof(struct castle_fs_superblock)) != 0)
             {
-                castle_printk("Castle fs supreblocks do not match!\n");
+                castle_printk("Castle fs superblocks do not match!\n");
                 castle_fs_superblock_put(cs, 0);
                 return -EINVAL;
             }

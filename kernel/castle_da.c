@@ -1826,7 +1826,7 @@ static int castle_da_ios_budget_replenish(struct castle_double_array *da, void *
 
     atomic_set(&da->ios_budget, da->ios_rate);
 
-    if (da->ios_rate || castle_fs_exiting)
+    if (da->ios_rate || castle_fs_exiting || castle_da_frozen(da))
     {
         /* We just replenished the DA's ios_budget.
          *
@@ -1839,7 +1839,8 @@ static int castle_da_ios_budget_replenish(struct castle_double_array *da, void *
 
             spin_lock(&wq->lock);
             if (!list_empty(&wq->list))
-                queue_work_on(request_cpus.cpus[i], castle_wqs[19], &wq->work);
+                /* wq->work is initialised as castle_da_queue_kick(). */
+                queue_work_on(request_cpus.cpus[i], castle_wqs[0], &wq->work);
             spin_unlock(&wq->lock);
         }
     }
@@ -4081,11 +4082,14 @@ static int castle_da_merge_run(void *da_p)
 
         debug_merges("Doing merge, trees=[%u]+[%u]\n", in_trees[0]->seq, in_trees[1]->seq);
 
-        /* Do the merge. If fails, retry after 10s (unless it's a merge abort). */
-        ret=castle_da_merge_do(da, 2, in_trees, level);
-        if(ret==-ESHUTDOWN) goto exit_thread; /* -ESHUTDOWN can only mean merge abort */
-        if (ret)
+        /* Do the merge.  If it fails, retry after 10s (unless it's a merge abort). */
+        ret = castle_da_merge_do(da, 2, in_trees, level);
+        if (ret == -ESHUTDOWN)
+            /* Merge has been aborted. */
+            goto exit_thread;
+        else if (ret)
         {
+            /* Merge failed, wait 10s to retry. */
             msleep(10000);
             continue;
         }
@@ -5872,8 +5876,10 @@ static void castle_da_queue_kick(struct work_struct *work)
     /* Get as many c_bvecs as we can and place them on the submit list.
        Take them all on module exit. */
     spin_lock(&wq->lock);
-    while (((atomic_dec_return(&wq->da->ios_budget) >= 0) || castle_fs_exiting) &&
-           !list_empty(&wq->list))
+    while (((atomic_dec_return(&wq->da->ios_budget) >= 0)
+                || castle_fs_exiting
+                || castle_da_frozen(wq->da))
+            && !list_empty(&wq->list))
     {
         /* New IOs are queued at the end of the list.  Always pull from the
          * front of the list to preserve ordering. */
@@ -5958,6 +5964,7 @@ static void castle_da_ct_walk_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cv
 /**
  * Hand-off write request (bvec) to DA.
  *
+ * - Fail request if DA is frozen
  * - Get T0 CT for bvec
  * - Configure endfind handlers
  * - Submit immediately to btree
@@ -5969,6 +5976,13 @@ static void castle_da_write_bvec_start(struct castle_double_array *da, c_bvec_t 
 { 
     debug_verbose("Doing DA write for da_id=%d\n", da_id);
     BUG_ON(c_bvec_data_dir(c_bvec) != WRITE);
+
+    /* If the DA is frozen the best we can do is return an error. */
+    if (castle_da_frozen(da))
+    {
+        c_bvec->endfind(c_bvec, -ENOSPC, INVAL_VAL_TUP);
+        return;
+    }
 
     /* Get a reference to the current RW CT (a new one may be created). */
     c_bvec->tree = castle_da_rwct_acquire(da, c_bvec);
@@ -6067,17 +6081,9 @@ void castle_double_array_submit(c_bvec_t *c_bvec)
         return;
     }
 
-    /* If the DA is frozen the best we can do is return an error. */
-    if (castle_da_frozen(da))
-    {
-        c_bvec->endfind(c_bvec, -ENOSPC, INVAL_VAL_TUP);
-        return;
-    }
-
     /* Write requests must operate within the ios_budget but reads can be
      * scheduled immediately. */
     wq = &da->ios_waiting[c_bvec->cpu_index];
-
     spin_lock(&wq->lock);
     if ((atomic_dec_return(&da->ios_budget) >= 0) && list_empty(&wq->list))
     {
