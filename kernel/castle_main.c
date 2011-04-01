@@ -749,11 +749,18 @@ int castle_fs_init(void)
 
     /* Load extent structures of logical extents into memory */
     ret = first ? castle_extents_create() : castle_extents_read(); 
-    if(ret) return -EINVAL;
+    if (ret)
+    {
+        if (ret == -ENOSPC)
+            castle_printk("Failed to create/read extents due to low freespace.\n");
+        else
+            castle_printk("Failed to create/read extents.\n");
+        return ret;
+    }
 
     /* Load all extents into memory. */
-    if (!first && castle_extents_read_complete())
-        return -EINVAL;
+    if (!first && (ret = castle_extents_read_complete()))
+        return ret;
 
     /* If first is still true, we've not found a single non-new cs.
        Init the fs superblock. */
@@ -798,8 +805,8 @@ int castle_fs_init(void)
         write_unlock_c2b(c2b);
         put_c2b(c2b);
         /* Init version list */
-        ret = castle_versions_zero_init();
-        if(ret) return ret;
+        if ((ret = castle_versions_zero_init()))
+            return ret;
         /* Make sure that fs_sb is up-to-date */
         cs_fs_sb = castle_fs_superblocks_get();
         memcpy(&fs_sb, cs_fs_sb, sizeof(struct castle_fs_superblock));
@@ -814,23 +821,23 @@ int castle_fs_init(void)
     castle_fs_superblocks_put(cs_fs_sb, 1);
 
     /* Read versions in. */
-    if (!first && castle_versions_read())
-        return -EINVAL;
+    if (!first && (ret = castle_versions_read()))
+        return ret;
 
     /* Read doubling arrays and component trees in. */
     ret = first ? castle_double_array_create() : castle_double_array_read(); 
-    if(ret) return -EINVAL;
+    if (ret) return ret;
 
     /* Read Collection Attachments. */
-    if (!first && castle_attachments_read())
-        return -EINVAL;
+    if (!first && (ret = castle_attachments_read()))
+        return ret;
  
     FAULT(FS_INIT_FAULT);
 
-    if (!first && castle_chk_disk())
+    if (!first && (ret = castle_chk_disk()))
     {
         castle_printk("Failed to bring-up sane FS from disks\n");
-        return -EINVAL;
+        return ret;
     }
 
     castle_checkpoint_version_inc();

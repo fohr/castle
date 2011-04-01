@@ -380,22 +380,24 @@ static int castle_extent_mstore_ext_create(void)
 
 int castle_extents_create(void)
 {
+    int ret;
+
     BUG_ON(extent_init_done);
     
     castle_extents_super_block_init();
 
-    if (castle_extent_micro_ext_create())
-        return -EINVAL;
+    if ((ret = castle_extent_micro_ext_create()))
+        return ret;
 
-    if (castle_extent_meta_ext_create())
-        return -EINVAL;
+    if ((ret = castle_extent_meta_ext_create()))
+        return ret;
 
     castle_ext_freespace_init(&meta_ext_free, META_EXT_ID, C_BLK_SIZE);
 
     INJECT_FAULT;
 
-    if (castle_extent_mstore_ext_create())
-        return -EINVAL;
+    if ((ret = castle_extent_mstore_ext_create()))
+        return ret;
 
     extent_init_done = 1;
     return 0;
@@ -502,6 +504,8 @@ static int load_extent_from_mentry(struct castle_elist_entry *mstore_entry)
 
 int castle_extents_read(void)
 {
+    int ret = EXIT_SUCCESS;
+
     struct castle_extents_superblock *ext_sblk = NULL;
 
     BUG_ON(extent_init_done);
@@ -515,14 +519,14 @@ int castle_extents_read(void)
     /* Read maps freespace structure from extents superblock. */
     castle_ext_freespace_unmarshall(&meta_ext_free, &ext_sblk->meta_ext_free_bs);
 
-    if (load_extent_from_mentry(&ext_sblk->meta_ext))
-        goto error_out;
+    if ((ret = load_extent_from_mentry(&ext_sblk->meta_ext)))
+        goto out;
 
-    if (load_extent_from_mentry(&ext_sblk->mstore_ext[0]))
-        goto error_out;
+    if ((ret = load_extent_from_mentry(&ext_sblk->mstore_ext[0])))
+        goto out;
 
-    if (load_extent_from_mentry(&ext_sblk->mstore_ext[1]))
-        goto error_out;
+    if ((ret = load_extent_from_mentry(&ext_sblk->mstore_ext[1])))
+        goto out;
 
     atomic_set(&current_rebuild_seqno, ext_sblk->current_rebuild_seqno);
 
@@ -535,10 +539,8 @@ int castle_extents_read(void)
     castle_extents_super_block_put(0);
     extent_init_done = 1;
 
-    return 0;
-
-error_out:
-    return -1;
+out:
+    return ret;
 }
 
 int castle_extents_read_complete(void)
