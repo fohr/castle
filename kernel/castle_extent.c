@@ -704,7 +704,10 @@ static void castle_extent_space_free(c_ext_t *ext, c_chk_cnt_t count)
         write_unlock_c2b(map_c2b);
 
         /* Destroy maps c2b. dont need this anymore. */
-        BUG_ON(unlikely(castle_cache_block_destroy(map_c2b)));
+        /* Ignore we if we fail to destroy - perhaps flush thread or checkpointing thread is 
+         * accessing it. */
+        if (castle_cache_block_destroy(map_c2b))
+            castle_printk("Failed to destroy c2b for cep "cep_fmt_str_nl, cep2str(map_cep));
 
         map_cep.offset += C_BLK_SIZE;
     }
@@ -2046,6 +2049,9 @@ static int castle_extent_remap(c_ext_t *ext)
             write_unlock_c2b(c2b);
 
             /* This c2b is not needed any more, and it pollutes the cache, so destroy it. */
+            /* Note: c2b still contains valid data. Destroy could fail due to other potential consumers 
+             * of the c2b. Except in the case logical extents, rebuild is the only consumer accesses in 
+             * chunks. So, there shouldnt be any other references to this c2b. */
             BUG_ON(castle_cache_block_destroy(c2b) && LOGICAL_EXTENT(ext->ext_id));
 
             /*
