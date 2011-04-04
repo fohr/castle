@@ -509,10 +509,8 @@ struct castle_btree_node {
     /*         12 */ btree_t         type;
     /*         13 */ uint8_t         is_leaf;
     /*         14 */ uint16_t        size;           /**< Size of this btree node in pages.     */
-    /*         16 */ c_ext_pos_t     next_node;
-    /*         32 */ uint16_t        next_node_size; /**< Size of the next btree node in pages. */
                      /* Payload (i.e. btree entries) depend on the B-tree type */
-    /*         34 */ uint8_t         _unused[30];
+    /*         34 */ uint8_t         _unused[48];
     /*         64 */ uint8_t         payload[0];
     /*         64 */
 } PACKED;

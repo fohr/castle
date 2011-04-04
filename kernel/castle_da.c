@@ -578,7 +578,6 @@ static void castle_da_node_buffer_init(struct castle_btree_type *btree,
     buffer->version   = 0;
     buffer->used      = 0;
     buffer->is_leaf   = 1;
-    buffer->next_node = INVAL_EXT_POS;
     buffer->size      = node_size;
 }
 
@@ -2575,7 +2574,7 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
     debug("Inserting into parent key=%p, *key=%d, version=%d\n",
             key, *((uint32_t*)key), node->version);
     BUG_ON(CVT_LEAF_PTR(cvt));
- 
+
     /* Insert correct pointer in the parent, unless we've just completed the
        root node at the end of the merge. */ 
     if(merge->completing && (merge->root_depth == depth) && (level->node_c2b == NULL)) 
@@ -2604,8 +2603,6 @@ release_node:
     prev_node = merge->last_node_c2b ? c2b_bnode(merge->last_node_c2b) : NULL; 
     if(prev_node)
     {
-        prev_node->next_node = node_c2b->cep;
-        prev_node->next_node_size = node_c2b->nr_pages;
         dirty_c2b(merge->last_node_c2b);
         write_unlock_c2b(merge->last_node_c2b);
         put_c2b(merge->last_node_c2b);

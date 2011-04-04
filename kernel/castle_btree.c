@@ -1680,8 +1680,6 @@ static void castle_btree_node_save(struct work_struct *work)
             BUG_ON(submit_c2b_sync(READ, c2b));
 
         node = c2b_buffer(c2b);
-        node->next_node = work_st->node_cep;
-        node->next_node_size = work_st->node_size;
 
         dirty_c2b(c2b);
         write_unlock_c2b(c2b);
@@ -1745,7 +1743,6 @@ static void castle_btree_node_init(struct castle_component_tree *ct,
     node->used      = 0;
     node->is_leaf   = (rev_level == 0);
     node->size      = node_size;
-    node->next_node = INVAL_EXT_POS;
 }
 
 static int castle_btree_node_space_get(struct castle_component_tree *ct,
