@@ -1980,7 +1980,7 @@ static int castle_da_iterators_create(struct castle_da_merge *merge)
     /* Make sure iter_types is not too big.  It's on stack. */
     BUG_ON(sizeof(iter_types) > 512);
 
-    castle_printk("Creating iterators for the merge.\n");
+    debug("Creating iterators for the merge.\n");
     FOR_EACH_MERGE_TREE(i, merge)
         BUG_ON(!merge->in_trees[i]);
 
@@ -2725,7 +2725,7 @@ static void castle_da_max_path_complete(struct castle_da_merge *merge)
     BUG_ON(!merge->completing);
     /* Root stored in last_node_c2b at the end of the merge */
     root_c2b = merge->last_node_c2b;
-    castle_printk("Maxifying the right most path, starting with root_cep="cep_fmt_str_nl,
+    debug("Maxifying the right most path, starting with root_cep="cep_fmt_str_nl,
             cep2str(root_c2b->cep));
     /* Start of with root node */
     node_c2b = root_c2b;
@@ -5482,7 +5482,7 @@ static int __castle_da_rwct_create(struct castle_double_array *da, int cpu_index
 
     if (!in_tran) CASTLE_TRANSACTION_END;
 
-    castle_printk("Created T0: %d\n", ++t0_count);
+    debug("Created T0: %d\n", ++t0_count);
     /* DA is attached, therefore we must be holding a ref, therefore it is safe to schedule
        the merge check. */
     write_unlock(&da->lock);
