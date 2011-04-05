@@ -5396,7 +5396,9 @@ static int __castle_da_rwct_create(struct castle_double_array *da, int cpu_index
     struct list_head *l = NULL;
     c2_block_t *c2b;
     int err;
+#ifdef DEBUG
     static int t0_count = 0;
+#endif
 
     /* Caller must have set the DA's growing bit. */
     BUG_ON(!castle_da_growing_rw_test(da));
