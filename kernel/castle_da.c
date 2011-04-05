@@ -134,6 +134,8 @@ static void castle_da_read_bvec_start(struct castle_double_array *da, c_bvec_t *
 static void castle_da_write_bvec_start(struct castle_double_array *da, c_bvec_t *c_bvec);
 static void castle_da_get(struct castle_double_array *da);
 static void castle_da_put(struct castle_double_array *da);
+static int __castle_da_rwct_create(struct castle_double_array *da, int cpu_index, int in_tran);
+static int castle_da_rwct_create(struct castle_double_array *da, int cpu_index, int in_tran);
 
 struct workqueue_struct *castle_da_wqs[NR_CASTLE_DA_WQS];
 char *castle_da_wqs_names[NR_CASTLE_DA_WQS] = {"castle_da0"};
@@ -4695,6 +4697,40 @@ static int castle_da_level0_check_promote(struct castle_double_array *da, void *
     return 0;
 }
 
+/**
+ * Promote modified level 0 RWCTs so the checkpoint thread writes them out.
+ *
+ * @param   da  Doubling array to search modified level 0 RWCTs in
+ *
+ * NOTE: Caller must hold CASTLE_TRANSACTION lock.  Expected to be called from
+ *       castle_double_arrays_writeback().
+ *
+ * @return  0   So hash iterator continues
+ *
+ * @also castle_double_arrays_writeback()
+ */
+static int castle_da_level0_modified_promote(struct castle_double_array *da, void *unused)
+{
+    struct castle_component_tree *ct, *tct;
+    int cpu_index = 0;
+
+    list_for_each_entry_safe_reverse(ct, tct, &da->levels[0].trees, da_list)
+    {
+        /* Promote level 0 CTs if they contain items.
+         * CTs at level 1 will be written to disk by the checkpoint thread. */
+        if (atomic64_read(&ct->item_count) != 0)
+        {
+            castle_printk("Promoting DA 0x%x level 0 RWCT seq %u, has %ld items\n",
+                    da->id, ct->seq, atomic64_read(&ct->item_count));
+            castle_da_rwct_create(da, cpu_index, 1 /*in_tran*/);
+        }
+
+        cpu_index++;
+    }
+
+    return 0;
+}
+
 static int castle_da_trees_sort(struct castle_double_array *da, void *unused)
 {
     int i;
@@ -4920,6 +4956,9 @@ static void castle_ct_hash_destroy(void)
     castle_free(castle_ct_hash);
 }
 
+/**
+ * Flush CT's extents to disk and marshall CT structure.
+ */
 static int castle_da_tree_writeback(struct castle_double_array *da,
                                     struct castle_component_tree *ct,
                                     int level_cnt,
@@ -5028,8 +5067,11 @@ static int castle_da_writeback(struct castle_double_array *da, void *unused)
     return 0;
 }
 
+#define RWCT_CHECKPOINT_FREQUENCY   (10)    /**< Checkpoint level 0 RWCTs every N checkpoints. */
 void castle_double_arrays_writeback(void)
 {
+    static int rwct_checkpoints = 0;
+
     BUG_ON(castle_da_store || castle_tree_store || castle_lo_store);
 
     castle_da_store   = castle_mstore_init(MSTORE_DOUBLE_ARRAYS,
@@ -5042,6 +5084,11 @@ void castle_double_arrays_writeback(void)
     if(!castle_da_store || !castle_tree_store || !castle_lo_store)
         goto out;
 
+    if (!castle_da_exiting && ++rwct_checkpoints >= RWCT_CHECKPOINT_FREQUENCY)
+    {
+        castle_da_hash_iterate(castle_da_level0_modified_promote, NULL);
+        rwct_checkpoints = 0;
+    }
     castle_da_hash_iterate(castle_da_writeback, NULL); 
     castle_da_tree_writeback(NULL, &castle_global_tree, -1, NULL);
 
@@ -5052,8 +5099,6 @@ out:
 
     castle_da_store = castle_tree_store = castle_lo_store = NULL;
 }
-
-static int __castle_da_rwct_create(struct castle_double_array *da, int cpu_index, int in_tran);
 
 /**
  * Create one RWCT per strand for specified DA if they do not already exist.
