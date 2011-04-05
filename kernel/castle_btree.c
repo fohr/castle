@@ -1648,73 +1648,6 @@ void castle_btree_lub_find(struct castle_btree_node *node,
     if(insert_idx_p) *insert_idx_p = insert_idx;
 }
 
-static void castle_btree_node_save(struct work_struct *work)
-{
-    static DECLARE_MUTEX(node_save_lock);
-    struct castle_btree_node_save *work_st = container_of(work,
-                                                       struct castle_btree_node_save,
-                                                       work);
-    struct castle_component_tree *ct = work_st->ct;
-    struct castle_btree_node *node;
-    struct castle_btree_type *btree;
-    c_ext_pos_t  prev_cep;
-    c2_block_t *c2b;
-
-    down(&node_save_lock);
-    btree = castle_btree_type_get(ct->btree_type);
-
-    if (unlikely(!atomic64_read(&ct->node_count)))
-    {
-        BUG_ON(!EXT_POS_INVAL(ct->first_node));
-        ct->first_node = work_st->node_cep;
-        ct->first_node_size = work_st->node_size;
-    }
-    else
-    {
-        prev_cep = ct->last_node;
-        c2b = castle_cache_block_get(prev_cep, ct->last_node_size);
-        write_lock_c2b(c2b);
-
-        /* If c2b is not up to date, issue a blocking READ to update */
-        if(!c2b_uptodate(c2b))
-            BUG_ON(submit_c2b_sync(READ, c2b));
-
-        node = c2b_buffer(c2b);
-
-        dirty_c2b(c2b);
-        write_unlock_c2b(c2b);
-        put_c2b(c2b);
-    }
-    ct->last_node = work_st->node_cep;
-    ct->last_node_size = work_st->node_size;
-    atomic64_inc(&ct->node_count);
-    up(&node_save_lock);
-    castle_ct_put(ct, 1 /* write */);
-
-    castle_free(work_st);
-}
-
-void castle_btree_node_save_prepare(struct castle_component_tree *ct,
-                                    c_ext_pos_t node_cep,
-                                    uint16_t node_size)
-{
-    struct castle_btree_node_save *work_st;
-
-    /* Link the new node to last created node. But, schedule the task for later; as
-     * locking the last node while holding lock for current node might lead to a
-     * dead-lock */
-    work_st = castle_malloc(sizeof(struct castle_btree_node_save), GFP_NOIO);
-    BUG_ON(!work_st);
-    /* Get a writable reference to the component tree, to stop people from assuming
-       the tree is static now */
-    castle_ct_get(ct, 1 /* write */);
-    work_st->ct = ct;
-    work_st->node_cep = node_cep;
-    work_st->node_size = node_size;
-    CASTLE_INIT_WORK(&work_st->work, castle_btree_node_save);
-    queue_work(castle_wq, &work_st->work);
-}
-
 /**
  * Initialises btree node header.
  *
@@ -1969,8 +1902,6 @@ static c2_block_t* castle_btree_effective_node_create(struct castle_component_tr
     memcpy(c2b_buffer(c2b), eff_node, node_size * C_BLK_SIZE);
     castle_vfree(eff_node);
 
-    castle_btree_node_save_prepare(c_bvec->tree, c2b->cep, node_size);
-
     return c2b;
 }
 
@@ -2003,7 +1934,6 @@ static c2_block_t* castle_btree_node_key_split(c_bvec_t *c_bvec,
                                          was_preallocated);
     if(was_preallocated)
         atomic_dec(&c_bvec->reserv_nodes);
-    castle_btree_node_save_prepare(ct, c2b->cep, node_size);
     sec_node  = c2b_bnode(c2b);
     /* The original node needs to contain the elements from the right hand side
        because otherwise the key in it's parent would have to change. We want
@@ -2147,7 +2077,6 @@ static void castle_btree_new_root_create(c_bvec_t *c_bvec, btree_t type)
                                    0              /* version */,
                                    ct->tree_depth /* level */,
                                    0              /* wasn't preallocated */);
-    castle_btree_node_save_prepare(ct, c2b->cep, c2b->nr_pages);
     node = c2b_buffer(c2b);
     /* We should be under write lock here, check if we can read lock it (and BUG) */
     BUG_ON(down_read_trylock(&ct->lock));

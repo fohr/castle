@@ -1455,9 +1455,7 @@ static USED void castle_ct_sort(struct castle_component_tree *ct1,
 
     debug("Number of items in the component tree1: %ld, number of nodes: %ld, ct2=%ld, %ld\n", 
             atomic64_read(&ct1->item_count),
-            atomic64_read(&ct1->node_count),
-            atomic64_read(&ct2->item_count),
-            atomic64_read(&ct2->node_count));
+            atomic64_read(&ct2->item_count));
 
     test_iter1.tree = ct1;
     castle_ct_modlist_iter_init(&test_iter1);
@@ -1690,11 +1688,8 @@ struct castle_da_merge {
     c2_block_t                   *last_leaf_node_c2b; /**< Previous node c2b at depth 0. */
     void                         *last_key;           /**< last_key added to
                                                            out tree at depth 0. */
-    c_ext_pos_t                   first_node;
-    uint16_t                      first_node_size;
     int                           completing;
     uint64_t                      nr_entries;
-    uint64_t                      nr_nodes;
     uint64_t                      large_chunks; 
     int                           is_new_key;      /**< Is the current key different
                                                         from last key added to out_tree. */
@@ -2606,17 +2601,9 @@ release_node:
         dirty_c2b(merge->last_node_c2b);
         write_unlock_c2b(merge->last_node_c2b);
         put_c2b(merge->last_node_c2b);
-    } else
-    {
-        /* We've just created the first node, save it */
-        merge->first_node = node_c2b->cep;
-        merge->first_node_size = node_c2b->nr_pages;
     }
     /* Save this node as the last node now */
     merge->last_node_c2b = node_c2b;
-
-    /* Increment node count */
-    merge->nr_nodes++;
 
 #ifdef CASTLE_DEBUG
     merge->is_recursion = 0;
@@ -2662,10 +2649,6 @@ static struct castle_component_tree* castle_da_merge_package(struct castle_da_me
     out_tree->tree_depth = merge->root_depth+1;
     castle_printk("Depth of ct=%d (%p) is: %d\n", out_tree->seq, out_tree, out_tree->tree_depth);
     out_tree->root_node = merge->last_node_c2b->cep;
-    out_tree->first_node = merge->first_node;
-    out_tree->first_node_size = merge->first_node_size;
-    out_tree->last_node = INVAL_EXT_POS;
-    out_tree->last_node_size = -1;
     out_tree->bloom_exists = merge->bloom_exists;
     out_tree->bloom = merge->bloom;
 
@@ -2683,7 +2666,6 @@ static struct castle_component_tree* castle_da_merge_package(struct castle_da_me
     atomic_set(&out_tree->ref_count, 1);
     atomic_set(&out_tree->write_ref_count, 0);
     atomic64_set(&out_tree->item_count, merge->nr_entries);
-    atomic64_set(&out_tree->node_count, merge->nr_nodes);
     atomic64_set(&out_tree->large_ext_chk_cnt, merge->large_chunks);
     out_tree->internal_ext_free = merge->internal_ext_free;
     out_tree->tree_ext_free = merge->tree_ext_free;
@@ -2717,8 +2699,7 @@ static struct castle_component_tree* castle_da_merge_package(struct castle_da_me
     INIT_LIST_HEAD(&merge->large_objs);
 
     debug("Number of entries=%ld, number of nodes=%ld\n",
-            atomic64_read(&out_tree->item_count),
-            atomic64_read(&out_tree->node_count));
+            atomic64_read(&out_tree->item_count));
 
     /* Add the new tree to the doubling array */
     BUG_ON(merge->da->id != out_tree->da); 
@@ -3513,10 +3494,8 @@ static struct castle_da_merge* castle_da_merge_init(struct castle_double_array *
     merge->last_node_c2b     = NULL;
     merge->last_leaf_node_c2b= NULL;
     merge->last_key          = NULL;
-    merge->first_node        = INVAL_EXT_POS;
     merge->completing        = 0;
     merge->nr_entries        = 0;
-    merge->nr_nodes          = 0;
     merge->large_chunks      = 0;
     merge->budget_cons_rate  = 1; 
     merge->budget_cons_units = 0; 
@@ -4741,11 +4720,6 @@ void castle_da_ct_marshall(struct castle_clist_entry *ctm,
     ctm->level       		= ct->level;
     ctm->tree_depth  		= ct->tree_depth;
     ctm->root_node   		= ct->root_node;
-    ctm->first_node  		= ct->first_node;
-    ctm->first_node_size    = ct->first_node_size;
-    ctm->last_node   		= ct->last_node;
-    ctm->last_node_size     = ct->last_node_size;
-    ctm->node_count  		= atomic64_read(&ct->node_count);
     ctm->large_ext_chk_cnt	= atomic64_read(&ct->large_ext_chk_cnt);
     for(i=0; i<MAX_BTREE_DEPTH; i++)
         ctm->node_sizes[i] = ct->node_sizes[i];
@@ -4779,16 +4753,11 @@ static da_id_t castle_da_ct_unmarshall(struct castle_component_tree *ct,
     ct->level       		= ctm->level;
     ct->tree_depth  		= ctm->tree_depth;
     ct->root_node   		= ctm->root_node;
-    ct->first_node  		= ctm->first_node;
-    ct->first_node_size     = ctm->first_node_size;
-    ct->last_node   		= ctm->last_node;
-    ct->last_node_size      = ctm->last_node_size;
     ct->new_ct              = 0;
     ct->compacting          = 0;
     atomic64_set(&ct->large_ext_chk_cnt, ctm->large_ext_chk_cnt);
     init_rwsem(&ct->lock);
     mutex_init(&ct->lo_mutex);
-    atomic64_set(&ct->node_count, ctm->node_count);
     for(i=0; i<MAX_BTREE_DEPTH; i++)
         ct->node_sizes[i] = ctm->node_sizes[i];
     castle_ext_freespace_unmarshall(&ct->internal_ext_free, &ctm->internal_ext_free_bs);
@@ -4810,7 +4779,9 @@ static da_id_t castle_da_ct_unmarshall(struct castle_component_tree *ct,
     {
         /* CHUNK() will give us the offset of the last btree node (from chunk 0)
          * so bump it by 1 to get the number of chunks to prefetch. */
-        int chunks = CHUNK(ct->last_node.offset) + 1;
+        uint64_t nr_bytes = atomic64_read(&ct->tree_ext_free.used);
+        int chunks = (nr_bytes)? (CHUNK(nr_bytes - 1) + 1): 0;
+        
         castle_cache_advise((c_ext_pos_t){ct->tree_ext_free.ext_id, 0},
                 C2_ADV_EXTENT|C2_ADV_PREFETCH, chunks, -1, 0);
     }
@@ -5376,15 +5347,10 @@ static struct castle_component_tree* castle_ct_alloc(struct castle_double_array 
     ct->level           = level;
     ct->tree_depth      = -1;
     ct->root_node       = INVAL_EXT_POS;
-    ct->first_node      = INVAL_EXT_POS;
-    ct->first_node_size = -1;
-    ct->last_node       = INVAL_EXT_POS;
-    ct->last_node_size  = -1;
     ct->new_ct          = 1;
     ct->compacting      = 0;
     init_rwsem(&ct->lock);
     mutex_init(&ct->lo_mutex);
-    atomic64_set(&ct->node_count, 0);
     ct->da_list.next = NULL;
     ct->da_list.prev = NULL;
     INIT_LIST_HEAD(&ct->hash_list);
@@ -5479,7 +5445,6 @@ static int __castle_da_rwct_create(struct castle_double_array *da, int cpu_index
                                    0 /* version */,
                                    0 /* level */,
                                    0 /* wasn't preallocated */);
-    castle_btree_node_save_prepare(ct, c2b->cep, c2b->nr_pages);
     ct->root_node = c2b->cep;
     ct->tree_depth = 1;
     write_unlock_c2b(c2b);

@@ -42,9 +42,6 @@ struct castle_component_tree castle_global_tree = {.seq             = GLOBAL_TRE
                                                    .level           = -1, 
                                                    .tree_depth      = -1,
                                                    .root_node       = INVAL_EXT_POS,
-                                                   .first_node      = INVAL_EXT_POS,
-                                                   .last_node       = INVAL_EXT_POS,
-                                                   .node_count      = {0ULL},
                                                    .da_list         = {NULL, NULL},
                                                    .hash_list       = {NULL, NULL},
                                                    .large_objs      = {NULL, NULL},
@@ -768,7 +765,6 @@ int castle_fs_init(void)
         c2_block_t *c2b;
 
         /* Init the root btree node */
-        atomic64_set(&(castle_global_tree.node_count), 0);
         init_rwsem(&castle_global_tree.lock);
         mutex_init(&castle_global_tree.lo_mutex);
         mutex_init(&castle_global_tree.last_key_mutex);
@@ -796,7 +792,6 @@ int castle_fs_init(void)
                                        0 /* version */, 
                                        0 /* level */,
                                        0 /* wasn't preallocated */);
-        castle_btree_node_save_prepare(&castle_global_tree, c2b->cep, MTREE_NODE_SIZE);
         /* Save the root node in the global tree */
         castle_global_tree.root_node = c2b->cep; 
         /* We know that the tree is 1 level deep at the moment */

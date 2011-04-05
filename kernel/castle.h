@@ -510,7 +510,7 @@ struct castle_btree_node {
     /*         13 */ uint8_t         is_leaf;
     /*         14 */ uint16_t        size;           /**< Size of this btree node in pages.     */
                      /* Payload (i.e. btree entries) depend on the B-tree type */
-    /*         34 */ uint8_t         _unused[48];
+    /*         16 */ uint8_t         _unused[48];
     /*         64 */ uint8_t         payload[0];
     /*         64 */
 } PACKED;
@@ -634,11 +634,6 @@ struct castle_component_tree {
     struct rw_semaphore lock;              /**< Protects root_node, tree depth & last_node.   */
     uint8_t             tree_depth;
     c_ext_pos_t         root_node;
-    c_ext_pos_t         first_node;        /**< Pointer to the first node in the linked list. */
-    uint16_t            first_node_size; 
-    c_ext_pos_t         last_node;
-    uint16_t            last_node_size;    /**< Size of the last node, in pages.              */
-    atomic64_t          node_count;
     struct list_head    da_list;
     struct list_head    hash_list;
     struct list_head    large_objs;
@@ -682,26 +677,21 @@ struct castle_clist_entry {
     /*          7 */ uint8_t         tree_depth;
     /*          8 */ uint64_t        item_count;
     /*         16 */ c_ext_pos_t     root_node;
-    /*         32 */ c_ext_pos_t     first_node;
-    /*         48 */ c_ext_pos_t     last_node;
-    /*         64 */ c_ext_free_bs_t internal_ext_free_bs;
-    /*        128 */ c_ext_free_bs_t tree_ext_free_bs;
-    /*        192 */ c_ext_free_bs_t data_ext_free_bs;
-    /*        256 */ uint64_t        node_count;
-    /*        264 */ uint64_t        large_ext_chk_cnt;
-    /*        272 */ uint32_t        bloom_num_chunks;
-    /*        276 */ uint32_t        bloom_num_blocks_last_chunk;
-    /*        280 */ uint64_t        bloom_chunks_offset;
-    /*        288 */ c_ext_id_t      bloom_ext_id;
-    /*        296 */ uint32_t        bloom_num_btree_nodes;
-    /*        300 */ uint32_t        bloom_block_size_pages;
-    /*        304 */ tree_seq_t      seq;
-    /*        308 */ uint8_t         bloom_exists;
-    /*        309 */ uint8_t         bloom_num_hashes;
-    /*        310 */ uint16_t        node_sizes[MAX_BTREE_DEPTH];
-    /*        330 */ uint16_t        first_node_size;
-    /*        332 */ uint16_t        last_node_size;
-    /*        334 */ uint8_t         _unused[178];
+    /*         32 */ c_ext_free_bs_t internal_ext_free_bs;
+    /*         96 */ c_ext_free_bs_t tree_ext_free_bs;
+    /*        160 */ c_ext_free_bs_t data_ext_free_bs;
+    /*        224 */ uint64_t        large_ext_chk_cnt;
+    /*        232 */ uint32_t        bloom_num_chunks;
+    /*        236 */ uint32_t        bloom_num_blocks_last_chunk;
+    /*        240 */ uint64_t        bloom_chunks_offset;
+    /*        248 */ c_ext_id_t      bloom_ext_id;
+    /*        256 */ uint32_t        bloom_num_btree_nodes;
+    /*        260 */ uint32_t        bloom_block_size_pages;
+    /*        264 */ tree_seq_t      seq;
+    /*        268 */ uint8_t         bloom_exists;
+    /*        269 */ uint8_t         bloom_num_hashes;
+    /*        270 */ uint16_t        node_sizes[MAX_BTREE_DEPTH];
+    /*        290 */ uint8_t         _unused[222];
     /*        512 */
 } PACKED;
 
