@@ -1225,7 +1225,7 @@ static int c_io_next_slave_get(c2_block_t *c2b, c_disk_chk_t *chunks, int k_fact
 out:
     if(disk_idx >= 0)
     {
-        *idx = i;
+        *idx = disk_idx;
         return EXIT_SUCCESS;         
     }
     BUG_ON(disk_idx != -1);
