@@ -1,12 +1,13 @@
 #include <linux/bitops.h>
 
 #include "castle.h"
+#include "castle_da.h"
 #include "castle_btree.h"
 #include "castle_cache.h"
-#include "castle_da.h"
 #include "castle_bloom.h"
-#include "castle_extent.h"
+#include "castle_utils.h"
 #include "castle_debug.h"
+#include "castle_extent.h"
 
 //#define DEBUG
 #ifndef DEBUG

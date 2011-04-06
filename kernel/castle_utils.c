@@ -9,6 +9,103 @@
 #include "castle_objects.h"
 #include "castle.h"
 
+struct castle_printk_buffer     printk_buf;
+
+/**
+ * Print to dmesg and castle ring buffer.
+ *
+ * @param msg   Message to print
+ *
+ * @also castle_printk_init()
+ * @also castle_printk_fini()
+ *
+ * @TODO timestamp
+ * @TODO message priorities
+ * @TODO castle-trace handler
+ */
+void castle_printk(const char *fmt, ...)
+{
+    char tmp_buf[1024];
+    c_byte_off_t len, rem, pos = 0;
+    va_list args;
+
+    BUG_ON(PRINTK_BUFFER_SIZE < sizeof(tmp_buf));
+
+    va_start(args, fmt);
+    len = (c_byte_off_t) vscnprintf(tmp_buf, sizeof(tmp_buf), fmt, args) + 1; /* +1 for '\0'$ */
+    va_end(args);
+
+    /* Serialise access to the ring buffer. */
+    spin_lock(&printk_buf.lock);
+
+    rem = PRINTK_BUFFER_SIZE - printk_buf.off;
+    if (unlikely(len > rem))
+    {
+        /* Write up to the end of the buffer if it cannot handle a whole write.
+         * We'll update the various pointers and continue the write outside of
+         * this 'overflow' handler (below). */
+
+        memcpy(&printk_buf.buf[printk_buf.off], &tmp_buf[pos], rem);
+
+        pos += rem;
+        len -= rem;
+
+        printk_buf.off = 0;
+        printk_buf.wraps++;
+
+        printk("Wrapping castle_printk() ring buffer.\n");
+    }
+
+    /* Copy message to the printk buffer. */
+    memcpy(&printk_buf.buf[printk_buf.off], &tmp_buf[pos], len);
+    printk_buf.off += len - 1; /* -1 for '\0'$ */
+
+    spin_unlock(&printk_buf.lock);
+
+    // @TODO castle-trace output here
+    /* printk() if we're within the ratelimit. */
+    if (__printk_ratelimit(HZ/PRINTKS_PER_SEC_STEADY_STATE, PRINTKS_IN_BURST))
+        printk(tmp_buf);
+}
+
+/**
+ * Initialise ring buffer for storing printk messages.
+ *
+ * NOTE: We must call vmalloc() directly as we are the first subsystem
+ *       that gets initialised on start-up.
+ */
+int castle_printk_init(void)
+{
+    BUG_ON(printk_buf.buf);
+
+    printk_buf.off      = 0;
+    printk_buf.wraps    = 0;
+    printk_buf.size     = PRINTK_BUFFER_SIZE;
+    printk_buf.buf      = vmalloc(printk_buf.size);
+    if (!printk_buf.buf)
+        return -ENOMEM;
+    spin_lock_init(&printk_buf.lock);
+
+    castle_printk("Initialised Castle printk ring buffer.\n");
+
+    return 0;
+}
+
+/**
+ * Free ring buffer for storing printk messages.
+ */
+void castle_printk_fini(void)
+{
+    BUG_ON(!printk_buf.buf);
+
+    castle_printk("Freeing Castle printk ring buffer.\n");
+
+    vfree(printk_buf.buf);
+    printk_buf.buf = NULL;
+}
+
+
+
 void inline  __list_swap(struct list_head *p,
                          struct list_head *t1,
                          struct list_head *t2,

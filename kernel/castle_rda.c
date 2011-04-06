@@ -4,6 +4,7 @@
 
 #include "castle.h"
 #include "castle_rda.h"
+#include "castle_utils.h"
 #include "castle_debug.h"
 #include "castle_extent.h"
 #include "castle_freespace.h"

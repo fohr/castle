@@ -2278,66 +2278,69 @@ static int __init castle_init(void)
 {
     int ret;
 
-    castle_printk("Castle FS init (build: %s).\n", CASTLE_COMPILE_CHANGESET);
+    printk("Castle FS init (build: %s).\n", CASTLE_COMPILE_CHANGESET);
 
     castle_fs_inited = 0;
-    if((ret = castle_debug_init()))             goto err_out1;
-    if((ret = castle_time_init()))              goto err_out2;
-    if((ret = castle_trace_init()))             goto err_out3;
-    if((ret = castle_wqs_init()))               goto err_out4;
-    if((ret = castle_slaves_init()))            goto err_out5;
-    if((ret = castle_extents_init()))           goto err_out6;
-    if((ret = castle_resubmit_init()))          goto err_out7;
-    if((ret = castle_extents_rebuild_init()))   goto err_out8;
-    if((ret = castle_cache_init()))             goto err_out9;
-    if((ret = castle_versions_init()))          goto err_out10;
-    if((ret = castle_btree_init()))             goto err_out11;
-    if((ret = castle_double_array_init()))      goto err_out12;
-    if((ret = castle_attachments_init()))       goto err_out13;
-    if((ret = castle_checkpoint_init()))        goto err_out14;
-    if((ret = castle_control_init()))           goto err_out15;
-    if((ret = castle_sysfs_init()))             goto err_out16;
-    if((ret = castle_back_init()))              goto err_out17;
+    if((ret = castle_printk_init()))            goto err_out1;
+    if((ret = castle_debug_init()))             goto err_out2;
+    if((ret = castle_time_init()))              goto err_out3;
+    if((ret = castle_trace_init()))             goto err_out4;
+    if((ret = castle_wqs_init()))               goto err_out5;
+    if((ret = castle_slaves_init()))            goto err_out6;
+    if((ret = castle_extents_init()))           goto err_out7;
+    if((ret = castle_resubmit_init()))          goto err_out8;
+    if((ret = castle_extents_rebuild_init()))   goto err_out9;
+    if((ret = castle_cache_init()))             goto err_out10;
+    if((ret = castle_versions_init()))          goto err_out11;
+    if((ret = castle_btree_init()))             goto err_out12;
+    if((ret = castle_double_array_init()))      goto err_out13;
+    if((ret = castle_attachments_init()))       goto err_out14;
+    if((ret = castle_checkpoint_init()))        goto err_out15;
+    if((ret = castle_control_init()))           goto err_out16;
+    if((ret = castle_sysfs_init()))             goto err_out17;
+    if((ret = castle_back_init()))              goto err_out18;
 
     castle_printk("Castle FS init done.\n");
 
     return 0;
 
     castle_back_fini(); /* Unreachable */
-err_out17:
+err_out18:
     castle_sysfs_fini();
-err_out16:
+err_out17:
     castle_control_fini();
-err_out15:
+err_out16:
     castle_checkpoint_fini();
-err_out14:
+err_out15:
     castle_attachments_free();
-err_out13:
+err_out14:
     castle_double_array_merges_fini();
     castle_double_array_fini();
-err_out12:
+err_out13:
     castle_btree_free();
-err_out11:
+err_out12:
     castle_versions_fini();
-err_out10:
+err_out11:
     BUG_ON(!list_empty(&castle_slaves.slaves));
     castle_cache_fini();
-err_out9:
+err_out10:
     castle_extents_rebuild_fini();
-err_out8:
+err_out9:
     castle_resubmit_fini();
-err_out7:
+err_out8:
     castle_extents_fini();
-err_out6:
+err_out7:
     castle_slaves_free();
-err_out5:
+err_out6:
     castle_wqs_fini();
-err_out4:
+err_out5:
     castle_trace_fini();
-err_out3:
+err_out4:
     castle_time_fini();
-err_out2:
+err_out3:
     castle_debug_fini();
+err_out2:
+    castle_printk_fini();
 err_out1:
     
     return ret;
@@ -2377,8 +2380,9 @@ static void __exit castle_exit(void)
     castle_trace_fini();
     castle_time_fini();
     castle_debug_fini();
+    castle_printk_fini();
 
-    castle_printk("Castle FS exit done.\n");
+    printk("Castle FS exit done.\n");
 }
 
 module_init(castle_init);

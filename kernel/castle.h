@@ -42,10 +42,12 @@ static inline ATTRIB_NORET void bug_fn(char *file, unsigned long line)
 /* Printk implementation used in the entire filesystem. */
 #define PRINTKS_PER_SEC_STEADY_STATE    5
 #define PRINTKS_IN_BURST                100
-#define castle_printk(_f, _a...)    do { if(__printk_ratelimit(                     \
+#define PRINTK_BUFFER_MBS               10          /**< Size of printk ring buffer (in MB).    */
+#define PRINTK_BUFFER_SIZE              PRINTK_BUFFER_MBS*1024*1024 /**< Size of printk buffer. */
+/*#define castle_printk(_f, _a...)    do { if(__printk_ratelimit(                     \
                                                 HZ/PRINTKS_PER_SEC_STEADY_STATE,    \
                                                 PRINTKS_IN_BURST))                  \
-                                            printk(_f, ##_a); } while(0)
+                                            printk(_f, ##_a); } while(0)*/
 #define FLE strrchr(__FILE__, '/') ? strrchr(__FILE__, '/') + 1 : __FILE__ 
 
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,18)
@@ -1085,6 +1087,17 @@ struct castle_slave_block_cnts
     struct castle_slave_block_cnt metadata_cnt;  /* Count for version 0 (metadata) */
 };
 
+/**
+ * Structure describing the printk ring buffer.
+ */
+struct castle_printk_buffer {
+    char           *buf;    /**< Ring buffer.           */
+    c_byte_off_t    off;    /**< Write pointer.         */
+    c_byte_off_t    size;   /**< Size of ring buffer.   */
+    int             wraps;  /**< Times buf has wrapped. */
+    spinlock_t      lock;   /**< Protects structure.    */
+};
+
 /* First class structures */
 struct castle {
     struct kobject kobj;
@@ -1387,7 +1400,6 @@ static uint32_t __attribute__((used)) fletcher32( uint16_t *data, size_t len )
         sum2 = (sum2 & 0xffff) + (sum2 >> 16);
         return sum2 << 16 | sum1;
 }
-
 
 struct castle_merge_token {
     int driver_level;

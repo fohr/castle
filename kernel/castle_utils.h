@@ -273,6 +273,10 @@ static USED void check_stack_usage(void)
 }
 #endif
 
+void castle_printk(const char *fmt, ...);
+int castle_printk_init(void);
+void castle_printk_fini(void);
+
 void inline list_swap(struct list_head *t1, struct list_head *t2);
 void        list_sort(struct list_head *list, 
                       int (*compare)(struct list_head *l1, struct list_head *l2));
@@ -291,4 +295,3 @@ uint32_t    murmur_hash_32(const void *key, int len, uint32_t seed);
 uint64_t    murmur_hash_64(const void *key, int len, uint32_t seed);
 
 #endif /* __CASTLE_UTILS_H__ */
-
