@@ -335,7 +335,7 @@ void castle_cache_stats_print(int verbose)
     atomic_sub(writes, &castle_cache_write_stats);
     
     if (verbose)
-        castle_printk(LOG_INFO, "castle_cache_stats_timer_tick: %d, %d, %d, %d, %d\n", 
+        castle_printk(LOG_PERF, "castle_cache_stats_timer_tick: %d, %d, %d, %d, %d\n", 
             atomic_read(&castle_cache_dirty_pages),
             atomic_read(&castle_cache_clean_pages),
             castle_cache_page_freelist_size * PAGES_PER_C2P,
@@ -593,7 +593,6 @@ static inline void __unlock_c2b(c2_block_t *c2b, int write)
         unlock_c2p(c2p, write);
     }
     c2b_for_each_c2p_end(c2p, cep_unused, c2b)
-
 }
 
 void write_unlock_c2b(c2_block_t *c2b)
@@ -4967,7 +4966,7 @@ static int castle_periodic_checkpoint(void *unused)
         if (!castle_fs_inited)
             continue;
 
-        castle_printk(LOG_INFO, "*****Checkpoint start**********\n");
+        castle_printk(LOG_DEVEL, "*****Checkpoint start**********\n");
         castle_trace_cache(TRACE_START, TRACE_CACHE_CHECKPOINT_ID, 0);
         CASTLE_TRANSACTION_BEGIN;
  
@@ -5007,7 +5006,7 @@ static int castle_periodic_checkpoint(void *unused)
         }
         castle_checkpoint_version_inc();
         
-        castle_printk(LOG_INFO, "*****Completed checkpoint of version: %u*****\n", version);
+        castle_printk(LOG_DEVEL, "*****Completed checkpoint of version: %u*****\n", version);
         castle_trace_cache(TRACE_END, TRACE_CACHE_CHECKPOINT_ID, 0);
     } while (!exit_loop);
 

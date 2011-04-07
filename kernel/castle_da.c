@@ -4138,7 +4138,7 @@ static int castle_da_merge_restart(struct castle_double_array *da, void *unused)
     {
         if (da->ios_rate != 0)
         {
-            castle_printk(LOG_INFO, "Disabling inserts on da=%d.\n", da->id);
+            castle_printk(LOG_PERF, "Disabling inserts on da=%d.\n", da->id);
             castle_trace_da(TRACE_START, TRACE_DA_INSERTS_DISABLED_ID, da->id, 0);
         }
         da->ios_rate = 0; 
@@ -4147,7 +4147,7 @@ static int castle_da_merge_restart(struct castle_double_array *da, void *unused)
     {
         if (da->ios_rate == 0)
         {
-            castle_printk(LOG_INFO, "Enabling inserts on da=%d.\n", da->id);
+            castle_printk(LOG_PERF, "Enabling inserts on da=%d.\n", da->id);
             castle_trace_da(TRACE_END, TRACE_DA_INSERTS_DISABLED_ID, da->id, 0);
         }
         da->ios_rate = INT_MAX;

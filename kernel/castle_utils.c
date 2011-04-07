@@ -20,7 +20,6 @@ struct castle_printk_buffer     printk_buf;
  * @also castle_printk_fini()
  *
  * @TODO timestamp
- * @TODO message priorities
  * @TODO castle-trace handler
  */
 void castle_printk(c_printk_level_t level, const char *fmt, ...)
@@ -65,7 +64,7 @@ void castle_printk(c_printk_level_t level, const char *fmt, ...)
     // @TODO castle-trace output here
 
     /* Only print warnings, errors and testing messages to the console. */
-    if (level >= LOG_INFO)
+    if (level >= MIN_CONS_LEVEL)
     {
         /* and then only printk() if we're within the ratelimit. */
         if (__printk_ratelimit(HZ/PRINTKS_PER_SEC_STEADY_STATE, PRINTKS_IN_BURST))

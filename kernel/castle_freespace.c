@@ -436,12 +436,12 @@ static int castle_freespace_print(struct castle_slave *cs, void *unused)
     castle_freespace_t  *freespace;
 
     freespace = freespace_sblk_get(cs);
-    castle_printk(LOG_INFO, "\tFreespace (0x%x) -> %u\n", cs->uuid, freespace->free_chk_cnt);
-    castle_printk(LOG_INFO, "\t\tprod: %d\n", freespace->prod);
-    castle_printk(LOG_INFO, "\t\tcons: %d\n", freespace->cons);
-    castle_printk(LOG_INFO, "\t\tprev_prod: %d\n", cs->prev_prod);
-    castle_printk(LOG_INFO, "\t\tnr_entries: %d\n", freespace->nr_entries);
-    castle_printk(LOG_INFO, "\t\tmax_entries: %d\n", freespace->max_entries);
+    castle_printk(LOG_INIT, "\tFreespace (0x%x) -> %u\n", cs->uuid, freespace->free_chk_cnt);
+    castle_printk(LOG_INIT, "\t\tprod: %d\n", freespace->prod);
+    castle_printk(LOG_INIT, "\t\tcons: %d\n", freespace->cons);
+    castle_printk(LOG_INIT, "\t\tprev_prod: %d\n", cs->prev_prod);
+    castle_printk(LOG_INIT, "\t\tnr_entries: %d\n", freespace->nr_entries);
+    castle_printk(LOG_INIT, "\t\tmax_entries: %d\n", freespace->max_entries);
     freespace_sblk_put(cs, 0);
 
     return 0;
@@ -449,7 +449,7 @@ static int castle_freespace_print(struct castle_slave *cs, void *unused)
 
 void castle_freespace_stats_print(void)
 {
-    castle_printk(LOG_INFO, "Freespace stats: \n");
+    castle_printk(LOG_INIT, "Freespace stats: \n");
     castle_freespace_foreach_slave(castle_freespace_print, NULL);
 }
 

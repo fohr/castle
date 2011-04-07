@@ -275,19 +275,20 @@ static USED void check_stack_usage(void)
 
 /**
  * Defines castle_printk() log levels.
+ *
+ * @TODO Level ordering and MIN_CONS_LEVEL will need revising before release.
  */
 typedef enum {
     LOG_DEBUG,      /**< Debug-related messages                 */
-
-    /* Following levels are printed to the console. */
-
     LOG_INFO,       /**< Filesystem informational messages      */
+    LOG_PERF,       /**< Performance related messages           */
     LOG_DEVEL,      /**< Ephemeral development messages         */
     LOG_USERINFO,   /**< Information messages aimed at the user */
     LOG_WARN,       /**< Filesystem warnings                    */
     LOG_INIT,       /**< Init()/fini() messages                 */
     LOG_ERROR       /**< Major error messages                   */
 } c_printk_level_t;
+#define MIN_CONS_LEVEL  LOG_PERF    /**< Minimum log level to hit the system console.   */
 
 void castle_printk(c_printk_level_t level, const char *fmt, ...);
 int castle_printk_init(void);
