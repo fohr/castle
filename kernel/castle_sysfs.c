@@ -120,7 +120,7 @@ static ssize_t versions_list_store(struct kobject *kobj,
 								   const char *buf, 
 								   size_t count)
 {
-    castle_printk("Got write to volumes: %s\n", buf);
+    castle_printk(LOG_INFO, "Got write to volumes: %s\n", buf);
     return count;
 }
 
@@ -147,7 +147,7 @@ int castle_sysfs_version_add(version_t version)
        version has to be less than 100000 */
     if(version >= 100000)
     {
-        castle_printk("ERROR: version number > 100000. Not adding to sysfs.\n");
+        castle_printk(LOG_INFO, "ERROR: version number > 100000. Not adding to sysfs.\n");
         return -E2BIG;
     }
     v = castle_malloc(sizeof(struct castle_sysfs_version), GFP_KERNEL);
@@ -164,7 +164,7 @@ int castle_sysfs_version_add(version_t version)
     ret = sysfs_create_file(&castle_sysfs_versions.kobj, &v->csys_entry.attr);
     if(ret)
     {
-        castle_printk("Warning: could not create a version file in sysfs.\n");
+        castle_printk(LOG_WARN, "Warning: could not create a version file in sysfs.\n");
         castle_free(v);
     } else
     {

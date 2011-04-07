@@ -23,7 +23,7 @@
 #ifndef DEBUG
 #define debug(_f, ...)  ((void)0)
 #else
-#define debug(_f, _a...)  (castle_printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
+#define debug(_f, _a...)  (castle_printk(LOG_DEBUG, "%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
 #endif
 
 static DEFINE_MUTEX(castle_control_lock);
@@ -64,7 +64,7 @@ void castle_control_claim(uint32_t dev, int *ret, slave_uuid_t *id)
 
 void castle_control_release(slave_uuid_t id, int *ret)
 {
-    castle_printk("==> Release NOT IMPLEMENTED YET, slave UUID=%d\n", id);
+    castle_printk(LOG_ERROR, "==> Release NOT IMPLEMENTED YET, slave UUID=%d\n", id);
     *ret = -ENOSYS;
 }
 
@@ -74,7 +74,7 @@ void castle_control_attach(version_t version, int *ret, uint32_t *dev)
  
     if (!DA_INVAL(castle_version_da_id_get(version)))
     {
-        castle_printk("Couldn't attach device to collection.\n");
+        castle_printk(LOG_WARN, "Couldn't attach device to collection.\n");
         *ret = -EINVAL;
         return;
     }
@@ -120,14 +120,15 @@ void castle_control_create(uint64_t size, int *ret, version_t *id)
 
     if(collection_tree)
     {
-        castle_printk("Creating a collection version tree.\n");
+        castle_printk(LOG_USERINFO, "Creating a collection version tree.\n");
         da_id = castle_next_da_id++;
     } 
 
     /* If size isn't zero, make sure it's a multiple of block size. */
     if(size % C_BLK_SIZE != 0)
     {
-        castle_printk("When creating a block device size must be a multiple of %d, got %lld.\n",
+        castle_printk(LOG_ERROR,
+                "When creating a block device size must be a multiple of %d, got %lld.\n",
                 C_BLK_SIZE, size);
         goto err_out;
     }
@@ -141,7 +142,7 @@ void castle_control_create(uint64_t size, int *ret, version_t *id)
     /* We use doubling arrays for collection trees */
     if (collection_tree && castle_double_array_make(da_id, version))
     {
-        castle_printk("Failed creating doubling array for version: %d\n", version);
+        castle_printk(LOG_ERROR, "Failed creating doubling array for version: %d\n", version);
         version = INVAL_VERSION; 
     }
 
@@ -171,13 +172,13 @@ void castle_control_destroy(version_t version, int *ret)
     version_t       parent;
     da_id_t         da_id;
 
-    castle_printk("Destroying version: %u\n", version);
+    castle_printk(LOG_USERINFO, "Destroying version: %u\n", version);
     *ret = castle_version_read(version, &da_id, &parent, NULL, NULL, NULL);
     
     /* Reply immediatly, if we can't find the version */
     if ((*ret < 0))
     {
-        castle_printk("Invalid version\n");
+        castle_printk(LOG_WARN, "Invalid version\n");   // @TODO print the version
         *ret = -EINVAL;
         return;
     }
@@ -185,7 +186,7 @@ void castle_control_destroy(version_t version, int *ret)
     /* Reply immediately, if we can't find an associated DA */
     if (!da_id)
     {
-        castle_printk("Version does not correspond to a DA.\n");
+        castle_printk(LOG_WARN, "Version does not correspond to a DA.\n");    // @TODO print the version
         *ret = -EINVAL;
         return;
     }
@@ -193,14 +194,14 @@ void castle_control_destroy(version_t version, int *ret)
     /* Reply immediately, if this is not the root version */
     if (parent)
     {
-        castle_printk("Cannot delete version with parent.\n");
+        castle_printk(LOG_WARN, "Cannot delete version with parent.\n");
         *ret = -EINVAL;
         return;
     }
 
     if (castle_double_array_destroy(da_id) < 0)
     {
-        castle_printk("Failed to destroy Collection tree: %u\n", version);
+        castle_printk(LOG_WARN, "Failed to destroy Collection tree: %u\n", version);
         *ret = -EINVAL;
         return;
     }
@@ -212,7 +213,7 @@ void castle_control_clone(version_t version, int *ret, version_t *clone)
 {
     if(version == 0)
     {
-        castle_printk("Do not clone version 0. Create a new volume.\n");
+        castle_printk(LOG_WARN, "Do not clone version 0. Create a new volume.\n");
         *clone = 0;
         *ret   = -EINVAL;
         return;
@@ -220,7 +221,7 @@ void castle_control_clone(version_t version, int *ret, version_t *clone)
 
     if (castle_version_deleted(version))
     {
-        castle_printk("Version is already marked for deletion. Can't clone it.\n");
+        castle_printk(LOG_WARN, "Version is already marked for deletion. Can't clone it.\n");
         *clone = 0;
         *ret = -EINVAL;
         return;
@@ -324,7 +325,7 @@ int castle_attachments_writeback(void)
         if(ca->device)
             continue;
         if(castle_collection_writeback(ca))
-            castle_printk("Failed to writeback collection: (%u, %s)\n", 
+            castle_printk(LOG_WARN, "Failed to writeback collection: (%u, %s)\n", 
                     ca->col.id, ca->col.name);
     }
     
@@ -342,7 +343,7 @@ int castle_attachments_read(void)
  
     BUG_ON(castle_attachments_store);
 
-    castle_printk("Opening mstore for Collection Attachments\n");
+    castle_printk(LOG_INFO, "Opening mstore for Collection Attachments\n");
     castle_attachments_store = castle_mstore_open(MSTORE_ATTACHMENTS_TAG, 
                                         sizeof(struct castle_alist_entry));
     if (!castle_attachments_store)
@@ -371,12 +372,12 @@ int castle_attachments_read(void)
         ca = castle_collection_init(mstore_entry.version, name);
         if(!ca)
         {
-            castle_printk("Failed to create Collection (%s, %u)\n",
+            castle_printk(LOG_WARN, "Failed to create Collection (%s, %u)\n",
                     mstore_entry.name, mstore_entry.version);
             ret = -EINVAL;
             goto out;
         }
-        castle_printk("Created Collection (%s, %u) with id: %u\n",
+        castle_printk(LOG_USERINFO, "Created Collection (%s, %u) with id: %u\n",
                 mstore_entry.name, mstore_entry.version, ca->col.id);
     }
 
@@ -406,7 +407,7 @@ void castle_control_collection_attach(version_t          version,
             continue;
         if (strcmp(name, ca->col.name) == 0)
         {
-            castle_printk("Collection name %s already exists\n", ca->col.name);
+            castle_printk(LOG_WARN, "Collection name %s already exists\n", ca->col.name);
             *ret = -EEXIST;
             return;
         }
@@ -414,7 +415,7 @@ void castle_control_collection_attach(version_t          version,
 
     if (castle_version_deleted(version))
     {
-        castle_printk("Version is already marked for deletion. Can't be attached\n");
+        castle_printk(LOG_WARN, "Version is already marked for deletion. Can't be attached\n");
         *ret = -EINVAL;
         return;
     }
@@ -422,11 +423,11 @@ void castle_control_collection_attach(version_t          version,
     ca = castle_collection_init(version, name);
     if(!ca)
     {
-        castle_printk("Couldn't find collection for version: %u\n", version);
+        castle_printk(LOG_WARN, "Couldn't find collection for version: %u\n", version);
         *ret = -EINVAL;
         return;
     }
-    castle_printk("Creating new Collection Attachment %u (%s, %u)\n", 
+    castle_printk(LOG_USERINFO, "Creating new Collection Attachment %u (%s, %u)\n", 
             ca->col.id, ca->col.name, ca->version);
     
     *collection = ca->col.id; 
@@ -443,7 +444,7 @@ void castle_control_collection_detach(collection_id_t collection,
         return;
     }
 
-    castle_printk("Deleting Collection Attachment %u (%s, %u)/%u\n", 
+    castle_printk(LOG_USERINFO, "Deleting Collection Attachment %u (%s, %u)/%u\n", 
             collection, ca->col.name, ca->version, ca->ref_cnt);
 
     /* Double put is opposite of what happens in collection_init */
@@ -508,14 +509,14 @@ void castle_control_collection_snapshot_delete(version_t version,
 {
     if (DA_INVAL(castle_version_da_id_get(version)))
     {
-        castle_printk("Version %d is not deletable. DA doesn't exist.\n", version);
+        castle_printk(LOG_WARN, "Version %d is not deletable. DA doesn't exist.\n", version);
         *ret = -EINVAL;
         return;
     }
 
     if (castle_version_attached(version))
     {
-        castle_printk("Version %d is attached. Couldn't be deleted.\n", version);
+        castle_printk(LOG_WARN, "Version %d is attached. Couldn't be deleted.\n", version);
         *ret = -EINVAL;
         return;
     }
@@ -622,7 +623,7 @@ void castle_control_slave_evacuate(uint32_t uuid, int *ret)
     slave = castle_slave_find_by_uuid(uuid);
     if(!slave)
     {
-        castle_printk("Error: slave not found. Ignoring request.\n");
+        castle_printk(LOG_WARN, "Error: slave not found. Ignoring request.\n");
         *ret = -ENOENT;
         return;
     }
@@ -648,7 +649,7 @@ void castle_control_slave_evacuate(uint32_t uuid, int *ret)
 
         if (nr_live_slaves == MIN_LIVE_SLAVES)
         {
-            castle_printk("Error: evacuation rejected to preserve minimum "
+            castle_printk(LOG_WARN, "Error: evacuation rejected to preserve minimum "
                           "number of working disks.\n");
             *ret = -EPERM;
             return;
@@ -658,7 +659,7 @@ void castle_control_slave_evacuate(uint32_t uuid, int *ret)
     if (test_bit(CASTLE_SLAVE_GHOST_BIT, &slave->flags))
     {
         /* Slave is a 'ghost' - missing from the expected set of slaves - error */
-        castle_printk("Error: slave 0x%x (%s) is missing. Ignoring.\n",
+        castle_printk(LOG_WARN, "Error: slave 0x%x (%s) is missing. Ignoring.\n",
                 slave->uuid, bdevname(slave->bdev, b));
         *ret = -ENOSYS;
         return;
@@ -667,7 +668,7 @@ void castle_control_slave_evacuate(uint32_t uuid, int *ret)
     if (test_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags))
     {
         /* Slave is already marked as out-of-service - ignore */
-        castle_printk("Warning: slave 0x%x (%s) has already been marked out-of-service. "
+        castle_printk(LOG_WARN, "Warning: slave 0x%x (%s) has already been marked out-of-service. "
                "Ignoring request.\n",
                 slave->uuid, bdevname(slave->bdev, b));
         *ret = -EINVAL;
@@ -679,7 +680,7 @@ void castle_control_slave_evacuate(uint32_t uuid, int *ret)
     if (test_bit(CASTLE_SLAVE_EVACUATE_BIT, &slave->flags))
     {
         /* Slave is already marked as evacuated - ignore */
-        castle_printk("Warning: slave 0x%x (%s) has already been evacuated. Ignoring.\n",
+        castle_printk(LOG_WARN, "Warning: slave 0x%x (%s) has already been evacuated. Ignoring.\n",
                 slave->uuid, bdevname(slave->bdev, b));
         *ret = -EEXIST;
         return;
@@ -690,7 +691,7 @@ void castle_control_slave_evacuate(uint32_t uuid, int *ret)
     * and all future I/O submissions should ignore this slave.
     */
     set_bit(CASTLE_SLAVE_EVACUATE_BIT, &slave->flags);
-    castle_printk("Slave 0x%x (%s) has been marked as evacuating.\n",
+    castle_printk(LOG_USERINFO, "Slave 0x%x (%s) has been marked as evacuating.\n",
             slave->uuid, bdevname(slave->bdev, b));
     castle_extents_rebuild_start();
     *ret = EXIT_SUCCESS;
@@ -733,7 +734,7 @@ void castle_wq_priority_set(struct workqueue_struct *wq)
         work = castle_malloc(sizeof(struct work_struct), GFP_KERNEL);
         if (!work)
         {
-            castle_printk("Couldn't allocate memory for work structures, not able to"
+            castle_printk(LOG_WARN, "Couldn't allocate memory for work structures, not able to"
                    "change nice value\n");
             return;
         }
@@ -800,7 +801,7 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 
     if(_IOC_TYPE(cmd) != CASTLE_CTRL_IOCTL_TYPE)
     {
-        castle_printk("Unknown IOCTL: 0x%x\n", cmd);
+        castle_printk(LOG_WARN, "Unknown IOCTL: 0x%x\n", cmd);
         return -EINVAL;
     }
 
@@ -809,7 +810,7 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 
     if(_IOC_NR(cmd) != ioctl.cmd)
     {
-        castle_printk("IOCTL number %d, doesn't agree with the command number %d.\n",
+        castle_printk(LOG_WARN, "IOCTL number %d, doesn't agree with the command number %d.\n",
                 _IOC_NR(cmd), ioctl.cmd);
         return -EINVAL;
     }
@@ -821,13 +822,13 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
                             (ioctl.cmd != CASTLE_CTRL_FAULT) &&
                             (ioctl.cmd != CASTLE_CTRL_SLAVE_EVACUATE))
     {
-        castle_printk("Disallowed ctrl op %d, before fs gets inited.\n", ioctl.cmd);
+        castle_printk(LOG_WARN, "Disallowed ctrl op %d, before fs gets inited.\n", ioctl.cmd);
         return -EINVAL;
     }
 
     if(castle_fs_inited && ((ioctl.cmd == CASTLE_CTRL_CLAIM) || (ioctl.cmd == CASTLE_CTRL_INIT))) 
     {
-        castle_printk("Disallowed ctrl op %d, after fs gets inited.\n", ioctl.cmd);
+        castle_printk(LOG_WARN, "Disallowed ctrl op %d, after fs gets inited.\n", ioctl.cmd);
         return -EINVAL;
     }
 
@@ -908,7 +909,7 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
                                                          &ioctl.destroy.ret);
             else
             {
-                castle_printk("Flag for destroy is none of version[0]/tree[1]\n");
+                castle_printk(LOG_WARN, "Flag for destroy is none of version[0]/tree[1]\n");
                 err = -ENOSYS;
                 goto err;
             }
@@ -1032,7 +1033,7 @@ int castle_control_init(void)
     int ret;
     
     if((ret = misc_register(&castle_control)))
-        castle_printk("Castle control device could not be registered (%d).", ret);
+        castle_printk(LOG_INIT, "Castle control device could not be registered (%d).", ret);
 
     return ret;
 }
@@ -1042,7 +1043,7 @@ void castle_control_fini(void)
     int ret;
 
     if((ret = misc_deregister(&castle_control))) 
-        castle_printk("Could not unregister castle control node (%d).\n", ret);
+        castle_printk(LOG_INIT, "Could not unregister castle control node (%d).\n", ret);
     /* Sleep waiting for the last ctrl op to complete, if there is one */
     CASTLE_TRANSACTION_BEGIN;
     CASTLE_TRANSACTION_END;

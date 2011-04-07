@@ -12,7 +12,7 @@
 #ifndef DEBUG
 #define debug(_f, ...)          ((void)0)
 #else
-#define debug(_f, _a...)        (castle_printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
+#define debug(_f, _a...)        (castle_printk(LOG_DEBUG, "%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
 #endif
 
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,18)
@@ -30,7 +30,7 @@ void castle_uevent4(uint16_t cmd, uint64_t arg1, uint64_t arg2, uint64_t arg3, u
     env = castle_zalloc(sizeof(struct kobj_uevent_env), GFP_NOIO);
     if(!env)
     {
-        castle_printk("No memory\n");
+        castle_printk(LOG_WARN, "No memory\n");
         return;
     }
     err = add_uevent_var(env, "NOTIFY=%s",  "false");

@@ -85,12 +85,12 @@ MODULE_PARM_DESC(castle_latest_key, "castle_latest_key");
 #ifndef DEBUG
 #define debug(_f, ...)  ((void)0)
 #else
-#define debug(_f, _a...)  (castle_printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
+#define debug(_f, _a...)  (castle_printk(LOG_DEBUG, "%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
 #endif
 
 static void USED castle_fs_superblock_print(struct castle_fs_superblock *fs_sb)
 {
-    castle_printk("Magic1: %.8x\n"
+    castle_printk(LOG_INIT, "Magic1: %.8x\n"
            "Magic2: %.8x\n"
            "Magic3: %.8x\n"
            "UUID: %x\n"
@@ -474,16 +474,16 @@ int castle_fs_init(void)
     uint32_t slave_count=0, nr_fs_slaves=0, nr_live_slaves=0, need_rebuild = 0;
     uint32_t bcv=0, last_version_checked=MAX_VERSION, potential_bcv=0;
 
-    castle_printk("Castle FS start.\n");
+    castle_printk(LOG_INIT, "Castle FS start.\n");
     if(castle_fs_inited)
     {
-        castle_printk("FS is already inited\n");
+        castle_printk(LOG_WARN, "FS is already inited\n");
         return -EEXIST;
     }
 
     if(list_empty(&castle_slaves.slaves))
     {
-        castle_printk("Found no slaves\n");
+        castle_printk(LOG_ERROR, "Found no slaves\n");
         return -ENOENT;
     }
 
@@ -537,7 +537,8 @@ int castle_fs_init(void)
         {
             /* All slaves support this fs version - use it. */
             bcv = version_to_check;
-            castle_printk("Found Best Common Version %d on all live slaves.\n", version_to_check);
+            castle_printk(LOG_INIT, "Found Best Common Version %d on all live slaves.\n",
+                    version_to_check);
             version_found = 1;
             break;
         } else if (potential_bcv)
@@ -547,8 +548,8 @@ int castle_fs_init(void)
              * support this version, potential_bcv is the next best version to use.
              */
             bcv = potential_bcv;
-            castle_printk("Best Common Filesystem Version %d on quorum of live slaves.\n",
-                          version_to_check);
+            castle_printk(LOG_INIT, "Best Common Filesystem Version %d on quorum of live slaves.\n",
+                    version_to_check);
             version_found = 1;
             break;
         } else if (hits == nr_slaves-1)
@@ -561,8 +562,8 @@ int castle_fs_init(void)
              */
             if (last)
             {
-                castle_printk("Best Common Filesystem Version %d on quorum of live slaves.\n",
-                              version_to_check);
+                castle_printk(LOG_INIT, "Best Common Filesystem Version %d on quorum of "
+                        "live slaves.\n", version_to_check);
                 bcv = version_to_check;
                 version_found = 1;
                 break;
@@ -573,7 +574,7 @@ int castle_fs_init(void)
         }
         if (last)
         {
-            castle_printk("Error: could not find quorum of slaves to start filesystem.\n");
+            castle_printk(LOG_INIT, "Error: could not find quorum of slaves to start filesystem.\n");
             return -EINVAL;
         }
     }
@@ -588,7 +589,7 @@ int castle_fs_init(void)
 
             BUG_ON(need_rebuild); /* We should only find one slave. */
 
-            castle_printk("Slave 0x%x [%s] is not in quorum of live slaves. "
+            castle_printk(LOG_INIT, "Slave 0x%x [%s] is not in quorum of live slaves. "
                           "Setting as out-of-service.\n",
                 cs->uuid, bdevname(cs->bdev, b));
             set_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags);
@@ -608,7 +609,7 @@ int castle_fs_init(void)
             prev_new_dev = cs->new_dev;
         if (cs->new_dev != prev_new_dev)
         {
-            castle_printk("Few disks are marked new and few are not\n");
+            castle_printk(LOG_ERROR, "Few disks are marked new and few are not\n");
             return -EINVAL;
         }
     }
@@ -622,12 +623,12 @@ int castle_fs_init(void)
         if ((cs->cs_superblock.fs_version != bcv) && 
                 (castle_slave_version_load(cs, bcv)))
         {
-            castle_printk("Couldn't find version %u on slave: 0x%x\n", bcv, cs->uuid);
+            castle_printk(LOG_ERROR, "Couldn't find version %u on slave: 0x%x\n", bcv, cs->uuid);
             return -EINVAL;
         }
         if (castle_freespace_slave_init(cs, cs->new_dev))
         {
-            castle_printk("Failed to initialise Freespace on slave: 0x%x\n", cs->uuid);
+            castle_printk(LOG_ERROR, "Failed to initialise Freespace on slave: 0x%x\n", cs->uuid);
             return -EINVAL;
         }
         castle_slave_superblock_print(&cs->cs_superblock);
@@ -660,7 +661,7 @@ int castle_fs_init(void)
             if(memcmp(&fs_sb, cs_fs_sb, 
                       sizeof(struct castle_fs_superblock)) != 0)
             {
-                castle_printk("Castle fs superblocks do not match!\n");
+                castle_printk(LOG_ERROR, "Castle fs superblocks do not match!\n");
                 castle_fs_superblock_put(cs, 0);
                 return -EINVAL;
             }
@@ -680,7 +681,7 @@ int castle_fs_init(void)
 
         if (i == fs_sb.nr_slaves)
         {
-            castle_printk("Slave %u doesn't belong to this File system.\n", cs->uuid);
+            castle_printk(LOG_ERROR, "Slave %u doesn't belong to this File system.\n", cs->uuid);
             return -EINVAL;
         }
         castle_fs_superblock_put(cs, 0);
@@ -689,17 +690,17 @@ int castle_fs_init(void)
     debug("FS init found %d live slaves out of a total of %d slaves\n", nr_live_slaves, nr_fs_slaves);
     if (slave_count < 2)
     {
-        castle_printk("Error: Need a minimum of two disks.\n");
+        castle_printk(LOG_ERROR, "Error: Need a minimum of two disks.\n");
         return -EINVAL;
     }
 
     if (!first)
     {
         if (nr_live_slaves == nr_fs_slaves - 1)
-            castle_printk("Warning: Starting filesystem with one slave missing.\n");
+            castle_printk(LOG_WARN, "Warning: Starting filesystem with one slave missing.\n");
         else if (nr_live_slaves < nr_fs_slaves)
         {
-            castle_printk("Error: could not find enough slaves to start the filesystem\n");
+            castle_printk(LOG_ERROR, "Error: could not find enough slaves to start the filesystem\n");
             return -EINVAL;
         }
 
@@ -714,12 +715,12 @@ int castle_fs_init(void)
             cs = castle_slave_find_by_uuid(fs_sb.slaves[i]);
             if (!cs)
             {
-                castle_printk("Warning: slave 0x%x is no longer live.\n",
+                castle_printk(LOG_WARN, "Warning: slave 0x%x is no longer live.\n",
                               fs_sb.slaves[i]);
                 castle_slave_ghost_add(fs_sb.slaves[i]);
                 if (!test_bit(CASTLE_SLAVE_REMAPPED_BIT, &fs_sb.slaves_flags[i]))
                 {
-                    castle_printk("Slave 0x%x has not been remapped. Forcing rebuild\n", 
+                    castle_printk(LOG_USERINFO, "Slave 0x%x has not been remapped. Forcing rebuild\n", 
                                   fs_sb.slaves[i]);
                     need_rebuild++;
                 }
@@ -732,7 +733,7 @@ int castle_fs_init(void)
                 if ((test_bit(CASTLE_SLAVE_EVACUATE_BIT, &fs_sb.slaves_flags[i])) &&
                     (!test_bit(CASTLE_SLAVE_OOS_BIT, &fs_sb.slaves_flags[i])))
                 {
-                    castle_printk("Slave 0x%x [%s] is still in evacuation\n",
+                    castle_printk(LOG_USERINFO, "Slave 0x%x [%s] is still in evacuation\n",
                             cs->uuid, bdevname(cs->bdev, b));
                     set_bit(CASTLE_SLAVE_EVACUATE_BIT, &cs->flags);
                 }
@@ -749,9 +750,9 @@ int castle_fs_init(void)
     if (ret)
     {
         if (ret == -ENOSPC)
-            castle_printk("Failed to create/read extents due to low freespace.\n");
+            castle_printk(LOG_ERROR, "Failed to create/read extents due to low freespace.\n");
         else
-            castle_printk("Failed to create/read extents.\n");
+            castle_printk(LOG_ERROR, "Failed to create/read extents.\n");
         return ret;
     }
 
@@ -775,7 +776,7 @@ int castle_fs_init(void)
                                                   castle_global_tree.tree_ext_free.ext_size,
                                                   MTREE_NODE_SIZE * C_BLK_SIZE)) < 0)
         {
-            castle_printk("Failed to allocate space for Global Tree.\n");
+            castle_printk(LOG_ERROR, "Failed to allocate space for Global Tree.\n");
             return ret;
         }
             
@@ -784,7 +785,7 @@ int castle_fs_init(void)
                                                   castle_global_tree.data_ext_free.ext_size,
                                                   C_BLK_SIZE)) < 0)
         {
-            castle_printk("Failed to allocate space for Global Tree Medium Objects.\n");
+            castle_printk(LOG_ERROR, "Failed to allocate space for Global Tree Medium Objects.\n");
             return ret;
         }
 
@@ -831,7 +832,7 @@ int castle_fs_init(void)
 
     if (!first && (ret = castle_chk_disk()))
     {
-        castle_printk("Failed to bring-up sane FS from disks\n");
+        castle_printk(LOG_ERROR, "Failed to bring-up sane FS from disks\n");
         return ret;
     }
 
@@ -841,13 +842,13 @@ int castle_fs_init(void)
 
     if (castle_double_array_start() < 0)
     {
-        castle_printk("Failed to start Doubling Arrays\n");
+        castle_printk(LOG_ERROR, "Failed to start Doubling Arrays\n");
         return -EINVAL;
     }
     
     castle_events_init();
 
-    castle_printk("Castle FS started.\n");
+    castle_printk(LOG_INIT, "Castle FS started.\n");
     castle_fs_inited = 1;
 
     castle_extents_rebuild_startup_check(need_rebuild);
@@ -857,7 +858,7 @@ int castle_fs_init(void)
 
 static void castle_slave_superblock_print(struct castle_slave_superblock *cs_sb)
 {
-    castle_printk("Magic1: %.8x\n"
+    castle_printk(LOG_INIT, "Magic1: %.8x\n"
            "Magic2: %.8x\n"
            "Magic3: %.8x\n"
            "Version:%x\n"
@@ -922,7 +923,7 @@ static int castle_block_read(struct block_device *bdev, sector_t sector, uint32_
     block_size = bdev->bd_block_size;
     if (block_size < 512)
     {
-        castle_printk("Block size(%u) < 512 bytes. Not supported\n", block_size);
+        castle_printk(LOG_WARN, "Block size(%u) < 512 bytes. Not supported\n", block_size);
         return -1;
     }
     nr_blocks = ((size - 1) / block_size) + 1;
@@ -950,7 +951,7 @@ static void castle_slave_superblock_init(struct   castle_slave *cs,
                                          struct   castle_slave_superblock *cs_sb,
                                          uint32_t uuid)
 {
-    castle_printk("Initing slave superblock.\n");
+    castle_printk(LOG_INIT, "Initing slave superblock.\n");
 
     cs_sb->pub.magic1 = CASTLE_SLAVE_MAGIC1;
     cs_sb->pub.magic2 = CASTLE_SLAVE_MAGIC2;
@@ -962,7 +963,7 @@ static void castle_slave_superblock_init(struct   castle_slave *cs,
     cs_sb->pub.flags  = CASTLE_SLAVE_TARGET | CASTLE_SLAVE_SPINNING;
     castle_slave_superblock_print(cs_sb);
 
-    castle_printk("Done.\n");
+    castle_printk(LOG_INIT, "Done.\n");
 }
 
 static int castle_slave_superblock_read(struct castle_slave *cs) 
@@ -980,7 +981,7 @@ static int castle_slave_superblock_read(struct castle_slave *cs)
     fs_sb = castle_malloc(sizeof(struct castle_fs_superblock) * 2, GFP_KERNEL);
     if (!cs_sb || !fs_sb)
     {
-        castle_printk("Failed to allocate memory for superblocks\n");
+        castle_printk(LOG_ERROR, "Failed to allocate memory for superblocks\n");
         goto error_out;
     }
 
@@ -1035,7 +1036,7 @@ static int castle_slave_superblock_read(struct castle_slave *cs)
     /* Both are invalid superblocks - Return error. */
     if (errs[0] && errs[1])
     {
-        castle_printk("Superblock is invalid and not a new device: (%d, %d)\n",
+        castle_printk(LOG_ERROR, "Superblock is invalid and not a new device: (%d, %d)\n",
                 errs[0], errs[1]);
         err = errs[0];
         goto error_out;
@@ -1053,10 +1054,10 @@ static int castle_slave_superblock_read(struct castle_slave *cs)
 
     fs_version = fs_version % 2;
 
-    castle_printk("Disk 0x%x has FS versions - ", cs_sb[fs_version].pub.uuid);
-    if (!errs[0])    castle_printk("[%u]", cs_sb[0].fs_version);
-    if (!errs[1])    castle_printk("[%u]", cs_sb[1].fs_version);
-    castle_printk("\n");
+    castle_printk(LOG_INIT, "Disk 0x%x has FS versions - ", cs_sb[fs_version].pub.uuid);
+    if (!errs[0])    castle_printk(LOG_INIT, "[%u]", cs_sb[0].fs_version);
+    if (!errs[1])    castle_printk(LOG_INIT, "[%u]", cs_sb[1].fs_version);
+    castle_printk(LOG_INIT, "\n");
 
     cs->fs_versions[0] = cs_sb[0].fs_version;
     cs->fs_versions[1] = cs_sb[1].fs_version;
@@ -1066,7 +1067,7 @@ static int castle_slave_superblock_read(struct castle_slave *cs)
         /* Check if the versions are non-consecutive. */
         if (abs(cs_sb[0].fs_version - cs_sb[1].fs_version) != 1)        
         {
-            castle_printk("Disk 0x%x has non-consequtive versions\n",
+            castle_printk(LOG_ERROR, "Disk 0x%x has non-consequtive versions\n",
                     cs_sb[0].pub.uuid);
 #ifdef DEBUG
             BUG();
@@ -1077,7 +1078,7 @@ static int castle_slave_superblock_read(struct castle_slave *cs)
         /* Check for the uuids of both versions to match. */
         if (cs_sb[0].pub.uuid != cs_sb[1].pub.uuid)
         {
-            castle_printk("Found versions with different uuids 0x%x:0x%x\n",
+            castle_printk(LOG_ERROR, "Found versions with different uuids 0x%x:0x%x\n",
                     cs_sb[0].pub.uuid, cs_sb[1].pub.uuid);
 #ifdef DEBUG
             BUG();
@@ -1087,7 +1088,7 @@ static int castle_slave_superblock_read(struct castle_slave *cs)
         }
     }
 
-    castle_printk("Disk superblock found.\n");
+    castle_printk(LOG_INIT, "Disk superblock found.\n");
     memcpy(&cs->cs_superblock, &cs_sb[fs_version], sizeof(struct castle_slave_superblock));
     memcpy(&cs->fs_superblock, &fs_sb[fs_version], sizeof(struct castle_fs_superblock));
 
@@ -1307,7 +1308,7 @@ static int castle_slave_add(struct castle_slave *cs)
         s = list_entry(l, struct castle_slave, list);
         if(s->uuid == cs->uuid)
         {
-            castle_printk("Uuid of two slaves match (uuid=0x%x, id1=%d, id2=%d)\n", 
+            castle_printk(LOG_ERROR, "Uuid of two slaves match (uuid=0x%x, id1=%d, id2=%d)\n", 
                     cs->uuid, s->id, cs->id);
             return -EINVAL;
         }
@@ -1338,7 +1339,7 @@ struct castle_slave* castle_claim(uint32_t new_dev)
     bdev = open_by_devnum(dev, FMODE_READ|FMODE_WRITE);
     if (IS_ERR(bdev)) 
     {
-        castle_printk("Could not open %s.\n", __bdevname(dev, b));
+        castle_printk(LOG_ERROR, "Could not open %s.\n", __bdevname(dev, b));
         bdev = NULL;
         goto err_out;
     }
@@ -1346,14 +1347,14 @@ struct castle_slave* castle_claim(uint32_t new_dev)
 
     if(castle_slave_superblock_read(cs))
     {
-        castle_printk("Invalid superblock.\n");
+        castle_printk(LOG_ERROR, "Invalid superblock.\n");
         goto err_out;
     }
 
     /* Make sure that the disk is at least FREE_SPACE_START big. */
     if(get_bd_capacity(bdev) < (FREE_SPACE_START << (20 - 9))) 
     {
-        castle_printk("Disk %s capacity too small. Must be at least %dM, got %lldM\n",
+        castle_printk(LOG_ERROR, "Disk %s capacity too small. Must be at least %dM, got %lldM\n",
                  __bdevname(dev, b), FREE_SPACE_START, get_bd_capacity(bdev) >> (20 - 9));
         goto err_out;
     }
@@ -1361,7 +1362,7 @@ struct castle_slave* castle_claim(uint32_t new_dev)
     err = bd_claim(bdev, &castle);
     if (err) 
     {
-        castle_printk("Could not bd_claim %s, err=%d.\n", bdevname(bdev, b), err);
+        castle_printk(LOG_ERROR, "Could not bd_claim %s, err=%d.\n", bdevname(bdev, b), err);
         goto err_out;
     }
     bdev_claimed = 1;
@@ -1369,7 +1370,7 @@ struct castle_slave* castle_claim(uint32_t new_dev)
     cs->sup_ext = castle_extent_sup_ext_init(cs);
     if (cs->sup_ext == INVAL_EXT_ID)
     {
-        castle_printk("Could not initialize super extent for slave 0x%x\n", cs->uuid);
+        castle_printk(LOG_ERROR, "Could not initialize super extent for slave 0x%x\n", cs->uuid);
         goto err_out;
     }
 
@@ -1378,7 +1379,7 @@ struct castle_slave* castle_claim(uint32_t new_dev)
     err = castle_slave_add(cs);
     if(err)
     {
-        castle_printk("Could not add slave to the list.\n");
+        castle_printk(LOG_ERROR, "Could not add slave to the list.\n");
         goto err_out;
     }
     cs_added = 1;
@@ -1386,7 +1387,7 @@ struct castle_slave* castle_claim(uint32_t new_dev)
     err = castle_sysfs_slave_add(cs);
     if(err)
     {
-        castle_printk("Could not add slave to sysfs.\n");
+        castle_printk(LOG_ERROR, "Could not add slave to sysfs.\n");
         goto err_out;
     }
     
@@ -1694,7 +1695,7 @@ static int castle_bio_data_cvt_get(c_bvec_t    *c_bvec,
                                     0, &cep);
     if (ret < 0)
     {
-        castle_printk("Pre-alloc: %lu, Alloc: %lu\n",
+        castle_printk(LOG_ERROR, "Pre-alloc: %lu, Alloc: %lu\n",
                atomic64_read(&c_bvec->tree->data_ext_free.blocked)/4096,
                atomic64_read(&c_bvec->tree->data_ext_free.used)/4096);
         BUG();
@@ -1732,7 +1733,7 @@ static int castle_bio_validate(struct bio *bio)
         if(((bvec->bv_offset % (1<<9)) != 0) ||  
            ((bvec->bv_len    % (1<<9)) != 0)) 
         {
-            castle_printk("Got non aligned IO: len=0x%x, offset=0x%x\n", 
+            castle_printk(LOG_WARN, "Got non aligned IO: len=0x%x, offset=0x%x\n", 
                     bvec->bv_len, bvec->bv_offset);
             return -EINVAL;
         }
@@ -1924,7 +1925,7 @@ void castle_attachment_put(struct castle_attachment *ca)
         castle_free(ca);
         castle_version_detach(version);
         castle_double_array_put(da_id);
-        castle_printk("Attachment %u is completly removed\n", ca_id);
+        castle_printk(LOG_USERINFO, "Attachment %u is completly removed\n", ca_id);
     }
 }
 
@@ -1960,7 +1961,7 @@ void castle_device_free(struct castle_attachment *cd)
     
     castle_events_device_detach(cd->dev.gd->major, cd->dev.gd->first_minor);
 
-    castle_printk("===> When freeing the number of cd users is: %d\n", cd->ref_cnt);
+    castle_printk(LOG_INFO, "===> When freeing the number of cd users is: %d\n", cd->ref_cnt);
     castle_sysfs_device_del(cd);
     /* @TODO: Should this be done? blk_cleanup_queue(cd->dev.gd->rq); */ 
     del_gendisk(cd->dev.gd);
@@ -2027,7 +2028,7 @@ error_out:
     if(gd)  put_disk(gd); 
     if(rq)  blk_cleanup_queue(rq); 
     if(dev) castle_free(dev);
-    castle_printk("Failed to init device.\n");
+    castle_printk(LOG_ERROR, "Failed to init device.\n");
     return NULL;    
 }
 
@@ -2047,7 +2048,8 @@ struct castle_attachment* castle_collection_init(version_t version, char *name)
     
     if(DA_INVAL(da_id))
     {
-        castle_printk("Could not attach collection: %s, version: %d, because no DA found.\n",
+        castle_printk(LOG_WARN,
+                "Could not attach collection: %s, version: %d, because no DA found.\n",
                 name, version);
         castle_version_detach(version);
         goto error_out;
@@ -2079,7 +2081,7 @@ error_out:
     castle_free(name);
     if(collection) castle_free(collection);
     if(da_get) castle_double_array_put(da_id);
-    castle_printk("Failed to init collection.\n");
+    castle_printk(LOG_USERINFO, "Failed to init collection.\n");
     return NULL;    
 }
 
@@ -2194,7 +2196,7 @@ static int castle_wqs_init(void)
     return 0;
 
 err_out:
-    castle_printk("Could not create workqueues.\n");
+    castle_printk(LOG_ERROR, "Could not create workqueues.\n");
 
     return -ENOMEM;
 }
@@ -2246,7 +2248,7 @@ static int castle_attachments_init(void)
     /* Allocate a major for this device */
     if((major = register_blkdev(0, "castle-fs")) < 0) 
     {
-        castle_printk("Couldn't register castle device\n");
+        castle_printk(LOG_ERROR, "Couldn't register castle device\n");
         return -ENOMEM;
     }
     spin_lock_init(&castle_attachments.lock);
@@ -2300,7 +2302,7 @@ static int __init castle_init(void)
     if((ret = castle_sysfs_init()))             goto err_out17;
     if((ret = castle_back_init()))              goto err_out18;
 
-    castle_printk("Castle FS init done.\n");
+    castle_printk(LOG_INIT, "Castle FS init done.\n");
 
     return 0;
 
@@ -2350,7 +2352,7 @@ void castle_rda_slaves_free(void);
 
 static void __exit castle_exit(void)
 {
-    castle_printk("Castle FS exit.\n");
+    castle_printk(LOG_INIT, "Castle FS exit.\n");
 
     castle_fs_exiting = 1;
     /* Remove externaly visible interfaces. Starting with the control file

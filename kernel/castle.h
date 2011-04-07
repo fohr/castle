@@ -1368,7 +1368,7 @@ int  castle_ctrl_is_locked          (void);
 #define FAULT(_fault)                                           \
     if (castle_fault == _fault)                                 \
     {                                                           \
-        castle_printk("User asked for fault\n");                \
+        castle_printk(LOG_ERROR, "User asked for fault\n");     \
         BUG();                                                  \
     }
 

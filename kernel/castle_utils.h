@@ -266,23 +266,39 @@ static USED void check_stack_usage(void)
         n++;
     free = (unsigned long)n - (unsigned long)end_of_stack(current);
 
-    castle_printk("%s used greatest stack depth: %lu bytes left, currently left %lu\n",
+    castle_printk(LOG_DEBUG, "%s used greatest stack depth: %lu bytes left, currently left %lu\n",
                 current->comm, 
                 free,
                 (unsigned long)&free - (unsigned long)end_of_stack(current));
 }
 #endif
 
-void castle_printk(const char *fmt, ...);
+/**
+ * Defines castle_printk() log levels.
+ */
+typedef enum {
+    LOG_DEBUG,      /**< Debug-related messages                 */
+
+    /* Following levels are printed to the console. */
+
+    LOG_INFO,       /**< Filesystem informational messages      */
+    LOG_DEVEL,      /**< Ephemeral development messages         */
+    LOG_USERINFO,   /**< Information messages aimed at the user */
+    LOG_WARN,       /**< Filesystem warnings                    */
+    LOG_INIT,       /**< Init()/fini() messages                 */
+    LOG_ERROR       /**< Major error messages                   */
+} c_printk_level_t;
+
+void castle_printk(c_printk_level_t level, const char *fmt, ...);
 int castle_printk_init(void);
 void castle_printk_fini(void);
 
 void inline list_swap(struct list_head *t1, struct list_head *t2);
 void        list_sort(struct list_head *list, 
                       int (*compare)(struct list_head *l1, struct list_head *l2));
-void        vl_key_print(c_vl_key_t *vl_key);
-void        vl_okey_print(c_vl_okey_t *key);
-void        vl_bkey_print(c_vl_bkey_t *key);
+void        vl_key_print(c_printk_level_t level, c_vl_key_t *vl_key);
+void        vl_okey_print(c_printk_level_t level, c_vl_okey_t *key);
+void        vl_bkey_print(c_printk_level_t level, c_vl_bkey_t *key);
 void        skb_print(struct sk_buff *skb);
 void        vl_okey_to_buf(c_vl_okey_t *key, char *buf);
 

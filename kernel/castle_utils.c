@@ -23,7 +23,7 @@ struct castle_printk_buffer     printk_buf;
  * @TODO message priorities
  * @TODO castle-trace handler
  */
-void castle_printk(const char *fmt, ...)
+void castle_printk(c_printk_level_t level, const char *fmt, ...)
 {
     char tmp_buf[1024];
     c_byte_off_t len, rem, pos = 0;
@@ -63,9 +63,14 @@ void castle_printk(const char *fmt, ...)
     spin_unlock(&printk_buf.lock);
 
     // @TODO castle-trace output here
-    /* printk() if we're within the ratelimit. */
-    if (__printk_ratelimit(HZ/PRINTKS_PER_SEC_STEADY_STATE, PRINTKS_IN_BURST))
-        printk(tmp_buf);
+
+    /* Only print warnings, errors and testing messages to the console. */
+    if (level >= LOG_INFO)
+    {
+        /* and then only printk() if we're within the ratelimit. */
+        if (__printk_ratelimit(HZ/PRINTKS_PER_SEC_STEADY_STATE, PRINTKS_IN_BURST))
+            printk(tmp_buf);
+    }
 }
 
 /**
@@ -86,7 +91,7 @@ int castle_printk_init(void)
         return -ENOMEM;
     spin_lock_init(&printk_buf.lock);
 
-    castle_printk("Initialised Castle printk ring buffer.\n");
+    castle_printk(LOG_INIT, "Initialised Castle printk ring buffer.\n");
 
     return 0;
 }
@@ -98,7 +103,7 @@ void castle_printk_fini(void)
 {
     BUG_ON(!printk_buf.buf);
 
-    castle_printk("Freeing Castle printk ring buffer.\n");
+    castle_printk(LOG_INIT, "Freeing Castle printk ring buffer.\n");
 
     vfree(printk_buf.buf);
     printk_buf.buf = NULL;
@@ -162,21 +167,21 @@ void skb_print(struct sk_buff *skb)
     int i;
     uint8_t byte;
 
-    castle_printk("\nPacket length=%d\n", skb->len);
+    castle_printk(LOG_DEBUG, "\nPacket length=%d\n", skb->len);
     for(i=0; i<skb->len; i++)
     {
         BUG_ON(skb_copy_bits(skb, i, &byte, 1) < 0);
         if((byte >= 32) && (byte <= 126))
-            castle_printk(" [%d]=%d (%c)\n", i, byte, byte);
+            castle_printk(LOG_DEBUG, " [%d]=%d (%c)\n", i, byte, byte);
         else
-            castle_printk(" [%d]=%d\n", i, byte);
+            castle_printk(LOG_DEBUG, " [%d]=%d\n", i, byte);
     }
-    castle_printk("\n");
+    castle_printk(LOG_DEBUG, "\n");
 }
 
-void vl_key_print(c_vl_key_t *vl_key)
+void vl_key_print(c_printk_level_t level, c_vl_key_t *vl_key)
 {
-    castle_printk(" key len=%d: ", vl_key->length);
+    castle_printk(level, " key len=%d: ", vl_key->length);
     print_hex_dump_bytes("", DUMP_PREFIX_NONE, vl_key->key, vl_key->length);
 }
 
@@ -197,18 +202,18 @@ void vl_okey_to_buf(c_vl_okey_t *key, char *buf)
     *buf++ = '\0';
 }
 
-void vl_okey_print(c_vl_okey_t *key)
+void vl_okey_print(c_printk_level_t level, c_vl_okey_t *key)
 {
 #define NR_BYTES_PRINT  15
     int i, j;
     char key_str[2*NR_BYTES_PRINT+1];
 
-    castle_printk("# key dimensions: %d\n", key->nr_dims);
+    castle_printk(level, "# key dimensions: %d\n", key->nr_dims);
     for(i=0; i<key->nr_dims; i++)
     {
         for(j=0; j<key->dims[i]->length && j<NR_BYTES_PRINT; j++)
             sprintf(key_str + 2*j, "%.2x", key->dims[i]->key[j]);
-        castle_printk(" dim[%.2d], len=%.3d, first %d bytes: %s\n", 
+        castle_printk(level, " dim[%.2d], len=%.3d, first %d bytes: %s\n", 
             i, 
             key->dims[i]->length, 
             NR_BYTES_PRINT,
@@ -218,18 +223,18 @@ void vl_okey_print(c_vl_okey_t *key)
 
 EXPORT_SYMBOL(vl_okey_print);
 
-void vl_bkey_print(c_vl_bkey_t *key)
+void vl_bkey_print(c_printk_level_t level, c_vl_bkey_t *key)
 {
     c_vl_okey_t *okey;
     
     okey = castle_object_btree_key_convert(key);
     if(!okey)
     {
-        castle_printk("Couldn't convert btree key for printing.\n");
+        castle_printk(level, "Couldn't convert btree key for printing.\n");
         return;
     }
-    castle_printk("Btree key, length=%d\n", key->length);
-    vl_okey_print(okey);
+    castle_printk(level, "Btree key, length=%d\n", key->length);
+    vl_okey_print(level, okey);
     castle_object_okey_free(okey);
 }
 

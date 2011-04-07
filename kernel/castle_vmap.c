@@ -10,7 +10,7 @@
 #ifndef DEBUG
 #define debug(_f, ...)           ((void)0)
 #else
-#define debug(_f, _a...)         (castle_printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
+#define debug(_f, _a...)         (castle_printk(LOG_DEBUG, "%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
 #endif
 
 #define CASTLE_VMAP_FREELIST_INITIAL    2       /* Initial number of per-bucket freelist slots */
@@ -152,7 +152,7 @@ static castle_vmap_freelist_t *castle_vmap_freelist_init(int slot_size, int slot
                     VM_READ|VM_WRITE, PAGE_KERNEL);
 
     if (!castle_vmap_freelist->vstart) {
-        castle_printk("Failed to vmap %d pages (freelist slot_size %d)\n",
+        castle_printk(LOG_ERROR, "Failed to vmap %d pages (freelist slot_size %d)\n",
                       nr_vmap_array_pages, slot_size);
         goto errout_5;
     }

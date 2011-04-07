@@ -159,7 +159,7 @@ static int castle_trace_subbuf_start(struct rchan_buf *buf,
 
 static int castle_trace_buf_file_remove(struct dentry *dentry)
 {
-    castle_printk("Deleting a buf file (%p), ref count in parent (%p) = %d\n",
+    castle_printk(LOG_INFO, "Deleting a buf file (%p), ref count in parent (%p) = %d\n",
             dentry, castle_trace_dir, atomic_read(&castle_trace_dir->d_count));
     debugfs_remove(dentry);
     atomic_dec(&castle_trace_files_cnt);
@@ -176,7 +176,7 @@ static struct dentry *castle_trace_buf_file_create(const char *filename,
     struct dentry *dentry;
 
     dentry = debugfs_create_file(filename, mode, parent, buf, &relay_file_operations);
-    castle_printk("Opened a buf file, ref count in parent (%p) = %d\n",
+    castle_printk(LOG_INFO, "Opened a buf file, ref count in parent (%p) = %d\n",
             parent, atomic_read(&parent->d_count));
     if(dentry)
         atomic_inc(&castle_trace_files_cnt);
@@ -190,19 +190,19 @@ static struct rchan_callbacks castle_trace_relay_callbacks = {
     .remove_buf_file    = castle_trace_buf_file_remove,
 };
 
-#define last_trace_register(tpoint)                                            \
-    ret = castle_trace_##tpoint##_register(castle_trace_##tpoint##_event);     \
-    if (ret) {                                                                 \
-        castle_printk("Failed to register trace point: %s\n", #tpoint);        \
-        goto *exit_point;                                                      \
+#define last_trace_register(tpoint)                                                 \
+    ret = castle_trace_##tpoint##_register(castle_trace_##tpoint##_event);          \
+    if (ret) {                                                                      \
+        castle_printk(LOG_WARN, "Failed to register trace point: %s\n", #tpoint);   \
+        goto *exit_point;                                                           \
     }
 
-#define trace_register(tpoint)                                                 \
-    last_trace_register(tpoint)                                                \
+#define trace_register(tpoint)                                                      \
+    last_trace_register(tpoint)                                                     \
     else exit_point = &&fail_unregister_probe_##tpoint;                        
                                                                                
-#define trace_register_fail(tpoint)                                            \
-    fail_unregister_probe_##tpoint:                                            \
+#define trace_register_fail(tpoint)                                                 \
+    fail_unregister_probe_##tpoint:                                                 \
         castle_trace_##tpoint##_unregister(castle_trace_##tpoint##_event)
 
 /**
@@ -341,7 +341,7 @@ int castle_trace_teardown(void)
     }
     else
     {
-        castle_printk("Not all trace files have been closed, failing the teardown.\n");
+        castle_printk(LOG_DEVEL, "Not all trace files have been closed, failing the teardown.\n");
         return -EEXIST;
     }
 }

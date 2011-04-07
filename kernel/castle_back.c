@@ -34,15 +34,15 @@ DEFINE_RING_TYPES(castle, castle_request_t, castle_response_t);
 
 #define USED              __attribute__((used))
 #define WARN_UNUSED_RET   __attribute__((warn_unused_result))
-#define error(_f, _a...)  castle_printk(KERN_ERR "%s:%.4d: " _f, __FILE__, __LINE__ , ##_a)
+#define error(_f, _a...)  castle_printk(LOG_ERROR, KERN_ERR "%s:%.4d: " _f, __FILE__, __LINE__ , ##_a)
 
 //#define DEBUG
 #ifndef DEBUG
 #define debug(_f, ...)              ((void)0)
 #define debug_iter(_f, ...)         ((void)0)
 #else
-#define debug(_f, _a...)            (castle_printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
-#define debug_iter(_f, _a...)       (castle_printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
+#define debug(_f, _a...)            (castle_printk(LOG_DEBUG, "%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
+#define debug_iter(_f, _a...)       (castle_printk(LOG_DEBUG, "%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
 #endif
 
 struct workqueue_struct        *castle_back_wq;
@@ -245,17 +245,17 @@ static USED void castle_back_print_page(char *buff, int length)
     int i=0;
     while(i<length)
     {
-        castle_printk(" [%d]=", i);
+        castle_printk(LOG_DEVEL, " [%d]=", i);
         
         while(i<length)
         {
-            castle_printk("%2x, ", (unsigned char)buff[i]);
+            castle_printk(LOG_DEVEL, "%2x, ", (unsigned char)buff[i]);
             i++;
             if (i % 8 == 0)
                 break;
         }
         
-        castle_printk("\n");
+        castle_printk(LOG_DEVEL, "\n");
     } 
 }
 
@@ -616,8 +616,8 @@ static void _castle_back_stateful_op_timeout_check(void *data)
                 jiffies - stateful_ops[i].last_used_jiffies > STATEFUL_OP_TIMEOUT &&
                 !stateful_ops[i].expiring)
         {
-            castle_printk("stateful_op index %u, token %u has expired.\n", 
-                           i, stateful_ops[i].token);
+            castle_printk(LOG_INFO, "stateful_op index %u, token %u has expired.\n",
+                    i, stateful_ops[i].token);
             /*
              * We may have already queued up this stateful_op to expire. Be sure to not
              * take a reference more than once. It is safe to increment the reference count
@@ -672,7 +672,8 @@ static void castle_back_stateful_op_expire(struct work_struct *work)
 
         spin_unlock(&stateful_op->lock);
 
-        castle_printk("Stateful operation with token 0x%x has expired.\n", stateful_op->token);
+        castle_printk(LOG_INFO, "Stateful operation with token 0x%x has expired.\n",
+                stateful_op->token);
         stateful_op->expire(stateful_op);
     }
     else
@@ -2711,7 +2712,7 @@ static int castle_back_work_do(void *data)
         {
             if (rp - cons > ring_size)
             {
-                castle_printk("Detected ring corruption, skipping ring contents.\n");
+                castle_printk(LOG_WARN, "Detected ring corruption, skipping ring contents.\n");
                 back_ring->req_cons = rp;
                 break;
             }

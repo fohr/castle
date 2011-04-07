@@ -30,15 +30,15 @@
 #define debug_mstore(_f, _a...)  ((void)0)
 #else
 #define PREF_DEBUG  /* ensure pref_debug* messages are printed too. */
-#define debug(_f, _a...)         (castle_printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
-#define debug_mstore(_f, _a...)  (castle_printk("%s:%.4d:%s " _f,                               \
+#define debug(_f, _a...)         (castle_printk(LOG_DEBUG, "%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
+#define debug_mstore(_f, _a...)  (castle_printk(LOG_DEBUG, "%s:%.4d:%s " _f,                    \
                                                  __FILE__, __LINE__ , __func__, ##_a))
 #endif
 
 #ifndef PREF_DEBUG
 #define pref_debug(d, _f, _a...) ((void)0)
 #else
-#define pref_debug(_d, _f, _a...) if (_d) castle_printk("%s:%.4d %s: " _f,                      \
+#define pref_debug(_d, _f, _a...) if (_d) castle_printk(LOG_DEBUG, "%s:%.4d %s: " _f,           \
                                                         FLE, __LINE__ , __func__, ##_a);
 #endif
 
@@ -334,8 +334,8 @@ void castle_cache_stats_print(int verbose)
     atomic_sub(reads, &castle_cache_read_stats);
     atomic_sub(writes, &castle_cache_write_stats);
     
-    if(verbose)
-        castle_printk("castle_cache_stats_timer_tick: %d, %d, %d, %d, %d\n", 
+    if (verbose)
+        castle_printk(LOG_INFO, "castle_cache_stats_timer_tick: %d, %d, %d, %d, %d\n", 
             atomic_read(&castle_cache_dirty_pages),
             atomic_read(&castle_cache_clean_pages),
             castle_cache_page_freelist_size * PAGES_PER_C2P,
@@ -796,7 +796,8 @@ static int c2_dirtylist_insert(c2_block_t *c2b)
             else
             {
                 /* this can't happen? */
-                castle_printk("Found an identical c2b in the tree already.  Not inserting.\n");
+                castle_printk(LOG_WARN, "Found an identical c2b in the tree already.  "
+                        "Not inserting.\n");
                 WARN_ON(1);
                 spin_unlock(&dirtylist->lock);
                 castle_extent_dirtylist_put(c2b->cep.ext_id);
@@ -1034,7 +1035,7 @@ static void c2b_multi_io_end(struct bio *bio, int err)
                 }
                 BUG_ON(nr_live_slaves < MIN_LIVE_SLAVES);
             }
-            castle_printk("Disabling slave 0x%x (%s), due to IO errors. Starting rebuild.\n", 
+            castle_printk(LOG_WARN, "Disabling slave 0x%x (%s), due to IO errors. Starting rebuild.\n", 
                     io_slave->uuid, bdevname(bio_info->bdev, b));
             castle_extents_rebuild_start();
         }
@@ -1064,7 +1065,7 @@ int chk_valid(c_disk_chk_t chk)
     
     if (!cs)
     {
-        castle_printk("Couldn't find disk with uuid: %u\n", chk.slave_id);
+        castle_printk(LOG_DEBUG, "Couldn't find disk with uuid: %u\n", chk.slave_id);
         return 0;
     }
 
@@ -1072,7 +1073,7 @@ int chk_valid(c_disk_chk_t chk)
     castle_freespace_summary_get(cs, NULL, &size);
     if (chk.offset >= size)
     {
-        castle_printk("Unexpected chunk "disk_chk_fmt", Disk Size: 0x%x\n",
+        castle_printk(LOG_DEBUG, "Unexpected chunk "disk_chk_fmt", Disk Size: 0x%x\n",
                 disk_chk2str(chk), size);
         return 0;
     }
@@ -1119,7 +1120,7 @@ void submit_c2b_io(int           rw,
         c2p = (c2_page_t *)pages[i]->lru.next;
         if(!EXT_POS_EQUAL(c2p->cep, dcep))
         {
-            castle_printk("Unmatching ceps "cep_fmt_str", "cep_fmt_str_nl,
+            castle_printk(LOG_DEBUG, "Unmatching ceps "cep_fmt_str", "cep_fmt_str_nl,
                 cep2str(c2p->cep), cep2str(dcep));
             BUG();
         }
@@ -1643,7 +1644,7 @@ int submit_c2b(int rw, c2_block_t *c2b)
     BUG_ON((rw == WRITE) && !c2b_locked(c2b));
     if (unlikely(BLOCK_OFFSET(c2b->cep.offset)))
     {
-        castle_printk("RDA %s: nr_pages - %u cep: "cep_fmt_str_nl, 
+        castle_printk(LOG_ERROR, "RDA %s: nr_pages - %u cep: "cep_fmt_str_nl, 
                 (rw == READ)?"Read":"Write", c2b->nr_pages, __cep2str(c2b->cep));
         BUG();
     }
@@ -2378,7 +2379,7 @@ static int castle_cache_block_hash_clean(void)
         {
             static atomic_t nr_allowed = ATOMIC_INIT(1000);
             
-            castle_printk("Couldn't find a victim page in %d pages, cache size %d\n",
+            castle_printk(LOG_WARN, "Couldn't find a victim page in %d pages, cache size %d\n",
                     nr_pages, castle_cache_size);
             if(atomic_dec_and_test(&nr_allowed)) 
                 BUG();
@@ -2538,7 +2539,7 @@ c2_block_t* _castle_cache_block_get(c_ext_pos_t cep, int nr_pages, int transient
             if (ext_size && 
                 ((ext_size * C_CHK_SIZE) < (cep.offset + (nr_pages * C_BLK_SIZE))))
             {
-                castle_printk("Couldn't create cache page of size %d at cep: "cep_fmt_str
+                castle_printk(LOG_DEBUG, "Couldn't create cache page of size %d at cep: "cep_fmt_str
                        "on extent of size %llu chunks\n", nr_pages, __cep2str(cep), ext_size);
                 WARN_ON(1);
                 msleep(10000);
@@ -2575,7 +2576,7 @@ c2_block_t* _castle_cache_block_get(c_ext_pos_t cep, int nr_pages, int transient
         debug("Trying to insert\n");
         if(!castle_cache_block_hash_insert(c2b, transient))
         {
-            castle_printk("Failed to insert c2b into hash "cep_fmt_str"\n", cep2str(cep));
+            castle_printk(LOG_WARN, "Failed to insert c2b into hash "cep_fmt_str"\n", cep2str(cep));
             put_c2b(c2b);
             castle_cache_block_free(c2b);
         }
@@ -3596,7 +3597,7 @@ static int c2_pref_window_advance(c2_pref_window_t *window, c_ext_pos_t cep, c2_
          * This is a race but no major deal: the data for cep will already have
          * been prefetched. */
         BUG_ON(window->state & PREF_WINDOW_INSERTED);
-        castle_printk("WARNING: %s already in the tree.\n", c2_pref_window_to_str(window));
+        castle_printk(LOG_WARN, "WARNING: %s already in the tree.\n", c2_pref_window_to_str(window));
         c2_pref_window_drop(window);
 
         return -EEXIST;
@@ -3662,7 +3663,7 @@ static int castle_cache_prefetch_advise(c_ext_pos_t cep, c2_advise_t advise,
          * window and initialise it so start_off=end_off=cep.offset. */
         if (!(window = c2_pref_window_get(cep, advise)))
         {
-            castle_printk("WARNING: Failed to allocate prefetch window.\n");
+            castle_printk(LOG_WARN, "WARNING: Failed to allocate prefetch window.\n");
             return -ENOMEM;
         }
 
@@ -3680,10 +3681,11 @@ static int castle_cache_prefetch_advise(c_ext_pos_t cep, c2_advise_t advise,
         if ((window_race = (window->state & PREF_WINDOW_DEAD
                         || c2_pref_window_compare(window, cep, advise & C2_ADV_FRWD))))
         {
-            castle_printk("WARNING: We raced to access prefetch window.%d %s\n",
+            castle_printk(LOG_WARN, "WARNING: We raced to access prefetch window.%d %s\n",
                     races,
                     window->state & PREF_WINDOW_DEAD ? "  Dead." : "");
-            castle_printk("cep="cep_fmt_str" %s\n", cep2str(cep), c2_pref_window_to_str(window));
+            castle_printk(LOG_WARN, "cep="cep_fmt_str" %s\n",
+                    cep2str(cep), c2_pref_window_to_str(window));
 
             mutex_unlock(&window->lock);
             c2_pref_window_put(window);
@@ -3800,7 +3802,7 @@ void castle_cache_debug(void)
     if(diff < 0) diff *= (-1);
     if(diff > castle_cache_size / 10)
     {
-        castle_printk("ERROR: Castle cache pages do not add up:\n"
+        castle_printk(LOG_ERROR, "ERROR: Castle cache pages do not add up:\n"
                "       #dirty_pgs=%d, #clean_pgs=%d, #freelist_pgs=%d\n",
                 dirty, clean, free);
     }
@@ -3967,7 +3969,7 @@ next_batch:
                Warn if the # of dirty pages is greater than a constant.
                If it is not, the pages are likely write locked. */
             if(dirty_pgs > 257)
-                castle_printk("WARNING: Could not find enough dirty pages to flush\n"
+                castle_printk(LOG_WARN, "WARNING: Could not find enough dirty pages to flush\n"
                        "  Stats: dirty=%d, clean=%d, free=%d, in_flight=%d\n"
                        "         target=%d, to_flush=%d, blocks=%d\n",
                     atomic_read(&castle_cache_dirty_pages), 
@@ -4005,7 +4007,7 @@ static void castle_cache_extent_flush_endio(c2_block_t *c2b)
         int cnt = atomic_dec_return(outst_blks);
         if(cnt < 0)
         {
-            castle_printk("Outstanding IO counter has gone negative (cnt=%d, c2b=%p).\n", 
+            castle_printk(LOG_ERROR, "Outstanding IO counter has gone negative (cnt=%d, c2b=%p).\n", 
                     cnt, c2b);
             BUG();
         }
@@ -4187,11 +4189,11 @@ static void castle_cache_hashes_fini(void)
             /* Buffers should not be in use any more (devices do not exist) */
             if((atomic_read(&c2b->count) != 0) || c2b_locked(c2b))
             {
-                castle_printk("cep="cep_fmt_str" not dropped count=%d, locked=%d.\n",
+                castle_printk(LOG_WARN, "cep="cep_fmt_str" not dropped count=%d, locked=%d.\n",
                     cep2str(c2b->cep), atomic_read(&c2b->count), c2b_locked(c2b));
 #ifdef CASTLE_DEBUG
                 if(c2b_locked(c2b))
-                    castle_printk("Locked from: %s:%d\n", c2b->file, c2b->line);
+                    castle_printk(LOG_DEBUG, "Locked from: %s:%d\n", c2b->file, c2b->line);
 #endif
             }
             BUG_ON(c2b_dirty(c2b));
@@ -4220,7 +4222,7 @@ static void castle_cache_hashes_fini(void)
 
         hlist_for_each_entry(c2p, l, &castle_cache_page_hash[i], hlist)
         {
-            castle_printk("c2p->id=%d not freed, count=%d, cep="cep_fmt_str_nl,
+            castle_printk(LOG_ERROR, "c2p->id=%d not freed, count=%d, cep="cep_fmt_str_nl,
                 c2p->id, c2p->count, cep2str(c2p->cep));
             BUG();
         } 
@@ -4382,7 +4384,7 @@ static void castle_mstore_iterator_validate(struct castle_mstore_iter *iter)
     if((node->magic != MLIST_NODE_MAGIC) || 
        (node->used  >  node->capacity))
     {
-        castle_printk("Trying to iterate over non-mlist node or over-full node.\n");
+        castle_printk(LOG_WARN, "Trying to iterate over non-mlist node or over-full node.\n");
         write_unlock_c2b(iter->node_c2b);
         put_c2b(iter->node_c2b);
         iter->node_c2b = NULL;
@@ -4627,7 +4629,7 @@ static void castle_mstore_entry_mod(struct castle_mstore *store,
     {
         if(mentry->flags & CASTLE_MSTORE_ENTRY_DELETED)
         {
-            castle_printk("WARNING: updating removed mstore entry for mstore=%d, "
+            castle_printk(LOG_WARN, "WARNING: updating removed mstore entry for mstore=%d, "
                           "key=("cep_fmt_str", %d)\n",
                           store->store_id, cep2str(key.cep), key.idx);
             mentry->flags &= ~CASTLE_MSTORE_ENTRY_DELETED;
@@ -4729,7 +4731,7 @@ struct castle_mstore* castle_mstore_open(c_mstore_id_t store_id, size_t entry_si
     /* Sanity check, to see if store_id isn't too large. */
     if(store_id >= sizeof(fs_sb->mstore) / sizeof(c_ext_pos_t ))
     {
-        castle_printk("Asked for mstore id=%d, this is too large.\n", store_id);
+        castle_printk(LOG_WARN, "Asked for mstore id=%d, this is too large.\n", store_id);
         return NULL;
     }
 
@@ -4765,7 +4767,7 @@ struct castle_mstore* castle_mstore_init(c_mstore_id_t store_id, size_t entry_si
     /* Sanity check, to see if store_id isn't too large. */
     if(store_id >= sizeof(fs_sb->mstore) / sizeof(c_ext_pos_t))
     {
-        castle_printk("Asked for mstore id=%d, this is too large.\n", store_id);
+        castle_printk(LOG_WARN, "Asked for mstore id=%d, this is too large.\n", store_id);
         return NULL;
     }
 
@@ -4817,7 +4819,7 @@ int castle_checkpoint_version_inc(void)
         cs_sb->fs_version++;
         if (fs_version != cs_sb->fs_version)
         {
-            castle_printk("%x:%x\n", fs_version, cs_sb->fs_version);
+            castle_printk(LOG_ERROR, "%x:%x\n", fs_version, cs_sb->fs_version);
             BUG();
         }
 
@@ -4833,8 +4835,8 @@ int castle_checkpoint_version_inc(void)
 
     castle_extents_super_block_put(0);
 
-    castle_printk("Number of logical extent pages: %u\n", 
-                                    atomic_read(&castle_cache_logical_ext_pages));
+    castle_printk(LOG_INFO, "Number of logical extent pages: %u\n",
+            atomic_read(&castle_cache_logical_ext_pages));
 
     return 0;
 }
@@ -4965,7 +4967,7 @@ static int castle_periodic_checkpoint(void *unused)
         if (!castle_fs_inited)
             continue;
 
-        castle_printk("*****Checkpoint start**********\n");
+        castle_printk(LOG_INFO, "*****Checkpoint start**********\n");
         castle_trace_cache(TRACE_START, TRACE_CACHE_CHECKPOINT_ID, 0);
         CASTLE_TRANSACTION_BEGIN;
  
@@ -4981,7 +4983,7 @@ static int castle_periodic_checkpoint(void *unused)
  
         if (castle_mstores_writeback(version))
         {
-            castle_printk("Mstore writeback failed\n");
+            castle_printk(LOG_WARN, "Mstore writeback failed\n");
             castle_trace_cache(TRACE_END, TRACE_CACHE_CHECKPOINT_ID, 0);
             return -1;
         }
@@ -4999,13 +5001,13 @@ static int castle_periodic_checkpoint(void *unused)
         /* Writeback superblocks. */
         if (castle_superblocks_writeback(version))
         {
-            castle_printk("Superblock writeback failed\n");
+            castle_printk(LOG_WARN, "Superblock writeback failed\n");
             castle_trace_cache(TRACE_END, TRACE_CACHE_CHECKPOINT_ID, 0);
             return -1;
         }
         castle_checkpoint_version_inc();
         
-        castle_printk("*****Completed checkpoint of version: %u*****\n", version);
+        castle_printk(LOG_INFO, "*****Completed checkpoint of version: %u*****\n", version);
         castle_trace_cache(TRACE_END, TRACE_CACHE_CHECKPOINT_ID, 0);
     } while (!exit_loop);
 
@@ -5043,25 +5045,25 @@ int castle_cache_init(void)
     /* Fail if we are trying to use too much. */
     if(castle_cache_size > max_ram) 
     {
-        castle_printk("Cache size too large, asked for %d pages, maximum is %ld pages (%ld MB)\n",
+        castle_printk(LOG_WARN, "Cache size too large, asked for %d pages, "
+                "maximum is %ld pages (%ld MB)\n",
                 castle_cache_size,
-                max_ram,
-                max_ram >> (20 - PAGE_SHIFT));
+                max_ram, max_ram >> (20 - PAGE_SHIFT));
         return -EINVAL;
     }
 
     if(castle_cache_size < (CASTLE_CACHE_MIN_SIZE << (20 - PAGE_SHIFT)))
     {
-        castle_printk("Cache size too small, asked for %d pages, minimum is %d pages (%d MB)\n",
+        castle_printk(LOG_WARN, "Cache size too small, asked for %d pages, "
+                "minimum is %d pages (%d MB)\n",
                 castle_cache_size,
                 CASTLE_CACHE_MIN_SIZE << (20 - PAGE_SHIFT),
                 CASTLE_CACHE_MIN_SIZE);
         return -EINVAL;
     }
 
-    castle_printk("Cache size: %d pages (%ld MB).\n", 
-            castle_cache_size, 
-            ((unsigned long)castle_cache_size * PAGE_SIZE) >> 20);
+    castle_printk(LOG_INIT, "Cache size: %d pages (%ld MB).\n",
+            castle_cache_size, ((unsigned long)castle_cache_size * PAGE_SIZE) >> 20);
 
     /* Work out the # of c2bs and c2ps, as well as the hash sizes */
     castle_cache_page_freelist_size  = castle_cache_size / PAGES_PER_C2P;
@@ -5092,7 +5094,8 @@ int castle_cache_init(void)
     c2_pref_total_window_size = 0;
     castle_cache_allow_hardpinning = castle_cache_size > CASTLE_CACHE_MIN_HARDPIN_SIZE << (20 - PAGE_SHIFT);
     if (!castle_cache_allow_hardpinning)
-        castle_printk("Cache size too small, hardpinning disabled.  Minimum %d MB required.\n",
+        castle_printk(LOG_INIT, "Cache size too small, hardpinning disabled.  "
+                "Minimum %d MB required.\n",
                 CASTLE_CACHE_MIN_HARDPIN_SIZE);
 
     if((ret = castle_cache_hashes_init()))    goto err_out;
@@ -5112,7 +5115,7 @@ int castle_cache_init(void)
 #endif
     if (!castle_io_array_cache)
     {
-        castle_printk("Could not allocate kmem cache for castle cache io arrays.\n");
+        castle_printk(LOG_INIT, "Could not allocate kmem cache for castle cache io arrays.\n");
         goto err_out;
     }
 

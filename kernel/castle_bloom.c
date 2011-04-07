@@ -13,7 +13,7 @@
 #ifndef DEBUG
 #define debug(_f, ...)            ((void)0)
 #else
-#define debug(_f, _a...)          (castle_printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
+#define debug(_f, _a...)          (castle_printk(LOG_DEBUG, "%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
 #endif
 
 static int castle_bloom_use = 1; /* 1 or 0 */
@@ -106,7 +106,7 @@ int castle_bloom_create(castle_bloom_t *bf, da_id_t da_id, uint64_t num_elements
     bf->private = castle_malloc(sizeof(struct castle_bloom_build_params), GFP_KERNEL);
     if (!bf->private)
     {
-        castle_printk("Failed to alloc castle_bloom_t\n");
+        castle_printk(LOG_WARN, "Failed to alloc castle_bloom_t\n");
         ret = -ENOMEM;
         goto err0;
     }
@@ -134,7 +134,7 @@ int castle_bloom_create(castle_bloom_t *bf, da_id_t da_id, uint64_t num_elements
         bf->ext_id = castle_extent_alloc(DEFAULT_RDA, da_id, ceiling(size, C_CHK_SIZE));
         if (EXT_ID_INVAL(bf->ext_id))
         {
-            castle_printk("Failed to create extent for bloom\n");
+            castle_printk(LOG_WARN, "Failed to create extent for bloom\n");
             ret = -ENOSPC;
             goto err1;
         }
@@ -640,7 +640,7 @@ static int castle_bloom_lookup(castle_bloom_t *bf, c2_block_t *c2b, struct castl
     if (queries % 10000 == 0 && queries > 0)
     {
         false_positives = atomic64_read(&bf->false_positives);
-        castle_printk("************ bf %p, false positive rate is %llu%% for %llu queries.\n", 
+        castle_printk(LOG_INFO, "******** bf %p, false positive rate is %llu%% for %llu queries.\n", 
                 bf, 100 * false_positives / queries, queries);
     }
 #endif
@@ -823,7 +823,7 @@ static void castle_bloom_index_read(c_bvec_t *c_bvec)
     btree_nodes_c2bs = castle_malloc(sizeof(c2_block_t*) * num_btree_nodes, GFP_KERNEL);
     if (!btree_nodes_c2bs)
     {
-        castle_printk("Failed to alloc btree_nodes_c2bs.\n");
+        castle_printk(LOG_WARN, "Failed to alloc btree_nodes_c2bs.\n");
         c_bvec->endfind(c_bvec, -ENOMEM, INVAL_VAL_TUP);
         return;
     }
@@ -843,7 +843,8 @@ static void castle_bloom_index_read(c_bvec_t *c_bvec)
             {
                 castle_cache_advise(btree_nodes_c2bs[i]->cep, C2_ADV_SOFTPIN, -1, -1, 0);
 
-                castle_printk("Bloom filter partition index not in cache, scheduling I/O at offset %llu for bf %p.\n", btree_nodes_c2bs[i]->cep.offset, bf);
+                castle_printk(LOG_INFO, "Bloom filter partition index not in cache, scheduling I/O "
+                        "at offset %llu for bf %p.\n", btree_nodes_c2bs[i]->cep.offset, bf);
 
                 BUG_ON(submit_c2b_sync(READ, btree_nodes_c2bs[i]));
             }

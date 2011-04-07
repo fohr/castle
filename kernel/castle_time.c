@@ -118,7 +118,7 @@ static int castle_request_checkpoint_get(c_req_time_t *timeline, char *file, int
     }
     /* Collision! */
     if(castle_checkpoint_collisions_print)
-        castle_printk("Checkpoints collided: %s:%d & %s:%d\n", 
+        castle_printk(LOG_DEVEL, "Checkpoints collided: %s:%d & %s:%d\n", 
                 checkpoint->file,
                 checkpoint->line,
                 file,
@@ -218,7 +218,7 @@ void castle_request_timeline_checkpoint_stop(c_req_time_t *timeline)
         return;
     if(timeline->active_checkpoint < 0)
     {
-        castle_printk("Stopping an inactive checkpoint. Due to a collision?.\n");
+        castle_printk(LOG_DEVEL, "Stopping an inactive checkpoint. Due to a collision?.\n");
         return;
     } 
     checkpoint = &timeline->checkpoints[timeline->active_checkpoint];
@@ -288,7 +288,7 @@ static void castle_request_timeline_process(c_req_time_t *timeline)
            ((checkpoint->line != check_stats->line) ||
             (strcmp(checkpoint->file, check_stats->file) != 0))) 
         {
-            castle_printk("Checkpoint %s:%d, doesn't agree with stats %s:%d\n", 
+            castle_printk(LOG_DEVEL, "Checkpoint %s:%d, doesn't agree with stats %s:%d\n", 
                 checkpoint->file, checkpoint->line,
                 check_stats->file, check_stats->line);
         }
@@ -313,7 +313,7 @@ static void castle_checkpoint_stats_print(void)
     s64 agg;
     int i;
 
-    castle_printk("Printing timing statistics.\n");
+    castle_printk(LOG_DEVEL, "Printing timing statistics.\n");
     for(i=0; i<=MAX_CHECK_POINTS; i++)
     {
         check_stats = &castle_checkpoint_stats[i];
@@ -326,25 +326,25 @@ static void castle_checkpoint_stats_print(void)
 
         /* Print */
         if(i < MAX_CHECK_POINTS)
-            castle_printk("For checkpoint started at %s:%d, samples=%d\n", 
+            castle_printk(LOG_DEVEL, "For checkpoint started at %s:%d, samples=%d\n", 
                 check_stats->file, check_stats->line, check_stats->cnt);
         else
-            castle_printk("For entire timeline, samples=%d:\n", check_stats->cnt);
+            castle_printk(LOG_DEVEL, "For entire timeline, samples=%d:\n", check_stats->cnt);
 
         if(check_stats->cnt == 0)
         {
-            castle_printk("No data yet.\n");
+            castle_printk(LOG_DEVEL, "No data yet.\n");
             continue;
         }
         agg = timespec_to_ns(&check_stats->agg);
         avg = ns_to_timespec(agg / check_stats->cnt);
-        castle_printk("Average: %.2ld.%.6ld\n", avg.tv_sec, avg.tv_nsec / 1000); 
-        castle_printk("Min:     %.2ld.%.6ld\n", 
+        castle_printk(LOG_DEVEL, "Average: %.2ld.%.6ld\n", avg.tv_sec, avg.tv_nsec / 1000); 
+        castle_printk(LOG_DEVEL, "Min:     %.2ld.%.6ld\n", 
                       check_stats->min.tv_sec, check_stats->min.tv_nsec / 1000); 
-        castle_printk("Max:     %.2ld.%.6ld\n", 
+        castle_printk(LOG_DEVEL, "Max:     %.2ld.%.6ld\n", 
                       check_stats->max.tv_sec, check_stats->max.tv_nsec / 1000); 
     }
-    castle_printk("\n");
+    castle_printk(LOG_DEVEL, "\n");
 }
 
 static void castle_request_timeline_print(c_req_time_t *timeline)
@@ -354,10 +354,10 @@ static void castle_request_timeline_print(c_req_time_t *timeline)
     s64 dur;
     int i;
 
-    castle_printk("Stats for timeline %d\n", timeline->seq);
+    castle_printk(LOG_DEVEL, "Stats for timeline %d\n", timeline->seq);
     dur = timespec_to_ns(&timeline->destroy_tm) - timespec_to_ns(&timeline->create_tm);
     dur_tm = ns_to_timespec(dur);
-    castle_printk("Durat. : %.2ld.%.6ld\n", dur_tm.tv_sec, dur_tm.tv_nsec / 1000); 
+    castle_printk(LOG_DEVEL, "Durat. : %.2ld.%.6ld\n", dur_tm.tv_sec, dur_tm.tv_nsec / 1000); 
 
     for(i=0; i<MAX_CHECK_POINTS; i++)
     {
@@ -365,14 +365,14 @@ static void castle_request_timeline_print(c_req_time_t *timeline)
         if(checkpoint->file == NULL)
             continue;
            
-        castle_printk("For checkpoint started at %s:%d\n", checkpoint->file, checkpoint->line);
+        castle_printk(LOG_DEVEL, "For checkpoint started at %s:%d\n", checkpoint->file, checkpoint->line);
         dur = timespec_to_ns(&checkpoint->aggregate_tm);
         dur_tm = ns_to_timespec(dur / checkpoint->cnts);
-        castle_printk("Average: %.2ld.%.6ld\n", dur_tm.tv_sec, dur_tm.tv_nsec / 1000); 
-        castle_printk("Min:     %.2ld.%.6ld\n", 
+        castle_printk(LOG_DEVEL, "Average: %.2ld.%.6ld\n", dur_tm.tv_sec, dur_tm.tv_nsec / 1000); 
+        castle_printk(LOG_DEVEL, "Min:     %.2ld.%.6ld\n", 
             checkpoint->min_tm.tv_sec, 
             checkpoint->min_tm.tv_nsec / 1000);
-        castle_printk("Max:     %.2ld.%.6ld\n", 
+        castle_printk(LOG_DEVEL, "Max:     %.2ld.%.6ld\n", 
             checkpoint->max_tm.tv_sec, 
             checkpoint->max_tm.tv_nsec / 1000);
     }
@@ -440,8 +440,6 @@ void castle_time_fini(void)
     kthread_stop(time_thread);
     spin_lock(&castle_timelines_list_lock);
     if(!list_empty(&castle_timelines_list))
-        castle_printk("WARNING: Haven't destroyed all the timelines before exiting.\n");
+        castle_printk(LOG_DEVEL, "WARNING: Haven't destroyed all the timelines before exiting.\n");
     spin_unlock(&castle_timelines_list_lock);
 }
-
-

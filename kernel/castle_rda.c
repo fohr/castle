@@ -11,7 +11,7 @@
 
 //#define DEBUG
 #ifdef DEBUG
-#define debug(_f, _a...)        (castle_printk(_f, ##_a))
+#define debug(_f, _a...)        (castle_printk(LOG_DEBUG, _f, ##_a))
 #else
 #define debug(_f, ...)          ((void)0)
 #endif
@@ -191,7 +191,7 @@ void* castle_def_rda_extent_init(c_ext_id_t ext_id,
     state = castle_zalloc(sizeof(c_def_rda_state_t), GFP_KERNEL);
     if (!state)
     {
-        castle_printk("Failed to allocate memory for RDA state.\n");
+        castle_printk(LOG_ERROR, "Failed to allocate memory for RDA state.\n");
         goto err_out;
     }
     
@@ -214,7 +214,7 @@ void* castle_def_rda_extent_init(c_ext_id_t ext_id,
     /* Check whether we've got enough slaves to make this extent. */
     if (state->nr_slaves < rda_spec->k_factor)
     {
-        castle_printk("Do not have enough disks to support %d-RDA\n", rda_spec->k_factor);
+        castle_printk(LOG_ERROR, "Do not have enough disks to support %d-RDA\n", rda_spec->k_factor);
         goto err_out;
     }
     /* Permute the list of slaves the first time around. */
@@ -271,7 +271,7 @@ int castle_def_rda_next_slave_get(struct castle_slave **cs,
     if (chk_num == state->prev_chk)
     {
         /* Findout the victim slave and segregate it */
-        castle_printk("Not yet ready for extent manager errors\n");
+        castle_printk(LOG_ERROR, "Not yet ready for extent manager errors\n");
         BUG();
     }
 

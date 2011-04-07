@@ -35,7 +35,7 @@
 
 //#define DEBUG
 #ifdef DEBUG
-#define debug(_f, _a...)        (castle_printk(_f, ##_a))
+#define debug(_f, _a...)        (castle_printk(LOG_DEBUG, _f, ##_a))
 #else
 #define debug(_f, ...)          ((void)0)
 #endif
@@ -179,7 +179,7 @@ int castle_extents_init(void)
     castle_extents_hash = castle_extents_hash_alloc();
     if(!castle_extents_hash)
     {
-        castle_printk("Could not allocate extents hash\n");
+        castle_printk(LOG_INIT, "Could not allocate extents hash\n");
         ret = -ENOMEM;
         goto __hell;
     }
@@ -325,7 +325,7 @@ static int castle_extent_meta_ext_create(void)
                                   META_EXT_ID);
     if (ext_id != META_EXT_ID)
     {
-        castle_printk("Meta Extent Allocation Failed\n");
+        castle_printk(LOG_WARN, "Meta Extent Allocation Failed\n");
         return -ENOSPC;
     }
 
@@ -458,7 +458,7 @@ int castle_extents_writeback(void)
 
     if (ext_sblk->nr_exts != nr_exts)
     {
-        castle_printk("%llx:%x\n", ext_sblk->nr_exts, nr_exts);
+        castle_printk(LOG_ERROR, "%llx:%x\n", ext_sblk->nr_exts, nr_exts);
         BUG();
     }
 
@@ -707,7 +707,8 @@ static void castle_extent_space_free(c_ext_t *ext, c_chk_cnt_t count)
         /* Ignore we if we fail to destroy - perhaps flush thread or checkpointing thread is 
          * accessing it. */
         if (castle_cache_block_destroy(map_c2b))
-            castle_printk("Failed to destroy c2b for cep "cep_fmt_str_nl, cep2str(map_cep));
+            castle_printk(LOG_WARN, "Failed to destroy c2b for cep "cep_fmt_str_nl,
+                    cep2str(map_cep));
 
         map_cep.offset += C_BLK_SIZE;
     }
@@ -764,7 +765,7 @@ static c_disk_chk_t castle_extent_disk_chk_alloc(da_id_t da_id,
         if ((!test_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags)) && (!(slave->cs_superblock.pub.flags & CASTLE_SLAVE_SSD)))
         {
             /* Slave is not out-of-service so we are out of space.  */
-            castle_printk("Failed to get freespace from slave: 0x%x\n", slave->uuid);
+            castle_printk(LOG_WARN, "Failed to get freespace from slave: 0x%x\n", slave->uuid);
             castle_freespace_stats_print();
             low_disk_space = 1;
         }
@@ -842,7 +843,7 @@ int castle_extent_space_alloc(c_ext_t *ext, da_id_t da_id)
     ext_state = castle_extent_state_alloc(ext);
     if(!ext_state)
     {
-        castle_printk("Couldn't malloc extent allocation structure.\n");
+        castle_printk(LOG_WARN, "Couldn't malloc extent allocation structure.\n");
         err = -ENOMEM;
         goto out;
     }
@@ -897,7 +898,7 @@ retry:
                                       rda_state, 
                                       chunk) < 0)
         {
-            castle_printk("Failed to get next slave for extent: %llu\n", ext->ext_id);
+            castle_printk(LOG_WARN, "Failed to get next slave for extent: %llu\n", ext->ext_id);
             err = -ENOSPC;
             goto out;
         }
@@ -991,7 +992,7 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t rda_type,
     debug("Creating extent of size: %u\n", count);
     if (!(ext = castle_ext_alloc(0)))
     {
-        castle_printk("Failed to allocate memory for extent\n");
+        castle_printk(LOG_WARN, "Failed to allocate memory for extent\n");
         goto __hell;
     }
     castle_extents_sb   = castle_extents_super_block_get();
@@ -1018,7 +1019,7 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t rda_type,
 
         if (castle_ext_freespace_get(&meta_ext_free, (nr_blocks * C_BLK_SIZE), 0, &ext->maps_cep))
         {
-            castle_printk("Too big of an extent/crossing the boundry.\n");
+            castle_printk(LOG_WARN, "Too big of an extent/crossing the boundry.\n");
             goto __hell;
         }
         debug("Allocated extent map at: "cep_fmt_str_nl, cep2str(ext->maps_cep));
@@ -1085,7 +1086,7 @@ static void _castle_extent_free(struct work_struct *work)
     /* Reference count should be zero. */
     if (atomic_read(&ext->ref_cnt))
     {
-        castle_printk("Couldn't delete the referenced extent %llu, %d\n", 
+        castle_printk(LOG_ERROR, "Couldn't delete the referenced extent %llu, %d\n", 
                 ext_id,
                 atomic_read(&ext->ref_cnt));
         BUG();
@@ -1296,10 +1297,10 @@ uint32_t castle_extent_map_get(void          *ext_p,
 
     if (offset >= ext->size)
     {
-        castle_printk("BUG in %s\n", __FUNCTION__);
-        castle_printk("    Extent: %llu\n", ext->ext_id);
-        castle_printk("    Offset: %u\n", offset);
-        castle_printk("    Extent Size: %u\n", ext->size);
+        castle_printk(LOG_ERROR, "BUG in %s\n", __FUNCTION__);
+        castle_printk(LOG_ERROR, "    Extent: %llu\n", ext->ext_id);
+        castle_printk(LOG_ERROR, "    Offset: %u\n", offset);
+        castle_printk(LOG_ERROR, "    Extent Size: %u\n", ext->size);
         BUG();
     }
 
@@ -1336,7 +1337,7 @@ c_ext_id_t castle_extent_sup_ext_init(struct castle_slave *cs)
     ext = castle_ext_alloc(slave_id_to_sup_ext(cs->id));
     if (!ext)
     {
-        castle_printk("Failed to allocate memory for extent\n");
+        castle_printk(LOG_WARN, "Failed to allocate memory for extent\n");
         goto __hell;
     }
     ext->size       = sup_ext.size;
@@ -1349,7 +1350,8 @@ c_ext_id_t castle_extent_sup_ext_init(struct castle_slave *cs)
     BUG_ON(rda_spec->k_factor != ext->k_factor);
     if (!cs->sup_ext_maps)
     {
-        castle_printk("Failed to allocate memory for extent chunk maps of size %u:%u chunks\n", 
+        castle_printk(LOG_WARN, "Failed to allocate memory for extent chunk "
+                "maps of size %u:%u chunks\n", 
         ext->size, rda_spec->k_factor);
         goto __hell;
     }
@@ -1516,7 +1518,7 @@ static int castle_extent_check_alive(c_ext_t *ext, void *unused)
 {
     if (ext->alive == 0)
     {
-        castle_printk("Found a dead extent: %llu - Cleaning it\n", ext->ext_id);
+        castle_printk(LOG_WARN, "Found a dead extent: %llu - Cleaning it\n", ext->ext_id);
         read_unlock_irq(&castle_extents_hash_lock);
         /* Extent is dead and not referenced any of the structures. Free it. */
         castle_extent_free(ext->ext_id);
@@ -1682,7 +1684,7 @@ static int castle_extent_remap_superchunks_alloc(int slave_idx)
         if ((!test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags)) && (!(cs->cs_superblock.pub.flags & CASTLE_SLAVE_SSD)))
         {
             /* Slave is not out-of-service so we are out of space */
-            castle_printk("Error: failed to get freespace from slave: 0x%x (%s).",
+            castle_printk(LOG_WARN, "Error: failed to get freespace from slave: 0x%x (%s).",
                     cs->uuid, bdevname(cs->bdev, b));
 
             castle_freespace_stats_print();
@@ -1690,9 +1692,8 @@ static int castle_extent_remap_superchunks_alloc(int slave_idx)
             return -ENOSPC;
         } else
         {
-            castle_printk("Warning - Failed allocating superchunk from out-of-service slave: "
-                          "0x%x (%s).",
-                          cs->uuid, bdevname(cs->bdev, b));
+            castle_printk(LOG_WARN, "Warning - Failed allocating superchunk from "
+                    "out-of-service slave: 0x%x (%s).", cs->uuid, bdevname(cs->bdev, b));
             /*
              * Slave is now out-of-service. Re-initialise remap state and retry.
              */
@@ -1917,7 +1918,7 @@ static int castle_extent_remap(c_ext_t *ext)
     ext->shadow_map = castle_vmalloc(ext->size*k_factor*sizeof(c_disk_chk_t));
     if (!ext->shadow_map)
     {
-        castle_printk("ERROR: could not allocate rebuild shadow map of size %lu\n",
+        castle_printk(LOG_ERROR, "ERROR: could not allocate rebuild shadow map of size %lu\n",
                 ext->size*k_factor*sizeof(c_disk_chk_t));
         BUG();
     }
@@ -1990,7 +1991,7 @@ static int castle_extent_remap(c_ext_t *ext)
             if (!disk_chk)
             {
                 /* Failed to allocate a disk chunk (slave out of space is most likely cause). */
-                castle_printk("Rebuild could not allocate a disk chunk.\n");
+                castle_printk(LOG_WARN, "Rebuild could not allocate a disk chunk.\n");
                 spin_lock(&ext->shadow_map_lock);
                 ext->use_shadow_map = 0;
                 spin_unlock(&ext->shadow_map_lock);
@@ -2163,7 +2164,7 @@ static int castle_extents_rebuild_run(void *unused)
         }
 
 restart:
-        castle_printk("Rebuild thread starting run.\n");
+        castle_printk(LOG_USERINFO, "Rebuild thread starting run.\n");
 
         fs_sb = castle_fs_superblocks_get();
         fs_sb->fs_in_rebuild = 1;
@@ -2180,7 +2181,7 @@ restart:
 
         if (list_empty(&rebuild_list))
         {
-            castle_printk("Rebuild: no extents found.\n");
+            castle_printk(LOG_WARN, "Rebuild: no extents found.\n");
             continue;
         }
 
@@ -2203,7 +2204,7 @@ restart:
                  */
                 if (castle_extent_remap(ext) || kthread_should_stop())
                 {
-                    castle_printk("Warning: rebuild terminating early ...\n");
+                    castle_printk(LOG_WARN, "Warning: rebuild terminating early ...\n");
                     exit_early = 1;
                 }
             }
@@ -2255,7 +2256,7 @@ restart:
         {
             if (oos_slaves[i])
             {
-                castle_printk("Finished remapping out-of-service slave 0x%x.\n", 
+                castle_printk(LOG_USERINFO, "Finished remapping out-of-service slave 0x%x.\n", 
                               oos_slaves[i]->uuid);
                 set_bit(CASTLE_SLAVE_REMAPPED_BIT, &oos_slaves[i]->flags);
             }
@@ -2264,7 +2265,7 @@ restart:
         {
             if (evacuated_slaves[i])
             {
-                castle_printk("Finished remapping evacuated slave 0x%x.\n",
+                castle_printk(LOG_USERINFO, "Finished remapping evacuated slave 0x%x.\n",
                               evacuated_slaves[i]->uuid);
                 set_bit(CASTLE_SLAVE_OOS_BIT, &evacuated_slaves[i]->flags);
                 set_bit(CASTLE_SLAVE_REMAPPED_BIT, &evacuated_slaves[i]->flags);
@@ -2277,7 +2278,7 @@ restart:
         fs_sb->fs_in_rebuild = 0;
         castle_fs_superblocks_put(fs_sb, 1);
 
-        castle_printk("Rebuild completed.\n");
+        castle_printk(LOG_USERINFO, "Rebuild completed.\n");
 
     } while (1);
 
@@ -2347,7 +2348,7 @@ void castle_extents_rebuild_startup_check(int need_rebuild)
     if (fs_sb->fs_in_rebuild || need_rebuild)
     {
         rebuild_to_seqno = atomic_read(&current_rebuild_seqno) - 1;
-        castle_printk("Rebuild startup check: Restarting rebuild.\n");
+        castle_printk(LOG_USERINFO, "Rebuild startup check: Restarting rebuild.\n");
 
         /* Wake the rebuild thread */
         wake_up(&rebuild_wq);

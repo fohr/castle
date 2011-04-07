@@ -94,7 +94,7 @@ void castle_debug_free(void *obj)
 
     if((dobj->cannary1 != CANNARY1) || (dobj->cannary2 != CANNARY2))
     {
-        castle_printk("Cannaries dead, for %p, double free?\n", dobj);
+        castle_printk(LOG_ERROR, "Cannaries dead, for %p, double free?\n", dobj);
         BUG();
     }
     /* Remove from list */
@@ -104,7 +104,7 @@ void castle_debug_free(void *obj)
 
    if(dobj->vmalloced)
     {
-        castle_printk("Trying to kfree() vmalloced object.\n");
+        castle_printk(LOG_ERROR, "Trying to kfree() vmalloced object.\n");
         BUG();
     }
     memset(dobj, 0xf5, sizeof(struct castle_malloc_debug));
@@ -140,7 +140,7 @@ void castle_debug_vfree(void *obj)
 
     if((dobj->cannary1 != CANNARY1) || (dobj->cannary2 != CANNARY2))
     {
-        castle_printk("Cannaries dead, for %p, double free?\n", dobj);
+        castle_printk(LOG_ERROR, "Cannaries dead, for %p, double free?\n", dobj);
         BUG();
     }
      /* Remove from list */
@@ -150,7 +150,7 @@ void castle_debug_vfree(void *obj)
 
     if(!dobj->vmalloced)
     {
-        castle_printk("Trying to vfree() kmalloced object.\n");
+        castle_printk(LOG_ERROR, "Trying to vfree() kmalloced object.\n");
         BUG();
     }
     memset(dobj, 0xf6, sizeof(struct castle_malloc_debug));
@@ -168,7 +168,7 @@ static void castle_debug_malloc_fini(void)
     list_for_each(l, &malloc_list)
     {
         dobj = list_entry(l, struct castle_malloc_debug, list);
-        castle_printk("%s of %u bytes from %s:%d hasn't been deallocated.\n",
+        castle_printk(LOG_ERROR, "%s of %u bytes from %s:%d hasn't been deallocated.\n",
                 dobj->vmalloced ? "vmalloc" : "kmalloc/kzalloc",
                 dobj->size, 
                 dobj->file, 
@@ -176,7 +176,7 @@ static void castle_debug_malloc_fini(void)
         sum += dobj->size;
         i++;
     }
-    castle_printk("******** Memory Leak: %u bytes / %u objects *********\n", sum, i);
+    castle_printk(LOG_ERROR, "******** Memory Leak: %u bytes / %u objects *********\n", sum, i);
 }
 
 static void castle_debug_buffer_init(struct page *pg)
@@ -222,10 +222,10 @@ static void castle_debug_watches_print(void)
 
     if(!watched_data) return;
 
-    castle_printk("\n");
+    castle_printk(LOG_DEBUG, "\n");
     for(i=0; i<nr_watches; i++)
     {
-        castle_printk("Data for watched (b,v)=(0x%x, 0x%x)\n",
+        castle_printk(LOG_DEBUG, "Data for watched (b,v)=(0x%x, 0x%x)\n",
             watches[i].block, watches[i].version);
         buffer = pfn_to_kaddr(page_to_pfn(watched_data[i]));
         for(sector=0; sector<8; sector++)
@@ -236,13 +236,13 @@ static void castle_debug_watches_print(void)
                     j<((sector+1) << 9);
                     j++)
                 {
-                    if(j % 8 == 0) castle_printk(" ");
-                    if(j % 16 == 0) castle_printk("\n[0x%.3x] ", j);
-                    castle_printk("%.2x ", buffer[j]);
+                    if(j % 8 == 0) castle_printk(LOG_DEBUG, " ");
+                    if(j % 16 == 0) castle_printk(LOG_DEBUG, "\n[0x%.3x] ", j);
+                    castle_printk(LOG_DEBUG, "%.2x ", buffer[j]);
                 }
             }
         }
-        castle_printk("\n\n");
+        castle_printk(LOG_DEBUG, "\n\n");
     }
 }
 
@@ -269,11 +269,11 @@ static void castle_debug_watches_update(struct bio *bio, uint32_t version)
             if((sector >> (C_BLK_SHIFT - 9) == watch->block) &&
                (version == watch->version) )
             {
-                castle_printk("Watched block (b,v)=(0x%x, 0x%x) accessed.\n",
+                castle_printk(LOG_DEBUG, "Watched block (b,v)=(0x%x, 0x%x) accessed.\n",
                     watch->block, watch->version);
                 if(bio_data_dir(bio) == WRITE)
                 {
-                    castle_printk("It's a write\n");
+                    castle_printk(LOG_DEBUG, "It's a write\n");
                     castle_debug_watch_update(j, bvec);
                 }
             }
@@ -349,13 +349,13 @@ static int castle_debug_run(void *unused)
 
                 if(!something_printed)
                 {
-                    castle_printk("Found an outstanding Castle BIOs\n");
+                    castle_printk(LOG_DEBUG, "Found an outstanding Castle BIOs\n");
                     something_printed = 1;
                 }
  
                 /* Print info about first 10 stuck BIO + all in locking state */
                 if(print || locking)
-                    castle_printk(" c_bio->id=%d, c_bvecs[%d], "
+                    castle_printk(LOG_DEBUG, " c_bio->id=%d, c_bvecs[%d], "
                            "(k,v)=(%p, 0x%x), "
                            "btree_depth=%d, "
                            "state=0x%lx\n",
@@ -368,19 +368,20 @@ static int castle_debug_run(void *unused)
                 {
                     c2_block_t *c2b = c_bvec->locking;
 
-                    castle_printk("Blocked on locking c2b for "cep_fmt_str_nl,
+                    castle_printk(LOG_DEBUG, "Blocked on locking c2b for "cep_fmt_str_nl,
                         cep2str(c2b->cep));
                     if(c2b->file != NULL)
-                        castle_printk("c2b last write locked from: %s:%d\n", c2b->file, c2b->line);
+                        castle_printk(LOG_DEBUG, "c2b last write locked from: %s:%d\n",
+                                c2b->file, c2b->line);
                     else
-                        castle_printk("has never been write locked before?\n");
+                        castle_printk(LOG_DEBUG, "has never been write locked before?\n");
                 }
             }
         }
         spin_unlock_irqrestore(&bio_list_spinlock, flags);
         if(something_printed) 
         {
-            castle_printk("...\nTotal number of stuck bios=%d\n\n", nr_bios);
+            castle_printk(LOG_DEBUG, "...\nTotal number of stuck bios=%d\n\n", nr_bios);
             sleep_time += 1;
         }
         castle_cache_stats_print(something_printed);
@@ -426,7 +427,7 @@ int castle_debug_init(void)
     return 0;
 
 alloc_failed:    
-    castle_printk("Failed to allocate buffers for debug watches.\n");
+    castle_printk(LOG_INIT, "Failed to allocate buffers for debug watches.\n");
     castle_debug_watches_free();
 
     return -ENOMEM;
