@@ -642,7 +642,6 @@ static struct castle_extent_state *castle_extent_state_alloc(c_ext_t *ext)
  */
 static void castle_extent_space_free(c_ext_t *ext, c_chk_cnt_t count)
 {
-    struct castle_extent_state  *ext_state; 
     c_chk_cnt_t                 chks_per_page;
     c_ext_pos_t                 map_cep;
     c2_block_t                  *map_c2b;
@@ -650,8 +649,6 @@ static void castle_extent_space_free(c_ext_t *ext, c_chk_cnt_t count)
     struct castle_slave         *cs;
 
     debug("Freeing %d disk chunks from extent %lld\n", count, ext->ext_id);
-    ext_state = castle_extent_state_alloc(ext);
-    BUG_ON(!ext_state);
     chks_per_page = map_chks_per_page(ext->k_factor);
    
     map_cep = ext->maps_cep; 
@@ -688,7 +685,7 @@ static void castle_extent_space_free(c_ext_t *ext, c_chk_cnt_t count)
                         /* If chunk is super chunk aligned, free that superchunk. */
                         debug("Freeing superchunk: "disk_chk_fmt", from ext_id: %lld\n",
                             disk_chk2str(map_buf[logical_chunk * ext->k_factor + copy]),
-                                        ext_state->ext->ext_id);
+                                         ext->ext_id);
                         castle_freespace_slave_superchunk_free(cs,
                             SUPER_CHUNK_STRUCT(map_buf[logical_chunk * ext->k_factor + copy].offset));
                     }
@@ -712,7 +709,6 @@ static void castle_extent_space_free(c_ext_t *ext, c_chk_cnt_t count)
 
         map_cep.offset += C_BLK_SIZE;
     }
-    castle_free(ext_state);
 }
 
 /**
