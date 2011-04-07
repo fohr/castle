@@ -45,9 +45,11 @@ DEFINE_RING_TYPES(castle, castle_request_t, castle_response_t);
 #define debug_iter(_f, _a...)       (castle_printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
 #endif
 
-struct workqueue_struct *castle_back_wq;
+struct workqueue_struct        *castle_back_wq;
 static wait_queue_head_t        conn_close_wait;
-atomic_t                        conn_count;
+atomic_t                        conn_count;         /**< Number of active castle_back_conns     */
+spinlock_t                      conns_lock;         /**< Protects castle_back_conns list        */
+static                LIST_HEAD(castle_back_conns); /**< List of all active castle_back_conns   */
 
 struct castle_back_op;
 
@@ -65,6 +67,7 @@ struct castle_back_conn
     castle_back_ring_t      back_ring;
     wait_queue_head_t       wait;
     struct task_struct     *work_thread;
+    struct list_head        list;           /**< Position on castle_back_conns list */
     spinlock_t              response_lock;
     atomic_t                ref_count;
     int                     cpu;            /**< CPU id for this conn               */
@@ -2772,6 +2775,13 @@ long castle_back_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned lo
     return 0;
 }
 
+/**
+ * Handle a new connection by creating a castle_back_conn.
+ *
+ * This is the only place we allocate castle_back_conn structures.
+ *
+ * @also castle_back_cleanup_conn()
+ */
 int castle_back_open(struct inode *inode, struct file *file)
 {
     castle_sring_t *sring;
@@ -2783,7 +2793,7 @@ int castle_back_open(struct inode *inode, struct file *file)
     conn = castle_malloc(sizeof(struct castle_back_conn), GFP_KERNEL);
     if (conn == NULL)
     {
-        error("castle_back: failed to kzalloc new connection\n");
+        error("castle_back: failed to malloc new connection\n");
         err = -ENOMEM;
         goto err0;
     }
@@ -2870,6 +2880,9 @@ int castle_back_open(struct inode *inode, struct file *file)
     castle_back_start_stateful_op_timeout_check_timer(conn);
 
     atomic_inc(&conn_count);
+    spin_lock(&conns_lock);
+    list_add_tail(&conn->list, &castle_back_conns);
+    spin_unlock(&conns_lock);
 
     debug("castle_back_open for conn = %p returning.\n", conn);
 
@@ -2886,6 +2899,14 @@ err0:
     return err;
 }
 
+/**
+ * Clean-up and free the conn structure.
+ *
+ * Except for conn's that don't get fully initialised in castle_back_open()
+ * this is the only place where conns are freed.
+ *
+ * @also castle_back_open().
+ */
 static void castle_back_cleanup_conn(struct castle_back_conn *conn)
 {
     struct castle_back_stateful_op *stateful_ops = conn->stateful_ops;
@@ -2914,14 +2935,15 @@ static void castle_back_cleanup_conn(struct castle_back_conn *conn)
     castle_vfree(conn->ops);
     castle_vfree(conn->stateful_ops);
 
-    /*
-     * We don't clean up buffers (buffer_put does that),
-     * and they should have been freed by now since conn->ref_count is zero
-     */
+    spin_lock(&conns_lock);
+    list_del(&conn->list);
+    spin_unlock(&conns_lock);
+    atomic_dec(&conn_count);
 
+    /* _buffer_put() cleans up buffers and they should now all have been freed
+     * as conn->ref_count has reached 0. */
     castle_free(conn);
 
-    atomic_dec(&conn_count);
     wake_up(&conn_close_wait);
 }
 
@@ -3169,6 +3191,7 @@ int castle_back_init(void)
     }
     
     init_waitqueue_head(&conn_close_wait);
+    spin_lock_init(&conns_lock);
     atomic_set(&conn_count, 0);
 
     debug("done!\n");
@@ -3187,6 +3210,8 @@ void castle_back_fini(void)
     /* wait for all connections to be closed */
     debug("castle_back_fini, connection count = %u.\n", atomic_read(&conn_count));
     wait_event(conn_close_wait, (atomic_read(&conn_count) == 0));
+
+    BUG_ON(!list_empty(&castle_back_conns));
 
     destroy_workqueue(castle_back_wq);
 
