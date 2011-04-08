@@ -941,7 +941,6 @@ struct bio_info {
 static void c2b_remaining_io_sub(int rw, int nr_pages, c2_block_t *c2b)
 {
     BUG_ON(!c2b_in_flight(c2b));
-
     if(!atomic_sub_and_test(nr_pages, &c2b->remaining))
         return;
 
@@ -2867,20 +2866,11 @@ static void c2_pref_window_put(c2_pref_window_t *window)
     pref_debug(0, "Putting %s\n", c2_pref_window_to_str(window));
     cnt = atomic_dec_return(&window->count);
     BUG_ON(cnt < 0);
-    if(cnt == 0)
+    if (cnt == 0)
     {
-        int pages;
-
         BUG_ON(!(window->state & PREF_WINDOW_DEAD));
         BUG_ON(window->state & PREF_WINDOW_INSERTED);
 
-        pref_debug(0, "Deallocating prefetch window %s\n", c2_pref_window_to_str(window));
-
-        if (window->cur_c2b)
-        {
-            pages = (window->end_off - window->start_off) >> PAGE_SHIFT;
-            c2_pref_window_falloff(window->cur_c2b->cep, pages, window, 0);
-        }
         castle_free(window);
     }
 }
@@ -3298,23 +3288,46 @@ static void c2_pref_io_end(c2_block_t *c2b)
 }
 
 /**
- * Delete prefetch window.
+ * Arrange to delete prefetch window.
+ *
+ * We call c2_pref_window_falloff() here and not c2_pref_window_put() as there
+ * might be other consumers holding references to this window.  If the caller
+ * of this function was c2_pref_c2b_destroy() then this window's cur_c2b pointer
+ * would be corrupt and those other reference holders would trigger a panic if
+ * they attempted the window falloff in c2_pref_window_put().
  *
  * @param window    Window to delete.
+ *
+ * @also c2_pref_window_put()
+ * @also c2_pref_c2b_destroy()
  */
 static void c2_pref_window_drop(c2_pref_window_t *window)
 {
     pref_debug(0, "Deleting %s\n", c2_pref_window_to_str(window));
-    /* Window must not be in the tree, and it must be alive. */
+
     BUG_ON(window->state & PREF_WINDOW_INSERTED);
-    /* Must be locked. */
     BUG_ON(!mutex_is_locked(&window->lock));
-    /* Set dead bit, release the lock, add put references down.
-     * Only put the second reference, if we are the first ones to set the dead bit.
-     */
-    if(!(window->state & PREF_WINDOW_DEAD))
+
+    /* Only put both references if we set the DEAD bit. */
+    if (likely(!(window->state & PREF_WINDOW_DEAD)))
         c2_pref_window_put(window);
     window->state |= PREF_WINDOW_DEAD;
+
+    /* Perform window falloff before putting the 'allocated' reference. */
+    if (window->cur_c2b)
+    {
+        int pages;
+
+        debug("Performing falloff for to-be-deallocated prefetch window %s.\n",
+                c2_pref_window_to_str(window));
+
+        pages = (window->end_off - window->start_off) >> PAGE_SHIFT;
+        c2_pref_window_falloff(window->cur_c2b->cep, pages, window, 0);
+    }
+
+    /* Release the window lock and put our last reference to the window.
+     * Other consumers may still hold references and this call may not be the
+     * one to free the window. */
     mutex_unlock(&window->lock);
     c2_pref_window_put(window);
 }
@@ -3617,7 +3630,8 @@ static int c2_pref_window_advance(c2_pref_window_t *window, c_ext_pos_t cep, c2_
          * This is a race but no major deal: the data for cep will already have
          * been prefetched. */
         BUG_ON(window->state & PREF_WINDOW_INSERTED);
-        castle_printk(LOG_WARN, "WARNING: %s already in the tree.\n", c2_pref_window_to_str(window));
+        castle_printk(LOG_WARN, "WARNING: %s already in the tree.\n",
+                c2_pref_window_to_str(window));
         c2_pref_window_drop(window);
 
         return -EEXIST;
@@ -3701,11 +3715,12 @@ static int castle_cache_prefetch_advise(c_ext_pos_t cep, c2_advise_t advise,
         if ((window_race = (window->state & PREF_WINDOW_DEAD
                         || c2_pref_window_compare(window, cep, advise & C2_ADV_FRWD))))
         {
-            castle_printk(LOG_WARN, "WARNING: We raced to access prefetch window.%d %s\n",
+            castle_printk(LOG_WARN, "WARNING: We raced to access %sprefetch window, %d races.\n"
+                    "Requested cep="cep_fmt_str" window=%s\n",
+                    window->state & PREF_WINDOW_DEAD ? "dead " : "",
                     races,
-                    window->state & PREF_WINDOW_DEAD ? "  Dead." : "");
-            castle_printk(LOG_WARN, "cep="cep_fmt_str" %s\n",
-                    cep2str(cep), c2_pref_window_to_str(window));
+                    cep2str(cep),
+                    c2_pref_window_to_str(window));
 
             mutex_unlock(&window->lock);
             c2_pref_window_put(window);
