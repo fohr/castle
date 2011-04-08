@@ -2714,8 +2714,11 @@ typedef struct castle_cache_prefetch_window {
     struct mutex    lock;       /**< Hold while changing start_off, end_off, pref_pages.          */
 } c2_pref_window_t;
 
-static DEFINE_SPINLOCK(c2_prefetch_lock);
-static struct rb_root c2p_rb_root = RB_ROOT;    /**< Window tree.  Protected by c2_prefetch_lock. */
+static          DEFINE_SPINLOCK(c2_prefetch_lock);          /**< Protects c2p_rb_root.            */
+static struct rb_root           c2p_rb_root = RB_ROOT;      /**< RB tree of c2_pref_windows.      */
+static  DECLARE_WAIT_QUEUE_HEAD(castle_cache_prefetch_wq);  /**< _in_flight wait queue.           */
+static atomic_t                 castle_cache_prefetch_in_flight = ATOMIC_INIT(0);   /**< Number of
+                                                                 outstanding prefetch IOs.        */
     
 static USED char* c2_pref_window_to_str(c2_pref_window_t *window)
 {
@@ -3268,6 +3271,9 @@ static c2_pref_window_t* c2_pref_window_get(c_ext_pos_t cep, c2_advise_t advise)
 /**
  * Prefetch I/O completion callback handler.
  *
+ * NOTE: Wakes up castle_cache_prefetch_wq waiters when the number of in flight
+ *       prefetch IOs reaches 0.
+ *
  * @param c2b   Cache block I/O has been completed on
  */
 static void c2_pref_io_end(c2_block_t *c2b)
@@ -3276,6 +3282,10 @@ static void c2_pref_io_end(c2_block_t *c2b)
             cep2str(c2b->cep), c2b->nr_pages);
     write_unlock_c2b(c2b);
     put_c2b(c2b);
+
+    /* Allow castle_cache_prefetch_fini() to complete. */
+    if (atomic_dec_return(&castle_cache_prefetch_in_flight) == 0)
+        wake_up(&castle_cache_prefetch_wq);
 }
 
 /**
@@ -3388,6 +3398,7 @@ static void castle_cache_prefetch_pin(c_ext_pos_t cep, int chunks, c2_advise_t a
             c2b->end_io = c2_pref_io_end;
 
             BUG_ON(submit_c2b(READ, c2b));
+            atomic_inc(&castle_cache_prefetch_in_flight);
         }
 
         if (advise & C2_ADV_SOFTPIN)
@@ -3502,6 +3513,7 @@ static void c2_pref_window_submit(c2_pref_window_t *window, c_ext_pos_t cep, int
             c2b->end_io = c2_pref_io_end;
 
             BUG_ON(submit_c2b(READ, c2b));
+            atomic_inc(&castle_cache_prefetch_in_flight);
         }
 
         pages -= BLKS_PER_CHK;
@@ -3782,6 +3794,15 @@ int castle_cache_advise_clear(c_ext_pos_t cep, c2_advise_t advise, int chunks,
     castle_cache_prefetch_unpin(cep, chunks, advise);
 
     return EXIT_SUCCESS;
+}
+
+/**
+ * Wait for all outstanding prefetch IOs to complete.
+ */
+void castle_cache_prefetch_fini(void)
+{
+    wait_event(castle_cache_prefetch_wq,
+            atomic_read(&castle_cache_prefetch_in_flight) == 0);
 }
 
 #ifdef CASTLE_DEBUG
@@ -5136,6 +5157,7 @@ err_out:
 void castle_cache_fini(void)
 {
     castle_cache_debug_fini();
+    castle_cache_prefetch_fini();
     castle_cache_flush_fini();
     castle_cache_hashes_fini();
     castle_vmap_fast_map_fini();
