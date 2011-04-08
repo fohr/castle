@@ -5,6 +5,7 @@
 #include "castle.h"
 #include "castle_debug.h"
 #include "castle_cache.h"
+#include "castle_utils.h"
 
 typedef struct castle_debug_watch {
     uint32_t block;
