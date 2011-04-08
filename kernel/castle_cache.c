@@ -47,16 +47,17 @@
  * Cache descriptor structures (c2b & c2p), and related accessor functions. 
  */
 enum c2b_state_bits {
-    C2B_uptodate,           /*<< Block is uptodate within the cache.                              */
-    C2B_dirty,              /*<< Block is dirty within the cache.                                 */
-    C2B_flushing,           /*<< Block is being flushed out to disk.                              */
+    C2B_uptodate,           /**< Block is uptodate within the cache.                              */
+    C2B_dirty,              /**< Block is dirty within the cache.                                 */
+    C2B_flushing,           /**< Block is being flushed out to disk.                              */
     C2B_transient,
-    C2B_prefetch,           /*<< Block is part of an active prefetch window.                      */
-    C2B_prefetched,         /*<< Block was prefetched.                                            */
-    C2B_windowstart,        /*<< Block is the first chunk of an active prefetch window.           */
-    C2B_bio_error,          /*<< Block had at least one bio I/O error.                            */
-    C2B_no_resubmit,        /*<< Block must not be resubmitted after I/O error.                   */
-    C2B_remap,              /*<< Block is for a remap                                             */
+    C2B_prefetch,           /**< Block is part of an active prefetch window.                      */
+    C2B_prefetched,         /**< Block was prefetched.                                            */
+    C2B_windowstart,        /**< Block is the first chunk of an active prefetch window.           */
+    C2B_bio_error,          /**< Block had at least one bio I/O error.                            */
+    C2B_no_resubmit,        /**< Block must not be resubmitted after I/O error.                   */
+    C2B_remap,              /**< Block is for a remap.                                            */
+    C2B_in_flight,          /**< Block is currently in-flight (un-set in c2b_multi_io_end().      */
 };
 
 #define INIT_C2B_BITS (0)
@@ -98,6 +99,7 @@ C2B_FNS(windowstart, windowstart)
 C2B_FNS(bio_error, bio_error)
 C2B_FNS(no_resubmit, no_resubmit)
 C2B_FNS(remap, remap)
+C2B_FNS(in_flight, in_flight)
 
 /* c2p encapsulates multiple memory pages (in order to reduce overheads).
    NOTE: In order for this to work, c2bs must necessarily be allocated in
@@ -938,6 +940,8 @@ struct bio_info {
 
 static void c2b_remaining_io_sub(int rw, int nr_pages, c2_block_t *c2b)
 {
+    BUG_ON(!c2b_in_flight(c2b));
+
     if(!atomic_sub_and_test(nr_pages, &c2b->remaining))
         return;
 
@@ -959,6 +963,7 @@ static void c2b_remaining_io_sub(int rw, int nr_pages, c2_block_t *c2b)
              * I/O error via !uptodate or dirty flags.
              */
             debug("c2b %p had bio error(s) - returning error\n", c2b);
+            clear_c2b_in_flight(c2b);
             c2b->end_io(c2b);
         }
         return;
@@ -969,6 +974,7 @@ static void c2b_remaining_io_sub(int rw, int nr_pages, c2_block_t *c2b)
         update_c2b(c2b);
     else
         clean_c2b(c2b);
+    clear_c2b_in_flight(c2b);
     c2b->end_io(c2b);
 }
 
@@ -1258,6 +1264,9 @@ static int c_io_array_submit(int rw,
         (rw == READ) ? "read" : "write");
 
     BUG_ON((nr_pages <= 0) || (nr_pages > MAX_BIO_PAGES));
+
+    /* Set in-flight bit on the block. */
+    set_c2b_in_flight(c2b);
 
     if (rw == READ) /* Read from one slave only */
     {
