@@ -1264,9 +1264,6 @@ static int c_io_array_submit(int rw,
 
     BUG_ON((nr_pages <= 0) || (nr_pages > MAX_BIO_PAGES));
 
-    /* Set in-flight bit on the block. */
-    set_c2b_in_flight(c2b);
-
     if (rw == READ) /* Read from one slave only */
     {
         /* Accounting */
@@ -1390,9 +1387,10 @@ static void castle_cache_sync_io_end(c2_block_t *c2b)
  * @param chunks    The array of disk chunks for this logical chunk
  * @param nr_remaps The number of disk chunks that are for remaps
  *
- * @see c_io_array_init()
- * @see c_io_array_page_add()
- * @see c_io_array_submit()
+ * @also c_io_array_init()
+ * @also c_io_array_page_add()
+ * @also c_io_array_submit()
+ * @also submit_c2b()
  */
 int submit_c2b_remap_rda(c2_block_t *c2b, c_disk_chk_t *chunks, int nr_remaps)
 {
@@ -1417,6 +1415,9 @@ int submit_c2b_remap_rda(c2_block_t *c2b, c_disk_chk_t *chunks, int nr_remaps)
     io_array = kmem_cache_alloc(castle_io_array_cache, GFP_KERNEL);
     if (!io_array)
         return -1;
+
+    /* Set in-flight bit on the block. */
+    set_c2b_in_flight(c2b);
 
     /* c2b->remaining is effectively a reference count. Get one ref before we start. */
     BUG_ON(atomic_read(&c2b->remaining) != 0);
@@ -1638,7 +1639,10 @@ out:
  *
  * Updates statistics before passing I/O to submit_c2b_rda().
  *
- * @see submit_c2b_rda()
+ * NOTE: IOs can also be submitted via submit_c2b_remap_rda().
+ *
+ * @also submit_c2b_rda()
+ * @also submit_c2b_remap_rda()
  */
 int submit_c2b(int rw, c2_block_t *c2b)
 {
@@ -1655,6 +1659,9 @@ int submit_c2b(int rw, c2_block_t *c2b)
                 (rw == READ)?"Read":"Write", c2b->nr_pages, __cep2str(c2b->cep));
         BUG();
     }
+
+    /* Set in-flight bit on the block. */
+    set_c2b_in_flight(c2b);
 
     return submit_c2b_rda(rw, c2b);
 }
