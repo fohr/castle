@@ -274,12 +274,23 @@ static USED void check_stack_usage(void)
 #endif
 
 /**
+ * Store per-level castle_printk() ratelimit state.
+ */
+struct castle_printk_state {
+    int             ratelimit_jiffies;
+    int             ratelimit_burst;
+    int             missed;             /**< Number of missed printk() since last message.  */
+    unsigned long   toks;
+    unsigned long   last_msg;
+};
+
+/**
  * Defines castle_printk() log levels.
  *
  * @TODO Level ordering and MIN_CONS_LEVEL will need revising before release.
  */
 typedef enum {
-    LOG_DEBUG,      /**< Debug-related messages                 */
+    LOG_DEBUG = 0,  /**< Debug-related messages                 */
     LOG_INFO,       /**< Filesystem informational messages      */
     LOG_PERF,       /**< Performance related messages           */
     LOG_DEVEL,      /**< Ephemeral development messages         */
@@ -289,6 +300,7 @@ typedef enum {
     LOG_ERROR       /**< Major error messages                   */
 } c_printk_level_t;
 #define MIN_CONS_LEVEL  LOG_PERF    /**< Minimum log level to hit the system console.   */
+#define MAX_CONS_LEVEL  LOG_ERROR   /**< Maximum log level to hit the system console.   */
 
 void castle_printk(c_printk_level_t level, const char *fmt, ...);
 int castle_printk_init(void);

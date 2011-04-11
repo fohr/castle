@@ -10,6 +10,42 @@
 #include "castle.h"
 
 struct castle_printk_buffer     printk_buf;
+struct castle_printk_state     *castle_printk_states;
+
+/**
+ * Determine whether to ratelimit printks at specified level.
+ *
+ * @param   level   castle_printk() level
+ *
+ * NOTE: Adapted from 2.6.18 __printk_ratelimit() code.
+ *
+ * @return  0       Caller should not issue printk() call
+ * @return  1       Caller can issue printk() call
+ *
+ * @also castle_printk()
+ */
+static int castle_printk_ratelimit(c_printk_level_t level)
+{
+    struct castle_printk_state *state = &castle_printk_states[level];
+    unsigned long now = jiffies;
+
+    state->toks    += now - state->last_msg;
+    state->last_msg = now;
+    if (state->toks > (state->ratelimit_burst * state->ratelimit_jiffies))
+        state->toks  = state->ratelimit_burst * state->ratelimit_jiffies;
+    if (state->toks >= state->ratelimit_jiffies)
+    {
+        int lost = state->missed;
+
+        state->missed = 0;
+        state->toks -= state->ratelimit_jiffies;
+        if (lost)
+            printk(KERN_WARNING "printk: %d level %d messages suppressed.\n", lost, level);
+        return 1;
+    }
+    state->missed++;
+    return 0;
+}
 
 /**
  * Print to dmesg and castle ring buffer.
@@ -18,6 +54,7 @@ struct castle_printk_buffer     printk_buf;
  *
  * @also castle_printk_init()
  * @also castle_printk_fini()
+ * @also castle_printk_ratelimit()
  *
  * @TODO timestamp
  * @TODO castle-trace handler
@@ -67,43 +104,68 @@ void castle_printk(c_printk_level_t level, const char *fmt, ...)
     if (level >= MIN_CONS_LEVEL)
     {
         /* and then only printk() if we're within the ratelimit. */
-        if (__printk_ratelimit(HZ/PRINTKS_PER_SEC_STEADY_STATE, PRINTKS_IN_BURST))
+        if (castle_printk_ratelimit(level))
             printk(tmp_buf);
     }
 }
 
 /**
- * Initialise ring buffer for storing printk messages.
+ * Initialise ring buffer and level states for castle_printk().
  *
  * NOTE: We must call vmalloc() directly as we are the first subsystem
  *       that gets initialised on start-up.
  */
 int castle_printk_init(void)
 {
-    BUG_ON(printk_buf.buf);
+    int i;
 
+    BUG_ON(printk_buf.buf);
+    BUG_ON(castle_printk_states);
+
+    /* castle_printk() buffer. */
     printk_buf.off      = 0;
     printk_buf.wraps    = 0;
     printk_buf.size     = PRINTK_BUFFER_SIZE;
     printk_buf.buf      = vmalloc(printk_buf.size);
     if (!printk_buf.buf)
-        return -ENOMEM;
+        goto err1;
     spin_lock_init(&printk_buf.lock);
+
+    /* castle_printk_ratelimit() level states. */
+    castle_printk_states = vmalloc(sizeof(struct castle_printk_state) * MAX_CONS_LEVEL);
+    if (!castle_printk_states)
+        goto err2;
+    for (i = 0; i < MAX_CONS_LEVEL; i++)
+    {
+        castle_printk_states[i].ratelimit_jiffies   = HZ/PRINTKS_PER_SEC_STEADY_STATE;
+        castle_printk_states[i].ratelimit_burst     = PRINTKS_IN_BURST;
+        castle_printk_states[i].missed              = 0;
+        castle_printk_states[i].toks                = 10 * 5 * HZ;
+        castle_printk_states[i].last_msg            = 0;
+    }
 
     castle_printk(LOG_INIT, "Initialised Castle printk ring buffer.\n");
 
     return 0;
+
+err2:
+    vfree(printk_buf.buf);
+err1:
+    return -ENOMEM;
 }
 
 /**
- * Free ring buffer for storing printk messages.
+ * Free ring buffer and level states for printk.
  */
 void castle_printk_fini(void)
 {
+    BUG_ON(!castle_printk_states);
     BUG_ON(!printk_buf.buf);
 
     castle_printk(LOG_INIT, "Freeing Castle printk ring buffer.\n");
 
+    vfree(castle_printk_states);
+    castle_printk_states = NULL;
     vfree(printk_buf.buf);
     printk_buf.buf = NULL;
 }
