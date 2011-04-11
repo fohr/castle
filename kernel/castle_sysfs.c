@@ -11,6 +11,7 @@
 #include "castle_freespace.h"
 #include "castle_da.h"
 #include "castle_utils.h"
+#include "castle_btree.h"
 
 static struct kobject  double_arrays_kobj;
 struct castle_sysfs_versions {
@@ -236,6 +237,80 @@ static ssize_t da_last_key_show(struct kobject *kobj,
         vl_okey_to_buf(da->last_key, buf);
     else
         sprintf(buf, "None");
+
+    return strlen(buf);
+}
+
+/**
+ * Show statistics for a given Doubling Array.
+ *
+ * Format:
+ * ------
+ *
+ * " One row for DA stats
+ * <nr of trees in DA> <Height of DA>
+ *
+ * " One row for each level contains #trees and one entry for each tree in the level
+ * <nr of trees in level> [<item count> <leaf node size> <internal node size> <tree depth> <size of the tree(in chunks)>] [] []
+ */
+static ssize_t da_tree_list_show(struct kobject *kobj, 
+							     struct attribute *attr, 
+							     char *buf)
+{
+    struct castle_double_array *da = container_of(kobj, struct castle_double_array, kobj); 
+    int i;
+    int ret = 0;
+
+    /* Get READ lock on DA, to make sure DA doesnt disappear while printing stats. */
+    read_lock(&da->lock);
+
+    /* Total number of trees. */
+    sprintf(buf, "%u %u\n", da->nr_trees, da->top_level);
+
+    for(i=0; i<=da->top_level; i++)
+    {
+        struct castle_component_tree *ct;
+        struct list_head *lh;
+
+        /* Number of trees in each level. */
+        ret = snprintf(buf, PAGE_SIZE, "%s%u ", buf, 
+                       da->levels[i].nr_trees + da->levels[i].nr_compac_trees);
+        /* Buffer is of size one PAGE. MAke sure we are not overflowing buffer. */
+        if (ret >= PAGE_SIZE)
+            goto err;
+
+        list_for_each(lh, &da->levels[i].trees)
+        {
+            struct castle_btree_type *btree;
+
+            ct = list_entry(lh, struct castle_component_tree, da_list); 
+            btree = castle_btree_type_get(ct->btree_type);
+            ret = snprintf(buf, PAGE_SIZE, 
+                           "%s[%lu %u %u %u %u] ", 
+                           buf, 
+                           atomic64_read(&ct->item_count),       /* Item count*/
+                           (uint32_t)btree->node_size(ct, 0),    /* Leaf node size */
+                           (uint32_t)btree->node_size(ct, 1),    /* Internal node size */
+                           (uint32_t)ct->tree_depth,             /* Depth of tree */
+                           (uint32_t)
+                           (CHUNK(ct->tree_ext_free.ext_size) + 
+                            CHUNK(ct->data_ext_free.ext_size) + 
+                            CHUNK(ct->internal_ext_free.ext_size) +
+                            ct->bloom.num_chunks +
+                            atomic64_read(&ct->large_ext_chk_cnt)));           /* Tree size */
+            if (ret >= PAGE_SIZE)
+                goto err;
+        }
+        ret = snprintf(buf, PAGE_SIZE, "%s\n", buf);
+        if (ret >= PAGE_SIZE)
+            goto err;
+    }
+    ret = 0;
+
+err:
+    read_unlock(&da->lock);
+
+    if (ret) sprintf(buf + PAGE_SIZE - 20, "Overloaded...\n");
 
     return strlen(buf);
 }
@@ -503,10 +578,14 @@ __ATTR(version, S_IRUGO|S_IWUSR, da_version_show, NULL);
 static struct castle_sysfs_entry da_last_key =
 __ATTR(last_key, S_IRUGO|S_IWUSR, da_last_key_show, NULL);
 
+static struct castle_sysfs_entry da_tree_list =
+__ATTR(component_trees, S_IRUGO|S_IWUSR, da_tree_list_show, NULL);
+
 static struct attribute *castle_da_attrs[] = {
     &da_id.attr,
     &da_version.attr,
     &da_last_key.attr,
+    &da_tree_list.attr,
     NULL,
 };
 
