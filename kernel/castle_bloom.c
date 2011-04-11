@@ -126,12 +126,14 @@ int castle_bloom_create(castle_bloom_t *bf, da_id_t da_id, uint64_t num_elements
     size = nodes_size + chunks_size;
 
     /* Try for SSD extent. If fails, go for DEFAULT_RDA */
-    bf->ext_id = castle_extent_alloc(SSD_ONLY_EXT, da_id, ceiling(size, C_CHK_SIZE));
+    bf->ext_id = castle_extent_alloc(SSD_ONLY_EXT, da_id, EXT_T_BLOOM_FILTER, 
+                                     ceiling(size, C_CHK_SIZE));
     if (EXT_ID_INVAL(bf->ext_id))
     {
         bf->block_size_pages = BLOOM_BLOCK_SIZE_HDD_PAGES;
 
-        bf->ext_id = castle_extent_alloc(DEFAULT_RDA, da_id, ceiling(size, C_CHK_SIZE));
+        bf->ext_id = castle_extent_alloc(DEFAULT_RDA, da_id, EXT_T_BLOOM_FILTER,
+                                         ceiling(size, C_CHK_SIZE));
         if (EXT_ID_INVAL(bf->ext_id))
         {
             castle_printk(LOG_WARN, "Failed to create extent for bloom\n");
@@ -921,7 +923,7 @@ void castle_bloom_unmarshall(castle_bloom_t *bf, struct castle_clist_entry *ctm)
     debug("castle_bloom_unmarshall ext_id=%llu num_chunks=%u num_blocks_last_chunk=%u chunks_offset=%llu num_btree_nodes=%u\n",
                 bf->ext_id, bf->num_chunks, bf->num_blocks_last_chunk, bf->chunks_offset, bf->num_btree_nodes);
 
-    castle_extent_mark_live(bf->ext_id);
+    castle_extent_mark_live(bf->ext_id, ctm->da_id);
 
     bf->private = NULL;
 

@@ -274,6 +274,7 @@ void castle_ext_freespace_init(c_ext_free_t *ext_free,
  */
 int castle_new_ext_freespace_init(c_ext_free_t *ext_free, 
                                   da_id_t       da_id, 
+                                  c_ext_type_t  ext_type,
                                   c_byte_off_t  size,
                                   uint32_t      align)
 {
@@ -283,7 +284,7 @@ int castle_new_ext_freespace_init(c_ext_free_t *ext_free,
     /* Calculate the number of chunks requried. */ 
     nr_chunks = ((size - 1) / C_CHK_SIZE) + 1;
     /* Try allocating the extent of the requested size. */
-    ext_id = castle_extent_alloc(DEFAULT_RDA, da_id, nr_chunks);
+    ext_id = castle_extent_alloc(DEFAULT_RDA, da_id, ext_type, nr_chunks);
     if(EXT_ID_INVAL(ext_id))
         return -ENOSPC;
 
@@ -773,6 +774,7 @@ int castle_fs_init(void)
 
         if ((ret = castle_new_ext_freespace_init(&castle_global_tree.tree_ext_free,
                                                   castle_global_tree.da,
+                                                  EXT_T_BTREE_NODES,
                                                   castle_global_tree.tree_ext_free.ext_size,
                                                   MTREE_NODE_SIZE * C_BLK_SIZE)) < 0)
         {
@@ -782,6 +784,7 @@ int castle_fs_init(void)
             
         if ((ret = castle_new_ext_freespace_init(&castle_global_tree.data_ext_free,
                                                   castle_global_tree.da,
+                                                  EXT_T_MEDIUM_OBJECTS,
                                                   castle_global_tree.data_ext_free.ext_size,
                                                   C_BLK_SIZE)) < 0)
         {

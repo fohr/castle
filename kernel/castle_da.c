@@ -2106,6 +2106,7 @@ static int castle_da_merge_extents_alloc(struct castle_da_merge *merge)
     merge->internals_on_ssds = 1;
     merge->internal_ext_free.ext_id = castle_extent_alloc(SSD_RDA,
                                                           merge->da->id,
+                                                          EXT_T_INTERNAL_NODES,
                                                           CHUNK(internal_tree_size));
     if (EXT_ID_INVAL(merge->internal_ext_free.ext_id))
     {
@@ -2114,6 +2115,7 @@ static int castle_da_merge_extents_alloc(struct castle_da_merge *merge)
         merge->internals_on_ssds = 0;
         merge->internal_ext_free.ext_id = castle_extent_alloc(DEFAULT_RDA,
                                                               merge->da->id,
+                                                              EXT_T_INTERNAL_NODES,
                                                               CHUNK(tree_size));
         if (EXT_ID_INVAL(merge->internal_ext_free.ext_id))
         {
@@ -2129,6 +2131,7 @@ static int castle_da_merge_extents_alloc(struct castle_da_merge *merge)
         if(castle_use_ssd_leaf_nodes)
             merge->tree_ext_free.ext_id = castle_extent_alloc(SSD_RDA,
                                                               merge->da->id,
+                                                              EXT_T_LEAF_NODES,
                                                               CHUNK(tree_size));
     }
 
@@ -2140,6 +2143,7 @@ static int castle_da_merge_extents_alloc(struct castle_da_merge *merge)
         merge->leafs_on_ssds = 0;
         merge->tree_ext_free.ext_id = castle_extent_alloc(DEFAULT_RDA,
                                                           merge->da->id,
+                                                          EXT_T_LEAF_NODES,
                                                           CHUNK(tree_size));
     }
 
@@ -2165,6 +2169,7 @@ static int castle_da_merge_extents_alloc(struct castle_da_merge *merge)
     data_size = MASK_CHK_OFFSET(data_size + C_CHK_SIZE);
     if ((ret = castle_new_ext_freespace_init(&merge->data_ext_free,
                                               merge->da->id,
+                                              EXT_T_MEDIUM_OBJECTS,
                                               data_size,
                                               C_BLK_SIZE)))
     {
@@ -4806,9 +4811,9 @@ static da_id_t castle_da_ct_unmarshall(struct castle_component_tree *ct,
     castle_ext_freespace_unmarshall(&ct->internal_ext_free, &ctm->internal_ext_free_bs);
     castle_ext_freespace_unmarshall(&ct->tree_ext_free, &ctm->tree_ext_free_bs);
     castle_ext_freespace_unmarshall(&ct->data_ext_free, &ctm->data_ext_free_bs);
-    castle_extent_mark_live(ct->internal_ext_free.ext_id);
-    castle_extent_mark_live(ct->tree_ext_free.ext_id);
-    castle_extent_mark_live(ct->data_ext_free.ext_id);
+    castle_extent_mark_live(ct->internal_ext_free.ext_id, ct->da);
+    castle_extent_mark_live(ct->tree_ext_free.ext_id, ct->da);
+    castle_extent_mark_live(ct->data_ext_free.ext_id, ct->da);
     ct->da_list.next = NULL;
     ct->da_list.prev = NULL;
     INIT_LIST_HEAD(&ct->large_objs);
@@ -5353,7 +5358,7 @@ int castle_double_array_read(void)
                     mstore_loentry.ct_seq);
             goto error_out;
         }
-        castle_extent_mark_live(mstore_loentry.ext_id);
+        castle_extent_mark_live(mstore_loentry.ext_id, ct->da);
     }
     castle_mstore_iterator_destroy(iterator);
     iterator = NULL;
@@ -5488,6 +5493,7 @@ static int __castle_da_rwct_create(struct castle_double_array *da, int cpu_index
     /* Allocate internal, btree and data extents. */
     if ((err = castle_new_ext_freespace_init(&ct->internal_ext_free,
                                              da->id,
+                                             EXT_T_INTERNAL_NODES,
                                              MAX_DYNAMIC_TREE_SIZE * C_CHK_SIZE,
                                              btree->node_size(ct, 0) * C_BLK_SIZE)))
     {
@@ -5496,6 +5502,7 @@ static int __castle_da_rwct_create(struct castle_double_array *da, int cpu_index
     }
     if ((err = castle_new_ext_freespace_init(&ct->tree_ext_free,
                                               da->id,
+                                              EXT_T_LEAF_NODES,
                                               MAX_DYNAMIC_TREE_SIZE * C_CHK_SIZE,
                                               btree->node_size(ct, 0) * C_BLK_SIZE)))
     {
@@ -5504,6 +5511,7 @@ static int __castle_da_rwct_create(struct castle_double_array *da, int cpu_index
     }
     if ((err = castle_new_ext_freespace_init(&ct->data_ext_free,
                                               da->id,
+                                              EXT_T_MEDIUM_OBJECTS,
                                               MAX_DYNAMIC_DATA_SIZE * C_CHK_SIZE,
                                               C_BLK_SIZE)))
     {

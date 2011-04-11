@@ -259,6 +259,17 @@ typedef enum {
     NR_RDA_SPECS
 } c_rda_type_t;
 
+typedef enum {
+    EXT_T_META_DATA,
+    EXT_T_BTREE_NODES,
+    EXT_T_INTERNAL_NODES,
+    EXT_T_LEAF_NODES,
+    EXT_T_MEDIUM_OBJECTS,
+    EXT_T_LARGE_OBJECT,
+    EXT_T_BLOOM_FILTER,
+    EXT_T_INVALID,
+} c_ext_type_t;
+
 typedef struct castle_extent_freespace {
     c_ext_id_t      ext_id;
     c_byte_off_t    ext_size;
@@ -299,7 +310,9 @@ struct castle_elist_entry {
     /*         20 */ uint32_t        obj_refs;
     /*         24 */ c_ext_pos_t     maps_cep;
     /*         40 */ uint32_t        curr_rebuild_seqno;
-    /*         44 */ uint8_t         _unused[20]; 
+    /*         44 */ uint32_t        da_id;
+    /*         48 */ uint32_t        ext_type;
+    /*         52 */ uint8_t         _unused[12]; 
     /*         64 */
 } PACKED;
 
@@ -1223,6 +1236,7 @@ void                  castle_ext_freespace_init    (c_ext_free_t     *ext_free,
 
 int                   castle_new_ext_freespace_init(c_ext_free_t     *ext_free, 
                                                     da_id_t           da_id, 
+                                                    c_ext_type_t      ext_type,
                                                     c_byte_off_t      size,
                                                     uint32_t          align);
 

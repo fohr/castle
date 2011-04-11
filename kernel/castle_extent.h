@@ -13,10 +13,12 @@ typedef struct c_ext_dirtylist {
 
 c_ext_id_t          castle_extent_alloc                     (c_rda_type_t   rda_type,
                                                              da_id_t        da_id,
+                                                             c_ext_type_t   ext_type, 
                                                              c_chk_cnt_t    chk_cnt);
 void                castle_extent_free                      (c_ext_id_t     ext_id);
 int                 castle_extent_exists                    (c_ext_id_t     ext_id);
-void                castle_extent_mark_live                 (c_ext_id_t     ext_id);
+void                castle_extent_mark_live                 (c_ext_id_t     ext_id, 
+                                                             da_id_t        da_id);
 void*               castle_extent_get                       (c_ext_id_t     ext_id);
 void                castle_extent_put                       (c_ext_id_t     ext_id);
 uint32_t            castle_extent_kfactor_get               (c_ext_id_t     ext_id);

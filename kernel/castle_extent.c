@@ -49,7 +49,9 @@
         (_ext)->type        = (_me)->type;                                  \
         (_ext)->k_factor    = (_me)->k_factor;                              \
         (_ext)->maps_cep    = (_me)->maps_cep;                              \
-        (_ext)->curr_rebuild_seqno = (_me)->curr_rebuild_seqno;             
+        (_ext)->curr_rebuild_seqno = (_me)->curr_rebuild_seqno;             \
+        (_ext)->ext_type    = (_me)->ext_type;                              \
+        (_ext)->da_id       = (_me)->da_id;
 
 #define CONVERT_EXTENT_TO_MENTRY(_ext, _me)                                 \
         (_me)->ext_id       = (_ext)->ext_id;                               \
@@ -57,7 +59,9 @@
         (_me)->type         = (_ext)->type;                                 \
         (_me)->k_factor     = (_ext)->k_factor;                             \
         (_me)->maps_cep     = (_ext)->maps_cep;                             \
-        (_me)->curr_rebuild_seqno = (_ext)->curr_rebuild_seqno;             
+        (_me)->curr_rebuild_seqno = (_ext)->curr_rebuild_seqno;             \
+        (_me)->ext_type     = (_ext)->ext_type;                             \
+        (_me)->da_id        = (_ext)->da_id;
  
 #define FAULT_CODE EXTENT_FAULT
 
@@ -90,6 +94,8 @@ typedef struct castle_extent {
      * called from light_put(). This could be allocated in extent_put() or extent_free(). */
     uint8_t             deleted;        /**< Marked when an extent is not refrenced by 
                                              anybody anymore. Safe to free it now. */
+    c_ext_type_t        ext_type;       /**< Type of extent. */
+    da_id_t             da_id;          /**< DA that extent corresponds to. */
 } c_ext_t;
 
 static struct list_head *castle_extents_hash = NULL;
@@ -97,6 +103,7 @@ static c_ext_free_t meta_ext_free;
 
 static c_ext_id_t _castle_extent_alloc(c_rda_type_t rda_type,
                                        da_id_t      da_id,
+                                       c_ext_type_t ext_type,
                                        c_chk_cnt_t  count,
                                        c_ext_id_t   ext_id);
 
@@ -145,6 +152,8 @@ static c_ext_t * castle_ext_alloc(c_ext_id_t ext_id)
     ext->dirtylist.rb_root  = RB_ROOT;
     ext->deleted            = 0;
     ext->maps_cep           = INVAL_EXT_POS;
+    ext->ext_type           = EXT_T_INVALID;
+    ext->da_id              = INVAL_DA;
     atomic_set(&ext->ref_cnt, 1);
     spin_lock_init(&ext->dirtylist.lock);
     spin_lock_init(&ext->shadow_map_lock);
@@ -161,12 +170,16 @@ static int castle_extent_print(c_ext_t *ext, void *unused)
     return 0;
 }
 
-void castle_extent_mark_live(c_ext_id_t ext_id)
+void castle_extent_mark_live(c_ext_id_t ext_id, da_id_t da_id)
 {
     c_ext_t *ext = castle_extents_hash_get(ext_id);
 
     if (ext)
+    {
+        /* Extent should belong to the same DA. */
+        BUG_ON(ext->da_id != da_id);
         ext->alive = 1;
+    }
 }
 
 int castle_extents_init(void)
@@ -278,6 +291,8 @@ static int castle_extent_micro_ext_create(void)
 
     micro_ext->size     = MICRO_EXT_SIZE;
     micro_ext->type     = MICRO_EXT;
+    micro_ext->ext_type = EXT_T_META_DATA;
+    micro_ext->da_id    = 0;
     micro_ext->maps_cep = INVAL_EXT_POS;
 
     memset(micro_maps, 0, sizeof(castle_extents_sb->micro_maps));
@@ -321,6 +336,7 @@ static int castle_extent_meta_ext_create(void)
     meta_ext_size = META_SPACE_SIZE * i / k_factor;
 
     ext_id = _castle_extent_alloc(META_EXT, 0, 
+                                  EXT_T_META_DATA,
                                   meta_ext_size,
                                   META_EXT_ID);
     if (ext_id != META_EXT_ID)
@@ -355,12 +371,14 @@ static int castle_extent_mstore_ext_create(void)
         i++;
 
     ext_id = _castle_extent_alloc(DEFAULT_RDA, 0, 
+                                  EXT_T_META_DATA,
                                   MSTORE_SPACE_SIZE * i / k_factor,
                                   MSTORE_EXT_ID);
     if (ext_id != MSTORE_EXT_ID)
         return -ENOSPC;
 
     ext_id = _castle_extent_alloc(DEFAULT_RDA, 0, 
+                                  EXT_T_META_DATA,
                                   MSTORE_SPACE_SIZE * i / k_factor,
                                   MSTORE_EXT_ID+1);
     if (ext_id != MSTORE_EXT_ID+1)
@@ -531,10 +549,10 @@ int castle_extents_read(void)
     atomic_set(&current_rebuild_seqno, ext_sblk->current_rebuild_seqno);
 
     /* Mark Logical extents as alive. */
-    castle_extent_mark_live(MICRO_EXT_ID);
-    castle_extent_mark_live(META_EXT_ID);
-    castle_extent_mark_live(MSTORE_EXT_ID);
-    castle_extent_mark_live(MSTORE_EXT_ID+1);
+    castle_extent_mark_live(MICRO_EXT_ID, 0);
+    castle_extent_mark_live(META_EXT_ID, 0);
+    castle_extent_mark_live(MSTORE_EXT_ID, 0);
+    castle_extent_mark_live(MSTORE_EXT_ID+1, 0);
     meta_ext_size = castle_extent_size_get(META_EXT_ID);
     castle_extents_super_block_put(0);
     extent_init_done = 1;
@@ -952,9 +970,10 @@ out:
   
 c_ext_id_t castle_extent_alloc(c_rda_type_t rda_type,
                                da_id_t      da_id,
+                               c_ext_type_t ext_type,
                                c_chk_cnt_t  count)
 {
-    return _castle_extent_alloc(rda_type, da_id, count, INVAL_EXT_ID);
+    return _castle_extent_alloc(rda_type, da_id, ext_type, count, INVAL_EXT_ID);
 }
 
 /**
@@ -970,6 +989,7 @@ c_ext_id_t castle_extent_alloc(c_rda_type_t rda_type,
  */
 static c_ext_id_t _castle_extent_alloc(c_rda_type_t rda_type,
                                        da_id_t      da_id,
+                                       c_ext_type_t ext_type,
                                        c_chk_cnt_t  count,
                                        c_ext_id_t   ext_id)
 {
@@ -998,6 +1018,8 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t rda_type,
     ext->size           = count;
     ext->type           = rda_type;
     ext->k_factor       = rda_spec->k_factor;
+    ext->ext_type       = ext_type;
+    ext->da_id          = da_id;
     ext->use_shadow_map = 0;
 
     /* The rebuild sequence number that this extent starts off at */
@@ -1340,6 +1362,8 @@ c_ext_id_t castle_extent_sup_ext_init(struct castle_slave *cs)
     ext->type       = sup_ext.type;
     ext->k_factor   = sup_ext.k_factor;
     ext->maps_cep   = sup_ext.maps_cep;
+    ext->ext_type   = EXT_T_META_DATA;
+    ext->da_id      = 0;
     
     cs->sup_ext_maps = castle_malloc(sizeof(c_disk_chk_t) * ext->size *
                                                     rda_spec->k_factor, GFP_KERNEL);
