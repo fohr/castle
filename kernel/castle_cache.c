@@ -4927,6 +4927,22 @@ int castle_mstores_writeback(uint32_t version)
     return 0;
 }
 
+/**
+ * Do necessary work before mstores writeback.
+ *
+ * NOTE: We are not within CASTLE_TRANSACTION.
+ *
+ * @also castle_mstores_writeback()
+ * @also castle_periodic_checkpoint()
+ */
+int castle_mstores_pre_writeback(uint32_t version)
+{
+    /* Call pre-writebacks of components. */
+    castle_double_arrays_pre_writeback();
+
+    return 0;
+}
+
 int castle_cache_extent_flush_schedule(c_ext_id_t ext_id, uint64_t start, 
                                        uint64_t count)
 {
@@ -4975,6 +4991,8 @@ extern atomic_t current_rebuild_seqno;
  *  START
  *
  *      CHECKPOINT START
+ *
+ *          - Perform any necessary work prior to starting the TRANSACTION
  *     
  *          Notes: During the transaction, no high level modifications can happen like
  *                  - no additions/deletions of trees from DA
@@ -5020,6 +5038,15 @@ static int castle_periodic_checkpoint(void *unused)
 
         castle_printk(LOG_DEVEL, "*****Checkpoint start**********\n");
         castle_trace_cache(TRACE_START, TRACE_CACHE_CHECKPOINT_ID, 0);
+
+        /* Perform any necessary work before we take the transaction lock. */
+        if (castle_mstores_pre_writeback(version) != EXIT_SUCCESS)
+        {
+            castle_printk(LOG_WARN, "Mstore pre-writeback failed.\n");
+            castle_trace_cache(TRACE_END, TRACE_CACHE_CHECKPOINT_ID, 0);
+            return -1;
+        }
+
         CASTLE_TRANSACTION_BEGIN;
  
         fs_sb = castle_fs_superblocks_get();

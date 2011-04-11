@@ -4729,7 +4729,7 @@ static int castle_da_level0_modified_promote(struct castle_double_array *da, voi
         {
             castle_printk(LOG_INFO, "Promoting DA 0x%x level 0 RWCT seq %u, has %ld items\n",
                     da->id, ct->seq, atomic64_read(&ct->item_count));
-            castle_da_rwct_create(da, cpu_index, 1 /*in_tran*/);
+            castle_da_rwct_create(da, cpu_index, 0 /*in_tran*/);
         }
 
         cpu_index++;
@@ -5074,11 +5074,15 @@ static int castle_da_writeback(struct castle_double_array *da, void *unused)
     return 0;
 }
 
-#define RWCT_CHECKPOINT_FREQUENCY   (10)    /**< Checkpoint level 0 RWCTs every N checkpoints. */
+/**
+ * Write double array structures to mstores.
+ *
+ * NOTE: Called within CASTLE_TRANSACTION.
+ *
+ * @also castle_double_arrays_pre_writeback()
+ */
 void castle_double_arrays_writeback(void)
 {
-    static int rwct_checkpoints = 0;
-
     BUG_ON(castle_da_store || castle_tree_store || castle_lo_store);
 
     castle_da_store   = castle_mstore_init(MSTORE_DOUBLE_ARRAYS,
@@ -5091,11 +5095,6 @@ void castle_double_arrays_writeback(void)
     if(!castle_da_store || !castle_tree_store || !castle_lo_store)
         goto out;
 
-    if (!castle_da_exiting && ++rwct_checkpoints >= RWCT_CHECKPOINT_FREQUENCY)
-    {
-        castle_da_hash_iterate(castle_da_level0_modified_promote, NULL);
-        rwct_checkpoints = 0;
-    }
     castle_da_hash_iterate(castle_da_writeback, NULL); 
     castle_da_tree_writeback(NULL, &castle_global_tree, -1, NULL);
 
@@ -5105,6 +5104,25 @@ out:
     if (castle_da_store)    castle_mstore_fini(castle_da_store);
 
     castle_da_store = castle_tree_store = castle_lo_store = NULL;
+}
+
+#define RWCT_CHECKPOINT_FREQUENCY   (10)    /**< Checkpoint level 0 RWCTs every N checkpoints. */
+/**
+ * Perform any work prior to castle_double_arrays_writeback() outside of transaction lock.
+ *
+ * NOTE: Called outside of CASTLE_TRANSACTION.
+ *
+ * @also castle_double_arrays_writeback()
+ */
+void castle_double_arrays_pre_writeback(void)
+{
+    static int rwct_checkpoints = 0;
+
+    if (!castle_da_exiting && ++rwct_checkpoints >= RWCT_CHECKPOINT_FREQUENCY)
+    {
+        castle_da_hash_iterate(castle_da_level0_modified_promote, NULL);
+        rwct_checkpoints = 0;
+    }
 }
 
 /**
