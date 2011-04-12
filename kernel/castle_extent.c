@@ -89,9 +89,7 @@ typedef struct castle_extent {
     atomic_t            ref_cnt;
     uint8_t             alive;
     c_ext_dirtylist_t   dirtylist;      /**< Extent c2b dirtylist */
-    struct work_struct  work;           /**< work structure to schedule extent free. */
-    /* @TODO: Ideally this work structure should be allcoated dynamically. kmalloc() cant be 
-     * called from light_put(). This could be allocated in extent_put() or extent_free(). */
+    struct work_struct *work;           /**< work structure to schedule extent free. */
     uint8_t             deleted;        /**< Marked when an extent is not refrenced by 
                                              anybody anymore. Safe to free it now. */
     c_ext_type_t        ext_type;       /**< Type of extent. */
@@ -154,6 +152,7 @@ static c_ext_t * castle_ext_alloc(c_ext_id_t ext_id)
     ext->maps_cep           = INVAL_EXT_POS;
     ext->ext_type           = EXT_T_INVALID;
     ext->da_id              = INVAL_DA;
+    ext->work               = NULL;
     atomic_set(&ext->ref_cnt, 1);
     spin_lock_init(&ext->dirtylist.lock);
     spin_lock_init(&ext->shadow_map_lock);
@@ -1085,19 +1084,28 @@ __hell:
 
 void castle_extent_free(c_ext_id_t ext_id)
 {
+    c_ext_t *ext = castle_extents_hash_get(ext_id);
+
+    ext->work = castle_malloc(sizeof(struct work_struct), GFP_KERNEL);
+    if (!ext->work)
+    {
+        castle_printk(LOG_ERROR, "Failed to allocate memory for extent deletion structures -"
+                                 " Not deleting extent\n");
+        return;
+    }
     castle_extent_put(ext_id);
 }
 
 /* Free the resources taken by extent. This function gets executed on system work queue. 
  *
- * @param work work structure for the extent to be freed. 
+ * @param data void pointer to extent structure that to be freed. 
  *
  * @also castle_extent_put 
  * @also castle_extent_free 
  */
-static void _castle_extent_free(struct work_struct *work)
+static void _castle_extent_free(void *data)
 {
-    c_ext_t *ext = container_of(work, c_ext_t, work);
+    c_ext_t *ext = data;
     struct castle_extents_superblock *castle_extents_sb = NULL;
     c_ext_id_t ext_id = ext->ext_id;
 
@@ -1125,6 +1133,7 @@ static void _castle_extent_free(struct work_struct *work)
     /* Release extent lock. */
     castle_extents_super_block_put(1);
 
+    castle_free(ext->work);
     castle_free(ext);
 
     /* Decrement the dead count. Module can't exit with outstanding dead extents.  */
@@ -1487,9 +1496,12 @@ void castle_extent_put(c_ext_id_t ext_id)
          * the freespace. */
         ext->deleted = 1;
 
+        /* Work structure should have been malloced in castle_extent_free(). */
+        BUG_ON(ext->work == NULL);
+
         /* Schedule extent deletion on system WQ. */
-        CASTLE_INIT_WORK(&ext->work, _castle_extent_free);
-        schedule_work(&ext->work);
+        INIT_WORK(ext->work, _castle_extent_free, ext);
+        schedule_work(ext->work);
     }
 
     write_unlock_irqrestore(&castle_extents_hash_lock, flags);
