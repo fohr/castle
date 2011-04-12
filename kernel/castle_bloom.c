@@ -26,7 +26,7 @@ MODULE_PARM_DESC(castle_bloom_use, "Use bloom filters");
  */
 
 /* the expected fp probability for a block is 2^{-ln 2 * BITS_PER_ELEMENTS} */
-#define BLOOM_BITS_PER_ELEMENT        8
+#define BLOOM_BITS_PER_ELEMENT        9
 #define BLOOM_MAX_BITS_PER_ELEMENT    16
 /* ensure CHUNK_SIZE % BLOCK_SIZE == 0 */
 #define BLOOM_CHUNK_SIZE              (1*1024*1024)
