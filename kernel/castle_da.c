@@ -1688,7 +1688,6 @@ struct castle_da_merge {
     void                         **iters;       /**< iterators for component trees */
     c_merged_iter_t              *merged_iter;
     int                           root_depth;
-    c2_block_t                   *last_node_c2b;
     c2_block_t                   *last_leaf_node_c2b; /**< Previous node c2b at depth 0. */
     void                         *last_key;           /**< last_key added to
                                                            out tree at depth 0. */
@@ -2514,7 +2513,7 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
 {
     struct castle_da_merge_level *level = merge->levels + depth;
     struct castle_btree_type *btree = merge->out_btree;
-    struct castle_btree_node *node, *prev_node;
+    struct castle_btree_node *node;
     int node_idx;
     void *key;
     version_t version;
@@ -2582,8 +2581,12 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
 
     /* Insert correct pointer in the parent, unless we've just completed the
        root node at the end of the merge. */
-    if(merge->completing && (merge->root_depth == depth) && (level->node_c2b == NULL))
+    if(merge->completing && (merge->root_depth == depth))
     {
+        /* Node c2b was set to NULL earlier in this function. When we are completing the merge
+           we should never have to create new nodes at the same lavel (i.e. there shouldn't be
+           any castle_da_entry_adds above). */
+        BUG_ON(level->node_c2b);
         debug("Just completed the root node (depth=%d), at the end of the merge.\n",
                 depth);
         goto release_node;
@@ -2597,23 +2600,26 @@ release_node:
      * is a immutable node. */
     if (depth == 0)
     {
-        if (merge->last_leaf_node_c2b)
-            put_c2b(merge->last_leaf_node_c2b);
+        c2_block_t *last_leaf_c2b = merge->last_leaf_node_c2b;
+
+        /* Release the refernece to the previous last node. */
+        if (last_leaf_c2b)
+        {
+            /* The last_key pointer mustn't be pointing to the node any more. */
+            BUG_ON(ptr_in_range(merge->last_key,
+                                c2b_buffer(last_leaf_c2b),
+                                last_leaf_c2b->nr_pages * PAGE_SIZE));
+            put_c2b(last_leaf_c2b);
+        }
 
         merge->last_leaf_node_c2b = node_c2b;
-        get_c2b(node_c2b);
+        get_c2b(merge->last_leaf_node_c2b);
     }
-    /* Write the list pointer into the previous node we've completed (if one exists).
-       Then release it. */
-    prev_node = merge->last_node_c2b ? c2b_bnode(merge->last_node_c2b) : NULL;
-    if(prev_node)
-    {
-        dirty_c2b(merge->last_node_c2b);
-        write_unlock_c2b(merge->last_node_c2b);
-        put_c2b(merge->last_node_c2b);
-    }
-    /* Save this node as the last node now */
-    merge->last_node_c2b = node_c2b;
+
+    /* Release the c2b. */
+    dirty_c2b(node_c2b);
+    write_unlock_c2b(node_c2b);
+    put_c2b(node_c2b);
 
 #ifdef CASTLE_DEBUG
     merge->is_recursion = 0;
@@ -2648,7 +2654,8 @@ out:
     return 0;
 }
 
-static struct castle_component_tree* castle_da_merge_package(struct castle_da_merge *merge)
+static struct castle_component_tree* castle_da_merge_package(struct castle_da_merge *merge,
+                                                             c_ext_pos_t root_cep)
 {
     struct castle_component_tree *out_tree;
     int i;
@@ -2659,18 +2666,9 @@ static struct castle_component_tree* castle_da_merge_package(struct castle_da_me
     out_tree->tree_depth = merge->root_depth+1;
     castle_printk(LOG_INFO, "Depth of ct=%d (%p) is: %d\n",
             out_tree->seq, out_tree, out_tree->tree_depth);
-    out_tree->root_node = merge->last_node_c2b->cep;
+    out_tree->root_node = root_cep;
     out_tree->bloom_exists = merge->bloom_exists;
     out_tree->bloom = merge->bloom;
-
-    /* Release the last node c2b */
-    if(merge->last_node_c2b)
-    {
-        dirty_c2b(merge->last_node_c2b);
-        write_unlock_c2b(merge->last_node_c2b);
-        put_c2b(merge->last_node_c2b);
-        merge->last_node_c2b = NULL;
-    }
 
     debug("Root for that tree is: " cep_fmt_str_nl, cep2str(out_tree->root_node));
     /* Write counts out */
@@ -2725,22 +2723,26 @@ static struct castle_component_tree* castle_da_merge_package(struct castle_da_me
     return out_tree;
 }
 
-static void castle_da_max_path_complete(struct castle_da_merge *merge)
+static void castle_da_max_path_complete(struct castle_da_merge *merge, c_ext_pos_t root_cep)
 {
     struct castle_btree_type *btree = merge->out_btree;
     struct castle_btree_node *node;
-    c2_block_t *root_c2b, *node_c2b, *next_node_c2b;
+    c2_block_t *node_c2b, *next_node_c2b;
     struct castle_component_tree *ct = merge->out_tree;
     uint8_t level;
 
     BUG_ON(!merge->completing);
-    /* Root stored in last_node_c2b at the end of the merge */
-    root_c2b = merge->last_node_c2b;
-    debug("Maxifying the right most path, starting with root_cep="cep_fmt_str_nl,
-            cep2str(root_c2b->cep));
-    /* Start of with root node */
-    node_c2b = root_c2b;
+    /* Start with the root node. */
+    node_c2b = castle_cache_block_get(root_cep,
+                                      btree->node_size(ct, merge->root_depth));
+    /* Lock and update the c2b. */
+    write_lock_c2b(node_c2b);
+    if(!c2b_uptodate(node_c2b))
+        BUG_ON(submit_c2b_sync(READ, node_c2b));
     node = c2b_bnode(node_c2b);
+    debug("Maxifying the right most path, starting with root_cep="cep_fmt_str_nl,
+            cep2str(node_c2b->cep));
+    /* Init other temp vars. */
     level = 0;
     while(!node->is_leaf)
     {
@@ -2767,26 +2769,21 @@ static void castle_da_max_path_complete(struct castle_da_merge *merge)
            nodes in the cache. */
         if(!c2b_uptodate(next_node_c2b))
             BUG_ON(submit_c2b_sync(READ, next_node_c2b));
-        /* Release the old node, if it's not the same as the root node */
-        if(node_c2b != root_c2b)
-        {
-            debug("Unlocking prev node cep=" cep_fmt_str_nl,
-                   cep2str(node_c2b->cep));
-            write_unlock_c2b(node_c2b);
-            put_c2b(node_c2b);
-        }
+        /* Release the old node. */
+        debug("Unlocking prev node cep=" cep_fmt_str_nl,
+               cep2str(node_c2b->cep));
+        write_unlock_c2b(node_c2b);
+        put_c2b(node_c2b);
+
         node_c2b = next_node_c2b;
         node = c2b_bnode(node_c2b);
         level++;
     }
-    /* Release the leaf node, if it's not the same as the root node */
-    if(node_c2b != root_c2b)
-    {
-        debug("Unlocking prev node cep="cep_fmt_str_nl,
-               cep2str(node_c2b->cep));
-        write_unlock_c2b(node_c2b);
-        put_c2b(node_c2b);
-    }
+    /* Release the leaf node. */
+    debug("Unlocking prev node cep="cep_fmt_str_nl,
+           cep2str(node_c2b->cep));
+    write_unlock_c2b(node_c2b);
+    put_c2b(node_c2b);
 }
 
 /**
@@ -2808,6 +2805,7 @@ static struct castle_component_tree* castle_da_merge_complete(struct castle_da_m
 {
     struct castle_da_merge_level *level;
     struct castle_btree_node *node;
+    c_ext_pos_t root_cep = INVAL_EXT_POS;
     int next_idx, i;
 
     merge->completing = 1;
@@ -2823,6 +2821,13 @@ static struct castle_component_tree* castle_da_merge_complete(struct castle_da_m
         /* Node index == 0 indicates that there is no node at this level,
            therefore we don't have to complete anything. */
         next_idx = level->next_idx;
+        /* Record the root cep for later use. */
+        if(i == merge->root_depth)
+        {
+            /* Root node must always exist, and have > 0 entries. */
+            BUG_ON(next_idx <= 0);
+            root_cep = merge->levels[i].node_c2b->cep;
+        }
         if(next_idx != 0)
         {
             debug("Artificially completing the node at depth: %d\n", i);
@@ -2841,14 +2846,14 @@ static struct castle_component_tree* castle_da_merge_complete(struct castle_da_m
         }
     }
     /* Write out the max keys along the max path. */
-    castle_da_max_path_complete(merge);
+    castle_da_max_path_complete(merge, root_cep);
 
     /* Complete Bloom filters. */
     if (merge->bloom_exists)
         castle_bloom_complete(&merge->bloom);
 
     /* Package the merge result. */
-    return castle_da_merge_package(merge);
+    return castle_da_merge_package(merge, root_cep);
 }
 
 static void castle_ct_large_objs_remove(struct list_head *);
@@ -2863,14 +2868,6 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
     /* Release the last leaf node c2b. */
     if (merge->last_leaf_node_c2b)
         put_c2b(merge->last_leaf_node_c2b);
-
-    /* Release the last node c2b */
-    if(merge->last_node_c2b)
-    {
-        dirty_c2b(merge->last_node_c2b);
-        write_unlock_c2b(merge->last_node_c2b);
-        put_c2b(merge->last_node_c2b);
-    }
 
     /* Free all the buffers */
     if (merge->snapshot_delete.occupied)
@@ -3503,7 +3500,6 @@ static struct castle_da_merge* castle_da_merge_init(struct castle_double_array *
     merge->in_trees          = in_trees;
     merge->merged_iter       = NULL;
     merge->root_depth        = -1;
-    merge->last_node_c2b     = NULL;
     merge->last_leaf_node_c2b= NULL;
     merge->last_key          = NULL;
     merge->completing        = 0;

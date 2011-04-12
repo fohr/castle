@@ -1104,9 +1104,8 @@ static void castle_vlba_tree_entry_add(struct castle_btree_node *node,
 
     if(vlba_node->free_bytes < req_space)
     {
-        /* BUG if the key is in the node we are processing (compaction will invalidate the pointer) */
-        BUG_ON(((uint8_t *)key <= EOF_VLBA_NODE(node)) &&
-            (((uint8_t *)key + key_length + sizeof(vlba_key_t)) >= (uint8_t *)node));
+        /* BUG if the key is in the node we are processing (compaction will invalidate the ptr). */
+        BUG_ON(ptr_in_range(key, node, VLBA_TREE_NODE_LENGTH(node)));
         castle_vlba_tree_node_compact(node);
     }
 
@@ -1132,7 +1131,7 @@ static void castle_vlba_tree_entry_add(struct castle_btree_node *node,
         memmove(VLBA_ENTRY_VAL_PTR(entry), cvt.val, cvt.length);
     }
     else
-        entry->cep      = cvt.cep;
+        entry->cep = cvt.cep;
 
     /* Increment the node used count */
     node->used++;

@@ -5,6 +5,7 @@
 #include "castle_public.h"
 #include "castle.h"
 #include "castle_debug.h"
+#include "castle_cache.h"
 
 #define ATOMIC(_i)  ((atomic_t)ATOMIC_INIT(_i))
 
@@ -12,114 +13,114 @@
 
 /* Uses RW spinlock for synchronization. Use iterate_exclusive() for exclusive
  * access while iterating over the hash table. */
-#define DEFINE_HASH_TBL(_prefix, _tab, _tab_size, _struct, _list_mbr, _key_t, _key)  \
-                                                                                     \
-static DEFINE_RWLOCK(_prefix##_hash_lock);                                         \
-                                                                                     \
-static inline int _prefix##_hash_idx(_key_t key)                                     \
-{                                                                                    \
-    unsigned long hash = 0UL;                                                        \
-                                                                                     \
-    memcpy(&hash, &key, sizeof(_key_t) > 8 ? 8 : sizeof(_key_t));                    \
-                                                                                     \
-    return (int)(hash % _tab_size);                                                  \
-}                                                                                    \
-                                                                                     \
-static inline void _prefix##_hash_add(_struct *v)                                    \
-{                                                                                    \
-    int idx = _prefix##_hash_idx(v->_key);                                           \
-    unsigned long flags;                                                             \
-                                                                                     \
-    write_lock_irqsave(&_prefix##_hash_lock, flags);                                  \
-    list_add(&v->_list_mbr, &_tab[idx]);                                             \
-    write_unlock_irqrestore(&_prefix##_hash_lock, flags);                             \
-}                                                                                    \
-                                                                                     \
-static inline void __##_prefix##_hash_remove(_struct *v)                             \
-{                                                                                    \
-    list_del(&v->_list_mbr);                                                         \
-}                                                                                    \
-                                                                                     \
-static inline void _prefix##_hash_remove(_struct *v)                                 \
-{                                                                                    \
-    unsigned long flags;                                                             \
-                                                                                     \
-    write_lock_irqsave(&_prefix##_hash_lock, flags);                                  \
-    list_del(&v->_list_mbr);                                                         \
-    write_unlock_irqrestore(&_prefix##_hash_lock, flags);                             \
-}                                                                                    \
-                                                                                     \
-static inline _struct* __##_prefix##_hash_get(_key_t key)                            \
-{                                                                                    \
-    _struct *v;                                                                      \
-    struct list_head *l;                                                             \
-    int idx = _prefix##_hash_idx(key);                                               \
-                                                                                     \
-    list_for_each(l, &_tab[idx])                                                     \
-    {                                                                                \
-        v = list_entry(l, _struct, _list_mbr);                                       \
-        if(memcmp(&v->_key, &key, sizeof(_key_t)) == 0)                              \
-            return v;                                                                \
-    }                                                                                \
-                                                                                     \
-    return NULL;                                                                     \
-}                                                                                    \
-                                                                                     \
-static inline _struct* _prefix##_hash_get(_key_t key)                                \
-{                                                                                    \
-    _struct *v;                                                                      \
-    unsigned long flags;                                                             \
-                                                                                     \
-    read_lock_irqsave(&_prefix##_hash_lock, flags);                                  \
-    v = __##_prefix##_hash_get(key);                                                 \
-    read_unlock_irqrestore(&_prefix##_hash_lock, flags);                             \
-                                                                                     \
-    return v;                                                                        \
-}                                                                                    \
-                                                                                     \
-static inline void __##_prefix##_hash_iterate(int (*fn)(_struct*, void*), void *arg) \
-{                                                                                    \
-    struct list_head *l, *t;                                                         \
-    _struct *v;                                                                      \
-    int i;                                                                           \
-                                                                                     \
-    if(!_tab) goto out;                                                              \
-    for(i=0; i<_tab_size; i++)                                                       \
-    {                                                                                \
-        list_for_each_safe(l, t, &_tab[i])                                           \
-        {                                                                            \
-            v = list_entry(l, _struct, hash_list);                                   \
-            if(fn(v, arg)) goto out;                                                 \
-        }                                                                            \
-    }                                                                                \
-out:                                                                                 \
-   return;                                                                           \
-}                                                                                    \
-                                                                                     \
-static inline void _prefix##_hash_iterate(int (*fn)(_struct*, void*), void *arg)     \
-{                                                                                    \
-    read_lock_irq(&_prefix##_hash_lock);                                             \
-    __##_prefix##_hash_iterate(fn, arg);                                             \
-    read_unlock_irq(&_prefix##_hash_lock);                                           \
-}                                                                                    \
-                                                                                     \
+#define DEFINE_HASH_TBL(_prefix, _tab, _tab_size, _struct, _list_mbr, _key_t, _key)            \
+                                                                                               \
+static DEFINE_RWLOCK(_prefix##_hash_lock);                                                     \
+                                                                                               \
+static inline int _prefix##_hash_idx(_key_t key)                                               \
+{                                                                                              \
+    unsigned long hash = 0UL;                                                                  \
+                                                                                               \
+    memcpy(&hash, &key, sizeof(_key_t) > 8 ? 8 : sizeof(_key_t));                              \
+                                                                                               \
+    return (int)(hash % _tab_size);                                                            \
+}                                                                                              \
+                                                                                               \
+static inline void _prefix##_hash_add(_struct *v)                                              \
+{                                                                                              \
+    int idx = _prefix##_hash_idx(v->_key);                                                     \
+    unsigned long flags;                                                                       \
+                                                                                               \
+    write_lock_irqsave(&_prefix##_hash_lock, flags);                                           \
+    list_add(&v->_list_mbr, &_tab[idx]);                                                       \
+    write_unlock_irqrestore(&_prefix##_hash_lock, flags);                                      \
+}                                                                                              \
+                                                                                               \
+static inline void __##_prefix##_hash_remove(_struct *v)                                       \
+{                                                                                              \
+    list_del(&v->_list_mbr);                                                                   \
+}                                                                                              \
+                                                                                               \
+static inline void _prefix##_hash_remove(_struct *v)                                           \
+{                                                                                              \
+    unsigned long flags;                                                                       \
+                                                                                               \
+    write_lock_irqsave(&_prefix##_hash_lock, flags);                                           \
+    list_del(&v->_list_mbr);                                                                   \
+    write_unlock_irqrestore(&_prefix##_hash_lock, flags);                                      \
+}                                                                                              \
+                                                                                               \
+static inline _struct* __##_prefix##_hash_get(_key_t key)                                      \
+{                                                                                              \
+    _struct *v;                                                                                \
+    struct list_head *l;                                                                       \
+    int idx = _prefix##_hash_idx(key);                                                         \
+                                                                                               \
+    list_for_each(l, &_tab[idx])                                                               \
+    {                                                                                          \
+        v = list_entry(l, _struct, _list_mbr);                                                 \
+        if(memcmp(&v->_key, &key, sizeof(_key_t)) == 0)                                        \
+            return v;                                                                          \
+    }                                                                                          \
+                                                                                               \
+    return NULL;                                                                               \
+}                                                                                              \
+                                                                                               \
+static inline _struct* _prefix##_hash_get(_key_t key)                                          \
+{                                                                                              \
+    _struct *v;                                                                                \
+    unsigned long flags;                                                                       \
+                                                                                               \
+    read_lock_irqsave(&_prefix##_hash_lock, flags);                                            \
+    v = __##_prefix##_hash_get(key);                                                           \
+    read_unlock_irqrestore(&_prefix##_hash_lock, flags);                                       \
+                                                                                               \
+    return v;                                                                                  \
+}                                                                                              \
+                                                                                               \
+static inline void __##_prefix##_hash_iterate(int (*fn)(_struct*, void*), void *arg)           \
+{                                                                                              \
+    struct list_head *l, *t;                                                                   \
+    _struct *v;                                                                                \
+    int i;                                                                                     \
+                                                                                               \
+    if(!_tab) goto out;                                                                        \
+    for(i=0; i<_tab_size; i++)                                                                 \
+    {                                                                                          \
+        list_for_each_safe(l, t, &_tab[i])                                                     \
+        {                                                                                      \
+            v = list_entry(l, _struct, hash_list);                                             \
+            if(fn(v, arg)) goto out;                                                           \
+        }                                                                                      \
+    }                                                                                          \
+out:                                                                                           \
+   return;                                                                                     \
+}                                                                                              \
+                                                                                               \
+static inline void _prefix##_hash_iterate(int (*fn)(_struct*, void*), void *arg)               \
+{                                                                                              \
+    read_lock_irq(&_prefix##_hash_lock);                                                       \
+    __##_prefix##_hash_iterate(fn, arg);                                                       \
+    read_unlock_irq(&_prefix##_hash_lock);                                                     \
+}                                                                                              \
+                                                                                               \
 static inline void _prefix##_hash_iterate_exclusive(int (*fn)(_struct*, void*), void *arg)     \
-{                                                                                    \
-    write_lock_irq(&_prefix##_hash_lock);                                             \
-    __##_prefix##_hash_iterate(fn, arg);                                             \
-    write_unlock_irq(&_prefix##_hash_lock);                                           \
-}                                                                                    \
-                                                                                     \
-static inline struct list_head* _prefix##_hash_alloc(void)                           \
-{                                                                                    \
-    return castle_malloc(sizeof(struct list_head) * _tab_size, GFP_KERNEL);          \
-}                                                                                    \
-                                                                                     \
-static void inline _prefix##_hash_init(void)                                         \
-{                                                                                    \
-    int i;                                                                           \
-    for(i=0; i<_tab_size; i++)                                                       \
-        INIT_LIST_HEAD(&_tab[i]);                                                    \
+{                                                                                              \
+    write_lock_irq(&_prefix##_hash_lock);                                                      \
+    __##_prefix##_hash_iterate(fn, arg);                                                       \
+    write_unlock_irq(&_prefix##_hash_lock);                                                    \
+}                                                                                              \
+                                                                                               \
+static inline struct list_head* _prefix##_hash_alloc(void)                                     \
+{                                                                                              \
+    return castle_malloc(sizeof(struct list_head) * _tab_size, GFP_KERNEL);                    \
+}                                                                                              \
+                                                                                               \
+static void inline _prefix##_hash_init(void)                                                   \
+{                                                                                              \
+    int i;                                                                                     \
+    for(i=0; i<_tab_size; i++)                                                                 \
+        INIT_LIST_HEAD(&_tab[i]);                                                              \
 }
 
 /**
@@ -130,7 +131,7 @@ static void inline _prefix##_hash_init(void)                                    
  *
  * Iterate over list of given type, continuing from current position.
  */
-#define list_for_each_from(from, pos, head)                    \
+#define list_for_each_from(from, pos, head)                                                    \
 	for (pos = (from); prefetch(pos->next), pos != (head); pos = pos->next)
 
 static inline uint32_t BUF_L_GET(const char *buf)
@@ -253,6 +254,29 @@ static inline int list_length(struct list_head *head)
         length++;
 
     return length;
+}
+
+/**
+ * Checks whether there is an overlap between two pointer ranges. Check is inclusive,
+ * that is function will return true, even if the ranges only have one point in common.
+ *
+ * @arg min1    Start of range1
+ * @arg max1    End of range1
+ * @arg min2    Start of range2
+ * @arg max2    End of range2
+ * @return true if there is an overlap in at least one point
+ */
+static inline int overlap(void *min1, void *max1, void *min2, void *max2)
+{
+    return (max1 >= min2) && (min1 <= max2);
+}
+
+/**
+ * Checks whether a pointer is in the specified range.
+ */
+static inline int ptr_in_range(void *ptr, void *range_start, size_t range_size)
+{
+    return overlap(ptr, ptr, range_start, range_start + range_size);
 }
 
 #ifdef DEBUG
