@@ -820,12 +820,12 @@ typedef struct castle_bio_vec {
 
     struct work_struct               work;      /**< Used to thread this bvec onto a workqueue  */
     union {
-        /* Value tuple allocation callback for writes */
-        int                        (*cvt_get)    (struct castle_bio_vec *, 
+        /* Castle Value Tuple allocation callback for writes */
+        int                        (*cvt_get)    (struct castle_bio_vec *,
                                                   c_val_tup_t,
                                                   c_val_tup_t *);
         /* Get reference on objects for reads */
-        int                        (*ref_get)    (struct castle_bio_vec *, 
+        int                        (*ref_get)    (struct castle_bio_vec *,
                                                   c_val_tup_t);
     };
     /* Completion callback */

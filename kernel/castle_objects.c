@@ -654,6 +654,26 @@ struct castle_iterator_type castle_objects_rq_iter = {
 
 /**********************************************************************************************/
 /* High level interface functions */
+/**********************************************************************************************/
+
+
+/**
+ * Callback to allocate space for a btree write (insert/replace/delete).
+ *
+ * @param c_bvec [in]   Describes write request
+ * @param prev_cvt [in] INVAL_VAL_TUP for inserts
+ *                      Previous cvt for replaces/deletes
+ * @param cvt [out]     Resulting cvt
+ *
+ * - Inline values:  Populate cvt as necessary
+ * - Medium objects: Allocate space in data extent and populate cvt
+ * - Large objects:  Allocate extent and populate cvt
+ * - Tombstones:     Populate cvt as necessary
+ * - For replaces/deletes free up medium object or large object extents
+ *   used by the to-be-replaced prev_cvt
+ *
+ * @also castle_btree_write_process()
+ */
 static int castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
                                          c_val_tup_t  prev_cvt,
                                          c_val_tup_t *cvt)

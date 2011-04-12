@@ -2253,8 +2253,18 @@ static int castle_btree_node_split(c_bvec_t *c_bvec)
 /**
  * Perform write (insert/replace/delete) on btree specified by c_bvec.
  *
+ * - Perform node split if there are not enough empty slots
+ * - Search for LUB for (key,version)
+ * - If current node is not leaf, recurse via __castle_btree_submit()
+ * - Otherwise we have a leaf node that satisfies (key,version)
+ * - If entry at LUB doesn't match (key,version) insert (could also be
+ *   replace/delete further up DA) via the cvt_get() callback handler
+ * - If entry at LUB matches (key,version) replace(/delete) via the
+ *   cvt_get() callback handler
+ *
  * @also castle_btree_process()
  * @also castle_btree_read_process()
+ * @also castle_object_replace_cvt_get()
  */
 static void castle_btree_write_process(c_bvec_t *c_bvec)
 {
