@@ -88,26 +88,19 @@ static ssize_t versions_list_show(struct kobject *kobj,
     ssize_t len;
     int leaf;
     int ret;
-    c_byte_off_t phys_size = 0;
     da_id_t da_id;
 
     ret = castle_version_read(v->version, &da_id, NULL, &live_parent, &size, &leaf);
     if(ret == 0)
     {
-		/* Work out the size for DA roots. */
-	    if ((live_parent == 0) && !DA_INVAL(da_id))
-		    castle_double_array_size_get(da_id, &phys_size);
-
         len = sprintf(buf,
                 "Id: 0x%x\n"
                 "ParentId: 0x%x\n"
                 "LogicalSize: %llu\n"
-                "PhysicalSize: %llu\n"
                 "IsLeaf: %d\n",
                  v->version, 
                  live_parent,
                  size,
-                 phys_size * C_CHK_SIZE,
                  leaf);
 
         return len;
