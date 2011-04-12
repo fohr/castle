@@ -35,7 +35,7 @@ static inline ATTRIB_NORET void bug_fn(char *file, unsigned long line)
     /* Will never get here. */
     while(1){};
 #endif
-} 
+}
 #define BUG()            do { bug_fn(__FILE__, __LINE__); } while(0)
 #define BUG_ON(_cond)    do { if(_cond) BUG(); } while(0)
 
@@ -48,7 +48,7 @@ static inline ATTRIB_NORET void bug_fn(char *file, unsigned long line)
                                                 HZ/PRINTKS_PER_SEC_STEADY_STATE,    \
                                                 PRINTKS_IN_BURST))                  \
                                             printk(_f, ##_a); } while(0)*/
-#define FLE strrchr(__FILE__, '/') ? strrchr(__FILE__, '/') + 1 : __FILE__ 
+#define FLE strrchr(__FILE__, '/') ? strrchr(__FILE__, '/') + 1 : __FILE__
 
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,18)
 #define CASTLE_INIT_WORK(_work, _func) INIT_WORK((_work), (void (*)(void *)) (_func), (void *) (_work))
@@ -75,20 +75,20 @@ extern char *castle_environment[NR_ENV_VARS];
 extern int   castle_fs_inited;
 extern int   castle_fs_exiting;
 
-typedef uint32_t tree_seq_t;                   
+typedef uint32_t tree_seq_t;
 #define GLOBAL_TREE         ((tree_seq_t)0)
 #define INVAL_TREE          ((tree_seq_t)-1)
 #define TREE_GLOBAL(_t)     ((_t) == GLOBAL_TREE)
 #define TREE_INVAL(_t)      ((_t) == INVAL_TREE)
 #define TREE_SEQ_SHIFT      (24)                    /**< Shift for RWCTs (at levels 0,1)        */
 
-typedef uint32_t da_id_t;                   
+typedef uint32_t da_id_t;
 #define INVAL_DA            ((da_id_t)-1)
 #define DA_INVAL(_da)       ((_da) == INVAL_DA)
 
 typedef uint32_t block_t;
-#define INVAL_BLOCK         ((block_t)-1) 
-#define BLOCK_INVAL(_b)     ((_b) == INVAL_BLOCK) 
+#define INVAL_BLOCK         ((block_t)-1)
+#define BLOCK_INVAL(_b)     ((_b) == INVAL_BLOCK)
 
 /* New Free space structures */
 
@@ -117,17 +117,17 @@ typedef uint32_t block_t;
 #define MASK_CHK_OFFSET(offset) (((offset) >> C_CHK_SHIFT) << C_CHK_SHIFT)
 
 #define POWOF2(_n)            (((_n) & ((_n) - 1)) == 0)
-/*  Chunk #                     Description     
+/*  Chunk #                     Description
  *  =======                     ===========
  *   0 - 29                     Super Extent
  *   0                          Super block (Only first 8k)
  *   1                          Reserved
  *   2                          Freespace structures
  *   3 - 29                     Reserved
- *          
+ *
  *           Leave double the space (Super Extent is 2-RDA)
  *
- *   60                         Micro Extent (Maps of meta extent) 
+ *   60                         Micro Extent (Maps of meta extent)
  *
  *   61 - 63                    Reserved
  *
@@ -149,14 +149,14 @@ typedef uint32_t block_t;
 #define MICRO_EXT_SIZE                 (1)   /* Don't change this */
 #define META_SPACE_SIZE                (300)
 #define MSTORE_SPACE_SIZE              (50)
-#define FREE_SPACE_START               (100) 
+#define FREE_SPACE_START               (100)
 #define FREESPACE_OFFSET               (2 * C_CHK_SIZE)
 #define FREESPACE_SIZE                 (20 * C_CHK_SIZE)
 
 #define sup_ext_to_slave_id(_id)       ((_id) - SUP_EXT_ID)
 #define slave_id_to_sup_ext(_id)       ((_id) + SUP_EXT_ID)
 
-/* Logical extent structures are stored seperatly from normal extents. They are 
+/* Logical extent structures are stored seperatly from normal extents. They are
  * stored in extent superblock itself. */
 #define LOGICAL_EXTENT(_ext_id)        ((_ext_id) < EXT_SEQ_START && !EXT_ID_INVAL(_ext_id))
 #define SUPER_EXTENT(_ext_id)          (((_ext_id) >= SUP_EXT_ID) && ((_ext_id) < slave_id_to_sup_ext(MAX_NR_SLAVES)))
@@ -183,7 +183,7 @@ typedef struct castle_chunk_sequence c_chk_seq_t;
 #define INVAL_CHK_SEQ                ((c_chk_seq_t){0,0})
 #define CHK_SEQ_INVAL(_seq)          ((_seq).count == 0)
 #define CHK_SEQ_EQUAL(_seq1, _seq2)  (((_seq1).first_chk == (_seq2).first_chk) && \
-                                      ((_seq1).count == (_seq2).count)) 
+                                      ((_seq1).count == (_seq2).count))
 #define chk_seq_fmt                  "(0x%llx, 0x%llx)"
 #define chk_seq2str(_seq)            (_seq).first_chk, (_seq).count
 
@@ -198,12 +198,12 @@ typedef struct castle_disk_chunk c_disk_chk_t;
 #define DISK_CHK_INVAL(_chk)         (((_chk).slave_id == INVAL_SLAVE_ID) &&    \
                                       ((_chk).offset == 0))
 #define DISK_CHK_EQUAL(_chk1, _chk2) (((_chk1).slave_id == (_chk2).slave_id) && \
-                                      ((_chk1).offset == (_chk2).offset)) 
+                                      ((_chk1).offset == (_chk2).offset))
 #define disk_chk_fmt                  "(0x%x, 0x%x)"
 #define disk_chk_fmt_nl               "(0x%x, 0x%x)\n"
 #define disk_chk2str(_chk)            (_chk).slave_id, (_chk).offset
 
-typedef uint64_t c_byte_off_t; 
+typedef uint64_t c_byte_off_t;
 
 /* Disk layout related structures (extent based) */
 struct castle_extent_position {
@@ -214,10 +214,10 @@ struct castle_extent_position {
 } PACKED;
 typedef struct castle_extent_position c_ext_pos_t;
 #define __INVAL_EXT_POS             {INVAL_EXT_ID,0}
-#define INVAL_EXT_POS               ((c_ext_pos_t) __INVAL_EXT_POS) 
+#define INVAL_EXT_POS               ((c_ext_pos_t) __INVAL_EXT_POS)
 #define EXT_POS_INVAL(_off)         ((_off).ext_id == INVAL_EXT_ID)
 #define EXT_POS_EQUAL(_off1, _off2) (((_off1).ext_id == (_off2).ext_id) && \
-                                      ((_off1).offset == (_off2).offset)) 
+                                      ((_off1).offset == (_off2).offset))
 /**
  * Compare cep1 against cep2.
  *
@@ -279,30 +279,30 @@ typedef struct castle_extent_freespace {
 } c_ext_free_t;
 
 typedef struct castle_extent_freespace_byte_stream {
-    /* align:   8 */   
+    /* align:   8 */
     /* offset:  0 */ c_ext_id_t      ext_id;
     /*          8 */ c_byte_off_t    ext_size;
     /*         16 */ uint64_t        used;
     /*         24 */ uint64_t        blocked;
     /*         32 */ uint32_t        align;
-    /*         36 */ uint8_t         _unused[28]; 
-    /*         64 */ 
+    /*         36 */ uint8_t         _unused[28];
+    /*         64 */
 } PACKED c_ext_free_bs_t;
 
 typedef struct castle_freespace {
-    /* align:   4 */  
+    /* align:   4 */
     /* offset:  0 */ uint32_t        max_entries;
     /*          4 */ uint32_t        nr_entries;
     /*          8 */ uint32_t        prod;
     /*         12 */ uint32_t        cons;
     /*         16 */ c_chk_cnt_t     free_chk_cnt;
     /*         20 */ c_chk_cnt_t     disk_size;
-    /*         24 */ uint8_t         _unused[40]; 
-    /*         64 */ 
+    /*         24 */ uint8_t         _unused[40];
+    /*         64 */
 } PACKED castle_freespace_t;
 
 struct castle_elist_entry {
-    /* align:   8 */ 
+    /* align:   8 */
     /* offset:  0 */ c_ext_id_t      ext_id;
     /*          8 */ c_chk_cnt_t     size;
     /*         12 */ c_rda_type_t    type;
@@ -312,7 +312,7 @@ struct castle_elist_entry {
     /*         40 */ uint32_t        curr_rebuild_seqno;
     /*         44 */ uint32_t        da_id;
     /*         48 */ uint32_t        ext_type;
-    /*         52 */ uint8_t         _unused[12]; 
+    /*         52 */ uint8_t         _unused[12];
     /*         64 */
 } PACKED;
 
@@ -335,8 +335,8 @@ struct castle_slave_superblock {
     /* offset:  0 */ struct castle_slave_superblock_public pub;
     /*        128 */ uint32_t                              fs_version;
     /*        132 */ castle_freespace_t                    freespace;
-    /*        196 */ uint8_t                               _unused[60]; 
-    /*        256 */ 
+    /*        196 */ uint8_t                               _unused[60];
+    /*        256 */
 } PACKED;
 
 struct castle_fs_superblock {
@@ -350,7 +350,7 @@ struct castle_fs_superblock {
     /*       1480 */ c_ext_pos_t                             mstore[16];
     /*       1736 */ int                                     fs_in_rebuild;
     /*       1740 */ uint8_t                                 _unused[308];
-    /*       2048 */ 
+    /*       2048 */
 } PACKED;
 
 enum {
@@ -375,7 +375,7 @@ enum {
 #define MEDIUM_OBJECT_LIMIT (20 * C_CHK_SIZE)
 
 struct castle_value_tuple {
-    /* align:   8 */ 
+    /* align:   8 */
     /* offset:  0 */ struct {
     /*          0 */     uint64_t      type:8;
     /*          1 */     uint64_t      length:56;
@@ -384,7 +384,7 @@ struct castle_value_tuple {
     /*          8 */     c_ext_pos_t   cep;
     /*          8 */     uint8_t      *val;
     /*         24 */ };
-    /*         24 */ 
+    /*         24 */
 } PACKED;
 typedef struct castle_value_tuple c_val_tup_t;
 
@@ -423,13 +423,13 @@ typedef struct castle_value_tuple c_val_tup_t;
    (_cvt).type   = (CVT_TYPE_LEAF_VAL | CVT_TYPE_TOMB_STONE);               \
    (_cvt).length = 0;                                                       \
    (_cvt).cep    = INVAL_EXT_POS;                                           \
-}                                                  
+}
 #define CVT_INLINE_SET(_cvt, _length, _ptr)                                 \
 {                                                                           \
    (_cvt).type   = (CVT_TYPE_LEAF_VAL | CVT_TYPE_INLINE);                   \
    (_cvt).length = _length;                                                 \
    (_cvt).val    = _ptr;                                                    \
-}                                                  
+}
 #define CVT_MEDIUM_OBJECT_SET(_cvt, _length, _cep)                          \
 {                                                                           \
     (_cvt).type  = (CVT_TYPE_LEAF_VAL | CVT_TYPE_ONDISK);                   \
@@ -485,7 +485,7 @@ typedef struct castle_mstore {
 typedef struct castle_mstore_iter {
     struct castle_mstore      *store;                /* Store we are iterating over      */
     struct castle_cache_block *node_c2b;             /* Currently accessed node (locked) */
-    int                        node_idx;             /* Next entry index in current node */ 
+    int                        node_idx;             /* Next entry index in current node */
 } c_mstore_iter_t;
 
 enum {
@@ -496,7 +496,7 @@ enum {
     MSTORE_ATTACHMENTS_TAG,
     MSTORE_EXTENTS,
     MSTORE_LARGE_OBJECTS,
-}; 
+};
 
 
 #define MTREE_TYPE                 0x33
@@ -504,12 +504,12 @@ enum {
 #define BATREE_TYPE                0x44
 #define RW_VLBA_TREE_TYPE          0x55
 #define RO_VLBA_TREE_TYPE          0x66
-                                  
+
 #define MAX_BTREE_DEPTH           (10)               /**< Maximum depth of btrees.
                                                           This is used in on-disk datastructures.
                                                           For example castle_clist_entry.
-                                                          If modified, those need to be reviewed. 
-                                                      */ 
+                                                          If modified, those need to be reviewed.
+                                                      */
 #define VLBA_HDD_RO_TREE_NODE_SIZE      (64)  /**< Size of the default RO tree node size. */
 #define VLBA_SSD_RO_TREE_NODE_SIZE      (2)   /**< Size of the RO tree node size on SSDs. */
 
@@ -552,15 +552,15 @@ struct castle_btree_type {
                                  array.                                 */
     void      *min_key;       /* Minimum key                            */
     void      *max_key;       /* Maximum used as the end of node marker */
-    void      *inv_key;       /* An invalid key, comparison with it 
+    void      *inv_key;       /* An invalid key, comparison with it
                                  should always return a negative number
                                  except if also compared to invalid key
                                  in which case cmp should return zero   */
     uint16_t (*node_size)     (struct castle_component_tree *ct,
                                uint8_t level);
-                              /**< Gives btree node size at the given 
+                              /**< Gives btree node size at the given
                                    level. Levels are counted in reverse
-                                   order. I.e. leaf level is 0, etc. 
+                                   order. I.e. leaf level is 0, etc.
                                    This makes it possible to grow the tree
                                    without renumbering all the existing
                                    levels. */
@@ -568,10 +568,10 @@ struct castle_btree_type {
                                int                       version_or_key);
                               /* 0 - version split, 1 - key split       */
     int      (*key_compare)   (void *key1, void *key2);
-                              /* Returns negative if key1 < key2, zero 
+                              /* Returns negative if key1 < key2, zero
                                  if equal, positive otherwise           */
     void*    (*key_duplicate) (void *key);
-                              /* Returns duplicate of key. Need to call 
+                              /* Returns duplicate of key. Need to call
                                * a dealloc later to free resources      */
     void*    (*key_next)      (void *key);
                               /* Successor key, succ(MAX) = INVAL,
@@ -583,17 +583,17 @@ struct castle_btree_type {
                               /* Get hash of key with seed              */
     int      (*entry_get)     (struct castle_btree_node *node,
                                int                       idx,
-                               void                    **key_p,            
+                               void                    **key_p,
                                version_t                *version_p,
                                c_val_tup_t              *cvt_p);
     void     (*entry_add)     (struct castle_btree_node *node,
                                int                       idx,
-                               void                     *key,            
+                               void                     *key,
                                version_t                 version,
                                c_val_tup_t               cvt);
     void     (*entry_replace) (struct castle_btree_node *node,
                                int                       idx,
-                               void                     *key,            
+                               void                     *key,
                                version_t                 version,
                                c_val_tup_t               cvt);
     void     (*entry_disable) (struct castle_btree_node *node,
@@ -602,11 +602,11 @@ struct castle_btree_type {
                                int                       idx_start,
                                int                       idx_end);
                               /* Drop all entries between idx_start and
-                                 idx_stop. Inclusive                    */ 
+                                 idx_stop. Inclusive                    */
     void     (*node_print)    (struct castle_btree_node *node);
-#ifdef CASTLE_DEBUG    
+#ifdef CASTLE_DEBUG
     void     (*node_validate) (struct castle_btree_node *node);
-#endif        
+#endif
 };
 
 #define MTREE_NODE_SIZE     (10) /* In blocks */
@@ -633,15 +633,15 @@ struct castle_component_tree {
     atomic_t            write_ref_count;
     atomic64_t          item_count;        /**< Number of items in the tree.                  */
     btree_t             btree_type;
-    uint8_t             dynamic;           /**< 1 - dynamic modlist btree, 0 - merge result.  */ 
+    uint8_t             dynamic;           /**< 1 - dynamic modlist btree, 0 - merge result.  */
     da_id_t             da;
     uint8_t             level;             /**< Level in the doubling array.                  */
     uint16_t            node_sizes[MAX_BTREE_DEPTH];
                                            /**< Size of nodes in each level in the b-tree,
-                                                in pages. Only used for !dynamic (i.e. RO) 
-                                                trees. Stored in reverse order, 
-                                                i.e. node_sizes[0] is the size of leaf level, 
-                                                node_sizes[tree_depth-1] is the size of the 
+                                                in pages. Only used for !dynamic (i.e. RO)
+                                                trees. Stored in reverse order,
+                                                i.e. node_sizes[0] is the size of leaf level,
+                                                node_sizes[tree_depth-1] is the size of the
                                                 root node. */
     uint8_t             new_ct;            /**< Marked for cts which are not yet flushed onto
                                                 the disk.                                     */
@@ -679,8 +679,8 @@ struct castle_dlist_entry {
     /* align:   4 */
     /* offset:  0 */ da_id_t     id;
     /*          4 */ version_t   root_version;
-    /*          8 */ uint8_t     _unused[248]; 
-    /*        256 */ 
+    /*          8 */ uint8_t     _unused[248];
+    /*        256 */
 } PACKED;
 
 struct castle_clist_entry {
@@ -711,7 +711,7 @@ struct castle_clist_entry {
 } PACKED;
 
 /**
- * Ondisk Serialized structure for castle versions.  
+ * Ondisk Serialized structure for castle versions.
  */
 struct castle_vlist_entry {
     /* align:   8 */
@@ -721,8 +721,8 @@ struct castle_vlist_entry {
     /*         12 */ uint8_t      _pad[4];
     /*         16 */ uint64_t     size;
     /*         24 */ uint64_t     flags;    /**< Flags for version LEAF & DELETED. */
-    /*         32 */ uint8_t      _unused[224]; 
-    /*        256 */ 
+    /*         32 */ uint8_t      _unused[224];
+    /*        256 */
 } PACKED;
 
 #define MAX_NAME_SIZE 128
@@ -730,8 +730,8 @@ struct castle_alist_entry {
     /* align:   4 */
     /* offset:  0 */ version_t   version;
     /*          4 */ char        name[MAX_NAME_SIZE];
-    /*        132 */ uint8_t     _unused[124]; 
-    /*        256 */ 
+    /*        132 */ uint8_t     _unused[124];
+    /*        256 */
 } PACKED;
 
 #define MLIST_NODE_MAGIC  0x0000baca
@@ -741,9 +741,9 @@ struct castle_mlist_node {
     /*          4 */ uint16_t    capacity;
     /*          6 */ uint16_t    used;
     /*          8 */ c_ext_pos_t next;
-    /*         24 */ uint8_t     _unused[40]; 
+    /*         24 */ uint8_t     _unused[40];
     /*         64 */ uint8_t     payload[0];
-    /*         64 */ 
+    /*         64 */
 } PACKED;
 
 struct castle_lolist_entry {
@@ -751,8 +751,8 @@ struct castle_lolist_entry {
     /* offset:  0 */ c_ext_id_t  ext_id;
     /*          8 */ uint64_t    length;
     /*         16 */ tree_seq_t  ct_seq;
-    /*         20 */ uint8_t     _unused[12]; 
-    /*         32 */ 
+    /*         20 */ uint8_t     _unused[12];
+    /*         32 */
 } PACKED;
 
 /* IO related structures */
@@ -771,10 +771,10 @@ typedef struct castle_bio {
         struct castle_object_get     *get;
         struct castle_object_pull    *pull;
     };
-    struct castle_bio_vec            *c_bvecs; 
+    struct castle_bio_vec            *c_bvecs;
     atomic_t                          count;
     int                               err;
-#ifdef CASTLE_DEBUG                  
+#ifdef CASTLE_DEBUG
     int                               stuck;
     int                               id;
     int                               nr_bvecs;
@@ -785,16 +785,16 @@ typedef struct castle_bio {
 
 struct castle_cache_block;
 struct castle_request_timeline;
-#define CBV_ONE2ONE_BIT               (0) 
-#define CBV_ROOT_LOCKED_BIT           (1) 
-#define CBV_PARENT_WRITE_LOCKED       (3) 
-#define CBV_CHILD_WRITE_LOCKED        (4) 
-/* Temporary variable used to set the above correctly, at the right point in time */ 
-#define CBV_C2B_WRITE_LOCKED          (5) 
+#define CBV_ONE2ONE_BIT               (0)
+#define CBV_ROOT_LOCKED_BIT           (1)
+#define CBV_PARENT_WRITE_LOCKED       (3)
+#define CBV_CHILD_WRITE_LOCKED        (4)
+/* Temporary variable used to set the above correctly, at the right point in time */
+#define CBV_C2B_WRITE_LOCKED          (5)
 
 typedef struct castle_bio_vec {
     c_bio_t                      *c_bio;        /**< Where this IO originated                   */
-    
+
     void                         *key;          /**< Key we want to read                        */
     version_t                     version;      /**< Version of key we want to read             */
     int                           cpu;          /**< CPU id for this request                    */
@@ -811,7 +811,7 @@ typedef struct castle_bio_vec {
     /* When writing, B-Tree node and its parent have to be locked concurrently. */
     struct castle_cache_block    *btree_node;
     struct castle_cache_block    *btree_parent_node;
- 
+
     /* Bloom filters. */
     struct castle_cache_block *bloom_c2b;
 #ifdef CASTLE_BLOOM_FP_STATS
@@ -832,17 +832,17 @@ typedef struct castle_bio_vec {
     void                           (*endfind)    (struct castle_bio_vec *, int, c_val_tup_t);
     void                           (*da_endfind) (struct castle_bio_vec *, int, c_val_tup_t);
     atomic_t                         reserv_nodes;
-    struct list_head                 io_list; 
-#ifdef CASTLE_DEBUG              
+    struct list_head                 io_list;
+#ifdef CASTLE_DEBUG
     unsigned long                    state;
     struct castle_cache_block       *locking;
 #endif
-#ifdef CASTLE_PERF_DEBUG    
+#ifdef CASTLE_PERF_DEBUG
     struct castle_request_timeline  *timeline;
 #endif
 } c_bvec_t;
 
-#define REMOVE                        (2) 
+#define REMOVE                        (2)
 
 #define c_bvec_data_dir(_c_bvec)      ((_c_bvec)->c_bio->data_dir & RW_MASK)
 #define c_bvec_data_del(_c_bvec)      ((_c_bvec)->c_bio->data_dir & REMOVE)
@@ -852,26 +852,26 @@ typedef struct castle_bio_vec {
 #define c_bvec_btree_fn(_c_bvec, _fn) ((_c_bvec)->c_bio->btree->(_fn))
 
 /* Iterface implemented by various iterators in the module. Skip function is optional. */
-/* 
- * Sequence of iterator functions to be called 
+/*
+ * Sequence of iterator functions to be called
  *      -> prep_next()
  *          <- end_io()
  *      -> has_next()
- *      -> next()   
+ *      -> next()
  */
 /* end_io - gets called after completing the lower level iterator. Call
  *          prep_next() to make sure buffer is not empty, If so prep_next would
  *          schedule lower level iterator again. If prep_next() returns 1, then
  *          call upper level iterator's callback. */
-typedef void (*castle_iterator_end_io_t)(void *iter, 
+typedef void (*castle_iterator_end_io_t)(void *iter,
                                          int err);
 /* register_cb - sets the calback function to be called after preparing buffer */
 typedef void (*castle_iterator_register_cb_t)(void *iter,
                                               castle_iterator_end_io_t cb,
                                               void *data);
 
-/* prep_next - Returns 
- *         1 - if the iterator has content ready in buffers to respond to next()  
+/* prep_next - Returns
+ *         1 - if the iterator has content ready in buffers to respond to next()
  *         0 - if the iterator needs to get contents schedule lower level
  *             iterator; this leads to a call to iterator's end_io() after
  *             completion of lower level iterator */
@@ -881,9 +881,9 @@ typedef int  (*castle_iterator_prep_next_t)(void *iter);
           0 -  if the buffer is empty */
 typedef int  (*castle_iterator_has_next_t)(void *iter);
 /* next - gets called only if buffer is not empty */
-typedef void (*castle_iterator_next_t)    (void *iter, 
-                                           void **key_p, 
-                                           version_t *version_p, 
+typedef void (*castle_iterator_next_t)    (void *iter,
+                                           void **key_p,
+                                           version_t *version_p,
                                            c_val_tup_t *cvt_p);
 /* skip - set the low level iterator to skip to the key, but don't run lower
  *        level iterator. It shouldn't block */
@@ -910,20 +910,20 @@ struct castle_indirect_node {
         struct {
             c_ext_pos_t                cep;      /* CEP from leaf pointer  */
             uint16_t                   f_idx;    /* Index in the orig node */
-        };                             
+        };
         /* Used after entries are locked */
         struct {
             struct castle_cache_block *c2b;      /* Cache page for an 'indirect' node */
         };
-    };                                 
+    };
     /* Will form array indexed by the entry # from the orginal node. Used to find
        the right indirect node/entry in the array above. Again spans at most
        node->used entries. */
-    struct {                 
+    struct {
         uint16_t                       r_idx;    /* Index in indirect_nodes array */
-        uint16_t                       node_idx; /* Index in the indirect node */ 
+        uint16_t                       node_idx; /* Index in the indirect node */
     };
-}; 
+};
 
 enum {
     C_ITER_ALL_ENTRIES,
@@ -933,14 +933,14 @@ enum {
 
 /* Used for iterating through the tree */
 typedef struct castle_iterator {
-    /* Fields below should be filled in before iterator is registered with the btree 
-       code with btree_iter_init() and start() */ 
+    /* Fields below should be filled in before iterator is registered with the btree
+       code with btree_iter_init() and start() */
     int                         (*need_visit)(struct castle_iterator *c_iter,
                                               c_ext_pos_t node_cep);
     void                        (*node_start)(struct castle_iterator *c_iter);
-    void                        (*each)      (struct castle_iterator *c_iter, 
-                                              int index, 
-                                              void *key, 
+    void                        (*each)      (struct castle_iterator *c_iter,
+                                              int index,
+                                              void *key,
                                               version_t version,
                                               c_val_tup_t cvt);
     void                        (*node_end)  (struct castle_iterator *c_iter);
@@ -951,23 +951,23 @@ typedef struct castle_iterator {
     /* Fields below are used by the iterator to conduct the walk */
     int                           type;       /* C_ITER_XXX */
     version_t                     version;
-    void                         *parent_key; /* The key we followed to get to the block 
+    void                         *parent_key; /* The key we followed to get to the block
                                                  on the top of the path/stack */
     union {
         /* Used by C_ITER_ALL_ENTRIES       */
         int                       node_idx[MAX_BTREE_DEPTH];
         /* Used by C_ITER_MATCHING_VERSIONS & C_ITER_ANCESTORAL_VERSIONS */
         struct {
-            void                 *key;          /* The next key to look for in the iteration 
+            void                 *key;          /* The next key to look for in the iteration
                                                    (typically parent_key + 1 when at leafs) */
             int                   need_destroy; /* True if allocated by the iterator
                                                    (and needs destroying at the end) */
         } next_key;
-                                                 
+
     };
     int                           cancelled;
     int                           err;
-    
+
     struct castle_cache_block    *path[MAX_BTREE_DEPTH];
     int                           depth;
     int                           btree_levels;   /**< Private copy of ct->tree_depth, recorded
@@ -976,7 +976,7 @@ typedef struct castle_iterator {
                                                        splits. */
 
     struct castle_indirect_node  *indirect_nodes; /* If allocated, MAX_BTREE_ENTRIES */
-                                 
+
     struct work_struct            work;
 } c_iter_t;
 
@@ -984,7 +984,7 @@ typedef struct castle_iterator {
 typedef struct castle_enumerator {
     struct castle_component_tree *tree;
     int                           err;
-    struct castle_iterator        iterator; 
+    struct castle_iterator        iterator;
     wait_queue_head_t             iterator_wq;
     volatile int                  iterator_outs;
     int                           iter_completed;
@@ -1007,7 +1007,7 @@ typedef struct castle_enumerator {
             struct list_head      list;
         } *visited;
     };
-} c_enum_t; 
+} c_enum_t;
 
 struct node_buf_t;
 struct node_buf_t {
@@ -1020,7 +1020,7 @@ typedef struct castle_rq_enumerator {
     struct castle_component_tree *tree;
     int                           err;
     version_t                     version;
-    struct castle_iterator        iterator; 
+    struct castle_iterator        iterator;
     volatile int                  iter_completed;
     wait_queue_head_t             iter_wq;
     volatile int                  iter_running;
@@ -1057,7 +1057,7 @@ typedef struct castle_merged_iterator {
         void                        *iterator;
         struct castle_iterator_type *iterator_type;
         int                          cached;
-        struct {           
+        struct {
             void                    *k;
             version_t                v;
             c_val_tup_t              cvt;
@@ -1077,7 +1077,7 @@ typedef struct castle_da_rq_iterator {
 
     struct ct_rq {
         struct castle_component_tree *ct;
-        c_rq_enum_t                   ct_rq_iter; 
+        c_rq_enum_t                   ct_rq_iter;
     } *ct_rqs;
     castle_iterator_end_io_t  end_io;
     void                     *private;
@@ -1093,9 +1093,9 @@ struct castle_slave_block_cnt
     c_mstore_key_t   mstore_key;
 };
 
-struct castle_slave_block_cnts 
+struct castle_slave_block_cnts
 {
-    struct list_head hash[BLOCKS_HASH_SIZE];     /* The hashtable is protected by 
+    struct list_head hash[BLOCKS_HASH_SIZE];     /* The hashtable is protected by
                                                     castle_slave superblock lock   */
     struct castle_slave_block_cnt metadata_cnt;  /* Count for version 0 (metadata) */
 };
@@ -1163,7 +1163,7 @@ struct castle_attachment {
     union {
         struct {
             struct gendisk  *gd;
-        } dev; /* Only valid for block devices */ 
+        } dev; /* Only valid for block devices */
         struct {
             collection_id_t  id;
             char            *name;
@@ -1175,7 +1175,7 @@ struct castle_attachment {
     struct list_head    list;
 };
 
-struct castle_attachments { 
+struct castle_attachments {
     struct kobject collections_kobj;
     struct kobject devices_kobj;
     int major;
@@ -1192,17 +1192,17 @@ extern struct workqueue_struct *castle_wqs[2*MAX_BTREE_DEPTH+1];
 #define castle_wq              (castle_wqs[0])
 
 /* Various utilities */
-#define C_BLK_SHIFT                    (12) 
+#define C_BLK_SHIFT                    (12)
 #define C_BLK_SIZE                     (1 << C_BLK_SHIFT)
 //#define disk_blk_to_offset(_cdb)     ((_cdb).block * C_BLK_SIZE)
 
-struct castle_attachment*                          
+struct castle_attachment*
                       castle_device_init           (version_t version);
 void                  castle_device_free           (struct castle_attachment *cd);
-struct castle_attachment*                          
+struct castle_attachment*
                       castle_device_find           (dev_t dev);
-                                                   
-struct castle_attachment* 
+
+struct castle_attachment*
                       castle_collection_init       (version_t version, char *name);
 
 struct castle_attachment *
@@ -1211,18 +1211,18 @@ void                  castle_attachment_put        (struct castle_attachment *ca
 
 struct castle_slave*  castle_claim                 (uint32_t new_dev);
 void                  castle_release               (struct castle_slave *cs);
-                                                   
+
 void                  castle_slave_access          (uint32_t uuid);
-                                                   
+
 struct castle_slave*  castle_slave_find_by_id      (uint32_t id);
 struct castle_slave*  castle_slave_find_by_uuid    (uint32_t uuid);
 struct castle_slave*  castle_slave_find_by_bdev    (struct block_device *bdev);
 struct castle_slave*  castle_slave_find_by_block   (c_ext_pos_t cep);
 
-struct castle_slave_superblock* 
+struct castle_slave_superblock*
                       castle_slave_superblock_get  (struct castle_slave *cs);
 void                  castle_slave_superblock_put  (struct castle_slave *cs, int dirty);
-struct castle_fs_superblock* 
+struct castle_fs_superblock*
                       castle_fs_superblocks_get    (void);
 void                  castle_fs_superblocks_put    (struct castle_fs_superblock *sb, int dirty);
 void                  castle_fs_superblock_slaves_update
@@ -1230,17 +1230,17 @@ void                  castle_fs_superblock_slaves_update
 
 int                   castle_fs_init               (void);
 
-void                  castle_ext_freespace_init    (c_ext_free_t     *ext_free, 
+void                  castle_ext_freespace_init    (c_ext_free_t     *ext_free,
                                                     c_ext_id_t        ext_id,
                                                     uint32_t          align);
 
-int                   castle_new_ext_freespace_init(c_ext_free_t     *ext_free, 
-                                                    da_id_t           da_id, 
+int                   castle_new_ext_freespace_init(c_ext_free_t     *ext_free,
+                                                    da_id_t           da_id,
                                                     c_ext_type_t      ext_type,
                                                     c_byte_off_t      size,
                                                     uint32_t          align);
 
-int                   castle_ext_freespace_consistent     
+int                   castle_ext_freespace_consistent
                                                    (c_ext_free_t     *ext_frees);
 
 void                  castle_ext_freespace_fini    (c_ext_free_t     *ext_free);
@@ -1256,14 +1256,14 @@ int                   castle_ext_freespace_get     (c_ext_free_t     *ext_free,
 int                   castle_ext_freespace_free    (c_ext_free_t     *ext_free,
                                                     int64_t           size);
 
-void                  castle_ext_freespace_marshall(c_ext_free_t     *ext_free, 
+void                  castle_ext_freespace_marshall(c_ext_free_t     *ext_free,
                                                     c_ext_free_bs_t  *ext_free_bs);
 
-void                  castle_ext_freespace_unmarshall     
-                                                   (c_ext_free_t     *ext_free, 
+void                  castle_ext_freespace_unmarshall
+                                                   (c_ext_free_t     *ext_free,
                                                     c_ext_free_bs_t  *ext_free_bs);
 
-c_byte_off_t          castle_ext_freespace_summary_get    
+c_byte_off_t          castle_ext_freespace_summary_get
                                                    (c_ext_free_t     *ext_free);
 
 struct castle_cache_block;
@@ -1275,8 +1275,8 @@ struct castle_object_replace {
                                     int                           err);
     void        (*replace_continue)(struct castle_object_replace *op);
     uint32_t    (*data_length_get) (struct castle_object_replace *op);
-    void        (*data_copy)       (struct castle_object_replace *op, 
-                                    void                         *buffer, 
+    void        (*data_copy)       (struct castle_object_replace *op,
+                                    void                         *buffer,
                                     uint32_t                      str_length,
                                     int                           partial);
 
@@ -1293,11 +1293,11 @@ struct castle_object_get {
     uint64_t    data_length;
     int         first;
     c_val_tup_t cvt;
-    
-    void      (*reply_start)     (struct castle_object_get *get, 
-                                  int err, 
+
+    void      (*reply_start)     (struct castle_object_get *get,
+                                  int err,
                                   uint64_t data_length,
-                                  void *buffer, 
+                                  void *buffer,
                                   uint32_t buffer_length);
     void      (*reply_continue)  (struct castle_object_get *get,
                                   int err,
@@ -1318,13 +1318,13 @@ struct castle_object_pull {
     c_val_tup_t                 cvt;
     struct castle_component_tree *ct;
     struct castle_cache_block  *curr_c2b;
-    
+
     void                       *buf;
     uint32_t                    to_copy;
 
     struct work_struct          work;
-    
-    void (*pull_continue)      (struct castle_object_pull *pull, 
+
+    void (*pull_continue)      (struct castle_object_pull *pull,
                                 int err, uint64_t length, int done);
 };
 /*
@@ -1398,7 +1398,7 @@ static uint32_t __attribute__((used)) fletcher32( uint16_t *data, size_t len )
         /* Length should be in terms if 16-bit words. */
         if (len % 2) *((size_t *)(uint64_t)(sum1 - sum2)) = len;
         len = (len / 2);
- 
+
         while (len) {
                 unsigned tlen = len > 360 ? 360 : len;
                 len -= tlen;
@@ -1446,13 +1446,13 @@ struct castle_double_array {
                                *active_token;
             struct castle_merge_token
                                *driver_token;
-            uint32_t            units_commited; 
+            uint32_t            units_commited;
             struct task_struct *thread;
             int                 deamortize;
         } merge;
     } levels[MAX_DA_LEVEL];
     struct castle_merge_token   merge_tokens_array[MAX_DA_LEVEL];
-    struct list_head            merge_tokens; 
+    struct list_head            merge_tokens;
     struct list_head            hash_list;
     int                         driver_merge;
     atomic_t                    ref_cnt;
@@ -1482,7 +1482,7 @@ struct castle_double_array {
     c_vl_okey_t                *last_key;
     /* Compaction (Big-merge) */
     int                         top_level;          /**< height of doubling array */
-    atomic_t                    nr_del_versions;    /**< #versions deleted since 
+    atomic_t                    nr_del_versions;    /**< #versions deleted since
                                                          last compaction. */
     int                         compacting;         /**< marked when DA has to
                                                          start compaction. */
@@ -1491,7 +1491,7 @@ struct castle_double_array {
 extern int castle_latest_key;
 
 /**
- * State for Snapshot delete. Gets reset for each new key on the merge stream. 
+ * State for Snapshot delete. Gets reset for each new key on the merge stream.
  */
 struct castle_version_delete_state {
     char                         *occupied;         /**< v'th bit set if key exists for version v. */
