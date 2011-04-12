@@ -587,9 +587,9 @@ static void castle_objects_rq_iter_cancel(castle_object_iterator_t *iter)
     /* Cancel da_rq_iter if it's error free */
     if(!iter->da_rq_iter.err)
         castle_da_rq_iter.cancel(&iter->da_rq_iter);
-    if(iter->start_bkey);
+    if(iter->start_bkey)
         castle_object_bkey_free(iter->start_bkey);
-    if(iter->end_bkey);
+    if(iter->end_bkey)
         castle_object_bkey_free(iter->end_bkey);
     castle_objects_rq_iter_next_key_free(iter);
 }
