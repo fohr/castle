@@ -1,0 +1,76 @@
+#!/bin/bash
+
+set -e
+
+device="$1"
+
+if [ -z "$device" ]
+then
+    echo "Usage: $0 <device>"
+    exit 2
+fi
+
+tempdir=$(mktemp -d)
+TMPDIR="$tempdir"
+
+cd "$tempdir"
+
+function cleanup {
+    cd /
+    rm -rf --one-file-system "$tempdir"
+}
+
+trap cleanup EXIT
+
+function read_sector {
+    lba="$1"
+    filename="$2"
+    dd if="$device" of="$filename" bs=512 skip="$lba" count=1 status=noxfer >/dev/null
+}
+
+function ll_validate_sector {
+    lba="$1"
+    filename="$2"
+    temp=$(mktemp)
+    blockdev --flushbufs "$device"
+    hdparm --read-sector "$lba" "$device" > "$temp"
+    mangled_temp=$(mktemp)
+    tail -n +4 < "$temp" > "$mangled_temp"
+    mangled_source=$(mktemp)
+    od -vt x2 < "$filename" | cut -b 9- | head -n -1 > "$mangled_source"
+    if ! cmp -s "$mangled_temp" "$mangled_source"
+    then
+        echo "Expected data:"
+        cat "$mangled_source"
+        echo "Actual data we got from the drive:"
+        cat "$temp"
+        echo "Sector at LBA $lba is not what it should be (via low-level access)!"
+        return 1
+    fi
+    return 0
+}
+
+function test_sector {
+    lba="$1"
+    for i in $(seq 1 10)
+    do
+      echo "Testing sector at $lba"
+      data=$(mktemp)
+      if ! read_sector "$lba" "$data"; then
+          return 1
+      fi
+      if ! ll_validate_sector "$lba" "$data"; then
+          return 1
+      fi
+    done
+    return 0
+}
+
+bad_lbas=$(smartctl -l selftest "$device" | grep '^#' | cut -b 79- | sort -u | grep .)
+for lba in $bad_lbas
+do
+  if ! test_sector "$lba"; then
+      echo "Bad sector detected at LBA $lba"
+      exit 1
+  fi
+done

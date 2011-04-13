@@ -1,0 +1,124 @@
+#!/bin/bash
+
+set -e
+
+device="$1"
+
+if [ -z "$device" ]
+then
+    echo "Usage: $0 <device>"
+    exit 2
+fi
+
+tempdir=$(mktemp -d)
+TMPDIR="$tempdir"
+
+cd "$tempdir"
+
+function cleanup {
+    cd /
+    rm -rf --one-file-system "$tempdir"
+}
+
+trap cleanup EXIT
+
+function generate_sector {
+    filename=$(mktemp)
+    dd if=/dev/urandom of="$filename" bs=512 count=1 status=noxfer >/dev/null
+    echo "$filename"
+}
+
+function write_sector {
+    lba="$1"
+    filename="$2"
+    dd if="$filename" of="$device" bs=512 seek="$lba" count=1 status=noxfer >/dev/null
+}
+
+function validate_sector {
+    lba="$1"
+    filename="$2"
+    temp=$(mktemp)
+    dd if="$device" of="$temp" bs=512 skip="$lba" count=1 status=noxfer >/dev/null
+    if ! cmp -lb "$filename" "$temp"
+    then
+        echo "Sector at LBA $lba is not what it should be (via block layer)!"
+        return 1
+    fi
+    return 0
+}
+
+function ll_zero_sector {
+    lba="$1"
+    hdparm --write-sector "$lba" --yes-i-know-what-i-am-doing "$device" || true
+}
+
+function ll_validate_sector {
+    lba="$1"
+    filename="$2"
+    temp=$(mktemp)
+    blockdev --flushbufs "$device"
+    hdparm --read-sector "$lba" "$device" > "$temp"
+    mangled_temp=$(mktemp)
+    tail -n +4 < "$temp" > "$mangled_temp"
+    mangled_source=$(mktemp)
+    od -vt x2 < "$filename" | cut -b 9- | head -n -1 > "$mangled_source"
+    if ! cmp -s "$mangled_temp" "$mangled_source"
+    then
+        echo "Expected data:"
+        cat "$mangled_source"
+        echo "Actual data we got from the drive:"
+        cat "$temp"
+        echo "Sector at LBA $lba is not what it should be (via low-level access)!"
+        return 1
+    fi
+    return 0
+}
+
+function test_sector {
+    lba="$1"
+    for i in $(seq 1 10)
+    do
+      echo "Testing sector at $lba"
+      data=$(generate_sector)
+      if ! write_sector "$lba" "$data"; then
+          return 1
+      fi
+      if ! validate_sector "$lba" "$data"; then
+          return 1
+      fi
+      if ! ll_validate_sector "$lba" "$data"; then
+          return 1
+      fi
+    done
+    return 0
+}
+
+killed_boot=no
+fixed_sectors=no
+bad_lbas=$(smartctl -l selftest "$device" | grep '^#' | cut -b 79- | sort -u | grep .)
+for lba in $bad_lbas
+do
+  if ! test_sector "$lba"; then
+      echo "Bad sector detected at LBA $lba. Attempting to scrub it"
+      if ! [ "$killed_boot" = "yes" ]; then
+          echo "Killing boot sector and partition table just to be sure nobody tries to reuse this drive"
+          dd if=/dev/zero of="$device" bs=512 count=64 status=noxfer >/dev/null
+          blockdev --rereadpt "$device"
+          killed_boot=yes
+      fi
+      ll_zero_sector "$lba"
+      if test_sector "$lba"; then
+          fixed_sectors=yes
+          echo "Sector at LBA $lba has been repaired"
+      else
+          echo "Scrubbed sector at LBA $lba and it still doesn't work. This hard drive will self-destruct in X seconds"
+          exit 1
+      fi
+  fi
+done
+
+if [ "$fixed_sectors" = "yes" ]
+then
+    echo "Sectors were fixed. Starting a new SMART test"
+    smartctl -t short "$device"
+fi
