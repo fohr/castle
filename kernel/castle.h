@@ -1044,6 +1044,7 @@ struct castle_merged_iterator;
 struct component_iterator;
 
 typedef void (*castle_merged_iterator_each_skip) (struct castle_merged_iterator *,
+                                                  struct component_iterator *,
                                                   struct component_iterator *);
 
 typedef struct castle_merged_iterator {

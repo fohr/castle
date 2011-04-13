@@ -1134,7 +1134,7 @@ static int castle_ct_merged_iter_rbtree_insert(c_merged_iter_t *iter,
     /* Go until end of the tree. */
     while (*p)
     {
-        struct component_iterator *c_iter, *dup_iter = NULL;
+        struct component_iterator *c_iter, *dup_iter = NULL, *new_iter = NULL;
         int kv_cmp;
 
         parent = *p;
@@ -1166,11 +1166,13 @@ static int castle_ct_merged_iter_rbtree_insert(c_merged_iter_t *iter,
              * rb-tree with the new key. */
             rb_replace_node(&c_iter->rb_node, &comp_iter->rb_node, root);
             dup_iter = c_iter;
+            new_iter = comp_iter;
         }
         else
         {
             ret = 1;
             dup_iter = comp_iter;
+            new_iter = c_iter;
         }
 
         /* Skip the duplicated entry and clear cached bit of the component
@@ -1179,7 +1181,7 @@ static int castle_ct_merged_iter_rbtree_insert(c_merged_iter_t *iter,
         {
             debug("Duplicate entry found. Removing.\n");
             if (iter->each_skip)
-                iter->each_skip(iter, dup_iter);
+                iter->each_skip(iter, dup_iter, new_iter);
             dup_iter->cached = 0;
             return ret;
         }
@@ -1949,11 +1951,13 @@ static struct castle_iterator_type* castle_da_iter_type_get(struct castle_compon
 }
 
 static void castle_da_each_skip(c_merged_iter_t *iter,
-                                struct component_iterator *comp_iter)
+                                struct component_iterator *dup_iter,
+                                struct component_iterator *new_iter)
 {
-    BUG_ON(!comp_iter->cached);
+    BUG_ON(!dup_iter->cached);
+    BUG_ON(!new_iter->cached);
 
-    if (CVT_LARGE_OBJECT(comp_iter->cached_entry.cvt))
+    if (CVT_LARGE_OBJECT(dup_iter->cached_entry.cvt))
     {
         /* No need to remove this large object, it gets deleted part of Tree
          * deletion. */
