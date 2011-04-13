@@ -97,11 +97,21 @@ static ssize_t versions_list_show(struct kobject *kobj,
                 "Id: 0x%x\n"
                 "ParentId: 0x%x\n"
                 "LogicalSize: %llu\n"
-                "IsLeaf: %d\n",
+                "IsLeaf: %d\n"
+                "Keys: %ld\n"
+                "Tombstones: %ld\n"
+                "TombstoneDeletes: %ld\n"
+                "VersionDeletes: %ld\n"
+                "KeyReplaces: %ld\n",
                  v->version, 
                  live_parent,
                  size,
-                 leaf);
+                 leaf,
+                 castle_version_keys_get(v->version),
+                 castle_version_tombstones_get(v->version),
+                 castle_version_tombstone_deletes_get(v->version),
+                 castle_version_version_deletes_get(v->version),
+                 castle_version_key_replaces_get(v->version));
 
         return len;
     }

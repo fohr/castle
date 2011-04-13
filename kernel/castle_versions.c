@@ -752,12 +752,13 @@ da_id_t castle_version_da_id_get(version_t version)
  * @param version   Version to update
  * @param stat      Stat in version to update
  * @param amount    Amount to update stat by
+ *
+ * @return          State of the counter after operation
  */
-static void castle_version_stats_adjust(version_t version, c_ver_stat_id_t stat, int amount)
+long castle_version_stats_adjust(version_t version, c_ver_stat_id_t stat, int amount)
 {
     struct castle_version *v;
-
-    BUG_ON(amount * amount != 1); /* support increments/decrements only */
+    long result;
 
     read_lock_irq(&castle_versions_hash_lock);
     v = __castle_versions_hash_get(version);
@@ -768,20 +769,30 @@ static void castle_version_stats_adjust(version_t version, c_ver_stat_id_t stat,
     switch (stat)
     {
         case CASTLE_VERSION_KEYS:
-            atomic64_add(amount, &v->stats.keys); break;
+            result = atomic64_add_return(amount, &v->stats.keys); break;
         case CASTLE_VERSION_TOMBSTONES:
-            atomic64_add(amount, &v->stats.tombstones); break;
+            result = atomic64_add_return(amount, &v->stats.tombstones); break;
         case CASTLE_VERSION_TOMBSTONE_DELETES:
-            atomic64_add(amount, &v->stats.tombstone_deletes); break;
+            result = atomic64_add_return(amount, &v->stats.tombstone_deletes); break;
         case CASTLE_VERSION_VERSION_DELETES:
-            atomic64_add(amount, &v->stats.version_deletes); break;
+            result = atomic64_add_return(amount, &v->stats.version_deletes); break;
         case CASTLE_VERSION_KEY_REPLACES:
-            atomic64_add(amount, &v->stats.key_replaces); break;
+            result = atomic64_add_return(amount, &v->stats.key_replaces); break;
         default:
             BUG(); break;
     }
 
     read_unlock_irq(&castle_versions_hash_lock);
+
+    return result;
+}
+
+/**
+ * Get number of keys in version.
+ */
+long castle_version_keys_get(version_t version)
+{
+    return castle_version_stats_adjust(version, CASTLE_VERSION_KEYS, 0);
 }
 
 /**
@@ -801,6 +812,14 @@ void castle_version_keys_dec(version_t version)
 }
 
 /**
+ * Get number of tombstones in version.
+ */
+long castle_version_tombstones_get(version_t version)
+{
+    return castle_version_stats_adjust(version, CASTLE_VERSION_TOMBSTONES, 0);
+}
+
+/**
  * Increment number of tombstones in version.
  */
 void castle_version_tombstones_inc(version_t version)
@@ -817,6 +836,14 @@ void castle_version_tombstones_dec(version_t version)
 }
 
 /**
+ * Get number of deletes due to tombstones in version.
+ */
+long castle_version_tombstone_deletes_get(version_t version)
+{
+    return castle_version_stats_adjust(version, CASTLE_VERSION_TOMBSTONE_DELETES, 0);
+}
+
+/**
  * Increment number of deletes due to tombstones in version.
  */
 void castle_version_tombstone_deletes_inc(version_t version)
@@ -825,11 +852,27 @@ void castle_version_tombstone_deletes_inc(version_t version)
 }
 
 /**
+ * Get number of deletes due to version deletes in version.
+ */
+long castle_version_version_deletes_get(version_t version)
+{
+    return castle_version_stats_adjust(version, CASTLE_VERSION_VERSION_DELETES, 0);
+}
+
+/**
  * Increment number of deletes due to version delete in version.
  */
 void castle_version_version_deletes_inc(version_t version)
 {
     castle_version_stats_adjust(version, CASTLE_VERSION_VERSION_DELETES, 1);
+}
+
+/**
+ * Get number of keys replaced in version.
+ */
+long castle_version_key_replaces_get(version_t version)
+{
+    return castle_version_stats_adjust(version, CASTLE_VERSION_KEY_REPLACES, 0);
 }
 
 /**

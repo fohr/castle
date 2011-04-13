@@ -13,12 +13,17 @@ int         castle_version_read                     (version_t version,
                                                      int *leaf);
 
 da_id_t     castle_version_da_id_get                (version_t version);
+long        castle_version_keys_get                 (version_t version);
 void        castle_version_keys_inc                 (version_t version);
 void        castle_version_keys_dec                 (version_t version);
+long        castle_version_tombstones_get           (version_t version);
 void        castle_version_tombstones_inc           (version_t version);
 void        castle_version_tombstones_dec           (version_t version);
+long        castle_version_tombstone_deletes_get    (version_t version);
 void        castle_version_tombstone_deletes_inc    (version_t version);
+long        castle_version_version_deletes_get      (version_t version);
 void        castle_version_version_deletes_inc      (version_t version);
+long        castle_version_key_replaces_get         (version_t version);
 void        castle_version_key_replaces_inc         (version_t version);
 
 int         castle_versions_zero_init               (void);
