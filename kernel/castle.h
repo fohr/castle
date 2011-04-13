@@ -1272,10 +1272,16 @@ struct castle_cache_block;
 struct castle_object_replace {
     uint64_t    value_len; // total value length
 
+    /* Call on completion of big_put. */
     void        (*complete)        (struct castle_object_replace *op,
                                     int                           err);
+    /* Call on completion of copy of a chunk for put_chunk(). */
     void        (*replace_continue)(struct castle_object_replace *op);
+
+    /* Length of current put_chunk. */
     uint32_t    (*data_length_get) (struct castle_object_replace *op);
+
+    /* Copy data from interface buffers into cache buffers(C2B). */
     void        (*data_copy)       (struct castle_object_replace *op,
                                     void                         *buffer,
                                     uint32_t                      str_length,
