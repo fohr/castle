@@ -15,7 +15,7 @@
 #define C_BVEC_DATA_C2B_GOT         (0x100)
 #define C_BVEC_DATA_C2B_LOCKED      (0x200)
 
-#define C_BVEC_BTREE_MASK           (0xFFFF0000)    
+#define C_BVEC_BTREE_MASK           (0xFFFF0000)
 #define C_BVEC_BTREE_GOT_NODE       (0x00010000)
 #define C_BVEC_BTREE_LOCKED_NODE    (0x00020000)
 #define C_BVEC_BTREE_NODE_UPTODATE  (0x00040000)
@@ -45,7 +45,7 @@ void  castle_debug_fini(void);
 #else /* !CASTLE_DEBUG */
 /* NO-OP debugging statements */
 #define castle_debug_bvec_update(_a, _b)  ((void)0)
-#define castle_debug_bvec_btree_walk(_a)  ((void)0) 
+#define castle_debug_bvec_btree_walk(_a)  ((void)0)
 #define castle_debug_bio_register(_a, _b, _c)  ((void)0)
 #define castle_debug_bio_deregister(_a)          ((void)0)
 #define castle_debug_init()               (0)

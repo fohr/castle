@@ -2327,7 +2327,7 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
     /* Deal with leaf nodes */
     BUG_ON(!node->is_leaf);
 
-    /* Insert an entry if LUB doesn't match our (k,v) precisely. */
+    /* Insert an entry if LUB doesn't match our (key,version) precisely. */
     if((lub_idx < 0) ||
        (btree->key_compare(lub_key, key) != 0) ||
        (lub_version != version))
@@ -2340,6 +2340,13 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
         }
 
         atomic64_inc(&c_bvec->tree->item_count);
+
+        /* Update per-version statistics. */
+        if (CVT_TOMB_STONE(new_cvt))
+            castle_version_tombstones_inc(version);
+        else
+            castle_version_keys_inc(version);
+
         /* @TODO: should memset the page to zero (because we return zeros on reads)
                   this can be done here, or beter still in _main.c, in data_copy */
         debug("Need to insert (%p, 0x%x) into node (used: 0x%x, leaf=%d).\n",
@@ -2355,7 +2362,7 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
         return;
     }
 
-    /* Final case: (k,v) found in the leaf node. */
+    /* Final case: (key,version) found in the leaf node. */
     BUG_ON((btree->key_compare(lub_key, key) != 0) ||
            (lub_version != version));
     BUG_ON(lub_idx != insert_idx);
@@ -2369,6 +2376,32 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
        return;
     }
     BUG_ON(CVT_LEAF_PTR(new_cvt));
+
+    /* Update per-version statistics. */
+    if (CVT_TOMB_STONE(lub_cvt))
+    {
+        if (CVT_TOMB_STONE(new_cvt))
+            castle_version_tombstone_deletes_inc(version);
+        else
+        {
+            castle_version_keys_inc(version);
+            castle_version_tombstones_dec(version);
+            /* Don't bump the replaces counter: replacing a tombstone with
+             * a key is the same as inserting a new key. */
+        }
+    }
+    else
+    {
+        if (CVT_TOMB_STONE(new_cvt))
+        {
+            castle_version_keys_dec(version);
+            castle_version_tombstones_inc(version);
+            castle_version_tombstone_deletes_inc(version);
+        }
+        else
+            castle_version_key_replaces_inc(version);
+    }
+
     btree->entry_replace(node, lub_idx, key, lub_version,
                          new_cvt);
     dirty_c2b(c_bvec->btree_node);

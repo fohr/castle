@@ -48,12 +48,20 @@ LIST_HEAD(castle_versions_deleted);
 #define CV_LEAF_BIT               (3)
 #define CV_LEAF_MASK              (1 << CV_LEAF_BIT)
 
+typedef enum {
+    CASTLE_VERSION_KEYS = 0,
+    CASTLE_VERSION_TOMBSTONES,
+    CASTLE_VERSION_TOMBSTONE_DELETES,
+    CASTLE_VERSION_VERSION_DELETES,
+    CASTLE_VERSION_KEY_REPLACES,
+} c_ver_stat_id_t;
+
 struct castle_version {
     /* Various tree links */
-    version_t                  version;
+    version_t                  version;     /**< Version ID, unique across all Doubling Arrays. */
     union {
-        version_t              parent_v;  /* Vaild if !inited */
-        struct castle_version *parent;    /* Vaild if  inited */
+        version_t              parent_v;    /**< Vaild if !initialised.                         */
+        struct castle_version *parent;      /**< Vaild if  initialised.                         */
     };
     struct castle_version     *first_child;
     struct castle_version     *next_sybling;
@@ -61,15 +69,26 @@ struct castle_version {
     /* Aux data */
     version_t        o_order;
     version_t        r_order;
-    da_id_t          da_id;
+    da_id_t          da_id;             /**< Doubling Array ID this version exists within.      */
     c_byte_off_t     size;
 
-    struct list_head hash_list;          /**< List for hash table, protected by hash lock. */
+    struct castle_version_stats {
+        atomic64_t   keys;              /**< Number of live keys.  May be inaccurate until all
+                                             merges complete and duplicates are handled.        */
+        atomic64_t   tombstones;        /**< Number of tombstones.                              */
+        atomic64_t   tombstone_deletes; /**< Number of keys deleted by tombstones (does not
+                                             include tombstones deleted by tombstones).         */
+        atomic64_t   version_deletes;   /**< Number of entries deleted due to version delete.   */
+        atomic64_t   key_replaces;      /**< Number of keys replaced by newer keys (excludes
+                                             tombstones).                                       */
+    } stats;
+
+    struct list_head hash_list;         /**< List for hash table, protected by hash lock.       */
     unsigned long    flags;
-    union {                              /**< All lists in this union are protected by the
-                                              ctrl mutex. */
-        struct list_head init_list;      /**< Used when the version is being initialised. */
-        struct list_head free_list;      /**< Uesd when the version is being removed. */
+    union {                             /**< All lists in this union are protected by the
+                                             ctrl mutex.                                        */
+        struct list_head init_list;     /**< Used when the version is being initialised.        */
+        struct list_head free_list;     /**< Uesd when the version is being removed.            */
     };
     struct list_head del_list;
 };
@@ -671,6 +690,11 @@ static struct castle_version* castle_version_add(version_t version,
     v->da_id        = da_id;
     v->size         = size; 
     v->flags        = 0;
+    atomic64_set(&v->stats.keys, 0);
+    atomic64_set(&v->stats.tombstones, 0);
+    atomic64_set(&v->stats.tombstone_deletes, 0);
+    atomic64_set(&v->stats.version_deletes, 0);
+    atomic64_set(&v->stats.key_replaces, 0);
     INIT_LIST_HEAD(&v->hash_list);
     INIT_LIST_HEAD(&v->init_list);
     INIT_LIST_HEAD(&v->del_list);
@@ -722,6 +746,100 @@ da_id_t castle_version_da_id_get(version_t version)
     return da_id; 
 }
 
+/**
+ * Update specified version stat by amount.
+ *
+ * @param version   Version to update
+ * @param stat      Stat in version to update
+ * @param amount    Amount to update stat by
+ */
+static void castle_version_stats_adjust(version_t version, c_ver_stat_id_t stat, int amount)
+{
+    struct castle_version *v;
+
+    BUG_ON(amount * amount != 1); /* support increments/decrements only */
+
+    read_lock_irq(&castle_versions_hash_lock);
+    v = __castle_versions_hash_get(version);
+    /* Sanity checks */
+    BUG_ON(!v);
+    BUG_ON(!(v->flags & CV_INITED_MASK));
+
+    switch (stat)
+    {
+        case CASTLE_VERSION_KEYS:
+            atomic64_add(amount, &v->stats.keys); break;
+        case CASTLE_VERSION_TOMBSTONES:
+            atomic64_add(amount, &v->stats.tombstones); break;
+        case CASTLE_VERSION_TOMBSTONE_DELETES:
+            atomic64_add(amount, &v->stats.tombstone_deletes); break;
+        case CASTLE_VERSION_VERSION_DELETES:
+            atomic64_add(amount, &v->stats.version_deletes); break;
+        case CASTLE_VERSION_KEY_REPLACES:
+            atomic64_add(amount, &v->stats.key_replaces); break;
+        default:
+            BUG(); break;
+    }
+
+    read_unlock_irq(&castle_versions_hash_lock);
+}
+
+/**
+ * Increment number of keys in version.
+ */
+void castle_version_keys_inc(version_t version)
+{
+    castle_version_stats_adjust(version, CASTLE_VERSION_KEYS, 1);
+}
+
+/**
+ * Decrement number of keys in version.
+ */
+void castle_version_keys_dec(version_t version)
+{
+    castle_version_stats_adjust(version, CASTLE_VERSION_KEYS, -1);
+}
+
+/**
+ * Increment number of tombstones in version.
+ */
+void castle_version_tombstones_inc(version_t version)
+{
+    castle_version_stats_adjust(version, CASTLE_VERSION_TOMBSTONES, 1);
+}
+
+/**
+ * Decrement number of tombstones in version.
+ */
+void castle_version_tombstones_dec(version_t version)
+{
+    castle_version_stats_adjust(version, CASTLE_VERSION_TOMBSTONES, -1);
+}
+
+/**
+ * Increment number of deletes due to tombstones in version.
+ */
+void castle_version_tombstone_deletes_inc(version_t version)
+{
+    castle_version_stats_adjust(version, CASTLE_VERSION_TOMBSTONE_DELETES, 1);
+}
+
+/**
+ * Increment number of deletes due to version delete in version.
+ */
+void castle_version_version_deletes_inc(version_t version)
+{
+    castle_version_stats_adjust(version, CASTLE_VERSION_VERSION_DELETES, 1);
+}
+
+/**
+ * Increment number of replaced keys in version.
+ */
+void castle_version_key_replaces_inc(version_t version)
+{
+    castle_version_stats_adjust(version, CASTLE_VERSION_KEY_REPLACES, 1);
+}
+
 /* TODO who should handle errors in writeback? */
 static int castle_version_writeback(struct castle_version *v, void *unused)
 {
@@ -729,11 +847,16 @@ static int castle_version_writeback(struct castle_version *v, void *unused)
     
     debug("Writing back version %d\n", v->version);
 
-    mstore_ventry.version_nr = v->version;
-    mstore_ventry.parent     = (v->parent ? v->parent->version : 0);
-    mstore_ventry.size       = v->size;
-    mstore_ventry.da_id      = v->da_id;
-    mstore_ventry.flags      = (v->flags & (CV_DELETED_MASK | CV_LEAF_MASK));
+    mstore_ventry.version_nr        = v->version;
+    mstore_ventry.parent            = (v->parent ? v->parent->version : 0);
+    mstore_ventry.size              = v->size;
+    mstore_ventry.da_id             = v->da_id;
+    mstore_ventry.flags             = (v->flags & (CV_DELETED_MASK | CV_LEAF_MASK));
+    mstore_ventry.keys              = atomic64_read(&v->stats.keys);
+    mstore_ventry.tombstones        = atomic64_read(&v->stats.tombstones);
+    mstore_ventry.tombstone_deletes = atomic64_read(&v->stats.tombstone_deletes);
+    mstore_ventry.version_deletes   = atomic64_read(&v->stats.version_deletes);
+    mstore_ventry.key_replaces      = atomic64_read(&v->stats.key_replaces);
 
     read_unlock_irq(&castle_versions_hash_lock);
     castle_mstore_entry_insert(castle_versions_mstore, &mstore_ventry);
@@ -1169,6 +1292,9 @@ int castle_versions_zero_init(void)
     return 0;
 }
 
+/**
+ * Unmarshall all castle_versions structures from disk.
+ */
 int castle_versions_read(void)
 {
     struct castle_vlist_entry mstore_ventry;
@@ -1207,7 +1333,14 @@ int castle_versions_read(void)
             goto out;
         }
         else
+        {
             v->flags |= mstore_ventry.flags;
+            atomic64_set(&v->stats.keys, mstore_ventry.keys);
+            atomic64_set(&v->stats.tombstones, mstore_ventry.tombstones);
+            atomic64_set(&v->stats.tombstone_deletes, mstore_ventry.tombstone_deletes);
+            atomic64_set(&v->stats.version_deletes, mstore_ventry.version_deletes);
+            atomic64_set(&v->stats.key_replaces, mstore_ventry.key_replaces);
+        }
 
         if(VERSION_INVAL(castle_versions_last) || v->version > castle_versions_last)
             castle_versions_last = v->version;

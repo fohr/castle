@@ -1116,10 +1116,16 @@ struct castle_iterator_type castle_ct_modlist_iter = {
 };
 
 /**
- * Insert a kv pair into RB tree. Delete the oldest entry if found a duplicate.
+ * Insert (key,version) into RB-tree.
  *
- * @param iter [in] merged iterator that the RB tree belongs to
- * @param comp_iter [in] component iterator that the new kv pair belongs to
+ * In case of duplicate (key,version) tuples, delete the older entry.  This
+ * results in updates to existing (key,version) tuples and 'deletes' (actually
+ * also replaces) with tombstones.
+ *
+ * @param iter [in]         Merged iterator that the RB tree belongs to
+ * @param comp_iter [in]    Component iterator that the new kv pair belongs to
+ *
+ * @also _each_skip() callbacks
  */
 static int castle_ct_merged_iter_rbtree_insert(c_merged_iter_t *iter,
                                                struct component_iterator *comp_iter)
@@ -1151,18 +1157,21 @@ static int castle_ct_merged_iter_rbtree_insert(c_merged_iter_t *iter,
                                    c_iter->cached_entry.v);
         nr_cmps++;
 
-        /* New key is smaller than the key in tree. Traverse left. */
+        /* New (key,version) is smaller than key in tree.  Traverse left. */
         if (kv_cmp < 0)
             p = &(*p)->rb_left;
-        /* New key is bigger than the key in tree. Traverse right. */
+        /* New (key,version) is bigger than key in tree.  Traverse right. */
         else if (kv_cmp > 0)
             p = &(*p)->rb_right;
-        /* Both kv pairs are equal. Find the newest element. Iterators are
-         * allocated in an array with the iterator of latest CT coming first.
-         * So, compare pointers and smallest pointer is latest. */
+        /* Both (key,version) pairs are equal.  Determine the older element and
+         * drop it.
+         *
+         * Component iterators are stored in an array sorted with newer CTs
+         * appearing earlier than older CTs.  We can use the pointers to the CTs
+         * to detect which is more recent. */
         else if (c_iter > comp_iter)
         {
-            /* If the new key is the latest, then jsut replace the one in
+            /* If the new key is the latest, then just replace the one in
              * rb-tree with the new key. */
             rb_replace_node(&c_iter->rb_node, &comp_iter->rb_node, root);
             dup_iter = c_iter;
@@ -1950,17 +1959,48 @@ static struct castle_iterator_type* castle_da_iter_type_get(struct castle_compon
         return &castle_ct_immut_iter;
 }
 
+/**
+ * each_skip() callback for merge merged iterator.
+ *
+ * Called whenever a duplicate entry gets skipped during merges.
+ */
 static void castle_da_each_skip(c_merged_iter_t *iter,
                                 struct component_iterator *dup_iter,
                                 struct component_iterator *new_iter)
 {
+    version_t version;
+
     BUG_ON(!dup_iter->cached);
     BUG_ON(!new_iter->cached);
+    BUG_ON(dup_iter->cached_entry.v != new_iter->cached_entry.v);
 
     if (CVT_LARGE_OBJECT(dup_iter->cached_entry.cvt))
     {
         /* No need to remove this large object, it gets deleted part of Tree
          * deletion. */
+    }
+
+    /* Update per-version statistics. */
+    version = dup_iter->cached_entry.v;
+    if (CVT_TOMB_STONE(dup_iter->cached_entry.cvt))
+    {
+        castle_version_tombstones_dec(version);
+
+        /* If the new entry is also a tombstone, don't bump the tombstone delete
+         * counter: deleting something that is already deleted makes no sense. */
+
+        /* If the new entry is a key, don't bump the key replaces counter:
+         * merging a newer key with an older tombstone is logically the same as
+         * inserting a new key. */
+    }
+    else
+    {
+        castle_version_keys_dec(version);
+
+        if (CVT_TOMB_STONE(new_iter->cached_entry.cvt))
+            castle_version_tombstone_deletes_inc(version);
+        else
+            castle_version_key_replaces_inc(version);
     }
 }
 
@@ -2962,16 +3002,15 @@ static int castle_da_merge_progress_update(struct castle_da_merge *merge, uint32
 }
 
 /**
- * Determines whether the entry can be deleted, if the version is marked for
- * deletion.
+ * Is entry from a version marked for deletion that has no descendant keys.
  *
- * @param merge [in] merge stream that entry comes from
- * @param key [in] key of the entry
- * @param version [in] version of the entry
+ * @param merge [in]    merge stream that entry comes from
+ * @param key [in]      key of the entry
+ * @param version [in]  version of the entry
  *
- * @return return 1, if the entry needs to be skipped
+ * @return 1            Entry can be skipped
  *
- * @see castle_version_is_deletable
+ * @also castle_version_is_deletable
  */
 static int castle_da_entry_skip(struct castle_da_merge *merge,
                                 void *key,
@@ -3017,12 +3056,21 @@ static int castle_da_merge_unit_do(struct castle_da_merge *merge, uint32_t unit_
         debug("Merging entry id=%lld: k=%p, *k=%d, version=%d, cep="cep_fmt_str_nl,
                 i, key, *((uint32_t *)key), version, cep2str(cvt.cep));
         BUG_ON(CVT_INVALID(cvt));
-        /* Check whether we need to skip the entry.
-         * Note: Nothing to be done to delete the skipped keys. They would get
-         * deleted while dropping the component tree. */
+        /* Skip the entry if the version is marked for deletion and there are no
+         * descendant keys. */
         if (castle_da_entry_skip(merge, key, version))
         {
+            /* Update per-version statistics. */
+            castle_version_version_deletes_inc(version);
+            if (CVT_TOMB_STONE(cvt))
+                castle_version_tombstones_dec(version);
+            else
+                castle_version_keys_dec(version);
+
             merge->skipped_count++;
+
+            /* The skipped key will be freed with the input extent. */
+
             goto entry_done;
         }
         /* Add entry to level 0 node (and recursively up the tree). */

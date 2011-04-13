@@ -628,14 +628,14 @@ typedef struct castle_bloom_filter {
 } castle_bloom_t;
 
 struct castle_component_tree {
-    tree_seq_t          seq;               /**< Unique ID identifying this tree.              */
+    tree_seq_t          seq;               /**< Unique ID identifying this tree.                */
     atomic_t            ref_count;
     atomic_t            write_ref_count;
-    atomic64_t          item_count;        /**< Number of items in the tree.                  */
+    atomic64_t          item_count;        /**< Number of items in the tree.                    */
     btree_t             btree_type;
-    uint8_t             dynamic;           /**< 1 - dynamic modlist btree, 0 - merge result.  */
+    uint8_t             dynamic;           /**< 1 - dynamic modlist btree, 0 - merge result.    */
     da_id_t             da;
-    uint8_t             level;             /**< Level in the doubling array.                  */
+    uint8_t             level;             /**< Level in the doubling array.                    */
     uint16_t            node_sizes[MAX_BTREE_DEPTH];
                                            /**< Size of nodes in each level in the b-tree,
                                                 in pages. Only used for !dynamic (i.e. RO)
@@ -644,15 +644,15 @@ struct castle_component_tree {
                                                 node_sizes[tree_depth-1] is the size of the
                                                 root node. */
     uint8_t             new_ct;            /**< Marked for cts which are not yet flushed onto
-                                                the disk.                                     */
-    uint8_t             compacting;        /**< compaction is going on this CT.*/
-    struct rw_semaphore lock;              /**< Protects root_node, tree depth & last_node.   */
+                                                the disk.                                       */
+    uint8_t             compacting;        /**< compaction is going on this CT.                 */
+    struct rw_semaphore lock;              /**< Protects root_node, tree depth & last_node.     */
     uint8_t             tree_depth;
     c_ext_pos_t         root_node;
     struct list_head    da_list;
     struct list_head    hash_list;
     struct list_head    large_objs;
-    struct mutex        lo_mutex;          /**< Protects Large Object List.                   */
+    struct mutex        lo_mutex;          /**< Protects Large Object List.                     */
     c_ext_free_t        internal_ext_free;
     c_ext_free_t        tree_ext_free;
     c_ext_free_t        data_ext_free;
@@ -720,8 +720,13 @@ struct castle_vlist_entry {
     /*          8 */ da_id_t      da_id;
     /*         12 */ uint8_t      _pad[4];
     /*         16 */ uint64_t     size;
-    /*         24 */ uint64_t     flags;    /**< Flags for version LEAF & DELETED. */
-    /*         32 */ uint8_t      _unused[224];
+    /*         24 */ uint64_t     flags;                /**< Flags for version LEAF & DELETED.  */
+    /*         32 */ uint64_t     keys;                 /**< stats.keys                         */
+    /*         40 */ uint64_t     tombstones;           /**< stats.tombstones                   */
+    /*         48 */ uint64_t     tombstone_deletes;    /**< stats.tombstone_deletes            */
+    /*         56 */ uint64_t     version_deletes;      /**< stats.version_deletes              */
+    /*         64 */ uint64_t     key_replaces;         /**< stats.key_replaces                 */
+    /*         72 */ uint8_t      _unused[184];
     /*        256 */
 } PACKED;
 

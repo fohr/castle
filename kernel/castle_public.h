@@ -116,7 +116,7 @@ typedef struct castle_trace_event {
 typedef uint32_t transfer_id_t;
 typedef uint32_t slave_uuid_t;
 typedef uint32_t collection_id_t;
-typedef uint32_t version_t;
+typedef uint32_t version_t;         /**< Version ID type, unique across all Doubling Arrays.    */
 #define INVAL_VERSION       ((version_t)-1)
 #define VERSION_INVAL(_v)   ((_v) == INVAL_VERSION)
 
