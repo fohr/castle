@@ -2868,8 +2868,10 @@ static struct castle_component_tree* castle_da_merge_complete(struct castle_da_m
         /* Record the root cep for later use. */
         if(i == merge->root_depth)
         {
-            /* Root node must always exist, and have > 0 entries. */
-            BUG_ON(next_idx <= 0);
+            /* Root node must always exist, and have > 0 entries.
+               -1 is also allowed, if the node overflowed once the node for
+               previous (merge->root_depth-1) got completed. */
+            BUG_ON(next_idx == 0 || next_idx < -1);
             root_cep = merge->levels[i].node_c2b->cep;
         }
         if(next_idx != 0)
