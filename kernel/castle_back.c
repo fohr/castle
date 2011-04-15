@@ -724,6 +724,8 @@ static int WARN_UNUSED_RET castle_back_stateful_op_completed_op
 }
 
 /*
+ * Take an op from Queue and set it as curr_op. 
+ *
  * @return non-zero if the next op should be called, 0 otherwise
  */
 static int castle_back_stateful_op_prod(struct castle_back_stateful_op *stateful_op)
@@ -732,12 +734,15 @@ static int castle_back_stateful_op_prod(struct castle_back_stateful_op *stateful
     BUG_ON(stateful_op->cancel_on_op_complete);
     BUG_ON(!stateful_op->in_use);
 
+    /* If there is a ongoing operation, dont go further. */
     if (stateful_op->curr_op != NULL)
     {
+        /* Should never expire with a ongoing operation. */
         BUG_ON(stateful_op->expire_enabled);
         return 0;
     }
 
+    /* Queue is empty. */
     if (list_empty(&stateful_op->op_queue))
     {
         /* there is no ongoing op and nothing in the queue - set to expire */
@@ -745,6 +750,7 @@ static int castle_back_stateful_op_prod(struct castle_back_stateful_op *stateful
         return 0;
     }
 
+    /* Queue is not empty. Few oustanding(no ongoing) ops. Shouldn't expire. */
     castle_back_stateful_op_disable_expire(stateful_op);
 
     /* take an op off the queue and process it */
@@ -1990,6 +1996,8 @@ static void castle_back_put_chunk_continue(void *data);
 static void castle_back_big_put_call_queued(struct castle_back_stateful_op *stateful_op)
 {
     BUG_ON(!spin_is_locked(&stateful_op->lock));
+
+    /* Take an op from queue and schedule work for it. */
     if (castle_back_stateful_op_prod(stateful_op))
         BUG_ON(!queue_work_on(stateful_op->cpu, castle_back_wq, &stateful_op->work[0]));
 }
@@ -2004,17 +2012,22 @@ static void castle_back_big_put_continue(struct castle_object_replace *replace)
     if (stateful_op->curr_op != NULL)
     {
         struct castle_back_op *op = stateful_op->curr_op;
+
+        /* Just completed data transfer for PUT_CHUNK, release the buffer. */
         if (op->req.tag == CASTLE_RING_PUT_CHUNK && op->buf)
             castle_back_buffer_put(stateful_op->conn, op->buf);
 
+        /* Respond back to client. */
         castle_back_reply(op, 0, stateful_op->token, 0);
         stateful_op->curr_op = NULL;
     }
 
+    /* Check if stateful_op is expired, if so no need to handle anymore ops. Return back. */
     /* drops the lock if return non-zero */
     if (castle_back_stateful_op_completed_op(stateful_op))
         return;
 
+    /* Look for more queued ops (put_chunks in this case). */
     castle_back_big_put_call_queued(stateful_op);
 
     spin_unlock(&stateful_op->lock);
@@ -2039,7 +2052,8 @@ static void castle_back_big_put_complete(struct castle_object_replace *replace, 
         castle_back_reply(op, err, stateful_op->token, 0);
         stateful_op->curr_op = NULL;
     }
-    
+  
+    /* Responds back to all outstanding ops with error. */
     castle_back_stateful_op_finish_all(stateful_op, err);
     attachment = stateful_op->attachment;
     stateful_op->attachment = NULL;
@@ -2098,6 +2112,27 @@ static void castle_back_big_put_data_copy(struct castle_object_replace *replace,
 }
 
 /**
+ * Call flow:
+ * 
+ *  castle_back functions                            castle_objects functions
+ *
+ *  castle_back_big_put()
+ *                                      ->          castle_object_replace()
+ *  data_copy()                         <-
+ *  replace_continue()                  <-      
+ *
+ *
+ *  castle_back_put_chunk()
+ *      - queue the op
+ *      - castle_back_big_put_call_queued()
+ *      - Schedule castle_back_put_chunk_continue()
+ *                                      ->          castle_object_replace_continue
+ *        data_copy()                   <-
+ *        replace_continue()            <-
+ *          - castle_back_big_put_call_queued()
+ */
+
+/**
  * Begin stateful op put of big value at specified key,version in DA.
  *
  * @also castle_object_replace()
@@ -2122,17 +2157,21 @@ static void castle_back_big_put(void *data)
         goto err0;
     }
 
+    /* Get a new stateful op to handle big_put. */
     token = castle_back_get_stateful_op(conn,
                                         &stateful_op,
                                         op->cpu,
                                         op->cpu_index,
                                         castle_back_big_put_expire);
+
+    /* Couldn't find a free stateful op. */
     if (!stateful_op)
     {
         err = -EAGAIN;
         goto err0;
     }
 
+    /* Get reference on attachment - Consequently on DA. */
     attachment = castle_attachment_get(op->req.big_put.collection_id);
     if (attachment == NULL)
     {
@@ -2141,6 +2180,7 @@ static void castle_back_big_put(void *data)
         goto err1;
     }
 
+    /* Get a copy of the key into kernel memory from userspace shared buffer. - Why? */
     /* start_key and end_key are freed by castle_object_iter_finish */
     err = castle_back_key_copy_get(conn, op->req.big_put.key_ptr, 
         op->req.big_put.key_len, &key);
@@ -2151,20 +2191,34 @@ static void castle_back_big_put(void *data)
     debug("key: \n");
     vl_okey_print(key);
     #endif
-    
+   
+    /* Initialize stateful op. */
     stateful_op->tag = CASTLE_RING_BIG_PUT;
     stateful_op->queued_size = 0;
+    /* big_put is the first op, followed by series of put_chunks. */
     stateful_op->curr_op = op;
     stateful_op->attachment = attachment;
-        
+       
+    /* Length of the complete value. */
     stateful_op->replace.value_len = op->req.big_put.value_len;
+
+    /* Call on completion of an operation in castle_object and to continue with next 
+     * operation. Gets called before copying data. */
     stateful_op->replace.replace_continue = castle_back_big_put_continue;
+
+    /* Call on completion of big_put, including data copy. */
     stateful_op->replace.complete = castle_back_big_put_complete;
+
+    /* Length of current put_chunk. */
     stateful_op->replace.data_length_get = castle_back_big_put_data_length_get;
+
+    /* Copy data from interface buffers into given cache buffers(C2B). */
     stateful_op->replace.data_copy = castle_back_big_put_data_copy;
 
+    /* Work structure to run every queued op. Every put_chunk gets queued. */
     INIT_WORK(&stateful_op->work[0], castle_back_put_chunk_continue, stateful_op);
 
+    /* Call castle_object layer to insert (k,v) pair. */
     err = castle_object_replace(&stateful_op->replace,
                                 attachment,
                                 key,
@@ -2230,6 +2284,7 @@ static void castle_back_put_chunk(void *data)
      */
     spin_lock(&stateful_op->lock);
 
+    /* Check, if we are trying to put more than value size. */
     if (op->req.put_chunk.buffer_len + stateful_op->queued_size > stateful_op->replace.value_len ||
             op->req.put_chunk.buffer_len == 0)
     {
@@ -2240,7 +2295,8 @@ static void castle_back_put_chunk(void *data)
     }
     
     stateful_op->queued_size += op->req.put_chunk.buffer_len;
-    
+  
+    /* Add put_chunk into queue. */
     err = castle_back_stateful_op_queue_op(stateful_op, op->req.put_chunk.token, op);
     if (err)
     {
@@ -2248,6 +2304,7 @@ static void castle_back_put_chunk(void *data)
         goto err1;
     }
 
+    /* Go through Q and handle ops. */
     castle_back_big_put_call_queued(stateful_op);
 
     spin_unlock(&stateful_op->lock);
