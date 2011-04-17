@@ -2052,7 +2052,7 @@ static int castle_da_iterators_create(struct castle_da_merge *merge)
     if (!merge->iters)
         goto err_out;
 
-    /* Create apprapriate iterators for all of the trees. */
+    /* Create appropriate iterators for all of the trees. */
     ret = -EINVAL;
     FOR_EACH_MERGE_TREE(i, merge)
     {
