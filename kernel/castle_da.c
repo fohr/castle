@@ -1724,11 +1724,6 @@ struct castle_da_merge {
                                                         nodes will be stored on SSDs.   */
     int                           internals_on_ssds;   /**< set to true if internal btree
                                                         nodes will be stored on SSDs.   */
-    c_ext_free_t                  internal_ext_free;
-    c_ext_free_t                  tree_ext_free;
-    c_ext_free_t                  data_ext_free;
-    int                           bloom_exists;
-    castle_bloom_t                bloom;
     struct list_head              large_objs;
 
     struct castle_version_delete_state snapshot_delete; /**< snapshot delete state. */
@@ -2142,25 +2137,25 @@ static int castle_da_merge_extents_alloc(struct castle_da_merge *merge)
 
     /* @TODO: change the alignment back to the actual node size, once we worked
              out which levels we'll be storing in this extent. */
-    BUG_ON(!EXT_ID_INVAL(merge->internal_ext_free.ext_id) ||
-           !EXT_ID_INVAL(merge->tree_ext_free.ext_id));
+    BUG_ON(!EXT_ID_INVAL(merge->out_tree->internal_ext_free.ext_id) ||
+           !EXT_ID_INVAL(merge->out_tree->tree_ext_free.ext_id));
 
     /* Attempt to allocate an SSD extent for internal nodes. */
     merge->internals_on_ssds = 1;
-    merge->internal_ext_free.ext_id = castle_extent_alloc(SSD_RDA,
-                                                          merge->da->id,
-                                                          EXT_T_INTERNAL_NODES,
-                                                          CHUNK(internal_tree_size));
-    if (EXT_ID_INVAL(merge->internal_ext_free.ext_id))
+    merge->out_tree->internal_ext_free.ext_id = castle_extent_alloc(SSD_RDA,
+                                                                    merge->da->id,
+                                                                    EXT_T_INTERNAL_NODES,
+                                                                    CHUNK(internal_tree_size));
+    if (EXT_ID_INVAL(merge->out_tree->internal_ext_free.ext_id))
     {
         /* FAILED to allocate internal node SSD extent.
          * ATTEMPT to allocate internal node HDD extent. */
         merge->internals_on_ssds = 0;
-        merge->internal_ext_free.ext_id = castle_extent_alloc(DEFAULT_RDA,
-                                                              merge->da->id,
-                                                              EXT_T_INTERNAL_NODES,
-                                                              CHUNK(tree_size));
-        if (EXT_ID_INVAL(merge->internal_ext_free.ext_id))
+        merge->out_tree->internal_ext_free.ext_id = castle_extent_alloc(DEFAULT_RDA,
+                                                                        merge->da->id,
+                                                                        EXT_T_INTERNAL_NODES,
+                                                                        CHUNK(tree_size));
+        if (EXT_ID_INVAL(merge->out_tree->internal_ext_free.ext_id))
         {
             /* FAILED to allocate internal node HDD extent. */
             castle_printk(LOG_WARN, "Merge failed due to space constraint for internal node tree.\n");
@@ -2172,25 +2167,25 @@ static int castle_da_merge_extents_alloc(struct castle_da_merge *merge)
         /* SUCCEEDED allocating internal node SSD extent.
          * ATTEMPT to allocate leaf node SSD extent, but only if explicitly requested. */
         if(castle_use_ssd_leaf_nodes)
-            merge->tree_ext_free.ext_id = castle_extent_alloc(SSD_RDA,
-                                                              merge->da->id,
-                                                              EXT_T_LEAF_NODES,
-                                                              CHUNK(tree_size));
+            merge->out_tree->tree_ext_free.ext_id = castle_extent_alloc(SSD_RDA,
+                                                                        merge->da->id,
+                                                                        EXT_T_LEAF_NODES,
+                                                                        CHUNK(tree_size));
     }
 
     merge->leafs_on_ssds = 1;
-    if (EXT_ID_INVAL(merge->tree_ext_free.ext_id))
+    if (EXT_ID_INVAL(merge->out_tree->tree_ext_free.ext_id))
     {
         /* FAILED to allocate leaf node SSD extent.
          * ATTEMPT to allocate leaf node HDD extent. */
         merge->leafs_on_ssds = 0;
-        merge->tree_ext_free.ext_id = castle_extent_alloc(DEFAULT_RDA,
-                                                          merge->da->id,
-                                                          EXT_T_LEAF_NODES,
-                                                          CHUNK(tree_size));
+        merge->out_tree->tree_ext_free.ext_id = castle_extent_alloc(DEFAULT_RDA,
+                                                                    merge->da->id,
+                                                                    EXT_T_LEAF_NODES,
+                                                                    CHUNK(tree_size));
     }
 
-    if (EXT_ID_INVAL(merge->tree_ext_free.ext_id))
+    if (EXT_ID_INVAL(merge->out_tree->tree_ext_free.ext_id))
     {
         /* FAILED to allocate leaf node HDD extent. */
         castle_printk(LOG_WARN, "Merge failed due to space constraint for leaf node tree.\n");
@@ -2198,19 +2193,19 @@ static int castle_da_merge_extents_alloc(struct castle_da_merge *merge)
     }
 
     /* Now, initialise freespace structure for the extents allocated. */
-    if(!EXT_ID_INVAL(merge->tree_ext_free.ext_id))
-        castle_ext_freespace_init(&merge->tree_ext_free,
-                                   merge->tree_ext_free.ext_id,
+    if(!EXT_ID_INVAL(merge->out_tree->tree_ext_free.ext_id))
+        castle_ext_freespace_init(&merge->out_tree->tree_ext_free,
+                                   merge->out_tree->tree_ext_free.ext_id,
                                    C_BLK_SIZE);
-    if(!EXT_ID_INVAL(merge->internal_ext_free.ext_id))
-        castle_ext_freespace_init(&merge->internal_ext_free,
-                                   merge->internal_ext_free.ext_id,
+    if(!EXT_ID_INVAL(merge->out_tree->internal_ext_free.ext_id))
+        castle_ext_freespace_init(&merge->out_tree->internal_ext_free,
+                                   merge->out_tree->internal_ext_free.ext_id,
                                    C_BLK_SIZE);
 
     /* Allocate an extent for medium objects of merged tree for the size equal to
      * sum of both the trees. */
     data_size = MASK_CHK_OFFSET(data_size + C_CHK_SIZE);
-    if ((ret = castle_new_ext_freespace_init(&merge->data_ext_free,
+    if ((ret = castle_new_ext_freespace_init(&merge->out_tree->data_ext_free,
                                               merge->da->id,
                                               EXT_T_MEDIUM_OBJECTS,
                                               data_size,
@@ -2221,10 +2216,10 @@ static int castle_da_merge_extents_alloc(struct castle_da_merge *merge)
     }
 
     /* Allocate Bloom filters. */
-    if ((ret = castle_bloom_create(&merge->bloom, merge->da->id, bloom_size)))
-        merge->bloom_exists = 0;
+    if ((ret = castle_bloom_create(&merge->out_tree->bloom, merge->da->id, bloom_size)))
+        merge->out_tree->bloom_exists = 0;
     else
-        merge->bloom_exists = 1;
+        merge->out_tree->bloom_exists = 1;
 
     return 0;
 
@@ -2262,7 +2257,7 @@ static c_val_tup_t castle_da_medium_obj_copy(struct castle_da_merge *merge,
 
     /* Allocate space for the new copy. */
     total_blocks = (old_cvt.length - 1) / C_BLK_SIZE + 1;
-    BUG_ON(castle_ext_freespace_get(&merge->data_ext_free,
+    BUG_ON(castle_ext_freespace_get(&merge->out_tree->data_ext_free,
                                      total_blocks * C_BLK_SIZE,
                                      0,
                                     &new_cep) < 0);
@@ -2365,8 +2360,8 @@ static inline void castle_da_merge_node_info_get(struct castle_da_merge *merge,
     if(level > 0)
     {
         /* Internal nodes extent should always exist. */
-        BUG_ON(EXT_ID_INVAL(merge->internal_ext_free.ext_id));
-        *ext_free = &merge->internal_ext_free;
+        BUG_ON(EXT_ID_INVAL(merge->out_tree->internal_ext_free.ext_id));
+        *ext_free = &merge->out_tree->internal_ext_free;
         if(merge->internals_on_ssds)
             *node_size = VLBA_SSD_RO_TREE_NODE_SIZE;
         else
@@ -2376,8 +2371,8 @@ static inline void castle_da_merge_node_info_get(struct castle_da_merge *merge,
 
     BUG_ON(level != 0);
     /* Leaf nodes extent should always exist. */
-    BUG_ON(EXT_ID_INVAL(merge->tree_ext_free.ext_id));
-    *ext_free = &merge->tree_ext_free;
+    BUG_ON(EXT_ID_INVAL(merge->out_tree->tree_ext_free.ext_id));
+    *ext_free = &merge->out_tree->tree_ext_free;
     if(merge->leafs_on_ssds)
         *node_size = VLBA_SSD_RO_TREE_NODE_SIZE;
     else
@@ -2440,9 +2435,10 @@ static inline void castle_da_entry_add(struct castle_da_merge *merge,
 
     BUG_ON(is_re_add &&
            CVT_MEDIUM_OBJECT(cvt) &&
-           (cvt.cep.ext_id != merge->data_ext_free.ext_id));
+           (cvt.cep.ext_id != merge->out_tree->data_ext_free.ext_id));
 
-    debug("Adding an entry at depth: %d\n", depth);
+    debug("Adding an entry at depth: %d for merge on da %d level %d\n",
+        depth, merge->da->id, merge->level);
     BUG_ON(depth >= MAX_BTREE_DEPTH);
     /* Alloc a new block if we need one */
     if(!level->node_c2b)
@@ -2711,26 +2707,13 @@ static struct castle_component_tree* castle_da_merge_package(struct castle_da_me
     castle_printk(LOG_INFO, "Depth of ct=%d (%p) is: %d\n",
             out_tree->seq, out_tree, out_tree->tree_depth);
     out_tree->root_node = root_cep;
-    out_tree->bloom_exists = merge->bloom_exists;
-    out_tree->bloom = merge->bloom;
 
     debug("Root for that tree is: " cep_fmt_str_nl, cep2str(out_tree->root_node));
     /* Write counts out */
-    atomic_set(&out_tree->ref_count, 1);
-    atomic_set(&out_tree->write_ref_count, 0);
     atomic64_set(&out_tree->item_count, merge->nr_entries);
     atomic64_set(&out_tree->large_ext_chk_cnt, merge->large_chunks);
-    out_tree->internal_ext_free = merge->internal_ext_free;
-    out_tree->tree_ext_free = merge->tree_ext_free;
-    out_tree->data_ext_free = merge->data_ext_free;
-    atomic64_set(&out_tree->tree_ext_free.used,
-                 atomic64_read(&merge->tree_ext_free.used));
-    atomic64_set(&out_tree->data_ext_free.used,
-                 atomic64_read(&merge->data_ext_free.used));
-    atomic64_set(&out_tree->tree_ext_free.blocked,
-                 atomic64_read(&merge->tree_ext_free.blocked));
-    atomic64_set(&out_tree->data_ext_free.blocked,
-                 atomic64_read(&merge->data_ext_free.blocked));
+    BUG_ON(atomic_read(&out_tree->ref_count)       != 1);
+    BUG_ON(atomic_read(&out_tree->write_ref_count) != 0);
 
     /* Calculate latest key in both trees. */
     if (castle_latest_key)
@@ -2895,8 +2878,8 @@ static struct castle_component_tree* castle_da_merge_complete(struct castle_da_m
     castle_da_max_path_complete(merge, root_cep);
 
     /* Complete Bloom filters. */
-    if (merge->bloom_exists)
-        castle_bloom_complete(&merge->bloom);
+    if (merge->out_tree->bloom_exists)
+        castle_bloom_complete(&merge->out_tree->bloom);
 
     /* Package the merge result. */
     return castle_da_merge_package(merge, root_cep);
@@ -2948,15 +2931,12 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
     {
         struct castle_component_tree *out_tree;
 
-        castle_ext_freespace_fini(&merge->internal_ext_free);
-        castle_ext_freespace_fini(&merge->tree_ext_free);
-        castle_ext_freespace_fini(&merge->data_ext_free);
-
-        if (merge->bloom_exists)
+        if (merge->out_tree->bloom_exists)
         {
             /* Abort (i.e. free) incomplete bloom filters */
-            castle_bloom_abort(&merge->bloom);
-            castle_bloom_destroy(&merge->bloom);
+            castle_bloom_abort(&merge->out_tree->bloom);
+            castle_bloom_destroy(&merge->out_tree->bloom);
+            merge->out_tree->bloom_exists=0;
         }
 
         /* Free the list of large objects referenced by merge. Old CT also has a reference,
@@ -3078,8 +3058,8 @@ static int castle_da_merge_unit_do(struct castle_da_merge *merge, uint32_t unit_
         /* Add entry to level 0 node (and recursively up the tree). */
         castle_da_entry_add(merge, 0, key, version, cvt, 0);
         /* Add entry to bloom filter */
-        if (merge->bloom_exists)
-            castle_bloom_add(&merge->bloom, merge->out_btree, key);
+        if (merge->out_tree->bloom_exists)
+            castle_bloom_add(&merge->out_tree->bloom, merge->out_btree, key);
         /* Increment the number of entries stored in the output tree. */
         merge->nr_entries++;
         /* Try to complete node. */
@@ -3569,9 +3549,9 @@ static struct castle_da_merge* castle_da_merge_init(struct castle_double_array *
         merge->levels[i].valid_end_idx = -1;
         merge->levels[i].valid_version = INVAL_VERSION;
     }
-    merge->internal_ext_free.ext_id = INVAL_EXT_ID;
-    merge->tree_ext_free.ext_id = INVAL_EXT_ID;
-    merge->data_ext_free.ext_id = INVAL_EXT_ID;
+    merge->out_tree->internal_ext_free.ext_id = INVAL_EXT_ID;
+    merge->out_tree->tree_ext_free.ext_id = INVAL_EXT_ID;
+    merge->out_tree->data_ext_free.ext_id = INVAL_EXT_ID;
     INIT_LIST_HEAD(&merge->large_objs);
 #ifdef CASTLE_PERF_DEBUG
     merge->get_c2b_ns                   = 0;

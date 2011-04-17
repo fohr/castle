@@ -371,11 +371,11 @@ void castle_bloom_abort(castle_bloom_t *bf)
 {
     struct castle_bloom_build_params *bf_bp = bf->private;
 
-    debug("bloom_abort::aborting bloom filter %p\n", bf);
+    debug("Aborting bloom filter %p\n", bf);
 
     if(bf_bp->cur_node != NULL)
     {
-        debug("bloom_abort::completing NODE for bloom_filter %p\n", bf);
+        debug("Completing NODE for bloom_filter %p\n", bf);
         dirty_c2b(bf_bp->node_c2b);
         write_unlock_c2b(bf_bp->node_c2b);
         put_c2b(bf_bp->node_c2b);
