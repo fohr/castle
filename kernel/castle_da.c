@@ -2342,6 +2342,32 @@ static c_val_tup_t castle_da_medium_obj_copy(struct castle_da_merge *merge,
 }
 
 /**
+ * Works out what node size should be used for given level in the btree in a given merge.
+ *
+ * @param merge     Merge state structure.
+ * @param level     Level counted from leaves.
+ * @param node_size Return argument: size of the node.
+ */
+static inline void castle_da_merge_node_size_get(struct castle_da_merge *merge,
+                                                 uint8_t level,
+                                                 uint16_t *node_size)
+{
+    if(level > 0)
+    {
+        if(merge->internals_on_ssds)
+            *node_size = VLBA_SSD_RO_TREE_NODE_SIZE;
+        else
+            *node_size = VLBA_HDD_RO_TREE_NODE_SIZE;
+        return;
+    }
+
+    if(merge->leafs_on_ssds)
+        *node_size = VLBA_SSD_RO_TREE_NODE_SIZE;
+    else
+        *node_size = VLBA_HDD_RO_TREE_NODE_SIZE;
+}
+
+/**
  * Works out which extent, and what node size should be used for given level in the btree
  * in a given merge.
  *
@@ -2355,6 +2381,7 @@ static inline void castle_da_merge_node_info_get(struct castle_da_merge *merge,
                                                  uint16_t *node_size,
                                                  c_ext_free_t **ext_free)
 {
+    castle_da_merge_node_size_get(merge, level, node_size);
     /* If level is zero, we are allocating from tree_ext. Size depends on whether the
        extent is on SSDs or HDDs. */
     if(level > 0)
@@ -2362,10 +2389,6 @@ static inline void castle_da_merge_node_info_get(struct castle_da_merge *merge,
         /* Internal nodes extent should always exist. */
         BUG_ON(EXT_ID_INVAL(merge->out_tree->internal_ext_free.ext_id));
         *ext_free = &merge->out_tree->internal_ext_free;
-        if(merge->internals_on_ssds)
-            *node_size = VLBA_SSD_RO_TREE_NODE_SIZE;
-        else
-            *node_size = VLBA_HDD_RO_TREE_NODE_SIZE;
         return;
     }
 
@@ -2373,10 +2396,6 @@ static inline void castle_da_merge_node_info_get(struct castle_da_merge *merge,
     /* Leaf nodes extent should always exist. */
     BUG_ON(EXT_ID_INVAL(merge->out_tree->tree_ext_free.ext_id));
     *ext_free = &merge->out_tree->tree_ext_free;
-    if(merge->leafs_on_ssds)
-        *node_size = VLBA_SSD_RO_TREE_NODE_SIZE;
-    else
-        *node_size = VLBA_HDD_RO_TREE_NODE_SIZE;
 }
 
 /**
