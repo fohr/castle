@@ -250,7 +250,7 @@ typedef struct castle_immut_iterator {
     int32_t                       curr_idx;   /**< offset within curr_node of current entry
                                                    (where current is really next())               */
     int32_t                       cached_idx; /**< this is needed for merge SERDES because curr_idx
-                                                   is moved ahead after the iterator value is 
+                                                   is moved ahead after the iterator value is
                                                    cached; if the call to iter_entry_find was moved
                                                    before the entry_get within immut_iter_next, it
                                                    will be unnecessary to save cached_idx         */
