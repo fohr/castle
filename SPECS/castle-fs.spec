@@ -7,6 +7,7 @@
 %define kverrel %(%{kmodtool} verrel %{?kversion} 2>/dev/null)
 %define kvariants "" xen debug
 %define krel	%(echo %{kverrel} | sed -e 's/-/_/g')
+%define krel_nohg %(echo %{krel} | sed -e 's/\.hg.*$//')
 
 %define groupname castle
 
@@ -38,7 +39,7 @@ BuildRequires: graphviz-gd
 # magic hidden here:
 # NOTE: these two extra defines will not be necessary in future.
 %define kmp_version %{version}
-%define kmp_release %{buildrev}_%{krel}
+%define kmp_release %{buildrev}_%{krel_nohg}
 # kmodtool is a bit brainless in how it handles kmp_release
 %{expand:%(kmp_version=foo kmp_release=bar %{kmodtool} rpmtemplate_kmp %{kmod_name} %{kverrel} %{kvariants} 2>/dev/null)}
 
