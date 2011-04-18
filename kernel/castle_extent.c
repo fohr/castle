@@ -1347,7 +1347,7 @@ uint32_t castle_extent_map_get(void          *ext_p,
         spin_lock(&ext->shadow_map_lock);
         if (ext->use_shadow_map)
         {
-            memcpy(chk_map, &ext->shadow_map[offset], ext->k_factor * sizeof(c_disk_chk_t));
+            memcpy(chk_map, &ext->shadow_map[offset*ext->k_factor], ext->k_factor * sizeof(c_disk_chk_t));
             spin_unlock(&ext->shadow_map_lock);
             goto map_done;
         }
