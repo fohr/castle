@@ -2309,6 +2309,7 @@ restart:
                 castle_printk(LOG_USERINFO, "Finished remapping out-of-service slave 0x%x.\n",
                               oos_slaves[i]->uuid);
                 set_bit(CASTLE_SLAVE_REMAPPED_BIT, &oos_slaves[i]->flags);
+                castle_release_device(oos_slaves[i]->bdev);
             }
         }
         for (i=0; i<nr_evacuated_slaves; i++)
@@ -2320,6 +2321,7 @@ restart:
                 set_bit(CASTLE_SLAVE_OOS_BIT, &evacuated_slaves[i]->flags);
                 set_bit(CASTLE_SLAVE_REMAPPED_BIT, &evacuated_slaves[i]->flags);
                 clear_bit(CASTLE_SLAVE_EVACUATE_BIT, &evacuated_slaves[i]->flags);
+                castle_release_device(evacuated_slaves[i]->bdev);
             }
         }
 

@@ -1439,6 +1439,16 @@ err_out:
     return NULL;    
 }
 
+void castle_release_device(struct block_device *bdev)
+{
+    bd_release(bdev);
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,24)
+    blkdev_put(bdev);
+#else
+    blkdev_put(bdev, FMODE_READ|FMODE_WRITE);
+#endif
+}
+
 void castle_release(struct castle_slave *cs)
 {
     /* Ghost slaves are only partially initialised */
@@ -1446,12 +1456,7 @@ void castle_release(struct castle_slave *cs)
     {
         castle_events_slave_release(cs->uuid);
         castle_sysfs_slave_del(cs);
-        bd_release(cs->bdev);
-#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,24)
-        blkdev_put(cs->bdev);
-#else
-        blkdev_put(cs->bdev, FMODE_READ|FMODE_WRITE);
-#endif
+        castle_release_device(cs->bdev);
     }
     list_del(&cs->list);
     castle_free(cs);
