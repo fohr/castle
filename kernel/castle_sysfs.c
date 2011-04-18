@@ -95,7 +95,7 @@ static ssize_t versions_list_show(struct kobject *kobj,
     {
         len = sprintf(buf,
                 "Id: 0x%x\n"
-                "DoubleArrayId: 0x%x\n"
+                "VertreeId: 0x%x\n"
                 "ParentId: 0x%x\n"
                 "LogicalSize: %llu\n"
                 "IsLeaf: %d\n"
@@ -857,7 +857,7 @@ int castle_sysfs_init(void)
     ret = kobject_tree_add(&double_arrays_kobj, 
                            &castle.kobj, 
                            &castle_double_array_ktype, 
-                           "%s", "double-arrays");
+                           "%s", "vertrees");
     if(ret < 0) goto out6;
 
     return 0;
