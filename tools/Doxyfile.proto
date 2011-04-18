@@ -1589,7 +1589,7 @@ HAVE_DOT               = YES
 # explicitly to a value larger than 0 to get control over the balance
 # between CPU load and processing speed.
 
-DOT_NUM_THREADS        = 0
+DOT_NUM_THREADS        = 16
 
 # By default doxygen will write a font called Helvetica to the output
 # directory and reference it in all dot files that doxygen generates.
@@ -1741,7 +1741,7 @@ DOT_TRANSPARENT        = NO
 # makes dot run faster, but since only newer versions of dot (>1.8.10)
 # support this, this feature is disabled by default.
 
-DOT_MULTI_TARGETS      = NO
+DOT_MULTI_TARGETS      = YES
 
 # If the GENERATE_LEGEND tag is set to YES (the default) Doxygen will
 # generate a legend page explaining the meaning of the various boxes and
