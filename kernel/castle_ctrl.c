@@ -574,10 +574,18 @@ void castle_control_environment_set(c_env_var_t var_id, char *var_str, int *ret)
     *ret = 0;
 }
 
-void castle_control_fault(uint32_t fault, int *ret)
+/**
+ * Handle a fault request (for testing).
+ *
+ * @param fault     The fault code.
+ * @param arg       An argument for the fault.
+ */
+void castle_control_fault(uint32_t fault, uint32_t fault_arg, int *ret)
 {
     *ret = 0;
     castle_fault = fault;
+    castle_fault_arg = fault_arg;
+    debug("castle_control_fault got fault %u arg 0x%x\n", castle_fault, castle_fault_arg);
 }
 
 void castle_control_trace_setup(char *dir, int *ret)
@@ -600,10 +608,20 @@ void castle_control_trace_teardown(int *ret)
     *ret = castle_trace_teardown();
 }
 
-/*
- * The minimum number of live slaves we can safely run with. For N-rda this is N.
- * This is hard coded for 2-rda at the moment.
+/**
+ * Check extents for mappings containing a slave (currently used for testing only).
+ *
+ * @param uuid      The slave to check for
+ * @param ret       Returns EINVAL if slave is already marked as out-of-service
+ *                  Returns EEXIST if slave is already marked as evacuated
+ *                  Returns ENOENT if slave was not found
+ *                  Returns EXIT_SUCCESS if slave is now marked as evacuated
  */
+void castle_control_slave_scan(uint32_t uuid, int *ret)
+{
+    *ret = castle_extents_slave_scan(uuid);
+}
+
 /**
  * Initiate evacuation (removal from service) of a slave
  *
@@ -659,8 +677,7 @@ void castle_control_slave_evacuate(uint32_t uuid, int *ret)
     if (test_bit(CASTLE_SLAVE_GHOST_BIT, &slave->flags))
     {
         /* Slave is a 'ghost' - missing from the expected set of slaves - error */
-        castle_printk(LOG_WARN, "Error: slave 0x%x (%s) is missing. Ignoring.\n",
-                slave->uuid, bdevname(slave->bdev, b));
+        castle_printk(LOG_WARN, "Error: slave 0x%x is missing. Ignoring.\n", slave->uuid);
         *ret = -ENOSYS;
         return;
     } 
@@ -820,7 +837,8 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
                             (ioctl.cmd != CASTLE_CTRL_PROTOCOL_VERSION) &&
                             (ioctl.cmd != CASTLE_CTRL_ENVIRONMENT_SET) &&
                             (ioctl.cmd != CASTLE_CTRL_FAULT) &&
-                            (ioctl.cmd != CASTLE_CTRL_SLAVE_EVACUATE))
+                            (ioctl.cmd != CASTLE_CTRL_SLAVE_EVACUATE) &&
+                            (ioctl.cmd != CASTLE_CTRL_SLAVE_SCAN))
     {
         castle_printk(LOG_WARN, "Disallowed ctrl op %d, before fs gets inited.\n", ioctl.cmd);
         return -EINVAL;
@@ -929,6 +947,7 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 
         case CASTLE_CTRL_FAULT:
             castle_control_fault( ioctl.fault.fault_id,
+                                  ioctl.fault.fault_arg,
                                  &ioctl.fault.ret);
             break;
 
@@ -979,6 +998,9 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
             break;
         case CASTLE_CTRL_SLAVE_EVACUATE:
             castle_control_slave_evacuate(ioctl.slave_evacuate.id, &ioctl.slave_evacuate.ret);
+            break;
+        case CASTLE_CTRL_SLAVE_SCAN:
+            castle_control_slave_scan(ioctl.slave_scan.id, &ioctl.slave_scan.ret);
             break;
         case CASTLE_CTRL_THREAD_PRIORITY:
             castle_control_thread_priority(ioctl.thread_priority.nice_value, 

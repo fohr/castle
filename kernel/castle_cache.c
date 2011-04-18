@@ -312,7 +312,8 @@ static               LIST_HEAD(castle_cache_flush_list);
 
 static atomic_t                castle_cache_logical_ext_pages = ATOMIC_INIT(0);
 
-#define CHECKPOINT_FREQUENCY (60)        /* Checkpoint once in every 60secs. */
+int                            checkpoint_frequency = 60;        /* Checkpoint default of once in every 60secs. */
+
 struct                  task_struct  *checkpoint_thread;
 /**********************************************************************************************
  * Prototypes. 
@@ -1009,9 +1010,20 @@ static void c2b_multi_io_end(struct bio *bio, int err)
 #endif
     BUG_ON(atomic_read(&c2b->remaining) == 0);
 
+    if (INJECT_ERR(SLAVE_OOS_ERR))
+    {
+        struct castle_slave *oos_slave = castle_slave_find_by_bdev(bio_info->bdev);
+        if (oos_slave->uuid == castle_fault_arg)
+        {
+            castle_printk(LOG_DEVEL, "Injecting bio error on slave 0x%x\n", oos_slave->uuid);
+            castle_fault = castle_fault_arg = 0;
+            clear_bit(BIO_UPTODATE, &bio->bi_flags);
+        }
+    }
+
     if (!test_bit(BIO_UPTODATE, &bio->bi_flags))
     {
-        /* I/O has failed for this bio */
+        /* I/O has failed for this bio, or testing has injected fault. */
         io_slave = castle_slave_find_by_bdev(bio_info->bdev);
         BUG_ON(!io_slave);
         if (!test_and_set_bit(CASTLE_SLAVE_OOS_BIT, &io_slave->flags))
@@ -5025,8 +5037,10 @@ static int castle_periodic_checkpoint(void *unused)
 
     do {
         /* Wakes-up once in a second just to check whether to stop the thread.
-         * After every CHECKPOINT_FREQUENCY seconds checkpoints the filesystem. */
-        for (i=0; i<CHECKPOINT_FREQUENCY; i++)
+         * After every checkpoint_frequency seconds checkpoints the filesystem. */
+        for (i=0;
+            (i<MIN_CHECKPOINT_FREQUENCY) || ((i<checkpoint_frequency) && (i<MAX_CHECKPOINT_FREQUENCY));
+            i++)
         {
             if (!kthread_should_stop())
                 msleep(1000);
@@ -5036,6 +5050,8 @@ static int castle_periodic_checkpoint(void *unused)
 
         if (!castle_fs_inited)
             continue;
+
+        castle_printk(LOG_DEVEL, "*****Checkpoint freq %d *******\n", checkpoint_frequency);
 
         castle_printk(LOG_DEVEL, "*****Checkpoint start**********\n");
         castle_trace_cache(TRACE_START, TRACE_CACHE_CHECKPOINT_ID, 0);

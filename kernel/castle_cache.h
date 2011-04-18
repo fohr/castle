@@ -197,4 +197,7 @@ void castle_cache_fini(void);
 void castle_cache_debug(void);
 #endif
 
+#define MIN_CHECKPOINT_FREQUENCY 5
+#define MAX_CHECKPOINT_FREQUENCY 3600
+
 #endif /* __CASTLE_CACHE_H__ */

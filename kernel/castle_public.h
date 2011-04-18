@@ -36,6 +36,9 @@ typedef enum {
     FS_INIT_FAULT,      /*10 */
     FS_RESTORE_FAULT,   /*11 */
     FINI_FAULT,         /*12 */
+    SLAVE_OOS_ERR,      /*13 */
+    REBUILD_FAULT1,     /*14 Fault between extent remaps*/
+    REBUILD_FAULT2,     /*15 Fault in mid extent remap*/
 } c_fault_t;
 
 typedef enum {
@@ -151,6 +154,7 @@ typedef uint32_t version_t;         /**< Version ID type, unique across all Doub
 #define CASTLE_CTRL_TRACE_TEARDOWN           27
 #define CASTLE_CTRL_SLAVE_EVACUATE           28
 #define CASTLE_CTRL_THREAD_PRIORITY          29
+#define CASTLE_CTRL_SLAVE_SCAN               30
 
 typedef struct castle_control_cmd_claim {
     uint32_t     dev;          /* IN  */
@@ -251,6 +255,7 @@ typedef struct castle_control_cmd_environment_set {
 
 typedef struct castle_control_cmd_fault {
     c_fault_t fault_id;        /* IN  */
+    uint32_t  fault_arg;       /* IN  */
     int       ret;             /* OUT */
 } cctrl_cmd_fault_t;
 
@@ -276,6 +281,11 @@ typedef struct castle_control_slave_evacuate {
     slave_uuid_t id;           /* IN  */
     int          ret;          /* OUT */
 } PACKED cctrl_cmd_slave_evacuate_t;
+
+typedef struct castle_control_slave_scan {
+    slave_uuid_t id;           /* IN  */
+    int          ret;          /* OUT */
+} PACKED cctrl_cmd_slave_scan_t;
 
 typedef struct castle_control_cmd_thread_priority {
     int       nice_value;       /* IN */
@@ -315,6 +325,7 @@ typedef struct castle_control_ioctl {
         cctrl_cmd_trace_teardown_t      trace_teardown;
 
         cctrl_cmd_slave_evacuate_t      slave_evacuate;
+        cctrl_cmd_slave_scan_t          slave_scan;
 
         cctrl_cmd_thread_priority_t     thread_priority;
     };
@@ -376,6 +387,8 @@ enum {
         _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_SLAVE_EVACUATE, cctrl_ioctl_t),
     CASTLE_CTRL_THREAD_PRIORITY_IOCTL =
         _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_THREAD_PRIORITY, cctrl_ioctl_t),
+    CASTLE_CTRL_SLAVE_SCAN_IOCTL =
+        _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_SLAVE_SCAN, cctrl_ioctl_t),
 };
 
 /*

@@ -14,6 +14,7 @@
 #include "castle_btree.h"
 
 static struct kobject  double_arrays_kobj;
+static struct kobject  filesystem_kobj;
 struct castle_sysfs_versions {
     struct kobject kobj;
     struct list_head version_list;
@@ -343,10 +344,15 @@ static ssize_t slave_size_show(struct kobject *kobj,
     struct castle_slave_superblock *sb;
     uint64_t size;
 
-    sb = castle_slave_superblock_get(slave);
-    size = sb->pub.size;
-    castle_slave_superblock_put(slave, 0);
-    size *= C_BLK_SIZE;
+    if (!test_bit(CASTLE_SLAVE_GHOST_BIT, &slave->flags))
+    {
+        sb = castle_slave_superblock_get(slave);
+        size = sb->pub.size;
+        castle_slave_superblock_put(slave, 0);
+        size *= C_BLK_SIZE;
+    }
+    else
+        size = 0;
 
     return sprintf(buf, "%lld\n", size);
 }
@@ -360,9 +366,14 @@ static ssize_t slave_used_show(struct kobject *kobj,
     c_chk_cnt_t size_chunks;
     uint64_t used;
 
-    castle_freespace_summary_get(slave, &free_chunks, &size_chunks);
+    if (!test_bit(CASTLE_SLAVE_GHOST_BIT, &slave->flags))
+    {
+        castle_freespace_summary_get(slave, &free_chunks, &size_chunks);
 
-    used = (uint64_t)(size_chunks - free_chunks) * C_CHK_SIZE;
+        used = (uint64_t)(size_chunks - free_chunks) * C_CHK_SIZE;
+    }
+    else
+        used = 0;
 
     return sprintf(buf, "%llu\n", used);
 }
@@ -375,9 +386,14 @@ static ssize_t slave_target_show(struct kobject *kobj,
     struct castle_slave_superblock *sb;
     int target;
     
-    sb = castle_slave_superblock_get(slave);
-    target = sb->pub.flags & CASTLE_SLAVE_TARGET ? 1 : 0;
-    castle_slave_superblock_put(slave, 0);
+    if (!test_bit(CASTLE_SLAVE_GHOST_BIT, &slave->flags))
+    {
+        sb = castle_slave_superblock_get(slave);
+        target = sb->pub.flags & CASTLE_SLAVE_TARGET ? 1 : 0;
+        castle_slave_superblock_put(slave, 0);
+    }
+    else
+        target = -1;
 
     return sprintf(buf, "%d\n", target);
 }
@@ -390,9 +406,14 @@ static ssize_t slave_spinning_show(struct kobject *kobj,
     struct castle_slave_superblock *sb;
     int spinning;
     
-    sb = castle_slave_superblock_get(slave);
-    spinning = !!(sb->pub.flags & CASTLE_SLAVE_SPINNING);
-    castle_slave_superblock_put(slave, 0);
+    if (!test_bit(CASTLE_SLAVE_GHOST_BIT, &slave->flags))
+    {
+        sb = castle_slave_superblock_get(slave);
+        spinning = !!(sb->pub.flags & CASTLE_SLAVE_SPINNING);
+        castle_slave_superblock_put(slave, 0);
+    }
+    else
+        spinning = -1;
 
     return sprintf(buf, "%d\n", spinning);
 }
@@ -403,13 +424,53 @@ static ssize_t slave_ssd_show(struct kobject *kobj,
 {
     struct castle_slave *slave = container_of(kobj, struct castle_slave, kobj); 
     struct castle_slave_superblock *sb;
-    int spinning;
+    int ssd;
     
-    sb = castle_slave_superblock_get(slave);
-    spinning = !!(sb->pub.flags & CASTLE_SLAVE_SSD);
-    castle_slave_superblock_put(slave, 0);
+    if (!test_bit(CASTLE_SLAVE_GHOST_BIT, &slave->flags))
+    {
+        sb = castle_slave_superblock_get(slave);
+        ssd = !!(sb->pub.flags & CASTLE_SLAVE_SSD);
+        castle_slave_superblock_put(slave, 0);
+    }
+    else
+        ssd = -1;
 
-    return sprintf(buf, "%d\n", spinning);
+    return sprintf(buf, "%d\n", ssd);
+}
+
+/* Display rebuild state for this slave. See the castle_slave flags bits in castle.h.  */
+static ssize_t slave_rebuild_state_show(struct kobject *kobj,
+                              struct attribute *attr,
+                              char *buf)
+{
+    struct castle_slave *slave = container_of(kobj, struct castle_slave, kobj);
+
+    return sprintf(buf, "%lx\n", slave->flags);
+}
+
+/* Display the fs version (checkpoint number). */
+extern uint32_t castle_filesystem_fs_version;
+static ssize_t filesystem_version_show(struct kobject *kobj,
+						           struct attribute *attr,
+                                   char *buf)
+{
+    struct castle_fs_superblock *fs_sb;
+    uint32_t                    fs_version;
+
+    fs_sb = castle_fs_superblocks_get();
+    fs_version = fs_sb->fs_version;
+    castle_fs_superblocks_put(fs_sb, 0);
+
+    return sprintf(buf, "%u\n", fs_version);
+}
+
+/* Display the number of blocks that have been remapped. */
+extern long castle_extents_chunks_remapped;
+static ssize_t slaves_rebuild_chunks_remapped_show(struct kobject *kobj,
+                              struct attribute *attr,
+                              char *buf)
+{
+    return sprintf(buf, "%ld\n", castle_extents_chunks_remapped);
 }
 
 static ssize_t devices_number_show(struct kobject *kobj, 
@@ -611,8 +672,12 @@ void castle_sysfs_da_del(struct castle_double_array *da)
 static struct castle_sysfs_entry slaves_number =
 __ATTR(number, S_IRUGO|S_IWUSR, slaves_number_show, NULL);
 
+static struct castle_sysfs_entry slaves_rebuild_chunks_remapped =
+__ATTR(rebuild_chunks_remapped, S_IRUGO|S_IWUSR, slaves_rebuild_chunks_remapped_show, NULL);
+
 static struct attribute *castle_slaves_attrs[] = {
     &slaves_number.attr,
+    &slaves_rebuild_chunks_remapped.attr,
     NULL,
 };
 
@@ -640,6 +705,9 @@ __ATTR(spinning, S_IRUGO|S_IWUSR, slave_spinning_show, NULL);
 static struct castle_sysfs_entry slave_ssd =
 __ATTR(ssd, S_IRUGO|S_IWUSR, slave_ssd_show, NULL);
 
+static struct castle_sysfs_entry slave_rebuild_state =
+__ATTR(rebuild_state, S_IRUGO|S_IWUSR, slave_rebuild_state_show, NULL);
+
 static struct attribute *castle_slave_attrs[] = {
     &slave_uuid.attr,
     &slave_size.attr,
@@ -647,6 +715,7 @@ static struct attribute *castle_slave_attrs[] = {
     &slave_target.attr,
     &slave_spinning.attr,
     &slave_ssd.attr,
+    &slave_rebuild_state.attr,
     NULL,
 };
 
@@ -668,9 +737,13 @@ int castle_sysfs_slave_add(struct castle_slave *slave)
         return ret;
     /* TODO: do we need a link for >32?. If so, how do we get hold of the right kobj */ 
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,24)
-    ret = sysfs_create_link(&slave->kobj, &slave->bdev->bd_disk->kobj, "dev");
-    if (ret < 0)
-        return ret;
+    /* There is no bdev for ghost slaves. */
+    if (!test_bit(CASTLE_SLAVE_GHOST_BIT, &slave->flags))
+    {
+        ret = sysfs_create_link(&slave->kobj, &slave->bdev->bd_disk->kobj, "dev");
+        if (ret < 0)
+            return ret;
+    }
 #endif
 
     return 0;
@@ -710,6 +783,20 @@ static struct attribute *castle_collections_attrs[] = {
 static struct kobj_type castle_collections_ktype = {
     .sysfs_ops      = &castle_sysfs_ops,
     .default_attrs  = castle_collections_attrs,
+};
+
+/* Definition of filesystem sysfs directory attributes */
+static struct castle_sysfs_entry filesystem_version =
+__ATTR(filesystem_version, S_IRUGO|S_IWUSR, filesystem_version_show, NULL);
+
+static struct attribute *castle_filesystem_attrs[] = {
+    &filesystem_version.attr,
+    NULL,
+};
+
+static struct kobj_type castle_filesystem_ktype = {
+    .sysfs_ops      = &castle_sysfs_ops,
+    .default_attrs  = castle_filesystem_attrs,
 };
 
 /* Definition of each device sysfs directory attributes */
@@ -860,11 +947,20 @@ int castle_sysfs_init(void)
                            "%s", "vertrees");
     if(ret < 0) goto out6;
 
+    memset(&filesystem_kobj, 0, sizeof(struct kobject));
+    ret = kobject_tree_add(&filesystem_kobj,
+                           &castle.kobj,
+                           &castle_filesystem_ktype,
+                           "%s", "filesystem");
+    if(ret < 0) goto out7;
+
     return 0;
 
-    kobject_remove(&double_arrays_kobj); /* Unreachable */
+    kobject_remove(&filesystem_kobj); /* Unreachable */
+out7:
+    kobject_remove(&double_arrays_kobj);
 out6:
-    kobject_remove(&castle_attachments.collections_kobj); /* Unreachable */
+    kobject_remove(&castle_attachments.collections_kobj);
 out5:
     kobject_remove(&castle_attachments.devices_kobj);
 out4:

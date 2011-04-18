@@ -82,6 +82,7 @@ typedef struct castle_extent {
     c_ext_pos_t         maps_cep;       /* Offset of chunk mapping in logical extent */
     struct list_head    hash_list;
     struct list_head    rebuild_list;
+    struct list_head    verify_list;    /* Used for testing. */
     uint32_t            curr_rebuild_seqno;
     spinlock_t          shadow_map_lock;
     c_disk_chk_t        *shadow_map;
@@ -120,6 +121,7 @@ c_ext_t sup_ext = {
 uint8_t extent_init_done = 0;
 
 static struct list_head     rebuild_list;
+static struct list_head     verify_list; /* Used for testing. */
 static wait_queue_head_t    rebuild_wq;
 struct task_struct   *rebuild_thread;
 
@@ -135,7 +137,11 @@ static int                  rebuild_to_seqno;     /* The sequence number being r
 
 static int                  castle_extents_rescan_required = 0;
 
+long                        castle_extents_chunks_remapped = 0;
+
 static atomic_t             castle_extents_dead_count = ATOMIC(0);
+
+uint32_t castle_rebuild_fs_version = 0;
 
 /* Allocate buffer for extent structure and initialize the structure. */
 static c_ext_t * castle_ext_alloc(c_ext_id_t ext_id)
@@ -1572,7 +1578,6 @@ int castle_extents_restore(void)
  *
  * @return 0:       Always return 0 so that castle_extents_hash_iterate continues.
  */
-
 static int castle_extent_rebuild_list_add(c_ext_t *ext, void *unused)
 {
     /* We are not handling logical extents. */
@@ -2043,6 +2048,9 @@ static int castle_extent_remap(c_ext_t *ext)
             remap_chunks[remap_idx].slave_id = disk_chk->slave_id;
             remap_chunks[remap_idx++].offset = disk_chk->offset;
         }
+
+        FAULT(REBUILD_FAULT2);
+
         /*
          * The remap_chunks array now contains all the disk chunks for this chunkno.
          */
@@ -2113,6 +2121,9 @@ static int castle_extent_remap(c_ext_t *ext)
             put_c2b(map_c2b);
         }
 
+        /* Keep count of the chunks that have actually been remapped. */
+        castle_extents_chunks_remapped += remap_idx;
+
         /*
          * Allow for shutdown in mid-extent (between chunks), because extents may be large and
          * take too long to remap.
@@ -2123,6 +2134,7 @@ static int castle_extent_remap(c_ext_t *ext)
             ext->use_shadow_map = 0;
             spin_unlock(&ext->shadow_map_lock);
             castle_vfree(ext->shadow_map);
+            castle_extents_chunks_remapped = 0;
             return 1;
         }
     }
@@ -2208,6 +2220,8 @@ restart:
 
         castle_extents_remap_state_init();
 
+        castle_extents_chunks_remapped = 0;
+
         /* Build the list of extents to remap. */
         castle_extents_hash_iterate(castle_extent_rebuild_list_add, NULL);
 
@@ -2240,6 +2254,9 @@ restart:
                     exit_early = 1;
                 }
             }
+
+            FAULT(REBUILD_FAULT1);
+
             /* We don't need the extent list any more - drop refs to remaining extents. */
             if (exit_early)
                 castle_extent_put(ext->ext_id);
@@ -2262,9 +2279,11 @@ restart:
             list_for_each(entry, &castle_slaves.slaves)
             {
                 cs = list_entry(entry, struct castle_slave, list);
-                if (test_bit(CASTLE_SLAVE_EVACUATE_BIT, &cs->flags))
+                if (test_bit(CASTLE_SLAVE_EVACUATE_BIT, &cs->flags) &&
+                   !test_bit(CASTLE_SLAVE_REMAPPED_BIT, &cs->flags))
                     evacuated_slaves[nr_evacuated_slaves++] = cs;
-                if (test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags))
+                if (test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags) &&
+                   !test_bit(CASTLE_SLAVE_REMAPPED_BIT, &cs->flags))
                     oos_slaves[nr_oos_slaves++] = cs;
             }
         }
@@ -2308,7 +2327,9 @@ restart:
         /* Rebuild has finished. Mark it so in the superblock. */
         fs_sb = castle_fs_superblocks_get();
         fs_sb->fs_in_rebuild = 0;
+        castle_rebuild_fs_version = fs_sb->fs_version;
         castle_fs_superblocks_put(fs_sb, 1);
+        castle_extents_chunks_remapped = 0;
 
         castle_printk(LOG_USERINFO, "Rebuild completed.\n");
 
@@ -2386,4 +2407,112 @@ void castle_extents_rebuild_startup_check(int need_rebuild)
         wake_up(&rebuild_wq);
     }
     castle_fs_superblocks_put(fs_sb, 1);
+}
+
+/*
+ * Add an extent to the verify list if it is potentially remappable.
+ *
+ * @param ext       The extent to check and add to the verify list.
+ *
+ * @return 0:       Always return 0 so that castle_extents_hash_iterate continues.
+ */
+static int castle_extent_verify_list_add(c_ext_t *ext, void *unused)
+{
+    /* We are not handling logical extents. */
+    if (!SUPER_EXTENT(ext->ext_id) && !(ext->ext_id == MICRO_EXT_ID))
+    {
+        list_add_tail(&ext->verify_list, &verify_list);
+        /*
+         * Take a reference to the extent. We will drop this when we have finished remapping
+         * the extent.
+         */
+        castle_extent_get(ext->ext_id);
+    }
+    return 0;
+}
+
+/*
+ * Scanb the map for an extent, looking for references to a slave.
+ *
+ * @param ext       The extent to check.
+ * @param uuid      The slave to scan for.
+ *
+ * @return nr_refs: The number of references to the uuid in this extent
+ */
+static int castle_extent_scan_uuid(c_ext_t *ext, uint32_t uuid)
+{
+    int chunkno, nr_refs=0, idx=0;
+    c_disk_chk_t chunks[ext->k_factor];
+
+    for (chunkno = 0; chunkno<ext->size; chunkno++)
+    {
+        __castle_extent_map_get(ext, chunkno, chunks);
+        for (idx=0; idx<ext->k_factor; idx++)
+        {
+            if (chunks[idx].slave_id == uuid)
+            {
+                castle_printk(LOG_DEVEL, "castle_extent_scan_uuid found uuid 0x%x in extent %llu\n", uuid, ext->ext_id);
+                nr_refs++;
+            }
+        }
+    }
+    return nr_refs;
+}
+
+/**
+ * Scan all extents in the hash, looking for disk chunks using that slave.
+ *
+ * @param uuid      The slave to check for
+ * return           Returns EBUSY if a rebuild is in progress, so a scan may be invalid.
+ *                  Returns EEXIST if at least one chunk is found for the slave.
+ *                  Returns ENOENT if extents found to check.
+ *                  Returns EXIT_SUCCESS if no chunk is found for the slave.
+ */
+int castle_extents_slave_scan(uint32_t uuid)
+{
+    struct castle_fs_superblock *fs_sb;
+    struct list_head            *entry, *tmp;
+    c_ext_t *ext;
+    int     nr_refs=0;
+
+    fs_sb = castle_fs_superblocks_get();
+    /*
+     * If fs_in_rebuild is non-zero a rebuild is still in progress, so a scan may be invalid.
+     */
+    if (fs_sb->fs_in_rebuild)
+    {
+        castle_printk(LOG_DEVEL, "REBUILD_VERIFY returning EBUSY\n");
+        castle_fs_superblocks_put(fs_sb, 1);
+        return -EBUSY;
+    }
+    castle_fs_superblocks_put(fs_sb, 1);
+
+    /* Initialise the verify list. */
+    INIT_LIST_HEAD(&verify_list);
+
+    debug("castle_extents_slave_scan started on slave 0x%x\n", uuid);
+    castle_extents_hash_iterate(castle_extent_verify_list_add, NULL);
+
+    if (list_empty(&verify_list))
+    {
+        castle_printk(LOG_DEVEL, "REBUILD_VERIFY: list is empty.\n");
+        return -ENOENT;
+    }
+
+    list_for_each_safe(entry, tmp, &verify_list)
+    {
+        ext = list_entry(entry, c_ext_t, verify_list);
+        list_del(entry);
+
+        nr_refs += castle_extent_scan_uuid(ext, uuid);
+        castle_extent_put(ext->ext_id);
+    }
+
+    if (nr_refs)
+    {
+        castle_printk(LOG_DEVEL, "REBUILD_VERIFY: %d references found to uuid 0x%xd\n", nr_refs, uuid);
+        return -EEXIST;
+    }
+    else
+        return 0;
 }

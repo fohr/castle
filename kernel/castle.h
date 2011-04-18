@@ -1151,7 +1151,7 @@ struct castle_slave {
 };
 /* castle_slave flags bits */
 #define CASTLE_SLAVE_OOS_BIT        0 /* Slave is out-of-service */
-#define CASTLE_SLAVE_EVACUATE_BIT   1 /* Slave has been evacuated */
+#define CASTLE_SLAVE_EVACUATE_BIT   1 /* Slave is being, or has been, evacuated */
 #define CASTLE_SLAVE_GHOST_BIT      2 /* Slave is missing or invalid (on reboot) */
 #define CASTLE_SLAVE_REMAPPED_BIT   3 /* Slave has been remapped */
 
@@ -1398,9 +1398,12 @@ int  castle_ctrl_is_locked          (void);
         BUG();                                                  \
     }
 
+#define INJECT_ERR(_fault)          (castle_fault == _fault)
+
 #define INJECT_FAULT                FAULT(FAULT_CODE)
 
 extern c_fault_t castle_fault;
+extern uint32_t  castle_fault_arg;
 
 /* Ref: This code is taken from wikipedia. */
 static uint32_t __attribute__((used)) fletcher32( uint16_t *data, size_t len )
@@ -1513,4 +1516,6 @@ struct castle_version_delete_state {
 };
 
 extern int castle_nice_value;
+
+extern int checkpoint_frequency;
 #endif /* __CASTLE_H__ */
