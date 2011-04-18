@@ -95,7 +95,7 @@ static ssize_t versions_list_show(struct kobject *kobj,
     {
         len = sprintf(buf,
                 "Id: 0x%x\n"
-                "Double Array Id: 0x%x\n"
+                "DoubleArrayId: 0x%x\n"
                 "ParentId: 0x%x\n"
                 "LogicalSize: %llu\n"
                 "IsLeaf: %d\n"
