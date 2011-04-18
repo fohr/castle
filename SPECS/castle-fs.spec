@@ -57,7 +57,7 @@ for kvariant in %{kvariants}
 do
     ksrc=%{_usrsrc}/kernels/%{kverrel}${kvariant:+-$kvariant}-%{_target_cpu}
     pushd _kmod_build_$kvariant
-    make KVER=%{kversion} KERNEL_DIR="${ksrc}" DEBUG=n PERF_DEBUG=n
+    make KVER=%{kversion} KERNEL_DIR="${ksrc}" DEBUG=n PERF_DEBUG=n %{?_smp_mflags}
     popd
 done
 
