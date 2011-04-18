@@ -1059,7 +1059,7 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t rda_type,
 
     /*
      * If current_rebuild_seqno has changed, then the mappings for this extent may contain
-     * out-of-service slaves. Set the rescan flag and kick the rebuild thread so that the  extent
+     * out-of-service slaves. Set the rescan flag and kick the rebuild thread so that the extent
      * list is rescanned by the rebuild thread. This extent will then be remapped if required.
      */
     if (ext->curr_rebuild_seqno != atomic_read(&current_rebuild_seqno))
@@ -1580,9 +1580,14 @@ int castle_extents_restore(void)
  */
 static int castle_extent_rebuild_list_add(c_ext_t *ext, void *unused)
 {
-    /* We are not handling logical extents. */
+    c_ext_t *ref_ext;
+    /*
+     * We are not handling logical extents. The extent is not already at current_rebuild_seqno. The extent
+     * is not marked for deletion (it is a live extent)
+     */
     if ((!SUPER_EXTENT(ext->ext_id) && !(ext->ext_id == MICRO_EXT_ID)) &&
-        (ext->curr_rebuild_seqno < atomic_read(&current_rebuild_seqno)))
+        (ext->curr_rebuild_seqno < atomic_read(&current_rebuild_seqno)) &&
+        LIVE_EXTENT(ext))
     {
         debug("Adding extent %llu to rebuild list for extent seqno %u, global seqno %u\n",
                ext->ext_id, ext->curr_rebuild_seqno, atomic_read(&current_rebuild_seqno));
@@ -1591,7 +1596,8 @@ static int castle_extent_rebuild_list_add(c_ext_t *ext, void *unused)
          * Take a reference to the extent. We will drop this when we have finished remapping
          * the extent.
          */
-        castle_extent_get(ext->ext_id);
+        ref_ext = castle_extent_get(ext->ext_id);
+        BUG_ON(!ref_ext);
     }
     return 0;
 }
@@ -1964,24 +1970,6 @@ static int castle_extent_remap(c_ext_t *ext)
     for (chunkno = 0; chunkno<ext->size; chunkno++)
         __castle_extent_map_get(ext, chunkno, &ext->shadow_map[chunkno*k_factor]);
 
-    if (rebuild_to_seqno != atomic_read(&current_rebuild_seqno))
-    {
-        /*
-         * Sequence number has changed. Set rebuild_to_seqno, which is the sequence number we will
-         * be remapping to. Populate the live slaves array with its matching set of slaves and set
-         * the flag to indicate thet rebuild will need to restart to remap extents that we have
-         * already scanned, because these may now be out of date.
-         */
-        castle_extents_rescan_required = 1;
-
-        rebuild_to_seqno = atomic_read(&current_rebuild_seqno);
-
-        /*
-         * Refresh the live slaves array to reflect the change, and use that from now on.
-         */
-        castle_extents_remap_state_init();
-    }
-
     /*
      * As we are remapping a new extent, we need to stop using any pre-existing superchunks.
      * Setting next_chk to 0 will force new superchunk(s) to be allocated for this extent.
@@ -2173,8 +2161,6 @@ static int castle_extent_remap(c_ext_t *ext)
     spin_unlock(&ext->shadow_map_lock);
     castle_vfree(ext->shadow_map);
 
-    /* Release the hold we took in castle_rebuild_extent_add */
-    castle_extent_put(ext->ext_id);
     return EXIT_SUCCESS;
 }
 
@@ -2208,13 +2194,13 @@ static int castle_extents_rebuild_run(void *unused)
         }
 
 restart:
-        castle_printk(LOG_USERINFO, "Rebuild thread starting run.\n");
+        castle_printk(LOG_USERINFO, "Rebuild run starting.\n");
 
         fs_sb = castle_fs_superblocks_get();
         fs_sb->fs_in_rebuild = 1;
         castle_fs_superblocks_put(fs_sb, 1);
 
-        castle_extents_rescan_required = 0;
+        castle_extents_rescan_required = exit_early = 0;
 
         rebuild_to_seqno = atomic_read(&current_rebuild_seqno);
 
@@ -2244,26 +2230,39 @@ restart:
             if (!exit_early)
             {
                 /*
-                 * Allow rebuild to be suspended in-between extent remappings.
+                 * Allow rebuild to be stopped or restarted in-between extent remappings.
                  * The only 'error' castle_extent_remap should return is when it discovers that
                  * kthread_should_stop().
                  */
-                if (castle_extent_remap(ext) || kthread_should_stop())
-                {
-                    castle_printk(LOG_WARN, "Warning: rebuild terminating early ...\n");
+                if (castle_extent_remap(ext) ||
+                        kthread_should_stop() ||
+                        castle_extents_rescan_required ||
+                        rebuild_to_seqno != atomic_read(&current_rebuild_seqno))
                     exit_early = 1;
-                }
             }
 
             FAULT(REBUILD_FAULT1);
 
-            /* We don't need the extent list any more - drop refs to remaining extents. */
-            if (exit_early)
-                castle_extent_put(ext->ext_id);
+            /* Drop ref to extent. */
+            castle_extent_put(ext->ext_id);
         }
 
         if (exit_early)
-            goto out;
+        {
+            if (kthread_should_stop())
+            {
+                castle_printk(LOG_WARN, "Rebuild run terminating early.\n");
+                goto out;
+            }
+            else if (rebuild_to_seqno != atomic_read(&current_rebuild_seqno) ||
+                     castle_extents_rescan_required)
+            {
+                castle_printk(LOG_WARN, "Rebuild run restarting.\n");
+                goto restart;
+            }
+            else
+                BUG();
+        }
 
         if ((rebuild_to_seqno == atomic_read(&current_rebuild_seqno)) &&
             !castle_extents_rescan_required)
@@ -2295,7 +2294,7 @@ restart:
         if ((rebuild_to_seqno != atomic_read(&current_rebuild_seqno)) ||
             castle_extents_rescan_required)
         {
-            debug("Rebuild extent rescan required (seqno has changed)\n");
+            castle_printk(LOG_WARN, "Rebuild run restarting.\n");
             goto restart;
         }
 
@@ -2307,7 +2306,7 @@ restart:
         {
             if (oos_slaves[i])
             {
-                castle_printk(LOG_USERINFO, "Finished remapping out-of-service slave 0x%x.\n", 
+                castle_printk(LOG_USERINFO, "Finished remapping out-of-service slave 0x%x.\n",
                               oos_slaves[i]->uuid);
                 set_bit(CASTLE_SLAVE_REMAPPED_BIT, &oos_slaves[i]->flags);
             }
@@ -2418,15 +2417,18 @@ void castle_extents_rebuild_startup_check(int need_rebuild)
  */
 static int castle_extent_verify_list_add(c_ext_t *ext, void *unused)
 {
-    /* We are not handling logical extents. */
-    if (!SUPER_EXTENT(ext->ext_id) && !(ext->ext_id == MICRO_EXT_ID))
+    c_ext_t *ref_ext;
+
+    /* We are not handling logical extents or extents scheduled for deletion. */
+    if (!SUPER_EXTENT(ext->ext_id) && !(ext->ext_id == MICRO_EXT_ID) && LIVE_EXTENT(ext))
     {
         list_add_tail(&ext->verify_list, &verify_list);
         /*
          * Take a reference to the extent. We will drop this when we have finished remapping
          * the extent.
          */
-        castle_extent_get(ext->ext_id);
+        ref_ext = castle_extent_get(ext->ext_id);
+        BUG_ON(!ref_ext);
     }
     return 0;
 }
