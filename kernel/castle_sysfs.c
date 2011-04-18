@@ -95,6 +95,7 @@ static ssize_t versions_list_show(struct kobject *kobj,
     {
         len = sprintf(buf,
                 "Id: 0x%x\n"
+                "Double Array Id: 0x%x\n"
                 "ParentId: 0x%x\n"
                 "LogicalSize: %llu\n"
                 "IsLeaf: %d\n"
@@ -104,6 +105,7 @@ static ssize_t versions_list_show(struct kobject *kobj,
                 "VersionDeletes: %ld\n"
                 "KeyReplaces: %ld\n",
                  v->version, 
+                 castle_version_da_id_get(v->version),
                  live_parent,
                  size,
                  leaf,
@@ -210,15 +212,6 @@ static ssize_t double_array_number_show(struct kobject *kobj,
 							            char *buf)
 {
     return sprintf(buf, "%d\n", castle_da_count());
-}
-
-static ssize_t da_id_show(struct kobject *kobj, 
-						  struct attribute *attr, 
-						  char *buf)
-{
-    struct castle_double_array *da = container_of(kobj, struct castle_double_array, kobj); 
-
-    return sprintf(buf, "0x%x\n", da->id);
 }
 
 static ssize_t da_version_show(struct kobject *kobj, 
@@ -572,9 +565,6 @@ static struct kobj_type castle_double_array_ktype = {
 };
 
 /* Definition of each da sysfs directory attributes */
-static struct castle_sysfs_entry da_id =
-__ATTR(id, S_IRUGO|S_IWUSR, da_id_show, NULL);
-
 static struct castle_sysfs_entry da_version =
 __ATTR(version, S_IRUGO|S_IWUSR, da_version_show, NULL);
 
@@ -585,7 +575,6 @@ static struct castle_sysfs_entry da_tree_list =
 __ATTR(component_trees, S_IRUGO|S_IWUSR, da_tree_list_show, NULL);
 
 static struct attribute *castle_da_attrs[] = {
-    &da_id.attr,
     &da_version.attr,
     &da_last_key.attr,
     &da_tree_list.attr,
@@ -605,7 +594,7 @@ int castle_sysfs_da_add(struct castle_double_array *da)
     ret = kobject_tree_add(&da->kobj, 
                            &double_arrays_kobj, 
                            &castle_da_ktype, 
-                           "%x", da->root_version);
+                           "%x", da->id);
 
     if (ret < 0)
         return ret;
