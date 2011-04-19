@@ -740,6 +740,9 @@ int castle_fs_init(void)
                     {
                         castle_printk(LOG_USERINFO, "Slave 0x%x has already been remapped.\n", fs_sb.slaves[i]);
                         set_bit(CASTLE_SLAVE_REMAPPED_BIT, &cs->flags);
+                        /* We will not be performing I/O on this device. Release it. */
+                        castle_release_device(cs->bdev);
+
                     } else
                     {
                         castle_printk(LOG_USERINFO, "Slave 0x%x is not in quorum and has not been remapped.\n",
@@ -1451,12 +1454,14 @@ void castle_release_device(struct block_device *bdev)
 
 void castle_release(struct castle_slave *cs)
 {
-    /* Ghost slaves are only partially initialised */
+    /* Ghost slaves are only partially initialised, and have no bdev. */
     if (!test_bit(CASTLE_SLAVE_GHOST_BIT, &cs->flags))
     {
         castle_events_slave_release(cs->uuid);
         castle_sysfs_slave_del(cs);
-        castle_release_device(cs->bdev);
+        /* Remapped slaves have already been released. */
+        if (!test_bit(CASTLE_SLAVE_REMAPPED_BIT, &cs->flags))
+            castle_release_device(cs->bdev);
     }
     list_del(&cs->list);
     castle_free(cs);
