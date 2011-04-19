@@ -661,6 +661,7 @@ struct castle_component_tree {
     struct mutex        last_key_mutex;
     uint8_t             bloom_exists;
     castle_bloom_t      bloom;
+    uint8_t             do_not_put; /* TODO@tr get rid of this once stable */
 #ifdef CASTLE_PERF_DEBUG
     u64                 bt_c2bsync_ns;
     u64                 data_c2bsync_ns;
@@ -709,6 +710,68 @@ struct castle_clist_entry {
     /*        290 */ uint8_t         _unused[222];
     /*        512 */
 } PACKED;
+
+/** DA merge SERDES on-disk structure.
+ *
+ *  @note Assumes 2 input trees, both c_immut_iter_t, and max of 10 DA levels
+ */
+struct castle_dmserlist_entry {
+    /* align:   8 */
+    /* offset:  0 */ da_id_t                     da_id;
+    /*          4 */ int32_t                     level;
+    /* On in_trees... each in_tree can identify which DA and level it belongs to, so it is up to
+       the trees to find their DA, not the DA to find it's trees. On any given level there can
+       be more than 2 trees (but no more than 4? don't quote me on that); the choice of which 2
+       trees to merge is dictated by their age (oldest trees first), which is implicit in their
+       location in the level ("left-most" first?). But just in case something goes wrong, lets
+       check the tree sequence numbers as well. */
+    /*          8 */ tree_seq_t                  in_tree_0;
+    /*         12 */ tree_seq_t                  in_tree_1;
+    /*         16 */ struct castle_clist_entry   out_tree;
+    /*        528 */ btree_t                     btree_type;
+    /*        529 */ int32_t                     root_depth;
+    /*        533 */ int8_t                      is_new_key;
+    /*        534 */ c_ext_pos_t                 last_leaf_node_cep;
+    /*        550 */ int8_t                      completing;
+    /*        551 */ uint64_t                    nr_entries;
+    /*        559 */ uint64_t                    large_chunks;
+    /*        567 */ int8_t                      leafs_on_ssds;
+    /*        568 */ int8_t                      internals_on_ssds;
+    /*        569 */ uint32_t                    skipped_count;
+    /*        573 */
+
+                   /* next few entries assume MAX_BTREE_DEPTH=10 */
+                   /* TODO@tr change SoA to Aos */
+    /*        573 */ c_ext_pos_t                 node_c2b_cep[MAX_BTREE_DEPTH];
+    /*        733 */ int32_t                     next_idx[MAX_BTREE_DEPTH];
+    /*        773 */ int32_t                     node_used[MAX_BTREE_DEPTH]; /* uncertain if this
+                                                                                is needed... might
+                                                                                get rid of it */
+    /*        813 */ int32_t                     valid_end_idx[MAX_BTREE_DEPTH];
+    /*        853 */ version_t                   valid_version[MAX_BTREE_DEPTH];
+    /*        893 */ uint8_t                     pad_to_iters[3]; /* beyond here entries are
+                                                                     frequently marshalled, so
+                                                                     alignment is important */
+
+                    /* iterators, assuming we always have 2 immut_iters per merge */
+    /*        896 */ int32_t                     iter_err;
+    /*        900 */ int64_t                     iter_non_empty_cnt;
+    /*        908 */ uint64_t                    iter_src_items_completed;
+    /*        916 */
+                          /* 2 immutable iterators */
+                          /* TODO@tr change SoA to AoS */
+    /*        916 */ int32_t                     iter_component_completed[2];
+    /*        924 */ int32_t                     iter_component_cached[2];
+    /*        932 */ int32_t                     iter_immut_curr_idx[2];
+    /*        940 */ int32_t                     iter_immut_cached_idx[2];
+    /*        948 */ int32_t                     iter_immut_next_idx[2];
+    /*        956 */ c_ext_pos_t                 iter_immut_curr_c2b_cep[2];
+    /*        988 */ c_ext_pos_t                 iter_immut_next_c2b_cep[2];
+
+    /*       1020 */ uint8_t                     unused[4];
+    /*       1024 */
+} PACKED;
+#define SIZEOF_CASTLE_DMSERLIST_ENTRY (1024)
 
 /**
  * Ondisk Serialized structure for castle versions.
@@ -1056,7 +1119,7 @@ typedef struct castle_merged_iterator {
     int nr_iters;
     struct castle_btree_type *btree;
     int err;
-    int non_empty_cnt;
+    int64_t non_empty_cnt;
     uint64_t src_items_completed;
     struct component_iterator {
         int                          completed;
@@ -1443,6 +1506,7 @@ struct castle_merge_token {
 #define DOUBLE_ARRAY_DELETED_FLAG           (1 << DOUBLE_ARRAY_DELETED_BIT)
 #define DOUBLE_ARRAY_FROZEN_BIT             (2)
 #define DOUBLE_ARRAY_FROZEN_FLAG            (1 << DOUBLE_ARRAY_FROZEN_BIT)
+#define MIN_DA_SERDES_LEVEL                 (2) /* merges below this level won't be serialised */
 struct castle_double_array {
     da_id_t                     id;
     version_t                   root_version;
@@ -1464,6 +1528,27 @@ struct castle_double_array {
             uint32_t            units_commited;
             struct task_struct *thread;
             int                 deamortize;
+            /* Merge serialisation/deserialisation */
+            struct {
+                struct castle_dmserlist_entry *mstore_entry;
+                /* TODO@tr get rid of out_tree; the clist in mstore_entry has the out_tree
+                           ext_id, which is all checkpoint needs */
+                struct castle_component_tree  *out_tree; /* used by checkpoint when we need to
+                                                            flush output extents */
+                struct semaphore mutex; /* because we might lock while using mstore, spinlock
+                                           may be a bad idea. might need a "double buffering"
+                                           solution with round robin selection over 2
+                                           mstore_entry structures to get around it? */
+                atomic_t         valid; /* for merge thread to notify checkpoint when state is
+                                           checkpointable:
+                                               0 = not initialised;
+                                               1 = initialised but not valid (i.e.  not safe to
+                                                   deserialise);
+                                               2 = valid.  */
+                atomic_t         fresh; /* for merge thread to notify checkpoint when output
+                                           extents should be flushed */
+                unsigned int     des; /* for init to notify merge thread to resume merge */
+            } serdes;
         } merge;
     } levels[MAX_DA_LEVEL];
     struct castle_merge_token   merge_tokens_array[MAX_DA_LEVEL];
