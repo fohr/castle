@@ -1280,6 +1280,7 @@ void                  castle_attachment_put        (struct castle_attachment *ca
 
 struct castle_slave*  castle_claim                 (uint32_t new_dev);
 void                  castle_release               (struct castle_slave *cs);
+void                  castle_release_device        (struct block_device *bdev);
 
 void                  castle_slave_access          (uint32_t uuid);
 
