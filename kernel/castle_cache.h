@@ -12,9 +12,10 @@ typedef struct castle_cache_block {
     void                      *buffer;          /**< Linear mapping of the pages                  */
     struct hlist_node          hlist;           /**< Hash-list node                               */
     union {
-        struct list_head       dirty;
-        struct list_head       clean;
-        struct list_head       free;
+        struct list_head       dirty;           /**< Position on dirtylist.                       */
+        struct list_head       clean;           /**< Position on freelist.                        */
+        struct list_head       free;            /**< Position on freelist.                        */
+        struct list_head       reserve;         /**< Position on meta-extent reserve freelist.    */
     };
     struct rb_node             rb_dirtylist;    /**< Per-extent dirtylist RB-node                 */
 
@@ -150,7 +151,10 @@ int         submit_c2b_remap_rda      (c2_block_t *c2b, c_disk_chk_t *remap_chun
 
 #define     castle_cache_page_block_get(_cep) \
             castle_cache_block_get    (_cep, 1)
+#define     castle_cache_page_block_reserve() \
+            castle_cache_block_get    ((c_ext_pos_t){RESERVE_EXT_ID, 0}, 1)
 c2_block_t* castle_cache_block_get    (c_ext_pos_t  cep, int nr_pages);
+void        castle_cache_page_block_unreserve(c2_block_t *c2b);
 void        castle_cache_flush_wakeup (void);
 int         castle_cache_extent_flush (c_ext_id_t ext_id, uint64_t start, uint64_t size);
 int         castle_cache_extent_flush_schedule (c_ext_id_t ext_id, uint64_t start, uint64_t size);

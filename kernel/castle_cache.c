@@ -57,7 +57,7 @@ enum c2b_state_bits {
     C2B_bio_error,          /**< Block had at least one bio I/O error.                            */
     C2B_no_resubmit,        /**< Block must not be resubmitted after I/O error.                   */
     C2B_remap,              /**< Block is for a remap.                                            */
-    C2B_in_flight,          /**< Block is currently in-flight (un-set in c2b_multi_io_end().      */
+    C2B_in_flight,          /**< Block is currently in-flight (un-set in c2b_multi_io_end()).     */
 };
 
 #define INIT_C2B_BITS (0)
@@ -122,7 +122,7 @@ typedef struct castle_cache_page {
     struct page          *pages[PAGES_PER_C2P]; 
     union {
         struct hlist_node hlist;
-        struct list_head  list;
+        struct list_head  list;         /**< Position on freelist/meta-extent reserve freelist. */
     };
     struct rw_semaphore   lock;
     unsigned long         state;
@@ -286,11 +286,27 @@ static int                     c2_pref_total_window_size;   /**< Sum of all wind
                                                     times.  Protected by c2_prefetch_lock.        */
 static int                     castle_cache_allow_hardpinning;      /**< Is hardpinning allowed?  */
 
-static         DEFINE_SPINLOCK(castle_cache_freelist_lock); /**< Lock for the two freelists below */
-static int                     castle_cache_page_freelist_size;
-static               LIST_HEAD(castle_cache_page_freelist);
-static int                     castle_cache_block_freelist_size;
-static               LIST_HEAD(castle_cache_block_freelist);
+static         DEFINE_SPINLOCK(castle_cache_freelist_lock);     /**< Lock for page/block freelists*/
+static int                     castle_cache_page_freelist_size; /**< Num c2ps on freelist         */
+static               LIST_HEAD(castle_cache_page_freelist);     /**< Freelist of c2ps             */
+static int                     castle_cache_block_freelist_size;/**< Num c2bs on freelist         */
+static               LIST_HEAD(castle_cache_block_freelist);    /**< Freelist of c2bs             */
+
+/* The reservelist is an additional list of free c2bs and c2ps that are held
+ * for the exclusive use of the flush thread.  The flush thread gets single c2p
+ * c2bs and these are used to perform I/O on the metaextent to allow RDA chunk
+ * disks+disk offsets to be looked up. */
+#define CASTLE_CACHE_FLUSH_BATCH_SIZE   64                          /**< Number of c2bs to flush per
+                                                                         batch in _flush()        */
+#define CASTLE_CACHE_RESERVELIST_QUOTA  2*CASTLE_CACHE_FLUSH_BATCH_SIZE /**< Number of c2bs/c2ps to
+                                                                             reserve for _flush() */
+static         DEFINE_SPINLOCK(castle_cache_reservelist_lock);      /**< Lock for reservelists    */
+static atomic_t                castle_cache_page_reservelist_size;  /**< Num c2ps on reservelist  */
+static               LIST_HEAD(castle_cache_page_reservelist);      /**< Reservelist of c2ps      */
+static atomic_t                castle_cache_block_reservelist_size; /**< Num c2bs on reservelist  */
+static               LIST_HEAD(castle_cache_block_reservelist);     /**< Reservelist of c2bs      */
+static DECLARE_WAIT_QUEUE_HEAD(castle_cache_page_reservelist_wq);   /**< Reservelist c2p waiters  */
+static DECLARE_WAIT_QUEUE_HEAD(castle_cache_block_reservelist_wq);  /**< Reservelist c2b waiters  */
 
 #define CASTLE_CACHE_VMAP_PGS   256
 static struct page            *castle_cache_vmap_pgs[CASTLE_CACHE_VMAP_PGS]; 
@@ -353,11 +369,17 @@ void castle_cache_stats_print(int verbose)
                        TRACE_CACHE_FREE_PGS_ID, 
                        castle_cache_page_freelist_size * PAGES_PER_C2P);
     castle_trace_cache(TRACE_VALUE,
-                       TRACE_CACHE_FREE_BLKS_ID,
-                       castle_cache_block_freelist_size);
+                       TRACE_CACHE_RESERVE_PGS_ID,
+                       atomic_read(&castle_cache_page_reservelist_size));
     castle_trace_cache(TRACE_VALUE,
                        TRACE_CACHE_CLEAN_BLKS_ID,
                        atomic_read(&castle_cache_cleanlist_size));
+    castle_trace_cache(TRACE_VALUE,
+                       TRACE_CACHE_FREE_BLKS_ID,
+                       castle_cache_block_freelist_size);
+    castle_trace_cache(TRACE_VALUE,
+                       TRACE_CACHE_RESERVE_BLKS_ID,
+                       atomic_read(&castle_cache_block_reservelist_size));
     castle_trace_cache(TRACE_VALUE,
                        TRACE_CACHE_SOFTPIN_BLKS_ID, 
                        atomic_read(&castle_cache_cleanlist_softpin_size));
@@ -1814,7 +1836,7 @@ static inline void castle_cache_c2p_put(c2_page_t *c2p, struct list_head *accumu
     spin_lock_irq(lock);
 
     c2p->count--;
-    /* If the count reached zero, delete fromt the hash, add to the accumulator list,
+    /* If the count reached zero, delete from the hash, add to the accumulator list,
        so that they get freed later on. */
     if(c2p->count == 0)
     {
@@ -1993,22 +2015,81 @@ out:
     return success;
 }
 
+/**
+ * Add c2p to freelist or reservelist and do list accounting.
+ *
+ * c2p goes to the reservelist if reservelist_size is below quota.
+ */
 static inline void __castle_cache_page_freelist_add(c2_page_t *c2p)
 {
+    int size, on_reservelist = 0;
+
     BUG_ON(c2p->count != 0);
-    list_add_tail(&c2p->list, &castle_cache_page_freelist);
-    castle_cache_page_freelist_size++;
+
+    size = atomic_read(&castle_cache_page_reservelist_size);
+
+    if (unlikely(size < CASTLE_CACHE_RESERVELIST_QUOTA))
+    {
+        /* c2p reservelist is below quota.  Grab the lock and retest.  If it is
+         * still below quota, place this c2p on reservelist. */
+        spin_lock(&castle_cache_reservelist_lock);
+        size = atomic_read(&castle_cache_page_reservelist_size);
+        if (likely(size < CASTLE_CACHE_RESERVELIST_QUOTA))
+        {
+            list_add_tail(&c2p->list, &castle_cache_page_reservelist);
+            atomic_inc(&castle_cache_page_reservelist_size);
+            on_reservelist = 1;
+        }
+        spin_unlock(&castle_cache_reservelist_lock);
+    }
+
+    if (likely(!on_reservelist))
+    {
+        /* c2p reservelist is at its quota.  Place this c2p on freelist. */
+        list_add_tail(&c2p->list, &castle_cache_page_freelist);
+        castle_cache_page_freelist_size++;
+    }
 }
 
 /**
- * Add block to the freelist and do freelist accounting.
+ * Add block to freelist or reservelist and do list accounting.
+ *
+ * c2b goes to the reservelist if reservelist_size is below quota.
  */
 static inline void __castle_cache_block_freelist_add(c2_block_t *c2b)
 {
-    list_add_tail(&c2b->free, &castle_cache_block_freelist);
-    castle_cache_block_freelist_size++;
+    int size, on_reservelist = 0;
+
+    size = atomic_read(&castle_cache_block_reservelist_size);
+
+    if (unlikely(size < CASTLE_CACHE_RESERVELIST_QUOTA))
+    {
+        /* c2b reservelist is below quota.  Grab the lock and retest.  If it is
+         * still below quota, places this c2b on reservelist. */
+        spin_lock(&castle_cache_reservelist_lock);
+        size = atomic_read(&castle_cache_block_reservelist_size);
+        if (likely(size < CASTLE_CACHE_RESERVELIST_QUOTA))
+        {
+            list_add_tail(&c2b->reserve, &castle_cache_block_reservelist);
+            atomic_inc(&castle_cache_block_reservelist_size);
+            on_reservelist = 1;
+        }
+        spin_unlock(&castle_cache_reservelist_lock);
+    }
+
+    if (likely(!on_reservelist))
+    {
+        /* c2b reservelist is at its quota.  Places this c2b on freelist. */
+        list_add_tail(&c2b->free, &castle_cache_block_freelist);
+        castle_cache_block_freelist_size++;
+    }
 }
 
+/**
+ * Get nr_pages of c2ps from the freelist.
+ *
+ * @also castle_cache_page_reservelist_get()
+ */
 static c2_page_t** castle_cache_page_freelist_get(int nr_pages)
 {
     struct list_head *lh, *lt;
@@ -2021,7 +2102,7 @@ static c2_page_t** castle_cache_page_freelist_get(int nr_pages)
     BUG_ON(!c2ps);
     spin_lock(&castle_cache_freelist_lock);
     /* Will only be able to satisfy the request if we have nr_pages on the list */
-    if(castle_cache_page_freelist_size * PAGES_PER_C2P < nr_pages)
+    if (castle_cache_page_freelist_size * PAGES_PER_C2P < nr_pages)
     {
         spin_unlock(&castle_cache_freelist_lock);
         castle_free(c2ps);
@@ -2032,7 +2113,7 @@ static c2_page_t** castle_cache_page_freelist_get(int nr_pages)
     i = 0;
     list_for_each_safe(lh, lt, &castle_cache_page_freelist)
     {
-        if(nr_pages <= 0)
+        if (nr_pages <= 0)
             break;
         list_del(lh);
         castle_cache_page_freelist_size--;
@@ -2042,13 +2123,60 @@ static c2_page_t** castle_cache_page_freelist_get(int nr_pages)
     }
     spin_unlock(&castle_cache_freelist_lock);
 #ifdef CASTLE_DEBUG
-    for(i--; i>=0; i--)
+    for (i--; i>=0; i--)
     {
         debug("Got c2p id=%d from freelist.\n", c2ps[i]->id);
     }
 #endif
     /* Check that we _did_ succeed at allocating required number of c2ps */
     BUG_ON(nr_pages > 0);
+
+    return c2ps;
+}
+
+/**
+ * Get nr_pages of c2ps from the reservelist.
+ *
+ * @also castle_cache_page_freelist_get()
+ */
+static c2_page_t** castle_cache_page_reservelist_get(int nr_pages)
+{
+    struct list_head *lh, *lt;
+    c2_page_t **c2ps;
+    int i, nr_c2ps;
+
+    nr_c2ps = castle_cache_pages_to_c2ps(nr_pages);
+    c2ps = castle_zalloc(nr_c2ps * sizeof(c2_page_t *), GFP_KERNEL);
+    BUG_ON(!c2ps);
+
+    spin_lock(&castle_cache_reservelist_lock);
+    if (atomic_read(&castle_cache_page_reservelist_size) * PAGES_PER_C2P < nr_pages)
+    {
+        spin_unlock(&castle_cache_reservelist_lock);
+        castle_free(c2ps);
+        debug("Reservelist too small to allocate %d pages.\n", nr_pages);
+        return NULL;
+    }
+
+    i = 0;
+    list_for_each_safe(lh, lt, &castle_cache_page_reservelist)
+    {
+        if (nr_pages <= 0)
+            break;
+        list_del(lh);
+        atomic_dec(&castle_cache_page_reservelist_size);
+        BUG_ON(i >= nr_c2ps);
+        c2ps[i++] = list_entry(lh, c2_page_t, list);
+        nr_pages -= PAGES_PER_C2P;
+    }
+    spin_unlock(&castle_cache_reservelist_lock);
+#ifdef CASTLE_DEBUG
+    for (i--; i >= 0; i--)
+    {
+        debug("Got c2p id=%d from reservelist.\n", c2ps[i]->id);
+    }
+#endif
+    BUG_ON(nr_pages > 0); /* verify we got nr_pages of c2ps */
 
     return c2ps;
 }
@@ -2074,6 +2202,32 @@ static c2_block_t* castle_cache_block_freelist_get(void)
         castle_cache_block_freelist_size--;
     }
     spin_unlock(&castle_cache_freelist_lock);
+
+    return c2b;
+}
+
+/**
+ * Return a c2b from the reservelist if one exists.
+ *
+ * @return      c2b from the reservelist
+ * @return NULL reservelist is empty
+ */
+static c2_block_t *castle_cache_block_reservelist_get(void)
+{
+    struct list_head *lh;
+    c2_block_t *c2b = NULL;
+
+    BUG_ON(current != castle_cache_flush_thread);
+
+    spin_lock(&castle_cache_reservelist_lock);
+    if (atomic_read(&castle_cache_block_reservelist_size) > 0)
+    {
+        lh = castle_cache_block_reservelist.next;
+        list_del(lh);
+        c2b = list_entry(lh, c2_block_t, reserve);
+        atomic_dec(&castle_cache_block_reservelist_size);
+    }
+    spin_unlock(&castle_cache_reservelist_lock);
 
     return c2b;
 }
@@ -2111,7 +2265,8 @@ static int castle_cache_pages_get(c_ext_pos_t cep,
             freed_c2ps_cnt++;
             c2ps[i] = c2p;
             BUG_ON(c2p == NULL);
-        } else
+        }
+        else
         {
             atomic_add(PAGES_PER_C2P, &castle_cache_clean_pages);
             if (LOGICAL_EXTENT(cep.ext_id))
@@ -2296,7 +2451,7 @@ static inline int c2b_busy(c2_block_t *c2b, int expected_count)
 }
 
 /**
- * Return c2bs (and associated c2ps) from the cleanlist to the freelist.
+ * Pick c2bs (and associated c2ps) to move from the cleanlist to freelist.
  *
  * - Return immediately if clean blocks make up < 10% of the cache.
  * - Evict softpin blocks if softpin blocks make up 1/2 of the cleanlist.
@@ -2304,8 +2459,9 @@ static inline int c2b_busy(c2_block_t *c2b, int expected_count)
  * - If we weren't able to evict BATCH_FREE blocks then victimise softpin blocks
  *   and try again.
  *
- * @return 0    No victims found (or cleanlist too small)
- * @return 1    Victims found
+ * @return 0    Victims found
+ * @return 1    No victims found
+ * @return 2    Cleanlist too small (caller to force flush)
  */
 static int castle_cache_block_hash_clean(void)
 {
@@ -2321,11 +2477,20 @@ static int castle_cache_block_hash_clean(void)
     /* Initialise. */
     nr_victims = nr_pages = victimise_softpin = 0;
 
-    /* Return immediately if the cleanlist is < 10% of the cache. */
-    clean = atomic_read(&castle_cache_clean_pages);
-    dirty = atomic_read(&castle_cache_dirty_pages);
-    if (clean < (clean + dirty) / 10)
-        return 0;
+    /* Return immediately if the c2p cleanlist is < 10% of the cache.
+     *
+     * By doing this we expect the caller to wake the flush thread to write back
+     * dirty c2ps to disk and placing them onto the cleanlist.
+     *
+     * If we are the flush thread, skip this check and instead attempt to return
+     * as much as we can to the freelist so the active flush can progress. */
+    if (likely(current != castle_cache_flush_thread))
+    {
+        clean = atomic_read(&castle_cache_clean_pages);
+        dirty = atomic_read(&castle_cache_dirty_pages);
+        if (clean < (clean + dirty) / 10)
+            return 2;
+    }
 
     /* Victimise softpin blocks if they make up more than half the cleanlist. */
     clean   = atomic_read(&castle_cache_cleanlist_size);
@@ -2351,11 +2516,12 @@ static int castle_cache_block_hash_clean(void)
              *     that no longer exists.  This allows us to correctly evict softpinned blocks from
              *     extents that have now been removed - by targetting the start of window block we
              *     unpin and demote those other blocks from the window.
-             * (4) Must be either transient or non-logical.  @TODO Long term solution: pools. */
+             * (4) Must be transient or from an evictable extent (i.e. not from the super, micro or
+             *     mstore extents).  @TODO longer term solution: pools. */
             if (!c2b_busy(c2b, 0) /* (1) */
                     && (victimise_softpin || !c2b_softpin(c2b) /* (2) */
                         || (c2b_windowstart(c2b) && !castle_extent_exists(c2b->cep.ext_id))) /*(3)*/
-                    && (c2b_transient(c2b) || !LOGICAL_EXTENT(c2b->cep.ext_id))) /* (4) */
+                    && (c2b_transient(c2b) || EVICTABLE_EXTENT(c2b->cep.ext_id))) /* (4) */
             {
                 debug("Found a %svictim.\n", c2b_softpin(c2b) ? "softpin " : "");
 
@@ -2399,19 +2565,19 @@ static int castle_cache_block_hash_clean(void)
     spin_unlock_irq(&castle_cache_block_hash_lock);
 
     /* We couldn't find any victims */
-    if(hlist_empty(&victims))
+    if (hlist_empty(&victims))
     {
-        if(nr_pages > castle_cache_size / 2)
+        if (nr_pages > castle_cache_size / 2)
         {
             static atomic_t nr_allowed = ATOMIC_INIT(1000);
             
             castle_printk(LOG_WARN, "Couldn't find a victim page in %d pages, cache size %d\n",
                     nr_pages, castle_cache_size);
-            if(atomic_dec_and_test(&nr_allowed)) 
+            if (atomic_dec_and_test(&nr_allowed))
                 BUG();
         }
         debug("No victims found!!\n");
-        return 0;
+        return 1;
     }
 
     /* Remove victims from hash and return them to the freelist. */
@@ -2421,7 +2587,7 @@ static int castle_cache_block_hash_clean(void)
         castle_cache_block_free(c2b);
     }
 
-    return 1;
+    return 0;
 }
 
 /**
@@ -2479,30 +2645,69 @@ int castle_cache_block_destroy(c2_block_t *c2b)
 /**
  * Grow the freelists until we have nr_c2bs and nr_pages free.
  *
+ * If we are unable to return enough c2bs & c2ps to the freelist then wake the
+ * flush thread so dirty pages get written back to disk.
+ *
+ * If we are the flush thread then return before waking the flush thread after
+ * checking that the reservelist is capable of satisfying the request.
+ *
  * @param nr_c2bs   Minimum number of c2bs we need freed up
  * @param nr_pages  Minimum number of pages we need freed up
  *
  * @also castle_cache_block_hash_clean()
+ * @also castle_extent_remap()
  */
 static void castle_cache_freelists_grow(int nr_c2bs, int nr_pages)
 {
-    int flush_seq, success = 0;
+    int flush_seq, success;
 
-    while(!castle_cache_block_hash_clean())
+    while (castle_cache_block_hash_clean() != EXIT_SUCCESS)
     {
         debug("Failed to clean the hash.\n");
-        /* Someone might have freed some pages, even though we failed. 
-           We need to check that, in case hash is empty, and we will never 
-           manage to free anything. */
+
+        /* The cache is < 10% clean pages or we failed to find any clean pages.
+         *
+         * Another thread might have raced us in castle_cache_block_hash_clean()
+         * so get the relevant lock and check whether the freelist can satisfy
+         * our request. */
         flush_seq = atomic_read(&castle_cache_flush_seq);
+
         spin_lock(&castle_cache_freelist_lock);
-        if((castle_cache_page_freelist_size * PAGES_PER_C2P >= nr_pages) &&
-           (castle_cache_block_freelist_size >= nr_c2bs))
-           success = 1; 
+        success = (castle_cache_page_freelist_size * PAGES_PER_C2P >= nr_pages)
+            && (castle_cache_block_freelist_size >= nr_c2bs);
         spin_unlock(&castle_cache_freelist_lock);
-        if(success) return;
-        /* If we haven't found any !busy buffers in the clean list 
-           its likely because they are dirty. Schedule a writeout. */
+
+        if (success)
+            return;
+
+        /* If we're the flush thread the reservelist should now be capable of
+         * satisfying our request.  We raced with castle_extent_remap() if it
+         * isn't - in this case, wait and then try cleaning the hash again. */
+        if (unlikely(current == castle_cache_flush_thread))
+        {
+            int c2p_size, c2b_size;
+
+            spin_lock(&castle_cache_reservelist_lock);
+            c2p_size = atomic_read(&castle_cache_page_reservelist_size);
+            c2b_size = atomic_read(&castle_cache_block_reservelist_size);
+            success = (c2p_size * PAGES_PER_C2P >= nr_pages)
+                && (c2b_size >= nr_c2bs);
+            spin_unlock(&castle_cache_reservelist_lock);
+
+            if (likely(success))
+                return;
+            else
+            {
+                /* Raced with castle_extent_remap().  Wait for it to complete
+                 * and call castle_cache_page_block_unreserve() to release a
+                 * c2b back to the reservelist. */
+                msleep(500);
+                continue;
+            }
+        }
+
+        /* If there are still no clean c2bs then wake the flush thread so any
+         * dirty c2bs get written back to disk and placed on the cleanlist. */
         debug("Could not clean the hash table. Waking flush.\n");
         castle_cache_flush_wakeup();
         /* Make sure at least one extra IO is done */
@@ -2546,7 +2751,7 @@ c2_block_t* _castle_cache_block_get(c_ext_pos_t cep, int nr_pages, int transient
         /* Try to find in the hash first */
         c2b = castle_cache_block_hash_get(cep, nr_pages); 
         debug("Found in hash: %p\n", c2b);
-        if(c2b) 
+        if (c2b)
         {
             /* Make sure that the number of pages agrees */
             BUG_ON(c2b->nr_pages != nr_pages);
@@ -2574,34 +2779,41 @@ c2_block_t* _castle_cache_block_get(c_ext_pos_t cep, int nr_pages, int transient
             }
         }
 #endif
+
+        /* c2b couldn't be found in the hash.
+         *
+         * Try and get c2b and c2ps from the freelists.
+         *
+         * If we are the flush thread then attempt to get c2b/c2ps from the
+         * reservelist before calling the _freelist_grow() function. */
         do {
-            debug("Trying to allocate c2b from freelist.\n");
             c2b = castle_cache_block_freelist_get();
-            if(!c2b)
+            if (unlikely(!c2b))
             {
-                debug("Failed to allocate c2b from freelist. Growing freelist.\n");
-                /* If freelist is empty, we need to recycle some buffers */
-                castle_cache_block_freelist_grow(); 
+                if (unlikely(current == castle_cache_flush_thread))
+                    c2b = castle_cache_block_reservelist_get();
+                else
+                    castle_cache_block_freelist_grow();
             }
-        } while(!c2b);
-        /* Then get as many c2ps as required */
+        } while (!c2b);
         do {
-            debug("Trying to allocate c2ps from freelist.\n");
             c2ps = castle_cache_page_freelist_get(nr_pages); 
-            if(!c2ps)
+            if (unlikely(!c2ps))
             {
-                debug("Failed to allocate c2ps from freelist. Growing freelist.\n");
-                /* If freelist is empty, we need to recycle some buffers */
-                castle_cache_page_freelist_grow(nr_pages); 
+                if (unlikely(current == castle_cache_flush_thread))
+                    c2ps = castle_cache_page_reservelist_get(nr_pages);
+                else
+                    castle_cache_page_freelist_grow(nr_pages);
             }
-        } while(!c2ps);
+        } while (!c2ps);
+
         /* Initialise the buffer */
         debug("Initialising the c2b: %p\n", c2b);
         castle_cache_block_init(c2b, cep, c2ps, nr_pages);
         get_c2b(c2b);
         /* Try to insert into the hash, can fail if it is already there */
         debug("Trying to insert\n");
-        if(!castle_cache_block_hash_insert(c2b, transient))
+        if (!castle_cache_block_hash_insert(c2b, transient))
         {
             castle_printk(LOG_WARN, "Failed to insert c2b into hash "cep_fmt_str"\n", cep2str(cep));
             put_c2b(c2b);
@@ -2625,6 +2837,35 @@ c2_block_t* _castle_cache_block_get(c_ext_pos_t cep, int nr_pages, int transient
 c2_block_t* castle_cache_block_get(c_ext_pos_t cep, int nr_pages)
 {
     return _castle_cache_block_get(cep, nr_pages, 0);
+}
+
+/**
+ * Release reservation on c2b and immediately place on relevant freelist.
+ *
+ * Private interface for castle_extent_remap() to remove a previously made c2b
+ * reservation.  This is required for the c2b/c2p reservelist to always be
+ * capable of satisfying demands on c2bs, even when the remap thread is making
+ * changes to otherwise static metaextent pages.
+ *
+ * The caller should have a reservation for the duration of the time it holds
+ * a metaextent c2b for writing.
+ *
+ * - Put reference on c2b
+ * - Wake up the flush thread
+ *
+ * @also castle_extent_remap()
+ * @also castle_cache_page_block_reserve()
+ * @also castle_cache_freelists_grow()
+ */
+void castle_cache_page_block_unreserve(c2_block_t *c2b)
+{
+    BUG_ON(!EXT_ID_RESERVE(c2b->cep.ext_id));
+    BUG_ON(atomic_read(&c2b->count) != 1);
+
+    put_c2b(c2b);
+
+    atomic_inc(&castle_cache_flush_seq);
+    wake_up(&castle_cache_flush_wq);
 }
 
 /*******************************************************************************
@@ -2963,7 +3204,7 @@ static inline c2_pref_window_t* c2_pref_window_closest_find(struct rb_node *n,
     /* Save provided window rb_node ptr.  It is guaranteed to satisfy cep. */
     p = n;
 
-    do { 
+    do {
         /* Check next entry satisfies cep. */
         n = rb_next(n);
         if(!n)
@@ -3919,8 +4160,7 @@ static int castle_cache_flush(void *unused)
 #define MAX_FLUSH_SIZE     (4*1024)
 #define MIN_FLUSH_FREQ     5        /* Min flush rate: 5*128 pgs/s = 2.5 MB/s. */
 
-#define FLUSH_BATCH        64
-    c2_block_t *c2b_batch[FLUSH_BATCH];
+    c2_block_t *c2b_batch[CASTLE_CACHE_FLUSH_BATCH_SIZE];
     atomic_t in_flight;
 
     /* We'll try to maintain # dirty pages at this */
@@ -3976,7 +4216,7 @@ static int castle_cache_flush(void *unused)
         if(exiting || (flush_size > dirty_pgs))
             flush_size = dirty_pgs;
 
-        /* Submit the IOs in batches of at most FLUSH_BATCH */ 
+        /* Submit the IOs in batches of at most CASTLE_CACHE_FLUSH_BATCH_SIZE */
         to_flush = flush_size;
         debug("====> Flushing: %d pages out of %d dirty.\n", to_flush, dirty_pgs);
 next_batch:        
@@ -4008,7 +4248,7 @@ next_batch:
                effective batch size. */ 
             to_flush -= castle_cache_c2b_to_pages(c2b);
             c2b_batch[batch_idx++] = c2b;
-            if(batch_idx >= FLUSH_BATCH)
+            if(batch_idx >= CASTLE_CACHE_FLUSH_BATCH_SIZE)
                 break;
         }
         spin_unlock_irq(&castle_cache_block_hash_lock);
@@ -4026,7 +4266,7 @@ next_batch:
         /* We may have to flush more than one batch */
         if(exiting || (to_flush > 0))
         {
-            if(batch_idx == FLUSH_BATCH)
+            if(batch_idx == CASTLE_CACHE_FLUSH_BATCH_SIZE)
                 goto next_batch; 
             /* If we still have buffers to flush, but we could not lock 
                enough dirty buffers print a warning message, and stop.
@@ -4332,21 +4572,35 @@ static void castle_cache_c2b_init(c2_block_t *c2b)
     INIT_HLIST_NODE(&c2b->hlist);
     /* This effectively also does:
         INIT_LIST_HEAD(&c2b->dirty);
-        INIT_LIST_HEAD(&c2b->clean); */
+        INIT_LIST_HEAD(&c2b->clean);
+        INIT_LIST_HEAD(&c2b->reserve); */
     INIT_LIST_HEAD(&c2b->free);
 }
 
+/**
+ * Initialise freelists (handles c2bs and c2ps).
+ *
+ * - Zero the c2b and c2p arrays
+ * - Initialise individual array elements
+ * - Place CASTLE_CACHE_RESERVELIST_QUOTA c2bs/c2ps onto respective
+ *   meta-extent reserve freelists
+ * - Place remaining c2bs/c2ps onto respective freelists
+ *
+ * @also castle_cache_freelists_fini()
+ */
 static int castle_cache_freelists_init(void)
 {
     int i;
 
-    if(!castle_cache_blks || !castle_cache_pgs)
+    if (!castle_cache_blks || !castle_cache_pgs)
         return -ENOMEM;
 
     memset(castle_cache_blks, 0, sizeof(c2_block_t) * castle_cache_block_freelist_size);
     memset(castle_cache_pgs,  0, sizeof(c2_page_t)  * castle_cache_page_freelist_size);
-    /* Init the c2p freelist */
-    for(i=0; i<castle_cache_page_freelist_size; i++)
+
+    /* Initialise the c2p freelist and meta-extent reserve freelist. */
+    BUG_ON(CASTLE_CACHE_RESERVELIST_QUOTA >= castle_cache_page_freelist_size);
+    for (i = 0; i < castle_cache_page_freelist_size; i++)
     {
         c2_page_t *c2p = castle_cache_pgs + i;
 
@@ -4354,22 +4608,46 @@ static int castle_cache_freelists_init(void)
 #ifdef CASTLE_DEBUG
         c2p->id = i;
 #endif
-        /* Add c2p to page_freelist */
-        list_add(&c2p->list, &castle_cache_page_freelist);
+
+        /* Thread c2p onto the relevant freelist. */
+        if (unlikely(i < CASTLE_CACHE_RESERVELIST_QUOTA))
+            list_add(&c2p->list, &castle_cache_page_reservelist);
+        else
+            list_add(&c2p->list, &castle_cache_page_freelist);
     }
-    /* Init the c2b freelist */
-    for(i=0; i<castle_cache_block_freelist_size; i++)
+    /* Finish by adjusting the freelist sizes. */
+    castle_cache_page_freelist_size  -= CASTLE_CACHE_RESERVELIST_QUOTA;
+    atomic_set(&castle_cache_page_reservelist_size, CASTLE_CACHE_RESERVELIST_QUOTA);
+
+    /* Initialise the c2b freelist and meta-extent reserve freelist. */
+    BUG_ON(CASTLE_CACHE_RESERVELIST_QUOTA >= castle_cache_block_freelist_size);
+    for (i = 0; i < castle_cache_block_freelist_size; i++)
     {
         c2_block_t *c2b = castle_cache_blks + i; 
 
         castle_cache_c2b_init(c2b);
-        /* Add c2b to block_freelist */
-        list_add(&c2b->free, &castle_cache_block_freelist);
+
+        /* Thread c2b onto the relevant freelist. */
+        if (unlikely(i < CASTLE_CACHE_RESERVELIST_QUOTA))
+        {
+            list_add(&c2b->reserve, &castle_cache_block_reservelist);
+            atomic_inc(&castle_cache_block_reservelist_size);
+        }
+        else
+            list_add(&c2b->free, &castle_cache_block_freelist);
     }
+    /* Finish by adjust the freelist sizes. */
+    castle_cache_block_freelist_size -= CASTLE_CACHE_RESERVELIST_QUOTA;
+    atomic_set(&castle_cache_block_reservelist_size, CASTLE_CACHE_RESERVELIST_QUOTA);
 
     return 0;
 }
 
+/**
+ * Free the freelists.
+ *
+ * @also castle_cache_freelists_init()
+ */
 static void castle_cache_freelists_fini(void)
 {
     struct list_head *l, *t;
@@ -4379,15 +4657,16 @@ static void castle_cache_freelists_fini(void)
     c2_block_t *c2b;
 #endif    
 
-    if(!castle_cache_blks || !castle_cache_pgs)
+    if (!castle_cache_blks || !castle_cache_pgs)
     {
-        if(castle_cache_blks)
+        if (castle_cache_blks)
             castle_vfree(castle_cache_blks);
-        if(castle_cache_pgs)
+        if (castle_cache_pgs)
             castle_vfree(castle_cache_pgs);
         return;
     }
 
+    list_splice(&castle_cache_page_reservelist, &castle_cache_page_freelist);
     list_for_each_safe(l, t, &castle_cache_page_freelist)
     {
         list_del(l);
@@ -4397,6 +4676,7 @@ static void castle_cache_freelists_fini(void)
     }
 
 #ifdef CASTLE_DEBUG     
+    list_splice(&castle_cache_block_reservelist, &castle_cache_block_freelist);
     list_for_each_safe(l, t, &castle_cache_block_freelist)
     {
         list_del(l);

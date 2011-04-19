@@ -2045,10 +2045,8 @@ static int castle_extent_remap(c_ext_t *ext)
          */
         if (remap_idx)
         {
-            c_ext_pos_t cep;
-            c2_block_t  *c2b;
-            c_ext_pos_t map_cep, map_page_cep;
-            c2_block_t * map_c2b;
+            c_ext_pos_t cep, map_cep, map_page_cep;
+            c2_block_t *c2b, *map_c2b, *reserve_c2b;
 
             /*
              * If a chunk has been remapped, read it in (via the old map) and write it out (using
@@ -2093,7 +2091,12 @@ static int castle_extent_remap(c_ext_t *ext)
             memcpy(&map_page_cep, &map_cep, sizeof(c_ext_pos_t));
             map_page_cep.offset = MASK_BLK_OFFSET(map_page_cep.offset);
 
-            /* Get the c2b for the page containing the map cep */
+            /* Get the c2b for the page containing the map cep.
+             *
+             * In order to prevent a situation where we have no reserve c2b/c2ps
+             * for the flush thread, make a single page c2b reservation and
+             * release it once we've finished dirtying the map_c2b. */
+            reserve_c2b = castle_cache_page_block_reserve();
             map_c2b = castle_cache_page_block_get(map_page_cep);
 
             write_lock_c2b(map_c2b);
@@ -2108,6 +2111,7 @@ static int castle_extent_remap(c_ext_t *ext)
 
             write_unlock_c2b(map_c2b);
             put_c2b(map_c2b);
+            castle_cache_page_block_unreserve(reserve_c2b);
         }
 
         /* Keep count of the chunks that have actually been remapped. */

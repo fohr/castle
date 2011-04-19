@@ -160,6 +160,8 @@ typedef uint32_t block_t;
  * stored in extent superblock itself. */
 #define LOGICAL_EXTENT(_ext_id)        ((_ext_id) < EXT_SEQ_START && !EXT_ID_INVAL(_ext_id))
 #define SUPER_EXTENT(_ext_id)          (((_ext_id) >= SUP_EXT_ID) && ((_ext_id) < slave_id_to_sup_ext(MAX_NR_SLAVES)))
+#define EVICTABLE_EXTENT(_ext_id)      ((_ext_id) >= EXT_SEQ_START || (_ext_id) == META_EXT_ID  \
+                                            || EXT_ID_INVAL(_ext_id))
 
 typedef uint32_t c_chk_cnt_t;
 typedef uint32_t c_chk_t;
@@ -171,6 +173,8 @@ typedef uint32_t c_uuid_t;
 
 #define INVAL_EXT_ID                    (-1)
 #define EXT_ID_INVAL(_id)               ((_id) == INVAL_EXT_ID)
+#define RESERVE_EXT_ID                  (-2)        /**< See castle_cache_page_block_unreserve(). */
+#define EXT_ID_RESERVE(_id)             ((_id) == RESERVE_EXT_ID)
 #define INVAL_SLAVE_ID                  (0)
 
 struct castle_chunk_sequence {

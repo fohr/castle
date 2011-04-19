@@ -71,16 +71,18 @@ typedef enum {
  */
 typedef enum {
     TRACE_CACHE_CHECKPOINT_ID,          /**< Checkpoint running.                                */
-    TRACE_CACHE_DIRTY_PGS_ID,
-    TRACE_CACHE_CLEAN_PGS_ID,
-    TRACE_CACHE_FREE_PGS_ID,
-    TRACE_CACHE_FREE_BLKS_ID,
-    TRACE_CACHE_CLEAN_BLKS_ID,
-    TRACE_CACHE_SOFTPIN_BLKS_ID,
-    TRACE_CACHE_BLOCK_VICTIMS_ID,
-    TRACE_CACHE_SOFTPIN_VICTIMS_ID,
-    TRACE_CACHE_READS_ID,
-    TRACE_CACHE_WRITES_ID,
+    TRACE_CACHE_DIRTY_PGS_ID,           /**< Number of c2ps on the dirtylist.                   */
+    TRACE_CACHE_CLEAN_PGS_ID,           /**< Number of c2ps on the cleanlist.                   */
+    TRACE_CACHE_FREE_PGS_ID,            /**< Number of c2ps on the freelist.                    */
+    TRACE_CACHE_RESERVE_PGS_ID,         /**< Number of c2ps on the reserve freelist.            */
+    TRACE_CACHE_CLEAN_BLKS_ID,          /**< Number of c2bs on the cleanlist.                   */
+    TRACE_CACHE_FREE_BLKS_ID,           /**< Number of c2bs on the freelist.                    */
+    TRACE_CACHE_RESERVE_BLKS_ID,        /**< Number of c2bs on the reserve freelist.            */
+    TRACE_CACHE_SOFTPIN_BLKS_ID,        /**< Number of softpin c2bs in the cache.               */
+    TRACE_CACHE_BLOCK_VICTIMS_ID,       /**< Number of c2bs evicted from the cache.             */
+    TRACE_CACHE_SOFTPIN_VICTIMS_ID,     /**< Number of softpinned c2bs evicted from the cache.  */
+    TRACE_CACHE_READS_ID,               /**< Number of reads this tick.                         */
+    TRACE_CACHE_WRITES_ID,              /**< Number of writes this tick.                        */
 } c_trc_cache_var_t;
 
 /**
@@ -101,7 +103,7 @@ typedef enum {
 #define MERGE_END_FLAG      (1U<<1)
 
 /* Bump the magic version byte (LSB) when c_trc_evt_t changes. */
-#define CASTLE_TRACE_MAGIC          0xCAE5E10C
+#define CASTLE_TRACE_MAGIC          0xCAE5E10D
 typedef struct castle_trace_event {
     uint32_t                    magic;
     struct timeval              timestamp;
