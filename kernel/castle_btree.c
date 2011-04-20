@@ -1560,7 +1560,7 @@ static void castle_btree_io_end(c_bvec_t    *c_bvec,
     castle_btree_c2b_forget(c_bvec);
     castle_btree_c2b_forget(c_bvec);
     /* Finish the IO */
-    c_bvec->endfind(c_bvec, err, cvt);
+    c_bvec->submit_complete(c_bvec, err, cvt);
 }
 
 static void USED castle_btree_node_print(struct castle_btree_type *t, struct castle_btree_node *node)

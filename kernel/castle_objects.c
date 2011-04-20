@@ -656,165 +656,6 @@ struct castle_iterator_type castle_objects_rq_iter = {
 /* High level interface functions */
 /**********************************************************************************************/
 
-
-/**
- * Callback to allocate space for a btree write (insert/replace/delete).
- *
- * @param c_bvec [in]   Describes write request
- * @param prev_cvt [in] INVAL_VAL_TUP for inserts
- *                      Previous cvt for replaces/deletes
- * @param cvt [out]     Resulting cvt
- *
- * - Inline values:  Populate cvt as necessary
- * - Medium objects: Allocate space in data extent and populate cvt
- * - Large objects:  Allocate extent and populate cvt
- * - Tombstones:     Populate cvt as necessary
- * - For replaces/deletes free up medium object or large object extents
- *   used by the to-be-replaced prev_cvt
- *
- * @also castle_btree_write_process()
- */
-static int castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
-                                         c_val_tup_t  prev_cvt,
-                                         c_val_tup_t *cvt)
-{
-    struct castle_object_replace *replace = c_bvec->c_bio->replace;
-    int tombstone = c_bvec_data_del(c_bvec); 
-    int nr_blocks;
-    int prev_large_ext_chk_cnt;
-
-    /* We should be handling a write (possibly a tombstone write). */
-    BUG_ON(c_bvec_data_dir(c_bvec) != WRITE); 
-    /* Some sanity checks */
-    BUG_ON(!CVT_LEAF_VAL(prev_cvt) && !CVT_INVALID(prev_cvt));
-    BUG_ON(CVT_TOMB_STONE(prev_cvt) && (prev_cvt.length != 0));
-
-    /* Allocate space for new value, in or out of line */ 
-    if(!tombstone)
-    {
-        cvt->length = replace->value_len;
-
-        /* Decide whether to use inline, or out-of-line value on the 
-           basis of this length. */
-        if (replace->value_len <= MAX_INLINE_VAL_SIZE)
-        {
-            CVT_INLINE_SET(*cvt, replace->value_len, NULL);
-            cvt->val  = castle_malloc(cvt->length, GFP_NOIO);
-            /* @TODO: Work out how to handle this */
-            BUG_ON(!cvt->val);
-            /* We should not inline values which do not fit in a packet */
-            BUG_ON(replace->data_length_get(replace) < cvt->length);
-            replace->data_copy(replace, cvt->val, cvt->length, 0 /* not partial */); 
-        }
-        else /* On-disk objects. (Medium or Large Objects) */
-        {
-            uint32_t nr_chunks;
-            c_ext_pos_t cep;
-            uint32_t prev_nr_blocks;
-
-            nr_blocks = (cvt->length - 1) / C_BLK_SIZE + 1; 
-            nr_chunks = (cvt->length - 1) / C_CHK_SIZE + 1; 
-            prev_nr_blocks = (prev_cvt.length - 1) / C_BLK_SIZE + 1;
-
-            if (replace->value_len <= MEDIUM_OBJECT_LIMIT)
-            { /* Medium Objects. */
-                if (CVT_MEDIUM_OBJECT(prev_cvt) && (prev_nr_blocks >= nr_blocks))
-                {
-                    castle_ext_freespace_free(&c_bvec->tree->data_ext_free,
-                                               nr_blocks * C_BLK_SIZE);
-                    debug("Freeing %u blks from %p|%p\n", nr_blocks, c_bvec,
-                                                             c_bvec->tree);
-                    CVT_MEDIUM_OBJECT_SET(*cvt, replace->value_len, prev_cvt.cep);
-                }
-                else
-                {
-                    BUG_ON(castle_ext_freespace_get(&c_bvec->tree->data_ext_free,
-                                                     nr_blocks * C_BLK_SIZE,
-                                                     1,
-                                                    &cep) < 0);
-                    CVT_MEDIUM_OBJECT_SET(*cvt, replace->value_len, cep);
-                }
-                debug("Medium Object in %p, cep: "cep_fmt_str_nl, c_bvec->tree,
-                                                   __cep2str(cvt->cep));
-            }
-            else 
-            { /* Large Objects. */
-                cep.ext_id = castle_extent_alloc(DEFAULT_RDA, c_bvec->tree->da, 
-                                                 EXT_T_LARGE_OBJECT,
-                                                 nr_chunks);
-                cep.offset = 0;
-
-                if (EXT_ID_INVAL(cep.ext_id))
-                {
-                    castle_printk(LOG_WARN, "Failed to allocate space for Large Object.\n");
-                    return -ENOSPC;
-                }
-
-                if (castle_ct_large_obj_add(cep.ext_id, replace->value_len,
-                                            &c_bvec->tree->large_objs,
-                                            &c_bvec->tree->lo_mutex))
-                {
-                    castle_printk(LOG_WARN, "Failed to intialize large object\n");
-                    return -ENOMEM;
-                }
-
-                /* Update the large object chunk count on the tree */
-                atomic64_add(nr_chunks, &c_bvec->tree->large_ext_chk_cnt);
-
-                CVT_LARGE_OBJECT_SET(*cvt, replace->value_len, cep);
-
-
-                debug("Creating Large Object of size - %u\n", nr_chunks);
-                /* @TODO: Again, work out how to handle failed allocations */ 
-                BUG_ON(EXT_POS_INVAL(cvt->cep));
-            }
-        }
-    } else
-    /* For tombstones, construct the cvt and exit. */
-    {
-        CVT_TOMB_STONE_SET(*cvt);
-    }
-
-    /* If there was an out-of-line object stored under this key, release it. */
-    /* Note: Not handling Medium objects. They may create holes. But, its fine
-     * as it is just in T0. */
-    BUG_ON(CVT_MEDIUM_OBJECT(prev_cvt) &&
-           (prev_cvt.cep.ext_id != c_bvec->tree->data_ext_free.ext_id));
-
-    /* Free Old Large Object */
-    if (CVT_LARGE_OBJECT(prev_cvt))
-    {
-        /* Update the large object chunk count on the tree */
-        prev_large_ext_chk_cnt = castle_extent_size_get(prev_cvt.cep.ext_id);
-        atomic64_sub(prev_large_ext_chk_cnt, &c_bvec->tree->large_ext_chk_cnt);
-        debug("Freeing Large Object of size - %u\n", prev_large_ext_chk_cnt);
-        castle_ct_large_obj_remove(prev_cvt.cep.ext_id, 
-                                  &c_bvec->tree->large_objs, 
-                                  &c_bvec->tree->lo_mutex);
-    }
-    BUG_ON(CVT_INVALID(*cvt));
-    FAULT(REPLACE_FAULT);
-
-    return 0;
-}
-
-static int castle_object_reference_get(c_bvec_t    *c_bvec,
-                                       c_val_tup_t  cvt)
-{
-    BUG_ON(c_bvec_data_dir(c_bvec) != READ);
-
-    if (CVT_LARGE_OBJECT(cvt))
-        BUG_ON(!castle_extent_get(cvt.cep.ext_id));
-
-    return 0;
-}
-
-static void castle_object_reference_release(c_val_tup_t cvt)
-{
-    if (CVT_LARGE_OBJECT(cvt))
-        castle_extent_put(cvt.cep.ext_id);
-}
-
 #define OBJ_IO_MAX_BUFFER_SIZE      (10)    /* In C_BLK_SIZE blocks */
 
 static c_ext_pos_t  castle_object_write_next_cep(c_ext_pos_t  old_cep,
@@ -971,27 +812,63 @@ static int castle_object_data_write(struct castle_object_replace *replace)
 
     return (data_length == 0);
 }
-                                     
 
-void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
-                                    int err,
-                                    c_val_tup_t cvt)
+/**
+ * Frees up the large object specified by the CVT provided to this function.
+ * It deals with accounting, large object refcounting and extent freeing (the last two
+ * indirectly through the DA code).
+ */
+static void castle_object_replace_large_object_free(struct castle_component_tree *ct,
+                                                    c_val_tup_t cvt)
+{
+    uint64_t chk_cnt;
+
+    BUG_ON(!CVT_LARGE_OBJECT(cvt));
+    /* Update the large object chunk count on the tree */
+    chk_cnt = castle_extent_size_get(cvt.cep.ext_id);
+    atomic64_sub(chk_cnt, &ct->large_ext_chk_cnt);
+    debug("Freeing Large Object of size - %u\n", chk_cnt);
+    castle_ct_large_obj_remove(cvt.cep.ext_id,
+                               &ct->large_objs,
+                               &ct->lo_mutex);
+}
+
+/**
+ * Wraps up object replace operation after either:
+ * - btree insertion was completed
+ * - there was an error allocating space for the value/btree
+ * - the replace was cancelled
+ *
+ * Specifically this function is responsible for storing the last key (if that was requested),
+ * freeing the btree key structure, freeing up large object extents on errors, freeing up the
+ * BIO structure and releasing the reference on CT.
+ *
+ * It calls back to the user, unless the replace operation was cancelled by the user (in which
+ * case it already knows).
+ */
+static void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
+                                           int err,
+                                           c_val_tup_t cvt)
 {
     struct castle_object_replace *replace = c_bvec->c_bio->replace;
     c_bio_t *c_bio = c_bvec->c_bio;
-    c2_block_t *c2b = NULL;
-    int complete_write = 0;
+    struct castle_component_tree *ct = c_bvec->tree;
+    int cancelled;
 
-    replace->ct = c_bvec->tree;
     castle_debug_bio_deregister(c_bio);
+    /* This function is used to cleanup when cancelling a request, with err set to -EPIPE. */
+    cancelled = (err == -EPIPE);
 
     /* Sanity checks on the bio */
-    BUG_ON(c_bvec_data_dir(c_bvec) != WRITE); 
+    BUG_ON(c_bvec_data_dir(c_bvec) != WRITE);
     BUG_ON(atomic_read(&c_bio->count) != 1);
     BUG_ON(c_bio->err != 0);
+    BUG_ON(replace->data_c2b);
+    BUG_ON(memcmp(&replace->cvt, &cvt, sizeof(c_val_tup_t)));
 
     debug("castle_object_replace_complete\n");
 
+    /* Save the last key, if the relevant module parameter is set, and there wasn't an error. */
     if (castle_latest_key && !err)
     {
         mutex_lock(&c_bvec->tree->last_key_mutex);
@@ -1006,58 +883,40 @@ void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
     /* Free the key */
     castle_object_bkey_free(c_bvec->key);
 
-    /* Deal with error case first */
-    if(err)
-    {
-        if (replace->ct)
-            castle_ct_put(replace->ct, 1);
-        replace->complete(replace, err);
-        castle_utils_bio_free(c_bio);
-        return;
-    }
+    if(err && !cancelled)
+        castle_printk(LOG_WARN, "Failed to insert into btree.\n");
 
-    /* Otherwise, write the entry out. */
-    BUG_ON(!CVT_LEAF_VAL(cvt));
-    if(CVT_ONDISK(cvt))
-    {
-        BUG_ON(c_bvec_data_del(c_bvec));
-        c2b = castle_object_write_buffer_alloc(cvt.cep, cvt.length); 
-        
-        replace->data_c2b = c2b;
-        replace->data_c2b_offset = 0;
-        replace->data_length = cvt.length;
-        
-        if (replace->data_length_get(replace) > 0)
-            complete_write = castle_object_data_write(replace);
-    
-        c2b = replace->data_c2b;
-    }
-    else 
-    if(CVT_INLINE(cvt))
-    {
-        complete_write = 1;
-        castle_free(cvt.val);
-    }
-    else /* tombstone */
-        complete_write = 1;
-        
-    /* Unlock buffers, and complete the call if we are done already */
-    if(complete_write)
-    {
-        debug("Completing the write. c2b=%p\n", c2b);
-        if(c2b)
-            put_c2b(c2b);
- 
-        castle_ct_put(replace->ct, 1);
-        replace->complete(replace, 0);
-    } else
-    /* Complete the packet, so that the client sends us more. */
-    {
-        debug("Completing the packet, continuing the rest of the write.\n");
-        replace->replace_continue(replace);
-    }
+    /* If there was an error inserting on large objects, free the extent.
+       If the replace was cancelled (err == -EPIPE), don't do it. */
+    if(err && CVT_LARGE_OBJECT(cvt))
+        castle_object_replace_large_object_free(c_bvec->tree, cvt);
 
+    /* Free the bio. */
     castle_utils_bio_free(c_bio);
+
+    /* Drop the CT ref. */
+    if (ct)
+        castle_ct_put(ct, 1);
+
+    /* Tell the client everything is finished. */
+    if(!cancelled)
+        replace->complete(replace, err);
+}
+
+/**
+ * Schedules the DA key insertion.
+ */
+static void castle_object_replace_key_insert(struct castle_object_replace *replace)
+{
+    c_bvec_t *c_bvec = replace->c_bvec;
+
+    /* Register with the debugger. */
+    castle_debug_bio_register(c_bvec->c_bio, c_bvec->c_bio->attachment->version, 1);
+    /* Set the callback. */
+    c_bvec->submit_complete = castle_object_replace_complete;
+    /* Submit to the DA. */
+    BUG_ON(replace->data_c2b);
+    castle_double_array_submit(c_bvec);
 }
 
 int castle_object_replace_continue(struct castle_object_replace *replace)
@@ -1073,93 +932,339 @@ int castle_object_replace_continue(struct castle_object_replace *replace)
         
         BUG_ON(data_length != 0);
         put_c2b(data_c2b);
-        castle_ct_put(replace->ct, 1);
-        replace->complete(replace, 0);
-    } else
-    {
-        replace->replace_continue(replace);
+        replace->data_c2b = NULL;
+
+        /* Finished writing the data out, insert the key into the btree. */
+        castle_object_replace_key_insert(replace);
+        return 0;
     }
+    
+    /* If the data writeout isn't finished, notify the client. */
+    replace->replace_continue(replace);
 
     return 0;
 }
 
 int castle_object_replace_cancel(struct castle_object_replace *replace)
 {
-    struct castle_component_tree *ct = replace->ct;
-    c2_block_t *data_c2b = replace->data_c2b;
-
     debug("Replace cancel.\n");
 
-    castle_ct_put(ct, 1);
-    put_c2b(data_c2b);
+    /* Release the data c2b. */
+    put_c2b(replace->data_c2b);
+    replace->data_c2b = NULL;
 
-    /* @TODO: delete the partially written object */
-    /* castle_utils_bio_free(c_bio); ??? */
+    /* @TODO consider freeing up medium object reservation. */
+
+    /* The rest of the cleanup will be done by: */
+    castle_object_replace_complete(replace->c_bvec, -EPIPE, replace->cvt);
 
     return 0;
 }
 
 /**
- * Insert new or replace existing object.
+ * Start up an on disk (medium/large) object replace.
  *
- * @param cpu_index     CPU index (to determine correct T0 CT)
- *
- * @also castle_back_replace()
- * @also castle_back_remove()
- * @also castle_back_big_put()
+ * It initialises the c_bvec->data_c2b, and calls the functions handling data write.
+ * If all the data is already available, it will clean up the data_c2b too (release the c2b
+ * reference, and set the field to NULL).
  */
-int castle_object_replace(struct castle_object_replace *replace, 
+static void castle_object_replace_on_disk_start(struct castle_object_replace *replace)
+{
+    c2_block_t *c2b;
+    c_val_tup_t cvt;
+
+    cvt = replace->cvt;
+    BUG_ON(!CVT_ONDISK(cvt));
+    BUG_ON(replace->value_len != cvt.length);
+
+    /* Init the c2b for data writeout. */
+    c2b = castle_object_write_buffer_alloc(cvt.cep, cvt.length);
+    replace->data_c2b = c2b;
+    replace->data_c2b_offset = 0;
+    replace->data_length = cvt.length;
+
+    if (replace->data_length_get(replace) > 0)
+    {
+        int complete_write;
+
+        complete_write = castle_object_data_write(replace);
+        BUG_ON(complete_write && (replace->data_length != 0));
+        if(complete_write)
+        {
+            put_c2b(replace->data_c2b);
+            replace->data_c2b = NULL;
+        }
+    }
+}
+
+/**
+ * Returns the CVT for the object being inserted and does the appropriate bookkeeping
+ * (by registering large objects with the DA code, and updating the chunk counter on
+ * the component tree). Also, it frees up and cleans up after large objects that used
+ * to be stored under the same key.
+ */
+static int castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
+                                         c_val_tup_t  prev_cvt,
+                                         c_val_tup_t *cvt)
+{
+    struct castle_object_replace *replace = c_bvec->c_bio->replace;
+    uint64_t nr_chunks;
+
+    /* We should be handling a write (possibly a tombstone write). */
+    BUG_ON(c_bvec_data_dir(c_bvec) != WRITE);
+    /* Some sanity checks on the prev_cvt. */
+    BUG_ON(!CVT_INVALID(prev_cvt) && !CVT_LEAF_VAL(prev_cvt));
+    BUG_ON(CVT_TOMB_STONE(prev_cvt) && (prev_cvt.length != 0));
+
+    /* Bookkeeping for large objects (about to be inserted into the tree). */
+    if(CVT_LARGE_OBJECT(replace->cvt))
+    {
+        if (castle_ct_large_obj_add(replace->cvt.cep.ext_id,
+                                    replace->value_len,
+                                    &c_bvec->tree->large_objs,
+                                    &c_bvec->tree->lo_mutex))
+        {
+            castle_printk(LOG_WARN, "Failed to intialize large object\n");
+            return -ENOMEM;
+        }
+
+        /* Update the large object chunk count on the tree */
+        nr_chunks = (replace->value_len - 1) / C_CHK_SIZE + 1;
+        atomic64_add(nr_chunks, &c_bvec->tree->large_ext_chk_cnt);
+    }
+
+    /* Free the space occupied by large object, if prev_cvt points to a large object. */
+    if(CVT_LARGE_OBJECT(prev_cvt))
+        castle_object_replace_large_object_free(c_bvec->tree, prev_cvt);
+
+    /* Finally set the cvt. */
+    *cvt = replace->cvt;
+
+    return 0;
+}
+
+/**
+ * Reserves memory for inline objects, extent space in medium object extent, or a brand new
+ * extent for large objects. It sets the CVT.
+ *
+ * For inline objects, the data is copied into memory allocated too.
+ *
+ * This function may fail in variety of ways in which case an appropriate code will be
+ * returned, replace->cvt will be set to INVAL_VAL_TUP in such case.
+ */
+static int castle_object_replace_space_reserve(struct castle_object_replace *replace)
+{
+    c_bvec_t *c_bvec = replace->c_bvec;
+    int tombstone = c_bvec_data_del(c_bvec);
+    uint64_t value_len, nr_blocks, nr_chunks;
+    c_ext_pos_t cep;
+
+    replace->cvt = INVAL_VAL_TUP;
+    /* Deal with tombstones first. */
+    if(tombstone)
+    {
+        CVT_TOMB_STONE_SET(replace->cvt);
+        /* No need to allocate any memory/extent space for tombstones. */
+        return 0;
+    }
+
+    value_len = replace->value_len;
+    /* Reserve memory for inline values. */
+    if(value_len <= MAX_INLINE_VAL_SIZE)
+    {
+        void *value;
+
+        /* Allocate memory. */
+        value = castle_malloc(value_len, GFP_KERNEL);
+        if(!value)
+            return -ENOMEM;
+
+        /* Construct the cvt. */
+        CVT_INLINE_SET(replace->cvt, value_len, value);
+        /* Get the data copied into the cvt. It should all be available in one shot. */
+        BUG_ON(replace->data_length_get(replace) < value_len);
+        replace->data_copy(replace, value, value_len, 0 /* not partial */);
+
+        return 0;
+    }
+
+    /* Out of line objects. */
+    nr_blocks = (value_len - 1) / C_BLK_SIZE + 1;
+    nr_chunks = (value_len - 1) / C_CHK_SIZE + 1;
+    /* Medium objects. */
+    if(value_len <= MEDIUM_OBJECT_LIMIT)
+    {
+        /* Allocate space in the medium object extent. This has already been preallocated
+           therefore the allocation should always succeed. */
+        BUG_ON(castle_ext_freespace_get(&c_bvec->tree->data_ext_free,
+                                         nr_blocks * C_BLK_SIZE,
+                                         1,
+                                        &cep) < 0);
+        CVT_MEDIUM_OBJECT_SET(replace->cvt, value_len, cep);
+        debug("Medium Object in %p, cep: "cep_fmt_str_nl, c_bvec->tree, __cep2str(cvt->cep));
+
+        return 0;
+    }
+
+    /* Large objects. */
+    memset(&cep, 0, sizeof(c_ext_pos_t));
+    cep.ext_id = castle_extent_alloc(DEFAULT_RDA,
+                                     c_bvec->tree->da,
+                                     EXT_T_LARGE_OBJECT,
+                                     nr_chunks);
+
+    if(EXT_ID_INVAL(cep.ext_id))
+    {
+        castle_printk(LOG_WARN, "Failed to allocate space for Large Object.\n");
+        return -ENOSPC;
+    }
+    CVT_LARGE_OBJECT_SET(replace->cvt, value_len, cep);
+
+    return 0;
+}
+
+/**
+ * Callback used after the request went through the DA throttling, and btree/medium
+ * object extent space has been reserved.
+ *
+ * This function allocates memory/extent space, and starts the write.
+ *
+ * If the write is completed in one shot it schedules the key insert. If not, it notifies
+ * the client and exits.
+ */
+static void castle_object_replace_queue_complete(struct castle_bio_vec *c_bvec, int err)
+{
+    struct castle_object_replace *replace = c_bvec->c_bio->replace;
+    int write_complete;
+
+    /* Handle the error case first. Notify the client, and exit. */
+    if(err)
+    {
+        /* If we failed to queue, there should be no CT set. */
+        BUG_ON(c_bvec->tree);
+        goto err_out;
+    }
+    /* Otherwise the CT should be set. */
+    BUG_ON(!c_bvec->tree);
+
+    /* Reserve space (memory or extent space) to store the value. */
+    err = castle_object_replace_space_reserve(replace);
+    if(err)
+    {
+        BUG_ON(!CVT_INVALID(replace->cvt));
+        goto err_out;
+    }
+
+    /*
+     * For on disk objects, kick off the write-out (inline objects/tombstones have already been
+     * dealt with by now).
+     * If the entire value gets written out (which is trivially true for inline values/tombstones)
+     * insert the key into the btree.
+     */
+    write_complete = 1;
+    if(CVT_ONDISK(replace->cvt))
+    {
+        castle_object_replace_on_disk_start(replace);
+        write_complete = (replace->data_length == 0);
+    }
+
+    if(write_complete)
+        castle_object_replace_key_insert(replace);
+    else
+        /* If the data writeout isn't finished, notify the client. */
+        replace->replace_continue(replace);
+
+    return;
+
+err_out:
+    BUG_ON(err == 0);
+    /* This cleans everything up, including the CT ref. */
+    castle_object_replace_complete(c_bvec, err, replace->cvt);
+}
+
+/**
+ * Starts object replace.
+ * It allocates memory for the BIO and btree key, sets up the requsets, and submits the
+ * request to the queue. The request may go straight through and be handled on the
+ * current thread, but otherwise will be queued up in the DA, and handled asynchronously later.
+ */
+int castle_object_replace(struct castle_object_replace *replace,
                           struct castle_attachment *attachment,
-                          c_vl_okey_t *key, 
+                          c_vl_okey_t *key,
                           int cpu_index,
                           int tombstone)
 {
-    c_vl_bkey_t *btree_key;
-    c_bvec_t *c_bvec;
-    c_bio_t *c_bio;
-    int i;
+    c_vl_bkey_t *btree_key = NULL;
+    c_bvec_t *c_bvec = NULL;
+    c_bio_t *c_bio = NULL;
+    int i, ret;
 
+    /* Sanity checks. */
+    BUG_ON(!attachment);
+
+    /*
+     * Make sure that the filesystem has been fully initialised before accepting any requsets.
+     * @TODO consider moving this check to castle_back_open().
+     */
     if(!castle_fs_inited)
         return -ENODEV;
 
+    /* Checks on the key. */
     for (i=0; i<key->nr_dims; i++)
         if(key->dims[i]->length == 0)
             return -EINVAL;
-    
-    btree_key = castle_object_key_convert(key);
-    if (!btree_key)
-        return -EINVAL;
-   
-    //castle_printk(LOG_DEVEL, " value          : %s\n", tombstone ? "tombstone" : "object");
-    //castle_printk(LOG_DEVEL, "Btree key is:");
-    //vl_key_print(btree_key);
 
-    /* Single c_bvec for the bio */
+    /* Create btree key out of the object key. */
+    ret = -EINVAL;
+    btree_key = castle_object_key_convert(key);
+    if(!btree_key)
+        goto err_out;
+
+    /* Allocate castle bio with a single bvec. */
+    ret = -ENOMEM;
     c_bio = castle_utils_bio_alloc(1);
     if(!c_bio)
-        return -ENOMEM;
-    BUG_ON(!attachment);
+        goto err_out;
+
+    /* Initialise the bio. */
     c_bio->attachment    = attachment;
     c_bio->replace       = replace;
     c_bio->data_dir      = WRITE;
-    /* Tombstone & object replace both require a write */
-    if(tombstone) 
+    if(tombstone)
         c_bio->data_dir |= REMOVE;
-    
-    c_bvec = c_bio->c_bvecs; 
-    c_bvec->key        = btree_key; 
-    c_bvec->cpu_index  = cpu_index;
-    c_bvec->cpu        = castle_double_array_request_cpu(c_bvec->cpu_index);
-    c_bvec->flags      = 0;
-    c_bvec->cvt_get    = castle_object_replace_cvt_get;
-    c_bvec->endfind    = castle_object_replace_complete;
-    c_bvec->da_endfind = NULL; 
+
+    /* Initialise the bvec. */
+    c_bvec = c_bio->c_bvecs;
+    c_bvec->key            = btree_key;
+    c_bvec->tree           = NULL;
+    c_bvec->cpu_index      = cpu_index;
+    c_bvec->cpu            = castle_double_array_request_cpu(c_bvec->cpu_index);
+    c_bvec->flags          = 0;
+    c_bvec->cvt_get        = castle_object_replace_cvt_get;
+    c_bvec->queue_complete = castle_object_replace_queue_complete;
+    c_bvec->orig_complete  = NULL;
     atomic_set(&c_bvec->reserv_nodes, 0);
 
-    castle_debug_bio_register(c_bio, attachment->version, 1);
-    castle_double_array_submit(c_bvec);
+    /* Save c_bvec in the replace. */
+    replace->c_bvec = c_bvec;
+    replace->data_c2b = NULL;
+
+    /* Queue up in the DA. */
+    castle_double_array_queue(c_bvec);
 
     return 0;
+
+err_out:
+    /* Free up allocated memory on errors. */
+    if(ret)
+    {
+        if(btree_key)
+            castle_object_bkey_free(btree_key);
+        if(c_bio)
+            castle_utils_bio_free(c_bio);
+    }
+
+    return ret;
 }
 EXPORT_SYMBOL(castle_object_replace);
 
@@ -1312,6 +1417,23 @@ void castle_object_slice_get_end_io(void *obj_iter, int err)
     debug_rq("Done async key read: Re-scheduling slice_get()- iterator: %p\n", iter);
     CASTLE_INIT_WORK(&iter->work, castle_object_next_available);
     queue_work(castle_wq, &iter->work);
+}
+
+static int castle_object_reference_get(c_bvec_t    *c_bvec,
+                                       c_val_tup_t  cvt)
+{
+    BUG_ON(c_bvec_data_dir(c_bvec) != READ);
+
+    if (CVT_LARGE_OBJECT(cvt))
+        BUG_ON(!castle_extent_get(cvt.cep.ext_id));
+
+    return 0;
+}
+
+static void castle_object_reference_release(c_val_tup_t cvt)
+{
+    if (CVT_LARGE_OBJECT(cvt))
+        castle_extent_put(cvt.cep.ext_id);
 }
 
 void castle_object_get_continue(struct castle_bio_vec *c_bvec,
@@ -1577,16 +1699,16 @@ int castle_object_get(struct castle_object_get *get,
     c_bio->get           = get;
     c_bio->data_dir      = READ;
 
-    c_bvec = c_bio->c_bvecs; 
-    c_bvec->key        = btree_key; 
-    c_bvec->cpu_index  = cpu_index;
-    c_bvec->cpu        = castle_double_array_request_cpu(c_bvec->cpu_index);
-    c_bvec->ref_get    = castle_object_reference_get;
-    c_bvec->endfind    = castle_object_get_complete;
-    c_bvec->da_endfind = NULL; 
+    c_bvec = c_bio->c_bvecs;
+    c_bvec->key             = btree_key;
+    c_bvec->cpu_index       = cpu_index;
+    c_bvec->cpu             = castle_double_array_request_cpu(c_bvec->cpu_index);
+    c_bvec->ref_get         = castle_object_reference_get;
+    c_bvec->submit_complete = castle_object_get_complete;
+    c_bvec->orig_complete   = NULL;
     atomic_set(&c_bvec->reserv_nodes, 0);
-    
-    /* @TODO: add bios to the debugger! */ 
+
+    /* @TODO: add bios to the debugger! */
     castle_double_array_submit(c_bvec);
 
     return 0;
@@ -1754,16 +1876,16 @@ int castle_object_pull(struct castle_object_pull *pull,
     c_bio->pull          = pull;
     c_bio->data_dir      = READ;
 
-    c_bvec = c_bio->c_bvecs; 
-    c_bvec->key        = btree_key; 
-    c_bvec->cpu_index  = cpu_index;
-    c_bvec->cpu        = castle_double_array_request_cpu(c_bvec->cpu_index);
-    c_bvec->ref_get    = castle_object_reference_get;
-    c_bvec->endfind    = castle_object_pull_continue;
-    c_bvec->da_endfind = NULL; 
+    c_bvec = c_bio->c_bvecs;
+    c_bvec->key             = btree_key;
+    c_bvec->cpu_index       = cpu_index;
+    c_bvec->cpu             = castle_double_array_request_cpu(c_bvec->cpu_index);
+    c_bvec->ref_get         = castle_object_reference_get;
+    c_bvec->submit_complete = castle_object_pull_continue;
+    c_bvec->orig_complete   = NULL;
     atomic_set(&c_bvec->reserv_nodes, 0);
-    
-    /* @TODO: add bios to the debugger! */ 
+
+    /* @TODO: add bios to the debugger! */
     castle_double_array_submit(c_bvec);
 
     return 0;

@@ -22,6 +22,7 @@ int  castle_double_array_okey_cpu_index(c_vl_okey_t *okey, uint32_t key_len);
 int  castle_double_array_request_cpu(int cpu_index);
 int  castle_double_array_request_cpus(void);
 
+void castle_double_array_queue (c_bvec_t *c_bvec);
 void castle_double_array_submit(c_bvec_t *c_bvec);
 int  castle_double_array_make  (da_id_t da_id, version_t root_version);
 
