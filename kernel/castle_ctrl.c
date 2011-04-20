@@ -626,22 +626,32 @@ void castle_control_slave_scan(uint32_t uuid, int *ret)
  * Initiate evacuation (removal from service) of a slave
  *
  * @param uuid      The slave to evacuate
- * @param ret       Returns EINVAL if slave is already marked as out-of-service
- *                  Returns EEXIST if slave is already marked as evacuated
+ * @param force     0 = evacuate, 1 = oos (a.k.a. force evacuate).
+ * @param ret       Returns EEXIST if slave is already marked as out-of-service
+ *                          or evacuating.
+ *                  Returns EINVAL if force argument is invalid.
  *                  Returns ENOENT if slave was not found
  *                  Returns EXIT_SUCCESS if slave is now marked as evacuated
  */
-void castle_control_slave_evacuate(uint32_t uuid, int *ret)
+void castle_control_slave_evacuate(uint32_t uuid, uint32_t force, int *ret)
 {
     struct  castle_slave *slave;
     char    b[BDEVNAME_SIZE];
     struct  list_head *lh;
     int     nr_live_slaves=0;
 
+    if (force != 0 && force != 1)
+    {
+        castle_printk(LOG_WARN, "Error: invalid evacuation force argument %d. "
+                                "Ignoring request.\n", force);
+        *ret = -EINVAL;
+        return;
+    }
+
     slave = castle_slave_find_by_uuid(uuid);
     if(!slave)
     {
-        castle_printk(LOG_WARN, "Error: slave not found. Ignoring request.\n");
+        castle_printk(LOG_WARN, "Error: slave 0x%x not found. Ignoring request.\n", uuid);
         *ret = -ENOENT;
         return;
     }
@@ -657,10 +667,23 @@ void castle_control_slave_evacuate(uint32_t uuid, int *ret)
         list_for_each(lh, &castle_slaves.slaves)
         {
             cs = list_entry(lh, struct castle_slave, list);
+            if (force)
+            {
+                /* If there's a another slave already oos (but not yet remapped), then reject. */
+                if (test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags) &&
+                    !test_bit(CASTLE_SLAVE_REMAPPED_BIT, &cs->flags) &&
+                    cs->uuid != uuid)
+                {
+                    castle_printk(LOG_WARN, "Error: forced evacuation rejected. Another disk "
+                                  "is already out-of-service but not yet remapped.\n");
+                    *ret = -EPERM;
+                    return;
+                }
+            }
             if (!test_bit(CASTLE_SLAVE_EVACUATE_BIT, &cs->flags) &&
                 !test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags) &&
                 !(cs->cs_superblock.pub.flags & CASTLE_SLAVE_SSD))
-                    nr_live_slaves++;
+                nr_live_slaves++;
         }
 
         BUG_ON(nr_live_slaves < MIN_LIVE_SLAVES);
@@ -688,7 +711,7 @@ void castle_control_slave_evacuate(uint32_t uuid, int *ret)
         castle_printk(LOG_WARN, "Warning: slave 0x%x (%s) has already been marked out-of-service. "
                "Ignoring request.\n",
                 slave->uuid, bdevname(slave->bdev, b));
-        *ret = -EINVAL;
+        *ret = -EEXIST;
         return;
     } 
 
@@ -704,12 +727,20 @@ void castle_control_slave_evacuate(uint32_t uuid, int *ret)
     } 
         
     /*
-    * Mark that this slave is out-of-service. Allocations from this slave should now stop,
-    * and all future I/O submissions should ignore this slave.
-    */
-    set_bit(CASTLE_SLAVE_EVACUATE_BIT, &slave->flags);
-    castle_printk(LOG_USERINFO, "Slave 0x%x (%s) has been marked as evacuating.\n",
-            slave->uuid, bdevname(slave->bdev, b));
+     * Mark that this slave is evacuating or out-of-service. Allocations from this slave
+     * should now stop, and all future I/O submissions should ignore this slave.
+     */
+    if (force)
+    {
+        set_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags);
+        castle_printk(LOG_USERINFO, "Slave 0x%x (%s) has been marked as out-of-service.\n",
+                      slave->uuid, bdevname(slave->bdev, b));
+    } else
+    {
+        set_bit(CASTLE_SLAVE_EVACUATE_BIT, &slave->flags);
+        castle_printk(LOG_USERINFO, "Slave 0x%x (%s) has been marked as evacuating.\n",
+                      slave->uuid, bdevname(slave->bdev, b));
+    }
     castle_extents_rebuild_wake();
     *ret = EXIT_SUCCESS;
 }
@@ -997,7 +1028,7 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
             castle_control_trace_teardown(&ioctl.trace_teardown.ret);
             break;
         case CASTLE_CTRL_SLAVE_EVACUATE:
-            castle_control_slave_evacuate(ioctl.slave_evacuate.id, &ioctl.slave_evacuate.ret);
+            castle_control_slave_evacuate(ioctl.slave_evacuate.id, ioctl.slave_evacuate.force, &ioctl.slave_evacuate.ret);
             break;
         case CASTLE_CTRL_SLAVE_SCAN:
             castle_control_slave_scan(ioctl.slave_scan.id, &ioctl.slave_scan.ret);
