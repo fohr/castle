@@ -1073,9 +1073,9 @@ static void c2b_multi_io_end(struct bio *bio, int err)
                 }
                 BUG_ON(nr_live_slaves < MIN_LIVE_SLAVES);
             }
-            castle_printk(LOG_WARN, "Disabling slave 0x%x (%s), due to IO errors. Starting rebuild.\n", 
+            castle_printk(LOG_WARN, "Disabling slave 0x%x (%s), due to IO errors.\n",
                     io_slave->uuid, bdevname(bio_info->bdev, b));
-            castle_extents_rebuild_start();
+            castle_extents_rebuild_wake();
         }
 
         /* We may need to re-submit I/O for the c2b. Mark this c2b as 'bio_error' */

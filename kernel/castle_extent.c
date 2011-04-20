@@ -2286,7 +2286,8 @@ restart:
             {
                 cs = list_entry(entry, struct castle_slave, list);
                 if (test_bit(CASTLE_SLAVE_EVACUATE_BIT, &cs->flags) &&
-                   !test_bit(CASTLE_SLAVE_REMAPPED_BIT, &cs->flags))
+                   !test_bit(CASTLE_SLAVE_REMAPPED_BIT, &cs->flags) &&
+                   !test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags))
                     evacuated_slaves[nr_evacuated_slaves++] = cs;
                 if (test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags) &&
                    !test_bit(CASTLE_SLAVE_REMAPPED_BIT, &cs->flags))
@@ -2316,13 +2317,16 @@ restart:
                 castle_printk(LOG_USERINFO, "Finished remapping out-of-service slave 0x%x.\n",
                               oos_slaves[i]->uuid);
                 set_bit(CASTLE_SLAVE_REMAPPED_BIT, &oos_slaves[i]->flags);
-                castle_release_device(oos_slaves[i]->bdev);
+                /* Ghost slaves do not have an associated bdev. */
+                if (!test_bit(CASTLE_SLAVE_GHOST_BIT, &oos_slaves[i]->flags))
+                    castle_release_device(oos_slaves[i]->bdev);
             }
         }
         for (i=0; i<nr_evacuated_slaves; i++)
         {
             if (evacuated_slaves[i])
             {
+                BUG_ON(test_bit(CASTLE_SLAVE_GHOST_BIT, &evacuated_slaves[i]->flags));
                 castle_printk(LOG_USERINFO, "Finished remapping evacuated slave 0x%x.\n",
                               evacuated_slaves[i]->uuid);
                 set_bit(CASTLE_SLAVE_OOS_BIT, &evacuated_slaves[i]->flags);
@@ -2354,7 +2358,7 @@ out:
 /*
  * Kick the rebuild thread to start the rebuild process (e.g. when a slave dies or is evacuated).
  */
-void castle_extents_rebuild_start(void)
+void castle_extents_rebuild_wake(void)
 {
     atomic_inc(&current_rebuild_seqno);
     wake_up(&rebuild_wq);
