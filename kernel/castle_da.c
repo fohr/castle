@@ -2058,7 +2058,7 @@ static int castle_da_iterators_create(struct castle_da_merge *merge)
         {
             debug("Found non-zero write ref count on a tree scheduled for merge (%d)\n",
                     atomic_read(&merge->in_trees[i]->write_ref_count));
-            msleep(10);
+            msleep_interruptible(10);
         }
     }
 
@@ -4385,7 +4385,7 @@ wait_and_try:
             /* Wakeup everyone waiting on merge state update. */
             wake_up(&da->merge_waitq);
             /* In case we failed the merge because of no memory for in_trees, wait and retry. */
-            msleep(10000);
+            msleep_interruptible(10000);
         }
     } while(1);
 
@@ -4510,7 +4510,7 @@ static int castle_da_merge_run(void *da_p)
         else if (ret)
         {
             /* Merge failed, wait 10s to retry. */
-            msleep(10000);
+            msleep_interruptible(10000);
             continue;
         }
     } while(1);
@@ -4552,7 +4552,7 @@ static int castle_da_merge_stop(struct castle_double_array *da, void *unused)
     for(i=0; i<MAX_DA_LEVEL; i++)
     {
         while(da->levels[i].merge.thread)
-            msleep(10);
+            msleep_interruptible(10);
         castle_printk(LOG_INIT, "Stopped merge thread for DA=%d, level=%d\n", da->id, i);
     }
 
@@ -5601,7 +5601,7 @@ static int castle_da_all_rwcts_create(struct castle_double_array *da)
     while (castle_da_growing_rw_test_and_set(da) != EXIT_SUCCESS)
     {
         had_to_wait = 1;
-        msleep(1);
+        msleep_interruptible(1);
     }
 
     /* We can return immediately if:
@@ -6046,7 +6046,7 @@ static int castle_da_rwct_create(struct castle_double_array *da, int cpu_index, 
     {
         debug("Racing RWCT make on da=%d\n", da->id);
         while (castle_da_growing_rw_test(da))
-            msleep(1); /* @TODO use out_of_line_wait_on_bit(_lock)() here instead */
+            msleep_interruptible(1); /* @TODO use out_of_line_wait_on_bit(_lock)() here instead */
         return -EAGAIN;
     }
     ret = __castle_da_rwct_create(da, cpu_index, in_tran);
@@ -6823,7 +6823,7 @@ void castle_double_array_merges_fini(void)
         deleted_das = !list_empty(&castle_deleted_das);
         CASTLE_TRANSACTION_END;
         if(deleted_das)
-            msleep(10);
+            msleep_interruptible(10);
     } while(deleted_das);
 }
 

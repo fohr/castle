@@ -465,7 +465,8 @@ int castle_extents_writeback(void)
     /* Don't exit with out-standing dead extents. They are scheduled to get freed on 
      * system work queue. */
     if (castle_extents_exiting)
-        while (atomic_read(&castle_extents_dead_count)) msleep(1000);
+        while (atomic_read(&castle_extents_dead_count))
+            msleep_interruptible(1000);
 
     castle_extents_mstore = 
         castle_mstore_init(MSTORE_EXTENTS, sizeof(struct castle_elist_entry));

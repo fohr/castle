@@ -2701,7 +2701,7 @@ static void castle_cache_freelists_grow(int nr_c2bs, int nr_pages)
                 /* Raced with castle_extent_remap().  Wait for it to complete
                  * and call castle_cache_page_block_unreserve() to release a
                  * c2b back to the reservelist. */
-                msleep(500);
+                msleep_interruptible(500);
                 continue;
             }
         }
@@ -5323,7 +5323,7 @@ static int castle_periodic_checkpoint(void *unused)
             i++)
         {
             if (!kthread_should_stop())
-                msleep(1000);
+                msleep_interruptible(1000);
             else
                 exit_loop = 1;
         }
