@@ -891,12 +891,16 @@ static void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
     if(err && CVT_LARGE_OBJECT(cvt))
         castle_object_replace_large_object_free(c_bvec->tree, cvt);
 
+    /* Unreserve any space we may still hold in the CT. Drop the CT ref. */
+    if (ct)
+    {
+        castle_double_array_unreserve(c_bvec);
+        castle_ct_put(ct, 1);
+    }
+    BUG_ON(atomic_read(&c_bvec->reserv_nodes) != 0);
+
     /* Free the bio. */
     castle_utils_bio_free(c_bio);
-
-    /* Drop the CT ref. */
-    if (ct)
-        castle_ct_put(ct, 1);
 
     /* Tell the client everything is finished. */
     if(!cancelled)

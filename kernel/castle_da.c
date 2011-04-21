@@ -6469,15 +6469,7 @@ static void castle_da_ct_write_complete(c_bvec_t *c_bvec, int err, c_val_tup_t c
     debug_verbose("Finished with DA, calling back.\n");
     castle_da_merge_budget_io_end(castle_da_hash_get(ct->da));
     /* Release the preallocated space in the btree extent. */
-    if (atomic_read(&c_bvec->reserv_nodes))
-    {
-        struct castle_btree_type *btree = castle_btree_type_get(ct->btree_type);
-
-        castle_ext_freespace_free(&ct->tree_ext_free,
-                                   atomic_read(&c_bvec->reserv_nodes) *
-                                   btree->node_size(ct, 0) *
-                                   C_BLK_SIZE);
-    }
+    castle_double_array_unreserve(c_bvec);
     BUG_ON(CVT_MEDIUM_OBJECT(cvt) && (cvt.cep.ext_id != c_bvec->tree->data_ext_free.ext_id));
 
     /* Don't release the ct reference in order to hold on to medium objects array, etc. */
@@ -6675,6 +6667,33 @@ new_ct:
     BUG_ON(atomic_read(&c_bvec->reserv_nodes) != 0);
 
     c_bvec->queue_complete(c_bvec, ret);
+}
+
+/**
+ * Unreserves any nodes reserved in the btree extent associated with the write request provided.
+ */
+void castle_double_array_unreserve(c_bvec_t *c_bvec)
+{
+    struct castle_component_tree *ct;
+    struct castle_btree_type *btree;
+    uint32_t reserv_nodes;
+
+    /* Only works for write requests. */
+    BUG_ON(c_bvec_data_dir(c_bvec) != WRITE);
+
+    /* If no nodes are reserved, stop. */
+    reserv_nodes = atomic_read(&c_bvec->reserv_nodes);
+    if(reserv_nodes == 0)
+        return;
+
+    /* Free the nodes. */
+    ct = c_bvec->tree;
+    btree = castle_btree_type_get(ct->btree_type);
+    castle_ext_freespace_free(&ct->tree_ext_free,
+                               reserv_nodes * btree->node_size(ct, 0) * C_BLK_SIZE);
+    /* Set the reservation back to 0. Don't use atomic_set() because this doesn't use
+       locked prefix. */
+    atomic_sub(reserv_nodes, &c_bvec->reserv_nodes);
 }
 
 /**
