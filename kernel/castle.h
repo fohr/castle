@@ -23,6 +23,11 @@
 #undef BUG
 #undef BUG_ON
 
+/* Enable additional sanity checking to debug merge serialisation/deserialisation */
+/* TODO@tr: test withot DEBUG_MERGE_SERDES */
+/* do not disable this for now; no testing done yet without it. */
+#define DEBUG_MERGE_SERDES
+
 static inline ATTRIB_NORET void bug_fn(char *file, unsigned long line)
 {
     panic("Castle BUG, from: %s:%ld\n", file, line);
@@ -500,6 +505,7 @@ enum {
     MSTORE_ATTACHMENTS_TAG,
     MSTORE_EXTENTS,
     MSTORE_LARGE_OBJECTS,
+    MSTORE_DA_MERGE,
 };
 
 
@@ -665,7 +671,6 @@ struct castle_component_tree {
     struct mutex        last_key_mutex;
     uint8_t             bloom_exists;
     castle_bloom_t      bloom;
-    uint8_t             do_not_put; /* TODO@tr get rid of this once stable */
 #ifdef CASTLE_PERF_DEBUG
     u64                 bt_c2bsync_ns;
     u64                 data_c2bsync_ns;

@@ -43,4 +43,11 @@ extern struct castle_iterator_type castle_btree_enum;
 int         castle_btree_init         (void);
 void        castle_btree_free         (void);
 
+typedef struct vlba_key {
+    /* align:   4 */
+    /* offset:  0 */ uint32_t length;
+    /*          4 */ uint8_t _key[0];
+    /*          4 */
+} PACKED vlba_key_t;
+
 #endif /* __CASTLE_BTREE_H__ */
