@@ -4935,6 +4935,7 @@ static void castle_component_tree_add(struct castle_double_array *da,
     BUG_ON(!castle_da_is_locked(da));
     BUG_ON(!CASTLE_IN_TRANSACTION);
 
+    BUG_ON((ct->level == 1) && (atomic64_read(&ct->item_count) == 0));
     /* Default insert point is the front of the list. */
     if (!head)
         head = &da->levels[ct->level].trees;
