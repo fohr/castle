@@ -287,7 +287,8 @@ static ssize_t da_tree_list_show(struct kobject *kobj,
                            buf, 
                            atomic64_read(&ct->item_count),       /* Item count*/
                            (uint32_t)btree->node_size(ct, 0),    /* Leaf node size */
-                           (uint32_t)btree->node_size(ct, 1),    /* Internal node size */
+                           ct->tree_depth > 1 ?                  /* Internal node size */
+                               (uint32_t)btree->node_size(ct, 1) : 0,
                            (uint32_t)ct->tree_depth,             /* Depth of tree */
                            (uint32_t)
                            (CHUNK(ct->tree_ext_free.ext_size) + 
