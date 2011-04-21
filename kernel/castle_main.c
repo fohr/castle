@@ -349,6 +349,15 @@ int castle_ext_freespace_prealloc(c_ext_free_t *ext_free,
     return 0;
 }
 
+/**
+ * Checks whether there is at least 'size' worth of freespace in the extent.
+ */
+int castle_ext_freespace_can_alloc(c_ext_free_t *ext_free,
+                                   c_byte_off_t size)
+{
+    return (atomic64_read(&ext_free->blocked) + size <= ext_free->ext_size);
+}
+
 int castle_ext_freespace_free(c_ext_free_t *ext_free,
                               int64_t       size)
 {
@@ -1781,38 +1790,38 @@ static int castle_bio_validate(struct bio *bio)
     return 0;
 }
 
-static void castle_device_c_bvec_make(c_bio_t *c_bio, 
-                                      int idx, 
+static void castle_device_c_bvec_make(c_bio_t *c_bio,
+                                      int idx,
                                       sector_t block,
                                       int one2one_bvec)
 {
     /* Create an appropriate c_bvec */
     c_bvec_t *c_bvec = c_bio->c_bvecs + idx;
-                                
+
     /* Get a reference */
     castle_bio_get(c_bio);
 
     /* Init the c_bvec */
-    c_bvec->key         = (void *)block; 
-    c_bvec->version     = INVAL_VERSION; 
-    c_bvec->flags       = 0; 
-    c_bvec->tree        = &castle_global_tree;
+    c_bvec->key             = (void *)block;
+    c_bvec->version         = INVAL_VERSION;
+    c_bvec->flags           = 0;
+    c_bvec->tree            = &castle_global_tree;
     /* cvt_get() only for writes. */
     if (c_bvec_data_dir(c_bvec)==WRITE)
-        c_bvec->cvt_get = castle_bio_data_cvt_get;
+        c_bvec->cvt_get     = castle_bio_data_cvt_get;
     else
-        c_bvec->ref_get = castle_bio_data_ref_get;
-    c_bvec->endfind     = castle_bio_data_io_end;
-    c_bvec->da_endfind  = NULL;
+        c_bvec->ref_get     = castle_bio_data_ref_get;
+    c_bvec->submit_complete = castle_bio_data_io_end;
+    c_bvec->orig_complete   = NULL;
     atomic_set(&c_bvec->reserv_nodes, 0);
     if(one2one_bvec)
         set_bit(CBV_ONE2ONE_BIT, &c_bvec->flags);
     castle_debug_bvec_update(c_bvec, C_BVEC_INITIALISED);
 
     /* Submit the c_bvec for processing */
-    castle_btree_submit(c_bvec); 
+    castle_btree_submit(c_bvec);
 }
- 
+
 static int castle_device_make_request(struct request_queue *rq, struct bio *bio)
 { 
     c_bio_t *c_bio = NULL;

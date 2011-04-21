@@ -281,6 +281,7 @@ typedef struct castle_control_cmd_trace_teardown {
 
 typedef struct castle_control_slave_evacuate {
     slave_uuid_t id;           /* IN  */
+    uint32_t     force;        /* IN  */
     int          ret;          /* OUT */
 } PACKED cctrl_cmd_slave_evacuate_t;
 

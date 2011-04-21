@@ -382,6 +382,7 @@ enum {
 #define MAX_INLINE_VAL_SIZE            512      /* In bytes */
 #define VLBA_TREE_MAX_KEY_SIZE         512      /* In bytes */
 #define MEDIUM_OBJECT_LIMIT (20 * C_CHK_SIZE)
+#define is_medium(_size)    (((_size) > MAX_INLINE_VAL_SIZE) && ((_size) <= MEDIUM_OBJECT_LIMIT))
 
 struct castle_value_tuple {
     /* align:   8 */
@@ -906,8 +907,11 @@ typedef struct castle_bio_vec {
                                                   c_val_tup_t);
     };
     /* Completion callback */
-    void                           (*endfind)    (struct castle_bio_vec *, int, c_val_tup_t);
-    void                           (*da_endfind) (struct castle_bio_vec *, int, c_val_tup_t);
+    union {
+        void                       (*queue_complete)  (struct castle_bio_vec *, int);
+        void                       (*submit_complete) (struct castle_bio_vec *, int, c_val_tup_t);
+    };
+    void                           (*orig_complete)   (struct castle_bio_vec *, int, c_val_tup_t);
     atomic_t                         reserv_nodes;
     struct list_head                 io_list;
 #ifdef CASTLE_DEBUG
@@ -1326,7 +1330,9 @@ void                  castle_ext_freespace_fini    (c_ext_free_t     *ext_free);
 
 int                   castle_ext_freespace_prealloc(c_ext_free_t     *ext_free,
                                                     c_byte_off_t      size);
-
+int                   castle_ext_freespace_can_alloc
+                                                   (c_ext_free_t *ext_free,
+                                                    c_byte_off_t size);
 int                   castle_ext_freespace_get     (c_ext_free_t     *ext_free,
                                                     c_byte_off_t      size,
                                                     int               alloc_done,
@@ -1348,8 +1354,20 @@ c_byte_off_t          castle_ext_freespace_summary_get
 struct castle_cache_block;
 
 struct castle_object_replace {
-    uint64_t    value_len; // total value length
-
+    uint64_t                      value_len;        /**< Length of the value being written out. */
+    c_val_tup_t                   cvt;              /**< CVT allocated for the value.           */
+    c_bvec_t                     *c_bvec;           /**< bvec to be submitted to DA.            */
+ 
+    /* Variables used when copying the value into the CVT. */
+    struct castle_cache_block    *data_c2b;         /**< Current cache block used to copy the
+                                                         data out.                              */
+    uint64_t                      data_c2b_offset;  /**< Offset in the data_c2b at which future
+                                                         writes should start from (everything
+                                                         up to data_c2b_offset has already been
+                                                         used up).                              */
+    uint64_t                      data_length;      /**< Amount of data still to be written out
+                                                         initialy equals value_len.             */
+ 
     /* Call on completion of big_put. */
     void        (*complete)        (struct castle_object_replace *op,
                                     int                           err);
@@ -1364,11 +1382,6 @@ struct castle_object_replace {
                                     void                         *buffer,
                                     uint32_t                      str_length,
                                     int                           partial);
-
-    struct castle_component_tree *ct;
-    struct castle_cache_block *data_c2b;
-    uint64_t    data_c2b_offset;
-    uint64_t    data_length;
 };
 
 struct castle_object_get {

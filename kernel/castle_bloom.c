@@ -670,7 +670,7 @@ static void castle_bloom_lookup_next_ct(c_bvec_t *c_bvec)
     if (!next_ct)
     {
         /* We've finished looking through all the trees. */
-        c_bvec->endfind(c_bvec, 0, INVAL_VAL_TUP);
+        c_bvec->submit_complete(c_bvec, 0, INVAL_VAL_TUP);
         return;
     }
     castle_ct_put(ct, 0);
@@ -826,7 +826,7 @@ static void castle_bloom_index_read(c_bvec_t *c_bvec)
     if (!btree_nodes_c2bs)
     {
         castle_printk(LOG_WARN, "Failed to alloc btree_nodes_c2bs.\n");
-        c_bvec->endfind(c_bvec, -ENOMEM, INVAL_VAL_TUP);
+        c_bvec->submit_complete(c_bvec, -ENOMEM, INVAL_VAL_TUP);
         return;
     }
 

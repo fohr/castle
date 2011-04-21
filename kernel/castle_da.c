@@ -137,6 +137,7 @@ static void castle_da_merge_budget_consume(struct castle_da_merge *merge);
 static void castle_da_queue_kick(struct work_struct *work);
 static void castle_da_read_bvec_start(struct castle_double_array *da, c_bvec_t *c_bvec);
 static void castle_da_write_bvec_start(struct castle_double_array *da, c_bvec_t *c_bvec);
+static void castle_da_reserve(struct castle_double_array *da, c_bvec_t *c_bvec);
 static void castle_da_get(struct castle_double_array *da);
 static void castle_da_put(struct castle_double_array *da);
 static void castle_da_merge_serialise(struct castle_da_merge *merge);
@@ -1861,16 +1862,16 @@ static int castle_da_ios_budget_replenish(struct castle_double_array *da, void *
          * We need to kick all of the write IO wait queues.  In the current
          * context we hold spin_lock_irq(&castle_da_hash_lock) so schedule this
          * work so we can drop the lock and return immediately. */
-        for (i = 0; i < castle_double_array_request_cpus(); i++)
-        {
-            struct castle_da_io_wait_queue *wq = &da->ios_waiting[i];
+         for (i = 0; i < castle_double_array_request_cpus(); i++)
+         {
+             struct castle_da_io_wait_queue *wq = &da->ios_waiting[i];
 
-            spin_lock(&wq->lock);
-            if (!list_empty(&wq->list))
-                /* wq->work is initialised as castle_da_queue_kick(). */
-                queue_work_on(request_cpus.cpus[i], castle_wqs[0], &wq->work);
-            spin_unlock(&wq->lock);
-        }
+             spin_lock(&wq->lock);
+             if (!list_empty(&wq->list))
+                 /* wq->work is initialised as castle_da_queue_kick(). */
+                 queue_work_on(request_cpus.cpus[i], castle_wqs[0], &wq->work);
+             spin_unlock(&wq->lock);
+         }
     }
 
     return 0;
@@ -2060,7 +2061,7 @@ static int castle_da_iterators_create(struct castle_da_merge *merge)
         {
             debug("Found non-zero write ref count on a tree scheduled for merge (%d)\n",
                     atomic_read(&merge->in_trees[i]->write_ref_count));
-            msleep(10);
+            msleep_interruptible(10);
         }
     }
 
@@ -2270,7 +2271,7 @@ static c_val_tup_t castle_da_medium_obj_copy(struct castle_da_merge *merge,
     /* Old cvt needs to be a medium object. */
     BUG_ON(!CVT_MEDIUM_OBJECT(old_cvt));
     /* It needs to be of the right size. */
-    BUG_ON((old_cvt.length <= MAX_INLINE_VAL_SIZE) || (old_cvt.length > MEDIUM_OBJECT_LIMIT));
+    BUG_ON(!is_medium(old_cvt.length));
     /* It must belong to one of the in_trees data extent. */
     FOR_EACH_MERGE_TREE(i, merge)
         if (old_cvt.cep.ext_id == merge->in_trees[i]->data_ext_free.ext_id)
@@ -4422,7 +4423,7 @@ wait_and_try:
             /* Wakeup everyone waiting on merge state update. */
             wake_up(&da->merge_waitq);
             /* In case we failed the merge because of no memory for in_trees, wait and retry. */
-            msleep(10000);
+            msleep_interruptible(10000);
         }
     } while(1);
 
@@ -4547,7 +4548,7 @@ static int castle_da_merge_run(void *da_p)
         else if (ret)
         {
             /* Merge failed, wait 10s to retry. */
-            msleep(10000);
+            msleep_interruptible(10000);
             continue;
         }
     } while(1);
@@ -4589,7 +4590,7 @@ static int castle_da_merge_stop(struct castle_double_array *da, void *unused)
     for(i=0; i<MAX_DA_LEVEL; i++)
     {
         while(da->levels[i].merge.thread)
-            msleep(10);
+            msleep_interruptible(10);
         castle_printk(LOG_INIT, "Stopped merge thread for DA=%d, level=%d\n", da->id, i);
     }
 
@@ -5764,7 +5765,7 @@ static int castle_da_all_rwcts_create(struct castle_double_array *da)
     while (castle_da_growing_rw_test_and_set(da) != EXIT_SUCCESS)
     {
         had_to_wait = 1;
-        msleep(1);
+        msleep_interruptible(1);
     }
 
     /* We can return immediately if:
@@ -6208,7 +6209,7 @@ static int castle_da_rwct_create(struct castle_double_array *da, int cpu_index, 
     {
         debug("Racing RWCT make on da=%d\n", da->id);
         while (castle_da_growing_rw_test(da))
-            msleep(1); /* @TODO use out_of_line_wait_on_bit(_lock)() here instead */
+            msleep_interruptible(1); /* @TODO use out_of_line_wait_on_bit(_lock)() here instead */
         return -EAGAIN;
     }
     ret = __castle_da_rwct_create(da, cpu_index, in_tran);
@@ -6374,6 +6375,54 @@ static struct castle_component_tree* castle_da_rwct_get(struct castle_double_arr
 }
 
 /**
+ * Acquires the write reference to a T0 (appropriate for the cpu_index provided), it dosen't
+ * pre-allocate any freespace, but checks that at least 2 nodes worth of space is available.
+ * If not, it'll try to allocate new T0.
+ *
+ * It should only be used if CT hasn't already been acquired through castle_da_reserve().
+ * ATM all inserts do go through castle_da_reserve() therefore this function is effectively
+ * unused
+ */
+static struct castle_component_tree* castle_da_rwct_acquire(struct castle_double_array *da,
+                                                            int cpu_index)
+{
+    struct castle_component_tree *ct;
+    struct castle_btree_type *btree;
+    int ret;
+
+
+again:
+    if (castle_da_frozen(da))
+        return NULL;
+
+    ct = castle_da_rwct_get(da, cpu_index);
+    BUG_ON(!ct);
+
+    /* Use this tree, but only if there is still some space left in it (otherwise
+       we could get stuck in a loop where write fails, but we still use the same CT
+       and try again). */
+    btree = castle_btree_type_get(ct->btree_type);
+    if(castle_ext_freespace_can_alloc(&ct->tree_ext_free,
+                                      2 * btree->node_size(ct, 0) * C_BLK_SIZE))
+        return ct;
+
+    debug("Number of items in component tree %d, # items %ld. Trying to add a new rwct.\n",
+            ct->seq, atomic64_read(&ct->item_count));
+    /* Drop reference for old CT. */
+    castle_ct_put(ct, 1 /*write*/);
+
+    /* Try creating a new CT. */
+    ret = castle_da_rwct_create(da, cpu_index, 0 /* in_tran */);
+
+    if((ret == 0) || (ret == -EAGAIN))
+        goto again;
+
+    castle_printk(LOG_INFO, "Warning: failed to create RWCT with errno=%d\n", ret);
+
+    return NULL;
+}
+
+/**
  * Get first CT from DA that satisfies bvec.
  *
  * - Check if we have an appropriate CT at level 0 (specifically one that
@@ -6415,72 +6464,6 @@ out:
     read_unlock(&da->lock);
 
     return ct;
-}
-
-/**
- * Get T0 CT from da and preallocate space for writing.
- *
- * - Get CT for c_bvec->cpu_index
- * - Preallocate space in CT for writes
- *   - Promote and get fresh CT if it cannot satisfy preallocation
- *
- * @return Write case:  T0 CT preallocated for write
- *
- * @also castle_da_rwct_get()
- */
-static struct castle_component_tree* castle_da_rwct_acquire(struct castle_double_array *da,
-                                                            c_bvec_t *c_bvec)
-{
-    uint64_t value_len, req_btree_space, req_medium_space;
-    struct castle_component_tree *ct;
-    struct castle_btree_type *btree;
-    int ret;
-
-    BUG_ON(c_bvec_data_dir(c_bvec) != WRITE);
-
-again:
-    if (castle_da_frozen(da))
-        return NULL;
-
-    ct = castle_da_rwct_get(da, c_bvec->cpu_index);
-    BUG_ON(!ct);
-
-    /* Attempt to preallocate space in the btree and m-obj extents for writes. */
-    btree = castle_btree_type_get(ct->btree_type);
-    /* We may have to create up to 2 new leaf nodes in this write. Preallocate
-       the space for this. */
-    req_btree_space = 2 * btree->node_size(ct, 0) * C_BLK_SIZE;
-    if (castle_ext_freespace_prealloc(&ct->tree_ext_free, req_btree_space) < 0)
-        goto new_ct;
-    /* Save how many nodes we've pre-allocated. */
-    atomic_set(&c_bvec->reserv_nodes, 2);
-
-    /* Pre-allocate space for Medium objects. */
-    value_len = c_bvec->c_bio->replace->value_len;
-    /* If not a medium object, we are done. */
-    if ((value_len <= MAX_INLINE_VAL_SIZE) || (value_len > MEDIUM_OBJECT_LIMIT))
-        return ct;
-
-    /* Preallocate (ceil to C_BLK_SIZE) space for the medium object. */
-    req_medium_space = ((value_len - 1) / C_BLK_SIZE + 1) * C_BLK_SIZE;
-    if (castle_ext_freespace_prealloc(&ct->data_ext_free, req_medium_space) >= 0)
-        return ct;
-
-    /* We failed to preallocate space for the medium object. Free the space in btree extent. */
-    castle_ext_freespace_free(&ct->tree_ext_free, req_btree_space);
-
-new_ct:
-    debug("Number of items in component tree %d, # items %ld. Trying to add a new rwct.\n",
-            ct->seq, atomic64_read(&ct->item_count));
-    ret = castle_da_rwct_create(da, c_bvec->cpu_index, 0 /* in_tran */);
-
-    /* Drop reference for old CT. */
-    castle_ct_put(ct, 1 /*write*/);
-    if((ret == 0) || (ret == -EAGAIN))
-        goto again;
-
-    castle_printk(LOG_WARN, "Warning: failed to create RWCT with errno=%d\n", ret);
-    return NULL;
 }
 
 /**
@@ -6552,25 +6535,34 @@ static void castle_da_queue_kick(struct work_struct *work)
     {
         c_bvec = list_entry(l, c_bvec_t, io_list);
         list_del(&c_bvec->io_list);
-        castle_da_write_bvec_start(wq->da, c_bvec);
+        castle_da_reserve(wq->da, c_bvec);
     }
 }
 
-static void castle_da_ct_walk_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cvt)
+/**
+ * This is the callback used to complete a btree read. It either:
+ * - calls back to the client if the key sought for has been found
+ * - calls back to the client if there was an error
+ * - calls back to the client if no more component trees are available
+ * - otherwise it drops the reference to the last CT, takes reference to the next CT and
+ *   submits the request to the bloom filter code (which will call this callback again,
+ *   directly or indirectly).
+ */
+static void castle_da_ct_read_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cvt)
 {
     void (*callback) (struct castle_bio_vec *c_bvec, int err, c_val_tup_t cvt);
     struct castle_component_tree *ct, *next_ct;
     struct castle_double_array *da;
-    int read;
 
-    callback = c_bvec->da_endfind;
+    callback = c_bvec->orig_complete;
     ct = c_bvec->tree;
     da = castle_da_hash_get(ct->da);
 
-    read = (c_bvec_data_dir(c_bvec) == READ);
-    BUG_ON(read && atomic_read(&c_bvec->reserv_nodes));
-    /* For reads, if the key hasn't been found, check in the next tree. */
-    if(read && CVT_INVALID(cvt) && (!err))
+    BUG_ON(c_bvec_data_dir(c_bvec) != READ);
+    BUG_ON(atomic_read(&c_bvec->reserv_nodes));
+
+    /* If the key hasn't been found, check in the next tree. */
+    if(CVT_INVALID(cvt) && (!err))
     {
 #ifdef CASTLE_BLOOM_FP_STATS
         if (ct->bloom_exists && c_bvec->bloom_positive)
@@ -6595,20 +6587,52 @@ static void castle_da_ct_walk_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cv
         castle_bloom_submit(c_bvec);
         return;
     }
-    castle_request_timeline_checkpoint_stop(c_bvec->timeline);
-    castle_request_timeline_destroy(c_bvec->timeline);
+    debug_verbose("Finished with DA read, calling back.\n");
+
+    /* Don't release the ct reference in order to hold on to medium objects array, etc. */
+    callback(c_bvec, err, cvt);
+}
+
+/**
+ * This function implements the btree write callback. At the moment it is expected that
+ * space to do the btree write was preallocated and -ENOSPC error code will never happen
+ * (this function is capable of handling this, but castle_da_write_bvec_start is not reentrant).
+ *
+ * Btree write is handled by releasing any unused preallocated btree extent space,
+ * and calling back to the client.
+ */
+static void castle_da_ct_write_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cvt)
+{
+    void (*callback) (struct castle_bio_vec *c_bvec, int err, c_val_tup_t cvt);
+    struct castle_component_tree *ct;
+    struct castle_double_array *da;
+
+    callback = c_bvec->orig_complete;
+    ct = c_bvec->tree;
+    da = castle_da_hash_get(ct->da);
+
+    /*
+     * If the insert space failed, create a new ct, and continue.
+     * At the moment we don't expect btree insert to fail, because space is always preallocated.
+     */
+    BUG_ON(err == -ENOSPC);
+    if(err == -ENOSPC)
+    {
+        /* Release the reference to the tree. */
+        castle_ct_put(ct, 1);
+        /*
+         * For now all inserts reserve space, and castle_da_write_bvec_start is not reentrant,
+         * therefore err should never be -ENOSPC.
+         */
+        BUG();
+        castle_da_write_bvec_start(da, c_bvec);
+        return;
+    }
+    BUG_ON(c_bvec_data_dir(c_bvec) != WRITE);
     debug_verbose("Finished with DA, calling back.\n");
     castle_da_merge_budget_io_end(castle_da_hash_get(ct->da));
     /* Release the preallocated space in the btree extent. */
-    if (atomic_read(&c_bvec->reserv_nodes))
-    {
-        struct castle_btree_type *btree = castle_btree_type_get(ct->btree_type);
-
-        castle_ext_freespace_free(&ct->tree_ext_free,
-                                   atomic_read(&c_bvec->reserv_nodes) *
-                                   btree->node_size(ct, 0) *
-                                   C_BLK_SIZE);
-    }
+    castle_double_array_unreserve(c_bvec);
     BUG_ON(CVT_MEDIUM_OBJECT(cvt) && (cvt.cep.ext_id != c_bvec->tree->data_ext_free.ext_id));
 
     /* Don't release the ct reference in order to hold on to medium objects array, etc. */
@@ -6620,7 +6644,7 @@ static void castle_da_ct_walk_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cv
  *
  * - Fail request if DA is frozen
  * - Get T0 CT for bvec
- * - Configure endfind handlers
+ * - Configure completion handlers
  * - Submit immediately to btree
  *
  * @also castle_da_read_bvec_start()
@@ -6628,29 +6652,38 @@ static void castle_da_ct_walk_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cv
  */
 static void castle_da_write_bvec_start(struct castle_double_array *da, c_bvec_t *c_bvec)
 {
+    int reserved;
+
     debug_verbose("Doing DA write for da_id=%d\n", da_id);
     BUG_ON(c_bvec_data_dir(c_bvec) != WRITE);
+
+    /* Medium, and only medium inserts must have reserved the space (in leaf nodes extent,
+       and in the medium objects extent). */
+    reserved = (c_bvec->tree != NULL);
+
+    /* If space was reserved, start the insert immediately. */
+    if(reserved)
+        goto insert;
 
     /* If the DA is frozen the best we can do is return an error. */
     if (castle_da_frozen(da))
     {
-        c_bvec->endfind(c_bvec, -ENOSPC, INVAL_VAL_TUP);
+        c_bvec->submit_complete(c_bvec, -ENOSPC, INVAL_VAL_TUP);
         return;
     }
 
     /* Get a reference to the current RW CT (a new one may be created). */
-    c_bvec->tree = castle_da_rwct_acquire(da, c_bvec);
+    c_bvec->tree = castle_da_rwct_acquire(da, c_bvec->cpu_index);
     if (!c_bvec->tree)
     {
-        c_bvec->endfind(c_bvec, -ENOSPC, INVAL_VAL_TUP);
+        c_bvec->submit_complete(c_bvec, -ENOSPC, INVAL_VAL_TUP);
         return;
     }
 
-    c_bvec->da_endfind = c_bvec->endfind;
-    c_bvec->endfind    = castle_da_ct_walk_complete;
+insert:
+    c_bvec->orig_complete   = c_bvec->submit_complete;
+    c_bvec->submit_complete = castle_da_ct_write_complete;
 
-    //castle_request_timeline_create(c_bvec->timeline);
-    castle_request_timeline_checkpoint_start(c_bvec->timeline);
     debug_verbose("Looking up in ct=%d\n", c_bvec->tree->seq);
 
     /* Submit directly to btree. */
@@ -6661,10 +6694,10 @@ static void castle_da_write_bvec_start(struct castle_double_array *da, c_bvec_t 
  * Hand-off read request (bvec) to DA via bloom filter.
  *
  * - Get first CT for bvec (not necessarily a RWCT)
- * - Configure endfind handlers
+ * - Configure callback handlers
  * - Pass off to the bloom layer
  *
- * @also castle_da_bvec_write_start()
+ * @also castle_da_write_bvec_start()
  * @also castle_bloom_submit()
  */
 static void castle_da_read_bvec_start(struct castle_double_array *da, c_bvec_t *c_bvec)
@@ -6676,15 +6709,13 @@ static void castle_da_read_bvec_start(struct castle_double_array *da, c_bvec_t *
     c_bvec->tree = castle_da_first_ct_get(da, c_bvec);
     if (!c_bvec->tree)
     {
-        c_bvec->endfind(c_bvec, -EINVAL, INVAL_VAL_TUP);
+        c_bvec->submit_complete(c_bvec, -EINVAL, INVAL_VAL_TUP);
         return;
     }
 
-    c_bvec->da_endfind = c_bvec->endfind;
-    c_bvec->endfind    = castle_da_ct_walk_complete;
+    c_bvec->orig_complete   = c_bvec->submit_complete;
+    c_bvec->submit_complete = castle_da_ct_read_complete;
 
-    //castle_request_timeline_create(c_bvec->timeline);
-    castle_request_timeline_checkpoint_start(c_bvec->timeline);
     debug_verbose("Looking up in ct=%d\n", c_bvec->tree->seq);
 
     /* Submit via bloom filter. */
@@ -6713,7 +6744,6 @@ static void castle_da_read_bvec_start(struct castle_double_array *da, c_bvec_t *
 void castle_double_array_submit(c_bvec_t *c_bvec)
 {
     struct castle_attachment *att = c_bvec->c_bio->attachment;
-    struct castle_da_io_wait_queue *wq;
     struct castle_double_array *da;
     da_id_t da_id;
 
@@ -6724,9 +6754,8 @@ void castle_double_array_submit(c_bvec_t *c_bvec)
 
     da = castle_da_hash_get(da_id);
     BUG_ON(!da);
-    /* da_endfind should be null it is for our privte use */
-    BUG_ON(c_bvec->da_endfind);
-    BUG_ON(atomic_read(&c_bvec->reserv_nodes) != 0);
+    /* orig_complete should be null it is for our privte use */
+    BUG_ON(c_bvec->orig_complete);
 
     /* Start the read bvecs without any queueing. */
     if(c_bvec_data_dir(c_bvec) == READ)
@@ -6734,6 +6763,127 @@ void castle_double_array_submit(c_bvec_t *c_bvec)
         castle_da_read_bvec_start(da, c_bvec);
         return;
     }
+
+    castle_da_write_bvec_start(da, c_bvec);
+}
+
+/**
+ * Gets write reference to the appropriate T0 (for the cpu_index stored in c_bvec) and
+ * reserves space in btree and medium object extents (for medium object writes).
+ * It calls back to the client through queue_complete() callback, on success or failure.
+ */
+static void castle_da_reserve(struct castle_double_array *da, c_bvec_t *c_bvec)
+{
+    struct castle_component_tree *ct;
+    struct castle_btree_type *btree;
+    uint64_t value_len, req_btree_space, req_medium_space;
+    int ret;
+
+    if(castle_da_frozen(da))
+    {
+        c_bvec->queue_complete(c_bvec, -ENOSPC);
+        return;
+    }
+
+    value_len = c_bvec->c_bio->replace->value_len;
+again:
+    ct = castle_da_rwct_get(da, c_bvec->cpu_index);
+    BUG_ON(!ct);
+
+    /* Attempt to preallocate space in the btree and m-obj extents for writes. */
+    btree = castle_btree_type_get(ct->btree_type);
+
+    /* We may have to create up to 2 new leaf nodes in this write. Preallocate
+       the space for this. */
+    req_btree_space = 2 * btree->node_size(ct, 0) * C_BLK_SIZE;
+    if (castle_ext_freespace_prealloc(&ct->tree_ext_free, req_btree_space) < 0)
+        goto new_ct;
+    /* Save how many nodes we've pre-allocated. */
+    atomic_set(&c_bvec->reserv_nodes, 2);
+
+    /* Preallocate (ceil to C_BLK_SIZE) space for the medium object. */
+    req_medium_space = ((value_len - 1) / C_BLK_SIZE + 1) * C_BLK_SIZE;
+    if ( is_medium(value_len) &&
+        (castle_ext_freespace_prealloc(&ct->data_ext_free, req_medium_space) < 0))
+    {
+        /* We failed to preallocate space for the medium object. Free the space in btree extent. */
+        castle_ext_freespace_free(&ct->tree_ext_free, req_btree_space);
+        atomic_set(&c_bvec->reserv_nodes, 0);
+        goto new_ct;
+    }
+    /* Save the CT in bvec. */
+    c_bvec->tree = ct;
+
+    c_bvec->queue_complete(c_bvec, 0);
+    return;
+
+new_ct:
+    debug("Number of items in component tree %d, # items %ld. Trying to add a new rwct.\n",
+            ct->seq, atomic64_read(&ct->item_count));
+    /* Drop reference for old CT. */
+    castle_ct_put(ct, 1 /*write*/);
+
+    ret = castle_da_rwct_create(da, c_bvec->cpu_index, 0 /* in_tran */);
+    if((ret == 0) || (ret == -EAGAIN))
+        goto again;
+
+    BUG_ON(atomic_read(&c_bvec->reserv_nodes) != 0);
+
+    c_bvec->queue_complete(c_bvec, ret);
+}
+
+/**
+ * Unreserves any nodes reserved in the btree extent associated with the write request provided.
+ */
+void castle_double_array_unreserve(c_bvec_t *c_bvec)
+{
+    struct castle_component_tree *ct;
+    struct castle_btree_type *btree;
+    uint32_t reserv_nodes;
+
+    /* Only works for write requests. */
+    BUG_ON(c_bvec_data_dir(c_bvec) != WRITE);
+
+    /* If no nodes are reserved, stop. */
+    reserv_nodes = atomic_read(&c_bvec->reserv_nodes);
+    if(reserv_nodes == 0)
+        return;
+
+    /* Free the nodes. */
+    ct = c_bvec->tree;
+    btree = castle_btree_type_get(ct->btree_type);
+    castle_ext_freespace_free(&ct->tree_ext_free,
+                               reserv_nodes * btree->node_size(ct, 0) * C_BLK_SIZE);
+    /* Set the reservation back to 0. Don't use atomic_set() because this doesn't use
+       locked prefix. */
+    atomic_sub(reserv_nodes, &c_bvec->reserv_nodes);
+}
+
+/**
+ * Submits write requests to this DA write queue which throttles inserts according to the
+ * merge progress. Once the write is scheduled for processing (which could happen immediately
+ * in the current thread's context) it reserves btree/medium object extent space, and
+ * calls back to the user.
+ *
+ * @also castle_da_reserve()
+ */
+void castle_double_array_queue(c_bvec_t *c_bvec)
+{
+    struct castle_attachment *att = c_bvec->c_bio->attachment;
+    struct castle_da_io_wait_queue *wq;
+    struct castle_double_array *da;
+    da_id_t da_id;
+
+    BUG_ON(c_bvec_data_dir(c_bvec) != WRITE);
+
+    down_read(&att->lock);
+    /* Since the version is attached, it must be found */
+    BUG_ON(castle_version_read(att->version, &da_id, NULL, NULL, NULL, NULL));
+    up_read(&att->lock);
+
+    da = castle_da_hash_get(da_id);
+    BUG_ON(!da);
+    BUG_ON(atomic_read(&c_bvec->reserv_nodes) != 0);
 
     /* Write requests must operate within the ios_budget but reads can be
      * scheduled immediately. */
@@ -6744,7 +6894,7 @@ void castle_double_array_submit(c_bvec_t *c_bvec)
         /* We're within the budget and there are no other IOs on the queue,
          * schedule this write IO immediately. */
         spin_unlock(&wq->lock);
-        castle_da_write_bvec_start(da, c_bvec);
+        castle_da_reserve(da, c_bvec);
     }
     else
     {
@@ -6855,7 +7005,7 @@ void castle_double_array_merges_fini(void)
         deleted_das = !list_empty(&castle_deleted_das);
         CASTLE_TRANSACTION_END;
         if(deleted_das)
-            msleep(10);
+            msleep_interruptible(10);
     } while(deleted_das);
 }
 
