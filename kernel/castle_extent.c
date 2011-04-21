@@ -2102,10 +2102,13 @@ static int castle_extent_remap(c_ext_t *ext)
 
             write_lock_c2b(map_c2b);
 
-            /* Update the buffer so it contains the shadow map for the chunk */
-            memcpy(c2b_buffer(map_c2b) + BLOCK_OFFSET(map_cep.offset),
-                &ext->shadow_map[chunkno*k_factor],
-                ext->k_factor * sizeof(c_disk_chk_t));
+            /* Shadow map must be page aligned. */
+            BUG_ON((unsigned long)ext->shadow_map % PAGE_SIZE);
+
+            /* Update the entire buffer with the page containing the shadow map for the chunk */
+            memcpy(c2b_buffer(map_c2b),
+                   (char *)(MASK_BLK_OFFSET((unsigned long)&ext->shadow_map[chunkno*k_factor])),
+                   C_BLK_SIZE);
 
             dirty_c2b(map_c2b);
             update_c2b(map_c2b);
