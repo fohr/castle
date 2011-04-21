@@ -5646,7 +5646,7 @@ static int castle_da_writeback(struct castle_double_array *da, void *unused)
                     struct castle_component_tree *ct;
                     ct=da->levels[i].merge.serdes.out_tree;
                     BUG_ON(!ct);
-                    castle_printk(LOG_USERINFO, "%s::flushing merge out_tree extents on da %d, level %d\n",
+                    castle_printk(LOG_INFO, "%s::flushing merge out_tree extents on da %d, level %d\n",
                             __FUNCTION__, da->id, i);
                     //TODO@tr fix this so it doesn't overflush the extent (as it stands we are doing
                     //        more flush than necessary, i.e. more IO than necessary)
