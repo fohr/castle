@@ -1862,16 +1862,16 @@ static int castle_da_ios_budget_replenish(struct castle_double_array *da, void *
          * We need to kick all of the write IO wait queues.  In the current
          * context we hold spin_lock_irq(&castle_da_hash_lock) so schedule this
          * work so we can drop the lock and return immediately. */
-         for (i = 0; i < castle_double_array_request_cpus(); i++)
-         {
-             struct castle_da_io_wait_queue *wq = &da->ios_waiting[i];
+        for (i = 0; i < castle_double_array_request_cpus(); i++)
+        {
+            struct castle_da_io_wait_queue *wq = &da->ios_waiting[i];
 
-             spin_lock(&wq->lock);
-             if (!list_empty(&wq->list))
-                 /* wq->work is initialised as castle_da_queue_kick(). */
-                 queue_work_on(request_cpus.cpus[i], castle_wqs[0], &wq->work);
-             spin_unlock(&wq->lock);
-         }
+            spin_lock(&wq->lock);
+            if (!list_empty(&wq->list))
+                /* wq->work is initialised as castle_da_queue_kick(). */
+                queue_work_on(request_cpus.cpus[i], castle_wqs[0], &wq->work);
+            spin_unlock(&wq->lock);
+        }
     }
 
     return 0;
