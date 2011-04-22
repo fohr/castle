@@ -2025,6 +2025,80 @@ static void castle_da_each_skip(c_merged_iter_t *iter,
 }
 
 /**
+ * Extracts two oldest component trees from the DA, and waits for all the write references
+ * to disappear. If either of the trees turns out to be empty is deallocated and an error
+ * is returned.
+ *
+ * @return  -EAGAIN     A tree was deallocated, restart the merge.
+ * @return   0          Trees were found, and stored in cts array.
+ */
+static int castle_da_merge_cts_get(struct castle_double_array *da,
+                                   int level,
+                                   struct castle_component_tree **cts)
+{
+    struct castle_component_tree *ct;
+    struct list_head *l;
+    int i;
+
+    /* Zero out the CTs array. */
+    cts[0] = cts[1] = NULL;
+    read_lock(&da->lock);
+    BUG_ON(da->compacting);
+
+    /* Find two oldest trees walking the list backwards. */
+    list_for_each_prev(l, &da->levels[level].trees)
+    {
+        struct castle_component_tree *ct =
+                            list_entry(l, struct castle_component_tree, da_list);
+
+        /* If there are any trees being compacted, they must be older than the
+           two trees we want to merge here. */
+        if (ct->compacting)
+            continue;
+
+        if(!cts[1])
+            cts[1] = ct;
+        else
+        if(!cts[0])
+            cts[0] = ct;
+    }
+    read_unlock(&da->lock);
+
+    /* Wait for RW refs to dissapear. Free the CT if it is empty after that. */
+    for(i = 0; i < 2; i++)
+    {
+        ct = cts[i];
+
+        /* Wait until write ref count reaches zero. */
+        BUG_ON(!ct->dynamic && (atomic_read(&ct->write_ref_count) != 0));
+        while(atomic_read(&ct->write_ref_count))
+        {
+            debug("Found non-zero write ref count on ct=%d scheduled for merge cnt=%d\n",
+                ct->seq, atomic_read(&ct->write_ref_count));
+            msleep_interruptible(10);
+        }
+
+        /* Check that the tree has non-zero elements. */
+        if(atomic64_read(&ct->item_count) == 0)
+        {
+            printk("Found empty CT=%d, freeing it up.\n", ct->seq);
+            /* No items in this CT, deallocate it by removing it from the DA,
+               and dropping the ref. */
+            CASTLE_TRANSACTION_BEGIN;
+            write_lock(&da->lock);
+            castle_component_tree_del(da, ct);
+            write_unlock(&da->lock);
+            CASTLE_TRANSACTION_END;
+            castle_ct_put(ct, 0);
+
+            return -EAGAIN;
+        }
+    }
+
+    return 0;
+}
+
+/**
  * Creates iterators for each of the input trees. And merged iterator used to
  * construct the output tree.
  *
@@ -2054,16 +2128,9 @@ static int castle_da_iterators_create(struct castle_da_merge *merge)
 
     btree = castle_btree_type_get(merge->in_trees[0]->btree_type);
 
-    /* Wait until there are no outstanding writes on the trees */
+    /* The wait for write ref count to reach zero should have already be done. */
     FOR_EACH_MERGE_TREE(i, merge)
-    {
-        while(atomic_read(&merge->in_trees[i]->write_ref_count))
-        {
-            debug("Found non-zero write ref count on a tree scheduled for merge (%d)\n",
-                    atomic_read(&merge->in_trees[i]->write_ref_count));
-            msleep_interruptible(10);
-        }
-    }
+        BUG_ON(atomic_read(&merge->in_trees[i]->write_ref_count) != 0);
 
     /* Alloc space for iterators. */
     ret = -ENOMEM;
@@ -4489,7 +4556,6 @@ static int castle_da_merge_run(void *da_p)
 {
     struct castle_double_array *da = (struct castle_double_array *)da_p;
     struct castle_component_tree *in_trees[2];
-    struct list_head *l;
     int level, ignore, ret;
 
     /* Work out the level at which we are supposed to be doing merges.
@@ -4513,31 +4579,14 @@ static int castle_da_merge_run(void *da_p)
         if(exit_cond)
             break;
 
-        /* Otherwise do a merge. */
-        in_trees[0] = in_trees[1] = NULL;
+        /* Extract the two oldest component trees. */
+        ret = castle_da_merge_cts_get(da, level, in_trees);
+        BUG_ON(ret && (ret != -EAGAIN));
+        if(ret == -EAGAIN)
+            continue;
 
-        read_lock(&da->lock);
-        BUG_ON(da->compacting);
-        list_for_each_prev(l, &da->levels[level].trees)
-        {
-            struct castle_component_tree *ct =
-                                list_entry(l, struct castle_component_tree, da_list);
-
-            /* If there are any trees being compacted, they must be older than the
-               two trees we want to merge here. */
-            if (ct->compacting)
-                continue;
-
-            if(!in_trees[1])
-                in_trees[1] = ct;
-            else
-            if(!in_trees[0])
-                in_trees[0] = ct;
-        }
-        read_unlock(&da->lock);
-
+        /* We expect to have 2 trees. */
         BUG_ON(!in_trees[0] || !in_trees[1]);
-
         debug_merges("Doing merge, trees=[%u]+[%u]\n", in_trees[0]->seq, in_trees[1]->seq);
 
         /* Do the merge.  If it fails, retry after 10s (unless it's a merge abort). */
@@ -4935,7 +4984,6 @@ static void castle_component_tree_add(struct castle_double_array *da,
     BUG_ON(!castle_da_is_locked(da));
     BUG_ON(!CASTLE_IN_TRANSACTION);
 
-    BUG_ON((ct->level == 1) && (atomic64_read(&ct->item_count) == 0));
     /* Default insert point is the front of the list. */
     if (!head)
         head = &da->levels[ct->level].trees;
