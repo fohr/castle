@@ -959,7 +959,9 @@ int castle_object_replace_cancel(struct castle_object_replace *replace)
     put_c2b(replace->data_c2b);
     replace->data_c2b = NULL;
 
-    /* @TODO consider freeing up medium object reservation. */
+    /* Btree reservation is going to be released by replace_complete().
+       No need to release medium object extent, because we allocated space from it
+      (haven't used it, but its too late to free it). */
 
     /* The rest of the cleanup will be done by: */
     castle_object_replace_complete(replace->c_bvec, -EPIPE, replace->cvt);
