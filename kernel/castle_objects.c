@@ -865,6 +865,7 @@ static void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
     BUG_ON(c_bio->err != 0);
     BUG_ON(replace->data_c2b);
     BUG_ON(memcmp(&replace->cvt, &cvt, sizeof(c_val_tup_t)));
+    BUG_ON((c_bvec->cvt_get == NULL) && err);
 
     debug("castle_object_replace_complete\n");
 
@@ -887,9 +888,10 @@ static void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
         castle_printk(LOG_WARN, "Failed to insert into btree.\n");
 
     /* If there was an error inserting on large objects, free the extent.
-       If the replace was cancelled (err == -EPIPE), don't do it. */
+       Since there was an error, the object hasn't been threaded onto large object list yet.
+       There is no need to remove it from there, or to change any accounting. */
     if(err && CVT_LARGE_OBJECT(cvt))
-        castle_object_replace_large_object_free(c_bvec->tree, cvt);
+        castle_extent_free(cvt.cep.ext_id);
 
     /* Unreserve any space we may still hold in the CT. Drop the CT ref. */
     if (ct)
@@ -1041,6 +1043,9 @@ static int castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
     if(CVT_LARGE_OBJECT(prev_cvt))
         castle_object_replace_large_object_free(c_bvec->tree, prev_cvt);
 
+    /* Set cvt_get to NULL, to tell the replace_complete function that cvt_get was done
+       successfully */
+    c_bvec->cvt_get = NULL;
     /* Finally set the cvt. */
     *cvt = replace->cvt;
 
@@ -1144,8 +1149,9 @@ static void castle_object_replace_queue_complete(struct castle_bio_vec *c_bvec, 
     /* Handle the error case first. Notify the client, and exit. */
     if(err)
     {
-        /* If we failed to queue, there should be no CT set. */
+        /* If we failed to queue, there should be no CT set, and no CVT. */
         BUG_ON(c_bvec->tree);
+        BUG_ON(!CVT_INVALID(replace->cvt));
         goto err_out;
     }
     /* Otherwise the CT should be set. */
@@ -1251,6 +1257,7 @@ int castle_object_replace(struct castle_object_replace *replace,
 
     /* Save c_bvec in the replace. */
     replace->c_bvec = c_bvec;
+    CVT_INVALID_SET(replace->cvt);
     replace->data_c2b = NULL;
 
     /* Queue up in the DA. */
