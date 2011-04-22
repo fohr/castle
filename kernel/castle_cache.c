@@ -5315,6 +5315,9 @@ static int castle_periodic_checkpoint(void *unused)
     int      exit_loop = 0;
     struct   list_head flush_list;
 
+    if(castle_merges_checkpoint) castle_printk(LOG_INIT, "Will checkpoint on-going DA merges.\n");
+    else castle_printk(LOG_INIT, "Will NOT checkpoint on-going DA merges.\n");
+
     do {
         /* Wakes-up once in a second just to check whether to stop the thread.
          * After every checkpoint_frequency seconds checkpoints the filesystem. */
