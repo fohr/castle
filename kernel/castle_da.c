@@ -4410,7 +4410,7 @@ read_trees_again:
         /* Lock the DA, because we may reset the compacting flag. */
         write_lock(&da->lock);
         nr_trees_estimate = 0;
-        for (level=1; level<MAX_DA_LEVEL; level++)
+        for (level=2; level<MAX_DA_LEVEL; level++)
             nr_trees_estimate += da->levels[level].nr_trees;
         /* Merge cannot be scheduled with < 2 trees. */
         if(nr_trees_estimate < 2)
@@ -4430,7 +4430,7 @@ read_trees_again:
         /* Now, lock the DA, confirm the #trees, either retry again or start the merge. */
         write_lock(&da->lock);
         nr_trees = 0;
-        for (level=1; level<MAX_DA_LEVEL; level++)
+        for (level=2; level<MAX_DA_LEVEL; level++)
             nr_trees += da->levels[level].nr_trees;
         /* If the # of trees changed, free the array, and try again. */
         if(nr_trees != nr_trees_estimate)
@@ -4441,7 +4441,7 @@ read_trees_again:
             goto read_trees_again;
         }
         /* Number of trees still the same, construct the array of trees that will be merged. */
-        for (level=1, i=0; level<MAX_DA_LEVEL; level++)
+        for (level=2, i=0; level<MAX_DA_LEVEL; level++)
         {
             list_for_each(l, &da->levels[level].trees)
             {
