@@ -53,7 +53,6 @@ struct castle_component_tree castle_global_tree = {.seq             = GLOBAL_TRE
                                                                        (512ULL * C_CHK_SIZE), 
                                                                        {0ULL}, 
                                                                        {0ULL}},
-                                                   .last_key        = NULL,
                                                   }; 
 
 static DEFINE_MUTEX(castle_sblk_lock);
@@ -73,12 +72,6 @@ int                          castle_fs_inited = 0;
 int                          castle_fs_exiting = 0;
 c_fault_t                    castle_fault = NO_FAULT;
 uint32_t                     castle_fault_arg = 0;
-
-int  castle_latest_key = 0; /**< maintain latest key for each CT. Useful to test
-                              *  crash consistency.*/
-
-module_param(castle_latest_key, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
-MODULE_PARM_DESC(castle_latest_key, "castle_latest_key");
 
 module_param(checkpoint_frequency, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
 MODULE_PARM_DESC(checkpoint_frequency, "checkpoint_frequency,");
@@ -790,7 +783,6 @@ int castle_fs_init(void)
         /* Init the root btree node */
         init_rwsem(&castle_global_tree.lock);
         mutex_init(&castle_global_tree.lo_mutex);
-        mutex_init(&castle_global_tree.last_key_mutex);
         INIT_LIST_HEAD(&castle_global_tree.large_objs);
 
         if ((ret = castle_new_ext_freespace_init(&castle_global_tree.tree_ext_free,

@@ -2954,21 +2954,6 @@ static struct castle_component_tree* castle_da_merge_package(struct castle_da_me
     BUG_ON(atomic_read(&out_tree->ref_count)       != 1);
     BUG_ON(atomic_read(&out_tree->write_ref_count) != 0);
 
-    /* Calculate latest key in both trees. */
-    if (castle_latest_key)
-    {
-        FOR_EACH_MERGE_TREE(i, merge)
-        {
-            //BUG_ON(merge->in_tree1->seq <=  merge->in_tree2->seq);
-            if (merge->in_trees[i]->last_key)
-            {
-                out_tree->last_key = merge->in_trees[i]->last_key;
-                merge->in_trees[i]->last_key = NULL;
-                break;
-            }
-        }
-    }
-
     /* Add list of large objects to CT. */
     list_replace(&merge->large_objs, &out_tree->large_objs);
     INIT_LIST_HEAD(&merge->large_objs);
@@ -5304,7 +5289,6 @@ static struct castle_double_array* castle_da_alloc(da_id_t da_id)
         goto err_out;
     atomic_set(&da->ios_budget, 0);
     da->ios_rate        = 0;
-    da->last_key        = NULL;
     da->top_level       = 0;
     atomic_set(&da->nr_del_versions, 0);
     da->compacting      = 0;
@@ -5650,9 +5634,6 @@ void castle_ct_put(struct castle_component_tree *ct, int write)
     castle_ext_freespace_fini(&ct->tree_ext_free);
     castle_ext_freespace_fini(&ct->data_ext_free);
 
-    if (ct->last_key)
-        castle_object_okey_free(ct->last_key);
-
     if (ct->bloom_exists)
         castle_bloom_destroy(&ct->bloom);
 
@@ -5796,8 +5777,6 @@ static da_id_t castle_da_ct_unmarshall(struct castle_component_tree *ct,
     ct->da_list.next = NULL;
     ct->da_list.prev = NULL;
     INIT_LIST_HEAD(&ct->large_objs);
-    mutex_init(&ct->last_key_mutex);
-    ct->last_key = NULL;
     ct->bloom_exists = ctm->bloom_exists;
     if (ctm->bloom_exists)
         castle_bloom_unmarshall(&ct->bloom, ctm);
@@ -5917,8 +5896,6 @@ static int castle_da_ct_dealloc(struct castle_double_array *da,
     castle_ct_hash_destroy_check(ct, (void*)0UL);
     list_del(&ct->da_list);
     list_del(&ct->hash_list);
-    if (ct->last_key)
-        castle_object_okey_free(ct->last_key);
     castle_free(ct);
 
     return 0;
@@ -5997,9 +5974,6 @@ static int castle_da_tree_writeback(struct castle_double_array *da,
     }
 
 mstore_writeback:
-    if (da && !da->last_key)
-        da->last_key = ct->last_key;
-
     /* Never writeback T0 in periodic checkpoints. */
     BUG_ON((ct->level == 0) && !castle_da_exiting);
 
@@ -6198,9 +6172,6 @@ static int castle_da_writeback(struct castle_double_array *da, void *unused)
        we need to drop it. Hash consitancy is guaranteed, because by this point
        noone should be modifying it anymore */
     read_unlock_irq(&castle_da_hash_lock);
-
-    if (da->last_key)
-        da->last_key = NULL;
 
     /* Writeback is happening under CASTLE_TRANSACTION LOCK, which guarentees no
      * addition/deletions to component tree list, no need of DA lock here. */
@@ -6620,9 +6591,7 @@ static struct castle_component_tree* castle_ct_alloc(struct castle_double_array 
     ct->internal_ext_free.ext_id = INVAL_EXT_ID;
     ct->tree_ext_free.ext_id     = INVAL_EXT_ID;
     ct->data_ext_free.ext_id     = INVAL_EXT_ID;
-    ct->last_key        = NULL;
     ct->bloom_exists    = 0;
-    mutex_init(&ct->last_key_mutex);
 #ifdef CASTLE_PERF_DEBUG
     ct->bt_c2bsync_ns   = 0;
     ct->data_c2bsync_ns = 0;

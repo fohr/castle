@@ -667,8 +667,6 @@ struct castle_component_tree {
     c_ext_free_t        tree_ext_free;
     c_ext_free_t        data_ext_free;
     atomic64_t          large_ext_chk_cnt;
-    c_vl_okey_t        *last_key;
-    struct mutex        last_key_mutex;
     uint8_t             bloom_exists;
     castle_bloom_t      bloom;
 #ifdef CASTLE_PERF_DEBUG
