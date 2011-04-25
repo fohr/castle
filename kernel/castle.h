@@ -1358,7 +1358,7 @@ struct castle_object_replace {
     uint64_t                      value_len;        /**< Length of the value being written out. */
     c_val_tup_t                   cvt;              /**< CVT allocated for the value.           */
     c_bvec_t                     *c_bvec;           /**< bvec to be submitted to DA.            */
- 
+
     /* Variables used when copying the value into the CVT. */
     struct castle_cache_block    *data_c2b;         /**< Current cache block used to copy the
                                                          data out.                              */
@@ -1368,7 +1368,7 @@ struct castle_object_replace {
                                                          used up).                              */
     uint64_t                      data_length;      /**< Amount of data still to be written out
                                                          initialy equals value_len.             */
- 
+
     /* Call on completion of big_put. */
     void        (*complete)        (struct castle_object_replace *op,
                                     int                           err);
@@ -1554,11 +1554,11 @@ struct castle_double_array {
             int                 deamortize;
             /* Merge serialisation/deserialisation */
             struct {
+#ifdef DEBUG_MERGE_SERDES
+                int                            merge_completed;
+#endif
+                struct castle_component_tree  *out_tree;
                 struct castle_dmserlist_entry *mstore_entry;
-                /* TODO@tr get rid of out_tree; the clist in mstore_entry has the out_tree
-                           ext_id, which is all checkpoint needs */
-                struct castle_component_tree  *out_tree; /* used by checkpoint when we need to
-                                                            flush output extents */
                 struct semaphore mutex; /* because we might lock while using mstore, spinlock
                                            may be a bad idea. might need a "double buffering"
                                            solution with round robin selection over 2
@@ -1566,7 +1566,7 @@ struct castle_double_array {
                 atomic_t         valid; /* for merge thread to notify checkpoint when state is
                                            checkpointable:
                                                0 = not initialised;
-                                               1 = initialised but not valid (i.e.  not safe to
+                                               1 = initialised but not valid (i.e. not safe to
                                                    deserialise);
                                                2 = valid.  */
                 atomic_t         fresh; /* for merge thread to notify checkpoint when output
