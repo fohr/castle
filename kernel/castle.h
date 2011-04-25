@@ -1462,8 +1462,6 @@ typedef struct castle_object_iterator {
     struct work_struct  work;
 } castle_object_iterator_t;
 
-extern int low_disk_space;
-
 int castle_superblocks_writeback(uint32_t version);
 
 void castle_ctrl_lock               (void);

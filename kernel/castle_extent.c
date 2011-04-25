@@ -65,8 +65,6 @@
  
 #define FAULT_CODE EXTENT_FAULT
 
-int low_disk_space = 0;
-
 c_chk_cnt_t meta_ext_size = 0;
 
 struct castle_extents_superblock castle_extents_global_sb;
@@ -779,15 +777,12 @@ static c_disk_chk_t castle_extent_disk_chk_alloc(da_id_t da_id,
         /*
          * We get here if the slave is either out-or-service, or out of space. If the slave is
          * out-of-service then just return INVAL_DISK_CHK so calling stack can retry.
-         * If it's out of space then set the low_disk_space condition, except for SSDs, which
-         * can run out of space while non-SSDs still have free space.
          */
         if ((!test_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags)) && (!(slave->cs_superblock.pub.flags & CASTLE_SLAVE_SSD)))
         {
             /* Slave is not out-of-service so we are out of space.  */
             castle_printk(LOG_WARN, "Failed to get freespace from slave: 0x%x\n", slave->uuid);
             castle_freespace_stats_print();
-            low_disk_space = 1;
         }
         return INVAL_DISK_CHK;
     }
@@ -1004,9 +999,6 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t rda_type,
     struct castle_extents_superblock *castle_extents_sb = NULL;
 
     BUG_ON(!extent_init_done && !LOGICAL_EXTENT(ext_id));
-
-    if (low_disk_space)
-        goto __hell;
 
     if (castle_extents_hash_get(ext_id))
         goto __hell;
@@ -1721,9 +1713,6 @@ static int castle_extent_remap_superchunks_alloc(int slave_idx)
         /*
          * We get here if the slave is either out-or-service, or out of space. If the slave is
          * out-of-service then just return ENOSPC so calling stack can retry.
-         * If it's out of space then set the low_disk_space condition, except for SSDs, which
-         * can run out of space while non-SSDs still have free space.
-
          */
         if ((!test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags)) && (!(cs->cs_superblock.pub.flags & CASTLE_SLAVE_SSD)))
         {
@@ -1732,7 +1721,6 @@ static int castle_extent_remap_superchunks_alloc(int slave_idx)
                     cs->uuid, bdevname(cs->bdev, b));
 
             castle_freespace_stats_print();
-            low_disk_space = 1;
             return -ENOSPC;
         } else
         {
