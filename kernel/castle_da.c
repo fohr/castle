@@ -6063,7 +6063,10 @@ static int castle_da_writeback(struct castle_double_array *da, void *unused)
                this thread will not run while deserialisation is ongoing, so the best we can do
                is to skip when we detect a deserialising merge. */
             if(da->levels[i].merge.serdes.des)
+            {
+                up(&da->levels[i].merge.serdes.mutex);
                 continue;
+            }
 
             if(atomic_read(&da->levels[i].merge.serdes.valid)==2)
             {
