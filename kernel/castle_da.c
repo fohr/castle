@@ -6484,6 +6484,8 @@ int castle_double_array_read(void)
 
     while(castle_mstore_iterator_has_next(iterator))
     {
+        uint32_t ct_seq;
+
         castle_mstore_iterator_next(iterator, &mstore_centry, &key);
         /* Special case for castle_global_tree, it doesn't have a da associated with it. */
         if(TREE_GLOBAL(mstore_centry.seq))
@@ -6506,8 +6508,11 @@ int castle_double_array_read(void)
         write_lock(&da->lock);
         castle_component_tree_add(da, ct, NULL /*head*/, 1 /*in_init*/);
         write_unlock(&da->lock);
-        if (ct->seq >= atomic_read(&castle_next_tree_seq))
-            atomic_set(&castle_next_tree_seq, ct->seq+1);
+        /* Calculate maximum CT sequence number. Be wary of T0 sequence numbers, they prefix 
+         * CPU indexes. */
+        ct_seq = ct->seq & ((1 << TREE_SEQ_SHIFT) - 1);
+        if (ct_seq >= atomic_read(&castle_next_tree_seq))
+            atomic_set(&castle_next_tree_seq, ct_seq+1);
     }
     castle_mstore_iterator_destroy(iterator);
     iterator = NULL;
