@@ -294,7 +294,7 @@ static ssize_t da_tree_list_show(struct kobject *kobj,
                            (CHUNK(ct->tree_ext_free.ext_size) + 
                             CHUNK(ct->data_ext_free.ext_size) + 
                             CHUNK(ct->internal_ext_free.ext_size) +
-                            ct->bloom.num_chunks +
+                            ((ct->bloom_exists)?ct->bloom.num_chunks:0) +
                             atomic64_read(&ct->large_ext_chk_cnt)));           /* Tree size */
             if (ret >= PAGE_SIZE)
                 goto err;
