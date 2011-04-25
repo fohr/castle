@@ -283,7 +283,6 @@ typedef enum {
 typedef struct castle_extent_freespace {
     c_ext_id_t      ext_id;
     c_byte_off_t    ext_size;
-    uint32_t        align;
     atomic64_t      used;
     atomic64_t      blocked;
 } c_ext_free_t;
@@ -294,8 +293,7 @@ typedef struct castle_extent_freespace_byte_stream {
     /*          8 */ c_byte_off_t    ext_size;
     /*         16 */ uint64_t        used;
     /*         24 */ uint64_t        blocked;
-    /*         32 */ uint32_t        align;
-    /*         36 */ uint8_t         _unused[28];
+    /*         32 */ uint8_t         _unused[32];
     /*         64 */
 } PACKED c_ext_free_bs_t;
 
@@ -1315,14 +1313,12 @@ void                  castle_fs_superblock_slaves_update
 int                   castle_fs_init               (void);
 
 void                  castle_ext_freespace_init    (c_ext_free_t     *ext_free,
-                                                    c_ext_id_t        ext_id,
-                                                    uint32_t          align);
+                                                    c_ext_id_t        ext_id);
 
 int                   castle_new_ext_freespace_init(c_ext_free_t     *ext_free,
                                                     da_id_t           da_id,
                                                     c_ext_type_t      ext_type,
-                                                    c_byte_off_t      size,
-                                                    uint32_t          align);
+                                                    c_byte_off_t      size);
 
 int                   castle_ext_freespace_consistent
                                                    (c_ext_free_t     *ext_frees);

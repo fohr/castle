@@ -415,7 +415,7 @@ int castle_extents_create(void)
     if ((ret = castle_extent_meta_ext_create()))
         return ret;
 
-    castle_ext_freespace_init(&meta_ext_free, META_EXT_ID, C_BLK_SIZE);
+    castle_ext_freespace_init(&meta_ext_free, META_EXT_ID);
 
     INJECT_FAULT;
 

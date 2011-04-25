@@ -2412,12 +2412,10 @@ static int castle_da_merge_extents_alloc(struct castle_da_merge *merge)
     /* Now, initialise freespace structure for the extents allocated. */
     if(!EXT_ID_INVAL(merge->out_tree->tree_ext_free.ext_id))
         castle_ext_freespace_init(&merge->out_tree->tree_ext_free,
-                                   merge->out_tree->tree_ext_free.ext_id,
-                                   C_BLK_SIZE);
+                                   merge->out_tree->tree_ext_free.ext_id);
     if(!EXT_ID_INVAL(merge->out_tree->internal_ext_free.ext_id))
         castle_ext_freespace_init(&merge->out_tree->internal_ext_free,
-                                   merge->out_tree->internal_ext_free.ext_id,
-                                   C_BLK_SIZE);
+                                   merge->out_tree->internal_ext_free.ext_id);
 
     /* Allocate an extent for medium objects of merged tree for the size equal to
      * sum of both the trees. */
@@ -2425,8 +2423,7 @@ static int castle_da_merge_extents_alloc(struct castle_da_merge *merge)
     if ((ret = castle_new_ext_freespace_init(&merge->out_tree->data_ext_free,
                                               merge->da->id,
                                               EXT_T_MEDIUM_OBJECTS,
-                                              data_size,
-                                              C_BLK_SIZE)))
+                                              data_size)))
     {
         castle_printk(LOG_WARN, "Merge failed due to space constraint for data\n");
         goto no_space;
@@ -6683,8 +6680,7 @@ static int __castle_da_rwct_create(struct castle_double_array *da, int cpu_index
     if ((err = castle_new_ext_freespace_init(&ct->internal_ext_free,
                                              da->id,
                                              EXT_T_INTERNAL_NODES,
-                                             MAX_DYNAMIC_TREE_SIZE * C_CHK_SIZE,
-                                             btree->node_size(ct, 0) * C_BLK_SIZE)))
+                                             MAX_DYNAMIC_TREE_SIZE * C_CHK_SIZE)))
     {
         castle_printk(LOG_WARN, "Failed to get space for T0 internal\n");
         goto no_space;
@@ -6692,8 +6688,7 @@ static int __castle_da_rwct_create(struct castle_double_array *da, int cpu_index
     if ((err = castle_new_ext_freespace_init(&ct->tree_ext_free,
                                               da->id,
                                               EXT_T_LEAF_NODES,
-                                              MAX_DYNAMIC_TREE_SIZE * C_CHK_SIZE,
-                                              btree->node_size(ct, 0) * C_BLK_SIZE)))
+                                              MAX_DYNAMIC_TREE_SIZE * C_CHK_SIZE)))
     {
         castle_printk(LOG_WARN, "Failed to get space for T0 tree\n");
         goto no_space;
@@ -6701,8 +6696,7 @@ static int __castle_da_rwct_create(struct castle_double_array *da, int cpu_index
     if ((err = castle_new_ext_freespace_init(&ct->data_ext_free,
                                               da->id,
                                               EXT_T_MEDIUM_OBJECTS,
-                                              MAX_DYNAMIC_DATA_SIZE * C_CHK_SIZE,
-                                              C_BLK_SIZE)))
+                                              MAX_DYNAMIC_DATA_SIZE * C_CHK_SIZE)))
     {
         castle_printk(LOG_WARN, "Failed to get space for T0 data\n");
         goto no_space;
