@@ -1559,7 +1559,7 @@ struct castle_double_array {
 #endif
                 struct castle_component_tree  *out_tree;
                 struct castle_dmserlist_entry *mstore_entry;
-                struct semaphore mutex; /* because we might lock while using mstore, spinlock
+                struct mutex     mutex; /* because we might lock while using mstore, spinlock
                                            may be a bad idea. might need a "double buffering"
                                            solution with round robin selection over 2
                                            mstore_entry structures to get around it? */
