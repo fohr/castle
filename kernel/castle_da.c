@@ -6569,6 +6569,12 @@ static struct castle_component_tree* castle_ct_alloc(struct castle_double_array 
 
     /* Allocate an id for the tree, init the ct. */
     ct->seq             = atomic_inc_return(&castle_next_tree_seq);
+    if(ct->seq >= (1U<<TREE_SEQ_SHIFT))
+    {
+        castle_printk(LOG_ERROR, "Could not allocate a CT because of sequence # overflow.\n");
+        castle_free(ct);
+        return NULL;
+    }
     atomic_set(&ct->ref_count, 1);
     atomic_set(&ct->write_ref_count, 0);
     atomic64_set(&ct->item_count, 0);
