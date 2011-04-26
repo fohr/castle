@@ -2245,8 +2245,6 @@ restart:
 
         castle_extents_remap_state_init();
 
-        castle_extents_chunks_remapped = 0;
-
         /* Build the list of extents to remap. */
         castle_extents_hash_iterate(castle_extent_rebuild_list_add, NULL);
 
