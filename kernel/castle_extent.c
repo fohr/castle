@@ -425,6 +425,35 @@ int castle_extents_create(void)
     return 0;
 }
 
+/**
+ * Inserts all extent stats into the stats mstore. At the moment just the rebulid progress counter.
+ */
+void castle_extents_stats_writeback(c_mstore_t *stats_mstore)
+{
+    struct castle_slist_entry mstore_entry;
+
+    mstore_entry.stat_type = STATS_MSTORE_REBUILD_PROGRESS;
+    mstore_entry.key = -1;
+    mstore_entry.val = castle_extents_chunks_remapped;
+
+    castle_mstore_entry_insert(stats_mstore, &mstore_entry);
+}
+
+/**
+ * Reads extent stats. At the moment just a single entry of STATS_MSTORE_REBUILD_PROGRESS expected.
+ */
+void castle_extents_stat_read(struct castle_slist_entry *mstore_entry)
+{
+    BUG_ON(mstore_entry->stat_type != STATS_MSTORE_REBUILD_PROGRESS);
+    BUG_ON(mstore_entry->key != (uint64_t)-1);
+
+    /* Temporarily high logging level. */
+    castle_printk(LOG_INFO,
+                  "Read %lld chunks remapped from mstore.\n",
+                  mstore_entry->val);
+    castle_extents_chunks_remapped += mstore_entry->val;
+}
+
 int nr_exts = 0;
 
 /* @TODO who should handle errors in writeback? */
@@ -2133,7 +2162,6 @@ retry:
             ext->use_shadow_map = 0;
             spin_unlock(&ext->shadow_map_lock);
             castle_vfree(ext->shadow_map);
-            castle_extents_chunks_remapped = 0;
             return 1;
         }
     }

@@ -5187,6 +5187,79 @@ int castle_checkpoint_version_inc(void)
     return 0;
 }
 
+/**
+ * High level handler for writing out stats mstore. It prepares the store, and calls sub-handlers
+ * to collect all the stats.
+ */
+static int castle_stats_writeback(void)
+{
+    c_mstore_t *stats_store;
+
+    /* Initialise the store. */
+    stats_store = castle_mstore_init(MSTORE_STATS, sizeof(struct castle_slist_entry));
+    if(!stats_store)
+        return -ENOMEM;
+
+    /* Writeback extent stats. */
+    castle_extents_stats_writeback(stats_store);
+
+    /* Close mstore. */
+    castle_mstore_fini(stats_store);
+
+    return 0;
+}
+
+/**
+ * Reads all stats from stats mstore, and, depending on stat type calls appropriate consumer.
+ * At the moment only used for rebuild progress counter.
+ */
+int castle_stats_read(void)
+{
+    c_mstore_t *stats_mstore;
+    struct castle_mstore_iter *iterator;
+    struct castle_slist_entry mstore_entry;
+    c_mstore_key_t key;
+
+    castle_printk(LOG_INFO, "Opening mstore for stats\n");
+    /* Open mstore. */
+    stats_mstore = castle_mstore_open(MSTORE_STATS, sizeof(struct castle_slist_entry));
+    if(!stats_mstore)
+        return -ENOMEM;
+
+    /* Create the iterator for the mstore. */
+    iterator = castle_mstore_iterate(stats_mstore);
+    if(!iterator)
+    {
+        castle_mstore_fini(stats_mstore);
+        return -EINVAL;
+    }
+
+    /* Iterate through all entries. */
+    while(castle_mstore_iterator_has_next(iterator))
+    {
+        castle_mstore_iterator_next(iterator, &mstore_entry, &key);
+
+        /* Handle each entry appropriately. */
+        switch(mstore_entry.stat_type)
+        {
+            case STATS_MSTORE_REBUILD_PROGRESS:
+                castle_extents_stat_read(&mstore_entry);
+                break;
+            default:
+                castle_printk(LOG_ERROR, "Unknown mstore stat (%p), type=0x%x\n",
+                        &mstore_entry, mstore_entry.stat_type);
+                BUG();
+                break;
+        }
+    }
+
+    /* Cleanup. */
+    castle_mstore_iterator_destroy(iterator);
+    castle_mstore_fini(stats_mstore);
+
+    return 0;
+}
+
 int castle_mstores_writeback(uint32_t version)
 {
     struct castle_fs_superblock *fs_sb;
@@ -5214,6 +5287,7 @@ int castle_mstores_writeback(uint32_t version)
 
     castle_versions_writeback();
     castle_extents_writeback();
+    castle_stats_writeback();
 
     BUG_ON(!castle_ext_freespace_consistent(&mstore_ext_free));
     castle_cache_extent_flush_schedule(MSTORE_EXT_ID + slot, 0, 

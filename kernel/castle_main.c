@@ -841,7 +841,11 @@ int castle_fs_init(void)
     /* Read Collection Attachments. */
     if (!first && (ret = castle_attachments_read()))
         return ret;
- 
+
+    /* Read stats in. */
+    if (!first && (ret = castle_stats_read()))
+        return ret;
+
     FAULT(FS_INIT_FAULT);
 
     if (!first && (ret = castle_chk_disk()))
