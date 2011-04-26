@@ -73,3 +73,43 @@ void castle_uevent1(uint16_t cmd, uint64_t arg1)
 {
     castle_uevent4(cmd, arg1, 0, 0, 0);
 }
+
+extern atomic_t current_rebuild_seqno;
+
+/**
+ * Notifies the userspace about any disks which are being rebuilt at the moment.
+ * If called multiple disks are being rebuilt, it may notify about the same disk multiple times
+ * because no information about which notifications have already been sent out is stored.
+ */
+static void castle_events_slave_rebuild_handle(void *unused)
+{
+    struct castle_slave *cs;
+    struct list_head *lh;
+    int seqno;
+
+    /* Read the sequence number before notification starts. */
+    seqno = atomic_read(&current_rebuild_seqno);
+    list_for_each(lh, &castle_slaves.slaves)
+    {
+        cs = list_entry(lh, struct castle_slave, list);
+        /* Notify about any slaves which have the EVACUATE or OOS bit set, but
+           don't have the REMAPPED bit set yet. */
+        if((test_bit(CASTLE_SLAVE_EVACUATE_BIT, &cs->flags) ||
+            test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags)) &&
+           (!test_bit(CASTLE_SLAVE_REMAPPED_BIT, &cs->flags)))
+            castle_events_slave_rebuild(cs->uuid);
+    }
+    /* If the sequence number changed, re-notify. */
+    if(seqno != atomic_read(&current_rebuild_seqno))
+        castle_events_slave_rebuild_notify();
+}
+
+static DECLARE_WORK(castle_events_slave_rebuild_work, castle_events_slave_rebuild_handle, NULL);
+/**
+ * Schedules notifications about disks being rebuilt.
+ * Safe to be called from atomic contexts.
+ */
+void castle_events_slave_rebuild_notify(void)
+{
+    schedule_work(&castle_events_slave_rebuild_work);
+}

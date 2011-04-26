@@ -15,6 +15,7 @@
 #include "castle_cache.h"
 #include "castle_da.h"
 #include "castle_rebuild.h"
+#include "castle_events.h"
 
 /* Extent manager - Every disk reserves few chunks in the begining of the disk to 
  * store meta data. Meta data for freespace management (for each disk) would be
@@ -2353,6 +2354,7 @@ out:
 void castle_extents_rebuild_wake(void)
 {
     atomic_inc(&current_rebuild_seqno);
+    castle_events_slave_rebuild_notify();
     wake_up(&rebuild_wq);
 }
 
