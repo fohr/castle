@@ -5311,7 +5311,7 @@ static int castle_periodic_checkpoint(void *unused)
     struct castle_fs_superblock         *fs_sb;
     struct castle_extents_superblock    *castle_extents_sb;
 
-    int      i; 
+    int      ret, i;
     int      exit_loop = 0;
     struct   list_head flush_list;
 
@@ -5322,7 +5322,8 @@ static int castle_periodic_checkpoint(void *unused)
         /* Wakes-up once in a second just to check whether to stop the thread.
          * After every checkpoint_frequency seconds checkpoints the filesystem. */
         for (i=0;
-            (i<MIN_CHECKPOINT_FREQUENCY) || ((i<checkpoint_frequency) && (i<MAX_CHECKPOINT_FREQUENCY));
+            (i<MIN_CHECKPOINT_FREQUENCY) ||
+            ((i<checkpoint_frequency) && (i<MAX_CHECKPOINT_FREQUENCY));
             i++)
         {
             if (!kthread_should_stop())
@@ -5344,11 +5345,12 @@ static int castle_periodic_checkpoint(void *unused)
         {
             castle_printk(LOG_WARN, "Mstore pre-writeback failed.\n");
             castle_trace_cache(TRACE_END, TRACE_CACHE_CHECKPOINT_ID, 0);
-            return -1;
+            ret = -1;
+            goto out;
         }
 
         CASTLE_TRANSACTION_BEGIN;
- 
+
         fs_sb = castle_fs_superblocks_get();
         version = fs_sb->fs_version;
         /* Update rebuild superblock information. */
@@ -5358,12 +5360,13 @@ static int castle_periodic_checkpoint(void *unused)
         castle_extents_sb = castle_extents_super_block_get();
         castle_extents_sb->current_rebuild_seqno = atomic_read(&current_rebuild_seqno);
         castle_extents_super_block_put(1);
- 
+
         if (castle_mstores_writeback(version))
         {
             castle_printk(LOG_WARN, "Mstore writeback failed\n");
             castle_trace_cache(TRACE_END, TRACE_CACHE_CHECKPOINT_ID, 0);
-            return -1;
+            ret = -2;
+            goto out;
         }
 
         list_replace(&castle_cache_flush_list, &flush_list);
@@ -5381,15 +5384,22 @@ static int castle_periodic_checkpoint(void *unused)
         {
             castle_printk(LOG_WARN, "Superblock writeback failed\n");
             castle_trace_cache(TRACE_END, TRACE_CACHE_CHECKPOINT_ID, 0);
-            return -1;
+            ret = -3;
+            goto out;
         }
         castle_checkpoint_version_inc();
-        
+
         castle_printk(LOG_DEVEL, "*****Completed checkpoint of version: %u*****\n", version);
         castle_trace_cache(TRACE_END, TRACE_CACHE_CHECKPOINT_ID, 0);
     } while (!exit_loop);
+    /* Clean exit, return success. */
+    ret = 0;
+out:
+    /* Wait until the thread is explicitly collected. */
+    while(!kthread_should_stop())
+        msleep_interruptible(1000);
 
-    return 0;
+    return ret;
 }
 
 int castle_chk_disk(void)
