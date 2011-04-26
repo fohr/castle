@@ -1945,6 +1945,7 @@ static int castle_extent_remap(c_ext_t *ext)
     uint32_t            k_factor = castle_extent_kfactor_get(ext->ext_id);
     int                 chunkno, idx, remap_idx, no_remap_idx, i;
     struct castle_slave *cs;
+    int ret=0;
 
     debug("\nRemapping extent %llu size: %u, from seqno: %u to seqno: %u\n",
             ext->ext_id, ext->size, ext->curr_rebuild_seqno, rebuild_to_seqno);
@@ -1987,6 +1988,8 @@ static int castle_extent_remap(c_ext_t *ext)
          * the two sets in the remap chunks array.
          */
         c_disk_chk_t remap_chunks[k_factor];
+
+retry:
         for (idx=0, remap_idx=0, no_remap_idx=k_factor-1; idx<k_factor; idx++)
         {
             c_disk_chk_t *disk_chk;
@@ -2062,7 +2065,7 @@ static int castle_extent_remap(c_ext_t *ext)
                 BUG_ON(submit_c2b_sync(READ, c2b));
 
             /* Submit the write. */
-            BUG_ON(submit_c2b_remap_rda(c2b, remap_chunks, remap_idx));
+            ret = submit_c2b_remap_rda(c2b, remap_chunks, remap_idx);
 
             write_unlock_c2b(c2b);
 
@@ -2071,6 +2074,16 @@ static int castle_extent_remap(c_ext_t *ext)
              * of the c2b. Except in the case logical extents, rebuild is the only consumer accesses in 
              * chunks. So, there shouldnt be any other references to this c2b. */
             BUG_ON(castle_cache_block_destroy(c2b) && LOGICAL_EXTENT(ext->ext_id));
+
+            /*
+             * Check that the submit_c2b_remap_rda succeeded. If it got EAGAIN, then the
+             * remap_chunks contained a now-oos slave (a slave that went oos between the disk chunk
+             * alloc and the submit. In this case, we can retry, which should rebuild remap_chunks
+             * with (hopefully) now valid slave(s).
+             */
+            if (ret == -EAGAIN)
+                goto retry;
+            BUG_ON(ret);
 
             /*
              * Now write out the shadow map entry for this chunk.

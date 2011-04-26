@@ -1338,13 +1338,17 @@ static int c_io_array_submit(int rw,
         }
     }
     /*
-     * There's no need to return write failure here if no live slave found. If the extent is
-     * for a superblock then we can treat this as successful because we don't care if writes
-     * fail to a to the superblock of a now-dead disk. We won't have incremented c2b->remaining
-     * so doing nothing here is safe.
-     * For all other extent types finding no live slave to write to is fatal, so bug out.
+     * If no live slave was found , and the extent is for a superblock then we can treat this
+     * as successful because we don't care if writes fail to a to the superblock of a now-dead
+     * disk. We won't have incremented c2b->remaining so doing nothing here is safe.
+     * For all other extent types, if we find no live slave then return EAGAIN so the caller
+     * can retry if it wants.
      */
-    BUG_ON(!found && !SUPER_EXTENT(ext_id));
+    if (!found && !SUPER_EXTENT(ext_id))
+    {
+        debug("Could not submit I/O. Only oos slaves specified in disk chunk\n");
+        return -EAGAIN;
+    }
 
     return EXIT_SUCCESS;
 }
