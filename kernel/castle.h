@@ -1264,6 +1264,13 @@ struct castle_attachment {
         } col; /* Only valid for object collections */
     };
 
+    /* Stats for attachment. */
+    struct {
+        atomic64_t      ios;
+        atomic64_t      bytes;
+    } get, put, big_get, big_put, rq;
+    atomic64_t          rq_nr_keys;
+
     struct kobject      kobj;
     int                 sysfs_registered;
     struct list_head    list;
