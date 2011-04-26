@@ -4745,7 +4745,6 @@ static void castle_mstore_iterator_advance(struct castle_mstore_iter *iter)
     struct castle_mlist_node *node;
     struct castle_mstore_entry *mentry;
     c2_block_t *c2b;
-    int ret;
 
 again: 
     c2b = NULL;
@@ -4773,8 +4772,7 @@ again:
             if(!c2b_uptodate(c2b)) 
             {
                 debug_mstore("Scheduling a read.\n");
-                ret = submit_c2b_sync(READ, c2b);
-                BUG_ON(ret);
+                BUG_ON(submit_c2b_sync(READ, c2b));
             }
         } else
         /* For the sole benefit of initialising the store */

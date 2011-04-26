@@ -1682,7 +1682,7 @@ static void castle_bio_data_io_do(c_bvec_t *c_bvec, c_ext_pos_t cep)
         castle_debug_bvec_update(c_bvec, C_BVEC_DATA_C2B_OUTOFDATE);
         c2b->private = c_bvec;
         c2b->end_io = castle_bio_c2b_update;
-        submit_c2b(READ, c2b);
+        BUG_ON(submit_c2b(READ, c2b));
     }
 }
 
