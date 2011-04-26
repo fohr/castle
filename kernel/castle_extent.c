@@ -153,6 +153,7 @@ static c_ext_t * castle_ext_alloc(c_ext_id_t ext_id)
     ext->ext_id             = ext_id;
     ext->alive              = 1;
     ext->dirtylist.rb_root  = RB_ROOT;
+    INIT_LIST_HEAD(&ext->dirtylist.list);
     ext->deleted            = 0;
     ext->maps_cep           = INVAL_EXT_POS;
     ext->ext_type           = EXT_T_INVALID;
@@ -1152,6 +1153,7 @@ static void _castle_extent_free(void *data)
 
     /* Remove extent from hash and free the space. Both should happen in atomic with respect 
      * to checkpoint. */
+    castle_cache_extent_dirtylist_remove(&ext->dirtylist);
     castle_extents_hash_remove(ext);
     castle_extent_space_free(ext, ext->k_factor * ext->size);
 

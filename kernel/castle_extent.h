@@ -7,8 +7,10 @@
  * Extent dirtylist structure.
  */
 typedef struct c_ext_dirtylist {
-    spinlock_t                  lock;           /**< Dirtylist lock. */
-    struct rb_root              rb_root;        /**< Dirtylist RB root. */
+    spinlock_t                  lock;           /**< Dirtylist lock.                    */
+    int                         count;          /**< Elements on dirtylist.             */
+    struct rb_root              rb_root;        /**< Dirtylist RB root.                 */
+    struct list_head            list;           /**< castle_cache_extent_dirtylist pos. */
 } c_ext_dirtylist_t;
 
 c_ext_id_t          castle_extent_alloc                     (c_rda_type_t   rda_type,

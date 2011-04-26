@@ -270,8 +270,10 @@ static struct hlist_head      *castle_cache_page_hash = NULL;
 
 static struct kmem_cache      *castle_io_array_cache = NULL;
 
-static               LIST_HEAD(castle_cache_dirtylist);
-static               LIST_HEAD(castle_cache_cleanlist);
+/* Following LIST_HEADs are protected by castle_cache_block_hash_lock. */
+static               LIST_HEAD(castle_cache_extent_dirtylist);      /**< Extents with dirty c2bs  */
+static               LIST_HEAD(castle_cache_dirtylist);             /**< Dirty c2bs               */
+static               LIST_HEAD(castle_cache_cleanlist);             /**< Clean c2bs               */
 static atomic_t                castle_cache_cleanlist_size;         /**< Blocks on the cleanlist  */
 static atomic_t                castle_cache_cleanlist_softpin_size; /**< Softpin blks on cleanlist*/
 static atomic_t                castle_cache_block_victims;          /**< #clean blocks evicted    */
@@ -747,6 +749,18 @@ static inline int c2b_softpin(c2_block_t *c2b)
 }
 
 /**
+ * Remove a per-extent dirtylist from the list of dirtylists.
+ *
+ * @also _castle_extent_free()
+ */
+void castle_cache_extent_dirtylist_remove(c_ext_dirtylist_t *dirtylist)
+{
+    spin_lock(&castle_cache_block_hash_lock);
+    list_del_init(&dirtylist->list);
+    spin_unlock(&castle_cache_block_hash_lock);
+}
+
+/**
  * Remove a c2b from its per-extent dirtylist.
  *
  * @param c2b   Block to remove
@@ -766,6 +780,12 @@ static int c2_dirtylist_remove(c2_block_t *c2b)
     spin_lock_irqsave(&dirtylist->lock, flags);
 
     rb_erase(&c2b->rb_dirtylist, &dirtylist->rb_root);
+    if (--dirtylist->count == 0)
+        /* Last dirty c2b from this extent has been cleaned.  Remove this
+         * per-extent c2b dirtylist from the list of dirty extents. */
+        castle_cache_extent_dirtylist_remove(dirtylist);
+    }
+    BUG_ON(dirtylist->count < 0);
 
     /* Release dirtylist lock. */
     spin_unlock_irqrestore(&dirtylist->lock, flags);
@@ -820,9 +840,9 @@ static int c2_dirtylist_insert(c2_block_t *c2b)
             else
             {
                 /* this can't happen? */
-                castle_printk(LOG_WARN, "Found an identical c2b in the tree already.  "
+                castle_printk(LOG_ERROR, "Found an identical c2b in the tree already.  "
                         "Not inserting.\n");
-                WARN_ON(1);
+                BUG();
                 spin_unlock(&dirtylist->lock);
                 castle_extent_dirtylist_put(c2b->cep.ext_id);
 
@@ -834,6 +854,14 @@ static int c2_dirtylist_insert(c2_block_t *c2b)
     /* Insert c2b into the tree. */
     rb_link_node(&c2b->rb_dirtylist, parent, p);
     rb_insert_color(&c2b->rb_dirtylist, &dirtylist->rb_root);
+    if (++dirtylist->count == 1)
+    {
+        /* First dirty c2b for this extent.  Place the per-extent c2b dirtylist
+         * onto the list of dirty extents. */
+        spin_lock(&castle_cache_block_hash_lock);
+        list_add_tail(&dirtylist->list, &castle_cache_extent_dirtylist);
+        spin_unlock(&castle_cache_block_hash_lock);
+    }
 
     /* Release dirtylist lock. */
     spin_unlock_irqrestore(&dirtylist->lock, flags);

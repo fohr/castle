@@ -1,3 +1,5 @@
+#include "castle_extent.h"
+
 #ifndef __CASTLE_CACHE_H__
 #define __CASTLE_CACHE_H__
 
@@ -87,6 +89,7 @@ void clear_c2b_no_resubmit  (c2_block_t *c2b);
 int  c2b_remap              (c2_block_t *c2b);
 void set_c2b_remap          (c2_block_t *c2b);
 void clear_c2b_remap        (c2_block_t *c2b);
+void castle_cache_extent_dirtylist_remove(c_ext_dirtylist_t *dirtylist);
 
 /**********************************************************************************************
  * Refcounts. 
