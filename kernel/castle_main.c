@@ -1977,6 +1977,18 @@ struct castle_attachment* castle_attachment_init(int device, /* _or_object_colle
     attachment->device  = device;
     attachment->version = version;
 
+    atomic64_set(&attachment->get.ios, 0);
+    atomic64_set(&attachment->get.bytes, 0);
+    atomic64_set(&attachment->put.ios, 0);
+    atomic64_set(&attachment->put.bytes, 0);
+    atomic64_set(&attachment->big_get.ios, 0);
+    atomic64_set(&attachment->big_get.bytes, 0);
+    atomic64_set(&attachment->big_put.ios, 0);
+    atomic64_set(&attachment->big_put.bytes, 0);
+    atomic64_set(&attachment->rq.ios, 0);
+    atomic64_set(&attachment->rq.bytes, 0);
+    atomic64_set(&attachment->rq_nr_keys, 0);
+
     return attachment; 
 }
 

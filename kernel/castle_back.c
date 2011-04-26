@@ -141,6 +141,9 @@ struct castle_back_iterator
     uint32_t                      kv_list_size;
     /* the amount of buffer the kv_list can fill */
     uint32_t                      buf_len;
+    /* Stats */
+    uint64_t                      nr_keys;
+    uint64_t                      nr_bytes;
 };
 
 typedef void (*castle_back_stateful_op_expire_t) (struct castle_back_stateful_op *stateful_op);
@@ -1086,7 +1089,7 @@ static void castle_back_key_kernel_to_user(c_vl_okey_t *key, struct castle_back_
 /**
  * if doesn't fit into the buffer, *buf_used will be set to 0
  */
-static void castle_back_val_kernel_to_user(c_val_tup_t *val, struct castle_back_buffer *buf, 
+static uint32_t castle_back_val_kernel_to_user(c_val_tup_t *val, struct castle_back_buffer *buf, 
                                            unsigned long user_buf, uint32_t buf_len,
                                            uint32_t *buf_used, collection_id_t collection_id)
 {
@@ -1103,7 +1106,7 @@ static void castle_back_val_kernel_to_user(c_val_tup_t *val, struct castle_back_
     if (buf_len < length)
     {
         *buf_used = 0;
-        return;
+        return 0;
     }
 
     val_copy = (struct castle_iter_val *)castle_back_user_to_kernel(buf, user_buf);
@@ -1119,6 +1122,8 @@ static void castle_back_val_kernel_to_user(c_val_tup_t *val, struct castle_back_
     }
 
     *buf_used = length;
+
+    return val_length;
 }
 
 static void castle_back_replace_complete(struct castle_object_replace *replace, int err)
@@ -1129,6 +1134,13 @@ static void castle_back_replace_complete(struct castle_object_replace *replace, 
 
     if (op->replace.value_len > 0)
         castle_back_buffer_put(op->conn, op->buf);
+
+    /* Update stats. */
+    if (!err)
+    {
+        atomic64_inc(&op->attachment->put.ios);
+        atomic64_add(op->replace.value_len, &op->attachment->put.bytes);
+    }
 
     castle_attachment_put(op->attachment); 
 
@@ -1239,6 +1251,14 @@ static void castle_back_remove_complete(struct castle_object_replace *replace, i
     struct castle_back_op *op = container_of(replace, struct castle_back_op, replace);
 
     debug("castle_back_remove_complete\n");
+
+    /* Update stats. */
+    if (!err)
+    {
+        atomic64_inc(&op->attachment->put.ios);
+        /* Replacing with Tomb Stone. Dont increment bytes. */
+    }
+
     castle_attachment_put(op->attachment); 
 
     castle_back_reply(op, err, 0, 0);
@@ -1316,6 +1336,14 @@ void castle_back_get_reply_continue(struct castle_object_get *get,
     if (last)
     {
         castle_back_buffer_put(op->conn, op->buf);
+
+        /* Update stats. */
+        if (!err)
+        {
+            atomic64_inc(&op->attachment->get.ios);
+            atomic64_add(op->req.get.value_len, &op->attachment->get.bytes);
+        }
+
         castle_attachment_put(op->attachment); 
         castle_back_reply(op, 0, 0, op->value_length);
     }
@@ -1553,6 +1581,8 @@ static void castle_back_iter_start(void *data)
     stateful_op->iterator.saved_key = NULL;
     stateful_op->iterator.start_key = start_key;
     stateful_op->iterator.end_key = end_key;
+    stateful_op->iterator.nr_keys = 0;
+    stateful_op->iterator.nr_bytes = 0;
     stateful_op->attachment = attachment;
 
     INIT_WORK(&stateful_op->work[0], _castle_back_iter_next, stateful_op);
@@ -1581,14 +1611,15 @@ err1: /* No one could have added another op to queue as we haven't returns token
 err0: castle_back_reply(op, err, 0, 0);    
 }
 
-static uint32_t castle_back_save_key_value_to_list(struct castle_key_value_list *kv_list,
+static uint32_t castle_back_save_key_value_to_list(struct castle_back_stateful_op *stateful_op,
+        struct castle_key_value_list *kv_list,
         c_vl_okey_t *key, c_val_tup_t *val,
         collection_id_t collection_id,
         struct castle_back_buffer *back_buf,
         uint32_t buf_len, /* space left in the buffer */
         int save_val /* should values be saved too? */)
 {
-    uint32_t buf_used, key_len, val_len;
+    uint32_t buf_used, key_len, val_len, cvt_len = 0;
 
     BUG_ON(!kv_list);
 
@@ -1616,8 +1647,9 @@ static uint32_t castle_back_save_key_value_to_list(struct castle_key_value_list 
     else
     {
         kv_list->val = (struct castle_iter_val *)((unsigned long)kv_list->key + key_len);
-        castle_back_val_kernel_to_user(val, back_buf,
-            (unsigned long)kv_list->val, buf_len - buf_used, &val_len, collection_id);
+        cvt_len = castle_back_val_kernel_to_user(val, back_buf,
+                            (unsigned long)kv_list->val, buf_len - buf_used, &val_len, 
+                            collection_id);
 
         if (val_len == 0)
         {
@@ -1626,6 +1658,9 @@ static uint32_t castle_back_save_key_value_to_list(struct castle_key_value_list 
         }
         buf_used += val_len;
     }
+
+    stateful_op->iterator.nr_keys++;
+    stateful_op->iterator.nr_bytes += cvt_len;
 
     return buf_used;
 
@@ -1687,7 +1722,8 @@ static int castle_back_iter_next_callback(struct castle_object_iterator *iterato
     buf_len = stateful_op->iterator.buf_len;
     buf_used = stateful_op->iterator.kv_list_size;
 
-    cur_len = castle_back_save_key_value_to_list(kv_list_cur,
+    cur_len = castle_back_save_key_value_to_list(stateful_op,
+                        kv_list_cur,
                         key,
                         val,
                         stateful_op->iterator.collection_id,
@@ -1783,7 +1819,8 @@ static void _castle_back_iter_next(void *data)
     {
         debug_iter("iter_next found saved key, adding to buffer\n");
 
-        buf_used = castle_back_save_key_value_to_list(kv_list_head,
+        buf_used = castle_back_save_key_value_to_list(stateful_op,
+                kv_list_head,
                 stateful_op->iterator.saved_key,
                 &stateful_op->iterator.saved_val,
                 stateful_op->iterator.collection_id,
@@ -1924,6 +1961,16 @@ static void _castle_back_iter_finish(void *data)
 
     castle_back_stateful_op_finish_all(stateful_op, -EINVAL);
 
+    /* Update stats. */
+    if (!err)
+    {
+        struct castle_attachment *attachment = stateful_op->attachment;
+
+        atomic64_inc(&attachment->rq.ios);
+        atomic64_add(stateful_op->iterator.nr_bytes, &attachment->rq.bytes);
+        atomic64_add(stateful_op->iterator.nr_keys, &attachment->rq_nr_keys);
+    }
+
     castle_back_iter_cleanup(stateful_op); /* drops stateful_op->lock */
 }
 
@@ -2060,6 +2107,13 @@ static void castle_back_big_put_complete(struct castle_object_replace *replace, 
 
     /* Will drop stateful_op->lock. */
     castle_back_put_stateful_op(stateful_op->conn, stateful_op);
+
+    /* Update stats. */
+    if (!err)
+    {
+        atomic64_inc(&attachment->big_put.ios);
+        atomic64_add(stateful_op->replace.value_len, &attachment->big_put.bytes);
+    }
 
     castle_attachment_put(attachment);
 }
@@ -2399,8 +2453,14 @@ static void castle_back_big_get_continue(struct castle_object_pull *pull,
         stateful_op->attachment = NULL;
 
         if (!err)
+        {
             /* May sleep so do not hold the spinlock. Safe because curr_op is still not null */
             castle_object_pull_finish(&stateful_op->pull);
+
+            /* Update stats. */
+            atomic64_inc(&attachment->big_get.ios);
+            atomic64_add(stateful_op->pull.cvt.length, &attachment->big_get.bytes);
+        }
 
         spin_lock(&stateful_op->lock);
 
