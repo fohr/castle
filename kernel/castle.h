@@ -506,6 +506,7 @@ enum {
     MSTORE_EXTENTS,
     MSTORE_LARGE_OBJECTS,
     MSTORE_DA_MERGE,
+    MSTORE_STATS,
 };
 
 
@@ -828,6 +829,20 @@ struct castle_lolist_entry {
     /*         16 */ tree_seq_t  ct_seq;
     /*         20 */ uint8_t     _unused[12];
     /*         32 */
+} PACKED;
+
+enum {
+    STATS_MSTORE_REBUILD_PROGRESS,
+};
+
+struct castle_slist_entry {
+    /* align:  8 */
+    /* offset: 0 */ uint16_t    stat_type;
+    /*         2 */ uint8_t     _pad[6];
+    /*         8 */ uint64_t    key;
+    /*        16 */ uint64_t    val;
+    /*        24 */ uint8_t     _unused[40];
+    /*        64 */
 } PACKED;
 
 /* IO related structures */

@@ -39,6 +39,9 @@ void                              castle_extents_super_block_put (int dirty);
 c_ext_id_t                        castle_extent_sup_ext_init     (struct castle_slave *cs);
 void                              castle_extent_sup_ext_close    (struct castle_slave *cs);
 
+void                castle_extents_stats_writeback (c_mstore_t *stats_mstore);
+void                castle_extents_stat_read       (struct castle_slist_entry *mstore_entry);
+
 int                 castle_extents_create                   (void);
 int                 castle_extents_read                     (void);
 int                 castle_extents_read_complete            (void);

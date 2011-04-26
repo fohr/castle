@@ -161,8 +161,10 @@ int         castle_cache_extent_flush_schedule (c_ext_id_t ext_id, uint64_t star
 
 
 /**********************************************************************************************
- * MStore related functions 
- */ 
+ * MStore related functions (including stats store handler).
+ */
+int                        castle_stats_read               (void);
+
 int                        castle_mstore_iterator_has_next (struct castle_mstore_iter *iter);
 void                       castle_mstore_iterator_next     (struct castle_mstore_iter *iter,
                                                             void *entry,
