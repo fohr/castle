@@ -47,15 +47,12 @@ struct castle_component_tree castle_global_tree = {.seq             = GLOBAL_TRE
                                                    .large_objs      = {NULL, NULL},
                                                    .tree_ext_free   = {INVAL_EXT_ID, 
                                                                        (100 * C_CHK_SIZE), 
-                                                                       0, 
                                                                        {0ULL}, 
                                                                        {0ULL}},
                                                    .data_ext_free   = {INVAL_EXT_ID, 
                                                                        (512ULL * C_CHK_SIZE), 
-                                                                       0, 
                                                                        {0ULL}, 
                                                                        {0ULL}},
-                                                   .last_key        = NULL,
                                                   }; 
 
 static DEFINE_MUTEX(castle_sblk_lock);
@@ -75,12 +72,6 @@ int                          castle_fs_inited = 0;
 int                          castle_fs_exiting = 0;
 c_fault_t                    castle_fault = NO_FAULT;
 uint32_t                     castle_fault_arg = 0;
-
-int  castle_latest_key = 0; /**< maintain latest key for each CT. Useful to test
-                              *  crash consistency.*/
-
-module_param(castle_latest_key, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
-MODULE_PARM_DESC(castle_latest_key, "castle_latest_key");
 
 module_param(checkpoint_frequency, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
 MODULE_PARM_DESC(checkpoint_frequency, "checkpoint_frequency,");
@@ -248,11 +239,9 @@ void castle_fs_superblocks_put(struct castle_fs_superblock *sb, int dirty)
  *
  * @param ext_free  Pointer to the freespace structure.
  * @param ext_id    Id of the extent for which to initalise the freespace struct.
- * @param align     How are the allocations from this extent going to be aligned. 
  */
 void castle_ext_freespace_init(c_ext_free_t *ext_free, 
-                               c_ext_id_t    ext_id,
-                               uint32_t      align)
+                               c_ext_id_t    ext_id)
 {
     /* Extent id must be valid. */ 
     BUG_ON(EXT_ID_INVAL(ext_id));
@@ -260,7 +249,6 @@ void castle_ext_freespace_init(c_ext_free_t *ext_free,
     /* Init the structure. */ 
     ext_free->ext_id = ext_id;
     ext_free->ext_size = castle_extent_size_get(ext_id) * C_CHK_SIZE;
-    ext_free->align = align;
     atomic64_set(&ext_free->used, 0);
     atomic64_set(&ext_free->blocked, 0);
 }
@@ -271,7 +259,6 @@ void castle_ext_freespace_init(c_ext_free_t *ext_free,
  * @param ext_free  Pointer to the freespace structure.
  * @param da_id     Which DA will the new extent belong to.
  * @param size      Size of the extent, in bytes.
- * @param align     How are the allocations from the new extent going to be aligned. 
  *
  * @return 0:       On success.
  * @return -ENOSPC: If extent could not be allocated.
@@ -279,8 +266,7 @@ void castle_ext_freespace_init(c_ext_free_t *ext_free,
 int castle_new_ext_freespace_init(c_ext_free_t *ext_free, 
                                   da_id_t       da_id, 
                                   c_ext_type_t  ext_type,
-                                  c_byte_off_t  size,
-                                  uint32_t      align)
+                                  c_byte_off_t  size)
 {
     uint32_t nr_chunks;
     c_ext_id_t ext_id;
@@ -293,7 +279,7 @@ int castle_new_ext_freespace_init(c_ext_free_t *ext_free,
         return -ENOSPC;
 
     /* Initialise the freespace structure. */
-    castle_ext_freespace_init(ext_free, ext_id, align);
+    castle_ext_freespace_init(ext_free, ext_id);
 
     /* Succees. */
     return 0;
@@ -306,7 +292,6 @@ void castle_ext_freespace_fini(c_ext_free_t *ext_free)
     castle_extent_free(ext_free->ext_id);
     ext_free->ext_id      = INVAL_EXT_ID;
     ext_free->ext_size    = 0;
-    ext_free->align       = 0;
     atomic64_set(&ext_free->used, 0);
     atomic64_set(&ext_free->blocked, 0);
 }
@@ -332,8 +317,6 @@ int castle_ext_freespace_prealloc(c_ext_free_t *ext_free,
     barrier();
     blocked = atomic64_read(&ext_free->blocked);
 
-    BUG_ON(used % ext_free->align);
-    BUG_ON(blocked % ext_free->align);
     BUG_ON(blocked < used);
     BUG_ON(used > ext_free->ext_size);
 
@@ -361,9 +344,6 @@ int castle_ext_freespace_can_alloc(c_ext_free_t *ext_free,
 int castle_ext_freespace_free(c_ext_free_t *ext_free,
                               int64_t       size)
 {
-    BUG_ON(atomic64_read(&ext_free->used) % ext_free->align);
-    BUG_ON(atomic64_read(&ext_free->blocked) % ext_free->align);
-
     atomic64_sub(size, &ext_free->blocked);
     barrier();
 
@@ -382,8 +362,6 @@ int castle_ext_freespace_get(c_ext_free_t *ext_free,
     barrier();
     blocked = atomic64_read(&ext_free->blocked);
 
-    BUG_ON(used % ext_free->align);
-    BUG_ON(blocked % ext_free->align);
     BUG_ON(blocked < used);
     BUG_ON(used > ext_free->ext_size);
 
@@ -425,7 +403,6 @@ void castle_ext_freespace_marshall(c_ext_free_t *ext_free, c_ext_free_bs_t *ext_
 {
     ext_free_bs->ext_id    = ext_free->ext_id;
     ext_free_bs->ext_size  = ext_free->ext_size;
-    ext_free_bs->align     = ext_free->align;
     ext_free_bs->used      = atomic64_read(&ext_free->used);
     ext_free_bs->blocked   = atomic64_read(&ext_free->blocked);
 }
@@ -434,7 +411,6 @@ void castle_ext_freespace_unmarshall(c_ext_free_t *ext_free, c_ext_free_bs_t *ex
 {
     ext_free->ext_id       = ext_free_bs->ext_id;
     ext_free->ext_size     = ext_free_bs->ext_size;
-    ext_free->align        = ext_free_bs->align;
     atomic64_set(&ext_free->used, ext_free_bs->used);
     atomic64_set(&ext_free->blocked, ext_free_bs->blocked);
 }
@@ -807,14 +783,12 @@ int castle_fs_init(void)
         /* Init the root btree node */
         init_rwsem(&castle_global_tree.lock);
         mutex_init(&castle_global_tree.lo_mutex);
-        mutex_init(&castle_global_tree.last_key_mutex);
         INIT_LIST_HEAD(&castle_global_tree.large_objs);
 
         if ((ret = castle_new_ext_freespace_init(&castle_global_tree.tree_ext_free,
                                                   castle_global_tree.da,
                                                   EXT_T_BTREE_NODES,
-                                                  castle_global_tree.tree_ext_free.ext_size,
-                                                  MTREE_NODE_SIZE * C_BLK_SIZE)) < 0)
+                                                  castle_global_tree.tree_ext_free.ext_size)) < 0)
         {
             castle_printk(LOG_ERROR, "Failed to allocate space for Global Tree.\n");
             return ret;
@@ -823,8 +797,7 @@ int castle_fs_init(void)
         if ((ret = castle_new_ext_freespace_init(&castle_global_tree.data_ext_free,
                                                   castle_global_tree.da,
                                                   EXT_T_MEDIUM_OBJECTS,
-                                                  castle_global_tree.data_ext_free.ext_size,
-                                                  C_BLK_SIZE)) < 0)
+                                                  castle_global_tree.data_ext_free.ext_size)) < 0)
         {
             castle_printk(LOG_ERROR, "Failed to allocate space for Global Tree Medium Objects.\n");
             return ret;
@@ -868,7 +841,11 @@ int castle_fs_init(void)
     /* Read Collection Attachments. */
     if (!first && (ret = castle_attachments_read()))
         return ret;
- 
+
+    /* Read stats in. */
+    if (!first && (ret = castle_stats_read()))
+        return ret;
+
     FAULT(FS_INIT_FAULT);
 
     if (!first && (ret = castle_chk_disk()))
@@ -1709,7 +1686,7 @@ static void castle_bio_data_io_do(c_bvec_t *c_bvec, c_ext_pos_t cep)
         castle_debug_bvec_update(c_bvec, C_BVEC_DATA_C2B_OUTOFDATE);
         c2b->private = c_bvec;
         c2b->end_io = castle_bio_c2b_update;
-        submit_c2b(READ, c2b);
+        BUG_ON(submit_c2b(READ, c2b));
     }
 }
 
@@ -1999,6 +1976,18 @@ struct castle_attachment* castle_attachment_init(int device, /* _or_object_colle
     attachment->ref_cnt = 1; /* Use double put on detach */
     attachment->device  = device;
     attachment->version = version;
+
+    atomic64_set(&attachment->get.ios, 0);
+    atomic64_set(&attachment->get.bytes, 0);
+    atomic64_set(&attachment->put.ios, 0);
+    atomic64_set(&attachment->put.bytes, 0);
+    atomic64_set(&attachment->big_get.ios, 0);
+    atomic64_set(&attachment->big_get.bytes, 0);
+    atomic64_set(&attachment->big_put.ios, 0);
+    atomic64_set(&attachment->big_put.bytes, 0);
+    atomic64_set(&attachment->rq.ios, 0);
+    atomic64_set(&attachment->rq.bytes, 0);
+    atomic64_set(&attachment->rq_nr_keys, 0);
 
     return attachment; 
 }

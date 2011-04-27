@@ -1028,7 +1028,9 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
             castle_control_trace_teardown(&ioctl.trace_teardown.ret);
             break;
         case CASTLE_CTRL_SLAVE_EVACUATE:
-            castle_control_slave_evacuate(ioctl.slave_evacuate.id, ioctl.slave_evacuate.force, &ioctl.slave_evacuate.ret);
+            castle_control_slave_evacuate(ioctl.slave_evacuate.id,
+                                          ioctl.slave_evacuate.force,
+                                         &ioctl.slave_evacuate.ret);
             break;
         case CASTLE_CTRL_SLAVE_SCAN:
             castle_control_slave_scan(ioctl.slave_scan.id, &ioctl.slave_scan.ret);

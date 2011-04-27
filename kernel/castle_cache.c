@@ -270,8 +270,10 @@ static struct hlist_head      *castle_cache_page_hash = NULL;
 
 static struct kmem_cache      *castle_io_array_cache = NULL;
 
-static               LIST_HEAD(castle_cache_dirtylist);
-static               LIST_HEAD(castle_cache_cleanlist);
+/* Following LIST_HEADs are protected by castle_cache_block_hash_lock. */
+static               LIST_HEAD(castle_cache_extent_dirtylist);      /**< Extents with dirty c2bs  */
+static               LIST_HEAD(castle_cache_dirtylist);             /**< Dirty c2bs               */
+static               LIST_HEAD(castle_cache_cleanlist);             /**< Clean c2bs               */
 static atomic_t                castle_cache_cleanlist_size;         /**< Blocks on the cleanlist  */
 static atomic_t                castle_cache_cleanlist_softpin_size; /**< Softpin blks on cleanlist*/
 static atomic_t                castle_cache_block_victims;          /**< #clean blocks evicted    */
@@ -747,6 +749,18 @@ static inline int c2b_softpin(c2_block_t *c2b)
 }
 
 /**
+ * Remove a per-extent dirtylist from the list of dirtylists.
+ *
+ * @also _castle_extent_free()
+ */
+void castle_cache_extent_dirtylist_remove(c_ext_dirtylist_t *dirtylist)
+{
+    spin_lock(&castle_cache_block_hash_lock);
+    list_del_init(&dirtylist->list);
+    spin_unlock(&castle_cache_block_hash_lock);
+}
+
+/**
  * Remove a c2b from its per-extent dirtylist.
  *
  * @param c2b   Block to remove
@@ -766,6 +780,12 @@ static int c2_dirtylist_remove(c2_block_t *c2b)
     spin_lock_irqsave(&dirtylist->lock, flags);
 
     rb_erase(&c2b->rb_dirtylist, &dirtylist->rb_root);
+    if (--dirtylist->count == 0)
+        /* Last dirty c2b from this extent has been cleaned.  Remove this
+         * per-extent c2b dirtylist from the list of dirty extents. */
+        castle_cache_extent_dirtylist_remove(dirtylist);
+    }
+    BUG_ON(dirtylist->count < 0);
 
     /* Release dirtylist lock. */
     spin_unlock_irqrestore(&dirtylist->lock, flags);
@@ -820,9 +840,9 @@ static int c2_dirtylist_insert(c2_block_t *c2b)
             else
             {
                 /* this can't happen? */
-                castle_printk(LOG_WARN, "Found an identical c2b in the tree already.  "
+                castle_printk(LOG_ERROR, "Found an identical c2b in the tree already.  "
                         "Not inserting.\n");
-                WARN_ON(1);
+                BUG();
                 spin_unlock(&dirtylist->lock);
                 castle_extent_dirtylist_put(c2b->cep.ext_id);
 
@@ -834,6 +854,14 @@ static int c2_dirtylist_insert(c2_block_t *c2b)
     /* Insert c2b into the tree. */
     rb_link_node(&c2b->rb_dirtylist, parent, p);
     rb_insert_color(&c2b->rb_dirtylist, &dirtylist->rb_root);
+    if (++dirtylist->count == 1)
+    {
+        /* First dirty c2b for this extent.  Place the per-extent c2b dirtylist
+         * onto the list of dirty extents. */
+        spin_lock(&castle_cache_block_hash_lock);
+        list_add_tail(&dirtylist->list, &castle_cache_extent_dirtylist);
+        spin_unlock(&castle_cache_block_hash_lock);
+    }
 
     /* Release dirtylist lock. */
     spin_unlock_irqrestore(&dirtylist->lock, flags);
@@ -1338,13 +1366,17 @@ static int c_io_array_submit(int rw,
         }
     }
     /*
-     * There's no need to return write failure here if no live slave found. If the extent is
-     * for a superblock then we can treat this as successful because we don't care if writes
-     * fail to a to the superblock of a now-dead disk. We won't have incremented c2b->remaining
-     * so doing nothing here is safe.
-     * For all other extent types finding no live slave to write to is fatal, so bug out.
+     * If no live slave was found , and the extent is for a superblock then we can treat this
+     * as successful because we don't care if writes fail to a to the superblock of a now-dead
+     * disk. We won't have incremented c2b->remaining so doing nothing here is safe.
+     * For all other extent types, if we find no live slave then return EAGAIN so the caller
+     * can retry if it wants.
      */
-    BUG_ON(!found && !SUPER_EXTENT(ext_id));
+    if (!found && !SUPER_EXTENT(ext_id))
+    {
+        debug("Could not submit I/O. Only oos slaves specified in disk chunk\n");
+        return -EAGAIN;
+    }
 
     return EXIT_SUCCESS;
 }
@@ -4741,7 +4773,6 @@ static void castle_mstore_iterator_advance(struct castle_mstore_iter *iter)
     struct castle_mlist_node *node;
     struct castle_mstore_entry *mentry;
     c2_block_t *c2b;
-    int ret;
 
 again: 
     c2b = NULL;
@@ -4769,8 +4800,7 @@ again:
             if(!c2b_uptodate(c2b)) 
             {
                 debug_mstore("Scheduling a read.\n");
-                ret = submit_c2b_sync(READ, c2b);
-                BUG_ON(ret);
+                BUG_ON(submit_c2b_sync(READ, c2b));
             }
         } else
         /* For the sole benefit of initialising the store */
@@ -5185,6 +5215,79 @@ int castle_checkpoint_version_inc(void)
     return 0;
 }
 
+/**
+ * High level handler for writing out stats mstore. It prepares the store, and calls sub-handlers
+ * to collect all the stats.
+ */
+static int castle_stats_writeback(void)
+{
+    c_mstore_t *stats_store;
+
+    /* Initialise the store. */
+    stats_store = castle_mstore_init(MSTORE_STATS, sizeof(struct castle_slist_entry));
+    if(!stats_store)
+        return -ENOMEM;
+
+    /* Writeback extent stats. */
+    castle_extents_stats_writeback(stats_store);
+
+    /* Close mstore. */
+    castle_mstore_fini(stats_store);
+
+    return 0;
+}
+
+/**
+ * Reads all stats from stats mstore, and, depending on stat type calls appropriate consumer.
+ * At the moment only used for rebuild progress counter.
+ */
+int castle_stats_read(void)
+{
+    c_mstore_t *stats_mstore;
+    struct castle_mstore_iter *iterator;
+    struct castle_slist_entry mstore_entry;
+    c_mstore_key_t key;
+
+    castle_printk(LOG_INFO, "Opening mstore for stats\n");
+    /* Open mstore. */
+    stats_mstore = castle_mstore_open(MSTORE_STATS, sizeof(struct castle_slist_entry));
+    if(!stats_mstore)
+        return -ENOMEM;
+
+    /* Create the iterator for the mstore. */
+    iterator = castle_mstore_iterate(stats_mstore);
+    if(!iterator)
+    {
+        castle_mstore_fini(stats_mstore);
+        return -EINVAL;
+    }
+
+    /* Iterate through all entries. */
+    while(castle_mstore_iterator_has_next(iterator))
+    {
+        castle_mstore_iterator_next(iterator, &mstore_entry, &key);
+
+        /* Handle each entry appropriately. */
+        switch(mstore_entry.stat_type)
+        {
+            case STATS_MSTORE_REBUILD_PROGRESS:
+                castle_extents_stat_read(&mstore_entry);
+                break;
+            default:
+                castle_printk(LOG_ERROR, "Unknown mstore stat (%p), type=0x%x\n",
+                        &mstore_entry, mstore_entry.stat_type);
+                BUG();
+                break;
+        }
+    }
+
+    /* Cleanup. */
+    castle_mstore_iterator_destroy(iterator);
+    castle_mstore_fini(stats_mstore);
+
+    return 0;
+}
+
 int castle_mstores_writeback(uint32_t version)
 {
     struct castle_fs_superblock *fs_sb;
@@ -5202,7 +5305,7 @@ int castle_mstores_writeback(uint32_t version)
         fs_sb->mstore[i] = INVAL_EXT_POS;
     castle_fs_superblocks_put(fs_sb, 1);
 
-    castle_ext_freespace_init(&mstore_ext_free, MSTORE_EXT_ID + slot, C_BLK_SIZE);
+    castle_ext_freespace_init(&mstore_ext_free, MSTORE_EXT_ID + slot);
 
     /* Call writebacks of components. */
     castle_attachments_writeback();
@@ -5212,6 +5315,7 @@ int castle_mstores_writeback(uint32_t version)
 
     castle_versions_writeback();
     castle_extents_writeback();
+    castle_stats_writeback();
 
     BUG_ON(!castle_ext_freespace_consistent(&mstore_ext_free));
     castle_cache_extent_flush_schedule(MSTORE_EXT_ID + slot, 0, 
@@ -5311,7 +5415,7 @@ static int castle_periodic_checkpoint(void *unused)
     struct castle_fs_superblock         *fs_sb;
     struct castle_extents_superblock    *castle_extents_sb;
 
-    int      i; 
+    int      ret, i;
     int      exit_loop = 0;
     struct   list_head flush_list;
 
@@ -5322,7 +5426,8 @@ static int castle_periodic_checkpoint(void *unused)
         /* Wakes-up once in a second just to check whether to stop the thread.
          * After every checkpoint_frequency seconds checkpoints the filesystem. */
         for (i=0;
-            (i<MIN_CHECKPOINT_FREQUENCY) || ((i<checkpoint_frequency) && (i<MAX_CHECKPOINT_FREQUENCY));
+            (i<MIN_CHECKPOINT_FREQUENCY) ||
+            ((i<checkpoint_frequency) && (i<MAX_CHECKPOINT_FREQUENCY));
             i++)
         {
             if (!kthread_should_stop())
@@ -5344,11 +5449,12 @@ static int castle_periodic_checkpoint(void *unused)
         {
             castle_printk(LOG_WARN, "Mstore pre-writeback failed.\n");
             castle_trace_cache(TRACE_END, TRACE_CACHE_CHECKPOINT_ID, 0);
-            return -1;
+            ret = -1;
+            goto out;
         }
 
         CASTLE_TRANSACTION_BEGIN;
- 
+
         fs_sb = castle_fs_superblocks_get();
         version = fs_sb->fs_version;
         /* Update rebuild superblock information. */
@@ -5358,12 +5464,13 @@ static int castle_periodic_checkpoint(void *unused)
         castle_extents_sb = castle_extents_super_block_get();
         castle_extents_sb->current_rebuild_seqno = atomic_read(&current_rebuild_seqno);
         castle_extents_super_block_put(1);
- 
+
         if (castle_mstores_writeback(version))
         {
             castle_printk(LOG_WARN, "Mstore writeback failed\n");
             castle_trace_cache(TRACE_END, TRACE_CACHE_CHECKPOINT_ID, 0);
-            return -1;
+            ret = -2;
+            goto out;
         }
 
         list_replace(&castle_cache_flush_list, &flush_list);
@@ -5381,15 +5488,22 @@ static int castle_periodic_checkpoint(void *unused)
         {
             castle_printk(LOG_WARN, "Superblock writeback failed\n");
             castle_trace_cache(TRACE_END, TRACE_CACHE_CHECKPOINT_ID, 0);
-            return -1;
+            ret = -3;
+            goto out;
         }
         castle_checkpoint_version_inc();
-        
+
         castle_printk(LOG_DEVEL, "*****Completed checkpoint of version: %u*****\n", version);
         castle_trace_cache(TRACE_END, TRACE_CACHE_CHECKPOINT_ID, 0);
     } while (!exit_loop);
+    /* Clean exit, return success. */
+    ret = 0;
+out:
+    /* Wait until the thread is explicitly collected. */
+    while(!kthread_should_stop())
+        msleep_interruptible(1000);
 
-    return 0;
+    return ret;
 }
 
 int castle_chk_disk(void)

@@ -15,6 +15,7 @@
 #include "castle_cache.h"
 #include "castle_da.h"
 #include "castle_rebuild.h"
+#include "castle_events.h"
 
 /* Extent manager - Every disk reserves few chunks in the begining of the disk to 
  * store meta data. Meta data for freespace management (for each disk) would be
@@ -64,8 +65,6 @@
         (_me)->da_id        = (_ext)->da_id;
  
 #define FAULT_CODE EXTENT_FAULT
-
-int low_disk_space = 0;
 
 c_chk_cnt_t meta_ext_size = 0;
 
@@ -154,6 +153,7 @@ static c_ext_t * castle_ext_alloc(c_ext_id_t ext_id)
     ext->ext_id             = ext_id;
     ext->alive              = 1;
     ext->dirtylist.rb_root  = RB_ROOT;
+    INIT_LIST_HEAD(&ext->dirtylist.list);
     ext->deleted            = 0;
     ext->maps_cep           = INVAL_EXT_POS;
     ext->ext_type           = EXT_T_INVALID;
@@ -415,7 +415,7 @@ int castle_extents_create(void)
     if ((ret = castle_extent_meta_ext_create()))
         return ret;
 
-    castle_ext_freespace_init(&meta_ext_free, META_EXT_ID, C_BLK_SIZE);
+    castle_ext_freespace_init(&meta_ext_free, META_EXT_ID);
 
     INJECT_FAULT;
 
@@ -424,6 +424,35 @@ int castle_extents_create(void)
 
     extent_init_done = 1;
     return 0;
+}
+
+/**
+ * Inserts all extent stats into the stats mstore. At the moment just the rebulid progress counter.
+ */
+void castle_extents_stats_writeback(c_mstore_t *stats_mstore)
+{
+    struct castle_slist_entry mstore_entry;
+
+    mstore_entry.stat_type = STATS_MSTORE_REBUILD_PROGRESS;
+    mstore_entry.key = -1;
+    mstore_entry.val = castle_extents_chunks_remapped;
+
+    castle_mstore_entry_insert(stats_mstore, &mstore_entry);
+}
+
+/**
+ * Reads extent stats. At the moment just a single entry of STATS_MSTORE_REBUILD_PROGRESS expected.
+ */
+void castle_extents_stat_read(struct castle_slist_entry *mstore_entry)
+{
+    BUG_ON(mstore_entry->stat_type != STATS_MSTORE_REBUILD_PROGRESS);
+    BUG_ON(mstore_entry->key != (uint64_t)-1);
+
+    /* Temporarily high logging level. */
+    castle_printk(LOG_INFO,
+                  "Read %lld chunks remapped from mstore.\n",
+                  mstore_entry->val);
+    castle_extents_chunks_remapped += mstore_entry->val;
 }
 
 int nr_exts = 0;
@@ -779,15 +808,12 @@ static c_disk_chk_t castle_extent_disk_chk_alloc(da_id_t da_id,
         /*
          * We get here if the slave is either out-or-service, or out of space. If the slave is
          * out-of-service then just return INVAL_DISK_CHK so calling stack can retry.
-         * If it's out of space then set the low_disk_space condition, except for SSDs, which
-         * can run out of space while non-SSDs still have free space.
          */
         if ((!test_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags)) && (!(slave->cs_superblock.pub.flags & CASTLE_SLAVE_SSD)))
         {
             /* Slave is not out-of-service so we are out of space.  */
             castle_printk(LOG_WARN, "Failed to get freespace from slave: 0x%x\n", slave->uuid);
             castle_freespace_stats_print();
-            low_disk_space = 1;
         }
         return INVAL_DISK_CHK;
     }
@@ -1005,9 +1031,6 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t rda_type,
 
     BUG_ON(!extent_init_done && !LOGICAL_EXTENT(ext_id));
 
-    if (low_disk_space)
-        goto __hell;
-
     if (castle_extents_hash_get(ext_id))
         goto __hell;
 
@@ -1135,6 +1158,7 @@ static void _castle_extent_free(void *data)
 
     /* Remove extent from hash and free the space. Both should happen in atomic with respect 
      * to checkpoint. */
+    castle_cache_extent_dirtylist_remove(&ext->dirtylist);
     castle_extents_hash_remove(ext);
     castle_extent_space_free(ext, ext->k_factor * ext->size);
 
@@ -1284,7 +1308,7 @@ static void __castle_extent_map_get(c_ext_t *ext, c_chk_t chk_idx, c_disk_chk_t 
             if(!c2b_uptodate(map_c2b))
             {
                 set_c2b_no_resubmit(map_c2b);
-                submit_c2b_sync(READ, map_c2b);
+                BUG_ON(submit_c2b_sync(READ, map_c2b));
                 if (!c2b_uptodate(map_c2b))
                 {
                     /*
@@ -1726,9 +1750,6 @@ static int castle_extent_remap_superchunks_alloc(int slave_idx)
         /*
          * We get here if the slave is either out-or-service, or out of space. If the slave is
          * out-of-service then just return ENOSPC so calling stack can retry.
-         * If it's out of space then set the low_disk_space condition, except for SSDs, which
-         * can run out of space while non-SSDs still have free space.
-
          */
         if ((!test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags)) && (!(cs->cs_superblock.pub.flags & CASTLE_SLAVE_SSD)))
         {
@@ -1737,7 +1758,6 @@ static int castle_extent_remap_superchunks_alloc(int slave_idx)
                     cs->uuid, bdevname(cs->bdev, b));
 
             castle_freespace_stats_print();
-            low_disk_space = 1;
             return -ENOSPC;
         } else
         {
@@ -1961,6 +1981,7 @@ static int castle_extent_remap(c_ext_t *ext)
     uint32_t            k_factor = castle_extent_kfactor_get(ext->ext_id);
     int                 chunkno, idx, remap_idx, no_remap_idx, i;
     struct castle_slave *cs;
+    int ret=0;
 
     debug("\nRemapping extent %llu size: %u, from seqno: %u to seqno: %u\n",
             ext->ext_id, ext->size, ext->curr_rebuild_seqno, rebuild_to_seqno);
@@ -2003,6 +2024,8 @@ static int castle_extent_remap(c_ext_t *ext)
          * the two sets in the remap chunks array.
          */
         c_disk_chk_t remap_chunks[k_factor];
+
+retry:
         for (idx=0, remap_idx=0, no_remap_idx=k_factor-1; idx<k_factor; idx++)
         {
             c_disk_chk_t *disk_chk;
@@ -2078,7 +2101,7 @@ static int castle_extent_remap(c_ext_t *ext)
                 BUG_ON(submit_c2b_sync(READ, c2b));
 
             /* Submit the write. */
-            BUG_ON(submit_c2b_remap_rda(c2b, remap_chunks, remap_idx));
+            ret = submit_c2b_remap_rda(c2b, remap_chunks, remap_idx);
 
             write_unlock_c2b(c2b);
 
@@ -2087,6 +2110,16 @@ static int castle_extent_remap(c_ext_t *ext)
              * of the c2b. Except in the case logical extents, rebuild is the only consumer accesses in 
              * chunks. So, there shouldnt be any other references to this c2b. */
             BUG_ON(castle_cache_block_destroy(c2b) && LOGICAL_EXTENT(ext->ext_id));
+
+            /*
+             * Check that the submit_c2b_remap_rda succeeded. If it got EAGAIN, then the
+             * remap_chunks contained a now-oos slave (a slave that went oos between the disk chunk
+             * alloc and the submit. In this case, we can retry, which should rebuild remap_chunks
+             * with (hopefully) now valid slave(s).
+             */
+            if (ret == -EAGAIN)
+                goto retry;
+            BUG_ON(ret);
 
             /*
              * Now write out the shadow map entry for this chunk.
@@ -2136,7 +2169,6 @@ static int castle_extent_remap(c_ext_t *ext)
             ext->use_shadow_map = 0;
             spin_unlock(&ext->shadow_map_lock);
             castle_vfree(ext->shadow_map);
-            castle_extents_chunks_remapped = 0;
             return 1;
         }
     }
@@ -2219,8 +2251,6 @@ restart:
         rebuild_to_seqno = atomic_read(&current_rebuild_seqno);
 
         castle_extents_remap_state_init();
-
-        castle_extents_chunks_remapped = 0;
 
         /* Build the list of extents to remap. */
         castle_extents_hash_iterate(castle_extent_rebuild_list_add, NULL);
@@ -2370,6 +2400,7 @@ out:
 void castle_extents_rebuild_wake(void)
 {
     atomic_inc(&current_rebuild_seqno);
+    castle_events_slave_rebuild_notify();
     wake_up(&rebuild_wq);
 }
 

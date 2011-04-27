@@ -5,6 +5,7 @@ void castle_uevent4(uint16_t cmd, uint64_t arg1, uint64_t arg2, uint64_t arg3, u
 void castle_uevent3(uint16_t cmd, uint64_t arg1, uint64_t arg2, uint64_t arg3);
 void castle_uevent2(uint16_t cmd, uint64_t arg1, uint64_t arg2);
 void castle_uevent1(uint16_t cmd, uint64_t arg1);
+void castle_events_slave_rebuild_notify(void);
 
 /* Events which do not correspond to any particular command. Defined in 0x80+ range not
    to overlap with IOCTL command ids. */
@@ -22,6 +23,9 @@ void castle_uevent1(uint16_t cmd, uint64_t arg1);
 
 #define castle_events_slave_release(_slave_uuid) \
     castle_uevent2(CASTLE_CTRL_RELEASE, CASTLE_EVENTS_SUCCESS, _slave_uuid)
+
+#define castle_events_slave_rebuild(_slave_uuid) \
+    castle_uevent2(CASTLE_CTRL_SLAVE_EVACUATE, CASTLE_EVENTS_SUCCESS, _slave_uuid)
 
 #define castle_events_device_attach(_maj, _min, _version_id) \
     castle_uevent3(CASTLE_CTRL_ATTACH, CASTLE_EVENTS_SUCCESS, new_encode_dev(MKDEV(_maj, _min)), _version_id)

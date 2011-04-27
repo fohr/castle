@@ -283,7 +283,6 @@ typedef enum {
 typedef struct castle_extent_freespace {
     c_ext_id_t      ext_id;
     c_byte_off_t    ext_size;
-    uint32_t        align;
     atomic64_t      used;
     atomic64_t      blocked;
 } c_ext_free_t;
@@ -294,8 +293,7 @@ typedef struct castle_extent_freespace_byte_stream {
     /*          8 */ c_byte_off_t    ext_size;
     /*         16 */ uint64_t        used;
     /*         24 */ uint64_t        blocked;
-    /*         32 */ uint32_t        align;
-    /*         36 */ uint8_t         _unused[28];
+    /*         32 */ uint8_t         _unused[32];
     /*         64 */
 } PACKED c_ext_free_bs_t;
 
@@ -508,6 +506,7 @@ enum {
     MSTORE_EXTENTS,
     MSTORE_LARGE_OBJECTS,
     MSTORE_DA_MERGE,
+    MSTORE_STATS,
 };
 
 
@@ -672,8 +671,6 @@ struct castle_component_tree {
     c_ext_free_t        tree_ext_free;
     c_ext_free_t        data_ext_free;
     atomic64_t          large_ext_chk_cnt;
-    c_vl_okey_t        *last_key;
-    struct mutex        last_key_mutex;
     uint8_t             bloom_exists;
     castle_bloom_t      bloom;
 #ifdef CASTLE_PERF_DEBUG
@@ -835,6 +832,20 @@ struct castle_lolist_entry {
     /*         16 */ tree_seq_t  ct_seq;
     /*         20 */ uint8_t     _unused[12];
     /*         32 */
+} PACKED;
+
+enum {
+    STATS_MSTORE_REBUILD_PROGRESS,
+};
+
+struct castle_slist_entry {
+    /* align:  8 */
+    /* offset: 0 */ uint16_t    stat_type;
+    /*         2 */ uint8_t     _pad[6];
+    /*         8 */ uint64_t    key;
+    /*        16 */ uint64_t    val;
+    /*        24 */ uint8_t     _unused[40];
+    /*        64 */
 } PACKED;
 
 /* IO related structures */
@@ -1256,6 +1267,13 @@ struct castle_attachment {
         } col; /* Only valid for object collections */
     };
 
+    /* Stats for attachment. */
+    struct {
+        atomic64_t      ios;
+        atomic64_t      bytes;
+    } get, put, big_get, big_put, rq;
+    atomic64_t          rq_nr_keys;
+
     struct kobject      kobj;
     int                 sysfs_registered;
     struct list_head    list;
@@ -1318,14 +1336,12 @@ void                  castle_fs_superblock_slaves_update
 int                   castle_fs_init               (void);
 
 void                  castle_ext_freespace_init    (c_ext_free_t     *ext_free,
-                                                    c_ext_id_t        ext_id,
-                                                    uint32_t          align);
+                                                    c_ext_id_t        ext_id);
 
 int                   castle_new_ext_freespace_init(c_ext_free_t     *ext_free,
                                                     da_id_t           da_id,
                                                     c_ext_type_t      ext_type,
-                                                    c_byte_off_t      size,
-                                                    uint32_t          align);
+                                                    c_byte_off_t      size);
 
 int                   castle_ext_freespace_consistent
                                                    (c_ext_free_t     *ext_frees);
@@ -1468,8 +1484,6 @@ typedef struct castle_object_iterator {
     void               *data;
     struct work_struct  work;
 } castle_object_iterator_t;
-
-extern int low_disk_space;
 
 int castle_superblocks_writeback(uint32_t version);
 

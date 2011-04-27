@@ -869,18 +869,6 @@ static void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
 
     debug("castle_object_replace_complete\n");
 
-    /* Save the last key, if the relevant module parameter is set, and there wasn't an error. */
-    if (castle_latest_key && !err)
-    {
-        mutex_lock(&c_bvec->tree->last_key_mutex);
-
-        if (c_bvec->tree->last_key)
-            castle_object_okey_free(c_bvec->tree->last_key);
-        c_bvec->tree->last_key = castle_object_btree_key_convert(c_bvec->key);
-
-        mutex_unlock(&c_bvec->tree->last_key_mutex);
-    }
-
     /* Free the key */
     castle_object_bkey_free(c_bvec->key);
 

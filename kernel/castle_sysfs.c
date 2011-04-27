@@ -294,7 +294,7 @@ static ssize_t da_tree_list_show(struct kobject *kobj,
                            (CHUNK(ct->tree_ext_free.ext_size) + 
                             CHUNK(ct->data_ext_free.ext_size) + 
                             CHUNK(ct->internal_ext_free.ext_size) +
-                            ct->bloom.num_chunks +
+                            ((ct->bloom_exists)?ct->bloom.num_chunks:0) +
                             atomic64_read(&ct->large_ext_chk_cnt)));           /* Tree size */
             if (ret >= PAGE_SIZE)
                 goto err;
@@ -541,6 +541,26 @@ static ssize_t collection_version_show(struct kobject *kobj,
     struct castle_attachment *collection = container_of(kobj, struct castle_attachment, kobj); 
 
     return sprintf(buf, "0x%x\n", collection->version);
+}
+
+static ssize_t collection_stats_show(struct kobject *kobj, 
+						             struct attribute *attr, 
+                                     char *buf)
+{
+    struct castle_attachment *collection = container_of(kobj, struct castle_attachment, kobj); 
+
+    return sprintf(buf, "[%lu %lu] [%lu %lu] [%lu %lu] [%lu %lu] [%lu %lu %lu]\n", 
+                        atomic64_read(&collection->get.ios),
+                        atomic64_read(&collection->get.bytes),
+                        atomic64_read(&collection->put.ios),
+                        atomic64_read(&collection->put.bytes),
+                        atomic64_read(&collection->big_get.ios),
+                        atomic64_read(&collection->big_get.bytes),
+                        atomic64_read(&collection->big_put.ios),
+                        atomic64_read(&collection->big_put.bytes),
+                        atomic64_read(&collection->rq.ios),
+                        atomic64_read(&collection->rq.bytes),
+                        atomic64_read(&collection->rq_nr_keys));
 }
 
 static ssize_t collection_id_show(struct kobject *kobj, 
@@ -859,10 +879,14 @@ __ATTR(id, S_IRUGO|S_IWUSR, collection_id_show, NULL);
 static struct castle_sysfs_entry collection_name =
 __ATTR(name, S_IRUGO|S_IWUSR, collection_name_show, NULL);
 
+static struct castle_sysfs_entry collection_stats =
+__ATTR(stats, S_IRUGO|S_IWUSR, collection_stats_show, NULL);
+
 static struct attribute *castle_collection_attrs[] = {
     &collection_id.attr,
     &collection_version.attr,
     &collection_name.attr,
+    &collection_stats.attr,
     NULL,
 };
 

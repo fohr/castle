@@ -1,3 +1,5 @@
+#include "castle_extent.h"
+
 #ifndef __CASTLE_CACHE_H__
 #define __CASTLE_CACHE_H__
 
@@ -87,6 +89,7 @@ void clear_c2b_no_resubmit  (c2_block_t *c2b);
 int  c2b_remap              (c2_block_t *c2b);
 void set_c2b_remap          (c2_block_t *c2b);
 void clear_c2b_remap        (c2_block_t *c2b);
+void castle_cache_extent_dirtylist_remove(c_ext_dirtylist_t *dirtylist);
 
 /**********************************************************************************************
  * Refcounts. 
@@ -161,8 +164,10 @@ int         castle_cache_extent_flush_schedule (c_ext_id_t ext_id, uint64_t star
 
 
 /**********************************************************************************************
- * MStore related functions 
- */ 
+ * MStore related functions (including stats store handler).
+ */
+int                        castle_stats_read               (void);
+
 int                        castle_mstore_iterator_has_next (struct castle_mstore_iter *iter);
 void                       castle_mstore_iterator_next     (struct castle_mstore_iter *iter,
                                                             void *entry,

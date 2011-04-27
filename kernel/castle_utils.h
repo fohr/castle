@@ -314,17 +314,17 @@ struct castle_printk_state {
  * @TODO Level ordering and MIN_CONS_LEVEL will need revising before release.
  */
 typedef enum {
-    LOG_DEBUG = 0,  /**< Debug-related messages                 */
-    LOG_INFO,       /**< Filesystem informational messages      */
-    LOG_PERF,       /**< Performance related messages           */
-    LOG_DEVEL,      /**< Ephemeral development messages         */
-    LOG_USERINFO,   /**< Information messages aimed at the user */
-    LOG_WARN,       /**< Filesystem warnings                    */
-    LOG_INIT,       /**< Init()/fini() messages                 */
-    LOG_ERROR       /**< Major error messages                   */
+    LOG_DEBUG = 0,  /**< Debug-related messages                    */
+    LOG_INFO,       /**< Filesystem informational messages         */
+    LOG_PERF,       /**< Performance related messages              */
+    LOG_DEVEL,      /**< Ephemeral development messages            */
+    LOG_USERINFO,   /**< Information messages aimed at the user    */
+    LOG_WARN,       /**< Filesystem warnings                       */
+    LOG_INIT,       /**< Init()/fini() messages                    */
+    LOG_ERROR,      /**< Major error messages                      */
+    MAX_CONS_LEVEL  /**< Counts number of levels (has to be last). */
 } c_printk_level_t;
 #define MIN_CONS_LEVEL  LOG_PERF    /**< Minimum log level to hit the system console.   */
-#define MAX_CONS_LEVEL  LOG_ERROR   /**< Maximum log level to hit the system console.   */
 
 void castle_printk(c_printk_level_t level, const char *fmt, ...);
 int castle_printk_init(void);

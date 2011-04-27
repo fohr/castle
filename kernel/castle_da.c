@@ -2411,12 +2411,10 @@ static int castle_da_merge_extents_alloc(struct castle_da_merge *merge)
     /* Now, initialise freespace structure for the extents allocated. */
     if(!EXT_ID_INVAL(merge->out_tree->tree_ext_free.ext_id))
         castle_ext_freespace_init(&merge->out_tree->tree_ext_free,
-                                   merge->out_tree->tree_ext_free.ext_id,
-                                   C_BLK_SIZE);
+                                   merge->out_tree->tree_ext_free.ext_id);
     if(!EXT_ID_INVAL(merge->out_tree->internal_ext_free.ext_id))
         castle_ext_freespace_init(&merge->out_tree->internal_ext_free,
-                                   merge->out_tree->internal_ext_free.ext_id,
-                                   C_BLK_SIZE);
+                                   merge->out_tree->internal_ext_free.ext_id);
 
     /* Allocate an extent for medium objects of merged tree for the size equal to
      * sum of both the trees. */
@@ -2424,8 +2422,7 @@ static int castle_da_merge_extents_alloc(struct castle_da_merge *merge)
     if ((ret = castle_new_ext_freespace_init(&merge->out_tree->data_ext_free,
                                               merge->da->id,
                                               EXT_T_MEDIUM_OBJECTS,
-                                              data_size,
-                                              C_BLK_SIZE)))
+                                              data_size)))
     {
         castle_printk(LOG_WARN, "Merge failed due to space constraint for data\n");
         goto no_space;
@@ -2669,6 +2666,8 @@ static inline void castle_da_entry_add(struct castle_da_merge *merge,
                da_merge_package to do final splice. */
             castle_ct_large_obj_add(cvt.cep.ext_id, cvt.length, &merge->new_large_objs, NULL);
             castle_extent_get(cvt.cep.ext_id);
+            debug("%s::large object ("cep_fmt_str") for da %d level %d.\n",
+                __FUNCTION__, cep2str(cvt.cep), merge->da->id, merge->level);
         }
     }
 
@@ -2958,27 +2957,6 @@ static struct castle_component_tree* castle_da_merge_package(struct castle_da_me
     BUG_ON(atomic_read(&out_tree->ref_count)       != 1);
     BUG_ON(atomic_read(&out_tree->write_ref_count) != 0);
 
-    /* Calculate latest key in both trees. */
-    if (castle_latest_key)
-    {
-        FOR_EACH_MERGE_TREE(i, merge)
-        {
-            //BUG_ON(merge->in_tree1->seq <=  merge->in_tree2->seq);
-            if (merge->in_trees[i]->last_key)
-            {
-                out_tree->last_key = merge->in_trees[i]->last_key;
-                merge->in_trees[i]->last_key = NULL;
-                break;
-            }
-        }
-    }
-
-    /* update list of large objects */
-    if ( (castle_merges_checkpoint) && (merge->level >= MIN_DA_SERDES_LEVEL) )
-        mutex_lock(&merge->da->levels[merge->level].merge.serdes.mutex);
-    list_splice_init(&merge->new_large_objs, &out_tree->large_objs);
-    if ( (castle_merges_checkpoint) && (merge->level >= MIN_DA_SERDES_LEVEL) )
-        mutex_unlock(&merge->da->levels[merge->level].merge.serdes.mutex);
 
     debug("Number of entries=%ld, number of nodes=%ld\n",
             atomic64_read(&out_tree->item_count));
@@ -5306,7 +5284,6 @@ static struct castle_double_array* castle_da_alloc(da_id_t da_id)
         goto err_out;
     atomic_set(&da->ios_budget, 0);
     da->ios_rate        = 0;
-    da->last_key        = NULL;
     da->top_level       = 0;
     atomic_set(&da->nr_del_versions, 0);
     da->compacting      = 0;
@@ -5650,9 +5627,6 @@ void castle_ct_put(struct castle_component_tree *ct, int write)
     castle_ext_freespace_fini(&ct->tree_ext_free);
     castle_ext_freespace_fini(&ct->data_ext_free);
 
-    if (ct->last_key)
-        castle_object_okey_free(ct->last_key);
-
     if (ct->bloom_exists)
         castle_bloom_destroy(&ct->bloom);
 
@@ -5796,8 +5770,6 @@ static da_id_t castle_da_ct_unmarshall(struct castle_component_tree *ct,
     ct->da_list.next = NULL;
     ct->da_list.prev = NULL;
     INIT_LIST_HEAD(&ct->large_objs);
-    mutex_init(&ct->last_key_mutex);
-    ct->last_key = NULL;
     ct->bloom_exists = ctm->bloom_exists;
     if (ctm->bloom_exists)
         castle_bloom_unmarshall(&ct->bloom, ctm);
@@ -5917,8 +5889,6 @@ static int castle_da_ct_dealloc(struct castle_double_array *da,
     castle_ct_hash_destroy_check(ct, (void*)0UL);
     list_del(&ct->da_list);
     list_del(&ct->hash_list);
-    if (ct->last_key)
-        castle_object_okey_free(ct->last_key);
     castle_free(ct);
 
     return 0;
@@ -5997,9 +5967,6 @@ static int castle_da_tree_writeback(struct castle_double_array *da,
     }
 
 mstore_writeback:
-    if (da && !da->last_key)
-        da->last_key = ct->last_key;
-
     /* Never writeback T0 in periodic checkpoints. */
     BUG_ON((ct->level == 0) && !castle_da_exiting);
 
@@ -6218,9 +6185,6 @@ static int castle_da_writeback(struct castle_double_array *da, void *unused)
        we need to drop it. Hash consitancy is guaranteed, because by this point
        noone should be modifying it anymore */
     read_unlock_irq(&castle_da_hash_lock);
-
-    if (da->last_key)
-        da->last_key = NULL;
 
     /* Writeback is happening under CASTLE_TRANSACTION LOCK, which guarentees no
      * addition/deletions to component tree list, no need of DA lock here. */
@@ -6525,6 +6489,8 @@ int castle_double_array_read(void)
 
     while(castle_mstore_iterator_has_next(iterator))
     {
+        uint32_t ct_seq;
+
         castle_mstore_iterator_next(iterator, &mstore_centry, &key);
         /* Special case for castle_global_tree, it doesn't have a da associated with it. */
         if(TREE_GLOBAL(mstore_centry.seq))
@@ -6547,8 +6513,11 @@ int castle_double_array_read(void)
         write_lock(&da->lock);
         castle_component_tree_add(da, ct, NULL /*head*/, 1 /*in_init*/);
         write_unlock(&da->lock);
-        if (ct->seq >= atomic_read(&castle_next_tree_seq))
-            atomic_set(&castle_next_tree_seq, ct->seq+1);
+        /* Calculate maximum CT sequence number. Be wary of T0 sequence numbers, they prefix 
+         * CPU indexes. */
+        ct_seq = ct->seq & ((1 << TREE_SEQ_SHIFT) - 1);
+        if (ct_seq >= atomic_read(&castle_next_tree_seq))
+            atomic_set(&castle_next_tree_seq, ct_seq+1);
     }
     castle_mstore_iterator_destroy(iterator);
     iterator = NULL;
@@ -6639,6 +6608,12 @@ static struct castle_component_tree* castle_ct_alloc(struct castle_double_array 
 
     /* Allocate an id for the tree, init the ct. */
     ct->seq             = atomic_inc_return(&castle_next_tree_seq);
+    if(ct->seq >= (1U<<TREE_SEQ_SHIFT))
+    {
+        castle_printk(LOG_ERROR, "Could not allocate a CT because of sequence # overflow.\n");
+        castle_free(ct);
+        return NULL;
+    }
     atomic_set(&ct->ref_count, 1);
     atomic_set(&ct->write_ref_count, 0);
     atomic64_set(&ct->item_count, 0);
@@ -6661,9 +6636,7 @@ static struct castle_component_tree* castle_ct_alloc(struct castle_double_array 
     ct->internal_ext_free.ext_id = INVAL_EXT_ID;
     ct->tree_ext_free.ext_id     = INVAL_EXT_ID;
     ct->data_ext_free.ext_id     = INVAL_EXT_ID;
-    ct->last_key        = NULL;
     ct->bloom_exists    = 0;
-    mutex_init(&ct->last_key_mutex);
 #ifdef CASTLE_PERF_DEBUG
     ct->bt_c2bsync_ns   = 0;
     ct->data_c2bsync_ns = 0;
@@ -6721,8 +6694,7 @@ static int __castle_da_rwct_create(struct castle_double_array *da, int cpu_index
     if ((err = castle_new_ext_freespace_init(&ct->internal_ext_free,
                                              da->id,
                                              EXT_T_INTERNAL_NODES,
-                                             MAX_DYNAMIC_TREE_SIZE * C_CHK_SIZE,
-                                             btree->node_size(ct, 0) * C_BLK_SIZE)))
+                                             MAX_DYNAMIC_TREE_SIZE * C_CHK_SIZE)))
     {
         castle_printk(LOG_WARN, "Failed to get space for T0 internal\n");
         goto no_space;
@@ -6730,8 +6702,7 @@ static int __castle_da_rwct_create(struct castle_double_array *da, int cpu_index
     if ((err = castle_new_ext_freespace_init(&ct->tree_ext_free,
                                               da->id,
                                               EXT_T_LEAF_NODES,
-                                              MAX_DYNAMIC_TREE_SIZE * C_CHK_SIZE,
-                                              btree->node_size(ct, 0) * C_BLK_SIZE)))
+                                              MAX_DYNAMIC_TREE_SIZE * C_CHK_SIZE)))
     {
         castle_printk(LOG_WARN, "Failed to get space for T0 tree\n");
         goto no_space;
@@ -6739,8 +6710,7 @@ static int __castle_da_rwct_create(struct castle_double_array *da, int cpu_index
     if ((err = castle_new_ext_freespace_init(&ct->data_ext_free,
                                               da->id,
                                               EXT_T_MEDIUM_OBJECTS,
-                                              MAX_DYNAMIC_DATA_SIZE * C_CHK_SIZE,
-                                              C_BLK_SIZE)))
+                                              MAX_DYNAMIC_DATA_SIZE * C_CHK_SIZE)))
     {
         castle_printk(LOG_WARN, "Failed to get space for T0 data\n");
         goto no_space;

@@ -3031,7 +3031,7 @@ static void castle_btree_iter_leaf_ptrs_lock(c_iter_t *c_iter)
         c2b = castle_cache_block_get(cep, btree->node_size(c_iter->tree, 0));
         write_lock_c2b(c2b);
         if(!c2b_uptodate(c2b))
-            submit_c2b_sync(READ, c2b);
+            BUG_ON(submit_c2b_sync(READ, c2b));
         indirect_node(i)->c2b = c2b;
     }
 

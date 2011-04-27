@@ -1,0 +1,56 @@
+#!/bin/bash
+
+set -e
+
+device="$1"
+
+if castle-smart-weigh-drive "$device"
+then
+    exit 0
+fi
+
+devname=$(basename "$device")
+
+for slavedir in $(find /sys/fs/castle-fs/slaves/ -mindepth 1 -maxdepth 1 -type d)
+do
+  dev=$(basename $(readlink "$slavedir/dev"))
+  if [ "$dev" = "$devname" ]; then
+      uuid=$(basename "$slavedir")
+      break
+  fi
+done
+
+for part in /sys/block/$devname/${devname}[0-9]*
+do
+  partname=$(basename "$part")
+  for holder in $part/holders/*
+  do
+    holdername=$(basename "$holder")
+    case "$holder" in
+        md*)
+        mdadm "/dev/$holdername" --fail "/dev/$partname" --remove "/dev/$partname"
+        ;;
+    esac
+  done
+done
+
+if [ -n "$uuid" ]
+then
+    castle-cli slave_evacuate "0x$uuid" 1
+    sleep 2
+fi
+
+while ! blockdev --rmparts "$device" 2> /dev/null; do
+    sleep 10
+done
+
+# Make sure those don't come back yet
+dd if=/dev/zero of="$device" bs=512 count=64 status=noxfer >/dev/null
+
+castle-smart-spank-drive "$device"
+
+# TODO:
+# reconstruct partition table
+# add partitions back into raid array
+# install grub
+# add device to castle-fs
