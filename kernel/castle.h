@@ -664,7 +664,10 @@ struct castle_component_tree {
     struct list_head    da_list;
     struct list_head    hash_list;
     struct list_head    large_objs;
-    struct mutex        lo_mutex;          /**< Protects Large Object List.                     */
+    struct mutex        lo_mutex;          /**< Protects Large Object List. When working with
+                                                the output CT of a serialisable merge, never
+                                                take this lock before serdes.mutex or there will
+                                                be deadlock against checkpoint thread. */
     c_ext_free_t        internal_ext_free;
     c_ext_free_t        tree_ext_free;
     c_ext_free_t        data_ext_free;
@@ -1557,7 +1560,58 @@ struct castle_double_array {
 #ifdef DEBUG_MERGE_SERDES
                 int                            merge_completed;
 #endif
-                struct castle_component_tree  *out_tree;
+                struct castle_component_tree  *out_tree; /* points to merge->out_tree, which holds
+                                                            list of serialised large_objs */
+                /* Design note: On large_obj handling.
+
+                   Before merge checkpointing, we could assume that a cct only contained/owned a
+                   valid non-zero large_objs list if it was "complete" (i.e. not being produced
+                   through a merge operation). While a merge was underway, we would produce a
+                   large objects list to hold results of the ongoing merge. This list was owned by
+                   the merge, and populated from da_entry_add.  When the merge was complete, the
+                   merge passes ownership of the large_objs list to the cct through a list_replace
+                   operation in da_merge_package.
+
+                   There are a couple of issues here w.r.t. merge checkpointing. Firstly, on the
+                   serialisation side, we would need to maintain a list of large_objs corresponding
+                   to the serialised state of the tree. This list of large_objs would be written
+                   back during checkpoint. This by itself is not an issue - we simply need to
+                   maintain a list that is accessible to the checkpoint thread, i.e. right here in
+                   the double_array structure. That list would have to be deallocated at rmmod
+                   time so we don't violate any ref_cnt sanity checks on the large_objects, since
+                   it is currently assumed that each LO would only have 1 reference to it.
+
+                   Secondly, we would need to deserialise this list of large_objs. In order to
+                   reuse the current deserialisation scheme (as in castle_da_read), we would have
+                   to create a large_obj list onto the deserialising tree. The alternative is to
+                   handle deserialisation of the incomplete output tree outside the standard path,
+                   but that will require changes to the standard deserialisation path anyway since
+                   at least one sanity check will fail (i.e. it will find large_objs linked to
+                   ccts that it cannot find). Furthermore, we would have to mark the LO extents
+                   live so they are not removed prematurely.
+
+                   Therefore, while a merge is ongoing, by design, the output tree under merge has
+                   a list of large_obj that corresponds to it's serialised state. When the merge is
+                   completed this list is completed. If a merge is aborted, this list must be
+                   dropped (after it has been checkpointed) in order to avoid a bad ref count
+                   sanity check. After deserialising, the tree once again has a list of large_obj
+                   that corresponds to the serialised state - therefore symmetry is maintained and
+                   a deserialised tree would be indistinguishable from a newly created one in mid-
+                   merge.
+
+                   (This symmetry could also have been maintained by allowing the output cct
+                   to always hold it's "live" state (since at deserialisation time, serialised
+                   state == live state), but that would have then required maintenance of 3 lists:
+                   a "live list", a "serialised list", and a "new list" which is the diff btwn
+                   the live list and the serialised list. In practice we only need the serialised
+                   list and the new list, since the live list is worthless until the merge
+                   completes anyway.)
+
+                   For this reason we need to maintain a pointer to the output tree in this struct,
+                   and in the case of an aborted merge, the output tree must persist beyond
+                   merge_dealloc so that it can be written out by the final checkpoint before being
+                   dropped by da_dealloc.
+                 */
                 struct castle_dmserlist_entry *mstore_entry;
                 struct mutex     mutex; /* because we might lock while using mstore, spinlock
                                            may be a bad idea. might need a "double buffering"
@@ -1571,7 +1625,9 @@ struct castle_double_array {
                                                2 = valid.  */
                 atomic_t         fresh; /* for merge thread to notify checkpoint when output
                                            extents should be flushed */
-                unsigned int     des; /* for init to notify merge thread to resume merge */
+                unsigned int     des; /* for init to notify merge thread to resume merge, and
+                                         to notify checkpoint not to writeback state because
+                                         deserialisation still running. */
             } serdes;
         } merge;
     } levels[MAX_DA_LEVEL];

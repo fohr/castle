@@ -1092,6 +1092,11 @@ __hell:
 void castle_extent_free(c_ext_id_t ext_id)
 {
     c_ext_t *ext = castle_extents_hash_get(ext_id);
+    if(!ext)
+    {
+        castle_printk(LOG_ERROR, "%s::cannot find ext with id %d.\n", __FUNCTION__, ext_id);
+        BUG();
+    }
 
     ext->work = castle_malloc(sizeof(struct work_struct), GFP_KERNEL);
     if (!ext->work)
