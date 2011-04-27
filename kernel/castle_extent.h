@@ -56,5 +56,6 @@ void                castle_extents_rebuild_fini             (void);
 void                castle_extents_rebuild_wake             (void);
 void                castle_extents_rebuild_startup_check    (int need_rebuild);
 int                 castle_extents_slave_scan               (uint32_t uuid);
+signed int          castle_extent_ref_cnt_get               (c_ext_id_t);
 
 #endif /* __CASTLE_EXTENT_H__ */

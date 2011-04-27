@@ -2571,3 +2571,12 @@ int castle_extents_slave_scan(uint32_t uuid)
     else
         return 0;
 }
+
+signed int castle_extent_ref_cnt_get(c_ext_id_t ext_id)
+{
+    c_ext_t *ext;
+    ext = castle_extents_hash_get(ext_id);
+    if(!ext) return -1;
+    return ((signed int)atomic_read(&ext->ref_cnt));
+}
+

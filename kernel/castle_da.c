@@ -3243,7 +3243,9 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
            for checkpoint, it will be freed in da_dealloc. */
         if(!merge_out_tree_retain)
         {
+            mutex_lock(&merge->out_tree->lo_mutex);
             castle_ct_large_objs_remove(&merge->out_tree->large_objs);
+            mutex_unlock(&merge->out_tree->lo_mutex);
         }
         else
         {
@@ -3252,6 +3254,11 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
             mutex_lock(&merge->out_tree->lo_mutex);
             list_for_each_safe(lh, tmp, &merge->out_tree->large_objs)
             {
+                struct castle_large_obj_entry *lo =
+                    list_entry(lh, struct castle_large_obj_entry, list);
+                int lo_ref_cnt = castle_extent_ref_cnt_get(lo->ext_id);
+                /* we expect the input cct and output cct to both have reference to the LO ext */
+                BUG_ON(lo_ref_cnt != 2);
                 lo_count++;
             }
             mutex_unlock(&merge->out_tree->lo_mutex);
@@ -4181,7 +4188,6 @@ static void castle_da_merge_marshall(struct castle_dmserlist_entry *merge_mstore
     int i;
     struct component_iterator *comp[2], *curr_comp;
     c_immut_iter_t *immut[2];
-    int lo_count=0;
 
     /* Try to catch (at compile-time) any screwups to dmserlist structure; if we fail to compile
        here, review struct castle_dmserlist_entry, MAX_BTREE_DEPTH, and
@@ -4257,17 +4263,25 @@ update_output_tree_state:
     /* output tree marshalling is expensive... make it rare (i.e. once per checkpoint) */
 
     {
+        int lo_count=0;
         struct list_head *lh, *tmp;
         list_for_each_safe(lh, tmp, &merge->new_large_objs)
         {
+            struct castle_large_obj_entry *lo =
+                list_entry(lh, struct castle_large_obj_entry, list);
+            int lo_ref_cnt = castle_extent_ref_cnt_get(lo->ext_id);
+            /* we expect the input cct and output cct to both have reference to the LO ext */
+            BUG_ON(lo_ref_cnt != 2);
             lo_count++;
         }
     }
     /* update list of large objects */
+    /* no need to take out_tree lo_mutex because we are here with serdes mutex, which will block
+       checkpoint thread, which is the only race candidate */
     list_splice_init(&merge->new_large_objs, &merge->out_tree->large_objs);
 
     debug("%s::merge %p (da %d, level %d) output tree marshall with "
-            "%d LOs.\n", __FUNCTION__, merge, merge->da->id, merge->level, lo_count);
+            "%d new LOs.\n", __FUNCTION__, merge, merge->da->id, merge->level, lo_count);
 
     BUG_ON(!merge->out_tree);
     BUG_ON(!merge->da->levels[merge->level].merge.serdes.out_tree);
@@ -5242,7 +5256,9 @@ static void castle_da_dealloc(struct castle_double_array *da)
         if(da->levels[i].merge.serdes.out_tree)
         {
             /* don't put the tree - we want the extents kept alive for deserialisation */
+            mutex_lock(&da->levels[i].merge.serdes.out_tree->lo_mutex);
             castle_ct_large_objs_remove(&da->levels[i].merge.serdes.out_tree->large_objs);
+            mutex_unlock(&da->levels[i].merge.serdes.out_tree->lo_mutex);
             castle_free(da->levels[i].merge.serdes.out_tree);
             da->levels[i].merge.serdes.out_tree=NULL;
         }
@@ -6112,7 +6128,10 @@ static int castle_da_writeback(struct castle_double_array *da, void *unused)
                     {
                         struct castle_large_obj_entry *lo =
                             list_entry(lh, struct castle_large_obj_entry, list);
-
+                        int lo_ref_cnt = castle_extent_ref_cnt_get(lo->ext_id);
+                        /* input ct and/or output ct will have ref */
+                        BUG_ON(lo_ref_cnt<1);
+                        BUG_ON(lo_ref_cnt>2);
                         debug("%s::writeback lo at ext %d\n", __FUNCTION__,
                                 lo->ext_id);
 
