@@ -781,6 +781,7 @@ static int c2_dirtylist_remove(c2_block_t *c2b)
 
     rb_erase(&c2b->rb_dirtylist, &dirtylist->rb_root);
     if (--dirtylist->count == 0)
+    {
         /* Last dirty c2b from this extent has been cleaned.  Remove this
          * per-extent c2b dirtylist from the list of dirty extents. */
         castle_cache_extent_dirtylist_remove(dirtylist);

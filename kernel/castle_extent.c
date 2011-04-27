@@ -1308,7 +1308,7 @@ static void __castle_extent_map_get(c_ext_t *ext, c_chk_t chk_idx, c_disk_chk_t 
             if(!c2b_uptodate(map_c2b))
             {
                 set_c2b_no_resubmit(map_c2b);
-                BUG_ON(submit_c2b_sync(READ, map_c2b));
+                submit_c2b_sync(READ, map_c2b);
                 if (!c2b_uptodate(map_c2b))
                 {
                     /*
