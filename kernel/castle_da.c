@@ -3264,7 +3264,7 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
                     list_entry(lh, struct castle_large_obj_entry, list);
                 int lo_ref_cnt = castle_extent_ref_cnt_get(lo->ext_id);
                 /* we expect the input cct and output cct to both have reference to the LO ext */
-                BUG_ON(lo_ref_cnt != 2);
+                BUG_ON(lo_ref_cnt < 2);
                 lo_count++;
             }
             mutex_unlock(&merge->out_tree->lo_mutex);
@@ -4277,7 +4277,7 @@ update_output_tree_state:
                 list_entry(lh, struct castle_large_obj_entry, list);
             int lo_ref_cnt = castle_extent_ref_cnt_get(lo->ext_id);
             /* we expect the input cct and output cct to both have reference to the LO ext */
-            BUG_ON(lo_ref_cnt != 2);
+            BUG_ON(lo_ref_cnt < 2);
             lo_count++;
         }
     }
@@ -6142,8 +6142,7 @@ static int castle_da_writeback(struct castle_double_array *da, void *unused)
                             list_entry(lh, struct castle_large_obj_entry, list);
                         int lo_ref_cnt = castle_extent_ref_cnt_get(lo->ext_id);
                         /* input ct and/or output ct will have ref */
-                        BUG_ON(lo_ref_cnt<1);
-                        BUG_ON(lo_ref_cnt>2);
+                        BUG_ON(lo_ref_cnt < 1);
                         debug("%s::writeback lo at ext %d\n", __FUNCTION__,
                                 lo->ext_id);
 
