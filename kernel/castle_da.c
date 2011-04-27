@@ -2957,6 +2957,12 @@ static struct castle_component_tree* castle_da_merge_package(struct castle_da_me
     BUG_ON(atomic_read(&out_tree->ref_count)       != 1);
     BUG_ON(atomic_read(&out_tree->write_ref_count) != 0);
 
+    /* update list of large objects */
+    if ( (castle_merges_checkpoint) && (merge->level >= MIN_DA_SERDES_LEVEL) )
+        mutex_lock(&merge->da->levels[merge->level].merge.serdes.mutex);
+    list_splice_init(&merge->new_large_objs, &out_tree->large_objs);
+    if ( (castle_merges_checkpoint) && (merge->level >= MIN_DA_SERDES_LEVEL) )
+        mutex_unlock(&merge->da->levels[merge->level].merge.serdes.mutex);
 
     debug("Number of entries=%ld, number of nodes=%ld\n",
             atomic64_read(&out_tree->item_count));
@@ -3217,7 +3223,7 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
         {
             /* merge aborted, we are checkpointing, and this is a checkpointable merge level */
             merge_out_tree_retain=1;
-            debug("%s::leaving output extents for merge %p deserialisation "
+            castle_printk(LOG_INIT, "%s::leaving output extents for merge %p deserialisation "
                     "(da %d, level %d).\n", __FUNCTION__, merge, merge->da->id, merge->level);
         }
         else if ( (castle_merges_checkpoint) && (merge->level >= MIN_DA_SERDES_LEVEL) )
@@ -5255,10 +5261,16 @@ static void castle_da_dealloc(struct castle_double_array *da)
         /* we don't have a merge structure here, so we can't use castle_da_merge_serdes_dealloc */
         if(da->levels[i].merge.serdes.out_tree)
         {
-            /* don't put the tree - we want the extents kept alive for deserialisation */
+            castle_printk(LOG_INIT, "%s::cleaning up interrupted merge on da %d level %d.\n",
+                     __FUNCTION__, da->id, i);
+
+            /* free up large objects list - checkpoint would already have written them back, and
+               input cts will keep the extents alive through fini */
             mutex_lock(&da->levels[i].merge.serdes.out_tree->lo_mutex);
             castle_ct_large_objs_remove(&da->levels[i].merge.serdes.out_tree->large_objs);
             mutex_unlock(&da->levels[i].merge.serdes.out_tree->lo_mutex);
+
+            /* don't put the tree - we want the extents kept alive for deserialisation */
             castle_free(da->levels[i].merge.serdes.out_tree);
             da->levels[i].merge.serdes.out_tree=NULL;
         }
