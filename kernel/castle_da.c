@@ -7706,22 +7706,6 @@ static void castle_da_put_locked(struct castle_double_array *da)
     }
 }
 
-static struct castle_double_array* castle_da_ref_get(da_id_t da_id)
-{
-    struct castle_double_array *da;
-    unsigned long flags;
-
-    read_lock_irqsave(&castle_da_hash_lock, flags);
-    da = __castle_da_hash_get(da_id);
-    if(!da)
-        goto out;
-    castle_da_get(da);
-out:
-    read_unlock_irqrestore(&castle_da_hash_lock, flags);
-
-    return da;
-}
-
 int castle_double_array_get(da_id_t da_id)
 {
     struct castle_double_array *da;
@@ -7799,41 +7783,6 @@ int castle_double_array_destroy(da_id_t da_id)
 err_out:
     write_unlock_irqrestore(&castle_da_hash_lock, flags);
     return ret;
-}
-
-static int castle_da_size_get(struct castle_double_array *da,
-                              struct castle_component_tree *ct,
-                              int level_cnt,
-                              void *token)
-{
-    c_byte_off_t *size = (c_byte_off_t *)token;
-    *size += castle_extent_size_get(ct->tree_ext_free.ext_id);
-    *size += castle_extent_size_get(ct->data_ext_free.ext_id);
-    *size += atomic64_read(&ct->large_ext_chk_cnt);
-
-    return 0;
-}
-
-int castle_double_array_size_get(da_id_t da_id, c_byte_off_t *size)
-{
-    struct castle_double_array *da;
-    int err_code = 0;
-    c_byte_off_t s = 0;
-
-    da = castle_da_ref_get(da_id);
-    if (!da)
-    {
-        err_code = -EINVAL;
-        goto out;
-    }
-
-    castle_da_foreach_tree(da, castle_da_size_get, (void *)&s);
-
-    castle_da_put(da);
-
-out:
-    *size = s;
-    return err_code;
 }
 
 /**
