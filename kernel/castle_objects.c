@@ -881,6 +881,10 @@ static void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
     if(err && CVT_LARGE_OBJECT(cvt))
         castle_extent_free(cvt.cep.ext_id);
 
+    /* Reserve kmalloced memory for inline objects. */
+    if(CVT_INLINE(cvt))
+        castle_free(cvt.val);
+
     /* Unreserve any space we may still hold in the CT. Drop the CT ref. */
     if (ct)
     {
