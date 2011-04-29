@@ -88,7 +88,7 @@ typedef struct castle_extent {
     int                 use_shadow_map; /* Extent is currently being remapped */
     atomic_t            ref_cnt;
     uint8_t             alive;
-    c_ext_dirtylist_t   dirtylist;      /**< Extent c2b dirtylist */
+    c_ext_dirtylist_t  *dirtylist;      /**< Extent c2b dirtylist */
     struct work_struct *work;           /**< work structure to schedule extent free. */
     uint8_t             deleted;        /**< Marked when an extent is not refrenced by 
                                              anybody anymore. Safe to free it now. */
@@ -97,6 +97,7 @@ typedef struct castle_extent {
 } c_ext_t;
 
 static struct list_head *castle_extents_hash = NULL;
+static struct list_head *castle_extent_dirtylists_hash = NULL;
 static c_ext_free_t meta_ext_free;
 
 static c_ext_id_t _castle_extent_alloc(c_rda_type_t rda_type,
@@ -107,6 +108,8 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t rda_type,
 
 DEFINE_HASH_TBL(castle_extents, castle_extents_hash, CASTLE_EXTENTS_HASH_SIZE,
                 c_ext_t, hash_list, c_ext_id_t, ext_id);
+DEFINE_HASH_TBL(castle_extent_dirtylists, castle_extent_dirtylists_hash, CASTLE_EXTENTS_HASH_SIZE,
+                c_ext_dirtylist_t, hash_list, c_ext_id_t, ext_id);
 
 
 c_ext_t sup_ext = { 
@@ -142,26 +145,42 @@ static atomic_t             castle_extents_dead_count = ATOMIC(0);
 
 uint32_t castle_rebuild_fs_version = 0;
 
-/* Allocate buffer for extent structure and initialize the structure. */
+/**
+ * Allocate and initialise extent and per-extent dirtylist structures.
+ */
 static c_ext_t * castle_ext_alloc(c_ext_id_t ext_id)
 {
     c_ext_t *ext = castle_zalloc(sizeof(c_ext_t), GFP_KERNEL);
-
     if (!ext)
         return NULL;
+    ext->dirtylist = castle_zalloc(sizeof(c_ext_dirtylist_t), GFP_KERNEL);
+    if (!ext->dirtylist)
+    {
+        castle_free(ext);
+        return NULL;
+    }
 
+    /* Extent structure. */
     ext->ext_id             = ext_id;
     ext->alive              = 1;
-    ext->dirtylist.rb_root  = RB_ROOT;
-    INIT_LIST_HEAD(&ext->dirtylist.list);
     ext->deleted            = 0;
     ext->maps_cep           = INVAL_EXT_POS;
     ext->ext_type           = EXT_T_INVALID;
     ext->da_id              = INVAL_DA;
     ext->work               = NULL;
     atomic_set(&ext->ref_cnt, 1);
-    spin_lock_init(&ext->dirtylist.lock);
     spin_lock_init(&ext->shadow_map_lock);
+
+    /* Per-extent RB dirtylist structure. */
+    ext->dirtylist->ext_id  = ext_id;
+    ext->dirtylist->count   = 0;
+    ext->dirtylist->ref_cnt = ATOMIC(1);
+    ext->dirtylist->rb_root = RB_ROOT;
+    INIT_LIST_HEAD(&ext->dirtylist->list);
+    INIT_LIST_HEAD(&ext->dirtylist->hash_list);
+    spin_lock_init(&ext->dirtylist->lock);
+
+    debug("Allocated extent ext_id=%lld.\n", ext->ext_id);
 
     return ext;
 }
@@ -189,23 +208,32 @@ void castle_extent_mark_live(c_ext_id_t ext_id, da_id_t da_id)
 
 int castle_extents_init(void)
 {
-    int ret = 0;
-
     debug("Initing castle extents\n");
 
-    /* Initialise hash table for extents */
+    /* Initialise hash table for extents. */
     castle_extents_hash = castle_extents_hash_alloc();
-    if(!castle_extents_hash)
+    if (!castle_extents_hash)
     {
-        castle_printk(LOG_INIT, "Could not allocate extents hash\n");
-        ret = -ENOMEM;
-        goto __hell;
+        castle_printk(LOG_INIT, "Could not allocate extents hash.\n");
+        goto err1;
     }
     castle_extents_hash_init();
 
-    return 0;
-__hell:
-    return ret;
+    /* Initialise hash table for per-extent dirtylists. */
+    castle_extent_dirtylists_hash = castle_extent_dirtylists_hash_alloc();
+    if (!castle_extent_dirtylists_hash)
+    {
+        castle_printk(LOG_INIT, "Could not allocate extent dirtylists hash.\n");
+        goto err2;
+    }
+    castle_extent_dirtylists_hash_init();
+
+    return EXIT_SUCCESS;
+
+err2:
+    castle_free(castle_extents_hash);
+err1:
+    return -ENOMEM;
 }
 
 /* Cleanup all extents from hash table. Called at finish. */
@@ -318,6 +346,7 @@ static int castle_extent_micro_ext_create(void)
     BUG_ON(i > MAX_NR_SLAVES);
     micro_ext->k_factor = i;
     CONVERT_EXTENT_TO_MENTRY(micro_ext, &castle_extents_sb->micro_ext);
+    castle_extent_dirtylists_hash_add(micro_ext->dirtylist);
     castle_extents_hash_add(micro_ext);
 
     castle_extents_super_block_put(1);
@@ -540,19 +569,34 @@ int castle_extents_writeback(void)
 static int load_extent_from_mentry(struct castle_elist_entry *mstore_entry)
 {
     c_ext_t *ext = NULL;
+    int ret;
 
     /* Load micro extent. */
-    ext = castle_ext_alloc(0);
-    if (!ext) return -ENOMEM;
+    ext = castle_ext_alloc(mstore_entry->ext_id);
+    if (!ext)
+    {
+        ret = -ENOMEM;
+        goto err1;
+    }
 
     CONVERT_MENTRY_TO_EXTENT(ext, mstore_entry);
     if (EXT_ID_INVAL(ext->ext_id))
-        return -EINVAL;
+    {
+        ret = -EINVAL;
+        goto err2;
+    }
 
+    castle_extent_dirtylists_hash_add(ext->dirtylist);
     castle_extents_hash_add(ext);
     castle_extent_print(ext, NULL);
 
     return 0;
+
+err2:
+    castle_free(ext->dirtylist);
+    castle_free(ext);
+err1:
+    return ret;
 }
 
 int castle_extents_read(void)
@@ -649,6 +693,7 @@ void castle_extents_fini(void)
      * lock here as this happenes in the module end. */
     castle_extents_hash_iterate_exclusive(castle_extent_hash_remove, NULL);
     castle_free(castle_extents_hash);
+    castle_free(castle_extent_dirtylists_hash);
 }
 
 #define MAX_K_FACTOR   4 
@@ -1035,21 +1080,22 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t rda_type,
         goto __hell;
 
     debug("Creating extent of size: %u\n", count);
-    if (!(ext = castle_ext_alloc(0)))
+    ext = castle_ext_alloc(0);
+    if (!ext)
     {
         castle_printk(LOG_WARN, "Failed to allocate memory for extent\n");
         goto __hell;
     }
-    castle_extents_sb   = castle_extents_super_block_get();
+    castle_extents_sb       = castle_extents_super_block_get();
 
-    ext->ext_id         = (EXT_ID_INVAL(ext_id))? castle_extents_sb->ext_id_seq: 
-                                                  ext_id;
-    ext->size           = count;
-    ext->type           = rda_type;
-    ext->k_factor       = rda_spec->k_factor;
-    ext->ext_type       = ext_type;
-    ext->da_id          = da_id;
-    ext->use_shadow_map = 0;
+    ext->ext_id             = EXT_ID_INVAL(ext_id) ? castle_extents_sb->ext_id_seq : ext_id;
+    ext->dirtylist->ext_id  = ext->ext_id;
+    ext->size               = count;
+    ext->type               = rda_type;
+    ext->k_factor           = rda_spec->k_factor;
+    ext->ext_type           = ext_type;
+    ext->da_id              = da_id;
+    ext->use_shadow_map     = 0;
 
     /* The rebuild sequence number that this extent starts off at */
     ext->curr_rebuild_seqno = atomic_read(&current_rebuild_seqno);
@@ -1078,7 +1124,8 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t rda_type,
         goto __hell;
     }
   
-    /* Add extent to hash table */
+    /* Add extent and extent dirtylist to hash tables. */
+    castle_extent_dirtylists_hash_add(ext->dirtylist);
     castle_extents_hash_add(ext);
 
     /*
@@ -1105,7 +1152,10 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t rda_type,
 
 __hell:
     if (ext)
+    {
+        castle_free(ext->dirtylist);
         castle_free(ext);
+    }
     if (castle_extents_sb)
         castle_extents_super_block_put(1);
 
@@ -1158,9 +1208,11 @@ static void _castle_extent_free(void *data)
 
     /* Remove extent from hash and free the space. Both should happen in atomic with respect 
      * to checkpoint. */
-    castle_cache_extent_dirtylist_remove(&ext->dirtylist);
     castle_extents_hash_remove(ext);
     castle_extent_space_free(ext, ext->k_factor * ext->size);
+
+    /* Drop 'extent exists' reference on c2b dirtylist. */
+    castle_extent_dirtylist_put(ext_id);
 
     debug("Completed deleting ext: %lld\n", ext_id);
 
@@ -1401,7 +1453,7 @@ c_ext_id_t castle_extent_sup_ext_init(struct castle_slave *cs)
     if (!ext)
     {
         castle_printk(LOG_WARN, "Failed to allocate memory for extent\n");
-        goto __hell;
+        goto err1;
     }
     ext->size       = sup_ext.size;
     ext->type       = sup_ext.type;
@@ -1418,7 +1470,7 @@ c_ext_id_t castle_extent_sup_ext_init(struct castle_slave *cs)
         castle_printk(LOG_WARN, "Failed to allocate memory for extent chunk "
                 "maps of size %u:%u chunks\n", 
         ext->size, rda_spec->k_factor);
-        goto __hell;
+        goto err2;
     }
 
     for (i=0; i<ext->size; i++)
@@ -1430,6 +1482,7 @@ c_ext_id_t castle_extent_sup_ext_init(struct castle_slave *cs)
         }
     }
     ext->maps_cep = INVAL_EXT_POS;
+    castle_extent_dirtylists_hash_add(ext->dirtylist);
     castle_extents_hash_add(ext);
     cs->sup_ext = ext->ext_id;
 
@@ -1437,12 +1490,10 @@ c_ext_id_t castle_extent_sup_ext_init(struct castle_slave *cs)
 
     return ext->ext_id;
 
-__hell:
-    if (cs->sup_ext_maps)
-        castle_free(cs->sup_ext_maps);
-    if (ext)
-        castle_free(ext);
-
+err2:
+    castle_free(ext->dirtylist);
+    castle_free(ext);
+err1:
     return INVAL_EXT_ID;
 }
 
@@ -1544,32 +1595,47 @@ void castle_extent_put(c_ext_id_t ext_id)
 }
 
 /**
- * Hold a reference on the extent and return the dirtylist RB-tree.
+ * Get and hold a reference to RB-tree dirtylist for extent ext_id.
  *
- * castle_extents_rhash_get() holds a reference to the extent for us.
- *
- * @also castle_extents_rhash_get()
  * @also castle_extent_dirtylist_put()
  */
 c_ext_dirtylist_t* castle_extent_dirtylist_get(c_ext_id_t ext_id)
 {
-    c_ext_t *ext;
+    c_ext_dirtylist_t *dirtylist;
+    unsigned long flags;
 
-    if ((ext = castle_extent_get(ext_id)) == NULL)
-        return NULL;
+    /* Hold the hash lock for the duration of the get.
+     * This way we won't race with a _put() that removes the dirtylist
+     * from the hash. */
+    read_lock_irqsave(&castle_extent_dirtylists_hash_lock, flags);
+    dirtylist = __castle_extent_dirtylists_hash_get(ext_id);
+    if (dirtylist)
+        /* If the ref_cnt is 0 then we are racing with a _put().
+         * Don't return the dirtylist. */
+        if (atomic_inc_return(&dirtylist->ref_cnt) == 1)
+            dirtylist = NULL;
+    read_unlock_irqrestore(&castle_extent_dirtylists_hash_lock, flags);
 
-    return &ext->dirtylist;
+    return dirtylist;
 }
 
 /**
- * Release reference on the extent.
+ * Drop reference to RB-tree dirtylist for extent ext_id.
  *
- * @also castle_extents_rhash_put()
  * @also castle_extent_dirtylist_get()
  */
 void castle_extent_dirtylist_put(c_ext_id_t ext_id)
 {
-    castle_extent_put(ext_id);
+    c_ext_dirtylist_t *dirtylist;
+
+    dirtylist = castle_extent_dirtylists_hash_get(ext_id);
+    BUG_ON(!dirtylist); /* _put() implies prior _get() */
+    if (unlikely(atomic_dec_return(&dirtylist->ref_cnt) == 0))
+    {
+        BUG_ON(castle_extent_get(ext_id));  /* cannot be in hash now */
+        castle_extent_dirtylists_hash_remove(dirtylist);
+        castle_free(dirtylist);
+    }
 }
 
 /* Check if the extent is alive or not. 

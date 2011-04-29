@@ -5,12 +5,19 @@
 
 /**
  * Extent dirtylist structure.
+ *
+ * ref_cnt: 1 reference while ext_id exists
+ *          1 reference for each _get()
+ *          1 reference if there are dirty c2bs on rb_root
  */
 typedef struct c_ext_dirtylist {
-    spinlock_t                  lock;           /**< Dirtylist lock.                    */
-    int                         count;          /**< Elements on dirtylist.             */
-    struct rb_root              rb_root;        /**< Dirtylist RB root.                 */
-    struct list_head            list;           /**< castle_cache_extent_dirtylist pos. */
+    c_ext_id_t          ext_id;     /**< Extent ID this dirtylist describes.        */
+    spinlock_t          lock;       /**< Protects count, rb_root.                   */
+    int                 count;      /**< Number of dirty c2bs on rb_root.           */
+    atomic_t            ref_cnt;    /**< References to this dirtylist.              */
+    struct rb_root      rb_root;    /**< RB-tree of dirty c2bs.                     */
+    struct list_head    list;       /**< Position on castle_cache_extent_dirtylist. */
+    struct list_head    hash_list;  /**< Position on castle_extent_dirtylists_hash. */
 } c_ext_dirtylist_t;
 
 c_ext_id_t          castle_extent_alloc                     (c_rda_type_t   rda_type,
