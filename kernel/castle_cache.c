@@ -1116,7 +1116,7 @@ static void c2b_multi_io_end(struct bio *bio, int err)
 #ifdef CASTLE_DEBUG    
     local_irq_restore(flags);
 #endif
-    kfree(bio_info);
+    castle_free(bio_info);
     bio_put(bio);
     
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,18)
@@ -1215,7 +1215,7 @@ void submit_c2b_io(int           rw,
 
         /* Allocate BIO and bio_info struct */
         bio = bio_alloc(GFP_KERNEL, batch);
-        bio_info = kmalloc(sizeof(struct bio_info), GFP_KERNEL);
+        bio_info = castle_malloc(sizeof(struct bio_info), GFP_KERNEL);
         BUG_ON(!bio_info);
 
         /* Init BIO and bio_info */
