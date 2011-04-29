@@ -272,14 +272,12 @@ static void castle_extents_super_block_read(void)
 {
     struct castle_fs_superblock *sblk;
 
-    mutex_lock(&castle_extents_mutex);
+    BUG_ON(!castle_extent_in_transaction());
 
     sblk = castle_fs_superblocks_get();
     memcpy(&castle_extents_global_sb, &sblk->extents_sb,
            sizeof(struct castle_extents_superblock));
     castle_fs_superblocks_put(sblk, 0);
-
-    mutex_unlock(&castle_extents_mutex);
 }
 
 static void castle_extents_super_block_writeback(void)
@@ -296,17 +294,29 @@ static void castle_extents_super_block_writeback(void)
     INJECT_FAULT;
 }
 
-struct castle_extents_superblock* castle_extents_super_block_get(void)
+void castle_extent_transaction_start(void)
 {
     mutex_lock(&castle_extents_mutex);
-    return &castle_extents_global_sb;
 }
- 
-void castle_extents_super_block_put(int dirty)
+
+void castle_extent_transaction_end(void)
 {
     mutex_unlock(&castle_extents_mutex);
 }
 
+int castle_extent_in_transaction(void)
+{
+    return mutex_is_locked(&castle_extents_mutex);
+}
+
+struct castle_extents_superblock* castle_extents_super_block_get(void)
+{
+    /* Doesn't make sense to get superblock without being in transaction. */
+    BUG_ON(!castle_extent_in_transaction());
+
+    return &castle_extents_global_sb;
+}
+ 
 static int castle_extent_micro_ext_create(void)
 {
     struct castle_extents_superblock *castle_extents_sb = castle_extents_super_block_get();
@@ -315,12 +325,11 @@ static int castle_extent_micro_ext_create(void)
     struct list_head *l;
     int i = 0;
 
+    BUG_ON(!castle_extent_in_transaction());
+
     micro_ext = castle_ext_alloc(MICRO_EXT_ID);
     if (!micro_ext)
-    {
-        castle_extents_super_block_put(0);
         return -ENOMEM;
-    }
 
     micro_ext->size     = MICRO_EXT_SIZE;
     micro_ext->type     = MICRO_EXT;
@@ -349,8 +358,6 @@ static int castle_extent_micro_ext_create(void)
     castle_extent_dirtylists_hash_add(micro_ext->dirtylist);
     castle_extents_hash_add(micro_ext);
 
-    castle_extents_super_block_put(1);
-
     return 0;
 }
 
@@ -361,6 +368,8 @@ static int castle_extent_meta_ext_create(void)
     struct list_head *l;
     c_ext_t *meta_ext;
     c_ext_id_t ext_id;
+
+    BUG_ON(!castle_extent_in_transaction());
 
     list_for_each(l, &castle_slaves.slaves)
         i++;
@@ -382,7 +391,6 @@ static int castle_extent_meta_ext_create(void)
     castle_extents_sb = castle_extents_super_block_get();
     meta_ext = castle_extents_hash_get(META_EXT_ID);
     CONVERT_EXTENT_TO_MENTRY(meta_ext, &castle_extents_sb->meta_ext);
-    castle_extents_super_block_put(1);
 
     /* Make sure that micro extent is persistent. */
     castle_cache_extent_flush_schedule(MICRO_EXT_ID, 0, 0);
@@ -399,6 +407,8 @@ static int castle_extent_mstore_ext_create(void)
     struct   castle_extents_superblock *castle_extents_sb;
     c_ext_id_t ext_id;
     int      k_factor = (castle_rda_spec_get(DEFAULT_RDA))->k_factor; 
+
+    BUG_ON(!castle_extent_in_transaction());
 
     i = 0;
     list_for_each(l, &castle_slaves.slaves)
@@ -425,34 +435,38 @@ static int castle_extent_mstore_ext_create(void)
     mstore_ext = castle_extents_hash_get(MSTORE_EXT_ID+1);
     CONVERT_EXTENT_TO_MENTRY(mstore_ext, &castle_extents_sb->mstore_ext[1]);
 
-    castle_extents_super_block_put(1);
-
     return 0;
 }
 
 int castle_extents_create(void)
 {
-    int ret;
+    int ret = 0;
 
     BUG_ON(extent_init_done);
-    
+
+    castle_extent_transaction_start();
+
     castle_extents_super_block_init();
 
     if ((ret = castle_extent_micro_ext_create()))
-        return ret;
+        goto out;
 
     if ((ret = castle_extent_meta_ext_create()))
-        return ret;
+        goto out;
 
     castle_ext_freespace_init(&meta_ext_free, META_EXT_ID);
 
     INJECT_FAULT;
 
     if ((ret = castle_extent_mstore_ext_create()))
-        return ret;
+        goto out;
 
     extent_init_done = 1;
-    return 0;
+
+out:
+    castle_extent_transaction_end();
+
+    return ret;
 }
 
 /**
@@ -530,7 +544,9 @@ int castle_extents_writeback(void)
         castle_mstore_init(MSTORE_EXTENTS, sizeof(struct castle_elist_entry));
     if(!castle_extents_mstore)
         return -ENOMEM;
-  
+ 
+    castle_extent_transaction_start();
+
     /* Note: This is important to make sure, nothing changes in extents. And
      * writeback() relinquishes hash spin_lock() while doing writeback. */
     ext_sblk = castle_extents_super_block_get();
@@ -561,7 +577,8 @@ int castle_extents_writeback(void)
     castle_freespace_writeback();
 
     castle_extents_super_block_writeback();
-    castle_extents_super_block_put(0);
+
+    castle_extent_transaction_end();
 
     return 0;
 }
@@ -607,6 +624,8 @@ int castle_extents_read(void)
 
     BUG_ON(extent_init_done);
 
+    castle_extent_transaction_start();
+
     castle_extents_super_block_read();
 
     castle_extent_micro_ext_create();
@@ -633,10 +652,10 @@ int castle_extents_read(void)
     castle_extent_mark_live(MSTORE_EXT_ID, 0);
     castle_extent_mark_live(MSTORE_EXT_ID+1, 0);
     meta_ext_size = castle_extent_size_get(META_EXT_ID);
-    castle_extents_super_block_put(0);
     extent_init_done = 1;
 
 out:
+    castle_extent_transaction_end();
     return ret;
 }
 
@@ -652,7 +671,9 @@ int castle_extents_read_complete(void)
         castle_mstore_open(MSTORE_EXTENTS, sizeof(struct castle_elist_entry));
     if(!castle_extents_mstore)
         return -ENOMEM;
- 
+
+    castle_extent_transaction_start();
+
     nr_exts = 0;
     iterator = castle_mstore_iterate(castle_extents_mstore);
     if (!iterator)
@@ -673,15 +694,18 @@ int castle_extents_read_complete(void)
 
     ext_sblk = castle_extents_super_block_get();
     BUG_ON(ext_sblk->nr_exts != nr_exts);
-    castle_extents_super_block_put(0);
 
     INJECT_FAULT;
+
+    castle_extent_transaction_end();
 
     return 0;
 
 error_out:
     if (iterator)               castle_mstore_iterator_destroy(iterator);
     if (castle_extents_mstore)  castle_mstore_fini(castle_extents_mstore);
+
+    castle_extent_transaction_end();
 
     return -1;
 }
@@ -1048,9 +1072,20 @@ out:
 c_ext_id_t castle_extent_alloc(c_rda_type_t rda_type,
                                da_id_t      da_id,
                                c_ext_type_t ext_type,
-                               c_chk_cnt_t  count)
+                               c_chk_cnt_t  count,
+                               int          in_tran)
 {
-    return _castle_extent_alloc(rda_type, da_id, ext_type, count, INVAL_EXT_ID);
+    int ret = 0;
+
+    /* If the caller is not already in transaction. start a transaction. */
+    if (!in_tran)   castle_extent_transaction_start();
+
+    ret = _castle_extent_alloc(rda_type, da_id, ext_type, count, INVAL_EXT_ID);
+
+    /* End the transaction. */
+    if (!in_tran)   castle_extent_transaction_end();
+
+    return ret;
 }
 
 /**
@@ -1072,10 +1107,11 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t rda_type,
 {
     c_ext_t *ext = NULL;
     c_rda_spec_t *rda_spec = castle_rda_spec_get(rda_type);
-    struct castle_extents_superblock *castle_extents_sb = NULL;
+    struct castle_extents_superblock *castle_extents_sb;
 
+    BUG_ON(!castle_extent_in_transaction());
     BUG_ON(!extent_init_done && !LOGICAL_EXTENT(ext_id));
-
+    
     if (castle_extents_hash_get(ext_id))
         goto __hell;
 
@@ -1146,7 +1182,6 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t rda_type,
         castle_extents_sb->nr_exts++;
         castle_extents_sb->ext_id_seq++;
     }
-    castle_extents_super_block_put(1);
 
     return ext->ext_id;
 
@@ -1156,8 +1191,6 @@ __hell:
         castle_free(ext->dirtylist);
         castle_free(ext);
     }
-    if (castle_extents_sb)
-        castle_extents_super_block_put(1);
 
     return INVAL_EXT_ID;
 }
@@ -1194,6 +1227,8 @@ static void _castle_extent_free(void *data)
     struct castle_extents_superblock *castle_extents_sb = NULL;
     c_ext_id_t ext_id = ext->ext_id;
 
+    castle_extent_transaction_start();
+
     /* Reference count should be zero. */
     if (atomic_read(&ext->ref_cnt))
     {
@@ -1218,14 +1253,13 @@ static void _castle_extent_free(void *data)
 
     castle_extents_sb->nr_exts--;
 
-    /* Release extent lock. */
-    castle_extents_super_block_put(1);
-
     castle_free(ext->work);
     castle_free(ext);
 
     /* Decrement the dead count. Module can't exit with outstanding dead extents.  */
     atomic_dec(&castle_extents_dead_count);
+
+    castle_extent_transaction_end();
 }
 
 uint32_t castle_extent_kfactor_get(c_ext_id_t ext_id)
@@ -2252,6 +2286,8 @@ retry:
         (ext->ext_id == MSTORE_EXT_ID+1))
     {
         struct castle_extents_superblock* castle_extents_sb;
+
+        castle_extent_transaction_start();
         castle_extents_sb = castle_extents_super_block_get();
         switch (ext->ext_id) {
             case META_EXT_ID:
@@ -2264,7 +2300,7 @@ retry:
                 castle_extents_sb->mstore_ext[1].curr_rebuild_seqno = rebuild_to_seqno;
                 break;
         }
-        castle_extents_super_block_put(1);
+        castle_extent_transaction_end();
     }
 
     /* Now the shadow map has become the default map, we can stop redirecting write I/O. */

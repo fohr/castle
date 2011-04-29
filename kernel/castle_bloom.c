@@ -109,13 +109,13 @@ int castle_bloom_create(castle_bloom_t *bf, da_id_t da_id, uint64_t num_elements
 
     /* Try for SSD extent. If fails, go for DEFAULT_RDA */
     bf->ext_id = castle_extent_alloc(SSD_ONLY_EXT, da_id, EXT_T_BLOOM_FILTER, 
-                                     ceiling(size, C_CHK_SIZE));
+                                     ceiling(size, C_CHK_SIZE), 1);
     if (EXT_ID_INVAL(bf->ext_id))
     {
         bf->block_size_pages = BLOOM_BLOCK_SIZE_HDD_PAGES;
 
         bf->ext_id = castle_extent_alloc(DEFAULT_RDA, da_id, EXT_T_BLOOM_FILTER,
-                                         ceiling(size, C_CHK_SIZE));
+                                         ceiling(size, C_CHK_SIZE), 1);
         if (EXT_ID_INVAL(bf->ext_id))
         {
             castle_printk(LOG_WARN, "Failed to create extent for bloom\n");

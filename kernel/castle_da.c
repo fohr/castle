@@ -2356,12 +2356,15 @@ static int castle_da_merge_extents_alloc(struct castle_da_merge *merge)
     BUG_ON(!EXT_ID_INVAL(merge->out_tree->internal_ext_free.ext_id) ||
            !EXT_ID_INVAL(merge->out_tree->tree_ext_free.ext_id));
 
+    /* Start an extent transaction, to make sure all the extent operations are atomic. */
+    castle_extent_transaction_start();
+
     /* Attempt to allocate an SSD extent for internal nodes. */
     merge->internals_on_ssds = 1;
     merge->out_tree->internal_ext_free.ext_id = castle_extent_alloc(SSD_RDA,
                                                                     merge->da->id,
                                                                     EXT_T_INTERNAL_NODES,
-                                                                    CHUNK(internal_tree_size));
+                                                                    CHUNK(internal_tree_size), 1);
     if (EXT_ID_INVAL(merge->out_tree->internal_ext_free.ext_id))
     {
         /* FAILED to allocate internal node SSD extent.
@@ -2370,7 +2373,7 @@ static int castle_da_merge_extents_alloc(struct castle_da_merge *merge)
         merge->out_tree->internal_ext_free.ext_id = castle_extent_alloc(DEFAULT_RDA,
                                                                         merge->da->id,
                                                                         EXT_T_INTERNAL_NODES,
-                                                                        CHUNK(tree_size));
+                                                                        CHUNK(tree_size), 1);
         if (EXT_ID_INVAL(merge->out_tree->internal_ext_free.ext_id))
         {
             /* FAILED to allocate internal node HDD extent. */
@@ -2386,7 +2389,7 @@ static int castle_da_merge_extents_alloc(struct castle_da_merge *merge)
             merge->out_tree->tree_ext_free.ext_id = castle_extent_alloc(SSD_RDA,
                                                                         merge->da->id,
                                                                         EXT_T_LEAF_NODES,
-                                                                        CHUNK(tree_size));
+                                                                        CHUNK(tree_size), 1);
     }
 
     merge->leafs_on_ssds = 1;
@@ -2398,7 +2401,7 @@ static int castle_da_merge_extents_alloc(struct castle_da_merge *merge)
         merge->out_tree->tree_ext_free.ext_id = castle_extent_alloc(DEFAULT_RDA,
                                                                     merge->da->id,
                                                                     EXT_T_LEAF_NODES,
-                                                                    CHUNK(tree_size));
+                                                                    CHUNK(tree_size), 1);
     }
 
     if (EXT_ID_INVAL(merge->out_tree->tree_ext_free.ext_id))
@@ -2422,7 +2425,7 @@ static int castle_da_merge_extents_alloc(struct castle_da_merge *merge)
     if ((ret = castle_new_ext_freespace_init(&merge->out_tree->data_ext_free,
                                               merge->da->id,
                                               EXT_T_MEDIUM_OBJECTS,
-                                              data_size)))
+                                              data_size, 1)))
     {
         castle_printk(LOG_WARN, "Merge failed due to space constraint for data\n");
         goto no_space;
@@ -2434,9 +2437,15 @@ static int castle_da_merge_extents_alloc(struct castle_da_merge *merge)
     else
         merge->out_tree->bloom_exists = 1;
 
+    /* End extent transaction. */
+    castle_extent_transaction_end();
+
     return 0;
 
 no_space:
+    /* End extent transaction. */
+    castle_extent_transaction_end();
+
     castle_da_freeze(merge->da);
 
     return -ENOSPC;
@@ -6782,11 +6791,14 @@ static int __castle_da_rwct_create(struct castle_double_array *da, int cpu_index
     BUG_ON(sizeof(ct->seq) != 4);
     ct->seq = (cpu_index << TREE_SEQ_SHIFT) + ct->seq;
 
+    /* Start extent transaction. */
+    castle_extent_transaction_start();
+
     /* Allocate internal, btree and data extents. */
     if ((err = castle_new_ext_freespace_init(&ct->internal_ext_free,
                                              da->id,
                                              EXT_T_INTERNAL_NODES,
-                                             MAX_DYNAMIC_TREE_SIZE * C_CHK_SIZE)))
+                                             MAX_DYNAMIC_TREE_SIZE * C_CHK_SIZE, 1)))
     {
         castle_printk(LOG_WARN, "Failed to get space for T0 internal\n");
         goto no_space;
@@ -6794,7 +6806,7 @@ static int __castle_da_rwct_create(struct castle_double_array *da, int cpu_index
     if ((err = castle_new_ext_freespace_init(&ct->tree_ext_free,
                                               da->id,
                                               EXT_T_LEAF_NODES,
-                                              MAX_DYNAMIC_TREE_SIZE * C_CHK_SIZE)))
+                                              MAX_DYNAMIC_TREE_SIZE * C_CHK_SIZE, 1)))
     {
         castle_printk(LOG_WARN, "Failed to get space for T0 tree\n");
         goto no_space;
@@ -6802,11 +6814,14 @@ static int __castle_da_rwct_create(struct castle_double_array *da, int cpu_index
     if ((err = castle_new_ext_freespace_init(&ct->data_ext_free,
                                               da->id,
                                               EXT_T_MEDIUM_OBJECTS,
-                                              MAX_DYNAMIC_DATA_SIZE * C_CHK_SIZE)))
+                                              MAX_DYNAMIC_DATA_SIZE * C_CHK_SIZE, 1)))
     {
         castle_printk(LOG_WARN, "Failed to get space for T0 data\n");
         goto no_space;
     }
+
+    /* End extent transaction. */
+    castle_extent_transaction_end();
 
     /* Create a root node for this tree, and update the root version */
     ct->tree_depth = 0;
@@ -6859,6 +6874,8 @@ static int __castle_da_rwct_create(struct castle_double_array *da, int cpu_index
     return 0;
 
 no_space:
+    /* End extent transaction. */
+    castle_extent_transaction_end();
     castle_da_freeze(da);
     if (ct)
         castle_ct_put(ct, 0);

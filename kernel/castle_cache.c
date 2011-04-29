@@ -5188,7 +5188,7 @@ int castle_checkpoint_version_inc(void)
     castle_fs_superblocks_put(fs_sb, 1);
 
     /* Makes sure no parallel freespace operations happening. */
-    (void) castle_extents_super_block_get();
+    castle_extent_transaction_start();
 
     list_for_each(lh, &castle_slaves.slaves)
     {
@@ -5214,7 +5214,7 @@ int castle_checkpoint_version_inc(void)
     /* We must have created some freespace, unfreeze DAs. */
     castle_double_arrays_unfreeze();
 
-    castle_extents_super_block_put(0);
+    castle_extent_transaction_end();
 
     castle_printk(LOG_INFO, "Number of logical extent pages: %u\n",
             atomic_read(&castle_cache_logical_ext_pages));
@@ -5468,9 +5468,10 @@ static int castle_periodic_checkpoint(void *unused)
         castle_fs_superblock_slaves_update(fs_sb);
         castle_fs_superblocks_put(fs_sb, 1);
 
+        castle_extent_transaction_start();
         castle_extents_sb = castle_extents_super_block_get();
         castle_extents_sb->current_rebuild_seqno = atomic_read(&current_rebuild_seqno);
-        castle_extents_super_block_put(1);
+        castle_extent_transaction_end();
 
         if (castle_mstores_writeback(version))
         {
