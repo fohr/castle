@@ -638,6 +638,23 @@ typedef struct castle_bloom_filter {
 #endif
 } castle_bloom_t;
 
+struct castle_bbp_entry
+{
+    /* align:   8 */
+    /* offset:  0 */ uint64_t    expected_num_elements;
+    /*          8 */ uint64_t    elements_inserted;
+    /*         16 */ uint32_t    chunks_complete;
+    /*         20 */ uint32_t    cur_node_cur_chunk_id;
+    /*         24 */ uint32_t    cur_chunk_num_blocks;
+    /*         28 */ uint32_t    nodes_complete;
+    /*         32 */ c_ext_pos_t node_cep;
+    /*         48 */ c_ext_pos_t chunk_cep;
+    /*         64 */ uint32_t    node_used;   /* for entries_drop */
+    /*         68 */ uint8_t     node_avail;  /* flag to indicate if we should recover node */
+    /*         69 */ uint8_t     chunk_avail; /* flag to indicate if we should recover chunk */
+    /*         70 */
+} PACKED;
+
 struct castle_component_tree {
     tree_seq_t          seq;               /**< Unique ID identifying this tree.                */
     atomic_t            ref_count;
@@ -779,10 +796,15 @@ struct castle_dmserlist_entry {
     /*        956 */ c_ext_pos_t                 iter_immut_curr_c2b_cep[2];
     /*        988 */ c_ext_pos_t                 iter_immut_next_c2b_cep[2];
 
-    /*       1020 */ uint8_t                     unused[4];
+    /*       1020 */ uint8_t                     pad_to_bloom_build_params[4];
     /*       1024 */
+
+    /*       1024 */ struct castle_bbp_entry     out_tree_bbp;
+    /*       1094 */ uint8_t                     pad[442];
+    /*       1536 */
+
 } PACKED;
-#define SIZEOF_CASTLE_DMSERLIST_ENTRY (1024)
+#define SIZEOF_CASTLE_DMSERLIST_ENTRY (1536)
 
 /**
  * Ondisk Serialized structure for castle versions.

@@ -3240,7 +3240,7 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
             /* Abort (i.e. free) incomplete bloom filters */
             castle_bloom_abort(&merge->out_tree->bloom);
             if(!merge_out_tree_retain)
-                castle_bloom_destroy(&merge->out_tree->bloom);
+                castle_bloom_destroy(&merge->out_tree->bloom); /* free the extent */
             merge->out_tree->bloom_exists=0;
         }
 
@@ -3909,13 +3909,12 @@ static struct castle_da_merge* castle_da_merge_init(struct castle_double_array *
                 __FUNCTION__, da->id, level);
         castle_da_merge_des_check(merge, da, level, nr_trees, in_trees);
         /* by this point, merge->deserialising flag is set, but we also maintain the
-           da->levels[level].merge.serdes.des flag for checkpoint's sake*/
-        castle_da_merge_deserialise(merge, da, level);
+           da->levels[level].merge.serdes.des flag for checkpoint's sake.
+           TODO@tr get rid of merge->deserialising; use only da->levels[level].merge.serdes.des
+                   so we never get any inconsistency/confusion */
 
+        castle_da_merge_deserialise(merge, da, level);
         merge->out_tree = da->levels[level].merge.serdes.out_tree;
-        /* TODO@tr just disabled blooming for now, need to re-enable it once bloom_build_params
-           are included in merge serdes. */
-        merge->out_tree->bloom_exists=0;
     }
 
     if(!merge->out_tree)
@@ -4194,6 +4193,7 @@ static void castle_da_merge_marshall(struct castle_dmserlist_entry *merge_mstore
     int i;
     struct component_iterator *comp[2], *curr_comp;
     c_immut_iter_t *immut[2];
+    int lo_count=0;
 
     /* Try to catch (at compile-time) any screwups to dmserlist structure; if we fail to compile
        here, review struct castle_dmserlist_entry, MAX_BTREE_DEPTH, and
@@ -4269,7 +4269,6 @@ update_output_tree_state:
     /* output tree marshalling is expensive... make it rare (i.e. once per checkpoint) */
 
     {
-        int lo_count=0;
         struct list_head *lh, *tmp;
         list_for_each_safe(lh, tmp, &merge->new_large_objs)
         {
@@ -4337,6 +4336,21 @@ update_output_tree_state:
 
             dirty_c2b(merge->levels[i].node_c2b);
         }
+    }
+
+    /* bloom build parameters, so we can resume building the output CT's bloom filter */
+    if(merge->out_tree->bloom_exists)
+    {
+        struct castle_bloom_build_params *bf_bp = merge->out_tree->bloom.private;
+        BUG_ON(!bf_bp);
+
+        /* just me testing a theory... */
+        BUG_ON(bf_bp->chunk_cep.ext_id != bf_bp->node_cep.ext_id);
+        BUG_ON(bf_bp->chunk_cep.ext_id != merge->out_tree->bloom.ext_id);
+
+        debug("%s::merge %p (da %d, level %d) bloom_build_param marshall.\n",
+                __FUNCTION__, merge, merge->da->id, merge->level);
+        castle_bloom_build_param_marshall(&merge_mstore->out_tree_bbp, bf_bp);
     }
 
     if (partial_marshall) return;
@@ -6070,7 +6084,8 @@ static int castle_da_writeback(struct castle_double_array *da, void *unused)
 
                 merge_mstore = da->levels[i].merge.serdes.mstore_entry;
 
-                castle_printk(LOG_INFO, "%s::checkpointing merge on da %d, level %d\n",
+                /* TODO@tr change this to LOG_INFO before public release */
+                castle_printk(LOG_USERINFO, "%s::checkpointing merge on da %d, level %d\n",
                         __FUNCTION__, da->id, i);
 
                 /* assert that we are not checkpointing merges on lower levels */
@@ -6200,6 +6215,19 @@ static int castle_da_writeback(struct castle_double_array *da, void *unused)
                         debug("%s::    bloom ext_id = %lld.\n",
                                 __FUNCTION__, cl->bloom_ext_id);
                         castle_cache_extent_flush_schedule(cl->bloom_ext_id, 0, 0);
+
+                        /* the following two are almost certainly unnecessary: the ext_ids will
+                           match the above. */
+                        /* TODO@tr: get rid of the following flushes. */
+                        debug("%s::    bbp node ext_id = %lld.\n",
+                                __FUNCTION__, merge_mstore->out_tree_bbp.node_cep.ext_id);
+                        castle_cache_extent_flush_schedule(
+                            merge_mstore->out_tree_bbp.node_cep.ext_id, 0, 0);
+
+                        debug("%s::    bbp chunk ext_id = %lld.\n",
+                                __FUNCTION__, merge_mstore->out_tree_bbp.chunk_cep.ext_id);
+                        castle_cache_extent_flush_schedule(
+                            merge_mstore->out_tree_bbp.chunk_cep.ext_id, 0, 0);
                     }
 
                     atomic_set(&da->levels[i].merge.serdes.fresh, 0);
@@ -6399,6 +6427,36 @@ int castle_double_array_start(void)
     return 0;
 }
 
+static int castle_da_ct_bloom_build_param_deserialise(struct castle_component_tree *ct,
+                                                      struct castle_bbp_entry *bbpm)
+{
+    /* memory allocation and some sanity checking: */
+    if(!ct->bloom_exists)
+    {
+        castle_printk(LOG_ERROR, "%s::no bloom filter attached to CT %d, "
+                "yet we have build_params. Weird.\n", __FUNCTION__, ct->seq);
+        BUG(); /* relax this if we might ever end up in this situation */
+        return -ENXIO;
+    }
+
+    BUG_ON(ct->bloom.btree->magic != RO_VLBA_TREE_TYPE);
+    ct->bloom.private = castle_zalloc(sizeof(struct castle_bloom_build_params), GFP_KERNEL);
+    if(!ct->bloom.private)
+    {
+        castle_printk(LOG_ERROR, "%s::failed to deserialise bloom build parameters for CT %d; "
+                "discarding bloom filter on this CT.", __FUNCTION__, ct->seq);
+        castle_bloom_abort(&ct->bloom);
+        castle_bloom_destroy(&ct->bloom);
+        ct->bloom_exists=0;
+        BUG(); /* Out of memory at init time? relax this if it's a possible valid situation */
+        return -ENOMEM;
+    }
+
+    /* actual deserialisation work happens here: */
+    castle_bloom_build_param_unmarshall(&ct->bloom, bbpm);
+    return 0;
+}
+
 /**
  * Read doubling arrays and serialised component trees in from disk.
  *
@@ -6501,7 +6559,9 @@ int castle_double_array_read(void)
            unlike a normal ct (see code below), a partially complete in-merge ct does not get
            added to a DA through cct_add(da, ct, NULL, 1). */
 
-        /* TODO@tr recover bloom build params here */
+        /* oh and also, bloom_build_params. */
+        castle_da_ct_bloom_build_param_deserialise(des_da->levels[level].merge.serdes.out_tree,
+                                                   &mstore_dmserentry.out_tree_bbp);
 
         /* inc ct seq number if necessary */
         if (des_da->levels[level].merge.serdes.out_tree->seq >= atomic_read(&castle_next_tree_seq))

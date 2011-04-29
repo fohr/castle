@@ -57,26 +57,8 @@ uint32_t opt_hashes_per_bit[] =
 
 #define ceiling(_a, _b)         ((_a - 1) / _b + 1)
 
-/**** Bloom filter builds ****/
-
-struct castle_bloom_build_params
-{
-    uint64_t expected_num_elements;
-    uint64_t elements_inserted;
-    uint32_t chunks_complete;
-    uint32_t cur_node_cur_chunk_id;
-    struct castle_btree_node *cur_node;
-    c2_block_t *node_c2b;
-    c_ext_pos_t node_cep;
-    void *cur_chunk_buffer;
-    c2_block_t *chunk_c2b;
-    c_ext_pos_t chunk_cep;
-    uint32_t cur_chunk_num_blocks;
-    uint32_t nodes_complete;
-#ifdef DEBUG
-    uint32_t *elements_inserted_per_block;
-#endif
-};
+/* unsigned saturating subtract */
+#define usat_subtract(_a, _b, _c)  ( ( (_a) > ( (_b)+(_c) ) ) ? ((_a) - (_b)) : (_c) )
 
 /**
  * Initialize a bloom filter.  Call castle_bloom_add to add a key and
@@ -375,7 +357,7 @@ void castle_bloom_abort(castle_bloom_t *bf)
 
     if(bf_bp->cur_node != NULL)
     {
-        debug("Completing NODE for bloom_filter %p\n", bf);
+        debug("Completing node for bloom_filter %p\n", bf);
         dirty_c2b(bf_bp->node_c2b);
         write_unlock_c2b(bf_bp->node_c2b);
         put_c2b(bf_bp->node_c2b);
@@ -383,7 +365,7 @@ void castle_bloom_abort(castle_bloom_t *bf)
 
     if(bf_bp->chunk_c2b != NULL)
     {
-        debug("bloom_abort::completing CHUNK for bloom_filter %p\n", bf);
+        debug("Completing chunk for bloom_filter %p\n", bf);
         dirty_c2b(bf_bp->chunk_c2b);
         write_unlock_c2b(bf_bp->chunk_c2b);
         put_c2b(bf_bp->chunk_c2b);
@@ -943,3 +925,105 @@ void castle_bloom_unmarshall(castle_bloom_t *bf, struct castle_clist_entry *ctm)
     atomic64_set(&bf->false_positives, 0);
 #endif
 }
+
+/* Marshalling/unmarshalling of bloom_build_params handled seperately because they are only needed
+   for SERDES of in-flight DA merges (as part of the incomplete output tree) */
+
+void castle_bloom_build_param_marshall(struct castle_bbp_entry *bbpm,
+                                       struct castle_bloom_build_params *bf_bp)
+{
+    bbpm->expected_num_elements = bf_bp->expected_num_elements;
+    bbpm->elements_inserted     = bf_bp->elements_inserted;
+    bbpm->chunks_complete       = bf_bp->chunks_complete;
+    bbpm->cur_node_cur_chunk_id = bf_bp->cur_node_cur_chunk_id;
+    bbpm->cur_chunk_num_blocks  = bf_bp->cur_chunk_num_blocks;
+    bbpm->nodes_complete        = bf_bp->nodes_complete;
+
+    bbpm->node_cep              = bf_bp->node_cep;
+    bbpm->chunk_cep             = bf_bp->chunk_cep;
+
+    if(bf_bp->cur_node)
+    {
+        BUG_ON(bf_bp->cur_node->magic != BTREE_NODE_MAGIC);
+        BUG_ON(EXT_POS_INVAL(bbpm->node_cep));
+        bbpm->node_used         = bf_bp->cur_node->used;
+        /* we need to explicitly tell deserialisation whether or not to recover the bnode bcos
+           it cannot be assumed that (!EXT_POS_INVAL(node_cep)) is sufficient evidence of this */
+        bbpm->node_avail = 1;
+        dirty_c2b(bf_bp->node_c2b);
+    }
+    else
+        bbpm->node_avail = 0;
+
+    if(bf_bp->cur_chunk_buffer)
+    {
+        BUG_ON(EXT_POS_INVAL(bbpm->chunk_cep));
+        bbpm->chunk_avail = 1;
+        dirty_c2b(bf_bp->chunk_c2b);
+    }
+    else
+        bbpm->chunk_avail = 0;
+
+    return;
+}
+
+void castle_bloom_build_param_unmarshall(castle_bloom_t *bf, struct castle_bbp_entry *bbpm)
+{
+    struct castle_bloom_build_params *bf_bp = bf->private;
+
+    /* assumes a priori unmarshalled bloom filter */
+    BUG_ON(bf->btree->magic != RO_VLBA_TREE_TYPE);
+
+    /* assumes caller did zalloc */
+    BUG_ON(!bf_bp);
+    BUG_ON(bf_bp->node_c2b);
+    BUG_ON(bf_bp->cur_node);
+    BUG_ON(bf_bp->chunk_c2b);
+    BUG_ON(bf_bp->cur_chunk_buffer);
+
+    BUG_ON(EXT_POS_INVAL(bbpm->node_cep));
+    BUG_ON(EXT_POS_INVAL(bbpm->chunk_cep));
+
+    bf_bp->expected_num_elements = bbpm->expected_num_elements;
+    bf_bp->elements_inserted     = bbpm->elements_inserted;
+    bf_bp->chunks_complete       = bbpm->chunks_complete;
+    bf_bp->cur_node_cur_chunk_id = bbpm->cur_node_cur_chunk_id;
+    bf_bp->cur_chunk_num_blocks  = bbpm->cur_chunk_num_blocks;
+    bf_bp->nodes_complete        = bbpm->nodes_complete;
+
+    /* recover node cep, c2b, and node */
+    bf_bp->node_cep              = bbpm->node_cep;
+    if(bbpm->node_avail)
+    {
+        BUG_ON(EXT_POS_INVAL(bf_bp->node_cep));
+        bf_bp->node_c2b = castle_cache_block_get(bf_bp->node_cep, BLOOM_INDEX_NODE_SIZE_PAGES);
+        write_lock_c2b(bf_bp->node_c2b);
+        if(!c2b_uptodate(bf_bp->node_c2b))
+            BUG_ON(submit_c2b_sync(READ, bf_bp->node_c2b));
+        castle_cache_advise(bf_bp->node_c2b->cep, C2_ADV_SOFTPIN, -1, -1, 0);
+        update_c2b(bf_bp->node_c2b);
+        bf_bp->cur_node = c2b_bnode(bf_bp->node_c2b);
+        BUG_ON(!bf_bp->cur_node);
+        BUG_ON(bf_bp->cur_node->magic != BTREE_NODE_MAGIC);
+        debug("%s::previous node used: %d, current node used: %d.\n",
+            __FUNCTION__, bbpm->node_used, bf_bp->cur_node->used);
+        bf->btree->entries_drop(bf_bp->cur_node,
+                                usat_subtract(bbpm->node_used, 1, 0),
+                                bf_bp->cur_node->used - 1);
+    }
+
+    /* recover chunk cep, c2b, and buffer */
+    bf_bp->chunk_cep             = bbpm->chunk_cep;
+    if(bbpm->chunk_avail)
+    {
+        BUG_ON(EXT_POS_INVAL(bf_bp->chunk_cep));
+        bf_bp->chunk_c2b = castle_cache_block_get(bf_bp->chunk_cep, bf_bp->cur_chunk_num_blocks * bf->block_size_pages);
+        write_lock_c2b(bf_bp->chunk_c2b);
+        if (bf->num_chunks <= BLOOM_MAX_SOFTPIN_CHUNKS)
+            castle_cache_advise(bf_bp->chunk_c2b->cep, C2_ADV_SOFTPIN, -1, -1, 0);
+        update_c2b(bf_bp->chunk_c2b);
+        bf_bp->cur_chunk_buffer = c2b_buffer(bf_bp->chunk_c2b);
+    }
+    return;
+}
+
