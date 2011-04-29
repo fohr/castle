@@ -294,11 +294,18 @@ static void castle_extents_super_block_writeback(void)
     INJECT_FAULT;
 }
 
+/**
+ * Start an extent transaction. An extent transaction makes sure that all extent operations in 
+ * transaction are atomic.
+ */
 void castle_extent_transaction_start(void)
 {
     mutex_lock(&castle_extents_mutex);
 }
 
+/**
+ * End the extent transaction. 
+ */
 void castle_extent_transaction_end(void)
 {
     mutex_unlock(&castle_extents_mutex);
