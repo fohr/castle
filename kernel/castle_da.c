@@ -2908,15 +2908,15 @@ release_node:
 #endif
 }
 
-static inline int castle_da_nodes_complete(struct castle_da_merge *merge, int depth)
+static inline int castle_da_nodes_complete(struct castle_da_merge *merge)
 {
     struct castle_da_merge_level *level;
     int i;
 
-    debug("Checking if we need to complete nodes starting at level: %d\n", depth);
-    /* Check if the level 'depth' node has been completed, which may trigger a cascade of
+    debug("Checking if we need to complete nodes.");
+    /* Check if the level i node has been completed, which may trigger a cascade of
        completes up the tree. */
-    for(i=depth; i<MAX_BTREE_DEPTH-1; i++)
+    for(i=0; i<MAX_BTREE_DEPTH-1; i++)
     {
         level = merge->levels + i;
         /* Complete if next_idx < 0 */
@@ -3413,7 +3413,7 @@ static int castle_da_merge_unit_do(struct castle_da_merge *merge, uint32_t unit_
         merge->nr_entries++;
         /* Try to complete node. */
         castle_perf_debug_getnstimeofday(&ts_start);
-        ret = castle_da_nodes_complete(merge, 0);
+        ret = castle_da_nodes_complete(merge);
         castle_perf_debug_getnstimeofday(&ts_end);
         castle_perf_debug_bump_ctr(merge->nodes_complete_ns, ts_end, ts_start);
         if (ret != EXIT_SUCCESS)
