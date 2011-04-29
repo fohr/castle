@@ -2198,7 +2198,7 @@ static int castle_da_iterators_create(struct castle_da_merge *merge)
         struct castle_dmserlist_entry *merge_mstore =
                                         merge->da->levels[merge->level].merge.serdes.mstore_entry;
 
-        castle_printk(LOG_INIT, "%s::Fast-forward iterators on merge %p (da %d level %d)\n",
+        debug("%s::Fast-forward iterators on merge %p (da %d level %d)\n",
                       __FUNCTION__, merge, merge->da->id, merge->level);
 
         BUG_ON(merge->nr_trees!=2);
@@ -3905,7 +3905,7 @@ static struct castle_da_merge* castle_da_merge_init(struct castle_double_array *
     /* only reason a lock might be needed here would be if we were racing with double_array_read,
        which should never happen */
     if(da->levels[level].merge.serdes.des){
-        castle_printk(LOG_INIT, "%s::found serialised merge in da %d level %d, attempting des\n",
+        debug("%s::found serialised merge in da %d level %d, attempting des\n",
                 __FUNCTION__, da->id, level);
         castle_da_merge_des_check(merge, da, level, nr_trees, in_trees);
         /* by this point, merge->deserialising flag is set, but we also maintain the
@@ -3988,6 +3988,8 @@ static struct castle_da_merge* castle_da_merge_init(struct castle_double_array *
         mutex_lock(&da->levels[level].merge.serdes.mutex);
         da->levels[level].merge.serdes.des=0;
         mutex_unlock(&da->levels[level].merge.serdes.mutex);
+        castle_printk(LOG_INIT, "Resuming merge on da %d level %d.\n",
+            da->id, level);
     }
     return merge;
 
@@ -4462,7 +4464,7 @@ static void castle_da_merge_deserialise(struct castle_da_merge *merge,
         /* Recover each btree level's node_c2b and last_key */
         if(!EXT_POS_INVAL(merge_mstore->node_c2b_cep[i]))
         {
-            castle_printk(LOG_INIT, "%s::sanity check for merge %p (da %d level %d) node_c2b[%d] ("cep_fmt_str")\n",
+            debug("%s::sanity check for merge %p (da %d level %d) node_c2b[%d] ("cep_fmt_str")\n",
                     __FUNCTION__, merge, da->id, level,
                     i, cep2str(merge_mstore->node_c2b_cep[i]) );
 
@@ -4477,7 +4479,7 @@ static void castle_da_merge_deserialise(struct castle_da_merge *merge,
             BUG_ON(merge_mstore->node_used[i] > (node->used) );
             if(merge_mstore->next_idx[i] < (node->used))
             {
-                castle_printk(LOG_INIT, "%s::for merge %p (da %d level %d) entries_drop on node_c2b[%d] "
+                debug("%s::for merge %p (da %d level %d) entries_drop on node_c2b[%d] "
                         "ser used = %d, current used = %d, valid_end_idx = %d, next_idx = %d, node size = %d\n",
                         __FUNCTION__, merge, da->id, level, i,
                         merge_mstore->node_used[i],
@@ -4500,7 +4502,7 @@ static void castle_da_merge_deserialise(struct castle_da_merge *merge,
     BUG_ON(merge->last_leaf_node_c2b); /* Initialising merge - this should always be NULL */
     if(!EXT_POS_INVAL(merge_mstore->last_leaf_node_cep))
     {
-        castle_printk(LOG_INIT, "%s::last_leaf_node_c2b for merge %p (da %d level %d)\n",
+        debug("%s::last_leaf_node_c2b for merge %p (da %d level %d)\n",
                 __FUNCTION__, merge, da->id, level);
         merge->last_leaf_node_c2b =
             castle_da_merge_des_out_tree_c2b_write_fetch(merge, merge_mstore->last_leaf_node_cep,
@@ -4586,7 +4588,7 @@ static void castle_da_merge_des_check(struct castle_da_merge *merge, struct cast
     }
 
     /* Sane. Proceed. */
-    castle_printk(LOG_INIT, "Merge DES da %d level %d passed initial SERDES logic sanity checks.\n",
+    castle_printk(LOG_INIT, "Interrupted merge da %d level %d passed initial SERDES logic sanity checks.\n",
             da->id, level);
     merge->deserialising=1;
 
