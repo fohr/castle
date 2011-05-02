@@ -24,9 +24,7 @@
 #undef BUG_ON
 
 /* Enable additional sanity checking to debug merge serialisation/deserialisation */
-/* TODO@tr: test withot DEBUG_MERGE_SERDES */
-/* do not disable this for now; no testing done yet without it. */
-#define DEBUG_MERGE_SERDES
+//#define DEBUG_MERGE_SERDES
 extern int castle_merges_checkpoint; /* 0 or 1, default=enabled */
 
 static inline ATTRIB_NORET void bug_fn(char *file, unsigned long line)
