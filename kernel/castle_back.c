@@ -2105,15 +2105,15 @@ static void castle_back_big_put_complete(struct castle_object_replace *replace, 
     attachment = stateful_op->attachment;
     stateful_op->attachment = NULL;
 
-    /* Will drop stateful_op->lock. */
-    castle_back_put_stateful_op(stateful_op->conn, stateful_op);
-
     /* Update stats. */
     if (!err)
     {
         atomic64_inc(&attachment->big_put.ios);
         atomic64_add(stateful_op->replace.value_len, &attachment->big_put.bytes);
     }
+
+    /* Will drop stateful_op->lock. */
+    castle_back_put_stateful_op(stateful_op->conn, stateful_op);
 
     castle_attachment_put(attachment);
 }

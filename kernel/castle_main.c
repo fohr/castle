@@ -266,7 +266,8 @@ void castle_ext_freespace_init(c_ext_free_t *ext_free,
 int castle_new_ext_freespace_init(c_ext_free_t *ext_free, 
                                   da_id_t       da_id, 
                                   c_ext_type_t  ext_type,
-                                  c_byte_off_t  size)
+                                  c_byte_off_t  size,
+                                  int           in_tran)
 {
     uint32_t nr_chunks;
     c_ext_id_t ext_id;
@@ -274,7 +275,7 @@ int castle_new_ext_freespace_init(c_ext_free_t *ext_free,
     /* Calculate the number of chunks requried. */ 
     nr_chunks = ((size - 1) / C_CHK_SIZE) + 1;
     /* Try allocating the extent of the requested size. */
-    ext_id = castle_extent_alloc(DEFAULT_RDA, da_id, ext_type, nr_chunks);
+    ext_id = castle_extent_alloc(DEFAULT_RDA, da_id, ext_type, nr_chunks, in_tran);
     if(EXT_ID_INVAL(ext_id))
         return -ENOSPC;
 
@@ -785,23 +786,29 @@ int castle_fs_init(void)
         mutex_init(&castle_global_tree.lo_mutex);
         INIT_LIST_HEAD(&castle_global_tree.large_objs);
 
+        castle_extent_transaction_start();
+
         if ((ret = castle_new_ext_freespace_init(&castle_global_tree.tree_ext_free,
                                                   castle_global_tree.da,
                                                   EXT_T_BTREE_NODES,
-                                                  castle_global_tree.tree_ext_free.ext_size)) < 0)
+                                                  castle_global_tree.tree_ext_free.ext_size, 1)) < 0)
         {
             castle_printk(LOG_ERROR, "Failed to allocate space for Global Tree.\n");
+            castle_extent_transaction_end();
             return ret;
         }
             
         if ((ret = castle_new_ext_freespace_init(&castle_global_tree.data_ext_free,
                                                   castle_global_tree.da,
                                                   EXT_T_MEDIUM_OBJECTS,
-                                                  castle_global_tree.data_ext_free.ext_size)) < 0)
+                                                  castle_global_tree.data_ext_free.ext_size, 1)) < 0)
         {
             castle_printk(LOG_ERROR, "Failed to allocate space for Global Tree Medium Objects.\n");
+            castle_extent_transaction_end();
             return ret;
         }
+
+        castle_extent_transaction_end();
 
         c2b = castle_btree_node_create(&castle_global_tree,
                                        0 /* version */, 

@@ -1361,7 +1361,8 @@ void                  castle_ext_freespace_init    (c_ext_free_t     *ext_free,
 int                   castle_new_ext_freespace_init(c_ext_free_t     *ext_free,
                                                     da_id_t           da_id,
                                                     c_ext_type_t      ext_type,
-                                                    c_byte_off_t      size);
+                                                    c_byte_off_t      size, 
+                                                    int               in_tran);
 
 int                   castle_ext_freespace_consistent
                                                    (c_ext_free_t     *ext_frees);

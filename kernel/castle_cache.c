@@ -761,6 +761,18 @@ void castle_cache_extent_dirtylist_remove(c_ext_dirtylist_t *dirtylist)
 }
 
 /**
+ * Insert a per-extent dirtylist into the list of dirtylists.
+ *
+ * @also c2_dirtylist_insert()
+ */
+static void castle_cache_extent_dirtylist_insert(c_ext_dirtylist_t *dirtylist)
+{
+    spin_lock(&castle_cache_block_hash_lock);
+    list_add_tail(&dirtylist->list, &castle_cache_extent_dirtylist);
+    spin_unlock(&castle_cache_block_hash_lock);
+}
+
+/**
  * Remove a c2b from its per-extent dirtylist.
  *
  * @param c2b   Block to remove
@@ -770,25 +782,28 @@ static int c2_dirtylist_remove(c2_block_t *c2b)
     c_ext_dirtylist_t *dirtylist;
     unsigned long flags;
 
-    BUG_ON(!atomic_read(&c2b->count));
+    BUG_ON(atomic_read(&c2b->count) == 0);
 
+    /* Get dirtylist and holds its lock. */
     dirtylist = castle_extent_dirtylist_get(c2b->cep.ext_id);
-    if (dirtylist == NULL)
-        return -EINVAL;
-
-    /* Hold the dirtylist lock while we manipulate the tree. */
+    BUG_ON(!dirtylist);
     spin_lock_irqsave(&dirtylist->lock, flags);
 
-    rb_erase(&c2b->rb_dirtylist, &dirtylist->rb_root);
-    if (--dirtylist->count == 0)
+    /* Remove c2b from the tree. */
+    BUG_ON(dirtylist->count < 1);
+    dirtylist->count--;
+    if (unlikely(dirtylist->count == 0))
     {
-        /* Last dirty c2b from this extent has been cleaned.  Remove this
-         * per-extent c2b dirtylist from the list of dirty extents. */
+        /* No more dirty c2bs in the RB tree:
+         * - remove dirtylist from list of dirty extents
+         * - drop 'has dirty c2bs' reference */
         castle_cache_extent_dirtylist_remove(dirtylist);
+        castle_extent_dirtylist_put(c2b->cep.ext_id);
     }
-    BUG_ON(dirtylist->count < 0);
+    rb_erase(&c2b->rb_dirtylist, &dirtylist->rb_root);
 
-    /* Release dirtylist lock. */
+    /* Release lock and put reference, potentially freeing the dirtylist if
+     * the extent has already been freed. */
     spin_unlock_irqrestore(&dirtylist->lock, flags);
     castle_extent_dirtylist_put(c2b->cep.ext_id);
 
@@ -798,7 +813,7 @@ static int c2_dirtylist_remove(c2_block_t *c2b)
 /**
  * Place a c2b onto its per-extent dirtylist.
  *
- * @param c2b   Block to place
+ * @param c2b   Block to insert
  */
 static int c2_dirtylist_insert(c2_block_t *c2b)
 {
@@ -808,15 +823,14 @@ static int c2_dirtylist_insert(c2_block_t *c2b)
     unsigned long flags;
     int cmp;
 
-    BUG_ON(!atomic_read(&c2b->count));
+    BUG_ON(atomic_read(&c2b->count) == 0);
 
+    /* Get dirtylist and hold its lock while we manipulate the tree. */
     dirtylist = castle_extent_dirtylist_get(c2b->cep.ext_id);
-    if (dirtylist == NULL)
-        return -EINVAL;
-
-    /* Hold the dirtylist lock while we manipulate the tree. */
+    BUG_ON(!dirtylist);
     spin_lock_irqsave(&dirtylist->lock, flags);
 
+    /* Find position in tree. */
     p = &dirtylist->rb_root.rb_node;
     while (*p)
     {
@@ -840,33 +854,30 @@ static int c2_dirtylist_insert(c2_block_t *c2b)
                 p = &(*p)->rb_right;
             else
             {
-                /* this can't happen? */
-                castle_printk(LOG_ERROR, "Found an identical c2b in the tree already.  "
-                        "Not inserting.\n");
+                castle_printk(LOG_ERROR, "c2b with cep "cep_fmt_str_nl" already in tree.\n",
+                        cep2str(c2b->cep));
                 BUG();
-                spin_unlock(&dirtylist->lock);
-                castle_extent_dirtylist_put(c2b->cep.ext_id);
-
-                return -EINVAL;
             }
         }
     }
 
     /* Insert c2b into the tree. */
+    BUG_ON(dirtylist->count < 0);
+    if (unlikely(++dirtylist->count == 1))
+    {
+        /* First dirty c2b for this extent.
+         *
+         * - place the per-extent c2b dirtylist onto the list of dirty extents
+         * - get a reference for the per-extent c2b dirtylist for the duration
+         *   of its life in tree */
+        castle_cache_extent_dirtylist_insert(dirtylist);
+        castle_extent_dirtylist_get(c2b->cep.ext_id);
+    }
     rb_link_node(&c2b->rb_dirtylist, parent, p);
     rb_insert_color(&c2b->rb_dirtylist, &dirtylist->rb_root);
-    if (++dirtylist->count == 1)
-    {
-        /* First dirty c2b for this extent.  Place the per-extent c2b dirtylist
-         * onto the list of dirty extents. */
-        spin_lock(&castle_cache_block_hash_lock);
-        list_add_tail(&dirtylist->list, &castle_cache_extent_dirtylist);
-        spin_unlock(&castle_cache_block_hash_lock);
-    }
 
-    /* Release dirtylist lock. */
+    /* Release lock and put reference. */
     spin_unlock_irqrestore(&dirtylist->lock, flags);
-
     castle_extent_dirtylist_put(c2b->cep.ext_id);
 
     return EXIT_SUCCESS;
@@ -4378,12 +4389,7 @@ int castle_cache_extent_flush(c_ext_id_t ext_id, uint64_t start, uint64_t size)
     /* We always flush from the beginning of the extent to start+size.
      * If size is not specified, flush the entire extent. */
     if (size == 0)
-    {
-        size = castle_extent_size_get(ext_id);
-        if (size == 0)
-            return -EINVAL;
-        end_offset = size * C_CHK_SIZE;
-    }
+        end_offset = -1;
     else
         end_offset = start + size;
 
@@ -5182,7 +5188,7 @@ int castle_checkpoint_version_inc(void)
     castle_fs_superblocks_put(fs_sb, 1);
 
     /* Makes sure no parallel freespace operations happening. */
-    (void) castle_extents_super_block_get();
+    castle_extent_transaction_start();
 
     list_for_each(lh, &castle_slaves.slaves)
     {
@@ -5208,7 +5214,7 @@ int castle_checkpoint_version_inc(void)
     /* We must have created some freespace, unfreeze DAs. */
     castle_double_arrays_unfreeze();
 
-    castle_extents_super_block_put(0);
+    castle_extent_transaction_end();
 
     castle_printk(LOG_INFO, "Number of logical extent pages: %u\n",
             atomic_read(&castle_cache_logical_ext_pages));
@@ -5462,9 +5468,10 @@ static int castle_periodic_checkpoint(void *unused)
         castle_fs_superblock_slaves_update(fs_sb);
         castle_fs_superblocks_put(fs_sb, 1);
 
+        castle_extent_transaction_start();
         castle_extents_sb = castle_extents_super_block_get();
         castle_extents_sb->current_rebuild_seqno = atomic_read(&current_rebuild_seqno);
-        castle_extents_super_block_put(1);
+        castle_extent_transaction_end();
 
         if (castle_mstores_writeback(version))
         {
