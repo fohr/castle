@@ -4326,13 +4326,15 @@ update_output_tree_state:
         merge_mstore->valid_end_idx[i]       = merge->levels[i].valid_end_idx;
         merge_mstore->valid_version[i]       = merge->levels[i].valid_version;
 
-        merge_mstore->node_c2b_cep[i] = INVAL_EXT_POS;
-        if( (merge->levels[i].node_c2b) && !EXT_POS_INVAL(merge->levels[i].node_c2b->cep) )
+        merge_mstore->node_c2b_cep[i]        = INVAL_EXT_POS;
+        merge_mstore->node_used[i]           = 0;
+
+        if(merge->levels[i].node_c2b)
         {
             struct castle_btree_node *node;
 
             BUG_ON(EXT_POS_INVAL(merge->levels[i].node_c2b->cep));
-            merge_mstore->node_c2b_cep[i]        = merge->levels[i].node_c2b->cep;
+            merge_mstore->node_c2b_cep[i] = merge->levels[i].node_c2b->cep;
 
             node=c2b_bnode(merge->levels[i].node_c2b);
             debug("%s::merge %p (da %d, level %d) sanity check node_c2b[%d] ("
@@ -4345,11 +4347,10 @@ update_output_tree_state:
             debug("%s::level[%d] for merge %p (da %d level %d) node size %d, node isleaf %d\n",
                     __FUNCTION__, i, merge, merge->da->id, merge->level, node->size, node->is_leaf);
 
-            // TODO@tr we shouldn't dirty_c2bs when marshalling because we shouldn't rely on c2bs
-            // being dirtied in marshalling.
+            /* dirty the incomplete node so it will be flushed at next checkpoint */
             dirty_c2b(merge->levels[i].node_c2b);
-        }
-    }
+        }//fi
+    }//rof
 
     /* bloom build parameters, so we can resume building the output CT's bloom filter */
     if(merge->out_tree->bloom_exists)
@@ -4358,6 +4359,7 @@ update_output_tree_state:
         BUG_ON(!bf_bp);
 
         /* just me testing a theory... */
+        /* if these ever BUG, it means we need to flush the bloom build param extents as well */
         BUG_ON(bf_bp->chunk_cep.ext_id != bf_bp->node_cep.ext_id);
         BUG_ON(bf_bp->chunk_cep.ext_id != merge->out_tree->bloom.ext_id);
 
@@ -4484,8 +4486,9 @@ static void castle_da_merge_deserialise(struct castle_da_merge *merge,
             BUG_ON(!merge->levels[i].node_c2b);
             /* sanity check on btree node */
             node = c2b_bnode(merge->levels[i].node_c2b);
-            debug("%s::recovered node at %p with magic %lx for merge %p (da %d level %d).\n",
-                    __FUNCTION__, node, node->magic, merge, da->id, level );
+            debug("%s::recovered node at %p with magic %lx for merge %p (da %d level %d) from "
+                    cep_fmt_str" \n",
+                    __FUNCTION__, node, node->magic, merge, da->id, level, cep2str(merge_mstore->node_c2b_cep[i]) );
             BUG_ON(!node);
             BUG_ON(node->magic != BTREE_NODE_MAGIC);
 
@@ -5269,6 +5272,64 @@ static int castle_da_wait_queue_create(struct castle_double_array *da, void *unu
     return 0;
 }
 
+/* sanity check serialised state of DA merge output tree */
+static void castle_da_merge_serdes_out_tree_check(struct castle_dmserlist_entry *merge_mstore,
+                                                  struct castle_double_array *da,
+                                                  int level)
+{
+    int i=0; /* btree level */
+    int have_node=0;
+    BUG_ON(!merge_mstore);
+    BUG_ON(!da);
+    BUG_ON(merge_mstore->da_id          != da->id);
+    BUG_ON(merge_mstore->level          != level);
+    BUG_ON(merge_mstore->out_tree.level != level + 1);
+    BUG_ON(merge_mstore->btree_type     != castle_btree_type_get(RO_VLBA_TREE_TYPE)->magic);
+
+    debug("%s::sanity checking merge SERDES on da %d level %d.\n",
+            __FUNCTION__, da->id, level);
+
+    have_node=0;
+    for(i=0; i<MAX_BTREE_DEPTH; i++)
+    {
+        if(!EXT_POS_INVAL(merge_mstore->node_c2b_cep[i]))
+        {
+            int node_size = 0;
+            c2_block_t *node_c2b = NULL;
+            struct castle_btree_node *node = NULL;
+
+            if (i==0) /* leaf node */
+                node_size = ((merge_mstore->leafs_on_ssds) ? VLBA_SSD_RO_TREE_NODE_SIZE
+                        : VLBA_HDD_RO_TREE_NODE_SIZE);
+            else /* internal node */
+                node_size = ((merge_mstore->internals_on_ssds) ? VLBA_SSD_RO_TREE_NODE_SIZE
+                        : VLBA_HDD_RO_TREE_NODE_SIZE);
+
+            node_c2b = castle_cache_block_get(merge_mstore->node_c2b_cep[i], node_size);
+            BUG_ON(!node_c2b);
+            write_lock_c2b(node_c2b);
+            if(!c2b_uptodate(node_c2b))
+                BUG_ON(submit_c2b_sync(READ, node_c2b));
+            write_unlock_c2b(node_c2b);
+
+            node = c2b_bnode(node_c2b);
+            BUG_ON(!node);
+            debug("%s::recovered node at %p with magic %lx for merge on "
+                    "da %d level %d from"cep_fmt_str", btree level %d.\n",
+                    __FUNCTION__, node, node->magic, da->id, level,
+                    cep2str(merge_mstore->node_c2b_cep[i]), i);
+            BUG_ON(node->magic != BTREE_NODE_MAGIC);
+
+            put_c2b(node_c2b);
+            have_node++;
+        }//fi
+    }//rof
+    BUG_ON(have_node==0); /* this might be too strict... we assume that if we have serialised state
+                             we MUST have at least one "active" node */
+    debug("%s::sanity check passed merge SERDES on da %d level %d.\n",
+            __FUNCTION__, da->id, level);
+}
+
 /**
  * Deallocate doubling array and all associated data.
  *
@@ -5310,55 +5371,11 @@ static void castle_da_dealloc(struct castle_double_array *da)
 
         if(da->levels[i].merge.serdes.mstore_entry)
         {
-            struct castle_dmserlist_entry *merge_mstore;
-            int j; /* btree level */
-            struct castle_btree_node *node;
-            c2_block_t *node_c2b;
-
-            debug("%s::sanity checking merge SERDES on da %d level %d.\n",
-                    __FUNCTION__, da->id, i);
-
-            merge_mstore=da->levels[i].merge.serdes.mstore_entry;
-            BUG_ON(merge_mstore->da_id          != da->id);
-            BUG_ON(merge_mstore->level          != i);
-            BUG_ON(merge_mstore->out_tree.level != i + 1);
-            BUG_ON(merge_mstore->btree_type     != castle_btree_type_get(RO_VLBA_TREE_TYPE)->magic);
-
-            node=NULL;
-            /* attempt node recovery */
-            for(j=0; j<MAX_BTREE_DEPTH; j++)
-            {
-                if(!EXT_POS_INVAL(merge_mstore->node_c2b_cep[j]))
-                {
-                    int node_size=0;
-
-                    if (j==0) /* leaf node */
-                        node_size = ((merge_mstore->leafs_on_ssds) ? VLBA_SSD_RO_TREE_NODE_SIZE
-                                                                   : VLBA_HDD_RO_TREE_NODE_SIZE);
-                    else /* internal node */
-                        node_size = ((merge_mstore->internals_on_ssds) ? VLBA_SSD_RO_TREE_NODE_SIZE
-                                                                       : VLBA_HDD_RO_TREE_NODE_SIZE);
-
-                    node_c2b = castle_cache_block_get(merge_mstore->node_c2b_cep[j], node_size);
-                    BUG_ON(!node_c2b);
-                    write_lock_c2b(node_c2b);
-                    if(!c2b_uptodate(node_c2b))
-                        BUG_ON(submit_c2b_sync(READ, node_c2b));
-                    write_unlock_c2b(node_c2b);
-
-                    node = c2b_bnode(node_c2b);
-                    BUG_ON(!node);
-                    BUG_ON(node->magic != BTREE_NODE_MAGIC);
-
-                    put_c2b(node_c2b);
-                }
-            }
-
-            castle_free(merge_mstore);
-            merge_mstore=NULL;
+            castle_da_merge_serdes_out_tree_check(da->levels[i].merge.serdes.mstore_entry, da, i);
+            castle_free(da->levels[i].merge.serdes.mstore_entry);
+            da->levels[i].merge.serdes.mstore_entry=NULL;
             castle_printk(LOG_INIT, "%s::merge on da %d level %d will resume at next FS start.\n",
                     __FUNCTION__, da->id, i);
-
         }
 
     }
@@ -6110,6 +6127,158 @@ uint32_t castle_da_count(void)
     return count;
 }
 
+/* assumes caller took serdes.mutex */
+static void castle_da_merge_writeback(struct castle_double_array *da, int level)
+{
+    struct castle_dmserlist_entry *merge_mstore;
+    struct castle_component_tree *ct = da->levels[level].merge.serdes.out_tree;
+
+    BUG_ON(!da);
+    BUG_ON(!ct);
+
+    /* assert that we are not checkpointing merges on lower levels */
+    BUG_ON(level < MIN_DA_SERDES_LEVEL);
+
+    debug("%s::checkpointing merge on da %d, level %d\n",
+            __FUNCTION__, da->id, level);
+
+    merge_mstore = da->levels[level].merge.serdes.mstore_entry;
+
+    /* sanity check that there isn't a mismatch between the serdes state
+       and where it's located in the da structure */
+    BUG_ON(da->id != merge_mstore->da_id);
+    BUG_ON(level  != merge_mstore->level);
+
+#ifdef DEBUG_MERGE_SERDES
+    /* sanity check iterator state */
+    /* if the merge completed, we may not have the input trees anymore */
+    if(!da->levels[level].merge.serdes.merge_completed)
+    {
+        /* test serialised iterator state */
+        struct castle_btree_node *node;
+        c2_block_t *node_c2b;
+        uint16_t node_size;
+        uint32_t idx;
+        void                    *k;
+        version_t                v_dummy;
+        c_val_tup_t              cvt_dummy;
+        vlba_key_t *key;
+        struct castle_btree_type *btree = castle_btree_type_get(RO_VLBA_TREE_TYPE);
+        int i;
+
+        for(i=0; i<2; i++)
+        {
+            if(EXT_POS_INVAL(merge_mstore->iter_immut_curr_c2b_cep[i]))
+                continue; /* iterator completed? */
+
+            if(merge_mstore->leafs_on_ssds)
+                node_size = VLBA_SSD_RO_TREE_NODE_SIZE;
+            else
+                node_size = VLBA_HDD_RO_TREE_NODE_SIZE;
+
+            node_c2b=castle_cache_block_get(merge_mstore->iter_immut_curr_c2b_cep[i],
+                    node_size);
+            BUG_ON(!node_c2b);
+            write_lock_c2b(node_c2b);
+            if(!c2b_uptodate(node_c2b))
+                BUG_ON(submit_c2b_sync(READ, node_c2b));
+            write_unlock_c2b(node_c2b);
+            node=c2b_bnode(node_c2b);
+            BUG_ON(!node);
+            BUG_ON(node->magic != BTREE_NODE_MAGIC);
+
+            idx=merge_mstore->iter_immut_cached_idx[i];
+
+            btree->entry_get(node, idx, &k, &v_dummy, &cvt_dummy);
+
+            key = (vlba_key_t *)k;
+            debug("%s::Recovered key (hash) 0x%llx of length %d on "
+                    "node from immut[%d] ("cep_fmt_str").\n", __FUNCTION__,
+                    murmur_hash_64(key->_key, key->length, 0),
+                    key->length, i, cep2str(merge_mstore->iter_immut_curr_c2b_cep[i]) );
+            put_c2b(node_c2b);
+        }
+    }
+#endif
+
+    /* flush extents if neccesary */
+    if(atomic_read(&da->levels[level].merge.serdes.fresh))
+    {
+        /* we have fresh serialisation state, so flush output tree extents */
+        struct castle_clist_entry *cl    = &merge_mstore->out_tree;
+
+        /* make sure extents are valid */
+        BUG_ON(EXT_ID_INVAL(cl->internal_ext_free_bs.ext_id));
+        BUG_ON(EXT_ID_INVAL(cl->tree_ext_free_bs.ext_id));
+        BUG_ON(EXT_ID_INVAL(cl->data_ext_free_bs.ext_id));
+
+        /* make sure serialised extents match live extents */
+        BUG_ON(ct->internal_ext_free.ext_id != cl->internal_ext_free_bs.ext_id);
+        BUG_ON(ct->tree_ext_free.ext_id     != cl->tree_ext_free_bs.ext_id);
+        BUG_ON(ct->data_ext_free.ext_id     != cl->data_ext_free_bs.ext_id);
+
+        /* make sure we haven't somehow moved backwards on each extent */
+        BUG_ON(atomic64_read(&ct->internal_ext_free.used) <
+                cl->internal_ext_free_bs.used);
+        BUG_ON(atomic64_read(&ct->tree_ext_free.used)     <
+                cl->tree_ext_free_bs.used);
+        BUG_ON(atomic64_read(&ct->data_ext_free.used)     <
+                cl->data_ext_free_bs.used);
+
+        debug("%s::flushing out_tree extents for ongoing merge on "
+                "da %d, level %d:\n", __FUNCTION__, da->id, i);
+
+        debug("%s::    internal_ext_free_bs ext_id = %lld.\n",
+                __FUNCTION__, cl->internal_ext_free_bs.ext_id);
+        /* TODO@tr flush from previous checkpoint instead of start of extent */
+        castle_cache_extent_flush_schedule(
+                cl->internal_ext_free_bs.ext_id, 0, cl->internal_ext_free_bs.used);
+
+        debug("%s::    tree_ext_free_bs ext_id = %lld.\n",
+                __FUNCTION__, cl->tree_ext_free_bs.ext_id);
+        castle_cache_extent_flush_schedule(
+                cl->tree_ext_free_bs.ext_id, 0, cl->tree_ext_free_bs.used);
+
+        debug("%s::    data_ext_free_bs ext_id = %lld.\n",
+                __FUNCTION__, cl->data_ext_free_bs.ext_id);
+        castle_cache_extent_flush_schedule(
+                cl->data_ext_free_bs.ext_id, 0, cl->data_ext_free_bs.used);
+
+        if(cl->bloom_exists)
+        {
+            BUG_ON(EXT_ID_INVAL(cl->bloom_ext_id));
+            BUG_ON(ct->bloom.ext_id != cl->bloom_ext_id);
+            debug("%s::    bloom ext_id = %lld.\n",
+                    __FUNCTION__, cl->bloom_ext_id);
+            castle_cache_extent_flush_schedule(cl->bloom_ext_id, 0, 0);
+        }
+
+        atomic_set(&da->levels[level].merge.serdes.fresh, 0);
+    }
+
+    /* writeback LOs */
+    {
+        struct list_head *lh, *tmp;
+        mutex_lock(&ct->lo_mutex);
+        list_for_each_safe(lh, tmp, &ct->large_objs)
+        {
+            struct castle_large_obj_entry *lo =
+                list_entry(lh, struct castle_large_obj_entry, list);
+            int lo_ref_cnt = castle_extent_ref_cnt_get(lo->ext_id);
+            /* input ct and/or output ct will have ref */
+            BUG_ON(lo_ref_cnt < 1);
+            debug("%s::writeback lo at ext %d\n", __FUNCTION__,
+                    lo->ext_id);
+
+            castle_ct_large_obj_writeback(lo, ct);
+        }
+        mutex_unlock(&ct->lo_mutex);
+    }
+
+    /* insert merge state into mstore */
+    castle_mstore_entry_insert(castle_dmser_store, merge_mstore);
+}
+
 /**
  * Checkpoint function for DAs (including merges); calls mstore_insert.
  *
@@ -6121,186 +6290,6 @@ uint32_t castle_da_count(void)
 static int castle_da_writeback(struct castle_double_array *da, void *unused)
 {
     struct castle_dlist_entry mstore_dentry;
-
-    if(castle_merges_checkpoint)
-    {
-        int i; /* DA levels */
-        /* Handle serialised merges */
-        /* Assumed to preceed writeback of DAs and ccts */
-        for(i=0; i<MAX_DA_LEVEL; i++)
-        {
-            mutex_lock(&da->levels[i].merge.serdes.mutex);
-            /* we should never checkpoint a deserialising merge, but we cannot guarantee that
-               this thread will not run while deserialisation is ongoing, so the best we can do
-               is to skip when we detect a deserialising merge. */
-            if(da->levels[i].merge.serdes.des)
-            {
-                castle_printk(LOG_WARN, "%s::deserialisation still in progress on da %d, level %d.\n",
-                        __FUNCTION__, da->id, i);
-                mutex_unlock(&da->levels[i].merge.serdes.mutex);
-                continue;
-            }
-
-            if(atomic_read(&da->levels[i].merge.serdes.valid)==2)
-            {
-                struct castle_dmserlist_entry *merge_mstore;
-                struct castle_component_tree *ct = da->levels[i].merge.serdes.out_tree;
-                BUG_ON(!ct);
-
-                merge_mstore = da->levels[i].merge.serdes.mstore_entry;
-
-                /* TODO@tr change this to LOG_INFO before public release */
-                castle_printk(LOG_USERINFO, "%s::checkpointing merge on da %d, level %d\n",
-                        __FUNCTION__, da->id, i);
-
-                /* assert that we are not checkpointing merges on lower levels */
-                BUG_ON(i < MIN_DA_SERDES_LEVEL);
-
-                /* sanity check that there isn't a mismatch between the serdes state
-                   and where it's located in the da structure */
-                BUG_ON(da->id != merge_mstore->da_id);
-                BUG_ON(i      != merge_mstore->level);
-                castle_mstore_entry_insert(castle_dmser_store, merge_mstore);
-
-#ifdef DEBUG_MERGE_SERDES
-                /* if the merge completed, we may not have the input trees anymore */
-                if(!da->levels[i].merge.serdes.merge_completed)
-                {
-                    /* test serialised iterator state */
-                    struct castle_btree_node *node;
-                    c2_block_t *node_c2b;
-                    uint16_t node_size;
-                    uint32_t idx;
-                    void                    *k;
-                    version_t                v_dummy;
-                    c_val_tup_t              cvt_dummy;
-                    vlba_key_t *key;
-                    struct castle_btree_type *btree = castle_btree_type_get(RO_VLBA_TREE_TYPE);
-                    int i;
-
-                    for(i=0; i<2; i++)
-                    {
-                        if(EXT_POS_INVAL(merge_mstore->iter_immut_curr_c2b_cep[i]))
-                            continue; /* iterator completed? */
-
-                        if(merge_mstore->leafs_on_ssds)
-                            node_size = VLBA_SSD_RO_TREE_NODE_SIZE;
-                        else
-                            node_size = VLBA_HDD_RO_TREE_NODE_SIZE;
-
-                        node_c2b=castle_cache_block_get(merge_mstore->iter_immut_curr_c2b_cep[i],
-                                node_size);
-                        BUG_ON(!node_c2b);
-                        write_lock_c2b(node_c2b);
-                        if(!c2b_uptodate(node_c2b))
-                            BUG_ON(submit_c2b_sync(READ, node_c2b));
-                        write_unlock_c2b(node_c2b);
-                        node=c2b_bnode(node_c2b);
-                        BUG_ON(!node);
-                        BUG_ON(node->magic != BTREE_NODE_MAGIC);
-
-                        idx=merge_mstore->iter_immut_cached_idx[i];
-
-                        btree->entry_get(node, idx, &k, &v_dummy, &cvt_dummy);
-
-                        key = (vlba_key_t *)k;
-                        debug("%s::Recovered key (hash) 0x%llx of length %d on "
-                                "node from immut[%d] ("cep_fmt_str").\n", __FUNCTION__,
-                                murmur_hash_64(key->_key, key->length, 0),
-                                key->length, i, cep2str(merge_mstore->iter_immut_curr_c2b_cep[i]) );
-                        put_c2b(node_c2b);
-                    }
-                }
-#endif
-                /* writeback LOs */
-                {
-                    struct list_head *lh, *tmp;
-                    mutex_lock(&ct->lo_mutex);
-                    list_for_each_safe(lh, tmp, &ct->large_objs)
-                    {
-                        struct castle_large_obj_entry *lo =
-                            list_entry(lh, struct castle_large_obj_entry, list);
-                        int lo_ref_cnt = castle_extent_ref_cnt_get(lo->ext_id);
-                        /* input ct and/or output ct will have ref */
-                        BUG_ON(lo_ref_cnt < 1);
-                        debug("%s::writeback lo at ext %d\n", __FUNCTION__,
-                                lo->ext_id);
-
-                        castle_ct_large_obj_writeback(lo, ct);
-                    }
-                    mutex_unlock(&ct->lo_mutex);
-                }
-
-                if(atomic_read(&da->levels[i].merge.serdes.fresh))
-                {
-                    /* we have fresh serialisation state, so flush output tree extents */
-                    struct castle_clist_entry *cl    = &merge_mstore->out_tree;
-
-                    /* make sure extents are valid */
-                    BUG_ON(EXT_ID_INVAL(cl->internal_ext_free_bs.ext_id));
-                    BUG_ON(EXT_ID_INVAL(cl->tree_ext_free_bs.ext_id));
-                    BUG_ON(EXT_ID_INVAL(cl->data_ext_free_bs.ext_id));
-
-                    /* make sure serialised extents match live extents */
-                    BUG_ON(ct->internal_ext_free.ext_id != cl->internal_ext_free_bs.ext_id);
-                    BUG_ON(ct->tree_ext_free.ext_id     != cl->tree_ext_free_bs.ext_id);
-                    BUG_ON(ct->data_ext_free.ext_id     != cl->data_ext_free_bs.ext_id);
-
-                    /* make sure we haven't somehow moved backwards on each extent */
-                    BUG_ON(atomic64_read(&ct->internal_ext_free.used) <
-                            cl->internal_ext_free_bs.used);
-                    BUG_ON(atomic64_read(&ct->tree_ext_free.used)     <
-                            cl->tree_ext_free_bs.used);
-                    BUG_ON(atomic64_read(&ct->data_ext_free.used)     <
-                            cl->data_ext_free_bs.used);
-
-                    debug("%s::flushing out_tree extents for ongoing merge on "
-                            "da %d, level %d:\n", __FUNCTION__, da->id, i);
-
-                    debug("%s::    internal_ext_free_bs ext_id = %lld.\n",
-                            __FUNCTION__, cl->internal_ext_free_bs.ext_id);
-                    /* TODO@tr flush from previous checkpoint instead of start of extent */
-                    castle_cache_extent_flush_schedule(
-                            cl->internal_ext_free_bs.ext_id, 0, cl->internal_ext_free_bs.used);
-
-                    debug("%s::    tree_ext_free_bs ext_id = %lld.\n",
-                            __FUNCTION__, cl->tree_ext_free_bs.ext_id);
-                    castle_cache_extent_flush_schedule(
-                            cl->tree_ext_free_bs.ext_id, 0, cl->tree_ext_free_bs.used);
-
-                    debug("%s::    data_ext_free_bs ext_id = %lld.\n",
-                            __FUNCTION__, cl->data_ext_free_bs.ext_id);
-                    castle_cache_extent_flush_schedule(
-                            cl->data_ext_free_bs.ext_id, 0, cl->data_ext_free_bs.used);
-
-                    if(cl->bloom_exists)
-                    {
-                        BUG_ON(EXT_ID_INVAL(cl->bloom_ext_id));
-                        BUG_ON(ct->bloom.ext_id != cl->bloom_ext_id);
-                        debug("%s::    bloom ext_id = %lld.\n",
-                                __FUNCTION__, cl->bloom_ext_id);
-                        castle_cache_extent_flush_schedule(cl->bloom_ext_id, 0, 0);
-
-                        /* the following two are almost certainly unnecessary: the ext_ids will
-                           match the above. */
-                        /* TODO@tr: get rid of the following flushes. */
-                        debug("%s::    bbp node ext_id = %lld.\n",
-                                __FUNCTION__, merge_mstore->out_tree_bbp.node_cep.ext_id);
-                        castle_cache_extent_flush_schedule(
-                            merge_mstore->out_tree_bbp.node_cep.ext_id, 0, 0);
-
-                        debug("%s::    bbp chunk ext_id = %lld.\n",
-                                __FUNCTION__, merge_mstore->out_tree_bbp.chunk_cep.ext_id);
-                        castle_cache_extent_flush_schedule(
-                            merge_mstore->out_tree_bbp.chunk_cep.ext_id, 0, 0);
-                    }
-
-                    atomic_set(&da->levels[i].merge.serdes.fresh, 0);
-                }/* fi fresh */
-            }/* fi valid */
-            mutex_unlock(&da->levels[i].merge.serdes.mutex);
-        }/* rof each level */
-    }
 
     castle_da_marshall(&mstore_dentry, da);
 
@@ -6317,6 +6306,31 @@ static int castle_da_writeback(struct castle_double_array *da, void *unused)
     castle_mstore_entry_insert(castle_da_store, &mstore_dentry);
 
     read_lock_irq(&castle_da_hash_lock);
+
+    if(castle_merges_checkpoint)
+    {
+        int i; /* DA levels */
+        for(i=0; i<MAX_DA_LEVEL; i++)
+        {
+            mutex_lock(&da->levels[i].merge.serdes.mutex);
+            /* we should never checkpoint a deserialising merge, but we cannot guarantee that
+               this thread will not run while deserialisation is ongoing, so the best we can do
+               is to skip when we detect a deserialising merge. */
+            if(da->levels[i].merge.serdes.des)
+            {
+                castle_printk(LOG_WARN, "%s::deserialisation still in progress on da %d level %d;"
+                        " not checkpointing merge state.\n",
+                        __FUNCTION__, da->id, i);
+                mutex_unlock(&da->levels[i].merge.serdes.mutex);
+                continue;
+            }
+
+            if(atomic_read(&da->levels[i].merge.serdes.valid)==2)
+                castle_da_merge_writeback(da, i);
+
+            mutex_unlock(&da->levels[i].merge.serdes.mutex);
+        }/* rof each level */
+    }
 
     return 0;
 }
@@ -6600,6 +6614,10 @@ int castle_double_array_read(void)
             castle_printk(LOG_ERROR, "%s::could not find da %d\n", __FUNCTION__, da_id);
             BUG();
         }
+
+        /* sanity check merge output tree state */
+        castle_da_merge_serdes_out_tree_check(&mstore_dmserentry, des_da, level);
+
         des_da->levels[level].merge.serdes.mstore_entry=
             castle_malloc(sizeof(struct castle_dmserlist_entry), GFP_KERNEL);
 
