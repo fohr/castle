@@ -150,6 +150,11 @@ static void castle_da_merge_serialise(struct castle_da_merge *merge);
 static void castle_da_merge_marshall(struct castle_dmserlist_entry *merge_mstore,
                                      struct castle_da_merge *merge,
                                      c_da_merge_marshall_set_t partial_marshall);
+/* out_tree_check checks only output tree state */
+static void castle_da_merge_serdes_out_tree_check(struct castle_dmserlist_entry *merge_mstore,
+                                                  struct castle_double_array *da,
+                                                  int level);
+/* des_check checks things like making sure the merge has the right input trees */
 static void castle_da_merge_des_check(struct castle_da_merge *merge, struct castle_double_array *da,
                                       int level, int nr_trees,
                                       struct castle_component_tree **in_trees);
@@ -3230,6 +3235,12 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
 
         if( (err==-ESHUTDOWN) && (castle_merges_checkpoint) && (merge->level >= MIN_DA_SERDES_LEVEL) )
         {
+            /* sanity check merge output tree state */
+            castle_da_merge_serdes_out_tree_check(
+                    merge->da->levels[merge->level].merge.serdes.mstore_entry,
+                    merge->da,
+                    merge->level);
+
             /* merge aborted, we are checkpointing, and this is a checkpointable merge level */
             merge_out_tree_retain=1;
             castle_printk(LOG_INIT, "%s::leaving output extents for merge %p deserialisation "
@@ -6606,7 +6617,7 @@ int castle_double_array_read(void)
         level=mstore_dmserentry.level;
         BUG_ON(level < MIN_DA_SERDES_LEVEL);
 
-        debug("%s::deserialising merge on da %d level %d\n",
+        castle_printk(LOG_INIT, "%s::deserialising merge on da %d level %d\n",
                 __FUNCTION__, da_id, level);
         des_da=castle_da_hash_get(da_id);
         if(!des_da)
