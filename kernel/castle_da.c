@@ -4506,6 +4506,8 @@ static void castle_da_merge_deserialise(struct castle_da_merge *merge,
             BUG_ON(merge_mstore->node_used[i] > (node->used) );
             if(merge_mstore->next_idx[i] < (node->used))
             {
+                int drop_start=0;
+                int drop_end=0;
                 debug("%s::for merge %p (da %d level %d) entries_drop on node_c2b[%d] "
                         "ser used = %d, current used = %d, valid_end_idx = %d, next_idx = %d, node size = %d\n",
                         __FUNCTION__, merge, da->id, level, i,
@@ -4515,7 +4517,11 @@ static void castle_da_merge_deserialise(struct castle_da_merge *merge,
                         merge_mstore->next_idx[i],
                         node->size);
 
-                merge->out_btree->entries_drop(node, merge_mstore->next_idx[i], node->used - 1);
+                /* TODO@tr verify that this entries_drop is sensible */
+                drop_start = merge_mstore->next_idx[i];
+                drop_end   = sat_subu(node->used, 1);
+                BUG_ON(drop_end < drop_start);
+                merge->out_btree->entries_drop(node, drop_start, drop_end);
             }
             /* recover last key */
             if(node->used)
