@@ -707,7 +707,7 @@ static int _unsoftpin_c2b(c2_block_t *c2b, int clear)
         /* Decrement softpin cleanlist if we decremented the last
          * softpin hold on a clean block. */
         if ((p_new->softpin_cnt == 0) && !c2b_dirty(c2b))
-            BUG_ON(atomic_dec_and_test(&castle_cache_cleanlist_softpin_size) < 0);
+            BUG_ON(atomic_dec_and_return(&castle_cache_cleanlist_softpin_size) < 0);
         else
             return p_new->softpin_cnt;
     }
