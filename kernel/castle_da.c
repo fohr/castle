@@ -5332,7 +5332,7 @@ static void castle_da_merge_serdes_out_tree_check(struct castle_dmserlist_entry 
             if(node->magic != BTREE_NODE_MAGIC)
             {
                 castle_printk(LOG_ERROR, "%s::failed to recover node at "cep_fmt_str
-                        "; found weird magic=%lx.\n "
+                        "; found weird magic=%lx.\n ",
                         __FUNCTION__, cep2str(merge_mstore->node_c2b_cep[i]), node->magic);
                 BUG();
             }
