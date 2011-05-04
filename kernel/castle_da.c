@@ -3235,13 +3235,21 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
 
         if( (err==-ESHUTDOWN) && (castle_merges_checkpoint) && (merge->level >= MIN_DA_SERDES_LEVEL) )
         {
-            /* sanity check merge output tree state */
-            castle_da_merge_serdes_out_tree_check(
-                    merge->da->levels[merge->level].merge.serdes.mstore_entry,
-                    merge->da,
-                    merge->level);
-
             /* merge aborted, we are checkpointing, and this is a checkpointable merge level */
+
+            /* It is possible to abort a merge even before doing a unit of work, so the following
+               check is necessary before calling serdes_out_tree_check since serialisation
+               state is lazily initialized (i.e. alloc and init on first write) and out_tree_check
+               assumes serialisation state is valid (which of course implies it's initialized etc).
+            */
+            /* No need for mutex - we are merge thread, noone else should ever change ser state
+               besides the freshness flag, which is irrelevant here */
+            if(atomic_read(&merge->da->levels[merge->level].merge.serdes.valid)==2)
+                castle_da_merge_serdes_out_tree_check(
+                        merge->da->levels[merge->level].merge.serdes.mstore_entry,
+                        merge->da,
+                        merge->level);
+
             merge_out_tree_retain=1;
             castle_printk(LOG_INIT, "%s::leaving output extents for merge %p deserialisation "
                     "(da %d, level %d).\n", __FUNCTION__, merge, merge->da->id, merge->level);
@@ -5296,6 +5304,7 @@ static void castle_da_merge_serdes_out_tree_check(struct castle_dmserlist_entry 
 {
     int i=0; /* btree level */
     int have_node=0;
+
     BUG_ON(!merge_mstore);
     BUG_ON(!da);
     BUG_ON(merge_mstore->da_id          != da->id);
