@@ -5325,7 +5325,7 @@ int castle_mstores_writeback(uint32_t version)
     castle_stats_writeback();
 
     BUG_ON(!castle_ext_freespace_consistent(&mstore_ext_free));
-    castle_cache_extent_flush_schedule(MSTORE_EXT_ID + slot, 0, 
+    castle_cache_extent_flush_schedule(MSTORE_EXT_ID + slot, 0,
                                        atomic64_read(&mstore_ext_free.used));
 
     return 0;
@@ -5347,10 +5347,21 @@ int castle_mstores_pre_writeback(uint32_t version)
     return 0;
 }
 
+/**
+ * Schedule flush for ext_id at the next checkpoint.
+ *
+ * - Take an extent reference so the extent persists until the flush
+ *   has completed.
+ *
+ * @also castle_cache_extents_flush()
+ */
 int castle_cache_extent_flush_schedule(c_ext_id_t ext_id, uint64_t start, 
                                        uint64_t count)
 {
     struct castle_cache_flush_entry *entry;
+
+    if (!castle_extent_get(ext_id))
+        return -1;
 
     entry = castle_malloc(sizeof(struct castle_cache_flush_entry), GFP_KERNEL);
     if (!entry)
@@ -5364,6 +5375,14 @@ int castle_cache_extent_flush_schedule(c_ext_id_t ext_id, uint64_t start,
     return 0;
 }
 
+/**
+ * Flush all scheduled extents.
+ *
+ * - Flush all extents on flush_list
+ * - Drop extent reference after flush
+ *
+ * @also castle_cache_extent_flush_schedule()
+ */
 int castle_cache_extents_flush(struct list_head *flush_list)
 {
     struct list_head *lh, *tmp;
@@ -5373,6 +5392,7 @@ int castle_cache_extents_flush(struct list_head *flush_list)
     {
         entry = list_entry(lh, struct castle_cache_flush_entry, list);
         castle_cache_extent_flush(entry->ext_id, entry->start, entry->count);
+        castle_extent_put(entry->ext_id);
 
         list_del(lh);
         castle_free(entry);
