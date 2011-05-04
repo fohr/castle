@@ -100,11 +100,22 @@ static struct list_head *castle_extents_hash = NULL;
 static struct list_head *castle_extent_dirtylists_hash = NULL;
 static c_ext_free_t meta_ext_free;
 
-static c_ext_id_t _castle_extent_alloc(c_rda_type_t rda_type,
-                                       da_id_t      da_id,
-                                       c_ext_type_t ext_type,
-                                       c_chk_cnt_t  count,
-                                       c_ext_id_t   ext_id);
+/**
+ * Low freespace victim handling structure.
+ */
+typedef struct c_ext_event {
+    c_ext_event_callback_t  callback;              /**< Callback to be called when more
+                                                     *< disk space is available.          */
+    void                   *data;
+    struct list_head        list;
+} c_ext_event_t;
+
+static c_ext_id_t _castle_extent_alloc(c_rda_type_t   rda_type,
+                                       da_id_t        da_id,
+                                       c_ext_type_t   ext_type,
+                                       c_chk_cnt_t    count,
+                                       c_ext_id_t     ext_id,
+                                       c_ext_event_t *hdl);
 
 DEFINE_HASH_TBL(castle_extents, castle_extents_hash, CASTLE_EXTENTS_HASH_SIZE,
                 c_ext_t, hash_list, c_ext_id_t, ext_id);
@@ -126,6 +137,7 @@ static struct list_head     rebuild_list;
 static struct list_head     verify_list; /* Used for testing. */
 static wait_queue_head_t    rebuild_wq;
 struct task_struct   *rebuild_thread;
+static LIST_HEAD(castle_lfs_victim_list);
 
 /*
  * A difference between current_rebuild_seqno and rebuild_to_seqno indicates that
@@ -316,6 +328,14 @@ int castle_extent_in_transaction(void)
     return mutex_is_locked(&castle_extents_mutex);
 }
 
+/**
+ * Get global extent superblock. Dont try to get mutex. Function is called with mutex. 
+ */
+struct castle_extents_superblock* _castle_extents_super_block_get(void)
+{
+    return &castle_extents_global_sb;
+}
+
 struct castle_extents_superblock* castle_extents_super_block_get(void)
 {
     /* Doesn't make sense to get superblock without being in transaction. */
@@ -385,10 +405,11 @@ static int castle_extent_meta_ext_create(void)
        slaves, divided by the k-factor (2) */
     meta_ext_size = META_SPACE_SIZE * i / k_factor;
 
-    ext_id = _castle_extent_alloc(META_EXT, 0, 
+    ext_id = _castle_extent_alloc(META_EXT, 0,
                                   EXT_T_META_DATA,
                                   meta_ext_size,
-                                  META_EXT_ID);
+                                  META_EXT_ID,
+                                  NULL);
     if (ext_id != META_EXT_ID)
     {
         castle_printk(LOG_WARN, "Meta Extent Allocation Failed\n");
@@ -421,17 +442,19 @@ static int castle_extent_mstore_ext_create(void)
     list_for_each(l, &castle_slaves.slaves)
         i++;
 
-    ext_id = _castle_extent_alloc(DEFAULT_RDA, 0, 
+    ext_id = _castle_extent_alloc(DEFAULT_RDA, 0,
                                   EXT_T_META_DATA,
                                   MSTORE_SPACE_SIZE * i / k_factor,
-                                  MSTORE_EXT_ID);
+                                  MSTORE_EXT_ID,
+                                  NULL);
     if (ext_id != MSTORE_EXT_ID)
         return -ENOSPC;
 
-    ext_id = _castle_extent_alloc(DEFAULT_RDA, 0, 
+    ext_id = _castle_extent_alloc(DEFAULT_RDA, 0,
                                   EXT_T_META_DATA,
                                   MSTORE_SPACE_SIZE * i / k_factor,
-                                  MSTORE_EXT_ID+1);
+                                  MSTORE_EXT_ID+1,
+                                  NULL);
     if (ext_id != MSTORE_EXT_ID+1)
         return -ENOSPC;
 
@@ -974,7 +997,8 @@ int castle_extent_space_alloc(c_ext_t *ext, da_id_t da_id)
     if (!rda_state)
     {
         debug("Couldn't initialise RDA state.\n");
-        err = -EINVAL;
+        /* FIXME: It is also possible that the error is -ENOMEM. */
+        err = -ENOSPC;
         goto out;
     }
     
@@ -1076,18 +1100,52 @@ out:
     return err;
 }
   
-c_ext_id_t castle_extent_alloc(c_rda_type_t rda_type,
-                               da_id_t      da_id,
-                               c_ext_type_t ext_type,
-                               c_chk_cnt_t  count,
-                               int          in_tran)
+/**
+ * Allocate an extent.
+ *
+ * @param rda_type      [in]    RDA algorithm to be used.
+ * @param da_id         [in]    Double-Array that this extent belongs to.
+ * @param ext_type      [in]    Type of data, that will be stored in extent.
+ * @param count         [in]    Size of extent (in chunks). Extent could occupy more space
+ *                              than this, depends on RDA algorithm and freespace algos.
+ * @param in_tran       [in]    Already in the extent transaction.
+ * @param data          [in]    Data to be used in event handler.
+ * @param callback      [in]    Extent Event handler. Current events are just low space events.
+ *
+ * @return Extent ID.
+ *
+ * @also _castle_extent_alloc
+ */
+c_ext_id_t castle_extent_alloc(c_rda_type_t             rda_type,
+                               da_id_t                  da_id,
+                               c_ext_type_t             ext_type,
+                               c_chk_cnt_t              count,
+                               int                      in_tran,
+                               void                    *data,
+                               c_ext_event_callback_t   callback)
 {
     int ret = 0;
+    c_ext_event_t *event_hdl = NULL;
+
+    /* Either get both parameters or none. */
+    BUG_ON((callback && !data) || (!callback && data));
+
+    /* Allocate event handler structure and call low level extent alloc(). */
+    if (callback)
+    {
+        event_hdl = castle_zalloc(sizeof(c_ext_event_t), GFP_KERNEL);
+
+        if (!event_hdl)
+            return INVAL_EXT_ID;
+
+        event_hdl->callback = callback;
+        event_hdl->data     = data;
+    }
 
     /* If the caller is not already in transaction. start a transaction. */
     if (!in_tran)   castle_extent_transaction_start();
 
-    ret = _castle_extent_alloc(rda_type, da_id, ext_type, count, INVAL_EXT_ID);
+    ret = _castle_extent_alloc(rda_type, da_id, ext_type, count, INVAL_EXT_ID, event_hdl);
 
     /* End the transaction. */
     if (!in_tran)   castle_extent_transaction_end();
@@ -1098,29 +1156,39 @@ c_ext_id_t castle_extent_alloc(c_rda_type_t rda_type,
 /**
  * Allocate a new extent.
  *
+ * @param rda_type      [in]    RDA algorithm to be used.
+ * @param da_id         [in]    Double-Array that this extent belongs to.
+ * @param ext_type      [in]    Type of data, that will be stored in extent.
+ * @param count         [in]    Size of extent (in chunks). Extent could occupy more space
+ *                              than this, depends on RDA algorithm and freespace algos.
+ * @param ext_id        [in]    Specify an extent ID, for logical extents. INVAL_EXT_ID for 
+ *                              normal extents.
+ * @param event_hdl     [in]    Low space event handler structure.
+ *
  * @return  Extent ID of the newly created extent.
  *
- * Extents are also allocated in:
- *
+ * @also castle_extent_alloc
  * @also CONVERT_MENTRY_TO_EXTENT()
  * @also castle_extent_micro_ext_create()
  * @also castle_extent_sup_ext_init()
  */
-static c_ext_id_t _castle_extent_alloc(c_rda_type_t rda_type,
-                                       da_id_t      da_id,
-                                       c_ext_type_t ext_type,
-                                       c_chk_cnt_t  count,
-                                       c_ext_id_t   ext_id)
+static c_ext_id_t _castle_extent_alloc(c_rda_type_t     rda_type,
+                                       da_id_t          da_id,
+                                       c_ext_type_t     ext_type,
+                                       c_chk_cnt_t      count,
+                                       c_ext_id_t       ext_id,
+                                       c_ext_event_t   *event_hdl)
 {
     c_ext_t *ext = NULL;
+    int ret = 0;
     c_rda_spec_t *rda_spec = castle_rda_spec_get(rda_type);
     struct castle_extents_superblock *castle_extents_sb;
 
     BUG_ON(!castle_extent_in_transaction());
     BUG_ON(!extent_init_done && !LOGICAL_EXTENT(ext_id));
     
-    if (castle_extents_hash_get(ext_id))
-        goto __hell;
+    /* ext_id would be passed only for logical extents and they musn't be in the hash. */
+    BUG_ON(castle_extents_hash_get(ext_id));
 
     debug("Creating extent of size: %u\n", count);
     ext = castle_ext_alloc(0);
@@ -1161,7 +1229,12 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t rda_type,
         debug("Allocated extent map at: "cep_fmt_str_nl, cep2str(ext->maps_cep));
     }
   
-    if (castle_extent_space_alloc(ext, da_id) < 0)
+    if ((ret = castle_extent_space_alloc(ext, da_id)) == -ENOSPC)
+    {
+        debug("Extent alloc failed to allocate space for %u chunks\n", count);
+        goto __low_space;
+    }
+    else if (ret < 0)
     {
         debug("Extent alloc failed for %u chunks\n", count);
         goto __hell;
@@ -1190,7 +1263,24 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t rda_type,
         castle_extents_sb->ext_id_seq++;
     }
 
+    /* Extent allocation is SUCCESS. No need of event handler. Free it. */
+    if (event_hdl)
+        castle_free(event_hdl);
+
     return ext->ext_id;
+
+__low_space:
+    /* Add the victim handler to the list of handlers of specific type. This handler gets
+     * called, when more space is available. */
+    if (event_hdl)
+    {
+        castle_printk(LOG_INFO, "Failed to create extent for DA: %u of type %s for %u chunks\n",
+                      da_id,
+                      castle_ext_type_str[ext_type],
+                      count);
+        /* Add to the end, to maintain FIFO. */
+        list_add_tail(&event_hdl->list, &castle_lfs_victim_list);
+    }
 
 __hell:
     if (ext)
@@ -1202,6 +1292,92 @@ __hell:
     return INVAL_EXT_ID;
 }
 
+ 
+/**
+ * Low freespace handling
+ * === ========= ========
+ *
+ * Lewis notes from meeting:
+ * ----- ----- ---- -------
+ *
+ * When a thread calls castle_extent_alloc() that fails it passes a work_struct to
+ * the extent layer.  This work_struct might be a CB handler (which wakes another
+ * thread up, etc.) or a full-blown function.
+ *
+ * When the extent layer has more freespace available for allocation it schedules
+ * the work_structs which will retry their various allocations, potentially calling
+ * back into the extent layer to requeue themselves if allocations still fail.
+ *
+ * By keeping the list of work items sensibly sorted we could fairly share access
+ * to freespace as it becomes available.  Big non-atomic consumers (e.g.
+ * castle_da_all_rwcts_create() which makes multiple small allocations) could be
+ * scheduled in an atomic fashion and eventually bubble to the top of the CB list.
+ * Atomic allocations would also bubble up but are less likely to fail as a result
+ * of races from other threads.
+ *
+ * e.g.
+ * a merge thread that failed to allocate an output extent would call into the
+ * extent layer to be notified when more freespace is available.
+ *
+ * e.g.
+ * a castle_da_rwct_create() that failed to allocate a T0 extent would call into
+ * the extent layer to be notified when more freespace is available.  It would also
+ * set the DA's frozen bit, preventing any further inserts until a new T0 could be
+ * created.  [ could this frozen bit be per T0 RWCT? ]
+ *
+ * e.g.
+ * castle_da_all_rwcts_create() fails to allocate an extent and calls into the
+ * extent layer to be notified when more freespace is available.  It would set the
+ * DA frozen bit, preventing further inserts.
+ *
+ * Design:
+ * ------
+ *
+ * Every consumer of freespace that has failed to allocate would add itself to a list of
+ * victims. And also registers a callback. All operations on this victim list are atomic.
+ *
+ * LIST_HEAD(castle_freespace_victim_list)
+ *
+ * When more freespace is available (checkpoints potentially release space), go through
+ * victim list and runs callback function for each victim in sequence. Each victim can
+ * also mark the priority.
+ */
+
+/**
+ * Call low free space handlers of all victims. Stop if any of the handler fails.
+ */
+void castle_extent_lfs_victims_wakeup(void)
+{
+    castle_extent_transaction_start();
+
+    /* Call each handler for each victim in sequence. */
+    /* Note: Don't use list_for_each_safe as it is possible that someone else could be changing 
+     * the list. */
+    while (!list_empty(&castle_lfs_victim_list))
+    {
+        c_ext_event_t *hdl = list_first_entry(&castle_lfs_victim_list, c_ext_event_t, list);
+
+        castle_extent_transaction_end();
+
+        /* No need to call handlers in case module is exiting. No point of creating more extents
+         * for components just before they die. */
+        if (castle_extents_exiting || (hdl->callback(hdl->data) == EXIT_SUCCESS))
+        {
+            castle_extent_transaction_start();
+
+            /* Handled low free space successfully. Get rid of event handler. */
+            list_del(&hdl->list);
+            castle_free(hdl);
+
+            continue;
+        }
+
+        break;
+    }
+
+    castle_extent_transaction_end();
+}
+
 void castle_extent_free(c_ext_id_t ext_id)
 {
     c_ext_t *ext = castle_extents_hash_get(ext_id);
@@ -1211,6 +1387,8 @@ void castle_extent_free(c_ext_id_t ext_id)
         BUG();
     }
 
+    /* Allocate space for work structure, to be used to schedule castle_extent_free 
+     * onto work queue. */
     ext->work = castle_malloc(sizeof(struct work_struct), GFP_KERNEL);
     if (!ext->work)
     {

@@ -267,6 +267,7 @@ typedef enum {
     NR_RDA_SPECS
 } c_rda_type_t;
 
+/* Type of data stored within extent. */
 typedef enum {
     EXT_T_META_DATA,
     EXT_T_BTREE_NODES,
@@ -277,6 +278,37 @@ typedef enum {
     EXT_T_BLOOM_FILTER,
     EXT_T_INVALID,
 } c_ext_type_t;
+
+static USED char *castle_ext_type_str[] = { 
+    "EXT_T_META_DATA",
+    "EXT_T_BTREE_NODES",
+    "EXT_T_INTERNAL_NODES",
+    "EXT_T_LEAF_NODES",
+    "EXT_T_MEDIUM_OBJECTS",
+    "EXT_T_LARGE_OBJECT",
+    "EXT_T_BLOOM_FILTER",
+    "EXT_T_INVALID"
+};
+
+/* This type determines the way, this extent has to be handled in case of Low Free-Space (LFS) 
+ * situation. */
+typedef enum {
+    LFS_VCT_T_T0_GRP,
+    LFS_VCT_T_T0,
+    LFS_VCT_T_MERGE,
+    LFS_VCT_T_INVALID
+} c_lfs_vct_type_t;
+
+#define LFS_VCT_T_MAX_TYPE LFS_VCT_T_INVALID
+
+static USED char *castle_lfs_vct_type_str[] = {
+    "LFS_VCT_T_T0_GRP",
+    "LFS_VCT_T_T0",
+    "LFS_VCT_T_MERGE",
+    "LFS_VCT_T_INVALID"
+};
+
+typedef int       (*c_ext_event_callback_t)                (void *data);
 
 typedef struct castle_extent_freespace {
     c_ext_id_t      ext_id;
@@ -1362,7 +1394,9 @@ int                   castle_new_ext_freespace_init(c_ext_free_t     *ext_free,
                                                     da_id_t           da_id,
                                                     c_ext_type_t      ext_type,
                                                     c_byte_off_t      size, 
-                                                    int               in_tran);
+                                                    int               in_tran,
+                                                    void              *data,
+                                                    c_ext_event_callback_t callback);
 
 int                   castle_ext_freespace_consistent
                                                    (c_ext_free_t     *ext_frees);
@@ -1561,13 +1595,23 @@ struct castle_merge_token {
     struct list_head list;
 };
 
+/* Low free space structure being used by each merge in DA. */
+struct castle_da_lfs_ct_t {
+    uint8_t             space_reserved;     /**< Reserved space from low space handler  */
+    struct castle_double_array *da;         /**< Double-array */
+    struct {
+        c_chk_cnt_t     size;               /**< Size of the extent to be reserved      */
+        c_ext_id_t      ext_id;             /**< ID to be set after space is reserved   */
+    } internal_ext, tree_ext, data_ext;
+    int                 leafs_on_ssds;
+    int                 internals_on_ssds;
+};
+
 #define MAX_DA_LEVEL                        (20)
 #define DOUBLE_ARRAY_GROWING_RW_TREE_BIT    (0)
 #define DOUBLE_ARRAY_GROWING_RW_TREE_FLAG   (1 << DOUBLE_ARRAY_GROWING_RW_TREE_BIT)
 #define DOUBLE_ARRAY_DELETED_BIT            (1)
 #define DOUBLE_ARRAY_DELETED_FLAG           (1 << DOUBLE_ARRAY_DELETED_BIT)
-#define DOUBLE_ARRAY_FROZEN_BIT             (2)
-#define DOUBLE_ARRAY_FROZEN_FLAG            (1 << DOUBLE_ARRAY_FROZEN_BIT)
 #define MIN_DA_SERDES_LEVEL                 (2) /* merges below this level won't be serialised */
 struct castle_double_array {
     da_id_t                     id;
@@ -1665,7 +1709,11 @@ struct castle_double_array {
                                          deserialisation still running. */
             } serdes;
         } merge;
+        struct castle_da_lfs_ct_t lfs;              /**< Low Free-Space handler for merge       */
     } levels[MAX_DA_LEVEL];
+    atomic_t                    lfs_victim_count;   /**< Number of components of DA, that are 
+                                                         blocked due to Low Free-Space.         */
+    struct castle_da_lfs_ct_t  *t0_lfs;             /**< Low Free-Space handler for T0s.        */
     struct castle_merge_token   merge_tokens_array[MAX_DA_LEVEL];
     struct list_head            merge_tokens;
     struct list_head            hash_list;

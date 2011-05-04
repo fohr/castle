@@ -108,14 +108,18 @@ int castle_bloom_create(castle_bloom_t *bf, da_id_t da_id, uint64_t num_elements
     size = nodes_size + chunks_size;
 
     /* Try for SSD extent. If fails, go for DEFAULT_RDA */
+    /* No need to handle Low Free-Space situation. Dont use bloom filter, in case of LFS. */
     bf->ext_id = castle_extent_alloc(SSD_ONLY_EXT, da_id, EXT_T_BLOOM_FILTER, 
-                                     ceiling(size, C_CHK_SIZE), 1);
+                                     ceiling(size, C_CHK_SIZE), 0,
+                                     NULL, NULL);
     if (EXT_ID_INVAL(bf->ext_id))
     {
         bf->block_size_pages = BLOOM_BLOCK_SIZE_HDD_PAGES;
 
+        /* No need to handle Low Free-Space situation. Dont use bloom filter, in case of LFS. */
         bf->ext_id = castle_extent_alloc(DEFAULT_RDA, da_id, EXT_T_BLOOM_FILTER,
-                                         ceiling(size, C_CHK_SIZE), 1);
+                                         ceiling(size, C_CHK_SIZE), 0,
+                                         NULL, NULL);
         if (EXT_ID_INVAL(bf->ext_id))
         {
             castle_printk(LOG_WARN, "Failed to create extent for bloom\n");

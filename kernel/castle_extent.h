@@ -23,11 +23,14 @@ typedef struct c_ext_dirtylist {
 void                castle_extent_transaction_start         (void);
 void                castle_extent_transaction_end           (void);
 int                 castle_extent_in_transaction            (void);
-c_ext_id_t          castle_extent_alloc                     (c_rda_type_t   rda_type,
-                                                             da_id_t        da_id,
-                                                             c_ext_type_t   ext_type, 
-                                                             c_chk_cnt_t    chk_cnt,
-                                                             int            in_tran);
+c_ext_id_t          castle_extent_alloc                     (c_rda_type_t           rda_type,
+                                                             da_id_t                da_id,
+                                                             c_ext_type_t           ext_type, 
+                                                             c_chk_cnt_t            chk_cnt,
+                                                             int                    in_tran,
+                                                             void                  *data,
+                                                             c_ext_event_callback_t callback);
+void                castle_extent_lfs_victims_wakeup        (void);
 void                castle_extent_free                      (c_ext_id_t     ext_id);
 int                 castle_extent_exists                    (c_ext_id_t     ext_id);
 void                castle_extent_mark_live                 (c_ext_id_t     ext_id, 

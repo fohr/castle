@@ -5204,6 +5204,8 @@ int castle_checkpoint_version_inc(void)
             BUG();
         }
 
+        /* Make the freespace, released since last checkpoint, available for usage. */
+
         /* As the flushed version is consistent now on disk, It is okay to
          * overwrite the previous version now. Change freespace producer
          * accordingly. */
@@ -5211,10 +5213,10 @@ int castle_checkpoint_version_inc(void)
         castle_slave_superblock_put(cs, 1);
     }
 
-    /* We must have created some freespace, unfreeze DAs. */
-    castle_double_arrays_unfreeze();
-
     castle_extent_transaction_end();
+
+    /* Created more freespace, wakeup all low freespace victims. */
+    castle_extent_lfs_victims_wakeup();
 
     castle_printk(LOG_INFO, "Number of logical extent pages: %u\n",
             atomic_read(&castle_cache_logical_ext_pages));
