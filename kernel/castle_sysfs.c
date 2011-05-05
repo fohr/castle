@@ -551,18 +551,29 @@ static ssize_t collection_stats_show(struct kobject *kobj,
 {
     struct castle_attachment *collection = container_of(kobj, struct castle_attachment, kobj); 
 
-    return sprintf(buf, "[%lu %lu] [%lu %lu] [%lu %lu] [%lu %lu] [%lu %lu %lu]\n", 
-                        atomic64_read(&collection->get.ios),
-                        atomic64_read(&collection->get.bytes),
-                        atomic64_read(&collection->put.ios),
-                        atomic64_read(&collection->put.bytes),
-                        atomic64_read(&collection->big_get.ios),
-                        atomic64_read(&collection->big_get.bytes),
-                        atomic64_read(&collection->big_put.ios),
-                        atomic64_read(&collection->big_put.bytes),
-                        atomic64_read(&collection->rq.ios),
-                        atomic64_read(&collection->rq.bytes),
-                        atomic64_read(&collection->rq_nr_keys));
+    return sprintf(buf, 
+                   "Gets: %lu\n"
+                   "GetsSize: %lu\n"
+                   "Puts: %lu\n"
+                   "PutsSize: %lu\n"
+                   "BigGets: %lu\n"
+                   "BigGetsSize: %lu\n"
+                   "BigPuts: %lu\n"
+                   "BigPutsSize: %lu\n"
+                   "RangeQueries: %lu\n"
+                   "RangeQueriesSize: %lu\n"
+                   "RangeQueriesKeys: %lu\n",
+                   atomic64_read(&collection->get.ios),
+                   atomic64_read(&collection->get.bytes),
+                   atomic64_read(&collection->put.ios),
+                   atomic64_read(&collection->put.bytes),
+                   atomic64_read(&collection->big_get.ios),
+                   atomic64_read(&collection->big_get.bytes),
+                   atomic64_read(&collection->big_put.ios),
+                   atomic64_read(&collection->big_put.bytes),
+                   atomic64_read(&collection->rq.ios),
+                   atomic64_read(&collection->rq.bytes),
+                   atomic64_read(&collection->rq_nr_keys));
 }
 
 static ssize_t collection_id_show(struct kobject *kobj, 
