@@ -33,7 +33,7 @@ struct castle_sysfs_entry {
 struct castle_sysfs_version {
     version_t version;
     char name[10];
-    struct castle_sysfs_entry csys_entry; 
+    struct castle_sysfs_entry csys_entry;
     struct list_head list;
 };
 
@@ -687,6 +687,7 @@ static struct attribute *castle_da_attrs[] = {
 };
 
 static struct kobj_type castle_da_ktype = {
+    .release        = castle_sysfs_kobj_release,
     .sysfs_ops      = &castle_sysfs_ops,
     .default_attrs  = castle_da_attrs,
 };
@@ -710,6 +711,7 @@ int castle_sysfs_da_add(struct castle_double_array *da)
 void castle_sysfs_da_del(struct castle_double_array *da)
 {
     kobject_remove(&da->kobj);
+    castle_sysfs_kobj_release_wait(&da->kobj);
 }
 
 /* Definition of slaves sysfs directory attributes */
@@ -764,6 +766,7 @@ static struct attribute *castle_slave_attrs[] = {
 };
 
 static struct kobj_type castle_slave_ktype = {
+    .release        = castle_sysfs_kobj_release,
     .sysfs_ops      = &castle_sysfs_ops,
     .default_attrs  = castle_slave_attrs,
 };
@@ -799,6 +802,7 @@ void castle_sysfs_slave_del(struct castle_slave *slave)
     sysfs_remove_link(&slave->kobj, "dev");
 #endif
     kobject_remove(&slave->kobj);
+    castle_sysfs_kobj_release_wait(&slave->kobj);
 }
 
 /* Definition of devices sysfs directory attributes */
@@ -857,6 +861,7 @@ static struct attribute *castle_device_attrs[] = {
 };
 
 static struct kobj_type castle_device_ktype = {
+    .release        = castle_sysfs_kobj_release,
     .sysfs_ops      = &castle_sysfs_ops,
     .default_attrs  = castle_device_attrs,
 };
@@ -890,6 +895,7 @@ void castle_sysfs_device_del(struct castle_attachment *device)
     sysfs_remove_link(&device->kobj, "dev");
 #endif
     kobject_remove(&device->kobj);
+    castle_sysfs_kobj_release_wait(&device->kobj);
 }
 
 /* Definition of each collection sysfs directory attributes */
@@ -1027,6 +1033,8 @@ out1:
 
 void castle_sysfs_fini(void)
 {
+    kobject_remove(&filesystem_kobj);
+    kobject_remove(&double_arrays_kobj);
     kobject_remove(&castle_attachments.collections_kobj);
     kobject_remove(&castle_attachments.devices_kobj);
     kobject_remove(&castle_slaves.kobj);
