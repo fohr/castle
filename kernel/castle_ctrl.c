@@ -444,11 +444,11 @@ void castle_control_collection_detach(collection_id_t collection,
         return;
     }
 
+    castle_attachment_delete(ca);
+
     castle_printk(LOG_USERINFO, "Deleting Collection Attachment %u (%s, %u)/%u\n", 
             collection, ca->col.name, ca->version, ca->ref_cnt);
 
-    /* Double put is opposite of what happens in collection_init */
-    castle_attachment_put(ca);
     castle_attachment_put(ca);
 
     *ret = 0;

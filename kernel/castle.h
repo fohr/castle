@@ -1364,6 +1364,7 @@ struct castle_attachment*
 struct castle_attachment *
                       castle_attachment_get        (collection_id_t collection);
 void                  castle_attachment_put        (struct castle_attachment *ca);
+void                  castle_attachment_delete     (struct castle_attachment *ca);
 
 struct castle_slave*  castle_claim                 (uint32_t new_dev);
 void                  castle_release               (struct castle_slave *cs);
