@@ -2867,3 +2867,11 @@ signed int castle_extent_ref_cnt_get(c_ext_id_t ext_id)
     return ((signed int)atomic_read(&ext->ref_cnt));
 }
 
+c_ext_type_t castle_extent_type_get(c_ext_id_t ext_id)
+{
+    c_ext_t *ext;
+    ext = castle_extents_hash_get(ext_id);
+    if(!ext) return EXT_T_INVALID;
+    return ext->ext_type;
+}
+
