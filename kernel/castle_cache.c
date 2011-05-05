@@ -707,7 +707,7 @@ static int _unsoftpin_c2b(c2_block_t *c2b, int clear)
         /* Decrement softpin cleanlist if we decremented the last
          * softpin hold on a clean block. */
         if ((p_new->softpin_cnt == 0) && !c2b_dirty(c2b))
-            BUG_ON(atomic_dec_and_test(&castle_cache_cleanlist_softpin_size) < 0);
+            BUG_ON(atomic_dec_return(&castle_cache_cleanlist_softpin_size) < 0);
         else
             return p_new->softpin_cnt;
     }
@@ -5211,6 +5211,8 @@ int castle_checkpoint_version_inc(void)
             BUG();
         }
 
+        /* Make the freespace, released since last checkpoint, available for usage. */
+
         /* As the flushed version is consistent now on disk, It is okay to
          * overwrite the previous version now. Change freespace producer
          * accordingly. */
@@ -5218,10 +5220,10 @@ int castle_checkpoint_version_inc(void)
         castle_slave_superblock_put(cs, 1);
     }
 
-    /* We must have created some freespace, unfreeze DAs. */
-    castle_double_arrays_unfreeze();
-
     castle_extent_transaction_end();
+
+    /* Created more freespace, wakeup all low freespace victims. */
+    castle_extent_lfs_victims_wakeup();
 
     castle_printk(LOG_INFO, "Number of logical extent pages: %u\n",
             atomic_read(&castle_cache_logical_ext_pages));
