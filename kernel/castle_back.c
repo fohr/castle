@@ -58,10 +58,10 @@ struct castle_back_op;
 #define CASTLE_BACK_CONN_NOTIFY_BIT         (1)
 #define CASTLE_BACK_CONN_NOTIFY_FLAG        (1 << CASTLE_BACK_CONN_NOTIFY_BIT)
 
-struct castle_back_conn 
+struct castle_back_conn
 {
     unsigned long           flags;
-    
+
     /* details of the shared ring buffer */
     unsigned long           rings_vstart;   /**< Where is the ring mapped in?       */
     castle_back_ring_t      back_ring;
@@ -72,9 +72,9 @@ struct castle_back_conn
     atomic_t                ref_count;
     int                     cpu;            /**< CPU id for this conn               */
     int                     cpu_index;      /**< CPU index for this conn            */
-    
-    /* 
-     * in kernel state for each operation 
+
+    /*
+     * in kernel state for each operation
      * should be RING_SIZE(back_ring) of these
      * and a free list to get new ones
      */
@@ -87,7 +87,7 @@ struct castle_back_conn
     int                              restart_timer;
     struct workqueue_struct         *timeout_check_wq;
     struct work_struct               timeout_check_work;
-        
+
     /* details of the shared buffers */
     rwlock_t                         buffers_lock;  /**< Protects buffers_rb                */
     struct rb_root                   buffers_rb;    /**< RB tree for castle_back_buffers    */
@@ -108,17 +108,17 @@ struct castle_back_op
     struct work_struct               work;
     int                              cpu;           /**< CPU id for this op                 */
     int                              cpu_index;     /**< CPU index for this op              */
-    
+
     castle_request_t                 req;           /**< Contains call_id etc.              */
     struct castle_back_conn         *conn;
     struct castle_back_buffer       *buf;
     struct castle_attachment        *attachment;
-    
+
     /* use for assembling a get and partial writes in puts */
     uint64_t value_length;
     uint32_t buffer_offset;
-    
-    union 
+
+    union
     {
         struct castle_object_replace replace;
         struct castle_object_get     get;
@@ -169,7 +169,7 @@ struct castle_back_stateful_op
     struct list_head                    op_queue;
     spinlock_t                          lock;
     struct castle_back_conn            *conn;
-    
+
     uint64_t                            queued_size;        /**< Sum size of all queued buffers */
     struct castle_back_op              *curr_op;
     struct work_struct                  work[2];
@@ -208,11 +208,11 @@ static inline void ReservePages(void *buffer, unsigned long size)
 {
     int i, pages = size >> PAGE_SHIFT;
     for (i = 0; i < pages; i++)
-        SetPageReserved(vmalloc_to_page(buffer + (i * PAGE_SIZE))); 
+        SetPageReserved(vmalloc_to_page(buffer + (i * PAGE_SIZE)));
 }
 
 static inline void UnReservePages(void *buffer, unsigned long size)
-{    
+{
     int i, pages = size >> PAGE_SHIFT;
     for (i = 0; i < pages; i++)
         ClearPageReserved(vmalloc_to_page(buffer + (i * PAGE_SIZE)));
@@ -221,11 +221,11 @@ static inline void UnReservePages(void *buffer, unsigned long size)
 static inline int castle_vma_map(struct vm_area_struct *vma, void *buffer, unsigned long size)
 {
     int i, err, offset, pages = size >> PAGE_SHIFT;
-    
+
     for (i=0; i<pages; i++)
     {
         offset = i << PAGE_SHIFT;
-        err = remap_pfn_range(vma, vma->vm_start + offset, 
+        err = remap_pfn_range(vma, vma->vm_start + offset,
             vmalloc_to_pfn(buffer + offset),
             PAGE_SIZE, vma->vm_page_prot);
         if (err)
@@ -235,7 +235,7 @@ static inline int castle_vma_map(struct vm_area_struct *vma, void *buffer, unsig
             goto err_out;
         }
     }
-    
+
     return 0;
 
 err_out:
@@ -249,7 +249,7 @@ static USED void castle_back_print_page(char *buff, int length)
     while(i<length)
     {
         castle_printk(LOG_DEVEL, " [%d]=", i);
-        
+
         while(i<length)
         {
             castle_printk(LOG_DEVEL, "%2x, ", (unsigned char)buff[i]);
@@ -257,16 +257,16 @@ static USED void castle_back_print_page(char *buff, int length)
             if (i % 8 == 0)
                 break;
         }
-        
+
         castle_printk(LOG_DEVEL, "\n");
-    } 
+    }
 }
 
 /******************************************************************
- * Functions to deal with getting and putting buffers, inserting 
+ * Functions to deal with getting and putting buffers, inserting
  * new ones into tree
  */
- 
+
 #define castle_back_user_to_kernel(__buffer, __user_addr) \
     (__buffer->buffer + ((unsigned long)__user_addr - __buffer->user_addr))
 
@@ -297,7 +297,7 @@ static inline int __castle_back_buffer_exists(struct castle_back_conn *conn,
     {
         buffer = rb_entry(node, struct castle_back_buffer, rb_node);
 
-        //debug("Considering buffer (%lx, %ld, %p)\n", buffer->user_addr, 
+        //debug("Considering buffer (%lx, %ld, %p)\n", buffer->user_addr,
         //    buffer->size, buffer->buffer);
 
         if (end <= buffer->user_addr)
@@ -348,7 +348,7 @@ static inline struct castle_back_buffer *castle_back_buffer_get(struct castle_ba
     {
         buffer = rb_entry(node, struct castle_back_buffer, rb_node);
 
-        //debug("Considering buffer (%lx, %ld, %p)\n", buffer->user_addr, 
+        //debug("Considering buffer (%lx, %ld, %p)\n", buffer->user_addr,
         //    buffer->size, buffer->buffer);
 
         if (user_addr < buffer->user_addr)
@@ -371,7 +371,7 @@ static inline struct castle_back_buffer *castle_back_buffer_get(struct castle_ba
         }
     }
     read_unlock(&conn->buffers_lock);
-    
+
     return ret;
 }
 
@@ -411,7 +411,7 @@ static void castle_back_buffer_put(struct castle_back_conn *conn,
     castle_free(buf);
 }
 
-static inline struct castle_back_buffer 
+static inline struct castle_back_buffer
 *__castle_back_buffers_rb_insert(struct castle_back_conn *conn,
                                  unsigned long user_addr,
                                  struct rb_node *node)
@@ -441,7 +441,7 @@ static inline struct castle_back_buffer
     return NULL;
 }
 
-static inline struct castle_back_buffer 
+static inline struct castle_back_buffer
 *castle_back_buffers_rb_insert(struct castle_back_conn *conn,
                                unsigned long user_addr,
                                struct rb_node *node)
@@ -483,7 +483,7 @@ static struct castle_back_stateful_op *castle_back_find_stateful_op(struct castl
 static void castle_back_stateful_op_expire(struct work_struct *work);
 
 /* *op_ptr is NULL if there are no free ones */
-static castle_interface_token_t 
+static castle_interface_token_t
 castle_back_get_stateful_op(struct castle_back_conn *conn,
                             struct castle_back_stateful_op **op_ptr,
                             int cpu,
@@ -547,7 +547,7 @@ static void castle_back_put_stateful_op(struct castle_back_conn *conn,
     BUG_ON(!list_empty(&stateful_op->op_queue));
     BUG_ON(stateful_op->curr_op != NULL); /* Remember to put the current op! */
     BUG_ON(stateful_op->attachment != NULL); /* Remember to put the current attachment */
-    
+
     stateful_op->in_use = 0;
     spin_unlock(&stateful_op->lock);
 
@@ -727,7 +727,7 @@ static int WARN_UNUSED_RET castle_back_stateful_op_completed_op
 }
 
 /*
- * Take an op from Queue and set it as curr_op. 
+ * Take an op from Queue and set it as curr_op.
  *
  * @return non-zero if the next op should be called, 0 otherwise
  */
@@ -776,11 +776,11 @@ static void castle_back_stateful_op_finish_all(struct castle_back_stateful_op *s
 #ifdef DEBUG
     int cancelled = 0;
 #endif
-    
+
     BUG_ON(!spin_is_locked(&stateful_op->lock));
-    
+
     /* Return err on all queued ops */
-    
+
     list_for_each_safe(pos, tmp, &stateful_op->op_queue) {
         op = list_entry(pos, struct castle_back_op, list);
         list_del(pos);
@@ -802,20 +802,20 @@ static void castle_back_stateful_op_finish_all(struct castle_back_stateful_op *s
 
 /**
  * This should only be call on a partial munmap, when
- * the vma is split.  We use it to up the ref count on 
- * the buffer, to stop the buffer going away when you 
+ * the vma is split.  We use it to up the ref count on
+ * the buffer, to stop the buffer going away when you
  * do multiple, partial munmaps.
  */
 static void castle_back_vm_open(struct vm_area_struct *vma)
 {
     struct castle_back_conn *conn = NULL;
     struct castle_back_buffer *buf = NULL;
-    
+
     debug("castle_back_vm_open vm_start=%lx vm_end=%lx\n", vma->vm_start, vma->vm_end);
-    
+
     if (vma->vm_file != NULL)
         conn = vma->vm_file->private_data;
-    
+
     if (conn == NULL)
     {
         error("castle_back_vm_open: no connection!\n");
@@ -823,18 +823,18 @@ static void castle_back_vm_open(struct vm_area_struct *vma)
     }
 
     buf = castle_back_buffer_get(conn, vma->vm_start);
-    
+
     if (buf == NULL)
     {
         error("castle_back_vm_open: could not find buffer!\n");
         return;
     }
-    
-    debug("castle_back_vm_open buf=%p, size=%d, vm_start=%lx, vm_end=%lx\n", 
+
+    debug("castle_back_vm_open buf=%p, size=%d, vm_start=%lx, vm_end=%lx\n",
         buf, buf->size, vma->vm_start, vma->vm_end);
-    
+
     atomic_inc(&buf->ref_count);
-    
+
     castle_back_buffer_put(conn, buf);
 }
 
@@ -842,13 +842,13 @@ static void castle_back_vm_close(struct vm_area_struct *vma)
 {
     struct castle_back_conn *conn = NULL;
     struct castle_back_buffer *buf = NULL;
-    
+
     debug("castle_back_vm_close vm_start=%lx vm_end=%lx\n", vma->vm_start, vma->vm_end);
     debug("castle_back_vm_close mm->mmap_sem.activity=%d\n", vma->vm_mm->mmap_sem.activity);
-    
+
     if (vma->vm_file != NULL)
         conn = vma->vm_file->private_data;
-    
+
     if (conn == NULL)
     {
         error("castle_back_vm_close: no connection!\n");
@@ -862,10 +862,10 @@ static void castle_back_vm_close(struct vm_area_struct *vma)
         error("castle_back_vm_close: could not find buffer!\n");
         return;
     }
-    
+
     debug("castle_back_vm_close buf=%p, size=%d, vm_start=%lx, vm_end=%lx\n",
         buf, buf->size, vma->vm_start, vma->vm_end);
-    
+
     /* Double put - This is the reverse of the ref_count=1 in buffer_map */
     castle_back_buffer_put(conn, buf);
     castle_back_buffer_put(conn, buf);
@@ -880,7 +880,7 @@ static struct vm_operations_struct castle_back_vm_ops = {
  * High(er) level rpc callbacks
  */
 
-static int castle_back_reply(struct castle_back_op *op, int err, 
+static int castle_back_reply(struct castle_back_op *op, int err,
                              castle_interface_token_t token, uint64_t length)
 {
     struct castle_back_conn *conn = op->conn;
@@ -902,10 +902,10 @@ static int castle_back_reply(struct castle_back_op *op, int err,
     back_ring->rsp_prod_pvt++;
 
     RING_PUSH_RESPONSES_AND_CHECK_NOTIFY(back_ring, notify);
-    
+
     /* Put op back on freelist. */
     list_add(&op->list, &conn->free_ops);
-    
+
     spin_unlock(&conn->response_lock);
 
     /* @TODO if (notify) ? */
@@ -918,14 +918,14 @@ static int castle_back_reply(struct castle_back_op *op, int err,
     return 0;
 }
 
-static int castle_back_key_copy_get(struct castle_back_conn *conn, c_vl_okey_t *user_key, 
+static int castle_back_key_copy_get(struct castle_back_conn *conn, c_vl_okey_t *user_key,
                                     uint32_t key_len, c_vl_okey_t **key_out)
 {
     struct castle_back_buffer *buf;
     unsigned long user_key_start, user_key_end, buf_end;
     c_vl_okey_t *key;
     int i, err;
-    
+
     /*
      * Get buffer with key in it and create a temporary copy
      * of it, doing whole bunch of checks to make sure we have
@@ -938,7 +938,7 @@ static int castle_back_key_copy_get(struct castle_back_conn *conn, c_vl_okey_t *
         err = -ENAMETOOLONG;
         goto err0;
     }
-    
+
     /* Work out the start (inclusive), and the end point (exclusive) of the key block
        in user memory. */
     user_key_start = (unsigned long)user_key;
@@ -947,7 +947,7 @@ static int castle_back_key_copy_get(struct castle_back_conn *conn, c_vl_okey_t *
     if (!buf)
     {
         error("Bad user pointer %p\n", user_key);
-        err = -EINVAL;        
+        err = -EINVAL;
         goto err0;
     }
 
@@ -973,7 +973,7 @@ static int castle_back_key_copy_get(struct castle_back_conn *conn, c_vl_okey_t *
     if (sizeof(c_vl_okey_t) + (key->nr_dims * sizeof(c_vl_key_t *)) > key_len)
     {
         error("Too many dimensions %d\n", key->nr_dims);
-        err = -EINVAL;        
+        err = -EINVAL;
         goto err2;
     }
 
@@ -991,43 +991,43 @@ static int castle_back_key_copy_get(struct castle_back_conn *conn, c_vl_okey_t *
     {
         unsigned long dim_i = (unsigned long) key->dims[i];
         unsigned long dim_size;
-        
+
         debug("  dim[%d] = %p (user)\n", i, key->dims[i]);
-        
-        /* Check that the dimension [i] is contained in our private copy. */ 
-        if((dim_i < user_key_start) || (dim_i + sizeof(c_vl_key_t) > user_key_end)) 
+
+        /* Check that the dimension [i] is contained in our private copy. */
+        if((dim_i < user_key_start) || (dim_i + sizeof(c_vl_key_t) > user_key_end))
         {
-            error("Bad pointer 0x%lx (out of key, start=0x%lx, length=%u)\n", 
+            error("Bad pointer 0x%lx (out of key, start=0x%lx, length=%u)\n",
                 dim_i, user_key_start, key_len);
             err = -EINVAL;
             goto err2;
         }
-        
+
         /* dim_i - user_key_start is the offset of the dimension within (both of) the buffers. */
         key->dims[i] = (c_vl_key_t *)((unsigned long)key + (dim_i - user_key_start));
-        
+
         debug("  dim[%d] = %p (kernel)\n", i, key->dims[i]);
 
         /* The entire dimension must fit in the key buffer. */
         dim_size = sizeof(c_vl_key_t) + key->dims[i]->length;
         if (dim_i + dim_size > user_key_end)
-        {    
+        {
             error("Dimension %d goes beyond end of buffer\n", i);
             err = -EINVAL;
             goto err2;
         }
     }
-    
+
     castle_back_buffer_put(conn, buf);
-    
-#ifdef DEBUG    
+
+#ifdef DEBUG
     vl_okey_print(key);
 #endif
-    
+
     *key_out = key;
-    
+
     return 0;
-    
+
 err2: castle_free(key);
 err1: castle_back_buffer_put(conn, buf);
 err0: return err;
@@ -1036,7 +1036,7 @@ err0: return err;
 /**
  * if doesn't fit into the buffer, *buf_used will be set to 0
  */
-static void castle_back_key_kernel_to_user(c_vl_okey_t *key, struct castle_back_buffer *buf, 
+static void castle_back_key_kernel_to_user(c_vl_okey_t *key, struct castle_back_buffer *buf,
                                            unsigned long user_buf, uint32_t buf_len,
                                            uint32_t *buf_used)
 {
@@ -1089,7 +1089,7 @@ static void castle_back_key_kernel_to_user(c_vl_okey_t *key, struct castle_back_
 /**
  * if doesn't fit into the buffer, *buf_used will be set to 0
  */
-static uint32_t castle_back_val_kernel_to_user(c_val_tup_t *val, struct castle_back_buffer *buf, 
+static uint32_t castle_back_val_kernel_to_user(c_val_tup_t *val, struct castle_back_buffer *buf,
                                            unsigned long user_buf, uint32_t buf_len,
                                            uint32_t *buf_used, collection_id_t collection_id)
 {
@@ -1142,7 +1142,7 @@ static void castle_back_replace_complete(struct castle_object_replace *replace, 
         atomic64_add(op->replace.value_len, &op->attachment->put.bytes);
     }
 
-    castle_attachment_put(op->attachment); 
+    castle_attachment_put(op->attachment);
 
     castle_back_reply(op, err, 0, 0);
 }
@@ -1150,11 +1150,11 @@ static void castle_back_replace_complete(struct castle_object_replace *replace, 
 static uint32_t castle_back_replace_data_length_get(struct castle_object_replace *replace)
 {
     struct castle_back_op *op = container_of(replace, struct castle_back_op, replace);
-    
+
     return op->req.replace.value_len;
 }
 
-static void castle_back_replace_data_copy(struct castle_object_replace *replace, 
+static void castle_back_replace_data_copy(struct castle_object_replace *replace,
                                           void *buffer, uint32_t buffer_length, int not_last)
 {
     struct castle_back_op *op = container_of(replace, struct castle_back_op, replace);
@@ -1168,8 +1168,8 @@ static void castle_back_replace_data_copy(struct castle_object_replace *replace,
     /* @TODO: actual zero copy! */
 
     BUG_ON(op->buffer_offset + buffer_length > op->req.replace.value_len);
-    
-    memcpy(buffer, castle_back_user_to_kernel(op->buf, op->req.replace.value_ptr) + op->buffer_offset, 
+
+    memcpy(buffer, castle_back_user_to_kernel(op->buf, op->req.replace.value_ptr) + op->buffer_offset,
         buffer_length);
 
     op->buffer_offset += buffer_length;
@@ -1187,7 +1187,7 @@ static void castle_back_replace(void *data)
     struct castle_back_conn *conn = op->conn;
     int err;
     c_vl_okey_t *key;
-    
+
     op->attachment = castle_attachment_get(op->req.replace.collection_id);
     if (op->attachment == NULL)
     {
@@ -1236,10 +1236,10 @@ static void castle_back_replace(void *data)
     err = castle_object_replace(&op->replace, op->attachment, key, op->cpu_index, 0);
     if (err)
         goto err3;
-        
+
     castle_free(key);
     return;
-    
+
 err3: if (op->buf) castle_back_buffer_put(conn, op->buf);
 err2: castle_free(key);
 err1: castle_attachment_put(op->attachment);
@@ -1259,7 +1259,7 @@ static void castle_back_remove_complete(struct castle_object_replace *replace, i
         /* Replacing with Tomb Stone. Dont increment bytes. */
     }
 
-    castle_attachment_put(op->attachment); 
+    castle_attachment_put(op->attachment);
 
     castle_back_reply(op, err, 0, 0);
 }
@@ -1276,7 +1276,7 @@ static void castle_back_remove(void *data)
     struct castle_back_conn *conn = op->conn;
     int err;
     c_vl_okey_t *key;
-    
+
     op->attachment = castle_attachment_get(op->req.remove.collection_id);
     if (op->attachment == NULL)
     {
@@ -1302,9 +1302,9 @@ static void castle_back_remove(void *data)
 
     castle_free(key);
     return;
-    
+
 err2: castle_free(key);
-err1: castle_attachment_put(op->attachment); 
+err1: castle_attachment_put(op->attachment);
 err0: castle_back_reply(op, err, 0, 0);
 }
 
@@ -1321,18 +1321,18 @@ void castle_back_get_reply_continue(struct castle_object_get *get,
     if (err)
     {
         castle_back_buffer_put(op->conn, op->buf);
-        castle_attachment_put(op->attachment); 
+        castle_attachment_put(op->attachment);
         castle_back_reply(op, err, 0, 0);
     }
-    
+
     BUG_ON(!buffer);
-    
+
     if (to_copy > 0)
     {
-        memcpy(dest, buffer, to_copy); 
+        memcpy(dest, buffer, to_copy);
         op->buffer_offset += to_copy;
     }
-    
+
     if (last)
     {
         castle_back_buffer_put(op->conn, op->buf);
@@ -1344,31 +1344,31 @@ void castle_back_get_reply_continue(struct castle_object_get *get,
             atomic64_add(op->req.get.value_len, &op->attachment->get.bytes);
         }
 
-        castle_attachment_put(op->attachment); 
+        castle_attachment_put(op->attachment);
         castle_back_reply(op, 0, 0, op->value_length);
     }
 
     return;
 }
 
-void castle_back_get_reply_start(struct castle_object_get *get, 
-                                  int err, 
+void castle_back_get_reply_start(struct castle_object_get *get,
+                                  int err,
                                   uint64_t data_length,
-                                  void *buffer, 
+                                  void *buffer,
                                   uint32_t buffer_length)
 {
     struct castle_back_op *op = container_of(get, struct castle_back_op, get);
     int err_prime;
-    
-    BUG_ON(buffer_length > data_length);    
-        
+
+    BUG_ON(buffer_length > data_length);
+
     if (!buffer)
     {
         BUG_ON((data_length != 0) || (buffer_length != 0));
         err_prime = -ENOENT;
         goto err;
-    }        
-        
+    }
+
     if (err)
     {
         err_prime = err;
@@ -1377,14 +1377,14 @@ void castle_back_get_reply_start(struct castle_object_get *get,
 
     op->value_length = data_length;
     op->buffer_offset = 0;
-    
+
     castle_back_get_reply_continue(get, 0, buffer, buffer_length, buffer_length == data_length);
 
     return;
-    
+
 err:
     castle_back_buffer_put(op->conn, op->buf);
-    castle_attachment_put(op->attachment); 
+    castle_attachment_put(op->attachment);
     castle_back_reply(op, err_prime, 0, 0);
 }
 
@@ -1399,7 +1399,7 @@ static void castle_back_get(void *data)
     struct castle_back_conn *conn = op->conn;
     int err;
     c_vl_okey_t *key;
-    
+
     op->attachment = castle_attachment_get(op->req.get.collection_id);
     if (op->attachment == NULL)
     {
@@ -1555,12 +1555,12 @@ static void castle_back_iter_start(void *data)
     }
 
     /* start_key and end_key are freed by castle_object_iter_finish */
-    err = castle_back_key_copy_get(conn, op->req.iter_start.start_key_ptr, 
+    err = castle_back_key_copy_get(conn, op->req.iter_start.start_key_ptr,
         op->req.iter_start.start_key_len, &start_key);
     if (err)
         goto err2;
 
-    err = castle_back_key_copy_get(conn, op->req.iter_start.end_key_ptr, 
+    err = castle_back_key_copy_get(conn, op->req.iter_start.end_key_ptr,
         op->req.iter_start.end_key_len, &end_key);
     if (err)
         goto err3;
@@ -1608,7 +1608,7 @@ err2: castle_attachment_put(attachment);
 err1: /* No one could have added another op to queue as we haven't returns token yet */
       spin_lock(&stateful_op->lock);
       castle_back_put_stateful_op(conn, stateful_op);
-err0: castle_back_reply(op, err, 0, 0);    
+err0: castle_back_reply(op, err, 0, 0);
 }
 
 static uint32_t castle_back_save_key_value_to_list(struct castle_back_stateful_op *stateful_op,
@@ -1648,7 +1648,7 @@ static uint32_t castle_back_save_key_value_to_list(struct castle_back_stateful_o
     {
         kv_list->val = (struct castle_iter_val *)((unsigned long)kv_list->key + key_len);
         cvt_len = castle_back_val_kernel_to_user(val, back_buf,
-                            (unsigned long)kv_list->val, buf_len - buf_used, &val_len, 
+                            (unsigned long)kv_list->val, buf_len - buf_used, &val_len,
                             collection_id);
 
         if (val_len == 0)
@@ -1885,7 +1885,7 @@ static void castle_back_iter_next(void *data)
         err = -ENOBUFS;
         goto err0;
     }
-    
+
     /*
      * Get buffer with value in it and save it
      */
@@ -1953,7 +1953,7 @@ static void _castle_back_iter_finish(void *data)
     debug_iter("_castle_back_iter_finish, token = 0x%x\n", stateful_op->token);
 
     err = castle_object_iter_finish(stateful_op->iterator.iterator);
-    
+
     castle_back_reply(stateful_op->curr_op, err, 0, 0);
 
     spin_lock(&stateful_op->lock);
@@ -2022,17 +2022,17 @@ static void castle_back_big_put_expire(struct castle_back_stateful_op *stateful_
     struct castle_attachment *attachment;
 
     debug("castle_back_big_put_expire token=%u.\n", stateful_op->token);
-    
+
     BUG_ON(!stateful_op->expiring);
     BUG_ON(!list_empty(&stateful_op->op_queue));
     BUG_ON(stateful_op->curr_op != NULL);
-    
+
     castle_object_replace_cancel(&stateful_op->replace);
 
     spin_lock(&stateful_op->lock);
     attachment = stateful_op->attachment;
     stateful_op->attachment = NULL;
-    
+
     castle_back_put_stateful_op(stateful_op->conn, stateful_op); /* drops stateful_op->lock */
 
     castle_attachment_put(attachment);
@@ -2051,9 +2051,9 @@ static void castle_back_big_put_call_queued(struct castle_back_stateful_op *stat
 
 static void castle_back_big_put_continue(struct castle_object_replace *replace)
 {
-    struct castle_back_stateful_op *stateful_op = 
+    struct castle_back_stateful_op *stateful_op =
         container_of(replace, struct castle_back_stateful_op, replace);
-    
+
     spin_lock(&stateful_op->lock);
 
     if (stateful_op->curr_op != NULL)
@@ -2082,14 +2082,14 @@ static void castle_back_big_put_continue(struct castle_object_replace *replace)
 
 static void castle_back_big_put_complete(struct castle_object_replace *replace, int err)
 {
-    struct castle_back_stateful_op *stateful_op = 
+    struct castle_back_stateful_op *stateful_op =
         container_of(replace, struct castle_back_stateful_op, replace);
     struct castle_attachment *attachment;
 
     debug("castle_back_big_put_complete err=%d\n", err);
 
     spin_lock(&stateful_op->lock);
-    
+
     if (stateful_op->curr_op != NULL)
     {
         struct castle_back_op *op = stateful_op->curr_op;
@@ -2099,7 +2099,7 @@ static void castle_back_big_put_complete(struct castle_object_replace *replace, 
         castle_back_reply(op, err, stateful_op->token, 0);
         stateful_op->curr_op = NULL;
     }
-  
+
     /* Responds back to all outstanding ops with error. */
     castle_back_stateful_op_finish_all(stateful_op, err);
     attachment = stateful_op->attachment;
@@ -2120,7 +2120,7 @@ static void castle_back_big_put_complete(struct castle_object_replace *replace, 
 
 static uint32_t castle_back_big_put_data_length_get(struct castle_object_replace *replace)
 {
-    struct castle_back_stateful_op *stateful_op = 
+    struct castle_back_stateful_op *stateful_op =
         container_of(replace, struct castle_back_stateful_op, replace);
     uint32_t length = 0;
 
@@ -2135,17 +2135,17 @@ static uint32_t castle_back_big_put_data_length_get(struct castle_object_replace
     return length;
 }
 
-static void castle_back_big_put_data_copy(struct castle_object_replace *replace, 
+static void castle_back_big_put_data_copy(struct castle_object_replace *replace,
                                           void *buffer, uint32_t buffer_length, int not_last)
 {
-    struct castle_back_stateful_op *stateful_op = 
+    struct castle_back_stateful_op *stateful_op =
         container_of(replace, struct castle_back_stateful_op, replace);
     struct castle_back_op *op;
 
     spin_lock(&stateful_op->lock);
-    
+
     op = stateful_op->curr_op;
-    
+
     BUG_ON(op == NULL);
 
     debug("castle_back_big_put_data_copy buffer=%p, buffer_length=%u,"
@@ -2159,7 +2159,7 @@ static void castle_back_big_put_data_copy(struct castle_object_replace *replace,
 
     memcpy(buffer, castle_back_user_to_kernel(op->buf, op->req.put_chunk.buffer_ptr)
         + op->buffer_offset, buffer_length);
-    
+
     op->buffer_offset += buffer_length;
 
     spin_unlock(&stateful_op->lock);
@@ -2167,13 +2167,13 @@ static void castle_back_big_put_data_copy(struct castle_object_replace *replace,
 
 /**
  * Call flow:
- * 
+ *
  *  castle_back functions                            castle_objects functions
  *
  *  castle_back_big_put()
  *                                      ->          castle_object_replace()
  *  data_copy()                         <-
- *  replace_continue()                  <-      
+ *  replace_continue()                  <-
  *
  *
  *  castle_back_put_chunk()
@@ -2236,7 +2236,7 @@ static void castle_back_big_put(void *data)
 
     /* Get a copy of the key into kernel memory from userspace shared buffer. - Why? */
     /* start_key and end_key are freed by castle_object_iter_finish */
-    err = castle_back_key_copy_get(conn, op->req.big_put.key_ptr, 
+    err = castle_back_key_copy_get(conn, op->req.big_put.key_ptr,
         op->req.big_put.key_len, &key);
     if (err)
         goto err2;
@@ -2245,18 +2245,18 @@ static void castle_back_big_put(void *data)
     debug("key: \n");
     vl_okey_print(key);
     #endif
-   
+
     /* Initialize stateful op. */
     stateful_op->tag = CASTLE_RING_BIG_PUT;
     stateful_op->queued_size = 0;
     /* big_put is the first op, followed by series of put_chunks. */
     stateful_op->curr_op = op;
     stateful_op->attachment = attachment;
-       
+
     /* Length of the complete value. */
     stateful_op->replace.value_len = op->req.big_put.value_len;
 
-    /* Call on completion of an operation in castle_object and to continue with next 
+    /* Call on completion of an operation in castle_object and to continue with next
      * operation. Gets called before copying data. */
     stateful_op->replace.replace_continue = castle_back_big_put_continue;
 
@@ -2312,7 +2312,7 @@ static void castle_back_put_chunk(void *data)
         err = -EBADFD;
         goto err0;
     }
-    
+
     /*
      * Get buffer with value in it and save it
      */
@@ -2330,9 +2330,9 @@ static void castle_back_put_chunk(void *data)
         err = -EINVAL;
         goto err1;
     }
-    
+
     op->buffer_offset = 0;
-    
+
     /*
      * Put this op on the queue for the big put
      */
@@ -2347,9 +2347,9 @@ static void castle_back_put_chunk(void *data)
         err = -EINVAL;
         goto err1;
     }
-    
+
     stateful_op->queued_size += op->req.put_chunk.buffer_len;
-  
+
     /* Add put_chunk into queue. */
     err = castle_back_stateful_op_queue_op(stateful_op, op->req.put_chunk.token, op);
     if (err)
@@ -2364,7 +2364,7 @@ static void castle_back_put_chunk(void *data)
     spin_unlock(&stateful_op->lock);
 
     return;
-       
+
 err1: castle_back_buffer_put(conn, op->buf);
 err0: castle_back_reply(op, err, 0, 0);
 }
@@ -2405,12 +2405,12 @@ static void castle_back_big_get_do_chunk(void *data)
 {
     struct castle_back_stateful_op *stateful_op = data;
     struct castle_back_op *op = stateful_op->curr_op;
-    
+
     BUG_ON(stateful_op->tag != CASTLE_RING_BIG_GET);
     BUG_ON(op == NULL);
     BUG_ON(op->req.tag != CASTLE_RING_GET_CHUNK);
-    
-    castle_object_chunk_pull(&stateful_op->pull, castle_back_user_to_kernel(op->buf, 
+
+    castle_object_chunk_pull(&stateful_op->pull, castle_back_user_to_kernel(op->buf,
         op->req.get_chunk.buffer_ptr), op->req.get_chunk.buffer_len);
 }
 
@@ -2421,12 +2421,12 @@ static void castle_back_big_get_call_queued(struct castle_back_stateful_op *stat
         BUG_ON(!queue_work_on(stateful_op->cpu, castle_back_wq, &stateful_op->work[0]));
 }
 
-static void castle_back_big_get_continue(struct castle_object_pull *pull, 
-                                         int err, 
-                                         uint64_t length, 
+static void castle_back_big_get_continue(struct castle_object_pull *pull,
+                                         int err,
+                                         uint64_t length,
                                          int done)
 {
-    struct castle_back_stateful_op *stateful_op = 
+    struct castle_back_stateful_op *stateful_op =
         container_of(pull, struct castle_back_stateful_op, pull);
     struct castle_attachment *attachment;
 
@@ -2435,10 +2435,10 @@ static void castle_back_big_get_continue(struct castle_object_pull *pull,
 
     BUG_ON(stateful_op->tag != CASTLE_RING_BIG_GET);
     BUG_ON(stateful_op->curr_op == NULL);
-    BUG_ON(stateful_op->curr_op->req.tag != CASTLE_RING_GET_CHUNK 
+    BUG_ON(stateful_op->curr_op->req.tag != CASTLE_RING_GET_CHUNK
         && stateful_op->curr_op->req.tag != CASTLE_RING_BIG_GET);
     BUG_ON(!stateful_op->in_use);
-    
+
     if (stateful_op->curr_op->req.tag == CASTLE_RING_GET_CHUNK)
         castle_back_buffer_put(stateful_op->conn, stateful_op->curr_op->buf);
     castle_back_reply(stateful_op->curr_op, err, stateful_op->token, length);
@@ -2473,7 +2473,7 @@ static void castle_back_big_get_continue(struct castle_object_pull *pull,
 
         return;
     }
-    
+
     spin_lock(&stateful_op->lock);
 
     stateful_op->curr_op = NULL;
@@ -2519,14 +2519,14 @@ static void castle_back_big_get(void *data)
     }
 
     stateful_op->tag = CASTLE_RING_BIG_GET;
-    stateful_op->curr_op = op;    
+    stateful_op->curr_op = op;
     stateful_op->attachment = attachment;
 
     stateful_op->pull.pull_continue = castle_back_big_get_continue;
 
     INIT_WORK(&stateful_op->work[0], castle_back_big_get_do_chunk, stateful_op);
 
-    err = castle_back_key_copy_get(conn, op->req.big_get.key_ptr, 
+    err = castle_back_key_copy_get(conn, op->req.big_get.key_ptr,
         op->req.big_get.key_len, &key);
     if (err)
     {
@@ -2564,7 +2564,7 @@ static void castle_back_get_chunk(void *data)
     struct castle_back_stateful_op *stateful_op;
     int err;
 
-    stateful_op = castle_back_find_stateful_op(conn, 
+    stateful_op = castle_back_find_stateful_op(conn,
         op->req.get_chunk.token, CASTLE_RING_BIG_GET);
     if (!stateful_op)
     {
@@ -2590,7 +2590,7 @@ static void castle_back_get_chunk(void *data)
         err = -EINVAL;
         goto err1;
     }
-    
+
     if (((unsigned long) op->req.get_chunk.buffer_ptr) % PAGE_SIZE)
     {
         error("Invalid ptr, not page aligned (ptr=%p)\n", op->req.put_chunk.buffer_ptr);
@@ -2634,12 +2634,12 @@ err0: castle_back_reply(op, err, 0, 0);
 unsigned int castle_back_poll(struct file *file, poll_table *wait)
 {
     struct castle_back_conn *conn = file->private_data;
-    if (conn == NULL) 
+    if (conn == NULL)
     {
         error("castle_back: poll, retrieving connection failed\n");
         return -EINVAL;
     }
-    
+
     debug(">>>castle_back_poll\n");
 
     poll_wait(file, &conn->wait, wait);
@@ -2815,7 +2815,7 @@ static int castle_back_work_do(void *data)
     RING_IDX cons, rp;
     struct castle_back_op *op;
     uint32_t ring_size = __RING_SIZE(back_ring->sring, CASTLE_RING_SIZE);
-    
+
     debug("castle_back: doing work for conn = %p.\n", conn);
 
     while(1)
@@ -2840,7 +2840,7 @@ static int castle_back_work_do(void *data)
             spin_unlock(&conn->response_lock);
 
             memcpy(&op->req, RING_GET_REQUEST(back_ring, cons), sizeof(castle_request_t));
-        
+
             back_ring->req_cons++;
 
             /* this is put in castle_back_reply */
@@ -2872,20 +2872,20 @@ static int castle_back_work_do(void *data)
 long castle_back_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
     struct castle_back_conn *conn = file->private_data;
-    if (conn == NULL) 
+    if (conn == NULL)
     {
         error("castle_back: ioctl, retrieving connection failed\n");
         return -EINVAL;
     }
-    
+
     debug("castle_back_ioctl\n");
-    
+
     switch (cmd)
     {
         case CASTLE_IOCTL_POKE_RING:
             wake_up_process(conn->work_thread);
             break;
-        
+
         default:
             return -ENOIOCTLCMD;
     }
@@ -2905,7 +2905,7 @@ int castle_back_open(struct inode *inode, struct file *file)
     castle_sring_t *sring;
     struct castle_back_conn *conn;
     int i, err = 0;
-    
+
     debug("castle_back_dev_open\n");
 
     conn = castle_malloc(sizeof(struct castle_back_conn), GFP_KERNEL);
@@ -2915,12 +2915,12 @@ int castle_back_open(struct inode *inode, struct file *file)
         err = -ENOMEM;
         goto err0;
     }
-        
+
     conn->flags = 0;
     conn->cpu_index = 0;
     conn->cpu = castle_double_array_request_cpu(conn->cpu_index);
     atomic_set(&conn->ref_count, 1);
-    
+
     init_waitqueue_head(&conn->wait);
     spin_lock_init(&conn->response_lock);
     rwlock_init(&conn->buffers_lock);
@@ -2948,9 +2948,9 @@ int castle_back_open(struct inode *inode, struct file *file)
         err = -ENOMEM;
         goto err2;
     }
-    
+
     INIT_LIST_HEAD(&conn->free_ops);
-    
+
     for (i=0; i<RING_SIZE(&conn->back_ring); i++)
     {
         conn->ops[i].conn = conn;
@@ -2966,9 +2966,9 @@ int castle_back_open(struct inode *inode, struct file *file)
         goto err2;
     }
     memset(conn->stateful_ops, 0, sizeof(struct castle_back_stateful_op) * MAX_STATEFUL_OPS);
-    
+
     INIT_LIST_HEAD(&conn->free_stateful_ops);
-    
+
     for (i=0; i<MAX_STATEFUL_OPS; i++)
     {
         list_add_tail(&conn->stateful_ops[i].list, &conn->free_stateful_ops);
@@ -3084,16 +3084,16 @@ int castle_back_release(struct inode *inode, struct file *file)
 
     debug("castle_back_release\n");
 
-    if (conn == NULL) 
+    if (conn == NULL)
     {
         error("castle_back: release, retrieving connection failed\n");
         return -EINVAL;
     }
-    
+
     file->private_data = NULL;
     kthread_stop(conn->work_thread);
     wake_up(&conn->wait);
-    
+
     stateful_ops = conn->stateful_ops;
 
     for (i = 0; i < MAX_STATEFUL_OPS; i++)
@@ -3135,13 +3135,13 @@ static int castle_buffer_map(struct castle_back_conn *conn, struct vm_area_struc
     int err;
     unsigned long size;
     struct castle_back_buffer *buffer;
-    
+
     size = vma->vm_end - vma->vm_start;
-    if (size > MAX_BUFFER_SIZE) 
+    if (size > MAX_BUFFER_SIZE)
     {
         error("castle_back: you tried to map %ld bytes, max is %d!\n", size, MAX_BUFFER_SIZE);
         err = -EINVAL;
-        goto err1;     
+        goto err1;
     }
     else if (vma->vm_start % PAGE_SIZE)
     {
@@ -3165,7 +3165,7 @@ static int castle_buffer_map(struct castle_back_conn *conn, struct vm_area_struc
     }
 
     debug("castle_buffer_map buffer=%p, size=%ld, vm_start=%lx, vm_end=%lx\n", buffer, size, vma->vm_start, vma->vm_end);
-    
+
     vma->vm_flags |= VM_RESERVED;
     vma->vm_ops = &castle_back_vm_ops;
 
@@ -3179,9 +3179,9 @@ static int castle_buffer_map(struct castle_back_conn *conn, struct vm_area_struc
         err = -ENOMEM;
         goto err2;
     }
-    
-    /* 
-     * Add entry to our rb tree so we can find the buffer later 
+
+    /*
+     * Add entry to our rb tree so we can find the buffer later
      * there is only one mmap at once, so no worries about concurrency here
      */
     read_lock(&conn->buffers_lock);
@@ -3191,27 +3191,27 @@ static int castle_buffer_map(struct castle_back_conn *conn, struct vm_area_struc
         error("castle_back: mapping exists!\n");
         err = -EEXIST;
         goto err3;
-    } 
+    }
     read_unlock(&conn->buffers_lock);
 
     ReservePages(buffer->buffer, size);
-    
+
     vma->vm_flags |= VM_DONTCOPY;
-    
+
     err = castle_vma_map(vma, buffer->buffer, size);
     if (err)
     {
         error("castle_back: mapping failed!\n");
         goto err4;
     }
-     
+
     write_lock(&conn->buffers_lock);
-    BUG_ON(castle_back_buffers_rb_insert(conn, vma->vm_start, &buffer->rb_node) != NULL);   
+    BUG_ON(castle_back_buffers_rb_insert(conn, vma->vm_start, &buffer->rb_node) != NULL);
     write_unlock(&conn->buffers_lock);
-        
-    debug("Create shared buffer kernel=%p, user=%lx, size=%u\n", 
+
+    debug("Create shared buffer kernel=%p, user=%lx, size=%u\n",
         buffer->buffer, buffer->user_addr, buffer->size);
-    
+
     return 0;
 
 err4:
@@ -3230,9 +3230,9 @@ static int castle_ring_map(struct castle_back_conn *conn, struct vm_area_struct 
     int err;
 
     size = vma->vm_end - vma->vm_start;
-    if (size != CASTLE_RING_SIZE) 
+    if (size != CASTLE_RING_SIZE)
     {
-        error("castle_back: you _must_ map exactly %d bytes (you asked for %ld)!\n", 
+        error("castle_back: you _must_ map exactly %d bytes (you asked for %ld)!\n",
             CASTLE_RING_SIZE, size);
         return -EINVAL;
     }
@@ -3241,22 +3241,22 @@ static int castle_ring_map(struct castle_back_conn *conn, struct vm_area_struct 
         error("castle_back: you tried to map at addr %ld, not page aligned!\n", vma->vm_start);
         return -EINVAL;
     }
-    
+
     vma->vm_flags |= VM_RESERVED;
     /* ring doesn't really need our VM ops */
     // vma->vm_ops = &castle_vm_ops;
-    
+
     conn->rings_vstart = vma->vm_start;
-    
+
     err = castle_vma_map(vma, conn->back_ring.sring, CASTLE_RING_SIZE);
     if (err)
     {
         error("castle_back: mapping failed!\n");
         return err;
     }
-            
+
     vma->vm_flags |= VM_DONTCOPY;
-    
+
     return 0;
 }
 
@@ -3264,12 +3264,12 @@ int castle_back_mmap(struct file *file, struct vm_area_struct *vma)
 {
     int err;
     struct castle_back_conn *conn = file->private_data;
-    if (conn == NULL) 
+    if (conn == NULL)
     {
         error("castle_back: castle, retrieving connection failed\n");
         return -EINVAL;
     }
-    
+
     debug("castle_back_mmap mm->mmap_sem.activity=%d\n", vma->vm_mm->mmap_sem.activity);
 
     if(!test_and_set_bit(CASTLE_BACK_CONN_INITIALISED_BIT, &conn->flags))
@@ -3289,7 +3289,7 @@ int castle_back_mmap(struct file *file, struct vm_area_struct *vma)
     }
 
     return 0;
-    
+
 err_out:
     return err;
 }
@@ -3299,7 +3299,7 @@ int castle_back_init(void)
     int err;
 
     debug("castle_back initing...");
-        
+
     castle_back_wq = create_workqueue("castle_back");
     if (!castle_back_wq)
     {
@@ -3307,7 +3307,7 @@ int castle_back_init(void)
         err = -ENOMEM;
         goto err1;
     }
-    
+
     init_waitqueue_head(&conn_close_wait);
     spin_lock_init(&conns_lock);
     atomic_set(&conn_count, 0);
@@ -3317,7 +3317,7 @@ int castle_back_init(void)
     return 0;
 
     destroy_workqueue(castle_back_wq); /* unreachable */
-err1: 
+err1:
     return err;
 }
 
