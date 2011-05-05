@@ -240,6 +240,38 @@ static ssize_t da_last_key_show(struct kobject *kobj,
     return strlen(buf);
 }
 
+static ssize_t da_size_show(struct kobject *kobj, 
+							struct attribute *attr, 
+							char *buf)
+{
+    struct castle_double_array *da = container_of(kobj, struct castle_double_array, kobj); 
+    int i;
+    uint32_t size = 0;
+
+    /* Get READ lock on DA, to make sure DA doesnt disappear while printing stats. */
+    read_lock(&da->lock);
+
+    for(i=0; i<=da->top_level; i++)
+    {
+        struct castle_component_tree *ct;
+        struct list_head *lh;
+
+        list_for_each(lh, &da->levels[i].trees)
+        {
+            ct = list_entry(lh, struct castle_component_tree, da_list);
+
+            size += CHUNK(ct->tree_ext_free.ext_size) + 
+                    CHUNK(ct->data_ext_free.ext_size) + 
+                    CHUNK(ct->internal_ext_free.ext_size) +
+                    ((ct->bloom_exists)?ct->bloom.num_chunks:0) +
+                    atomic64_read(&ct->large_ext_chk_cnt);
+        }
+    }
+
+    read_unlock(&da->lock);
+
+    return sprintf(buf, "%u\n", size);
+}
 /**
  * Show statistics for a given Doubling Array.
  *
@@ -676,12 +708,16 @@ __ATTR(version, S_IRUGO|S_IWUSR, da_version_show, NULL);
 static struct castle_sysfs_entry da_last_key =
 __ATTR(last_key, S_IRUGO|S_IWUSR, da_last_key_show, NULL);
 
+static struct castle_sysfs_entry da_size =
+__ATTR(size, S_IRUGO|S_IWUSR, da_size_show, NULL);
+
 static struct castle_sysfs_entry da_tree_list =
 __ATTR(component_trees, S_IRUGO|S_IWUSR, da_tree_list_show, NULL);
 
 static struct attribute *castle_da_attrs[] = {
     &da_version.attr,
     &da_last_key.attr,
+    &da_size.attr,
     &da_tree_list.attr,
     NULL,
 };
