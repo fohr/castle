@@ -226,20 +226,6 @@ static ssize_t da_version_show(struct kobject *kobj,
     return sprintf(buf, "0x%x\n", da->root_version);
 }
 
-static ssize_t da_last_key_show(struct kobject *kobj, 
-							    struct attribute *attr, 
-							    char *buf)
-{
-    struct castle_double_array *da = container_of(kobj, struct castle_double_array, kobj); 
-
-    if (da->last_key)
-        vl_okey_to_buf(da->last_key, buf);
-    else
-        sprintf(buf, "None");
-
-    return strlen(buf);
-}
-
 static ssize_t da_size_show(struct kobject *kobj, 
 							struct attribute *attr, 
 							char *buf)
@@ -705,9 +691,6 @@ static struct kobj_type castle_double_array_ktype = {
 static struct castle_sysfs_entry da_version =
 __ATTR(version, S_IRUGO|S_IWUSR, da_version_show, NULL);
 
-static struct castle_sysfs_entry da_last_key =
-__ATTR(last_key, S_IRUGO|S_IWUSR, da_last_key_show, NULL);
-
 static struct castle_sysfs_entry da_size =
 __ATTR(size, S_IRUGO|S_IWUSR, da_size_show, NULL);
 
@@ -716,7 +699,6 @@ __ATTR(component_trees, S_IRUGO|S_IWUSR, da_tree_list_show, NULL);
 
 static struct attribute *castle_da_attrs[] = {
     &da_version.attr,
-    &da_last_key.attr,
     &da_size.attr,
     &da_tree_list.attr,
     NULL,

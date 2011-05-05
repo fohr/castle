@@ -1744,7 +1744,6 @@ struct castle_double_array {
     atomic_t                    epoch_ios;
     atomic_t                    merge_budget;
     wait_queue_head_t           merge_budget_waitq;
-    c_vl_okey_t                *last_key;
     /* Compaction (Big-merge) */
     int                         top_level;          /**< height of doubling array */
     atomic_t                    nr_del_versions;    /**< #versions deleted since
