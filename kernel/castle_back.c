@@ -28,7 +28,7 @@ DEFINE_RING_TYPES(castle, castle_request_t, castle_response_t);
 #define MAX_BUFFER_PAGES  (256)
 #define MAX_BUFFER_SIZE   (MAX_BUFFER_PAGES << PAGE_SHIFT)
 
-#define MAX_STATEFUL_OPS  (1024)
+#define MAX_STATEFUL_OPS  (CASTLE_STATEFUL_OPS)
 
 #define CASTLE_BACK_NAME  "castle-back"
 
@@ -151,9 +151,9 @@ typedef void (*castle_back_stateful_op_expire_t) (struct castle_back_stateful_op
 struct castle_back_stateful_op
 {
     struct list_head                    list;
-    /* token is calculated by index + use_count * MAX_STATEFUL_OPS where index is the
+    /* token is calculated by (index + use_count * MAX_STATEFUL_OPS) | 0x80000000 where index is the
      * index in the stateful_ops array in the connection. So the index is calculated by
-     * token % MAX_STATEFUL_OPS.  This means tokens are reused at most every 2^32/MAX_STATEFUL_OPS
+     * token % MAX_STATEFUL_OPS.  This means tokens are reused at most every 2^31/MAX_STATEFUL_OPS
      * calls so shouldn't get collisions.
      */
     castle_interface_token_t            token;
@@ -522,7 +522,7 @@ castle_back_get_stateful_op(struct castle_back_conn *conn,
     CASTLE_INIT_WORK(&stateful_op->expire_work, castle_back_stateful_op_expire);
     stateful_op->in_use = 1;
     /* see def of castle_back_stateful_op */
-    stateful_op->token = (stateful_op - conn->stateful_ops) + (stateful_op->use_count * MAX_STATEFUL_OPS);
+    stateful_op->token = ((stateful_op - conn->stateful_ops) + (stateful_op->use_count * MAX_STATEFUL_OPS)) | 0x80000000;
     stateful_op->use_count++;
     stateful_op->conn = conn;
     stateful_op->attachment = NULL;
