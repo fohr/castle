@@ -33,7 +33,7 @@ struct castle_sysfs_entry {
 struct castle_sysfs_version {
     version_t version;
     char name[10];
-    struct castle_sysfs_entry csys_entry; 
+    struct castle_sysfs_entry csys_entry;
     struct list_head list;
 };
 
@@ -226,20 +226,38 @@ static ssize_t da_version_show(struct kobject *kobj,
     return sprintf(buf, "0x%x\n", da->root_version);
 }
 
-static ssize_t da_last_key_show(struct kobject *kobj, 
-							    struct attribute *attr, 
-							    char *buf)
+static ssize_t da_size_show(struct kobject *kobj, 
+							struct attribute *attr, 
+							char *buf)
 {
     struct castle_double_array *da = container_of(kobj, struct castle_double_array, kobj); 
+    int i;
+    uint32_t size = 0;
 
-    if (da->last_key)
-        vl_okey_to_buf(da->last_key, buf);
-    else
-        sprintf(buf, "None");
+    /* Get READ lock on DA, to make sure DA doesnt disappear while printing stats. */
+    read_lock(&da->lock);
 
-    return strlen(buf);
+    for(i=0; i<=da->top_level; i++)
+    {
+        struct castle_component_tree *ct;
+        struct list_head *lh;
+
+        list_for_each(lh, &da->levels[i].trees)
+        {
+            ct = list_entry(lh, struct castle_component_tree, da_list);
+
+            size += CHUNK(ct->tree_ext_free.ext_size) + 
+                    CHUNK(ct->data_ext_free.ext_size) + 
+                    CHUNK(ct->internal_ext_free.ext_size) +
+                    ((ct->bloom_exists)?ct->bloom.num_chunks:0) +
+                    atomic64_read(&ct->large_ext_chk_cnt);
+        }
+    }
+
+    read_unlock(&da->lock);
+
+    return sprintf(buf, "%u\n", size);
 }
-
 /**
  * Show statistics for a given Doubling Array.
  *
@@ -551,18 +569,29 @@ static ssize_t collection_stats_show(struct kobject *kobj,
 {
     struct castle_attachment *collection = container_of(kobj, struct castle_attachment, kobj); 
 
-    return sprintf(buf, "[%lu %lu] [%lu %lu] [%lu %lu] [%lu %lu] [%lu %lu %lu]\n", 
-                        atomic64_read(&collection->get.ios),
-                        atomic64_read(&collection->get.bytes),
-                        atomic64_read(&collection->put.ios),
-                        atomic64_read(&collection->put.bytes),
-                        atomic64_read(&collection->big_get.ios),
-                        atomic64_read(&collection->big_get.bytes),
-                        atomic64_read(&collection->big_put.ios),
-                        atomic64_read(&collection->big_put.bytes),
-                        atomic64_read(&collection->rq.ios),
-                        atomic64_read(&collection->rq.bytes),
-                        atomic64_read(&collection->rq_nr_keys));
+    return sprintf(buf, 
+                   "Gets: %lu\n"
+                   "GetsSize: %lu\n"
+                   "Puts: %lu\n"
+                   "PutsSize: %lu\n"
+                   "BigGets: %lu\n"
+                   "BigGetsSize: %lu\n"
+                   "BigPuts: %lu\n"
+                   "BigPutsSize: %lu\n"
+                   "RangeQueries: %lu\n"
+                   "RangeQueriesSize: %lu\n"
+                   "RangeQueriesKeys: %lu\n",
+                   atomic64_read(&collection->get.ios),
+                   atomic64_read(&collection->get.bytes),
+                   atomic64_read(&collection->put.ios),
+                   atomic64_read(&collection->put.bytes),
+                   atomic64_read(&collection->big_get.ios),
+                   atomic64_read(&collection->big_get.bytes),
+                   atomic64_read(&collection->big_put.ios),
+                   atomic64_read(&collection->big_put.bytes),
+                   atomic64_read(&collection->rq.ios),
+                   atomic64_read(&collection->rq.bytes),
+                   atomic64_read(&collection->rq_nr_keys));
 }
 
 static ssize_t collection_id_show(struct kobject *kobj, 
@@ -662,20 +691,21 @@ static struct kobj_type castle_double_array_ktype = {
 static struct castle_sysfs_entry da_version =
 __ATTR(version, S_IRUGO|S_IWUSR, da_version_show, NULL);
 
-static struct castle_sysfs_entry da_last_key =
-__ATTR(last_key, S_IRUGO|S_IWUSR, da_last_key_show, NULL);
+static struct castle_sysfs_entry da_size =
+__ATTR(size, S_IRUGO|S_IWUSR, da_size_show, NULL);
 
 static struct castle_sysfs_entry da_tree_list =
 __ATTR(component_trees, S_IRUGO|S_IWUSR, da_tree_list_show, NULL);
 
 static struct attribute *castle_da_attrs[] = {
     &da_version.attr,
-    &da_last_key.attr,
+    &da_size.attr,
     &da_tree_list.attr,
     NULL,
 };
 
 static struct kobj_type castle_da_ktype = {
+    .release        = castle_sysfs_kobj_release,
     .sysfs_ops      = &castle_sysfs_ops,
     .default_attrs  = castle_da_attrs,
 };
@@ -699,6 +729,7 @@ int castle_sysfs_da_add(struct castle_double_array *da)
 void castle_sysfs_da_del(struct castle_double_array *da)
 {
     kobject_remove(&da->kobj);
+    castle_sysfs_kobj_release_wait(&da->kobj);
 }
 
 /* Definition of slaves sysfs directory attributes */
@@ -753,6 +784,7 @@ static struct attribute *castle_slave_attrs[] = {
 };
 
 static struct kobj_type castle_slave_ktype = {
+    .release        = castle_sysfs_kobj_release,
     .sysfs_ops      = &castle_sysfs_ops,
     .default_attrs  = castle_slave_attrs,
 };
@@ -788,6 +820,7 @@ void castle_sysfs_slave_del(struct castle_slave *slave)
     sysfs_remove_link(&slave->kobj, "dev");
 #endif
     kobject_remove(&slave->kobj);
+    castle_sysfs_kobj_release_wait(&slave->kobj);
 }
 
 /* Definition of devices sysfs directory attributes */
@@ -846,6 +879,7 @@ static struct attribute *castle_device_attrs[] = {
 };
 
 static struct kobj_type castle_device_ktype = {
+    .release        = castle_sysfs_kobj_release,
     .sysfs_ops      = &castle_sysfs_ops,
     .default_attrs  = castle_device_attrs,
 };
@@ -879,6 +913,7 @@ void castle_sysfs_device_del(struct castle_attachment *device)
     sysfs_remove_link(&device->kobj, "dev");
 #endif
     kobject_remove(&device->kobj);
+    castle_sysfs_kobj_release_wait(&device->kobj);
 }
 
 /* Definition of each collection sysfs directory attributes */
@@ -1016,6 +1051,8 @@ out1:
 
 void castle_sysfs_fini(void)
 {
+    kobject_remove(&filesystem_kobj);
+    kobject_remove(&double_arrays_kobj);
     kobject_remove(&castle_attachments.collections_kobj);
     kobject_remove(&castle_attachments.devices_kobj);
     kobject_remove(&castle_slaves.kobj);

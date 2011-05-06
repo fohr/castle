@@ -1332,11 +1332,11 @@ struct castle_attachment {
 };
 
 struct castle_attachments {
-    struct kobject collections_kobj;
-    struct kobject devices_kobj;
-    int major;
-    struct list_head attachments;
-    spinlock_t     lock;
+    struct kobject          collections_kobj;
+    struct kobject          devices_kobj;
+    int                     major;
+    struct list_head        attachments;
+    spinlock_t              lock;
 };
 
 extern struct castle              castle;
@@ -1364,6 +1364,8 @@ struct castle_attachment*
 struct castle_attachment *
                       castle_attachment_get        (collection_id_t collection);
 void                  castle_attachment_put        (struct castle_attachment *ca);
+void                  castle_attachment_free       (struct castle_attachment *ca);
+void                  castle_attachment_free_complete(struct castle_attachment *ca);
 
 struct castle_slave*  castle_claim                 (uint32_t new_dev);
 void                  castle_release               (struct castle_slave *cs);
@@ -1742,7 +1744,6 @@ struct castle_double_array {
     atomic_t                    epoch_ios;
     atomic_t                    merge_budget;
     wait_queue_head_t           merge_budget_waitq;
-    c_vl_okey_t                *last_key;
     /* Compaction (Big-merge) */
     int                         top_level;          /**< height of doubling array */
     atomic_t                    nr_del_versions;    /**< #versions deleted since
