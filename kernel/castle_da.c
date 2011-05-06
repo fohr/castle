@@ -3451,7 +3451,10 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
                                         to write to disk, and cleanup duty will be left to
                                         da_dealloc. */
 
-        if( (err==-ESHUTDOWN) && (castle_merges_checkpoint) && (merge->level >= MIN_DA_SERDES_LEVEL) )
+        /* Retain extents, if we are checkpointing merges and interrupting the merge. */
+        /* Note: Don't retain extents, if DA is already marked for deletion. */
+        if( (err==-ESHUTDOWN) && (!castle_da_deleted(merge->da)) &&
+            (castle_merges_checkpoint) && (merge->level >= MIN_DA_SERDES_LEVEL) )
         {
             /* merge aborted, we are checkpointing, and this is a checkpointable merge level */
 
