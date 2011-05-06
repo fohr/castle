@@ -5526,7 +5526,6 @@ static void castle_da_merge_serdes_out_tree_check(struct castle_dmserlist_entry 
                                                   int level)
 {
     int i=0; /* btree level */
-    int have_node=0;
 
     BUG_ON(!merge_mstore);
     BUG_ON(!da);
@@ -5538,7 +5537,6 @@ static void castle_da_merge_serdes_out_tree_check(struct castle_dmserlist_entry 
     debug("%s::sanity checking merge SERDES on da %d level %d.\n",
             __FUNCTION__, da->id, level);
 
-    have_node=0;
     for(i=0; i<MAX_BTREE_DEPTH; i++)
     {
         if(!EXT_POS_INVAL(merge_mstore->node_c2b_cep[i]))
@@ -5576,11 +5574,8 @@ static void castle_da_merge_serdes_out_tree_check(struct castle_dmserlist_entry 
             }
 
             put_c2b(node_c2b);
-            have_node++;
         }//fi
     }//rof
-    BUG_ON(have_node==0); /* this might be too strict... we assume that if we have serialised state
-                             we MUST have at least one "active" node */
     debug("%s::sanity check passed merge SERDES on da %d level %d.\n",
             __FUNCTION__, da->id, level);
 }
