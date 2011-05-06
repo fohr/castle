@@ -64,7 +64,7 @@ static int                      castle_da_exiting    = 0;
 
 static int                      castle_dynamic_driver_merge = 1;
 
-static int                      castle_merges_abortable = 0; /* 0 or 1, default=disabled */
+static int                      castle_merges_abortable = 1; /* 0 or 1, default=enabled */
 module_param(castle_merges_abortable, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
 MODULE_PARM_DESC(castle_merges_abortable, "Allow on-going merges to abort upon exit condition");
 
