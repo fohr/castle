@@ -3337,7 +3337,8 @@ static struct castle_component_tree* castle_da_merge_complete(struct castle_da_m
         }
     }
     /* Write out the max keys along the max path. */
-    castle_da_max_path_complete(merge, root_cep);
+    if (merge->nr_entries)
+        castle_da_max_path_complete(merge, root_cep);
 
     /* Complete Bloom filters. */
     if (merge->out_tree->bloom_exists)
@@ -3442,6 +3443,11 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
            from the DA by castle_da_merge_package(). */
         FOR_EACH_MERGE_TREE(i, merge)
             castle_ct_put(merge->in_trees[i], 0);
+        if (merge->nr_entries == 0)
+        {
+            castle_printk(LOG_WARN, "Empty merge at level: %u\n", merge->level);
+            castle_ct_put(merge->out_tree, 0);
+        }
     }
     else
     {
@@ -4055,7 +4061,9 @@ static tree_seq_t castle_da_merge_last_unit_complete(struct castle_double_array 
         castle_component_tree_del(merge->da, merge->in_trees[i]);
     }
     /* TODO@tr: figure out implications of FAULT()ing at this point */
-    castle_component_tree_add(merge->da, out_tree, NULL /*head*/, 0 /*not in init*/);
+    if (merge->nr_entries)
+        castle_component_tree_add(merge->da, out_tree, NULL /*head*/, 0 /*not in init*/);
+
     /* Reset the number of completed units. */
     BUG_ON(da->levels[level].merge.units_commited != (1U << level));
     da->levels[level].merge.units_commited = 0;
