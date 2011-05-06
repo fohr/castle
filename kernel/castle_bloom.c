@@ -57,9 +57,6 @@ uint32_t opt_hashes_per_bit[] =
 
 #define ceiling(_a, _b)         ((_a - 1) / _b + 1)
 
-/* unsigned saturating subtract */
-#define usat_subtract(_a, _b, _c)  ( ( (_a) > ( (_b)+(_c) ) ) ? ((_a) - (_b)) : (_c) )
-
 /**
  * Initialize a bloom filter.  Call castle_bloom_add to add a key and
  * castle_bloom_complete when all keys are added.  Call castle_bloom_destory
@@ -999,6 +996,8 @@ void castle_bloom_build_param_unmarshall(castle_bloom_t *bf, struct castle_bbp_e
     bf_bp->node_cep              = bbpm->node_cep;
     if(bbpm->node_avail)
     {
+        int drop_start=0;
+        int drop_end=0;
         BUG_ON(EXT_POS_INVAL(bf_bp->node_cep));
         bf_bp->node_c2b = castle_cache_block_get(bf_bp->node_cep, BLOOM_INDEX_NODE_SIZE_PAGES);
         write_lock_c2b(bf_bp->node_c2b);
@@ -1008,12 +1007,22 @@ void castle_bloom_build_param_unmarshall(castle_bloom_t *bf, struct castle_bbp_e
         update_c2b(bf_bp->node_c2b);
         bf_bp->cur_node = c2b_bnode(bf_bp->node_c2b);
         BUG_ON(!bf_bp->cur_node);
-        BUG_ON(bf_bp->cur_node->magic != BTREE_NODE_MAGIC);
+        if(bf_bp->cur_node->magic != BTREE_NODE_MAGIC)
+        {
+            castle_printk(LOG_ERROR, "%s::failed to recover node at "cep_fmt_str
+                    "; found weird magic=%lx.\n",
+                    __FUNCTION__, cep2str(bf_bp->node_cep), bf_bp->cur_node->magic);
+            BUG();
+        }
+
         debug("%s::previous node used: %d, current node used: %d.\n",
-            __FUNCTION__, bbpm->node_used, bf_bp->cur_node->used);
-        bf->btree->entries_drop(bf_bp->cur_node,
-                                usat_subtract(bbpm->node_used, 1, 0),
-                                bf_bp->cur_node->used - 1);
+                __FUNCTION__, bbpm->node_used, bf_bp->cur_node->used);
+
+        /* TODO@tr verify that this entries_drop is sensible */
+        drop_start = sat_subu(bbpm->node_used, 1);
+        drop_end   = sat_subu(bf_bp->cur_node->used, 1);
+        BUG_ON(drop_end < drop_start);
+        bf->btree->entries_drop(bf_bp->cur_node, drop_start, drop_end);
     }
 
     /* recover chunk cep, c2b, and buffer */

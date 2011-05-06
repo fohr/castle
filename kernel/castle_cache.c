@@ -4328,7 +4328,6 @@ next_batch:
         }
         
     }
-
     BUG_ON(atomic_read(&in_flight) != 0);
     debug("====> Castle cache flush loop EXITING.\n");
 
@@ -4427,7 +4426,15 @@ int castle_cache_extent_flush(c_ext_id_t ext_id, uint64_t start, uint64_t size)
             }
 
             if (!read_trylock_c2b(c2b))
+            {
+                c_ext_type_t ext_type;
+                ext_type=castle_extent_type_get(ext_id);
+                BUG_ON(ext_type == EXT_T_INVALID);
+                if( (ext_type == EXT_T_INTERNAL_NODES) || (ext_type == EXT_T_LEAF_NODES) )
+                    castle_printk(LOG_WARN, "%s::can't flush "cep_fmt_str".\n",
+                    __FUNCTION__, cep2str(c2b->cep));
                 goto next_pg;
+            }
             if (test_set_c2b_flushing(c2b))
                 goto next_pg_2;
             if (!c2b_uptodate(c2b) || !c2b_dirty(c2b))
