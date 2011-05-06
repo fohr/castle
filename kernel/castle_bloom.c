@@ -1019,10 +1019,13 @@ void castle_bloom_build_param_unmarshall(castle_bloom_t *bf, struct castle_bbp_e
                 __FUNCTION__, bbpm->node_used, bf_bp->cur_node->used);
 
         /* TODO@tr verify that this entries_drop is sensible */
-        drop_start = sat_subu(bbpm->node_used, 1);
-        drop_end   = sat_subu(bf_bp->cur_node->used, 1);
-        BUG_ON(drop_end < drop_start);
-        bf->btree->entries_drop(bf_bp->cur_node, drop_start, drop_end);
+        if(bf_bp->cur_node->used > 0)
+        {
+            drop_start = sat_subu(bbpm->node_used, 1);
+            drop_end   = bf_bp->cur_node->used - 1;
+            BUG_ON(drop_end < drop_start);
+            bf->btree->entries_drop(bf_bp->cur_node, drop_start, drop_end);
+        }
     }
 
     /* recover chunk cep, c2b, and buffer */

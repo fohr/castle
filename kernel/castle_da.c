@@ -4744,10 +4744,13 @@ static void castle_da_merge_deserialise(struct castle_da_merge *merge,
                         node->size);
 
                 /* TODO@tr verify that this entries_drop is sensible */
-                drop_start = merge_mstore->next_idx[i];
-                drop_end   = sat_subu(node->used, 1);
-                BUG_ON(drop_end < drop_start);
-                merge->out_btree->entries_drop(node, drop_start, drop_end);
+                if(node->used > 0)
+                {
+                    drop_start = merge_mstore->next_idx[i];
+                    drop_end   = node->used - 1;
+                    BUG_ON(drop_end < drop_start);
+                    merge->out_btree->entries_drop(node, drop_start, drop_end);
+                }
             }
             /* recover last key */
             if(node->used)
