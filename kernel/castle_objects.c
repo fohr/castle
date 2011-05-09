@@ -855,7 +855,6 @@ static void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
     struct castle_component_tree *ct = c_bvec->tree;
     int cancelled;
 
-    castle_debug_bio_deregister(c_bio);
     /* This function is used to cleanup when cancelling a request, with err set to -EPIPE. */
     cancelled = (err == -EPIPE);
 
@@ -902,6 +901,21 @@ static void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
 }
 
 /**
+ * Wrapper for @see castle_object_replace_complete(), called after
+ * @see castle_double_array_submit(), responsible for deregistering BIOs from the
+ * internal debugger.
+ */
+static void castle_object_da_replace_complete(struct castle_bio_vec *c_bvec,
+                                              int err,
+                                              c_val_tup_t cvt)
+{
+    /* Deregister the BIO. */
+    castle_debug_bio_register(c_bvec->c_bio, c_bvec->c_bio->attachment->version, 1);
+    /* Call the actual complete function. */
+    castle_object_replace_complete(c_bvec, err, cvt);
+}
+
+/**
  * Schedules the DA key insertion.
  */
 static void castle_object_replace_key_insert(struct castle_object_replace *replace)
@@ -911,7 +925,7 @@ static void castle_object_replace_key_insert(struct castle_object_replace *repla
     /* Register with the debugger. */
     castle_debug_bio_register(c_bvec->c_bio, c_bvec->c_bio->attachment->version, 1);
     /* Set the callback. */
-    c_bvec->submit_complete = castle_object_replace_complete;
+    c_bvec->submit_complete = castle_object_da_replace_complete;
     /* Submit to the DA. */
     BUG_ON(replace->data_c2b);
     castle_double_array_submit(c_bvec);
