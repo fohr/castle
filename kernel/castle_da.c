@@ -2333,6 +2333,10 @@ static void castle_da_lfs_ct_reset(struct castle_da_lfs_ct_t *lfs)
     lfs->internal_ext.size = lfs->tree_ext.size = lfs->data_ext.size = 0;
     lfs->space_reserved = 0;
     lfs->leafs_on_ssds = lfs->internals_on_ssds = 0;
+
+    /* Make sure all writes are completed, before next thread tries to do some checks 
+     * during lfs_init. */
+    wmb();
 }
 
 /**
@@ -2505,6 +2509,9 @@ static int castle_da_lfs_ct_space_alloc(struct castle_da_lfs_ct_t *lfs,
     /* Mark it as space reserved. */
     lfs->space_reserved = 1;
 
+    /* Make sure all writes are completed, before decrementing victim count. */
+    wmb();
+
     /* If it's a reallocation (last allocation failed due to low free space), reduce the count of lfs 
      * victims in DA; If there are no more victims left for DA, then restart merges. */
     if (is_realloc && atomic_dec_and_test(&da->lfs_victim_count))
@@ -2557,8 +2564,8 @@ static int castle_da_lfs_rwct_callback(void *data)
 {
     return castle_da_lfs_ct_space_alloc(data,
                                         1,    /* Reallocation. */
-                                        NULL, /* No need to register a callback. */
-                                        NULL,
+                                        castle_da_lfs_rwct_callback,
+                                        data,
                                         0);   /* T0. Dont use SSDs. */
 }
 
@@ -2574,8 +2581,8 @@ static int castle_da_lfs_merge_ct_callback(void *data)
 {
     return castle_da_lfs_ct_space_alloc(data,
                                         1,    /* Reallocation. */
-                                        NULL, /* No need to register a callback. */
-                                        NULL,
+                                        castle_da_lfs_merge_ct_callback,
+                                        data,
                                         1);   /* Not a T0. Use SSD. */
 }
 
@@ -5642,6 +5649,8 @@ static void castle_da_dealloc(struct castle_double_array *da)
     }
     if (da->ios_waiting)
         castle_free(da->ios_waiting);
+    if (da->t0_lfs)
+        castle_free(da->t0_lfs);
     /* Poison and free (may be repoisoned on debug kernel builds). */
     memset(da, 0xa7, sizeof(struct castle_double_array));
     castle_free(da);
