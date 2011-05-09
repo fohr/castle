@@ -134,6 +134,8 @@ static void inline _prefix##_hash_init(void)                                    
 #define list_for_each_from(from, pos, head)                                                    \
 	for (pos = (from); prefetch(pos->next), pos != (head); pos = pos->next)
 
+void list_append(struct list_head *head1, struct list_head *head2);
+
 static inline uint32_t BUF_L_GET(const char *buf)
 {
     __be32 word;
@@ -330,7 +332,7 @@ void castle_printk(c_printk_level_t level, const char *fmt, ...);
 int castle_printk_init(void);
 void castle_printk_fini(void);
 
-void inline list_swap(struct list_head *t1, struct list_head *t2);
+inline void list_swap(struct list_head *t1, struct list_head *t2);
 void        list_sort(struct list_head *list, 
                       int (*compare)(struct list_head *l1, struct list_head *l2));
 void        vl_key_print(c_printk_level_t level, c_vl_key_t *vl_key);

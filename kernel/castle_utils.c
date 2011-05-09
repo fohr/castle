@@ -172,7 +172,7 @@ void castle_printk_fini(void)
 
 
 
-void inline  __list_swap(struct list_head *p,
+inline void  __list_swap(struct list_head *p,
                          struct list_head *t1,
                          struct list_head *t2,
                          struct list_head *n)
@@ -185,7 +185,7 @@ void inline  __list_swap(struct list_head *p,
     n->prev  = t1;
 }
 
-void inline list_swap(struct list_head *t1, struct list_head *t2)
+inline void list_swap(struct list_head *t1, struct list_head *t2)
 {
     __list_swap(t1->prev, t1, t2, t2->next);
 }
@@ -536,4 +536,13 @@ uint64_t murmur_hash_64(const void *key, int len, uint32_t seed)
     MurmurHash3_x64_128(key, len, seed, temp);
 
     return temp[0];
+}
+
+/* Append list2 (with head2) to list1 (with head1). Doesnt add head2. */
+void list_append(struct list_head *head1, struct list_head *head2)
+{
+    head2->prev->next = head1;
+    head2->next->prev = head1->prev;
+    head1->prev->next = head2->next;
+    head1->prev       = head2->prev;
 }

@@ -384,7 +384,7 @@ struct castle_batree_entry {
 #define BATREE_NODE_ENTRIES  ((BATREE_NODE_SIZE * PAGE_SIZE - sizeof(struct castle_btree_node)) \
                                 / sizeof(struct castle_batree_entry))
 
-static void inline castle_batree_key_print(bakey_t *key)
+static inline void castle_batree_key_print(bakey_t *key)
 {
     int i;
 
