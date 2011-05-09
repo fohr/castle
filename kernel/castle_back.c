@@ -2221,6 +2221,7 @@ static void castle_back_big_put(void *data)
     /* Couldn't find a free stateful op. */
     if (!stateful_op)
     {
+        error("castle_back: no more free stateful ops!\n");
         err = -EAGAIN;
         goto err0;
     }
@@ -2506,6 +2507,7 @@ static void castle_back_big_get(void *data)
                                         castle_back_big_get_expire);
     if (!stateful_op)
     {
+        error("castle_back: no more free stateful ops!\n");
         err = -EAGAIN;
         goto err0;
     }
@@ -2531,6 +2533,15 @@ static void castle_back_big_get(void *data)
     if (err)
     {
         error("Error copying key err=%d\n", err);
+        error("Could not get buffer for pointer=%p, while doing op: "
+              "(tag: 0x%x, call_id: 0x%x, col: 0x%x, key_ptr: %p, key_len: 0x%x)\n",
+                op->req.big_get.key_ptr,
+                op->req.tag,
+                op->req.call_id,
+                op->req.big_get.collection_id,
+                op->req.big_get.key_ptr,
+                op->req.big_get.key_len);
+
         goto err2;
     }
 
@@ -2579,7 +2590,14 @@ static void castle_back_get_chunk(void *data)
     op->buf = castle_back_buffer_get(conn, (unsigned long) op->req.get_chunk.buffer_ptr);
     if (op->buf == NULL)
     {
-        error("Could not get buffer for pointer=%p\n", op->req.get_chunk.buffer_ptr);
+        error("Could not get buffer for pointer=%p, while doing op: "
+              "(tag: 0x%x, call_id: 0x%x, token: 0x%x, buffer_ptr: %p, buffer_len: 0x%x)\n",
+                op->req.get_chunk.buffer_ptr,
+                op->req.tag,
+                op->req.call_id,
+                op->req.get_chunk.token,
+                op->req.get_chunk.buffer_ptr,
+                op->req.get_chunk.buffer_len);
         err = -EINVAL;
         goto err0;
     }
