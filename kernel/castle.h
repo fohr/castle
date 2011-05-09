@@ -830,7 +830,8 @@ struct castle_dmserlist_entry {
     /*       1024 */
 
     /*       1024 */ struct castle_bbp_entry     out_tree_bbp;
-    /*       1094 */ uint8_t                     pad[442];
+    /*       1094 */ uint8_t                     have_bbp;
+    /*       1095 */ uint8_t                     pad[441];
     /*       1536 */
 
 } PACKED;
