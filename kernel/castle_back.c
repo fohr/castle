@@ -2533,6 +2533,15 @@ static void castle_back_big_get(void *data)
     if (err)
     {
         error("Error copying key err=%d\n", err);
+        error("Could not get buffer for pointer=%p, while doing op: "
+              "(tag: 0x%x, call_id: 0x%x, col: 0x%x, key_ptr: %p, key_len: 0x%x)\n",
+                op->req.big_get.key_ptr,
+                op->req.tag,
+                op->req.call_id,
+                op->req.big_get.collection_id,
+                op->req.big_get.key_ptr,
+                op->req.big_get.key_len);
+
         goto err2;
     }
 
