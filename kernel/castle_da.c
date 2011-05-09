@@ -4601,6 +4601,7 @@ update_output_tree_state:
     }//rof
 
     /* bloom build parameters, so we can resume building the output CT's bloom filter */
+    merge_mstore->have_bbp = 0;
     if(merge->out_tree->bloom_exists)
     {
         struct castle_bloom_build_params *bf_bp = merge->out_tree->bloom.private;
@@ -4614,6 +4615,7 @@ update_output_tree_state:
         debug("%s::merge %p (da %d, level %d) bloom_build_param marshall.\n",
                 __FUNCTION__, merge, merge->da->id, merge->level);
         castle_bloom_build_param_marshall(&merge_mstore->out_tree_bbp, bf_bp);
+        merge_mstore->have_bbp = 1;
     }
 
     if (partial_marshall) return;
@@ -6916,7 +6918,7 @@ int castle_double_array_read(void)
             castle_malloc(sizeof(struct castle_component_tree), GFP_KERNEL);
         BUG_ON(!des_da->levels[level].merge.serdes.out_tree);
         ct_da_id = castle_da_ct_unmarshall(des_da->levels[level].merge.serdes.out_tree,
-            &mstore_dmserentry.out_tree);
+                                           &mstore_dmserentry.out_tree);
         BUG_ON(da_id != ct_da_id);
         castle_ct_hash_add(des_da->levels[level].merge.serdes.out_tree);
         /* the difference btwn unmarshalling a partially complete in-merge ct and a "normal" ct is
@@ -6924,8 +6926,9 @@ int castle_double_array_read(void)
            added to a DA through cct_add(da, ct, NULL, 1). */
 
         /* oh and also, bloom_build_params. */
-        castle_da_ct_bloom_build_param_deserialise(des_da->levels[level].merge.serdes.out_tree,
-                                                   &mstore_dmserentry.out_tree_bbp);
+        if(&mstore_dmserentry.have_bbp)
+            castle_da_ct_bloom_build_param_deserialise(des_da->levels[level].merge.serdes.out_tree,
+                                                       &mstore_dmserentry.out_tree_bbp);
 
         /* inc ct seq number if necessary */
         if (des_da->levels[level].merge.serdes.out_tree->seq >= atomic_read(&castle_next_tree_seq))
