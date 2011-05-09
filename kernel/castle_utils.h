@@ -332,7 +332,7 @@ void castle_printk(c_printk_level_t level, const char *fmt, ...);
 int castle_printk_init(void);
 void castle_printk_fini(void);
 
-void inline list_swap(struct list_head *t1, struct list_head *t2);
+inline void list_swap(struct list_head *t1, struct list_head *t2);
 void        list_sort(struct list_head *list, 
                       int (*compare)(struct list_head *l1, struct list_head *l2));
 void        vl_key_print(c_printk_level_t level, c_vl_key_t *vl_key);

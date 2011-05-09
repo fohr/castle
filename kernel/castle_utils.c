@@ -172,7 +172,7 @@ void castle_printk_fini(void)
 
 
 
-void inline  __list_swap(struct list_head *p,
+inline void  __list_swap(struct list_head *p,
                          struct list_head *t1,
                          struct list_head *t2,
                          struct list_head *n)
@@ -185,7 +185,7 @@ void inline  __list_swap(struct list_head *p,
     n->prev  = t1;
 }
 
-void inline list_swap(struct list_head *t1, struct list_head *t2)
+inline void list_swap(struct list_head *t1, struct list_head *t2)
 {
     __list_swap(t1->prev, t1, t2, t2->next);
 }
