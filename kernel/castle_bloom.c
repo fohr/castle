@@ -322,6 +322,12 @@ void castle_bloom_complete(castle_bloom_t *bf)
 
     debug("castle_bloom_complete, elements inserted %llu, expected %llu\n", bf_bp->elements_inserted, bf_bp->expected_num_elements);
 
+    if (bf_bp->elements_inserted == 0)
+    {
+        castle_bloom_abort(bf);
+        return;
+    }
+
     /* if got less elements than expected, we will need to add in the key into the index here
      * we don't have a copy of the key here, so insert the largest key
      */

@@ -64,7 +64,7 @@ static int                      castle_da_exiting    = 0;
 
 static int                      castle_dynamic_driver_merge = 1;
 
-static int                      castle_merges_abortable = 0; /* 0 or 1, default=disabled */
+static int                      castle_merges_abortable = 1; /* 0 or 1, default=enabled */
 module_param(castle_merges_abortable, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
 MODULE_PARM_DESC(castle_merges_abortable, "Allow on-going merges to abort upon exit condition");
 
@@ -3337,7 +3337,8 @@ static struct castle_component_tree* castle_da_merge_complete(struct castle_da_m
         }
     }
     /* Write out the max keys along the max path. */
-    castle_da_max_path_complete(merge, root_cep);
+    if (merge->nr_entries)
+        castle_da_max_path_complete(merge, root_cep);
 
     /* Complete Bloom filters. */
     if (merge->out_tree->bloom_exists)
@@ -3442,6 +3443,11 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
            from the DA by castle_da_merge_package(). */
         FOR_EACH_MERGE_TREE(i, merge)
             castle_ct_put(merge->in_trees[i], 0);
+        if (merge->nr_entries == 0)
+        {
+            castle_printk(LOG_WARN, "Empty merge at level: %u\n", merge->level);
+            castle_ct_put(merge->out_tree, 0);
+        }
     }
     else
     {
@@ -3451,7 +3457,10 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
                                         to write to disk, and cleanup duty will be left to
                                         da_dealloc. */
 
-        if( (err==-ESHUTDOWN) && (castle_merges_checkpoint) && (merge->level >= MIN_DA_SERDES_LEVEL) )
+        /* Retain extents, if we are checkpointing merges and interrupting the merge. */
+        /* Note: Don't retain extents, if DA is already marked for deletion. */
+        if( (err==-ESHUTDOWN) && (!castle_da_deleted(merge->da)) &&
+            (castle_merges_checkpoint) && (merge->level >= MIN_DA_SERDES_LEVEL) )
         {
             /* merge aborted, we are checkpointing, and this is a checkpointable merge level */
 
@@ -4052,7 +4061,9 @@ static tree_seq_t castle_da_merge_last_unit_complete(struct castle_double_array 
         castle_component_tree_del(merge->da, merge->in_trees[i]);
     }
     /* TODO@tr: figure out implications of FAULT()ing at this point */
-    castle_component_tree_add(merge->da, out_tree, NULL /*head*/, 0 /*not in init*/);
+    if (merge->nr_entries)
+        castle_component_tree_add(merge->da, out_tree, NULL /*head*/, 0 /*not in init*/);
+
     /* Reset the number of completed units. */
     BUG_ON(da->levels[level].merge.units_commited != (1U << level));
     da->levels[level].merge.units_commited = 0;
