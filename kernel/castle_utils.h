@@ -7,11 +7,6 @@
 #include "castle_debug.h"
 #include "castle_cache.h"
 
-/* unsigned saturating subtract (a - b, but no less than 0) */
-/* TODO@tr replace this with branchless code - e.g. see
-           http://locklessinc.com/articles/sat_arithmetic/ */
-#define sat_subu(_a, _b)  ( ((_a) > (_b)) ? ((_a) - (_b)) : 0 )
-
 #define ATOMIC(_i)  ((atomic_t)ATOMIC_INIT(_i))
 
 #define order_base_2(_n) ilog2(roundup_pow_of_two(_n))

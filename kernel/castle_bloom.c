@@ -1021,7 +1021,7 @@ void castle_bloom_build_param_unmarshall(castle_bloom_t *bf, struct castle_bbp_e
         /* TODO@tr verify that this entries_drop is sensible */
         if(bf_bp->cur_node->used > 0)
         {
-            drop_start = sat_subu(bbpm->node_used, 1);
+            drop_start = bbpm->node_used;
             drop_end   = bf_bp->cur_node->used - 1;
             BUG_ON(drop_end < drop_start);
             bf->btree->entries_drop(bf_bp->cur_node, drop_start, drop_end);
