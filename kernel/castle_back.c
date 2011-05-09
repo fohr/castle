@@ -2221,6 +2221,7 @@ static void castle_back_big_put(void *data)
     /* Couldn't find a free stateful op. */
     if (!stateful_op)
     {
+        error("castle_back: no more free stateful ops!\n");
         err = -EAGAIN;
         goto err0;
     }
@@ -2506,6 +2507,7 @@ static void castle_back_big_get(void *data)
                                         castle_back_big_get_expire);
     if (!stateful_op)
     {
+        error("castle_back: no more free stateful ops!\n");
         err = -EAGAIN;
         goto err0;
     }
