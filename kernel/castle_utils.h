@@ -134,6 +134,8 @@ static void inline _prefix##_hash_init(void)                                    
 #define list_for_each_from(from, pos, head)                                                    \
 	for (pos = (from); prefetch(pos->next), pos != (head); pos = pos->next)
 
+void list_append(struct list_head *head1, struct list_head *head2);
+
 static inline uint32_t BUF_L_GET(const char *buf)
 {
     __be32 word;

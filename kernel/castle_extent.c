@@ -1154,6 +1154,22 @@ c_ext_id_t castle_extent_alloc(c_rda_type_t             rda_type,
 }
 
 /**
+ * Add the low freespace callback to the victim list.
+ */
+static void castle_extent_lfs_callback_add(c_ext_event_t *event_hdl)
+{
+    BUG_ON(!castle_extent_in_transaction());
+
+    /* Add the victim handler to the list of handlers of specific type. This handler gets
+     * called, when more space is available. */
+    if (event_hdl)
+    {
+        /* Add to the end, to maintain FIFO. */
+        list_add_tail(&event_hdl->list, &castle_lfs_victim_list);
+    }
+}
+
+/**
  * Allocate a new extent.
  *
  * @param rda_type      [in]    RDA algorithm to be used.
@@ -1270,17 +1286,13 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t     rda_type,
     return ext->ext_id;
 
 __low_space:
+    castle_printk(LOG_INFO, "Failed to create extent for DA: %u of type %s for %u chunks\n",
+                  da_id,
+                  castle_ext_type_str[ext_type],
+                  count);
     /* Add the victim handler to the list of handlers of specific type. This handler gets
      * called, when more space is available. */
-    if (event_hdl)
-    {
-        castle_printk(LOG_INFO, "Failed to create extent for DA: %u of type %s for %u chunks\n",
-                      da_id,
-                      castle_ext_type_str[ext_type],
-                      count);
-        /* Add to the end, to maintain FIFO. */
-        list_add_tail(&event_hdl->list, &castle_lfs_victim_list);
-    }
+    castle_extent_lfs_callback_add(event_hdl);
 
 __hell:
     if (ext)
@@ -1348,34 +1360,45 @@ __hell:
  */
 void castle_extent_lfs_victims_wakeup(void)
 {
+    struct list_head head;
+
     castle_extent_transaction_start();
+
+    /* Take the snapshot of the list and clean it. */
+    list_replace_init(&castle_lfs_victim_list, &head);
+
+    castle_extent_transaction_end();
 
     /* Call each handler for each victim in sequence. */
     /* Note: Don't use list_for_each_safe as it is possible that someone else could be changing 
      * the list. */
-    while (!list_empty(&castle_lfs_victim_list))
+    while (!list_empty(&head))
     {
-        c_ext_event_t *hdl = list_first_entry(&castle_lfs_victim_list, c_ext_event_t, list);
-
-        castle_extent_transaction_end();
+        c_ext_event_t *hdl = list_first_entry(&head, c_ext_event_t, list);
+        int ret = 0;
 
         /* No need to call handlers in case module is exiting. No point of creating more extents
          * for components just before they die. */
-        if (castle_extents_exiting || (hdl->callback(hdl->data) == EXIT_SUCCESS))
-        {
-            castle_extent_transaction_start();
+        if (!castle_extents_exiting)
+            ret = hdl->callback(hdl->data);
+            
+         /* Handled low free space successfully. Get rid of event handler. */
+         list_del(&hdl->list);
+         castle_free(hdl);
 
-            /* Handled low free space successfully. Get rid of event handler. */
-            list_del(&hdl->list);
-            castle_free(hdl);
+         /* Callback failed, add remaining callbacks back to the list and break. */
+         if (ret)
+         {
+             if (!list_empty(&head))
+             {
+                castle_extent_transaction_start();
+                list_append(&castle_lfs_victim_list, &head);
+                castle_extent_transaction_end();
+             }
 
-            continue;
-        }
-
-        break;
+             break;
+         }
     }
-
-    castle_extent_transaction_end();
 }
 
 void castle_extent_free(c_ext_id_t ext_id)
