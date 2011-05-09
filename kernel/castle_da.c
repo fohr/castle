@@ -2410,6 +2410,7 @@ static int castle_da_lfs_ct_space_alloc(struct castle_da_lfs_ct_t *lfs,
                                         int                        use_ssd)
 {
     struct castle_double_array *da = lfs->da;
+    c_ext_id_t internal_ext_id, tree_ext_id, data_ext_id;
 
     /* If the DA is dead already, no need to handle the event anymore. */
     if (da == NULL)
@@ -2428,6 +2429,8 @@ static int castle_da_lfs_ct_space_alloc(struct castle_da_lfs_ct_t *lfs,
     BUG_ON(!lfs->internal_ext.size || !lfs->tree_ext.size || !lfs->data_ext.size);
     BUG_ON(!EXT_ID_INVAL(lfs->internal_ext.ext_id) || !EXT_ID_INVAL(lfs->tree_ext.ext_id) ||
            !EXT_ID_INVAL(lfs->data_ext.ext_id));
+
+    internal_ext_id = tree_ext_id = data_ext_id = INVAL_EXT_ID;
 
     /* Start an extent transaction, to make sure all the extent operations are atomic. */
     castle_extent_transaction_start();
@@ -2527,25 +2530,24 @@ no_space:
     if (!is_realloc)
         atomic_inc(&da->lfs_victim_count);
 
+    /* Take a copy of ext IDs. */
+    internal_ext_id = lfs->internal_ext.ext_id;
+    tree_ext_id = lfs->tree_ext.ext_id;
+    BUG_ON(!EXT_ID_INVAL(lfs->data_ext.ext_id));
+
+    /* Reset ext ids. */
+    lfs->internal_ext.ext_id = lfs->tree_ext.ext_id = lfs->data_ext.ext_id = INVAL_EXT_ID;
+    lfs->leafs_on_ssds = lfs->internals_on_ssds = 0;
+
     /* End extent transaction. */
     castle_extent_transaction_end();
 
     /* Incase of failure release free space. It is safe to call castle_extent_free as it doesnt
      * try to get global extent lock again. */
-    if (!EXT_ID_INVAL(lfs->internal_ext.ext_id))
-    {
-        castle_extent_free(lfs->internal_ext.ext_id);
-        lfs->internal_ext.ext_id = INVAL_EXT_ID;
-    }
-    if (!EXT_ID_INVAL(lfs->tree_ext.ext_id))
-    {
-        castle_extent_free(lfs->tree_ext.ext_id);
-        lfs->tree_ext.ext_id = INVAL_EXT_ID;
-    }
-
-    BUG_ON(!EXT_ID_INVAL(lfs->data_ext.ext_id));
-
-    lfs->leafs_on_ssds = lfs->internals_on_ssds = 0;
+    if (!EXT_ID_INVAL(internal_ext_id))
+        castle_extent_free(internal_ext_id);
+    if (!EXT_ID_INVAL(tree_ext_id))
+        castle_extent_free(tree_ext_id);
 
     debug("Failed to allocate from realloc\n");
 
