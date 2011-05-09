@@ -2284,8 +2284,8 @@ static int castle_da_no_disk_space(struct castle_double_array *da)
 
 /**
  * Set structure for Low Free Space (LFS) handler. This functions sets the size of each
- * extent that got to be created by the LFS handler when more space is available. LFS handler 
- * would allocate space and fill the extent ids in the same structure. 
+ * extent that got to be created by the LFS handler when more space is available. LFS handler
+ * would allocate space and fill the extent ids in the same structure.
  *
  * @param [inout] LFS Structure.
  * @param [in] Size of Internal tree extent size (in chunks).
@@ -2334,7 +2334,7 @@ static void castle_da_lfs_ct_reset(struct castle_da_lfs_ct_t *lfs)
     lfs->space_reserved = 0;
     lfs->leafs_on_ssds = lfs->internals_on_ssds = 0;
 
-    /* Make sure all writes are completed, before next thread tries to do some checks 
+    /* Make sure all writes are completed, before next thread tries to do some checks
      * during lfs_init. */
     wmb();
 }
@@ -2388,7 +2388,7 @@ static void castle_da_lfs_ct_init_tree(struct castle_component_tree *ct,
 }
 
 /**
- * Low Freespace handler for Component Tree extents. Gets called by extents code, when more 
+ * Low Freespace handler for Component Tree extents. Gets called by extents code, when more
  * space is available.
  *
  * @param [inout] lfs           - Low Free Space structure.
@@ -2512,7 +2512,7 @@ static int castle_da_lfs_ct_space_alloc(struct castle_da_lfs_ct_t *lfs,
     /* Make sure all writes are completed, before decrementing victim count. */
     wmb();
 
-    /* If it's a reallocation (last allocation failed due to low free space), reduce the count of lfs 
+    /* If it's a reallocation (last allocation failed due to low free space), reduce the count of lfs
      * victims in DA; If there are no more victims left for DA, then restart merges. */
     if (is_realloc && atomic_dec_and_test(&da->lfs_victim_count))
         castle_da_merge_restart(da, NULL);
@@ -2530,7 +2530,7 @@ no_space:
     /* End extent transaction. */
     castle_extent_transaction_end();
 
-    /* Incase of failure release free space. It is safe to call castle_extent_free as it doesnt 
+    /* Incase of failure release free space. It is safe to call castle_extent_free as it doesnt
      * try to get global extent lock again. */
     if (!EXT_ID_INVAL(lfs->internal_ext.ext_id))
     {
@@ -2553,7 +2553,7 @@ no_space:
 }
 
 /**
- * Low Freespace event handler function for T0 extents. Will be called by extent code 
+ * Low Freespace event handler function for T0 extents. Will be called by extent code
  * when more space is available.
  *
  * @param [inout] data - void * for lfs structure
@@ -2570,7 +2570,7 @@ static int castle_da_lfs_rwct_callback(void *data)
 }
 
 /**
- * Low Freespace event handler function for merge extents. Will be called by extent code 
+ * Low Freespace event handler function for merge extents. Will be called by extent code
  * when more space is available.
  *
  * @param [inout] data - void * for lfs structure
@@ -2642,28 +2642,28 @@ static int castle_da_merge_extents_alloc(struct castle_da_merge *merge)
     if (!lfs->space_reserved)
     {
         /* Initialize the lfs structure with required extent sizes. */
-        castle_da_lfs_ct_init(lfs, 
-                              CHUNK(internal_tree_size), 
-                              CHUNK(tree_size), 
+        castle_da_lfs_ct_init(lfs,
+                              CHUNK(internal_tree_size),
+                              CHUNK(tree_size),
                               CHUNK(data_size));
 
         /* Allocate space from freespace. */
-        ret = castle_da_lfs_ct_space_alloc(lfs, 
+        ret = castle_da_lfs_ct_space_alloc(lfs,
                                            0,   /* First allocation. */
-                                           castle_da_lfs_merge_ct_callback, 
-                                           lfs, 
+                                           castle_da_lfs_merge_ct_callback,
+                                           lfs,
                                            1);  /* Not a T0. Use SSD. */
 
-        /* If failed to allocate space, return error. lfs structure is already set. 
+        /* If failed to allocate space, return error. lfs structure is already set.
          * Low freespace handler would allocate space, when more freespace is available. */
         if (ret)    return ret;
     }
 
     /* Successfully allocated space. Initialize the component tree with alloced extents. */
-    castle_da_lfs_ct_init_tree(merge->out_tree, 
-                               lfs, 
-                               CHUNK(internal_tree_size), 
-                               CHUNK(tree_size), 
+    castle_da_lfs_ct_init_tree(merge->out_tree,
+                               lfs,
+                               CHUNK(internal_tree_size),
+                               CHUNK(tree_size),
                                CHUNK(data_size));
 
     merge->internals_on_ssds = lfs->internals_on_ssds;
