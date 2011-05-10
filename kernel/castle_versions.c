@@ -1083,7 +1083,7 @@ int castle_version_attach(version_t version)
 
     if(test_and_set_bit(CV_ATTACHED_BIT, &v->flags))
     {
-        castle_printk(LOG_WARN, "attach bit not valid\n");
+        castle_printk(LOG_WARN, "version is already attached\n");
         ret = -EAGAIN;
         goto out;
     }
