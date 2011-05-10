@@ -272,7 +272,6 @@ static struct kmem_cache      *castle_io_array_cache = NULL;
 
 /* Following LIST_HEADs are protected by castle_cache_block_hash_lock. */
 static               LIST_HEAD(castle_cache_extent_dirtylist);      /**< Extents with dirty c2bs  */
-static               LIST_HEAD(castle_cache_dirtylist);             /**< Dirty c2bs               */
 static               LIST_HEAD(castle_cache_cleanlist);             /**< Clean c2bs               */
 static atomic_t                castle_cache_cleanlist_size;         /**< Blocks on the cleanlist  */
 static atomic_t                castle_cache_cleanlist_softpin_size; /**< Softpin blks on cleanlist*/
@@ -749,93 +748,86 @@ static inline int c2b_softpin(c2_block_t *c2b)
 }
 
 /**
- * Remove a per-extent dirtylist from the list of dirtylists.
+ * Remove per-extent dirtytree from global dirtytrees list.
  *
  * @also _castle_extent_free()
  */
-void castle_cache_extent_dirtylist_remove(c_ext_dirtylist_t *dirtylist)
+void castle_cache_extent_dirtylist_remove(c_ext_dirtytree_t *dirtytree)
 {
     spin_lock(&castle_cache_block_hash_lock);
-    list_del_init(&dirtylist->list);
+    list_del_init(&dirtytree->list);
     spin_unlock(&castle_cache_block_hash_lock);
 }
 
 /**
- * Insert a per-extent dirtylist into the list of dirtylists.
+ * Insert per-extent dirtytree onto global list of dirtytrees.
  *
- * @also c2_dirtylist_insert()
+ * @also c2_dirtytree_insert()
  */
-static void castle_cache_extent_dirtylist_insert(c_ext_dirtylist_t *dirtylist)
+static void castle_cache_extent_dirtylist_insert(c_ext_dirtytree_t *dirtytree)
 {
     spin_lock(&castle_cache_block_hash_lock);
-    list_add_tail(&dirtylist->list, &castle_cache_extent_dirtylist);
+    list_add_tail(&dirtytree->list, &castle_cache_extent_dirtylist);
     spin_unlock(&castle_cache_block_hash_lock);
 }
 
 /**
- * Remove a c2b from its per-extent dirtylist.
+ * Remove a c2b from its per-extent dirtytree.
  *
  * @param c2b   Block to remove
  */
-static int c2_dirtylist_remove(c2_block_t *c2b)
+static int c2_dirtytree_remove(c2_block_t *c2b)
 {
-    c_ext_dirtylist_t *dirtylist;
+    c_ext_dirtytree_t *dirtytree;
     unsigned long flags;
 
     BUG_ON(atomic_read(&c2b->count) == 0);
 
-    /* Get dirtylist and holds its lock. */
-    dirtylist = castle_extent_dirtylist_get(c2b->cep.ext_id);
-    BUG_ON(!dirtylist);
-    spin_lock_irqsave(&dirtylist->lock, flags);
+    /* Get extent dirtytree from c2b. */
+    dirtytree = c2b->dirtytree;
+    BUG_ON(!dirtytree);
+    spin_lock_irqsave(&dirtytree->lock, flags);
 
     /* Remove c2b from the tree. */
-    BUG_ON(dirtylist->count < 1);
-    dirtylist->count--;
-    if (unlikely(dirtylist->count == 0))
-    {
-        /* No more dirty c2bs in the RB tree:
-         * - remove dirtylist from list of dirty extents
-         * - drop 'has dirty c2bs' reference */
-        castle_cache_extent_dirtylist_remove(dirtylist);
-        castle_extent_dirtylist_put(c2b->cep.ext_id);
-    }
-    rb_erase(&c2b->rb_dirtylist, &dirtylist->rb_root);
+    rb_erase(&c2b->rb_dirtytree, &dirtytree->rb_root);
+    if (RB_EMPTY_ROOT(&dirtytree->rb_root))
+        /* Last dirty c2b for this extent, remove it from the global
+         * list of dirty extents. */
+        castle_cache_extent_dirtylist_remove(dirtytree);
 
-    /* Release lock and put reference, potentially freeing the dirtylist if
+    /* Release lock and put reference, potentially freeing the dirtytree if
      * the extent has already been freed. */
-    spin_unlock_irqrestore(&dirtylist->lock, flags);
-    castle_extent_dirtylist_put(c2b->cep.ext_id);
+    spin_unlock_irqrestore(&dirtytree->lock, flags);
+    castle_extent_dirtytree_put(c2b->cep.ext_id);
+    c2b->dirtytree = NULL;
 
     return EXIT_SUCCESS;
 }
 
 /**
- * Place a c2b onto its per-extent dirtylist.
+ * Place a c2b onto its per-extent dirtytree.
  *
  * @param c2b   Block to insert
  */
-static int c2_dirtylist_insert(c2_block_t *c2b)
+static int c2_dirtytree_insert(c2_block_t *c2b)
 {
     struct rb_node **p, *parent = NULL;
-    c_ext_dirtylist_t *dirtylist;
+    c_ext_dirtytree_t *dirtytree;
     c2_block_t *tree_c2b;
     unsigned long flags;
     int cmp;
 
-    BUG_ON(atomic_read(&c2b->count) == 0);
-
-    /* Get dirtylist and hold its lock while we manipulate the tree. */
-    dirtylist = castle_extent_dirtylist_get(c2b->cep.ext_id);
-    BUG_ON(!dirtylist);
-    spin_lock_irqsave(&dirtylist->lock, flags);
+    /* Get dirtytree and hold its lock while we manipulate the tree. */
+    dirtytree = castle_extent_dirtytree_get(c2b->cep.ext_id);
+    BUG_ON(!dirtytree);
+    spin_lock_irqsave(&dirtytree->lock, flags);
 
     /* Find position in tree. */
-    p = &dirtylist->rb_root.rb_node;
+    p = &dirtytree->rb_root.rb_node;
     while (*p)
     {
         parent = *p;
-        tree_c2b = rb_entry(parent, c2_block_t, rb_dirtylist);
+        tree_c2b = rb_entry(parent, c2_block_t, rb_dirtytree);
 
         cmp = EXT_POS_COMP(c2b->cep, tree_c2b->cep);
         if (cmp < 0)
@@ -861,35 +853,28 @@ static int c2_dirtylist_insert(c2_block_t *c2b)
         }
     }
 
-    /* Insert c2b into the tree. */
-    BUG_ON(dirtylist->count < 0);
-    if (unlikely(++dirtylist->count == 1))
-    {
-        /* First dirty c2b for this extent.
-         *
-         * - place the per-extent c2b dirtylist onto the list of dirty extents
-         * - get a reference for the per-extent c2b dirtylist for the duration
-         *   of its life in tree */
-        castle_cache_extent_dirtylist_insert(dirtylist);
-        castle_extent_dirtylist_get(c2b->cep.ext_id);
-    }
-    rb_link_node(&c2b->rb_dirtylist, parent, p);
-    rb_insert_color(&c2b->rb_dirtylist, &dirtylist->rb_root);
+    /* Insert dirty c2b into the tree. */
+    if (RB_EMPTY_ROOT(&dirtytree->rb_root))
+        /* First dirty c2b for this extent, place it onto the global
+         * list of dirty extents. */
+        castle_cache_extent_dirtylist_insert(dirtytree);
+    rb_link_node(&c2b->rb_dirtytree, parent, p);
+    rb_insert_color(&c2b->rb_dirtytree, &dirtytree->rb_root);
 
-    /* Release lock and put reference. */
-    spin_unlock_irqrestore(&dirtylist->lock, flags);
-    castle_extent_dirtylist_put(c2b->cep.ext_id);
+    /* Keep the reference until the c2b is clean but drop the lock. */
+    spin_unlock_irqrestore(&dirtytree->lock, flags);
+    c2b->dirtytree = dirtytree;
 
     return EXIT_SUCCESS;
 }
 
 /**
- * Mark c2b and associated c2ps dirty and place on dirtylist.
+ * Mark c2b and associated c2ps dirty and place on dirtytree.
  *
  * @param c2b   c2b to mark as dirty.
  *
- * - Insert c2b into per-extent RB-tree dirtylist
- * - Move c2b from cleanlist to dirtylist
+ * - Insert c2b into per-extent RB-tree dirtytree
+ * - Move c2b from cleanlist to dirtytree
  *   (also occurs when we free blocks in hash_clean())
  * - Update cleanlist accounting.
  *
@@ -907,24 +892,23 @@ void dirty_c2b(c2_block_t *c2b)
     /* With overlapping c2bs we cannot rely on this c2b being dirty. We have to dirty
        all c2ps. */
     nr_c2ps = castle_cache_pages_to_c2ps(c2b->nr_pages);
-    for(i=0; i<nr_c2ps; i++)
+    for (i = 0; i < nr_c2ps; i++)
         dirty_c2p(c2b->c2ps[i]);
 
     if (!c2b_dirty(c2b))
     {
-        c2_dirtylist_insert(c2b);
-
+        /* Remove from cleanlist and do cache list accounting. */
         spin_lock_irqsave(&castle_cache_block_hash_lock, flags);
-
-        list_move_tail(&c2b->dirty, &castle_cache_dirtylist);
-        /* Cleanlist accounting. */
+        list_del(&c2b->clean);
         BUG_ON(atomic_read(&castle_cache_cleanlist_size) <= 0);
         atomic_dec(&castle_cache_cleanlist_size);
         if (c2b_softpin(c2b))
             atomic_dec(&castle_cache_cleanlist_softpin_size);
         set_c2b_dirty(c2b);
-
         spin_unlock_irqrestore(&castle_cache_block_hash_lock, flags);
+
+        /* Place dirty c2b onto per-extent dirtytree. */
+        c2_dirtytree_insert(c2b);
     }
 }
 
@@ -933,14 +917,14 @@ void dirty_c2b(c2_block_t *c2b)
  *
  * @param c2b   c2b to mark as clean.
  *
- * - Remove c2b from per-extent RB-tree dirtylist
- * - Move c2b from cache dirtylist to cache cleanlist
+ * - Remove c2b from per-extent RB-tree dirtytree
+ * - Place c2b onto cache cleanlist
  *   (also occurs in hash_insert() for new c2bs)
  * - Update cleanlist accounting.
  * - Handles special case of remap c2bs which can have a clean c2b but dirty c2ps
  *
  * @also castle_cache_block_hash_insert()
- * @also c2_dirtylist_remove()
+ * @also c2_dirtytree_remove()
  * @also I/O callback handlers (callers)
  */
 void clean_c2b(c2_block_t *c2b)
@@ -953,24 +937,22 @@ void clean_c2b(c2_block_t *c2b)
 
     /* Clean all c2ps. */
     nr_c2ps = castle_cache_pages_to_c2ps(c2b->nr_pages);
-    for(i=0; i<nr_c2ps; i++)
+    for (i = 0; i < nr_c2ps; i++)
         clean_c2p(c2b->c2ps[i]);
 
     if (c2b_remap(c2b) && !c2b_dirty(c2b))
         return;
 
-    /* Clean the c2b. */
-    c2_dirtylist_remove(c2b);
+    /* Remove from per-extent dirtytree. */
+    c2_dirtytree_remove(c2b);
 
+    /* Insert onto cleanlist and do cache list accounting. */
     spin_lock_irqsave(&castle_cache_block_hash_lock, flags);
-
-    list_move_tail(&c2b->clean, &castle_cache_cleanlist);
-    /* Cleanlist accounting. */
+    list_add_tail(&c2b->clean, &castle_cache_cleanlist);
     atomic_inc(&castle_cache_cleanlist_size);
     if (c2b_softpin(c2b))
         atomic_inc(&castle_cache_cleanlist_softpin_size);
     clear_c2b_dirty(c2b); 
-
     spin_unlock_irqrestore(&castle_cache_block_hash_lock, flags);
 }
 
@@ -1970,10 +1952,7 @@ static inline c2_block_t* _castle_cache_block_hash_get(c_ext_pos_t cep,
              * reference for them so it doesn't get removed. */
             get_c2b(c2b);
 
-            /* Move to the end of the appropriate list. */
-            if(c2b_dirty(c2b))
-                list_move_tail(&c2b->dirty, &castle_cache_dirtylist);
-            else
+            if (!c2b_dirty(c2b))
                 list_move_tail(&c2b->clean, &castle_cache_cleanlist);
         }
         else if (atomic_read(&c2b->count) == 0)
@@ -2008,7 +1987,7 @@ static inline c2_block_t* castle_cache_block_hash_get(c_ext_pos_t cep,
 }
 
 /**
- * Find block matching (cep, nr_pages) and demote it in the clean/dirtylist.
+ * Find block matching (cep, nr_pages) and demote it in the clean/dirtytree.
  *
  * NOTE: does not obtain an addition reference on any block returned.  The
  * caller is responsible for obtaining this if required.
@@ -4246,7 +4225,7 @@ static int castle_cache_flush(void *unused)
         {
             int returning;
             spin_lock_irq(&castle_cache_block_hash_lock);
-            returning = list_empty(&castle_cache_dirtylist);
+            returning = list_empty(&castle_cache_dirtytree);
             spin_unlock_irq(&castle_cache_block_hash_lock);
             if (returning)
                  break;
@@ -4270,7 +4249,7 @@ static int castle_cache_flush(void *unused)
 next_batch:        
         batch_idx = 0;
         spin_lock_irq(&castle_cache_block_hash_lock);
-        list_for_each_safe(l, t, &castle_cache_dirtylist)
+        list_for_each_safe(l, t, &castle_cache_dirtytree)
         {
             if(!exiting && (to_flush <= 0))
                 break;
@@ -4289,7 +4268,7 @@ next_batch:
                 continue;
             }
             /* This is slightly dangerous, but should be fine */
-            list_move_tail(l, &castle_cache_dirtylist);
+            list_move_tail(l, &castle_cache_dirtytree);
             get_c2b(c2b);
             /* It's possible that not all the pages in the c2b are dirty.
                So we may actually flush less than we wanted to, but this only affects the
@@ -4382,7 +4361,7 @@ int castle_cache_extent_flush(c_ext_id_t ext_id, uint64_t start, uint64_t size)
 {
     c2_block_t *c2b;
     c_byte_off_t end_offset;
-    c_ext_dirtylist_t *dirtylist;
+    c_ext_dirtytree_t *dirtytree;
     struct rb_node **p, *parent = NULL;
     int i, batch_idx, ret;
     atomic_t in_flight = ATOMIC(0);
@@ -4403,14 +4382,14 @@ int castle_cache_extent_flush(c_ext_id_t ext_id, uint64_t start, uint64_t size)
     {
         batch_idx = 0;
 
-        /* Get dirtylist and hold its lock. */
-        dirtylist = castle_extent_dirtylist_get(ext_id);
-        if (dirtylist == NULL)
+        /* Get dirtytree and hold its lock. */
+        dirtytree = castle_extent_dirtytree_get(ext_id);
+        if (dirtytree == NULL)
             goto out; 
-        spin_lock_irq(&dirtylist->lock);
+        spin_lock_irq(&dirtytree->lock);
 
         /* Find c2b closest to the beginning of the extent. */
-        p = &dirtylist->rb_root.rb_node;
+        p = &dirtytree->rb_root.rb_node;
         while (*p)
         {
             parent = *p;
@@ -4420,7 +4399,7 @@ int castle_cache_extent_flush(c_ext_id_t ext_id, uint64_t start, uint64_t size)
         /* Traverse dirty c2bs until we reach end_offset. */
         while (parent)
         {
-            c2b = rb_entry(parent, c2_block_t, rb_dirtylist);
+            c2b = rb_entry(parent, c2_block_t, rb_dirtytree);
 
             /* We're done if we reach end_offset. */
             if (c2b->cep.offset > end_offset)
@@ -4462,8 +4441,8 @@ next_pg:    parent = rb_next(parent);
         }
 
         /* Release holds. */
-        spin_unlock_irq(&dirtylist->lock);
-        castle_extent_dirtylist_put(ext_id);
+        spin_unlock_irq(&dirtytree->lock);
+        castle_extent_dirtytree_put(ext_id);
 
         /* Flush batch of c2bs. */
         for (i = 0; i < batch_idx; i++)
