@@ -1378,7 +1378,6 @@ struct castle_slave* castle_claim(uint32_t new_dev)
     struct castle_fs_superblock *fs_sb;
     struct castle_slave_superblock *cs_sb;
 
-    printk("castle_claim device 0x%x %u\n", new_dev, new_dev);
     debug("Claiming: in_atomic=%d.\n", in_atomic());
 
     if (slave_id >= MAX_NR_SLAVES)
