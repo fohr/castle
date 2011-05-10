@@ -4,21 +4,18 @@
 #include "castle.h"
 
 /**
- * Extent dirtylist structure.
+ * Extent dirtytree structure.
  *
- * ref_cnt: 1 reference while ext_id exists
- *          1 reference for each _get()
- *          1 reference if there are dirty c2bs on rb_root
+ * ref_cnt: 1 reference held by the extent
+ *          1 reference per dirty c2b
  */
-typedef struct c_ext_dirtylist {
+typedef struct castle_extent_dirtytree {
     c_ext_id_t          ext_id;     /**< Extent ID this dirtylist describes.        */
     spinlock_t          lock;       /**< Protects count, rb_root.                   */
-    int                 count;      /**< Number of dirty c2bs on rb_root.           */
     atomic_t            ref_cnt;    /**< References to this dirtylist.              */
     struct rb_root      rb_root;    /**< RB-tree of dirty c2bs.                     */
     struct list_head    list;       /**< Position on castle_cache_extent_dirtylist. */
-    struct list_head    hash_list;  /**< Position on castle_extent_dirtylists_hash. */
-} c_ext_dirtylist_t;
+} c_ext_dirtytree_t;
 
 void                castle_extent_transaction_start         (void);
 void                castle_extent_transaction_end           (void);
@@ -44,8 +41,8 @@ uint32_t            castle_extent_map_get                   (void*          ext_
                                                              c_chk_t        offset,
                                                              c_disk_chk_t  *chk_maps,
                                                              int            rw);
-c_ext_dirtylist_t  *castle_extent_dirtylist_get             (c_ext_id_t     ext_id);
-void                castle_extent_dirtylist_put             (c_ext_id_t     ext_id);
+c_ext_dirtytree_t  *castle_extent_dirtytree_get             (c_ext_id_t     ext_id);
+void                castle_extent_dirtytree_put             (c_ext_id_t     ext_id);
 
 
 struct castle_extents_superblock* castle_extents_super_block_get (void);

@@ -74,30 +74,29 @@ static DEFINE_MUTEX(castle_extents_mutex);
 static int castle_extents_exiting = 0;
 
 typedef struct castle_extent {
-    c_ext_id_t          ext_id;         /* Unique extent ID */
-    c_chk_cnt_t         size;           /* Number of chunks */
-    c_rda_type_t        type;           /* RDA type */
-    uint32_t            k_factor;       /* K factor in K-RDA */
-    c_ext_pos_t         maps_cep;       /* Offset of chunk mapping in logical extent */
+    c_ext_id_t          ext_id;         /* Unique extent ID                             */
+    c_chk_cnt_t         size;           /* Number of chunks                             */
+    c_rda_type_t        type;           /* RDA type                                     */
+    uint32_t            k_factor;       /* K factor in K-RDA                            */
+    c_ext_pos_t         maps_cep;       /* Offset of chunk mapping in logical extent    */
     struct list_head    hash_list;
     struct list_head    rebuild_list;
-    struct list_head    verify_list;    /* Used for testing. */
+    struct list_head    verify_list;    /* Used for testing.                            */
     uint32_t            curr_rebuild_seqno;
     spinlock_t          shadow_map_lock;
     c_disk_chk_t        *shadow_map;
-    int                 use_shadow_map; /* Extent is currently being remapped */
+    int                 use_shadow_map; /* Extent is currently being remapped           */
     atomic_t            ref_cnt;
     uint8_t             alive;
-    c_ext_dirtylist_t  *dirtylist;      /**< Extent c2b dirtylist */
-    struct work_struct *work;           /**< work structure to schedule extent free. */
+    c_ext_dirtytree_t  *dirtytree;      /**< RB-tree of dirty c2bs.                     */
+    struct work_struct *work;           /**< work structure to schedule extent free.    */
     uint8_t             deleted;        /**< Marked when an extent is not refrenced by 
-                                             anybody anymore. Safe to free it now. */
-    c_ext_type_t        ext_type;       /**< Type of extent. */
-    da_id_t             da_id;          /**< DA that extent corresponds to. */
+                                             anybody anymore. Safe to free it now.      */
+    c_ext_type_t        ext_type;       /**< Type of extent.                            */
+    da_id_t             da_id;          /**< DA that extent corresponds to.             */
 } c_ext_t;
 
 static struct list_head *castle_extents_hash = NULL;
-static struct list_head *castle_extent_dirtylists_hash = NULL;
 static c_ext_free_t meta_ext_free;
 
 /**
@@ -119,8 +118,6 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t   rda_type,
 
 DEFINE_HASH_TBL(castle_extents, castle_extents_hash, CASTLE_EXTENTS_HASH_SIZE,
                 c_ext_t, hash_list, c_ext_id_t, ext_id);
-DEFINE_HASH_TBL(castle_extent_dirtylists, castle_extent_dirtylists_hash, CASTLE_EXTENTS_HASH_SIZE,
-                c_ext_dirtylist_t, hash_list, c_ext_id_t, ext_id);
 
 
 c_ext_t sup_ext = { 
@@ -158,15 +155,15 @@ static atomic_t             castle_extents_dead_count = ATOMIC(0);
 uint32_t castle_rebuild_fs_version = 0;
 
 /**
- * Allocate and initialise extent and per-extent dirtylist structures.
+ * Allocate and initialise extent and per-extent dirtytree structures.
  */
 static c_ext_t * castle_ext_alloc(c_ext_id_t ext_id)
 {
     c_ext_t *ext = castle_zalloc(sizeof(c_ext_t), GFP_KERNEL);
     if (!ext)
         return NULL;
-    ext->dirtylist = castle_zalloc(sizeof(c_ext_dirtylist_t), GFP_KERNEL);
-    if (!ext->dirtylist)
+    ext->dirtytree = castle_zalloc(sizeof(c_ext_dirtytree_t), GFP_KERNEL);
+    if (!ext->dirtytree)
     {
         castle_free(ext);
         return NULL;
@@ -183,14 +180,12 @@ static c_ext_t * castle_ext_alloc(c_ext_id_t ext_id)
     atomic_set(&ext->ref_cnt, 1);
     spin_lock_init(&ext->shadow_map_lock);
 
-    /* Per-extent RB dirtylist structure. */
-    ext->dirtylist->ext_id  = ext_id;
-    ext->dirtylist->count   = 0;
-    ext->dirtylist->ref_cnt = ATOMIC(1);
-    ext->dirtylist->rb_root = RB_ROOT;
-    INIT_LIST_HEAD(&ext->dirtylist->list);
-    INIT_LIST_HEAD(&ext->dirtylist->hash_list);
-    spin_lock_init(&ext->dirtylist->lock);
+    /* Per-extent RB dirtytree structure. */
+    ext->dirtytree->ext_id  = ext_id;
+    ext->dirtytree->ref_cnt = ATOMIC(1);
+    ext->dirtytree->rb_root = RB_ROOT;
+    INIT_LIST_HEAD(&ext->dirtytree->list);
+    spin_lock_init(&ext->dirtytree->lock);
 
     debug("Allocated extent ext_id=%lld.\n", ext->ext_id);
 
@@ -227,24 +222,13 @@ int castle_extents_init(void)
     if (!castle_extents_hash)
     {
         castle_printk(LOG_INIT, "Could not allocate extents hash.\n");
-        goto err1;
+        goto err_out;
     }
     castle_extents_hash_init();
 
-    /* Initialise hash table for per-extent dirtylists. */
-    castle_extent_dirtylists_hash = castle_extent_dirtylists_hash_alloc();
-    if (!castle_extent_dirtylists_hash)
-    {
-        castle_printk(LOG_INIT, "Could not allocate extent dirtylists hash.\n");
-        goto err2;
-    }
-    castle_extent_dirtylists_hash_init();
-
     return EXIT_SUCCESS;
 
-err2:
-    castle_free(castle_extents_hash);
-err1:
+err_out:
     return -ENOMEM;
 }
 
@@ -430,7 +414,6 @@ static int castle_extent_micro_ext_create(void)
     BUG_ON(i > MAX_NR_SLAVES);
     micro_ext->k_factor = i;
     CONVERT_EXTENT_TO_MENTRY(micro_ext, &castle_extents_sb->micro_ext);
-    castle_extent_dirtylists_hash_add(micro_ext->dirtylist);
     castle_extents_hash_add(micro_ext);
 
     return 0;
@@ -685,14 +668,13 @@ static int load_extent_from_mentry(struct castle_elist_entry *mstore_entry)
         goto err2;
     }
 
-    castle_extent_dirtylists_hash_add(ext->dirtylist);
     castle_extents_hash_add(ext);
     castle_extent_print(ext, NULL);
 
     return 0;
 
 err2:
-    castle_free(ext->dirtylist);
+    castle_free(ext->dirtytree);
     castle_free(ext);
 err1:
     return ret;
@@ -799,7 +781,6 @@ void castle_extents_fini(void)
      * lock here as this happenes in the module end. */
     castle_extents_hash_iterate_exclusive(castle_extent_hash_remove, NULL);
     castle_free(castle_extents_hash);
-    castle_free(castle_extent_dirtylists_hash);
 }
 
 #define MAX_K_FACTOR   4 
@@ -1268,7 +1249,7 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t     rda_type,
     castle_extents_sb       = castle_extents_super_block_get();
 
     ext->ext_id             = EXT_ID_INVAL(ext_id) ? castle_extents_sb->ext_id_seq : ext_id;
-    ext->dirtylist->ext_id  = ext->ext_id;
+    ext->dirtytree->ext_id  = ext->ext_id;
     ext->size               = count;
     ext->type               = rda_type;
     ext->k_factor           = rda_spec->k_factor;
@@ -1309,7 +1290,6 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t     rda_type,
     }
 
     /* Add extent and extent dirtylist to hash tables. */
-    castle_extent_dirtylists_hash_add(ext->dirtylist);
     castle_extents_hash_add(ext);
 
     /*
@@ -1349,7 +1329,7 @@ __low_space:
 __hell:
     if (ext)
     {
-        castle_free(ext->dirtylist);
+        castle_free(ext->dirtytree);
         castle_free(ext);
     }
 
@@ -1506,8 +1486,8 @@ static void _castle_extent_free(void *data)
     castle_extents_hash_remove(ext);
     castle_extent_space_free(ext, ext->k_factor * ext->size);
 
-    /* Drop 'extent exists' reference on c2b dirtylist. */
-    castle_extent_dirtylist_put(ext_id);
+    /* Drop 'extent exists' reference on c2b dirtytree. */
+    castle_extent_dirtytree_put(ext->dirtytree);
 
     debug("Completed deleting ext: %lld\n", ext_id);
 
@@ -1778,7 +1758,6 @@ c_ext_id_t castle_extent_sup_ext_init(struct castle_slave *cs)
         }
     }
     ext->maps_cep = INVAL_EXT_POS;
-    castle_extent_dirtylists_hash_add(ext->dirtylist);
     castle_extents_hash_add(ext);
     cs->sup_ext = ext->ext_id;
 
@@ -1787,7 +1766,7 @@ c_ext_id_t castle_extent_sup_ext_init(struct castle_slave *cs)
     return ext->ext_id;
 
 err2:
-    castle_free(ext->dirtylist);
+    castle_free(ext->dirtytree);
     castle_free(ext);
 err1:
     return INVAL_EXT_ID;
@@ -1891,46 +1870,32 @@ void castle_extent_put(c_ext_id_t ext_id)
 }
 
 /**
- * Get and hold a reference to RB-tree dirtylist for extent ext_id.
+ * Get and hold a reference to RB-tree dirtytree for extent ext_id.
  *
- * @also castle_extent_dirtylist_put()
+ * @also castle_extent_dirtytree_put()
  */
-c_ext_dirtylist_t* castle_extent_dirtylist_get(c_ext_id_t ext_id)
+c_ext_dirtytree_t* castle_extent_dirtytree_get(c_ext_id_t ext_id)
 {
-    c_ext_dirtylist_t *dirtylist;
-    unsigned long flags;
+    c_ext_t *ext;
 
-    /* Hold the hash lock for the duration of the get.
-     * This way we won't race with a _put() that removes the dirtylist
-     * from the hash. */
-    read_lock_irqsave(&castle_extent_dirtylists_hash_lock, flags);
-    dirtylist = __castle_extent_dirtylists_hash_get(ext_id);
-    if (dirtylist)
-        /* If the ref_cnt is 0 then we are racing with a _put().
-         * Don't return the dirtylist. */
-        if (atomic_inc_return(&dirtylist->ref_cnt) == 1)
-            dirtylist = NULL;
-    read_unlock_irqrestore(&castle_extent_dirtylists_hash_lock, flags);
+    ext = castle_extent_get(ext_id);
+    BUG_ON(!ext);
+    BUG_ON(atomic_inc_return(&ext->dirtytree->ref_cnt) < 2);
 
-    return dirtylist;
+    return ext->dirtytree;
 }
 
 /**
- * Drop reference to RB-tree dirtylist for extent ext_id.
+ * Drop reference to RB-tree dirtytree for extent ext_id.
  *
- * @also castle_extent_dirtylist_get()
+ * @also castle_extent_dirtytree_get()
  */
-void castle_extent_dirtylist_put(c_ext_id_t ext_id)
+void castle_extent_dirtytree_put(c_ext_dirtytree_t *dirtytree)
 {
-    c_ext_dirtylist_t *dirtylist;
-
-    dirtylist = castle_extent_dirtylists_hash_get(ext_id);
-    BUG_ON(!dirtylist); /* _put() implies prior _get() */
-    if (unlikely(atomic_dec_return(&dirtylist->ref_cnt) == 0))
+    if (unlikely(atomic_dec_return(&dirtytree->ref_cnt) == 0))
     {
         BUG_ON(castle_extent_get(ext_id));  /* cannot be in hash now */
-        castle_extent_dirtylists_hash_remove(dirtylist);
-        castle_free(dirtylist);
+        castle_free(dirtytree);
     }
 }
 
