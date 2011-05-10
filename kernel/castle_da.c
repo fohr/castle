@@ -8221,6 +8221,7 @@ int castle_double_array_destroy(da_id_t da_id)
     /* Fail if we cannot find the da in the hash. */
     if(!da)
     {
+        castle_printk(LOG_USERINFO, "No Version Tree exists with id: %u\n", da_id);
         ret = -EINVAL;
         goto err_out;
     }
@@ -8228,6 +8229,9 @@ int castle_double_array_destroy(da_id_t da_id)
     /* Fail if there are attachments to the DA. */
     if(da->attachment_cnt > 0)
     {
+        castle_printk(LOG_USERINFO, "Version Tree %u has %u outstanding attachments\n",
+                      da_id,
+                      da->attachment_cnt);
         ret = -EBUSY;
         goto err_out;
     }
