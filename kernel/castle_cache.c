@@ -5441,7 +5441,7 @@ extern atomic_t current_rebuild_seqno;
  *          TRANSACTION START
  *              - Writedown all meta data structures into a new mstore
  *          TRANSACTION END
- *      
+ *
  *          - Flush all data (extents belong to previous version) and mstore on to disk
  *          - Flush superblocks onto all slaves
  *
@@ -5481,9 +5481,7 @@ static int castle_periodic_checkpoint(void *unused)
         if (!castle_fs_inited)
             continue;
 
-        castle_printk(LOG_DEVEL, "*****Checkpoint freq %d *******\n", checkpoint_frequency);
-
-        castle_printk(LOG_DEVEL, "*****Checkpoint start**********\n");
+        castle_printk(LOG_DEVEL, "***** Checkpoint start (freq %ds) *****\n", checkpoint_frequency);
         castle_trace_cache(TRACE_START, TRACE_CACHE_CHECKPOINT_ID, 0);
 
         /* Perform any necessary work before we take the transaction lock. */
@@ -5536,7 +5534,7 @@ static int castle_periodic_checkpoint(void *unused)
         }
         castle_checkpoint_version_inc();
 
-        castle_printk(LOG_DEVEL, "*****Completed checkpoint of version: %u*****\n", version);
+        castle_printk(LOG_DEVEL, "***** Completed checkpoint of version: %u *****\n", version);
         castle_trace_cache(TRACE_END, TRACE_CACHE_CHECKPOINT_ID, 0);
     } while (!exit_loop);
     /* Clean exit, return success. */
