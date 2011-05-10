@@ -394,11 +394,13 @@ static void castle_freespace_foreach_slave(int (*fn)(struct castle_slave *cs, vo
     struct list_head *lh;
     struct castle_slave *slave;
 
-    list_for_each(lh, &castle_slaves.slaves)
+    rcu_read_lock();
+    list_for_each_rcu(lh, &castle_slaves.slaves)
     {
         slave = list_entry(lh, struct castle_slave, list);
         fn(slave, data);
     }
+    rcu_read_unlock();
 }
 
 static int castle_freespace_slave_writeback(struct castle_slave *cs, void *unused)

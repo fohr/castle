@@ -4,12 +4,6 @@ set -e
 
 . /usr/share/castle-fs/init-utils
 
-if kernel_fs_running
-then
-    echo "$0 cannot be used when castle-fs is running"
-    exit 0
-fi
-
 for disk in "$@"
 do
   mkcastlefs "$disk"

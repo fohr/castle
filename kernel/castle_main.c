@@ -140,7 +140,8 @@ void castle_fs_superblock_slaves_update(struct castle_fs_superblock *fs_sb)
     struct list_head            *lh;
     int                         i;
 
-    list_for_each(lh, &castle_slaves.slaves)
+    rcu_read_lock();
+    list_for_each_rcu(lh, &castle_slaves.slaves)
     {
         cs = list_entry(lh, struct castle_slave, list);
         for (i=0; i<fs_sb->nr_slaves; i++)
@@ -170,6 +171,7 @@ void castle_fs_superblock_slaves_update(struct castle_fs_superblock *fs_sb)
             }
         }
     }
+    rcu_read_unlock();
 }
 
 static void castle_fs_superblock_init(struct castle_fs_superblock *fs_sb)
@@ -191,11 +193,13 @@ static void castle_fs_superblock_init(struct castle_fs_superblock *fs_sb)
         fs_sb->mstore[i] = INVAL_EXT_POS;
 
     i = 0;
-    list_for_each(lh, &castle_slaves.slaves)
+    rcu_read_lock();
+    list_for_each_rcu(lh, &castle_slaves.slaves)
     {
         cs = list_entry(lh, struct castle_slave, list);
         fs_sb->slaves[i++] = cs->uuid;
     }
+    rcu_read_unlock();
     fs_sb->nr_slaves = i;
 }
 
@@ -450,15 +454,17 @@ static struct castle_slave *castle_slave_ghost_add(uint32_t uuid)
 {
     struct castle_slave *slave;
 
+    BUG_ON(!CASTLE_IN_TRANSACTION);
     if (!(slave = castle_zalloc(sizeof(struct castle_slave), GFP_KERNEL)))
         BUG_ON(!slave);
     slave->uuid = uuid;
     slave->id = slave_id++;
     slave->sup_ext = INVAL_EXT_ID;
     mutex_init(&slave->sblk_lock);
+    INIT_RCU_HEAD(&slave->rcu);
     set_bit(CASTLE_SLAVE_GHOST_BIT, &slave->flags);
     set_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags);
-    list_add(&slave->list, &castle_slaves.slaves);
+    list_add_rcu(&slave->list, &castle_slaves.slaves);
 
     if (castle_sysfs_slave_add(slave) != 0)
         castle_printk(LOG_DEVEL, "Could not add slave to sysfs.\n");
@@ -507,7 +513,8 @@ int castle_fs_init(void)
          * Each time we pass through this loop, we'll calculate the next-highest fs version on
          * any slave. Also not how many slaves we have found.
          */
-        list_for_each(lh, &castle_slaves.slaves)
+        rcu_read_lock();
+        list_for_each_rcu(lh, &castle_slaves.slaves)
         {
             cs = list_entry(lh, struct castle_slave, list);
             for (i=0; i<2; i++)
@@ -516,6 +523,7 @@ int castle_fs_init(void)
                     version_to_check = cs->fs_versions[i];
             nr_slaves++;
         }
+        rcu_read_unlock();
 
         /* No lower version found, so this is the lowest. */
         if (version_to_check == last_version_checked)
@@ -525,7 +533,8 @@ int castle_fs_init(void)
 
         /* Find how many slaves support this fs version. */
         hits = 0;
-        list_for_each(lh, &castle_slaves.slaves)
+        rcu_read_lock();
+        list_for_each_rcu(lh, &castle_slaves.slaves)
         {
             cs = list_entry(lh, struct castle_slave, list);
             for (i=0; i<2; i++)
@@ -537,6 +546,7 @@ int castle_fs_init(void)
                 }
             }
         }
+        rcu_read_unlock();
 
         if (hits == nr_slaves)
         {
@@ -589,7 +599,8 @@ int castle_fs_init(void)
      * 2. If there is a slave which did not support the version, mark it as out-of-service.
      */
     prev_new_dev = -1;
-    list_for_each(lh, &castle_slaves.slaves)
+    rcu_read_lock();
+    list_for_each_rcu(lh, &castle_slaves.slaves)
     {
         cs = list_entry(lh, struct castle_slave, list);
 
@@ -611,9 +622,11 @@ int castle_fs_init(void)
             set_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags);
         }
     }
+    rcu_read_unlock();
 
     /* Load super blocks for the Best Common Version from all valid slaves. */
-    list_for_each(lh, &castle_slaves.slaves)
+    rcu_read_lock();
+    list_for_each_rcu(lh, &castle_slaves.slaves)
     {
         cs = list_entry(lh, struct castle_slave, list);
         if (test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags))
@@ -631,11 +644,13 @@ int castle_fs_init(void)
         }
         castle_slave_superblock_print(&cs->cs_superblock);
     }
+    rcu_read_unlock();
 
     first = 1;
     /* Make sure that superblocks of the all non-new devices are
        the same, save the results */
-    list_for_each(lh, &castle_slaves.slaves)
+    rcu_read_lock();
+    list_for_each_rcu(lh, &castle_slaves.slaves)
     {
         cs = list_entry(lh, struct castle_slave, list);
         if (test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags))
@@ -679,11 +694,12 @@ int castle_fs_init(void)
 
         if (i == fs_sb.nr_slaves)
         {
-            castle_printk(LOG_ERROR, "Slave %u doesn't belong to this File system.\n", cs->uuid);
+            castle_printk(LOG_ERROR, "Slave 0x%x doesn't belong to this File system.\n", cs->uuid);
             return -EINVAL;
         }
         castle_fs_superblock_put(cs, 0);
     }
+    rcu_read_unlock();
 
     debug("FS init found %d live slaves out of a total of %d slaves\n", nr_live_slaves, nr_fs_slaves);
     if (slave_count < 2)
@@ -1097,30 +1113,16 @@ static int castle_slave_superblock_read(struct castle_slave *cs)
     cs->fs_versions[0] = cs_sb[0].fs_version;
     cs->fs_versions[1] = cs_sb[1].fs_version;
 
-    if (!errs[0] && !errs[1])
+    /* Check for the uuids of both versions to match. */
+    if ((!errs[0] && !errs[1]) && (cs_sb[0].pub.uuid != cs_sb[1].pub.uuid))
     {
-        /* Check if the versions are non-consecutive. */
-        if (abs(cs_sb[0].fs_version - cs_sb[1].fs_version) != 1)        
-        {
-            castle_printk(LOG_ERROR, "Disk 0x%x has non-consequtive versions\n",
-                    cs_sb[0].pub.uuid);
+        castle_printk(LOG_ERROR, "Found versions with different uuids 0x%x:0x%x\n",
+                cs_sb[0].pub.uuid, cs_sb[1].pub.uuid);
 #ifdef DEBUG
-            BUG();
+        BUG();
 #endif
-            err = -EINVAL;
-            goto error_out;
-        }
-        /* Check for the uuids of both versions to match. */
-        if (cs_sb[0].pub.uuid != cs_sb[1].pub.uuid)
-        {
-            castle_printk(LOG_ERROR, "Found versions with different uuids 0x%x:0x%x\n",
-                    cs_sb[0].pub.uuid, cs_sb[1].pub.uuid);
-#ifdef DEBUG
-            BUG();
-#endif
-            err = -EINVAL;
-            goto error_out;
-        }
+        err = -EINVAL;
+        goto error_out;
     }
 
     castle_printk(LOG_INIT, "Disk superblock found.\n");
@@ -1268,7 +1270,8 @@ int castle_superblocks_writeback(uint32_t version)
     struct list_head *lh;
     struct castle_slave *slave;
 
-    list_for_each(lh, &castle_slaves.slaves)
+    rcu_read_lock();
+    list_for_each_rcu(lh, &castle_slaves.slaves)
     {
         slave = list_entry(lh, struct castle_slave, list);
 
@@ -1279,6 +1282,7 @@ int castle_superblocks_writeback(uint32_t version)
         if (castle_slave_superblocks_writeback(slave, version))
             return -EIO;
     }
+    rcu_read_unlock();
 
     return 0;
 }
@@ -1288,12 +1292,14 @@ struct castle_slave* castle_slave_find_by_id(uint32_t id)
     struct list_head *lh;
     struct castle_slave *slave;
 
-    list_for_each(lh, &castle_slaves.slaves)
+    rcu_read_lock();
+    list_for_each_rcu(lh, &castle_slaves.slaves)
     {
         slave = list_entry(lh, struct castle_slave, list);
         if(slave->id == id)
             return slave;
     }
+    rcu_read_unlock();
 
     return NULL;
 }
@@ -1303,12 +1309,14 @@ struct castle_slave* castle_slave_find_by_uuid(uint32_t uuid)
     struct list_head *lh;
     struct castle_slave *slave;
 
-    list_for_each(lh, &castle_slaves.slaves)
+    rcu_read_lock();
+    list_for_each_rcu(lh, &castle_slaves.slaves)
     {
         slave = list_entry(lh, struct castle_slave, list);
         if(slave->uuid == uuid)
             return slave;
     }
+    rcu_read_unlock();
 
     return NULL;
 }
@@ -1318,12 +1326,14 @@ struct castle_slave* castle_slave_find_by_bdev(struct block_device *bdev)
     struct list_head *lh;
     struct castle_slave *slave;
 
-    list_for_each(lh, &castle_slaves.slaves)
+    rcu_read_lock();
+    list_for_each_rcu(lh, &castle_slaves.slaves)
     {
         slave = list_entry(lh, struct castle_slave, list);
         if(slave->bdev == bdev)
             return slave;
     }
+    rcu_read_unlock();
 
     return NULL;
 }
@@ -1338,7 +1348,8 @@ static int castle_slave_add(struct castle_slave *cs)
     struct list_head *l;
     struct castle_slave *s;
 
-    list_for_each(l, &castle_slaves.slaves)
+    rcu_read_lock();
+    list_for_each_rcu(l, &castle_slaves.slaves)
     {
         s = list_entry(l, struct castle_slave, list);
         if(s->uuid == cs->uuid)
@@ -1348,8 +1359,11 @@ static int castle_slave_add(struct castle_slave *cs)
             return -EINVAL;
         }
     }
+    rcu_read_unlock();
+
     /* If no UUID collision, add to the list */
-    list_add(&cs->list, &castle_slaves.slaves);
+    BUG_ON(!CASTLE_IN_TRANSACTION);
+    list_add_rcu(&cs->list, &castle_slaves.slaves);
     return 0;
 }
 
@@ -1361,14 +1375,26 @@ struct castle_slave* castle_claim(uint32_t new_dev)
     int err;
     char b[BDEVNAME_SIZE];
     struct castle_slave *cs = NULL;
+    struct castle_fs_superblock *fs_sb;
+    struct castle_slave_superblock *cs_sb;
 
+    printk("castle_claim device 0x%x %u\n", new_dev, new_dev);
     debug("Claiming: in_atomic=%d.\n", in_atomic());
+
+    if (slave_id >= MAX_NR_SLAVES)
+    {
+        castle_printk(LOG_ERROR, "Could not add slave 0x%x. Maximum number of slaves has already "
+                                 "been reached,\n", cs->uuid);
+        goto err_out;
+    }
+
     if(!(cs = castle_zalloc(sizeof(struct castle_slave), GFP_KERNEL)))
         goto err_out;
     cs->id          = slave_id++;
     cs->last_access = jiffies;
     cs->sup_ext     = INVAL_EXT_ID;
     mutex_init(&cs->sblk_lock);
+    INIT_RCU_HEAD(&cs->rcu);
 
     dev = new_decode_dev(new_dev);
     bdev = open_by_devnum(dev, FMODE_READ|FMODE_WRITE);
@@ -1411,6 +1437,28 @@ struct castle_slave* castle_claim(uint32_t new_dev)
 
     FAULT(CLAIM_FAULT);
 
+    if (castle_fs_inited)
+    {
+        /*
+         * This is the initial part of 'disk claim after init'.
+         * Set up the relevant superblocks and extents.
+         */
+        castle_printk(LOG_DEVEL, "Claiming disk 0x%x after fs inited\n", cs->uuid);
+
+        /* Indicate that slave cannot yet be used for allocations. */
+        set_bit(CASTLE_SLAVE_CLAIMING_BIT, &cs->flags);
+
+        fs_sb = castle_fs_superblocks_get();
+        fs_sb->slaves[fs_sb->nr_slaves++] = cs->uuid;
+        cs_sb = castle_slave_superblock_get(cs);
+
+        /* Slave is initialised with current fs version. */
+        cs_sb->fs_version = fs_sb->fs_version;
+
+        castle_slave_superblock_put(cs, 1);
+        castle_fs_superblocks_put(fs_sb, 1);
+    }
+
     err = castle_slave_add(cs);
     if(err)
     {
@@ -1418,6 +1466,28 @@ struct castle_slave* castle_claim(uint32_t new_dev)
         goto err_out;
     }
     cs_added = 1;
+
+    if (castle_fs_inited)
+    {
+        /*
+         * The final part of 'disk claim after init'.
+         * Freespace initialisation must occur after the slave has been added to castle_slaves,
+         * otherwise the c2b submits it generates will not find the slave.
+         */
+        castle_freespace_slave_init(cs, cs->new_dev);
+
+        /* Update the micro map to include the new slave. */
+        castle_extent_micro_ext_update(cs);
+
+        /* Mark the slave as available for general use. */
+        clear_bit(CASTLE_SLAVE_CLAIMING_BIT, &cs->flags);
+
+        castle_printk(LOG_USERINFO, "Disk 0x%x [%s] has been successfully added.\n",
+                      cs->uuid, bdevname(bdev, b));
+
+        /* Wake up anybody who is waiting for space .... */
+        castle_extent_lfs_victims_wakeup();
+    }
 
     err = castle_sysfs_slave_add(cs);
     if(err)
@@ -1466,7 +1536,8 @@ void castle_release(struct castle_slave *cs)
         if (!test_bit(CASTLE_SLAVE_REMAPPED_BIT, &cs->flags))
             castle_release_device(cs->bdev);
     }
-    list_del(&cs->list);
+    list_del_rcu(&cs->list);
+    synchronize_rcu();
     castle_free(cs);
 }
 
@@ -2183,7 +2254,8 @@ static void castle_slaves_spindown(struct work_struct *work)
     struct castle_slave_superblock *sb;
     struct list_head *l;
 
-    list_for_each(l, &castle_slaves.slaves)
+    rcu_read_lock();
+    list_for_each_rcu(l, &castle_slaves.slaves)
     {
         struct castle_slave *cs = list_entry(l, struct castle_slave, list);
 
@@ -2208,6 +2280,7 @@ static void castle_slaves_spindown(struct work_struct *work)
             castle_slave_superblock_put(cs, 0);
 #endif
     }
+    rcu_read_unlock();
 }
     
 static struct timer_list spindown_timer; 
@@ -2288,11 +2361,13 @@ static void castle_slaves_free(void)
     cancel_work_sync(&spindown_work_item);
 #endif
 
-    list_for_each_safe(lh, th, &castle_slaves.slaves)
+    rcu_read_lock();
+    list_for_each_safe_rcu(lh, th, &castle_slaves.slaves)
     {
         slave = list_entry(lh, struct castle_slave, list); 
         castle_release(slave);
     }
+    rcu_read_unlock();
 }
 
 static int castle_slaves_init(void)

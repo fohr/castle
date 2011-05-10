@@ -89,7 +89,8 @@ static void castle_events_slave_rebuild_handle(void *unused)
 
     /* Read the sequence number before notification starts. */
     seqno = atomic_read(&current_rebuild_seqno);
-    list_for_each(lh, &castle_slaves.slaves)
+    rcu_read_lock();
+    list_for_each_rcu(lh, &castle_slaves.slaves)
     {
         cs = list_entry(lh, struct castle_slave, list);
         /* Notify about any slaves which have the EVACUATE or OOS bit set, but
@@ -99,6 +100,7 @@ static void castle_events_slave_rebuild_handle(void *unused)
            (!test_bit(CASTLE_SLAVE_REMAPPED_BIT, &cs->flags)))
             castle_events_slave_rebuild(cs->uuid);
     }
+    rcu_read_unlock();
     /* If the sequence number changed, re-notify. */
     if(seqno != atomic_read(&current_rebuild_seqno))
         castle_events_slave_rebuild_notify();

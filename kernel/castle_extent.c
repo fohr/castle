@@ -344,6 +344,52 @@ struct castle_extents_superblock* castle_extents_super_block_get(void)
     return &castle_extents_global_sb;
 }
  
+/**
+ * Adds a new slave into the micro_maps. Used during claims after fs init.
+ *
+ * @param cs    The slave to add to the micro extent maps
+ */
+void castle_extent_micro_ext_update(struct castle_slave * cs)
+{
+    c_ext_t * micro_ext;
+    struct castle_extents_superblock *castle_extents_sb;
+    c_disk_chk_t *micro_maps;
+    c2_block_t *c2b;
+    c_ext_pos_t cep;
+
+    micro_ext = castle_extent_get(MICRO_EXT_ID);
+    BUG_ON(!micro_ext || (micro_ext->size > 1));
+
+    /* Read in the micro extent using the old micro map. */
+    cep.ext_id = MICRO_EXT_ID;
+    cep.offset = 0;
+
+    c2b = castle_cache_block_get(cep, BLKS_PER_CHK);
+    write_lock_c2b(c2b);
+    if(!c2b_uptodate(c2b))
+        BUG_ON(submit_c2b_sync(READ, c2b));
+
+    /* Update the micro map to include the new slave. */
+    castle_extent_transaction_start();
+
+    castle_extents_sb = castle_extents_super_block_get();
+    micro_maps = castle_extents_sb->micro_maps;
+
+    micro_maps[micro_ext->k_factor].slave_id = cs->uuid;
+    micro_maps[micro_ext->k_factor].offset   = MICRO_EXT_START;
+    micro_ext->k_factor++;
+
+    castle_extent_transaction_end();
+
+    /* Write out the micro extent using the updated micro map. */
+    dirty_c2b(c2b);
+    BUG_ON(submit_c2b_sync(WRITE, c2b));
+    write_unlock_c2b(c2b);
+    put_c2b(c2b);
+
+    castle_extent_put(MICRO_EXT_ID);
+}
+
 static int castle_extent_micro_ext_create(void)
 {
     struct castle_extents_superblock *castle_extents_sb = castle_extents_super_block_get();
@@ -365,7 +411,8 @@ static int castle_extent_micro_ext_create(void)
     micro_ext->maps_cep = INVAL_EXT_POS;
 
     memset(micro_maps, 0, sizeof(castle_extents_sb->micro_maps));
-    list_for_each(l, &castle_slaves.slaves)
+    rcu_read_lock();
+    list_for_each_rcu(l, &castle_slaves.slaves)
     {
         struct castle_slave *cs = list_entry(l, struct castle_slave, list);
 
@@ -379,6 +426,7 @@ static int castle_extent_micro_ext_create(void)
         micro_maps[i].offset   = MICRO_EXT_START;
         i++;
     }
+    rcu_read_unlock();
     BUG_ON(i > MAX_NR_SLAVES);
     micro_ext->k_factor = i;
     CONVERT_EXTENT_TO_MENTRY(micro_ext, &castle_extents_sb->micro_ext);
@@ -398,12 +446,14 @@ static int castle_extent_meta_ext_create(void)
 
     BUG_ON(!castle_extent_in_transaction());
 
-    list_for_each(l, &castle_slaves.slaves)
+    rcu_read_lock();
+    list_for_each_rcu(l, &castle_slaves.slaves)
         i++;
+    rcu_read_unlock();
 
     /* Allocate meta extent size to be however much we allocated in all the
        slaves, divided by the k-factor (2) */
-    meta_ext_size = META_SPACE_SIZE * i / k_factor;
+    meta_ext_size = META_SPACE_SIZE * MAX_NR_SLAVES / k_factor;
 
     ext_id = _castle_extent_alloc(META_EXT, 0,
                                   EXT_T_META_DATA,
@@ -439,8 +489,10 @@ static int castle_extent_mstore_ext_create(void)
     BUG_ON(!castle_extent_in_transaction());
 
     i = 0;
-    list_for_each(l, &castle_slaves.slaves)
+    rcu_read_lock();
+    list_for_each_rcu(l, &castle_slaves.slaves)
         i++;
+    rcu_read_unlock();
 
     ext_id = _castle_extent_alloc(DEFAULT_RDA, 0,
                                   EXT_T_META_DATA,
@@ -1516,10 +1568,12 @@ static int _castle_extent_slave_count_get(c_ext_id_t ext_id, int only_active)
         struct list_head *lh;
         int slaves = 0;
 
-        list_for_each(lh, &castle_slaves.slaves)
+        rcu_read_lock();
+        list_for_each_rcu(lh, &castle_slaves.slaves)
         {
             slaves++;
         }
+        rcu_read_unlock();
 
         return slaves;
     }
@@ -1993,7 +2047,8 @@ static void castle_extents_remap_state_init(void)
     } else
     {
         /* Initial population at startup. */
-        list_for_each(lh, &castle_slaves.slaves)
+        rcu_read_lock();
+        list_for_each_rcu(lh, &castle_slaves.slaves)
         {
             cs = list_entry(lh, struct castle_slave, list);
             if ((!test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags)) &&
@@ -2008,6 +2063,7 @@ static void castle_extents_remap_state_init(void)
                 remap_state.nr_live_slaves++;
             }
         }
+        rcu_read_unlock();
         for (i=remap_state.nr_live_slaves; i<MAX_NR_SLAVES; i++)
             remap_state.live_slaves[i++] = NULL;
     }
@@ -2059,10 +2115,11 @@ static int castle_extent_remap_superchunks_alloc(int slave_idx)
          * We get here if the slave is either out-or-service, or out of space. If the slave is
          * out-of-service then just return ENOSPC so calling stack can retry.
          */
-        if ((!test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags)) && (!(cs->cs_superblock.pub.flags & CASTLE_SLAVE_SSD)))
+        if ((!test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags)) &&
+            (!(cs->cs_superblock.pub.flags & CASTLE_SLAVE_SSD)))
         {
             /* Slave is not out-of-service so we are out of space */
-            castle_printk(LOG_WARN, "Error: failed to get freespace from slave: 0x%x (%s).",
+            castle_printk(LOG_WARN, "Error: failed to get freespace from slave: 0x%x (%s).\n",
                     cs->uuid, bdevname(cs->bdev, b));
 
             castle_freespace_stats_print();
@@ -2526,6 +2583,15 @@ retry:
  * @return 0:       Kthread should stop.
  */
 
+static int  freespace_added = 0;
+
+int castle_extents_rebuild_callback(void *data)
+{
+    freespace_added = 1;
+    wake_up(&rebuild_wq);
+    return 0;
+}
+
 static int castle_extents_rebuild_run(void *unused)
 {
     struct list_head            *entry, *tmp;
@@ -2541,6 +2607,7 @@ static int castle_extents_rebuild_run(void *unused)
     do {
         wait_event_interruptible(rebuild_wq,
                                  ((atomic_read(&current_rebuild_seqno) > rebuild_to_seqno) ||
+                                  freespace_added ||
                                   kthread_should_stop()));
 
         if (kthread_should_stop())
@@ -2556,7 +2623,7 @@ restart:
         fs_sb->fs_in_rebuild = 1;
         castle_fs_superblocks_put(fs_sb, 1);
 
-        castle_extents_rescan_required = exit_early = 0;
+        castle_extents_rescan_required = exit_early = freespace_added = 0;
 
         rebuild_to_seqno = atomic_read(&current_rebuild_seqno);
 
@@ -2613,8 +2680,20 @@ restart:
                 goto restart;
             } else if (ret == -ENOSPC)
             {
+                c_ext_event_t *event_hdl = NULL;
                 /* Currently we can't do anything other than go back to the wait_event. */
                 castle_printk(LOG_WARN, "Rebuild run pausing.\n");
+
+                event_hdl = castle_zalloc(sizeof(c_ext_event_t), GFP_KERNEL);
+                if (!event_hdl)
+                    BUG();
+
+                event_hdl->callback = castle_extents_rebuild_callback;
+                event_hdl->data     = NULL;
+
+                castle_extent_transaction_start();
+                castle_extent_lfs_callback_add(event_hdl);
+                castle_extent_transaction_end();
                 continue;
             } else
                 BUG();
@@ -2631,7 +2710,8 @@ restart:
                 oos_slaves[i] = evacuated_slaves[i] = 0;    
             nr_oos_slaves = nr_evacuated_slaves = 0;
     
-            list_for_each(entry, &castle_slaves.slaves)
+            rcu_read_lock();
+            list_for_each_rcu(entry, &castle_slaves.slaves)
             {
                 cs = list_entry(entry, struct castle_slave, list);
                 if (test_bit(CASTLE_SLAVE_EVACUATE_BIT, &cs->flags) &&
@@ -2642,6 +2722,7 @@ restart:
                    !test_bit(CASTLE_SLAVE_REMAPPED_BIT, &cs->flags))
                     oos_slaves[nr_oos_slaves++] = cs;
             }
+            rcu_read_unlock();
         }
 
         /*

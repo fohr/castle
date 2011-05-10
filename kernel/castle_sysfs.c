@@ -342,8 +342,10 @@ static ssize_t slaves_number_show(struct kobject *kobj,
     struct list_head *lh;
     int nr_slaves = 0;
 
-    list_for_each(lh, &slaves->slaves)
+    rcu_read_lock();
+    list_for_each_rcu(lh, &slaves->slaves)
         nr_slaves++;
+    rcu_read_unlock();
 
     return sprintf(buf, "%d\n", nr_slaves);
 }
