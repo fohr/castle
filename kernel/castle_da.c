@@ -8113,7 +8113,7 @@ void castle_da_destroy_complete(struct castle_double_array *da)
     /* Sanity Checks. */
     BUG_ON(!castle_da_deleted(da));
 
-    castle_printk(LOG_INFO, "Cleaning DA: %u\n", da->id);
+    castle_printk(LOG_USERINFO, "Cleaning VerTree: %u\n", da->id);
 
     /* Destroy Component Trees. */
     for(i=0; i<MAX_DA_LEVEL; i++)
