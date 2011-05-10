@@ -4701,7 +4701,6 @@ static void castle_da_merge_deserialise(struct castle_da_merge *merge,
     struct castle_component_tree *des_tree = da->levels[level].merge.serdes.out_tree;
     int i;
 
-    CASTLE_TRANSACTION_BEGIN;
     merge_mstore=da->levels[level].merge.serdes.mstore_entry;
 
     /* out_btree (type) can be assigned directly because we passed the BUG_ON() btree_type->magic
@@ -4811,7 +4810,6 @@ static void castle_da_merge_deserialise(struct castle_da_merge *merge,
                     &merge->last_key, NULL, NULL);
     }
 
-    CASTLE_TRANSACTION_END;
     return;
 }
 
@@ -6960,7 +6958,7 @@ int castle_double_array_read(void)
         castle_da_merge_serdes_out_tree_check(&mstore_dmserentry, des_da, level);
 
         des_da->levels[level].merge.serdes.mstore_entry=
-            castle_malloc(sizeof(struct castle_dmserlist_entry), GFP_KERNEL);
+            castle_zalloc(sizeof(struct castle_dmserlist_entry), GFP_KERNEL);
 
         if(!des_da->levels[level].merge.serdes.mstore_entry)
         {
