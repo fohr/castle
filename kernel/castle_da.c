@@ -6912,7 +6912,7 @@ int castle_double_array_read(void)
         castle_da_merge_serdes_out_tree_check(&mstore_dmserentry, des_da, level);
 
         des_da->levels[level].merge.serdes.mstore_entry=
-            castle_malloc(sizeof(struct castle_dmserlist_entry), GFP_KERNEL);
+            castle_zalloc(sizeof(struct castle_dmserlist_entry), GFP_KERNEL);
 
         if(!des_da->levels[level].merge.serdes.mstore_entry)
         {
