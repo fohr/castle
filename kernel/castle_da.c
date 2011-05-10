@@ -4697,7 +4697,6 @@ static void castle_da_merge_deserialise(struct castle_da_merge *merge,
     struct castle_component_tree *des_tree = da->levels[level].merge.serdes.out_tree;
     int i;
 
-    CASTLE_TRANSACTION_BEGIN;
     merge_mstore=da->levels[level].merge.serdes.mstore_entry;
 
     /* out_btree (type) can be assigned directly because we passed the BUG_ON() btree_type->magic
@@ -4807,7 +4806,6 @@ static void castle_da_merge_deserialise(struct castle_da_merge *merge,
                     &merge->last_key, NULL, NULL);
     }
 
-    CASTLE_TRANSACTION_END;
     return;
 }
 
