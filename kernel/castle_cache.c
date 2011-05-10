@@ -894,7 +894,7 @@ void dirty_c2b(c2_block_t *c2b)
         list_del(&c2b->clean);
         BUG_ON(atomic_dec_return(&castle_cache_cleanlist_size) < 0);
         if (c2b_softpin(c2b))
-            BUG_ON(atomic_dec_return(&castle_cache_cleanlist_softpin_size < 0));
+            BUG_ON(atomic_dec_return(&castle_cache_cleanlist_softpin_size) < 0);
         set_c2b_dirty(c2b);
         spin_unlock_irqrestore(&castle_cache_block_hash_lock, flags);
 
@@ -4181,18 +4181,27 @@ static void castle_cache_extent_flush_endio(c2_block_t *c2b)
  *                                  0 => no limit
  * @param in_flight_p   [both]  Number of c2bs currently in-flight
  * @param flushed_p     [out]   Number of pages flushed from extent
+ * @param waitlock      [in]    True if caller wants to block on c2b readlock,
+ *                              otherwise use read_trylock()
  *
  * Caller must hold an explicit reference to the dirtytree otherwise in the
  * process of submitting IOs the IO completion handlers might free the tree.
  *
+ * NOTE: max_pgs is an estimate of the number of dirty pages that will be
+ *       flushed due to overlapping c2bs and dirty c2bs comprised of a mixture
+ *       or dirty and clean c2ps.
+ *
  * @return  -ENOENT             No such extent
  * @return  0                   Flush successfully started
+ *
+ * @also castle_cache_extent_flush()
  */
 int __castle_cache_extent_flush(c_ext_dirtytree_t *dirtytree,
                                 c_byte_off_t end_off,
                                 int max_pgs,
                                 atomic_t *in_flight_p,
-                                int *flushed_p)
+                                int *flushed_p,
+                                int waitlock)
 {
     c2_block_t *c2b;
     struct rb_node *parent;
@@ -4207,10 +4216,13 @@ int __castle_cache_extent_flush(c_ext_dirtytree_t *dirtytree,
     debug("Extent flush: (%llu) -> %llu\n", dirtytree->ext_id, nr_pages/BLKS_PER_CHK);
     do
     {
+        int dirtytree_locked;
         batch_idx = 0;
 
+restart_traverse:
         /* Hold dirtytree lock. */
         spin_lock_irq(&dirtytree->lock);
+        dirtytree_locked = 1;
 
         /* Walk dirty c2bs until we hit end_off or flush max_pgs. */
         parent = rb_first(&dirtytree->rb_root);
@@ -4227,13 +4239,29 @@ int __castle_cache_extent_flush(c_ext_dirtytree_t *dirtytree,
             }
 
             if (!read_trylock_c2b(c2b))
-                goto next_pg;
+            {
+                if (waitlock)
+                {
+                    /* We want to block on a c2b readlock.
+                     *
+                     * Hold a reference to the c2b before we drop the dirtytree
+                     * lock.  We drop it later if it turns out that the c2b
+                     * doesn't need flushing. */
+                    get_c2b(c2b);
+                    spin_unlock_irq(&dirtytree->lock);
+                    dirtytree_locked = 0;
+                    read_lock_c2b(c2b);
+                }
+                else
+                    goto next_pg;
+            }
             if (test_set_c2b_flushing(c2b))
                 goto next_pg_2;
             if (!c2b_uptodate(c2b) || !c2b_dirty(c2b))
                 goto next_pg_1;
 
-            get_c2b(c2b);
+            if (likely(dirtytree_locked)) /* else we already have a reference */
+                get_c2b(c2b);
             c2b_batch[batch_idx++] = c2b;
             flushed += castle_cache_c2b_to_pages(c2b);
 
@@ -4241,18 +4269,26 @@ int __castle_cache_extent_flush(c_ext_dirtytree_t *dirtytree,
             if (batch_idx >= CASTLE_CACHE_FLUSH_BATCH_SIZE)
                 break;
 
-            goto next_pg;
+            if (likely(dirtytree_locked))
+                goto next_pg;
+            else
+                goto restart_traverse;
 
             /* Clean up state. */
 next_pg_1:  clear_c2b_flushing(c2b);
 next_pg_2:  read_unlock_c2b(c2b);
+
+            /* Put extra c2b reference if we unlocked the dirtytree. */
+            if (unlikely(!dirtytree_locked))
+                put_c2b(c2b);
 
             /* Advance to next c2b. */
 next_pg:    parent = rb_next(parent);
         }
 
         /* Release holds. */
-        spin_unlock_irq(&dirtytree->lock);
+        if (likely(dirtytree_locked))
+            spin_unlock_irq(&dirtytree->lock);
 
         /* Flush batch of c2bs. */
         for (i = 0; i < batch_idx; i++)
@@ -4300,7 +4336,8 @@ int castle_cache_extent_flush(c_ext_id_t ext_id, uint64_t start, uint64_t size)
                                       size,         /* end_off      */
                                       0,            /* max_pgs      */
                                       &in_flight,   /* in_flight_p  */
-                                      NULL);        /* flushed_p    */
+                                      NULL,         /* flushed_p    */
+                                      1);           /* waitlock     */
     castle_extent_dirtytree_put(dirtytree);
 
     /* Wait for 100% of IOs to complete. */
@@ -4421,7 +4458,8 @@ static int castle_cache_flush(void *unused)
                                         0,          /* end_off      */
                                         to_flush,   /* max_pgs      */
                                         &in_flight, /* in_flight    */
-                                        &flushed);  /* flushed_p    */
+                                        &flushed,   /* flushed_p    */
+                                        0);         /* waitlock     */
             castle_extent_dirtytree_put(dirtytree);
 
             to_flush -= flushed;
