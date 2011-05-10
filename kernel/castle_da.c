@@ -4775,7 +4775,7 @@ static void castle_da_merge_deserialise(struct castle_da_merge *merge,
             }
             /* recover last key */
             if(node->used)
-                merge->out_btree->entry_get(node, merge_mstore->valid_end_idx[i],
+                merge->out_btree->entry_get(node, node->used - 1,
                         &merge->levels[i].last_key, NULL, NULL);
         }
     }
