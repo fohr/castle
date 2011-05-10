@@ -1872,21 +1872,55 @@ void castle_extent_put(c_ext_id_t ext_id)
 /**
  * Get and hold a reference to RB-tree dirtytree for extent ext_id.
  *
+ * All dirtytree gets by extent ID must occur while the extent exists
+ * within the hash (e.g. checkpoint extent flush and dirty_c2b()).
+ *
+ * @also castle_cache_extent_flush()
+ * @also dirty_c2b()
+ *
+ * @also castle_extent_dirtytree_get()
  * @also castle_extent_dirtytree_put()
  */
-c_ext_dirtytree_t* castle_extent_dirtytree_get(c_ext_id_t ext_id)
+c_ext_dirtytree_t* castle_extent_dirtytree_by_id_get(c_ext_id_t ext_id)
 {
     c_ext_t *ext;
+    c_ext_dirtytree_t *dirtytree;
+    unsigned long flags;
 
-    ext = castle_extent_get(ext_id);
+    read_lock_irqsave(&castle_extents_hash_lock, flags);
+    ext = __castle_extents_hash_get(ext_id);
     BUG_ON(!ext);
     BUG_ON(atomic_inc_return(&ext->dirtytree->ref_cnt) < 2);
+    dirtytree = ext->dirtytree;
+    read_unlock_irqrestore(&castle_extents_hash_lock, flags);
 
-    return ext->dirtytree;
+    return dirtytree;
 }
 
 /**
- * Drop reference to RB-tree dirtytree for extent ext_id.
+ * Take an additional reference to per-extent dirtytree.
+ *
+ * Extent structure specified by dirtytree->ext_id does not need to exist
+ * within the extents hash.
+ *
+ * @also castle_cache_flush()
+ *
+ * @also castle_extent_dirtytree_by_id_get()
+ * @also castle_extent_dirtytree_put()
+ */
+void castle_extent_dirtytree_get(c_ext_dirtytree_t *dirtytree)
+{
+    /* Per-extent dirtytrees are freed when the ref_cnt reaches 0. */
+    BUG_ON(atomic_inc_return(&dirtytree->ref_cnt) <= 1);
+}
+
+/**
+ * Drop a reference to to per-extent dirtytree.
+ *
+ * Extent structure specified by dirtytree->ext_id does not need to exist
+ * within the extents hash.
+ *
+ * Frees the per-extent dirtytree if the reference count reaches 0.
  *
  * @also castle_extent_dirtytree_get()
  */
@@ -1894,7 +1928,8 @@ void castle_extent_dirtytree_put(c_ext_dirtytree_t *dirtytree)
 {
     if (unlikely(atomic_dec_return(&dirtytree->ref_cnt) == 0))
     {
-        BUG_ON(castle_extent_get(ext_id));  /* cannot be in hash now */
+        BUG_ON(castle_extent_get(dirtytree->ext_id));   /* cannot be in hash now */
+        BUG_ON(!RB_EMPTY_ROOT(&dirtytree->rb_root));    /* must be empty */
         castle_free(dirtytree);
     }
 }

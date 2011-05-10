@@ -41,8 +41,9 @@ uint32_t            castle_extent_map_get                   (void*          ext_
                                                              c_chk_t        offset,
                                                              c_disk_chk_t  *chk_maps,
                                                              int            rw);
-c_ext_dirtytree_t  *castle_extent_dirtytree_get             (c_ext_id_t     ext_id);
-void                castle_extent_dirtytree_put             (c_ext_id_t     ext_id);
+c_ext_dirtytree_t  *castle_extent_dirtytree_by_id_get       (c_ext_id_t         ext_id);
+void                castle_extent_dirtytree_get             (c_ext_dirtytree_t *dirtytree);
+void                castle_extent_dirtytree_put             (c_ext_dirtytree_t *dirtytree);
 
 
 struct castle_extents_superblock* castle_extents_super_block_get (void);
