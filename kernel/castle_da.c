@@ -6595,8 +6595,6 @@ static int castle_da_writeback(struct castle_double_array *da, void *unused)
     debug("Inserting a DA id=%d\n", da->id);
     castle_mstore_entry_insert(castle_da_store, &mstore_dentry);
 
-    read_lock_irq(&castle_da_hash_lock);
-
     if(castle_merges_checkpoint)
     {
         int i; /* DA levels */
@@ -6622,6 +6620,7 @@ static int castle_da_writeback(struct castle_double_array *da, void *unused)
         }/* rof each level */
     }
 
+    read_lock_irq(&castle_da_hash_lock);
     return 0;
 }
 
