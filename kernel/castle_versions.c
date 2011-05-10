@@ -152,6 +152,28 @@ static void castle_version_counts_hash_destroy(void)
 }
 
 /**
+ * Return active version count for DA.
+ *
+ * @param   da_id   DA to return version count for
+ *
+ * NOTE: Must be called during a CASTLE_TRANSACTION
+ * NOTE: castle_versions_counts_hash members protected by CASTLE_TRANSACTION
+ *
+ * @return  Version count
+ */
+static int castle_versions_count(da_id_t da_id)
+{
+    struct castle_version_count *vc;
+
+    BUG_ON(!CASTLE_IN_TRANSACTION);
+
+    vc = castle_versions_counts_hash_get(da_id);
+    BUG_ON(!vc);
+
+    return vc->count;
+}
+
+/**
  * Increment the active version count for DA.
  *
  * @param   da_id   DA to increment version count for
@@ -429,6 +451,7 @@ int castle_version_delete(version_t version)
     if(!v)
     {
         write_unlock_irq(&castle_versions_hash_lock);
+        castle_vfree(event_vs);
         return -EINVAL;
     }
 
@@ -436,9 +459,25 @@ int castle_version_delete(version_t version)
     BUG_ON(test_bit(CV_ATTACHED_BIT, &v->flags));
     BUG_ON(!test_bit(CV_INITED_BIT, &v->flags));
 
+    /* Before making any changes check if this is the last version to delete. */
+    if (castle_versions_count(v->da_id) == 1)
+    {
+        /* This is the last version. Don't delete the version, instead destroy DA. */
+        da_id = v->da_id;
+
+        /* Release resources. */
+        write_unlock_irq(&castle_versions_hash_lock);
+        castle_vfree(event_vs);
+
+        castle_printk(LOG_USERINFO, "Last version is getting deleted; destroying Version Tree.\n");
+
+        return castle_double_array_destroy(da_id);
+    }
+
     if(test_and_set_bit(CV_DELETED_BIT, &v->flags))
     {
         write_unlock_irq(&castle_versions_hash_lock);
+        castle_vfree(event_vs);
         return -EAGAIN;
     }
 
@@ -475,7 +514,7 @@ int castle_version_delete(version_t version)
                 break;
             }
         }
- 
+
         /* If all children are leafs and marked for deletion mark P as leaf. */
         if (!sybling)
         {
@@ -553,15 +592,15 @@ int castle_version_delete(version_t version)
 }
 
 
-/** 
+/**
  * Delete a version from version tree. Only possible, while deleting complete
- * collection. 
+ * collection.
  *
  * @param v [in] delete structure for version v from version tree.
  *
  * @return parent of version v.
  * */
-static struct castle_version * castle_version_subtree_delete(struct castle_version *v, 
+static struct castle_version * castle_version_subtree_delete(struct castle_version *v,
                                                              struct list_head *version_list)
 {
     struct castle_version *parent;
@@ -580,14 +619,14 @@ static struct castle_version * castle_version_subtree_delete(struct castle_versi
     __castle_versions_hash_remove(v);
     list_del(&v->del_list);
     list_add_tail(&v->free_list, version_list);
-    
+
     return parent;
 }
 
-/** 
+/**
  * Delete the complete version subtree from the tree. Can be done only while
- * deleting complete collection. 
- * 
+ * deleting complete collection.
+ *
  * @param version [in] delete version sub-tree with root version from version tree.
  *
  * @return non-zero if, failed to destroy version sub-tree.
