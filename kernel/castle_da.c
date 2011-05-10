@@ -6117,7 +6117,8 @@ static void __castle_da_level0_modified_promote(struct work_struct *work)
 
     castle_da_growing_rw_clear(da);
 
-    /* Decrement promoting DAs counter and signal caller. */
+    /* Drop DA reference, adjust promoting DAs counter and signal caller. */
+    castle_da_put(da);
     atomic_dec((atomic_t *)da->private);
     wake_up(&castle_da_promote_wq);
 }
@@ -6140,9 +6141,14 @@ static int castle_da_level0_modified_promote(struct castle_double_array *da, voi
 {
     atomic_inc((atomic_t *)counter);
 
+    if (castle_da_deleted(da))
+        return 0;
+
+    /* Get DA reference and place on workqueue. */
+    castle_da_get(da);
     da->private = counter;
     CASTLE_INIT_WORK(&da->work, __castle_da_level0_modified_promote);
-    queue_work(castle_wq, &da->work);
+    schedule_work(&da->work);
 
     return 0;
 }
