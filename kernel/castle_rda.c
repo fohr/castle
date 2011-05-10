@@ -81,7 +81,8 @@ static int castle_rda_slave_usable(c_rda_spec_t *rda_spec, struct castle_slave *
     /* Any extra tests should go here. */
 
     if ((test_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags)) ||
-        (test_bit(CASTLE_SLAVE_EVACUATE_BIT, &slave->flags)))
+        (test_bit(CASTLE_SLAVE_EVACUATE_BIT, &slave->flags)) ||
+        (test_bit(CASTLE_SLAVE_CLAIMING_BIT, &slave->flags)))
         return 0;
 
     switch(rda_spec->type)
@@ -205,12 +206,14 @@ void* castle_def_rda_extent_init(c_ext_id_t ext_id,
     state->permut_idx = 0;
 
     /* Initialise the slaves array. */
-    list_for_each(l, &castle_slaves.slaves)
+    rcu_read_lock();
+    list_for_each_rcu(l, &castle_slaves.slaves)
     {
         slave = list_entry(l, struct castle_slave, list);
         if(castle_rda_slave_usable(rda_spec, slave))
             state->permuted_slaves[state->nr_slaves++] = slave;
     }
+    rcu_read_unlock();
     /* Check whether we've got enough slaves to make this extent. */
     if (state->nr_slaves < rda_spec->k_factor)
     {
@@ -356,12 +359,14 @@ void* castle_ssd_rda_extent_init(c_ext_id_t ext_id,
             goto err_out;
     }
     /* Initialise the slave list. */ 
-    list_for_each(l, &castle_slaves.slaves)
+    rcu_read_lock();
+    list_for_each_rcu(l, &castle_slaves.slaves)
     {
         slave = list_entry(l, struct castle_slave, list);
         if(castle_rda_slave_usable(rda_spec, slave))
             state->permuted_slaves[state->nr_slaves++] = slave;
     }
+    rcu_read_unlock();
     if(state->nr_slaves == 0)
     {
         debug("Could not allocate SSD extent size: %d. No SSDs found.\n", size);

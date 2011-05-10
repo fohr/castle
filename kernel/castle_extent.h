@@ -67,6 +67,7 @@ void                castle_extents_rebuild_fini             (void);
 void                castle_extents_rebuild_wake             (void);
 void                castle_extents_rebuild_startup_check    (int need_rebuild);
 int                 castle_extents_slave_scan               (uint32_t uuid);
+void                castle_extent_micro_ext_update          (struct castle_slave *cs);
 signed int          castle_extent_ref_cnt_get               (c_ext_id_t);
 c_ext_type_t        castle_extent_type_get                  (c_ext_id_t);
 

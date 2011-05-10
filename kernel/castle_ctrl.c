@@ -675,7 +675,8 @@ void castle_control_slave_evacuate(uint32_t uuid, uint32_t force, int *ret)
     {
         struct  castle_slave *cs;
 
-        list_for_each(lh, &castle_slaves.slaves)
+        rcu_read_lock();
+        list_for_each_rcu(lh, &castle_slaves.slaves)
         {
             cs = list_entry(lh, struct castle_slave, list);
             if (force)
@@ -696,6 +697,7 @@ void castle_control_slave_evacuate(uint32_t uuid, uint32_t force, int *ret)
                 !(cs->cs_superblock.pub.flags & CASTLE_SLAVE_SSD))
                 nr_live_slaves++;
         }
+        rcu_read_unlock();
 
         BUG_ON(nr_live_slaves < MIN_LIVE_SLAVES);
 
@@ -886,7 +888,7 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
         return -EINVAL;
     }
 
-    if(castle_fs_inited && ((ioctl.cmd == CASTLE_CTRL_CLAIM) || (ioctl.cmd == CASTLE_CTRL_INIT))) 
+    if(castle_fs_inited && (ioctl.cmd == CASTLE_CTRL_INIT))
     {
         castle_printk(LOG_WARN, "Disallowed ctrl op %d, after fs gets inited.\n", ioctl.cmd);
         return -EINVAL;

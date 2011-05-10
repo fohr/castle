@@ -10,6 +10,7 @@
 #include <linux/net.h>
 #include <linux/socket.h>
 #include <net/sock.h>
+#include <linux/rcupdate.h>
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,24)
 #include <asm/semaphore.h>
 #else
@@ -151,7 +152,7 @@ typedef uint32_t block_t;
 #define SUP_EXT_SIZE                   (30)  /* 2-RDA. Occupies double the space */
 #define MICRO_EXT_START                (60)
 #define MICRO_EXT_SIZE                 (1)   /* Don't change this */
-#define META_SPACE_SIZE                (300)
+#define META_SPACE_SIZE                (100)
 #define MSTORE_SPACE_SIZE              (50)
 #define FREE_SPACE_START               (100)
 #define FREESPACE_OFFSET               (2 * C_CHK_SIZE)
@@ -1276,6 +1277,7 @@ struct castle_slave {
     int                             new_dev;
     struct kobject                  kobj;
     struct list_head                list;
+    struct rcu_head                 rcu;
     struct block_device            *bdev;
     c_ext_id_t                      sup_ext;
     c_disk_chk_t                   *sup_ext_maps;
@@ -1298,6 +1300,7 @@ struct castle_slave {
 #define CASTLE_SLAVE_EVACUATE_BIT   1 /* Slave is being, or has been, evacuated */
 #define CASTLE_SLAVE_GHOST_BIT      2 /* Slave is missing or invalid (on reboot) */
 #define CASTLE_SLAVE_REMAPPED_BIT   3 /* Slave has been remapped */
+#define CASTLE_SLAVE_CLAIMING_BIT   4 /* Slave is not yet available for use (in castle_claim) */
 
 struct castle_slaves {
     struct kobject   kobj;

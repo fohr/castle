@@ -1103,7 +1103,8 @@ static void c2b_multi_io_end(struct bio *bio, int err)
             {
                 int nr_live_slaves=0;
 
-                list_for_each(lh, &castle_slaves.slaves)
+                rcu_read_lock();
+                list_for_each_rcu(lh, &castle_slaves.slaves)
                 {
                     slave = list_entry(lh, struct castle_slave, list);
                     if (!test_bit(CASTLE_SLAVE_EVACUATE_BIT, &slave->flags) &&
@@ -1111,6 +1112,7 @@ static void c2b_multi_io_end(struct bio *bio, int err)
                         !(slave->cs_superblock.pub.flags & CASTLE_SLAVE_SSD))
                         nr_live_slaves++;
                 }
+                rcu_read_unlock();
                 BUG_ON(nr_live_slaves < MIN_LIVE_SLAVES);
             }
             castle_printk(LOG_WARN, "Disabling slave 0x%x (%s), due to IO errors.\n",
@@ -1756,12 +1758,14 @@ static void castle_slaves_unplug(void)
 {
     struct list_head *lh;
 
-    list_for_each(lh, &castle_slaves.slaves)
+    rcu_read_lock();
+    list_for_each_rcu(lh, &castle_slaves.slaves)
     {
         struct castle_slave *cs = list_entry(lh, struct castle_slave, list);
         if (!test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags))
             generic_unplug_device(bdev_get_queue(cs->bdev));
     }
+    rcu_read_unlock();
 }
 
 /**
@@ -5197,7 +5201,8 @@ int castle_checkpoint_version_inc(void)
     /* Makes sure no parallel freespace operations happening. */
     castle_extent_transaction_start();
 
-    list_for_each(lh, &castle_slaves.slaves)
+    rcu_read_lock();
+    list_for_each_rcu(lh, &castle_slaves.slaves)
     {
         cs = list_entry(lh, struct castle_slave, list);
         /* Do not checkpoint out-of-service slaves. */
@@ -5219,6 +5224,7 @@ int castle_checkpoint_version_inc(void)
         cs->prev_prod = cs->frozen_prod;
         castle_slave_superblock_put(cs, 1);
     }
+    rcu_read_unlock();
 
     castle_extent_transaction_end();
 
