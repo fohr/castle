@@ -1527,11 +1527,11 @@ void castle_release_device(struct block_device *bdev)
 
 void castle_release(struct castle_slave *cs)
 {
+    castle_sysfs_slave_del(cs);
     /* Ghost slaves are only partially initialised, and have no bdev. */
     if (!test_bit(CASTLE_SLAVE_GHOST_BIT, &cs->flags))
     {
         castle_events_slave_release(cs->uuid);
-        castle_sysfs_slave_del(cs);
         /* Remapped slaves have already been released. */
         if (!test_bit(CASTLE_SLAVE_REMAPPED_BIT, &cs->flags))
             castle_release_device(cs->bdev);
