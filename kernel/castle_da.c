@@ -6890,11 +6890,19 @@ int castle_double_array_read(void)
         int da_id, ct_da_id;
         int level;
         struct castle_double_array *des_da;
-        struct castle_dmserlist_entry mstore_dmserentry;
+        struct castle_dmserlist_entry *mstore_dmserentry;
 
-        castle_mstore_iterator_next(iterator, &mstore_dmserentry, &key);
-        da_id=mstore_dmserentry.da_id;
-        level=mstore_dmserentry.level;
+        mstore_dmserentry =
+            castle_zalloc(sizeof(struct castle_dmserlist_entry), GFP_KERNEL);
+        if(!mstore_dmserentry)
+        {
+            castle_printk(LOG_ERROR, "%s:: castle_malloc fail\n", __FUNCTION__);
+            BUG();
+        }
+
+        castle_mstore_iterator_next(iterator, mstore_dmserentry, &key);
+        da_id=mstore_dmserentry->da_id;
+        level=mstore_dmserentry->level;
         BUG_ON(level < MIN_DA_SERDES_LEVEL);
 
         castle_printk(LOG_INIT, "%s::deserialising merge on da %d level %d\n",
@@ -6907,18 +6915,12 @@ int castle_double_array_read(void)
         }
 
         /* sanity check merge output tree state */
-        castle_da_merge_serdes_out_tree_check(&mstore_dmserentry, des_da, level);
+        castle_da_merge_serdes_out_tree_check(mstore_dmserentry, des_da, level);
 
-        des_da->levels[level].merge.serdes.mstore_entry=
-            castle_zalloc(sizeof(struct castle_dmserlist_entry), GFP_KERNEL);
-
-        if(!des_da->levels[level].merge.serdes.mstore_entry)
-        {
-            castle_printk(LOG_ERROR, "%s:: castle_malloc fail\n", __FUNCTION__);
-            BUG();
-        }
-        memcpy(des_da->levels[level].merge.serdes.mstore_entry, &mstore_dmserentry,
-                sizeof(struct castle_dmserlist_entry));
+        /* we know the da and the level, and we passed some sanity checking - so put the serdes
+           state in the appropriate merge slot */
+        des_da->levels[level].merge.serdes.mstore_entry = mstore_dmserentry;
+        mstore_dmserentry=NULL;
 
         /* Recover partially complete output CT */
         des_da->levels[level].merge.serdes.out_tree = NULL;
@@ -6926,7 +6928,7 @@ int castle_double_array_read(void)
             castle_malloc(sizeof(struct castle_component_tree), GFP_KERNEL);
         BUG_ON(!des_da->levels[level].merge.serdes.out_tree);
         ct_da_id = castle_da_ct_unmarshall(des_da->levels[level].merge.serdes.out_tree,
-                                           &mstore_dmserentry.out_tree);
+                                        &des_da->levels[level].merge.serdes.mstore_entry->out_tree);
         BUG_ON(da_id != ct_da_id);
         castle_ct_hash_add(des_da->levels[level].merge.serdes.out_tree);
         /* the difference btwn unmarshalling a partially complete in-merge ct and a "normal" ct is
@@ -6934,9 +6936,9 @@ int castle_double_array_read(void)
            added to a DA through cct_add(da, ct, NULL, 1). */
 
         /* oh and also, bloom_build_params. */
-        if(&mstore_dmserentry.have_bbp)
+        if(&des_da->levels[level].merge.serdes.mstore_entry->have_bbp)
             castle_da_ct_bloom_build_param_deserialise(des_da->levels[level].merge.serdes.out_tree,
-                                                       &mstore_dmserentry.out_tree_bbp);
+                                    &des_da->levels[level].merge.serdes.mstore_entry->out_tree_bbp);
 
         /* inc ct seq number if necessary */
         if (des_da->levels[level].merge.serdes.out_tree->seq >= atomic_read(&castle_next_tree_seq))
