@@ -1301,6 +1301,7 @@ struct castle_slave {
 #define CASTLE_SLAVE_GHOST_BIT      2 /* Slave is missing or invalid (on reboot) */
 #define CASTLE_SLAVE_REMAPPED_BIT   3 /* Slave has been remapped */
 #define CASTLE_SLAVE_CLAIMING_BIT   4 /* Slave is not yet available for use (in castle_claim) */
+#define CASTLE_SLAVE_BDCLAIMED_BIT  5 /* Slave has been bd_claim'ed. */
 
 struct castle_slaves {
     struct kobject   kobj;
@@ -1373,7 +1374,7 @@ void                  castle_attachment_free_complete(struct castle_attachment *
 
 struct castle_slave*  castle_claim                 (uint32_t new_dev);
 void                  castle_release               (struct castle_slave *cs);
-void                  castle_release_device        (struct block_device *bdev);
+void                  castle_release_device        (struct castle_slave *cs);
 
 void                  castle_slave_access          (uint32_t uuid);
 
