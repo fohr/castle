@@ -13,6 +13,17 @@ int         castle_version_read                     (version_t version,
                                                      int *leaf);
 
 da_id_t     castle_version_da_id_get                (version_t version);
+
+/**
+ * Castle version health.
+ */
+typedef enum castle_version_health {
+    CVH_LIVE = 0,   /**< Live versions.                         */
+    CVH_DEAD,       /**< Deleted versions.                      */
+    CVH_DELETED,    /**< Dead versions (no further keys in DA). */
+    CVH_TOTAL,      /**< Total versions (sum of above).         */
+} cv_health_t;
+
 long        castle_version_keys_get                 (version_t version);
 void        castle_version_keys_inc                 (version_t version);
 void        castle_version_keys_dec                 (version_t version);

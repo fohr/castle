@@ -697,19 +697,22 @@ error_out:
     return ret;
 }
 
-static struct castle_version* castle_version_add(version_t version, 
-                                                 version_t parent, 
+static struct castle_version* castle_version_add(version_t version,
+                                                 version_t parent,
                                                  da_id_t da_id,
-                                                 c_byte_off_t size)
+                                                 c_byte_off_t size,
+                                                 cv_health_t health)
 {
     struct castle_version *v;
     int ret;
 
-    /* Check we are under the per-DA version limit. */
-    if ((ret = castle_versions_count_inc(da_id)) != EXIT_SUCCESS)
+    /* Check we are under the per-DA live version limit. */
+    if ((health == CVH_LIVE)
+            && ((ret = castle_versions_count_inc(da_id)) != EXIT_SUCCESS))
     {
         if (ret == -E2BIG)
-            castle_printk(LOG_INFO, "Beta cannot create more than %d versions per DA.\n",
+            castle_printk(LOG_USERINFO,
+                    "Beta cannot create more than %d versions per DA.\n",
                     CASTLE_VERSIONS_MAX);
         return NULL;
     }
@@ -717,17 +720,17 @@ static struct castle_version* castle_version_add(version_t version,
     v = kmem_cache_alloc(castle_versions_cache, GFP_KERNEL);
     if (!v)
         goto out_dealloc;
-    
+
     debug("Adding: (v, p)=(%d,%d)\n", version, parent);
-    
+
     v->version      = version;
     v->parent_v     = parent;
-    v->first_child  = NULL; 
-    v->next_sybling = NULL; 
+    v->first_child  = NULL;
+    v->next_sybling = NULL;
     v->o_order      = INVAL_VERSION;
     v->r_order      = INVAL_VERSION;
     v->da_id        = da_id;
-    v->size         = size; 
+    v->size         = size;
     v->flags        = 0;
     atomic64_set(&v->stats.keys, 0);
     atomic64_set(&v->stats.tombstones, 0);
@@ -738,8 +741,8 @@ static struct castle_version* castle_version_add(version_t version,
     INIT_LIST_HEAD(&v->init_list);
     INIT_LIST_HEAD(&v->del_list);
 
-    /* Initialise version 0 fully, defer full init of all other versions by 
-       putting it on the init list. */ 
+    /* Initialise version 0 fully, defer full init of all other versions by
+       putting it on the init list. */
     if (v->version == 0)
     {
         if(castle_sysfs_version_add(v->version))
@@ -764,7 +767,8 @@ static struct castle_version* castle_version_add(version_t version,
 
 out_dealloc:
     kmem_cache_free(castle_versions_cache, v);
-    castle_versions_count_dec(da_id);
+    if (health == CVH_LIVE)
+        castle_versions_count_dec(da_id);
 
     return NULL;
 }
@@ -983,7 +987,7 @@ static struct castle_version* castle_version_new_create(int snap_or_clone,
             parent);
         return NULL;
     }
-    
+
     parent_size = p->size;
 
     /* Allocate a new version number. */
@@ -994,18 +998,18 @@ static struct castle_version* castle_version_new_create(int snap_or_clone,
     /* Try to add it to the hash. Use the da_id provided or the parent's */
     BUG_ON(!DA_INVAL(da_id) && !DA_INVAL(p->da_id));
     da_id = DA_INVAL(da_id) ? p->da_id : da_id;
-    v = castle_version_add(version, parent, da_id, size);
+    v = castle_version_add(version, parent, da_id, size, CVH_LIVE);
     if(!v) 
         return NULL;
-    
+
     /* If our parent has the size set, inherit it (ignores the size argument) */
     if(parent_size != 0)
         v->size = parent_size;
-    
+
     /* Run processing (which will thread the new version into the tree,
        and recalculate the order numbers) */
-    castle_versions_process(); 
-    
+    castle_versions_process();
+
     /* Check if the version got initialised */
     if(!(v->flags & CV_INITED_MASK))
     {
@@ -1363,7 +1367,7 @@ int castle_versions_zero_init(void)
 
     debug("Initialising version root.\n");
 
-    v = castle_version_add(0, 0, INVAL_DA, 0);
+    v = castle_version_add(0, 0, INVAL_DA, 0, CVH_LIVE);
     if (!v)
     {
         castle_printk(LOG_ERROR, "Failed to create verion ZERO\n");
@@ -1381,12 +1385,12 @@ int castle_versions_read(void)
 {
     struct castle_vlist_entry mstore_ventry;
     struct castle_mstore_iter* iterator = NULL;
-    struct castle_version* v; 
+    struct castle_version* v;
     c_mstore_key_t key;
     int ret = 0;
 
     BUG_ON(castle_versions_mstore);
-    castle_versions_mstore = 
+    castle_versions_mstore =
         castle_mstore_open(MSTORE_VERSIONS_ID, sizeof(struct castle_vlist_entry));
 
     if(!castle_versions_mstore)
@@ -1404,12 +1408,16 @@ int castle_versions_read(void)
 
     while(castle_mstore_iterator_has_next(iterator))
     {
+        cv_health_t health;
         castle_mstore_iterator_next(iterator, &mstore_ventry, &key);
-        v = castle_version_add(mstore_ventry.version_nr, 
-                               mstore_ventry.parent, 
+        health = test_bit(CV_DELETED_BIT, &mstore_ventry.flags)
+                ? CVH_DELETED : CVH_LIVE;
+        v = castle_version_add(mstore_ventry.version_nr,
+                               mstore_ventry.parent,
                                mstore_ventry.da_id,
-                               mstore_ventry.size);
-        if(!v)
+                               mstore_ventry.size,
+                               health);
+        if (!v)
         {
             ret = -ENOMEM;
             goto out;
@@ -1427,14 +1435,14 @@ int castle_versions_read(void)
         if(VERSION_INVAL(castle_versions_last) || v->version > castle_versions_last)
             castle_versions_last = v->version;
     }
-    ret = castle_versions_process(); 
+    ret = castle_versions_process();
 
 out:
     if (iterator)               castle_mstore_iterator_destroy(iterator);
     if (castle_versions_mstore) castle_mstore_fini(castle_versions_mstore);
     castle_versions_mstore = NULL;
 
-    return ret; 
+    return ret;
 }
 
 /***** Init/fini functions *****/
@@ -1452,7 +1460,7 @@ int castle_versions_init(void)
                                                0,     /* flags */
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,18)
                                                NULL, NULL); /* ctor, dtor */
-#else                                               
+#else
                                                NULL); /* ctor */
 #endif
 
