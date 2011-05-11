@@ -910,7 +910,7 @@ static void castle_object_da_replace_complete(struct castle_bio_vec *c_bvec,
                                               c_val_tup_t cvt)
 {
     /* Deregister the BIO. */
-    castle_debug_bio_register(c_bvec->c_bio, c_bvec->c_bio->attachment->version, 1);
+    castle_debug_bio_deregister(c_bvec->c_bio);
     /* Call the actual complete function. */
     castle_object_replace_complete(c_bvec, err, cvt);
 }
