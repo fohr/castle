@@ -468,7 +468,7 @@ static ssize_t slave_rebuild_state_show(struct kobject *kobj,
 {
     struct castle_slave *slave = container_of(kobj, struct castle_slave, kobj);
 
-    return sprintf(buf, "%lx\n", slave->flags);
+    return sprintf(buf, "0x%lx\n", slave->flags);
 }
 
 /* Display the fs version (checkpoint number). */
