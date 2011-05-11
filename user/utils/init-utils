@@ -146,7 +146,11 @@ function load_fs_and_claim {
 
     init_kernel_fs
 
-    buildid=$(cat /etc/acunu/build_id.txt)
+    if [ -f /etc/acunu/build_id.txt ]; then
+	buildid=$(cat /etc/acunu/build_id.txt)
+    else
+	buildid=""
+    fi
     modulehash=$(sha1sum /lib/modules/$(uname -r)/extra/castle/castle-fs.ko | cut -f1 -d' ')
     castle-cli environment buildid "$buildid"
     castle-cli environment modulehash "$modulehash"
@@ -157,6 +161,7 @@ function load_fs_and_claim {
         castle-cli environment description "$description"
     fi
 
+    mkdir -p /var/lib/castle-fs
     touch /var/lib/castle-fs/dirty
     sync
     sleep 1
