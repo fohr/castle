@@ -4722,6 +4722,7 @@ static void castle_da_merge_deserialise(struct castle_da_merge *merge,
     mutex_unlock(&des_tree->lo_mutex);
 
     node=NULL;
+    merge->last_key=NULL;
     for(i=0; i<MAX_BTREE_DEPTH; i++)
     {
         BUG_ON(merge->levels[i].node_c2b); /* Initialising merge - this should always be NULL */
@@ -4775,14 +4776,16 @@ static void castle_da_merge_deserialise(struct castle_da_merge *merge,
             }
             /* recover last key */
             if(node->used)
+            {
                 merge->out_btree->entry_get(node, node->used - 1,
                         &merge->levels[i].last_key, NULL, NULL);
+                if(i==0)
+                    merge->last_key = merge->levels[i].last_key;
+            }
         }
     }
 
-    /* Recover last_leaf_node_c2b and last_key */
-    merge->last_key=NULL;
-    BUG_ON(merge->last_leaf_node_c2b); /* Initialising merge - this should always be NULL */
+    merge->last_leaf_node_c2b = NULL;
     if(!EXT_POS_INVAL(merge_mstore->last_leaf_node_cep))
     {
         debug("%s::last_leaf_node_c2b for merge %p (da %d level %d)\n",
@@ -4791,19 +4794,14 @@ static void castle_da_merge_deserialise(struct castle_da_merge *merge,
             castle_da_merge_des_out_tree_c2b_write_fetch(merge, merge_mstore->last_leaf_node_cep,
                     0 /* leaf */);
         BUG_ON(!merge->last_leaf_node_c2b);
-
-        /* last leaf node may be immutable, so give up write lock (if it's still being written to,
-           we will hit it again in the individual level c2b recovery below) */
         write_unlock_c2b(merge->last_leaf_node_c2b);
-
         node = c2b_bnode(merge->last_leaf_node_c2b);
         BUG_ON(!node);
         BUG_ON(node->magic != BTREE_NODE_MAGIC);
 
-        /* recover last key */
-        if(node->used)
-            merge->out_btree->entry_get(node, /* TODO@tr what to have as index??? */ node->used - 1,
-                    &merge->last_key, NULL, NULL);
+        /* if we don't already have the last_key, then it is on the already completed node. */
+        if( (!merge->last_key) && (node->used) )
+            merge->out_btree->entry_get(node, node->used - 1, &merge->last_key, NULL, NULL);
     }
 
     return;
