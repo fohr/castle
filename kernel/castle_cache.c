@@ -4380,6 +4380,7 @@ static int castle_cache_flush(void *unused)
 #define MIN_FLUSH_FREQ  5           /* Min flush rate: 5*128pgs/s = 2.5MB/s */
     int exiting, target_dirty_pgs, dirty_pgs, to_flush, last_flush;
     atomic_t in_flight = ATOMIC(0);
+    static int loops;
 
     /* Try and keep 3/4 of pages in the cache dirty. */
     target_dirty_pgs = 3 * (castle_cache_size / 4);
@@ -4436,10 +4437,18 @@ static int castle_cache_flush(void *unused)
         }
         last_flush = to_flush;
 
+        loops = 0;
         while (to_flush > 0)
         {
             c_ext_dirtytree_t *dirtytree;
             int flushed = 0;
+
+            if (++loops > 1000)
+            {
+                castle_printk(LOG_WARN, "%d loops in castle_cache_flush to_flush loop, break\n",
+                        loops);
+                break;
+            }
 
             /* Get next per-extent dirtytree to flush. */
             spin_lock_irq(&castle_cache_block_hash_lock);
