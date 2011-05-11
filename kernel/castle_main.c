@@ -786,7 +786,7 @@ int castle_fs_init(void)
     else      castle_fs_superblocks_load(&fs_sb);
 
     /* Load extent structures of logical extents into memory */
-    ret = first ? castle_extents_create() : castle_extents_read(); 
+    ret = first ? castle_extents_create() : castle_extents_read();
     if (ret)
     {
         if (ret == -ENOSPC)
@@ -822,7 +822,7 @@ int castle_fs_init(void)
             castle_extent_transaction_end();
             return ret;
         }
-            
+
         if ((ret = castle_new_ext_freespace_init(&castle_global_tree.data_ext_free,
                                                   castle_global_tree.da,
                                                   EXT_T_MEDIUM_OBJECTS,
