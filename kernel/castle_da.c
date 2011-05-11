@@ -3491,7 +3491,7 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
                         merge->level);
 
             merge_out_tree_retain=1;
-            castle_printk(LOG_INIT, "%s::leaving output extents for merge %p deserialisation "
+            debug("%s::leaving output extents for merge %p deserialisation "
                     "(da %d, level %d).\n", __FUNCTION__, merge, merge->da->id, merge->level);
         }
         else if ( (castle_merges_checkpoint) && (merge->level >= MIN_DA_SERDES_LEVEL) )
@@ -4868,7 +4868,7 @@ static void castle_da_merge_des_check(struct castle_da_merge *merge, struct cast
     }
 
     /* Sane. Proceed. */
-    castle_printk(LOG_INIT, "Interrupted merge da %d level %d passed initial SERDES logic sanity checks.\n",
+    debug("Interrupted merge da %d level %d passed initial SERDES logic sanity checks.\n",
             da->id, level);
     merge->deserialising=1;
 
@@ -6951,7 +6951,7 @@ int castle_double_array_read(void)
         level=mstore_dmserentry->level;
         BUG_ON(level < MIN_DA_SERDES_LEVEL);
 
-        castle_printk(LOG_INIT, "%s::deserialising merge on da %d level %d\n",
+        debug("%s::deserialising merge on da %d level %d\n",
                 __FUNCTION__, da_id, level);
         des_da=castle_da_hash_get(da_id);
         if(!des_da)
