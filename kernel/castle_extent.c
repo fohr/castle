@@ -453,8 +453,6 @@ static int castle_extent_meta_ext_create(void)
     meta_ext = castle_extents_hash_get(META_EXT_ID);
     CONVERT_EXTENT_TO_MENTRY(meta_ext, &castle_extents_sb->meta_ext);
 
-    /* Make sure that micro extent is persistent. */
-    castle_cache_extent_flush_schedule(MICRO_EXT_ID, 0, 0);
     debug("Done with intialization of meta extent mappings\n");
 
     return 0;
@@ -599,7 +597,7 @@ int castle_extents_writeback(void)
     if (!extent_init_done)
         return 0;
 
-    /* Don't exit with out-standing dead extents. They are scheduled to get freed on 
+    /* Don't exit with out-standing dead extents. They are scheduled to get freed on
      * system work queue. */
     if (castle_extents_exiting)
         while (atomic_read(&castle_extents_dead_count))
@@ -609,7 +607,7 @@ int castle_extents_writeback(void)
         castle_mstore_init(MSTORE_EXTENTS, sizeof(struct castle_elist_entry));
     if(!castle_extents_mstore)
         return -ENOMEM;
- 
+
     castle_extent_transaction_start();
 
     /* Note: This is important to make sure, nothing changes in extents. And
@@ -630,6 +628,9 @@ int castle_extents_writeback(void)
     /* Writeback maps freespace structure into extent superblock. */
     castle_ext_freespace_marshall(&meta_ext_free, &ext_sblk->meta_ext_free_bs);
 
+    /* Flush micro extent. */
+    castle_cache_extent_flush_schedule(MICRO_EXT_ID, 0, 0);
+
     /* Flush the complete meta extent onto disk, before completing writeback. */
     BUG_ON(!castle_ext_freespace_consistent(&meta_ext_free));
     castle_cache_extent_flush_schedule(META_EXT_ID, 0,
@@ -638,7 +639,7 @@ int castle_extents_writeback(void)
     INJECT_FAULT;
 
     /* It is important to complete freespace_writeback() under extent lock, to
-     * make sure freesapce and extents are in sync. */ 
+     * make sure freesapce and extents are in sync. */
     castle_freespace_writeback();
 
     castle_extents_super_block_writeback();
