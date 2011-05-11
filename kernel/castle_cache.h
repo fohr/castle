@@ -7,19 +7,19 @@ struct castle_cache_page;
 typedef struct castle_cache_block {
     c_ext_pos_t                cep;
     atomic_t                   remaining;
+
     int                        nr_pages;        /**< Number of c2ps mapped by the block           */
-
     struct castle_cache_page **c2ps;            /**< Array of c2ps backing the buffer             */
-
     void                      *buffer;          /**< Linear mapping of the pages                  */
+
     struct hlist_node          hlist;           /**< Hash-list node                               */
     union {
-        struct list_head       dirty;           /**< Position on dirtylist.                       */
-        struct list_head       clean;           /**< Position on freelist.                        */
         struct list_head       free;            /**< Position on freelist.                        */
+        struct list_head       clean;           /**< Position on freelist.                        */
         struct list_head       reserve;         /**< Position on meta-extent reserve freelist.    */
+        struct rb_node         rb_dirtytree;    /**< Per-extent dirtytree RB-node.                */
     };
-    struct rb_node             rb_dirtylist;    /**< Per-extent dirtylist RB-node                 */
+    c_ext_dirtytree_t         *dirtytree;       /**< Dirtytree c2b is a member of.                */
 
     struct c2b_state {
         unsigned long          bits:56;         /**< State bitfield                               */
@@ -89,7 +89,7 @@ void clear_c2b_no_resubmit  (c2_block_t *c2b);
 int  c2b_remap              (c2_block_t *c2b);
 void set_c2b_remap          (c2_block_t *c2b);
 void clear_c2b_remap        (c2_block_t *c2b);
-void castle_cache_extent_dirtylist_remove(c_ext_dirtylist_t *dirtylist);
+void castle_cache_extent_dirtytree_remove(c_ext_dirtytree_t *dirtytree);
 
 /**********************************************************************************************
  * Refcounts. 

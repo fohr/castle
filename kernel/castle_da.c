@@ -65,6 +65,8 @@ static int                      castle_da_exiting    = 0;
 static int                      castle_dynamic_driver_merge = 1;
 
 static int                      castle_merges_abortable = 1; /* 0 or 1, default=enabled */
+static DECLARE_WAIT_QUEUE_HEAD (castle_da_promote_wq);  /**< castle_da_level0_modified_promote()  */
+
 module_param(castle_merges_abortable, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
 MODULE_PARM_DESC(castle_merges_abortable, "Allow on-going merges to abort upon exit condition");
 
@@ -140,6 +142,8 @@ static int castle_da_merge_restart(struct castle_double_array *da, void *unused)
 static int castle_da_merge_start(struct castle_double_array *da, void *unused);
 void castle_double_array_merges_fini(void);
 static void castle_da_merge_budget_consume(struct castle_da_merge *merge);
+static struct castle_component_tree* castle_da_rwct_get(struct castle_double_array *da,
+                                                        int cpu_index);
 static void castle_da_queue_kick(struct work_struct *work);
 static void castle_da_read_bvec_start(struct castle_double_array *da, c_bvec_t *c_bvec);
 static void castle_da_write_bvec_start(struct castle_double_array *da, c_bvec_t *c_bvec);
@@ -6075,33 +6079,72 @@ static int castle_da_level0_check_promote(struct castle_double_array *da, void *
 /**
  * Promote modified level 0 RWCTs so the checkpoint thread writes them out.
  *
- * @param   da  Doubling array to search modified level 0 RWCTs in
+ * @param   work    Work structure (embedded in DA structure)
  *
- * NOTE: Caller must hold CASTLE_TRANSACTION lock.  Expected to be called from
- *       castle_double_arrays_writeback().
- *
- * @return  0   So hash iterator continues
- *
- * @also castle_double_arrays_writeback()
+ * @also castle_da_level0_modified_promote()
  */
-static int castle_da_level0_modified_promote(struct castle_double_array *da, void *unused)
+static void __castle_da_level0_modified_promote(struct work_struct *work)
 {
-    struct castle_component_tree *ct, *tct;
-    int cpu_index = 0;
+    struct castle_double_array *da;
+    struct castle_component_tree *ct;
+    int cpu_index;
 
-    list_for_each_entry_safe_reverse(ct, tct, &da->levels[0].trees, da_list)
+    da = container_of(work, struct castle_double_array, work);
+
+    /* Wait until *we* set the growing bit. */
+    while (castle_da_growing_rw_test_and_set(da) != EXIT_SUCCESS)
+        msleep_interruptible(1);
+
+    for (cpu_index = 0; cpu_index < castle_double_array_request_cpus(); cpu_index++)
     {
+        ct = castle_da_rwct_get(da, cpu_index);
+
         /* Promote level 0 CTs if they contain items.
          * CTs at level 1 will be written to disk by the checkpoint thread. */
         if (atomic64_read(&ct->item_count) != 0)
         {
-            castle_printk(LOG_INFO, "Promoting DA 0x%x level 0 RWCT seq %u, has %ld items\n",
+            castle_printk(LOG_INFO, "Promote for DA 0x%x level 0 RWCT seq %u (has %ld items)\n",
                     da->id, ct->seq, atomic64_read(&ct->item_count));
-            castle_da_rwct_create(da, cpu_index, 0 /*in_tran*/, LFS_VCT_T_INVALID);
+            __castle_da_rwct_create(da, cpu_index, 0 /*in_tran*/, LFS_VCT_T_INVALID);
         }
 
-        cpu_index++;
+        castle_ct_put(ct, 1 /*write*/);
     }
+
+    castle_da_growing_rw_clear(da);
+
+    /* Drop DA reference, adjust promoting DAs counter and signal caller. */
+    castle_da_put(da);
+    atomic_dec((atomic_t *)da->private);
+    wake_up(&castle_da_promote_wq);
+}
+
+/**
+ * Promote modified level 0 RWCTs so the checkpoint thread writes them out.
+ *
+ * @param   da      DA to search for modified level 0 RWCTs in
+ * @param   counter To count outstanding DA promotes
+ *
+ * Schedule each DA promote on a workqueue as castle_da_rwct_create() might
+ * sleep which is not safe while holding the da hash spinlock.
+ *
+ * @return  0       So hash iterator continues
+ *
+ * @also __castle_da_level0_modified_promote()
+ * @also castle_double_arrays_writeback()
+ */
+static int castle_da_level0_modified_promote(struct castle_double_array *da, void *counter)
+{
+    atomic_inc((atomic_t *)counter);
+
+    if (castle_da_deleted(da))
+        return 0;
+
+    /* Get DA reference and place on workqueue. */
+    castle_da_get(da);
+    da->private = counter;
+    CASTLE_INIT_WORK(&da->work, __castle_da_level0_modified_promote);
+    schedule_work(&da->work);
 
     return 0;
 }
@@ -6666,10 +6709,15 @@ out:
 void castle_double_arrays_pre_writeback(void)
 {
     static int rwct_checkpoints = 0;
+    atomic_t in_flight = ATOMIC(0);
 
     if (!castle_da_exiting && ++rwct_checkpoints >= RWCT_CHECKPOINT_FREQUENCY)
     {
-        castle_da_hash_iterate(castle_da_level0_modified_promote, NULL);
+        /* Promote non-empty CTs in all DAs. */
+        castle_da_hash_iterate(castle_da_level0_modified_promote, &in_flight);
+        /* Wait for all promotes to complete. */
+        wait_event(castle_da_promote_wq, atomic_read(&in_flight) == 0);
+
         rwct_checkpoints = 0;
     }
 }
@@ -6723,7 +6771,7 @@ static int castle_da_all_rwcts_create(struct castle_double_array *da, c_lfs_vct_
     /* No RWCTs at level 0 in this DA.  Create on per request-handling CPU. */
     for (cpu_index = 0; cpu_index < castle_double_array_request_cpus(); cpu_index++)
     {
-        if (__castle_da_rwct_create(da, cpu_index, 1 /* in_tran */, lfs_type) != EXIT_SUCCESS)
+        if (__castle_da_rwct_create(da, cpu_index, 1 /*in_tran*/, lfs_type) != EXIT_SUCCESS)
         {
             castle_printk(LOG_WARN, "Failed to create T0 %d for DA %u\n", cpu_index, da->id);
             goto err_out;
@@ -7439,6 +7487,8 @@ static struct castle_component_tree* __castle_da_rwct_get(struct castle_double_a
 
 /**
  * Return cpu_index^th T0 CT for da with a reference held.
+ *
+ * NOTE: Always returns a valid CT pointer.
  *
  * @also __castle_da_rwct_get()
  */
