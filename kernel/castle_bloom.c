@@ -1023,12 +1023,13 @@ void castle_bloom_build_param_unmarshall(castle_bloom_t *bf, struct castle_bbp_e
         debug("%s::previous node used: %d, current node used: %d.\n",
                 __FUNCTION__, bbpm->node_used, bf_bp->cur_node->used);
 
-        /* TODO@tr verify that this entries_drop is sensible */
-        if(bf_bp->cur_node->used > 0)
+        /* if the following BUGs, then it seems possible that some node entries were dropped
+           after the serialisation point, which means serdes is more tricky :-( */
+        BUG_ON(bf_bp->cur_node->used < bbpm->node_used);
+        if(bf_bp->cur_node->used != bbpm->node_used)
         {
             drop_start = bbpm->node_used;
             drop_end   = bf_bp->cur_node->used - 1;
-            BUG_ON(drop_end < drop_start);
             bf->btree->entries_drop(bf_bp->cur_node, drop_start, drop_end);
         }
     }

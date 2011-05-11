@@ -4769,12 +4769,13 @@ static void castle_da_merge_deserialise(struct castle_da_merge *merge,
                         merge_mstore->next_idx[i],
                         node->size);
 
-                /* TODO@tr verify that this entries_drop is sensible */
-                if(node->used > 0)
+                /* if the following BUGs, then it seems possible that some node entries were dropped
+                   after the serialisation point, which means serdes is more tricky :-( */
+                BUG_ON(node->used < merge_mstore->node_used[i]);
+                if(node->used != merge_mstore->node_used[i])
                 {
                     drop_start = merge_mstore->node_used[i];
                     drop_end   = node->used - 1;
-                    BUG_ON(drop_end < drop_start);
                     merge->out_btree->entries_drop(node, drop_start, drop_end);
                 }
             }
