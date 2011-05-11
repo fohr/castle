@@ -5375,7 +5375,10 @@ int castle_cache_extent_flush_schedule(c_ext_id_t ext_id, uint64_t start,
 
     entry = castle_malloc(sizeof(struct castle_cache_flush_entry), GFP_KERNEL);
     if (!entry)
+    {
+        castle_extent_put(ext_id);
         return -1;
+    }
 
     entry->ext_id = ext_id;
     entry->start  = start;
