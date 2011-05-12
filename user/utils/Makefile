@@ -63,3 +63,4 @@ install: castle_probe_device mkcastlefs
 	install -D check-ssd /usr/sbin/check-ssd
 	install -D mkcastlefs /sbin/mkcastlefs
 	install -D castle_probe_device /usr/sbin/castle-probe-device
+	install -d /var/lib/castle-fs -m 0755 -o root

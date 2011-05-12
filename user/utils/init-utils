@@ -27,7 +27,7 @@ function get_cache_size {
             size_in_kb=$(( ${TOTAL_RAM} - ${MIN_FREE} ))
         else
             size_in_kb="$CANDIDATE_SIZE"
-        fi 
+        fi
     fi
 
     local PAGE_SIZE=$(getconf PAGESIZE)
@@ -68,7 +68,7 @@ function init_kernel_fs {
 }
 
 function unmount_kernel_fs {
-    if kernel_fs_running; then 
+    if kernel_fs_running; then
         echo "Unmounting Kernel FS..."
 
         if [ "$RUNLEVEL" = 0 ] || [ "$RUNLEVEL" = 6 ]
@@ -161,7 +161,6 @@ function load_fs_and_claim {
         castle-cli environment description "$description"
     fi
 
-    mkdir -p /var/lib/castle-fs
     touch /var/lib/castle-fs/dirty
     sync
     sleep 1
