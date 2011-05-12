@@ -586,7 +586,7 @@ int castle_version_delete(version_t version)
     castle_da_version_delete(da_id);
 
     /* raise event */
-    castle_events_version_destroy(version);
+    castle_events_version_delete_version(version);
 
     return 0;
 }
@@ -685,7 +685,7 @@ int castle_version_tree_delete(version_t version)
         struct castle_version *del_v = list_entry(pos, struct castle_version, free_list);
 
         castle_sysfs_version_del(del_v->version);
-        castle_events_version_destroy(del_v->version);
+        castle_events_version_delete_version(del_v->version);
         list_del(pos);
         kmem_cache_free(castle_versions_cache, del_v);
     }

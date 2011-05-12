@@ -46,8 +46,8 @@ void castle_events_slave_rebuild_notify(void);
 #define castle_events_version_changed(_version_id) \
     castle_uevent2(CASTLE_CTRL_CREATE, CASTLE_EVENTS_SUCCESS, _version_id)
 
-#define castle_events_version_destroy(_version_id) \
-    castle_uevent2(CASTLE_CTRL_DESTROY, CASTLE_EVENTS_SUCCESS, _version_id)
+#define castle_events_version_delete_version(_version_id) \
+    castle_uevent2(CASTLE_CTRL_DELETE_VERSION, CASTLE_EVENTS_SUCCESS, _version_id)
 
 #define castle_events_version_clone(_version_id) \
     castle_uevent2(CASTLE_CTRL_CLONE, CASTLE_EVENTS_SUCCESS, _version_id)

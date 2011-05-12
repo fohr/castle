@@ -87,7 +87,6 @@ typedef uint32_t tree_seq_t;
 #define TREE_INVAL(_t)      ((_t) == INVAL_TREE)
 #define TREE_SEQ_SHIFT      (24)                    /**< Shift for RWCTs (at levels 0,1)        */
 
-typedef uint32_t da_id_t;
 #define INVAL_DA            ((da_id_t)-1)
 #define DA_INVAL(_da)       ((_da) == INVAL_DA)
 

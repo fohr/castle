@@ -157,58 +157,6 @@ err_out:
     *ret = -EINVAL;
 }
 
-/**
- * Destroy version (version) from doubling array.
- *
- * @TODO Does this destroy an individual version or a whole DA with root version (version)?
- *
- * @param version   Version to destroy
- *
- * @return ret      0       Version destroyed
- * @return ret      -EINVAL Failed to destroy specified version
- */
-void castle_control_destroy(version_t version, int *ret)
-{
-    version_t       parent;
-    da_id_t         da_id;
-
-    castle_printk(LOG_USERINFO, "Destroying version: %u\n", version);
-    *ret = castle_version_read(version, &da_id, &parent, NULL, NULL, NULL);
-    
-    /* Reply immediatly, if we can't find the version */
-    if ((*ret < 0))
-    {
-        castle_printk(LOG_WARN, "Invalid version\n");   // @TODO print the version
-        *ret = -EINVAL;
-        return;
-    }
-
-    /* Reply immediately, if we can't find an associated DA */
-    if (!da_id)
-    {
-        castle_printk(LOG_WARN, "Version does not correspond to a DA.\n");    // @TODO print the version
-        *ret = -EINVAL;
-        return;
-    }
-
-    /* Reply immediately, if this is not the root version */
-    if (parent)
-    {
-        castle_printk(LOG_WARN, "Cannot delete version with parent.\n");
-        *ret = -EINVAL;
-        return;
-    }
-
-    if (castle_double_array_destroy(da_id) < 0)
-    {
-        castle_printk(LOG_WARN, "Failed to destroy Collection tree: %u\n", version);
-        *ret = -EINVAL;
-        return;
-    }
-
-    *ret = 0;
-}
-
 void castle_control_clone(version_t version, int *ret, version_t *clone)
 {
     if(version == 0)
@@ -910,9 +858,9 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
             break;
         case CASTLE_CTRL_INIT:
             castle_control_fs_init(&ioctl.init.ret);
-            break;            
+            break;
         case CASTLE_CTRL_PROTOCOL_VERSION:
-            castle_control_protocol_version(&ioctl.protocol_version.ret, 
+            castle_control_protocol_version(&ioctl.protocol_version.ret,
                                             &ioctl.protocol_version.version);
             break;
         case CASTLE_CTRL_ATTACH:
@@ -933,14 +881,14 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
         case CASTLE_CTRL_COLLECTION_ATTACH:
         {
             char *collection_name;
-            
+
             err = castle_from_user_copy( ioctl.collection_attach.name,
                                          ioctl.collection_attach.name_length,
                                          MAX_NAME_SIZE,
                                         &collection_name);
             if(err)
                 goto err;
-        
+
             debug("Collection Attach: %s\n", collection_name);
             castle_control_collection_attach(ioctl.collection_attach.version,
                                             collection_name,
@@ -962,20 +910,14 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
                                   &ioctl.create.ret,
                                   &ioctl.create.id);
             break;
-        case CASTLE_CTRL_DESTROY:
-            if (ioctl.destroy.flag == CASTLE_DESTROY_TREE)
-                castle_control_destroy(ioctl.destroy.version,
-                                      &ioctl.destroy.ret);
-            else if (ioctl.destroy.flag == CASTLE_DESTROY_VERSION)
-                castle_control_collection_snapshot_delete(ioctl.destroy.version,
-                                                         &ioctl.destroy.ret);
-            else
-            {
-                castle_printk(LOG_WARN, "Flag for destroy is none of version[0]/tree[1]\n");
-                err = -ENOSYS;
-                goto err;
-            }
+        case CASTLE_CTRL_DESTROY_VERTREE:
+            ioctl.destroy_vertree.ret =
+                            castle_double_array_destroy(ioctl.destroy_vertree.vertree_id);
+            break;
 
+        case CASTLE_CTRL_DELETE_VERSION:
+            castle_control_collection_snapshot_delete(ioctl.delete_version.version,
+                                                     &ioctl.delete_version.ret);
             break;
 
         case CASTLE_CTRL_CLONE:
@@ -999,18 +941,18 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
         {
             char *var_str;
             c_env_var_t var_id;
-            
+
             err = castle_from_user_copy( ioctl.environment_set.var_str,
                                          ioctl.environment_set.var_len,
                                          MAX_ENV_LEN-1,
                                         &var_str);
             if(err)
                 goto err;
-        
+
             var_id = ioctl.environment_set.var_id;
             debug("Setting environment var[%d]=%s\n", var_id, var_str);
             castle_control_environment_set( var_id,
-                                            var_str, 
+                                            var_str,
                                            &ioctl.environment_set.ret);
             break;
         }
@@ -1049,7 +991,7 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
             castle_control_slave_scan(ioctl.slave_scan.id, &ioctl.slave_scan.ret);
             break;
         case CASTLE_CTRL_THREAD_PRIORITY:
-            castle_control_thread_priority(ioctl.thread_priority.nice_value, 
+            castle_control_thread_priority(ioctl.thread_priority.nice_value,
                                           &ioctl.thread_priority.ret);
             break;
 
@@ -1064,7 +1006,7 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
         return -EFAULT;
 
     return 0;
-    
+
 err:
     CASTLE_TRANSACTION_END;
     return err;

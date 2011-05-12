@@ -7,7 +7,7 @@
 #include <sys/time.h>
 #endif
 
-#define CASTLE_PROTOCOL_VERSION 7
+#define CASTLE_PROTOCOL_VERSION 8
 
 #define PACKED               __attribute__((packed))
 
@@ -122,6 +122,7 @@ typedef uint32_t transfer_id_t;
 typedef uint32_t slave_uuid_t;
 typedef uint32_t collection_id_t;
 typedef uint32_t version_t;         /**< Version ID type, unique across all Doubling Arrays.    */
+typedef uint32_t da_id_t;
 #define INVAL_VERSION       ((version_t)-1)
 #define VERSION_INVAL(_v)   ((_v) == INVAL_VERSION)
 
@@ -146,7 +147,7 @@ typedef uint32_t version_t;         /**< Version ID type, unique across all Doub
 #define CASTLE_CTRL_VALID_STATS              17
 #define CASTLE_CTRL_INVALID_STATS            18
 #define CASTLE_CTRL_SET_TARGET               19
-#define CASTLE_CTRL_DESTROY                  20
+#define CASTLE_CTRL_DESTROY_VERTREE          20
 #define CASTLE_CTRL_PROTOCOL_VERSION         21
 #define CASTLE_CTRL_FAULT                    22
 #define CASTLE_CTRL_ENVIRONMENT_SET          23
@@ -157,6 +158,7 @@ typedef uint32_t version_t;         /**< Version ID type, unique across all Doub
 #define CASTLE_CTRL_SLAVE_EVACUATE           28
 #define CASTLE_CTRL_THREAD_PRIORITY          29
 #define CASTLE_CTRL_SLAVE_SCAN               30
+#define CASTLE_CTRL_DELETE_VERSION           31
 
 typedef struct castle_control_cmd_claim {
     uint32_t     dev;          /* IN  */
@@ -211,15 +213,15 @@ typedef struct castle_control_cmd_create {
     version_t id;              /* OUT */
 } cctrl_cmd_create_t;
 
-enum {
-    CASTLE_DESTROY_TREE = 0,
-    CASTLE_DESTROY_VERSION = 1,
-};
-typedef struct castle_control_cmd_destroy {
-    version_t   version;         /* IN */
-    int         flag;            /* IN */
+typedef struct castle_control_cmd_destroy_vertree {
+    da_id_t     vertree_id;      /* IN */
     int         ret;             /* OUT */
-} cctrl_cmd_destroy_t;
+} cctrl_cmd_destroy_vertree_t;
+
+typedef struct castle_control_cmd_delete_version {
+    version_t   version;         /* IN */
+    int         ret;             /* OUT */
+} cctrl_cmd_delete_version_t;
 
 typedef struct castle_control_cmd_clone {
     version_t version;         /* IN  */
@@ -311,7 +313,8 @@ typedef struct castle_control_ioctl {
         cctrl_cmd_collection_snapshot_t collection_snapshot;
 
         cctrl_cmd_create_t              create;
-        cctrl_cmd_destroy_t             destroy;
+        cctrl_cmd_destroy_vertree_t     destroy_vertree;
+        cctrl_cmd_delete_version_t      delete_version;
         cctrl_cmd_clone_t               clone;
 
         cctrl_cmd_transfer_create_t     transfer_create;
@@ -370,8 +373,10 @@ enum {
         _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_INVALID_STATS, cctrl_ioctl_t),
     CASTLE_CTRL_SET_TARGET_IOCTL =
         _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_SET_TARGET, cctrl_ioctl_t),
-    CASTLE_CTRL_DESTROY_IOCTL =
-        _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_DESTROY, cctrl_ioctl_t),
+    CASTLE_CTRL_DESTROY_VERTREE_IOCTL =
+        _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_DESTROY_VERTREE, cctrl_ioctl_t),
+    CASTLE_CTRL_DELETE_VERSION_IOCTL =
+        _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_DELETE_VERSION, cctrl_ioctl_t),
     CASTLE_CTRL_PROTOCOL_VERSION_IOCTL =
         _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_PROTOCOL_VERSION, cctrl_ioctl_t),
     CASTLE_CTRL_ENVIRONMENT_SET_IOCTL =
