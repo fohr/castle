@@ -1928,7 +1928,7 @@ static inline c2_block_t* _castle_cache_block_hash_get(c_ext_pos_t cep,
     c2_block_t *c2b = NULL;
 
     /* Hold the hash lock. */
-    read_lock_irq(&castle_cache_block_hash_lock);
+    read_lock(&castle_cache_block_hash_lock);
 
     /* Try and get the matching block from the hash. */
     c2b = castle_cache_block_hash_find(cep, nr_pages);
@@ -1937,7 +1937,7 @@ static inline c2_block_t* _castle_cache_block_hash_get(c_ext_pos_t cep,
 	/* We found a matching block. */
 	get_c2b(c2b);
 	/* we have a reference so drop the lock on the hash */
-	read_unlock_irq(&castle_cache_block_hash_lock);
+	read_unlock(&castle_cache_block_hash_lock);
 	if(promote) {
 	    /* We are obtaining this block to be used.  We should push it to
              * the end of the LRU list indicating that it is recently used
@@ -1965,7 +1965,7 @@ static inline c2_block_t* _castle_cache_block_hash_get(c_ext_pos_t cep,
 	}
     } /* if(c2b) */
     else {
-	read_unlock_irq(&castle_cache_block_hash_lock);
+	read_unlock(&castle_cache_block_hash_lock);
     }
     return c2b;
 }
@@ -2018,12 +2018,12 @@ static int castle_cache_block_hash_insert(c2_block_t *c2b, int transient)
 {
     int idx, success;
 
-    write_lock_irq(&castle_cache_block_hash_lock);
+    write_lock(&castle_cache_block_hash_lock);
 
     /* Check if already in the hash */
     success = 0;
     if(castle_cache_block_hash_find(c2b->cep, c2b->nr_pages)) { 
-	write_unlock_irq(&castle_cache_block_hash_lock);
+	write_unlock(&castle_cache_block_hash_lock);
 	goto out;
     }
 
@@ -2033,7 +2033,7 @@ static int castle_cache_block_hash_insert(c2_block_t *c2b, int transient)
     hlist_add_head(&c2b->hlist, &castle_cache_block_hash[idx]);
     /* in the hash and hold a reference so drop lock */
     BUG_ON(atomic_read(&c2b->count) == 0);
-    write_unlock_irq(&castle_cache_block_hash_lock);
+    write_unlock(&castle_cache_block_hash_lock);
     BUG_ON(c2b_dirty(c2b));
     BUG_ON(c2b_softpin(c2b));
     spin_lock_irq(&castle_cache_block_lru_lock);
@@ -2535,11 +2535,10 @@ static int castle_cache_block_hash_clean(void)
     /* Hunt for victim c2bs. Hold hash lock for duration. */
     /* this means we can delete victim blocks from the hash */
     /* this also means no-one can acquire new references */
-    write_lock_irq(&castle_cache_block_hash_lock);
+    write_lock(&castle_cache_block_hash_lock);
 
     /* acquire the lock on the LRU list, since we are moving things around */
-    /* we've already disabled interrupts at this point */
-    spin_lock(&castle_cache_block_lru_lock);
+    spin_lock_irq(&castle_cache_block_lru_lock);
     
     do
     {
@@ -2602,8 +2601,8 @@ static int castle_cache_block_hash_clean(void)
     while (!victimise_softpin && (victimise_softpin = (nr_victims < BATCH_FREE)));
 
     /* Hunt complete.  Release locks. */
-    spin_unlock(&castle_cache_block_lru_lock);
-    write_unlock_irq(&castle_cache_block_hash_lock);
+    spin_unlock_irq(&castle_cache_block_lru_lock);
+    write_unlock(&castle_cache_block_hash_lock);
 
     /* We couldn't find any victims */
     if (hlist_empty(&victims))
@@ -2649,11 +2648,11 @@ int castle_cache_block_destroy(c2_block_t *c2b)
 
     /* Check whether the c2b is busy, under the hash lock so that no other references
        can be taken. */
-    write_lock_irq(&castle_cache_block_hash_lock);
+    write_lock(&castle_cache_block_hash_lock);
     ret = c2b_busy(c2b, 1) ? -EINVAL : 0;
     if(!ret)
     {
-	spin_lock(&castle_cache_block_lru_lock);
+	spin_lock_irq(&castle_cache_block_lru_lock);
         hlist_del(&c2b->hlist);
         list_del(&c2b->clean);
         /* Update bookkeeping info. */
@@ -2665,9 +2664,9 @@ int castle_cache_block_destroy(c2_block_t *c2b)
         }
         else
             atomic_inc(&castle_cache_block_victims);
-	spin_unlock(&castle_cache_block_lru_lock);
+	spin_unlock_irq(&castle_cache_block_lru_lock);
     }
-    write_unlock_irq(&castle_cache_block_hash_lock);
+    write_unlock(&castle_cache_block_hash_lock);
     /* If the c2b was busy, exit early. */
     if(ret)
     {
