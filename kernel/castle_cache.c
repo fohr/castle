@@ -311,8 +311,6 @@ static DECLARE_WAIT_QUEUE_HEAD(castle_cache_page_reservelist_wq);   /**< Reserve
 static DECLARE_WAIT_QUEUE_HEAD(castle_cache_block_reservelist_wq);  /**< Reservelist c2b waiters  */
 
 #define CASTLE_CACHE_VMAP_PGS   256
-static struct page            *castle_cache_vmap_pgs[CASTLE_CACHE_VMAP_PGS]; 
-static           DECLARE_MUTEX(castle_cache_vmap_lock);
 
 struct task_struct     *castle_cache_flush_thread;
 static DECLARE_WAIT_QUEUE_HEAD(castle_cache_flush_wq); 
@@ -2344,6 +2342,7 @@ static void castle_cache_block_init(c2_block_t *c2b,
     c_ext_pos_t dcep;
     c2_page_t *c2p;
     int i, uptodate;
+    struct page            *castle_cache_vmap_pgs[CASTLE_CACHE_VMAP_PGS]; 
 
     debug("Initing c2b for cep="cep_fmt_str", nr_pages=%d\n",
             cep2str(cep), nr_pages);
@@ -2373,7 +2372,6 @@ static void castle_cache_block_init(c2_block_t *c2b,
 
     i = 0;
     debug("c2b->nr_pages=%d\n", nr_pages);
-    down(&castle_cache_vmap_lock);
     c2b_for_each_page_start(page, c2p, dcep, c2b) 
     {
 #ifdef CASTLE_DEBUG
@@ -2393,7 +2391,6 @@ static void castle_cache_block_init(c2_block_t *c2b,
         else
             c2b->buffer = vmap(castle_cache_vmap_pgs, i, VM_READ|VM_WRITE, PAGE_KERNEL);
 
-    up(&castle_cache_vmap_lock);
     BUG_ON(!c2b->buffer);
 }
 
