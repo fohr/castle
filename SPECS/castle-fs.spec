@@ -85,6 +85,7 @@ cp user/utils/castle-fs-init.sh %{buildroot}/usr/share/castle-fs/castle-fs-init
 cp user/utils/castle-fs-fini.sh %{buildroot}/usr/share/castle-fs/castle-fs-fini
 cp user/utils/castle-smart-weigh-drive %{buildroot}/usr/sbin/
 cp user/utils/castle-smart-spank-drive %{buildroot}/usr/sbin/
+cp user/utils/castle-smart-process-drive %{buildroot}/usr/sbin/
 cp user/utils/castle-scan %{buildroot}/usr/sbin/
 cp user/utils/castle_probe_device %{buildroot}/usr/sbin/castle-probe-device
 cp user/utils/castle-create %{buildroot}/usr/sbin/

@@ -16,8 +16,10 @@ TMPDIR="$tempdir"
 cd "$tempdir"
 
 function cleanup {
+    local exit_status=${1:-$?}
     cd /
-    rm -rf --one-file-system "$tempdir"
+    rm -rf "$tempdir"
+    exit $exit_status
 }
 
 trap cleanup EXIT
