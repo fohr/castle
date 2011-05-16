@@ -11,24 +11,24 @@ fi
 
 devname=$(basename "$device")
 
-for slavedir in $(find /sys/fs/castle-fs/slaves/ -mindepth 1 -maxdepth 1 -type d)
-do
-  dev=$(basename $(readlink "$slavedir/dev"))
-  if [ "$dev" = "$devname" ]; then
-      uuid=$(basename "$slavedir")
-      break
-  fi
-done
+if [ -e /sys/fs/castle-fs ]; then
+    for slavedir in $(find /sys/fs/castle-fs/slaves/ -mindepth 1 -maxdepth 1 -type d);  do
+        dev=$(basename $(readlink "$slavedir/dev"))
+        if [ "$dev" = "$devname" ]; then
+            uuid=$(basename "$slavedir")
+            break
+        fi
+    done
+fi
 
-for part in /sys/block/$devname/${devname}[0-9]*
-do
+for part in /sys/block/$devname/${devname}[0-9]*; do
   partname=$(basename "$part")
-  for holder in $part/holders/*
-  do
+  for holder in $part/holders/*; do
     holdername=$(basename "$holder")
-    case "$holder" in
+    case "$holdername" in
         md*)
-        mdadm "/dev/$holdername" --fail "/dev/$partname" --remove "/dev/$partname"
+        mdadm "/dev/$holdername" --fail "/dev/$partname"
+        mdadm "/dev/$holdername" --remove "/dev/$partname"
         ;;
     esac
   done

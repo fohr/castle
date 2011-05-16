@@ -4452,7 +4452,8 @@ static int castle_cache_flush(void *unused)
 
             /* Get next per-extent dirtytree to flush. */
             spin_lock_irq(&castle_cache_block_hash_lock);
-            BUG_ON(list_empty(&castle_cache_extent_dirtylist));
+            if (list_empty(&castle_cache_extent_dirtylist))
+                break;
             dirtytree = list_entry(castle_cache_extent_dirtylist.next,
                     c_ext_dirtytree_t, list);
             /* Get dirtytree ref under castle_cache_block_hash_lock.  Prevents
