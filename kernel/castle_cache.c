@@ -4375,7 +4375,7 @@ int castle_cache_extent_flush(c_ext_id_t ext_id, uint64_t start, uint64_t size)
     BUG_ON(!dirtytree);
     ret = __castle_cache_extent_flush(dirtytree,    /* dirtytree    */
                                       size,         /* end_off      */
-                                      0,            /* max_pgs      */
+                                      INT_MAX,      /* max_pgs      */
                                       &in_flight,   /* in_flight_p  */
                                       NULL,         /* flushed_p    */
                                       1);           /* waitlock     */
