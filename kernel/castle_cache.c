@@ -887,10 +887,19 @@ void dirty_c2b(c2_block_t *c2b)
     for (i = 0; i < nr_c2ps; i++)
         dirty_c2p(c2b->c2ps[i]);
 
+    /* Place c2b on per-extent dirtytree if it is not already dirty. */
     if (!c2b_dirty(c2b))
     {
-        /* Remove from cleanlist and do cache list accounting. */
         spin_lock_irqsave(&castle_cache_block_hash_lock, flags);
+
+        /* Don't continue if we've raced another thread. */
+        if (c2b_dirty(c2b))
+        {
+            spin_unlock_irqrestore(&castle_cache_block_hash_lock, flags);
+            return;
+        }
+
+        /* Remove from cleanlist and do cachelist accounting. */
         list_del(&c2b->clean);
         BUG_ON(atomic_dec_return(&castle_cache_cleanlist_size) < 0);
         if (c2b_softpin(c2b))
