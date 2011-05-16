@@ -115,6 +115,7 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t   rda_type,
                                        c_chk_cnt_t    count,
                                        c_ext_id_t     ext_id,
                                        c_ext_event_t *hdl);
+void __castle_extent_dirtytree_put(c_ext_dirtytree_t *dirtytree, int check_hash);
 
 DEFINE_HASH_TBL(castle_extents, castle_extents_hash, CASTLE_EXTENTS_HASH_SIZE,
                 c_ext_t, hash_list, c_ext_id_t, ext_id);
@@ -233,7 +234,7 @@ err_out:
 }
 
 /* Cleanup all extents from hash table. Called at finish. */
-static int castle_extent_hash_remove(c_ext_t *ext, void *unused) 
+static int castle_extent_hash_remove(c_ext_t *ext, void *unused)
 {
     debug("Freeing extent #%llu\n", ext->ext_id);
 
@@ -241,7 +242,7 @@ static int castle_extent_hash_remove(c_ext_t *ext, void *unused)
     /* There shouldn't be any outstanding extents for deletion on exit. */
     BUG_ON(ext->deleted);
     __castle_extents_hash_remove(ext);
-    
+
     if (SUPER_EXTENT(ext->ext_id))
     {
         struct castle_slave *cs =
@@ -249,6 +250,7 @@ static int castle_extent_hash_remove(c_ext_t *ext, void *unused)
 
         castle_free(cs->sup_ext_maps);
     }
+    __castle_extent_dirtytree_put(ext->dirtytree, 0 /*check_hash*/);
     castle_free(ext);
 
     return 0;
@@ -1916,7 +1918,10 @@ void castle_extent_dirtytree_get(c_ext_dirtytree_t *dirtytree)
 }
 
 /**
- * Drop a reference to to per-extent dirtytree.
+ * Drop a reference to per-extent dirtytree.
+ *
+ * @param   dirtytree   Dirtytree to drop reference on
+ * @param   check_hash  Whether to verify the dirtytree's extent is not in hash
  *
  * Extent structure specified by dirtytree->ext_id does not need to exist
  * within the extents hash.
@@ -1925,18 +1930,29 @@ void castle_extent_dirtytree_get(c_ext_dirtytree_t *dirtytree)
  *
  * @also castle_extent_dirtytree_get()
  */
-void castle_extent_dirtytree_put(c_ext_dirtytree_t *dirtytree)
+void __castle_extent_dirtytree_put(c_ext_dirtytree_t *dirtytree, int check_hash)
 {
     if (unlikely(atomic_dec_return(&dirtytree->ref_cnt) == 0))
     {
-        BUG_ON(castle_extent_get(dirtytree->ext_id));   /* cannot be in hash now */
+        if (check_hash)
+            BUG_ON(castle_extent_get(dirtytree->ext_id));   /* cannot be in hash now */
         BUG_ON(!RB_EMPTY_ROOT(&dirtytree->rb_root));    /* must be empty */
         castle_free(dirtytree);
     }
 }
 
-/* Check if the extent is alive or not. 
- * Extent is alive if it referenced by one of 
+/**
+ * Drop a reference to per-extent dirtytree.
+ *
+ * @also __castle_extent_dirtytree_put()
+ */
+void castle_extent_dirtytree_put(c_ext_dirtytree_t *dirtytree)
+{
+    __castle_extent_dirtytree_put(dirtytree, 1 /*check_hash*/);
+}
+
+/* Check if the extent is alive or not.
+ * Extent is alive if it referenced by one of
  *  - Component Trees in a DA
  *      - Tree Extent
  *      - Medium Object Extent
