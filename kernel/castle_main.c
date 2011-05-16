@@ -461,6 +461,7 @@ static struct castle_slave *castle_slave_ghost_add(uint32_t uuid)
     slave->id = slave_id++;
     slave->sup_ext = INVAL_EXT_ID;
     mutex_init(&slave->sblk_lock);
+    mutex_init(&slave->bdev_lock);
     INIT_RCU_HEAD(&slave->rcu);
     set_bit(CASTLE_SLAVE_GHOST_BIT, &slave->flags);
     set_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags);
@@ -614,12 +615,11 @@ int castle_fs_init(void)
 
         if ((cs->fs_versions[0] != bcv) && (cs->fs_versions[1] != bcv))
         {
-            char                        b[BDEVNAME_SIZE];
-
             castle_printk(LOG_INIT, "Slave 0x%x [%s] is not in quorum of live slaves. "
                           "Setting as out-of-service.\n",
-                cs->uuid, bdevname(cs->bdev, b));
+                cs->uuid, cs->bdev_name);
             set_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags);
+            castle_release_device(cs);
         }
     }
     rcu_read_unlock();
@@ -724,8 +724,6 @@ int castle_fs_init(void)
          */
         for (i=0; i<fs_sb.nr_slaves; i++)
         {
-            char b[BDEVNAME_SIZE];
-
             cs = castle_slave_find_by_uuid(fs_sb.slaves[i]);
             if (!cs)
             {
@@ -767,7 +765,7 @@ int castle_fs_init(void)
                     (!test_bit(CASTLE_SLAVE_OOS_BIT, &fs_sb.slaves_flags[i])))
                 {
                     castle_printk(LOG_USERINFO, "Slave 0x%x [%s] is still in evacuation\n",
-                            cs->uuid, bdevname(cs->bdev, b));
+                            cs->uuid, cs->bdev_name);
                     set_bit(CASTLE_SLAVE_EVACUATE_BIT, &cs->flags);
                 }
             }
@@ -1393,7 +1391,9 @@ struct castle_slave* castle_claim(uint32_t new_dev)
     cs->last_access = jiffies;
     cs->sup_ext     = INVAL_EXT_ID;
     mutex_init(&cs->sblk_lock);
+    mutex_init(&cs->bdev_lock);
     INIT_RCU_HEAD(&cs->rcu);
+    atomic_set(&cs->io_in_flight, 0);
 
     dev = new_decode_dev(new_dev);
     bdev = open_by_devnum(dev, FMODE_READ|FMODE_WRITE);
@@ -1404,6 +1404,9 @@ struct castle_slave* castle_claim(uint32_t new_dev)
         goto err_out;
     }
     cs->bdev = bdev;
+
+    /* Keep track of the bdev name, so that it can be accessed after the bdev has been released. */
+    bdevname(bdev, cs->bdev_name);
 
     if(castle_slave_superblock_read(cs))
     {
@@ -1422,7 +1425,7 @@ struct castle_slave* castle_claim(uint32_t new_dev)
     err = bd_claim(bdev, &castle);
     if (err) 
     {
-        castle_printk(LOG_ERROR, "Could not bd_claim %s, err=%d.\n", bdevname(bdev, b), err);
+        castle_printk(LOG_ERROR, "Could not bd_claim %s, err=%d.\n", cs->bdev_name, err);
         goto err_out;
     }
     set_bit(CASTLE_SLAVE_BDCLAIMED_BIT, &cs->flags);
@@ -1482,7 +1485,7 @@ struct castle_slave* castle_claim(uint32_t new_dev)
         clear_bit(CASTLE_SLAVE_CLAIMING_BIT, &cs->flags);
 
         castle_printk(LOG_USERINFO, "Disk 0x%x [%s] has been successfully added.\n",
-                      cs->uuid, bdevname(bdev, b));
+                      cs->uuid, cs->bdev_name);
 
         /* Wake up anybody who is waiting for space .... */
         castle_extent_lfs_victims_wakeup();
@@ -1518,17 +1521,35 @@ err_out:
     return NULL;    
 }
 
+void castle_release_oos_slave(struct work_struct *work)
+{
+    struct castle_slave *cs = container_of(work, struct castle_slave, work);
+
+    BUG_ON(!cs);
+    BUG_ON(!test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags));
+    BUG_ON(atomic_read(&cs->io_in_flight));
+    castle_release_device(cs);
+}
+
 void castle_release_device(struct castle_slave *cs)
 {
     BUG_ON(!cs);
-    BUG_ON(!test_bit(CASTLE_SLAVE_BDCLAIMED_BIT, &cs->flags));
-    bd_release(cs->bdev);
-    clear_bit(CASTLE_SLAVE_BDCLAIMED_BIT, &cs->flags);
+    BUG_ON(atomic_read(&cs->io_in_flight));
+    mutex_lock(&cs->bdev_lock);
+    if (test_bit(CASTLE_SLAVE_BDCLAIMED_BIT, &cs->flags))
+    {
+        bd_release(cs->bdev);
+        clear_bit(CASTLE_SLAVE_BDCLAIMED_BIT, &cs->flags);
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,24)
-    blkdev_put(cs->bdev);
+        blkdev_put(cs->bdev);
 #else
-    blkdev_put(cs->bdev, FMODE_READ|FMODE_WRITE);
+        blkdev_put(cs->bdev, FMODE_READ|FMODE_WRITE);
 #endif
+        mutex_unlock(&cs->bdev_lock);
+        castle_printk(LOG_USERINFO, "Device 0x%x [%s] has been released.\n",
+                      cs->uuid, cs->bdev_name);
+    } else
+        mutex_unlock(&cs->bdev_lock);
 }
 
 void castle_release(struct castle_slave *cs)
@@ -1539,9 +1560,7 @@ void castle_release(struct castle_slave *cs)
     if (!test_bit(CASTLE_SLAVE_GHOST_BIT, &cs->flags))
     {
         castle_events_slave_release(cs->uuid);
-        /* Remapped slaves have already been released. */
-        if (test_bit(CASTLE_SLAVE_BDCLAIMED_BIT, &cs->flags))
-            castle_release_device(cs);
+        castle_release_device(cs);
     }
     list_del_rcu(&cs->list);
     synchronize_rcu();

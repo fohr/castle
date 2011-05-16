@@ -2111,7 +2111,6 @@ static int castle_extent_remap_superchunks_alloc(int slave_idx)
     chk_seq = castle_freespace_slave_superchunk_alloc(cs, 0, NULL);
     if (CHK_SEQ_INVAL(chk_seq))
     {
-        char b[BDEVNAME_SIZE];
         /*
          * We get here if the slave is either out-or-service, or out of space. If the slave is
          * out-of-service then just return ENOSPC so calling stack can retry.
@@ -2120,15 +2119,15 @@ static int castle_extent_remap_superchunks_alloc(int slave_idx)
             (!(cs->cs_superblock.pub.flags & CASTLE_SLAVE_SSD)))
         {
             /* Slave is not out-of-service so we are out of space */
-            castle_printk(LOG_WARN, "Error: failed to get freespace from slave: 0x%x (%s).\n",
-                    cs->uuid, bdevname(cs->bdev, b));
+            castle_printk(LOG_WARN, "Error: failed to get freespace from slave: 0x%x [%s].\n",
+                    cs->uuid, cs->bdev_name);
 
             castle_freespace_stats_print();
             return -ENOSPC;
         } else
         {
             castle_printk(LOG_WARN, "Warning - Failed allocating superchunk from "
-                    "out-of-service slave: 0x%x (%s).", cs->uuid, bdevname(cs->bdev, b));
+                    "out-of-service slave: 0x%x [%s].", cs->uuid, cs->bdev_name);
             /*
              * Slave is now out-of-service. Re-initialise remap state and retry.
              */
@@ -2748,7 +2747,7 @@ restart:
                 castle_printk(LOG_USERINFO, "Finished remapping out-of-service slave 0x%x.\n",
                               oos_slaves[i]->uuid);
                 set_bit(CASTLE_SLAVE_REMAPPED_BIT, &oos_slaves[i]->flags);
-                if (test_bit(CASTLE_SLAVE_BDCLAIMED_BIT, &oos_slaves[i]->flags))
+                if (atomic_read(&oos_slaves[i]->io_in_flight) == 0)
                     castle_release_device(oos_slaves[i]);
             }
         }
@@ -2762,7 +2761,8 @@ restart:
                 set_bit(CASTLE_SLAVE_OOS_BIT, &evacuated_slaves[i]->flags);
                 set_bit(CASTLE_SLAVE_REMAPPED_BIT, &evacuated_slaves[i]->flags);
                 clear_bit(CASTLE_SLAVE_EVACUATE_BIT, &evacuated_slaves[i]->flags);
-                castle_release_device(evacuated_slaves[i]);
+                if (atomic_read(&evacuated_slaves[i]->io_in_flight) == 0)
+                    castle_release_device(evacuated_slaves[i]);
             }
         }
 

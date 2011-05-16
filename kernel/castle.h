@@ -1293,6 +1293,10 @@ struct castle_slave {
     c_chk_cnt_t                     disk_size; /* in chunks; max_chk_num + 1 */
     c_chk_cnt_t                     reserved_schks;
     atomic_t                        free_chk_cnt;
+    struct mutex                    bdev_lock;
+    atomic_t                        io_in_flight;
+    char                            bdev_name[BDEVNAME_SIZE];
+    struct work_struct              work;
 };
 /* castle_slave flags bits */
 #define CASTLE_SLAVE_OOS_BIT        0 /* Slave is out-of-service */
@@ -1431,6 +1435,7 @@ void                  castle_ext_freespace_unmarshall
 
 c_byte_off_t          castle_ext_freespace_summary_get
                                                    (c_ext_free_t     *ext_free);
+void                  castle_release_oos_slave     (struct work_struct *work) ;
 
 struct castle_cache_block;
 

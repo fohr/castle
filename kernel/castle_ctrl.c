@@ -595,7 +595,6 @@ void castle_control_slave_scan(uint32_t uuid, int *ret)
 void castle_control_slave_evacuate(uint32_t uuid, uint32_t force, int *ret)
 {
     struct  castle_slave *slave;
-    char    b[BDEVNAME_SIZE];
     struct  list_head *lh;
     int     nr_live_slaves=0;
 
@@ -669,9 +668,9 @@ void castle_control_slave_evacuate(uint32_t uuid, uint32_t force, int *ret)
     if (test_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags))
     {
         /* Slave is already marked as out-of-service - ignore */
-        castle_printk(LOG_WARN, "Warning: slave 0x%x (%s) has already been marked out-of-service. "
+        castle_printk(LOG_WARN, "Warning: slave 0x%x [%s] has already been marked out-of-service. "
                "Ignoring request.\n",
-                slave->uuid, bdevname(slave->bdev, b));
+                slave->uuid, slave->bdev_name);
         *ret = -EEXIST;
         return;
     } 
@@ -681,8 +680,8 @@ void castle_control_slave_evacuate(uint32_t uuid, uint32_t force, int *ret)
     if (test_bit(CASTLE_SLAVE_EVACUATE_BIT, &slave->flags))
     {
         /* Slave is already marked as evacuated - ignore */
-        castle_printk(LOG_WARN, "Warning: slave 0x%x (%s) has already been evacuated. Ignoring.\n",
-                slave->uuid, bdevname(slave->bdev, b));
+        castle_printk(LOG_WARN, "Warning: slave 0x%x [%s] has already been evacuated. Ignoring.\n",
+                slave->uuid, slave->bdev_name);
         *ret = -EEXIST;
         return;
     } 
@@ -694,13 +693,13 @@ void castle_control_slave_evacuate(uint32_t uuid, uint32_t force, int *ret)
     if (force)
     {
         set_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags);
-        castle_printk(LOG_USERINFO, "Slave 0x%x (%s) has been marked as out-of-service.\n",
-                      slave->uuid, bdevname(slave->bdev, b));
+        castle_printk(LOG_USERINFO, "Slave 0x%x [%s] has been marked as out-of-service.\n",
+                      slave->uuid, slave->bdev_name);
     } else
     {
         set_bit(CASTLE_SLAVE_EVACUATE_BIT, &slave->flags);
-        castle_printk(LOG_USERINFO, "Slave 0x%x (%s) has been marked as evacuating.\n",
-                      slave->uuid, bdevname(slave->bdev, b));
+        castle_printk(LOG_USERINFO, "Slave 0x%x [%s] has been marked as evacuating.\n",
+                      slave->uuid, slave->bdev_name);
     }
     castle_extents_rebuild_wake();
     *ret = EXIT_SUCCESS;
