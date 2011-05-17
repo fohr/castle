@@ -4288,6 +4288,7 @@ restart_traverse:
                 break;
             }
 
+__try_again:
             if (!read_trylock_c2b(c2b))
             {
                 if (waitlock)
@@ -4297,10 +4298,14 @@ restart_traverse:
                      * Hold a reference to the c2b before we drop the dirtytree
                      * lock.  We drop it later if it turns out that the c2b
                      * doesn't need flushing. */
-                    get_c2b(c2b);
-                    spin_unlock_irq(&dirtytree->lock);
-                    dirtytree_locked = 0;
-                    read_lock_c2b(c2b);
+                    if (dirtytree_locked)
+                    {
+                        get_c2b(c2b);
+                        spin_unlock_irq(&dirtytree->lock);
+                        dirtytree_locked = 0;
+                    }
+                    msleep(1);
+                    goto __try_again;
                 }
                 else
                     goto next_pg;
