@@ -4330,7 +4330,10 @@ next_pg_2:  read_unlock_c2b(c2b);
 
             /* Put extra c2b reference if we unlocked the dirtytree. */
             if (unlikely(!dirtytree_locked))
+            {
                 put_c2b(c2b);
+                goto restart_traverse;
+            }
 
             /* Advance to next c2b. */
 next_pg:    parent = rb_next(parent);
