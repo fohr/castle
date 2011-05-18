@@ -38,6 +38,9 @@ void castle_ctrl_lock(void)
 
 void castle_ctrl_unlock(void)
 {
+    /* if we BUG here, it means we just did a CASTLE_TRANSACTION_END without
+       first doing a CASTLE_TRANSACTION_BEGIN. */
+    BUG_ON(!castle_ctrl_is_locked());
     mutex_unlock(&castle_control_lock);
 }
 

@@ -3312,8 +3312,10 @@ static struct castle_component_tree* castle_da_merge_complete(struct castle_da_m
     c_ext_pos_t root_cep = INVAL_EXT_POS;
     int next_idx, i;
 
+    BUG_ON(!CASTLE_IN_TRANSACTION);
+
     merge->completing = 1;
-    debug("Complete merge at level: %d|%d\n", merge->level, merge->root_depth);
+    castle_printk(LOG_DEBUG, "Complete merge at level: %d|%d\n", merge->level, merge->root_depth);
     /* Force the nodes to complete by setting next_idx negative. Valid node idx
        can be set to the last entry in the node safely, because it happens in
        conjunction with setting the version to 0. This guarantees that all
@@ -4056,7 +4058,6 @@ static tree_seq_t castle_da_merge_last_unit_complete(struct castle_double_array 
     out_tree_id = out_tree->seq;
     /* If we succeeded at creating the last tree, remove the in_trees, and add the out_tree.
        All under appropriate locks. */
-    CASTLE_TRANSACTION_BEGIN;
 
     /* Get the lock. */
     write_lock(&merge->da->lock);
@@ -4080,7 +4081,6 @@ static tree_seq_t castle_da_merge_last_unit_complete(struct castle_double_array 
         BUG_ON(merge->da->id != merge->in_trees[i]->da);
         castle_component_tree_del(merge->da, merge->in_trees[i]);
     }
-    /* TODO@tr: figure out implications of FAULT()ing at this point */
     if (merge->nr_entries)
         castle_component_tree_add(merge->da, out_tree, NULL /*head*/, 0 /*not in init*/);
 
@@ -4101,7 +4101,6 @@ static tree_seq_t castle_da_merge_last_unit_complete(struct castle_double_array 
     /* Release the lock. */
     write_unlock(&merge->da->lock);
 
-    CASTLE_TRANSACTION_END;
     castle_da_merge_restart(da, NULL);
 
     castle_printk(LOG_INFO, "Completed merge at level: %d and deleted %u entries\n",
@@ -4396,7 +4395,7 @@ static void castle_da_merge_serialise(struct castle_da_merge *merge)
             castle_da_merge_marshall(da->levels[level].merge.serdes.mstore_entry, merge,
                     DAM_MARSHALL_OUTTREE);
 
-            debug("%s::found new_key boundary; existing serialisation for "
+            castle_printk(LOG_DEBUG, "%s::found new_key boundary; existing serialisation for "
                     "da %d, level %d is now checkpointable, so stop updating it.\n",
                     __FUNCTION__, da->id, level);
 
@@ -4408,7 +4407,7 @@ static void castle_da_merge_serialise(struct castle_da_merge *merge)
         }
 
         /* update iterator state */
-        debug("%s::updating mstore entry for merge in "
+        castle_printk(LOG_DEBUG, "%s::updating mstore entry for merge in "
                 "da %d, level %d\n", __FUNCTION__, da->id, level);
         castle_da_merge_marshall(da->levels[level].merge.serdes.mstore_entry, merge,
                 DAM_MARSHALL_ITERS);
@@ -4486,7 +4485,7 @@ static void castle_da_merge_marshall(struct castle_dmserlist_entry *merge_mstore
     /* iterators */
     /* iterator marshalling happens often... make it as cheap as possible! */
 
-    debug("%s::merge %p (da %d, level %d) iterator marshall\n", __FUNCTION__,
+    castle_printk(LOG_DEBUG, "%s::merge %p (da %d, level %d) iterator marshall\n", __FUNCTION__,
             merge, merge->da->id, merge->level);
 
     merge_mstore->iter_err                    = merge->merged_iter->err;
@@ -4545,6 +4544,9 @@ update_output_tree_state:
     /* output tree */
     /* output tree marshalling is expensive... make it rare (i.e. once per checkpoint) */
 
+    castle_printk(LOG_DEBUG, "%s::merge %p (da %d, level %d) output tree marshall with "
+            "%d new LOs.\n", __FUNCTION__, merge, merge->da->id, merge->level, lo_count);
+
     {
         struct list_head *lh, *tmp;
         list_for_each_safe(lh, tmp, &merge->new_large_objs)
@@ -4561,9 +4563,6 @@ update_output_tree_state:
     /* no need to take out_tree lo_mutex because we are here with serdes mutex, which will block
        checkpoint thread, which is the only race candidate */
     list_splice_init(&merge->new_large_objs, &merge->out_tree->large_objs);
-
-    debug("%s::merge %p (da %d, level %d) output tree marshall with "
-            "%d new LOs.\n", __FUNCTION__, merge, merge->da->id, merge->level, lo_count);
 
     BUG_ON(!merge->out_tree);
     BUG_ON(!merge->da->levels[merge->level].merge.serdes.out_tree);
@@ -4922,7 +4921,7 @@ static int castle_da_merge_do(struct castle_double_array *da,
         castle_printk(LOG_WARN, "Could not start a merge for DA=%d, level=%d.\n", da->id, level);
         return -EAGAIN;
     }
-    debug("%s::MERGE START - DA %d L %d, with input cts %d and %d \n", __FUNCTION__, da->id, level, in_trees[0]->seq, in_trees[1]->seq);
+    castle_printk(LOG_DEBUG, "%s::MERGE START - DA %d L %d, with input cts %d and %d \n", __FUNCTION__, da->id, level, in_trees[0]->seq, in_trees[1]->seq);
 #ifdef DEBUG
     debug_merges("MERGE START - L%d -> ", level);
     FOR_EACH_MERGE_TREE(i, merge)
@@ -4956,6 +4955,7 @@ static int castle_da_merge_do(struct castle_double_array *da,
         {
             castle_printk(LOG_INIT, "Merge for DA=%d, level=%d, aborted.\n", da->id, level);
             ret = -ESHUTDOWN;
+            CASTLE_TRANSACTION_BEGIN;
             goto merge_aborted;
         }
 
@@ -4992,6 +4992,7 @@ static int castle_da_merge_do(struct castle_double_array *da,
             out_tree_id = INVAL_TREE;
             castle_printk(LOG_WARN, "%s::MERGE FAILED - DA %d L %d, with input cts %d and %d \n",
                     __FUNCTION__, da->id, level, in_trees[0]->seq, in_trees[1]->seq);
+            CASTLE_TRANSACTION_BEGIN;
             goto merge_failed;
         }
         /* Only ret>0 we are expecting to continue, i.e. ret==EAGAIN. */
@@ -5001,7 +5002,8 @@ static int castle_da_merge_do(struct castle_double_array *da,
             castle_da_merge_intermediate_unit_complete(da, level);
     } while(ret);
 
-    debug("%s::MERGE COMPLETING - DA %d L %d, with input cts %d and %d, "
+    CASTLE_TRANSACTION_BEGIN;
+    castle_printk(LOG_DEBUG, "%s::MERGE COMPLETING - DA %d L %d, with input cts %d and %d, "
         "and output ct %d.\n", __FUNCTION__, da->id, level, in_trees[0]->seq, in_trees[1]->seq,
         merge->out_tree->seq);
 
@@ -5034,7 +5036,12 @@ merge_failed:
     debug("%s::MERGE END with ret %d - DA %d L %d, produced out ct seq %d \n",
         __FUNCTION__, ret, da->id, level, out_tree_id);
     debug_merges("MERGE END - L%d -> [%u]\n", level, out_tree_id);
+
     castle_da_merge_dealloc(merge, ret);
+
+    /* safe for checkpoint to run now because we've completed and cleaned up all merge state */
+    CASTLE_TRANSACTION_END;
+
     castle_trace_da_merge(TRACE_END, TRACE_DA_MERGE_ID, da->id, level, out_tree_id, 0);
     if(ret==-ESHUTDOWN) return -ESHUTDOWN; /* merge abort */
     if(ret)
@@ -6565,10 +6572,6 @@ static void castle_da_merge_writeback(struct castle_double_array *da, int level)
             BUG_ON(lo_ref_cnt < 1);
             debug("%s::writeback lo at ext %d\n", __FUNCTION__,
                     lo->ext_id);
-
-            /* if there are any large objects to write out, this must be fresh */
-            BUG_ON(current_state != VALID_AND_FRESH_DAM_SERDES);
-
             castle_ct_large_obj_writeback(lo, ct);
         }
         mutex_unlock(&ct->lo_mutex);
