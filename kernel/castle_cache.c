@@ -273,6 +273,7 @@ static struct kmem_cache      *castle_io_array_cache = NULL;
 /* Following LIST_HEADs are protected by castle_cache_block_hash_lock. */
 static               LIST_HEAD(castle_cache_extent_dirtylist);      /**< Extents with dirty c2bs  */
 static               LIST_HEAD(castle_cache_cleanlist);             /**< Clean c2bs               */
+static atomic_t                castle_cache_extent_dirtylist_size;  /**< Number of dirty extents  */
 static atomic_t                castle_cache_cleanlist_size;         /**< Blocks on the cleanlist  */
 static atomic_t                castle_cache_cleanlist_softpin_size; /**< Softpin blks on cleanlist*/
 static atomic_t                castle_cache_block_victims;          /**< #clean blocks evicted    */
@@ -770,9 +771,12 @@ static int c2_dirtytree_remove(c2_block_t *c2b)
     spin_lock(&castle_cache_block_hash_lock); /* protects clean/dirty union. */
     rb_erase(&c2b->rb_dirtytree, &dirtytree->rb_root);
     if (RB_EMPTY_ROOT(&dirtytree->rb_root))
+    {
         /* Last dirty c2b for this extent, remove it from the global
          * list of dirty extents. */
         list_del_init(&dirtytree->list);
+        BUG_ON(atomic_dec_return(&castle_cache_extent_dirtylist_size) < 0);
+    }
     spin_unlock(&castle_cache_block_hash_lock);
 
     /* Release lock and put reference, potentially freeing the dirtytree if
@@ -846,9 +850,12 @@ static int c2_dirtytree_insert(c2_block_t *c2b)
     /* Insert dirty c2b into the tree. */
     spin_lock(&castle_cache_block_hash_lock); /* protects clean/dirty union. */
     if (RB_EMPTY_ROOT(&dirtytree->rb_root))
+    {
         /* First dirty c2b for this extent, place it onto the global
          * list of dirty extents. */
-        list_add_tail(&dirtytree->list, &castle_cache_extent_dirtylist);
+        list_add(&dirtytree->list, &castle_cache_extent_dirtylist);
+        atomic_inc(&castle_cache_extent_dirtylist_size);
+    }
     rb_link_node(&c2b->rb_dirtytree, parent, p);
     rb_insert_color(&c2b->rb_dirtytree, &dirtytree->rb_root);
     spin_unlock(&castle_cache_block_hash_lock);
@@ -4436,9 +4443,8 @@ static int castle_cache_flush(void *unused)
 #define MIN_FLUSH_SIZE  128
 #define MAX_FLUSH_SIZE  (4*1024)
 #define MIN_FLUSH_FREQ  5           /* Min flush rate: 5*128pgs/s = 2.5MB/s */
-    int exiting, target_dirty_pgs, dirty_pgs, to_flush, last_flush;
+    int exiting, target_dirty_pgs, dirty_pgs, to_flush, last_flush, i;
     atomic_t in_flight = ATOMIC(0);
-    static int loops;
 
     /* Try and keep 3/4 of pages in the cache dirty. */
     target_dirty_pgs = 3 * (castle_cache_size / 4);
@@ -4469,17 +4475,13 @@ static int castle_cache_flush(void *unused)
         /* Exit if we've finished waiting for all outstanding IOs. */
         if (unlikely(exiting))
         {
-            int returning;
-
-            spin_lock_irq(&castle_cache_block_hash_lock);
-            returning = list_empty(&castle_cache_extent_dirtylist);
-            spin_unlock_irq(&castle_cache_block_hash_lock);
-            if (returning)
+            if (atomic_read(&castle_cache_extent_dirtylist_size) == 0)
                 break; /* only way out */
 
-            /* We've not finished the flush.  Set last_flush to flush all
-             * outstanding dirty pages. */
-            to_flush = dirty_pgs;
+            /* We've not finished the flush.  Set last_flush such that it will
+             * attempt to flush all dirty c2bs.  We don't use dirty_pgs here
+             * due to overlapping c2bs. */
+            to_flush = INT_MAX;
         }
         else
         {
@@ -4495,18 +4497,15 @@ static int castle_cache_flush(void *unused)
         }
         last_flush = to_flush;
 
-        loops = 0;
-        while (to_flush > 0)
+        /* Iterate over all dirty extents trying to find pages to flush. */
+        for (i = atomic_read(&castle_cache_extent_dirtylist_size); i > 0; i--)
         {
             c_ext_dirtytree_t *dirtytree;
             int flushed = 0;
 
-            if (++loops > 1000)
-            {
-                castle_printk(LOG_WARN, "%d loops in castle_cache_flush to_flush loop, break\n",
-                        loops);
+            /* Stop looping if we've managed to flush enough pages. */
+            if (to_flush <= 0)
                 break;
-            }
 
             /* Get next per-extent dirtytree to flush. */
             spin_lock_irq(&castle_cache_block_hash_lock);
@@ -4538,6 +4537,7 @@ static int castle_cache_flush(void *unused)
     }
 
     /* We shouldn't need locks to check these lists now. */
+    BUG_ON(atomic_read(&castle_cache_extent_dirtylist_size) != 0);
     BUG_ON(!list_empty(&castle_cache_extent_dirtylist));
     BUG_ON(atomic_read(&in_flight) != 0);
 
@@ -5671,23 +5671,24 @@ int castle_cache_init(void)
     castle_cache_page_freelist_size  = castle_cache_size / PAGES_PER_C2P;
     castle_cache_page_hash_buckets   = castle_cache_page_freelist_size / 2;
     castle_cache_block_freelist_size = castle_cache_page_freelist_size;
-    castle_cache_block_hash_buckets  = castle_cache_block_freelist_size / 2; 
+    castle_cache_block_hash_buckets  = castle_cache_block_freelist_size / 2;
     /* Allocate memory for c2bs, c2ps and hash tables */
-    castle_cache_page_hash  = castle_vmalloc(castle_cache_page_hash_buckets  * 
+    castle_cache_page_hash  = castle_vmalloc(castle_cache_page_hash_buckets *
                                              sizeof(struct hlist_head));
-    castle_cache_page_hash_locks 
-        = castle_vmalloc((castle_cache_page_hash_buckets / PAGE_HASH_LOCK_PERIOD + 1) * 
+    castle_cache_page_hash_locks
+        = castle_vmalloc((castle_cache_page_hash_buckets / PAGE_HASH_LOCK_PERIOD + 1) *
                                              sizeof(spinlock_t));
-    castle_cache_block_hash = castle_vmalloc(castle_cache_block_hash_buckets * 
+    castle_cache_block_hash = castle_vmalloc(castle_cache_block_hash_buckets *
                                              sizeof(struct hlist_head));
-    castle_cache_blks       = castle_vmalloc(castle_cache_block_freelist_size * 
+    castle_cache_blks       = castle_vmalloc(castle_cache_block_freelist_size *
                                              sizeof(c2_block_t));
-    castle_cache_pgs        = castle_vmalloc(castle_cache_page_freelist_size  * 
+    castle_cache_pgs        = castle_vmalloc(castle_cache_page_freelist_size  *
                                              sizeof(c2_page_t));
     /* Init other variables */
     atomic_set(&castle_cache_dirty_pages, 0);
     atomic_set(&castle_cache_clean_pages, 0);
     atomic_set(&castle_cache_flush_seq, 0);
+    atomic_set(&castle_cache_extent_dirtylist_size, 0);
     atomic_set(&castle_cache_cleanlist_size, 0);
     atomic_set(&castle_cache_cleanlist_softpin_size, 0);
     atomic_set(&castle_cache_block_victims, 0);
@@ -5701,7 +5702,7 @@ int castle_cache_init(void)
                 CASTLE_CACHE_MIN_HARDPIN_SIZE);
 
     if((ret = castle_cache_hashes_init()))    goto err_out;
-    if((ret = castle_cache_freelists_init())) goto err_out; 
+    if((ret = castle_cache_freelists_init())) goto err_out;
     if((ret = castle_vmap_fast_map_init()))   goto err_out;
     if((ret = castle_cache_flush_init()))     goto err_out;
 
@@ -5712,7 +5713,7 @@ int castle_cache_init(void)
                                                0,   /* flags */
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,18)
                                                NULL, NULL); /* ctor, dtor */
-#else                                               
+#else
                                                NULL); /* ctor */
 #endif
     if (!castle_io_array_cache)
