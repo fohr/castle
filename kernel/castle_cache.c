@@ -4248,6 +4248,10 @@ static void castle_cache_extent_flush_endio(c2_block_t *c2b)
  *       flushed due to overlapping c2bs and dirty c2bs comprised of a mixture
  *       or dirty and clean c2ps.
  *
+ * NOTE: While overlapping c2bs are permitted within the cache in practice they
+ *       should not occur so are BUG_ON()ed.  Indeed, if they did it could lead
+ *       to potential deadlocks when waitlock is set.  See #2237 for details.
+ *
  * @return  -ENOENT             No such extent
  * @return  0                   Flush successfully started
  *
@@ -4273,8 +4277,11 @@ int __castle_cache_extent_flush(c_ext_dirtytree_t *dirtytree,
     debug("Extent flush: (%llu) -> %llu\n", dirtytree->ext_id, nr_pages/BLKS_PER_CHK);
     do
     {
+        c_byte_off_t last_end_off;
         int dirtytree_locked;
+
         batch_idx = 0;
+        last_end_off = 0;
 
 restart_traverse:
         /* Hold dirtytree lock. */
@@ -4285,70 +4292,67 @@ restart_traverse:
         parent = rb_first(&dirtytree->rb_root);
         while (parent)
         {
-            c2b = rb_entry(parent, c2_block_t, rb_dirtytree);
-            BUG_ON(c2b->dirtytree == NULL);
+            /* Flush the current batch if it is full. */
+            if (batch_idx >= CASTLE_CACHE_FLUSH_BATCH_SIZE)
+                break;
 
-            /* We're done if we reach end_off or have flushed max_pgs. */
+            c2b = rb_entry(parent, c2_block_t, rb_dirtytree);
+            BUG_ON(c2b->dirtytree != dirtytree);
+
+            /* Flush is complete if we reached end_off or flushed max_pgs. */
             if (c2b->cep.offset > end_off || flushed >= max_pgs)
             {
                 parent = NULL; /* outer loop while clause */
                 break;
             }
 
-__try_again:
-            if (!read_trylock_c2b(c2b))
+            if (test_set_c2b_flushing(c2b))
+                goto next_c2b; /* already flushing, skip to next c2b */
+            while (!read_trylock_c2b(c2b))
             {
-                if (waitlock)
+                if (unlikely(waitlock))
                 {
-                    /* We want to block on a c2b readlock.
-                     *
-                     * Hold a reference to the c2b before we drop the dirtytree
-                     * lock.  We drop it later if it turns out that the c2b
-                     * doesn't need flushing. */
-                    if (dirtytree_locked)
+                    /* We want to block until we have a c2b readlock. */
+
+                    /* Dirty c2bs should never overlap. */
+                    BUG_ON(c2b->cep.offset < last_end_off);
+
+                    if (unlikely(dirtytree_locked))
                     {
+                        /* Hold a reference to the c2b before we drop the
+                         * dirtytree lock.  Gets dropped at next_c2b label. */
                         get_c2b(c2b);
                         spin_unlock_irq(&dirtytree->lock);
                         dirtytree_locked = 0;
                     }
                     msleep(1);
-                    goto __try_again;
                 }
                 else
-                    goto next_pg;
+                    goto cant_lock;
             }
-            if (test_set_c2b_flushing(c2b))
-                goto next_pg_2;
             if (!c2b_uptodate(c2b) || !c2b_dirty(c2b))
-                goto next_pg_1;
+                goto dont_flush;
 
-            if (likely(dirtytree_locked)) /* else we already have a reference */
-                get_c2b(c2b);
+            /* This c2b will be flushed. */
+            get_c2b(c2b);
             c2b_batch[batch_idx++] = c2b;
             flushed += castle_cache_c2b_to_pages(c2b);
 
-            /* Perform flush if the batch is complete. */
-            if (batch_idx >= CASTLE_CACHE_FLUSH_BATCH_SIZE)
-                break;
+            goto next_c2b;
 
+dont_flush: read_unlock_c2b(c2b);
+cant_lock:  clear_c2b_flushing(c2b);
+next_c2b:
+            /* Calculate extent offset where current c2b ends. */
+            last_end_off = c2b->cep.offset
+                            + castle_cache_c2b_to_pages(c2b) * PAGE_SIZE;
             if (likely(dirtytree_locked))
-                goto next_pg;
+                parent = rb_next(parent);
             else
-                goto restart_traverse;
-
-            /* Clean up state. */
-next_pg_1:  clear_c2b_flushing(c2b);
-next_pg_2:  read_unlock_c2b(c2b);
-
-            /* Put extra c2b reference if we unlocked the dirtytree. */
-            if (unlikely(!dirtytree_locked))
             {
-                put_c2b(c2b);
+                put_c2b(c2b); /* extra ref */
                 goto restart_traverse;
             }
-
-            /* Advance to next c2b. */
-next_pg:    parent = rb_next(parent);
         }
 
         /* Release holds. */
