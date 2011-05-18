@@ -1618,6 +1618,17 @@ struct castle_da_lfs_ct_t {
     int                 internals_on_ssds;
 };
 
+/* Possible states of merge serialisation control atomics in da->levels[].merge.serdes,
+   which indicate the state of the serialised state (struct dmserlist_entry) mstore_entry */
+typedef enum {
+    /* DO NOT REORDER */
+    NULL_DAM_SERDES=0,          /* not yet alloc'd, or undergoing deserialisation */
+    INVALID_DAM_SERDES,         /* alloc'd but not yet checkpointable */
+    VALID_AND_FRESH_DAM_SERDES, /* checkpointable and has changed since last checkpoint */
+    VALID_AND_STALE_DAM_SERDES, /* checkpointable, but not changed since last checkpoint */
+    MAX_DAM_SERDES /* must be last entry */
+} c_merge_serdes_state_t;
+
 #define MAX_DA_LEVEL                        (20)
 #define DOUBLE_ARRAY_GROWING_RW_TREE_BIT    (0)
 #define DOUBLE_ARRAY_GROWING_RW_TREE_FLAG   (1 << DOUBLE_ARRAY_GROWING_RW_TREE_BIT)
@@ -1708,13 +1719,7 @@ struct castle_double_array {
                                            solution with round robin selection over 2
                                            mstore_entry structures to get around it? */
                 atomic_t         valid; /* for merge thread to notify checkpoint when state is
-                                           checkpointable:
-                                               0 = not initialised;
-                                               1 = initialised but not valid (i.e. not safe to
-                                                   deserialise);
-                                               2 = valid.  */
-                atomic_t         fresh; /* for merge thread to notify checkpoint when output
-                                           extents should be flushed */
+                                           checkpointable; see c_merge_serdes_state_t */
                 unsigned int     des; /* for init to notify merge thread to resume merge, and
                                          to notify checkpoint not to writeback state because
                                          deserialisation still running. */
