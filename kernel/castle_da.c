@@ -3186,6 +3186,7 @@ static struct castle_component_tree* castle_da_merge_package(struct castle_da_me
 {
     struct castle_component_tree *out_tree;
     int i;
+    c_merge_serdes_state_t serdes_state;
 
     out_tree = merge->out_tree;
     debug("Using component tree id=%d to package the merge.\n", out_tree->seq);
@@ -3203,10 +3204,11 @@ static struct castle_component_tree* castle_da_merge_package(struct castle_da_me
     BUG_ON(atomic_read(&out_tree->write_ref_count) != 0);
 
     /* update list of large objects */
-    if ( (castle_merges_checkpoint) && (merge->level >= MIN_DA_SERDES_LEVEL) )
+    serdes_state = atomic_read(&merge->da->levels[merge->level].merge.serdes.valid);
+    if(serdes_state > NULL_DAM_SERDES)
         mutex_lock(&merge->da->levels[merge->level].merge.serdes.mutex);
     list_splice_init(&merge->new_large_objs, &out_tree->large_objs);
-    if ( (castle_merges_checkpoint) && (merge->level >= MIN_DA_SERDES_LEVEL) )
+    if(serdes_state > NULL_DAM_SERDES)
         mutex_unlock(&merge->da->levels[merge->level].merge.serdes.mutex);
 
     debug("Number of entries=%ld, number of nodes=%ld\n",
@@ -3310,8 +3312,10 @@ static struct castle_component_tree* castle_da_merge_complete(struct castle_da_m
     c_ext_pos_t root_cep = INVAL_EXT_POS;
     int next_idx, i;
 
+    BUG_ON(!CASTLE_IN_TRANSACTION);
+
     merge->completing = 1;
-    debug("Complete merge at level: %d|%d\n", merge->level, merge->root_depth);
+    castle_printk(LOG_DEBUG, "Complete merge at level: %d|%d\n", merge->level, merge->root_depth);
     /* Force the nodes to complete by setting next_idx negative. Valid node idx
        can be set to the last entry in the node safely, because it happens in
        conjunction with setting the version to 0. This guarantees that all
@@ -3375,6 +3379,7 @@ static void castle_da_merge_serdes_dealloc(struct castle_da_merge *merge)
 {
     struct castle_double_array *da;
     int level;
+    c_merge_serdes_state_t serdes_state;
     da=merge->da;
     level=merge->level;
 
@@ -3382,7 +3387,8 @@ static void castle_da_merge_serdes_dealloc(struct castle_da_merge *merge)
     BUG_ON(!merge->da);
     BUG_ON(level < MIN_DA_SERDES_LEVEL);
 
-    if(atomic_read(&da->levels[level].merge.serdes.valid)==0)
+    serdes_state = atomic_read(&da->levels[level].merge.serdes.valid);
+    if(serdes_state == NULL_DAM_SERDES)
     {
         castle_printk(LOG_WARN, "%s::deallocating non-initialised merge SERDES state on "
                 "da %d level %d: repeated call???\n",
@@ -3401,18 +3407,20 @@ static void castle_da_merge_serdes_dealloc(struct castle_da_merge *merge)
     castle_free(da->levels[level].merge.serdes.mstore_entry);
     da->levels[level].merge.serdes.mstore_entry=NULL;
 
-    atomic_set(&da->levels[level].merge.serdes.fresh, 0);
-    atomic_set(&da->levels[level].merge.serdes.valid, 0);
+    serdes_state = NULL_DAM_SERDES;
+    atomic_set(&da->levels[level].merge.serdes.valid, (int)serdes_state);
 }
 
 static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
 {
     int i;
+    c_merge_serdes_state_t serdes_state;
+    serdes_state = atomic_read(&merge->da->levels[merge->level].merge.serdes.valid);
 
     if(!merge)
         return;
 
-    if( (castle_merges_checkpoint) && (merge->level >= MIN_DA_SERDES_LEVEL) )
+    if(serdes_state > NULL_DAM_SERDES)
         mutex_lock(&merge->da->levels[merge->level].merge.serdes.mutex);
 
     /* Release the last leaf node c2b. */
@@ -3443,7 +3451,7 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
 
     if(!err)
     {
-        if( (castle_merges_checkpoint) && (merge->level >= MIN_DA_SERDES_LEVEL) )
+        if(serdes_state > NULL_DAM_SERDES)
         {
             debug("%s::Merge (da id=%d, level=%d) completed; "
                     "deallocating merge serialisation state.\n",
@@ -3472,8 +3480,7 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
 
         /* Retain extents, if we are checkpointing merges and interrupting the merge. */
         /* Note: Don't retain extents, if DA is already marked for deletion. */
-        if( (err==-ESHUTDOWN) && (!castle_da_deleted(merge->da)) &&
-            (castle_merges_checkpoint) && (merge->level >= MIN_DA_SERDES_LEVEL) )
+        if( (err==-ESHUTDOWN) && (!castle_da_deleted(merge->da)) && (serdes_state > NULL_DAM_SERDES) )
         {
             /* merge aborted, we are checkpointing, and this is a checkpointable merge level */
 
@@ -3484,7 +3491,8 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
             */
             /* No need for mutex - we are merge thread, noone else should ever change ser state
                besides the freshness flag, which is irrelevant here */
-            if(atomic_read(&merge->da->levels[merge->level].merge.serdes.valid)==2)
+            if( (serdes_state == VALID_AND_FRESH_DAM_SERDES) ||
+                    (serdes_state == VALID_AND_STALE_DAM_SERDES) )
                 castle_da_merge_serdes_out_tree_check(
                         merge->da->levels[merge->level].merge.serdes.mstore_entry,
                         merge->da,
@@ -3494,7 +3502,7 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
             debug("%s::leaving output extents for merge %p deserialisation "
                     "(da %d, level %d).\n", __FUNCTION__, merge, merge->da->id, merge->level);
         }
-        else if ( (castle_merges_checkpoint) && (merge->level >= MIN_DA_SERDES_LEVEL) )
+        else if (serdes_state > NULL_DAM_SERDES)
         {
             /* merge failed, we are checkpointing, and this is a checkpointable merge level */
             castle_printk(LOG_ERROR, "Merge %p (da id=%d, level=%d) failed with err=%d "
@@ -3537,7 +3545,8 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
             }
             mutex_unlock(&merge->out_tree->lo_mutex);
             debug("%s::leaving %d large objects for checkpoint of merge %p "
-                    "(da %d, level %d).\n", __FUNCTION__, lo_count, merge, merge->da->id, merge->level);
+                    "(da %d, level %d).\n", __FUNCTION__, lo_count, merge, merge->da->id,
+                    merge->level);
         }
 
         /* Always free the list of new large_objs; we don't want to write them out because they
@@ -3563,7 +3572,7 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
         }
     }
 
-    if( (castle_merges_checkpoint) && (merge->level >= MIN_DA_SERDES_LEVEL) )
+    if (serdes_state > NULL_DAM_SERDES)
         mutex_unlock(&merge->da->levels[merge->level].merge.serdes.mutex);
 
     /* Free the merged iterator, if one was allocated. */
@@ -4049,7 +4058,6 @@ static tree_seq_t castle_da_merge_last_unit_complete(struct castle_double_array 
     out_tree_id = out_tree->seq;
     /* If we succeeded at creating the last tree, remove the in_trees, and add the out_tree.
        All under appropriate locks. */
-    CASTLE_TRANSACTION_BEGIN;
 
     /* Get the lock. */
     write_lock(&merge->da->lock);
@@ -4073,7 +4081,6 @@ static tree_seq_t castle_da_merge_last_unit_complete(struct castle_double_array 
         BUG_ON(merge->da->id != merge->in_trees[i]->da);
         castle_component_tree_del(merge->da, merge->in_trees[i]);
     }
-    /* TODO@tr: figure out implications of FAULT()ing at this point */
     if (merge->nr_entries)
         castle_component_tree_add(merge->da, out_tree, NULL /*head*/, 0 /*not in init*/);
 
@@ -4094,7 +4101,6 @@ static tree_seq_t castle_da_merge_last_unit_complete(struct castle_double_array 
     /* Release the lock. */
     write_unlock(&merge->da->lock);
 
-    CASTLE_TRANSACTION_END;
     castle_da_merge_restart(da, NULL);
 
     castle_printk(LOG_INFO, "Completed merge at level: %d and deleted %u entries\n",
@@ -4240,26 +4246,16 @@ static struct castle_da_merge* castle_da_merge_init(struct castle_double_array *
             goto error_out;
     }
 
-    /* finished deserialising: set serdes state as immediately re-checkpointable so that in the
-       event of a crash after the first checkpoint but before merge produces a new serialisable
-       state, we will have merge ser state ready for the next insmod */
     if(merge->deserialising)
     {
 #ifdef DEBUG_MERGE_SERDES
         da->levels[level].merge.serdes.merge_completed=0;
 #endif
         da->levels[level].merge.serdes.out_tree=merge->out_tree;
-        atomic_set(&da->levels[level].merge.serdes.valid, 2);
-        atomic_set(&da->levels[level].merge.serdes.fresh, 1);
         da->levels[level].merge.serdes.des=0;
         merge->deserialising=0;
-
-        /* after unsetting des flag, checkpoint thread may writeback this merge */
-        mutex_lock(&da->levels[level].merge.serdes.mutex);
-        da->levels[level].merge.serdes.des=0;
-        mutex_unlock(&da->levels[level].merge.serdes.mutex);
-        castle_printk(LOG_INIT, "Resuming merge on da %d level %d.\n",
-            da->id, level);
+        atomic_set(&da->levels[level].merge.serdes.valid, VALID_AND_STALE_DAM_SERDES);
+        castle_printk(LOG_INIT, "Resuming merge on da %d level %d.\n", da->id, level);
     }
     return merge;
 
@@ -4344,17 +4340,30 @@ static void castle_da_merge_serialise(struct castle_da_merge *merge)
 {
     struct castle_double_array *da;
     int level;
+    c_merge_serdes_state_t current_state;
+    c_merge_serdes_state_t new_state;
 
     BUG_ON(!merge);
     da=merge->da;
     level=merge->level;
     BUG_ON(level < MIN_DA_SERDES_LEVEL);
 
-    /* TODO@tr fuse state variables valid and fresh into a single atomic_t */
-    BUG_ON(atomic_read(&da->levels[level].merge.serdes.valid)>2);
-    BUG_ON(atomic_read(&da->levels[level].merge.serdes.fresh)>1);
+    current_state = atomic_read(&da->levels[level].merge.serdes.valid);
+    /*
+    Possible state transitions: (MT = this thread, CT = checkpoint thread)
+        NULL_DAM_SERDES            -> INVALID_DAM_SERDES         [label="MT allocs"]
+        INVALID_DAM_SERDES         -> INVALID_DAM_SERDES         [label="MT updates iter state or"]
+        INVALID_DAM_SERDES         -> VALID_AND_FRESH_DAM_SERDES [label="MT found new key boundary, updates out cct state"]
+        VALID_AND_FRESH_DAM_SERDES -> VALID_AND_STALE_DAM_SERDES [label="CT flushes extents"]
+        VALID_AND_STALE_DAM_SERDES -> INVALID_DAM_SERDES         [label="MT updates iter state"]
+    Note: CT writes merge state to mstore when state is VALID_AND_STALE or VALID_AND_FRESH, but if
+          it is VALID_AND_STALE then it does not change SERDES state. When it is VALID_AND_FRESH
+          then after checkpoint it changes state to VALID_AND_STALE.
+    */
 
-    if( unlikely(atomic_read(&da->levels[level].merge.serdes.valid)==0)  ) /* state [valid],[fresh]= 0,x */
+    BUG_ON(current_state >= MAX_DAM_SERDES);
+
+    if( unlikely(current_state == NULL_DAM_SERDES ) )
     {
         /* first write - initialise */
         mutex_lock(&da->levels[level].merge.serdes.mutex);
@@ -4369,73 +4378,68 @@ static void castle_da_merge_serialise(struct castle_da_merge *merge)
         da->levels[level].merge.serdes.out_tree=merge->out_tree;
         castle_da_merge_marshall(da->levels[level].merge.serdes.mstore_entry, merge,
                 DAM_MARSHALL_ALL);
-        atomic_set(&da->levels[level].merge.serdes.valid, 1);
-        atomic_set(&da->levels[level].merge.serdes.fresh, 1);
+
+        new_state = INVALID_DAM_SERDES;
+        atomic_set(&da->levels[level].merge.serdes.valid, (int)new_state);
         mutex_unlock(&da->levels[level].merge.serdes.mutex);
-        return; /* state now updated to 11 */
-        /* we avoid falling through to the valid==1 case here because we have just updated state,
-           and we cannot allow freezing state in the same serialisation cycle as we have made an
-           update, since the new state does not correspond to a valid state */
+        return;
     }
 
-    if( unlikely(atomic_read(&da->levels[level].merge.serdes.valid)==1)  ) /* state: 1,x */
+    if( unlikely(current_state == INVALID_DAM_SERDES) )
     {
-        BUG_ON(atomic_read(&da->levels[level].merge.serdes.fresh)==0); /* state 10 should never occur */
-
-        /* state: 1,1 */
         mutex_lock(&da->levels[level].merge.serdes.mutex);
+        BUG_ON(!da->levels[level].merge.serdes.mstore_entry);
         if( unlikely(merge->is_new_key) )
         {
             /* update output tree state */
             castle_da_merge_marshall(da->levels[level].merge.serdes.mstore_entry, merge,
                     DAM_MARSHALL_OUTTREE);
 
-            /* mark serialisation as checkpointable, and no longer updatable */
-            debug("%s::found new_key boundary; existing serialisation for "
+            castle_printk(LOG_DEBUG, "%s::found new_key boundary; existing serialisation for "
                     "da %d, level %d is now checkpointable, so stop updating it.\n",
                     __FUNCTION__, da->id, level);
-            BUG_ON(!da->levels[level].merge.serdes.mstore_entry);
-            atomic_set(&da->levels[level].merge.serdes.valid, 2);
+
+            /* mark serialisation as checkpointable, and no longer updatable */
+            new_state = VALID_AND_FRESH_DAM_SERDES;
+            atomic_set(&da->levels[level].merge.serdes.valid, (int)new_state);
             mutex_unlock(&da->levels[level].merge.serdes.mutex);
-            return; /* state now updated to 2,1 */
+            return;
         }
-        /* update serialisation state */
-        debug("%s::updating mstore entry for merge in "
+
+        /* update iterator state */
+        castle_printk(LOG_DEBUG, "%s::updating mstore entry for merge in "
                 "da %d, level %d\n", __FUNCTION__, da->id, level);
-        BUG_ON(!da->levels[level].merge.serdes.mstore_entry);
         castle_da_merge_marshall(da->levels[level].merge.serdes.mstore_entry, merge,
                 DAM_MARSHALL_ITERS);
 
         mutex_unlock(&da->levels[level].merge.serdes.mutex);
-        return; /* state still 1,1 */
+        return;
     }
 
-    if( likely(atomic_read(&da->levels[level].merge.serdes.valid)==2) ) /* state 2,x */
+    if( unlikely(current_state == VALID_AND_STALE_DAM_SERDES) )
     {
-        if( unlikely(atomic_read(&da->levels[level].merge.serdes.fresh)==0) ) /* state 2,0 */
-        {
-            /* update serialisation state */
-            mutex_lock(&da->levels[level].merge.serdes.mutex);
-            debug("%s::updating mstore entry for merge in "
-                    "da %d, level %d\n", __FUNCTION__, da->id, level);
+        /* we just got back from checkpoint - so FORCE an update */
+        mutex_lock(&da->levels[level].merge.serdes.mutex);
+        BUG_ON(!da->levels[level].merge.serdes.mstore_entry);
 
-            BUG_ON(!da->levels[level].merge.serdes.mstore_entry);
-            castle_da_merge_marshall(da->levels[level].merge.serdes.mstore_entry, merge,
-                    DAM_MARSHALL_ITERS);
+        debug("%s::updating mstore entry for merge in "
+                "da %d, level %d\n", __FUNCTION__, da->id, level);
+        castle_da_merge_marshall(da->levels[level].merge.serdes.mstore_entry, merge,
+                DAM_MARSHALL_ITERS);
 
-            atomic_set(&da->levels[level].merge.serdes.fresh, 1);
-            atomic_set(&da->levels[level].merge.serdes.valid, 1);
-            mutex_unlock(&da->levels[level].merge.serdes.mutex);
-            return; /* state now 1,1 */
-        }
+        new_state = INVALID_DAM_SERDES;
+        atomic_set(&da->levels[level].merge.serdes.valid, (int)new_state);
+        mutex_unlock(&da->levels[level].merge.serdes.mutex);
+        return; /* state now 1,1 */
+    }
 
+    if( likely(current_state == VALID_AND_FRESH_DAM_SERDES) )
+    {
         /* state 2,1 -- this is usually the most common case. */
 
         /* Noop: Wait for checkpoint to write existing serialisation point before updating it.
-           This code branch is entered once per merge key... at the moment the cost is two atomic
-           reads. It could actually be pushed down to 1 atomic read.
-
-           TODO@tr: tweak state transitions so we only need one atomic_read to identify state 2,1.
+           This code branch is entered once per merge key... at the moment the cost is one atomic
+           read, BUG_ONs aside.
         */
 
         BUG_ON(!da->levels[level].merge.serdes.mstore_entry);
@@ -4481,7 +4485,7 @@ static void castle_da_merge_marshall(struct castle_dmserlist_entry *merge_mstore
     /* iterators */
     /* iterator marshalling happens often... make it as cheap as possible! */
 
-    debug("%s::merge %p (da %d, level %d) iterator marshall\n", __FUNCTION__,
+    castle_printk(LOG_DEBUG, "%s::merge %p (da %d, level %d) iterator marshall\n", __FUNCTION__,
             merge, merge->da->id, merge->level);
 
     merge_mstore->iter_err                    = merge->merged_iter->err;
@@ -4540,6 +4544,9 @@ update_output_tree_state:
     /* output tree */
     /* output tree marshalling is expensive... make it rare (i.e. once per checkpoint) */
 
+    castle_printk(LOG_DEBUG, "%s::merge %p (da %d, level %d) output tree marshall with "
+            "%d new LOs.\n", __FUNCTION__, merge, merge->da->id, merge->level, lo_count);
+
     {
         struct list_head *lh, *tmp;
         list_for_each_safe(lh, tmp, &merge->new_large_objs)
@@ -4556,9 +4563,6 @@ update_output_tree_state:
     /* no need to take out_tree lo_mutex because we are here with serdes mutex, which will block
        checkpoint thread, which is the only race candidate */
     list_splice_init(&merge->new_large_objs, &merge->out_tree->large_objs);
-
-    debug("%s::merge %p (da %d, level %d) output tree marshall with "
-            "%d new LOs.\n", __FUNCTION__, merge, merge->da->id, merge->level, lo_count);
 
     BUG_ON(!merge->out_tree);
     BUG_ON(!merge->da->levels[merge->level].merge.serdes.out_tree);
@@ -4896,6 +4900,7 @@ static int castle_da_merge_do(struct castle_double_array *da,
     uint32_t units_cnt;
     tree_seq_t out_tree_id=0;
     int ret;
+    c_merge_serdes_state_t serdes_state;
 
     castle_trace_da_merge(TRACE_START,
                           TRACE_DA_MERGE_ID,
@@ -4916,7 +4921,7 @@ static int castle_da_merge_do(struct castle_double_array *da,
         castle_printk(LOG_WARN, "Could not start a merge for DA=%d, level=%d.\n", da->id, level);
         return -EAGAIN;
     }
-    debug("%s::MERGE START - DA %d L %d, with input cts %d and %d \n", __FUNCTION__, da->id, level, in_trees[0]->seq, in_trees[1]->seq);
+    castle_printk(LOG_DEBUG, "%s::MERGE START - DA %d L %d, with input cts %d and %d \n", __FUNCTION__, da->id, level, in_trees[0]->seq, in_trees[1]->seq);
 #ifdef DEBUG
     debug_merges("MERGE START - L%d -> ", level);
     FOR_EACH_MERGE_TREE(i, merge)
@@ -4950,11 +4955,24 @@ static int castle_da_merge_do(struct castle_double_array *da,
         {
             castle_printk(LOG_INIT, "Merge for DA=%d, level=%d, aborted.\n", da->id, level);
             ret = -ESHUTDOWN;
+            CASTLE_TRANSACTION_BEGIN;
             goto merge_aborted;
         }
 
         /* Perform the merge work. */
         ret = castle_da_merge_unit_do(merge, units_cnt);
+
+        serdes_state = atomic_read(&da->levels[level].merge.serdes.valid);
+        if((serdes_state > NULL_DAM_SERDES) && (!castle_merges_checkpoint))
+        {
+            /* user changed castle_merges_checkpoint param from 1 to 0 */
+            castle_printk(LOG_USERINFO,
+                    "Discarding checkpoint state for in-flight merge on DA=%d, level=%d.\n",
+                    da->id, level);
+            mutex_lock(&merge->da->levels[merge->level].merge.serdes.mutex);
+            castle_da_merge_serdes_dealloc(merge);
+            mutex_unlock(&merge->da->levels[merge->level].merge.serdes.mutex);
+        }
         /* Trace event. */
         castle_trace_da_merge_unit(TRACE_END,
                                    TRACE_DA_MERGE_UNIT_ID,
@@ -4972,7 +4990,9 @@ static int castle_da_merge_do(struct castle_double_array *da,
         if(ret < 0)
         {
             out_tree_id = INVAL_TREE;
-            castle_printk(LOG_WARN, "%s::MERGE FAILED - DA %d L %d, with input cts %d and %d \n", __FUNCTION__, da->id, level, in_trees[0]->seq, in_trees[1]->seq);
+            castle_printk(LOG_WARN, "%s::MERGE FAILED - DA %d L %d, with input cts %d and %d \n",
+                    __FUNCTION__, da->id, level, in_trees[0]->seq, in_trees[1]->seq);
+            CASTLE_TRANSACTION_BEGIN;
             goto merge_failed;
         }
         /* Only ret>0 we are expecting to continue, i.e. ret==EAGAIN. */
@@ -4982,12 +5002,14 @@ static int castle_da_merge_do(struct castle_double_array *da,
             castle_da_merge_intermediate_unit_complete(da, level);
     } while(ret);
 
-    debug("%s::MERGE COMPLETING - DA %d L %d, with input cts %d and %d, "
+    CASTLE_TRANSACTION_BEGIN;
+    castle_printk(LOG_DEBUG, "%s::MERGE COMPLETING - DA %d L %d, with input cts %d and %d, "
         "and output ct %d.\n", __FUNCTION__, da->id, level, in_trees[0]->seq, in_trees[1]->seq,
         merge->out_tree->seq);
 
 #ifdef DEBUG_MERGE_SERDES
-    if ( (castle_merges_checkpoint) && (level >= MIN_DA_SERDES_LEVEL) )
+    serdes_state = atomic_read(&da->levels[level].merge.serdes.valid);
+    if(serdes_state > NULL_DAM_SERDES)
     {
         /* using mutex here to synchronize merge thread against checkpoint thread - cannot allow
            checkpoint to sanity check iterator state when we are about to drop the input ccts */
@@ -5014,7 +5036,12 @@ merge_failed:
     debug("%s::MERGE END with ret %d - DA %d L %d, produced out ct seq %d \n",
         __FUNCTION__, ret, da->id, level, out_tree_id);
     debug_merges("MERGE END - L%d -> [%u]\n", level, out_tree_id);
+
     castle_da_merge_dealloc(merge, ret);
+
+    /* safe for checkpoint to run now because we've completed and cleaned up all merge state */
+    CASTLE_TRANSACTION_END;
+
     castle_trace_da_merge(TRACE_END, TRACE_DA_MERGE_ID, da->id, level, out_tree_id, 0);
     if(ret==-ESHUTDOWN) return -ESHUTDOWN; /* merge abort */
     if(ret)
@@ -5718,8 +5745,7 @@ static struct castle_double_array* castle_da_alloc(da_id_t da_id)
         mutex_init(&da->levels[i].merge.serdes.mutex);
         da->levels[i].merge.serdes.mstore_entry=NULL;
         da->levels[i].merge.serdes.out_tree=NULL;
-        atomic_set(&da->levels[i].merge.serdes.fresh, 0);
-        atomic_set(&da->levels[i].merge.serdes.valid, 0);
+        atomic_set(&da->levels[i].merge.serdes.valid, NULL_DAM_SERDES);
 
         INIT_LIST_HEAD(&da->levels[i].trees);
         da->levels[i].nr_trees             = 0;
@@ -6462,12 +6488,14 @@ static void castle_da_merge_writeback(struct castle_double_array *da, int level)
 {
     struct castle_dmserlist_entry *merge_mstore;
     struct castle_component_tree *ct = da->levels[level].merge.serdes.out_tree;
+    c_merge_serdes_state_t current_state;
 
     BUG_ON(!da);
     BUG_ON(!ct);
 
     /* assert that we are not checkpointing merges on lower levels */
     BUG_ON(level < MIN_DA_SERDES_LEVEL);
+    current_state = atomic_read(&da->levels[level].merge.serdes.valid);
 
     debug("%s::checkpointing merge on da %d, level %d\n",
             __FUNCTION__, da->id, level);
@@ -6531,9 +6559,30 @@ static void castle_da_merge_writeback(struct castle_double_array *da, int level)
     }
 #endif
 
-    /* flush extents if neccesary */
-    if(atomic_read(&da->levels[level].merge.serdes.fresh))
+    /* writeback LOs */
     {
+        struct list_head *lh, *tmp;
+        mutex_lock(&ct->lo_mutex);
+        list_for_each_safe(lh, tmp, &ct->large_objs)
+        {
+            struct castle_large_obj_entry *lo =
+                list_entry(lh, struct castle_large_obj_entry, list);
+            int lo_ref_cnt = castle_extent_ref_cnt_get(lo->ext_id);
+            /* input ct and/or output ct will have ref */
+            BUG_ON(lo_ref_cnt < 1);
+            debug("%s::writeback lo at ext %d\n", __FUNCTION__,
+                    lo->ext_id);
+            castle_ct_large_obj_writeback(lo, ct);
+        }
+        mutex_unlock(&ct->lo_mutex);
+    }
+
+    /* insert merge state into mstore */
+    castle_mstore_entry_insert(castle_dmser_store, merge_mstore);
+    /* flush extents if neccesary */
+    if(current_state == VALID_AND_FRESH_DAM_SERDES)
+    {
+        c_merge_serdes_state_t new_state;
         /* we have fresh serialisation state, so flush output tree extents */
         struct castle_clist_entry *cl    = &merge_mstore->out_tree;
 
@@ -6560,7 +6609,8 @@ static void castle_da_merge_writeback(struct castle_double_array *da, int level)
 
         debug("%s::    internal_ext_free_bs ext_id = %lld.\n",
                 __FUNCTION__, cl->internal_ext_free_bs.ext_id);
-        /* TODO@tr flush from previous checkpoint instead of start of extent */
+        /* always flush from 0, to account for the possibility that the castle_merges_checkpoint
+           param may have been toggled from 0 to 1 halfway during some merges */
         castle_cache_extent_flush_schedule(
                 cl->internal_ext_free_bs.ext_id, 0, cl->internal_ext_free_bs.used);
 
@@ -6582,31 +6632,10 @@ static void castle_da_merge_writeback(struct castle_double_array *da, int level)
                     __FUNCTION__, cl->bloom_ext_id);
             castle_cache_extent_flush_schedule(cl->bloom_ext_id, 0, 0);
         }
-
-        atomic_set(&da->levels[level].merge.serdes.fresh, 0);
+        new_state = VALID_AND_STALE_DAM_SERDES;
+        atomic_set(&da->levels[level].merge.serdes.valid, (int)new_state);
     }
 
-    /* writeback LOs */
-    {
-        struct list_head *lh, *tmp;
-        mutex_lock(&ct->lo_mutex);
-        list_for_each_safe(lh, tmp, &ct->large_objs)
-        {
-            struct castle_large_obj_entry *lo =
-                list_entry(lh, struct castle_large_obj_entry, list);
-            int lo_ref_cnt = castle_extent_ref_cnt_get(lo->ext_id);
-            /* input ct and/or output ct will have ref */
-            BUG_ON(lo_ref_cnt < 1);
-            debug("%s::writeback lo at ext %d\n", __FUNCTION__,
-                    lo->ext_id);
-
-            castle_ct_large_obj_writeback(lo, ct);
-        }
-        mutex_unlock(&ct->lo_mutex);
-    }
-
-    /* insert merge state into mstore */
-    castle_mstore_entry_insert(castle_dmser_store, merge_mstore);
 }
 
 /**
@@ -6640,6 +6669,8 @@ static int castle_da_writeback(struct castle_double_array *da, void *unused)
         int i; /* DA levels */
         for(i=0; i<MAX_DA_LEVEL; i++)
         {
+            c_merge_serdes_state_t current_state;
+
             mutex_lock(&da->levels[i].merge.serdes.mutex);
             /* we should never checkpoint a deserialising merge, but we cannot guarantee that
                this thread will not run while deserialisation is ongoing, so the best we can do
@@ -6652,8 +6683,9 @@ static int castle_da_writeback(struct castle_double_array *da, void *unused)
                 mutex_unlock(&da->levels[i].merge.serdes.mutex);
                 continue;
             }
-
-            if(atomic_read(&da->levels[i].merge.serdes.valid)==2)
+            current_state = atomic_read(&da->levels[i].merge.serdes.valid);
+            if( (current_state == VALID_AND_FRESH_DAM_SERDES) ||
+                    (current_state == VALID_AND_STALE_DAM_SERDES) )
                 castle_da_merge_writeback(da, i);
 
             mutex_unlock(&da->levels[i].merge.serdes.mutex);
