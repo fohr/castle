@@ -781,9 +781,9 @@ static int c2_dirtytree_remove(c2_block_t *c2b)
 
     /* Release lock and put reference, potentially freeing the dirtytree if
      * the extent has already been freed. */
+    c2b->dirtytree = NULL;
     spin_unlock_irqrestore(&dirtytree->lock, flags);
     castle_extent_dirtytree_put(dirtytree);
-    c2b->dirtytree = NULL;
 
     return EXIT_SUCCESS;
 }
