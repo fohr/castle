@@ -68,7 +68,7 @@ function test_sector {
     return 0
 }
 
-bad_lbas=$(smartctl -l selftest "$device" | grep '^#' | cut -b 79- | sort -u | grep .)
+bad_lbas=$(smartctl -l selftest "$device" | grep '^#' | sed 's/.*%  *[0-9]*  *//' | sort -u | grep '[0-9]')
 for lba in $bad_lbas
 do
   if ! test_sector "$lba"; then
