@@ -2763,7 +2763,8 @@ restart:
                 castle_printk(LOG_USERINFO, "Finished remapping out-of-service slave 0x%x.\n",
                               oos_slaves[i]->uuid);
                 set_bit(CASTLE_SLAVE_REMAPPED_BIT, &oos_slaves[i]->flags);
-                if (atomic_read(&oos_slaves[i]->io_in_flight) == 0)
+                if (atomic_read(&oos_slaves[i]->io_in_flight) == 0 &&
+                    test_bit(CASTLE_SLAVE_BDCLAIMED_BIT, &oos_slaves[i]->flags))
                     castle_release_device(oos_slaves[i]);
             }
         }
@@ -2777,7 +2778,8 @@ restart:
                 set_bit(CASTLE_SLAVE_OOS_BIT, &evacuated_slaves[i]->flags);
                 set_bit(CASTLE_SLAVE_REMAPPED_BIT, &evacuated_slaves[i]->flags);
                 clear_bit(CASTLE_SLAVE_EVACUATE_BIT, &evacuated_slaves[i]->flags);
-                if (atomic_read(&evacuated_slaves[i]->io_in_flight) == 0)
+                if (atomic_read(&evacuated_slaves[i]->io_in_flight) == 0 &&
+                    test_bit(CASTLE_SLAVE_BDCLAIMED_BIT, &evacuated_slaves[i]->flags))
                     castle_release_device(evacuated_slaves[i]);
             }
         }

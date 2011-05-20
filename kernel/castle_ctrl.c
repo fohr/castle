@@ -698,6 +698,9 @@ void castle_control_slave_evacuate(uint32_t uuid, uint32_t force, int *ret)
         set_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags);
         castle_printk(LOG_USERINFO, "Slave 0x%x [%s] has been marked as out-of-service.\n",
                       slave->uuid, slave->bdev_name);
+        if (atomic_read(&slave->io_in_flight) == 0)
+            castle_release_device(slave);
+
     } else
     {
         set_bit(CASTLE_SLAVE_EVACUATE_BIT, &slave->flags);

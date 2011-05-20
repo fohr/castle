@@ -461,7 +461,6 @@ static struct castle_slave *castle_slave_ghost_add(uint32_t uuid)
     slave->id = slave_id++;
     slave->sup_ext = INVAL_EXT_ID;
     mutex_init(&slave->sblk_lock);
-    mutex_init(&slave->bdev_lock);
     INIT_RCU_HEAD(&slave->rcu);
     set_bit(CASTLE_SLAVE_GHOST_BIT, &slave->flags);
     set_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags);
@@ -759,7 +758,12 @@ int castle_fs_init(void)
                     }
                 }
                 if (test_bit(CASTLE_SLAVE_OOS_BIT, &fs_sb.slaves_flags[i]))
+                {
                     set_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags);
+                    if (atomic_read(&cs->io_in_flight) == 0)
+                        castle_release_device(cs);
+                }
+
                 /* If EVACUATE is set, but not OOS, then evacuation has not completed. */
                 if ((test_bit(CASTLE_SLAVE_EVACUATE_BIT, &fs_sb.slaves_flags[i])) &&
                     (!test_bit(CASTLE_SLAVE_OOS_BIT, &fs_sb.slaves_flags[i])))
@@ -1391,7 +1395,6 @@ struct castle_slave* castle_claim(uint32_t new_dev)
     cs->last_access = jiffies;
     cs->sup_ext     = INVAL_EXT_ID;
     mutex_init(&cs->sblk_lock);
-    mutex_init(&cs->bdev_lock);
     INIT_RCU_HEAD(&cs->rcu);
     atomic_set(&cs->io_in_flight, 0);
 
@@ -1535,21 +1538,17 @@ void castle_release_device(struct castle_slave *cs)
 {
     BUG_ON(!cs);
     BUG_ON(atomic_read(&cs->io_in_flight));
-    mutex_lock(&cs->bdev_lock);
-    if (test_bit(CASTLE_SLAVE_BDCLAIMED_BIT, &cs->flags))
+    if (test_and_clear_bit(CASTLE_SLAVE_BDCLAIMED_BIT, &cs->flags))
     {
         bd_release(cs->bdev);
-        clear_bit(CASTLE_SLAVE_BDCLAIMED_BIT, &cs->flags);
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,24)
         blkdev_put(cs->bdev);
 #else
         blkdev_put(cs->bdev, FMODE_READ|FMODE_WRITE);
 #endif
-        mutex_unlock(&cs->bdev_lock);
         castle_printk(LOG_USERINFO, "Device 0x%x [%s] has been released.\n",
                       cs->uuid, cs->bdev_name);
-    } else
-        mutex_unlock(&cs->bdev_lock);
+    }
 }
 
 void castle_release(struct castle_slave *cs)

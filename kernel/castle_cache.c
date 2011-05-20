@@ -1029,29 +1029,6 @@ static void c2b_remaining_io_sub(int rw, int nr_pages, c2_block_t *c2b)
     c2b->end_io(c2b);
 }
 
-/**
- * Checks if a slave has gone out-of-service.
- * If slave is out-of-service, releases the device
- * If slave is not out-of-service, bump the in-flight I/O count.
- *
- * @param slave The slave to check.
- *
- * @return  1 if slave is out-of-service, otherwise 0.
- */
-static int check_and_release_oos_slave(struct castle_slave *slave)
-{
-    BUG_ON(!slave);
-    atomic_inc(&slave->io_in_flight);
-    if (test_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags))
-    {
-        /* Slave is OOS. Return true and release device if no outstanding I/O. */
-        if (atomic_dec_and_test(&slave->io_in_flight))
-            castle_release_device(slave);
-        return 1;
-    }
-    return 0;
-}
-
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,18)
 static int c2b_multi_io_end(struct bio *bio, unsigned int completed, int err)
 #else
@@ -1098,15 +1075,6 @@ static void c2b_multi_io_end(struct bio *bio, int err)
     io_slave = castle_slave_find_by_bdev(bio_info->bdev);
     BUG_ON(!io_slave);
 
-    atomic_dec(&io_slave->io_in_flight);
-    /* If slave is out-of-service, and no I/O is outstanding, then queue up bdev release. */
-    if (test_bit(CASTLE_SLAVE_OOS_BIT, &io_slave->flags) &&
-        (atomic_read(&io_slave->io_in_flight) == 0))
-    {
-        CASTLE_INIT_WORK(&io_slave->work, castle_release_oos_slave);
-        queue_work(castle_wq, &io_slave->work);
-    }
-
     if (!test_bit(BIO_UPTODATE, &bio->bi_flags))
     {
         /* I/O has failed for this bio, or testing has injected fault. */
@@ -1152,6 +1120,24 @@ static void c2b_multi_io_end(struct bio *bio, int err)
     castle_free(bio_info);
     bio_put(bio);
     
+    /*
+     * io_in_flight logic. The ordering of the dec and read of io_in_flight and the test
+     * of CASTLE_SLAVE_OOS_BIT is important.
+     * Decrement io_in_flight. If the slave is marked out-of-service, then check if
+     * io_in_flight is zero. If it is, then we know that it cannot now be incremented
+     * in submit_c2b_io because it is only incremented there if the out-of-service flag
+     * is not set. It is therefore safe to queue the device for release.
+     */
+    atomic_dec(&io_slave->io_in_flight);
+
+    /* If slave is out-of-service, and no I/O is outstanding, then queue up bdev release. */
+    if (test_bit(CASTLE_SLAVE_OOS_BIT, &io_slave->flags) &&
+        (atomic_read(&io_slave->io_in_flight) == 0))
+    {
+        CASTLE_INIT_WORK(&io_slave->work, castle_release_oos_slave);
+        queue_work(castle_wq, &io_slave->work);
+    }
+
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,18)
     return 0;
 #endif
@@ -1190,8 +1176,10 @@ int chk_valid(c_disk_chk_t chk)
  * @param disk_chk  Chunk to be IOed to
  * @param pages     Array of pages to be used for IO 
  * @param nr_pages  Size of @pages array
+ *
+ * @return          EAGAIN if slave in passed chunk is now out-of-service, otherwise EXIT_SUCCESS.
  */
-void submit_c2b_io(int           rw, 
+int submit_c2b_io(int           rw, 
                    c2_block_t   *c2b, 
                    c_ext_pos_t   cep, 
                    c_disk_chk_t  disk_chk, 
@@ -1240,6 +1228,25 @@ void submit_c2b_io(int           rw,
     BUG_ON(nr_pages > MAX_BIO_PAGES);
     j = 0;
     while (nr_pages > 0) {
+
+        /*
+         * io_in_flight logic. The ordering of the dec and read of io_in_flight and the test
+         * of CASTLE_SLAVE_OOS_BIT is important.
+         * Pre-increment io_in_flight, then check if the slave is out-of-service. If it is then
+         * decrement it and request device release if required. If it is not out-of-service
+         * then it remains incremented. This means that, effectively, io_in_flight is only
+         * incremented if the slave is not out-of-service.
+         */
+        atomic_inc(&cs->io_in_flight);
+        if (test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags))
+        {
+            /* Slave is OOS. Return true and release claimed device if no outstanding I/O. */
+            if (atomic_dec_and_test(&cs->io_in_flight) &&
+                (test_bit(CASTLE_SLAVE_BDCLAIMED_BIT, &cs->flags)))
+                castle_release_device(cs);
+            return -EAGAIN;
+        }
+
         /*
          * We may have more pages than we are allowed to submit in one bio. Each time we submit
          * we re-calculate what we can send, because bio_get_nr_vecs can change dynamically.
@@ -1277,6 +1284,7 @@ void submit_c2b_io(int           rw,
         j += batch;
         nr_pages -= batch;
     }
+    return EXIT_SUCCESS;
 }
 
 typedef struct castle_io_array {
@@ -1364,8 +1372,9 @@ static int c_io_array_submit(int rw,
     {
         /* Accounting */
         atomic_add(nr_pages, &castle_cache_read_stats);
-        /* Call the slave scheduler to find the next slave to read from */
+
 retry:
+        /* Call the slave scheduler to find the next slave to read from */
         ret = c_io_next_slave_get(c2b, chunks, k_factor, &read_idx);
         /*
          * If there is a read failure here (no live slaves found) then we return error.
@@ -1379,17 +1388,19 @@ retry:
         slave = castle_slave_find_by_uuid(chunks[read_idx].slave_id);
         BUG_ON(!slave);
 
-        if (!check_and_release_oos_slave(slave))
+        /* Only increment remaining count once we know we'll submit the IO. */
+        atomic_add(nr_pages, &c2b->remaining);
+        /* Submit the IO. */
+        ret = submit_c2b_io(READ, c2b, array->start_cep, chunks[read_idx],
+                            array->io_pages, nr_pages);
+        if (ret == -EAGAIN)
         {
-            /* Only increment remaining count once we know we'll submit the IO. */
-            atomic_add(nr_pages, &c2b->remaining);
-            /* Submit the IO. */
-            submit_c2b_io(READ, c2b, array->start_cep, chunks[read_idx], array->io_pages, nr_pages);
-
-            /* Return with success. */
-            return EXIT_SUCCESS;
-        } else
+            atomic_sub(nr_pages, &c2b->remaining);
             goto retry;
+        }
+
+        /* Return with success. */
+        return EXIT_SUCCESS;
     }
 
     /* Write to all slaves */
@@ -1400,15 +1411,22 @@ retry:
         slave = castle_slave_find_by_uuid(chunks[i].slave_id);
         BUG_ON(!slave);
 
-        /* If slave is out-of-service, skip it, otherwise submit the I/O. */
-        if (!check_and_release_oos_slave(slave))
+        if (!test_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags))
         {
             found = 1;
+            /* Slave is not out-of-sevice - submit the IO */
             atomic_add(nr_pages, &castle_cache_write_stats);
             atomic_add(nr_pages, &c2b->remaining);
-            submit_c2b_io(WRITE, c2b, array->start_cep, chunks[i], array->io_pages, nr_pages);
+            ret = submit_c2b_io(WRITE, c2b, array->start_cep, chunks[i], array->io_pages, nr_pages);
+            if (ret == -EAGAIN)
+            {
+                atomic_sub(nr_pages, &castle_cache_write_stats);
+                atomic_sub(nr_pages, &c2b->remaining);
+                continue;
+            }
         }
     }
+
     /*
      * If no live slave was found , and the extent is for a superblock then we can treat this
      * as successful because we don't care if writes fail to a to the superblock of a now-dead

@@ -1293,7 +1293,6 @@ struct castle_slave {
     c_chk_cnt_t                     disk_size; /* in chunks; max_chk_num + 1 */
     c_chk_cnt_t                     reserved_schks;
     atomic_t                        free_chk_cnt;
-    struct mutex                    bdev_lock;
     atomic_t                        io_in_flight;
     char                            bdev_name[BDEVNAME_SIZE];
     struct work_struct              work;
