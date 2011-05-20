@@ -763,7 +763,7 @@ __ATTR(used, S_IRUGO|S_IWUSR, slave_used_show, NULL);
 static struct castle_sysfs_entry slave_target =
 __ATTR(target, S_IRUGO|S_IWUSR, slave_target_show, NULL);
 
-static struct castle_sysfs_entry slave_spinning =
+static USED struct castle_sysfs_entry slave_spinning =
 __ATTR(spinning, S_IRUGO|S_IWUSR, slave_spinning_show, NULL);
 
 static struct castle_sysfs_entry slave_ssd =
@@ -777,7 +777,7 @@ static struct attribute *castle_slave_attrs[] = {
     &slave_size.attr,
     &slave_used.attr,
     &slave_target.attr,
-    &slave_spinning.attr,
+    //&slave_spinning.attr,
     &slave_ssd.attr,
     &slave_rebuild_state.attr,
     NULL,
