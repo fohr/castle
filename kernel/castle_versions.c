@@ -780,8 +780,10 @@ da_id_t castle_version_da_id_get(version_t version)
 
     read_lock_irq(&castle_versions_hash_lock);
     v = __castle_versions_hash_get(version);
+
     /* Sanity checks */
-    BUG_ON(!v);
+    if (!v) return INVAL_DA;
+
     BUG_ON(!(v->flags & CV_INITED_MASK));
     da_id = v->da_id;
     read_unlock_irq(&castle_versions_hash_lock);
