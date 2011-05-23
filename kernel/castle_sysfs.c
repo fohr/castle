@@ -75,14 +75,12 @@ struct castle_sysfs_version {
 
 #define kobject_remove(_kobj)                                                    \
     kobject_del(_kobj)
-    
+
 #endif
 
-static ssize_t versions_list_show(struct kobject *kobj, 
-							      struct attribute *attr, 
-								  char *buf)
+static ssize_t versions_list_show(struct kobject *kobj, struct attribute *attr, char *buf)
 {
-    struct castle_sysfs_entry *csys_entry = 
+    struct castle_sysfs_entry *csys_entry =
                 container_of(attr, struct castle_sysfs_entry, attr);
     struct castle_sysfs_version *v =
                 container_of(csys_entry, struct castle_sysfs_version, csys_entry);
@@ -96,6 +94,8 @@ static ssize_t versions_list_show(struct kobject *kobj,
     ret = castle_version_read(v->version, &da_id, NULL, &live_parent, &size, &leaf);
     if(ret == 0)
     {
+        cv_nonatomic_stats_t live_stats;
+        live_stats = castle_version_live_stats_get(v->version);
         len = sprintf(buf,
                 "Id: 0x%x\n"
                 "VertreeId: 0x%x\n"
@@ -107,27 +107,27 @@ static ssize_t versions_list_show(struct kobject *kobj,
                 "TombstoneDeletes: %ld\n"
                 "VersionDeletes: %ld\n"
                 "KeyReplaces: %ld\n",
-                 v->version, 
+                 v->version,
                  castle_version_da_id_get(v->version),
                  live_parent,
                  size,
                  leaf,
-                 castle_version_keys_get(v->version),
-                 castle_version_tombstones_get(v->version),
-                 castle_version_tombstone_deletes_get(v->version),
-                 castle_version_version_deletes_get(v->version),
-                 castle_version_key_replaces_get(v->version));
+                 live_stats.keys,
+                 live_stats.tombstones,
+                 live_stats.tombstone_deletes,
+                 live_stats.version_deletes,
+                 live_stats.key_replaces);
 
         return len;
     }
 
-    return sprintf(buf, "Could not read the version, err %d\n", ret); 
+    return sprintf(buf, "Could not read the version, err %d\n", ret);
 }
 
 static ssize_t versions_list_store(struct kobject *kobj,
-							       struct attribute *attr, 
-								   const char *buf, 
-								   size_t count)
+                                   struct attribute *attr,
+                                   const char *buf,
+                                   size_t count)
 {
     castle_printk(LOG_INFO, "Got write to volumes: %s\n", buf);
     return count;

@@ -2264,6 +2264,7 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
     struct castle_btree_type    *btree = castle_btree_type_get(node->type);
     void                        *lub_key, *key = c_bvec->key;
     version_t                    lub_version, version = c_bvec->version;
+    cv_nonatomic_stats_t stats = { 0, 0, 0, 0, 0 };
     int                          lub_idx, insert_idx, ret;
     c_val_tup_t                  lub_cvt = INVAL_VAL_TUP;
     c_val_tup_t                  new_cvt = INVAL_VAL_TUP;
@@ -2334,11 +2335,12 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
 
         atomic64_inc(&c_bvec->tree->item_count);
 
-        /* Update per-version statistics. */
+        /* Update live per-version statistics. */
         if (CVT_TOMB_STONE(new_cvt))
-            castle_version_tombstones_inc(version);
+            stats.tombstones++;
         else
-            castle_version_keys_inc(version);
+            stats.keys++;
+        castle_version_live_stats_adjust(version, stats);
 
         /* @TODO: should memset the page to zero (because we return zeros on reads)
                   this can be done here, or beter still in _main.c, in data_copy */
@@ -2370,15 +2372,15 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
     }
     BUG_ON(CVT_LEAF_PTR(new_cvt));
 
-    /* Update per-version statistics. */
+    /* Update live per-version statistics. */
     if (CVT_TOMB_STONE(lub_cvt))
     {
         if (CVT_TOMB_STONE(new_cvt))
-            castle_version_tombstone_deletes_inc(version);
+            stats.tombstone_deletes++;
         else
         {
-            castle_version_keys_inc(version);
-            castle_version_tombstones_dec(version);
+            stats.keys++;
+            stats.tombstones--;
             /* Don't bump the replaces counter: replacing a tombstone with
              * a key is the same as inserting a new key. */
         }
@@ -2387,13 +2389,14 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
     {
         if (CVT_TOMB_STONE(new_cvt))
         {
-            castle_version_keys_dec(version);
-            castle_version_tombstones_inc(version);
-            castle_version_tombstone_deletes_inc(version);
+            stats.keys--;
+            stats.tombstones++;
+            stats.tombstone_deletes++;
         }
         else
-            castle_version_key_replaces_inc(version);
+            stats.key_replaces++;
     }
+    castle_version_live_stats_adjust(version, stats);
 
     btree->entry_replace(node, lub_idx, key, lub_version,
                          new_cvt);

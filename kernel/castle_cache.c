@@ -5420,7 +5420,7 @@ int castle_mstores_writeback(uint32_t version)
     /* Call writebacks of components. */
     castle_attachments_writeback();
     castle_double_arrays_writeback();
-    
+
     FAULT(CHECKPOINT_FAULT);
 
     castle_versions_writeback();

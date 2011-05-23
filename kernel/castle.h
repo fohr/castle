@@ -1164,6 +1164,19 @@ struct node_buf_t {
     struct list_head          list;
 };
 
+/**
+ * Non-atomic statistics specific to a given version.
+ *
+ * @also castle_version_stats
+ */
+typedef struct castle_version_nonatomic_stats {
+    long        keys;               /**< castle_version_stats.keys                          */
+    long        tombstones;         /**< castle_version_stats.tombstones                    */
+    long        tombstone_deletes;  /**< castle_version_stats.tombstone_deletes             */
+    long        version_deletes;    /**< castle_version_stats.version_deletes               */
+    long        key_replaces;       /**< castle_version_stats.key_replaces                  */
+} cv_nonatomic_stats_t;
+
 /* Enumerates latest version value for all entries */
 typedef struct castle_rq_enumerator {
     struct castle_component_tree *tree;
@@ -1215,6 +1228,7 @@ typedef struct castle_merged_iterator {
         struct rb_node               rb_node;
     } *iterators;
     struct rb_root                   rb_root;
+    cv_nonatomic_stats_t             stats;         /**< Stat changes during last _next().  */
     castle_merged_iterator_each_skip each_skip;
     castle_iterator_end_io_t         end_io;
     void                            *private;
@@ -1726,7 +1740,7 @@ struct castle_double_array {
         } merge;
         struct castle_da_lfs_ct_t lfs;              /**< Low Free-Space handler for merge       */
     } levels[MAX_DA_LEVEL];
-    atomic_t                    lfs_victim_count;   /**< Number of components of DA, that are 
+    atomic_t                    lfs_victim_count;   /**< Number of components of DA, that are
                                                          blocked due to Low Free-Space.         */
     struct castle_da_lfs_ct_t  *t0_lfs;             /**< Low Free-Space handler for T0s.        */
     struct castle_merge_token   merge_tokens_array[MAX_DA_LEVEL];
@@ -1772,14 +1786,93 @@ struct castle_double_array {
 extern int castle_latest_key;
 
 /**
- * State for Snapshot delete. Gets reset for each new key on the merge stream.
+ * Snapshot delete state.
+ *
+ * Gets reset for each new key on the merge stream.
  */
 struct castle_version_delete_state {
-    char                         *occupied;         /**< v'th bit set if key exists for version v. */
-    char                         *need_parent;      /**< v'th bit set if version v depends on parent for the current key. */
-    struct list_head             *next_deleted;     /**< Next version in list of reverse DFS order of deleted versions. */
-    int                           last_version;     /**< last version that is created before starting the merge. */
+    char               *occupied;       /**< v'th bit set if key exists for version v.      */
+    char               *need_parent;    /**< v'th bit set if version v depends on parent
+                                             for the current key.                           */
+    struct list_head   *next_deleted;   /**< Next version in list of reverse DFS order of
+                                             deleted versions.                              */
+    int                 last_version;   /**< Last version that is created before starting
+                                             the merge.                                     */
 };
+
+/**
+ * Various statistics stored on a per-version basis.
+ *
+ * @also castle_version_stats
+ */
+typedef enum castle_version_stat_id {
+    CV_KEYS_ID = 0,                 /**< castle_version_stats.keys                          */
+    CV_TOMBSTONES_ID,               /**< castle_version_stats.tombstones                    */
+    CV_TOMBSTONE_DELETES_ID,        /**< castle_version_stats.tombstone_deletes             */
+    CV_VERSION_DELETES_ID,          /**< castle_version_stats.version_deletes               */
+    CV_KEY_REPLACES_ID,             /**< castle_version_stats.key_replaces                  */
+} cv_stat_id_t;
+
+/**
+ * Statistics specific to a given version.
+ *
+ * @also castle_version_stat_id
+ * @also castle_version_nonatomic_stats
+ */
+typedef struct castle_version_stats {
+    atomic64_t  keys;               /**< Number of live keys.  May be inaccurate until all
+                                         merges complete and duplicates are handled.        */
+    atomic64_t  tombstones;         /**< Number of tombstones.                              */
+    atomic64_t  tombstone_deletes;  /**< Number of keys deleted by tombstones (does not
+                                         include tombstones deleted by tombstones).         */
+    atomic64_t  version_deletes;    /**< Number of entries deleted due to version delete.   */
+    atomic64_t  key_replaces;       /**< Number of keys replaced by newer keys (excludes
+                                         tombstones).                                       */
+} cv_stats_t;
+
+/**
+ * Version-specific state.
+ *
+ * Maintain statistics about a given version.  Used by merge output.
+ */
+typedef struct castle_version_state {
+    version_t                   version;        /**< Version ID.                            */
+    struct castle_version_delete_state2 {
+        uint8_t                 occupied:1;     /**< Whether keys exist in this version.    */
+        uint8_t                 need_parent:7;  /**< Whether this version depends on parent
+                                                     for the current key.                   */
+    } delete_state;
+    cv_nonatomic_stats_t        stats;          /**< Per-version stats.                     */
+    struct list_head            hash_list;      /**< Hash-bucket list position.             */
+} cv_state_t;
+
+/**
+ * Hash of per-version states.
+ *
+ * castle_version_state array allocated dynamically.
+ *
+ * @also castle_da_merge
+ */
+typedef struct castle_version_states {
+#define CASTLE_VERSION_STATES_HASH_SIZE (1000)  /**< Hash buckets to allocate.              */
+    struct castle_version_state    *array;      /**< Array of free version_state structs.   */
+    int                             free_idx;   /**< Index of next free version_state.      */
+    int                             max_idx;    /**< Max possible elements in array.        */
+    struct list_head               *hash;       /**< Array of hash buckets.                 */
+} cv_states_t;
+
+/**
+ * Describe changes to per-version stats.
+ */
+typedef struct castle_version_stats_adjust {
+    version_t               version;        /**< Version to adjust stats for.                   */
+
+    int                     live;           /**< Whether to update live version stats.          */
+    cv_states_t            *private;        /**< Whether to update private per-version stats.   */
+    int                     consistent;     /**< Whether to update crash consistent stats.      */
+
+    cv_nonatomic_stats_t    stats;          /**< Stat changes.                                  */
+} cv_stats_adjust_t;
 
 extern int castle_nice_value;
 

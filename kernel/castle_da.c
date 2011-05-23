@@ -1184,6 +1184,9 @@ static int castle_ct_merged_iter_rbtree_insert(c_merged_iter_t *iter,
             new_iter = c_iter;
         }
 
+        /* Reset merged version iterator stats. */
+        memset(&iter->stats, 0, sizeof(cv_nonatomic_stats_t));
+
         /* Skip the duplicated entry and clear cached bit of the component
          * iterator. */
         if (dup_iter)
@@ -1725,17 +1728,15 @@ struct castle_da_merge {
     struct work_struct            work;
     int                           budget_cons_rate;
     int                           budget_cons_units;
-    int                           leafs_on_ssds;       /**< set to true if leaf btree
-                                                        nodes will be stored on SSDs.   */
-    int                           internals_on_ssds;   /**< set to true if internal btree
-                                                        nodes will be stored on SSDs.   */
-    struct list_head              new_large_objs;  /**< used with merge serdes; keeps track of what
-                                                        los were added since last checkpoint */
-
-    struct castle_version_delete_state snapshot_delete; /**< snapshot delete state. */
+    int                           leafs_on_ssds;        /**< Are leaf btree nodes stored on SSD.*/
+    int                           internals_on_ssds;    /**< Are internal nodes stored on SSD.  */
+    struct list_head              new_large_objs;       /**< Large objects added since last
+                                                             checkpoint (for merge serdes).     */
+    struct castle_version_states  version_states;       /**< Merged version states.             */
+    struct castle_version_delete_state snapshot_delete; /**< Snapshot delete state.             */
 
 #ifdef CASTLE_PERF_DEBUG
-    u64                           get_c2b_ns;       /**< ns in castle_cache_block_get() */
+    u64                           get_c2b_ns;           /**< ns in castle_cache_block_get()     */
     u64                           merged_iter_next_ns;
     u64                           da_medium_obj_copy_ns;
     u64                           nodes_complete_ns;
@@ -1747,7 +1748,8 @@ struct castle_da_merge {
 #ifdef CASTLE_DEBUG
     uint8_t                       is_recursion;
 #endif
-    uint32_t                      skipped_count;    /**< num of entries from deleted versions. */
+    uint32_t                      skipped_count;        /**< Count of entries from deleted
+                                                             versions.                          */
 };
 
 #define MAX_IOS             (1000) /* Arbitrary constants */
@@ -1968,13 +1970,14 @@ static struct castle_iterator_type* castle_da_iter_type_get(struct castle_compon
  * each_skip() callback for merge merged iterator.
  *
  * Called whenever a duplicate entry gets skipped during merges.
+ *
+ * Store any stat changes in merged iterator stats structure.  These are to
+ * be handled via the merge process (castle_da_merge_unit_do()).
  */
 static void castle_da_each_skip(c_merged_iter_t *iter,
                                 struct component_iterator *dup_iter,
                                 struct component_iterator *new_iter)
 {
-    version_t version;
-
     BUG_ON(!dup_iter->cached);
     BUG_ON(!new_iter->cached);
     BUG_ON(dup_iter->cached_entry.v != new_iter->cached_entry.v);
@@ -1986,10 +1989,18 @@ static void castle_da_each_skip(c_merged_iter_t *iter,
     }
 
     /* Update per-version statistics. */
-    version = dup_iter->cached_entry.v;
-    if (CVT_TOMB_STONE(dup_iter->cached_entry.cvt))
+    if (!CVT_TOMB_STONE(dup_iter->cached_entry.cvt))
     {
-        castle_version_tombstones_dec(version);
+        iter->stats.keys--;
+
+        if (CVT_TOMB_STONE(new_iter->cached_entry.cvt))
+            iter->stats.tombstone_deletes++;
+        else
+            iter->stats.key_replaces++;
+    }
+    else
+    {
+        iter->stats.tombstones--;
 
         /* If the new entry is also a tombstone, don't bump the tombstone delete
          * counter: deleting something that is already deleted makes no sense. */
@@ -1997,15 +2008,6 @@ static void castle_da_each_skip(c_merged_iter_t *iter,
         /* If the new entry is a key, don't bump the key replaces counter:
          * merging a newer key with an older tombstone is logically the same as
          * inserting a new key. */
-    }
-    else
-    {
-        castle_version_keys_dec(version);
-
-        if (CVT_TOMB_STONE(new_iter->cached_entry.cvt))
-            castle_version_tombstone_deletes_inc(version);
-        else
-            castle_version_key_replaces_inc(version);
     }
 }
 
@@ -3576,8 +3578,10 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
         mutex_unlock(&merge->da->levels[merge->level].merge.serdes.mutex);
 
     /* Free the merged iterator, if one was allocated. */
-    if(merge->merged_iter)
+    if (merge->merged_iter)
         castle_free(merge->merged_iter);
+
+    castle_version_states_free(&merge->version_states);
     castle_free(merge);
 }
 
@@ -3650,10 +3654,14 @@ static int castle_da_merge_unit_do(struct castle_da_merge *merge, uint32_t unit_
     struct timespec ts_start, ts_end;
 #endif
 
-    while(castle_ct_merged_iter_has_next(merge->merged_iter))
+    while (castle_ct_merged_iter_has_next(merge->merged_iter))
     {
+        cv_nonatomic_stats_t stats;
+
         might_resched();
+
         /* @TODO: we never check iterator errors. We should! */
+
         castle_perf_debug_getnstimeofday(&ts_start);
         castle_ct_merged_iter_next(merge->merged_iter, &key, &version, &cvt);
         castle_perf_debug_getnstimeofday(&ts_end);
@@ -3661,33 +3669,79 @@ static int castle_da_merge_unit_do(struct castle_da_merge *merge, uint32_t unit_
         debug("Merging entry id=%lld: k=%p, *k=%d, version=%d, cep="cep_fmt_str_nl,
                 i, key, *((uint32_t *)key), version, cep2str(cvt.cep));
         BUG_ON(CVT_INVALID(cvt));
-        /* Skip the entry if the version is marked for deletion and there are no
-         * descendant keys. */
+
+        /* Start with merged iterator stats (see castle_da_each_skip()). */
+        stats = merge->merged_iter->stats;
+
+        /* Skip entry if version marked for deletion and no descendant keys. */
         if (castle_da_entry_skip(merge, key, version))
         {
-            /* Update per-version statistics. */
-            castle_version_version_deletes_inc(version);
-            if (CVT_TOMB_STONE(cvt))
-                castle_version_tombstones_dec(version);
-            else
-                castle_version_keys_dec(version);
-
+            /* Update per-version and merge statistics.
+             *
+             * We do not need to decrement keys/tombstones for level 1 merges
+             * as these keys have not yet been accounted for; skip them. */
             merge->skipped_count++;
+            stats.version_deletes++;
+            if (CVT_TOMB_STONE(cvt))
+                stats.tombstones--;
+            else
+                stats.keys--;
+            castle_version_live_stats_adjust(version, stats);
+            if (merge->level == 1)
+            {
+                /* Key & tombstones inserts have not been accounted for in
+                 * level 1 merges so don't record removals. */
+                stats.keys = 0;
+                stats.tombstones = 0;
+            }
+            castle_version_private_stats_adjust(version, stats, &merge->version_states);
 
-            /* The skipped key will be freed with the input extent. */
+            /*
+             * The skipped key gets freed along with the input extent.
+             */
 
             goto entry_done;
         }
-        /* update serialisation state */
-        if( (castle_merges_checkpoint) && (merge->level >= MIN_DA_SERDES_LEVEL) )
+
+        /* Update merge serialisation state. */
+        if ((castle_merges_checkpoint) && (merge->level >= MIN_DA_SERDES_LEVEL))
             castle_da_merge_serialise(merge);
-        /* Add entry to level 0 node (and recursively up the tree). */
+
+        /* Add entry to the output btree.
+         *
+         * - Add to level 0 node (and recurse up the tree)
+         * - Update the bloom filter */
         castle_da_entry_add(merge, 0, key, version, cvt, 0);
-        /* Add entry to bloom filter */
         if (merge->out_tree->bloom_exists)
             castle_bloom_add(&merge->out_tree->bloom, merge->out_btree, key);
-        /* Increment the number of entries stored in the output tree. */
+
+        /* Update per-version and merge statistics.
+         * We are starting with merged iterator stats (from above). */
         merge->nr_entries++;
+        if (merge->level == 1)
+        {
+            /* Live stats to reflect adjustments by castle_da_each_skip(). */
+            castle_version_live_stats_adjust(version, stats);
+
+            /* Key & tombstone inserts have not been accounted for in private
+             * level 1 merge version stats.  Zero any stat adjustments made in
+             * castle_da_each_skip() and perform accounting now. */
+            stats.keys = 0;
+            stats.tombstones = 0;
+
+            if (CVT_TOMB_STONE(cvt))
+                stats.tombstones++;
+            else
+                stats.keys++;
+
+            castle_version_private_stats_adjust(version, stats, &merge->version_states);
+        }
+        else
+        {
+            castle_version_live_stats_adjust(version, stats);
+            castle_version_private_stats_adjust(version, stats, &merge->version_states);
+        }
+
         /* Try to complete node. */
         castle_perf_debug_getnstimeofday(&ts_start);
         ret = castle_da_nodes_complete(merge);
@@ -3695,6 +3749,7 @@ static int castle_da_merge_unit_do(struct castle_da_merge *merge, uint32_t unit_
         castle_perf_debug_bump_ctr(merge->nodes_complete_ns, ts_end, ts_start);
         if (ret != EXIT_SUCCESS)
             goto err_out;
+
 entry_done:
         castle_perf_debug_getnstimeofday(&ts_start);
         castle_da_merge_budget_consume(merge);
@@ -3724,7 +3779,11 @@ entry_done:
     return EXIT_SUCCESS;
 
 err_out:
-    if(ret)
+    /* While we handle it, merges should never fail.
+     *
+     * Per-version statistics will now be inconsistent. */
+    WARN_ON(1);
+    if (ret)
         castle_printk(LOG_WARN, "Merge failed with %d\n", ret);
     castle_da_merge_dealloc(merge, ret);
 
@@ -4113,10 +4172,10 @@ static tree_seq_t castle_da_merge_last_unit_complete(struct castle_double_array 
  * Initialize merge process for multiple component trees. Merges, other than
  * compaction, process on 2 trees only.
  *
- * @param da [in] doubling array to be merged
- * @param level [in] merge level in doubling array
- * @param nr_trees [in] number of trees to be merged
- * @param in_trees [in] component trees to be merged
+ * @param da        [in]    doubling array to be merged
+ * @param level     [in]    merge level in doubling array
+ * @param nr_trees  [in]    number of trees to be merged
+ * @param in_trees  [in]    component trees to be merged
  *
  * @return intialized merge structure. NULL in case of error.
  */
@@ -4148,34 +4207,36 @@ static struct castle_da_merge* castle_da_merge_init(struct castle_double_array *
     /* Malloc everything ... */
     ret = -ENOMEM;
     merge = castle_zalloc(sizeof(struct castle_da_merge), GFP_KERNEL);
-    if(!merge)
+    if (!merge)
         goto error_out;
-    merge->da                = da;
-    merge->out_btree         = castle_btree_type_get(RO_VLBA_TREE_TYPE);
-    merge->level             = level;
-    merge->nr_trees          = nr_trees;
-    merge->in_trees          = in_trees;
-    merge->merged_iter       = NULL;
-    merge->root_depth        = -1;
-    merge->last_leaf_node_c2b= NULL;
-    merge->last_key          = NULL;
-    merge->completing        = 0;
-    merge->nr_entries        = 0;
-    merge->large_chunks      = 0;
-    merge->budget_cons_rate  = 1;
-    merge->budget_cons_units = 0;
-    merge->is_new_key        = 1;
-    merge->skipped_count     = 0;
-    for(i=0; i<MAX_BTREE_DEPTH; i++)
+    if (castle_version_states_alloc(&merge->version_states,
+                castle_versions_count_get(da->id, CVH_TOTAL)) != EXIT_SUCCESS)
+        goto error_out;
+    merge->da                   = da;
+    merge->out_btree            = castle_btree_type_get(RO_VLBA_TREE_TYPE);
+    merge->level                = level;
+    merge->deserialising        = 0;
+    merge->nr_trees             = nr_trees;
+    merge->in_trees             = in_trees;
+    merge->out_tree             = NULL;
+    merge->merged_iter          = NULL;
+    merge->root_depth           = -1;
+    merge->last_leaf_node_c2b   = NULL;
+    merge->last_key             = NULL;
+    merge->completing           = 0;
+    merge->nr_entries           = 0;
+    merge->large_chunks         = 0;
+    merge->budget_cons_rate     = 1;
+    merge->budget_cons_units    = 0;
+    merge->is_new_key           = 1;
+    merge->skipped_count        = 0;
+    for (i = 0; i < MAX_BTREE_DEPTH; i++)
     {
         merge->levels[i].last_key      = NULL;
         merge->levels[i].next_idx      = 0;
         merge->levels[i].valid_end_idx = -1;
         merge->levels[i].valid_version = INVAL_VERSION;
     }
-
-    merge->deserialising     = 0;
-    merge->out_tree          = NULL;
 
     /* Deserialise ongoing merge state */
     /* only reason a lock might be needed here would be if we were racing with double_array_read,
@@ -4398,6 +4459,9 @@ static void castle_da_merge_serialise(struct castle_da_merge *merge)
             castle_printk(LOG_DEBUG, "%s::found new_key boundary; existing serialisation for "
                     "da %d, level %d is now checkpointable, so stop updating it.\n",
                     __FUNCTION__, da->id, level);
+
+            /* Commit and zero private stats to global crash-consistent tree. */
+            castle_version_states_commit(&merge->version_states);
 
             /* mark serialisation as checkpointable, and no longer updatable */
             new_state = VALID_AND_FRESH_DAM_SERDES;
@@ -4921,7 +4985,8 @@ static int castle_da_merge_do(struct castle_double_array *da,
         castle_printk(LOG_WARN, "Could not start a merge for DA=%d, level=%d.\n", da->id, level);
         return -EAGAIN;
     }
-    castle_printk(LOG_DEBUG, "%s::MERGE START - DA %d L %d, with input cts %d and %d \n", __FUNCTION__, da->id, level, in_trees[0]->seq, in_trees[1]->seq);
+    castle_printk(LOG_DEBUG, "%s::MERGE START - DA %d L %d, with input cts %d and %d \n",
+            __FUNCTION__, da->id, level, in_trees[0]->seq, in_trees[1]->seq);
 #ifdef DEBUG
     debug_merges("MERGE START - L%d -> ", level);
     FOR_EACH_MERGE_TREE(i, merge)
@@ -4951,7 +5016,7 @@ static int castle_da_merge_do(struct castle_double_array *da,
                                    units_cnt,
                                    0);
         /* Check for castle stop and merge abort */
-        if((castle_merges_abortable)&&(exit_cond))
+        if (castle_merges_abortable && exit_cond)
         {
             castle_printk(LOG_INIT, "Merge for DA=%d, level=%d, aborted.\n", da->id, level);
             ret = -ESHUTDOWN;
@@ -4987,8 +5052,11 @@ static int castle_da_merge_do(struct castle_double_array *da,
         castle_da_merge_perf_stats_flush_reset(da, merge, units_cnt);
 #endif
         /* Exit on errors. */
-        if(ret < 0)
+        if (ret < 0)
         {
+            /* Merges should never fail.
+             *
+             * Per-version statistics will now be out of sync. */
             out_tree_id = INVAL_TREE;
             castle_printk(LOG_WARN, "%s::MERGE FAILED - DA %d L %d, with input cts %d and %d \n",
                     __FUNCTION__, da->id, level, in_trees[0]->seq, in_trees[1]->seq);
@@ -4998,7 +5066,7 @@ static int castle_da_merge_do(struct castle_double_array *da,
         /* Only ret>0 we are expecting to continue, i.e. ret==EAGAIN. */
         BUG_ON(ret && (ret != EAGAIN));
         /* Notify interested parties that we've completed current merge unit. */
-        if(ret == EAGAIN)
+        if (ret == EAGAIN)
             castle_da_merge_intermediate_unit_complete(da, level);
     } while(ret);
 
@@ -5022,6 +5090,10 @@ static int castle_da_merge_do(struct castle_double_array *da,
     /* Finish the last unit, packaging the output tree. */
     out_tree_id = castle_da_merge_last_unit_complete(da, level, merge);
     ret = TREE_INVAL(out_tree_id) ? -ENOMEM : 0;
+
+    /* Commit and zero private stats to global crash-consistent tree. */
+    castle_version_states_commit(&merge->version_states);
+
 merge_aborted:
 merge_failed:
     /* Unhard-pin T1s in the cache. Do this before we deallocate the merge and extents. */

@@ -25,7 +25,7 @@ static int castle_versions_process(void);
 
 static struct kmem_cache *castle_versions_cache  = NULL;
 
-#define CASTLE_VERSIONS_MAX                 (200)   /**< Maximum number of versions per-DA.     */
+#define CASTLE_VERSIONS_MAX                 (200)   /**< Maximum number of live versions per-DA.*/
 #define CASTLE_VERSIONS_HASH_SIZE           (1000)  /**< Size of castle_versions_hash.          */
 #define CASTLE_VERSIONS_COUNTS_HASH_SIZE    (1000)  /**< Size of castle_versions_counts_hash.   */
 static struct list_head  *castle_versions_hash          = NULL;
@@ -48,14 +48,6 @@ LIST_HEAD(castle_versions_deleted);
 #define CV_LEAF_BIT               (3)
 #define CV_LEAF_MASK              (1 << CV_LEAF_BIT)
 
-typedef enum {
-    CASTLE_VERSION_KEYS = 0,
-    CASTLE_VERSION_TOMBSTONES,
-    CASTLE_VERSION_TOMBSTONE_DELETES,
-    CASTLE_VERSION_VERSION_DELETES,
-    CASTLE_VERSION_KEY_REPLACES,
-} c_ver_stat_id_t;
-
 struct castle_version {
     /* Various tree links */
     version_t                  version;     /**< Version ID, unique across all Doubling Arrays. */
@@ -72,16 +64,16 @@ struct castle_version {
     da_id_t          da_id;             /**< Doubling Array ID this version exists within.      */
     c_byte_off_t     size;
 
-    struct castle_version_stats {
-        atomic64_t   keys;              /**< Number of live keys.  May be inaccurate until all
-                                             merges complete and duplicates are handled.        */
-        atomic64_t   tombstones;        /**< Number of tombstones.                              */
-        atomic64_t   tombstone_deletes; /**< Number of keys deleted by tombstones (does not
-                                             include tombstones deleted by tombstones).         */
-        atomic64_t   version_deletes;   /**< Number of entries deleted due to version delete.   */
-        atomic64_t   key_replaces;      /**< Number of keys replaced by newer keys (excludes
-                                             tombstones).                                       */
-    } stats;
+    /* We keep two sets of version stats: live and delayed.
+     *
+     * The live stats are updated during inserts, merges, deletes and provide
+     * an insight into the current state of the DA.  These live stats are
+     * exposed to userland consumers via sysfs.
+     *
+     * The delayed stats are updated in a crash-consistent manner as merges
+     * get 'snapshotted', see castle_da_merge_serialise(). */
+    struct castle_version_stats live_stats; /**< Up-to-date stats associated with version.      */
+    struct castle_version_stats stats;  /**< Stats associated with version (crash consistent).  */
 
     struct list_head hash_list;         /**< List for hash table, protected by hash lock.       */
     unsigned long    flags;
@@ -94,16 +86,209 @@ struct castle_version {
 };
 
 /**
- * Maintains the number of active versions in each doubling array.
+ * Describes the number of versions per DA.
  */
-struct castle_version_count {
+struct castle_versions_count {
     da_id_t             da_id;      /**< DA we are counting live versions for.          */
-    int                 count;      /**< Number of live versions for da_id.             */
+
+    int                 live;       /**< Number of live versions.                       */
+    int                 deleted;    /**< Number of deleted versions.                    */
+    int                 dead;       /**< Number of dead versions.                       */
+
+    int                 total;      /**< Sum of all version counts.                     */
+
     struct list_head    hash_list;  /**< Threading onto castle_versions_counts_hash.    */
 };
 
-DEFINE_HASH_TBL(castle_versions, castle_versions_hash, CASTLE_VERSIONS_HASH_SIZE, struct castle_version, hash_list, version_t, version);
-DEFINE_HASH_TBL(castle_versions_counts, castle_versions_counts_hash, CASTLE_VERSIONS_COUNTS_HASH_SIZE, struct castle_version_count, hash_list, da_id_t, da_id);
+DEFINE_HASH_TBL(castle_versions,
+                castle_versions_hash,
+                CASTLE_VERSIONS_HASH_SIZE,
+                struct castle_version,
+                hash_list,
+                version_t,
+                version);
+DEFINE_HASH_TBL(castle_versions_counts,
+                castle_versions_counts_hash,
+                CASTLE_VERSIONS_COUNTS_HASH_SIZE,
+                struct castle_versions_count,
+                hash_list,
+                da_id_t,
+                da_id);
+
+/********************************************************
+ * Functions related to the castle_versions_counts hash *
+ *******************************************************/
+
+/**
+ * Disassociate all castle_version_count from hash and free them.
+ */
+static int castle_version_counts_hash_remove(struct castle_versions_count *vc, void *unused)
+{
+    list_del(&vc->hash_list);
+    castle_free(vc);
+
+    return 0;
+}
+
+/**
+ * Free castle_versions_counts_hash and all members.
+ */
+static void castle_versions_counts_hash_destroy(void)
+{
+    castle_versions_counts_hash_iterate(castle_version_counts_hash_remove, NULL);
+    castle_free(castle_versions_counts_hash);
+}
+
+/**
+ * Adjust per-DA version counts in response to version add/delete.
+ *
+ * @param   da_id       Which DA's version stats to update
+ * @param   health      Health of the version being adjusted
+ * @param   add         Set implies add version, unset delete version
+ * @param   propagate   Whether to propagate subsequent health state counters
+ *                      on delete.
+ *                        - If set during a live version delete, the deleted
+ *                          versions count will be bumped.
+ *                        - If unset during a live version delete, only the
+ *                          live version count will be decremented.  Required
+ *                          if a version allocation fails.
+ *
+ * @return  0       SUCCESS
+ * @return -ENOMEM  Failed to allocate new castle_versions_count struct
+ * @return -E2BIG   Already at maximum live versions for DA
+ *
+ * @also castle_version_add()
+ */
+int _castle_versions_count_adjust(da_id_t da_id, cv_health_t health, int add, int propagate)
+{
+    struct castle_versions_count *vc;
+
+    BUG_ON(!CASTLE_IN_TRANSACTION);
+
+    vc = castle_versions_counts_hash_get(da_id);
+    if (!vc)
+    {
+        BUG_ON(!add);
+
+        vc = castle_zalloc(sizeof(struct castle_versions_count), GFP_KERNEL);
+        if (!vc)
+            return -ENOMEM;
+        vc->da_id = da_id;
+        /* zalloc initialised counts for us */
+        INIT_LIST_HEAD(&vc->hash_list);
+        castle_versions_counts_hash_add(vc);
+    }
+
+    if (add) /* incrementing version count */
+    {
+        switch (health)
+        {
+            case CVH_LIVE:
+                if (vc->live < CASTLE_VERSIONS_MAX)
+                    vc->live++;
+                else
+                    return -E2BIG;
+                break;
+
+            case CVH_DELETED:
+                vc->deleted++;
+                break;
+
+            case CVH_DEAD:
+            case CVH_TOTAL:
+            default:
+                BUG();
+        }
+
+        vc->total++;
+    }
+    else /* decrementing version count */
+    {
+        switch (health)
+        {
+            case CVH_LIVE:
+                BUG_ON(--vc->live < 0);
+                if (likely(propagate))
+                    vc->deleted++;
+                else
+                    BUG_ON(--vc->total < 0);
+                break;
+
+            case CVH_DELETED:
+                BUG_ON(--vc->deleted < 0);
+                if (likely(propagate))
+                    vc->dead++;
+                else
+                    BUG_ON(--vc->total < 0);
+                break;
+
+            case CVH_DEAD:
+                BUG_ON(--vc->dead < 0);
+                BUG_ON(--vc->total < 0);
+                break;
+
+            case CVH_TOTAL:
+            default:
+                BUG();
+        }
+
+        /* Free the version count structure if the total count reaches 0. */
+        if (vc->total == 0)
+        {
+            BUG_ON(vc->live + vc->deleted + vc->dead != 0);
+
+            list_del(&vc->hash_list);
+            castle_free(vc);
+        }
+    }
+
+    BUG_ON(vc->live + vc->deleted + vc->dead != vc->total);
+
+    return EXIT_SUCCESS;
+}
+
+/**
+ * Adjust per-DA version counts.
+ *
+ * @param   da_id   DA ID
+ * @param   health  Adjust which type of version
+ * @param   add     If set implies a bump of health
+ *                      Unset implies decrement
+ *
+ * @also _castle_versions_count_adjust()
+ */
+int castle_versions_count_adjust(da_id_t da_id, cv_health_t health, int add)
+{
+    return _castle_versions_count_adjust(da_id, health, add, 1 /*propagate*/);
+}
+
+/**
+ * Get number of health versions for DA.
+ *
+ * @param   da_id   DA to check
+ * @param   health  Versions of which health
+ */
+int castle_versions_count_get(da_id_t da_id, cv_health_t health)
+{
+    struct castle_versions_count *vc;
+
+    vc = castle_versions_counts_hash_get(da_id);
+    BUG_ON(!vc);
+
+    switch (health)
+    {
+        case CVH_LIVE:      return vc->live;    break;
+        case CVH_DELETED:   return vc->deleted; break;
+        case CVH_DEAD:      return vc->dead;    break;
+        case CVH_TOTAL:     return vc->total;   break;
+    }
+
+    return -EINVAL;
+}
+
+/***************************************************
+ * Functions associated with castle_versions_hash. *
+ **************************************************/
 
 /**
  * Disassociate all castle_versions from hash and free them.
@@ -129,118 +314,6 @@ static void castle_versions_init_add(struct castle_version *v)
 {
     v->flags &= (~CV_INITED_MASK);
     list_add(&v->init_list, &castle_versions_init_list);
-}
-
-/**
- * Disassociate all castle_version_count from hash and free them.
- */
-static int castle_version_counts_hash_remove(struct castle_version_count *vc, void *unused)
-{
-    list_del(&vc->hash_list);
-    castle_free(vc);
-
-    return 0;
-}
-
-/**
- * Free castle_versions_counts_hash and all members.
- */
-static void castle_version_counts_hash_destroy(void)
-{
-    castle_versions_counts_hash_iterate(castle_version_counts_hash_remove, NULL);
-    castle_free(castle_versions_counts_hash);
-}
-
-/**
- * Return active version count for DA.
- *
- * @param   da_id   DA to return version count for
- *
- * NOTE: Must be called during a CASTLE_TRANSACTION
- * NOTE: castle_versions_counts_hash members protected by CASTLE_TRANSACTION
- *
- * @return  Version count
- */
-static int castle_versions_count(da_id_t da_id)
-{
-    struct castle_version_count *vc;
-
-    BUG_ON(!CASTLE_IN_TRANSACTION);
-
-    vc = castle_versions_counts_hash_get(da_id);
-    BUG_ON(!vc);
-
-    return vc->count;
-}
-
-/**
- * Increment the active version count for DA.
- *
- * @param   da_id   DA to increment version count for
- *
- * NOTE: Must be called during a CASTLE_TRANSACTION
- * NOTE: castle_versions_counts_hash members protected by CASTLE_TRANSACTION
- *
- * @return  0       Successfully incremented version count
- * @return -ENOMEM  Couldn't allocate castle_version_count structure
- * @return -EINVAL  Already at maximum number of versions per DA
- */
-static int castle_versions_count_inc(da_id_t da_id)
-{
-    struct castle_version_count *vc;
-
-    BUG_ON(!CASTLE_IN_TRANSACTION);
-
-    vc = castle_versions_counts_hash_get(da_id);
-    if (!vc)
-    {
-        /* No castle_version_count for da_id.  Create a new one. */
-        vc = castle_malloc(sizeof(struct castle_version_count), GFP_KERNEL);
-        if (!vc)
-            return -ENOMEM;
-        vc->da_id = da_id;
-        vc->count = 1;
-        INIT_LIST_HEAD(&vc->hash_list);
-        castle_versions_counts_hash_add(vc);
-    }
-    else if (vc->count < CASTLE_VERSIONS_MAX)
-        /* Increment count for existing castle_version_count. */
-        vc->count++;
-    else
-        /* DA is already at maximum number of versions. */
-        return -E2BIG;
-
-    return EXIT_SUCCESS;
-}
-
-/**
- * Decrement the active version count for DA.
- *
- * @param   da_id   DA to decrement version count for
- *
- * NOTE: Must be called during a CASTLE_TRANSACTION
- * NOTE: castle_versions_counts_hash members protected by CASTLE_TRANSACTION
- *
- * @return  0   Successfully decremented version count
- */
-static int castle_versions_count_dec(da_id_t da_id)
-{
-    struct castle_version_count *vc;
-
-    BUG_ON(!CASTLE_IN_TRANSACTION);
-
-    vc = castle_versions_counts_hash_get(da_id);
-    BUG_ON(!vc); /* must always exist for decrements */
-    vc->count--;
-    if (vc->count == 0)
-    {
-        list_del(&vc->hash_list);
-        castle_free(vc);
-    }
-    else
-        BUG_ON(vc->count < 0);
-
-    return EXIT_SUCCESS;
 }
 
 version_t castle_version_max_get(void)
@@ -460,7 +533,7 @@ int castle_version_delete(version_t version)
     BUG_ON(!test_bit(CV_INITED_BIT, &v->flags));
 
     /* Before making any changes check if this is the last version to delete. */
-    if (castle_versions_count(v->da_id) == 1)
+    if (castle_versions_count_get(v->da_id, CVH_LIVE) == 1)
     {
         /* This is the last version. Don't delete the version, instead destroy DA. */
         da_id = v->da_id;
@@ -492,7 +565,7 @@ int castle_version_delete(version_t version)
         BUG_ON(d->o_order == v->o_order);
     }
     list_add_tail(&v->del_list, pos);
-    castle_versions_count_dec(v->da_id);
+    castle_versions_count_adjust(v->da_id, CVH_LIVE, 0 /*add*/);
 
     castle_printk(LOG_USERINFO, "Marked version %d for deletion: 0x%lx\n", version, v->flags);
     da_id = v->da_id;
@@ -697,6 +770,20 @@ error_out:
     return ret;
 }
 
+/**
+ * Allocate a new version structure and add it to castle_versions_hash.
+ *
+ * @param   version Version number to add
+ * @param   parent  New version's parent version number
+ * @param   da_id   DA new version is associated with
+ * @param   size    ??? Size of version ???
+ * @param   health  What state the version is in (e.g. live, deleted, etc.)
+ *
+ * - Updates per-DA version counts (based on health).
+ *
+ * @also castle_version_delete()
+ * @also castle_versions_count_adjust()
+ */
 static struct castle_version* castle_version_add(version_t version,
                                                  version_t parent,
                                                  da_id_t da_id,
@@ -706,9 +793,8 @@ static struct castle_version* castle_version_add(version_t version,
     struct castle_version *v;
     int ret;
 
-    /* Check we are under the per-DA live version limit. */
-    if ((health == CVH_LIVE)
-            && ((ret = castle_versions_count_inc(da_id)) != EXIT_SUCCESS))
+    /* Update version counts and verify we're under live version limit. */
+    if ((ret = castle_versions_count_adjust(da_id, health, 1 /*add*/)) != EXIT_SUCCESS)
     {
         if (ret == -E2BIG)
             castle_printk(LOG_USERINFO,
@@ -732,14 +818,23 @@ static struct castle_version* castle_version_add(version_t version,
     v->da_id        = da_id;
     v->size         = size;
     v->flags        = 0;
+
+    INIT_LIST_HEAD(&v->hash_list);
+    INIT_LIST_HEAD(&v->init_list);
+    INIT_LIST_HEAD(&v->del_list);
+
+    /* Initialise crash-consistent version stats. */
     atomic64_set(&v->stats.keys, 0);
     atomic64_set(&v->stats.tombstones, 0);
     atomic64_set(&v->stats.tombstone_deletes, 0);
     atomic64_set(&v->stats.version_deletes, 0);
     atomic64_set(&v->stats.key_replaces, 0);
-    INIT_LIST_HEAD(&v->hash_list);
-    INIT_LIST_HEAD(&v->init_list);
-    INIT_LIST_HEAD(&v->del_list);
+    /* Initialise live version stats. */
+    atomic64_set(&v->live_stats.keys, 0);
+    atomic64_set(&v->live_stats.tombstones, 0);
+    atomic64_set(&v->live_stats.tombstone_deletes, 0);
+    atomic64_set(&v->live_stats.version_deletes, 0);
+    atomic64_set(&v->live_stats.key_replaces, 0);
 
     /* Initialise version 0 fully, defer full init of all other versions by
        putting it on the init list. */
@@ -767,8 +862,9 @@ static struct castle_version* castle_version_add(version_t version,
 
 out_dealloc:
     kmem_cache_free(castle_versions_cache, v);
-    if (health == CVH_LIVE)
-        castle_versions_count_dec(da_id);
+    /* Revert bump to version counts.  Don't propagate as this decrement does
+     * not imply health -> health+1. */
+    _castle_versions_count_adjust(da_id, health, 0 /*add*/, 0 /*propagate*/);
 
     return NULL;
 }
@@ -787,152 +883,273 @@ da_id_t castle_version_da_id_get(version_t version)
     BUG_ON(!(v->flags & CV_INITED_MASK));
     da_id = v->da_id;
     read_unlock_irq(&castle_versions_hash_lock);
- 
-    return da_id; 
+
+    return da_id;
 }
 
 /**
- * Update specified version stat by amount.
- *
- * @param version   Version to update
- * @param stat      Stat in version to update
- * @param amount    Amount to update stat by
- *
- * @return          State of the counter after operation
+ * Determine hash bucket for version.
  */
-long castle_version_stats_adjust(version_t version, c_ver_stat_id_t stat, int amount)
+static inline int castle_version_states_hash_idx(version_t version)
 {
-    struct castle_version *v;
-    long result;
+    unsigned long hash = 0UL;
 
-    read_lock_irq(&castle_versions_hash_lock);
-    v = __castle_versions_hash_get(version);
-    /* Sanity checks */
-    BUG_ON(!v);
-    BUG_ON(!(v->flags & CV_INITED_MASK));
+    return (int)(((unsigned long)version) % CASTLE_VERSION_STATES_HASH_SIZE);
 
-    switch (stat)
+    memcpy(&hash, &version, sizeof(version_t) > 8 ? 8 : sizeof(version_t));
+
+    return (int)(hash % CASTLE_VERSION_STATES_HASH_SIZE);
+}
+
+/**
+ * Add castle_version_state to hash.
+ */
+inline void castle_version_states_hash_add(cv_states_t *states, cv_state_t *state)
+{
+    int idx;
+
+    idx = castle_version_states_hash_idx(state->version);
+    list_add(&state->hash_list, &states->hash[idx]);
+}
+
+/**
+ * Return castle_version_state structure for version, if it exists.
+ */
+inline cv_state_t* castle_version_states_hash_get(cv_states_t *states, version_t version)
+{
+    cv_state_t *state;
+    struct list_head *l;
+    int idx;
+
+    idx = castle_version_states_hash_idx(version);
+    list_for_each(l, &states->hash[idx])
     {
-        case CASTLE_VERSION_KEYS:
-            result = atomic64_add_return(amount, &v->stats.keys); break;
-        case CASTLE_VERSION_TOMBSTONES:
-            result = atomic64_add_return(amount, &v->stats.tombstones); break;
-        case CASTLE_VERSION_TOMBSTONE_DELETES:
-            result = atomic64_add_return(amount, &v->stats.tombstone_deletes); break;
-        case CASTLE_VERSION_VERSION_DELETES:
-            result = atomic64_add_return(amount, &v->stats.version_deletes); break;
-        case CASTLE_VERSION_KEY_REPLACES:
-            result = atomic64_add_return(amount, &v->stats.key_replaces); break;
-        default:
-            BUG(); break;
+        state = list_entry(l, cv_state_t, hash_list);
+        if (state->version == version)
+            return state;
     }
 
-    read_unlock_irq(&castle_versions_hash_lock);
-
-    return result;
+    return NULL;
 }
 
 /**
- * Get number of keys in version.
+ * Return castle_version_state structure for version, allocate if necessary.
  */
-long castle_version_keys_get(version_t version)
+inline cv_state_t* castle_version_states_hash_get_alloc(cv_states_t *states, version_t version)
 {
-    return castle_version_stats_adjust(version, CASTLE_VERSION_KEYS, 0);
+    cv_state_t *state;
+
+    state = castle_version_states_hash_get(states, version);
+    if (state)
+        return state;
+
+    /* Allocate new castle_version_state structure, add it to the hash
+     * and return a pointer to the user. */
+    state = &states->array[states->free_idx++];
+    BUG_ON(states->free_idx > states->max_idx);
+    memset(state, 0, sizeof(cv_state_t));
+    state->version = version;
+    castle_version_states_hash_add(states, state);
+
+    return state;
 }
 
 /**
- * Increment number of keys in version.
+ * Commit and zero private version stats to global crash-consistent tree.
  */
-void castle_version_keys_inc(version_t version)
+void castle_version_states_commit(cv_states_t *states)
 {
-    castle_version_stats_adjust(version, CASTLE_VERSION_KEYS, 1);
+    int i;
+
+    for (i = 0; i < states->free_idx; i++)
+    {
+        cv_state_t *state;
+
+        state = &states->array[i];
+        castle_version_consistent_stats_adjust(state->version, state->stats);
+        memset(&state->stats, 0, sizeof(cv_nonatomic_stats_t));
+    }
 }
 
 /**
- * Decrement number of keys in version.
+ * Deallocate version states array and hash.
  */
-void castle_version_keys_dec(version_t version)
+void castle_version_states_free(cv_states_t *states)
 {
-    castle_version_stats_adjust(version, CASTLE_VERSION_KEYS, -1);
+    if (states->array)
+        castle_free(states->array);
+
+    if (states->hash)
+        castle_free(states->hash);
 }
 
 /**
- * Get number of tombstones in version.
+ * Allocate and initialise version states array and hash.
+ *
+ * @param   states          Version states structure to initialise
+ * @param   max_versions    Maximum possible versions to handle in array
+ *
+ * @return  0               Success
+ * @return  1               Failed to allocate structures
  */
-long castle_version_tombstones_get(version_t version)
+int castle_version_states_alloc(cv_states_t *states, int max_versions)
 {
-    return castle_version_stats_adjust(version, CASTLE_VERSION_TOMBSTONES, 0);
+    int i;
+
+    states->array = castle_malloc(max_versions * sizeof(cv_state_t), GFP_KERNEL);
+    if (!states->array)
+        goto err_out;
+    states->hash = castle_malloc(CASTLE_VERSION_STATES_HASH_SIZE * sizeof(struct list_head),
+            GFP_KERNEL);
+    if (!states->hash)
+        goto err_out;
+    states->free_idx = 0;
+    states->max_idx = max_versions;
+
+    /* Initialise hash buckets. */
+    for (i = 0; i < CASTLE_VERSION_STATES_HASH_SIZE; i++)
+        INIT_LIST_HEAD(&states->hash[i]);
+
+    return EXIT_SUCCESS;
+
+err_out:
+    castle_version_states_free(states);
+
+    return 1;
 }
 
 /**
- * Increment number of tombstones in version.
+ * Update version stats as described by adjust.
+ *
+ * @param   adjust      Describe adjustments to be made/retrieved.
+ * @param   live        Update live version stats
+ * @param   consistent  Update crash consistent version stats
+ * @param   private     Update private version stats
+ *
+ * NOTE: Only one set of stats (live, consistent or private) can be adjusted
+ *       per call.
+ *
+ * @also castle_version_stats_adjust()
+ * @also castle_version_stats_get()
  */
-void castle_version_tombstones_inc(version_t version)
+cv_nonatomic_stats_t _castle_version_stats_adjust(version_t version,
+                                                  cv_nonatomic_stats_t adjust,
+                                                  int live,
+                                                  int consistent,
+                                                  cv_states_t *private)
 {
-    castle_version_stats_adjust(version, CASTLE_VERSION_TOMBSTONES, 1);
+    cv_nonatomic_stats_t return_stats;
+
+    if (private)
+    {
+        cv_nonatomic_stats_t *stats;
+        cv_state_t *state;
+
+        BUG_ON(live || consistent);
+
+        state = castle_version_states_hash_get_alloc(private, version);
+        stats = &state->stats;
+
+        return_stats.keys               = (stats->keys += adjust.keys);
+        return_stats.tombstones         = (stats->tombstones += adjust.tombstones);
+        return_stats.tombstone_deletes  = (stats->tombstone_deletes += adjust.tombstone_deletes);
+        return_stats.version_deletes    = (stats->version_deletes += adjust.version_deletes);
+        return_stats.key_replaces       = (stats->key_replaces += adjust.key_replaces);
+    }
+    else
+    {
+        struct castle_version *v;
+        cv_stats_t *stats;
+
+        BUG_ON(live && consistent);
+        BUG_ON(!live && !consistent);
+
+        read_lock_irq(&castle_versions_hash_lock); // @FIXME do we need irq disabled?
+        v = __castle_versions_hash_get(version);
+        BUG_ON(!v);
+        BUG_ON(!(v->flags & CV_INITED_MASK));
+
+        if (live)
+            stats = &v->live_stats;
+        else
+            stats = &v->stats;
+
+        return_stats.keys               = atomic64_add_return(adjust.keys, &stats->keys);
+        return_stats.tombstones         = atomic64_add_return(adjust.tombstones,
+                                                              &stats->tombstones);
+        return_stats.tombstone_deletes  = atomic64_add_return(adjust.tombstone_deletes,
+                                                              &stats->tombstone_deletes);
+        return_stats.version_deletes    = atomic64_add_return(adjust.version_deletes,
+                                                              &stats->version_deletes);
+        return_stats.key_replaces       = atomic64_add_return(adjust.key_replaces,
+                                                              &stats->key_replaces);
+
+        read_unlock_irq(&castle_versions_hash_lock);
+    }
+
+    return return_stats;
 }
 
 /**
- * Decrement number of tombstones in version.
+ * Adjust state of live per-version stats by amounts in adjust.
+ *
+ * See _castle_version_stats_adjust() for argument info.
+ *
+ * @also _castle_version_stats_adjust()
+ * @also castle_version_stats_get()
  */
-void castle_version_tombstones_dec(version_t version)
+void castle_version_live_stats_adjust(version_t version, cv_nonatomic_stats_t adjust)
 {
-    castle_version_stats_adjust(version, CASTLE_VERSION_TOMBSTONES, -1);
+    _castle_version_stats_adjust(version, adjust, 1 /*live*/, 0 /*consistent*/, NULL /*private*/);
 }
 
 /**
- * Get number of deletes due to tombstones in version.
+ * Adjust state of crash-consistent per-version stats by amounts in adjust.
+ *
+ * See _castle_version_stats_adjust() for argument info.
+ *
+ * @also _castle_version_stats_adjust()
+ * @also castle_version_consistent_stats_get()
  */
-long castle_version_tombstone_deletes_get(version_t version)
+void castle_version_consistent_stats_adjust(version_t version, cv_nonatomic_stats_t adjust)
 {
-    return castle_version_stats_adjust(version, CASTLE_VERSION_TOMBSTONE_DELETES, 0);
+    _castle_version_stats_adjust(version, adjust, 0 /*live*/, 1 /*consistent*/, NULL /*private*/);
 }
 
 /**
- * Increment number of deletes due to tombstones in version.
+ * Adjust state of private per-version stats by amounts in adjust.
+ *
+ * See _castle_version_stats_adjust() for argument info.
+ *
+ * @also _castle_version_stats_adjust()
  */
-void castle_version_tombstone_deletes_inc(version_t version)
+void castle_version_private_stats_adjust(version_t version,
+                                         cv_nonatomic_stats_t adjust,
+                                         cv_states_t *private)
 {
-    castle_version_stats_adjust(version, CASTLE_VERSION_TOMBSTONE_DELETES, 1);
+    _castle_version_stats_adjust(version, adjust, 0 /*live*/, 0 /*consistent*/, private);
 }
 
 /**
- * Get number of deletes due to version deletes in version.
+ * Return current state of live per-version stats.
+ *
+ * See _castle_version_stats_adjust() for argument info.
+ *
+ * @also _castle_version_stats_adjust()
  */
-long castle_version_version_deletes_get(version_t version)
+cv_nonatomic_stats_t castle_version_live_stats_get(version_t version)
 {
-    return castle_version_stats_adjust(version, CASTLE_VERSION_VERSION_DELETES, 0);
-}
+    cv_nonatomic_stats_t null_adjust = { 0, 0, 0, 0, 0 };
 
-/**
- * Increment number of deletes due to version delete in version.
- */
-void castle_version_version_deletes_inc(version_t version)
-{
-    castle_version_stats_adjust(version, CASTLE_VERSION_VERSION_DELETES, 1);
-}
-
-/**
- * Get number of keys replaced in version.
- */
-long castle_version_key_replaces_get(version_t version)
-{
-    return castle_version_stats_adjust(version, CASTLE_VERSION_KEY_REPLACES, 0);
-}
-
-/**
- * Increment number of replaced keys in version.
- */
-void castle_version_key_replaces_inc(version_t version)
-{
-    castle_version_stats_adjust(version, CASTLE_VERSION_KEY_REPLACES, 1);
+    return _castle_version_stats_adjust(version, null_adjust,
+                                        1 /*live*/, 0 /*consistent*/, NULL /*private*/);
 }
 
 /* TODO who should handle errors in writeback? */
 static int castle_version_writeback(struct castle_version *v, void *unused)
 {
     struct castle_vlist_entry mstore_ventry;
-    
+
     debug("Writing back version %d\n", v->version);
 
     mstore_ventry.version_nr        = v->version;
@@ -957,11 +1174,11 @@ int castle_versions_writeback(void)
 { /* Should be called in CASTLE_TRANSACTION. */
     BUG_ON(castle_versions_mstore);
 
-    castle_versions_mstore = 
+    castle_versions_mstore =
         castle_mstore_init(MSTORE_VERSIONS_ID, sizeof(struct castle_vlist_entry));
     if(!castle_versions_mstore)
         return -ENOMEM;
-    
+
     /* Writeback new copy. */
     castle_versions_hash_iterate(castle_version_writeback, NULL);
 
@@ -1001,7 +1218,7 @@ static struct castle_version* castle_version_new_create(int snap_or_clone,
     BUG_ON(!DA_INVAL(da_id) && !DA_INVAL(p->da_id));
     da_id = DA_INVAL(da_id) ? p->da_id : da_id;
     v = castle_version_add(version, parent, da_id, size, CVH_LIVE);
-    if(!v) 
+    if (!v)
         return NULL;
 
     /* If our parent has the size set, inherit it (ignores the size argument) */
@@ -1363,6 +1580,9 @@ int castle_version_compare(version_t version1, version_t version2)
     return ret;
 }
 
+/**
+ * Initialise root version.
+ */
 int castle_versions_zero_init(void)
 {
     struct castle_version *v;
@@ -1427,14 +1647,23 @@ int castle_versions_read(void)
         else
         {
             v->flags |= mstore_ventry.flags;
+
+            /* Load crash-consistent version stats. */
             atomic64_set(&v->stats.keys, mstore_ventry.keys);
             atomic64_set(&v->stats.tombstones, mstore_ventry.tombstones);
             atomic64_set(&v->stats.tombstone_deletes, mstore_ventry.tombstone_deletes);
             atomic64_set(&v->stats.version_deletes, mstore_ventry.version_deletes);
             atomic64_set(&v->stats.key_replaces, mstore_ventry.key_replaces);
+
+            /* Initialise live version stats (from crash-consistent stats). */
+            atomic64_set(&v->live_stats.keys, mstore_ventry.keys);
+            atomic64_set(&v->live_stats.tombstones, mstore_ventry.tombstones);
+            atomic64_set(&v->live_stats.tombstone_deletes, mstore_ventry.tombstone_deletes);
+            atomic64_set(&v->live_stats.version_deletes, mstore_ventry.version_deletes);
+            atomic64_set(&v->live_stats.key_replaces, mstore_ventry.key_replaces);
         }
 
-        if(VERSION_INVAL(castle_versions_last) || v->version > castle_versions_last)
+        if (VERSION_INVAL(castle_versions_last) || v->version > castle_versions_last)
             castle_versions_last = v->version;
     }
     ret = castle_versions_process();
@@ -1471,7 +1700,7 @@ int castle_versions_init(void)
         castle_printk(LOG_ERROR, "Could not allocate kmem cache for castle versions.\n");
         goto err_out;
     }
-    
+
     castle_versions_hash = castle_versions_hash_alloc();
     if (!castle_versions_hash)
     {
@@ -1503,6 +1732,6 @@ err_out:
 void castle_versions_fini(void)
 {
     castle_versions_hash_destroy();
-    castle_version_counts_hash_destroy();
+    castle_versions_counts_hash_destroy();
     kmem_cache_destroy(castle_versions_cache);
 }
