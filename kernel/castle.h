@@ -1644,9 +1644,8 @@ typedef enum {
 
 #define MAX_DA_LEVEL                        (20)
 #define DOUBLE_ARRAY_GROWING_RW_TREE_BIT    (0)
-#define DOUBLE_ARRAY_GROWING_RW_TREE_FLAG   (1 << DOUBLE_ARRAY_GROWING_RW_TREE_BIT)
 #define DOUBLE_ARRAY_DELETED_BIT            (1)
-#define DOUBLE_ARRAY_DELETED_FLAG           (1 << DOUBLE_ARRAY_DELETED_BIT)
+#define DOUBLE_ARRAY_NEED_COMPACTION_BIT    (2)
 #define MIN_DA_SERDES_LEVEL                 (2) /* merges below this level won't be serialised */
 struct castle_double_array {
     da_id_t                     id;
@@ -1747,6 +1746,7 @@ struct castle_double_array {
     struct list_head            merge_tokens;
     struct list_head            hash_list;
     int                         driver_merge;
+    atomic_t                    ongoing_merges;     /**< Number of ongoing merges.              */
     atomic_t                    ref_cnt;
     uint32_t                    attachment_cnt;
 
@@ -1774,7 +1774,6 @@ struct castle_double_array {
     /* Compaction (Big-merge) */
     int                         top_level;          /**< Levels in the doubling array.          */
     atomic_t                    nr_del_versions;    /**< Versions deleted since last compaction.*/
-    int                         compacting;         /**< Set when DA has to start compaction.   */
 
     /* General purpose structure for placing DA on a workqueue.
      * @TODO Currently used only by castle_da_levle0_modified_promote(), hence

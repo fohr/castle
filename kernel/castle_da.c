@@ -226,6 +226,21 @@ static inline void castle_da_deleted_set(struct castle_double_array *da)
     set_bit(DOUBLE_ARRAY_DELETED_BIT, &da->flags);
 }
 
+static inline int castle_da_need_compaction(struct castle_double_array *da)
+{
+    return test_bit(DOUBLE_ARRAY_NEED_COMPACTION_BIT, &da->flags);
+}
+
+static inline void castle_da_need_compaction_set(struct castle_double_array *da)
+{
+    set_bit(DOUBLE_ARRAY_NEED_COMPACTION_BIT, &da->flags);
+}
+
+static inline void castle_da_need_compaction_clear(struct castle_double_array *da)
+{
+    clear_bit(DOUBLE_ARRAY_NEED_COMPACTION_BIT, &da->flags);
+}
+
 /**********************************************************************************************/
 /* Iterators */
 struct castle_immut_iterator;
@@ -2029,7 +2044,6 @@ static int castle_da_merge_cts_get(struct castle_double_array *da,
     /* Zero out the CTs array. */
     cts[0] = cts[1] = NULL;
     read_lock(&da->lock);
-    BUG_ON(da->compacting);
 
     /* Find two oldest trees walking the list backwards. */
     list_for_each_prev(l, &da->levels[level].trees)
@@ -4117,7 +4131,7 @@ static tree_seq_t castle_da_merge_last_unit_complete(struct castle_double_array 
        All under appropriate locks. */
 
     /* Get the lock. */
-    write_lock(&merge->da->lock);
+    write_lock(&da->lock);
     /* Notify interested parties about merge completion, _before_ moving trees around. */
     castle_da_merge_unit_complete(da, level);
     /* If this was a total merge, the output level needs to be computed.
@@ -4154,9 +4168,12 @@ static tree_seq_t castle_da_merge_last_unit_complete(struct castle_double_array 
             castle_da_merge_token_return(da, level, token);
         }
     }
+    /* Reduce the number of ongoing merges count. */
+    atomic_dec(&da->ongoing_merges);
+
     castle_da_driver_merge_reset(da);
     /* Release the lock. */
-    write_unlock(&merge->da->lock);
+    write_unlock(&da->lock);
 
     castle_da_merge_restart(da, NULL);
 
@@ -5000,6 +5017,7 @@ static int castle_da_merge_do(struct castle_double_array *da,
         castle_cache_advise((c_ext_pos_t){in_trees[1]->data_ext_free.ext_id, 0},
                 C2_ADV_EXTENT|C2_ADV_HARDPIN, -1, -1, 0);
     }
+
     /* Do the merge. */
     do {
         /* Wait until we are allowed to do next unit of merge. */
@@ -5131,7 +5149,15 @@ merge_failed:
  */
 void castle_da_version_delete(da_id_t da_id)
 {
-    atomic_inc(&(castle_da_hash_get(da_id)->nr_del_versions));
+    struct castle_double_array *da = castle_da_hash_get(da_id);
+
+    atomic_inc(&(da->nr_del_versions));
+
+    /* Mark DA for compaction. */
+    castle_da_need_compaction_set(da);
+
+    /* Wakeup compaction thread. */
+    wake_up(&da->merge_waitq);
 }
 
 /**
@@ -5177,19 +5203,20 @@ static int castle_da_big_merge_trigger(struct castle_double_array *da)
     if (castle_da_no_disk_space(da))
         return 0;
 
-    write_lock(&da->lock);
+    read_lock(&da->lock);
 
     /* Check if marked for compaction. */
-    if (!da->compacting)
+    if (!castle_da_need_compaction(da))
     {
         debug_merges("Not marked for compaction.\n");
         goto out;
     }
 
-    /* Make sure there are no ongoing merge units anywhere. */
-    if (castle_da_merge_units_ongoing(da, 0))
+    /* Make sure there are no ongoing merges. */
+    if (atomic_read(&da->ongoing_merges))
     {
-        debug_merges("Total merge cannot be triggered - ongoing merges\n");
+        debug_merges("Total merge cannot be triggered - ongoing merges : %u\n",
+                     atomic_read(&da->ongoing_merges));
         goto out;
     }
 
@@ -5197,7 +5224,7 @@ static int castle_da_big_merge_trigger(struct castle_double_array *da)
     ret = 1;
 
 out:
-    write_unlock(&da->lock);
+    read_unlock(&da->lock);
 
     return ret;
 }
@@ -5250,7 +5277,8 @@ read_trees_again:
         if(nr_trees_estimate < 2)
         {
             /* Don't compact any more (not enough trees). */
-            da->compacting = 0;
+            castle_printk(LOG_INFO, "Aborting compaction: Not enough trees\n");
+            castle_da_need_compaction_clear(da);
             write_unlock(&da->lock);
             goto wait_and_try;
         }
@@ -5288,7 +5316,7 @@ read_trees_again:
         }
         BUG_ON(i != nr_trees);
 
-        da->compacting = 0;
+        castle_da_need_compaction_clear(da);
         atomic_set(&da->nr_del_versions, 0);
 
         /* Unlock the DA. */
@@ -5326,6 +5354,8 @@ wait_and_try:
             /* In case we failed the merge because of no memory for in_trees, wait and retry. */
             msleep_interruptible(10000);
         }
+        else
+            castle_printk(LOG_INFO, "Successfully completed compaction\n");
     } while(1);
 
     debug_merges("Merge thread exiting.\n");
@@ -5363,17 +5393,30 @@ static int castle_da_merge_trigger(struct castle_double_array *da, int level)
 
     read_lock(&da->lock);
 
+    if (exit_cond)
+        goto start_merge;
+
     if (da->levels[level].nr_trees < 2)
         goto out;
 
     /* Make sure there are no ongoing merge units on top levels. */
-    /* (or) if doubling array marked for compaction, dont start merges yet. Let
-     * the compaction start first. */
-    if (castle_da_merge_units_ongoing(da, level) || da->compacting)
+    if (castle_da_merge_units_ongoing(da, level))
     {
-        debug_merges("Merge %d cant be triggered - ongoing merges or compaction.\n", level);
+        debug_merges("Merge %d cant be triggered - ongoing merge units.\n", level);
         goto out;
     }
+
+    /* If DA is marked for compaction, don't start a new merge if there are no ongoing merges.
+     * (Time to start compaction). */
+    if (castle_da_need_compaction(da) && !atomic_read(&da->ongoing_merges))
+    {
+        debug_merges("Merge %d cant be triggered - compaction going on.\n", level);
+        goto out;
+    }
+
+start_merge:
+    /* Everything is good for merges to start. Increment ongoing merge count. */
+    atomic_inc(&da->ongoing_merges);
 
     ret = 1;
 
@@ -5407,18 +5450,21 @@ static int castle_da_merge_run(void *da_p)
     do {
         /* Wait for 2+ trees to appear at this level. */
         __wait_event_interruptible(da->merge_waitq,
-                    exit_cond || (castle_da_merge_trigger(da, level)),
+                    castle_da_merge_trigger(da, level),
                     ignore);
 
         /* Exit without doing a merge, if we are stopping execution, or da has been deleted. */
         if(exit_cond)
+        {
+            atomic_dec(&da->ongoing_merges);
             break;
+        }
 
         /* Extract the two oldest component trees. */
         ret = castle_da_merge_cts_get(da, level, in_trees);
         BUG_ON(ret && (ret != -EAGAIN));
         if(ret == -EAGAIN)
-            continue;
+            goto __again;
 
         /* We expect to have 2 trees. */
         BUG_ON(!in_trees[0] || !in_trees[1]);
@@ -5428,13 +5474,19 @@ static int castle_da_merge_run(void *da_p)
         ret = castle_da_merge_do(da, 2, in_trees, level);
         if (ret == -ESHUTDOWN)
             /* Merge has been aborted. */
-            goto exit_thread;
+            goto __again;
         else if (ret)
         {
             /* Merge failed, wait 10s to retry. */
             msleep_interruptible(10000);
-            continue;
+            goto __again;
         }
+
+        continue;
+__again:
+        atomic_dec(&da->ongoing_merges);
+        if (ret == -ESHUTDOWN)
+            goto exit_thread;
     } while(1);
 exit_thread:
     debug_merges("Merge thread exiting.\n");
@@ -5771,7 +5823,6 @@ static struct castle_double_array* castle_da_alloc(da_id_t da_id)
     da->ios_rate        = 0;
     da->top_level       = 0;
     atomic_set(&da->nr_del_versions, 0);
-    da->compacting      = 0;
     /* For existing double arrays driver merge has to be reset after loading it. */
     da->driver_merge    = -1;
     atomic_set(&da->epoch_ios, 0);
@@ -5942,12 +5993,6 @@ static void castle_component_tree_add(struct castle_double_array *da,
         da->top_level = ct->level;
         castle_printk(LOG_INFO, "DA: %d growing one level to %d, del_vers: %d\n",
                 da->id, ct->level, atomic_read(&da->nr_del_versions));
-        if (!in_init && atomic_read(&da->nr_del_versions))
-        {
-            castle_printk(LOG_INFO, "Marking DA for compaction\n");
-            da->compacting = 1;
-            wake_up(&da->merge_waitq);
-        }
     }
 }
 
