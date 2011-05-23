@@ -958,8 +958,8 @@ static int castle_vlba_tree_key_compare(void *keyv1, void *keyv2)
     if(key1_max || key2_max)
         return key1_max - key2_max;
 
-    BUG_ON(VLBA_KEY_LENGTH(key1) >= VLBA_TREE_MAX_KEY_SIZE);
-    BUG_ON(VLBA_KEY_LENGTH(key2) >= VLBA_TREE_MAX_KEY_SIZE);
+    BUG_ON(VLBA_KEY_LENGTH(key1) > VLBA_TREE_MAX_KEY_SIZE);
+    BUG_ON(VLBA_KEY_LENGTH(key2) > VLBA_TREE_MAX_KEY_SIZE);
 
     return castle_object_btree_key_compare(keyv1, keyv2);
 }
