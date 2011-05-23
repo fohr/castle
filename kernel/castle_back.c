@@ -1021,7 +1021,7 @@ static int castle_back_key_copy_get(struct castle_back_conn *conn, c_vl_okey_t *
     castle_back_buffer_put(conn, buf);
 
 #ifdef DEBUG
-    vl_okey_print(key);
+    vl_okey_print(LOG_DEBUG, key);
 #endif
 
     *key_out = key;
@@ -1046,7 +1046,7 @@ static void castle_back_key_kernel_to_user(c_vl_okey_t *key, struct castle_back_
 
 #ifdef DEBUG
     debug("castle_back_key_kernel_to_user copying key:\n");
-    vl_okey_print(key);
+    vl_okey_print(LOG_DEBUG, key);
     debug("user_buf = %p\n", (void *)user_buf);
 #endif
 
@@ -1567,10 +1567,10 @@ static void castle_back_iter_start(void *data)
 
 #ifdef DEBUG
     debug_iter("start_key: \n");
-    vl_okey_print(start_key);
+    vl_okey_print(LOG_DEBUG, start_key);
 
     debug_iter("end_key: \n");
-    vl_okey_print(end_key);
+    vl_okey_print(LOG_DEBUG, end_key);
 #endif
 
     stateful_op->tag = CASTLE_RING_ITER_START;
@@ -1808,10 +1808,10 @@ static void _castle_back_iter_next(void *data)
 
 #ifdef DEBUG
     debug_iter("iter_next start_key\n");
-    vl_okey_print(iterator->start_okey);
+    vl_okey_print(LOG_DEBUG, iterator->start_okey);
 
     debug_iter("iter_next end_key\n");
-    vl_okey_print(iterator->end_okey);
+    vl_okey_print(LOG_DEBUG, iterator->end_okey);
 #endif
 
     /* if we have a saved key and value from the last call, add them to the buffer */
@@ -2244,7 +2244,7 @@ static void castle_back_big_put(void *data)
 
     #ifdef DEBUG
     debug("key: \n");
-    vl_okey_print(key);
+    vl_okey_print(LOG_DEBUG, key);
     #endif
 
     /* Initialize stateful op. */
@@ -2547,7 +2547,7 @@ static void castle_back_big_get(void *data)
 
     #ifdef DEBUG
     debug_iter("key: \n");
-    vl_okey_print(key);
+    vl_okey_print(LOG_DEBUG, key);
     #endif
 
     err = castle_object_pull(&stateful_op->pull, attachment, key, op->cpu_index);
