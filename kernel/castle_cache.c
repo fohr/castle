@@ -1177,7 +1177,8 @@ int chk_valid(c_disk_chk_t chk)
  * @param pages     Array of pages to be used for IO 
  * @param nr_pages  Size of @pages array
  *
- * @return          EAGAIN if slave in passed chunk is now out-of-service, otherwise EXIT_SUCCESS.
+ * @return          number of pages remaining un-submitted if slave is,
+ *                  or becomes, out-of-service. Otherwise EXIT_SUCCESS.
  */
 int submit_c2b_io(int           rw, 
                    c2_block_t   *c2b, 
@@ -1244,7 +1245,7 @@ int submit_c2b_io(int           rw,
             if (atomic_dec_and_test(&cs->io_in_flight) &&
                 (test_bit(CASTLE_SLAVE_BDCLAIMED_BIT, &cs->flags)))
                 castle_release_device(cs);
-            return -EAGAIN;
+            return nr_pages;
         }
 
         /*
@@ -1355,7 +1356,7 @@ static int c_io_array_submit(int rw,
                              c_io_array_t *array,
                              c_ext_id_t ext_id)
 {
-    int                  i, nr_pages, read_idx, found;
+    int                  i, nr_pages, nr_pages_remaining, read_idx, found;
     struct castle_slave *slave;
     int                  ret = 0;
 
@@ -1391,11 +1392,15 @@ retry:
         /* Only increment remaining count once we know we'll submit the IO. */
         atomic_add(nr_pages, &c2b->remaining);
         /* Submit the IO. */
-        ret = submit_c2b_io(READ, c2b, array->start_cep, chunks[read_idx],
+        nr_pages_remaining = submit_c2b_io(READ, c2b, array->start_cep, chunks[read_idx],
                             array->io_pages, nr_pages);
-        if (ret == -EAGAIN)
+        if (nr_pages_remaining)
         {
-            atomic_sub(nr_pages, &c2b->remaining);
+            /*
+             * Failed to read nr_pages_remaining pages from this slave because it has gone
+             * out-of-service. Retry to find another slave to read from.
+             */
+            atomic_sub(nr_pages_remaining, &c2b->remaining);
             goto retry;
         }
 
@@ -1417,11 +1422,16 @@ retry:
             /* Slave is not out-of-sevice - submit the IO */
             atomic_add(nr_pages, &castle_cache_write_stats);
             atomic_add(nr_pages, &c2b->remaining);
-            ret = submit_c2b_io(WRITE, c2b, array->start_cep, chunks[i], array->io_pages, nr_pages);
-            if (ret == -EAGAIN)
+            nr_pages_remaining = submit_c2b_io(WRITE, c2b, array->start_cep, chunks[i],
+                                               array->io_pages, nr_pages);
+            if (nr_pages_remaining)
             {
-                atomic_sub(nr_pages, &castle_cache_write_stats);
-                atomic_sub(nr_pages, &c2b->remaining);
+                /*
+                 * Failed to write nr_pages_remaining pages to this slave because it has
+                 * gone out-of-service. Skip to next slave.
+                 */
+                atomic_sub(nr_pages_remaining, &castle_cache_write_stats);
+                atomic_sub(nr_pages_remaining, &c2b->remaining);
                 continue;
             }
         }
