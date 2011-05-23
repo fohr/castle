@@ -124,7 +124,6 @@ typedef enum {
 static struct castle_component_tree* castle_ct_alloc(struct castle_double_array *da,
                                                      btree_t type,
                                                      int level);
-static inline int castle_da_is_locked(struct castle_double_array *da);
 void castle_ct_get(struct castle_component_tree *ct, int write);
 void castle_ct_put(struct castle_component_tree *ct, int write);
 static void castle_component_tree_add(struct castle_double_array *da,
@@ -3796,7 +3795,7 @@ static inline void castle_da_merge_token_return(struct castle_double_array *da,
 {
     int driver_level;
 
-    BUG_ON(!castle_da_is_locked(da));
+    BUG_ON(read_can_lock(&da->lock));
     BUG_ON(token->ref_cnt <= 0);
     driver_level = token->driver_level;
     token->ref_cnt--;
@@ -3815,7 +3814,7 @@ static inline void castle_da_merge_token_push(struct castle_double_array *da,
                                               int level,
                                               struct castle_merge_token *token)
 {
-    BUG_ON(!castle_da_is_locked(da));
+    BUG_ON(read_can_lock(&da->lock));
     /* Token push moves the token to the next level, if that level is in a merge,
        or returns it to the driver level if not. */
     BUG_ON(level+1 >= MAX_DA_LEVEL);
@@ -3830,7 +3829,7 @@ static inline void castle_da_merge_token_activate(struct castle_double_array *da
                                                   int level,
                                                   struct castle_merge_token *token)
 {
-    BUG_ON(!castle_da_is_locked(da));
+    BUG_ON(read_can_lock(&da->lock));
     /* Token is activated by pushing it to the next level up, and saving it as the active
        token at this level. */
     BUG_ON(level+1 >= MAX_DA_LEVEL);
@@ -4008,7 +4007,7 @@ static inline void castle_da_merge_unit_complete(struct castle_double_array *da,
     struct castle_merge_token *token;
 
     debug_merges("Completing unit %d\n", da->levels[level].merge.units_commited);
-    BUG_ON(!castle_da_is_locked(da));
+    BUG_ON(read_can_lock(&da->lock));
     /* We'll be looking at level+1, make sure we don't go out of bounds. */
     BUG_ON(level+1 >= MAX_DA_LEVEL);
 
@@ -4040,8 +4039,7 @@ static inline void castle_da_driver_merge_reset(struct castle_double_array *da)
     int level;
 
     /* Function should be called with DA locked. */
-    BUG_ON(!castle_da_is_locked(da));
-
+    BUG_ON(read_can_lock(&da->lock));
     if (!castle_dynamic_driver_merge)
     {
         da->driver_merge = 1;
@@ -5556,18 +5554,6 @@ static void castle_da_merges_print(struct castle_double_array *da)
 /**********************************************************************************************/
 /* Generic DA code */
 
-/**
- * Return whether the da is write-locked.
- *
- * NOTE: Calling read_can_lock() with a write-lock should be race safe, unlike
- *       calling it with just a read-lock.
- */
-static inline int castle_da_is_locked(struct castle_double_array *da)
-{
-    /* must be write-locked if readers can't get a lock, or we have 2^24 readers */
-    return !read_can_lock(&da->lock);
-}
-
 static int castle_da_ct_dec_cmp(struct list_head *l1, struct list_head *l2)
 {
     struct castle_component_tree *ct1 = list_entry(l1, struct castle_component_tree, da_list);
@@ -5900,7 +5886,7 @@ static void castle_component_tree_add(struct castle_double_array *da,
 
     BUG_ON(da->id != ct->da);
     BUG_ON(ct->level >= MAX_DA_LEVEL);
-    BUG_ON(!castle_da_is_locked(da));
+    BUG_ON(read_can_lock(&da->lock));
     BUG_ON(!CASTLE_IN_TRANSACTION);
 
     /* Default insert point is the front of the list. */
@@ -5972,7 +5958,7 @@ static void castle_component_tree_del(struct castle_double_array *da,
                                       struct castle_component_tree *ct)
 {
     BUG_ON(da->id != ct->da);
-    BUG_ON(!castle_da_is_locked(da));
+    BUG_ON(read_can_lock(&da->lock));
     BUG_ON(!CASTLE_IN_TRANSACTION);
 
     list_del(&ct->da_list);
