@@ -922,6 +922,8 @@ static void castle_object_replace_key_insert(struct castle_object_replace *repla
 {
     c_bvec_t *c_bvec = replace->c_bvec;
 
+    FAULT(REPLACE_FAULT);
+
     /* Register with the debugger. */
     castle_debug_bio_register(c_bvec->c_bio, c_bvec->c_bio->attachment->version, 1);
     /* Set the callback. */
@@ -934,6 +936,8 @@ static void castle_object_replace_key_insert(struct castle_object_replace *repla
 int castle_object_replace_continue(struct castle_object_replace *replace)
 {
     int copy_end;
+
+    FAULT(REPLACE_FAULT);
 
     debug("Replace continue.\n");
     copy_end = castle_object_data_write(replace);
@@ -1056,6 +1060,8 @@ static int castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
     c_bvec->cvt_get = NULL;
     /* Finally set the cvt. */
     *cvt = replace->cvt;
+
+    FAULT(REPLACE_FAULT);
 
     return 0;
 }
