@@ -2565,6 +2565,9 @@ static inline int c2b_busy(c2_block_t *c2b, int expected_count)
  * @return 0    Victims found
  * @return 1    No victims found
  * @return 2    Cleanlist too small (caller to force flush)
+ *
+ * @also _castle_cache_block_get()
+ * @also castle_cache_freelists_grow()
  */
 static int castle_cache_block_hash_clean(void)
 {
@@ -2673,7 +2676,7 @@ static int castle_cache_block_hash_clean(void)
         if (nr_pages > castle_cache_size / 2)
         {
             static atomic_t nr_allowed = ATOMIC_INIT(1000);
-            
+
             castle_printk(LOG_WARN, "Couldn't find a victim page in %d pages, cache size %d\n",
                     nr_pages, castle_cache_size);
             if (atomic_dec_and_test(&nr_allowed))
@@ -2757,6 +2760,7 @@ int castle_cache_block_destroy(c2_block_t *c2b)
  * @param nr_c2bs   Minimum number of c2bs we need freed up
  * @param nr_pages  Minimum number of pages we need freed up
  *
+ * @also _castle_cache_block_get()
  * @also castle_cache_block_hash_clean()
  * @also castle_extent_remap()
  */
@@ -2814,7 +2818,7 @@ static void castle_cache_freelists_grow(int nr_c2bs, int nr_pages)
         debug("Could not clean the hash table. Waking flush.\n");
         castle_cache_flush_wakeup();
         /* Make sure at least one extra IO is done */
-        wait_event(castle_cache_flush_wq, 
+        wait_event(castle_cache_flush_wq,
                 (atomic_read(&castle_cache_flush_seq) != flush_seq));
         debug("We think there is some free memory now (clean pages: %d).\n",
                 atomic_read(&castle_cache_clean_pages));
@@ -2852,7 +2856,7 @@ c2_block_t* _castle_cache_block_get(c_ext_pos_t cep, int nr_pages, int transient
         debug("Trying to find buffer for cep="cep_fmt_str", nr_pages=%d\n",
             __cep2str(cep), nr_pages);
         /* Try to find in the hash first */
-        c2b = castle_cache_block_hash_get(cep, nr_pages); 
+        c2b = castle_cache_block_hash_get(cep, nr_pages);
         debug("Found in hash: %p\n", c2b);
         if (c2b)
         {
@@ -2861,7 +2865,7 @@ c2_block_t* _castle_cache_block_get(c_ext_pos_t cep, int nr_pages, int transient
             return c2b;
         }
 
-        /* If we couldn't find in the hash, try allocating from the freelists. Get c2b first. */ 
+        /* If we couldn't find in the hash, try allocating from the freelists. Get c2b first. */
         /* @TODO: Return NULL if extent doesn't exist any more. Make sure this
          * doesnt break any of the clients. */
 #ifdef CASTLE_DEBUG
@@ -2871,7 +2875,7 @@ c2_block_t* _castle_cache_block_get(c_ext_pos_t cep, int nr_pages, int transient
             /* Check sanity of CEP. */
             ext_size = (uint64_t)castle_extent_size_get(cep.ext_id);
             BUG_ON(ext_size==0);
-            if (ext_size && 
+            if (ext_size &&
                 ((ext_size * C_CHK_SIZE) < (cep.offset + (nr_pages * C_BLK_SIZE))))
             {
                 castle_printk(LOG_DEBUG, "Couldn't create cache page of size %d at cep: "cep_fmt_str
@@ -2900,7 +2904,7 @@ c2_block_t* _castle_cache_block_get(c_ext_pos_t cep, int nr_pages, int transient
             }
         } while (!c2b);
         do {
-            c2ps = castle_cache_page_freelist_get(nr_pages); 
+            c2ps = castle_cache_page_freelist_get(nr_pages);
             if (unlikely(!c2ps))
             {
                 if (unlikely(current == castle_cache_flush_thread))
@@ -3078,7 +3082,8 @@ typedef struct castle_cache_prefetch_window {
                                      it wants to free blocks and associated pref windows.         */
     c_ext_id_t      ext_id;     /**< Extent this window describes.                                */
     c_byte_off_t    start_off;  /**< Start of range that has been prefetched.                     */
-    c_byte_off_t    end_off;    /**< End of range that has been prefetched.  Chunk aligned.       */
+    c_byte_off_t    end_off;    /**< End of range that[P] tests for reserve list (dirty at high rates to trigger reserve list being used)
+ has been prefetched.  Chunk aligned.       */
     uint32_t        pref_pages; /**< Number of pages we prefetch.                                 */
     uint32_t        adv_thresh; /**< #pages from end_off before we prefetch.                      */
     struct rb_node  rb_node;    /**< RB-node for this window.                                     */
@@ -3174,7 +3179,7 @@ static void c2_pref_block_chunk_put(c_ext_pos_t cep, c2_pref_window_t *window, i
         }
         if (window->state & PREF_WINDOW_SOFTPIN)
             demote = demote || unsoftpin_c2b(c2b);
-        
+
         pref_debug(debug, "ext_id==%lld chunk %lld/%u softpin_cnt=%d\n",
                 cep.ext_id, CHUNK(cep.offset), castle_extent_size_get(cep.ext_id)-1,
                 atomic_read(&c2b->softpin_cnt));
@@ -3318,7 +3323,7 @@ static inline c2_pref_window_t* c2_pref_window_closest_find(struct rb_node *n,
         if (cmp == 0)
             /* Greater start_off, still satisfies cep. */
             p = n;
-    } 
+    }
     while (cmp >= 0);
 
     /* n is now NULL, or in the first window that doesn't cover the cep, return
@@ -3326,7 +3331,7 @@ static inline c2_pref_window_t* c2_pref_window_closest_find(struct rb_node *n,
     window = rb_entry(p, c2_pref_window_t, rb_node);
 
     return window;
-} 
+}
 
 /**
  * Find prefetch window from tree whose range encompasses cep.
@@ -3381,8 +3386,8 @@ static c2_pref_window_t *c2_pref_window_find(c_ext_pos_t cep, c2_advise_t advise
                This prevents corner cases, where we find a window, try to advance it
                but then fail to insert into the tree, because its already there. */
             if(!exact_match)
-                window = c2_pref_window_closest_find(n, cep, advise & C2_ADV_FRWD); 
-            /* Get a reference to the window. Reference count should be strictly > 1. 
+                window = c2_pref_window_closest_find(n, cep, advise & C2_ADV_FRWD);
+            /* Get a reference to the window. Reference count should be strictly > 1.
                Otherwise the window should not be in the tree. */
             BUG_ON(!window);
             BUG_ON(c2_pref_window_compare(window, cep, advise & C2_ADV_FRWD) != 0);
@@ -3471,15 +3476,15 @@ static int c2_pref_window_insert(c2_pref_window_t *window)
             p = &(*p)->rb_left;
         else if (cmp > 0)
             p = &(*p)->rb_right;
-        else 
+        else
         {
             /* We found an identical starting point.  Do not insert. */
             spin_unlock(&c2_prefetch_lock);
             pref_debug(0, "Starting point already exists.  Not inserting.\n");
 
-            return -EINVAL;                  
+            return -EINVAL;
         }
-    }                     
+    }
 
     window->state |= PREF_WINDOW_INSERTED;
     rb_link_node(&window->rb_node, parent, p);
