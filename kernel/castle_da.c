@@ -241,6 +241,21 @@ static inline void castle_da_need_compaction_clear(struct castle_double_array *d
     clear_bit(DOUBLE_ARRAY_NEED_COMPACTION_BIT, &da->flags);
 }
 
+int castle_da_compacting(struct castle_double_array *da)
+{
+    return test_bit(DOUBLE_ARRAY_COMPACTING_BIT, &da->flags);
+}
+
+static inline void castle_da_compacting_set(struct castle_double_array *da)
+{
+    set_bit(DOUBLE_ARRAY_COMPACTING_BIT, &da->flags);
+}
+
+static inline void castle_da_compacting_clear(struct castle_double_array *da)
+{
+    clear_bit(DOUBLE_ARRAY_COMPACTING_BIT, &da->flags);
+}
+
 /**********************************************************************************************/
 /* Iterators */
 struct castle_immut_iterator;
@@ -5346,6 +5361,9 @@ static int castle_da_big_merge_run(void *da_p)
 
         castle_printk(LOG_USERINFO, "Starting total merge on %d trees\n", nr_trees);
 
+        /* Mark DA as compaction is ongoing. */
+        castle_da_compacting_set(da);
+
         /* Do the merge. If fails, retry after 10s. */
         if (castle_da_merge_do(da, nr_trees, in_trees, BIG_MERGE))
         {
@@ -5397,11 +5415,19 @@ wait_and_try:
             /* Wakeup everyone waiting on merge state update. */
             wake_up(&da->merge_waitq);
 
+            /* Mark DA as compaction is completed. */
+            castle_da_compacting_clear(da);
+
             /* In case we failed the merge because of no memory for in_trees, wait and retry. */
             msleep_interruptible(10000);
         }
         else
+        {
+            /* Mark DA as compaction is completed. */
+            castle_da_compacting_clear(da);
+
             castle_printk(LOG_USERINFO, "Successfully completed compaction\n");
+        }
     } while(1);
 
     debug_merges("Merge thread exiting.\n");

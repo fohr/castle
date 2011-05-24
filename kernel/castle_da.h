@@ -18,6 +18,7 @@ void castle_da_rq_iter_init    (c_da_rq_iter_t *iter,
                                 void *end_key);
 extern struct castle_iterator_type castle_da_rq_iter;
 
+int  castle_da_compacting      (struct castle_double_array *da);
 int  castle_double_array_okey_cpu_index(c_vl_okey_t *okey, uint32_t key_len);
 int  castle_double_array_request_cpu   (int cpu_index);
 int  castle_double_array_request_cpus  (void);

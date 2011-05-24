@@ -1646,6 +1646,7 @@ typedef enum {
 #define DOUBLE_ARRAY_GROWING_RW_TREE_BIT    (0)
 #define DOUBLE_ARRAY_DELETED_BIT            (1)
 #define DOUBLE_ARRAY_NEED_COMPACTION_BIT    (2)
+#define DOUBLE_ARRAY_COMPACTING_BIT         (3)
 #define MIN_DA_SERDES_LEVEL                 (2) /* merges below this level won't be serialised */
 struct castle_double_array {
     da_id_t                     id;

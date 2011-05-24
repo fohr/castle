@@ -224,6 +224,15 @@ static ssize_t da_version_show(struct kobject *kobj,
     return sprintf(buf, "0x%x\n", da->root_version);
 }
 
+static ssize_t da_compacting_show(struct kobject *kobj,
+							      struct attribute *attr,
+							      char *buf)
+{
+    struct castle_double_array *da = container_of(kobj, struct castle_double_array, kobj);
+
+    return sprintf(buf, "%u\n", castle_da_compacting(da));
+}
+
 static ssize_t da_size_show(struct kobject *kobj, 
 							struct attribute *attr, 
 							char *buf)
@@ -694,12 +703,16 @@ __ATTR(version, S_IRUGO|S_IWUSR, da_version_show, NULL);
 static struct castle_sysfs_entry da_size =
 __ATTR(size, S_IRUGO|S_IWUSR, da_size_show, NULL);
 
+static struct castle_sysfs_entry da_compacting =
+__ATTR(compacting, S_IRUGO|S_IWUSR, da_compacting_show, NULL);
+
 static struct castle_sysfs_entry da_tree_list =
 __ATTR(component_trees, S_IRUGO|S_IWUSR, da_tree_list_show, NULL);
 
 static struct attribute *castle_da_attrs[] = {
     &da_version.attr,
     &da_size.attr,
+    &da_compacting.attr,
     &da_tree_list.attr,
     NULL,
 };
