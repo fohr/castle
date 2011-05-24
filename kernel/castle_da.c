@@ -8465,6 +8465,24 @@ void castle_double_array_put(da_id_t da_id)
     castle_da_put(da);
 }
 
+/* TODO: Check what happens if ioctl functions or sysfs functions need to get reference on
+ * resources. */
+int castle_double_array_compact(da_id_t da_id)
+{
+    struct castle_double_array *da;
+
+    da = castle_da_hash_get(da_id);
+    if (!da)
+        return -EINVAL;
+
+    castle_printk(LOG_USERINFO, "Marking version tree %u for compaction.\n", da_id);
+    castle_da_need_compaction_set(da);
+
+    wake_up(&da->merge_waitq);
+
+    return 0;
+}
+
 int castle_double_array_destroy(da_id_t da_id)
 {
     struct castle_double_array *da;
