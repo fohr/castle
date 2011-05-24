@@ -83,6 +83,8 @@ typedef enum {
     TRACE_CACHE_SOFTPIN_VICTIMS_ID,     /**< Number of softpinned c2bs evicted from the cache.  */
     TRACE_CACHE_READS_ID,               /**< Number of reads this tick.                         */
     TRACE_CACHE_WRITES_ID,              /**< Number of writes this tick.                        */
+    TRACE_CACHE_RESERVE_PGS_USED_ID,    /**< Number of c2ps from reserve freelist in use.       */
+    TRACE_CACHE_RESERVE_BLKS_USED_ID,   /**< Number of c2bs from reserve freelist in use.       */
 } c_trc_cache_var_t;
 
 /**

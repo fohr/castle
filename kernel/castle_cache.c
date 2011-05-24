@@ -2281,6 +2281,11 @@ static c2_page_t** castle_cache_page_reservelist_get(int nr_pages)
 #endif
     BUG_ON(nr_pages > 0); /* verify we got nr_pages of c2ps */
 
+    castle_trace_cache(TRACE_VALUE,
+                       TRACE_CACHE_RESERVE_PGS_USED_ID,
+                       CASTLE_CACHE_RESERVELIST_QUOTA
+                            - atomic_read(&castle_cache_page_reservelist_size));
+
     return c2ps;
 }
 
@@ -2331,6 +2336,12 @@ static c2_block_t *castle_cache_block_reservelist_get(void)
         atomic_dec(&castle_cache_block_reservelist_size);
     }
     spin_unlock(&castle_cache_reservelist_lock);
+
+    castle_trace_cache(TRACE_VALUE,
+                       TRACE_CACHE_RESERVE_BLKS_USED_ID,
+                       CASTLE_CACHE_RESERVELIST_QUOTA
+                           - atomic_read(&castle_cache_block_reservelist_size));
+
 
     return c2b;
 }
