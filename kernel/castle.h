@@ -1383,7 +1383,7 @@ struct castle_attachment*
                       castle_collection_init       (version_t version, char *name);
 
 struct castle_attachment *
-                      castle_attachment_get        (collection_id_t collection);
+                      castle_attachment_get        (collection_id_t collection, int rw);
 void                  castle_attachment_put        (struct castle_attachment *ca);
 void                  castle_attachment_free       (struct castle_attachment *ca);
 void                  castle_attachment_free_complete(struct castle_attachment *ca);

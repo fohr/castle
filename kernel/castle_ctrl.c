@@ -384,11 +384,11 @@ void castle_control_collection_attach(version_t          version,
     *collection = ca->col.id; 
     *ret = 0;
 }
-            
+
 void castle_control_collection_detach(collection_id_t collection,
                                       int            *ret)
 {
-    struct castle_attachment *ca = castle_attachment_get(collection);
+    struct castle_attachment *ca = castle_attachment_get(collection, READ);
     if (!ca)
     {
         *ret = -ENODEV;
@@ -398,7 +398,7 @@ void castle_control_collection_detach(collection_id_t collection,
     /* Matk attachment as deleted. */
     castle_attachment_free(ca);
 
-    castle_printk(LOG_USERINFO, "Deleting Collection Attachment %u (%s, %u)/%u\n", 
+    castle_printk(LOG_USERINFO, "Deleting Collection Attachment %u (%s, %u)/%u\n",
             collection, ca->col.name, ca->version, ca->ref_cnt);
 
     /* Release reference. */
@@ -420,11 +420,11 @@ void castle_control_collection_snapshot(collection_id_t collection,
                                                int *ret,
                                                version_t *version)
 {
-    struct castle_attachment *ca = castle_attachment_get(collection);
+    struct castle_attachment *ca = castle_attachment_get(collection, READ);
     version_t ver, old_version;
 
     if(!ca)
-    {   
+    {
         *version = -1;
         *ret     = -ENOENT;
         return;

@@ -1188,7 +1188,7 @@ static void castle_back_replace(void *data)
     int err;
     c_vl_okey_t *key;
 
-    op->attachment = castle_attachment_get(op->req.replace.collection_id);
+    op->attachment = castle_attachment_get(op->req.replace.collection_id, WRITE);
     if (op->attachment == NULL)
     {
         error("Collection not found id=0x%x\n", op->req.replace.collection_id);
@@ -1277,7 +1277,7 @@ static void castle_back_remove(void *data)
     int err;
     c_vl_okey_t *key;
 
-    op->attachment = castle_attachment_get(op->req.remove.collection_id);
+    op->attachment = castle_attachment_get(op->req.remove.collection_id, WRITE);
     if (op->attachment == NULL)
     {
         error("Collection not found id=0x%x\n", op->req.remove.collection_id);
@@ -1400,7 +1400,7 @@ static void castle_back_get(void *data)
     int err;
     c_vl_okey_t *key;
 
-    op->attachment = castle_attachment_get(op->req.get.collection_id);
+    op->attachment = castle_attachment_get(op->req.get.collection_id, READ);
     if (op->attachment == NULL)
     {
         error("Collection not found id=0x%x\n", op->req.get.collection_id);
@@ -1546,7 +1546,7 @@ static void castle_back_iter_start(void *data)
         goto err0;
     }
 
-    attachment = castle_attachment_get(op->req.iter_start.collection_id);
+    attachment = castle_attachment_get(op->req.iter_start.collection_id, READ);
     if (attachment == NULL)
     {
         error("Collection not found id=0x%x\n", op->req.iter_start.collection_id);
@@ -2227,7 +2227,7 @@ static void castle_back_big_put(void *data)
     }
 
     /* Get reference on attachment - Consequently on DA. */
-    attachment = castle_attachment_get(op->req.big_put.collection_id);
+    attachment = castle_attachment_get(op->req.big_put.collection_id, WRITE);
     if (attachment == NULL)
     {
         error("Collection not found id=0x%x\n", op->req.big_put.collection_id);
@@ -2512,7 +2512,7 @@ static void castle_back_big_get(void *data)
         goto err0;
     }
 
-    attachment = castle_attachment_get(op->req.big_get.collection_id);
+    attachment = castle_attachment_get(op->req.big_get.collection_id, READ);
     if (attachment == NULL)
     {
         error("Collection not found id=0x%x\n", op->req.big_get.collection_id);

@@ -2006,7 +2006,7 @@ struct castle_attachment* castle_device_find(dev_t dev)
     return NULL;
 }
 
-struct castle_attachment* castle_attachment_get(collection_id_t col_id)
+struct castle_attachment* castle_attachment_get(collection_id_t col_id, int rw)
 {
     struct castle_attachment *ca, *result = NULL;
     struct list_head *lh;
@@ -2020,28 +2020,33 @@ struct castle_attachment* castle_attachment_get(collection_id_t col_id)
             continue;
         if(ca->col.id == col_id)
         {
-            result = ca;
-            ca->ref_cnt++;
+            if (rw == WRITE && !castle_version_is_leaf(ca->version))
+                result = NULL;
+            else
+            {
+                result = ca;
+                ca->ref_cnt++;
+            }
             break;
         }
     }
-    
+
     spin_unlock(&castle_attachments.lock);
-    
+
     return result;
 }
 
 void castle_attachment_put(struct castle_attachment *ca)
 {
     int to_free = 0;
-    
+
     BUG_ON(in_atomic());
     spin_lock(&castle_attachments.lock);
 
     ca->ref_cnt--;
-    
+
     BUG_ON(ca->ref_cnt < 0);
-    
+
     if (ca->ref_cnt == 0)
         to_free = 1;
 
@@ -2052,7 +2057,7 @@ void castle_attachment_put(struct castle_attachment *ca)
         version_t version = ca->version;
         da_id_t da_id = castle_version_da_id_get(version);
         collection_id_t ca_id = ca->col.id;
-        
+
         castle_events_collection_detach(ca->col.id);
         castle_sysfs_collection_del(ca);
 
