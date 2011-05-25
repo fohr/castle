@@ -5008,9 +5008,9 @@ static int castle_da_merge_do(struct castle_double_array *da,
      * Level 1 merges have modlist component btrees that need sorting - this is
      * currently done using a malloc'd buffer.  Serialise function entry across
      * all DAs to prevent races decrementing the modlist mem budget. */
-    if (level <= 1) mutex_lock(&castle_da_level1_merge_init);
+    if (level == 1) mutex_lock(&castle_da_level1_merge_init);
     merge = castle_da_merge_init(da, level, nr_trees, in_trees);
-    if (level <= 1) mutex_unlock(&castle_da_level1_merge_init);
+    if (level == 1) mutex_unlock(&castle_da_level1_merge_init);
     if(!merge)
     {
         castle_printk(LOG_WARN, "Could not start a merge for DA=%d, level=%d.\n", da->id, level);
@@ -5302,8 +5302,12 @@ static int castle_da_big_merge_run(void *da_p)
         /* Lock the DA, because we may reset the compacting flag. */
         write_lock(&da->lock);
 
-        /* Count number of trees to compact. */
-        for (nr_trees=0, level=1; level<MAX_DA_LEVEL; level++)
+        /* Count number of trees to compact. Don't compact level-1 trees.
+         *
+         * Note: Merging T1s need memory as we need to sort them before merge. If we try to
+         * include T1s in compaction, we might run out of memory.
+         */
+        for (nr_trees=0, level=2; level<MAX_DA_LEVEL; level++)
             nr_trees += da->levels[level].nr_trees;
 
         /* Merge cannot be scheduled with < 2 trees. */
@@ -5319,7 +5323,7 @@ static int castle_da_big_merge_run(void *da_p)
 
         /* Mark all the trees for compaction. So, we start compaction on them after allocating
          * resources. */
-        for (level=1, i=0; level<MAX_DA_LEVEL; level++)
+        for (level=2, i=0; level<MAX_DA_LEVEL; level++)
         {
             list_for_each(l, &da->levels[level].trees)
             {
@@ -5350,7 +5354,7 @@ static int castle_da_big_merge_run(void *da_p)
         write_lock(&da->lock);
 
         /* Allocated memory for in_trees; store all trees on in_trees array. */
-        for (level=1, i=0; level<MAX_DA_LEVEL; level++)
+        for (level=2, i=0; level<MAX_DA_LEVEL; level++)
         {
             list_for_each(l, &da->levels[level].trees)
             {
@@ -5363,8 +5367,6 @@ static int castle_da_big_merge_run(void *da_p)
                     in_trees[i] = ct;
                     i++;
                 }
-                else
-                    BUG_ON(level != 1);
 
                 BUG_ON(i > nr_trees);
             }
@@ -5399,7 +5401,7 @@ wait_and_try:
                    but failed afterward (e.g. due to NOSPC), readjust the counters again. */
 
                 /* Merge failed, unmark compacting bit for all trees. */
-                for (level=1, i=0; level<MAX_DA_LEVEL; level++)
+                for (level=2, i=0; level<MAX_DA_LEVEL; level++)
                 {
                     list_for_each(l, &da->levels[level].trees)
                     {
@@ -5419,6 +5421,8 @@ wait_and_try:
                 /* Change count for compaction trees on each level. */
                 for (i=0; i<MAX_DA_LEVEL; i++)
                 {
+                    BUG_ON((i <=1 ) && da->levels[i].nr_compac_trees);
+
                     da->levels[i].nr_trees += da->levels[i].nr_compac_trees;
                     da->levels[i].nr_compac_trees = 0;
                 }
@@ -5920,6 +5924,7 @@ static struct castle_double_array* castle_da_alloc(da_id_t da_id)
     da->driver_merge    = -1;
     atomic_set(&da->epoch_ios, 0);
     atomic_set(&da->merge_budget, 0);
+    atomic_set(&da->ongoing_merges, 0);
 
     atomic_set(&da->lfs_victim_count, 0);
     da->t0_lfs = castle_malloc(sizeof(struct castle_da_lfs_ct_t) * nr_cpus, GFP_KERNEL);
