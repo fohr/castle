@@ -5315,7 +5315,7 @@ static int castle_da_big_merge_run(void *da_p)
         {
             /* Don't compact any more (not enough trees). */
             castle_printk(LOG_USERINFO, "Aborting compaction: Need minimum 2 trees above"
-                                        "level 0.\n");
+                                        " level 1.\n");
             castle_da_need_compaction_clear(da);
             write_unlock(&da->lock);
             goto wait_and_try;
