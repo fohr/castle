@@ -4183,8 +4183,9 @@ static tree_seq_t castle_da_merge_last_unit_complete(struct castle_double_array 
             castle_da_merge_token_return(da, level, token);
         }
     }
-    /* Reduce the number of ongoing merges count. */
-    atomic_dec(&da->ongoing_merges);
+    /* Reduce the number of ongoing merges count. Don't do it for compaction. */
+    if (level != 0)
+        atomic_dec(&da->ongoing_merges);
 
     castle_da_driver_merge_reset(da);
     /* Release the lock. */
@@ -5274,7 +5275,7 @@ static int castle_da_big_merge_run(void *da_p)
     struct list_head *l;
     int level=0, ignore;
     int nr_trees=0;
-    int i;
+    int i, ret = 0;
 
     /* Disable deamortization of total merges. */
     da->levels[BIG_MERGE].merge.deamortize = 0;
@@ -5309,7 +5310,8 @@ static int castle_da_big_merge_run(void *da_p)
         if(nr_trees < 2)
         {
             /* Don't compact any more (not enough trees). */
-            castle_printk(LOG_USERINFO, "Aborting compaction: Not enough trees\n");
+            castle_printk(LOG_USERINFO, "Aborting compaction: Need minimum 2 trees above"
+                                        "level 0.\n");
             castle_da_need_compaction_clear(da);
             write_unlock(&da->lock);
             goto wait_and_try;
@@ -5339,7 +5341,10 @@ static int castle_da_big_merge_run(void *da_p)
         in_trees = castle_zalloc(sizeof(struct castle_component_tree *) * nr_trees,
                                  GFP_KERNEL);
         if (!in_trees)
+        {
+            castle_printk(LOG_USERINFO, "Aborting compaction: Failed to allocate memory.\n");
             goto wait_and_try;
+        }
 
         /* Now, lock the DA, take the in trees and start the merge. */
         write_lock(&da->lock);
@@ -5382,11 +5387,10 @@ static int castle_da_big_merge_run(void *da_p)
         castle_da_compacting_set(da);
 
         /* Do the merge. If fails, retry after 10s. */
-        if (castle_da_merge_do(da, nr_trees, in_trees, BIG_MERGE))
+        if ((ret = castle_da_merge_do(da, nr_trees, in_trees, BIG_MERGE)))
         {
+            castle_printk(LOG_WARN, "Total merge failed with error: %d\n", ret);
 wait_and_try:
-            castle_printk(LOG_WARN, "Total merge failed\n");
-
             if (nr_trees >= 2)
             {
                 write_lock(&da->lock);
