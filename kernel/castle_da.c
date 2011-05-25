@@ -5598,7 +5598,7 @@ static int castle_da_merge_stop(struct castle_double_array *da, void *unused)
     for(i=0; i<MAX_DA_LEVEL; i++)
     {
         while(da->levels[i].merge.thread)
-            msleep_interruptible(10);
+            msleep(10);
         castle_printk(LOG_INIT, "Stopped merge thread for DA=%d, level=%d\n", da->id, i);
     }
 
@@ -8345,7 +8345,7 @@ void castle_double_array_merges_fini(void)
         deleted_das = !list_empty(&castle_deleted_das);
         CASTLE_TRANSACTION_END;
         if(deleted_das)
-            msleep_interruptible(10);
+            msleep(10);
     } while(deleted_das);
 }
 
