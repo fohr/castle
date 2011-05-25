@@ -5020,8 +5020,25 @@ static int castle_da_merge_do(struct castle_double_array *da,
 
     /* Do the merge. */
     do {
+        int i;
+
+        /* unlock output ct active c2bs, so checkpoint can flush partial merges */
+        for(i=0; i<MAX_BTREE_DEPTH; i++)
+        {
+            c2_block_t *c2b = merge->levels[i].node_c2b;
+            if(c2b)
+                write_unlock_c2b(c2b);
+        }
         /* Wait until we are allowed to do next unit of merge. */
         units_cnt = castle_da_merge_units_inc_return(da, level);
+        /* relock output ct active c2bs, as unit_do expects to find them */
+        for(i=0; i<MAX_BTREE_DEPTH; i++)
+        {
+            c2_block_t *c2b = merge->levels[i].node_c2b;
+            if(c2b)
+                write_lock_c2b(c2b);
+        }
+
         debug("%s::doing unit %d on merge %p (da %d level %d)\n", __FUNCTION__,
             units_cnt, merge, da->id, level);
         /* Trace event. */
