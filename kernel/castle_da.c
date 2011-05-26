@@ -256,6 +256,21 @@ static inline void castle_da_compacting_clear(struct castle_double_array *da)
     clear_bit(DOUBLE_ARRAY_COMPACTING_BIT, &da->flags);
 }
 
+int castle_da_merge_running(struct castle_double_array *da, int level)
+{
+    return test_bit(DA_MERGE_RUNNING_BIT, &da->levels[level].merge.flags);
+}
+
+static inline void castle_da_merge_running_set(struct castle_double_array *da, int level)
+{
+    set_bit(DA_MERGE_RUNNING_BIT, &da->levels[level].merge.flags);
+}
+
+static inline void castle_da_merge_running_clear(struct castle_double_array *da, int level)
+{
+    clear_bit(DA_MERGE_RUNNING_BIT, &da->levels[level].merge.flags);
+}
+
 /**********************************************************************************************/
 /* Iterators */
 struct castle_immut_iterator;
@@ -4123,7 +4138,8 @@ static inline void castle_da_driver_merge_reset(struct castle_double_array *da)
     /* Set the lowest level with two fullygrown trees as driver. */
     for (level=1; level<MAX_DA_LEVEL; level++)
     {
-        if (da->levels[level].nr_trees >= 2)
+        /* Compute driver merge from currently ongong merges only. */
+        if (castle_da_merge_running(da, level) && (da->levels[level].nr_trees >= 2))
         {
             if (level != da->driver_merge)
                 castle_printk(LOG_INFO, "Changing driver merge %d -> %d\n",
@@ -4132,6 +4148,17 @@ static inline void castle_da_driver_merge_reset(struct castle_double_array *da)
             break;
         }
     }
+
+    wake_up(&da->merge_waitq);
+}
+
+static int __castle_da_driver_merge_reset(struct castle_double_array *da, void *unused)
+{
+    write_lock(&da->lock);
+    castle_da_driver_merge_reset(da);
+    write_unlock(&da->lock);
+
+    return 0;
 }
 
 /**
@@ -4232,7 +4259,6 @@ static tree_seq_t castle_da_merge_last_unit_complete(struct castle_double_array 
     if (level != 0)
         atomic_dec(&da->ongoing_merges);
 
-    castle_da_driver_merge_reset(da);
     /* Release the lock. */
     write_unlock(&da->lock);
 
@@ -5074,6 +5100,14 @@ static int castle_da_merge_do(struct castle_double_array *da,
     debug_merges("\n");
 #endif
 
+    /* Merge no fail zone starts here. Can't fail from here. Expected to complete, unless
+     * someone aborts merge in between. */
+
+    /* Mark merge as running. */
+    castle_da_merge_running_set(da, level);
+
+    __castle_da_driver_merge_reset(da, NULL);
+
     /* Hard-pin T1s in the cache. */
     if (level == 1)
     {
@@ -5203,6 +5237,11 @@ merge_failed:
 
     /* safe for checkpoint to run now because we've completed and cleaned up all merge state */
     CASTLE_TRANSACTION_END;
+
+    /* Mark merge as completed. */
+    castle_da_merge_running_clear(da, level);
+
+    __castle_da_driver_merge_reset(da, NULL);
 
     castle_trace_da_merge(TRACE_END, TRACE_DA_MERGE_ID, da->id, level, out_tree_id, 0);
     if(ret==-ESHUTDOWN) return -ESHUTDOWN; /* merge abort */
@@ -5998,6 +6037,7 @@ static struct castle_double_array* castle_da_alloc(c_da_t da_id)
         INIT_LIST_HEAD(&da->levels[i].trees);
         da->levels[i].nr_trees             = 0;
         da->levels[i].nr_compac_trees      = 0;
+        da->levels[i].merge.flags          = 0;
         INIT_LIST_HEAD(&da->levels[i].merge.merge_tokens);
         da->levels[i].merge.active_token   = NULL;
         da->levels[i].merge.driver_token   = NULL;
@@ -7091,15 +7131,6 @@ err_out:
 static int castle_da_rwct_init(struct castle_double_array *da, void *unused)
 {
     castle_da_all_rwcts_create(da, LFS_VCT_T_INVALID);
-
-    return 0;
-}
-
-static int __castle_da_driver_merge_reset(struct castle_double_array *da, void *unused)
-{
-    write_lock(&da->lock);
-    castle_da_driver_merge_reset(da);
-    write_unlock(&da->lock);
 
     return 0;
 }

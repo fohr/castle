@@ -1647,6 +1647,11 @@ typedef enum {
 #define DOUBLE_ARRAY_DELETED_BIT            (1)
 #define DOUBLE_ARRAY_NEED_COMPACTION_BIT    (2)
 #define DOUBLE_ARRAY_COMPACTING_BIT         (3)
+
+/* Merge level flags. */
+#define DA_MERGE_RUNNING_BIT                (0)
+//#define DA_MERGE_UNIT_RUNNING               (1)
+
 #define MIN_DA_SERDES_LEVEL                 (2) /* merges below this level won't be serialised */
 struct castle_double_array {
     c_da_t                      id;
@@ -1661,6 +1666,7 @@ struct castle_double_array {
         struct list_head        trees;              /**< List of (nr_trees) at level            */
         /* Merge related variables. */
         struct {
+            unsigned long       flags;              /**< Flags on level merge.                  */
             struct list_head    merge_tokens;
             struct castle_merge_token
                                *active_token;
