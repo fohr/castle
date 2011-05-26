@@ -624,6 +624,7 @@ static inline void __unlock_c2b(c2_block_t *c2b, int write)
 
 void write_unlock_c2b(c2_block_t *c2b)
 {
+    BUG_ON(!c2b_write_locked(c2b));
     __unlock_c2b(c2b, 1);
 }
 

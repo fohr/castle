@@ -2992,6 +2992,8 @@ static inline void castle_da_entry_add(struct castle_da_merge *merge,
         debug("%s::Allocating a new node at depth: %d for merge %p (da %d level %d)\n",
             __FUNCTION__, depth, merge, merge->da->id, merge->level);
     }
+    else //if (depth > 0)
+            write_lock_c2b(level->node_c2b);
 
     node = c2b_bnode(level->node_c2b);
     debug("Adding at idx=%d depth=%d into node %p for merge on da %d level %d\n",
@@ -3010,6 +3012,17 @@ static inline void castle_da_entry_add(struct castle_da_merge *merge,
      * added and last key added to the node. But, it repesents the comparision between last
      * 2 keys added to the tree. Still, it is okay as in case of re-adds both the comparisions
      * yield same value. */
+
+    /* unlock the c2b so checkpoint can writeback merge state, but for the sake of performance,
+       don't do this for leaf nodes, which will be unlocked and relocked on unit merge boundary. */
+    /* TODO@tr actually come to think of it, this might rate-limit checkpoint's progress to unit
+       merge boundary anyway. i.o.w. we may have had the same effect if we left the locking
+       scheme as it was in da_entry_add, node_complete, etc, and simply unlocked and locked ALL
+       node level c2bs at unit merge boundary. Nevertheless, the current "frequent internal node
+       lock toggling" approach might be beneficial for partial merges... */
+    //if (depth > 0)
+        write_unlock_c2b(level->node_c2b);
+
     key_cmp = (level->next_idx != 0) ?
                ((depth == 0)? merge->is_new_key: btree->key_compare(key, level->last_key)) :
                0;
@@ -3084,8 +3097,14 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
     merge->is_recursion = 1;
 #endif
 
-    debug("Completing node at depth=%d\n", depth);
+    castle_printk(LOG_DEBUG, "%s::Completing node at depth=%d for da %d level %d\n",
+        __FUNCTION__, depth, merge->da->id, merge->level);
     BUG_ON(depth >= MAX_BTREE_DEPTH);
+
+    /* for non-leaf nodes, the c2b will be unlocked */
+    //if (depth > 0)
+        write_lock_c2b(level->node_c2b);
+
     node      = c2b_bnode(level->node_c2b);
     BUG_ON(!node);
     /* Version of the node should be the last valid_version */
@@ -3118,7 +3137,13 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
         BUG_ON(merge->completing);
         btree->entry_get(node, node_idx,  &key, &version, &cvt);
         BUG_ON(CVT_LEAF_PTR(cvt));
+        //if(depth > 0)
+            write_unlock_c2b(node_c2b);
+        castle_printk(LOG_DEBUG, "%s::spliting node at depth %d for da %d level %d.\n",
+            __FUNCTION__, depth, merge->da->id, merge->level);
         castle_da_entry_add(merge, depth, key, version, cvt, 1);
+        //if(depth > 0)
+            write_lock_c2b(node_c2b);
         node_idx++;
         BUG_ON(level->node_c2b == NULL);
         /* Check if the node completed, it should never do */
@@ -3468,7 +3493,11 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
         c2_block_t *c2b = merge->levels[i].node_c2b;
         if(c2b)
         {
-            write_unlock_c2b(c2b);
+            castle_printk(LOG_DEBUG, "%s::putting c2b of btree node %i for da %d level %d.\n",
+                __FUNCTION__, i, merge->da->id, merge->level);
+            /* leaf nodes remain locked throughout a merge */
+            //if(i==0)
+            //    write_unlock_c2b(c2b);
             put_c2b(c2b);
         }
     }
@@ -4561,7 +4590,7 @@ static void castle_da_merge_marshall(struct castle_dmserlist_entry *merge_mstore
                                      struct castle_da_merge *merge,
                                      c_da_merge_marshall_set_t partial_marshall)
 {
-    int i;
+    unsigned int i;
     struct component_iterator *comp[2], *curr_comp;
     c_immut_iter_t *immut[2];
     int lo_count=0;
@@ -4697,7 +4726,7 @@ update_output_tree_state:
             merge_mstore->node_c2b_cep[i] = merge->levels[i].node_c2b->cep;
 
             node=c2b_bnode(merge->levels[i].node_c2b);
-            debug("%s::merge %p (da %d, level %d) sanity check node_c2b[%d] ("
+            castle_printk(LOG_DEBUG, "%s::merge %p (da %d, level %d) sanity check node_c2b[%d] ("
                     cep_fmt_str")\n", __FUNCTION__, merge, merge->da->id, merge->level, i,
                     cep2str(merge_mstore->node_c2b_cep[i]));
             BUG_ON(!node);
@@ -4708,7 +4737,11 @@ update_output_tree_state:
                     __FUNCTION__, i, merge, merge->da->id, merge->level, node->size, node->is_leaf);
 
             /* dirty the incomplete node so it will be flushed at next checkpoint */
+            //if(i > 0)
+                write_lock_c2b(merge->levels[i].node_c2b);
             dirty_c2b(merge->levels[i].node_c2b);
+            //if(i > 0)
+                write_unlock_c2b(merge->levels[i].node_c2b);
         }//fi
     }//rof
 
@@ -4777,8 +4810,9 @@ static c2_block_t* castle_da_merge_des_out_tree_c2b_write_fetch(struct castle_da
     /* If c2b is not up to date, issue a blocking READ to update */
     if(!c2b_uptodate(c2b))
         BUG_ON(submit_c2b_sync(READ, c2b));
-    /* do not write_unlock the c2b; merge thread expects to find it in a locked state. */
-    /* write_unlock_c2b(c2b); */
+    /* do not write_unlock leaf node c2b; merge thread expects to find it in a locked state. */
+    //if(depth > 0)
+        write_unlock_c2b(c2b);
     return c2b;
 }
 
@@ -4898,7 +4932,6 @@ static void castle_da_merge_deserialise(struct castle_da_merge *merge,
             castle_da_merge_des_out_tree_c2b_write_fetch(merge, merge_mstore->last_leaf_node_cep,
                     0 /* leaf */);
         BUG_ON(!merge->last_leaf_node_c2b);
-        write_unlock_c2b(merge->last_leaf_node_c2b);
         node = c2b_bnode(merge->last_leaf_node_c2b);
         BUG_ON(!node);
         BUG_ON(node->magic != BTREE_NODE_MAGIC);
@@ -5036,24 +5069,15 @@ static int castle_da_merge_do(struct castle_double_array *da,
 
     /* Do the merge. */
     do {
-        int i;
-
-        /* unlock output ct active c2bs, so checkpoint can flush partial merges */
-        for(i=0; i<MAX_BTREE_DEPTH; i++)
-        {
-            c2_block_t *c2b = merge->levels[i].node_c2b;
-            if(c2b)
-                write_unlock_c2b(c2b);
-        }
+        /* unlock output ct active leaf c2b, so checkpoint can quickly flush partial merges */
+        //c2_block_t *c2b = merge->levels[0].node_c2b;
+        //if(c2b)
+        //    write_unlock_c2b(c2b);
         /* Wait until we are allowed to do next unit of merge. */
         units_cnt = castle_da_merge_units_inc_return(da, level);
-        /* relock output ct active c2bs, as unit_do expects to find them */
-        for(i=0; i<MAX_BTREE_DEPTH; i++)
-        {
-            c2_block_t *c2b = merge->levels[i].node_c2b;
-            if(c2b)
-                write_lock_c2b(c2b);
-        }
+        /* relock output ct active leaf c2b, as unit_do expects to find it */
+        //if(c2b)
+        //    write_lock_c2b(c2b);
 
         debug("%s::doing unit %d on merge %p (da %d level %d)\n", __FUNCTION__,
             units_cnt, merge, da->id, level);
@@ -5128,6 +5152,7 @@ static int castle_da_merge_do(struct castle_double_array *da,
     serdes_state = atomic_read(&da->levels[level].merge.serdes.valid);
     if(serdes_state > NULL_DAM_SERDES)
     {
+        //TODO@tr figure out if there is still a point to this or not
         /* using mutex here to synchronize merge thread against checkpoint thread - cannot allow
            checkpoint to sanity check iterator state when we are about to drop the input ccts */
         mutex_lock(&da->levels[level].merge.serdes.mutex);
@@ -5791,7 +5816,7 @@ static void castle_da_merge_serdes_out_tree_check(struct castle_dmserlist_entry 
     BUG_ON(merge_mstore->out_tree.level != level + 1);
     BUG_ON(merge_mstore->btree_type     != castle_btree_type_get(RO_VLBA_TREE_TYPE)->magic);
 
-    debug("%s::sanity checking merge SERDES on da %d level %d.\n",
+    castle_printk(LOG_DEBUG, "%s::sanity checking merge SERDES on da %d level %d.\n",
             __FUNCTION__, da->id, level);
 
     for(i=0; i<MAX_BTREE_DEPTH; i++)
@@ -6876,6 +6901,8 @@ static int castle_da_writeback(struct castle_double_array *da, void *unused)
             /* we should never checkpoint a deserialising merge, but we cannot guarantee that
                this thread will not run while deserialisation is ongoing, so the best we can do
                is to skip when we detect a deserialising merge. */
+            //TODO@tr Is this check really needed? if a merge is still deserialising wouldn't the
+            //        serdes.valid atomic prevent checkpointing?
             if(da->levels[i].merge.serdes.des)
             {
                 castle_printk(LOG_WARN, "%s::deserialisation still in progress on da %d level %d;"
@@ -7125,6 +7152,7 @@ int castle_double_array_read(void)
     c_mstore_key_t key;
     da_id_t da_id;
     int ret = 0;
+    castle_printk(LOG_DEBUG, "%s::start.\n", __FUNCTION__);
 
     castle_da_store   = castle_mstore_open(MSTORE_DOUBLE_ARRAYS,
                                          sizeof(struct castle_dlist_entry));
@@ -7211,6 +7239,8 @@ int castle_double_array_read(void)
                                         &des_da->levels[level].merge.serdes.mstore_entry->out_tree);
         BUG_ON(da_id != ct_da_id);
         castle_ct_hash_add(des_da->levels[level].merge.serdes.out_tree);
+        castle_printk(LOG_DEBUG, "%s::deserialising merge on da %d level %d with incomplete ct seq %d\n",
+                __FUNCTION__, da_id, level, des_da->levels[level].merge.serdes.out_tree->seq);
         /* the difference btwn unmarshalling a partially complete in-merge ct and a "normal" ct is
            unlike a normal ct (see code below), a partially complete in-merge ct does not get
            added to a DA through cct_add(da, ct, NULL, 1). */
@@ -7332,6 +7362,7 @@ out:
     if (castle_dmser_store) castle_mstore_fini(castle_dmser_store);
     castle_da_store = castle_dmser_store = castle_tree_store = castle_lo_store = NULL;
 
+    castle_printk(LOG_DEBUG, "%s::end.\n", __FUNCTION__);
     return ret;
 }
 
@@ -8378,6 +8409,7 @@ void castle_double_array_merges_fini(void)
 void castle_double_array_fini(void)
 {
     int i;
+    castle_printk(LOG_DEBUG, "%s::start.\n", __FUNCTION__);
     castle_da_hash_destroy();
     castle_ct_hash_destroy();
 
@@ -8385,6 +8417,7 @@ void castle_double_array_fini(void)
 
     for (i = 0; i < NR_CASTLE_DA_WQS; i++)
         destroy_workqueue(castle_da_wqs[i]);
+    castle_printk(LOG_DEBUG, "%s::end.\n", __FUNCTION__);
 }
 
 void castle_da_destroy_complete(struct castle_double_array *da)
