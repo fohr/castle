@@ -448,7 +448,7 @@ void castle_control_collection_snapshot(c_collection_id_t collection,
         ca->version    = ver;
         /* Release the old version */
         castle_version_detach(old_version);
-        *version = ver;
+        *version = old_version;
         *ret     = 0;
     }
     up_write(&ca->lock);
