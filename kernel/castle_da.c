@@ -1228,9 +1228,6 @@ static int castle_ct_merged_iter_rbtree_insert(c_merged_iter_t *iter,
             new_iter = c_iter;
         }
 
-        /* Reset merged version iterator stats. */
-        memset(&iter->stats, 0, sizeof(cv_nonatomic_stats_t));
-
         /* Skip the duplicated entry and clear cached bit of the component
          * iterator. */
         if (dup_iter)
@@ -1283,8 +1280,11 @@ static int _castle_ct_merged_iter_prep_next(c_merged_iter_t *iter,
     int i;
     struct component_iterator *comp_iter;
 
+    /* Reset merged version iterator stats. */
+    memset(&iter->stats, 0, sizeof(cv_nonatomic_stats_t));
+
     debug_iter("No of comp_iters: %u\n", iter->nr_iters);
-    for(i=0; i<iter->nr_iters; i++)
+    for (i = 0; i < iter->nr_iters; i++)
     {
         comp_iter = iter->iterators + i;
 
