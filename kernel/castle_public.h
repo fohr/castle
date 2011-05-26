@@ -566,6 +566,7 @@ struct castle_key_value_list {
 #define CASTLE_SLAVE_SPINNING   (0x00000002)
 #define CASTLE_SLAVE_NEWDEV     (0x00000004)
 #define CASTLE_SLAVE_SSD        (0x00000008)
+#define CASTLE_SLAVE_SB_INVALID (0x00000010)
 
 struct castle_slave_superblock_public {
     /* align:   8 */

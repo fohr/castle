@@ -961,6 +961,10 @@ static int castle_slave_superblock_validate(struct castle_slave *cs,
         (cs_sb->pub.size != get_bd_capacity(cs->bdev) >> (C_BLK_SHIFT - 9)))
         return -7;
 
+    /* This superblock has been invalidated, so it is not safe to use. */
+    if((cs_sb->pub.flags & CASTLE_SLAVE_SB_INVALID))
+        return -8;
+
     return 0;
 }
 

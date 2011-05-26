@@ -5539,6 +5539,72 @@ int castle_cache_extents_flush(struct list_head *flush_list)
 extern atomic_t current_rebuild_seqno;
 
 /**
+ * Mark the previous ondisk checkpoint slot as invalid on all live slaves.
+ *
+ * @return  -ENOMEM if out of memory, -EIO if could not flush, otherwise EXIT_SUCCESS.
+ */
+int castle_slaves_superblock_invalidate(void)
+{
+    c2_block_t                  *c2b;
+    c_ext_pos_t                 cep;
+    char                        *buf;
+    int                         slot;
+    int                         length = (2 * C_BLK_SIZE);
+    struct castle_fs_superblock *fs_sb;
+    struct castle_slave         *slave;
+    struct list_head            *lh;
+
+    fs_sb = castle_fs_superblocks_get();
+    /* If current fs version is N, the slot to invalidate is for fs version N-1. */
+    slot = (fs_sb->fs_version - 1) % 2;
+    castle_fs_superblocks_put(fs_sb, 0);
+
+    rcu_read_lock();
+    list_for_each_rcu(lh, &castle_slaves.slaves)
+    {
+        slave = list_entry(lh, struct castle_slave, list);
+
+        /* Do not attempt bit mod on out-of-service slaves. */
+        if ((test_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags)))
+            continue;
+
+        /* Calculate CEP for the slave's super extent. */
+        cep.ext_id = slave->sup_ext;
+        cep.offset = length * slot;
+
+        /* Get c2b for superblock. */
+        c2b = castle_cache_block_get(cep, 2);
+        if (!c2b)
+            return -ENOMEM;
+
+        write_lock_c2b(c2b);
+        if(!c2b_uptodate(c2b))
+            BUG_ON(submit_c2b_sync(READ, c2b));
+
+        /* The buffer is the superblock. */
+        buf = c2b_buffer(c2b);
+
+        ((struct castle_slave_superblock *)buf)->pub.flags |= CASTLE_SLAVE_SB_INVALID;
+
+        /* Re-calculate checksum for superblock - with checksum bytes set to 0. */
+        ((struct castle_slave_superblock *)buf)->pub.checksum = 0;
+        ((struct castle_slave_superblock *)buf)->pub.checksum =
+                        fletcher32((uint16_t *)buf, sizeof(struct castle_slave_superblock));
+
+        dirty_c2b(c2b);
+        write_unlock_c2b(c2b);
+        put_c2b(c2b);
+
+        /* Flush out to disk. */
+        if (castle_cache_extent_flush(slave->sup_ext, 0, length * 2))
+            return -EIO;
+    }
+    rcu_read_unlock();
+
+    return EXIT_SUCCESS;
+}
+
+/**
  * Checkpoints system state with given frequency. 
  *
  * Notes: Checkpointing maintains metadata structures of all modules in memory. And checkpoints them 
@@ -5650,6 +5716,14 @@ static int castle_periodic_checkpoint(void *unused)
             ret = -3;
             goto out;
         }
+
+        /* Mark previous on-disk checkpoint as invalid. */
+        if (castle_slaves_superblock_invalidate())
+        {
+            ret = -4;
+            goto out;
+        }
+
         castle_checkpoint_version_inc();
 
         castle_printk(LOG_DEVEL, "***** Completed checkpoint of version: %u *****\n", version);
