@@ -4358,6 +4358,10 @@ restart_traverse:
                 if (unlikely(waitlock))
                 {
                     /* We want to block until we have a c2b readlock. */
+#ifdef CASTLE_DEBUG
+                    castle_printk(LOG_WARN, "%s::waiting on c2b locked from: %s:%d\n",
+                        __FUNCTION__, c2b->file, c2b->line);
+#endif
 
                     /* Dirty c2bs should never overlap. */
                     BUG_ON(c2b->cep.offset < last_end_off);
