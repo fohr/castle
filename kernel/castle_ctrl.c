@@ -207,7 +207,7 @@ void castle_control_snapshot(uint32_t dev, int *ret, c_ver_t *version)
         return;
     }
     down_write(&cd->lock);
-    old_version  = cd->version;
+    old_version = cd->version;
     ver = castle_version_new(1,            /* snapshot */
                              cd->version,
                              INVAL_DA,     /* take da_id from the parent */
@@ -225,7 +225,7 @@ void castle_control_snapshot(uint32_t dev, int *ret, c_ver_t *version)
         cd->version    = ver;
         /* Release the old version */
         castle_version_detach(old_version);
-        *version = ver;
+        *version = old_version;
         *ret     = 0;
     }
     up_write(&cd->lock);
