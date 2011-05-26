@@ -481,9 +481,9 @@ int castle_fs_init(void)
     struct   castle_slave *cs;
     struct   castle_fs_superblock fs_sb, *cs_fs_sb;
     int      ret, first, prev_new_dev = -1;
-    int      i, version_found=0, last;
+    int      i, last;
     uint32_t slave_count=0, nr_fs_slaves=0, nr_live_slaves=0, need_rebuild=0;
-    uint32_t bcv=0, last_version_checked=MAX_VERSION, potential_bcv=0;
+    uint32_t bcv=0, max=0, last_version_checked=MAX_VERSION;
 
     castle_printk(LOG_INIT, "Castle FS start.\n");
     if(castle_fs_inited)
@@ -525,6 +525,14 @@ int castle_fs_init(void)
         }
         rcu_read_unlock();
 
+        if (!max) max = version_to_check;
+        if (max && version_to_check < (max - 1))
+        {
+            castle_printk(LOG_INIT, "Error: could not find set of slaves to start filesystem using"
+                                    " fs versions %d or %d.\n", max, max - 1);
+            return -EINVAL;
+        }
+
         /* No lower version found, so this is the lowest. */
         if (version_to_check == last_version_checked)
             last = 1;
@@ -548,48 +556,20 @@ int castle_fs_init(void)
         }
         rcu_read_unlock();
 
-        if (hits == nr_slaves)
+        if (hits == nr_slaves || (hits == nr_slaves-1))
         {
-            /* All slaves support this fs version - use it. */
+            /* Found a set of slaves to support this fs version - use it. */
             bcv = version_to_check;
-            castle_printk(LOG_INIT, "Found Best Common Version %d on all live slaves.\n",
-                    version_to_check);
-            version_found = 1;
+            if (hits == nr_slaves)
+                castle_printk(LOG_INIT, "Found Best Common Version %d on all live slaves.\n",
+                              version_to_check);
+            else
+                castle_printk(LOG_INIT, "Found Best Common Version %d on quorum of live slaves.\n",
+                              version_to_check);
             break;
-        } else if (potential_bcv)
+        } else if (last)
         {
-            /*
-             * The previous fs version was supported by all slaves bar one. As not all slaves
-             * support this version, potential_bcv is the next best version to use.
-             */
-            bcv = potential_bcv;
-            castle_printk(LOG_INIT, "Best Common Filesystem Version %d on quorum of live slaves.\n",
-                    version_to_check);
-            version_found = 1;
-            break;
-        } else if (hits == nr_slaves-1)
-        {
-            /*
-             * All slaves bar one support this fs version. If this is the last version to check,
-             * then this is the version to use. If not, this *could* be the best version
-             * to use, unless the next lower fs version is supported by all slaves. Mark it as
-             * a potential fs version to use, and it will be checked the next time through the loop.
-             */
-            if (last)
-            {
-                castle_printk(LOG_INIT, "Best Common Filesystem Version %d on quorum of "
-                        "live slaves.\n", version_to_check);
-                bcv = version_to_check;
-                version_found = 1;
-                break;
-            }
-            potential_bcv = version_to_check;
-            debug("Found potential Best Common Filesystem Version %d on quorum of live slaves.\n",
-                   potential_bcv);
-        }
-        if (last)
-        {
-            castle_printk(LOG_INIT, "Error: could not find quorum of slaves to start filesystem.\n");
+            castle_printk(LOG_INIT, "Error: could not find set of slaves to start filesystem.\n");
             return -EINVAL;
         }
     }
