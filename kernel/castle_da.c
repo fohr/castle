@@ -5739,7 +5739,7 @@ int castle_double_array_okey_cpu_index(c_vl_okey_t *okey, uint32_t key_len)
     int i;
 
     for (i = 0; i < okey->nr_dims; i++)
-        seed = murmur_hash_32(okey->dims[i], okey->dims[i]->length, seed);
+        seed = murmur_hash_32(okey->dims[i]->key, okey->dims[i]->length, seed);
 
     return seed % castle_double_array_request_cpus();
 }
