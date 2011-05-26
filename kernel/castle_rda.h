@@ -3,28 +3,28 @@
 
 #include "castle_freespace.h"
 
-/** 
+/**
  * Get a slave to allocate next chunk. Slave array determines which slave should be used
  * for the allocation, superchunk ids determine whether to allocate multiple superchunks
  * from a given slave, and which one to use.
  *
- * @param cs                  Array of slave pointers to be filled in.  
- * @param seq_ids             Array of superchunk ids. Ids are never greater than k_factor. 
- * @param reservation_token   Pointer to the reservation token pointer. 
+ * @param cs                  Array of slave pointers to be filled in.
+ * @param seq_ids             Array of superchunk ids. Ids are never greater than k_factor.
+ * @param reservation_token   Pointer to the reservation token pointer.
  * @param state               RDA state structure obtained from @see c_extent_init_t().
- * @param chk_num             Logical chunk number for which we are allocating space. 
+ * @param chk_num             Logical chunk number for which we are allocating space.
  */
 typedef int  (*c_next_slave_get_t)(struct castle_slave                 **cs,
                                    int                                  *schk_ids,
-                                   struct castle_freespace_reservation **reservation_token, 
+                                   struct castle_freespace_reservation **reservation_token,
                                    void                                 *state,
                                    c_chk_t                               chk_num);
 
-typedef void* (*c_extent_init_t)  (c_ext_id_t   ext_id, 
+typedef void* (*c_extent_init_t)  (c_ext_id_t   ext_id,
                                    c_chk_cnt_t  size,
                                    c_rda_type_t rda_type);
 
-typedef void (*c_extent_fini_t)   (c_ext_id_t  ext_id, 
+typedef void (*c_extent_fini_t)   (c_ext_id_t  ext_id,
                                    void       *state);
 
 typedef struct c_rda_spec {

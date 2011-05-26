@@ -87,7 +87,7 @@ typedef uint32_t tree_seq_t;
 #define TREE_INVAL(_t)      ((_t) == INVAL_TREE)
 #define TREE_SEQ_SHIFT      (24)                    /**< Shift for RWCTs (at levels 0,1)        */
 
-#define INVAL_DA            ((da_id_t)-1)
+#define INVAL_DA            ((c_da_t)-1)
 #define DA_INVAL(_da)       ((_da) == INVAL_DA)
 
 typedef uint32_t block_t;
@@ -229,12 +229,12 @@ typedef struct castle_extent_position c_ext_pos_t;
 /**
  * Compare cep1 against cep2.
  *
- * @param cep1	cep to compare
- * @param cep2	cep to compare against
+ * @param cep1 cep to compare
+ * @param cep2 cep to compare against
  *
- * @return -1	cep1 is prior to cep2
- * @return  0	cep1 is the same as cep2
- * @return  1	cep1 is after cep2
+ * @return -1  cep1 is prior to cep2
+ * @return  0  cep1 is the same as cep2
+ * @return  1  cep1 is after cep2
  */
 static inline int EXT_POS_COMP(c_ext_pos_t cep1, c_ext_pos_t cep2)
 {
@@ -250,7 +250,7 @@ static inline int EXT_POS_COMP(c_ext_pos_t cep1, c_ext_pos_t cep2)
     if(cep1.offset > cep2.offset)
         return 1;
 
-	return 0;
+    return 0;
 }
 #define cep_fmt_str                  "(%llu, 0x%llx (chunk %lld chunk_off 0x%llx))"
 #define cep_fmt_str_nl               "(%llu, 0x%llx (chunk %lld chunk_off 0x%llx)).\n"
@@ -279,7 +279,7 @@ typedef enum {
     EXT_T_INVALID,
 } c_ext_type_t;
 
-static USED char *castle_ext_type_str[] = { 
+static USED char *castle_ext_type_str[] = {
     "EXT_T_META_DATA",
     "EXT_T_BTREE_NODES",
     "EXT_T_INTERNAL_NODES",
@@ -290,7 +290,7 @@ static USED char *castle_ext_type_str[] = {
     "EXT_T_INVALID"
 };
 
-/* This type determines the way, this extent has to be handled in case of Low Free-Space (LFS) 
+/* This type determines the way, this extent has to be handled in case of Low Free-Space (LFS)
  * situation. */
 typedef enum {
     LFS_VCT_T_T0_GRP,
@@ -625,17 +625,17 @@ struct castle_btree_type {
     int      (*entry_get)     (struct castle_btree_node *node,
                                int                       idx,
                                void                    **key_p,
-                               version_t                *version_p,
+                               c_ver_t                  *version_p,
                                c_val_tup_t              *cvt_p);
     void     (*entry_add)     (struct castle_btree_node *node,
                                int                       idx,
                                void                     *key,
-                               version_t                 version,
+                               c_ver_t                   version,
                                c_val_tup_t               cvt);
     void     (*entry_replace) (struct castle_btree_node *node,
                                int                       idx,
                                void                     *key,
-                               version_t                 version,
+                               c_ver_t                   version,
                                c_val_tup_t               cvt);
     void     (*entry_disable) (struct castle_btree_node *node,
                                int                       idx);
@@ -692,7 +692,7 @@ struct castle_component_tree {
     atomic64_t          item_count;        /**< Number of items in the tree.                    */
     btree_t             btree_type;
     uint8_t             dynamic;           /**< 1 - dynamic modlist btree, 0 - merge result.    */
-    da_id_t             da;
+    c_da_t              da;
     uint8_t             level;             /**< Level in the doubling array.                    */
     uint16_t            node_sizes[MAX_BTREE_DEPTH];
                                            /**< Size of nodes in each level in the b-tree,
@@ -736,15 +736,15 @@ struct castle_large_obj_entry {
 
 struct castle_dlist_entry {
     /* align:   4 */
-    /* offset:  0 */ da_id_t     id;
-    /*          4 */ version_t   root_version;
+    /* offset:  0 */ c_da_t      id;
+    /*          4 */ c_ver_t     root_version;
     /*          8 */ uint8_t     _unused[248];
     /*        256 */
 } PACKED;
 
 struct castle_clist_entry {
     /* align:   8 */
-    /* offset:  0 */ da_id_t         da_id;
+    /* offset:  0 */ c_da_t          da_id;
     /*          4 */ btree_t         btree_type;
     /*          5 */ uint8_t         dynamic;
     /*          6 */ uint8_t         level;
@@ -775,7 +775,7 @@ struct castle_clist_entry {
  */
 struct castle_dmserlist_entry {
     /* align:   8 */
-    /* offset:  0 */ da_id_t                     da_id;
+    /* offset:  0 */ c_da_t                      da_id;
     /*          4 */ int32_t                     level;
     /* On in_trees... each in_tree can identify which DA and level it belongs to, so it is up to
        the trees to find their DA, not the DA to find it's trees. On any given level there can
@@ -806,7 +806,7 @@ struct castle_dmserlist_entry {
                                                                                 is needed... might
                                                                                 get rid of it */
     /*        813 */ int32_t                     valid_end_idx[MAX_BTREE_DEPTH];
-    /*        853 */ version_t                   valid_version[MAX_BTREE_DEPTH];
+    /*        853 */ c_ver_t                     valid_version[MAX_BTREE_DEPTH];
     /*        893 */ uint8_t                     pad_to_iters[3]; /* beyond here entries are
                                                                      frequently marshalled, so
                                                                      alignment is important */
@@ -842,9 +842,9 @@ struct castle_dmserlist_entry {
  */
 struct castle_vlist_entry {
     /* align:   8 */
-    /* offset:  0 */ version_t    version_nr;
-    /*          4 */ version_t    parent;
-    /*          8 */ da_id_t      da_id;
+    /* offset:  0 */ c_ver_t      version_nr;
+    /*          4 */ c_ver_t      parent;
+    /*          8 */ c_da_t       da_id;
     /*         12 */ uint8_t      _pad[4];
     /*         16 */ uint64_t     size;
     /*         24 */ uint64_t     flags;                /**< Flags for version LEAF & DELETED.  */
@@ -860,7 +860,7 @@ struct castle_vlist_entry {
 #define MAX_NAME_SIZE 128
 struct castle_alist_entry {
     /* align:   4 */
-    /* offset:  0 */ version_t   version;
+    /* offset:  0 */ c_ver_t     version;
     /*          4 */ char        name[MAX_NAME_SIZE];
     /*        132 */ uint8_t     _unused[124];
     /*        256 */
@@ -942,7 +942,7 @@ typedef struct castle_bio_vec {
     c_bio_t                      *c_bio;        /**< Where this IO originated                   */
 
     void                         *key;          /**< Key we want to read                        */
-    version_t                     version;      /**< Version of key we want to read             */
+    c_ver_t                       version;      /**< Version of key we want to read             */
     int                           cpu;          /**< CPU id for this request                    */
     int                           cpu_index;    /**< CPU index (for determining correct CT)     */
     struct castle_component_tree *tree;         /**< CT to search                               */
@@ -1030,9 +1030,9 @@ typedef int  (*castle_iterator_prep_next_t)(void *iter);
           0 -  if the buffer is empty */
 typedef int  (*castle_iterator_has_next_t)(void *iter);
 /* next - gets called only if buffer is not empty */
-typedef void (*castle_iterator_next_t)    (void *iter,
-                                           void **key_p,
-                                           version_t *version_p,
+typedef void (*castle_iterator_next_t)    (void        *iter,
+                                           void       **key_p,
+                                           c_ver_t     *version_p,
                                            c_val_tup_t *cvt_p);
 /* skip - set the low level iterator to skip to the key, but don't run lower
  *        level iterator. It shouldn't block */
@@ -1088,10 +1088,10 @@ typedef struct castle_iterator {
                                               c_ext_pos_t node_cep);
     void                        (*node_start)(struct castle_iterator *c_iter);
     void                        (*each)      (struct castle_iterator *c_iter,
-                                              int index,
-                                              void *key,
-                                              version_t version,
-                                              c_val_tup_t cvt);
+                                              int                     index,
+                                              void                   *key,
+                                              c_ver_t                 version,
+                                              c_val_tup_t             cvt);
     void                        (*node_end)  (struct castle_iterator *c_iter);
     void                        (*end)       (struct castle_iterator *c_iter, int err);
     void                         *private;
@@ -1099,7 +1099,7 @@ typedef struct castle_iterator {
 
     /* Fields below are used by the iterator to conduct the walk */
     int                           type;       /* C_ITER_XXX */
-    version_t                     version;
+    c_ver_t                       version;
     void                         *parent_key; /* The key we followed to get to the block
                                                  on the top of the path/stack */
     union {
@@ -1181,7 +1181,7 @@ typedef struct castle_version_nonatomic_stats {
 typedef struct castle_rq_enumerator {
     struct castle_component_tree *tree;
     int                           err;
-    version_t                     version;
+    c_ver_t                       version;
     struct castle_iterator        iterator;
     volatile int                  iter_completed;
     wait_queue_head_t             iter_wq;
@@ -1222,7 +1222,7 @@ typedef struct castle_merged_iterator {
         int                          cached;
         struct {
             void                    *k;
-            version_t                v;
+            c_ver_t                  v;
             c_val_tup_t              cvt;
         } cached_entry;
         struct rb_node               rb_node;
@@ -1251,7 +1251,7 @@ typedef struct castle_da_rq_iterator {
 #define BLOCKS_HASH_SIZE        (100)
 struct castle_slave_block_cnt
 {
-    version_t        version;
+    c_ver_t          version;
     block_t          cnt;
     struct list_head list;
     c_mstore_key_t   mstore_key;
@@ -1326,17 +1326,17 @@ struct castle_slaves {
 
 /* Castle attachment represents a block device or an attached object collection */
 struct castle_attachment {
-    version_t           version;
+    c_ver_t             version;
     int                 ref_cnt; /* protected by castle_attachments.lock */
     struct rw_semaphore lock;
     int                 device; /* !=0 if block device, == 0 if object collection */
     union {
         struct {
-            struct gendisk  *gd;
+            struct gendisk   *gd;
         } dev; /* Only valid for block devices */
         struct {
-            collection_id_t  id;
-            char            *name;
+            c_collection_id_t id;
+            char             *name;
         } col; /* Only valid for object collections */
     };
 
@@ -1363,7 +1363,7 @@ struct castle_attachments {
 extern struct castle              castle;
 extern struct castle_slaves       castle_slaves;
 extern struct castle_attachments  castle_attachments;
-extern da_id_t                    castle_next_da_id;
+extern c_da_t                     castle_next_da_id;
 
 extern struct workqueue_struct *castle_wqs[2*MAX_BTREE_DEPTH+1];
 #define castle_wq              (castle_wqs[0])
@@ -1374,16 +1374,16 @@ extern struct workqueue_struct *castle_wqs[2*MAX_BTREE_DEPTH+1];
 //#define disk_blk_to_offset(_cdb)     ((_cdb).block * C_BLK_SIZE)
 
 struct castle_attachment*
-                      castle_device_init           (version_t version);
+                      castle_device_init           (c_ver_t version);
 void                  castle_device_free           (struct castle_attachment *cd);
 struct castle_attachment*
                       castle_device_find           (dev_t dev);
 
 struct castle_attachment*
-                      castle_collection_init       (version_t version, char *name);
+                      castle_collection_init       (c_ver_t version, char *name);
 
 struct castle_attachment *
-                      castle_attachment_get        (collection_id_t collection, int rw);
+                      castle_attachment_get        (c_collection_id_t collection, int rw);
 void                  castle_attachment_put        (struct castle_attachment *ca);
 void                  castle_attachment_free       (struct castle_attachment *ca);
 void                  castle_attachment_free_complete(struct castle_attachment *ca);
@@ -1414,9 +1414,9 @@ void                  castle_ext_freespace_init    (c_ext_free_t     *ext_free,
                                                     c_ext_id_t        ext_id);
 
 int                   castle_new_ext_freespace_init(c_ext_free_t     *ext_free,
-                                                    da_id_t           da_id,
+                                                    c_da_t            da_id,
                                                     c_ext_type_t      ext_type,
-                                                    c_byte_off_t      size, 
+                                                    c_byte_off_t      size,
                                                     int               in_tran,
                                                     void              *data,
                                                     c_ext_event_callback_t callback);
@@ -1540,8 +1540,8 @@ typedef int (*castle_object_iter_next_available_t)
 
 typedef struct castle_object_iterator {
     /* Filled in by the client */
-    da_id_t             da_id;
-    version_t           version;
+    c_da_t              da_id;
+    c_ver_t             version;
     c_vl_okey_t        *start_okey;
     c_vl_okey_t        *end_okey;
 
@@ -1555,7 +1555,7 @@ typedef struct castle_object_iterator {
     /* Cached entry, guaranteed to fall in the hypercube */
     int                 cached;
     void               *cached_k;
-    version_t           cached_v;
+    c_ver_t             cached_v;
     c_val_tup_t         cached_cvt;
     castle_iterator_end_io_t end_io;
     castle_object_iter_next_available_t next_available;
@@ -1649,8 +1649,8 @@ typedef enum {
 #define DOUBLE_ARRAY_COMPACTING_BIT         (3)
 #define MIN_DA_SERDES_LEVEL                 (2) /* merges below this level won't be serialised */
 struct castle_double_array {
-    da_id_t                     id;
-    version_t                   root_version;
+    c_da_t                      id;
+    c_ver_t                     root_version;
     rwlock_t                    lock;               /**< Protects levels[].trees lists          */
     struct kobject              kobj;
     unsigned long               flags;
@@ -1836,7 +1836,7 @@ typedef struct castle_version_stats {
  * Maintain statistics about a given version.  Used by merge output.
  */
 typedef struct castle_version_state {
-    version_t                   version;        /**< Version ID.                            */
+    c_ver_t                     version;        /**< Version ID.                            */
     struct castle_version_delete_state2 {
         uint8_t                 occupied:1;     /**< Whether keys exist in this version.    */
         uint8_t                 need_parent:7;  /**< Whether this version depends on parent
@@ -1865,7 +1865,7 @@ typedef struct castle_version_states {
  * Describe changes to per-version stats.
  */
 typedef struct castle_version_stats_adjust {
-    version_t               version;        /**< Version to adjust stats for.                   */
+    c_ver_t                 version;        /**< Version to adjust stats for.                   */
 
     int                     live;           /**< Whether to update live version stats.          */
     cv_states_t            *private;        /**< Whether to update private per-version stats.   */

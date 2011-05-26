@@ -29,14 +29,14 @@ typedef struct castle_cache_block {
     atomic_t                   lock_cnt;
     void                     (*end_io)(struct castle_cache_block *c2b); /**< IO CB handler routine*/
     void                      *private;         /**< Can only be used if c2b is locked            */
-#ifdef CASTLE_DEBUG            
+#ifdef CASTLE_DEBUG
     char                      *file;
     int                        line;
 #endif
 } c2_block_t;
 
 /**********************************************************************************************
- * Locking. 
+ * Locking.
  */
 void __lock_c2b      (c2_block_t *c2b, int write_mode);
 int  __trylock_c2b   (c2_block_t *c2b, int write_mode);
@@ -76,7 +76,7 @@ static inline int read_trylock_c2b(c2_block_t *c2b)
 }
 
 /**********************************************************************************************
- * Dirting & up-to-date. 
+ * Dirting & up-to-date.
  */
 int  c2b_dirty              (c2_block_t *c2b);
 void dirty_c2b              (c2_block_t *c2b);
@@ -92,7 +92,7 @@ void clear_c2b_remap        (c2_block_t *c2b);
 void castle_cache_extent_dirtytree_remove(c_ext_dirtytree_t *dirtytree);
 
 /**********************************************************************************************
- * Refcounts. 
+ * Refcounts.
  */
 static inline void get_c2b(c2_block_t *c2b)
 {
@@ -106,7 +106,7 @@ static inline void put_c2b(c2_block_t *c2b)
 }
 
 /**********************************************************************************************
- * Advising the cache. 
+ * Advising the cache.
  */
 enum c2_advise_bits {
     C2_ADV_cep,
@@ -120,7 +120,7 @@ enum c2_advise_bits {
     C2_ADV_adaptive,
 };
 
-    
+
 typedef uint32_t c2_advise_t;
 #define C2_ADV_CEP          ((c2_advise_t) (1<<C2_ADV_cep))
 #define C2_ADV_EXTENT       ((c2_advise_t) (1<<C2_ADV_extent))
@@ -141,12 +141,12 @@ int castle_cache_advise_clear (c_ext_pos_t s_cep, c2_advise_t advise, int chunks
                                int priority, int debug);
 
 /**********************************************************************************************
- * Misc. 
+ * Misc.
  */
 #define c2b_buffer(_c2b)    ((_c2b)->buffer)
 
 /**********************************************************************************************
- * The 'interesting' cache interface functions 
+ * The 'interesting' cache interface functions
  */
 int         submit_c2b                (int rw, c2_block_t *c2b);
 int         submit_c2b_sync           (int rw, c2_block_t *c2b);
@@ -197,8 +197,8 @@ int                        castle_cache_size_get           (void);
 int                        castle_cache_block_destroy      (c2_block_t *c2b);
 
 /**********************************************************************************************
- * Cache init/fini. 
- */ 
+ * Cache init/fini.
+ */
 int  castle_cache_init(void);
 void castle_cache_fini(void);
 

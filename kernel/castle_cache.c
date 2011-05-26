@@ -44,7 +44,7 @@
 
 
 /**********************************************************************************************
- * Cache descriptor structures (c2b & c2p), and related accessor functions. 
+ * Cache descriptor structures (c2b & c2p), and related accessor functions.
  */
 enum c2b_state_bits {
     C2B_uptodate,           /**< Block is uptodate within the cache.                              */
@@ -104,7 +104,7 @@ C2B_FNS(in_flight, in_flight)
 /* c2p encapsulates multiple memory pages (in order to reduce overheads).
    NOTE: In order for this to work, c2bs must necessarily be allocated in
          integer multiples of c2bs. Otherwise this could happen:
-            // Dirty of sub-c2p 
+            // Dirty of sub-c2p
             c2b = castle_cache_block_get(cep, 1);
             write_lock_c2b(c2b);
             update_c2b(c2b);
@@ -119,7 +119,7 @@ C2B_FNS(in_flight, in_flight)
 #define PAGES_PER_C2P   (1)
 typedef struct castle_cache_page {
     c_ext_pos_t           cep;
-    struct page          *pages[PAGES_PER_C2P]; 
+    struct page          *pages[PAGES_PER_C2P];
     union {
         struct hlist_node hlist;
         struct list_head  list;         /**< Position on freelist/meta-extent reserve freelist. */
@@ -177,16 +177,16 @@ static inline int castle_cache_pages_to_c2ps(int nr_pages)
 {
     /* If nr_pages divides into PAGES_PER_C2P the expression below is fine because:
         let   nr_pages = n * PAGES_PER_C2P;
-        then (nr_pages - 1 ) / PAGES_PER_C2P + 1 = 
+        then (nr_pages - 1 ) / PAGES_PER_C2P + 1 =
              (n * PAGES_PER_C2P - 1) / PAGES_PER_C2P + 1 =
              (n - 1) + 1 =
               n
        Otherwise, nr_pages doesn't divide into PAGES_PER_C2P, the expression is still ok:
-        let   nr_pages = n * PAGES_PER_C2P + k, where k=[1, PAGES_PER_C2P-1] 
+        let   nr_pages = n * PAGES_PER_C2P + k, where k=[1, PAGES_PER_C2P-1]
         then (nr_pages - 1) / PAGES_PER_C2P + 1 =
              (n * PAGES_PER_C2P + k - 1) / PAGES_PER_C2P + 1 =
               n + 1
-     */ 
+     */
     return (nr_pages - 1) / PAGES_PER_C2P + 1;
 }
 
@@ -205,7 +205,7 @@ static inline int castle_cache_c2b_to_pages(c2_block_t *c2b)
         c2b_for_each_c2p_end(c2p, cep, c2b_to_iterate_over)
     Similarily for iterating over pages.
     NOTE: continue in $(block of code) musn't use continue, because this
-          would skip the block of code in c2b_for_each_c2p_end(). 
+          would skip the block of code in c2b_for_each_c2p_end().
  */
 #define c2b_for_each_c2p_start(_c2p, _cep, _c2b)                         \
 {                                                                        \
@@ -214,8 +214,8 @@ static inline int castle_cache_c2b_to_pages(c2_block_t *c2b)
     _cep = (_c2b)->cep;                                                  \
     for(_a=0; _a<_nr_c2ps; _a++)                                         \
     {                                                                    \
-        _c2p = (_c2b)->c2ps[_a]; 
- 
+        _c2p = (_c2b)->c2ps[_a];
+
 #define c2b_for_each_c2p_end(_c2p, _cep, _c2b)                           \
         (_cep).offset += (PAGES_PER_C2P * PAGE_SIZE);                    \
     }                                                                    \
@@ -242,7 +242,7 @@ static inline int castle_cache_c2b_to_pages(c2_block_t *c2b)
 }
 
 /**********************************************************************************************
- * Static variables. 
+ * Static variables.
  */
 #define               CASTLE_CACHE_MIN_SIZE         25      /* In MB */
 #define               CASTLE_CACHE_MIN_HARDPIN_SIZE 1000    /* In MB */
@@ -311,11 +311,11 @@ static DECLARE_WAIT_QUEUE_HEAD(castle_cache_page_reservelist_wq);   /**< Reserve
 static DECLARE_WAIT_QUEUE_HEAD(castle_cache_block_reservelist_wq);  /**< Reservelist c2b waiters  */
 
 #define CASTLE_CACHE_VMAP_PGS   256
-static struct page            *castle_cache_vmap_pgs[CASTLE_CACHE_VMAP_PGS]; 
+static struct page            *castle_cache_vmap_pgs[CASTLE_CACHE_VMAP_PGS];
 static           DECLARE_MUTEX(castle_cache_vmap_lock);
 
 struct task_struct     *castle_cache_flush_thread;
-static DECLARE_WAIT_QUEUE_HEAD(castle_cache_flush_wq); 
+static DECLARE_WAIT_QUEUE_HEAD(castle_cache_flush_wq);
 static atomic_t                castle_cache_flush_seq;
 
 static atomic_t                castle_cache_read_stats = ATOMIC_INIT(0);
@@ -334,12 +334,12 @@ int                            checkpoint_frequency = 60;        /* Checkpoint d
 
 struct                  task_struct  *checkpoint_thread;
 /**********************************************************************************************
- * Prototypes. 
+ * Prototypes.
  */
 static void c2_pref_c2b_destroy(c2_block_t *c2b);
 
 /**********************************************************************************************
- * Core cache. 
+ * Core cache.
  */
 
 /**
@@ -354,21 +354,21 @@ void castle_cache_stats_print(int verbose)
     int writes = atomic_read(&castle_cache_write_stats);
     atomic_sub(reads, &castle_cache_read_stats);
     atomic_sub(writes, &castle_cache_write_stats);
-    
+
     if (verbose)
-        castle_printk(LOG_PERF, "castle_cache_stats_timer_tick: %d, %d, %d, %d, %d\n", 
+        castle_printk(LOG_PERF, "castle_cache_stats_timer_tick: %d, %d, %d, %d, %d\n",
             atomic_read(&castle_cache_dirty_pages),
             atomic_read(&castle_cache_clean_pages),
             castle_cache_page_freelist_size * PAGES_PER_C2P,
             reads, writes);
-    castle_trace_cache(TRACE_VALUE, 
-                       TRACE_CACHE_CLEAN_PGS_ID, 
+    castle_trace_cache(TRACE_VALUE,
+                       TRACE_CACHE_CLEAN_PGS_ID,
                        atomic_read(&castle_cache_clean_pages));
-    castle_trace_cache(TRACE_VALUE, 
-                       TRACE_CACHE_DIRTY_PGS_ID, 
+    castle_trace_cache(TRACE_VALUE,
+                       TRACE_CACHE_DIRTY_PGS_ID,
                        atomic_read(&castle_cache_dirty_pages));
-    castle_trace_cache(TRACE_VALUE, 
-                       TRACE_CACHE_FREE_PGS_ID, 
+    castle_trace_cache(TRACE_VALUE,
+                       TRACE_CACHE_FREE_PGS_ID,
                        castle_cache_page_freelist_size * PAGES_PER_C2P);
     castle_trace_cache(TRACE_VALUE,
                        TRACE_CACHE_RESERVE_PGS_ID,
@@ -383,7 +383,7 @@ void castle_cache_stats_print(int verbose)
                        TRACE_CACHE_RESERVE_BLKS_ID,
                        atomic_read(&castle_cache_block_reservelist_size));
     castle_trace_cache(TRACE_VALUE,
-                       TRACE_CACHE_SOFTPIN_BLKS_ID, 
+                       TRACE_CACHE_SOFTPIN_BLKS_ID,
                        atomic_read(&castle_cache_cleanlist_softpin_size));
     count = atomic_read(&castle_cache_block_victims);
     atomic_sub(count, &castle_cache_block_victims);
@@ -461,7 +461,7 @@ static USED int c2p_read_locked(c2_page_t *c2p)
 
 static USED int c2p_locked(c2_page_t *c2p)
 {
-    return rwsem_is_locked(&c2p->lock); 
+    return rwsem_is_locked(&c2p->lock);
 }
 
 static void lock_c2p(c2_page_t *c2p, int write)
@@ -580,7 +580,7 @@ int __trylock_c2b(c2_block_t *c2b, int write)
         success_cnt++;
     }
     c2b_for_each_c2p_end(c2p, cep_unused, c2b)
-    
+
     /* Succeeded locking all c2ps. Make sure that c2b counter is updated. */
     lock_c2b_counter(c2b, write);
 
@@ -590,7 +590,7 @@ fail_out:
     c2b_for_each_c2p_start(c2p, cep_unused, c2b)
     {
         if(success_cnt == 0)
-            return 0; 
+            return 0;
         unlock_c2p(c2p, write);
         success_cnt--;
     }
@@ -606,7 +606,7 @@ static inline void __unlock_c2b(c2_block_t *c2b, int write)
     c_ext_pos_t cep_unused;
     c2_page_t *c2p;
 
-#ifdef CASTLE_DEBUG    
+#ifdef CASTLE_DEBUG
     if (write)
     {
         c2b->file = "none";
@@ -967,7 +967,7 @@ void clean_c2b(c2_block_t *c2b)
 void update_c2b(c2_block_t *c2b)
 {
     int i, nr_c2ps;
-    
+
     BUG_ON(!c2b_write_locked(c2b));
 
     /* Update all c2ps. */
@@ -1003,7 +1003,7 @@ static void c2b_remaining_io_sub(int rw, int nr_pages, c2_block_t *c2b)
     castle_extent_put(c2b->cep.ext_id);
 
     /* At least one of the bios for this c2b had an error. Handle that first. */
-    if(c2b_bio_error(c2b))     
+    if(c2b_bio_error(c2b))
     {
         clear_c2b_bio_error(c2b);
         if (!c2b_no_resubmit(c2b)) /* This c2b can be resubmitted */
@@ -1040,16 +1040,16 @@ static void c2b_multi_io_end(struct bio *bio, int err)
     struct castle_slave *slave, *io_slave;
     c2_block_t          *c2b = bio_info->c2b;
     struct list_head    *lh;
-#ifdef CASTLE_DEBUG    
+#ifdef CASTLE_DEBUG
     unsigned long flags;
-    
+
     /* In debugging mode force the end_io to complete in atomic */
     local_irq_save(flags);
 #endif
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,18)
     if (bio->bi_size)
     {
-#ifdef CASTLE_DEBUG    
+#ifdef CASTLE_DEBUG
         local_irq_restore(flags);
 #endif
         return 1;
@@ -1113,14 +1113,14 @@ static void c2b_multi_io_end(struct bio *bio, int err)
         set_c2b_bio_error(((struct bio_info *)bio->bi_private)->c2b);
     }
 
-    /* Record how many pages we've completed, potentially ending the c2b io. */ 
+    /* Record how many pages we've completed, potentially ending the c2b io. */
     c2b_remaining_io_sub(bio_info->rw, bio_info->nr_pages, c2b);
-#ifdef CASTLE_DEBUG    
+#ifdef CASTLE_DEBUG
     local_irq_restore(flags);
 #endif
     castle_free(bio_info);
     bio_put(bio);
-    
+
     /*
      * io_in_flight logic. The ordering of the dec and read of io_in_flight and the test
      * of CASTLE_SLAVE_OOS_BIT is important.
@@ -1149,7 +1149,7 @@ int chk_valid(c_disk_chk_t chk)
 {
     struct castle_slave *cs = castle_slave_find_by_uuid(chk.slave_id);
     c_chk_t size;
-    
+
     if (!cs)
     {
         castle_printk(LOG_DEBUG, "Couldn't find disk with uuid: %u\n", chk.slave_id);
@@ -1175,16 +1175,16 @@ int chk_valid(c_disk_chk_t chk)
  * Allocate bio for pages & hand-off to Linux block layer.
  *
  * @param disk_chk  Chunk to be IOed to
- * @param pages     Array of pages to be used for IO 
+ * @param pages     Array of pages to be used for IO
  * @param nr_pages  Size of @pages array
  *
  * @return          number of pages remaining un-submitted if slave is,
  *                  or becomes, out-of-service. Otherwise EXIT_SUCCESS.
  */
-int submit_c2b_io(int           rw, 
-                   c2_block_t   *c2b, 
-                   c_ext_pos_t   cep, 
-                   c_disk_chk_t  disk_chk, 
+int submit_c2b_io(int           rw,
+                   c2_block_t   *c2b,
+                   c_ext_pos_t   cep,
+                   c_disk_chk_t  disk_chk,
                    struct page **pages,
                    int           nr_pages)
 {
@@ -1194,7 +1194,7 @@ int submit_c2b_io(int           rw,
     struct bio_info *bio_info;
     int i, j, batch;
 
-#ifdef CASTLE_DEBUG    
+#ifdef CASTLE_DEBUG
     /* Check that we are submitting IO to the right ceps. */
     c_ext_pos_t dcep = cep;
     c2_page_t *c2p;
@@ -1217,8 +1217,8 @@ int submit_c2b_io(int           rw,
         dcep.offset += PAGE_SIZE;
     }
 #endif
-  
-    /* Work out the slave structure. */ 
+
+    /* Work out the slave structure. */
     cs = castle_slave_find_by_uuid(disk_chk.slave_id);
     debug("slave_id=%d, cs=%p\n", disk_chk.slave_id, cs);
     BUG_ON(!cs);
@@ -1317,7 +1317,7 @@ static int c_io_next_slave_get(c2_block_t *c2b, c_disk_chk_t *chunks, int k_fact
      *
      * At the moment, when prefetching, avoid using the first copy, which may be stored on SSDs.
      */
-    try_second = c2b_prefetch(c2b); 
+    try_second = c2b_prefetch(c2b);
     /* Loop around, searching for disks in service. */
     disk_idx = -1;
     for(i=0; i<k_factor; i++)
@@ -1337,12 +1337,12 @@ out:
     if(disk_idx >= 0)
     {
         *idx = disk_idx;
-        return EXIT_SUCCESS;         
+        return EXIT_SUCCESS;
     }
     BUG_ON(disk_idx != -1);
     /* Could not find a slave to read from. */
     return -ENOENT;
-            
+
 }
 
 /**
@@ -1456,7 +1456,7 @@ retry:
 
 static inline void c_io_array_init(c_io_array_t *array)
 {
-    array->start_cep = INVAL_EXT_POS; 
+    array->start_cep = INVAL_EXT_POS;
     array->chunk = INVAL_CHK;
     array->next_idx = 0;
 }
@@ -1464,9 +1464,9 @@ static inline void c_io_array_init(c_io_array_t *array)
 /**
  * Add page to I/O array.
  */
-static inline int c_io_array_page_add(c_io_array_t *array, 
-                                      c_ext_pos_t cep, 
-                                      c_chk_t logical_chunk, 
+static inline int c_io_array_page_add(c_io_array_t *array,
+                                      c_ext_pos_t cep,
+                                      c_chk_t logical_chunk,
                                       struct page *page)
 {
     c_ext_pos_t cur_cep;
@@ -1480,11 +1480,11 @@ static inline int c_io_array_page_add(c_io_array_t *array,
         cur_cep = array->start_cep;
         cur_cep.offset += array->next_idx * PAGE_SIZE;
         if(logical_chunk != array->chunk)
-            return -2; 
+            return -2;
         if(!EXT_POS_EQUAL(cur_cep, cep))
             return -3;
     }
-    /* If it is a new array, initialise start_cep and chunk. */ 
+    /* If it is a new array, initialise start_cep and chunk. */
     if(array->next_idx == 0)
     {
         array->start_cep = cep;
@@ -1663,7 +1663,7 @@ static int submit_c2b_rda(int rw, c2_block_t *c2b)
     c_disk_chk_t  chunks[k_factor];
     void         *ext_p;
 
-    debug("Submitting c2b "cep_fmt_str", for %s\n", 
+    debug("Submitting c2b "cep_fmt_str", for %s\n",
             __cep2str(c2b->cep), (rw == READ) ? "read" : "write");
 
     io_array = kmem_cache_alloc(castle_io_array_cache, GFP_KERNEL);
@@ -1683,19 +1683,19 @@ static int submit_c2b_rda(int rw, c2_block_t *c2b)
     {
         cur_chk = CHUNK(cur_cep.offset);
         debug("Processing a c2b page, last_chk=%d, cur_chk=%d\n", last_chk, cur_chk);
-        
+
         /* Do not read into uptodate pages, do not write out of clean pages. */
         skip_c2p = ((rw == READ)  && c2p_uptodate(c2p)) ||
                    ((rw == WRITE) && !c2p_dirty(c2p));
         debug("%s %s on c2p->cep="cep_fmt_str_nl,
                     (skip_c2p ? "Skipping" : "Not skipping"),
-                    (rw == READ ? "read" : "write"), 
+                    (rw == READ ? "read" : "write"),
                     cep2str(c2p->cep));
         /* Move to the next page, if we are not supposed to do IO on this page. */
         if(skip_c2p)
             goto next_page;
 
-        /* If we are not skipping, add the page to io array. */ 
+        /* If we are not skipping, add the page to io array. */
         if(c_io_array_page_add(io_array, cur_cep, cur_chk, page) != EXIT_SUCCESS)
         {
             /* Failed to add this page to the array (see return code for reason).
@@ -1703,7 +1703,7 @@ static int submit_c2b_rda(int rw, c2_block_t *c2b)
              * attempt to add the page to the new array.
              *
              * We've got physical chunks for last_chk (logical chunk), this should
-               match with the logical chunk stored in io_array. */ 
+               match with the logical chunk stored in io_array. */
             BUG_ON(io_array->chunk != last_chk);
             /* Submit the array. */
             ret = c_io_array_submit(rw, c2b, chunks, k_factor, io_array, ext_id);
@@ -1721,8 +1721,8 @@ static int submit_c2b_rda(int rw, c2_block_t *c2b)
             c_io_array_init(io_array);
             BUG_ON(c_io_array_page_add(io_array, cur_cep, cur_chk, page));
         }
-         
-        /* Update chunk map when we move to a new chunk. */ 
+
+        /* Update chunk map when we move to a new chunk. */
         if(cur_chk != last_chk)
         {
             int ret;
@@ -1767,7 +1767,7 @@ next_page:
     }
     /* Drop the 1 ref. */
     c2b_remaining_io_sub(rw, 1, c2b);
-    
+
 out:
     kmem_cache_free(castle_io_array_cache, io_array);
     return ret;
@@ -1794,7 +1794,7 @@ int submit_c2b(int rw, c2_block_t *c2b)
     BUG_ON((rw == WRITE) && !c2b_locked(c2b));
     if (unlikely(BLOCK_OFFSET(c2b->cep.offset)))
     {
-        castle_printk(LOG_ERROR, "RDA %s: nr_pages - %u cep: "cep_fmt_str_nl, 
+        castle_printk(LOG_ERROR, "RDA %s: nr_pages - %u cep: "cep_fmt_str_nl,
                 (rw == READ)?"Read":"Write", c2b->nr_pages, __cep2str(c2b->cep));
         BUG();
     }
@@ -1865,10 +1865,10 @@ static inline unsigned long castle_cache_hash_idx(c_ext_pos_t cep, int nr_bucket
 
 static inline void castle_cache_page_hash_idx(c_ext_pos_t cep, int *hash_idx_p, int *lock_idx_p)
 {
-    int hash_idx; 
+    int hash_idx;
 
     hash_idx = castle_cache_hash_idx(cep, castle_cache_page_hash_buckets);
-    
+
     if(hash_idx_p)
         *hash_idx_p = hash_idx;
     if(lock_idx_p)
@@ -1878,7 +1878,7 @@ static inline void castle_cache_page_hash_idx(c_ext_pos_t cep, int *hash_idx_p, 
 /* Must be called with the page_hash lock held */
 static inline void __castle_cache_c2p_get(c2_page_t *c2p)
 {
-#ifdef CASTLE_DEBUG 
+#ifdef CASTLE_DEBUG
     int lock_idx;
 
     castle_cache_page_hash_idx(c2p->cep, NULL, &lock_idx);
@@ -1912,7 +1912,7 @@ static c2_page_t* castle_cache_page_hash_insert_get(c2_page_t *c2p)
 
     /* Work out the index, and the lock. */
     castle_cache_page_hash_idx(c2p->cep, &idx, &lock_idx);
-    lock = castle_cache_page_hash_locks + lock_idx; 
+    lock = castle_cache_page_hash_locks + lock_idx;
 
     /* Check if already in the hash */
     spin_lock_irq(lock);
@@ -1932,14 +1932,14 @@ static c2_page_t* castle_cache_page_hash_insert_get(c2_page_t *c2p)
     }
 }
 
-#define MIN(_a, _b)     ((_a) < (_b) ? (_a) : (_b)) 
+#define MIN(_a, _b)     ((_a) < (_b) ? (_a) : (_b))
 static inline void castle_cache_c2p_put(c2_page_t *c2p, struct list_head *accumulator)
 {
     spinlock_t *lock;
     int idx, lock_idx;
 
     castle_cache_page_hash_idx(c2p->cep, &idx, &lock_idx);
-    lock = castle_cache_page_hash_locks + lock_idx; 
+    lock = castle_cache_page_hash_locks + lock_idx;
     spin_lock_irq(lock);
 
     c2p->count--;
@@ -2213,7 +2213,7 @@ static c2_page_t** castle_cache_page_freelist_get(int nr_pages)
         debug("Freelist too small to allocate %d pages.\n", nr_pages);
         return NULL;
     }
-    
+
     i = 0;
     list_for_each_safe(lh, lt, &castle_cache_page_freelist)
     {
@@ -2355,9 +2355,9 @@ static void castle_cache_page_init(c_ext_pos_t cep,
     c2p->state = INIT_C2P_BITS;
 }
 
-static int castle_cache_pages_get(c_ext_pos_t cep, 
+static int castle_cache_pages_get(c_ext_pos_t cep,
                                   c2_page_t **c2ps,
-                                  int nr_c2ps) 
+                                  int nr_c2ps)
 {
     struct list_head *lh, *lt;
     LIST_HEAD(freed_c2ps);
@@ -2376,7 +2376,7 @@ static int castle_cache_pages_get(c_ext_pos_t cep,
         if(c2p != c2ps[i])
         {
             debug("Found c2p in the hash\n");
-            list_add(&c2ps[i]->list, &freed_c2ps); 
+            list_add(&c2ps[i]->list, &freed_c2ps);
             freed_c2ps_cnt++;
             c2ps[i] = c2p;
             BUG_ON(c2p == NULL);
@@ -2418,7 +2418,7 @@ static int castle_cache_pages_get(c_ext_pos_t cep,
  * to fully initialise all fields.
  */
 static void castle_cache_block_init(c2_block_t *c2b,
-                                    c_ext_pos_t cep, 
+                                    c_ext_pos_t cep,
                                     c2_page_t **c2ps,
                                     int nr_pages)
 {
@@ -2443,7 +2443,7 @@ static void castle_cache_block_init(c2_block_t *c2b,
     BUG_ON(atomic_read(&c2b->lock_cnt) != 0);
     BUG_ON(c2b->state.softpin_cnt != 0);
 #endif
-    /* Init the page array (note: this may substitute some c2ps, 
+    /* Init the page array (note: this may substitute some c2ps,
        if they aleady exist in the hash. */
     uptodate = castle_cache_pages_get(cep, c2ps, castle_cache_pages_to_c2ps(nr_pages));
     /* Initialise c2b. */
@@ -2456,20 +2456,20 @@ static void castle_cache_block_init(c2_block_t *c2b,
     i = 0;
     debug("c2b->nr_pages=%d\n", nr_pages);
     down(&castle_cache_vmap_lock);
-    c2b_for_each_page_start(page, c2p, dcep, c2b) 
+    c2b_for_each_page_start(page, c2p, dcep, c2b)
     {
 #ifdef CASTLE_DEBUG
         debug("Adding c2p id=%d, to cep "cep_fmt_str_nl,
                 c2p->id, cep2str(dcep));
 #endif
-        castle_cache_vmap_pgs[i++] = page; 
+        castle_cache_vmap_pgs[i++] = page;
     }
-    c2b_for_each_page_end(page, c2p, dcep, c2b) 
+    c2b_for_each_page_end(page, c2p, dcep, c2b)
     debug("Added %d pages.\n", i);
     BUG_ON(i != nr_pages);
 
     if (nr_pages == 1)
-        c2b->buffer = pfn_to_kaddr(page_to_pfn(castle_cache_vmap_pgs[0])); 
+        c2b->buffer = pfn_to_kaddr(page_to_pfn(castle_cache_vmap_pgs[0]));
     else if (nr_pages <= CASTLE_VMAP_PGS)
             c2b->buffer = castle_vmap_fast_map(castle_cache_vmap_pgs, i);
         else
@@ -3108,35 +3108,35 @@ static struct rb_root           c2p_rb_root = RB_ROOT;      /**< RB tree of c2_p
 static  DECLARE_WAIT_QUEUE_HEAD(castle_cache_prefetch_wq);  /**< _in_flight wait queue.           */
 static atomic_t                 castle_cache_prefetch_in_flight = ATOMIC_INIT(0);   /**< Number of
                                                                  outstanding prefetch IOs.        */
-    
+
 static USED char* c2_pref_window_to_str(c2_pref_window_t *window)
 {
 #define PREF_WINDOW_STR_LEN     (128)
     static char win_str[PREF_WINDOW_STR_LEN];
     c_ext_pos_t cep;
-    
+
     cep.ext_id = window->ext_id;
     cep.offset = window->start_off;
 
-    snprintf(win_str, PREF_WINDOW_STR_LEN, 
+    snprintf(win_str, PREF_WINDOW_STR_LEN,
         "%s%s%s pref win: {cep="cep_fmt_str", start_off=0x%llx (%lld), "
         "end_off=0x%llx (%lld), pref_pages=%d (%lld), st=0x%.2x, cnt=%d",
         window->state & PREF_WINDOW_NEW ? "N": "",
         window->state & PREF_WINDOW_SOFTPIN ? "S": "",
         window->state & PREF_WINDOW_ADAPTIVE ? "A" : "",
-        cep2str(cep), 
-        window->start_off, 
+        cep2str(cep),
+        window->start_off,
         CHUNK(window->start_off),
-        window->end_off, 
+        window->end_off,
         CHUNK(window->end_off),
-        window->pref_pages, 
+        window->pref_pages,
         window->pref_pages / BLKS_PER_CHK,
-        window->state, 
+        window->state,
         atomic_read(&window->count));
     win_str[PREF_WINDOW_STR_LEN-1] = '\0';
 
     return win_str;
-} 
+}
 
 /**
  * Get a c2b for use by the prefetcher setting necessary bits.
@@ -3571,8 +3571,8 @@ static void c2_pref_window_dump(void)
  * @return A freshly allocated & initialised prefetch window.
  * @return NULL if we could not allocate enough memory.
  */
-static c2_pref_window_t * c2_pref_window_alloc(c2_pref_window_t *window, 
-                                               c_ext_pos_t cep, 
+static c2_pref_window_t * c2_pref_window_alloc(c2_pref_window_t *window,
+                                               c_ext_pos_t cep,
                                                c2_advise_t advise)
 {
     window = castle_malloc(sizeof(c2_pref_window_t), GFP_KERNEL);
@@ -3621,7 +3621,7 @@ static c2_pref_window_t * c2_pref_window_alloc(c2_pref_window_t *window,
 static c2_pref_window_t* c2_pref_window_get(c_ext_pos_t cep, c2_advise_t advise)
 {
     c2_pref_window_t *window;
-    
+
     /* Look for existing prefetch window. */
     pref_debug(0, "Looking for window for cep="cep_fmt_str_nl, cep2str(cep));
     if ((window = c2_pref_window_find(cep, advise, 0)))
@@ -3644,7 +3644,7 @@ static c2_pref_window_t* c2_pref_window_get(c_ext_pos_t cep, c2_advise_t advise)
         return NULL;
     }
 
-    /* Return the newly allocate prefetch window. */ 
+    /* Return the newly allocate prefetch window. */
     return window;
 }
 
@@ -4239,7 +4239,7 @@ void castle_cache_debug_fini(void)
     castle_cache_debug_counts = 0;
 }
 #else
-#define castle_cache_debug_fini()    ((void)0) 
+#define castle_cache_debug_fini()    ((void)0)
 #endif
 
 /**********************************************************************************************
@@ -4616,7 +4616,7 @@ static int castle_cache_hashes_init(void)
 
     if(!castle_cache_page_hash || !castle_cache_page_hash_locks || !castle_cache_block_hash)
         return -ENOMEM;
-    
+
     /* Init the tables. */
     for(i=0; i<castle_cache_page_hash_buckets; i++)
         INIT_HLIST_HEAD(&castle_cache_page_hash[i]);
@@ -4639,7 +4639,7 @@ static void castle_cache_hashes_fini(void)
     c2_block_t *c2b;
     int i;
 
-    if(!castle_cache_block_hash || !castle_cache_page_hash) 
+    if(!castle_cache_block_hash || !castle_cache_page_hash)
     {
         if(castle_cache_block_hash)
             castle_vfree(castle_cache_block_hash);
@@ -4694,7 +4694,7 @@ static void castle_cache_hashes_fini(void)
             castle_printk(LOG_ERROR, "c2p->id=%d not freed, count=%d, cep="cep_fmt_str_nl,
                 c2p->id, c2p->count, cep2str(c2p->cep));
             BUG();
-        } 
+        }
     }
 #endif
 }
@@ -4708,7 +4708,7 @@ static int castle_cache_c2p_init(c2_page_t *c2p)
     /* Allocate pages for this c2p */
     for(j=0; j<PAGES_PER_C2P; j++)
     {
-        struct page *page = alloc_page(GFP_KERNEL); 
+        struct page *page = alloc_page(GFP_KERNEL);
 
         if(!page)
             goto err_out;
@@ -4788,7 +4788,7 @@ static int castle_cache_freelists_init(void)
     BUG_ON(CASTLE_CACHE_RESERVELIST_QUOTA >= castle_cache_block_freelist_size);
     for (i = 0; i < castle_cache_block_freelist_size; i++)
     {
-        c2_block_t *c2b = castle_cache_blks + i; 
+        c2_block_t *c2b = castle_cache_blks + i;
 
         castle_cache_c2b_init(c2b);
 
@@ -4818,9 +4818,9 @@ static void castle_cache_freelists_fini(void)
     struct list_head *l, *t;
     c2_page_t *c2p;
     int i;
-#ifdef CASTLE_DEBUG     
+#ifdef CASTLE_DEBUG
     c2_block_t *c2b;
-#endif    
+#endif
 
     if (!castle_cache_blks || !castle_cache_pgs)
     {
@@ -4840,7 +4840,7 @@ static void castle_cache_freelists_fini(void)
             __free_page(c2p->pages[i]);
     }
 
-#ifdef CASTLE_DEBUG     
+#ifdef CASTLE_DEBUG
     list_splice(&castle_cache_block_reservelist, &castle_cache_block_freelist);
     list_for_each_safe(l, t, &castle_cache_block_freelist)
     {
@@ -4857,11 +4857,11 @@ static void castle_cache_freelists_fini(void)
  */
 #define CASTLE_MSTORE_ENTRY_DELETED     (1<<1)
 struct castle_mstore_entry {
-    /* align:   1 */ 
+    /* align:   1 */
     /* offset:  0 */ uint8_t flags;
     /*          1 */ uint8_t _unused[7];
     /*          8 */ char payload[0];
-    /*          8 */ 
+    /*          8 */
 } PACKED;
 
 static inline struct castle_mstore_entry* castle_mstore_entry_get(struct castle_mstore *mstore,
@@ -4869,7 +4869,7 @@ static inline struct castle_mstore_entry* castle_mstore_entry_get(struct castle_
                                                                   int idx)
 /* Works out where a given entry is in an mstore */
 {
-    return (struct castle_mstore_entry *)(node->payload + mstore->entry_size * idx); 
+    return (struct castle_mstore_entry *)(node->payload + mstore->entry_size * idx);
 }
 
 static inline char* castle_mstore_entry_payload_get(struct castle_mstore *mstore,
@@ -4890,7 +4890,7 @@ static void castle_mstore_iterator_validate(struct castle_mstore_iter *iter)
 {
     struct castle_mlist_node *node = c2b_buffer(iter->node_c2b);
 
-    if((node->magic != MLIST_NODE_MAGIC) || 
+    if((node->magic != MLIST_NODE_MAGIC) ||
        (node->used  >  node->capacity))
     {
         castle_printk(LOG_WARN, "Trying to iterate over non-mlist node or over-full node.\n");
@@ -4907,7 +4907,7 @@ static void castle_mstore_iterator_advance(struct castle_mstore_iter *iter)
     struct castle_mstore_entry *mentry;
     c2_block_t *c2b;
 
-again: 
+again:
     c2b = NULL;
     debug_mstore("Advancing the iterator.\n");
 
@@ -4930,7 +4930,7 @@ again:
             BUG_ON(node->used != node->capacity);
             c2b = castle_cache_page_block_get(node->next);
             write_lock_c2b(c2b);
-            if(!c2b_uptodate(c2b)) 
+            if(!c2b_uptodate(c2b))
             {
                 debug_mstore("Scheduling a read.\n");
                 BUG_ON(submit_c2b_sync(READ, c2b));
@@ -4942,11 +4942,11 @@ again:
             iter->store->last_node_cep    = iter->node_c2b->cep;
             iter->store->last_node_unused = node->capacity - node->used;
             up(&iter->store->mutex);
-            debug_mstore("End of the list, last_node_unused=%d.\n", 
+            debug_mstore("End of the list, last_node_unused=%d.\n",
                     iter->store->last_node_unused);
         }
         debug_mstore("Unlocking prev node.\n");
-        write_unlock_c2b(iter->node_c2b); 
+        write_unlock_c2b(iter->node_c2b);
         put_c2b(iter->node_c2b);
         iter->node_c2b = c2b;
         iter->node_idx = -1;
@@ -4990,23 +4990,23 @@ void castle_mstore_iterator_next(struct castle_mstore_iter *iter,
     {
         key->cep = iter->node_c2b->cep;
         key->idx = iter->node_idx;
-        debug_mstore("Key: cep="cep_fmt_str", idx=%d.\n", 
+        debug_mstore("Key: cep="cep_fmt_str", idx=%d.\n",
                 cep2str(key->cep), key->idx);
     }
-    debug_mstore("Advancing the iterator.\n"); 
+    debug_mstore("Advancing the iterator.\n");
     castle_mstore_iterator_advance(iter);
 }
 
 void castle_mstore_iterator_destroy(struct castle_mstore_iter *iter)
 {
-    debug_mstore("Destroying the iterator.\n"); 
+    debug_mstore("Destroying the iterator.\n");
     if(iter->node_c2b)
     {
-        debug_mstore("Unlocking the node.\n"); 
+        debug_mstore("Unlocking the node.\n");
         write_unlock_c2b(iter->node_c2b);
         put_c2b(iter->node_c2b);
     }
-    debug_mstore("Freeing.\n"); 
+    debug_mstore("Freeing.\n");
     castle_free(iter);
 }
 
@@ -5016,15 +5016,15 @@ struct castle_mstore_iter* castle_mstore_iterate(struct castle_mstore *store)
     struct castle_mstore_iter *iter;
     c_ext_pos_t  list_cep;
 
-    debug_mstore("Creating the iterator.\n"); 
+    debug_mstore("Creating the iterator.\n");
     iter = castle_zalloc(sizeof(struct castle_mstore_iter), GFP_KERNEL);
     if(!iter)
         return NULL;
 
     iter->store = store;
-    fs_sb = castle_fs_superblocks_get(); 
+    fs_sb = castle_fs_superblocks_get();
     list_cep = fs_sb->mstore[store->store_id];
-    castle_fs_superblocks_put(fs_sb, 0); 
+    castle_fs_superblocks_put(fs_sb, 0);
     debug_mstore("Read first list node for mstore %d, got "cep_fmt_str_nl,
                     store->store_id, cep2str(list_cep));
     if(EXT_POS_INVAL(list_cep))
@@ -5034,7 +5034,7 @@ struct castle_mstore_iter* castle_mstore_iterate(struct castle_mstore *store)
     debug_mstore("Locknig the first node "cep_fmt_str_nl,
             cep2str(iter->node_c2b->cep));
     write_lock_c2b(iter->node_c2b);
-    if(!c2b_uptodate(iter->node_c2b)) 
+    if(!c2b_uptodate(iter->node_c2b))
         BUG_ON(submit_c2b_sync(READ, iter->node_c2b));
     debug_mstore("Node uptodate\n");
     castle_mstore_iterator_validate(iter);
@@ -5057,7 +5057,7 @@ static void castle_mstore_node_add(struct castle_mstore *store)
     struct castle_fs_superblock *fs_sb;
     c2_block_t *c2b, *prev_c2b;
     c_ext_pos_t  cep;
-    
+
     debug_mstore("Adding a node.\n");
     /* Check if mutex is locked */
     BUG_ON(down_trylock(&store->mutex) == 0);
@@ -5085,29 +5085,29 @@ static void castle_mstore_node_add(struct castle_mstore *store)
     if(EXT_POS_INVAL(store->last_node_cep))
     {
         debug_mstore("Linking into the superblock.\n");
-        fs_sb = castle_fs_superblocks_get(); 
+        fs_sb = castle_fs_superblocks_get();
         BUG_ON(!EXT_POS_INVAL(fs_sb->mstore[store->store_id]));
         fs_sb->mstore[store->store_id] = cep;
-        castle_fs_superblocks_put(fs_sb, 1); 
+        castle_fs_superblocks_put(fs_sb, 1);
     } else
     {
         prev_c2b = castle_cache_page_block_get(store->last_node_cep);
-        debug_mstore("Linking into the prev node "cep_fmt_str_nl, 
+        debug_mstore("Linking into the prev node "cep_fmt_str_nl,
                 cep2str(prev_c2b->cep));
         write_lock_c2b(prev_c2b);
         if(!c2b_uptodate(prev_c2b))
             BUG_ON(submit_c2b_sync(READ, prev_c2b));
-        debug_mstore("Read prev node.\n"); 
+        debug_mstore("Read prev node.\n");
         prev_node = c2b_buffer(prev_c2b);
         prev_node->next = cep;
         dirty_c2b(prev_c2b);
         write_unlock_c2b(prev_c2b);
         put_c2b(prev_c2b);
     }
-    debug_mstore("Updating the saved last node.\n"); 
+    debug_mstore("Updating the saved last node.\n");
     /* Finally, save this node as the last node */
     store->last_node_cep    = cep;
-    store->last_node_unused = node->capacity; 
+    store->last_node_unused = node->capacity;
     write_unlock_c2b(c2b);
     put_c2b(c2b);
 }
@@ -5119,9 +5119,9 @@ static void castle_mstore_entry_mod(struct castle_mstore *store,
     struct castle_mlist_node *node;
     struct castle_mstore_entry *mentry;
     c2_block_t *node_c2b;
-    
+
     debug_mstore("Modifying an entry in "cep_fmt_str", idx=%d, %s.\n",
-            cep2str(key.cep), key.idx, entry ? "updating" : "deleting"); 
+            cep2str(key.cep), key.idx, entry ? "updating" : "deleting");
     node_c2b = castle_cache_page_block_get(key.cep);
     write_lock_c2b(node_c2b);
     if(!c2b_uptodate(node_c2b))
@@ -5146,7 +5146,7 @@ static void castle_mstore_entry_mod(struct castle_mstore *store,
                castle_mstore_payload_size(store));
     }
     dirty_c2b(node_c2b);
-    write_unlock_c2b(node_c2b); 
+    write_unlock_c2b(node_c2b);
     put_c2b(node_c2b);
 }
 
@@ -5195,9 +5195,9 @@ c_mstore_key_t castle_mstore_entry_insert(struct castle_mstore *store,
     node->used++;
     store->last_node_unused--;
     dirty_c2b(c2b);
-    write_unlock_c2b(c2b); 
+    write_unlock_c2b(c2b);
     put_c2b(c2b);
- 
+
     /* Add a new node if we've run out */
     if(store->last_node_unused == 0)
     {
@@ -5221,7 +5221,7 @@ static struct castle_mstore *castle_mstore_alloc(c_mstore_id_t store_id, size_t 
     store->store_id         = store_id;
     store->entry_size       = entry_size + sizeof(struct castle_mstore_entry);
     init_MUTEX(&store->mutex);
-    store->last_node_cep    = INVAL_EXT_POS; 
+    store->last_node_cep    = INVAL_EXT_POS;
     store->last_node_unused = -1;
     debug_mstore("Done.\n");
 
@@ -5259,9 +5259,9 @@ struct castle_mstore* castle_mstore_open(c_mstore_id_t store_id, size_t entry_si
         castle_mstore_iterator_next(iterator, NULL, NULL);
     debug_mstore("Destroying iterator and exiting.\n");
     castle_mstore_iterator_destroy(iterator);
-    
+
     atomic_inc(&mstores_ref_cnt);
-    
+
     return store;
 }
 
@@ -5285,7 +5285,7 @@ struct castle_mstore* castle_mstore_init(c_mstore_id_t store_id, size_t entry_si
     down(&store->mutex);
     castle_mstore_node_add(store);
     up(&store->mutex);
-     
+
     atomic_inc(&mstores_ref_cnt);
 
     return store;
@@ -5323,7 +5323,7 @@ int castle_checkpoint_version_inc(void)
         /* Do not checkpoint out-of-service slaves. */
         if (test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags))
             continue;
-        cs_sb = castle_slave_superblock_get(cs); 
+        cs_sb = castle_slave_superblock_get(cs);
         cs_sb->fs_version++;
         if (fs_version != cs_sb->fs_version)
         {
@@ -5485,7 +5485,7 @@ int castle_mstores_pre_writeback(uint32_t version)
  *
  * @also castle_cache_extents_flush()
  */
-int castle_cache_extent_flush_schedule(c_ext_id_t ext_id, uint64_t start, 
+int castle_cache_extent_flush_schedule(c_ext_id_t ext_id, uint64_t start,
                                        uint64_t count)
 {
     struct castle_cache_flush_entry *entry;
@@ -5605,18 +5605,18 @@ int castle_slaves_superblock_invalidate(void)
 }
 
 /**
- * Checkpoints system state with given frequency. 
+ * Checkpoints system state with given frequency.
  *
- * Notes: Checkpointing maintains metadata structures of all modules in memory. And checkpoints them 
- * in hierarchy, ending with superblocks on slaves. When we completed making superblocks persistent on 
+ * Notes: Checkpointing maintains metadata structures of all modules in memory. And checkpoints them
+ * in hierarchy, ending with superblocks on slaves. When we completed making superblocks persistent on
  * all slaves, we are done with checkpoint.
- *  
+ *
  *  START
  *
  *      CHECKPOINT START
  *
  *          - Perform any necessary work prior to starting the TRANSACTION
- *     
+ *
  *          Notes: During the transaction, no high level modifications can happen like
  *                  - no additions/deletions of trees from DA
  *                  - no additions/deletions of attachments
@@ -5746,7 +5746,7 @@ int castle_chk_disk(void)
 
 int castle_checkpoint_init(void)
 {
-    checkpoint_thread = kthread_run(castle_periodic_checkpoint, NULL, 
+    checkpoint_thread = kthread_run(castle_periodic_checkpoint, NULL,
                                     "castle-checkpoint");
     return 0;
 }
@@ -5768,7 +5768,7 @@ int castle_cache_init(void)
     max_ram = max_ram / 2;
 
     /* Fail if we are trying to use too much. */
-    if(castle_cache_size > max_ram) 
+    if(castle_cache_size > max_ram)
     {
         castle_printk(LOG_WARN, "Cache size too large, asked for %d pages, "
                 "maximum is %ld pages (%ld MB)\n",

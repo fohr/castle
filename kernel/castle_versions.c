@@ -32,7 +32,7 @@ static struct list_head  *castle_versions_hash          = NULL;
 static          LIST_HEAD(castle_versions_init_list);
 static struct list_head  *castle_versions_counts_hash   = NULL;
 
-static version_t          castle_versions_last   = INVAL_VERSION;
+static c_ver_t            castle_versions_last   = INVAL_VERSION;
 static c_mstore_t        *castle_versions_mstore = NULL;
 
 LIST_HEAD(castle_versions_deleted);
@@ -50,18 +50,18 @@ LIST_HEAD(castle_versions_deleted);
 
 struct castle_version {
     /* Various tree links */
-    version_t                  version;     /**< Version ID, unique across all Doubling Arrays. */
+    c_ver_t                    version;     /**< Version ID, unique across all Doubling Arrays. */
     union {
-        version_t              parent_v;    /**< Vaild if !initialised.                         */
+        c_ver_t                parent_v;    /**< Vaild if !initialised.                         */
         struct castle_version *parent;      /**< Vaild if  initialised.                         */
     };
     struct castle_version     *first_child;
     struct castle_version     *next_sybling;
 
     /* Aux data */
-    version_t        o_order;
-    version_t        r_order;
-    da_id_t          da_id;             /**< Doubling Array ID this version exists within.      */
+    c_ver_t          o_order;
+    c_ver_t          r_order;
+    c_da_t           da_id;             /**< Doubling Array ID this version exists within.      */
     c_byte_off_t     size;
 
     /* We keep two sets of version stats: live and delayed.
@@ -89,7 +89,7 @@ struct castle_version {
  * Describes the number of versions per DA.
  */
 struct castle_versions_count {
-    da_id_t             da_id;      /**< DA we are counting live versions for.          */
+    c_da_t              da_id;      /**< DA we are counting live versions for.          */
 
     int                 live;       /**< Number of live versions.                       */
     int                 deleted;    /**< Number of deleted versions.                    */
@@ -105,14 +105,14 @@ DEFINE_HASH_TBL(castle_versions,
                 CASTLE_VERSIONS_HASH_SIZE,
                 struct castle_version,
                 hash_list,
-                version_t,
+                c_ver_t,
                 version);
 DEFINE_HASH_TBL(castle_versions_counts,
                 castle_versions_counts_hash,
                 CASTLE_VERSIONS_COUNTS_HASH_SIZE,
                 struct castle_versions_count,
                 hash_list,
-                da_id_t,
+                c_da_t,
                 da_id);
 
 /********************************************************
@@ -159,7 +159,7 @@ static void castle_versions_counts_hash_destroy(void)
  *
  * @also castle_version_add()
  */
-int _castle_versions_count_adjust(da_id_t da_id, cv_health_t health, int add, int propagate)
+int _castle_versions_count_adjust(c_da_t da_id, cv_health_t health, int add, int propagate)
 {
     struct castle_versions_count *vc;
 
@@ -257,7 +257,7 @@ int _castle_versions_count_adjust(da_id_t da_id, cv_health_t health, int add, in
  *
  * @also _castle_versions_count_adjust()
  */
-int castle_versions_count_adjust(da_id_t da_id, cv_health_t health, int add)
+int castle_versions_count_adjust(c_da_t da_id, cv_health_t health, int add)
 {
     return _castle_versions_count_adjust(da_id, health, add, 1 /*propagate*/);
 }
@@ -268,7 +268,7 @@ int castle_versions_count_adjust(da_id_t da_id, cv_health_t health, int add)
  * @param   da_id   DA to check
  * @param   health  Versions of which health
  */
-int castle_versions_count_get(da_id_t da_id, cv_health_t health)
+int castle_versions_count_get(c_da_t da_id, cv_health_t health)
 {
     struct castle_versions_count *vc;
 
@@ -293,7 +293,7 @@ int castle_versions_count_get(da_id_t da_id, cv_health_t health)
 /**
  * Disassociate all castle_versions from hash and free them.
  */
-static int castle_version_hash_remove(struct castle_version *v, void *unused) 
+static int castle_version_hash_remove(struct castle_version *v, void *unused)
 {
     list_del(&v->hash_list);
     kmem_cache_free(castle_versions_cache, v);
@@ -306,7 +306,7 @@ static int castle_version_hash_remove(struct castle_version *v, void *unused)
  */
 static void castle_versions_hash_destroy(void)
 {
-    castle_versions_hash_iterate(castle_version_hash_remove, NULL); 
+    castle_versions_hash_iterate(castle_version_hash_remove, NULL);
     castle_free(castle_versions_hash);
 }
 
@@ -316,7 +316,7 @@ static void castle_versions_init_add(struct castle_version *v)
     list_add(&v->init_list, &castle_versions_init_list);
 }
 
-version_t castle_version_max_get(void)
+c_ver_t castle_version_max_get(void)
 {
     int last;
 
@@ -330,7 +330,7 @@ version_t castle_version_max_get(void)
 static void castle_versions_drop(struct castle_version *p);
 static int castle_version_writeback(struct castle_version *v, void *unused);
 
-int castle_version_attached(version_t version)
+int castle_version_attached(c_ver_t version)
 {
     struct castle_version *v;
 
@@ -341,7 +341,7 @@ int castle_version_attached(version_t version)
     return test_bit(CV_ATTACHED_BIT, &v->flags);
 }
 
-int castle_version_deleted(version_t version)
+int castle_version_deleted(c_ver_t version)
 {
     struct castle_version *v;
 
@@ -353,7 +353,7 @@ int castle_version_deleted(version_t version)
     return test_bit(CV_DELETED_BIT, &v->flags);
 }
 
-int castle_version_is_leaf(version_t version)
+int castle_version_is_leaf(c_ver_t version)
 {
     struct castle_version *v;
 
@@ -365,7 +365,7 @@ int castle_version_is_leaf(version_t version)
 }
 
 /**
- * Determines whether the version v depends on its parent for the current key. 
+ * Determines whether the version v depends on its parent for the current key.
  *
  * @param v [in] version to be determined
  * @param state [in] state of snapshot delete for current key
@@ -394,7 +394,7 @@ static int castle_version_needs_parent(struct castle_version *v, struct castle_v
      * is dependent on parent, keep the parent alive. */
     for (w=v->first_child; w; w=w->next_sybling)
     {
-        version_t ver_id = w->version;
+        c_ver_t ver_id = w->version;
 
         if (test_bit(ver_id, state->occupied))
             continue;
@@ -407,17 +407,17 @@ static int castle_version_needs_parent(struct castle_version *v, struct castle_v
 }
 
 /**
- * Determines if any strictly descendant version depends on the current version (all, 
- * for the particular key being processed at the moment). Assumption is that occupied 
- * bit is valid for all versions. But, need_parent bit is valid only for deleted versions. 
+ * Determines if any strictly descendant version depends on the current version (all,
+ * for the particular key being processed at the moment). Assumption is that occupied
+ * bit is valid for all versions. But, need_parent bit is valid only for deleted versions.
  * For other versions, need_parent doesnt represent any thing.
  *
  * @param state [in] state of the snapshot delete for current key
  * @param version [in] version of the current entry
  *
- * @return 1 if, version is deletable. 
+ * @return 1 if, version is deletable.
  */
-int castle_version_is_deletable(struct castle_version_delete_state *state, version_t version)
+int castle_version_is_deletable(struct castle_version_delete_state *state, c_ver_t version)
 {
     struct castle_version *cur_v = NULL, *w;
     struct list_head *list;
@@ -475,7 +475,7 @@ int castle_version_is_deletable(struct castle_version_delete_state *state, versi
         }
     }
     state->next_deleted = list;
-   
+
     /* Check the version required by childs. For undeleted childs, dont look
      * at need_parent bit (its not calculated for them). */
     for (w=cur_v->first_child; w; w=w->next_sybling)
@@ -483,7 +483,7 @@ int castle_version_is_deletable(struct castle_version_delete_state *state, versi
         if (test_bit(w->version, state->occupied))
             continue;
 
-        if (!test_bit(CV_DELETED_BIT, &w->flags) || 
+        if (!test_bit(CV_DELETED_BIT, &w->flags) ||
                 test_bit(w->version, state->need_parent))
         {
             ret = 0;
@@ -504,16 +504,16 @@ out:
  *
  * @return non-zero if version couldn't be deleted
  */
-int castle_version_delete(version_t version)
+int castle_version_delete(c_ver_t version)
 {
     struct castle_version *v, *p, *n, *d, *sybling;
     struct list_head *pos;
-    da_id_t da_id;
+    c_da_t da_id;
     int children_first, event_vs_idx;
-    version_t *event_vs;
+    c_ver_t *event_vs;
 
     /* Allocate memory for event notifications before taking the spinlock. */
-    event_vs = castle_vmalloc(sizeof(version_t) * CASTLE_VERSIONS_MAX);
+    event_vs = castle_vmalloc(sizeof(c_ver_t) * CASTLE_VERSIONS_MAX);
     if(!event_vs)
         castle_printk(LOG_WARN, "Cannot allocate memory to notify of version deletions.\n");
 
@@ -704,7 +704,7 @@ static struct castle_version * castle_version_subtree_delete(struct castle_versi
  *
  * @return non-zero if, failed to destroy version sub-tree.
  */
-int castle_version_tree_delete(version_t version)
+int castle_version_tree_delete(c_ver_t version)
 {
     struct castle_version *v, *cur;
     int ret = 0;
@@ -784,9 +784,9 @@ error_out:
  * @also castle_version_delete()
  * @also castle_versions_count_adjust()
  */
-static struct castle_version* castle_version_add(version_t version,
-                                                 version_t parent,
-                                                 da_id_t da_id,
+static struct castle_version* castle_version_add(c_ver_t version,
+                                                 c_ver_t parent,
+                                                 c_da_t da_id,
                                                  c_byte_off_t size,
                                                  cv_health_t health)
 {
@@ -869,10 +869,10 @@ out_dealloc:
     return NULL;
 }
 
-da_id_t castle_version_da_id_get(version_t version)
+c_da_t castle_version_da_id_get(c_ver_t version)
 {
     struct castle_version *v;
-    da_id_t da_id;
+    c_da_t da_id;
 
     read_lock_irq(&castle_versions_hash_lock);
     v = __castle_versions_hash_get(version);
@@ -890,13 +890,13 @@ da_id_t castle_version_da_id_get(version_t version)
 /**
  * Determine hash bucket for version.
  */
-static inline int castle_version_states_hash_idx(version_t version)
+static inline int castle_version_states_hash_idx(c_ver_t version)
 {
     unsigned long hash = 0UL;
 
     return (int)(((unsigned long)version) % CASTLE_VERSION_STATES_HASH_SIZE);
 
-    memcpy(&hash, &version, sizeof(version_t) > 8 ? 8 : sizeof(version_t));
+    memcpy(&hash, &version, sizeof(c_ver_t) > 8 ? 8 : sizeof(c_ver_t));
 
     return (int)(hash % CASTLE_VERSION_STATES_HASH_SIZE);
 }
@@ -915,7 +915,7 @@ inline void castle_version_states_hash_add(cv_states_t *states, cv_state_t *stat
 /**
  * Return castle_version_state structure for version, if it exists.
  */
-inline cv_state_t* castle_version_states_hash_get(cv_states_t *states, version_t version)
+inline cv_state_t* castle_version_states_hash_get(cv_states_t *states, c_ver_t version)
 {
     cv_state_t *state;
     struct list_head *l;
@@ -935,7 +935,7 @@ inline cv_state_t* castle_version_states_hash_get(cv_states_t *states, version_t
 /**
  * Return castle_version_state structure for version, allocate if necessary.
  */
-inline cv_state_t* castle_version_states_hash_get_alloc(cv_states_t *states, version_t version)
+inline cv_state_t* castle_version_states_hash_get_alloc(cv_states_t *states, c_ver_t version)
 {
     cv_state_t *state;
 
@@ -1032,7 +1032,7 @@ err_out:
  * @also castle_version_stats_adjust()
  * @also castle_version_stats_get()
  */
-cv_nonatomic_stats_t _castle_version_stats_adjust(version_t version,
+cv_nonatomic_stats_t _castle_version_stats_adjust(c_ver_t version,
                                                   cv_nonatomic_stats_t adjust,
                                                   int live,
                                                   int consistent,
@@ -1098,7 +1098,7 @@ cv_nonatomic_stats_t _castle_version_stats_adjust(version_t version,
  * @also _castle_version_stats_adjust()
  * @also castle_version_stats_get()
  */
-void castle_version_live_stats_adjust(version_t version, cv_nonatomic_stats_t adjust)
+void castle_version_live_stats_adjust(c_ver_t version, cv_nonatomic_stats_t adjust)
 {
     _castle_version_stats_adjust(version, adjust, 1 /*live*/, 0 /*consistent*/, NULL /*private*/);
 }
@@ -1111,7 +1111,7 @@ void castle_version_live_stats_adjust(version_t version, cv_nonatomic_stats_t ad
  * @also _castle_version_stats_adjust()
  * @also castle_version_consistent_stats_get()
  */
-void castle_version_consistent_stats_adjust(version_t version, cv_nonatomic_stats_t adjust)
+void castle_version_consistent_stats_adjust(c_ver_t version, cv_nonatomic_stats_t adjust)
 {
     _castle_version_stats_adjust(version, adjust, 0 /*live*/, 1 /*consistent*/, NULL /*private*/);
 }
@@ -1123,7 +1123,7 @@ void castle_version_consistent_stats_adjust(version_t version, cv_nonatomic_stat
  *
  * @also _castle_version_stats_adjust()
  */
-void castle_version_private_stats_adjust(version_t version,
+void castle_version_private_stats_adjust(c_ver_t version,
                                          cv_nonatomic_stats_t adjust,
                                          cv_states_t *private)
 {
@@ -1137,7 +1137,7 @@ void castle_version_private_stats_adjust(version_t version,
  *
  * @also _castle_version_stats_adjust()
  */
-cv_nonatomic_stats_t castle_version_live_stats_get(version_t version)
+cv_nonatomic_stats_t castle_version_live_stats_get(c_ver_t version)
 {
     cv_nonatomic_stats_t null_adjust = { 0, 0, 0, 0, 0 };
 
@@ -1190,13 +1190,13 @@ int castle_versions_writeback(void)
 
 /***** External functions *****/
 static struct castle_version* castle_version_new_create(int snap_or_clone,
-                                                        version_t parent,
-                                                        da_id_t da_id,
+                                                        c_ver_t parent,
+                                                        c_da_t da_id,
                                                         c_byte_off_t size)
 {
     struct castle_version *v, *p;
     c_byte_off_t parent_size;
-    version_t version;
+    c_ver_t version;
 
     /* Read ftree root from the parent (also, make sure parent exists) */
     p = castle_versions_hash_get(parent);
@@ -1247,15 +1247,15 @@ static struct castle_version* castle_version_new_create(int snap_or_clone,
     return v;
 }
 
-version_t castle_version_new(int snap_or_clone,
-                             version_t parent,
-                             da_id_t da_id,
-                             c_byte_off_t size)
+c_ver_t castle_version_new(int snap_or_clone,
+                           c_ver_t parent,
+                           c_da_t da_id,
+                           c_byte_off_t size)
 {
     struct castle_version *v;
     int is_leaf = castle_version_is_leaf(parent);
     int is_attached = castle_version_attached(parent);
-    
+
     /* Snapshot is not possible on non-leafs. */
     if (snap_or_clone && !is_leaf)
     {
@@ -1277,7 +1277,7 @@ version_t castle_version_new(int snap_or_clone,
                                   parent,
                                   da_id,
                                   size);
-        
+
     /* Return if we couldn't create the version correctly
        (possibly because we trying to clone attached version,
         or because someone asked for more than one snapshot to
@@ -1288,10 +1288,10 @@ version_t castle_version_new(int snap_or_clone,
     /* We've succeeded at creating a new version number.
        Let's find where to store it on the disk. */
 
-    return v->version; 
+    return v->version;
 }
 
-int castle_version_attach(version_t version) 
+int castle_version_attach(c_ver_t version)
 {
     struct castle_version *v;
     int ret = 0;
@@ -1316,10 +1316,10 @@ out:
     return ret;
 }
 
-int castle_version_read(version_t version, 
-                        da_id_t *da,
-                        version_t *parent,
-                        version_t *live_parent,
+int castle_version_read(c_ver_t version,
+                        c_da_t *da,
+                        c_ver_t *parent,
+                        c_ver_t *live_parent,
                         c_byte_off_t *size,
                         int *leaf)
 {
@@ -1332,7 +1332,7 @@ int castle_version_read(version_t version,
         read_unlock_irq(&castle_versions_hash_lock);
         return -EINVAL;
     }
-    
+
     /* Set these even if we fail to set the attached bit */
     if(da)     *da     =  v->da_id;
     if(size)   *size   =  v->size;
@@ -1349,9 +1349,9 @@ int castle_version_read(version_t version,
     read_unlock_irq(&castle_versions_hash_lock);
 
     return 0;
-} 
+}
 
-void castle_version_detach(version_t version)
+void castle_version_detach(c_ver_t version)
 {
     struct castle_version *v;
 
@@ -1411,8 +1411,8 @@ static void castle_versions_drop(struct castle_version *v)
 static int castle_versions_process(void)
 {
     struct castle_version *v, *p, *n;
-    LIST_HEAD(sysfs_list); 
-    version_t id;
+    LIST_HEAD(sysfs_list);
+    c_ver_t id;
     int children_first, ret;
     int err = 0;
 
@@ -1420,10 +1420,10 @@ static int castle_versions_process(void)
     /* Start processing elements from the init list, one at the time */
     while(!list_empty(&castle_versions_init_list))
     {
-        v = list_first_entry(&castle_versions_init_list, 
+        v = list_first_entry(&castle_versions_init_list,
                               struct castle_version,
                               init_list);
-process_version:        
+process_version:
         /* Remove the element from the list */
         list_del(&v->init_list);
         BUG_ON(v->flags & CV_INITED_MASK);
@@ -1443,8 +1443,8 @@ process_version:
             debug("Changing version to parent.\n");
             /* Set v to the parent */
             v = p;
-            /* Retry processing, this time starting with the parent. 
-               This has to succeed at some point because version 0 
+            /* Retry processing, this time starting with the parent.
+               This has to succeed at some point because version 0
                is guaranteed to be inited */
             goto process_version;
         }
@@ -1462,17 +1462,17 @@ process_version:
     debug("Done with tree init.\n");
 
     /* Now, once the tree has been built, assign the order to the nodes
-       We assign two id's to each node. o_order is based on when is the node 
-       visited first time in DFS, r_order when the node is visited last. 
+       We assign two id's to each node. o_order is based on when is the node
+       visited first time in DFS, r_order when the node is visited last.
        The code below implements non-recursive DFS (we don't have enough stack for
-       potentialy deep recursion */  
-    v = __castle_versions_hash_get(0); 
+       potentialy deep recursion */
+    v = __castle_versions_hash_get(0);
     BUG_ON(!v);
     BUG_ON(!(v->flags & CV_INITED_MASK));
     BUG_ON(v->parent);
     id = 0;
     children_first = 1;
-    
+
     while(v)
     {
         debug("Looking at version: %d\n", v->version);
@@ -1502,7 +1502,7 @@ process_version:
             debug("Assigned version=%d r_order %d\n", v->version, v->r_order);
         }
         children_first = 1;
-        if(!n) 
+        if(!n)
             n = v->next_sybling;
         if(!n) {
             n = v->parent;
@@ -1515,7 +1515,7 @@ process_version:
 
     while(!list_empty(&sysfs_list))
     {
-        v = list_first_entry(&sysfs_list, 
+        v = list_first_entry(&sysfs_list,
                               struct castle_version,
                               init_list);
         list_del(&v->init_list);
@@ -1526,15 +1526,15 @@ process_version:
             castle_printk(LOG_WARN, "Could not add version %d to sysfs. Errno=%d.\n",
                     v->version, ret);
             err = -3;
-            continue; 
+            continue;
         }
     }
- 
+
     /* Done. */
     return err;
 }
 
-int castle_version_is_ancestor(version_t candidate, version_t version)
+int castle_version_is_ancestor(c_ver_t candidate, c_ver_t version)
 {
     struct castle_version *c, *v;
     int ret;
@@ -1558,7 +1558,7 @@ int castle_version_is_ancestor(version_t candidate, version_t version)
     return ret;
 }
 
-int castle_version_compare(version_t version1, version_t version2)
+int castle_version_compare(c_ver_t version1, c_ver_t version2)
 {
     struct castle_version *v1, *v2;
     int ret;

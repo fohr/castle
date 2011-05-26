@@ -116,7 +116,7 @@ static void castle_trace_cache_event(c_trc_type_t type, c_trc_cache_var_t var, u
 /* castle_trace_da() */
 static void castle_trace_da_event(c_trc_type_t type,
                                   c_trc_cache_var_t var,
-                                  da_id_t da,
+                                  c_da_t da,
                                   uint64_t v2)
 {
     _castle_trace_event(TRACE_DA, type, var, da, v2, 0, 0, 0);
@@ -125,7 +125,7 @@ static void castle_trace_da_event(c_trc_type_t type,
 /* castle_trace_da_merge() */
 static void castle_trace_da_merge_event(c_trc_type_t type,
                                         c_trc_cache_var_t var,
-                                        da_id_t da,
+                                        c_da_t da,
                                         uint8_t level,
                                         uint64_t v4,
                                         uint64_t v5)
@@ -136,7 +136,7 @@ static void castle_trace_da_merge_event(c_trc_type_t type,
 /* castle_trace_da_merge_unit() */
 static void castle_trace_da_merge_unit_event(c_trc_type_t type,
                                              c_trc_cache_var_t var,
-                                             da_id_t da,
+                                             c_da_t da,
                                              uint8_t level,
                                              uint64_t unit,
                                              uint64_t v4)
@@ -146,9 +146,9 @@ static void castle_trace_da_merge_unit_event(c_trc_type_t type,
 
 /**************************************************************************************************/
 
-static int castle_trace_subbuf_start(struct rchan_buf *buf, 
+static int castle_trace_subbuf_start(struct rchan_buf *buf,
                                      void *subbuf,
-                                     void *prev_subbuf, 
+                                     void *prev_subbuf,
                                      size_t prev_padding)
 {
     if (!relay_buf_full(buf))
@@ -199,8 +199,8 @@ static struct rchan_callbacks castle_trace_relay_callbacks = {
 
 #define trace_register(tpoint)                                                      \
     last_trace_register(tpoint)                                                     \
-    else exit_point = &&fail_unregister_probe_##tpoint;                        
-                                                                               
+    else exit_point = &&fail_unregister_probe_##tpoint;
+
 #define trace_register_fail(tpoint)                                                 \
     fail_unregister_probe_##tpoint:                                                 \
         castle_trace_##tpoint##_unregister(castle_trace_##tpoint##_event)
@@ -259,17 +259,17 @@ int castle_trace_setup(char *dir_str)
     dir = NULL;
     root = NULL;
 
-    /* Create tracing directory. */ 
+    /* Create tracing directory. */
     ret = -ENOENT;
     castle_trace_dir = debugfs_create_dir(dir_str, NULL);
     if(!castle_trace_dir)
         goto err1;
-    
+
     /* Create relay channel. */
     BUG_ON(castle_trace_rchan);
-    if(!(castle_trace_rchan = relay_open("trace", 
-                                         castle_trace_dir, 
-                                         sizeof(c_trc_evt_t), 
+    if(!(castle_trace_rchan = relay_open("trace",
+                                         castle_trace_dir,
+                                         sizeof(c_trc_evt_t),
                                          1024,
                                          &castle_trace_relay_callbacks)))
         goto err2;
@@ -284,7 +284,7 @@ err2:
 err1:
     castle_free(dir_str);
     module_put(THIS_MODULE);
-    
+
     return ret;
 }
 
@@ -294,7 +294,7 @@ int castle_trace_start(void)
     if(!castle_trace_ready)
         return -EINVAL;
 
-    return castle_trace_tracepoints_register(); 
+    return castle_trace_tracepoints_register();
 }
 
 int castle_trace_stop(void)
@@ -317,7 +317,7 @@ int castle_trace_teardown(void)
     if(!castle_trace_ready)
         return -EINVAL;
 
-    castle_trace_tracepoints_unregister(); 
+    castle_trace_tracepoints_unregister();
     if(castle_trace_rchan)
     {
         relay_flush(castle_trace_rchan);

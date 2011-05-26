@@ -9,7 +9,7 @@ void castle_events_slave_rebuild_notify(void);
 
 /* Events which do not correspond to any particular command. Defined in 0x80+ range not
    to overlap with IOCTL command ids. */
-#define CASTLE_EVENT_SPINUP            (128) 
+#define CASTLE_EVENT_SPINUP            (128)
 #define CASTLE_EVENT_SPINDOWN          (129)
 #define CASTLE_EVENT_TRANFSER_FINISHED (130)
 
@@ -29,7 +29,7 @@ void castle_events_slave_rebuild_notify(void);
 
 #define castle_events_device_attach(_maj, _min, _version_id) \
     castle_uevent3(CASTLE_CTRL_ATTACH, CASTLE_EVENTS_SUCCESS, new_encode_dev(MKDEV(_maj, _min)), _version_id)
-    
+
 #define castle_events_device_detach(_maj, _min) \
     castle_uevent2(CASTLE_CTRL_DETACH, CASTLE_EVENTS_SUCCESS, new_encode_dev(MKDEV(_maj, _min)))
 
@@ -38,7 +38,7 @@ void castle_events_slave_rebuild_notify(void);
 
 #define castle_events_collection_detach(_id) \
     castle_uevent2(CASTLE_CTRL_COLLECTION_DETACH, CASTLE_EVENTS_SUCCESS, _id)
- 
+
 #define castle_events_version_create(_version_id) \
     castle_uevent2(CASTLE_CTRL_CREATE, CASTLE_EVENTS_SUCCESS, _version_id)
 
