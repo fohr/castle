@@ -128,7 +128,7 @@ struct castle_back_op
 struct castle_back_iterator
 {
     uint64_t                      flags;
-    collection_id_t               collection_id;
+    c_collection_id_t             collection_id;
     c_vl_okey_t                  *start_key;
     c_vl_okey_t                  *end_key;
     /* saved key and value that couldn't fit in the buffer this time */
@@ -1091,7 +1091,7 @@ static void castle_back_key_kernel_to_user(c_vl_okey_t *key, struct castle_back_
  */
 static uint32_t castle_back_val_kernel_to_user(c_val_tup_t *val, struct castle_back_buffer *buf,
                                            unsigned long user_buf, uint32_t buf_len,
-                                           uint32_t *buf_used, collection_id_t collection_id)
+                                           uint32_t *buf_used, c_collection_id_t collection_id)
 {
     uint32_t length, val_length;
     struct castle_iter_val *val_copy;
@@ -1614,7 +1614,7 @@ err0: castle_back_reply(op, err, 0, 0);
 static uint32_t castle_back_save_key_value_to_list(struct castle_back_stateful_op *stateful_op,
         struct castle_key_value_list *kv_list,
         c_vl_okey_t *key, c_val_tup_t *val,
-        collection_id_t collection_id,
+        c_collection_id_t collection_id,
         struct castle_back_buffer *back_buf,
         uint32_t buf_len, /* space left in the buffer */
         int save_val /* should values be saved too? */)

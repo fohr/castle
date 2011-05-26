@@ -16,7 +16,7 @@
     static inline int castle_trace_##name##_unregister(void (*probe)(proto))  \
     {                                                                         \
         return unregister_trace_castle_##name((void *)probe);                 \
-    } 
+    }
 
 /*
  * Consumer trace function definitions.
@@ -44,19 +44,19 @@ CASTLE_DEFINE_TRACE(cache,
 /* castle_trace_da() */
 CASTLE_DEFINE_TRACE(da,
                     TPPROTO(c_trc_type_t type, c_trc_cache_var_t var,
-                        da_id_t da, uint64_t v2),
+                        c_da_t da, uint64_t v2),
                     TPARGS(type, var, da, v2));
 
 /* castle_trace_da_merge() */
 CASTLE_DEFINE_TRACE(da_merge,
                     TPPROTO(c_trc_type_t type, c_trc_cache_var_t var,
-                        da_id_t da, uint8_t level, uint64_t v4, uint64_t v5),
+                        c_da_t da, uint8_t level, uint64_t v4, uint64_t v5),
                     TPARGS(type, var, da, level, v4, v5));
 
 /* castle_trace_da_merge_unit() */
 CASTLE_DEFINE_TRACE(da_merge_unit,
                     TPPROTO(c_trc_type_t type, c_trc_cache_var_t var,
-                        da_id_t da, uint8_t level, uint64_t unit, uint64_t v4),
+                        c_da_t da, uint8_t level, uint64_t unit, uint64_t v4),
                     TPARGS(type, var, da, level, unit, v4));
 
 int castle_trace_setup   (char *dir);

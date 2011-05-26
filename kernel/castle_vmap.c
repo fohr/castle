@@ -128,7 +128,7 @@ static castle_vmap_freelist_t *castle_vmap_freelist_init(int slot_size, int slot
     memset(dummy_pages, 0, nr_dummy_pages * sizeof(struct page *));
 
     /* Freelist contains one slot per mapping, plus one extra as an end-of-freelist marker */
-    castle_vmap_freelist->freelist = castle_vmalloc((slots + 1) * sizeof(uint32_t)); 
+    castle_vmap_freelist->freelist = castle_vmalloc((slots + 1) * sizeof(uint32_t));
 
     if(!castle_vmap_freelist->freelist)
         goto errout_4;
@@ -198,7 +198,7 @@ static void castle_vmap_freelist_delete(castle_vmap_freelist_t *castle_vmap_free
 {
 #ifdef CASTLE_DEBUG
 {
-    /* At this point there should be nothing mapped in the fast vmap areas for this freelist. 
+    /* At this point there should be nothing mapped in the fast vmap areas for this freelist.
        When in debug mode, verify that the freelist contains the correct number of items */
     int i = 0;
     while(castle_vmap_freelist->freelist[0] < castle_vmap_freelist->nr_slots)
@@ -208,7 +208,7 @@ static void castle_vmap_freelist_delete(castle_vmap_freelist_t *castle_vmap_free
     }
     BUG_ON(i != castle_vmap_freelist->nr_slots);
 }
-#endif 
+#endif
     castle_vfree(castle_vmap_freelist->freelist);
     /* Let vmalloc.c destroy vm_area_struct by vmunmping it. */
     vunmap(castle_vmap_freelist->vstart);
@@ -218,8 +218,8 @@ static void castle_vmap_freelist_delete(castle_vmap_freelist_t *castle_vmap_free
 static void castle_vmap_freelist_add(castle_vmap_freelist_t *castle_vmap_freelist, uint32_t id)
 {
     BUG_ON(castle_vmap_freelist->freelist[id+1] != CASTLE_SLOT_INVALID);
-    castle_vmap_freelist->freelist[id+1] = castle_vmap_freelist->freelist[0]; 
-    castle_vmap_freelist->freelist[0]    = id; 
+    castle_vmap_freelist->freelist[id+1] = castle_vmap_freelist->freelist[0];
+    castle_vmap_freelist->freelist[0]    = id;
     castle_vmap_freelist->slots_free++;
 }
 
@@ -235,8 +235,8 @@ static uint32_t castle_vmap_freelist_get(castle_vmap_freelist_t *castle_vmap_fre
         goto out;
     }
 
-    castle_vmap_freelist->freelist[0] = castle_vmap_freelist->freelist[id+1]; 
-    /* Invalidate the slot we've just allocated, so that we can test for double frees */ 
+    castle_vmap_freelist->freelist[0] = castle_vmap_freelist->freelist[id+1];
+    /* Invalidate the slot we've just allocated, so that we can test for double frees */
     castle_vmap_freelist->freelist[id+1] = CASTLE_SLOT_INVALID;
     castle_vmap_freelist->slots_free--;
 
@@ -269,9 +269,9 @@ void *castle_vmap_fast_map(struct page **pgs, int nr_pages)
         } else
             BUG();
     }
- 
+
     vaddr = castle_vmap_freelist->vstart + vmap_slot * PAGE_SIZE * (SLOT_SIZE(freelist_bucket_idx)+1);
-#ifdef CASTLE_DEBUG    
+#ifdef CASTLE_DEBUG
     BUG_ON((unsigned long)vaddr <  (unsigned long)castle_vmap_freelist->vstart);
     BUG_ON((unsigned long)vaddr >= (unsigned long)castle_vmap_freelist->vend);
 #endif

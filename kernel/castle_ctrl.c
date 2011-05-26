@@ -46,10 +46,10 @@ void castle_ctrl_unlock(void)
 
 int castle_ctrl_is_locked(void)
 {
-    return mutex_is_locked(&castle_control_lock); 
+    return mutex_is_locked(&castle_control_lock);
 }
 
-void castle_control_claim(uint32_t dev, int *ret, slave_uuid_t *id)
+void castle_control_claim(uint32_t dev, int *ret, c_slave_uuid_t *id)
 {
     struct castle_slave *cs;
 
@@ -65,16 +65,16 @@ void castle_control_claim(uint32_t dev, int *ret, slave_uuid_t *id)
     }
 }
 
-void castle_control_release(slave_uuid_t id, int *ret)
+void castle_control_release(c_slave_uuid_t id, int *ret)
 {
     castle_printk(LOG_ERROR, "==> Release NOT IMPLEMENTED YET, slave UUID=%d\n", id);
     *ret = -ENOSYS;
 }
 
-void castle_control_attach(version_t version, int *ret, uint32_t *dev)
+void castle_control_attach(c_ver_t version, int *ret, uint32_t *dev)
 {
     struct castle_attachment *cd;
- 
+
     if (!DA_INVAL(castle_version_da_id_get(version)))
     {
         castle_printk(LOG_WARN, "Couldn't attach device to collection.\n");
@@ -86,7 +86,7 @@ void castle_control_attach(version_t version, int *ret, uint32_t *dev)
     cd = castle_device_init(version);
     if(!cd)
     {
-        *ret = -EINVAL; 
+        *ret = -EINVAL;
         return;
     }
     *dev = new_encode_dev(MKDEV(cd->dev.gd->major, cd->dev.gd->first_minor));
@@ -115,17 +115,17 @@ void castle_control_detach(uint32_t dev, int *ret)
  *
  * @also castle_double_array_make()
  */
-void castle_control_create(uint64_t size, int *ret, version_t *id)
+void castle_control_create(uint64_t size, int *ret, c_ver_t *id)
 {
     int collection_tree = (size == 0);
-    da_id_t da_id = INVAL_DA; 
-    version_t version;
+    c_da_t da_id = INVAL_DA;
+    c_ver_t version;
 
     if(collection_tree)
     {
         castle_printk(LOG_USERINFO, "Creating a collection version tree.\n");
         da_id = castle_next_da_id++;
-    } 
+    }
 
     /* If size isn't zero, make sure it's a multiple of block size. */
     if(size % C_BLK_SIZE != 0)
@@ -137,7 +137,7 @@ void castle_control_create(uint64_t size, int *ret, version_t *id)
     }
 
     /* Create a new version which will act as the root for this version tree */
-    version = castle_version_new(0, /* clone */ 
+    version = castle_version_new(0, /* clone */
                                  0, /* root version */
                                  da_id,
                                  size);
@@ -146,7 +146,7 @@ void castle_control_create(uint64_t size, int *ret, version_t *id)
     if (collection_tree && castle_double_array_make(da_id, version))
     {
         castle_printk(LOG_ERROR, "Failed creating doubling array for version: %d\n", version);
-        version = INVAL_VERSION; 
+        version = INVAL_VERSION;
     }
 
     if(VERSION_INVAL(version))
@@ -160,7 +160,7 @@ err_out:
     *ret = -EINVAL;
 }
 
-void castle_control_clone(version_t version, int *ret, version_t *clone)
+void castle_control_clone(c_ver_t version, int *ret, c_ver_t *clone)
 {
     if(version == 0)
     {
@@ -177,9 +177,9 @@ void castle_control_clone(version_t version, int *ret, version_t *clone)
         *ret = -EINVAL;
         return;
     }
-    
+
     /* Try to create a new version in the version tree */
-    version = castle_version_new(0,        /* clone */ 
+    version = castle_version_new(0,        /* clone */
                                  version,
                                  INVAL_DA, /* da_id: take parent's */
                                  0);       /* size:  take parent's */
@@ -194,14 +194,14 @@ void castle_control_clone(version_t version, int *ret, version_t *clone)
     }
 }
 
-void castle_control_snapshot(uint32_t dev, int *ret, version_t *version)
+void castle_control_snapshot(uint32_t dev, int *ret, c_ver_t *version)
 {
     dev_t devid = new_decode_dev(dev);
     struct castle_attachment *cd = castle_device_find(devid);
-    version_t ver, old_version;
+    c_ver_t ver, old_version;
 
     if(!cd)
-    {   
+    {
         *version = -1;
         *ret     = -ENOENT;
         return;
@@ -211,7 +211,7 @@ void castle_control_snapshot(uint32_t dev, int *ret, version_t *version)
     ver = castle_version_new(1,            /* snapshot */
                              cd->version,
                              INVAL_DA,     /* take da_id from the parent */
-                             0);           /* take size  from the parent */ 
+                             0);           /* take size  from the parent */
     if(VERSION_INVAL(ver))
     {
         *version = -1;
@@ -229,10 +229,10 @@ void castle_control_snapshot(uint32_t dev, int *ret, version_t *version)
         *ret     = 0;
     }
     up_write(&cd->lock);
-    
+
     castle_events_device_snapshot(ver, cd->dev.gd->major, cd->dev.gd->first_minor);
 }
- 
+
 void castle_control_fs_init(int *ret)
 {
     *ret = castle_fs_init();
@@ -241,7 +241,7 @@ void castle_control_fs_init(int *ret)
 static int castle_collection_writeback(struct castle_attachment *ca)
 {
     struct castle_alist_entry mstore_entry;
-    
+
     BUG_ON(strlen(ca->col.name) > MAX_NAME_SIZE);
 
     debug("Collection add: %s,%u\n", ca->col.name, ca->version);
@@ -261,11 +261,11 @@ int castle_attachments_writeback(void)
 
     BUG_ON(castle_attachments_store);
 
-    castle_attachments_store = 
+    castle_attachments_store =
         castle_mstore_init(MSTORE_ATTACHMENTS_TAG, sizeof(struct castle_alist_entry));
     if(!castle_attachments_store)
         return -ENOMEM;
-    
+
     /* Note: Shouldn't take attachments lock here. Writeback function can sleep.
      * This function should be called in CASTLE_TRANSACTION and it guarentees
      * no changes to attachments list. */
@@ -276,10 +276,10 @@ int castle_attachments_writeback(void)
         if(ca->device)
             continue;
         if(castle_collection_writeback(ca))
-            castle_printk(LOG_WARN, "Failed to writeback collection: (%u, %s)\n", 
+            castle_printk(LOG_WARN, "Failed to writeback collection: (%u, %s)\n",
                     ca->col.id, ca->col.name);
     }
-    
+
     castle_mstore_fini(castle_attachments_store);
     castle_attachments_store = NULL;
 
@@ -291,11 +291,11 @@ int castle_attachments_read(void)
     struct castle_mstore_iter *iterator = NULL;
     struct castle_alist_entry mstore_entry;
     int ret = 0;
- 
+
     BUG_ON(castle_attachments_store);
 
     castle_printk(LOG_INFO, "Opening mstore for Collection Attachments\n");
-    castle_attachments_store = castle_mstore_open(MSTORE_ATTACHMENTS_TAG, 
+    castle_attachments_store = castle_mstore_open(MSTORE_ATTACHMENTS_TAG,
                                         sizeof(struct castle_alist_entry));
     if (!castle_attachments_store)
     {
@@ -340,10 +340,10 @@ out:
     return 0;
 }
 
-void castle_control_collection_attach(version_t          version,
+void castle_control_collection_attach(c_ver_t            version,
                                       char              *name,
                                       int               *ret,
-                                      collection_id_t   *collection)
+                                      c_collection_id_t *collection)
 {
     struct list_head            *lh;
     struct castle_attachment *ca;
@@ -378,15 +378,15 @@ void castle_control_collection_attach(version_t          version,
         *ret = -EINVAL;
         return;
     }
-    castle_printk(LOG_USERINFO, "Creating new Collection Attachment %u (%s, %u)\n", 
+    castle_printk(LOG_USERINFO, "Creating new Collection Attachment %u (%s, %u)\n",
             ca->col.id, ca->col.name, ca->version);
-    
-    *collection = ca->col.id; 
+
+    *collection = ca->col.id;
     *ret = 0;
 }
 
-void castle_control_collection_detach(collection_id_t collection,
-                                      int            *ret)
+void castle_control_collection_detach(c_collection_id_t  collection,
+                                      int               *ret)
 {
     struct castle_attachment *ca = castle_attachment_get(collection, READ);
     if (!ca)
@@ -416,12 +416,12 @@ void castle_control_collection_detach(collection_id_t collection,
     *ret = 0;
 }
 
-void castle_control_collection_snapshot(collection_id_t collection,
-                                               int *ret,
-                                               version_t *version)
+void castle_control_collection_snapshot(c_collection_id_t collection,
+                                        int *ret,
+                                        c_ver_t *version)
 {
     struct castle_attachment *ca = castle_attachment_get(collection, READ);
-    version_t ver, old_version;
+    c_ver_t ver, old_version;
 
     if(!ca)
     {
@@ -434,7 +434,7 @@ void castle_control_collection_snapshot(collection_id_t collection,
     ver = castle_version_new(1,            /* snapshot */
                              ca->version,
                              INVAL_DA,     /* take da_id from the parent */
-                             0);           /* take size  from the parent */ 
+                             0);           /* take size  from the parent */
     if(VERSION_INVAL(ver))
     {
         *version = -1;
@@ -452,7 +452,7 @@ void castle_control_collection_snapshot(collection_id_t collection,
         *ret     = 0;
     }
     up_write(&ca->lock);
-    
+
     castle_events_collection_snapshot(ver, ca->col.id);
     castle_attachment_put(ca);
 }
@@ -466,7 +466,7 @@ void castle_control_collection_snapshot(collection_id_t collection,
  *
  * @see castle_control_destroy
  */
-void castle_control_collection_snapshot_delete(version_t version,
+void castle_control_collection_snapshot_delete(c_ver_t version,
                                                int *ret)
 {
     if (DA_INVAL(castle_version_da_id_get(version)))
@@ -488,7 +488,7 @@ void castle_control_collection_snapshot_delete(version_t version,
     return;
 }
 
-void castle_control_set_target(slave_uuid_t slave_uuid, int value, int *ret)
+void castle_control_set_target(c_slave_uuid_t slave_uuid, int value, int *ret)
 {
     struct castle_slave *slave = castle_slave_find_by_uuid(slave_uuid);
     struct castle_slave_superblock *sb;
@@ -498,14 +498,14 @@ void castle_control_set_target(slave_uuid_t slave_uuid, int value, int *ret)
         *ret = -ENOENT;
         return;
     }
-    
+
     sb = castle_slave_superblock_get(slave);
-    
+
     if (value)
         sb->pub.flags |= CASTLE_SLAVE_TARGET;
     else
         sb->pub.flags &= ~CASTLE_SLAVE_TARGET;
-    
+
     castle_slave_superblock_put(slave, 1);
 
     castle_events_slave_changed(slave->uuid);
@@ -518,7 +518,7 @@ void castle_control_protocol_version(int *ret, uint32_t *version)
     *ret = 0;
     *version = CASTLE_PROTOCOL_VERSION;
 }
-            
+
 void castle_control_environment_set(c_env_var_t var_id, char *var_str, int *ret)
 {
     /* Check that the id is in range. */
@@ -531,7 +531,7 @@ void castle_control_environment_set(c_env_var_t var_id, char *var_str, int *ret)
 
     /* Save the environment var. */
     strncpy(castle_environment[var_id], var_str, MAX_ENV_LEN);
-    castle_free(var_str); 
+    castle_free(var_str);
 
     *ret = 0;
 }
@@ -666,7 +666,7 @@ void castle_control_slave_evacuate(uint32_t uuid, uint32_t force, int *ret)
         castle_printk(LOG_WARN, "Error: slave 0x%x is missing. Ignoring.\n", slave->uuid);
         *ret = -ENOSYS;
         return;
-    } 
+    }
 
     if (test_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags))
     {
@@ -676,7 +676,7 @@ void castle_control_slave_evacuate(uint32_t uuid, uint32_t force, int *ret)
                 slave->uuid, slave->bdev_name);
         *ret = -EEXIST;
         return;
-    } 
+    }
 
     /* All of the below is happening under the ioctl lock, so we don't have to use atomic
        test_and_set. */
@@ -687,8 +687,8 @@ void castle_control_slave_evacuate(uint32_t uuid, uint32_t force, int *ret)
                 slave->uuid, slave->bdev_name);
         *ret = -EEXIST;
         return;
-    } 
-        
+    }
+
     /*
      * Mark that this slave is evacuating or out-of-service. Allocations from this slave
      * should now stop, and all future I/O submissions should ignore this slave.
@@ -729,10 +729,10 @@ static void castle_thread_priority_set(struct work_struct *work)
 }
 
 /**
- * Set nice value for all threads in a WQ to global nice value. 
+ * Set nice value for all threads in a WQ to global nice value.
  *
  * This function just schedules the priority_set() whihc would change the
- * priority later. 
+ * priority later.
  */
 void castle_wq_priority_set(struct workqueue_struct *wq)
 {
@@ -744,7 +744,7 @@ void castle_wq_priority_set(struct workqueue_struct *wq)
     for_each_online_cpu(cpu)
     {
         struct work_struct *work;
-       
+
         work = castle_malloc(sizeof(struct work_struct), GFP_KERNEL);
         if (!work)
         {
@@ -829,8 +829,8 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
         return -EINVAL;
     }
 
-    if(!castle_fs_inited && (ioctl.cmd != CASTLE_CTRL_CLAIM) && 
-                            (ioctl.cmd != CASTLE_CTRL_INIT) && 
+    if(!castle_fs_inited && (ioctl.cmd != CASTLE_CTRL_CLAIM) &&
+                            (ioctl.cmd != CASTLE_CTRL_INIT) &&
                             (ioctl.cmd != CASTLE_CTRL_PROTOCOL_VERSION) &&
                             (ioctl.cmd != CASTLE_CTRL_ENVIRONMENT_SET) &&
                             (ioctl.cmd != CASTLE_CTRL_FAULT) &&
@@ -1027,9 +1027,9 @@ long castle_ctrl_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned lo
     long ret = castle_back_unlocked_ioctl(file, cmd, arg);
     if (ret != -ENOIOCTLCMD)
         return ret;
-        
+
     ret = castle_control_ioctl(file, cmd, arg);
-    
+
     return ret;
 }
 
@@ -1051,7 +1051,7 @@ static struct miscdevice castle_control = {
 int castle_control_init(void)
 {
     int ret;
-    
+
     if((ret = misc_register(&castle_control)))
         castle_printk(LOG_INIT, "Castle control device could not be registered (%d).", ret);
 
@@ -1062,7 +1062,7 @@ void castle_control_fini(void)
 {
     int ret;
 
-    if((ret = misc_deregister(&castle_control))) 
+    if((ret = misc_deregister(&castle_control)))
         castle_printk(LOG_INIT, "Could not unregister castle control node (%d).\n", ret);
     /* Sleep waiting for the last ctrl op to complete, if there is one */
     CASTLE_TRANSACTION_BEGIN;

@@ -36,37 +36,37 @@ struct castle_component_tree castle_global_tree = {.seq             = GLOBAL_TRE
                                                    .ref_count       = {1},
                                                    .write_ref_count = {1},
                                                    .item_count      = {0ULL},
-                                                   .btree_type      = MTREE_TYPE, 
+                                                   .btree_type      = MTREE_TYPE,
                                                    .dynamic         = 1,
                                                    .da              = INVAL_DA,
-                                                   .level           = -1, 
+                                                   .level           = -1,
                                                    .tree_depth      = -1,
                                                    .root_node       = INVAL_EXT_POS,
                                                    .da_list         = {NULL, NULL},
                                                    .hash_list       = {NULL, NULL},
                                                    .large_objs      = {NULL, NULL},
-                                                   .tree_ext_free   = {INVAL_EXT_ID, 
-                                                                       (100 * C_CHK_SIZE), 
-                                                                       {0ULL}, 
+                                                   .tree_ext_free   = {INVAL_EXT_ID,
+                                                                       (100 * C_CHK_SIZE),
+                                                                       {0ULL},
                                                                        {0ULL}},
-                                                   .data_ext_free   = {INVAL_EXT_ID, 
-                                                                       (512ULL * C_CHK_SIZE), 
-                                                                       {0ULL}, 
+                                                   .data_ext_free   = {INVAL_EXT_ID,
+                                                                       (512ULL * C_CHK_SIZE),
+                                                                       {0ULL},
                                                                        {0ULL}},
-                                                  }; 
+                                                  };
 
 static DEFINE_MUTEX(castle_sblk_lock);
 struct castle_fs_superblock global_fs_superblock;
 struct workqueue_struct     *castle_wqs[2*MAX_BTREE_DEPTH+1];
 char                         castle_environment_block[NR_ENV_VARS * MAX_ENV_LEN];
-char                        *castle_environment[NR_ENV_VARS] 
-                                = {[0] = &castle_environment_block[0 * MAX_ENV_LEN], 
-                                   [1] = &castle_environment_block[1 * MAX_ENV_LEN], 
-                                   [2] = &castle_environment_block[2 * MAX_ENV_LEN], 
-                                   [3] = &castle_environment_block[3 * MAX_ENV_LEN], 
-                                   [4] = &castle_environment_block[4 * MAX_ENV_LEN], 
-                                   [5] = &castle_environment_block[5 * MAX_ENV_LEN], 
-                                   [6] = &castle_environment_block[6 * MAX_ENV_LEN], 
+char                        *castle_environment[NR_ENV_VARS]
+                                = {[0] = &castle_environment_block[0 * MAX_ENV_LEN],
+                                   [1] = &castle_environment_block[1 * MAX_ENV_LEN],
+                                   [2] = &castle_environment_block[2 * MAX_ENV_LEN],
+                                   [3] = &castle_environment_block[3 * MAX_ENV_LEN],
+                                   [4] = &castle_environment_block[4 * MAX_ENV_LEN],
+                                   [5] = &castle_environment_block[5 * MAX_ENV_LEN],
+                                   [6] = &castle_environment_block[6 * MAX_ENV_LEN],
                                    [7] = &castle_environment_block[7 * MAX_ENV_LEN]};
 int                          castle_fs_inited = 0;
 int                          castle_fs_exiting = 0;
@@ -115,7 +115,7 @@ static int castle_fs_superblock_validate(struct castle_fs_superblock *fs_sb)
     if(fs_sb->fs_version == 0)                  return -5;
 
     fs_sb->pub.checksum = 0;
-    if (fletcher32((uint16_t *)fs_sb, sizeof(struct castle_fs_superblock)) 
+    if (fletcher32((uint16_t *)fs_sb, sizeof(struct castle_fs_superblock))
                         != checksum)
     {
         fs_sb->pub.checksum = checksum;
@@ -127,9 +127,9 @@ static int castle_fs_superblock_validate(struct castle_fs_superblock *fs_sb)
 }
 
 /*
- * Scans castle_slaves and updates the fs superblock with the slave states. This allows the 
+ * Scans castle_slaves and updates the fs superblock with the slave states. This allows the
  * service state of slaves to be persistent across fs shutdowns and crashes.
- * 
+ *
  * The fs superblock lock must by held on entry to this function.
  *
  * @param fs_sb  Pointer to the fs superblock.
@@ -175,7 +175,7 @@ void castle_fs_superblock_slaves_update(struct castle_fs_superblock *fs_sb)
 }
 
 static void castle_fs_superblock_init(struct castle_fs_superblock *fs_sb)
-{   
+{
     int i;
     struct list_head *lh;
     struct castle_slave *cs;
@@ -247,13 +247,13 @@ void castle_fs_superblocks_put(struct castle_fs_superblock *sb, int dirty)
  * @param ext_free  Pointer to the freespace structure.
  * @param ext_id    Id of the extent for which to initalise the freespace struct.
  */
-void castle_ext_freespace_init(c_ext_free_t *ext_free, 
+void castle_ext_freespace_init(c_ext_free_t *ext_free,
                                c_ext_id_t    ext_id)
 {
-    /* Extent id must be valid. */ 
+    /* Extent id must be valid. */
     BUG_ON(EXT_ID_INVAL(ext_id));
 
-    /* Init the structure. */ 
+    /* Init the structure. */
     ext_free->ext_id = ext_id;
     ext_free->ext_size = castle_extent_size_get(ext_id) * C_CHK_SIZE;
     atomic64_set(&ext_free->used, 0);
@@ -273,18 +273,18 @@ void castle_ext_freespace_init(c_ext_free_t *ext_free,
  * @return 0:       On success.
  * @return -ENOSPC: If extent could not be allocated.
  */
-int castle_new_ext_freespace_init(c_ext_free_t           *ext_free, 
-                                  da_id_t                 da_id, 
+int castle_new_ext_freespace_init(c_ext_free_t           *ext_free,
+                                  c_da_t                  da_id,
                                   c_ext_type_t            ext_type,
                                   c_byte_off_t            size,
                                   int                     in_tran,
                                   void                   *data,
-                                  c_ext_event_callback_t  callback) 
+                                  c_ext_event_callback_t  callback)
 {
     uint32_t nr_chunks;
     c_ext_id_t ext_id;
 
-    /* Calculate the number of chunks requried. */ 
+    /* Calculate the number of chunks requried. */
     nr_chunks = ((size - 1) / C_CHK_SIZE) + 1;
     /* Try allocating the extent of the requested size. */
     ext_id = castle_extent_alloc(DEFAULT_RDA, da_id, ext_type, nr_chunks, in_tran, data, callback);
@@ -390,12 +390,12 @@ int castle_ext_freespace_get(c_ext_free_t *ext_free,
             return ret;
         }
     }
-    
+
     cep->ext_id = ext_free->ext_id;
     cep->offset = atomic64_add_return(size, &ext_free->used) - size;
     barrier();
     BUG_ON(EXT_ID_INVAL(cep->ext_id));
-    
+
     used = atomic64_read(&ext_free->used);
     barrier();
     blocked = atomic64_read(&ext_free->blocked);
@@ -630,7 +630,7 @@ int castle_fs_init(void)
         cs = list_entry(lh, struct castle_slave, list);
         if (test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags))
             continue;
-        if ((cs->cs_superblock.fs_version != bcv) && 
+        if ((cs->cs_superblock.fs_version != bcv) &&
                 (castle_slave_version_load(cs, bcv)))
         {
             castle_printk(LOG_ERROR, "Couldn't find version %u on slave: 0x%x\n", bcv, cs->uuid);
@@ -670,7 +670,7 @@ int castle_fs_init(void)
         else
         /* Check if fs superblock the same as the one we already know about */
         {
-            if(memcmp(&fs_sb, cs_fs_sb, 
+            if(memcmp(&fs_sb, cs_fs_sb,
                       sizeof(struct castle_fs_superblock)) != 0)
             {
                 castle_printk(LOG_ERROR, "Castle fs superblocks do not match!\n");
@@ -732,7 +732,7 @@ int castle_fs_init(void)
                 cs = castle_slave_ghost_add(fs_sb.slaves[i]);
                 if (!test_bit(CASTLE_SLAVE_REMAPPED_BIT, &fs_sb.slaves_flags[i]))
                 {
-                    castle_printk(LOG_USERINFO, "Slave 0x%x is missing and has not been remapped.\n", 
+                    castle_printk(LOG_USERINFO, "Slave 0x%x is missing and has not been remapped.\n",
                                   fs_sb.slaves[i]);
                     need_rebuild++;
                 } else
@@ -839,11 +839,11 @@ int castle_fs_init(void)
         castle_extent_transaction_end();
 
         c2b = castle_btree_node_create(&castle_global_tree,
-                                       0 /* version */, 
+                                       0 /* version */,
                                        0 /* level */,
                                        0 /* wasn't preallocated */);
         /* Save the root node in the global tree */
-        castle_global_tree.root_node = c2b->cep; 
+        castle_global_tree.root_node = c2b->cep;
         /* We know that the tree is 1 level deep at the moment */
         castle_global_tree.tree_depth = 1;
         /* Release btree node c2b */
@@ -870,7 +870,7 @@ int castle_fs_init(void)
         return ret;
 
     /* Read doubling arrays and component trees in. */
-    ret = first ? castle_double_array_create() : castle_double_array_read(); 
+    ret = first ? castle_double_array_create() : castle_double_array_read();
     if (ret) return ret;
 
     /* Read Collection Attachments. */
@@ -898,7 +898,7 @@ int castle_fs_init(void)
         castle_printk(LOG_ERROR, "Failed to start Doubling Arrays\n");
         return -EINVAL;
     }
-    
+
     castle_events_init();
 
     castle_printk(LOG_INIT, "Castle FS started.\n");
@@ -949,7 +949,7 @@ static int castle_slave_superblock_validate(struct castle_slave *cs,
         return 0;
 
     cs_sb->pub.checksum = 0;
-    if(fletcher32((uint16_t *)cs_sb, sizeof(struct castle_slave_superblock)) 
+    if(fletcher32((uint16_t *)cs_sb, sizeof(struct castle_slave_superblock))
                                 != checksum)
     {
         cs_sb->pub.checksum = checksum;
@@ -1000,7 +1000,7 @@ static int castle_block_read(struct block_device *bdev, sector_t sector, uint32_
     return 0;
 }
 
-static void castle_slave_superblock_init(struct   castle_slave *cs, 
+static void castle_slave_superblock_init(struct   castle_slave *cs,
                                          struct   castle_slave_superblock *cs_sb,
                                          uint32_t uuid)
 {
@@ -1019,7 +1019,7 @@ static void castle_slave_superblock_init(struct   castle_slave *cs,
     castle_printk(LOG_INIT, "Done.\n");
 }
 
-static int castle_slave_superblock_read(struct castle_slave *cs) 
+static int castle_slave_superblock_read(struct castle_slave *cs)
 {
     struct castle_slave_superblock *cs_sb = NULL;
     struct castle_fs_superblock *fs_sb = NULL;
@@ -1040,12 +1040,12 @@ static int castle_slave_superblock_read(struct castle_slave *cs)
 
     for (i=0; i<2; i++)
     {
-        if ((err = castle_block_read(cs->bdev, (i*16), 
-                        sizeof(struct castle_slave_superblock), 
+        if ((err = castle_block_read(cs->bdev, (i*16),
+                        sizeof(struct castle_slave_superblock),
                         (char *)&cs_sb[i])) < 0)
             goto error_out;
-        if ((err = castle_block_read(cs->bdev, (i*16+8), 
-                        sizeof(struct castle_fs_superblock), 
+        if ((err = castle_block_read(cs->bdev, (i*16+8),
+                        sizeof(struct castle_fs_superblock),
                         (char *)&fs_sb[i])) < 0)
             goto error_out;
 
@@ -1228,7 +1228,7 @@ int castle_slave_superblocks_writeback(struct castle_slave *cs, uint32_t version
 
     cs_sb = castle_slave_superblock_get(cs);
     fs_sb = castle_fs_superblocks_get();
-    
+
     BUG_ON(cs_sb->fs_version != version);
 
     write_lock_c2b(c2b);
@@ -1237,9 +1237,9 @@ int castle_slave_superblocks_writeback(struct castle_slave *cs, uint32_t version
 
     /* Calculate checksum for superblocks - with checksum bytes set to 0. */
     cs_sb->pub.checksum = fs_sb->pub.checksum = 0;
-    cs_sb->pub.checksum = fletcher32((uint16_t *)cs_sb, 
+    cs_sb->pub.checksum = fletcher32((uint16_t *)cs_sb,
                                      sizeof(struct castle_slave_superblock));
-    fs_sb->pub.checksum = fletcher32((uint16_t *)fs_sb, 
+    fs_sb->pub.checksum = fletcher32((uint16_t *)fs_sb,
                                      sizeof(struct castle_fs_superblock));
 
     /* Copy superblocks with valid checksums. */
@@ -1356,7 +1356,7 @@ static int castle_slave_add(struct castle_slave *cs)
         s = list_entry(l, struct castle_slave, list);
         if(s->uuid == cs->uuid)
         {
-            castle_printk(LOG_ERROR, "Uuid of two slaves match (uuid=0x%x, id1=%d, id2=%d)\n", 
+            castle_printk(LOG_ERROR, "Uuid of two slaves match (uuid=0x%x, id1=%d, id2=%d)\n",
                     cs->uuid, s->id, cs->id);
             return -EINVAL;
         }
@@ -1400,7 +1400,7 @@ struct castle_slave* castle_claim(uint32_t new_dev)
 
     dev = new_decode_dev(new_dev);
     bdev = open_by_devnum(dev, FMODE_READ|FMODE_WRITE);
-    if (IS_ERR(bdev)) 
+    if (IS_ERR(bdev))
     {
         castle_printk(LOG_ERROR, "Could not open %s.\n", __bdevname(dev, b));
         bdev = NULL;
@@ -1418,7 +1418,7 @@ struct castle_slave* castle_claim(uint32_t new_dev)
     }
 
     /* Make sure that the disk is at least FREE_SPACE_START big. */
-    if(get_bd_capacity(bdev) < (FREE_SPACE_START << (20 - 9))) 
+    if(get_bd_capacity(bdev) < (FREE_SPACE_START << (20 - 9)))
     {
         castle_printk(LOG_ERROR, "Disk %s capacity too small. Must be at least %dM, got %lldM\n",
                  __bdevname(dev, b), FREE_SPACE_START, get_bd_capacity(bdev) >> (20 - 9));
@@ -1426,7 +1426,7 @@ struct castle_slave* castle_claim(uint32_t new_dev)
     }
 
     err = bd_claim(bdev, &castle);
-    if (err) 
+    if (err)
     {
         castle_printk(LOG_ERROR, "Could not bd_claim %s, err=%d.\n", cs->bdev_name, err);
         goto err_out;
@@ -1500,7 +1500,7 @@ struct castle_slave* castle_claim(uint32_t new_dev)
         castle_printk(LOG_ERROR, "Could not add slave to sysfs.\n");
         goto err_out;
     }
-    
+
     castle_events_slave_claim(cs->uuid);
 
     return cs;
@@ -1521,7 +1521,7 @@ err_out:
     if(cs)   castle_free(cs);
     slave_id--;
 
-    return NULL;    
+    return NULL;
 }
 
 void castle_release_oos_slave(struct work_struct *work)
@@ -1631,7 +1631,7 @@ void castle_bio_get(c_bio_t *c_bio)
     atomic_inc(&c_bio->count);
 }
 
-/* Do not declare this as static because castle_debug calls this directly. 
+/* Do not declare this as static because castle_debug calls this directly.
    But this is the only external reference */
 void castle_bio_put(c_bio_t *c_bio)
 {
@@ -1652,7 +1652,7 @@ void castle_bio_put(c_bio_t *c_bio)
     bio_endio(bio, err);
 #endif
 }
-   
+
 
 static void castle_bio_data_copy(c_bvec_t *c_bvec, c2_block_t *c2b)
 {
@@ -1687,23 +1687,23 @@ static void castle_bio_data_copy(c_bvec_t *c_bvec, c2_block_t *c2b)
         /* Work out which sectors to copy */
         first_sec = (bv_first_sec < cbv_first_sec ? cbv_first_sec : bv_first_sec);
         last_sec  = (bv_last_sec  < cbv_last_sec  ? bv_last_sec   : cbv_last_sec);
-        
-#ifdef CASTLE_DEBUG        
+
+#ifdef CASTLE_DEBUG
         /* Some sanity checks */
         BUG_ON(last_sec <= first_sec);
         BUG_ON(last_sec > bv_last_sec);
         BUG_ON(last_sec > cbv_last_sec);
         BUG_ON(first_sec < bv_first_sec);
         BUG_ON(first_sec < cbv_first_sec);
-#endif        
-        
+#endif
+
         bvec_buf  = pfn_to_kaddr(page_to_pfn(bvec->bv_page));
         bvec_buf += bvec->bv_offset + ((first_sec - sector) << 9);
         /* If invalid block, we are handling non-allocated block read */
         if(c2b)
         {
             /* @TODO use better macros than page_to_pfn etc */
-            buf  = c2b_buffer(c2b); 
+            buf  = c2b_buffer(c2b);
             buf += (first_sec - cbv_first_sec) << 9;
 
             memcpy( write ? buf : bvec_buf,
@@ -1716,7 +1716,7 @@ static void castle_bio_data_copy(c_bvec_t *c_bvec, c2_block_t *c2b)
     }
 
     /* Dirty buffers on writes */
-    if(write) 
+    if(write)
     {
         BUG_ON(!c2b);
         dirty_c2b(c2b);
@@ -1728,7 +1728,7 @@ static void castle_bio_data_copy(c_bvec_t *c_bvec, c2_block_t *c2b)
         write_unlock_c2b(c2b);
         put_c2b(c2b);
     }
-    
+
     castle_bio_put(c_bvec->c_bio);
 }
 
@@ -1764,10 +1764,10 @@ static void castle_bio_data_io_do(c_bvec_t *c_bvec, c_ext_pos_t cep)
     c2_block_t *c2b;
     int write = (c_bvec_data_dir(c_bvec) == WRITE);
 
-    /* 
+    /*
      * Invalid pointer to on slave data means that it's never been written before.
      * Memset BIO buffer page to zero.
-     * This should not happen on writes, since btree handling code should have 
+     * This should not happen on writes, since btree handling code should have
      * allocated a new block (@TODO: what if we've just run out of capacity ...)
      */
     if(EXT_POS_INVAL(cep))
@@ -1817,7 +1817,7 @@ static int castle_bio_data_cvt_get(c_bvec_t    *c_bvec,
     c_ext_pos_t cep;
     int ret;
 
-    BUG_ON(c_bvec_data_dir(c_bvec) != WRITE); 
+    BUG_ON(c_bvec_data_dir(c_bvec) != WRITE);
 
     /* If the block has already been allocated, override it */
     if (!CVT_INVALID(prev_cvt))
@@ -1828,7 +1828,7 @@ static int castle_bio_data_cvt_get(c_bvec_t    *c_bvec,
     }
 
     /* Otherwise, allocate a new out-of-line block */
-    ret = castle_ext_freespace_get(&c_bvec->tree->data_ext_free, 
+    ret = castle_ext_freespace_get(&c_bvec->tree->data_ext_free,
                                     C_BLK_SIZE,
                                     0, &cep);
     if (ret < 0)
@@ -1843,35 +1843,35 @@ static int castle_bio_data_cvt_get(c_bvec_t    *c_bvec,
     return 0;
 }
 
-static void castle_bio_data_io_end(c_bvec_t     *c_bvec, 
-                                   int           err, 
+static void castle_bio_data_io_end(c_bvec_t     *c_bvec,
+                                   int           err,
                                    c_val_tup_t   cvt)
 {
     debug("Finished the IO.\n");
     castle_debug_bvec_update(c_bvec, C_BVEC_IO_END);
-   
-    if(err) 
+
+    if(err)
         castle_bio_data_io_error(c_bvec, err);
     else
     {
         BUG_ON(!CVT_INVALID(cvt) && !CVT_MEDIUM_OBJECT(cvt));
-        BUG_ON(CVT_MEDIUM_OBJECT(cvt) && 
+        BUG_ON(CVT_MEDIUM_OBJECT(cvt) &&
                (cvt.cep.ext_id != c_bvec->tree->data_ext_free.ext_id));
         castle_bio_data_io_do(c_bvec, cvt.cep);
     }
 }
- 
+
 static int castle_bio_validate(struct bio *bio)
 {
     struct bio_vec *bvec;
     int i;
-        
+
     bio_for_each_segment(bvec, bio, i)
     {
-        if(((bvec->bv_offset % (1<<9)) != 0) ||  
-           ((bvec->bv_len    % (1<<9)) != 0)) 
+        if(((bvec->bv_offset % (1<<9)) != 0) ||
+           ((bvec->bv_len    % (1<<9)) != 0))
         {
-            castle_printk(LOG_WARN, "Got non aligned IO: len=0x%x, offset=0x%x\n", 
+            castle_printk(LOG_WARN, "Got non aligned IO: len=0x%x, offset=0x%x\n",
                     bvec->bv_len, bvec->bv_offset);
             return -EINVAL;
         }
@@ -1913,7 +1913,7 @@ static void castle_device_c_bvec_make(c_bio_t *c_bio,
 }
 
 static int castle_device_make_request(struct request_queue *rq, struct bio *bio)
-{ 
+{
     c_bio_t *c_bio = NULL;
     struct castle_attachment *dev = rq->queuedata;
     struct bio_vec *bvec;
@@ -1925,12 +1925,12 @@ static int castle_device_make_request(struct request_queue *rq, struct bio *bio)
     if(castle_bio_validate(bio))
         goto fail_bio;
 
-    /* We'll generate at most bi_vcnt + 1 castle_bio_vecs (for full page, 
+    /* We'll generate at most bi_vcnt + 1 castle_bio_vecs (for full page,
        unaligned bvecs) */
     c_bio = castle_utils_bio_alloc(bio->bi_vcnt + 1);
-    if(!c_bio) 
+    if(!c_bio)
         goto fail_bio;
-    
+
     c_bio->attachment = dev;
     c_bio->bio        = bio;
     c_bio->data_dir   = bio_data_dir(bio);
@@ -1957,7 +1957,7 @@ static int castle_device_make_request(struct request_queue *rq, struct bio *bio)
         {
             /* We should have only advanced by one block */
             BUG_ON(block != last_block + 1);
-            /* Make sure we never try to use too many c_bvecs 
+            /* Make sure we never try to use too many c_bvecs
                (we've got bi_vcnt + 1) */
             BUG_ON(j > bio->bi_vcnt);
             /* Block cannot possibly correspond to one bvec exactly */
@@ -1977,7 +1977,7 @@ static int castle_device_make_request(struct request_queue *rq, struct bio *bio)
 
 fail_bio:
     if(c_bio) castle_utils_bio_free(c_bio);
- 
+
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,18)
     bio_endio(bio, 0, -EIO);
 #else
@@ -2006,7 +2006,7 @@ struct castle_attachment* castle_device_find(dev_t dev)
     return NULL;
 }
 
-struct castle_attachment* castle_attachment_get(collection_id_t col_id, int rw)
+struct castle_attachment* castle_attachment_get(c_collection_id_t col_id, int rw)
 {
     struct castle_attachment *ca, *result = NULL;
     struct list_head *lh;
@@ -2054,9 +2054,9 @@ void castle_attachment_put(struct castle_attachment *ca)
 
     if (to_free)
     {
-        version_t version = ca->version;
-        da_id_t da_id = castle_version_da_id_get(version);
-        collection_id_t ca_id = ca->col.id;
+        c_ver_t version = ca->version;
+        c_da_t da_id = castle_version_da_id_get(version);
+        c_collection_id_t ca_id = ca->col.id;
 
         castle_events_collection_detach(ca->col.id);
         castle_sysfs_collection_del(ca);
@@ -2094,8 +2094,8 @@ EXPORT_SYMBOL(castle_attachment_get);
 EXPORT_SYMBOL(castle_attachment_put);
 
 struct castle_attachment* castle_attachment_init(int device, /* _or_object_collection */
-                                                 version_t version,
-                                                 da_id_t *da_id,
+                                                 c_ver_t version,
+                                                 c_da_t *da_id,
                                                  c_byte_off_t *size,
                                                  int *leaf)
 {
@@ -2105,7 +2105,7 @@ struct castle_attachment* castle_attachment_init(int device, /* _or_object_colle
         return NULL;
     BUG_ON(castle_version_read(version, da_id, NULL, NULL, size, leaf));
 
-    attachment = castle_malloc(sizeof(struct castle_attachment), GFP_KERNEL); 
+    attachment = castle_malloc(sizeof(struct castle_attachment), GFP_KERNEL);
     if(!attachment)
         return NULL;
     init_rwsem(&attachment->lock);
@@ -2125,18 +2125,18 @@ struct castle_attachment* castle_attachment_init(int device, /* _or_object_colle
     atomic64_set(&attachment->rq.bytes, 0);
     atomic64_set(&attachment->rq_nr_keys, 0);
 
-    return attachment; 
+    return attachment;
 }
 
 void castle_device_free(struct castle_attachment *cd)
 {
-    version_t version = cd->version;
-    
+    c_ver_t version = cd->version;
+
     castle_events_device_detach(cd->dev.gd->major, cd->dev.gd->first_minor);
 
     castle_printk(LOG_INFO, "===> When freeing the number of cd users is: %d\n", cd->ref_cnt);
     castle_sysfs_device_del(cd);
-    /* @TODO: Should this be done? blk_cleanup_queue(cd->dev.gd->rq); */ 
+    /* @TODO: Should this be done? blk_cleanup_queue(cd->dev.gd->rq); */
     del_gendisk(cd->dev.gd);
     put_disk(cd->dev.gd);
     list_del(&cd->list);
@@ -2144,7 +2144,7 @@ void castle_device_free(struct castle_attachment *cd)
     castle_version_detach(version);
 }
 
-struct castle_attachment* castle_device_init(version_t version)
+struct castle_attachment* castle_device_init(c_ver_t version)
 {
     struct castle_attachment *dev = NULL;
     struct request_queue *rq      = NULL;
@@ -2154,7 +2154,7 @@ struct castle_attachment* castle_device_init(version_t version)
     int leaf;
     int err;
 
-    dev = castle_attachment_init(1, version, NULL, &size, &leaf); 
+    dev = castle_attachment_init(1, version, NULL, &size, &leaf);
     if(!dev)
         goto error_out;
     gd = alloc_disk(1);
@@ -2173,20 +2173,20 @@ struct castle_attachment* castle_device_init(version_t version)
     blk_queue_make_request(rq, castle_device_make_request);
     rq->queuedata    = dev;
     gd->queue        = rq;
-    if(!leaf) 
+    if(!leaf)
         set_disk_ro(gd, 1);
 
     list_add(&dev->list, &castle_attachments.attachments);
     dev->dev.gd = gd;
-    
+
     set_capacity(gd, size >> 9);
     add_disk(gd);
 
     bdget(MKDEV(gd->major, gd->first_minor));
     err = castle_sysfs_device_add(dev);
-    if(err) 
+    if(err)
     {
-        /* @TODO: this doesn't do bdput. device_free doesn't 
+        /* @TODO: this doesn't do bdput. device_free doesn't
                   do this neither, and it works ... */
         del_gendisk(gd);
         list_del(&dev->list);
@@ -2198,27 +2198,27 @@ struct castle_attachment* castle_device_init(version_t version)
     return dev;
 
 error_out:
-    if(gd)  put_disk(gd); 
-    if(rq)  blk_cleanup_queue(rq); 
+    if(gd)  put_disk(gd);
+    if(rq)  blk_cleanup_queue(rq);
     if(dev) castle_free(dev);
     castle_printk(LOG_ERROR, "Failed to init device.\n");
-    return NULL;    
+    return NULL;
 }
 
-struct castle_attachment* castle_collection_init(version_t version, char *name)
+struct castle_attachment* castle_collection_init(c_ver_t version, char *name)
 {
     struct castle_attachment *collection = NULL;
-    static collection_id_t collection_id = 0;
-    da_id_t da_id;
+    static c_collection_id_t collection_id = 0;
+    c_da_t da_id;
     int err;
     int da_get = 0;
 
     BUG_ON(strlen(name) > MAX_NAME_SIZE);
 
-    collection = castle_attachment_init(0, version, &da_id, NULL, NULL); 
+    collection = castle_attachment_init(0, version, &da_id, NULL, NULL);
     if(!collection)
         goto error_out;
-    
+
     if(DA_INVAL(da_id))
     {
         castle_printk(LOG_WARN,
@@ -2238,7 +2238,7 @@ struct castle_attachment* castle_collection_init(version_t version, char *name)
     spin_unlock(&castle_attachments.lock);
 
     err = castle_sysfs_collection_add(collection);
-    if(err) 
+    if(err)
     {
         spin_lock(&castle_attachments.lock);
         list_del(&collection->list);
@@ -2255,7 +2255,7 @@ error_out:
     if(collection) castle_free(collection);
     if(da_get) castle_double_array_put(da_id);
     castle_printk(LOG_USERINFO, "Failed to init collection.\n");
-    return NULL;    
+    return NULL;
 }
 
 void castle_slave_access(uint32_t uuid)
@@ -2267,8 +2267,8 @@ void castle_slave_access(uint32_t uuid)
     BUG_ON(!cs);
     BUG_ON(test_bit(CASTLE_SLAVE_GHOST_BIT, &cs->flags));
 
-    cs->last_access = jiffies; 
-        
+    cs->last_access = jiffies;
+
     sb = castle_slave_superblock_get(cs);
     if(!(sb->pub.flags & CASTLE_SLAVE_SPINNING))
     {
@@ -2301,7 +2301,7 @@ static void castle_slaves_spindown(struct work_struct *work)
         if((cs->last_access + 5 * HZ < jiffies) &&
            !(sb->flags & CASTLE_SLAVE_TARGET))
         {
-            sb->flags &= ~CASTLE_SLAVE_SPINNING; 
+            sb->flags &= ~CASTLE_SLAVE_SPINNING;
             castle_slave_superblock_put(cs, 1);
             castle_events_spindown(cs->uuid);
         } else
@@ -2312,8 +2312,8 @@ static void castle_slaves_spindown(struct work_struct *work)
     }
     rcu_read_unlock();
 }
-    
-static struct timer_list spindown_timer; 
+
+static struct timer_list spindown_timer;
 static struct work_struct spindown_work_item;
 static void castle_slaves_spindowns_check(unsigned long first)
 {
@@ -2327,7 +2327,7 @@ static void castle_slaves_spindowns_check(unsigned long first)
         sleep = 10*HZ;
     }
     else
-        queue_work(castle_wq, &spindown_work_item); 
+        queue_work(castle_wq, &spindown_work_item);
 
     /* Reschedule ourselves */
     setup_timer(&spindown_timer, castle_slaves_spindowns_check, 0);
@@ -2342,8 +2342,8 @@ static void castle_wqs_fini(void)
     for(i=0; i<=2*MAX_BTREE_DEPTH; i++)
     {
         if(wq_names[i])
-            castle_free(wq_names[i]); 
-        if(castle_wqs[i]) 
+            castle_free(wq_names[i]);
+        if(castle_wqs[i])
             destroy_workqueue(castle_wqs[i]);
     }
 }
@@ -2394,7 +2394,7 @@ static void castle_slaves_free(void)
     rcu_read_lock();
     list_for_each_safe_rcu(lh, th, &castle_slaves.slaves)
     {
-        slave = list_entry(lh, struct castle_slave, list); 
+        slave = list_entry(lh, struct castle_slave, list);
         castle_release(slave);
     }
     rcu_read_unlock();
@@ -2423,13 +2423,13 @@ static int castle_attachments_init(void)
     INIT_LIST_HEAD(&castle_attachments.attachments);
 
     /* Allocate a major for this device */
-    if((major = register_blkdev(0, "castle-fs")) < 0) 
+    if((major = register_blkdev(0, "castle-fs")) < 0)
     {
         castle_printk(LOG_ERROR, "Couldn't register castle device\n");
         return -ENOMEM;
     }
     spin_lock_init(&castle_attachments.lock);
-        
+
     castle_attachments.major = major;
 
     return 0;
@@ -2442,7 +2442,7 @@ static void castle_attachments_free(void)
 
     list_for_each_safe(lh, th, &castle_attachments.attachments)
     {
-        ca = list_entry(lh, struct castle_attachment, list); 
+        ca = list_entry(lh, struct castle_attachment, list);
         if(ca->device)
             castle_device_free(ca);
         else
@@ -2524,7 +2524,7 @@ err_out3:
 err_out2:
     castle_printk_fini();
 err_out1:
-    
+
     return ret;
 }
 
@@ -2544,16 +2544,16 @@ static void __exit castle_exit(void)
     /* Now, make sure no more IO can be made, internally or externally generated */
     castle_double_array_merges_fini();  /* Completes all internal i/o - merges. */
     castle_extents_rebuild_fini();
-    castle_checkpoint_fini(); 
+    castle_checkpoint_fini();
     /* Note: Changes from here are not persistent. */
     castle_attachments_free();
-    /* Cleanup/writeout all metadata */ 
+    /* Cleanup/writeout all metadata */
     castle_double_array_fini();
     castle_btree_free();
     castle_versions_fini();
     /* Make sure all resubmitted I/O is handled before exit */
     castle_resubmit_fini();
-    /* Flush the cache, free the slaves. */ 
+    /* Flush the cache, free the slaves. */
     castle_cache_fini();
     castle_extents_fini();
     castle_slaves_free();

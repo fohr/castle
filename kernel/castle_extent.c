@@ -17,21 +17,21 @@
 #include "castle_rebuild.h"
 #include "castle_events.h"
 
-/* Extent manager - Every disk reserves few chunks in the begining of the disk to 
+/* Extent manager - Every disk reserves few chunks in the begining of the disk to
  * store meta data. Meta data for freespace management (for each disk) would be
  * stored only on specific disk. Meta data for extent management is stored
  * across multiple disks. This meta data is stored in terms of special extents.
  *
- * Super Extent - One for each disk. Located on initial chunks [SUP_EXT_SIZE] for 
- * each disk. First chunk contains super block. Next subsequent chunks contain the 
+ * Super Extent - One for each disk. Located on initial chunks [SUP_EXT_SIZE] for
+ * each disk. First chunk contains super block. Next subsequent chunks contain the
  * freespace data structures.
  *
  * Micro Extent - Contains mappings for meta extent. Replicated on all disks.
  *
- * Meta Extent - One extent for the complete system to store extent manager's 
+ * Meta Extent - One extent for the complete system to store extent manager's
  * structures i.e. extent strcuture and chunk mappings. This extent is spread
  * and replicated across all disks to reduce the riscue of failure. Meta data of
- * this extent is stored on all disks (in Super extent). 
+ * this extent is stored on all disks (in Super extent).
  */
 
 //#define DEBUG
@@ -63,7 +63,7 @@
         (_me)->curr_rebuild_seqno = (_ext)->curr_rebuild_seqno;             \
         (_me)->ext_type     = (_ext)->ext_type;                             \
         (_me)->da_id        = (_ext)->da_id;
- 
+
 #define FAULT_CODE EXTENT_FAULT
 
 c_chk_cnt_t meta_ext_size = 0;
@@ -90,10 +90,10 @@ typedef struct castle_extent {
     uint8_t             alive;
     c_ext_dirtytree_t  *dirtytree;      /**< RB-tree of dirty c2bs.                     */
     struct work_struct *work;           /**< work structure to schedule extent free.    */
-    uint8_t             deleted;        /**< Marked when an extent is not refrenced by 
+    uint8_t             deleted;        /**< Marked when an extent is not refrenced by
                                              anybody anymore. Safe to free it now.      */
     c_ext_type_t        ext_type;       /**< Type of extent.                            */
-    da_id_t             da_id;          /**< DA that extent corresponds to.             */
+    c_da_t              da_id;          /**< DA that extent corresponds to.             */
 } c_ext_t;
 
 static struct list_head *castle_extents_hash = NULL;
@@ -110,7 +110,7 @@ typedef struct c_ext_event {
 } c_ext_event_t;
 
 static c_ext_id_t _castle_extent_alloc(c_rda_type_t   rda_type,
-                                       da_id_t        da_id,
+                                       c_da_t         da_id,
                                        c_ext_type_t   ext_type,
                                        c_chk_cnt_t    count,
                                        c_ext_id_t     ext_id,
@@ -121,7 +121,7 @@ DEFINE_HASH_TBL(castle_extents, castle_extents_hash, CASTLE_EXTENTS_HASH_SIZE,
                 c_ext_t, hash_list, c_ext_id_t, ext_id);
 
 
-c_ext_t sup_ext = { 
+c_ext_t sup_ext = {
     .ext_id         = SUP_EXT_ID,
     .size           = SUP_EXT_SIZE,
     .type           = SUPER_EXT,
@@ -193,16 +193,16 @@ static c_ext_t * castle_ext_alloc(c_ext_id_t ext_id)
     return ext;
 }
 
-static int castle_extent_print(c_ext_t *ext, void *unused) 
+static int castle_extent_print(c_ext_t *ext, void *unused)
 {
     debug("Print   Extent   %llu\n", ext->ext_id);
     debug("        Size     %u chunks\n", ext->size);
     debug("        Maps at  "cep_fmt_str_nl, cep2str(ext->maps_cep));
-   
+
     return 0;
 }
 
-void castle_extent_mark_live(c_ext_id_t ext_id, da_id_t da_id)
+void castle_extent_mark_live(c_ext_id_t ext_id, c_da_t da_id)
 {
     c_ext_t *ext = castle_extents_hash_get(ext_id);
 
@@ -293,7 +293,7 @@ static void castle_extents_super_block_writeback(void)
 }
 
 /**
- * Start an extent transaction. An extent transaction makes sure that all extent operations in 
+ * Start an extent transaction. An extent transaction makes sure that all extent operations in
  * transaction are atomic.
  */
 void castle_extent_transaction_start(void)
@@ -302,7 +302,7 @@ void castle_extent_transaction_start(void)
 }
 
 /**
- * End the extent transaction. 
+ * End the extent transaction.
  */
 void castle_extent_transaction_end(void)
 {
@@ -315,7 +315,7 @@ int castle_extent_in_transaction(void)
 }
 
 /**
- * Get global extent superblock. Dont try to get mutex. Function is called with mutex. 
+ * Get global extent superblock. Dont try to get mutex. Function is called with mutex.
  */
 struct castle_extents_superblock* _castle_extents_super_block_get(void)
 {
@@ -329,7 +329,7 @@ struct castle_extents_superblock* castle_extents_super_block_get(void)
 
     return &castle_extents_global_sb;
 }
- 
+
 /**
  * Adds a new slave into the micro_maps. Used during claims after fs init.
  *
@@ -407,7 +407,7 @@ static int castle_extent_micro_ext_create(void)
             continue;
 
         BUG_ON(MICRO_EXT_SIZE != 1);
-        
+
         micro_maps[i].slave_id = cs->uuid;
         micro_maps[i].offset   = MICRO_EXT_START;
         i++;
@@ -467,7 +467,7 @@ static int castle_extent_mstore_ext_create(void)
     c_ext_t *mstore_ext;
     struct   castle_extents_superblock *castle_extents_sb;
     c_ext_id_t ext_id;
-    int      k_factor = (castle_rda_spec_get(DEFAULT_RDA))->k_factor; 
+    int      k_factor = (castle_rda_spec_get(DEFAULT_RDA))->k_factor;
 
     BUG_ON(!castle_extent_in_transaction());
 
@@ -570,7 +570,7 @@ static int castle_extent_writeback(c_ext_t *ext, void *store)
 {
     struct castle_elist_entry mstore_entry;
     c_mstore_t *castle_extents_mstore = store;
- 
+
     /* Shouldnt be any outstanding deletions before last checkpoint. */
     BUG_ON(castle_extents_exiting && ext->deleted);
 
@@ -605,7 +605,7 @@ int castle_extents_writeback(void)
         while (atomic_read(&castle_extents_dead_count))
             msleep_interruptible(1000);
 
-    castle_extents_mstore = 
+    castle_extents_mstore =
         castle_mstore_init(MSTORE_EXTENTS, sizeof(struct castle_elist_entry));
     if(!castle_extents_mstore)
         return -ENOMEM;
@@ -734,7 +734,7 @@ int castle_extents_read_complete(void)
     c_mstore_t *castle_extents_mstore = NULL;
     c_mstore_key_t key;
 
-    castle_extents_mstore = 
+    castle_extents_mstore =
         castle_mstore_open(MSTORE_EXTENTS, sizeof(struct castle_elist_entry));
     if(!castle_extents_mstore)
         return -ENOMEM;
@@ -786,7 +786,7 @@ void castle_extents_fini(void)
     castle_free(castle_extents_hash);
 }
 
-#define MAX_K_FACTOR   4 
+#define MAX_K_FACTOR   4
 struct castle_extent_state {
     c_ext_t *ext;
     c_chk_t  chunks[MAX_NR_SLAVES][MAX_K_FACTOR];
@@ -803,19 +803,19 @@ struct castle_extent_state {
  */
 static struct castle_extent_state *castle_extent_state_alloc(c_ext_t *ext)
 {
-    struct castle_extent_state *ext_state; 
+    struct castle_extent_state *ext_state;
     int i, j;
 
     ext_state = castle_malloc(sizeof(struct castle_extent_state), GFP_KERNEL);
     if(!ext_state)
         return NULL;
-    
+
     ext_state->ext = ext;
     for(i=0; i<MAX_NR_SLAVES; i++)
         for(j=0; j<MAX_K_FACTOR; j++)
-            ext_state->chunks[i][j] = INVAL_CHK;  
+            ext_state->chunks[i][j] = INVAL_CHK;
 
-    return ext_state; 
+    return ext_state;
 }
 
 /**
@@ -824,9 +824,9 @@ static struct castle_extent_state *castle_extent_state_alloc(c_ext_t *ext)
  *
  * @param ext   Extent to free the disk space for.
  * @param count Number of chunks to free.
- * 
- * @FIXME Cannot handle kmalloc failure. We should retry freeing extent freespace, 
- * once memory becomes available. 
+ *
+ * @FIXME Cannot handle kmalloc failure. We should retry freeing extent freespace,
+ * once memory becomes available.
  */
 static void castle_extent_space_free(c_ext_t *ext, c_chk_cnt_t count)
 {
@@ -838,8 +838,8 @@ static void castle_extent_space_free(c_ext_t *ext, c_chk_cnt_t count)
 
     debug("Freeing %d disk chunks from extent %lld\n", count, ext->ext_id);
     chks_per_page = map_chks_per_page(ext->k_factor);
-   
-    map_cep = ext->maps_cep; 
+
+    map_cep = ext->maps_cep;
     debug("Map at cep: "cep_fmt_str_nl, cep2str(map_cep));
     while(count>0)
     {
@@ -853,10 +853,10 @@ static void castle_extent_space_free(c_ext_t *ext, c_chk_cnt_t count)
             BUG_ON(submit_c2b_sync(READ, map_c2b));
         map_buf = c2b_buffer(map_c2b);
 
-        /* Work out how many logical chunks (in the extent space) to free. */ 
-        logical_chunks = (count > chks_per_page * ext->k_factor) ? 
+        /* Work out how many logical chunks (in the extent space) to free. */
+        logical_chunks = (count > chks_per_page * ext->k_factor) ?
                             chks_per_page :
-                            (count - 1) / ext->k_factor + 1; 
+                            (count - 1) / ext->k_factor + 1;
         /* For each logical chunk, look through each copy. */
         for( logical_chunk=0; (logical_chunk<chks_per_page) && (count > 0); logical_chunk++)
         {
@@ -881,7 +881,7 @@ static void castle_extent_space_free(c_ext_t *ext, c_chk_cnt_t count)
                 count--;
             }
         }
-    
+
         /* We are done with maps. No need of flushing maps onto disk anymore. Mark them clean. */
         if (c2b_dirty(map_c2b))
             clean_c2b(map_c2b);
@@ -889,7 +889,7 @@ static void castle_extent_space_free(c_ext_t *ext, c_chk_cnt_t count)
         write_unlock_c2b(map_c2b);
 
         /* Destroy maps c2b. dont need this anymore. */
-        /* Ignore we if we fail to destroy - perhaps flush thread or checkpointing thread is 
+        /* Ignore we if we fail to destroy - perhaps flush thread or checkpointing thread is
          * accessing it. */
         if (castle_cache_block_destroy(map_c2b))
             castle_printk(LOG_WARN, "Failed to destroy c2b for cep "cep_fmt_str_nl,
@@ -900,17 +900,17 @@ static void castle_extent_space_free(c_ext_t *ext, c_chk_cnt_t count)
 }
 
 /**
- * Allocates disk chunks for particular extent (specified by the extent state struct). 
+ * Allocates disk chunks for particular extent (specified by the extent state struct).
  * Allocates chunks from the specified slave, takes the copy id into account, to make sure
  * continous reads perform well. Gets superchunks from the freespace periodically, and
  * chops them up into individual chunks.
  *
  * @param da_id     Doubling array id for which the extent is to be allocated.
- * @param slave     Disk slave to allocate disk chunk from. 
+ * @param slave     Disk slave to allocate disk chunk from.
  * @param copy_id   Which copy in the k-RDA set we are trying to allocate.
  * @param token     Reservation token, required to allocate freespace.
  */
-static c_disk_chk_t castle_extent_disk_chk_alloc(da_id_t da_id,
+static c_disk_chk_t castle_extent_disk_chk_alloc(c_da_t da_id,
                                                  struct castle_extent_state *ext_state,
                                                  struct castle_slave *slave,
                                                  int copy_id,
@@ -925,7 +925,7 @@ static c_disk_chk_t castle_extent_disk_chk_alloc(da_id_t da_id,
     /* Work out which chunk sequence we are using. */
     chk = &ext_state->chunks[slave->id][copy_id];
     debug("*chk: %d/0x%x\n", *chk, *chk);
-    /* If we've got some chunks left in our cache, return one from there. */ 
+    /* If we've got some chunks left in our cache, return one from there. */
     if(!CHK_INVAL(*chk))
     {
         disk_chk.offset = *chk;
@@ -954,30 +954,30 @@ static c_disk_chk_t castle_extent_disk_chk_alloc(da_id_t da_id,
     }
     /* Chunk sequence must represent a single superchunk. */
     BUG_ON(chk_seq.count != CHKS_PER_SLOT);
-    
-    debug("Allocated disk superchunk: %d, for extent: %lld\n", 
+
+    debug("Allocated disk superchunk: %d, for extent: %lld\n",
             chk_seq.first_chk, ext_state->ext->ext_id);
-    disk_chk.offset = chk_seq.first_chk; 
+    disk_chk.offset = chk_seq.first_chk;
     *chk = chk_seq.first_chk + 1;
- 
+
     return disk_chk;
 }
 
 /**
- * Gets location of the map for given chunk, given the start of the map, and k_factor. 
+ * Gets location of the map for given chunk, given the start of the map, and k_factor.
  *
  * @param map_start     Location of the start of the map (usually in the meta extent).
- * @param chk_idx       Which chunk is the map location requested for. 
+ * @param chk_idx       Which chunk is the map location requested for.
  * @param k_factor      K-factor of the RDA scheme used by the particular extent.
  */
-static inline c_ext_pos_t castle_extent_map_cep_get(c_ext_pos_t map_start, 
-                                                    c_chk_t chk_idx, 
+static inline c_ext_pos_t castle_extent_map_cep_get(c_ext_pos_t map_start,
+                                                    c_chk_t chk_idx,
                                                     uint32_t k_factor)
 {
     c_chk_t chks_per_page;
-    
+
     /* Work out how many chunks fit in one page. */
-    chks_per_page = map_chks_per_page(k_factor); 
+    chks_per_page = map_chks_per_page(k_factor);
     map_start.offset += PAGE_SIZE * (chk_idx / chks_per_page);
     map_start.offset += k_factor * sizeof(c_disk_chk_t) * (chk_idx % chks_per_page);
 
@@ -989,14 +989,14 @@ static inline c_ext_pos_t castle_extent_map_cep_get(c_ext_pos_t map_start,
  *
  * @param ext   Extent to allocate the space for.
  * @param da_id Doubling array ID.
- * 
+ *
  * @return -ENOMEM: Could not allocate memory for state structure.
  * @return -EINVAL: RDA spec failed to initialise.
- * @return -ENOSPC: Not enough disk space left to create this extent (for the particular set of 
+ * @return -ENOSPC: Not enough disk space left to create this extent (for the particular set of
  *                  slaves chosen by the RDA spec).
  * @return  0:      Success.
  */
-int castle_extent_space_alloc(c_ext_t *ext, da_id_t da_id)
+int castle_extent_space_alloc(c_ext_t *ext, c_da_t da_id)
 {
     struct castle_extent_state *ext_state;
     struct castle_freespace_reservation *reservation_token;
@@ -1037,14 +1037,14 @@ int castle_extent_space_alloc(c_ext_t *ext, da_id_t da_id)
         err = -ENOSPC;
         goto out;
     }
-    
+
     debug("Allocating physical space for extent: %lld, k_factor: %d\n", ext->ext_id, ext->k_factor);
     /* Get k_factor disk chunks for each logical chunk, and save them in the meta extent. */
     max_map_page_idx = map_chks_per_page(ext->k_factor);
 
 retry:
     map_cep = ext->maps_cep;
-    map_page_idx = max_map_page_idx; 
+    map_page_idx = max_map_page_idx;
     map_page = NULL;
     map_c2b = NULL;
     for(chunk=0; chunk<ext->size; chunk++)
@@ -1067,17 +1067,17 @@ retry:
             write_lock_c2b(map_c2b);
             update_c2b(map_c2b);
             /* Reset the index, and the map pointer. */
-            map_page_idx = 0; 
+            map_page_idx = 0;
             map_page = c2b_buffer(map_c2b);
             /* Advance the map cep. */
             map_cep.offset += C_BLK_SIZE;
         }
 
         /* Ask the RDA spec which slaves to use. */
-        if (rda_spec->next_slave_get( slaves, 
-                                      schk_ids, 
+        if (rda_spec->next_slave_get( slaves,
+                                      schk_ids,
                                      &reservation_token,
-                                      rda_state, 
+                                      rda_state,
                                       chunk) < 0)
         {
             castle_printk(LOG_WARN, "Failed to get next slave for extent: %llu\n", ext->ext_id);
@@ -1088,13 +1088,13 @@ retry:
         /* Allocate disk chunks from each slave designated by the rda spec. */
         for (j=0; j<ext->k_factor; j++)
         {
-            disk_chk = castle_extent_disk_chk_alloc(da_id, 
-                                                    ext_state, 
-                                                    slaves[j], 
+            disk_chk = castle_extent_disk_chk_alloc(da_id,
+                                                    ext_state,
+                                                    slaves[j],
                                                     schk_ids[j],
                                                     reservation_token);
             debug("Allocation for (logical_chunk=%d, copy=%d) -> (slave=0x%x, "disk_chk_fmt")\n",
-                chunk, j, slaves[j]->uuid, disk_chk2str(disk_chk)); 
+                chunk, j, slaves[j]->uuid, disk_chk2str(disk_chk));
             if(DISK_CHK_INVAL(disk_chk))
             {
                 debug("Invalid disk chunk, freeing the extent.\n");
@@ -1114,7 +1114,7 @@ retry:
                 goto out;
             }
             /* Save the disk chunk in the map. */
-            map_page[ext->k_factor * map_page_idx + j] = disk_chk; 
+            map_page[ext->k_factor * map_page_idx + j] = disk_chk;
         }
         map_page_idx++;
     }
@@ -1135,7 +1135,7 @@ out:
 
     return err;
 }
-  
+
 /**
  * Allocate an extent.
  *
@@ -1153,7 +1153,7 @@ out:
  * @also _castle_extent_alloc
  */
 c_ext_id_t castle_extent_alloc(c_rda_type_t             rda_type,
-                               da_id_t                  da_id,
+                               c_da_t                   da_id,
                                c_ext_type_t             ext_type,
                                c_chk_cnt_t              count,
                                int                      in_tran,
@@ -1213,7 +1213,7 @@ static void castle_extent_lfs_callback_add(c_ext_event_t *event_hdl)
  * @param ext_type      [in]    Type of data, that will be stored in extent.
  * @param count         [in]    Size of extent (in chunks). Extent could occupy more space
  *                              than this, depends on RDA algorithm and freespace algos.
- * @param ext_id        [in]    Specify an extent ID, for logical extents. INVAL_EXT_ID for 
+ * @param ext_id        [in]    Specify an extent ID, for logical extents. INVAL_EXT_ID for
  *                              normal extents.
  * @param event_hdl     [in]    Low space event handler structure.
  *
@@ -1225,7 +1225,7 @@ static void castle_extent_lfs_callback_add(c_ext_event_t *event_hdl)
  * @also castle_extent_sup_ext_init()
  */
 static c_ext_id_t _castle_extent_alloc(c_rda_type_t     rda_type,
-                                       da_id_t          da_id,
+                                       c_da_t           da_id,
                                        c_ext_type_t     ext_type,
                                        c_chk_cnt_t      count,
                                        c_ext_id_t       ext_id,
@@ -1616,8 +1616,8 @@ static void __castle_extent_map_get(c_ext_t *ext, c_chk_t chk_idx, c_disk_chk_t 
     }
     else if (ext->ext_id == MICRO_EXT_ID)
     {
-        /* Accessing castle_extents_global_sb without lock. extent_space_alloc() 
-         * calls this function with lock held, which could lead to deadlock. */ 
+        /* Accessing castle_extents_global_sb without lock. extent_space_alloc()
+         * calls this function with lock held, which could lead to deadlock. */
         BUG_ON(chk_idx != 0);
         memcpy(chk_map, castle_extents_global_sb.micro_maps, ext->k_factor * sizeof(c_disk_chk_t));
     }
@@ -1628,7 +1628,7 @@ static void __castle_extent_map_get(c_ext_t *ext, c_chk_t chk_idx, c_disk_chk_t 
         /* Make the map_page_cep offset block aligned. */
         memcpy(&map_page_cep, &map_cep, sizeof(c_ext_pos_t));
         map_page_cep.offset = MASK_BLK_OFFSET(map_page_cep.offset);
-        /* Get the c2b coresponding to map_page_cep. */ 
+        /* Get the c2b coresponding to map_page_cep. */
         map_c2b = castle_cache_page_block_get(map_page_cep);
         if (!c2b_uptodate(map_c2b))
         {
@@ -1655,10 +1655,10 @@ static void __castle_extent_map_get(c_ext_t *ext, c_chk_t chk_idx, c_disk_chk_t 
             write_unlock_c2b(map_c2b);
         }
         read_lock_c2b(map_c2b);
-        /* Check that the mapping for the chunk fits in the page. */ 
+        /* Check that the mapping for the chunk fits in the page. */
         BUG_ON(BLOCK_OFFSET(map_cep.offset) + (ext->k_factor * sizeof(c_disk_chk_t)) > C_BLK_SIZE);
         /* Copy. */
-        memcpy(chk_map, 
+        memcpy(chk_map,
                c2b_buffer(map_c2b) + BLOCK_OFFSET(map_cep.offset),
                ext->k_factor * sizeof(c_disk_chk_t));
 #ifdef DEBUG
@@ -1740,14 +1740,14 @@ c_ext_id_t castle_extent_sup_ext_init(struct castle_slave *cs)
     ext->maps_cep   = sup_ext.maps_cep;
     ext->ext_type   = EXT_T_META_DATA;
     ext->da_id      = 0;
-    
+
     cs->sup_ext_maps = castle_malloc(sizeof(c_disk_chk_t) * ext->size *
                                                     rda_spec->k_factor, GFP_KERNEL);
     BUG_ON(rda_spec->k_factor != ext->k_factor);
     if (!cs->sup_ext_maps)
     {
         castle_printk(LOG_WARN, "Failed to allocate memory for extent chunk "
-                "maps of size %u:%u chunks\n", 
+                "maps of size %u:%u chunks\n",
         ext->size, rda_spec->k_factor);
         goto err2;
     }
@@ -1823,11 +1823,11 @@ void* castle_extent_get(c_ext_id_t ext_id)
 /**
  * Puts the light reference. (Interrupt Context)
  *
- * Trigger _castle_extent_free() if the reference count is 0. But, dont call it from here as 
+ * Trigger _castle_extent_free() if the reference count is 0. But, dont call it from here as
  * free() is sleeping function and we are in interrupt context now. Instead, schedule
- * the _castle_extent_free() on system WQ. This fucntion just marks an extent for deletion, 
+ * the _castle_extent_free() on system WQ. This fucntion just marks an extent for deletion,
  * but doesnt remove it from hash. As removing from hash table and freeing freespace on disk
- * should happen atomically under extents global mutex (as a transaction for the sake of 
+ * should happen atomically under extents global mutex (as a transaction for the sake of
  * checkpoiting).
  *
  * @also: _castle_extent_free
@@ -1837,7 +1837,7 @@ void castle_extent_put(c_ext_id_t ext_id)
     unsigned long flags;
     c_ext_t *ext;
 
-    /* Write lock is required to mark the deleted bit to 1. We dont want to anybody to get 
+    /* Write lock is required to mark the deleted bit to 1. We dont want to anybody to get
      * references, while marking it for deletion.  */
     write_lock_irqsave(&castle_extents_hash_lock, flags);
 
@@ -1853,9 +1853,9 @@ void castle_extent_put(c_ext_id_t ext_id)
         /* Extent shouldn't be already marked for deletion. */
         BUG_ON(ext->deleted);
 
-        /* Mark for deletion. But, dont remove it from hash. 
+        /* Mark for deletion. But, dont remove it from hash.
          *
-         * Notes: Removing it from hash and freeing space should happen together under extent 
+         * Notes: Removing it from hash and freeing space should happen together under extent
          * lock. If we remove it from hash wihtout freeing sapce, then checkpoint would skip the
          * extent but counts freespace occupied by extent. In case of crash, this would leak
          * the freespace. */
@@ -2150,7 +2150,7 @@ static int castle_extent_remap_superchunks_alloc(int slave_idx)
             return -EAGAIN;
         }
     }
- 
+
     /* Chunk sequence must represent a single superchunk. */
     BUG_ON(chk_seq.count != CHKS_PER_SLOT);
 
@@ -2294,8 +2294,8 @@ retry:
             debug("Rebuild tried using a now-dead slave - repopulating remap state\n");
             castle_extents_remap_state_init();
             goto retry;
-        } 
-        else 
+        }
+        else
         if ((ret == -ENOSPC) && want_ssd)
         {
             /*
@@ -2306,8 +2306,8 @@ retry:
             ssds_tried++;
             goto retry;
         }
-        
-        if(ret) 
+
+        if(ret)
             return NULL;
     }
 
@@ -2324,7 +2324,7 @@ retry:
     remap_state.live_slaves[slave_idx]->next_chk =
                         ++remap_state.live_slaves[slave_idx]->next_chk % CHKS_PER_SLOT;
 
-    return disk_chk; 
+    return disk_chk;
 }
 
 /*
@@ -2487,8 +2487,8 @@ retry:
             write_unlock_c2b(c2b);
 
             /* This c2b is not needed any more, and it pollutes the cache, so destroy it. */
-            /* Note: c2b still contains valid data. Destroy could fail due to other potential consumers 
-             * of the c2b. Except in the case logical extents, rebuild is the only consumer accesses in 
+            /* Note: c2b still contains valid data. Destroy could fail due to other potential consumers
+             * of the c2b. Except in the case logical extents, rebuild is the only consumer accesses in
              * chunks. So, there shouldnt be any other references to this c2b. */
             BUG_ON(castle_cache_block_destroy(c2b) && LOGICAL_EXTENT(ext->ext_id));
 
@@ -2723,9 +2723,9 @@ restart:
              * slaves to remapped state. First, create the list of evacuated / oos slaves.
              */
             for (i=0; i<MAX_NR_SLAVES; i++)
-                oos_slaves[i] = evacuated_slaves[i] = 0;    
+                oos_slaves[i] = evacuated_slaves[i] = 0;
             nr_oos_slaves = nr_evacuated_slaves = 0;
-    
+
             rcu_read_lock();
             list_for_each_rcu(entry, &castle_slaves.slaves)
             {

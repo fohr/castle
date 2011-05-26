@@ -34,11 +34,11 @@ static struct page        **watched_data;
 
 #define CANNARY1 0xabcd0123
 #define CANNARY2 0x456789ab
-static void __castle_debug_dobj_add(struct castle_malloc_debug *dobj, 
-                                    size_t size, 
-                                    char *file, 
+static void __castle_debug_dobj_add(struct castle_malloc_debug *dobj,
+                                    size_t size,
+                                    char *file,
                                     int line,
-                                    int vmalloced) 
+                                    int vmalloced)
 {
     /* Init all fields */
     INIT_LIST_HEAD(&dobj->list);
@@ -63,25 +63,25 @@ void* castle_debug_malloc(size_t size, gfp_t flags, char *file, int line)
 
     size += sizeof(struct castle_malloc_debug);
     /* Alloc the object */
-    dobj = kmalloc(size, flags); 
+    dobj = kmalloc(size, flags);
     if(!dobj)
         return NULL;
     /* Init and add the object to the list. */
     __castle_debug_dobj_add(dobj, size, file, line, 0);
 
-    return (char *)dobj + sizeof(struct castle_malloc_debug); 
+    return (char *)dobj + sizeof(struct castle_malloc_debug);
 }
 EXPORT_SYMBOL(castle_debug_malloc);
 
 void* castle_debug_zalloc(size_t size, gfp_t flags, char *file, int line)
 {
     char *obj;
-   
+
     obj = castle_debug_malloc(size, flags, file, line);
     if(obj)
         memset(obj, 0, size);
 
-    return obj; 
+    return obj;
 }
 EXPORT_SYMBOL(castle_debug_zalloc);
 
@@ -121,14 +121,14 @@ void* castle_debug_vmalloc(unsigned long size, char *file, int line)
 
     size += PAGE_SIZE;
     /* Alloc the object */
-    dobj = vmalloc(size); 
+    dobj = vmalloc(size);
     if(!dobj)
         return NULL;
 
     /* Init and add the object to the list. */
     __castle_debug_dobj_add(dobj, size, file, line, 1);
 
-    return (char *)dobj + PAGE_SIZE; 
+    return (char *)dobj + PAGE_SIZE;
 }
 EXPORT_SYMBOL(castle_debug_vmalloc);
 
@@ -171,8 +171,8 @@ static void castle_debug_malloc_fini(void)
         dobj = list_entry(l, struct castle_malloc_debug, list);
         castle_printk(LOG_ERROR, "%s of %u bytes from %s:%d hasn't been deallocated.\n",
                 dobj->vmalloced ? "vmalloc" : "kmalloc/kzalloc",
-                dobj->size, 
-                dobj->file, 
+                dobj->size,
+                dobj->file,
                 dobj->line);
         sum += dobj->size;
         i++;
@@ -193,8 +193,8 @@ static int castle_debug_buffer_sector_written(struct page *pg, sector_t sector)
 {
     uint8_t *buffer = pfn_to_kaddr(page_to_pfn(pg));
     int i;
-     
-    for(i=(sector << 9); 
+
+    for(i=(sector << 9);
         i<((sector+1) << 9);
         i++)
     {
@@ -233,7 +233,7 @@ static void castle_debug_watches_print(void)
         {
             if(castle_debug_buffer_sector_written(watched_data[i], sector))
             {
-                for(j=(sector << 9); 
+                for(j=(sector << 9);
                     j<((sector+1) << 9);
                     j++)
                 {
@@ -264,7 +264,7 @@ static void castle_debug_watches_update(struct bio *bio, uint32_t version)
     bio_for_each_segment(bvec, bio, i)
     {
         for(j=0; j<nr_watches; j++)
-        { 
+        {
             cd_watch_t *watch = &watches[j];
 
             if((sector >> (C_BLK_SHIFT - 9) == watch->block) &&
@@ -279,7 +279,7 @@ static void castle_debug_watches_update(struct bio *bio, uint32_t version)
                 }
             }
             sector += (bvec->bv_len >> 9);
-        } 
+        }
     }
 }
 
@@ -288,7 +288,7 @@ void castle_debug_bio_register(c_bio_t *c_bio, uint32_t version, int nr_bvecs)
     unsigned long flags;
     int i;
 
-    c_bio->nr_bvecs = nr_bvecs; 
+    c_bio->nr_bvecs = nr_bvecs;
     spin_lock_irqsave(&bio_list_spinlock, flags);
     c_bio->id = bio_id++;
     c_bio->stuck = 0;
@@ -304,7 +304,7 @@ void castle_debug_bio_register(c_bio_t *c_bio, uint32_t version, int nr_bvecs)
 void castle_debug_bio_deregister(c_bio_t *c_bio)
 {
     unsigned long flags;
-         
+
     spin_lock_irqsave(&bio_list_spinlock, flags);
     list_del(&c_bio->list);
     spin_unlock_irqrestore(&bio_list_spinlock, flags);
@@ -327,7 +327,7 @@ static int castle_debug_run(void *unused)
         nr_bios = 0;
         list_for_each(l, &bio_list)
         {
-            c_bio = list_entry(l, c_bio_t, list); 
+            c_bio = list_entry(l, c_bio_t, list);
             if(!c_bio->stuck)
             {
                 c_bio->stuck = 1;
@@ -353,7 +353,7 @@ static int castle_debug_run(void *unused)
                     castle_printk(LOG_DEBUG, "Found an outstanding Castle BIOs\n");
                     something_printed = 1;
                 }
- 
+
                 /* Print info about first 10 stuck BIO + all in locking state */
                 if(print || locking)
                     castle_printk(LOG_DEBUG, " c_bio->id=%d, c_bvecs[%d], "
@@ -364,7 +364,7 @@ static int castle_debug_run(void *unused)
                         c_bvec->key, c_bvec->version,
                         c_bvec->btree_depth,
                         c_bvec->state);
-                /* For locking BIOs print what lock are they blocked on. */ 
+                /* For locking BIOs print what lock are they blocked on. */
                 if(locking)
                 {
                     c2_block_t *c2b = c_bvec->locking;
@@ -380,13 +380,13 @@ static int castle_debug_run(void *unused)
             }
         }
         spin_unlock_irqrestore(&bio_list_spinlock, flags);
-        if(something_printed) 
+        if(something_printed)
         {
             castle_printk(LOG_DEBUG, "...\nTotal number of stuck bios=%d\n\n", nr_bios);
             sleep_time += 1;
         }
         castle_cache_stats_print(something_printed);
-  
+
         set_task_state(current, TASK_INTERRUPTIBLE);
         schedule_timeout(sleep_time * HZ);
         castle_cache_debug();
@@ -398,7 +398,7 @@ static int castle_debug_run(void *unused)
 static void castle_debug_watches_free(void)
 {
     int i;
-    
+
     if(watched_data)
     {
         for(i=0; i<nr_watches; i++)
@@ -415,9 +415,9 @@ int castle_debug_init(void)
     debug_thread = kthread_run(castle_debug_run, NULL, "castle-debug");
     if(!debug_thread)
         return -ENOMEM;
-   
+
     /* Try to allocate buffers for watched pages */
-    watched_data = castle_zalloc(sizeof(struct page*) * nr_watches, GFP_KERNEL); 
+    watched_data = castle_zalloc(sizeof(struct page*) * nr_watches, GFP_KERNEL);
     if(!watched_data) goto alloc_failed;
     for(i=0; i<nr_watches; i++)
     {
@@ -427,7 +427,7 @@ int castle_debug_init(void)
     }
     return 0;
 
-alloc_failed:    
+alloc_failed:
     castle_printk(LOG_INIT, "Failed to allocate buffers for debug watches.\n");
     castle_debug_watches_free();
 

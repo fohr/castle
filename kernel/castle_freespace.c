@@ -24,7 +24,7 @@
 castle_freespace_t * freespace_sblk_get(struct castle_slave *cs)
 {
     mutex_lock(&cs->freespace_lock);
-    return &cs->freespace; 
+    return &cs->freespace;
 }
 
 void freespace_sblk_put(struct castle_slave *cs, int dirty)
@@ -58,23 +58,23 @@ static void castle_freespace_reservation_token_validate(struct castle_slave *cs,
  * requests. Reservation can be cancelled. This function cannot be called mulitple times for
  * the same slave, using the same token.
  *
- * @param cs        Slave from which to reserve freespace. 
- * @param nr_schks  Number of superchunks to reserve. 
+ * @param cs        Slave from which to reserve freespace.
+ * @param nr_schks  Number of superchunks to reserve.
  * @param token     Reservation structure, updated by this function. Must be zeroed before first
- *                  call to this function. If token pointer is NULL, the reservation will be 
+ *                  call to this function. If token pointer is NULL, the reservation will be
  *                  made without recording it anywhare. This is dangerous, use with care.
  *
  * @return 0:       Success.
- * @return -ENOSPC: Not enough freespace. 
+ * @return -ENOSPC: Not enough freespace.
  */
-int castle_freespace_slave_superchunks_reserve(struct castle_slave *cs, 
+int castle_freespace_slave_superchunks_reserve(struct castle_slave *cs,
                                                c_chk_cnt_t nr_schks,
                                                struct castle_freespace_reservation *token)
 {
     castle_freespace_t *freespace;
     c_chk_cnt_t free_schks;
     int ret;
-    
+
     /* Validate token, if we have one. */
     if(token)
         castle_freespace_reservation_token_validate(cs, token);
@@ -82,13 +82,13 @@ int castle_freespace_slave_superchunks_reserve(struct castle_slave *cs,
     freespace = freespace_sblk_get(cs);
     /* Work out how many free superchunks there are ATM. */
     if(freespace->cons <= cs->prev_prod)
-        free_schks = cs->prev_prod - freespace->cons; 
+        free_schks = cs->prev_prod - freespace->cons;
     else
         free_schks = freespace->max_entries - freespace->cons + cs->prev_prod;
-    /* Subtract reserved superchunks. */ 
+    /* Subtract reserved superchunks. */
     BUG_ON(free_schks < cs->reserved_schks);
     free_schks -= cs->reserved_schks;
-    
+
     /* Allocate freespace, if enough freespace is available. */
     ret = -ENOSPC;
     if(free_schks >= nr_schks)
@@ -99,7 +99,7 @@ int castle_freespace_slave_superchunks_reserve(struct castle_slave *cs,
             token->reserved_schks[cs->id] = nr_schks;
         ret = 0;
     }
-    /* Release the lock. */ 
+    /* Release the lock. */
     freespace_sblk_put(cs, 0);
 
     return ret;
@@ -118,9 +118,9 @@ static void _castle_freespace_slave_superchunks_unreserve(struct castle_slave *c
 
     /* Get the superblock lock. */
     freespace = freespace_sblk_get(cs);
-    BUG_ON(schks_to_free > cs->reserved_schks); 
+    BUG_ON(schks_to_free > cs->reserved_schks);
     cs->reserved_schks -= schks_to_free;
-    /* Release the lock. */ 
+    /* Release the lock. */
     freespace_sblk_put(cs, 0);
 }
 
@@ -147,13 +147,13 @@ void castle_freespace_slave_superchunks_unreserve(struct castle_slave *cs,
     /* Do the actual work. */
     _castle_freespace_slave_superchunks_unreserve(cs, schks_to_free);
 }
-                                      
+
 /*
  * TBD - document the interface, including use of a NULL token.
  */
 c_chk_seq_t castle_freespace_slave_superchunk_alloc(struct castle_slave *cs,
-                                                    da_id_t da_id,
-                                                    struct castle_freespace_reservation *token) 
+                                                    c_da_t da_id,
+                                                    struct castle_freespace_reservation *token)
 {
     castle_freespace_t  *freespace;
     c_chk_seq_t          chk_seq;
@@ -168,7 +168,7 @@ c_chk_seq_t castle_freespace_slave_superchunk_alloc(struct castle_slave *cs,
         /* If token supplied, check validity. */
         BUG_ON(!token->inited);
         BUG_ON(token->reserved_schks[cs->id] == 0);
-        /* Check for underflows. */ 
+        /* Check for underflows. */
         BUG_ON(token->reserved_schks[cs->id] > ((c_chk_cnt_t)-1)/3);
     } else
     {
@@ -195,7 +195,7 @@ c_chk_seq_t castle_freespace_slave_superchunk_alloc(struct castle_slave *cs,
     cep.offset = MASK_BLK_OFFSET(cons_off);
     c2b = castle_cache_page_block_get(cep);
     write_lock_c2b(c2b);
-    
+
     if ((!c2b_uptodate(c2b)) && (submit_c2b_sync(READ, c2b)))
     {
         debug("Failed to read superblock from slave %x\n", cs->uuid);
@@ -203,7 +203,7 @@ c_chk_seq_t castle_freespace_slave_superchunk_alloc(struct castle_slave *cs,
         put_c2b(c2b);
         freespace_sblk_put(cs, 0);
         /* If we reserved superchunks at the top of this function, we should return them.
-           This is unlikely to matter, as the above error will only happen when the 
+           This is unlikely to matter, as the above error will only happen when the
            slave goes out of service, but still. */
         if(!token)
             _castle_freespace_slave_superchunks_unreserve(cs, 1);
@@ -224,7 +224,7 @@ c_chk_seq_t castle_freespace_slave_superchunk_alloc(struct castle_slave *cs,
     if (token)
         token->reserved_schks[cs->id]--;
     cs->reserved_schks--;
-    
+
     BUG_ON(freespace->nr_entries < 0 || freespace->free_chk_cnt < 0);
 
     dirty_c2b(c2b);
@@ -236,14 +236,14 @@ c_chk_seq_t castle_freespace_slave_superchunk_alloc(struct castle_slave *cs,
 
     INJECT_FAULT;
 
-    debug("Allocating %u chunks from slave %u at %u chunk\n", chk_seq.count, 
+    debug("Allocating %u chunks from slave %u at %u chunk\n", chk_seq.count,
           cs->uuid,
           chk_seq.first_chk);
-    
+
     return chk_seq;
 }
 
-void castle_freespace_slave_superchunk_free(struct castle_slave *cs, 
+void castle_freespace_slave_superchunk_free(struct castle_slave *cs,
                                             c_chk_seq_t          chk_seq)
 {
     castle_freespace_t  *freespace;
@@ -311,14 +311,14 @@ void castle_freespace_slave_superchunk_free(struct castle_slave *cs,
     atomic_add(chk_seq.count, &cs->free_chk_cnt);
     freespace->nr_entries += nr_sup_chunks;
 
-    if ((freespace->cons == ((freespace->prod + 1) % freespace->max_entries)) && 
+    if ((freespace->cons == ((freespace->prod + 1) % freespace->max_entries)) &&
         (freespace->nr_entries != freespace->max_entries - 1))
     {
         castle_printk(LOG_INFO, "    Free Chunks: %u from slave %u\n", freespace->free_chk_cnt,
                 cs->uuid);
         freespace_sblk_put(cs, 1);
         castle_freespace_stats_print();
-        BUG(); 
+        BUG();
     }
     BUG_ON(freespace->nr_entries > freespace->max_entries ||
                 freespace->free_chk_cnt > freespace->disk_size);
@@ -350,7 +350,7 @@ int castle_freespace_slave_init(struct castle_slave *cs, int fresh)
         memcpy(freespace, &sblk->freespace, sizeof(castle_freespace_t));
         castle_slave_superblock_put(cs, 0);
     }
-    else 
+    else
     {
         debug("Initialising new device\n");
         memset(freespace, 0, sizeof(castle_freespace_t));
@@ -366,7 +366,7 @@ int castle_freespace_slave_init(struct castle_slave *cs, int fresh)
     castle_freespace_print(cs, NULL);
 
     nr_chunks = freespace->disk_size;
-  
+
     INJECT_FAULT;
 
     if (fresh)
@@ -383,12 +383,12 @@ void castle_freespace_summary_get(struct castle_slave *cs,
 {
     if (free_cnt)
         *free_cnt = atomic_read(&cs->free_chk_cnt);
-    
+
     if (size)
         *size = (cs->disk_size + FREE_SPACE_START);
 }
 
-static void castle_freespace_foreach_slave(int (*fn)(struct castle_slave *cs, void *data), 
+static void castle_freespace_foreach_slave(int (*fn)(struct castle_slave *cs, void *data),
                                     void *data)
 {
     struct list_head *lh;
@@ -414,7 +414,7 @@ static int castle_freespace_slave_writeback(struct castle_slave *cs, void *unuse
 
     castle_slave_superblock_put(cs, 1);
 
-    castle_cache_extent_flush_schedule(cs->sup_ext, FREESPACE_OFFSET, 
+    castle_cache_extent_flush_schedule(cs->sup_ext, FREESPACE_OFFSET,
                                        cs->freespace.nr_entries * sizeof(c_chk_t));
     INJECT_FAULT;
 
