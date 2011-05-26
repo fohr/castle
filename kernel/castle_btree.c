@@ -2375,14 +2375,17 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
     /* Update live per-version statistics. */
     if (CVT_TOMB_STONE(lub_cvt))
     {
-        if (CVT_TOMB_STONE(new_cvt))
-            stats.tombstone_deletes++;
-        else
+        if (!CVT_TOMB_STONE(new_cvt))
         {
             stats.keys++;
             stats.tombstones--;
             /* Don't bump the replaces counter: replacing a tombstone with
              * a key is the same as inserting a new key. */
+        }
+        else
+        {
+            /* Don't bump tombstone_deletes counter: you can't delete something
+             * that doesn't exist. */
         }
     }
     else
