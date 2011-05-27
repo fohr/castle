@@ -58,6 +58,7 @@ enum c2b_state_bits {
     C2B_no_resubmit,        /**< Block must not be resubmitted after I/O error.                   */
     C2B_remap,              /**< Block is for a remap.                                            */
     C2B_in_flight,          /**< Block is currently in-flight (un-set in c2b_multi_io_end()).     */
+    C2B_barrier,            /**< Block in write IO, and should be used as a barrier write.        */
 };
 
 #define INIT_C2B_BITS (0)
@@ -100,6 +101,7 @@ C2B_FNS(bio_error, bio_error)
 C2B_FNS(no_resubmit, no_resubmit)
 C2B_FNS(remap, remap)
 C2B_FNS(in_flight, in_flight)
+C2B_FNS(barrier, barrier)
 
 /* c2p encapsulates multiple memory pages (in order to reduce overheads).
    NOTE: In order for this to work, c2bs must necessarily be allocated in
@@ -1260,7 +1262,7 @@ int submit_c2b_io(int           rw,
         bio_info = castle_malloc(sizeof(struct bio_info), GFP_KERNEL);
         BUG_ON(!bio_info);
 
-        /* Init BIO and bio_info */
+        /* Init BIO and bio_info. */
         bio_info->rw       = rw;
         bio_info->bio      = bio;
         bio_info->c2b      = c2b;
@@ -1280,11 +1282,18 @@ int submit_c2b_io(int           rw,
         bio->bi_end_io  = c2b_multi_io_end;
         bio->bi_private = bio_info;
 
-        /* Hand off to Linux block layer */
-        submit_bio(rw, bio);
-
         j += batch;
         nr_pages -= batch;
+
+        /* Hand off to Linux block layer. Deal with barrier writes correctly. */
+        if(unlikely(c2b_barrier(c2b) && (nr_pages <= 0)))
+        {
+            BUG_ON(rw != WRITE);
+            /* Set the barrier flag, but only if that the last bio. */
+            submit_bio(WRITE_BARRIER, bio);
+        }
+        else
+            submit_bio(rw, bio);
     }
     return EXIT_SUCCESS;
 }
@@ -1853,6 +1862,31 @@ int submit_c2b_sync(int rw, c2_block_t *c2b)
         return !c2b_uptodate(c2b);
     else
         return c2b_dirty(c2b);
+}
+
+/**
+ * Submit synchronous c2b write, which is also a barrier write i
+ * (as per: Documentation/block/barrier.txt).
+ *
+ * @see submit_c2b_sync()
+ */
+int submit_c2b_sync_barrier(int rw, c2_block_t *c2b)
+{
+    int ret;
+
+    /* Only makes sense for writes. */
+    BUG_ON(rw != WRITE);
+
+    /* Mark the c2b as a barrier c2b. */
+    set_c2b_barrier(c2b);
+
+    /* Submit the c2b as per usual. */
+    ret = submit_c2b_sync(rw, c2b);
+
+    /* Clear the bit, since c2b is write locked, noone else will see it. */
+    clear_c2b_barrier(c2b);
+
+    return ret;
 }
 
 static inline unsigned long castle_cache_hash_idx(c_ext_pos_t cep, int nr_buckets)
@@ -5553,8 +5587,7 @@ int castle_slaves_superblock_invalidate(void)
 {
     c2_block_t                  *c2b;
     c_ext_pos_t                 cep;
-    char                        *buf;
-    int                         slot;
+    int                         slot, ret;
     int                         length = (2 * C_BLK_SIZE);
     struct castle_fs_superblock *fs_sb;
     struct castle_slave         *slave;
@@ -5568,6 +5601,8 @@ int castle_slaves_superblock_invalidate(void)
     rcu_read_lock();
     list_for_each_rcu(lh, &castle_slaves.slaves)
     {
+        struct castle_slave_superblock *superblock;
+
         slave = list_entry(lh, struct castle_slave, list);
 
         /* Do not attempt bit mod on out-of-service slaves. */
@@ -5588,22 +5623,25 @@ int castle_slaves_superblock_invalidate(void)
             BUG_ON(submit_c2b_sync(READ, c2b));
 
         /* The buffer is the superblock. */
-        buf = c2b_buffer(c2b);
+        superblock = (struct castle_slave_superblock *)c2b_buffer(c2b);
 
-        ((struct castle_slave_superblock *)buf)->pub.flags |= CASTLE_SLAVE_SB_INVALID;
-
+        superblock->pub.flags |= CASTLE_SLAVE_SB_INVALID;
         /* Re-calculate checksum for superblock - with checksum bytes set to 0. */
-        ((struct castle_slave_superblock *)buf)->pub.checksum = 0;
-        ((struct castle_slave_superblock *)buf)->pub.checksum =
-                        fletcher32((uint16_t *)buf, sizeof(struct castle_slave_superblock));
+        superblock->pub.checksum = 0;
+        superblock->pub.checksum =
+                        fletcher32((uint16_t *)superblock, sizeof(struct castle_slave_superblock));
 
         dirty_c2b(c2b);
+        ret = submit_c2b_sync_barrier(WRITE, c2b);
         write_unlock_c2b(c2b);
         put_c2b(c2b);
-
-        /* Flush out to disk. */
-        if (castle_cache_extent_flush(slave->sup_ext, 0, length * 2))
+        if(ret)
+        {
+            castle_printk(LOG_ERROR,
+                          "Failed to invalidate the superblock for slave: 0x%x\n",
+                          slave->uuid);
             return -EIO;
+        }
     }
     rcu_read_unlock();
 

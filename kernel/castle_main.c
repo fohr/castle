@@ -1200,6 +1200,7 @@ int castle_slave_superblocks_writeback(struct castle_slave *cs, uint32_t version
     char       *buf;
     int         slot = version % 2;
     int         length = (2 * C_BLK_SIZE);
+    int         ret;
     struct castle_slave_superblock *cs_sb;
     struct castle_fs_superblock *fs_sb;
 
@@ -1231,15 +1232,18 @@ int castle_slave_superblocks_writeback(struct castle_slave *cs, uint32_t version
     memcpy(buf + C_BLK_SIZE, fs_sb, sizeof(struct castle_fs_superblock));
 
     dirty_c2b(c2b);
-    write_unlock_c2b(c2b);
-    put_c2b(c2b);
 
     debug("Free chunks: %u|%u|%u\n", cs_sb->freespace.free_chk_cnt,
            cs_sb->freespace.prod,
            cs_sb->freespace.cons);
 
-    if (castle_cache_extent_flush(cs->sup_ext, 0, length * 2))
+    ret = submit_c2b_sync_barrier(WRITE, c2b);
+    write_unlock_c2b(c2b);
+    put_c2b(c2b);
+
+    if(ret)
     {
+        castle_printk(LOG_ERROR, "Could not write superblocks out, for cs uuid=0x%x\n", cs->uuid);
         castle_slave_superblock_put(cs, 1);
         castle_fs_superblocks_put(fs_sb, 1);
         return -EIO;

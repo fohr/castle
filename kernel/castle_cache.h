@@ -150,6 +150,7 @@ int castle_cache_advise_clear (c_ext_pos_t s_cep, c2_advise_t advise, int chunks
  */
 int         submit_c2b                (int rw, c2_block_t *c2b);
 int         submit_c2b_sync           (int rw, c2_block_t *c2b);
+int         submit_c2b_sync_barrier   (int rw, c2_block_t *c2b);
 int         submit_c2b_remap_rda      (c2_block_t *c2b, c_disk_chk_t *remap_chunks, int nr_remaps);
 
 #define     castle_cache_page_block_get(_cep) \
