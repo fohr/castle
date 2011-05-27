@@ -818,7 +818,12 @@ int castle_sysfs_slave_add(struct castle_slave *slave)
     /* There is no bdev for ghost slaves. */
     if (!test_bit(CASTLE_SLAVE_GHOST_BIT, &slave->flags))
     {
-        ret = sysfs_create_link(&slave->kobj, &slave->bdev->bd_disk->kobj, "dev");
+        /* If this is a partition, link to the partition. */
+        if(slave->bdev->bd_part)
+            ret = sysfs_create_link(&slave->kobj, &slave->bdev->bd_part->kobj, "dev");
+        /* Otherwise link to the device. */
+        else
+            ret = sysfs_create_link(&slave->kobj, &slave->bdev->bd_disk->kobj, "dev");
         if (ret < 0)
             return ret;
     }
