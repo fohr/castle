@@ -2819,8 +2819,10 @@ static void castle_cache_freelists_grow(int nr_c2bs, int nr_pages)
             {
                 /* Raced with castle_extent_remap().  Wait for it to complete
                  * and call castle_cache_page_block_unreserve() to release a
-                 * c2b back to the reservelist. */
-                msleep_interruptible(500);
+                 * c2b back to the reservelist.
+                 * This should never be called from userspace context. But
+                 * use non-interruptible msleep just to be safe. */
+                msleep(500);
                 continue;
             }
         }

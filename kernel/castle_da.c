@@ -7116,7 +7116,10 @@ static int castle_da_all_rwcts_create(struct castle_double_array *da, c_lfs_vct_
     while (castle_da_growing_rw_test_and_set(da) != EXIT_SUCCESS)
     {
         had_to_wait = 1;
-        msleep_interruptible(1);
+        /* Cannot sleep in interruptible, because this function is called from an IOCTL,
+           and therefore in a user process context. This could be interrupted, and go into
+           busy loop. This would cause a softlockup. */
+        msleep(1);
     }
 
     /* We can return immediately if:
@@ -7702,8 +7705,10 @@ static int castle_da_rwct_create(struct castle_double_array *da, int cpu_index, 
     if (castle_da_growing_rw_test_and_set(da))
     {
         debug("Racing RWCT make on da=%d\n", da->id);
+        /* This look cannot use msleep_interruptible. Read comments in
+           castle_da_all_rwcts_create() for more info. */
         while (castle_da_growing_rw_test(da))
-            msleep_interruptible(1); /* @TODO use out_of_line_wait_on_bit(_lock)() here instead */
+            msleep(1); /* @TODO use out_of_line_wait_on_bit(_lock)() here instead */
         return -EAGAIN;
     }
     ret = __castle_da_rwct_create(da, cpu_index, in_tran, lfs_type);
