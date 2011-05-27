@@ -1489,12 +1489,12 @@ struct castle_object_get {
     int         first;
     c_val_tup_t cvt;
 
-    void      (*reply_start)     (struct castle_object_get *get,
+    int       (*reply_start)     (struct castle_object_get *get,
                                   int err,
                                   uint64_t data_length,
                                   void *buffer,
                                   uint32_t buffer_length);
-    void      (*reply_continue)  (struct castle_object_get *get,
+    int       (*reply_continue)  (struct castle_object_get *get,
                                   int err,
                                   void *buffer,
                                   uint32_t buffer_length,
