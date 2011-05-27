@@ -35,6 +35,10 @@ static struct list_head  *castle_versions_counts_hash   = NULL;
 static c_ver_t            castle_versions_last   = INVAL_VERSION;
 static c_mstore_t        *castle_versions_mstore = NULL;
 
+static int castle_versions_deleted_sysfs_hide = 1;  /**< Hide deleted versions from sysfs?      */
+module_param(castle_versions_deleted_sysfs_hide, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
+MODULE_PARM_DESC(castle_versions_deleted_sysfs_hide, "Hide deleted versions from sysfs");
+
 LIST_HEAD(castle_versions_deleted);
 
 #define CV_INITED_BIT             (0)
@@ -650,7 +654,8 @@ int castle_version_delete(c_ver_t version)
 
     write_unlock_irq(&castle_versions_hash_lock);
 
-    castle_sysfs_version_del(version);
+    if (castle_versions_deleted_sysfs_hide)
+        castle_sysfs_version_del(version);
     for(event_vs_idx--; event_vs_idx >= 0; event_vs_idx--)
         castle_events_version_changed(event_vs[event_vs_idx]);
     if(event_vs)
