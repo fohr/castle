@@ -4310,6 +4310,32 @@ static void castle_cache_extent_flush_endio(c2_block_t *c2b)
 }
 
 /**
+ * Flush a batch of dirty c2bs.
+ *
+ * @param   c2b_batch   Array of dirty c2bs
+ * @param   batch_idx   Number of dirty c2bs in c2b_batch
+ * @param   in_flight_p Number of c2bs currently in-flight
+ *
+ * @also __castle_cache_extent_flush()
+ */
+static inline void __castle_cache_extent_flush_batch(c2_block_t *c2b_batch[],
+                                                     int *batch_idx,
+                                                     atomic_t *in_flight_p)
+{
+    int i;
+
+    for (i = 0; i < *batch_idx; i++)
+    {
+        atomic_inc(in_flight_p);
+        c2b_batch[i]->end_io  = castle_cache_extent_flush_endio;
+        c2b_batch[i]->private = (void *)in_flight_p;
+        BUG_ON(submit_c2b(WRITE, c2b_batch[i]));
+    }
+
+    *batch_idx = 0;
+}
+
+/**
  * Submit async IO on max_pgs dirty pages from start of extent to end_off.
  *
  * @param dirtytree     [in]    Per-extent dirtytree to flush
@@ -4348,7 +4374,7 @@ int __castle_cache_extent_flush(c_ext_dirtytree_t *dirtytree,
     c2_block_t *c2b;
     struct rb_node *parent;
     c2_block_t *c2b_batch[CASTLE_CACHE_FLUSH_BATCH_SIZE];
-    int i, batch_idx, flushed = 0;
+    int batch_idx, flushed = 0;
 
     /* Flush from the beginning of the extent to end_off.
      * If end_off is not specified, flush the entire extent. */
@@ -4394,21 +4420,27 @@ restart_traverse:
                 if (unlikely(waitlock))
                 {
                     /* We want to block until we have a c2b readlock. */
-#ifdef CASTLE_DEBUG
-                    castle_printk(LOG_WARN, "%s::waiting on c2b locked from: %s:%d\n",
-                        __FUNCTION__, c2b->file, c2b->line);
-#endif
-
-                    /* Dirty c2bs should never overlap. */
-                    BUG_ON(c2b->cep.offset < last_end_off);
 
                     if (unlikely(dirtytree_locked))
                     {
-                        /* Hold a reference to the c2b before we drop the
-                         * dirtytree lock.  Gets dropped at next_c2b label. */
+                        /* First time we've failed to lock this c2b.  Take a
+                         * temporary reference before we drop the dirtytree
+                         * lock.  We'll also flush the current batch of c2bs
+                         * before going to sleep, to prevent deadlocks. */
                         get_c2b(c2b);
                         spin_unlock_irq(&dirtytree->lock);
                         dirtytree_locked = 0;
+                        __castle_cache_extent_flush_batch(c2b_batch,
+                                                          &batch_idx,
+                                                          in_flight_p);
+
+                        /* Dirty c2bs should never overlap. */
+                        BUG_ON(c2b->cep.offset < last_end_off);
+#ifdef CASTLE_DEBUG
+                        castle_printk(LOG_DEBUG,
+                                "%s::waiting on c2b locked from: %s:%d\n",
+                                __FUNCTION__, c2b->file, c2b->line);
+#endif
                     }
                     msleep(1);
                 }
@@ -4445,13 +4477,7 @@ next_c2b:
             spin_unlock_irq(&dirtytree->lock);
 
         /* Flush batch of c2bs. */
-        for (i = 0; i < batch_idx; i++)
-        {
-            atomic_inc(in_flight_p);
-            c2b_batch[i]->end_io  = castle_cache_extent_flush_endio;
-            c2b_batch[i]->private = (void *)in_flight_p;
-            BUG_ON(submit_c2b(WRITE, c2b_batch[i]));
-        }
+        __castle_cache_extent_flush_batch(c2b_batch, &batch_idx, in_flight_p);
     } while (parent);
 
     /* Return number of pages to caller, if requested. */
