@@ -3501,11 +3501,22 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
 {
     int i;
     c_merge_serdes_state_t serdes_state;
-    serdes_state = atomic_read(&merge->da->levels[merge->level].merge.serdes.valid);
 
     if(!merge)
+    {
+        castle_printk(LOG_ERROR, "%s::[da %d level %d] no merge structure.\n",
+                __FUNCTION__, merge->da->id, merge->level);
         return;
+    }
 
+    if(!merge->da)
+    {
+        castle_printk(LOG_ERROR, "%s::[da %d level %d] merge structure da pointer not assigned.\n",
+                __FUNCTION__, merge->da->id, merge->level);
+        return;
+    }
+
+    serdes_state = atomic_read(&merge->da->levels[merge->level].merge.serdes.valid);
     if(serdes_state > NULL_DAM_SERDES)
         mutex_lock(&merge->da->levels[merge->level].merge.serdes.mutex);
 
