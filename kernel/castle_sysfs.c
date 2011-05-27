@@ -31,7 +31,7 @@ struct castle_sysfs_entry {
 };
 
 struct castle_sysfs_version {
-    version_t version;
+    c_ver_t version;
     char name[10];
     struct castle_sysfs_entry csys_entry;
     struct list_head list;
@@ -84,12 +84,12 @@ static ssize_t versions_list_show(struct kobject *kobj, struct attribute *attr, 
                 container_of(attr, struct castle_sysfs_entry, attr);
     struct castle_sysfs_version *v =
                 container_of(csys_entry, struct castle_sysfs_version, csys_entry);
-    version_t live_parent;
+    c_ver_t live_parent;
     c_byte_off_t size;
     ssize_t len;
     int leaf;
     int ret;
-    da_id_t da_id;
+    c_da_t da_id;
 
     ret = castle_version_read(v->version, &da_id, NULL, &live_parent, &size, &leaf);
     if(ret == 0)
@@ -147,7 +147,7 @@ static void castle_sysfs_versions_fini(void)
     }
 }
 
-int castle_sysfs_version_add(version_t version)
+int castle_sysfs_version_add(c_ver_t version)
 {
     struct castle_sysfs_version *v;
     int ret;
@@ -163,7 +163,7 @@ int castle_sysfs_version_add(version_t version)
     if(!v) return -ENOMEM;
 
     v->version = version;
-    sprintf(v->name, "%x", version); 
+    sprintf(v->name, "%x", version);
     v->csys_entry.attr.name  = v->name;
     v->csys_entry.attr.mode  = S_IRUGO|S_IWUSR;
     v->csys_entry.attr.owner = THIS_MODULE;
@@ -185,7 +185,7 @@ int castle_sysfs_version_add(version_t version)
     return ret;
 }
 
-int castle_sysfs_version_del(version_t version)
+int castle_sysfs_version_del(c_ver_t version)
 {
     struct castle_sysfs_version *v = NULL, *k;
     struct list_head *pos, *tmp;
@@ -208,36 +208,36 @@ int castle_sysfs_version_del(version_t version)
 }
 
 /* Double Array functions could race with DA deletion. */
-static ssize_t double_array_number_show(struct kobject *kobj, 
-						                struct attribute *attr, 
-							            char *buf)
+static ssize_t double_array_number_show(struct kobject *kobj,
+                                        struct attribute *attr,
+                                        char *buf)
 {
     return sprintf(buf, "%d\n", castle_da_count());
 }
 
-static ssize_t da_version_show(struct kobject *kobj, 
-							   struct attribute *attr, 
-							   char *buf)
+static ssize_t da_version_show(struct kobject *kobj,
+                               struct attribute *attr,
+                               char *buf)
 {
-    struct castle_double_array *da = container_of(kobj, struct castle_double_array, kobj); 
+    struct castle_double_array *da = container_of(kobj, struct castle_double_array, kobj);
 
     return sprintf(buf, "0x%x\n", da->root_version);
 }
 
 static ssize_t da_compacting_show(struct kobject *kobj,
-							      struct attribute *attr,
-							      char *buf)
+                                  struct attribute *attr,
+                                  char *buf)
 {
     struct castle_double_array *da = container_of(kobj, struct castle_double_array, kobj);
 
     return sprintf(buf, "%u\n", castle_da_compacting(da));
 }
 
-static ssize_t da_size_show(struct kobject *kobj, 
-							struct attribute *attr, 
-							char *buf)
+static ssize_t da_size_show(struct kobject *kobj,
+                            struct attribute *attr,
+                            char *buf)
 {
-    struct castle_double_array *da = container_of(kobj, struct castle_double_array, kobj); 
+    struct castle_double_array *da = container_of(kobj, struct castle_double_array, kobj);
     int i;
     uint32_t size = 0;
 
@@ -253,8 +253,8 @@ static ssize_t da_size_show(struct kobject *kobj,
         {
             ct = list_entry(lh, struct castle_component_tree, da_list);
 
-            size += CHUNK(ct->tree_ext_free.ext_size) + 
-                    CHUNK(ct->data_ext_free.ext_size) + 
+            size += CHUNK(ct->tree_ext_free.ext_size) +
+                    CHUNK(ct->data_ext_free.ext_size) +
                     CHUNK(ct->internal_ext_free.ext_size) +
                     ((ct->bloom_exists)?ct->bloom.num_chunks:0) +
                     atomic64_read(&ct->large_ext_chk_cnt);
@@ -277,11 +277,11 @@ static ssize_t da_size_show(struct kobject *kobj,
  * " One row for each level contains #trees and one entry for each tree in the level
  * <nr of trees in level> [<item count> <leaf node size> <internal node size> <tree depth> <size of the tree(in chunks)>] [] []
  */
-static ssize_t da_tree_list_show(struct kobject *kobj, 
-							     struct attribute *attr, 
-							     char *buf)
+static ssize_t da_tree_list_show(struct kobject *kobj,
+                                 struct attribute *attr,
+                                 char *buf)
 {
-    struct castle_double_array *da = container_of(kobj, struct castle_double_array, kobj); 
+    struct castle_double_array *da = container_of(kobj, struct castle_double_array, kobj);
     int i;
     int ret = 0;
 
@@ -297,7 +297,7 @@ static ssize_t da_tree_list_show(struct kobject *kobj,
         struct list_head *lh;
 
         /* Number of trees in each level. */
-        ret = snprintf(buf, PAGE_SIZE, "%s%u ", buf, 
+        ret = snprintf(buf, PAGE_SIZE, "%s%u ", buf,
                        da->levels[i].nr_trees + da->levels[i].nr_compac_trees);
         /* Buffer is of size one PAGE. MAke sure we are not overflowing buffer. */
         if (ret >= PAGE_SIZE)
@@ -307,19 +307,19 @@ static ssize_t da_tree_list_show(struct kobject *kobj,
         {
             struct castle_btree_type *btree;
 
-            ct = list_entry(lh, struct castle_component_tree, da_list); 
+            ct = list_entry(lh, struct castle_component_tree, da_list);
             btree = castle_btree_type_get(ct->btree_type);
-            ret = snprintf(buf, PAGE_SIZE, 
-                           "%s[%lu %u %u %u %u] ", 
-                           buf, 
+            ret = snprintf(buf, PAGE_SIZE,
+                           "%s[%lu %u %u %u %u] ",
+                           buf,
                            atomic64_read(&ct->item_count),       /* Item count*/
                            (uint32_t)btree->node_size(ct, 0),    /* Leaf node size */
                            ct->tree_depth > 1 ?                  /* Internal node size */
                                (uint32_t)btree->node_size(ct, 1) : 0,
                            (uint32_t)ct->tree_depth,             /* Depth of tree */
                            (uint32_t)
-                           (CHUNK(ct->tree_ext_free.ext_size) + 
-                            CHUNK(ct->data_ext_free.ext_size) + 
+                           (CHUNK(ct->tree_ext_free.ext_size) +
+                            CHUNK(ct->data_ext_free.ext_size) +
                             CHUNK(ct->internal_ext_free.ext_size) +
                             ((ct->bloom_exists)?ct->bloom.num_chunks:0) +
                             atomic64_read(&ct->large_ext_chk_cnt)));           /* Tree size */
@@ -340,11 +340,11 @@ err:
     return strlen(buf);
 }
 
-static ssize_t slaves_number_show(struct kobject *kobj, 
-								  struct attribute *attr, 
-							      char *buf)
+static ssize_t slaves_number_show(struct kobject *kobj,
+                                  struct attribute *attr,
+                                  char *buf)
 {
-    struct castle_slaves *slaves = 
+    struct castle_slaves *slaves =
                 container_of(kobj, struct castle_slaves, kobj);
     struct list_head *lh;
     int nr_slaves = 0;
@@ -357,20 +357,20 @@ static ssize_t slaves_number_show(struct kobject *kobj,
     return sprintf(buf, "%d\n", nr_slaves);
 }
 
-static ssize_t slave_uuid_show(struct kobject *kobj, 
-						       struct attribute *attr, 
+static ssize_t slave_uuid_show(struct kobject *kobj,
+                               struct attribute *attr,
                                char *buf)
 {
-    struct castle_slave *slave = container_of(kobj, struct castle_slave, kobj); 
+    struct castle_slave *slave = container_of(kobj, struct castle_slave, kobj);
 
     return sprintf(buf, "0x%x\n", slave->uuid);
 }
 
-static ssize_t slave_size_show(struct kobject *kobj, 
-						       struct attribute *attr, 
+static ssize_t slave_size_show(struct kobject *kobj,
+                               struct attribute *attr,
                                char *buf)
 {
-    struct castle_slave *slave = container_of(kobj, struct castle_slave, kobj); 
+    struct castle_slave *slave = container_of(kobj, struct castle_slave, kobj);
     struct castle_slave_superblock *sb;
     uint64_t size;
 
@@ -387,11 +387,11 @@ static ssize_t slave_size_show(struct kobject *kobj,
     return sprintf(buf, "%lld\n", size);
 }
 
-static ssize_t slave_used_show(struct kobject *kobj, 
-						       struct attribute *attr, 
+static ssize_t slave_used_show(struct kobject *kobj,
+                               struct attribute *attr,
                                char *buf)
 {
-    struct castle_slave *slave = container_of(kobj, struct castle_slave, kobj); 
+    struct castle_slave *slave = container_of(kobj, struct castle_slave, kobj);
     c_chk_cnt_t free_chunks;
     c_chk_cnt_t size_chunks;
     uint64_t used;
@@ -408,14 +408,14 @@ static ssize_t slave_used_show(struct kobject *kobj,
     return sprintf(buf, "%llu\n", used);
 }
 
-static ssize_t slave_target_show(struct kobject *kobj, 
-                                 struct attribute *attr, 
+static ssize_t slave_target_show(struct kobject *kobj,
+                                 struct attribute *attr,
                                  char *buf)
 {
-    struct castle_slave *slave = container_of(kobj, struct castle_slave, kobj); 
+    struct castle_slave *slave = container_of(kobj, struct castle_slave, kobj);
     struct castle_slave_superblock *sb;
     int target;
-    
+
     if (!test_bit(CASTLE_SLAVE_GHOST_BIT, &slave->flags))
     {
         sb = castle_slave_superblock_get(slave);
@@ -428,14 +428,14 @@ static ssize_t slave_target_show(struct kobject *kobj,
     return sprintf(buf, "%d\n", target);
 }
 
-static ssize_t slave_spinning_show(struct kobject *kobj, 
-                                   struct attribute *attr, 
+static ssize_t slave_spinning_show(struct kobject *kobj,
+                                   struct attribute *attr,
                                    char *buf)
 {
-    struct castle_slave *slave = container_of(kobj, struct castle_slave, kobj); 
+    struct castle_slave *slave = container_of(kobj, struct castle_slave, kobj);
     struct castle_slave_superblock *sb;
     int spinning;
-    
+
     if (!test_bit(CASTLE_SLAVE_GHOST_BIT, &slave->flags))
     {
         sb = castle_slave_superblock_get(slave);
@@ -448,14 +448,14 @@ static ssize_t slave_spinning_show(struct kobject *kobj,
     return sprintf(buf, "%d\n", spinning);
 }
 
-static ssize_t slave_ssd_show(struct kobject *kobj, 
-                              struct attribute *attr, 
+static ssize_t slave_ssd_show(struct kobject *kobj,
+                              struct attribute *attr,
                               char *buf)
 {
-    struct castle_slave *slave = container_of(kobj, struct castle_slave, kobj); 
+    struct castle_slave *slave = container_of(kobj, struct castle_slave, kobj);
     struct castle_slave_superblock *sb;
     int ssd;
-    
+
     if (!test_bit(CASTLE_SLAVE_GHOST_BIT, &slave->flags))
     {
         sb = castle_slave_superblock_get(slave);
@@ -481,7 +481,7 @@ static ssize_t slave_rebuild_state_show(struct kobject *kobj,
 /* Display the fs version (checkpoint number). */
 extern uint32_t castle_filesystem_fs_version;
 static ssize_t filesystem_version_show(struct kobject *kobj,
-						           struct attribute *attr,
+                                   struct attribute *attr,
                                    char *buf)
 {
     struct castle_fs_superblock *fs_sb;
@@ -503,11 +503,11 @@ static ssize_t slaves_rebuild_chunks_remapped_show(struct kobject *kobj,
     return sprintf(buf, "%ld\n", castle_extents_chunks_remapped);
 }
 
-static ssize_t devices_number_show(struct kobject *kobj, 
-						           struct attribute *attr, 
+static ssize_t devices_number_show(struct kobject *kobj,
+                                   struct attribute *attr,
                                    char *buf)
 {
-    struct castle_attachments *devices = 
+    struct castle_attachments *devices =
                 container_of(kobj, struct castle_attachments, devices_kobj);
     struct castle_attachment *device;
     struct list_head *lh;
@@ -524,29 +524,29 @@ static ssize_t devices_number_show(struct kobject *kobj,
     return sprintf(buf, "%d\n", nr_devices);
 }
 
-static ssize_t device_version_show(struct kobject *kobj, 
-						           struct attribute *attr, 
+static ssize_t device_version_show(struct kobject *kobj,
+                                   struct attribute *attr,
                                    char *buf)
 {
-    struct castle_attachment *device = container_of(kobj, struct castle_attachment, kobj); 
+    struct castle_attachment *device = container_of(kobj, struct castle_attachment, kobj);
 
     return sprintf(buf, "0x%x\n", device->version);
 }
 
-static ssize_t device_id_show(struct kobject *kobj, 
-				              struct attribute *attr, 
+static ssize_t device_id_show(struct kobject *kobj,
+                              struct attribute *attr,
                               char *buf)
 {
-    struct castle_attachment *device = container_of(kobj, struct castle_attachment, kobj); 
+    struct castle_attachment *device = container_of(kobj, struct castle_attachment, kobj);
 
     return sprintf(buf, "0x%x\n", new_encode_dev(MKDEV(device->dev.gd->major, device->dev.gd->first_minor)));
 }
 
-static ssize_t collections_number_show(struct kobject *kobj, 
-						               struct attribute *attr, 
+static ssize_t collections_number_show(struct kobject *kobj,
+                                       struct attribute *attr,
                                        char *buf)
 {
-    struct castle_attachments *collections = 
+    struct castle_attachments *collections =
                 container_of(kobj, struct castle_attachments, collections_kobj);
     struct castle_attachment *collection;
     struct list_head *lh;
@@ -563,22 +563,22 @@ static ssize_t collections_number_show(struct kobject *kobj,
     return sprintf(buf, "%d\n", nr_collections);
 }
 
-static ssize_t collection_version_show(struct kobject *kobj, 
-						               struct attribute *attr, 
+static ssize_t collection_version_show(struct kobject *kobj,
+                                       struct attribute *attr,
                                        char *buf)
 {
-    struct castle_attachment *collection = container_of(kobj, struct castle_attachment, kobj); 
+    struct castle_attachment *collection = container_of(kobj, struct castle_attachment, kobj);
 
     return sprintf(buf, "0x%x\n", collection->version);
 }
 
-static ssize_t collection_stats_show(struct kobject *kobj, 
-						             struct attribute *attr, 
+static ssize_t collection_stats_show(struct kobject *kobj,
+                                     struct attribute *attr,
                                      char *buf)
 {
-    struct castle_attachment *collection = container_of(kobj, struct castle_attachment, kobj); 
+    struct castle_attachment *collection = container_of(kobj, struct castle_attachment, kobj);
 
-    return sprintf(buf, 
+    return sprintf(buf,
                    "Gets: %lu\n"
                    "GetsSize: %lu\n"
                    "Puts: %lu\n"
@@ -603,20 +603,20 @@ static ssize_t collection_stats_show(struct kobject *kobj,
                    atomic64_read(&collection->rq_nr_keys));
 }
 
-static ssize_t collection_id_show(struct kobject *kobj, 
-						          struct attribute *attr, 
+static ssize_t collection_id_show(struct kobject *kobj,
+                                  struct attribute *attr,
                                   char *buf)
 {
-    struct castle_attachment *collection = container_of(kobj, struct castle_attachment, kobj); 
+    struct castle_attachment *collection = container_of(kobj, struct castle_attachment, kobj);
 
     return sprintf(buf, "0x%x\n", collection->col.id);
 }
 
-static ssize_t collection_name_show(struct kobject *kobj, 
-						            struct attribute *attr, 
+static ssize_t collection_name_show(struct kobject *kobj,
+                                    struct attribute *attr,
                                     char *buf)
 {
-    struct castle_attachment *collection = container_of(kobj, struct castle_attachment, kobj); 
+    struct castle_attachment *collection = container_of(kobj, struct castle_attachment, kobj);
 
     return sprintf(buf, "%s\n", collection->col.name);
 }
@@ -625,21 +625,21 @@ static ssize_t castle_attr_show(struct kobject *kobj,
                                 struct attribute *attr,
                                 char *page)
 {
-    struct castle_sysfs_entry *entry = 
+    struct castle_sysfs_entry *entry =
                 container_of(attr, struct castle_sysfs_entry, attr);
 
     if (!entry->show)
         return -EIO;
-    
+
     return entry->show(kobj, attr, page);
 }
 
-static ssize_t castle_attr_store(struct kobject *kobj, 
+static ssize_t castle_attr_store(struct kobject *kobj,
                                  struct attribute *attr,
-                                 const char *page, 
+                                 const char *page,
                                  size_t length)
 {
-    struct castle_sysfs_entry *entry = 
+    struct castle_sysfs_entry *entry =
                 container_of(attr, struct castle_sysfs_entry, attr);
 
     if (!entry->store)
@@ -726,11 +726,11 @@ static struct kobj_type castle_da_ktype = {
 int castle_sysfs_da_add(struct castle_double_array *da)
 {
     int ret;
-    
+
     memset(&da->kobj, 0, sizeof(struct kobject));
-    ret = kobject_tree_add(&da->kobj, 
-                           &double_arrays_kobj, 
-                           &castle_da_ktype, 
+    ret = kobject_tree_add(&da->kobj,
+                           &double_arrays_kobj,
+                           &castle_da_ktype,
                            "%x", da->id);
 
     if (ret < 0)
@@ -805,15 +805,15 @@ static struct kobj_type castle_slave_ktype = {
 int castle_sysfs_slave_add(struct castle_slave *slave)
 {
     int ret;
-    
+
     memset(&slave->kobj, 0, sizeof(struct kobject));
-    ret = kobject_tree_add(&slave->kobj, 
-                           &castle_slaves.kobj, 
-                           &castle_slave_ktype, 
+    ret = kobject_tree_add(&slave->kobj,
+                           &castle_slaves.kobj,
+                           &castle_slave_ktype,
                            "%x", slave->uuid);
-    if(ret < 0) 
+    if(ret < 0)
         return ret;
-    /* TODO: do we need a link for >32?. If so, how do we get hold of the right kobj */ 
+    /* TODO: do we need a link for >32?. If so, how do we get hold of the right kobj */
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,24)
     /* There is no bdev for ghost slaves. */
     if (!test_bit(CASTLE_SLAVE_GHOST_BIT, &slave->flags))
@@ -902,13 +902,13 @@ int castle_sysfs_device_add(struct castle_attachment *device)
     int ret;
 
     memset(&device->kobj, 0, sizeof(struct kobject));
-    ret = kobject_tree_add(&device->kobj, 
+    ret = kobject_tree_add(&device->kobj,
                            &castle_attachments.devices_kobj,
                            &castle_device_ktype,
-                           "%x", 
-                           new_encode_dev(MKDEV(device->dev.gd->major, 
+                           "%x",
+                           new_encode_dev(MKDEV(device->dev.gd->major,
                                                 device->dev.gd->first_minor)));
-    if(ret < 0) 
+    if(ret < 0)
         return ret;
 
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,24)
@@ -961,12 +961,12 @@ int castle_sysfs_collection_add(struct castle_attachment *collection)
     int ret;
 
     memset(&collection->kobj, 0, sizeof(struct kobject));
-    ret = kobject_tree_add(&collection->kobj, 
+    ret = kobject_tree_add(&collection->kobj,
                            &castle_attachments.collections_kobj,
                            &castle_collection_ktype,
-                           "%x", 
+                           "%x",
                            collection->col.id);
-    if(ret < 0) 
+    if(ret < 0)
         return ret;
 
     return 0;
@@ -990,48 +990,48 @@ int castle_sysfs_init(void)
     kobj_set_kset_s(&castle, fs_subsys);
 #elif LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,24)
     /* TODO should probably be kobj_set_kset_s(&castle, fs_subsys); */
-    castle.kobj.kset   = &fs_subsys; 
+    castle.kobj.kset   = &fs_subsys;
 #endif
 
-    ret = kobject_tree_add(&castle.kobj, 
-                            fs_kobject, 
-                           &castle_root_ktype, 
+    ret = kobject_tree_add(&castle.kobj,
+                            fs_kobject,
+                           &castle_root_ktype,
                            "%s", "castle-fs");
     if(ret < 0) goto out1;
 
     memset(&castle_sysfs_versions.kobj, 0, sizeof(struct kobject));
     INIT_LIST_HEAD(&castle_sysfs_versions.version_list);
-    ret = kobject_tree_add(&castle_sysfs_versions.kobj, 
-                           &castle.kobj, 
-                           &castle_versions_ktype, 
+    ret = kobject_tree_add(&castle_sysfs_versions.kobj,
+                           &castle.kobj,
+                           &castle_versions_ktype,
                            "%s", "versions");
     if(ret < 0) goto out2;
 
     memset(&castle_slaves.kobj, 0, sizeof(struct kobject));
-    ret = kobject_tree_add(&castle_slaves.kobj, 
-                           &castle.kobj, 
-                           &castle_slaves_ktype, 
+    ret = kobject_tree_add(&castle_slaves.kobj,
+                           &castle.kobj,
+                           &castle_slaves_ktype,
                            "%s", "slaves");
     if(ret < 0) goto out3;
 
     memset(&castle_attachments.devices_kobj, 0, sizeof(struct kobject));
-    ret = kobject_tree_add(&castle_attachments.devices_kobj, 
-                           &castle.kobj, 
-                           &castle_devices_ktype, 
+    ret = kobject_tree_add(&castle_attachments.devices_kobj,
+                           &castle.kobj,
+                           &castle_devices_ktype,
                            "%s", "devices");
     if(ret < 0) goto out4;
 
     memset(&castle_attachments.collections_kobj, 0, sizeof(struct kobject));
-    ret = kobject_tree_add(&castle_attachments.collections_kobj, 
-                           &castle.kobj, 
-                           &castle_collections_ktype, 
+    ret = kobject_tree_add(&castle_attachments.collections_kobj,
+                           &castle.kobj,
+                           &castle_collections_ktype,
                            "%s", "collections");
     if(ret < 0) goto out5;
 
     memset(&double_arrays_kobj, 0, sizeof(struct kobject));
-    ret = kobject_tree_add(&double_arrays_kobj, 
-                           &castle.kobj, 
-                           &castle_double_array_ktype, 
+    ret = kobject_tree_add(&double_arrays_kobj,
+                           &castle.kobj,
+                           &castle_double_array_ktype,
                            "%s", "vertrees");
     if(ret < 0) goto out6;
 

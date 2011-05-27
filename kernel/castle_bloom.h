@@ -24,7 +24,7 @@ struct castle_bloom_build_params
 #endif
 };
 
-int castle_bloom_create(castle_bloom_t *bf, da_id_t da_id, uint64_t num_elements);
+int castle_bloom_create(castle_bloom_t *bf, c_da_t da_id, uint64_t num_elements);
 void castle_bloom_complete(castle_bloom_t *bf);
 void castle_bloom_abort(castle_bloom_t *bf);
 void castle_bloom_destroy(castle_bloom_t *bf);

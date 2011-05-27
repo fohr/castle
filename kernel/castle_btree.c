@@ -84,7 +84,7 @@ struct castle_mtree_entry {
     /* offset:  0 */ uint8_t     type;
     /*          1 */ uint8_t     _pad[3];
     /*          4 */ block_t     block;
-    /*          8 */ version_t   version;
+    /*          8 */ c_ver_t     version;
     /*         12 */ uint32_t    val_len;
     /*         16 */ c_ext_pos_t cep;
     /*         32 */
@@ -171,7 +171,7 @@ static uint32_t castle_mtree_key_hash(void *key, uint32_t seed)
 static int castle_mtree_entry_get(struct castle_btree_node *node,
                                   int                       idx,
                                   void                    **key_p,
-                                  version_t                *version_p,
+                                  c_ver_t                  *version_p,
                                   c_val_tup_t              *cvt_p)
 {
     struct castle_mtree_entry *entries =
@@ -194,7 +194,7 @@ static int castle_mtree_entry_get(struct castle_btree_node *node,
 static void castle_mtree_entry_add(struct castle_btree_node *node,
                                    int                       idx,
                                    void                     *key,
-                                   version_t                 version,
+                                   c_ver_t                   version,
                                    c_val_tup_t               cvt)
 {
     struct castle_mtree_entry *entries =
@@ -225,7 +225,7 @@ static void castle_mtree_entry_add(struct castle_btree_node *node,
 static void castle_mtree_entry_replace(struct castle_btree_node *node,
                                        int                       idx,
                                        void                     *key,
-                                       version_t                 version,
+                                       c_ver_t                   version,
                                        c_val_tup_t               cvt)
 {
     struct castle_mtree_entry *entries =
@@ -373,7 +373,7 @@ struct castle_batree_entry {
     /* offset:  0 */ uint8_t      type;
     /*          1 */ uint8_t      _pad1[3];
     /*          4 */ bakey_t      key;
-    /*        132 */ version_t    version;
+    /*        132 */ c_ver_t      version;
     /*        136 */ uint32_t     val_len;
     /*        140 */ uint8_t      _pad2[4];
     /*        144 */ c_ext_pos_t  cep;
@@ -493,7 +493,7 @@ static uint32_t castle_batree_key_hash(void *key, uint32_t seed)
 static int castle_batree_entry_get(struct castle_btree_node *node,
                                    int                       idx,
                                    void                    **key_p,
-                                   version_t                *version_p,
+                                   c_ver_t                  *version_p,
                                    c_val_tup_t              *cvt_p)
 {
     struct castle_batree_entry *entries =
@@ -516,7 +516,7 @@ static int castle_batree_entry_get(struct castle_btree_node *node,
 static void castle_batree_entry_add(struct castle_btree_node *node,
                                     int                       idx,
                                     void                     *key,
-                                    version_t                 version,
+                                    c_ver_t                   version,
                                     c_val_tup_t               cvt)
 {
     struct castle_batree_entry *entries =
@@ -547,7 +547,7 @@ static void castle_batree_entry_add(struct castle_btree_node *node,
 static void castle_batree_entry_replace(struct castle_btree_node *node,
                                         int                       idx,
                                         void                     *key,
-                                        version_t                 version,
+                                        c_ver_t                   version,
                                         c_val_tup_t               cvt)
 {
     struct castle_batree_entry *entries =
@@ -697,7 +697,7 @@ struct castle_vlba_tree_entry {
     /* align:   8 */
     /* offset:  0 */ uint8_t      type;
     /*          1 */ uint8_t      _pad[3];
-    /*          4 */ version_t    version;
+    /*          4 */ c_ver_t      version;
     /*          8 */ uint64_t     val_len;
     /*         16 */ c_ext_pos_t  cep;
     /*         32 */ vlba_key_t   key;
@@ -1018,7 +1018,7 @@ static uint32_t castle_vlba_tree_key_hash(void *keyv, uint32_t seed) {
 static int castle_vlba_tree_entry_get(struct castle_btree_node *node,
                                       int                       idx,
                                       void                    **key_p,
-                                      version_t                *version_p,
+                                      c_ver_t                  *version_p,
                                       c_val_tup_t              *cvt_p)
 {
     struct castle_vlba_tree_node *vlba_node =
@@ -1054,7 +1054,7 @@ static void castle_vlba_tree_node_validate(struct castle_btree_node *node);
 static void castle_vlba_tree_entry_add(struct castle_btree_node *node,
                                        int                       idx,
                                        void                     *key_v,
-                                       version_t                 version,
+                                       c_ver_t                   version,
                                        c_val_tup_t               cvt)
 {
     struct castle_vlba_tree_node *vlba_node =
@@ -1162,7 +1162,7 @@ static void castle_vlba_tree_entries_drop(struct castle_btree_node *node,
 static void castle_vlba_tree_entry_replace(struct castle_btree_node *node,
                                            int                       idx,
                                            void                     *key_v,
-                                           version_t                 version,
+                                           c_ver_t                   version,
                                            c_val_tup_t               cvt)
 {
     struct castle_vlba_tree_node *vlba_node =
@@ -1566,12 +1566,12 @@ static void USED castle_btree_node_print(struct castle_btree_type *t, struct cas
 
 void castle_btree_lub_find(struct castle_btree_node *node,
                                   void *key,
-                                  version_t version,
+                                  c_ver_t version,
                                   int *lub_idx_p,
                                   int *insert_idx_p)
 {
     struct castle_btree_type *btree = castle_btree_type_get(node->type);
-    version_t version_lub;
+    c_ver_t version_lub;
     void *key_lub;
     int lub_idx, insert_idx, low, high, mid;
 
@@ -1683,7 +1683,7 @@ static int castle_btree_node_space_get(struct castle_component_tree *ct,
     btree = castle_btree_type_get(ct->btree_type);
     node_size = btree->node_size(ct, rev_level);
     /* Use separate extent for internal nodes. The only exception is when we are
-       working with the global tree. */ 
+       working with the global tree. */
     if(rev_level > 0)
     {
         c_ext_free_t *ext_free;
@@ -1692,9 +1692,9 @@ static int castle_btree_node_space_get(struct castle_component_tree *ct,
         if (ct == &castle_global_tree)
             ext_free = &ct->tree_ext_free;
         BUG_ON(EXT_ID_INVAL(ext_free->ext_id));
-        /* We never preallocate space for internal nodes. */ 
+        /* We never preallocate space for internal nodes. */
         BUG_ON(was_preallocated);
-        
+
         /* Allocate the space. */
         return castle_ext_freespace_get(ext_free,
                                         node_size * C_BLK_SIZE,
@@ -1705,7 +1705,7 @@ static int castle_btree_node_space_get(struct castle_component_tree *ct,
     /* Otherwise we are allocating space for a leaf node. We always preallocate it,
        except when working with the global ct. */
     BUG_ON(rev_level != 0);
-    BUG_ON((ct->tree_depth > 0) && 
+    BUG_ON((ct->tree_depth > 0) &&
            (!was_preallocated ^ (ct == &castle_global_tree)));
 
     ret = castle_ext_freespace_get(&ct->tree_ext_free,
@@ -1776,13 +1776,13 @@ static c2_block_t* castle_btree_effective_node_create(struct castle_component_tr
                                                       c_bvec_t *c_bvec,
                                                       c2_block_t *orig_c2b,
                                                       uint8_t level,
-                                                      version_t version)
+                                                      c_ver_t version)
 {
     struct castle_btree_type *btree;
     struct castle_btree_node *node, *eff_node;
     c2_block_t *c2b;
     void *last_eff_key;
-    version_t last_eff_version = 0;
+    c_ver_t last_eff_version = 0;
     int i, insert_idx, moved_cnt, was_preallocated, need_dirty;
     uint16_t node_size;
     uint8_t rev_level;
@@ -1807,7 +1807,7 @@ static c2_block_t* castle_btree_effective_node_create(struct castle_component_tr
     for(i=0; i<node->used; i++)
     {
         void        *entry_key;
-        version_t    entry_version;
+        c_ver_t      entry_version;
         c_val_tup_t  entry_cvt;
         int          need_move;
 
@@ -1887,9 +1887,9 @@ static c2_block_t* castle_btree_effective_node_create(struct castle_component_tr
     was_preallocated = castle_btree_node_was_preallocated(c_bvec->tree, rev_level);
     if(was_preallocated)
         atomic_dec(&c_bvec->reserv_nodes);
-    c2b = castle_btree_node_create(c_bvec->tree, 
-                                   version, 
-                                   rev_level, 
+    c2b = castle_btree_node_create(c_bvec->tree,
+                                   version,
+                                   rev_level,
                                    was_preallocated);
     memcpy(c2b_buffer(c2b), eff_node, node_size * C_BLK_SIZE);
     castle_vfree(eff_node);
@@ -1910,7 +1910,7 @@ static c2_block_t* castle_btree_node_key_split(c_bvec_t *c_bvec,
     int i, was_preallocated;
 
     void        *entry_key;
-    version_t    entry_version;
+    c_ver_t      entry_version;
     c_val_tup_t  entry_cvt;
 
     rev_level = c_bvec->btree_levels - level;
@@ -1918,11 +1918,11 @@ static c2_block_t* castle_btree_node_key_split(c_bvec_t *c_bvec,
     ct        = c_bvec->tree;
     btree     = castle_btree_type_get(ct->btree_type);
     node_size = btree->node_size(ct, rev_level);
-    was_preallocated 
+    was_preallocated
               = castle_btree_node_was_preallocated(c_bvec->tree, rev_level);
-    c2b       = castle_btree_node_create(ct, 
-                                         node->version, 
-                                         rev_level, 
+    c2b       = castle_btree_node_create(ct,
+                                         node->version,
+                                         rev_level,
                                          was_preallocated);
     if(was_preallocated)
         atomic_dec(&c_bvec->reserv_nodes);
@@ -1951,13 +1951,13 @@ static c2_block_t* castle_btree_node_key_split(c_bvec_t *c_bvec,
 static void castle_btree_slot_insert(c2_block_t  *c2b,
                                      int          index,
                                      void        *key,
-                                     version_t    version,
+                                     c_ver_t      version,
                                      c_val_tup_t  cvt)
 {
     struct castle_btree_node *node = c2b_buffer(c2b);
     struct castle_btree_type *btree = castle_btree_type_get(node->type);
     void      *lub_key      = btree->inv_key;
-    version_t  lub_version  = INVAL_VERSION;
+    c_ver_t    lub_version  = INVAL_VERSION;
     c_val_tup_t lub_cvt;
 
     BUG_ON(index > node->used);
@@ -2009,7 +2009,7 @@ static void castle_btree_node_insert(c2_block_t *parent_c2b,
     struct castle_btree_node    *parent = c2b_buffer(parent_c2b);
     struct castle_btree_node    *child  = c2b_buffer(child_c2b);
     struct castle_btree_type    *btree  = castle_btree_type_get(parent->type);
-    version_t                    version = child->version;
+    c_ver_t                      version = child->version;
     void                        *key;
     int                          insert_idx;
     c_val_tup_t                  cvt;
@@ -2031,7 +2031,7 @@ static void castle_btree_node_insert(c2_block_t *parent_c2b,
 static void castle_btree_node_under_key_insert(c2_block_t *parent_c2b,
                                                c2_block_t *child_c2b,
                                                void *key,
-                                               version_t version)
+                                               c_ver_t version)
 {
     struct castle_btree_node    *parent = c2b_buffer(parent_c2b);
     struct castle_btree_node    *child  = c2b_buffer(child_c2b);
@@ -2263,7 +2263,7 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
     struct castle_btree_node    *node = c_bvec_bnode(c_bvec);
     struct castle_btree_type    *btree = castle_btree_type_get(node->type);
     void                        *lub_key, *key = c_bvec->key;
-    version_t                    lub_version, version = c_bvec->version;
+    c_ver_t                      lub_version, version = c_bvec->version;
     cv_nonatomic_stats_t stats = { 0, 0, 0, 0, 0 };
     int                          lub_idx, insert_idx, ret;
     c_val_tup_t                  lub_cvt = INVAL_VAL_TUP;
@@ -2375,14 +2375,17 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
     /* Update live per-version statistics. */
     if (CVT_TOMB_STONE(lub_cvt))
     {
-        if (CVT_TOMB_STONE(new_cvt))
-            stats.tombstone_deletes++;
-        else
+        if (!CVT_TOMB_STONE(new_cvt))
         {
             stats.keys++;
             stats.tombstones--;
             /* Don't bump the replaces counter: replacing a tombstone with
              * a key is the same as inserting a new key. */
+        }
+        else
+        {
+            /* Don't bump tombstone_deletes counter: you can't delete something
+             * that doesn't exist. */
         }
     }
     else
@@ -2417,7 +2420,7 @@ static void castle_btree_read_process(c_bvec_t *c_bvec)
     struct castle_btree_node    *node = c_bvec_bnode(c_bvec);
     struct castle_btree_type    *btree = castle_btree_type_get(node->type);
     void                        *lub_key, *key = c_bvec->key;
-    version_t                    lub_version, version = c_bvec->version;
+    c_ver_t                      lub_version, version = c_bvec->version;
     int                          lub_idx;
     c_val_tup_t                  lub_cvt;
 
@@ -2823,7 +2826,7 @@ void castle_btree_iter_replace(c_iter_t *c_iter, int index, c_val_tup_t cvt)
     int real_entry_idx;
     void *prev_key;
     c_val_tup_t prev_cvt;
-    version_t prev_version;
+    c_ver_t prev_version;
 #ifdef CASTLE_DEBUG
     struct castle_btree_node *node;
 
@@ -2997,7 +3000,7 @@ static void castle_btree_iter_leaf_ptrs_lock(c_iter_t *c_iter)
     j=0;
     for(i=0; i<node->used; i++)
     {
-        version_t entry_version;
+        c_ver_t entry_version;
         c_val_tup_t entry_cvt;
 
         btree->entry_get(node, i, NULL, &entry_version,
@@ -3041,7 +3044,7 @@ static void castle_btree_iter_leaf_ptrs_lock(c_iter_t *c_iter)
     /* Finally, find out where in the indirect block the individual ptrs are */
     for(i=0; i<node->used; i++)
     {
-        version_t entry_version;
+        c_ver_t entry_version;
         void *entry_key;
         c_val_tup_t entry_cvt;
 
@@ -3057,7 +3060,7 @@ static void castle_btree_iter_leaf_ptrs_lock(c_iter_t *c_iter)
             continue;
         if(CVT_LEAF_PTR(entry_cvt))
         {
-            version_t real_entry_version;
+            c_ver_t real_entry_version;
             void *real_entry_key;
             int lub_idx;
 
@@ -3163,7 +3166,7 @@ static void castle_btree_iter_version_leaf_process(c_iter_t *c_iter)
     for(i=0; i<node->used; i++)
     {
         int         real_slot_idx;
-        version_t   entry_version;
+        c_ver_t     entry_version;
         c_val_tup_t entry_cvt;
         void       *entry_key;
 
@@ -3221,7 +3224,7 @@ static void castle_btree_iter_all_leaf_process(c_iter_t *c_iter)
 
     for(i=0; i<node->used; i++)
     {
-        version_t   entry_version;
+        c_ver_t     entry_version;
         c_val_tup_t entry_cvt;
         void       *entry_key;
 
@@ -3535,7 +3538,7 @@ void castle_btree_iter_cancel(c_iter_t *c_iter, int err)
     c_iter->cancelled = 1;
 }
 
-void castle_btree_iter_init(c_iter_t *c_iter, version_t version, int type)
+void castle_btree_iter_init(c_iter_t *c_iter, c_ver_t version, int type)
 {
     struct castle_btree_type *btree = castle_btree_type_get(c_iter->tree->btree_type);
     int i;
@@ -3646,7 +3649,7 @@ static int castle_enum_iter_need_visit(c_iter_t *c_iter, c_ext_pos_t  node_cep)
 static void castle_enum_iter_each(c_iter_t *c_iter,
                                   int index,
                                   void *key,
-                                  version_t version,
+                                  c_ver_t version,
                                   c_val_tup_t cvt)
 {
     struct castle_enumerator *c_enum = c_iter->private;
@@ -3789,7 +3792,7 @@ static void castle_btree_node_buffer_init(struct castle_component_tree *tree,
 
 void castle_btree_enum_next(c_enum_t *c_enum,
                             void **key_p,
-                            version_t *version_p,
+                            c_ver_t *version_p,
                             c_val_tup_t *cvt_p)
 {
     struct castle_btree_type *btree = castle_btree_type_get(c_enum->tree->btree_type);
@@ -3917,7 +3920,7 @@ static struct node_buf_t* node_buf_alloc(c_rq_enum_t *rq_enum)
 static void castle_rq_enum_iter_each(c_iter_t *c_iter,
                                      int index,
                                      void *key,
-                                     version_t version,
+                                     c_ver_t version,
                                      c_val_tup_t cvt)
 {
     struct castle_btree_type *btree;
@@ -4050,7 +4053,7 @@ static void castle_btree_rq_enum_fini(c_rq_enum_t *rq_enum)
     debug("Free rq_enum: %p\n", rq_enum);
 }
 
-void castle_btree_rq_enum_init(c_rq_enum_t *rq_enum, version_t version,
+void castle_btree_rq_enum_init(c_rq_enum_t *rq_enum, c_ver_t version,
                                struct castle_component_tree *tree,
                                void *start_key,
                                void *end_key)
@@ -4244,7 +4247,7 @@ int castle_btree_rq_enum_has_next(c_rq_enum_t *rq_enum)
 
 void castle_btree_rq_enum_next(c_rq_enum_t *rq_enum,
                                void       **key_p,
-                               version_t   *version_p,
+                               c_ver_t     *version_p,
                                c_val_tup_t *cvt_p)
 {
     struct castle_btree_type *btree =

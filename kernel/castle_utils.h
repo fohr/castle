@@ -126,13 +126,13 @@ static void inline _prefix##_hash_init(void)                                    
 /**
  * list_for_each_from - iterate over list of given type from the current point
  * @from:   curren point to start from
- * @pos:	the &struct list_head to use as a loop cursor.
- * @head:	the head for your list.
+ * @pos:    the &struct list_head to use as a loop cursor.
+ * @head:   the head for your list.
  *
  * Iterate over list of given type, continuing from current position.
  */
 #define list_for_each_from(from, pos, head)                                                    \
-	for (pos = (from); prefetch(pos->next), pos != (head); pos = pos->next)
+    for (pos = (from); prefetch(pos->next), pos != (head); pos = pos->next)
 
 void list_append(struct list_head *head1, struct list_head *head2);
 
@@ -170,7 +170,7 @@ static inline char* SKB_STR_GET(struct sk_buff *skb, int max_len)
 {
     uint32_t str_len = SKB_L_GET(skb);
     char *str;
-    
+
     if((str_len > max_len) || (str_len > skb->len))
         return NULL;
 
@@ -187,7 +187,7 @@ static inline char* SKB_STR_GET(struct sk_buff *skb, int max_len)
 static inline void SKB_STR_CPY(struct sk_buff *skb, void *dst, int str_len, int round)
 {
     uint32_t *dst32 = (uint32_t *)dst;
-    
+
     BUG_ON(str_len > skb->len);
     BUG_ON(skb_copy_bits(skb, 0, dst32, str_len) < 0);
     if(round)
@@ -199,7 +199,7 @@ static inline c_vl_key_t* SKB_VL_KEY_GET(struct sk_buff *skb, int max_len)
 {
     uint32_t key_len = SKB_L_GET(skb);
     c_vl_key_t *vlk;
-    
+
     if((key_len > max_len) || (key_len > skb->len))
         return NULL;
 
@@ -230,11 +230,11 @@ static inline c_bio_t* castle_utils_bio_alloc(int nr_bvecs)
         c_bvecs[i].cpu = -1;
         c_bvecs[i].c_bio = c_bio;
         c_bvecs[i].tree  = NULL;
-#ifdef CASTLE_PERF_DEBUG    
+#ifdef CASTLE_PERF_DEBUG
         c_bvecs[i].timeline = NULL;
 #endif
     }
-    c_bio->c_bvecs = c_bvecs; 
+    c_bio->c_bvecs = c_bvecs;
     /* Single reference taken out, the user decides how many more to take */
     c_bio->count   = ATOMIC(1);
     c_bio->err     = 0;
@@ -250,7 +250,7 @@ static inline void castle_utils_bio_free(c_bio_t *bio)
 static inline int list_length(struct list_head *head)
 {
     struct list_head *l;
-    int length = 0; 
+    int length = 0;
 
     list_for_each(l, head)
         length++;
@@ -293,7 +293,7 @@ static USED void check_stack_usage(void)
     free = (unsigned long)n - (unsigned long)end_of_stack(current);
 
     castle_printk(LOG_DEBUG, "%s used greatest stack depth: %lu bytes left, currently left %lu\n",
-                current->comm, 
+                current->comm,
                 free,
                 (unsigned long)&free - (unsigned long)end_of_stack(current));
 }
@@ -333,7 +333,7 @@ int castle_printk_init(void);
 void castle_printk_fini(void);
 
 inline void list_swap(struct list_head *t1, struct list_head *t2);
-void        list_sort(struct list_head *list, 
+void        list_sort(struct list_head *list,
                       int (*compare)(struct list_head *l1, struct list_head *l2));
 void        vl_key_print(c_printk_level_t level, c_vl_key_t *vl_key);
 void        vl_okey_print(c_printk_level_t level, c_vl_okey_t *key);

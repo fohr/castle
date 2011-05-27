@@ -8,12 +8,12 @@
 typedef struct castle_request_timeline {
     uint32_t         seq;
     /* Time when the request timeline was created */
-    struct timespec  create_tm; 
-    struct timespec  destroy_tm; 
+    struct timespec  create_tm;
+    struct timespec  destroy_tm;
     /* Stats about timing check points */
     int              active_checkpoint;
     struct castle_checkpoint {
-        int              active; 
+        int              active;
         struct timespec  start_tm;
         uint32_t         cnts;
         struct timespec  aggregate_tm;
@@ -23,11 +23,11 @@ typedef struct castle_request_timeline {
         int              line;
     } checkpoints[MAX_CHECK_POINTS];
 
-    struct list_head list; 
+    struct list_head list;
 } c_req_time_t;
 
 /* These should not be used directly */
-extern c_req_time_t* _castle_request_timeline_create           (void); 
+extern c_req_time_t* _castle_request_timeline_create           (void);
 extern void          _castle_request_timeline_checkpoint_start (c_req_time_t *timeline,
                                                                 char *file,
                                                                 int line);

@@ -67,7 +67,7 @@ uint32_t opt_hashes_per_bit[] =
  * @param   num_elements    Expected number of elements.  The actual number of elements added
  *                          can be less, but not more.
  */
-int castle_bloom_create(castle_bloom_t *bf, da_id_t da_id, uint64_t num_elements)
+int castle_bloom_create(castle_bloom_t *bf, c_da_t da_id, uint64_t num_elements)
 {
     uint32_t bits_per_element = BLOOM_BITS_PER_ELEMENT;
     uint32_t num_hashes = opt_hashes_per_bit[bits_per_element];
@@ -106,7 +106,7 @@ int castle_bloom_create(castle_bloom_t *bf, da_id_t da_id, uint64_t num_elements
 
     /* Try for SSD extent. If fails, go for DEFAULT_RDA */
     /* No need to handle Low Free-Space situation. Dont use bloom filter, in case of LFS. */
-    bf->ext_id = castle_extent_alloc(SSD_ONLY_EXT, da_id, EXT_T_BLOOM_FILTER, 
+    bf->ext_id = castle_extent_alloc(SSD_ONLY_EXT, da_id, EXT_T_BLOOM_FILTER,
                                      ceiling(size, C_CHK_SIZE), 0,
                                      NULL, NULL);
     if (EXT_ID_INVAL(bf->ext_id))
@@ -294,7 +294,7 @@ static void castle_bloom_next_chunk(castle_bloom_t *bf)
  */
 static void castle_bloom_add_index_key(castle_bloom_t *bf, void *key)
 {
-    version_t version = 0;
+    c_ver_t version = 0;
     c_val_tup_t cvt;
     struct castle_bloom_build_params *bf_bp = bf->private;
 
@@ -631,7 +631,7 @@ static int castle_bloom_lookup(castle_bloom_t *bf, c2_block_t *c2b, struct castl
     if (queries % 10000 == 0 && queries > 0)
     {
         false_positives = atomic64_read(&bf->false_positives);
-        castle_printk(LOG_INFO, "******** bf %p, false positive rate is %llu%% for %llu queries.\n", 
+        castle_printk(LOG_INFO, "******** bf %p, false positive rate is %llu%% for %llu queries.\n",
                 bf, 100 * false_positives / queries, queries);
     }
 #endif
@@ -760,7 +760,7 @@ static void castle_bloom_chunk_read(c_bvec_t *c_bvec, uint32_t chunk_id)
         chunk_c2b->end_io = castle_bloom_end_block_io;
         chunk_c2b->private = c_bvec;
 
-        debug("Bloom filter block not in cache, scheduling I/O at offset %llu for bf %p.\n", 
+        debug("Bloom filter block not in cache, scheduling I/O at offset %llu for bf %p.\n",
                 chunk_c2b->cep.offset, bf);
 
         BUG_ON(submit_c2b(READ, chunk_c2b));
