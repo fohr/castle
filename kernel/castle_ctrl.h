@@ -22,7 +22,6 @@ void castle_control_collection_detach(c_collection_id_t collection, int *ret);
 void castle_control_collection_snapshot(c_collection_id_t collection,
                                         int *ret,
                                         c_ver_t *version);
-void castle_control_set_target      (c_slave_uuid_t slave_uuid, int value, int *ret);
 
 int  castle_control_ioctl           (struct file *filp,
                                      unsigned int cmd,

@@ -1392,8 +1392,6 @@ struct castle_slave*  castle_claim                 (uint32_t new_dev);
 void                  castle_release               (struct castle_slave *cs);
 void                  castle_release_device        (struct castle_slave *cs);
 
-void                  castle_slave_access          (uint32_t uuid);
-
 struct castle_slave*  castle_slave_find_by_id      (uint32_t id);
 struct castle_slave*  castle_slave_find_by_uuid    (uint32_t uuid);
 struct castle_slave*  castle_slave_find_by_bdev    (struct block_device *bdev);

@@ -65,12 +65,6 @@ void castle_control_claim(uint32_t dev, int *ret, c_slave_uuid_t *id)
     }
 }
 
-void castle_control_release(c_slave_uuid_t id, int *ret)
-{
-    castle_printk(LOG_ERROR, "==> Release NOT IMPLEMENTED YET, slave UUID=%d\n", id);
-    *ret = -ENOSYS;
-}
-
 void castle_control_attach(c_ver_t version, int *ret, uint32_t *dev)
 {
     struct castle_attachment *cd;
@@ -488,31 +482,6 @@ void castle_control_collection_snapshot_delete(c_ver_t version,
     return;
 }
 
-void castle_control_set_target(c_slave_uuid_t slave_uuid, int value, int *ret)
-{
-    struct castle_slave *slave = castle_slave_find_by_uuid(slave_uuid);
-    struct castle_slave_superblock *sb;
-
-    if (!slave)
-    {
-        *ret = -ENOENT;
-        return;
-    }
-
-    sb = castle_slave_superblock_get(slave);
-
-    if (value)
-        sb->pub.flags |= CASTLE_SLAVE_TARGET;
-    else
-        sb->pub.flags &= ~CASTLE_SLAVE_TARGET;
-
-    castle_slave_superblock_put(slave, 1);
-
-    castle_events_slave_changed(slave->uuid);
-
-    *ret = 0;
-}
-
 void castle_control_protocol_version(int *ret, uint32_t *version)
 {
     *ret = 0;
@@ -857,10 +826,6 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
                                  &ioctl.claim.ret,
                                  &ioctl.claim.id);
             break;
-        case CASTLE_CTRL_RELEASE:
-            castle_control_release( ioctl.release.id,
-                                   &ioctl.release.ret);
-            break;
         case CASTLE_CTRL_INIT:
             castle_control_fs_init(&ioctl.init.ret);
             break;
@@ -935,11 +900,6 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
                                  &ioctl.clone.ret,
                                  &ioctl.clone.clone);
             break;
-
-        case CASTLE_CTRL_TRANSFER_CREATE:
-        case CASTLE_CTRL_TRANSFER_DESTROY:
-            err = -ENOSYS;
-            goto err;
 
         case CASTLE_CTRL_FAULT:
             castle_control_fault( ioctl.fault.fault_id,

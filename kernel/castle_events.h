@@ -21,9 +21,6 @@ void castle_events_slave_rebuild_notify(void);
 #define castle_events_slave_changed(_slave_uuid) \
     castle_uevent2(CASTLE_CTRL_CLAIM, CASTLE_EVENTS_SUCCESS, _slave_uuid)
 
-#define castle_events_slave_release(_slave_uuid) \
-    castle_uevent2(CASTLE_CTRL_RELEASE, CASTLE_EVENTS_SUCCESS, _slave_uuid)
-
 #define castle_events_slave_rebuild(_slave_uuid) \
     castle_uevent2(CASTLE_CTRL_SLAVE_EVACUATE, CASTLE_EVENTS_SUCCESS, _slave_uuid)
 
@@ -60,21 +57,6 @@ void castle_events_slave_rebuild_notify(void);
 
 #define castle_events_init() \
     castle_uevent1(CASTLE_CTRL_INIT, CASTLE_EVENTS_SUCCESS)
-
-#define castle_events_transfer_create(_transfer_id) \
-    castle_uevent2(CASTLE_CTRL_TRANSFER_CREATE, CASTLE_EVENTS_SUCCESS, _transfer_id)
-
-#define castle_events_transfer_finished(_transfer_id, _err) \
-    castle_uevent3(CASTLE_EVENT_TRANFSER_FINISHED, CASTLE_EVENTS_SUCCESS, _transfer_id, _err)
-
-#define castle_events_transfer_destroy(_transfer_id) \
-    castle_uevent2(CASTLE_CTRL_TRANSFER_DESTROY, CASTLE_EVENTS_SUCCESS, _transfer_id)
-
-#define castle_events_spinup(_slave_uuid) \
-    castle_uevent2(CASTLE_EVENT_SPINUP, CASTLE_EVENTS_SUCCESS, _slave_uuid)
-
-#define castle_events_spindown(_slave_uuid) \
-    castle_uevent2(CASTLE_EVENT_SPINDOWN, CASTLE_EVENTS_SUCCESS, _slave_uuid)
 
 
 #endif /* __CASTLE_EVENTS_H__ */
