@@ -997,7 +997,7 @@ static void castle_slave_superblock_init(struct   castle_slave *cs,
     cs_sb->pub.used   = 2; /* Two blocks used for the superblocks */
     cs_sb->pub.uuid   = uuid;
     cs_sb->pub.size   = get_bd_capacity(cs->bdev) >> (C_BLK_SHIFT - 9);
-    cs_sb->pub.flags  = CASTLE_SLAVE_TARGET | CASTLE_SLAVE_SPINNING;
+    cs_sb->pub.flags  = 0;
     castle_slave_superblock_print(cs_sb);
 
     castle_printk(LOG_INIT, "Done.\n");
@@ -1541,10 +1541,8 @@ void castle_release(struct castle_slave *cs)
     castle_sysfs_slave_del(cs);
     /* Ghost slaves are only partially initialised, and have no bdev. */
     if (!test_bit(CASTLE_SLAVE_GHOST_BIT, &cs->flags))
-    {
-        castle_events_slave_release(cs->uuid);
         castle_release_device(cs);
-    }
+
     list_del_rcu(&cs->list);
     synchronize_rcu();
     castle_free(cs);
@@ -2242,82 +2240,6 @@ error_out:
     return NULL;
 }
 
-void castle_slave_access(uint32_t uuid)
-{
-    struct castle_slave_superblock *sb;
-    struct castle_slave *cs;
-
-    cs = castle_slave_find_by_uuid(uuid);
-    BUG_ON(!cs);
-    BUG_ON(test_bit(CASTLE_SLAVE_GHOST_BIT, &cs->flags));
-
-    cs->last_access = jiffies;
-
-    sb = castle_slave_superblock_get(cs);
-    if(!(sb->pub.flags & CASTLE_SLAVE_SPINNING))
-    {
-        sb->pub.flags |= CASTLE_SLAVE_SPINNING;
-        castle_slave_superblock_put(cs, 1);
-        castle_events_spinup(cs->uuid);
-    } else
-        castle_slave_superblock_put(cs, 0);
-}
-
-static void castle_slaves_spindown(struct work_struct *work)
-{
-    struct castle_slave_superblock *sb;
-    struct list_head *l;
-
-    rcu_read_lock();
-    list_for_each_rcu(l, &castle_slaves.slaves)
-    {
-        struct castle_slave *cs = list_entry(l, struct castle_slave, list);
-
-        sb = castle_slave_superblock_get(cs);
-        if(!(sb->pub.flags & CASTLE_SLAVE_SPINNING))
-        {
-            castle_slave_superblock_put(cs, 0);
-            continue;
-        }
-#ifdef CASTLE_SPINDOWN_DISKS
-        /* This slave is spinning, check if there was an access to it within
-           the spindown period */
-        if((cs->last_access + 5 * HZ < jiffies) &&
-           !(sb->flags & CASTLE_SLAVE_TARGET))
-        {
-            sb->flags &= ~CASTLE_SLAVE_SPINNING;
-            castle_slave_superblock_put(cs, 1);
-            castle_events_spindown(cs->uuid);
-        } else
-            castle_slave_superblock_put(cs, 0);
-#else
-            castle_slave_superblock_put(cs, 0);
-#endif
-    }
-    rcu_read_unlock();
-}
-
-static struct timer_list spindown_timer;
-static struct work_struct spindown_work_item;
-static void castle_slaves_spindowns_check(unsigned long first)
-{
-    unsigned long sleep = 5*HZ;
-
-    /* NOTE: This should really check if we've got waitqueues initialised
-       at the moment we assume 10s is enough for that */
-    if(first)
-    {
-        CASTLE_INIT_WORK(&spindown_work_item, castle_slaves_spindown);
-        sleep = 10*HZ;
-    }
-    else
-        queue_work(castle_wq, &spindown_work_item);
-
-    /* Reschedule ourselves */
-    setup_timer(&spindown_timer, castle_slaves_spindowns_check, 0);
-    mod_timer(&spindown_timer, jiffies + sleep);
-}
-
 static char *wq_names[2*MAX_BTREE_DEPTH+1];
 static void castle_wqs_fini(void)
 {
@@ -2365,16 +2287,6 @@ static void castle_slaves_free(void)
     struct list_head *lh, *th;
     struct castle_slave *slave;
 
-    /* Delete the spindown timer. */
-    del_singleshot_timer_sync(&spindown_timer);
-
-#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,18)
-    cancel_delayed_work(&spindown_work_item);
-    flush_scheduled_work();
-#else
-    cancel_work_sync(&spindown_work_item);
-#endif
-
     rcu_read_lock();
     list_for_each_safe_rcu(lh, th, &castle_slaves.slaves)
     {
@@ -2393,8 +2305,6 @@ static int castle_slaves_init(void)
     /* Init the slaves structures */
     memset(&castle_slaves, 0, sizeof(struct castle_slaves));
     INIT_LIST_HEAD(&castle_slaves.slaves);
-
-    castle_slaves_spindowns_check(1);
 
     return 0;
 }
