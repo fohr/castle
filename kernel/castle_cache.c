@@ -2500,6 +2500,10 @@ static void castle_cache_block_free(c2_block_t *c2b)
     c2_page_t *c2p, **c2ps;
     int i, nr_c2ps;
 
+#ifdef CASTLE_DEBUG
+    if(c2b_locked(c2b))
+        castle_printk(LOG_ERROR, "%s::c2b blocked from %s:%d\n", __FUNCTION__, c2b->file, c2b->line);
+#endif
     BUG_ON(c2b_locked(c2b));
     BUG_ON(atomic_read(&c2b->count) != 0);
 
@@ -4361,6 +4365,10 @@ restart_traverse:
 
                     /* Dirty c2bs should never overlap. */
                     BUG_ON(c2b->cep.offset < last_end_off);
+#ifdef CASTLE_DEBUG
+                    castle_printk(LOG_DEBUG, "%s::waiting for c2b locked from: %s:%d\n",
+                        __FUNCTION__, c2b->file, c2b->line);
+#endif
 
                     if (unlikely(dirtytree_locked))
                     {

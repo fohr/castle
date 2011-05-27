@@ -2992,7 +2992,7 @@ static inline void castle_da_entry_add(struct castle_da_merge *merge,
         debug("%s::Allocating a new node at depth: %d for merge %p (da %d level %d)\n",
             __FUNCTION__, depth, merge, merge->da->id, merge->level);
     }
-    else //if (depth > 0)
+    else if (depth > 0)
             write_lock_c2b(level->node_c2b);
 
     node = c2b_bnode(level->node_c2b);
@@ -3003,6 +3003,17 @@ static inline void castle_da_entry_add(struct castle_da_merge *merge,
     /* Add the entry to the node (this may get dropped later, but leave it here for now */
     BUG_ON(CVT_LEAF_PTR(cvt));
     btree->entry_add(node, level->next_idx, key, version, cvt);
+
+    /* unlock the c2b so checkpoint can writeback merge state, but for the sake of performance,
+       don't do this for leaf nodes, which will be unlocked and relocked on unit merge boundary. */
+    /* TODO@tr actually come to think of it, this might rate-limit checkpoint's progress to unit
+       merge boundary anyway. i.o.w. we may have had the same effect if we left the locking
+       scheme as it was in da_entry_add, node_complete, etc, and simply unlocked and locked ALL
+       node level c2bs at unit merge boundary. Nevertheless, this "frequent internal node
+       lock toggling" approach might be beneficial for partial merges... */
+    if (depth > 0)
+        write_unlock_c2b(level->node_c2b);
+
     /* Compare the current key to the last key. Should never be smaller */
     /* key_compare() is a costly function. Trying to avoid duplicates. We already
      * did comparision between last key added to the out_tree and current key in
@@ -3012,16 +3023,6 @@ static inline void castle_da_entry_add(struct castle_da_merge *merge,
      * added and last key added to the node. But, it repesents the comparision between last
      * 2 keys added to the tree. Still, it is okay as in case of re-adds both the comparisions
      * yield same value. */
-
-    /* unlock the c2b so checkpoint can writeback merge state, but for the sake of performance,
-       don't do this for leaf nodes, which will be unlocked and relocked on unit merge boundary. */
-    /* TODO@tr actually come to think of it, this might rate-limit checkpoint's progress to unit
-       merge boundary anyway. i.o.w. we may have had the same effect if we left the locking
-       scheme as it was in da_entry_add, node_complete, etc, and simply unlocked and locked ALL
-       node level c2bs at unit merge boundary. Nevertheless, the current "frequent internal node
-       lock toggling" approach might be beneficial for partial merges... */
-    //if (depth > 0)
-        write_unlock_c2b(level->node_c2b);
 
     key_cmp = (level->next_idx != 0) ?
                ((depth == 0)? merge->is_new_key: btree->key_compare(key, level->last_key)) :
@@ -3100,11 +3101,6 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
     castle_printk(LOG_DEBUG, "%s::Completing node at depth=%d for da %d level %d\n",
         __FUNCTION__, depth, merge->da->id, merge->level);
     BUG_ON(depth >= MAX_BTREE_DEPTH);
-
-    /* for non-leaf nodes, the c2b will be unlocked */
-    //if (depth > 0)
-        write_lock_c2b(level->node_c2b);
-
     node      = c2b_bnode(level->node_c2b);
     BUG_ON(!node);
     /* Version of the node should be the last valid_version */
@@ -3119,7 +3115,7 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
     valid_end_idx   = level->valid_end_idx;
 
     /* Reset the variables to the correct state for castle_da_entry_add(). */
-    level->node_c2b      = NULL;
+    level->node_c2b      = NULL; /* this forces the next da_entry_add call to make a new node */
     level->last_key      = NULL;
     level->next_idx      = 0;
     level->valid_end_idx = -1;
@@ -3137,18 +3133,18 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
         BUG_ON(merge->completing);
         btree->entry_get(node, node_idx,  &key, &version, &cvt);
         BUG_ON(CVT_LEAF_PTR(cvt));
-        //if(depth > 0)
-            write_unlock_c2b(node_c2b);
         castle_printk(LOG_DEBUG, "%s::spliting node at depth %d for da %d level %d.\n",
             __FUNCTION__, depth, merge->da->id, merge->level);
         castle_da_entry_add(merge, depth, key, version, cvt, 1);
-        //if(depth > 0)
-            write_lock_c2b(node_c2b);
         node_idx++;
         BUG_ON(level->node_c2b == NULL);
         /* Check if the node completed, it should never do */
         BUG_ON(level->next_idx < 0);
     }
+
+    /* for non-leaf nodes, the c2b will be unlocked */
+    if (depth > 0)
+        write_lock_c2b(node_c2b);
     debug("Dropping entries [%d, %d] from the original node\n",
             valid_end_idx + 1, node->used - 1);
     /* Now that entries are safely in the new node, drop them from the node */
@@ -3228,7 +3224,7 @@ static inline int castle_da_nodes_complete(struct castle_da_merge *merge)
     }
     /* If we reached the top of the tree, we must fail the merge */
     if(i == MAX_BTREE_DEPTH - 1)
-        return -EINVAL;
+        return -EINVAL; /* TODO@tr change this to a BUG_ON; nothing graceful about this fail */
 
 out:
     debug("We got as far as depth=%d\n", i);
@@ -3496,8 +3492,8 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
             castle_printk(LOG_DEBUG, "%s::putting c2b of btree node %i for da %d level %d.\n",
                 __FUNCTION__, i, merge->da->id, merge->level);
             /* leaf nodes remain locked throughout a merge */
-            //if(i==0)
-            //    write_unlock_c2b(c2b);
+            if(i==0)
+                write_unlock_c2b(c2b);
             put_c2b(c2b);
         }
     }
@@ -4302,7 +4298,7 @@ static struct castle_da_merge* castle_da_merge_init(struct castle_double_array *
     /* only reason a lock might be needed here would be if we were racing with double_array_read,
        which should never happen */
     if(da->levels[level].merge.serdes.des){
-        debug("%s::found serialised merge in da %d level %d, attempting des\n",
+        castle_printk(LOG_DEBUG, "%s::found serialised merge in da %d level %d, attempting des\n",
                 __FUNCTION__, da->id, level);
         castle_da_merge_des_check(merge, da, level, nr_trees, in_trees);
         /* by this point, merge->deserialising flag is set, but we also maintain the
@@ -4737,10 +4733,10 @@ update_output_tree_state:
                     __FUNCTION__, i, merge, merge->da->id, merge->level, node->size, node->is_leaf);
 
             /* dirty the incomplete node so it will be flushed at next checkpoint */
-            //if(i > 0)
+            if(i > 0)
                 write_lock_c2b(merge->levels[i].node_c2b);
             dirty_c2b(merge->levels[i].node_c2b);
-            //if(i > 0)
+            if(i > 0)
                 write_unlock_c2b(merge->levels[i].node_c2b);
         }//fi
     }//rof
@@ -4800,6 +4796,8 @@ static c2_block_t* castle_da_merge_des_out_tree_c2b_write_fetch(struct castle_da
     BUG_ON(!merge);
     BUG_ON(EXT_POS_INVAL(cep));
 
+    castle_printk(LOG_DEBUG, "%s::recovering node for merge on da %d level %d from "cep_fmt_str", btree level %d.\n",
+            __FUNCTION__, merge->da->id, merge->level, cep2str(cep), depth);
     castle_da_merge_node_size_get(merge, depth, &node_size);
     BUG_ON(node_size==0);
 
@@ -4811,7 +4809,7 @@ static c2_block_t* castle_da_merge_des_out_tree_c2b_write_fetch(struct castle_da
     if(!c2b_uptodate(c2b))
         BUG_ON(submit_c2b_sync(READ, c2b));
     /* do not write_unlock leaf node c2b; merge thread expects to find it in a locked state. */
-    //if(depth > 0)
+    if(depth > 0)
         write_unlock_c2b(c2b);
     return c2b;
 }
@@ -5070,14 +5068,14 @@ static int castle_da_merge_do(struct castle_double_array *da,
     /* Do the merge. */
     do {
         /* unlock output ct active leaf c2b, so checkpoint can quickly flush partial merges */
-        //c2_block_t *c2b = merge->levels[0].node_c2b;
-        //if(c2b)
-        //    write_unlock_c2b(c2b);
+        c2_block_t *c2b = merge->levels[0].node_c2b;
+        if(c2b)
+            write_unlock_c2b(c2b);
         /* Wait until we are allowed to do next unit of merge. */
         units_cnt = castle_da_merge_units_inc_return(da, level);
         /* relock output ct active leaf c2b, as unit_do expects to find it */
-        //if(c2b)
-        //    write_lock_c2b(c2b);
+        if(c2b)
+            write_lock_c2b(c2b);
 
         debug("%s::doing unit %d on merge %p (da %d level %d)\n", __FUNCTION__,
             units_cnt, merge, da->id, level);
@@ -7213,7 +7211,7 @@ int castle_double_array_read(void)
         level=mstore_dmserentry->level;
         BUG_ON(level < MIN_DA_SERDES_LEVEL);
 
-        debug("%s::deserialising merge on da %d level %d\n",
+        castle_printk(LOG_DEBUG, "%s::deserialising merge on da %d level %d\n",
                 __FUNCTION__, da_id, level);
         des_da=castle_da_hash_get(da_id);
         if(!des_da)
