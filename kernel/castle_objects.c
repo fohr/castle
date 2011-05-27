@@ -1476,7 +1476,7 @@ void __castle_object_get_complete(struct work_struct *work)
     uint64_t data_length = get->data_length;
     int first = get->first;
     struct castle_component_tree *ct = get->ct;
-    int last;
+    int last, dont_want_more;
     c_val_tup_t cvt = get->cvt;
 
     /* Deal with error case first */
@@ -1495,20 +1495,20 @@ void __castle_object_get_complete(struct work_struct *work)
     debug("Last=%d\n", last);
     read_lock_c2b(c2b);
     if(first)
-        get->reply_start(get,
-                         0,
-                         data_c2b_length + data_length,
-                         c2b_buffer(c2b),
-                         data_c2b_length);
+        dont_want_more = get->reply_start(get,
+                                          0,
+                                          data_c2b_length + data_length,
+                                          c2b_buffer(c2b),
+                                          data_c2b_length);
     else
-        get->reply_continue(get,
-                            0,
-                            c2b_buffer(c2b),
-                            data_c2b_length,
-                            last);
+        dont_want_more = get->reply_continue(get,
+                                             0,
+                                             c2b_buffer(c2b),
+                                             data_c2b_length,
+                                             last);
     read_unlock_c2b(c2b);
 
-    if(last)
+    if(last || dont_want_more)
         goto out;
 
     BUG_ON(data_c2b_length != OBJ_IO_MAX_BUFFER_SIZE * C_BLK_SIZE);

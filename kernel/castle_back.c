@@ -1308,11 +1308,11 @@ err1: castle_attachment_put(op->attachment);
 err0: castle_back_reply(op, err, 0, 0);
 }
 
-void castle_back_get_reply_continue(struct castle_object_get *get,
-                                    int err,
-                                    void *buffer,
-                                    uint32_t buffer_len,
-                                    int last)
+int castle_back_get_reply_continue(struct castle_object_get *get,
+                                   int err,
+                                   void *buffer,
+                                   uint32_t buffer_len,
+                                   int last)
 {
     struct castle_back_op *op = container_of(get, struct castle_back_op, get);
     void *dest = castle_back_user_to_kernel(op->buf, op->req.get.value_ptr + op->buffer_offset);
@@ -1333,6 +1333,11 @@ void castle_back_get_reply_continue(struct castle_object_get *get,
         op->buffer_offset += to_copy;
     }
 
+    BUG_ON(op->req.get.value_len < op->buffer_offset);
+    /* We should finish if that's the last bit of data we are going to get,
+       or if there is no more space in the shared buffer. */
+    last = last || (op->req.get.value_len == op->buffer_offset);
+
     if (last)
     {
         castle_back_buffer_put(op->conn, op->buf);
@@ -1348,14 +1353,14 @@ void castle_back_get_reply_continue(struct castle_object_get *get,
         castle_back_reply(op, 0, 0, op->value_length);
     }
 
-    return;
+    return last;
 }
 
-void castle_back_get_reply_start(struct castle_object_get *get,
-                                  int err,
-                                  uint64_t data_length,
-                                  void *buffer,
-                                  uint32_t buffer_length)
+int castle_back_get_reply_start(struct castle_object_get *get,
+                                int err,
+                                uint64_t data_length,
+                                void *buffer,
+                                uint32_t buffer_length)
 {
     struct castle_back_op *op = container_of(get, struct castle_back_op, get);
     int err_prime;
@@ -1378,14 +1383,19 @@ void castle_back_get_reply_start(struct castle_object_get *get,
     op->value_length = data_length;
     op->buffer_offset = 0;
 
-    castle_back_get_reply_continue(get, 0, buffer, buffer_length, buffer_length == data_length);
-
-    return;
+    return castle_back_get_reply_continue(get,
+                                          0,
+                                          buffer,
+                                          buffer_length,
+                                          buffer_length == data_length);
 
 err:
     castle_back_buffer_put(op->conn, op->buf);
     castle_attachment_put(op->attachment);
     castle_back_reply(op, err_prime, 0, 0);
+
+    /* Return value ignored if there was an error. */
+    return 0;
 }
 
 /**
