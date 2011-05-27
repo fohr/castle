@@ -1878,13 +1878,13 @@ int submit_c2b_sync_barrier(int rw, c2_block_t *c2b)
     BUG_ON(rw != WRITE);
 
     /* Mark the c2b as a barrier c2b. */
-    set_c2b_barrier(c2b);
+    //set_c2b_barrier(c2b);
 
     /* Submit the c2b as per usual. */
     ret = submit_c2b_sync(rw, c2b);
 
     /* Clear the bit, since c2b is write locked, noone else will see it. */
-    clear_c2b_barrier(c2b);
+    //clear_c2b_barrier(c2b);
 
     return ret;
 }
