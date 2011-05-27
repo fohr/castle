@@ -30,7 +30,7 @@ int         castle_versions_count_get               (c_da_t da_id, cv_health_t h
 inline void         castle_version_states_hash_add         (cv_states_t *states, cv_state_t *state);
 inline cv_state_t*  castle_version_states_hash_get_alloc   (cv_states_t *states, c_ver_t version);
 void        castle_version_states_commit            (cv_states_t *states);
-void        castle_version_states_free              (cv_states_t *states);
+int         castle_version_states_free              (cv_states_t *states);
 int         castle_version_states_alloc             (cv_states_t *states, int max_versions);
 void        castle_version_live_stats_adjust        (c_ver_t version, cv_nonatomic_stats_t adjust);
 void        castle_version_consistent_stats_adjust  (c_ver_t version, cv_nonatomic_stats_t adjust);

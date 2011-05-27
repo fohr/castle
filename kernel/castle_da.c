@@ -3502,22 +3502,24 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
     int i;
     c_merge_serdes_state_t serdes_state;
 
-    if(!merge)
+    if (!merge)
     {
         castle_printk(LOG_ERROR, "%s::[da %d level %d] no merge structure.\n",
                 __FUNCTION__, merge->da->id, merge->level);
         return;
     }
 
-    if(!merge->da)
+    if (castle_version_states_free(&merge->version_states) != EXIT_SUCCESS)
     {
-        castle_printk(LOG_ERROR, "%s::[da %d level %d] merge structure da pointer not assigned.\n",
-                __FUNCTION__, merge->da->id, merge->level);
+        castle_printk(LOG_ERROR, "%s::[da %d level %d] version_states not fully"
+                " allocated.\n", __FUNCTION__, merge->da->id, merge->level);
         return;
     }
 
+    BUG_ON(!merge->da);
+
     serdes_state = atomic_read(&merge->da->levels[merge->level].merge.serdes.valid);
-    if(serdes_state > NULL_DAM_SERDES)
+    if (serdes_state > NULL_DAM_SERDES)
         mutex_lock(&merge->da->levels[merge->level].merge.serdes.mutex);
 
     /* Release the last leaf node c2b. */
@@ -3680,7 +3682,6 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
     if (merge->merged_iter)
         castle_free(merge->merged_iter);
 
-    castle_version_states_free(&merge->version_states);
     castle_free(merge);
 }
 

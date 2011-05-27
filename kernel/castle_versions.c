@@ -978,14 +978,29 @@ void castle_version_states_commit(cv_states_t *states)
 
 /**
  * Deallocate version states array and hash.
+ *
+ * @return  0   Structure was fully allocated
+ * @return >0   Structure was not fully allocated
  */
-void castle_version_states_free(cv_states_t *states)
+int castle_version_states_free(cv_states_t *states)
 {
+    int ret = 2;
+
     if (states->array)
-        castle_free(states->array);
+    {
+        castle_vfree(states->array);
+        states->array = NULL;
+        ret--;
+    }
 
     if (states->hash)
-        castle_free(states->hash);
+    {
+        castle_vfree(states->hash);
+        states->hash = NULL;
+        ret--;
+    }
+
+    return ret;
 }
 
 /**
@@ -1001,11 +1016,11 @@ int castle_version_states_alloc(cv_states_t *states, int max_versions)
 {
     int i;
 
-    states->array = castle_malloc(max_versions * sizeof(cv_state_t), GFP_KERNEL);
+    states->array = castle_vmalloc(max_versions * sizeof(cv_state_t));
     if (!states->array)
         goto err_out;
-    states->hash = castle_malloc(CASTLE_VERSION_STATES_HASH_SIZE * sizeof(struct list_head),
-            GFP_KERNEL);
+    states->hash = castle_vmalloc(CASTLE_VERSION_STATES_HASH_SIZE
+            * sizeof(struct list_head));
     if (!states->hash)
         goto err_out;
     states->free_idx = 0;
