@@ -1570,6 +1570,7 @@ void castle_release_device(struct castle_slave *cs)
 #else
         blkdev_put(cs->bdev, FMODE_READ|FMODE_WRITE);
 #endif
+        sysfs_remove_link(&cs->kobj, "dev");
         castle_printk(LOG_USERINFO, "Device 0x%x [%s] has been released.\n",
                       cs->uuid, cs->bdev_name);
     }
