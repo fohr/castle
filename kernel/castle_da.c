@@ -3666,12 +3666,6 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
                 castle_ct_put(merge->out_tree, 0);
                 merge->out_tree=NULL;
             }
-            else
-            {
-                /* leave free-ing to da_dealloc, but remove from hash now so that
-                   ct_hash_destroy_check doesn't bitch about it. */
-                castle_ct_hash_remove(merge->out_tree);
-            }
         }
     }
 
@@ -4362,7 +4356,8 @@ static struct castle_da_merge* castle_da_merge_init(struct castle_double_array *
         /* by this point, merge->deserialising flag is set, but we also maintain the
            da->levels[level].merge.serdes.des flag for checkpoint's sake.
            TODO@tr get rid of merge->deserialising; use only da->levels[level].merge.serdes.des
-                   so we never get any inconsistency/confusion */
+                   so we never get any inconsistency/confusion... at the moment I think the only
+                   place it's used is in the iterator recovery */
 
         castle_da_merge_deserialise(merge, da, level);
         merge->out_tree = da->levels[level].merge.serdes.out_tree;
@@ -4370,7 +4365,10 @@ static struct castle_da_merge* castle_da_merge_init(struct castle_double_array *
 
     if(!merge->out_tree)
     {
-        BUG_ON(merge->deserialising);
+        /* we cannot tolerate failure to recover an in-progress output ct if this is a
+           deserialising merge */
+        BUG_ON(da->levels[level].merge.serdes.des);
+
         merge->out_tree = castle_ct_alloc(da, RO_VLBA_TREE_TYPE, level+1);
         if(!merge->out_tree)
             goto error_out;
@@ -4414,22 +4412,20 @@ static struct castle_da_merge* castle_da_merge_init(struct castle_double_array *
     if(ret)
         goto error_out;
 
-    if(!merge->deserialising)
+    if(!da->levels[level].merge.serdes.des)
     {
         ret = castle_da_merge_extents_alloc(merge);
         if(ret)
             goto error_out;
     }
 
-    if(merge->deserialising)
+    if(da->levels[level].merge.serdes.des)
     {
 #ifdef DEBUG_MERGE_SERDES
         da->levels[level].merge.serdes.merge_completed=0;
 #endif
-        da->levels[level].merge.serdes.out_tree=merge->out_tree;
         da->levels[level].merge.serdes.des=0;
         merge->deserialising=0;
-        atomic_set(&da->levels[level].merge.serdes.valid, VALID_AND_STALE_DAM_SERDES);
         castle_printk(LOG_INIT, "Resuming merge on da %d level %d.\n", da->id, level);
     }
     return merge;
@@ -5685,8 +5681,7 @@ static int castle_da_merge_run(void *da_p)
 
     /* Enable deamortization of normal merges. */
     da->levels[level].merge.deamortize = 1;
-
-    debug_merges("Starting merge thread.\n");
+    castle_printk(LOG_DEBUG, "Starting merge thread.\n");
     do {
         /* Wait for 2+ trees to appear at this level. */
         __wait_event_interruptible(da->merge_waitq,
@@ -5991,7 +5986,7 @@ static void castle_da_merge_serdes_out_tree_check(struct castle_dmserlist_entry 
 static void castle_da_dealloc(struct castle_double_array *da)
 {
     int i; /* DA level */
-
+    BUG_ON(!da);
     for (i=0; i<MAX_DA_LEVEL; i++)
     {
         if(da->levels[i].merge.thread != NULL)
@@ -6008,6 +6003,7 @@ static void castle_da_dealloc(struct castle_double_array *da)
         {
             debug("%s::cleaning up interrupted merge on da %d level %d.\n",
                     __FUNCTION__, da->id, i);
+            castle_ct_hash_remove(da->levels[i].merge.serdes.out_tree);
             /* free up large objects list - checkpoint would already have written them back, and
                input cts will keep the extents alive through fini */
             mutex_lock(&da->levels[i].merge.serdes.out_tree->lo_mutex);
@@ -6721,6 +6717,7 @@ static int castle_da_ct_dealloc(struct castle_double_array *da,
 
 static int castle_da_hash_dealloc(struct castle_double_array *da, void *unused)
 {
+    BUG_ON(!da);
     castle_sysfs_da_del(da);
     castle_da_foreach_tree(da, castle_da_ct_dealloc, NULL);
     list_del(&da->hash_list);
@@ -7017,24 +7014,10 @@ static int castle_da_writeback(struct castle_double_array *da, void *unused)
             c_merge_serdes_state_t current_state;
 
             mutex_lock(&da->levels[i].merge.serdes.mutex);
-            /* we should never checkpoint a deserialising merge, but we cannot guarantee that
-               this thread will not run while deserialisation is ongoing, so the best we can do
-               is to skip when we detect a deserialising merge. */
-            //TODO@tr Is this check really needed? if a merge is still deserialising wouldn't the
-            //        serdes.valid atomic prevent checkpointing?
-            if(da->levels[i].merge.serdes.des)
-            {
-                castle_printk(LOG_WARN, "%s::deserialisation still in progress on da %d level %d;"
-                        " not checkpointing merge state.\n",
-                        __FUNCTION__, da->id, i);
-                mutex_unlock(&da->levels[i].merge.serdes.mutex);
-                continue;
-            }
             current_state = atomic_read(&da->levels[i].merge.serdes.valid);
             if( (current_state == VALID_AND_FRESH_DAM_SERDES) ||
                     (current_state == VALID_AND_STALE_DAM_SERDES) )
                 castle_da_merge_writeback(da, i);
-
             mutex_unlock(&da->levels[i].merge.serdes.mutex);
         }/* rof each level */
     }
@@ -7307,7 +7290,6 @@ int castle_double_array_read(void)
 
     while(castle_mstore_iterator_has_next(iterator))
     {
-        /* TODO@tr graceful error handling - for now trigger happy with BUG() */
         int da_id, ct_da_id;
         int level;
         struct castle_double_array *des_da;
@@ -7369,6 +7351,10 @@ int castle_double_array_read(void)
 
         /* notify merge thread that there is a deserialising merge */
         des_da->levels[level].merge.serdes.des=1;
+
+        /* set merge state as immediately re-checkpointable */
+        atomic_set(&des_da->levels[level].merge.serdes.valid, VALID_AND_STALE_DAM_SERDES);
+
     }
     castle_mstore_iterator_destroy(iterator);
 
