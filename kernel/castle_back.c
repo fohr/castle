@@ -2440,9 +2440,11 @@ static void castle_back_big_get_continue(struct castle_object_pull *pull,
     struct castle_back_stateful_op *stateful_op =
         container_of(pull, struct castle_back_stateful_op, pull);
     struct castle_attachment *attachment;
+    int not_found;
 
-    debug("castle_back_big_get_continue stateful_op=%p err=%d length=%llu done=%d\n",
-        stateful_op, err, length, done);
+    not_found = CVT_INVALID(pull->cvt);
+    debug("castle_back_big_get_continue stateful_op=%p err=%d length=%llu not_found=%d, done=%d\n",
+        stateful_op, err, length, not_found, done);
 
     BUG_ON(stateful_op->tag != CASTLE_RING_BIG_GET);
     BUG_ON(stateful_op->curr_op == NULL);
@@ -2452,7 +2454,11 @@ static void castle_back_big_get_continue(struct castle_object_pull *pull,
 
     if (stateful_op->curr_op->req.tag == CASTLE_RING_GET_CHUNK)
         castle_back_buffer_put(stateful_op->conn, stateful_op->curr_op->buf);
-    castle_back_reply(stateful_op->curr_op, err, stateful_op->token, length);
+
+    castle_back_reply(stateful_op->curr_op,
+                      err ? err : (not_found ? -ENOENT : 0),
+                      stateful_op->token,
+                      length);
 
     if (err || done)
     {
