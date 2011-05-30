@@ -978,10 +978,32 @@ static int castle_block_read(struct block_device *bdev, sector_t sector, uint32_
         length = (size < block_size)?size:block_size;
         size  -= length;
         memcpy((buffer + (i * block_size)), bh->b_data, length);
+
         bforget(bh);
     }
 
     return 0;
+}
+
+/**
+ * Check whether a block device supports ordered writes. It does so by reading & writing
+ * (in ordered mode) the very first block on the device. WARNING: not thread/cache safe.
+ */
+static int castle_block_ordered_supp_test(struct block_device *bdev)
+{
+    struct buffer_head *bh;
+    int ret;
+
+    if (!(bh = __bread(bdev, 0, bdev->bd_block_size)))
+        return -EIO;
+
+    set_buffer_dirty(bh);
+    set_buffer_ordered(bh);
+    ret = sync_dirty_buffer(bh);
+
+    bforget(bh);
+
+    return ret;
 }
 
 static void castle_slave_superblock_init(struct   castle_slave *cs,
@@ -1420,6 +1442,20 @@ struct castle_slave* castle_claim(uint32_t new_dev)
         goto err_out;
     }
     set_bit(CASTLE_SLAVE_BDCLAIMED_BIT, &cs->flags);
+
+    /* Check whether the block device supports ordered writes. */
+    err = castle_block_ordered_supp_test(bdev);
+    if (err)
+    {
+        castle_printk(LOG_WARN,
+                      "Block device %s dosen't support ordered writes. "
+                      "Crash consistency cannot be guaranteed.\n",
+                      __bdevname(dev, b));
+    }
+    else
+    {
+        set_bit(CASTLE_SLAVE_ORDERED_SUPP_BIT, &cs->flags);
+    }
 
     cs->sup_ext = castle_extent_sup_ext_init(cs);
     if (cs->sup_ext == INVAL_EXT_ID)
