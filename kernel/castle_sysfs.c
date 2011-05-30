@@ -786,9 +786,9 @@ int castle_sysfs_slave_add(struct castle_slave *slave)
 
 void castle_sysfs_slave_del(struct castle_slave *slave)
 {
-#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,24)
-    sysfs_remove_link(&slave->kobj, "dev");
-#endif
+    /* If slave is not claimed, the sysfs 'dev' link will already have been removed. */
+    if (!test_bit(CASTLE_SLAVE_BDCLAIMED_BIT, &slave->flags))
+        sysfs_remove_link(&slave->kobj, "dev");
     kobject_remove(&slave->kobj);
     castle_sysfs_kobj_release_wait(&slave->kobj);
 }
