@@ -2543,6 +2543,11 @@ static void castle_cache_block_free(c2_block_t *c2b)
     c2_page_t *c2p, **c2ps;
     int i, nr_c2ps;
 
+#ifdef CASTLE_DEBUG
+    if(c2b_locked(c2b))
+        castle_printk(LOG_DEVEL, "%s::c2b locked from: %s:%d\n",
+                __FUNCTION__, c2b->file, c2b->line);
+#endif
     BUG_ON(c2b_locked(c2b));
     BUG_ON(atomic_read(&c2b->count) != 0);
 
@@ -4737,7 +4742,7 @@ static void castle_cache_hashes_fini(void)
                     cep2str(c2b->cep), atomic_read(&c2b->count), c2b_locked(c2b));
 #ifdef CASTLE_DEBUG
                 if(c2b_locked(c2b))
-                    castle_printk(LOG_DEBUG, "Locked from: %s:%d\n", c2b->file, c2b->line);
+                    castle_printk(LOG_DEVEL, "Locked from: %s:%d\n", c2b->file, c2b->line);
 #endif
             }
             BUG_ON(c2b_dirty(c2b));

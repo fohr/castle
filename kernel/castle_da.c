@@ -163,6 +163,8 @@ static void castle_da_merge_des_check(struct castle_da_merge *merge, struct cast
                                       struct castle_component_tree **in_trees);
 static void castle_da_merge_deserialise(struct castle_da_merge *merge,
                                         struct castle_double_array *da, int level);
+static int castle_da_ct_bloom_build_param_deserialise(struct castle_component_tree *ct,
+                                                      struct castle_bbp_entry *bbpm);
 void castle_da_ct_marshall(struct castle_clist_entry *ctm, struct castle_component_tree *ct);
 static c_da_t castle_da_ct_unmarshall(struct castle_component_tree *ct,
                                       struct castle_clist_entry *ctm);
@@ -4886,6 +4888,11 @@ static void castle_da_merge_deserialise(struct castle_da_merge *merge,
 
     merge_mstore=da->levels[level].merge.serdes.mstore_entry;
 
+    /* recover bloom_build_params. */
+    if(&da->levels[level].merge.serdes.mstore_entry->have_bbp)
+        castle_da_ct_bloom_build_param_deserialise(da->levels[level].merge.serdes.out_tree,
+                                &da->levels[level].merge.serdes.mstore_entry->out_tree_bbp);
+
     /* out_btree (type) can be assigned directly because we passed the BUG_ON() btree_type->magic
        in da_merge_des_check. */
     merge->out_btree         = castle_btree_type_get(RO_VLBA_TREE_TYPE);
@@ -5171,21 +5178,19 @@ static int castle_da_merge_do(struct castle_double_array *da,
         //if(c2b)
         //    write_lock_c2b(c2b);
         /* ditto the in-progress bloom filter */
-        if (merge->out_tree->bloom_exists)
+        if(relock_bloom_node_c2b)
         {
             struct castle_bloom_build_params *bf_bp = merge->out_tree->bloom.private;
-            if(relock_bloom_node_c2b)
-            {
-                castle_printk(LOG_DEBUG, "%s::relocking bloom filter node_c2b for merge on da %d level %d.\n",
-                        __FUNCTION__, da->id, level);
-                write_lock_c2b(bf_bp->node_c2b);
-            }
-            if(relock_bloom_chunk_c2b)
-            {
-                castle_printk(LOG_DEBUG, "%s::relocking bloom filter chunk_c2b for merge on da %d level %d.\n",
-                        __FUNCTION__, da->id, level);
-                write_lock_c2b(bf_bp->chunk_c2b);
-            }
+            castle_printk(LOG_DEBUG, "%s::relocking bloom filter node_c2b for merge on da %d level %d.\n",
+                    __FUNCTION__, da->id, level);
+            write_lock_c2b(bf_bp->node_c2b);
+        }
+        if(relock_bloom_chunk_c2b)
+        {
+            struct castle_bloom_build_params *bf_bp = merge->out_tree->bloom.private;
+            castle_printk(LOG_DEBUG, "%s::relocking bloom filter chunk_c2b for merge on da %d level %d.\n",
+                    __FUNCTION__, da->id, level);
+            write_lock_c2b(bf_bp->chunk_c2b);
         }
 
         debug("%s::doing unit %d on merge %p (da %d level %d)\n", __FUNCTION__,
@@ -7340,10 +7345,7 @@ int castle_double_array_read(void)
            unlike a normal ct (see code below), a partially complete in-merge ct does not get
            added to a DA through cct_add(da, ct, NULL, 1). */
 
-        /* oh and also, bloom_build_params. */
-        if(&des_da->levels[level].merge.serdes.mstore_entry->have_bbp)
-            castle_da_ct_bloom_build_param_deserialise(des_da->levels[level].merge.serdes.out_tree,
-                                    &des_da->levels[level].merge.serdes.mstore_entry->out_tree_bbp);
+        /* bloom_build_param recovery is left to merge thread (castle_da_merge_deserialise) */
 
         /* inc ct seq number if necessary */
         if (des_da->levels[level].merge.serdes.out_tree->seq >= atomic_read(&castle_next_tree_seq))
