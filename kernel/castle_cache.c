@@ -1184,11 +1184,11 @@ int chk_valid(c_disk_chk_t chk)
  *                  or becomes, out-of-service. Otherwise EXIT_SUCCESS.
  */
 int submit_c2b_io(int           rw,
-                   c2_block_t   *c2b,
-                   c_ext_pos_t   cep,
-                   c_disk_chk_t  disk_chk,
-                   struct page **pages,
-                   int           nr_pages)
+                  c2_block_t   *c2b,
+                  c_ext_pos_t   cep,
+                  c_disk_chk_t  disk_chk,
+                  struct page **pages,
+                  int           nr_pages)
 {
     struct castle_slave *cs;
     sector_t sector;
@@ -1285,8 +1285,11 @@ int submit_c2b_io(int           rw,
         j += batch;
         nr_pages -= batch;
 
+        bio_get(bio);
         /* Hand off to Linux block layer. Deal with barrier writes correctly. */
-        if(unlikely(c2b_barrier(c2b) && (nr_pages <= 0)))
+        if(unlikely(c2b_barrier(c2b) &&
+                    nr_pages <= 0 &&
+                    test_bit(CASTLE_SLAVE_ORDERED_SUPP_BIT, &cs->flags)))
         {
             BUG_ON(rw != WRITE);
             /* Set the barrier flag, but only if that the last bio. */
@@ -1294,6 +1297,12 @@ int submit_c2b_io(int           rw,
         }
         else
             submit_bio(rw, bio);
+        if(bio_flagged(bio, BIO_EOPNOTSUPP))
+        {
+            castle_printk(LOG_ERROR, "BIO flagged not supported.\n");
+            WARN_ON(1);
+        }
+        bio_put(bio);
     }
     return EXIT_SUCCESS;
 }
@@ -1865,7 +1874,7 @@ int submit_c2b_sync(int rw, c2_block_t *c2b)
 }
 
 /**
- * Submit synchronous c2b write, which is also a barrier write i
+ * Submit synchronous c2b write, which is also a barrier write
  * (as per: Documentation/block/barrier.txt).
  *
  * @see submit_c2b_sync()
@@ -1878,13 +1887,13 @@ int submit_c2b_sync_barrier(int rw, c2_block_t *c2b)
     BUG_ON(rw != WRITE);
 
     /* Mark the c2b as a barrier c2b. */
-    //set_c2b_barrier(c2b);
+    set_c2b_barrier(c2b);
 
     /* Submit the c2b as per usual. */
     ret = submit_c2b_sync(rw, c2b);
 
     /* Clear the bit, since c2b is write locked, noone else will see it. */
-    //clear_c2b_barrier(c2b);
+    clear_c2b_barrier(c2b);
 
     return ret;
 }
