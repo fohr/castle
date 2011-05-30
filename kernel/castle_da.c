@@ -3664,12 +3664,6 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
                 castle_ct_put(merge->out_tree, 0);
                 merge->out_tree=NULL;
             }
-            else
-            {
-                /* leave free-ing to da_dealloc, but remove from hash now so that
-                   ct_hash_destroy_check doesn't bitch about it. */
-                castle_ct_hash_remove(merge->out_tree);
-            }
         }
     }
 
@@ -5686,8 +5680,7 @@ static int castle_da_merge_run(void *da_p)
 
     /* Enable deamortization of normal merges. */
     da->levels[level].merge.deamortize = 1;
-
-    debug_merges("Starting merge thread.\n");
+    castle_printk(LOG_DEBUG, "Starting merge thread.\n");
     do {
         /* Wait for 2+ trees to appear at this level. */
         __wait_event_interruptible(da->merge_waitq,
@@ -5992,7 +5985,7 @@ static void castle_da_merge_serdes_out_tree_check(struct castle_dmserlist_entry 
 static void castle_da_dealloc(struct castle_double_array *da)
 {
     int i; /* DA level */
-
+    BUG_ON(!da);
     for (i=0; i<MAX_DA_LEVEL; i++)
     {
         if(da->levels[i].merge.thread != NULL)
@@ -6009,6 +6002,7 @@ static void castle_da_dealloc(struct castle_double_array *da)
         {
             debug("%s::cleaning up interrupted merge on da %d level %d.\n",
                     __FUNCTION__, da->id, i);
+            castle_ct_hash_remove(da->levels[i].merge.serdes.out_tree);
             /* free up large objects list - checkpoint would already have written them back, and
                input cts will keep the extents alive through fini */
             mutex_lock(&da->levels[i].merge.serdes.out_tree->lo_mutex);
@@ -6722,6 +6716,7 @@ static int castle_da_ct_dealloc(struct castle_double_array *da,
 
 static int castle_da_hash_dealloc(struct castle_double_array *da, void *unused)
 {
+    BUG_ON(!da);
     castle_sysfs_da_del(da);
     castle_da_foreach_tree(da, castle_da_ct_dealloc, NULL);
     list_del(&da->hash_list);
