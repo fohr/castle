@@ -1881,5 +1881,5 @@ typedef struct castle_version_stats_adjust {
 
 extern int castle_nice_value;
 
-extern int checkpoint_frequency;
+extern int castle_checkpoint_period;
 #endif /* __CASTLE_H__ */

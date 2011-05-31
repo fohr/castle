@@ -332,7 +332,7 @@ static               LIST_HEAD(castle_cache_flush_list);
 
 static atomic_t                castle_cache_logical_ext_pages = ATOMIC_INIT(0);
 
-int                            checkpoint_frequency = 60;        /* Checkpoint default of once in every 60secs. */
+int                            castle_checkpoint_period = 60;        /* Checkpoint default of once in every 60secs. */
 
 struct                  task_struct  *checkpoint_thread;
 /**********************************************************************************************
@@ -5693,7 +5693,7 @@ int castle_slaves_superblock_invalidate(void)
 }
 
 /**
- * Checkpoints system state with given frequency.
+ * Checkpoints system state with given periodicity.
  *
  * Notes: Checkpointing maintains metadata structures of all modules in memory. And checkpoints them
  * in hierarchy, ending with superblocks on slaves. When we completed making superblocks persistent on
@@ -5738,10 +5738,10 @@ static int castle_periodic_checkpoint(void *unused)
 
     do {
         /* Wakes-up once in a second just to check whether to stop the thread.
-         * After every checkpoint_frequency seconds checkpoints the filesystem. */
+         * After every castle_checkpoint_period seconds checkpoints the filesystem. */
         for (i=0;
-            (i<MIN_CHECKPOINT_FREQUENCY) ||
-            ((i<checkpoint_frequency) && (i<MAX_CHECKPOINT_FREQUENCY));
+            (i<MIN_CHECKPOINT_PERIOD) ||
+            ((i<castle_checkpoint_period) && (i<MAX_CHECKPOINT_PERIOD));
             i++)
         {
             if (!kthread_should_stop())
@@ -5753,7 +5753,8 @@ static int castle_periodic_checkpoint(void *unused)
         if (!castle_fs_inited)
             continue;
 
-        castle_printk(LOG_DEVEL, "***** Checkpoint start (freq %ds) *****\n", checkpoint_frequency);
+        castle_printk(LOG_DEVEL, "***** Checkpoint start (period %ds) *****\n",
+                      castle_checkpoint_period);
         castle_trace_cache(TRACE_START, TRACE_CACHE_CHECKPOINT_ID, 0);
 
         /* Perform any necessary work before we take the transaction lock. */

@@ -73,8 +73,8 @@ int                          castle_fs_exiting = 0;
 c_fault_t                    castle_fault = NO_FAULT;
 uint32_t                     castle_fault_arg = 0;
 
-module_param(checkpoint_frequency, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
-MODULE_PARM_DESC(checkpoint_frequency, "checkpoint_frequency,");
+module_param(castle_checkpoint_period, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
+MODULE_PARM_DESC(castle_checkpoint_period, "checkpoint_period,");
 
 static DECLARE_WAIT_QUEUE_HEAD(castle_detach_waitq);
 
