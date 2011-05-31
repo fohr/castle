@@ -1327,31 +1327,37 @@ typedef struct castle_io_array {
 static int c_io_next_slave_get(c2_block_t *c2b, c_disk_chk_t *chunks, int k_factor, int *idx)
 {
     struct castle_slave *slave;
-    int i, try_second, disk_idx;
+    int i, try_second, disk_idx, min_outstanding_ios, tmp;
 
     /*
-     * At some point we'll have a proper read slave scheduler to optimise read I/O as mentioned
-     * above, but for the moment just return the first working slave.
+     * Read scheduler: select the one with minimum in-flight IOs
      *
      * At the moment, when prefetching, avoid using the first copy, which may be stored on SSDs.
      */
     try_second = c2b_prefetch(c2b);
     /* Loop around, searching for disks in service. */
     disk_idx = -1;
+    min_outstanding_ios = 0; /* keep the compiler happy */
     for(i=0; i<k_factor; i++)
     {
         slave = castle_slave_find_by_uuid(chunks[i].slave_id);
         BUG_ON(!slave);
         if (!test_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags))
         {
-            disk_idx = i;
-            /* If we are not looking for second copy, or we are already looking past the first
-               copy, terminate. */
-            if(!try_second || i != 0)
-                goto out;
+	    if(disk_idx == -1) {
+		disk_idx = i;
+		min_outstanding_ios = atomic_read(&slave->io_in_flight);
+	    }
+	    else {
+		tmp = atomic_read(&slave->io_in_flight);
+		if((tmp < min_outstanding_ios) || (disk_idx == 0 && try_second)) {
+		    disk_idx = i;
+		    min_outstanding_ios = tmp;
+		}
+	    }
         }
     }
-out:
+
     if(disk_idx >= 0)
     {
         *idx = disk_idx;
