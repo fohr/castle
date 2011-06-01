@@ -16,6 +16,7 @@
 #else
 #include <linux/semaphore.h>
 #endif
+#include <linux/reboot.h>
 
 
 #include "castle_public.h"
@@ -1577,7 +1578,7 @@ int  castle_ctrl_is_locked          (void);
     if (castle_fault == _fault)                                 \
     {                                                           \
         castle_printk(LOG_ERROR, "User asked for fault\n");     \
-        BUG();                                                  \
+        emergency_restart();                                                  \
     }
 
 #define INJECT_ERR(_fault)          (castle_fault == _fault)
