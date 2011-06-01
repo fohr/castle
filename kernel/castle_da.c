@@ -2351,10 +2351,14 @@ static int castle_da_no_disk_space(struct castle_double_array *da)
 static void castle_da_lfs_ct_init(struct castle_da_lfs_ct_t *lfs,
                                   c_chk_cnt_t internal_tree_size,
                                   c_chk_cnt_t tree_size,
-                                  c_chk_cnt_t data_size)
+                                  c_chk_cnt_t data_size,
+                                  int rwct)
 {
     /* Setting up the strucuture, there shouldn't be any reserved space. */
     BUG_ON(lfs->space_reserved);
+
+    /* Save whether we are allocating RWCT. */
+    lfs->rwct = rwct;
 
     /* Shouldn't see any valid ext_ids. */
     BUG_ON(!EXT_ID_INVAL(lfs->internal_ext.ext_id) ||
@@ -2504,7 +2508,9 @@ static int castle_da_lfs_ct_space_alloc(struct castle_da_lfs_ct_t *lfs,
         lfs->internals_on_ssds = 1;
         lfs->internal_ext.ext_id = castle_extent_alloc(SSD_RDA,
                                                        da->id,
-                                                       EXT_T_INTERNAL_NODES,
+                                                       lfs->rwct ?
+                                                            EXT_T_T0_INTERNAL_NODES :
+                                                            EXT_T_INTERNAL_NODES,
                                                        lfs->internal_ext.size, 1,
                                                        NULL, NULL);
     }
@@ -2516,7 +2522,9 @@ static int castle_da_lfs_ct_space_alloc(struct castle_da_lfs_ct_t *lfs,
         lfs->internals_on_ssds = 0;
         lfs->internal_ext.ext_id = castle_extent_alloc(DEFAULT_RDA,
                                                        da->id,
-                                                       EXT_T_INTERNAL_NODES,
+                                                       lfs->rwct ?
+                                                            EXT_T_T0_INTERNAL_NODES :
+                                                            EXT_T_INTERNAL_NODES,
                                                        lfs->internal_ext.size, 1,
                                                        lfs_data, lfs_callback);
         if (EXT_ID_INVAL(lfs->internal_ext.ext_id))
@@ -2533,7 +2541,9 @@ static int castle_da_lfs_ct_space_alloc(struct castle_da_lfs_ct_t *lfs,
         if(castle_use_ssd_leaf_nodes && use_ssd)
             lfs->tree_ext.ext_id = castle_extent_alloc(SSD_RDA,
                                                        da->id,
-                                                       EXT_T_LEAF_NODES,
+                                                       lfs->rwct ?
+                                                            EXT_T_T0_LEAF_NODES :
+                                                            EXT_T_LEAF_NODES,
                                                        lfs->tree_ext.size, 1,
                                                        NULL, NULL);
     }
@@ -2546,7 +2556,9 @@ static int castle_da_lfs_ct_space_alloc(struct castle_da_lfs_ct_t *lfs,
         lfs->leafs_on_ssds = 0;
         lfs->tree_ext.ext_id = castle_extent_alloc(DEFAULT_RDA,
                                                    da->id,
-                                                   EXT_T_LEAF_NODES,
+                                                   lfs->rwct ?
+                                                        EXT_T_T0_LEAF_NODES :
+                                                        EXT_T_LEAF_NODES,
                                                    lfs->tree_ext.size, 1,
                                                    lfs_data, lfs_callback);
     }
@@ -2563,7 +2575,9 @@ static int castle_da_lfs_ct_space_alloc(struct castle_da_lfs_ct_t *lfs,
      * sum of both the trees. */
     lfs->data_ext.ext_id = castle_extent_alloc(DEFAULT_RDA,
                                                da->id,
-                                               EXT_T_MEDIUM_OBJECTS,
+                                               lfs->rwct ?
+                                                    EXT_T_T0_MEDIUM_OBJECTS :
+                                                    EXT_T_MEDIUM_OBJECTS,
                                                lfs->data_ext.size, 1,
                                                lfs_data, lfs_callback);
     if (EXT_ID_INVAL(lfs->data_ext.ext_id))
@@ -2711,7 +2725,8 @@ __again:
         castle_da_lfs_ct_init(lfs,
                               CHUNK(internal_tree_size),
                               CHUNK(tree_size),
-                              CHUNK(data_size));
+                              CHUNK(data_size),
+                              0 /* Not a T0. */);
 
         /* Allocate space from freespace. */
         ret = castle_da_lfs_ct_space_alloc(lfs,
@@ -7614,9 +7629,11 @@ static int __castle_da_rwct_create(struct castle_double_array *da, int cpu_index
         /* Initialize the lfs structure with required extent sizes. */
         /* Note: Init this structure ahead so that, if allocation fails due to low free space
          * use this structure to register for notifications when more space is available. */
-        castle_da_lfs_ct_init(lfs, MAX_DYNAMIC_TREE_SIZE,
-                                   MAX_DYNAMIC_TREE_SIZE,
-                                   MAX_DYNAMIC_TREE_SIZE);
+        castle_da_lfs_ct_init(lfs,
+                              MAX_DYNAMIC_TREE_SIZE,
+                              MAX_DYNAMIC_TREE_SIZE,
+                              MAX_DYNAMIC_TREE_SIZE,
+                              1 /* a T0. */);
 
         /* Allocate space from freespace. */
         err = castle_da_lfs_ct_space_alloc(lfs,

@@ -4572,8 +4572,9 @@ static int castle_cache_flush(void *unused)
 #define MIN_FLUSH_SIZE  128
 #define MAX_FLUSH_SIZE  (4*1024)
 #define MIN_FLUSH_FREQ  5           /* Min flush rate: 5*128pgs/s = 2.5MB/s */
-    int exiting, target_dirty_pgs, dirty_pgs, to_flush, last_flush, i;
+    int exiting, flushing_rwcts, target_dirty_pgs, dirty_pgs, to_flush, last_flush, i;
     atomic_t in_flight = ATOMIC(0);
+    c_ext_type_t ext_type;
 
     /* Try and keep 3/4 of pages in the cache dirty. */
     target_dirty_pgs = 3 * (castle_cache_size / 4);
@@ -4627,7 +4628,9 @@ static int castle_cache_flush(void *unused)
         last_flush = to_flush;
 
         /* Iterate over all dirty extents trying to find pages to flush. */
-        for (i = atomic_read(&castle_cache_extent_dirtylist_size); i > 0; i--)
+        flushing_rwcts = 0;
+        i = atomic_read(&castle_cache_extent_dirtylist_size);
+        while(true)
         {
             c_ext_dirtytree_t *dirtytree;
             int flushed = 0;
@@ -4635,6 +4638,26 @@ static int castle_cache_flush(void *unused)
             /* Stop looping if we've managed to flush enough pages. */
             if (to_flush <= 0)
                 break;
+
+            /* If counter reached zero the, and the flusing rwcts flag isn't set,
+               consider setting it (reset the counter too). */
+            if (i == 0 &&
+                !flushing_rwcts &&
+                (exiting || dirty_pgs > target_dirty_pgs))
+            {
+                flushing_rwcts = 1;
+                i = atomic_read(&castle_cache_extent_dirtylist_size);
+            }
+
+            /* Stop looping if i reached 0. */
+            if (i == 0)
+                break;
+
+
+            /* Update the counter here, before any 'continue' statements.
+               That's fine because the counter isn't used for anything other than
+               checking the termination conditions. */
+            i--;
 
             /* Get next per-extent dirtytree to flush. */
             spin_lock_irq(&castle_cache_block_hash_lock);
@@ -4651,6 +4674,18 @@ static int castle_cache_flush(void *unused)
             castle_extent_dirtytree_get(dirtytree);
             list_move_tail(&dirtytree->list, &castle_cache_extent_dirtylist);
             spin_unlock_irq(&castle_cache_block_hash_lock);
+
+            /* Check extent type. If its T0, only flush if flushing_rwcts flag is set.
+               Note that if ext_id belongs to a deleted extent, we are going to get
+               EXT_T_INVALID returned. We are therefore going to flush it, _even_ if
+               it used to belong to a T0. */
+            ext_type = castle_extent_type_get(dirtytree->ext_id);
+            if(!flushing_rwcts &&
+                    (ext_type == EXT_T_T0_INTERNAL_NODES ||
+                     ext_type == EXT_T_T0_LEAF_NODES ||
+                     ext_type == EXT_T_T0_MEDIUM_OBJECTS))
+                continue;
+
 
             /* Flushed will be set to an approximation of pages flushed. */
             __castle_cache_extent_flush(dirtytree,  /* dirtytree    */
