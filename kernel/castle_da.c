@@ -8613,6 +8613,13 @@ static void castle_da_put_locked(struct castle_double_array *da)
     }
 }
 
+int castle_double_array_alive(c_da_t da_id)
+{
+    BUG_ON(!CASTLE_IN_TRANSACTION);
+
+    return (castle_da_hash_get(da_id)?1:0);
+}
+
 int castle_double_array_get(c_da_t da_id)
 {
     struct castle_double_array *da;

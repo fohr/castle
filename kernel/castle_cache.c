@@ -5505,7 +5505,7 @@ int castle_stats_read(void)
     return 0;
 }
 
-int castle_mstores_writeback(uint32_t version)
+int castle_mstores_writeback(uint32_t version, int is_fini)
 {
     struct castle_fs_superblock *fs_sb;
     int    i;
@@ -5530,7 +5530,7 @@ int castle_mstores_writeback(uint32_t version)
 
     FAULT(CHECKPOINT_FAULT);
 
-    castle_versions_writeback();
+    castle_versions_writeback(is_fini);
     castle_extents_writeback();
     castle_stats_writeback();
 
@@ -5779,7 +5779,7 @@ static int castle_periodic_checkpoint(void *unused)
         castle_extents_sb->current_rebuild_seqno = atomic_read(&current_rebuild_seqno);
         castle_extent_transaction_end();
 
-        if (castle_mstores_writeback(version))
+        if (castle_mstores_writeback(version, exit_loop))
         {
             castle_printk(LOG_WARN, "Mstore writeback failed\n");
             castle_trace_cache(TRACE_END, TRACE_CACHE_CHECKPOINT_ID, 0);
