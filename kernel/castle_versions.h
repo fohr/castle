@@ -11,6 +11,8 @@ int         castle_version_read                     (c_ver_t version,
                                                      c_ver_t *live_parent,
                                                      c_byte_off_t *size,
                                                      int *leaf);
+struct timeval
+            castle_version_creation_timestamp_get   (c_ver_t version);
 
 c_da_t      castle_version_da_id_get                (c_ver_t version);
 

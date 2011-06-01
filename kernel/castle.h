@@ -854,7 +854,9 @@ struct castle_vlist_entry {
     /*         48 */ uint64_t     tombstone_deletes;    /**< stats.tombstone_deletes            */
     /*         56 */ uint64_t     version_deletes;      /**< stats.version_deletes              */
     /*         64 */ uint64_t     key_replaces;         /**< stats.key_replaces                 */
-    /*         72 */ uint8_t      _unused[184];
+    /*         72 */ uint64_t     creation_time_s;      /**< seconds of the creation timestamp  */
+    /*         80 */ uint64_t     creation_time_us;     /**< useconds of the creation timestamp */
+    /*         88 */ uint8_t      _unused[168];
     /*        256 */
 } PACKED;
 
