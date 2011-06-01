@@ -87,6 +87,9 @@ struct castle_version {
         struct list_head free_list;     /**< Uesd when the version is being removed.            */
     };
     struct list_head del_list;
+
+    /* Misc info about the version. */
+    struct timeval creation_timestamp;
 };
 
 /**
@@ -841,6 +844,9 @@ static struct castle_version* castle_version_add(c_ver_t version,
     atomic64_set(&v->live_stats.version_deletes, 0);
     atomic64_set(&v->live_stats.key_replaces, 0);
 
+    /* Clean timestamp. */
+    memset(&v->creation_timestamp, 0, sizeof(struct timeval));
+
     /* Initialise version 0 fully, defer full init of all other versions by
        putting it on the init list. */
     if (v->version == 0)
@@ -1165,6 +1171,21 @@ cv_nonatomic_stats_t castle_version_live_stats_get(c_ver_t version)
                                         1 /*live*/, 0 /*consistent*/, NULL /*private*/);
 }
 
+/**
+ * Return the creation timestamp for a particular version.
+ *
+ * The version asked for is expected to exist (BUG otherwise).
+ */
+struct timeval castle_version_creation_timestamp_get(c_ver_t version)
+{
+    struct castle_version *v;
+
+    v = castle_versions_hash_get(version);
+    BUG_ON(!v);
+
+    return v->creation_timestamp;
+}
+
 /* TODO who should handle errors in writeback? */
 static int castle_version_writeback(struct castle_version *v, void *unused)
 {
@@ -1182,6 +1203,8 @@ static int castle_version_writeback(struct castle_version *v, void *unused)
     mstore_ventry.tombstone_deletes = atomic64_read(&v->stats.tombstone_deletes);
     mstore_ventry.version_deletes   = atomic64_read(&v->stats.version_deletes);
     mstore_ventry.key_replaces      = atomic64_read(&v->stats.key_replaces);
+    mstore_ventry.creation_time_s   = v->creation_timestamp.tv_sec;
+    mstore_ventry.creation_time_us  = v->creation_timestamp.tv_usec;
 
     read_unlock_irq(&castle_versions_hash_lock);
     castle_mstore_entry_insert(castle_versions_mstore, &mstore_ventry);
@@ -1297,6 +1320,9 @@ c_ver_t castle_version_new(int snap_or_clone,
                                   parent,
                                   da_id,
                                   size);
+
+    /* Timestamp the creation. */
+    do_gettimeofday(&v->creation_timestamp);
 
     /* Return if we couldn't create the version correctly
        (possibly because we trying to clone attached version,
@@ -1681,6 +1707,10 @@ int castle_versions_read(void)
             atomic64_set(&v->live_stats.tombstone_deletes, mstore_ventry.tombstone_deletes);
             atomic64_set(&v->live_stats.version_deletes, mstore_ventry.version_deletes);
             atomic64_set(&v->live_stats.key_replaces, mstore_ventry.key_replaces);
+
+            /* Misc. */
+            v->creation_timestamp.tv_sec  = mstore_ventry.creation_time_s;
+            v->creation_timestamp.tv_usec = mstore_ventry.creation_time_us;
         }
 
         if (VERSION_INVAL(castle_versions_last) || v->version > castle_versions_last)

@@ -95,7 +95,10 @@ static ssize_t versions_list_show(struct kobject *kobj, struct attribute *attr, 
     if(ret == 0)
     {
         cv_nonatomic_stats_t live_stats;
+        struct timeval creation_timestamp;
+
         live_stats = castle_version_live_stats_get(v->version);
+        creation_timestamp = castle_version_creation_timestamp_get(v->version);
         len = sprintf(buf,
                 "Id: 0x%x\n"
                 "VertreeId: 0x%x\n"
@@ -106,7 +109,8 @@ static ssize_t versions_list_show(struct kobject *kobj, struct attribute *attr, 
                 "Tombstones: %ld\n"
                 "TombstoneDeletes: %ld\n"
                 "VersionDeletes: %ld\n"
-                "KeyReplaces: %ld\n",
+                "KeyReplaces: %ld\n"
+                "CreationTimestamp: %ld.%.6ld\n",
                  v->version,
                  castle_version_da_id_get(v->version),
                  live_parent,
@@ -116,7 +120,9 @@ static ssize_t versions_list_show(struct kobject *kobj, struct attribute *attr, 
                  live_stats.tombstones,
                  live_stats.tombstone_deletes,
                  live_stats.version_deletes,
-                 live_stats.key_replaces);
+                 live_stats.key_replaces,
+                 creation_timestamp.tv_sec,
+                 creation_timestamp.tv_usec);
 
         return len;
     }
