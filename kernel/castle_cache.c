@@ -1652,9 +1652,9 @@ int submit_c2b_remap_rda(c2_block_t *c2b, c_disk_chk_t *chunks, int nr_remaps)
     /* Drop the 1 ref. */
     c2b_remaining_io_sub(WRITE, 1, c2b);
 
+out:
     wait_for_completion(&completion);
 
-out:
     kmem_cache_free(castle_io_array_cache, io_array);
     if (ret)
         return ret;
