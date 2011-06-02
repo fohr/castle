@@ -3915,7 +3915,7 @@ static inline void castle_da_merge_token_push(struct castle_double_array *da,
        or returns it to the driver level if not. */
     BUG_ON(level+1 >= MAX_DA_LEVEL);
     token->ref_cnt++;
-    if(da->levels[level+1].nr_trees >= 2)
+    if( (level+1 < MAX_DA_LEVEL-1) && (da->levels[level+1].nr_trees >= 2) )
         list_add(&token->list, &da->levels[level+1].merge.merge_tokens);
     else
         castle_da_merge_token_return(da, level, token);
@@ -5765,7 +5765,7 @@ static int castle_da_merge_start(struct castle_double_array *da, void *unused)
     int i;
 
     /* Wake up all of the merge threads. */
-    for(i=0; i<MAX_DA_LEVEL; i++)
+    for(i=0; i<MAX_DA_LEVEL-1; i++)
         wake_up_process(da->levels[i].merge.thread);
 
     __castle_da_threads_priority_set(da, &castle_nice_value);
@@ -5780,7 +5780,7 @@ static int castle_da_merge_stop(struct castle_double_array *da, void *unused)
     /* castle_da_exiting should have been set by now. */
     BUG_ON(!exit_cond);
     wake_up(&da->merge_waitq);
-    for(i=0; i<MAX_DA_LEVEL; i++)
+    for(i=0; i<MAX_DA_LEVEL-1; i++)
     {
         while(da->levels[i].merge.thread)
             msleep(10);
@@ -5836,7 +5836,7 @@ static void castle_da_merges_print(struct castle_double_array *da)
     read_lock(&da->lock);
     castle_printk(LOG_INFO, "\nPrinting merging stats for DA=%d, t=(%ld,%ld)\n",
             da->id, time.tv_sec, time.tv_usec/1000);
-    for(level=MAX_DA_LEVEL-1; level>0; level--)
+    for(level=MAX_DA_LEVEL-2; level>0; level--)
     {
         if(!print && (da->levels[level].nr_trees == 0))
             continue;
@@ -6009,7 +6009,7 @@ static void castle_da_dealloc(struct castle_double_array *da)
 {
     int i; /* DA level */
     BUG_ON(!da);
-    for (i=0; i<MAX_DA_LEVEL; i++)
+    for (i=0; i<MAX_DA_LEVEL-1; i++)
     {
         if(da->levels[i].merge.thread != NULL)
             kthread_stop(da->levels[i].merge.thread);
@@ -6101,13 +6101,13 @@ static struct castle_double_array* castle_da_alloc(c_da_t da_id)
     init_waitqueue_head(&da->merge_budget_waitq);
     /* Initialise the merge tokens list. */
     INIT_LIST_HEAD(&da->merge_tokens);
-    for(i=0; i<MAX_DA_LEVEL; i++)
+    for(i=0; i<MAX_DA_LEVEL-1; i++)
     {
         da->merge_tokens_array[i].driver_level = -1;
         da->merge_tokens_array[i].ref_cnt      = 0;
         list_add(&da->merge_tokens_array[i].list, &da->merge_tokens);
     }
-    for(i=0; i<MAX_DA_LEVEL; i++)
+    for(i=0; i<MAX_DA_LEVEL-1; i++)
     {
         /* Initialise merge serdes */
         mutex_init(&da->levels[i].merge.serdes.mutex);
@@ -6138,6 +6138,12 @@ static struct castle_double_array* castle_da_alloc(c_da_t da_id)
         if(!da->levels[i].merge.thread)
             goto err_out;
     }
+    /* allocate top-level */
+    INIT_LIST_HEAD(&da->levels[MAX_DA_LEVEL-1].trees);
+    da->levels[MAX_DA_LEVEL-1].nr_trees = 0;
+    da->levels[MAX_DA_LEVEL-1].lfs.da   = da;
+    castle_da_lfs_ct_reset(&da->levels[MAX_DA_LEVEL-1].lfs);
+
     castle_printk(LOG_USERINFO, "Allocated DA=%d successfully.\n", da_id);
 
     return da;
@@ -6146,7 +6152,7 @@ err_out:
 #ifdef CASTLE_DEBUG
     {
         int j;
-        for(j=0; j<MAX_DA_LEVEL; j++)
+        for(j=0; j<MAX_DA_LEVEL-1; j++)
         {
             BUG_ON((j<i)  && (da->levels[j].merge.thread == NULL));
             BUG_ON((j>=i) && (da->levels[j].merge.thread != NULL));
@@ -7031,7 +7037,7 @@ static int castle_da_writeback(struct castle_double_array *da, void *unused)
     if(castle_merges_checkpoint)
     {
         int i; /* DA levels */
-        for(i=0; i<MAX_DA_LEVEL; i++)
+        for(i=0; i<MAX_DA_LEVEL-1; i++)
         {
             c_merge_serdes_state_t current_state;
 
