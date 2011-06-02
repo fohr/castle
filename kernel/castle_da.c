@@ -4214,11 +4214,22 @@ static int castle_da_total_merge_output_level_get(struct castle_double_array *da
         out_tree_level = 2;
     castle_printk(LOG_INFO, "Total merge: #units: %d, size appropriate for level: %d\n",
                    nr_units, out_tree_level);
-    /* Make sure no other trees exist above this level. */
-    for (i=MAX_DA_LEVEL-1; i>=out_tree_level; i--)
+
+    /* Find the highest level in DA with trees. */
+    for (i=MAX_DA_LEVEL-1; i>0; i--)
         if (da->levels[i].nr_trees)
             break;
-    out_tree_level = i+1;
+
+    /* Compacted tree should always be placed on top of all the trees. It contains the oldest
+     * data. */
+    if (i > out_tree_level)
+        out_tree_level = i + 1;
+
+    /* Max level should never cross MAX_DA_LEVEL-1. */
+    if (out_tree_level >= MAX_DA_LEVEL)
+        out_tree_level = MAX_DA_LEVEL - 1;
+
+    if (out_tree_level)
     castle_printk(LOG_INFO, "Outputting at level: %d\n", out_tree_level);
 
     return out_tree_level;
@@ -4230,6 +4241,7 @@ static tree_seq_t castle_da_merge_last_unit_complete(struct castle_double_array 
 {
     struct castle_component_tree *out_tree;
     struct castle_merge_token *token;
+    struct list_head *head = NULL;
     tree_seq_t out_tree_id;
     int i;
 
@@ -4245,18 +4257,7 @@ static tree_seq_t castle_da_merge_last_unit_complete(struct castle_double_array 
     write_lock(&da->lock);
     /* Notify interested parties about merge completion, _before_ moving trees around. */
     castle_da_merge_unit_complete(da, level);
-    /* If this was a total merge, the output level needs to be computed.
-       Otherwise the level should already be set to the next level up. */
-    if(level == BIG_MERGE)
-    {
-        out_tree->level = castle_da_total_merge_output_level_get(da, out_tree);
 
-        /* Done with compaction. Time to reset reserved tree seq ID. */
-        BUG_ON(da->compaction_ct_seq != out_tree->seq);
-        da->compaction_ct_seq = INVAL_TREE;
-    }
-    else
-        BUG_ON(out_tree->level != level + 1);
     /* Delete the old trees from DA list.
        Note 1: Old trees may still be used by IOs and will only be destroyed on the last ct_put.
                But we want to remove it from the DA straight away. The out_tree now takes over
@@ -4269,8 +4270,34 @@ static tree_seq_t castle_da_merge_last_unit_complete(struct castle_double_array 
         BUG_ON(merge->da->id != merge->in_trees[i]->da);
         castle_component_tree_del(merge->da, merge->in_trees[i]);
     }
+
+    /* If this was a total merge, the output level needs to be computed.
+       Otherwise the level should already be set to the next level up. */
+    if(level == BIG_MERGE)
+    {
+        int olevel = castle_da_total_merge_output_level_get(da, out_tree);
+
+        /* Output level should never be as big as MAX_DA_LEVEL. */
+        BUG_ON(olevel >= MAX_DA_LEVEL);
+
+        /* Compact tree should always be added to non empty level except if the level is
+         * MAX_DA_LEVEL-1*/
+        BUG_ON((olevel != (MAX_DA_LEVEL-1)) && (!list_empty(&da->levels[olevel].trees)));
+
+        /* Done with compaction. Time to reset reserved tree seq ID. */
+        BUG_ON(da->compaction_ct_seq != out_tree->seq);
+        da->compaction_ct_seq = INVAL_TREE;
+
+        out_tree->level = olevel;
+
+        /* Always add the compacted tree at the end. */
+        head = da->levels[out_tree->level].trees.prev;
+    }
+    else
+        BUG_ON(out_tree->level != level + 1);
+
     if (merge->nr_entries)
-        castle_component_tree_add(merge->da, out_tree, NULL /*head*/, 0 /*not in init*/);
+        castle_component_tree_add(merge->da, out_tree, head, 0 /*not in init*/);
 
     /* Reset the number of completed units. */
     BUG_ON(da->levels[level].merge.units_commited != (1U << level));
