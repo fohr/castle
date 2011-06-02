@@ -1360,15 +1360,15 @@ c_ver_t castle_version_new(int snap_or_clone,
                                   da_id,
                                   size);
 
-    /* Timestamp the creation. */
-    do_gettimeofday(&v->creation_timestamp);
-
     /* Return if we couldn't create the version correctly
        (possibly because we trying to clone attached version,
         or because someone asked for more than one snapshot to
         an attached version */
     if(!v)
         return INVAL_VERSION;
+
+    /* Timestamp the creation. */
+    do_gettimeofday(&v->creation_timestamp);
 
     /* We've succeeded at creating a new version number.
        Let's find where to store it on the disk. */
