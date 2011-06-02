@@ -1767,6 +1767,7 @@ struct castle_double_array {
     atomic_t                    ongoing_merges;     /**< Number of ongoing merges.              */
     atomic_t                    ref_cnt;
     uint32_t                    attachment_cnt;
+    tree_seq_t                  compaction_ct_seq;  /**< Sequence ID to be used by compaction.  */
 
     /* Write IO wait queue members */
     struct castle_da_io_wait_queue {
