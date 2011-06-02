@@ -687,6 +687,8 @@ int castle_fs_init(void)
         return -EINVAL;
     }
 
+    castle_checkpoint_ratelimit_set(25 * 1024 * slave_count);
+
     if (!first)
     {
         if (nr_live_slaves == nr_fs_slaves - 1)
