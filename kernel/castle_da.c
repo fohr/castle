@@ -123,7 +123,7 @@ typedef enum {
 /* Prototypes */
 static struct castle_component_tree* castle_ct_alloc(struct castle_double_array *da,
                                                      btree_t type,
-                                                     int level);
+                                                     int level, tree_seq_t seq);
 void castle_ct_get(struct castle_component_tree *ct, int write);
 void castle_ct_put(struct castle_component_tree *ct, int write);
 static void castle_component_tree_add(struct castle_double_array *da,
@@ -182,6 +182,8 @@ static int castle_da_no_disk_space(struct castle_double_array *da);
 
 struct workqueue_struct *castle_da_wqs[NR_CASTLE_DA_WQS];
 char *castle_da_wqs_names[NR_CASTLE_DA_WQS] = {"castle_da0"};
+
+tree_seq_t castle_da_next_ct_seq(void);
 
 /**********************************************************************************************/
 /* Utils */
@@ -2351,10 +2353,14 @@ static int castle_da_no_disk_space(struct castle_double_array *da)
 static void castle_da_lfs_ct_init(struct castle_da_lfs_ct_t *lfs,
                                   c_chk_cnt_t internal_tree_size,
                                   c_chk_cnt_t tree_size,
-                                  c_chk_cnt_t data_size)
+                                  c_chk_cnt_t data_size,
+                                  int rwct)
 {
     /* Setting up the strucuture, there shouldn't be any reserved space. */
     BUG_ON(lfs->space_reserved);
+
+    /* Save whether we are allocating RWCT. */
+    lfs->rwct = rwct;
 
     /* Shouldn't see any valid ext_ids. */
     BUG_ON(!EXT_ID_INVAL(lfs->internal_ext.ext_id) ||
@@ -2504,7 +2510,9 @@ static int castle_da_lfs_ct_space_alloc(struct castle_da_lfs_ct_t *lfs,
         lfs->internals_on_ssds = 1;
         lfs->internal_ext.ext_id = castle_extent_alloc(SSD_RDA,
                                                        da->id,
-                                                       EXT_T_INTERNAL_NODES,
+                                                       lfs->rwct ?
+                                                            EXT_T_T0_INTERNAL_NODES :
+                                                            EXT_T_INTERNAL_NODES,
                                                        lfs->internal_ext.size, 1,
                                                        NULL, NULL);
     }
@@ -2516,7 +2524,9 @@ static int castle_da_lfs_ct_space_alloc(struct castle_da_lfs_ct_t *lfs,
         lfs->internals_on_ssds = 0;
         lfs->internal_ext.ext_id = castle_extent_alloc(DEFAULT_RDA,
                                                        da->id,
-                                                       EXT_T_INTERNAL_NODES,
+                                                       lfs->rwct ?
+                                                            EXT_T_T0_INTERNAL_NODES :
+                                                            EXT_T_INTERNAL_NODES,
                                                        lfs->internal_ext.size, 1,
                                                        lfs_data, lfs_callback);
         if (EXT_ID_INVAL(lfs->internal_ext.ext_id))
@@ -2533,7 +2543,9 @@ static int castle_da_lfs_ct_space_alloc(struct castle_da_lfs_ct_t *lfs,
         if(castle_use_ssd_leaf_nodes && use_ssd)
             lfs->tree_ext.ext_id = castle_extent_alloc(SSD_RDA,
                                                        da->id,
-                                                       EXT_T_LEAF_NODES,
+                                                       lfs->rwct ?
+                                                            EXT_T_T0_LEAF_NODES :
+                                                            EXT_T_LEAF_NODES,
                                                        lfs->tree_ext.size, 1,
                                                        NULL, NULL);
     }
@@ -2546,7 +2558,9 @@ static int castle_da_lfs_ct_space_alloc(struct castle_da_lfs_ct_t *lfs,
         lfs->leafs_on_ssds = 0;
         lfs->tree_ext.ext_id = castle_extent_alloc(DEFAULT_RDA,
                                                    da->id,
-                                                   EXT_T_LEAF_NODES,
+                                                   lfs->rwct ?
+                                                        EXT_T_T0_LEAF_NODES :
+                                                        EXT_T_LEAF_NODES,
                                                    lfs->tree_ext.size, 1,
                                                    lfs_data, lfs_callback);
     }
@@ -2563,7 +2577,9 @@ static int castle_da_lfs_ct_space_alloc(struct castle_da_lfs_ct_t *lfs,
      * sum of both the trees. */
     lfs->data_ext.ext_id = castle_extent_alloc(DEFAULT_RDA,
                                                da->id,
-                                               EXT_T_MEDIUM_OBJECTS,
+                                               lfs->rwct ?
+                                                    EXT_T_T0_MEDIUM_OBJECTS :
+                                                    EXT_T_MEDIUM_OBJECTS,
                                                lfs->data_ext.size, 1,
                                                lfs_data, lfs_callback);
     if (EXT_ID_INVAL(lfs->data_ext.ext_id))
@@ -2711,7 +2727,8 @@ __again:
         castle_da_lfs_ct_init(lfs,
                               CHUNK(internal_tree_size),
                               CHUNK(tree_size),
-                              CHUNK(data_size));
+                              CHUNK(data_size),
+                              0 /* Not a T0. */);
 
         /* Allocate space from freespace. */
         ret = castle_da_lfs_ct_space_alloc(lfs,
@@ -4231,7 +4248,13 @@ static tree_seq_t castle_da_merge_last_unit_complete(struct castle_double_array 
     /* If this was a total merge, the output level needs to be computed.
        Otherwise the level should already be set to the next level up. */
     if(level == BIG_MERGE)
+    {
         out_tree->level = castle_da_total_merge_output_level_get(da, out_tree);
+
+        /* Done with compaction. Time to reset reserved tree seq ID. */
+        BUG_ON(da->compaction_ct_seq != out_tree->seq);
+        da->compaction_ct_seq = INVAL_TREE;
+    }
     else
         BUG_ON(out_tree->level != level + 1);
     /* Delete the old trees from DA list.
@@ -4366,11 +4389,16 @@ static struct castle_da_merge* castle_da_merge_init(struct castle_double_array *
 
     if(!merge->out_tree)
     {
+        tree_seq_t ct_seq = INVAL_TREE;
+
         /* we cannot tolerate failure to recover an in-progress output ct if this is a
            deserialising merge */
         BUG_ON(da->levels[level].merge.serdes.des);
 
-        merge->out_tree = castle_ct_alloc(da, RO_VLBA_TREE_TYPE, level+1);
+        if (level == BIG_MERGE)
+            ct_seq = da->compaction_ct_seq;
+
+        merge->out_tree = castle_ct_alloc(da, RO_VLBA_TREE_TYPE, level+1, ct_seq);
         if(!merge->out_tree)
             goto error_out;
         merge->out_tree->internal_ext_free.ext_id = INVAL_EXT_ID;
@@ -5536,6 +5564,15 @@ static int castle_da_big_merge_run(void *da_p)
         /* We should have seen all marked in trees. */
         BUG_ON(i != nr_trees);
 
+        /* Marked trees for compaction, register a component tree sequence number, before
+         * letting other merges start.
+         *
+         * Note: This is important as, merges can race with compaction and it is possible to have
+         * compaction out_tree with latest sequence number than the racing merge.
+         */
+        if (TREE_INVAL(da->compaction_ct_seq))
+            da->compaction_ct_seq = castle_da_next_ct_seq();
+
         write_unlock(&da->lock);
 
         castle_da_need_compaction_clear(da);
@@ -6083,6 +6120,7 @@ static struct castle_double_array* castle_da_alloc(c_da_t da_id)
     atomic_set(&da->nr_del_versions, 0);
     /* For existing double arrays driver merge has to be reset after loading it. */
     da->driver_merge    = -1;
+    da->compaction_ct_seq = INVAL_TREE;
     atomic_set(&da->epoch_ios, 0);
     atomic_set(&da->merge_budget, 0);
     atomic_set(&da->ongoing_merges, 0);
@@ -7490,6 +7528,11 @@ out:
     return ret;
 }
 
+tree_seq_t castle_da_next_ct_seq(void)
+{
+    return atomic_inc_return(&castle_next_tree_seq);
+}
+
 /**
  * Allocate and initialise a CT.
  *
@@ -7499,7 +7542,8 @@ out:
  */
 static struct castle_component_tree* castle_ct_alloc(struct castle_double_array *da,
                                                      btree_t type,
-                                                     int level)
+                                                     int level,
+                                                     tree_seq_t seq)
 {
     struct castle_component_tree *ct;
 
@@ -7509,7 +7553,7 @@ static struct castle_component_tree* castle_ct_alloc(struct castle_double_array 
         return NULL;
 
     /* Allocate an id for the tree, init the ct. */
-    ct->seq             = atomic_inc_return(&castle_next_tree_seq);
+    ct->seq             = (TREE_INVAL(seq)? castle_da_next_ct_seq(): seq);
     if(ct->seq >= (1U<<TREE_SEQ_SHIFT))
     {
         castle_printk(LOG_ERROR, "Could not allocate a CT because of sequence # overflow.\n");
@@ -7588,7 +7632,7 @@ static int __castle_da_rwct_create(struct castle_double_array *da, int cpu_index
     /* Caller must have set the DA's growing bit. */
     BUG_ON(!castle_da_growing_rw_test(da));
 
-    ct = castle_ct_alloc(da, RW_VLBA_TREE_TYPE, 0 /* level */);
+    ct = castle_ct_alloc(da, RW_VLBA_TREE_TYPE, 0 /* level */, INVAL_TREE);
     if (!ct)
         return -ENOMEM;
 
@@ -7620,9 +7664,11 @@ static int __castle_da_rwct_create(struct castle_double_array *da, int cpu_index
         /* Initialize the lfs structure with required extent sizes. */
         /* Note: Init this structure ahead so that, if allocation fails due to low free space
          * use this structure to register for notifications when more space is available. */
-        castle_da_lfs_ct_init(lfs, MAX_DYNAMIC_TREE_SIZE,
-                                   MAX_DYNAMIC_TREE_SIZE,
-                                   MAX_DYNAMIC_TREE_SIZE);
+        castle_da_lfs_ct_init(lfs,
+                              MAX_DYNAMIC_TREE_SIZE,
+                              MAX_DYNAMIC_TREE_SIZE,
+                              MAX_DYNAMIC_TREE_SIZE,
+                              1 /* a T0. */);
 
         /* Allocate space from freespace. */
         err = castle_da_lfs_ct_space_alloc(lfs,

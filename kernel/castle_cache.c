@@ -258,6 +258,12 @@ static int                     castle_cache_stats_timer_interval = 0; /* in seco
 module_param(castle_cache_stats_timer_interval, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
 MODULE_PARM_DESC(castle_cache_stats_timer_interval, "Cache stats print interval (seconds)");
 
+#define                        CASTLE_MIN_CHECKPOINT_RATELIMIT  (25 * 1024)  /* In KB/s */
+static unsigned int            castle_checkpoint_ratelimit;
+module_param(castle_checkpoint_ratelimit, uint, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
+MODULE_PARM_DESC(castle_checkpoint_ratelimit, "Checkpoint ratelimit in KB/s");
+
+
 static c2_block_t             *castle_cache_blks = NULL;
 static c2_page_t              *castle_cache_pgs  = NULL;
 
@@ -2808,6 +2814,11 @@ int castle_cache_block_destroy(c2_block_t *c2b)
     return ret;
 }
 
+void castle_cache_flush_wakeup(void)
+{
+    wake_up_process(castle_cache_flush_thread);
+}
+
 /**
  * Grow the freelists until we have nr_c2bs and nr_pages free.
  *
@@ -4373,17 +4384,14 @@ static inline void __castle_cache_extent_flush_batch(c2_block_t *c2b_batch[],
  *       should not occur so are BUG_ON()ed.  Indeed, if they did it could lead
  *       to potential deadlocks when waitlock is set.  See #2237 for details.
  *
- * @return  -ENOENT             No such extent
- * @return  0                   Flush successfully started
- *
  * @also castle_cache_extent_flush()
  */
-int __castle_cache_extent_flush(c_ext_dirtytree_t *dirtytree,
-                                c_byte_off_t end_off,
-                                int max_pgs,
-                                atomic_t *in_flight_p,
-                                int *flushed_p,
-                                int waitlock)
+void __castle_cache_extent_flush(c_ext_dirtytree_t *dirtytree,
+                                 c_byte_off_t end_off,
+                                 int max_pgs,
+                                 atomic_t *in_flight_p,
+                                 int *flushed_p,
+                                 int waitlock)
 {
     c2_block_t *c2b;
     struct rb_node *parent;
@@ -4497,12 +4505,11 @@ next_c2b:
     /* Return number of pages to caller, if requested. */
     if (flushed_p)
         *flushed_p = flushed;
-
-    return EXIT_SUCCESS;
 }
 
 /**
  * Synchronously flush dirty pages from beginning of extent to start+size.
+ * Extent must exist, checked with a BUG_ON(!dirtytree).
  *
  * NOTE: start is currently ignored; we always flush from the beginning of
  *       the extent to start+size.
@@ -4510,34 +4517,70 @@ next_c2b:
  * @param ext_id    Extent to flush
  * @param start     Byte offset to flush from (ignored)
  * @param size      Bytes to flush from start
- *
- * @return -EINVAL  Couldn't get dirtytree for extent
- * @return 0        Success
+ * @param ratelimit Ratelimit in KB/s, 0 for unlimited
  */
-int castle_cache_extent_flush(c_ext_id_t ext_id, uint64_t start, uint64_t size)
+void castle_cache_extent_flush(c_ext_id_t ext_id,
+                               uint64_t start,
+                               uint64_t size,
+                               unsigned int ratelimit)
 {
     atomic_t in_flight = ATOMIC(0);
     c_ext_dirtytree_t *dirtytree;
-    int ret;
+    int batch, batch_period, io_time, flushed;
+    unsigned long io_start;
 
     /* Calculate end_off for __castle_cache_extent_flush(). */
     if (size)
         size = start + size;
 
+    /* Get the dirtytree. */
     dirtytree = castle_extent_dirtytree_by_id_get(ext_id);
     BUG_ON(!dirtytree);
-    ret = __castle_cache_extent_flush(dirtytree,    /* dirtytree    */
-                                      size,         /* end_off      */
-                                      INT_MAX,      /* max_pgs      */
-                                      &in_flight,   /* in_flight_p  */
-                                      NULL,         /* flushed_p    */
-                                      1);           /* waitlock     */
+
+    /* Flush 8 MB at the time if there is a ratelimit. */
+    batch = INT_MAX;
+    batch_period = 0;
+    if(ratelimit != 0)
+    {
+        batch = 8 * 256;
+        /* Work out how long it should take to flush each batch in order
+           to achieve the specified rate. In msecs. */
+        batch_period = (4 * 1000 * batch) / ratelimit;
+    }
+
+    /* Continue flushing batches for as long as there are dirty blocks
+       in the specified range. */
+    do {
+        /* Record when the flush starts. */
+        io_start = jiffies;
+
+        /* Schedule flush of up to batch pages. */
+        __castle_cache_extent_flush(dirtytree,    /* dirtytree    */
+                                    size,         /* end_off      */
+                                    batch,        /* max_pgs      */
+                                    &in_flight,   /* in_flight_p  */
+                                    &flushed,     /* flushed_p    */
+                                    1);           /* waitlock     */
+
+        /* Wait for IO from the current batch to complete. */
+        wait_event(castle_cache_flush_wq, (atomic_read(&in_flight) == 0));
+
+        /* If there is ratelimiting, sleep for the required amount of time. */
+        if((ratelimit != 0) && (flushed > 0))
+        {
+            io_time = jiffies_to_msecs(jiffies - io_start);
+            /* Only go to sleep if IO took less time than batch_period. */
+            if(batch_period > io_time)
+                msleep_interruptible(batch_period - io_time);
+        }
+
+    } while(flushed > 0);
+
+    /* Put the dirtytree. */
     castle_extent_dirtytree_put(dirtytree);
 
-    /* Wait for 100% of IOs to complete. */
-    wait_event(castle_cache_flush_wq, (atomic_read(&in_flight) == 0));
-
-    return ret;
+    /* There should be no IO in flight by now. */
+    BUG_ON(atomic_read(&in_flight) != 0);
 }
 
 /**
@@ -4572,8 +4615,9 @@ static int castle_cache_flush(void *unused)
 #define MIN_FLUSH_SIZE  128
 #define MAX_FLUSH_SIZE  (4*1024)
 #define MIN_FLUSH_FREQ  5           /* Min flush rate: 5*128pgs/s = 2.5MB/s */
-    int exiting, target_dirty_pgs, dirty_pgs, to_flush, last_flush, i;
+    int exiting, flushing_rwcts, target_dirty_pgs, dirty_pgs, to_flush, last_flush, i;
     atomic_t in_flight = ATOMIC(0);
+    c_ext_type_t ext_type;
 
     /* Try and keep 3/4 of pages in the cache dirty. */
     target_dirty_pgs = 3 * (castle_cache_size / 4);
@@ -4627,7 +4671,9 @@ static int castle_cache_flush(void *unused)
         last_flush = to_flush;
 
         /* Iterate over all dirty extents trying to find pages to flush. */
-        for (i = atomic_read(&castle_cache_extent_dirtylist_size); i > 0; i--)
+        flushing_rwcts = 0;
+        i = atomic_read(&castle_cache_extent_dirtylist_size);
+        while(true)
         {
             c_ext_dirtytree_t *dirtytree;
             int flushed = 0;
@@ -4635,6 +4681,26 @@ static int castle_cache_flush(void *unused)
             /* Stop looping if we've managed to flush enough pages. */
             if (to_flush <= 0)
                 break;
+
+            /* If counter reached zero the, and the flusing rwcts flag isn't set,
+               consider setting it (reset the counter too). */
+            if (i == 0 &&
+                !flushing_rwcts &&
+                (exiting || dirty_pgs > target_dirty_pgs))
+            {
+                flushing_rwcts = 1;
+                i = atomic_read(&castle_cache_extent_dirtylist_size);
+            }
+
+            /* Stop looping if i reached 0. */
+            if (i == 0)
+                break;
+
+
+            /* Update the counter here, before any 'continue' statements.
+               That's fine because the counter isn't used for anything other than
+               checking the termination conditions. */
+            i--;
 
             /* Get next per-extent dirtytree to flush. */
             spin_lock_irq(&castle_cache_block_hash_lock);
@@ -4651,6 +4717,18 @@ static int castle_cache_flush(void *unused)
             castle_extent_dirtytree_get(dirtytree);
             list_move_tail(&dirtytree->list, &castle_cache_extent_dirtylist);
             spin_unlock_irq(&castle_cache_block_hash_lock);
+
+            /* Check extent type. If its T0, only flush if flushing_rwcts flag is set.
+               Note that if ext_id belongs to a deleted extent, we are going to get
+               EXT_T_INVALID returned. We are therefore going to flush it, _even_ if
+               it used to belong to a T0. */
+            ext_type = castle_extent_type_get(dirtytree->ext_id);
+            if(!flushing_rwcts &&
+                    (ext_type == EXT_T_T0_INTERNAL_NODES ||
+                     ext_type == EXT_T_T0_LEAF_NODES ||
+                     ext_type == EXT_T_T0_MEDIUM_OBJECTS))
+                continue;
+
 
             /* Flushed will be set to an approximation of pages flushed. */
             __castle_cache_extent_flush(dirtytree,  /* dirtytree    */
@@ -4671,11 +4749,6 @@ static int castle_cache_flush(void *unused)
     BUG_ON(atomic_read(&in_flight) != 0);
 
     return EXIT_SUCCESS;
-}
-
-void castle_cache_flush_wakeup(void)
-{
-    wake_up_process(castle_cache_flush_thread);
 }
 
 /***** Init/fini functions *****/
@@ -5594,9 +5667,11 @@ int castle_cache_extent_flush_schedule(c_ext_id_t ext_id, uint64_t start,
  * - Flush all extents on flush_list
  * - Drop extent reference after flush
  *
+ * @param ratelimit     Ratelimit in KB/s, 0 for unlimited.
+ *
  * @also castle_cache_extent_flush_schedule()
  */
-int castle_cache_extents_flush(struct list_head *flush_list)
+void castle_cache_extents_flush(struct list_head *flush_list, unsigned int ratelimit)
 {
     struct list_head *lh, *tmp;
     struct castle_cache_flush_entry *entry;
@@ -5604,7 +5679,7 @@ int castle_cache_extents_flush(struct list_head *flush_list)
     list_for_each_safe(lh, tmp, flush_list)
     {
         entry = list_entry(lh, struct castle_cache_flush_entry, list);
-        castle_cache_extent_flush(entry->ext_id, entry->start, entry->count);
+        castle_cache_extent_flush(entry->ext_id, entry->start, entry->count, ratelimit);
         castle_extent_put(entry->ext_id);
 
         list_del(lh);
@@ -5612,8 +5687,6 @@ int castle_cache_extents_flush(struct list_head *flush_list)
     }
 
     BUG_ON(!list_empty(flush_list));
-
-    return 0;
 }
 
 extern atomic_t current_rebuild_seqno;
@@ -5690,6 +5763,26 @@ int castle_slaves_superblock_invalidate(void)
     rcu_read_unlock();
 
     return EXIT_SUCCESS;
+}
+
+/**
+ * Sets checkpoint extent flushing ratelimit.
+ *
+ * @param ratelimit Ratelimit in KB/s
+ */
+void castle_checkpoint_ratelimit_set(unsigned long ratelimit)
+{
+    /* If ratelimit is smaller than min, ignore the request to set it. */
+    if(ratelimit < CASTLE_MIN_CHECKPOINT_RATELIMIT)
+    {
+        castle_printk(LOG_WARN, "Trying to set checkpoint ratelimit to too small of a rate: %d, "
+                                "minimum is %d. Current ratelimit is %d\n",
+                                ratelimit,
+                                CASTLE_MIN_CHECKPOINT_RATELIMIT,
+                                castle_checkpoint_ratelimit);
+        return;
+    }
+    castle_checkpoint_ratelimit = ratelimit;
 }
 
 /**
@@ -5793,7 +5886,11 @@ static int castle_periodic_checkpoint(void *unused)
         CASTLE_TRANSACTION_END;
 
         /* Flush all marked extents from cache. */
-        castle_cache_extents_flush(&flush_list);
+        castle_cache_extents_flush(&flush_list,
+                                   exit_loop ? 0 :
+                                   max_t(unsigned int,
+                                         castle_checkpoint_ratelimit,
+                                         CASTLE_MIN_CHECKPOINT_RATELIMIT));
 
         FAULT(CHECKPOINT_FAULT);
 

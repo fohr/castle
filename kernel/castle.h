@@ -271,10 +271,14 @@ typedef enum {
 /* Type of data stored within extent. */
 typedef enum {
     EXT_T_META_DATA,
-    EXT_T_BTREE_NODES,
+    EXT_T_GLOBAL_BTREE,
+    EXT_T_BLOCK_DEV,
     EXT_T_INTERNAL_NODES,
     EXT_T_LEAF_NODES,
     EXT_T_MEDIUM_OBJECTS,
+    EXT_T_T0_INTERNAL_NODES,
+    EXT_T_T0_LEAF_NODES,
+    EXT_T_T0_MEDIUM_OBJECTS,
     EXT_T_LARGE_OBJECT,
     EXT_T_BLOOM_FILTER,
     EXT_T_INVALID,
@@ -282,10 +286,14 @@ typedef enum {
 
 static USED char *castle_ext_type_str[] = {
     "EXT_T_META_DATA",
-    "EXT_T_BTREE_NODES",
+    "EXT_T_GLOBAL_BTREE",
+    "EXT_T_BLOCK_DEV",
     "EXT_T_INTERNAL_NODES",
     "EXT_T_LEAF_NODES",
     "EXT_T_MEDIUM_OBJECTS",
+    "EXT_T_T0_INTERNAL_NODES",
+    "EXT_T_T0_LEAF_NODES",
+    "EXT_T_T0_MEDIUM_OBJECTS",
     "EXT_T_LARGE_OBJECT",
     "EXT_T_BLOOM_FILTER",
     "EXT_T_INVALID"
@@ -1624,6 +1632,7 @@ struct castle_merge_token {
 /* Low free space structure being used by each merge in DA. */
 struct castle_da_lfs_ct_t {
     uint8_t             space_reserved;     /**< Reserved space from low space handler  */
+    uint8_t             rwct;               /**< Whether allocating RWCT or not         */
     struct castle_double_array *da;         /**< Double-array */
     struct {
         c_chk_cnt_t     size;               /**< Size of the extent to be reserved      */
@@ -1758,6 +1767,7 @@ struct castle_double_array {
     atomic_t                    ongoing_merges;     /**< Number of ongoing merges.              */
     atomic_t                    ref_cnt;
     uint32_t                    attachment_cnt;
+    tree_seq_t                  compaction_ct_seq;  /**< Sequence ID to be used by compaction.  */
 
     /* Write IO wait queue members */
     struct castle_da_io_wait_queue {
