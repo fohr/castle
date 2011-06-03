@@ -110,6 +110,76 @@ void castle_printk(c_printk_level_t level, const char *fmt, ...)
 }
 
 /**
+ * Dump CASTLE_DMESG_DUMP_SIZE worth of the Castle dmesg ring-buffer.
+ */
+#define CASTLE_DMESG_DUMP_SIZE  (1*1024*1024)   /**< How much of the printk buffer to dump (1MB). */
+void castle_dmesg(void)
+{
+    c_byte_off_t read_off, write_off, size;
+    char *buf, line[1024];
+    int wraps;
+
+    /* Allocate a buffer to store CASTLE_DMESG_DUMP_SIZE of buffer. */
+    buf = castle_vmalloc(CASTLE_DMESG_DUMP_SIZE);
+    if (!buf)
+        printk("Couldn't allocate lines buffer to print castle_dmesg().\n");
+
+    /* Populate the local buffer under printk_buf lock. */
+    spin_lock(&printk_buf.lock);
+
+    /* Fill at end, in case we wrapped and need to push more at the front. */
+    if (printk_buf.off >= CASTLE_DMESG_DUMP_SIZE)
+        size = CASTLE_DMESG_DUMP_SIZE;
+    else
+        size = printk_buf.off;
+    read_off = printk_buf.off - size;
+    write_off = CASTLE_DMESG_DUMP_SIZE - size;
+    memcpy(&buf[write_off], &printk_buf.buf[read_off], size);
+
+    /* Fill the front of the local buffer from the end of the printk_buf if
+     * we wrapped. */
+    if (write_off && printk_buf.wraps)
+    {
+        size = write_off;
+        read_off = printk_buf.size - size;
+        write_off = 0;
+
+        memcpy(&buf[write_off], &printk_buf.buf[read_off], size);
+    }
+
+    wraps = printk_buf.wraps;
+    read_off = write_off;
+
+    spin_unlock(&printk_buf.lock);
+
+    printk("================================================================================\n");
+    printk("DUMPING %lld BYTES OF CASTLE PRINTK BUFFER WRAPPED %d TIME(S)\n",
+            CASTLE_DMESG_DUMP_SIZE - read_off, wraps);
+    printk("================================================================================\n");
+
+    /* Dump the buffer in lines as large as possible (1024). */
+    while (read_off < CASTLE_DMESG_DUMP_SIZE - 1)
+    {
+        if (likely(read_off + 1024 < CASTLE_DMESG_DUMP_SIZE))
+            size = 1024;
+        else
+            size = CASTLE_DMESG_DUMP_SIZE - read_off;
+
+        memset(&line, 0, 1024);
+        memcpy(&line, &buf[read_off], size);
+        read_off += size - 1;
+
+        printk(line);
+    }
+
+    printk("================================================================================\n");
+    printk("END OF CASTLE PRINTK BUFFER\n");
+    printk("================================================================================\n");
+
+    castle_vfree(buf);
+}
+
+/**
  * Initialise ring buffer and level states for castle_printk().
  *
  * NOTE: We must call vmalloc() directly as we are the first subsystem

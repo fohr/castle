@@ -18,7 +18,6 @@
 #endif
 #include <linux/reboot.h>
 
-
 #include "castle_public.h"
 
 /* BUG and BUG_ON redefined to cause reliable crash-dumpable crashes. */
@@ -31,6 +30,9 @@ extern int castle_merges_checkpoint; /* 0 or 1, default=enabled */
 
 static inline ATTRIB_NORET void bug_fn(char *file, unsigned long line)
 {
+    void castle_dmesg(void);
+
+    castle_dmesg();
     panic("Castle BUG, from: %s:%ld\n", file, line);
 #if 0
     /* Write the line number into R15, but push it onto the stack first. */
