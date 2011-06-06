@@ -1193,6 +1193,21 @@ void castle_version_private_stats_adjust(c_ver_t version,
 }
 
 /**
+ * Return current state of crash consistent per-version stats.
+ *
+ * See _castle_version_stats_adjust() for argument info.
+ *
+ * @also _castle_version_stats_adjust()
+ */
+cv_nonatomic_stats_t castle_version_consistent_stats_get(c_ver_t version)
+{
+    cv_nonatomic_stats_t null_adjust = { 0, 0, 0, 0, 0 };
+
+    return _castle_version_stats_adjust(version, null_adjust,
+                                        0 /*live*/, 1 /*consistent*/, NULL /*private*/);
+}
+
+/**
  * Return current state of live per-version stats.
  *
  * See _castle_version_stats_adjust() for argument info.

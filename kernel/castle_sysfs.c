@@ -94,10 +94,10 @@ static ssize_t versions_list_show(struct kobject *kobj, struct attribute *attr, 
     ret = castle_version_read(v->version, &da_id, NULL, &live_parent, &size, &leaf);
     if(ret == 0)
     {
-        cv_nonatomic_stats_t live_stats;
+        cv_nonatomic_stats_t stats;
         struct timeval creation_timestamp;
 
-        live_stats = castle_version_live_stats_get(v->version);
+        stats = castle_version_consistent_stats_get(v->version);
         creation_timestamp = castle_version_creation_timestamp_get(v->version);
         len = sprintf(buf,
                 "Id: 0x%x\n"
@@ -116,11 +116,11 @@ static ssize_t versions_list_show(struct kobject *kobj, struct attribute *attr, 
                  live_parent,
                  size,
                  leaf,
-                 live_stats.keys,
-                 live_stats.tombstones,
-                 live_stats.tombstone_deletes,
-                 live_stats.version_deletes,
-                 live_stats.key_replaces,
+                 stats.keys,
+                 stats.tombstones,
+                 stats.tombstone_deletes,
+                 stats.version_deletes,
+                 stats.key_replaces,
                  creation_timestamp.tv_sec,
                  creation_timestamp.tv_usec);
 
