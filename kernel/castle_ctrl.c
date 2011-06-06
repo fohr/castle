@@ -480,6 +480,13 @@ void castle_control_collection_snapshot_delete(c_ver_t version,
         return;
     }
 
+    if (castle_version_deleted(version))
+    {
+        castle_printk(LOG_WARN, "Version %d is already deleted. Couldn't be deleted.\n", version);
+        *ret = -EINVAL;
+        return;
+    }
+
     *ret = castle_version_delete(version);
 
     return;
