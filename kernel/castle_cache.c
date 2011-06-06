@@ -253,10 +253,15 @@ static int            castle_cache_size           = 20000;  /* In pages */
 module_param(castle_cache_size, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
 MODULE_PARM_DESC(castle_cache_size, "Cache size");
 
-static int                     castle_cache_stats_timer_interval = 0; /* in seconds */
-
-module_param(castle_cache_stats_timer_interval, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
-MODULE_PARM_DESC(castle_cache_stats_timer_interval, "Cache stats print interval (seconds)");
+static int                     castle_cache_stats_timer_interval = 0; /* in seconds. NOTE: this need
+                                                                         to be set to 0, because we
+                                                                         rely on it to work out
+                                                                         whether to delete the timer
+                                                                         on castle_cache_fini() or
+                                                                         not.
+                                                                         ALSO: don't export as module
+                                                                         parameter, until the fini()
+                                                                         logic is fixed. */
 
 #define                        CASTLE_MIN_CHECKPOINT_RATELIMIT  (25 * 1024)  /* In KB/s */
 static unsigned int            castle_checkpoint_ratelimit;
