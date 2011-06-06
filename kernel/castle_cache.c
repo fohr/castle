@@ -6056,7 +6056,7 @@ void castle_cache_fini(void)
     castle_cache_freelists_fini();
 
     if(castle_io_array_cache)   kmem_cache_destroy(castle_io_array_cache);
-    if(castle_cache_stats_timer_interval) del_timer(&castle_cache_stats_timer);
+    if(castle_cache_stats_timer_interval) del_timer_sync(&castle_cache_stats_timer);
 
     if(castle_cache_page_hash)       castle_vfree(castle_cache_page_hash);
     if(castle_cache_block_hash)      castle_vfree(castle_cache_block_hash);
