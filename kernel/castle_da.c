@@ -5700,6 +5700,10 @@ wait_and_try:
  *  - DA is marked for compaction
  *  - There is a ongoing merge unit at a level above
  *
+ * IMPORTANT: this function has side effect of increamenting ongoing merges counter,
+ *            this happens iff the wait is supposed to terminate (non-zero return from
+ *            this function).
+ *
  * @param da [in] doubling array to check for
  * @param level [out] merge level
  *
@@ -5707,16 +5711,11 @@ wait_and_try:
  */
 static int castle_da_merge_trigger(struct castle_double_array *da, int level)
 {
-    int ret = 0;
-
     /* Don't start merge, if there is no disk space. */
     if (castle_da_no_disk_space(da))
         return 0;
 
     read_lock(&da->lock);
-
-    if (exit_cond)
-        goto start_merge;
 
     if (da->levels[level].nr_trees < 2)
         goto out;
@@ -5736,15 +5735,15 @@ static int castle_da_merge_trigger(struct castle_double_array *da, int level)
         goto out;
     }
 
-start_merge:
     /* Everything is good for merges to start. Increment ongoing merge count. */
     atomic_inc(&da->ongoing_merges);
+    read_unlock(&da->lock);
 
-    ret = 1;
+    return 1;
 
 out:
     read_unlock(&da->lock);
-    return ret;
+    return 0;
 }
 
 /**
@@ -5769,17 +5768,19 @@ static int castle_da_merge_run(void *da_p)
     da->levels[level].merge.deamortize = 1;
     castle_printk(LOG_DEBUG, "Starting merge thread.\n");
     do {
-        /* Wait for 2+ trees to appear at this level. */
+        /* Wait for 2+ trees to appear at this level.
+           NOTE: we moved exit condition from */
         __wait_event_interruptible(da->merge_waitq,
-                    castle_da_merge_trigger(da, level),
+                    (ret = exit_cond) || castle_da_merge_trigger(da, level),
                     ignore);
 
-        /* Exit without doing a merge, if we are stopping execution, or da has been deleted. */
-        if(exit_cond)
-        {
-            atomic_dec(&da->ongoing_merges);
+        /* If ret is set, exit_cond should return true as well. */
+        BUG_ON(ret && !(exit_cond));
+        /* Exit without doing a merge, if we are stopping execution, or da has been deleted.
+           NOTE: this is the only case for which we haven't bumped up the ongoing merges counter.
+         */
+        if(ret)
             break;
-        }
 
         /* Extract the two oldest component trees. */
         ret = castle_da_merge_cts_get(da, level, in_trees);
