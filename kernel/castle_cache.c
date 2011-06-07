@@ -4724,15 +4724,18 @@ static int castle_cache_flush(void *unused)
             spin_unlock_irq(&castle_cache_block_hash_lock);
 
             /* Check extent type. If its T0, only flush if flushing_rwcts flag is set.
-               Note that if ext_id belongs to a deleted extent, we are going to get
-               EXT_T_INVALID returned. We are therefore going to flush it, _even_ if
-               it used to belong to a T0. */
+             * Note that if ext_id belongs to a deleted extent, we are going to get
+             * EXT_T_INVALID returned. We are therefore going to flush it, _even_ if
+             * it used to belong to a T0. */
             ext_type = castle_extent_type_get(dirtytree->ext_id);
-            if(!flushing_rwcts &&
+            if (!flushing_rwcts &&
                     (ext_type == EXT_T_T0_INTERNAL_NODES ||
                      ext_type == EXT_T_T0_LEAF_NODES ||
                      ext_type == EXT_T_T0_MEDIUM_OBJECTS))
+            {
+                castle_extent_dirtytree_put(dirtytree);
                 continue;
+            }
 
 
             /* Flushed will be set to an approximation of pages flushed. */
