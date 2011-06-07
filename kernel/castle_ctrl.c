@@ -356,6 +356,7 @@ void castle_control_collection_attach(c_ver_t            version,
         if (strcmp(name, ca->col.name) == 0)
         {
             castle_printk(LOG_WARN, "Collection name %s already exists\n", ca->col.name);
+            castle_free(name);
             *ret = -EEXIST;
             return;
         }
@@ -364,6 +365,7 @@ void castle_control_collection_attach(c_ver_t            version,
     if (castle_version_deleted(version))
     {
         castle_printk(LOG_WARN, "Version is already marked for deletion. Can't be attached\n");
+        castle_free(name);
         *ret = -EINVAL;
         return;
     }
