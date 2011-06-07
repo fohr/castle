@@ -251,6 +251,8 @@ static int castle_extent_hash_remove(c_ext_t *ext, void *unused)
         castle_free(cs->sup_ext_maps);
     }
     __castle_extent_dirtytree_put(ext->dirtytree, 0 /*check_hash*/);
+    if(ext->work)
+        castle_free(ext->work);
     castle_free(ext);
 
     return 0;
@@ -1446,8 +1448,14 @@ void castle_extent_free(c_ext_id_t ext_id)
     }
 
     /* Allocate space for work structure, to be used to schedule castle_extent_free
-     * onto work queue. */
-    ext->work = castle_malloc(sizeof(struct work_struct), GFP_KERNEL);
+     * onto work queue.
+     * Only do it once (this function is often called just to put the reference,
+     * and is therefore reentrant. For example from castle_ct_put() large object
+     * scan).
+     */
+    if(!ext->work)
+        ext->work = castle_malloc(sizeof(struct work_struct), GFP_KERNEL);
+
     if (!ext->work)
     {
         castle_printk(LOG_ERROR, "Failed to allocate memory for extent deletion structures -"
