@@ -5654,14 +5654,6 @@ wait_and_try:
 
                 write_unlock(&da->lock);
             }
-
-            /* Free in_trees structure. */
-            if (in_trees)
-            {
-                castle_free(in_trees);
-                in_trees = NULL;
-            }
-
             /* Wakeup everyone waiting on merge state update. */
             wake_up(&da->merge_waitq);
 
@@ -5678,6 +5670,14 @@ wait_and_try:
 
             castle_printk(LOG_USERINFO, "Successfully completed compaction\n");
         }
+
+        /* Free in_trees structure. */
+        if (in_trees)
+        {
+            castle_free(in_trees);
+            in_trees = NULL;
+        }
+
     } while(1);
 
     debug_merges("Merge thread exiting.\n");
