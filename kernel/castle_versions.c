@@ -838,7 +838,7 @@ static struct castle_version* castle_version_add(c_ver_t version,
     {
         if (ret == -E2BIG)
             castle_printk(LOG_USERINFO,
-                    "Beta cannot create more than %d versions per DA.\n",
+                    "V1 cannot create more than %d versions per DA.\n",
                     CASTLE_VERSIONS_MAX);
         return NULL;
     }
