@@ -2767,10 +2767,14 @@ static void castle_btree_iter_path_put(c_iter_t *c_iter, int from)
 
 static void castle_btree_iter_end(c_iter_t *c_iter, int err)
 {
+    struct castle_btree_type *btree = castle_btree_type_get(c_iter->tree->btree_type);
+
     iter_debug("Putting path, ending\n");
 
 
     castle_btree_iter_version_key_dealloc(c_iter);
+    btree->key_dealloc(c_iter->parent_key);
+
     castle_btree_iter_path_put(c_iter, 0);
 
     /* @TODO: this will not work well for double frees/double ends, fix that */
@@ -3129,6 +3133,14 @@ static void castle_btree_iter_parent_node_idx_increment(c_iter_t *c_iter)
        this will terminate the iterator, as the ->depth == 0 */
 }
 
+void castle_iter_parent_key_set(c_iter_t *iter, void *key)
+{
+    struct castle_btree_type *btree = castle_btree_type_get(iter->tree->btree_type);
+
+    if (iter->parent_key)   btree->key_dealloc(iter->parent_key);
+    iter->parent_key = btree->key_duplicate(key);
+}
+
 static void castle_btree_iter_version_leaf_process(c_iter_t *c_iter)
 {
     struct castle_btree_node *node;
@@ -3189,6 +3201,12 @@ static void castle_btree_iter_version_leaf_process(c_iter_t *c_iter)
             slot_follow_ptr(i, c2b, real_slot_idx);
             btree->entry_get(c2b_bnode(c2b), real_slot_idx, NULL, NULL,
                              &entry_cvt);
+            if (!VLBA_TREE_KEY_INVAL((vlba_key_t *)c_iter->next_key.key) &&
+                    btree->key_compare(c_iter->next_key.key, entry_key) < 0)
+            {
+                printk("Unexpected key ordering: %p, %p\n", c_iter, entry_key);
+                BUG();
+            }
             c_iter->each(c_iter, i, entry_key, entry_version, entry_cvt);
         }
     }
@@ -3368,7 +3386,7 @@ static void __castle_btree_iter_path_traverse(struct work_struct *work)
     }
 
     c_iter->depth++;
-    c_iter->parent_key = entry_key;
+    castle_iter_parent_key_set(c_iter, entry_key);
 
     castle_btree_iter_path_traverse(c_iter, entry_cep);
 }
@@ -3512,7 +3530,7 @@ static void __castle_btree_iter_start(c_iter_t *c_iter)
         return;
     }
 
-    c_iter->parent_key = btree->inv_key;
+    castle_iter_parent_key_set(c_iter, btree->inv_key);
     castle_btree_iter_path_traverse(c_iter, root_cep);
 }
 
@@ -3542,14 +3560,14 @@ void castle_btree_iter_init(c_iter_t *c_iter, c_ver_t version, int type)
 {
     struct castle_btree_type *btree = castle_btree_type_get(c_iter->tree->btree_type);
     int i;
-;
+
     iter_debug("Initialising iterator for version=0x%x\n", version);
 
     atomic_inc(&castle_btree_iters_cnt);
 
     c_iter->type = type;
     c_iter->version = version;
-    c_iter->parent_key = btree->min_key;
+    castle_iter_parent_key_set(c_iter, btree->min_key);
     c_iter->next_key.key = btree->min_key;
     c_iter->next_key.need_destroy = 0;
     c_iter->depth = -1;
@@ -3970,7 +3988,11 @@ static void castle_rq_enum_iter_each(c_iter_t *c_iter,
     if ((!rq_enum->cur_key || btree->key_compare(rq_enum->cur_key, key) != 0))
     {
         debug("Adding entry to node buffer: %p\n", rq_enum->prod_buf);
-        BUG_ON(rq_enum->cur_key && btree->key_compare(rq_enum->cur_key, key) > 0);
+        if (rq_enum->cur_key && btree->key_compare(rq_enum->cur_key, key) > 0)
+        {
+            printk("re_enum: %p, cur_key: %p, key: %p\n", rq_enum, rq_enum->cur_key, key);
+            BUG();
+        }
         BUG_ON(CVT_LEAF_PTR(cvt));
         btree->entry_add(rq_enum->prod_buf->node, rq_enum->prod_idx, key, version, cvt);
         btree->entry_get(rq_enum->prod_buf->node, rq_enum->prod_idx, &rq_enum->cur_key, NULL,
