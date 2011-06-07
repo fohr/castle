@@ -169,7 +169,7 @@ void castle_dmesg(void)
         memcpy(&line, &buf[read_off], size);
         read_off += size - 1;
 
-        printk(line);
+        printk("%s", line);
     }
 
     printk("================================================================================\n");
