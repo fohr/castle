@@ -72,6 +72,7 @@ struct castle_extents_superblock castle_extents_global_sb;
 static DEFINE_MUTEX(castle_extents_mutex);
 
 static int castle_extents_exiting = 0;
+static int castle_extents_deletes_disabled = 0;
 
 typedef struct castle_extent {
     c_ext_id_t          ext_id;         /* Unique extent ID                             */
@@ -236,9 +237,18 @@ err_out:
 /* Cleanup all extents from hash table. Called at finish. */
 static int castle_extent_hash_remove(c_ext_t *ext, void *unused)
 {
+    int ref_cnt;
+
     debug("Freeing extent #%llu\n", ext->ext_id);
 
-    BUG_ON(atomic_read(&ext->ref_cnt) != 1);
+    ref_cnt = atomic_read(&ext->ref_cnt);
+    BUG_ON(ref_cnt && ref_cnt != 1);
+
+    /* Reference count could be zero, if a deleted extent is being used till the cache module
+     * is finished. */
+    if (ref_cnt == 0)
+        castle_printk(LOG_WARN, "Delaying deletion of the extent: %llu\n", ext->ext_id);
+
     /* There shouldn't be any outstanding extents for deletion on exit. */
     BUG_ON(ext->deleted);
     __castle_extents_hash_remove(ext);
@@ -601,11 +611,21 @@ int castle_extents_writeback(void)
     if (!extent_init_done)
         return 0;
 
-    /* Don't exit with out-standing dead extents. They are scheduled to get freed on
-     * system work queue. */
     if (castle_extents_exiting)
+    {
+        /* Don't let extents get deleted from this point on. These extents would get deleted in the
+         * next run of file system. We do check for dead extents on the module load time. */
+        /* Need lock here as we don't want to race with extent_put code which increments the
+         * dead_count. */
+        read_lock_irq(&castle_extents_hash_lock);
+        castle_extents_deletes_disabled = 1;
+        read_unlock_irq(&castle_extents_hash_lock);
+
+        /* Don't exit with out-standing dead extents. They are scheduled to get freed on
+         * system work queue. */
         while (atomic_read(&castle_extents_dead_count))
             msleep_interruptible(1000);
+    }
 
     castle_extents_mstore =
         castle_mstore_init(MSTORE_EXTENTS, sizeof(struct castle_elist_entry));
@@ -665,6 +685,10 @@ static int load_extent_from_mentry(struct castle_elist_entry *mstore_entry)
         ret = -ENOMEM;
         goto err1;
     }
+
+    /* ext_alloc() would set the alive bit to 1. Shouldn't do that during module reload.
+     * Instead, extent owner would mark it alive. */
+    ext->alive = 0;
 
     CONVERT_MENTRY_TO_EXTENT(ext, mstore_entry);
     if (EXT_ID_INVAL(ext->ext_id))
@@ -1862,7 +1886,10 @@ void castle_extent_put(c_ext_id_t ext_id)
     ext = __castle_extents_hash_get(ext_id);
 
     /* Dont do put on deleted extents. */
-    if (LIVE_EXTENT(ext) &&  atomic_dec_return(&ext->ref_cnt) == 0)
+    /* Don't delete extents if deletes are disabled. These extents would get deleted in the
+     * next run of file system. We do check for dead extents on the module load time. */
+    if (LIVE_EXTENT(ext) &&  atomic_dec_return(&ext->ref_cnt) == 0 &&
+        !castle_extents_deletes_disabled)
     {
         /* Increment the count of scheduled extents for deletion. Last checkpoint, conseqeuntly,
          * castle_exit waits for all outstanding dead extents to get destroyed. */
