@@ -1441,6 +1441,7 @@ void castle_extent_lfs_victims_wakeup(void)
 void castle_extent_free(c_ext_id_t ext_id)
 {
     c_ext_t *ext = castle_extents_hash_get(ext_id);
+    struct work_struct *work;
     if(!ext)
     {
         castle_printk(LOG_ERROR, "%s::cannot find ext with id %d.\n", __FUNCTION__, ext_id);
@@ -1454,7 +1455,16 @@ void castle_extent_free(c_ext_id_t ext_id)
      * scan).
      */
     if(!ext->work)
-        ext->work = castle_malloc(sizeof(struct work_struct), GFP_KERNEL);
+    {
+        work = castle_malloc(sizeof(struct work_struct), GFP_KERNEL);
+        /* Assign ext->work pointer atomically. */
+        if(cmpxchg(&ext->work, NULL, work) != NULL)
+        {
+            castle_printk(LOG_WARN, "WARNING: Race in assigning ext->work ptr, ext=%p.\n", ext);
+            castle_free(work);
+            BUG_ON(!ext->work);
+        }
+    }
 
     if (!ext->work)
     {
