@@ -246,7 +246,7 @@ static inline int castle_cache_c2b_to_pages(c2_block_t *c2b)
 /**********************************************************************************************
  * Static variables.
  */
-#define               CASTLE_CACHE_MIN_SIZE         50      /* In MB */
+#define               CASTLE_CACHE_MIN_SIZE         75      /* In MB */
 #define               CASTLE_CACHE_MIN_HARDPIN_SIZE 1000    /* In MB */
 static int            castle_cache_size           = 20000;  /* In pages */
 
