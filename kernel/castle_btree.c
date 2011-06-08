@@ -3201,8 +3201,9 @@ static void castle_btree_iter_version_leaf_process(c_iter_t *c_iter)
             slot_follow_ptr(i, c2b, real_slot_idx);
             btree->entry_get(c2b_bnode(c2b), real_slot_idx, NULL, NULL,
                              &entry_cvt);
-            if (!VLBA_TREE_KEY_INVAL((vlba_key_t *)c_iter->next_key.key) &&
-                    btree->key_compare(c_iter->next_key.key, entry_key) < 0)
+            /* Next key should always be greater than all the keys in the current node. */
+            if ((btree->key_compare(c_iter->next_key.key, btree->inv_key) != 0) &&
+                    btree->key_compare(c_iter->next_key.key, entry_key) <= 0)
             {
                 printk("Unexpected key ordering: %p, %p\n", c_iter, entry_key);
                 BUG();
