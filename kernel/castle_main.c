@@ -1003,6 +1003,8 @@ static int castle_block_ordered_supp_test(struct block_device *bdev)
     set_buffer_ordered(bh);
     ret = sync_dirty_buffer(bh);
 
+    clear_buffer_write_io_error(bh);
+
     bforget(bh);
 
     return ret;
