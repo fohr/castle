@@ -4498,7 +4498,8 @@ error_out:
 #ifdef CASTLE_PERF_DEBUG
 static void castle_da_merge_perf_stats_flush_reset(struct castle_double_array *da,
                                                    struct castle_da_merge *merge,
-                                                   uint32_t units_cnt)
+                                                   uint32_t units_cnt,
+                                                   struct castle_component_tree *in_trees[])
 {
     u64 ns;
     int i;
@@ -5308,7 +5309,7 @@ static int castle_da_merge_do(struct castle_double_array *da,
 
 #ifdef CASTLE_PERF_DEBUG
         /* Output & reset performance stats. */
-        castle_da_merge_perf_stats_flush_reset(da, merge, units_cnt);
+        castle_da_merge_perf_stats_flush_reset(da, merge, units_cnt, in_trees);
 #endif
         /* Exit on errors. */
         if (ret < 0)
