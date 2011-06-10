@@ -785,21 +785,21 @@ struct castle_clist_entry {
 /** DA merge SERDES input tree iter on-disk structure.
  */
 struct castle_intree_merge_state {
-    /* align:   8 */
-    /* offset:  0 */ tree_seq_t          seq;
+    /* align:  16 */
+    /* offset:  0 */ tree_seq_t                    seq;
     /*          4 */
                      struct {
-               /*   0 */ int32_t         component_completed;
-               /*   4 */ int32_t         component_cached;
-               /*   8 */ int32_t         immut_curr_idx;
-               /*  12 */ int32_t         immut_cached_idx;
-               /*  16 */ int32_t         immut_next_idx;
-               /*  20 */ c_ext_pos_t     immut_curr_c2b_cep;
-               /*  36 */ c_ext_pos_t     immut_next_c2b_cep;
-               /*  52 */
+                         /*   0 */ int32_t         component_completed;
+                         /*   4 */ int32_t         component_cached;
+                         /*   8 */ int32_t         immut_curr_idx;
+                         /*  12 */ int32_t         immut_cached_idx;
+                         /*  16 */ int32_t         immut_next_idx;
+                         /*  20 */ c_ext_pos_t     immut_curr_c2b_cep;
+                         /*  36 */ c_ext_pos_t     immut_next_c2b_cep;
+                         /*  52 */
                      } iter PACKED; /* 52 * 1 = 52 */
-
-    /*         56 */
+    /*         56 */ uint8_t                       pad[8];
+    /*         64 */
 } PACKED;
 
 /** DA merge SERDES on-disk structure.
@@ -807,54 +807,53 @@ struct castle_intree_merge_state {
  *  @note Assumes 2 input trees, both c_immut_iter_t, and max of 10 DA levels
  */
 struct castle_dmserlist_entry {
-    // TODO@tr recalculate all entry offsets!
-    /* align:   8 */
-    /* offset:  0 */ c_da_t                      da_id;
-    /*          4 */ int32_t                     level;
-    /*         16 */ struct castle_clist_entry   out_tree;
-    /*        528 */ btree_t                     btree_type;
-    /*        529 */ int32_t                     root_depth;
-    /*        533 */ int8_t                      is_new_key;
-    /*        534 */ c_ext_pos_t                 last_leaf_node_cep;
-    /*        550 */ int8_t                      completing;
-    /*        551 */ uint64_t                    nr_entries;
-    /*        559 */ uint64_t                    large_chunks;
-    /*        567 */ int8_t                      leafs_on_ssds;
-    /*        568 */ int8_t                      internals_on_ssds;
-    /*        569 */ uint32_t                    skipped_count;
-    /*        573 */
+    /* align:  16 */
+    /*************************** misc stuff: marshalled once per merge ***************************/
+    /* offset:  0 */ c_da_t                           da_id;
+    /*          4 */ int32_t                          level;
+    /*          8 */ int8_t                           leafs_on_ssds;
+    /*          9 */ int8_t                           internals_on_ssds;
+    /*         10 */ uint8_t                          pad_to_outct[6];
+    /*         16 */
 
-                   /* sizing/alignment of the overall struct assumes MAX_BTREE_DEPTH=10 */
+    /**************** partially complete output ct: marshalled once per checkpoint ****************/
+                    /* sizing/alignment of the overall struct assumes MAX_BTREE_DEPTH=10 */
+    /*         16 */ uint64_t                         nr_entries;
+    /*         24 */ uint64_t                         large_chunks;
+    /*         32 */ struct castle_clist_entry        out_tree;
+    /*        544 */
                      struct {
-               /*   0 */ c_ext_pos_t                 node_c2b_cep;
-               /*  16 */ int32_t                     next_idx;
-               /*  20 */ int32_t                     node_used;
-               /*  24 */ int32_t                     valid_end_idx;
-               /*  28 */ c_ver_t                     valid_version;
-               /*  32 */
+                         /*   0 */ c_ext_pos_t                 node_c2b_cep;
+                         /*  16 */ int32_t                     next_idx;
+                         /*  20 */ int32_t                     node_used;
+                         /*  24 */ int32_t                     valid_end_idx;
+                         /*  28 */ c_ver_t                     valid_version;
+                         /*  32 */
                      } levels[MAX_BTREE_DEPTH]; /* 32 * 10 = 320 */
+    /*        864 */
+    /*        864 */ c_ext_pos_t                      last_leaf_node_cep;
+    /*        880 */ struct castle_bbp_entry          out_tree_bbp;
+    /*        950 */ uint8_t                          have_bbp;
+    /*        951 */ btree_t                          btree_type;
+    /*        952 */ int32_t                          root_depth;
+    /*        956 */ int8_t                           completing;
+    /*        957 */ int8_t                           is_new_key;
+    /*        958 */ uint32_t                         skipped_count;
+    /*        962 */ uint8_t                          pad_to_iters[14]; /* beyond here entries are
+                                                                           frequently marshalled, so
+                                                                           alignment is important */
+    /*        976 */
 
-    /*        893 */ uint8_t                     pad_to_iters[3]; /* beyond here entries are
-                                                                     frequently marshalled, so
-                                                                     alignment is important */
-
-                    /* iterators, assuming we always have 2 immut_iters per merge */
-    /*        896 */ int32_t                     iter_err;
-    /*        900 */ int64_t                     iter_non_empty_cnt;
-    /*        908 */ uint64_t                    iter_src_items_completed;
-    /*        916 */
-
-    /*       1020 */ uint8_t                     pad_to_bloom_build_params[4];
-    /*       1024 */
-
-    /*       1024 */ struct castle_bbp_entry     out_tree_bbp;
-    /*       1094 */ uint8_t                     have_bbp;
-    /*       1095 */ uint8_t                     pad[441];
-    /*       1536 */
-                     struct castle_intree_merge_state             in_trees[2];
+    /**************** input ct seq and iters: iters potentially marshalled often *****************/
+    /*        976 */ int32_t                          iter_err;
+    /*        980 */ int64_t                          iter_non_empty_cnt;
+    /*        988 */ uint64_t                         iter_src_items_completed;
+    /*        996 */ uint8_t                          pad_to_pertree_structs[12];
+    /*       1008 */ struct castle_intree_merge_state in_trees[2];
+    /*       1136 */
 
 } PACKED;
-#define SIZEOF_CASTLE_DMSERLIST_ENTRY (1536)
+#define SIZEOF_CASTLE_DMSERLIST_ENTRY (1136)
 
 /**
  * Ondisk Serialized structure for castle versions.
