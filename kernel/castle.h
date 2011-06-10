@@ -721,13 +721,13 @@ struct castle_component_tree {
     struct list_head    da_list;
     struct list_head    hash_list;
     struct list_head    large_objs;
-    struct mutex        lo_mutex;          /**< Protects Large Object List. When working with
-                                                the output CT of a serialisable merge, never
-                                                take this lock before serdes.mutex or there will
-                                                be deadlock against checkpoint thread. */
-    c_ext_free_t        internal_ext_free;
-    c_ext_free_t        tree_ext_free;
-    c_ext_free_t        data_ext_free;
+    struct mutex        lo_mutex;           /**< Protects Large Object List. When working with
+                                                 the output CT of a serialisable merge, never
+                                                 take this lock before serdes.mutex or there
+                                                 will be deadlock against checkpoint thread.    */
+    c_ext_free_t        internal_ext_free;  /**< Extent for internal btree nodes.               */
+    c_ext_free_t        tree_ext_free;      /**< Extent for leaf btree nodes.                   */
+    c_ext_free_t        data_ext_free;      /**< Medium-object data extent.                     */
     atomic64_t          large_ext_chk_cnt;
     uint8_t             bloom_exists;
     castle_bloom_t      bloom;
