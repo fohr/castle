@@ -809,15 +809,15 @@ struct castle_dmserlist_entry {
     /*        569 */ uint32_t                    skipped_count;
     /*        573 */
 
-                   /* next few entries assume MAX_BTREE_DEPTH=10 */
-                   /* TODO@tr change SoA to Aos */
-    /*        573 */ c_ext_pos_t                 node_c2b_cep[MAX_BTREE_DEPTH];
-    /*        733 */ int32_t                     next_idx[MAX_BTREE_DEPTH];
-    /*        773 */ int32_t                     node_used[MAX_BTREE_DEPTH]; /* uncertain if this
-                                                                                is needed... might
-                                                                                get rid of it */
-    /*        813 */ int32_t                     valid_end_idx[MAX_BTREE_DEPTH];
-    /*        853 */ c_ver_t                     valid_version[MAX_BTREE_DEPTH];
+                   /* sizing/alignment of the overall struct assumes MAX_BTREE_DEPTH=10 */
+                   struct {
+                       c_ext_pos_t                 node_c2b_cep;
+                       int32_t                     next_idx;
+                       int32_t                     node_used;
+                       int32_t                     valid_end_idx;
+                       c_ver_t                     valid_version;
+                   } levels[MAX_BTREE_DEPTH];
+
     /*        893 */ uint8_t                     pad_to_iters[3]; /* beyond here entries are
                                                                      frequently marshalled, so
                                                                      alignment is important */
@@ -828,14 +828,15 @@ struct castle_dmserlist_entry {
     /*        908 */ uint64_t                    iter_src_items_completed;
     /*        916 */
                           /* 2 immutable iterators */
-                          /* TODO@tr change SoA to AoS */
-    /*        916 */ int32_t                     iter_component_completed[2];
-    /*        924 */ int32_t                     iter_component_cached[2];
-    /*        932 */ int32_t                     iter_immut_curr_idx[2];
-    /*        940 */ int32_t                     iter_immut_cached_idx[2];
-    /*        948 */ int32_t                     iter_immut_next_idx[2];
-    /*        956 */ c_ext_pos_t                 iter_immut_curr_c2b_cep[2];
-    /*        988 */ c_ext_pos_t                 iter_immut_next_c2b_cep[2];
+                    struct {
+                        int32_t                     component_completed;
+                        int32_t                     component_cached;
+                        int32_t                     immut_curr_idx;
+                        int32_t                     immut_cached_idx;
+                        int32_t                     immut_next_idx;
+                        c_ext_pos_t                 immut_curr_c2b_cep;
+                        c_ext_pos_t                 immut_next_c2b_cep;
+                    } iter[2];
 
     /*       1020 */ uint8_t                     pad_to_bloom_build_params[4];
     /*       1024 */

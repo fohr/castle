@@ -2229,12 +2229,12 @@ static int castle_da_iterators_create(struct castle_da_merge *merge)
             immut[i]=(c_immut_iter_t *)comp[i]->iterator;
             BUG_ON(!immut[i]);
 
-            comp[i]->completed   = immut[i]->completed = merge_mstore->iter_component_completed[i];
-            comp[i]->cached      = merge_mstore->iter_component_cached[i];
+            comp[i]->completed   = immut[i]->completed = merge_mstore->iter[i].component_completed;
+            comp[i]->cached      = merge_mstore->iter[i].component_cached;
 
-            immut[i]->curr_idx   = merge_mstore->iter_immut_curr_idx[i];
-            immut[i]->cached_idx = merge_mstore->iter_immut_cached_idx[i];
-            immut[i]->next_idx   = merge_mstore->iter_immut_next_idx[i];
+            immut[i]->curr_idx   = merge_mstore->iter[i].immut_curr_idx;
+            immut[i]->cached_idx = merge_mstore->iter[i].immut_cached_idx;
+            immut[i]->next_idx   = merge_mstore->iter[i].immut_next_idx;
 
             if(immut[i]->curr_c2b)
                 put_c2b(immut[i]->curr_c2b);
@@ -2245,12 +2245,12 @@ static int castle_da_iterators_create(struct castle_da_merge *merge)
             immut[i]->next_c2b = NULL;
 
             /* Restore curr_c2b */
-            if(!EXT_POS_INVAL(merge_mstore->iter_immut_curr_c2b_cep[i]))
+            if(!EXT_POS_INVAL(merge_mstore->iter[i].immut_curr_c2b_cep))
             {
                 uint16_t node_size;
                 c_ext_pos_t cep;
 
-                cep                = merge_mstore->iter_immut_curr_c2b_cep[i];
+                cep                = merge_mstore->iter[i].immut_curr_c2b_cep;
                 castle_da_merge_node_size_get(merge, 0 /* always at leaf node? */, &node_size);
                 immut[i]->curr_c2b = castle_cache_block_get(cep, node_size);
                 BUG_ON(!immut[i]->curr_c2b);
@@ -2281,13 +2281,13 @@ static int castle_da_iterators_create(struct castle_da_merge *merge)
                 BUG_ON(!immut[i]->completed);
 
             /* Restore next_c2b */
-            if(!EXT_POS_INVAL(merge_mstore->iter_immut_next_c2b_cep[i]))
+            if(!EXT_POS_INVAL(merge_mstore->iter[i].immut_next_c2b_cep))
             {
                 uint16_t node_size;
                 c_ext_pos_t cep;
                 struct castle_btree_node *node;
 
-                cep                = merge_mstore->iter_immut_next_c2b_cep[i];
+                cep                = merge_mstore->iter[i].immut_next_c2b_cep;
                 castle_da_merge_node_size_get(merge, 0 /* always at leaf node? */, &node_size);
                 immut[i]->next_c2b = castle_cache_block_get(cep, node_size);
                 BUG_ON(!immut[i]->next_c2b);
@@ -4723,26 +4723,26 @@ static void castle_da_merge_marshall(struct castle_dmserlist_entry *merge_mstore
            on deserialisation. If the following BUGs, then the completed flags can have different
            states at serialisation boundary, which means we have to handle both seperately. */
         BUG_ON(immut[i]->completed != comp[i]->completed);
-        merge_mstore->iter_component_completed[i]         = comp[i]->completed;
-        merge_mstore->iter_component_cached[i]            = comp[i]->cached;
-        merge_mstore->iter_immut_curr_idx[i]              = immut[i]->curr_idx;
-        merge_mstore->iter_immut_cached_idx[i]            = immut[i]->cached_idx;
-        merge_mstore->iter_immut_next_idx[i]              = immut[i]->next_idx;
+        merge_mstore->iter[i].component_completed         = comp[i]->completed;
+        merge_mstore->iter[i].component_cached            = comp[i]->cached;
+        merge_mstore->iter[i].immut_curr_idx              = immut[i]->curr_idx;
+        merge_mstore->iter[i].immut_cached_idx            = immut[i]->cached_idx;
+        merge_mstore->iter[i].immut_next_idx              = immut[i]->next_idx;
 
         if(immut[i]->curr_c2b)
-            merge_mstore->iter_immut_curr_c2b_cep[i] = immut[i]->curr_c2b->cep;
+            merge_mstore->iter[i].immut_curr_c2b_cep = immut[i]->curr_c2b->cep;
         else
         {
             /* the only known valid situation in which an immutable iterator may not have curr_c2b
                is when it is completed. */
             BUG_ON(!comp[i]->completed);
-            merge_mstore->iter_immut_curr_c2b_cep[i] = INVAL_EXT_POS;
+            merge_mstore->iter[i].immut_curr_c2b_cep = INVAL_EXT_POS;
         }
 
         if(immut[i]->next_c2b)
-            merge_mstore->iter_immut_next_c2b_cep[i] = immut[i]->next_c2b->cep;
+            merge_mstore->iter[i].immut_next_c2b_cep = immut[i]->next_c2b->cep;
         else
-            merge_mstore->iter_immut_next_c2b_cep[i] = INVAL_EXT_POS;
+            merge_mstore->iter[i].immut_next_c2b_cep = INVAL_EXT_POS;
 
 #ifdef DEBUG_MERGE_SERDES
         if(comp[i]->cached)
@@ -4805,27 +4805,27 @@ update_output_tree_state:
         /* if the above ever BUGs, then an assumption about how to deserialise - specifically what
            entries should be dropped - is broken! */
 
-        merge_mstore->next_idx[i]            = merge->levels[i].next_idx;
-        merge_mstore->valid_end_idx[i]       = merge->levels[i].valid_end_idx;
-        merge_mstore->valid_version[i]       = merge->levels[i].valid_version;
+        merge_mstore->levels[i].next_idx            = merge->levels[i].next_idx;
+        merge_mstore->levels[i].valid_end_idx       = merge->levels[i].valid_end_idx;
+        merge_mstore->levels[i].valid_version       = merge->levels[i].valid_version;
 
-        merge_mstore->node_c2b_cep[i]        = INVAL_EXT_POS;
-        merge_mstore->node_used[i]           = 0;
+        merge_mstore->levels[i].node_c2b_cep        = INVAL_EXT_POS;
+        merge_mstore->levels[i].node_used           = 0;
 
         if(merge->levels[i].node_c2b)
         {
             struct castle_btree_node *node;
 
             BUG_ON(EXT_POS_INVAL(merge->levels[i].node_c2b->cep));
-            merge_mstore->node_c2b_cep[i] = merge->levels[i].node_c2b->cep;
+            merge_mstore->levels[i].node_c2b_cep = merge->levels[i].node_c2b->cep;
 
             node=c2b_bnode(merge->levels[i].node_c2b);
             debug("%s::merge %p (da %d, level %d) sanity check node_c2b[%d] ("
                     cep_fmt_str")\n", __FUNCTION__, merge, merge->da->id, merge->level, i,
-                    cep2str(merge_mstore->node_c2b_cep[i]));
+                    cep2str(merge_mstore->levels[i].node_c2b_cep));
             BUG_ON(!node);
             BUG_ON(node->magic != BTREE_NODE_MAGIC);
-            merge_mstore->node_used[i] = node->used; /* to know which entries to drop at DES time */
+            merge_mstore->levels[i].node_used = node->used; /* to know which entries to drop at DES time */
 
             debug("%s::level[%d] for merge %p (da %d level %d) node size %d, node isleaf %d\n",
                     __FUNCTION__, i, merge, merge->da->id, merge->level, node->size, node->is_leaf);
@@ -4965,48 +4965,48 @@ static void castle_da_merge_deserialise(struct castle_da_merge *merge,
         merge->levels[i].node_c2b      = NULL;
         merge->levels[i].last_key      = NULL;
 
-        merge->levels[i].next_idx      = merge_mstore->next_idx[i];
-        merge->levels[i].valid_end_idx = merge_mstore->valid_end_idx[i];
-        merge->levels[i].valid_version = merge_mstore->valid_version[i];
+        merge->levels[i].next_idx      = merge_mstore->levels[i].next_idx;
+        merge->levels[i].valid_end_idx = merge_mstore->levels[i].valid_end_idx;
+        merge->levels[i].valid_version = merge_mstore->levels[i].valid_version;
 
         /* Recover each btree level's node_c2b and last_key */
-        if(!EXT_POS_INVAL(merge_mstore->node_c2b_cep[i]))
+        if(!EXT_POS_INVAL(merge_mstore->levels[i].node_c2b_cep))
         {
             debug("%s::sanity check for merge %p (da %d level %d) node_c2b[%d] ("cep_fmt_str")\n",
                     __FUNCTION__, merge, da->id, level,
-                    i, cep2str(merge_mstore->node_c2b_cep[i]) );
+                    i, cep2str(merge_mstore->levels[i].node_c2b_cep) );
 
             merge->levels[i].node_c2b =
-                castle_da_merge_des_out_tree_c2b_write_fetch(merge, merge_mstore->node_c2b_cep[i], i);
+                castle_da_merge_des_out_tree_c2b_write_fetch(merge, merge_mstore->levels[i].node_c2b_cep, i);
             BUG_ON(!merge->levels[i].node_c2b);
             /* sanity check on btree node */
             node = c2b_bnode(merge->levels[i].node_c2b);
             debug("%s::recovered level %d node at %p with magic %lx for merge %p (da %d level %d) from "
                     cep_fmt_str" \n",
-                    __FUNCTION__, i, node, node->magic, merge, da->id, level, cep2str(merge_mstore->node_c2b_cep[i]) );
+                    __FUNCTION__, i, node, node->magic, merge, da->id, level, cep2str(merge_mstore->levels[i].node_c2b_cep) );
             BUG_ON(!node);
             BUG_ON(node->magic != BTREE_NODE_MAGIC);
 
-            BUG_ON(merge_mstore->node_used[i] > (node->used) );
-            if(merge_mstore->next_idx[i] < (node->used))
+            BUG_ON(merge_mstore->levels[i].node_used > (node->used) );
+            if(merge_mstore->levels[i].next_idx < (node->used))
             {
                 int drop_start=0;
                 int drop_end=0;
                 debug("%s::for merge %p (da %d level %d) entries_drop on node_c2b[%d] "
                         "ser used = %d, current used = %d, valid_end_idx = %d, next_idx = %d, node size = %d\n",
                         __FUNCTION__, merge, da->id, level, i,
-                        merge_mstore->node_used[i],
+                        merge_mstore->levels[i].node_used,
                         node->used,
-                        merge_mstore->valid_end_idx[i],
-                        merge_mstore->next_idx[i],
+                        merge_mstore->levels[i].valid_end_idx,
+                        merge_mstore->levels[i].next_idx,
                         node->size);
 
                 /* if the following BUGs, then it seems possible that some node entries were dropped
                    after the serialisation point */
-                BUG_ON(node->used < merge_mstore->node_used[i]);
-                if(node->used != merge_mstore->node_used[i])
+                BUG_ON(node->used < merge_mstore->levels[i].node_used);
+                if(node->used != merge_mstore->levels[i].node_used)
                 {
-                    drop_start = merge_mstore->node_used[i];
+                    drop_start = merge_mstore->levels[i].node_used;
                     drop_end   = node->used - 1;
                     merge->out_btree->entries_drop(node, drop_start, drop_end);
                 }
@@ -6006,7 +6006,7 @@ static void castle_da_merge_serdes_out_tree_check(struct castle_dmserlist_entry 
 
     for(i=0; i<MAX_BTREE_DEPTH; i++)
     {
-        if(!EXT_POS_INVAL(merge_mstore->node_c2b_cep[i]))
+        if(!EXT_POS_INVAL(merge_mstore->levels[i].node_c2b_cep))
         {
             int node_size = 0;
             c2_block_t *node_c2b = NULL;
@@ -6019,7 +6019,7 @@ static void castle_da_merge_serdes_out_tree_check(struct castle_dmserlist_entry 
                 node_size = ((merge_mstore->internals_on_ssds) ? VLBA_SSD_RO_TREE_NODE_SIZE
                         : VLBA_HDD_RO_TREE_NODE_SIZE);
 
-            node_c2b = castle_cache_block_get(merge_mstore->node_c2b_cep[i], node_size);
+            node_c2b = castle_cache_block_get(merge_mstore->levels[i].node_c2b_cep, node_size);
             BUG_ON(!node_c2b);
             write_lock_c2b(node_c2b);
             if(!c2b_uptodate(node_c2b))
@@ -6031,12 +6031,12 @@ static void castle_da_merge_serdes_out_tree_check(struct castle_dmserlist_entry 
             debug("%s::recovered node at %p with magic %lx for merge on "
                     "da %d level %d from"cep_fmt_str", btree level %d.\n",
                     __FUNCTION__, node, node->magic, da->id, level,
-                    cep2str(merge_mstore->node_c2b_cep[i]), i);
+                    cep2str(merge_mstore->levels[i].node_c2b_cep), i);
             if(node->magic != BTREE_NODE_MAGIC)
             {
                 castle_printk(LOG_ERROR, "%s::failed to recover node at "cep_fmt_str
                         "; found weird magic=%lx.\n",
-                        __FUNCTION__, cep2str(merge_mstore->node_c2b_cep[i]), node->magic);
+                        __FUNCTION__, cep2str(merge_mstore->levels[i].node_c2b_cep), node->magic);
                 BUG();
             }
 
