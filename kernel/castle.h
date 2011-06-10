@@ -780,22 +780,37 @@ struct castle_clist_entry {
     /*        512 */
 } PACKED;
 
+
+
+/** DA merge SERDES input tree iter on-disk structure.
+ */
+struct castle_intree_merge_state {
+    /* align:   8 */
+    /* offset:  0 */ tree_seq_t          seq;
+    /*          4 */
+                     struct {
+               /*   0 */ int32_t         component_completed;
+               /*   4 */ int32_t         component_cached;
+               /*   8 */ int32_t         immut_curr_idx;
+               /*  12 */ int32_t         immut_cached_idx;
+               /*  16 */ int32_t         immut_next_idx;
+               /*  20 */ c_ext_pos_t     immut_curr_c2b_cep;
+               /*  36 */ c_ext_pos_t     immut_next_c2b_cep;
+               /*  52 */
+                     } iter PACKED; /* 52 * 1 = 52 */
+
+    /*         56 */
+} PACKED;
+
 /** DA merge SERDES on-disk structure.
  *
  *  @note Assumes 2 input trees, both c_immut_iter_t, and max of 10 DA levels
  */
 struct castle_dmserlist_entry {
+    // TODO@tr recalculate all entry offsets!
     /* align:   8 */
     /* offset:  0 */ c_da_t                      da_id;
     /*          4 */ int32_t                     level;
-    /* On in_trees... each in_tree can identify which DA and level it belongs to, so it is up to
-       the trees to find their DA, not the DA to find it's trees. On any given level there can
-       be more than 2 trees (but no more than 4? don't quote me on that); the choice of which 2
-       trees to merge is dictated by their age (oldest trees first), which is implicit in their
-       location in the level ("left-most" first?). But just in case something goes wrong, lets
-       check the tree sequence numbers as well. */
-    /*          8 */ tree_seq_t                  in_tree_0;
-    /*         12 */ tree_seq_t                  in_tree_1;
     /*         16 */ struct castle_clist_entry   out_tree;
     /*        528 */ btree_t                     btree_type;
     /*        529 */ int32_t                     root_depth;
@@ -810,13 +825,14 @@ struct castle_dmserlist_entry {
     /*        573 */
 
                    /* sizing/alignment of the overall struct assumes MAX_BTREE_DEPTH=10 */
-                   struct {
-                       c_ext_pos_t                 node_c2b_cep;
-                       int32_t                     next_idx;
-                       int32_t                     node_used;
-                       int32_t                     valid_end_idx;
-                       c_ver_t                     valid_version;
-                   } levels[MAX_BTREE_DEPTH];
+                     struct {
+               /*   0 */ c_ext_pos_t                 node_c2b_cep;
+               /*  16 */ int32_t                     next_idx;
+               /*  20 */ int32_t                     node_used;
+               /*  24 */ int32_t                     valid_end_idx;
+               /*  28 */ c_ver_t                     valid_version;
+               /*  32 */
+                     } levels[MAX_BTREE_DEPTH]; /* 32 * 10 = 320 */
 
     /*        893 */ uint8_t                     pad_to_iters[3]; /* beyond here entries are
                                                                      frequently marshalled, so
@@ -827,16 +843,6 @@ struct castle_dmserlist_entry {
     /*        900 */ int64_t                     iter_non_empty_cnt;
     /*        908 */ uint64_t                    iter_src_items_completed;
     /*        916 */
-                          /* 2 immutable iterators */
-                    struct {
-                        int32_t                     component_completed;
-                        int32_t                     component_cached;
-                        int32_t                     immut_curr_idx;
-                        int32_t                     immut_cached_idx;
-                        int32_t                     immut_next_idx;
-                        c_ext_pos_t                 immut_curr_c2b_cep;
-                        c_ext_pos_t                 immut_next_c2b_cep;
-                    } iter[2];
 
     /*       1020 */ uint8_t                     pad_to_bloom_build_params[4];
     /*       1024 */
@@ -845,6 +851,7 @@ struct castle_dmserlist_entry {
     /*       1094 */ uint8_t                     have_bbp;
     /*       1095 */ uint8_t                     pad[441];
     /*       1536 */
+                     struct castle_intree_merge_state             in_trees[2];
 
 } PACKED;
 #define SIZEOF_CASTLE_DMSERLIST_ENTRY (1536)

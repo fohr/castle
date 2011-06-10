@@ -2229,12 +2229,12 @@ static int castle_da_iterators_create(struct castle_da_merge *merge)
             immut[i]=(c_immut_iter_t *)comp[i]->iterator;
             BUG_ON(!immut[i]);
 
-            comp[i]->completed   = immut[i]->completed = merge_mstore->iter[i].component_completed;
-            comp[i]->cached      = merge_mstore->iter[i].component_cached;
+            comp[i]->completed   = immut[i]->completed = merge_mstore->in_trees[i].iter.component_completed;
+            comp[i]->cached      = merge_mstore->in_trees[i].iter.component_cached;
 
-            immut[i]->curr_idx   = merge_mstore->iter[i].immut_curr_idx;
-            immut[i]->cached_idx = merge_mstore->iter[i].immut_cached_idx;
-            immut[i]->next_idx   = merge_mstore->iter[i].immut_next_idx;
+            immut[i]->curr_idx   = merge_mstore->in_trees[i].iter.immut_curr_idx;
+            immut[i]->cached_idx = merge_mstore->in_trees[i].iter.immut_cached_idx;
+            immut[i]->next_idx   = merge_mstore->in_trees[i].iter.immut_next_idx;
 
             if(immut[i]->curr_c2b)
                 put_c2b(immut[i]->curr_c2b);
@@ -2245,12 +2245,12 @@ static int castle_da_iterators_create(struct castle_da_merge *merge)
             immut[i]->next_c2b = NULL;
 
             /* Restore curr_c2b */
-            if(!EXT_POS_INVAL(merge_mstore->iter[i].immut_curr_c2b_cep))
+            if(!EXT_POS_INVAL(merge_mstore->in_trees[i].iter.immut_curr_c2b_cep))
             {
                 uint16_t node_size;
                 c_ext_pos_t cep;
 
-                cep                = merge_mstore->iter[i].immut_curr_c2b_cep;
+                cep                = merge_mstore->in_trees[i].iter.immut_curr_c2b_cep;
                 castle_da_merge_node_size_get(merge, 0 /* always at leaf node? */, &node_size);
                 immut[i]->curr_c2b = castle_cache_block_get(cep, node_size);
                 BUG_ON(!immut[i]->curr_c2b);
@@ -2281,13 +2281,13 @@ static int castle_da_iterators_create(struct castle_da_merge *merge)
                 BUG_ON(!immut[i]->completed);
 
             /* Restore next_c2b */
-            if(!EXT_POS_INVAL(merge_mstore->iter[i].immut_next_c2b_cep))
+            if(!EXT_POS_INVAL(merge_mstore->in_trees[i].iter.immut_next_c2b_cep))
             {
                 uint16_t node_size;
                 c_ext_pos_t cep;
                 struct castle_btree_node *node;
 
-                cep                = merge_mstore->iter[i].immut_next_c2b_cep;
+                cep                = merge_mstore->in_trees[i].iter.immut_next_c2b_cep;
                 castle_da_merge_node_size_get(merge, 0 /* always at leaf node? */, &node_size);
                 immut[i]->next_c2b = castle_cache_block_get(cep, node_size);
                 BUG_ON(!immut[i]->next_c2b);
@@ -4723,26 +4723,26 @@ static void castle_da_merge_marshall(struct castle_dmserlist_entry *merge_mstore
            on deserialisation. If the following BUGs, then the completed flags can have different
            states at serialisation boundary, which means we have to handle both seperately. */
         BUG_ON(immut[i]->completed != comp[i]->completed);
-        merge_mstore->iter[i].component_completed         = comp[i]->completed;
-        merge_mstore->iter[i].component_cached            = comp[i]->cached;
-        merge_mstore->iter[i].immut_curr_idx              = immut[i]->curr_idx;
-        merge_mstore->iter[i].immut_cached_idx            = immut[i]->cached_idx;
-        merge_mstore->iter[i].immut_next_idx              = immut[i]->next_idx;
+        merge_mstore->in_trees[i].iter.component_completed         = comp[i]->completed;
+        merge_mstore->in_trees[i].iter.component_cached            = comp[i]->cached;
+        merge_mstore->in_trees[i].iter.immut_curr_idx              = immut[i]->curr_idx;
+        merge_mstore->in_trees[i].iter.immut_cached_idx            = immut[i]->cached_idx;
+        merge_mstore->in_trees[i].iter.immut_next_idx              = immut[i]->next_idx;
 
         if(immut[i]->curr_c2b)
-            merge_mstore->iter[i].immut_curr_c2b_cep = immut[i]->curr_c2b->cep;
+            merge_mstore->in_trees[i].iter.immut_curr_c2b_cep = immut[i]->curr_c2b->cep;
         else
         {
             /* the only known valid situation in which an immutable iterator may not have curr_c2b
                is when it is completed. */
             BUG_ON(!comp[i]->completed);
-            merge_mstore->iter[i].immut_curr_c2b_cep = INVAL_EXT_POS;
+            merge_mstore->in_trees[i].iter.immut_curr_c2b_cep = INVAL_EXT_POS;
         }
 
         if(immut[i]->next_c2b)
-            merge_mstore->iter[i].immut_next_c2b_cep = immut[i]->next_c2b->cep;
+            merge_mstore->in_trees[i].iter.immut_next_c2b_cep = immut[i]->next_c2b->cep;
         else
-            merge_mstore->iter[i].immut_next_c2b_cep = INVAL_EXT_POS;
+            merge_mstore->in_trees[i].iter.immut_next_c2b_cep = INVAL_EXT_POS;
 
 #ifdef DEBUG_MERGE_SERDES
         if(comp[i]->cached)
@@ -4873,8 +4873,8 @@ update_output_tree_state:
     BUG_ON(immut[0]->tree->seq != merge->in_trees[0]->seq);
     BUG_ON(immut[1]->tree->seq != merge->in_trees[1]->seq);
 
-    merge_mstore->in_tree_0          = merge->in_trees[0]->seq;
-    merge_mstore->in_tree_1          = merge->in_trees[1]->seq;
+    merge_mstore->in_trees[0].seq     = merge->in_trees[0]->seq;
+    merge_mstore->in_trees[1].seq     = merge->in_trees[1]->seq;
 
     merge_mstore->leafs_on_ssds      = merge->leafs_on_ssds;
     merge_mstore->internals_on_ssds  = merge->internals_on_ssds;
@@ -5090,15 +5090,15 @@ static void castle_da_merge_des_check(struct castle_da_merge *merge, struct cast
     BUG_ON(merge_mstore->out_tree.level != level + 1);
     BUG_ON(merge_mstore->btree_type     != castle_btree_type_get(RO_VLBA_TREE_TYPE)->magic);
 
-    if( (da->levels[level].merge.serdes.mstore_entry->in_tree_0 != in_trees[0]->seq) ||
-            (da->levels[level].merge.serdes.mstore_entry->in_tree_1 != in_trees[1]->seq))
+    if( (da->levels[level].merge.serdes.mstore_entry->in_trees[0].seq != in_trees[0]->seq) ||
+            (da->levels[level].merge.serdes.mstore_entry->in_trees[1].seq != in_trees[1]->seq))
     {
         castle_printk(LOG_ERROR, "%s::merge des mismatched input trees on "
                 "da %d level %d (seqs %d and %d vs %d and %d); the merge completed after "
                 "checkpoint?\n",
                 __FUNCTION__, da->id, level,
-                da->levels[level].merge.serdes.mstore_entry->in_tree_0,
-                da->levels[level].merge.serdes.mstore_entry->in_tree_1,
+                da->levels[level].merge.serdes.mstore_entry->in_trees[0].seq,
+                da->levels[level].merge.serdes.mstore_entry->in_trees[1].seq,
                 in_trees[0]->seq, in_trees[1]->seq);
 
         BUG();
