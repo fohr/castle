@@ -6947,7 +6947,7 @@ static void castle_da_merge_writeback(struct castle_double_array *da, int level)
 
         for(i=0; i<2; i++)
         {
-            if(EXT_POS_INVAL(merge_mstore->iter_immut_curr_c2b_cep[i]))
+            if(EXT_POS_INVAL(merge_mstore->in_trees[i].iter.immut_curr_c2b_cep))
                 continue; /* iterator completed? */
 
             if(merge_mstore->leafs_on_ssds)
@@ -6955,7 +6955,7 @@ static void castle_da_merge_writeback(struct castle_double_array *da, int level)
             else
                 node_size = VLBA_HDD_RO_TREE_NODE_SIZE;
 
-            node_c2b=castle_cache_block_get(merge_mstore->iter_immut_curr_c2b_cep[i],
+            node_c2b=castle_cache_block_get(merge_mstore->in_trees[i].iter.immut_curr_c2b_cep,
                     node_size);
             BUG_ON(!node_c2b);
             write_lock_c2b(node_c2b);
@@ -6966,7 +6966,7 @@ static void castle_da_merge_writeback(struct castle_double_array *da, int level)
             BUG_ON(!node);
             BUG_ON(node->magic != BTREE_NODE_MAGIC);
 
-            idx=merge_mstore->iter_immut_cached_idx[i];
+            idx=merge_mstore->in_trees[i].iter.immut_cached_idx;
 
             btree->entry_get(node, idx, &k, &v_dummy, &cvt_dummy);
 
@@ -6974,7 +6974,7 @@ static void castle_da_merge_writeback(struct castle_double_array *da, int level)
             debug("%s::Recovered key (hash) 0x%llx of length %d on "
                     "node from immut[%d] ("cep_fmt_str").\n", __FUNCTION__,
                     murmur_hash_64(key->_key, key->length, 0),
-                    key->length, i, cep2str(merge_mstore->iter_immut_curr_c2b_cep[i]) );
+                    key->length, i, cep2str(merge_mstore->in_trees[i].iter.immut_curr_c2b_cep) );
             put_c2b(node_c2b);
         }
     }
