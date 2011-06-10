@@ -30,6 +30,9 @@ struct castle_sysfs_entry {
     void *private;
 };
 
+/* We assume that version can be printed in 10 chars (in hex, without 0x). That's true
+   for as long as 32 bit ints are used. */
+STATIC_BUG_ON(sizeof(c_ver_t) > 4);
 struct castle_sysfs_version {
     c_ver_t version;
     char name[10];
@@ -166,13 +169,6 @@ int castle_sysfs_version_add(c_ver_t version)
     if (test_bit(CASTLE_SYSFS_FINISHED, &castle_sysfs_flags))
         return 0;
 
-    /* We've got 10 chars for the name, 'ver-%d'. This means
-       version has to be less than 100000 */
-    if(version >= 100000)
-    {
-        castle_printk(LOG_INFO, "ERROR: version number > 100000. Not adding to sysfs.\n");
-        return -E2BIG;
-    }
     v = castle_malloc(sizeof(struct castle_sysfs_version), GFP_KERNEL);
     if(!v) return -ENOMEM;
 
