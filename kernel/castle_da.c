@@ -1744,11 +1744,6 @@ struct castle_da_merge {
     struct castle_double_array   *da;
     struct castle_btree_type     *out_btree;
     int                           level;
-    unsigned int                  deserialising; /**< flag indicating when we are deserising merge
-                                                      state from da->level[].merge.serdes, should
-                                                      never be non-0 outside of the first
-                                                      ever run of merge_init for a given
-                                                      da level */
     int                           nr_trees;     /**< num of component trees being merged */
     struct castle_component_tree **in_trees;    /**< array of component trees to be merged */
     struct castle_component_tree *out_tree;
@@ -1974,7 +1969,8 @@ static void castle_da_iterator_create(struct castle_da_merge *merge,
     if (tree->dynamic)
     {
         c_modlist_iter_t *iter = castle_malloc(sizeof(c_modlist_iter_t), GFP_KERNEL);
-        BUG_ON(merge->deserialising); /* we only serialise merges with immut in_trees */
+        BUG_ON(merge->da->levels[merge->level].merge.serdes.des); /* we should only serialise merges
+                                                                     with immut in_trees */
         if (!iter)
             return;
         iter->tree = tree;
@@ -2205,7 +2201,7 @@ static int castle_da_iterators_create(struct castle_da_merge *merge)
         goto err_out;
 
     /* Fast-forward merge iterator and immutable iterators states */
-    if(merge->deserialising)
+    if(merge->da->levels[merge->level].merge.serdes.des)
     {
         int i;
         struct component_iterator *comp[2], *curr_comp;
@@ -4374,7 +4370,6 @@ static struct castle_da_merge* castle_da_merge_init(struct castle_double_array *
     merge->da                   = da;
     merge->out_btree            = castle_btree_type_get(RO_VLBA_TREE_TYPE);
     merge->level                = level;
-    merge->deserialising        = 0;
     merge->nr_trees             = nr_trees;
     merge->in_trees             = in_trees;
     merge->out_tree             = NULL;
@@ -4404,12 +4399,6 @@ static struct castle_da_merge* castle_da_merge_init(struct castle_double_array *
         debug("%s::found serialised merge in da %d level %d, attempting des\n",
                 __FUNCTION__, da->id, level);
         castle_da_merge_des_check(merge, da, level, nr_trees, in_trees);
-        /* by this point, merge->deserialising flag is set, but we also maintain the
-           da->levels[level].merge.serdes.des flag for checkpoint's sake.
-           TODO@tr get rid of merge->deserialising; use only da->levels[level].merge.serdes.des
-                   so we never get any inconsistency/confusion... at the moment I think the only
-                   place it's used is in the iterator recovery */
-
         castle_da_merge_deserialise(merge, da, level);
         merge->out_tree = da->levels[level].merge.serdes.out_tree;
     }
@@ -4464,7 +4453,7 @@ static struct castle_da_merge* castle_da_merge_init(struct castle_double_array *
 
     /* Iterators */
     ret = castle_da_iterators_create(merge); /* built-in handling of deserialisation, triggered by
-                                                merge->deserialising. */
+                                                da->levels[].merge.serdes.des flag. */
     if(ret)
         goto error_out;
 
@@ -4481,7 +4470,6 @@ static struct castle_da_merge* castle_da_merge_init(struct castle_double_array *
         da->levels[level].merge.serdes.merge_completed=0;
 #endif
         da->levels[level].merge.serdes.des=0;
-        merge->deserialising=0;
         castle_printk(LOG_INIT, "Resuming merge on da %d level %d.\n", da->id, level);
     }
     return merge;
@@ -5065,7 +5053,6 @@ static void castle_da_merge_deserialise(struct castle_da_merge *merge,
 /**
  * Sanity checks on deserialising merge state.
  *
- * @param merge [out] deserialising flag set to 1 if serdes sanity checks passed
  * @param da [in] doubling array containing in-flight merge state
  * @param level [in] merge level in doubling array containing in-flight merge state
  * @param nr_trees [in] number of trees to be merged
@@ -5081,7 +5068,6 @@ static void castle_da_merge_des_check(struct castle_da_merge *merge, struct cast
 {
     struct castle_dmserlist_entry *merge_mstore;
     /* Sanity checks... */
-    BUG_ON(merge->deserialising); /* noone else should ever set this flag */
     if(nr_trees!=2)
     {
         castle_printk(LOG_ERROR, "%s::doesn't work with %d trees; not "
@@ -5121,7 +5107,6 @@ static void castle_da_merge_des_check(struct castle_da_merge *merge, struct cast
     /* Sane. Proceed. */
     debug("Interrupted merge da %d level %d passed initial SERDES logic sanity checks.\n",
             da->id, level);
-    merge->deserialising=1;
 
     return;
 }
