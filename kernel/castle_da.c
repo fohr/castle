@@ -5322,14 +5322,7 @@ static int castle_da_merge_do(struct castle_double_array *da,
 #ifdef DEBUG_MERGE_SERDES
     serdes_state = atomic_read(&da->levels[level].merge.serdes.valid);
     if(serdes_state > NULL_DAM_SERDES)
-    {
-        //TODO@tr figure out if there is still a point to this or not
-        /* using mutex here to synchronize merge thread against checkpoint thread - cannot allow
-           checkpoint to sanity check iterator state when we are about to drop the input ccts */
-        mutex_lock(&da->levels[level].merge.serdes.mutex);
         da->levels[level].merge.serdes.merge_completed=1;
-        mutex_unlock(&da->levels[level].merge.serdes.mutex);
-    }
 #endif
 
     /* Finish the last unit, packaging the output tree. */
