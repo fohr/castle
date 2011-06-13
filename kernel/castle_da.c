@@ -4218,7 +4218,7 @@ static int castle_da_total_merge_output_level_get(struct castle_double_array *da
 
     /* Compacted tree should always be placed on top of all the trees. It contains the oldest
      * data. */
-    if (i > out_tree_level)
+    if (i >= out_tree_level)
         out_tree_level = i + 1;
 
     /* Max level should never cross MAX_DA_LEVEL-1. */
