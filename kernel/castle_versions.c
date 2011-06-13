@@ -403,6 +403,13 @@ static int castle_version_needs_parent(struct castle_version *v, struct castle_v
     {
         c_ver_t ver_id = w->version;
 
+        /* If the child is created after merge started, assume that this version needs the
+         * key from parent.
+         * Note: Even if the version is deleted, it is possible that it's child might need it.
+         * We don't have much information to take any decision, so assume it needs the parent. */
+        if (ver_id >= state->last_version)
+            return 1;
+
         if (test_bit(ver_id, state->occupied))
             continue;
 
@@ -461,7 +468,7 @@ int castle_version_is_deletable(struct castle_version_delete_state *state, c_ver
         struct castle_version *del_v = list_entry(list, struct castle_version, del_list);
 
         /* dont look at versions created after merge started. */
-        if (del_v->version > state->last_version)
+        if (del_v->version >= state->last_version)
             continue;
 
         if (del_v->o_order < cur_v->o_order)

@@ -95,6 +95,10 @@ typedef struct castle_extent {
                                              anybody anymore. Safe to free it now.      */
     c_ext_type_t        ext_type;       /**< Type of extent.                            */
     c_da_t              da_id;          /**< DA that extent corresponds to.             */
+#ifdef CASTLE_PERF_DEBUG
+    atomic_t            pref_chunks_up2date;    /**< Chunks no prefetch required for.   */
+    atomic_t            pref_chunks_not_up2date;/**< Chunks prefetched.                 */
+#endif
 } c_ext_t;
 
 static struct list_head *castle_extents_hash = NULL;
@@ -1916,6 +1920,95 @@ void castle_extent_put(c_ext_id_t ext_id)
 
     write_unlock_irqrestore(&castle_extents_hash_lock, flags);
 }
+
+#ifdef CASTLE_PERF_DEBUG
+/**
+ * Increment the number of up2date/not up2date chunks prefetched (or not).
+ *
+ * @param   up2date If set, increment the number of chunks that did not need
+ *                  to be prefetched
+ *                  If unset, increment the number of chunks that needed to
+ *                  be prefetched
+ */
+void _castle_extent_efficiency_inc(c_ext_id_t ext_id, int up2date)
+{
+    c_ext_t *ext;
+
+    ext = castle_extent_get(ext_id);
+    BUG_ON(!ext);
+
+    if (up2date)
+        atomic_inc(&ext->pref_chunks_up2date);
+    else
+        atomic_inc(&ext->pref_chunks_not_up2date);
+
+    castle_extent_put(ext_id);
+}
+
+/**
+ * Increment the number of prefetched chunks for extent.
+ */
+void castle_extent_not_up2date_inc(c_ext_id_t ext_id)
+{
+    _castle_extent_efficiency_inc(ext_id, 0 /*up2date*/);
+}
+
+/**
+ * Increment the number of chunks that did not need to be prefetched for extent.
+ */
+void castle_extent_up2date_inc(c_ext_id_t ext_id)
+{
+    _castle_extent_efficiency_inc(ext_id, 1 /*up2date*/);
+}
+
+/**
+ * Return and reset the number of up2date/not up2date chunks prefetched (or not).
+ *
+ * @param   up2date If set, get/reset the number of chunks that did not need
+ *                  to be prefetched
+ *                  If unset, get/reset the number of chunks that needed to
+ *                  be prefetched
+ */
+int _castle_extent_efficiency_get_reset(c_ext_id_t ext_id, int up2date)
+{
+    c_ext_t *ext;
+    int amount;
+
+    ext = castle_extent_get(ext_id);
+    BUG_ON(!ext);
+
+    if (up2date)
+    {
+        amount = atomic_read(&ext->pref_chunks_up2date);
+        atomic_sub(amount, &ext->pref_chunks_up2date);
+    }
+    else
+    {
+        amount = atomic_read(&ext->pref_chunks_not_up2date);
+        atomic_sub(amount, &ext->pref_chunks_not_up2date);
+    }
+
+    castle_extent_put(ext_id);
+
+    return amount;
+}
+
+/**
+ * Get/reset the number of chunks that needed to be prefetched.
+ */
+int castle_extent_not_up2date_get_reset(c_ext_id_t ext_id)
+{
+    return _castle_extent_efficiency_get_reset(ext_id, 0 /*up2date*/);
+}
+
+/**
+ * Get/reset the number of chunks that did not need to be prefetched.
+ */
+int castle_extent_up2date_get_reset(c_ext_id_t ext_id)
+{
+    return _castle_extent_efficiency_get_reset(ext_id, 1 /*up2date*/);
+}
+#endif
 
 /**
  * Get and hold a reference to RB-tree dirtytree for extent ext_id.

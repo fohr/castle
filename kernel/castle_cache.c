@@ -3226,6 +3226,25 @@ static c2_block_t* c2_pref_block_chunk_get(c_ext_pos_t cep, c2_pref_window_t *wi
             softpin_c2b(c2b);
     }
 
+#ifdef CASTLE_PERF_DEBUG
+    if (!c2b_uptodate(c2b))
+    {
+        c2_page_t *c2p;
+        c_ext_pos_t cep_unused;
+        int up2date = 1;
+
+        c2b_for_each_c2p_start(c2p, cep_unused, c2b)
+        {
+            if (!c2p_uptodate(c2p))
+                up2date = 0;
+        }
+        c2b_for_each_c2p_end(c2p, cep_unused, c2b)
+
+        if (up2date)
+            set_c2b_uptodate(c2b);
+    }
+#endif
+
     pref_debug(debug, "ext_id==%lld chunk %lld/%u softpin_cnt=%d\n",
             cep.ext_id, CHUNK(cep.offset), castle_extent_size_get(cep.ext_id)-1,
             atomic_read(&c2b->softpin_cnt));
@@ -3970,6 +3989,9 @@ static void c2_pref_window_submit(c2_pref_window_t *window, c_ext_pos_t cep, int
             /* c2b already up-to-date, don't do anything. */
             pref_debug(debug, "ext_id==%lld chunk %lld/%u already up-to-date\n",
                     cep.ext_id, CHUNK(cep.offset), castle_extent_size_get(cep.ext_id)-1);
+#ifdef CASTLE_PERF_DEBUG
+            castle_extent_up2date_inc(cep.ext_id);
+#endif
             put_c2b(c2b);
         }
         else
@@ -3977,6 +3999,9 @@ static void c2_pref_window_submit(c2_pref_window_t *window, c_ext_pos_t cep, int
             /* Submit I/O for c2b. */
             pref_debug(debug, "ext_id==%lld chunk %lld/%u submitted for I/O\n",
                     cep.ext_id, CHUNK(cep.offset), castle_extent_size_get(cep.ext_id)-1);
+#ifdef CASTLE_PERF_DEBUG
+            castle_extent_not_up2date_inc(cep.ext_id);
+#endif
 
             write_lock_c2b(c2b);
             c2b->end_io = c2_pref_io_end;
