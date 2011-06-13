@@ -38,12 +38,14 @@ void        castle_version_live_stats_adjust        (c_ver_t version, cv_nonatom
 void        castle_version_consistent_stats_adjust  (c_ver_t version, cv_nonatomic_stats_t adjust);
 void        castle_version_private_stats_adjust     (c_ver_t version, cv_nonatomic_stats_t adjust,
                                                      cv_states_t *private);
+cv_nonatomic_stats_t castle_version_consistent_stats_get (c_ver_t version);
 cv_nonatomic_stats_t castle_version_live_stats_get  (c_ver_t version);
 int         castle_versions_zero_init               (void);
 c_ver_t     castle_version_new                      (int snap_or_clone,
                                                      c_ver_t parent,
                                                      c_da_t da,
                                                      c_byte_off_t size);
+int         castle_version_free                     (c_ver_t version);
 int         castle_version_tree_delete              (c_ver_t version);
 int         castle_version_delete                   (c_ver_t version);
 int         castle_version_deleted                  (c_ver_t version);
@@ -57,6 +59,6 @@ int         castle_versions_init                    (void);
 void        castle_versions_fini                    (void);
 
 c_ver_t     castle_version_max_get                  (void);
-int         castle_versions_writeback               (void);
+int         castle_versions_writeback               (int is_fini);
 
 #endif /*__CASTLE_VERSIONS_H__ */

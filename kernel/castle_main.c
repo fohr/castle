@@ -687,6 +687,8 @@ int castle_fs_init(void)
         return -EINVAL;
     }
 
+    castle_checkpoint_ratelimit_set(25 * 1024 * slave_count);
+
     if (!first)
     {
         if (nr_live_slaves == nr_fs_slaves - 1)
@@ -796,7 +798,7 @@ int castle_fs_init(void)
 
         if ((ret = castle_new_ext_freespace_init(&castle_global_tree.tree_ext_free,
                                                   castle_global_tree.da,
-                                                  EXT_T_BTREE_NODES,
+                                                  EXT_T_GLOBAL_BTREE,
                                                   castle_global_tree.tree_ext_free.ext_size, 1,
                                                   NULL, NULL)) < 0)
         {
@@ -807,7 +809,7 @@ int castle_fs_init(void)
 
         if ((ret = castle_new_ext_freespace_init(&castle_global_tree.data_ext_free,
                                                   castle_global_tree.da,
-                                                  EXT_T_MEDIUM_OBJECTS,
+                                                  EXT_T_BLOCK_DEV,
                                                   castle_global_tree.data_ext_free.ext_size, 1,
                                                   NULL, NULL)) < 0)
         {
@@ -1000,6 +1002,8 @@ static int castle_block_ordered_supp_test(struct block_device *bdev)
     set_buffer_dirty(bh);
     set_buffer_ordered(bh);
     ret = sync_dirty_buffer(bh);
+
+    clear_buffer_write_io_error(bh);
 
     bforget(bh);
 

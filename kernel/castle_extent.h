@@ -41,6 +41,12 @@ uint32_t            castle_extent_map_get                   (void*          ext_
                                                              c_chk_t        offset,
                                                              c_disk_chk_t  *chk_maps,
                                                              int            rw);
+#ifdef CASTLE_PERF_DEBUG
+void                castle_extent_not_up2date_inc           (c_ext_id_t         ext_id);
+void                castle_extent_up2date_inc               (c_ext_id_t         ext_id);
+int                 castle_extent_not_up2date_get_reset     (c_ext_id_t         ext_id);
+int                 castle_extent_up2date_get_reset         (c_ext_id_t         ext_id);
+#endif
 c_ext_dirtytree_t  *castle_extent_dirtytree_by_id_get       (c_ext_id_t         ext_id);
 void                castle_extent_dirtytree_get             (c_ext_dirtytree_t *dirtytree);
 void                castle_extent_dirtytree_put             (c_ext_dirtytree_t *dirtytree);

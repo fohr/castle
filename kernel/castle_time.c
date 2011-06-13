@@ -4,6 +4,7 @@
 #include "castle.h"
 #include "castle_time.h"
 #include "castle_debug.h"
+#include "castle_utils.h"
 
 /* Aggregates stats from multiple timelines, one for each checkpoint */
 typedef struct castle_checkpoint_stats {

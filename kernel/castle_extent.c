@@ -72,6 +72,7 @@ struct castle_extents_superblock castle_extents_global_sb;
 static DEFINE_MUTEX(castle_extents_mutex);
 
 static int castle_extents_exiting = 0;
+static int castle_extents_deletes_disabled = 0;
 
 typedef struct castle_extent {
     c_ext_id_t          ext_id;         /* Unique extent ID                             */
@@ -94,6 +95,10 @@ typedef struct castle_extent {
                                              anybody anymore. Safe to free it now.      */
     c_ext_type_t        ext_type;       /**< Type of extent.                            */
     c_da_t              da_id;          /**< DA that extent corresponds to.             */
+#ifdef CASTLE_PERF_DEBUG
+    atomic_t            pref_chunks_up2date;    /**< Chunks no prefetch required for.   */
+    atomic_t            pref_chunks_not_up2date;/**< Chunks prefetched.                 */
+#endif
 } c_ext_t;
 
 static struct list_head *castle_extents_hash = NULL;
@@ -236,9 +241,18 @@ err_out:
 /* Cleanup all extents from hash table. Called at finish. */
 static int castle_extent_hash_remove(c_ext_t *ext, void *unused)
 {
+    int ref_cnt;
+
     debug("Freeing extent #%llu\n", ext->ext_id);
 
-    BUG_ON(atomic_read(&ext->ref_cnt) != 1);
+    ref_cnt = atomic_read(&ext->ref_cnt);
+    BUG_ON(ref_cnt && ref_cnt != 1);
+
+    /* Reference count could be zero, if a deleted extent is being used till the cache module
+     * is finished. */
+    if (ref_cnt == 0)
+        castle_printk(LOG_WARN, "Delaying deletion of the extent: %llu\n", ext->ext_id);
+
     /* There shouldn't be any outstanding extents for deletion on exit. */
     BUG_ON(ext->deleted);
     __castle_extents_hash_remove(ext);
@@ -251,6 +265,8 @@ static int castle_extent_hash_remove(c_ext_t *ext, void *unused)
         castle_free(cs->sup_ext_maps);
     }
     __castle_extent_dirtytree_put(ext->dirtytree, 0 /*check_hash*/);
+    if(ext->work)
+        castle_free(ext->work);
     castle_free(ext);
 
     return 0;
@@ -599,11 +615,21 @@ int castle_extents_writeback(void)
     if (!extent_init_done)
         return 0;
 
-    /* Don't exit with out-standing dead extents. They are scheduled to get freed on
-     * system work queue. */
     if (castle_extents_exiting)
+    {
+        /* Don't let extents get deleted from this point on. These extents would get deleted in the
+         * next run of file system. We do check for dead extents on the module load time. */
+        /* Need lock here as we don't want to race with extent_put code which increments the
+         * dead_count. */
+        read_lock_irq(&castle_extents_hash_lock);
+        castle_extents_deletes_disabled = 1;
+        read_unlock_irq(&castle_extents_hash_lock);
+
+        /* Don't exit with out-standing dead extents. They are scheduled to get freed on
+         * system work queue. */
         while (atomic_read(&castle_extents_dead_count))
             msleep_interruptible(1000);
+    }
 
     castle_extents_mstore =
         castle_mstore_init(MSTORE_EXTENTS, sizeof(struct castle_elist_entry));
@@ -663,6 +689,10 @@ static int load_extent_from_mentry(struct castle_elist_entry *mstore_entry)
         ret = -ENOMEM;
         goto err1;
     }
+
+    /* ext_alloc() would set the alive bit to 1. Shouldn't do that during module reload.
+     * Instead, extent owner would mark it alive. */
+    ext->alive = 0;
 
     CONVERT_MENTRY_TO_EXTENT(ext, mstore_entry);
     if (EXT_ID_INVAL(ext->ext_id))
@@ -1439,6 +1469,7 @@ void castle_extent_lfs_victims_wakeup(void)
 void castle_extent_free(c_ext_id_t ext_id)
 {
     c_ext_t *ext = castle_extents_hash_get(ext_id);
+    struct work_struct *work;
     if(!ext)
     {
         castle_printk(LOG_ERROR, "%s::cannot find ext with id %d.\n", __FUNCTION__, ext_id);
@@ -1446,8 +1477,23 @@ void castle_extent_free(c_ext_id_t ext_id)
     }
 
     /* Allocate space for work structure, to be used to schedule castle_extent_free
-     * onto work queue. */
-    ext->work = castle_malloc(sizeof(struct work_struct), GFP_KERNEL);
+     * onto work queue.
+     * Only do it once (this function is often called just to put the reference,
+     * and is therefore reentrant. For example from castle_ct_put() large object
+     * scan).
+     */
+    if(!ext->work)
+    {
+        work = castle_malloc(sizeof(struct work_struct), GFP_KERNEL);
+        /* Assign ext->work pointer atomically. */
+        if(cmpxchg(&ext->work, NULL, work) != NULL)
+        {
+            castle_printk(LOG_WARN, "WARNING: Race in assigning ext->work ptr, ext=%p.\n", ext);
+            castle_free(work);
+            BUG_ON(!ext->work);
+        }
+    }
+
     if (!ext->work)
     {
         castle_printk(LOG_ERROR, "Failed to allocate memory for extent deletion structures -"
@@ -1844,7 +1890,10 @@ void castle_extent_put(c_ext_id_t ext_id)
     ext = __castle_extents_hash_get(ext_id);
 
     /* Dont do put on deleted extents. */
-    if (LIVE_EXTENT(ext) &&  atomic_dec_return(&ext->ref_cnt) == 0)
+    /* Don't delete extents if deletes are disabled. These extents would get deleted in the
+     * next run of file system. We do check for dead extents on the module load time. */
+    if (LIVE_EXTENT(ext) &&  atomic_dec_return(&ext->ref_cnt) == 0 &&
+        !castle_extents_deletes_disabled)
     {
         /* Increment the count of scheduled extents for deletion. Last checkpoint, conseqeuntly,
          * castle_exit waits for all outstanding dead extents to get destroyed. */
@@ -1871,6 +1920,95 @@ void castle_extent_put(c_ext_id_t ext_id)
 
     write_unlock_irqrestore(&castle_extents_hash_lock, flags);
 }
+
+#ifdef CASTLE_PERF_DEBUG
+/**
+ * Increment the number of up2date/not up2date chunks prefetched (or not).
+ *
+ * @param   up2date If set, increment the number of chunks that did not need
+ *                  to be prefetched
+ *                  If unset, increment the number of chunks that needed to
+ *                  be prefetched
+ */
+void _castle_extent_efficiency_inc(c_ext_id_t ext_id, int up2date)
+{
+    c_ext_t *ext;
+
+    ext = castle_extent_get(ext_id);
+    BUG_ON(!ext);
+
+    if (up2date)
+        atomic_inc(&ext->pref_chunks_up2date);
+    else
+        atomic_inc(&ext->pref_chunks_not_up2date);
+
+    castle_extent_put(ext_id);
+}
+
+/**
+ * Increment the number of prefetched chunks for extent.
+ */
+void castle_extent_not_up2date_inc(c_ext_id_t ext_id)
+{
+    _castle_extent_efficiency_inc(ext_id, 0 /*up2date*/);
+}
+
+/**
+ * Increment the number of chunks that did not need to be prefetched for extent.
+ */
+void castle_extent_up2date_inc(c_ext_id_t ext_id)
+{
+    _castle_extent_efficiency_inc(ext_id, 1 /*up2date*/);
+}
+
+/**
+ * Return and reset the number of up2date/not up2date chunks prefetched (or not).
+ *
+ * @param   up2date If set, get/reset the number of chunks that did not need
+ *                  to be prefetched
+ *                  If unset, get/reset the number of chunks that needed to
+ *                  be prefetched
+ */
+int _castle_extent_efficiency_get_reset(c_ext_id_t ext_id, int up2date)
+{
+    c_ext_t *ext;
+    int amount;
+
+    ext = castle_extent_get(ext_id);
+    BUG_ON(!ext);
+
+    if (up2date)
+    {
+        amount = atomic_read(&ext->pref_chunks_up2date);
+        atomic_sub(amount, &ext->pref_chunks_up2date);
+    }
+    else
+    {
+        amount = atomic_read(&ext->pref_chunks_not_up2date);
+        atomic_sub(amount, &ext->pref_chunks_not_up2date);
+    }
+
+    castle_extent_put(ext_id);
+
+    return amount;
+}
+
+/**
+ * Get/reset the number of chunks that needed to be prefetched.
+ */
+int castle_extent_not_up2date_get_reset(c_ext_id_t ext_id)
+{
+    return _castle_extent_efficiency_get_reset(ext_id, 0 /*up2date*/);
+}
+
+/**
+ * Get/reset the number of chunks that did not need to be prefetched.
+ */
+int castle_extent_up2date_get_reset(c_ext_id_t ext_id)
+{
+    return _castle_extent_efficiency_get_reset(ext_id, 1 /*up2date*/);
+}
+#endif
 
 /**
  * Get and hold a reference to RB-tree dirtytree for extent ext_id.
