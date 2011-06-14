@@ -44,6 +44,19 @@
 #define MAP_IDX(_ext, _i, _j)       (((_ext)->k_factor * _i) + _j)
 #define CASTLE_EXTENTS_HASH_SIZE    100
 
+#ifdef CASTLE_PERF_DEBUG
+#define CONVERT_MENTRY_TO_EXTENT(_ext, _me)                                 \
+        (_ext)->ext_id      = (_me)->ext_id;                                \
+        (_ext)->size        = (_me)->size;                                  \
+        (_ext)->type        = (_me)->type;                                  \
+        (_ext)->k_factor    = (_me)->k_factor;                              \
+        (_ext)->maps_cep    = (_me)->maps_cep;                              \
+        (_ext)->curr_rebuild_seqno = (_me)->curr_rebuild_seqno;             \
+        (_ext)->ext_type    = (_me)->ext_type;                              \
+        (_ext)->da_id       = (_me)->da_id;                                 \
+        (_ext)->dirtytree->ext_size = (_me)->size;                          \
+        (_ext)->dirtytree->ext_type = (_me)->ext_type;
+#else
 #define CONVERT_MENTRY_TO_EXTENT(_ext, _me)                                 \
         (_ext)->ext_id      = (_me)->ext_id;                                \
         (_ext)->size        = (_me)->size;                                  \
@@ -53,6 +66,7 @@
         (_ext)->curr_rebuild_seqno = (_me)->curr_rebuild_seqno;             \
         (_ext)->ext_type    = (_me)->ext_type;                              \
         (_ext)->da_id       = (_me)->da_id;
+#endif
 
 #define CONVERT_EXTENT_TO_MENTRY(_ext, _me)                                 \
         (_me)->ext_id       = (_ext)->ext_id;                               \
@@ -192,6 +206,10 @@ static c_ext_t * castle_ext_alloc(c_ext_id_t ext_id)
     ext->dirtytree->rb_root = RB_ROOT;
     INIT_LIST_HEAD(&ext->dirtytree->list);
     spin_lock_init(&ext->dirtytree->lock);
+#ifdef CASTLE_PERF_DEBUG
+    ext->dirtytree->ext_size= 0;
+    ext->dirtytree->ext_type= ext->ext_type;
+#endif
 
     debug("Allocated extent ext_id=%lld.\n", ext->ext_id);
 
@@ -411,6 +429,10 @@ static int castle_extent_micro_ext_create(void)
     micro_ext->ext_type = EXT_T_META_DATA;
     micro_ext->da_id    = 0;
     micro_ext->maps_cep = INVAL_EXT_POS;
+#ifdef CASTLE_PERF_DEBUG
+    micro_ext->dirtytree->ext_size  = micro_ext->size;
+    micro_ext->dirtytree->ext_type  = micro_ext->ext_type;
+#endif
 
     memset(micro_maps, 0, sizeof(castle_extents_sb->micro_maps));
     rcu_read_lock();
@@ -1289,6 +1311,10 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t     rda_type,
     ext->ext_type           = ext_type;
     ext->da_id              = da_id;
     ext->use_shadow_map     = 0;
+#ifdef CASTLE_PERF_DEBUG
+    ext->dirtytree->ext_size= ext->size;
+    ext->dirtytree->ext_type= ext->ext_type;
+#endif
 
     /* The rebuild sequence number that this extent starts off at */
     ext->curr_rebuild_seqno = atomic_read(&current_rebuild_seqno);
@@ -1786,6 +1812,10 @@ c_ext_id_t castle_extent_sup_ext_init(struct castle_slave *cs)
     ext->maps_cep   = sup_ext.maps_cep;
     ext->ext_type   = EXT_T_META_DATA;
     ext->da_id      = 0;
+#ifdef CASTLE_PERF_DEBUG
+    ext->dirtytree->ext_size    = ext->size;
+    ext->dirtytree->ext_type    = ext->ext_type;
+#endif
 
     cs->sup_ext_maps = castle_malloc(sizeof(c_disk_chk_t) * ext->size *
                                                     rda_spec->k_factor, GFP_KERNEL);

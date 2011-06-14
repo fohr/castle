@@ -18,6 +18,8 @@ typedef struct castle_extent_dirtytree {
 #ifdef CASTLE_PERF_DEBUG
     int                 nr_pages;   /**< Sum of c2b->nr_pages for c2bs in tree.
                                          Protected by lock.                         */
+    c_chk_cnt_t         ext_size;   /**< Size of extent when created (in chunks).   */
+    c_ext_type_t        ext_type;   /**< Extent type when created.                  */
 #endif
 } c_ext_dirtytree_t;
 
