@@ -244,6 +244,7 @@ static int castle_collection_writeback(struct castle_attachment *ca)
     debug("Collection add: %s,%u\n", ca->col.name, ca->version);
 
     mstore_entry.version = ca->version;
+    mstore_entry.flags   = ca->col.flags;
     strcpy(mstore_entry.name, ca->col.name);
 
     castle_mstore_entry_insert(castle_attachments_store, &mstore_entry);
@@ -317,7 +318,8 @@ int castle_attachments_read(void)
         castle_mstore_iterator_next(iterator, &mstore_entry, &key);
         strcpy(name, mstore_entry.name);
         debug("Collection Load: %s\n", name);
-        ca = castle_collection_init(mstore_entry.version, name);
+
+        ca = castle_collection_init(mstore_entry.version, mstore_entry.flags, name);
         if(!ca)
         {
             castle_printk(LOG_WARN, "Failed to create Collection (%s, %u)\n",
@@ -344,6 +346,7 @@ void castle_control_collection_attach(c_ver_t            version,
 {
     struct list_head            *lh;
     struct castle_attachment *ca;
+    uint32_t flags = 0;
 
     BUG_ON(strlen(name) > MAX_NAME_SIZE);
 
@@ -370,7 +373,13 @@ void castle_control_collection_attach(c_ver_t            version,
         return;
     }
 
-    ca = castle_collection_init(version, name);
+    /* Check if the read-only flag can be set. */
+    /* Note: If an attachment is marked as RD_ONLY it can't be changed back to writable,
+     * even when the version becomes writable (all children got deleted). */
+    if (!castle_version_is_leaf(version))
+        __set_bit(CASTLE_ATTACH_RDONLY, &flags);
+
+    ca = castle_collection_init(version, flags, name);
     if(!ca)
     {
         castle_printk(LOG_WARN, "Couldn't find collection for version: %u\n", version);

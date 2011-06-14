@@ -2047,7 +2047,7 @@ struct castle_attachment* castle_attachment_get(c_collection_id_t col_id, int rw
             continue;
         if(ca->col.id == col_id)
         {
-            if (rw == WRITE && !castle_version_is_leaf(ca->version))
+            if (rw == WRITE && castle_collection_is_rdonly(ca))
                 result = NULL;
             else
             {
@@ -2232,7 +2232,12 @@ error_out:
     return NULL;
 }
 
-struct castle_attachment* castle_collection_init(c_ver_t version, char *name)
+int castle_collection_is_rdonly(struct castle_attachment *ca)
+{
+    return test_bit(CASTLE_ATTACH_RDONLY, &ca->col.flags);
+}
+
+struct castle_attachment* castle_collection_init(c_ver_t version, uint32_t flags, char *name)
 {
     struct castle_attachment *collection = NULL;
     static c_collection_id_t collection_id = 0;
@@ -2260,6 +2265,7 @@ struct castle_attachment* castle_collection_init(c_ver_t version, char *name)
 
     collection->col.id   = collection_id++;
     collection->col.name = name;
+    collection->col.flags= flags;
     spin_lock(&castle_attachments.lock);
     list_add(&collection->list, &castle_attachments.attachments);
     spin_unlock(&castle_attachments.lock);

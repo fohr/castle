@@ -881,8 +881,9 @@ struct castle_vlist_entry {
 struct castle_alist_entry {
     /* align:   4 */
     /* offset:  0 */ c_ver_t     version;
-    /*          4 */ char        name[MAX_NAME_SIZE];
-    /*        132 */ uint8_t     _unused[124];
+    /*          4 */ uint32_t    flags;
+    /*          8 */ char        name[MAX_NAME_SIZE];
+    /*        136 */ uint8_t     _unused[120];
     /*        256 */
 } PACKED;
 
@@ -1357,6 +1358,7 @@ struct castle_attachment {
         } dev; /* Only valid for block devices */
         struct {
             c_collection_id_t id;
+            uint32_t          flags;
             char             *name;
         } col; /* Only valid for object collections */
     };
@@ -1394,14 +1396,18 @@ extern struct workqueue_struct *castle_wqs[2*MAX_BTREE_DEPTH+1];
 #define C_BLK_SIZE                     (1 << C_BLK_SHIFT)
 //#define disk_blk_to_offset(_cdb)     ((_cdb).block * C_BLK_SIZE)
 
+#define CASTLE_ATTACH_RDONLY           (0)
+
 struct castle_attachment*
                       castle_device_init           (c_ver_t version);
 void                  castle_device_free           (struct castle_attachment *cd);
 struct castle_attachment*
                       castle_device_find           (dev_t dev);
 
+int                   castle_collection_is_rdonly  (struct castle_attachment *ca);
+
 struct castle_attachment*
-                      castle_collection_init       (c_ver_t version, char *name);
+                      castle_collection_init       (c_ver_t version, uint32_t flags, char *name);
 
 struct castle_attachment *
                       castle_attachment_get        (c_collection_id_t collection, int rw);
