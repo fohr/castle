@@ -792,6 +792,12 @@ static int c2_dirtytree_remove(c2_block_t *c2b)
     }
     spin_unlock(&castle_cache_block_lru_lock);
 
+#ifdef CASTLE_PERF_DEBUG
+    /* Maintain the number of pages in this dirtytree. */
+    dirtytree->nr_pages -= c2b->nr_pages;
+    BUG_ON(dirtytree->nr_pages < 0);
+#endif
+
     /* Release lock and put reference, potentially freeing the dirtytree if
      * the extent has already been freed. */
     c2b->dirtytree = NULL;
@@ -872,6 +878,11 @@ static int c2_dirtytree_insert(c2_block_t *c2b)
     rb_link_node(&c2b->rb_dirtytree, parent, p);
     rb_insert_color(&c2b->rb_dirtytree, &dirtytree->rb_root);
     spin_unlock(&castle_cache_block_lru_lock);
+
+#ifdef CASTLE_PERF_DEBUG
+    /* Maintain the number of pages in this dirtytree. */
+    dirtytree->nr_pages += c2b->nr_pages;
+#endif
 
     /* Keep the reference until the c2b is clean but drop the lock. */
     c2b->dirtytree = dirtytree;

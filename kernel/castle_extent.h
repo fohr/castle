@@ -15,6 +15,10 @@ typedef struct castle_extent_dirtytree {
     atomic_t            ref_cnt;    /**< References to this dirtylist.              */
     struct rb_root      rb_root;    /**< RB-tree of dirty c2bs.                     */
     struct list_head    list;       /**< Position on castle_cache_extent_dirtylist. */
+#ifdef CASTLE_PERF_DEBUG
+    int                 nr_pages;   /**< Sum of c2b->nr_pages for c2bs in tree.
+                                         Protected by lock.                         */
+#endif
 } c_ext_dirtytree_t;
 
 void                castle_extent_transaction_start         (void);
