@@ -738,7 +738,8 @@ struct castle_vlba_tree_node {
                  _entry->val_len))
 
 /**
- * Returns maximum number of entries that can be stored in a node of the specified size.
+ * Returns maximum number of entries that can be stored in a node of the specified size
+ * (assuming that the entries are the biggest possible).
  *
  * @param node_size     Size of the node in pages.
  */
