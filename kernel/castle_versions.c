@@ -1382,9 +1382,6 @@ c_ver_t castle_version_new(int snap_or_clone,
                                   da_id,
                                   size);
 
-    /* Timestamp the creation. */
-    do_gettimeofday(&v->creation_timestamp);
-
     /* Return if we couldn't create the version correctly
        (possibly because we trying to clone attached version,
         or because someone asked for more than one snapshot to
