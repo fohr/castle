@@ -512,7 +512,9 @@ out:
 /**
  * Mark version for deletion during merges.
  *
- * @param version [in] version to be deleted
+ * @param version [in]  Version to be deleted
+ *
+ * NOTE: Can not be used to delete block device versions.
  *
  * @return non-zero if version couldn't be deleted
  */
@@ -539,14 +541,16 @@ int castle_version_delete(c_ver_t version)
         castle_vfree(event_vs);
         return -EINVAL;
     }
-
     da_id = v->da_id;
+
+    /* Ensure we're not trying to delete a block device version. */
+    BUG_ON(DA_INVAL(da_id));
 
     /* Sanity check flags. */
     BUG_ON(test_bit(CV_ATTACHED_BIT, &v->flags));
     BUG_ON(!test_bit(CV_INITED_BIT, &v->flags));
 
-    if (!DA_INVAL(da_id) && !castle_double_array_alive(da_id))
+    if (!castle_double_array_alive(da_id))
     {
         castle_printk(LOG_INFO, "Couldn't find DA for version %u, must be marked deletion.\n",
                                 version);
@@ -587,7 +591,6 @@ int castle_version_delete(c_ver_t version)
         BUG_ON(d->o_order == v->o_order);
     }
     list_add_tail(&v->del_list, pos);
-    castle_versions_count_adjust(v->da_id, CVH_LIVE, 0 /*add*/);
 
     castle_printk(LOG_USERINFO, "Marked version %d for deletion: 0x%lx\n", version, v->flags);
 
@@ -678,8 +681,8 @@ int castle_version_delete(c_ver_t version)
     if(event_vs)
         castle_vfree(event_vs);
 
-    if (!DA_INVAL(da_id))
-        castle_da_version_delete(da_id);
+    castle_versions_count_adjust(da_id, CVH_LIVE, 0 /*add*/);
+    castle_da_version_delete(da_id);
 
     /* raise event */
     castle_events_version_delete_version(version);
