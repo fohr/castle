@@ -4706,7 +4706,8 @@ static int castle_cache_flush(void *unused)
 #define MIN_FLUSH_SIZE  128
 #define MAX_FLUSH_SIZE  (4*1024)
 #define MIN_FLUSH_FREQ  5           /* Min flush rate: 5*128pgs/s = 2.5MB/s */
-    int exiting, flushing_rwcts, target_dirty_pgs, dirty_pgs, to_flush, last_flush, i;
+    int i, exiting, flushing_rwcts, reordered,
+        target_dirty_pgs, dirty_pgs, to_flush, last_flush;
     atomic_t in_flight = ATOMIC(0);
     c_ext_type_t ext_type;
 
@@ -4764,6 +4765,35 @@ static int castle_cache_flush(void *unused)
         /* Iterate over all dirty extents trying to find pages to flush. */
         flushing_rwcts = 0;
         i = atomic_read(&castle_cache_extent_dirtylist_size);
+
+        /* Sort the list of dirtytrees in descending size by bubbles. */
+        spin_lock_irq(&castle_cache_block_lru_lock);
+        do {
+            struct list_head *l, *t, *last;
+            c_ext_dirtytree_t *dirtytree;
+            int size, last_size = INT_MAX;
+
+            last = NULL;
+            reordered = 0;
+
+            list_for_each_safe(l, t, &castle_cache_extent_dirtylist)
+            {
+                dirtytree = list_entry(l, c_ext_dirtytree_t, list);
+                size = castle_extent_size_get(dirtytree->ext_id);
+
+                if (size > last_size)
+                {
+                    BUG_ON(last == NULL);
+                    list_move(l, last->prev);
+                    reordered = 1;
+                }
+
+                last_size = size;
+                last = l;
+            }
+        } while (reordered);
+        spin_unlock_irq(&castle_cache_block_lru_lock);
+
         while(true)
         {
             c_ext_dirtytree_t *dirtytree;
