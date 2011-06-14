@@ -4469,6 +4469,10 @@ void __castle_cache_extent_flush(c_ext_dirtytree_t *dirtytree,
     if (end_off == 0)
         end_off = -1;
 
+    /* If max_pgs is not specified, set a huge limit. */
+    if (max_pgs == 0)
+        max_pgs = INT_MAX;
+
     debug("Extent flush: (%llu) -> %llu\n", dirtytree->ext_id, nr_pages/BLKS_PER_CHK);
     do
     {
