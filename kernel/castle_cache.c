@@ -5983,6 +5983,8 @@ static int castle_periodic_checkpoint(void *unused)
             goto out;
         }
 
+        castle_extents_remap_writeback_setstate();
+
         CASTLE_TRANSACTION_BEGIN;
 
         fs_sb = castle_fs_superblocks_get();
@@ -6035,6 +6037,8 @@ static int castle_periodic_checkpoint(void *unused)
         }
 
         castle_checkpoint_version_inc();
+
+        castle_extents_remap_writeback();
 
         castle_printk(LOG_DEVEL, "***** Completed checkpoint of version: %u *****\n", version);
         castle_trace_cache(TRACE_END, TRACE_CACHE_CHECKPOINT_ID, 0);

@@ -96,8 +96,10 @@ typedef struct castle_extent {
     c_ext_pos_t         maps_cep;       /* Offset of chunk mapping in logical extent    */
     struct list_head    hash_list;
     struct list_head    rebuild_list;
+    struct list_head    rebuild_done_list;
     struct list_head    verify_list;    /* Used for testing.                            */
     uint32_t            curr_rebuild_seqno;
+    uint32_t            remap_seqno;
     spinlock_t          shadow_map_lock;
     c_disk_chk_t        *shadow_map;
     int                 use_shadow_map; /* Extent is currently being remapped           */
@@ -151,8 +153,11 @@ c_ext_t sup_ext = {
 uint8_t extent_init_done = 0;
 
 static struct list_head     rebuild_list;
+static struct list_head     rebuild_done_list;
+struct mutex                rebuild_done_list_lock;
 static struct list_head     verify_list; /* Used for testing. */
 static wait_queue_head_t    rebuild_wq;
+static wait_queue_head_t    rebuild_done_wq;
 struct task_struct   *rebuild_thread;
 static LIST_HEAD(castle_lfs_victim_list);
 
@@ -1318,6 +1323,8 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t     rda_type,
 
     /* The rebuild sequence number that this extent starts off at */
     ext->curr_rebuild_seqno = atomic_read(&current_rebuild_seqno);
+    ext->rebuild_done_list.next = NULL;
+    ext->remap_seqno = 0;
 
     /* Block aligned chunk maps for each extent. */
     if (ext->ext_id == META_EXT_ID)
@@ -2163,12 +2170,16 @@ static int castle_extent_rebuild_list_add(c_ext_t *ext, void *unused)
     c_ext_t *ref_ext;
     /*
      * We are not handling logical extents. The extent is not already at current_rebuild_seqno. The extent
-     * is not marked for deletion (it is a live extent)
+     * is not marked for deletion (it is a live extent). The extent is not already on the rebuild_done_list.
      */
+
+    mutex_lock(&rebuild_done_list_lock);
     if ((!SUPER_EXTENT(ext->ext_id) && !(ext->ext_id == MICRO_EXT_ID)) &&
         (ext->curr_rebuild_seqno < atomic_read(&current_rebuild_seqno)) &&
-        LIVE_EXTENT(ext))
+        LIVE_EXTENT(ext) &&
+        (ext->rebuild_done_list.next == NULL))
     {
+        mutex_unlock(&rebuild_done_list_lock);
         debug("Adding extent %llu to rebuild list for extent seqno %u, global seqno %u\n",
                ext->ext_id, ext->curr_rebuild_seqno, atomic_read(&current_rebuild_seqno));
         list_add_tail(&ext->rebuild_list, &rebuild_list);
@@ -2178,7 +2189,8 @@ static int castle_extent_rebuild_list_add(c_ext_t *ext, void *unused)
          */
         ref_ext = castle_extent_get(ext->ext_id);
         BUG_ON(!ref_ext);
-    }
+    } else
+        mutex_unlock(&rebuild_done_list_lock);
     return 0;
 }
 
@@ -2263,6 +2275,14 @@ static void castle_extents_remap_state_init(void)
 static void castle_extents_remap_state_fini(void)
 {
     int i;
+
+    /* There may be outstanding extent maps that need to be written out. */
+    debug("Rebuild writeback flushing out final extent maps.\n");
+    castle_extents_remap_writeback_setstate();
+    castle_extents_remap_writeback();
+    mutex_lock(&rebuild_done_list_lock);
+    BUG_ON(!list_empty(&rebuild_done_list));
+    mutex_unlock(&rebuild_done_list_lock);
 
     for (i=0; i<MAX_NR_SLAVES; i++)
     {
@@ -2519,6 +2539,10 @@ static struct castle_slave *slave_needs_remapping(uint32_t slave_id)
         return NULL;
 }
 
+static c_ext_id_t current_rebuild_extent = 0, rebuild_extent_last = 0;
+static int rebuild_extent_chunk = 0;
+static atomic_t current_rebuild_chunk = ATOMIC(0);
+
 /*
  * Scan an extent, remapping disk chunks where necessary.
  *
@@ -2537,6 +2561,17 @@ static int castle_extent_remap(c_ext_t *ext)
 
     debug("\nRemapping extent %llu size: %u, from seqno: %u to seqno: %u\n",
             ext->ext_id, ext->size, ext->curr_rebuild_seqno, rebuild_to_seqno);
+
+    mutex_lock(&rebuild_done_list_lock);
+    current_rebuild_extent = ext->ext_id;
+    atomic_set(&current_rebuild_chunk, 0);
+    /* Add this extent to the rebuild_done_list. Move it to the end of the list
+       if its already on it. */
+    if(ext->rebuild_done_list.next != NULL)
+        list_move_tail(&ext->rebuild_done_list, &rebuild_done_list);
+    else
+        list_add_tail(&ext->rebuild_done_list, &rebuild_done_list);
+    mutex_unlock(&rebuild_done_list_lock);
 
     ext->shadow_map = castle_vmalloc(ext->size*k_factor*sizeof(c_disk_chk_t));
     if (!ext->shadow_map)
@@ -2565,6 +2600,7 @@ static int castle_extent_remap(c_ext_t *ext)
      */
     ext->use_shadow_map = 1;
 
+    /* Keeps track of which chunk we are remapping. */
     /* Scan the shadow map, chunk by chunk, remapping slaves as necessary. */
     for (chunkno = 0; chunkno<ext->size; chunkno++)
     {
@@ -2599,6 +2635,12 @@ retry:
             {
                 /* Failed to allocate a disk chunk (slave out of space is most likely cause). */
                 castle_printk(LOG_WARN, "Rebuild could not allocate a disk chunk.\n");
+                mutex_lock(&rebuild_done_list_lock);
+                list_del(&ext->rebuild_done_list);
+                ext->rebuild_done_list.next = NULL;
+                current_rebuild_extent = 0;
+                atomic_set(&current_rebuild_chunk, 0);
+                mutex_unlock(&rebuild_done_list_lock);
                 spin_lock(&ext->shadow_map_lock);
                 ext->use_shadow_map = 0;
                 spin_unlock(&ext->shadow_map_lock);
@@ -2626,8 +2668,8 @@ retry:
          */
         if (remap_idx)
         {
-            c_ext_pos_t cep, map_cep, map_page_cep;
-            c2_block_t *c2b, *map_c2b, *reserve_c2b;
+            c_ext_pos_t cep;
+            c2_block_t *c2b;
 
             /*
              * If a chunk has been remapped, read it in (via the old map) and write it out (using
@@ -2672,62 +2714,91 @@ retry:
             if (ret == -EAGAIN)
                 goto retry;
             BUG_ON(ret);
-
-            /*
-             * Now write out the shadow map entry for this chunk.
-             * First, get the cep for the map for this chunk.
-             */
-            map_cep = castle_extent_map_cep_get(ext->maps_cep, chunkno, ext->k_factor);
-            /* Make the map_page_cep offset block aligned. */
-            memcpy(&map_page_cep, &map_cep, sizeof(c_ext_pos_t));
-            map_page_cep.offset = MASK_BLK_OFFSET(map_page_cep.offset);
-
-            /* Get the c2b for the page containing the map cep.
-             *
-             * In order to prevent a situation where we have no reserve c2b/c2ps
-             * for the flush thread, make a single page c2b reservation and
-             * release it once we've finished dirtying the map_c2b. */
-            reserve_c2b = castle_cache_page_block_reserve();
-            map_c2b = castle_cache_page_block_get(map_page_cep);
-
-            write_lock_c2b(map_c2b);
-
-            /* Shadow map must be page aligned. */
-            BUG_ON((unsigned long)ext->shadow_map % PAGE_SIZE);
-
-            /* Update the entire buffer with the page containing the shadow map for the chunk */
-            memcpy(c2b_buffer(map_c2b),
-                   (char *)(MASK_BLK_OFFSET((unsigned long)&ext->shadow_map[chunkno*k_factor])),
-                   C_BLK_SIZE);
-
-            dirty_c2b(map_c2b);
-            update_c2b(map_c2b);
-
-            write_unlock_c2b(map_c2b);
-            put_c2b(map_c2b);
-            castle_cache_page_block_unreserve(reserve_c2b);
         }
 
         /* Keep count of the chunks that have actually been remapped. */
         castle_extents_chunks_remapped += remap_idx;
 
+        atomic_inc(&current_rebuild_chunk);
+
         /*
          * Allow for shutdown in mid-extent (between chunks), because extents may be large and
          * take too long to remap.
          */
-        if (kthread_should_stop())
-        {
-            spin_lock(&ext->shadow_map_lock);
-            ext->use_shadow_map = 0;
-            spin_unlock(&ext->shadow_map_lock);
-            castle_vfree(ext->shadow_map);
-            return 1;
-        }
+        if (kthread_should_stop() && ext->size != atomic_read(&current_rebuild_chunk))
+            return -EINTR;
     }
 
-    /* This is the rebuild sequence number we have rebuilt the extent to. */
+    /*
+     * Save the rebuild sequence number we have rebuilt the extent to.
+     * This can't be saved in the extent until the remap writeback because if a checkpoint
+     * and crash occurs before the writeback, the extent will have the wrong sequence number.
+     */
     debug("Setting extent %llu to rebuild seqno %d\n", ext->ext_id, rebuild_to_seqno);
-    ext->curr_rebuild_seqno = rebuild_to_seqno;
+    ext->remap_seqno = rebuild_to_seqno;
+
+    return EXIT_SUCCESS;
+}
+
+/*
+ * Writeback a remapped extent.
+ *
+ * @param ext       The extent to writeback.
+ */
+void castle_extent_remap_writeback(c_ext_t *ext)
+{
+    c_ext_pos_t map_cep, map_page_cep;
+    c2_block_t *map_c2b, *reserve_c2b;
+    int chunkno;
+    uint32_t            k_factor = castle_extent_kfactor_get(ext->ext_id);
+
+    for (chunkno = 0; chunkno<ext->size; chunkno++)
+    {
+        /*
+        * Write back the shadow map entry for this chunk.
+        * First, get the cep for the map for this chunk.
+        */
+        map_cep = castle_extent_map_cep_get(ext->maps_cep, chunkno, ext->k_factor);
+        /* Make the map_page_cep offset block aligned. */
+        memcpy(&map_page_cep, &map_cep, sizeof(c_ext_pos_t));
+        map_page_cep.offset = MASK_BLK_OFFSET(map_page_cep.offset);
+
+        /* Get the c2b for the page containing the map cep.
+        *
+        * In order to prevent a situation where we have no reserve c2b/c2ps
+        * for the flush thread, make a single page c2b reservation and
+        * release it once we've finished dirtying the map_c2b. */
+        reserve_c2b = castle_cache_page_block_reserve();
+        map_c2b = castle_cache_page_block_get(map_page_cep);
+
+        write_lock_c2b(map_c2b);
+
+        /* Shadow map must be page aligned. */
+        BUG_ON((unsigned long)ext->shadow_map % PAGE_SIZE);
+
+        /* Update the entire buffer with the page containing the shadow map for the chunk */
+        memcpy(c2b_buffer(map_c2b),
+            (char *)(MASK_BLK_OFFSET((unsigned long)&ext->shadow_map[chunkno*k_factor])),
+            C_BLK_SIZE);
+
+        dirty_c2b(map_c2b);
+        update_c2b(map_c2b);
+
+        write_unlock_c2b(map_c2b);
+        put_c2b(map_c2b);
+        castle_cache_page_block_unreserve(reserve_c2b);
+    }
+
+    castle_cache_extent_flush(ext->ext_id, 0, 0, 0);
+
+    /* Now the shadow map has become the default map, we can stop redirecting write I/O. */
+    spin_lock(&ext->shadow_map_lock);
+    ext->use_shadow_map = 0;
+    spin_unlock(&ext->shadow_map_lock);
+    castle_vfree(ext->shadow_map);
+
+    /* It is now safe to update the extent with the rebuild sequence number. */
+    ext->curr_rebuild_seqno = ext->remap_seqno;
 
     /*
      * For superblock meta extents, update the superblock too, because that's what will get
@@ -2743,26 +2814,21 @@ retry:
         castle_extents_sb = castle_extents_super_block_get();
         switch (ext->ext_id) {
             case META_EXT_ID:
-                castle_extents_sb->meta_ext.curr_rebuild_seqno = rebuild_to_seqno;
+                castle_extents_sb->meta_ext.curr_rebuild_seqno = ext->remap_seqno;
                 break;
             case MSTORE_EXT_ID:
-                castle_extents_sb->mstore_ext[0].curr_rebuild_seqno = rebuild_to_seqno;
+                castle_extents_sb->mstore_ext[0].curr_rebuild_seqno = ext->remap_seqno;
                 break;
             case MSTORE_EXT_ID+1:
-                castle_extents_sb->mstore_ext[1].curr_rebuild_seqno = rebuild_to_seqno;
+                castle_extents_sb->mstore_ext[1].curr_rebuild_seqno = ext->remap_seqno;
                 break;
         }
         castle_extent_transaction_end();
     }
 
-    /* Now the shadow map has become the default map, we can stop redirecting write I/O. */
-    spin_lock(&ext->shadow_map_lock);
-    ext->use_shadow_map = 0;
-    spin_unlock(&ext->shadow_map_lock);
-    castle_vfree(ext->shadow_map);
-
-    return EXIT_SUCCESS;
+    castle_extent_put(ext->ext_id);
 }
+    
 
 /*
  * The main rebuild kthread function.
@@ -2789,6 +2855,8 @@ static int castle_extents_rebuild_run(void *unused)
 
     /* Initialise the rebuild list. */
     INIT_LIST_HEAD(&rebuild_list);
+    INIT_LIST_HEAD(&rebuild_done_list);
+    mutex_init(&rebuild_done_list_lock);
 
     debug("Starting rebuild thread ...\n");
     do {
@@ -2845,12 +2913,34 @@ restart:
                         castle_extents_rescan_required ||
                         rebuild_to_seqno != atomic_read(&current_rebuild_seqno))
                     exit_early = 1;
+                if (ret == -EINTR)
+                {
+                    /*
+                     * If the remap has been interrupted by a kthread_stop(), and it has
+                     * not yet remapped all the chunks, then this extent should no longer be
+                     * scheduled for map writeback. Take it off the rebuild_done_list and clean
+                     * up the shadow map before we exit.
+                     */
+                    mutex_lock(&rebuild_done_list_lock);
+                    list_del(&ext->rebuild_done_list);
+                    ext->rebuild_done_list.next = NULL;
+                    mutex_unlock(&rebuild_done_list_lock);
+                    spin_lock(&ext->shadow_map_lock);
+                    ext->use_shadow_map = 0;
+                    spin_unlock(&ext->shadow_map_lock);
+                    castle_vfree(ext->shadow_map);
+                }
             }
 
             FAULT(REBUILD_FAULT1);
 
-            /* Drop ref to extent. */
-            castle_extent_put(ext->ext_id);
+            /*
+             * If this extent is on the rebuild_done list we should not drop the ref here.
+             * Writeback will do that when it is finished.
+             * or has not yet been remapped, then drop the ref safely.
+             */
+            if ((exit_early) && (ext->rebuild_done_list.next == NULL))
+                castle_extent_put(ext->ext_id);
         }
 
         if (exit_early)
@@ -2863,7 +2953,7 @@ restart:
             else if (rebuild_to_seqno != atomic_read(&current_rebuild_seqno) ||
                      castle_extents_rescan_required)
             {
-                castle_printk(LOG_WARN, "Rebuild run restarting.\n");
+                castle_printk(LOG_WARN, "Rebuild run restarting - rescan required.\n");
                 goto restart;
             } else if (ret == -ENOSPC)
             {
@@ -2884,6 +2974,22 @@ restart:
                 continue;
             } else
                 BUG();
+        }
+
+        /* Now wait until all the extent maps have been written out (via the callback from
+           castle_periodic_checkpoint). */
+        wait_event_interruptible(rebuild_done_wq,
+                    ({int _ret;
+                     mutex_lock(&rebuild_done_list_lock);
+                     _ret = list_empty(&rebuild_done_list);
+                     mutex_unlock(&rebuild_done_list_lock);
+                     _ret;}) ||
+                    kthread_should_stop());
+
+        if (kthread_should_stop())
+        {
+            castle_printk(LOG_WARN, "Rebuild terminating before writeback.\n");
+            goto out;
         }
 
         if ((rebuild_to_seqno == atomic_read(&current_rebuild_seqno)) &&
@@ -2994,6 +3100,7 @@ int castle_extents_rebuild_init(void)
     atomic_set(&current_rebuild_seqno, 0);
 
     init_waitqueue_head(&rebuild_wq);
+    init_waitqueue_head(&rebuild_done_wq);
 
     rebuild_thread = kthread_run(castle_extents_rebuild_run, NULL, "castle-rebuild");
     if(!rebuild_thread)
@@ -3086,7 +3193,8 @@ static int castle_extent_scan_uuid(c_ext_t *ext, uint32_t uuid)
         {
             if (chunks[idx].slave_id == uuid)
             {
-                castle_printk(LOG_DEVEL, "castle_extent_scan_uuid found uuid 0x%x in extent %llu\n", uuid, ext->ext_id);
+                castle_printk(LOG_DEVEL, "castle_extent_scan_uuid found uuid 0x%x in extent %llu\n",
+                    uuid, ext->ext_id);
                 nr_refs++;
             }
         }
@@ -3150,6 +3258,57 @@ int castle_extents_slave_scan(uint32_t uuid)
     }
     else
         return 0;
+}
+
+/**
+ * Saves current rebuild state before checkpoint
+ * (this is the point up to which we will commit remap state.
+ */
+void castle_extents_remap_writeback_setstate(void)
+{
+    mutex_lock(&rebuild_done_list_lock);
+    rebuild_extent_last = current_rebuild_extent;
+    rebuild_extent_chunk = atomic_read(&current_rebuild_chunk);
+    mutex_unlock(&rebuild_done_list_lock);
+}
+
+/**
+ * 'Commits' current rebuild remap state so that extent maps match the remap allocations.
+ */
+void castle_extents_remap_writeback(void)
+{
+    struct list_head    *entry, *tmp;
+    c_ext_t             *ext;
+
+    /* Lock, because rebuild want to add extents to the tail while we commiting. */
+    mutex_lock(&rebuild_done_list_lock);
+    list_for_each_safe(entry, tmp, &rebuild_done_list)
+    {
+        ext = list_entry(entry, c_ext_t, rebuild_done_list);
+
+        /*
+         * We want all the extents in the list up to but not including the one we saved in the
+         * precheckpoint callback, but that one too - only if we finished remapping it.
+         */
+        if ((ext->ext_id != rebuild_extent_last) ||
+            ((ext->ext_id == rebuild_extent_last) && (ext->size == rebuild_extent_chunk)))
+        {
+            list_del(entry);
+            ext->rebuild_done_list.next = NULL;
+            castle_extent_remap_writeback(ext);
+        }
+        else
+            /* We're done for this pass. */
+            break;
+    }
+    /*
+     * If we're done, then kick the rebuild thread to update the slave state bitmaps,
+     * and go back to it's normal wait-for-a-rebuild-event state.
+     */
+    if (list_empty(&rebuild_done_list))
+        wake_up(&rebuild_done_wq);
+    mutex_unlock(&rebuild_done_list_lock);
+
 }
 
 signed int castle_extent_ref_cnt_get(c_ext_id_t ext_id)
