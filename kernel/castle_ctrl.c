@@ -684,9 +684,9 @@ void castle_control_slave_evacuate(uint32_t uuid, uint32_t force, int *ret)
 
     } else
     {
-        set_bit(CASTLE_SLAVE_EVACUATE_BIT, &slave->flags);
-        castle_printk(LOG_USERINFO, "Slave 0x%x [%s] has been marked as evacuating.\n",
-                      slave->uuid, slave->bdev_name);
+        castle_printk(LOG_ERROR, "Error: slave evacuation is not supported.\n");
+        *ret = -ENOSYS;
+        return;
     }
     castle_extents_rebuild_wake();
     *ret = EXIT_SUCCESS;
