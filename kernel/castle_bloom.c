@@ -29,7 +29,7 @@ MODULE_PARM_DESC(castle_bloom_use, "Use bloom filters");
 #define BLOOM_BITS_PER_ELEMENT        9
 #define BLOOM_MAX_BITS_PER_ELEMENT    16
 /* ensure CHUNK_SIZE % BLOCK_SIZE == 0 */
-#define BLOOM_CHUNK_SIZE              (1*1024*1024)
+#define BLOOM_CHUNK_SIZE              (1*1024*1024ULL)
 #define BLOOM_CHUNK_SIZE_PAGES        (BLOOM_CHUNK_SIZE / PAGE_SIZE)
 #define BLOOM_BLOCK_SIZE_HDD_PAGES    64
 #define BLOOM_BLOCK_SIZE_SSD_PAGES    2
