@@ -32,7 +32,8 @@ static struct list_head  *castle_versions_hash          = NULL;
 static          LIST_HEAD(castle_versions_init_list);
 static struct list_head  *castle_versions_counts_hash   = NULL;
 
-static c_ver_t            castle_versions_last   = INVAL_VERSION;
+/* castle_version_last should be same type as c_ver_t. */
+static atomic_t           castle_versions_last   = ATOMIC(INVAL_VERSION);
 static c_mstore_t        *castle_versions_mstore = NULL;
 
 static int castle_versions_deleted_sysfs_hide = 1;  /**< Hide deleted versions from sysfs?      */
@@ -325,13 +326,7 @@ static void castle_versions_init_add(struct castle_version *v)
 
 c_ver_t castle_version_max_get(void)
 {
-    int last;
-
-    read_lock_irq(&castle_versions_hash_lock);
-    last = castle_versions_last + 1;
-    read_unlock_irq(&castle_versions_hash_lock);
-
-    return last;
+    return atomic_read(&castle_versions_last) + 1;
 }
 
 static void castle_versions_drop(struct castle_version *p);
@@ -1306,14 +1301,14 @@ static struct castle_version* castle_version_new_create(int snap_or_clone,
        ctrl lock. Make sure its locked. */
     BUG_ON(!castle_ctrl_is_locked());
     /* We'll use last version + 1. */
-    version = castle_versions_last + 1;
+    version = atomic_read(&castle_versions_last) + 1;
 
     /* Only accept 50k versions. This guarantees that we won't run out of space in
        the mstore extent. */
     if(version >= 50000)
     {
         castle_printk(LOG_WARN, "Too many versions created: %d, rejecting an attempt "
-                                "to create a new one.\n", castle_versions_last);
+                                "to create a new one.\n", atomic_read(&castle_versions_last));
         return NULL;
     }
 
@@ -1357,8 +1352,8 @@ static struct castle_version* castle_version_new_create(int snap_or_clone,
     clear_bit(CV_LEAF_BIT, &p->flags);
 
     castle_events_version_create(version);
-    BUG_ON(version != castle_versions_last + 1);
-    castle_versions_last++;
+    BUG_ON(version != atomic_read(&castle_versions_last) + 1);
+    atomic_inc(&castle_versions_last);
 
     return v;
 }
@@ -1714,7 +1709,7 @@ int castle_versions_zero_init(void)
         castle_printk(LOG_ERROR, "Failed to create verion ZERO\n");
         return -1;
     }
-    castle_versions_last = v->version;
+    atomic_set(&castle_versions_last, v->version);
 
     return 0;
 }
@@ -1786,8 +1781,9 @@ int castle_versions_read(void)
             v->creation_timestamp.tv_usec = mstore_ventry.creation_time_us;
         }
 
-        if (VERSION_INVAL(castle_versions_last) || v->version > castle_versions_last)
-            castle_versions_last = v->version;
+        if (VERSION_INVAL(atomic_read(&castle_versions_last)) ||
+                        v->version > atomic_read(&castle_versions_last))
+            atomic_set(&castle_versions_last, v->version);
     }
     ret = castle_versions_process();
 
