@@ -33,6 +33,7 @@ static          LIST_HEAD(castle_versions_init_list);
 static struct list_head  *castle_versions_counts_hash   = NULL;
 
 /* castle_version_last should be same type as c_ver_t. */
+/* Note: we need this variable to be atomic, as max_get() can race with version_add(). */
 static atomic_t           castle_versions_last   = ATOMIC(INVAL_VERSION);
 static c_mstore_t        *castle_versions_mstore = NULL;
 
