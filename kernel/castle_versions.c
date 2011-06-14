@@ -1300,7 +1300,22 @@ static struct castle_version* castle_version_new_create(int snap_or_clone,
 {
     struct castle_version *v, *p;
     c_byte_off_t parent_size;
-    c_ver_t version;
+    c_ver_t version_chk;
+
+    /* Updates to some variables (especially castle_versions_last) are protected by the
+       ctrl lock. Make sure its locked. */
+    BUG_ON(!castle_ctrl_is_locked());
+    /* Record what the version was at the start of this function, it must not change. */
+    version_chk = castle_versions_last;
+
+    /* Only accept 50k versions. This guarantees that we won't run out of space in
+       the mstore extent. */
+    if(castle_versions_last >= 50000)
+    {
+        castle_printk(LOG_WARN, "Too many versions created: %d, rejecting an attempt "
+                                "to create a new one.\n", castle_versions_last);
+        return NULL;
+    }
 
     /* Read ftree root from the parent (also, make sure parent exists) */
     p = castle_versions_hash_get(parent);
@@ -1313,15 +1328,10 @@ static struct castle_version* castle_version_new_create(int snap_or_clone,
 
     parent_size = p->size;
 
-    /* Allocate a new version number. */
-    BUG_ON(VERSION_INVAL(castle_versions_last));
-    version = ++castle_versions_last;
-    BUG_ON(VERSION_INVAL(castle_versions_last));
-
     /* Try to add it to the hash. Use the da_id provided or the parent's */
     BUG_ON(!DA_INVAL(da_id) && !DA_INVAL(p->da_id));
     da_id = DA_INVAL(da_id) ? p->da_id : da_id;
-    v = castle_version_add(version, parent, da_id, size, CVH_LIVE);
+    v = castle_version_add(castle_versions_last, parent, da_id, size, CVH_LIVE);
     if (!v)
         return NULL;
 
@@ -1346,7 +1356,9 @@ static struct castle_version* castle_version_new_create(int snap_or_clone,
     set_bit(CV_LEAF_BIT, &v->flags);
     clear_bit(CV_LEAF_BIT, &p->flags);
 
-    castle_events_version_create(version);
+    castle_events_version_create(castle_versions_last);
+    BUG_ON(version_chk != castle_versions_last);
+    castle_versions_last++;
 
     return v;
 }
