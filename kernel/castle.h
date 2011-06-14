@@ -16,7 +16,7 @@
 #else
 #include <linux/semaphore.h>
 #endif
-
+#include <linux/reboot.h>
 
 #include "castle_public.h"
 
@@ -25,11 +25,14 @@
 #undef BUG_ON
 
 /* Enable additional sanity checking to debug merge serialisation/deserialisation */
-//#define DEBUG_MERGE_SERDES
+#define DEBUG_MERGE_SERDES
 extern int castle_merges_checkpoint; /* 0 or 1, default=enabled */
 
 static inline ATTRIB_NORET void bug_fn(char *file, unsigned long line)
 {
+    void castle_dmesg(void);
+
+    castle_dmesg();
     panic("Castle BUG, from: %s:%ld\n", file, line);
 #if 0
     /* Write the line number into R15, but push it onto the stack first. */
@@ -270,10 +273,14 @@ typedef enum {
 /* Type of data stored within extent. */
 typedef enum {
     EXT_T_META_DATA,
-    EXT_T_BTREE_NODES,
+    EXT_T_GLOBAL_BTREE,
+    EXT_T_BLOCK_DEV,
     EXT_T_INTERNAL_NODES,
     EXT_T_LEAF_NODES,
     EXT_T_MEDIUM_OBJECTS,
+    EXT_T_T0_INTERNAL_NODES,
+    EXT_T_T0_LEAF_NODES,
+    EXT_T_T0_MEDIUM_OBJECTS,
     EXT_T_LARGE_OBJECT,
     EXT_T_BLOOM_FILTER,
     EXT_T_INVALID,
@@ -281,10 +288,14 @@ typedef enum {
 
 static USED char *castle_ext_type_str[] = {
     "EXT_T_META_DATA",
-    "EXT_T_BTREE_NODES",
+    "EXT_T_GLOBAL_BTREE",
+    "EXT_T_BLOCK_DEV",
     "EXT_T_INTERNAL_NODES",
     "EXT_T_LEAF_NODES",
     "EXT_T_MEDIUM_OBJECTS",
+    "EXT_T_T0_INTERNAL_NODES",
+    "EXT_T_T0_LEAF_NODES",
+    "EXT_T_T0_MEDIUM_OBJECTS",
     "EXT_T_LARGE_OBJECT",
     "EXT_T_BLOOM_FILTER",
     "EXT_T_INVALID"
@@ -710,13 +721,13 @@ struct castle_component_tree {
     struct list_head    da_list;
     struct list_head    hash_list;
     struct list_head    large_objs;
-    struct mutex        lo_mutex;          /**< Protects Large Object List. When working with
-                                                the output CT of a serialisable merge, never
-                                                take this lock before serdes.mutex or there will
-                                                be deadlock against checkpoint thread. */
-    c_ext_free_t        internal_ext_free;
-    c_ext_free_t        tree_ext_free;
-    c_ext_free_t        data_ext_free;
+    struct mutex        lo_mutex;           /**< Protects Large Object List. When working with
+                                                 the output CT of a serialisable merge, never
+                                                 take this lock before serdes.mutex or there
+                                                 will be deadlock against checkpoint thread.    */
+    c_ext_free_t        internal_ext_free;  /**< Extent for internal btree nodes.               */
+    c_ext_free_t        tree_ext_free;      /**< Extent for leaf btree nodes.                   */
+    c_ext_free_t        data_ext_free;      /**< Medium-object data extent.                     */
     atomic64_t          large_ext_chk_cnt;
     uint8_t             bloom_exists;
     castle_bloom_t      bloom;
@@ -769,73 +780,80 @@ struct castle_clist_entry {
     /*        512 */
 } PACKED;
 
+
+
+/** DA merge SERDES input tree iter on-disk structure.
+ */
+struct castle_intree_merge_state {
+    /* align:  16 */
+    /* offset:  0 */ tree_seq_t                    seq;
+    /*          4 */
+                     struct {
+                         /*   0 */ int32_t         component_completed;
+                         /*   4 */ int32_t         component_cached;
+                         /*   8 */ int32_t         immut_curr_idx;
+                         /*  12 */ int32_t         immut_cached_idx;
+                         /*  16 */ int32_t         immut_next_idx;
+                         /*  20 */ c_ext_pos_t     immut_curr_c2b_cep;
+                         /*  36 */ c_ext_pos_t     immut_next_c2b_cep;
+                         /*  52 */
+                     } iter PACKED; /* 52 * 1 = 52 */
+    /*         56 */ uint8_t                       pad[8];
+    /*         64 */
+} PACKED;
+
 /** DA merge SERDES on-disk structure.
  *
  *  @note Assumes 2 input trees, both c_immut_iter_t, and max of 10 DA levels
  */
 struct castle_dmserlist_entry {
-    /* align:   8 */
-    /* offset:  0 */ c_da_t                      da_id;
-    /*          4 */ int32_t                     level;
-    /* On in_trees... each in_tree can identify which DA and level it belongs to, so it is up to
-       the trees to find their DA, not the DA to find it's trees. On any given level there can
-       be more than 2 trees (but no more than 4? don't quote me on that); the choice of which 2
-       trees to merge is dictated by their age (oldest trees first), which is implicit in their
-       location in the level ("left-most" first?). But just in case something goes wrong, lets
-       check the tree sequence numbers as well. */
-    /*          8 */ tree_seq_t                  in_tree_0;
-    /*         12 */ tree_seq_t                  in_tree_1;
-    /*         16 */ struct castle_clist_entry   out_tree;
-    /*        528 */ btree_t                     btree_type;
-    /*        529 */ int32_t                     root_depth;
-    /*        533 */ int8_t                      is_new_key;
-    /*        534 */ c_ext_pos_t                 last_leaf_node_cep;
-    /*        550 */ int8_t                      completing;
-    /*        551 */ uint64_t                    nr_entries;
-    /*        559 */ uint64_t                    large_chunks;
-    /*        567 */ int8_t                      leafs_on_ssds;
-    /*        568 */ int8_t                      internals_on_ssds;
-    /*        569 */ uint32_t                    skipped_count;
-    /*        573 */
+    /* align:  16 */
+    /*************************** misc stuff: marshalled once per merge ***************************/
+    /* offset:  0 */ c_da_t                           da_id;
+    /*          4 */ int32_t                          level;
+    /*          8 */ int8_t                           leafs_on_ssds;
+    /*          9 */ int8_t                           internals_on_ssds;
+    /*         10 */ uint8_t                          pad_to_outct[6];
+    /*         16 */
 
-                   /* next few entries assume MAX_BTREE_DEPTH=10 */
-                   /* TODO@tr change SoA to Aos */
-    /*        573 */ c_ext_pos_t                 node_c2b_cep[MAX_BTREE_DEPTH];
-    /*        733 */ int32_t                     next_idx[MAX_BTREE_DEPTH];
-    /*        773 */ int32_t                     node_used[MAX_BTREE_DEPTH]; /* uncertain if this
-                                                                                is needed... might
-                                                                                get rid of it */
-    /*        813 */ int32_t                     valid_end_idx[MAX_BTREE_DEPTH];
-    /*        853 */ c_ver_t                     valid_version[MAX_BTREE_DEPTH];
-    /*        893 */ uint8_t                     pad_to_iters[3]; /* beyond here entries are
-                                                                     frequently marshalled, so
-                                                                     alignment is important */
+    /**************** partially complete output ct: marshalled once per checkpoint ****************/
+                    /* sizing/alignment of the overall struct assumes MAX_BTREE_DEPTH=10 */
+    /*         16 */ uint64_t                         nr_entries;
+    /*         24 */ uint64_t                         large_chunks;
+    /*         32 */ struct castle_clist_entry        out_tree;
+    /*        544 */
+                     struct {
+                         /*   0 */ c_ext_pos_t                 node_c2b_cep;
+                         /*  16 */ int32_t                     next_idx;
+                         /*  20 */ int32_t                     node_used;
+                         /*  24 */ int32_t                     valid_end_idx;
+                         /*  28 */ c_ver_t                     valid_version;
+                         /*  32 */
+                     } levels[MAX_BTREE_DEPTH]; /* 32 * 10 = 320 */
+    /*        864 */
+    /*        864 */ c_ext_pos_t                      last_leaf_node_cep;
+    /*        880 */ struct castle_bbp_entry          out_tree_bbp;
+    /*        950 */ uint8_t                          have_bbp;
+    /*        951 */ btree_t                          btree_type;
+    /*        952 */ int32_t                          root_depth;
+    /*        956 */ int8_t                           completing;
+    /*        957 */ int8_t                           is_new_key;
+    /*        958 */ uint32_t                         skipped_count;
+    /*        962 */ uint8_t                          pad_to_iters[14]; /* beyond here entries are
+                                                                           frequently marshalled, so
+                                                                           alignment is important */
+    /*        976 */
 
-                    /* iterators, assuming we always have 2 immut_iters per merge */
-    /*        896 */ int32_t                     iter_err;
-    /*        900 */ int64_t                     iter_non_empty_cnt;
-    /*        908 */ uint64_t                    iter_src_items_completed;
-    /*        916 */
-                          /* 2 immutable iterators */
-                          /* TODO@tr change SoA to AoS */
-    /*        916 */ int32_t                     iter_component_completed[2];
-    /*        924 */ int32_t                     iter_component_cached[2];
-    /*        932 */ int32_t                     iter_immut_curr_idx[2];
-    /*        940 */ int32_t                     iter_immut_cached_idx[2];
-    /*        948 */ int32_t                     iter_immut_next_idx[2];
-    /*        956 */ c_ext_pos_t                 iter_immut_curr_c2b_cep[2];
-    /*        988 */ c_ext_pos_t                 iter_immut_next_c2b_cep[2];
-
-    /*       1020 */ uint8_t                     pad_to_bloom_build_params[4];
-    /*       1024 */
-
-    /*       1024 */ struct castle_bbp_entry     out_tree_bbp;
-    /*       1094 */ uint8_t                     have_bbp;
-    /*       1095 */ uint8_t                     pad[441];
-    /*       1536 */
+    /**************** input ct seq and iters: iters potentially marshalled often *****************/
+    /*        976 */ int32_t                          iter_err;
+    /*        980 */ int64_t                          iter_non_empty_cnt;
+    /*        988 */ uint64_t                         iter_src_items_completed;
+    /*        996 */ uint8_t                          pad_to_pertree_structs[12];
+    /*       1008 */ struct castle_intree_merge_state in_trees[2];
+    /*       1136 */
 
 } PACKED;
-#define SIZEOF_CASTLE_DMSERLIST_ENTRY (1536)
+#define SIZEOF_CASTLE_DMSERLIST_ENTRY (1136)
 
 /**
  * Ondisk Serialized structure for castle versions.
@@ -853,7 +871,9 @@ struct castle_vlist_entry {
     /*         48 */ uint64_t     tombstone_deletes;    /**< stats.tombstone_deletes            */
     /*         56 */ uint64_t     version_deletes;      /**< stats.version_deletes              */
     /*         64 */ uint64_t     key_replaces;         /**< stats.key_replaces                 */
-    /*         72 */ uint8_t      _unused[184];
+    /*         72 */ uint64_t     creation_time_s;      /**< seconds of the creation timestamp  */
+    /*         80 */ uint64_t     creation_time_us;     /**< useconds of the creation timestamp */
+    /*         88 */ uint8_t      _unused[168];
     /*        256 */
 } PACKED;
 
@@ -1312,12 +1332,13 @@ struct castle_slave {
     struct work_struct              work;
 };
 /* castle_slave flags bits */
-#define CASTLE_SLAVE_OOS_BIT        0 /* Slave is out-of-service */
-#define CASTLE_SLAVE_EVACUATE_BIT   1 /* Slave is being, or has been, evacuated */
-#define CASTLE_SLAVE_GHOST_BIT      2 /* Slave is missing or invalid (on reboot) */
-#define CASTLE_SLAVE_REMAPPED_BIT   3 /* Slave has been remapped */
-#define CASTLE_SLAVE_CLAIMING_BIT   4 /* Slave is not yet available for use (in castle_claim) */
-#define CASTLE_SLAVE_BDCLAIMED_BIT  5 /* Slave has been bd_claim'ed. */
+#define CASTLE_SLAVE_OOS_BIT             0 /* Slave is out-of-service */
+#define CASTLE_SLAVE_EVACUATE_BIT        1 /* Slave is being, or has been, evacuated */
+#define CASTLE_SLAVE_GHOST_BIT           2 /* Slave is missing or invalid (on reboot) */
+#define CASTLE_SLAVE_REMAPPED_BIT        3 /* Slave has been remapped */
+#define CASTLE_SLAVE_CLAIMING_BIT        4 /* Slave is not yet available for use (in castle_claim) */
+#define CASTLE_SLAVE_BDCLAIMED_BIT       5 /* Slave has been bd_claim'ed. */
+#define CASTLE_SLAVE_ORDERED_SUPP_BIT    6 /* Slave has been bd_claim'ed. */
 
 struct castle_slaves {
     struct kobject   kobj;
@@ -1489,12 +1510,12 @@ struct castle_object_get {
     int         first;
     c_val_tup_t cvt;
 
-    void      (*reply_start)     (struct castle_object_get *get,
+    int       (*reply_start)     (struct castle_object_get *get,
                                   int err,
                                   uint64_t data_length,
                                   void *buffer,
                                   uint32_t buffer_length);
-    void      (*reply_continue)  (struct castle_object_get *get,
+    int       (*reply_continue)  (struct castle_object_get *get,
                                   int err,
                                   void *buffer,
                                   uint32_t buffer_length,
@@ -1576,7 +1597,7 @@ int  castle_ctrl_is_locked          (void);
     if (castle_fault == _fault)                                 \
     {                                                           \
         castle_printk(LOG_ERROR, "User asked for fault\n");     \
-        BUG();                                                  \
+        emergency_restart();                                                  \
     }
 
 #define INJECT_ERR(_fault)          (castle_fault == _fault)
@@ -1620,6 +1641,7 @@ struct castle_merge_token {
 /* Low free space structure being used by each merge in DA. */
 struct castle_da_lfs_ct_t {
     uint8_t             space_reserved;     /**< Reserved space from low space handler  */
+    uint8_t             rwct;               /**< Whether allocating RWCT or not         */
     struct castle_double_array *da;         /**< Double-array */
     struct {
         c_chk_cnt_t     size;               /**< Size of the extent to be reserved      */
@@ -1754,6 +1776,7 @@ struct castle_double_array {
     atomic_t                    ongoing_merges;     /**< Number of ongoing merges.              */
     atomic_t                    ref_cnt;
     uint32_t                    attachment_cnt;
+    tree_seq_t                  compaction_ct_seq;  /**< Sequence ID to be used by compaction.  */
 
     /* Write IO wait queue members */
     struct castle_da_io_wait_queue {
@@ -1880,5 +1903,5 @@ typedef struct castle_version_stats_adjust {
 
 extern int castle_nice_value;
 
-extern int checkpoint_frequency;
+extern int castle_checkpoint_period;
 #endif /* __CASTLE_H__ */

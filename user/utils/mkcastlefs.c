@@ -47,7 +47,7 @@ void init_superblock(struct castle_slave_superblock_public *super, int is_ssd)
   super->uuid = get_random_uuid();
   super->used = 1; /* we are responsible for writing JUST the
                       slave's superblock */
-  super->flags = CASTLE_SLAVE_TARGET | CASTLE_SLAVE_NEWDEV | (is_ssd ? CASTLE_SLAVE_SSD : 0);
+  super->flags = CASTLE_SLAVE_NEWDEV | (is_ssd ? CASTLE_SLAVE_SSD : 0);
   super->size = -1;
   super->checksum = 0;
 }

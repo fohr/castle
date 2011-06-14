@@ -40,9 +40,11 @@ then
     sleep 2
 fi
 
-while ! blockdev --rmparts "$device" 2> /dev/null; do
+while let "$(</sys/fs/castle-fs/slaves/$uuid/rebuild_state) & 32"; do
     sleep 10
 done
+
+blockdev --rmparts "$device"
 
 # Make sure those don't come back yet
 dd if=/dev/zero of="$device" bs=512 count=64 status=noxfer >/dev/null

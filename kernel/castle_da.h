@@ -36,6 +36,7 @@ int  castle_double_array_start (void);
 int  castle_double_array_init  (void);
 void castle_double_array_fini  (void);
 
+int  castle_double_array_alive          (c_da_t da_id);
 int  castle_double_array_get            (c_da_t da_id);
 void castle_double_array_put            (c_da_t da_id);
 int  castle_double_array_destroy        (c_da_t da_id);

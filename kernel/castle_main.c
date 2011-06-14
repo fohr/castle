@@ -73,8 +73,8 @@ int                          castle_fs_exiting = 0;
 c_fault_t                    castle_fault = NO_FAULT;
 uint32_t                     castle_fault_arg = 0;
 
-module_param(checkpoint_frequency, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
-MODULE_PARM_DESC(checkpoint_frequency, "checkpoint_frequency,");
+module_param(castle_checkpoint_period, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
+MODULE_PARM_DESC(castle_checkpoint_period, "checkpoint_period,");
 
 static DECLARE_WAIT_QUEUE_HEAD(castle_detach_waitq);
 
@@ -687,6 +687,8 @@ int castle_fs_init(void)
         return -EINVAL;
     }
 
+    castle_checkpoint_ratelimit_set(25 * 1024 * slave_count);
+
     if (!first)
     {
         if (nr_live_slaves == nr_fs_slaves - 1)
@@ -796,7 +798,7 @@ int castle_fs_init(void)
 
         if ((ret = castle_new_ext_freespace_init(&castle_global_tree.tree_ext_free,
                                                   castle_global_tree.da,
-                                                  EXT_T_BTREE_NODES,
+                                                  EXT_T_GLOBAL_BTREE,
                                                   castle_global_tree.tree_ext_free.ext_size, 1,
                                                   NULL, NULL)) < 0)
         {
@@ -807,7 +809,7 @@ int castle_fs_init(void)
 
         if ((ret = castle_new_ext_freespace_init(&castle_global_tree.data_ext_free,
                                                   castle_global_tree.da,
-                                                  EXT_T_MEDIUM_OBJECTS,
+                                                  EXT_T_BLOCK_DEV,
                                                   castle_global_tree.data_ext_free.ext_size, 1,
                                                   NULL, NULL)) < 0)
         {
@@ -978,10 +980,34 @@ static int castle_block_read(struct block_device *bdev, sector_t sector, uint32_
         length = (size < block_size)?size:block_size;
         size  -= length;
         memcpy((buffer + (i * block_size)), bh->b_data, length);
+
         bforget(bh);
     }
 
     return 0;
+}
+
+/**
+ * Check whether a block device supports ordered writes. It does so by reading & writing
+ * (in ordered mode) the very first block on the device. WARNING: not thread/cache safe.
+ */
+static int castle_block_ordered_supp_test(struct block_device *bdev)
+{
+    struct buffer_head *bh;
+    int ret;
+
+    if (!(bh = __bread(bdev, 0, bdev->bd_block_size)))
+        return -EIO;
+
+    set_buffer_dirty(bh);
+    set_buffer_ordered(bh);
+    ret = sync_dirty_buffer(bh);
+
+    clear_buffer_write_io_error(bh);
+
+    bforget(bh);
+
+    return ret;
 }
 
 static void castle_slave_superblock_init(struct   castle_slave *cs,
@@ -1200,6 +1226,7 @@ int castle_slave_superblocks_writeback(struct castle_slave *cs, uint32_t version
     char       *buf;
     int         slot = version % 2;
     int         length = (2 * C_BLK_SIZE);
+    int         ret;
     struct castle_slave_superblock *cs_sb;
     struct castle_fs_superblock *fs_sb;
 
@@ -1231,15 +1258,18 @@ int castle_slave_superblocks_writeback(struct castle_slave *cs, uint32_t version
     memcpy(buf + C_BLK_SIZE, fs_sb, sizeof(struct castle_fs_superblock));
 
     dirty_c2b(c2b);
-    write_unlock_c2b(c2b);
-    put_c2b(c2b);
 
     debug("Free chunks: %u|%u|%u\n", cs_sb->freespace.free_chk_cnt,
            cs_sb->freespace.prod,
            cs_sb->freespace.cons);
 
-    if (castle_cache_extent_flush(cs->sup_ext, 0, length * 2))
+    ret = submit_c2b_sync_barrier(WRITE, c2b);
+    write_unlock_c2b(c2b);
+    put_c2b(c2b);
+
+    if(ret)
     {
+        castle_printk(LOG_ERROR, "Could not write superblocks out, for cs uuid=0x%x\n", cs->uuid);
         castle_slave_superblock_put(cs, 1);
         castle_fs_superblocks_put(fs_sb, 1);
         return -EIO;
@@ -1417,6 +1447,20 @@ struct castle_slave* castle_claim(uint32_t new_dev)
     }
     set_bit(CASTLE_SLAVE_BDCLAIMED_BIT, &cs->flags);
 
+    /* Check whether the block device supports ordered writes. */
+    err = castle_block_ordered_supp_test(bdev);
+    if (err)
+    {
+        castle_printk(LOG_WARN,
+                      "Block device %s dosen't support ordered writes. "
+                      "Crash consistency cannot be guaranteed.\n",
+                      __bdevname(dev, b));
+    }
+    else
+    {
+        set_bit(CASTLE_SLAVE_ORDERED_SUPP_BIT, &cs->flags);
+    }
+
     cs->sup_ext = castle_extent_sup_ext_init(cs);
     if (cs->sup_ext == INVAL_EXT_ID)
     {
@@ -1530,6 +1574,7 @@ void castle_release_device(struct castle_slave *cs)
 #else
         blkdev_put(cs->bdev, FMODE_READ|FMODE_WRITE);
 #endif
+        sysfs_remove_link(&cs->kobj, "dev");
         castle_printk(LOG_USERINFO, "Device 0x%x [%s] has been released.\n",
                       cs->uuid, cs->bdev_name);
     }
