@@ -4582,7 +4582,7 @@ next_c2b:
  *
  * @param ext_id    Extent to flush
  * @param start     Byte offset to flush from (ignored)
- * @param size      Bytes to flush from start
+ * @param size      Bytes to flush from start (0 to end of extent)
  * @param ratelimit Ratelimit in KB/s, 0 for unlimited
  */
 void castle_cache_extent_flush(c_ext_id_t ext_id,
