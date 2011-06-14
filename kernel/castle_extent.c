@@ -1561,6 +1561,9 @@ static void _castle_extent_free(void *data)
     castle_extents_hash_remove(ext);
     castle_extent_space_free(ext, ext->k_factor * ext->size);
 
+    /* Drop dirty c2bs associated with this extent from the cache. */
+    castle_cache_extent_evict(ext->dirtytree);
+
     /* Drop 'extent exists' reference on c2b dirtytree. */
     castle_extent_dirtytree_put(ext->dirtytree);
 

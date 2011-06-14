@@ -4654,6 +4654,27 @@ void castle_cache_extent_flush(c_ext_id_t ext_id,
 }
 
 /**
+ * Evict dirty blocks for specified extent from the cache.
+ *
+ * @TODO Make this castle_cache_advise() functionality.
+ *
+ * @also _castle_extent_free()
+ */
+void castle_cache_extent_evict(c_ext_dirtytree_t *dirtytree)
+{
+    atomic_t in_flight = ATOMIC(0);
+    int flushed = 0;
+
+    /* Schedule flush of up to batch pages. */
+    __castle_cache_extent_flush(dirtytree,    /* dirtytree    */
+                                0,            /* end_off      */
+                                0,            /* max_pgs      */
+                                &in_flight,   /* in_flight_p  */
+                                &flushed,     /* flushed_p    */
+                                1);           /* waitlock     */
+}
+
+/**
  * Flush dirty blocks to disk and place them on the cleanlist.
  *
  * Fundamentally this function walks castle_cache_extent_dirtylist (the global
