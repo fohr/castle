@@ -2638,7 +2638,6 @@ retry:
                 mutex_lock(&rebuild_done_list_lock);
                 list_del(&ext->rebuild_done_list);
                 ext->rebuild_done_list.next = NULL;
-                current_rebuild_extent = 0;
                 atomic_set(&current_rebuild_chunk, 0);
                 mutex_unlock(&rebuild_done_list_lock);
                 spin_lock(&ext->shadow_map_lock);
@@ -3267,8 +3266,13 @@ int castle_extents_slave_scan(uint32_t uuid)
 void castle_extents_remap_writeback_setstate(void)
 {
     mutex_lock(&rebuild_done_list_lock);
-    rebuild_extent_last = current_rebuild_extent;
-    rebuild_extent_chunk = atomic_read(&current_rebuild_chunk);
+    if (list_empty(&rebuild_done_list))
+        rebuild_extent_last = rebuild_extent_chunk = 0;
+    else
+    {
+        rebuild_extent_last = current_rebuild_extent;
+        rebuild_extent_chunk = atomic_read(&current_rebuild_chunk);
+    }
     mutex_unlock(&rebuild_done_list_lock);
 }
 
@@ -3290,8 +3294,9 @@ void castle_extents_remap_writeback(void)
          * We want all the extents in the list up to but not including the one we saved in the
          * precheckpoint callback, but that one too - only if we finished remapping it.
          */
-        if ((ext->ext_id != rebuild_extent_last) ||
-            ((ext->ext_id == rebuild_extent_last) && (ext->size == rebuild_extent_chunk)))
+        if (rebuild_extent_last &&
+           ((ext->ext_id != rebuild_extent_last) ||
+           ((ext->ext_id == rebuild_extent_last) && (ext->size == rebuild_extent_chunk))))
         {
             list_del(entry);
             ext->rebuild_done_list.next = NULL;
