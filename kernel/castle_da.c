@@ -3161,6 +3161,24 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
     node_c2b        = level->node_c2b;
     valid_end_idx   = level->valid_end_idx;
 
+    /* for non-leaf nodes, the c2b will be unlocked */
+    if (depth > 0)
+        write_lock_c2b(node_c2b);
+
+    btree->entry_get(node, valid_end_idx, &key, &version, &cvt);
+    debug("Inserting into parent key=%p, *key=%d, version=%d\n",
+            key, *((uint32_t*)key), node->version);
+    BUG_ON(CVT_LEAF_PTR(cvt));
+
+    /* Insert correct pointer in the parent, unless we've just completed the
+       root node at the end of the merge. */
+    if(!(merge->completing && (merge->root_depth == depth)))
+    {
+        CVT_NODE_SET(node_cvt, (node_c2b->nr_pages * C_BLK_SIZE), node_c2b->cep);
+        castle_da_entry_add(merge, depth+1, key, node->version, node_cvt, 0);
+    }
+
+
     /* Reset the variables to the correct state for castle_da_entry_add(). */
     level->node_c2b      = NULL;
     level->last_key      = NULL;
@@ -3189,9 +3207,6 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
         BUG_ON(level->next_idx < 0);
     }
 
-    /* for non-leaf nodes, the c2b will be unlocked */
-    if (depth > 0)
-        write_lock_c2b(node_c2b);
     debug("Dropping entries [%d, %d] from the original node\n",
             valid_end_idx + 1, node->used - 1);
     /* Now that entries are safely in the new node, drop them from the node */
@@ -3199,13 +3214,6 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
         btree->entries_drop(node, valid_end_idx + 1, node->used - 1);
 
     BUG_ON(node->used != valid_end_idx + 1);
-    btree->entry_get(node, valid_end_idx, &key, &version, &cvt);
-    debug("Inserting into parent key=%p, *key=%d, version=%d\n",
-            key, *((uint32_t*)key), node->version);
-    BUG_ON(CVT_LEAF_PTR(cvt));
-
-    /* Insert correct pointer in the parent, unless we've just completed the
-       root node at the end of the merge. */
     if(merge->completing && (merge->root_depth == depth))
     {
         /* Node c2b was set to NULL earlier in this function. When we are completing the merge
@@ -3214,11 +3222,7 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
         BUG_ON(level->node_c2b);
         debug("Just completed the root node (depth=%d), at the end of the merge.\n",
                 depth);
-        goto release_node;
     }
-    CVT_NODE_SET(node_cvt, (node_c2b->nr_pages * C_BLK_SIZE), node_c2b->cep);
-    castle_da_entry_add(merge, depth+1, key, node->version, node_cvt, 0);
-release_node:
     debug("Releasing c2b for cep=" cep_fmt_str_nl, cep2str(node_c2b->cep));
     debug("Completing a node with %d entries at depth %d\n", node->used, depth);
     /* Hold on to last leaf node for the sake of last_key. No need of lock, this
