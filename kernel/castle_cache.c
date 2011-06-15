@@ -4675,6 +4675,35 @@ void castle_cache_extent_evict(c_ext_dirtytree_t *dirtytree)
 }
 
 /**
+ * Comparator for elements on the dirtylist, used by castle_cache_flush().
+ *
+ * NOTE: Return values are the reverse of what a normal comparator might be
+ *       expected to return.  This is to ensure that the dirtylist is sorted
+ *       in descending order.
+ *
+ * @return <0   l1 is greated than l2
+ * @return  0   l1 is the same size as l2
+ * @return >0   l2 is smaller than l1
+ */
+int castle_cache_dirtytree_compare(struct list_head *l1, struct list_head *l2)
+{
+    c_ext_dirtytree_t *dirtytree;
+    int s1, s2;
+
+    dirtytree = list_entry(l1, c_ext_dirtytree_t, list);
+    s1 = castle_extent_size_get(dirtytree->ext_id);
+    dirtytree = list_entry(l2, c_ext_dirtytree_t, list);
+    s2 = castle_extent_size_get(dirtytree->ext_id);
+
+    if (s1 > s2)
+        return -1;
+    else if (s1 < s2)
+        return 1;
+    else
+        return 0;
+}
+
+/**
  * Flush dirty blocks to disk and place them on the cleanlist.
  *
  * Fundamentally this function walks castle_cache_extent_dirtylist (the global
@@ -4706,8 +4735,7 @@ static int castle_cache_flush(void *unused)
 #define MIN_FLUSH_SIZE  128
 #define MAX_FLUSH_SIZE  (4*1024)
 #define MIN_FLUSH_FREQ  5           /* Min flush rate: 5*128pgs/s = 2.5MB/s */
-    int i, exiting, flushing_rwcts, reordered,
-        target_dirty_pgs, dirty_pgs, to_flush, last_flush;
+    int i, exiting, flushing_rwcts, target_dirty_pgs, dirty_pgs, to_flush, last_flush;
     atomic_t in_flight = ATOMIC(0);
     c_ext_type_t ext_type;
 
@@ -4766,32 +4794,9 @@ static int castle_cache_flush(void *unused)
         flushing_rwcts = 0;
         i = atomic_read(&castle_cache_extent_dirtylist_size);
 
-        /* Sort the list of dirtytrees in descending size by bubbles. */
+        /* Sort the list of dirtytrees in descending extent size. */
         spin_lock_irq(&castle_cache_block_lru_lock);
-        do {
-            struct list_head *l, *t, *last;
-            c_ext_dirtytree_t *dirtytree;
-            int size, last_size = INT_MAX;
-
-            last = NULL;
-            reordered = 0;
-
-            list_for_each_safe(l, t, &castle_cache_extent_dirtylist)
-            {
-                dirtytree = list_entry(l, c_ext_dirtytree_t, list);
-                size = castle_extent_size_get(dirtytree->ext_id);
-
-                if (size > last_size)
-                {
-                    BUG_ON(last == NULL);
-                    list_move(l, last->prev);
-                    reordered = 1;
-                }
-
-                last_size = size;
-                last = l;
-            }
-        } while (reordered);
+        list_sort(&castle_cache_extent_dirtylist, castle_cache_dirtytree_compare);
         spin_unlock_irq(&castle_cache_block_lru_lock);
 
         while(true)
