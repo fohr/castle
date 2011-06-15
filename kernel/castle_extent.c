@@ -2181,16 +2181,13 @@ static int castle_extent_rebuild_list_add(c_ext_t *ext, void *unused)
 {
     /*
      * We are not handling logical extents. The extent is not already at current_rebuild_seqno. The extent
-     * is not marked for deletion (it is a live extent). The extent is not already on the rebuild_done_list.
+     * is not marked for deletion (it is a live extent).
      */
 
-    mutex_lock(&rebuild_done_list_lock);
     if ((!SUPER_EXTENT(ext->ext_id) && !(ext->ext_id == MICRO_EXT_ID)) &&
         (ext->curr_rebuild_seqno < atomic_read(&current_rebuild_seqno)) &&
-        LIVE_EXTENT(ext) &&
-        (ext->rebuild_done_list.next == NULL))
+        LIVE_EXTENT(ext))
     {
-        mutex_unlock(&rebuild_done_list_lock);
         debug("Adding extent %llu to rebuild list for extent seqno %u, global seqno %u\n",
                ext->ext_id, ext->curr_rebuild_seqno, atomic_read(&current_rebuild_seqno));
         list_add_tail(&ext->rebuild_list, &rebuild_list);
@@ -2199,8 +2196,7 @@ static int castle_extent_rebuild_list_add(c_ext_t *ext, void *unused)
          * the extent.
          */
         BUG_ON(__castle_extent_get(ext));
-    } else
-        mutex_unlock(&rebuild_done_list_lock);
+    }
     return 0;
 }
 
