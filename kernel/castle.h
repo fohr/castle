@@ -402,6 +402,7 @@ struct castle_fs_superblock {
     /*       2048 */
 } PACKED;
 
+/* These must be the same as castle_public.h (in both fs.hg and libcastle.hg) */
 enum {
     CVT_TYPE_LEAF_VAL        = 0x01,
     CVT_TYPE_LEAF_PTR        = 0x02,

@@ -18,7 +18,7 @@
 enum {
     CVT_TYPE_INLINE          = 0x10,
     CVT_TYPE_ONDISK          = 0x20,
-    CVT_TYPE_INVALID         = 0x30,
+    CVT_TYPE_INVALID         = 0x00,
 };
 #endif
 
