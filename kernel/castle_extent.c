@@ -1906,6 +1906,18 @@ void* castle_extent_get(c_ext_id_t ext_id)
     return ext;
 }
 
+int __castle_extent_get(c_ext_t *ext)
+{
+    /* Don't give reference if extent is marked for deletion. */
+    if (LIVE_EXTENT(ext))
+    {
+        atomic_inc(&ext->ref_cnt);
+        return 0;
+    }
+
+    return -1;
+}
+
 /**
  * Puts the light reference. (Interrupt Context)
  *
@@ -2167,7 +2179,6 @@ int castle_extents_restore(void)
  */
 static int castle_extent_rebuild_list_add(c_ext_t *ext, void *unused)
 {
-    c_ext_t *ref_ext;
     /*
      * We are not handling logical extents. The extent is not already at current_rebuild_seqno. The extent
      * is not marked for deletion (it is a live extent). The extent is not already on the rebuild_done_list.
@@ -2187,8 +2198,7 @@ static int castle_extent_rebuild_list_add(c_ext_t *ext, void *unused)
          * Take a reference to the extent. We will drop this when we have finished remapping
          * the extent.
          */
-        ref_ext = castle_extent_get(ext->ext_id);
-        BUG_ON(!ref_ext);
+        BUG_ON(__castle_extent_get(ext));
     } else
         mutex_unlock(&rebuild_done_list_lock);
     return 0;
