@@ -3180,7 +3180,7 @@ void castle_cache_page_block_unreserve(c2_block_t *c2b)
 #define PREF_WINDOW_ADAPTIVE        (0x10)          /**< Whether this is an adaptive window.      */
 #define PREF_WINDOW_SOFTPIN         (0x20)          /**< Keep c2bs in cache if possible.          */
 #define PREF_PAGES                  4 *BLKS_PER_CHK /**< #pages to non-adaptive prefetch.         */
-#define PREF_ADAP_INITIAL           1 *BLKS_PER_CHK /**< Initial #pages to adaptive prefetch.     */
+#define PREF_ADAP_INITIAL           2 *BLKS_PER_CHK /**< Initial #pages to adaptive prefetch.     */
 #define PREF_ADAP_MAX               16*BLKS_PER_CHK /**< Maximum #pages to adaptive prefetch.     */
 #define PREF_ADV_THRESH             4 *BLKS_PER_CHK /**< #pages from window end before prefetch.  */
 
