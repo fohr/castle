@@ -2641,15 +2641,6 @@ retry:
             {
                 /* Failed to allocate a disk chunk (slave out of space is most likely cause). */
                 castle_printk(LOG_WARN, "Rebuild could not allocate a disk chunk.\n");
-                mutex_lock(&rebuild_done_list_lock);
-                list_del(&ext->rebuild_done_list);
-                ext->rebuild_done_list.next = NULL;
-                atomic_set(&current_rebuild_chunk, 0);
-                mutex_unlock(&rebuild_done_list_lock);
-                spin_lock(&ext->shadow_map_lock);
-                ext->use_shadow_map = 0;
-                spin_unlock(&ext->shadow_map_lock);
-                castle_vfree(ext->shadow_map);
                 return -ENOSPC;
             }
             /*
@@ -2895,7 +2886,7 @@ restart:
         if (list_empty(&rebuild_list))
         {
             castle_printk(LOG_WARN, "Rebuild: no extents found.\n");
-            continue;
+            goto finished;
         }
 
         /*
@@ -2913,17 +2904,14 @@ restart:
                 /*
                  * Allow rebuild to be stopped or restarted in-between extent remappings.
                  */
-                if ((ret = castle_extent_remap(ext)) ||
-                        kthread_should_stop() ||
-                        castle_extents_rescan_required ||
-                        rebuild_to_seqno != atomic_read(&current_rebuild_seqno))
+                if ((ret = castle_extent_remap(ext)) || kthread_should_stop())
                     exit_early = 1;
-                if (ret == -EINTR)
+                if (ret == -EINTR || ret == -ENOSPC)
                 {
                     /*
-                     * If the remap has been interrupted by a kthread_stop(), and it has
-                     * not yet remapped all the chunks, then this extent should no longer be
-                     * scheduled for map writeback. Take it off the rebuild_done_list and clean
+                     * If the remap has been interrupted by a kthread_stop(), or cannot allocate,
+                     * and it has not yet remapped all the chunks, then this extent should no longer
+                     * be scheduled for map writeback. Take it off the rebuild_done_list and clean
                      * up the shadow map before we exit.
                      */
                     mutex_lock(&rebuild_done_list_lock);
@@ -2942,7 +2930,6 @@ restart:
             /*
              * If this extent is on the rebuild_done list we should not drop the ref here.
              * Writeback will do that when it is finished.
-             * or has not yet been remapped, then drop the ref safely.
              */
             if ((exit_early) && (ext->rebuild_done_list.next == NULL))
                 castle_extent_put(ext->ext_id);
@@ -2954,12 +2941,6 @@ restart:
             {
                 castle_printk(LOG_WARN, "Rebuild run terminating early.\n");
                 goto out;
-            }
-            else if (rebuild_to_seqno != atomic_read(&current_rebuild_seqno) ||
-                     castle_extents_rescan_required)
-            {
-                castle_printk(LOG_WARN, "Rebuild run restarting - rescan required.\n");
-                goto restart;
             } else if (ret == -ENOSPC)
             {
                 c_ext_event_t *event_hdl = NULL;
@@ -2997,74 +2978,51 @@ restart:
             goto out;
         }
 
-        if ((rebuild_to_seqno == atomic_read(&current_rebuild_seqno)) &&
-            !castle_extents_rescan_required)
+        if (castle_extents_rescan_required)
         {
-            /*
-             * No further remapping required. We can now convert any evacuating or out-of-service
-             * slaves to remapped state. First, create the list of evacuated / oos slaves.
-             */
-            for (i=0; i<MAX_NR_SLAVES; i++)
-                oos_slaves[i] = evacuated_slaves[i] = 0;
-            nr_oos_slaves = nr_evacuated_slaves = 0;
-
-            rcu_read_lock();
-            list_for_each_rcu(entry, &castle_slaves.slaves)
-            {
-                cs = list_entry(entry, struct castle_slave, list);
-                if (test_bit(CASTLE_SLAVE_EVACUATE_BIT, &cs->flags) &&
-                   !test_bit(CASTLE_SLAVE_REMAPPED_BIT, &cs->flags) &&
-                   !test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags))
-                    evacuated_slaves[nr_evacuated_slaves++] = cs;
-                if (test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags) &&
-                   !test_bit(CASTLE_SLAVE_REMAPPED_BIT, &cs->flags))
-                    oos_slaves[nr_oos_slaves++] = cs;
-            }
-            rcu_read_unlock();
-        }
-
-        /*
-         * If current_rebuild_seqno has changed during the run then start again to pick up any
-         * extents which have not been remapped to the new sequence number.
-         */
-        if ((rebuild_to_seqno != atomic_read(&current_rebuild_seqno)) ||
-            castle_extents_rescan_required)
-        {
-            castle_printk(LOG_WARN, "Rebuild run restarting.\n");
+            castle_printk(LOG_WARN, "Rebuild run restarting - rescan required.\n");
             goto restart;
         }
 
+finished:
         /*
-         * Nothing more to do. Now we can be sure that the set of evacuated_slaves and oos_slaves
-         * built earlier is correct. Use them to convert to oos / remapped.
+         * No further remapping required. We can now convert any evacuating or out-of-service
+         * slaves to remapped state.
          */
-        for (i=0; i<nr_oos_slaves; i++)
+        for (i=0; i<MAX_NR_SLAVES; i++)
+            oos_slaves[i] = evacuated_slaves[i] = 0;
+        nr_oos_slaves = nr_evacuated_slaves = 0;
+
+        rcu_read_lock();
+        list_for_each_rcu(entry, &castle_slaves.slaves)
         {
-            if (oos_slaves[i])
+            cs = list_entry(entry, struct castle_slave, list);
+            if (test_bit(CASTLE_SLAVE_EVACUATE_BIT, &cs->flags) &&
+               !test_bit(CASTLE_SLAVE_REMAPPED_BIT, &cs->flags) &&
+               !test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags))
+            {
+                BUG_ON(test_bit(CASTLE_SLAVE_GHOST_BIT, &cs->flags));
+                castle_printk(LOG_USERINFO, "Finished remapping evacuated slave 0x%x.\n",
+                            cs->uuid);
+                set_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags);
+                set_bit(CASTLE_SLAVE_REMAPPED_BIT, &cs->flags);
+                clear_bit(CASTLE_SLAVE_EVACUATE_BIT, &cs->flags);
+                if (atomic_read(&cs->io_in_flight) == 0 &&
+                    test_bit(CASTLE_SLAVE_BDCLAIMED_BIT, &cs->flags))
+                    castle_release_device(cs);
+            }
+            if (test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags) &&
+               !test_bit(CASTLE_SLAVE_REMAPPED_BIT, &cs->flags))
             {
                 castle_printk(LOG_USERINFO, "Finished remapping out-of-service slave 0x%x.\n",
-                              oos_slaves[i]->uuid);
-                set_bit(CASTLE_SLAVE_REMAPPED_BIT, &oos_slaves[i]->flags);
-                if (atomic_read(&oos_slaves[i]->io_in_flight) == 0 &&
-                    test_bit(CASTLE_SLAVE_BDCLAIMED_BIT, &oos_slaves[i]->flags))
-                    castle_release_device(oos_slaves[i]);
+                              cs->uuid);
+                set_bit(CASTLE_SLAVE_REMAPPED_BIT, &cs->flags);
+                if (atomic_read(&cs->io_in_flight) == 0 &&
+                    test_bit(CASTLE_SLAVE_BDCLAIMED_BIT, &cs->flags))
+                    castle_release_device(cs);
             }
         }
-        for (i=0; i<nr_evacuated_slaves; i++)
-        {
-            if (evacuated_slaves[i])
-            {
-                BUG_ON(test_bit(CASTLE_SLAVE_GHOST_BIT, &evacuated_slaves[i]->flags));
-                castle_printk(LOG_USERINFO, "Finished remapping evacuated slave 0x%x.\n",
-                              evacuated_slaves[i]->uuid);
-                set_bit(CASTLE_SLAVE_OOS_BIT, &evacuated_slaves[i]->flags);
-                set_bit(CASTLE_SLAVE_REMAPPED_BIT, &evacuated_slaves[i]->flags);
-                clear_bit(CASTLE_SLAVE_EVACUATE_BIT, &evacuated_slaves[i]->flags);
-                if (atomic_read(&evacuated_slaves[i]->io_in_flight) == 0 &&
-                    test_bit(CASTLE_SLAVE_BDCLAIMED_BIT, &evacuated_slaves[i]->flags))
-                    castle_release_device(evacuated_slaves[i]);
-            }
-        }
+        rcu_read_unlock();
 
         /* Rebuild has finished. Mark it so in the superblock. */
         fs_sb = castle_fs_superblocks_get();
