@@ -3162,8 +3162,6 @@ void castle_extents_rebuild_startup_check(int need_rebuild)
  */
 static int castle_extent_verify_list_add(c_ext_t *ext, void *unused)
 {
-    c_ext_t *ref_ext;
-
     /* We are not handling logical extents or extents scheduled for deletion. */
     if (!SUPER_EXTENT(ext->ext_id) && !(ext->ext_id == MICRO_EXT_ID) && LIVE_EXTENT(ext))
     {
@@ -3172,8 +3170,7 @@ static int castle_extent_verify_list_add(c_ext_t *ext, void *unused)
          * Take a reference to the extent. We will drop this when we have finished remapping
          * the extent.
          */
-        ref_ext = castle_extent_get(ext->ext_id);
-        BUG_ON(!ref_ext);
+        BUG_ON(__castle_extent_get(ext));
     }
     return 0;
 }
