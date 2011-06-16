@@ -2287,7 +2287,9 @@ static void castle_extents_remap_state_fini(void)
     castle_extents_remap_writeback_setstate();
     castle_extents_remap_writeback();
     mutex_lock(&rebuild_done_list_lock);
-    BUG_ON(!list_empty(&rebuild_done_list));
+    if(!list_empty(&rebuild_done_list))
+        castle_printk(LOG_ERROR, "Finishing remap thread while there are still extents "
+                                 "on the rebuild_done_list.\n");
     mutex_unlock(&rebuild_done_list_lock);
 
     for (i=0; i<MAX_NR_SLAVES; i++)
