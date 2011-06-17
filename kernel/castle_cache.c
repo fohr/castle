@@ -2655,7 +2655,8 @@ static void castle_cache_block_free(c2_block_t *c2b)
 
 static inline int c2b_busy(c2_block_t *c2b, int expected_count)
 {
-    /* cannot readlock means writelock is held */
+    /* If the lock can be read locked it means that lock isn't writelocked
+       (which is expected when calling c2b_busy). */
     BUG_ON(read_can_lock(&castle_cache_block_hash_lock));
     /* c2b_locked() implies (c2b->count > 0) */
     return (atomic_read(&c2b->count) != expected_count) ||
