@@ -1255,8 +1255,8 @@ int submit_c2b_io(int           rw,
 
     BUG_ON(nr_pages > MAX_BIO_PAGES);
     j = 0;
-    while (nr_pages > 0) {
-
+    while (nr_pages > 0)
+    {
         /*
          * io_in_flight logic. The ordering of the dec and read of io_in_flight and the test
          * of CASTLE_SLAVE_OOS_BIT is important.
@@ -1368,17 +1368,20 @@ static int c_io_next_slave_get(c2_block_t *c2b, c_disk_chk_t *chunks, int k_fact
         BUG_ON(!slave);
         if (!test_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags))
         {
-	    if(disk_idx == -1) {
-		disk_idx = i;
-		min_outstanding_ios = atomic_read(&slave->io_in_flight);
-	    }
-	    else {
-		tmp = atomic_read(&slave->io_in_flight);
-		if((tmp < min_outstanding_ios) || (disk_idx == 0 && try_second)) {
-		    disk_idx = i;
-		    min_outstanding_ios = tmp;
-		}
-	    }
+            if(disk_idx == -1)
+            {
+                disk_idx = i;
+                min_outstanding_ios = atomic_read(&slave->io_in_flight);
+            }
+            else
+            {
+                tmp = atomic_read(&slave->io_in_flight);
+                if((tmp < min_outstanding_ios) || (disk_idx == 0 && try_second))
+                {
+                    disk_idx = i;
+                    min_outstanding_ios = tmp;
+                }
+            }
         }
     }
 
@@ -2089,38 +2092,42 @@ static inline c2_block_t* _castle_cache_block_hash_get(c_ext_pos_t cep,
     c2b = castle_cache_block_hash_find(cep, nr_pages);
     if (c2b)
     {
-	/* We found a matching block. */
-	get_c2b(c2b);
-	/* we have a reference so drop the lock on the hash */
-	read_unlock(&castle_cache_block_hash_lock);
-	if(promote) {
-	    /* We are obtaining this block to be used.  We should push it to
+        /* We found a matching block. */
+        get_c2b(c2b);
+        /* we have a reference so drop the lock on the hash */
+        read_unlock(&castle_cache_block_hash_lock);
+        if(promote)
+        {
+            /* We are obtaining this block to be used.  We should push it to
              * the end of the LRU list indicating that it is recently used
              * and should not be freed any time soon.
              *
              * We're going to return this block to the caller so hold a
              * reference for them so it doesn't get removed. */
-	    spin_lock_irq(&castle_cache_block_lru_lock);
-	    if (!c2b_dirty(c2b))
+            spin_lock_irq(&castle_cache_block_lru_lock);
+            if (!c2b_dirty(c2b))
                 list_move_tail(&c2b->clean, &castle_cache_cleanlist);
-	    spin_unlock_irq(&castle_cache_block_lru_lock);
-	}
-	else {
-	    spin_lock_irq(&castle_cache_block_lru_lock);
-	    if (atomic_read(&c2b->count) == 0) {
-		/* No references on this block means it's not in use.
-		 * If clean: demote so it gets reused next
-		 * If dirty: don't touch it - let LRU mechanism handle it */
-		if (!c2b_dirty(c2b))
-		    list_move(&c2b->clean, &castle_cache_cleanlist);
-	    }
-	    spin_unlock_irq(&castle_cache_block_lru_lock);
-	    /* demote callers do not need a reference to the block */
-	    put_c2b(c2b);
-	}
+            spin_unlock_irq(&castle_cache_block_lru_lock);
+        }
+        else
+        {
+            spin_lock_irq(&castle_cache_block_lru_lock);
+            if (atomic_read(&c2b->count) == 0)
+            {
+                /* No references on this block means it's not in use.
+                 * If clean: demote so it gets reused next
+                 * If dirty: don't touch it - let LRU mechanism handle it */
+                if (!c2b_dirty(c2b))
+                    list_move(&c2b->clean, &castle_cache_cleanlist);
+            }
+            spin_unlock_irq(&castle_cache_block_lru_lock);
+            /* demote callers do not need a reference to the block */
+            put_c2b(c2b);
+        }
     } /* if(c2b) */
-    else {
-	read_unlock(&castle_cache_block_hash_lock);
+    else
+    {
+        read_unlock(&castle_cache_block_hash_lock);
     }
     return c2b;
 }
@@ -2177,9 +2184,10 @@ static int castle_cache_block_hash_insert(c2_block_t *c2b, int transient)
 
     /* Check if already in the hash */
     success = 0;
-    if(castle_cache_block_hash_find(c2b->cep, c2b->nr_pages)) { 
-	write_unlock(&castle_cache_block_hash_lock);
-	goto out;
+    if(castle_cache_block_hash_find(c2b->cep, c2b->nr_pages))
+    {
+        write_unlock(&castle_cache_block_hash_lock);
+        goto out;
     }
 
     /* Insert */
@@ -2713,7 +2721,7 @@ static int castle_cache_block_hash_clean(void)
 
     /* acquire the lock on the LRU list, since we are moving things around */
     spin_lock_irq(&castle_cache_block_lru_lock);
-    
+
     do
     {
         list_for_each_safe(lh, th, &castle_cache_cleanlist)
@@ -2826,7 +2834,7 @@ int castle_cache_block_destroy(c2_block_t *c2b)
     ret = c2b_busy(c2b, 1) ? -EINVAL : 0;
     if(!ret)
     {
-	spin_lock_irq(&castle_cache_block_lru_lock);
+        spin_lock_irq(&castle_cache_block_lru_lock);
         hlist_del(&c2b->hlist);
         list_del(&c2b->clean);
         /* Update bookkeeping info. */
@@ -2838,7 +2846,7 @@ int castle_cache_block_destroy(c2_block_t *c2b)
         }
         else
             atomic_inc(&castle_cache_block_victims);
-	spin_unlock_irq(&castle_cache_block_lru_lock);
+        spin_unlock_irq(&castle_cache_block_lru_lock);
     }
     write_unlock(&castle_cache_block_hash_lock);
     /* If the c2b was busy, exit early. */

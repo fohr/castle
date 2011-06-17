@@ -154,7 +154,8 @@ static castle_vmap_freelist_t *castle_vmap_freelist_init(int slot_size, int slot
     castle_vmap_freelist->vstart = vmap(pgs_array, nr_vmap_array_pages,
                     VM_READ|VM_WRITE, PAGE_KERNEL);
 
-    if (!castle_vmap_freelist->vstart) {
+    if (!castle_vmap_freelist->vstart)
+    {
         castle_printk(LOG_ERROR, "Failed to vmap %d pages (freelist slot_size %d)\n",
                       nr_vmap_array_pages, slot_size);
         goto errout_5;
@@ -232,7 +233,8 @@ static uint32_t castle_vmap_freelist_get(castle_vmap_freelist_t *castle_vmap_fre
     uint32_t id;
 
     id = castle_vmap_freelist->freelist[0];
-    if (id >= castle_vmap_freelist->nr_slots) {
+    if (id >= castle_vmap_freelist->nr_slots)
+    {
         /* Last slot has been used. Return CASTLE_SLOT_INVALID. Caller will grow freelist and retry */
         BUG_ON(id != CASTLE_SLOT_INVALID);
         goto out;
@@ -258,45 +260,48 @@ void *castle_vmap_fast_map(struct page **pgs, int nr_pages)
     int need_slots;
 
     freelist_bucket_idx = order_base_2(nr_pages);
-    while(1) {
-	
-	/* grab the lock for the bucket */
-	spin_lock(&castle_vmap_lock[freelist_bucket_idx].lock);
-	
-	/* We always map from the freelist at the head of the bucket */
-	castle_vmap_freelist = get_freelist_head(freelist_bucket_idx);
-	vmap_slot = castle_vmap_freelist_get(castle_vmap_freelist);
-	
-	if (vmap_slot == CASTLE_SLOT_INVALID) {
-	    /* need to grow the freelist */
-	    need_slots = castle_vmap_freelist->nr_slots;
-	    /* 1. drop the lock on the bucket */
-	    spin_unlock(&castle_vmap_lock[freelist_bucket_idx].lock);
-	    /* 2. grow the freelist */
-	    castle_vmap_freelist_grow(freelist_bucket_idx, need_slots);
-	    /* 3. and retry */
-	    continue;
-	}
-	vaddr = castle_vmap_freelist->vstart + vmap_slot * PAGE_SIZE * (SLOT_SIZE(freelist_bucket_idx)+1);
-	/* release the lock for the bucket */
-	spin_unlock(&castle_vmap_lock[freelist_bucket_idx].lock);
-	break; /* we have what we want, break out of the loop */
-    } 
+    while(1)
+    {
+
+        /* grab the lock for the bucket */
+        spin_lock(&castle_vmap_lock[freelist_bucket_idx].lock);
+
+        /* We always map from the freelist at the head of the bucket */
+        castle_vmap_freelist = get_freelist_head(freelist_bucket_idx);
+        vmap_slot = castle_vmap_freelist_get(castle_vmap_freelist);
+
+        if (vmap_slot == CASTLE_SLOT_INVALID)
+        {
+            /* need to grow the freelist */
+            need_slots = castle_vmap_freelist->nr_slots;
+            /* 1. drop the lock on the bucket */
+            spin_unlock(&castle_vmap_lock[freelist_bucket_idx].lock);
+            /* 2. grow the freelist */
+            castle_vmap_freelist_grow(freelist_bucket_idx, need_slots);
+            /* 3. and retry */
+            continue;
+        }
+        vaddr = castle_vmap_freelist->vstart + vmap_slot * PAGE_SIZE * (SLOT_SIZE(freelist_bucket_idx)+1);
+        /* release the lock for the bucket */
+        spin_unlock(&castle_vmap_lock[freelist_bucket_idx].lock);
+        break; /* we have what we want, break out of the loop */
+    }
 
 #ifdef CASTLE_DEBUG
     BUG_ON((unsigned long)vaddr <  (unsigned long)castle_vmap_freelist->vstart);
     BUG_ON((unsigned long)vaddr >= (unsigned long)castle_vmap_freelist->vend);
 #endif
- 
-    if(castle_map_vm_area(vaddr, pgs, nr_pages, PAGE_KERNEL)) {
-	debug("ERROR: failed to vmap!\n");
-	
-	/* put the vaddr range back */
-	spin_lock(&castle_vmap_lock[freelist_bucket_idx].lock);
-	castle_vmap_freelist_add(castle_vmap_freelist, vmap_slot);
-	spin_unlock(&castle_vmap_lock[freelist_bucket_idx].lock);
-       
-	vaddr = NULL;
+
+    if(castle_map_vm_area(vaddr, pgs, nr_pages, PAGE_KERNEL))
+    {
+        debug("ERROR: failed to vmap!\n");
+
+        /* put the vaddr range back */
+        spin_lock(&castle_vmap_lock[freelist_bucket_idx].lock);
+        castle_vmap_freelist_add(castle_vmap_freelist, vmap_slot);
+        spin_unlock(&castle_vmap_lock[freelist_bucket_idx].lock);
+
+        vaddr = NULL;
     }
 
     return vaddr;
@@ -325,7 +330,7 @@ void castle_vmap_fast_unmap(void *vaddr, int nr_pages)
         {
             vmap_slot = (vaddr - castle_vmap_freelist->vstart) /
                         ((SLOT_SIZE(freelist_bucket_idx)+1) * PAGE_SIZE);
-	    castle_vmap_freelist_add(castle_vmap_freelist, vmap_slot);
+            castle_vmap_freelist_add(castle_vmap_freelist, vmap_slot);
 
             /* If the add made this freelist completely free, and this freelist is not at the head
                of the bucket (i.e. not active for gets, then delete this freelist. */
@@ -333,15 +338,16 @@ void castle_vmap_fast_unmap(void *vaddr, int nr_pages)
                 (castle_vmap_freelist != get_freelist_head(freelist_bucket_idx)))
             {
                 list_del(pos);
-		need_release_list = 1;
+                need_release_list = 1;
             }
             spin_unlock(&castle_vmap_lock[freelist_bucket_idx].lock);
-	    debug("Released fast vmap slot: %d\n", vmap_slot);
+            debug("Released fast vmap slot: %d\n", vmap_slot);
 
-	    if(need_release_list) {
+            if(need_release_list)
+            {
                 castle_vmap_freelist_delete(castle_vmap_freelist);
                 castle_free(castle_vmap_freelist);
-	    }
+            }
 
             return;
         }
@@ -355,12 +361,11 @@ static void castle_vmap_freelist_grow(int freelist_bucket_idx, int slots)
     castle_vmap_freelist_t  *new;
 
     debug("Adding new freelist of %d slots for bucket size %d\n",
-	  slots * CASTLE_VMAP_FREELIST_MULTI, SLOT_SIZE(freelist_bucket_idx));
+          slots * CASTLE_VMAP_FREELIST_MULTI, SLOT_SIZE(freelist_bucket_idx));
     new = castle_vmap_freelist_init(SLOT_SIZE(freelist_bucket_idx), slots * CASTLE_VMAP_FREELIST_MULTI);
 
-    if (!new) {
-	BUG(); /* failure to get vmem area is fatal */
-    }
+    if (!new)
+        BUG(); /* failure to get vmem area is fatal */
 
     spin_lock(&castle_vmap_lock[freelist_bucket_idx].lock);
     list_add(&new->list, castle_vmap_fast_maps_ptr+freelist_bucket_idx);
