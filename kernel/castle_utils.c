@@ -61,8 +61,9 @@ static int castle_printk_ratelimit(c_printk_level_t level)
  */
 void castle_printk(c_printk_level_t level, const char *fmt, ...)
 {
-    char tmp_buf[1024];
     c_byte_off_t len, rem, pos = 0;
+    unsigned long flags;
+    char tmp_buf[1024];
     va_list args;
 
     BUG_ON(PRINTK_BUFFER_SIZE < sizeof(tmp_buf));
@@ -72,7 +73,7 @@ void castle_printk(c_printk_level_t level, const char *fmt, ...)
     va_end(args);
 
     /* Serialise access to the ring buffer. */
-    spin_lock(&printk_buf.lock);
+    spin_lock_irqsave(&printk_buf.lock, flags);
 
     rem = PRINTK_BUFFER_SIZE - printk_buf.off;
     if (unlikely(len > rem))
@@ -96,7 +97,7 @@ void castle_printk(c_printk_level_t level, const char *fmt, ...)
     memcpy(&printk_buf.buf[printk_buf.off], &tmp_buf[pos], len);
     printk_buf.off += len - 1; /* -1 for '\0'$ */
 
-    spin_unlock(&printk_buf.lock);
+    spin_unlock_irqrestore(&printk_buf.lock, flags);
 
     // @TODO castle-trace output here
 
@@ -117,6 +118,7 @@ void castle_dmesg(void)
 {
     c_byte_off_t read_off, write_off, size;
     char *buf, line[1024];
+    unsigned long flags;
     int wraps;
 
     /* Allocate a buffer to store CASTLE_DMESG_DUMP_SIZE of buffer. */
@@ -125,7 +127,7 @@ void castle_dmesg(void)
         printk("Couldn't allocate lines buffer to print castle_dmesg().\n");
 
     /* Populate the local buffer under printk_buf lock. */
-    spin_lock(&printk_buf.lock);
+    spin_lock_irqsave(&printk_buf.lock, flags);
 
     /* Fill at end, in case we wrapped and need to push more at the front. */
     if (printk_buf.off >= CASTLE_DMESG_DUMP_SIZE)
@@ -150,7 +152,7 @@ void castle_dmesg(void)
     wraps = printk_buf.wraps;
     read_off = write_off;
 
-    spin_unlock(&printk_buf.lock);
+    spin_unlock_irqrestore(&printk_buf.lock, flags);
 
     printk("================================================================================\n");
     printk("DUMPING %lld BYTES OF CASTLE PRINTK BUFFER WRAPPED %d TIME(S)\n",
