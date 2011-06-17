@@ -6250,8 +6250,12 @@ static struct castle_double_array* castle_da_alloc(c_da_t da_id)
             kthread_create((i == BIG_MERGE)? castle_da_big_merge_run: castle_da_merge_run,
                            da, "castle-m-%d-%.2d", da_id, i);
 
-        if(!da->levels[i].merge.thread)
+        if(IS_ERR(da->levels[i].merge.thread) || !da->levels[i].merge.thread)
+        {
+            castle_printk(LOG_WARN, "Failed to allocate memory for DA threads\n");
+            da->levels[i].merge.thread = NULL;
             goto err_out;
+        }
     }
     /* allocate top-level */
     INIT_LIST_HEAD(&da->levels[MAX_DA_LEVEL-1].trees);
@@ -6264,7 +6268,6 @@ static struct castle_double_array* castle_da_alloc(c_da_t da_id)
     return da;
 
 err_out:
-#ifdef CASTLE_DEBUG
     {
         int j;
         for(j=0; j<MAX_DA_LEVEL-1; j++)
@@ -6273,7 +6276,6 @@ err_out:
             BUG_ON((j>=i) && (da->levels[j].merge.thread != NULL));
         }
     }
-#endif
     castle_da_dealloc(da);
 
     return NULL;
