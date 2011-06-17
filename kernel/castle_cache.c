@@ -663,6 +663,22 @@ int c2b_locked(c2_block_t *c2b)
 }
 
 /**
+ * Increment c2b hardpin count.
+ */
+void castle_cache_block_hardpin(c2_block_t *c2b)
+{
+    get_c2b(c2b);
+}
+
+/**
+ * Decrement c2b hardpin count.
+ */
+void castle_cache_block_unhardpin(c2_block_t *c2b)
+{
+    put_c2b(c2b);
+}
+
+/**
  * Increment c2b softpin count and do cleanlist accounting.
  *
  * - Atomically increment softpin count
@@ -670,7 +686,7 @@ int c2b_locked(c2_block_t *c2b)
  *
  * @also c2_pref_window_submit() (our primary caller)
  */
-static void softpin_c2b(c2_block_t *c2b)
+void castle_cache_block_softpin(c2_block_t *c2b)
 {
     unsigned long old, new;
     struct c2b_state *p_old, *p_new;
@@ -736,7 +752,7 @@ static int _unsoftpin_c2b(c2_block_t *c2b, int clear)
  * - Decrement softpin count
  * - Does cleanlist accounting if necessary
  */
-static int unsoftpin_c2b(c2_block_t *c2b)
+int castle_cache_block_unsoftpin(c2_block_t *c2b)
 {
     return _unsoftpin_c2b(c2b, 0);
 }
@@ -3271,7 +3287,7 @@ static c2_block_t* c2_pref_block_chunk_get(c_ext_pos_t cep, c2_pref_window_t *wi
         if (!test_set_c2b_prefetch(c2b))
             atomic_inc(&c2_pref_active_window_size);
         if (window->state & PREF_WINDOW_SOFTPIN)
-            softpin_c2b(c2b);
+            castle_cache_block_softpin(c2b);
     }
 
 #ifdef CASTLE_PERF_DEBUG
@@ -3323,7 +3339,7 @@ static void c2_pref_block_chunk_put(c_ext_pos_t cep, c2_pref_window_t *window, i
             set_c2b_prefetched(c2b);
         }
         if (window->state & PREF_WINDOW_SOFTPIN)
-            demote = demote || unsoftpin_c2b(c2b);
+            demote = demote || castle_cache_block_unsoftpin(c2b);
 
         pref_debug(debug, "ext_id==%lld chunk %lld/%u softpin_cnt=%d\n",
                 cep.ext_id, CHUNK(cep.offset), castle_extent_size_get(cep.ext_id)-1,
@@ -3939,7 +3955,7 @@ static void castle_cache_prefetch_pin(c_ext_pos_t cep, int chunks, c2_advise_t a
 
         if (advise & C2_ADV_SOFTPIN)
         {
-            softpin_c2b(c2b);
+            castle_cache_block_softpin(c2b);
             put_c2b(c2b);
         }
         else if (!(advise & C2_ADV_HARDPIN))

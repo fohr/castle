@@ -222,7 +222,7 @@ static void castle_bloom_next_btree_node(castle_bloom_t *bf)
 
     bf_bp->node_c2b = castle_cache_block_get(bf_bp->node_cep, BLOOM_INDEX_NODE_SIZE_PAGES);
     write_lock_c2b(bf_bp->node_c2b);
-    castle_cache_advise(bf_bp->node_c2b->cep, C2_ADV_SOFTPIN, -1, -1, 0);
+    castle_cache_block_softpin(bf_bp->node_c2b);
     update_c2b(bf_bp->node_c2b);
     /* Init the node properly */
     bf_bp->cur_node = c2b_bnode(bf_bp->node_c2b);
@@ -283,7 +283,7 @@ static void castle_bloom_next_chunk(castle_bloom_t *bf)
     bf_bp->chunk_c2b = castle_cache_block_get(bf_bp->chunk_cep, bf_bp->cur_chunk_num_blocks * bf->block_size_pages);
     write_lock_c2b(bf_bp->chunk_c2b);
     if (bf->num_chunks <= BLOOM_MAX_SOFTPIN_CHUNKS)
-        castle_cache_advise(bf_bp->chunk_c2b->cep, C2_ADV_SOFTPIN, -1, -1, 0);
+        castle_cache_block_softpin(bf_bp->chunk_c2b);
     update_c2b(bf_bp->chunk_c2b);
     bf_bp->cur_chunk_buffer = c2b_buffer(bf_bp->chunk_c2b);
     memset(bf_bp->cur_chunk_buffer, 0, bf_bp->cur_chunk_num_blocks * BLOOM_BLOCK_SIZE(bf));
@@ -756,7 +756,7 @@ static void castle_bloom_chunk_read(c_bvec_t *c_bvec, uint32_t chunk_id)
             return;
         }
         if (bf->num_chunks <= BLOOM_MAX_SOFTPIN_CHUNKS)
-            castle_cache_advise(chunk_c2b->cep, C2_ADV_SOFTPIN, -1, -1, 0);
+            castle_cache_block_softpin(chunk_c2b);
         chunk_c2b->end_io = castle_bloom_end_block_io;
         chunk_c2b->private = c_bvec;
 
@@ -832,7 +832,7 @@ static void castle_bloom_index_read(c_bvec_t *c_bvec)
             /* now we have the lock, it might be up to date */
             if (!c2b_uptodate(btree_nodes_c2bs[i]))
             {
-                castle_cache_advise(btree_nodes_c2bs[i]->cep, C2_ADV_SOFTPIN, -1, -1, 0);
+                castle_cache_block_softpin(btree_nodes_c2bs[i]);
 
                 castle_printk(LOG_INFO, "Bloom filter partition index not in cache, scheduling I/O "
                         "at offset %llu for bf %p.\n", btree_nodes_c2bs[i]->cep.offset, bf);
@@ -1009,7 +1009,7 @@ void castle_bloom_build_param_unmarshall(castle_bloom_t *bf, struct castle_bbp_e
         write_lock_c2b(bf_bp->node_c2b);
         if(!c2b_uptodate(bf_bp->node_c2b))
             BUG_ON(submit_c2b_sync(READ, bf_bp->node_c2b));
-        castle_cache_advise(bf_bp->node_c2b->cep, C2_ADV_SOFTPIN, -1, -1, 0);
+        castle_cache_block_softpin(bf_bp->node_c2b);
         bf_bp->cur_node = c2b_bnode(bf_bp->node_c2b);
         BUG_ON(!bf_bp->cur_node);
         if(bf_bp->cur_node->magic != BTREE_NODE_MAGIC)
@@ -1044,7 +1044,7 @@ void castle_bloom_build_param_unmarshall(castle_bloom_t *bf, struct castle_bbp_e
         if(!c2b_uptodate(bf_bp->chunk_c2b))
             BUG_ON(submit_c2b_sync(READ, bf_bp->chunk_c2b));
         if (bf->num_chunks <= BLOOM_MAX_SOFTPIN_CHUNKS)
-            castle_cache_advise(bf_bp->chunk_c2b->cep, C2_ADV_SOFTPIN, -1, -1, 0);
+            castle_cache_block_softpin(bf_bp->chunk_c2b);
         bf_bp->cur_chunk_buffer = c2b_buffer(bf_bp->chunk_c2b);
     }
     return;

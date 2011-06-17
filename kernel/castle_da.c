@@ -2835,10 +2835,7 @@ static c_val_tup_t castle_da_medium_obj_copy(struct castle_da_merge *merge,
         c_c2b = castle_cache_block_get(new_cep, blocks);
         castle_perf_debug_getnstimeofday(&ts_end);
         castle_perf_debug_bump_ctr(tree->get_c2b_ns, ts_end, ts_start);
-        if (merge->level > 1)
-            castle_cache_advise(s_c2b->cep, C2_ADV_PREFETCH|C2_ADV_SOFTPIN|C2_ADV_FRWD, -1, -1, 0);
-        else
-            castle_cache_advise(s_c2b->cep, C2_ADV_PREFETCH|C2_ADV_FRWD, -1, -1, 0);
+        castle_cache_advise(s_c2b->cep, C2_ADV_PREFETCH|C2_ADV_SOFTPIN|C2_ADV_FRWD, -1, -1, 0);
         /* Make sure that we lock _after_ prefetch call. */
         write_lock_c2b(s_c2b);
         write_lock_c2b(c_c2b);

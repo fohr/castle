@@ -164,6 +164,10 @@ int         submit_c2b_remap_rda      (c2_block_t *c2b, c_disk_chk_t *remap_chun
 #define     castle_cache_page_block_reserve() \
             castle_cache_block_get    ((c_ext_pos_t){RESERVE_EXT_ID, 0}, 1)
 c2_block_t* castle_cache_block_get    (c_ext_pos_t  cep, int nr_pages);
+void        castle_cache_block_hardpin  (c2_block_t *c2b);
+void        castle_cache_block_unhardpin(c2_block_t *c2b);
+void        castle_cache_block_softpin  (c2_block_t *c2b);
+int         castle_cache_block_unsoftpin(c2_block_t *c2b);
 void        castle_cache_page_block_unreserve(c2_block_t *c2b);
 int         castle_cache_extent_flush_schedule (c_ext_id_t ext_id, uint64_t start, uint64_t size);
 
