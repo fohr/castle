@@ -30,12 +30,19 @@ struct castle_sysfs_entry {
     void *private;
 };
 
+/* We assume that version can be printed in 10 chars (in hex, without 0x). That's true
+   for as long as 32 bit ints are used. */
+STATIC_BUG_ON(sizeof(c_ver_t) > 4);
 struct castle_sysfs_version {
     c_ver_t version;
     char name[10];
     struct castle_sysfs_entry csys_entry;
     struct list_head list;
 };
+
+static unsigned long castle_sysfs_flags;
+
+#define CASTLE_SYSFS_FINISHED 0
 
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,18)
     #define fs_kobject  (&fs_subsys.kset.kobj)
@@ -94,10 +101,10 @@ static ssize_t versions_list_show(struct kobject *kobj, struct attribute *attr, 
     ret = castle_version_read(v->version, &da_id, NULL, &live_parent, &size, &leaf);
     if(ret == 0)
     {
-        cv_nonatomic_stats_t live_stats;
+        cv_nonatomic_stats_t stats;
         struct timeval creation_timestamp;
 
-        live_stats = castle_version_live_stats_get(v->version);
+        stats = castle_version_consistent_stats_get(v->version);
         creation_timestamp = castle_version_creation_timestamp_get(v->version);
         len = sprintf(buf,
                 "Id: 0x%x\n"
@@ -116,11 +123,11 @@ static ssize_t versions_list_show(struct kobject *kobj, struct attribute *attr, 
                  live_parent,
                  size,
                  leaf,
-                 live_stats.keys,
-                 live_stats.tombstones,
-                 live_stats.tombstone_deletes,
-                 live_stats.version_deletes,
-                 live_stats.key_replaces,
+                 stats.keys,
+                 stats.tombstones,
+                 stats.tombstone_deletes,
+                 stats.version_deletes,
+                 stats.key_replaces,
                  creation_timestamp.tv_sec,
                  creation_timestamp.tv_usec);
 
@@ -158,13 +165,10 @@ int castle_sysfs_version_add(c_ver_t version)
     struct castle_sysfs_version *v;
     int ret;
 
-    /* We've got 10 chars for the name, 'ver-%d'. This means
-       version has to be less than 100000 */
-    if(version >= 100000)
-    {
-        castle_printk(LOG_INFO, "ERROR: version number > 100000. Not adding to sysfs.\n");
-        return -E2BIG;
-    }
+    /* Don't proceed, just return success - if sysfs is already finished. */
+    if (test_bit(CASTLE_SYSFS_FINISHED, &castle_sysfs_flags))
+        return 0;
+
     v = castle_malloc(sizeof(struct castle_sysfs_version), GFP_KERNEL);
     if(!v) return -ENOMEM;
 
@@ -195,6 +199,10 @@ int castle_sysfs_version_del(c_ver_t version)
 {
     struct castle_sysfs_version *v = NULL, *k;
     struct list_head *pos, *tmp;
+
+    /* Don't proceed, just return success - if sysfs is already finished. */
+    if (test_bit(CASTLE_SYSFS_FINISHED, &castle_sysfs_flags))
+        return 0;
 
     list_for_each_safe(pos, tmp, &castle_sysfs_versions.version_list)
     {
@@ -693,6 +701,10 @@ int castle_sysfs_da_add(struct castle_double_array *da)
 {
     int ret;
 
+    /* Don't proceed, just return success - if sysfs is already finished. */
+    if (test_bit(CASTLE_SYSFS_FINISHED, &castle_sysfs_flags))
+        return 0;
+
     memset(&da->kobj, 0, sizeof(struct kobject));
     ret = kobject_tree_add(&da->kobj,
                            &double_arrays_kobj,
@@ -707,6 +719,10 @@ int castle_sysfs_da_add(struct castle_double_array *da)
 
 void castle_sysfs_da_del(struct castle_double_array *da)
 {
+    /* Don't proceed, just return success - if sysfs is already finished. */
+    if (test_bit(CASTLE_SYSFS_FINISHED, &castle_sysfs_flags))
+        return;
+
     kobject_remove(&da->kobj);
     castle_sysfs_kobj_release_wait(&da->kobj);
 }
@@ -764,6 +780,10 @@ int castle_sysfs_slave_add(struct castle_slave *slave)
 {
     int ret;
 
+    /* Don't proceed, just return success - if sysfs is already finished. */
+    if (test_bit(CASTLE_SYSFS_FINISHED, &castle_sysfs_flags))
+        return 0;
+
     memset(&slave->kobj, 0, sizeof(struct kobject));
     ret = kobject_tree_add(&slave->kobj,
                            &castle_slaves.kobj,
@@ -792,6 +812,10 @@ int castle_sysfs_slave_add(struct castle_slave *slave)
 
 void castle_sysfs_slave_del(struct castle_slave *slave)
 {
+    /* Don't proceed, just return success - if sysfs is already finished. */
+    if (test_bit(CASTLE_SYSFS_FINISHED, &castle_sysfs_flags))
+        return;
+
     /* If slave is not claimed, the sysfs 'dev' link will already have been removed. */
     if (!test_bit(CASTLE_SLAVE_BDCLAIMED_BIT, &slave->flags))
         sysfs_remove_link(&slave->kobj, "dev");
@@ -864,6 +888,10 @@ int castle_sysfs_device_add(struct castle_attachment *device)
 {
     int ret;
 
+    /* Don't proceed, just return success - if sysfs is already finished. */
+    if (test_bit(CASTLE_SYSFS_FINISHED, &castle_sysfs_flags))
+        return 0;
+
     memset(&device->kobj, 0, sizeof(struct kobject));
     ret = kobject_tree_add(&device->kobj,
                            &castle_attachments.devices_kobj,
@@ -885,6 +913,10 @@ int castle_sysfs_device_add(struct castle_attachment *device)
 
 void castle_sysfs_device_del(struct castle_attachment *device)
 {
+    /* Don't proceed, just return success - if sysfs is already finished. */
+    if (test_bit(CASTLE_SYSFS_FINISHED, &castle_sysfs_flags))
+        return;
+
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,24)
     sysfs_remove_link(&device->kobj, "dev");
 #endif
@@ -923,6 +955,10 @@ int castle_sysfs_collection_add(struct castle_attachment *collection)
 {
     int ret;
 
+    /* Don't proceed, just return success - if sysfs is already finished. */
+    if (test_bit(CASTLE_SYSFS_FINISHED, &castle_sysfs_flags))
+        return 0;
+
     memset(&collection->kobj, 0, sizeof(struct kobject));
     ret = kobject_tree_add(&collection->kobj,
                            &castle_attachments.collections_kobj,
@@ -937,6 +973,10 @@ int castle_sysfs_collection_add(struct castle_attachment *collection)
 
 void castle_sysfs_collection_del(struct castle_attachment *collection)
 {
+    /* Don't proceed, just return success - if sysfs is already finished. */
+    if (test_bit(CASTLE_SYSFS_FINISHED, &castle_sysfs_flags))
+        return;
+
     kobject_remove(&collection->kobj);
     castle_sysfs_kobj_release_wait(&collection->kobj);
 }
@@ -1027,6 +1067,9 @@ out1:
 
 void castle_sysfs_fini(void)
 {
+    set_bit(CASTLE_SYSFS_FINISHED, &castle_sysfs_flags);
+    mb();
+
     kobject_remove(&filesystem_kobj);
     kobject_remove(&double_arrays_kobj);
     kobject_remove(&castle_attachments.collections_kobj);

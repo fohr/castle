@@ -140,6 +140,11 @@ int castle_cache_advise (c_ext_pos_t s_cep, c2_advise_t advise, int chunks,
                          int priority, int debug);
 int castle_cache_advise_clear (c_ext_pos_t s_cep, c2_advise_t advise, int chunks,
                                int priority, int debug);
+void castle_cache_extent_flush(c_ext_id_t ext_id,
+                               uint64_t start,
+                               uint64_t size,
+                               unsigned int ratelimit);
+void castle_cache_extent_evict(c_ext_dirtytree_t *dirtytree);
 
 /**********************************************************************************************
  * Misc.
@@ -160,8 +165,6 @@ int         submit_c2b_remap_rda      (c2_block_t *c2b, c_disk_chk_t *remap_chun
             castle_cache_block_get    ((c_ext_pos_t){RESERVE_EXT_ID, 0}, 1)
 c2_block_t* castle_cache_block_get    (c_ext_pos_t  cep, int nr_pages);
 void        castle_cache_page_block_unreserve(c2_block_t *c2b);
-void        castle_cache_flush_wakeup (void);
-int         castle_cache_extent_flush (c_ext_id_t ext_id, uint64_t start, uint64_t size);
 int         castle_cache_extent_flush_schedule (c_ext_id_t ext_id, uint64_t start, uint64_t size);
 
 
@@ -192,6 +195,7 @@ void                       castle_mstore_fini              (struct castle_mstore
 int                        castle_checkpoint_init          (void);
 void                       castle_checkpoint_fini          (void);
 int                        castle_checkpoint_version_inc   (void);
+void                       castle_checkpoint_ratelimit_set (unsigned long ratelimit);
 int                        castle_chk_disk                 (void);
 
 void                       castle_cache_stats_print        (int verbose);

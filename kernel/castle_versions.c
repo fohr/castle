@@ -32,7 +32,10 @@ static struct list_head  *castle_versions_hash          = NULL;
 static          LIST_HEAD(castle_versions_init_list);
 static struct list_head  *castle_versions_counts_hash   = NULL;
 
-static c_ver_t            castle_versions_last   = INVAL_VERSION;
+/* castle_version_last should be same type as c_ver_t. */
+/* Note: we need this variable to be atomic, as max_get() can race with version_add(). */
+static atomic_t           castle_versions_last   = ATOMIC(INVAL_VERSION);
+static atomic_t           castle_versions_count  = ATOMIC(0);
 static c_mstore_t        *castle_versions_mstore = NULL;
 
 static int castle_versions_deleted_sysfs_hide = 1;  /**< Hide deleted versions from sysfs?      */
@@ -302,6 +305,7 @@ int castle_versions_count_get(c_da_t da_id, cv_health_t health)
  */
 static int castle_version_hash_remove(struct castle_version *v, void *unused)
 {
+    atomic_dec(&castle_versions_count);
     list_del(&v->hash_list);
     kmem_cache_free(castle_versions_cache, v);
 
@@ -325,13 +329,7 @@ static void castle_versions_init_add(struct castle_version *v)
 
 c_ver_t castle_version_max_get(void)
 {
-    int last;
-
-    read_lock_irq(&castle_versions_hash_lock);
-    last = castle_versions_last + 1;
-    read_unlock_irq(&castle_versions_hash_lock);
-
-    return last;
+    return atomic_read(&castle_versions_last) + 1;
 }
 
 static void castle_versions_drop(struct castle_version *p);
@@ -403,6 +401,13 @@ static int castle_version_needs_parent(struct castle_version *v, struct castle_v
     {
         c_ver_t ver_id = w->version;
 
+        /* If the child is created after merge started, assume that this version needs the
+         * key from parent.
+         * Note: Even if the version is deleted, it is possible that it's child might need it.
+         * We don't have much information to take any decision, so assume it needs the parent. */
+        if (ver_id >= state->last_version)
+            return 1;
+
         if (test_bit(ver_id, state->occupied))
             continue;
 
@@ -461,7 +466,7 @@ int castle_version_is_deletable(struct castle_version_delete_state *state, c_ver
         struct castle_version *del_v = list_entry(list, struct castle_version, del_list);
 
         /* dont look at versions created after merge started. */
-        if (del_v->version > state->last_version)
+        if (del_v->version >= state->last_version)
             continue;
 
         if (del_v->o_order < cur_v->o_order)
@@ -507,7 +512,9 @@ out:
 /**
  * Mark version for deletion during merges.
  *
- * @param version [in] version to be deleted
+ * @param version [in]  Version to be deleted
+ *
+ * NOTE: Can not be used to delete block device versions.
  *
  * @return non-zero if version couldn't be deleted
  */
@@ -534,16 +541,28 @@ int castle_version_delete(c_ver_t version)
         castle_vfree(event_vs);
         return -EINVAL;
     }
+    da_id = v->da_id;
+
+    /* Ensure we're not trying to delete a block device version. */
+    BUG_ON(DA_INVAL(da_id));
 
     /* Sanity check flags. */
     BUG_ON(test_bit(CV_ATTACHED_BIT, &v->flags));
     BUG_ON(!test_bit(CV_INITED_BIT, &v->flags));
 
+    if (!castle_double_array_alive(da_id))
+    {
+        castle_printk(LOG_INFO, "Couldn't find DA for version %u, must be marked deletion.\n",
+                                version);
+        write_unlock_irq(&castle_versions_hash_lock);
+        castle_vfree(event_vs);
+        return -EINVAL;
+    }
+
     /* Before making any changes check if this is the last version to delete. */
-    if (castle_versions_count_get(v->da_id, CVH_LIVE) == 1)
+    if (castle_versions_count_get(da_id, CVH_LIVE) == 1)
     {
         /* This is the last version. Don't delete the version, instead destroy DA. */
-        da_id = v->da_id;
 
         /* Release resources. */
         write_unlock_irq(&castle_versions_hash_lock);
@@ -572,10 +591,8 @@ int castle_version_delete(c_ver_t version)
         BUG_ON(d->o_order == v->o_order);
     }
     list_add_tail(&v->del_list, pos);
-    castle_versions_count_adjust(v->da_id, CVH_LIVE, 0 /*add*/);
 
     castle_printk(LOG_USERINFO, "Marked version %d for deletion: 0x%lx\n", version, v->flags);
-    da_id = v->da_id;
 
     /* Check if ancestors can be marked as leaf. Go upto root. */
     while(v->version != 0)
@@ -664,6 +681,7 @@ int castle_version_delete(c_ver_t version)
     if(event_vs)
         castle_vfree(event_vs);
 
+    castle_versions_count_adjust(da_id, CVH_LIVE, 0 /*add*/);
     castle_da_version_delete(da_id);
 
     /* raise event */
@@ -681,8 +699,8 @@ int castle_version_delete(c_ver_t version)
  *
  * @return parent of version v.
  * */
-static struct castle_version * castle_version_subtree_delete(struct castle_version *v,
-                                                             struct list_head *version_list)
+static struct castle_version * castle_version_delete_from_tree(struct castle_version *v,
+                                                               struct list_head *version_list)
 {
     struct castle_version *parent;
 
@@ -697,9 +715,11 @@ static struct castle_version * castle_version_subtree_delete(struct castle_versi
 
     /* Remove version from hash. */
     castle_versions_drop(v);
+    atomic_dec(&castle_versions_count);
     __castle_versions_hash_remove(v);
     list_del(&v->del_list);
-    list_add_tail(&v->free_list, version_list);
+    if (version_list)
+        list_add_tail(&v->free_list, version_list);
 
     return parent;
 }
@@ -743,12 +763,8 @@ int castle_version_tree_delete(c_ver_t version)
 
             /* Delete version and handle Parent. castle_version_subtree_delete()
              * returns parent of the deleted node. */
-            cur = castle_version_subtree_delete(cur, &version_list);
-            if (cur == NULL)
-            {
-                ret = -EINVAL;
-                goto error_out;
-            }
+            cur = castle_version_delete_from_tree(cur, &version_list);
+            BUG_ON(cur == NULL);
 
             if (done)
                 break;
@@ -778,6 +794,31 @@ error_out:
     return ret;
 }
 
+
+/**
+ * Free the resources used by version.
+ */
+int castle_version_free(c_ver_t version)
+{
+    struct castle_version *v;
+
+    /* Should be holding the transaction lock. */
+    BUG_ON(!CASTLE_IN_TRANSACTION);
+
+    v = castle_versions_hash_get(version);
+    if (v == NULL)
+        return -EINVAL;
+
+    BUG_ON(castle_version_delete_from_tree(v, NULL) == NULL);
+
+    castle_sysfs_version_del(version);
+    castle_events_version_delete_version(version);
+    kmem_cache_free(castle_versions_cache, v);
+
+    return 0;
+}
+
+
 /**
  * Allocate a new version structure and add it to castle_versions_hash.
  *
@@ -806,7 +847,7 @@ static struct castle_version* castle_version_add(c_ver_t version,
     {
         if (ret == -E2BIG)
             castle_printk(LOG_USERINFO,
-                    "Beta cannot create more than %d versions per DA.\n",
+                    "V1 cannot create more than %d versions per DA.\n",
                     CASTLE_VERSIONS_MAX);
         return NULL;
     }
@@ -868,6 +909,8 @@ static struct castle_version* castle_version_add(c_ver_t version,
         castle_versions_init_add(v);
         castle_versions_hash_add(v);
     }
+    /* Increment the number of versions known to the filesystem. */
+    atomic_inc(&castle_versions_count);
 
     return v;
 
@@ -889,7 +932,11 @@ c_da_t castle_version_da_id_get(c_ver_t version)
     v = __castle_versions_hash_get(version);
 
     /* Sanity checks */
-    if (!v) return INVAL_DA;
+    if (!v)
+    {
+        read_unlock_irq(&castle_versions_hash_lock);
+        return INVAL_DA;
+    }
 
     BUG_ON(!(v->flags & CV_INITED_MASK));
     da_id = v->da_id;
@@ -1157,6 +1204,21 @@ void castle_version_private_stats_adjust(c_ver_t version,
 }
 
 /**
+ * Return current state of crash consistent per-version stats.
+ *
+ * See _castle_version_stats_adjust() for argument info.
+ *
+ * @also _castle_version_stats_adjust()
+ */
+cv_nonatomic_stats_t castle_version_consistent_stats_get(c_ver_t version)
+{
+    cv_nonatomic_stats_t null_adjust = { 0, 0, 0, 0, 0 };
+
+    return _castle_version_stats_adjust(version, null_adjust,
+                                        0 /*live*/, 1 /*consistent*/, NULL /*private*/);
+}
+
+/**
  * Return current state of live per-version stats.
  *
  * See _castle_version_stats_adjust() for argument info.
@@ -1187,11 +1249,14 @@ struct timeval castle_version_creation_timestamp_get(c_ver_t version)
 }
 
 /* TODO who should handle errors in writeback? */
-static int castle_version_writeback(struct castle_version *v, void *unused)
+static int castle_version_writeback(struct castle_version *v, void *_data)
 {
     struct castle_vlist_entry mstore_ventry;
+    int is_fini = *(int *)_data;
 
     debug("Writing back version %d\n", v->version);
+
+    BUG_ON(is_fini && !DA_INVAL(v->da_id) && !castle_double_array_alive(v->da_id));
 
     mstore_ventry.version_nr        = v->version;
     mstore_ventry.parent            = (v->parent ? v->parent->version : 0);
@@ -1213,7 +1278,7 @@ static int castle_version_writeback(struct castle_version *v, void *unused)
     return 0;
 }
 
-int castle_versions_writeback(void)
+int castle_versions_writeback(int is_fini)
 { /* Should be called in CASTLE_TRANSACTION. */
     BUG_ON(castle_versions_mstore);
 
@@ -1223,7 +1288,7 @@ int castle_versions_writeback(void)
         return -ENOMEM;
 
     /* Writeback new copy. */
-    castle_versions_hash_iterate(castle_version_writeback, NULL);
+    castle_versions_hash_iterate(castle_version_writeback, &is_fini);
 
     castle_mstore_fini(castle_versions_mstore);
     castle_versions_mstore = NULL;
@@ -1241,6 +1306,22 @@ static struct castle_version* castle_version_new_create(int snap_or_clone,
     c_byte_off_t parent_size;
     c_ver_t version;
 
+    /* Updates to some variables (especially castle_versions_last) are protected by the
+       ctrl lock. Make sure its locked. */
+    BUG_ON(!castle_ctrl_is_locked());
+    /* We'll use last version + 1. */
+    version = atomic_read(&castle_versions_last) + 1;
+
+    /* Only accept 50k versions. This guarantees that we won't run out of space in
+       the mstore extent. */
+    if(atomic_read(&castle_versions_count) >= 50000)
+    {
+        castle_printk(LOG_WARN, "Too many versions created: %d, rejecting an attempt "
+                                "to create a new one.\n",
+                                atomic_read(&castle_versions_count));
+        return NULL;
+    }
+
     /* Read ftree root from the parent (also, make sure parent exists) */
     p = castle_versions_hash_get(parent);
     if(!p)
@@ -1251,11 +1332,6 @@ static struct castle_version* castle_version_new_create(int snap_or_clone,
     }
 
     parent_size = p->size;
-
-    /* Allocate a new version number. */
-    BUG_ON(VERSION_INVAL(castle_versions_last));
-    version = ++castle_versions_last;
-    BUG_ON(VERSION_INVAL(castle_versions_last));
 
     /* Try to add it to the hash. Use the da_id provided or the parent's */
     BUG_ON(!DA_INVAL(da_id) && !DA_INVAL(p->da_id));
@@ -1275,6 +1351,7 @@ static struct castle_version* castle_version_new_create(int snap_or_clone,
     /* Check if the version got initialised */
     if(!(v->flags & CV_INITED_MASK))
     {
+        atomic_dec(&castle_versions_count);
         castle_versions_hash_remove(v);
         kmem_cache_free(castle_versions_cache, v);
 
@@ -1286,6 +1363,8 @@ static struct castle_version* castle_version_new_create(int snap_or_clone,
     clear_bit(CV_LEAF_BIT, &p->flags);
 
     castle_events_version_create(version);
+    BUG_ON(version != atomic_read(&castle_versions_last) + 1);
+    atomic_inc(&castle_versions_last);
 
     return v;
 }
@@ -1321,15 +1400,15 @@ c_ver_t castle_version_new(int snap_or_clone,
                                   da_id,
                                   size);
 
-    /* Timestamp the creation. */
-    do_gettimeofday(&v->creation_timestamp);
-
     /* Return if we couldn't create the version correctly
        (possibly because we trying to clone attached version,
         or because someone asked for more than one snapshot to
         an attached version */
     if(!v)
         return INVAL_VERSION;
+
+    /* Timestamp the creation. */
+    do_gettimeofday(&v->creation_timestamp);
 
     /* We've succeeded at creating a new version number.
        Let's find where to store it on the disk. */
@@ -1641,7 +1720,7 @@ int castle_versions_zero_init(void)
         castle_printk(LOG_ERROR, "Failed to create verion ZERO\n");
         return -1;
     }
-    castle_versions_last = v->version;
+    atomic_set(&castle_versions_last, v->version);
 
     return 0;
 }
@@ -1713,8 +1792,9 @@ int castle_versions_read(void)
             v->creation_timestamp.tv_usec = mstore_ventry.creation_time_us;
         }
 
-        if (VERSION_INVAL(castle_versions_last) || v->version > castle_versions_last)
-            castle_versions_last = v->version;
+        if (VERSION_INVAL(atomic_read(&castle_versions_last)) ||
+                        v->version > atomic_read(&castle_versions_last))
+            atomic_set(&castle_versions_last, v->version);
     }
     ret = castle_versions_process();
 

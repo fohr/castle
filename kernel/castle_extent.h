@@ -15,6 +15,12 @@ typedef struct castle_extent_dirtytree {
     atomic_t            ref_cnt;    /**< References to this dirtylist.              */
     struct rb_root      rb_root;    /**< RB-tree of dirty c2bs.                     */
     struct list_head    list;       /**< Position on castle_cache_extent_dirtylist. */
+#ifdef CASTLE_PERF_DEBUG
+    int                 nr_pages;   /**< Sum of c2b->nr_pages for c2bs in tree.
+                                         Protected by lock.                         */
+    c_chk_cnt_t         ext_size;   /**< Size of extent when created (in chunks).   */
+    c_ext_type_t        ext_type;   /**< Extent type when created.                  */
+#endif
 } c_ext_dirtytree_t;
 
 void                castle_extent_transaction_start         (void);
@@ -41,6 +47,12 @@ uint32_t            castle_extent_map_get                   (void*          ext_
                                                              c_chk_t        offset,
                                                              c_disk_chk_t  *chk_maps,
                                                              int            rw);
+#ifdef CASTLE_PERF_DEBUG
+void                castle_extent_not_up2date_inc           (c_ext_id_t         ext_id);
+void                castle_extent_up2date_inc               (c_ext_id_t         ext_id);
+int                 castle_extent_not_up2date_get_reset     (c_ext_id_t         ext_id);
+int                 castle_extent_up2date_get_reset         (c_ext_id_t         ext_id);
+#endif
 c_ext_dirtytree_t  *castle_extent_dirtytree_by_id_get       (c_ext_id_t         ext_id);
 void                castle_extent_dirtytree_get             (c_ext_dirtytree_t *dirtytree);
 void                castle_extent_dirtytree_put             (c_ext_dirtytree_t *dirtytree);
@@ -68,5 +80,7 @@ int                 castle_extents_slave_scan               (uint32_t uuid);
 void                castle_extent_micro_ext_update          (struct castle_slave *cs);
 signed int          castle_extent_ref_cnt_get               (c_ext_id_t);
 c_ext_type_t        castle_extent_type_get                  (c_ext_id_t);
+void                castle_extents_remap_writeback_setstate  (void);
+void                castle_extents_remap_writeback           (void);
 
 #endif /* __CASTLE_EXTENT_H__ */

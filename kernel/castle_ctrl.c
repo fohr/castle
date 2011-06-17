@@ -139,6 +139,9 @@ void castle_control_create(uint64_t size, int *ret, c_ver_t *id)
     /* We use doubling arrays for collection trees */
     if (collection_tree && castle_double_array_make(da_id, version))
     {
+        /* Free the created version. */
+        BUG_ON(castle_version_free(version));
+
         castle_printk(LOG_ERROR, "Failed creating doubling array for version: %d\n", version);
         version = INVAL_VERSION;
     }
@@ -241,6 +244,7 @@ static int castle_collection_writeback(struct castle_attachment *ca)
     debug("Collection add: %s,%u\n", ca->col.name, ca->version);
 
     mstore_entry.version = ca->version;
+    mstore_entry.flags   = ca->col.flags;
     strcpy(mstore_entry.name, ca->col.name);
 
     castle_mstore_entry_insert(castle_attachments_store, &mstore_entry);
@@ -314,7 +318,8 @@ int castle_attachments_read(void)
         castle_mstore_iterator_next(iterator, &mstore_entry, &key);
         strcpy(name, mstore_entry.name);
         debug("Collection Load: %s\n", name);
-        ca = castle_collection_init(mstore_entry.version, name);
+
+        ca = castle_collection_init(mstore_entry.version, mstore_entry.flags, name);
         if(!ca)
         {
             castle_printk(LOG_WARN, "Failed to create Collection (%s, %u)\n",
@@ -341,6 +346,7 @@ void castle_control_collection_attach(c_ver_t            version,
 {
     struct list_head            *lh;
     struct castle_attachment *ca;
+    uint32_t flags = 0;
 
     BUG_ON(strlen(name) > MAX_NAME_SIZE);
 
@@ -353,6 +359,7 @@ void castle_control_collection_attach(c_ver_t            version,
         if (strcmp(name, ca->col.name) == 0)
         {
             castle_printk(LOG_WARN, "Collection name %s already exists\n", ca->col.name);
+            castle_free(name);
             *ret = -EEXIST;
             return;
         }
@@ -361,11 +368,18 @@ void castle_control_collection_attach(c_ver_t            version,
     if (castle_version_deleted(version))
     {
         castle_printk(LOG_WARN, "Version is already marked for deletion. Can't be attached\n");
+        castle_free(name);
         *ret = -EINVAL;
         return;
     }
 
-    ca = castle_collection_init(version, name);
+    /* Check if the read-only flag can be set. */
+    /* Note: If an attachment is marked as RD_ONLY it can't be changed back to writable,
+     * even when the version becomes writable (all children got deleted). */
+    if (!castle_version_is_leaf(version))
+        __set_bit(CASTLE_ATTACH_RDONLY, &flags);
+
+    ca = castle_collection_init(version, flags, name);
     if(!ca)
     {
         castle_printk(LOG_WARN, "Couldn't find collection for version: %u\n", version);
@@ -473,6 +487,13 @@ void castle_control_collection_snapshot_delete(c_ver_t version,
     if (castle_version_attached(version))
     {
         castle_printk(LOG_WARN, "Version %d is attached. Couldn't be deleted.\n", version);
+        *ret = -EINVAL;
+        return;
+    }
+
+    if (castle_version_deleted(version))
+    {
+        castle_printk(LOG_WARN, "Version %d is already deleted. Couldn't be deleted.\n", version);
         *ret = -EINVAL;
         return;
     }
@@ -672,9 +693,9 @@ void castle_control_slave_evacuate(uint32_t uuid, uint32_t force, int *ret)
 
     } else
     {
-        set_bit(CASTLE_SLAVE_EVACUATE_BIT, &slave->flags);
-        castle_printk(LOG_USERINFO, "Slave 0x%x [%s] has been marked as evacuating.\n",
-                      slave->uuid, slave->bdev_name);
+        castle_printk(LOG_ERROR, "Error: slave evacuation is not supported.\n");
+        *ret = -ENOSYS;
+        return;
     }
     castle_extents_rebuild_wake();
     *ret = EXIT_SUCCESS;

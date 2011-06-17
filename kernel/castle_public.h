@@ -18,7 +18,7 @@
 enum {
     CVT_TYPE_INLINE          = 0x10,
     CVT_TYPE_ONDISK          = 0x20,
-    CVT_TYPE_INVALID         = 0x30,
+    CVT_TYPE_INVALID         = 0x00,
 };
 #endif
 
@@ -99,13 +99,15 @@ typedef enum {
     TRACE_DA_MERGE_UNIT_C2B_SYNC_WAIT_DATA_NS_ID,
     TRACE_DA_MERGE_UNIT_GET_C2B_NS_ID,
     TRACE_DA_MERGE_UNIT_MOBJ_COPY_NS_ID,
+    TRACE_DA_MERGE_UNIT_CACHE_BTREE_EFFICIENCY_ID,  /**< % of up2date btree chunk-c2bs.         */
+    TRACE_DA_MERGE_UNIT_CACHE_DATA_EFFICIENCY_ID,   /**< % of up2date data chunk-c2bs.          */
 } c_trc_da_var_t;
 
 #define MERGE_START_FLAG    (1U<<0)
 #define MERGE_END_FLAG      (1U<<1)
 
 /* Bump the magic version byte (LSB) when c_trc_evt_t changes. */
-#define CASTLE_TRACE_MAGIC          0xCAE5E10D
+#define CASTLE_TRACE_MAGIC          0xCAE5E10E
 typedef struct castle_trace_event {
     uint32_t                    magic;
     struct timeval              timestamp;
@@ -545,7 +547,7 @@ struct castle_key_value_list {
 #define CASTLE_SLAVE_MAGIC1     (0x02061985)
 #define CASTLE_SLAVE_MAGIC2     (0x16071983)
 #define CASTLE_SLAVE_MAGIC3     (0x16061981)
-#define CASTLE_SLAVE_VERSION    (14)
+#define CASTLE_SLAVE_VERSION    (15)
 
 #define CASTLE_SLAVE_NEWDEV     (0x00000004)
 #define CASTLE_SLAVE_SSD        (0x00000008)

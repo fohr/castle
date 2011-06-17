@@ -687,6 +687,8 @@ int castle_fs_init(void)
         return -EINVAL;
     }
 
+    castle_checkpoint_ratelimit_set(25 * 1024 * slave_count);
+
     if (!first)
     {
         if (nr_live_slaves == nr_fs_slaves - 1)
@@ -796,7 +798,7 @@ int castle_fs_init(void)
 
         if ((ret = castle_new_ext_freespace_init(&castle_global_tree.tree_ext_free,
                                                   castle_global_tree.da,
-                                                  EXT_T_BTREE_NODES,
+                                                  EXT_T_GLOBAL_BTREE,
                                                   castle_global_tree.tree_ext_free.ext_size, 1,
                                                   NULL, NULL)) < 0)
         {
@@ -807,7 +809,7 @@ int castle_fs_init(void)
 
         if ((ret = castle_new_ext_freespace_init(&castle_global_tree.data_ext_free,
                                                   castle_global_tree.da,
-                                                  EXT_T_MEDIUM_OBJECTS,
+                                                  EXT_T_BLOCK_DEV,
                                                   castle_global_tree.data_ext_free.ext_size, 1,
                                                   NULL, NULL)) < 0)
         {
@@ -1000,6 +1002,8 @@ static int castle_block_ordered_supp_test(struct block_device *bdev)
     set_buffer_dirty(bh);
     set_buffer_ordered(bh);
     ret = sync_dirty_buffer(bh);
+
+    clear_buffer_write_io_error(bh);
 
     bforget(bh);
 
@@ -2043,7 +2047,7 @@ struct castle_attachment* castle_attachment_get(c_collection_id_t col_id, int rw
             continue;
         if(ca->col.id == col_id)
         {
-            if (rw == WRITE && !castle_version_is_leaf(ca->version))
+            if (rw == WRITE && castle_collection_is_rdonly(ca))
                 result = NULL;
             else
             {
@@ -2228,7 +2232,12 @@ error_out:
     return NULL;
 }
 
-struct castle_attachment* castle_collection_init(c_ver_t version, char *name)
+int castle_collection_is_rdonly(struct castle_attachment *ca)
+{
+    return test_bit(CASTLE_ATTACH_RDONLY, &ca->col.flags);
+}
+
+struct castle_attachment* castle_collection_init(c_ver_t version, uint32_t flags, char *name)
 {
     struct castle_attachment *collection = NULL;
     static c_collection_id_t collection_id = 0;
@@ -2256,6 +2265,7 @@ struct castle_attachment* castle_collection_init(c_ver_t version, char *name)
 
     collection->col.id   = collection_id++;
     collection->col.name = name;
+    collection->col.flags= flags;
     spin_lock(&castle_attachments.lock);
     list_add(&collection->list, &castle_attachments.attachments);
     spin_unlock(&castle_attachments.lock);
