@@ -7,7 +7,7 @@
 #include <sys/time.h>
 #endif
 
-#define CASTLE_PROTOCOL_VERSION 10
+#define CASTLE_PROTOCOL_VERSION 11
 
 #define PACKED               __attribute__((packed))
 
@@ -70,21 +70,32 @@ typedef enum {
  * Cache trace variables.
  */
 typedef enum {
-    TRACE_CACHE_CHECKPOINT_ID,          /**< Checkpoint running.                                */
-    TRACE_CACHE_DIRTY_PGS_ID,           /**< Number of c2ps on the dirtylist.                   */
-    TRACE_CACHE_CLEAN_PGS_ID,           /**< Number of c2ps on the cleanlist.                   */
-    TRACE_CACHE_FREE_PGS_ID,            /**< Number of c2ps on the freelist.                    */
-    TRACE_CACHE_RESERVE_PGS_ID,         /**< Number of c2ps on the reserve freelist.            */
-    TRACE_CACHE_CLEAN_BLKS_ID,          /**< Number of c2bs on the cleanlist.                   */
-    TRACE_CACHE_FREE_BLKS_ID,           /**< Number of c2bs on the freelist.                    */
-    TRACE_CACHE_RESERVE_BLKS_ID,        /**< Number of c2bs on the reserve freelist.            */
-    TRACE_CACHE_SOFTPIN_BLKS_ID,        /**< Number of softpin c2bs in the cache.               */
-    TRACE_CACHE_BLOCK_VICTIMS_ID,       /**< Number of c2bs evicted from the cache.             */
-    TRACE_CACHE_SOFTPIN_VICTIMS_ID,     /**< Number of softpinned c2bs evicted from the cache.  */
-    TRACE_CACHE_READS_ID,               /**< Number of reads this tick.                         */
-    TRACE_CACHE_WRITES_ID,              /**< Number of writes this tick.                        */
-    TRACE_CACHE_RESERVE_PGS_USED_ID,    /**< Number of c2ps from reserve freelist in use.       */
-    TRACE_CACHE_RESERVE_BLKS_USED_ID,   /**< Number of c2bs from reserve freelist in use.       */
+    TRACE_CACHE_CHECKPOINT_ID,            /**< Checkpoint running.                                */
+    TRACE_CACHE_DIRTY_PGS_ID,             /**< Number of c2ps on the dirtylist.                   */
+    TRACE_CACHE_CLEAN_PGS_ID,             /**< Number of c2ps on the cleanlist.                   */
+    TRACE_CACHE_FREE_PGS_ID,              /**< Number of c2ps on the freelist.                    */
+    TRACE_CACHE_RESERVE_PGS_ID,           /**< Number of c2ps on the reserve freelist.            */
+    TRACE_CACHE_CLEAN_BLKS_ID,            /**< Number of c2bs on the cleanlist.                   */
+    TRACE_CACHE_FREE_BLKS_ID,             /**< Number of c2bs on the freelist.                    */
+    TRACE_CACHE_RESERVE_BLKS_ID,          /**< Number of c2bs on the reserve freelist.            */
+    TRACE_CACHE_SOFTPIN_BLKS_ID,          /**< Number of softpin c2bs in the cache.               */
+    TRACE_CACHE_BLOCK_VICTIMS_ID,         /**< Number of c2bs evicted from the cache.             */
+    TRACE_CACHE_SOFTPIN_VICTIMS_ID,       /**< Number of softpinned c2bs evicted from the cache.  */
+    TRACE_CACHE_READS_ID,                 /**< Number of reads this tick.                         */
+    TRACE_CACHE_WRITES_ID,                /**< Number of writes this tick.                        */
+    TRACE_CACHE_RESERVE_PGS_USED_ID,      /**< Number of c2ps from reserve freelist in use.       */
+    TRACE_CACHE_RESERVE_BLKS_USED_ID,     /**< Number of c2bs from reserve freelist in use.       */
+    TRACE_CACHE_META_DATA_IOS_ID,         /**< IOs to meta extent                                 */
+    TRACE_CACHE_GLOBAL_BTREE_IOS_ID,      /**< IOs to global btree extent                         */
+    TRACE_CACHE_BLOCK_DEV_IOS_ID,         /**< IOs to device mapper blocks                        */
+    TRACE_CACHE_INTERNAL_NODES_IOS_ID,    /**< IOs to non T0 internal btree nodes                 */
+    TRACE_CACHE_LEAF_NODES_IOS_ID,        /**< IOs to non T0 leaf btree nodes                     */
+    TRACE_CACHE_MEDIUM_OBJECTS_IOS_ID,    /**< IOs to non T0 medium objects                       */
+    TRACE_CACHE_T0_INTERNAL_NODES_IOS_ID, /**< IOs to T0 internal btree nodes                     */
+    TRACE_CACHE_T0_LEAF_NODES_IOS_ID,     /**< IOs to T0 leaf btree nodes                         */
+    TRACE_CACHE_T0_MEDIUM_OBJECTS_IOS_ID, /**< IOs to T0 medium objects                           */
+    TRACE_CACHE_LARGE_OBJECT_IOS_ID,      /**< IOs to large objects                               */
+    TRACE_CACHE_BLOOM_FILTER_IOS_ID,      /**< IOs to bloom filters                               */
 } c_trc_cache_var_t;
 
 /**

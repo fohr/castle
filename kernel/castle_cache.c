@@ -294,6 +294,9 @@ static atomic_t                castle_cache_block_victims;          /**< #clean 
 static atomic_t                castle_cache_softpin_block_victims;  /**< #softpin blocks evicted  */
 static atomic_t                castle_cache_dirty_pages;
 static atomic_t                castle_cache_clean_pages;
+/* Extent related stats */
+static atomic_t extent_stats[EXT_T_INVALID];
+
 static atomic_t                c2_pref_active_window_size;  /**< Number of chunk-sized c2bs that are
                                                     marked as C2B_prefetch and covered by a prefetch
                                                     window currently in the tree.                 */
@@ -363,7 +366,7 @@ static void c2_pref_c2b_destroy(c2_block_t *c2b);
  */
 void castle_cache_stats_print(int verbose)
 {
-    int count;
+    int count, i;
     int reads = atomic_read(&castle_cache_read_stats);
     int writes = atomic_read(&castle_cache_write_stats);
     atomic_sub(reads, &castle_cache_read_stats);
@@ -399,6 +402,12 @@ void castle_cache_stats_print(int verbose)
     castle_trace_cache(TRACE_VALUE,
                        TRACE_CACHE_SOFTPIN_BLKS_ID,
                        atomic_read(&castle_cache_cleanlist_softpin_size));
+    for(i = 0; i < EXT_T_INVALID; i++)
+    {
+        count = atomic_read(&extent_stats[i]);
+        atomic_sub(count, &extent_stats[i]);
+        castle_trace_cache(TRACE_VALUE, TRACE_CACHE_META_DATA_IOS_ID + i, count);
+    }
     count = atomic_read(&castle_cache_block_victims);
     atomic_sub(count, &castle_cache_block_victims);
     castle_trace_cache(TRACE_VALUE, TRACE_CACHE_BLOCK_VICTIMS_ID, count);
@@ -1235,6 +1244,7 @@ int submit_c2b_io(int           rw,
     struct bio *bio;
     struct bio_info *bio_info;
     int i, j, batch;
+    c_ext_type_t extent_type;
 
 #ifdef CASTLE_DEBUG
     /* Check that we are submitting IO to the right ceps. */
@@ -1259,6 +1269,11 @@ int submit_c2b_io(int           rw,
         dcep.offset += PAGE_SIZE;
     }
 #endif
+
+    /* Update extent-type statistics */
+    extent_type = castle_extent_type_get(cep.ext_id);
+    if(extent_type != EXT_T_INVALID)
+        atomic_inc(&extent_stats[extent_type]);
 
     /* Work out the slave structure. */
     cs = castle_slave_find_by_uuid(disk_chk.slave_id);
