@@ -4308,9 +4308,12 @@ int castle_cache_advise(c_ext_pos_t cep, c2_advise_t advise, int chunks, int pri
 {
     BUG_ON(advise & C2_ADV_BACK);
 
-    /* Return if we're trying to hardpin and it's disabled. */
+    /* Downgrade to softpin if hardpinning is disabled. */
     if (!castle_cache_allow_hardpinning && (advise & C2_ADV_HARDPIN))
-        return EXIT_SUCCESS;
+    {
+        advise &= ~C2_ADV_HARDPIN;
+        advise |=  C2_ADV_SOFTPIN;
+    }
 
     /* Prefetching is handled via a _prefetch_advise() call. */
     if ((advise & C2_ADV_PREFETCH) && !(advise & C2_ADV_EXTENT))
@@ -4350,9 +4353,12 @@ int castle_cache_advise_clear(c_ext_pos_t cep, c2_advise_t advise, int chunks,
 {
     BUG_ON(advise & C2_ADV_BACK);
 
-    /* Return if we're trying to hardpin and it's disabled. */
+    /* Downgrade to softpin if hardpinning is disabled. */
     if (!castle_cache_allow_hardpinning && (advise & C2_ADV_HARDPIN))
-        return EXIT_SUCCESS;
+    {
+        advise &= ~C2_ADV_HARDPIN;
+        advise |=  C2_ADV_SOFTPIN;
+    }
 
     /* There's no such thing as 'unprefetching'. */
     if (advise & C2_ADV_PREFETCH && !(advise & C2_ADV_EXTENT))
