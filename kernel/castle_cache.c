@@ -294,8 +294,14 @@ static atomic_t                castle_cache_block_victims;          /**< #clean 
 static atomic_t                castle_cache_softpin_block_victims;  /**< #softpin blocks evicted  */
 static atomic_t                castle_cache_dirty_pages;
 static atomic_t                castle_cache_clean_pages;
+
 /* Extent related stats */
-static atomic_t extent_stats[EXT_T_INVALID];
+typedef struct castle_cache_extent_stats {
+    atomic_t        hits;                   /**< c2b_get() where c2b_uptodate(c2b)                */
+    atomic_t        misses;                 /**< c2b_get() where !c2b_uptodate(c2b)               */
+    atomic_t        ios_cnt;                /**< Number of submit_c2b_io() calls                  */
+} c2_extent_stats_t;
+static c2_extent_stats_t       extent_stats[EXT_T_INVALID];
 
 static atomic_t                c2_pref_active_window_size;  /**< Number of chunk-sized c2bs that are
                                                     marked as C2B_prefetch and covered by a prefetch
@@ -366,7 +372,7 @@ static void c2_pref_c2b_destroy(c2_block_t *c2b);
  */
 void castle_cache_stats_print(int verbose)
 {
-    int count, i;
+    int hits, misses, count, i;
     int reads = atomic_read(&castle_cache_read_stats);
     int writes = atomic_read(&castle_cache_write_stats);
     atomic_sub(reads, &castle_cache_read_stats);
@@ -402,12 +408,6 @@ void castle_cache_stats_print(int verbose)
     castle_trace_cache(TRACE_VALUE,
                        TRACE_CACHE_SOFTPIN_BLKS_ID,
                        atomic_read(&castle_cache_cleanlist_softpin_size));
-    for(i = 0; i < EXT_T_INVALID; i++)
-    {
-        count = atomic_read(&extent_stats[i]);
-        atomic_sub(count, &extent_stats[i]);
-        castle_trace_cache(TRACE_VALUE, TRACE_CACHE_META_DATA_IOS_ID + i, count);
-    }
     count = atomic_read(&castle_cache_block_victims);
     atomic_sub(count, &castle_cache_block_victims);
     castle_trace_cache(TRACE_VALUE, TRACE_CACHE_BLOCK_VICTIMS_ID, count);
@@ -416,6 +416,30 @@ void castle_cache_stats_print(int verbose)
     castle_trace_cache(TRACE_VALUE, TRACE_CACHE_SOFTPIN_VICTIMS_ID, count);
     castle_trace_cache(TRACE_VALUE, TRACE_CACHE_READS_ID, reads);
     castle_trace_cache(TRACE_VALUE, TRACE_CACHE_WRITES_ID, writes);
+
+    hits = misses = 0;
+    for (i = 0; i < EXT_T_INVALID; i++)
+    {
+        count = atomic_read(&extent_stats[i].ios_cnt);
+        atomic_sub(count, &extent_stats[i].ios_cnt);
+        castle_trace_cache(TRACE_VALUE, TRACE_CACHE_META_DATA_IOS_ID + i, count);
+
+        count = atomic_read(&extent_stats[i].hits);
+        atomic_sub(count, &extent_stats[i].hits);
+        hits += count;
+
+        count = atomic_read(&extent_stats[i].misses);
+        atomic_sub(count, &extent_stats[i].misses);
+        misses += count;
+    }
+    castle_trace_cache(TRACE_VALUE, TRACE_CACHE_BLOCK_GET_HITS_ID, hits);
+    castle_trace_cache(TRACE_VALUE, TRACE_CACHE_BLOCK_GET_MISSES_ID, misses);
+    if (hits)
+        count = (100 * hits) / (hits + misses);
+    castle_trace_cache(TRACE_VALUE, TRACE_CACHE_BLOCK_GET_HITS_PCT_ID, count);
+//    if (misses)
+//        count = (100 * misses) / (hits + misses);
+//    castle_trace_cache(TRACE_VALUE, TRACE_CACHE_BLOCK_GET_MISSES_PCT_ID, count);
 }
 
 EXPORT_SYMBOL(castle_cache_stats_print);
@@ -1244,7 +1268,7 @@ int submit_c2b_io(int           rw,
     struct bio *bio;
     struct bio_info *bio_info;
     int i, j, batch;
-    c_ext_type_t extent_type;
+    c_ext_type_t ext_type;
 
 #ifdef CASTLE_DEBUG
     /* Check that we are submitting IO to the right ceps. */
@@ -1271,9 +1295,9 @@ int submit_c2b_io(int           rw,
 #endif
 
     /* Update extent-type statistics */
-    extent_type = castle_extent_type_get(cep.ext_id);
-    if(extent_type != EXT_T_INVALID)
-        atomic_inc(&extent_stats[extent_type]);
+    ext_type = castle_extent_type_get(cep.ext_id);
+    if (ext_type != EXT_T_INVALID)
+        atomic_inc(&extent_stats[ext_type].ios_cnt);
 
     /* Work out the slave structure. */
     cs = castle_slave_find_by_uuid(disk_chk.slave_id);
@@ -3001,6 +3025,7 @@ static inline void castle_cache_page_freelist_grow(int nr_pages)
 
 c2_block_t* _castle_cache_block_get(c_ext_pos_t cep, int nr_pages, int transient)
 {
+    c_ext_type_t ext_type;
     c2_block_t *c2b;
     c2_page_t **c2ps;
 
@@ -3019,7 +3044,8 @@ c2_block_t* _castle_cache_block_get(c_ext_pos_t cep, int nr_pages, int transient
         {
             /* Make sure that the number of pages agrees */
             BUG_ON(c2b->nr_pages != nr_pages);
-            return c2b;
+
+            goto out;
         }
 
         /* If we couldn't find in the hash, try allocating from the freelists. Get c2b first. */
@@ -3087,10 +3113,27 @@ c2_block_t* _castle_cache_block_get(c_ext_pos_t cep, int nr_pages, int transient
         {
             BUG_ON(c2b->nr_pages != nr_pages);
             /* Mark c2b as transient, if required. */
-            if (transient)  set_c2b_transient(c2b);
-            return c2b;
+            if (transient)
+                set_c2b_transient(c2b);
+
+            goto out;
         }
     }
+
+    BUG(); /* can't reach here */
+
+out:
+    /* Update per-extent type cache statistics. */
+    ext_type = castle_extent_type_get(c2b->cep.ext_id);
+    if (ext_type != EXT_T_INVALID)
+    {
+        if (c2b_uptodate(c2b))
+            atomic_add(c2b->nr_pages, &extent_stats[ext_type].hits);
+        else
+            atomic_add(c2b->nr_pages, &extent_stats[ext_type].misses);
+    }
+
+    return c2b;
 }
 
 /**
