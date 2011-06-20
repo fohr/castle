@@ -441,6 +441,8 @@ typedef struct castle_var_length_object_key {
 #define CASTLE_RING_ITER_FINISH 9
 #define CASTLE_RING_ITER_SKIP 10
 #define CASTLE_RING_REMOVE 11
+#define CASTLE_RING_COUNTER_SET_REPLACE 12
+#define CASTLE_RING_COUNTER_ADD_REPLACE 13
 
 typedef uint32_t castle_interface_token_t;
 
@@ -451,6 +453,15 @@ typedef struct castle_request_replace {
     void                 *value_ptr;
     uint32_t              value_len;
 } castle_request_replace_t;
+
+typedef struct castle_request_counter_replace {
+    c_collection_id_t     collection_id;
+    c_vl_okey_t          *key_ptr;
+    uint8_t               add; /* 0: SET op, 1: ADD op */
+    uint32_t              key_len;
+    void                 *value_ptr;
+    uint32_t              value_len;
+} castle_request_counter_replace_t;
 
 typedef struct castle_request_remove {
     c_collection_id_t     collection_id;
@@ -465,6 +476,14 @@ typedef struct castle_request_get {
     void                *value_ptr; /* where to put the result */
     uint32_t             value_len;
 } castle_request_get_t;
+
+typedef struct castle_request_counter_get {
+    c_collection_id_t    collection_id;
+    c_vl_okey_t         *key_ptr;
+    uint32_t             key_len;
+    void                *value_ptr; /* where to put the result */
+    uint32_t             value_len;
+} castle_request_counter_get_t;
 
 typedef struct castle_request_iter_start {
     c_collection_id_t    collection_id;
@@ -520,6 +539,9 @@ typedef struct castle_request {
         castle_request_replace_t     replace;
         castle_request_remove_t      remove;
         castle_request_get_t         get;
+
+        castle_request_counter_replace_t    counter_replace;
+        castle_request_counter_get_t        counter_get;
 
         castle_request_big_get_t     big_get;
         castle_request_get_chunk_t   get_chunk;

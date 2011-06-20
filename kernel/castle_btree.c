@@ -72,6 +72,8 @@ struct castle_btree_node_save {
 
 #define MTREE_ENTRY_IS_TOMB_STONE(_slot)    CVT_TOMB_STONE(*(_slot))
 #define MTREE_ENTRY_IS_INLINE(_slot)        CVT_INLINE(*(_slot))
+#define MTREE_ENTRY_IS_COUNTER_SET(_slot)   CVT_COUNTER_SET(*(_slot))
+#define MTREE_ENTRY_IS_COUNTER_ADD(_slot)   CVT_COUNTER_ADD(*(_slot))
 #define MTREE_ENTRY_IS_LARGE_OBJECT(_slot)  CVT_LARGE_OBJECT(*(_slot))
 #define MTREE_ENTRY_IS_MEDIUM_OBJECT(_slot) CVT_MEDIUM_OBJECT(*(_slot))
 #define MTREE_ENTRY_IS_ONDISK(_slot)        CVT_ONDISK(*(_slot))
@@ -349,6 +351,8 @@ struct castle_btree_type castle_mtree = {
 
 #define BATREE_ENTRY_IS_TOMB_STONE(_slot)    CVT_TOMB_STONE(*(_slot))
 #define BATREE_ENTRY_IS_INLINE(_slot)        CVT_INLINE(*(_slot))
+#define BATREE_ENTRY_IS_COUNTER_SET(_slot)   CVT_COUNTER_SET(*(_slot))
+#define BATREE_ENTRY_IS_COUNTER_ADD(_slot)   CVT_COUNTER_ADD(*(_slot))
 #define BATREE_ENTRY_IS_LARGE_OBJECT(_slot)  CVT_LARGE_OBJECT(*(_slot))
 #define BATREE_ENTRY_IS_MEDIUM_OBJECT(_slot) CVT_MEDIUM_OBJECT(*(_slot))
 #define BATREE_ENTRY_IS_ONDISK(_slot)        CVT_ONDISK(*(_slot))
@@ -680,6 +684,8 @@ struct castle_btree_type castle_batree = {
 
 #define VLBA_TREE_ENTRY_IS_TOMB_STONE(_slot)    CVT_TOMB_STONE(*(_slot))
 #define VLBA_TREE_ENTRY_IS_INLINE(_slot)        CVT_INLINE(*(_slot))
+#define VLBA_ENTRY_IS_COUNTER_SET(_slot)        CVT_COUNTER_SET(*(_slot))
+#define VLBA_ENTRY_IS_COUNTER_ADD(_slot)        CVT_COUNTER_ADD(*(_slot))
 #define VLBA_TREE_ENTRY_IS_LARGE_OBJECT(_slot)  CVT_LARGE_OBJECT(*(_slot))
 #define VLBA_TREE_ENTRY_IS_MEDIUM_OBJECT(_slot) CVT_MEDIUM_OBJECT(*(_slot))
 #define VLBA_TREE_ENTRY_IS_ONDISK(_slot)        CVT_ONDISK(*(_slot))

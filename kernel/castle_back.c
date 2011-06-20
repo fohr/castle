@@ -2726,6 +2726,7 @@ static void castle_back_request_process(struct castle_back_conn *conn, struct ca
      * return before hitting the DA. */
     op->cpu_index = conn->cpu_index;
 
+    CVT_INVALID_SET(op->replace.cvt);
     switch (op->req.tag)
     {
         /* Point ops
@@ -2740,6 +2741,20 @@ static void castle_back_request_process(struct castle_back_conn *conn, struct ca
             break;
 
         case CASTLE_RING_REPLACE:
+            INIT_WORK(&op->work, castle_back_replace, op);
+            key_len = op->req.replace.key_len;
+            castle_back_key_copy_get(conn, op->req.replace.key_ptr, key_len, &key);
+            break;
+
+        case CASTLE_RING_COUNTER_SET_REPLACE:
+            CVT_COUNTER_SET_SET(op->replace.cvt);
+            INIT_WORK(&op->work, castle_back_replace, op);
+            key_len = op->req.replace.key_len;
+            castle_back_key_copy_get(conn, op->req.replace.key_ptr, key_len, &key);
+            break;
+
+        case CASTLE_RING_COUNTER_ADD_REPLACE:
+            CVT_COUNTER_ADD_SET(op->replace.cvt);
             INIT_WORK(&op->work, castle_back_replace, op);
             key_len = op->req.replace.key_len;
             castle_back_key_copy_get(conn, op->req.replace.key_ptr, key_len, &key);

@@ -417,6 +417,8 @@ enum {
      * 1 - Large objects
      * 0 - Medium objects */
     CVT_TYPE_LARGE_OBJECT    = 0x40,
+    CVT_TYPE_COUNTER_SET     = 0x80,
+    CVT_TYPE_COUNTER_ADD     = 0x100,
     CVT_TYPE_INVALID         = 0x00,
 };
 
@@ -428,8 +430,8 @@ enum {
 struct castle_value_tuple {
     /* align:   8 */
     /* offset:  0 */ struct {
-    /*          0 */     uint64_t      type:8;
-    /*          1 */     uint64_t      length:56;
+    /*          0 */     uint64_t      type:10; //TODO@tr change this back to 8 and change CVT type handling to pack more types into the 8 bit range
+    /*          1 */     uint64_t      length:54;
     /*          8 */ };
     /*          8 */ union {
     /*          8 */     c_ext_pos_t   cep;
@@ -446,6 +448,8 @@ typedef struct castle_value_tuple c_val_tup_t;
 #define CVT_NODE(_cvt)          ((_cvt).type & CVT_TYPE_NODE)
 #define CVT_TOMB_STONE(_cvt)    (CVT_LEAF_VAL(_cvt) && ((_cvt).type & CVT_TYPE_TOMB_STONE))
 #define CVT_INLINE(_cvt)        (CVT_LEAF_VAL(_cvt) && ((_cvt).type & CVT_TYPE_INLINE))
+#define CVT_COUNTER_SET(_cvt)   (CVT_LEAF_VAL(_cvt) && ((_cvt).type & CVT_TYPE_COUNTER_SET))
+#define CVT_COUNTER_ADD(_cvt)   (CVT_LEAF_VAL(_cvt) && ((_cvt).type & CVT_TYPE_COUNTER_ADD))
 #define CVT_ONDISK(_cvt)        (CVT_LEAF_VAL(_cvt) && ((_cvt).type & CVT_TYPE_ONDISK))
 #define CVT_MEDIUM_OBJECT(_cvt) (CVT_ONDISK(_cvt) && !((_cvt).type & CVT_TYPE_LARGE_OBJECT))
 #define CVT_LARGE_OBJECT(_cvt)  (CVT_ONDISK(_cvt) && ((_cvt).type & CVT_TYPE_LARGE_OBJECT))
@@ -480,6 +484,14 @@ typedef struct castle_value_tuple c_val_tup_t;
    (_cvt).type   = (CVT_TYPE_LEAF_VAL | CVT_TYPE_INLINE);                   \
    (_cvt).length = _length;                                                 \
    (_cvt).val    = _ptr;                                                    \
+}
+#define CVT_COUNTER_SET_SET(_cvt)                                           \
+{                                                                           \
+   (_cvt).type   = (CVT_TYPE_LEAF_VAL | CVT_TYPE_INLINE | CVT_TYPE_COUNTER_SET); \
+}
+#define CVT_COUNTER_ADD_SET(_cvt)                                           \
+{                                                                           \
+   (_cvt).type   = (CVT_TYPE_LEAF_VAL | CVT_TYPE_INLINE | CVT_TYPE_COUNTER_ADD); \
 }
 #define CVT_MEDIUM_OBJECT_SET(_cvt, _length, _cep)                          \
 {                                                                           \
