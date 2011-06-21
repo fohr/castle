@@ -106,7 +106,9 @@ typedef struct castle_extent {
     int                 use_shadow_map; /* Extent is currently being remapped           */
     atomic_t            ref_cnt;
     atomic_t            link_cnt;
+#ifdef CASTLE_DEBUG
     uint8_t             alive;
+#endif
     c_ext_dirtytree_t  *dirtytree;      /**< RB-tree of dirty c2bs.                     */
     struct work_struct *work;           /**< work structure to schedule extent free.    */
     c_ext_type_t        ext_type;       /**< Type of extent.                            */
@@ -196,7 +198,9 @@ static c_ext_t * castle_ext_alloc(c_ext_id_t ext_id)
 
     /* Extent structure. */
     ext->ext_id             = ext_id;
+#ifdef CASTLE_DEBUG
     ext->alive              = 1;
+#endif
     ext->maps_cep           = INVAL_EXT_POS;
     ext->ext_type           = EXT_T_INVALID;
     ext->da_id              = INVAL_DA;
@@ -238,7 +242,13 @@ void castle_extent_mark_live(c_ext_id_t ext_id, c_da_t da_id)
     {
         /* Extent should belong to the same DA. */
         BUG_ON(ext->da_id != da_id);
+
+        /* Create the first link. */
+        atomic_set(&ext->link_cnt, 1);
+
+#ifdef CASTLE_DEBUG
         ext->alive = 1;
+#endif
     }
 }
 
@@ -719,7 +729,10 @@ static int load_extent_from_mentry(struct castle_elist_entry *mstore_entry)
 
     /* ext_alloc() would set the alive bit to 1. Shouldn't do that during module reload.
      * Instead, extent owner would mark it alive. */
+#ifdef CASTLE_DEBUG
     ext->alive = 0;
+#endif
+    atomic_set(&ext->link_cnt, 0);
 
     CONVERT_MENTRY_TO_EXTENT(ext, mstore_entry);
     if (EXT_ID_INVAL(ext->ext_id))
@@ -770,8 +783,9 @@ int castle_extents_read(void)
 
     atomic_set(&current_rebuild_seqno, ext_sblk->current_rebuild_seqno);
 
+    /* Note: Micro extent is being created every time, not being loaded from mentry. It is already
+     * linked. No need to mark it as alive. */
     /* Mark Logical extents as alive. */
-    castle_extent_mark_live(MICRO_EXT_ID, 0);
     castle_extent_mark_live(META_EXT_ID, 0);
     castle_extent_mark_live(MSTORE_EXT_ID, 0);
     castle_extent_mark_live(MSTORE_EXT_ID+1, 0);
@@ -2306,9 +2320,11 @@ void castle_extent_dirtytree_put(c_ext_dirtytree_t *dirtytree)
  */
 static int castle_extent_check_alive(c_ext_t *ext, void *unused)
 {
-    if (ext->alive == 0)
+    if (atomic_read(&ext->link_cnt) == 0)
     {
         castle_printk(LOG_WARN, "Found a dead extent: %llu - Cleaning it\n", ext->ext_id);
+        /* castle_extent_free() expects link count to be 1. */
+        atomic_set(&ext->link_cnt, 1);
         read_unlock_irq(&castle_extents_hash_lock);
         /* Extent is dead and not referenced any of the structures. Free it. */
         castle_extent_free(ext->ext_id);
