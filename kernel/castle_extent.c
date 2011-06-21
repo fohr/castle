@@ -2707,10 +2707,14 @@ retry:
              * Check that the submit_c2b_remap_rda succeeded. If it got EAGAIN, then the
              * remap_chunks contained a now-oos slave (a slave that went oos between the disk chunk
              * alloc and the submit. In this case, we can retry, which should rebuild remap_chunks
-             * with (hopefully) now valid slave(s).
+             * with (hopefully) now valid slave(s). If it got -EINVAL then it failed to get a ref
+             * on the extent, which means that the extent is no longer live, and therefore does not
+             * need remapping.
              */
             if (ret == -EAGAIN)
                 goto retry;
+            if (ret == -EINVAL)
+                return -EINVAL;
             BUG_ON(ret);
         }
 
@@ -2897,24 +2901,35 @@ restart:
          */
         list_for_each_safe(entry, tmp, &rebuild_list)
         {
+            ret = 0;
             ext = list_entry(entry, c_ext_t, rebuild_list);
             list_del(entry);
             BUG_ON(ext->curr_rebuild_seqno >= rebuild_to_seqno);
 
+            /*
+             * If exit_early is set, then we are abandoning the rest of this rebuild run.
+             * castle_extent_remap will not be called, and all we will do is drop the ref
+             * on the extents remaining inthe rebuild list, before we stop.
+             */
             if (!exit_early)
             {
-                /*
-                 * Allow rebuild to be stopped or restarted in-between extent remappings.
-                 */
-                if ((ret = castle_extent_remap(ext)) || kthread_should_stop())
+                ret = castle_extent_remap(ext);
+
+                if (ret == -EINTR || ret == -ENOSPC || kthread_should_stop())
+                    /* We will not be remapping any more extents in this rebuild run. */
                     exit_early = 1;
-                if (ret == -EINTR || ret == -ENOSPC)
+
+                if (ret == -EINTR || ret == -ENOSPC || ret == -EINVAL)
                 {
                     /*
-                     * If the remap has been interrupted by a kthread_stop(), or cannot allocate,
-                     * and it has not yet remapped all the chunks, then this extent should no longer
-                     * be scheduled for map writeback. Take it off the rebuild_done_list and clean
-                     * up the shadow map before we exit.
+                     * If A: The remap has been interrupted by a kthread_stop() and it has not yet
+                     *       remapped all the chunks (EINTR).
+                     * or B: An allocation has failed (which implicitly means that it has not yet
+                     *       remapped all the chunks (ENOSPC).
+                     * or C: The extent is no longer live, and therefore we don't care if it has
+                     *       remapped all the chunks (EINVAL).
+                     * then this extent should no longer be scheduled for map writeback. Take it off
+                     * the rebuild_done_list and clean up the shadow map.
                      */
                     mutex_lock(&rebuild_done_list_lock);
                     list_del(&ext->rebuild_done_list);
@@ -2930,10 +2945,11 @@ restart:
             FAULT(REBUILD_FAULT1);
 
             /*
-             * If this extent is on the rebuild_done list we should not drop the ref here.
-             * Writeback will do that when it is finished.
+             * If we are exiting early or the last extent is no longer live, and the extent is not
+             * on the rebuild_done list, then drop the ref here. Otherwise writeback will drop it
+             * when it has finished with it.
              */
-            if ((exit_early) && (ext->rebuild_done_list.next == NULL))
+            if ((exit_early || (ret == -EINVAL)) && (ext->rebuild_done_list.next == NULL))
                 castle_extent_put(ext->ext_id);
         }
 

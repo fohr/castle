@@ -1661,6 +1661,14 @@ int submit_c2b_remap_rda(c2_block_t *c2b, c_disk_chk_t *chunks, int nr_remaps)
     if (!io_array)
         return -1;
 
+    /* Get extent reference (so that extent doesn't disappear under underneath us. */
+    ext_p = castle_extent_get(c2b->cep.ext_id);
+    if (!ext_p)
+    {
+        kmem_cache_free(castle_io_array_cache, io_array);
+        return -EINVAL;
+    }
+
     /* Set in-flight bit on the block. */
     set_c2b_in_flight(c2b);
 
@@ -1668,8 +1676,6 @@ int submit_c2b_remap_rda(c2_block_t *c2b, c_disk_chk_t *chunks, int nr_remaps)
     BUG_ON(atomic_read(&c2b->remaining) != 0);
     atomic_inc(&c2b->remaining);
     c_io_array_init(io_array);
-    /* Get extent reference (so that extent doesn't disappear under underneath us. */
-    ext_p = castle_extent_get(c2b->cep.ext_id);
 
     c2b->end_io = castle_cache_sync_io_end;
     c2b->private = &completion;
