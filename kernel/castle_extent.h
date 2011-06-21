@@ -34,12 +34,14 @@ c_ext_id_t          castle_extent_alloc                     (c_rda_type_t       
                                                              void                  *data,
                                                              c_ext_event_callback_t callback);
 void                castle_extent_lfs_victims_wakeup        (void);
-void                castle_extent_free                      (c_ext_id_t     ext_id);
 int                 castle_extent_exists                    (c_ext_id_t     ext_id);
 void                castle_extent_mark_live                 (c_ext_id_t     ext_id,
                                                              c_da_t         da_id);
+int                 castle_extent_free                      (c_ext_id_t     ext_id);
 void*               castle_extent_get                       (c_ext_id_t     ext_id);
 void                castle_extent_put                       (c_ext_id_t     ext_id);
+int                 castle_extent_link                      (c_ext_id_t     ext_id);
+int                 castle_extent_unlink                    (c_ext_id_t     ext_id);
 uint32_t            castle_extent_kfactor_get               (c_ext_id_t     ext_id);
 c_chk_cnt_t         castle_extent_size_get                  (c_ext_id_t     ext_id);
 /* Sets @chunks to all physical chunks holding the logical chunks from offset */

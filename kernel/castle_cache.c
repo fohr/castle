@@ -1771,9 +1771,25 @@ static int submit_c2b_rda(int rw, c2_block_t *c2b)
     debug("Submitting c2b "cep_fmt_str", for %s\n",
             __cep2str(c2b->cep), (rw == READ) ? "read" : "write");
 
+    /* Get extent reference (so that extent doesn't disappear underneath us. */
+    ext_p = castle_extent_get(c2b->cep.ext_id);
+    if (ext_p == NULL)
+    {
+        /* Failed to get the reference, mark the C2B as if the i/o is successfully completed.
+         * And, call end_io(). */
+        if (rw == WRITE)
+            clean_c2b(c2b);
+        c2b->end_io(c2b);
+
+        return 0;
+    }
+
     io_array = kmem_cache_alloc(castle_io_array_cache, GFP_KERNEL);
     if (!io_array)
+    {
+        castle_extent_put(c2b->cep.ext_id);
         return -1;
+    }
 
     /* c2b->remaining is effectively a reference count. Get one ref before we start. */
     BUG_ON(atomic_read(&c2b->remaining) != 0);
@@ -1781,8 +1797,6 @@ static int submit_c2b_rda(int rw, c2_block_t *c2b)
     last_chk = INVAL_CHK;
     cur_chk = INVAL_CHK;
     c_io_array_init(io_array);
-    /* Get extent reference (so that extent doesn't disappear under underneath us. */
-    ext_p = castle_extent_get(c2b->cep.ext_id);
     /* Everything initialised, go through each page in the c2p. */
     c2b_for_each_page_start(page, c2p, cur_cep, c2b)
     {

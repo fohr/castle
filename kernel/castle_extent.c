@@ -86,7 +86,8 @@ struct castle_extents_superblock castle_extents_global_sb;
 static DEFINE_MUTEX(castle_extents_mutex);
 
 static int castle_extents_exiting = 0;
-static int castle_extents_deletes_disabled = 0;
+
+static struct kmem_cache *castle_extents_work_cache  = NULL;
 
 typedef struct castle_extent {
     c_ext_id_t          ext_id;         /* Unique extent ID                             */
@@ -104,11 +105,10 @@ typedef struct castle_extent {
     c_disk_chk_t        *shadow_map;
     int                 use_shadow_map; /* Extent is currently being remapped           */
     atomic_t            ref_cnt;
+    atomic_t            link_cnt;
     uint8_t             alive;
     c_ext_dirtytree_t  *dirtytree;      /**< RB-tree of dirty c2bs.                     */
     struct work_struct *work;           /**< work structure to schedule extent free.    */
-    uint8_t             deleted;        /**< Marked when an extent is not refrenced by
-                                             anybody anymore. Safe to free it now.      */
     c_ext_type_t        ext_type;       /**< Type of extent.                            */
     c_da_t              da_id;          /**< DA that extent corresponds to.             */
 #ifdef CASTLE_PERF_DEBUG
@@ -197,12 +197,12 @@ static c_ext_t * castle_ext_alloc(c_ext_id_t ext_id)
     /* Extent structure. */
     ext->ext_id             = ext_id;
     ext->alive              = 1;
-    ext->deleted            = 0;
     ext->maps_cep           = INVAL_EXT_POS;
     ext->ext_type           = EXT_T_INVALID;
     ext->da_id              = INVAL_DA;
     ext->work               = NULL;
     atomic_set(&ext->ref_cnt, 1);
+    atomic_set(&ext->link_cnt, 1);
     spin_lock_init(&ext->shadow_map_lock);
 
     /* Per-extent RB dirtytree structure. */
@@ -246,6 +246,22 @@ int castle_extents_init(void)
 {
     debug("Initing castle extents\n");
 
+    /* Init kmem_cache for extent free work structure cache. */
+    castle_extents_work_cache = kmem_cache_create("castle_extents_work",
+                                                  sizeof(struct work_struct),
+                                                  0,     /* align */
+                                                  0,     /* flags */
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,18)
+                                                  NULL, NULL); /* ctor, dtor */
+#else
+                                                  NULL); /* ctor */
+#endif
+    if (!castle_extents_work_cache)
+    {
+        castle_printk(LOG_ERROR, "Could not allocate kmem cache for castle extents.\n");
+        goto err_out;
+    }
+
     /* Initialise hash table for extents. */
     castle_extents_hash = castle_extents_hash_alloc();
     if (!castle_extents_hash)
@@ -258,26 +274,20 @@ int castle_extents_init(void)
     return EXIT_SUCCESS;
 
 err_out:
+    if (castle_extents_work_cache)
+        kmem_cache_destroy(castle_extents_work_cache);
+
     return -ENOMEM;
 }
 
 /* Cleanup all extents from hash table. Called at finish. */
 static int castle_extent_hash_remove(c_ext_t *ext, void *unused)
 {
-    int ref_cnt;
-
     debug("Freeing extent #%llu\n", ext->ext_id);
 
-    ref_cnt = atomic_read(&ext->ref_cnt);
-    BUG_ON(ref_cnt && ref_cnt != 1);
-
-    /* Reference count could be zero, if a deleted extent is being used till the cache module
-     * is finished. */
-    if (ref_cnt == 0)
-        castle_printk(LOG_WARN, "Delaying deletion of the extent: %llu\n", ext->ext_id);
+    BUG_ON(atomic_read(&ext->ref_cnt) != 1);
 
     /* There shouldn't be any outstanding extents for deletion on exit. */
-    BUG_ON(ext->deleted);
     __castle_extents_hash_remove(ext);
 
     if (SUPER_EXTENT(ext->ext_id))
@@ -615,7 +625,7 @@ static int castle_extent_writeback(c_ext_t *ext, void *store)
     c_mstore_t *castle_extents_mstore = store;
 
     /* Shouldnt be any outstanding deletions before last checkpoint. */
-    BUG_ON(castle_extents_exiting && ext->deleted);
+    BUG_ON(castle_extents_exiting && (atomic_read(&ext->link_cnt) == 0));
 
     if (LOGICAL_EXTENT(ext->ext_id))
         return 0;
@@ -642,21 +652,11 @@ int castle_extents_writeback(void)
     if (!extent_init_done)
         return 0;
 
+    /* Don't exit with out-standing dead extents. They are scheduled to get freed on
+     * system work queue. */
     if (castle_extents_exiting)
-    {
-        /* Don't let extents get deleted from this point on. These extents would get deleted in the
-         * next run of file system. We do check for dead extents on the module load time. */
-        /* Need lock here as we don't want to race with extent_put code which increments the
-         * dead_count. */
-        read_lock_irq(&castle_extents_hash_lock);
-        castle_extents_deletes_disabled = 1;
-        read_unlock_irq(&castle_extents_hash_lock);
-
-        /* Don't exit with out-standing dead extents. They are scheduled to get freed on
-         * system work queue. */
         while (atomic_read(&castle_extents_dead_count))
             msleep_interruptible(1000);
-    }
 
     castle_extents_mstore =
         castle_mstore_init(MSTORE_EXTENTS, sizeof(struct castle_elist_entry));
@@ -841,6 +841,7 @@ void castle_extents_fini(void)
      * lock here as this happenes in the module end. */
     castle_extents_hash_iterate_exclusive(castle_extent_hash_remove, NULL);
     castle_free(castle_extents_hash);
+    kmem_cache_destroy(castle_extents_work_cache);
 }
 
 #define MAX_K_FACTOR   4
@@ -1499,51 +1500,14 @@ void castle_extent_lfs_victims_wakeup(void)
     }
 }
 
-void castle_extent_free(c_ext_id_t ext_id)
-{
-    c_ext_t *ext = castle_extents_hash_get(ext_id);
-    struct work_struct *work;
-    if(!ext)
-    {
-        castle_printk(LOG_ERROR, "%s::cannot find ext with id %d.\n", __FUNCTION__, ext_id);
-        BUG();
-    }
-
-    /* Allocate space for work structure, to be used to schedule castle_extent_free
-     * onto work queue.
-     * Only do it once (this function is often called just to put the reference,
-     * and is therefore reentrant. For example from castle_ct_put() large object
-     * scan).
-     */
-    if(!ext->work)
-    {
-        work = castle_malloc(sizeof(struct work_struct), GFP_KERNEL);
-        /* Assign ext->work pointer atomically. */
-        if(cmpxchg(&ext->work, NULL, work) != NULL)
-        {
-            castle_printk(LOG_WARN, "WARNING: Race in assigning ext->work ptr, ext=%p.\n", ext);
-            castle_free(work);
-            BUG_ON(!ext->work);
-        }
-    }
-
-    if (!ext->work)
-    {
-        castle_printk(LOG_ERROR, "Failed to allocate memory for extent deletion structures -"
-                                 " Not deleting extent\n");
-        return;
-    }
-    castle_extent_put(ext_id);
-}
-
 /* Free the resources taken by extent. This function gets executed on system work queue.
  *
  * @param data void pointer to extent structure that to be freed.
  *
  * @also castle_extent_put
- * @also castle_extent_free
+ * @also castle_extent_unlink
  */
-static void _castle_extent_free(void *data)
+static void castle_extent_resource_release(void *data)
 {
     c_ext_t *ext = data;
     struct castle_extents_superblock *castle_extents_sb = NULL;
@@ -1552,11 +1516,12 @@ static void _castle_extent_free(void *data)
     castle_extent_transaction_start();
 
     /* Reference count should be zero. */
-    if (atomic_read(&ext->ref_cnt))
+    if (atomic_read(&ext->ref_cnt) || atomic_read(&ext->link_cnt))
     {
         castle_printk(LOG_ERROR, "Couldn't delete the referenced extent %llu, %d\n",
                 ext_id,
-                atomic_read(&ext->ref_cnt));
+                atomic_read(&ext->ref_cnt),
+                atomic_read(&ext->link_cnt));
         BUG();
     }
 
@@ -1578,7 +1543,7 @@ static void _castle_extent_free(void *data)
 
     castle_extents_sb->nr_exts--;
 
-    castle_free(ext->work);
+    kmem_cache_free(castle_extents_work_cache, ext->work);
     castle_free(ext);
 
     /* Decrement the dead count. Module can't exit with outstanding dead extents.  */
@@ -1879,11 +1844,72 @@ void castle_extent_sup_ext_close(struct castle_slave *cs)
     return;
 }
 
-#define LIVE_EXTENT(_ext) ((_ext) && !(_ext)->deleted)
 /**
- * Gets a 'light' reference to the extent. This is one that won't stop the extent from
- * being scheduled for removal, but it'll preserve the extent structure in the hashtable
- * and stop the freespace from being released.
+ * Extents Reference Counting:
+ *
+ * Extent structures can be referenced two ways..
+ *      - links
+ *      - transient references
+ *
+ * Links are used to link extents to multiple sources. For ex, large objects could be linked and
+ * unlinked between component trees during merges. Links also take a transient reference on the
+ * extent. Removing the last link to an extent, would mark the extent for deletion. Other than
+ * that, it wouldn't do anything else. Also leaves the extent in the hash, to make sure no
+ * outstanding operations would fail. It is not possible to get any references or links after
+ * releasing the last link.
+ *
+ * Transient references are taken on extents to preserve them while doing some task(mostly io).
+ * It is not possible to get a reference on an extent with no active links. After deleting last
+ * reference, schedule the free function and also add the extent to a deleted extents list.
+ * Last checkpoint of extent code should wait on this list to get exmpty to make sure there are
+ * no outstanding deletes.
+ *
+ * Synchronization for Reference Counting:
+ *
+ * Both counts ref_cnt and link_count would be atomic variables to make sure multiple writes to
+ * these variables won't race. Four operations we need for this are get(), put(), link() and
+ * unlink(). It is okay to run get() and link() to run together. They just get references. Only
+ * races that are possible are when the last link and last reference are released, link() and get()
+ * should see it in consistent way. So, run unulink() and put() under write lock and get() and
+ * link() under read lock.
+ */
+
+#define LIVE_EXTENT(_ext) ((_ext) && atomic_read(&(_ext)->link_cnt))
+
+/**
+ * Low level get() for extent references. Takes a reference only if extent is in hash and has
+ * active links.
+ *
+ * Locks should have been taken by the parent function.
+ *
+ * @param   ext_id  [in]    Extent id that reference to be taken.
+ *
+ * @return  Pointer of extent, if SUCCESS
+ *          NULL, if FAILURE
+ */
+c_ext_t* __castle_extent_get(c_ext_id_t ext_id)
+{
+    c_ext_t *ext = __castle_extents_hash_get(ext_id);
+
+    /* Expected to hold atleast read_lock. */
+    BUG_ON(write_can_lock(&castle_extents_hash_lock));
+
+    /* Don't give reference if extent is not alive. */
+    if (LIVE_EXTENT(ext))
+        atomic_inc(&ext->ref_cnt);
+    else
+        ext = NULL;
+
+    return ext;
+}
+
+/**
+ * Take a reference on extent to preserve extent from being deleted.
+ *
+ * @param   ext_id  [in]    Extent id that reference to be taken.
+ *
+ * @return  Pointer of extent, if SUCCESS
+ *          NULL, if FAILURE
  */
 void* castle_extent_get(c_ext_id_t ext_id)
 {
@@ -1893,84 +1919,211 @@ void* castle_extent_get(c_ext_id_t ext_id)
     /* Read lock is good enough as ref count is atomic. */
     read_lock_irqsave(&castle_extents_hash_lock, flags);
 
-    ext = __castle_extents_hash_get(ext_id);
-
-    /* Don't give reference if extent is marked for deletion. */
-    if (LIVE_EXTENT(ext))
-        atomic_inc(&ext->ref_cnt);
-    else
-        ext = NULL;
+    /* Call low level get function. */
+    ext = __castle_extent_get(ext_id);
 
     read_unlock_irqrestore(&castle_extents_hash_lock, flags);
 
     return ext;
 }
 
-int __castle_extent_get(c_ext_t *ext)
+/**
+ * Release reference on the extent. Locks are already taken. If releasing last reference, schedule
+ * castle_extent_resource_release().
+ *
+ * It is possible to call with NULL; just return back to caller.
+ *
+ * Dont call castle_extent_resource_release() from here as free() is sleeping function and the
+ * function could be in interrupt context. Instead, schedule the castle_extent_resource_release()
+ * on system WQ.
+ *
+ * @param ext [inout]   Extent that reference has to be released.
+ */
+void __castle_extent_put(c_ext_t *ext)
 {
-    /* Don't give reference if extent is marked for deletion. */
-    if (LIVE_EXTENT(ext))
+    /* Expected to hold atleast read_lock. */
+    BUG_ON(write_can_lock(&castle_extents_hash_lock));
+
+    if (ext == NULL)
+        return;
+
+    if (atomic_read(&ext->ref_cnt) == 0)
     {
-        atomic_inc(&ext->ref_cnt);
-        return 0;
+        printk("ext: %p\t, id: %llu\n", ext, ext->ext_id);
+        BUG();
     }
 
-    return -1;
+    /* Release reference and also check if this is the last referece; if so, schedule extent
+     * for deletion. */
+    if (atomic_dec_return(&ext->ref_cnt) == 0)
+    {
+        /* There should be no active links. */
+        BUG_ON(atomic_read(&ext->link_cnt));
+
+        /* Note: We don't even remove extent from hash, as it should happen together with
+         * freespace changes, to maintain consistency. */
+        /* Work structure should have been malloced in last castle_extent_unlink(). */
+        BUG_ON(ext->work == NULL);
+
+        /* Schedule extent deletion on system WQ. */
+        schedule_work(ext->work);
+    }
 }
 
 /**
- * Puts the light reference. (Interrupt Context)
+ * Puts the reference. (Interrupt Context)
  *
- * Trigger _castle_extent_free() if the reference count is 0. But, dont call it from here as
- * free() is sleeping function and we are in interrupt context now. Instead, schedule
- * the _castle_extent_free() on system WQ. This fucntion just marks an extent for deletion,
- * but doesnt remove it from hash. As removing from hash table and freeing freespace on disk
- * should happen atomically under extents global mutex (as a transaction for the sake of
- * checkpoiting).
- *
- * @also: _castle_extent_free
+ * @also: castle_extent_resource_release
  */
 void castle_extent_put(c_ext_id_t ext_id)
 {
     unsigned long flags;
     c_ext_t *ext;
 
-    /* Write lock is required to mark the deleted bit to 1. We dont want to anybody to get
-     * references, while marking it for deletion.  */
-    write_lock_irqsave(&castle_extents_hash_lock, flags);
+    /* Write lock is required to not race with reference gets. */
+    read_lock_irqsave(&castle_extents_hash_lock, flags);
 
     ext = __castle_extents_hash_get(ext_id);
 
-    /* Dont do put on deleted extents. */
-    /* Don't delete extents if deletes are disabled. These extents would get deleted in the
-     * next run of file system. We do check for dead extents on the module load time. */
-    if (LIVE_EXTENT(ext) &&  atomic_dec_return(&ext->ref_cnt) == 0 &&
-        !castle_extents_deletes_disabled)
+    /* Call low level put function. */
+    __castle_extent_put(ext);
+
+    read_unlock_irqrestore(&castle_extents_hash_lock, flags);
+}
+
+/**
+ * Create a new link to the extent. New links can't be created if extent has no active links
+ * (extent is dead).
+ *
+ * Link to an extent also takes a reference to the extent.
+ *
+ * @param   ext_id  [in]    Extent ID, link to be created.
+ *
+ * @return  0   SUCCESS
+ *          -1  FAILURE
+ */
+int castle_extent_link(c_ext_id_t ext_id)
+{
+    c_ext_t *ext;
+
+    /* Read lock is good enough as link count is atomic and unlink works under write lock. */
+    read_lock_irq(&castle_extents_hash_lock);
+
+    /* Try to get a reference on the extent. Would fail, if the extent is already dead. */
+    ext = __castle_extent_get(ext_id);
+    if(!ext)
     {
+        /* Shouldn't have tried to create links on a dead extents. BUG. */
+        castle_printk(LOG_ERROR, "%s::cannot do get on ext with id %d.\n", __FUNCTION__, ext_id);
+        BUG();
+    }
+
+    /* Shouldn't be a dead extent. */
+    BUG_ON(atomic_read(&ext->link_cnt) == 0);
+
+    /* Increment link count. */
+    atomic_inc(&ext->link_cnt);
+
+    /* Unlock hash lock. */
+    read_unlock_irq(&castle_extents_hash_lock);
+
+    return 0;
+}
+
+/**
+ * Remove a link for extent. Removing the last link would mark extent for deletion. No more
+ * references or links can be created after that.
+ *
+ * @param   ext_id  [in]    Extent ID, to be unlinked.
+ *
+ * @return  0   SUCCESS
+ *          -1  FAILURE
+ */
+int castle_extent_unlink(c_ext_id_t ext_id)
+{
+    c_ext_t *ext;
+    int last_link = 0;
+
+    /* Allocate work structure upfront. If we fail to allocate, after releasing reference,
+     * then extent references could be in inconsistent state. Unlike malloc, kmem_cache_alloc()
+     * is not really a heavy operation. */
+    struct work_struct *work = kmem_cache_alloc(castle_extents_work_cache, GFP_KERNEL);
+
+    /* If failed to get memory, don't release reference and return error. */
+    if (!work)
+    {
+        castle_printk(LOG_ERROR, "Failed to allocate memory for extent deletion structures -"
+                                 " Not deleting extent\n");
+        return -1;
+    }
+
+    /* Get a write lock, to make sure there are no parallel get() or link(). */
+    write_lock_irq(&castle_extents_hash_lock);
+
+    ext = __castle_extents_hash_get(ext_id);
+    /* Can't unlink an extent not in hash. BUG. */
+    if(!ext)
+    {
+        castle_printk(LOG_ERROR, "%s::cannot do unlink on ext with id %d.\n", __FUNCTION__, ext_id);
+        BUG();
+    }
+
+    /* Shouldn't try to unlink a deleted extent. */
+    BUG_ON(atomic_read(&ext->link_cnt) == 0);
+
+    /* Reduce the link count and check if this is the last link. */
+    if (atomic_dec_return(&ext->link_cnt) == 0)
+    {
+        /* All merges and request would have completed before setting castle_extents_exiting.
+         * There shouldn't be any free()/unlink() after that. */
+        BUG_ON(castle_extents_exiting);
+
         /* Increment the count of scheduled extents for deletion. Last checkpoint, conseqeuntly,
          * castle_exit waits for all outstanding dead extents to get destroyed. */
         atomic_inc(&castle_extents_dead_count);
 
-        /* Extent shouldn't be already marked for deletion. */
-        BUG_ON(ext->deleted);
+        /* Shouldn't have alloced work structure already. */
+        BUG_ON(ext->work);
+        ext->work = work;
 
-        /* Mark for deletion. But, dont remove it from hash.
-         *
-         * Notes: Removing it from hash and freeing space should happen together under extent
-         * lock. If we remove it from hash wihtout freeing sapce, then checkpoint would skip the
-         * extent but counts freespace occupied by extent. In case of crash, this would leak
-         * the freespace. */
-        ext->deleted = 1;
+        /* Initialise work structure. But, don't scheudle free yet. Need to wait on all oustanding
+         * reference(not links) to be released. */
+        INIT_WORK(ext->work, castle_extent_resource_release, ext);
 
-        /* Work structure should have been malloced in castle_extent_free(). */
-        BUG_ON(ext->work == NULL);
-
-        /* Schedule extent deletion on system WQ. */
-        INIT_WORK(ext->work, _castle_extent_free, ext);
-        schedule_work(ext->work);
+        last_link = 1;
     }
 
-    write_unlock_irqrestore(&castle_extents_hash_lock, flags);
+    /* Release the corresponding reference. */
+    __castle_extent_put(ext);
+
+    write_unlock_irq(&castle_extents_hash_lock);
+
+    /* This is not the last link, free work structure. kmem_cache_alloc and free are not as expensive
+     * as kmalloc and free. */
+    if (!last_link)
+        kmem_cache_free(castle_extents_work_cache, work);
+
+    return 0;
+}
+
+/**
+ * It's exactly same as castle_extent_unlink(). Unlink function would be used with extents with
+ * multiple links. Just to be clear with terminology adding one more function castle_extent_free()
+ * to remove the only link normal(non-large object) extents have.
+ *
+ * @param   ext_id  [in]    Extent ID, to be unlinked.
+ *
+ * @return  0   SUCCESS
+ *          -1  FAILURE
+ */
+int castle_extent_free(c_ext_id_t ext_id)
+{
+    c_ext_t *ext = castle_extents_hash_get(ext_id);
+
+    /* Free should be called to remove the the last/only link extent has. */
+    BUG_ON(atomic_read(&ext->link_cnt) != 1);
+
+    return castle_extent_unlink(ext_id);
 }
 
 #ifdef CASTLE_PERF_DEBUG
@@ -2185,17 +2338,19 @@ static int castle_extent_rebuild_list_add(c_ext_t *ext, void *unused)
      */
 
     if ((!SUPER_EXTENT(ext->ext_id) && !(ext->ext_id == MICRO_EXT_ID)) &&
-        (ext->curr_rebuild_seqno < atomic_read(&current_rebuild_seqno)) &&
-        LIVE_EXTENT(ext))
+        (ext->curr_rebuild_seqno < atomic_read(&current_rebuild_seqno)))
     {
-        debug("Adding extent %llu to rebuild list for extent seqno %u, global seqno %u\n",
-               ext->ext_id, ext->curr_rebuild_seqno, atomic_read(&current_rebuild_seqno));
-        list_add_tail(&ext->rebuild_list, &rebuild_list);
         /*
          * Take a reference to the extent. We will drop this when we have finished remapping
          * the extent.
          */
-        BUG_ON(__castle_extent_get(ext));
+        if (__castle_extent_get(ext->ext_id) == NULL)
+            /* Extent is already dead. */
+            return 0;
+
+        debug("Adding extent %llu to rebuild list for extent seqno %u, global seqno %u\n",
+               ext->ext_id, ext->curr_rebuild_seqno, atomic_read(&current_rebuild_seqno));
+        list_add_tail(&ext->rebuild_list, &rebuild_list);
     }
     return 0;
 }
@@ -3139,14 +3294,17 @@ void castle_extents_rebuild_startup_check(int need_rebuild)
 static int castle_extent_verify_list_add(c_ext_t *ext, void *unused)
 {
     /* We are not handling logical extents or extents scheduled for deletion. */
-    if (!SUPER_EXTENT(ext->ext_id) && !(ext->ext_id == MICRO_EXT_ID) && LIVE_EXTENT(ext))
+    if (!SUPER_EXTENT(ext->ext_id) && !(ext->ext_id == MICRO_EXT_ID))
     {
-        list_add_tail(&ext->verify_list, &verify_list);
         /*
          * Take a reference to the extent. We will drop this when we have finished remapping
          * the extent.
          */
-        BUG_ON(__castle_extent_get(ext));
+        if (__castle_extent_get(ext->ext_id) == NULL)
+            /* Extent is already dead. */
+            return 0;
+
+        list_add_tail(&ext->verify_list, &verify_list);
     }
     return 0;
 }

@@ -2983,7 +2983,7 @@ static inline void castle_da_entry_add(struct castle_da_merge *merge,
             /* Adding LO to a temp list, wait for merge_serialise to splice when appropriate, or
                da_merge_package to do final splice. */
             castle_ct_large_obj_add(cvt.cep.ext_id, cvt.length, &merge->new_large_objs, NULL);
-            castle_extent_get(cvt.cep.ext_id);
+            BUG_ON(castle_extent_link(cvt.cep.ext_id) < 0);
             debug("%s::large object ("cep_fmt_str") for da %d level %d.\n",
                 __FUNCTION__, cep2str(cvt.cep), merge->da->id, merge->level);
         }
@@ -5016,7 +5016,7 @@ static void castle_da_merge_deserialise(struct castle_da_merge *merge,
     {
         struct castle_large_obj_entry *lo =
             list_entry(lh, struct castle_large_obj_entry, list);
-        castle_extent_get(lo->ext_id);
+        BUG_ON(castle_extent_link(lo->ext_id) < 0);
     }
     mutex_unlock(&des_tree->lo_mutex);
 
@@ -6431,8 +6431,8 @@ static void __castle_ct_large_obj_remove(struct list_head *lh)
     /* Remove LO from list. */
     list_del(&lo->list);
 
-    /* Free-up LO extent. */
-    castle_extent_free(lo->ext_id);
+    /* Unlink LO extent from this CT. If it from merge, the output CT could hold a link to it. */
+    castle_extent_unlink(lo->ext_id);
 
     /* Free memory. */
     castle_free(lo);
