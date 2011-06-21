@@ -54,6 +54,20 @@ static char          *castle_trace_dir_str        = NULL;
  * 2. fs.hg/kernel/castle_public.h: add TRACE_CACHE_CLEAN_PGS to c_trc_cache_var_t enum
  * 3. Update castle_public.h in acunutils.hg/libcastle (see above)
  * 4. acunutils.hg/castle-trace/castle_trace.c: add TRACE_CACHE_CLEAN_PGS to cache_var_name[]
+ *
+ * USING TRACE_PERCENTAGE (for castle_trace_cache() only, at current):
+ *
+ * - Create five new sequential c_trc_cache_var_t variables in order:
+ *     1. ...V1_V2_ID
+ *     2. ...V1_ID
+ *     3. ...V2_ID
+ *     4. ...V1_PCT_ID
+ *     5. ...V2_PCT_ID
+ * - Use TRACE_PERCENTAGE and pass the two values in the sequential order defined above
+ * - Update castle_trace.c as standard, but do not define a string for ..V1_V2_ID
+ *
+ * castle-trace takes the two values from TRACE_PERCENTAGE and outputs ***value for both
+ * v1 and v2 then ***percentage for v1 and v2, e.g. (100*v1)/(v1+v2) and (100*v2)/(v1+v2).
  */
 
 static c_trc_evt_t* castle_trace_buffer_alloc(void)
@@ -108,9 +122,12 @@ static void _castle_trace_event(c_trc_prov_t provider,
 /**************************************************************************************************/
 
 /* castle_trace_cache() */
-static void castle_trace_cache_event(c_trc_type_t type, c_trc_cache_var_t var, uint64_t v1)
+static void castle_trace_cache_event(c_trc_type_t type,
+                                     c_trc_cache_var_t var,
+                                     uint64_t v1,
+                                     uint64_t v2)
 {
-    _castle_trace_event(TRACE_CACHE, type, var, v1, 0, 0, 0, 0);
+    _castle_trace_event(TRACE_CACHE, type, var, v1, v2, 0, 0, 0);
 }
 
 /* castle_trace_da() */

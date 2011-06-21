@@ -38,8 +38,8 @@
 
 /* castle_trace_cache() */
 CASTLE_DEFINE_TRACE(cache,
-                    TPPROTO(c_trc_type_t type, c_trc_cache_var_t var, uint64_t v1),
-                    TPARGS(type, var, v1));
+                    TPPROTO(c_trc_type_t type, c_trc_cache_var_t var, uint64_t v1, uint64_t v2),
+                    TPARGS(type, var, v1, v2));
 
 /* castle_trace_da() */
 CASTLE_DEFINE_TRACE(da,

@@ -386,43 +386,43 @@ void castle_cache_stats_print(int verbose)
             reads, writes);
     castle_trace_cache(TRACE_VALUE,
                        TRACE_CACHE_CLEAN_PGS_ID,
-                       atomic_read(&castle_cache_clean_pages));
+                       atomic_read(&castle_cache_clean_pages), 0);
     castle_trace_cache(TRACE_VALUE,
                        TRACE_CACHE_DIRTY_PGS_ID,
-                       atomic_read(&castle_cache_dirty_pages));
+                       atomic_read(&castle_cache_dirty_pages), 0);
     castle_trace_cache(TRACE_VALUE,
                        TRACE_CACHE_FREE_PGS_ID,
-                       castle_cache_page_freelist_size * PAGES_PER_C2P);
+                       castle_cache_page_freelist_size * PAGES_PER_C2P, 0);
     castle_trace_cache(TRACE_VALUE,
                        TRACE_CACHE_RESERVE_PGS_ID,
-                       atomic_read(&castle_cache_page_reservelist_size));
+                       atomic_read(&castle_cache_page_reservelist_size), 0);
     castle_trace_cache(TRACE_VALUE,
                        TRACE_CACHE_CLEAN_BLKS_ID,
-                       atomic_read(&castle_cache_cleanlist_size));
+                       atomic_read(&castle_cache_cleanlist_size), 0);
     castle_trace_cache(TRACE_VALUE,
                        TRACE_CACHE_FREE_BLKS_ID,
-                       castle_cache_block_freelist_size);
+                       castle_cache_block_freelist_size, 0);
     castle_trace_cache(TRACE_VALUE,
                        TRACE_CACHE_RESERVE_BLKS_ID,
-                       atomic_read(&castle_cache_block_reservelist_size));
+                       atomic_read(&castle_cache_block_reservelist_size), 0);
     castle_trace_cache(TRACE_VALUE,
                        TRACE_CACHE_SOFTPIN_BLKS_ID,
-                       atomic_read(&castle_cache_cleanlist_softpin_size));
+                       atomic_read(&castle_cache_cleanlist_softpin_size), 0);
     count = atomic_read(&castle_cache_block_victims);
     atomic_sub(count, &castle_cache_block_victims);
-    castle_trace_cache(TRACE_VALUE, TRACE_CACHE_BLOCK_VICTIMS_ID, count);
+    castle_trace_cache(TRACE_VALUE, TRACE_CACHE_BLOCK_VICTIMS_ID, count, 0);
     count = atomic_read(&castle_cache_softpin_block_victims);
     atomic_sub(count, &castle_cache_softpin_block_victims);
-    castle_trace_cache(TRACE_VALUE, TRACE_CACHE_SOFTPIN_VICTIMS_ID, count);
-    castle_trace_cache(TRACE_VALUE, TRACE_CACHE_READS_ID, reads);
-    castle_trace_cache(TRACE_VALUE, TRACE_CACHE_WRITES_ID, writes);
+    castle_trace_cache(TRACE_VALUE, TRACE_CACHE_SOFTPIN_VICTIMS_ID, count, 0);
+    castle_trace_cache(TRACE_VALUE, TRACE_CACHE_READS_ID, reads, 0);
+    castle_trace_cache(TRACE_VALUE, TRACE_CACHE_WRITES_ID, writes, 0);
 
     hits = misses = 0;
     for (i = 0; i < EXT_T_INVALID; i++)
     {
         count = atomic_read(&extent_stats[i].ios_cnt);
         atomic_sub(count, &extent_stats[i].ios_cnt);
-        castle_trace_cache(TRACE_VALUE, TRACE_CACHE_META_DATA_IOS_ID + i, count);
+        castle_trace_cache(TRACE_VALUE, TRACE_CACHE_META_DATA_IOS_ID + i, count, 0);
 
         count = atomic_read(&extent_stats[i].hits);
         atomic_sub(count, &extent_stats[i].hits);
@@ -432,14 +432,7 @@ void castle_cache_stats_print(int verbose)
         atomic_sub(count, &extent_stats[i].misses);
         misses += count;
     }
-    castle_trace_cache(TRACE_VALUE, TRACE_CACHE_BLOCK_GET_HITS_ID, hits);
-    castle_trace_cache(TRACE_VALUE, TRACE_CACHE_BLOCK_GET_MISSES_ID, misses);
-    if (hits)
-        count = (100 * hits) / (hits + misses);
-    castle_trace_cache(TRACE_VALUE, TRACE_CACHE_BLOCK_GET_HITS_PCT_ID, count);
-//    if (misses)
-//        count = (100 * misses) / (hits + misses);
-//    castle_trace_cache(TRACE_VALUE, TRACE_CACHE_BLOCK_GET_MISSES_PCT_ID, count);
+    castle_trace_cache(TRACE_PERCENTAGE, TRACE_CACHE_BLK_GET_HIT_MISS_ID, hits, misses);
 }
 
 EXPORT_SYMBOL(castle_cache_stats_print);
@@ -2438,7 +2431,7 @@ static c2_page_t** castle_cache_page_reservelist_get(int nr_pages)
     castle_trace_cache(TRACE_VALUE,
                        TRACE_CACHE_RESERVE_PGS_USED_ID,
                        CASTLE_CACHE_RESERVELIST_QUOTA
-                            - atomic_read(&castle_cache_page_reservelist_size));
+                            - atomic_read(&castle_cache_page_reservelist_size), 0);
 
     return c2ps;
 }
@@ -2494,8 +2487,7 @@ static c2_block_t *castle_cache_block_reservelist_get(void)
     castle_trace_cache(TRACE_VALUE,
                        TRACE_CACHE_RESERVE_BLKS_USED_ID,
                        CASTLE_CACHE_RESERVELIST_QUOTA
-                           - atomic_read(&castle_cache_block_reservelist_size));
-
+                           - atomic_read(&castle_cache_block_reservelist_size), 0);
 
     return c2b;
 }
@@ -6075,13 +6067,13 @@ static int castle_periodic_checkpoint(void *unused)
 
         castle_printk(LOG_DEVEL, "***** Checkpoint start (period %ds) *****\n",
                       castle_checkpoint_period);
-        castle_trace_cache(TRACE_START, TRACE_CACHE_CHECKPOINT_ID, 0);
+        castle_trace_cache(TRACE_START, TRACE_CACHE_CHECKPOINT_ID, 0, 0);
 
         /* Perform any necessary work before we take the transaction lock. */
         if (castle_mstores_pre_writeback(version) != EXIT_SUCCESS)
         {
             castle_printk(LOG_WARN, "Mstore pre-writeback failed.\n");
-            castle_trace_cache(TRACE_END, TRACE_CACHE_CHECKPOINT_ID, 0);
+            castle_trace_cache(TRACE_END, TRACE_CACHE_CHECKPOINT_ID, 0, 0);
             ret = -1;
             goto out;
         }
@@ -6104,7 +6096,7 @@ static int castle_periodic_checkpoint(void *unused)
         if (castle_mstores_writeback(version, exit_loop))
         {
             castle_printk(LOG_WARN, "Mstore writeback failed\n");
-            castle_trace_cache(TRACE_END, TRACE_CACHE_CHECKPOINT_ID, 0);
+            castle_trace_cache(TRACE_END, TRACE_CACHE_CHECKPOINT_ID, 0, 0);
             ret = -2;
             goto out;
         }
@@ -6127,7 +6119,7 @@ static int castle_periodic_checkpoint(void *unused)
         if (castle_superblocks_writeback(version))
         {
             castle_printk(LOG_WARN, "Superblock writeback failed\n");
-            castle_trace_cache(TRACE_END, TRACE_CACHE_CHECKPOINT_ID, 0);
+            castle_trace_cache(TRACE_END, TRACE_CACHE_CHECKPOINT_ID, 0, 0);
             ret = -3;
             goto out;
         }
@@ -6144,7 +6136,7 @@ static int castle_periodic_checkpoint(void *unused)
         castle_extents_remap_writeback();
 
         castle_printk(LOG_DEVEL, "***** Completed checkpoint of version: %u *****\n", version);
-        castle_trace_cache(TRACE_END, TRACE_CACHE_CHECKPOINT_ID, 0);
+        castle_trace_cache(TRACE_END, TRACE_CACHE_CHECKPOINT_ID, 0, 0);
     } while (!exit_loop);
     /* Clean exit, return success. */
     ret = 0;

@@ -60,6 +60,7 @@ typedef enum {
  * Event types.
  */
 typedef enum {
+    TRACE_PERCENTAGE,   /**< Percentage value       */
     TRACE_VALUE,        /**< Value being reported   */
     TRACE_MARK,         /**< Event has occurred     */
     TRACE_START,        /**< Event has started      */
@@ -96,10 +97,11 @@ typedef enum {
     TRACE_CACHE_T0_MEDIUM_OBJECTS_IOS_ID, /**< IOs to T0 medium objects                           */
     TRACE_CACHE_LARGE_OBJECT_IOS_ID,      /**< IOs to large objects                               */
     TRACE_CACHE_BLOOM_FILTER_IOS_ID,      /**< IOs to bloom filters                               */
-    TRACE_CACHE_BLOCK_GET_HITS_ID,        /**< Block hits within the cache                        */
-    TRACE_CACHE_BLOCK_GET_MISSES_ID,      /**< Block misses within the cache                      */
-    TRACE_CACHE_BLOCK_GET_HITS_PCT_ID,    /**< % of block hits within the cache                   */
-    TRACE_CACHE_BLOCK_GET_MISSES_PCT_ID,  /**< % of block misses within the cache                 */
+    TRACE_CACHE_BLK_GET_HIT_MISS_ID,      /**< Hits, misses within the cache                      */
+    TRACE_CACHE_BLK_GET_HITS_ID,          /**< Block hits within the cache                        */
+    TRACE_CACHE_BLK_GET_MISSES_ID,        /**< Block misses within the cache                      */
+    TRACE_CACHE_BLK_GET_HITS_PCT_ID,      /**< % of block hits within the cache                   */
+    TRACE_CACHE_BLK_GET_MISSES_PCT_ID,    /**< % of block misses within the cache                 */
 } c_trc_cache_var_t;
 
 /**
@@ -122,7 +124,7 @@ typedef enum {
 #define MERGE_END_FLAG      (1U<<1)
 
 /* Bump the magic version byte (LSB) when c_trc_evt_t changes. */
-#define CASTLE_TRACE_MAGIC          0xCAE5E10E
+#define CASTLE_TRACE_MAGIC          0xCAE5E10F
 typedef struct castle_trace_event {
     uint32_t                    magic;
     struct timeval              timestamp;
