@@ -2861,11 +2861,24 @@ retry:
              * READ uses the existing map.
              */
             if(!c2b_uptodate(c2b))
-                BUG_ON(submit_c2b_sync(READ, c2b));
+                if(submit_c2b_sync(READ, c2b))
+                {
+                    if (!LIVE_EXTENT(ext))
+                    {
+                        /*
+                         * We failed to get a ref on the extent, which means that the extent is no
+                         * longer live, and therefore does not need remapping.
+                         */
+                        ret = -EINVAL;
+                        goto skip_extent;
+                    }
+                    BUG();
+                }
 
             /* Submit the write. */
             ret = submit_c2b_remap_rda(c2b, remap_chunks, remap_idx);
 
+skip_extent:
             write_unlock_c2b(c2b);
 
             /* This c2b is not needed any more, and it pollutes the cache, so destroy it. */
