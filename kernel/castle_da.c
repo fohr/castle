@@ -7462,7 +7462,6 @@ int castle_double_array_read(void)
         /* we know the da and the level, and we passed some sanity checking - so put the serdes
            state in the appropriate merge slot */
         des_da->levels[level].merge.serdes.mstore_entry = mstore_dmserentry;
-        mstore_dmserentry=NULL;
 
         /* Recover partially complete output CT */
         des_da->levels[level].merge.serdes.out_tree = NULL;
@@ -7483,6 +7482,7 @@ int castle_double_array_read(void)
 
         /* sanity check merge output tree state */
         castle_da_merge_serdes_out_tree_check(mstore_dmserentry, des_da, level);
+        mstore_dmserentry=NULL;
 
         /* inc ct seq number if necessary */
         if (des_da->levels[level].merge.serdes.out_tree->seq >= atomic_read(&castle_next_tree_seq))
