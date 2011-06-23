@@ -312,46 +312,11 @@ void skb_print(struct sk_buff *skb)
     castle_printk(LOG_DEBUG, "\n");
 }
 
+#if 0
 void vl_key_print(c_printk_level_t level, c_vl_key_t *vl_key)
 {
     castle_printk(level, " key len=%d: ", vl_key->length);
     print_hex_dump_bytes("", DUMP_PREFIX_NONE, vl_key->key, vl_key->length);
-}
-
-void vl_okey_to_buf(c_vl_okey_t *key, char *buf)
-{
-    int i, j;
-
-    *buf++ = '|';
-    for(i=0; i<key->nr_dims; i++)
-    {
-        for(j=0; j<key->dims[i]->length; j++)
-        {
-            sprintf(buf, "%.2x", key->dims[i]->key[j]);
-            buf += 2;
-        }
-        *buf++ = '|';
-    }
-    *buf++ = '\0';
-}
-
-void vl_okey_print(c_printk_level_t level, c_vl_okey_t *key)
-{
-#define NR_BYTES_PRINT  15
-    int i, j;
-    char key_str[2*NR_BYTES_PRINT+1];
-
-    castle_printk(level, "# key dimensions: %d\n", key->nr_dims);
-    for(i=0; i<key->nr_dims; i++)
-    {
-        for(j=0; j<key->dims[i]->length && j<NR_BYTES_PRINT; j++)
-            sprintf(key_str + 2*j, "%.2x", key->dims[i]->key[j]);
-        castle_printk(level, " dim[%.2d], len=%.3d, first %d bytes: %s\n",
-            i,
-            key->dims[i]->length,
-            NR_BYTES_PRINT,
-            key->dims[i]->length == 0 ? "" : key_str);
-    }
 }
 
 EXPORT_SYMBOL(vl_okey_print);
@@ -370,6 +335,7 @@ void vl_bkey_print(c_printk_level_t level, c_vl_bkey_t *key)
     vl_okey_print(level, okey);
     castle_object_okey_free(okey);
 }
+#endif
 
 /**
  * Copies a string out of the userspace, performing checks to verify that string

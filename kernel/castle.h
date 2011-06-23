@@ -599,20 +599,6 @@ struct castle_btree_node {
 
 #define PLUS_INFINITY_DIM_LENGTH 0xFFFFFFFF
 
-/*
- * Variable length key, for example used by the btree
- */
-
-typedef struct castle_var_length_key {
-    uint32_t length;
-    uint8_t key[];
-} PACKED c_vl_key_t;
-
-typedef struct castle_var_length_object_key {
-    uint32_t nr_dims;
-    c_vl_key_t *dims[];
-} PACKED c_vl_okey_t;
-
 /* Below encapsulates the internal btree node structure, different type of
    nodes may be used for different trees */
 struct castle_component_tree;
@@ -1575,7 +1561,7 @@ struct castle_object_pull {
 struct castle_object_iterator;
 typedef int (*castle_object_iter_next_available_t)
         (struct castle_object_iterator *iter,
-         c_vl_okey_t *key,
+         c_vl_bkey_t *key,
          c_val_tup_t *val,
          int err,
          void *data);
@@ -1584,13 +1570,11 @@ typedef struct castle_object_iterator {
     /* Filled in by the client */
     c_da_t              da_id;
     c_ver_t             version;
-    c_vl_okey_t        *start_okey;
-    c_vl_okey_t        *end_okey;
+    c_vl_bkey_t        *start_key;
+    c_vl_bkey_t        *end_key;
 
     /* Rest */
     int                 err;
-    c_vl_bkey_t        *start_bkey;
-    c_vl_bkey_t        *end_bkey;
     int                 completed;
     c_vl_bkey_t        *last_next_key;
     c_da_rq_iter_t      da_rq_iter;

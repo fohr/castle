@@ -129,10 +129,10 @@ struct castle_back_iterator
 {
     uint64_t                      flags;
     c_collection_id_t             collection_id;
-    c_vl_okey_t                  *start_key;
-    c_vl_okey_t                  *end_key;
+    c_vl_bkey_t                  *start_key;
+    c_vl_bkey_t                  *end_key;
     /* saved key and value that couldn't fit in the buffer this time */
-    c_vl_okey_t                  *saved_key;
+    c_vl_bkey_t                  *saved_key;
     c_val_tup_t                   saved_val;
     castle_object_iterator_t     *iterator;
     /* the tail of the kv_list being built by this iterator */
@@ -919,11 +919,10 @@ static int castle_back_reply(struct castle_back_op *op, int err,
 }
 
 static int castle_back_key_copy_get(struct castle_back_conn *conn, c_vl_bkey_t *user_key,
-                                    uint32_t key_len, c_vl_okey_t **key_out)
+                                    uint32_t key_len, c_vl_bkey_t **key_out)
 {
     struct castle_back_buffer *buf;
     unsigned long user_key_start, user_key_end, buf_end;
-    c_vl_okey_t *okey;
     c_vl_bkey_t *bkey;
     int i, err;
 
@@ -933,7 +932,7 @@ static int castle_back_key_copy_get(struct castle_back_conn *conn, c_vl_bkey_t *
      * a valid key
      */
 
-    if (key_len < sizeof(c_vl_okey_t) || key_len > VLBA_TREE_MAX_KEY_SIZE)
+    if (key_len < sizeof(c_vl_bkey_t) || key_len > VLBA_TREE_MAX_KEY_SIZE)
     {
         error("Bad key length %u\n", key_len);
         err = -ENAMETOOLONG;
@@ -965,6 +964,13 @@ static int castle_back_key_copy_get(struct castle_back_conn *conn, c_vl_bkey_t *
     if (key_len != (bkey->length + 4))
     {
         error("Buffer length(%u) doesnt match with key length(%u)\n", key_len, bkey->length+4);
+        err = -EINVAL;
+        goto err1;
+    }
+
+    if (*((uint64_t *)bkey->_unused) != 0)
+    {
+        error("Unused bits need to be set to 0\n");
         err = -EINVAL;
         goto err1;
     }
@@ -1011,7 +1017,16 @@ static int castle_back_key_copy_get(struct castle_back_conn *conn, c_vl_bkey_t *
         }
 
         /* Length should be zero, if the dimension is infinity. */
-        if ((dim_flags & KEY_DIMENSION_INFINITY_FLAGS_MASK) && (dim_len != 0))
+        /* The dimension should be a infinity, if the length is zero. */
+        /* (no infinity flags) XOR (non-zero length dimension) */
+        if ((!(dim_flags & KEY_DIMENSION_INFINITY_FLAGS_MASK)) ^ (dim_len != 0))
+        {
+            error("Found mis-match for INFINITY flags and dimension length.\n");
+            err = -EINVAL;
+            goto err1;
+        }
+
+        if ((dim_len == 0) && !(dim_flags & KEY_DIMENSION_INFINITY_FLAGS_MASK))
         {
             error("Found INFINITY and no-zero dimension length.\n");
             err = -EINVAL;
@@ -1028,15 +1043,13 @@ static int castle_back_key_copy_get(struct castle_back_conn *conn, c_vl_bkey_t *
         }
     }
 
-    okey = castle_object_btree_key_convert(bkey);
+    *key_out = castle_object_btree_key_duplicate(bkey);
 
     castle_back_buffer_put(conn, buf);
 
 #ifdef DEBUG
     vl_okey_print(okey);
 #endif
-
-    *key_out = okey;
 
     return 0;
 
@@ -1047,13 +1060,14 @@ err0: return err;
 /**
  * if doesn't fit into the buffer, *buf_used will be set to 0
  */
-static void castle_back_key_kernel_to_user(c_vl_okey_t                 *okey,
+static void castle_back_key_kernel_to_user(c_vl_bkey_t                 *kernel_key,
                                            struct castle_back_buffer   *buf,
                                            unsigned long                user_buf,
                                            uint32_t                     buf_len,
                                            uint32_t                    *buf_used)
 {
-    c_vl_bkey_t *bkey, *ret;
+    c_vl_bkey_t *bkey;
+    int ret;
 
 #ifdef DEBUG
     debug("castle_back_key_kernel_to_user copying key:\n");
@@ -1062,13 +1076,12 @@ static void castle_back_key_kernel_to_user(c_vl_okey_t                 *okey,
 #endif
 
     bkey = (c_vl_bkey_t *)castle_back_user_to_kernel(buf, user_buf);
-    ret = castle_object_key_convert_to_buf(okey, bkey, buf_len);
-    if (ret == NULL)
+    ret = castle_object_btree_key_copy(kernel_key, bkey, buf_len);
+    if (ret)
     {
         *buf_used = 0;
         return;
     }
-    BUG_ON(ret != bkey);
 
     *buf_used = bkey->length + 4;
 
@@ -1175,7 +1188,7 @@ static void castle_back_replace(void *data)
     struct castle_back_op *op = data;
     struct castle_back_conn *conn = op->conn;
     int err;
-    c_vl_okey_t *key;
+    c_vl_bkey_t *key;
 
     op->attachment = castle_attachment_get(op->req.replace.collection_id, WRITE);
     if (op->attachment == NULL)
@@ -1264,7 +1277,7 @@ static void castle_back_remove(void *data)
     struct castle_back_op *op = data;
     struct castle_back_conn *conn = op->conn;
     int err;
-    c_vl_okey_t *key;
+    c_vl_bkey_t *key;
 
     op->attachment = castle_attachment_get(op->req.remove.collection_id, WRITE);
     if (op->attachment == NULL)
@@ -1397,7 +1410,7 @@ static void castle_back_get(void *data)
     struct castle_back_op *op = data;
     struct castle_back_conn *conn = op->conn;
     int err;
-    c_vl_okey_t *key;
+    c_vl_bkey_t *key;
 
     op->attachment = castle_attachment_get(op->req.get.collection_id, READ);
     if (op->attachment == NULL)
@@ -1525,8 +1538,8 @@ static void castle_back_iter_start(void *data)
     struct castle_back_op *op = data;
     struct castle_back_conn *conn = op->conn;
     int err;
-    c_vl_okey_t *start_key;
-    c_vl_okey_t *end_key;
+    c_vl_bkey_t *start_key;
+    c_vl_bkey_t *end_key;
     castle_interface_token_t token;
     struct castle_attachment *attachment;
     struct castle_back_stateful_op *stateful_op;
@@ -1612,7 +1625,7 @@ err0: castle_back_reply(op, err, 0, 0);
 
 static uint32_t castle_back_save_key_value_to_list(struct castle_back_stateful_op *stateful_op,
         struct castle_key_value_list *kv_list,
-        c_vl_okey_t *key, c_val_tup_t *val,
+        c_vl_bkey_t *key, c_val_tup_t *val,
         c_collection_id_t collection_id,
         struct castle_back_buffer *back_buf,
         uint32_t buf_len, /* space left in the buffer */
@@ -1671,7 +1684,7 @@ err0:
 }
 
 static int castle_back_iter_next_callback(struct castle_object_iterator *iterator,
-        c_vl_okey_t *key,
+        c_vl_bkey_t *key,
         c_val_tup_t *val,
         int err,
         void *data)
@@ -1736,7 +1749,7 @@ static int castle_back_iter_next_callback(struct castle_object_iterator *iterato
 
         debug_iter("Not enough space on buffer, saving a key for next time.\n");
 
-        stateful_op->iterator.saved_key = castle_object_okey_copy(key);
+        stateful_op->iterator.saved_key = castle_object_btree_key_duplicate(key);
         if (!stateful_op->iterator.saved_key)
         {
             err = -ENOMEM;
@@ -1834,7 +1847,7 @@ static void _castle_back_iter_next(void *data)
             goto err0;
         }
 
-        castle_object_okey_free(stateful_op->iterator.saved_key);
+        castle_object_bkey_free(stateful_op->iterator.saved_key);
         /* we copied it so free it */
         if (stateful_op->iterator.saved_val.type & CVT_TYPE_INLINE)
             castle_free(stateful_op->iterator.saved_val.val);
@@ -1926,7 +1939,7 @@ static void castle_back_iter_cleanup(struct castle_back_stateful_op *stateful_op
 
     if (stateful_op->iterator.saved_key != NULL)
     {
-        castle_object_okey_free(stateful_op->iterator.saved_key);
+        castle_object_bkey_free(stateful_op->iterator.saved_key);
         if (stateful_op->iterator.saved_val.type & CVT_TYPE_INLINE)
         {
             BUG_ON(!stateful_op->iterator.saved_val.val);
@@ -2197,7 +2210,7 @@ static void castle_back_big_put(void *data)
     struct castle_back_conn *conn = op->conn;
     int err;
     struct castle_attachment *attachment;
-    c_vl_okey_t *key;
+    c_vl_bkey_t *key;
     castle_interface_token_t token;
     struct castle_back_stateful_op *stateful_op;
 
@@ -2499,7 +2512,7 @@ static void castle_back_big_get(void *data)
     struct castle_back_conn *conn = op->conn;
     int err;
     struct castle_attachment *attachment;
-    c_vl_okey_t *key;
+    c_vl_bkey_t *key;
     castle_interface_token_t token;
     struct castle_back_stateful_op *stateful_op;
 
@@ -2705,7 +2718,7 @@ static int castle_back_get_stateful_op_cpu_index(struct castle_back_conn *conn,
  */
 static void castle_back_request_process(struct castle_back_conn *conn, struct castle_back_op *op)
 {
-    c_vl_okey_t *key = NULL;
+    c_vl_bkey_t *key = NULL;
     uint32_t key_len = 0;
 
     debug("Got a request call=%d tag=%d\n", op->req.call_id, op->req.tag);
@@ -2828,7 +2841,7 @@ static void castle_back_request_process(struct castle_back_conn *conn, struct ca
     /* Hash key for cpu_index. */
     if (key != NULL)
     {
-        op->cpu_index = castle_double_array_okey_cpu_index(key, key_len);
+        op->cpu_index = castle_double_array_key_cpu_index(key, key_len);
         castle_free(key);
     }
 

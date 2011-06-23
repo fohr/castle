@@ -450,6 +450,9 @@ typedef struct castle_var_length_btree_key {
 #define castle_object_btree_key_header_size(_nr_dims)                                     \
         ( sizeof(c_vl_bkey_t) + ((_nr_dims) * 4) )
 
+#define castle_object_btree_key_length(_key)                                              \
+        ( (_key) ? ((_key)->length + 4) : 0 )
+
 #define castle_object_btree_key_dim_length(key, dim)                                      \
 ({                                                                                        \
     uint32_t end_offset;                                                                  \

@@ -25,203 +25,98 @@
 static const uint32_t OBJ_TOMBSTONE = ((uint32_t)-1);
 
 /**
- * Constructs btree key, taking dimensions < okey_first_dim from the src_bkey, and
- * dimensions >= okey_first_dim from src_okey and copies it to dest_bkey of length
- * dest_len.
+ * Constructs btree key, from two source keys k1 and k2. Take first n dimensions from k1 and
+ * remaining from k2. It is possible that all dimensions are coming from k2 (n = 0). But, we
+ * never take all dimensions from k1 (n should less than k1->nr_dims).
  *
- * @param src_bkey         [in]    B-Tree key to copy from.
- * @param src_okey         [in]    Object key to convert from.
- * @param okey_first_dim   [in]    Copy upto the dimension before this from src_bkey
- *                                 and get remaining from src_okey.
- * @param buffer           [out]   B-tree key buffer to put the converted key.
- * @param buffer_len       [in]    Size of B-Tree key buffer length. (doesn't matter
- *                                 if dest_bkey is NULL).
+ * @param k1                [in]    B-Tree key to copy first dimensions.
+ * @param k2                [in]    B-Tree key to copy remianing dimensions from.
+ * @param nr_dims_from_k1   [in]    Copy these many number of dimensions from k1 and remaining
+ *                                  from k2. Could be zero.
  *
- * @return  buffer          SUCCESS and buffer is not NULL.
- *          bkey            SUCCESS and pointer to created bkey buffer.
- *          NULL            FAILURE.
+ * @return  out_key SUCCESS
+ *          NULL    FAILURE
  */
-static c_vl_bkey_t* castle_object_btree_key_construct(c_vl_bkey_t  *src_bkey,
-                                                      c_vl_okey_t  *src_okey,
-                                                      int           okey_first_dim,
-                                                      c_vl_bkey_t  *buffer,
-                                                      uint32_t      buffer_len)
+static c_vl_bkey_t* castle_object_btree_key_construct(c_vl_bkey_t  *k1,
+                                                      c_vl_bkey_t  *k2,
+                                                      uint32_t      nr_dims_from_k1)
 {
-    uint32_t key_len, first_okey_offset = 0, payload_offset;
-    int i, nr_dims;
-    c_vl_bkey_t *btree_key;
-    int plus_infinity = 0;
+    uint32_t key_len, nr_dims;
+    uint32_t nr_dims_from_k2;
+    uint32_t k2_payload_len;
+    uint32_t payload_split_offset = 0;
+    c_vl_bkey_t *out_key;
 
     /* Sanity checks */
-    BUG_ON(!src_okey);
-    BUG_ON(okey_first_dim > 0 && !src_bkey);
-    BUG_ON(okey_first_dim == 0 && src_bkey);
-    BUG_ON(src_bkey && src_okey && (src_bkey->nr_dims != src_okey->nr_dims));
-    BUG_ON(okey_first_dim >= src_okey->nr_dims);
+    /* Check if source is NULL. */
+    BUG_ON(!k2 || !k2->nr_dims);
 
-    nr_dims = src_okey->nr_dims;
+    /* k1 should exist if we want to copy few dimensions. */
+    BUG_ON(nr_dims_from_k1 > 0 && !k1);
 
-    for (i=okey_first_dim; i<nr_dims; i++)
+    /* k1 shouldn't exist if we are not copying any thing from k1. */
+    BUG_ON(nr_dims_from_k1 == 0 && k1);
+
+    /* If k1 exists, k1 & k2 should contain same number of dimensions. */
+    BUG_ON(k1 && (k1->nr_dims != k2->nr_dims));
+
+    /* Number of dimensions to copy shouldn't exceed the nr_dims(k1)-1. We expect atleast one
+     * dimension to go from k2. */
+    BUG_ON(nr_dims_from_k1 && (nr_dims_from_k1 > (k1->nr_dims - 1)));
+
+    nr_dims = k2->nr_dims;
+    nr_dims_from_k2 = nr_dims - nr_dims_from_k1;
+
+    /* Workout the length of the key. */
+
+    /* Workout the offset in payload, that k2 dimensions has to be copied to. */
+    if (nr_dims_from_k1 > 0)
     {
-        if (src_okey->dims[i]->length == PLUS_INFINITY_DIM_LENGTH)
-        {
-            plus_infinity = 1;
-            src_okey->dims[i]->length = 0;
-            break;
-        }
-    }
-    /* Work the length of the btree key. okey_first_dim > 0, work out how much space the
-       dimensions < okey_first_dim take up first. */
-    if(okey_first_dim > 0)
-    {
-        /* The length of the header + dimensions < okey_first_dim can be easily worked
-           out by looking at the offset for the okey_first_dim in the src_bkey */
-        first_okey_offset = castle_object_btree_key_dim_get(src_bkey, okey_first_dim) -
-                                (char *)src_bkey;
-        key_len = first_okey_offset;
+        /* The length of the header + dimensions from k1 can be easily worked out by looking at
+         * the offset for the next dimension in k1. */
+        payload_split_offset = KEY_DIMENSION_OFFSET(k1->dim_head[nr_dims_from_k1]);
+        key_len = payload_split_offset;
     }
     else
     {
         /* Work out the header size (including the dim_head array) */
         key_len = sizeof(c_vl_bkey_t) + 4 * nr_dims;
+        payload_split_offset = KEY_DIMENSION_OFFSET(k2->dim_head[0]);
     }
 
-    /* Add the size of dimensions >= okey_first_dim */
-    for(i=okey_first_dim; i<nr_dims; i++)
-        key_len += src_okey->dims[i]->length;
+    /* Find the length of payload to be copied from k2. */
+    k2_payload_len = castle_object_btree_key_length(k2) -
+                            KEY_DIMENSION_OFFSET(k2->dim_head[nr_dims_from_k1]);
+    key_len += k2_payload_len;
 
-    if (key_len - 4 > VLBA_TREE_MAX_KEY_SIZE) /* Length doesn't include length field */
+    /* Length doesn't include length field */
+    if (key_len - 4 > VLBA_TREE_MAX_KEY_SIZE)
         return NULL;
 
-    if (buffer)
-    {
-        if (key_len > buffer_len)
-            return NULL;
-        btree_key = buffer;
-    }
+    /* Allocate the single-dimensional key */
+    out_key = castle_zalloc(key_len, GFP_KERNEL);
+    if (!out_key)
+        return NULL;
+
+    /* Copy the part from k1. Both header and payload together. */
+    if (nr_dims_from_k1 > 0)
+        memcpy(out_key, k1, payload_split_offset);
     else
-    {
-        /* Allocate the single-dimensional key */
-        btree_key = castle_zalloc(key_len, GFP_KERNEL);
-        if(!btree_key)
-            return NULL;
-    }
+        out_key->nr_dims = k2->nr_dims;
 
-    /* Work out where should the first_okey_dim be put. Copy the relevant bits from src_bkey. */
-    if(okey_first_dim > 0)
-    {
-        payload_offset = first_okey_offset;
-        memcpy(btree_key, src_bkey, payload_offset);
-    }
-    else
-        payload_offset = sizeof(c_vl_bkey_t) + 4 * nr_dims;
+    /* Copy the header of k2 dimensions. */
+    memcpy(&out_key->dim_head[nr_dims_from_k1], &k2->dim_head[nr_dims_from_k1],
+           sizeof(k2->dim_head[0]) * nr_dims_from_k2);
 
-    /* Construct the key. */
-    btree_key->length  = key_len - 4; /* Length doesn't include length field */
-    btree_key->nr_dims = nr_dims;
-    /* Go through all okey dimensions and write them in. */
-    for(i=okey_first_dim; i<nr_dims; i++)
-    {
-        BUG_ON(src_okey->dims[i]->length == PLUS_INFINITY_DIM_LENGTH);
-        if (src_okey->dims[i]->length == 0)
-        {
-            if (!plus_infinity)
-            {
-                btree_key->dim_head[i] = KEY_DIMENSION_HEADER(payload_offset,
-                                           KEY_DIMENSION_MINUS_INFINITY_FLAG);
-                BUG_ON(!(castle_object_btree_key_dim_flags_get(btree_key, i) &
-                        KEY_DIMENSION_MINUS_INFINITY_FLAG));
-            }
-            else
-            {
-                btree_key->dim_head[i] = KEY_DIMENSION_HEADER(payload_offset,
-                                           KEY_DIMENSION_PLUS_INFINITY_FLAG);
-                BUG_ON(!(castle_object_btree_key_dim_flags_get(btree_key, i) &
-                        KEY_DIMENSION_PLUS_INFINITY_FLAG));
-            }
-        }
-        else
-            btree_key->dim_head[i] = KEY_DIMENSION_HEADER(payload_offset, 0);
-        memcpy((char *)btree_key + payload_offset, src_okey->dims[i]->key, src_okey->dims[i]->length);
-        payload_offset += src_okey->dims[i]->length;
-    }
-    BUG_ON(payload_offset != key_len);
+    /* Copy payload for k2 dimensions. */
+    memcpy((char *)out_key + payload_split_offset,
+           castle_object_btree_key_dim_get(k2, nr_dims_from_k1),
+           k2_payload_len);
 
-    return btree_key;
-}
+    /* Set key length. */
+    out_key->length = key_len - 4;
 
-/* Converts 'object key' (i.e. multidimensional key) to btree key (single dimensional) */
-c_vl_bkey_t* castle_object_key_convert(c_vl_okey_t *obj_key)
-{
-    if (obj_key->nr_dims == 0)
-        return NULL;
-
-    return castle_object_btree_key_construct(NULL, obj_key, 0, NULL, 0);
-}
-
-/**
- * Converts 'object key' (i.e. multidimensional key) to btree key (single dimensional)
- * and copies it to buffer of length buf_len.
- *
- * @param obj_key          [in]    Object key to convert from.
- * @param btree_key        [out]   B-tree key buffer to put the converted key.
- * @param buf_len          [in]    Size of B-Tree key buffer length. (doesn't matter
- *                                 if dest_bkey is NULL).
- *
- * @return  btree_key       SUCCESS and buffer is not NULL.
- *          bkey            SUCCESS and pointer to created bkey buffer.
- *          NULL            FAILURE.
- */
-c_vl_bkey_t* castle_object_key_convert_to_buf(c_vl_okey_t *obj_key,
-                                              c_vl_bkey_t *btree_key,
-                                              uint32_t     buf_len)
-{
-    if (obj_key->nr_dims == 0)
-        return NULL;
-
-    return castle_object_btree_key_construct(NULL, obj_key, 0, btree_key, buf_len);
-}
-
-c_vl_okey_t* castle_object_btree_key_convert(c_vl_bkey_t *btree_key)
-{
-    c_vl_okey_t *obj_key;
-    c_vl_key_t *dim;
-    uint32_t dim_len;
-    int i;
-
-    obj_key = castle_zalloc(sizeof(c_vl_okey_t) + sizeof(c_vl_key_t *) * btree_key->nr_dims, GFP_KERNEL);
-    if(!obj_key)
-        return NULL;
-
-    obj_key->nr_dims = btree_key->nr_dims;
-    for(i=0; i<btree_key->nr_dims; i++)
-    {
-        dim_len = castle_object_btree_key_dim_length(btree_key, i);
-        BUG_ON((dim_len == 0) &&
-               !(castle_object_btree_key_dim_flags_get(btree_key, i) &
-                KEY_DIMENSION_MINUS_INFINITY_FLAG) &&
-               !(castle_object_btree_key_dim_flags_get(btree_key, i) &
-                KEY_DIMENSION_PLUS_INFINITY_FLAG));
-        dim = castle_malloc(dim_len + 4, GFP_KERNEL);
-        if(!dim)
-        {
-        castle_printk(LOG_WARN, "Couldn't malloc dim_len=%d, dim=%p\n", dim_len, dim);
-            goto err_out;
-        }
-        dim->length = dim_len;
-        memcpy(dim->key, castle_object_btree_key_dim_get(btree_key, i), dim_len);
-        obj_key->dims[i] = dim;
-    }
-
-    return obj_key;
-
-err_out:
-    castle_printk(LOG_ERROR, "Error!\n");
-    for(i--; i>0; i--)
-        castle_free(obj_key->dims[i]);
-    castle_free(obj_key);
-
-    return NULL;
+    return out_key;
 }
 
 static inline int castle_object_key_dim_compare(char *dim_a, uint32_t dim_a_len, uint32_t dim_a_flags,
@@ -302,16 +197,34 @@ static void castle_object_btree_key_dim_inc(c_vl_bkey_t *key, int dim)
     key->dim_head[dim] = KEY_DIMENSION_HEADER(offset, flags | KEY_DIMENSION_NEXT_FLAG);
 }
 
+int castle_object_btree_key_copy(c_vl_bkey_t *old_key,
+                                 c_vl_bkey_t *new_key,
+                                 uint32_t     buf_len)
+{
+    int key_length;
+
+    if(!new_key || !old_key)
+        return -ENOMEM;
+
+    key_length = old_key->length + 4;
+
+    if (buf_len < key_length)
+        return -ENOMEM;
+
+    memcpy(new_key, old_key, key_length);
+
+    return 0;
+}
+
 void *castle_object_btree_key_duplicate(c_vl_bkey_t *key)
 {
     c_vl_bkey_t *new_key;
-    uint32_t key_length;
 
-    key_length = key->length + 4;
-    new_key = castle_malloc(key_length, GFP_KERNEL);
+    new_key = castle_malloc(key->length + 4, GFP_KERNEL);
     if(!new_key)
         return NULL;
-    memcpy(new_key, key, key_length);
+
+    BUG_ON(castle_object_btree_key_copy(key, new_key, key->length + 4));
 
     return new_key;
 }
@@ -334,8 +247,8 @@ void *castle_object_btree_key_next(c_vl_bkey_t *key)
    less then start, or 0 if the key is within bounds. Optionally, the function can
    be queried about which dimension offeneded */
 static int castle_object_btree_key_bounds_check(c_vl_bkey_t *key,
-                                                c_vl_okey_t *start,
-                                                c_vl_okey_t *end,
+                                                c_vl_bkey_t *start,
+                                                c_vl_bkey_t *end,
                                                 int *offending_dim_p)
 {
     int dim;
@@ -354,19 +267,17 @@ static int castle_object_btree_key_bounds_check(c_vl_bkey_t *key,
         char *key_dim, *start_dim, *end_dim;
         int cmp;
 
-        key_dim_len   = castle_object_btree_key_dim_length(key, dim);
-        key_dim       = castle_object_btree_key_dim_get(key, dim);
-        key_dim_flags = castle_object_btree_key_dim_flags_get(key, dim);
+        key_dim_len     = castle_object_btree_key_dim_length(key, dim);
+        key_dim         = castle_object_btree_key_dim_get(key, dim);
+        key_dim_flags   = castle_object_btree_key_dim_flags_get(key, dim);
 
-        start_dim_len = start->dims[dim]->length;
-        start_dim     = start->dims[dim]->key;
-        start_dim_flags = ((start_dim_len == 0)?
-                           KEY_DIMENSION_MINUS_INFINITY_FLAG:0);
+        start_dim_len   = castle_object_btree_key_dim_length(start, dim);
+        start_dim       = castle_object_btree_key_dim_get(start, dim);
+        start_dim_flags = castle_object_btree_key_dim_flags_get(start, dim);
 
-        end_dim_len   = end->dims[dim]->length;
-        end_dim       = end->dims[dim]->key;
-        end_dim_flags = ((end_dim_len == 0)?
-                         KEY_DIMENSION_PLUS_INFINITY_FLAG:0);
+        end_dim_len     = castle_object_btree_key_dim_length(end, dim);
+        end_dim         = castle_object_btree_key_dim_get(end, dim);
+        end_dim_flags   = castle_object_btree_key_dim_flags_get(end, dim);
 
         cmp = castle_object_key_dim_compare(key_dim,
                                             key_dim_len,
@@ -399,7 +310,7 @@ static int castle_object_btree_key_bounds_check(c_vl_bkey_t *key,
 }
 
 static c_vl_bkey_t* castle_object_btree_key_skip(c_vl_bkey_t *old_key,
-                                                 c_vl_okey_t *start,
+                                                 c_vl_bkey_t *start,
                                                  int offending_dim,
                                                  int out_of_range)
 {
@@ -407,8 +318,7 @@ static c_vl_bkey_t* castle_object_btree_key_skip(c_vl_bkey_t *old_key,
 
     new_key = castle_object_btree_key_construct(old_key,
                                                 start,
-                                                offending_dim,
-                                                NULL, 0);
+                                                offending_dim);
     if(!new_key)
         return NULL;
 
@@ -418,42 +328,6 @@ static c_vl_bkey_t* castle_object_btree_key_skip(c_vl_bkey_t *old_key,
         castle_object_btree_key_dim_inc(new_key, offending_dim - 1);
 
     return new_key;
-}
-
-void castle_object_okey_free(c_vl_okey_t *obj_key)
-{
-    int i;
-
-    for(i=0; i < obj_key->nr_dims; i++)
-        castle_free(obj_key->dims[i]);
-    castle_free(obj_key);
-}
-
-c_vl_okey_t *castle_object_okey_copy(c_vl_okey_t *obj_key)
-{
-    c_vl_okey_t *copy;
-    int i, j;
-
-    copy = castle_malloc(sizeof(c_vl_okey_t) + sizeof(c_vl_key_t *) * obj_key->nr_dims, GFP_KERNEL);
-    if (copy == NULL)
-        return NULL;
-
-    copy->nr_dims = obj_key->nr_dims;
-    for(i=0; i < obj_key->nr_dims; i++)
-    {
-        copy->dims[i] = castle_malloc(sizeof(c_vl_key_t) + obj_key->dims[i]->length, GFP_KERNEL);
-        if (copy->dims[i] == NULL)
-            goto err0;
-        memcpy(copy->dims[i], obj_key->dims[i], sizeof(c_vl_key_t) + obj_key->dims[i]->length);
-    }
-
-    return copy;
-
-err0:
-    for (j = 0; j < i; j++)
-        castle_free(copy->dims[j]);
-    castle_free(copy);
-    return NULL;
 }
 
 void castle_object_bkey_free(c_vl_bkey_t *bkey)
@@ -513,8 +387,8 @@ static int _castle_objects_rq_iter_prep_next(castle_object_iterator_t *iter,
            Check if that's within the rq hypercube */
         castle_da_rq_iter.next(&iter->da_rq_iter, &k, &v, &cvt);
         out_of_range = castle_object_btree_key_bounds_check(k,
-                                                            iter->start_okey,
-                                                            iter->end_okey,
+                                                            iter->start_key,
+                                                            iter->end_key,
                                                             &offending_dim);
 #ifdef DEBUG
         debug("Got the following key from da_rq iterator. Is in range: %d, offending_dim=%d\n",
@@ -534,7 +408,7 @@ static int _castle_objects_rq_iter_prep_next(castle_object_iterator_t *iter,
             /* We are outside of the rq hypercube, find next intersection point
                and skip to that */
             next_key = castle_object_btree_key_skip(k,
-                                                    iter->start_okey,
+                                                    iter->start_key,
                                                     offending_dim,
                                                     out_of_range);
             /* Save the key, to be freed the next time around the loop/on cancel */
@@ -599,16 +473,12 @@ static void castle_objects_rq_iter_cancel(castle_object_iterator_t *iter)
     /* Cancel da_rq_iter if it's error free */
     if(!iter->da_rq_iter.err)
         castle_da_rq_iter.cancel(&iter->da_rq_iter);
-    if(iter->start_bkey)
-        castle_object_bkey_free(iter->start_bkey);
-    if(iter->end_bkey)
-        castle_object_bkey_free(iter->end_bkey);
     castle_objects_rq_iter_next_key_free(iter);
 }
 
 static void castle_objects_rq_iter_init(castle_object_iterator_t *iter)
 {
-    BUG_ON(!iter->start_okey || !iter->end_okey);
+    BUG_ON(!iter->start_key || !iter->end_key);
 
     iter->err = 0;
     iter->end_io = NULL;
@@ -617,9 +487,6 @@ static void castle_objects_rq_iter_init(castle_object_iterator_t *iter)
        but will prevent castle_object_rq_iter_cancel from cancelling the
        da_rq_iter unnecessarily */
     iter->da_rq_iter.err = -EINVAL;
-    /* Construct the btree keys for range-query */
-    iter->start_bkey    = castle_object_key_convert(iter->start_okey);
-    iter->end_bkey      = castle_object_key_convert(iter->end_okey);
     iter->last_next_key = NULL;
     iter->completed     = 0;
 #ifdef DEBUG
@@ -632,19 +499,11 @@ static void castle_objects_rq_iter_init(castle_object_iterator_t *iter)
     castle_printk(LOG_DEBUG, "============================================================\n");
 #endif
 
-    /* Check if we managed to initialise the btree keys correctly */
-    if(!iter->start_bkey || !iter->end_bkey)
-    {
-        castle_objects_rq_iter_cancel(iter);
-        iter->err = -ENOMEM;
-        return;
-    }
-
     castle_da_rq_iter_init(&iter->da_rq_iter,
                             iter->version,
                             iter->da_id,
-                            iter->start_bkey,
-                            iter->end_bkey);
+                            iter->start_key,
+                            iter->end_key);
     castle_da_rq_iter.register_cb(&iter->da_rq_iter,
                                   castle_objects_rq_iter_end_io,
                                   (void *)iter);
@@ -1262,7 +1121,7 @@ err_out:
  */
 int castle_object_replace(struct castle_object_replace *replace,
                           struct castle_attachment *attachment,
-                          c_vl_okey_t *key,
+                          c_vl_bkey_t *key,
                           int cpu_index,
                           int tombstone)
 {
@@ -1290,12 +1149,12 @@ int castle_object_replace(struct castle_object_replace *replace,
 
     /* Checks on the key. */
     for (i=0; i<key->nr_dims; i++)
-        if(key->dims[i]->length == 0)
+        if(castle_object_btree_key_dim_length(key, i) == 0)
             return -EINVAL;
 
     /* Create btree key out of the object key. */
     ret = -EINVAL;
-    btree_key = castle_object_key_convert(key);
+    btree_key = castle_object_btree_key_duplicate(key);
     if(!btree_key)
         goto err_out;
 
@@ -1355,28 +1214,16 @@ EXPORT_SYMBOL(castle_object_replace);
 void castle_object_slice_get_end_io(void *obj_iter, int err);
 
 int castle_object_iter_start(struct castle_attachment *attachment,
-                            c_vl_okey_t *start_key,
-                            c_vl_okey_t *end_key,
+                            c_vl_bkey_t *start_key,
+                            c_vl_bkey_t *end_key,
                             castle_object_iterator_t **iter)
 {
     castle_object_iterator_t *iterator;
-    int i;
 
     if(start_key->nr_dims != end_key->nr_dims)
     {
         castle_printk(LOG_WARN, "Range query with different # of dimensions.\n");
         return -EINVAL;
-    }
-    /* Mark the key that this is end key. To notify this is infinity and +ve.
-     * Assuming that end_key will not used anywhere before converting into
-     * btree_key. */
-    for (i=0; i<end_key->nr_dims; i++)
-    {
-        if (end_key->dims[i]->length == 0)
-        {
-            end_key->dims[i]->length = PLUS_INFINITY_DIM_LENGTH;
-            break;
-        }
     }
 
     iterator = castle_malloc(sizeof(castle_object_iterator_t), GFP_KERNEL);
@@ -1386,10 +1233,10 @@ int castle_object_iter_start(struct castle_attachment *attachment,
     *iter = iterator;
 
     /* Initialise the iterator */
-    iterator->start_okey = start_key;
-    iterator->end_okey   = end_key;
-    iterator->version    = attachment->version;
-    iterator->da_id      = castle_version_da_id_get(iterator->version);
+    iterator->start_key = start_key;
+    iterator->end_key   = end_key;
+    iterator->version   = attachment->version;
+    iterator->da_id     = castle_version_da_id_get(iterator->version);
 
     debug_rq("rq_iter_init.\n");
     castle_objects_rq_iter_init(iterator);
@@ -1410,8 +1257,7 @@ int castle_object_iter_next(castle_object_iterator_t *iterator,
                             castle_object_iter_next_available_t callback,
                             void *data)
 {
-    c_vl_bkey_t *k;
-    c_vl_okey_t *key = NULL;
+    c_vl_bkey_t *k, *key = NULL;
     c_val_tup_t val;
     c_ver_t v;
     int has_response;
@@ -1443,7 +1289,7 @@ int castle_object_iter_next(castle_object_iterator_t *iterator,
                 {
                     has_response = 1;
 
-                    key = castle_object_btree_key_convert(k);
+                    key = k;
                     if (!key)
                     {
                         callback(iterator, NULL, NULL, -ENOMEM, iterator->next_available_data);
@@ -1469,7 +1315,6 @@ int castle_object_iter_next(castle_object_iterator_t *iterator,
         {
             debug_rq("Calling next available callback with key=%p.\n", key);
             continue_iterator = callback(iterator, key, &val, 0, iterator->next_available_data);
-            castle_object_okey_free(key);
         }
         debug_rq("Next available callback gave response %d.\n", continue_iterator);
     }
@@ -1758,7 +1603,7 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
  */
 int castle_object_get(struct castle_object_get *get,
                       struct castle_attachment *attachment,
-                      c_vl_okey_t *key,
+                      c_vl_bkey_t *key,
                       int cpu_index)
 {
     c_vl_bkey_t *btree_key;
@@ -1770,7 +1615,7 @@ int castle_object_get(struct castle_object_get *get,
     if(!castle_fs_inited)
         return -ENODEV;
 
-    btree_key = castle_object_key_convert(key);
+    btree_key = castle_object_btree_key_duplicate(key);
     if (!btree_key)
         return -EINVAL;
 
@@ -1935,7 +1780,7 @@ static void castle_object_pull_continue(struct castle_bio_vec *c_bvec, int err, 
 
 int castle_object_pull(struct castle_object_pull *pull,
                        struct castle_attachment *attachment,
-                       c_vl_okey_t *key,
+                       c_vl_bkey_t *key,
                        int cpu_index)
 {
     c_vl_bkey_t *btree_key;
@@ -1947,7 +1792,7 @@ int castle_object_pull(struct castle_object_pull *pull,
     if(!castle_fs_inited)
         return -ENODEV;
 
-    btree_key = castle_object_key_convert(key);
+    btree_key = castle_object_btree_key_duplicate(key);
     if (!btree_key)
         return -EINVAL;
 

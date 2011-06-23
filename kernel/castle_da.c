@@ -5984,17 +5984,15 @@ static int castle_da_ct_dec_cmp(struct list_head *l1, struct list_head *l2)
 }
 
 /**
- * Calculate hash of userland key (okey) length key_len and modulo for cpu_index.
+ * Calculate hash of castle key length key_len and modulo for cpu_index.
  *
  * @return  Offset into request_cpus.cpus[]
  */
-int castle_double_array_okey_cpu_index(c_vl_okey_t *okey, uint32_t key_len)
+int castle_double_array_key_cpu_index(c_vl_bkey_t *key, uint32_t key_len)
 {
     uint32_t seed = 0;
-    int i;
 
-    for (i = 0; i < okey->nr_dims; i++)
-        seed = murmur_hash_32(okey->dims[i]->key, okey->dims[i]->length, seed);
+    seed = murmur_hash_32(key, castle_object_btree_key_length(key), 0);
 
     return seed % castle_double_array_request_cpus();
 }
