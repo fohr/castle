@@ -599,15 +599,19 @@ struct castle_btree_node {
 
 #define PLUS_INFINITY_DIM_LENGTH 0xFFFFFFFF
 
-typedef struct castle_var_length_btree_key {
-    /* align:   4 */
-    /* offset:  0 */ uint32_t length;
-    /*          4 */ uint32_t nr_dims;
-    /*          8 */ uint8_t  _unused[8];
-    /*         16 */ uint32_t dim_head[0];
-    /*         16 */
-    /* Dimension header is followed by individual dimensions. */
-} PACKED c_vl_bkey_t;
+/*
+ * Variable length key, for example used by the btree
+ */
+
+typedef struct castle_var_length_key {
+    uint32_t length;
+    uint8_t key[];
+} PACKED c_vl_key_t;
+
+typedef struct castle_var_length_object_key {
+    uint32_t nr_dims;
+    c_vl_key_t *dims[];
+} PACKED c_vl_okey_t;
 
 /* Below encapsulates the internal btree node structure, different type of
    nodes may be used for different trees */

@@ -918,12 +918,13 @@ static int castle_back_reply(struct castle_back_op *op, int err,
     return 0;
 }
 
-static int castle_back_key_copy_get(struct castle_back_conn *conn, c_vl_okey_t *user_key,
+static int castle_back_key_copy_get(struct castle_back_conn *conn, c_vl_bkey_t *user_key,
                                     uint32_t key_len, c_vl_okey_t **key_out)
 {
     struct castle_back_buffer *buf;
     unsigned long user_key_start, user_key_end, buf_end;
-    c_vl_okey_t *key;
+    c_vl_okey_t *okey;
+    c_vl_bkey_t *bkey;
     int i, err;
 
     /*
@@ -960,75 +961,85 @@ static int castle_back_key_copy_get(struct castle_back_conn *conn, c_vl_okey_t *
         goto err1;
     }
 
-    key = castle_malloc(key_len, GFP_KERNEL);
-    if (key == NULL)
+    bkey = castle_back_user_to_kernel(buf, user_key);
+    if (key_len != (bkey->length + 4))
     {
-        error("Could not kmalloc for key copy!\n");
-        err = -ENOMEM;
+        error("Buffer length(%u) doesnt match with key length(%u)\n", key_len, bkey->length+4);
+        err = -EINVAL;
         goto err1;
     }
 
-    memcpy(key, castle_back_user_to_kernel(buf, user_key), key_len);
-
-    if (sizeof(c_vl_okey_t) + (key->nr_dims * sizeof(c_vl_key_t *)) > key_len)
+    /* Check if the key length is smaller than space needed for all dim_heads. */
+    if ((sizeof(c_vl_bkey_t) + (bkey->nr_dims * 4)) > key_len)
     {
-        error("Too many dimensions %d\n", key->nr_dims);
+        error("Too many dimensions %d\n", bkey->nr_dims);
         err = -EINVAL;
-        goto err2;
+        goto err1;
     }
 
-    if (key->nr_dims == 0)
+    if (bkey->nr_dims == 0)
     {
         error("Zero-dimensional key\n");
         err = -EINVAL;
-        goto err2;
+        goto err1;
     }
 
     debug("Original key pointer %p\n", user_key);
 
-    /* Translate pointers in so that they are fully contained in the kernel buffer. */
-    for (i=0; i < key->nr_dims; i++)
+    /* Check if all the key dimensions or sane. */
+    for (i=0; i < bkey->nr_dims; i++)
     {
-        unsigned long dim_i = (unsigned long) key->dims[i];
-        unsigned long dim_size;
+        uint32_t dim_len    = castle_object_btree_key_dim_length(bkey, i);
+        uint8_t  dim_flags  = castle_object_btree_key_dim_flags_get(bkey, i);
+        uint8_t *dim_data   = castle_object_btree_key_dim_get(bkey, i);
 
-        debug("  dim[%d] = %p (user)\n", i, key->dims[i]);
-
-        /* Check that the dimension [i] is contained in our private copy. */
-        if((dim_i < user_key_start) || (dim_i + sizeof(c_vl_key_t) > user_key_end))
+        /* Flags other than INFINITY flags are not supported. */
+        if (dim_flags & (KEY_DIMENSION_FLAGS_MASK ^ KEY_DIMENSION_INFINITY_FLAGS_MASK))
         {
-            error("Bad pointer 0x%lx (out of key, start=0x%lx, length=%u)\n",
-                dim_i, user_key_start, key_len);
+            error("Found flags other than INFINITY %u\n", dim_flags);
             err = -EINVAL;
-            goto err2;
+            goto err1;
         }
 
-        /* dim_i - user_key_start is the offset of the dimension within (both of) the buffers. */
-        key->dims[i] = (c_vl_key_t *)((unsigned long)key + (dim_i - user_key_start));
-
-        debug("  dim[%d] = %p (kernel)\n", i, key->dims[i]);
-
-        /* The entire dimension must fit in the key buffer. */
-        dim_size = sizeof(c_vl_key_t) + key->dims[i]->length;
-        if (dim_i + dim_size > user_key_end)
+        /* Only one kind of infinity is possible. */
+        if ((dim_flags & KEY_DIMENSION_MINUS_INFINITY_FLAG) &&
+            (dim_flags & KEY_DIMENSION_PLUS_INFINITY_FLAG))
         {
-            error("Dimension %d goes beyond end of buffer\n", i);
+            error("Found both PLUS_INFINITY and MINUS_INFINITY for the same dimension.\n");
             err = -EINVAL;
-            goto err2;
+            goto err1;
+        }
+
+        /* Length should be zero, if the dimension is infinity. */
+        if ((dim_flags & KEY_DIMENSION_INFINITY_FLAGS_MASK) && (dim_len != 0))
+        {
+            error("Found INFINITY and no-zero dimension length.\n");
+            err = -EINVAL;
+            goto err1;
+        }
+
+        /* Dimension payload shouldn't cross key boundaries. */
+        if ((dim_data + dim_len) > (((uint8_t *)bkey) + key_len))
+        {
+            error("Dimension payload going beyond the key boundaries [%p, %u] - [%p, %u]\n",
+                  dim_data, dim_len, bkey, key_len);
+            err = -EINVAL;
+            goto err1;
         }
     }
+
+    okey = castle_object_btree_key_convert(bkey);
 
     castle_back_buffer_put(conn, buf);
 
 #ifdef DEBUG
-    vl_okey_print(LOG_DEBUG, key);
+    vl_okey_print(okey);
 #endif
 
-    *key_out = key;
+    *key_out = okey;
 
     return 0;
 
-err2: castle_free(key);
 err1: castle_back_buffer_put(conn, buf);
 err0: return err;
 }
@@ -1036,13 +1047,13 @@ err0: return err;
 /**
  * if doesn't fit into the buffer, *buf_used will be set to 0
  */
-static void castle_back_key_kernel_to_user(c_vl_okey_t *key, struct castle_back_buffer *buf,
-                                           unsigned long user_buf, uint32_t buf_len,
-                                           uint32_t *buf_used)
+static void castle_back_key_kernel_to_user(c_vl_okey_t                 *okey,
+                                           struct castle_back_buffer   *buf,
+                                           unsigned long                user_buf,
+                                           uint32_t                     buf_len,
+                                           uint32_t                    *buf_used)
 {
-    uint32_t i;
-    c_vl_okey_t *key_copy;
-    uint32_t total_size;
+    c_vl_bkey_t *bkey, *ret;
 
 #ifdef DEBUG
     debug("castle_back_key_kernel_to_user copying key:\n");
@@ -1050,38 +1061,16 @@ static void castle_back_key_kernel_to_user(c_vl_okey_t *key, struct castle_back_
     debug("user_buf = %p\n", (void *)user_buf);
 #endif
 
-    total_size = sizeof(c_vl_okey_t) + sizeof(c_vl_key_t *) * key->nr_dims;
-    if (total_size > buf_len)
+    bkey = (c_vl_bkey_t *)castle_back_user_to_kernel(buf, user_buf);
+    ret = castle_object_key_convert_to_buf(okey, bkey, buf_len);
+    if (ret == NULL)
     {
         *buf_used = 0;
         return;
     }
-    key_copy = (c_vl_okey_t *)castle_back_user_to_kernel(buf, user_buf);
+    BUG_ON(ret != bkey);
 
-    key_copy->nr_dims = key->nr_dims;
-
-    for (i = 0; i < key->nr_dims; i++)
-    {
-        uint32_t sub_key_size;
-        c_vl_key_t *vlk;
-
-        sub_key_size = sizeof(c_vl_key_t) + key->dims[i]->length;
-
-        key_copy->dims[i] = (c_vl_key_t *)(user_buf + total_size);
-        total_size += sub_key_size;
-        if (total_size > buf_len)
-        {
-            *buf_used = 0;
-            return;
-        }
-
-        vlk = castle_back_user_to_kernel(buf, key_copy->dims[i]);
-
-        vlk->length = key->dims[i]->length;
-        memcpy(vlk->key, key->dims[i]->key, key->dims[i]->length);
-    }
-
-    *buf_used = total_size;
+    *buf_used = bkey->length + 4;
 
     return;
 }
@@ -1640,7 +1629,7 @@ static uint32_t castle_back_save_key_value_to_list(struct castle_back_stateful_o
         goto err0;
     }
 
-    kv_list->key = (c_vl_okey_t *)castle_back_kernel_to_user(back_buf,
+    kv_list->key = (c_vl_bkey_t *)castle_back_kernel_to_user(back_buf,
             (unsigned long)kv_list + buf_used);
 
     castle_back_key_kernel_to_user(key, back_buf, (unsigned long)kv_list->key,

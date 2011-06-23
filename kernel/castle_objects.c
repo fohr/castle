@@ -22,51 +22,30 @@
 #define debug_obj(_f, _a...)    (castle_printk(LOG_DEBUG, "%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
 #endif
 
-
 static const uint32_t OBJ_TOMBSTONE = ((uint32_t)-1);
 
-#define KEY_DIMENSION_NEXT_FLAG             (1 << 0)
-#define KEY_DIMENSION_MINUS_INFINITY_FLAG   (1 << 1)
-#define KEY_DIMENSION_PLUS_INFINITY_FLAG    (1 << 2)
-#define KEY_DIMENSION_UNUSED3_FLAG          (1 << 3)
-#define KEY_DIMENSION_UNUSED4_FLAG          (1 << 4)
-#define KEY_DIMENSION_UNUSED5_FLAG          (1 << 5)
-#define KEY_DIMENSION_UNUSED6_FLAG          (1 << 6)
-#define KEY_DIMENSION_UNUSED7_FLAG          (1 << 7)
-#define KEY_DIMENSION_FLAGS_SHIFT           (8)
-#define KEY_DIMENSION_FLAGS_MASK           ((1 << KEY_DIMENSION_FLAGS_SHIFT) - 1)
-#define KEY_DIMENSION_FLAGS(_dim_head)      ((_dim_head) &  KEY_DIMENSION_FLAGS_MASK)
-#define KEY_DIMENSION_OFFSET(_dim_head)     ((_dim_head) >> KEY_DIMENSION_FLAGS_SHIFT)
-#define KEY_DIMENSION_HEADER(_off, _flags)  (((_off)  << KEY_DIMENSION_FLAGS_SHIFT) |     \
-                                             ((_flags) & KEY_DIMENSION_FLAGS_MASK))
-
-
-
-static inline uint32_t castle_object_btree_key_dim_length(c_vl_bkey_t *key, int dim)
-{
-    uint32_t end_offset;
-
-    end_offset = (dim+1 < key->nr_dims) ? KEY_DIMENSION_OFFSET(key->dim_head[dim+1]) :
-                                          key->length + 4;
-
-    return end_offset - KEY_DIMENSION_OFFSET(key->dim_head[dim]);
-}
-
-static inline char* castle_object_btree_key_dim_get(c_vl_bkey_t *key, int dim)
-{
-    return (char *)key + KEY_DIMENSION_OFFSET(key->dim_head[dim]);
-}
-
-static inline uint32_t castle_object_btree_key_dim_flags_get(c_vl_bkey_t *key, int dim)
-{
-    return KEY_DIMENSION_FLAGS(key->dim_head[dim]);
-}
-
-/* Constructs btree key, taking dimensions < okey_first_dim from the src_bkey, and
-   dimensions >= okey_first_dim from src_okey. */
-static c_vl_bkey_t* castle_object_btree_key_construct(c_vl_bkey_t *src_bkey,
-                                                      c_vl_okey_t *src_okey,
-                                                      int okey_first_dim)
+/**
+ * Constructs btree key, taking dimensions < okey_first_dim from the src_bkey, and
+ * dimensions >= okey_first_dim from src_okey and copies it to dest_bkey of length
+ * dest_len.
+ *
+ * @param src_bkey         [in]    B-Tree key to copy from.
+ * @param src_okey         [in]    Object key to convert from.
+ * @param okey_first_dim   [in]    Copy upto the dimension before this from src_bkey
+ *                                 and get remaining from src_okey.
+ * @param buffer           [out]   B-tree key buffer to put the converted key.
+ * @param buffer_len       [in]    Size of B-Tree key buffer length. (doesn't matter
+ *                                 if dest_bkey is NULL).
+ *
+ * @return  buffer          SUCCESS and buffer is not NULL.
+ *          bkey            SUCCESS and pointer to created bkey buffer.
+ *          NULL            FAILURE.
+ */
+static c_vl_bkey_t* castle_object_btree_key_construct(c_vl_bkey_t  *src_bkey,
+                                                      c_vl_okey_t  *src_okey,
+                                                      int           okey_first_dim,
+                                                      c_vl_bkey_t  *buffer,
+                                                      uint32_t      buffer_len)
 {
     uint32_t key_len, first_okey_offset = 0, payload_offset;
     int i, nr_dims;
@@ -114,10 +93,19 @@ static c_vl_bkey_t* castle_object_btree_key_construct(c_vl_bkey_t *src_bkey,
     if (key_len - 4 > VLBA_TREE_MAX_KEY_SIZE) /* Length doesn't include length field */
         return NULL;
 
-    /* Allocate the single-dimensional key */
-    btree_key = castle_zalloc(key_len, GFP_KERNEL);
-    if(!btree_key)
-        return NULL;
+    if (buffer)
+    {
+        if (key_len > buffer_len)
+            return NULL;
+        btree_key = buffer;
+    }
+    else
+    {
+        /* Allocate the single-dimensional key */
+        btree_key = castle_zalloc(key_len, GFP_KERNEL);
+        if(!btree_key)
+            return NULL;
+    }
 
     /* Work out where should the first_okey_dim be put. Copy the relevant bits from src_bkey. */
     if(okey_first_dim > 0)
@@ -168,7 +156,30 @@ c_vl_bkey_t* castle_object_key_convert(c_vl_okey_t *obj_key)
     if (obj_key->nr_dims == 0)
         return NULL;
 
-    return castle_object_btree_key_construct(NULL, obj_key, 0);
+    return castle_object_btree_key_construct(NULL, obj_key, 0, NULL, 0);
+}
+
+/**
+ * Converts 'object key' (i.e. multidimensional key) to btree key (single dimensional)
+ * and copies it to buffer of length buf_len.
+ *
+ * @param obj_key          [in]    Object key to convert from.
+ * @param btree_key        [out]   B-tree key buffer to put the converted key.
+ * @param buf_len          [in]    Size of B-Tree key buffer length. (doesn't matter
+ *                                 if dest_bkey is NULL).
+ *
+ * @return  btree_key       SUCCESS and buffer is not NULL.
+ *          bkey            SUCCESS and pointer to created bkey buffer.
+ *          NULL            FAILURE.
+ */
+c_vl_bkey_t* castle_object_key_convert_to_buf(c_vl_okey_t *obj_key,
+                                              c_vl_bkey_t *btree_key,
+                                              uint32_t     buf_len)
+{
+    if (obj_key->nr_dims == 0)
+        return NULL;
+
+    return castle_object_btree_key_construct(NULL, obj_key, 0, btree_key, buf_len);
 }
 
 c_vl_okey_t* castle_object_btree_key_convert(c_vl_bkey_t *btree_key)
@@ -396,7 +407,8 @@ static c_vl_bkey_t* castle_object_btree_key_skip(c_vl_bkey_t *old_key,
 
     new_key = castle_object_btree_key_construct(old_key,
                                                 start,
-                                                offending_dim);
+                                                offending_dim,
+                                                NULL, 0);
     if(!new_key)
         return NULL;
 

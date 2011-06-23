@@ -7,7 +7,7 @@
 #include <sys/time.h>
 #endif
 
-#define CASTLE_PROTOCOL_VERSION 11
+#define CASTLE_PROTOCOL_VERSION 12
 
 #define PACKED               __attribute__((packed))
 
@@ -414,19 +414,60 @@ enum {
         _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_SLAVE_SCAN, cctrl_ioctl_t),
 };
 
-/*
- * Variable length key, for example used by the btree
+/**
+ * Castle B-Tree key. No pointers.
+ *
+ * Each dim_head(one per dimension) contains 8-bits for flags(lower bits) and remaining
+ * 24 bits for offset of the payload. Payloads continue immediatly after dim_head array.
  */
+typedef struct castle_var_length_btree_key {
+    /* align:   4 */
+    /* offset:  0 */ uint32_t length;
+    /*          4 */ uint32_t nr_dims;
+    /*          8 */ uint8_t  _unused[8];
+    /*         16 */ uint32_t dim_head[0];
+    /*         16 */
+    /* Dimension header is followed by individual dimensions. */
+} PACKED c_vl_bkey_t;
 
-typedef struct castle_var_length_key {
-    uint32_t length;
-    uint8_t key[];
-} PACKED c_vl_key_t;
+#define KEY_DIMENSION_NEXT_FLAG             (1 << 0)
+#define KEY_DIMENSION_MINUS_INFINITY_FLAG   (1 << 1)
+#define KEY_DIMENSION_PLUS_INFINITY_FLAG    (1 << 2)
+#define KEY_DIMENSION_UNUSED3_FLAG          (1 << 3)
+#define KEY_DIMENSION_UNUSED4_FLAG          (1 << 4)
+#define KEY_DIMENSION_UNUSED5_FLAG          (1 << 5)
+#define KEY_DIMENSION_UNUSED6_FLAG          (1 << 6)
+#define KEY_DIMENSION_UNUSED7_FLAG          (1 << 7)
+#define KEY_DIMENSION_FLAGS_SHIFT           (8)
+#define KEY_DIMENSION_FLAGS_MASK           ((1 << KEY_DIMENSION_FLAGS_SHIFT) - 1)
+#define KEY_DIMENSION_INFINITY_FLAGS_MASK   (KEY_DIMENSION_MINUS_INFINITY_FLAG |          \
+                                             KEY_DIMENSION_PLUS_INFINITY_FLAG)
+#define KEY_DIMENSION_FLAGS(_dim_head)      ((_dim_head) &  KEY_DIMENSION_FLAGS_MASK)
+#define KEY_DIMENSION_OFFSET(_dim_head)     ((_dim_head) >> KEY_DIMENSION_FLAGS_SHIFT)
+#define KEY_DIMENSION_HEADER(_off, _flags)  (((_off)  << KEY_DIMENSION_FLAGS_SHIFT) |     \
+                                             ((_flags) & KEY_DIMENSION_FLAGS_MASK))
 
-typedef struct castle_var_length_object_key {
-    uint32_t nr_dims;
-    c_vl_key_t *dims[];
-} PACKED c_vl_okey_t;
+#define castle_object_btree_key_header_size(_nr_dims)                                     \
+        ( sizeof(c_vl_bkey_t) + ((_nr_dims) * 4) )
+
+#define castle_object_btree_key_dim_length(key, dim)                                      \
+({                                                                                        \
+    uint32_t end_offset;                                                                  \
+                                                                                          \
+    end_offset = (dim+1 < key->nr_dims) ? KEY_DIMENSION_OFFSET(key->dim_head[dim+1]) :    \
+                                          key->length + 4;                                \
+    (end_offset - KEY_DIMENSION_OFFSET(key->dim_head[dim]));                              \
+})
+
+#define castle_object_btree_key_dim_get(key, dim)                                         \
+({                                                                                        \
+    ((char *)key + KEY_DIMENSION_OFFSET(key->dim_head[dim]));                             \
+})
+
+#define castle_object_btree_key_dim_flags_get(key, dim)                                   \
+({                                                                                        \
+    (KEY_DIMENSION_FLAGS(key->dim_head[dim]));                                            \
+})
 
 #define CASTLE_RING_PAGES (16)                              /**< 64 requests/page.                */
 #define CASTLE_RING_SIZE (CASTLE_RING_PAGES << PAGE_SHIFT)  /**< Must be ^2 or things break.      */
@@ -454,7 +495,7 @@ typedef uint32_t castle_interface_token_t;
 
 typedef struct castle_request_replace {
     c_collection_id_t     collection_id;
-    c_vl_okey_t          *key_ptr;
+    c_vl_bkey_t          *key_ptr;
     uint32_t              key_len;
     void                 *value_ptr;
     uint32_t              value_len;
@@ -462,7 +503,7 @@ typedef struct castle_request_replace {
 
 typedef struct castle_request_counter_replace {
     c_collection_id_t     collection_id;
-    c_vl_okey_t          *key_ptr;
+    c_vl_bkey_t          *key_ptr;
     uint8_t               add; /* 0: SET op, 1: ADD op */
     uint32_t              key_len;
     void                 *value_ptr;
@@ -471,13 +512,13 @@ typedef struct castle_request_counter_replace {
 
 typedef struct castle_request_remove {
     c_collection_id_t     collection_id;
-    c_vl_okey_t          *key_ptr;
+    c_vl_bkey_t          *key_ptr;
     uint32_t              key_len;
 } castle_request_remove_t;
 
 typedef struct castle_request_get {
     c_collection_id_t    collection_id;
-    c_vl_okey_t         *key_ptr;
+    c_vl_bkey_t         *key_ptr;
     uint32_t             key_len;
     void                *value_ptr; /* where to put the result */
     uint32_t             value_len;
@@ -485,7 +526,7 @@ typedef struct castle_request_get {
 
 typedef struct castle_request_counter_get {
     c_collection_id_t    collection_id;
-    c_vl_okey_t         *key_ptr;
+    c_vl_bkey_t         *key_ptr;
     uint32_t             key_len;
     void                *value_ptr; /* where to put the result */
     uint32_t             value_len;
@@ -493,9 +534,9 @@ typedef struct castle_request_counter_get {
 
 typedef struct castle_request_iter_start {
     c_collection_id_t    collection_id;
-    c_vl_okey_t         *start_key_ptr;
+    c_vl_bkey_t         *start_key_ptr;
     uint32_t             start_key_len;
-    c_vl_okey_t         *end_key_ptr;
+    c_vl_bkey_t         *end_key_ptr;
     uint32_t             end_key_len;
     uint64_t             flags;
 } castle_request_iter_start_t;
@@ -515,7 +556,7 @@ typedef struct castle_request_iter_finish {
 
 typedef struct castle_request_big_get {
     c_collection_id_t  collection_id;
-    c_vl_okey_t       *key_ptr;
+    c_vl_bkey_t       *key_ptr;
     uint32_t           key_len;
 } castle_request_big_get_t;
 
@@ -527,7 +568,7 @@ typedef struct castle_request_get_chunk {
 
 typedef struct castle_request_big_put {
     c_collection_id_t  collection_id;
-    c_vl_okey_t       *key_ptr;
+    c_vl_bkey_t       *key_ptr;
     uint32_t           key_len;
     uint64_t           value_len;
 } castle_request_big_put_t;
@@ -578,7 +619,7 @@ struct castle_iter_val {
 
 struct castle_key_value_list {
     struct castle_key_value_list *next;
-    c_vl_okey_t                  *key;
+    c_vl_bkey_t                  *key;
     struct castle_iter_val       *val;
 };
 

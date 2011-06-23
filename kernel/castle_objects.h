@@ -2,6 +2,9 @@
 #define __CASTLE_OBJECTS_H__
 
 c_vl_bkey_t* castle_object_key_convert       (c_vl_okey_t *obj_key);
+c_vl_bkey_t* castle_object_key_convert_to_buf(c_vl_okey_t *obj_key,
+                                              c_vl_bkey_t *btree_key,
+                                              uint32_t     buf_len);
 c_vl_okey_t* castle_object_btree_key_convert (c_vl_bkey_t *btree_key);
 void         castle_object_okey_free         (c_vl_okey_t *obj_key);
 c_vl_okey_t *castle_object_okey_copy         (c_vl_okey_t *obj_key);
