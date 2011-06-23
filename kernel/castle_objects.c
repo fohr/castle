@@ -1212,12 +1212,26 @@ int castle_object_iter_start(struct castle_attachment *attachment,
                             castle_object_iterator_t **iter)
 {
     castle_object_iterator_t *iterator;
+    int i;
 
+    /* Checks on keys. */
     if(start_key->nr_dims != end_key->nr_dims)
     {
         castle_printk(LOG_WARN, "Range query with different # of dimensions.\n");
         return -EINVAL;
     }
+
+    /* Empty dimensions on start_key are allowed only if it is -ve infinity. */
+    for (i=0; i<start_key->nr_dims; i++)
+        if (castle_object_btree_key_dim_length(start_key, i) == 0 &&
+            !(castle_object_btree_key_dim_flags_get(start_key, i) & KEY_DIMENSION_MINUS_INFINITY_FLAG))
+            return -EINVAL;
+
+    /* Empty dimensions on end_key are allowed only if it is +ve infinity. */
+    for (i=0; i<end_key->nr_dims; i++)
+        if (castle_object_btree_key_dim_length(end_key, i) == 0 &&
+            !(castle_object_btree_key_dim_flags_get(end_key, i) & KEY_DIMENSION_PLUS_INFINITY_FLAG))
+            return -EINVAL;
 
     iterator = castle_malloc(sizeof(castle_object_iterator_t), GFP_KERNEL);
     if(!iterator)
@@ -1598,6 +1612,7 @@ int castle_object_get(struct castle_object_get *get,
 {
     c_bvec_t *c_bvec;
     c_bio_t *c_bio;
+    int i;
 
     debug("castle_object_get get=%p\n", get);
 
@@ -1606,6 +1621,11 @@ int castle_object_get(struct castle_object_get *get,
 
     if (!key)
         return -EINVAL;
+
+    /* Checks on the key. */
+    for (i=0; i<key->nr_dims; i++)
+        if(castle_object_btree_key_dim_length(key, i) == 0)
+            return -EINVAL;
 
     /* Single c_bvec for the bio */
     c_bio = castle_utils_bio_alloc(1);
@@ -1772,6 +1792,7 @@ int castle_object_pull(struct castle_object_pull *pull,
 {
     c_bvec_t *c_bvec;
     c_bio_t *c_bio;
+    int i;
 
     debug("castle_object_pull pull=%p\n", pull);
 
@@ -1780,6 +1801,11 @@ int castle_object_pull(struct castle_object_pull *pull,
 
     if (!key)
         return -EINVAL;
+
+    /* Checks on the key. */
+    for (i=0; i<key->nr_dims; i++)
+        if(castle_object_btree_key_dim_length(key, i) == 0)
+            return -EINVAL;
 
     /* Single c_bvec for the bio */
     c_bio = castle_utils_bio_alloc(1);
