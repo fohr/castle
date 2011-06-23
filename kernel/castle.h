@@ -1484,6 +1484,7 @@ struct castle_object_replace {
     uint64_t                      value_len;        /**< Length of the value being written out. */
     c_val_tup_t                   cvt;              /**< CVT allocated for the value.           */
     c_bvec_t                     *c_bvec;           /**< bvec to be submitted to DA.            */
+    c_vl_bkey_t                  *key;              /**< Key of the value to be replaced.       */
 
     /* Variables used when copying the value into the CVT. */
     struct castle_cache_block    *data_c2b;         /**< Current cache block used to copy the
@@ -1513,11 +1514,12 @@ struct castle_object_replace {
 
 struct castle_object_get {
     struct castle_component_tree *ct;
-    struct castle_cache_block *data_c2b;
-    uint64_t    data_c2b_length;
-    uint64_t    data_length;
-    int         first;
-    c_val_tup_t cvt;
+    struct castle_cache_block    *data_c2b;
+    uint64_t                      data_c2b_length;
+    uint64_t                      data_length;
+    int                           first;
+    c_val_tup_t                   cvt;
+    c_vl_bkey_t                  *key;             /**< Key of the value to be replaced.       */
 
     int       (*reply_start)     (struct castle_object_get *get,
                                   int err,
@@ -1534,6 +1536,7 @@ struct castle_object_get {
 struct castle_object_pull {
     uint64_t                    remaining;
     uint64_t                    offset;
+    c_vl_bkey_t                *key;             /**< Key of the value to be replaced.       */
 
     int                         is_inline;
     union {

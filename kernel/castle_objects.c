@@ -739,9 +739,6 @@ static void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
 
     debug("castle_object_replace_complete\n");
 
-    /* Free the key */
-    castle_object_bkey_free(c_bvec->key);
-
     if(err && !cancelled)
         castle_printk(LOG_WARN, "Failed to insert into btree.\n");
 
@@ -1125,7 +1122,6 @@ int castle_object_replace(struct castle_object_replace *replace,
                           int cpu_index,
                           int tombstone)
 {
-    c_vl_bkey_t *btree_key = NULL;
     c_bvec_t *c_bvec = NULL;
     c_bio_t *c_bio = NULL;
     int i, ret;
@@ -1154,8 +1150,7 @@ int castle_object_replace(struct castle_object_replace *replace,
 
     /* Create btree key out of the object key. */
     ret = -EINVAL;
-    btree_key = castle_object_btree_key_duplicate(key);
-    if(!btree_key)
+    if (!key)
         goto err_out;
 
     /* Allocate castle bio with a single bvec. */
@@ -1173,7 +1168,7 @@ int castle_object_replace(struct castle_object_replace *replace,
 
     /* Initialise the bvec. */
     c_bvec = c_bio->c_bvecs;
-    c_bvec->key            = btree_key;
+    c_bvec->key            = key;
     c_bvec->tree           = NULL;
     c_bvec->cpu_index      = cpu_index;
     c_bvec->cpu            = castle_double_array_request_cpu(c_bvec->cpu_index);
@@ -1201,8 +1196,6 @@ err_out:
     /* Free up allocated memory on errors. */
     if(ret)
     {
-        if(btree_key)
-            castle_object_bkey_free(btree_key);
         if(c_bio)
             castle_utils_bio_free(c_bio);
     }
@@ -1543,9 +1536,6 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
     BUG_ON(atomic_read(&c_bio->count) != 1);
     BUG_ON(c_bio->err != 0);
 
-    /* Free the key */
-    castle_object_bkey_free(c_bvec->key);
-
     /* Deal with error case, or non-existant value. */
     if(err || CVT_INVALID(cvt) || CVT_TOMB_STONE(cvt))
     {
@@ -1606,7 +1596,6 @@ int castle_object_get(struct castle_object_get *get,
                       c_vl_bkey_t *key,
                       int cpu_index)
 {
-    c_vl_bkey_t *btree_key;
     c_bvec_t *c_bvec;
     c_bio_t *c_bio;
 
@@ -1615,8 +1604,7 @@ int castle_object_get(struct castle_object_get *get,
     if(!castle_fs_inited)
         return -ENODEV;
 
-    btree_key = castle_object_btree_key_duplicate(key);
-    if (!btree_key)
+    if (!key)
         return -EINVAL;
 
     /* Single c_bvec for the bio */
@@ -1629,7 +1617,7 @@ int castle_object_get(struct castle_object_get *get,
     c_bio->data_dir      = READ;
 
     c_bvec = c_bio->c_bvecs;
-    c_bvec->key             = btree_key;
+    c_bvec->key             = key;
     c_bvec->cpu_index       = cpu_index;
     c_bvec->cpu             = castle_double_array_request_cpu(c_bvec->cpu_index);
     c_bvec->ref_get         = castle_object_reference_get;
@@ -1746,7 +1734,6 @@ static void castle_object_pull_continue(struct castle_bio_vec *c_bvec, int err, 
 
     pull->ct = c_bvec->tree;
     pull->cvt = cvt;
-    castle_object_bkey_free(c_bvec->key);
     castle_utils_bio_free(c_bvec->c_bio);
 
     if(err || CVT_INVALID(cvt) || CVT_TOMB_STONE(cvt))
@@ -1783,7 +1770,6 @@ int castle_object_pull(struct castle_object_pull *pull,
                        c_vl_bkey_t *key,
                        int cpu_index)
 {
-    c_vl_bkey_t *btree_key;
     c_bvec_t *c_bvec;
     c_bio_t *c_bio;
 
@@ -1792,8 +1778,7 @@ int castle_object_pull(struct castle_object_pull *pull,
     if(!castle_fs_inited)
         return -ENODEV;
 
-    btree_key = castle_object_btree_key_duplicate(key);
-    if (!btree_key)
+    if (!key)
         return -EINVAL;
 
     /* Single c_bvec for the bio */
@@ -1806,7 +1791,7 @@ int castle_object_pull(struct castle_object_pull *pull,
     c_bio->data_dir      = READ;
 
     c_bvec = c_bio->c_bvecs;
-    c_bvec->key             = btree_key;
+    c_bvec->key             = key;
     c_bvec->cpu_index       = cpu_index;
     c_bvec->cpu             = castle_double_array_request_cpu(c_bvec->cpu_index);
     c_bvec->ref_get         = castle_object_reference_get;
