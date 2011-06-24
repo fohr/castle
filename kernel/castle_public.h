@@ -19,6 +19,9 @@ enum {
     CVT_TYPE_INLINE          = 0x10,
     CVT_TYPE_ONDISK          = 0x20,
     CVT_TYPE_INVALID         = 0x00,
+    CVT_TYPE_COUNTER_SET     = 0x80,
+    CVT_TYPE_COUNTER_ADD     = 0x100,
+
 };
 #endif
 
@@ -507,10 +510,10 @@ typedef struct castle_request_replace {
 typedef struct castle_request_counter_replace {
     c_collection_id_t     collection_id;
     c_vl_bkey_t          *key_ptr;
-    uint8_t               add; /* 0: SET op, 1: ADD op */
     uint32_t              key_len;
     void                 *value_ptr;
     uint32_t              value_len;
+    uint8_t               add; /* 0: SET op, 1: ADD op */
 } castle_request_counter_replace_t;
 
 typedef struct castle_request_remove {

@@ -930,6 +930,14 @@ static int castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
     }
 
     if(CVT_COUNTER_ADD(replace->cvt))
+        castle_printk(LOG_DEVEL, "%s::got a counter_ADD.\n", __FUNCTION__);
+    if(CVT_COUNTER_SET(replace->cvt))
+        castle_printk(LOG_DEVEL, "%s::got a counter_SET.\n", __FUNCTION__);
+
+    if( CVT_COUNTER_ADD(replace->cvt) || CVT_COUNTER_SET(replace->cvt))
+        BUG_ON(!CVT_INLINE(replace->cvt));
+
+    if(CVT_COUNTER_ADD(replace->cvt))
     {
         if ( (CVT_COUNTER_ADD(prev_cvt)) || (CVT_COUNTER_SET(prev_cvt)) )
         {
@@ -940,15 +948,13 @@ static int castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
             memcpy(&prev_x, prev_cvt.val, sizeof(prev_x));
             memcpy(&new_x, replace->cvt.val, sizeof(new_x));
 
-            castle_printk(LOG_DEVEL, "%s::old x = %llx, new x = %llx.\n", __FUNCTION__, prev_x, new_x);
             accum_x = prev_x + new_x;
             memcpy(replace->cvt.val, &accum_x, sizeof(accum_x));
-            castle_printk(LOG_DEVEL, "%s::resulting x = %llx.\n", __FUNCTION__, (uint64_t)*(replace->cvt.val));
 
             if (CVT_COUNTER_SET(prev_cvt))
             {
                 castle_printk(LOG_DEVEL, "%s::converting to COUNTER_SET.\n", __FUNCTION__);
-                CVT_COUNTER_SET_SET(replace->cvt);
+                CVT_COUNTER_SET_SET(replace->cvt, replace->cvt.length, replace->cvt.val);
             }
         }
     }
@@ -983,13 +989,6 @@ static int castle_object_replace_space_reserve(struct castle_object_replace *rep
     int tombstone = c_bvec_data_del(c_bvec);
     uint64_t value_len, nr_blocks, nr_chunks;
     c_ext_pos_t cep;
-    int counter_type = 0;
-
-    /* save counter flags because replace->cvt is reinitialised here */
-    if(CVT_COUNTER_ADD(replace->cvt))
-        counter_type=1;
-    if(CVT_COUNTER_SET(replace->cvt))
-        counter_type=2;
 
     replace->cvt = INVAL_VAL_TUP;
     /* Deal with tombstones first. */
@@ -1012,17 +1011,31 @@ static int castle_object_replace_space_reserve(struct castle_object_replace *rep
             return -ENOMEM;
 
         /* Construct the cvt. */
-        CVT_INLINE_SET(replace->cvt, value_len, value);
+        if(unlikely(replace->counter_type == 1))
+        {
+            castle_printk(LOG_DEVEL, "%s::counter_SET.\n", __FUNCTION__);
+            CVT_COUNTER_SET_SET(replace->cvt, value_len, value);
+            //TODO@tr get rid of these once CVT macros stabilise
+            BUG_ON(!CVT_COUNTER_SET(replace->cvt));
+            BUG_ON(!CVT_INLINE(replace->cvt));
+        }
+        else if(replace->counter_type == 2)
+        {
+            castle_printk(LOG_DEVEL, "%s::counter_ADD.\n", __FUNCTION__);
+            CVT_COUNTER_ADD_SET(replace->cvt, value_len, value);
+            BUG_ON(!CVT_COUNTER_ADD(replace->cvt));
+            BUG_ON(!CVT_INLINE(replace->cvt));
+        }
+        else
+            {CVT_INLINE_SET(replace->cvt, value_len, value);}
         /* Get the data copied into the cvt. It should all be available in one shot. */
-        if(counter_type==1)
-            CVT_COUNTER_ADD_SET(replace->cvt);
-        if(counter_type==2)
-            CVT_COUNTER_SET_SET(replace->cvt);
         BUG_ON(replace->data_length_get(replace) < value_len);
         replace->data_copy(replace, value, value_len, 0 /* not partial */);
 
         return 0;
     }
+
+    BUG_ON(replace->counter_type > 0); /* counters must be inline */
 
     /* Out of line objects. */
     nr_blocks = (value_len - 1) / C_BLK_SIZE + 1;
@@ -1135,16 +1148,9 @@ int castle_object_replace(struct castle_object_replace *replace,
     c_bvec_t *c_bvec = NULL;
     c_bio_t *c_bio = NULL;
     int ret;
-    int counter_type = 0;
 
     /* Sanity checks. */
     BUG_ON(!attachment);
-
-    /* save counter flags because replace->cvt is reinitialised here */
-    if(CVT_COUNTER_ADD(replace->cvt))
-        counter_type=1;
-    if(CVT_COUNTER_SET(replace->cvt))
-        counter_type=2;
 
     /*
      * Make sure that the filesystem has been fully initialised before accepting any requsets.
@@ -1186,10 +1192,6 @@ int castle_object_replace(struct castle_object_replace *replace,
     /* Save c_bvec in the replace. */
     replace->c_bvec = c_bvec;
     CVT_INVALID_SET(replace->cvt);
-    if(counter_type==1)
-        CVT_COUNTER_ADD_SET(replace->cvt);
-    if(counter_type==2)
-        CVT_COUNTER_SET_SET(replace->cvt);
     replace->data_c2b = NULL;
 
     /* Queue up in the DA. */
@@ -1570,7 +1572,20 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
     }
     BUG_ON(!get->ct);
 
-    /* Next, handle inline values, since we already have them in memory */
+    /* Next, handle counters and inline values, since we already have them in memory */
+    BUG_ON(CVT_COUNTER_ADD(cvt)); /* never return an ADD; always reduce to a set */
+    if(CVT_COUNTER_SET(cvt))
+    {
+        castle_printk(LOG_DEVEL, "%s::getted a counter_SET.\n", __FUNCTION__);
+    }
+    else
+    {
+        /* TODO@tr add support for special counter get ops: if the cvt type is not a counter_set
+           then the get has failed, so return error, maybe use the error block above? */
+    }
+
+    /* because counters are inlines, we can leave the rest of the work to the existing inline
+       handling code */
     if(CVT_INLINE(cvt))
     {
         debug("Inline.\n");

@@ -1227,6 +1227,75 @@ static void castle_back_replace(void *data)
     op->replace.complete = castle_back_replace_complete;
     op->replace.data_length_get = castle_back_replace_data_length_get;
     op->replace.data_copy = castle_back_replace_data_copy;
+    op->replace.counter_type = 0;
+    op->replace.key = key;      /* Key would be freed by replace_complete. */
+
+    err = castle_object_replace(&op->replace, op->attachment, key, op->cpu_index, 0);
+    if (err)
+        goto err3;
+
+    return;
+
+err3: if (op->buf) castle_back_buffer_put(conn, op->buf);
+err2: castle_object_bkey_free(key);
+err1: castle_attachment_put(op->attachment);
+err0: castle_back_reply(op, err, 0, 0);
+}
+
+static void castle_back_counter_replace(void *data)
+{
+    struct castle_back_op *op = data;
+    struct castle_back_conn *conn = op->conn;
+    int err;
+    c_vl_bkey_t *key;
+
+    op->attachment = castle_attachment_get(op->req.counter_replace.collection_id, WRITE);
+    if (op->attachment == NULL)
+    {
+        error("Collection not found id=0x%x\n", op->req.counter_replace.collection_id);
+        err = -ENOTCONN;
+        goto err0;
+    }
+
+    err = castle_back_key_copy_get(conn,
+                                   op->req.counter_replace.key_ptr,
+                                   op->req.counter_replace.key_len, &key);
+    if (err)
+        goto err1;
+
+    /*
+     * Get buffer with value in it and save it
+     */
+    if (op->req.counter_replace.value_len > 0)
+    {
+        op->buf = castle_back_buffer_get(conn, (unsigned long) op->req.counter_replace.value_ptr);
+        if (op->buf == NULL)
+        {
+            error("Could not get buffer for pointer=%p\n", op->req.counter_replace.value_ptr);
+            err = -EINVAL;
+            goto err2;
+        }
+
+        if (!castle_back_user_addr_in_buffer(op->buf,
+                    op->req.counter_replace.value_ptr + op->req.counter_replace.value_len - 1))
+        {
+            error("Invalid value length %u (ptr=%p)\n",
+                    op->req.counter_replace.value_len, op->req.counter_replace.value_ptr);
+            err = -EINVAL;
+            goto err3;
+        }
+    }
+    else
+        op->buf = NULL;
+
+    op->buffer_offset = 0;
+
+    op->replace.value_len = op->req.counter_replace.value_len;
+    op->replace.replace_continue = NULL;
+    op->replace.complete = castle_back_replace_complete;
+    op->replace.data_length_get = castle_back_replace_data_length_get;
+    op->replace.data_copy = castle_back_replace_data_copy;
+    op->replace.counter_type = op->req.counter_replace.add+1;
     op->replace.key = key;      /* Key would be freed by replace_complete. */
 
     err = castle_object_replace(&op->replace, op->attachment, key, op->cpu_index, 0);
@@ -1292,6 +1361,7 @@ static void castle_back_remove(void *data)
     op->replace.complete = castle_back_remove_complete;
     op->replace.data_length_get = NULL;
     op->replace.data_copy = NULL;
+    op->replace.counter_type = 0;
     op->replace.key = key;      /* Key would be freed by remove_complete. */
 
     err = castle_object_replace(&op->replace, op->attachment, key, op->cpu_index, 1 /*tombstone*/);
@@ -2285,6 +2355,9 @@ static void castle_back_big_put(void *data)
     /* Store key and free it after completion of operation. */
     stateful_op->replace.key = key;
 
+    /* We would never big_put counters. */
+    stateful_op->replace.counter_type = 0;
+
     /* Work structure to run every queued op. Every put_chunk gets queued. */
     INIT_WORK(&stateful_op->work[0], castle_back_put_chunk_continue, stateful_op);
 
@@ -2753,18 +2826,12 @@ static void castle_back_request_process(struct castle_back_conn *conn, struct ca
             castle_back_key_copy_get(conn, op->req.replace.key_ptr, key_len, &key);
             break;
 
+            //TODO@tr do we really need two CASTLE_RING command enums?
         case CASTLE_RING_COUNTER_SET_REPLACE:
-            CVT_COUNTER_SET_SET(op->replace.cvt);
-            INIT_WORK(&op->work, castle_back_replace, op);
-            key_len = op->req.replace.key_len;
-            castle_back_key_copy_get(conn, op->req.replace.key_ptr, key_len, &key);
-            break;
-
         case CASTLE_RING_COUNTER_ADD_REPLACE:
-            CVT_COUNTER_ADD_SET(op->replace.cvt);
-            INIT_WORK(&op->work, castle_back_replace, op);
-            key_len = op->req.replace.key_len;
-            castle_back_key_copy_get(conn, op->req.replace.key_ptr, key_len, &key);
+            INIT_WORK(&op->work, castle_back_counter_replace, op);
+            key_len = op->req.counter_replace.key_len;
+            castle_back_key_copy_get(conn, op->req.counter_replace.key_ptr, key_len, &key);
             break;
 
         case CASTLE_RING_GET:

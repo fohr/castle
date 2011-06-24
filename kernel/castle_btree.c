@@ -676,7 +676,7 @@ struct castle_btree_type castle_batree = {
 #define VLBA_RW_TREE_MAX_ENTRIES                (2500UL) /**< Maximum number of entries in any
                                                               of the RW tree entries. */
 
-#define VLBA_TREE_ENTRY_DISABLED                0x80
+#define VLBA_TREE_ENTRY_DISABLED                0x8000
 #define VLBA_TREE_ENTRY_IS_NODE(_slot)          CVT_NODE(*(_slot))
 #define VLBA_TREE_ENTRY_IS_LEAF_VAL(_slot)      CVT_LEAF_VAL(*(_slot))
 #define VLBA_TREE_ENTRY_IS_LEAF_PTR(_slot)      CVT_LEAF_PTR(*(_slot))
@@ -701,8 +701,8 @@ static const vlba_key_t VLBA_TREE_MAX_KEY = (vlba_key_t){.length = 0xFFFFFFFE};
 
 struct castle_vlba_tree_entry {
     /* align:   8 */
-    /* offset:  0 */ uint8_t      type;
-    /*          1 */ uint8_t      _pad[3];
+    /* offset:  0 */ uint16_t      type;
+    /*          1 */ uint8_t      _pad[2];
     /*          4 */ c_ver_t      version;
     /*          8 */ uint64_t     val_len;
     /*         16 */ c_ext_pos_t  cep;
@@ -1126,6 +1126,11 @@ static void castle_vlba_tree_entry_add(struct castle_btree_node *node,
     BUG_ON(VLBA_TREE_ENTRY_IS_TOMB_STONE(entry) && entry->val_len != 0);
     if (VLBA_TREE_ENTRY_IS_INLINE(entry))
     {
+        if(VLBA_ENTRY_IS_COUNTER_ADD(entry))
+            castle_printk(LOG_DEVEL, "%s::got a counter_ADD.\n", __FUNCTION__);
+        if(VLBA_ENTRY_IS_COUNTER_SET(entry))
+            castle_printk(LOG_DEVEL, "%s::got a counter_SET.\n", __FUNCTION__);
+
         BUG_ON(entry->val_len > MAX_INLINE_VAL_SIZE);
         BUG_ON(VLBA_ENTRY_VAL_PTR(entry)+cvt.length > EOF_VLBA_NODE(node));
         memmove(VLBA_ENTRY_VAL_PTR(entry), cvt.val, cvt.length);
@@ -1972,7 +1977,8 @@ static void castle_btree_slot_insert(c2_block_t  *c2b,
     if (CVT_ONDISK(cvt) || CVT_NODE(cvt) || CVT_LEAF_PTR(cvt))
         debug("Inserting "cep_fmt_str" under index=%d\n", cep2str(cvt.cep), index);
     else
-        debug("Inserting an inline value under index=%d\n", index);
+        debug("%s::Inserting an inline value under index=%d\n",
+                __FUNCTION__, index);
 
     if(index < node->used)
         btree->entry_get(node, index, &lub_key, &lub_version, &lub_cvt);
@@ -2340,6 +2346,11 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
             return;
         }
 
+        if(CVT_COUNTER_ADD(new_cvt))
+            castle_printk(LOG_DEVEL, "%s::slot_insert a counter_ADD.\n", __FUNCTION__);
+        if(CVT_COUNTER_SET(new_cvt))
+            castle_printk(LOG_DEVEL, "%s::slot_insert a counter_SET.\n", __FUNCTION__);
+
         atomic64_inc(&c_bvec->tree->item_count);
 
         /* Update live per-version statistics. */
@@ -2351,8 +2362,8 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
 
         /* @TODO: should memset the page to zero (because we return zeros on reads)
                   this can be done here, or beter still in _main.c, in data_copy */
-        debug("Need to insert (%p, 0x%x) into node (used: 0x%x, leaf=%d).\n",
-                key, version, node->used, node->is_leaf);
+        debug("%s::Need to insert (%p, 0x%x) into node (used: 0x%x, leaf=%d).\n",
+                __FUNCTION__, key, version, node->used, node->is_leaf);
         BUG_ON(btree->key_compare(c_bvec->parent_key, btree->inv_key) == 0);
         BUG_ON(CVT_LEAF_PTR(new_cvt));
         castle_btree_slot_insert(c_bvec->btree_node,
@@ -2440,7 +2451,8 @@ static void castle_btree_read_process(c_bvec_t *c_bvec)
     /* If we haven't found the LUB (in the leaf node), return early */
     if(lub_idx < 0)
     {
-        debug(" Could not find the LUB for (k,v)=(%p, 0x%x)\n", key, version);
+        castle_printk(LOG_DEVEL, "%s::Could not find the LUB for (k,v)=(%p, 0x%x)\n",
+                __FUNCTION__, key, version);
         castle_btree_io_end(c_bvec, INVAL_VAL_TUP, 0);
         return;
     }
@@ -2453,12 +2465,78 @@ static void castle_btree_read_process(c_bvec_t *c_bvec)
     {
         BUG_ON(!CVT_LEAF_VAL(lub_cvt));
         if (CVT_ONDISK(lub_cvt))
+        {
             debug(" Is a leaf, found (k,v)=(%p, 0x%x), cep="cep_fmt_str_nl,
                     lub_key, lub_version, lub_cvt.cep.ext_id,
                     cep2str(lub_cvt.cep));
+            if(c_bvec->c_bio->get->is_reducing_counter)
+            {
+                //error!
+            }
+        }
+        else if (CVT_COUNTER_SET(lub_cvt)) /* counter checks must happen before inline checks
+                                              because counters are inlines */
+        {
+            castle_printk(LOG_DEVEL, "%s::Is a leaf, found (k,v)=(%p, 0x%x), counter_SET\n",
+                    __FUNCTION__, lub_key, lub_version);
+            if(c_bvec->c_bio->get->is_reducing_counter)
+            {
+                castle_printk(LOG_WARN, "%s::reduction not yet implemented\n",
+                        __FUNCTION__);
+                //perform reduction with c_bvec->c_bio->get->counter_accum
+                //save reduced value in place
+            }
+        }
+        else if (CVT_COUNTER_ADD(lub_cvt))
+        {
+            if(c_bvec->c_bio->get->is_reducing_counter)
+            {
+                castle_printk(LOG_WARN, "%s::reduction not yet implemented\n",
+                        __FUNCTION__);
+                //perform reduction with c_bvec->c_bio->get->counter_accum
+            }
+            else
+            {
+                /* A get has arrived here at a counter_ADD, and no counter_ADD was processed
+                   by this get op so far, which MUST mean this is the most recent entry for this
+                   kv. This means we will start traversing trees looking
+                   for other counter_ADDs, terminating on a non-counter_ADD type: if it's a
+                   counter_SET then we have our counter value, if it's something else it's an
+                   error - but either way, we would like to update this cvt so that future GET
+                   ops on this counter will terminate earlier.
+
+                   Therefore, we would like to hold a pointer of some sort to this cvt, so that
+                   we can revisit it later once the reductions terminate at a non-counter_ADD.
+                   This implies taking a reference to the tree and the node. What about locking?
+
+                   We could take a writelock. That would mean all ops on the node would block
+                   (including merges, other get ops, range queries etc). We could readlock.
+                   The danger there is we could update the entry on a tree being merged, where
+                   the iterator on that tree has already moved beyond that entry, so the output
+                   tree has the stale state. This sounds undesirable, but is actually tolerable;
+                   correctness is preserved, it's only a performance-enhancing update that's
+                   lost. That should be fine... right?
+
+                   Then again, maybe we don't want to perform this optimization at all because
+                   the consequence of doing this is, our RO tree is no longer RO.
+                */
+            }
+            c_bvec->c_bio->get->is_reducing_counter=1;
+            castle_printk(LOG_DEVEL, "%s::Is a leaf, found (k,v)=(%p, 0x%x), counter_ADD\n",
+                    __FUNCTION__, lub_key, lub_version);
+            castle_printk(LOG_WARN, "%s::search continuation not implemented\n",
+                    __FUNCTION__);
+            //look in next tree
+        }
         else if (CVT_INLINE(lub_cvt))
+        {
             debug(" Is a leaf, found (k,v)=(%p, 0x%x), inline value\n",
                     lub_key, lub_version);
+            if(c_bvec->c_bio->get->is_reducing_counter)
+            {
+                //error!
+            }
+        }
         else if (CVT_TOMB_STONE(lub_cvt))
             debug(" Is a leaf, found (k,v)=(%p, 0x%x), tomb stone\n",
                     lub_key, lub_version);
@@ -2481,10 +2559,11 @@ static void castle_btree_read_process(c_bvec_t *c_bvec)
     {
         BUG_ON(CVT_LEAF_VAL(lub_cvt));
         if (CVT_LEAF_PTR(lub_cvt))
-            debug("Leaf ptr. Read and search "cep_fmt_str_nl,
-                   cep2str(lub_cvt.cep));
+            castle_printk(LOG_DEVEL, "%s::Leaf ptr. Read and search "cep_fmt_str_nl,
+                    __FUNCTION__, cep2str(lub_cvt.cep));
         else if (CVT_NODE(lub_cvt))
-            debug("Child node. Read and search - inline value\n");
+            castle_printk(LOG_DEVEL, "%s::Child node. Read and search - inline value\n",
+                    __FUNCTION__);
         else
             BUG();
         /* parent_key is not needed when reading (also, we might be looking at a leaf ptr)

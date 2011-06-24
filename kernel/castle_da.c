@@ -430,7 +430,8 @@ static void castle_ct_immut_iter_next_node_find(c_immut_iter_t *iter,
         if(castle_ct_immut_iter_next_node_init(iter, node))
         {
             /* It is */
-            debug("Cep "cep_fmt_str " will be used next, exiting.\n",
+            debug(LOG_DEVEL, "%s::Cep "cep_fmt_str " will be used next, exiting.\n",
+                   __FUNCTION__,
                    cep2str(cep));
             iter->next_c2b = c2b;
             return;
@@ -439,6 +440,7 @@ static void castle_ct_immut_iter_next_node_find(c_immut_iter_t *iter,
         debug("Node non-leaf or no non-leaf-ptr entries, moving to " cep_fmt_str_nl,
                cep2str(cep));
     }
+    debug(LOG_DEVEL, "%s::no leaf node found.\n", __FUNCTION__);
     /* Drop c2b if we failed to find a leaf node, but have an outstanding reference to
        a non-leaf node */
     if(c2b)
@@ -968,6 +970,11 @@ static void castle_ct_modlist_iter_fill(c_modlist_iter_t *iter)
     if (likely(node_idx))
         iter->ranges[node_idx-1].end = item_idx-1;    /* @TODO this should be tidier */
 
+    castle_printk(LOG_DEVEL, "%s::CT=%d "
+           "(dynamic=%d). Item_idx=%d, item_count=%ld\n",
+           __FUNCTION__,
+           iter->tree->seq, iter->tree->dynamic,
+           item_idx, atomic64_read(&iter->tree->item_count));
     if (item_idx != atomic64_read(&iter->tree->item_count))
     {
         castle_printk(LOG_WARN, "Error. Different number of items than expected in CT=%d "
@@ -1127,7 +1134,7 @@ struct castle_iterator_type castle_ct_modlist_iter = {
  * - Consume bytes from the global modlist iter byte budget
  * - Allocate memory for node_buffer, src_ and dst_entry_idx[] and ranges
  * - Initialise immutable iterator (for sort)
- * - Kick of mergesort
+ * - Kick off mergesort
  *
  * NOTE: Caller must hold castle_da_level1_merge_init mutex.
  *
@@ -1265,6 +1272,40 @@ static int castle_ct_merged_iter_rbtree_insert(c_merged_iter_t *iter,
          * iterator. */
         if (dup_iter)
         {
+            if(CVT_COUNTER_ADD(new_iter->cached_entry.cvt))
+            {
+                //new entry is a counter_ADD
+                if(CVT_COUNTER_ADD(dup_iter->cached_entry.cvt) ||
+                        CVT_COUNTER_SET(dup_iter->cached_entry.cvt))
+                {
+                    //old entry is a counter
+                    int64_t prev_x, new_x, accum_x;
+                    castle_printk(LOG_DEVEL, "%s::reducing COUNTER_ADD.\n", __FUNCTION__);
+
+                    //TODO@tr this is horrible, fix it! (and allow 512b counter values)
+                    memcpy(&prev_x, dup_iter->cached_entry.cvt.val, sizeof(prev_x));
+                    memcpy(&new_x, new_iter->cached_entry.cvt.val, sizeof(new_x));
+
+                    accum_x = prev_x + new_x;
+                    memcpy(new_iter->cached_entry.cvt.val, &accum_x, sizeof(accum_x));
+
+                    if(CVT_COUNTER_SET(dup_iter->cached_entry.cvt))
+                    {
+                        //old entry is a counter_SET
+                        castle_printk(LOG_DEVEL, "%s::converting to COUNTER_SET.\n", __FUNCTION__);
+                        CVT_COUNTER_SET_SET(new_iter->cached_entry.cvt,
+                                new_iter->cached_entry.cvt.length,
+                                new_iter->cached_entry.cvt.val);
+                    }
+                }
+                else
+                {
+                    //old entry is not a counter
+                    castle_printk(LOG_WARN, "%s::COUNTER_ADD to a non-counter type??? Tombstoning.\n", __FUNCTION__);
+                    CVT_TOMB_STONE_SET(new_iter->cached_entry.cvt);
+                }
+            }
+
             debug("Duplicate entry found. Removing.\n");
             if (iter->each_skip)
                 iter->each_skip(iter, dup_iter, new_iter);
@@ -1605,7 +1646,8 @@ static USED void castle_ct_sort(struct castle_component_tree *ct1,
     void *iters[2];
     struct castle_iterator_type *iter_types[2];
 
-    debug("Number of items in the component tree1: %ld, number of nodes: %ld, ct2=%ld, %ld\n",
+    castle_printk(LOG_DEVEL, "%s::Number of items in the component tree1: %ld, number of nodes: %ld, ct2=%ld, %ld\n",
+            __FUNCTION__,
             atomic64_read(&ct1->item_count),
             atomic64_read(&ct2->item_count));
 
@@ -3397,7 +3439,7 @@ static struct castle_component_tree* castle_da_merge_package(struct castle_da_me
     if(serdes_state > NULL_DAM_SERDES)
         mutex_unlock(&merge->da->levels[merge->level].merge.serdes.mutex);
 
-    debug("Number of entries=%ld, number of nodes=%ld\n",
+    castle_printk(LOG_DEVEL, "%s::Number of entries=%ld, number of nodes=%ld\n", __FUNCTION__,
             atomic64_read(&out_tree->item_count));
 
     /* Add the new tree to the doubling array */
@@ -4431,8 +4473,9 @@ static struct castle_da_merge* castle_da_merge_init(struct castle_double_array *
     struct castle_da_merge *merge = NULL;
     int i, ret;
 
-    castle_printk(LOG_DEBUG, "Merging ct=%d (dynamic=%d) with ct=%d (dynamic=%d)\n",
-             in_trees[0]->seq, in_trees[0]->dynamic, in_trees[1]->seq, in_trees[1]->dynamic);
+    castle_printk(LOG_DEVEL, "%s::Merging ct=%d (dynamic=%d) with ct=%d (dynamic=%d)\n",
+            __FUNCTION__,
+            in_trees[0]->seq, in_trees[0]->dynamic, in_trees[1]->seq, in_trees[1]->dynamic);
 
     /* Sanity checks. */
     BUG_ON(nr_trees < 2);
@@ -5302,7 +5345,7 @@ static int castle_da_merge_do(struct castle_double_array *da,
         castle_printk(LOG_WARN, "Could not start a merge for DA=%d, level=%d.\n", da->id, level);
         return -EAGAIN;
     }
-    debug("%s::MERGE START - DA %d L %d, with input cts %d and %d \n",
+    castle_printk(LOG_DEVEL, "%s::MERGE START - DA %d L %d, with input cts %d and %d \n",
             __FUNCTION__, da->id, level, in_trees[0]->seq, in_trees[1]->seq);
 #ifdef DEBUG
     debug_merges("MERGE START - L%d -> ", level);
@@ -8386,7 +8429,7 @@ static void castle_da_write_bvec_start(struct castle_double_array *da, c_bvec_t 
 {
     int reserved;
 
-    debug_verbose("Doing DA write for da_id=%d\n", da_id);
+    debug(LOG_DEVEL, "%s::Doing DA write for da_id=%d\n", __FUNCTION__, da->id);
     BUG_ON(c_bvec_data_dir(c_bvec) != WRITE);
 
     /* Medium, and only medium inserts must have reserved the space (in leaf nodes extent,
@@ -8449,6 +8492,7 @@ static void castle_da_read_bvec_start(struct castle_double_array *da, c_bvec_t *
     c_bvec->submit_complete = castle_da_ct_read_complete;
 
     debug_verbose("Looking up in ct=%d\n", c_bvec->tree->seq);
+    castle_printk(LOG_DEVEL, "%s::Looking up in ct=%d\n", __FUNCTION__, c_bvec->tree->seq);
 
     /* Submit via bloom filter. */
 #ifdef CASTLE_BLOOM_FP_STATS
