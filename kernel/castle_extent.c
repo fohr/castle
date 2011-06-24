@@ -3035,8 +3035,8 @@ static int castle_extents_rebuild_run(void *unused)
 {
     struct list_head            *entry, *tmp;
     c_ext_t                     *ext;
-    struct castle_slave         *cs, *evacuated_slaves[MAX_NR_SLAVES], *oos_slaves[MAX_NR_SLAVES];
-    int                         i, ret=0, nr_evacuated_slaves=0, nr_oos_slaves=0, exit_early=0;
+    struct castle_slave         *cs;
+    int                         ret=0, exit_early=0;
     struct castle_fs_superblock *fs_sb;
 
     /* Initialise the rebuild list. */
@@ -3191,10 +3191,6 @@ finished:
          * No further remapping required. We can now convert any evacuating or out-of-service
          * slaves to remapped state.
          */
-        for (i=0; i<MAX_NR_SLAVES; i++)
-            oos_slaves[i] = evacuated_slaves[i] = 0;
-        nr_oos_slaves = nr_evacuated_slaves = 0;
-
         rcu_read_lock();
         list_for_each_rcu(entry, &castle_slaves.slaves)
         {
