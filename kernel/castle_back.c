@@ -2046,6 +2046,7 @@ static void castle_back_big_put_expire(struct castle_back_stateful_op *stateful_
     BUG_ON(stateful_op->curr_op != NULL);
 
     castle_object_replace_cancel(&stateful_op->replace);
+    castle_object_bkey_free(stateful_op->replace.key);
 
     spin_lock(&stateful_op->lock);
     attachment = stateful_op->attachment;
@@ -2053,7 +2054,6 @@ static void castle_back_big_put_expire(struct castle_back_stateful_op *stateful_
 
     castle_back_put_stateful_op(stateful_op->conn, stateful_op); /* drops stateful_op->lock */
 
-    castle_object_bkey_free(stateful_op->replace.key);
     castle_attachment_put(attachment);
 }
 
@@ -2104,6 +2104,7 @@ static void castle_back_big_put_complete(struct castle_object_replace *replace, 
     struct castle_back_stateful_op *stateful_op =
         container_of(replace, struct castle_back_stateful_op, replace);
     struct castle_attachment *attachment;
+    c_vl_bkey_t *key = replace->key;
 
     debug("castle_back_big_put_complete err=%d\n", err);
 
@@ -2131,10 +2132,9 @@ static void castle_back_big_put_complete(struct castle_object_replace *replace, 
         atomic64_add(stateful_op->replace.value_len, &attachment->big_put.bytes);
     }
 
-    castle_object_bkey_free(replace->key);
-
     /* Will drop stateful_op->lock. */
     castle_back_put_stateful_op(stateful_op->conn, stateful_op);
+    castle_object_bkey_free(key);
 
     castle_attachment_put(attachment);
 }
@@ -2414,6 +2414,9 @@ static void castle_back_big_get_expire(struct castle_back_stateful_op *stateful_
 
     castle_object_pull_finish(&stateful_op->pull);
 
+    castle_object_bkey_free(stateful_op->pull.key);
+    stateful_op->pull.key = NULL;
+
     spin_lock(&stateful_op->lock);
 
     attachment = stateful_op->attachment;
@@ -2491,11 +2494,11 @@ static void castle_back_big_get_continue(struct castle_object_pull *pull,
             atomic64_add(stateful_op->pull.cvt.length, &attachment->big_get.bytes);
         }
 
+        castle_object_bkey_free(pull->key);
+
         spin_lock(&stateful_op->lock);
 
         stateful_op->curr_op = NULL;
-
-        castle_object_bkey_free(pull->key);
 
         /* This drops the spinlock. */
         castle_back_put_stateful_op(stateful_op->conn, stateful_op);
