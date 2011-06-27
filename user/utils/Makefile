@@ -58,6 +58,7 @@ install: castle_probe_device mkcastlefs
 	install -D castle-smart-weigh-drive /usr/sbin/castle-smart-weigh-drive
 	install -D castle-smart-spank-drive /usr/sbin/castle-smart-spank-drive
 	install -D castle-smart-process-drive /usr/sbin/castle-smart-process-drive
+	install -D castle-find-collection /usr/sbin/castle-find-collection
 	install -D castle-scan /usr/sbin/castle-scan
 	install -D castle-claim-empty /usr/sbin/castle-claim-empty
 	install -D castle-create /usr/sbin/castle-create

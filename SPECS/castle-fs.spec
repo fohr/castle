@@ -92,6 +92,7 @@ cp user/utils/castle-create %{buildroot}/usr/sbin/
 cp user/utils/castle-claim-empty %{buildroot}/usr/sbin/
 cp user/utils/check-ssd %{buildroot}/usr/sbin/
 cp user/utils/mkcastlefs %{buildroot}/sbin
+cp user/utils/castle-find-collection %{buildroot}/usr/sbin/
 
 export INSTALL_MOD_PATH=%{buildroot}
 export INSTALL_MOD_DIR=extra/%{kmod_name}
