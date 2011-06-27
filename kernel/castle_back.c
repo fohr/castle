@@ -1087,7 +1087,7 @@ static inline uint8_t castle_back_val_type_kernel_to_user(c_val_tup_t cvt)
     /* We should never be returning those to userspace. */
     BUG_ON(CVT_LEAF_PTR(cvt));
     BUG_ON(CVT_NODE(cvt));
-    BUG_ON(CVT_TOMB_STONE(cvt));
+    BUG_ON(CVT_TOMBSTONE(cvt));
     BUG_ON(CVT_COUNTER_ADD(cvt));
 
     /* Check for counters before checking for inline (which will also be true). */
@@ -1097,7 +1097,7 @@ static inline uint8_t castle_back_val_type_kernel_to_user(c_val_tup_t cvt)
     if(CVT_INLINE(cvt))
         return CASTLE_VALUE_TYPE_INLINE;
 
-    if(CVT_ONDISK(cvt))
+    if(CVT_ON_DISK(cvt))
         return CASTLE_VALUE_TYPE_OUT_OF_LINE;
 
     /* All types should have been dealt with by now. */
@@ -1114,7 +1114,7 @@ static uint32_t castle_back_val_kernel_to_user(c_val_tup_t *val, struct castle_b
     uint32_t length, val_length;
     struct castle_iter_val *val_copy;
 
-    if (val->type & CVT_TYPE_INLINE)
+    if (CVT_INLINE(*val))
         val_length = val->length;
     else
         val_length = 0;
@@ -1131,7 +1131,7 @@ static uint32_t castle_back_val_kernel_to_user(c_val_tup_t *val, struct castle_b
 
     val_copy->type   = castle_back_val_type_kernel_to_user(*val);
     val_copy->length = val->length;
-    if (val->type & CVT_TYPE_INLINE)
+    if (CVT_INLINE(*val))
     {
         val_copy->val = (uint8_t *)(user_buf + sizeof(struct castle_iter_val));
         memcpy((uint8_t *)castle_back_user_to_kernel(buf, val_copy->val), val->val, val->length);
@@ -1848,7 +1848,7 @@ static int castle_back_iter_next_callback(struct castle_object_iterator *iterato
             goto err0;
         }
         stateful_op->iterator.saved_val = *val;
-        if (val->type & CVT_TYPE_INLINE)
+        if (CVT_INLINE(*val))
         {
             /* copy the value since it may get removed from the cache */
             stateful_op->iterator.saved_val.val =
@@ -1941,7 +1941,7 @@ static void _castle_back_iter_next(void *data)
 
         castle_object_bkey_free(stateful_op->iterator.saved_key);
         /* we copied it so free it */
-        if (stateful_op->iterator.saved_val.type & CVT_TYPE_INLINE)
+        if (CVT_INLINE(stateful_op->iterator.saved_val))
             castle_free(stateful_op->iterator.saved_val.val);
 
         debug_iter("iter_next added saved key\n");
@@ -2032,7 +2032,7 @@ static void castle_back_iter_cleanup(struct castle_back_stateful_op *stateful_op
     if (stateful_op->iterator.saved_key != NULL)
     {
         castle_object_bkey_free(stateful_op->iterator.saved_key);
-        if (stateful_op->iterator.saved_val.type & CVT_TYPE_INLINE)
+        if (CVT_INLINE(stateful_op->iterator.saved_val))
         {
             BUG_ON(!stateful_op->iterator.saved_val.val);
             castle_free(stateful_op->iterator.saved_val.val);

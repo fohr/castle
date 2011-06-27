@@ -1302,7 +1302,7 @@ static int castle_ct_merged_iter_rbtree_insert(c_merged_iter_t *iter,
                 {
                     //old entry is not a counter
                     castle_printk(LOG_WARN, "%s::COUNTER_ADD to a non-counter type??? Tombstoning.\n", __FUNCTION__);
-                    CVT_TOMB_STONE_SET(new_iter->cached_entry.cvt);
+                    CVT_TOMBSTONE_SET(new_iter->cached_entry.cvt);
                 }
             }
 
@@ -2162,11 +2162,11 @@ static void castle_da_each_skip(c_merged_iter_t *iter,
     }
 
     /* Update per-version statistics. */
-    if (!CVT_TOMB_STONE(dup_iter->cached_entry.cvt))
+    if (!CVT_TOMBSTONE(dup_iter->cached_entry.cvt))
     {
         iter->stats.keys--;
 
-        if (CVT_TOMB_STONE(new_iter->cached_entry.cvt))
+        if (CVT_TOMBSTONE(new_iter->cached_entry.cvt))
             iter->stats.tombstone_deletes++;
         else
             iter->stats.key_replaces++;
@@ -3920,7 +3920,7 @@ static int castle_da_merge_unit_do(struct castle_da_merge *merge, uint32_t unit_
              * as these keys have not yet been accounted for; skip them. */
             merge->skipped_count++;
             stats.version_deletes++;
-            if (CVT_TOMB_STONE(cvt))
+            if (CVT_TOMBSTONE(cvt))
                 stats.tombstones--;
             else
                 stats.keys--;
@@ -3967,7 +3967,7 @@ static int castle_da_merge_unit_do(struct castle_da_merge *merge, uint32_t unit_
             stats.keys = 0;
             stats.tombstones = 0;
 
-            if (CVT_TOMB_STONE(cvt))
+            if (CVT_TOMBSTONE(cvt))
                 stats.tombstones++;
             else
                 stats.keys++;

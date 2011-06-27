@@ -870,7 +870,7 @@ static void castle_object_replace_on_disk_start(struct castle_object_replace *re
     c_val_tup_t cvt;
 
     cvt = replace->cvt;
-    BUG_ON(!CVT_ONDISK(cvt));
+    BUG_ON(!CVT_ON_DISK(cvt));
     BUG_ON(replace->value_len != cvt.length);
 
     /* Init the c2b for data writeout. */
@@ -910,7 +910,7 @@ static int castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
     BUG_ON(c_bvec_data_dir(c_bvec) != WRITE);
     /* Some sanity checks on the prev_cvt. */
     BUG_ON(!CVT_INVALID(prev_cvt) && !CVT_LEAF_VAL(prev_cvt));
-    BUG_ON(CVT_TOMB_STONE(prev_cvt) && (prev_cvt.length != 0));
+    BUG_ON(CVT_TOMBSTONE(prev_cvt) && (prev_cvt.length != 0));
 
     /* Bookkeeping for large objects (about to be inserted into the tree). */
     if(CVT_LARGE_OBJECT(replace->cvt))
@@ -994,7 +994,7 @@ static int castle_object_replace_space_reserve(struct castle_object_replace *rep
     /* Deal with tombstones first. */
     if(tombstone)
     {
-        CVT_TOMB_STONE_SET(replace->cvt);
+        CVT_TOMBSTONE_SET(replace->cvt);
         /* No need to allocate any memory/extent space for tombstones. */
         return 0;
     }
@@ -1113,7 +1113,7 @@ static void castle_object_replace_queue_complete(struct castle_bio_vec *c_bvec, 
      * insert the key into the btree.
      */
     write_complete = 1;
-    if(CVT_ONDISK(replace->cvt))
+    if(CVT_ON_DISK(replace->cvt))
     {
         castle_object_replace_on_disk_start(replace);
         write_complete = (replace->data_length == 0);
@@ -1299,7 +1299,7 @@ int castle_object_iter_next(castle_object_iterator_t *iterator,
                                             &v,
                                             &val);
                 debug_rq("Got an entry for the range query.\n");
-                if (!CVT_TOMB_STONE(val))
+                if (!CVT_TOMBSTONE(val))
                 {
                     has_response = 1;
 
@@ -1558,7 +1558,7 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
     BUG_ON(c_bio->err != 0);
 
     /* Deal with error case, or non-existant value. */
-    if(err || CVT_INVALID(cvt) || CVT_TOMB_STONE(cvt))
+    if(err || CVT_INVALID(cvt) || CVT_TOMBSTONE(cvt))
     {
         debug("Error, invalid or tombstone.\n");
         /* Dont have any object returned, no need to release reference of object. */
@@ -1604,7 +1604,7 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
 
     debug("Out of line.\n");
     /* Finally, out of line values */
-    BUG_ON(!CVT_ONDISK(cvt));
+    BUG_ON(!CVT_ON_DISK(cvt));
     /* Init the variables stored in the call correctly, so that _continue() doesn't
        get confused */
 
@@ -1770,7 +1770,7 @@ static void castle_object_pull_continue(struct castle_bio_vec *c_bvec, int err, 
     pull->cvt = cvt;
     castle_utils_bio_free(c_bvec->c_bio);
 
-    if(err || CVT_INVALID(cvt) || CVT_TOMB_STONE(cvt))
+    if(err || CVT_INVALID(cvt) || CVT_TOMBSTONE(cvt))
     {
         debug("Error, invalid or tombstone.\n");
 

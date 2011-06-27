@@ -402,24 +402,23 @@ struct castle_fs_superblock {
     /*       2048 */
 } PACKED;
 
-/* These must be the same as castle_public.h (in both fs.hg and libcastle.hg) */
+/* Different CVT types. These are stored in btree nodes, so changes to those should be
+   made in a backwards compatible way. */
+
+#define CVT_TYPE_DISABLED_FLAG   0x80
 enum {
-    CVT_TYPE_LEAF_VAL        = 0x01,
+    CVT_TYPE_INVALID         = 0x00,
     CVT_TYPE_LEAF_PTR        = 0x02,
     CVT_TYPE_NODE            = 0x04,
-    /* TOMB_STONE points to NULL value (no value). */
-    CVT_TYPE_TOMB_STONE      = 0x08,
-    /* Value length is small enough to keep in B-tree node itself. */
-    CVT_TYPE_INLINE          = 0x10,
-    /* Set to 1 for both Large and Medium Objects */
-    CVT_TYPE_ONDISK          = 0x20,
-    /* Valid only when CVT_TYPE_ONDISK is set.
-     * 1 - Large objects
-     * 0 - Medium objects */
-    CVT_TYPE_LARGE_OBJECT    = 0x40,
-    CVT_TYPE_COUNTER_SET     = 0x80,
-    CVT_TYPE_COUNTER_ADD     = 0x100,
-    CVT_TYPE_INVALID         = 0x00,
+    CVT_TYPE_TOMBSTONE       = 0x09,
+    CVT_TYPE_INLINE          = 0x11,
+    CVT_TYPE_MEDIUM_OBJECT   = 0x21,
+    CVT_TYPE_LARGE_OBJECT    = 0x61,
+
+    CVT_TYPE_COUNTER_SET     = 0x01,
+    CVT_TYPE_COUNTER_ADD     = 0x03,
+
+    /* 0x80 - 0xFF should not be used, because it conflicts with CVT_DISABLED. */
 };
 
 #define MAX_INLINE_VAL_SIZE            512      /* In bytes */
@@ -430,8 +429,8 @@ enum {
 struct castle_value_tuple {
     /* align:   8 */
     /* offset:  0 */ struct {
-    /*          0 */     uint64_t      type:16; //TODO@tr change this back to 8 and change CVT type handling to pack more types into the 8 bit range
-    /*          1 */     uint64_t      length:48;
+    /*          0 */     uint64_t      type:8;
+    /*          1 */     uint64_t      length:56;
     /*          8 */ };
     /*          8 */ union {
     /*          8 */     c_ext_pos_t   cep;
@@ -443,18 +442,50 @@ typedef struct castle_value_tuple c_val_tup_t;
 
 #define INVAL_VAL_TUP        ((c_val_tup_t){{CVT_TYPE_INVALID, 0}, {.cep = INVAL_EXT_POS}})
 
-#define CVT_LEAF_VAL(_cvt)      ((_cvt).type & CVT_TYPE_LEAF_VAL)
-#define CVT_LEAF_PTR(_cvt)      ((_cvt).type & CVT_TYPE_LEAF_PTR)
-#define CVT_NODE(_cvt)          ((_cvt).type & CVT_TYPE_NODE)
-#define CVT_TOMB_STONE(_cvt)    (CVT_LEAF_VAL(_cvt) && ((_cvt).type & CVT_TYPE_TOMB_STONE))
-#define CVT_INLINE(_cvt)        (CVT_LEAF_VAL(_cvt) && ((_cvt).type & CVT_TYPE_INLINE))
-#define CVT_COUNTER_SET(_cvt)   (CVT_INLINE(_cvt) && ((_cvt).type & CVT_TYPE_COUNTER_SET))
-#define CVT_COUNTER_ADD(_cvt)   (CVT_INLINE(_cvt) && ((_cvt).type & CVT_TYPE_COUNTER_ADD))
-#define CVT_ONDISK(_cvt)        (CVT_LEAF_VAL(_cvt) && ((_cvt).type & CVT_TYPE_ONDISK))
-#define CVT_MEDIUM_OBJECT(_cvt) (CVT_ONDISK(_cvt) && !((_cvt).type & CVT_TYPE_LARGE_OBJECT))
-#define CVT_LARGE_OBJECT(_cvt)  (CVT_ONDISK(_cvt) && ((_cvt).type & CVT_TYPE_LARGE_OBJECT))
+
 #define CVT_INVALID(_cvt)       ((_cvt).type == CVT_TYPE_INVALID)
-#define CVT_ONE_BLK(_cvt)       (CVT_ONDISK(_cvt) &&  (_cvt).length == C_BLK_SIZE)
+
+#define CVT_DISABLED(_cvt)      ((_cvt).type & CVT_TYPE_DISABLED_FLAG)
+
+/* CVT_LEAF_VAL checks for any value type (directly usable entry from leaf btree nodes).
+   In particular pointers to btree nodes aren't CVT_LEAF_VAL, neither are leaf ptrs. */
+#define CVT_LEAF_VAL(_cvt)       (((_cvt).type == CVT_TYPE_TOMBSTONE) ||       \
+                                  ((_cvt).type == CVT_TYPE_INLINE) ||          \
+                                  ((_cvt).type == CVT_TYPE_MEDIUM_OBJECT) ||   \
+                                  ((_cvt).type == CVT_TYPE_LARGE_OBJECT) ||    \
+                                  ((_cvt).type == CVT_TYPE_COUNTER_SET) ||     \
+                                  ((_cvt).type == CVT_TYPE_COUNTER_ADD))
+
+#define CVT_LEAF_PTR(_cvt)        ((_cvt).type == CVT_TYPE_LEAF_PTR)
+
+#define CVT_NODE(_cvt)            ((_cvt).type == CVT_TYPE_NODE)
+
+#define CVT_TOMBSTONE(_cvt)       ((_cvt).type == CVT_TYPE_TOMBSTONE)
+
+/* CVT_INLINE() is true for _any_ inline values, including counters. */
+#define CVT_INLINE(_cvt)         (((_cvt).type == CVT_TYPE_INLINE) ||          \
+                                  ((_cvt).type == CVT_TYPE_COUNTER_SET) ||     \
+                                  ((_cvt).type == CVT_TYPE_COUNTER_ADD))
+
+/* Only medium and large objects are stored out of line, i.e. 'on disk' .*/
+#define CVT_ON_DISK(_cvt)        (((_cvt).type == CVT_TYPE_MEDIUM_OBJECT) ||   \
+                                  ((_cvt).type == CVT_TYPE_LARGE_OBJECT))
+
+#define CVT_MEDIUM_OBJECT(_cvt)   ((_cvt).type == CVT_TYPE_MEDIUM_OBJECT)
+
+#define CVT_LARGE_OBJECT(_cvt)    ((_cvt).type == CVT_TYPE_LARGE_OBJECT)
+
+#define CVT_COUNTER_SET(_cvt)     ((_cvt).type == CVT_TYPE_COUNTER_SET)
+
+#define CVT_COUNTER_ADD(_cvt)     ((_cvt).type == CVT_TYPE_COUNTER_ADD)
+
+/* Derevative types. */
+#define CVT_ONE_BLK(_cvt)       (CVT_ON_DISK(_cvt) && ((_cvt).length == C_BLK_SIZE))
+
+#define CVT_DISABLED_SET(_cvt)                                              \
+{                                                                           \
+   (_cvt).type |= CVT_TYPE_DISABLED_FLAG;                                   \
+}
 #define CVT_INVALID_SET(_cvt)                                               \
 {                                                                           \
    (_cvt).type   = CVT_TYPE_INVALID;                                        \
@@ -473,37 +504,39 @@ typedef struct castle_value_tuple c_val_tup_t;
    (_cvt).length = _length;                                                 \
    (_cvt).cep    = _cep;                                                    \
 }
-#define CVT_TOMB_STONE_SET(_cvt)                                            \
+#define CVT_TOMBSTONE_SET(_cvt)                                             \
 {                                                                           \
-   (_cvt).type   = (CVT_TYPE_LEAF_VAL | CVT_TYPE_TOMB_STONE);               \
+   (_cvt).type   = CVT_TYPE_TOMBSTONE;                                      \
    (_cvt).length = 0;                                                       \
    (_cvt).cep    = INVAL_EXT_POS;                                           \
 }
 #define CVT_INLINE_SET(_cvt, _length, _ptr)                                 \
 {                                                                           \
-   (_cvt).type   = (CVT_TYPE_LEAF_VAL | CVT_TYPE_INLINE);                   \
+   (_cvt).type   = CVT_TYPE_INLINE;                                         \
    (_cvt).length = _length;                                                 \
    (_cvt).val    = _ptr;                                                    \
 }
 #define CVT_COUNTER_SET_SET(_cvt, _length, _ptr)                            \
 {                                                                           \
-   CVT_INLINE_SET(_cvt, _length, _ptr)                                      \
-   (_cvt).type   |= (CVT_TYPE_COUNTER_SET);                                 \
+   (_cvt).type   = CVT_TYPE_COUNTER_SET;                                    \
+   (_cvt).length = _length;                                                 \
+   (_cvt).val    = _ptr;                                                    \
 }
 #define CVT_COUNTER_ADD_SET(_cvt, _length, _ptr)                            \
 {                                                                           \
-   CVT_INLINE_SET(_cvt, _length, _ptr)                                      \
-   (_cvt).type   |= (CVT_TYPE_COUNTER_ADD);                                 \
+   (_cvt).type   = CVT_TYPE_COUNTER_ADD;                                    \
+   (_cvt).length = _length;                                                 \
+   (_cvt).val    = _ptr;                                                    \
 }
 #define CVT_MEDIUM_OBJECT_SET(_cvt, _length, _cep)                          \
 {                                                                           \
-    (_cvt).type  = (CVT_TYPE_LEAF_VAL | CVT_TYPE_ONDISK);                   \
+    (_cvt).type  = CVT_TYPE_MEDIUM_OBJECT;                                  \
     (_cvt).length= _length;                                                 \
     (_cvt).cep   = _cep;                                                    \
 }
 #define CVT_LARGE_OBJECT_SET(_cvt, _length, _cep)                           \
 {                                                                           \
-    (_cvt).type  = (CVT_TYPE_LEAF_VAL | CVT_TYPE_ONDISK | CVT_TYPE_LARGE_OBJECT); \
+    (_cvt).type  = CVT_TYPE_LARGE_OBJECT;                                   \
     (_cvt).length= _length;                                                 \
     (_cvt).cep   = _cep;                                                    \
 }
@@ -513,16 +546,8 @@ typedef struct castle_value_tuple c_val_tup_t;
 #define CVT_EQUAL(_cvt1, _cvt2)                                                 \
                              ((_cvt1).type      == (_cvt2).type &&              \
                               (_cvt1).length    == (_cvt2).length &&            \
-                              (!CVT_ONDISK(_cvt1) ||                            \
+                              (!CVT_ON_DISK(_cvt1) ||                           \
                                EXT_POS_EQUAL((_cvt1).cep, (_cvt2).cep)))
-#if 0
-#define CEP_TO_CVT(_cvt, _cep, _blks, _type)                                    \
-                                {                                               \
-                                    (_cvt).type     = _type;                    \
-                                    (_cvt).length   = (_blks) * C_BLK_SIZE;     \
-                                    (_cvt).cep      = _cep;                     \
-                                }
-#endif
 
 
 typedef uint8_t c_mstore_id_t;

@@ -167,16 +167,6 @@ err1:
 err0: return ret;
 }
 
-/**
- * Sets the cvt to insert into the node
- */
-static void castle_bloom_fill_value(c_val_tup_t *cvt)
-{
-    cvt->type = CVT_TYPE_TOMB_STONE;
-    cvt->length = 0;
-    cvt->val = NULL;
-}
-
 static void castle_bloom_node_buffer_init(struct castle_btree_type *btree, struct castle_btree_node *buffer)
 {
     /* Buffers are proper btree nodes understood by castle_btree_node_type function sets.
@@ -305,7 +295,9 @@ static void castle_bloom_add_index_key(castle_bloom_t *bf, void *key)
     } else
         bf_bp->cur_node_cur_chunk_id++;
 
-    castle_bloom_fill_value(&cvt);
+    /* Bloom filters don't store values, just keys. Since btree code requires values,
+       store tombstones. */
+    CVT_TOMBSTONE_SET(cvt);
     debug("Adding key for chunk_id %u to btree node.\n", bf_bp->cur_node_cur_chunk_id);
     bf->btree->entry_add(bf_bp->cur_node, bf_bp->cur_node_cur_chunk_id, key, version, cvt);
 }
