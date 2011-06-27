@@ -1080,6 +1080,31 @@ static void castle_back_key_kernel_to_user(c_vl_bkey_t                 *kernel_k
 }
 
 /**
+ * Converts in kernel CVT, to userspace type field.
+ */
+static inline uint8_t castle_back_val_type_kernel_to_user(c_val_tup_t cvt)
+{
+    /* We should never be returning those to userspace. */
+    BUG_ON(CVT_LEAF_PTR(cvt));
+    BUG_ON(CVT_NODE(cvt));
+    BUG_ON(CVT_TOMB_STONE(cvt));
+    BUG_ON(CVT_COUNTER_ADD(cvt));
+
+    /* Check for counters before checking for inline (which will also be true). */
+    if(CVT_COUNTER_SET(cvt))
+        return CASTLE_VALUE_TYPE_INLINE_COUNTER;
+
+    if(CVT_INLINE(cvt))
+        return CASTLE_VALUE_TYPE_INLINE;
+
+    if(CVT_ONDISK(cvt))
+        return CASTLE_VALUE_TYPE_OUT_OF_LINE;
+
+    /* All types should have been dealt with by now. */
+    BUG();
+}
+
+/**
  * if doesn't fit into the buffer, *buf_used will be set to 0
  */
 static uint32_t castle_back_val_kernel_to_user(c_val_tup_t *val, struct castle_back_buffer *buf,
@@ -1104,7 +1129,7 @@ static uint32_t castle_back_val_kernel_to_user(c_val_tup_t *val, struct castle_b
 
     val_copy = (struct castle_iter_val *)castle_back_user_to_kernel(buf, user_buf);
 
-    val_copy->type = val->type;
+    val_copy->type   = castle_back_val_type_kernel_to_user(*val);
     val_copy->length = val->length;
     if (val->type & CVT_TYPE_INLINE)
     {

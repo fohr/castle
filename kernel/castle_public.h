@@ -14,15 +14,6 @@
 #ifndef __KERNEL__
 #define PAGE_SIZE 4096
 #define PAGE_SHIFT 12
-/* These must be the same as castle.h in fs.hg */
-enum {
-    CVT_TYPE_INLINE          = 0x10,
-    CVT_TYPE_ONDISK          = 0x20,
-    CVT_TYPE_INVALID         = 0x00,
-    CVT_TYPE_COUNTER_SET     = 0x80,
-    CVT_TYPE_COUNTER_ADD     = 0x100,
-
-};
 #endif
 
 typedef enum {
@@ -613,6 +604,14 @@ typedef struct castle_response {
     uint64_t                 length;
     castle_interface_token_t token;
 } castle_response_t;
+
+/* Value types used in struct castle_iter_val. */
+enum {
+    CASTLE_VALUE_TYPE_INVALID         = 0,
+    CASTLE_VALUE_TYPE_INLINE          = 1,
+    CASTLE_VALUE_TYPE_OUT_OF_LINE     = 2,
+    CASTLE_VALUE_TYPE_INLINE_COUNTER  = 3
+};
 
 struct castle_iter_val {
     uint64_t               length;
