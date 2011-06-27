@@ -3116,8 +3116,30 @@ restart:
                      * the rebuild_done_list and clean up the shadow map.
                      */
                     mutex_lock(&rebuild_done_list_lock);
+                    if (ext->ext_id == rebuild_extent_last)
+                    {
+                        /*
+                         * This extent is the marker used by castle_extents_remap_writeback to
+                         * determine the point in the rebuild_done_list where it should stop. If we
+                         * simply remove this extent from the rebuild_done_list that logic would
+                         * break. Since we know that the previous extent in rebuild_done_list (if
+                         * there is one) will be fully remapped, we can replace the marker with that
+                         * and then we are free to remove this extent from the list.
+                         */
+                        if (ext->rebuild_done_list.prev != NULL)
+                        {
+                            c_ext_t *prev_ext;
+                            prev_ext = list_entry(ext->rebuild_done_list.prev,
+                                                  c_ext_t,
+                                                  rebuild_done_list);
+                            rebuild_extent_last = prev_ext->ext_id;
+                            rebuild_extent_chunk = prev_ext->size;
+                        } else
+                            /* No previous extent (rebuild_done_list will become empty). */
+                            rebuild_extent_last = rebuild_extent_chunk = 0;
+                    }
                     list_del(&ext->rebuild_done_list);
-                    ext->rebuild_done_list.next = NULL;
+                    ext->rebuild_done_list.next = ext->rebuild_done_list.prev = NULL;
                     mutex_unlock(&rebuild_done_list_lock);
                     spin_lock(&ext->shadow_map_lock);
                     ext->use_shadow_map = 0;
