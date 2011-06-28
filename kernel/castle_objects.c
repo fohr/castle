@@ -84,6 +84,8 @@ static c_vl_bkey_t* castle_object_btree_key_construct(c_vl_bkey_t  *k1,
         payload_split_offset = KEY_DIMENSION_OFFSET(k2->dim_head[0]);
     }
 
+    BUG_ON(key_len != payload_split_offset);
+
     /* Find the length of payload to be copied from k2. */
     k2_payload_len = castle_object_btree_key_length(k2) -
                             KEY_DIMENSION_OFFSET(k2->dim_head[nr_dims_from_k1]);
@@ -108,9 +110,11 @@ static c_vl_bkey_t* castle_object_btree_key_construct(c_vl_bkey_t  *k1,
     offset = payload_split_offset;
     for (i=nr_dims_from_k1; i<nr_dims; i++)
     {
-        out_key->dim_head[i] = offset;
+        out_key->dim_head[i] =
+                    KEY_DIMENSION_HEADER(offset, castle_object_btree_key_dim_flags_get(k2, i));
         offset += castle_object_btree_key_dim_length(k2, i);
     }
+    BUG_ON(offset != key_len);
 
     /* Copy payload for k2 dimensions. */
     memcpy((char *)out_key + payload_split_offset,
