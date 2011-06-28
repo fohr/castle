@@ -50,7 +50,9 @@ static void                         castle_vmap_freelist_add(castle_vmap_freelis
                                                              *castle_vmap_freelist, uint32_t id);
 static uint32_t                     castle_vmap_freelist_get(castle_vmap_freelist_t
                                                              *castle_vmap_freelist);
-static void                         castle_vmap_freelist_grow(int freelist_bucket_idx, int slots);
+static void                         castle_vmap_freelist_grow(castle_vmap_freelist_t
+                                                             *castle_vmap_freelist,
+                                                             int freelist_bucket_idx, int slots);
 
 int castle_vmap_fast_map_init(void)
 {
@@ -277,7 +279,7 @@ void *castle_vmap_fast_map(struct page **pgs, int nr_pages)
             /* 1. drop the lock on the bucket */
             spin_unlock(&castle_vmap_lock[freelist_bucket_idx].lock);
             /* 2. grow the freelist */
-            castle_vmap_freelist_grow(freelist_bucket_idx, need_slots);
+            castle_vmap_freelist_grow(castle_vmap_freelist, freelist_bucket_idx, need_slots);
             /* 3. and retry */
             continue;
         }
@@ -356,7 +358,15 @@ void castle_vmap_fast_unmap(void *vaddr, int nr_pages)
     BUG();
 }
 
-static void castle_vmap_freelist_grow(int freelist_bucket_idx, int slots)
+/**
+ * Grow a vmap freelist, by insertinga new, larger freelist at the head of the bucket.
+ *
+ * @param castle_vmap_freelist  The old freelist to be re-checked under the bucket lock.
+ * @param freelist_bucket_idx   The freelist bucket index to be grown.
+ * @param slots                 The number of slots to grow to.
+ */
+static void castle_vmap_freelist_grow(castle_vmap_freelist_t *castle_vmap_freelist,
+                                      int freelist_bucket_idx, int slots)
 {
     castle_vmap_freelist_t  *new;
 
@@ -368,6 +378,22 @@ static void castle_vmap_freelist_grow(int freelist_bucket_idx, int slots)
         BUG(); /* failure to get vmem area is fatal */
 
     spin_lock(&castle_vmap_lock[freelist_bucket_idx].lock);
+    /*
+     * Now we have the lock again, recheck to see if all the slots in the (old) freelist at the head
+     * of the bucket have become free since we dropped the lock. If they have, then we don't now
+     * need this new freelist. Worse, if we did add this new freelist, the old freelist would never
+     * get deleted, because the only thing that could have triggered its deletion is when all its
+     * slots became free, and that could never happen because freelists not at the head are not used
+     * for allocations.
+     */
+    if (castle_vmap_freelist->slots_free == castle_vmap_freelist->nr_slots)
+    {
+        debug("Dropping new list for freelist bucket index %d\n", freelist_bucket_idx);
+        castle_vmap_freelist_delete(new);
+        goto out;
+    }
     list_add(&new->list, castle_vmap_fast_maps_ptr+freelist_bucket_idx);
+
+out:
     spin_unlock(&castle_vmap_lock[freelist_bucket_idx].lock);
 }
