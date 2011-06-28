@@ -1200,26 +1200,31 @@ static void castle_ct_modlist_iter_init(c_modlist_iter_t *iter)
 }
 
 /**
- * Insert (key,version) into RB-tree.
+ * Insert a component iterator (with cached (k,v)) into the RB-tree.
  *
- * In case of duplicate (key,version) tuples, delete the older entry.  This
- * results in updates to existing (key,version) tuples and 'deletes' (actually
- * also replaces) with tombstones.
+ * In case of duplicate (k,v) tuples maintain only store the most recent iterator in the tree.
+ * All other iterators in the list rooted at that newest iterator.same_kv_head.
+ *
+ * Each_skip callback will be used to notify the client about older CVTs with matching (k,v).
+ * But only if they are non-counter types.
  *
  * @param iter [in]         Merged iterator that the RB tree belongs to
  * @param comp_iter [in]    Component iterator that the new kv pair belongs to
  *
  * @also _each_skip() callbacks
  */
-static int castle_ct_merged_iter_rbtree_insert(c_merged_iter_t *iter,
-                                               struct component_iterator *comp_iter)
+static void castle_ct_merged_iter_rbtree_insert(c_merged_iter_t *iter,
+                                                struct component_iterator *comp_iter)
 {
     struct rb_root *root = &iter->rb_root;
     struct rb_node **p = &root->rb_node;
     struct rb_node *parent = NULL;
     struct rb_node *node = &comp_iter->rb_node;
     int nr_cmps = 0;
-    int ret = 0;
+
+    /* Init the same_kv_head when the iterator is getting added to the tree.
+       This guaratees that its going to be read for use, when we detect (k,v) collision(s). */
+    INIT_LIST_HEAD(&comp_iter->same_kv_head);
 
     /* Go until end of the tree. */
     while (*p)
@@ -1247,70 +1252,59 @@ static int castle_ct_merged_iter_rbtree_insert(c_merged_iter_t *iter,
         /* New (key,version) is bigger than key in tree.  Traverse right. */
         else if (kv_cmp > 0)
             p = &(*p)->rb_right;
-        /* Both (key,version) pairs are equal.  Determine the older element and
-         * drop it.
-         *
-         * Component iterators are stored in an array sorted with newer CTs
-         * appearing earlier than older CTs.  We can use the pointers to the CTs
-         * to detect which is more recent. */
-        else if (c_iter > comp_iter)
-        {
-            /* If the new key is the latest, then just replace the one in
-             * rb-tree with the new key. */
-            rb_replace_node(&c_iter->rb_node, &comp_iter->rb_node, root);
-            dup_iter = c_iter;
-            new_iter = comp_iter;
-        }
         else
         {
-            ret = 1;
-            dup_iter = comp_iter;
-            new_iter = c_iter;
-        }
+            /* Both (key,version) pairs are equal. Here is how we deal with those:
+             *
+             * 1. Put the newest iterator (i.e. from the latest tree) in the rb_tree.
+             *    Older iterators with same (k,v) will _not_ be accesible in the tree directly.
+             * 2. Construct a list of iterators which cache same (k,v), rooted at the newest
+             *    component iterator.same_kv_head. This list may contain both counter and
+             *    non-counter CVTs.
+             * 3. Call each_skip (if registered) for object (i.e. non-counter) CVTs
+             *    for all iterators, except of the newest one (i.e. from the latest tree).
+             *
+             * Component iterators are stored in an array sorted with newer CTs
+             * appearing earlier than older CTs.  We can use the pointers to the CTs
+             * to detect which is more recent.
+             *
+             * The same_kv list is used to construct the response if the newest iterator
+             * turns out to be a CVT_COUNTER_ADD. Otherwise the list isn't used.
+             */
 
-        /* Skip the duplicated entry and clear cached bit of the component
-         * iterator. */
-        if (dup_iter)
-        {
-            if(CVT_COUNTER_ADD(new_iter->cached_entry.cvt))
+            if(c_iter > comp_iter)
             {
-                //new entry is a counter_ADD
-                if(CVT_COUNTER_ADD(dup_iter->cached_entry.cvt) ||
-                        CVT_COUNTER_SET(dup_iter->cached_entry.cvt))
-                {
-                    //old entry is a counter
-                    int64_t prev_x, new_x, accum_x;
-                    castle_printk(LOG_DEVEL, "%s::reducing COUNTER_ADD.\n", __FUNCTION__);
+                /* The current iterator is more recent than the one in the tree.
+                   (Re-)splice the same_kv list onto current iterator head. */
+                list_splice_init(&c_iter->same_kv_head, &comp_iter->same_kv_head);
+                /* Replace the rb node. */
+                rb_replace_node(&c_iter->rb_node, &comp_iter->rb_node, root);
+                /* Add the older iterator onto same_kv list. */
+                list_add(&c_iter->same_kv_list, &comp_iter->same_kv_head);
 
-                    //TODO@tr this is horrible, fix it! (and allow 512b counter values)
-                    memcpy(&prev_x, dup_iter->cached_entry.cvt.val, sizeof(prev_x));
-                    memcpy(&new_x, new_iter->cached_entry.cvt.val, sizeof(new_x));
+                /* Save which iterator is newer and older. */
+                dup_iter = c_iter;
+                new_iter = comp_iter;
 
-                    accum_x = prev_x + new_x;
-                    memcpy(new_iter->cached_entry.cvt.val, &accum_x, sizeof(accum_x));
+            } else
+            {
+                /* The current iterator is less recent that the one in the tree.
+                   Add the current iterator to the same_kv list (rooted at the most
+                   recent iterator). */
+                list_add(&comp_iter->same_kv_list, &c_iter->same_kv_head);
 
-                    if(CVT_COUNTER_SET(dup_iter->cached_entry.cvt))
-                    {
-                        //old entry is a counter_SET
-                        castle_printk(LOG_DEVEL, "%s::converting to COUNTER_SET.\n", __FUNCTION__);
-                        CVT_COUNTER_SET_SET(new_iter->cached_entry.cvt,
-                                new_iter->cached_entry.cvt.length,
-                                new_iter->cached_entry.cvt.val);
-                    }
-                }
-                else
-                {
-                    //old entry is not a counter
-                    castle_printk(LOG_WARN, "%s::COUNTER_ADD to a non-counter type??? Tombstoning.\n", __FUNCTION__);
-                    CVT_TOMBSTONE_SET(new_iter->cached_entry.cvt);
-                }
+                /* Save which iterator is newer and older. */
+                dup_iter = comp_iter;
+                new_iter = c_iter;
             }
 
-            debug("Duplicate entry found. Removing.\n");
-            if (iter->each_skip)
+            /* (Conditionally), call the callback. */
+            debug("Duplicate entry found, CVT type=%d.\n", dup_iter->cached_entry.cvt.type);
+            if (iter->each_skip && !CVT_ANY_COUNTER(dup_iter->cached_entry.cvt))
                 iter->each_skip(iter, dup_iter, new_iter);
-            dup_iter->cached = 0;
-            return ret;
+
+            /* The rb_tree and same_kv list have all been updated, return now. */
+            return;
         }
     }
 
@@ -1318,8 +1312,6 @@ static int castle_ct_merged_iter_rbtree_insert(c_merged_iter_t *iter,
     rb_link_node(node, parent, p);
     /* Set color and inturn balance the tree. */
     rb_insert_color(node, root);
-
-    return ret;
 }
 
 static struct component_iterator * castle_ct_merge_iter_rbtree_min_del(c_merged_iter_t *iter)
@@ -1334,7 +1326,7 @@ static struct component_iterator * castle_ct_merge_iter_rbtree_min_del(c_merged_
     /* Erase the element from tree. */
     rb_erase(min, root);
 
-    /* Return component tree. */
+    /* Return the iterator. */
     return rb_entry(min, struct component_iterator, rb_node);
 }
 
@@ -1426,13 +1418,7 @@ static int castle_ct_merged_iter_prep_next(c_merged_iter_t *iter)
                 /* It is possible that. this call could delete kv pairs of the component
                  * iterators (which is fine, as we go through that component iterator anyway)
                  * coming after this or it could delete the current kv pair itself. */
-                if (castle_ct_merged_iter_rbtree_insert(iter, comp_iter))
-                {
-                    /* If the current kv pair is deleted, get the next entry in this
-                     * iterator. */
-                    i--;
-                    continue;
-                }
+                castle_ct_merged_iter_rbtree_insert(iter, comp_iter);
             }
             else
             {
@@ -1486,12 +1472,99 @@ static int castle_ct_merged_iter_has_next(c_merged_iter_t *iter)
     return (!iter->err && (iter->non_empty_cnt > 0));
 }
 
+static void castle_ct_merged_iter_consume(struct component_iterator *iter)
+{
+    struct component_iterator *other_iter;
+    struct list_head *l;
+
+    /* Clear cached flag for each iterator in the same_kv list. */
+    list_for_each(l, &iter->same_kv_head)
+    {
+        other_iter = list_entry(l, struct component_iterator, same_kv_list);
+        /* Each of the component iterators should have something cached. */
+        BUG_ON(!other_iter->cached);
+        /* Head should be newest. */
+        BUG_ON(iter > other_iter);
+        other_iter->cached = 0;
+    }
+
+    /* Clear cached flag for the min iterator too. */
+    iter->cached = 0;
+}
+
+static c_val_tup_t castle_ct_merged_iter_counter_reduce(struct component_iterator *iter)
+{
+    c_val_tup_t accumulator;
+    struct list_head *l, *t;
+    struct rb_root rb_root;
+    struct rb_node **p, *parent, *rb_entry;
+
+    /* We expecting for the list head of the same_kv list to be a counter (at least). */
+    BUG_ON(!CVT_ANY_COUNTER(iter->cached_entry.cvt));
+
+    /* Prepare the accumulator. */
+    CVT_COUNTER_LOCAL_ADD_SET(accumulator, 0);
+
+    /* Deal with the list head. */
+    if(castle_counter_one_reduce(&accumulator, iter->cached_entry.cvt))
+        return accumulator;
+
+    /* If the list same_kv list is emtpy, return too. */
+    if(list_empty(&iter->same_kv_head))
+        return accumulator;
+
+    /* The same_kv list isn't sorted. Insert sort it. */
+    rb_root = RB_ROOT;
+    list_for_each_safe(l, t, &iter->same_kv_head)
+    {
+        struct component_iterator *current_iter;
+
+        /* Work ot the iterator structure pointer, and delete list entry. */
+        current_iter = list_entry(l, struct component_iterator, same_kv_list);
+        list_del(l);
+
+        /* Insert into rb tree. */
+        parent = NULL;
+        p = &rb_root.rb_node;
+        while(*p)
+        {
+            struct component_iterator *tree_iter;
+
+            parent = *p;
+            tree_iter = rb_entry(parent, struct component_iterator, rb_node);
+            /* We never expect to see the same iterator twice. */
+            BUG_ON(tree_iter == current_iter);
+            if(tree_iter > current_iter)
+                p = &(*p)->rb_left;
+            else
+                p = &(*p)->rb_right;
+        }
+        rb_link_node(&current_iter->rb_node, parent, p);
+        rb_insert_color(&current_iter->rb_node, &rb_root);
+    }
+
+    /* Now accumulate the results one iterator at the time. */
+    rb_entry = rb_first(&rb_root);
+    /* There was a check for emtpy same_kv list, so there should be something in the tree. */
+    BUG_ON(!rb_entry);
+    do {
+        iter = rb_entry(rb_entry, struct component_iterator, rb_node);
+        /* Continue iterating until a terminating cvt (e.g. a counter set) is found. */
+        if(castle_counter_one_reduce(&accumulator, iter->cached_entry.cvt))
+            return accumulator;
+    } while((rb_entry = rb_next(&iter->rb_node)));
+
+    /* Never reached a terminating cvt, assume implicit set 0. */
+    return accumulator;
+}
+
 static void castle_ct_merged_iter_next(c_merged_iter_t *iter,
                                        void **key_p,
                                        c_ver_t *version_p,
                                        c_val_tup_t *cvt_p)
 {
     struct component_iterator *comp_iter;
+    c_val_tup_t cvt;
 
     debug_iter("%s:%p\n", __FUNCTION__, iter);
     debug("Merged iterator next.\n");
@@ -1502,12 +1575,21 @@ static void castle_ct_merged_iter_next(c_merged_iter_t *iter,
     /* Get the smallest kv pair from RB tree. */
     comp_iter = castle_ct_merge_iter_rbtree_min_del(iter);
     debug("Smallest entry is from iterator: %p.\n", comp_iter);
-    comp_iter->cached = 0;
+
+    /* Consume (clear cached flags) from the component iterators. */
+    castle_ct_merged_iter_consume(comp_iter);
+
+    /* Work out the counter value (handle the case where the iterator contains a counter.
+       NOTE: this destroys same_kv list. Don't use it after this point. */
+    if(CVT_ANY_COUNTER(comp_iter->cached_entry.cvt))
+        cvt = castle_ct_merged_iter_counter_reduce(comp_iter);
+    else
+        cvt = comp_iter->cached_entry.cvt;
 
     /* Return the smallest entry */
-    if(key_p) *key_p = comp_iter->cached_entry.k;
+    if(key_p)     *key_p     = comp_iter->cached_entry.k;
     if(version_p) *version_p = comp_iter->cached_entry.v;
-    if(cvt_p) *cvt_p = comp_iter->cached_entry.cvt;
+    if(cvt_p)     *cvt_p     = cvt;
 }
 
 static void castle_ct_merged_iter_skip(c_merged_iter_t *iter,
@@ -2403,7 +2485,7 @@ static int castle_da_iterators_create(struct castle_da_merge *merge)
                             &comp[i]->cached_entry.cvt);
                     /* Restore the rbtree */
                     /* Assume we should never serialise on a deleted kv pair */
-                    BUG_ON(castle_ct_merged_iter_rbtree_insert(merge->merged_iter, comp[i]));
+                    castle_ct_merged_iter_rbtree_insert(merge->merged_iter, comp[i]);
                 } /* replenished cache */
             } /* restored curr_c2b */
             else

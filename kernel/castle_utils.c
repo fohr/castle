@@ -12,6 +12,41 @@
 struct castle_printk_buffer     printk_buf;
 struct castle_printk_state     *castle_printk_states;
 
+int castle_counter_one_reduce(c_val_tup_t *accumulator, c_val_tup_t delta_cvt)
+{
+    int64_t delta_counter;
+
+    if(!CVT_ANY_COUNTER(delta_cvt))
+    {
+        /* Set the accumulator type to LOCAL_SET. */
+        CVT_COUNTER_LOCAL_SET_SET(*accumulator, accumulator->counter);
+        return 1;
+    }
+
+    /* We are not expecting local counters to be used as delta (these are never stored
+       in btrees). Therefore we only expecting set or add by this point. */
+    BUG_ON(!CVT_INLINE_COUNTER(delta_cvt));
+
+    /* The value length should be 8 bytes. */
+    BUG_ON(delta_cvt.length != 8);
+
+    /* Get the counter out of the CVT. */
+    memcpy(&delta_counter, delta_cvt.val, sizeof(delta_counter));
+
+    /* Add it to the accumulator. */
+    accumulator->counter += delta_counter;
+
+    /* Stop accumulating if we reached a set. */
+    if(CVT_COUNTER_SET(delta_cvt))
+    {
+        /* Set the accumulator type to LOCAL_SET. */
+        CVT_COUNTER_LOCAL_SET_SET(*accumulator, accumulator->counter);
+        return 1;
+    }
+
+    return 0;
+}
+
 /**
  * Determine whether to ratelimit printks at specified level.
  *

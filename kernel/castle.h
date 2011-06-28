@@ -407,18 +407,21 @@ struct castle_fs_superblock {
 
 #define CVT_TYPE_DISABLED_FLAG   0x80
 enum {
-    CVT_TYPE_INVALID         = 0x00,
-    CVT_TYPE_LEAF_PTR        = 0x02,
-    CVT_TYPE_NODE            = 0x04,
-    CVT_TYPE_TOMBSTONE       = 0x09,
-    CVT_TYPE_INLINE          = 0x11,
-    CVT_TYPE_MEDIUM_OBJECT   = 0x21,
-    CVT_TYPE_LARGE_OBJECT    = 0x61,
+    CVT_TYPE_INVALID           = 0x00,
+    CVT_TYPE_LEAF_PTR          = 0x02,
+    CVT_TYPE_NODE              = 0x04,
+    CVT_TYPE_TOMBSTONE         = 0x09,
+    CVT_TYPE_INLINE            = 0x11,
+    CVT_TYPE_MEDIUM_OBJECT     = 0x21,
+    CVT_TYPE_LARGE_OBJECT      = 0x61,
 
-    CVT_TYPE_COUNTER_SET     = 0x01,
-    CVT_TYPE_COUNTER_ADD     = 0x03,
+    CVT_TYPE_COUNTER_SET       = 0x01,    /**< Counter set, c_val_tup_t.val points to the data.  */
+    CVT_TYPE_COUNTER_ADD       = 0x03,    /**< Counter add, c_val_tup_t.val points to the data.  */
+    CVT_TYPE_COUNTER_LOCAL_SET = 0x05,    /**< Counter set (only used for returning the response
+                                             to the user. Counter stored in c_val_tup_t.counter. */
+    CVT_TYPE_COUNTER_LOCAL_ADD = 0x06,    /**< Counter add. Counter stored in cvt.counter.       */
 
-    /* 0x80 - 0xFF should not be used, because it conflicts with CVT_DISABLED. */
+    /* 0x80 - 0xFF should not be used, because it conflicts with CVT_TYPE_DISABLED_FLAG. */
 };
 
 #define MAX_INLINE_VAL_SIZE            512      /* In bytes */
@@ -435,6 +438,7 @@ struct castle_value_tuple {
     /*          8 */ union {
     /*          8 */     c_ext_pos_t   cep;
     /*          8 */     uint8_t      *val;
+    /*          8 */     int64_t       counter;
     /*         24 */ };
     /*         24 */
 } PACKED;
@@ -443,44 +447,54 @@ typedef struct castle_value_tuple c_val_tup_t;
 #define INVAL_VAL_TUP        ((c_val_tup_t){{CVT_TYPE_INVALID, 0}, {.cep = INVAL_EXT_POS}})
 
 
-#define CVT_INVALID(_cvt)       ((_cvt).type == CVT_TYPE_INVALID)
+#define CVT_INVALID(_cvt)           ((_cvt).type == CVT_TYPE_INVALID)
 
-#define CVT_DISABLED(_cvt)      ((_cvt).type & CVT_TYPE_DISABLED_FLAG)
+#define CVT_DISABLED(_cvt)          ((_cvt).type & CVT_TYPE_DISABLED_FLAG)
 
 /* CVT_LEAF_VAL checks for any value type (directly usable entry from leaf btree nodes).
    In particular pointers to btree nodes aren't CVT_LEAF_VAL, neither are leaf ptrs. */
-#define CVT_LEAF_VAL(_cvt)       (((_cvt).type == CVT_TYPE_TOMBSTONE) ||       \
-                                  ((_cvt).type == CVT_TYPE_INLINE) ||          \
-                                  ((_cvt).type == CVT_TYPE_MEDIUM_OBJECT) ||   \
-                                  ((_cvt).type == CVT_TYPE_LARGE_OBJECT) ||    \
-                                  ((_cvt).type == CVT_TYPE_COUNTER_SET) ||     \
-                                  ((_cvt).type == CVT_TYPE_COUNTER_ADD))
+#define CVT_LEAF_VAL(_cvt)          (((_cvt).type == CVT_TYPE_TOMBSTONE) ||       \
+                                     ((_cvt).type == CVT_TYPE_INLINE) ||          \
+                                     ((_cvt).type == CVT_TYPE_MEDIUM_OBJECT) ||   \
+                                     ((_cvt).type == CVT_TYPE_LARGE_OBJECT) ||    \
+                                     ((_cvt).type == CVT_TYPE_COUNTER_SET) ||     \
+                                     ((_cvt).type == CVT_TYPE_COUNTER_ADD))
 
-#define CVT_LEAF_PTR(_cvt)        ((_cvt).type == CVT_TYPE_LEAF_PTR)
+#define CVT_LEAF_PTR(_cvt)           ((_cvt).type == CVT_TYPE_LEAF_PTR)
 
-#define CVT_NODE(_cvt)            ((_cvt).type == CVT_TYPE_NODE)
+#define CVT_NODE(_cvt)               ((_cvt).type == CVT_TYPE_NODE)
 
-#define CVT_TOMBSTONE(_cvt)       ((_cvt).type == CVT_TYPE_TOMBSTONE)
+#define CVT_TOMBSTONE(_cvt)          ((_cvt).type == CVT_TYPE_TOMBSTONE)
 
 /* CVT_INLINE() is true for _any_ inline values, including counters. */
-#define CVT_INLINE(_cvt)         (((_cvt).type == CVT_TYPE_INLINE) ||          \
-                                  ((_cvt).type == CVT_TYPE_COUNTER_SET) ||     \
-                                  ((_cvt).type == CVT_TYPE_COUNTER_ADD))
+#define CVT_INLINE(_cvt)            (((_cvt).type == CVT_TYPE_INLINE) ||          \
+                                     ((_cvt).type == CVT_TYPE_COUNTER_SET) ||     \
+                                     ((_cvt).type == CVT_TYPE_COUNTER_ADD))
 
 /* Only medium and large objects are stored out of line, i.e. 'on disk' .*/
-#define CVT_ON_DISK(_cvt)        (((_cvt).type == CVT_TYPE_MEDIUM_OBJECT) ||   \
-                                  ((_cvt).type == CVT_TYPE_LARGE_OBJECT))
+#define CVT_ON_DISK(_cvt)           (((_cvt).type == CVT_TYPE_MEDIUM_OBJECT) ||   \
+                                     ((_cvt).type == CVT_TYPE_LARGE_OBJECT))
 
-#define CVT_MEDIUM_OBJECT(_cvt)   ((_cvt).type == CVT_TYPE_MEDIUM_OBJECT)
+#define CVT_MEDIUM_OBJECT(_cvt)      ((_cvt).type == CVT_TYPE_MEDIUM_OBJECT)
 
-#define CVT_LARGE_OBJECT(_cvt)    ((_cvt).type == CVT_TYPE_LARGE_OBJECT)
+#define CVT_LARGE_OBJECT(_cvt)       ((_cvt).type == CVT_TYPE_LARGE_OBJECT)
 
-#define CVT_COUNTER_SET(_cvt)     ((_cvt).type == CVT_TYPE_COUNTER_SET)
+#define CVT_COUNTER_SET(_cvt)        ((_cvt).type == CVT_TYPE_COUNTER_SET)
 
-#define CVT_COUNTER_ADD(_cvt)     ((_cvt).type == CVT_TYPE_COUNTER_ADD)
+#define CVT_COUNTER_ADD(_cvt)        ((_cvt).type == CVT_TYPE_COUNTER_ADD)
+
+#define CVT_COUNTER_LOCAL_SET(_cvt)  ((_cvt).type == CVT_TYPE_COUNTER_LOCAL_SET)
+
+#define CVT_COUNTER_LOCAL_ADD(_cvt)  ((_cvt).type == CVT_TYPE_COUNTER_LOCAL_ADD)
 
 /* Derevative types. */
-#define CVT_ONE_BLK(_cvt)       (CVT_ON_DISK(_cvt) && ((_cvt).length == C_BLK_SIZE))
+#define CVT_ONE_BLK(_cvt)        (CVT_ON_DISK(_cvt) && ((_cvt).length == C_BLK_SIZE))
+#define CVT_LOCAL_COUNTER(_cvt)  (CVT_COUNTER_LOCAL_SET(_cvt) ||            \
+                                  CVT_COUNTER_LOCAL_ADD(_cvt))
+#define CVT_INLINE_COUNTER(_cvt) (CVT_COUNTER_SET(_cvt) ||                  \
+                                  CVT_COUNTER_ADD(_cvt))
+#define CVT_ANY_COUNTER(_cvt)    (CVT_INLINE_COUNTER(_cvt) ||               \
+                                  CVT_LOCAL_COUNTER(_cvt))
 
 #define CVT_DISABLED_SET(_cvt)                                              \
 {                                                                           \
@@ -527,6 +541,18 @@ typedef struct castle_value_tuple c_val_tup_t;
    (_cvt).type   = CVT_TYPE_COUNTER_ADD;                                    \
    (_cvt).length = _length;                                                 \
    (_cvt).val    = _ptr;                                                    \
+}
+#define CVT_COUNTER_LOCAL_SET_SET(_cvt, _counter)                           \
+{                                                                           \
+   (_cvt).type    = CVT_TYPE_COUNTER_LOCAL_SET;                             \
+   (_cvt).length  = 8;                                                      \
+   (_cvt).counter = (_counter);                                             \
+}
+#define CVT_COUNTER_LOCAL_ADD_SET(_cvt, _counter)                           \
+{                                                                           \
+   (_cvt).type    = CVT_TYPE_COUNTER_LOCAL_ADD;                             \
+   (_cvt).length  = 8;                                                      \
+   (_cvt).counter = (_counter);                                             \
 }
 #define CVT_MEDIUM_OBJECT_SET(_cvt, _length, _cep)                          \
 {                                                                           \
@@ -1288,7 +1314,16 @@ typedef struct castle_merged_iterator {
             c_ver_t                  v;
             c_val_tup_t              cvt;
         } cached_entry;
-        struct rb_node               rb_node;
+        struct list_head             same_kv_head;
+        union {
+            struct rb_node           rb_node;       /**< Used to put the iterator onto rb tree
+                                                         rooted in the merged_iterator.rb_root
+                                                         (or temporarily when sorting same_kv
+                                                          list on local rb tree) */
+            struct list_head         same_kv_list;  /**< Used to add iterator to the list of
+                                                         iterators with the same (k,v), rooted
+                                                         at same_kv_head above. */
+        };
     } *iterators;
     struct rb_root                   rb_root;
     cv_nonatomic_stats_t             stats;         /**< Stat changes during last _next().  */

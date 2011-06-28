@@ -1091,7 +1091,7 @@ static inline uint8_t castle_back_val_type_kernel_to_user(c_val_tup_t cvt)
     BUG_ON(CVT_COUNTER_ADD(cvt));
 
     /* Check for counters before checking for inline (which will also be true). */
-    if(CVT_COUNTER_SET(cvt))
+    if(CVT_COUNTER_SET(cvt) || CVT_LOCAL_COUNTER(cvt))
         return CASTLE_VALUE_TYPE_INLINE_COUNTER;
 
     if(CVT_INLINE(cvt))
@@ -1134,8 +1134,20 @@ static uint32_t castle_back_val_kernel_to_user(c_val_tup_t *val, struct castle_b
     if (CVT_INLINE(*val))
     {
         val_copy->val = (uint8_t *)(user_buf + sizeof(struct castle_iter_val));
-        memcpy((uint8_t *)castle_back_user_to_kernel(buf, val_copy->val), val->val, val->length);
-    } else {
+        memcpy((uint8_t *)castle_back_user_to_kernel(buf, val_copy->val),
+               val->val,
+               val->length);
+    }
+    else
+    if (CVT_LOCAL_COUNTER(*val))
+    {
+        val_copy->val = (uint8_t *)(user_buf + sizeof(struct castle_iter_val));
+        memcpy((uint8_t *)castle_back_user_to_kernel(buf, val_copy->val),
+               &val->counter,
+               val->length);
+    }
+    else
+    {
         val_copy->collection_id = collection_id;
     }
 
