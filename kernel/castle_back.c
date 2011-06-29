@@ -1114,7 +1114,7 @@ static uint32_t castle_back_val_kernel_to_user(c_val_tup_t *val, struct castle_b
     uint32_t length, val_length;
     struct castle_iter_val *val_copy;
 
-    if (CVT_INLINE(*val))
+    if (CVT_INLINE(*val) || CVT_LOCAL_COUNTER(*val))
         val_length = val->length;
     else
         val_length = 0;
