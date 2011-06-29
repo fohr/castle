@@ -3037,6 +3037,7 @@ static inline void castle_cache_page_freelist_grow(int nr_pages)
 
 c2_block_t* _castle_cache_block_get(c_ext_pos_t cep, int nr_pages, int transient)
 {
+    int grown_block_freelist = 0, grown_page_freelist = 0;
     c_ext_type_t ext_type;
     c2_block_t *c2b;
     c2_page_t **c2ps;
@@ -3086,26 +3087,28 @@ c2_block_t* _castle_cache_block_get(c_ext_pos_t cep, int nr_pages, int transient
          *
          * Try and get c2b and c2ps from the freelists.
          *
-         * If we are the flush thread then attempt to get c2b/c2ps from the
-         * reservelist before calling the _freelist_grow() function. */
+         * If we are the flush thread and fail to get c2b/c2ps from the freelist
+         * after a _freelist_grow then allocate from the reservelist. */
         do {
             c2b = castle_cache_block_freelist_get();
             if (unlikely(!c2b))
             {
-                if (unlikely(current == castle_cache_flush_thread))
+                castle_cache_block_freelist_grow();
+
+                if (unlikely(current == castle_cache_flush_thread)
+                        && grown_block_freelist++)
                     c2b = castle_cache_block_reservelist_get();
-                else
-                    castle_cache_block_freelist_grow();
             }
         } while (!c2b);
         do {
             c2ps = castle_cache_page_freelist_get(nr_pages);
             if (unlikely(!c2ps))
             {
-                if (unlikely(current == castle_cache_flush_thread))
+                castle_cache_page_freelist_grow(nr_pages);
+
+                if (unlikely(current == castle_cache_flush_thread)
+                        && grown_page_freelist++)
                     c2ps = castle_cache_page_reservelist_get(nr_pages);
-                else
-                    castle_cache_page_freelist_grow(nr_pages);
             }
         } while (!c2ps);
 
