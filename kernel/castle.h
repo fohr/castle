@@ -1604,9 +1604,6 @@ struct castle_object_get {
                                   void *buffer,
                                   uint32_t buffer_length,
                                   int last);
-    int         is_reducing_counter;
-    int64_t     counter_accum; // TODO@tr improve this: move it to some other data structure, and/or
-                               //   replace it with a pointer to 512b counter value.
 };
 
 struct castle_object_pull {

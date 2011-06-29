@@ -1544,55 +1544,69 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
                                 int err,
                                 c_val_tup_t cvt)
 {
-    //struct castle_rxrpc_call *call = c_bvec->c_bio->rxrpc_call;
     struct castle_object_get *get = c_bvec->c_bio->get;
     c_bio_t *c_bio = c_bvec->c_bio;
+    int is_inline;
 
-    debug("Returned from btree walk with value of type 0x%x and length %llu\n",
-          cvt.type, cvt.length);
-    get->ct = c_bvec->tree;
-    get->cvt = cvt;
+    debug("Returned from btree walk with value of type 0x%x and length 0x%llu\n",
+          cvt.type, (uint64_t)cvt.length);
+
     /* Sanity checks on the bio */
     BUG_ON(c_bvec_data_dir(c_bvec) != READ);
     BUG_ON(atomic_read(&c_bio->count) != 1);
     BUG_ON(c_bio->err != 0);
 
+    /* We are handling a counter if either we just got a counter or we were already
+       accumulating counters. */
+    if(CVT_ANY_COUNTER(cvt) || CVT_ANY_COUNTER(get->cvt))
+    {
+        int finished;
+
+        /* Prepare the accumulator, if isn't ready yet. */
+        if(CVT_INVALID(get->cvt))
+            CVT_COUNTER_LOCAL_ADD_SET(get->cvt, 0);
+
+        finished = castle_counter_one_reduce(&get->cvt, cvt);
+        /* Return early if we have to keep accumulating. */
+        if(!finished)
+            return;
+    }
+    else
+        get->cvt = cvt;
+
+    get->ct = c_bvec->tree;
+
     /* Deal with error case, or non-existant value. */
-    if(err || CVT_INVALID(cvt) || CVT_TOMBSTONE(cvt))
+    if(err || CVT_INVALID(get->cvt) || CVT_TOMBSTONE(get->cvt))
     {
         debug("Error, invalid or tombstone.\n");
         /* Dont have any object returned, no need to release reference of object. */
         /* Release reference of Component Tree. */
         if(get->ct)
             castle_ct_put(get->ct, 0);
+        /* Turn tombstones into invalid CVTs. */
         CVT_INVALID_SET(get->cvt);
         get->reply_start(get, err, 0, NULL, 0);
         castle_utils_bio_free(c_bvec->c_bio);
         return;
     }
-    BUG_ON(!get->ct);
+    /* For non-counters there must always be a CT. */
+    BUG_ON(!CVT_ANY_COUNTER(get->cvt) && !get->ct);
 
-    /* Next, handle counters and inline values, since we already have them in memory */
-    BUG_ON(CVT_COUNTER_ADD(cvt)); /* never return an ADD; always reduce to a set */
-    if(CVT_COUNTER_SET(cvt))
-    {
-        castle_printk(LOG_DEVEL, "%s::getted a counter_SET.\n", __FUNCTION__);
-    }
-    else
-    {
-        /* TODO@tr add support for special counter get ops: if the cvt type is not a counter_set
-           then the get has failed, so return error, maybe use the error block above? */
-    }
-
-    /* because counters are inlines, we can leave the rest of the work to the existing inline
-       handling code */
-    if(CVT_INLINE(cvt))
+    /* Deal with the inlines and local counters (therefore with inlines and all counters). */
+    if((is_inline = CVT_INLINE(get->cvt)) || CVT_LOCAL_COUNTER(get->cvt))
     {
         debug("Inline.\n");
         /* Release reference of Component Tree. */
-        castle_ct_put(get->ct, 0);
-        get->reply_start(get, 0, cvt.length, cvt.val, cvt.length);
-        castle_free(cvt.val);
+        if(get->ct)
+            castle_ct_put(get->ct, 0);
+        get->reply_start(get,
+                         0,
+                         get->cvt.length,
+                         is_inline ? get->cvt.val : (void *)&get->cvt.counter,
+                         get->cvt.length);
+        if(is_inline)
+            castle_free(get->cvt.val);
         castle_utils_bio_free(c_bvec->c_bio);
 
         FAULT(GET_FAULT);
@@ -1646,6 +1660,10 @@ int castle_object_get(struct castle_object_get *get,
     if(!c_bio)
         return -ENOMEM; // @TODO leaking btree_key?
     BUG_ON(!attachment);
+
+    /* Set CVT to invalid. We need that to recognise and handle counters properly. */
+    CVT_INVALID_SET(get->cvt);
+
     c_bio->attachment    = attachment;
     c_bio->get           = get;
     c_bio->data_dir      = READ;

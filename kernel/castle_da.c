@@ -8396,6 +8396,32 @@ static void castle_da_queue_kick(struct work_struct *work)
     }
 }
 
+static void castle_da_ct_read_next(c_bvec_t *c_bvec,
+                                   struct castle_component_tree *ct)
+{
+    void (*callback) (struct castle_bio_vec *c_bvec, int err, c_val_tup_t cvt);
+    struct castle_component_tree *next_ct;
+
+    callback = c_bvec->orig_complete;
+
+    next_ct = castle_da_ct_next(ct);
+    /* No more trees left. Callback with invalid cvt. */
+    if(!next_ct)
+    {
+        c_bvec->tree = NULL;
+        callback(c_bvec, 0, INVAL_VAL_TUP);
+        return;
+    }
+
+    /* Put the previous tree, now that we know we've got a ref to the next. */
+    castle_ct_put(ct, 0);
+    c_bvec->tree = next_ct;
+    debug_verbose("Scheduling btree read in %s tree: %d.\n",
+            ct->dynamic ? "dynamic" : "static", ct->seq);
+    castle_bloom_submit(c_bvec);
+}
+
+
 /**
  * This is the callback used to complete a btree read. It either:
  * - calls back to the client if the key sought for has been found
@@ -8408,7 +8434,7 @@ static void castle_da_queue_kick(struct work_struct *work)
 static void castle_da_ct_read_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cvt)
 {
     void (*callback) (struct castle_bio_vec *c_bvec, int err, c_val_tup_t cvt);
-    struct castle_component_tree *ct, *next_ct;
+    struct castle_component_tree *ct;
     struct castle_double_array *da;
 
     callback = c_bvec->orig_complete;
@@ -8418,8 +8444,18 @@ static void castle_da_ct_read_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cv
     BUG_ON(c_bvec_data_dir(c_bvec) != READ);
     BUG_ON(atomic_read(&c_bvec->reserv_nodes));
 
-    /* If the key hasn't been found, check in the next tree. */
-    if(CVT_INVALID(cvt) && (!err))
+    /* Deal with counter adds first (other component trees may have to be looked at). */
+    if(!err && (CVT_COUNTER_ADD(cvt) || CVT_COUNTER_LOCAL_ADD(cvt)))
+    {
+        /* Callback (this should perform counter accumulation). */
+        callback(c_bvec, err, cvt);
+
+        castle_da_ct_read_next(c_bvec, ct);
+        return;
+    }
+
+    /* If the key hasn't been found, or it is counter add, go to the next tree. */
+    if(!err && CVT_INVALID(cvt))
     {
 #ifdef CASTLE_BLOOM_FP_STATS
         if (ct->bloom_exists && c_bvec->bloom_positive)
@@ -8429,22 +8465,10 @@ static void castle_da_ct_read_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cv
         }
 #endif
         debug_verbose("Checking next ct.\n");
-        next_ct = castle_da_ct_next(ct);
-        /* We've finished looking through all the trees. */
-        if(!next_ct)
-        {
-            callback(c_bvec, err, INVAL_VAL_TUP);
-            return;
-        }
-        /* Put the previous tree, now that we know we've got a ref to the next. */
-        castle_ct_put(ct, 0);
-        c_bvec->tree = next_ct;
-        debug_verbose("Scheduling btree read in %s tree: %d.\n",
-                ct->dynamic ? "dynamic" : "static", ct->seq);
-        castle_bloom_submit(c_bvec);
+
+        castle_da_ct_read_next(c_bvec, ct);
         return;
     }
-    debug_verbose("Finished with DA read, calling back.\n");
 
     /* Don't release the ct reference in order to hold on to medium objects array, etc. */
     callback(c_bvec, err, cvt);

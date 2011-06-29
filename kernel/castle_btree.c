@@ -2487,78 +2487,12 @@ static void castle_btree_read_process(c_bvec_t *c_bvec)
     {
         BUG_ON(!CVT_LEAF_VAL(lub_cvt));
         if (CVT_ON_DISK(lub_cvt))
-        {
             debug(" Is a leaf, found (k,v)=(%p, 0x%x), cep="cep_fmt_str_nl,
                     lub_key, lub_version, lub_cvt.cep.ext_id,
                     cep2str(lub_cvt.cep));
-            if(c_bvec->c_bio->get->is_reducing_counter)
-            {
-                //error!
-            }
-        }
-        else if (CVT_COUNTER_SET(lub_cvt)) /* counter checks must happen before inline checks
-                                              because counters are inlines */
-        {
-            castle_printk(LOG_DEVEL, "%s::Is a leaf, found (k,v)=(%p, 0x%x), counter_SET\n",
-                    __FUNCTION__, lub_key, lub_version);
-            if(c_bvec->c_bio->get->is_reducing_counter)
-            {
-                castle_printk(LOG_WARN, "%s::reduction not yet implemented\n",
-                        __FUNCTION__);
-                //perform reduction with c_bvec->c_bio->get->counter_accum
-                //save reduced value in place
-            }
-        }
-        else if (CVT_COUNTER_ADD(lub_cvt))
-        {
-            if(c_bvec->c_bio->get->is_reducing_counter)
-            {
-                castle_printk(LOG_WARN, "%s::reduction not yet implemented\n",
-                        __FUNCTION__);
-                //perform reduction with c_bvec->c_bio->get->counter_accum
-            }
-            else
-            {
-                /* A get has arrived here at a counter_ADD, and no counter_ADD was processed
-                   by this get op so far, which MUST mean this is the most recent entry for this
-                   kv. This means we will start traversing trees looking
-                   for other counter_ADDs, terminating on a non-counter_ADD type: if it's a
-                   counter_SET then we have our counter value, if it's something else it's an
-                   error - but either way, we would like to update this cvt so that future GET
-                   ops on this counter will terminate earlier.
-
-                   Therefore, we would like to hold a pointer of some sort to this cvt, so that
-                   we can revisit it later once the reductions terminate at a non-counter_ADD.
-                   This implies taking a reference to the tree and the node. What about locking?
-
-                   We could take a writelock. That would mean all ops on the node would block
-                   (including merges, other get ops, range queries etc). We could readlock.
-                   The danger there is we could update the entry on a tree being merged, where
-                   the iterator on that tree has already moved beyond that entry, so the output
-                   tree has the stale state. This sounds undesirable, but is actually tolerable;
-                   correctness is preserved, it's only a performance-enhancing update that's
-                   lost. That should be fine... right?
-
-                   Then again, maybe we don't want to perform this optimization at all because
-                   the consequence of doing this is, our RO tree is no longer RO.
-                */
-            }
-            c_bvec->c_bio->get->is_reducing_counter=1;
-            castle_printk(LOG_DEVEL, "%s::Is a leaf, found (k,v)=(%p, 0x%x), counter_ADD\n",
-                    __FUNCTION__, lub_key, lub_version);
-            castle_printk(LOG_WARN, "%s::search continuation not implemented\n",
-                    __FUNCTION__);
-            //look in next tree
-        }
         else if (CVT_INLINE(lub_cvt))
-        {
             debug(" Is a leaf, found (k,v)=(%p, 0x%x), inline value\n",
                     lub_key, lub_version);
-            if(c_bvec->c_bio->get->is_reducing_counter)
-            {
-                //error!
-            }
-        }
         else if (CVT_TOMBSTONE(lub_cvt))
             debug(" Is a leaf, found (k,v)=(%p, 0x%x), tomb stone\n",
                     lub_key, lub_version);
