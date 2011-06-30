@@ -8405,6 +8405,9 @@ static void castle_da_ct_read_next(c_bvec_t *c_bvec,
     callback = c_bvec->orig_complete;
 
     next_ct = castle_da_ct_next(ct);
+    /* Put the previous tree, now that we know we've got a ref to the next. */
+    castle_ct_put(ct, 0);
+
     /* No more trees left. Callback with invalid cvt. */
     if(!next_ct)
     {
@@ -8413,8 +8416,6 @@ static void castle_da_ct_read_next(c_bvec_t *c_bvec,
         return;
     }
 
-    /* Put the previous tree, now that we know we've got a ref to the next. */
-    castle_ct_put(ct, 0);
     c_bvec->tree = next_ct;
     debug_verbose("Scheduling btree read in %s tree: %d.\n",
             ct->dynamic ? "dynamic" : "static", ct->seq);
