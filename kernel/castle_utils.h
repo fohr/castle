@@ -313,7 +313,10 @@ void castle_printk(c_printk_level_t level, const char *fmt, ...);
 int castle_printk_init(void);
 void castle_printk_fini(void);
 
-int         castle_counter_one_reduce(c_val_tup_t *accumulator, c_val_tup_t delta_cvt);
+void        castle_counter_accumulating_reduce(c_val_tup_t *accumulator,
+                                               c_val_tup_t delta_cvt,
+                                               int delta_ancestoral);
+int         castle_counter_simple_reduce(c_val_tup_t *accumulator, c_val_tup_t delta_cvt);
 
 inline void list_swap(struct list_head *t1, struct list_head *t2);
 void        list_sort(struct list_head *list,

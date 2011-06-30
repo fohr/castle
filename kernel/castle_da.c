@@ -937,6 +937,8 @@ static void castle_ct_modlist_iter_fill(c_modlist_iter_t *iter)
                 *((uint32_t *)key));
         debug("Inserting into the node=%d, under idx=%d\n", node_idx, node_offset);
         BUG_ON(CVT_LEAF_PTR(cvt));
+        if(CVT_ACCUM_COUNTER(cvt))
+            CVT_COUNTER_ACCUM_NV_TO_LOCAL(cvt, cvt);
 
         /* Advance to a new node if the immutable iterator has moved on.  This
          * is handled via the immutable iterator callback.  We rely on source
@@ -1506,7 +1508,7 @@ static c_val_tup_t castle_ct_merged_iter_counter_reduce(struct component_iterato
     CVT_COUNTER_LOCAL_ADD_SET(accumulator, 0);
 
     /* Deal with the list head. */
-    if(castle_counter_one_reduce(&accumulator, iter->cached_entry.cvt))
+    if(castle_counter_simple_reduce(&accumulator, iter->cached_entry.cvt))
         return accumulator;
 
     /* If the list same_kv list is emtpy, return too. */
@@ -1550,7 +1552,7 @@ static c_val_tup_t castle_ct_merged_iter_counter_reduce(struct component_iterato
     do {
         iter = rb_entry(rb_entry, struct component_iterator, rb_node);
         /* Continue iterating until a terminating cvt (e.g. a counter set) is found. */
-        if(castle_counter_one_reduce(&accumulator, iter->cached_entry.cvt))
+        if(castle_counter_simple_reduce(&accumulator, iter->cached_entry.cvt))
             return accumulator;
     } while((rb_entry = rb_next(&iter->rb_node)));
 
@@ -8446,7 +8448,7 @@ static void castle_da_ct_read_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cv
     BUG_ON(atomic_read(&c_bvec->reserv_nodes));
 
     /* Deal with counter adds first (other component trees may have to be looked at). */
-    if(!err && (CVT_COUNTER_ADD(cvt) || CVT_COUNTER_LOCAL_ADD(cvt)))
+    if(!err && CVT_ADD_V_COUNTER(cvt))
     {
         /* Callback (this should perform counter accumulation). */
         callback(c_bvec, err, cvt);

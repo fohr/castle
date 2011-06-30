@@ -4446,6 +4446,8 @@ void castle_btree_rq_enum_next(c_rq_enum_t *rq_enum,
     cons_idx_prod_idx_compare(rq_enum);
     btree->entry_get(rq_enum->cons_buf->node, rq_enum->cons_idx, key_p, version_p,
                      cvt_p);
+    if(cvt_p && CVT_ACCUM_COUNTER(*cvt_p))
+        CVT_COUNTER_ACCUM_V_TO_LOCAL(*cvt_p, *cvt_p);
     rq_enum->last_key = *key_p;
     rq_enum->cons_idx++;
     if (rq_enum->cons_buf != rq_enum->prod_buf &&

@@ -12,7 +12,84 @@
 struct castle_printk_buffer     printk_buf;
 struct castle_printk_state     *castle_printk_states;
 
-int castle_counter_one_reduce(c_val_tup_t *accumulator, c_val_tup_t delta_cvt)
+static inline uint8_t castle_counter_accumulating_type_get(int counter1_set, int counter2_set)
+{
+    if(counter1_set && counter2_set)
+        return CVT_TYPE_COUNTER_ACCUM_SET_SET;
+
+    if(!counter1_set && counter2_set)
+        return CVT_TYPE_COUNTER_ACCUM_ADD_SET;
+
+    if(!counter1_set && !counter2_set)
+        return CVT_TYPE_COUNTER_ACCUM_ADD_ADD;
+
+    BUG();
+}
+
+void castle_counter_accumulating_reduce(c_val_tup_t *accumulator,
+                                        c_val_tup_t delta_cvt,
+                                        int delta_ancestoral)
+{
+    int64_t delta_counter1, delta_counter2, accumulator_counter1, accumulator_counter2;
+    int counter1_set, counter2_set;
+
+    /* Accumulator must be an accumulating counter. */
+    BUG_ON(!CVT_ACCUM_COUNTER(*accumulator));
+    /* If delta is a counter it must be an accumulating counter. */
+    BUG_ON(CVT_ANY_COUNTER(delta_cvt) && !CVT_ACCUM_COUNTER(*accumulator));
+
+    /* Set/set accumulator shouldn't be reduced any more. Also, it shouldn't really be used
+       with this function. Warn. */
+    if(CVT_COUNTER_ACCUM_SET_SET(*accumulator))
+    {
+        castle_printk(LOG_WARN, "SET/SET accumulator used in reductions.\n");
+        return;
+    }
+
+    /* Work out the types of subcounters in the accumulator. */
+    counter1_set = 0;
+    counter2_set = CVT_COUNTER_ACCUM_ADD_SET(*accumulator);
+
+    /* If delta isn't a counter, finish reduction early. */
+    if(!CVT_ANY_COUNTER(delta_cvt))
+    {
+        /* Change the type to SET/SET. */
+        accumulator->type = castle_counter_accumulating_type_get(1, 1);
+        return;
+    }
+
+    /* Proper reduction neccessary. Work out what both of the subcounts of both counters are. */
+    memcpy(&delta_counter1, delta_cvt.val,   8);
+    memcpy(&delta_counter2, delta_cvt.val+8, 8);
+    memcpy(&accumulator_counter1, accumulator->val  , 8);
+    memcpy(&accumulator_counter2, accumulator->val+8, 8);
+
+    /* Merge the first sub-counter only if the delta is precisely the same version. */
+    if(!delta_ancestoral)
+    {
+        /* First counter must be an add. */
+        BUG_ON(counter1_set);
+        /* Accumulate. */
+        accumulator_counter1 += delta_counter1;
+        memcpy(accumulator->val, &accumulator_counter1, 8);
+        /* The first counter inherits the type from the delta counter. */
+        counter1_set = CVT_COUNTER_ACCUM_SET_SET(delta_cvt);
+    }
+    /* Merge the second sub-counter only if the second sub-counter in the accumulator isn't
+       already a set. */
+    if(!counter2_set)
+    {
+        accumulator_counter2 += delta_counter2;
+        memcpy(accumulator->val+8, &accumulator_counter2, 8);
+        /* The second counter becomes a set if the second counter in delta is also a set. */
+        counter2_set = CVT_COUNTER_ACCUM_SET_SET(delta_cvt) ||
+                       CVT_COUNTER_ACCUM_ADD_SET(delta_cvt);
+    }
+    /* Accumulator values have already been updated, update the type. */
+    accumulator->type = castle_counter_accumulating_type_get(counter1_set, counter2_set);
+}
+
+int castle_counter_simple_reduce(c_val_tup_t *accumulator, c_val_tup_t delta_cvt)
 {
     int64_t delta_counter;
 
@@ -23,21 +100,20 @@ int castle_counter_one_reduce(c_val_tup_t *accumulator, c_val_tup_t delta_cvt)
         return 1;
     }
 
-    /* We are not expecting local counters to be used as delta (these are never stored
-       in btrees). Therefore we only expecting set or add by this point. */
-    BUG_ON(!CVT_INLINE_COUNTER(delta_cvt));
+    /* Delta counter shouldn't be an accumulating counter, because we don't know which
+       of the two sub-counters to use. */
+    BUG_ON(CVT_ACCUM_COUNTER(delta_cvt));
 
     /* The value length should be 8 bytes. */
     BUG_ON(delta_cvt.length != 8);
 
     /* Get the counter out of the CVT. */
-    memcpy(&delta_counter, delta_cvt.val, sizeof(delta_counter));
-
+    memcpy(&delta_counter, CVT_COUNTER_TO_VAL_PTR(delta_cvt), 8);
     /* Add it to the accumulator. */
     accumulator->counter += delta_counter;
 
     /* Stop accumulating if we reached a set. */
-    if(CVT_COUNTER_SET(delta_cvt))
+    if(CVT_SET_COUNTER(delta_cvt))
     {
         /* Set the accumulator type to LOCAL_SET. */
         CVT_COUNTER_LOCAL_SET_SET(*accumulator, accumulator->counter);

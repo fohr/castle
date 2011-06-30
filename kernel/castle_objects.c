@@ -930,34 +930,23 @@ static int castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
         atomic64_add(nr_chunks, &c_bvec->tree->large_ext_chk_cnt);
     }
 
-    if(CVT_COUNTER_ADD(replace->cvt))
-        castle_printk(LOG_DEVEL, "%s::got a counter_ADD.\n", __FUNCTION__);
-    if(CVT_COUNTER_SET(replace->cvt))
+    /* @TODO 3 if statements below are for debugging, remove when stable. */
+    if(CVT_COUNTER_ACCUM_SET_SET(replace->cvt))
         castle_printk(LOG_DEVEL, "%s::got a counter_SET.\n", __FUNCTION__);
-
+    if(CVT_COUNTER_ACCUM_ADD_ADD(replace->cvt))
+        castle_printk(LOG_DEVEL, "%s::got a counter_ADD.\n", __FUNCTION__);
     if( CVT_COUNTER_ADD(replace->cvt) || CVT_COUNTER_SET(replace->cvt))
         BUG_ON(!CVT_INLINE(replace->cvt));
 
-    if(CVT_COUNTER_ADD(replace->cvt))
+    /* For counter add operation (which uses ACCUM_ADD_ADD cvt type). Reduce with
+       either the previous entry or ancestral entry if either exists. */
+    if(CVT_COUNTER_ACCUM_ADD_ADD(replace->cvt))
     {
-        if ( (CVT_COUNTER_ADD(prev_cvt)) || (CVT_COUNTER_SET(prev_cvt)) )
-        {
-            int64_t prev_x, new_x, accum_x;
-            castle_printk(LOG_DEVEL, "%s::reducing COUNTER_ADD.\n", __FUNCTION__);
-
-            //TODO@tr this is horrible, fix it! (and allow 512b counter values)
-            memcpy(&prev_x, prev_cvt.val, sizeof(prev_x));
-            memcpy(&new_x, replace->cvt.val, sizeof(new_x));
-
-            accum_x = prev_x + new_x;
-            memcpy(replace->cvt.val, &accum_x, sizeof(accum_x));
-
-            if (CVT_COUNTER_SET(prev_cvt))
-            {
-                castle_printk(LOG_DEVEL, "%s::converting to COUNTER_SET.\n", __FUNCTION__);
-                CVT_COUNTER_SET_SET(replace->cvt, replace->cvt.length, replace->cvt.val);
-            }
-        }
+        if(!CVT_INVALID(prev_cvt))
+            castle_counter_accumulating_reduce(&replace->cvt, prev_cvt, 0);
+        else
+        if(!CVT_INVALID(ancestral_cvt))
+            castle_counter_accumulating_reduce(&replace->cvt, ancestral_cvt, 1);
     }
 
     /* Free the space occupied by large object, if prev_cvt points to a large object. */
@@ -1005,9 +994,12 @@ static int castle_object_replace_space_reserve(struct castle_object_replace *rep
     if(value_len <= MAX_INLINE_VAL_SIZE)
     {
         void *value;
+        int counter;
 
-        /* Allocate memory. */
-        value = castle_malloc(value_len, GFP_KERNEL);
+        counter = (replace->counter_type > 0);
+        BUG_ON(counter && (value_len != 8));
+        /* Allocate memory. 16 bytes for accumulating counter. */
+        value = castle_malloc(counter ? 16 : value_len, GFP_KERNEL);
         if(!value)
             return -ENOMEM;
 
@@ -1015,16 +1007,16 @@ static int castle_object_replace_space_reserve(struct castle_object_replace *rep
         if(unlikely(replace->counter_type == 1))
         {
             castle_printk(LOG_DEVEL, "%s::counter_SET.\n", __FUNCTION__);
-            CVT_COUNTER_SET_SET(replace->cvt, value_len, value);
-            //TODO@tr get rid of these once CVT macros stabilise
-            BUG_ON(!CVT_COUNTER_SET(replace->cvt));
+            CVT_COUNTER_ACCUM_SET_SET_SET(replace->cvt, 16, value);
+            /* @TODO remove when CVTs stabilise. */
+            BUG_ON(!CVT_COUNTER_ACCUM_SET_SET(replace->cvt));
             BUG_ON(!CVT_INLINE(replace->cvt));
         }
         else if(replace->counter_type == 2)
         {
             castle_printk(LOG_DEVEL, "%s::counter_ADD.\n", __FUNCTION__);
-            CVT_COUNTER_ADD_SET(replace->cvt, value_len, value);
-            BUG_ON(!CVT_COUNTER_ADD(replace->cvt));
+            CVT_COUNTER_ACCUM_ADD_ADD_SET(replace->cvt, 16, value);
+            BUG_ON(!CVT_COUNTER_ACCUM_ADD_ADD(replace->cvt));
             BUG_ON(!CVT_INLINE(replace->cvt));
         }
         else
@@ -1032,6 +1024,10 @@ static int castle_object_replace_space_reserve(struct castle_object_replace *rep
         /* Get the data copied into the cvt. It should all be available in one shot. */
         BUG_ON(replace->data_length_get(replace) < value_len);
         replace->data_copy(replace, value, value_len, 0 /* not partial */);
+        /* If we are handling a counter, accumulating sub-counter needs to be the same
+           as the non-accumulating sub-counter. */
+        if(counter)
+            memcpy(value + 8, value, 8);
 
         return 0;
     }
@@ -1567,7 +1563,11 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
         if(CVT_INVALID(get->cvt))
             CVT_COUNTER_LOCAL_ADD_SET(get->cvt, 0);
 
-        finished = castle_counter_one_reduce(&get->cvt, cvt);
+        /* Convert accumulating counter to local counter. */
+        if(CVT_ACCUM_COUNTER(cvt))
+            CVT_COUNTER_ACCUM_V_TO_LOCAL(cvt, cvt);
+
+        finished = castle_counter_simple_reduce(&get->cvt, cvt);
         /* Return early if we have to keep accumulating. */
         if(!finished)
             return;
