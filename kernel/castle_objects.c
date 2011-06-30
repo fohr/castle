@@ -901,6 +901,7 @@ static void castle_object_replace_on_disk_start(struct castle_object_replace *re
  */
 static int castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
                                          c_val_tup_t prev_cvt,
+                                         c_val_tup_t ancestral_cvt,
                                          c_val_tup_t *cvt)
 {
     struct castle_object_replace *replace = c_bvec->c_bio->replace;

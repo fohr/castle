@@ -2300,7 +2300,7 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
     void                        *lub_key, *key = c_bvec->key;
     c_ver_t                      lub_version, version = c_bvec->version;
     cv_nonatomic_stats_t stats = { 0, 0, 0, 0, 0 };
-    int                          lub_idx, insert_idx, ret;
+    int                          lub_idx, insert_idx, ret, lub_key_different;
     c_val_tup_t                  lub_cvt = INVAL_VAL_TUP;
     c_val_tup_t                  new_cvt = INVAL_VAL_TUP;
 
@@ -2357,11 +2357,15 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
     BUG_ON(!node->is_leaf);
 
     /* Insert an entry if LUB doesn't match our (key,version) precisely. */
+    lub_key_different = 1;
     if((lub_idx < 0) ||
-       (btree->key_compare(lub_key, key) != 0) ||
+       (lub_key_different = btree->key_compare(lub_key, key)) ||
        (lub_version != version))
     {
-        if ((ret = c_bvec->cvt_get(c_bvec, INVAL_VAL_TUP, &new_cvt)))
+        if ((ret = c_bvec->cvt_get(c_bvec,
+                                   INVAL_VAL_TUP,
+                                   lub_key_different ? INVAL_VAL_TUP : lub_cvt,
+                                   &new_cvt)))
         {
             /* End the IO in failure */
             castle_btree_io_end(c_bvec, INVAL_VAL_TUP, ret);
@@ -2382,8 +2386,6 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
             stats.keys++;
         castle_version_live_stats_adjust(version, stats);
 
-        /* @TODO: should memset the page to zero (because we return zeros on reads)
-                  this can be done here, or beter still in _main.c, in data_copy */
         debug("%s::Need to insert (%p, 0x%x) into node (used: 0x%x, leaf=%d).\n",
                 __FUNCTION__, key, version, node->used, node->is_leaf);
         BUG_ON(btree->key_compare(c_bvec->parent_key, btree->inv_key) == 0);
@@ -2404,7 +2406,7 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
     BUG_ON(CVT_LEAF_PTR(lub_cvt));
 
     /* NOP for block devices */
-    if ((ret = c_bvec->cvt_get(c_bvec, lub_cvt, &new_cvt)))
+    if ((ret = c_bvec->cvt_get(c_bvec, lub_cvt, INVAL_VAL_TUP, &new_cvt)))
     {
        /* End the IO in failure */
        castle_btree_io_end(c_bvec, INVAL_VAL_TUP, ret);

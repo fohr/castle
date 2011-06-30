@@ -1844,6 +1844,7 @@ static int castle_bio_data_ref_get(c_bvec_t    *c_bvec,
 
 static int castle_bio_data_cvt_get(c_bvec_t    *c_bvec,
                                    c_val_tup_t  prev_cvt,
+                                   c_val_tup_t  ancestral_cvt,
                                    c_val_tup_t *cvt)
 {
     c_ext_pos_t cep;
