@@ -1209,7 +1209,7 @@ static void castle_vlba_tree_entry_replace(struct castle_btree_node *node,
     BUG_ON(((uint8_t *)entry) >= EOF_VLBA_NODE(node));
 
     new_entry.version    = version;
-    new_entry.type       = cvt.type;
+    new_entry.type       = castle_vlba_tree_cvt_type_to_entry_type(cvt);
     new_entry.val_len    = cvt.length;
     new_entry.key.length = key->length;
     new_length = VLBA_ENTRY_LENGTH((&new_entry));
@@ -1225,7 +1225,9 @@ static void castle_vlba_tree_entry_replace(struct castle_btree_node *node,
         if (VLBA_TREE_ENTRY_IS_INLINE(entry))
         {
             BUG_ON(entry->val_len > MAX_INLINE_VAL_SIZE);
-            memcpy(VLBA_ENTRY_VAL_PTR(entry), cvt.val, cvt.length);
+            memcpy(VLBA_ENTRY_VAL_PTR(entry),
+                   CVT_LOCAL_COUNTER(cvt) ? (void *)&cvt.counter : cvt.val,
+                   cvt.length);
         }
         else
             entry->cep      = cvt.cep;
@@ -4090,6 +4092,91 @@ static int castle_rq_enum_iter_node_start(c_iter_t *c_iter)
         return 0;
 }
 
+static void castle_rq_enum_iter_counter_reset(c_rq_enum_t *rq_enum)
+{
+    CVT_INVALID_SET(rq_enum->counter_accumulator);
+    rq_enum->counter_key    = NULL;
+    rq_enum->counter_buf    = NULL;
+    rq_enum->counter_idx    = -1;
+}
+
+static void castle_rq_enum_iter_counter_accum_fini(c_rq_enum_t *rq_enum)
+{
+    struct castle_btree_type *btree;
+    struct castle_btree_node *node;
+
+    /* Don't terminate if there isn't an accumulation going on. */
+    if(CVT_INVALID(rq_enum->counter_accumulator))
+        return;
+
+    /* Otherwise, write out the entry into the right place in the buffer. */
+    node = rq_enum->counter_buf->node;
+    btree = castle_btree_type_get(node->type);
+
+    /* Use the saved key pointer (should match cur_key), version after accumulation
+       is no longer meaningful, therefore use the iterator version. */
+    btree->entry_replace(node,
+                         rq_enum->counter_idx,
+                         rq_enum->counter_key,
+                         rq_enum->version,
+                         rq_enum->counter_accumulator);
+
+    /* Reset all the variables. */
+    castle_rq_enum_iter_counter_reset(rq_enum);
+}
+
+static void castle_rq_enum_iter_counter_accum_continue(c_rq_enum_t *rq_enum,
+                                                       c_val_tup_t cvt)
+{
+    int finish;
+
+    /* Don't accumulate if accumulator hasn't been prepared. */
+    if(CVT_INVALID(rq_enum->counter_accumulator))
+        return;
+
+    /* Accumulator must be a local add counter. Otherwise the accumulation should have
+       finished by now, or shouldn't have started at all. */
+    BUG_ON(!CVT_COUNTER_LOCAL_ADD(rq_enum->counter_accumulator));
+
+    /* Deal with accumulating counters (they already have all the data in them). */
+    finish = 0;
+    if(CVT_ACCUM_COUNTER(cvt))
+    {
+        CVT_COUNTER_ACCUM_V_TO_LOCAL(cvt, cvt);
+        finish = 1;
+    }
+
+    /* Accumulate. And terminate possibly terminate. */
+    if(castle_counter_simple_reduce(&rq_enum->counter_accumulator, cvt) || finish)
+        castle_rq_enum_iter_counter_accum_fini(rq_enum);
+}
+
+static void castle_rq_enum_iter_counter_accum_init(c_rq_enum_t *rq_enum, c_val_tup_t cvt)
+{
+    /* Don't init if we aren't looking at a counter. */
+    if(!CVT_ANY_COUNTER(cvt))
+        return;
+
+    /* There shouldn't be an accumulation going on. */
+    BUG_ON(!CVT_INVALID(rq_enum->counter_accumulator));
+    BUG_ON(rq_enum->counter_key != NULL);
+    BUG_ON(rq_enum->counter_buf != NULL);
+    BUG_ON(rq_enum->counter_idx >= 0);
+
+    /* Save the key. */
+    rq_enum->counter_key = rq_enum->cur_key;
+
+    /* Save the position of the counter (node & index). */
+    rq_enum->counter_buf = rq_enum->prod_buf;
+    rq_enum->counter_idx = rq_enum->prod_idx;
+
+    /* Initialise the accumulator. */
+    CVT_COUNTER_LOCAL_ADD_SET(rq_enum->counter_accumulator, 0);
+
+    /* Deal with the current cvt. */
+    castle_rq_enum_iter_counter_accum_continue(rq_enum, cvt);
+}
+
 /**
  * @return  0 => Iterator should continue
  * @return >0 => Iterator should terminate
@@ -4146,11 +4233,15 @@ static int castle_rq_enum_iter_each(c_iter_t *c_iter,
     }
 
     /* If curr_key is set, figure out whether the new key is the same, or different. */
+    cmp = 1;    /* Just to make the compiler happy. */
     if (rq_enum->cur_key)
         cmp = btree->key_compare(rq_enum->cur_key, key);
 
+    /* Check whether we moving on to a new key. */
     if (!rq_enum->cur_key || cmp)
     {
+        /* If there is a counter accumulation happening, terminate it. */
+        castle_rq_enum_iter_counter_accum_fini(rq_enum);
         debug("Adding entry to node buffer: %p\n", rq_enum->prod_buf);
         /* Keys should not go backwards. */
         if (rq_enum->cur_key && (cmp > 0))
@@ -4160,14 +4251,16 @@ static int castle_rq_enum_iter_each(c_iter_t *c_iter,
         }
         BUG_ON(CVT_LEAF_PTR(cvt));
         btree->entry_add(rq_enum->prod_buf->node, rq_enum->prod_idx, key, version, cvt);
-        btree->entry_get(rq_enum->prod_buf->node, rq_enum->prod_idx, &rq_enum->cur_key, NULL,
-                         NULL);
+        btree->entry_get(rq_enum->prod_buf->node, rq_enum->prod_idx, &rq_enum->cur_key, NULL, NULL);
+        castle_rq_enum_iter_counter_accum_init(rq_enum, cvt);
         rq_enum->prod_idx++;
 
         if (unlikely(btree->key_compare(key, rq_enum->end_key) > 0))
             return 1; /* Iterator to terminate */
     }
-    /* else key same as cur_key */
+    else
+        /* Key is the same as the previous one, but we may be accumulating a counter. */
+        castle_rq_enum_iter_counter_accum_continue(rq_enum, cvt);
 
     return 0; /* Iterator to continue */
 }
@@ -4181,6 +4274,10 @@ static void castle_rq_enum_iter_node_end(c_iter_t *c_iter)
     rq_debug("%s:%p\n", __FUNCTION__, rq_enum);
     /* Check consumer idx for 0 */
     BUG_ON(rq_enum->cons_idx != 0);
+
+    /* There may be an ongoing counter accumulation. We assume that in never needs
+       to span multiple nodes => terminate it now. */
+    castle_rq_enum_iter_counter_accum_fini(rq_enum);
 
     /* If producer idx also is 0, then schedule iterator again to get entries
      * and return */
@@ -4286,6 +4383,7 @@ void castle_btree_rq_enum_init(c_rq_enum_t *rq_enum, c_ver_t version,
     rq_enum->start_key      = start_key;
     rq_enum->end_key        = end_key;
     rq_enum->in_range       = 0;
+    castle_rq_enum_iter_counter_reset(rq_enum);
 
     iter = &rq_enum->iterator;
     iter->tree       = rq_enum->tree;
@@ -4446,8 +4544,6 @@ void castle_btree_rq_enum_next(c_rq_enum_t *rq_enum,
     cons_idx_prod_idx_compare(rq_enum);
     btree->entry_get(rq_enum->cons_buf->node, rq_enum->cons_idx, key_p, version_p,
                      cvt_p);
-    if(cvt_p && CVT_ACCUM_COUNTER(*cvt_p))
-        CVT_COUNTER_ACCUM_V_TO_LOCAL(*cvt_p, *cvt_p);
     rq_enum->last_key = *key_p;
     rq_enum->cons_idx++;
     if (rq_enum->cons_buf != rq_enum->prod_buf &&

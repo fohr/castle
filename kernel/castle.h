@@ -1379,6 +1379,12 @@ typedef struct castle_rq_enumerator {
     void                         *end_key;
     void                         *last_key;  /* Last key returned by next(). */
     int                           in_range;
+
+    /* Variables used for counter accumulation. */
+    c_val_tup_t                   counter_accumulator;
+    void                         *counter_key;
+    struct node_buf_t            *counter_buf;
+    int                           counter_idx;
 } c_rq_enum_t;
 
 struct castle_merged_iterator;
