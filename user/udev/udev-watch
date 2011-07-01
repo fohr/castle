@@ -33,26 +33,27 @@ function get_dev {
     find_dev $MAJ $MIN
 }
 
+COMMAND_STR="unknown CMD=$CMD, RET=$RET, ARG1=$ARG1, ARG2=$ARG2, ARG3=$ARG3, ARG4=$ARG4"
 case $CMD in
 1)
-    get_slave $ARG1
-    COMMAND_STR="claim $DEV";;
+    #get_slave $ARG1
+    COMMAND_STR="claim $ARG1";;
 2)
-    get_slave $ARG1
-    COMMAND_STR="release $DEV";;
+    #get_slave $ARG1
+    COMMAND_STR="release $ARG1";;
 3)
-    get_dev $ARG2
-    COMMAND_STR="attach $DEV -> $ARG1";;
+    #get_dev $ARG2
+    COMMAND_STR="attach $ARG2 -> $ARG1";;
 4)
-    get_dev $ARG1
-    COMMAND_STR="detach $DEV";;
+    #get_dev $ARG1
+    COMMAND_STR="detach $ARG1";;
 5)
     COMMAND_STR="create $ARG1";;
 6)
     COMMAND_STR="clone $ARG1";;
 7)
-    get_dev $ARG2
-    COMMAND_STR="snapshot $DEV -> $ARG1";;
+    #get_dev $ARG2
+    COMMAND_STR="snapshot $ARG2 -> $ARG1";;
 8)
     COMMAND_STR="init";;
 9)
@@ -63,6 +64,10 @@ case $CMD in
     COMMAND_STR="transfer_create $ARG1";;
 12)
     COMMAND_STR="transfer_cancel $ARG1";;
+13)
+    COMMAND_STR="collection_attach $ARG1";;
+14)
+    COMMAND_STR="collection_dettach $ARG1";;
 esac
 
 echo $COMMAND_STR >> /tmp/events
