@@ -2907,7 +2907,7 @@ static void __castle_btree_iter_release(c_iter_t *c_iter)
             iter_debug("===> Trying to unlock indirect node i=%d\n", i);
             if(indirect_node(i)->c2b)
             {
-                write_unlock_c2b(indirect_node(i)->c2b);
+                read_unlock_c2b(indirect_node(i)->c2b);
                 put_c2b(indirect_node(i)->c2b);
                 indirect_node(i)->c2b = NULL;
             }
@@ -2917,7 +2917,7 @@ static void __castle_btree_iter_release(c_iter_t *c_iter)
     }
     iter_debug("%p unlocks leaf (0x%x, 0x%x)\n",
         c_iter, leaf->cep.ext_id, leaf->cep.offset);
-    write_unlock_c2b(leaf);
+    read_unlock_c2b(leaf);
 }
 
 void castle_btree_iter_continue(c_iter_t *c_iter)
@@ -3046,9 +3046,26 @@ static void castle_btree_iter_leaf_ptrs_lock(c_iter_t *c_iter)
         }
         BUG_ON(c_iter->depth + 1 != c_iter->btree_levels);
         c2b = castle_cache_block_get(cep, btree->node_size(c_iter->tree, 0));
-        write_lock_c2b(c2b);
-        if(!c2b_uptodate(c2b))
-            BUG_ON(submit_c2b_sync(READ, c2b));
+        /* If the c2b is up to date within the cache, take a read lock.
+         * Otherwise get a write lock and retest, somebody could have completed
+         * IO while we waited; if so, downgrade to a read lock. */
+        if (c2b_uptodate(c2b))
+        {
+            read_lock_c2b(c2b);
+        }
+        else
+        {
+            write_lock_c2b(c2b);
+            if(c2b_uptodate(c2b))
+                /* Somebody else did IO for us. */
+                downgrade_write_c2b(c2b);
+            else
+            {
+                /* We need to do IO. */
+                BUG_ON(submit_c2b_sync(READ, c2b));
+                downgrade_write_c2b(c2b);
+            }
+        }
         indirect_node(i)->c2b = c2b;
     }
 
@@ -3144,7 +3161,8 @@ void castle_iter_parent_key_set(c_iter_t *iter, void *key)
 {
     struct castle_btree_type *btree = castle_btree_type_get(iter->tree->btree_type);
 
-    if (iter->parent_key)   btree->key_dealloc(iter->parent_key);
+    if (iter->parent_key)
+        btree->key_dealloc(iter->parent_key);
     iter->parent_key = btree->key_duplicate(key);
 }
 
@@ -3279,10 +3297,9 @@ static void castle_btree_iter_all_leaf_process(c_iter_t *c_iter)
        castle_btree_iter_continue(c_iter);
 }
 
-static void   castle_btree_iter_path_traverse(c_iter_t *c_iter, c_ext_pos_t  node_cep);
-static void __castle_btree_iter_path_traverse(struct work_struct *work)
+static void   castle_btree_iter_path_traverse(c_iter_t *c_iter, c_ext_pos_t node_cep);
+static void __castle_btree_iter_path_traverse(c_iter_t *c_iter)
 {
-    c_iter_t *c_iter = container_of(work, c_iter_t, work);
     struct castle_btree_node *node;
     struct castle_btree_type *btree = castle_btree_type_get(c_iter->tree->btree_type);
     c_ext_pos_t  entry_cep, node_cep;
@@ -3291,7 +3308,7 @@ static void __castle_btree_iter_path_traverse(struct work_struct *work)
     c_val_tup_t cvt;
 
     /* Return early on error */
-    if(c_iter->err)
+    if (c_iter->err)
     {
         /* Unlock the top of the stack, this is normally done by
            castle_btree_iter_continue. This will not happen now, because
@@ -3300,7 +3317,7 @@ static void __castle_btree_iter_path_traverse(struct work_struct *work)
                 c_iter,
                 c_iter->path[c_iter->depth]->cep.ext_id,
                 c_iter->path[c_iter->depth]->cep.offset);
-        write_unlock_c2b(c_iter->path[c_iter->depth]);
+        read_unlock_c2b(c_iter->path[c_iter->depth]);
         castle_btree_iter_end(c_iter, c_iter->err);
         return;
     }
@@ -3342,7 +3359,7 @@ static void __castle_btree_iter_path_traverse(struct work_struct *work)
                         c_iter,
                         node_cep.ext_id,
                         node_cep.offset);
-                write_unlock_c2b(c_iter->path[c_iter->depth]);
+                read_unlock_c2b(c_iter->path[c_iter->depth]);
                 castle_btree_iter_start(c_iter);
                 return;
             }
@@ -3399,13 +3416,34 @@ static void __castle_btree_iter_path_traverse(struct work_struct *work)
     castle_btree_iter_path_traverse(c_iter, entry_cep);
 }
 
-static void _castle_btree_iter_path_traverse(c2_block_t *c2b)
+/**
+ * @also castle_btree_iter_path_traverse_endio()
+ */
+static void _castle_btree_iter_path_traverse(struct work_struct *work)
+{
+    c_iter_t *c_iter = container_of(work, c_iter_t, work);
+
+    __castle_btree_iter_path_traverse(c_iter);
+}
+
+/**
+ * IO completion callback handler for castle_btree_iter_path_traverse().
+ *
+ * On successful IO:
+ * - Downgrades c2b writelock to readlock
+ * - Pushes c2b node onto the path stack
+ * - Continues iterator via a workqueue
+ *
+ * @also castle_btree_iter_path_traverse()
+ * @also _castle_btree_iter_path_traverse()
+ */
+static void castle_btree_iter_path_traverse_endio(c2_block_t *c2b)
 {
     c_iter_t *c_iter = c2b->private;
 
     iter_debug("Finished reading btree node.\n");
 
-    if(!c2b_uptodate(c2b))
+    if (!c2b_uptodate(c2b))
     {
         iter_debug("Error reading the btree node. Cancelling iterator.\n");
         iter_debug("%p unlocking cep: (0x%x, 0x%x).\n", c_iter, c2b->cep.ext_id, c2b->cep.offset);
@@ -3413,19 +3451,24 @@ static void _castle_btree_iter_path_traverse(c2_block_t *c2b)
         put_c2b(c2b);
         /* Save the error. This will be handled properly by __path_traverse */
         c_iter->err = -EIO;
-    } else
+    }
+    else
     {
+        downgrade_write_c2b(c2b);
+
         /* Push the node onto the path 'stack' */
         BUG_ON((c_iter->path[c_iter->depth] != NULL) && (c_iter->path[c_iter->depth] != c2b));
         c_iter->path[c_iter->depth] = c2b;
     }
 
-    /* Put on to the workqueue. Choose a workqueue which corresponds
-       to how deep we are in the tree.
-       A single queue cannot be used, because a request blocked on
-       lock_c2b() would block the entire queue (=> deadlock).
-       NOTE: The +1 is required to match the wqs we are using in normal btree walks. */
-    CASTLE_INIT_WORK(&c_iter->work, __castle_btree_iter_path_traverse);
+    /* Put on to the workqueue.  Choose a workqueue which corresponds to how
+     * deep we are in the btree.
+     * A single queue cannot be used because a request blocked on lock_c2b()
+     * would block the entire queue (=> deadlock).
+     *
+     * NOTE: The +1 is required to match the workqueues we are using in normal
+     *       btree walks. */
+    CASTLE_INIT_WORK(&c_iter->work, _castle_btree_iter_path_traverse);
     queue_work(castle_wqs[c_iter->depth+MAX_BTREE_DEPTH], &c_iter->work);
 }
 
@@ -3433,6 +3476,7 @@ static void castle_btree_iter_path_traverse(c_iter_t *c_iter, c_ext_pos_t node_c
 {
     struct castle_btree_type *btree = castle_btree_type_get(c_iter->tree->btree_type);
     c2_block_t *c2b = NULL;
+    int write_locked = 0;
 
     iter_debug("Starting the traversal: depth=%d, node_cep=(0x%x, 0x%x)\n",
                 c_iter->depth, node_cep.ext_id, node_cep.offset);
@@ -3458,7 +3502,23 @@ static void castle_btree_iter_path_traverse(c_iter_t *c_iter, c_ext_pos_t node_c
     iter_debug("%p locking cep=(0x%x, 0x%x)\n",
         c_iter, c2b->cep.ext_id, c2b->cep.offset);
 
-    write_lock_c2b(c2b);
+    /* If the c2b is up to date within the cache, take a read lock.
+     * Otherwise get a write lock and retest, somebody could have completed IO
+     * while we waited; if so, downgrade to a read lock. */
+    if (c2b_uptodate(c2b))
+    {
+        read_lock_c2b(c2b);
+    }
+    else
+    {
+        write_lock_c2b(c2b);
+        if (c2b_uptodate(c2b))
+            /* Somebody else did IO for us. */
+            downgrade_write_c2b(c2b);
+        else
+            /* We need to schedule IO. */
+            write_locked = 1;
+    }
 
     /* Unlock the tree if we've just locked the root */
     if(c_iter->depth == 0)
@@ -3473,25 +3533,28 @@ static void castle_btree_iter_path_traverse(c_iter_t *c_iter, c_ext_pos_t node_c
         c2_block_t *prev_c2b = c_iter->path[c_iter->depth - 1];
         iter_debug("%p unlocking cep=(0x%x, 0x%x)\n",
             c_iter, prev_c2b->cep.ext_id, prev_c2b->cep.offset);
-        write_unlock_c2b(prev_c2b);
-        /* NOTE: not putting the c2b. Might be useful if we have to walk the tree again */
+        read_unlock_c2b(prev_c2b);
+        /* Don't put_c2b(), handy if we need to rewalk the tree. */
     }
 
-    /* Read from disk where nessecary */
-    c2b->private = c_iter;
-    if(!c2b_uptodate(c2b))
+    /* Continue the traverse, scheduling and waiting for IO if necessary. */
+    if (write_locked)
     {
         iter_debug("Not uptodate, submitting\n");
 
-        /* If the buffer doesn't contain up to date data, schedule the IO */
-        c2b->end_io = _castle_btree_iter_path_traverse;
+        c2b->end_io = castle_btree_iter_path_traverse_endio;
+        c2b->private = c_iter;
         BUG_ON(submit_c2b(READ, c2b));
     }
     else
     {
         iter_debug("Uptodate, carrying on\n");
-        /* If the buffer is up to date */
-        _castle_btree_iter_path_traverse(c2b);
+
+        /* Push the node onto the path 'stack' */
+        BUG_ON((c_iter->path[c_iter->depth] != NULL) && (c_iter->path[c_iter->depth] != c2b));
+        c_iter->path[c_iter->depth] = c2b;
+
+        __castle_btree_iter_path_traverse(c_iter);
     }
 }
 
@@ -3507,6 +3570,11 @@ static void __castle_btree_iter_start(c_iter_t *c_iter)
      *    - we start again at depth 0 - ie the root is a leaf
      *    - we followed max key to a leaf
      *    - we were cancelled
+     *
+     *    @TODO we can probably bum some cycles here.  we're checking that
+     *    next_key is the invalid key... we must have set this somewhere else
+     *    in the code, so why do the comparison again (every single time we
+     *    skip, continue, etc.)
      */
     if ((c_iter->depth == 0) ||
        ((c_iter->type == C_ITER_MATCHING_VERSIONS) &&
