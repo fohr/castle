@@ -1105,58 +1105,60 @@ struct castle_request_timeline;
 #define CBV_C2B_WRITE_LOCKED          (5)
 
 typedef struct castle_bio_vec {
-    c_bio_t                      *c_bio;        /**< Where this IO originated                   */
+    c_bio_t                        *c_bio;        /**< Where this IO originated                  */
 
-    void                         *key;          /**< Key we want to read                        */
-    c_ver_t                       version;      /**< Version of key we want to read             */
-    int                           cpu;          /**< CPU id for this request                    */
-    int                           cpu_index;    /**< CPU index (for determining correct CT)     */
-    struct castle_component_tree *tree;         /**< CT to search                               */
+    void                           *key;          /**< Key we want to read                       */
+    c_ver_t                         version;      /**< Version of key we want to read            */
+    int                             cpu;          /**< CPU id for this request                   */
+    int                             cpu_index;    /**< CPU index (for determining correct CT)    */
+    struct castle_component_tree   *tree;         /**< CT to search                              */
+    struct castle_component_tree  **trees;        /**< CTs to search                             */
+    int                             nr_trees;     /**< Size of the trees array                   */
 
     /* Btree walk variables. */
-    unsigned long                 flags;        /**< Flags                                      */
-    int                           btree_depth;  /**< How far down the btree we've gone so far   */
-    int                           btree_levels; /**< Levels in the tree (private copy in case
-                                                     someone splits root node while we are
-                                                     lower down in the tree                     */
-    void                         *parent_key;   /**< Key in parent node btree_node is from      */
+    unsigned long                   flags;        /**< Flags                                     */
+    int                             btree_depth;  /**< How far down the btree we've gone so far  */
+    int                             btree_levels; /**< Levels in the tree (private copy in case
+                                                       someone splits root node while we are
+                                                       lower down in the tree                    */
+    void                           *parent_key;   /**< Key in parent node btree_node is from     */
     /* When writing, B-Tree node and its parent have to be locked concurrently. */
-    struct castle_cache_block    *btree_node;
-    struct castle_cache_block    *btree_parent_node;
+    struct castle_cache_block      *btree_node;
+    struct castle_cache_block      *btree_parent_node;
 
     /* Bloom filters. */
-    struct castle_cache_block *bloom_c2b;
+    struct castle_cache_block      *bloom_c2b;
 #ifdef CASTLE_BLOOM_FP_STATS
     int bloom_positive;
 #endif
 
-    struct work_struct               work;      /**< Used to thread this bvec onto a workqueue  */
+    struct work_struct              work;      /**< Used to thread this bvec onto a workqueue    */
     union {
         /* Castle Value Tuple allocation callback for writes */
-        int                        (*cvt_get)    (struct castle_bio_vec *,
-                                                  c_val_tup_t,  /**< CVT being replaced.        */
-                                                  c_val_tup_t,  /**< Ancestral CVT, if there
-                                                                     isn't precise (k,v) match,
-                                                                     and if one exists.         */
-                                                  c_val_tup_t *);
+        int                       (*cvt_get)    (struct castle_bio_vec *,
+                                                 c_val_tup_t,  /**< CVT being replaced.          */
+                                                 c_val_tup_t,  /**< Ancestral CVT, if there
+                                                                    isn't precise (k,v) match,
+                                                                    and if one exists.           */
+                                                 c_val_tup_t *);
         /* Get reference on objects for reads */
-        int                        (*ref_get)    (struct castle_bio_vec *,
-                                                  c_val_tup_t);
+        int                       (*ref_get)    (struct castle_bio_vec *,
+                                                 c_val_tup_t);
     };
     /* Completion callback */
     union {
-        void                       (*queue_complete)  (struct castle_bio_vec *, int);
-        void                       (*submit_complete) (struct castle_bio_vec *, int, c_val_tup_t);
+        void                      (*queue_complete)  (struct castle_bio_vec *, int);
+        void                      (*submit_complete) (struct castle_bio_vec *, int, c_val_tup_t);
     };
-    void                           (*orig_complete)   (struct castle_bio_vec *, int, c_val_tup_t);
-    atomic_t                         reserv_nodes;
-    struct list_head                 io_list;
+    void                          (*orig_complete)   (struct castle_bio_vec *, int, c_val_tup_t);
+    atomic_t                        reserv_nodes;
+    struct list_head                io_list;
 #ifdef CASTLE_DEBUG
-    unsigned long                    state;
-    struct castle_cache_block       *locking;
+    unsigned long                   state;
+    struct castle_cache_block      *locking;
 #endif
 #ifdef CASTLE_PERF_DEBUG
-    struct castle_request_timeline  *timeline;
+    struct castle_request_timeline *timeline;
 #endif
 } c_bvec_t;
 

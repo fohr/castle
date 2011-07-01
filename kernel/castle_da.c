@@ -8121,71 +8121,44 @@ int castle_double_array_make(c_da_t da_id, c_ver_t root_version)
     return 0;
 }
 
-/**
- * Return CT that logically follows passed ct, from the next level, if necessary.
- *
- * @param ct    Current CT to use as basis for finding next CT
- *
- * - Advance to the next level if the current CT has been removed from the DA or
- *   if the current CT is from level 0 (keys are hashed to specific CTs at level
- *   0 so there's no point searching other CTs)
- * - Keep going up the levels until a CT is found (or none)
- *
- * @return  Next CT with a reference held
- * @return  NULL if no more trees
- */
-struct castle_component_tree* castle_da_ct_next(struct castle_component_tree *ct)
+static void castle_da_cts_free(c_bvec_t *c_bvec)
 {
-    struct castle_double_array *da = castle_da_hash_get(ct->da);
-    struct castle_component_tree *next_ct;
-    struct list_head *ct_list;
-    uint8_t level;
+    castle_free(c_bvec->trees);
+    c_bvec->trees = NULL;
+}
 
-    debug_verbose("Asked for component tree after %d\n", ct->seq);
-    BUG_ON(!da);
-    read_lock(&da->lock);
-    /* Start from the current list, from wherever the current ct is in the da_list. */
-    level = ct->level;
-    ct_list = &ct->da_list;
+/**
+ * Advaces current CT used by the bvec provided, to the next one in the trees array.
+ * Releases the read reference on the now disused CT.
+ *
+ * @param ct   Current CT to use as basis for finding next CT
+ */
+void castle_da_ct_next(c_bvec_t *c_bvec)
+{
+    struct castle_component_tree *ct;
+    int i;
 
-    /* Advance to the next level of the DA if:
-     *
-     * - Current CT is level 0: each CT at level 0 handles inserts for a
-     *   specific hash of keys.  The only CT at this level that could contain a
-     *   hit is the one the key hashed to (i.e. the current CT).
-     * - Current CT was removed from the DA (da_list is NULL): we can safely
-     *   move to the next level as merges always remove the two oldest trees.
-     *   Any other trees in the current CT's level will be newer and therefore
-     *   predate a lookup. */
-    if (level == 0 || ct_list->next == NULL)
+    ct = c_bvec->tree;
+    /* Find the ct in the array of trees. */
+    for(i=0; i<c_bvec->nr_trees; i++)
+        if(c_bvec->trees[i] == ct)
+            break;
+    /* Tree must always be found. */
+    BUG_ON(i >= c_bvec->nr_trees);
+
+    /* Remove the tree from the array, and put the reference. */
+    c_bvec->trees[i] = NULL;
+    castle_ct_put(ct, 0);
+
+    /* Advance to the next tree. */
+    i++;
+    if(i >= c_bvec->nr_trees)
     {
-        BUG_ON(ct_list->next == NULL && ct_list->prev != NULL);
-
-        level++;
-        ct_list = &da->levels[level].trees;
+        c_bvec->tree = NULL;
+        castle_da_cts_free(c_bvec);
     }
-
-    /* Loop through all levels trying to find the next tree. */
-    while (level < MAX_DA_LEVEL)
-    {
-        if (!list_is_last(ct_list, &da->levels[level].trees))
-        {
-            /* CT found at (level), return it. */
-            next_ct = list_entry(ct_list->next, struct castle_component_tree, da_list);
-            debug_verbose("Found component tree %d\n", next_ct->seq);
-            castle_ct_get(next_ct, 0);
-            read_unlock(&da->lock);
-
-            return next_ct;
-        }
-
-        /* No CT found at (level), advance to the next level. */
-        level++;
-        ct_list = &da->levels[level].trees;
-    }
-    read_unlock(&da->lock);
-
-    return NULL;
+    else
+        c_bvec->tree = c_bvec->trees[i];
 }
 
 /**
@@ -8296,8 +8269,8 @@ again:
  *
  * @return  The youngest CT that satisfies bvec
  */
-static struct castle_component_tree* castle_da_first_ct_get(struct castle_double_array *da,
-                                                            c_bvec_t *c_bvec)
+struct castle_component_tree* castle_da_first_ct_get(struct castle_double_array *da,
+                                                     c_bvec_t *c_bvec)
 {
     struct castle_component_tree *ct = NULL;
     struct list_head *l;
@@ -8328,6 +8301,88 @@ out:
     read_unlock(&da->lock);
 
     return ct;
+}
+
+static int castle_da_all_cts_get(struct castle_double_array *da,
+                                 int *nr_cts_p,
+                                 struct castle_component_tree ***cts_p)
+{
+    struct castle_component_tree** cts;
+    struct list_head *l;
+    int i, j, nr_cts;
+
+again:
+    /* Try to allocate the right amount of memory, but remember that nr_trees
+       may change, because we are not holding the da lock (cannot kmalloc holding
+       a spinlock). */
+    nr_cts = da->nr_trees;
+    if(nr_cts <= 0)
+        return -EINVAL;
+
+    cts = castle_zalloc(nr_cts * sizeof(struct castle_component_tree *), GFP_KERNEL);
+    if(!cts)
+        return -ENOMEM;
+
+    read_lock(&da->lock);
+    /* Check the number of trees under lock. Retry again if # changed. */
+    if(nr_cts != da->nr_trees)
+    {
+        read_unlock(&da->lock);
+        castle_printk(LOG_WARN,
+                "Warning. Untested. # of cts changed while allocating memory for rq.\n");
+        castle_free(cts);
+        goto again;
+    }
+    /* Get refs to all the component trees, and release the lock */
+    j=0;
+    for(i=0; i<MAX_DA_LEVEL; i++)
+    {
+        list_for_each(l, &da->levels[i].trees)
+        {
+            struct castle_component_tree *ct;
+
+            BUG_ON(j >= nr_cts);
+            ct = list_entry(l, struct castle_component_tree, da_list);
+            cts[j] = ct;
+            castle_ct_get(ct, 0);
+            BUG_ON((castle_btree_type_get(ct->btree_type)->magic != RW_VLBA_TREE_TYPE) &&
+                   (castle_btree_type_get(ct->btree_type)->magic != RO_VLBA_TREE_TYPE));
+            j++;
+        }
+    }
+    read_unlock(&da->lock);
+    BUG_ON(j != nr_cts);
+
+    *nr_cts_p = nr_cts;
+    *cts_p = cts;
+
+    return 0;
+}
+
+static void castle_da_cts_put(c_bvec_t *c_bvec)
+{
+    int i, cur_found;
+
+    /* We expecting the trees array to looks as follows:
+       NULL, ..., NULL, c_bvec->tree, ct_b, ct_c, ....
+       Check for the layout for debugging purposes. */
+    BUG_ON(!c_bvec->tree);
+    for(i=0, cur_found=0; i<c_bvec->nr_trees; i++)
+    {
+        struct castle_component_tree *ct;
+
+        ct = c_bvec->trees[i];
+        if(ct == c_bvec->tree)
+        {
+            cur_found = 1;
+            /* Skip c_bvec->tree. This reference must remain. */
+            continue;
+        }
+        BUG_ON(!cur_found && (ct != NULL));
+        BUG_ON( cur_found && (ct == NULL));
+        if(ct)
+            castle_ct_put(ct, 0);
+    }
 }
 
 /**
@@ -8403,29 +8458,23 @@ static void castle_da_queue_kick(struct work_struct *work)
     }
 }
 
-static void castle_da_ct_read_next(c_bvec_t *c_bvec,
-                                   struct castle_component_tree *ct)
+static void castle_da_ct_read_next(c_bvec_t *c_bvec)
 {
     void (*callback) (struct castle_bio_vec *c_bvec, int err, c_val_tup_t cvt);
-    struct castle_component_tree *next_ct;
 
     callback = c_bvec->orig_complete;
 
-    next_ct = castle_da_ct_next(ct);
-    /* Put the previous tree, now that we know we've got a ref to the next. */
-    castle_ct_put(ct, 0);
+    castle_da_ct_next(c_bvec);
 
     /* No more trees left. Callback with invalid cvt. */
-    if(!next_ct)
+    if(!c_bvec->tree)
     {
-        c_bvec->tree = NULL;
         callback(c_bvec, 0, INVAL_VAL_TUP);
         return;
     }
 
-    c_bvec->tree = next_ct;
     debug_verbose("Scheduling btree read in %s tree: %d.\n",
-            ct->dynamic ? "dynamic" : "static", ct->seq);
+            c_bvec->tree->dynamic ? "dynamic" : "static", c_bvec->tree->seq);
     castle_bloom_submit(c_bvec);
 }
 
@@ -8455,10 +8504,12 @@ static void castle_da_ct_read_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cv
     /* Deal with counter adds first (other component trees may have to be looked at). */
     if(!err && CVT_ADD_V_COUNTER(cvt))
     {
-        /* Callback (this should perform counter accumulation). */
+        /* Callback (this should perform counter accumulation).
+           NOTE: this callback is non-terminating (i.e. DA code retakes control after
+                 counter accumulation). All other calls to the client terminate. */
         callback(c_bvec, err, cvt);
 
-        castle_da_ct_read_next(c_bvec, ct);
+        castle_da_ct_read_next(c_bvec);
         return;
     }
 
@@ -8474,11 +8525,13 @@ static void castle_da_ct_read_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cv
 #endif
         debug_verbose("Checking next ct.\n");
 
-        castle_da_ct_read_next(c_bvec, ct);
+        castle_da_ct_read_next(c_bvec);
         return;
     }
 
-    /* Don't release the ct reference in order to hold on to medium objects array, etc. */
+    /* Don't release the ct reference in order to hold on to medium objects array, etc.
+       But release references to all other trees (those further on in the trees array). */
+    castle_da_cts_put(c_bvec);
     callback(c_bvec, err, cvt);
 }
 
@@ -8591,16 +8644,21 @@ insert:
  */
 static void castle_da_read_bvec_start(struct castle_double_array *da, c_bvec_t *c_bvec)
 {
+    int err;
+
     debug_verbose("Doing DA read for da_id=%d\n", da_id);
     BUG_ON(c_bvec_data_dir(c_bvec) != READ);
 
     /* Get a reference to the first appropriate CT for this bvec. */
-    c_bvec->tree = castle_da_first_ct_get(da, c_bvec);
-    if (!c_bvec->tree)
+    err = castle_da_all_cts_get(da, &c_bvec->nr_trees, &c_bvec->trees);
+    if (err)
     {
-        c_bvec->submit_complete(c_bvec, -EINVAL, INVAL_VAL_TUP);
+        c_bvec->submit_complete(c_bvec, err, INVAL_VAL_TUP);
         return;
     }
+
+    /* Start with the first tree. */
+    c_bvec->tree = c_bvec->trees[0];
 
     c_bvec->orig_complete   = c_bvec->submit_complete;
     c_bvec->submit_complete = castle_da_ct_read_complete;

@@ -8,8 +8,7 @@ struct castle_component_tree*
      castle_component_tree_get (tree_seq_t seq);
 void castle_ct_get             (struct castle_component_tree *ct, int write);
 void castle_ct_put             (struct castle_component_tree *ct, int write);
-struct castle_component_tree*
-     castle_da_ct_next         (struct castle_component_tree *ct);
+void castle_da_ct_next         (c_bvec_t *c_bvec);
 
 void castle_da_rq_iter_init    (c_da_rq_iter_t *iter,
                                 c_ver_t version,

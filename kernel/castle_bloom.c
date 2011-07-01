@@ -643,19 +643,13 @@ static int castle_bloom_lookup(castle_bloom_t *bf, c2_block_t *c2b, struct castl
  */
 static void castle_bloom_lookup_next_ct(c_bvec_t *c_bvec)
 {
-    struct castle_component_tree *ct, *next_ct;
-
-    ct = c_bvec->tree;
-
-    next_ct = castle_da_ct_next(ct);
-    if (!next_ct)
+    castle_da_ct_next(c_bvec);
+    if (!c_bvec->tree)
     {
         /* We've finished looking through all the trees. */
         c_bvec->submit_complete(c_bvec, 0, INVAL_VAL_TUP);
         return;
     }
-    castle_ct_put(ct, 0);
-    c_bvec->tree = next_ct;
 
     castle_bloom_submit(c_bvec);
 }
