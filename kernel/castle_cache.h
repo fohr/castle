@@ -38,12 +38,13 @@ typedef struct castle_cache_block {
 /**********************************************************************************************
  * Locking.
  */
-void __lock_c2b      (c2_block_t *c2b, int write_mode);
-int  __trylock_c2b   (c2_block_t *c2b, int write_mode);
-void write_unlock_c2b(c2_block_t *c2b);
-void read_unlock_c2b (c2_block_t *c2b);
-int  c2b_read_locked (c2_block_t *c2b);
-int  c2b_write_locked(c2_block_t *c2b);
+void __lock_c2b             (c2_block_t *c2b, int write_mode);
+int  __trylock_c2b          (c2_block_t *c2b, int write_mode);
+void downgrade_write_c2b    (c2_block_t *c2b);
+void write_unlock_c2b       (c2_block_t *c2b);
+void read_unlock_c2b        (c2_block_t *c2b);
+int  c2b_read_locked        (c2_block_t *c2b);
+int  c2b_write_locked       (c2_block_t *c2b);
 
 #ifdef CASTLE_DEBUG
 #define write_lock_c2b(_c2b)          \

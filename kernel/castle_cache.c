@@ -504,6 +504,14 @@ static USED int c2p_locked(c2_page_t *c2p)
     return rwsem_is_locked(&c2p->lock);
 }
 
+/**
+ * Downgrade a c2p write-lock to read-lock.
+ */
+static void downgrade_write_c2p(c2_page_t *c2p)
+{
+    downgrade_write(&c2p->lock);
+}
+
 static void lock_c2p(c2_page_t *c2p, int write)
 {
     if(write)
@@ -589,6 +597,23 @@ static inline void unlock_c2b_counter(c2_block_t *c2b, int write)
 #endif
         atomic_dec(&c2b->lock_cnt);
     }
+}
+
+/**
+ * Downgrade a c2b write-lock to read-lock.
+ */
+void downgrade_write_c2b(c2_block_t *c2b)
+{
+    c_ext_pos_t cep_unused;
+    c2_page_t *c2p;
+
+    unlock_c2b_counter(c2b, 1 /*write*/);
+    c2b_for_each_c2p_start(c2p, cep_unused, c2b)
+    {
+        downgrade_write_c2p(c2p);
+    }
+    c2b_for_each_c2p_end(c2p, cep_unused, c2b)
+    lock_c2b_counter(c2b, 0 /*read*/);
 }
 
 void __lock_c2b(c2_block_t *c2b, int write)
