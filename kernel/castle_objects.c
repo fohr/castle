@@ -1563,10 +1563,6 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
         if(CVT_INVALID(get->cvt))
             CVT_COUNTER_LOCAL_ADD_SET(get->cvt, 0);
 
-        /* Convert accumulating counter to local counter. */
-        if(CVT_ACCUM_COUNTER(cvt))
-            CVT_COUNTER_ACCUM_V_TO_LOCAL(cvt, cvt);
-
         finished = castle_counter_simple_reduce(&get->cvt, cvt);
         /* Return early if we have to keep accumulating. */
         if(!finished)

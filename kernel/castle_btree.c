@@ -2453,6 +2453,53 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
 
 }
 
+static c_val_tup_t castle_btree_counter_read(struct castle_btree_node *node,
+                                             c_ver_t version,
+                                             void *key,
+                                             int idx,
+                                             c_val_tup_t cvt)
+{
+    struct castle_btree_type *btree = castle_btree_type_get(node->type);
+    c_val_tup_t accumulator, next_cvt;
+    c_ver_t next_version;
+    void *next_key;
+    int finish;
+
+    /* Accumulating counters already dealt with accumulations, read the right subcounter off. */
+    if(CVT_ACCUM_COUNTER(cvt))
+    {
+        CVT_COUNTER_ACCUM_V_TO_LOCAL(accumulator, cvt);
+        return accumulator;
+    }
+
+    /* Otherwise init the accumulator. */
+    CVT_COUNTER_LOCAL_ADD_SET(accumulator, 0);
+
+    /* Accumulate the start cvt. */
+    finish = castle_counter_simple_reduce(&accumulator, cvt);
+
+    /* Go through all CVTs that are weakly ancestral entries. */
+    idx++;
+    while(!finish && (idx < node->used))
+    {
+        /* Get the entry from the node. */
+        btree->entry_get(node, idx, &next_key, &next_version, &next_cvt);
+
+        /* Check whether the key hasn't changed, terminate if so. */
+        if(btree->key_compare(next_key, key) != 0)
+            return accumulator;
+
+        /* Accumulate iff version of the entry is ancestral. */
+        if(castle_version_is_ancestor(next_version, version))
+            finish = castle_counter_simple_reduce(&accumulator, next_cvt);
+
+        /* Read the next entry in the node. */
+        idx++;
+    }
+
+    return accumulator;
+}
+
 /**
  * Perform read on btree specified by c_bvec.
  *
@@ -2503,6 +2550,10 @@ static void castle_btree_read_process(c_bvec_t *c_bvec)
 
         if(btree->key_compare(lub_key, key) == 0)
         {
+            /* Deal with counters first. Accumulate if neccessary. */
+            if (CVT_ANY_COUNTER(lub_cvt))
+                lub_cvt = castle_btree_counter_read(node, version, key, lub_idx, lub_cvt);
+            else
             if (CVT_INLINE(lub_cvt))
             {
                 char *loc_buf;
