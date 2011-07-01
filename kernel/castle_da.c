@@ -3308,7 +3308,11 @@ static inline void castle_da_entry_add(struct castle_da_merge *merge,
         BUG_ON(level->next_idx <= 0);
         level->valid_end_idx = level->next_idx - 1;
         level->valid_version = 0;
-    } else
+    }
+#if 0
+    /* This is disabled now, because we don't want keys crossing the node boundries.
+       Otherwise counter accumulation may not work correctly on gets/rqs. */
+    else
     /* Case 3: Version is STRONGLY ancestoral to valid_version. */
     if(castle_version_is_ancestor(version, level->valid_version))
     {
@@ -3317,6 +3321,7 @@ static inline void castle_da_entry_add(struct castle_da_merge *merge,
         level->valid_end_idx = level->next_idx;
         level->valid_version = version;
     }
+#endif
 
     /* Node may be (over-)complete now, if it is full. Set next_idx to -1 (invalid) */
     if(btree->need_split(node, 0))
