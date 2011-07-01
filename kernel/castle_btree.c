@@ -3954,6 +3954,7 @@ static void castle_rq_enum_iter_each(c_iter_t *c_iter,
     struct node_buf_t *prod_buf = rq_enum->prod_buf;
     struct node_buf_t *cons_buf = rq_enum->cons_buf;
     struct castle_btree_node *node = prod_buf->node;
+    int cmp;
 
     btree = castle_btree_type_get(node->type);
     BUG_ON(rq_enum->prod_idx != node->used);
@@ -3993,10 +3994,15 @@ static void castle_rq_enum_iter_each(c_iter_t *c_iter,
             return;
     }
 
-    if ((!rq_enum->cur_key || btree->key_compare(rq_enum->cur_key, key) != 0))
+    /* If curr_key is set, figure out whether the new key is the same, or different. */
+    if(rq_enum->cur_key)
+        cmp = btree->key_compare(rq_enum->cur_key, key);
+
+    if (!rq_enum->cur_key || cmp)
     {
         debug("Adding entry to node buffer: %p\n", rq_enum->prod_buf);
-        if (rq_enum->cur_key && btree->key_compare(rq_enum->cur_key, key) > 0)
+        /* Keys should not go backwards. */
+        if (rq_enum->cur_key && (cmp > 0))
         {
             printk("re_enum: %p, cur_key: %p, key: %p\n", rq_enum, rq_enum->cur_key, key);
             BUG();
