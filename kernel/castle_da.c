@@ -8493,17 +8493,23 @@ static void castle_da_ct_read_next(c_bvec_t *c_bvec)
 static void castle_da_ct_read_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cvt)
 {
     void (*callback) (struct castle_bio_vec *c_bvec, int err, c_val_tup_t cvt);
-    struct castle_component_tree *ct;
-    struct castle_double_array *da;
 
     callback = c_bvec->orig_complete;
-    ct = c_bvec->tree;
-    da = castle_da_hash_get(ct->da);
 
     BUG_ON(c_bvec_data_dir(c_bvec) != READ);
     BUG_ON(atomic_read(&c_bvec->reserv_nodes));
 
-    /* Deal with counter adds first (other component trees may have to be looked at). */
+    /* If there tree is null, it means that no more there are no more trees left
+       to inspect, callback immediately. */
+    if(!c_bvec->tree)
+    {
+        /* Trees array should have been deallocated by now. */
+        BUG_ON(c_bvec->trees);
+        callback(c_bvec, err, cvt);
+        return;
+    }
+
+    /* Deal with counter adds (other component trees may have to be looked at). */
     if(!err && CVT_ADD_V_COUNTER(cvt))
     {
         /* Callback (this should perform counter accumulation).
@@ -8519,9 +8525,9 @@ static void castle_da_ct_read_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cv
     if(!err && CVT_INVALID(cvt))
     {
 #ifdef CASTLE_BLOOM_FP_STATS
-        if (ct->bloom_exists && c_bvec->bloom_positive)
+        if (c_bvec->tree->bloom_exists && c_bvec->bloom_positive)
         {
-            atomic64_inc(&ct->bloom.false_positives);
+            atomic64_inc(&c_bvec->tree->bloom.false_positives);
             c_bvec->bloom_positive = 0;
         }
 #endif
