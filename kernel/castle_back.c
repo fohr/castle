@@ -2835,6 +2835,7 @@ static void castle_back_request_process(struct castle_back_conn *conn, struct ca
 {
     c_vl_bkey_t *key = NULL;
     uint32_t key_len = 0;
+    uint64_t val_len = 0;
 
     debug("Got a request call=%d tag=%d\n", op->req.call_id, op->req.tag);
 
@@ -2866,6 +2867,13 @@ static void castle_back_request_process(struct castle_back_conn *conn, struct ca
             //TODO@tr do we really need two CASTLE_RING command enums?
         case CASTLE_RING_COUNTER_SET_REPLACE:
         case CASTLE_RING_COUNTER_ADD_REPLACE:
+            val_len = op->req.counter_replace.value_len;
+            if(val_len != sizeof(int64_t))
+            {
+                error("Counter value len %lld is invalid; must be 8 bytes.\n", val_len);
+                castle_back_reply(op, -EINVAL, 0, 0);
+                return;
+            }
             INIT_WORK(&op->work, castle_back_counter_replace, op);
             key_len = op->req.counter_replace.key_len;
             castle_back_key_copy_get(conn, op->req.counter_replace.key_ptr, key_len, &key);
