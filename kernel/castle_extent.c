@@ -3486,7 +3486,7 @@ void castle_extents_remap_writeback(void)
             ext->rebuild_done_list.next = NULL;
             castle_extent_remap_writeback(ext);
         }
-        else
+        if ((!rebuild_extent_last) || (ext->ext_id == rebuild_extent_last))
             /* We're done for this pass. */
             break;
     }
