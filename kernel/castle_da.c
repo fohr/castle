@@ -8384,6 +8384,7 @@ static void castle_da_cts_put(c_bvec_t *c_bvec)
         if(ct)
             castle_ct_put(ct, 0);
     }
+    castle_da_cts_free(c_bvec);
 }
 
 /**
@@ -8506,8 +8507,8 @@ static void castle_da_ct_read_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cv
     if(!err && CVT_ADD_V_COUNTER(cvt))
     {
         /* Callback (this should perform counter accumulation).
-           NOTE: this callback is non-terminating (i.e. DA code retakes control after
-                 counter accumulation). All other calls to the client terminate. */
+           NOTE: DA code retakes control after this callback is complete (after counter
+           accumulation has been done). */
         callback(c_bvec, err, cvt);
 
         castle_da_ct_read_next(c_bvec);

@@ -643,7 +643,8 @@ typedef struct castle_value_tuple c_val_tup_t;
 }
 #define CVT_COUNTER_ACCUM_NV_TO_LOCAL(_local_cvt, _accum_cvt)               \
 {                                                                           \
-    if(CVT_COUNTER_ACCUM_ADD_ADD(_accum_cvt))                               \
+    if(CVT_COUNTER_ACCUM_ADD_ADD(_accum_cvt) ||                             \
+       CVT_COUNTER_ACCUM_ADD_SET(_accum_cvt))                               \
         _CVT_COUNTER_INLINE_TO_LOCAL(_local_cvt, _accum_cvt, 0, 0)          \
     else                                                                    \
         _CVT_COUNTER_INLINE_TO_LOCAL(_local_cvt, _accum_cvt, 0, 1)          \

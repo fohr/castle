@@ -53,7 +53,11 @@ void castle_counter_accumulating_reduce(c_val_tup_t *accumulator,
     /* If delta isn't a counter, finish reduction early. */
     if(!CVT_ANY_COUNTER(delta_cvt))
     {
-        /* Change the type to SET/SET. */
+         /* Change the type to SET/SET.
+           NOTE: this must be a SET/SET because in the case of replacing a entry in T0
+                 non-counters will be lost. Therefore _both_ sub-counters need to become
+                 sets.
+         */
         accumulator->type = castle_counter_accumulating_type_get(1, 1);
         return;
     }

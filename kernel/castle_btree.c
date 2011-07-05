@@ -4198,7 +4198,7 @@ static void castle_rq_enum_iter_counter_accum_continue(c_rq_enum_t *rq_enum,
     }
 
     /* Accumulate. And terminate possibly terminate. */
-    if(castle_counter_simple_reduce(&rq_enum->counter_accumulator, cvt) || finish)
+    if(finish || castle_counter_simple_reduce(&rq_enum->counter_accumulator, cvt))
         castle_rq_enum_iter_counter_accum_fini(rq_enum);
 }
 
