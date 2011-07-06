@@ -1681,10 +1681,16 @@ int castle_object_get(struct castle_object_get *get,
 }
 EXPORT_SYMBOL(castle_object_get);
 
-void castle_object_pull_finish(struct castle_object_pull *pull)
+static void inline castle_object_pull_ct_put(struct castle_object_pull *pull)
 {
     if(pull->ct)
         castle_ct_put(pull->ct, 0);
+    pull->ct = NULL;
+}
+
+void castle_object_pull_finish(struct castle_object_pull *pull)
+{
+    castle_object_pull_ct_put(pull);
     castle_object_reference_release(pull->cvt);
 }
 
@@ -1790,8 +1796,7 @@ static void castle_object_pull_continue(struct castle_bio_vec *c_bvec, int err, 
     {
         debug("Error, invalid or tombstone.\n");
 
-        if (pull->ct)
-            castle_ct_put(pull->ct, 0);
+        castle_object_pull_ct_put(pull);
         CVT_INVALID_SET(pull->cvt);
         pull->pull_continue(pull, err, 0, 1 /* done */);
         return;
