@@ -878,7 +878,10 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
                                          MAX_NAME_SIZE,
                                         &collection_name);
             if(err)
+            {
+                castle_printk(LOG_WARN, "Invalid string provided for collection name.\n");
                 goto err;
+            }
 
             debug("Collection Attach: %s\n", collection_name);
             castle_control_collection_attach(ioctl.collection_attach.version,
