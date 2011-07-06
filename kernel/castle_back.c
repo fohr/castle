@@ -2993,7 +2993,7 @@ int castle_back_open(struct inode *inode, struct file *file)
     conn->buffers_rb = RB_ROOT;
 
     sring = (castle_sring_t *)castle_vmalloc(CASTLE_RING_SIZE);
-    if (conn == NULL)
+    if (sring == NULL)
     {
         error("castle_back: failed to vmalloc shared ring\n");
         err = -ENOMEM;
