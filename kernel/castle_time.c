@@ -12,6 +12,7 @@ typedef struct castle_checkpoint_stats {
     struct timespec min;
     struct timespec agg;
     int cnt;
+    char *desc;                 /**< User-specified checkpoint description.     */
     char *file;
     int line;
 } c_check_stats_t;
@@ -95,7 +96,7 @@ static void castle_request_timeline_del(c_req_time_t *timeline)
     spin_unlock(&castle_timelines_list_lock);
 }
 
-static int castle_request_checkpoint_get(c_req_time_t *timeline, char *file, int line)
+static int castle_request_checkpoint_get(c_req_time_t *timeline, char *desc, char *file, int line)
 {
     struct castle_checkpoint *checkpoint;
     int checkpoint_idx;
@@ -106,6 +107,7 @@ static int castle_request_checkpoint_get(c_req_time_t *timeline, char *file, int
     /* Check if that's a new checkpoint */
     if(checkpoint->file == NULL)
     {
+        checkpoint->desc = desc;
         checkpoint->file = file;
         checkpoint->line = line;
 
@@ -186,6 +188,7 @@ static inline void timespec_next_avg(struct timespec *curr,
 
 /* Records the start of operation, called from file:line */
 void _castle_request_timeline_checkpoint_start(c_req_time_t *timeline,
+                                               char *desc,
                                                char *file,
                                                int line)
 {
@@ -197,7 +200,7 @@ void _castle_request_timeline_checkpoint_start(c_req_time_t *timeline,
     /* Stop should have been called first */
     BUG_ON(timeline->active_checkpoint >= 0);
 
-    checkpoint_idx = castle_request_checkpoint_get(timeline, file, line);
+    checkpoint_idx = castle_request_checkpoint_get(timeline, desc, file, line);
     if(checkpoint_idx < 0)
         return;
     checkpoint = &timeline->checkpoints[checkpoint_idx];
@@ -301,6 +304,7 @@ static void castle_request_timeline_process(c_req_time_t *timeline)
         timespec_next_max(&checkpoint->max_tm, &check_stats->max, check_stats->cnt);
         timespec_next_min(&checkpoint->min_tm, &check_stats->min, check_stats->cnt);
         timespec_next_avg(&dur_tm,             &check_stats->agg, check_stats->cnt);
+        check_stats->desc = checkpoint->desc;
         check_stats->file = checkpoint->file;
         check_stats->line = checkpoint->line;
         check_stats->cnt++;
@@ -327,8 +331,8 @@ static void castle_checkpoint_stats_print(void)
 
         /* Print */
         if(i < MAX_CHECK_POINTS)
-            castle_printk(LOG_DEVEL, "For checkpoint started at %s:%d, samples=%d\n",
-                check_stats->file, check_stats->line, check_stats->cnt);
+            castle_printk(LOG_DEVEL, "For checkpoint (%s) started at %s:%d, samples=%d\n",
+                check_stats->desc, check_stats->file, check_stats->line, check_stats->cnt);
         else
             castle_printk(LOG_DEVEL, "For entire timeline, samples=%d:\n", check_stats->cnt);
 
@@ -366,7 +370,8 @@ static void castle_request_timeline_print(c_req_time_t *timeline)
         if(checkpoint->file == NULL)
             continue;
 
-        castle_printk(LOG_DEVEL, "For checkpoint started at %s:%d\n", checkpoint->file, checkpoint->line);
+        castle_printk(LOG_DEVEL, "For checkpoint (%s) started at %s:%d\n",
+                checkpoint->desc, checkpoint->file, checkpoint->line);
         dur = timespec_to_ns(&checkpoint->aggregate_tm);
         dur_tm = ns_to_timespec(dur / checkpoint->cnts);
         castle_printk(LOG_DEVEL, "Average: %.2ld.%.6ld\n", dur_tm.tv_sec, dur_tm.tv_nsec / 1000);

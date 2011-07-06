@@ -19,6 +19,7 @@ typedef struct castle_request_timeline {
         struct timespec  aggregate_tm;
         struct timespec  max_tm;
         struct timespec  min_tm;
+        char            *desc;              /**< User-defined checkpoint description.   */
         char            *file;
         int              line;
     } checkpoints[MAX_CHECK_POINTS];
@@ -29,14 +30,15 @@ typedef struct castle_request_timeline {
 /* These should not be used directly */
 extern c_req_time_t* _castle_request_timeline_create           (void);
 extern void          _castle_request_timeline_checkpoint_start (c_req_time_t *timeline,
+                                                                char *desc,
                                                                 char *file,
                                                                 int line);
 /* External functions */
 #define        castle_request_timeline_create(_ptr)                             \
     (_ptr) = _castle_request_timeline_create()
 void           castle_request_timeline_destroy(c_req_time_t *timeline);
-#define        castle_request_timeline_checkpoint_start(_ptr)                   \
-    _castle_request_timeline_checkpoint_start(_ptr, __FILE__, __LINE__)
+#define        castle_request_timeline_checkpoint_start(_ptr, _desc)            \
+    _castle_request_timeline_checkpoint_start(_ptr, _desc, __FILE__, __LINE__)
 void           castle_request_timeline_checkpoint_stop(c_req_time_t *timeline);
 
 int            castle_time_init(void);
