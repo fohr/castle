@@ -4193,7 +4193,7 @@ static void castle_rq_enum_iter_counter_accum_continue(c_rq_enum_t *rq_enum,
     finish = 0;
     if(CVT_ACCUM_COUNTER(cvt))
     {
-        CVT_COUNTER_ACCUM_V_TO_LOCAL(cvt, cvt);
+        CVT_COUNTER_ACCUM_V_TO_LOCAL(rq_enum->counter_accumulator, cvt);
         finish = 1;
     }
 
