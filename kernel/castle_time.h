@@ -4,7 +4,7 @@
 #ifdef CASTLE_PERF_DEBUG
 #include <linux/time.h>
 
-#define MAX_CHECK_POINTS    23
+#define MAX_CHECK_POINTS    173
 typedef struct castle_request_timeline {
     uint32_t         seq;
     /* Time when the request timeline was created */

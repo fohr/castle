@@ -292,7 +292,8 @@ static void castle_request_timeline_process(c_req_time_t *timeline)
            ((checkpoint->line != check_stats->line) ||
             (strcmp(checkpoint->file, check_stats->file) != 0)))
         {
-            castle_printk(LOG_DEVEL, "Checkpoint %s:%d, doesn't agree with stats %s:%d\n",
+            castle_printk(LOG_DEVEL, "Checkpoint %s:%d, doesn't agree with stats %s:%d"
+                   " (line numbers collide, add some comments above checkpoint starts\n",
                 checkpoint->file, checkpoint->line,
                 check_stats->file, check_stats->line);
         }
