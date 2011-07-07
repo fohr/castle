@@ -197,13 +197,22 @@ void _castle_request_timeline_checkpoint_start(c_req_time_t *timeline,
 
     if(!timeline)
         return;
-    /* Stop should have been called first */
-    BUG_ON(timeline->active_checkpoint >= 0);
 
     checkpoint_idx = castle_request_checkpoint_get(timeline, desc, file, line);
     if(checkpoint_idx < 0)
         return;
     checkpoint = &timeline->checkpoints[checkpoint_idx];
+
+    /* Stop should have been called first */
+    if (timeline->active_checkpoint >= 0)
+    {
+
+        castle_printk(LOG_DEVEL, "Checkpoint start (%s) from %s:%d but checkpoint "
+                "already active (%s from %s:%d).\n",
+                desc, file, line, checkpoint->desc, checkpoint->file, checkpoint->line);
+        return;
+    }
+
     /* We checked that we are not in checkpoint ATM, so this should not be active */
     BUG_ON(checkpoint->active);
     checkpoint->active = 1;
@@ -226,6 +235,13 @@ void castle_request_timeline_checkpoint_stop(c_req_time_t *timeline)
         return;
     }
     checkpoint = &timeline->checkpoints[timeline->active_checkpoint];
+    if (!checkpoint->active)
+    {
+        castle_printk(LOG_DEVEL, "Checkpoint stop called for inactive checkpoint.  "
+                "Hint: %s from %s:%d (might be invalid).\n",
+                checkpoint->desc, checkpoint->file, checkpoint->line);
+        return;
+    }
     BUG_ON(!checkpoint->active);
     getnstimeofday(&end_tm);
 
@@ -300,15 +316,19 @@ static void castle_request_timeline_process(c_req_time_t *timeline)
 
         /* Update the stats */
         BUG_ON(checkpoint->file == NULL || checkpoint->line == 0);
-        start_ns = timespec_to_ns(&checkpoint->aggregate_tm);
-        dur_tm = ns_to_timespec(start_ns / checkpoint->cnts);
+//        start_ns = timespec_to_ns(&checkpoint->aggregate_tm);
+        if (!checkpoint->cnts)
+            continue;
+//        dur_tm = ns_to_timespec(start_ns / checkpoint->cnts);
         timespec_next_max(&checkpoint->max_tm, &check_stats->max, check_stats->cnt);
         timespec_next_min(&checkpoint->min_tm, &check_stats->min, check_stats->cnt);
-        timespec_next_avg(&dur_tm,             &check_stats->agg, check_stats->cnt);
+        timespec_next_avg(&checkpoint->aggregate_tm, &check_stats->agg, check_stats->cnt);
+//        timespec_next_avg(&dur_tm,             &check_stats->agg, check_stats->cnt);
         check_stats->desc = checkpoint->desc;
         check_stats->file = checkpoint->file;
         check_stats->line = checkpoint->line;
-        check_stats->cnt++;
+        check_stats->cnt += checkpoint->cnts;
+//        check_stats->cnt++;
     }
 }
 
@@ -344,11 +364,11 @@ static void castle_checkpoint_stats_print(void)
         }
         agg = timespec_to_ns(&check_stats->agg);
         avg = ns_to_timespec(agg / check_stats->cnt);
-        castle_printk(LOG_DEVEL, "Average: %.2ld.%.6ld\n", avg.tv_sec, avg.tv_nsec / 1000);
+        castle_printk(LOG_DEVEL, "Average: %.2ld.%.6ld\n", avg.tv_sec, (avg.tv_nsec + 500) / 1000);
         castle_printk(LOG_DEVEL, "Min:     %.2ld.%.6ld\n",
-                      check_stats->min.tv_sec, check_stats->min.tv_nsec / 1000);
+                      check_stats->min.tv_sec, (check_stats->min.tv_nsec + 500) / 1000);
         castle_printk(LOG_DEVEL, "Max:     %.2ld.%.6ld\n",
-                      check_stats->max.tv_sec, check_stats->max.tv_nsec / 1000);
+                      check_stats->max.tv_sec, (check_stats->max.tv_nsec + 500) / 1000);
     }
     castle_printk(LOG_DEVEL, "\n");
 }
@@ -363,7 +383,7 @@ static void castle_request_timeline_print(c_req_time_t *timeline)
     castle_printk(LOG_DEVEL, "Stats for timeline %d\n", timeline->seq);
     dur = timespec_to_ns(&timeline->destroy_tm) - timespec_to_ns(&timeline->create_tm);
     dur_tm = ns_to_timespec(dur);
-    castle_printk(LOG_DEVEL, "Durat. : %.2ld.%.6ld\n", dur_tm.tv_sec, dur_tm.tv_nsec / 1000);
+    castle_printk(LOG_DEVEL, "Durat. : %.2ld.%.6ld\n", dur_tm.tv_sec, (dur_tm.tv_nsec + 500) / 1000);
 
     for(i=0; i<MAX_CHECK_POINTS; i++)
     {
@@ -374,14 +394,16 @@ static void castle_request_timeline_print(c_req_time_t *timeline)
         castle_printk(LOG_DEVEL, "For checkpoint (%s) started at %s:%d\n",
                 checkpoint->desc, checkpoint->file, checkpoint->line);
         dur = timespec_to_ns(&checkpoint->aggregate_tm);
+        if (!checkpoint->cnts)
+            continue;
         dur_tm = ns_to_timespec(dur / checkpoint->cnts);
-        castle_printk(LOG_DEVEL, "Average: %.2ld.%.6ld\n", dur_tm.tv_sec, dur_tm.tv_nsec / 1000);
+        castle_printk(LOG_DEVEL, "Average: %.2ld.%.6ld\n", dur_tm.tv_sec, (dur_tm.tv_nsec + 500) / 1000);
         castle_printk(LOG_DEVEL, "Min:     %.2ld.%.6ld\n",
             checkpoint->min_tm.tv_sec,
-            checkpoint->min_tm.tv_nsec / 1000);
+            (checkpoint->min_tm.tv_nsec + 500) / 1000);
         castle_printk(LOG_DEVEL, "Max:     %.2ld.%.6ld\n",
             checkpoint->max_tm.tv_sec,
-            checkpoint->max_tm.tv_nsec / 1000);
+            (checkpoint->max_tm.tv_nsec + 500) / 1000);
     }
 }
 
