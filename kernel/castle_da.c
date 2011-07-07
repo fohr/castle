@@ -1473,7 +1473,7 @@ static void castle_ct_merged_iter_skip(c_merged_iter_t *iter,
                                        void *key)
 {
     struct component_iterator *comp_iter;
-    int i, skip_cached;
+    int i;
 
     debug_iter("%s:%p\n", __FUNCTION__, iter);
 
@@ -1491,22 +1491,22 @@ static void castle_ct_merged_iter_skip(c_merged_iter_t *iter,
         if(comp_iter->completed)
             continue;
 
-        /* Check if the cached entry needs to be skipped AHEAD of the skip
-           being called on the appropriate component iterator (which may
-           invalidate the cached key pointer */
-        skip_cached = comp_iter->cached &&
-                     (iter->btree->key_compare(comp_iter->cached_entry.k, key) < 0);
         /* Next skip in the component iterator */
         BUG_ON(!comp_iter->iterator_type->skip);
 
-        /* If cached entry is not being skipped, bigger than the skip key, then no
-         * need to call skip on low level iterator. */
-        /* Flush cached entry if it was to small (this doesn't inspect the cached entry
-           any more). */
-        if (skip_cached)
+        /* If there is no entry in cache, call skip on comp_iter stright away.
+
+           Other wise, check if the cached entry needs to be skipped AHEAD of the skip
+           being called on the appropriate component iterator (which may invalidate the
+           cached key pointer. */
+        if (!comp_iter->cached || (iter->btree->key_compare(comp_iter->cached_entry.k, key) < 0))
         {
             comp_iter->iterator_type->skip(comp_iter->iterator, key);
+
+            /* each_skip() doesn't make sense for Range Queries and we are here for RQ only.
+             * skip() gets called only for RQs. */
             BUG_ON(iter->each_skip);
+
             if (comp_iter->cached)
             {
                 castle_ct_merge_iter_rbtree_remove(iter, comp_iter);
