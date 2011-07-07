@@ -24,8 +24,9 @@ static             LIST_HEAD(castle_dead_timelines_list);
 static int                   castle_checkpoint_collisions_print;
 static uint32_t              castle_checkpoint_seq;
 struct task_struct   *time_thread;
-static c_check_stats_t       castle_checkpoint_stats[MAX_CHECK_POINTS + 1];
-                                                    /* +1 for the stats on timeline duration */
+static c_check_stats_t       castle_checkpoint_stats[MAX_CHECK_POINTS + 2];
+                                                    /**< +1 for stats on inactive duration. */
+                                                    /**< +2 for stats on timeline duration. */
 static atomic_t              castle_checkpoint_create_seq;
 #define                      REQUEST_PERIOD         1000   /* Trace every 1000th request */
 #define                      PRINT_PERIOD           100    /* Print every 100th trace */
@@ -129,24 +130,6 @@ static int castle_request_checkpoint_get(c_req_time_t *timeline, char *desc, cha
     return -1;
 }
 
-c_req_time_t* _castle_request_timeline_create(void)
-{
-    c_req_time_t* timeline;
-
-    /* Create the timeline when sequence # is divisible by period. */
-    if(atomic_inc_return(&castle_checkpoint_create_seq) % REQUEST_PERIOD != 0)
-        return NULL;
-    timeline = castle_zalloc(sizeof(c_req_time_t), GFP_KERNEL);
-    if(!timeline)
-        return NULL;
-    timeline->active_checkpoint = -1;
-    INIT_LIST_HEAD(&timeline->list);
-    castle_request_timeline_add(timeline);
-    getnstimeofday(&timeline->create_tm);
-
-    return timeline;
-}
-
 static inline void timespec_next_max(struct timespec *curr,
                                      struct timespec *store,
                                      int cnt)
@@ -186,6 +169,93 @@ static inline void timespec_next_avg(struct timespec *curr,
     *store = ns_to_timespec(curr_ns + store_ns);
 }
 
+/**
+ * Init the 'inactive' checkpoint for timeline.
+ */
+static void castle_request_timeline_inactive_init(c_req_time_t *timeline)
+{
+    struct castle_checkpoint *checkpoint;
+
+    checkpoint = &timeline->checkpoints[MAX_CHECK_POINTS];
+
+    checkpoint->desc = "Inactive time";
+    checkpoint->file = "n/a";
+    checkpoint->line = -1;
+    checkpoint->cnts = 1;
+}
+
+/**
+ * Start the 'inactive' checkpoint for timeline.
+ */
+static void castle_request_timeline_inactive_start(c_req_time_t *timeline)
+{
+    struct castle_checkpoint *checkpoint;
+
+    checkpoint = &timeline->checkpoints[MAX_CHECK_POINTS];
+
+    BUG_ON(checkpoint->active);
+    checkpoint->active = 1;
+    getnstimeofday(&checkpoint->start_tm);
+}
+
+/**
+ * Stop the 'inactive' checkpoint for timeline.
+ */
+static void castle_request_timeline_inactive_stop(c_req_time_t *timeline)
+{
+    struct castle_checkpoint *checkpoint;
+    struct timespec end_tm;
+    s64 start_ns, end_ns;
+
+    checkpoint = &timeline->checkpoints[MAX_CHECK_POINTS];
+
+    BUG_ON(!checkpoint->active);
+    getnstimeofday(&end_tm);
+
+    /* Update the stats */
+    start_ns = timespec_to_ns(&checkpoint->start_tm);
+    end_ns = timespec_to_ns(&end_tm);
+    end_tm = ns_to_timespec(end_ns - start_ns); /* delta_tm */
+//    timespec_next_max(&end_tm, &checkpoint->max_tm, checkpoint->cnts);
+//    timespec_next_min(&end_tm, &checkpoint->min_tm, checkpoint->cnts);
+    timespec_next_avg(&end_tm, &checkpoint->aggregate_tm, 1);
+
+    checkpoint->active = 0;
+}
+
+static void castle_request_timeline_inactive_fini(c_req_time_t *timeline)
+{
+    struct castle_checkpoint *checkpoint;
+//    struct timespec end_tm;
+//    s64 start_ns, end_ns;
+
+    checkpoint = &timeline->checkpoints[MAX_CHECK_POINTS];
+    checkpoint->max_tm = checkpoint->aggregate_tm;
+    checkpoint->min_tm = checkpoint->aggregate_tm;
+}
+
+c_req_time_t* _castle_request_timeline_create(void)
+{
+    c_req_time_t* timeline;
+
+    /* Create the timeline when sequence # is divisible by period. */
+    if(atomic_inc_return(&castle_checkpoint_create_seq) % REQUEST_PERIOD != 0)
+        return NULL;
+    timeline = castle_zalloc(sizeof(c_req_time_t), GFP_KERNEL);
+    if(!timeline)
+        return NULL;
+    timeline->active_checkpoint = -1;
+    INIT_LIST_HEAD(&timeline->list);
+    castle_request_timeline_add(timeline);
+    getnstimeofday(&timeline->create_tm);
+
+    /* Init and start inactive checkpoint. */
+    castle_request_timeline_inactive_init(timeline);
+    castle_request_timeline_inactive_start(timeline);
+
+    return timeline;
+}
+
 /* Records the start of operation, called from file:line */
 void _castle_request_timeline_checkpoint_start(c_req_time_t *timeline,
                                                char *desc,
@@ -212,6 +282,9 @@ void _castle_request_timeline_checkpoint_start(c_req_time_t *timeline,
                 desc, file, line, checkpoint->desc, checkpoint->file, checkpoint->line);
         return;
     }
+
+    /* Stop inactive checkpoint. */
+    castle_request_timeline_inactive_stop(timeline);
 
     /* We checked that we are not in checkpoint ATM, so this should not be active */
     BUG_ON(checkpoint->active);
@@ -253,6 +326,9 @@ void castle_request_timeline_checkpoint_stop(c_req_time_t *timeline)
     timespec_next_min(&end_tm, &checkpoint->min_tm, checkpoint->cnts);
     timespec_next_avg(&end_tm, &checkpoint->aggregate_tm, checkpoint->cnts);
 
+    /* Start inactive checkpoint. */
+    castle_request_timeline_inactive_start(timeline);
+
     checkpoint->cnts++;
     checkpoint->active = 0;
     timeline->active_checkpoint = -1;
@@ -262,6 +338,11 @@ void castle_request_timeline_destroy(c_req_time_t *timeline)
 {
     if(!timeline)
         return;
+
+    /* Stop inactive checkpoint. */
+    castle_request_timeline_inactive_stop(timeline);
+    castle_request_timeline_inactive_fini(timeline);
+
     /* Record the time, and move to the dead list */
     getnstimeofday(&timeline->destroy_tm);
     castle_request_timeline_del(timeline);
@@ -280,7 +361,7 @@ static void castle_request_timeline_process(c_req_time_t *timeline)
     int i;
 
     /* Process the duration of the entire timeline first */
-    check_stats = &castle_checkpoint_stats[MAX_CHECK_POINTS];
+    check_stats = &castle_checkpoint_stats[MAX_CHECK_POINTS+1];
     BUG_ON(check_stats->line != 0 || check_stats->file != NULL);
     end_ns = timespec_to_ns(&timeline->destroy_tm);
     start_ns = timespec_to_ns(&timeline->create_tm);
@@ -291,7 +372,7 @@ static void castle_request_timeline_process(c_req_time_t *timeline)
     check_stats->cnt++;
 
     /* Now process each of the non-empty checkpoints */
-    for(i=0; i<MAX_CHECK_POINTS; i++)
+    for (i = 0; i < MAX_CHECK_POINTS + 1; i++)
     {
         check_stats = &castle_checkpoint_stats[i];
         checkpoint = &timeline->checkpoints[i];
@@ -340,11 +421,11 @@ static void castle_checkpoint_stats_print(void)
     int i;
 
     castle_printk(LOG_DEVEL, "Printing timing statistics.\n");
-    for(i=0; i<=MAX_CHECK_POINTS; i++)
+    for (i = 0; i < MAX_CHECK_POINTS + 2; i++)
     {
         check_stats = &castle_checkpoint_stats[i];
         /* Skip empty stats */
-        if(!check_stats->file && (i != MAX_CHECK_POINTS))
+        if(!check_stats->file && (i < MAX_CHECK_POINTS))
         {
             BUG_ON(check_stats->line != 0);
             continue;
@@ -354,7 +435,10 @@ static void castle_checkpoint_stats_print(void)
         if(i < MAX_CHECK_POINTS)
             castle_printk(LOG_DEVEL, "For checkpoint (%s) started at %s:%d, samples=%d\n",
                 check_stats->desc, check_stats->file, check_stats->line, check_stats->cnt);
-        else
+        else if (i == MAX_CHECK_POINTS)
+            castle_printk(LOG_DEVEL, "Inactive times for entire timeline, samples=%d:\n",
+                    check_stats->cnt);
+        else if (i == MAX_CHECK_POINTS + 1)
             castle_printk(LOG_DEVEL, "For entire timeline, samples=%d:\n", check_stats->cnt);
 
         if(check_stats->cnt == 0)
@@ -385,14 +469,18 @@ static void castle_request_timeline_print(c_req_time_t *timeline)
     dur_tm = ns_to_timespec(dur);
     castle_printk(LOG_DEVEL, "Durat. : %.2ld.%.6ld\n", dur_tm.tv_sec, (dur_tm.tv_nsec + 500) / 1000);
 
-    for(i=0; i<MAX_CHECK_POINTS; i++)
+    for (i = 0; i < MAX_CHECK_POINTS + 1; i++)
     {
         checkpoint = &timeline->checkpoints[i];
         if(checkpoint->file == NULL)
             continue;
 
-        castle_printk(LOG_DEVEL, "For checkpoint (%s) started at %s:%d\n",
-                checkpoint->desc, checkpoint->file, checkpoint->line);
+        if (i < MAX_CHECK_POINTS)
+            castle_printk(LOG_DEVEL, "For checkpoint (%s) started at %s:%d\n",
+                    checkpoint->desc, checkpoint->file, checkpoint->line);
+        else
+            castle_printk(LOG_DEVEL, "For inactive checkpoint:\n");
+
         dur = timespec_to_ns(&checkpoint->aggregate_tm);
         if (!checkpoint->cnts)
             continue;
@@ -430,8 +518,8 @@ static int castle_time_run(void *unused)
         castle_request_timeline_process(timeline);
         if(cnt % PRINT_PERIOD == 0)
         {
-            castle_request_timeline_print(timeline);
-            castle_checkpoint_stats_print();
+            castle_request_timeline_print(timeline);    /* Stats for timeline           */
+            castle_checkpoint_stats_print();            /* Printing timing statistics   */
         }
         castle_free(timeline);
         cnt++;

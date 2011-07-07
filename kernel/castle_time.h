@@ -19,10 +19,10 @@ typedef struct castle_request_timeline {
         struct timespec  aggregate_tm;
         struct timespec  max_tm;
         struct timespec  min_tm;
-        char            *desc;              /**< User-defined checkpoint description.   */
-        char            *file;
-        int              line;
-    } checkpoints[MAX_CHECK_POINTS];
+        char            *desc;              /**< User-defined checkpoint description.           */
+        char            *file;              /**< File checkpoint_start() called from.           */
+        int              line;              /**< Line in file checkpoint_start() called from.   */
+    } checkpoints[MAX_CHECK_POINTS+1];      /**< +1 for stats on inactive duration.             */
 
     struct list_head list;
 } c_req_time_t;
