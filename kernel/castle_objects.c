@@ -350,8 +350,8 @@ static void castle_objects_rq_iter_register_cb(castle_object_iterator_t *iter,
                                                castle_iterator_end_io_t cb,
                                                void *data)
 {
-    iter->data = data;
-    iter->end_io = cb;
+    iter->async_iter.private = data;
+    iter->async_iter.end_io = cb;
 }
 
 static void castle_objects_rq_iter_next(castle_object_iterator_t *iter,
@@ -373,8 +373,7 @@ static void castle_objects_rq_iter_next_key_free(castle_object_iterator_t *iter)
     iter->last_next_key = NULL;
 }
 
-static int _castle_objects_rq_iter_prep_next(castle_object_iterator_t *iter,
-                                             int sync_call)
+static int castle_objects_rq_iter_prep_next(castle_object_iterator_t *iter)
 {
     void *k;
     c_ver_t v;
@@ -385,11 +384,14 @@ static int _castle_objects_rq_iter_prep_next(castle_object_iterator_t *iter,
     {
         if(iter->cached || iter->completed)
             return 1;
-        if(!sync_call && !castle_da_rq_iter.prep_next(&iter->da_rq_iter))
+        if(!castle_da_rq_iter.prep_next(&iter->da_rq_iter))
             return 0;
         /* Nothing cached, check if da_rq_iter has anything */
         if(!castle_da_rq_iter.has_next(&iter->da_rq_iter))
+        {
+            iter->completed = 1;
             return 1;
+        }
 
         /* Nothing cached, but there is something in the da_rq_iter.
            Check if that's within the rq hypercube */
@@ -443,37 +445,32 @@ static int _castle_objects_rq_iter_prep_next(castle_object_iterator_t *iter,
     BUG();
 }
 
-static int castle_objects_rq_iter_prep_next(castle_object_iterator_t *iter)
-{
-    return _castle_objects_rq_iter_prep_next(iter, 0);
-}
-
 static void castle_objects_rq_iter_end_io(void *da_iter,
                                           int err)
 {
     castle_object_iterator_t *iter = ((c_da_rq_iter_t *)da_iter)->async_iter.private;
 
     if (castle_objects_rq_iter_prep_next(iter))
-        iter->end_io(iter, 0);
+        iter->async_iter.end_io(iter, 0);
 }
 
 static int castle_objects_rq_iter_has_next(castle_object_iterator_t *iter)
 {
-    BUG_ON(!_castle_objects_rq_iter_prep_next(iter, 1));
-
     debug_obj("%s:%p\n", __FUNCTION__, iter);
     if(iter->cached)
         return 1;
 
     /* End of iterator. */
-    if(iter->completed)
-        return 0;
+    BUG_ON(!iter->completed);
 
+    return 0;
+#if 0
     /* Nothing cached, check if da_rq_iter has anything */
     BUG_ON(castle_da_rq_iter.has_next(&iter->da_rq_iter));
     debug_obj("%s:%p - reschedule\n", __FUNCTION__, iter);
 
     return 0;
+#endif
 }
 
 static void castle_objects_rq_iter_cancel(castle_object_iterator_t *iter)
@@ -484,12 +481,22 @@ static void castle_objects_rq_iter_cancel(castle_object_iterator_t *iter)
     castle_objects_rq_iter_next_key_free(iter);
 }
 
+struct castle_iterator_type castle_objects_rq_iter = {
+    .register_cb= (castle_iterator_register_cb_t)castle_objects_rq_iter_register_cb,
+    .prep_next  = (castle_iterator_prep_next_t)  castle_objects_rq_iter_prep_next,
+    .has_next   = (castle_iterator_has_next_t)   castle_objects_rq_iter_has_next,
+    .next       = (castle_iterator_next_t)       castle_objects_rq_iter_next,
+    .skip       = NULL,
+    .cancel     = (castle_iterator_cancel_t)     castle_objects_rq_iter_cancel,
+};
+
 static void castle_objects_rq_iter_init(castle_object_iterator_t *iter)
 {
     BUG_ON(!iter->start_key || !iter->end_key);
 
     iter->err = 0;
-    iter->end_io = NULL;
+    iter->async_iter.end_io = NULL;
+    iter->async_iter.iter_type = &castle_objects_rq_iter;
     iter->cached = 0;
     /* Set the error on da_rq_iter, which will get cleared by the init,
        but will prevent castle_object_rq_iter_cancel from cancelling the
@@ -521,15 +528,6 @@ static void castle_objects_rq_iter_init(castle_object_iterator_t *iter)
         return;
     }
 }
-
-struct castle_iterator_type castle_objects_rq_iter = {
-    .register_cb= (castle_iterator_register_cb_t)castle_objects_rq_iter_register_cb,
-    .prep_next  = (castle_iterator_prep_next_t)  castle_objects_rq_iter_prep_next,
-    .has_next   = (castle_iterator_has_next_t)   castle_objects_rq_iter_has_next,
-    .next       = (castle_iterator_next_t)       castle_objects_rq_iter_next,
-    .skip       = NULL,
-    .cancel     = (castle_iterator_cancel_t)     castle_objects_rq_iter_cancel,
-};
 
 /**********************************************************************************************/
 /* High level interface functions */

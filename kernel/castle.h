@@ -1575,6 +1575,7 @@ typedef int (*castle_object_iter_next_available_t)
          void *data);
 
 typedef struct castle_object_iterator {
+    c_async_iterator_t  async_iter;
     /* Filled in by the client */
     c_da_t              da_id;
     c_ver_t             version;
@@ -1591,10 +1592,8 @@ typedef struct castle_object_iterator {
     void               *cached_k;
     c_ver_t             cached_v;
     c_val_tup_t         cached_cvt;
-    castle_iterator_end_io_t end_io;
     castle_object_iter_next_available_t next_available;
     void               *next_available_data;
-    void               *data;
     struct work_struct  work;
 } castle_object_iterator_t;
 
