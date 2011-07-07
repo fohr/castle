@@ -3376,6 +3376,8 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
      * parameters in level. Taking a copy of required members. */
     node_c2b        = level->node_c2b;
     valid_end_idx   = level->valid_end_idx;
+    /* We expecting the nodes to have more than one entry. */
+    BUG_ON(valid_end_idx == 0);
 
     /* for non-leaf nodes, the c2b will be unlocked */
     if (depth > 0)
@@ -3951,8 +3953,7 @@ static int castle_da_merge_progress_update(struct castle_da_merge *merge, uint32
  */
 static int castle_da_entry_skip(struct castle_da_merge *merge,
                                 void *key,
-                                c_ver_t version,
-                                int counter_delta)
+                                c_ver_t version)
 {
     struct castle_btree_type *btree = merge->out_btree;
     struct castle_version_delete_state *state = &merge->snapshot_delete;
@@ -3970,7 +3971,83 @@ static int castle_da_entry_skip(struct castle_da_merge *merge,
         state->next_deleted = NULL;
     }
 
-    return castle_version_is_deletable(state, version, merge->is_new_key, counter_delta);
+    return castle_version_is_deletable(state, version, merge->is_new_key);
+}
+
+static void castle_da_counter_delete(struct castle_da_merge *merge,
+                                     void *key,
+                                     c_ver_t version,
+                                     c_val_tup_t cvt)
+{
+    c_val_tup_t entry_cvt, accumulator_cvt;
+    c_ver_t child_version, entry_version;
+    struct castle_da_merge_level *level;
+    struct castle_btree_type *btree;
+    struct castle_btree_node *node;
+    void *entry_key;
+    int idx, ret;
+
+    castle_printk(LOG_DEBUG, "Deleting a counter, merge %p\n", merge);
+    /* Init vars. */
+    level = &merge->levels[0];
+    btree = merge->out_btree;
+
+    /* If the node doesn't exist, it means there are no descendants to worry about. */
+    if(!level->node_c2b)
+        return;
+
+    castle_printk(LOG_DEBUG, "Starting from idx=%d\n", level->next_idx-1);
+    node = c2b_bnode(level->node_c2b);
+    child_version = INVAL_VERSION;
+    /* Go through entries in the node, accumulate the relevant ones. */
+    for(idx=level->next_idx-1; idx>=0; idx--)
+    {
+        btree->entry_get(node, idx, &entry_key, &entry_version, &entry_cvt);
+        castle_printk(LOG_DEBUG, "Idx=%d, entry_version=%d, cvt.type=%d\n",
+            idx, entry_version, entry_cvt.type);
+
+        /* If we reached another (smaller) key, we can terminate. */
+        ret = btree->key_compare(entry_key, key);
+        castle_printk(LOG_DEBUG, "Key compare=%d\n", ret);
+        BUG_ON(ret > 0);
+        if(ret < 0)
+            return;
+
+        castle_printk(LOG_DEBUG, "Deleted version=%d, entry version=%d, child_version=%d\n",
+            version, entry_version, child_version);
+        /* If we reached a version which isn't a descendant of the deleted version
+           we must have dealt with entire subtree of the deleted version. Exit. */
+        if(!castle_version_is_ancestor(version, entry_version))
+            return;
+
+        castle_printk(LOG_DEBUG, "Entry version is descendant of the deleted version.\n");
+        /* Go to the next entry if current entry is a descendant of the current
+           'child' version, which already accumulated the deleted entry. */
+        if(!VERSION_INVAL(child_version) &&
+            castle_version_is_ancestor(child_version, entry_version))
+            continue;
+
+        castle_printk(LOG_DEBUG, "Entry version is a direct child.\n");
+        /* We reached a direct child (in this array) of the deleted version,
+           do the accumulation, and update vars.
+           If the entry isn't a counter add, accumulation is a noop.
+         */
+        child_version = version;
+        if(!CVT_ADD_COUNTER(entry_cvt))
+            continue;
+
+        castle_printk(LOG_DEBUG, "Entry cvt is an add.\n");
+        /* Accumulation is neccessary. Accumulate entry_cvt first. */
+        CVT_COUNTER_LOCAL_ADD_SET(accumulator_cvt, 0);
+        ret = castle_counter_simple_reduce(&accumulator_cvt, entry_cvt);
+        /* We know that entry_cvt is an add, therefore accumulation musn't terminate. */
+        BUG_ON(ret);
+        /* Accumulate deleted cvt next. */
+        castle_counter_simple_reduce(&accumulator_cvt, cvt);
+        castle_printk(LOG_DEBUG, "Accumulated to 0x%llx.\n", accumulator_cvt.counter);
+        /* Write out the updated entry. */
+        btree->entry_replace(node, idx, key, entry_version, accumulator_cvt);
+    }
 }
 
 static int castle_da_merge_unit_do(struct castle_da_merge *merge, uint32_t unit_nr)
@@ -4003,8 +4080,12 @@ static int castle_da_merge_unit_do(struct castle_da_merge *merge, uint32_t unit_
         stats = merge->merged_iter->stats;
 
         /* Skip entry if version marked for deletion and no descendant keys. */
-        if (castle_da_entry_skip(merge, key, version, CVT_ADD_COUNTER(cvt)))
+        if (castle_da_entry_skip(merge, key, version))
         {
+            /* If a counter is being deleted, it needs to be pushed to its
+               descendants, otherwise we would loose its contribution. */
+            if (CVT_ANY_COUNTER(cvt))
+                castle_da_counter_delete(merge, key, version, cvt);
             /* Update per-version and merge statistics.
              *
              * We do not need to decrement keys/tombstones for level 1 merges
