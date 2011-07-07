@@ -1884,7 +1884,7 @@ static void castle_back_iter_next(void *data)
     int err;
     struct castle_back_stateful_op *stateful_op;
 
-    debug_iter("castle_back_iter_next, token = 0x%x\n", op->req.iter_finish.token);
+    debug_iter("castle_back_iter_next, token = 0x%x\n", op->req.iter_next.token);
 
     stateful_op = castle_back_find_stateful_op(conn,
             op->req.iter_next.token, CASTLE_RING_ITER_START);
