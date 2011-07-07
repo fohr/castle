@@ -451,7 +451,7 @@ static int castle_objects_rq_iter_prep_next(castle_object_iterator_t *iter)
 static void castle_objects_rq_iter_end_io(void *da_iter,
                                           int err)
 {
-    castle_object_iterator_t *iter = ((c_da_rq_iter_t *)da_iter)->private;
+    castle_object_iterator_t *iter = ((c_da_rq_iter_t *)da_iter)->async_iter.private;
 
     if (castle_objects_rq_iter_prep_next(iter))
         iter->end_io(iter, 0);

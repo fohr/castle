@@ -282,6 +282,7 @@ struct castle_immut_iterator;
 typedef void (*castle_immut_iter_node_start) (struct castle_immut_iterator *);
 
 typedef struct castle_immut_iterator {
+    c_async_iterator_t            async_iter;
     struct castle_component_tree *tree;
     struct castle_btree_type     *btree;
     int                           completed;  /**< set to 1 when iterator is exhausted            */
@@ -298,7 +299,7 @@ typedef struct castle_immut_iterator {
     int32_t                       next_idx;   /**< offset within next_c2b of first entry to return*/
     castle_immut_iter_node_start  node_start; /**< callback handler to fire whenever iterator moves
                                                    to a new node within the btree                 */
-    void                         *private;    /**< callback handler private data                  */
+    void                         *private;
 } c_immut_iter_t;
 
 static int castle_ct_immut_iter_entry_find(c_immut_iter_t *iter,
@@ -493,6 +494,31 @@ static void castle_ct_immut_iter_next_node(c_immut_iter_t *iter)
                                         node_size);
 }
 
+static int castle_ct_immut_iter_prep_next(c_immut_iter_t *iter)
+{
+    /* Check if we can read from the curr_node. If not move to the next node.
+       Make sure that if entries exist, they are not leaf pointers. */
+    if(iter->curr_idx >= iter->curr_node->used || iter->curr_idx < 0)
+    {
+        if (!iter->next_c2b)
+        {
+            iter->completed = 1;
+            BUG_ON(!iter->curr_c2b);
+            put_c2b(iter->curr_c2b);
+            iter->curr_c2b = NULL;
+
+            return 1;
+        }
+
+        debug("No more entries in the current node. Asking for next.\n");
+        BUG_ON((iter->curr_idx >= 0) && (iter->curr_idx > iter->curr_node->used));
+        castle_ct_immut_iter_next_node(iter);
+        BUG_ON((iter->curr_idx >= 0) && (iter->curr_idx >= iter->curr_node->used));
+    }
+
+    return 1;
+}
+
 static void castle_ct_immut_iter_next(c_immut_iter_t *iter,
                                       void **key_p,
                                       c_ver_t *version_p,
@@ -502,13 +528,8 @@ static void castle_ct_immut_iter_next(c_immut_iter_t *iter,
 
     /* Check if we can read from the curr_node. If not move to the next node.
        Make sure that if entries exist, they are not leaf pointers. */
-    if(iter->curr_idx >= iter->curr_node->used || iter->curr_idx < 0)
-    {
-        debug("No more entries in the current node. Asking for next.\n");
-        BUG_ON((iter->curr_idx >= 0) && (iter->curr_idx > iter->curr_node->used));
-        castle_ct_immut_iter_next_node(iter);
-        BUG_ON((iter->curr_idx >= 0) && (iter->curr_idx >= iter->curr_node->used));
-    }
+    BUG_ON(iter->curr_idx >= iter->curr_node->used || iter->curr_idx < 0);
+
     disabled = iter->btree->entry_get(iter->curr_node,
                                       iter->curr_idx,
                                       key_p,
@@ -526,18 +547,28 @@ static int castle_ct_immut_iter_has_next(c_immut_iter_t *iter)
     if(unlikely(iter->completed))
         return 0;
 
-    if((iter->curr_idx >= iter->curr_node->used || iter->curr_idx < 0) && (!iter->next_c2b))
-    {
-        iter->completed = 1;
-        BUG_ON(!iter->curr_c2b);
-        put_c2b(iter->curr_c2b);
-        iter->curr_c2b = NULL;
-
-        return 0;
-    }
+    BUG_ON(iter->curr_idx >= iter->curr_node->used || iter->curr_idx < 0);
 
     return 1;
 }
+
+static void castle_ct_immut_iter_cancel(c_immut_iter_t *iter)
+{
+    debug("Cancelling immut enumerator for ct id=%d\n", iter->tree->seq);
+    if (iter->curr_c2b)
+        put_c2b(iter->curr_c2b);
+    if (iter->next_c2b)
+        put_c2b(iter->next_c2b);
+}
+
+struct castle_iterator_type castle_ct_immut_iter = {
+    .register_cb = NULL,
+    .prep_next   = (castle_iterator_prep_next_t)    castle_ct_immut_iter_prep_next,
+    .has_next    = (castle_iterator_has_next_t)     castle_ct_immut_iter_has_next,
+    .next        = (castle_iterator_next_t)         castle_ct_immut_iter_next,
+    .skip        = NULL,
+    .cancel      = (castle_iterator_cancel_t)       castle_ct_immut_iter_cancel,
+};
 
 /**
  * Initialise iterator for immutable btrees.
@@ -560,6 +591,8 @@ static void castle_ct_immut_iter_init(c_immut_iter_t *iter,
     iter->next_c2b  = NULL;
     iter->node_start= node_start;
     iter->private   = private;
+    iter->async_iter.end_io = NULL;
+    iter->async_iter.iter_type = &castle_ct_immut_iter;
 
     first_node_cep.ext_id = iter->tree->tree_ext_free.ext_id;
     first_node_cep.offset = 0;
@@ -572,24 +605,6 @@ static void castle_ct_immut_iter_init(c_immut_iter_t *iter,
     /* Init curr_c2b correctly */
     castle_ct_immut_iter_next_node(iter);
 }
-
-static void castle_ct_immut_iter_cancel(c_immut_iter_t *iter)
-{
-    debug("Cancelling immut enumerator for ct id=%d\n", iter->tree->seq);
-    if (iter->curr_c2b)
-        put_c2b(iter->curr_c2b);
-    if (iter->next_c2b)
-        put_c2b(iter->next_c2b);
-}
-
-struct castle_iterator_type castle_ct_immut_iter = {
-    .register_cb = NULL,
-    .prep_next   = NULL,
-    .has_next    = (castle_iterator_has_next_t)castle_ct_immut_iter_has_next,
-    .next        = (castle_iterator_next_t)    castle_ct_immut_iter_next,
-    .skip        = NULL,
-    .cancel      = (castle_iterator_cancel_t)castle_ct_immut_iter_cancel,
-};
 
 /**
  * Compare verion tuples k1,v1 against k2,v2.
@@ -637,6 +652,7 @@ static void castle_da_node_buffer_init(struct castle_btree_type *btree,
  * @also castle_ct_modlist_iter_init()
  */
 typedef struct castle_modlist_iterator {
+    c_async_iterator_t async_iter;
     struct castle_btree_type *btree;
     struct castle_component_tree *tree;
     uint16_t leaf_node_size;
@@ -751,6 +767,17 @@ static void castle_ct_modlist_iter_next(c_modlist_iter_t *iter,
 static int castle_ct_modlist_iter_has_next(c_modlist_iter_t *iter)
 {
     return (!iter->err && (iter->next_item < iter->nr_items));
+}
+
+/**
+ * Prepare the iterator for next key. This is a NOP for modlist_iter as the data is completly
+ * in buffer.
+ *
+ * @return 1    Always
+ */
+static int castle_ct_modlist_iter_prep_next(c_modlist_iter_t *iter)
+{
+    return 1;
 }
 
 /**
@@ -896,7 +923,7 @@ static void castle_ct_modlist_iter_fill(c_modlist_iter_t *iter)
     void *key;
 
     node_idx = item_idx = node_offset = 0;
-    while (castle_ct_immut_iter.has_next(iter->enumerator))
+    while (castle_iterator_has_next_sync(&castle_ct_immut_iter, iter->enumerator))
     {
         might_resched();
 
@@ -1083,6 +1110,14 @@ static void castle_ct_modlist_iter_mergesort(c_modlist_iter_t *iter)
     iter->dst_entry_idx = NULL;
 }
 
+struct castle_iterator_type castle_ct_modlist_iter = {
+    .register_cb = NULL,
+    .prep_next   = (castle_iterator_prep_next_t)    castle_ct_modlist_iter_prep_next,
+    .has_next    = (castle_iterator_has_next_t)     castle_ct_modlist_iter_has_next,
+    .next        = (castle_iterator_next_t)         castle_ct_modlist_iter_next,
+    .skip        = NULL,
+};
+
 /**
  * Initialise modlist btree iterator.
  *
@@ -1110,6 +1145,8 @@ static void castle_ct_modlist_iter_init(c_modlist_iter_t *iter)
     iter->err = 0;
     iter->btree = castle_btree_type_get(ct->btree_type);
     iter->leaf_node_size = iter->btree->node_size(ct, 0);
+    iter->async_iter.end_io = NULL;
+    iter->async_iter.iter_type = &castle_ct_modlist_iter;
 
     /* To prevent sudden kernel memory ballooning we impose a modlist byte
      * budget for all DAs.  Size the node buffer based on leaf nodes only. */
@@ -1154,14 +1191,6 @@ static void castle_ct_modlist_iter_init(c_modlist_iter_t *iter)
     iter->err = 0;
     iter->next_item = 0;
 }
-
-struct castle_iterator_type castle_ct_modlist_iter = {
-    .register_cb = NULL,
-    .prep_next   = NULL,
-    .has_next    = (castle_iterator_has_next_t)castle_ct_modlist_iter_has_next,
-    .next        = (castle_iterator_next_t)    castle_ct_modlist_iter_next,
-    .skip        = NULL,
-};
 
 /**
  * Insert (key,version) into RB-tree.
@@ -1278,11 +1307,51 @@ static void castle_ct_merge_iter_rbtree_remove(c_merged_iter_t *iter,
     rb_erase(node, root);
 }
 
-static int _castle_ct_merged_iter_prep_next(c_merged_iter_t *iter,
-                                            int sync_call)
+void castle_iterator_sync_end_io(void *iter, int err)
+{
+    c_async_iterator_t          *async_iter = (c_async_iterator_t *)iter;
+    struct castle_iterator_type *iter_type = async_iter->iter_type;
+
+    /* Don't expect any errors. */
+    BUG_ON(err);
+
+    /* prep_next() should succeed now. */
+    BUG_ON(iter_type->prep_next(iter));
+
+    /* Mark the task as completed and invoke the thread. */
+    complete((struct completion *)async_iter->private);
+}
+
+int castle_iterator_has_next_sync(struct castle_iterator_type *iter_type, void *iter)
+{
+    c_async_iterator_t *async_iter = (c_async_iterator_t *)iter;
+    struct completion completion;
+
+    /* Make sure the iterator type matches the type in iterator. */
+    BUG_ON(async_iter->iter_type != iter_type);
+
+    /* Set end_io(). It will overwrite any default callback. */
+    /* FIXME: This might lead to a problem, if we mix has_next_sync() and prep_next() calls. */
+    async_iter->end_io = castle_iterator_sync_end_io;
+
+    /* Initialise completion structure. Need to wait for the iterator to fill its buffer. */
+    init_completion(&completion);
+    async_iter->private = (void *)&completion;
+
+    /* If prep_next() fails, then wait for it to fill the buffer. */
+    if (!iter_type->prep_next(iter))
+        wait_for_completion(&completion);
+
+    /* Return with has_next() response. */
+    return iter_type->has_next(iter);
+}
+
+static int castle_ct_merged_iter_prep_next(c_merged_iter_t *iter)
 {
     int i;
     struct component_iterator *comp_iter;
+
+    debug_iter("%s:%p\n", __FUNCTION__, iter);
 
     /* Reset merged version iterator stats. */
     memset(&iter->stats, 0, sizeof(cv_nonatomic_stats_t));
@@ -1297,9 +1366,10 @@ static int _castle_ct_merged_iter_prep_next(c_merged_iter_t *iter,
         if(!comp_iter->completed && !comp_iter->cached)
         {
             debug("Reading next entry for iterator: %d.\n", i);
-            if (!sync_call &&
-                !comp_iter->iterator_type->prep_next(comp_iter->iterator)) {
+            if (!comp_iter->iterator_type->prep_next(comp_iter->iterator))
+            {
                 debug_iter("%s:%p:%p:%d - schedule\n", __FUNCTION__, iter, comp_iter->iterator, i);
+                iter->iter_running = 1;
                 return 0;
             }
             if (comp_iter->iterator_type->has_next(comp_iter->iterator))
@@ -1342,14 +1412,8 @@ static void castle_ct_merged_iter_register_cb(c_merged_iter_t *iter,
                                               castle_iterator_end_io_t cb,
                                               void *data)
 {
-    iter->end_io  = cb;
-    iter->private = data;
-}
-
-static int castle_ct_merged_iter_prep_next(c_merged_iter_t *iter)
-{
-    debug_iter("%s:%p\n", __FUNCTION__, iter);
-    return _castle_ct_merged_iter_prep_next(iter, 0);
+    iter->async_iter.end_io  = cb;
+    iter->async_iter.private = data;
 }
 
 static void castle_ct_merged_iter_end_io(void *rq_enum_iter, int err)
@@ -1360,7 +1424,10 @@ static void castle_ct_merged_iter_end_io(void *rq_enum_iter, int err)
     if (castle_ct_merged_iter_prep_next(iter))
     {
         debug_iter("%s:%p - Done\n", __FUNCTION__, iter);
-        iter->end_io(iter, 0);
+
+        iter->iter_running = 0;
+        iter->async_iter.end_io(iter, 0);
+
         return;
     }
 }
@@ -1368,9 +1435,13 @@ static void castle_ct_merged_iter_end_io(void *rq_enum_iter, int err)
 static int castle_ct_merged_iter_has_next(c_merged_iter_t *iter)
 {
     debug_iter("%s:%p\n", __FUNCTION__, iter);
-    BUG_ON(!_castle_ct_merged_iter_prep_next(iter, 1));
+
+    /* Iterator shouldn't be running(waiting for prep_next to complete) now. */
+    BUG_ON(iter->iter_running);
+
     debug("Merged iterator has next, err=%d, non_empty_cnt=%d\n",
             iter->err, iter->non_empty_cnt);
+
     return (!iter->err && (iter->non_empty_cnt > 0));
 }
 
@@ -1383,6 +1454,9 @@ static void castle_ct_merged_iter_next(c_merged_iter_t *iter,
 
     debug_iter("%s:%p\n", __FUNCTION__, iter);
     debug("Merged iterator next.\n");
+
+    /* Iterator shouldn't be running(waiting for prep_next to complete) now. */
+    BUG_ON(iter->iter_running);
 
     /* Get the smallest kv pair from RB tree. */
     comp_iter = castle_ct_merge_iter_rbtree_min_del(iter);
@@ -1402,6 +1476,10 @@ static void castle_ct_merged_iter_skip(c_merged_iter_t *iter,
     int i, skip_cached;
 
     debug_iter("%s:%p\n", __FUNCTION__, iter);
+
+    /* Iterator shouldn't be running(waiting for prep_next to complete) now. */
+    BUG_ON(iter->iter_running);
+
     /* Go through iterators, and do the following:
        * call skip in each of the iterators
        * check if we have something cached
@@ -1440,9 +1518,25 @@ static void castle_ct_merged_iter_skip(c_merged_iter_t *iter,
 
 static void castle_ct_merged_iter_cancel(c_merged_iter_t *iter)
 {
+    /* FIXME: Handle gracefully. It is possible for range queries to cancel iterator, when it
+     * is running. But, usually prep_next completes before expire time. Still possible not to
+     * complete.We need to wait for iterator to complete with prep_next. But, make sure
+     * it is not racing. */
+    /* Iterator shouldn't be running(waiting for prep_next to complete) now. */
+    BUG_ON(iter->iter_running);
+
     if (iter->iterators)
         castle_free(iter->iterators);
 }
+
+struct castle_iterator_type castle_ct_merged_iter = {
+    .register_cb = (castle_iterator_register_cb_t)castle_ct_merged_iter_register_cb,
+    .prep_next   = (castle_iterator_prep_next_t)  castle_ct_merged_iter_prep_next,
+    .has_next    = (castle_iterator_has_next_t)   castle_ct_merged_iter_has_next,
+    .next        = (castle_iterator_next_t)       castle_ct_merged_iter_next,
+    .skip        = (castle_iterator_skip_t)       castle_ct_merged_iter_skip,
+    .cancel      = (castle_iterator_cancel_t)     castle_ct_merged_iter_cancel,
+};
 
 /**
  * Initialise a meta iterator from a number of component iterators.
@@ -1464,7 +1558,9 @@ static void castle_ct_merged_iter_init(c_merged_iter_t *iter,
     BUG_ON(!iter->btree);
     iter->err = 0;
     iter->src_items_completed = 0;
-    iter->end_io = NULL;
+    iter->async_iter.end_io = NULL;
+    iter->async_iter.iter_type = &castle_ct_merged_iter;
+    iter->iter_running = 0;
     iter->rb_root = RB_ROOT;
     iter->iterators = castle_malloc(iter->nr_iters * sizeof(struct component_iterator), GFP_KERNEL);
     if(!iter->iterators)
@@ -1493,15 +1589,6 @@ static void castle_ct_merged_iter_init(c_merged_iter_t *iter,
                                                   (void *)iter);
     }
 }
-
-struct castle_iterator_type castle_ct_merged_iter = {
-    .register_cb = (castle_iterator_register_cb_t)castle_ct_merged_iter_register_cb,
-    .prep_next   = (castle_iterator_prep_next_t)  castle_ct_merged_iter_prep_next,
-    .has_next    = (castle_iterator_has_next_t)   castle_ct_merged_iter_has_next,
-    .next        = (castle_iterator_next_t)       castle_ct_merged_iter_next,
-    .skip        = (castle_iterator_skip_t)       castle_ct_merged_iter_skip,
-    .cancel      = (castle_iterator_cancel_t)     castle_ct_merged_iter_cancel,
-};
 
 
 #ifdef DEBUG
@@ -1549,7 +1636,7 @@ static USED void castle_ct_sort(struct castle_component_tree *ct1,
                                iter_types,
                                NULL);
     debug("=============== SORTED ================\n");
-    while(castle_ct_merged_iter_has_next(&test_miter))
+    while(castle_iterator_has_next_sync(&castle_ct_merged_iter, &test_miter))
     {
         castle_ct_merged_iter_next(&test_miter, &key, &version, &cvt);
         debug("Sorted: %d: k=%p, version=%d, cep=" cep_fmt_str_nl,
@@ -1568,8 +1655,8 @@ static void castle_da_rq_iter_register_cb(c_da_rq_iter_t *iter,
                                           castle_iterator_end_io_t cb,
                                           void *data)
 {
-    iter->end_io  = cb;
-    iter->private = data;
+    iter->async_iter.end_io  = cb;
+    iter->async_iter.private = data;
 }
 
 static int castle_da_rq_iter_prep_next(c_da_rq_iter_t *iter)
@@ -1585,11 +1672,11 @@ static int castle_da_rq_iter_has_next(c_da_rq_iter_t *iter)
 
 static void castle_da_rq_iter_end_io(void *merged_iter, int err)
 {
-    c_da_rq_iter_t *iter = ((c_merged_iter_t *)merged_iter)->private;
+    c_da_rq_iter_t *iter = ((c_merged_iter_t *)merged_iter)->async_iter.private;
 
     if (castle_da_rq_iter_prep_next(iter))
     {
-        iter->end_io(iter, 0);
+        iter->async_iter.end_io(iter, 0);
         return;
     }
     else
@@ -1649,7 +1736,7 @@ again:
        a spinlock). */
     iter->nr_cts = da->nr_trees;
     iter->err    = 0;
-    iter->end_io = NULL;
+    iter->async_iter.end_io = NULL;
     iter->ct_rqs = castle_zalloc(iter->nr_cts * sizeof(struct ct_rq), GFP_KERNEL);
     iters        = castle_malloc(iter->nr_cts * sizeof(void *), GFP_KERNEL);
     iter_types   = castle_malloc(iter->nr_cts * sizeof(struct castle_iterator_type *), GFP_KERNEL);
@@ -3763,7 +3850,7 @@ static int castle_da_merge_unit_do(struct castle_da_merge *merge, uint32_t unit_
     struct timespec ts_start, ts_end;
 #endif
 
-    while (castle_ct_merged_iter_has_next(merge->merged_iter))
+    while (castle_iterator_has_next_sync(&castle_ct_merged_iter, merge->merged_iter))
     {
         cv_nonatomic_stats_t stats;
 

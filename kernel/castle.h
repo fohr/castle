@@ -1072,6 +1072,8 @@ struct castle_iterator_type {
     castle_iterator_cancel_t      cancel;
  };
 
+int castle_iterator_has_next_sync(struct castle_iterator_type *iter_type, void *iter);
+
 /* Used to lock nodes pointed to by leaf pointers (refered to as 'indirect nodes') */
 struct castle_indirect_node {
     /* Will form array of c2b/{cep, f_idx} for the indirect nodes. Sorted by
@@ -1232,12 +1234,20 @@ typedef void (*castle_merged_iterator_each_skip) (struct castle_merged_iterator 
                                                   struct component_iterator *,
                                                   struct component_iterator *);
 
+typedef struct castle_async_iterator {
+    castle_iterator_end_io_t        end_io;
+    struct castle_iterator_type    *iter_type;
+    void                           *private;
+} c_async_iterator_t;
+
 typedef struct castle_merged_iterator {
-    int nr_iters;
-    struct castle_btree_type *btree;
-    int err;
-    int64_t non_empty_cnt;
-    uint64_t src_items_completed;
+    c_async_iterator_t              async_iter;
+    int                             iter_running;
+    int                             nr_iters;
+    struct castle_btree_type       *btree;
+    int                             err;
+    int64_t                         non_empty_cnt;
+    uint64_t                        src_items_completed;
     struct component_iterator {
         int                          completed;
         void                        *iterator;
@@ -1253,11 +1263,10 @@ typedef struct castle_merged_iterator {
     struct rb_root                   rb_root;
     cv_nonatomic_stats_t             stats;         /**< Stat changes during last _next().  */
     castle_merged_iterator_each_skip each_skip;
-    castle_iterator_end_io_t         end_io;
-    void                            *private;
 } c_merged_iter_t;
 
 typedef struct castle_da_rq_iterator {
+    c_async_iterator_t        async_iter;
     int                       nr_cts;
     int                       err;
     c_merged_iter_t           merged_iter;
@@ -1266,8 +1275,6 @@ typedef struct castle_da_rq_iterator {
         struct castle_component_tree *ct;
         c_rq_enum_t                   ct_rq_iter;
     } *ct_rqs;
-    castle_iterator_end_io_t  end_io;
-    void                     *private;
 } c_da_rq_iter_t;
 
 
