@@ -4112,7 +4112,7 @@ static void castle_rq_enum_iter_node_end(c_iter_t *c_iter)
     {
         /* Call callback of the higher level iterator */
         rq_debug("%p - Done\n", rq_enum);
-        rq_enum->end_io(rq_enum, 0);
+        rq_enum->async_iter.end_io(rq_enum, 0);
     }
 
     wake_up(&rq_enum->iter_wq);
@@ -4129,7 +4129,7 @@ static void castle_rq_enum_iter_end(c_iter_t *c_iter, int err)
     rq_debug("Nothing left in %p\n", rq_enum);
 
     /* end_io() would be set to NULL, if this callback is result of rq_enum_cancel(). */
-    if (rq_enum->end_io)
+    if (rq_enum->async_iter.end_io)
     {
         /* Verify prep_next() succeeding. */
         BUG_ON(!castle_btree_rq_enum_prep_next(rq_enum));
@@ -4137,7 +4137,7 @@ static void castle_rq_enum_iter_end(c_iter_t *c_iter, int err)
         rq_debug("%p - Done\n", rq_enum);
 
         /* Call callback of the higher level iterator */
-        rq_enum->end_io(rq_enum, 0);
+        rq_enum->async_iter.end_io(rq_enum, 0);
     }
 
     wake_up(&rq_enum->iter_wq);
@@ -4178,7 +4178,8 @@ void castle_btree_rq_enum_init(c_rq_enum_t *rq_enum, c_ver_t version,
 
     rq_enum->tree           = tree;
     rq_enum->err            = 0;
-    rq_enum->end_io         = NULL;
+    rq_enum->async_iter.end_io = NULL;
+    rq_enum->async_iter.iter_type = &castle_btree_rq_iter;
     rq_enum->version        = version;
     rq_enum->iter_completed = 0;
     init_waitqueue_head(&rq_enum->iter_wq);
@@ -4272,8 +4273,8 @@ static void castle_btree_rq_enum_register_cb(c_rq_enum_t *iter,
                                              castle_iterator_end_io_t cb,
                                              void *data)
 {
-    iter->end_io  = cb;
-    iter->private = data;
+    iter->async_iter.end_io  = cb;
+    iter->async_iter.private = data;
 }
 
 /* Returns 1 - if ready to call has_next(); 0 - if waiting for some IO operation
@@ -4297,7 +4298,7 @@ static int castle_btree_rq_enum_prep_next(c_rq_enum_t *rq_enum)
     if (rq_enum->iter_completed)
         return 1;
 
-    BUG_ON(rq_enum->end_io == NULL);
+    BUG_ON(rq_enum->async_iter.end_io == NULL);
 
     /* Check if the first entry in buffer is smaller than end key. */
     if (cons_idx_prod_idx_compare(rq_enum))
@@ -4442,7 +4443,7 @@ void castle_btree_rq_enum_cancel(c_rq_enum_t *rq_enum)
         /* castle_btree_iter_start() would call end() on the cancellation of iterator.
          * We don't need this call get promoted to higher level iterators. Reset end_io here.
          * We don't need this anymore. */
-        rq_enum->end_io = NULL;
+        rq_enum->async_iter.end_io = NULL;
         wmb();
         castle_btree_iter_start(iter);
         wait_event(rq_enum->iter_wq, (rq_enum->iter_running == 0));

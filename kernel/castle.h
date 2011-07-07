@@ -1203,8 +1203,15 @@ typedef struct castle_version_nonatomic_stats {
     long        key_replaces;       /**< castle_version_stats.key_replaces                  */
 } cv_nonatomic_stats_t;
 
+typedef struct castle_async_iterator {
+    castle_iterator_end_io_t        end_io;
+    struct castle_iterator_type    *iter_type;
+    void                           *private;
+} c_async_iterator_t;
+
 /* Enumerates latest version value for all entries */
 typedef struct castle_rq_enumerator {
+    c_async_iterator_t            async_iter;
     struct castle_component_tree *tree;
     int                           err;
     c_ver_t                       version;
@@ -1223,8 +1230,6 @@ typedef struct castle_rq_enumerator {
     void                         *end_key;
     void                         *last_key;  /* Last key returned by next(). */
     int                           in_range;
-    castle_iterator_end_io_t      end_io;
-    void                         *private;
 } c_rq_enum_t;
 
 struct castle_merged_iterator;
@@ -1233,12 +1238,6 @@ struct component_iterator;
 typedef void (*castle_merged_iterator_each_skip) (struct castle_merged_iterator *,
                                                   struct component_iterator *,
                                                   struct component_iterator *);
-
-typedef struct castle_async_iterator {
-    castle_iterator_end_io_t        end_io;
-    struct castle_iterator_type    *iter_type;
-    void                           *private;
-} c_async_iterator_t;
 
 typedef struct castle_merged_iterator {
     c_async_iterator_t              async_iter;

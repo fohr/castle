@@ -1418,7 +1418,7 @@ static void castle_ct_merged_iter_register_cb(c_merged_iter_t *iter,
 
 static void castle_ct_merged_iter_end_io(void *rq_enum_iter, int err)
 {
-    c_merged_iter_t *iter = ((c_rq_enum_t *) rq_enum_iter)->private;
+    c_merged_iter_t *iter = ((c_rq_enum_t *) rq_enum_iter)->async_iter.private;
 
     debug_iter("%s:%p\n", __FUNCTION__, iter);
     if (castle_ct_merged_iter_prep_next(iter))
