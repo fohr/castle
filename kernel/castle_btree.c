@@ -1140,11 +1140,6 @@ static void castle_vlba_tree_entry_add(struct castle_btree_node *node,
     BUG_ON(VLBA_TREE_ENTRY_IS_TOMB_STONE(entry) && entry->val_len != 0);
     if (VLBA_TREE_ENTRY_IS_INLINE(entry))
     {
-        if(VLBA_ENTRY_IS_COUNTER_ADD(entry))
-            castle_printk(LOG_DEVEL, "%s::got a counter_ADD.\n", __FUNCTION__);
-        if(VLBA_ENTRY_IS_COUNTER_SET(entry))
-            castle_printk(LOG_DEVEL, "%s::got a counter_SET.\n", __FUNCTION__);
-
         BUG_ON(entry->val_len > MAX_INLINE_VAL_SIZE);
         BUG_ON(VLBA_ENTRY_VAL_PTR(entry)+cvt.length > EOF_VLBA_NODE(node));
         memmove(VLBA_ENTRY_VAL_PTR(entry),
@@ -2374,11 +2369,6 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
             return;
         }
 
-        if(CVT_COUNTER_ADD(new_cvt))
-            castle_printk(LOG_DEVEL, "%s::slot_insert a counter_ADD.\n", __FUNCTION__);
-        if(CVT_COUNTER_SET(new_cvt))
-            castle_printk(LOG_DEVEL, "%s::slot_insert a counter_SET.\n", __FUNCTION__);
-
         atomic64_inc(&c_bvec->tree->item_count);
 
         /* Update live per-version statistics. */
@@ -2524,8 +2514,7 @@ static void castle_btree_read_process(c_bvec_t *c_bvec)
     /* If we haven't found the LUB (in the leaf node), return early */
     if(lub_idx < 0)
     {
-        castle_printk(LOG_DEVEL, "%s::Could not find the LUB for (k,v)=(%p, 0x%x)\n",
-                __FUNCTION__, key, version);
+        castle_printk(LOG_INFO, "Could not find the LUB for (k,v)=(%p, 0x%x)\n", key, version);
         castle_btree_io_end(c_bvec, INVAL_VAL_TUP, 0);
         return;
     }
@@ -2570,11 +2559,10 @@ static void castle_btree_read_process(c_bvec_t *c_bvec)
     {
         BUG_ON(CVT_LEAF_VAL(lub_cvt));
         if (CVT_LEAF_PTR(lub_cvt))
-            castle_printk(LOG_DEVEL, "%s::Leaf ptr. Read and search "cep_fmt_str_nl,
-                    __FUNCTION__, cep2str(lub_cvt.cep));
+            debug("Leaf ptr. Read and search "cep_fmt_str_nl,
+                   cep2str(lub_cvt.cep));
         else if (CVT_NODE(lub_cvt))
-            castle_printk(LOG_DEVEL, "%s::Child node. Read and search - inline value\n",
-                    __FUNCTION__);
+            debug("Child node. Read and search - inline value\n");
         else
             BUG();
         /* parent_key is not needed when reading (also, we might be looking at a leaf ptr)

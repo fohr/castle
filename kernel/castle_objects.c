@@ -930,11 +930,6 @@ static int castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
         atomic64_add(nr_chunks, &c_bvec->tree->large_ext_chk_cnt);
     }
 
-    /* @TODO 3 if statements below are for debugging, remove when stable. */
-    if(CVT_COUNTER_ACCUM_SET_SET(replace->cvt))
-        castle_printk(LOG_DEVEL, "%s::got a counter_SET.\n", __FUNCTION__);
-    if(CVT_COUNTER_ACCUM_ADD_ADD(replace->cvt))
-        castle_printk(LOG_DEVEL, "%s::got a counter_ADD.\n", __FUNCTION__);
     if( CVT_COUNTER_ADD(replace->cvt) || CVT_COUNTER_SET(replace->cvt))
         BUG_ON(!CVT_INLINE(replace->cvt));
 
@@ -1006,18 +1001,11 @@ static int castle_object_replace_space_reserve(struct castle_object_replace *rep
         /* Construct the cvt. */
         if(unlikely(replace->counter_type == 1))
         {
-            castle_printk(LOG_DEVEL, "%s::counter_SET.\n", __FUNCTION__);
             CVT_COUNTER_ACCUM_SET_SET_SET(replace->cvt, 16, value);
-            /* @TODO remove when CVTs stabilise. */
-            BUG_ON(!CVT_COUNTER_ACCUM_SET_SET(replace->cvt));
-            BUG_ON(!CVT_INLINE(replace->cvt));
         }
         else if(replace->counter_type == 2)
         {
-            castle_printk(LOG_DEVEL, "%s::counter_ADD.\n", __FUNCTION__);
             CVT_COUNTER_ACCUM_ADD_ADD_SET(replace->cvt, 16, value);
-            BUG_ON(!CVT_COUNTER_ACCUM_ADD_ADD(replace->cvt));
-            BUG_ON(!CVT_INLINE(replace->cvt));
         }
         else
             {CVT_INLINE_SET(replace->cvt, value_len, value);}
