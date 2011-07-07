@@ -1223,7 +1223,6 @@ typedef struct castle_rq_enumerator {
     int                           in_range;
     castle_iterator_end_io_t      end_io;
     void                         *private;
-    int                           sync_call; /* TODO: Cleanup, not requried */
 } c_rq_enum_t;
 
 struct castle_merged_iterator;
