@@ -28,28 +28,43 @@ typedef struct castle_request_timeline {
 } c_req_time_t;
 
 /* These should not be used directly */
-extern c_req_time_t* _castle_request_timeline_create           (void);
-extern void          _castle_request_timeline_checkpoint_start (c_req_time_t *timeline,
-                                                                char *desc,
-                                                                char *file,
-                                                                int line);
+extern c_req_time_t* _castle_request_timeline_create        (char *desc, char *file, int line);
+extern void          _castle_request_timeline_checkpoint    (c_req_time_t *timeline,
+                                                             char *desc,
+                                                             char *file,
+                                                             int line);
 /* External functions */
-#define        castle_request_timeline_create(_ptr)                             \
-    (_ptr) = _castle_request_timeline_create()
-void           castle_request_timeline_destroy(c_req_time_t *timeline);
-#define        castle_request_timeline_checkpoint_start(_ptr, _desc)            \
-    _castle_request_timeline_checkpoint_start(_ptr, _desc, __FILE__, __LINE__)
-void           castle_request_timeline_checkpoint_stop(c_req_time_t *timeline);
+
+/**
+ * Allocate and start a timeline (arguments as per castle_request_timeline_checkpoint()).
+ *
+ * @also castle_request_timeline_checkpoint()
+ */
+#define castle_request_timeline_create(_ptr, _desc)                                 \
+            (_ptr) = _castle_request_timeline_create(_desc, __FILE__, __LINE__)
+
+/**
+ * Checkpoint the current position.
+ *
+ * @param   _ptr    Timeline pointer
+ * @param   _desc   Describes checkpoint start
+ */
+#define castle_request_timeline_checkpoint(_ptr, _desc)                             \
+            _castle_request_timeline_checkpoint(_ptr, _desc, __FILE__, __LINE__)
+
+/**
+ * Stop and destroy timeline.
+ */
+void    castle_request_timeline_destroy(c_req_time_t *timeline);
 
 int            castle_time_init(void);
 void           castle_time_fini(void);
 
 #else /* !CASTLE_PERF_DEBUG */
 
-#define castle_request_timeline_create(_a)            ((void)0)
-#define castle_request_timeline_destroy(_a)           ((void)0)
-#define castle_request_timeline_checkpoint_start(_a)  ((void)0)
-#define castle_request_timeline_checkpoint_stop(_a)   ((void)0)
+#define castle_request_timeline_create(_a, _desc)       ((void)0)
+#define castle_request_timeline_checkpoint(_a, _desc)   ((void)0)
+#define castle_request_timeline_destroy(_a)             ((void)0)
 
 #define castle_time_init()                            (0)
 #define castle_time_fini()                            ((void)0)

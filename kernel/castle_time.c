@@ -216,51 +216,18 @@ static void castle_request_timeline_inactive_stop(c_req_time_t *timeline)
     start_ns = timespec_to_ns(&checkpoint->start_tm);
     end_ns = timespec_to_ns(&end_tm);
     end_tm = ns_to_timespec(end_ns - start_ns); /* delta_tm */
-//    timespec_next_max(&end_tm, &checkpoint->max_tm, checkpoint->cnts);
-//    timespec_next_min(&end_tm, &checkpoint->min_tm, checkpoint->cnts);
+    timespec_next_max(&end_tm, &checkpoint->max_tm, checkpoint->cnts);
+    timespec_next_min(&end_tm, &checkpoint->min_tm, checkpoint->cnts);
     timespec_next_avg(&end_tm, &checkpoint->aggregate_tm, 1);
 
     checkpoint->active = 0;
 }
 
-static void castle_request_timeline_inactive_fini(c_req_time_t *timeline)
-{
-    struct castle_checkpoint *checkpoint;
-//    struct timespec end_tm;
-//    s64 start_ns, end_ns;
-
-    checkpoint = &timeline->checkpoints[MAX_CHECK_POINTS];
-    checkpoint->max_tm = checkpoint->aggregate_tm;
-    checkpoint->min_tm = checkpoint->aggregate_tm;
-}
-
-c_req_time_t* _castle_request_timeline_create(void)
-{
-    c_req_time_t* timeline;
-
-    /* Create the timeline when sequence # is divisible by period. */
-    if(atomic_inc_return(&castle_checkpoint_create_seq) % REQUEST_PERIOD != 0)
-        return NULL;
-    timeline = castle_zalloc(sizeof(c_req_time_t), GFP_KERNEL);
-    if(!timeline)
-        return NULL;
-    timeline->active_checkpoint = -1;
-    INIT_LIST_HEAD(&timeline->list);
-    castle_request_timeline_add(timeline);
-    getnstimeofday(&timeline->create_tm);
-
-    /* Init and start inactive checkpoint. */
-    castle_request_timeline_inactive_init(timeline);
-    castle_request_timeline_inactive_start(timeline);
-
-    return timeline;
-}
-
 /* Records the start of operation, called from file:line */
-void _castle_request_timeline_checkpoint_start(c_req_time_t *timeline,
-                                               char *desc,
-                                               char *file,
-                                               int line)
+static void _castle_request_timeline_checkpoint_start(c_req_time_t *timeline,
+                                                      char *desc,
+                                                      char *file,
+                                                      int line)
 {
     struct castle_checkpoint *checkpoint;
     int checkpoint_idx;
@@ -283,7 +250,7 @@ void _castle_request_timeline_checkpoint_start(c_req_time_t *timeline,
         return;
     }
 
-    /* Stop inactive checkpoint. */
+    /* Stop the 'inactive' checkpoint. */
     castle_request_timeline_inactive_stop(timeline);
 
     /* We checked that we are not in checkpoint ATM, so this should not be active */
@@ -294,7 +261,7 @@ void _castle_request_timeline_checkpoint_start(c_req_time_t *timeline,
 }
 
 /* Records the end of sleep called from a particular place */
-void castle_request_timeline_checkpoint_stop(c_req_time_t *timeline)
+static void _castle_request_timeline_checkpoint_stop(c_req_time_t *timeline)
 {
     struct castle_checkpoint *checkpoint;
     s64 start_ns, end_ns;
@@ -326,7 +293,7 @@ void castle_request_timeline_checkpoint_stop(c_req_time_t *timeline)
     timespec_next_min(&end_tm, &checkpoint->min_tm, checkpoint->cnts);
     timespec_next_avg(&end_tm, &checkpoint->aggregate_tm, checkpoint->cnts);
 
-    /* Start inactive checkpoint. */
+    /* Start the 'inactive' checkpoint. */
     castle_request_timeline_inactive_start(timeline);
 
     checkpoint->cnts++;
@@ -334,14 +301,47 @@ void castle_request_timeline_checkpoint_stop(c_req_time_t *timeline)
     timeline->active_checkpoint = -1;
 }
 
+void _castle_request_timeline_checkpoint(c_req_time_t *timeline, char *desc, char *file, int line)
+{
+    _castle_request_timeline_checkpoint_stop(timeline);
+    _castle_request_timeline_checkpoint_start(timeline, desc, file, line);
+}
+
+c_req_time_t* _castle_request_timeline_create(char *desc, char *file, int line)
+{
+    c_req_time_t* timeline;
+
+    /* Create the timeline when sequence # is divisible by period. */
+    if(atomic_inc_return(&castle_checkpoint_create_seq) % REQUEST_PERIOD != 0)
+        return NULL;
+    timeline = castle_zalloc(sizeof(c_req_time_t), GFP_KERNEL);
+    if(!timeline)
+        return NULL;
+    timeline->active_checkpoint = -1;
+    INIT_LIST_HEAD(&timeline->list);
+    castle_request_timeline_add(timeline);
+    getnstimeofday(&timeline->create_tm);
+
+    /* Initialise and start 'inactive' checkpoint. */
+    castle_request_timeline_inactive_init(timeline);
+    castle_request_timeline_inactive_start(timeline);
+
+    /* Start first checkpoint. */
+    _castle_request_timeline_checkpoint_start(timeline, desc, file, line);
+
+    return timeline;
+}
+
 void castle_request_timeline_destroy(c_req_time_t *timeline)
 {
     if(!timeline)
         return;
 
-    /* Stop inactive checkpoint. */
+    /* Stop current checkpoint. */
+    _castle_request_timeline_checkpoint_stop(timeline);
+
+    /* Stop 'inactive' checkpoint. */
     castle_request_timeline_inactive_stop(timeline);
-    castle_request_timeline_inactive_fini(timeline);
 
     /* Record the time, and move to the dead list */
     getnstimeofday(&timeline->destroy_tm);
@@ -397,19 +397,15 @@ static void castle_request_timeline_process(c_req_time_t *timeline)
 
         /* Update the stats */
         BUG_ON(checkpoint->file == NULL || checkpoint->line == 0);
-//        start_ns = timespec_to_ns(&checkpoint->aggregate_tm);
         if (!checkpoint->cnts)
             continue;
-//        dur_tm = ns_to_timespec(start_ns / checkpoint->cnts);
         timespec_next_max(&checkpoint->max_tm, &check_stats->max, check_stats->cnt);
         timespec_next_min(&checkpoint->min_tm, &check_stats->min, check_stats->cnt);
         timespec_next_avg(&checkpoint->aggregate_tm, &check_stats->agg, check_stats->cnt);
-//        timespec_next_avg(&dur_tm,             &check_stats->agg, check_stats->cnt);
         check_stats->desc = checkpoint->desc;
         check_stats->file = checkpoint->file;
         check_stats->line = checkpoint->line;
         check_stats->cnt += checkpoint->cnts;
-//        check_stats->cnt++;
     }
 }
 
