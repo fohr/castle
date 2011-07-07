@@ -308,11 +308,13 @@ static int castle_ct_immut_iter_entry_find(c_immut_iter_t *iter,
 {
     int disabled;
     c_val_tup_t cvt;
+    c_ver_t version;
 
     for(; start_idx<node->used; start_idx++)
     {
-        disabled = iter->btree->entry_get(node, start_idx, NULL, NULL, &cvt);
-        if(!CVT_LEAF_PTR(cvt) && !disabled)
+
+        disabled = iter->btree->entry_get(node, start_idx, NULL, &version, &cvt);
+        if(!CVT_LEAF_PTR(cvt) && !disabled && castle_version_is_ancestor(node->version, version))
             return start_idx;
     }
 

@@ -1820,6 +1820,8 @@ static c2_block_t* castle_btree_effective_node_create(struct castle_component_tr
 
     rev_level = c_bvec->btree_levels - level;
     node = c2b_bnode(orig_c2b);
+    if(node->version == version)
+        return NULL;
     btree = castle_btree_type_get(node->type);
     node_size = btree->node_size(ct, rev_level);
 
@@ -1863,14 +1865,15 @@ static c2_block_t* castle_btree_effective_node_create(struct castle_component_tr
               but different from the old node version)
          */
         need_move = (entry_version == version) && (node->version != version);
-        if(!node->is_leaf || CVT_LEAF_PTR(entry_cvt) || need_move)
-        {
+        //if(!node->is_leaf || CVT_LEAF_PTR(entry_cvt) || need_move)
+        //{
             /* If already a leaf pointer, or a non-leaf entry copy directly. */
             btree->entry_add(eff_node,
                              insert_idx,
                              entry_key,
                              entry_version,
                              entry_cvt);
+#if 0
         } else
         {
             c_val_tup_t cvt;
@@ -1882,6 +1885,7 @@ static c2_block_t* castle_btree_effective_node_create(struct castle_component_tr
                              entry_version,
                              cvt);
         }
+#endif
 
         /* Remember what the last key/version was, so that we know whether to take the
            next entry we see in the original node or not */
@@ -2022,7 +2026,7 @@ static void castle_btree_slot_insert(c2_block_t  *c2b,
            because lub_version is strictly ancestoral to the node version.
            It implies that the key hasn't been insterted here, because
            keys are only inserted to weakly ancestoral nodes */
-        BUG_ON(!CVT_LEAF_PTR(lub_cvt) && node->is_leaf);
+        //BUG_ON(!CVT_LEAF_PTR(lub_cvt) && node->is_leaf);
         /* Replace the slot */
         BUG_ON(CVT_LEAF_PTR(cvt));
         btree->entry_replace(node, index, key, version, cvt);
