@@ -1,4 +1,4 @@
-%if ! %{release}
+%if !%{release}
 %define release 1
 %endif
 
