@@ -1017,18 +1017,9 @@ static int castle_back_key_copy_get(struct castle_back_conn *conn, c_vl_bkey_t *
         }
 
         /* Length should be zero, if the dimension is infinity. */
-        /* The dimension should be a infinity, if the length is zero. */
-        /* (no infinity flags) XOR (non-zero length dimension) */
-        if ((!(dim_flags & KEY_DIMENSION_INFINITY_FLAGS_MASK)) ^ (dim_len != 0))
+        if ((dim_flags & KEY_DIMENSION_INFINITY_FLAGS_MASK) && (dim_len != 0))
         {
             error("Found mis-match for INFINITY flags and dimension length.\n");
-            err = -EINVAL;
-            goto err1;
-        }
-
-        if ((dim_len == 0) && !(dim_flags & KEY_DIMENSION_INFINITY_FLAGS_MASK))
-        {
-            error("Found INFINITY and no-zero dimension length.\n");
             err = -EINVAL;
             goto err1;
         }

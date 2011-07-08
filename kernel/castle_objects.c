@@ -137,14 +137,18 @@ static inline int castle_object_key_dim_compare(char *dim_a, uint32_t dim_a_len,
     if(cmp)
         return cmp;
 
-    BUG_ON(dim_a_len == PLUS_INFINITY_DIM_LENGTH ||
-           dim_b_len == PLUS_INFINITY_DIM_LENGTH);
-    BUG_ON((dim_a_len == 0) &&
-           !(dim_a_flags & KEY_DIMENSION_MINUS_INFINITY_FLAG) &&
-           !(dim_a_flags & KEY_DIMENSION_PLUS_INFINITY_FLAG));
-    BUG_ON((dim_b_len == 0) &&
-           !(dim_b_flags & KEY_DIMENSION_MINUS_INFINITY_FLAG) &&
-           !(dim_b_flags & KEY_DIMENSION_PLUS_INFINITY_FLAG));
+    BUG_ON(dim_a_len == PLUS_INFINITY_DIM_LENGTH || dim_b_len == PLUS_INFINITY_DIM_LENGTH);
+
+    if ((dim_a_flags & KEY_DIMENSION_MINUS_INFINITY_FLAG) &&
+        (dim_b_flags & KEY_DIMENSION_MINUS_INFINITY_FLAG))
+        return 0;
+
+    if (dim_a_flags & KEY_DIMENSION_MINUS_INFINITY_FLAG)
+        return -1;
+
+    if (dim_b_flags & KEY_DIMENSION_MINUS_INFINITY_FLAG)
+        return 1;
+
     /* If the common part of the keys the same, check which one is shorter */
     dim_a_len = (dim_a_flags & KEY_DIMENSION_PLUS_INFINITY_FLAG)?
                  PLUS_INFINITY_DIM_LENGTH:
@@ -1130,7 +1134,7 @@ int castle_object_replace(struct castle_object_replace *replace,
 {
     c_bvec_t *c_bvec = NULL;
     c_bio_t *c_bio = NULL;
-    int i, ret;
+    int ret;
     int counter_type = 0;
 
     /* Sanity checks. */
@@ -1148,11 +1152,6 @@ int castle_object_replace(struct castle_object_replace *replace,
      */
     if(!castle_fs_inited)
         return -ENODEV;
-
-    /* Checks on the key. */
-    for (i=0; i<key->nr_dims; i++)
-        if(castle_object_btree_key_dim_length(key, i) == 0)
-            return -EINVAL;
 
     /* Create btree key out of the object key. */
     ret = -EINVAL;
@@ -1618,7 +1617,6 @@ int castle_object_get(struct castle_object_get *get,
 {
     c_bvec_t *c_bvec;
     c_bio_t *c_bio;
-    int i;
 
     debug("castle_object_get get=%p\n", get);
 
@@ -1627,11 +1625,6 @@ int castle_object_get(struct castle_object_get *get,
 
     if (!key)
         return -EINVAL;
-
-    /* Checks on the key. */
-    for (i=0; i<key->nr_dims; i++)
-        if(castle_object_btree_key_dim_length(key, i) == 0)
-            return -EINVAL;
 
     /* Single c_bvec for the bio */
     c_bio = castle_utils_bio_alloc(1);
@@ -1798,7 +1791,6 @@ int castle_object_pull(struct castle_object_pull *pull,
 {
     c_bvec_t *c_bvec;
     c_bio_t *c_bio;
-    int i;
 
     debug("castle_object_pull pull=%p\n", pull);
 
@@ -1807,11 +1799,6 @@ int castle_object_pull(struct castle_object_pull *pull,
 
     if (!key)
         return -EINVAL;
-
-    /* Checks on the key. */
-    for (i=0; i<key->nr_dims; i++)
-        if(castle_object_btree_key_dim_length(key, i) == 0)
-            return -EINVAL;
 
     /* Single c_bvec for the bio */
     c_bio = castle_utils_bio_alloc(1);
