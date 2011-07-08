@@ -2751,13 +2751,14 @@ static void __castle_btree_submit(c_bvec_t *c_bvec,
 
     castle_debug_bvec_btree_walk(c_bvec);
 
-    /* Forget the parent node buffer first */
-    castle_btree_c2b_forget(c_bvec);
     /* Get the cache block for the next node. */
     c2b = castle_cache_block_get(node_cep,
                                  btree->node_size(ct,
                                                   c_bvec->btree_levels - c_bvec->btree_depth));
     castle_btree_c2b_lock(c_bvec, c2b);
+    /* After the node has been locked, drop the parent. */
+    castle_btree_c2b_forget(c_bvec);
+
     if(!c2b_uptodate(c2b))
     {
         /* If the buffer doesn't contain up to date data, schedule the IO */
