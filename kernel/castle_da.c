@@ -3376,8 +3376,6 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
      * parameters in level. Taking a copy of required members. */
     node_c2b        = level->node_c2b;
     valid_end_idx   = level->valid_end_idx;
-    /* We expecting the nodes to have more than one entry. */
-    BUG_ON(valid_end_idx == 0);
 
     /* for non-leaf nodes, the c2b will be unlocked */
     if (depth > 0)
