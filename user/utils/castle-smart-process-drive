@@ -13,7 +13,8 @@ devname=$(basename "$device")
 
 if [ -e /sys/fs/castle-fs ]; then
     for slavedir in $(find /sys/fs/castle-fs/slaves/ -mindepth 1 -maxdepth 1 -type d);  do
-        dev=$(basename $(readlink "$slavedir/dev"))
+        dev=$(readlink "$slavedir/dev" | sed -r 's,.*/block/([^/]*)(/.*)?,\1,')
+
         if [ "$dev" = "$devname" ]; then
             uuid=$(basename "$slavedir")
             break
@@ -27,6 +28,7 @@ for part in /sys/block/$devname/${devname}[0-9]*; do
     holdername=$(basename "$holder")
     case "$holdername" in
         md*)
+        echo "Removing $partname from $holdername"
         mdadm "/dev/$holdername" --fail "/dev/$partname"
         mdadm "/dev/$holdername" --remove "/dev/$partname"
         ;;
@@ -36,13 +38,15 @@ done
 
 if [ -n "$uuid" ]
 then
+    echo "Removing $dev (as 0x$uuid) from castle-fs"
+
     castle-cli slave_evacuate "0x$uuid" 1
     sleep 2
-fi
 
-while let "$(</sys/fs/castle-fs/slaves/$uuid/rebuild_state) & 32"; do
-    sleep 10
-done
+    while let "$(</sys/fs/castle-fs/slaves/$uuid/rebuild_state) & 32"; do
+        sleep 10
+    done
+fi
 
 blockdev --rmparts "$device"
 
