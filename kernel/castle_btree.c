@@ -4294,7 +4294,10 @@ static int castle_rq_enum_iter_each(c_iter_t *c_iter,
             BUG();
         }
         BUG_ON(CVT_LEAF_PTR(cvt));
-        btree->entry_add(rq_enum->prod_buf->node, rq_enum->prod_idx, key, version, cvt);
+        /* Add the entry into the buffer, in the version of the rq. This guarantees that
+           results from different arrays will be merged properly by the merged iterator
+           (in castle_da_rq_iter). */
+        btree->entry_add(rq_enum->prod_buf->node, rq_enum->prod_idx, key, rq_enum->version, cvt);
         btree->entry_get(rq_enum->prod_buf->node, rq_enum->prod_idx, &rq_enum->cur_key, NULL, NULL);
         castle_rq_enum_iter_counter_accum_init(rq_enum, cvt);
         rq_enum->prod_idx++;
