@@ -993,19 +993,22 @@ static int castle_block_direct_read(struct block_device *bdev, sector_t sector,
  */
 static int castle_block_ordered_supp_test(struct block_device *bdev)
 {
-    struct buffer_head *bh;
-    int ret;
+    struct page *iopage;
+    int         ret;
 
-    if (!(bh = __bread(bdev, 0, bdev->bd_block_size)))
-        return -EIO;
+    iopage = alloc_page(GFP_KERNEL);
+    BUG_ON(!iopage);
 
-    set_buffer_dirty(bh);
-    set_buffer_ordered(bh);
-    ret = sync_dirty_buffer(bh);
+    ret = submit_direct_io(READ, bdev, 0, &iopage, 1);
+    if (ret)
+    {
+        castle_printk(LOG_WARN, "Ordered support test: I/O read failed with error %d\n", ret);
+        return 0;
+    }
 
-    clear_buffer_write_io_error(bh);
+    ret = submit_direct_io(WRITE_BARRIER, bdev, 0, &iopage, 1);
 
-    bforget(bh);
+    __free_page(iopage);
 
     return ret;
 }
