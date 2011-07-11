@@ -3252,7 +3252,6 @@ c2_block_t* _castle_cache_block_get(c_ext_pos_t cep, int nr_pages, int transient
         debug("Trying to insert\n");
         if (!castle_cache_block_hash_insert(c2b, transient))
         {
-            castle_printk(LOG_WARN, "Failed to insert c2b into hash "cep_fmt_str"\n", cep2str(cep));
             put_c2b(c2b);
             castle_cache_block_free(c2b);
         }
