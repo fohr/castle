@@ -507,6 +507,14 @@ int castle_version_is_deletable(struct castle_version_delete_state *state,
      * at need_parent bit (its not calculated for them). */
     for (w=cur_v->first_child; w; w=w->next_sybling)
     {
+        /* If the child version isn't tracked in the bitmaps (out of bounds), assume
+           that it needs the parent, and don't check any of the bitmaps. */
+        if (w->version >= state->last_version)
+        {
+            ret = 0;
+            goto out;
+        }
+
         if (test_bit(w->version, state->occupied))
             continue;
 
