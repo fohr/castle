@@ -950,41 +950,41 @@ static int castle_slave_superblock_validate(struct castle_slave *cs,
     return 0;
 }
 
-static int castle_block_read(struct block_device *bdev, sector_t sector, uint32_t size, char *buffer)
+/**
+ * Read directly from disk into a buffer up to C_BLK_SIZE size.
+ *
+ * @param bdev      [in]    The block device to read from.
+ * @param sector    [in]    The sector to start reading from
+ * @param size      [in]    The size of the buffer to read into (max C_BLK_SIZE)
+ * @param buffer    [in]    The buffer
+ *
+ * @return 0:       On success.
+ * @return -EINVAL: Invalid buffer size (> C_BLK_SIZE).
+ */
+static int castle_block_direct_read(struct block_device *bdev, sector_t sector,
+                                    uint32_t size, char *buffer)
 {
-    struct   buffer_head *bh;
-    int      nr_blocks, block_size, i;
-    sector_t block;
+    struct page *iopage;
+    int     ret;
 
     if (!bdev || (size > C_BLK_SIZE))
         return -1;
 
-    block_size = bdev->bd_block_size;
-    if (block_size < 512)
+    iopage = alloc_page(GFP_KERNEL);
+    BUG_ON(!iopage);
+
+    /* We'll read a whole page, then copy up to the size requested into the passed buffer. */
+    ret = submit_direct_io(READ, bdev, sector, &iopage, 1);
+    if (ret)
     {
-        castle_printk(LOG_WARN, "Block size(%u) < 512 bytes. Not supported\n", block_size);
-        return -1;
+        castle_printk(LOG_ERROR, "Direct io submission failed with error %d\n", ret);
+        return ret;
     }
-    nr_blocks = ((size - 1) / block_size) + 1;
-    block = sector / (block_size / 512);
+    memcpy(buffer, pfn_to_kaddr(page_to_pfn(iopage)), size);
 
-    debug("Reading %u bytes from block %llu.\n", (nr_blocks * block_size), block);
-    for (i=0; i<nr_blocks; i++)
-    {
-        int length;
+    __free_page(iopage);
 
-        /* Each buffer head can't be bigger than a block. */
-        if (!(bh = __bread(bdev, block+i, block_size)))
-            return -1;
-
-        length = (size < block_size)?size:block_size;
-        size  -= length;
-        memcpy((buffer + (i * block_size)), bh->b_data, length);
-
-        bforget(bh);
-    }
-
-    return 0;
+    return EXIT_SUCCESS;
 }
 
 /**
@@ -1050,11 +1050,11 @@ static int castle_slave_superblock_read(struct castle_slave *cs)
 
     for (i=0; i<2; i++)
     {
-        if ((err = castle_block_read(cs->bdev, (i*16),
+        if ((err = castle_block_direct_read(cs->bdev, (i*16),
                         sizeof(struct castle_slave_superblock),
                         (char *)&cs_sb[i])) < 0)
             goto error_out;
-        if ((err = castle_block_read(cs->bdev, (i*16+8),
+        if ((err = castle_block_direct_read(cs->bdev, (i*16+8),
                         sizeof(struct castle_fs_superblock),
                         (char *)&fs_sb[i])) < 0)
             goto error_out;
@@ -1172,9 +1172,11 @@ static int castle_slave_version_load(struct castle_slave *cs, uint32_t fs_versio
     if (fs_version != (cs->cs_superblock.fs_version - 1))
         goto out;
 
-    if (castle_block_read(cs->bdev, sector, sizeof(struct castle_slave_superblock), (char *)&cs->cs_superblock))
+    if (castle_block_direct_read(cs->bdev, sector, sizeof(struct castle_slave_superblock),
+                                (char *)&cs->cs_superblock))
         goto out;
-    if (castle_block_read(cs->bdev, sector+8, sizeof(struct castle_fs_superblock), (char *)&cs->fs_superblock))
+    if (castle_block_direct_read(cs->bdev, sector+8, sizeof(struct castle_fs_superblock),
+                                (char *)&cs->fs_superblock))
         goto out;
     if (castle_slave_superblock_validate(cs, &cs->cs_superblock))
         goto out;

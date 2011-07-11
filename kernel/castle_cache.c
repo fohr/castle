@@ -1082,6 +1082,8 @@ struct bio_info {
     c2_block_t          *c2b;
     uint32_t            nr_pages;
     struct block_device *bdev;
+    struct completion   completion;
+    int                 err;
 };
 
 static void c2b_remaining_io_sub(int rw, int nr_pages, c2_block_t *c2b)
@@ -1263,6 +1265,111 @@ int chk_valid(c_disk_chk_t chk)
 #endif
 
 #define MAX_BIO_PAGES        128
+
+/**
+ * Handle completion for submit_direct_io bios
+ *
+ * @return     'err' is returned to submit_bio caller via bio_info.
+ */
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,18)
+static int direct_io_complete(struct bio *bio, unsigned int completed, int err)
+#else
+static int direct_io_complete(struct bio *bio, int err)
+#endif
+{
+    struct bio_info     *bio_info = bio->bi_private;
+
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,18)
+    if (bio->bi_size)
+        return 1;
+
+    /* Check if we always complete the entire BIO. Likely yes, since
+       the interface in >= 2.6.24 removes the completed variable */
+    BUG_ON((!err) && (completed != C_BLK_SIZE * bio_info->nr_pages));
+    BUG_ON(err && test_bit(BIO_UPTODATE, &bio->bi_flags));
+#endif
+
+    /* Return the error back to caller of submit_bio. */
+    bio_info->err = err;
+
+    complete((struct completion *)&bio_info->completion);
+    return 0;
+}
+
+/**
+ * Read directly from disk
+ * This function performs I/O using a single submit_bio, and is therefore limited to a maximum
+ * of bio_get_nr_vecs(bdev) pages per call (which varies depending on the underlying block driver).
+ *
+ * @param rw        [in]    READ, WRITE or WRITE_BARRIER.
+ * @param bdev      [in]    The block device.
+ * @param sector    [in]    The sector to start at.
+ * @param iopages   [in]    The pages to read/write into/from.
+ * @param size      [in]    The number of pages.
+ *
+ * @return 0:       On success.
+ * @return -EINVAL: If nr_pages > the number of pages submit_bio can handle (in one bio).
+ * @return -EPERM:  If a barrier write is attempted on a device which does not support it.
+ */
+int submit_direct_io(int                    rw,
+                     struct block_device    *bdev,
+                     sector_t               sector,
+                     struct page            **iopages,
+                     int                    nr_pages)
+{
+    struct bio          *bio;
+    struct bio_info     *bio_info;
+    int                 i, ret;
+
+    if (nr_pages > bio_get_nr_vecs(bdev))
+        return -EINVAL;
+
+    /* Allocate BIO and bio_info struct */
+    bio = bio_alloc(GFP_KERNEL, 1);
+    BUG_ON(!bio);
+    bio_info = castle_malloc(sizeof(struct bio_info), GFP_KERNEL);
+    BUG_ON(!bio_info);
+
+    /* Init BIO and bio_info. */
+    bio_info->nr_pages = nr_pages;
+    bio_info->bdev     = bdev;
+    init_completion(&bio_info->completion);
+
+    for(i=0; i < nr_pages; i++)
+    {
+        bio->bi_io_vec[i].bv_page   = iopages[i];
+        bio->bi_io_vec[i].bv_len    = PAGE_SIZE;
+        bio->bi_io_vec[i].bv_offset = 0;
+    }
+
+    bio->bi_sector  = sector;
+    bio->bi_bdev    = bdev;
+    bio->bi_vcnt    = 1;
+    bio->bi_idx     = 0;
+    bio->bi_size    = nr_pages * PAGE_SIZE;
+    bio->bi_end_io  = direct_io_complete;
+    bio->bi_private = bio_info;
+
+    bio_get(bio);
+    /* Hand off to Linux block layer. */
+    submit_bio(rw, bio);
+    if(bio_flagged(bio, BIO_EOPNOTSUPP))
+    {
+        castle_printk(LOG_ERROR, "BIO flagged not supported.\n");
+        bio_put(bio);
+        castle_free(bio_info);
+        return -EOPNOTSUPP;
+    }
+
+    bio_put(bio);
+
+    wait_for_completion(&bio_info->completion);
+    ret = bio_info->err;
+
+    castle_free(bio_info);
+
+    return ret;
+}
 
 /**
  * Allocate bio for pages & hand-off to Linux block layer.
