@@ -3185,22 +3185,26 @@ static void castle_btree_iter_version_leaf_process(c_iter_t *c_iter)
 
     /* We are in a leaf, then save the vblk number we followed to get here */
     castle_btree_iter_version_key_dealloc(c_iter);
-    if(btree->key_compare(c_iter->parent_key, btree->inv_key) == 0)
+    if (btree->key_compare(c_iter->parent_key, btree->inv_key) == 0)
     {
         c_iter->next_key.key          = btree->inv_key;
         c_iter->next_key.need_destroy = 0;
-    } else
+    }
+    else
     {
         c_iter->next_key.key          = btree->key_next(c_iter->parent_key);
         c_iter->next_key.need_destroy = 1;
     }
 
+    /* Perform consumer setup and determine index to start searching node. */
     if (c_iter->node_start != NULL)
-        c_iter->node_start(c_iter);
+        i = c_iter->node_start(c_iter);
+    else
+        i = 0;
 
     castle_btree_iter_leaf_ptrs_lock(c_iter);
 
-    for(i=0; i<node->used; i++)
+    for (; i < node->used; i++)
     {
         int         real_slot_idx;
         c_ver_t     entry_version;
@@ -3226,6 +3230,7 @@ static void castle_btree_iter_version_leaf_process(c_iter_t *c_iter)
             slot_follow_ptr(i, c2b, real_slot_idx);
             btree->entry_get(c2b_bnode(c2b), real_slot_idx, NULL, NULL,
                              &entry_cvt);
+#ifdef DEBUG
             /* Next key should always be greater than all the keys in the current node. */
             if ((btree->key_compare(c_iter->next_key.key, btree->inv_key) != 0) &&
                     btree->key_compare(c_iter->next_key.key, entry_key) <= 0)
@@ -3233,7 +3238,9 @@ static void castle_btree_iter_version_leaf_process(c_iter_t *c_iter)
                 printk("Unexpected key ordering: %p, %p\n", c_iter, entry_key);
                 BUG();
             }
-            c_iter->each(c_iter, i, entry_key, entry_version, entry_cvt);
+#endif
+            if (c_iter->each(c_iter, i, entry_key, entry_version, entry_cvt))
+                break; /* Consumer advised us to terminate. */
         }
     }
 
@@ -3263,10 +3270,13 @@ static void castle_btree_iter_all_leaf_process(c_iter_t *c_iter)
 
     iter_debug("All entries: processing %d entries\n", node->used);
 
+    /* Perform consumer setup and determine index to start searching node. */
     if (c_iter->node_start != NULL)
-        c_iter->node_start(c_iter);
+        i = c_iter->node_start(c_iter);
+    else
+        i = 0;
 
-    for(i=0; i<node->used; i++)
+    for (; i < node->used; i++)
     {
         c_ver_t     entry_version;
         c_val_tup_t entry_cvt;
@@ -3283,7 +3293,8 @@ static void castle_btree_iter_all_leaf_process(c_iter_t *c_iter)
                        entry_key, entry_version, entry_cvt.cep.ext_id,
                        entry_cvt.cep.offset);
         if (!CVT_LEAF_PTR(entry_cvt))
-            c_iter->each(c_iter, i, entry_key, entry_version, entry_cvt);
+            if (c_iter->each(c_iter, i, entry_key, entry_version, entry_cvt))
+                break; /* Consumer advised us to terminate. */
     }
 
     iter_debug("Done processing entries.\n");
@@ -3740,11 +3751,11 @@ static int castle_enum_iter_need_visit(c_iter_t *c_iter, c_ext_pos_t  node_cep)
     return 1;
 }
 
-static void castle_enum_iter_each(c_iter_t *c_iter,
-                                  int index,
-                                  void *key,
-                                  c_ver_t version,
-                                  c_val_tup_t cvt)
+static int castle_enum_iter_each(c_iter_t *c_iter,
+                                 int index,
+                                 void *key,
+                                 c_ver_t version,
+                                 c_val_tup_t cvt)
 {
     struct castle_enumerator *c_enum = c_iter->private;
     struct castle_btree_type *btree;
@@ -3756,6 +3767,8 @@ static void castle_enum_iter_each(c_iter_t *c_iter,
     BUG_ON(CVT_LEAF_PTR(cvt));
     btree->entry_add(c_enum->buffer, c_enum->prod_idx, key, version, cvt);
     c_enum->prod_idx++;
+
+    return 0; /* Iterator to continue */
 }
 
 static void castle_enum_iter_node_end(c_iter_t *c_iter)
@@ -4011,11 +4024,44 @@ static struct node_buf_t* node_buf_alloc(c_rq_enum_t *rq_enum)
     return node_buf;
 }
 
-static void castle_rq_enum_iter_each(c_iter_t *c_iter,
-                                     int index,
-                                     void *key,
-                                     c_ver_t version,
-                                     c_val_tup_t cvt)
+/**
+ * Call castle_btree_lub_find() to find search start index for RQ.
+ *
+ * @return  Index within node to start looking for entries.
+ *
+ * @also castle_btree_lub_find()
+ */
+static int castle_rq_enum_iter_node_start(c_iter_t *c_iter)
+{
+    c_rq_enum_t *rq_enum = (c_rq_enum_t *)c_iter->private;
+    struct castle_btree_node *node;
+    c2_block_t *leaf;
+    int idx;
+
+    leaf = c_iter->path[c_iter->depth];
+    BUG_ON(leaf == NULL);
+
+    node = c2b_bnode(leaf);
+    BUG_ON(!node->is_leaf);
+
+    castle_btree_lub_find(node, rq_enum->start_key, rq_enum->version, &idx, NULL);
+
+    /* Only return idx if we found a match. */
+    if (idx >= 0)
+        return idx;
+    else
+        return 0;
+}
+
+/**
+ * @return  0 => Iterator should continue
+ * @return >0 => Iterator should terminate
+ */
+static int castle_rq_enum_iter_each(c_iter_t *c_iter,
+                                    int index,
+                                    void *key,
+                                    c_ver_t version,
+                                    c_val_tup_t cvt)
 {
     struct castle_btree_type *btree;
     c_rq_enum_t *rq_enum = (c_rq_enum_t *)c_iter->private;
@@ -4030,7 +4076,7 @@ static void castle_rq_enum_iter_each(c_iter_t *c_iter,
     /* Check if the node buffer is full */
     if (btree->need_split(node, 0))
     {
-        debug("Need split - producer buffer :%p\n", prod_buf);
+        debug("Need split - producer buffer: %p\n", prod_buf);
         /* Check to not overwrite last node of previous buffer */
         if (prod_buf->list.next == &cons_buf->list ||
             prod_buf->list.next->next == &cons_buf->list)
@@ -4059,11 +4105,11 @@ static void castle_rq_enum_iter_each(c_iter_t *c_iter,
         if (btree->key_compare(rq_enum->start_key, key) <= 0)
             rq_enum->in_range = 1;
         else
-            return;
+            return 0; /* Iterator to continue */
     }
 
     /* If curr_key is set, figure out whether the new key is the same, or different. */
-    if(rq_enum->cur_key)
+    if (rq_enum->cur_key)
         cmp = btree->key_compare(rq_enum->cur_key, key);
 
     if (!rq_enum->cur_key || cmp)
@@ -4080,7 +4126,13 @@ static void castle_rq_enum_iter_each(c_iter_t *c_iter,
         btree->entry_get(rq_enum->prod_buf->node, rq_enum->prod_idx, &rq_enum->cur_key, NULL,
                          NULL);
         rq_enum->prod_idx++;
+
+        if (unlikely(btree->key_compare(key, rq_enum->end_key) > 0))
+            return 1; /* Iterator to terminate */
     }
+    /* else key same as cur_key */
+
+    return 0; /* Iterator to continue */
 }
 
 static int castle_btree_rq_enum_prep_next(c_rq_enum_t *rq_enum);
@@ -4201,7 +4253,7 @@ void castle_btree_rq_enum_init(c_rq_enum_t *rq_enum, c_ver_t version,
     iter = &rq_enum->iterator;
     iter->tree       = rq_enum->tree;
     iter->need_visit = NULL;
-    iter->node_start = NULL;
+    iter->node_start = castle_rq_enum_iter_node_start;
     iter->each       = castle_rq_enum_iter_each;
     iter->node_end   = castle_rq_enum_iter_node_end;
     iter->end        = castle_rq_enum_iter_end;

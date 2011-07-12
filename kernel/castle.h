@@ -1112,12 +1112,16 @@ typedef struct castle_iterator {
        code with btree_iter_init() and start() */
     int                         (*need_visit)(struct castle_iterator *c_iter,
                                               c_ext_pos_t node_cep);
-    void                        (*node_start)(struct castle_iterator *c_iter);
-    void                        (*each)      (struct castle_iterator *c_iter,
+    int                         (*node_start)(struct castle_iterator *c_iter);
+                                    /**< Returns index within node the iterator should begin
+                                         iterating from, or 0 to start from the beginning.      */
+    int                         (*each)      (struct castle_iterator *c_iter,
                                               int                     index,
                                               void                   *key,
                                               c_ver_t                 version,
                                               c_val_tup_t             cvt);
+                                    /**< Returns a positive value to indicate the iterator
+                                         should terminate, or 0 to continue.                    */
     void                        (*node_end)  (struct castle_iterator *c_iter);
     void                        (*end)       (struct castle_iterator *c_iter, int err);
     void                         *private;
