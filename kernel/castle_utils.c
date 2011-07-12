@@ -100,7 +100,7 @@ int castle_counter_simple_reduce(c_val_tup_t *accumulator, c_val_tup_t delta_cvt
     if(!CVT_ANY_COUNTER(delta_cvt))
     {
         /* Set the accumulator type to LOCAL_SET. */
-        CVT_COUNTER_LOCAL_SET_SET(*accumulator, accumulator->counter);
+        CVT_COUNTER_LOCAL_SET_INIT(*accumulator, accumulator->counter)
         return 1;
     }
 
@@ -123,7 +123,7 @@ int castle_counter_simple_reduce(c_val_tup_t *accumulator, c_val_tup_t delta_cvt
     if(CVT_SET_COUNTER(delta_cvt))
     {
         /* Set the accumulator type to LOCAL_SET. */
-        CVT_COUNTER_LOCAL_SET_SET(*accumulator, accumulator->counter);
+        CVT_COUNTER_LOCAL_SET_INIT(*accumulator, accumulator->counter)
         return 1;
     }
 

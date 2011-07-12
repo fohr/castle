@@ -297,7 +297,7 @@ static void castle_bloom_add_index_key(castle_bloom_t *bf, void *key)
 
     /* Bloom filters don't store values, just keys. Since btree code requires values,
        store tombstones. */
-    CVT_TOMBSTONE_SET(cvt);
+    CVT_TOMBSTONE_INIT(cvt);
     debug("Adding key for chunk_id %u to btree node.\n", bf_bp->cur_node_cur_chunk_id);
     bf->btree->entry_add(bf_bp->cur_node, bf_bp->cur_node_cur_chunk_id, key, version, cvt);
 }

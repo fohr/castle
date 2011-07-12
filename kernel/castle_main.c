@@ -1871,7 +1871,7 @@ static int castle_bio_data_cvt_get(c_bvec_t    *c_bvec,
                atomic64_read(&c_bvec->tree->data_ext_free.used)/4096);
         BUG();
     }
-    CVT_MEDIUM_OBJECT_SET(*cvt, C_BLK_SIZE, cep);
+    CVT_MEDIUM_OBJECT_INIT(*cvt, C_BLK_SIZE, cep);
 
     return 0;
 }

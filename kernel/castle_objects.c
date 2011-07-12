@@ -979,7 +979,7 @@ static int castle_object_replace_space_reserve(struct castle_object_replace *rep
     /* Deal with tombstones first. */
     if(tombstone)
     {
-        CVT_TOMBSTONE_SET(replace->cvt);
+        CVT_TOMBSTONE_INIT(replace->cvt);
         /* No need to allocate any memory/extent space for tombstones. */
         return 0;
     }
@@ -1001,14 +1001,14 @@ static int castle_object_replace_space_reserve(struct castle_object_replace *rep
         /* Construct the cvt. */
         if(unlikely(replace->counter_type == 1))
         {
-            CVT_COUNTER_ACCUM_SET_SET_SET(replace->cvt, 16, value);
+            CVT_COUNTER_ACCUM_SET_SET_INIT(replace->cvt, 16, value);
         }
         else if(replace->counter_type == 2)
         {
-            CVT_COUNTER_ACCUM_ADD_ADD_SET(replace->cvt, 16, value);
+            CVT_COUNTER_ACCUM_ADD_ADD_INIT(replace->cvt, 16, value);
         }
         else
-            {CVT_INLINE_SET(replace->cvt, value_len, value);}
+            {CVT_INLINE_INIT(replace->cvt, value_len, value);}
         /* Get the data copied into the cvt. It should all be available in one shot. */
         BUG_ON(replace->data_length_get(replace) < value_len);
         replace->data_copy(replace, value, value_len, 0 /* not partial */);
@@ -1034,7 +1034,7 @@ static int castle_object_replace_space_reserve(struct castle_object_replace *rep
                                          nr_blocks * C_BLK_SIZE,
                                          1,
                                         &cep) < 0);
-        CVT_MEDIUM_OBJECT_SET(replace->cvt, value_len, cep);
+        CVT_MEDIUM_OBJECT_INIT(replace->cvt, value_len, cep);
         debug("Medium Object in %p, cep: "cep_fmt_str_nl, c_bvec->tree, __cep2str(cvt->cep));
 
         return 0;
@@ -1053,7 +1053,7 @@ static int castle_object_replace_space_reserve(struct castle_object_replace *rep
         castle_printk(LOG_WARN, "Failed to allocate space for Large Object.\n");
         return -ENOSPC;
     }
-    CVT_LARGE_OBJECT_SET(replace->cvt, value_len, cep);
+    CVT_LARGE_OBJECT_INIT(replace->cvt, value_len, cep);
 
     return 0;
 }
@@ -1176,7 +1176,7 @@ int castle_object_replace(struct castle_object_replace *replace,
 
     /* Save c_bvec in the replace. */
     replace->c_bvec = c_bvec;
-    CVT_INVALID_SET(replace->cvt);
+    CVT_INVALID_INIT(replace->cvt);
     replace->data_c2b = NULL;
 
     /* Queue up in the DA. */
@@ -1549,7 +1549,7 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
 
         /* Prepare the accumulator, if isn't ready yet. */
         if(CVT_INVALID(get->cvt))
-            CVT_COUNTER_LOCAL_ADD_SET(get->cvt, 0);
+            CVT_COUNTER_LOCAL_ADD_INIT(get->cvt, 0);
 
         finished = castle_counter_simple_reduce(&get->cvt, cvt);
         /* Return early if we have to keep accumulating. */
@@ -1573,7 +1573,7 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
         if(get->ct)
             castle_ct_put(get->ct, 0);
         /* Turn tombstones into invalid CVTs. */
-        CVT_INVALID_SET(get->cvt);
+        CVT_INVALID_INIT(get->cvt);
         get->reply_start(get, err, 0, NULL, 0);
         castle_utils_bio_free(c_bvec->c_bio);
         return;
@@ -1650,7 +1650,7 @@ int castle_object_get(struct castle_object_get *get,
     BUG_ON(!attachment);
 
     /* Set CVT to invalid. We need that to recognise and handle counters properly. */
-    CVT_INVALID_SET(get->cvt);
+    CVT_INVALID_INIT(get->cvt);
 
     c_bio->attachment    = attachment;
     c_bio->get           = get;
@@ -1788,7 +1788,7 @@ static void castle_object_pull_continue(struct castle_bio_vec *c_bvec, int err, 
         debug("Error, invalid or tombstone.\n");
 
         castle_object_pull_ct_put(pull);
-        CVT_INVALID_SET(pull->cvt);
+        CVT_INVALID_INIT(pull->cvt);
         pull->pull_continue(pull, err, 0, 1 /* done */);
         return;
     }

@@ -2844,7 +2844,7 @@ static void castle_back_request_process(struct castle_back_conn *conn, struct ca
      * return before hitting the DA. */
     op->cpu_index = conn->cpu_index;
 
-    CVT_INVALID_SET(op->replace.cvt);
+    CVT_INVALID_INIT(op->replace.cvt);
     switch (op->req.tag)
     {
         /* Point ops
