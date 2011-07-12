@@ -26,6 +26,7 @@ endif
 EXTRA_CFLAGS += $(DEBFLAGS)
 EXTRA_CFLAGS += -I..
 EXTRA_CFLAGS += -msoft-float
+EXTRA_CFLAGS += -mtune=core2
 
 KVER       ?= $(shell uname -r)
 KERNEL_DIR ?= /lib/modules/$(KVER)/build

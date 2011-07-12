@@ -45,7 +45,7 @@ static inline ATTRIB_NORET void bug_fn(char *file, unsigned long line)
 #endif
 }
 #define BUG()            do { bug_fn(__FILE__, __LINE__); } while(0)
-#define BUG_ON(_cond)    do { if(_cond) BUG(); } while(0)
+#define BUG_ON(_cond)    do { if(unlikely(_cond)) BUG(); } while(0)
 
 /* Printk implementation used in the entire filesystem. */
 #define PRINTKS_PER_SEC_STEADY_STATE    5
