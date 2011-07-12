@@ -770,7 +770,7 @@ static int castle_ct_modlist_iter_has_next(c_modlist_iter_t *iter)
 }
 
 /**
- * Prepare the iterator for next key. This is a NOP for modlist_iter as the data is completly
+ * Prepare the iterator for next key. This is a NOP for modlist_iter as the data is completely
  * in buffer.
  *
  * @return 1    Always

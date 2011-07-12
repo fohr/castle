@@ -2095,7 +2095,7 @@ void castle_attachment_put(struct castle_attachment *ca)
 
         castle_version_detach(version);
         castle_double_array_put(da_id);
-        castle_printk(LOG_USERINFO, "Attachment %u is completly removed\n", ca_id);
+        castle_printk(LOG_USERINFO, "Attachment %u is completely removed\n", ca_id);
 
         wake_up(&castle_detach_waitq);
     }
