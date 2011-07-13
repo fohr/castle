@@ -1299,7 +1299,7 @@ static void castle_ct_merged_iter_rbtree_insert(c_merged_iter_t *iter,
 
             /* (Conditionally), call the callback. */
             debug("Duplicate entry found, CVT type=%d.\n", dup_iter->cached_entry.cvt.type);
-            if (iter->each_skip && !CVT_ANY_COUNTER(dup_iter->cached_entry.cvt))
+            if (iter->each_skip)
                 iter->each_skip(iter, dup_iter, new_iter);
 
             /* The rb_tree and same_kv list have all been updated, return now. */
