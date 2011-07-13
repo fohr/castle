@@ -441,9 +441,6 @@ int castle_version_is_deletable(struct castle_version_delete_state *state,
 
     /* Set occupied bit for this version. Merge is single-threaded and runs on
      * same processor. No need of set_bit.
-     *
-     * Counter deltas (i.e. adds) don't count as occupied versions, because they
-     * rely on their ancestoral versions (just like if the version wasn't written at all).
      */
     __set_bit(version, state->occupied);
 

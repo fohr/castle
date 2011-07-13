@@ -12,6 +12,10 @@
 struct castle_printk_buffer     printk_buf;
 struct castle_printk_state     *castle_printk_states;
 
+/**
+ * Determines what CVT type should be used for counter composed of two sub-counters.
+ * The type of sub-counters (add/set) are provided.
+ */
 static inline uint8_t castle_counter_accumulating_type_get(int counter1_set, int counter2_set)
 {
     if(counter1_set && counter2_set)
@@ -26,6 +30,25 @@ static inline uint8_t castle_counter_accumulating_type_get(int counter1_set, int
     BUG();
 }
 
+/**
+ * Accumulates delta CVT (which may or may not be a counter) into the accumulator.
+ *
+ * Accumulation accounts for whether the delta is ancestral, or in precisely the same
+ * version as the accumulator.
+ *
+ * The semantics is:
+ * - if delta isn't a counter, the accumulator becomes SET/SET. Values of both
+ *   sub-counters remain unchanged.
+ * - otherwise delta is a counter. If delta is ancestral (i.e. not in the same
+ *   version as the accumulator) only the all-v sub-counter will be accumulated.
+ *   Otherwise both are accumulated.
+ * - individual sub-counters are accumulated separately, according to the standard
+ *   semantics, as per castle_counter_simple_reduce().
+ *
+ * NB: Its expected that accumulator is a composite counter, with the first sub-counter
+ * (accumulating just one version) being an add. Next, if delta is a counter, it
+ * must be a composite counter.
+ */
 void castle_counter_accumulating_reduce(c_val_tup_t *accumulator,
                                         c_val_tup_t delta_cvt,
                                         int delta_ancestoral)
@@ -93,6 +116,17 @@ void castle_counter_accumulating_reduce(c_val_tup_t *accumulator,
     accumulator->type = castle_counter_accumulating_type_get(counter1_set, counter2_set);
 }
 
+/**
+ * Accumulates delta_cvt (which may or may not be a counter) into the accumulator.
+ * The accumulator is expected to be a local add counter.
+ *
+ * Reduction semantics is:
+ * - if delta_cvt is not a counter, its effect is identical to set_0 counter,
+ * - accumulator value is incremented by delta
+ * - type of the accumulator is changed from add to a set if the delta is a set
+ *
+ * @return True if accumulator bacame a set (reduction terminated).
+ */
 int castle_counter_simple_reduce(c_val_tup_t *accumulator, c_val_tup_t delta_cvt)
 {
     int64_t delta_counter;

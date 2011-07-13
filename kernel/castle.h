@@ -420,9 +420,13 @@ enum {
     CVT_TYPE_COUNTER_LOCAL_SET     = 0x05, /**< Counter set (only used for returning the response
                                               to the user. Counter stored in c_val_tup_t.counter. */
     CVT_TYPE_COUNTER_LOCAL_ADD     = 0x06, /**< Counter add. Counter stored in cvt.counter.       */
-    CVT_TYPE_COUNTER_ACCUM_SET_SET = 0x07,
-    CVT_TYPE_COUNTER_ACCUM_ADD_SET = 0x08,
-    CVT_TYPE_COUNTER_ACCUM_ADD_ADD = 0x0a,
+    CVT_TYPE_COUNTER_ACCUM_SET_SET = 0x07, /**< Composite counter, first counter stores count
+                                              for one version (specified in the btree entry)
+                                              the second, stores accumulation over ancestral
+                                              versions. In this particular cvt type both
+                                              subcounters are sets. */
+    CVT_TYPE_COUNTER_ACCUM_ADD_SET = 0x08, /**< Composite counter, first is an add, second a set. */
+    CVT_TYPE_COUNTER_ACCUM_ADD_ADD = 0x0a, /**< Composite counter, both are adds.                 */
 
     /* 0x80 - 0xFF should not be used, because it conflicts with CVT_TYPE_DISABLED_FLAG. */
 };
@@ -515,9 +519,12 @@ typedef struct castle_value_tuple c_val_tup_t;
                                      CVT_COUNTER_ACCUM_SET_SET(_cvt) ||        \
                                      CVT_COUNTER_ACCUM_ADD_SET(_cvt) ||        \
                                      CVT_COUNTER_ACCUM_ADD_ADD(_cvt))
+/* True if the counter is a 'simple' add, or for composite counters, if the
+   all-versions sub-counter is an add. */
 #define CVT_ADD_ALLV_COUNTER(_cvt)  (CVT_COUNTER_ADD(_cvt) ||                  \
                                      CVT_COUNTER_ACCUM_ADD_ADD(_cvt) ||        \
                                      CVT_COUNTER_LOCAL_ADD(_cvt))
+/* Should only be used for non-composite CVTs. True if its an add counter. */
 #define CVT_ADD_COUNTER(_cvt)                                                 \
 ({                                                                            \
     int _ret;                                                                 \
@@ -625,6 +632,7 @@ typedef struct castle_value_tuple c_val_tup_t;
 }
 #define CVT_INLINE_VAL_LENGTH(_cvt)                                           \
                              (CVT_INLINE(_cvt)?((_cvt).length):0)
+/* Helper macro, don't use outside of the CVT macros. */
 #define _CVT_COUNTER_INLINE_TO_LOCAL(_local_cvt, _inline_cvt, _offset, _set)  \
 {                                                                             \
     int64_t count;                                                            \
@@ -634,6 +642,8 @@ typedef struct castle_value_tuple c_val_tup_t;
     else                                                                      \
         CVT_COUNTER_LOCAL_ADD_INIT(_local_cvt, count)                         \
 }
+/* Converts an accumulating counter to a local counter, extracting the
+   all-versions sub-counter. */
 #define CVT_COUNTER_ACCUM_ALLV_TO_LOCAL(_local_cvt, _accum_cvt)               \
 {                                                                             \
     if(CVT_COUNTER_ACCUM_ADD_ADD(_accum_cvt))                                 \
@@ -641,6 +651,8 @@ typedef struct castle_value_tuple c_val_tup_t;
     else                                                                      \
         _CVT_COUNTER_INLINE_TO_LOCAL(_local_cvt, _accum_cvt, 8, 1)            \
 }
+/* Converts an accumulating counter to a local counter, extracting the
+   one-version sub-counter. */
 #define CVT_COUNTER_ACCUM_ONEV_TO_LOCAL(_local_cvt, _accum_cvt)               \
 {                                                                             \
     if(CVT_COUNTER_ACCUM_ADD_ADD(_accum_cvt) ||                               \
@@ -649,6 +661,8 @@ typedef struct castle_value_tuple c_val_tup_t;
     else                                                                      \
         _CVT_COUNTER_INLINE_TO_LOCAL(_local_cvt, _accum_cvt, 0, 1)            \
 }
+/* Should only be used for 'simple' counters. Returns pointer to the
+   counter. */
 #define CVT_COUNTER_TO_VAL_PTR(_cvt)                                          \
 ({                                                                            \
     void *_ptr;                                                               \
@@ -1384,10 +1398,13 @@ typedef struct castle_rq_enumerator {
     int                           in_range;
 
     /* Variables used for counter accumulation. */
-    c_val_tup_t                   counter_accumulator;
-    void                         *counter_key;
-    struct node_buf_t            *counter_buf;
-    int                           counter_idx;
+    c_val_tup_t                   counter_accumulator; /**< Accumulator for the current key. */
+    void                         *counter_key;         /**< Key being accumulated.           */
+    struct node_buf_t            *counter_buf;         /**< Buffer in which counter key is
+                                                            stored. Value updated after
+                                                            accumulation.                    */
+    int                           counter_idx;         /**< Index in the buffer node under
+                                                            which the counter is stored.     */
 } c_rq_enum_t;
 
 struct castle_merged_iterator;

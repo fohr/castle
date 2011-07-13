@@ -1080,7 +1080,9 @@ static void castle_back_key_kernel_to_user(c_vl_bkey_t                 *kernel_k
 }
 
 /**
- * Converts in kernel CVT, to userspace type field.
+ * Converts an in-kernel CVT, to userspace type field.
+ *
+ * @param cvt   In-kernel CVT to convert.
  */
 static inline uint8_t castle_back_val_type_kernel_to_user(c_val_tup_t cvt)
 {

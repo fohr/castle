@@ -1260,17 +1260,15 @@ static void castle_ct_merged_iter_rbtree_insert(c_merged_iter_t *iter,
              * 2. Construct a list of iterators which cache same (k,v), rooted at the newest
              *    component iterator.same_kv_head. This list may contain both counter and
              *    non-counter CVTs.
-             * 3. Call each_skip (if registered) for object (i.e. non-counter) CVTs
-             *    for all iterators, except of the newest one (i.e. from the latest tree).
+             * 3. Call each_skip (if registered) for all iterators, except of the newest
+             *    one (i.e. from the latest tree).
              *
-             * Component iterators are stored in an array sorted with newer CTs
-             * appearing earlier than older CTs.  We can use the pointers to the CTs
-             * to detect which is more recent.
+             * Component iterators are threaded onto a list headed by the newset iterator
+             * (same_kv list). This list is later used to construct responce for
+             * counters. Otherwise its thrown away.
              *
-             * The same_kv list is used to construct the response if the newest iterator
-             * turns out to be a CVT_COUNTER_ADD. Otherwise the list isn't used.
+             * Component iterator pointers are used to determine the recency order.
              */
-
             if(c_iter > comp_iter)
             {
                 /* The current iterator is more recent than the one in the tree.
@@ -1328,6 +1326,9 @@ static inline struct component_iterator* castle_ct_merged_iter_rbtree_min_get(
     return rb_entry(min, struct component_iterator, rb_node);
 }
 
+/**
+ * Removes the iterator specified from the rbtree.
+ */
 static inline void castle_ct_merged_iter_rbtree_del(c_merged_iter_t *iter,
                                                     struct component_iterator *comp_iter)
 {
@@ -1335,6 +1336,10 @@ static inline void castle_ct_merged_iter_rbtree_del(c_merged_iter_t *iter,
     rb_erase(&comp_iter->rb_node, &iter->rb_root);
 }
 
+/**
+ * Determines and removes+returns the component iterator which provided the smallest
+ * key.
+ */
 static struct component_iterator* castle_ct_merge_iter_rbtree_min_del(c_merged_iter_t *iter)
 {
     struct component_iterator *comp_iter;
@@ -1482,6 +1487,12 @@ static int castle_ct_merged_iter_has_next(c_merged_iter_t *iter)
     return (!iter->err && (iter->non_empty_cnt > 0));
 }
 
+/**
+ * Consumes the current key from the component iterator provided, and from all
+ * all iterators in same_kv list.
+ * Additionally, skip can be performed in all the iterators mentioned, by setting
+ * 'skip' argument to true, and providing the skip key.
+ */
 static void castle_ct_merged_iter_consume(struct component_iterator *iter,
                                           int skip,
                                           void *skip_key)
@@ -1508,6 +1519,12 @@ static void castle_ct_merged_iter_consume(struct component_iterator *iter,
     iter->cached = 0;
 }
 
+/**
+ * Accumulates and returns counter (wrapped into a cvt) from the component iterator
+ * specified and older iterators present in the same_kv list.
+ *
+ * The function uses O(n*log(n)) sort on same_kv list.
+ */
 static c_val_tup_t castle_ct_merged_iter_counter_reduce(struct component_iterator *iter)
 {
     c_val_tup_t accumulator;
@@ -3972,6 +3989,15 @@ static int castle_da_entry_skip(struct castle_da_merge *merge,
     return castle_version_is_deletable(state, version, merge->is_new_key);
 }
 
+/**
+ * Deals with deletable counter, by 'pushing' its value to all direct children (so
+ * grand-children etc won't be modified) of the counter version.
+ *
+ * 'Push' is performed according to the usual counter reduction semantics (i.e.
+ * it'll only have an effect if the child is a counter add).
+ *
+ * Its assumed that all the children will exist in a single (current) leaf btree node.
+ */
 static void castle_da_counter_delete(struct castle_da_merge *merge,
                                      void *key,
                                      c_ver_t version,
@@ -8202,6 +8228,9 @@ int castle_double_array_make(c_da_t da_id, c_ver_t root_version)
     return 0;
 }
 
+/**
+ * Frees up the array of ct pointers used to perform gets.
+ */
 static void castle_da_cts_free(c_bvec_t *c_bvec)
 {
     castle_free(c_bvec->trees);
@@ -8211,6 +8240,8 @@ static void castle_da_cts_free(c_bvec_t *c_bvec)
 /**
  * Advaces current CT used by the bvec provided, to the next one in the trees array.
  * Releases the read reference on the now disused CT.
+ *
+ * Pointers to the released CTs are replaced with NULLs.
  *
  * @param ct   Current CT to use as basis for finding next CT
  */
@@ -8341,49 +8372,11 @@ again:
 }
 
 /**
- * Get first CT from DA that satisfies bvec.
+ * Takes references to all CTs in the DA, stores pointers to them in a (malloced)
+ * array, and returns it and its size.
  *
- * - Check if we have an appropriate CT at level 0 (specifically one that
- *   matches the bvec's cpu_index)
- * - Iterate over all levels of the DA until we find the first CT
- * - Return the first CT we find
- *
- * @return  The youngest CT that satisfies bvec
+ * CT pointers are sorted from newest to oldest.
  */
-struct castle_component_tree* castle_da_first_ct_get(struct castle_double_array *da,
-                                                     c_bvec_t *c_bvec)
-{
-    struct castle_component_tree *ct = NULL;
-    struct list_head *l;
-    int level = 1;
-
-    read_lock(&da->lock);
-
-    /* Level 0 is handled as a special case due to its ordering constraints. */
-    ct = __castle_da_rwct_get(da, c_bvec->cpu_index);
-    if (ct)
-        goto out;
-
-    /* Find the first level with trees and return it. */
-    while (level < MAX_DA_LEVEL)
-    {
-        l = &da->levels[level].trees;
-        if (!list_empty(l))
-        {
-            ct = list_first_entry(l, struct castle_component_tree, da_list);
-            goto out;
-        }
-        level++;
-    }
-
-out:
-    if (ct)
-        castle_ct_get(ct, 0 /*write*/);
-    read_unlock(&da->lock);
-
-    return ct;
-}
-
 static int castle_da_all_cts_get(struct castle_double_array *da,
                                  int *nr_cts_p,
                                  struct castle_component_tree ***cts_p)
@@ -8440,6 +8433,10 @@ again:
     return 0;
 }
 
+/**
+ * Releases references to all remaining CTs stored in c_bvec->trees array, and frees
+ * that array.
+ */
 static void castle_da_cts_put(c_bvec_t *c_bvec)
 {
     int i, cur_found;
@@ -8540,6 +8537,10 @@ static void castle_da_queue_kick(struct work_struct *work)
     }
 }
 
+/**
+ * Progresses read c_bvec to next CT, or if one is not available it terminates the requset,
+ * by calling back to the client.
+ */
 static void castle_da_ct_read_next(c_bvec_t *c_bvec)
 {
     void (*callback) (struct castle_bio_vec *c_bvec, int err, c_val_tup_t cvt);

@@ -1059,6 +1059,11 @@ static int castle_vlba_tree_entry_get(struct castle_btree_node *node,
 static void castle_vlba_tree_node_validate(struct castle_btree_node *node);
 #endif
 
+/**
+ * Converts CVT to type field that will be store in the btree.
+ * It deals with local counters correctly, other than that just returns
+ * the CVT type field.
+ */
 static inline uint8_t castle_vlba_tree_cvt_type_to_entry_type(c_val_tup_t cvt)
 {
     /* Local counters will be turned into inline counters. */
@@ -2363,6 +2368,9 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
        (lub_key_different = btree->key_compare(lub_key, key)) ||
        (lub_version != version))
     {
+        /* Get the CVT from the client. Since this is a new insert (and not
+           a replace) only provide the ancestral entry (lub_cvt), if the key
+           matches. */
         if ((ret = c_bvec->cvt_get(c_bvec,
                                    INVAL_VAL_TUP,
                                    lub_key_different ? INVAL_VAL_TUP : lub_cvt,
@@ -2401,7 +2409,8 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
     BUG_ON(lub_idx != insert_idx);
     BUG_ON(CVT_LEAF_PTR(lub_cvt));
 
-    /* NOP for block devices */
+    /* Get CVT from the client. Provide the current CVT. Ancestor isn't necessary
+       even if it exists, since exact match was found. */
     if ((ret = c_bvec->cvt_get(c_bvec, lub_cvt, INVAL_VAL_TUP, &new_cvt)))
     {
        /* End the IO in failure */
@@ -2447,6 +2456,20 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
 
 }
 
+/**
+ * Performs counter accumulation over versions. It works for both RW and RO trees.
+ * Starts from the specified location in the specified btree node, terminates
+ * when accumulation terminates (on a set, or object), or when no more entries
+ * for the specified key exist.
+ *
+ * @param node      Btree node containing the counter (all of its versions).
+ * @param version   Version in which the query is performed.
+ * @param key       Counter key.
+ * @param idx       Index to the most recent version of the counter key.
+ * @param cvt       Most recent counter CVT.
+ *
+ * @return Accumulated counter. Returned as a local counter.
+ */
 static c_val_tup_t castle_btree_counter_read(struct castle_btree_node *node,
                                              c_ver_t version,
                                              void *key,
@@ -4141,6 +4164,10 @@ static int castle_rq_enum_iter_node_start(c_iter_t *c_iter)
         return 0;
 }
 
+/**
+ * Resets all counter accumulation variables stored in rq_enum struture to their default
+ * values (NULLs, -1s).
+ */
 static void castle_rq_enum_iter_counter_reset(c_rq_enum_t *rq_enum)
 {
     CVT_INVALID_INIT(rq_enum->counter_accumulator);
@@ -4149,6 +4176,12 @@ static void castle_rq_enum_iter_counter_reset(c_rq_enum_t *rq_enum)
     rq_enum->counter_idx    = -1;
 }
 
+/**
+ * Terminates counter accumulation, by updating the counter in the buffer and reserting
+ * all the counter accumulation variables in rq_enum.
+ *
+ * If accumulation isn't being performed this function is a noop.
+ */
 static void castle_rq_enum_iter_counter_accum_fini(c_rq_enum_t *rq_enum)
 {
     struct castle_btree_type *btree;
@@ -4174,6 +4207,15 @@ static void castle_rq_enum_iter_counter_accum_fini(c_rq_enum_t *rq_enum)
     castle_rq_enum_iter_counter_reset(rq_enum);
 }
 
+/**
+ * Continues accumulation of a counter by folding the cvt provided into the accumulator
+ * stored in rq_enum structure.
+ *
+ * It terminates the accumulation if a counter set, or an non-counter is encountered.
+ * It also terminates on accumulating counters (in the case of RW trees).
+ *
+ * If accumulation isn't being performed this function is a noop.
+ */
 static void castle_rq_enum_iter_counter_accum_continue(c_rq_enum_t *rq_enum,
                                                        c_val_tup_t cvt)
 {
@@ -4200,6 +4242,15 @@ static void castle_rq_enum_iter_counter_accum_continue(c_rq_enum_t *rq_enum,
         castle_rq_enum_iter_counter_accum_fini(rq_enum);
 }
 
+/**
+ * Initiates counter accumulation if the cvt provided is a counter.
+ *
+ * All accumulation variables are initialised on the basis of the current state of the
+ * enumerator, and the cvt provided.
+ *
+ * If the accumulation is trivialy terminable (either on counter sets, or on
+ * accumulating counters), it terminates.
+ */
 static void castle_rq_enum_iter_counter_accum_init(c_rq_enum_t *rq_enum, c_val_tup_t cvt)
 {
     /* Don't init if we aren't looking at a counter. */
