@@ -940,7 +940,7 @@ static void castle_ct_modlist_iter_fill(c_modlist_iter_t *iter)
         debug("Inserting into the node=%d, under idx=%d\n", node_idx, node_offset);
         BUG_ON(CVT_LEAF_PTR(cvt));
         if(CVT_ACCUM_COUNTER(cvt))
-            CVT_COUNTER_ACCUM_NV_TO_LOCAL(cvt, cvt);
+            CVT_COUNTER_ACCUM_ONEV_TO_LOCAL(cvt, cvt);
 
         /* Advance to a new node if the immutable iterator has moved on.  This
          * is handled via the immutable iterator callback.  We rely on source
@@ -8590,7 +8590,7 @@ static void castle_da_ct_read_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cv
     }
 
     /* Deal with counter adds (other component trees may have to be looked at). */
-    if(!err && CVT_ADD_V_COUNTER(cvt))
+    if(!err && CVT_ADD_ALLV_COUNTER(cvt))
     {
         /* Callback (this should perform counter accumulation).
            NOTE: DA code retakes control after this callback is complete (after counter

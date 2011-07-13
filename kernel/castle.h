@@ -504,165 +504,165 @@ typedef struct castle_value_tuple c_val_tup_t;
 
 
 /* Derevative types. */
-#define CVT_ONE_BLK(_cvt)        (CVT_ON_DISK(_cvt) && ((_cvt).length == C_BLK_SIZE))
-#define CVT_LOCAL_COUNTER(_cvt)  (CVT_COUNTER_LOCAL_SET(_cvt) ||            \
-                                  CVT_COUNTER_LOCAL_ADD(_cvt))
-#define CVT_ACCUM_COUNTER(_cvt)  (CVT_COUNTER_ACCUM_SET_SET(_cvt) ||        \
-                                  CVT_COUNTER_ACCUM_ADD_SET(_cvt) ||        \
-                                  CVT_COUNTER_ACCUM_ADD_ADD(_cvt))
-#define CVT_INLINE_COUNTER(_cvt) (CVT_COUNTER_SET(_cvt) ||                  \
-                                  CVT_COUNTER_ADD(_cvt) ||                  \
-                                  CVT_COUNTER_ACCUM_SET_SET(_cvt) ||        \
-                                  CVT_COUNTER_ACCUM_ADD_SET(_cvt) ||        \
-                                  CVT_COUNTER_ACCUM_ADD_ADD(_cvt))
-#define CVT_ADD_V_COUNTER(_cvt)  (CVT_COUNTER_ADD(_cvt) ||                  \
-                                  CVT_COUNTER_ACCUM_ADD_ADD(_cvt) ||        \
-                                  CVT_COUNTER_LOCAL_ADD(_cvt))
-#define CVT_ADD_COUNTER(_cvt)                                               \
-({                                                                          \
-    int _ret;                                                               \
-    /* Cannot decide which sub-counter to check for accum counters. */      \
-    BUG_ON(CVT_ACCUM_COUNTER(_cvt));                                        \
-    _ret = CVT_ADD_V_COUNTER(_cvt);                                         \
-    _ret;                                                                   \
+#define CVT_ONE_BLK(_cvt)           (CVT_ON_DISK(_cvt) && ((_cvt).length == C_BLK_SIZE))
+#define CVT_LOCAL_COUNTER(_cvt)     (CVT_COUNTER_LOCAL_SET(_cvt) ||            \
+                                     CVT_COUNTER_LOCAL_ADD(_cvt))
+#define CVT_ACCUM_COUNTER(_cvt)     (CVT_COUNTER_ACCUM_SET_SET(_cvt) ||        \
+                                     CVT_COUNTER_ACCUM_ADD_SET(_cvt) ||        \
+                                     CVT_COUNTER_ACCUM_ADD_ADD(_cvt))
+#define CVT_INLINE_COUNTER(_cvt)    (CVT_COUNTER_SET(_cvt) ||                  \
+                                     CVT_COUNTER_ADD(_cvt) ||                  \
+                                     CVT_COUNTER_ACCUM_SET_SET(_cvt) ||        \
+                                     CVT_COUNTER_ACCUM_ADD_SET(_cvt) ||        \
+                                     CVT_COUNTER_ACCUM_ADD_ADD(_cvt))
+#define CVT_ADD_ALLV_COUNTER(_cvt)  (CVT_COUNTER_ADD(_cvt) ||                  \
+                                     CVT_COUNTER_ACCUM_ADD_ADD(_cvt) ||        \
+                                     CVT_COUNTER_LOCAL_ADD(_cvt))
+#define CVT_ADD_COUNTER(_cvt)                                                 \
+({                                                                            \
+    int _ret;                                                                 \
+    /* Cannot decide which sub-counter to check for accum counters. */        \
+    BUG_ON(CVT_ACCUM_COUNTER(_cvt));                                          \
+    _ret = CVT_ADD_ALLV_COUNTER(_cvt);                                        \
+    _ret;                                                                     \
 })
 #define CVT_SET_COUNTER(_cvt)    (!CVT_ADD_COUNTER(_cvt))
-#define CVT_ANY_COUNTER(_cvt)    (CVT_INLINE_COUNTER(_cvt) ||               \
+#define CVT_ANY_COUNTER(_cvt)    (CVT_INLINE_COUNTER(_cvt) ||                 \
                                   CVT_LOCAL_COUNTER(_cvt))
 
-#define CVT_DISABLED_INIT(_cvt)                                             \
-{                                                                           \
-   (_cvt).type |= CVT_TYPE_DISABLED_FLAG;                                   \
+#define CVT_DISABLED_INIT(_cvt)                                               \
+{                                                                             \
+   (_cvt).type |= CVT_TYPE_DISABLED_FLAG;                                     \
 }
-#define CVT_INVALID_INIT(_cvt)                                              \
-{                                                                           \
-   (_cvt).type   = CVT_TYPE_INVALID;                                        \
-   (_cvt).length = 0;                                                       \
-   (_cvt).cep    = INVAL_EXT_POS;                                           \
+#define CVT_INVALID_INIT(_cvt)                                                \
+{                                                                             \
+   (_cvt).type   = CVT_TYPE_INVALID;                                          \
+   (_cvt).length = 0;                                                         \
+   (_cvt).cep    = INVAL_EXT_POS;                                             \
 }
-#define CVT_LEAF_PTR_INIT(_cvt, _length, _cep)                              \
-{                                                                           \
-   (_cvt).type   = CVT_TYPE_LEAF_PTR;                                       \
-   (_cvt).length = _length;                                                 \
-   (_cvt).cep    = _cep;                                                    \
+#define CVT_LEAF_PTR_INIT(_cvt, _length, _cep)                                \
+{                                                                             \
+   (_cvt).type   = CVT_TYPE_LEAF_PTR;                                         \
+   (_cvt).length = _length;                                                   \
+   (_cvt).cep    = _cep;                                                      \
 }
-#define CVT_NODE_INIT(_cvt, _length, _cep)                                  \
-{                                                                           \
-   (_cvt).type   = CVT_TYPE_NODE;                                           \
-   (_cvt).length = _length;                                                 \
-   (_cvt).cep    = _cep;                                                    \
+#define CVT_NODE_INIT(_cvt, _length, _cep)                                    \
+{                                                                             \
+   (_cvt).type   = CVT_TYPE_NODE;                                             \
+   (_cvt).length = _length;                                                   \
+   (_cvt).cep    = _cep;                                                      \
 }
-#define CVT_TOMBSTONE_INIT(_cvt)                                            \
-{                                                                           \
-   (_cvt).type   = CVT_TYPE_TOMBSTONE;                                      \
-   (_cvt).length = 0;                                                       \
-   (_cvt).cep    = INVAL_EXT_POS;                                           \
+#define CVT_TOMBSTONE_INIT(_cvt)                                              \
+{                                                                             \
+   (_cvt).type   = CVT_TYPE_TOMBSTONE;                                        \
+   (_cvt).length = 0;                                                         \
+   (_cvt).cep    = INVAL_EXT_POS;                                             \
 }
-#define CVT_INLINE_INIT(_cvt, _length, _ptr)                                \
-{                                                                           \
-   (_cvt).type   = CVT_TYPE_INLINE;                                         \
-   (_cvt).length = _length;                                                 \
-   (_cvt).val    = _ptr;                                                    \
+#define CVT_INLINE_INIT(_cvt, _length, _ptr)                                  \
+{                                                                             \
+   (_cvt).type   = CVT_TYPE_INLINE;                                           \
+   (_cvt).length = _length;                                                   \
+   (_cvt).val    = _ptr;                                                      \
 }
-#define CVT_COUNTER_SET_INIT(_cvt, _length, _ptr)                           \
-{                                                                           \
-   BUG_ON((_length) != 8);                                                  \
-   (_cvt).type   = CVT_TYPE_COUNTER_SET;                                    \
-   (_cvt).length = _length;                                                 \
-   (_cvt).val    = _ptr;                                                    \
+#define CVT_COUNTER_SET_INIT(_cvt, _length, _ptr)                             \
+{                                                                             \
+   BUG_ON((_length) != 8);                                                    \
+   (_cvt).type   = CVT_TYPE_COUNTER_SET;                                      \
+   (_cvt).length = _length;                                                   \
+   (_cvt).val    = _ptr;                                                      \
 }
-#define CVT_COUNTER_ADD_INIT(_cvt, _length, _ptr)                           \
-{                                                                           \
-   BUG_ON((_length) != 8);                                                  \
-   (_cvt).type   = CVT_TYPE_COUNTER_ADD;                                    \
-   (_cvt).length = _length;                                                 \
-   (_cvt).val    = _ptr;                                                    \
+#define CVT_COUNTER_ADD_INIT(_cvt, _length, _ptr)                             \
+{                                                                             \
+   BUG_ON((_length) != 8);                                                    \
+   (_cvt).type   = CVT_TYPE_COUNTER_ADD;                                      \
+   (_cvt).length = _length;                                                   \
+   (_cvt).val    = _ptr;                                                      \
 }
-#define CVT_COUNTER_ACCUM_SET_SET_INIT(_cvt, _length, _ptr)                 \
-{                                                                           \
-   BUG_ON((_length) != 16);                                                 \
-   (_cvt).type   = CVT_TYPE_COUNTER_ACCUM_SET_SET;                          \
-   (_cvt).length = _length;                                                 \
-   (_cvt).val    = _ptr;                                                    \
+#define CVT_COUNTER_ACCUM_SET_SET_INIT(_cvt, _length, _ptr)                   \
+{                                                                             \
+   BUG_ON((_length) != 16);                                                   \
+   (_cvt).type   = CVT_TYPE_COUNTER_ACCUM_SET_SET;                            \
+   (_cvt).length = _length;                                                   \
+   (_cvt).val    = _ptr;                                                      \
 }
-#define CVT_COUNTER_ACCUM_ADD_SET_INIT(_cvt, _length, _ptr)                 \
-{                                                                           \
-   BUG_ON((_length) != 16);                                                 \
-   (_cvt).type   = CVT_TYPE_COUNTER_ACCUM_ADD_SET;                          \
-   (_cvt).length = _length;                                                 \
-   (_cvt).val    = _ptr;                                                    \
+#define CVT_COUNTER_ACCUM_ADD_SET_INIT(_cvt, _length, _ptr)                   \
+{                                                                             \
+   BUG_ON((_length) != 16);                                                   \
+   (_cvt).type   = CVT_TYPE_COUNTER_ACCUM_ADD_SET;                            \
+   (_cvt).length = _length;                                                   \
+   (_cvt).val    = _ptr;                                                      \
 }
-#define CVT_COUNTER_ACCUM_ADD_ADD_INIT(_cvt, _length, _ptr)                 \
-{                                                                           \
-   BUG_ON((_length) != 16);                                                 \
-   (_cvt).type   = CVT_TYPE_COUNTER_ACCUM_ADD_ADD;                          \
-   (_cvt).length = _length;                                                 \
-   (_cvt).val    = _ptr;                                                    \
+#define CVT_COUNTER_ACCUM_ADD_ADD_INIT(_cvt, _length, _ptr)                   \
+{                                                                             \
+   BUG_ON((_length) != 16);                                                   \
+   (_cvt).type   = CVT_TYPE_COUNTER_ACCUM_ADD_ADD;                            \
+   (_cvt).length = _length;                                                   \
+   (_cvt).val    = _ptr;                                                      \
 }
-#define CVT_COUNTER_LOCAL_SET_INIT(_cvt, _counter)                          \
-{                                                                           \
-   (_cvt).type    = CVT_TYPE_COUNTER_LOCAL_SET;                             \
-   (_cvt).length  = 8;                                                      \
-   (_cvt).counter = (_counter);                                             \
+#define CVT_COUNTER_LOCAL_SET_INIT(_cvt, _counter)                            \
+{                                                                             \
+   (_cvt).type    = CVT_TYPE_COUNTER_LOCAL_SET;                               \
+   (_cvt).length  = 8;                                                        \
+   (_cvt).counter = (_counter);                                               \
 }
-#define CVT_COUNTER_LOCAL_ADD_INIT(_cvt, _counter)                          \
-{                                                                           \
-   (_cvt).type    = CVT_TYPE_COUNTER_LOCAL_ADD;                             \
-   (_cvt).length  = 8;                                                      \
-   (_cvt).counter = (_counter);                                             \
+#define CVT_COUNTER_LOCAL_ADD_INIT(_cvt, _counter)                            \
+{                                                                             \
+   (_cvt).type    = CVT_TYPE_COUNTER_LOCAL_ADD;                               \
+   (_cvt).length  = 8;                                                        \
+   (_cvt).counter = (_counter);                                               \
 }
-#define CVT_MEDIUM_OBJECT_INIT(_cvt, _length, _cep)                         \
-{                                                                           \
-    (_cvt).type  = CVT_TYPE_MEDIUM_OBJECT;                                  \
-    (_cvt).length= _length;                                                 \
-    (_cvt).cep   = _cep;                                                    \
+#define CVT_MEDIUM_OBJECT_INIT(_cvt, _length, _cep)                           \
+{                                                                             \
+    (_cvt).type  = CVT_TYPE_MEDIUM_OBJECT;                                    \
+    (_cvt).length= _length;                                                   \
+    (_cvt).cep   = _cep;                                                      \
 }
-#define CVT_LARGE_OBJECT_INIT(_cvt, _length, _cep)                          \
-{                                                                           \
-    (_cvt).type  = CVT_TYPE_LARGE_OBJECT;                                   \
-    (_cvt).length= _length;                                                 \
-    (_cvt).cep   = _cep;                                                    \
+#define CVT_LARGE_OBJECT_INIT(_cvt, _length, _cep)                            \
+{                                                                             \
+    (_cvt).type  = CVT_TYPE_LARGE_OBJECT;                                     \
+    (_cvt).length= _length;                                                   \
+    (_cvt).cep   = _cep;                                                      \
 }
-#define CVT_INLINE_VAL_LENGTH(_cvt)                                         \
+#define CVT_INLINE_VAL_LENGTH(_cvt)                                           \
                              (CVT_INLINE(_cvt)?((_cvt).length):0)
-#define _CVT_COUNTER_INLINE_TO_LOCAL(_local_cvt, _inline_cvt, _offset, _set)\
-{                                                                           \
-    int64_t count;                                                          \
-    memcpy(&count, (_inline_cvt).val+(_offset), 8);                         \
-    if(_set)                                                                \
-        CVT_COUNTER_LOCAL_SET_INIT(_local_cvt, count)                       \
-    else                                                                    \
-        CVT_COUNTER_LOCAL_ADD_INIT(_local_cvt, count)                       \
+#define _CVT_COUNTER_INLINE_TO_LOCAL(_local_cvt, _inline_cvt, _offset, _set)  \
+{                                                                             \
+    int64_t count;                                                            \
+    memcpy(&count, (_inline_cvt).val+(_offset), 8);                           \
+    if(_set)                                                                  \
+        CVT_COUNTER_LOCAL_SET_INIT(_local_cvt, count)                         \
+    else                                                                      \
+        CVT_COUNTER_LOCAL_ADD_INIT(_local_cvt, count)                         \
 }
-#define CVT_COUNTER_ACCUM_V_TO_LOCAL(_local_cvt, _accum_cvt)                \
-{                                                                           \
-    if(CVT_COUNTER_ACCUM_ADD_ADD(_accum_cvt))                               \
-        _CVT_COUNTER_INLINE_TO_LOCAL(_local_cvt, _accum_cvt, 8, 0)          \
-    else                                                                    \
-        _CVT_COUNTER_INLINE_TO_LOCAL(_local_cvt, _accum_cvt, 8, 1)          \
+#define CVT_COUNTER_ACCUM_ALLV_TO_LOCAL(_local_cvt, _accum_cvt)               \
+{                                                                             \
+    if(CVT_COUNTER_ACCUM_ADD_ADD(_accum_cvt))                                 \
+        _CVT_COUNTER_INLINE_TO_LOCAL(_local_cvt, _accum_cvt, 8, 0)            \
+    else                                                                      \
+        _CVT_COUNTER_INLINE_TO_LOCAL(_local_cvt, _accum_cvt, 8, 1)            \
 }
-#define CVT_COUNTER_ACCUM_NV_TO_LOCAL(_local_cvt, _accum_cvt)               \
-{                                                                           \
-    if(CVT_COUNTER_ACCUM_ADD_ADD(_accum_cvt) ||                             \
-       CVT_COUNTER_ACCUM_ADD_SET(_accum_cvt))                               \
-        _CVT_COUNTER_INLINE_TO_LOCAL(_local_cvt, _accum_cvt, 0, 0)          \
-    else                                                                    \
-        _CVT_COUNTER_INLINE_TO_LOCAL(_local_cvt, _accum_cvt, 0, 1)          \
+#define CVT_COUNTER_ACCUM_ONEV_TO_LOCAL(_local_cvt, _accum_cvt)               \
+{                                                                             \
+    if(CVT_COUNTER_ACCUM_ADD_ADD(_accum_cvt) ||                               \
+       CVT_COUNTER_ACCUM_ADD_SET(_accum_cvt))                                 \
+        _CVT_COUNTER_INLINE_TO_LOCAL(_local_cvt, _accum_cvt, 0, 0)            \
+    else                                                                      \
+        _CVT_COUNTER_INLINE_TO_LOCAL(_local_cvt, _accum_cvt, 0, 1)            \
 }
-#define CVT_COUNTER_TO_VAL_PTR(_cvt)                                        \
-({                                                                          \
-    void *_ptr;                                                             \
-    BUG_ON(CVT_ACCUM_COUNTER(_cvt));                                        \
-    if(CVT_LOCAL_COUNTER(_cvt))                                             \
-        _ptr = &(_cvt).counter;                                             \
-    else                                                                    \
-        _ptr = (_cvt).val;                                                  \
-    _ptr;                                                                   \
+#define CVT_COUNTER_TO_VAL_PTR(_cvt)                                          \
+({                                                                            \
+    void *_ptr;                                                               \
+    BUG_ON(CVT_ACCUM_COUNTER(_cvt));                                          \
+    if(CVT_LOCAL_COUNTER(_cvt))                                               \
+        _ptr = &(_cvt).counter;                                               \
+    else                                                                      \
+        _ptr = (_cvt).val;                                                    \
+    _ptr;                                                                     \
 })
-#define CVT_EQUAL(_cvt1, _cvt2)                                                 \
-                             ((_cvt1).type      == (_cvt2).type &&              \
-                              (_cvt1).length    == (_cvt2).length &&            \
-                              (!CVT_ON_DISK(_cvt1) ||                           \
+#define CVT_EQUAL(_cvt1, _cvt2)                                               \
+                             ((_cvt1).type      == (_cvt2).type &&            \
+                              (_cvt1).length    == (_cvt2).length &&          \
+                              (!CVT_ON_DISK(_cvt1) ||                         \
                                EXT_POS_EQUAL((_cvt1).cep, (_cvt2).cep)))
 
 
