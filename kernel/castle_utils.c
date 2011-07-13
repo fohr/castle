@@ -108,8 +108,8 @@ int castle_counter_simple_reduce(c_val_tup_t *accumulator, c_val_tup_t delta_cvt
        of the two sub-counters to use. */
     BUG_ON(CVT_ACCUM_COUNTER(delta_cvt));
 
-    /* Accumulator should be an add (otherwise we shouldn't be accumulating any more. */
-    BUG_ON(!CVT_COUNTER_ADD(*accumulator));
+    /* Accumulator should be an add (otherwise we shouldn't be accumulating any more). */
+    BUG_ON(!CVT_ADD_V_COUNTER(*accumulator));
 
     /* The value length should be 8 bytes. */
     BUG_ON(delta_cvt.length != 8);
