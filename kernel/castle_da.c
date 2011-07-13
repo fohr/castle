@@ -3410,7 +3410,7 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
             node_idx, node->used);
     while(node_idx < node->used)
     {
-        /* If merge is completing, there shouldnt be any splits any more. */
+        /* If merge is completing, there shouldn't be any splits any more. */
         BUG_ON(merge->completing);
         btree->entry_get(node, node_idx,  &key, &version, &cvt);
         BUG_ON(CVT_LEAF_PTR(cvt));

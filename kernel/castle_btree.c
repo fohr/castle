@@ -2751,13 +2751,18 @@ static void __castle_btree_submit(c_bvec_t *c_bvec,
 
     castle_debug_bvec_btree_walk(c_bvec);
 
+    /* On writes we can drop the lock on the grandparent node _before_ acquiring lock
+       on the child. */
+    if(write)
+        castle_btree_c2b_forget(c_bvec);
     /* Get the cache block for the next node. */
     c2b = castle_cache_block_get(node_cep,
                                  btree->node_size(ct,
                                                   c_bvec->btree_levels - c_bvec->btree_depth));
     castle_btree_c2b_lock(c_bvec, c2b);
-    /* After the node has been locked, drop the parent. */
-    castle_btree_c2b_forget(c_bvec);
+    /* On reads, the parent can only be unlocked _after_ child got locked. */
+    if(!write)
+        castle_btree_c2b_forget(c_bvec);
 
     if(!c2b_uptodate(c2b))
     {
