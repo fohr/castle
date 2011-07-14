@@ -30,10 +30,14 @@
 
 #define __XOR(a, b) (((a) && !(b)) || (!(a) && (b)))
 
-c_val_tup_t convert_to_cvt(uint8_t type, uint64_t length, c_ext_pos_t cep)
+static c_val_tup_t convert_to_cvt(uint8_t type,
+                                  uint64_t length,
+                                  c_ext_pos_t cep,
+                                  void *inline_ptr)
 {
     c_val_tup_t cvt;
 
+    memset(&cvt, 0, sizeof(c_val_tup_t));
     cvt.type    = type;
     cvt.length  = length;
     if (CVT_LEAF_PTR(cvt) || CVT_NODE(cvt) || CVT_ON_DISK(cvt))
@@ -46,7 +50,10 @@ c_val_tup_t convert_to_cvt(uint8_t type, uint64_t length, c_ext_pos_t cep)
         cvt.cep    = INVAL_EXT_POS;
     }
     else if (CVT_INLINE(cvt))
-        cvt.val    = NULL;
+    {
+        BUG_ON(!inline_ptr);
+        cvt.val_p = inline_ptr;
+    }
 
     return cvt;
 }
@@ -186,7 +193,7 @@ static int castle_mtree_entry_get(struct castle_btree_node *node,
     if(version_p)     *version_p     = entry->version;
     if(cvt_p)
     {
-        *cvt_p = convert_to_cvt(entry->type, entry->val_len, entry->cep);
+        *cvt_p = convert_to_cvt(entry->type, entry->val_len, entry->cep, NULL);
         BUG_ON(!CVT_MEDIUM_OBJECT(*cvt_p) && !CVT_NODE(*cvt_p) && !CVT_LEAF_PTR(*cvt_p));
     }
 
@@ -511,7 +518,7 @@ static int castle_batree_entry_get(struct castle_btree_node *node,
     if(cvt_p)
     {
         BUG_ON(!BATREE_ENTRY_IS_ONDISK(entry) && !BATREE_ENTRY_IS_NODE(entry));
-        *cvt_p = convert_to_cvt(entry->type, entry->val_len, entry->cep);
+        *cvt_p = convert_to_cvt(entry->type, entry->val_len, entry->cep, NULL);
     }
 
     return 0;
@@ -1039,13 +1046,13 @@ static int castle_vlba_tree_entry_get(struct castle_btree_node *node,
     if(version_p)     *version_p     = entry->version;
     if(cvt_p)
     {
-        *cvt_p = convert_to_cvt(entry->type, entry->val_len, entry->cep);
+        *cvt_p = convert_to_cvt(entry->type,
+                                entry->val_len,
+                                entry->cep,
+                                VLBA_ENTRY_VAL_PTR(entry));
         BUG_ON(VLBA_TREE_ENTRY_IS_TOMB_STONE(entry) && entry->val_len != 0);
-        if (VLBA_TREE_ENTRY_IS_INLINE(entry))
-        {
-            BUG_ON(entry->val_len > MAX_INLINE_VAL_SIZE);
-            cvt_p->val = VLBA_ENTRY_VAL_PTR(entry);
-        }
+        BUG_ON(VLBA_TREE_ENTRY_IS_INLINE(entry) &&
+               (entry->val_len > MAX_INLINE_VAL_SIZE));
         BUG_ON(!node->is_leaf && (CVT_LEAF_PTR(*cvt_p) || CVT_LEAF_VAL(*cvt_p)));
         BUG_ON(node->is_leaf && CVT_NODE(*cvt_p));
     }
@@ -1148,7 +1155,7 @@ static void castle_vlba_tree_entry_add(struct castle_btree_node *node,
         BUG_ON(entry->val_len > MAX_INLINE_VAL_SIZE);
         BUG_ON(VLBA_ENTRY_VAL_PTR(entry)+cvt.length > EOF_VLBA_NODE(node));
         memmove(VLBA_ENTRY_VAL_PTR(entry),
-                CVT_LOCAL_COUNTER(cvt) ? (void *)&cvt.counter : cvt.val,
+                CVT_INLINE_VAL_PTR(cvt),
                 cvt.length);
     }
     else
@@ -1226,7 +1233,7 @@ static void castle_vlba_tree_entry_replace(struct castle_btree_node *node,
         {
             BUG_ON(entry->val_len > MAX_INLINE_VAL_SIZE);
             memcpy(VLBA_ENTRY_VAL_PTR(entry),
-                   CVT_LOCAL_COUNTER(cvt) ? (void *)&cvt.counter : cvt.val,
+                   CVT_INLINE_VAL_PTR(cvt),
                    cvt.length);
         }
         else
@@ -2574,8 +2581,8 @@ static void castle_btree_read_process(c_bvec_t *c_bvec)
             {
                 char *loc_buf;
                 loc_buf = castle_malloc(lub_cvt.length, GFP_NOIO);
-                memcpy(loc_buf, lub_cvt.val, lub_cvt.length);
-                lub_cvt.val = loc_buf;
+                memcpy(loc_buf, CVT_INLINE_VAL_PTR(lub_cvt), lub_cvt.length);
+                lub_cvt.val_p = loc_buf;
             }
             castle_btree_io_end(c_bvec, lub_cvt, 0);
         }

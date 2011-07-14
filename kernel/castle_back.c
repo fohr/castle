@@ -1116,7 +1116,7 @@ static uint32_t castle_back_val_kernel_to_user(c_val_tup_t *val, struct castle_b
     uint32_t length, val_length;
     struct castle_iter_val *val_copy;
 
-    if (CVT_INLINE(*val) || CVT_LOCAL_COUNTER(*val))
+    if (CVT_INLINE(*val))
         val_length = val->length;
     else
         val_length = 0;
@@ -1137,15 +1137,7 @@ static uint32_t castle_back_val_kernel_to_user(c_val_tup_t *val, struct castle_b
     {
         val_copy->val = (uint8_t *)(user_buf + sizeof(struct castle_iter_val));
         memcpy((uint8_t *)castle_back_user_to_kernel(buf, val_copy->val),
-               val->val,
-               val->length);
-    }
-    else
-    if (CVT_LOCAL_COUNTER(*val))
-    {
-        val_copy->val = (uint8_t *)(user_buf + sizeof(struct castle_iter_val));
-        memcpy((uint8_t *)castle_back_user_to_kernel(buf, val_copy->val),
-               &val->counter,
+               CVT_INLINE_VAL_PTR(*val),
                val->length);
     }
     else
@@ -1862,15 +1854,16 @@ static int castle_back_iter_next_callback(struct castle_object_iterator *iterato
             goto err0;
         }
         stateful_op->iterator.saved_val = *val;
-        if (CVT_INLINE(*val))
+        /* Copy the value since it may get removed from the cache.
+           There is no need to memcpy local counters. */
+        if (CVT_INLINE(*val) && !CVT_LOCAL_COUNTER(*val))
         {
-            /* copy the value since it may get removed from the cache */
-            stateful_op->iterator.saved_val.val =
+            stateful_op->iterator.saved_val.val_p =
                 castle_malloc(val->length, GFP_KERNEL);
-            memcpy(stateful_op->iterator.saved_val.val, val->val, val->length);
+            memcpy(stateful_op->iterator.saved_val.val_p,
+                   CVT_INLINE_VAL_PTR(*val),
+                   val->length);
         }
-        else
-            stateful_op->iterator.saved_val.val = NULL;
 
         castle_back_buffer_put(conn, op->buf);
         castle_back_iter_reply(stateful_op, op, 0);
@@ -1955,8 +1948,7 @@ static void _castle_back_iter_next(void *data)
 
         castle_object_bkey_free(stateful_op->iterator.saved_key);
         /* we copied it so free it */
-        if (CVT_INLINE(stateful_op->iterator.saved_val))
-            castle_free(stateful_op->iterator.saved_val.val);
+        CVT_INLINE_FREE(stateful_op->iterator.saved_val);
 
         debug_iter("iter_next added saved key\n");
 
@@ -2046,11 +2038,7 @@ static void castle_back_iter_cleanup(struct castle_back_stateful_op *stateful_op
     if (stateful_op->iterator.saved_key != NULL)
     {
         castle_object_bkey_free(stateful_op->iterator.saved_key);
-        if (CVT_INLINE(stateful_op->iterator.saved_val))
-        {
-            BUG_ON(!stateful_op->iterator.saved_val.val);
-            castle_free(stateful_op->iterator.saved_val.val);
-        }
+        CVT_INLINE_FREE(stateful_op->iterator.saved_val);
     }
 
     castle_object_bkey_free(stateful_op->iterator.start_key);

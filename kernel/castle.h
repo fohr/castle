@@ -444,7 +444,7 @@ struct castle_value_tuple {
     /*          8 */ };
     /*          8 */ union {
     /*          8 */     c_ext_pos_t   cep;
-    /*          8 */     uint8_t      *val;
+    /*          8 */     uint8_t      *val_p;
     /*          8 */     int64_t       counter;
     /*         24 */ };
     /*         24 */
@@ -480,6 +480,8 @@ typedef struct castle_value_tuple c_val_tup_t;
 #define CVT_INLINE(_cvt)                (((_cvt).type == CVT_TYPE_INLINE) ||                  \
                                          ((_cvt).type == CVT_TYPE_COUNTER_SET) ||             \
                                          ((_cvt).type == CVT_TYPE_COUNTER_ADD) ||             \
+                                         ((_cvt).type == CVT_TYPE_COUNTER_LOCAL_SET) ||       \
+                                         ((_cvt).type == CVT_TYPE_COUNTER_LOCAL_ADD) ||       \
                                          ((_cvt).type == CVT_TYPE_COUNTER_ACCUM_SET_SET) ||   \
                                          ((_cvt).type == CVT_TYPE_COUNTER_ACCUM_ADD_SET) ||   \
                                          ((_cvt).type == CVT_TYPE_COUNTER_ACCUM_ADD_ADD))
@@ -569,42 +571,42 @@ typedef struct castle_value_tuple c_val_tup_t;
 {                                                                             \
    (_cvt).type   = CVT_TYPE_INLINE;                                           \
    (_cvt).length = _length;                                                   \
-   (_cvt).val    = _ptr;                                                      \
+   (_cvt).val_p  = _ptr;                                                      \
 }
 #define CVT_COUNTER_SET_INIT(_cvt, _length, _ptr)                             \
 {                                                                             \
    BUG_ON((_length) != 8);                                                    \
    (_cvt).type   = CVT_TYPE_COUNTER_SET;                                      \
    (_cvt).length = _length;                                                   \
-   (_cvt).val    = _ptr;                                                      \
+   (_cvt).val_p  = _ptr;                                                      \
 }
 #define CVT_COUNTER_ADD_INIT(_cvt, _length, _ptr)                             \
 {                                                                             \
    BUG_ON((_length) != 8);                                                    \
    (_cvt).type   = CVT_TYPE_COUNTER_ADD;                                      \
    (_cvt).length = _length;                                                   \
-   (_cvt).val    = _ptr;                                                      \
+   (_cvt).val_p  = _ptr;                                                      \
 }
 #define CVT_COUNTER_ACCUM_SET_SET_INIT(_cvt, _length, _ptr)                   \
 {                                                                             \
    BUG_ON((_length) != 16);                                                   \
    (_cvt).type   = CVT_TYPE_COUNTER_ACCUM_SET_SET;                            \
    (_cvt).length = _length;                                                   \
-   (_cvt).val    = _ptr;                                                      \
+   (_cvt).val_p  = _ptr;                                                      \
 }
 #define CVT_COUNTER_ACCUM_ADD_SET_INIT(_cvt, _length, _ptr)                   \
 {                                                                             \
    BUG_ON((_length) != 16);                                                   \
    (_cvt).type   = CVT_TYPE_COUNTER_ACCUM_ADD_SET;                            \
    (_cvt).length = _length;                                                   \
-   (_cvt).val    = _ptr;                                                      \
+   (_cvt).val_p  = _ptr;                                                      \
 }
 #define CVT_COUNTER_ACCUM_ADD_ADD_INIT(_cvt, _length, _ptr)                   \
 {                                                                             \
    BUG_ON((_length) != 16);                                                   \
    (_cvt).type   = CVT_TYPE_COUNTER_ACCUM_ADD_ADD;                            \
    (_cvt).length = _length;                                                   \
-   (_cvt).val    = _ptr;                                                      \
+   (_cvt).val_p  = _ptr;                                                      \
 }
 #define CVT_COUNTER_LOCAL_SET_INIT(_cvt, _counter)                            \
 {                                                                             \
@@ -636,7 +638,7 @@ typedef struct castle_value_tuple c_val_tup_t;
 #define _CVT_COUNTER_INLINE_TO_LOCAL(_local_cvt, _inline_cvt, _offset, _set)  \
 {                                                                             \
     int64_t count;                                                            \
-    memcpy(&count, (_inline_cvt).val+(_offset), 8);                           \
+    memcpy(&count, (_inline_cvt).val_p+(_offset), 8);                         \
     if(_set)                                                                  \
         CVT_COUNTER_LOCAL_SET_INIT(_local_cvt, count)                         \
     else                                                                      \
@@ -663,16 +665,25 @@ typedef struct castle_value_tuple c_val_tup_t;
 }
 /* Should only be used for 'simple' counters. Returns pointer to the
    counter. */
-#define CVT_COUNTER_TO_VAL_PTR(_cvt)                                          \
+#define CVT_INLINE_VAL_PTR(_cvt)                                              \
 ({                                                                            \
     void *_ptr;                                                               \
-    BUG_ON(CVT_ACCUM_COUNTER(_cvt));                                          \
+    BUG_ON(CVT_ACCUM_COUNTER(_cvt) || !CVT_INLINE(_cvt));                     \
     if(CVT_LOCAL_COUNTER(_cvt))                                               \
         _ptr = &(_cvt).counter;                                               \
     else                                                                      \
-        _ptr = (_cvt).val;                                                    \
+        _ptr = (_cvt).val_p;                                                  \
     _ptr;                                                                     \
 })
+#define CVT_INLINE_FREE(_cvt)                                                 \
+{                                                                             \
+    if(CVT_INLINE(_cvt) && !CVT_LOCAL_COUNTER(_cvt))                          \
+    {                                                                         \
+        BUG_ON(!(_cvt).val_p);                                                \
+        castle_free((_cvt).val_p);                                            \
+        (_cvt).val_p = NULL;                                                  \
+    }                                                                         \
+}
 #define CVT_EQUAL(_cvt1, _cvt2)                                               \
                              ((_cvt1).type      == (_cvt2).type &&            \
                               (_cvt1).length    == (_cvt2).length &&          \
@@ -1725,26 +1736,22 @@ struct castle_object_get {
 };
 
 struct castle_object_pull {
-    uint64_t                    remaining;
-    uint64_t                    offset;
-    c_vl_bkey_t                *key;             /**< Key of the value to be replaced.       */
-
-    int                         is_inline;
-    union {
-        c_ext_pos_t             cep;
-        char                   *inline_val;
-    };
-    c_val_tup_t                 cvt;
     struct castle_component_tree *ct;
-    struct castle_cache_block  *curr_c2b;
+    uint64_t                      remaining;
+    uint64_t                      offset;
 
-    void                       *buf;
-    uint32_t                    to_copy;
+    c_vl_bkey_t                  *key;           /**< Key of the value to be replaced.       */
 
-    struct work_struct          work;
+    c_val_tup_t                   cvt;
+    struct castle_cache_block    *curr_c2b;
 
-    void (*pull_continue)      (struct castle_object_pull *pull,
-                                int err, uint64_t length, int done);
+    void                         *buf;
+    uint32_t                      to_copy;
+
+    struct work_struct            work;
+
+    void (*pull_continue)        (struct castle_object_pull *pull,
+                                  int err, uint64_t length, int done);
 };
 /*
  * This is the callback to notify when the iterator has the

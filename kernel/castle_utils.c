@@ -86,10 +86,10 @@ void castle_counter_accumulating_reduce(c_val_tup_t *accumulator,
     }
 
     /* Proper reduction neccessary. Work out what both of the subcounts of both counters are. */
-    memcpy(&delta_counter1, delta_cvt.val,   8);
-    memcpy(&delta_counter2, delta_cvt.val+8, 8);
-    memcpy(&accumulator_counter1, accumulator->val  , 8);
-    memcpy(&accumulator_counter2, accumulator->val+8, 8);
+    memcpy(&delta_counter1, CVT_INLINE_VAL_PTR(delta_cvt),   8);
+    memcpy(&delta_counter2, CVT_INLINE_VAL_PTR(delta_cvt)+8, 8);
+    memcpy(&accumulator_counter1, CVT_INLINE_VAL_PTR(*accumulator)  , 8);
+    memcpy(&accumulator_counter2, CVT_INLINE_VAL_PTR(*accumulator)+8, 8);
 
     /* Merge the first sub-counter only if the delta is precisely the same version. */
     if(!delta_ancestoral)
@@ -98,7 +98,7 @@ void castle_counter_accumulating_reduce(c_val_tup_t *accumulator,
         BUG_ON(counter1_set);
         /* Accumulate. */
         accumulator_counter1 += delta_counter1;
-        memcpy(accumulator->val, &accumulator_counter1, 8);
+        memcpy(CVT_INLINE_VAL_PTR(*accumulator), &accumulator_counter1, 8);
         /* The first counter inherits the type from the delta counter. */
         counter1_set = CVT_COUNTER_ACCUM_SET_SET(delta_cvt);
     }
@@ -107,7 +107,7 @@ void castle_counter_accumulating_reduce(c_val_tup_t *accumulator,
     if(!counter2_set)
     {
         accumulator_counter2 += delta_counter2;
-        memcpy(accumulator->val+8, &accumulator_counter2, 8);
+        memcpy(CVT_INLINE_VAL_PTR(*accumulator)+8, &accumulator_counter2, 8);
         /* The second counter becomes a set if the second counter in delta is also a set. */
         counter2_set = CVT_COUNTER_ACCUM_SET_SET(delta_cvt) ||
                        CVT_COUNTER_ACCUM_ADD_SET(delta_cvt);
@@ -149,7 +149,7 @@ int castle_counter_simple_reduce(c_val_tup_t *accumulator, c_val_tup_t delta_cvt
     BUG_ON(delta_cvt.length != 8);
 
     /* Get the counter out of the CVT. */
-    memcpy(&delta_counter, CVT_COUNTER_TO_VAL_PTR(delta_cvt), 8);
+    memcpy(&delta_counter, CVT_INLINE_VAL_PTR(delta_cvt), 8);
     /* Add it to the accumulator. */
     accumulator->counter += delta_counter;
 

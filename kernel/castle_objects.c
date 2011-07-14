@@ -759,8 +759,7 @@ static void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
         castle_extent_free(cvt.cep.ext_id);
 
     /* Reserve kmalloced memory for inline objects. */
-    if(CVT_INLINE(cvt))
-        castle_free(cvt.val);
+    CVT_INLINE_FREE(cvt);
 
     /* Unreserve any space we may still hold in the CT. Drop the CT ref. */
     if (ct)
@@ -929,9 +928,6 @@ static int castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
         nr_chunks = (replace->value_len - 1) / C_CHK_SIZE + 1;
         atomic64_add(nr_chunks, &c_bvec->tree->large_ext_chk_cnt);
     }
-
-    if( CVT_COUNTER_ADD(replace->cvt) || CVT_COUNTER_SET(replace->cvt))
-        BUG_ON(!CVT_INLINE(replace->cvt));
 
     /* For counter add operation (which uses ACCUM_ADD_ADD cvt type). Reduce with
        either the previous entry or ancestral entry if either exists. */
@@ -1531,7 +1527,6 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
 {
     struct castle_object_get *get = c_bvec->c_bio->get;
     c_bio_t *c_bio = c_bvec->c_bio;
-    int is_inline;
 
     debug("Returned from btree walk with value of type 0x%x and length 0x%llu\n",
           cvt.type, (uint64_t)cvt.length);
@@ -1582,7 +1577,7 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
     BUG_ON(!CVT_ANY_COUNTER(cvt) && !get->ct);
 
     /* Deal with the inlines and local counters (therefore with inlines and all counters). */
-    if((is_inline = CVT_INLINE(cvt)) || CVT_LOCAL_COUNTER(cvt))
+    if(CVT_INLINE(cvt))
     {
         debug("Inline.\n");
         /* Release reference of Component Tree. */
@@ -1591,10 +1586,9 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
         get->reply_start(get,
                          0,
                          cvt.length,
-                         is_inline ? cvt.val : (void *)&cvt.counter,
+                         CVT_INLINE_VAL_PTR(cvt),
                          cvt.length);
-        if(is_inline)
-            castle_free(cvt.val);
+        CVT_INLINE_FREE(cvt);
         castle_utils_bio_free(c_bvec->c_bio);
 
         FAULT(GET_FAULT);
@@ -1740,18 +1734,19 @@ void castle_object_chunk_pull(struct castle_object_pull *pull, void *buf, size_t
 
     BUG_ON(pull->to_copy == 0);
 
-    if(pull->is_inline)
+    if(CVT_INLINE(pull->cvt))
     {
         /* this is assured since buf_len >= PAGE_SIZE > MAX_INLINE_VAL_SIZE */
         BUG_ON(buf_len < pull->remaining);
-        memcpy(buf, pull->inline_val, pull->remaining);
-        castle_free(pull->inline_val);
+        memcpy(buf, CVT_INLINE_VAL_PTR(pull->cvt), pull->remaining);
+        CVT_INLINE_FREE(pull->cvt);
         pull->pull_continue(pull, 0, pull->remaining, 1 /* done */);
         return;
     }
 
-    cep.ext_id = pull->cep.ext_id;
-    cep.offset = pull->cep.offset + pull->offset; /* @TODO in bytes or blocks? */
+    BUG_ON(!CVT_ON_DISK(pull->cvt));
+    cep.ext_id = pull->cvt.cep.ext_id;
+    cep.offset = pull->cvt.cep.offset + pull->offset; /* @TODO in bytes or blocks? */
 
     debug("Locking cdb (0x%x, 0x%x)\n", cep.ext_id, cep.offset);
     pull->curr_c2b = castle_cache_block_get(cep, (pull->to_copy - 1) / PAGE_SIZE + 1);
@@ -1791,17 +1786,6 @@ static void castle_object_pull_continue(struct castle_bio_vec *c_bvec, int err, 
         CVT_INVALID_INIT(pull->cvt);
         pull->pull_continue(pull, err, 0, 1 /* done */);
         return;
-    }
-
-    if(CVT_INLINE(cvt))
-    {
-        pull->is_inline = 1;
-        pull->inline_val = cvt.val;
-    }
-    else
-    {
-        pull->is_inline = 0;
-        pull->cep = cvt.cep;
     }
 
     pull->offset = 0;
