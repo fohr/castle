@@ -1,7 +1,3 @@
-%if !%{release}
-%define release 1
-%endif
-
 %define   kmodtool sh /usr/lib/rpm/redhat/kmodtool
 
 # hardcode for now:
@@ -17,7 +13,7 @@
 
 Name:           castle-fs
 Version:        @@SOURCEVER@@
-Release:        %{release}
+Release:        %{?release}%{?!release:1}
 Summary:        Acunu kernel filesystem
 
 Group:          Filesystem
