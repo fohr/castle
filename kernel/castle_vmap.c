@@ -97,7 +97,7 @@ void castle_vmap_fast_map_fini(void)
         castle_vmap_freelist = get_freelist_head(freelist_bucket_idx);
         BUG_ON(!(list_is_singular(castle_vmap_fast_maps_ptr+freelist_bucket_idx)));
         castle_vmap_freelist_delete(castle_vmap_freelist);
-        castle_free(castle_vmap_freelist);
+        castle_kfree(castle_vmap_freelist);
     }
 }
 
@@ -195,7 +195,7 @@ errout_4:
 errout_3:
     castle_vfree(pgs_array);
 errout_2:
-    castle_free(castle_vmap_freelist);
+    castle_kfree(castle_vmap_freelist);
 errout_1:
     return NULL;
 }
@@ -348,7 +348,7 @@ void castle_vmap_fast_unmap(void *vaddr, int nr_pages)
             if(need_release_list)
             {
                 castle_vmap_freelist_delete(castle_vmap_freelist);
-                castle_free(castle_vmap_freelist);
+                castle_kfree(castle_vmap_freelist);
             }
 
             return;

@@ -493,7 +493,7 @@ static void castle_batree_key_dealloc(void *key)
     if (BATREE_KEY_INVAL(key) || BATREE_KEY_MIN(key) || BATREE_KEY_MAX(key))
         return;
 
-    castle_free(key);
+    castle_kfree(key);
 }
 
 static uint32_t castle_batree_key_hash(void *key, uint32_t seed)
@@ -899,8 +899,8 @@ static void castle_vlba_tree_node_compact(struct castle_btree_node *node)
            vlba_node->free_bytes);
 #endif
 
-    castle_free(a);
-    castle_free(idx);
+    castle_kfree(a);
+    castle_kfree(idx);
 }
 
 
@@ -1398,8 +1398,8 @@ static void castle_vlba_tree_node_validate(struct castle_btree_node *node)
         BUG_ON(VLBA_INLINE_VAL_LENGTH(entry) > MAX_INLINE_VAL_SIZE);
     }
 
-    castle_free(a);
-    castle_free(idx);
+    castle_kfree(a);
+    castle_kfree(idx);
 }
 #endif
 
@@ -1839,7 +1839,7 @@ static c2_block_t* castle_btree_effective_node_create(struct castle_component_tr
 
     /* First build effective node in memory and allocate disk space only if it
      * is not same as original node. */
-    eff_node = castle_vmalloc(node_size * C_BLK_SIZE);
+    eff_node = castle_alloc(node_size * C_BLK_SIZE);
     /* rev_level == 0 should be equivalent to node->is_leaf test */
     BUG_ON((rev_level == 0) ^ (node->is_leaf));
     castle_btree_node_init(ct, eff_node, version, rev_level);
@@ -1922,7 +1922,7 @@ static c2_block_t* castle_btree_effective_node_create(struct castle_component_tr
     {
         BUG_ON(moved_cnt > 0);
         BUG_ON(need_dirty);
-        castle_vfree(eff_node);
+        castle_free(eff_node);
 
         return NULL;
     }
@@ -1939,7 +1939,7 @@ static c2_block_t* castle_btree_effective_node_create(struct castle_component_tr
                                    rev_level,
                                    was_preallocated);
     memcpy(c2b_buffer(c2b), eff_node, node_size * C_BLK_SIZE);
-    castle_vfree(eff_node);
+    castle_free(eff_node);
 
     return c2b;
 }
@@ -2905,7 +2905,7 @@ static void castle_btree_iter_end(c_iter_t *c_iter, int err)
     /* @TODO: this will not work well for double frees/double ends, fix that */
     if(c_iter->indirect_nodes)
     {
-        castle_vfree(c_iter->indirect_nodes);
+        castle_free(c_iter->indirect_nodes);
         c_iter->indirect_nodes = NULL;
     }
 
@@ -3795,7 +3795,7 @@ void castle_btree_iter_init(c_iter_t *c_iter, c_ver_t version, int type)
             if(btree == &castle_ro_tree)
                 return;
             c_iter->indirect_nodes =
-                castle_vmalloc(RW_TREES_MAX_ENTRIES * sizeof(struct castle_indirect_node));
+                castle_alloc(RW_TREES_MAX_ENTRIES * sizeof(struct castle_indirect_node));
             /* If memory allocation failed, cancel the iterator, and set the error condition.
                This will get picked up by _start() */
             if(!c_iter->indirect_nodes)
@@ -3936,18 +3936,18 @@ static void castle_btree_enum_fini(c_enum_t *c_enum)
     }
 #endif
     if(c_enum->buffer1)
-        castle_vfree(c_enum->buffer1);
+        castle_free(c_enum->buffer1);
     if(c_enum->buffer2)
-        castle_vfree(c_enum->buffer2);
+        castle_free(c_enum->buffer2);
 
     if(c_enum->visited_hash)
     {
-        castle_free(c_enum->visited_hash);
+        castle_kfree(c_enum->visited_hash);
         c_enum->visited_hash = NULL;
     }
     if(c_enum->visited)
     {
-        castle_vfree(c_enum->visited);
+        castle_free(c_enum->visited);
         c_enum->visited = NULL;
     }
 }
@@ -4073,7 +4073,7 @@ void castle_btree_enum_init(c_enum_t *c_enum)
     c_enum->visited_hash   = castle_malloc(VISITED_HASH_LENGTH * sizeof(struct list_head),
                                      GFP_KERNEL);
     c_enum->max_visited    = 8 * VISITED_HASH_LENGTH;
-    c_enum->visited        = castle_vmalloc(c_enum->max_visited * sizeof(struct castle_visited));
+    c_enum->visited        = castle_alloc(c_enum->max_visited * sizeof(struct castle_visited));
     if(!c_enum->visited_hash || !c_enum->visited)
         goto no_mem;
     /* Init structures related to visited hash */
@@ -4086,8 +4086,8 @@ void castle_btree_enum_init(c_enum_t *c_enum)
     c_enum->prod_idx = 0;
     c_enum->cons_idx = 0;
     c_enum->iter_completed = 0;
-    c_enum->buffer1 = castle_vmalloc(leaf_node_size * C_BLK_SIZE);
-    c_enum->buffer2 = castle_vmalloc(leaf_node_size * C_BLK_SIZE);
+    c_enum->buffer1 = castle_alloc(leaf_node_size * C_BLK_SIZE);
+    c_enum->buffer2 = castle_alloc(leaf_node_size * C_BLK_SIZE);
     c_enum->buffer = c_enum->buffer1;
     if(!c_enum->buffer1 || !c_enum->buffer2)
         goto no_mem;
@@ -4134,7 +4134,9 @@ static struct node_buf_t* node_buf_alloc(c_rq_enum_t *rq_enum)
     leaf_node_size = btype->node_size(ct, 0);
     node_buf = castle_malloc(sizeof(struct node_buf_t), GFP_KERNEL);
     BUG_ON(!node_buf);
-    node_buf->node = castle_vmalloc(leaf_node_size * C_BLK_SIZE);
+    if (leaf_node_size * C_BLK_SIZE > MAX_KMALLOC_SIZE)
+        leaf_node_size = MAX_KMALLOC_SIZE / C_BLK_SIZE;
+    node_buf->node = castle_alloc(leaf_node_size * C_BLK_SIZE);
     BUG_ON(!node_buf->node);
     castle_btree_node_buffer_init(rq_enum->tree, node_buf->node, leaf_node_size);
     rq_enum->buf_count++;
@@ -4450,8 +4452,8 @@ static void castle_btree_rq_enum_fini(c_rq_enum_t *rq_enum)
     do {
         next = list_entry(buf->list.next,
                           struct node_buf_t, list);
-        castle_vfree(buf->node);
-        castle_free(buf);
+        castle_free(buf->node);
+        castle_kfree(buf);
         buf = next;
         count++;
         BUG_ON(count > rq_enum->buf_count);

@@ -695,16 +695,16 @@ static void castle_ct_modlist_iter_free(c_modlist_iter_t *iter)
     if(iter->enumerator)
     {
         castle_ct_immut_iter.cancel(iter->enumerator);
-        castle_free(iter->enumerator);
+        castle_kfree(iter->enumerator);
     }
     if(iter->node_buffer)
-        castle_vfree(iter->node_buffer);
+        castle_free(iter->node_buffer);
     if (iter->src_entry_idx)
-        castle_vfree(iter->src_entry_idx);
+        castle_free(iter->src_entry_idx);
     if (iter->dst_entry_idx)
-        castle_vfree(iter->dst_entry_idx);
+        castle_free(iter->dst_entry_idx);
     if (iter->ranges)
-        castle_vfree(iter->ranges);
+        castle_free(iter->ranges);
 
     /* Replenish the budget - no need to serialise. */
     buffer_size = iter->nr_nodes * iter->leaf_node_size * C_BLK_SIZE;
@@ -1111,7 +1111,7 @@ static void castle_ct_modlist_iter_mergesort(c_modlist_iter_t *iter)
 
     /* Finally ensure dst_entry_idx points to the final sorted index and free
      * the other temporary index right now. */
-    castle_vfree(iter->src_entry_idx);
+    castle_free(iter->src_entry_idx);
     iter->src_entry_idx = iter->dst_entry_idx;
     iter->dst_entry_idx = NULL;
 }
@@ -1173,10 +1173,10 @@ static void castle_ct_modlist_iter_init(c_modlist_iter_t *iter)
 
     /* Allocate btree-entry buffer, two indexes for the buffer (for sorting)
      * and space to define ranges of sorted nodes within the index. */
-    iter->node_buffer = castle_vmalloc(buffer_size);
-    iter->src_entry_idx = castle_vmalloc(atomic64_read(&ct->item_count) * sizeof(struct item_idx));
-    iter->dst_entry_idx = castle_vmalloc(atomic64_read(&ct->item_count) * sizeof(struct item_idx));
-    iter->ranges = castle_vmalloc(iter->nr_nodes * sizeof(struct entry_range));
+    iter->node_buffer = castle_alloc(buffer_size);
+    iter->src_entry_idx = castle_alloc(atomic64_read(&ct->item_count) * sizeof(struct item_idx));
+    iter->dst_entry_idx = castle_alloc(atomic64_read(&ct->item_count) * sizeof(struct item_idx));
+    iter->ranges = castle_alloc(iter->nr_nodes * sizeof(struct entry_range));
 
     /* Return ENOMEM if we failed any of our allocations. */
     if(!iter->enumerator || !iter->node_buffer || !iter->src_entry_idx || !iter->dst_entry_idx)
@@ -1670,7 +1670,7 @@ static void castle_ct_merged_iter_cancel(c_merged_iter_t *iter)
     BUG_ON(iter->iter_running);
 
     if (iter->iterators)
-        castle_free(iter->iterators);
+        castle_kfree(iter->iterators);
 }
 
 struct castle_iterator_type castle_ct_merged_iter = {
@@ -1851,7 +1851,7 @@ void castle_da_rq_iter_cancel(c_da_rq_iter_t *iter)
         castle_btree_rq_enum_cancel(&ct_rq->ct_rq_iter);
         castle_ct_put(ct_rq->ct, 0);
     }
-    castle_free(iter->ct_rqs);
+    castle_kfree(iter->ct_rqs);
 }
 
 /**
@@ -1887,11 +1887,11 @@ again:
     if(!iter->ct_rqs || !iters || !iter_types)
     {
         if(iter->ct_rqs)
-            castle_free(iter->ct_rqs);
+            castle_kfree(iter->ct_rqs);
         if(iters)
-            castle_free(iters);
+            castle_kfree(iters);
         if(iter_types)
-            castle_free(iter_types);
+            castle_kfree(iter_types);
         iter->err = -ENOMEM;
         return;
     }
@@ -1903,9 +1903,9 @@ again:
         read_unlock(&da->lock);
         castle_printk(LOG_WARN,
                 "Warning. Untested. # of cts changed while allocating memory for rq.\n");
-        castle_free(iter->ct_rqs);
-        castle_free(iters);
-        castle_free(iter_types);
+        castle_kfree(iter->ct_rqs);
+        castle_kfree(iters);
+        castle_kfree(iter_types);
         goto again;
     }
     /* Get refs to all the component trees, and release the lock */
@@ -1956,8 +1956,8 @@ again:
     castle_ct_merged_iter_register_cb(&iter->merged_iter,
                                       castle_da_rq_iter_end_io,
                                       iter);
-    castle_free(iters);
-    castle_free(iter_types);
+    castle_kfree(iters);
+    castle_kfree(iter_types);
 }
 
 struct castle_iterator_type castle_da_rq_iter = {
@@ -2177,13 +2177,13 @@ static void castle_da_iterator_destroy(struct castle_component_tree *tree,
     {
         /* For dynamic trees we are using modlist iterator. */
         castle_ct_modlist_iter_free(iter);
-        castle_free(iter);
+        castle_kfree(iter);
     } else
     {
         /* For static trees, we are using immut iterator. */
         /* @TODO: do we need to do better resource release here? */
         castle_ct_immut_iter_cancel(iter);
-        castle_free(iter);
+        castle_kfree(iter);
     }
 }
 
@@ -2215,7 +2215,7 @@ static void castle_da_iterator_create(struct castle_da_merge *merge,
                     merge->da->id, tree->level, 0, 0);
         if (iter->err)
         {
-            castle_free(iter);
+            castle_kfree(iter);
             return;
         }
         /* Success */
@@ -3739,7 +3739,7 @@ static void castle_da_merge_serdes_dealloc(struct castle_da_merge *merge)
     BUG_ON(!da->levels[level].merge.serdes.out_tree);
     BUG_ON(merge->out_tree != da->levels[level].merge.serdes.out_tree);
     da->levels[level].merge.serdes.out_tree=NULL;
-    castle_free(da->levels[level].merge.serdes.mstore_entry);
+    castle_kfree(da->levels[level].merge.serdes.mstore_entry);
     da->levels[level].merge.serdes.mstore_entry=NULL;
 
     serdes_state = NULL_DAM_SERDES;
@@ -3777,9 +3777,9 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
 
     /* Free all the buffers */
     if (merge->snapshot_delete.occupied)
-        castle_free(merge->snapshot_delete.occupied);
+        castle_kfree(merge->snapshot_delete.occupied);
     if (merge->snapshot_delete.need_parent)
-        castle_free(merge->snapshot_delete.need_parent);
+        castle_kfree(merge->snapshot_delete.need_parent);
 
     for(i=0; i<MAX_BTREE_DEPTH; i++)
     {
@@ -3799,7 +3799,7 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
     FOR_EACH_MERGE_TREE(i, merge)
         castle_da_iterator_destroy(merge->in_trees[i], merge->iters[i]);
     if (merge->iters)
-        castle_free(merge->iters);
+        castle_kfree(merge->iters);
     if (merge->merged_iter)
         castle_ct_merged_iter_cancel(merge->merged_iter);
 
@@ -3925,9 +3925,9 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
 
     /* Free the merged iterator, if one was allocated. */
     if (merge->merged_iter)
-        castle_free(merge->merged_iter);
+        castle_kfree(merge->merged_iter);
 
-    castle_free(merge);
+    castle_kfree(merge);
 }
 
 static int castle_da_merge_progress_update(struct castle_da_merge *merge, uint32_t unit_nr)
@@ -6046,7 +6046,7 @@ wait_and_try:
         /* Free in_trees structure. */
         if (in_trees)
         {
-            castle_free(in_trees);
+            castle_kfree(in_trees);
             in_trees = NULL;
         }
 
@@ -6468,14 +6468,14 @@ static void castle_da_dealloc(struct castle_double_array *da)
             mutex_unlock(&da->levels[i].merge.serdes.out_tree->lo_mutex);
 
             /* don't put the tree - we want the extents kept alive for deserialisation */
-            castle_free(da->levels[i].merge.serdes.out_tree);
+            castle_kfree(da->levels[i].merge.serdes.out_tree);
             da->levels[i].merge.serdes.out_tree=NULL;
         }
 
         if(da->levels[i].merge.serdes.mstore_entry)
         {
             castle_da_merge_serdes_out_tree_check(da->levels[i].merge.serdes.mstore_entry, da, i);
-            castle_free(da->levels[i].merge.serdes.mstore_entry);
+            castle_kfree(da->levels[i].merge.serdes.mstore_entry);
             da->levels[i].merge.serdes.mstore_entry=NULL;
             castle_printk(LOG_INIT, "%s::merge on da %d level %d will resume at next FS start.\n",
                     __FUNCTION__, da->id, i);
@@ -6483,12 +6483,12 @@ static void castle_da_dealloc(struct castle_double_array *da)
 
     }
     if (da->ios_waiting)
-        castle_free(da->ios_waiting);
+        castle_kfree(da->ios_waiting);
     if (da->t0_lfs)
-        castle_free(da->t0_lfs);
+        castle_kfree(da->t0_lfs);
     /* Poison and free (may be repoisoned on debug kernel builds). */
     memset(da, 0xa7, sizeof(struct castle_double_array));
-    castle_free(da);
+    castle_kfree(da);
 }
 
 static struct castle_double_array* castle_da_alloc(c_da_t da_id)
@@ -6759,7 +6759,7 @@ static void __castle_ct_large_obj_remove(struct list_head *lh)
     castle_extent_unlink(lo->ext_id);
 
     /* Free memory. */
-    castle_free(lo);
+    castle_kfree(lo);
 }
 
 /* Remove a large object from list attached to the CT. This gets called only from T0 replaces.
@@ -6880,7 +6880,7 @@ void castle_ct_put(struct castle_component_tree *ct, int write)
 
     /* Poison ct (note this will be repoisoned by kfree on kernel debug build. */
     memset(ct, 0xde, sizeof(struct castle_component_tree));
-    castle_free(ct);
+    castle_kfree(ct);
 }
 
 /**
@@ -7162,7 +7162,7 @@ static int castle_ct_hash_destroy_check(struct castle_component_tree *ct, void *
        struct castle_large_obj_entry *lo =
                 list_entry(lh, struct castle_large_obj_entry, list);
        list_del(lh);
-       castle_free(lo);
+       castle_kfree(lo);
    }
 
     return 0;
@@ -7176,7 +7176,7 @@ static int castle_da_ct_dealloc(struct castle_double_array *da,
     castle_ct_hash_destroy_check(ct, (void*)0UL);
     list_del(&ct->da_list);
     list_del(&ct->hash_list);
-    castle_free(ct);
+    castle_kfree(ct);
 
     return 0;
 }
@@ -7196,13 +7196,13 @@ static void castle_da_hash_destroy(void)
 {
     /* No need for the lock, end-of-day stuff. */
    __castle_da_hash_iterate(castle_da_hash_dealloc, NULL);
-   castle_free(castle_da_hash);
+   castle_kfree(castle_da_hash);
 }
 
 static void castle_ct_hash_destroy(void)
 {
     castle_ct_hash_iterate(castle_ct_hash_destroy_check, (void *)1UL);
-    castle_free(castle_ct_hash);
+    castle_kfree(castle_ct_hash);
 }
 
 /**
@@ -7957,7 +7957,7 @@ static struct castle_component_tree* castle_ct_alloc(struct castle_double_array 
     if(ct->seq >= (1U<<TREE_SEQ_SHIFT))
     {
         castle_printk(LOG_ERROR, "Could not allocate a CT because of sequence # overflow.\n");
-        castle_free(ct);
+        castle_kfree(ct);
         return NULL;
     }
     atomic_set(&ct->ref_count, 1);
@@ -9017,9 +9017,9 @@ int castle_double_array_init(void)
     return 0;
 
 err2:
-    castle_free(castle_da_hash);
+    castle_kfree(castle_da_hash);
 err1:
-    castle_free(request_cpus.cpus);
+    castle_kfree(request_cpus.cpus);
 err0:
     for (j = 0; j < i; j++)
         destroy_workqueue(castle_da_wqs[j]);
@@ -9052,7 +9052,7 @@ void castle_double_array_fini(void)
     castle_da_hash_destroy();
     castle_ct_hash_destroy();
 
-    castle_free(request_cpus.cpus);
+    castle_kfree(request_cpus.cpus);
 
     for (i = 0; i < NR_CASTLE_DA_WQS; i++)
         destroy_workqueue(castle_da_wqs[i]);

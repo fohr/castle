@@ -225,7 +225,7 @@ static inline c_bio_t* castle_utils_bio_alloc(int nr_bvecs)
 
 static inline void castle_utils_bio_free(c_bio_t *bio)
 {
-    castle_free(bio);
+    castle_kfree(bio);
 }
 
 static inline int list_length(struct list_head *head)
@@ -279,6 +279,9 @@ static USED void check_stack_usage(void)
                 (unsigned long)&free - (unsigned long)end_of_stack(current));
 }
 #endif
+
+void * castle_alloc_func(size_t size);
+void castle_free_func(void *ptr);
 
 /**
  * Store per-level castle_printk() ratelimit state.

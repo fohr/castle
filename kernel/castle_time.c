@@ -517,7 +517,7 @@ static int castle_time_run(void *unused)
             castle_request_timeline_print(timeline);    /* Stats for timeline           */
             castle_checkpoint_stats_print();            /* Printing timing statistics   */
         }
-        castle_free(timeline);
+        castle_kfree(timeline);
         cnt++;
 
         /* Go to the next timeline */

@@ -47,6 +47,9 @@ static inline ATTRIB_NORET void bug_fn(char *file, unsigned long line)
 #define BUG()            do { bug_fn(__FILE__, __LINE__); } while(0)
 #define BUG_ON(_cond)    do { if(unlikely(_cond)) BUG(); } while(0)
 
+#define MAX_KMALLOC_PAGES   32                                  /**< Maximum pages we can kmalloc */
+#define MAX_KMALLOC_SIZE    MAX_KMALLOC_PAGES << PAGE_SHIFT     /**< Maximum Bytes we can kmalloc */
+
 /* Printk implementation used in the entire filesystem. */
 #define PRINTKS_PER_SEC_STEADY_STATE    5
 #define PRINTKS_IN_BURST                100
@@ -680,7 +683,7 @@ typedef struct castle_value_tuple c_val_tup_t;
     if(CVT_INLINE(_cvt) && !CVT_LOCAL_COUNTER(_cvt))                          \
     {                                                                         \
         BUG_ON(!(_cvt).val_p);                                                \
-        castle_free((_cvt).val_p);                                            \
+        castle_kfree((_cvt).val_p);                                            \
         (_cvt).val_p = NULL;                                                  \
     }                                                                         \
 }

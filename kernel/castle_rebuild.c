@@ -105,7 +105,7 @@ static int castle_resubmit_run(void *unused)
             BUG_ON(atomic_read(&c2b->remaining));
             debug("Resubmitting c2b %p\n", rc2b->c2b);
             BUG_ON(submit_c2b(rc2b->rw, rc2b->c2b));
-            castle_free(rc2b);
+            castle_kfree(rc2b);
             spin_lock_irq(&resubmit_list_lock);
         }
         spin_unlock_irq(&resubmit_list_lock);

@@ -344,7 +344,7 @@ static c_vl_bkey_t* castle_object_btree_key_skip(c_vl_bkey_t *old_key,
 
 void castle_object_bkey_free(c_vl_bkey_t *bkey)
 {
-    castle_free(bkey);
+    castle_kfree(bkey);
 }
 
 /**********************************************************************************************/
@@ -1237,7 +1237,7 @@ int castle_object_iter_start(struct castle_attachment *attachment,
     castle_objects_rq_iter_init(iterator);
     if(iterator->err)
     {
-        castle_free(iterator);
+        castle_kfree(iterator);
         return iterator->err;
     }
 
@@ -1321,7 +1321,7 @@ int castle_object_iter_finish(castle_object_iterator_t *iterator)
 {
     castle_objects_rq_iter_cancel(iterator);
     debug_rq("Freeing iterators & buffers.\n");
-    castle_free(iterator);
+    castle_kfree(iterator);
 
     return 0;
 }

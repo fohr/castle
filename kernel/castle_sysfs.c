@@ -156,7 +156,7 @@ static void castle_sysfs_versions_fini(void)
     {
         list_del(l);
         v = list_entry(l, struct castle_sysfs_version, list);
-        castle_free(v);
+        castle_kfree(v);
     }
 }
 
@@ -184,7 +184,7 @@ int castle_sysfs_version_add(c_ver_t version)
     if(ret)
     {
         castle_printk(LOG_WARN, "Warning: could not create a version file in sysfs.\n");
-        castle_free(v);
+        castle_kfree(v);
     } else
     {
         /* Succeeded at adding the version, add it to the list, so that it gets cleaned up */

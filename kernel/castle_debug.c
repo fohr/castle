@@ -55,6 +55,38 @@ static void __castle_debug_dobj_add(struct castle_malloc_debug *dobj,
     spin_unlock_irq(&malloc_list_spinlock);
 }
 
+/**
+ * Allocate bytes using castle_malloc(), falling back to castle_vmalloc() as appropriate.
+ */
+void* castle_debug_alloc_func(size_t size, char *file, int line)
+{
+    void *buf;
+
+    if (likely(size <= MAX_KMALLOC_SIZE))
+    {
+        buf = castle_debug_malloc(size, GFP_KERNEL, file, line);
+        if (likely(!buf))
+            buf = castle_debug_vmalloc(size, file, line);
+    }
+    else
+        buf = castle_debug_vmalloc(size, file, line);
+
+    return buf;
+}
+
+/**
+ * Deallocate buffer previously allocated via castle_debug_alloc_func().
+ */
+void castle_debug_free_func(void *ptr)
+{
+    unsigned long addr = (unsigned long) ptr;
+
+    if (likely(addr >= VMALLOC_START && addr < VMALLOC_END))
+        castle_vfree(ptr);
+    else
+        castle_kfree(ptr);
+}
+
 void* castle_debug_malloc(size_t size, gfp_t flags, char *file, int line)
 {
     struct castle_malloc_debug *dobj;
@@ -404,7 +436,7 @@ static void castle_debug_watches_free(void)
         for(i=0; i<nr_watches; i++)
             if(watched_data[i] != NULL)
                 __free_page(watched_data[i]);
-        castle_free(watched_data);
+        castle_kfree(watched_data);
     }
 }
 

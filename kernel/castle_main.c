@@ -1151,8 +1151,8 @@ out:
     BUG_ON(err);
 
 error_out:
-    if (cs_sb) castle_free(cs_sb);
-    if (fs_sb) castle_free(fs_sb);
+    if (cs_sb) castle_kfree(cs_sb);
+    if (fs_sb) castle_kfree(fs_sb);
 
     return err;
 }
@@ -1551,7 +1551,7 @@ err_out:
 #else
     if(bdev) blkdev_put(bdev, FMODE_READ|FMODE_WRITE);
 #endif
-    if(cs)   castle_free(cs);
+    if(cs)   castle_kfree(cs);
     slave_id--;
 
     return NULL;
@@ -1595,7 +1595,7 @@ void castle_release(struct castle_slave *cs)
 
     list_del_rcu(&cs->list);
     synchronize_rcu();
-    castle_free(cs);
+    castle_kfree(cs);
 }
 
 static int castle_open(struct castle_attachment *dev)
@@ -2119,8 +2119,8 @@ void castle_attachment_free_complete(struct castle_attachment *ca)
     wait_event(castle_detach_waitq, (ca->ref_cnt == 0));
 
     /* Free collection. */
-    castle_free(ca->col.name);
-    castle_free(ca);
+    castle_kfree(ca->col.name);
+    castle_kfree(ca);
 }
 
 EXPORT_SYMBOL(castle_attachment_get);
@@ -2173,7 +2173,7 @@ void castle_device_free(struct castle_attachment *cd)
     del_gendisk(cd->dev.gd);
     put_disk(cd->dev.gd);
     list_del(&cd->list);
-    castle_free(cd);
+    castle_kfree(cd);
     castle_version_detach(version);
 }
 
@@ -2233,7 +2233,7 @@ struct castle_attachment* castle_device_init(c_ver_t version)
 error_out:
     if(gd)  put_disk(gd);
     if(rq)  blk_cleanup_queue(rq);
-    if(dev) castle_free(dev);
+    if(dev) castle_kfree(dev);
     castle_printk(LOG_ERROR, "Failed to init device.\n");
     return NULL;
 }
@@ -2290,8 +2290,8 @@ struct castle_attachment* castle_collection_init(c_ver_t version, uint32_t flags
     return collection;
 
 error_out:
-    castle_free(name);
-    if(collection) castle_free(collection);
+    castle_kfree(name);
+    if(collection) castle_kfree(collection);
     if(da_get) castle_double_array_put(da_id);
     castle_printk(LOG_USERINFO, "Failed to init collection.\n");
     return NULL;
@@ -2305,7 +2305,7 @@ static void castle_wqs_fini(void)
     for(i=0; i<=2*MAX_BTREE_DEPTH; i++)
     {
         if(wq_names[i])
-            castle_free(wq_names[i]);
+            castle_kfree(wq_names[i]);
         if(castle_wqs[i])
             destroy_workqueue(castle_wqs[i]);
     }

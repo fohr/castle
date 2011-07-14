@@ -135,7 +135,7 @@ DEFINE_HASH_TBL(castle_versions_counts,
 static int castle_version_counts_hash_remove(struct castle_versions_count *vc, void *unused)
 {
     list_del(&vc->hash_list);
-    castle_free(vc);
+    castle_kfree(vc);
 
     return 0;
 }
@@ -146,7 +146,7 @@ static int castle_version_counts_hash_remove(struct castle_versions_count *vc, v
 static void castle_versions_counts_hash_destroy(void)
 {
     castle_versions_counts_hash_iterate(castle_version_counts_hash_remove, NULL);
-    castle_free(castle_versions_counts_hash);
+    castle_kfree(castle_versions_counts_hash);
 }
 
 /**
@@ -248,7 +248,7 @@ int _castle_versions_count_adjust(c_da_t da_id, cv_health_t health, int add, int
             BUG_ON(vc->live + vc->deleted + vc->dead != 0);
 
             list_del(&vc->hash_list);
-            castle_free(vc);
+            castle_kfree(vc);
         }
     }
 
@@ -318,7 +318,7 @@ static int castle_version_hash_remove(struct castle_version *v, void *unused)
 static void castle_versions_hash_destroy(void)
 {
     castle_versions_hash_iterate(castle_version_hash_remove, NULL);
-    castle_free(castle_versions_hash);
+    castle_kfree(castle_versions_hash);
 }
 
 static void castle_versions_init_add(struct castle_version *v)
@@ -547,7 +547,7 @@ int castle_version_delete(c_ver_t version)
     c_ver_t *event_vs;
 
     /* Allocate memory for event notifications before taking the spinlock. */
-    event_vs = castle_vmalloc(sizeof(c_ver_t) * CASTLE_VERSIONS_MAX);
+    event_vs = castle_alloc(sizeof(c_ver_t) * CASTLE_VERSIONS_MAX);
     if(!event_vs)
         castle_printk(LOG_WARN, "Cannot allocate memory to notify of version deletions.\n");
 
@@ -558,7 +558,7 @@ int castle_version_delete(c_ver_t version)
     if(!v)
     {
         write_unlock_irq(&castle_versions_hash_lock);
-        castle_vfree(event_vs);
+        castle_free(event_vs);
         return -EINVAL;
     }
     da_id = v->da_id;
@@ -575,7 +575,7 @@ int castle_version_delete(c_ver_t version)
         castle_printk(LOG_INFO, "Couldn't find DA for version %u, must be marked deletion.\n",
                                 version);
         write_unlock_irq(&castle_versions_hash_lock);
-        castle_vfree(event_vs);
+        castle_free(event_vs);
         return -EINVAL;
     }
 
@@ -586,7 +586,7 @@ int castle_version_delete(c_ver_t version)
 
         /* Release resources. */
         write_unlock_irq(&castle_versions_hash_lock);
-        castle_vfree(event_vs);
+        castle_free(event_vs);
 
         castle_printk(LOG_USERINFO, "Last version is getting deleted; destroying Version Tree.\n");
 
@@ -596,7 +596,7 @@ int castle_version_delete(c_ver_t version)
     if(test_and_set_bit(CV_DELETED_BIT, &v->flags))
     {
         write_unlock_irq(&castle_versions_hash_lock);
-        castle_vfree(event_vs);
+        castle_free(event_vs);
         return -EAGAIN;
     }
 
@@ -699,7 +699,7 @@ int castle_version_delete(c_ver_t version)
     for(event_vs_idx--; event_vs_idx >= 0; event_vs_idx--)
         castle_events_version_changed(event_vs[event_vs_idx]);
     if(event_vs)
-        castle_vfree(event_vs);
+        castle_free(event_vs);
 
     castle_versions_count_adjust(da_id, CVH_LIVE, 0 /*add*/);
     castle_da_version_delete(da_id);
@@ -1061,14 +1061,14 @@ int castle_version_states_free(cv_states_t *states)
 
     if (states->array)
     {
-        castle_vfree(states->array);
+        castle_free(states->array);
         states->array = NULL;
         ret--;
     }
 
     if (states->hash)
     {
-        castle_vfree(states->hash);
+        castle_free(states->hash);
         states->hash = NULL;
         ret--;
     }
@@ -1089,10 +1089,10 @@ int castle_version_states_alloc(cv_states_t *states, int max_versions)
 {
     int i;
 
-    states->array = castle_vmalloc(max_versions * sizeof(cv_state_t));
+    states->array = castle_alloc(max_versions * sizeof(cv_state_t));
     if (!states->array)
         goto err_out;
-    states->hash = castle_vmalloc(CASTLE_VERSION_STATES_HASH_SIZE
+    states->hash = castle_alloc(CASTLE_VERSION_STATES_HASH_SIZE
             * sizeof(struct list_head));
     if (!states->hash)
         goto err_out;
@@ -1873,9 +1873,9 @@ err_out:
     if (castle_versions_cache)
         kmem_cache_destroy(castle_versions_cache);
     if (castle_versions_hash)
-        castle_free(castle_versions_hash);
+        castle_kfree(castle_versions_hash);
     if (castle_versions_counts_hash)
-        castle_free(castle_versions_counts_hash);
+        castle_kfree(castle_versions_counts_hash);
     return ret;
 }
 

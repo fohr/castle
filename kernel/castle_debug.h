@@ -24,12 +24,16 @@
 #define C_BVEC_BTREE_NODE_WPROCESS  (0x00200000)
 #define C_BVEC_BTREE_NODE_IO_END    (0x00400000)
 
+#define castle_alloc(_s)             castle_debug_alloc_func(_s, __FILE__, __LINE__)
+#define castle_free(_p)              castle_debug_free_func(_p)
 #define castle_malloc(_s, _f)        castle_debug_malloc(_s, _f, __FILE__, __LINE__)
 #define castle_zalloc(_s, _f)        castle_debug_zalloc(_s, _f, __FILE__, __LINE__)
-#define castle_free(_p)              do {castle_debug_free(_p); (_p) = NULL;} while(0)
+#define castle_kfree(_p)             do {castle_debug_free(_p); (_p) = NULL;} while(0)
 #define castle_vmalloc(_s)           castle_debug_vmalloc(_s, __FILE__, __LINE__)
 #define castle_vfree(_p)             do {castle_debug_vfree(_p); (_p) = NULL;} while(0)
 
+void* castle_debug_alloc_func(size_t size, char *file, int line);
+void  castle_debug_free_func(void *ptr);
 void* castle_debug_malloc(size_t size, gfp_t flags, char *file, int line);
 void* castle_debug_zalloc(size_t size, gfp_t flags, char *file, int line);
 void  castle_debug_free(void *obj);
@@ -50,9 +54,11 @@ void  castle_debug_fini(void);
 #define castle_debug_bio_deregister(_a)          ((void)0)
 #define castle_debug_init()               (0)
 #define castle_debug_fini()               ((void)0)
+#define castle_alloc(_s)                  castle_alloc_func(_s)
+#define castle_free(_p)                   castle_free_func(_p)
 #define castle_malloc(_s, _f)             kmalloc(_s, _f)
 #define castle_zalloc(_s, _f)             kzalloc(_s, _f)
-#define castle_free(_p)                   kfree(_p)
+#define castle_kfree(_p)                  kfree(_p)
 #define castle_vmalloc(_s)                vmalloc(_s)
 #define castle_vfree(_p)                  vfree(_p)
 

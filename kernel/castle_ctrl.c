@@ -359,7 +359,7 @@ void castle_control_collection_attach(c_ver_t            version,
         if (strcmp(name, ca->col.name) == 0)
         {
             castle_printk(LOG_WARN, "Collection name %s already exists\n", ca->col.name);
-            castle_free(name);
+            castle_kfree(name);
             *ret = -EEXIST;
             return;
         }
@@ -368,7 +368,7 @@ void castle_control_collection_attach(c_ver_t            version,
     if (castle_version_deleted(version))
     {
         castle_printk(LOG_WARN, "Version is already marked for deletion. Can't be attached\n");
-        castle_free(name);
+        castle_kfree(name);
         *ret = -EINVAL;
         return;
     }
@@ -514,14 +514,14 @@ void castle_control_environment_set(c_env_var_t var_id, char *var_str, int *ret)
     /* Check that the id is in range. */
     if(var_id >= NR_ENV_VARS)
     {
-        castle_free(var_str);
+        castle_kfree(var_str);
         *ret = -EINVAL;
         return;
     }
 
     /* Save the environment var. */
     strncpy(castle_environment[var_id], var_str, MAX_ENV_LEN);
-    castle_free(var_str);
+    castle_kfree(var_str);
 
     *ret = 0;
 }
@@ -715,7 +715,7 @@ static void castle_thread_priority_set(struct work_struct *work)
     set_user_nice(current, castle_nice_value);
     /* It is safe to free work structure here. Kernel is not going to use it
      * anymore.*/
-    castle_free(work);
+    castle_kfree(work);
 }
 
 /**

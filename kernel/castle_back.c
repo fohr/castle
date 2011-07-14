@@ -408,7 +408,7 @@ static void castle_back_buffer_put(struct castle_back_conn *conn,
 
     UnReservePages(buf->buffer, buf->size);
     castle_vfree(buf->buffer);
-    castle_free(buf);
+    castle_kfree(buf);
 }
 
 static inline struct castle_back_buffer
@@ -3170,7 +3170,7 @@ err2:
     UnReservePages(conn->back_ring.sring, CASTLE_RING_SIZE);
     castle_vfree(conn->back_ring.sring);
 err1:
-    castle_free(conn);
+    castle_kfree(conn);
 err0:
     return err;
 }
@@ -3218,7 +3218,7 @@ static void castle_back_cleanup_conn(struct castle_back_conn *conn)
 
     /* _buffer_put() cleans up buffers and they should now all have been freed
      * as conn->ref_count has reached 0. */
-    castle_free(conn);
+    castle_kfree(conn);
 
     wake_up(&conn_close_wait);
 }
@@ -3377,7 +3377,7 @@ err4:
 err3:
     castle_vfree(buffer->buffer);
 err2:
-    castle_free(buffer);
+    castle_kfree(buffer);
 err1:
     return err;
 }

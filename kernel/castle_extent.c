@@ -192,7 +192,7 @@ static c_ext_t * castle_ext_alloc(c_ext_id_t ext_id)
     ext->dirtytree = castle_zalloc(sizeof(c_ext_dirtytree_t), GFP_KERNEL);
     if (!ext->dirtytree)
     {
-        castle_free(ext);
+        castle_kfree(ext);
         return NULL;
     }
 
@@ -305,12 +305,12 @@ static int castle_extent_hash_remove(c_ext_t *ext, void *unused)
         struct castle_slave *cs =
                 castle_slave_find_by_id(sup_ext_to_slave_id(ext->ext_id));
 
-        castle_free(cs->sup_ext_maps);
+        castle_kfree(cs->sup_ext_maps);
     }
     __castle_extent_dirtytree_put(ext->dirtytree, 0 /*check_hash*/);
     if(ext->work)
-        castle_free(ext->work);
-    castle_free(ext);
+        castle_kfree(ext->work);
+    castle_kfree(ext);
 
     return 0;
 }
@@ -747,8 +747,8 @@ static int load_extent_from_mentry(struct castle_elist_entry *mstore_entry)
     return 0;
 
 err2:
-    castle_free(ext->dirtytree);
-    castle_free(ext);
+    castle_kfree(ext->dirtytree);
+    castle_kfree(ext);
 err1:
     return ret;
 }
@@ -854,7 +854,7 @@ void castle_extents_fini(void)
     /* Iterate over extents hash with exclusive access. Indeed, we don't need a
      * lock here as this happenes in the module end. */
     castle_extents_hash_iterate_exclusive(castle_extent_hash_remove, NULL);
-    castle_free(castle_extents_hash);
+    castle_kfree(castle_extents_hash);
     kmem_cache_destroy(castle_extents_work_cache);
 }
 
@@ -1203,7 +1203,7 @@ out:
     if(rda_state)
         rda_spec->extent_fini(ext->ext_id, rda_state);
     if(ext_state)
-        castle_free(ext_state);
+        castle_kfree(ext_state);
 
     return err;
 }
@@ -1394,7 +1394,7 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t     rda_type,
 
     /* Extent allocation is SUCCESS. No need of event handler. Free it. */
     if (event_hdl)
-        castle_free(event_hdl);
+        castle_kfree(event_hdl);
 
     return ext->ext_id;
 
@@ -1410,8 +1410,8 @@ __low_space:
 __hell:
     if (ext)
     {
-        castle_free(ext->dirtytree);
-        castle_free(ext);
+        castle_kfree(ext->dirtytree);
+        castle_kfree(ext);
     }
 
     return INVAL_EXT_ID;
@@ -1497,7 +1497,7 @@ void castle_extent_lfs_victims_wakeup(void)
 
          /* Handled low free space successfully. Get rid of event handler. */
          list_del(&hdl->list);
-         castle_free(hdl);
+         castle_kfree(hdl);
 
          /* Callback failed, add remaining callbacks back to the list and break. */
          if (ret)
@@ -1558,7 +1558,7 @@ static void castle_extent_resource_release(void *data)
     castle_extents_sb->nr_exts--;
 
     kmem_cache_free(castle_extents_work_cache, ext->work);
-    castle_free(ext);
+    castle_kfree(ext);
 
     /* Decrement the dead count. Module can't exit with outstanding dead extents.  */
     atomic_dec(&castle_extents_dead_count);
@@ -1834,8 +1834,8 @@ c_ext_id_t castle_extent_sup_ext_init(struct castle_slave *cs)
     return ext->ext_id;
 
 err2:
-    castle_free(ext->dirtytree);
-    castle_free(ext);
+    castle_kfree(ext->dirtytree);
+    castle_kfree(ext);
 err1:
     return INVAL_EXT_ID;
 }
@@ -1851,9 +1851,9 @@ void castle_extent_sup_ext_close(struct castle_slave *cs)
     {
         BUG_ON(atomic_read(&ext->ref_cnt) != 1);
         castle_extents_hash_remove(ext);
-        castle_free(ext);
+        castle_kfree(ext);
     }
-    castle_free(cs->sup_ext_maps);
+    castle_kfree(cs->sup_ext_maps);
 
     return;
 }
@@ -2294,7 +2294,7 @@ void __castle_extent_dirtytree_put(c_ext_dirtytree_t *dirtytree, int check_hash)
         if (check_hash)
             BUG_ON(castle_extent_get(dirtytree->ext_id));   /* cannot be in hash now */
         BUG_ON(!RB_EMPTY_ROOT(&dirtytree->rb_root));    /* must be empty */
-        castle_free(dirtytree);
+        castle_kfree(dirtytree);
     }
 }
 
@@ -2415,7 +2415,7 @@ static void castle_extents_remap_state_init(void)
                      * Leave the slave as a 'hole' in remap_state.live_slaves.
                      */
                     BUG_ON(!remap_state.live_slaves[i]);
-                    castle_free(remap_state.live_slaves[i]);
+                    castle_kfree(remap_state.live_slaves[i]);
                     remap_state.live_slaves[i] = NULL;
                 }
                 /* Still alive - leave it as it is. */
@@ -2466,7 +2466,7 @@ static void castle_extents_remap_state_fini(void)
     for (i=0; i<MAX_NR_SLAVES; i++)
     {
         if (remap_state.live_slaves[i])
-            castle_free(remap_state.live_slaves[i]);
+            castle_kfree(remap_state.live_slaves[i]);
     }
 }
 
@@ -2752,7 +2752,7 @@ static int castle_extent_remap(c_ext_t *ext)
         list_add_tail(&ext->rebuild_done_list, &rebuild_done_list);
     mutex_unlock(&rebuild_done_list_lock);
 
-    ext->shadow_map = castle_vmalloc(ext->size*k_factor*sizeof(c_disk_chk_t));
+    ext->shadow_map = castle_alloc(ext->size*k_factor*sizeof(c_disk_chk_t));
     if (!ext->shadow_map)
     {
         castle_printk(LOG_ERROR, "ERROR: could not allocate rebuild shadow map of size %lu\n",
@@ -2981,7 +2981,7 @@ void castle_extent_remap_writeback(c_ext_t *ext)
     spin_lock(&ext->shadow_map_lock);
     ext->use_shadow_map = 0;
     spin_unlock(&ext->shadow_map_lock);
-    castle_vfree(ext->shadow_map);
+    castle_free(ext->shadow_map);
 
     /* It is now safe to update the extent with the rebuild sequence number. */
     ext->curr_rebuild_seqno = ext->remap_seqno;
@@ -3144,7 +3144,7 @@ restart:
                     spin_lock(&ext->shadow_map_lock);
                     ext->use_shadow_map = 0;
                     spin_unlock(&ext->shadow_map_lock);
-                    castle_vfree(ext->shadow_map);
+                    castle_free(ext->shadow_map);
                 }
             }
 

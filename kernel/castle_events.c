@@ -56,7 +56,7 @@ void castle_uevent4(uint16_t cmd, uint64_t arg1, uint64_t arg2, uint64_t arg3, u
     err = kobject_uevent_env(&castle.kobj, KOBJ_CHANGE, env->envp);
     if (err) debug("Error sending event err=%d\n", err);
 
-    castle_free(env);
+    castle_kfree(env);
 }
 
 void castle_uevent3(uint16_t cmd, uint64_t arg1, uint64_t arg2, uint64_t arg3)

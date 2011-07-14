@@ -1213,7 +1213,7 @@ static void c2b_multi_io_end(struct bio *bio, int err)
 #ifdef CASTLE_DEBUG
     local_irq_restore(flags);
 #endif
-    castle_free(bio_info);
+    castle_kfree(bio_info);
     bio_put(bio);
 
     /*
@@ -1357,7 +1357,7 @@ int submit_direct_io(int                    rw,
     {
         castle_printk(LOG_ERROR, "BIO flagged not supported.\n");
         bio_put(bio);
-        castle_free(bio_info);
+        castle_kfree(bio_info);
         return -EOPNOTSUPP;
     }
 
@@ -1366,7 +1366,7 @@ int submit_direct_io(int                    rw,
     wait_for_completion(&bio_info->completion);
     ret = bio_info->err;
 
-    castle_free(bio_info);
+    castle_kfree(bio_info);
 
     return ret;
 }
@@ -2501,7 +2501,7 @@ static c2_page_t** castle_cache_page_freelist_get(int nr_pages)
     if (castle_cache_page_freelist_size * PAGES_PER_C2P < nr_pages)
     {
         spin_unlock(&castle_cache_freelist_lock);
-        castle_free(c2ps);
+        castle_kfree(c2ps);
         debug("Freelist too small to allocate %d pages.\n", nr_pages);
         return NULL;
     }
@@ -2549,7 +2549,7 @@ static c2_page_t** castle_cache_page_reservelist_get(int nr_pages)
     if (atomic_read(&castle_cache_page_reservelist_size) * PAGES_PER_C2P < nr_pages)
     {
         spin_unlock(&castle_cache_reservelist_lock);
-        castle_free(c2ps);
+        castle_kfree(c2ps);
         debug("Reservelist too small to allocate %d pages.\n", nr_pages);
         return NULL;
     }
@@ -2849,7 +2849,7 @@ static void castle_cache_block_free(c2_block_t *c2b)
     __castle_cache_block_freelist_add(c2b);
     spin_unlock(&castle_cache_freelist_lock);
     /* Free the c2ps array. By this point, we must not use c2b any more. */
-    castle_free(c2ps);
+    castle_kfree(c2ps);
 }
 
 static inline int c2b_busy(c2_block_t *c2b, int expected_count)
@@ -3605,7 +3605,7 @@ static void c2_pref_window_put(c2_pref_window_t *window)
         BUG_ON(!(window->state & PREF_WINDOW_DEAD));
         BUG_ON(window->state & PREF_WINDOW_INSERTED);
 
-        castle_free(window);
+        castle_kfree(window);
     }
 }
 
@@ -5162,11 +5162,11 @@ static void castle_cache_hashes_fini(void)
     if(!castle_cache_block_hash || !castle_cache_page_hash)
     {
         if(castle_cache_block_hash)
-            castle_vfree(castle_cache_block_hash);
+            castle_free(castle_cache_block_hash);
         if(castle_cache_page_hash)
-            castle_vfree(castle_cache_page_hash);
+            castle_free(castle_cache_page_hash);
         if(castle_cache_page_hash_locks)
-            castle_vfree(castle_cache_page_hash_locks);
+            castle_free(castle_cache_page_hash_locks);
         return;
     }
 
@@ -5345,9 +5345,9 @@ static void castle_cache_freelists_fini(void)
     if (!castle_cache_blks || !castle_cache_pgs)
     {
         if (castle_cache_blks)
-            castle_vfree(castle_cache_blks);
+            castle_free(castle_cache_blks);
         if (castle_cache_pgs)
-            castle_vfree(castle_cache_pgs);
+            castle_free(castle_cache_pgs);
         return;
     }
 
@@ -5527,7 +5527,7 @@ void castle_mstore_iterator_destroy(struct castle_mstore_iter *iter)
         put_c2b(iter->node_c2b);
     }
     debug_mstore("Freeing.\n");
-    castle_free(iter);
+    castle_kfree(iter);
 }
 
 struct castle_mstore_iter* castle_mstore_iterate(struct castle_mstore *store)
@@ -5772,7 +5772,7 @@ struct castle_mstore* castle_mstore_open(c_mstore_id_t store_id, size_t entry_si
     iterator = castle_mstore_iterate(store);
     if(!iterator)
     {
-        castle_free(store);
+        castle_kfree(store);
         return NULL;
     }
     while(castle_mstore_iterator_has_next(iterator))
@@ -5814,7 +5814,7 @@ struct castle_mstore* castle_mstore_init(c_mstore_id_t store_id, size_t entry_si
 void castle_mstore_fini(struct castle_mstore *store)
 {
     debug_mstore("Closing mstore id=%d.\n", store->store_id);
-    castle_free(store);
+    castle_kfree(store);
 
     atomic_dec(&mstores_ref_cnt);
 }
@@ -6050,7 +6050,7 @@ void castle_cache_extents_flush(struct list_head *flush_list, unsigned int ratel
         castle_extent_put(entry->ext_id);
 
         list_del(lh);
-        castle_free(entry);
+        castle_kfree(entry);
     }
 
     BUG_ON(!list_empty(flush_list));
@@ -6353,17 +6353,17 @@ int castle_cache_init(void)
     castle_cache_block_freelist_size = castle_cache_page_freelist_size;
     castle_cache_block_hash_buckets  = castle_cache_block_freelist_size / 2;
     /* Allocate memory for c2bs, c2ps and hash tables */
-    castle_cache_page_hash  = castle_vmalloc(castle_cache_page_hash_buckets *
-                                             sizeof(struct hlist_head));
+    castle_cache_page_hash  = castle_alloc(castle_cache_page_hash_buckets *
+                                           sizeof(struct hlist_head));
     castle_cache_page_hash_locks
-        = castle_vmalloc((castle_cache_page_hash_buckets / PAGE_HASH_LOCK_PERIOD + 1) *
+        = castle_alloc((castle_cache_page_hash_buckets / PAGE_HASH_LOCK_PERIOD + 1) *
                                              sizeof(spinlock_t));
-    castle_cache_block_hash = castle_vmalloc(castle_cache_block_hash_buckets *
-                                             sizeof(struct hlist_head));
-    castle_cache_blks       = castle_vmalloc(castle_cache_block_freelist_size *
-                                             sizeof(c2_block_t));
-    castle_cache_pgs        = castle_vmalloc(castle_cache_page_freelist_size  *
-                                             sizeof(c2_page_t));
+    castle_cache_block_hash = castle_alloc(castle_cache_block_hash_buckets *
+                                           sizeof(struct hlist_head));
+    castle_cache_blks       = castle_alloc(castle_cache_block_freelist_size *
+                                           sizeof(c2_block_t));
+    castle_cache_pgs        = castle_alloc(castle_cache_page_freelist_size  *
+                                           sizeof(c2_page_t));
     /* Init other variables */
     atomic_set(&castle_cache_dirty_pages, 0);
     atomic_set(&castle_cache_clean_pages, 0);
@@ -6429,9 +6429,9 @@ void castle_cache_fini(void)
     if(castle_io_array_cache)   kmem_cache_destroy(castle_io_array_cache);
     if(castle_cache_stats_timer_interval) del_timer_sync(&castle_cache_stats_timer);
 
-    if(castle_cache_page_hash)       castle_vfree(castle_cache_page_hash);
-    if(castle_cache_block_hash)      castle_vfree(castle_cache_block_hash);
-    if(castle_cache_page_hash_locks) castle_vfree(castle_cache_page_hash_locks);
-    if(castle_cache_blks)            castle_vfree(castle_cache_blks);
-    if(castle_cache_pgs)             castle_vfree(castle_cache_pgs);
+    if(castle_cache_page_hash)       castle_free(castle_cache_page_hash);
+    if(castle_cache_block_hash)      castle_free(castle_cache_block_hash);
+    if(castle_cache_page_hash_locks) castle_free(castle_cache_page_hash_locks);
+    if(castle_cache_blks)            castle_free(castle_cache_blks);
+    if(castle_cache_pgs)             castle_free(castle_cache_pgs);
 }

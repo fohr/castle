@@ -9,6 +9,42 @@
 #include "castle_objects.h"
 #include "castle.h"
 
+/**
+ * Allocate bytes using malloc(), falling back to vmalloc() as appropriate.
+ */
+void * castle_alloc_func(size_t size)
+{
+    void *buf;
+
+    if (likely(size <= MAX_KMALLOC_SIZE))
+    {
+        buf = kmalloc(size, GFP_KERNEL);
+        if (likely(!buf))
+            buf = vmalloc(size);
+    }
+    else
+        buf = vmalloc(size);
+
+    return buf;
+}
+
+/**
+ * Deallocate buffer previously allocated via castle_alloc_func().
+ */
+void castle_free_func(void *ptr)
+{
+    unsigned long addr = (unsigned long) ptr;
+
+    if (likely(addr >= VMALLOC_START && addr < VMALLOC_END))
+        vfree(ptr);
+    else
+        kfree(ptr);
+}
+
+/*****
+ * castle_printk()
+ ****/
+
 struct castle_printk_buffer     printk_buf;
 struct castle_printk_state     *castle_printk_states;
 
@@ -274,7 +310,7 @@ void castle_dmesg(void)
     int wraps;
 
     /* Allocate a buffer to store CASTLE_DMESG_DUMP_SIZE of buffer. */
-    buf = castle_vmalloc(CASTLE_DMESG_DUMP_SIZE);
+    buf = castle_alloc(CASTLE_DMESG_DUMP_SIZE);
     if (!buf)
         printk("Couldn't allocate lines buffer to print castle_dmesg().\n");
 
@@ -330,7 +366,7 @@ void castle_dmesg(void)
     printk("END OF CASTLE PRINTK BUFFER\n");
     printk("================================================================================\n");
 
-    castle_vfree(buf);
+    castle_free(buf);
 }
 
 /**
@@ -534,7 +570,7 @@ int castle_from_user_copy(const char __user *from, int len, int max_len, char **
 err_out:
     /* Non-zero return code should have been set. */
     BUG_ON(ret == 0);
-    castle_free(out_str);
+    castle_kfree(out_str);
     return ret;
 }
 

@@ -244,7 +244,7 @@ unreserve_err_out:
     castle_rda_unreserve(state->permuted_slaves, state->nr_slaves, &state->freespace_reservation);
 err_out:
     if (state)
-        castle_free(state);
+        castle_kfree(state);
 
     return NULL;
 }
@@ -254,7 +254,7 @@ void castle_def_rda_extent_fini(c_ext_id_t ext_id, void *state_p)
     c_def_rda_state_t *state = (c_def_rda_state_t *)state_p;
 
     castle_rda_unreserve(state->permuted_slaves, state->nr_slaves, &state->freespace_reservation);
-    castle_free(state);
+    castle_kfree(state);
 }
 
 int castle_def_rda_next_slave_get(struct castle_slave **cs,
@@ -394,7 +394,7 @@ err_out:
     {
         if(state->def_state)
             castle_def_rda_extent_fini(ext_id, state->def_state);
-        castle_free(state);
+        castle_kfree(state);
     }
     return NULL;
 }
@@ -410,7 +410,7 @@ void castle_ssd_rda_extent_fini(c_ext_id_t ext_id, void *state_v)
                          castle_ssd_rda_reservation_token_get(state));
     if(state->def_state)
         castle_def_rda_extent_fini(ext_id, state->def_state);
-    castle_free(state);
+    castle_kfree(state);
 }
 
 int castle_ssd_rda_next_slave_get(struct castle_slave **cs,

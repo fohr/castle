@@ -162,7 +162,7 @@ int castle_bloom_create(castle_bloom_t *bf, c_da_t da_id, uint64_t num_elements)
     return 0;
 
 err1:
-    castle_free(bf->private);
+    castle_kfree(bf->private);
     bf->private = NULL;
 err0: return ret;
 }
@@ -330,9 +330,9 @@ void castle_bloom_complete(castle_bloom_t *bf)
     castle_bloom_complete_chunk(bf);
 
 #ifdef DEBUG
-    castle_free(bf_bp->elements_inserted_per_block);
+    castle_kfree(bf_bp->elements_inserted_per_block);
 #endif
-    castle_free(bf->private);
+    castle_kfree(bf->private);
     bf->private = NULL;
 
     /* set number of chunks to actual number */
@@ -371,9 +371,9 @@ void castle_bloom_abort(castle_bloom_t *bf)
     }
 
 #ifdef DEBUG
-    castle_free(bf_bp->elements_inserted_per_block);
+    castle_kfree(bf_bp->elements_inserted_per_block);
 #endif
-    castle_free(bf->private);
+    castle_kfree(bf->private);
     bf->private = NULL;
 }
 
@@ -837,7 +837,7 @@ static void castle_bloom_index_read(c_bvec_t *c_bvec)
     for (i = 0; i < num_btree_nodes; i++)
         put_c2b(btree_nodes_c2bs[i]);
 
-    castle_free(btree_nodes_c2bs);
+    castle_kfree(btree_nodes_c2bs);
 }
 
 /**
