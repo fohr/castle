@@ -429,7 +429,9 @@ static int castle_version_needs_parent(struct castle_version *v, struct castle_v
  *
  * @return 1 if, version is deletable.
  */
-int castle_version_is_deletable(struct castle_version_delete_state *state, c_ver_t version)
+int castle_version_is_deletable(struct castle_version_delete_state *state,
+                                c_ver_t version,
+                                int is_new_key)
 {
     struct castle_version *cur_v = NULL, *w;
     struct list_head *list;
@@ -456,6 +458,14 @@ int castle_version_is_deletable(struct castle_version_delete_state *state, c_ver
      * calculate need_parent bit(f-value) for this version now. */
     if (test_bit(CV_LEAF_BIT, &cur_v->flags))
         goto out;
+
+    /* If this is the first key in merge stream, don't delete. As we know this version is not
+     * leaf and descendents are not visible. */
+    if (is_new_key)
+    {
+        ret = 0;
+        goto out;
+    }
 
     if (state->next_deleted == NULL)
         state->next_deleted = castle_versions_deleted.next;

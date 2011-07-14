@@ -3837,7 +3837,7 @@ static int castle_da_entry_skip(struct castle_da_merge *merge,
         state->next_deleted = NULL;
     }
 
-    return castle_version_is_deletable(state, version);
+    return castle_version_is_deletable(state, version, merge->is_new_key);
 }
 
 static int castle_da_merge_unit_do(struct castle_da_merge *merge, uint32_t unit_nr)
