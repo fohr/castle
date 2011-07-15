@@ -8286,7 +8286,8 @@ look_again:
     /* Look for the next tree. Next tree has to be*/
     for (; i<c_bvec->nr_trees; i++)
     {
-        BUG_ON(look_compacting_trees && c_bvec->trees[i]->compacting);
+        /* While looking for compacting trees, array shouldn't have normal trees. */
+        BUG_ON(look_compacting_trees && c_bvec->trees[i] && !c_bvec->trees[i]->compacting);
 
         if (c_bvec->trees[i] && (look_compacting_trees == c_bvec->trees[i]->compacting))
             break;
@@ -8478,7 +8479,7 @@ again:
 static void castle_da_cts_put(c_bvec_t *c_bvec)
 {
     int i;
-    int ct_compacting = c_bvec->tree->compacting;
+    int ct_compacting = (c_bvec->tree && c_bvec->tree->compacting);
 
     BUG_ON(!c_bvec->tree);
     for(i=0; i<c_bvec->nr_trees; i++)
@@ -8491,11 +8492,14 @@ static void castle_da_cts_put(c_bvec_t *c_bvec)
             /* Skip c_bvec->tree. This reference must remain. */
             continue;
         }
-        /* We shouldn't have a normal CT in array, when we found the key in compacting tree. */
-        BUG_ON(ct_compacting && !ct->compacting);
 
         if(ct)
+        {
+            /* We shouldn't have a normal CT in array, when we found the key in compacting tree. */
+            BUG_ON(ct_compacting && !ct->compacting);
+
             castle_ct_put(ct, 0);
+        }
     }
     castle_da_cts_free(c_bvec);
 }
