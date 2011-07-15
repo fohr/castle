@@ -8254,6 +8254,7 @@ void castle_da_ct_next(c_bvec_t *c_bvec)
 {
     struct castle_component_tree *ct;
     int i;
+    uint8_t compacting_tree = 0;
 
     ct = c_bvec->tree;
     /* Find the ct in the array of trees. */
@@ -8262,6 +8263,8 @@ void castle_da_ct_next(c_bvec_t *c_bvec)
             break;
     /* Tree must always be found. */
     BUG_ON(i >= c_bvec->nr_trees);
+
+    compacting_tree = ct->compacting;
 
     /* Remove the tree from the array, and put the reference. */
     c_bvec->trees[i] = NULL;
@@ -8275,7 +8278,10 @@ void castle_da_ct_next(c_bvec_t *c_bvec)
         castle_da_cts_free(c_bvec);
     }
     else
+    {
         c_bvec->tree = c_bvec->trees[i];
+        BUG_ON(compacting_tree && !c_bvec->tree->compacting);
+    }
 }
 
 /**
@@ -8414,14 +8420,20 @@ again:
     }
     /* Get refs to all the component trees, and release the lock */
     j=0;
+
+    /* Get all trees that are not compacting. These trees definelty have latest data compared
+     * to trees that are compacting, irrespective of their position in DA. */
     for(i=0; i<MAX_DA_LEVEL; i++)
     {
         list_for_each(l, &da->levels[i].trees)
         {
             struct castle_component_tree *ct;
 
-            BUG_ON(j >= nr_cts);
             ct = list_entry(l, struct castle_component_tree, da_list);
+            if (ct->compacting)
+                continue;
+
+            BUG_ON(j >= nr_cts);
             cts[j] = ct;
             castle_ct_get(ct, 0);
             BUG_ON((castle_btree_type_get(ct->btree_type)->magic != RW_VLBA_TREE_TYPE) &&
@@ -8429,6 +8441,27 @@ again:
             j++;
         }
     }
+
+    /* Get all trees that are compacting. */
+    for(i=0; i<MAX_DA_LEVEL; i++)
+    {
+        list_for_each(l, &da->levels[i].trees)
+        {
+            struct castle_component_tree *ct;
+
+            ct = list_entry(l, struct castle_component_tree, da_list);
+            if (!ct->compacting)
+                continue;
+
+            BUG_ON(j >= nr_cts);
+            cts[j] = ct;
+            castle_ct_get(ct, 0);
+            BUG_ON((castle_btree_type_get(ct->btree_type)->magic != RW_VLBA_TREE_TYPE) &&
+                   (castle_btree_type_get(ct->btree_type)->magic != RO_VLBA_TREE_TYPE));
+            j++;
+        }
+    }
+
     read_unlock(&da->lock);
     BUG_ON(j != nr_cts);
 
@@ -8464,7 +8497,10 @@ static void castle_da_cts_put(c_bvec_t *c_bvec)
         BUG_ON(!cur_found && (ct != NULL));
         BUG_ON( cur_found && (ct == NULL));
         if(ct)
+        {
+            BUG_ON(c_bvec->tree->compacting && !ct->compacting);
             castle_ct_put(ct, 0);
+        }
     }
     castle_da_cts_free(c_bvec);
 }
