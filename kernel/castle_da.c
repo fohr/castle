@@ -8254,62 +8254,34 @@ void castle_da_ct_next(c_bvec_t *c_bvec)
 {
     struct castle_component_tree *ct;
     int i;
-    uint8_t look_compacting_trees = 0;
-
-    i = 0;
-    look_compacting_trees = 0;
+    uint8_t compacting_tree = 0;
 
     ct = c_bvec->tree;
-
-    /* This can be called to get the first CT as well. (i.e. ct == NULL). */
     /* Find the ct in the array of trees. */
-    if (ct)
-    {
-        for(i=0; i<c_bvec->nr_trees; i++)
-            if(c_bvec->trees[i] == ct)
-                break;
-        /* Tree must always be found. */
-        BUG_ON(i >= c_bvec->nr_trees);
-
-        /* If the current tree is compacting tree next tree should be compacting tree. */
-        look_compacting_trees = ct->compacting;
-
-        /* Remove the tree from the array, and put the reference. */
-        c_bvec->trees[i] = NULL;
-        castle_ct_put(ct, 0);
-
-        /* Advance to the next tree. */
-        i++;
-    }
-
-look_again:
-    /* Look for the next tree. Next tree has to be*/
-    for (; i<c_bvec->nr_trees; i++)
-    {
-        /* While looking for compacting trees, array shouldn't have normal trees. */
-        BUG_ON(look_compacting_trees && c_bvec->trees[i] && !c_bvec->trees[i]->compacting);
-
-        if (c_bvec->trees[i] && (look_compacting_trees == c_bvec->trees[i]->compacting))
+    for(i=0; i<c_bvec->nr_trees; i++)
+        if(c_bvec->trees[i] == ct)
             break;
-    }
+    /* Tree must always be found. */
+    BUG_ON(i >= c_bvec->nr_trees);
 
-    /* If we couldn't find any tree. */
-    if (i >= c_bvec->nr_trees)
+    compacting_tree = ct->compacting;
+
+    /* Remove the tree from the array, and put the reference. */
+    c_bvec->trees[i] = NULL;
+    castle_ct_put(ct, 0);
+
+    /* Advance to the next tree. */
+    i++;
+    if(i >= c_bvec->nr_trees)
     {
-        /* If we are not yet looking for compacting trees, start looking for them. */
-        if (!look_compacting_trees)
-        {
-            i = 0;
-            look_compacting_trees = 1;
-            goto look_again;
-        }
-
-        /* We don't have any trees left, not even compacting trees. */
         c_bvec->tree = NULL;
         castle_da_cts_free(c_bvec);
     }
     else
+    {
         c_bvec->tree = c_bvec->trees[i];
+        BUG_ON(compacting_tree && !c_bvec->tree->compacting);
+    }
 }
 
 /**
@@ -8448,14 +8420,20 @@ again:
     }
     /* Get refs to all the component trees, and release the lock */
     j=0;
+
+    /* Get all trees that are not compacting. These trees definelty have latest data compared
+     * to trees that are compacting, irrespective of their position in DA. */
     for(i=0; i<MAX_DA_LEVEL; i++)
     {
         list_for_each(l, &da->levels[i].trees)
         {
             struct castle_component_tree *ct;
 
-            BUG_ON(j >= nr_cts);
             ct = list_entry(l, struct castle_component_tree, da_list);
+            if (ct->compacting)
+                continue;
+
+            BUG_ON(j >= nr_cts);
             cts[j] = ct;
             castle_ct_get(ct, 0);
             BUG_ON((castle_btree_type_get(ct->btree_type)->magic != RW_VLBA_TREE_TYPE) &&
@@ -8463,6 +8441,27 @@ again:
             j++;
         }
     }
+
+    /* Get all trees that are compacting. */
+    for(i=0; i<MAX_DA_LEVEL; i++)
+    {
+        list_for_each(l, &da->levels[i].trees)
+        {
+            struct castle_component_tree *ct;
+
+            ct = list_entry(l, struct castle_component_tree, da_list);
+            if (!ct->compacting)
+                continue;
+
+            BUG_ON(j >= nr_cts);
+            cts[j] = ct;
+            castle_ct_get(ct, 0);
+            BUG_ON((castle_btree_type_get(ct->btree_type)->magic != RW_VLBA_TREE_TYPE) &&
+                   (castle_btree_type_get(ct->btree_type)->magic != RO_VLBA_TREE_TYPE));
+            j++;
+        }
+    }
+
     read_unlock(&da->lock);
     BUG_ON(j != nr_cts);
 
@@ -8478,26 +8477,28 @@ again:
  */
 static void castle_da_cts_put(c_bvec_t *c_bvec)
 {
-    int i;
-    int ct_compacting = (c_bvec->tree && c_bvec->tree->compacting);
+    int i, cur_found;
 
+    /* We expecting the trees array to looks as follows:
+       NULL, ..., NULL, c_bvec->tree, ct_b, ct_c, ....
+       Check for the layout for debugging purposes. */
     BUG_ON(!c_bvec->tree);
-    for(i=0; i<c_bvec->nr_trees; i++)
+    for(i=0, cur_found=0; i<c_bvec->nr_trees; i++)
     {
         struct castle_component_tree *ct;
 
         ct = c_bvec->trees[i];
         if(ct == c_bvec->tree)
         {
+            cur_found = 1;
             /* Skip c_bvec->tree. This reference must remain. */
             continue;
         }
-
+        BUG_ON(!cur_found && (ct != NULL));
+        BUG_ON( cur_found && (ct == NULL));
         if(ct)
         {
-            /* We shouldn't have a normal CT in array, when we found the key in compacting tree. */
-            BUG_ON(ct_compacting && !ct->compacting);
-
+            BUG_ON(c_bvec->tree->compacting && !ct->compacting);
             castle_ct_put(ct, 0);
         }
     }
@@ -8787,11 +8788,7 @@ static void castle_da_read_bvec_start(struct castle_double_array *da, c_bvec_t *
     }
 
     /* Start with the first tree. */
-    c_bvec->tree = NULL;
-    castle_da_ct_next(c_bvec);
-
-    /* If we don't have any trees, we would have failed before at castle_da_all_cts_get(). */
-    BUG_ON(c_bvec->tree == NULL);
+    c_bvec->tree = c_bvec->trees[0];
 
     c_bvec->orig_complete   = c_bvec->submit_complete;
     c_bvec->submit_complete = castle_da_ct_read_complete;

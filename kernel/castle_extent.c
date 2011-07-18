@@ -2752,7 +2752,7 @@ static int castle_extent_remap(c_ext_t *ext)
         list_add_tail(&ext->rebuild_done_list, &rebuild_done_list);
     mutex_unlock(&rebuild_done_list_lock);
 
-    ext->shadow_map = castle_alloc(ext->size*k_factor*sizeof(c_disk_chk_t));
+    ext->shadow_map = castle_vmalloc(ext->size*k_factor*sizeof(c_disk_chk_t));
     if (!ext->shadow_map)
     {
         castle_printk(LOG_ERROR, "ERROR: could not allocate rebuild shadow map of size %lu\n",
@@ -2981,7 +2981,7 @@ void castle_extent_remap_writeback(c_ext_t *ext)
     spin_lock(&ext->shadow_map_lock);
     ext->use_shadow_map = 0;
     spin_unlock(&ext->shadow_map_lock);
-    castle_free(ext->shadow_map);
+    castle_vfree(ext->shadow_map);
 
     /* It is now safe to update the extent with the rebuild sequence number. */
     ext->curr_rebuild_seqno = ext->remap_seqno;
@@ -3144,7 +3144,7 @@ restart:
                     spin_lock(&ext->shadow_map_lock);
                     ext->use_shadow_map = 0;
                     spin_unlock(&ext->shadow_map_lock);
-                    castle_free(ext->shadow_map);
+                    castle_vfree(ext->shadow_map);
                 }
             }
 
