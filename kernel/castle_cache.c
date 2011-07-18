@@ -2396,7 +2396,6 @@ static int castle_cache_block_hash_insert(c2_block_t *c2b, int transient)
     hlist_add_head(&c2b->hlist, &castle_cache_block_hash[idx]);
     /* in the hash and hold a reference so drop lock */
     BUG_ON(atomic_read(&c2b->count) == 0);
-    write_unlock(&castle_cache_block_hash_lock);
     BUG_ON(c2b_dirty(c2b));
     BUG_ON(c2b_softpin(c2b));
     spin_lock_irq(&castle_cache_block_lru_lock);
@@ -2407,6 +2406,7 @@ static int castle_cache_block_hash_insert(c2_block_t *c2b, int transient)
     /* Cleanlist accounting. */
     atomic_inc(&castle_cache_cleanlist_size);
     spin_unlock_irq(&castle_cache_block_lru_lock);
+    write_unlock(&castle_cache_block_hash_lock);
 out:
     return success;
 }
