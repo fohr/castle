@@ -666,12 +666,11 @@ typedef struct castle_value_tuple c_val_tup_t;
     else                                                                      \
         _CVT_COUNTER_INLINE_TO_LOCAL(_local_cvt, _accum_cvt, 0, 1)            \
 }
-/* Should only be used for 'simple' counters. Returns pointer to the
-   counter. */
+/* Returns pointer to the an inlined value (deals with local counters too). */
 #define CVT_INLINE_VAL_PTR(_cvt)                                              \
 ({                                                                            \
     void *_ptr;                                                               \
-    BUG_ON(CVT_ACCUM_COUNTER(_cvt) || !CVT_INLINE(_cvt));                     \
+    BUG_ON(!CVT_INLINE(_cvt));                                                \
     if(CVT_LOCAL_COUNTER(_cvt))                                               \
         _ptr = &(_cvt).counter;                                               \
     else                                                                      \
