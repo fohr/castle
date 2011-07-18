@@ -730,7 +730,8 @@ enum {
     MSTORE_ATTACHMENTS_TAG,
     MSTORE_EXTENTS,
     MSTORE_LARGE_OBJECTS,
-    MSTORE_DA_MERGE,
+    MSTORE_DA_MERGE,                  /* state of merge structure and output tree */
+    MSTORE_DA_MERGE_IN_TREE,          /* state of input trees in a merge, mainly iterator state */
     MSTORE_STATS,
 };
 
@@ -958,11 +959,12 @@ struct castle_clist_entry {
 
 /** DA merge SERDES input tree iter on-disk structure.
  */
-struct castle_intree_merge_state {
+struct castle_in_tree_merge_state_entry {
     /* align:  16 */
     /* offset:  0 */ tree_seq_t                    seq;
     /*          4 */
                      struct {
+                         /* stuff in here is accessed very often - align carefully! */
                          /*   0 */ int32_t         component_completed;
                          /*   4 */ int32_t         component_cached;
                          /*   8 */ int32_t         immut_curr_idx;
@@ -972,9 +974,15 @@ struct castle_intree_merge_state {
                          /*  36 */ c_ext_pos_t     immut_next_c2b_cep;
                          /*  52 */
                      } iter PACKED; /* 52 * 1 = 52 */
-    /*         56 */ uint8_t                       pad[8];
-    /*         64 */
+                     /* at des time, each c_intree_merge_state uses the da_id and level
+                        to find the corresponding merge state */
+    /*         56 */ c_da_t                        da_id;
+    /*         60 */ int32_t                       level;
+    /*         64 */ int32_t                       pos_in_merge_struct; /* cld use seq to infer this? */
+    /*         68 */ uint8_t                       alignment_pad[12];
+    /*         80 */
 } PACKED;
+#define SIZEOF_CASTLE_IN_TREE_MERGE_STATE_ENTRY (80)
 
 /** DA merge SERDES on-disk structure.
  *
@@ -987,7 +995,8 @@ struct castle_dmserlist_entry {
     /*          4 */ int32_t                          level;
     /*          8 */ int8_t                           leafs_on_ssds;
     /*          9 */ int8_t                           internals_on_ssds;
-    /*         10 */ uint8_t                          pad_to_outct[6];
+    /*         10 */ int32_t                          nr_trees;
+    /*         14 */ uint8_t                          pad_to_outct[2];
     /*         16 */
 
     /**************** partially complete output ct: marshalled once per checkpoint ****************/
@@ -1022,12 +1031,10 @@ struct castle_dmserlist_entry {
     /*        976 */ int32_t                          iter_err;
     /*        980 */ int64_t                          iter_non_empty_cnt;
     /*        988 */ uint64_t                         iter_src_items_completed;
-    /*        996 */ uint8_t                          pad_to_pertree_structs[12];
-    /*       1008 */ struct castle_intree_merge_state in_trees[2];
-    /*       1136 */
-
+    /*        996 */ uint8_t                          unused[12];
+    /*       1008 */
 } PACKED;
-#define SIZEOF_CASTLE_DMSERLIST_ENTRY (1136)
+#define SIZEOF_CASTLE_DMSERLIST_ENTRY (1008)
 
 /**
  * Ondisk Serialized structure for castle versions.
@@ -1963,6 +1970,7 @@ struct castle_double_array {
                    dropped by da_dealloc.
                  */
                 struct castle_dmserlist_entry *mstore_entry;
+                struct castle_in_tree_merge_state_entry    *in_tree_mstore_entry_arr;
                 struct mutex     mutex; /* because we might lock while using mstore, spinlock
                                            may be a bad idea. might need a "double buffering"
                                            solution with round robin selection over 2
