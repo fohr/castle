@@ -4158,6 +4158,14 @@ static int castle_rq_enum_iter_node_start(c_iter_t *c_iter)
     c2_block_t *leaf;
     int idx;
 
+    /* If the enumerator is 'in_range' it means that it's walking keys sequentially.
+       Therefore there is no need to binary chop in the btree node. In fact, start_key
+       may be/will likely be NULL. Which will make the binary chop impossible. */
+    if (rq_enum->in_range)
+        return 0;
+    /* If the enumerator is not 'in_range', start_key must be non-NULL. */
+    BUG_ON(rq_enum->start_key == NULL);
+
     leaf = c_iter->path[c_iter->depth];
     BUG_ON(leaf == NULL);
 
@@ -4335,6 +4343,7 @@ static int castle_rq_enum_iter_each(c_iter_t *c_iter,
 
     if (!rq_enum->in_range)
     {
+        BUG_ON(rq_enum->start_key == NULL);
         if (btree->key_compare(rq_enum->start_key, key) <= 0)
             rq_enum->in_range = 1;
         else
@@ -4700,9 +4709,17 @@ void castle_btree_rq_enum_skip(c_rq_enum_t *rq_enum,
             void *buf_key;
 
             btree->entry_get(rq_enum->cons_buf->node, i, &buf_key, NULL, NULL);
+            /* If the key is within the buffer already we are going to advance
+               consumer pointer, but there is no need to change the state of
+               castle_iterator. Consequently, we don't need the start_key.
+               In fact, we want to set it to NULL, so that
+               castle_rq_enum_iter_node_start() can use it to detect whether or
+               not to binary chop in btree nodes. */
             if (btree->key_compare(buf_key, key) >= 0)
             {
+                BUG_ON(!rq_enum->in_range);
                 rq_enum->cons_idx = i;
+                rq_enum->start_key = NULL;
                 return;
             }
         }
