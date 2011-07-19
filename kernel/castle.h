@@ -139,12 +139,61 @@ typedef uint32_t block_t;
  *
  *   60                         Micro Extent (Maps of meta extent)
  *
- *   61 - 63                    Reserved
+ *   61 - 99                    Reserved
  *
- *   64 - 563 (on each disk)    Meta extent (Spans across multiple disks)
- *                              would occupy 1024 logical chunks
- *    0 -  99                   Extent Structures
- *  100 - 1023                  Extent maps
+ *   100                        Freespace to be used by extents (including meta extent and
+ *                              mstore extent)
+ *
+ *   Meta Extent
+ *   ==== ======
+ *
+ *   Keeps the maps for all extents (Maps for this extent would be stored in micro extent).
+ *   Size of this extent depends on MAX number of slaves. We take META_SPACE_SIZE chunks from
+ *   each slave for this extent. Freespace allocation is done just like any other extent, but
+ *   as this extent gets allocated before any other extent it usually gets space at the
+ *   front of freespace(this is not mandatory, no assumptions made on this).
+ *
+ *   Mstore Extents
+ *   ====== =======
+ *
+ *   Keeps the serialised meta data for all entities in the file system(including extent
+ *   structures). From extent manager point of view this is just like any other extent,
+ *   except when serialising the extents, as this extent can't be reserialised into itself.
+ *   We keep 2 extents for mstore to alternate checkpoints. We take MSTORE_SPACE_SIZE chunks
+ *   from each slave to form this extent.
+ *
+ *   Extent dependency flow
+ *   ====== ========== ====
+ *
+ *   Normal extents - BTree extents, Large object extents etc
+ *                             | (depends on Meta extent to store maps)
+ *                             | (depends on Mstore to serialise extent structure)
+ *                             V
+ *                       Mstore extents
+ *                             | (depends on Meta extent to store maps
+ *                             | (depends on Superextents to serialise extent structure)
+ *                             V
+ *                        Meta extent
+ *                             | (depends on Micro extent to store maps)
+ *                             | (depends on Superextents to serialise extent structure)
+ *                             V
+ *                        Micro extent
+ *                             | (Maps are static gets created every time filesystem loads)
+ *                             | (depends on Superextents to serialise extent structure)
+ *                             V
+ *                       Super extents
+ *                             | (Maps are static gets created every time filesystem loads)
+ *                             | (Extent structure is static created when FS loads)
+ *                            ===
+ *                             =
+ *
+ *
+ * So, minimum size of the slave should be
+ *
+ * 100 + (META_SPACE_SIZE * MAX_NR_SLAVES / # of slaves) + (MSTORE_SPACE_SIZE * 2) + (global tree size * 2 / nr of slaves)
+ *
+ * Note: gloabl tree size could be found in castle_global_tree, all other definitions should be
+ * found in castle.h
  */
 
 #define SUP_EXT_ID                     (10)
