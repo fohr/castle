@@ -2857,9 +2857,7 @@ static void castle_back_request_process(struct castle_back_conn *conn, struct ca
             castle_back_key_copy_get(conn, op->req.replace.key_ptr, key_len, &key);
             break;
 
-            //TODO@tr do we really need two CASTLE_RING command enums?
-        case CASTLE_RING_COUNTER_SET_REPLACE:
-        case CASTLE_RING_COUNTER_ADD_REPLACE:
+        case CASTLE_RING_COUNTER_REPLACE:
             val_len = op->req.counter_replace.value_len;
             counter_add_flag = op->req.counter_replace.add;
             if(val_len != sizeof(int64_t))

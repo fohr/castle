@@ -7,7 +7,7 @@
 #include <sys/time.h>
 #endif
 
-#define CASTLE_PROTOCOL_VERSION 13
+#define CASTLE_PROTOCOL_VERSION 14
 
 #define PACKED               __attribute__((packed))
 
@@ -485,8 +485,7 @@ typedef struct castle_var_length_btree_key {
 #define CASTLE_RING_ITER_FINISH 9
 #define CASTLE_RING_ITER_SKIP 10
 #define CASTLE_RING_REMOVE 11
-#define CASTLE_RING_COUNTER_SET_REPLACE 12
-#define CASTLE_RING_COUNTER_ADD_REPLACE 13
+#define CASTLE_RING_COUNTER_REPLACE 12
 
 typedef uint32_t castle_interface_token_t;
 
