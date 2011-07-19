@@ -6031,6 +6031,7 @@ static int castle_da_big_merge_run(void *da_p)
 
         castle_da_need_compaction_clear(da);
         atomic_set(&da->nr_del_versions, 0);
+        atomic_inc(&da->ongoing_merges);
 
         /* Wakeup everyone waiting on merge state update. */
         wake_up(&da->merge_waitq);
@@ -6044,6 +6045,7 @@ static int castle_da_big_merge_run(void *da_p)
         if ((ret = castle_da_merge_do(da, nr_trees, in_trees, BIG_MERGE)))
         {
             castle_printk(LOG_WARN, "Total merge failed with error: %d\n", ret);
+            atomic_dec(&da->ongoing_merges);
 wait_and_try:
             if (nr_trees >= 2)
             {
@@ -6092,6 +6094,7 @@ wait_and_try:
         }
         else
         {
+            atomic_dec(&da->ongoing_merges);
             /* Mark DA as compaction is completed. */
             castle_da_compacting_clear(da);
 
