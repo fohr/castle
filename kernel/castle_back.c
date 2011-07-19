@@ -1258,7 +1258,7 @@ static void castle_back_replace(void *data)
     op->replace.complete = castle_back_replace_complete;
     op->replace.data_length_get = castle_back_replace_data_length_get;
     op->replace.data_copy = castle_back_replace_data_copy;
-    op->replace.counter_type = 0;
+    op->replace.counter_type = CASTLE_OBJECT_NOT_COUNTER;
     op->replace.key = key;      /* Key would be freed by replace_complete. */
 
     err = castle_object_replace(&op->replace, op->attachment, key, op->cpu_index, 0);
@@ -1326,7 +1326,9 @@ static void castle_back_counter_replace(void *data)
     op->replace.complete = castle_back_replace_complete;
     op->replace.data_length_get = castle_back_replace_data_length_get;
     op->replace.data_copy = castle_back_replace_data_copy;
-    op->replace.counter_type = op->req.counter_replace.add+1;
+    op->replace.counter_type = ( (op->req.counter_replace.add == CASTLE_COUNTER_TYPE_SET) ?
+                                    CASTLE_OBJECT_COUNTER_SET :
+                                    CASTLE_OBJECT_COUNTER_ADD);
     op->replace.key = key;      /* Key would be freed by replace_complete. */
 
     err = castle_object_replace(&op->replace, op->attachment, key, op->cpu_index, 0);
@@ -1392,7 +1394,7 @@ static void castle_back_remove(void *data)
     op->replace.complete = castle_back_remove_complete;
     op->replace.data_length_get = NULL;
     op->replace.data_copy = NULL;
-    op->replace.counter_type = 0;
+    op->replace.counter_type = CASTLE_OBJECT_NOT_COUNTER;
     op->replace.key = key;      /* Key would be freed by remove_complete. */
 
     err = castle_object_replace(&op->replace, op->attachment, key, op->cpu_index, 1 /*tombstone*/);
@@ -2383,7 +2385,7 @@ static void castle_back_big_put(void *data)
     stateful_op->replace.key = key;
 
     /* We would never big_put counters. */
-    stateful_op->replace.counter_type = 0;
+    stateful_op->replace.counter_type = CASTLE_OBJECT_NOT_COUNTER;
 
     /* Work structure to run every queued op. Every put_chunk gets queued. */
     INIT_WORK(&stateful_op->work[0], castle_back_put_chunk_continue, stateful_op);
@@ -2826,6 +2828,7 @@ static void castle_back_request_process(struct castle_back_conn *conn, struct ca
     c_vl_bkey_t *key = NULL;
     uint32_t key_len = 0;
     uint64_t val_len = 0;
+    int8_t   counter_add_flag = -1;
 
     debug("Got a request call=%d tag=%d\n", op->req.call_id, op->req.tag);
 
@@ -2858,9 +2861,19 @@ static void castle_back_request_process(struct castle_back_conn *conn, struct ca
         case CASTLE_RING_COUNTER_SET_REPLACE:
         case CASTLE_RING_COUNTER_ADD_REPLACE:
             val_len = op->req.counter_replace.value_len;
+            counter_add_flag = op->req.counter_replace.add;
             if(val_len != sizeof(int64_t))
             {
                 error("Counter value len %lld is invalid; must be 8 bytes.\n", val_len);
+                castle_back_reply(op, -EINVAL, 0, 0);
+                return;
+            }
+            /* Note: the following sanity check has never been tested */
+            if((counter_add_flag != CASTLE_COUNTER_TYPE_SET) &&
+                    (counter_add_flag != CASTLE_COUNTER_TYPE_ADD))
+            {
+                error("Counter op flag (add) must be either 0 (SET) or 1 (ADD); value %d not recognized.\n",
+                        counter_add_flag);
                 castle_back_reply(op, -EINVAL, 0, 0);
                 return;
             }

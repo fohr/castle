@@ -987,7 +987,7 @@ static int castle_object_replace_space_reserve(struct castle_object_replace *rep
         void *value;
         int counter;
 
-        counter = (replace->counter_type > 0);
+        counter = (replace->counter_type != CASTLE_OBJECT_NOT_COUNTER);
         BUG_ON(counter && (value_len != 8));
         /* Allocate memory. 16 bytes for accumulating counter. */
         value = castle_malloc(counter ? 16 : value_len, GFP_KERNEL);
@@ -995,11 +995,11 @@ static int castle_object_replace_space_reserve(struct castle_object_replace *rep
             return -ENOMEM;
 
         /* Construct the cvt. */
-        if(unlikely(replace->counter_type == 1))
+        if(unlikely(replace->counter_type == CASTLE_OBJECT_COUNTER_SET))
         {
             CVT_COUNTER_ACCUM_SET_SET_INIT(replace->cvt, 16, value);
         }
-        else if(replace->counter_type == 2)
+        else if(replace->counter_type == CASTLE_OBJECT_COUNTER_ADD)
         {
             CVT_COUNTER_ACCUM_ADD_ADD_INIT(replace->cvt, 16, value);
         }
@@ -1016,7 +1016,7 @@ static int castle_object_replace_space_reserve(struct castle_object_replace *rep
         return 0;
     }
 
-    BUG_ON(replace->counter_type > 0); /* counters must be inline */
+    BUG_ON(replace->counter_type != CASTLE_OBJECT_NOT_COUNTER); /* counters must be inline */
 
     /* Out of line objects. */
     nr_blocks = (value_len - 1) / C_BLK_SIZE + 1;

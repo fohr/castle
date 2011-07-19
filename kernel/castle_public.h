@@ -498,13 +498,19 @@ typedef struct castle_request_replace {
     uint32_t              value_len;
 } castle_request_replace_t;
 
+enum{
+    CASTLE_COUNTER_TYPE_SET=0,
+    CASTLE_COUNTER_TYPE_ADD,
+};
+
 typedef struct castle_request_counter_replace {
     c_collection_id_t     collection_id;
     c_vl_bkey_t          *key_ptr;
     uint32_t              key_len;
     void                 *value_ptr;
     uint32_t              value_len;
-    uint8_t               add; /* flag to indicate SET op (add==0), and ADD op (add==1) */
+    uint8_t               add; /* flag to indicate counter op type;
+                                  CASTLE_COUNTER_TYPE_{SET|ADD} */
 } castle_request_counter_replace_t;
 
 typedef struct castle_request_remove {
