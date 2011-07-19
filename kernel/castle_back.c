@@ -47,7 +47,7 @@ DEFINE_RING_TYPES(castle, castle_request_t, castle_response_t);
 
 struct workqueue_struct        *castle_back_wq;
 static wait_queue_head_t        conn_close_wait;
-atomic_t                        conn_count;         /**< Number of active castle_back_conns     */
+atomic_t                        castle_back_conn_count; /**< Number of active castle_back_conns */
 spinlock_t                      conns_lock;         /**< Protects castle_back_conns list        */
 static                LIST_HEAD(castle_back_conns); /**< List of all active castle_back_conns   */
 
@@ -3168,7 +3168,7 @@ int castle_back_open(struct inode *inode, struct file *file)
     conn->restart_timer = 1;
     castle_back_start_stateful_op_timeout_check_timer(conn);
 
-    atomic_inc(&conn_count);
+    atomic_inc(&castle_back_conn_count);
     spin_lock(&conns_lock);
     list_add_tail(&conn->list, &castle_back_conns);
     spin_unlock(&conns_lock);
@@ -3227,7 +3227,7 @@ static void castle_back_cleanup_conn(struct castle_back_conn *conn)
     spin_lock(&conns_lock);
     list_del(&conn->list);
     spin_unlock(&conns_lock);
-    atomic_dec(&conn_count);
+    atomic_dec(&castle_back_conn_count);
 
     /* _buffer_put() cleans up buffers and they should now all have been freed
      * as conn->ref_count has reached 0. */
@@ -3481,7 +3481,7 @@ int castle_back_init(void)
 
     init_waitqueue_head(&conn_close_wait);
     spin_lock_init(&conns_lock);
-    atomic_set(&conn_count, 0);
+    atomic_set(&castle_back_conn_count, 0);
 
     debug("done!\n");
 
@@ -3497,8 +3497,8 @@ void castle_back_fini(void)
     debug("castle_back exiting...");
 
     /* wait for all connections to be closed */
-    debug("castle_back_fini, connection count = %u.\n", atomic_read(&conn_count));
-    wait_event(conn_close_wait, (atomic_read(&conn_count) == 0));
+    debug("castle_back_fini, connection count = %u.\n", atomic_read(&castle_back_conn_count));
+    wait_event(conn_close_wait, (atomic_read(&castle_back_conn_count) == 0));
 
     BUG_ON(!list_empty(&castle_back_conns));
 

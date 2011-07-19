@@ -2098,6 +2098,8 @@ void castle_attachment_put(struct castle_attachment *ca)
         castle_double_array_put(da_id);
         castle_printk(LOG_USERINFO, "Attachment %u is completely removed\n", ca_id);
 
+        set_bit(CASTLE_ATTACH_DEAD, &ca->col.flags);
+
         wake_up(&castle_detach_waitq);
     }
 }
@@ -2116,7 +2118,9 @@ void castle_attachment_free(struct castle_attachment *ca)
 void castle_attachment_free_complete(struct castle_attachment *ca)
 {
     /* Wait for the attachment to get freed. */
-    wait_event(castle_detach_waitq, (ca->ref_cnt == 0));
+    wait_event(castle_detach_waitq, test_bit(CASTLE_ATTACH_DEAD, &ca->col.flags));
+
+    BUG_ON(ca->ref_cnt != 0);
 
     /* Free collection. */
     castle_kfree(ca->col.name);
