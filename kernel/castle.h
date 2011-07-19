@@ -1609,6 +1609,8 @@ extern struct workqueue_struct *castle_wqs[2*MAX_BTREE_DEPTH+1];
 //#define disk_blk_to_offset(_cdb)     ((_cdb).block * C_BLK_SIZE)
 
 #define CASTLE_ATTACH_RDONLY           (0)
+#define CASTLE_ATTACH_DEAD             (1)  /* Set, when attachment resources are good to be
+                                               freed. */
 
 struct castle_attachment*
                       castle_device_init           (c_ver_t version);
