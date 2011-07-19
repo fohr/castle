@@ -104,8 +104,9 @@ do
       echo "Bad sector detected at LBA $lba. Attempting to scrub it"
       if ! [ "$killed_boot" = "yes" ]; then
           echo "Killing boot sector and partition table just to be sure nobody tries to reuse this drive"
-          dd if=/dev/zero of="$device" bs=512 count=64 status=noxfer >/dev/null
-          blockdev --rereadpt "$device"
+          # If we can't write or read the partition table, don't worry - nobody's using it
+          dd if=/dev/zero of="$device" bs=512 count=64 status=noxfer >/dev/null || true
+          blockdev --rereadpt "$device" || true
           killed_boot=yes
       fi
       ll_zero_sector "$lba"

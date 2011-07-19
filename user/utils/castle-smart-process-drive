@@ -22,18 +22,25 @@ if [ -e /sys/fs/castle-fs ]; then
     done
 fi
 
+have_parts=no
 for part in /sys/block/$devname/${devname}[0-9]*; do
-  partname=$(basename "$part")
-  for holder in $part/holders/*; do
-    holdername=$(basename "$holder")
-    case "$holdername" in
-        md*)
-        echo "Removing $partname from $holdername"
-        mdadm "/dev/$holdername" --fail "/dev/$partname"
-        mdadm "/dev/$holdername" --remove "/dev/$partname"
-        ;;
-    esac
-  done
+    if [ -d "$part" ]; then
+        have_parts=yes
+    else
+        continue
+    fi
+
+    partname=$(basename "$part")
+    for holder in $part/holders/* ; do
+        holdername=$(basename "$holder")
+        case "$holdername" in
+            md*)
+            echo "Removing $partname from $holdername"
+            mdadm "/dev/$holdername" --fail "/dev/$partname"
+            mdadm "/dev/$holdername" --remove "/dev/$partname"
+            ;;
+        esac
+    done
 done
 
 if [ -n "$uuid" ]
@@ -48,10 +55,12 @@ then
     done
 fi
 
-blockdev --rmparts "$device"
+if [ "$have_parts" = "yes" ]; then
+    blockdev --rmparts "$device"
+fi
 
 # Make sure those don't come back yet
-dd if=/dev/zero of="$device" bs=512 count=64 status=noxfer >/dev/null
+dd if=/dev/zero of="$device" bs=512 count=64 status=noxfer >/dev/null || true
 
 castle-smart-spank-drive "$device"
 
