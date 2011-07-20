@@ -784,7 +784,8 @@ static void castle_back_stateful_op_finish_all(struct castle_back_stateful_op *s
     list_for_each_safe(pos, tmp, &stateful_op->op_queue) {
         op = list_entry(pos, struct castle_back_op, list);
         list_del(pos);
-        castle_back_buffer_put(op->conn, op->buf);
+        if (op->buf)
+            castle_back_buffer_put(op->conn, op->buf);
         /* even though we have the lock, this is safe since conn reference count cannot be
          * decremented to 0 since the stateful_op has a count */
         castle_back_reply(op, err, 0, 0);
@@ -3008,6 +3009,7 @@ static int castle_back_work_do(void *data)
             list_del(&op->list);
             spin_unlock(&conn->response_lock);
 
+            op->buf = NULL;
             memcpy(&op->req, RING_GET_REQUEST(back_ring, cons), sizeof(castle_request_t));
 
             back_ring->req_cons++;
