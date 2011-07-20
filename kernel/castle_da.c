@@ -5829,11 +5829,14 @@ void castle_da_version_delete(c_da_t da_id)
 
     atomic_inc(&(da->nr_del_versions));
 
+    /* Compaction after each version delete is disabled. It leads to inefficient merges. */
+#if 0
     /* Mark DA for compaction. */
     castle_da_need_compaction_set(da);
 
     /* Wakeup compaction thread. */
     wake_up(&da->merge_waitq);
+#endif
 }
 
 /**
