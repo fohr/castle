@@ -2548,7 +2548,7 @@ static void castle_btree_read_process(c_bvec_t *c_bvec)
     /* If we haven't found the LUB (in the leaf node), return early */
     if(lub_idx < 0)
     {
-        castle_printk(LOG_INFO, "Could not find the LUB for (k,v)=(%p, 0x%x)\n", key, version);
+        castle_printk(LOG_DEBUG, "Could not find the LUB for (k,v)=(%p, 0x%x)\n", key, version);
         castle_btree_io_end(c_bvec, INVAL_VAL_TUP, 0);
         return;
     }

@@ -11,6 +11,7 @@
 #include <linux/rbtree.h>
 #include <linux/list.h>
 #include <linux/vmalloc.h>
+#include <linux/delay.h>
 #include <asm/pgtable.h>
 
 #include "castle_public.h"
@@ -550,6 +551,13 @@ static void castle_back_put_stateful_op(struct castle_back_conn *conn,
 
     stateful_op->in_use = 0;
     spin_unlock(&stateful_op->lock);
+
+    /* If the expire_work work struct for this stateful op has already been queued,
+       wait for it to(start getting) processed. Otherwise, there is nothing that stops this
+       stateful op being reallocated. This overwrites expire_work, and corrupts the
+       list of work items on a workqueue in the process. */
+    while(test_bit(0, &stateful_op->expire_work.pending))
+        msleep(1);
 
     /* Put stateful_op back on freelist, safe to do this without the lock
      * since nothing else will modify this stateful_op with in_use = 0
