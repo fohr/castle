@@ -3180,18 +3180,18 @@ static inline void castle_da_merge_node_info_get(struct castle_da_merge *merge,
  * @param is_re_add [in] are we trying to re-add the entry to output tree?
  *                       (possible when we are trying to move entries from one node to
  *                       another node while completing the former node.)
+ * @return c_val_tup_t*  If a new node is created, return a cvt specifying how to link this node
+                         to a higher level node.
  * Note: if is_re_add flag is set, then the data wont be processed again, just
  * the key gets added.  Used when entry is being moved from one node to another
  * node.
- * Note2: this used to be an inline func, but partial merges requires orphan node preadoption which
- *        is currently implemented with recursion.
  */
-static /*inline*/ void castle_da_entry_add(struct castle_da_merge *merge,
-                                       int depth,
-                                       void *key,
-                                       c_ver_t version,
-                                       c_val_tup_t cvt,
-                                       int is_re_add)
+static inline c_val_tup_t* _castle_da_entry_add(struct castle_da_merge *merge,
+                                                int depth,
+                                                void *key,
+                                                c_ver_t version,
+                                                c_val_tup_t cvt,
+                                                int is_re_add)
 {
     struct castle_da_merge_level *level = merge->levels + depth;
     struct castle_btree_type *btree = merge->out_btree;
@@ -3200,6 +3200,7 @@ static /*inline*/ void castle_da_entry_add(struct castle_da_merge *merge,
 #ifdef CASTLE_PERF_DEBUG
     struct timespec ts_start, ts_end;
 #endif
+    c_val_tup_t* preadoption_cvt = NULL;
 
     /* Deal with medium and large objects first. For medium objects, we need to copy them
        into our new medium object extent. For large objects, we need to save the aggregate
@@ -3277,19 +3278,13 @@ static /*inline*/ void castle_da_entry_add(struct castle_da_merge *merge,
         debug("%s::Allocating a new node at depth: %d for merge %p (da %d level %d)\n",
             __FUNCTION__, depth, merge, merge->da->id, merge->level);
 
-        /* if a parent node exists, perform preadoption (i.e. link this node to parent using
-           max_key) so there are never orphan nodes */
+        /* if a parent node exists, return preadoption cvt for caller to perform preadoption */
         if(depth < merge->root_depth)
         {
-            c_val_tup_t preadoption_cvt;
-            CVT_NODE_INIT(preadoption_cvt, (level->node_c2b->nr_pages * C_BLK_SIZE), level->node_c2b->cep);
-
-            /* ZOMG RECURSION!!1!@~!! if this turns out to be a problem, convert this recursion to
-               iteration by making this function return a flag when a new node is created, which
-               would signal to the caller that it should call this function again with the
-               appropriate parameters in order preadopt the new (orphan) node */
-            castle_da_entry_add(merge, depth+1, btree->max_key, version, preadoption_cvt, 0);
-            debug("%s::preadopting node with max_key %p.\n", __FUNCTION__, btree->max_key);
+            preadoption_cvt = castle_zalloc(sizeof(c_val_tup_t), GFP_KERNEL); /* free'd by caller */
+            CVT_NODE_INIT(*preadoption_cvt,
+                          level->node_c2b->nr_pages * C_BLK_SIZE,
+                          level->node_c2b->cep);
         }
     }
     else if (depth > 0)
@@ -3383,6 +3378,39 @@ static /*inline*/ void castle_da_entry_add(struct castle_da_merge *merge,
         merge->last_key = level->last_key;
         BUG_ON(merge->last_key == NULL);
     }
+    return preadoption_cvt;
+}
+
+/* wrapper around the real castle_da_entry_add that performs orphan node preadoption iteratively */
+static inline void castle_da_entry_add(struct castle_da_merge *merge,
+                                       int depth,
+                                       void *key,
+                                       c_ver_t version,
+                                       c_val_tup_t cvt,
+                                       int is_re_add)
+{
+    c_val_tup_t* preadoption_cvt = NULL;
+    int initial_root_depth = merge->root_depth;
+
+    do{
+        preadoption_cvt = _castle_da_entry_add(merge, depth, key, version, cvt, is_re_add);
+        if(!preadoption_cvt) return; /* no new node created */
+
+        /*  if _castle_da_entry_add returned non-NULL, then a new node was created */
+        memcpy(&cvt, preadoption_cvt, sizeof(c_val_tup_t)); //TODO@tr get rid of this memcpy
+        castle_kfree(preadoption_cvt); /* malloc'd by _castle_da_entry_add */
+        preadoption_cvt = NULL;
+
+        key = merge->out_btree->max_key;
+        is_re_add = 0;
+        depth++;
+
+        /* at most this loop can add 1 level */
+        BUG_ON(depth > initial_root_depth+1);
+        BUG_ON(merge->root_depth > initial_root_depth+1);
+        debug("%s::preadopting new orphan node for merge on da %d level %d.\n",
+                __FUNCTION__, merge->da->id, merge->level);
+    } while(true); /* rely on the return value from _castle_da_entry_add to break */
 }
 
 static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
