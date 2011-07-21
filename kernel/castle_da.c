@@ -3183,8 +3183,10 @@ static inline void castle_da_merge_node_info_get(struct castle_da_merge *merge,
  * Note: if is_re_add flag is set, then the data wont be processed again, just
  * the key gets added.  Used when entry is being moved from one node to another
  * node.
+ * Note2: this used to be an inline func, but partial merges requires orphan node preadoption which
+ *        is currently implemented with recursion.
  */
-static inline void castle_da_entry_add(struct castle_da_merge *merge,
+static /*inline*/ void castle_da_entry_add(struct castle_da_merge *merge,
                                        int depth,
                                        void *key,
                                        c_ver_t version,
@@ -3246,7 +3248,7 @@ static inline void castle_da_entry_add(struct castle_da_merge *merge,
         castle_da_merge_node_info_get(merge, depth, &node_size, &ext_free);
         if(merge->root_depth < depth)
         {
-            debug("Creating a new root level: %d\n", depth);
+            debug("%s::Creating a new root level: %d\n", __FUNCTION__, depth);
             BUG_ON(merge->root_depth != depth - 1);
             merge->root_depth = depth;
             merge->out_tree->node_sizes[depth] = node_size;
@@ -3274,6 +3276,21 @@ static inline void castle_da_entry_add(struct castle_da_merge *merge,
         castle_da_node_buffer_init(btree, node, node_size);
         debug("%s::Allocating a new node at depth: %d for merge %p (da %d level %d)\n",
             __FUNCTION__, depth, merge, merge->da->id, merge->level);
+
+        /* if a parent node exists, perform preadoption (i.e. link this node to parent using
+           max_key) so there are never orphan nodes */
+        if(depth < merge->root_depth)
+        {
+            c_val_tup_t preadoption_cvt;
+            CVT_NODE_INIT(preadoption_cvt, (level->node_c2b->nr_pages * C_BLK_SIZE), level->node_c2b->cep);
+
+            /* ZOMG RECURSION!!1!@~!! if this turns out to be a problem, convert this recursion to
+               iteration by making this function return a flag when a new node is created, which
+               would signal to the caller that it should call this function again with the
+               appropriate parameters in order preadopt the new (orphan) node */
+            castle_da_entry_add(merge, depth+1, btree->max_key, version, preadoption_cvt, 0);
+            debug("%s::preadopting node with max_key %p.\n", __FUNCTION__, btree->max_key);
+        }
     }
     else if (depth > 0)
             write_lock_c2b(level->node_c2b);
@@ -3417,7 +3434,30 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
     if(!(merge->completing && (merge->root_depth == depth)))
     {
         CVT_NODE_INIT(node_cvt, (node_c2b->nr_pages * C_BLK_SIZE), node_c2b->cep);
-        castle_da_entry_add(merge, depth+1, key, node->version, node_cvt, 0);
+        if (depth < merge->root_depth)
+        {
+            /* this is not the top level, so there must be a higher level which contains a
+               preadoption link that must be replaced with a "real" link. */
+            struct castle_da_merge_level *parent_level = merge->levels + depth + 1;
+            c2_block_t *parent_node_c2b                = parent_level->node_c2b;
+            struct castle_btree_node *parent_node      = c2b_bnode(parent_node_c2b);
+
+            write_lock_c2b(parent_node_c2b);
+            parent_node      = c2b_bnode(parent_node_c2b);
+
+            debug("%s::replacing preadoption link with real link.\n",
+                    __FUNCTION__);
+
+            btree->entry_replace(parent_node, parent_node->used - 1, key, node->version, node_cvt);
+            write_unlock_c2b(parent_node_c2b);
+        }
+        else
+        {
+            debug("%s::linking completed node to parent.\n", __FUNCTION__);
+            /* add a "real" link */
+            castle_da_entry_add(merge, depth+1, key, node->version, node_cvt, 0);
+        }
+
     }
 
 
@@ -3432,8 +3472,8 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
        the corresponding buffer */
     node_idx = valid_end_idx + 1;
     BUG_ON(node_idx <= 0 || node_idx > node->used);
-    debug("Entries to be copied to the buffer are in range [%d, %d)\n",
-            node_idx, node->used);
+    debug("%s::Entries to be copied to the buffer are in range [%d, %d)\n",
+            __FUNCTION__, node_idx, node->used);
     while(node_idx < node->used)
     {
         /* If merge is completing, there shouldn't be any splits any more. */
@@ -4685,7 +4725,7 @@ static struct castle_da_merge* castle_da_merge_init(struct castle_double_array *
     struct castle_da_merge *merge = NULL;
     int i, ret;
 
-    castle_printk(LOG_DEVEL, "%s::Merging ct=%d (dynamic=%d) with ct=%d (dynamic=%d)\n",
+    debug("%s::Merging ct=%d (dynamic=%d) with ct=%d (dynamic=%d)\n",
             __FUNCTION__,
             in_trees[0]->seq, in_trees[0]->dynamic, in_trees[1]->seq, in_trees[1]->dynamic);
 
