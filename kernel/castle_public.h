@@ -7,7 +7,7 @@
 #include <sys/time.h>
 #endif
 
-#define CASTLE_PROTOCOL_VERSION 14
+#define CASTLE_PROTOCOL_VERSION 15
 
 #define PACKED               __attribute__((packed))
 
@@ -170,6 +170,7 @@ typedef uint32_t c_da_t;
 #define CASTLE_CTRL_SLAVE_SCAN               30
 #define CASTLE_CTRL_DELETE_VERSION           31
 #define CASTLE_CTRL_VERTREE_COMPACT          32
+#define CASTLE_CTRL_COLLECTION_REATTACH      33
 
 typedef struct castle_control_cmd_claim {
     uint32_t       dev;          /* IN  */
@@ -206,6 +207,12 @@ typedef struct castle_control_cmd_collection_attach {
     int                ret;             /* OUT */
     c_collection_id_t  collection;      /* OUT */
 } cctrl_cmd_collection_attach_t;
+
+typedef struct castle_control_cmd_collection_reattach {
+    c_collection_id_t  collection;      /* IN */
+    c_ver_t            new_version;     /* IN  */
+    int                ret;             /* OUT */
+} cctrl_cmd_collection_reattach_t;
 
 typedef struct castle_control_cmd_collection_detach {
     c_collection_id_t collection;       /* IN  */
@@ -325,6 +332,7 @@ typedef struct castle_control_ioctl {
         cctrl_cmd_snapshot_t            snapshot;
 
         cctrl_cmd_collection_attach_t   collection_attach;
+        cctrl_cmd_collection_reattach_t collection_reattach;
         cctrl_cmd_collection_detach_t   collection_detach;
         cctrl_cmd_collection_snapshot_t collection_snapshot;
 

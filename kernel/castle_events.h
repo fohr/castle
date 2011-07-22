@@ -33,6 +33,9 @@ void castle_events_slave_rebuild_notify(void);
 #define castle_events_collection_attach(_id, _version_id) \
     castle_uevent3(CASTLE_CTRL_COLLECTION_ATTACH, CASTLE_EVENTS_SUCCESS, _id, _version_id)
 
+#define castle_events_collection_reattach(_id, _version_id) \
+    castle_uevent3(CASTLE_CTRL_COLLECTION_REATTACH, CASTLE_EVENTS_SUCCESS, _id, _version_id)
+
 #define castle_events_collection_detach(_id) \
     castle_uevent2(CASTLE_CTRL_COLLECTION_DETACH, CASTLE_EVENTS_SUCCESS, _id)
 

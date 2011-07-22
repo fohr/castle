@@ -393,6 +393,96 @@ void castle_control_collection_attach(c_ver_t            version,
     *ret = 0;
 }
 
+void castle_control_collection_reattach(c_collection_id_t  collection,
+                                        c_ver_t            new_version,
+                                        int               *ret)
+{
+    struct castle_attachment *ca;
+    c_da_t new_da_id, old_da_id;
+    c_ver_t old_version;
+    int err;
+
+    /* Checks on new_version. It must exist and it mustn't be deleted. */
+    if((err = castle_version_deleted(new_version)))
+    {
+        /* -EINVAL means that version doesn't exist. */
+        if(err == -EINVAL)
+            castle_printk(LOG_WARN,
+                          "Version %d doesn't exist. Collection %d cannot be re-attached\n",
+                          new_version, collection);
+        else
+            castle_printk(LOG_WARN,
+                          "Version %d is already marked for deletion. "
+                          "Collection %d cannot be re-attached\n",
+                          new_version, collection);
+        *ret = -EINVAL;
+        return;
+    }
+
+    /* It mustn't be attached. */
+    if(castle_version_attached(new_version))
+    {
+        castle_printk(LOG_WARN,
+                      "Version %d is already attached. Collection %d cannot be re-attached\n",
+                      new_version, collection);
+        *ret = -EEXIST;
+        return;
+    }
+
+    /* Next, try to get the attachment. */
+    ca = castle_attachment_get(collection, READ);
+    if(!ca)
+    {
+        castle_printk(LOG_WARN,
+                      "Collection %d cannot be re-attached, it cannot be found.\n",
+                      collection);
+        *ret = -ENODEV;
+        return;
+    }
+    old_version = ca->version;
+    /* Current version must be attached. */
+    BUG_ON(castle_version_attached(old_version));
+
+    /* Check whether DA associated with the new_version matches the old version's DA. */
+    BUG_ON(castle_version_read(new_version, &new_da_id, NULL, NULL, NULL, NULL));
+    BUG_ON(castle_version_read(old_version, &old_da_id, NULL, NULL, NULL, NULL));
+    if(new_da_id != old_da_id)
+    {
+        castle_printk(LOG_WARN,
+                      "Version %d and %d are not from the same doubling array (%d, %d)."
+                      "Collection %d cannot be re-attached\n",
+                      new_version, old_version, new_da_id, old_da_id, collection);
+        castle_attachment_put(ca);
+        *ret = -EBADE;
+        return;
+    }
+
+    /* We are past the point of no-return. Version will be changed. Attach it.
+       This should never fail, since we checked whether version is attached earlier on,
+       and we are doing everything under control lock. */
+    BUG_ON(castle_version_attach(new_version));
+
+    /* Get lock on the collection, we are going to be changing the version. */
+    down_write(&ca->lock);
+    ca->version = new_version;
+    /* Set read-only bit if the version is not leaf. */
+    if (!castle_version_is_leaf(new_version))
+        __set_bit(CASTLE_ATTACH_RDONLY, &ca->col.flags);
+    up_write(&ca->lock);
+
+    /* Detach the old version. */
+    castle_version_detach(old_version);
+
+    /* Send an event to userspace. */
+    castle_events_collection_reattach(ca->col.id, new_version);
+
+    /* Put the temparary attachment reference. */
+    castle_attachment_put(ca);
+
+    *ret = 0;
+}
+
+
 void castle_control_collection_detach(c_collection_id_t  collection,
                                       int               *ret)
 {
@@ -890,6 +980,11 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
                                             &ioctl.collection_attach.collection);
             break;
         }
+        case CASTLE_CTRL_COLLECTION_REATTACH:
+            castle_control_collection_reattach(ioctl.collection_reattach.collection,
+                                               ioctl.collection_reattach.new_version,
+                                              &ioctl.collection_reattach.ret);
+            break;
         case CASTLE_CTRL_COLLECTION_DETACH:
             castle_control_collection_detach(ioctl.collection_detach.collection,
                                   &ioctl.collection_detach.ret);
