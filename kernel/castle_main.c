@@ -2144,7 +2144,10 @@ struct castle_attachment* castle_attachment_init(int device, /* _or_object_colle
 
     attachment = castle_malloc(sizeof(struct castle_attachment), GFP_KERNEL);
     if(!attachment)
+    {
+        castle_version_detach(version);
         return NULL;
+    }
     init_rwsem(&attachment->lock);
     attachment->ref_cnt = 1; /* Use double put on detach */
     attachment->device  = device;
@@ -2264,9 +2267,8 @@ struct castle_attachment* castle_collection_init(c_ver_t version, uint32_t flags
     if(DA_INVAL(da_id))
     {
         castle_printk(LOG_WARN,
-                "Could not attach collection: %s, version: %d, because no DA found.\n",
-                name, version);
-        castle_version_detach(version);
+                      "Could not attach collection: %s, version: %d, because no DA found.\n",
+                      name, version);
         goto error_out;
     }
     if (castle_double_array_get(da_id) < 0)
@@ -2295,7 +2297,11 @@ struct castle_attachment* castle_collection_init(c_ver_t version, uint32_t flags
 
 error_out:
     castle_kfree(name);
-    if(collection) castle_kfree(collection);
+    if(collection)
+    {
+        castle_version_detach(version);
+        castle_kfree(collection);
+    }
     if(da_get) castle_double_array_put(da_id);
     castle_printk(LOG_USERINFO, "Failed to init collection.\n");
     return NULL;
