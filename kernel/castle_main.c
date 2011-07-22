@@ -302,7 +302,7 @@ void castle_ext_freespace_fini(c_ext_free_t *ext_free)
 {
     if(EXT_ID_INVAL(ext_free->ext_id))
         return;
-    castle_extent_free(ext_free->ext_id);
+    castle_extent_unlink(ext_free->ext_id);
     ext_free->ext_id      = INVAL_EXT_ID;
     ext_free->ext_size    = 0;
     atomic64_set(&ext_free->used, 0);

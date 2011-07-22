@@ -6010,13 +6010,14 @@ int castle_cache_extent_flush_schedule(c_ext_id_t ext_id, uint64_t start,
 {
     struct castle_cache_flush_entry *entry;
 
-    if (!castle_extent_get(ext_id))
+    /* Take a hard reference on extent, to make sure extent wouldn't disappear during flush. */
+    if (castle_extent_link(ext_id))
         return -1;
 
     entry = castle_malloc(sizeof(struct castle_cache_flush_entry), GFP_KERNEL);
     if (!entry)
     {
-        castle_extent_put(ext_id);
+        castle_extent_unlink(ext_id);
         return -1;
     }
 
@@ -6047,7 +6048,7 @@ void castle_cache_extents_flush(struct list_head *flush_list, unsigned int ratel
     {
         entry = list_entry(lh, struct castle_cache_flush_entry, list);
         castle_cache_extent_flush(entry->ext_id, entry->start, entry->count, ratelimit);
-        castle_extent_put(entry->ext_id);
+        castle_extent_unlink(entry->ext_id);
 
         list_del(lh);
         castle_kfree(entry);

@@ -387,7 +387,7 @@ void castle_bloom_destroy(castle_bloom_t *bf)
 
     castle_cache_advise_clear((c_ext_pos_t){bf->ext_id, 0}, C2_ADV_EXTENT|C2_ADV_SOFTPIN, -1,-1,0);
 
-    castle_extent_free(bf->ext_id);
+    castle_extent_unlink(bf->ext_id);
 }
 
 /**
