@@ -243,6 +243,8 @@ static inline int castle_cache_c2b_to_pages(c2_block_t *c2b)
     c2b_for_each_c2p_end(_c2p, __cep, _c2b)                              \
 }
 
+int                   castle_last_checkpoint_ongoing = 0;
+
 /**********************************************************************************************
  * Static variables.
  */
@@ -6208,7 +6210,10 @@ static int castle_periodic_checkpoint(void *unused)
             if (!kthread_should_stop())
                 msleep_interruptible(1000);
             else
+            {
                 exit_loop = 1;
+                castle_last_checkpoint_ongoing = 1;
+            }
         }
 
         if (!castle_fs_inited)

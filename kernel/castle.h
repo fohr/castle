@@ -2172,4 +2172,6 @@ typedef struct castle_version_stats_adjust {
 extern int castle_nice_value;
 
 extern int castle_checkpoint_period;
+
+extern int castle_last_checkpoint_ongoing;
 #endif /* __CASTLE_H__ */

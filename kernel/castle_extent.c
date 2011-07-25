@@ -85,8 +85,6 @@ c_chk_cnt_t meta_ext_size = 0;
 struct castle_extents_superblock castle_extents_global_sb;
 static DEFINE_MUTEX(castle_extents_mutex);
 
-static int castle_extents_exiting = 0;
-
 static struct kmem_cache *castle_extents_work_cache  = NULL;
 
 typedef struct castle_extent {
@@ -635,7 +633,7 @@ static int castle_extent_writeback(c_ext_t *ext, void *store)
     c_mstore_t *castle_extents_mstore = store;
 
     /* Shouldnt be any outstanding deletions before last checkpoint. */
-    BUG_ON(castle_extents_exiting && (atomic_read(&ext->link_cnt) == 0));
+    BUG_ON(castle_last_checkpoint_ongoing && (atomic_read(&ext->link_cnt) == 0));
 
     if (LOGICAL_EXTENT(ext->ext_id))
         return 0;
@@ -664,7 +662,7 @@ int castle_extents_writeback(void)
 
     /* Don't exit with out-standing dead extents. They are scheduled to get freed on
      * system work queue. */
-    if (castle_extents_exiting)
+    if (castle_last_checkpoint_ongoing)
         while (atomic_read(&castle_extents_dead_count))
             msleep_interruptible(1000);
 
@@ -1492,7 +1490,7 @@ void castle_extent_lfs_victims_wakeup(void)
 
         /* No need to call handlers in case module is exiting. No point of creating more extents
          * for components just before they die. */
-        if (!castle_extents_exiting)
+        if (!castle_last_checkpoint_ongoing)
             ret = hdl->callback(hdl->data);
 
          /* Handled low free space successfully. Get rid of event handler. */
@@ -2088,9 +2086,9 @@ int castle_extent_unlink(c_ext_id_t ext_id)
     /* Reduce the link count and check if this is the last link. */
     if (atomic_dec_return(&ext->link_cnt) == 0)
     {
-        /* All merges and request would have completed before setting castle_extents_exiting.
+        /* All merges and request would have completed before setting castle_last_checkpoint_ongoing.
          * There shouldn't be any free()/unlink() after that. */
-        BUG_ON(castle_extents_exiting);
+        BUG_ON(castle_last_checkpoint_ongoing);
 
         /* Increment the count of scheduled extents for deletion. Last checkpoint, conseqeuntly,
          * castle_exit waits for all outstanding dead extents to get destroyed. */
@@ -3298,7 +3296,6 @@ int castle_extents_rebuild_init(void)
 void castle_extents_rebuild_fini(void)
 {
     kthread_stop(rebuild_thread);
-    castle_extents_exiting = 1;
 }
 
 /*
