@@ -75,6 +75,9 @@ int                             castle_merges_checkpoint = 1; /* 0 or 1, default
 module_param(castle_merges_checkpoint, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
 MODULE_PARM_DESC(castle_merges_checkpoint, "Checkpoint on-going merges");
 
+/* We don't need to set upper/lower bounds for the promition frequency as values
+ * < 2 will all results in RWCTs being promoted every checkpoint, while very
+ * large values will result in RWCTs 'never' being promoted. */
 int                             castle_rwct_checkpoint_frequency = 10;  /**< Number of checkpoints
                                                                              before RWCTs are
                                                                              promoted to level 1. */
