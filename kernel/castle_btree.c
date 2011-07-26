@@ -4122,14 +4122,14 @@ struct castle_iterator_type castle_btree_enum = {
     .skip     = NULL,
 };
 
-static struct node_buf_t* node_buf_alloc(c_rq_enum_t *rq_enum)
+static struct node_buf_t* node_buf_alloc(c_rq_iter_t *rq_iter)
 {
     struct node_buf_t *node_buf;
     struct castle_btree_type *btype;
     struct castle_component_tree *ct;
     uint16_t leaf_node_size;
 
-    ct = rq_enum->tree;
+    ct = rq_iter->tree;
     btype = castle_btree_type_get(ct->btree_type);
     leaf_node_size = btype->node_size(ct, 0);
     node_buf = castle_malloc(sizeof(struct node_buf_t), GFP_KERNEL);
@@ -4138,8 +4138,8 @@ static struct node_buf_t* node_buf_alloc(c_rq_enum_t *rq_enum)
         leaf_node_size = MAX_KMALLOC_SIZE / C_BLK_SIZE;
     node_buf->node = castle_alloc(leaf_node_size * C_BLK_SIZE);
     BUG_ON(!node_buf->node);
-    castle_btree_node_buffer_init(rq_enum->tree, node_buf->node, leaf_node_size);
-    rq_enum->buf_count++;
+    castle_btree_node_buffer_init(rq_iter->tree, node_buf->node, leaf_node_size);
+    rq_iter->buf_count++;
 
     return node_buf;
 }
@@ -4151,9 +4151,9 @@ static struct node_buf_t* node_buf_alloc(c_rq_enum_t *rq_enum)
  *
  * @also castle_btree_lub_find()
  */
-static int castle_rq_enum_iter_node_start(c_iter_t *c_iter)
+static int castle_rq_iter_node_start(c_iter_t *c_iter)
 {
-    c_rq_enum_t *rq_enum = (c_rq_enum_t *)c_iter->private;
+    c_rq_iter_t *rq_iter = (c_rq_iter_t *)c_iter->private;
     struct castle_btree_node *node;
     c2_block_t *leaf;
     int idx;
@@ -4161,10 +4161,10 @@ static int castle_rq_enum_iter_node_start(c_iter_t *c_iter)
     /* If the enumerator is 'in_range' it means that it's walking keys sequentially.
        Therefore there is no need to binary chop in the btree node. In fact, start_key
        may be/will likely be NULL. Which will make the binary chop impossible. */
-    if (rq_enum->in_range)
+    if (rq_iter->in_range)
         return 0;
     /* If the enumerator is not 'in_range', start_key must be non-NULL. */
-    BUG_ON(rq_enum->start_key == NULL);
+    BUG_ON(rq_iter->start_key == NULL);
 
     leaf = c_iter->path[c_iter->depth];
     BUG_ON(leaf == NULL);
@@ -4172,7 +4172,7 @@ static int castle_rq_enum_iter_node_start(c_iter_t *c_iter)
     node = c2b_bnode(leaf);
     BUG_ON(!node->is_leaf);
 
-    castle_btree_lub_find(node, rq_enum->start_key, rq_enum->version, &idx, NULL);
+    castle_btree_lub_find(node, rq_iter->start_key, rq_iter->version, &idx, NULL);
 
     /* Only return idx if we found a match. */
     if (idx >= 0)
@@ -4182,81 +4182,81 @@ static int castle_rq_enum_iter_node_start(c_iter_t *c_iter)
 }
 
 /**
- * Resets all counter accumulation variables stored in rq_enum struture to their default
+ * Resets all counter accumulation variables stored in rq_iter struture to their default
  * values (NULLs, -1s).
  */
-static void castle_rq_enum_iter_counter_reset(c_rq_enum_t *rq_enum)
+static void castle_rq_iter_counter_reset(c_rq_iter_t *rq_iter)
 {
-    CVT_INVALID_INIT(rq_enum->counter_accumulator);
-    rq_enum->counter_key    = NULL;
-    rq_enum->counter_buf    = NULL;
-    rq_enum->counter_idx    = -1;
+    CVT_INVALID_INIT(rq_iter->counter_accumulator);
+    rq_iter->counter_key    = NULL;
+    rq_iter->counter_buf    = NULL;
+    rq_iter->counter_idx    = -1;
 }
 
 /**
  * Terminates counter accumulation, by updating the counter in the buffer and reserting
- * all the counter accumulation variables in rq_enum.
+ * all the counter accumulation variables in rq_iter.
  *
  * If accumulation isn't being performed this function is a noop.
  */
-static void castle_rq_enum_iter_counter_accum_fini(c_rq_enum_t *rq_enum)
+static void castle_rq_iter_counter_accum_fini(c_rq_iter_t *rq_iter)
 {
     struct castle_btree_type *btree;
     struct castle_btree_node *node;
 
     /* Don't terminate if there isn't an accumulation going on. */
-    if(CVT_INVALID(rq_enum->counter_accumulator))
+    if(CVT_INVALID(rq_iter->counter_accumulator))
         return;
 
     /* Otherwise, write out the entry into the right place in the buffer. */
-    node = rq_enum->counter_buf->node;
+    node = rq_iter->counter_buf->node;
     btree = castle_btree_type_get(node->type);
 
     /* Use the saved key pointer (should match cur_key), version after accumulation
        is no longer meaningful, therefore use the iterator version. */
     btree->entry_replace(node,
-                         rq_enum->counter_idx,
-                         rq_enum->counter_key,
-                         rq_enum->version,
-                         rq_enum->counter_accumulator);
+                         rq_iter->counter_idx,
+                         rq_iter->counter_key,
+                         rq_iter->version,
+                         rq_iter->counter_accumulator);
 
     /* Reset all the variables. */
-    castle_rq_enum_iter_counter_reset(rq_enum);
+    castle_rq_iter_counter_reset(rq_iter);
 }
 
 /**
  * Continues accumulation of a counter by folding the cvt provided into the accumulator
- * stored in rq_enum structure.
+ * stored in rq_iter structure.
  *
  * It terminates the accumulation if a counter set, or an non-counter is encountered.
  * It also terminates on accumulating counters (in the case of RW trees).
  *
  * If accumulation isn't being performed this function is a noop.
  */
-static void castle_rq_enum_iter_counter_accum_continue(c_rq_enum_t *rq_enum,
-                                                       c_val_tup_t cvt)
+static void castle_rq_iter_counter_accum_continue(c_rq_iter_t *rq_iter,
+                                                  c_val_tup_t cvt)
 {
     int finish;
 
     /* Don't accumulate if accumulator hasn't been prepared. */
-    if(CVT_INVALID(rq_enum->counter_accumulator))
+    if(CVT_INVALID(rq_iter->counter_accumulator))
         return;
 
     /* Accumulator must be a local add counter. Otherwise the accumulation should have
        finished by now, or shouldn't have started at all. */
-    BUG_ON(!CVT_COUNTER_LOCAL_ADD(rq_enum->counter_accumulator));
+    BUG_ON(!CVT_COUNTER_LOCAL_ADD(rq_iter->counter_accumulator));
 
     /* Deal with accumulating counters (they already have all the data in them). */
     finish = 0;
     if(CVT_ACCUM_COUNTER(cvt))
     {
-        CVT_COUNTER_ACCUM_ALLV_TO_LOCAL(rq_enum->counter_accumulator, cvt);
+        CVT_COUNTER_ACCUM_ALLV_TO_LOCAL(rq_iter->counter_accumulator, cvt);
         finish = 1;
     }
 
     /* Accumulate. And terminate possibly terminate. */
-    if(finish || castle_counter_simple_reduce(&rq_enum->counter_accumulator, cvt))
-        castle_rq_enum_iter_counter_accum_fini(rq_enum);
+    if(finish || castle_counter_simple_reduce(&rq_iter->counter_accumulator, cvt))
+        castle_rq_iter_counter_accum_fini(rq_iter);
 }
 
 /**
@@ -4268,51 +4268,51 @@ static void castle_rq_enum_iter_counter_accum_continue(c_rq_enum_t *rq_enum,
  * If the accumulation is trivialy terminable (either on counter sets, or on
  * accumulating counters), it terminates.
  */
-static void castle_rq_enum_iter_counter_accum_init(c_rq_enum_t *rq_enum, c_val_tup_t cvt)
+static void castle_rq_iter_counter_accum_init(c_rq_iter_t *rq_iter, c_val_tup_t cvt)
 {
     /* Don't init if we aren't looking at a counter. */
     if(!CVT_ANY_COUNTER(cvt))
         return;
 
     /* There shouldn't be an accumulation going on. */
-    BUG_ON(!CVT_INVALID(rq_enum->counter_accumulator));
-    BUG_ON(rq_enum->counter_key != NULL);
-    BUG_ON(rq_enum->counter_buf != NULL);
-    BUG_ON(rq_enum->counter_idx >= 0);
+    BUG_ON(!CVT_INVALID(rq_iter->counter_accumulator));
+    BUG_ON(rq_iter->counter_key != NULL);
+    BUG_ON(rq_iter->counter_buf != NULL);
+    BUG_ON(rq_iter->counter_idx >= 0);
 
     /* Save the key. */
-    rq_enum->counter_key = rq_enum->cur_key;
+    rq_iter->counter_key = rq_iter->cur_key;
 
     /* Save the position of the counter (node & index). */
-    rq_enum->counter_buf = rq_enum->prod_buf;
-    rq_enum->counter_idx = rq_enum->prod_idx;
+    rq_iter->counter_buf = rq_iter->prod_buf;
+    rq_iter->counter_idx = rq_iter->prod_idx;
 
     /* Initialise the accumulator. */
-    CVT_COUNTER_LOCAL_ADD_INIT(rq_enum->counter_accumulator, 0);
+    CVT_COUNTER_LOCAL_ADD_INIT(rq_iter->counter_accumulator, 0);
 
     /* Deal with the current cvt. */
-    castle_rq_enum_iter_counter_accum_continue(rq_enum, cvt);
+    castle_rq_iter_counter_accum_continue(rq_iter, cvt);
 }
 
 /**
  * @return  0 => Iterator should continue
  * @return >0 => Iterator should terminate
  */
-static int castle_rq_enum_iter_each(c_iter_t *c_iter,
-                                    int index,
-                                    void *key,
-                                    c_ver_t version,
-                                    c_val_tup_t cvt)
+static int castle_rq_iter_each(c_iter_t *c_iter,
+                               int index,
+                               void *key,
+                               c_ver_t version,
+                               c_val_tup_t cvt)
 {
     struct castle_btree_type *btree;
-    c_rq_enum_t *rq_enum = (c_rq_enum_t *)c_iter->private;
-    struct node_buf_t *prod_buf = rq_enum->prod_buf;
-    struct node_buf_t *cons_buf = rq_enum->cons_buf;
+    c_rq_iter_t *rq_iter = (c_rq_iter_t *)c_iter->private;
+    struct node_buf_t *prod_buf = rq_iter->prod_buf;
+    struct node_buf_t *cons_buf = rq_iter->cons_buf;
     struct castle_btree_node *node = prod_buf->node;
     int cmp;
 
     btree = castle_btree_type_get(node->type);
-    BUG_ON(rq_enum->prod_idx != node->used);
+    BUG_ON(rq_iter->prod_idx != node->used);
 
     /* Check if the node buffer is full */
     if (btree->need_split(node, 0))
@@ -4324,137 +4324,137 @@ static int castle_rq_enum_iter_each(c_iter_t *c_iter,
         {
             struct node_buf_t *new_buf;
 
-            new_buf = node_buf_alloc(rq_enum);
+            new_buf = node_buf_alloc(rq_iter);
             list_add(&new_buf->list, &prod_buf->list);
-            rq_enum->prod_buf = new_buf;
-            debug("Creating new node buffer: %p\n", rq_enum->prod_buf);
+            rq_iter->prod_buf = new_buf;
+            debug("Creating new node buffer: %p\n", rq_iter->prod_buf);
         }
         else
         {
-            rq_enum->prod_buf = list_entry(prod_buf->list.next,
+            rq_iter->prod_buf = list_entry(prod_buf->list.next,
                                            struct node_buf_t, list);
-            castle_btree_node_buffer_init(rq_enum->tree,
-                                          rq_enum->prod_buf->node,
-                                          rq_enum->prod_buf->node->size);
-            debug("Moving prod_buf to next node_buf: %p\n", rq_enum->prod_buf);
+            castle_btree_node_buffer_init(rq_iter->tree,
+                                          rq_iter->prod_buf->node,
+                                          rq_iter->prod_buf->node->size);
+            debug("Moving prod_buf to next node_buf: %p\n", rq_iter->prod_buf);
         }
-        rq_enum->prod_idx = 0;
+        rq_iter->prod_idx = 0;
     }
 
-    if (!rq_enum->in_range)
+    if (!rq_iter->in_range)
     {
-        BUG_ON(rq_enum->start_key == NULL);
-        if (btree->key_compare(rq_enum->start_key, key) <= 0)
-            rq_enum->in_range = 1;
+        BUG_ON(rq_iter->start_key == NULL);
+        if (btree->key_compare(rq_iter->start_key, key) <= 0)
+            rq_iter->in_range = 1;
         else
             return 0; /* Iterator to continue */
     }
 
     /* If curr_key is set, figure out whether the new key is the same, or different. */
     cmp = 1;    /* Just to make the compiler happy. */
-    if (rq_enum->cur_key)
-        cmp = btree->key_compare(rq_enum->cur_key, key);
+    if (rq_iter->cur_key)
+        cmp = btree->key_compare(rq_iter->cur_key, key);
 
     /* Check whether we moving on to a new key. */
-    if (!rq_enum->cur_key || cmp)
+    if (!rq_iter->cur_key || cmp)
     {
         /* If there is a counter accumulation happening, terminate it. */
-        castle_rq_enum_iter_counter_accum_fini(rq_enum);
-        debug("Adding entry to node buffer: %p\n", rq_enum->prod_buf);
+        castle_rq_iter_counter_accum_fini(rq_iter);
+        debug("Adding entry to node buffer: %p\n", rq_iter->prod_buf);
         /* Keys should not go backwards. */
-        if (rq_enum->cur_key && (cmp > 0))
+        if (rq_iter->cur_key && (cmp > 0))
         {
-            printk("re_enum: %p, cur_key: %p, key: %p\n", rq_enum, rq_enum->cur_key, key);
+            printk("re_enum: %p, cur_key: %p, key: %p\n", rq_iter, rq_iter->cur_key, key);
             BUG();
         }
         BUG_ON(CVT_LEAF_PTR(cvt));
         /* Add the entry into the buffer, in the version of the rq. This guarantees that
            results from different arrays will be merged properly by the merged iterator
            (in castle_da_rq_iter). */
-        btree->entry_add(rq_enum->prod_buf->node, rq_enum->prod_idx, key, rq_enum->version, cvt);
-        btree->entry_get(rq_enum->prod_buf->node, rq_enum->prod_idx, &rq_enum->cur_key, NULL, NULL);
-        castle_rq_enum_iter_counter_accum_init(rq_enum, cvt);
-        rq_enum->prod_idx++;
+        btree->entry_add(rq_iter->prod_buf->node, rq_iter->prod_idx, key, rq_iter->version, cvt);
+        btree->entry_get(rq_iter->prod_buf->node, rq_iter->prod_idx, &rq_iter->cur_key, NULL, NULL);
+        castle_rq_iter_counter_accum_init(rq_iter, cvt);
+        rq_iter->prod_idx++;
 
-        if (unlikely(btree->key_compare(key, rq_enum->end_key) > 0))
+        if (unlikely(btree->key_compare(key, rq_iter->end_key) > 0))
             return 1; /* Iterator to terminate */
     }
     else
         /* Key is the same as the previous one, but we may be accumulating a counter. */
-        castle_rq_enum_iter_counter_accum_continue(rq_enum, cvt);
+        castle_rq_iter_counter_accum_continue(rq_iter, cvt);
 
     return 0; /* Iterator to continue */
 }
 
-static int castle_btree_rq_enum_prep_next(c_rq_enum_t *rq_enum);
+static int castle_rq_iter_prep_next(c_rq_iter_t *rq_iter);
 
-static void castle_rq_enum_iter_node_end(c_iter_t *c_iter)
+static void castle_rq_iter_node_end(c_iter_t *c_iter)
 {
-    c_rq_enum_t *rq_enum = c_iter->private;
+    c_rq_iter_t *rq_iter = c_iter->private;
 
-    rq_debug("%s:%p\n", __FUNCTION__, rq_enum);
+    rq_debug("%s:%p\n", __FUNCTION__, rq_iter);
     /* Check consumer idx for 0 */
-    BUG_ON(rq_enum->cons_idx != 0);
+    BUG_ON(rq_iter->cons_idx != 0);
 
     /* There may be an ongoing counter accumulation. We assume that in never needs
        to span multiple nodes => terminate it now. */
-    castle_rq_enum_iter_counter_accum_fini(rq_enum);
+    castle_rq_iter_counter_accum_fini(rq_iter);
 
     /* If producer idx also is 0, then schedule iterator again to get entries
      * and return */
-    if (rq_enum->prod_idx == 0)
+    if (rq_iter->prod_idx == 0)
     {
-        rq_debug("%p - reschedule\n", rq_enum);
+        rq_debug("%p - reschedule\n", rq_iter);
         castle_btree_iter_continue(c_iter);
         return;
     }
 
     /* Release the iterator resources and mark node process completed */
     __castle_btree_iter_release(c_iter);
-    rq_enum->iter_running = 0;
+    rq_iter->iter_running = 0;
 
     /* prep_next() cancels the iterator, if end_key is found. Iterator
      * cancellation is executed on different thread. */
-    if (castle_btree_rq_enum_prep_next(rq_enum))
+    if (castle_rq_iter_prep_next(rq_iter))
     {
         /* Call callback of the higher level iterator */
-        rq_debug("%p - Done\n", rq_enum);
-        rq_enum->async_iter.end_io(rq_enum, 0);
+        rq_debug("%p - Done\n", rq_iter);
+        rq_iter->async_iter.end_io(rq_iter, 0);
     }
 
-    wake_up(&rq_enum->iter_wq);
+    wake_up(&rq_iter->iter_wq);
 }
 
-static void castle_rq_enum_iter_end(c_iter_t *c_iter, int err)
+static void castle_rq_iter_end(c_iter_t *c_iter, int err)
 {
-    c_rq_enum_t *rq_enum = c_iter->private;
+    c_rq_iter_t *rq_iter = c_iter->private;
 
-    if(err) rq_enum->err = err;
-    rq_enum->iter_completed = 1;
-    rq_enum->iter_running = 0;
+    if(err) rq_iter->err = err;
+    rq_iter->iter_completed = 1;
+    rq_iter->iter_running = 0;
     wmb();
-    rq_debug("Nothing left in %p\n", rq_enum);
+    rq_debug("Nothing left in %p\n", rq_iter);
 
-    /* end_io() would be set to NULL, if this callback is result of rq_enum_cancel(). */
-    if (rq_enum->async_iter.end_io)
+    /* end_io() would be set to NULL, if this callback is result of rq_iter_cancel(). */
+    if (rq_iter->async_iter.end_io)
     {
         /* Verify prep_next() succeeding. */
-        BUG_ON(!castle_btree_rq_enum_prep_next(rq_enum));
+        BUG_ON(!castle_rq_iter_prep_next(rq_iter));
 
-        rq_debug("%p - Done\n", rq_enum);
+        rq_debug("%p - Done\n", rq_iter);
 
         /* Call callback of the higher level iterator */
-        rq_enum->async_iter.end_io(rq_enum, 0);
+        rq_iter->async_iter.end_io(rq_iter, 0);
     }
 
-    wake_up(&rq_enum->iter_wq);
+    wake_up(&rq_iter->iter_wq);
 
     return;
 }
 
-static void castle_btree_rq_enum_fini(c_rq_enum_t *rq_enum)
+static void castle_rq_iter_fini(c_rq_iter_t *rq_iter)
 {
-    struct node_buf_t *buf = rq_enum->buf_head;
+    struct node_buf_t *buf = rq_iter->buf_head;
     struct node_buf_t *next;
     int count = 0;
 
@@ -4465,16 +4465,16 @@ static void castle_btree_rq_enum_fini(c_rq_enum_t *rq_enum)
         castle_kfree(buf);
         buf = next;
         count++;
-        BUG_ON(count > rq_enum->buf_count);
-    } while (buf != rq_enum->buf_head);
-    BUG_ON(count != rq_enum->buf_count);
-    debug("Free rq_enum: %p\n", rq_enum);
+        BUG_ON(count > rq_iter->buf_count);
+    } while (buf != rq_iter->buf_head);
+    BUG_ON(count != rq_iter->buf_count);
+    debug("Free rq_iter: %p\n", rq_iter);
 }
 
-void castle_btree_rq_enum_init(c_rq_enum_t *rq_enum, c_ver_t version,
-                               struct castle_component_tree *tree,
-                               void *start_key,
-                               void *end_key)
+void castle_rq_iter_init(c_rq_iter_t *rq_iter, c_ver_t version,
+                         struct castle_component_tree *tree,
+                         void *start_key,
+                         void *end_key)
 {
     struct castle_btree_type *btype;
     struct castle_iterator *iter;
@@ -4483,37 +4483,37 @@ void castle_btree_rq_enum_init(c_rq_enum_t *rq_enum, c_ver_t version,
     BUG_ON(btype->key_compare(start_key, btype->inv_key) == 0 ||
            btype->key_compare(end_key, btype->inv_key) == 0);
 
-    rq_enum->tree           = tree;
-    rq_enum->err            = 0;
-    rq_enum->async_iter.end_io = NULL;
-    rq_enum->async_iter.iter_type = &castle_btree_rq_iter;
-    rq_enum->version        = version;
-    rq_enum->iter_completed = 0;
-    init_waitqueue_head(&rq_enum->iter_wq);
-    rq_enum->iter_running   = 0;
-    rq_enum->prod_idx       = 0;
-    rq_enum->cons_idx       = 0;
-    rq_enum->buf_count      = 0;
-    rq_enum->buf_head       = node_buf_alloc(rq_enum);
-    INIT_LIST_HEAD(&rq_enum->buf_head->list);
-    rq_enum->prod_buf       = rq_enum->buf_head;
-    debug("0: Creating new node buffer: %p\n", rq_enum->prod_buf);
-    rq_enum->cons_buf       = rq_enum->buf_head;
-    rq_enum->cur_key        = NULL;
-    rq_enum->last_key       = NULL;
-    rq_enum->start_key      = start_key;
-    rq_enum->end_key        = end_key;
-    rq_enum->in_range       = 0;
-    castle_rq_enum_iter_counter_reset(rq_enum);
+    rq_iter->tree           = tree;
+    rq_iter->err            = 0;
+    rq_iter->async_iter.end_io = NULL;
+    rq_iter->async_iter.iter_type = &castle_rq_iter;
+    rq_iter->version        = version;
+    rq_iter->iter_completed = 0;
+    init_waitqueue_head(&rq_iter->iter_wq);
+    rq_iter->iter_running   = 0;
+    rq_iter->prod_idx       = 0;
+    rq_iter->cons_idx       = 0;
+    rq_iter->buf_count      = 0;
+    rq_iter->buf_head       = node_buf_alloc(rq_iter);
+    INIT_LIST_HEAD(&rq_iter->buf_head->list);
+    rq_iter->prod_buf       = rq_iter->buf_head;
+    debug("0: Creating new node buffer: %p\n", rq_iter->prod_buf);
+    rq_iter->cons_buf       = rq_iter->buf_head;
+    rq_iter->cur_key        = NULL;
+    rq_iter->last_key       = NULL;
+    rq_iter->start_key      = start_key;
+    rq_iter->end_key        = end_key;
+    rq_iter->in_range       = 0;
+    castle_rq_iter_counter_reset(rq_iter);
 
-    iter = &rq_enum->iterator;
-    iter->tree       = rq_enum->tree;
+    iter = &rq_iter->iterator;
+    iter->tree       = rq_iter->tree;
     iter->need_visit = NULL;
-    iter->node_start = castle_rq_enum_iter_node_start;
-    iter->each       = castle_rq_enum_iter_each;
-    iter->node_end   = castle_rq_enum_iter_node_end;
-    iter->end        = castle_rq_enum_iter_end;
-    iter->private    = rq_enum;
+    iter->node_start = castle_rq_iter_node_start;
+    iter->each       = castle_rq_iter_each;
+    iter->node_end   = castle_rq_iter_node_end;
+    iter->end        = castle_rq_iter_end;
+    iter->private    = rq_iter;
 
     castle_btree_iter_init(iter, version, C_ITER_ANCESTRAL_VERSIONS);
     iter->next_key.key          = start_key;
@@ -4524,62 +4524,62 @@ void castle_btree_rq_enum_init(c_rq_enum_t *rq_enum, c_ver_t version,
     /* @TODO: do we need to handle out of memory condidions better than with BUG_ON? */
 #if 0
 no_mem:
-    rq_enum->err = -ENOMEM;
-    castle_btree_rq_enum_fini(rq_enum);
+    rq_iter->err = -ENOMEM;
+    castle_rq_iter_fini(rq_iter);
 #endif
 }
 
-static void castle_btree_rq_enum_buffer_switch(c_rq_enum_t *rq_enum)
+static void castle_rq_iter_buffer_switch(c_rq_iter_t *rq_iter)
 {
     /* Only switch the buffer if the old buffer actually had anything in it,
        this prevents problems when the iterator below hasn't returned anything
        in the range we are interested in (double buffer swap will start invalidating
        the memory area used by the key pointer returned by previous _next()) */
     /* @TODO: check if enumerator also suffers from the same problem */
-    if(rq_enum->prod_idx > 0)
+    if(rq_iter->prod_idx > 0)
     {
-        if (rq_enum->prod_buf->list.next == &rq_enum->prod_buf->list)
+        if (rq_iter->prod_buf->list.next == &rq_iter->prod_buf->list)
         {
             struct node_buf_t *new_buf;
 
-            new_buf = node_buf_alloc(rq_enum);
-            list_add(&new_buf->list, &rq_enum->prod_buf->list);
-            debug("1: Creating new node buffer: %p\n", rq_enum->prod_buf);
+            new_buf = node_buf_alloc(rq_iter);
+            list_add(&new_buf->list, &rq_iter->prod_buf->list);
+            debug("1: Creating new node buffer: %p\n", rq_iter->prod_buf);
         }
-        BUG_ON(rq_enum->prod_buf->list.next == &rq_enum->prod_buf->list);
-        rq_enum->prod_buf = list_entry(rq_enum->prod_buf->list.next,
+        BUG_ON(rq_iter->prod_buf->list.next == &rq_iter->prod_buf->list);
+        rq_iter->prod_buf = list_entry(rq_iter->prod_buf->list.next,
                                        struct node_buf_t, list);
-        debug("1: Moving prod_buf to next node_buf: %p\n", rq_enum->prod_buf);
+        debug("1: Moving prod_buf to next node_buf: %p\n", rq_iter->prod_buf);
     } else
     {
-        BUG_ON(rq_enum->cons_idx != 0 && rq_enum->cons_buf == rq_enum->prod_buf);
+        BUG_ON(rq_iter->cons_idx != 0 && rq_iter->cons_buf == rq_iter->prod_buf);
     }
-    rq_enum->cons_buf = rq_enum->prod_buf;
-    rq_enum->cons_idx = 0;
-    rq_enum->prod_idx = 0;
+    rq_iter->cons_buf = rq_iter->prod_buf;
+    rq_iter->cons_idx = 0;
+    rq_iter->prod_idx = 0;
 
-    castle_btree_node_buffer_init(rq_enum->tree,
-                                  rq_enum->prod_buf->node,
-                                  rq_enum->prod_buf->node->size);
+    castle_btree_node_buffer_init(rq_iter->tree,
+                                  rq_iter->prod_buf->node,
+                                  rq_iter->prod_buf->node->size);
 }
 
-int cons_idx_prod_idx_compare(c_rq_enum_t *rq_enum)
+int cons_idx_prod_idx_compare(c_rq_iter_t *rq_iter)
 {
-    if (rq_enum->cons_buf != rq_enum->prod_buf ||
-        rq_enum->cons_idx < rq_enum->prod_idx)
+    if (rq_iter->cons_buf != rq_iter->prod_buf ||
+        rq_iter->cons_idx < rq_iter->prod_idx)
         return 1;
 
     /* If we are consuming and producing in different buffers, we should not get here */
-    BUG_ON(rq_enum->cons_buf != rq_enum->prod_buf);
+    BUG_ON(rq_iter->cons_buf != rq_iter->prod_buf);
     /* In same buffer, consumer buffer must not overtake the producer index */
-    BUG_ON(rq_enum->cons_idx > rq_enum->prod_idx);
+    BUG_ON(rq_iter->cons_idx > rq_iter->prod_idx);
 
     return 0;
 }
 
-static void castle_btree_rq_enum_register_cb(c_rq_enum_t *iter,
-                                             castle_iterator_end_io_t cb,
-                                             void *data)
+static void castle_rq_iter_register_cb(c_rq_iter_t *iter,
+                                       castle_iterator_end_io_t cb,
+                                       void *data)
 {
     iter->async_iter.end_io  = cb;
     iter->async_iter.private = data;
@@ -4587,38 +4587,38 @@ static void castle_btree_rq_enum_register_cb(c_rq_enum_t *iter,
 
 /* Returns 1 - if ready to call has_next(); 0 - if waiting for some IO operation
  * to finish */
-static int castle_btree_rq_enum_prep_next(c_rq_enum_t *rq_enum)
+static int castle_rq_iter_prep_next(c_rq_iter_t *rq_iter)
 {
-    struct castle_iterator *iter = &rq_enum->iterator;
+    struct castle_iterator *iter = &rq_iter->iterator;
     struct castle_btree_type *btree =
-                            castle_btree_type_get(rq_enum->prod_buf->node->type);
+                            castle_btree_type_get(rq_iter->prod_buf->node->type);
     void *key;
 
-    rq_debug("%p\n", rq_enum);
+    rq_debug("%p\n", rq_iter);
 
     /* Check if castle iterator is running */
-    BUG_ON(rq_enum->iter_running);
-    cons_idx_prod_idx_compare(rq_enum);
-    BUG_ON(rq_enum->iter_completed && cons_idx_prod_idx_compare(rq_enum));
+    BUG_ON(rq_iter->iter_running);
+    cons_idx_prod_idx_compare(rq_iter);
+    BUG_ON(rq_iter->iter_completed && cons_idx_prod_idx_compare(rq_iter));
 
-    rq_debug("Checking for %p\n", rq_enum);
+    rq_debug("Checking for %p\n", rq_iter);
     /* Return if iterator is already completed */
-    if (rq_enum->iter_completed)
+    if (rq_iter->iter_completed)
         return 1;
 
-    BUG_ON(rq_enum->async_iter.end_io == NULL);
+    BUG_ON(rq_iter->async_iter.end_io == NULL);
 
     /* Check if the first entry in buffer is smaller than end key. */
-    if (cons_idx_prod_idx_compare(rq_enum))
+    if (cons_idx_prod_idx_compare(rq_iter))
     {
-        btree->entry_get(rq_enum->cons_buf->node, rq_enum->cons_idx, &key, NULL,
+        btree->entry_get(rq_iter->cons_buf->node, rq_iter->cons_idx, &key, NULL,
                          NULL);
-        if (btree->key_compare(rq_enum->end_key, key) < 0)
+        if (btree->key_compare(rq_iter->end_key, key) < 0)
         {
-            rq_enum->cons_buf = rq_enum->prod_buf;
-            rq_enum->cons_idx = rq_enum->prod_idx = 0;
+            rq_iter->cons_buf = rq_iter->prod_buf;
+            rq_iter->cons_idx = rq_iter->prod_idx = 0;
             castle_btree_iter_cancel(iter, 0);
-            rq_enum->iter_running = 1;
+            rq_iter->iter_running = 1;
             wmb();
             castle_btree_iter_start(iter);
 
@@ -4628,70 +4628,69 @@ static int castle_btree_rq_enum_prep_next(c_rq_enum_t *rq_enum)
     }
 
     /* Schedule iterator to get few more entries into buffer */
-    castle_btree_rq_enum_buffer_switch(rq_enum);
-    rq_enum->iter_running   = 1;
+    castle_rq_iter_buffer_switch(rq_iter);
+    rq_iter->iter_running   = 1;
     wmb();
     castle_btree_iter_start(iter);
-    rq_debug("%p - schedule\n", rq_enum);
+    rq_debug("%p - schedule\n", rq_iter);
 
     return 0;
 }
 
-int castle_btree_rq_enum_has_next(c_rq_enum_t *rq_enum)
+int castle_rq_iter_has_next(c_rq_iter_t *rq_iter)
 {
-    BUG_ON(rq_enum->iter_running);
+    BUG_ON(rq_iter->iter_running);
 
     /* Return 1, if buffer has entries. */
-    if (cons_idx_prod_idx_compare(rq_enum))
+    if (cons_idx_prod_idx_compare(rq_iter))
         return 1;
 
-    BUG_ON(!rq_enum->iter_completed);
+    BUG_ON(!rq_iter->iter_completed);
 
     return 0;
 }
 
-void castle_btree_rq_enum_next(c_rq_enum_t *rq_enum,
-                               void       **key_p,
-                               c_ver_t     *version_p,
-                               c_val_tup_t *cvt_p)
+void castle_rq_iter_next(c_rq_iter_t *rq_iter,
+                         void **key_p,
+                         c_ver_t *version_p,
+                         c_val_tup_t *cvt_p)
 {
     struct castle_btree_type *btree =
-                            castle_btree_type_get(rq_enum->tree->btree_type);
+                            castle_btree_type_get(rq_iter->tree->btree_type);
 
-    rq_debug("%p\n", rq_enum);
-    BUG_ON(rq_enum->iter_running);
+    rq_debug("%p\n", rq_iter);
+    BUG_ON(rq_iter->iter_running);
     /* Make sure that consumer index is less than the producer (there is an assert in
        the comparator). */
-    cons_idx_prod_idx_compare(rq_enum);
-    btree->entry_get(rq_enum->cons_buf->node, rq_enum->cons_idx, key_p, version_p,
+    cons_idx_prod_idx_compare(rq_iter);
+    btree->entry_get(rq_iter->cons_buf->node, rq_iter->cons_idx, key_p, version_p,
                      cvt_p);
-    rq_enum->last_key = *key_p;
-    rq_enum->cons_idx++;
-    if (rq_enum->cons_buf != rq_enum->prod_buf &&
-        rq_enum->cons_idx == rq_enum->cons_buf->node->used)
+    rq_iter->last_key = *key_p;
+    rq_iter->cons_idx++;
+    if (rq_iter->cons_buf != rq_iter->prod_buf &&
+        rq_iter->cons_idx == rq_iter->cons_buf->node->used)
     {
-        rq_enum->cons_buf = list_entry(rq_enum->cons_buf->list.next,
+        rq_iter->cons_buf = list_entry(rq_iter->cons_buf->list.next,
                                        struct node_buf_t, list);
-        rq_enum->cons_idx = 0;
+        rq_iter->cons_idx = 0;
     }
 }
 
-void castle_btree_rq_enum_skip(c_rq_enum_t *rq_enum,
-                               void        *key)
+void castle_rq_iter_skip(c_rq_iter_t *rq_iter, void *key)
 {
     struct castle_btree_type *btree =
-                            castle_btree_type_get(rq_enum->tree->btree_type);
+                            castle_btree_type_get(rq_iter->tree->btree_type);
     int i;
 
-    rq_debug("%p\n", rq_enum);
-    BUG_ON(rq_enum->iter_running);
-    cons_idx_prod_idx_compare(rq_enum);
+    rq_debug("%p\n", rq_iter);
+    BUG_ON(rq_iter->iter_running);
+    cons_idx_prod_idx_compare(rq_iter);
 
     /* Should never try to skip to the key before last key returned. */
-    if (rq_enum->last_key && (btree->key_compare(key, rq_enum->last_key) <= 0))
+    if (rq_iter->last_key && (btree->key_compare(key, rq_iter->last_key) <= 0))
     {
         castle_printk(LOG_ERROR, "Trying to skip to a key[%p] smaller than "
-                "last_key [%p], iter - %p\n", key, rq_enum->last_key, rq_enum);
+                "last_key [%p], iter - %p\n", key, rq_iter->last_key, rq_iter);
         BUG();
     }
 
@@ -4700,79 +4699,79 @@ void castle_btree_rq_enum_skip(c_rq_enum_t *rq_enum,
     {
         int last_idx;
 
-        last_idx = (rq_enum->cons_buf == rq_enum->prod_buf)
-                    ? rq_enum->prod_idx
-                    : (rq_enum->cons_buf->node->used);
+        last_idx = (rq_iter->cons_buf == rq_iter->prod_buf)
+                    ? rq_iter->prod_idx
+                    : (rq_iter->cons_buf->node->used);
         /* Check if the seeking key is in buffer, if so skip to it and return */
-        for (i=rq_enum->cons_idx; i < last_idx; i++)
+        for (i=rq_iter->cons_idx; i < last_idx; i++)
         {
             void *buf_key;
 
-            btree->entry_get(rq_enum->cons_buf->node, i, &buf_key, NULL, NULL);
+            btree->entry_get(rq_iter->cons_buf->node, i, &buf_key, NULL, NULL);
             /* If the key is within the buffer already we are going to advance
                consumer pointer, but there is no need to change the state of
                castle_iterator. Consequently, we don't need the start_key.
                In fact, we want to set it to NULL, so that
-               castle_rq_enum_iter_node_start() can use it to detect whether or
+               castle_rq_iter_node_start() can use it to detect whether or
                not to binary chop in btree nodes. */
             if (btree->key_compare(buf_key, key) >= 0)
             {
-                BUG_ON(!rq_enum->in_range);
-                rq_enum->cons_idx = i;
-                rq_enum->start_key = NULL;
+                BUG_ON(!rq_iter->in_range);
+                rq_iter->cons_idx = i;
+                rq_iter->start_key = NULL;
                 return;
             }
         }
-        if (rq_enum->cons_buf == rq_enum->prod_buf)
+        if (rq_iter->cons_buf == rq_iter->prod_buf)
             break;
 
         /* Move consumer to next buffer. */
-        rq_enum->cons_buf = list_entry(rq_enum->cons_buf->list.next,
+        rq_iter->cons_buf = list_entry(rq_iter->cons_buf->list.next,
                                        struct node_buf_t, list);
-        rq_enum->cons_idx = 0;
+        rq_iter->cons_idx = 0;
     }
 
     /* Key that iterator is skipping to must be bigger than last key of the node
-     * (which is stored in rq_enum->cur_key). */
-    BUG_ON(btree->key_compare(rq_enum->cur_key, key) >= 0);
+     * (which is stored in rq_iter->cur_key). */
+    BUG_ON(btree->key_compare(rq_iter->cur_key, key) >= 0);
 
-    castle_btree_rq_enum_buffer_switch(rq_enum);
-    castle_btree_iter_version_key_dealloc(&rq_enum->iterator);
-    rq_enum->iterator.next_key.key = key;
-    rq_enum->iterator.next_key.need_destroy = 0;
+    castle_rq_iter_buffer_switch(rq_iter);
+    castle_btree_iter_version_key_dealloc(&rq_iter->iterator);
+    rq_iter->iterator.next_key.key = key;
+    rq_iter->iterator.next_key.need_destroy = 0;
     /* Reset range to handle next key in the middle of a node */
-    rq_enum->in_range = 0;
-    rq_enum->start_key = key;
+    rq_iter->in_range = 0;
+    rq_iter->start_key = key;
 }
 
-void castle_btree_rq_enum_cancel(c_rq_enum_t *rq_enum)
+void castle_rq_iter_cancel(c_rq_iter_t *rq_iter)
 {
     /* Wait for the iterator to complete */
-    wait_event(rq_enum->iter_wq, (rq_enum->iter_running == 0));
+    wait_event(rq_iter->iter_wq, (rq_iter->iter_running == 0));
 
-    if (!rq_enum->iter_completed)
+    if (!rq_iter->iter_completed)
     {
-        struct castle_iterator *iter = &rq_enum->iterator;
+        struct castle_iterator *iter = &rq_iter->iterator;
 
         castle_btree_iter_cancel(iter, 0);
-        rq_enum->iter_running = 1;
+        rq_iter->iter_running = 1;
         /* castle_btree_iter_start() would call end() on the cancellation of iterator.
          * We don't need this call get promoted to higher level iterators. Reset end_io here.
          * We don't need this anymore. */
-        rq_enum->async_iter.end_io = NULL;
+        rq_iter->async_iter.end_io = NULL;
         wmb();
         castle_btree_iter_start(iter);
-        wait_event(rq_enum->iter_wq, (rq_enum->iter_running == 0));
+        wait_event(rq_iter->iter_wq, (rq_iter->iter_running == 0));
     }
 
-    castle_btree_rq_enum_fini(rq_enum);
+    castle_rq_iter_fini(rq_iter);
 }
 
-struct castle_iterator_type castle_btree_rq_iter = {
-    .register_cb= (castle_iterator_register_cb_t)castle_btree_rq_enum_register_cb,
-    .prep_next  = (castle_iterator_prep_next_t)  castle_btree_rq_enum_prep_next,
-    .has_next   = (castle_iterator_has_next_t)   castle_btree_rq_enum_has_next,
-    .next       = (castle_iterator_next_t)       castle_btree_rq_enum_next,
-    .skip       = (castle_iterator_skip_t)       castle_btree_rq_enum_skip,
-    .cancel     = (castle_iterator_cancel_t)     castle_btree_rq_enum_cancel,
+struct castle_iterator_type castle_rq_iter = {
+    .register_cb= (castle_iterator_register_cb_t)castle_rq_iter_register_cb,
+    .prep_next  = (castle_iterator_prep_next_t)  castle_rq_iter_prep_next,
+    .has_next   = (castle_iterator_has_next_t)   castle_rq_iter_has_next,
+    .next       = (castle_iterator_next_t)       castle_rq_iter_next,
+    .skip       = (castle_iterator_skip_t)       castle_rq_iter_skip,
+    .cancel     = (castle_iterator_cancel_t)     castle_rq_iter_cancel,
 };

@@ -26,14 +26,14 @@ void        castle_btree_lub_find     (struct castle_btree_node *node,
                                        int *insert_idx_p);
 
 /* Iterator to enumerate latest ancestral entries */
-void        castle_btree_rq_enum_init (c_rq_enum_t *c_rq_enum,
+void        castle_rq_iter_init       (c_rq_iter_t *c_rq_iter,
                                        c_ver_t      version,
                                        struct castle_component_tree
                                                    *tree,
                                        void        *start_key,
                                        void        *end_key);
-void        castle_btree_rq_enum_cancel  (c_rq_enum_t *c_rq_enum);
-extern struct castle_iterator_type castle_btree_rq_iter;
+void        castle_rq_iter_cancel     (c_rq_iter_t *c_rq_iter);
+extern struct castle_iterator_type castle_rq_iter;
 
 /* Iterator to enumerate all entries in a dynamic modlist tree */
 void        castle_btree_enum_init    (c_enum_t *c_enum);

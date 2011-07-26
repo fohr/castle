@@ -1445,7 +1445,7 @@ typedef struct castle_async_iterator {
 } c_async_iterator_t;
 
 /* Enumerates latest version value for all entries */
-typedef struct castle_rq_enumerator {
+typedef struct castle_rq_iterator {
     c_async_iterator_t            async_iter;
     struct castle_component_tree *tree;
     int                           err;
@@ -1474,7 +1474,7 @@ typedef struct castle_rq_enumerator {
                                                             accumulation.                    */
     int                           counter_idx;         /**< Index in the buffer node under
                                                             which the counter is stored.     */
-} c_rq_enum_t;
+} c_rq_iter_t;
 
 struct castle_merged_iterator;
 struct component_iterator;
@@ -1525,7 +1525,7 @@ typedef struct castle_da_rq_iterator {
 
     struct ct_rq {
         struct castle_component_tree *ct;
-        c_rq_enum_t                   ct_rq_iter;
+        c_rq_iter_t                   ct_rq_iter;
     } *ct_rqs;
 } c_da_rq_iter_t;
 

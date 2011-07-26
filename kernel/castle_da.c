@@ -1469,9 +1469,9 @@ static void castle_ct_merged_iter_register_cb(c_merged_iter_t *iter,
     iter->async_iter.private = data;
 }
 
-static void castle_ct_merged_iter_end_io(void *rq_enum_iter, int err)
+static void castle_ct_merged_iter_end_io(void *rq_iter, int err)
 {
-    c_merged_iter_t *iter = ((c_rq_enum_t *) rq_enum_iter)->async_iter.private;
+    c_merged_iter_t *iter = ((c_rq_iter_t *) rq_iter)->async_iter.private;
 
     debug_iter("%s:%p\n", __FUNCTION__, iter);
     if (castle_ct_merged_iter_prep_next(iter))
@@ -1864,7 +1864,7 @@ void castle_da_rq_iter_cancel(c_da_rq_iter_t *iter)
     for(i=0; i<iter->nr_cts; i++)
     {
         struct ct_rq *ct_rq = iter->ct_rqs + i;
-        castle_btree_rq_enum_cancel(&ct_rq->ct_rq_iter);
+        castle_rq_iter_cancel(&ct_rq->ct_rq_iter);
         castle_ct_put(ct_rq->ct, 0);
     }
     castle_kfree(iter->ct_rqs);
@@ -1951,15 +1951,15 @@ again:
     {
         struct ct_rq *ct_rq = iter->ct_rqs + i;
 
-        castle_btree_rq_enum_init(&ct_rq->ct_rq_iter,
-                                   version,
-                                   ct_rq->ct,
-                                   start_key,
-                                   end_key);
+        castle_rq_iter_init(&ct_rq->ct_rq_iter,
+                            version,
+                            ct_rq->ct,
+                            start_key,
+                            end_key);
         /* @TODO: handle errors! Don't know how to destroy ct_rq_iter ATM. */
         BUG_ON(ct_rq->ct_rq_iter.err);
         iters[i]        = &ct_rq->ct_rq_iter;
-        iter_types[i]   = &castle_btree_rq_iter;
+        iter_types[i]   = &castle_rq_iter;
     }
 
     /* Iterators have been initialised, now initialise the merged iterator */
