@@ -936,6 +936,7 @@ static void castle_extent_space_free(c_ext_t *ext, c_chk_cnt_t count)
 #define SUPER_CHUNK_STRUCT(chk_idx)  ((c_chk_seq_t){chk_idx, CHKS_PER_SLOT})
                 cs = castle_slave_find_by_uuid(
                     map_buf[logical_chunk*ext->k_factor + copy].slave_id);
+                BUG_ON(!cs);
                 if (!test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags))
                 {
                     if (map_buf[logical_chunk * ext->k_factor + copy].offset % CHKS_PER_SLOT == 0)

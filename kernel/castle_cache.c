@@ -6013,15 +6013,10 @@ int castle_cache_extent_flush_schedule(c_ext_id_t ext_id, uint64_t start,
     struct castle_cache_flush_entry *entry;
 
     /* Take a hard reference on extent, to make sure extent wouldn't disappear during flush. */
-    if (castle_extent_link(ext_id))
-        return -1;
+    BUG_ON(castle_extent_link(ext_id));
 
     entry = castle_malloc(sizeof(struct castle_cache_flush_entry), GFP_KERNEL);
-    if (!entry)
-    {
-        castle_extent_unlink(ext_id);
-        return -1;
-    }
+    BUG_ON(!entry);
 
     entry->ext_id = ext_id;
     entry->start  = start;
