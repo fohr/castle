@@ -58,6 +58,8 @@ struct castle_back_op;
 #define CASTLE_BACK_CONN_INITIALISED_FLAG   (1 << CASTLE_BACK_CONN_INITIALISED_BIT)
 #define CASTLE_BACK_CONN_NOTIFY_BIT         (1)
 #define CASTLE_BACK_CONN_NOTIFY_FLAG        (1 << CASTLE_BACK_CONN_NOTIFY_BIT)
+#define CASTLE_BACK_CONN_DEAD_BIT           (2)
+#define CASTLE_BACK_CONN_DEAD_FLAG          (1 << CASTLE_BACK_CONN_DEAD_BIT)
 
 struct castle_back_conn
 {
@@ -521,7 +523,7 @@ castle_back_get_stateful_op(struct castle_back_conn *conn,
     stateful_op->expiring = 0;
     stateful_op->cancel_on_op_complete = 0;
     CASTLE_INIT_WORK(&stateful_op->expire_work, castle_back_stateful_op_expire);
-    stateful_op->in_use = 1;
+    stateful_op->in_use = 0;
     /* see def of castle_back_stateful_op */
     stateful_op->token = ((stateful_op - conn->stateful_ops) + (stateful_op->use_count * MAX_STATEFUL_OPS)) | 0x80000000;
     stateful_op->use_count++;
@@ -544,7 +546,6 @@ static void castle_back_put_stateful_op(struct castle_back_conn *conn,
             stateful_op->token, stateful_op->use_count, stateful_op - conn->stateful_ops);
 
     BUG_ON(!spin_is_locked(&stateful_op->lock));
-    BUG_ON(!stateful_op->in_use);
     BUG_ON(!list_empty(&stateful_op->op_queue));
     BUG_ON(stateful_op->curr_op != NULL); /* Remember to put the current op! */
     BUG_ON(stateful_op->attachment != NULL); /* Remember to put the current attachment */
@@ -1713,9 +1714,22 @@ static void castle_back_iter_start(void *data)
     if (err)
         goto err4;
 
-    /* get the lock, since castle_back_stateful_op_enable_expire requires it */
+    /* Check CASTLE_BACK_CONN_DEAD_FLAG under the stateful_op lock to prevent
+     * racing with castle_back_release().  _op_enable_expire() also needs it. */
     spin_lock(&stateful_op->lock);
+
+    if (stateful_op->conn->flags & CASTLE_BACK_CONN_DEAD_FLAG)
+    {
+        stateful_op->expiring = 1;
+        spin_unlock(&stateful_op->lock);
+        stateful_op->expire(stateful_op);
+
+        return;
+    }
+    else
+        stateful_op->in_use = 1;
     castle_back_stateful_op_enable_expire(stateful_op);
+
     spin_unlock(&stateful_op->lock);
 
     castle_back_reply(op, 0, token, 0);
@@ -2178,6 +2192,9 @@ static void castle_back_big_put_continue(struct castle_object_replace *replace)
 
     spin_lock(&stateful_op->lock);
 
+    if (!stateful_op->in_use)
+        stateful_op->in_use = 1;
+
     if (stateful_op->curr_op != NULL)
     {
         struct castle_back_op *op = stateful_op->curr_op;
@@ -2571,7 +2588,7 @@ static void castle_back_big_get_continue(struct castle_object_pull *pull,
     BUG_ON(stateful_op->curr_op == NULL);
     BUG_ON(stateful_op->curr_op->req.tag != CASTLE_RING_GET_CHUNK
         && stateful_op->curr_op->req.tag != CASTLE_RING_BIG_GET);
-    BUG_ON(!stateful_op->in_use);
+    BUG_ON(stateful_op->curr_op->req.tag == CASTLE_RING_GET_CHUNK && !stateful_op->in_use);
 
     if (stateful_op->curr_op->req.tag == CASTLE_RING_GET_CHUNK)
         castle_back_buffer_put(stateful_op->conn, stateful_op->curr_op->buf);
@@ -2615,6 +2632,9 @@ static void castle_back_big_get_continue(struct castle_object_pull *pull,
     }
 
     spin_lock(&stateful_op->lock);
+
+    if (!stateful_op->in_use)
+        stateful_op->in_use = 1;
 
     stateful_op->curr_op = NULL;
 
@@ -3273,6 +3293,7 @@ int castle_back_release(struct inode *inode, struct file *file)
         return -EINVAL;
     }
 
+    set_bit(CASTLE_BACK_CONN_DEAD_BIT, &conn->flags);
     file->private_data = NULL;
     kthread_stop(conn->work_thread);
     wake_up(&conn->wait);
