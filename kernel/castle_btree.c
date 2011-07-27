@@ -2890,7 +2890,7 @@ static void castle_btree_iter_path_put(c_iter_t *c_iter, int from)
     }
 }
 
-static void castle_btree_iter_end(c_iter_t *c_iter, int err)
+static void castle_btree_iter_end(c_iter_t *c_iter, int err, int async)
 {
     struct castle_btree_type *btree = castle_btree_type_get(c_iter->tree->btree_type);
 
@@ -2909,8 +2909,10 @@ static void castle_btree_iter_end(c_iter_t *c_iter, int err)
         c_iter->indirect_nodes = NULL;
     }
 
+    /* Run end() callback, if specified.  We should not need to reset
+     * running_async here as the iterator is being terminated. */
     if (c_iter->end)
-        c_iter->end(c_iter, err);
+        c_iter->end(c_iter, err, c_iter->running_async);
 
     atomic_dec(&castle_btree_iters_cnt);
     wake_up(&castle_btree_iters_wq);
@@ -3002,7 +3004,7 @@ void castle_btree_iter_replace(c_iter_t *c_iter, int index, c_val_tup_t cvt)
     dirty_c2b(real_c2b);
 }
 
-static void __castle_btree_iter_start(c_iter_t *c_iter);
+static int  __castle_btree_iter_start(c_iter_t *c_iter);
 
 static void __castle_btree_iter_release(c_iter_t *c_iter)
 {
@@ -3038,6 +3040,9 @@ static void __castle_btree_iter_release(c_iter_t *c_iter)
     read_unlock_c2b(leaf);
 }
 
+/**
+ * Reschedule and continue iterating.
+ */
 void castle_btree_iter_continue(c_iter_t *c_iter)
 {
     __castle_btree_iter_release(c_iter);
@@ -3284,12 +3289,12 @@ void castle_iter_parent_key_set(c_iter_t *iter, void *key)
     iter->parent_key = btree->key_duplicate(key);
 }
 
-static void castle_btree_iter_version_leaf_process(c_iter_t *c_iter)
+static int castle_btree_iter_version_leaf_process(c_iter_t *c_iter)
 {
     struct castle_btree_node *node;
     struct castle_btree_type *btree = castle_btree_type_get(c_iter->tree->btree_type);
     c2_block_t *leaf;
-    int i;
+    int running_async, i;
 
     BUG_ON(VERSION_INVAL(c_iter->version));
 
@@ -3364,21 +3369,28 @@ static void castle_btree_iter_version_leaf_process(c_iter_t *c_iter)
 
     iter_debug("Done processing entries.\n");
 
-    /*
-     * Send end node callback if one not specified. Otherwise continue automatically.
-     */
+    /* Run node_end() callback if specified, otherwise continue iterating. */
+    running_async = c_iter->running_async;
+    c_iter->running_async = 0;
     if (c_iter->node_end != NULL)
-       c_iter->node_end(c_iter);
+        /* The node_end() callback may restart us asynchronously.  Whether this
+         * is the case or we were already running asynchronously we need to
+         * return this information to the caller. */
+        return c_iter->node_end(c_iter, running_async) || running_async;
     else
-       castle_btree_iter_continue(c_iter);
+    {
+        castle_btree_iter_continue(c_iter); /* inform caller we went async */
+
+        return 1; /* inform caller we went async */
+    }
 }
 
-static void castle_btree_iter_all_leaf_process(c_iter_t *c_iter)
+static int castle_btree_iter_all_leaf_process(c_iter_t *c_iter)
 {
     struct castle_btree_node *node;
     struct castle_btree_type *btree = castle_btree_type_get(c_iter->tree->btree_type);
     c2_block_t *leaf;
-    int i;
+    int running_async, i;
 
     leaf = c_iter->path[c_iter->depth];
     BUG_ON(leaf == NULL);
@@ -3417,17 +3429,30 @@ static void castle_btree_iter_all_leaf_process(c_iter_t *c_iter)
 
     iter_debug("Done processing entries.\n");
 
-    /*
-     * Send end node callback if one not specified. Otherwise continue automatically.
-     */
+    /* Run node_end callback if specified, otherwise continue iterating. */
+    running_async = c_iter->running_async;
+    c_iter->running_async = 0;
     if (c_iter->node_end != NULL)
-       c_iter->node_end(c_iter);
+        /* The node_end() callback may restart us asynchronously.  Whether this
+         * is the case or we are already running asynchronously we need to
+         * return this information to the caller. */
+        return c_iter->node_end(c_iter, running_async) || running_async;
     else
-       castle_btree_iter_continue(c_iter);
+    {
+        castle_btree_iter_continue(c_iter);
+
+        return 1; /* inform caller we went async */
+    }
 }
 
-static void   castle_btree_iter_path_traverse(c_iter_t *c_iter, c_ext_pos_t node_cep);
-static void __castle_btree_iter_path_traverse(c_iter_t *c_iter)
+static int   castle_btree_iter_path_traverse(c_iter_t *c_iter, c_ext_pos_t node_cep);
+/**
+ * @return  0   Completed synchronously (e.g. cancelled, error, did not execute
+ *              async_iter callback handlers).
+ * @return  1   Went asynchronous (e.g. had to issue I/O, will call async_iter
+ *              callback handlers).
+ */
+static int __castle_btree_iter_path_traverse(c_iter_t *c_iter)
 {
     struct castle_btree_node *node;
     struct castle_btree_type *btree = castle_btree_type_get(c_iter->tree->btree_type);
@@ -3447,8 +3472,10 @@ static void __castle_btree_iter_path_traverse(c_iter_t *c_iter)
                 c_iter->path[c_iter->depth]->cep.ext_id,
                 c_iter->path[c_iter->depth]->cep.offset);
         read_unlock_c2b(c_iter->path[c_iter->depth]);
-        castle_btree_iter_end(c_iter, c_iter->err);
-        return;
+        /* No need to reset running_async as the iterator is to terminate. */
+        castle_btree_iter_end(c_iter, c_iter->err, c_iter->running_async);
+
+        return 0;
     }
 
     /* Otherwise, we know that the node got read successfully. Its buffer is in the path. */
@@ -3489,8 +3516,8 @@ static void __castle_btree_iter_path_traverse(c_iter_t *c_iter)
                         node_cep.ext_id,
                         node_cep.offset);
                 read_unlock_c2b(c_iter->path[c_iter->depth]);
-                castle_btree_iter_start(c_iter);
-                return;
+
+                return __castle_btree_iter_start(c_iter);
             }
 
             /* If we got here, it must be because we are visiting a node for the
@@ -3500,11 +3527,14 @@ static void __castle_btree_iter_path_traverse(c_iter_t *c_iter)
             /* Deal with leafs first */
             if(node->is_leaf)
             {
+                int ret;
+
                 iter_debug("Visiting leaf node cep=(0x%x, 0x%x).\n",
                         node_cep.ext_id, node_cep.offset);
-                castle_btree_iter_all_leaf_process(c_iter);
+                ret = castle_btree_iter_all_leaf_process(c_iter);
                 castle_btree_iter_parent_node_idx_increment(c_iter);
-                return;
+
+                return ret;
             }
 
             /* Final case: intermediate node visited for the first time */
@@ -3515,11 +3545,8 @@ static void __castle_btree_iter_path_traverse(c_iter_t *c_iter)
         case C_ITER_MATCHING_VERSIONS:
         case C_ITER_ANCESTRAL_VERSIONS:
             /* Deal with leafs first */
-            if(node->is_leaf)
-            {
-                castle_btree_iter_version_leaf_process(c_iter);
-                return;
-            }
+            if (node->is_leaf)
+                return castle_btree_iter_version_leaf_process(c_iter);
 
              /* If we are enumerating all entries for a particular version,
                fin the occurance of the next key. */
@@ -3542,7 +3569,7 @@ static void __castle_btree_iter_path_traverse(c_iter_t *c_iter)
     c_iter->depth++;
     castle_iter_parent_key_set(c_iter, entry_key);
 
-    castle_btree_iter_path_traverse(c_iter, entry_cep);
+    return castle_btree_iter_path_traverse(c_iter, entry_cep);
 }
 
 /**
@@ -3601,7 +3628,13 @@ static void castle_btree_iter_path_traverse_endio(c2_block_t *c2b)
     queue_work(castle_wqs[c_iter->depth+MAX_BTREE_DEPTH], &c_iter->work);
 }
 
-static void castle_btree_iter_path_traverse(c_iter_t *c_iter, c_ext_pos_t node_cep)
+/**
+ * @return  0   Completed synchronously (e.g. cancelled, error, did not execute
+ *              async_iter callback handlers).
+ * @return  1   Went asynchronous (e.g. had to issue I/O, will call async_iter
+ *              callback handlers).
+ */
+static int castle_btree_iter_path_traverse(c_iter_t *c_iter, c_ext_pos_t node_cep)
 {
     struct castle_btree_type *btree = castle_btree_type_get(c_iter->tree->btree_type);
     c2_block_t *c2b = NULL;
@@ -3671,9 +3704,12 @@ static void castle_btree_iter_path_traverse(c_iter_t *c_iter, c_ext_pos_t node_c
     {
         iter_debug("Not uptodate, submitting\n");
 
+        c_iter->running_async = 1;
         c2b->end_io = castle_btree_iter_path_traverse_endio;
         c2b->private = c_iter;
         BUG_ON(submit_c2b(READ, c2b));
+
+        return 1; /* inform caller we issued async I/O */
     }
     else
     {
@@ -3683,11 +3719,19 @@ static void castle_btree_iter_path_traverse(c_iter_t *c_iter, c_ext_pos_t node_c
         BUG_ON((c_iter->path[c_iter->depth] != NULL) && (c_iter->path[c_iter->depth] != c2b));
         c_iter->path[c_iter->depth] = c2b;
 
-        __castle_btree_iter_path_traverse(c_iter);
+        return __castle_btree_iter_path_traverse(c_iter);
     }
 }
 
-static void __castle_btree_iter_start(c_iter_t *c_iter)
+/**
+ * Start the main castle btree iterator.
+ *
+ * @return  0   Completed synchronously (e.g. cancelled, error, did not execute
+ *              async_iter callback handlers).
+ * @return  1   Went asynchronous (e.g. had to issue I/O, will call async_iter
+ *              callback handlers).
+ */
+static int __castle_btree_iter_start(c_iter_t *c_iter)
 {
     struct castle_btree_type *btree = castle_btree_type_get(c_iter->tree->btree_type);
     c_ext_pos_t  root_cep;
@@ -3712,8 +3756,8 @@ static void __castle_btree_iter_start(c_iter_t *c_iter)
             (btree->key_compare(c_iter->next_key.key, btree->inv_key) == 0)) ||
         (c_iter->cancelled))
     {
-        castle_btree_iter_end(c_iter, c_iter->err);
-        return;
+        castle_btree_iter_end(c_iter, c_iter->err, c_iter->running_async);
+        return 0;
     }
 
     /*
@@ -3731,12 +3775,12 @@ static void __castle_btree_iter_start(c_iter_t *c_iter)
         iter_debug("Warning: Invalid disk block for the root.\n");
         up_read(&c_iter->tree->lock);
         /* Complete the request early, end exit */
-        castle_btree_iter_end(c_iter, -EINVAL);
-        return;
+        castle_btree_iter_end(c_iter, -EINVAL, c_iter->running_async);
+        return 0;
     }
 
     castle_iter_parent_key_set(c_iter, btree->inv_key);
-    castle_btree_iter_path_traverse(c_iter, root_cep);
+    return castle_btree_iter_path_traverse(c_iter, root_cep);
 }
 
 static void _castle_btree_iter_start(struct work_struct *work)
@@ -3746,8 +3790,12 @@ static void _castle_btree_iter_start(struct work_struct *work)
     __castle_btree_iter_start(c_iter);
 }
 
+/**
+ * Asynchronously start the btree iterator.
+ */
 void castle_btree_iter_start(c_iter_t* c_iter)
 {
+    c_iter->running_async = 1;
     CASTLE_INIT_WORK(&c_iter->work, _castle_btree_iter_start);
     queue_work(castle_wqs[19], &c_iter->work);
 }
@@ -3889,7 +3937,11 @@ static int castle_enum_iter_each(c_iter_t *c_iter,
     return 0; /* Iterator to continue */
 }
 
-static void castle_enum_iter_node_end(c_iter_t *c_iter)
+/**
+ * @return  0   This callback did not cause calling iterator to go async.
+ * @return  1   This callback started the calling iterator asynchronously.
+ */
+static int castle_enum_iter_node_end(c_iter_t *c_iter, int async)
 {
     struct castle_enumerator *c_enum = c_iter->private;
 
@@ -3902,7 +3954,8 @@ static void castle_enum_iter_node_end(c_iter_t *c_iter)
         castle_printk(LOG_WARN, "There were no useful entries in the node. "
                 "How is that possible? Error?.\n");
         castle_btree_iter_continue(c_iter);
-        return;
+
+        return 1; /* inform caller we went async */
     }
     /* Release the leaf lock, otherwise other iterators will block, and we will never
        go past the enumaror initialisation */
@@ -3911,9 +3964,11 @@ static void castle_enum_iter_node_end(c_iter_t *c_iter)
     c_enum->iterator_outs = 0;
     wmb();
     wake_up(&c_enum->iterator_wq);
+
+    return 0;
 }
 
-static void castle_enum_iter_end(c_iter_t *c_iter, int err)
+static void castle_enum_iter_end(c_iter_t *c_iter, int err, int async)
 {
     struct castle_enumerator *c_enum = c_iter->private;
 
@@ -4388,7 +4443,11 @@ static int castle_rq_iter_each(c_iter_t *c_iter,
 
 static int castle_rq_iter_prep_next(c_rq_iter_t *rq_iter);
 
-static void castle_rq_iter_node_end(c_iter_t *c_iter)
+/**
+ * @return  0   This callback did not cause calling iterator to go async.
+ * @return  1   This callback started the calling iterator asynchronously.
+ */
+static int castle_rq_iter_node_end(c_iter_t *c_iter, int async)
 {
     c_rq_iter_t *rq_iter = c_iter->private;
 
@@ -4400,13 +4459,16 @@ static void castle_rq_iter_node_end(c_iter_t *c_iter)
        to span multiple nodes => terminate it now. */
     castle_rq_iter_counter_accum_fini(rq_iter);
 
-    /* If producer idx also is 0, then schedule iterator again to get entries
-     * and return */
-    if (rq_iter->prod_idx == 0)
+    /* We have no entries to process if rq_iter->prod_idx == 0.  If the btree
+     * iterator was running asynchronously, continue iterating, otherwise wait
+     * for control to be returned to castle_rq_iter_prep_next() which will
+     * detect this and continue iterating without requeuing. */
+    if (async && rq_iter->prod_idx == 0)
     {
-        rq_debug("%p - reschedule\n", rq_iter);
+        rq_debug("%p - async reschedule\n", rq_iter);
         castle_btree_iter_continue(c_iter);
-        return;
+
+        return 1;
     }
 
     /* Release the iterator resources and mark node process completed */
@@ -4415,7 +4477,7 @@ static void castle_rq_iter_node_end(c_iter_t *c_iter)
 
     /* prep_next() cancels the iterator, if end_key is found. Iterator
      * cancellation is executed on different thread. */
-    if (castle_rq_iter_prep_next(rq_iter))
+    if (async)
     {
         /* Call callback of the higher level iterator */
         rq_debug("%p - Done\n", rq_iter);
@@ -4423,9 +4485,11 @@ static void castle_rq_iter_node_end(c_iter_t *c_iter)
     }
 
     wake_up(&rq_iter->iter_wq);
+
+    return 0;
 }
 
-static void castle_rq_iter_end(c_iter_t *c_iter, int err)
+static void castle_rq_iter_end(c_iter_t *c_iter, int err, int async)
 {
     c_rq_iter_t *rq_iter = c_iter->private;
 
@@ -4436,11 +4500,8 @@ static void castle_rq_iter_end(c_iter_t *c_iter, int err)
     rq_debug("Nothing left in %p\n", rq_iter);
 
     /* end_io() would be set to NULL, if this callback is result of rq_iter_cancel(). */
-    if (rq_iter->async_iter.end_io)
+    if (async && rq_iter->async_iter.end_io)
     {
-        /* Verify prep_next() succeeding. */
-        BUG_ON(!castle_rq_iter_prep_next(rq_iter));
-
         rq_debug("%p - Done\n", rq_iter);
 
         /* Call callback of the higher level iterator */
@@ -4448,8 +4509,6 @@ static void castle_rq_iter_end(c_iter_t *c_iter, int err)
     }
 
     wake_up(&rq_iter->iter_wq);
-
-    return;
 }
 
 static void castle_rq_iter_fini(c_rq_iter_t *rq_iter)
@@ -4507,13 +4566,14 @@ void castle_rq_iter_init(c_rq_iter_t *rq_iter, c_ver_t version,
     castle_rq_iter_counter_reset(rq_iter);
 
     iter = &rq_iter->iterator;
-    iter->tree       = rq_iter->tree;
-    iter->need_visit = NULL;
-    iter->node_start = castle_rq_iter_node_start;
-    iter->each       = castle_rq_iter_each;
-    iter->node_end   = castle_rq_iter_node_end;
-    iter->end        = castle_rq_iter_end;
-    iter->private    = rq_iter;
+    iter->tree          = rq_iter->tree;
+    iter->need_visit    = NULL;
+    iter->node_start    = castle_rq_iter_node_start;
+    iter->each          = castle_rq_iter_each;
+    iter->node_end      = castle_rq_iter_node_end;
+    iter->end           = castle_rq_iter_end;
+    iter->private       = rq_iter;
+    iter->running_async = 0;
 
     castle_btree_iter_init(iter, version, C_ITER_ANCESTRAL_VERSIONS);
     iter->next_key.key          = start_key;
@@ -4565,8 +4625,8 @@ static void castle_rq_iter_buffer_switch(c_rq_iter_t *rq_iter)
 
 int cons_idx_prod_idx_compare(c_rq_iter_t *rq_iter)
 {
-    if (rq_iter->cons_buf != rq_iter->prod_buf ||
-        rq_iter->cons_idx < rq_iter->prod_idx)
+    if (rq_iter->cons_buf != rq_iter->prod_buf
+            || rq_iter->cons_idx < rq_iter->prod_idx)
         return 1;
 
     /* If we are consuming and producing in different buffers, we should not get here */
@@ -4585,8 +4645,11 @@ static void castle_rq_iter_register_cb(c_rq_iter_t *iter,
     iter->async_iter.private = data;
 }
 
-/* Returns 1 - if ready to call has_next(); 0 - if waiting for some IO operation
- * to finish */
+/**
+ * @return  1   Ready for has_next() to be called.
+ * @return  0   Waiting for some I/O operation to finish (will complete
+ *              asynchronously).
+ */
 static int castle_rq_iter_prep_next(c_rq_iter_t *rq_iter)
 {
     struct castle_iterator *iter = &rq_iter->iterator;
@@ -4596,43 +4659,43 @@ static int castle_rq_iter_prep_next(c_rq_iter_t *rq_iter)
 
     rq_debug("%p\n", rq_iter);
 
-    /* Check if castle iterator is running */
-    BUG_ON(rq_iter->iter_running);
-    cons_idx_prod_idx_compare(rq_iter);
-    BUG_ON(rq_iter->iter_completed && cons_idx_prod_idx_compare(rq_iter));
-
-    rq_debug("Checking for %p\n", rq_iter);
-    /* Return if iterator is already completed */
-    if (rq_iter->iter_completed)
-        return 1;
-
+    BUG_ON(rq_iter->iter_running); /* not re-entrant if iter_running */
     BUG_ON(rq_iter->async_iter.end_io == NULL);
 
-    /* Check if the first entry in buffer is smaller than end key. */
-    if (cons_idx_prod_idx_compare(rq_iter))
-    {
-        btree->entry_get(rq_iter->cons_buf->node, rq_iter->cons_idx, &key, NULL,
-                         NULL);
-        if (btree->key_compare(rq_iter->end_key, key) < 0)
+    do {
+        BUG_ON(rq_iter->iter_completed && cons_idx_prod_idx_compare(rq_iter));
+
+        rq_debug("Checking for %p\n", rq_iter);
+        /* Return if iterator is already completed */
+        if (rq_iter->iter_completed)
+            return 1;
+
+        /* Check if the first entry in buffer is smaller than end key. */
+        if (cons_idx_prod_idx_compare(rq_iter))
         {
-            rq_iter->cons_buf = rq_iter->prod_buf;
-            rq_iter->cons_idx = rq_iter->prod_idx = 0;
-            castle_btree_iter_cancel(iter, 0);
-            rq_iter->iter_running = 1;
-            wmb();
-            castle_btree_iter_start(iter);
-
-            return 0;
+            btree->entry_get(rq_iter->cons_buf->node, rq_iter->cons_idx, &key, NULL, NULL);
+            if (btree->key_compare(rq_iter->end_key, key) < 0)
+            {
+                /* Key is greater than end_key, terminate the iterator. */
+                rq_iter->cons_buf = rq_iter->prod_buf;
+                rq_iter->cons_idx = rq_iter->prod_idx = 0;
+                castle_btree_iter_cancel(iter, 0);
+                /* iter_start() will call iter_end() */
+            }
+            else
+                /* Success: first entry in buffer is smaller than end key. */
+                return 1;
         }
-        return 1;
-    }
+        else
+        {
+            castle_rq_iter_buffer_switch(rq_iter);
+            rq_debug("%p - schedule\n", rq_iter);
+        }
 
-    /* Schedule iterator to get few more entries into buffer */
-    castle_rq_iter_buffer_switch(rq_iter);
-    rq_iter->iter_running   = 1;
-    wmb();
-    castle_btree_iter_start(iter);
-    rq_debug("%p - schedule\n", rq_iter);
+        /* Schedule iterator to get few more entries into buffer */
+        rq_iter->iter_running = 1;
+        wmb();
+    } while (__castle_btree_iter_start(iter) == EXIT_SUCCESS);
 
     return 0;
 }
@@ -4655,8 +4718,7 @@ void castle_rq_iter_next(c_rq_iter_t *rq_iter,
                          c_ver_t *version_p,
                          c_val_tup_t *cvt_p)
 {
-    struct castle_btree_type *btree =
-                            castle_btree_type_get(rq_iter->tree->btree_type);
+    struct castle_btree_type *btree = castle_btree_type_get(rq_iter->tree->btree_type);
 
     rq_debug("%p\n", rq_iter);
     BUG_ON(rq_iter->iter_running);
@@ -4676,10 +4738,10 @@ void castle_rq_iter_next(c_rq_iter_t *rq_iter,
     }
 }
 
-void castle_rq_iter_skip(c_rq_iter_t *rq_iter, void *key)
+void castle_rq_iter_skip(c_rq_iter_t *rq_iter,
+                         void *key)
 {
-    struct castle_btree_type *btree =
-                            castle_btree_type_get(rq_iter->tree->btree_type);
+    struct castle_btree_type *btree = castle_btree_type_get(rq_iter->tree->btree_type);
     int i;
 
     rq_debug("%p\n", rq_iter);
@@ -4760,7 +4822,7 @@ void castle_rq_iter_cancel(c_rq_iter_t *rq_iter)
          * We don't need this anymore. */
         rq_iter->async_iter.end_io = NULL;
         wmb();
-        castle_btree_iter_start(iter);
+        __castle_btree_iter_start(iter);
         wait_event(rq_iter->iter_wq, (rq_iter->iter_running == 0));
     }
 

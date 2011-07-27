@@ -1353,8 +1353,11 @@ typedef struct castle_iterator {
                                               c_val_tup_t             cvt);
                                     /**< Returns a positive value to indicate the iterator
                                          should terminate, or 0 to continue.                    */
-    void                        (*node_end)  (struct castle_iterator *c_iter);
-    void                        (*end)       (struct castle_iterator *c_iter, int err);
+    int                         (*node_end)  (struct castle_iterator *c_iter, int async);
+                                    /**< Returns a positive value to indicate the callback
+                                         has restarted this (e.g. castle_iterator) iterator
+                                         asynchronously.                                        */
+    void                        (*end)       (struct castle_iterator *c_iter, int err, int async);
     void                         *private;
     struct castle_component_tree *tree;
 
@@ -1377,15 +1380,17 @@ typedef struct castle_iterator {
     };
     int                           cancelled;
     int                           err;
-
+    int                           running_async;    /**< Has the iterator requeued and gone
+                                                         asynchronous since it started, e.g. to
+                                                         do I/O or avoid a stack overflow.      */
     struct castle_cache_block    *path[MAX_BTREE_DEPTH];
     int                           depth;
-    int                           btree_levels;   /**< Private copy of ct->tree_depth, recorded
-                                                       at the time when the walk started.
-                                                       Used to prevent races with root node
-                                                       splits. */
+    int                           btree_levels;     /**< Private copy of ct->tree_depth, recorded
+                                                         at the time when the walk started.
+                                                         Used to prevent races with root node
+                                                         splits.                                */
 
-    struct castle_indirect_node  *indirect_nodes; /* If allocated, MAX_BTREE_ENTRIES */
+    struct castle_indirect_node  *indirect_nodes;   /**< If allocated, MAX_BTREE_ENTRIES        */
 
     struct work_struct            work;
 } c_iter_t;
