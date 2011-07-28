@@ -1684,6 +1684,9 @@ int castle_version_is_ancestor(c_ver_t candidate, c_ver_t version)
     struct castle_version *c, *v;
     int ret;
 
+    if (candidate == version)
+        return 1;
+
     read_lock_irq(&castle_versions_hash_lock);
     v = __castle_versions_hash_get(version);
     c = __castle_versions_hash_get(candidate);
