@@ -3,16 +3,14 @@
 # This script should run mkcastlefs on each device
 # that is a raw device (not a partition), unformatted,
 # unpartitioned and not already got castlefs on
-#
-# TODO: check members of raid sets?
 
 function should_claim {
     local device=$1
 
     # Check this is a real device, not a partition
     if ! [ -d "/sys/block/${device}" ]; then
-	echo "Not claiming ${device} - no sysfs entry!"  
-	return 1
+		echo "Not claiming ${device} - no sysfs entry!"
+		return 1
     fi
 
     if ! [ -b "/dev/${device}" ]; then
@@ -20,35 +18,48 @@ function should_claim {
         return 1
     fi
 
-    # if we're on ec2, then claim disks 
-    if [ -e "/etc/acunu/ec2-ephemeral-disks" ]; then
-	if grep "${device}" /etc/acunu/ec2-ephemeral-disks; then 
-	    echo "Device ${device} in /etc/acunu/ec2-ephemeral-disks, claiming"
-	    return 0
-	fi
-    fi
-
     # Check to see if device has any partitions on it
     local num_partitions=$(( $(cat /proc/partitions | grep ${device} | wc -l) - 1 ))
-    if [ "${num_partitions}" -gt 0 ]; then
-	echo "Not claiming ${device} - it has ${num_partitions} partitions!"
-	return 1
+	if [ "${num_partitions}" -gt 0 ]; then
+		echo "Not claiming ${device} - it has ${num_partitions} partitions!"
+		return 1
     fi
-    
+
     # Check to see if device is already in castlefs
     if castle-probe-device "/dev/${device}" > /dev/null 2>&1; then
-	echo "Not claiming ${device} - already been claimed!"
-	return 1
+		echo "Not claiming ${device} - already been claimed!"
+		return 1
     fi
-    
-    # Check to see if device has some other FS on it	
+
+    # Check to see if device has some other FS on it
     if blkid "/dev/${device}" > /dev/null; then
-	echo "Not claiming ${device} - already contains FS!"
-	return 1
+		echo "Not claiming ${device} - already contains FS!"
+		return 1
     fi
-    
+
+	# Check to see whether the device is part of an MD array.
+	if ! mdadm -Q /dev/${device} | grep "No md super block found" > /dev/null; then
+		echo "Not claiming ${device} - seems to be part of a RAID array.";
+		return 1;
+	fi
+
+    # If we're on ec2, then claim disks
+    if [ -e "/etc/acunu/ec2-ephemeral-disks" ]; then
+		if grep "${device}" /etc/acunu/ec2-ephemeral-disks; then
+	    	echo "Device ${device} in /etc/acunu/ec2-ephemeral-disks, claiming"
+	    	return 0
+		fi
+    fi
+
+	# Dangerous: Claim disks that look to be unused.
     return 0
 }
+
+# Only run autoclaim on first boot.
+if [ $(castle-scan | wc -l) -ne 0 ]; then
+	echo "Castle FS seems to have already been initialised. Not claiming any extra disks.";
+	exit 0;
+fi
 
 for dev in /dev/sd* /dev/hd* /dev/xvd*
 do
