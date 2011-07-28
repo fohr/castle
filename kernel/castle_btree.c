@@ -3379,7 +3379,7 @@ static int castle_btree_iter_version_leaf_process(c_iter_t *c_iter)
         return c_iter->node_end(c_iter, running_async) || running_async;
     else
     {
-        castle_btree_iter_continue(c_iter); /* inform caller we went async */
+        castle_btree_iter_continue(c_iter);
 
         return 1; /* inform caller we went async */
     }
@@ -3517,7 +3517,9 @@ static int __castle_btree_iter_path_traverse(c_iter_t *c_iter)
                         node_cep.offset);
                 read_unlock_c2b(c_iter->path[c_iter->depth]);
 
-                return __castle_btree_iter_start(c_iter);
+                castle_btree_iter_start(c_iter);
+
+                return 1; /* inform caller we went async */
             }
 
             /* If we got here, it must be because we are visiting a node for the
