@@ -31,24 +31,26 @@ function should_claim {
 		return 1
     fi
 
-    # Check to see if device has some other FS on it
-    if blkid "/dev/${device}" > /dev/null; then
-		echo "Not claiming ${device} - already contains FS!"
-		return 1
-    fi
-
 	# Check to see whether the device is part of an MD array.
 	if ! mdadm -Q /dev/${device} | grep "No md super block found" > /dev/null; then
 		echo "Not claiming ${device} - seems to be part of a RAID array.";
 		return 1;
 	fi
 
-    # If we're on ec2, then claim disks
+    # If we're on ec2, claim ephemeral disks. Do this check before checking for
+	# filesystem (via blkid below). Ephemeral disks come with ext3 pre-installed
+	# by default.
     if [ -e "/etc/acunu/ec2-ephemeral-disks" ]; then
 		if grep "${device}" /etc/acunu/ec2-ephemeral-disks; then
 	    	echo "Device ${device} in /etc/acunu/ec2-ephemeral-disks, claiming"
 	    	return 0
 		fi
+    fi
+
+    # Check to see if device has some other FS on it
+    if blkid "/dev/${device}" > /dev/null; then
+		echo "Not claiming ${device} - already contains FS!"
+		return 1
     fi
 
 	# Dangerous: Claim disks that look to be unused.
