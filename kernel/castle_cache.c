@@ -2401,6 +2401,7 @@ static int castle_cache_block_hash_insert(c2_block_t *c2b, int transient)
     BUG_ON(c2b_dirty(c2b));
     BUG_ON(c2b_softpin(c2b));
     spin_lock_irq(&castle_cache_block_lru_lock);
+    write_unlock(&castle_cache_block_hash_lock);
     if (transient)
         list_add(&c2b->clean, &castle_cache_cleanlist);
     else
@@ -2408,7 +2409,7 @@ static int castle_cache_block_hash_insert(c2_block_t *c2b, int transient)
     /* Cleanlist accounting. */
     atomic_inc(&castle_cache_cleanlist_size);
     spin_unlock_irq(&castle_cache_block_lru_lock);
-    write_unlock(&castle_cache_block_hash_lock);
+
 out:
     return success;
 }
