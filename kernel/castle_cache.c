@@ -336,8 +336,9 @@ static DECLARE_WAIT_QUEUE_HEAD(castle_cache_page_reservelist_wq);   /**< Reserve
 static DECLARE_WAIT_QUEUE_HEAD(castle_cache_block_reservelist_wq);  /**< Reservelist c2b waiters  */
 
 #define CASTLE_CACHE_VMAP_PGS   256
-static struct page            *castle_cache_vmap_pgs[CASTLE_CACHE_VMAP_PGS];
-static           DECLARE_MUTEX(castle_cache_vmap_lock);
+typedef struct page *castle_cache_vmap_pgs_t[CASTLE_CACHE_VMAP_PGS];
+DEFINE_PER_CPU(castle_cache_vmap_pgs_t, castle_cache_vmap_pgs);
+DEFINE_PER_CPU(struct mutex, castle_cache_vmap_lock);
 
 struct task_struct     *castle_cache_flush_thread;
 static DECLARE_WAIT_QUEUE_HEAD(castle_cache_flush_wq);
@@ -2720,6 +2721,8 @@ static void castle_cache_block_init(c2_block_t *c2b,
     c_ext_pos_t dcep;
     c2_page_t *c2p;
     int i, uptodate;
+    struct mutex *vmap_per_cpu_mutex_ptr;
+    struct page ** vmap_per_cpu_pgs_ptr;
 
     debug("Initing c2b for cep="cep_fmt_str", nr_pages=%d\n",
             cep2str(cep), nr_pages);
@@ -2749,27 +2752,34 @@ static void castle_cache_block_init(c2_block_t *c2b,
 
     i = 0;
     debug("c2b->nr_pages=%d\n", nr_pages);
-    down(&castle_cache_vmap_lock);
+    vmap_per_cpu_mutex_ptr = &get_cpu_var(castle_cache_vmap_lock);
+    vmap_per_cpu_pgs_ptr = (struct page **)&get_cpu_var(castle_cache_vmap_pgs);
+    put_cpu_var(castle_cache_vmap_pgs);
+    put_cpu_var(castle_cache_vmap_lock);
+    /* we can now sleep or switch cpus even though we hold a reference 
+     * to a per-cpu variable 
+     */
+    mutex_lock(vmap_per_cpu_mutex_ptr);
     c2b_for_each_page_start(page, c2p, dcep, c2b)
     {
 #ifdef CASTLE_DEBUG
         debug("Adding c2p id=%d, to cep "cep_fmt_str_nl,
                 c2p->id, cep2str(dcep));
 #endif
-        castle_cache_vmap_pgs[i++] = page;
+        vmap_per_cpu_pgs_ptr[i++] = page;
     }
     c2b_for_each_page_end(page, c2p, dcep, c2b)
     debug("Added %d pages.\n", i);
     BUG_ON(i != nr_pages);
 
     if (nr_pages == 1)
-        c2b->buffer = pfn_to_kaddr(page_to_pfn(castle_cache_vmap_pgs[0]));
+        c2b->buffer = pfn_to_kaddr(page_to_pfn(vmap_per_cpu_pgs_ptr[0]));
     else if (nr_pages <= CASTLE_VMAP_PGS)
-            c2b->buffer = castle_vmap_fast_map(castle_cache_vmap_pgs, i);
+            c2b->buffer = castle_vmap_fast_map(vmap_per_cpu_pgs_ptr, i);
         else
-            c2b->buffer = vmap(castle_cache_vmap_pgs, i, VM_READ|VM_WRITE, PAGE_KERNEL);
+            c2b->buffer = vmap(vmap_per_cpu_pgs_ptr, i, VM_READ|VM_WRITE, PAGE_KERNEL);
 
-    up(&castle_cache_vmap_lock);
+    mutex_unlock(vmap_per_cpu_mutex_ptr);
     BUG_ON(!c2b->buffer);
 }
 
@@ -6319,7 +6329,8 @@ int castle_cache_init(void)
 {
     unsigned long max_ram;
     struct sysinfo i;
-    int ret;
+    struct mutex* vmap_mutex_ptr;
+    int ret, cpu_iter;
 
     /* Find out how much memory there is in the system. */
     si_meminfo(&i);
@@ -6387,6 +6398,14 @@ int castle_cache_init(void)
     if((ret = castle_cache_freelists_init())) goto err_out;
     if((ret = castle_vmap_fast_map_init()))   goto err_out;
     if((ret = castle_cache_flush_init()))     goto err_out;
+
+    /* Initialise per-cpu vmap mutexes */
+    for(cpu_iter = 0; cpu_iter < NR_CPUS; cpu_iter++) {
+	if(cpu_possible(cpu_iter)) {
+	    vmap_mutex_ptr = &per_cpu(castle_cache_vmap_lock, cpu_iter);
+	    mutex_init(vmap_mutex_ptr);
+	}
+    }
 
     /* Init kmem_cache for io_array (Structure is too big to fit in stack). */
     castle_io_array_cache = kmem_cache_create("castle_io_array",
