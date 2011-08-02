@@ -363,7 +363,6 @@ int castle_freespace_slave_init(struct castle_slave *cs, int fresh)
     cs->reserved_schks = 0;
     cs->disk_size = freespace->disk_size;
     atomic_set(&cs->free_chk_cnt, freespace->free_chk_cnt);
-    castle_freespace_print(cs, NULL);
 
     nr_chunks = freespace->disk_size;
 
@@ -373,6 +372,8 @@ int castle_freespace_slave_init(struct castle_slave *cs, int fresh)
         castle_freespace_slave_superchunk_free(cs, (c_chk_seq_t){FREE_SPACE_START, nr_chunks});
 
     cs->frozen_prod = cs->prev_prod = freespace->prod;
+
+    castle_freespace_print(cs, NULL);
 
     return 0;
 }
