@@ -895,7 +895,7 @@ void castle_bloom_unmarshall(castle_bloom_t *bf, struct castle_clist_entry *ctm)
     bf->btree = castle_btree_type_get(RO_VLBA_TREE_TYPE);
     bf->ext_id = ctm->bloom_ext_id;
 
-    debug("castle_bloom_unmarshall ext_id=%llu num_chunks=%u num_blocks_last_chunk=%u chunks_offset=%llu num_btree_nodes=%u\n",
+    castle_printk(LOG_DEBUG, "castle_bloom_unmarshall ext_id=%llu num_chunks=%u num_blocks_last_chunk=%u chunks_offset=%llu num_btree_nodes=%u\n",
                 bf->ext_id, bf->num_chunks, bf->num_blocks_last_chunk, bf->chunks_offset, bf->num_btree_nodes);
 
     castle_extent_mark_live(bf->ext_id, ctm->da_id);

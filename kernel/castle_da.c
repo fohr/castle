@@ -5460,9 +5460,8 @@ static void castle_da_merge_deserialise(struct castle_da_merge *merge,
     int i;
 
     merge_mstore=da->levels[level].merge.serdes.mstore_entry;
-
     /* recover bloom_build_params. */
-    if(&da->levels[level].merge.serdes.mstore_entry->have_bbp)
+    if(da->levels[level].merge.serdes.mstore_entry->have_bbp)
         castle_da_ct_bloom_build_param_deserialise(da->levels[level].merge.serdes.out_tree,
                                 &da->levels[level].merge.serdes.mstore_entry->out_tree_bbp);
 
