@@ -50,9 +50,7 @@ static void                         castle_vmap_freelist_add(castle_vmap_freelis
                                                              *castle_vmap_freelist, uint32_t id);
 static uint32_t                     castle_vmap_freelist_get(castle_vmap_freelist_t
                                                              *castle_vmap_freelist);
-static void                         castle_vmap_freelist_grow(castle_vmap_freelist_t
-                                                             *castle_vmap_freelist,
-                                                             int freelist_bucket_idx, int slots);
+static void                         castle_vmap_freelist_grow(int freelist_bucket_idx, int slots);
 
 int castle_vmap_fast_map_init(void)
 {
@@ -279,7 +277,7 @@ void *castle_vmap_fast_map(struct page **pgs, int nr_pages)
             /* 1. drop the lock on the bucket */
             spin_unlock(&castle_vmap_lock[freelist_bucket_idx].lock);
             /* 2. grow the freelist */
-            castle_vmap_freelist_grow(castle_vmap_freelist, freelist_bucket_idx, need_slots);
+            castle_vmap_freelist_grow(freelist_bucket_idx, need_slots);
             /* 3. and retry */
             continue;
         }
@@ -365,11 +363,10 @@ void castle_vmap_fast_unmap(void *vaddr, int nr_pages)
  * @param freelist_bucket_idx   The freelist bucket index to be grown.
  * @param slots                 The number of slots to grow to.
  */
-static void castle_vmap_freelist_grow(castle_vmap_freelist_t *castle_vmap_freelist,
-                                      int freelist_bucket_idx, int slots)
+static void castle_vmap_freelist_grow(int freelist_bucket_idx, int slots)
 {
     castle_vmap_freelist_t  *new;
-
+    castle_vmap_freelist_t *castle_vmap_freelist;
     debug("Adding new freelist of %d slots for bucket size %d\n",
           slots * CASTLE_VMAP_FREELIST_MULTI, SLOT_SIZE(freelist_bucket_idx));
     new = castle_vmap_freelist_init(SLOT_SIZE(freelist_bucket_idx), slots * CASTLE_VMAP_FREELIST_MULTI);
@@ -386,6 +383,7 @@ static void castle_vmap_freelist_grow(castle_vmap_freelist_t *castle_vmap_freeli
      * slots became free, and that could never happen because freelists not at the head are not used
      * for allocations.
      */
+    castle_vmap_freelist = get_freelist_head(freelist_bucket_idx);
     if (castle_vmap_freelist->slots_free == castle_vmap_freelist->nr_slots)
     {
         debug("Dropping new list for freelist bucket index %d\n", freelist_bucket_idx);
