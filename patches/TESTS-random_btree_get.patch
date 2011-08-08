@@ -1,0 +1,385 @@
+diff --git a/kernel/castle_bloom.c b/kernel/castle_bloom.c
+--- a/kernel/castle_bloom.c
++++ b/kernel/castle_bloom.c
+@@ -801,6 +801,7 @@
+     if (!btree_nodes_c2bs)
+     {
+         castle_printk(LOG_WARN, "Failed to alloc btree_nodes_c2bs.\n");
++        castle_printk(LOG_DEVEL, "castle_bloom_index_read\n");
+         c_bvec->submit_complete(c_bvec, -ENOMEM, INVAL_VAL_TUP);
+         return;
+     }
+diff --git a/kernel/castle_btree.c b/kernel/castle_btree.c
+--- a/kernel/castle_btree.c
++++ b/kernel/castle_btree.c
+@@ -1539,7 +1539,7 @@
+     clear_bit(CBV_ROOT_LOCKED_BIT, &c_bvec->flags);
+ }
+ 
+-static inline c_ext_pos_t castle_btree_root_get(c_bvec_t *c_bvec)
++c_ext_pos_t castle_btree_root_get(c_bvec_t *c_bvec)
+ {
+     struct castle_attachment *att = c_bvec->c_bio->attachment;
+ 
+@@ -1553,8 +1553,8 @@
+     return c_bvec->tree->root_node;
+ }
+ 
+-static void castle_btree_c2b_forget(c_bvec_t *c_bvec);
+-static void __castle_btree_submit(c_bvec_t *c_bvec,
++void castle_btree_c2b_forget(c_bvec_t *c_bvec);
++void __castle_btree_submit(c_bvec_t *c_bvec,
+                                   c_ext_pos_t  node_cep,
+                                   void *parent_key);
+ 
+@@ -1585,11 +1585,11 @@
+     }
+ 
+     /* Get reference on objects before reads. */
+-    if (!err && (c_bvec_data_dir(c_bvec) == READ))
+-    {
+-        BUG_ON(!c_bvec->ref_get);
+-        c_bvec->ref_get(c_bvec, cvt);
+-    }
++//    if (!err && (c_bvec_data_dir(c_bvec) == READ))
++//    {
++//        BUG_ON(!c_bvec->ref_get);
++//        c_bvec->ref_get(c_bvec, cvt);
++//    }
+ 
+     /* Free the c2bs correctly. Call twice to release parent and child
+        (if both exist) */
+@@ -2587,7 +2587,10 @@
+             castle_btree_io_end(c_bvec, lub_cvt, 0);
+         }
+         else
++        {
++            castle_printk(LOG_DEVEL, "not found?\n");
+             castle_btree_io_end(c_bvec, INVAL_VAL_TUP, 0);
++        }
+     }
+     else
+     {
+@@ -2623,7 +2626,7 @@
+         castle_btree_read_process(c_bvec);
+ }
+ 
+-static void castle_btree_c2b_forget(c_bvec_t *c_bvec)
++void castle_btree_c2b_forget(c_bvec_t *c_bvec)
+ {
+     int write = (c_bvec_data_dir(c_bvec) == WRITE), write_unlock;
+     c2_block_t *c2b_to_forget;
+@@ -2754,7 +2757,7 @@
+     castle_btree_bvec_queue(c_bvec);
+ }
+ 
+-static void __castle_btree_submit(c_bvec_t *c_bvec,
++void __castle_btree_submit(c_bvec_t *c_bvec,
+                                   c_ext_pos_t node_cep,
+                                   void *parent_key)
+ {
+diff --git a/kernel/castle_btree.h b/kernel/castle_btree.h
+--- a/kernel/castle_btree.h
++++ b/kernel/castle_btree.h
+@@ -43,6 +43,10 @@
+ int         castle_btree_init         (void);
+ void        castle_btree_free         (void);
+ 
++c_ext_pos_t castle_btree_root_get(c_bvec_t *c_bvec);
++void castle_btree_c2b_forget(c_bvec_t *c_bvec);
++void __castle_btree_submit(c_bvec_t *c_bvec, c_ext_pos_t node_cep, void *parent_key);
++
+ typedef struct vlba_key {
+     /* align:   4 */
+     /* offset:  0 */ uint32_t length;
+diff --git a/kernel/castle_cache.c b/kernel/castle_cache.c
+--- a/kernel/castle_cache.c
++++ b/kernel/castle_cache.c
+@@ -340,6 +340,7 @@
+ DEFINE_PER_CPU(castle_cache_vmap_pgs_t, castle_cache_vmap_pgs);
+ DEFINE_PER_CPU(struct mutex, castle_cache_vmap_lock);
+ 
++struct task_struct     *btree_thread;
+ struct task_struct     *castle_cache_flush_thread;
+ static DECLARE_WAIT_QUEUE_HEAD(castle_cache_flush_wq);
+ static atomic_t                castle_cache_flush_seq;
+@@ -3087,6 +3088,7 @@
+ 
+ void castle_cache_flush_wakeup(void)
+ {
++    castle_printk(LOG_DEVEL, "castle_cache_flush_wakeup()\n");
+     wake_up_process(castle_cache_flush_thread);
+ }
+ 
+@@ -3195,7 +3197,7 @@
+ 
+     BUG_ON(BLOCK_OFFSET(cep.offset));
+ 
+-    castle_cache_flush_wakeup();
++    //castle_cache_flush_wakeup();
+     might_sleep();
+     for(;;)
+     {
+@@ -5137,16 +5139,189 @@
+     return EXIT_SUCCESS;
+ }
+ 
++#define castle_key_header_size(_nr_dims) castle_object_btree_key_header_size(_nr_dims)
++
++uint32_t castle_build_key_len(c_vl_bkey_t *key,
++                              size_t buf_len,
++                              int dims,
++                              const int *key_lens,
++                              const uint8_t * const *keys,
++                              const uint8_t *key_flags)
++{
++    int *lens = (int *)key_lens;
++    uint32_t needed, payload_offset;
++    int i;
++
++    /* Workout the header size (including the dim_head array). */
++    needed = castle_key_header_size(dims);
++    for (i = 0; i < dims; i++)
++        needed += lens[i];
++
++    if (!key || buf_len == 0 || !keys || buf_len < needed)
++        return needed;
++
++    payload_offset = castle_key_header_size(dims);
++    key->length = needed - 4; /* Length doesn't include length field. */
++    key->nr_dims = dims;
++    *((uint64_t *)key->_unused) = 0;
++
++    /* Go through all okey dimensions and write them in. */
++    for (i = 0; i < dims; i++)
++    {
++        if (key_flags)
++            key->dim_head[i] = KEY_DIMENSION_HEADER(payload_offset, key_flags[i]);
++        else
++            key->dim_head[i] = KEY_DIMENSION_HEADER(payload_offset, 0);
++        memcpy((char *)key + payload_offset, keys[i], lens[i]);
++        payload_offset += lens[i];
++    }
++
++    return needed;
++}
++
++void btree_thread_cb(c_bvec_t *c_bvec, int err, c_val_tup_t cvt)
++{
++    static int i = 0;
++    struct timeval time;
++
++    if (!(++i % 100000))
++    {
++        do_gettimeofday(&time);
++        castle_printk(LOG_DEVEL, "%ld.%ld %d point gets\n", time.tv_sec, time.tv_usec/1000, i);
++    }
++
++    if (err || CVT_INVALID(cvt))
++        castle_printk(LOG_DEVEL, "err = %d CVT_INLINE = %d CVT_INVALID == %d\n",
++                err, CVT_INLINE(cvt), CVT_INVALID(cvt));
++
++    castle_free(c_bvec->key);
++    castle_btree_c2b_forget(c_bvec);
++    castle_attachment_put(c_bvec->c_bio->attachment);
++    castle_utils_bio_free(c_bvec->c_bio);
++}
++
++static int btree_thread_func(void *unused)
++{
++    struct castle_component_tree *ct;
++    struct castle_btree_type *btree;
++    struct castle_double_array *da;
++    c_ext_pos_t root_cep;
++    c_vl_bkey_t *key = NULL;
++    c_bvec_t *c_bvec;
++    c_bio_t *c_bio;
++
++    castle_printk(LOG_DEVEL, "sleeping 10s before starting\n");
++    msleep(10000);
++    castle_printk(LOG_DEVEL, "slept 10s, starting\n");
++
++    while (!kthread_should_stop())
++    {
++        int i;
++
++        int key_lens[1];
++        uint8_t *keys[1];
++        uint64_t x;
++        static uint64_t y = 0;
++
++// number of keys inserted in DA
++#define TESTS_RANDOM_BTREE_GET_NUM_KEYS 800000000
++
++        /* "Random" key */
++        y += 479001599;
++        y = y % TESTS_RANDOM_BTREE_GET_NUM_KEYS;
++
++        x = __cpu_to_be64(y++);
++        key_lens[0] = sizeof(x);
++        keys[0] = (uint8_t *)&x;
++
++        key = castle_alloc(48);
++        castle_build_key_len(key, 48, 1, key_lens, (const uint8_t * const *) keys, NULL);
++//        vl_bkey_print(LOG_DEVEL, key);
++
++        c_bio = castle_utils_bio_alloc(1);
++        if (!c_bio)
++            break;
++
++        c_bio->attachment = castle_attachment_get(0, READ); // collection_id, direction
++        if (!c_bio->attachment)
++        {
++            castle_printk(LOG_DEVEL, "couldn't get attachment\n");
++            break;
++        }
++
++        c_bio->data_dir = READ;
++
++        c_bvec = c_bio->c_bvecs;
++        c_bvec->key = key;
++        c_bvec->cpu_index = 0;
++        c_bvec->cpu = castle_double_array_request_cpu(c_bvec->cpu_index);
++        c_bvec->orig_complete = NULL;
++        atomic_set(&c_bvec->reserv_nodes, 0);
++
++#define TESTS_RANDOM_BTREE_GET_DA_ID    1           // <--- DA_ID goes here
++
++        /* castle_double_array_submit */
++        da = castle_da_hash_get_func(TESTS_RANDOM_BTREE_GET_DA_ID);
++        if (!da)
++            break;
++
++        /* castle_da_read_bvec_start */
++        for (i = MAX_DA_LEVEL-1; i > 0; i--)
++        {
++            if (!list_empty(&da->levels[i].trees))
++            {
++                c_bvec->tree = list_entry(da->levels[i].trees.next,
++                        struct castle_component_tree, da_list);
++//                castle_printk(LOG_DEVEL, "found ct %p level = %d i=%d tree->da = %p da = %p\n",
++//                        c_bvec->tree, c_bvec->tree->level, i, c_bvec->tree->da, da);
++                break;
++            }
++        }
++
++        c_bvec->orig_complete = NULL;
++        c_bvec->submit_complete = btree_thread_cb;
++
++        /* castle_btree_submit */
++        c_bvec->btree_depth       = 0;
++        c_bvec->btree_node        = NULL;
++        c_bvec->btree_parent_node = NULL;
++        c_bvec->parent_key        = NULL;
++
++        /* _castle_btree_submit */
++        ct = c_bvec->tree;
++        btree = castle_btree_type_get(ct->btree_type);
++        clear_bit(CBV_ROOT_LOCKED_BIT, &c_bvec->flags);
++        clear_bit(CBV_PARENT_WRITE_LOCKED, &c_bvec->flags);
++        clear_bit(CBV_CHILD_WRITE_LOCKED, &c_bvec->flags);
++        clear_bit(CBV_C2B_WRITE_LOCKED, &c_bvec->flags);
++        root_cep = castle_btree_root_get(c_bvec);
++        c_bvec->btree_levels = ct->tree_depth;
++
++        __castle_btree_submit(c_bvec, root_cep, btree->max_key);
++    }
++
++    castle_printk(LOG_DEVEL, "sleeping until exit\n");
++
++    while (!kthread_should_stop())
++        msleep(1000);
++
++    castle_printk(LOG_DEVEL, "btree_thread_func exiting\n");
++
++    return 0;
++}
++
+ /***** Init/fini functions *****/
+ static int castle_cache_flush_init(void)
+ {
+     castle_cache_flush_thread = kthread_run(castle_cache_flush, NULL, "castle_flush");
++    btree_thread = kthread_run(btree_thread_func, NULL, "btree_thread");
+     return 0;
+ }
+ 
+ static void castle_cache_flush_fini(void)
+ {
+     kthread_stop(castle_cache_flush_thread);
++    kthread_stop(btree_thread);
+ }
+ 
+ static int castle_cache_hashes_init(void)
+diff --git a/kernel/castle_da.c b/kernel/castle_da.c
+--- a/kernel/castle_da.c
++++ b/kernel/castle_da.c
+@@ -9006,6 +9006,7 @@
+     err = castle_da_all_cts_get(da, &c_bvec->nr_trees, &c_bvec->trees);
+     if (err)
+     {
++        castle_printk(LOG_DEVEL, "read_bvec_start\n");
+         c_bvec->submit_complete(c_bvec, err, INVAL_VAL_TUP);
+         return;
+     }
+@@ -9025,6 +9026,11 @@
+     castle_bloom_submit(c_bvec);
+ }
+ 
++struct castle_double_array* castle_da_hash_get_func(c_da_t da_id)
++{
++    return castle_da_hash_get(da_id);
++}
++
+ /**
+  * Submit request to DA, queueing write IOs that are not within the DA ios_budget.
+  *
+diff --git a/kernel/castle_da.h b/kernel/castle_da.h
+--- a/kernel/castle_da.h
++++ b/kernel/castle_da.h
+@@ -54,5 +54,6 @@
+ void castle_da_version_delete   (c_da_t da_id);
+ 
+ uint32_t castle_da_count(void);
++struct castle_double_array* castle_da_hash_get_func(c_da_t da_id);
+ void castle_da_threads_priority_set(int nice_value);
+ #endif /* __CASTLE_DA_H__ */
+diff --git a/kernel/castle_utils.c b/kernel/castle_utils.c
+--- a/kernel/castle_utils.c
++++ b/kernel/castle_utils.c
+@@ -500,6 +500,24 @@
+     castle_printk(LOG_DEBUG, "\n");
+ }
+ 
++void vl_bkey_print(c_printk_level_t level, c_vl_bkey_t *key)
++{
++    int dim;
++
++    for (dim = 0; dim < key->nr_dims; dim++)
++    {
++        uint32_t key_dim_len, key_dim_flags;
++        uint64_t *key_dim;
++
++        key_dim_len     = castle_object_btree_key_dim_length(key, dim);
++        key_dim_flags   = castle_object_btree_key_dim_flags_get(key, dim);
++        key_dim         = (uint64_t *)castle_object_btree_key_dim_get(key, dim);
++
++        castle_printk(level, "Dim %d of %d [%p] length %d\n",
++                dim+1, key->nr_dims, *key_dim, key_dim_len);
++    }
++}
++
+ #if 0
+ void vl_key_print(c_printk_level_t level, c_vl_key_t *vl_key)
+ {
+diff --git a/kernel/castle_versions.c b/kernel/castle_versions.c
+--- a/kernel/castle_versions.c
++++ b/kernel/castle_versions.c
+@@ -1836,7 +1836,7 @@
+ 
+     /* Check that the version limit is set correctly (i.e. below the number of
+        entries we are guanateed to fit into leaf nodes). */
+-    BUG_ON(castle_btree_vlba_max_nr_entries_get(VLBA_HDD_RO_TREE_NODE_SIZE) < CASTLE_VERSIONS_MAX);
++//    BUG_ON(castle_btree_vlba_max_nr_entries_get(VLBA_HDD_RO_TREE_NODE_SIZE) < CASTLE_VERSIONS_MAX);
+     ret = -ENOMEM;
+     castle_versions_cache = kmem_cache_create("castle_versions",
+                                                sizeof(struct castle_version),

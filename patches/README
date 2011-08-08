@@ -1,0 +1,7 @@
+TESTS-random_btree_get.patch
+===
+Perform random point gets on the highest-level tree in DA.
+You'll need to define:
+    TESTS_RANDOM_BTREE_GET_NUM_KEYS - number of sequential keys you inserted in the DA
+    TESTS_RANDOM_BTREE_GET_DA_ID - the DA ID
+Expects single-dimensional keys so run perf_replace with --no-thread-safe-keys and --key-type ascending
