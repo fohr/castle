@@ -2278,6 +2278,24 @@ static c2_block_t* castle_cache_block_hash_find(c_ext_pos_t cep, uint32_t nr_pag
 }
 
 /**
+ * Give a hint that a block can be reclaimed soon
+ * Caller must hold a reference to the block
+ * The reference is released as part of the call
+ * Caller must not be in interrupt context
+ *
+ */
+void put_c2b_and_demote(c2_block_t *c2b)
+{
+    spin_lock_irq(&castle_cache_block_lru_lock);
+    if(!c2b_dirty(c2b)) { 
+	list_move(&c2b->clean, &castle_cache_cleanlist);
+    }
+    spin_unlock_irq(&castle_cache_block_lru_lock);
+    put_c2b(c2b);
+}
+
+
+/**
  * Gets c2b matching (cep, nr_pages) and adjusts its dirty/freelist position.
  *
  * @arg cep         Specifies the c2b offset and extent
@@ -3568,9 +3586,12 @@ static void c2_pref_block_chunk_put(c_ext_pos_t cep, c2_pref_window_t *window, i
                 cep.ext_id, CHUNK(cep.offset), castle_extent_size_get(cep.ext_id)-1,
                 atomic_read(&c2b->softpin_cnt));
 
-        put_c2b(c2b);
-        if (demote)
-            castle_cache_block_hash_demote(cep, BLKS_PER_CHK);
+	if (demote) {
+	    put_c2b_and_demote(c2b);
+	}
+	else {
+	    put_c2b(c2b);
+	}
     }
 }
 

@@ -475,7 +475,7 @@ static void castle_ct_immut_iter_next_node(c_immut_iter_t *iter)
     {
         debug("Moving to the next block after: "cep_fmt_str_nl,
                cep2str(iter->curr_c2b->cep));
-        put_c2b(iter->curr_c2b);
+        put_c2b_and_demote(iter->curr_c2b);
     }
     /* next_c2b becomes curr_c2b */
     iter->curr_c2b = iter->next_c2b;
