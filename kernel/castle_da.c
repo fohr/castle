@@ -412,7 +412,8 @@ static void castle_ct_immut_iter_next_node_find(c_immut_iter_t *iter,
     struct timespec ts_start, ts_end;
 #endif
 
-    debug("Looking for next node starting with "cep_fmt_str_nl, cep2str(cep));
+    castle_printk(LOG_DEBUG, "%s::Looking for next node starting with "cep_fmt_str_nl,
+            __FUNCTION__, cep2str(cep));
     BUG_ON(iter->next_c2b);
     c2b=NULL;
     while(!EXT_POS_INVAL(cep))
@@ -440,6 +441,7 @@ static void castle_ct_immut_iter_next_node_find(c_immut_iter_t *iter,
         write_unlock_c2b(c2b);
         node = c2b_bnode(c2b);
         /* Determine if this is a leaf-node with entries */
+        BUG_ON(node->magic != BTREE_NODE_MAGIC); //see trac #2844
         if(castle_ct_immut_iter_next_node_init(iter, node))
         {
             /* It is */
@@ -450,8 +452,8 @@ static void castle_ct_immut_iter_next_node_find(c_immut_iter_t *iter,
             return;
         }
         cep = castle_ct_immut_iter_next_node_cep_find(iter, cep, node_size);
-        debug("Node non-leaf or no non-leaf-ptr entries, moving to " cep_fmt_str_nl,
-               cep2str(cep));
+        castle_printk(LOG_DEBUG, "%s::Node non-leaf or no non-leaf-ptr entries, moving to " cep_fmt_str_nl,
+               __FUNCTION__, cep2str(cep));
     }
     debug("%s::no leaf node found.\n", __FUNCTION__);
     /* Drop c2b if we failed to find a leaf node, but have an outstanding reference to
@@ -493,7 +495,8 @@ static void castle_ct_immut_iter_next_node(c_immut_iter_t *iter)
     BUG_ON(!iter->curr_node->is_leaf ||
            (iter->curr_node->used <= iter->next_idx));
     iter->curr_idx  = iter->next_idx;
-    debug("Moved to cep="cep_fmt_str_nl, cep2str(iter->curr_c2b->cep));
+    castle_printk(LOG_DEBUG, "%s::Moved to cep="cep_fmt_str_nl,
+            __FUNCTION__, cep2str(iter->curr_c2b->cep));
 
     /* Fire the node_start callback. */
     if (iter->node_start)
@@ -599,7 +602,8 @@ static void castle_ct_immut_iter_init(c_immut_iter_t *iter,
     c_ext_pos_t first_node_cep;
     uint16_t first_node_size;
 
-    debug("Initialising immut enumerator for ct id=%d\n", iter->tree->seq);
+    castle_printk(LOG_DEBUG, "%s::Initialising immut enumerator for ct id=%d\n",
+            __FUNCTION__, iter->tree->seq);
     iter->btree     = castle_btree_type_get(iter->tree->btree_type);
     iter->completed = 0;
     iter->curr_c2b  = NULL;
@@ -612,6 +616,8 @@ static void castle_ct_immut_iter_init(c_immut_iter_t *iter,
     first_node_cep.ext_id = iter->tree->tree_ext_free.ext_id;
     first_node_cep.offset = 0;
     first_node_size = iter->btree->node_size(iter->tree, 0);
+    castle_printk(LOG_DEBUG, "%s::first_node_cep = "cep_fmt_str"\n",
+            __FUNCTION__, cep2str(first_node_cep));
     castle_ct_immut_iter_next_node_find(iter,
                                         first_node_cep,
                                         first_node_size);
