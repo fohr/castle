@@ -3112,7 +3112,7 @@ static c_val_tup_t castle_da_medium_obj_copy(struct castle_da_merge *merge,
         write_unlock_c2b(c_c2b);
         write_unlock_c2b(s_c2b);
         put_c2b(c_c2b);
-        put_c2b(s_c2b);
+        put_c2b_and_demote(s_c2b);
         old_cep.offset += blocks * PAGE_SIZE;
         new_cep.offset += blocks * PAGE_SIZE;
     }
