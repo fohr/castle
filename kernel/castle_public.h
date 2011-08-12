@@ -7,7 +7,7 @@
 #include <sys/time.h>
 #endif
 
-#define CASTLE_PROTOCOL_VERSION 15
+#define CASTLE_PROTOCOL_VERSION 16
 
 #define PACKED               __attribute__((packed))
 
@@ -501,8 +501,8 @@ typedef uint32_t castle_interface_token_t;
 
 typedef struct castle_request_replace {
     c_collection_id_t     collection_id;
-    c_vl_bkey_t          *key_ptr;
     uint32_t              key_len;
+    c_vl_bkey_t          *key_ptr;
     void                 *value_ptr;
     uint32_t              value_len;
 } castle_request_replace_t;
@@ -514,44 +514,39 @@ enum{
 
 typedef struct castle_request_counter_replace {
     c_collection_id_t     collection_id;
-    c_vl_bkey_t          *key_ptr;
     uint32_t              key_len;
+    c_vl_bkey_t          *key_ptr;
     void                 *value_ptr;
     uint32_t              value_len;
-    uint8_t               add; /* flag to indicate counter op type;
-                                  CASTLE_COUNTER_TYPE_{SET|ADD} */
+    uint8_t               add;              /**< Op type: CASTLE_COUNTER_TYPE_{SET|ADD}.    */
 } castle_request_counter_replace_t;
 
 typedef struct castle_request_remove {
     c_collection_id_t     collection_id;
-    c_vl_bkey_t          *key_ptr;
     uint32_t              key_len;
+    c_vl_bkey_t          *key_ptr;
 } castle_request_remove_t;
 
 typedef struct castle_request_get {
     c_collection_id_t    collection_id;
-    c_vl_bkey_t         *key_ptr;
     uint32_t             key_len;
-    void                *value_ptr; /* where to put the result */
+    c_vl_bkey_t         *key_ptr;
+    void                *value_ptr;         /**< Output buffer for result.                  */
     uint32_t             value_len;
 } castle_request_get_t;
 
 typedef struct castle_request_iter_start {
     c_collection_id_t    collection_id;
-    c_vl_bkey_t         *start_key_ptr;
     uint32_t             start_key_len;
+    c_vl_bkey_t         *start_key_ptr;
     c_vl_bkey_t         *end_key_ptr;
     uint32_t             end_key_len;
-    uint64_t             flags;
 } castle_request_iter_start_t;
-
-#define CASTLE_RING_ITER_FLAG_NONE      0x0
-#define CASTLE_RING_ITER_FLAG_NO_VALUES 0x1
 
 typedef struct castle_request_iter_next {
     castle_interface_token_t  token;
-    void                     *buffer_ptr;
     uint32_t                  buffer_len;
+    void                     *buffer_ptr;
 } castle_request_iter_next_t;
 
 typedef struct castle_request_iter_finish {
@@ -560,49 +555,60 @@ typedef struct castle_request_iter_finish {
 
 typedef struct castle_request_big_get {
     c_collection_id_t  collection_id;
-    c_vl_bkey_t       *key_ptr;
     uint32_t           key_len;
+    c_vl_bkey_t       *key_ptr;
 } castle_request_big_get_t;
 
 typedef struct castle_request_get_chunk {
     castle_interface_token_t  token;
-    void                     *buffer_ptr;
     uint32_t                  buffer_len;
+    void                     *buffer_ptr;
 } castle_request_get_chunk_t;
 
 typedef struct castle_request_big_put {
     c_collection_id_t  collection_id;
-    c_vl_bkey_t       *key_ptr;
     uint32_t           key_len;
+    c_vl_bkey_t       *key_ptr;
     uint64_t           value_len;
 } castle_request_big_put_t;
 
 typedef struct castle_request_put_chunk {
     castle_interface_token_t  token;
-    void                     *buffer_ptr;
     uint32_t                  buffer_len;
+    void                     *buffer_ptr;
 } castle_request_put_chunk_t;
 
 typedef struct castle_request {
-    uint32_t call_id;
-    uint32_t tag;
+    uint32_t    call_id;
+    uint32_t    tag;
     union {
-        castle_request_replace_t     replace;
-        castle_request_remove_t      remove;
-        castle_request_get_t         get;
+        castle_request_replace_t            replace;
+        castle_request_remove_t             remove;
+        castle_request_get_t                get;
 
         castle_request_counter_replace_t    counter_replace;
 
-        castle_request_big_get_t     big_get;
-        castle_request_get_chunk_t   get_chunk;
-        castle_request_big_put_t     big_put;
-        castle_request_put_chunk_t   put_chunk;
+        castle_request_big_get_t            big_get;
+        castle_request_get_chunk_t          get_chunk;
+        castle_request_big_put_t            big_put;
+        castle_request_put_chunk_t          put_chunk;
 
-        castle_request_iter_start_t  iter_start;
-        castle_request_iter_next_t   iter_next;
-        castle_request_iter_finish_t iter_finish;
+        castle_request_iter_start_t         iter_start;
+        castle_request_iter_next_t          iter_next;
+        castle_request_iter_finish_t        iter_finish;
     };
+    uint8_t     flags;                      /**< Flags affecting op, see CASTLE_RING_FLAGs.     */
 } castle_request_t;
+
+/**
+ * Value types used in struct castle_request.flags field.
+ */
+enum {
+    CASTLE_RING_FLAG_NONE = 0x0,            /**< No flags specified.                            */
+    CASTLE_RING_FLAG_NO_PREFETCH,           /**< Don't prefetch as part of this request.        */
+    CASTLE_RING_FLAG_NO_CACHE,              /**< Don't evict other data to cache this request.  */
+    CASTLE_RING_FLAG_ITER_NO_VALUES         /**< Iterator to return only keys, not values.      */
+};
 
 typedef struct castle_response {
     uint32_t                 call_id;

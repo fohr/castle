@@ -130,7 +130,6 @@ struct castle_back_op
 
 struct castle_back_iterator
 {
-    uint64_t                      flags;
     c_collection_id_t             collection_id;
     c_vl_bkey_t                  *start_key;
     c_vl_bkey_t                  *end_key;
@@ -166,6 +165,7 @@ struct castle_back_stateful_op
     uint32_t                            use_count;
     int                                 in_use;             /**< Boolean                        */
     uint32_t                            tag;
+    uint8_t                             flags;              /**< From userland request          */
     int                                 cpu;                /**< CPU all ops should run on      */
     int                                 cpu_index;          /**< CPU index all ops should use   */
 
@@ -1696,9 +1696,9 @@ static void castle_back_iter_start(void *data)
 #endif
 
     stateful_op->tag = CASTLE_RING_ITER_START;
+    stateful_op->flags = op->req.flags;
     stateful_op->curr_op = NULL;
 
-    stateful_op->iterator.flags = op->req.iter_start.flags;
     stateful_op->iterator.collection_id = op->req.iter_start.collection_id;
     stateful_op->iterator.saved_key = NULL;
     stateful_op->iterator.start_key = start_key;
@@ -1864,7 +1864,7 @@ static int castle_back_iter_next_callback(struct castle_object_iterator *iterato
                         stateful_op->iterator.collection_id,
                         op->buf,
                         buf_len - buf_used,
-                        !(stateful_op->iterator.flags & CASTLE_RING_ITER_FLAG_NO_VALUES));
+                        !(stateful_op->flags & CASTLE_RING_FLAG_ITER_NO_VALUES));
 
     if (cur_len == 0)
     {
@@ -1962,7 +1962,7 @@ static void _castle_back_iter_next(void *data)
                 stateful_op->iterator.collection_id,
                 op->buf,
                 buf_len,
-                !(stateful_op->iterator.flags & CASTLE_RING_ITER_FLAG_NO_VALUES));
+                !(stateful_op->flags & CASTLE_RING_FLAG_ITER_NO_VALUES));
 
         if (buf_used == 0)
         {
