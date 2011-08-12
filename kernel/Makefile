@@ -62,6 +62,10 @@ endef
 tags:
 	$(all_sources) | xargs ctags
 
+.PHONY: etags
+etags:
+	$(all_sources) | xargs etags
+
 .PHONY: cscope
 cscope:
 	$(all_sources) > cscope.files

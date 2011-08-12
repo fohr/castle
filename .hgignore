@@ -18,6 +18,7 @@ user/utils/castle_scan
 *cscope.in.out
 *cscope.po.out
 *tags
+TAGS
 *.swp
 *.patch
 kernel/.tmp_versions/castle-fs.mod
