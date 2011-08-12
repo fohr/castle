@@ -40,8 +40,9 @@ all: $(TARGET).ko
 # Make castle_compile.h PHONY, to get it refreshed every build
 .PHONY: castle_compile.h
 castle_compile.h:
-	@if [ ! -e ../.hg-rev ]; then echo "\nCould not find hg revision number. Please add the following to your fs.hg/.hg/hgrc:\n[hooks]\nupdate = hg tip --template \"{date|date} {rev}:{node|short}\" > .hg-rev\ncommit = hg tip --template \"{date|date} {rev}:{node|short}\" > .hg-rev\n"; fi
-	@echo "#define CASTLE_COMPILE_CHANGESET \"$(shell (if [ -e ../.hg-rev ]; then cat ../.hg-rev; else echo "unavailable"; fi) 2>/dev/null)\"" > $@
+	@if [ ! -e ../.hg-rev ]; then echo -e "\nCould not find hg revision number. Please add the following to your fs.hg/.hg/hgrc:\n[hooks]\nupdate = hg tip --template \"{date|date} {rev}:{node|short}\" > .hg-rev\ncommit = hg tip --template \"{date|date} {rev}:{node|short}\" > .hg-rev\n"; fi
+	@echo "#define CASTLE_COMPILE_CHANGESET \"$(shell (if [ -e ../.hg-rev ]; then cat ../.hg-rev; else echo "unavailable"; fi) 2>/dev/null)\"" > $@.new
+	@if cmp -s $@ $@.new; then rm -f $@.new; else mv -f $@.new $@; fi
 
 .PHONY: $(TARGET).ko
 $(TARGET).ko: castle_compile.h
