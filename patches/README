@@ -1,7 +1,9 @@
 TESTS-random_btree_get.patch
 ===
+Test runs as a kthread that starts at module load, kicks off gets after ~10s.
 Perform random point gets on the highest-level tree in DA.
 You'll need to define:
     TESTS_RANDOM_BTREE_GET_NUM_KEYS - number of sequential keys you inserted in the DA
     TESTS_RANDOM_BTREE_GET_DA_ID - the DA ID
-Expects single-dimensional keys so run perf_replace with --no-thread-safe-keys and --key-type ascending
+Expects single-dimensional keys so run perf_replace with --no-thread-safe-keys and --key-type ascending, e.g.:
+    perf_replace --iterations 1 --batch-size 10000000 --key-type ascending --value-size 4 --async --reuse-buffer-count 128 --no-thread-safe-keys --output /dev/null
