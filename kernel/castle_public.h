@@ -7,7 +7,7 @@
 #include <sys/time.h>
 #endif
 
-#define CASTLE_PROTOCOL_VERSION 16
+#define CASTLE_PROTOCOL_VERSION 17
 
 #define PACKED               __attribute__((packed))
 
@@ -476,7 +476,7 @@ typedef struct castle_var_length_btree_key {
     (KEY_DIMENSION_FLAGS(key->dim_head[dim]));                                            \
 })
 
-#define CASTLE_RING_PAGES (16)                              /**< 64 requests/page.                */
+#define CASTLE_RING_PAGES (32)                              /**< 32 requests/page.                */
 #define CASTLE_RING_SIZE (CASTLE_RING_PAGES << PAGE_SHIFT)  /**< Must be ^2 or things break.      */
 
 #define CASTLE_STATEFUL_OPS 512
@@ -492,8 +492,8 @@ typedef struct castle_var_length_btree_key {
 #define CASTLE_RING_GET_CHUNK 6
 #define CASTLE_RING_ITER_START 7
 #define CASTLE_RING_ITER_NEXT 8
-#define CASTLE_RING_ITER_FINISH 9
-#define CASTLE_RING_ITER_SKIP 10
+#define CASTLE_RING_ITER_SKIP 9
+#define CASTLE_RING_ITER_FINISH 10
 #define CASTLE_RING_REMOVE 11
 #define CASTLE_RING_COUNTER_REPLACE 12
 
@@ -541,6 +541,8 @@ typedef struct castle_request_iter_start {
     c_vl_bkey_t         *start_key_ptr;
     c_vl_bkey_t         *end_key_ptr;
     uint32_t             end_key_len;
+    void                *buffer_ptr;        /**< Resulting kvps from iterator.              */
+    uint32_t             buffer_len;        /**< Size of buffer_ptr buffer.                 */
 } castle_request_iter_start_t;
 
 typedef struct castle_request_iter_next {

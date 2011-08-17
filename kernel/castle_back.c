@@ -340,7 +340,7 @@ static inline int __castle_back_buffer_exists(struct castle_back_conn *conn,
  * @also castle_back_buffer_put()
  */
 static inline struct castle_back_buffer *castle_back_buffer_get(struct castle_back_conn *conn,
-                                                                  unsigned long user_addr)
+                                                                unsigned long user_addr)
 {
     struct rb_node *node;
     struct castle_back_buffer *buffer, *ret = NULL;
@@ -471,7 +471,10 @@ static struct castle_back_stateful_op *castle_back_find_stateful_op(struct castl
     struct castle_back_stateful_op *stateful_op = conn->stateful_ops + (token % MAX_STATEFUL_OPS);
 
     spin_lock(&stateful_op->lock);
-    if (stateful_op->in_use && stateful_op->token == token && stateful_op->tag == tag && !stateful_op->expiring)
+    if (stateful_op->in_use
+            && stateful_op->token == token
+            && stateful_op->tag == tag
+            && !stateful_op->expiring)
     {
         debug("castle_back_find_stateful_op returning: token = 0x%x, use_count = %u, index = %ld\n",
                     stateful_op->token, stateful_op->use_count, stateful_op - conn->stateful_ops);
@@ -697,12 +700,18 @@ static void castle_back_stateful_op_expire(struct work_struct *work)
 /**
  * Checks the token is still valid before queueing in case it has finished in between the find
  * and getting here.
+ *
+ * @also castle_back_release()
+ * @also stateful_op->expire()
  */
 static int castle_back_stateful_op_queue_op(struct castle_back_stateful_op *stateful_op,
-        castle_interface_token_t token, struct castle_back_op *op)
+                                            castle_interface_token_t token,
+                                            struct castle_back_op *op)
 {
     BUG_ON(!spin_is_locked(&stateful_op->lock));
-    if (!stateful_op->in_use || stateful_op->token != token || stateful_op->cancel_on_op_complete)
+    if (!stateful_op->in_use
+            || stateful_op->token != token
+            || stateful_op->cancel_on_op_complete)
     {
         error("Token expired 0x%x\n", token);
         return -EBADFD;
@@ -720,7 +729,7 @@ static int castle_back_stateful_op_queue_op(struct castle_back_stateful_op *stat
  * cancelled and is now invalid. The lock is dropped on non-zero return.
  */
 static int WARN_UNUSED_RET castle_back_stateful_op_completed_op
-        (struct castle_back_stateful_op *stateful_op)
+                                        (struct castle_back_stateful_op *stateful_op)
 {
     BUG_ON(!spin_is_locked(&stateful_op->lock));
     if (stateful_op->cancel_on_op_complete)
@@ -790,7 +799,8 @@ static void castle_back_stateful_op_finish_all(struct castle_back_stateful_op *s
 
     /* Return err on all queued ops */
 
-    list_for_each_safe(pos, tmp, &stateful_op->op_queue) {
+    list_for_each_safe(pos, tmp, &stateful_op->op_queue)
+    {
         op = list_entry(pos, struct castle_back_op, list);
         list_del(pos);
         if (op->buf)
@@ -890,8 +900,10 @@ static struct vm_operations_struct castle_back_vm_ops = {
  * High(er) level rpc callbacks
  */
 
-static int castle_back_reply(struct castle_back_op *op, int err,
-                             castle_interface_token_t token, uint64_t length)
+static int castle_back_reply(struct castle_back_op *op,
+                             int err,
+                             castle_interface_token_t token,
+                             uint64_t length)
 {
     struct castle_back_conn *conn = op->conn;
     castle_back_ring_t *back_ring = &conn->back_ring;
@@ -1570,8 +1582,115 @@ err0: castle_back_reply(op, err, 0, 0);
 
 /**** ITERATORS ****/
 
-static void _castle_back_iter_next(void *data);
-static void _castle_back_iter_finish(void *data);
+/*
+ * CASTLE_BACK_ITER_START
+ *      Initialises an iterator and immediately begins returning values.
+ *      In the case where the total set of results returned by the iterator
+ *      fits into the provided buffer the caller needs to issue no further
+ *      ring operations.
+ *
+ *      castle_back_iter_start()
+ *          Gets, initialises and takes a stateful_op reference.  Enables
+ *          expiry and decodes the relevant keys to be passed to the
+ *          castle_objects function (castle_object_iter_start()) that
+ *          initialises the underlying iterator structures.
+ *
+ *          Fakes up a userland iter_next structure and calls directly into
+ *          fastpath _castle_back_iter_next() (takes a stateful_op structure
+ *          instead of searching based on provided iter_next token).
+ *
+ *          Overflows into CASTLE_BACK_ITER_NEXT
+ *
+ * CASTLE_BACK_ITER_NEXT
+ *      Requests results from castle_objects iterator and places them into
+ *      the userland-provided buffer.
+ *
+ *      For range queries where the results do not fit into a single buffer
+ *      the userland code is expected to make multiple requests.
+ *
+ *      castle_back_iter_next()
+ *          Only called when the request came from the ring.  Looks up the
+ *          stateful_op structure based on iter_next request token.  There is
+ *          no need to take a further stateful_op reference - it has not been
+ *          dropped since castle_back_iter_start().
+ *
+ *      _castle_back_iter_next()
+ *          Takes a reference to the userland-provided output buffer and
+ *          requeues __castle_back_iter_next() which does the heavy lifting.
+ *
+ *      __castle_back_iter_next()
+ *          If this is not the first ring request there may be a saved KVP
+ *          in the stateful_op structure.  Before the iterator is restarted
+ *          this value is saved to the buffer.
+ *
+ *          castle_object_iter_next() is called with callback function
+ *          castle_back_iter_next_callback() to request more results.
+ *
+ *      castle_back_iter_next_callback()
+ *          Inserts castle_objects-provided KVP into the userland buffer using
+ *          castle_back_save_key_value_to_list().
+ *
+ *          In the common case we insert a valid KVP into the buffer and
+ *          return.
+ *
+ *          The other two cases are more interesting:
+ *
+ *          1. castle_back_save_key_value_to_list() returns 0 to indicate that
+ *          the KVP will not fit in the buffer.  In this case we store the
+ *          KVP in the stateful_op (to be inserted into the next buffer) and
+ *          set the final KVP list->next ptr to the start of the userspace
+ *          buffer indicating to userspace that the iterator has more values
+ *          to provide.  Puts a response on the ring for the userland to
+ *          consume.
+ *
+ *          2. The passed key was NULL, indicating that the underlying
+ *          iterator has been exhausted.  We set the final KVP list->next ptr
+ *          to NULL indicating to userspace that the iterator has terminated.
+ *          Fakes up a userland iter_finish structure and calls directly into
+ *          fastpath _castle_back_iter_finish() (takes a stateful_op
+ *          structure instead of searching based on provided iter_finish token).
+ *
+ *          Case (2) overflows into CASTLE_BACK_ITER_FINISH
+ *
+ * CASTLE_BACK_ITER_FINISH
+ *      Tears down underlying iterator state and frees up the stateful_op.
+ *
+ *      castle_back_iter_finish()
+ *          Only called when the request came from the ring.  Looks up the
+ *          stateful_op structure based on iter_finish request token.  There
+ *          is no need to take a further stateful_op reference - it has not
+ *          been dropped since castle_back_iter_start().
+ *
+ *      _castle_back_iter_finish()
+ *          Requeues __castle_back_iter_finish().
+ *
+ *      __castle_back_iter_finish()
+ *          Calls castle_object_iter_finish() to inform underlying iterator
+ *          to tear down state.  Puts a response on the ring for the userland
+ *          to consume.  Calls castle_back_stateful_op_finish_all() to finish
+ *          all outstanding ops on the stateful_op queue.
+ *
+ *          Finally calls castle_back_iter_clean() to free any remaining
+ *          back iterator state and puts the stateful_op.
+ *
+ * In case of early termination, e.g. by userland closing the ring, we call
+ * into castle_back_release() which calls each stateful_op's->expire().  For
+ * iterators the expire function is castle_back_iter_expire() which does a
+ * similar job to __castle_back_iter_finish() (terminating any queued ops
+ * on the stateful_op op queue).  However, in the case that there is a
+ * running op (stateful_op->curr_op) we set
+ * stateful_op->cancel_on_op_complete indicating that as soon as the running
+ * op is completed, it should not terminate.  For this reason it is essential
+ * to always call castle_back_iter_reply() (which checks the cancel bit)
+ * instead of castle_back_reply() directly.
+ */
+
+static void __castle_back_iter_next(void *data);
+static void _castle_back_iter_next(struct castle_back_op *op,
+                                   struct castle_back_stateful_op *stateful_op);
+static void __castle_back_iter_finish(void *data);
+static void _castle_back_iter_finish(struct castle_back_op *op,
+                                     struct castle_back_stateful_op *stateful_op);
 static void castle_back_iter_cleanup(struct castle_back_stateful_op *stateful_op);
 
 static void castle_back_iter_expire(struct castle_back_stateful_op *stateful_op)
@@ -1599,11 +1718,13 @@ static void castle_back_iter_call_queued(struct castle_back_stateful_op *statefu
         switch (stateful_op->curr_op->req.tag)
         {
             case CASTLE_RING_ITER_NEXT:
-                BUG_ON(!queue_work_on(stateful_op->cpu, castle_back_wq, &stateful_op->work[0]));
+                spin_unlock(&stateful_op->lock);
+                __castle_back_iter_next((void *)stateful_op);
                 break;
 
             case CASTLE_RING_ITER_FINISH:
-                BUG_ON(!queue_work_on(stateful_op->cpu, castle_back_wq, &stateful_op->work[1]));
+                spin_unlock(&stateful_op->lock);
+                __castle_back_iter_finish((void *)stateful_op);
                 break;
 
             default:
@@ -1612,17 +1733,30 @@ static void castle_back_iter_call_queued(struct castle_back_stateful_op *statefu
                 BUG();
         }
     }
+    else
+        spin_unlock(&stateful_op->lock);
 }
 
-/*
- * in error cases op != stateful_op->curr_op
+/**
+ * Iterator wrapper for castle_back_reply().
+ *
+ * Iterator functions that have either a valid token or a token that has expired
+ * during the course of the function (e.g. castle_back_stateful_op_queue_op()
+ * returned an error) should always call castle_back_iter_reply().
+ *
+ * Iterator functions that failed to get a stateful_op or have a token that
+ * expired prior to calling castle_back_find_stateful_op() should call
+ * castle_back_reply() directly.
+ *
+ * NOTE: In error cases op ! = stateful_op->curr_op.
  */
 static void castle_back_iter_reply(struct castle_back_stateful_op *stateful_op,
-        struct castle_back_op *op, int err)
+                                   struct castle_back_op *op,
+                                   int err)
 {
     debug_iter("castle_back_iter_reply, token = 0x%x.\n", stateful_op->token);
 
-    castle_back_reply(op, err, 0, 0);
+    castle_back_reply(op, err, stateful_op->token, 0);
 
     spin_lock(&stateful_op->lock);
 
@@ -1632,9 +1766,7 @@ static void castle_back_iter_reply(struct castle_back_stateful_op *stateful_op,
     if (castle_back_stateful_op_completed_op(stateful_op))
         return;
 
-    castle_back_iter_call_queued(stateful_op);
-
-    spin_unlock(&stateful_op->lock);
+    castle_back_iter_call_queued(stateful_op); // drops stateful_op->lock
 }
 
 /**
@@ -1647,12 +1779,14 @@ static void castle_back_iter_start(void *data)
 {
     struct castle_back_op *op = data;
     struct castle_back_conn *conn = op->conn;
-    int err;
+    struct castle_back_stateful_op *stateful_op;
+    struct castle_attachment *attachment;
+    castle_interface_token_t token;
     c_vl_bkey_t *start_key;
     c_vl_bkey_t *end_key;
-    castle_interface_token_t token;
-    struct castle_attachment *attachment;
-    struct castle_back_stateful_op *stateful_op;
+    uint32_t buffer_len;
+    char *buffer_ptr;
+    int err;
 
     debug_iter("castle_back_iter_start\n");
 
@@ -1707,8 +1841,8 @@ static void castle_back_iter_start(void *data)
     stateful_op->iterator.nr_bytes = 0;
     stateful_op->attachment = attachment;
 
-    INIT_WORK(&stateful_op->work[0], _castle_back_iter_next, stateful_op);
-    INIT_WORK(&stateful_op->work[1], _castle_back_iter_finish, stateful_op);
+    INIT_WORK(&stateful_op->work[0], __castle_back_iter_next, stateful_op);
+    INIT_WORK(&stateful_op->work[1], __castle_back_iter_finish, stateful_op);
 
     err = castle_object_iter_start(attachment, start_key, end_key, &stateful_op->iterator.iterator);
     if (err)
@@ -1732,7 +1866,18 @@ static void castle_back_iter_start(void *data)
 
     spin_unlock(&stateful_op->lock);
 
-    castle_back_reply(op, 0, token, 0);
+    /* Iterator has been initialised.  Fake up an iter_next request and pass
+     * it to castle_back_iter_next() to return the first buffer of results.
+     * See also: libcastle.hg:castle_iter_next_prepare() */
+    buffer_len = op->req.iter_start.buffer_len;
+    buffer_ptr = op->req.iter_start.buffer_ptr;
+    op->req.tag = CASTLE_RING_ITER_NEXT;
+    op->req.iter_next.token = token;
+    op->req.iter_next.buffer_ptr = buffer_ptr;
+    op->req.iter_next.buffer_len = buffer_len;
+
+    /* Start the iterator.  iter_next() handles castle_back(_iter)_reply(). */
+    _castle_back_iter_next(op, stateful_op);
 
     return;
 
@@ -1746,13 +1891,23 @@ err1: /* No one could have added another op to queue as we haven't returns token
 err0: castle_back_reply(op, err, 0, 0);
 }
 
+/**
+ * Copy kernelspace key and value to userspace key-value list.
+ *
+ * @param   buf_len     Amount of space left in the userspace buffer
+ * @param   save_val    0: Don't save values to the list
+ *                      *: Save values to the list
+ *
+ * @return  0: Not enough space available to save key-value to list
+ *         >0: Bytes used from back_buf to save key-value to list
+ */
 static uint32_t castle_back_save_key_value_to_list(struct castle_back_stateful_op *stateful_op,
-        struct castle_key_value_list *kv_list,
-        c_vl_bkey_t *key, c_val_tup_t *val,
-        c_collection_id_t collection_id,
-        struct castle_back_buffer *back_buf,
-        uint32_t buf_len, /* space left in the buffer */
-        int save_val /* should values be saved too? */)
+                                                   struct castle_key_value_list *kv_list,
+                                                   c_vl_bkey_t *key, c_val_tup_t *val,
+                                                   c_collection_id_t collection_id,
+                                                   struct castle_back_buffer *back_buf,
+                                                   uint32_t buf_len,
+                                                   int save_val)
 {
     uint32_t buf_used, key_len, val_len, cvt_len = 0;
 
@@ -1806,11 +1961,22 @@ err0:
     return buf_used;
 }
 
+/**
+ * Callback to add an iterated KVP to user-supplied buffer.
+ *
+ * Primary return point for iterator results.
+ *
+ * @return  1   Continue iterating
+ * @return  0   Error or buffer full
+ *
+ * @also castle_back_reply()
+ * @also __castle_back_iter_next()
+ */
 static int castle_back_iter_next_callback(struct castle_object_iterator *iterator,
-        c_vl_bkey_t *key,
-        c_val_tup_t *val,
-        int err,
-        void *data)
+                                          c_vl_bkey_t *key,
+                                          c_val_tup_t *val,
+                                          int err,
+                                          void *data)
 {
     struct castle_back_stateful_op *stateful_op;
     struct castle_back_conn *conn;
@@ -1840,23 +2006,28 @@ static int castle_back_iter_next_callback(struct castle_object_iterator *iterato
         kv_list_cur = castle_back_user_to_kernel(op->buf,
                 stateful_op->iterator.kv_list_tail->next);
 
-    /* if no more values */
+    /* If we've been passed a NULL key, the iterator has completed. */
     if (key == NULL)
     {
         stateful_op->iterator.kv_list_tail->next = NULL;
+        stateful_op->curr_op = NULL;
 
-        debug_iter("Iterator has no more values, replying. kv_list_size=%u.\n",
-                stateful_op->iterator.kv_list_size);
+        /* Iterator has finished.  Fake up an iter_finish request and pass it
+         * to castle_back_iter_finish() to end the iterator.
+         * See also: libcastle.hg:castle_iter_finish_prepare() */
+        op->req.tag = CASTLE_RING_ITER_FINISH;
+        op->req.iter_finish.token = op->req.iter_next.token;
 
+        /* End the iterator. */
         castle_back_buffer_put(conn, op->buf);
-        castle_back_iter_reply(stateful_op, op, 0);
+        _castle_back_iter_finish(op, stateful_op);
 
         return 0;
     }
 
+    /* We have a key from the iterator.  Try and add it to the list. */
     buf_len = stateful_op->iterator.buf_len;
     buf_used = stateful_op->iterator.kv_list_size;
-
     cur_len = castle_back_save_key_value_to_list(stateful_op,
                         kv_list_cur,
                         key,
@@ -1866,11 +2037,13 @@ static int castle_back_iter_next_callback(struct castle_object_iterator *iterato
                         buf_len - buf_used,
                         !(stateful_op->flags & CASTLE_RING_FLAG_ITER_NO_VALUES));
 
+    /* Was the buffer too small to save the key-value pair? */
     if (cur_len == 0)
     {
-        stateful_op->iterator.kv_list_tail->next = NULL;
-
-        debug_iter("Not enough space on buffer, saving a key for next time.\n");
+        /* Yes, buffer too small.  Update the final list->next to point to the
+         * start of the buffer so the userspace knows the iterator has more. */
+        stateful_op->iterator.kv_list_tail->next = (struct castle_key_value_list *)
+                                                                    op->buf->user_addr;
 
         stateful_op->iterator.saved_key = castle_object_btree_key_duplicate(key);
         if (!stateful_op->iterator.saved_key)
@@ -1896,12 +2069,14 @@ static int castle_back_iter_next_callback(struct castle_object_iterator *iterato
         return 0;
     }
 
+    /* We successfully added the key-value pair to the list.  Update pointer to
+     * the next element on the list for next iteration. */
     kv_list_cur->next = (struct castle_key_value_list *)
             castle_back_kernel_to_user(op->buf, ((unsigned long)kv_list_cur + cur_len));
     stateful_op->iterator.kv_list_tail = kv_list_cur;
     stateful_op->iterator.kv_list_size += cur_len;
 
-    /* we have space for more so request it */
+    /* We were successful, inform caller to continue iterating. */
     return 1;
 
 err0:
@@ -1911,7 +2086,11 @@ err0:
     return 0;
 }
 
-static void _castle_back_iter_next(void *data)
+/**
+ *
+ * @also castle_back_iter_next_callback()
+ */
+static void __castle_back_iter_next(void *data)
 {
     struct castle_back_conn        *conn;
     struct castle_back_op          *op;
@@ -1922,7 +2101,7 @@ static void _castle_back_iter_next(void *data)
     int                             err;
     struct castle_back_stateful_op *stateful_op = data;
 
-    debug_iter("_castle_back_iter_next, token = 0x%x\n", stateful_op->token);
+    debug_iter("__castle_back_iter_next, token = 0x%x\n", stateful_op->token);
 
     BUG_ON(!stateful_op->in_use);
 
@@ -1994,42 +2173,32 @@ err0:
     castle_back_iter_reply(stateful_op, op, err);
 }
 
-static void castle_back_iter_next(void *data)
+/**
+ * Continue iterator and return (up to) another buffer's-worth of results.
+ *
+ * Called from castle_back_iter_start() and castle_back_iter_next().
+ *
+ * @also castle_back_iter_start()
+ * @also castle_back_iter_next()
+ */
+static void _castle_back_iter_next(struct castle_back_op *op,
+                                   struct castle_back_stateful_op *stateful_op)
 {
-    struct castle_back_op *op = data;
-    struct castle_back_conn *conn = op->conn;
     int err;
-    struct castle_back_stateful_op *stateful_op;
-
-    debug_iter("castle_back_iter_next, token = 0x%x\n", op->req.iter_next.token);
-
-    stateful_op = castle_back_find_stateful_op(conn,
-            op->req.iter_next.token, CASTLE_RING_ITER_START);
-
-    if (!stateful_op)
-    {
-        error("Token not found 0x%x\n", op->req.iter_next.token);
-
-        castle_back_reply(op, -EBADFD, 0, 0);
-
-        return;
-    }
 
     if (op->req.iter_next.buffer_len < PAGE_SIZE)
     {
         error("castle_back_iter_next buffer_len smaller than a page\n");
         err = -ENOBUFS;
-        goto err0;
+        goto err;
     }
 
-    /*
-     * Get buffer with value in it and save it
-     */
-    op->buf = castle_back_buffer_get(conn, (unsigned long)op->req.iter_next.buffer_ptr);
+    /* Get buffer with value in and save it. */
+    op->buf = castle_back_buffer_get(op->conn, (unsigned long)op->req.iter_next.buffer_ptr);
     if (op->buf == NULL)
     {
         err = -EINVAL;
-        goto err0;
+        goto err;
     }
 
     spin_lock(&stateful_op->lock);
@@ -2040,19 +2209,55 @@ static void castle_back_iter_next(void *data)
     if (err)
     {
         spin_unlock(&stateful_op->lock);
-        goto err0;
+        /* NOTE: No need to castle_back_buffer_put() as this has been done as
+         * part of stateful_op expiry in castle_back_stateful_op_finish_all() */
+        goto err;
     }
 
-    castle_back_iter_call_queued(stateful_op);
-
-    spin_unlock(&stateful_op->lock);
+    castle_back_iter_call_queued(stateful_op); // drops stateful_op->lock
 
     return;
 
-err0:
+err:
     castle_back_iter_reply(stateful_op, op, err);
 }
 
+/**
+ * Find stateful op then continue iterating.
+ *
+ * Called from castle_back_request_process()
+ *
+ * @also castle_back_request_process()
+ * @also _castle_back_iter_next()
+ */
+static void castle_back_iter_next(void *data)
+{
+    struct castle_back_op *op = data;
+    struct castle_back_stateful_op *stateful_op;
+
+    debug_iter("castle_back_iter_next, token = 0x%x\n", op->req.iter_next.token);
+
+    stateful_op = castle_back_find_stateful_op(op->conn,
+                                               op->req.iter_next.token,
+                                               CASTLE_RING_ITER_START);
+    if (!stateful_op)
+    {
+        error("Token not found 0x%x\n", op->req.iter_next.token);
+
+        castle_back_reply(op, -EBADFD, 0, 0);
+
+        return;
+    }
+
+    _castle_back_iter_next(op, stateful_op);
+}
+
+/**
+ * Tear down iterator state.
+ *
+ * @also castle_back_iter_expire()
+ * @also __castle_back_iter_finish()
+ */
 static void castle_back_iter_cleanup(struct castle_back_stateful_op *stateful_op)
 {
     struct castle_attachment *attachment;
@@ -2078,12 +2283,12 @@ static void castle_back_iter_cleanup(struct castle_back_stateful_op *stateful_op
     castle_attachment_put(attachment);
 }
 
-static void _castle_back_iter_finish(void *data)
+static void __castle_back_iter_finish(void *data)
 {
     struct castle_back_stateful_op *stateful_op = data;
     int err;
 
-    debug_iter("_castle_back_iter_finish, token = 0x%x\n", stateful_op->token);
+    debug_iter("__castle_back_iter_finish, token = 0x%x\n", stateful_op->token);
 
     err = castle_object_iter_finish(stateful_op->iterator.iterator);
 
@@ -2107,26 +2312,18 @@ static void _castle_back_iter_finish(void *data)
     castle_back_iter_cleanup(stateful_op); /* drops stateful_op->lock */
 }
 
-static void castle_back_iter_finish(void *data)
+/**
+ * Prepare to terminate the iterator.
+ *
+ * Called from castle_back_iter_finish() and castle_back_iter_next_callback().
+ *
+ * @also castle_back_iter_finish()
+ * @also castle_back_iter_next_callback()
+ */
+static void _castle_back_iter_finish(struct castle_back_op *op,
+                                     struct castle_back_stateful_op *stateful_op)
 {
-    struct castle_back_op *op = data;
-    struct castle_back_conn *conn = op->conn;
     int err;
-    struct castle_back_stateful_op *stateful_op;
-
-    debug_iter("castle_back_iter_finish, token = 0x%x\n", op->req.iter_finish.token);
-
-    stateful_op = castle_back_find_stateful_op(conn,
-            op->req.iter_finish.token, CASTLE_RING_ITER_START);
-
-    if (!stateful_op)
-    {
-        error("Token not found 0x%x\n", op->req.iter_finish.token);
-
-        castle_back_reply(op, -EBADFD, 0, 0);
-
-        return;
-    }
 
     /*
      * Put this op on the queue for the iterator
@@ -2137,17 +2334,47 @@ static void castle_back_iter_finish(void *data)
     if (err)
     {
         spin_unlock(&stateful_op->lock);
+        /* NOTE: No need to castle_back_buffer_put() as this has been done as
+         * part of stateful_op expiry in castle_back_stateful_op_finish_all() */
         goto err0;
     }
 
-    castle_back_iter_call_queued(stateful_op);
-
-    spin_unlock(&stateful_op->lock);
+    castle_back_iter_call_queued(stateful_op); // drops stateful_op->lock
 
     return;
 
 err0:
     castle_back_iter_reply(stateful_op, op, err);
+}
+
+/**
+ * Find stateful op then terminate iterator.
+ *
+ * Called from castle_back_request_process()
+ *
+ * @also castle_back_request_process()
+ * @also _castle_back_iter_finish()
+ */
+static void castle_back_iter_finish(void *data)
+{
+    struct castle_back_op *op = data;
+    struct castle_back_stateful_op *stateful_op;
+
+    debug_iter("castle_back_iter_finish, token = 0x%x\n", op->req.iter_finish.token);
+
+    stateful_op = castle_back_find_stateful_op(op->conn,
+                                               op->req.iter_finish.token,
+                                               CASTLE_RING_ITER_START);
+
+    if (!stateful_op)
+    {
+        error("Token not found 0x%x\n", op->req.iter_finish.token);
+        castle_back_reply(op, -EBADFD, 0, 0);
+
+        return;
+    }
+
+    _castle_back_iter_finish(op, stateful_op);
 }
 
 /**** BIG PUT ****/
