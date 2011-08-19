@@ -140,11 +140,18 @@ enum c2p_state_bits {
 };
 
 struct castle_cache_flush_entry {
+    c_ext_mask_id_t     mask_id;        /**< Reference of the extent, release after completion. */
     c_ext_id_t          ext_id;
     uint64_t            start;
     uint64_t            count;
     struct list_head    list;
 };
+
+typedef struct castle_extent_inflight {
+    atomic_t           *in_flight;      /**< Global inflight counter.                           */
+    atomic_t            ext_in_flight;  /**< Extent specfic inflight counter.                   */
+    c_ext_mask_id_t     mask_id;        /**< Reference ID on extent.                            */
+} c_ext_inflight_t;
 
 #define INIT_C2P_BITS (0)
 #define C2P_FNS(bit, name)                                          \
@@ -285,6 +292,7 @@ static spinlock_t             *castle_cache_page_hash_locks = NULL;
 static struct hlist_head      *castle_cache_page_hash = NULL;
 
 static struct kmem_cache      *castle_io_array_cache = NULL;
+static struct kmem_cache      *castle_flush_cache = NULL;
 
 /* Following LIST_HEADs are protected by castle_cache_block_lru_lock. */
 static               LIST_HEAD(castle_cache_extent_dirtylist);      /**< Extents with dirty c2bs  */
@@ -1097,9 +1105,6 @@ static void c2b_remaining_io_sub(int rw, int nr_pages, c2_block_t *c2b)
 
     debug("Completed io on c2b"cep_fmt_str_nl, cep2str(c2b->cep));
 
-    /* Release the extent. */
-    castle_extent_put(c2b->cep.ext_id);
-
     /* At least one of the bios for this c2b had an error. Handle that first. */
     if(c2b_bio_error(c2b))
     {
@@ -1781,7 +1786,6 @@ int submit_c2b_remap_rda(c2_block_t *c2b, c_disk_chk_t *chunks, int nr_remaps)
     c_ext_id_t          ext_id = c2b->cep.ext_id;
     uint32_t            k_factor = castle_extent_kfactor_get(ext_id);
     int                 found_dirty_page = 0;
-    void                *ext_p;
     struct completion   completion;
 
     /* This can only be called with chunks populated, and nr_remaps > 0 */
@@ -1795,13 +1799,7 @@ int submit_c2b_remap_rda(c2_block_t *c2b, c_disk_chk_t *chunks, int nr_remaps)
     if (!io_array)
         return -1;
 
-    /* Get extent reference (so that extent doesn't disappear under underneath us. */
-    ext_p = castle_extent_get(c2b->cep.ext_id);
-    if (!ext_p)
-    {
-        kmem_cache_free(castle_io_array_cache, io_array);
-        return -EINVAL;
-    }
+    /* TODO: Add a check to make sure cep is within live extent range. */
 
     /* Set in-flight bit on the block. */
     set_c2b_in_flight(c2b);
@@ -1907,30 +1905,15 @@ static int submit_c2b_rda(int rw, c2_block_t *c2b)
     c_ext_id_t    ext_id = c2b->cep.ext_id;
     uint32_t      k_factor = castle_extent_kfactor_get(ext_id);
     c_disk_chk_t  chunks[k_factor];
-    void         *ext_p;
 
     debug("Submitting c2b "cep_fmt_str", for %s\n",
             __cep2str(c2b->cep), (rw == READ) ? "read" : "write");
 
-    /* Get extent reference (so that extent doesn't disappear underneath us. */
-    ext_p = castle_extent_get(c2b->cep.ext_id);
-    if (ext_p == NULL)
-    {
-        /* Failed to get the reference, mark the C2B as if the i/o is successfully completed.
-         * And, call end_io(). */
-        if (rw == WRITE)
-            clean_c2b(c2b);
-        c2b->end_io(c2b);
-
-        return 0;
-    }
+    /* TODO: Add a check to make sure cep is within live extent range. */
 
     io_array = kmem_cache_alloc(castle_io_array_cache, GFP_KERNEL);
     if (!io_array)
-    {
-        castle_extent_put(c2b->cep.ext_id);
         return -1;
-    }
 
     /* c2b->remaining is effectively a reference count. Get one ref before we start. */
     BUG_ON(atomic_read(&c2b->remaining) != 0);
@@ -1988,7 +1971,7 @@ static int submit_c2b_rda(int rw, c2_block_t *c2b)
             int ret;
             debug("Asking extent manager for "cep_fmt_str_nl,
                     cep2str(cur_cep));
-            ret = castle_extent_map_get(ext_p,
+            ret = castle_extent_map_get(cur_cep.ext_id,
                                         CHUNK(cur_cep.offset),
                                         chunks,
                                         rw);
@@ -4678,6 +4661,8 @@ static void castle_cache_extent_flush_endio(c2_block_t *c2b)
     wake_up(&castle_cache_flush_wq);
 }
 
+static void castle_cache_flush_endio(c2_block_t *c2b);
+
 /**
  * Flush a batch of dirty c2bs.
  *
@@ -4687,16 +4672,29 @@ static void castle_cache_extent_flush_endio(c2_block_t *c2b)
  *
  * @also __castle_cache_extent_flush()
  */
-static inline void __castle_cache_extent_flush_batch(c2_block_t *c2b_batch[],
-                                                     int *batch_idx,
-                                                     atomic_t *in_flight_p)
+static inline void __castle_cache_extent_flush_batch(c2_block_t         *c2b_batch[],
+                                                     int                *batch_idx,
+                                                     c2b_end_io_t        end_io,
+                                                     atomic_t           *in_flight_p)
 {
     int i;
 
     for (i = 0; i < *batch_idx; i++)
     {
-        atomic_inc(in_flight_p);
-        c2b_batch[i]->end_io  = castle_cache_extent_flush_endio;
+        /* Handle flush thread, differently, as it needs two counters. Global inflight counter -
+         * for flush  thread rate limiting. Per extent inflight counter - to release extent
+         * references. */
+        if (end_io == castle_cache_flush_endio)
+        {
+            c_ext_inflight_t *data = (c_ext_inflight_t *)in_flight_p;
+
+            atomic_inc(data->in_flight);
+            atomic_inc(&data->ext_in_flight);
+        }
+        else
+            atomic_inc(in_flight_p);
+
+        c2b_batch[i]->end_io  = end_io;
         c2b_batch[i]->private = (void *)in_flight_p;
         BUG_ON(submit_c2b(WRITE, c2b_batch[i]));
     }
@@ -4730,12 +4728,14 @@ static inline void __castle_cache_extent_flush_batch(c2_block_t *c2b_batch[],
  *
  * @also castle_cache_extent_flush()
  */
-void __castle_cache_extent_flush(c_ext_dirtytree_t *dirtytree,
-                                 c_byte_off_t end_off,
-                                 int max_pgs,
-                                 atomic_t *in_flight_p,
-                                 int *flushed_p,
-                                 int waitlock)
+static void __castle_cache_extent_flush(c_ext_dirtytree_t  *dirtytree,
+                                        c_byte_off_t        start_off,
+                                        c_byte_off_t        end_off,
+                                        int                 max_pgs,
+                                        c2b_end_io_t        end_io,
+                                        atomic_t           *in_flight_p,
+                                        int                *flushed_p,
+                                        int                 waitlock)
 {
     c2_block_t *c2b;
     struct rb_node *parent;
@@ -4783,6 +4783,10 @@ restart_traverse:
                 break;
             }
 
+            /* If c2b is not in range, skip to next c2b. */
+            if ((c2b->cep.offset  + (c2b->nr_pages * PAGE_SIZE)) < start_off)
+                goto next_c2b;
+
             if (test_set_c2b_flushing(c2b))
                 goto next_c2b; /* already flushing, skip to next c2b */
             while (!read_trylock_c2b(c2b))
@@ -4790,7 +4794,6 @@ restart_traverse:
                 if (unlikely(waitlock))
                 {
                     /* We want to block until we have a c2b readlock. */
-
                     if (unlikely(dirtytree_locked))
                     {
                         /* First time we've failed to lock this c2b.  Take a
@@ -4802,6 +4805,7 @@ restart_traverse:
                         dirtytree_locked = 0;
                         __castle_cache_extent_flush_batch(c2b_batch,
                                                           &batch_idx,
+                                                          end_io,
                                                           in_flight_p);
 
                         /* Dirty c2bs should never overlap. */
@@ -4847,7 +4851,7 @@ next_c2b:
             spin_unlock_irq(&dirtytree->lock);
 
         /* Flush batch of c2bs. */
-        __castle_cache_extent_flush_batch(c2b_batch, &batch_idx, in_flight_p);
+        __castle_cache_extent_flush_batch(c2b_batch, &batch_idx, end_io, in_flight_p);
     } while (parent);
 
     /* Return number of pages to caller, if requested. */
@@ -4877,10 +4881,6 @@ void castle_cache_extent_flush(c_ext_id_t ext_id,
     int batch, batch_period, io_time, flushed;
     unsigned long io_start;
 
-    /* Calculate end_off for __castle_cache_extent_flush(). */
-    if (size)
-        size = start + size;
-
     /* Get the dirtytree. */
     dirtytree = castle_extent_dirtytree_by_id_get(ext_id);
     BUG_ON(!dirtytree);
@@ -4903,12 +4903,14 @@ void castle_cache_extent_flush(c_ext_id_t ext_id,
         io_start = jiffies;
 
         /* Schedule flush of up to batch pages. */
-        __castle_cache_extent_flush(dirtytree,    /* dirtytree    */
-                                    size,         /* end_off      */
-                                    batch,        /* max_pgs      */
-                                    &in_flight,   /* in_flight_p  */
-                                    &flushed,     /* flushed_p    */
-                                    1);           /* waitlock     */
+        __castle_cache_extent_flush(dirtytree,                      /* dirtytree    */
+                                    start,                          /* start offset */
+                                    start + size - 1,               /* end offset   */
+                                    batch,                          /* max_pgs      */
+                                    castle_cache_extent_flush_endio,/* callback     */
+                                    &in_flight,                     /* callback data*/
+                                    &flushed,                       /* flushed_p    */
+                                    1);                             /* waitlock     */
 
         /* Wait for IO from the current batch to complete. */
         wait_event(castle_cache_flush_wq, (atomic_read(&in_flight) == 0));
@@ -4938,18 +4940,23 @@ void castle_cache_extent_flush(c_ext_id_t ext_id,
  *
  * @also _castle_extent_free()
  */
-void castle_cache_extent_evict(c_ext_dirtytree_t *dirtytree)
+void castle_cache_extent_evict(c_ext_dirtytree_t *dirtytree, c_chk_cnt_t start, c_chk_cnt_t count)
 {
     atomic_t in_flight = ATOMIC(0);
     int flushed = 0;
 
     /* Schedule flush of up to batch pages. */
-    __castle_cache_extent_flush(dirtytree,    /* dirtytree    */
-                                0,            /* end_off      */
-                                0,            /* max_pgs      */
-                                &in_flight,   /* in_flight_p  */
-                                &flushed,     /* flushed_p    */
-                                1);           /* waitlock     */
+    __castle_cache_extent_flush(dirtytree,                              /* dirtytree    */
+                                start * C_CHK_SIZE,                     /* start offset */
+                                (start + count) * C_CHK_SIZE  - 1,      /* end offset   */
+                                0,                                      /* max_pgs      */
+                                castle_cache_extent_flush_endio,        /* Callback     */
+                                &in_flight,                             /* Callback data*/
+                                &flushed,                               /* flushed_p    */
+                                1);                                     /* waitlock     */
+
+    /* We shouldn't have scheduled any pages for I/O. */
+    BUG_ON(atomic_read(&in_flight));
 }
 
 /**
@@ -4979,6 +4986,30 @@ int castle_cache_dirtytree_compare(struct list_head *l1, struct list_head *l2)
         return 1;
     else
         return 0;
+}
+
+static void castle_cache_flush_endio(c2_block_t *c2b)
+{
+    c_ext_inflight_t *data = c2b->private;
+
+    /* Clear flushing bit and release read lock. */
+    BUG_ON(!c2b_flushing(c2b));
+    clear_c2b_flushing(c2b);
+    read_unlock_c2b(c2b);
+    put_c2b(c2b);
+
+    /* Decrementing outstanding IOs count and signal waiters. */
+    BUG_ON(atomic_dec_return(data->in_flight) < 0);
+
+    /* If per extent inflight count reached 0, time to release the reference. */
+    if (atomic_dec_return(&data->ext_in_flight) == 0)
+    {
+        castle_extent_put_all(data->mask_id);
+        kmem_cache_free(castle_flush_cache, data);
+    }
+
+    atomic_inc(&castle_cache_flush_seq);
+    wake_up(&castle_cache_flush_wq);
 }
 
 /**
@@ -5016,6 +5047,9 @@ static int castle_cache_flush(void *unused)
     int i, exiting, flushing_rwcts, target_dirty_pgs, dirty_pgs, to_flush, last_flush;
     atomic_t in_flight = ATOMIC(0);
     c_ext_type_t ext_type;
+    c_ext_inflight_t *data;
+    c_chk_cnt_t start_chk;
+    c_chk_cnt_t end_chk;
 
     /* Try and keep 3/4 of pages in the cache dirty. */
     target_dirty_pgs = 3 * (castle_cache_size / 4);
@@ -5136,14 +5170,56 @@ static int castle_cache_flush(void *unused)
                 continue;
             }
 
+            /* We need to pass two reference counts to __castle_cache_extent_flush() one
+             * for global counting (for rate limiting) and another per extent cound to
+             * release references. */
+            data = kmem_cache_alloc(castle_flush_cache, GFP_KERNEL);
+            if (!data)
+            {
+                castle_printk(LOG_DEVEL, "Failed to allocate space for flush elemetn\n");
+                castle_extent_dirtytree_put(dirtytree);
+                continue;
+            }
+            data->in_flight = &in_flight;
+            atomic_set(&data->ext_in_flight, 0);
+
+            /* Get a reference on extent with all outstanding masks. */
+            data->mask_id = castle_extent_get_all(dirtytree->ext_id);
+
+            /* Check if extent is already dead. This shouldn't happen as before we delete
+             * the extent, we get rid off all dirty pages. */
+            BUG_ON(MASK_ID_INVAL(data->mask_id));
+#if 0
+            if (MASK_ID_INVAL(data->mask_id))
+            {
+                castle_printk(LOG_DEVEL, "Extent %llu is dead, no need to flush\n",
+                                          dirtytree->ext_id);
+                castle_extent_dirtytree_put(dirtytree);
+                kmem_cache_free(castle_flush_cache, data);
+                continue;
+            }
+#endif
+
+            /* Get the range of extent. */
+            castle_extent_mask_read_all(dirtytree->ext_id, &start_chk, &end_chk);
 
             /* Flushed will be set to an approximation of pages flushed. */
-            __castle_cache_extent_flush(dirtytree,  /* dirtytree    */
-                                        0,          /* end_off      */
-                                        to_flush,   /* max_pgs      */
-                                        &in_flight, /* in_flight    */
-                                        &flushed,   /* flushed_p    */
-                                        0);         /* waitlock     */
+            __castle_cache_extent_flush(dirtytree,                      /* dirtytree    */
+                                        start_chk * C_CHK_SIZE,         /* start offset */
+                                        (end_chk + 1) * C_CHK_SIZE - 1, /* end offset   */
+                                        to_flush,                       /* max_pgs      */
+                                        castle_cache_flush_endio,       /* Callback     */
+                                        (atomic_t *)data,               /* Callback data*/
+                                        &flushed,                       /* flushed_p    */
+                                        0);                             /* waitlock     */
+
+            /* If nothing to flush, release extent refernce and buffer. */
+            if (!flushed)
+            {
+                castle_extent_put_all(data->mask_id);
+                kmem_cache_free(castle_flush_cache, data);
+            }
+
             castle_extent_dirtytree_put(dirtytree);
 
             to_flush -= flushed;
@@ -6050,11 +6126,15 @@ int castle_cache_extent_flush_schedule(c_ext_id_t ext_id, uint64_t start,
 {
     struct castle_cache_flush_entry *entry;
 
+    entry = castle_malloc(sizeof(struct castle_cache_flush_entry), GFP_KERNEL);
+    BUG_ON(!entry);
+
     /* Take a hard reference on extent, to make sure extent wouldn't disappear during flush. */
     BUG_ON(castle_extent_link(ext_id));
 
-    entry = castle_malloc(sizeof(struct castle_cache_flush_entry), GFP_KERNEL);
-    BUG_ON(!entry);
+    /* Get a reference on the complete extent space. Releases the reference after
+     * completing the flush of the extent in castle_cache_extents_flush(). */
+    BUG_ON(MASK_ID_INVAL(entry->mask_id = castle_extent_get_all(ext_id)));
 
     entry->ext_id = ext_id;
     entry->start  = start;
@@ -6083,6 +6163,9 @@ void castle_cache_extents_flush(struct list_head *flush_list, unsigned int ratel
     {
         entry = list_entry(lh, struct castle_cache_flush_entry, list);
         castle_cache_extent_flush(entry->ext_id, entry->start, entry->count, ratelimit);
+
+        /* Release references. */
+        castle_extent_put_all(entry->mask_id);
         castle_extent_unlink(entry->ext_id);
 
         list_del(lh);
@@ -6450,6 +6533,23 @@ int castle_cache_init(void)
         goto err_out;
     }
 
+    /* Init kmem_cache for in_flight counters for extent_flush. */
+    castle_flush_cache = kmem_cache_create("castle_flush_inflight",
+                                            sizeof(c_ext_inflight_t),
+                                            0,   /* align */
+                                            0,   /* flags */
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,18)
+                                            NULL, NULL); /* ctor, dtor */
+#else
+                                            NULL); /* ctor */
+#endif
+    if (!castle_flush_cache)
+    {
+        castle_printk(LOG_INIT,
+                      "Could not allocate kmem cache for castle_flush_cache.\n");
+        goto err_out;
+    }
+
     /* Always trace cache stats. */
     castle_cache_stats_timer_interval = 1;
     if (castle_cache_stats_timer_interval) castle_cache_stats_timer_tick(0);
@@ -6474,6 +6574,7 @@ void castle_cache_fini(void)
     castle_vmap_fast_map_fini();
     castle_cache_freelists_fini();
 
+    if(castle_flush_cache)      kmem_cache_destroy(castle_flush_cache);
     if(castle_io_array_cache)   kmem_cache_destroy(castle_io_array_cache);
     if(castle_cache_stats_timer_interval) del_timer_sync(&castle_cache_stats_timer);
 

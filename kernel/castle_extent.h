@@ -38,14 +38,24 @@ int                 castle_extent_exists                    (c_ext_id_t     ext_
 void                castle_extent_mark_live                 (c_ext_id_t     ext_id,
                                                              c_da_t         da_id);
 int                 castle_extent_free                      (c_ext_id_t     ext_id);
-void*               castle_extent_get                       (c_ext_id_t     ext_id);
-void                castle_extent_put                       (c_ext_id_t     ext_id);
+c_ext_mask_id_t     castle_extent_get                       (c_ext_id_t     ext_id);
+void                castle_extent_put                       (c_ext_mask_id_t mask_id);
+c_ext_mask_id_t     castle_extent_get_all                   (c_ext_id_t     ext_id);
+void                castle_extent_put_all                   (c_ext_mask_id_t mask_id);
+#if 0
+void                castle_extent_current_mask              (c_ext_id_t     ext_id,
+                                                             c_chk_cnt_t   *start,
+                                                             c_chk_cnt_t   *end);
+#endif
+void                castle_extent_mask_read_all             (c_ext_id_t     ext_id,
+                                                             c_chk_cnt_t   *start,
+                                                             c_chk_cnt_t   *end);
 int                 castle_extent_link                      (c_ext_id_t     ext_id);
 int                 castle_extent_unlink                    (c_ext_id_t     ext_id);
 uint32_t            castle_extent_kfactor_get               (c_ext_id_t     ext_id);
 c_chk_cnt_t         castle_extent_size_get                  (c_ext_id_t     ext_id);
 /* Sets @chunks to all physical chunks holding the logical chunks from offset */
-uint32_t            castle_extent_map_get                   (void*          ext_p,
+uint32_t            castle_extent_map_get                   (c_ext_id_t     ext_id,
                                                              c_chk_t        offset,
                                                              c_disk_chk_t  *chk_maps,
                                                              int            rw);
@@ -80,7 +90,7 @@ void                castle_extents_rebuild_wake             (void);
 void                castle_extents_rebuild_startup_check    (int need_rebuild);
 int                 castle_extents_slave_scan               (uint32_t uuid);
 void                castle_extent_micro_ext_update          (struct castle_slave *cs);
-signed int          castle_extent_ref_cnt_get               (c_ext_id_t);
+signed int          castle_extent_link_count_get            (c_ext_id_t);
 c_ext_type_t        castle_extent_type_get                  (c_ext_id_t);
 void                castle_extents_remap_writeback_setstate  (void);
 void                castle_extents_remap_writeback           (void);

@@ -3980,7 +3980,7 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
             {
                 struct castle_large_obj_entry *lo =
                     list_entry(lh, struct castle_large_obj_entry, list);
-                int lo_ref_cnt = castle_extent_ref_cnt_get(lo->ext_id);
+                int lo_ref_cnt = castle_extent_link_count_get(lo->ext_id);
                 /* we expect the input cct and output cct to both have reference to the LO ext */
                 BUG_ON(lo_ref_cnt < 2);
                 lo_count++;
@@ -5314,7 +5314,7 @@ update_output_tree_state:
         {
             struct castle_large_obj_entry *lo =
                 list_entry(lh, struct castle_large_obj_entry, list);
-            int lo_ref_cnt = castle_extent_ref_cnt_get(lo->ext_id);
+            int lo_ref_cnt = castle_extent_link_count_get(lo->ext_id);
             /* we expect the input cct and output cct to both have reference to the LO ext */
             BUG_ON(lo_ref_cnt < 2);
             lo_count++;
@@ -7477,7 +7477,7 @@ static void castle_da_merge_writeback(struct castle_double_array *da, unsigned i
         {
             struct castle_large_obj_entry *lo =
                 list_entry(lh, struct castle_large_obj_entry, list);
-            int lo_ref_cnt = castle_extent_ref_cnt_get(lo->ext_id);
+            int lo_ref_cnt = castle_extent_link_count_get(lo->ext_id);
             /* input ct and/or output ct will have ref */
             BUG_ON(lo_ref_cnt < 1);
             debug("%s::writeback lo at ext %d\n", __FUNCTION__,
@@ -7771,7 +7771,7 @@ static int castle_da_rwct_init(struct castle_double_array *da, void *unused)
 int castle_double_array_start(void)
 {
     /* Check all DAs to see whether any merges need to be done. */
-    castle_da_hash_iterate(castle_da_merge_restart, NULL);
+    castle_da_hash_iterate(castle_da_merge_start, NULL);
 
     return 0;
 }
@@ -8140,8 +8140,6 @@ int castle_double_array_read(void)
 
     /* Reset driver merge for all DAs. */
     castle_da_hash_iterate(__castle_da_driver_merge_reset, NULL);
-
-    castle_da_hash_iterate(castle_da_merge_start, NULL);
 
     goto out;
 

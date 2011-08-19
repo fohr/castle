@@ -37,13 +37,26 @@
 //#define DEBUG
 #ifdef DEBUG
 #define debug(_f, _a...)        (castle_printk(LOG_DEBUG, _f, ##_a))
+#define debug_mask(_f, _a...)   (castle_printk(LOG_DEBUG, _f, ##_a))
 #else
 #define debug(_f, ...)          ((void)0)
+#define debug_mask(_f, ...)     ((void)0)
 #endif
 
 #define MAP_IDX(_ext, _i, _j)       (((_ext)->k_factor * _i) + _j)
 #define CASTLE_EXTENTS_HASH_SIZE    100
 
+#define GET_LATEST_MASK(_ext)   ((!list_empty(&(_ext)->mask_list))?                          \
+                                 (list_entry((_ext)->mask_list.next, c_ext_mask_t, list)):   \
+                                 NULL)
+#define GET_OLDEST_MASK(_ext)   ((!list_empty(&(_ext)->mask_list))?                          \
+                                 (list_entry((_ext)->mask_list.prev, c_ext_mask_t, list)):   \
+                                 NULL)
+
+#define IS_OLDEST_MASK(_ext, _mask)     list_is_last(&((_mask)->list), &((_ext)->mask_list))
+
+/* Note: load_extent_from_mentry() deals with complete extent deserialization. This
+ * is just a helper function. */
 #ifdef CASTLE_PERF_DEBUG
 #define CONVERT_MENTRY_TO_EXTENT(_ext, _me)                                 \
         (_ext)->ext_id      = (_me)->ext_id;                                \
@@ -76,16 +89,35 @@
         (_me)->maps_cep     = (_ext)->maps_cep;                             \
         (_me)->curr_rebuild_seqno = (_ext)->curr_rebuild_seqno;             \
         (_me)->ext_type     = (_ext)->ext_type;                             \
+        (_me)->cur_mask     = GET_LATEST_MASK(_ext)->range;                 \
+        (_me)->prev_mask    = (_ext)->chkpt_global_mask;                    \
         (_me)->da_id        = (_ext)->da_id;
 
 #define FAULT_CODE EXTENT_FAULT
+
+#define cemr_cstr           "[%u:%u)"
+#define cemr2str(_r)        (_r).start, (_r).end
 
 c_chk_cnt_t meta_ext_size = 0;
 
 struct castle_extents_superblock castle_extents_global_sb;
 static DEFINE_MUTEX(castle_extents_mutex);
 
-static struct kmem_cache *castle_extents_work_cache  = NULL;
+struct castle_extent;
+
+/**
+ * Extent mask represents a range of logical chunks in extent space. It gives a view
+ * of the valid chunks in extent. When the reference count of mask becomes zero, it is
+ * safe to delete mask and also chunks that are invalid after this mask.
+ */
+typedef struct castle_extent_mask {
+    c_ext_mask_id_t         mask_id;        /**< Unique mask ID.                        */
+    c_ext_mask_range_t      range;
+    atomic_t                ref_count;      /**< Number of references on this mask.     */
+    struct list_head        list;           /**< Link to extent mask list.              */
+    struct list_head        hash_list;      /**< Link to hash list.                     */
+    struct castle_extent   *ext;            /**< Extent that this mask belongs to.      */
+} c_ext_mask_t;
 
 typedef struct castle_extent {
     c_ext_id_t          ext_id;         /* Unique extent ID                             */
@@ -97,18 +129,22 @@ typedef struct castle_extent {
     struct list_head    rebuild_list;
     struct list_head    rebuild_done_list;
     struct list_head    verify_list;    /* Used for testing.                            */
+    c_ext_mask_id_t     rebuild_mask_id;/* Stores reference taken by rebuild.           */
+    /* TODO: Move rebuild data to a private state structure. */
     uint32_t            curr_rebuild_seqno;
     uint32_t            remap_seqno;
     spinlock_t          shadow_map_lock;
     c_disk_chk_t        *shadow_map;
     int                 use_shadow_map; /* Extent is currently being remapped           */
-    atomic_t            ref_cnt;
     atomic_t            link_cnt;
+    /* This global mask gets updated after freeing resources. Checkpoint has to commit
+     * this to mstore. */
+    c_ext_mask_range_t  chkpt_global_mask;
+    struct list_head    mask_list;      /* List of all valid masks - latest first.      */
 #ifdef CASTLE_DEBUG
     uint8_t             alive;
 #endif
     c_ext_dirtytree_t  *dirtytree;      /**< RB-tree of dirty c2bs.                     */
-    struct work_struct *work;           /**< work structure to schedule extent free.    */
     c_ext_type_t        ext_type;       /**< Type of extent.                            */
     c_da_t              da_id;          /**< DA that extent corresponds to.             */
 #ifdef CASTLE_PERF_DEBUG
@@ -117,9 +153,33 @@ typedef struct castle_extent {
 #endif
 } c_ext_t;
 
+static int castle_extent_mask_create(c_ext_t          *ext,
+                                     c_ext_mask_range_t range,
+                                     c_ext_mask_id_t   prev_mask_id);
+
+static inline c_ext_pos_t castle_extent_map_cep_get(c_ext_pos_t     map_start,
+                                                    c_chk_t         chk_idx,
+                                                    uint32_t        k_factor);
+
+static c_ext_mask_id_t castle_extent_get_ptr(c_ext_id_t ext_id, c_ext_t **ext);
+
+#define CASTLE_EXTENT_MASK_HASH_SIZE 100
+
+static struct list_head *castle_extent_mask_hash = NULL;
+
+static DECLARE_WAIT_QUEUE_HEAD (castle_ext_mask_gc_wq);
+
+DEFINE_HASH_TBL(castle_extent_mask, castle_extent_mask_hash, CASTLE_EXTENT_MASK_HASH_SIZE,
+                c_ext_mask_t, hash_list, c_ext_mask_id_t, mask_id);
+
 static struct list_head *castle_extents_hash = NULL;
 static c_ext_free_t meta_ext_free;
 
+atomic_t castle_extents_gc_q_size = ATOMIC(0);
+
+static LIST_HEAD(castle_ext_mask_free_list);
+
+static atomic_t castle_extent_max_mask_id = ATOMIC(0);
 /**
  * Low freespace victim handling structure.
  */
@@ -137,6 +197,12 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t   rda_type,
                                        c_ext_id_t     ext_id,
                                        c_ext_event_t *hdl);
 void __castle_extent_dirtytree_put(c_ext_dirtytree_t *dirtytree, int check_hash);
+
+static void castle_extent_mask_reduce(c_ext_t             *ext,
+                                      c_ext_mask_range_t   base,
+                                      c_ext_mask_range_t   range1,
+                                      c_ext_mask_range_t  *global_mask,
+                                      int                  do_free);
 
 DEFINE_HASH_TBL(castle_extents, castle_extents_hash, CASTLE_EXTENTS_HASH_SIZE,
                 c_ext_t, hash_list, c_ext_id_t, ext_id);
@@ -179,6 +245,8 @@ static atomic_t             castle_extents_dead_count = ATOMIC(0);
 
 uint32_t castle_rebuild_fs_version = 0;
 
+struct task_struct         *extents_gc_thread;
+
 /**
  * Allocate and initialise extent and per-extent dirtytree structures.
  */
@@ -202,10 +270,11 @@ static c_ext_t * castle_ext_alloc(c_ext_id_t ext_id)
     ext->maps_cep           = INVAL_EXT_POS;
     ext->ext_type           = EXT_T_INVALID;
     ext->da_id              = INVAL_DA;
-    ext->work               = NULL;
-    atomic_set(&ext->ref_cnt, 1);
     atomic_set(&ext->link_cnt, 1);
     spin_lock_init(&ext->shadow_map_lock);
+
+    INIT_LIST_HEAD(&ext->mask_list);
+    ext->rebuild_mask_id    = INVAL_MASK_ID;
 
     /* Per-extent RB dirtytree structure. */
     ext->dirtytree->ext_id  = ext_id;
@@ -217,6 +286,7 @@ static c_ext_t * castle_ext_alloc(c_ext_id_t ext_id)
     ext->dirtytree->ext_size= 0;
     ext->dirtytree->ext_type= ext->ext_type;
 #endif
+    ext->chkpt_global_mask = EMPTY_MASK_RANGE;
 
     debug("Allocated extent ext_id=%lld.\n", ext->ext_id);
 
@@ -241,32 +311,54 @@ void castle_extent_mark_live(c_ext_id_t ext_id, c_da_t da_id)
         /* Extent should belong to the same DA. */
         BUG_ON(ext->da_id != da_id);
 
-        /* Create the first link. */
-        atomic_set(&ext->link_cnt, 1);
-
-#ifdef CASTLE_DEBUG
-        ext->alive = 1;
-#endif
+        /* Create a link. This is the extra link other than the one in castle_ext_alloc().
+         * This preserves the extent. */
+        BUG_ON(castle_extent_link(ext_id));
     }
 }
+
+/* Check if the extent is alive or not.
+ * Extent is alive if it referenced by one of
+ *  - Component Trees in a DA
+ *      - Tree Extent
+ *      - Medium Object Extent
+ *      - Large Object Extent
+ *  - Logical Extents
+ *
+ *  Other wise free it.
+ */
+static int castle_extent_check_alive(c_ext_t *ext, void *unused)
+{
+    /* Logical extents are always alive. */
+    if (LOGICAL_EXTENT(ext->ext_id))
+        return 0;
+
+    /* Remove the link, we have created in castle_ext_alloc(). If no module called
+     * castle_extent_mark_live() on the extent. It would have only one link and would
+     * get freed. */
+    BUG_ON(castle_extent_unlink(ext->ext_id));
+
+    return 0;
+}
+
+int castle_extents_restore(void)
+{
+    __castle_extents_hash_iterate(castle_extent_check_alive, NULL);
+    return 0;
+}
+
+static int castle_extents_garbage_collector(void *unused);
 
 int castle_extents_init(void)
 {
     debug("Initing castle extents\n");
 
-    /* Init kmem_cache for extent free work structure cache. */
-    castle_extents_work_cache = kmem_cache_create("castle_extents_work",
-                                                  sizeof(struct work_struct),
-                                                  0,     /* align */
-                                                  0,     /* flags */
-#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,18)
-                                                  NULL, NULL); /* ctor, dtor */
-#else
-                                                  NULL); /* ctor */
-#endif
-    if (!castle_extents_work_cache)
+    /* Initialise extents garbage collector. */
+    extents_gc_thread = kthread_run(castle_extents_garbage_collector, NULL,
+                                    "castle-extents-gc");
+    if (IS_ERR(extents_gc_thread))
     {
-        castle_printk(LOG_ERROR, "Could not allocate kmem cache for castle extents.\n");
+        castle_printk(LOG_INIT, "Could not start garbage collector thread for extents\n");
         goto err_out;
     }
 
@@ -275,25 +367,41 @@ int castle_extents_init(void)
     if (!castle_extents_hash)
     {
         castle_printk(LOG_INIT, "Could not allocate extents hash.\n");
+        kthread_stop(extents_gc_thread);
+
         goto err_out;
     }
     castle_extents_hash_init();
 
+    /* Initialise hash table for extent masks. */
+    castle_extent_mask_hash = castle_extent_mask_hash_alloc();
+    if (!castle_extent_mask_hash)
+    {
+        castle_printk(LOG_INIT, "Could not allocate extents hash.\n");
+        kthread_stop(extents_gc_thread);
+
+        goto err_out;
+    }
+    castle_extent_mask_hash_init();
+
     return EXIT_SUCCESS;
 
 err_out:
-    if (castle_extents_work_cache)
-        kmem_cache_destroy(castle_extents_work_cache);
-
     return -ENOMEM;
 }
 
 /* Cleanup all extents from hash table. Called at finish. */
 static int castle_extent_hash_remove(c_ext_t *ext, void *unused)
 {
+    c_ext_mask_t *mask = GET_LATEST_MASK(ext);
+
     debug("Freeing extent #%llu\n", ext->ext_id);
 
-    BUG_ON(atomic_read(&ext->ref_cnt) != 1);
+    /* Should have only one valid mask. */
+    BUG_ON(!list_is_last(&mask->list, &ext->mask_list));
+
+    /* And its reference count should be equal to number of links. */
+    BUG_ON(atomic_read(&mask->ref_count) != 1);
 
     /* There shouldn't be any outstanding extents for deletion on exit. */
     __castle_extents_hash_remove(ext);
@@ -306,8 +414,8 @@ static int castle_extent_hash_remove(c_ext_t *ext, void *unused)
         castle_kfree(cs->sup_ext_maps);
     }
     __castle_extent_dirtytree_put(ext->dirtytree, 0 /*check_hash*/);
-    if(ext->work)
-        castle_kfree(ext->work);
+
+    castle_kfree(mask);
     castle_kfree(ext);
 
     return 0;
@@ -399,8 +507,9 @@ void castle_extent_micro_ext_update(struct castle_slave * cs)
     c_disk_chk_t *micro_maps;
     c2_block_t *c2b;
     c_ext_pos_t cep;
+    c_ext_mask_id_t mask_id;
 
-    micro_ext = castle_extent_get(MICRO_EXT_ID);
+    mask_id = castle_extent_get_ptr(MICRO_EXT_ID, &micro_ext);
     BUG_ON(!micro_ext || (micro_ext->size > 1));
 
     /* Read in the micro extent using the old micro map. */
@@ -430,7 +539,7 @@ void castle_extent_micro_ext_update(struct castle_slave * cs)
     write_unlock_c2b(c2b);
     put_c2b(c2b);
 
-    castle_extent_put(MICRO_EXT_ID);
+    castle_extent_put(mask_id);
 }
 
 static int castle_extent_micro_ext_create(void)
@@ -476,7 +585,14 @@ static int castle_extent_micro_ext_create(void)
     rcu_read_unlock();
     BUG_ON(i > MAX_NR_SLAVES);
     micro_ext->k_factor = i;
+
+    /* Create a mask for it. */
+    BUG_ON(castle_extent_mask_create(micro_ext,
+                                     MASK_RANGE(0, micro_ext->size),
+                                     INVAL_MASK_ID) < 0);
+
     CONVERT_EXTENT_TO_MENTRY(micro_ext, &castle_extents_sb->micro_ext);
+
     castle_extents_hash_add(micro_ext);
 
     return 0;
@@ -663,7 +779,7 @@ int castle_extents_writeback(void)
     /* Don't exit with out-standing dead extents. They are scheduled to get freed on
      * system work queue. */
     if (castle_last_checkpoint_ongoing)
-        while (atomic_read(&castle_extents_dead_count))
+        while (atomic_read(&castle_extents_gc_q_size) || atomic_read(&castle_extents_dead_count))
             msleep_interruptible(1000);
 
     castle_extents_mstore =
@@ -730,7 +846,6 @@ static int load_extent_from_mentry(struct castle_elist_entry *mstore_entry)
 #ifdef CASTLE_DEBUG
     ext->alive = 0;
 #endif
-    atomic_set(&ext->link_cnt, 0);
 
     CONVERT_MENTRY_TO_EXTENT(ext, mstore_entry);
     if (EXT_ID_INVAL(ext->ext_id))
@@ -739,7 +854,18 @@ static int load_extent_from_mentry(struct castle_elist_entry *mstore_entry)
         goto err2;
     }
 
+    /* Create the initial masks. */
+    BUG_ON(castle_extent_mask_create(ext,
+                                     mstore_entry->prev_mask,
+                                     INVAL_MASK_ID) < 0);
+
     castle_extents_hash_add(ext);
+
+    /* This would delete the previous mask, as it doesnt have any references. */
+    BUG_ON(castle_extent_mask_create(ext,
+                                     mstore_entry->cur_mask,
+                                     GET_LATEST_MASK(ext)->mask_id) < 0);
+
     castle_extent_print(ext, NULL);
 
     return 0;
@@ -781,12 +907,7 @@ int castle_extents_read(void)
 
     atomic_set(&current_rebuild_seqno, ext_sblk->current_rebuild_seqno);
 
-    /* Note: Micro extent is being created every time, not being loaded from mentry. It is already
-     * linked. No need to mark it as alive. */
     /* Mark Logical extents as alive. */
-    castle_extent_mark_live(META_EXT_ID, 0);
-    castle_extent_mark_live(MSTORE_EXT_ID, 0);
-    castle_extent_mark_live(MSTORE_EXT_ID+1, 0);
     meta_ext_size = castle_extent_size_get(META_EXT_ID);
     extent_init_done = 1;
 
@@ -848,12 +969,15 @@ error_out:
 
 void castle_extents_fini(void)
 {
+    /* Stop the Garbage collector thread. */
+    kthread_stop(extents_gc_thread);
+
     /* Make sure cache flushed all dirty pages */
     /* Iterate over extents hash with exclusive access. Indeed, we don't need a
      * lock here as this happenes in the module end. */
     castle_extents_hash_iterate_exclusive(castle_extent_hash_remove, NULL);
     castle_kfree(castle_extents_hash);
-    kmem_cache_destroy(castle_extents_work_cache);
+    castle_kfree(castle_extent_mask_hash);
 }
 
 #define MAX_K_FACTOR   4
@@ -898,7 +1022,7 @@ static struct castle_extent_state *castle_extent_state_alloc(c_ext_t *ext)
  * @FIXME Cannot handle kmalloc failure. We should retry freeing extent freespace,
  * once memory becomes available.
  */
-static void castle_extent_space_free(c_ext_t *ext, c_chk_cnt_t count)
+static void castle_extent_space_free(c_ext_t *ext, c_chk_cnt_t start, c_chk_cnt_t count)
 {
     c_chk_cnt_t                 chks_per_page;
     c_ext_pos_t                 map_cep;
@@ -909,26 +1033,28 @@ static void castle_extent_space_free(c_ext_t *ext, c_chk_cnt_t count)
     debug("Freeing %d disk chunks from extent %lld\n", count, ext->ext_id);
     chks_per_page = map_chks_per_page(ext->k_factor);
 
-    map_cep = ext->maps_cep;
+    /* Find map cep for the start chunk. */
+    map_cep = castle_extent_map_cep_get(ext->maps_cep, start, ext->k_factor);
+    map_c2b = NULL;
     debug("Map at cep: "cep_fmt_str_nl, cep2str(map_cep));
     while(count>0)
     {
-        c_chk_cnt_t logical_chunks, logical_chunk;
+        c_chk_cnt_t logical_chunk;
+
+        /* If this is the first page, set first logical_chunk accordingly.*/
+        logical_chunk = (map_c2b)? 0: (start % chks_per_page);
 
         /* Get page-worth of extent map. */
         debug("Processing map page at cep: "cep_fmt_str_nl, cep2str(map_cep));
+        map_cep = PG_ALIGN_CEP(map_cep);
         map_c2b = castle_cache_page_block_get(map_cep);
         write_lock_c2b(map_c2b);
         if(!c2b_uptodate(map_c2b))
             BUG_ON(submit_c2b_sync(READ, map_c2b));
         map_buf = c2b_buffer(map_c2b);
 
-        /* Work out how many logical chunks (in the extent space) to free. */
-        logical_chunks = (count > chks_per_page * ext->k_factor) ?
-                            chks_per_page :
-                            (count - 1) / ext->k_factor + 1;
         /* For each logical chunk, look through each copy. */
-        for( logical_chunk=0; (logical_chunk<chks_per_page) && (count > 0); logical_chunk++)
+        for (; (logical_chunk < chks_per_page) && (count > 0); logical_chunk++)
         {
             int copy;
             for(copy=0; (copy<ext->k_factor) && (count > 0); copy++)
@@ -937,6 +1063,7 @@ static void castle_extent_space_free(c_ext_t *ext, c_chk_cnt_t count)
                 cs = castle_slave_find_by_uuid(
                     map_buf[logical_chunk*ext->k_factor + copy].slave_id);
                 BUG_ON(!cs);
+
                 if (!test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags))
                 {
                     if (map_buf[logical_chunk * ext->k_factor + copy].offset % CHKS_PER_SLOT == 0)
@@ -1121,14 +1248,16 @@ retry:
                 dirty_c2b(map_c2b);
                 write_unlock_c2b(map_c2b);
                 put_c2b(map_c2b);
+
+                /* Reset the index. */
+                map_page_idx = 0;
             }
             /* Get the next map_c2b. */
             debug("Getting map c2b, for cep: "cep_fmt_str_nl, cep2str(map_cep));
             map_c2b = castle_cache_page_block_get(map_cep);
             write_lock_c2b(map_c2b);
             update_c2b(map_c2b);
-            /* Reset the index, and the map pointer. */
-            map_page_idx = 0;
+            /* Reset the map pointer. */
             map_page = c2b_buffer(map_c2b);
             /* Advance the map cep. */
             map_cep.offset += C_BLK_SIZE;
@@ -1164,7 +1293,7 @@ retry:
                 write_unlock_c2b(map_c2b);
                 put_c2b(map_c2b);
                 map_c2b = NULL;
-                castle_extent_space_free(ext, ext->k_factor * chunk + j);
+                castle_extent_space_free(ext, 0, ext->k_factor * chunk + j);
                 if (test_bit(CASTLE_SLAVE_OOS_BIT, &slaves[j]->flags))
                     /*
                      * The slave went out-of-service since the 'next_slave_get'. Retry, and the
@@ -1348,6 +1477,8 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t     rda_type,
         debug("Allocated extent map at: "cep_fmt_str_nl, cep2str(ext->maps_cep));
     }
 
+    BUG_ON(BLOCK_OFFSET(ext->maps_cep.offset));
+
     if ((ret = castle_extent_space_alloc(ext, da_id)) == -ENOSPC)
     {
         debug("Extent alloc failed to allocate space for %u chunks\n", count);
@@ -1358,6 +1489,11 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t     rda_type,
         debug("Extent alloc failed for %u chunks\n", count);
         goto __hell;
     }
+
+    /* Successfully allocated space for extent. Create a mask for it. */
+    BUG_ON(castle_extent_mask_create(ext,
+                                     MASK_RANGE(0, count),
+                                     INVAL_MASK_ID) < 0);
 
     /* Add extent and extent dirtylist to hash tables. */
     castle_extents_hash_add(ext);
@@ -1516,28 +1652,26 @@ static void castle_extent_resource_release(void *data)
     struct castle_extents_superblock *castle_extents_sb = NULL;
     c_ext_id_t ext_id = ext->ext_id;
 
-    castle_extent_transaction_start();
+    /* Should be in transaction. */
+    BUG_ON(!castle_extent_in_transaction());
+
+    /* Shouldn't have any live masks left. */
+    BUG_ON(!list_empty(&ext->mask_list));
 
     /* Reference count should be zero. */
-    if (atomic_read(&ext->ref_cnt) || atomic_read(&ext->link_cnt))
+    if (atomic_read(&ext->link_cnt))
     {
         castle_printk(LOG_ERROR, "Couldn't delete the referenced extent %llu, %d\n",
-                ext_id,
-                atomic_read(&ext->ref_cnt),
-                atomic_read(&ext->link_cnt));
+                                 ext_id,
+                                 atomic_read(&ext->link_cnt));
         BUG();
     }
 
     /* Get the extent lock, to prevent checkpoint happening parallely. */
     castle_extents_sb = castle_extents_super_block_get();
 
-    /* Remove extent from hash and free the space. Both should happen in atomic with respect
-     * to checkpoint. */
+    /* Remove extent from hash. */
     castle_extents_hash_remove(ext);
-    castle_extent_space_free(ext, ext->k_factor * ext->size);
-
-    /* Drop dirty c2bs associated with this extent from the cache. */
-    castle_cache_extent_evict(ext->dirtytree);
 
     /* Drop 'extent exists' reference on c2b dirtytree. */
     castle_extent_dirtytree_put(ext->dirtytree);
@@ -1546,13 +1680,8 @@ static void castle_extent_resource_release(void *data)
 
     castle_extents_sb->nr_exts--;
 
-    kmem_cache_free(castle_extents_work_cache, ext->work);
-    castle_kfree(ext);
-
     /* Decrement the dead count. Module can't exit with outstanding dead extents.  */
     atomic_dec(&castle_extents_dead_count);
-
-    castle_extent_transaction_end();
 }
 
 uint32_t castle_extent_kfactor_get(c_ext_id_t ext_id)
@@ -1728,12 +1857,17 @@ static void __castle_extent_map_get(c_ext_t *ext, c_chk_t chk_idx, c_disk_chk_t 
     }
 }
 
-uint32_t castle_extent_map_get(void          *ext_p,
+/**
+ * Get the mapping of disk chunk layout for a given logical chunk in extent.
+ *
+ * Note: Caller should be holding a reference on the extent.
+ */
+uint32_t castle_extent_map_get(c_ext_id_t     ext_id,
                                c_chk_t        offset,
                                c_disk_chk_t  *chk_map,
                                int            rw)
 {
-    c_ext_t *ext = ext_p;
+    c_ext_t *ext = castle_extents_hash_get(ext_id);
     uint32_t ret;
 
     if(ext == NULL)
@@ -1747,6 +1881,9 @@ uint32_t castle_extent_map_get(void          *ext_p,
         castle_printk(LOG_ERROR, "    Extent Size: %u\n", ext->size);
         BUG();
     }
+
+    if ((offset < ext->chkpt_global_mask.start) || (offset >= ext->chkpt_global_mask.end))
+        return 0;
 
     /*
      * This extent may be being remapped, in which case writes need to be redirected via its shadow
@@ -1815,8 +1952,18 @@ c_ext_id_t castle_extent_sup_ext_init(struct castle_slave *cs)
         }
     }
     ext->maps_cep = INVAL_EXT_POS;
+
+    castle_extent_transaction_start();
+
+    /* Create a mask for it. */
+    BUG_ON(castle_extent_mask_create(ext,
+                                     MASK_RANGE(0, ext->size),
+                                     INVAL_MASK_ID) < 0);
+
     castle_extents_hash_add(ext);
     cs->sup_ext = ext->ext_id;
+
+    castle_extent_transaction_end();
 
     debug("Created super extent %llu for slave 0x%x\n", ext->ext_id, cs->uuid);
 
@@ -1838,7 +1985,9 @@ void castle_extent_sup_ext_close(struct castle_slave *cs)
     ext = castle_extents_hash_get(ext_id);
     if (ext)
     {
-        BUG_ON(atomic_read(&ext->ref_cnt) != 1);
+        c_ext_mask_t *mask = GET_LATEST_MASK(ext);
+
+        BUG_ON(atomic_read(&mask->ref_count) != 1);
         castle_extents_hash_remove(ext);
         castle_kfree(ext);
     }
@@ -1880,30 +2029,136 @@ void castle_extent_sup_ext_close(struct castle_slave *cs)
 #define LIVE_EXTENT(_ext) ((_ext) && atomic_read(&(_ext)->link_cnt))
 
 /**
- * Low level get() for extent references. Takes a reference only if extent is in hash and has
- * active links.
+ * Get a reference on the latest mask. Don't give a reference, if the extent doesn't have
+ * any active links.
  *
- * Locks should have been taken by the parent function.
+ * @param ext_id    [in]    Extent that the reference is seeking for.
  *
- * @param   ext_id  [in]    Extent id that reference to be taken.
- *
- * @return  Pointer of extent, if SUCCESS
- *          NULL, if FAILURE
+ * @return mask_id  ID of the mask that reference is given for.
  */
-c_ext_t* __castle_extent_get(c_ext_id_t ext_id)
+c_ext_mask_id_t castle_extent_mask_get(c_ext_id_t ext_id)
 {
     c_ext_t *ext = __castle_extents_hash_get(ext_id);
+    uint32_t val;
 
     /* Expected to hold atleast read_lock. */
     BUG_ON(write_can_lock(&castle_extents_hash_lock));
 
     /* Don't give reference if extent is not alive. */
     if (LIVE_EXTENT(ext))
-        atomic_inc(&ext->ref_cnt);
-    else
-        ext = NULL;
+    {
+        /* Get the latest mask for this extent. */
+        c_ext_mask_t *mask = GET_LATEST_MASK(ext);
 
-    return ext;
+        /* Get a reference on latest mask. Count shouldn't be zero, before increment. */
+        BUG_ON((val = atomic_inc_return(&mask->ref_count)) == 1);
+
+        //castle_printk(LOG_DEVEL, "GET: %u "cemr_cstr"%u\n", mask->mask_id, cemr2str(mask->range), val);
+
+        BUG_ON(castle_extent_mask_hash_get(mask->mask_id) == NULL);
+
+        /* Return the mask ID. put() needs to be called with the same ID. */
+        return mask->mask_id;
+    }
+
+    /* Extent is not alive. Return error. */
+    return INVAL_MASK_ID;
+}
+
+/**
+ * Release reference on the extent mask. Locks are already taken. If releasing last
+ * reference, add the mask to the free list. It get's deleted by the extent garbage
+ * collector thread.
+ *
+ * Can't free the resources from this function as that would be sleeping function and
+ * the function could be in interrupt context. Instead, offload the task.
+ *
+ * @param mask_id [inout]   Extent mask that reference has to be released.
+ */
+void castle_extent_mask_put(c_ext_mask_id_t mask_id)
+{
+    /* Get the mask structure. */
+    c_ext_mask_t *mask = castle_extent_mask_hash_get(mask_id);
+    uint32_t val;
+
+    /* Expected to hold atleast read_lock. */
+    BUG_ON(write_can_lock(&castle_extents_hash_lock));
+
+    /* Mask should be alive. */
+    BUG_ON(mask == NULL);
+
+    /* Reference count shouldn't be zero. */
+    if (atomic_read(&mask->ref_count) == 0)
+    {
+        printk("mask: %p\n", mask);
+        BUG();
+    }
+
+    val = atomic_dec_return(&mask->ref_count);
+    //castle_printk(LOG_DEVEL, "PUT: %u "cemr_cstr"%u\n", mask->mask_id, cemr2str(mask->range), val);
+    /* Release reference and also check if this is the last referece; if so, schedule mask
+     * for deletion. */
+    if (val == 0)
+    {
+        static DEFINE_SPINLOCK(mask_ref_release_lock);
+        unsigned long flags;
+        int release_mask = 0;
+
+        /* Take lock to make sure, no other last reference release for other in this
+         * extent is racgin. */
+        spin_lock_irqsave(&mask_ref_release_lock, flags);
+
+        if (IS_OLDEST_MASK(mask->ext, mask))
+            release_mask = 1;
+        else
+        {
+            c_ext_mask_t *next_mask = list_entry(mask->list.next, c_ext_mask_t, list);
+
+            /* If the next mask is not in hash, then it is already marked for deletion. And
+             * this mask can be deleted. */
+            if (!castle_extent_mask_hash_get(next_mask->mask_id))
+                release_mask = 1;
+        }
+
+        if (release_mask)
+        {
+            c_ext_t *ext = mask->ext;
+            struct list_head *pos;
+
+            /* Update global mask. */
+            list_for_each_prev(pos, &ext->mask_list)
+            {
+                c_ext_mask_t *pos_mask = list_entry(pos, c_ext_mask_t, list);
+
+                /* Already scheduled for release. */
+                if (castle_extent_mask_hash_get(pos_mask->mask_id) == NULL)
+                    continue;
+
+                /* Not yet ready for release. */
+                if (atomic_read(&pos_mask->ref_count))
+                    break;
+
+#if 0
+                castle_printk(LOG_DEVEL, "Scheduling mask %u "cemr_cstr" for free\n",
+                                         pos_mask->mask_id, cemr2str(pos_mask->range));
+#endif
+                /* If this is the last mask, there should be no active links. */
+                BUG_ON(list_is_singular(&ext->mask_list) && atomic_read(&ext->link_cnt));
+
+                castle_extent_mask_hash_remove(pos_mask);
+
+                /* Add to the free list, it would get destroyed later by the GC thread. */
+                list_add_tail(&pos_mask->hash_list, &castle_ext_mask_free_list);
+
+                atomic_inc_return(&castle_extents_gc_q_size);
+            }
+
+            /* Wakeup the garbage collector. */
+            wake_up(&castle_ext_mask_gc_wq);
+        }
+
+        spin_unlock_irqrestore(&mask_ref_release_lock, flags);
+    }
 }
 
 /**
@@ -1914,63 +2169,72 @@ c_ext_t* __castle_extent_get(c_ext_id_t ext_id)
  * @return  Pointer of extent, if SUCCESS
  *          NULL, if FAILURE
  */
-void* castle_extent_get(c_ext_id_t ext_id)
+c_ext_mask_id_t castle_extent_get(c_ext_id_t ext_id)
 {
     unsigned long flags;
-    c_ext_t *ext;
+    c_ext_mask_id_t mask_id;
 
     /* Read lock is good enough as ref count is atomic. */
     read_lock_irqsave(&castle_extents_hash_lock, flags);
 
     /* Call low level get function. */
-    ext = __castle_extent_get(ext_id);
+    mask_id = castle_extent_mask_get(ext_id);
 
     read_unlock_irqrestore(&castle_extents_hash_lock, flags);
 
-    return ext;
+    return mask_id;
 }
 
 /**
- * Release reference on the extent. Locks are already taken. If releasing last reference, schedule
- * castle_extent_resource_release().
+ * Take a reference on all extent views by taking reference on latest and oldest masks.
  *
- * It is possible to call with NULL; just return back to caller.
+ * @param   ext_id  [in]    Extent id that reference to be taken.
  *
- * Dont call castle_extent_resource_release() from here as free() is sleeping function and the
- * function could be in interrupt context. Instead, schedule the castle_extent_resource_release()
- * on system WQ.
- *
- * @param ext [inout]   Extent that reference has to be released.
+ * @return  Pointer of extent, if SUCCESS
+ *          NULL, if FAILURE
  */
-void __castle_extent_put(c_ext_t *ext)
+c_ext_mask_id_t castle_extent_get_all(c_ext_id_t ext_id)
 {
-    /* Expected to hold atleast read_lock. */
-    BUG_ON(write_can_lock(&castle_extents_hash_lock));
+    unsigned long flags;
+    c_ext_mask_id_t mask_id;
 
-    if (ext == NULL)
-        return;
+    /* Call low level get function. */
+    mask_id = castle_extent_get(ext_id);
 
-    if (atomic_read(&ext->ref_cnt) == 0)
+    /* Take reference on oldest mask. */
+    if (!MASK_ID_INVAL(mask_id))
     {
-        printk("ext: %p\t, id: %llu\n", ext, ext->ext_id);
-        BUG();
+        c_ext_mask_t *mask, *oldest_mask;
+        struct list_head *pos;
+
+        /* Take writelock to make sure last valid mask is not getting released. */
+        write_lock_irqsave(&castle_extents_hash_lock, flags);
+
+        mask = castle_extent_mask_hash_get(mask_id);
+        if (!mask)
+        {
+            printk("%llu %u\n", ext_id, mask_id);
+            BUG();
+        }
+
+        list_for_each_prev(pos, &mask->ext->mask_list)
+        {
+            oldest_mask = list_entry(pos, c_ext_mask_t, list);
+
+            if (atomic_read(&oldest_mask->ref_count))
+            {
+                uint32_t val;
+                BUG_ON((val = atomic_inc_return(&oldest_mask->ref_count)) == 1);
+                //castle_printk(LOG_DEVEL, "get: %u "cemr_cstr"%u\n", oldest_mask->mask_id, cemr2str(oldest_mask->range), val);
+                BUG_ON(castle_extent_mask_hash_get(oldest_mask->mask_id) == NULL);
+                break;
+            }
+        }
+
+        write_unlock_irqrestore(&castle_extents_hash_lock, flags);
     }
 
-    /* Release reference and also check if this is the last referece; if so, schedule extent
-     * for deletion. */
-    if (atomic_dec_return(&ext->ref_cnt) == 0)
-    {
-        /* There should be no active links. */
-        BUG_ON(atomic_read(&ext->link_cnt));
-
-        /* Note: We don't even remove extent from hash, as it should happen together with
-         * freespace changes, to maintain consistency. */
-        /* Work structure should have been malloced in last castle_extent_unlink(). */
-        BUG_ON(ext->work == NULL);
-
-        /* Schedule extent deletion on system WQ. */
-        schedule_work(ext->work);
-    }
+    return mask_id;
 }
 
 /**
@@ -1978,20 +2242,67 @@ void __castle_extent_put(c_ext_t *ext)
  *
  * @also: castle_extent_resource_release
  */
-void castle_extent_put(c_ext_id_t ext_id)
+void castle_extent_put(c_ext_mask_id_t mask_id)
 {
     unsigned long flags;
-    c_ext_t *ext;
 
     /* Write lock is required to not race with reference gets. */
     read_lock_irqsave(&castle_extents_hash_lock, flags);
 
-    ext = __castle_extents_hash_get(ext_id);
-
     /* Call low level put function. */
-    __castle_extent_put(ext);
+    castle_extent_mask_put(mask_id);
 
     read_unlock_irqrestore(&castle_extents_hash_lock, flags);
+}
+
+/**
+ * Puts the reference on oldest mask and latest mask. (Interrupt Context)
+ *
+ * @also: castle_extent_resource_release
+ */
+void castle_extent_put_all(c_ext_mask_id_t mask_id)
+{
+    unsigned long flags;
+    c_ext_mask_t *mask, *oldest_mask;
+    struct list_head *pos;
+
+    /* Write lock is required to not race with reference gets. */
+    read_lock_irqsave(&castle_extents_hash_lock, flags);
+
+    mask = castle_extent_mask_hash_get(mask_id);
+
+    /* Release reference on oldest mask. */
+    list_for_each_prev(pos, &mask->ext->mask_list)
+    {
+        oldest_mask = list_entry(pos, c_ext_mask_t, list);
+
+        if (atomic_read(&oldest_mask->ref_count))
+        {
+            castle_extent_mask_put(oldest_mask->mask_id);
+            break;
+        }
+    }
+
+    /* Call low level put function on latest mask. */
+    castle_extent_mask_put(mask_id);
+
+    read_unlock_irqrestore(&castle_extents_hash_lock, flags);
+}
+
+static c_ext_mask_id_t castle_extent_get_ptr(c_ext_id_t ext_id, c_ext_t **ext)
+{
+    c_ext_mask_id_t mask_id = castle_extent_get(ext_id);
+
+    if (MASK_ID_INVAL(mask_id))
+    {
+        *ext = NULL;
+        return mask_id;
+    }
+
+    *ext = castle_extents_hash_get(ext_id);
+    BUG_ON(*ext == NULL);
+
+    return mask_id;
 }
 
 /**
@@ -2008,18 +2319,22 @@ void castle_extent_put(c_ext_id_t ext_id)
 int castle_extent_link(c_ext_id_t ext_id)
 {
     c_ext_t *ext;
+    c_ext_mask_id_t mask_id;
+    unsigned long flags;
 
     /* Read lock is good enough as link count is atomic and unlink works under write lock. */
-    read_lock_irq(&castle_extents_hash_lock);
+    read_lock_irqsave(&castle_extents_hash_lock, flags);
 
     /* Try to get a reference on the extent. Would fail, if the extent is already dead. */
-    ext = __castle_extent_get(ext_id);
-    if(!ext)
+    mask_id = castle_extent_mask_get(ext_id);
+    if (MASK_ID_INVAL(mask_id))
     {
-        /* Shouldn't have tried to create links on a dead extents. BUG. */
+        /* Shouldn't have tried to create links on a dead extent. BUG. */
         castle_printk(LOG_ERROR, "%s::cannot do get on ext with id %d.\n", __FUNCTION__, ext_id);
         BUG();
     }
+
+    ext = __castle_extents_hash_get(ext_id);
 
     /* Shouldn't be a dead extent. */
     BUG_ON(atomic_read(&ext->link_cnt) == 0);
@@ -2028,7 +2343,7 @@ int castle_extent_link(c_ext_id_t ext_id)
     atomic_inc(&ext->link_cnt);
 
     /* Unlock hash lock. */
-    read_unlock_irq(&castle_extents_hash_lock);
+    read_unlock_irqrestore(&castle_extents_hash_lock, flags);
 
     return 0;
 }
@@ -2045,23 +2360,11 @@ int castle_extent_link(c_ext_id_t ext_id)
 int castle_extent_unlink(c_ext_id_t ext_id)
 {
     c_ext_t *ext;
-    int last_link = 0;
-
-    /* Allocate work structure upfront. If we fail to allocate, after releasing reference,
-     * then extent references could be in inconsistent state. Unlike malloc, kmem_cache_alloc()
-     * is not really a heavy operation. */
-    struct work_struct *work = kmem_cache_alloc(castle_extents_work_cache, GFP_KERNEL);
-
-    /* If failed to get memory, don't release reference and return error. */
-    if (!work)
-    {
-        castle_printk(LOG_ERROR, "Failed to allocate memory for extent deletion structures -"
-                                 " Not deleting extent\n");
-        return -1;
-    }
+    c_ext_mask_id_t mask_id;
+    unsigned long flags;
 
     /* Get a write lock, to make sure there are no parallel get() or link(). */
-    write_lock_irq(&castle_extents_hash_lock);
+    write_lock_irqsave(&castle_extents_hash_lock, flags);
 
     ext = __castle_extents_hash_get(ext_id);
     /* Can't unlink an extent not in hash. BUG. */
@@ -2084,27 +2387,18 @@ int castle_extent_unlink(c_ext_id_t ext_id)
         /* Increment the count of scheduled extents for deletion. Last checkpoint, conseqeuntly,
          * castle_exit waits for all outstanding dead extents to get destroyed. */
         atomic_inc(&castle_extents_dead_count);
-
-        /* Shouldn't have alloced work structure already. */
-        BUG_ON(ext->work);
-        ext->work = work;
-
-        /* Initialise work structure. But, don't scheudle free yet. Need to wait on all oustanding
-         * reference(not links) to be released. */
-        INIT_WORK(ext->work, castle_extent_resource_release, ext);
-
-        last_link = 1;
     }
 
-    /* Release the corresponding reference. */
-    __castle_extent_put(ext);
+    /* There should be atleast one mask. */
+    BUG_ON(list_empty(&ext->mask_list));
 
-    write_unlock_irq(&castle_extents_hash_lock);
+    /* This link has a reference on current latest mask. */
+    mask_id = GET_LATEST_MASK(ext)->mask_id;
 
-    /* This is not the last link, free work structure. kmem_cache_alloc and free are not as expensive
-     * as kmalloc and free. */
-    if (!last_link)
-        kmem_cache_free(castle_extents_work_cache, work);
+    write_unlock_irqrestore(&castle_extents_hash_lock, flags);
+
+    /* Release the reference on latest mask. */
+    castle_extent_put(mask_id);
 
     return 0;
 }
@@ -2141,8 +2435,9 @@ int castle_extent_free(c_ext_id_t ext_id)
 void _castle_extent_efficiency_inc(c_ext_id_t ext_id, int up2date)
 {
     c_ext_t *ext;
+    c_ext_mask_id_t mask_id;
 
-    ext = castle_extent_get(ext_id);
+    mask_id = castle_extent_get_ptr(ext_id, &ext);
     BUG_ON(!ext);
 
     if (up2date)
@@ -2150,7 +2445,7 @@ void _castle_extent_efficiency_inc(c_ext_id_t ext_id, int up2date)
     else
         atomic_inc(&ext->pref_chunks_not_up2date);
 
-    castle_extent_put(ext_id);
+    castle_extent_put(mask_id);
 }
 
 /**
@@ -2181,8 +2476,9 @@ int _castle_extent_efficiency_get_reset(c_ext_id_t ext_id, int up2date)
 {
     c_ext_t *ext;
     int amount;
+    c_ext_mask_id_t mask_id;
 
-    ext = castle_extent_get(ext_id);
+    mask_id = castle_extent_get_ptr(ext_id, &ext);
     BUG_ON(!ext);
 
     if (up2date)
@@ -2196,7 +2492,7 @@ int _castle_extent_efficiency_get_reset(c_ext_id_t ext_id, int up2date)
         atomic_sub(amount, &ext->pref_chunks_not_up2date);
     }
 
-    castle_extent_put(ext_id);
+    castle_extent_put(mask_id);
 
     return amount;
 }
@@ -2281,7 +2577,8 @@ void __castle_extent_dirtytree_put(c_ext_dirtytree_t *dirtytree, int check_hash)
     if (unlikely(atomic_dec_return(&dirtytree->ref_cnt) == 0))
     {
         if (check_hash)
-            BUG_ON(castle_extent_get(dirtytree->ext_id));   /* cannot be in hash now */
+            /* cannot be in hash now */
+            BUG_ON(!MASK_ID_INVAL(castle_extent_get(dirtytree->ext_id)));
         BUG_ON(!RB_EMPTY_ROOT(&dirtytree->rb_root));    /* must be empty */
         castle_kfree(dirtytree);
     }
@@ -2297,35 +2594,31 @@ void castle_extent_dirtytree_put(c_ext_dirtytree_t *dirtytree)
     __castle_extent_dirtytree_put(dirtytree, 1 /*check_hash*/);
 }
 
-/* Check if the extent is alive or not.
- * Extent is alive if it referenced by one of
- *  - Component Trees in a DA
- *      - Tree Extent
- *      - Medium Object Extent
- *      - Large Object Extent
- *  - Logical Extents
- *
- *  Other wise free it.
- */
-static int castle_extent_check_alive(c_ext_t *ext, void *unused)
+int castle_extent_rebuild_ext_get(c_ext_t *ext, int is_locked)
 {
-    if (atomic_read(&ext->link_cnt) == 0)
-    {
-        castle_printk(LOG_WARN, "Found a dead extent: %llu - Cleaning it\n", ext->ext_id);
-        /* castle_extent_free() expects link count to be 1. */
-        atomic_set(&ext->link_cnt, 1);
-        read_unlock_irq(&castle_extents_hash_lock);
-        /* Extent is dead and not referenced any of the structures. Free it. */
-        castle_extent_free(ext->ext_id);
-        read_lock_irq(&castle_extents_hash_lock);
-    }
+    /* There shouldn't be an outstanding reference. */
+    BUG_ON(!MASK_ID_INVAL(ext->rebuild_mask_id));
+
+    if (is_locked)
+        ext->rebuild_mask_id = castle_extent_mask_get(ext->ext_id);
+    else
+        ext->rebuild_mask_id = castle_extent_get(ext->ext_id);
+
+    if (MASK_ID_INVAL(ext->rebuild_mask_id))
+        return -1;
+
     return 0;
 }
 
-int castle_extents_restore(void)
+void castle_extent_rebuild_ext_put(c_ext_t *ext, int is_locked)
 {
-    castle_extents_hash_iterate(castle_extent_check_alive, NULL);
-    return 0;
+    /* There should be an outstanding reference. */
+    BUG_ON(MASK_ID_INVAL(ext->rebuild_mask_id));
+
+    if (is_locked)
+        castle_extent_mask_put(ext->rebuild_mask_id);
+    else
+        castle_extent_put(ext->rebuild_mask_id);
 }
 
 /*
@@ -2349,7 +2642,7 @@ static int castle_extent_rebuild_list_add(c_ext_t *ext, void *unused)
          * Take a reference to the extent. We will drop this when we have finished remapping
          * the extent.
          */
-        if (__castle_extent_get(ext->ext_id) == NULL)
+        if (castle_extent_rebuild_ext_get(ext, 1) < 0)
             /* Extent is already dead. */
             return 0;
 
@@ -3001,9 +3294,9 @@ void castle_extent_remap_writeback(c_ext_t *ext)
         castle_extent_transaction_end();
     }
 
-    castle_extent_put(ext->ext_id);
+    castle_extent_rebuild_ext_put(ext, 0);
 }
-    
+
 
 /*
  * The main rebuild kthread function.
@@ -3145,7 +3438,7 @@ restart:
              * when it has finished with it.
              */
             if ((exit_early || (ret == -EINVAL)) && (ext->rebuild_done_list.next == NULL))
-                castle_extent_put(ext->ext_id);
+                castle_extent_rebuild_ext_put(ext, 0);
         }
 
         if (exit_early)
@@ -3335,7 +3628,7 @@ static int castle_extent_verify_list_add(c_ext_t *ext, void *unused)
          * Take a reference to the extent. We will drop this when we have finished remapping
          * the extent.
          */
-        if (__castle_extent_get(ext->ext_id) == NULL)
+        if (castle_extent_rebuild_ext_get(ext, 1) < 0)
             /* Extent is already dead. */
             return 0;
 
@@ -3419,7 +3712,7 @@ int castle_extents_slave_scan(uint32_t uuid)
         list_del(entry);
 
         nr_refs += castle_extent_scan_uuid(ext, uuid);
-        castle_extent_put(ext->ext_id);
+        castle_extent_rebuild_ext_put(ext, 0);
     }
 
     if (nr_refs)
@@ -3488,12 +3781,12 @@ void castle_extents_remap_writeback(void)
 
 }
 
-signed int castle_extent_ref_cnt_get(c_ext_id_t ext_id)
+signed int castle_extent_link_count_get(c_ext_id_t ext_id)
 {
     c_ext_t *ext;
     ext = castle_extents_hash_get(ext_id);
     if(!ext) return -1;
-    return ((signed int)atomic_read(&ext->ref_cnt));
+    return ((signed int)atomic_read(&ext->link_cnt));
 }
 
 c_ext_type_t castle_extent_type_get(c_ext_id_t ext_id)
@@ -3504,3 +3797,377 @@ c_ext_type_t castle_extent_type_get(c_ext_id_t ext_id)
     return ext->ext_type;
 }
 
+
+/**
+ * Extents Resize
+ */
+
+/**
+ * Create new extent mask and add it to the extent as latest mask.
+ *
+ * @param   ext         [inout]     Create a new mask for this extent.
+ * @param   start       [in]        First chunk offset of mask.
+ * #param   end         [in]        Last chunk offset of mask.
+ * @param   prev_mask_id[in]        ID of the mask that the new mask is relative to. If that
+ *                                  doesn't match, then racing with other mask_create. Just,
+ *                                  return error. Caller will try again.
+ *
+ * @return  mask_id     ID of the new mask that is created.
+ */
+static int castle_extent_mask_create(c_ext_t            *ext,
+                                     c_ext_mask_range_t  range,
+                                     c_ext_mask_id_t     prev_mask_id)
+{
+    c_ext_mask_t *mask = castle_malloc(sizeof(c_ext_mask_t), GFP_KERNEL);
+    c_ext_mask_t *prev_mask = NULL;
+
+    /* Should be in of the extent transaction. */
+    BUG_ON(!castle_extent_in_transaction());
+
+    debug_mask("Creating mask " cemr_cstr "for extent %llu\n",
+               cemr2str(range), ext->ext_id);
+
+    /* Sanity checks. */
+    CHECK_MASK_RANGE(range);
+
+    /* Shouldn't cross extent boundary. */
+    BUG_ON(range.end > ext->size);
+
+    /* No memory available return error. */
+    if (!mask)
+        return -ENOMEM;
+
+    /* Init mask structure. */
+    mask->mask_id   = atomic_inc_return(&castle_extent_max_mask_id);
+    mask->range     = range;
+    mask->ext       = ext;
+
+    /* Get hold of extents hash lock, to make sure no one else is accessing the extents
+     * mask_list and no references are being acquired parallely. */
+    write_lock_irq(&castle_extents_hash_lock);
+
+    /* Extent link count should not be 0. Should be alive. */
+    BUG_ON(atomic_read(&ext->link_cnt) == 0);
+
+    /* This is the latest mask. Should represent number links in reference count. */
+    atomic_set(&mask->ref_count, atomic_read(&ext->link_cnt));
+
+    /* If there is no previous mask, list should be empty. Same the other way. */
+    BUG_ON(!!MASK_ID_INVAL(prev_mask_id) ^ !!list_empty(&ext->mask_list));
+
+    /* If there is a previous mask. */
+    if (!MASK_ID_INVAL(prev_mask_id))
+    {
+        /* Get the previous mask structure. */
+        prev_mask = GET_LATEST_MASK(ext);
+
+        /* If it doesn't match the ID passed by the caller, then racing with some other
+         * mask_create on the same extent, return error and caller would try again. */
+        BUG_ON((prev_mask->mask_id != prev_mask_id));
+    }
+    else
+        /* Extent just got created link count should be 1. */
+        BUG_ON(atomic_read(&ext->link_cnt) != 1);
+
+    /* Add the mask as latest mask to the extent. */
+    list_add(&mask->list, &ext->mask_list);
+
+    /* Add mask to hash. */
+    castle_extent_mask_hash_add(mask);
+
+    /* Update global mask.
+     *
+     * Note:  Global mask gets updated by mask_create() and mask_destroy(). mask_create()
+     * changes the global mask only in case of grow().
+     */
+    if (ext->chkpt_global_mask.start > mask->range.start)
+        ext->chkpt_global_mask.start = mask->range.start;
+
+    if (ext->chkpt_global_mask.end < mask->range.end)
+        ext->chkpt_global_mask.end = mask->range.end;
+
+    debug_mask("Updated global mask to " cemr_cstr "\n", cemr2str(ext->chkpt_global_mask));
+
+    /* Release link references from previous mask. */
+    if (!MASK_ID_INVAL(prev_mask_id))
+    {
+        BUG_ON(castle_extent_mask_hash_get(prev_mask->mask_id) == NULL);
+
+        BUG_ON(atomic_read(&prev_mask->ref_count) < atomic_read(&ext->link_cnt));
+
+        /* This is not latest any more. Doesn't represent the reference count. Leave one
+         * extra reference, to release by mask_put() as it could be the last reference on
+         * mask. */
+        atomic_sub(atomic_read(&ext->link_cnt) - 1, &prev_mask->ref_count);
+
+        /* Release last link reference also. */
+        castle_extent_mask_put(prev_mask_id);
+    }
+
+    /* Done with create, release the lock. */
+    write_unlock_irq(&castle_extents_hash_lock);
+
+    return 0;
+}
+
+/**
+ * Delete extent mask from mask list and free the resources that would become invalid after
+ * the deletion.
+ *
+ * 1. If the extent has older masks than this mask, then just delete this mask from list,
+ * nothing more to do.
+ * 2. If this is the oldest mask, commit the mask operation
+ *      a. Shrink - Free the space in shrinked range.
+ *      b. Grow - Nothing to do, space is already allocated and being used.
+ *      c. Truncate - Free the space in truncated range.
+ *
+ * @param   mask    [in]    Destroy the mask.
+ */
+static int castle_extent_mask_destroy(c_ext_mask_t *mask)
+{
+    struct list_head *head;
+    c_ext_t *ext;
+    int ext_free = 0;
+
+    debug_mask("Destroying mask " cemr_cstr " on extent: %llu\n",
+                             cemr2str(mask->range), mask->ext->ext_id);
+
+    /* Should be in extent transaction. */
+    BUG_ON(!castle_extent_in_transaction());
+
+    /* Get hold of extent mask lock, to make sure no one else accessing the extents mask_list. */
+    write_lock_irq(&castle_extents_hash_lock);
+
+    /* Should be the oldest mask. */
+    BUG_ON(!IS_OLDEST_MASK(mask->ext, mask));
+
+    /* Shouldn't be any references left. */
+    BUG_ON(atomic_read(&mask->ref_count));
+
+    ext = mask->ext;
+    head = &ext->mask_list;
+
+    /* Remove the mask from the list. */
+    list_del(&mask->list);
+
+    if (list_empty(head))
+        ext_free = 1;
+
+    write_unlock_irq(&castle_extents_hash_lock);
+
+    if (ext_free)
+        /* Last mask to be freed. */
+        castle_extent_mask_reduce(ext, mask->range, EMPTY_MASK_RANGE,
+                                  &ext->chkpt_global_mask, 1);
+    else
+        castle_extent_mask_reduce(ext, mask->range, GET_OLDEST_MASK(ext)->range,
+                                  &ext->chkpt_global_mask, 1);
+
+    castle_kfree(mask);
+
+    if (ext_free)
+        /* Free the extent resources. */
+        castle_extent_resource_release(mask->ext);
+
+    return 0;
+}
+
+static int castle_extents_garbage_collector(void *unused)
+{
+    LIST_HEAD(gc_list);
+
+    castle_printk(LOG_INIT, "Starting Extents garbage collector thread: %p\n", &gc_list);
+
+    do {
+        int ignore;
+        struct list_head *tmp, *pos;
+
+        /* Wait for some one to schedule a mask to free or thread to stop. */
+        __wait_event_interruptible(castle_ext_mask_gc_wq,
+                                   (kthread_should_stop() ||
+                                            atomic_read(&castle_extents_gc_q_size)),
+                                   ignore);
+
+        /* If the file sytem is exiting break the loop. */
+        if (kthread_should_stop())
+        {
+            /* By this time, it shouldn't have any more extents to free. Should have
+             * completed last checkpoint by now. */
+            BUG_ON(atomic_read(&castle_extents_gc_q_size));
+
+            /* Break the loop, and exit the thread. */
+            break;
+        }
+
+        /* Start an extent transaction, to make sure no checkpoint happening in parellel. */
+        castle_extent_transaction_start();
+
+        /* Don't want any parallel additions to the list. */
+        write_lock_irq(&castle_extents_hash_lock);
+
+        BUG_ON(list_empty(&castle_ext_mask_free_list));
+
+        /* Make a duplicate copy of the list. */
+        list_splice_init(&castle_ext_mask_free_list, &gc_list);
+
+        write_unlock_irq(&castle_extents_hash_lock);
+
+        /* Go over the list of masks, and call destroy on them. */
+        list_for_each_safe(pos, tmp, &gc_list)
+        {
+            c_ext_mask_t *mask = list_entry(pos, c_ext_mask_t, hash_list);
+
+            /* Remove from GC list. */
+            list_del(pos);
+
+            /* Removes mask from extent and also free-up any resources occupied by it. */
+            BUG_ON(castle_extent_mask_destroy(mask) < 0);
+
+            atomic_dec_return(&castle_extents_gc_q_size);
+        }
+
+        castle_extent_transaction_end();
+    } while(1);
+
+    return 0;
+}
+
+/**
+ * Get the extents global view.
+ */
+void castle_extent_mask_read_all(c_ext_id_t     ext_id,
+                                 c_chk_cnt_t   *start,
+                                 c_chk_cnt_t   *end)
+{
+    c_ext_t *ext;
+    struct list_head *pos;
+
+    *start = *end = 0;
+
+    write_lock_irq(&castle_extents_hash_lock);
+
+    ext = __castle_extents_hash_get(ext_id);
+
+    list_for_each_prev(pos, &ext->mask_list)
+    {
+        c_ext_mask_t *mask = list_entry(pos, c_ext_mask_t, list);
+
+        if (atomic_read(&mask->ref_count) == 0)
+            continue;
+
+        if (*start > mask->range.start)
+            *start = mask->range.start;
+
+        if (*end < mask->range.end)
+            *end = mask->range.end;
+    }
+
+    *end = *end - 1;
+
+    write_unlock_irq(&castle_extents_hash_lock);
+}
+
+static void castle_extent_reduce_global_mask(c_ext_mask_range_t *global_mask,
+                                             c_ext_mask_range_t  free_range)
+{
+    int set = 0;
+
+    if (MASK_RANGE_EMPTY(free_range))
+        return;
+
+    /* Check the borders. */
+    BUG_ON(free_range.start < global_mask->start);
+    BUG_ON(free_range.end > global_mask->end);
+
+    /* Update global mask. */
+    if (free_range.start == global_mask->start)
+    {
+        global_mask->start = free_range.end;
+        set++;
+    }
+
+    if (free_range.end == global_mask->end)
+    {
+        global_mask->end = free_range.start;
+        set++;
+    }
+
+    /* If both ranges are same, deleting everything. */
+    if (set == 2)
+        *global_mask = EMPTY_MASK_RANGE;
+
+    debug_mask("Updated global mask to " cemr_cstr "\n", cemr2str(*global_mask));
+
+    BUG_ON(!set);
+}
+
+static void castle_extent_mask_split(c_ext_mask_range_t   range,
+                                     c_ext_mask_range_t   seperator,
+                                     c_ext_mask_range_t  *split1,
+                                     c_ext_mask_range_t  *split2)
+{
+    *split1 = *split2 = EMPTY_MASK_RANGE;
+
+    /* If the base range is empty just return. Do nothing. */
+    if (MASK_RANGE_EMPTY(range))
+        return;
+
+    /* Get the first half before serperator, if any. */
+    if (range.start < seperator.start)
+    {
+        split1->start   = range.start;
+        split1->end     = (range.end < seperator.start)? range.end: seperator.start;
+    }
+
+    /* Get the second half after serperator, if any. */
+    if (range.end > seperator.end)
+    {
+        split2->start   = (range.start > seperator.end)? range.start: seperator.end;
+        split2->end     = range.end;
+    }
+
+    debug_mask("Splitting " cemr_cstr " by " cemr_cstr " into " cemr_cstr " and " cemr_cstr "\n",
+                  cemr2str(range), cemr2str(seperator), cemr2str(*split1), cemr2str(*split2));
+
+}
+
+static void castle_extent_free_range(c_ext_t               *ext,
+                                     c_ext_mask_range_t     range)
+{
+    if (MASK_RANGE_EMPTY(range))
+        return;
+
+    debug_mask("Freeing space " cemr_cstr " from extent: %llu\n",
+                             cemr2str(range), ext->ext_id);
+
+    castle_cache_extent_evict(ext->dirtytree,
+                              range.start,
+                              (range.end - range.start));
+
+    castle_extent_space_free(ext, range.start, (range.end - range.start) * ext->k_factor);
+}
+
+static void castle_extent_mask_reduce(c_ext_t             *ext,
+                                      c_ext_mask_range_t   base,
+                                      c_ext_mask_range_t   range1,
+                                      c_ext_mask_range_t  *global_mask,
+                                      int                  do_free)
+{
+    c_ext_mask_range_t split1, split2;
+
+    debug_mask("Reducing mask " cemr_cstr " from extent %llu\n",
+                             cemr2str(base), ext->ext_id);
+
+    /* If the base range is empty just return. Do nothing. */
+    if (MASK_RANGE_EMPTY(base))
+        return;
+
+    /* Find the parts of base range that are not overlapped by range1. */
+    castle_extent_mask_split(base, range1, &split1, &split2);
+
+    castle_extent_reduce_global_mask(global_mask, split1);
+    if (do_free)    castle_extent_free_range(ext, split1);
+
+    castle_extent_reduce_global_mask(global_mask, split2);
+    if (do_free)    castle_extent_free_range(ext, split2);
+}

@@ -226,6 +226,22 @@ typedef uint32_t c_chk_cnt_t;
 typedef uint32_t c_chk_t;
 typedef uint64_t c_ext_id_t;
 typedef uint32_t c_uuid_t;
+typedef uint32_t c_ext_mask_id_t;
+
+/* Extent mask represents the view of an extent. We always make changes to extents to ends.
+ * Any point of time, extent view corresponds to one contigous range. */
+typedef struct castle_extent_mask_range {
+    c_chk_cnt_t         start;
+    c_chk_cnt_t         end;
+} c_ext_mask_range_t;
+
+#define EMPTY_MASK_RANGE            ((c_ext_mask_range_t){0, 0})
+#define MASK_RANGE_EMPTY(_r)        ((_r).start == (_r).end)
+#define MASK_RANGE(_start, _end)    ((c_ext_mask_range_t) {_start, _end})
+#define CHECK_MASK_RANGE(_r)        BUG_ON((_r).start > (_r).end)
+
+#define INVAL_MASK_ID                   (-1)
+#define MASK_ID_INVAL(_id)              ((_id) == INVAL_MASK_ID)
 
 #define INVAL_CHK                       ((c_chk_t)-1)
 #define CHK_INVAL(_chk)                 ((_chk) == INVAL_CHK)
@@ -311,6 +327,7 @@ static inline int EXT_POS_COMP(c_ext_pos_t cep1, c_ext_pos_t cep2)
 #define cep_fmt_str_nl               "(%llu, 0x%llx (chunk %lld chunk_off 0x%llx)).\n"
 #define cep2str(_off)                (_off).ext_id, BLOCK((_off).offset), CHUNK((_off).offset), CHUNK_OFFSET((_off).offset)
 #define __cep2str(_off)              (_off).ext_id, ((_off).offset), CHUNK((_off).offset), CHUNK_OFFSET((_off).offset)
+#define PG_ALIGN_CEP(_cep)           (c_ext_pos_t){(_cep).ext_id, MASK_BLK_OFFSET((_cep).offset)}
 
 typedef enum {
     DEFAULT_RDA,
@@ -413,8 +430,14 @@ struct castle_elist_entry {
     /*         40 */ uint32_t        curr_rebuild_seqno;
     /*         44 */ uint32_t        da_id;
     /*         48 */ uint32_t        ext_type;
-    /*         52 */ uint8_t         _unused[12];
-    /*         64 */
+    /*         52 */ c_ext_mask_range_t cur_mask;   /**< Current valid mask. All structures in FS
+                                                         should depend on this part of extent only.
+                                                         */
+    /*         60 */ c_ext_mask_range_t prev_mask;  /**< Freespace held by the extent, compare
+                                                         this with current valid mask and free extra
+                                                         space on reboot. */
+    /*         68 */ uint8_t         _unused[60];
+    /*        128 */
 } PACKED;
 
 struct castle_extents_superblock {

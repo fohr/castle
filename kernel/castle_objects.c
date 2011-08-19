@@ -1348,8 +1348,11 @@ static int castle_object_reference_get(c_bvec_t    *c_bvec,
 {
     BUG_ON(c_bvec_data_dir(c_bvec) != READ);
 
+    /* We know LO don't resize dynamically. It is safe to get a link, instead of reference,
+     * which would requrie us to store the reference ID (extent mask ID). */
+    /* Note: Might need to revisit this code with unknown Big-object implementaiton. */
     if (CVT_LARGE_OBJECT(cvt))
-        BUG_ON(!castle_extent_get(cvt.cep.ext_id));
+        BUG_ON(castle_extent_link(cvt.cep.ext_id));
 
     return 0;
 }
@@ -1357,7 +1360,7 @@ static int castle_object_reference_get(c_bvec_t    *c_bvec,
 static void castle_object_reference_release(c_val_tup_t cvt)
 {
     if (CVT_LARGE_OBJECT(cvt))
-        castle_extent_put(cvt.cep.ext_id);
+        castle_extent_unlink(cvt.cep.ext_id);
 }
 
 void castle_object_get_continue(struct castle_bio_vec *c_bvec,
