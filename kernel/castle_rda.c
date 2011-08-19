@@ -107,8 +107,8 @@ static int castle_rda_slave_usable(c_rda_spec_t *rda_spec, struct castle_slave *
 }
 
 /**
- * Calculates the number of superchunks needed for each of the slaves, in order to
- * create specified size extent, with given k_factor for given number of slaves.
+ * Calculates the number of super chunks needed for each of the slaves, in order to
+ * create specified size extent, for each copy.
  *
  * @param ext_size  Size of the extent to be created.
  * @param k_factor  K factor for the RDA spec.
@@ -139,7 +139,7 @@ static c_chk_cnt_t castle_rda_reservation_size_get(c_chk_cnt_t ext_size,
  *
  * @param slaves            Array of slaves to allocate superchunks from.
  * @param nr_slaves         Size of the slaves array.
- * @param reservation_size  Number of superchunks to reserve from each slave.
+ * @param reservation_size  Number of super chunks to reserve for each copy.
  * @param token             Reservation structure to store the reservations in.
  *
  * @return -ENOSPC:    At least one reservation failed.
@@ -179,7 +179,7 @@ static void castle_rda_unreserve(struct castle_slave **slaves,
         castle_freespace_slave_superchunks_unreserve(slaves[i], token);
 }
 
-void* castle_def_rda_extent_init(c_ext_id_t ext_id,
+void* castle_def_rda_extent_init(c_ext_t *ext,
                                  c_chk_cnt_t ext_size,
                                  c_chk_cnt_t alloc_size,
                                  c_rda_type_t rda_type)
@@ -199,7 +199,7 @@ void* castle_def_rda_extent_init(c_ext_id_t ext_id,
 
     /* Initialise state structure. */
     state->rda_spec   = rda_spec;
-    state->ext_id     = ext_id;
+    state->ext_id     = ext->ext_id;
     state->prev_chk   = -1;
     state->size       = alloc_size;
     state->nr_slaves  = 0;
@@ -250,7 +250,7 @@ err_out:
     return NULL;
 }
 
-void castle_def_rda_extent_fini(c_ext_id_t ext_id, void *state_p)
+void castle_def_rda_extent_fini(void *state_p)
 {
     c_def_rda_state_t *state = (c_def_rda_state_t *)state_p;
 
@@ -333,7 +333,7 @@ static struct castle_freespace_reservation *castle_ssd_rda_reservation_token_get
  * @param size     Size of the extent.
  * @param rda_type Must be set to SSD_RDA or SSD_ONLY_EXT.
  */
-void* castle_ssd_rda_extent_init(c_ext_id_t ext_id,
+void* castle_ssd_rda_extent_init(c_ext_t *ext,
                                  c_chk_cnt_t ext_size,
                                  c_chk_cnt_t alloc_size,
                                  c_rda_type_t rda_type)
@@ -356,7 +356,7 @@ void* castle_ssd_rda_extent_init(c_ext_id_t ext_id,
     state->rda_spec = rda_spec;
     if(rda_type != SSD_ONLY_EXT)
     {
-        state->def_state = castle_def_rda_extent_init(ext_id, ext_size, alloc_size, DEFAULT_RDA);
+        state->def_state = castle_def_rda_extent_init(ext, ext_size, alloc_size, DEFAULT_RDA);
         if(!state->def_state)
             goto err_out;
     }
@@ -395,13 +395,13 @@ err_out:
     if(state)
     {
         if(state->def_state)
-            castle_def_rda_extent_fini(ext_id, state->def_state);
+            castle_def_rda_extent_fini(state->def_state);
         castle_kfree(state);
     }
     return NULL;
 }
 
-void castle_ssd_rda_extent_fini(c_ext_id_t ext_id, void *state_v)
+void castle_ssd_rda_extent_fini(void *state_v)
 {
     c_ssd_rda_state_t *state = state_v;
 
@@ -411,7 +411,7 @@ void castle_ssd_rda_extent_fini(c_ext_id_t ext_id, void *state_v)
                          state->nr_slaves,
                          castle_ssd_rda_reservation_token_get(state));
     if(state->def_state)
-        castle_def_rda_extent_fini(ext_id, state->def_state);
+        castle_def_rda_extent_fini(state->def_state);
     castle_kfree(state);
 }
 

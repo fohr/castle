@@ -2,6 +2,7 @@
 #define __CASTLE_RDA_H__
 
 #include "castle_freespace.h"
+#include "castle_extent.h"
 
 /**
  * Get a slave to allocate next chunk. Slave array determines which slave should be used
@@ -20,13 +21,12 @@ typedef int  (*c_next_slave_get_t)(struct castle_slave                 **cs,
                                    void                                 *state,
                                    c_chk_t                               chk_num);
 
-typedef void* (*c_extent_init_t)  (c_ext_id_t   ext_id,
+typedef void* (*c_extent_init_t)  (c_ext_t     *ext,
                                    c_chk_cnt_t  size,
                                    c_chk_cnt_t  alloc_size,
                                    c_rda_type_t rda_type);
 
-typedef void (*c_extent_fini_t)   (c_ext_id_t  ext_id,
-                                   void       *state);
+typedef void (*c_extent_fini_t)   (void       *state);
 
 typedef struct c_rda_spec {
     c_rda_type_t                type;           /* RDA type */

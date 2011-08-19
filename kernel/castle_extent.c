@@ -39,10 +39,12 @@
 #define debug(_f, _a...)        (castle_printk(LOG_DEBUG, _f, ##_a))
 #define debug_mask(_f, _a...)   (castle_printk(LOG_DEBUG, _f, ##_a))
 #define debug_resize(_f, _a...) (castle_printk(LOG_DEBUG, _f, ##_a))
+#define debug_schks(_f, _a...)  (castle_printk(LOG_DEBUG, _f, ##_a))
 #else
 #define debug(_f, ...)          ((void)0)
 #define debug_mask(_f, ...)     ((void)0)
 #define debug_resize(_f, ...)   ((void)0)
+#define debug_schks(_f, ...)    ((void)0)
 #endif
 
 #define MAP_IDX(_ext, _i, _j)       (((_ext)->k_factor * _i) + _j)
@@ -56,6 +58,8 @@
                                  NULL)
 
 #define IS_OLDEST_MASK(_ext, _mask)     list_is_last(&((_mask)->list), &((_ext)->mask_list))
+
+#define SUPER_CHUNK_STRUCT(chk_idx)  ((c_chk_seq_t){chk_idx, CHKS_PER_SLOT})
 
 /* Note: load_extent_from_mentry() deals with complete extent deserialization. This
  * is just a helper function. */
@@ -108,6 +112,20 @@ static DEFINE_MUTEX(castle_extents_mutex);
 struct castle_extent;
 
 /**
+ * Structure to keep the partial superchunks that extent owns.
+ *
+ * Rebuild makes extent space mapping un-predictable. We can't assume any layout for a
+ * given superchunk. With extent resize operations, it is possible to delete parts of
+ * extents seperately. So, we maintain outstadning partial superchunks in the extent.
+ */
+typedef struct castle_partial_schk {
+    uint32_t            slave_id;       /**< Slave ID, this superchunk belongs to.      */
+    c_chk_cnt_t         first_chk;      /**< First chunk's offset.                      */
+    uint8_t             count;          /**< Number of chunks left in this super chunk. */
+    struct list_head    list;           /**< Link to extent.                            */
+} c_part_schk_t;
+
+/**
  * Extent mask represents a range of logical chunks in extent space. It gives a view
  * of the valid chunks in extent. When the reference count of mask becomes zero, it is
  * safe to delete mask and also chunks that are invalid after this mask.
@@ -120,40 +138,6 @@ typedef struct castle_extent_mask {
     struct list_head        hash_list;      /**< Link to hash list.                     */
     struct castle_extent   *ext;            /**< Extent that this mask belongs to.      */
 } c_ext_mask_t;
-
-typedef struct castle_extent {
-    c_ext_id_t          ext_id;         /* Unique extent ID                             */
-    c_chk_cnt_t         size;           /* Number of chunks                             */
-    c_rda_type_t        type;           /* RDA type                                     */
-    uint32_t            k_factor;       /* K factor in K-RDA                            */
-    c_ext_pos_t         maps_cep;       /* Offset of chunk mapping in logical extent    */
-    struct list_head    hash_list;
-    struct list_head    rebuild_list;
-    struct list_head    rebuild_done_list;
-    struct list_head    verify_list;    /* Used for testing.                            */
-    c_ext_mask_id_t     rebuild_mask_id;/* Stores reference taken by rebuild.           */
-    /* TODO: Move rebuild data to a private state structure. */
-    uint32_t            curr_rebuild_seqno;
-    uint32_t            remap_seqno;
-    spinlock_t          shadow_map_lock;
-    c_disk_chk_t        *shadow_map;
-    int                 use_shadow_map; /* Extent is currently being remapped           */
-    atomic_t            link_cnt;
-    /* This global mask gets updated after freeing resources. Checkpoint has to commit
-     * this to mstore. */
-    c_ext_mask_range_t  chkpt_global_mask;
-    struct list_head    mask_list;      /* List of all valid masks - latest first.      */
-#ifdef CASTLE_DEBUG
-    uint8_t             alive;
-#endif
-    c_ext_dirtytree_t  *dirtytree;      /**< RB-tree of dirty c2bs.                     */
-    c_ext_type_t        ext_type;       /**< Type of extent.                            */
-    c_da_t              da_id;          /**< DA that extent corresponds to.             */
-#ifdef CASTLE_PERF_DEBUG
-    atomic_t            pref_chunks_up2date;    /**< Chunks no prefetch required for.   */
-    atomic_t            pref_chunks_not_up2date;/**< Chunks prefetched.                 */
-#endif
-} c_ext_t;
 
 static int castle_extent_mask_create(c_ext_t          *ext,
                                      c_ext_mask_range_t range,
@@ -250,6 +234,257 @@ uint32_t castle_rebuild_fs_version = 0;
 
 struct task_struct         *extents_gc_thread;
 
+static struct kmem_cache   *castle_partial_schks_cache = NULL;
+
+/**
+ * Partial Superchunks handling.
+ */
+
+c_chk_cnt_t castle_extent_free_chunks_count(c_ext_t *ext, uint32_t slave_id)
+{
+    struct list_head *pos;
+    c_chk_cnt_t count = 0;
+
+    BUG_ON(!ext);
+
+    list_for_each(pos, &ext->schks_list)
+    {
+        c_part_schk_t *part_schk = list_entry(pos, c_part_schk_t, list);
+
+        if (part_schk->slave_id == slave_id)
+            count += part_schk->count;
+    }
+
+    return count;
+}
+
+static c_part_schk_t *castle_extent_part_schk_get(c_ext_t *ext, struct castle_slave *slave)
+{
+    struct list_head *pos;
+
+    list_for_each(pos, &ext->schks_list)
+    {
+        c_part_schk_t *part_schk = list_entry(pos, c_part_schk_t, list);
+
+        if (part_schk->slave_id == slave->id)
+            return part_schk;
+    }
+
+    return NULL;
+}
+
+static void castle_extent_part_schk_save(c_ext_t       *ext,
+                                         uint32_t       slave_id,
+                                         c_chk_t        first_chk,
+                                         c_chk_cnt_t    count)
+{
+    struct list_head *pos;
+    c_part_schk_t *part_schk = NULL;
+
+    BUG_ON(count == 0);
+
+    /* Don't try to save more than one super chunk at a time. */
+    BUG_ON(SUPER_CHUNK(first_chk) != SUPER_CHUNK(first_chk + count - 1));
+
+    /* Go over all existing super chunks and try to append to them. */
+    list_for_each(pos, &ext->schks_list)
+    {
+        part_schk = list_entry(pos, c_part_schk_t, list);
+
+        /* Shouldn't have any empty partial super chunks in the list. */
+        BUG_ON(part_schk->count == 0);
+
+        /* If the super chuink belongs to different slave, skip. */
+        if (slave_id != part_schk->slave_id)
+            continue;
+
+        /* If its a different superchunk, skip. */
+        if (SUPER_CHUNK(first_chk) != SUPER_CHUNK(part_schk->first_chk))
+            continue;
+
+        /* Check if it is appendable at end. */
+        if (first_chk == (part_schk->first_chk + part_schk->count))
+        {
+            part_schk->count += count;
+            break;
+        }
+
+        /* Check if it is appendable at start. */
+        if (part_schk->first_chk == (first_chk + count))
+        {
+            part_schk->first_chk = first_chk;
+            part_schk->count += count;
+            break;
+        }
+    }
+
+    /* Check if we stopped in between. */
+    if (pos != &ext->schks_list)
+    {
+        /* If we stopped in between, there should be a matching superchunk. And Superchunk
+         * size should be sane. */
+        BUG_ON(part_schk == NULL || part_schk->count > CHKS_PER_SLOT);
+
+        /* If the superchunk is full, free it. */
+        if (part_schk->count == CHKS_PER_SLOT)
+        {
+            /* First chunk should be aligned to superchunk. */
+            BUG_ON(part_schk->first_chk % CHKS_PER_SLOT);
+
+            debug_schks("Freeing superchunk %u\n", part_schk->first_chk);
+
+            /* Free super chunk. */
+            castle_freespace_slave_superchunk_free(castle_slave_find_by_id(slave_id),
+                                                   SUPER_CHUNK_STRUCT(part_schk->first_chk));
+
+            /* Delete from list. */
+            list_del(&part_schk->list);
+
+            /* Free space. */
+            kmem_cache_free(castle_partial_schks_cache, part_schk);
+        }
+
+        return;
+    }
+
+    /* If we are here, we couldn't find any appropriate superchunk in the list. */
+    /* Allocate memory. */
+    part_schk = kmem_cache_alloc(castle_partial_schks_cache, GFP_KERNEL);
+    BUG_ON(!part_schk);
+
+    /* Init and add to the list. */
+    part_schk->slave_id     = slave_id;
+    part_schk->first_chk    = first_chk;
+    part_schk->count        = count;
+    list_add(&part_schk->list, &ext->schks_list);
+}
+
+/* TODO: Works not efficent. Re-check. */
+static void castle_extent_part_schks_converge(c_ext_t *ext)
+{
+    struct list_head *pos, *tmp, *pos1;
+    c_part_schk_t *part_schk, *part_schk1;
+    LIST_HEAD(free_list);
+
+    list_for_each(pos, &ext->schks_list)
+    {
+        part_schk = list_entry(pos, c_part_schk_t, list);
+
+        list_for_each_safe(pos1, tmp, &ext->schks_list)
+        {
+            part_schk1 = list_entry(pos1, c_part_schk_t, list);
+
+            if (part_schk->first_chk == (part_schk1->first_chk + part_schk1->count) ||
+                part_schk1->first_chk == (part_schk->first_chk + part_schk->count))
+            {
+                list_del(pos1);
+                list_add(pos1, &free_list);
+
+                continue;
+            }
+        }
+    }
+
+    list_for_each_safe(pos, tmp, &free_list)
+    {
+        part_schk = list_entry(pos, c_part_schk_t, list);
+
+        castle_extent_part_schk_save(ext, part_schk->slave_id, part_schk->first_chk, part_schk->count);
+        list_del(pos);
+
+        /* Free space. */
+        kmem_cache_free(castle_partial_schks_cache, part_schk);
+    }
+}
+
+static int castle_extent_part_schks_writeback(c_ext_t *ext, void *store)
+{
+    struct list_head *pos;
+    struct castle_plist_entry mstore_entry;
+    c_mstore_t *castle_part_schks_mstore = store;
+
+    /* Go over all existing super chunks and write them to mstore. */
+    list_for_each(pos, &ext->schks_list)
+    {
+        c_part_schk_t *part_schk = list_entry(pos, c_part_schk_t, list);
+        struct castle_slave *cs = castle_slave_find_by_id(part_schk->slave_id);
+
+        if (test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags))
+            continue;
+
+        mstore_entry.ext_id     = ext->ext_id;
+        mstore_entry.slave_uuid = cs->uuid;
+        mstore_entry.first_chk  = part_schk->first_chk;
+        mstore_entry.count      = part_schk->count;
+
+        castle_mstore_entry_insert(castle_part_schks_mstore, &mstore_entry);
+    }
+
+    return 0;
+}
+
+static int castle_extents_part_schks_writeback(void)
+{
+    c_mstore_t *castle_part_schks_mstore;
+
+    castle_part_schks_mstore =
+                castle_mstore_init(MSTORE_PART_SCHKS, sizeof(struct castle_plist_entry));
+    if (!castle_part_schks_mstore)
+        return -ENOMEM;
+
+    __castle_extents_hash_iterate(castle_extent_part_schks_writeback, castle_part_schks_mstore);
+
+    castle_mstore_fini(castle_part_schks_mstore);
+
+    return 0;
+}
+
+static int castle_extents_part_schks_read(void)
+{
+    struct castle_plist_entry entry;
+    struct castle_mstore_iter *iterator = NULL;
+    c_mstore_t *castle_part_schks_mstore = NULL;
+    c_mstore_key_t key;
+
+    castle_part_schks_mstore =
+        castle_mstore_open(MSTORE_PART_SCHKS, sizeof(struct castle_plist_entry));
+    if(!castle_part_schks_mstore)
+        return -ENOMEM;
+
+    iterator = castle_mstore_iterate(castle_part_schks_mstore);
+    if (!iterator)
+        goto error_out;
+
+    while (castle_mstore_iterator_has_next(iterator))
+    {
+        c_ext_t *ext;
+        struct castle_slave *cs;
+
+        castle_mstore_iterator_next(iterator, &entry, &key);
+
+        ext = castle_extents_hash_get(entry.ext_id);
+        cs = castle_slave_find_by_uuid(entry.slave_uuid);
+
+        /* TODO: Handle gracefully. */
+        BUG_ON(!ext || !cs);
+
+        castle_extent_part_schk_save(ext, cs->id,
+                                     entry.first_chk,
+                                     entry.count);
+    }
+
+    castle_mstore_iterator_destroy(iterator);
+    castle_mstore_fini(castle_part_schks_mstore);
+
+    return 0;
+
+error_out:
+    if (iterator)                   castle_mstore_iterator_destroy(iterator);
+    if (castle_part_schks_mstore)   castle_mstore_fini(castle_part_schks_mstore);
+
+    return -1;
+}
+
 /**
  * Allocate and initialise extent and per-extent dirtytree structures.
  */
@@ -277,6 +512,7 @@ static c_ext_t * castle_ext_alloc(c_ext_id_t ext_id)
     spin_lock_init(&ext->shadow_map_lock);
 
     INIT_LIST_HEAD(&ext->mask_list);
+    INIT_LIST_HEAD(&ext->schks_list);
     ext->rebuild_mask_id    = INVAL_MASK_ID;
 
     /* Per-extent RB dirtytree structure. */
@@ -387,9 +623,27 @@ int castle_extents_init(void)
     }
     castle_extent_mask_hash_init();
 
+    /* Init kmem_cache for in_flight counters for extent_flush. */
+    castle_partial_schks_cache = kmem_cache_create("castle_partial_schks_cache",
+                                            sizeof(c_part_schk_t),
+                                            0,   /* align */
+                                            0,   /* flags */
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,18)
+                                            NULL, NULL); /* ctor, dtor */
+#else
+                                            NULL); /* ctor */
+#endif
+    if (!castle_partial_schks_cache)
+    {
+        castle_printk(LOG_INIT,
+                      "Could not allocate kmem cache for castle_partial_schks_cache.\n");
+        goto err_out;
+    }
+
     return EXIT_SUCCESS;
 
 err_out:
+    castle_extents_fini();
     return -ENOMEM;
 }
 
@@ -397,6 +651,7 @@ err_out:
 static int castle_extent_hash_remove(c_ext_t *ext, void *unused)
 {
     c_ext_mask_t *mask = GET_LATEST_MASK(ext);
+    struct list_head *pos, *tmp;
 
     debug("Freeing extent #%llu\n", ext->ext_id);
 
@@ -417,6 +672,14 @@ static int castle_extent_hash_remove(c_ext_t *ext, void *unused)
         castle_kfree(cs->sup_ext_maps);
     }
     __castle_extent_dirtytree_put(ext->dirtytree, 0 /*check_hash*/);
+
+    /* Free memory occupied by superchunk strcutures. */
+    list_for_each_safe(pos, tmp, &ext->schks_list)
+    {
+        c_part_schk_t *schk = list_entry(pos, c_part_schk_t, list);
+
+        kmem_cache_free(castle_partial_schks_cache, schk);
+    }
 
     castle_kfree(mask);
     castle_kfree(ext);
@@ -764,9 +1027,7 @@ static int castle_extent_writeback(c_ext_t *ext, void *store)
 
     CONVERT_EXTENT_TO_MENTRY(ext, &mstore_entry);
 
-    read_unlock_irq(&castle_extents_hash_lock);
     castle_mstore_entry_insert(castle_extents_mstore, &mstore_entry);
-    read_lock_irq(&castle_extents_hash_lock);
 
     nr_exts++;
 
@@ -800,7 +1061,7 @@ int castle_extents_writeback(void)
     ext_sblk = castle_extents_super_block_get();
     /* Writeback new copy. */
     nr_exts = 0;
-    castle_extents_hash_iterate(castle_extent_writeback, castle_extents_mstore);
+    __castle_extents_hash_iterate(castle_extent_writeback, castle_extents_mstore);
 
     if (ext_sblk->nr_exts != nr_exts)
     {
@@ -822,6 +1083,9 @@ int castle_extents_writeback(void)
                                        atomic64_read(&meta_ext_free.used));
 
     INJECT_FAULT;
+
+    /* Write list of partial superchunks for all extents into mstore. */
+    castle_extents_part_schks_writeback();
 
     /* It is important to complete freespace_writeback() under extent lock, to
      * make sure freesapce and extents are in sync. */
@@ -958,6 +1222,10 @@ int castle_extents_read_complete(void)
     ext_sblk = castle_extents_super_block_get();
     BUG_ON(ext_sblk->nr_exts != nr_exts);
 
+    /* Read partial superchunks for extents. */
+    if (castle_extents_part_schks_read())
+        goto error_out;
+
     INJECT_FAULT;
 
     castle_extent_transaction_end();
@@ -981,9 +1249,17 @@ void castle_extents_fini(void)
     /* Make sure cache flushed all dirty pages */
     /* Iterate over extents hash with exclusive access. Indeed, we don't need a
      * lock here as this happenes in the module end. */
-    castle_extents_hash_iterate_exclusive(castle_extent_hash_remove, NULL);
-    castle_kfree(castle_extents_hash);
-    castle_kfree(castle_extent_mask_hash);
+    if (castle_extents_hash)
+    {
+        castle_extents_hash_iterate_exclusive(castle_extent_hash_remove, NULL);
+        castle_kfree(castle_extents_hash);
+    }
+
+    if (castle_extent_mask_hash)
+        castle_kfree(castle_extent_mask_hash);
+
+    if (castle_partial_schks_cache)
+        kmem_cache_destroy(castle_partial_schks_cache);
 }
 
 #define MAX_K_FACTOR   4
@@ -1016,6 +1292,27 @@ static struct castle_extent_state *castle_extent_state_alloc(c_ext_t *ext)
             ext_state->chunks[i][j] = INVAL_CHK;
 
     return ext_state;
+}
+
+static void castle_extent_state_dealloc(c_ext_t *ext, struct castle_extent_state *ext_state)
+{
+    int i, j;
+
+    for(i=0; i<MAX_NR_SLAVES; i++)
+        for(j=0; j<MAX_K_FACTOR; j++)
+            if (!CHK_INVAL(ext_state->chunks[i][j]))
+            {
+                debug_schks("Left with part_schk after exntent alloc: %u, (%u, %u)\n",
+                            ext->ext_id, ext_state->chunks[i][j],
+                            CHKS_PER_SLOT - (ext_state->chunks[i][j] % CHKS_PER_SLOT));
+                castle_extent_part_schk_save(ext,
+                                             i,
+                                             ext_state->chunks[i][j],
+                                             CHKS_PER_SLOT -
+                                                (ext_state->chunks[i][j] % CHKS_PER_SLOT));
+            }
+
+    castle_kfree(ext_state);
 }
 
 /**
@@ -1065,23 +1362,15 @@ static void castle_extent_space_free(c_ext_t *ext, c_chk_cnt_t start, c_chk_cnt_
             int copy;
             for(copy=0; (copy<ext->k_factor) && (count > 0); copy++)
             {
-#define SUPER_CHUNK_STRUCT(chk_idx)  ((c_chk_seq_t){chk_idx, CHKS_PER_SLOT})
                 cs = castle_slave_find_by_uuid(
                     map_buf[logical_chunk*ext->k_factor + copy].slave_id);
                 BUG_ON(!cs);
 
                 if (!test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags))
-                {
-                    if (map_buf[logical_chunk * ext->k_factor + copy].offset % CHKS_PER_SLOT == 0)
-                    {
-                        /* If chunk is super chunk aligned, free that superchunk. */
-                        debug("Freeing superchunk: "disk_chk_fmt", from ext_id: %lld\n",
-                            disk_chk2str(map_buf[logical_chunk * ext->k_factor + copy]),
-                                         ext->ext_id);
-                        castle_freespace_slave_superchunk_free(cs,
-                            SUPER_CHUNK_STRUCT(map_buf[logical_chunk * ext->k_factor + copy].offset));
-                    }
-                }
+                    castle_extent_part_schk_save(ext,
+                                                 cs->id,
+                                                 map_buf[logical_chunk * ext->k_factor + copy].offset,
+                                                 1);
                 count--;
             }
         }
@@ -1091,6 +1380,8 @@ static void castle_extent_space_free(c_ext_t *ext, c_chk_cnt_t start, c_chk_cnt_
 
         map_cep.offset += C_BLK_SIZE;
     }
+
+    castle_extent_part_schks_converge(ext);
 }
 
 /**
@@ -1112,6 +1403,7 @@ static c_disk_chk_t castle_extent_disk_chk_alloc(c_da_t da_id,
 {
     c_disk_chk_t disk_chk;
     c_chk_seq_t chk_seq;
+    c_part_schk_t *part_schk;
     c_chk_t *chk;
 
     disk_chk = INVAL_DISK_CHK;
@@ -1119,7 +1411,26 @@ static c_disk_chk_t castle_extent_disk_chk_alloc(c_da_t da_id,
     /* Work out which chunk sequence we are using. */
     chk = &ext_state->chunks[slave->id][copy_id];
     debug("*chk: %d/0x%x\n", *chk, *chk);
-    /* If we've got some chunks left in our cache, return one from there. */
+
+    /* If there are no chunks in the buffer, get them from partial superchunk buffer for the
+     * extent. */
+    if (CHK_INVAL(*chk) && (part_schk = castle_extent_part_schk_get(ext_state->ext, slave)))
+    {
+        /* Check if the partial superchunk is preoperly aligned. */
+        BUG_ON((part_schk->first_chk + part_schk->count) % CHKS_PER_SLOT);
+
+        /* Partial superchunks can't be bigger than a superchunk. If it is this code ignores
+         * the part bigger than superchunk. */
+        BUG_ON(part_schk->count > CHKS_PER_SLOT);
+
+        /* Update the chunk buffer in extent state. */
+        *chk = part_schk->first_chk;
+
+        /* No need to keep this in list anymore. Get rid of it. */
+        list_del(&part_schk->list);
+        kmem_cache_free(castle_partial_schks_cache, part_schk);
+    }
+
     if(!CHK_INVAL(*chk))
     {
         disk_chk.offset = *chk;
@@ -1130,6 +1441,7 @@ static c_disk_chk_t castle_extent_disk_chk_alloc(c_da_t da_id,
 
         return disk_chk;
     }
+
     /* If we got here, we need to allocate a new superchunk. */
     chk_seq = castle_freespace_slave_superchunk_alloc(slave, da_id, token);
     if (CHK_SEQ_INVAL(chk_seq))
@@ -1205,6 +1517,10 @@ int castle_extent_space_alloc(c_ext_t *ext, c_da_t da_id, c_chk_cnt_t alloc_size
     int map_page_idx, max_map_page_idx, err, j;
     c_chk_cnt_t start;
 
+    /* Nothing to allocate. */
+    if (!alloc_size)
+        return 0;
+
     BUG_ON(LOGICAL_EXTENT(ext->ext_id) && (ext->ext_id < META_EXT_ID));
 
     /* Should be in transaction. */
@@ -1227,7 +1543,7 @@ int castle_extent_space_alloc(c_ext_t *ext, c_da_t da_id, c_chk_cnt_t alloc_size
         goto out;
     }
     /* Initialise the RDA spec state. */
-    rda_state = rda_spec->extent_init(ext->ext_id, ext->size, alloc_size, ext->type);
+    rda_state = rda_spec->extent_init(ext, ext->size, alloc_size, ext->type);
     if (!rda_state)
     {
         debug("Couldn't initialise RDA state.\n");
@@ -1337,9 +1653,9 @@ out:
         put_c2b(map_c2b);
     }
     if(rda_state)
-        rda_spec->extent_fini(ext->ext_id, rda_state);
+        rda_spec->extent_fini(rda_state);
     if(ext_state)
-        castle_kfree(ext_state);
+        castle_extent_state_dealloc(ext, ext_state);
 
     return err;
 }
@@ -1687,9 +2003,20 @@ static void castle_extent_resource_release(void *data)
     c_ext_t *ext = data;
     struct castle_extents_superblock *castle_extents_sb = NULL;
     c_ext_id_t ext_id = ext->ext_id;
+    struct list_head *pos;
 
     /* Should be in transaction. */
     BUG_ON(!castle_extent_in_transaction());
+
+    /* Shouldn't have partial superchunks left. */
+    list_for_each(pos, &ext->schks_list)
+    {
+        c_part_schk_t *schk = list_entry(pos, c_part_schk_t, list);
+
+        printk("%llu: Superchunk: (%u:%u)\n", ext_id, schk->first_chk, schk->count);
+    }
+
+    BUG_ON(!list_empty(&ext->schks_list));
 
     /* Shouldn't have any live masks left. */
     BUG_ON(!list_empty(&ext->mask_list));

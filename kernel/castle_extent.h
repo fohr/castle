@@ -23,6 +23,41 @@ typedef struct castle_extent_dirtytree {
 #endif
 } c_ext_dirtytree_t;
 
+typedef struct castle_extent {
+    c_ext_id_t          ext_id;         /* Unique extent ID                             */
+    c_chk_cnt_t         size;           /* Number of chunks                             */
+    c_rda_type_t        type;           /* RDA type                                     */
+    uint32_t            k_factor;       /* K factor in K-RDA                            */
+    c_ext_pos_t         maps_cep;       /* Offset of chunk mapping in logical extent    */
+    struct list_head    hash_list;
+    struct list_head    rebuild_list;
+    struct list_head    rebuild_done_list;
+    struct list_head    verify_list;    /* Used for testing.                            */
+    c_ext_mask_id_t     rebuild_mask_id;/* Stores reference taken by rebuild.           */
+    /* TODO: Move rebuild data to a private state structure. */
+    uint32_t            curr_rebuild_seqno;
+    uint32_t            remap_seqno;
+    spinlock_t          shadow_map_lock;
+    c_disk_chk_t        *shadow_map;
+    int                 use_shadow_map; /* Extent is currently being remapped           */
+    atomic_t            link_cnt;
+    /* This global mask gets updated after freeing resources. Checkpoint has to commit
+     * this to mstore. */
+    c_ext_mask_range_t  chkpt_global_mask;
+    struct list_head    mask_list;      /* List of all valid masks - latest first.      */
+    struct list_head    schks_list;     /* List of partially used superchunks.          */
+#ifdef CASTLE_DEBUG
+    uint8_t             alive;
+#endif
+    c_ext_dirtytree_t  *dirtytree;      /**< RB-tree of dirty c2bs.                     */
+    c_ext_type_t        ext_type;       /**< Type of extent.                            */
+    c_da_t              da_id;          /**< DA that extent corresponds to.             */
+#ifdef CASTLE_PERF_DEBUG
+    atomic_t            pref_chunks_up2date;    /**< Chunks no prefetch required for.   */
+    atomic_t            pref_chunks_not_up2date;/**< Chunks prefetched.                 */
+#endif
+} c_ext_t;
+
 void                castle_extent_transaction_start         (void);
 void                castle_extent_transaction_end           (void);
 int                 castle_extent_in_transaction            (void);
@@ -51,6 +86,9 @@ int                 castle_extent_shrink                    (c_ext_id_t         
 
 int                 castle_extent_truncate                  (c_ext_id_t             ext_id,
                                                              c_chk_cnt_t            count);
+
+c_chk_cnt_t         castle_extent_free_chunks_count         (c_ext_t               *ext,
+                                                             uint32_t               slave_id);
 
 void                castle_extent_lfs_victims_wakeup        (void);
 int                 castle_extent_exists                    (c_ext_id_t     ext_id);

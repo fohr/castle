@@ -440,6 +440,16 @@ struct castle_elist_entry {
     /*        128 */
 } PACKED;
 
+struct castle_plist_entry {
+    /* align:   4 */
+    /* offset:  0 */ c_ext_id_t       ext_id;
+    /*          8 */ c_uuid_t         slave_uuid;
+    /*         12 */ c_chk_t          first_chk;
+    /*         16 */ c_chk_cnt_t      count;
+    /*         20 */ uint8_t          _unused[12];
+    /*         32 */
+} PACKED;
+
 struct castle_extents_superblock {
     /* align:   8 */
     /* offset:  0 */ c_ext_id_t                 ext_id_seq;
@@ -803,6 +813,7 @@ enum {
     MSTORE_LARGE_OBJECTS,
     MSTORE_DA_MERGE,                  /* state of merge structure and output tree */
     MSTORE_DA_MERGE_IN_TREE,          /* state of input trees in a merge, mainly iterator state */
+    MSTORE_PART_SCHKS,
     MSTORE_STATS,
 };
 
