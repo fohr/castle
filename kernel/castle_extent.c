@@ -195,7 +195,8 @@ typedef struct c_ext_event {
 static c_ext_id_t _castle_extent_alloc(c_rda_type_t   rda_type,
                                        c_da_t         da_id,
                                        c_ext_type_t   ext_type,
-                                       c_chk_cnt_t    count,
+                                       c_chk_cnt_t    ext_size,
+                                       c_chk_cnt_t    alloc_size,
                                        c_ext_id_t     ext_id,
                                        c_ext_event_t *hdl);
 void __castle_extent_dirtytree_put(c_ext_dirtytree_t *dirtytree, int check_hash);
@@ -622,6 +623,7 @@ static int castle_extent_meta_ext_create(void)
     ext_id = _castle_extent_alloc(META_EXT, 0,
                                   EXT_T_META_DATA,
                                   meta_ext_size,
+                                  meta_ext_size,
                                   META_EXT_ID,
                                   NULL);
     if (ext_id != META_EXT_ID)
@@ -659,6 +661,7 @@ static int castle_extent_mstore_ext_create(void)
     ext_id = _castle_extent_alloc(DEFAULT_RDA, 0,
                                   EXT_T_META_DATA,
                                   MSTORE_SPACE_SIZE * i / k_factor,
+                                  MSTORE_SPACE_SIZE * i / k_factor,
                                   MSTORE_EXT_ID,
                                   NULL);
     if (ext_id != MSTORE_EXT_ID)
@@ -666,6 +669,7 @@ static int castle_extent_mstore_ext_create(void)
 
     ext_id = _castle_extent_alloc(DEFAULT_RDA, 0,
                                   EXT_T_META_DATA,
+                                  MSTORE_SPACE_SIZE * i / k_factor,
                                   MSTORE_SPACE_SIZE * i / k_factor,
                                   MSTORE_EXT_ID+1,
                                   NULL);
@@ -1237,7 +1241,7 @@ int castle_extent_space_alloc(c_ext_t *ext, c_da_t da_id, c_chk_cnt_t alloc_size
     max_map_page_idx = map_chks_per_page(ext->k_factor);
 
 retry:
-    start = ext->global_mask.end;
+    start = ext->chkpt_global_mask.end;
     map_cep = castle_extent_map_cep_get(ext->maps_cep, start, ext->k_factor);
     map_cep.offset = MASK_BLK_OFFSET(map_cep.offset);
     map_page_idx = start % max_map_page_idx;
@@ -1264,7 +1268,13 @@ retry:
             debug("Getting map c2b, for cep: "cep_fmt_str_nl, cep2str(map_cep));
             map_c2b = castle_cache_page_block_get(map_cep);
             write_lock_c2b(map_c2b);
-            update_c2b(map_c2b);
+
+            /* Read old maps, if we are allocating from in-between. */
+            if (map_page_idx && !c2b_uptodate(map_c2b))
+                BUG_ON(submit_c2b_sync(READ, map_c2b));
+            else
+                update_c2b(map_c2b);
+
             /* Reset the map pointer. */
             map_page = c2b_buffer(map_c2b);
             /* Advance the map cep. */
@@ -1334,29 +1344,14 @@ out:
     return err;
 }
 
-/**
- * Allocate an extent.
- *
- * @param rda_type      [in]    RDA algorithm to be used.
- * @param da_id         [in]    Double-Array that this extent belongs to.
- * @param ext_type      [in]    Type of data, that will be stored in extent.
- * @param count         [in]    Size of extent (in chunks). Extent could occupy more space
- *                              than this, depends on RDA algorithm and freespace algos.
- * @param in_tran       [in]    Already in the extent transaction.
- * @param data          [in]    Data to be used in event handler.
- * @param callback      [in]    Extent Event handler. Current events are just low space events.
- *
- * @return Extent ID.
- *
- * @also _castle_extent_alloc
- */
-c_ext_id_t castle_extent_alloc(c_rda_type_t             rda_type,
-                               c_da_t                   da_id,
-                               c_ext_type_t             ext_type,
-                               c_chk_cnt_t              count,
-                               int                      in_tran,
-                               void                    *data,
-                               c_ext_event_callback_t   callback)
+c_ext_id_t castle_extent_alloc_sparse(c_rda_type_t             rda_type,
+                                      c_da_t                   da_id,
+                                      c_ext_type_t             ext_type,
+                                      c_chk_cnt_t              ext_size,
+                                      c_chk_cnt_t              alloc_size,
+                                      int                      in_tran,
+                                      void                    *data,
+                                      c_ext_event_callback_t   callback)
 {
     int ret = 0;
     c_ext_event_t *event_hdl = NULL;
@@ -1379,12 +1374,40 @@ c_ext_id_t castle_extent_alloc(c_rda_type_t             rda_type,
     /* If the caller is not already in transaction. start a transaction. */
     if (!in_tran)   castle_extent_transaction_start();
 
-    ret = _castle_extent_alloc(rda_type, da_id, ext_type, count, INVAL_EXT_ID, event_hdl);
+    ret = _castle_extent_alloc(rda_type, da_id, ext_type, ext_size, alloc_size, INVAL_EXT_ID, event_hdl);
 
     /* End the transaction. */
     if (!in_tran)   castle_extent_transaction_end();
 
     return ret;
+}
+
+/**
+ * Allocate an extent.
+ *
+ * @param rda_type      [in]    RDA algorithm to be used.
+ * @param da_id         [in]    Double-Array that this extent belongs to.
+ * @param ext_type      [in]    Type of data, that will be stored in extent.
+ * @param count         [in]    Size of extent (in chunks). Extent could occupy more space
+ *                              than this, depends on RDA algorithm and freespace algos.
+ * @param in_tran       [in]    Already in the extent transaction.
+ * @param data          [in]    Data to be used in event handler.
+ * @param callback      [in]    Extent Event handler. Current events are just low space events.
+ *
+ * @return Extent ID.
+ *
+ * @also _castle_extent_alloc
+ */
+c_ext_id_t castle_extent_alloc(c_rda_type_t             rda_type,
+                               c_da_t                   da_id,
+                               c_ext_type_t             ext_type,
+                               c_chk_cnt_t              ext_size,
+                               int                      in_tran,
+                               void                    *data,
+                               c_ext_event_callback_t   callback)
+{
+    return castle_extent_alloc_sparse(rda_type, da_id, ext_type, ext_size, ext_size,
+                                      in_tran, data, callback);
 }
 
 /**
@@ -1425,7 +1448,8 @@ static void castle_extent_lfs_callback_add(c_ext_event_t *event_hdl)
 static c_ext_id_t _castle_extent_alloc(c_rda_type_t     rda_type,
                                        c_da_t           da_id,
                                        c_ext_type_t     ext_type,
-                                       c_chk_cnt_t      count,
+                                       c_chk_cnt_t      ext_size,
+                                       c_chk_cnt_t      alloc_size,
                                        c_ext_id_t       ext_id,
                                        c_ext_event_t   *event_hdl)
 {
@@ -1440,7 +1464,7 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t     rda_type,
     /* ext_id would be passed only for logical extents and they musn't be in the hash. */
     BUG_ON(castle_extents_hash_get(ext_id));
 
-    debug("Creating extent of size: %u\n", count);
+    debug("Creating extent of size: %u/%u\n", ext_size, alloc_size);
     ext = castle_ext_alloc(0);
     if (!ext)
     {
@@ -1451,7 +1475,7 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t     rda_type,
 
     ext->ext_id             = EXT_ID_INVAL(ext_id) ? castle_extents_sb->ext_id_seq : ext_id;
     ext->dirtytree->ext_id  = ext->ext_id;
-    ext->size               = count;
+    ext->size               = ext_size;
     ext->type               = rda_type;
     ext->k_factor           = rda_spec->k_factor;
     ext->ext_type           = ext_type;
@@ -1475,7 +1499,7 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t     rda_type,
     }
     else
     {
-        uint32_t nr_blocks = map_size(count, rda_spec->k_factor);
+        uint32_t nr_blocks = map_size(ext_size, rda_spec->k_factor);
 
         if (castle_ext_freespace_get(&meta_ext_free, (nr_blocks * C_BLK_SIZE), 0, &ext->maps_cep))
         {
@@ -1487,20 +1511,24 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t     rda_type,
 
     BUG_ON(BLOCK_OFFSET(ext->maps_cep.offset));
 
-    if ((ret = castle_extent_space_alloc(ext, da_id, count)) == -ENOSPC)
+    if (alloc_size == 0)
+        goto alloc_done;
+
+    if ((ret = castle_extent_space_alloc(ext, da_id, alloc_size)) == -ENOSPC)
     {
-        debug("Extent alloc failed to allocate space for %u chunks\n", count);
+        debug("Extent alloc failed to allocate space for %u chunks\n", alloc_size);
         goto __low_space;
     }
     else if (ret < 0)
     {
-        debug("Extent alloc failed for %u chunks\n", count);
+        debug("Extent alloc failed for %u chunks\n", alloc_size);
         goto __hell;
     }
 
+alloc_done:
     /* Successfully allocated space for extent. Create a mask for it. */
     BUG_ON(castle_extent_mask_create(ext,
-                                     MASK_RANGE(0, count),
+                                     MASK_RANGE(0, alloc_size),
                                      INVAL_MASK_ID) < 0);
 
     /* Add extent and extent dirtylist to hash tables. */
@@ -1535,7 +1563,7 @@ __low_space:
     castle_printk(LOG_INFO, "Failed to create extent for DA: %u of type %s for %u chunks\n",
                   da_id,
                   castle_ext_type_str[ext_type],
-                  count);
+                  alloc_size);
     /* Add the victim handler to the list of handlers of specific type. This handler gets
      * called, when more space is available. */
     castle_extent_lfs_callback_add(event_hdl);

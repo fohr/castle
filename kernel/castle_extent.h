@@ -34,6 +34,15 @@ c_ext_id_t          castle_extent_alloc                     (c_rda_type_t       
                                                              void                  *data,
                                                              c_ext_event_callback_t callback);
 
+c_ext_id_t          castle_extent_alloc_sparse              (c_rda_type_t           rda_type,
+                                                             c_da_t                 da_id,
+                                                             c_ext_type_t           ext_type,
+                                                             c_chk_cnt_t            ext_size,
+                                                             c_chk_cnt_t            alloc_size,
+                                                             int                    in_tran,
+                                                             void                  *data,
+                                                             c_ext_event_callback_t callback);
+
 int                 castle_extent_grow                      (c_ext_id_t             ext_id,
                                                              c_chk_cnt_t            count);
 
