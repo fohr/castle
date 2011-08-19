@@ -5187,9 +5187,8 @@ static int castle_cache_flush(void *unused)
             data->mask_id = castle_extent_get_all(dirtytree->ext_id);
 
             /* Check if extent is already dead. This shouldn't happen as before we delete
-             * the extent, we get rid off all dirty pages. */
-            BUG_ON(MASK_ID_INVAL(data->mask_id));
-#if 0
+             * the extent, we get rid off all dirty pages. It could happen only if after last
+             * link is gone. */
             if (MASK_ID_INVAL(data->mask_id))
             {
                 castle_printk(LOG_DEVEL, "Extent %llu is dead, no need to flush\n",
@@ -5198,7 +5197,6 @@ static int castle_cache_flush(void *unused)
                 kmem_cache_free(castle_flush_cache, data);
                 continue;
             }
-#endif
 
             /* Get the range of extent. */
             castle_extent_mask_read_all(dirtytree->ext_id, &start_chk, &end_chk);
