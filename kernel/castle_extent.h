@@ -33,6 +33,16 @@ c_ext_id_t          castle_extent_alloc                     (c_rda_type_t       
                                                              int                    in_tran,
                                                              void                  *data,
                                                              c_ext_event_callback_t callback);
+
+int                 castle_extent_grow                      (c_ext_id_t             ext_id,
+                                                             c_chk_cnt_t            count);
+
+int                 castle_extent_shrink                    (c_ext_id_t             ext_id,
+                                                             c_chk_cnt_t            count);
+
+int                 castle_extent_truncate                  (c_ext_id_t             ext_id,
+                                                             c_chk_cnt_t            count);
+
 void                castle_extent_lfs_victims_wakeup        (void);
 int                 castle_extent_exists                    (c_ext_id_t     ext_id);
 void                castle_extent_mark_live                 (c_ext_id_t     ext_id,

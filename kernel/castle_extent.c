@@ -38,9 +38,11 @@
 #ifdef DEBUG
 #define debug(_f, _a...)        (castle_printk(LOG_DEBUG, _f, ##_a))
 #define debug_mask(_f, _a...)   (castle_printk(LOG_DEBUG, _f, ##_a))
+#define debug_resize(_f, _a...) (castle_printk(LOG_DEBUG, _f, ##_a))
 #else
 #define debug(_f, ...)          ((void)0)
 #define debug_mask(_f, ...)     ((void)0)
+#define debug_resize(_f, ...)   ((void)0)
 #endif
 
 #define MAP_IDX(_ext, _i, _j)       (((_ext)->k_factor * _i) + _j)
@@ -1184,7 +1186,7 @@ static inline c_ext_pos_t castle_extent_map_cep_get(c_ext_pos_t map_start,
  *                  slaves chosen by the RDA spec).
  * @return  0:      Success.
  */
-int castle_extent_space_alloc(c_ext_t *ext, c_da_t da_id)
+int castle_extent_space_alloc(c_ext_t *ext, c_da_t da_id, c_chk_cnt_t alloc_size)
 {
     struct castle_extent_state *ext_state;
     struct castle_freespace_reservation *reservation_token;
@@ -1197,8 +1199,12 @@ int castle_extent_space_alloc(c_ext_t *ext, c_da_t da_id)
     c2_block_t *map_c2b;
     c_disk_chk_t disk_chk, *map_page;
     int map_page_idx, max_map_page_idx, err, j;
+    c_chk_cnt_t start;
 
     BUG_ON(LOGICAL_EXTENT(ext->ext_id) && (ext->ext_id < META_EXT_ID));
+
+    /* Should be in transaction. */
+    BUG_ON(!castle_extent_in_transaction());
 
     /* Initialise all the variables checked in the out: block. */
     map_c2b = NULL;
@@ -1217,7 +1223,7 @@ int castle_extent_space_alloc(c_ext_t *ext, c_da_t da_id)
         goto out;
     }
     /* Initialise the RDA spec state. */
-    rda_state = rda_spec->extent_init(ext->ext_id, ext->size, ext->type);
+    rda_state = rda_spec->extent_init(ext->ext_id, ext->size, alloc_size, ext->type);
     if (!rda_state)
     {
         debug("Couldn't initialise RDA state.\n");
@@ -1231,15 +1237,17 @@ int castle_extent_space_alloc(c_ext_t *ext, c_da_t da_id)
     max_map_page_idx = map_chks_per_page(ext->k_factor);
 
 retry:
-    map_cep = ext->maps_cep;
-    map_page_idx = max_map_page_idx;
+    start = ext->global_mask.end;
+    map_cep = castle_extent_map_cep_get(ext->maps_cep, start, ext->k_factor);
+    map_cep.offset = MASK_BLK_OFFSET(map_cep.offset);
+    map_page_idx = start % max_map_page_idx;
     map_page = NULL;
     map_c2b = NULL;
-    for(chunk=0; chunk<ext->size; chunk++)
+    for(chunk=0; chunk<alloc_size; chunk++)
     {
         debug("Map_page_idx: %d/%d\n", map_page_idx, max_map_page_idx);
         /* Move to the next map page, once the index overflows the max. */
-        if(map_page_idx >= max_map_page_idx)
+        if(!map_c2b || (map_page_idx >= max_map_page_idx))
         {
             /* Release the previous map_c2b, if one exists. */
             if(map_c2b)
@@ -1479,7 +1487,7 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t     rda_type,
 
     BUG_ON(BLOCK_OFFSET(ext->maps_cep.offset));
 
-    if ((ret = castle_extent_space_alloc(ext, da_id)) == -ENOSPC)
+    if ((ret = castle_extent_space_alloc(ext, da_id, count)) == -ENOSPC)
     {
         debug("Extent alloc failed to allocate space for %u chunks\n", count);
         goto __low_space;
@@ -4099,6 +4107,150 @@ static void castle_extent_reduce_global_mask(c_ext_mask_range_t *global_mask,
     debug_mask("Updated global mask to " cemr_cstr "\n", cemr2str(*global_mask));
 
     BUG_ON(!set);
+}
+
+/* Resize functions. */
+
+/**
+ * Grow the extent by given number of chunks.
+ *
+ * @param   ext_id  [inout]     ID of the extent that has to grow.
+ * @param   count   [in]        Number of chunks to be grown.
+ *
+ * @return  0   SUCCESS - Extent is successfully grown.
+ *          <0  FAILURE
+ */
+int castle_extent_grow(c_ext_id_t ext_id, c_chk_cnt_t count)
+{
+    c_ext_t *ext = castle_extents_hash_get(ext_id);
+    c_ext_mask_t *mask;
+    int ret = 0;
+
+    /* Extent should be alive, something is wrong with client. */
+    BUG_ON(!ext);
+
+    debug_resize("Grow the extent by %u chunks\n", count);
+
+    castle_extent_transaction_start();
+
+    /* Allocate space to the extent. */
+    ret = castle_extent_space_alloc(ext, INVAL_DA, count);
+    if (ret < 0)
+    {
+        castle_printk(LOG_WARN, "Failed to allocate space for extent %u\n", ext_id);
+        goto out;
+    }
+
+    /* Get the current latest mask. */
+    mask = GET_LATEST_MASK(ext);
+
+    /* Grow shouldn't try to cross extent boundary. */
+    BUG_ON(mask->range.end + count > ext->size);
+
+    /* Create new mask for the extent and set as latest. */
+    ret = castle_extent_mask_create(ext,
+                                    MASK_RANGE(mask->range.start, mask->range.end + count),
+                                    mask->mask_id);
+    if (ret < 0)
+    {
+        castle_extent_space_free(ext, mask->range.start, mask->range.end + count);
+        goto out;
+    }
+
+out:
+    castle_extent_transaction_end();
+
+    return ret;
+}
+
+/**
+ * Shrink the extent to the given chunk offset.
+ *
+ * @param   ext_id      [inout]     ID of the extent to be shrunk.
+ * @param   chunk       [in]        Chunk to be shrunk to. Everything upto (chunk-1)
+ *                                  becomes invalid.
+ *
+ * @return      0 SUCCESS
+ *            < 0 FAILURE
+ */
+int castle_extent_shrink(c_ext_id_t ext_id, c_chk_cnt_t chunk)
+{
+    c_ext_t *ext = castle_extents_hash_get(ext_id);
+    c_ext_mask_t *mask;
+    int ret = 0;
+
+    /* Extent should be alive, something is wrong with client. */
+    BUG_ON(!ext);
+
+    debug_resize("Shrink the extent upto %u chunk (%u is valid)\n", chunk, chunk);
+
+    castle_extent_transaction_start();
+
+    /* Get the current latest mask. */
+    mask = GET_LATEST_MASK(ext);
+
+    /* Can't shrink if the latest mask doesnt cover that range. */
+    BUG_ON(mask->range.start > chunk);
+
+    /* Create new mask for the extent and set as latest. */
+    ret = castle_extent_mask_create(ext,
+                                    MASK_RANGE(chunk, mask->range.end),
+                                    mask->mask_id);
+    if (ret < 0)
+    {
+        debug_resize("Fail to shrink the extent: %llu\n", ext_id);
+        goto out;
+    }
+
+out:
+    castle_extent_transaction_end();
+
+    return ret;
+}
+
+/**
+ * Truncate the extent to the given chunk offset.
+ *
+ * @param   ext_id      [inout]     ID of the extent to be shrunk.
+ * @param   chunk       [in]        Chunk to be truncate to. Everything from (chunk+1)
+ *                                  becomes invalid.
+ *
+ * @return      0 SUCCESS
+ *            < 0 FAILURE
+ */
+int castle_extent_truncate(c_ext_id_t ext_id, c_chk_cnt_t chunk)
+{
+    c_ext_t *ext = castle_extents_hash_get(ext_id);
+    c_ext_mask_t *mask;
+    int ret = 0;
+
+    debug_resize("Truncate extent upto %u chunk(%u is valid)\n", chunk, chunk);
+
+    /* Extent should be alive, something is wrong with client. */
+    BUG_ON(!ext);
+
+    castle_extent_transaction_start();
+
+    /* Get the current latest mask. */
+    mask = GET_LATEST_MASK(ext);
+
+    /* Can't shrink if the latest mask doesnt cover that range. */
+    BUG_ON(mask->range.end <= chunk);
+
+    /* Create new mask for the extent and set as latest. */
+    ret = castle_extent_mask_create(ext,
+                                    MASK_RANGE(mask->range.start, chunk + 1),
+                                    mask->mask_id);
+    if (ret < 0)
+    {
+        castle_printk(LOG_WARN, "Fail to shrink the extent: %u\n", ext_id);
+        goto out;
+    }
+
+out:
+    castle_extent_transaction_end();
+
+    return ret;
 }
 
 static void castle_extent_mask_split(c_ext_mask_range_t   range,

@@ -22,6 +22,7 @@ typedef int  (*c_next_slave_get_t)(struct castle_slave                 **cs,
 
 typedef void* (*c_extent_init_t)  (c_ext_id_t   ext_id,
                                    c_chk_cnt_t  size,
+                                   c_chk_cnt_t  alloc_size,
                                    c_rda_type_t rda_type);
 
 typedef void (*c_extent_fini_t)   (c_ext_id_t  ext_id,

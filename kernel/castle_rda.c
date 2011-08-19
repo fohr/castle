@@ -180,7 +180,8 @@ static void castle_rda_unreserve(struct castle_slave **slaves,
 }
 
 void* castle_def_rda_extent_init(c_ext_id_t ext_id,
-                                 c_chk_cnt_t size,
+                                 c_chk_cnt_t ext_size,
+                                 c_chk_cnt_t alloc_size,
                                  c_rda_type_t rda_type)
 {
     c_rda_spec_t *rda_spec = castle_rda_spec_get(rda_type);
@@ -200,7 +201,7 @@ void* castle_def_rda_extent_init(c_ext_id_t ext_id,
     state->rda_spec   = rda_spec;
     state->ext_id     = ext_id;
     state->prev_chk   = -1;
-    state->size       = size;
+    state->size       = alloc_size;
     state->nr_slaves  = 0;
     memset(&state->permuted_slaves, 0, sizeof(struct castle_slave *) * MAX_NR_SLAVES);
     state->permut_idx = 0;
@@ -225,13 +226,13 @@ void* castle_def_rda_extent_init(c_ext_id_t ext_id,
 
     /* When allocating small extents, limit the number of disks, which reduces the wasted space. */
     BUG_ON(state->size == 0);
-    state->nr_slaves = min(state->nr_slaves, SUPER_CHUNK(state->size - 1) + 1);
+    state->nr_slaves = min(state->nr_slaves, SUPER_CHUNK(ext_size - 1) + 1);
     state->nr_slaves = max(state->nr_slaves, rda_spec->k_factor);
 
     /* Reserve space from each of the disks. */
     if(castle_rda_reserve(state->permuted_slaves,
                           state->nr_slaves,
-                          castle_rda_reservation_size_get(size,
+                          castle_rda_reservation_size_get(alloc_size,
                                                           rda_spec->k_factor,
                                                           state->nr_slaves),
                           &state->freespace_reservation))
@@ -333,7 +334,8 @@ static struct castle_freespace_reservation *castle_ssd_rda_reservation_token_get
  * @param rda_type Must be set to SSD_RDA or SSD_ONLY_EXT.
  */
 void* castle_ssd_rda_extent_init(c_ext_id_t ext_id,
-                                 c_chk_cnt_t size,
+                                 c_chk_cnt_t ext_size,
+                                 c_chk_cnt_t alloc_size,
                                  c_rda_type_t rda_type)
 {
     struct castle_slave *slave;
@@ -354,7 +356,7 @@ void* castle_ssd_rda_extent_init(c_ext_id_t ext_id,
     state->rda_spec = rda_spec;
     if(rda_type != SSD_ONLY_EXT)
     {
-        state->def_state = castle_def_rda_extent_init(ext_id, size, DEFAULT_RDA);
+        state->def_state = castle_def_rda_extent_init(ext_id, ext_size, alloc_size, DEFAULT_RDA);
         if(!state->def_state)
             goto err_out;
     }
@@ -369,14 +371,14 @@ void* castle_ssd_rda_extent_init(c_ext_id_t ext_id,
     rcu_read_unlock();
     if(state->nr_slaves == 0)
     {
-        debug("Could not allocate SSD extent size: %d. No SSDs found.\n", size);
+        debug("Could not allocate SSD extent size: %d. No SSDs found.\n", alloc_size);
         goto unreserve_err_out;
     }
     castle_rda_slaves_shuffle(state->permuted_slaves, state->nr_slaves);
     /* Reserve space from each of the disks. */
     if(castle_rda_reserve(state->permuted_slaves,
                           state->nr_slaves,
-                          castle_rda_reservation_size_get(size,
+                          castle_rda_reservation_size_get(alloc_size,
                                                           1,
                                                           state->nr_slaves),
                           castle_ssd_rda_reservation_token_get(state)))
