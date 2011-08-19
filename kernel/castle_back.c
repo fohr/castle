@@ -1719,12 +1719,14 @@ static void castle_back_iter_call_queued(struct castle_back_stateful_op *statefu
         {
             case CASTLE_RING_ITER_NEXT:
                 spin_unlock(&stateful_op->lock);
-                __castle_back_iter_next((void *)stateful_op);
+                BUG_ON(!queue_work_on(stateful_op->cpu, castle_back_wq, &stateful_op->work[0]));
+//                __castle_back_iter_next((void *)stateful_op);
                 break;
 
             case CASTLE_RING_ITER_FINISH:
                 spin_unlock(&stateful_op->lock);
-                __castle_back_iter_finish((void *)stateful_op);
+                BUG_ON(!queue_work_on(stateful_op->cpu, castle_back_wq, &stateful_op->work[1]));
+//                __castle_back_iter_finish((void *)stateful_op);
                 break;
 
             default:
