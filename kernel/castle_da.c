@@ -7772,6 +7772,7 @@ int castle_double_array_start(void)
 {
     /* Check all DAs to see whether any merges need to be done. */
     castle_da_hash_iterate(castle_da_merge_start, NULL);
+    castle_da_hash_iterate(castle_da_merge_restart, NULL);
 
     return 0;
 }
