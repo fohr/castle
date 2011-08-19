@@ -2998,6 +2998,8 @@ void castle_extent_rebuild_ext_put(c_ext_t *ext, int is_locked)
         castle_extent_mask_put(ext->rebuild_mask_id);
     else
         castle_extent_put(ext->rebuild_mask_id);
+
+    ext->rebuild_mask_id = INVAL_MASK_ID;
 }
 
 /*
