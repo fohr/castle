@@ -765,7 +765,7 @@ static void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
     if (ct)
     {
         castle_double_array_unreserve(c_bvec);
-        castle_ct_put(ct, 1);
+        castle_ct_put(ct, 1, &c_bvec->ct_ref);
     }
     BUG_ON(atomic_read(&c_bvec->reserv_nodes) != 0);
 
@@ -1377,8 +1377,11 @@ void __castle_object_get_complete(struct work_struct *work)
     uint64_t data_length = get->data_length;
     int first = get->first;
     struct castle_component_tree *ct = get->ct;
+    c_ct_ext_ref_t ct_ref;
     int last, dont_want_more;
     c_val_tup_t cvt = get->cvt;
+
+    memcpy(&ct_ref, &get->ct_ref, sizeof(c_ct_ext_ref_t));
 
     /* Deal with error case first */
     if(!c2b_uptodate(c2b))
@@ -1434,7 +1437,7 @@ out:
         get, cep2str(c2b->cep));
     put_c2b(c2b);
 
-    castle_ct_put(ct, 0);
+    castle_ct_put(ct, 0, &ct_ref);
     castle_object_reference_release(cvt);
     castle_utils_bio_free(c_bvec->c_bio);
 }
@@ -1561,15 +1564,16 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
         get->cvt = cvt;
 
     get->ct = c_bvec->tree;
+    memcpy(&get->ct_ref, &c_bvec->ct_ref, sizeof(c_ct_ext_ref_t));
 
     /* Deal with error case, or non-existant value. */
     if(err || CVT_INVALID(cvt) || CVT_TOMBSTONE(cvt))
     {
-        debug("Error, invalid or tombstone.\n");
+        castle_printk(LOG_DEBUG, "%s::Error, invalid or tombstone.\n", __FUNCTION__);
         /* Dont have any object returned, no need to release reference of object. */
         /* Release reference of Component Tree. */
         if(get->ct)
-            castle_ct_put(get->ct, 0);
+            castle_ct_put(get->ct, 0, &get->ct_ref);
         /* Turn tombstones into invalid CVTs. */
         CVT_INVALID_INIT(get->cvt);
         get->reply_start(get, err, 0, NULL, 0);
@@ -1582,10 +1586,10 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
     /* Deal with the inlines and local counters (therefore with inlines and all counters). */
     if(CVT_INLINE(cvt))
     {
-        debug("Inline.\n");
+        castle_printk(LOG_DEBUG, "%s::Inline.\n", __FUNCTION__);
         /* Release reference of Component Tree. */
         if(get->ct)
-            castle_ct_put(get->ct, 0);
+            castle_ct_put(get->ct, 0, &get->ct_ref);
         get->reply_start(get,
                          0,
                          cvt.length,
@@ -1601,7 +1605,7 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
     BUG_ON(CVT_MEDIUM_OBJECT(cvt) &&
             cvt.cep.ext_id != c_bvec->tree->data_ext_free.ext_id);
 
-    debug("Out of line.\n");
+    castle_printk(LOG_DEBUG, "%s::Out of line.\n", __FUNCTION__);
     /* Finally, out of line values */
     BUG_ON(!CVT_ON_DISK(cvt));
     /* Init the variables stored in the call correctly, so that _continue() doesn't
@@ -1672,7 +1676,7 @@ EXPORT_SYMBOL(castle_object_get);
 static void inline castle_object_pull_ct_put(struct castle_object_pull *pull)
 {
     if(pull->ct)
-        castle_ct_put(pull->ct, 0);
+        castle_ct_put(pull->ct, 0, &pull->ct_ref);
     pull->ct = NULL;
 }
 
@@ -1778,6 +1782,7 @@ static void castle_object_pull_continue(struct castle_bio_vec *c_bvec, int err, 
     struct castle_object_pull *pull = c_bvec->c_bio->pull;
 
     pull->ct = c_bvec->tree;
+    memcpy(&pull->ct_ref, &c_bvec->ct_ref, sizeof(c_ct_ext_ref_t));
     pull->cvt = cvt;
     castle_utils_bio_free(c_bvec->c_bio);
 

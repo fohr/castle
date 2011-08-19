@@ -779,7 +779,8 @@ static uint16_t castle_vlba_rw_tree_node_size(struct castle_component_tree *ct, 
  */
 static uint16_t castle_vlba_ro_tree_node_size(struct castle_component_tree *ct, uint8_t level)
 {
-    BUG_ON(level >= ct->tree_depth);
+    //TODO@tr talk to GM, explain why I can't allow this BUG_ON
+    //BUG_ON(level >= ct->tree_depth);
     return ct->node_sizes[level];
 }
 
@@ -985,7 +986,10 @@ static void* castle_vlba_tree_key_next(void *keyv)
     BUG_ON(VLBA_TREE_KEY_MIN(key));
     /* Successor to max key is the invalid key */
     if(VLBA_TREE_KEY_MAX(key))
+    {
+        castle_printk(LOG_DEBUG, "%s::making INVAL_KEY\n", __FUNCTION__);
         return (void *)&VLBA_TREE_INVAL_KEY;
+    }
 
     return castle_object_btree_key_next(keyv);
 }
@@ -1615,7 +1619,7 @@ void castle_btree_lub_find(struct castle_btree_node *node,
 {
     struct castle_btree_type *btree = castle_btree_type_get(node->type);
     c_ver_t version_lub;
-    void *key_lub;
+    void *key_lub = NULL;
     int lub_idx, insert_idx, low, high, mid;
 
 #define insert_candidate(_x)    if(insert_idx < 0) insert_idx=(_x)
@@ -1623,6 +1627,8 @@ void castle_btree_lub_find(struct castle_btree_node *node,
             key, version, node->used);
     /* We should not search for an invalid key */
     BUG_ON(btree->key_compare(key, btree->inv_key) == 0);
+    if(btree->key_compare(key, btree->max_key) == 0)
+        castle_printk(LOG_DEBUG, "%s::looking for max_key\n", __FUNCTION__);
 
     /* Binary search on the keys to find LUB key */
     low = -1;           /* Key in entry pointed to by low is guaranteed
@@ -1674,10 +1680,24 @@ void castle_btree_lub_find(struct castle_btree_node *node,
             break;
         }
     }
+
     BUG_ON(lub_idx > node->used);
     insert_candidate(node->used);
     if(lub_idx == node->used)
+    {
+        castle_printk(LOG_DEBUG, "%s::node %p, hit end of the node\n", __FUNCTION__, node);
         lub_idx = -1;
+    }
+    //if(key_lub)
+    //{
+    //    castle_printk(LOG_DEBUG, "%s::node %p, key_lub : ", __FUNCTION__, node);
+    //    vl_bkey_print(LOG_DEBUG, key_lub);
+    //}
+    //if(key)
+    //{
+    //    castle_printk(LOG_DEBUG, "%s::node %p, key : ", __FUNCTION__, node);
+    //    vl_bkey_print(LOG_DEBUG, key);
+    //}
     /* Return the indices */
     if(lub_idx_p) *lub_idx_p = lub_idx;
     if(insert_idx_p) *insert_idx_p = insert_idx;
@@ -2543,7 +2563,9 @@ static void castle_btree_read_process(c_bvec_t *c_bvec)
 
     castle_btree_lub_find(node, key, version, &lub_idx, NULL);
     /* We should always find the LUB if we are not looking at a leaf node */
-    BUG_ON((lub_idx < 0) && (!node->is_leaf));
+    /* UPDATE: now that we're doing orphan node preadoption and query redirection, this
+               assertion is no longer true, so disable the BUG_ON. */
+    //BUG_ON((lub_idx < 0) && (!node->is_leaf));
 
     /* If we haven't found the LUB (in the leaf node), return early */
     if(lub_idx < 0)
@@ -2764,8 +2786,8 @@ static void __castle_btree_submit(c_bvec_t *c_bvec,
     int ret;
     int write = (c_bvec_data_dir(c_bvec) == WRITE);
 
-    debug("Asked for key: %p, in version 0x%x, reading ftree node" cep_fmt_str_nl,
-            c_bvec->key, c_bvec->version, cep2str(node_cep));
+    debug("%s::Asked for key: %p, in version 0x%x, on ct %d, reading ftree node" cep_fmt_str_nl,
+            __FUNCTION__, c_bvec->key, c_bvec->version, c_bvec->tree->seq, cep2str(node_cep));
     ret = -ENOMEM;
 
     ct = c_bvec->tree;
@@ -2804,6 +2826,10 @@ static void __castle_btree_submit(c_bvec_t *c_bvec,
     }
     else
     {
+        /* sanity check */
+        struct castle_btree_node *node;
+        node = c2b_bnode(c2b);
+        BUG_ON(node->magic != BTREE_NODE_MAGIC);
         /* If the buffer is up to date, copy data, and call the node processing
            function directly. c2b_remember should not return an error, because
            the Btree node had been normalized already. */
@@ -3283,7 +3309,8 @@ static void castle_btree_iter_parent_node_idx_increment(c_iter_t *c_iter)
 void castle_iter_parent_key_set(c_iter_t *iter, void *key)
 {
     struct castle_btree_type *btree = castle_btree_type_get(iter->tree->btree_type);
-
+    castle_printk(LOG_DEBUG, "%s::iter %p key: ", __FUNCTION__, iter);
+    vl_bkey_print(LOG_DEBUG, key);
     if (iter->parent_key)
         btree->key_dealloc(iter->parent_key);
     iter->parent_key = btree->key_duplicate(key);
@@ -3471,6 +3498,8 @@ static int __castle_btree_iter_path_traverse(c_iter_t *c_iter)
                 c_iter,
                 c_iter->path[c_iter->depth]->cep.ext_id,
                 c_iter->path[c_iter->depth]->cep.offset);
+        castle_printk(LOG_DEBUG, "%s::iter %p unlocking cep "cep_fmt_str"\n",
+                __FUNCTION__, c_iter, cep2str(c_iter->path[c_iter->depth]->cep));
         read_unlock_c2b(c_iter->path[c_iter->depth]);
         /* No need to reset running_async as the iterator is to terminate. */
         castle_btree_iter_end(c_iter, c_iter->err, c_iter->running_async);
@@ -3480,6 +3509,7 @@ static int __castle_btree_iter_path_traverse(c_iter_t *c_iter)
 
     /* Otherwise, we know that the node got read successfully. Its buffer is in the path. */
     node = c2b_bnode(c_iter->path[c_iter->depth]);
+    castle_printk(LOG_DEBUG, "%s::iter %p node %p\n", __FUNCTION__, c_iter, node);
 
     switch(c_iter->type)
     {
@@ -3490,6 +3520,8 @@ static int __castle_btree_iter_path_traverse(c_iter_t *c_iter)
             index = c_iter->node_idx[c_iter->depth];
             iter_debug("Processing node_cep=(0x%x, 0x%x), index=%d, node->used=%d\n",
                     node_cep.ext_id, node_cep.offset, index, node->used);
+            castle_printk(LOG_DEBUG, "%s::iter %p processing node_cep="cep_fmt_str", index=%d, node->used=%d\n",
+                    __FUNCTION__, c_iter, cep2str(node_cep), index, node->used);
             BUG_ON((index >= 0) && (index > node->used)); /* Be careful about unsigned comparions */
             /* If index is in range [0 - (node->used-1)] (inclusive), we don't
                have to check need_visit() (this has already been done).
@@ -3515,6 +3547,8 @@ static int __castle_btree_iter_path_traverse(c_iter_t *c_iter)
                         c_iter,
                         node_cep.ext_id,
                         node_cep.offset);
+                castle_printk(LOG_DEBUG, "%s::skipping, iter %p, unlocking cep "cep_fmt_str"\n",
+                        __FUNCTION__, c_iter, cep2str(node_cep));
                 read_unlock_c2b(c_iter->path[c_iter->depth]);
 
                 castle_btree_iter_start(c_iter);
@@ -3533,6 +3567,8 @@ static int __castle_btree_iter_path_traverse(c_iter_t *c_iter)
 
                 iter_debug("Visiting leaf node cep=(0x%x, 0x%x).\n",
                         node_cep.ext_id, node_cep.offset);
+                castle_printk(LOG_DEBUG, "%s::iter %p, visiting leaf node cep="cep_fmt_str".\n",
+                        __FUNCTION__, c_iter, cep2str(node_cep));
                 ret = castle_btree_iter_all_leaf_process(c_iter);
                 castle_btree_iter_parent_node_idx_increment(c_iter);
 
@@ -3542,7 +3578,11 @@ static int __castle_btree_iter_path_traverse(c_iter_t *c_iter)
             /* Final case: intermediate node visited for the first time */
             iter_debug("Visiting node cep=(0x%x, 0x%x) for the first time.\n",
                        node_cep.ext_id, node_cep.offset);
+            castle_printk(LOG_DEBUG, "%s::iter %p visiting node cep="cep_fmt_str" for the first time.\n",
+                       __FUNCTION__, c_iter, cep2str(node_cep));
             c_iter->node_idx[c_iter->depth] = index = 0;
+            castle_printk(LOG_DEBUG, "%s::ALL_ENTRIES iter %p index=%d\n",
+                    __FUNCTION__, c_iter, index);
             break;
         case C_ITER_MATCHING_VERSIONS:
         case C_ITER_ANCESTRAL_VERSIONS:
@@ -3555,7 +3595,33 @@ static int __castle_btree_iter_path_traverse(c_iter_t *c_iter)
             BUG_ON(VERSION_INVAL(c_iter->version));
             castle_btree_lub_find(node, c_iter->next_key.key, c_iter->version, &index, NULL);
             iter_debug("Node index=%d\n", index);
+            if(index==-1)
+            {
+                BUG_ON(node->used==0); /* empty node shouldn't have been part of the tree at all! */
+                index=node->used-1;    /* node didn't have LUB for next_key, so include all of it */
+            }
+            castle_printk(LOG_DEBUG, "%s::ANCESTRAL_VERSIONS iter %p index=%d\n",
+                    __FUNCTION__, c_iter, index);
             break;
+    }
+
+    castle_printk(LOG_DEBUG, "%s::iter %p, node %p, ct = %d, ct->tree_depth = %d, ct root node "
+            cep_fmt_str" version = %d\n",
+            __FUNCTION__, c_iter, node, c_iter->tree->seq, c_iter->tree->tree_depth,
+            cep2str(c_iter->tree->root_node), c_iter->version);
+    castle_printk(LOG_DEBUG, "%s::iter %p, node %p, parent_key: ", __FUNCTION__, c_iter, node);
+    if(c_iter->parent_key)
+        vl_bkey_print(LOG_DEBUG, c_iter->parent_key);
+    castle_printk(LOG_DEBUG, "%s::iter %p, node %p, next_key: ", __FUNCTION__, c_iter, node);
+    if(c_iter->next_key.key)
+        vl_bkey_print(LOG_DEBUG, c_iter->next_key.key);
+    if(index == -1)
+    {
+        castle_printk(LOG_DEBUG, "%s::lub_find returned -1, terminating iter %p\n",
+                __FUNCTION__, c_iter);
+        //castle_btree_iter_end(c_iter, c_iter->err);
+        //return;
+        BUG();
     }
     btree->entry_get(node, index, &entry_key, NULL, &cvt);
     entry_cep = cvt.cep;
@@ -3580,7 +3646,7 @@ static int __castle_btree_iter_path_traverse(c_iter_t *c_iter)
 static void _castle_btree_iter_path_traverse(struct work_struct *work)
 {
     c_iter_t *c_iter = container_of(work, c_iter_t, work);
-
+    castle_printk(LOG_DEBUG, "%s::iter %p\n", __FUNCTION__, c_iter);
     __castle_btree_iter_path_traverse(c_iter);
 }
 
@@ -3600,6 +3666,8 @@ static void castle_btree_iter_path_traverse_endio(c2_block_t *c2b)
     c_iter_t *c_iter = c2b->private;
 
     iter_debug("Finished reading btree node.\n");
+    castle_printk(LOG_DEBUG, "%s::Finished reading btree node "cep_fmt_str" for iter %p.\n",
+            __FUNCTION__, cep2str(c2b->cep), c_iter);
 
     if (!c2b_uptodate(c2b))
     {
@@ -3644,6 +3712,8 @@ static int castle_btree_iter_path_traverse(c_iter_t *c_iter, c_ext_pos_t node_ce
 
     iter_debug("Starting the traversal: depth=%d, node_cep=(0x%x, 0x%x)\n",
                 c_iter->depth, node_cep.ext_id, node_cep.offset);
+    castle_printk(LOG_DEBUG, "%s::Starting the traversal for iter %p: depth=%d, node_cep="cep_fmt_str"\n",
+                __FUNCTION__, c_iter, c_iter->depth, cep2str(node_cep));
 
     /* Try to use the c2b we've saved in the path, if it matches node_cep */
     if(c_iter->path[c_iter->depth] != NULL)
@@ -3665,6 +3735,8 @@ static int castle_btree_iter_path_traverse(c_iter_t *c_iter, c_ext_pos_t node_ce
 
     iter_debug("%p locking cep=(0x%x, 0x%x)\n",
         c_iter, c2b->cep.ext_id, c2b->cep.offset);
+    castle_printk(LOG_DEBUG, "%s::iter %p locking cep "cep_fmt_str"\n",
+        __FUNCTION__, c_iter, cep2str(c2b->cep));
 
     /* If the c2b is up to date within the cache, take a read lock.
      * Otherwise get a write lock and retest, somebody could have completed IO
@@ -3696,7 +3768,9 @@ static int castle_btree_iter_path_traverse(c_iter_t *c_iter, c_ext_pos_t node_ce
     {
         c2_block_t *prev_c2b = c_iter->path[c_iter->depth - 1];
         iter_debug("%p unlocking cep=(0x%x, 0x%x)\n",
-            c_iter, prev_c2b->cep.ext_id, prev_c2b->cep.offset);
+                c_iter, prev_c2b->cep.ext_id, prev_c2b->cep.offset);
+        castle_printk(LOG_DEBUG, "%s::iter %p unlocking cep "cep_fmt_str"\n",
+                __FUNCTION__, c_iter, cep2str(prev_c2b->cep));
         read_unlock_c2b(prev_c2b);
         /* Don't put_c2b(), handy if we need to rewalk the tree. */
     }
@@ -3716,6 +3790,7 @@ static int castle_btree_iter_path_traverse(c_iter_t *c_iter, c_ext_pos_t node_ce
     else
     {
         iter_debug("Uptodate, carrying on\n");
+        castle_printk(LOG_DEBUG, "%s::iter %p Uptodate, carrying on\n", __FUNCTION__, c_iter);
 
         /* Push the node onto the path 'stack' */
         BUG_ON((c_iter->path[c_iter->depth] != NULL) && (c_iter->path[c_iter->depth] != c2b));
@@ -3739,6 +3814,8 @@ static int __castle_btree_iter_start(c_iter_t *c_iter)
     c_ext_pos_t  root_cep;
 
     iter_debug("-------------- STARTING THE ITERATOR -------------------\n");
+    castle_printk(LOG_DEBUG, "%s::-------------- STARTING THE ITERATOR %p ct %d root cep "cep_fmt_str" -------------------\n",
+            __FUNCTION__, c_iter, c_iter->tree->seq, cep2str(c_iter->tree->root_node));
 
     /*
      * End conditions: we must be done if:

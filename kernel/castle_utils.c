@@ -10,6 +10,35 @@
 #include "castle.h"
 
 /**
+ * Reinit and drop ref on a castle_key_ptr_t.
+ */
+void castle_key_ptr_destroy(struct castle_key_ptr_t *key_ptr)
+{
+    BUG_ON(!key_ptr);
+    BUG_ON(key_ptr->node_c2b == NULL);
+    BUG_ON(key_ptr->key      == NULL);
+
+    put_c2b(key_ptr->node_c2b);
+    key_ptr->node_c2b   = NULL;
+    key_ptr->key        = NULL;
+    key_ptr->node_size  = 0;
+}
+/**
+ * Reference copy a castle_key_ptr_t.
+ */
+void castle_key_ptr_ref_cp(struct castle_key_ptr_t *dest, struct castle_key_ptr_t *src)
+{
+    BUG_ON(!src);
+    BUG_ON(!dest);
+    BUG_ON(src->node_c2b == NULL);
+    BUG_ON(src->key      == NULL);
+    dest->node_c2b   = src->node_c2b;
+    dest->key        = src->key;
+    dest->node_size = src->node_size;
+    get_c2b(dest->node_c2b);
+}
+
+/**
  * Allocate bytes using malloc(), falling back to vmalloc() as appropriate.
  */
 void * castle_alloc_func(size_t size)
@@ -524,6 +553,53 @@ void vl_bkey_print(c_printk_level_t level, c_vl_bkey_t *key)
     castle_object_okey_free(okey);
 }
 #endif
+/**
+ * Parse vl_okey as a string in form "[dim,dim,...dim]".
+ *
+ * Suitable for piping straight into castle-cli.
+ */
+void vl_bkey_print(c_printk_level_t level, c_vl_bkey_t *key)
+{
+    int i, j;
+    static char _buf[1024];
+    char *buf = _buf;
+
+    if (!key || key->length == 0) /* e.g. for big_put */
+    {
+        buf = "[null]";
+        goto print_and_exit;
+    }
+    if (key->length == 0xFFFFFFFE)
+    {
+        buf = "[max key]";
+        goto print_and_exit;
+    }
+    if (key->length == 0xFFFFFFFF)
+    {
+        buf = "[inval key]";
+        goto print_and_exit;
+    }
+
+    *buf++ = '[';
+    for(i=0; i<key->nr_dims; i++)
+    {
+        const uint8_t *dim = castle_object_btree_key_dim_get(key, i);
+
+        *buf++ = '0';
+        *buf++ = 'x';
+        for(j=0; j<castle_object_btree_key_dim_length(key, i); j++)
+        {
+            sprintf(buf, "%.2x", dim[j]);
+            buf += 2;
+        }
+        *buf++ = ',';
+    }
+    *(buf-1) = ']';
+    *buf++ = '\0';
+print_and_exit:
+    castle_printk(level, "%s, len=%d\n", _buf, key->length);
+}
+
 
 /**
  * Copies a string out of the userspace, performing checks to verify that string

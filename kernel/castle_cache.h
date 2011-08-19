@@ -105,7 +105,9 @@ static inline void get_c2b(c2_block_t *c2b)
 
 static inline void put_c2b(c2_block_t *c2b)
 {
-    //BUG_ON(c2b_write_locked(c2b));
+#ifdef DEBUG
+    BUG_ON(c2b_write_locked(c2b));
+#endif
     BUG_ON(atomic_read(&c2b->count) == 0);
     atomic_dec(&c2b->count);
 }

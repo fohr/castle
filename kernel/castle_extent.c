@@ -544,6 +544,7 @@ static int castle_extent_print(c_ext_t *ext, void *unused)
 void castle_extent_mark_live(c_ext_id_t ext_id, c_da_t da_id)
 {
     c_ext_t *ext = castle_extents_hash_get(ext_id);
+    printk("%s::ext_id %lld\n", __FUNCTION__, ext_id);
 
     if (ext)
     {
@@ -653,7 +654,7 @@ static int castle_extent_hash_remove(c_ext_t *ext, void *unused)
     c_ext_mask_t *mask = GET_LATEST_MASK(ext);
     struct list_head *pos, *tmp;
 
-    debug("Freeing extent #%llu\n", ext->ext_id);
+    castle_printk(LOG_DEBUG, "%s::Freeing extent #%llu\n", __FUNCTION__, ext->ext_id);
 
     /* Should have only one valid mask. */
     BUG_ON(!list_is_last(&mask->list, &ext->mask_list));
@@ -1018,6 +1019,8 @@ static int castle_extent_writeback(c_ext_t *ext, void *store)
     c_mstore_t *castle_extents_mstore = store;
 
     /* Shouldnt be any outstanding deletions before last checkpoint. */
+    if(castle_last_checkpoint_ongoing && (atomic_read(&ext->link_cnt) == 0))
+        castle_printk(LOG_DEBUG, "%s::ext %p ext_id %d\n", __FUNCTION__, ext, ext->ext_id);
     BUG_ON(castle_last_checkpoint_ongoing && (atomic_read(&ext->link_cnt) == 0));
 
     if (LOGICAL_EXTENT(ext->ext_id))
@@ -2534,6 +2537,7 @@ void castle_extent_mask_put(c_ext_mask_id_t mask_id)
  */
 c_ext_mask_id_t castle_extent_get(c_ext_id_t ext_id)
 {
+    static int count=0;
     unsigned long flags;
     c_ext_mask_id_t mask_id;
 
@@ -2543,6 +2547,7 @@ c_ext_mask_id_t castle_extent_get(c_ext_id_t ext_id)
     /* Call low level get function. */
     mask_id = castle_extent_mask_get(ext_id);
 
+    castle_printk(LOG_DEBUG, "%s::count = %d\n", __FUNCTION__, count++);
     read_unlock_irqrestore(&castle_extents_hash_lock, flags);
 
     return mask_id;
@@ -2607,6 +2612,7 @@ c_ext_mask_id_t castle_extent_get_all(c_ext_id_t ext_id)
  */
 void castle_extent_put(c_ext_mask_id_t mask_id)
 {
+    static int count = 0;
     unsigned long flags;
 
     /* Write lock is required to not race with reference gets. */
@@ -2614,6 +2620,7 @@ void castle_extent_put(c_ext_mask_id_t mask_id)
 
     /* Call low level put function. */
     castle_extent_mask_put(mask_id);
+    castle_printk(LOG_DEBUG, "%s::count = %d\n", __FUNCTION__, count++);
 
     read_unlock_irqrestore(&castle_extents_hash_lock, flags);
 }
@@ -2743,6 +2750,7 @@ int castle_extent_unlink(c_ext_id_t ext_id)
     /* Reduce the link count and check if this is the last link. */
     if (atomic_dec_return(&ext->link_cnt) == 0)
     {
+        printk("%s::extent %lld\n", __FUNCTION__, ext_id);
         /* All merges and request would have completed before setting castle_last_checkpoint_ongoing.
          * There shouldn't be any free()/unlink() after that. */
         BUG_ON(castle_last_checkpoint_ongoing);
@@ -2897,7 +2905,15 @@ c_ext_dirtytree_t* castle_extent_dirtytree_by_id_get(c_ext_id_t ext_id)
 
     read_lock_irqsave(&castle_extents_hash_lock, flags);
     ext = __castle_extents_hash_get(ext_id);
+    if(!ext)
+    {
+        printk("%s::no extent %lld\n", __FUNCTION__, ext_id);\
+        read_unlock_irqrestore(&castle_extents_hash_lock, flags);
+        BUG();
+    }
     BUG_ON(!ext);
+    if(atomic_inc_return(&ext->dirtytree->ref_cnt) < 2)
+        printk("%s::extent ref_cnt < 2; %lld\n", __FUNCTION__, ext_id);
     BUG_ON(atomic_inc_return(&ext->dirtytree->ref_cnt) < 2);
     dirtytree = ext->dirtytree;
     read_unlock_irqrestore(&castle_extents_hash_lock, flags);
@@ -4481,6 +4497,8 @@ int castle_extent_grow(c_ext_id_t ext_id, c_chk_cnt_t count)
     c_ext_mask_t *mask;
     int ret = 0;
 
+    castle_printk(LOG_DEVEL, "%s::ext %d, %d chunks\n", __FUNCTION__, ext_id, count);
+
     /* Extent should be alive, something is wrong with client. */
     BUG_ON(!ext);
 
@@ -4498,6 +4516,12 @@ int castle_extent_grow(c_ext_id_t ext_id, c_chk_cnt_t count)
 
     /* Get the current latest mask. */
     mask = GET_LATEST_MASK(ext);
+
+    if(!mask)
+    {
+        castle_printk(LOG_ERROR, "%s::failed to recover a mask for extent %d\n", ext->ext_id);
+        BUG();
+    }
 
     /* Grow shouldn't try to cross extent boundary. */
     BUG_ON(mask->range.end + count > ext->size);
@@ -4583,6 +4607,8 @@ int castle_extent_truncate(c_ext_id_t ext_id, c_chk_cnt_t chunk)
 
     /* Extent should be alive, something is wrong with client. */
     BUG_ON(!ext);
+
+    castle_printk(LOG_DEVEL, "%s::ext_id %d, chunk %d\n", __FUNCTION__, ext_id, chunk);
 
     castle_extent_transaction_start();
 

@@ -962,6 +962,9 @@ struct castle_component_tree {
     uint8_t             dynamic;           /**< 1 - dynamic modlist btree, 0 - merge result.    */
     c_da_t              da;
     uint8_t             level;             /**< Level in the doubling array.                    */
+    int16_t             merge_level;       /**< Merge level in the doubling array, where this ct
+                                                is input (-1: not being merged). Needed for query
+                                                redirection.                                    */
     uint16_t            node_sizes[MAX_BTREE_DEPTH];
                                            /**< Size of nodes in each level in the b-tree,
                                                 in pages. Only used for !dynamic (i.e. RO)
@@ -1033,11 +1036,19 @@ struct castle_clist_entry {
     /*        268 */ uint8_t         bloom_exists;
     /*        269 */ uint8_t         bloom_num_hashes;
     /*        270 */ uint16_t        node_sizes[MAX_BTREE_DEPTH];
-    /*        290 */ uint8_t         _unused[222];
+    /*        290 */ int16_t         merge_level;
+    /*        292 */ uint8_t         _unused[220];
     /*        512 */
 } PACKED;
 
-
+/* A "convenience" struct to temporarily (for a short period) maintain a pointer to
+   a key in some component tree */
+struct castle_key_ptr_t {
+    void                      *key;        /* points to the key we want to keep */
+    struct castle_cache_block *node_c2b;   /* points to the c2b we need to get/put
+                                              to keep the key pointer alive */
+    unsigned int               node_size;  /* btree level */
+};
 
 /** DA merge SERDES input tree iter on-disk structure.
  */
@@ -1104,19 +1115,26 @@ struct castle_dmserlist_entry {
     /*        956 */ int8_t                           completing;
     /*        957 */ int8_t                           is_new_key;
     /*        958 */ uint32_t                         skipped_count;
-    /*        962 */ uint8_t                          pad_to_iters[14]; /* beyond here entries are
+                     /* Although the redirection partition is contained by the castle_double_array
+                        struct, SERDES is left to merge because the partition is tighly linked to
+                        merge SERDES state. */
+    /*        962 */ c_ext_pos_t                      redirection_partition_node_cep;
+    /*        978 */ int32_t                          redirection_partition_node_size;
+    /*        982 */ uint32_t                         growth_control_tree_ext_nodes_capacity;
+    /*        986 */ uint32_t                         growth_control_tree_ext_nodes_occupancy;
+    /*        990 */ uint8_t                          pad_to_iters[2]; /* beyond here entries are
                                                                            frequently marshalled, so
                                                                            alignment is important */
-    /*        976 */
+    /*         */
 
     /**************** input ct seq and iters: iters potentially marshalled often *****************/
-    /*        976 */ int32_t                          iter_err;
-    /*        980 */ int64_t                          iter_non_empty_cnt;
-    /*        988 */ uint64_t                         iter_src_items_completed;
-    /*        996 */ uint8_t                          unused[12];
-    /*       1008 */
+    /*        992 */ int32_t                          iter_err;
+    /*        996 */ int64_t                          iter_non_empty_cnt;
+    /*       1004 */ uint64_t                         iter_src_items_completed;
+    /*       1012 */ uint8_t                          unused[12];
+    /*       1024 */
 } PACKED;
-#define SIZEOF_CASTLE_DMSERLIST_ENTRY (1008)
+#define SIZEOF_CASTLE_DMSERLIST_ENTRY (1024)
 
 /**
  * Ondisk Serialized structure for castle versions.
@@ -1212,6 +1230,16 @@ typedef struct castle_bio {
 #endif
 } c_bio_t;
 
+/* Queries that take reference to a CT must also take extent references to prevent extent
+   shrinkage; extent reference taking returns a mask_id that must be used for a matching
+   extent reference put, hence the masks have to be saved for each query */
+typedef struct castle_ct_extent_reference_set_t
+{
+    c_ext_mask_id_t ref_id_internal;
+    c_ext_mask_id_t ref_id_tree;
+    c_ext_mask_id_t ref_id_data;
+    c_ext_mask_id_t ref_id_bloom;
+} c_ct_ext_ref_t;
 
 struct castle_cache_block;
 struct castle_request_timeline;
@@ -1230,7 +1258,10 @@ typedef struct castle_bio_vec {
     int                             cpu;          /**< CPU id for this request                   */
     int                             cpu_index;    /**< CPU index (for determining correct CT)    */
     struct castle_component_tree   *tree;         /**< CT to search                              */
+    //TODO@tr change the following to a pointer and malloc/free in the right places
+    c_ct_ext_ref_t                  ct_ref;       /**< Current CT's ref set                      */
     struct castle_component_tree  **trees;        /**< CTs to search                             */
+    c_ct_ext_ref_t                 *ct_refs;      /**< CT extent refs                            */
     int                             nr_trees;     /**< Size of the trees array                   */
 
     /* Btree walk variables. */
@@ -1564,6 +1595,8 @@ typedef struct castle_da_rq_iterator {
 
     struct ct_rq {
         struct castle_component_tree *ct;
+        c_ct_ext_ref_t               *ct_refs;
+        struct castle_key_ptr_t       redirection_partition;
         c_rq_iter_t                   ct_rq_iter;
     } *ct_rqs;
 } c_da_rq_iter_t;
@@ -1815,6 +1848,7 @@ struct castle_object_replace {
 
 struct castle_object_get {
     struct castle_component_tree *ct;
+    c_ct_ext_ref_t                ct_ref;
     struct castle_cache_block    *data_c2b;
     uint64_t                      data_c2b_length;
     uint64_t                      data_length;
@@ -1836,6 +1870,7 @@ struct castle_object_get {
 
 struct castle_object_pull {
     struct castle_component_tree *ct;
+    c_ct_ext_ref_t                ct_ref;
     uint64_t                      remaining;
     uint64_t                      offset;
 
@@ -1974,6 +2009,17 @@ typedef enum {
 #define DOUBLE_ARRAY_NEED_COMPACTION_BIT    (2)
 #define DOUBLE_ARRAY_COMPACTING_BIT         (3)
 
+#define PARTIAL_MERGES_QUERY_REDIRECTION_BTREE_NODE_LEVEL (0)
+#if PARTIAL_MERGES_QUERY_REDIRECTION_BTREE_NODE_LEVEL > MAX_BTREE_DEPTH
+#error "PARTIAL_MERGES_QUERY_REDIRECTION_BTREE_NODE_LEVEL > MAX_BTREE_DEPTH"
+#endif
+
+/* rate at which output tree leaf nodes extent is grown; in chunks at a time. */
+#define MERGE_OUTPUT_TREE_GROWTH_RATE (8) /* BM said don't make this < 10 */
+/* rate at which output tree medium objects extent is grown; in chunks at a time. */
+//TODO@tr use this
+#define MERGE_OUTPUT_DATA_GROWTH_RATE (1)
+
 /* Merge level flags. */
 #define DA_MERGE_RUNNING_BIT                (0)
 //#define DA_MERGE_UNIT_RUNNING               (1)
@@ -1985,7 +2031,10 @@ struct castle_double_array {
     rwlock_t                    lock;               /**< Protects levels[].trees lists          */
     struct kobject              kobj;
     unsigned long               flags;
-    int                         nr_trees;           /**< Total number of CTs in the da          */
+    int                         nr_trees;           /**< Total number of complete CTs in the da */
+    /**< Total number of partially complete in-progress trees in the da; these are trees that are
+         complete enough to be queried. This count is helpful for query init.                   */
+    atomic_t                    queriable_merge_trees_cnt;
     struct {
         int                     nr_trees;           /**< Number of CTs at level                 */
         int                     nr_compac_trees;    /**< #trees that need to be merged          */
@@ -2001,6 +2050,15 @@ struct castle_double_array {
             uint32_t            units_commited;
             struct task_struct *thread;
             int                 deamortize;
+
+            struct castle_key_ptr_t redirection_partition; /**< The key used to decide if a query
+                                                                should be redirected to output ct */
+            struct castle_component_tree *queriable_out_tree; /**< This pointer and serdes.out_tree
+                                                                   pointer are non-NULL at different
+                                                                   times based on their intended
+                                                                   usage, so although it seems like
+                                                                   redundancy, its cleaner to
+                                                                   have them both.                */
             /* Merge serialisation/deserialisation */
             struct {
 #ifdef DEBUG_MERGE_SERDES
@@ -2069,6 +2127,8 @@ struct castle_double_array {
                 unsigned int     des; /* for init to notify merge thread to resume merge, and
                                          to notify checkpoint not to writeback state because
                                          deserialisation still running. */
+                c_ext_pos_t     *shrinkable_cep;
+
             } serdes;
         } merge;
         struct castle_da_lfs_ct_t lfs;              /**< Low Free-Space handler for merge       */

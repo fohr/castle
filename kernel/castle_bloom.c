@@ -52,6 +52,7 @@ MODULE_PARM_DESC(castle_bloom_use, "Use bloom filters");
 #define LAST_CHUNK(_bf, _chunk_id)           (_chunk_id == _bf->num_chunks - 1)
 #define BLOCKS_IN_CHUNK(_bf, _chunk_id)      (LAST_CHUNK(_bf, _chunk_id) ? _bf->num_blocks_last_chunk : BLOOM_BLOCKS_PER_CHUNK(_bf))
 
+
 uint32_t opt_hashes_per_bit[] =
 { 0, 1, 2, 3, 3, 4, 5, 5, 6, 7, 7, 8, 9, 10, 10, 11, 12 };
 
@@ -109,6 +110,7 @@ int castle_bloom_create(castle_bloom_t *bf, c_da_t da_id, uint64_t num_elements)
     bf->ext_id = castle_extent_alloc(SSD_ONLY_EXT, da_id, EXT_T_BLOOM_FILTER,
                                      ceiling(size, C_CHK_SIZE), 0,
                                      NULL, NULL);
+    castle_printk(LOG_DEBUG, "%s::making bf %p on ext %d\n", __FUNCTION__, bf, bf->ext_id);
     if (EXT_ID_INVAL(bf->ext_id))
     {
         bf->block_size_pages = BLOOM_BLOCK_SIZE_HDD_PAGES;
@@ -125,7 +127,6 @@ int castle_bloom_create(castle_bloom_t *bf, c_da_t da_id, uint64_t num_elements)
         }
     } else
         bf->block_size_pages = BLOOM_BLOCK_SIZE_SSD_PAGES;
-
 #ifdef DEBUG
     bf_bp->elements_inserted_per_block = castle_malloc(sizeof(uint32_t) * BLOOM_BLOCKS_PER_CHUNK(bf), GFP_KERNEL);
 #endif
@@ -192,12 +193,13 @@ static void castle_bloom_complete_btree_node(castle_bloom_t *bf)
     write_unlock_c2b(bf_bp->node_c2b);
     put_c2b(bf_bp->node_c2b);
 
-    debug("btree_node completed, offset was %llu, ", bf_bp->node_cep.offset);
+    debug("%s::btree_node completed for bf %p, cep was "cep_fmt_str", ",
+        __FUNCTION__, bf, cep2str(bf_bp->node_cep));
 
     bf_bp->node_cep.offset += BLOOM_INDEX_NODE_SIZE;
     bf_bp->nodes_complete++;
 
-    debug("now %llu.\n", bf_bp->node_cep.offset);
+    debug("now "cep_fmt_str".\n", cep2str(bf_bp->node_cep));
 }
 
 /**
@@ -210,6 +212,8 @@ static void castle_bloom_next_btree_node(castle_bloom_t *bf)
     if (bf_bp->cur_node != NULL)
         castle_bloom_complete_btree_node(bf);
 
+    debug("%s::making new node for bf %p at "cep_fmt_str"\n",
+            __FUNCTION__, bf, cep2str(bf_bp->node_cep));
     bf_bp->node_c2b = castle_cache_block_get(bf_bp->node_cep, BLOOM_INDEX_NODE_SIZE_PAGES);
     write_lock_c2b(bf_bp->node_c2b);
     castle_cache_block_softpin(bf_bp->node_c2b);
@@ -271,6 +275,10 @@ static void castle_bloom_next_chunk(castle_bloom_t *bf)
     bf_bp->cur_chunk_num_blocks = BLOCKS_IN_CHUNK(bf, bf_bp->chunks_complete);
 
     bf_bp->chunk_c2b = castle_cache_block_get(bf_bp->chunk_cep, bf_bp->cur_chunk_num_blocks * bf->block_size_pages);
+
+    castle_printk(LOG_DEBUG, "%s::new chunk at " cep_fmt_str" for bf %p.\n",
+            __FUNCTION__, cep2str(bf_bp->chunk_c2b->cep), bf);
+
     write_lock_c2b(bf_bp->chunk_c2b);
     if (bf->num_chunks <= BLOOM_MAX_SOFTPIN_CHUNKS)
         castle_cache_block_softpin(bf_bp->chunk_c2b);
@@ -279,14 +287,29 @@ static void castle_bloom_next_chunk(castle_bloom_t *bf)
     memset(bf_bp->cur_chunk_buffer, 0, bf_bp->cur_chunk_num_blocks * BLOOM_BLOCK_SIZE(bf));
 }
 
+typedef enum {
+    BAIK_REPLACE_LAST_KEY = 0,
+    BAIK_INSERT_KEY
+} c_baik_type_t;
+
 /**
  * Adds a key to the current btree node
  */
-static void castle_bloom_add_index_key(castle_bloom_t *bf, void *key)
+static void castle_bloom_add_index_key(castle_bloom_t *bf, void *key, c_baik_type_t mode)
 {
     c_ver_t version = 0;
     c_val_tup_t cvt;
     struct castle_bloom_build_params *bf_bp = bf->private;
+
+    /* Bloom filters don't store values, just keys. Since btree code requires values,
+       store tombstones. */
+    CVT_TOMBSTONE_INIT(cvt);
+
+    if(mode == BAIK_REPLACE_LAST_KEY)
+    {
+        bf->btree->entry_add(bf_bp->cur_node, bf_bp->cur_node->used - 1, key, version, cvt);
+        return;
+    }
 
     if (bf_bp->cur_node == NULL || bf->btree->need_split(bf_bp->cur_node, 1))
     {
@@ -295,10 +318,8 @@ static void castle_bloom_add_index_key(castle_bloom_t *bf, void *key)
     } else
         bf_bp->cur_node_cur_chunk_id++;
 
-    /* Bloom filters don't store values, just keys. Since btree code requires values,
-       store tombstones. */
-    CVT_TOMBSTONE_INIT(cvt);
-    debug("Adding key for chunk_id %u to btree node.\n", bf_bp->cur_node_cur_chunk_id);
+    debug("%s::Adding key for chunk_id %u to btree node for bf %p.\n",
+            __FUNCTION__, bf_bp->cur_node_cur_chunk_id, bf);
     bf->btree->entry_add(bf_bp->cur_node, bf_bp->cur_node_cur_chunk_id, key, version, cvt);
 }
 
@@ -324,7 +345,7 @@ void castle_bloom_complete(castle_bloom_t *bf)
      * we don't have a copy of the key here, so insert the largest key
      */
     if (bf_bp->elements_inserted < bf_bp->expected_num_elements)
-        castle_bloom_add_index_key(bf, bf->btree->max_key);
+        castle_bloom_add_index_key(bf, bf->btree->max_key, BAIK_INSERT_KEY);
 
     castle_bloom_complete_btree_node(bf);
     castle_bloom_complete_chunk(bf);
@@ -412,13 +433,14 @@ static uint32_t castle_bloom_get_block_id(castle_bloom_t *bf, void *key, uint32_
  *
  * @param   btree   The btree type that the key belongs to (used for key_hash)
  */
-void castle_bloom_add(castle_bloom_t *bf, struct castle_btree_type *btree, void *key)
+int castle_bloom_add(castle_bloom_t *bf, struct castle_btree_type *btree, void *key)
 {
     uint32_t block_id;
     uint32_t hash1, hash2, hash;
     uint64_t bit_offset;
     uint32_t i;
     struct castle_bloom_build_params *bf_bp = bf->private;
+    int chunk_reachable = 0;
 
     BUG_ON(bf_bp->elements_inserted == bf_bp->expected_num_elements);
 
@@ -426,7 +448,9 @@ void castle_bloom_add(castle_bloom_t *bf, struct castle_btree_type *btree, void 
     if (bf_bp->elements_inserted % BLOOM_ELEMENTS_PER_CHUNK == BLOOM_ELEMENTS_PER_CHUNK - 1 ||
             bf_bp->elements_inserted == bf_bp->expected_num_elements - 1)
     {
-        castle_bloom_add_index_key(bf, key);
+        //castle_bloom_add_index_key(bf, key, BAIK_REPLACE_LAST_KEY);
+        castle_bloom_add_index_key(bf, key, BAIK_INSERT_KEY);
+        chunk_reachable = 1;
     }
 
     /* start a new chunk */
@@ -434,6 +458,7 @@ void castle_bloom_add(castle_bloom_t *bf, struct castle_btree_type *btree, void 
     {
         BUG_ON(bf_bp->chunks_complete >= bf->num_chunks);
         castle_bloom_next_chunk(bf);
+        //castle_bloom_add_index_key(bf, bf->btree->max_key, BAIK_INSERT_KEY);
     }
 
     bf_bp->elements_inserted++;
@@ -454,6 +479,7 @@ void castle_bloom_add(castle_bloom_t *bf, struct castle_btree_type *btree, void 
         hash = hash1 + i * hash2;
         __set_bit(hash % BLOOM_BLOCK_SIZE_BITS(bf) + bit_offset, bf_bp->cur_chunk_buffer);
     }
+    return chunk_reachable;
 }
 
 /**
@@ -476,6 +502,7 @@ static int castle_bloom_get_chunk_id(castle_bloom_t *bf, void *key,
     void *last_key;
     struct castle_btree_type *btree = bf->btree;
 
+    //TODO@tr shouldn't this be || instead of &&?
     BUG_ON(cep == NULL && chunk_id_out == NULL);
 
     for (node_index = 0; node_index < bf->num_btree_nodes; node_index++)
@@ -493,10 +520,12 @@ static int castle_bloom_get_chunk_id(castle_bloom_t *bf, void *key,
             castle_btree_lub_find(node, key, 0, &found_index, NULL);
             BUG_ON(found_index < 0 || found_index >= node->used);
             chunk_id += found_index;
+            castle_printk(LOG_DEBUG, "%s::chunk_id (inner loop) = %d\n", __FUNCTION__, chunk_id);
             break;
         }
 
         chunk_id += node->used;
+        castle_printk(LOG_DEBUG, "%s::chunk_id (outer loop) = %d\n", __FUNCTION__, chunk_id);
     }
 
     /* it was never found i.e. greater than the last chunk key */
@@ -674,6 +703,8 @@ static void castle_bloom_block_process(c_bvec_t *c_bvec)
 
     put_c2b(chunk_c2b);
 
+    //found = 1;
+
     if (!found)
     {
         castle_bloom_lookup_next_ct(c_bvec);
@@ -746,8 +777,9 @@ static void castle_bloom_chunk_read(c_bvec_t *c_bvec, uint32_t chunk_id)
         chunk_c2b->end_io = castle_bloom_end_block_io;
         chunk_c2b->private = c_bvec;
 
-        debug("Bloom filter block not in cache, scheduling I/O at offset %llu for bf %p.\n",
-                chunk_c2b->cep.offset, bf);
+        castle_printk(LOG_DEBUG, "%s::Bloom filter block not in cache, scheduling I/O at "
+                cep_fmt_str" for bf %p.\n",
+                __FUNCTION__, cep2str(chunk_c2b->cep), bf);
 
         BUG_ON(submit_c2b(READ, chunk_c2b));
     } else
@@ -768,8 +800,12 @@ static void castle_bloom_index_process(c_bvec_t *c_bvec, c2_block_t **btree_node
 
     found = castle_bloom_get_chunk_id(bf, key, btree_nodes_c2bs, NULL, &chunk_id);
 
+    //found = 1;
+
     if (!found)
+    {
         castle_bloom_lookup_next_ct(c_bvec);
+    }
     else
         castle_bloom_chunk_read(c_bvec, chunk_id);
 }

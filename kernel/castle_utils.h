@@ -211,6 +211,10 @@ static inline c_bio_t* castle_utils_bio_alloc(int nr_bvecs)
         c_bvecs[i].cpu = -1;
         c_bvecs[i].c_bio = c_bio;
         c_bvecs[i].tree  = NULL;
+        c_bvecs[i].ct_ref.ref_id_internal = INVAL_MASK_ID;
+        c_bvecs[i].ct_ref.ref_id_tree     = INVAL_MASK_ID;
+        c_bvecs[i].ct_ref.ref_id_data     = INVAL_MASK_ID;
+        c_bvecs[i].ct_ref.ref_id_bloom    = INVAL_MASK_ID;
 #ifdef CASTLE_PERF_DEBUG
         c_bvecs[i].timeline = NULL;
 #endif
@@ -280,6 +284,8 @@ static USED void check_stack_usage(void)
 }
 #endif
 
+void castle_key_ptr_destroy(struct castle_key_ptr_t *key_ptr);
+void castle_key_ptr_ref_cp(struct castle_key_ptr_t *dest, struct castle_key_ptr_t *src);
 void * castle_alloc_func(size_t size);
 void castle_free_func(void *ptr);
 

@@ -94,6 +94,7 @@ void                castle_extent_lfs_victims_wakeup        (void);
 int                 castle_extent_exists                    (c_ext_id_t     ext_id);
 void                castle_extent_mark_live                 (c_ext_id_t     ext_id,
                                                              c_da_t         da_id);
+void                castle_extent_mask_put                  (c_ext_mask_id_t mask_id);
 int                 castle_extent_free                      (c_ext_id_t     ext_id);
 c_ext_mask_id_t     castle_extent_get                       (c_ext_id_t     ext_id);
 void                castle_extent_put                       (c_ext_mask_id_t mask_id);

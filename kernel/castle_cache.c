@@ -1607,7 +1607,8 @@ static int c_io_array_submit(int rw,
     int                  ret = 0;
 
     nr_pages = array->next_idx;
-    debug("Submitting io_array of %d pages, for cep "cep_fmt_str", k_factor=%d, rw=%s\n",
+    debug("%s::Submitting io_array of %d pages, for cep "cep_fmt_str", k_factor=%d, rw=%s\n",
+        __FUNCTION__,
         nr_pages,
         cep2str(array->start_cep),
         k_factor,
@@ -1660,6 +1661,10 @@ retry:
     for(i=0; i<k_factor; i++)
     {
         slave = castle_slave_find_by_uuid(chunks[i].slave_id);
+        if(!slave)
+            castle_printk(LOG_DEVEL, "%s::writing %d pages for cep "cep_fmt_str
+                    ", no slave; chunks[%d].slave_id=%d\n",
+                    __FUNCTION__, nr_pages, cep2str(array->start_cep), i, chunks[i].slave_id);
         BUG_ON(!slave);
 
         if (!test_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags))
@@ -1906,8 +1911,8 @@ static int submit_c2b_rda(int rw, c2_block_t *c2b)
     uint32_t      k_factor = castle_extent_kfactor_get(ext_id);
     c_disk_chk_t  chunks[k_factor];
 
-    debug("Submitting c2b "cep_fmt_str", for %s\n",
-            __cep2str(c2b->cep), (rw == READ) ? "read" : "write");
+    debug("%s::Submitting c2b "cep_fmt_str", for %s\n",
+            __FUNCTION__, __cep2str(c2b->cep), (rw == READ) ? "read" : "write");
 
     /* TODO: Add a check to make sure cep is within live extent range. */
 
@@ -2503,7 +2508,7 @@ static c2_page_t** castle_cache_page_freelist_get(int nr_pages)
     c2_page_t **c2ps;
     int i, nr_c2ps;
 
-    debug("Asked for %d pages from the freelist.\n", nr_pages);
+    debug("%s::Asked for %d pages from the freelist.\n", __FUNCTION__, nr_pages);
     nr_c2ps = castle_cache_pages_to_c2ps(nr_pages);
     c2ps = castle_zalloc(nr_c2ps * sizeof(c2_page_t *), GFP_KERNEL);
     BUG_ON(!c2ps);
@@ -2815,6 +2820,9 @@ static void castle_cache_block_free(c2_block_t *c2b)
     if(c2b_locked(c2b))
         castle_printk(LOG_DEVEL, "%s::c2b for "cep_fmt_str" locked from: %s:%d\n",
                 __FUNCTION__, cep2str(c2b->cep), c2b->file, c2b->line);
+    if(atomic_read(&c2b->count) != 0)
+        castle_printk(LOG_DEVEL, "%s::c2b for "cep_fmt_str" refcount = %d, locked from: %s:%d\n",
+                __FUNCTION__, cep2str(c2b->cep), atomic_read(&c2b->count), c2b->file, c2b->line);
 #endif
     BUG_ON(c2b_locked(c2b));
     BUG_ON(atomic_read(&c2b->count) != 0);
