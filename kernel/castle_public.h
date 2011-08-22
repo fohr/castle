@@ -7,7 +7,7 @@
 #include <sys/time.h>
 #endif
 
-#define CASTLE_PROTOCOL_VERSION 17
+#define CASTLE_PROTOCOL_VERSION 18
 
 #define PACKED               __attribute__((packed))
 
@@ -91,6 +91,26 @@ typedef enum {
     TRACE_CACHE_T0_MEDIUM_OBJECTS_IOS_ID, /**< IOs to T0 medium objects                           */
     TRACE_CACHE_LARGE_OBJECT_IOS_ID,      /**< IOs to large objects                               */
     TRACE_CACHE_BLOOM_FILTER_IOS_ID,      /**< IOs to bloom filters                               */
+    TRACE_CACHE_BLK_T0_INT_HIT_MISS_ID,   /**< Hits, misses T0 internal nodes                     */
+    TRACE_CACHE_BLK_T0_INT_HITS_ID,       /**< Hits  T0 internal nodes                            */
+    TRACE_CACHE_BLK_T0_INT_MISSES_ID,     /**< Misses T0 internal nodes                           */
+    TRACE_CACHE_BLK_T0_INT_HITS_PCT_ID,   /**< %Hits  T0 internal nodes                           */
+    TRACE_CACHE_BLK_T0_INT_MISSES_PCT_ID, /**< %Misses T0 internal nodes                          */
+    TRACE_CACHE_BLK_T0_LEAF_HIT_MISS_ID,  /**< Hits, misses T0 leaf nodes                         */
+    TRACE_CACHE_BLK_T0_LEAF_HITS_ID,      /**< Hits  T0 leaf nodes                                */
+    TRACE_CACHE_BLK_T0_LEAF_MISSES_ID,    /**< Misses T0 leaf nodes                               */
+    TRACE_CACHE_BLK_T0_LEAF_HITS_PCT_ID,  /**< %Hits  T0 leaf nodes                               */
+    TRACE_CACHE_BLK_T0_LEAF_MISSES_PCT_ID,/**< %Misses T0 leaf nodes                              */
+    TRACE_CACHE_BLK_INT_HIT_MISS_ID,      /**< Hits, misses ROCT internal nodes                   */
+    TRACE_CACHE_BLK_INT_HITS_ID,          /**< Hits  ROCT internal nodes                          */
+    TRACE_CACHE_BLK_INT_MISSES_ID,        /**< Misses ROCT internal nodes                         */
+    TRACE_CACHE_BLK_INT_HITS_PCT_ID,      /**< %Hits  ROCT internal nodes                         */
+    TRACE_CACHE_BLK_INT_MISSES_PCT_ID,    /**< %Misses ROCT internal nodes                        */
+    TRACE_CACHE_BLK_LEAF_HIT_MISS_ID,     /**< Hits, misses ROCT leaf nodes                       */
+    TRACE_CACHE_BLK_LEAF_HITS_ID,         /**< Hits ROCT leaf nodes                               */
+    TRACE_CACHE_BLK_LEAF_MISSES_ID,       /**< Misses ROCT leaf nodes                             */
+    TRACE_CACHE_BLK_LEAF_HITS_PCT_ID,     /**< %Hits  ROCT leaf nodes                             */
+    TRACE_CACHE_BLK_LEAF_MISSES_PCT_ID,   /**< %Misses ROCT leaf nodes                            */
     TRACE_CACHE_BLK_GET_HIT_MISS_ID,      /**< Hits, misses within the cache                      */
     TRACE_CACHE_BLK_GET_HITS_ID,          /**< Block hits within the cache                        */
     TRACE_CACHE_BLK_GET_MISSES_ID,        /**< Block misses within the cache                      */

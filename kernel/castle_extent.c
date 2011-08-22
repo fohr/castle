@@ -40,11 +40,13 @@
 #define debug_mask(_f, _a...)   (castle_printk(LOG_DEBUG, _f, ##_a))
 #define debug_resize(_f, _a...) (castle_printk(LOG_DEBUG, _f, ##_a))
 #define debug_schks(_f, _a...)  (castle_printk(LOG_DEBUG, _f, ##_a))
+#define debug_ext_ref(_f, _a...)  (castle_printk(LOG_DEBUG, _f, ##_a))
 #else
 #define debug(_f, ...)          ((void)0)
 #define debug_mask(_f, ...)     ((void)0)
 #define debug_resize(_f, ...)   ((void)0)
 #define debug_schks(_f, ...)    ((void)0)
+#define debug_ext_ref(_f, _a...)  ((void)0)
 #endif
 
 #define MAP_IDX(_ext, _i, _j)       (((_ext)->k_factor * _i) + _j)
@@ -2537,7 +2539,7 @@ void castle_extent_mask_put(c_ext_mask_id_t mask_id)
  */
 c_ext_mask_id_t castle_extent_get(c_ext_id_t ext_id)
 {
-    static int count=0;
+    static USED int count=0;
     unsigned long flags;
     c_ext_mask_id_t mask_id;
 
@@ -2547,7 +2549,7 @@ c_ext_mask_id_t castle_extent_get(c_ext_id_t ext_id)
     /* Call low level get function. */
     mask_id = castle_extent_mask_get(ext_id);
 
-    castle_printk(LOG_DEBUG, "%s::count = %d\n", __FUNCTION__, count++);
+    debug_ext_ref("%s::count = %d\n", __FUNCTION__, count++);
     read_unlock_irqrestore(&castle_extents_hash_lock, flags);
 
     return mask_id;
@@ -2612,7 +2614,7 @@ c_ext_mask_id_t castle_extent_get_all(c_ext_id_t ext_id)
  */
 void castle_extent_put(c_ext_mask_id_t mask_id)
 {
-    static int count = 0;
+    static USED int count = 0;
     unsigned long flags;
 
     /* Write lock is required to not race with reference gets. */
@@ -2620,7 +2622,7 @@ void castle_extent_put(c_ext_mask_id_t mask_id)
 
     /* Call low level put function. */
     castle_extent_mask_put(mask_id);
-    castle_printk(LOG_DEBUG, "%s::count = %d\n", __FUNCTION__, count++);
+    debug_ext_ref(LOG_DEBUG, "%s::count = %d\n", __FUNCTION__, count++);
 
     read_unlock_irqrestore(&castle_extents_hash_lock, flags);
 }
@@ -2750,7 +2752,7 @@ int castle_extent_unlink(c_ext_id_t ext_id)
     /* Reduce the link count and check if this is the last link. */
     if (atomic_dec_return(&ext->link_cnt) == 0)
     {
-        printk("%s::extent %lld\n", __FUNCTION__, ext_id);
+        debug_ext_ref("%s::extent %lld\n", __FUNCTION__, ext_id);
         /* All merges and request would have completed before setting castle_last_checkpoint_ongoing.
          * There shouldn't be any free()/unlink() after that. */
         BUG_ON(castle_last_checkpoint_ongoing);

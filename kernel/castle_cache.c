@@ -383,7 +383,7 @@ static void c2_pref_c2b_destroy(c2_block_t *c2b);
  */
 void castle_cache_stats_print(int verbose)
 {
-    int hits, misses, count, i;
+    int hits, misses, count1, count2, i;
     int reads = atomic_read(&castle_cache_read_stats);
     int writes = atomic_read(&castle_cache_write_stats);
     atomic_sub(reads, &castle_cache_read_stats);
@@ -419,29 +419,46 @@ void castle_cache_stats_print(int verbose)
     castle_trace_cache(TRACE_VALUE,
                        TRACE_CACHE_SOFTPIN_BLKS_ID,
                        atomic_read(&castle_cache_cleanlist_softpin_size), 0);
-    count = atomic_read(&castle_cache_block_victims);
-    atomic_sub(count, &castle_cache_block_victims);
-    castle_trace_cache(TRACE_VALUE, TRACE_CACHE_BLOCK_VICTIMS_ID, count, 0);
-    count = atomic_read(&castle_cache_softpin_block_victims);
-    atomic_sub(count, &castle_cache_softpin_block_victims);
-    castle_trace_cache(TRACE_VALUE, TRACE_CACHE_SOFTPIN_VICTIMS_ID, count, 0);
+    count1 = atomic_read(&castle_cache_block_victims);
+    atomic_sub(count1, &castle_cache_block_victims);
+    castle_trace_cache(TRACE_VALUE, TRACE_CACHE_BLOCK_VICTIMS_ID, count1, 0);
+    count1 = atomic_read(&castle_cache_softpin_block_victims);
+    atomic_sub(count1, &castle_cache_softpin_block_victims);
+    castle_trace_cache(TRACE_VALUE, TRACE_CACHE_SOFTPIN_VICTIMS_ID, count1, 0);
     castle_trace_cache(TRACE_VALUE, TRACE_CACHE_READS_ID, reads, 0);
     castle_trace_cache(TRACE_VALUE, TRACE_CACHE_WRITES_ID, writes, 0);
 
     hits = misses = 0;
     for (i = 0; i < EXT_T_INVALID; i++)
     {
-        count = atomic_read(&extent_stats[i].ios_cnt);
-        atomic_sub(count, &extent_stats[i].ios_cnt);
-        castle_trace_cache(TRACE_VALUE, TRACE_CACHE_META_DATA_IOS_ID + i, count, 0);
+        count1 = atomic_read(&extent_stats[i].ios_cnt);
+        atomic_sub(count1, &extent_stats[i].ios_cnt);
+        castle_trace_cache(TRACE_VALUE, TRACE_CACHE_META_DATA_IOS_ID + i, count1, 0);
 
-        count = atomic_read(&extent_stats[i].hits);
-        atomic_sub(count, &extent_stats[i].hits);
-        hits += count;
+        count1 = atomic_read(&extent_stats[i].hits);
+        atomic_sub(count1, &extent_stats[i].hits);
+        hits += count1;
 
-        count = atomic_read(&extent_stats[i].misses);
-        atomic_sub(count, &extent_stats[i].misses);
-        misses += count;
+	count2 = atomic_read(&extent_stats[i].misses);
+        atomic_sub(count2, &extent_stats[i].misses);
+        misses += count2;
+
+	if(i == EXT_T_T0_INTERNAL_NODES) {
+	    castle_trace_cache(TRACE_PERCENTAGE, TRACE_CACHE_BLK_T0_INT_HIT_MISS_ID,
+			       count1, count2);
+	}
+	else if(i == EXT_T_T0_LEAF_NODES) {
+	    castle_trace_cache(TRACE_PERCENTAGE, TRACE_CACHE_BLK_T0_LEAF_HIT_MISS_ID,
+			       count1, count2);
+	}
+	else if(i == EXT_T_INTERNAL_NODES) {
+	    castle_trace_cache(TRACE_PERCENTAGE, TRACE_CACHE_BLK_INT_HIT_MISS_ID,
+			       count1, count2);
+	}
+	else if(i == EXT_T_LEAF_NODES) {
+	    castle_trace_cache(TRACE_PERCENTAGE, TRACE_CACHE_BLK_LEAF_HIT_MISS_ID,
+			       count1, count2);
+	}
     }
     castle_trace_cache(TRACE_PERCENTAGE, TRACE_CACHE_BLK_GET_HIT_MISS_ID, hits, misses);
 }
@@ -1544,7 +1561,7 @@ static int c_io_next_slave_get(c2_block_t *c2b, c_disk_chk_t *chunks, int k_fact
     /*
      * Read scheduler: select the one with minimum in-flight IOs
      *
-     * At the moment, when prefetching, 
+     * At the moment, when prefetching,
      * 1. Avoid using the first copy, which may be stored on SSDs (don't waste SSD bandwidth).
      * 2. Always go to the same hd-copy in order to exploit sequentiality of prefetches.
      */
@@ -2275,7 +2292,7 @@ static c2_block_t* castle_cache_block_hash_find(c_ext_pos_t cep, uint32_t nr_pag
 void put_c2b_and_demote(c2_block_t *c2b)
 {
     spin_lock_irq(&castle_cache_block_lru_lock);
-    if(!c2b_dirty(c2b)) { 
+    if(!c2b_dirty(c2b)) {
 	list_move(&c2b->clean, &castle_cache_cleanlist);
     }
     spin_unlock_irq(&castle_cache_block_lru_lock);
@@ -2768,8 +2785,8 @@ static void castle_cache_block_init(c2_block_t *c2b,
     vmap_per_cpu_pgs_ptr = (struct page **)&get_cpu_var(castle_cache_vmap_pgs);
     put_cpu_var(castle_cache_vmap_pgs);
     put_cpu_var(castle_cache_vmap_lock);
-    /* we can now sleep or switch cpus even though we hold a reference 
-     * to a per-cpu variable 
+    /* we can now sleep or switch cpus even though we hold a reference
+     * to a per-cpu variable
      */
     mutex_lock(vmap_per_cpu_mutex_ptr);
     c2b_for_each_page_start(page, c2p, dcep, c2b)
