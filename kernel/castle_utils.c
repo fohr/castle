@@ -230,6 +230,34 @@ int castle_counter_simple_reduce(c_val_tup_t *accumulator, c_val_tup_t delta_cvt
 }
 
 /**
+ * Prefetch extents associated with CT.
+ *
+ * NOTE: Caller must hold a reference on CT.
+ */
+void castle_component_tree_prefetch(struct castle_component_tree *ct)
+{
+    c_ext_pos_t cep;
+    int chunks;
+
+    castle_printk(LOG_DEVEL, "Prefetching ct=%p da_id=0x%x\n", ct, ct->da);
+
+    /* Prefetch all extents from beginning. */
+    cep.offset = 0;
+
+    cep.ext_id = ct->internal_ext_free.ext_id;
+    chunks = (atomic64_read(&ct->internal_ext_free.used) / C_CHK_SIZE) + 1;
+    castle_cache_prefetch_pin(cep, chunks, C2_ADV_PREFETCH);
+
+    cep.ext_id = ct->tree_ext_free.ext_id;
+    chunks = (atomic64_read(&ct->tree_ext_free.used) / C_CHK_SIZE) + 1;
+    castle_cache_prefetch_pin(cep, chunks, C2_ADV_PREFETCH);
+
+    cep.ext_id = ct->data_ext_free.ext_id;
+    chunks = (atomic64_read(&ct->data_ext_free.used) / C_CHK_SIZE) + 1;
+    castle_cache_prefetch_pin(cep, chunks, C2_ADV_PREFETCH);
+}
+
+/**
  * Determine whether to ratelimit printks at specified level.
  *
  * @param   level   castle_printk() level

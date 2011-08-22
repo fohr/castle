@@ -41,6 +41,7 @@ int  castle_double_array_get            (c_da_t da_id);
 void castle_double_array_put            (c_da_t da_id);
 int  castle_double_array_destroy        (c_da_t da_id);
 int  castle_double_array_compact        (c_da_t da_id);
+int  castle_double_array_prefetch       (c_da_t da_id);
 void castle_double_arrays_writeback     (void);
 void castle_double_arrays_pre_writeback (void);
 void castle_double_array_merges_fini    (void);

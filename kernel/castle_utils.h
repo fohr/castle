@@ -327,6 +327,8 @@ void        castle_counter_accumulating_reduce(c_val_tup_t *accumulator,
                                                int delta_ancestoral);
 int         castle_counter_simple_reduce(c_val_tup_t *accumulator, c_val_tup_t delta_cvt);
 
+void        castle_component_tree_prefetch(struct castle_component_tree *ct);
+
 inline void list_swap(struct list_head *t1, struct list_head *t2);
 void        list_sort(struct list_head *list,
                       int (*compare)(struct list_head *l1, struct list_head *l2));

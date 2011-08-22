@@ -10329,6 +10329,49 @@ int castle_double_array_compact(c_da_t da_id)
     return 0;
 }
 
+/**
+ * Prefetch extents associated with DA da_id.
+ */
+int castle_double_array_prefetch(c_da_t da_id)
+{
+    struct castle_double_array *da;
+    struct list_head *l;
+    int i;
+
+    if (castle_double_array_get(da_id) != 0)
+    {
+        castle_printk(LOG_USERINFO, "no such DA id=0x%x\n", da_id);
+        return -EINVAL;
+    }
+
+    da = castle_da_hash_get(da_id);
+    if (!da)
+    {
+        castle_printk(LOG_USERINFO, "No such DA id=0x%x\n", da_id);
+        return -EINVAL;
+    }
+
+    castle_printk(LOG_DEVEL, "Prefetching CTs for DA=%p id=0x%d\n", da, da_id);
+
+    /* Prefetch ROCTs. */
+    for (i = 2; i < MAX_DA_LEVEL; i++)
+    {
+        list_for_each(l, &da->levels[i].trees)
+        {
+            struct castle_component_tree *ct;
+
+            ct = list_entry(l, struct castle_component_tree, da_list);
+            castle_ct_get(ct, 0, NULL);
+            castle_component_tree_prefetch(ct);
+            castle_ct_put(ct, 0, NULL);
+        }
+    }
+
+    castle_da_put(da);
+
+    return 0;
+}
+
 int castle_double_array_destroy(c_da_t da_id)
 {
     struct castle_double_array *da;

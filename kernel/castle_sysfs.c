@@ -14,9 +14,15 @@
 #include "castle_utils.h"
 #include "castle_btree.h"
 
+static int castle_devel = 0;            /* Whether to show devel syfs directory.    */
+static int castle_devel_enabled = 0;    /* Required for safe shutdown.              */
+module_param(castle_devel, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
+MODULE_PARM_DESC(castle_devel, "Whether to enable Castle FS devel sysfs directory.");
+
 static wait_queue_head_t castle_sysfs_kobj_release_wq;
 static struct kobject    double_arrays_kobj;
 static struct kobject    filesystem_kobj;
+static struct kobject    devel_kobj;
 struct castle_sysfs_versions {
     struct kobject kobj;
     struct list_head version_list;
@@ -468,6 +474,57 @@ static ssize_t filesystem_version_show(struct kobject *kobj,
     return sprintf(buf, "%u\n", fs_version);
 }
 
+/* Empty _show() function. */
+static ssize_t devel_null(struct kobject *kobj,
+                          struct attribute *attr,
+                          char *buf)
+{
+    return sprintf(buf, "0\n");
+}
+
+/**
+ * Accept collection ID to prefetch.
+ */
+static ssize_t devel_collection_prefetch_store(struct kobject *kobj,
+                                               struct attribute *attr,
+                                               const char *buf,
+                                               size_t count)
+{
+    struct castle_attachment *attachment;
+    c_collection_id_t col_id;
+    c_ver_t version;
+    c_da_t da_id;
+    char *endp;
+
+    /* Get collection ID. */
+    col_id = simple_strtoul(buf, &endp, 0);
+    if ((endp + 1) < (buf + count))
+        return -EINVAL;
+
+    /* Get version ID. */
+    attachment = castle_attachment_get(col_id, READ);
+    if (attachment == NULL)
+    {
+        castle_printk(LOG_WARN, "Collection not found id=0x%x\n", col_id);
+        return count;
+    }
+    version = attachment->version;
+    castle_attachment_put(attachment);
+
+    /* Get DA ID. */
+    da_id = castle_version_da_id_get(version);
+    if (da_id == INVAL_DA)
+    {
+        castle_printk(LOG_WARN, "Invalid da ID for collection id=0x%x\n", col_id);
+        return count;
+    }
+
+    /* Prefetch extents. */
+    castle_double_array_prefetch(da_id);
+
+    return count;
+}
+
 /* Display the number of blocks that have been remapped. */
 extern long castle_extents_chunks_remapped;
 static ssize_t slaves_rebuild_chunks_remapped_show(struct kobject *kobj,
@@ -865,6 +922,20 @@ static struct kobj_type castle_filesystem_ktype = {
     .default_attrs  = castle_filesystem_attrs,
 };
 
+/* Definition of devel sysfs directory attributes */
+static struct castle_sysfs_entry devel_collection_prefetch =
+__ATTR(devel_collection_prefetch, S_IRUGO|S_IWUSR, devel_null, devel_collection_prefetch_store);
+
+static struct attribute *castle_devel_attrs[] = {
+    &devel_collection_prefetch.attr,
+    NULL,
+};
+
+static struct kobj_type castle_devel_ktype = {
+    .sysfs_ops      = &castle_sysfs_ops,
+    .default_attrs  = castle_devel_attrs,
+};
+
 /* Definition of each device sysfs directory attributes */
 static struct castle_sysfs_entry device_version =
 __ATTR(version, S_IRUGO|S_IWUSR, device_version_show, NULL);
@@ -1045,9 +1116,23 @@ int castle_sysfs_init(void)
                            "%s", "filesystem");
     if(ret < 0) goto out7;
 
+    /* Only enable if started with castle_devel parameter. */
+    if (castle_devel)
+    {
+        castle_devel_enabled = 1;
+        memset(&devel_kobj, 0, sizeof(struct kobject));
+        ret = kobject_tree_add(&devel_kobj,
+                               &castle.kobj,
+                               &castle_devel_ktype,
+                               "%s", "devel");
+        if (ret < 0) goto out8;
+    }
+
     return 0;
 
-    kobject_remove(&filesystem_kobj); /* Unreachable */
+    kobject_remove(&devel_kobj); /* Unreachable */
+out8:
+    kobject_remove(&filesystem_kobj);
 out7:
     kobject_remove(&double_arrays_kobj);
 out6:
@@ -1070,6 +1155,11 @@ void castle_sysfs_fini(void)
     set_bit(CASTLE_SYSFS_FINISHED, &castle_sysfs_flags);
     mb();
 
+    if (castle_devel_enabled)
+    {
+        castle_devel_enabled = 0;
+        kobject_remove(&devel_kobj);
+    }
     kobject_remove(&filesystem_kobj);
     kobject_remove(&double_arrays_kobj);
     kobject_remove(&castle_attachments.collections_kobj);
@@ -1078,5 +1168,3 @@ void castle_sysfs_fini(void)
     castle_sysfs_versions_fini();
     kobject_remove(&castle.kobj);
 }
-
-

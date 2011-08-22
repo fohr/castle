@@ -4167,7 +4167,7 @@ static void c2_pref_c2b_destroy(c2_block_t *c2b)
  *
  * @also castle_cache_prefetch_unpin()
  */
-static void castle_cache_prefetch_pin(c_ext_pos_t cep, int chunks, c2_advise_t advise)
+void castle_cache_prefetch_pin(c_ext_pos_t cep, int chunks, c2_advise_t advise)
 {
     c2_block_t *c2b;
 
