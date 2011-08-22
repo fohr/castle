@@ -475,7 +475,7 @@ static ssize_t filesystem_version_show(struct kobject *kobj,
 }
 
 /* Empty _show() function. */
-static ssize_t devel_null(struct kobject *kobj,
+static USED ssize_t devel_null(struct kobject *kobj,
                           struct attribute *attr,
                           char *buf)
 {
@@ -506,7 +506,7 @@ static ssize_t devel_collection_prefetch_store(struct kobject *kobj,
     if (attachment == NULL)
     {
         castle_printk(LOG_WARN, "Collection not found id=0x%x\n", col_id);
-        return count;
+        return -EINVAL;
     }
     version = attachment->version;
     castle_attachment_put(attachment);
@@ -516,7 +516,7 @@ static ssize_t devel_collection_prefetch_store(struct kobject *kobj,
     if (da_id == INVAL_DA)
     {
         castle_printk(LOG_WARN, "Invalid da ID for collection id=0x%x\n", col_id);
-        return count;
+        return -EINVAL;
     }
 
     /* Prefetch extents. */

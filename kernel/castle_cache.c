@@ -4617,10 +4617,18 @@ int castle_cache_advise_clear(c_ext_pos_t cep, c2_advise_t advise, int chunks,
 /**
  * Wait for all outstanding prefetch IOs to complete.
  */
-void castle_cache_prefetch_fini(void)
+void castle_cache_prefetches_wait(void)
 {
     wait_event(castle_cache_prefetch_wq,
             atomic_read(&castle_cache_prefetch_in_flight) == 0);
+}
+
+/**
+ * Wait for all outstanding prefetch IOs to complete.
+ */
+static void castle_cache_prefetch_fini(void)
+{
+    castle_cache_prefetches_wait();
 }
 
 #ifdef CASTLE_DEBUG

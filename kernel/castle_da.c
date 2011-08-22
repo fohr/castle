@@ -10331,6 +10331,8 @@ int castle_double_array_compact(c_da_t da_id)
 
 /**
  * Prefetch extents associated with DA da_id.
+ *
+ * Blocks until all prefetch IO completes.
  */
 int castle_double_array_prefetch(c_da_t da_id)
 {

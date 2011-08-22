@@ -155,6 +155,7 @@ void castle_cache_extent_flush(c_ext_id_t ext_id,
                                uint64_t size,
                                unsigned int ratelimit);
 void castle_cache_extent_evict(c_ext_dirtytree_t *dirtytree, c_chk_cnt_t start, c_chk_cnt_t count);
+void castle_cache_prefetches_wait(void);
 
 /**********************************************************************************************
  * Misc.

@@ -255,6 +255,9 @@ void castle_component_tree_prefetch(struct castle_component_tree *ct)
     cep.ext_id = ct->data_ext_free.ext_id;
     chunks = (atomic64_read(&ct->data_ext_free.used) / C_CHK_SIZE) + 1;
     castle_cache_prefetch_pin(cep, chunks, C2_ADV_PREFETCH);
+
+    /* Waits for all outstanding prefetch IOs to complete. */
+    castle_cache_prefetches_wait();
 }
 
 /**
