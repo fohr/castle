@@ -2675,7 +2675,6 @@ void castle_extent_put(c_ext_mask_id_t mask_id)
     static USED int count = 0;
     unsigned long flags;
 
-    /* Write lock is required to not race with reference gets. */
     read_lock_irqsave(&castle_extents_hash_lock, flags);
 
     /* Call low level put function. */
@@ -2696,7 +2695,6 @@ void castle_extent_put_all(c_ext_mask_id_t mask_id)
     c_ext_mask_t *mask, *oldest_mask;
     struct list_head *pos;
 
-    /* Write lock is required to not race with reference gets. */
     read_lock_irqsave(&castle_extents_hash_lock, flags);
 
     mask = castle_extent_mask_hash_get(mask_id);
@@ -2733,6 +2731,34 @@ static c_ext_mask_id_t castle_extent_get_ptr(c_ext_id_t ext_id, c_ext_t **ext)
     BUG_ON(*ext == NULL);
 
     return mask_id;
+}
+
+static void castle_extent_mask_read(c_ext_mask_id_t mask_id, c_chk_cnt_t *start, c_chk_cnt_t *end)
+{
+    c_ext_mask_t *mask;
+
+    read_lock_irq(&castle_extents_hash_lock);
+
+    mask = castle_extent_mask_hash_get(mask_id);
+
+    *start = mask->range.start;
+    *end   = mask->range.end;
+
+    read_unlock_irq(&castle_extents_hash_lock);
+}
+
+static void castle_extent_latest_mask_read(c_ext_t *ext, c_chk_cnt_t *start, c_chk_cnt_t *end)
+{
+    c_ext_mask_t *mask;
+
+    read_lock_irq(&castle_extents_hash_lock);
+
+    mask = GET_LATEST_MASK(ext);
+
+    *start = mask->range.start;
+    *end   = mask->range.end;
+
+    read_unlock_irq(&castle_extents_hash_lock);
 }
 
 /**
@@ -3496,6 +3522,7 @@ static int castle_extent_remap(c_ext_t *ext)
     int                 chunkno, idx, remap_idx, no_remap_idx, i;
     struct castle_slave *cs;
     int ret=0;
+    c_chk_cnt_t ext_start, ext_end;
 
     debug("\nRemapping extent %llu size: %u, from seqno: %u to seqno: %u\n",
             ext->ext_id, ext->size, ext->curr_rebuild_seqno, rebuild_to_seqno);
@@ -3538,9 +3565,16 @@ static int castle_extent_remap(c_ext_t *ext)
      */
     ext->use_shadow_map = 1;
 
+    /* Get extent current range. */
+    castle_extent_mask_read(ext->rebuild_mask_id, &ext_start, &ext_end);
+
+    atomic_set(&current_rebuild_chunk, ext_start);
+
     /* Keeps track of which chunk we are remapping. */
     /* Scan the shadow map, chunk by chunk, remapping slaves as necessary. */
-    for (chunkno = 0; chunkno<ext->size; chunkno++)
+    /* Note: Remap only for the mask that we got reference on. Masks after that, shouldn't have
+     * any chunks from lost slave. Old masks might have chunks for failed slave, but who cares!! */
+    for (chunkno = ext_start; chunkno<ext_end; chunkno++)
     {
         /*
          * Populate the remap chunks array that will be used to write out remapped data.
@@ -3656,7 +3690,10 @@ retry:
         /* Keep count of the chunks that have actually been remapped. */
         castle_extents_chunks_remapped += remap_idx;
 
-        atomic_inc(&current_rebuild_chunk);
+        BUG_ON(atomic_read(&current_rebuild_chunk) >= ext_end);
+
+        if (atomic_inc_return(&current_rebuild_chunk) == ext_end)
+            atomic_set(&current_rebuild_chunk, ext->size);
 
         /*
          * Allow for shutdown in mid-extent (between chunks), because extents may be large and
@@ -4118,8 +4155,11 @@ static int castle_extent_scan_uuid(c_ext_t *ext, uint32_t uuid)
 {
     int chunkno, nr_refs=0, idx=0;
     c_disk_chk_t chunks[ext->k_factor];
+    c_chk_cnt_t ext_start, ext_end;
 
-    for (chunkno = 0; chunkno<ext->size; chunkno++)
+    castle_extent_latest_mask_read(ext, &ext_start, &ext_end);
+
+    for (chunkno = ext_start; chunkno<ext_end; chunkno++)
     {
         __castle_extent_map_get(ext, chunkno, chunks);
         for (idx=0; idx<ext->k_factor; idx++)
