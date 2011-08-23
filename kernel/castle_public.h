@@ -7,7 +7,7 @@
 #include <sys/time.h>
 #endif
 
-#define CASTLE_PROTOCOL_VERSION 18
+#define CASTLE_PROTOCOL_VERSION 19
 
 #define PACKED               __attribute__((packed))
 
@@ -116,6 +116,16 @@ typedef enum {
     TRACE_CACHE_BLK_GET_MISSES_ID,        /**< Block misses within the cache                      */
     TRACE_CACHE_BLK_GET_HITS_PCT_ID,      /**< % of block hits within the cache                   */
     TRACE_CACHE_BLK_GET_MISSES_PCT_ID,    /**< % of block misses within the cache                 */
+    TRACE_CACHE_BLK_MERGE_HIT_MISS_ID,    /**< Hits, misses  of merges within the cache           */
+    TRACE_CACHE_BLK_MERGE_HITS_ID,        /**< Merge hits within the cache                        */
+    TRACE_CACHE_BLK_MERGE_MISSES_ID,      /**< Merge misses within the cache                      */
+    TRACE_CACHE_BLK_MERGE_HITS_PCT_ID,    /**< % of merge hits within the cache                   */
+    TRACE_CACHE_BLK_MERGE_MISSES_PCT_ID,  /**< % of merge misses within the cache                 */
+    TRACE_CACHE_BLK_NON_MERGE_HIT_MISS_ID,/**< Hits, misses  of merges within the cache           */
+    TRACE_CACHE_BLK_NON_MERGE_HITS_ID,    /**< Merge hits within the cache                        */
+    TRACE_CACHE_BLK_NON_MERGE_MISSES_ID,  /**< Merge misses within the cache                      */
+    TRACE_CACHE_BLK_NON_MERGE_HITS_PCT_ID,/**< % of merge hits within the cache                   */
+    TRACE_CACHE_BLK_NON_MERGE_MISSES_PCT_ID,/**< % of merge misses within the cache               */
 } c_trc_cache_var_t;
 
 /**

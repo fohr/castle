@@ -311,6 +311,13 @@ typedef struct castle_cache_extent_stats {
     atomic_t        misses;                 /**< c2b_get() where !c2b_uptodate(c2b)               */
     atomic_t        ios_cnt;                /**< Number of submit_c2b_io() calls                  */
 } c2_extent_stats_t;
+
+/* Merge related stats */
+static atomic_t merge_misses;
+static atomic_t merge_hits;
+static atomic_t non_merge_misses;
+static atomic_t non_merge_hits;
+
 static c2_extent_stats_t       extent_stats[EXT_T_INVALID];
 
 static atomic_t                c2_pref_active_window_size;  /**< Number of chunk-sized c2bs that are
@@ -461,6 +468,18 @@ void castle_cache_stats_print(int verbose)
 	}
     }
     castle_trace_cache(TRACE_PERCENTAGE, TRACE_CACHE_BLK_GET_HIT_MISS_ID, hits, misses);
+    count1 = atomic_read(&merge_hits);
+    count2 = atomic_read(&merge_misses);
+    atomic_sub(count1, &merge_hits);
+    atomic_sub(count2, &merge_misses);
+    castle_trace_cache(TRACE_PERCENTAGE, TRACE_CACHE_BLK_MERGE_HIT_MISS_ID, count1,
+		       count2);
+    count1 = atomic_read(&non_merge_hits);
+    count2 = atomic_read(&non_merge_misses);
+    atomic_sub(count1, &non_merge_hits);
+    atomic_sub(count2, &non_merge_misses);
+    castle_trace_cache(TRACE_PERCENTAGE, TRACE_CACHE_BLK_NON_MERGE_HIT_MISS_ID, count1,
+		       count2);
 }
 
 EXPORT_SYMBOL(castle_cache_stats_print);
@@ -2312,14 +2331,14 @@ void put_c2b_and_demote(c2_block_t *c2b)
  * @return NULL if no matches were found
  */
 static inline c2_block_t* _castle_cache_block_hash_get(c_ext_pos_t cep,
-                               uint32_t nr_pages,
-                               int promote)
+						       uint32_t nr_pages,
+						       int promote)
 {
     c2_block_t *c2b = NULL;
 
     /* Hold the hash lock. */
     read_lock(&castle_cache_block_hash_lock);
-
+    
     /* Try and get the matching block from the hash. */
     c2b = castle_cache_block_hash_find(cep, nr_pages);
     if (c2b)
@@ -3212,7 +3231,9 @@ static inline void castle_cache_page_freelist_grow(int nr_pages)
     castle_cache_freelists_grow(0, nr_pages);
 }
 
-c2_block_t* _castle_cache_block_get(c_ext_pos_t cep, int nr_pages, int transient)
+static c2_block_t* _castle_cache_block_get(c_ext_pos_t cep, int nr_pages, 
+					   int transient, 
+					   int merge_originated)
 {
     int grown_block_freelist = 0, grown_page_freelist = 0;
     c_ext_type_t ext_type;
@@ -3318,10 +3339,24 @@ out:
     ext_type = castle_extent_type_get(c2b->cep.ext_id);
     if (ext_type != EXT_T_INVALID)
     {
-        if (c2b_uptodate(c2b))
+        if (c2b_uptodate(c2b)) {
             atomic_add(c2b->nr_pages, &extent_stats[ext_type].hits);
-        else
+	    if(merge_originated) {
+		atomic_add(c2b->nr_pages, &merge_hits);
+	    }
+	    else {
+		atomic_add(c2b->nr_pages, &non_merge_hits);
+	    }
+	}
+        else {
             atomic_add(c2b->nr_pages, &extent_stats[ext_type].misses);
+	    if(merge_originated) {
+		atomic_add(c2b->nr_pages, &merge_misses);
+	    }
+	    else {
+		atomic_add(c2b->nr_pages, &non_merge_misses);
+	    }
+	}
     }
 
     return c2b;
@@ -3334,7 +3369,19 @@ out:
  */
 c2_block_t* castle_cache_block_get(c_ext_pos_t cep, int nr_pages)
 {
-    return _castle_cache_block_get(cep, nr_pages, 0);
+    return _castle_cache_block_get(cep, nr_pages, 0, 0);
+}
+
+
+/**
+ * Get block starting at cep, size nr_pages, 
+ * especially mark this as from a merge.
+ *
+ * @return  Block matching cep, nr_pages.
+ */
+c2_block_t* castle_cache_block_get_for_merge(c_ext_pos_t cep, int nr_pages)
+{
+    return _castle_cache_block_get(cep, nr_pages, 0, 1);
 }
 
 /**
@@ -6528,6 +6575,10 @@ int castle_cache_init(void)
     atomic_set(&castle_cache_block_victims, 0);
     atomic_set(&castle_cache_softpin_block_victims, 0);
     atomic_set(&c2_pref_active_window_size, 0);
+    atomic_set(&merge_misses, 0);
+    atomic_set(&merge_hits, 0);
+    atomic_set(&non_merge_misses, 0);
+    atomic_set(&non_merge_hits, 0);
     c2_pref_total_window_size = 0;
     castle_cache_allow_hardpinning = castle_cache_size > CASTLE_CACHE_MIN_HARDPIN_SIZE << (20 - PAGE_SHIFT);
     if (!castle_cache_allow_hardpinning)
