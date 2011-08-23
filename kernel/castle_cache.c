@@ -5261,7 +5261,9 @@ static int castle_cache_flush(void *unused)
                 continue;
             }
             data->in_flight = &in_flight;
-            atomic_set(&data->ext_in_flight, 0);
+            /* Give an initial reference, to handle end_io(c2b) being called before issuing all
+             * submit_c2b(). */
+            atomic_set(&data->ext_in_flight, 1);
 
             /* Get a reference on extent with all outstanding masks. */
             data->mask_id = castle_extent_get_all(dirtytree->ext_id);
@@ -5289,8 +5291,9 @@ static int castle_cache_flush(void *unused)
                                         &flushed,                       /* flushed_p    */
                                         0);                             /* waitlock     */
 
-            /* If nothing to flush, release extent refernce and buffer. */
-            if (!flushed)
+            /* If per extent inflight count reached 0, time to release the reference. All
+             * io's completed or failed, or nothing scheudled for flush. */
+            if (!atomic_dec_return(&data->ext_in_flight))
             {
                 castle_extent_put_all(data->mask_id);
                 kmem_cache_free(castle_flush_cache, data);
