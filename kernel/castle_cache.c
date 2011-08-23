@@ -5271,8 +5271,6 @@ static int castle_cache_flush(void *unused)
              * link is gone. */
             if (MASK_ID_INVAL(data->mask_id))
             {
-                castle_printk(LOG_DEVEL, "Extent %llu is dead, no need to flush\n",
-                                          dirtytree->ext_id);
                 castle_extent_dirtytree_put(dirtytree);
                 kmem_cache_free(castle_flush_cache, data);
                 continue;

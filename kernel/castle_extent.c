@@ -280,6 +280,8 @@ static c_chk_seq_t castle_extent_part_schk_get(c_ext_t *ext, struct castle_slave
     c_chk_seq_t chk_seq;
     c_part_schk_t *part_schk;
 
+    BUG_ON(!castle_extent_in_transaction());
+
     if (!(part_schk = __castle_extent_part_schk_get(ext, slave)))
         return INVAL_CHK_SEQ;
 
@@ -297,6 +299,57 @@ static c_chk_seq_t castle_extent_part_schk_get(c_ext_t *ext, struct castle_slave
     return chk_seq;
 }
 
+static int castle_extent_part_schks_merge(c_part_schk_t  *part_schk,
+                                          uint32_t        slave_id,
+                                          c_chk_t         first_chk,
+                                          c_chk_cnt_t     count)
+{
+    /* If the super chuink belongs to different slave, skip. */
+    if (slave_id != part_schk->slave_id)
+        return -1;
+
+    /* If its a different superchunk, skip. */
+    if (SUPER_CHUNK(first_chk) != SUPER_CHUNK(part_schk->first_chk))
+        return -1;
+
+    /* Check if it is appendable at end. */
+    if (first_chk == (part_schk->first_chk + part_schk->count))
+    {
+        part_schk->count += count;
+        return 0;
+    }
+
+    /* Check if it is appendable at start. */
+    if (part_schk->first_chk == (first_chk + count))
+    {
+        part_schk->first_chk = first_chk;
+        part_schk->count += count;
+        return 0;
+    }
+
+    return -1;
+}
+
+static void castle_extent_part_schk_free(c_part_schk_t *part_schk)
+{
+    BUG_ON(part_schk->count != CHKS_PER_SLOT);
+
+    /* First chunk should be aligned to superchunk. */
+    BUG_ON(part_schk->first_chk % CHKS_PER_SLOT);
+
+    debug_schks("Freeing superchunk %u\n", part_schk->first_chk);
+
+    /* Free super chunk. */
+    castle_freespace_slave_superchunk_free(castle_slave_find_by_id(part_schk->slave_id),
+                                           SUPER_CHUNK_STRUCT(part_schk->first_chk));
+
+    /* Delete from list. */
+    list_del(&part_schk->list);
+
+    /* Free space. */
+    kmem_cache_free(castle_partial_schks_cache, part_schk);
+}
+
 static void castle_extent_part_schk_save(c_ext_t       *ext,
                                          uint32_t       slave_id,
                                          c_chk_t        first_chk,
@@ -305,7 +358,14 @@ static void castle_extent_part_schk_save(c_ext_t       *ext,
     struct list_head *pos;
     c_part_schk_t *part_schk = NULL;
 
+    /* Never save 0 chunks. */
     BUG_ON(count == 0);
+
+    /* Should be in transaction. */
+    BUG_ON(!castle_extent_in_transaction());
+
+    /* Slave ID should be valid. */
+    BUG_ON(castle_slave_find_by_id(slave_id) == NULL);
 
     /* Don't try to save more than one super chunk at a time. */
     BUG_ON(SUPER_CHUNK(first_chk) != SUPER_CHUNK(first_chk + count - 1));
@@ -318,28 +378,8 @@ static void castle_extent_part_schk_save(c_ext_t       *ext,
         /* Shouldn't have any empty partial super chunks in the list. */
         BUG_ON(part_schk->count == 0);
 
-        /* If the super chuink belongs to different slave, skip. */
-        if (slave_id != part_schk->slave_id)
-            continue;
-
-        /* If its a different superchunk, skip. */
-        if (SUPER_CHUNK(first_chk) != SUPER_CHUNK(part_schk->first_chk))
-            continue;
-
-        /* Check if it is appendable at end. */
-        if (first_chk == (part_schk->first_chk + part_schk->count))
-        {
-            part_schk->count += count;
+        if (castle_extent_part_schks_merge(part_schk, slave_id, first_chk, count) == 0)
             break;
-        }
-
-        /* Check if it is appendable at start. */
-        if (part_schk->first_chk == (first_chk + count))
-        {
-            part_schk->first_chk = first_chk;
-            part_schk->count += count;
-            break;
-        }
     }
 
     /* Check if we stopped in between. */
@@ -351,22 +391,7 @@ static void castle_extent_part_schk_save(c_ext_t       *ext,
 
         /* If the superchunk is full, free it. */
         if (part_schk->count == CHKS_PER_SLOT)
-        {
-            /* First chunk should be aligned to superchunk. */
-            BUG_ON(part_schk->first_chk % CHKS_PER_SLOT);
-
-            debug_schks("Freeing superchunk %u\n", part_schk->first_chk);
-
-            /* Free super chunk. */
-            castle_freespace_slave_superchunk_free(castle_slave_find_by_id(slave_id),
-                                                   SUPER_CHUNK_STRUCT(part_schk->first_chk));
-
-            /* Delete from list. */
-            list_del(&part_schk->list);
-
-            /* Free space. */
-            kmem_cache_free(castle_partial_schks_cache, part_schk);
-        }
+            castle_extent_part_schk_free(part_schk);
 
         return;
     }
@@ -390,34 +415,48 @@ static void castle_extent_part_schks_converge(c_ext_t *ext)
     c_part_schk_t *part_schk, *part_schk1;
     LIST_HEAD(free_list);
 
-    list_for_each(pos, &ext->schks_list)
+    BUG_ON(!castle_extent_in_transaction());
+
+    list_for_each_safe(pos, tmp, &ext->schks_list)
     {
+        struct castle_slave *cs;
+
         part_schk = list_entry(pos, c_part_schk_t, list);
 
-        list_for_each_safe(pos1, tmp, &ext->schks_list)
+        cs = castle_slave_find_by_id(part_schk->slave_id);
+        if (test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags))
+        {
+            list_del(pos);
+            /* Free space. */
+            kmem_cache_free(castle_partial_schks_cache, part_schk);
+
+            continue;
+        }
+
+        /* Check if we can merge this superchunk. */
+        list_for_each(pos1, &ext->schks_list)
         {
             part_schk1 = list_entry(pos1, c_part_schk_t, list);
 
-            if (part_schk->first_chk == (part_schk1->first_chk + part_schk1->count) ||
-                part_schk1->first_chk == (part_schk->first_chk + part_schk->count))
+            if (castle_extent_part_schks_merge(part_schk1, part_schk->slave_id,
+                                               part_schk->first_chk, part_schk->count) == 0)
             {
-                list_del(pos1);
-                list_add(pos1, &free_list);
+                list_del(pos);
+                kmem_cache_free(castle_partial_schks_cache, part_schk);
 
-                continue;
+                break;
             }
         }
     }
 
-    list_for_each_safe(pos, tmp, &free_list)
+    /* Free superchunks, that are full. */
+    list_for_each_safe(pos, tmp, &ext->schks_list)
     {
         part_schk = list_entry(pos, c_part_schk_t, list);
 
-        castle_extent_part_schk_save(ext, part_schk->slave_id, part_schk->first_chk, part_schk->count);
-        list_del(pos);
-
-        /* Free space. */
-        kmem_cache_free(castle_partial_schks_cache, part_schk);
+        /* If the superchunk is full, free it. */
+        if (part_schk->count == CHKS_PER_SLOT)
+            castle_extent_part_schk_free(part_schk);
     }
 }
 
@@ -997,7 +1036,7 @@ int castle_extents_create(void)
     if ((ret = castle_extent_mstore_ext_create()))
         goto out;
 
-    extent_init_done = 1;
+    extent_init_done = 2;
 
 out:
     castle_extent_transaction_end();
@@ -1256,6 +1295,8 @@ int castle_extents_read_complete(void)
     INJECT_FAULT;
 
     castle_extent_transaction_end();
+
+    extent_init_done = 2;
 
     return 0;
 
@@ -3059,8 +3100,8 @@ static int castle_extent_rebuild_list_add(c_ext_t *ext, void *unused)
  * of which chunk to use next.
  */
 typedef struct live_slave {
-    c_disk_chk_t    chunks[CHKS_PER_SLOT];  /* Chunk mappings (slave, offset) for slave. */
-    int             next_chk;               /* The next chunk to use. */
+    c_chk_t         first_chk;
+    c_chk_cnt_t     count;
     uint32_t        uuid;                   /* Uuid for slave. */
     uint32_t        flags;                  /* State flags for slave. */
 } live_slave_t;
@@ -3161,22 +3202,36 @@ static void castle_extents_remap_state_fini(void)
  * @return EXIT_SUCCESS:       Success.
  * @return -ENOSPC:            Slave is out of space.
  */
-static int castle_extent_remap_superchunks_alloc(int slave_idx)
+static int castle_extent_remap_superchunks_alloc(c_ext_t *ext, int slave_idx)
 {
-    c_disk_chk_t        *chunkp = remap_state.live_slaves[slave_idx]->chunks;
-    int                 chunk;
     c_chk_seq_t         chk_seq;
-    c_chk_t             offset;
     struct castle_slave *cs;
 
     cs = castle_slave_find_by_uuid(remap_state.live_slaves[slave_idx]->uuid);
     BUG_ON(!cs);
     BUG_ON(test_bit(CASTLE_SLAVE_GHOST_BIT, &cs->flags));
 
+    BUG_ON(remap_state.live_slaves[slave_idx]->count);
+
+    castle_extent_transaction_start();
+
+    /* Get partial superchunks from exntent, if any available. */
+    /* Note: Rebuild can happen after shrink and truncate, so no assumptions can be made
+     * on chunk sequence it can start some where in the middle and end in the middle. */
+    chk_seq = castle_extent_part_schk_get(ext, cs);
+    if (!CHK_SEQ_INVAL(chk_seq))
+    {
+        castle_extent_transaction_end();
+        goto fill_chks;
+    }
+
     /*
      * Allocate a superchunk. We do not want to pre-reserve space, so use a NULL token.
      */
     chk_seq = castle_freespace_slave_superchunk_alloc(cs, 0, NULL);
+
+    castle_extent_transaction_end();
+
     if (CHK_SEQ_INVAL(chk_seq))
     {
         /*
@@ -3206,12 +3261,11 @@ static int castle_extent_remap_superchunks_alloc(int slave_idx)
     /* Chunk sequence must represent a single superchunk. */
     BUG_ON(chk_seq.count != CHKS_PER_SLOT);
 
-    /* Fill in the chunks for this slave. */
-    for (chunk=0, offset=chk_seq.first_chk; chunk<chk_seq.count; chunk++, offset++)
-    {
-        (chunkp+chunk)->slave_id = remap_state.live_slaves[slave_idx]->uuid;
-        (chunkp+chunk)->offset = offset;
-    }
+fill_chks:
+
+    remap_state.live_slaves[slave_idx]->first_chk = chk_seq.first_chk;
+    remap_state.live_slaves[slave_idx]->count = chk_seq.count;
+
     return EXIT_SUCCESS;
 }
 
@@ -3308,9 +3362,9 @@ retry:
  *
  * @return          The disk chunk to use.
  */
-static c_disk_chk_t *castle_extent_remap_disk_chunk_alloc(c_ext_t *ext, int chunkno, int want_ssd)
+static c_disk_chk_t castle_extent_remap_disk_chunk_alloc(c_ext_t *ext, int chunkno, int want_ssd)
 {
-    c_disk_chk_t        *disk_chk;
+    c_disk_chk_t        disk_chk = INVAL_DISK_CHK;
     int                 slave_idx;
     struct castle_slave *target_slave;
     int                 ret;
@@ -3333,10 +3387,10 @@ retry:
         goto retry;
     }
 
-    if (!remap_state.live_slaves[slave_idx]->next_chk)
+    if (!remap_state.live_slaves[slave_idx]->count)
     {
         /* We've run out of chunks on this slave, allocate another set. */
-        ret = castle_extent_remap_superchunks_alloc(slave_idx);
+        ret = castle_extent_remap_superchunks_alloc(ext, slave_idx);
         if (ret == -EAGAIN)
         {
             /*
@@ -3360,21 +3414,18 @@ retry:
         }
 
         if(ret)
-            return NULL;
+            return INVAL_DISK_CHK;
     }
 
-    disk_chk =
-        &remap_state.live_slaves[slave_idx]->chunks[remap_state.live_slaves[slave_idx]->next_chk];
+    BUG_ON(remap_state.live_slaves[slave_idx]->count == 0);
 
-    BUG_ON(DISK_CHK_INVAL(*disk_chk));
+    disk_chk.slave_id   = remap_state.live_slaves[slave_idx]->uuid;
+    disk_chk.offset     = remap_state.live_slaves[slave_idx]->first_chk;
 
-    /*
-     * Calculate the next disk chunk to use in the remap_state chunks array. When this wraps to 0
-     * this is a trigger to allocate another set of superchunks and repopulate the array (see above)
-     * if a new disk chunk request is made.
-     */
-    remap_state.live_slaves[slave_idx]->next_chk =
-                        ++remap_state.live_slaves[slave_idx]->next_chk % CHKS_PER_SLOT;
+    remap_state.live_slaves[slave_idx]->first_chk++;
+    remap_state.live_slaves[slave_idx]->count--;
+
+    BUG_ON(DISK_CHK_INVAL(disk_chk));
 
     return disk_chk;
 }
@@ -3403,6 +3454,32 @@ static struct castle_slave *slave_needs_remapping(uint32_t slave_id)
 static c_ext_id_t current_rebuild_extent = 0, rebuild_extent_last = 0;
 static int rebuild_extent_chunk = 0;
 static atomic_t current_rebuild_chunk = ATOMIC(0);
+
+/* Save all the left-over superchunks back to extent again. */
+static void castle_extent_remap_space_cleanup(c_ext_t *ext)
+{
+    int i;
+
+    castle_extent_transaction_start();
+
+    for (i=0; i<remap_state.nr_live_slaves; i++)
+    {
+        if (remap_state.live_slaves[i] && remap_state.live_slaves[i]->count)
+        {
+            struct castle_slave *cs = castle_slave_find_by_uuid(remap_state.live_slaves[i]->uuid);
+
+            castle_extent_part_schk_save(ext, cs->id,
+                                         remap_state.live_slaves[i]->first_chk,
+                                         remap_state.live_slaves[i]->count);
+
+            remap_state.live_slaves[i]->count = 0;
+        }
+    }
+
+    castle_extent_part_schks_converge(ext);
+
+    castle_extent_transaction_end();
+}
 
 /*
  * Scan an extent, remapping disk chunks where necessary.
@@ -3452,7 +3529,7 @@ static int castle_extent_remap(c_ext_t *ext)
      */
     for (i=0; i<remap_state.nr_live_slaves; i++)
         if (remap_state.live_slaves[i])
-            remap_state.live_slaves[i]->next_chk = 0;
+            BUG_ON(remap_state.live_slaves[i]->count);
 
     /*
      * From this point, we will start using the shadow map to remap the extent. All write I/O must
@@ -3477,7 +3554,7 @@ static int castle_extent_remap(c_ext_t *ext)
 retry:
         for (idx=0, remap_idx=0, no_remap_idx=k_factor-1; idx<k_factor; idx++)
         {
-            c_disk_chk_t *disk_chk;
+            c_disk_chk_t disk_chk;
 
             /* Chunks that don't need remapping go to the end of the remap_chunks array. */
             if (!(cs = slave_needs_remapping(ext->shadow_map[(chunkno*k_factor)+idx].slave_id)))
@@ -3492,10 +3569,14 @@ retry:
             /* This slave needs remapping. Get a replacement disk chunk. */
             disk_chk = castle_extent_remap_disk_chunk_alloc(ext, chunkno,
                                             cs->cs_superblock.pub.flags & CASTLE_SLAVE_SSD);
-            if (!disk_chk)
+            if (DISK_CHK_INVAL(disk_chk))
             {
                 /* Failed to allocate a disk chunk (slave out of space is most likely cause). */
                 castle_printk(LOG_WARN, "Rebuild could not allocate a disk chunk.\n");
+
+                /* Cleanup extent space. */
+                castle_extent_remap_space_cleanup(ext);
+
                 return -ENOSPC;
             }
             /*
@@ -3503,13 +3584,13 @@ retry:
              * a chunk in mid-remap.
              */
             spin_lock(&ext->shadow_map_lock);
-            ext->shadow_map[(chunkno*k_factor)+idx].slave_id = disk_chk->slave_id;
-            ext->shadow_map[(chunkno*k_factor)+idx].offset = disk_chk->offset;
+            ext->shadow_map[(chunkno*k_factor)+idx].slave_id = disk_chk.slave_id;
+            ext->shadow_map[(chunkno*k_factor)+idx].offset = disk_chk.offset;
             spin_unlock(&ext->shadow_map_lock);
 
             /* Chunks that need remapping go to the start of the remap_chunks array. */
-            remap_chunks[remap_idx].slave_id = disk_chk->slave_id;
-            remap_chunks[remap_idx++].offset = disk_chk->offset;
+            remap_chunks[remap_idx].slave_id = disk_chk.slave_id;
+            remap_chunks[remap_idx++].offset = disk_chk.offset;
         }
 
         FAULT(REBUILD_FAULT2);
@@ -3543,24 +3624,11 @@ retry:
              * READ uses the existing map.
              */
             if(!c2b_uptodate(c2b))
-                if(submit_c2b_sync(READ, c2b))
-                {
-                    if (!LIVE_EXTENT(ext))
-                    {
-                        /*
-                         * We failed to get a ref on the extent, which means that the extent is no
-                         * longer live, and therefore does not need remapping.
-                         */
-                        ret = -EINVAL;
-                        goto skip_extent;
-                    }
-                    BUG();
-                }
+                BUG_ON(submit_c2b_sync(READ, c2b));
 
             /* Submit the write. */
             ret = submit_c2b_remap_rda(c2b, remap_chunks, remap_idx);
 
-skip_extent:
             write_unlock_c2b(c2b);
 
             /* This c2b is not needed any more, and it pollutes the cache, so destroy it. */
@@ -3579,10 +3647,11 @@ skip_extent:
              */
             if (ret == -EAGAIN)
                 goto retry;
-            if (ret == -EINVAL)
-                return -EINVAL;
             BUG_ON(ret);
         }
+
+        /* Cleanup extent space. */
+        castle_extent_remap_space_cleanup(ext);
 
         /* Keep count of the chunks that have actually been remapped. */
         castle_extents_chunks_remapped += remap_idx;
@@ -4377,6 +4446,10 @@ static int castle_extents_garbage_collector(void *unused)
     LIST_HEAD(gc_list);
 
     castle_printk(LOG_INIT, "Starting Extents garbage collector thread: %p\n", &gc_list);
+
+    /* Wait for all the extents to get initialized. */
+    while((extent_init_done != 2) && !kthread_should_stop())
+        msleep(1000);
 
     do {
         int ignore;
