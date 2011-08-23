@@ -260,7 +260,7 @@ c_chk_cnt_t castle_extent_free_chunks_count(c_ext_t *ext, uint32_t slave_id)
     return count;
 }
 
-static c_part_schk_t *castle_extent_part_schk_get(c_ext_t *ext, struct castle_slave *slave)
+static c_part_schk_t *__castle_extent_part_schk_get(c_ext_t *ext, struct castle_slave *slave)
 {
     struct list_head *pos;
 
@@ -273,6 +273,28 @@ static c_part_schk_t *castle_extent_part_schk_get(c_ext_t *ext, struct castle_sl
     }
 
     return NULL;
+}
+
+static c_chk_seq_t castle_extent_part_schk_get(c_ext_t *ext, struct castle_slave *slave)
+{
+    c_chk_seq_t chk_seq;
+    c_part_schk_t *part_schk;
+
+    if (!(part_schk = __castle_extent_part_schk_get(ext, slave)))
+        return INVAL_CHK_SEQ;
+
+    /* Partial superchunks can't be bigger than a superchunk. */
+    BUG_ON(part_schk->count > CHKS_PER_SLOT);
+
+    chk_seq.first_chk = part_schk->first_chk;
+    chk_seq.count = part_schk->count;
+
+    /* No need to keep this in list anymore. Get rid of it. */
+    list_del(&part_schk->list);
+
+    kmem_cache_free(castle_partial_schks_cache, part_schk);
+
+    return chk_seq;
 }
 
 static void castle_extent_part_schk_save(c_ext_t       *ext,
@@ -1408,7 +1430,6 @@ static c_disk_chk_t castle_extent_disk_chk_alloc(c_da_t da_id,
 {
     c_disk_chk_t disk_chk;
     c_chk_seq_t chk_seq;
-    c_part_schk_t *part_schk;
     c_chk_t *chk;
 
     disk_chk = INVAL_DISK_CHK;
@@ -1419,21 +1440,17 @@ static c_disk_chk_t castle_extent_disk_chk_alloc(c_da_t da_id,
 
     /* If there are no chunks in the buffer, get them from partial superchunk buffer for the
      * extent. */
-    if (CHK_INVAL(*chk) && (part_schk = castle_extent_part_schk_get(ext_state->ext, slave)))
+    if (CHK_INVAL(*chk) &&
+            !CHK_SEQ_INVAL(chk_seq = castle_extent_part_schk_get(ext_state->ext, slave)))
     {
-        /* Check if the partial superchunk is preoperly aligned. */
-        BUG_ON((part_schk->first_chk + part_schk->count) % CHKS_PER_SLOT);
-
-        /* Partial superchunks can't be bigger than a superchunk. If it is this code ignores
-         * the part bigger than superchunk. */
-        BUG_ON(part_schk->count > CHKS_PER_SLOT);
+        /* Check if the partial superchunk is preoperly aligned. This has to be true as no grow
+         * happens after shrink or truncate. */
+        /* Note: Rebuild can happen after shrink or truncate. But, rebuild doenst go thrrough
+         * this code flow. */
+        BUG_ON((chk_seq.first_chk + chk_seq.count) % CHKS_PER_SLOT);
 
         /* Update the chunk buffer in extent state. */
-        *chk = part_schk->first_chk;
-
-        /* No need to keep this in list anymore. Get rid of it. */
-        list_del(&part_schk->list);
-        kmem_cache_free(castle_partial_schks_cache, part_schk);
+        *chk = chk_seq.first_chk;
     }
 
     if(!CHK_INVAL(*chk))
