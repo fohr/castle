@@ -565,9 +565,7 @@ static c_ext_t * castle_ext_alloc(c_ext_id_t ext_id)
 
     /* Extent structure. */
     ext->ext_id             = ext_id;
-#ifdef CASTLE_DEBUG
     ext->alive              = 1;
-#endif
     ext->maps_cep           = INVAL_EXT_POS;
     ext->ext_type           = EXT_T_INVALID;
     ext->da_id              = INVAL_DA;
@@ -614,9 +612,8 @@ void castle_extent_mark_live(c_ext_id_t ext_id, c_da_t da_id)
         /* Extent should belong to the same DA. */
         BUG_ON(ext->da_id != da_id);
 
-        /* Create a link. This is the extra link other than the one in castle_ext_alloc().
-         * This preserves the extent. */
-        BUG_ON(castle_extent_link(ext_id));
+        /* Mark the extent as alive. */
+        ext->alive = 1;
     }
 }
 
@@ -636,10 +633,8 @@ static int castle_extent_check_alive(c_ext_t *ext, void *unused)
     if (LOGICAL_EXTENT(ext->ext_id))
         return 0;
 
-    /* Remove the link, we have created in castle_ext_alloc(). If no module called
-     * castle_extent_mark_live() on the extent. It would have only one link and would
-     * get freed. */
-    BUG_ON(castle_extent_unlink(ext->ext_id));
+    if (ext->alive == 0)
+        castle_extent_free(ext->ext_id);
 
     return 0;
 }
@@ -1179,9 +1174,7 @@ static int load_extent_from_mentry(struct castle_elist_entry *mstore_entry)
 
     /* ext_alloc() would set the alive bit to 1. Shouldn't do that during module reload.
      * Instead, extent owner would mark it alive. */
-#ifdef CASTLE_DEBUG
     ext->alive = 0;
-#endif
 
     CONVERT_MENTRY_TO_EXTENT(ext, mstore_entry);
     if (EXT_ID_INVAL(ext->ext_id))
