@@ -448,6 +448,11 @@ enum {
         _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_SLAVE_SCAN, cctrl_ioctl_t),
 };
 
+/*
+ * Castle B-tree key definitions. The key structure defined here is also, in fact, the key
+ * structure which is exported to userspace.
+ */
+
 /**
  * Castle B-Tree key. No pointers.
  *
@@ -505,6 +510,10 @@ typedef struct castle_var_length_btree_key {
 ({                                                                                        \
     (KEY_DIMENSION_FLAGS(key->dim_head[dim]));                                            \
 })
+
+/*
+ * Castle request interface definitions.
+ */
 
 #define CASTLE_RING_PAGES (32)                              /**< 32 requests/page.                */
 #define CASTLE_RING_SIZE (CASTLE_RING_PAGES << PAGE_SHIFT)  /**< Must be ^2 or things break.      */
