@@ -1569,7 +1569,7 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
     /* Deal with error case, or non-existant value. */
     if(err || CVT_INVALID(cvt) || CVT_TOMBSTONE(cvt))
     {
-        castle_printk(LOG_DEBUG, "%s::Error, invalid or tombstone.\n", __FUNCTION__);
+        //castle_printk(LOG_DEBUG, "%s::Error, invalid or tombstone.\n", __FUNCTION__);
         /* Dont have any object returned, no need to release reference of object. */
         /* Release reference of Component Tree. */
         if(get->ct)
@@ -1586,7 +1586,7 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
     /* Deal with the inlines and local counters (therefore with inlines and all counters). */
     if(CVT_INLINE(cvt))
     {
-        castle_printk(LOG_DEBUG, "%s::Inline.\n", __FUNCTION__);
+        //castle_printk(LOG_DEBUG, "%s::Inline.\n", __FUNCTION__);
         /* Release reference of Component Tree. */
         if(get->ct)
             castle_ct_put(get->ct, 0, &get->ct_ref);
@@ -1605,7 +1605,7 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
     BUG_ON(CVT_MEDIUM_OBJECT(cvt) &&
             cvt.cep.ext_id != c_bvec->tree->data_ext_free.ext_id);
 
-    castle_printk(LOG_DEBUG, "%s::Out of line.\n", __FUNCTION__);
+    //castle_printk(LOG_DEBUG, "%s::Out of line.\n", __FUNCTION__);
     /* Finally, out of line values */
     BUG_ON(!CVT_ON_DISK(cvt));
     /* Init the variables stored in the call correctly, so that _continue() doesn't

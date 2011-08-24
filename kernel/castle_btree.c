@@ -1685,7 +1685,7 @@ void castle_btree_lub_find(struct castle_btree_node *node,
     insert_candidate(node->used);
     if(lub_idx == node->used)
     {
-        castle_printk(LOG_DEBUG, "%s::node %p, hit end of the node\n", __FUNCTION__, node);
+        //castle_printk(LOG_DEBUG, "%s::node %p, hit end of the node\n", __FUNCTION__, node);
         lub_idx = -1;
     }
     //if(key_lub)

@@ -507,8 +507,8 @@ static void castle_ct_immut_iter_next_node_find(c_immut_iter_t *iter,
     struct timespec ts_start, ts_end;
 #endif
 
-    castle_printk(LOG_DEBUG, "%s::Looking for next node starting with "cep_fmt_str_nl,
-            __FUNCTION__, cep2str(cep));
+    //castle_printk(LOG_DEBUG, "%s::Looking for next node starting with "cep_fmt_str_nl,
+    //        __FUNCTION__, cep2str(cep));
     BUG_ON(iter->next_c2b);
     c2b=NULL;
     while(!EXT_POS_INVAL(cep))
@@ -723,8 +723,8 @@ static void castle_ct_immut_iter_init(c_immut_iter_t *iter,
     c_ext_pos_t first_node_cep;
     uint16_t first_node_size;
 
-    castle_printk(LOG_DEBUG, "%s::Initialising immut enumerator (iter %p) for ct id=%d\n",
-            __FUNCTION__, iter, iter->tree->seq);
+    //castle_printk(LOG_DEBUG, "%s::Initialising immut enumerator (iter %p) for ct id=%d\n",
+    //        __FUNCTION__, iter, iter->tree->seq);
     iter->btree     = castle_btree_type_get(iter->tree->btree_type);
     iter->completed = 0;
     iter->curr_c2b  = NULL;
