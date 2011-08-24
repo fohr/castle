@@ -2066,15 +2066,27 @@ static void castle_extent_resource_release(void *data)
     c_ext_t *ext = data;
     struct castle_extents_superblock *castle_extents_sb = NULL;
     c_ext_id_t ext_id = ext->ext_id;
-    struct list_head *pos;
+    struct list_head *pos, *tmp;
 
     /* Should be in transaction. */
     BUG_ON(!castle_extent_in_transaction());
 
     /* Shouldn't have partial superchunks left. */
-    list_for_each(pos, &ext->schks_list)
+    list_for_each_safe(pos, tmp, &ext->schks_list)
     {
         c_part_schk_t *schk = list_entry(pos, c_part_schk_t, list);
+        struct castle_slave *cs = castle_slave_find_by_id(schk->slave_id);
+
+        if (test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags))
+        {
+            /* Delete from list. */
+            list_del(pos);
+
+            /* Free space. */
+            kmem_cache_free(castle_partial_schks_cache, schk);
+
+            continue;
+        }
 
         printk("%llu: Superchunk: (%u:%u)\n", ext_id, schk->first_chk, schk->count);
     }
@@ -3684,9 +3696,6 @@ retry:
             BUG_ON(ret);
         }
 
-        /* Cleanup extent space. */
-        castle_extent_remap_space_cleanup(ext);
-
         /* Keep count of the chunks that have actually been remapped. */
         castle_extents_chunks_remapped += remap_idx;
 
@@ -3700,8 +3709,16 @@ retry:
          * take too long to remap.
          */
         if (kthread_should_stop() && ext->size != atomic_read(&current_rebuild_chunk))
+        {
+            /* Cleanup extent space. */
+            castle_extent_remap_space_cleanup(ext);
+
             return -EINTR;
+        }
     }
+
+    /* Cleanup extent space. */
+    castle_extent_remap_space_cleanup(ext);
 
     /*
      * Save the rebuild sequence number we have rebuilt the extent to.
