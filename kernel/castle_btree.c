@@ -3813,6 +3813,9 @@ static int __castle_btree_iter_start(c_iter_t *c_iter)
     struct castle_btree_type *btree = castle_btree_type_get(c_iter->tree->btree_type);
     c_ext_pos_t  root_cep;
 
+    BUG_ON((!strncmp(current->comm, "castle_wq", 9)
+                && strncmp(current->comm, "castle_wq0", 10)));
+
     iter_debug("-------------- STARTING THE ITERATOR -------------------\n");
     castle_printk(LOG_DEBUG, "%s::-------------- STARTING THE ITERATOR %p ct %d root cep "cep_fmt_str" -------------------\n",
             __FUNCTION__, c_iter, c_iter->tree->seq, cep2str(c_iter->tree->root_node));
@@ -3871,12 +3874,33 @@ static void _castle_btree_iter_start(struct work_struct *work)
 
 /**
  * Asynchronously start the btree iterator.
+ *
+ * NOTE: castle_wqs[0] is a safe place to start the iterator; any IO will be
+ *       done asynchronously and the iterator will be requeued at a workqueue
+ *       of the correct depth.
  */
 void castle_btree_iter_start(c_iter_t* c_iter)
 {
     c_iter->running_async = 1;
     CASTLE_INIT_WORK(&c_iter->work, _castle_btree_iter_start);
-    queue_work(castle_wqs[19], &c_iter->work);
+    queue_work(castle_wqs[0], &c_iter->work);
+}
+
+/**
+ * Start the btree iterator, asynchronously if we are on a btree workqueue.
+ */
+static int castle_btree_iter_safe_start(c_iter_t *c_iter)
+{
+    if (!strncmp(current->comm, "castle_wq", 9)
+            && strncmp(current->comm, "castle_wq0", 10))
+    {
+        /* We're running on level > 0 btree workqueue.  Go async. */
+        castle_btree_iter_start(c_iter);
+
+        return 1; /* inform caller we went asynchronous */
+    }
+    else
+        return __castle_btree_iter_start(c_iter);
 }
 
 void castle_btree_iter_cancel(c_iter_t *c_iter, int err)
@@ -4774,7 +4798,7 @@ static int castle_rq_iter_prep_next(c_rq_iter_t *rq_iter)
         /* Schedule iterator to get few more entries into buffer */
         rq_iter->iter_running = 1;
         wmb();
-    } while (__castle_btree_iter_start(iter) == EXIT_SUCCESS);
+    } while (castle_btree_iter_safe_start(iter) == EXIT_SUCCESS);
 
     return 0;
 }
@@ -4901,7 +4925,7 @@ void castle_rq_iter_cancel(c_rq_iter_t *rq_iter)
          * We don't need this anymore. */
         rq_iter->async_iter.end_io = NULL;
         wmb();
-        __castle_btree_iter_start(iter);
+        castle_btree_iter_safe_start(iter);
         wait_event(rq_iter->iter_wq, (rq_iter->iter_running == 0));
     }
 
