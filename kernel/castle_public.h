@@ -5,6 +5,8 @@
 #include <asm/ioctl.h>
 #ifndef __KERNEL__
 #include <sys/time.h>
+#else
+#include <linux/time.h>
 #endif
 
 #define CASTLE_PROTOCOL_VERSION 19
