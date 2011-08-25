@@ -68,6 +68,14 @@ case $CMD in
     COMMAND_STR="collection_attach $ARG1";;
 14)
     COMMAND_STR="collection_dettach $ARG1";;
+15)
+    COMMAND_STR="collection_snapshot $ARG2 -> $ARG1";;
+28)
+    COMMAND_STR="slave_evacuate $ARG1";;
+31)
+    COMMAND_STR="version_delete $ARG1";;
+33)
+    COMMAND_STR="collection_reattach $ARG1 $ARG2";;
 esac
 
 echo $COMMAND_STR >> /tmp/events
