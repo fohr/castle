@@ -716,7 +716,13 @@ static int castle_back_stateful_op_queue_op(struct castle_back_stateful_op *stat
         error("Token expired 0x%x\n", token);
         return -EBADFD;
     }
-    list_add_tail(&op->list, &stateful_op->op_queue);
+
+    if (op->req.tag == CASTLE_RING_ITER_FINISH)
+        /* Don't process any queued ITER_NEXT ops if we have been informed that
+         * the iterator is to terminate (either by ITER_NEXT or userspace). */
+        list_add(&op->list, &stateful_op->op_queue);
+    else
+        list_add_tail(&op->list, &stateful_op->op_queue);
 
     return 0;
 }
@@ -1707,6 +1713,12 @@ static void castle_back_iter_expire(struct castle_back_stateful_op *stateful_op)
     castle_back_iter_cleanup(stateful_op); /* drops stateful_op->lock */
 }
 
+/**
+ * Execute the next stateful_op op, if available.
+ *
+ * @also castle_back_stateful_op_queue_op()
+ * @also castle_back_stateful_op_prod()
+ */
 static void castle_back_iter_call_queued(struct castle_back_stateful_op *stateful_op)
 {
     BUG_ON(!spin_is_locked(&stateful_op->lock));
@@ -1718,11 +1730,15 @@ static void castle_back_iter_call_queued(struct castle_back_stateful_op *statefu
         switch (stateful_op->curr_op->req.tag)
         {
             case CASTLE_RING_ITER_NEXT:
+                /* Requeue ITER_NEXTs to prevent a stack overflow when called
+                 * from castle_back_iter_reply(). */
                 spin_unlock(&stateful_op->lock);
-                __castle_back_iter_next((void *)stateful_op);
+                BUG_ON(!queue_work_on(stateful_op->cpu, castle_back_wq, &stateful_op->work[0]));
                 break;
 
             case CASTLE_RING_ITER_FINISH:
+                /* ITER_FINISH can only ever occur once for a stateful op, so
+                 * don't requeue allowing a no-requeue fastpath iterator. */
                 spin_unlock(&stateful_op->lock);
                 __castle_back_iter_finish((void *)stateful_op);
                 break;
