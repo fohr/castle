@@ -441,7 +441,7 @@ void castle_control_collection_reattach(c_collection_id_t  collection,
     }
     old_version = ca->version;
     /* Current version must be attached. */
-    BUG_ON(castle_version_attached(old_version));
+    BUG_ON(!castle_version_attached(old_version));
 
     /* Check whether DA associated with the new_version matches the old version's DA. */
     BUG_ON(castle_version_read(new_version, &new_da_id, NULL, NULL, NULL, NULL));
