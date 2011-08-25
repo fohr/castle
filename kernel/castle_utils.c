@@ -354,7 +354,7 @@ void castle_printk(c_printk_level_t level, const char *fmt, ...)
     {
         /* and then only printk() if we're within the ratelimit. */
         if (castle_printk_ratelimit(level))
-            printk(tmp_buf);
+            printk("%s", tmp_buf);
     }
 }
 
