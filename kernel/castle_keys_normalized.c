@@ -10,7 +10,7 @@
 #include <linux/types.h>
 #include <linux/compiler.h>
 #include <linux/kernel.h>
-#include <linux/bug.h>
+#include <linux/slab.h>
 #include <linux/string.h>
 #include "castle_debug.h"
 #include "castle_public.h"
@@ -98,12 +98,13 @@ enum {
 size_t castle_norm_key_size_predict(const struct castle_var_length_btree_key *src)
 {
     size_t size = 2;
+    int dim;
 
     /* XXX: declare these constants somewhere where we can #include them */
     if (src->length == 0 || src->length == 0xfffffffe || src->length == 0xffffffff)
         return size;
 
-    for (int dim = 0; dim < src->nr_dims; ++dim)
+    for (dim = 0; dim < src->nr_dims; ++dim)
     {
         unsigned int flags = castle_object_btree_key_dim_flags_get(src, dim);
         if (!(flags & KEY_DIMENSION_INFINITY_FLAGS_MASK))
@@ -182,6 +183,7 @@ struct castle_norm_key *castle_norm_key_construct(const struct castle_var_length
     size_t size = castle_norm_key_size_predict(src);
     struct castle_norm_key *result = castle_malloc(size, GFP_KERNEL);
     char *data;
+    int dim;
     if (!result)
         return NULL;
 
@@ -200,7 +202,7 @@ struct castle_norm_key *castle_norm_key_construct(const struct castle_var_length
         BUG_ON(size != 2);
         return result;
     default:
-        /* fall through to the rest of the function */
+        break;                  /* fall through to the rest of the function */
     }
 
     data = result->data;
@@ -208,12 +210,12 @@ struct castle_norm_key *castle_norm_key_construct(const struct castle_var_length
     {
         result->length = KEY_LENGTH_LARGE_KEY;
         /* XXX: should we care about byte order here? */
-        (uint32_t *) data = size - 6;
+        *((uint32_t *) data) = size - 6;
         data += sizeof(uint32_t);
     }
     else result->length = size - 2;
 
-    for (int dim = 0; dim < src->nr_dims; ++dim)
+    for (dim = 0; dim < src->nr_dims; ++dim)
     {
         unsigned int flags = castle_object_btree_key_dim_flags_get(src, dim);
         if (flags & KEY_DIMENSION_MINUS_INFINITY_FLAG)
@@ -263,6 +265,8 @@ struct castle_norm_key *castle_norm_key_construct(const struct castle_var_length
 struct castle_norm_key *castle_norm_key_duplicate(const struct castle_norm_key *key)
 {
     size_t size;
+    struct castle_norm_key *result;
+
     if (key->length < KEY_LENGTH_LARGE_KEY)
         size = key->length + 2;
     else if (key->length == KEY_LENGTH_LARGE_KEY)
@@ -270,7 +274,7 @@ struct castle_norm_key *castle_norm_key_duplicate(const struct castle_norm_key *
     else
         size = 2;
 
-    struct castle_norm_key *result = castle_malloc(size, GFP_KERNEL);
+    result = castle_malloc(size, GFP_KERNEL);
     if (!result)
         return NULL;
     memcpy(result, key, size);
@@ -291,7 +295,8 @@ int castle_norm_key_compare(const struct castle_norm_key *a, const struct castle
 {
     if (likely(a->length <= KEY_LENGTH_LARGE_KEY && b->length <= KEY_LENGTH_LARGE_KEY)) {
         size_t a_len = a->length, b_len = b->length;
-        char *a_data = a->data, b_data = b->data;
+        const char *a_data = a->data, *b_data = b->data;
+        int result;
 
         if (a_len == KEY_LENGTH_LARGE_KEY)
         {
@@ -304,7 +309,7 @@ int castle_norm_key_compare(const struct castle_norm_key *a, const struct castle
             b_data += sizeof(uint32_t);
         }
 
-        int result = memcmp(a_data, b_data, min(a_len, b_len));
+        result = memcmp(a_data, b_data, min(a_len, b_len));
         return result ? result : a_len - b_len;
     }
 
