@@ -84,7 +84,6 @@ Group: Documentation
 
 %files doc
 %doc tools/docs/kernel
-%doc tools/docs/user
 
 %changelog
 * Thu Sep  9 2010 Andrew Suffield <asuffield@acunu.com> - @@SOURCEVER@@
