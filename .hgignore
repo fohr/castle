@@ -13,6 +13,7 @@ user/utils/castle_scan
 *.rej
 ._*
 \#*
+.\#*
 *cscope.files
 *cscope.out
 *cscope.in.out
