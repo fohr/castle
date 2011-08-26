@@ -2258,8 +2258,8 @@ static void castle_back_iter_next(void *data)
                                                CASTLE_RING_ITER_START);
     if (!stateful_op)
     {
-        error("Token not found 0x%x\n", op->req.iter_next.token);
-
+        castle_printk(LOG_INFO, "%s Token not found 0x%x\n",
+                __FUNCTION__, op->req.iter_next.token);
         castle_back_reply(op, -EBADFD, 0, 0);
 
         return;
@@ -2384,7 +2384,8 @@ static void castle_back_iter_finish(void *data)
 
     if (!stateful_op)
     {
-        error("Token not found 0x%x\n", op->req.iter_finish.token);
+        castle_printk(LOG_INFO, "%s Token not found 0x%x\n",
+                __FUNCTION__, op->req.iter_finish.token);
         castle_back_reply(op, -EBADFD, 0, 0);
 
         return;
@@ -2697,7 +2698,8 @@ static void castle_back_put_chunk(void *data)
 
     if (!stateful_op)
     {
-        error("Token not found 0x%x\n", op->req.put_chunk.token);
+        castle_printk(LOG_INFO, "%s Token not found 0x%x\n",
+                __FUNCTION__, op->req.put_chunk.token);
         err = -EBADFD;
         goto err0;
     }
@@ -2980,7 +2982,8 @@ static void castle_back_get_chunk(void *data)
         op->req.get_chunk.token, CASTLE_RING_BIG_GET);
     if (!stateful_op)
     {
-        error("Token not found 0x%x\n", op->req.get_chunk.token);
+        castle_printk(LOG_INFO, "%s Token not found 0x%x\n",
+                __FUNCTION__, op->req.get_chunk.token);
         err = -EBADFD;
         goto err0;
     }
