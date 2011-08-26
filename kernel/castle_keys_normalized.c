@@ -49,7 +49,7 @@
  * precede it are 0xff, instead of zeroes.
  *
  * If you make any modifications to the definition of this structure, you must make sure,
- * at the very least, that castle_norm_key_construct() still produces memcmp()-ordered
+ * at the very least, that castle_norm_key_pack() still produces memcmp()-ordered
  * bytestreams, and that castle_norm_key_compare() still works correctly!
  */
 struct castle_norm_key {
@@ -85,7 +85,7 @@ enum {
 #endif
 
 /**
- * castle_norm_key_size_predict() - predict the size of a normalized key
+ * norm_key_packed_size_predict() - predict the size of a normalized key
  * @src:        the source key that needs to be normalized
  *
  * Since normalized keys are variable-length, it's hard to predict how much space to
@@ -95,7 +95,7 @@ enum {
  * The value returned is the number of bytes which need to be allocated, so it includes
  * the (variable-length) length field -- hence "size" and not "length".
  */
-size_t castle_norm_key_size_predict(const struct castle_var_length_btree_key *src)
+static size_t norm_key_packed_size_predict(const struct castle_var_length_btree_key *src)
 {
     size_t size = 2;
     int dim;
@@ -171,16 +171,16 @@ static char *norm_key_pad(char *dst, int pad_val, int end_val, size_t len)
 }
 
 /**
- * castle_norm_key_construct() - construct a normalized key
+ * castle_norm_key_pack() - construct a normalized key
  * @src:        the source key that needs to be normalized
  *
  * This function takes a standard key structure and produces a normalized key out of it.
  * The key returned is allocated with kmalloc(). If kmalloc() fails to allocate, this
  * function returns NULL -- no other error conditions are possible.
  */
-struct castle_norm_key *castle_norm_key_construct(const struct castle_var_length_btree_key *src)
+struct castle_norm_key *castle_norm_key_pack(const struct castle_var_length_btree_key *src)
 {
-    size_t size = castle_norm_key_size_predict(src);
+    size_t size = norm_key_packed_size_predict(src);
     struct castle_norm_key *result = castle_malloc(size, GFP_KERNEL);
     char *data;
     int dim;
