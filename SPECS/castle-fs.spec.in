@@ -22,7 +22,6 @@ BuildRoot:      %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
 
 Provides: castle-fs-kmod-common = %{version}
 
-Requires: castle-cli
 Requires: castle-tools
 
 BuildRequires: doxygen
