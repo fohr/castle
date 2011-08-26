@@ -9,8 +9,6 @@
 %define krel	%(echo %{kverrel} | sed -e 's/-/_/g')
 %define krel_nohg %(echo %{krel} | sed -e 's/\.hg.*$//')
 
-%define groupname castle
-
 Name:           castle-fs
 Version:        @@SOURCEVER@@
 Release:        %{?release}%{?!release:1}
@@ -24,11 +22,8 @@ BuildRoot:      %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
 
 Provides: castle-fs-kmod-common = %{version}
 
-Requires(pre): shadow-utils
-Requires(post): chkconfig
-Requires(preun): chkconfig
-Requires(preun): initscripts
 Requires: castle-cli
+Requires: castle-tools
 
 BuildRequires: doxygen
 BuildRequires: graphviz-gd
@@ -51,8 +46,6 @@ done
 %build
 echo '%{version}-%{release}' > .hg-rev
 
-make -C user/utils
-
 for kvariant in %{kvariants}
 do
     ksrc=%{_usrsrc}/kernels/%{kverrel}${kvariant:+-$kvariant}-%{_target_cpu}
@@ -67,31 +60,6 @@ mkdir -p tools/docs
 
 %install
 rm -rf %{buildroot}
-
-mkdir -p %{buildroot}/etc/rc.d/init.d
-mkdir -p %{buildroot}/etc/udev/rules.d/
-mkdir -p %{buildroot}/etc/castle-fs
-mkdir -p %{buildroot}/sbin
-mkdir -p %{buildroot}/usr/sbin
-mkdir -p %{buildroot}/usr/share/castle-fs
-mkdir -p %{buildroot}/var/lib/castle-fs
-cp user/udev/castle-fs.rules %{buildroot}/etc/udev/rules.d/
-cp user/udev/udev-watch %{buildroot}/etc/castle-fs/
-cp user/utils/castle %{buildroot}/etc/rc.d/init.d/
-cp user/utils/castle_claim_empty %{buildroot}/etc/rc.d/init.d/
-cp user/utils/init-utils %{buildroot}/usr/share/castle-fs/
-cp user/utils/castle-fs-init.sh %{buildroot}/usr/share/castle-fs/castle-fs-init
-cp user/utils/castle-fs-fini.sh %{buildroot}/usr/share/castle-fs/castle-fs-fini
-cp user/utils/castle-smart-weigh-drive %{buildroot}/usr/sbin/
-cp user/utils/castle-smart-spank-drive %{buildroot}/usr/sbin/
-cp user/utils/castle-smart-process-drive %{buildroot}/usr/sbin/
-cp user/utils/castle-scan %{buildroot}/usr/sbin/
-cp user/utils/castle_probe_device %{buildroot}/usr/sbin/castle-probe-device
-cp user/utils/castle-create %{buildroot}/usr/sbin/
-cp user/utils/castle-claim-empty %{buildroot}/usr/sbin/
-cp user/utils/check-ssd %{buildroot}/usr/sbin/
-cp user/utils/mkcastlefs %{buildroot}/sbin
-cp user/utils/castle-find-collection %{buildroot}/usr/sbin/
 
 export INSTALL_MOD_PATH=%{buildroot}
 export INSTALL_MOD_DIR=extra/%{kmod_name}
@@ -123,13 +91,6 @@ getent group %{groupname} >/dev/null || groupadd -r %{groupname}
 
 %files
 %defattr(-,root,root,-)
-/etc/rc.d/init.d/*
-/etc/udev/rules.d
-/etc/castle-fs/udev-watch
-/usr/share/castle-fs
-/usr/sbin/*
-/sbin/mkcastlefs
-/var/lib/castle-fs
 
 %package doc
 
