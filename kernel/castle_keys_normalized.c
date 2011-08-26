@@ -281,6 +281,33 @@ struct castle_norm_key *castle_norm_key_duplicate(const struct castle_norm_key *
     return result;
 }
 
+static size_t norm_key_length(const struct castle_norm_key *key, const char **data)
+{
+    size_t length = key->length;
+    *data = key->data;
+
+    if (key->length == KEY_LENGTH_LARGE_KEY)
+    {
+        length = *((uint32_t *) key->data);
+        *data += sizeof(uint32_t);
+    }
+
+    return length;
+}
+
+inline static const char *norm_key_end(const struct castle_norm_key *key, const char **data)
+{
+    size_t length = norm_key_length(key, data);
+    return *data + length;
+}
+
+inline static int norm_key_data_compare(const char *a_data, size_t a_len,
+                                        const char *b_data, size_t b_len)
+{
+    int result = memcmp(a_data, b_data, min(a_len, b_len));
+    return result ? result : a_len - b_len;
+}
+
 /**
  * castle_norm_key_compare() - compare two normalized keys
  * @a:          the first key of the comparison
@@ -294,25 +321,66 @@ struct castle_norm_key *castle_norm_key_duplicate(const struct castle_norm_key *
 int castle_norm_key_compare(const struct castle_norm_key *a, const struct castle_norm_key *b)
 {
     if (likely(a->length <= KEY_LENGTH_LARGE_KEY && b->length <= KEY_LENGTH_LARGE_KEY)) {
-        size_t a_len = a->length, b_len = b->length;
-        const char *a_data = a->data, *b_data = b->data;
-        int result;
-
-        if (a_len == KEY_LENGTH_LARGE_KEY)
-        {
-            a_len = *((uint32_t *) a_data);
-            a_data += sizeof(uint32_t);
-        }
-        if (b_len == KEY_LENGTH_LARGE_KEY)
-        {
-            b_len = *((uint32_t *) b_data);
-            b_data += sizeof(uint32_t);
-        }
-
-        result = memcmp(a_data, b_data, min(a_len, b_len));
-        return result ? result : a_len - b_len;
+        const char *a_data, *b_data;
+        size_t a_len = norm_key_length(a, &a_data), b_len = norm_key_length(b, &b_data);
+        return norm_key_data_compare(a_data, a_len, b_data, b_len);
     }
 
     /* one of the keys is either the max key or the invalid key */
     else return a->length - b->length;
+}
+
+inline static const char *norm_key_dim_next(const char *pos)
+{
+    for (pos += KEY_MARKER_STRIDE;
+         *pos == KEY_MARKER_CONTINUES; pos += KEY_MARKER_STRIDE + 1);
+    return ++pos;
+}
+
+int castle_norm_key_bounds_check(const struct castle_norm_key *key,
+                                 const struct castle_norm_key *lower,
+                                 const struct castle_norm_key *upper,
+                                 int *offending_dim)
+{
+    int dim;
+    const char *key_data, *key_end = norm_key_end(key, &key_data), *key_curr = key_data;
+    const char *lower_data, *lower_end = norm_key_end(lower, &lower_data), *lower_curr = lower_data;
+    const char *upper_data, *upper_end = norm_key_end(upper, &upper_data), *upper_curr = upper_data;
+
+    for (dim = 0; ; ++dim)
+    {
+        const char *key_next = norm_key_dim_next(key_curr);
+        const char *lower_next = norm_key_dim_next(lower_curr);
+        const char *upper_next = norm_key_dim_next(upper_curr);
+
+        /* the key must be >= the lower bound */
+        if (norm_key_data_compare(key_curr, key_next - key_curr,
+                                  lower_curr, lower_next - lower_curr) < 0)
+        {
+            if (offending_dim)
+                *offending_dim = dim;
+            return -1;
+        }
+
+        /* the key must be <= the upper bound */
+        if (norm_key_data_compare(key_curr, key_next - key_curr,
+                                  upper_curr, upper_next - upper_curr) > 0)
+        {
+            if (offending_dim)
+                *offending_dim = dim;
+            return 1;
+        }
+
+        if (key_next >= key_end || lower_next >= lower_end || upper_next >= upper_end)
+        {
+            /* if one key has reached its end, all of them must have */
+            BUG_ON(key_next != key_end || lower_next != lower_end || upper_next != upper_end);
+            return 0;
+        }
+
+        /* proceed to the next dimension */
+        key_curr = key_next;
+        lower_curr = lower_next;
+        upper_curr = upper_next;
+    }
 }
