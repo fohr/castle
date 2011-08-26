@@ -56,7 +56,6 @@ done
 
 mkdir -p tools/docs
 (cd tools && doxygen Doxyfile.kernel)
-(cd tools && doxygen Doxyfile.user)
 
 %install
 rm -rf %{buildroot}
