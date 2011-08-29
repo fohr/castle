@@ -1,10 +1,10 @@
 /*
  * Current issues:
  *
- * - are zero-length key values supported?
- * - the length values of special keys cannot be #included -- what to do?
- * - how do we handle endianness issues?
- * - do we use some sort of source documentation system?
+ * - the length values of special keys cannot be #included -- must fix
+ * - switch from kerneldoc to doxygen
+ * - switch from magic numbers like 2 and 4 to sizeof(uint32_t) and the like
+ * - then also make those sizes typedefs to have a single definition
  */
 
 #include <linux/types.h>
@@ -12,6 +12,7 @@
 #include <linux/kernel.h>
 #include <linux/slab.h>
 #include <linux/string.h>
+#include <asm/byteorder.h>
 #include "castle_debug.h"
 #include "castle_public.h"
 #include "castle_keys_normalized.h"
@@ -30,19 +31,23 @@
  *
  * The @length field is two bytes long, but keys of length larger than what can be encoded
  * in two bytes are supported too. This works as follows; if the length field contains the
- * special value %KEY_LENGTH_LARGE_KEY, then the first four bytes of the @data field
- * contain the actual length, and the key follows. In that case, the stored length does
- * not include those four bytes either. In other words, the stored length is always the
- * value which needs to be passed to memcmp() when comparing two keys, not the allocated
- * size of the structure or the total number of bytes after the start of @data.
+ * special value %KEY_LENGTH_LARGE, then the first four bytes of the @data field contain
+ * the actual length, and the key follows. In that case, the stored length does not
+ * include those four bytes either. In other words, the stored length is always the value
+ * which needs to be passed to memcmp() when comparing two keys, not the allocated size of
+ * the structure or the total number of bytes after the start of @data.
+ *
+ * Following the @length field is the number of dimensions, stored in big-endian in order
+ * to be memcmp()-able. These are stored using the same scheme as the length field: using
+ * two bytes, or if these are not enough, a special value is stored in these two bytes and
+ * they are followed by four bytes.
  *
  * Each of the key's dimensions is stored in order, one after the other. For each
  * dimension, the key value is laid out "laced", with a special marker byte after every
- * %KEY_MARKER_STRIDE bytes of the actual value, padded with zeroes if necessary. The
+ * %MARKER_STRIDE bytes of the actual value, padded with zeroes if necessary. The
  * in-between markers of a key value are always %KEY_MARKER_CONTINUES, while the ending
  * marker is a computed value which encodes the number of bytes that the value occupied
- * after the last marker, whether this is a "next" value, and whether this is the end of
- * the entire key.
+ * after the last marker, and also whether this is a "next" value.
  *
  * There are also special markers to denote plus and minus infinity for this particular
  * dimension. Additionally, +infinity has the characteristic that the padding bytes that
@@ -60,27 +65,31 @@ struct castle_norm_key {
 /* special values for the length field */
 enum {
     KEY_LENGTH_MIN_KEY   = 0x0000,
-    KEY_LENGTH_LARGE_KEY = 0xfffd, /* needs to be larger than valid lengths */
+    KEY_LENGTH_LARGE     = 0xfffd, /* needs to be larger than valid lengths */
     KEY_LENGTH_MAX_KEY   = 0xfffe,
     KEY_LENGTH_INVAL_KEY = 0xffff
 };
 
+/* special values for the number of dimensions field */
+enum {
+    DIM_NUMBER_LARGE = KEY_LENGTH_LARGE
+};
+
 /* insert a marker byte after this number of content bytes */
-#define KEY_MARKER_STRIDE 8
+#define MARKER_STRIDE 8
 
 /* special values for the marker bytes */
 enum {
     KEY_MARKER_RESERVED0      = 0x00,
     KEY_MARKER_MINUS_INFINITY = 0x01,
-    KEY_MARKER_KEY_END_BASE   = 0x02,
-    KEY_MARKER_DIM_END_BASE   = 0x02 + (KEY_MARKER_STRIDE + 1) * 2,
+    KEY_MARKER_END_BASE       = 0x02,
     KEY_MARKER_CONTINUES      = 0xfe,
     KEY_MARKER_PLUS_INFINITY  = 0xff
 };
 
 /* the number of special values in the above enum */
 #define KEY_MARKER_NUM_SPECIAL 4
-#if (KEY_MARKER_STRIDE + 1) * 4 + KEY_MARKER_NUM_SPECIAL > 256
+#if (MARKER_STRIDE + 1) * 2 + KEY_MARKER_NUM_SPECIAL > 256
 #error Normalized key marker values do not fit inside a byte.
 #endif
 
@@ -112,16 +121,18 @@ static size_t norm_key_packed_size_predict(const struct castle_var_length_btree_
             size_t dim_len = castle_object_btree_key_dim_length(src, dim);
             if (dim_len != 0)
             {
-                dim_len = roundup(dim_len, KEY_MARKER_STRIDE);
-                dim_len += dim_len / KEY_MARKER_STRIDE;
+                dim_len = roundup(dim_len, MARKER_STRIDE);
+                dim_len += dim_len / MARKER_STRIDE;
             }
-            else dim_len = KEY_MARKER_STRIDE + 1;
+            else dim_len = MARKER_STRIDE + 1;
             size += dim_len;
         }
-        else size += KEY_MARKER_STRIDE + 1;
+        else size += MARKER_STRIDE + 1;
     }
 
-    if (size - 2 >= KEY_LENGTH_LARGE_KEY)
+    if (size - 2 >= KEY_LENGTH_LARGE)
+        size += 4;
+    if (dim >= DIM_NUMBER_LARGE)
         size += 4;
 
     return size;
@@ -135,17 +146,17 @@ static size_t norm_key_packed_size_predict(const struct castle_var_length_btree_
  *
  * This helper function copies @len bytes of a standard key from @src into a series of
  * segments of a normalized key in @dst, by lacing the source bytestream with the
- * %KEY_MARKER_CONTINUES marker every %KEY_MARKER_STRIDE bytes. It returns the position in
+ * %KEY_MARKER_CONTINUES marker every %MARKER_STRIDE bytes. It returns the position in
  * @dst immediately after the copied bytes.
  */
 static char *norm_key_lace(char *dst, const char *src, size_t len)
 {
-    while (len > KEY_MARKER_STRIDE) {
-        memcpy(dst, src, KEY_MARKER_STRIDE);
-        dst += KEY_MARKER_STRIDE;
+    while (len > MARKER_STRIDE) {
+        memcpy(dst, src, MARKER_STRIDE);
+        dst += MARKER_STRIDE;
         *dst++ = KEY_MARKER_CONTINUES;
-        src += KEY_MARKER_STRIDE;
-        len -= KEY_MARKER_STRIDE;
+        src += MARKER_STRIDE;
+        len -= MARKER_STRIDE;
     }
     memcpy(dst, src, len);
     return dst + len;
@@ -206,25 +217,37 @@ struct castle_norm_key *castle_norm_key_pack(const struct castle_var_length_btre
     }
 
     data = result->data;
-    if (size >= KEY_LENGTH_LARGE_KEY + 6)
+    if (size >= KEY_LENGTH_LARGE + 6)
     {
-        result->length = KEY_LENGTH_LARGE_KEY;
-        /* XXX: should we care about byte order here? */
+        result->length = KEY_LENGTH_LARGE;
         *((uint32_t *) data) = size - 6;
         data += sizeof(uint32_t);
     }
     else result->length = size - 2;
+
+    if (src->nr_dims < DIM_NUMBER_LARGE)
+    {
+        *((uint16_t *) data) = htons(src->nr_dims);
+        data += sizeof(uint16_t);
+    }
+    else
+    {
+        *((uint16_t *) data) = htons(DIM_NUMBER_LARGE);
+        data += sizeof(uint16_t);
+        *((uint32_t *) data) = htonl(src->nr_dims);
+        data += sizeof(uint32_t);
+    }
 
     for (dim = 0; dim < src->nr_dims; ++dim)
     {
         unsigned int flags = castle_object_btree_key_dim_flags_get(src, dim);
         if (flags & KEY_DIMENSION_MINUS_INFINITY_FLAG)
         {
-            data = norm_key_pad(data, 0, KEY_MARKER_MINUS_INFINITY, KEY_MARKER_STRIDE);
+            data = norm_key_pad(data, 0, KEY_MARKER_MINUS_INFINITY, MARKER_STRIDE);
         }
         else if (flags & KEY_DIMENSION_PLUS_INFINITY_FLAG)
         {
-            data = norm_key_pad(data, 0xff, KEY_MARKER_PLUS_INFINITY, KEY_MARKER_STRIDE);
+            data = norm_key_pad(data, 0xff, KEY_MARKER_PLUS_INFINITY, MARKER_STRIDE);
         }
         else
         {
@@ -235,19 +258,18 @@ struct castle_norm_key *castle_norm_key_pack(const struct castle_var_length_btre
                 const char *dim_key = castle_object_btree_key_dim_get(src, dim);
                 data = norm_key_lace(data, dim_key, dim_len);
                 /* calculate the length of the last segment: this is essentially dim_len %
-                   KEY_MARKER_STRIDE, but in the range [1..KEY_MARKER_STRIDE] instead of
-                   [0..KEY_MARKER_STRIDE-1] (except for 0) */
-                dim_len = (dim_len + KEY_MARKER_STRIDE - 1) % KEY_MARKER_STRIDE + 1;
+                   MARKER_STRIDE, but in the range [1..MARKER_STRIDE] instead of
+                   [0..MARKER_STRIDE-1] (except for 0) */
+                dim_len = (dim_len + MARKER_STRIDE - 1) % MARKER_STRIDE + 1;
             }
             /*
              * calculate the value of the final marker byte:
-             * - choose the base value based on whether this is the last dimension
+             * - start with KEY_MARKER_END_BASE as the base value
              * - add 2 for each byte occupied since the last marker
              * - add an extra 1 if the key value has the "next" flag
              */
-            marker = (dim + 1 < src->nr_dims ? KEY_MARKER_DIM_END_BASE : KEY_MARKER_KEY_END_BASE)
-                + dim_len * 2 + ((flags & KEY_DIMENSION_NEXT_FLAG) != 0);
-            data = norm_key_pad(data, 0, marker, KEY_MARKER_STRIDE - dim_len);
+            marker = KEY_MARKER_END_BASE + dim_len * 2 + ((flags & KEY_DIMENSION_NEXT_FLAG) != 0);
+            data = norm_key_pad(data, 0, marker, MARKER_STRIDE - dim_len);
         }
     }
 
@@ -267,9 +289,9 @@ struct castle_norm_key *castle_norm_key_duplicate(const struct castle_norm_key *
     size_t size;
     struct castle_norm_key *result;
 
-    if (key->length < KEY_LENGTH_LARGE_KEY)
+    if (key->length < KEY_LENGTH_LARGE)
         size = key->length + 2;
-    else if (key->length == KEY_LENGTH_LARGE_KEY)
+    else if (key->length == KEY_LENGTH_LARGE)
         size = *((uint32_t *) key->data) + 6;
     else
         size = 2;
@@ -283,22 +305,36 @@ struct castle_norm_key *castle_norm_key_duplicate(const struct castle_norm_key *
 
 static size_t norm_key_length(const struct castle_norm_key *key, const char **data)
 {
-    size_t length = key->length;
+    size_t len = key->length;
     *data = key->data;
 
-    if (key->length == KEY_LENGTH_LARGE_KEY)
+    if (key->length == KEY_LENGTH_LARGE)
     {
-        length = *((uint32_t *) key->data);
+        len = *((uint32_t *) key->data);
         *data += sizeof(uint32_t);
     }
 
-    return length;
+    return len;
 }
 
 inline static const char *norm_key_end(const struct castle_norm_key *key, const char **data)
 {
     size_t length = norm_key_length(key, data);
     return *data + length;
+}
+
+static size_t norm_key_dimensions(const char **data)
+{
+    size_t dim = ntohs(*((uint16_t *) *data));
+    *data += sizeof(uint16_t);
+
+    if (dim == DIM_NUMBER_LARGE)
+    {
+        dim = ntohl(*((uint32_t *) *data));
+        *data += sizeof(uint32_t);
+    }
+
+    return dim;
 }
 
 inline static int norm_key_data_compare(const char *a_data, size_t a_len,
@@ -320,7 +356,7 @@ inline static int norm_key_data_compare(const char *a_data, size_t a_len,
  */
 int castle_norm_key_compare(const struct castle_norm_key *a, const struct castle_norm_key *b)
 {
-    if (likely(a->length <= KEY_LENGTH_LARGE_KEY && b->length <= KEY_LENGTH_LARGE_KEY)) {
+    if (likely(a->length <= KEY_LENGTH_LARGE && b->length <= KEY_LENGTH_LARGE)) {
         const char *a_data, *b_data;
         size_t a_len = norm_key_length(a, &a_data), b_len = norm_key_length(b, &b_data);
         return norm_key_data_compare(a_data, a_len, b_data, b_len);
@@ -332,8 +368,8 @@ int castle_norm_key_compare(const struct castle_norm_key *a, const struct castle
 
 inline static const char *norm_key_dim_next(const char *pos)
 {
-    for (pos += KEY_MARKER_STRIDE;
-         *pos == KEY_MARKER_CONTINUES; pos += KEY_MARKER_STRIDE + 1);
+    for (pos += MARKER_STRIDE;
+         *pos == KEY_MARKER_CONTINUES; pos += MARKER_STRIDE + 1);
     return ++pos;
 }
 
@@ -342,12 +378,17 @@ int castle_norm_key_bounds_check(const struct castle_norm_key *key,
                                  const struct castle_norm_key *upper,
                                  int *offending_dim)
 {
-    int dim;
     const char *key_data, *key_end = norm_key_end(key, &key_data), *key_curr = key_data;
     const char *lower_data, *lower_end = norm_key_end(lower, &lower_data), *lower_curr = lower_data;
     const char *upper_data, *upper_end = norm_key_end(upper, &upper_data), *upper_curr = upper_data;
 
-    for (dim = 0; ; ++dim)
+    size_t dim;
+    size_t key_dim = norm_key_dimensions(&key_curr);
+    size_t lower_dim = norm_key_dimensions(&lower_curr);
+    size_t upper_dim = norm_key_dimensions(&upper_curr);
+    BUG_ON(key_dim != lower_dim || key_dim != upper_dim);
+
+    for (dim = 0; dim < key_dim; ++dim)
     {
         const char *key_next = norm_key_dim_next(key_curr);
         const char *lower_next = norm_key_dim_next(lower_curr);
@@ -371,16 +412,13 @@ int castle_norm_key_bounds_check(const struct castle_norm_key *key,
             return 1;
         }
 
-        if (key_next >= key_end || lower_next >= lower_end || upper_next >= upper_end)
-        {
-            /* if one key has reached its end, all of them must have */
-            BUG_ON(key_next != key_end || lower_next != lower_end || upper_next != upper_end);
-            return 0;
-        }
-
         /* proceed to the next dimension */
         key_curr = key_next;
         lower_curr = lower_next;
         upper_curr = upper_next;
     }
+
+    /* if one key has reached its end, all of them must have */
+    BUG_ON(key_curr != key_end || lower_curr != lower_end || upper_curr != upper_end);
+    return 0;
 }
