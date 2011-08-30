@@ -696,9 +696,9 @@ struct castle_btree_type castle_batree = {
 #define VLBA_TREE_ENTRY_IS_MEDIUM_OBJECT(_slot) CVT_MEDIUM_OBJECT(*(_slot))
 #define VLBA_TREE_ENTRY_IS_ONDISK(_slot)        CVT_ON_DISK(*(_slot))
 
-static const vlba_key_t VLBA_TREE_INVAL_KEY = (vlba_key_t){.length = 0xFFFFFFFF};
-static const vlba_key_t VLBA_TREE_MIN_KEY = (vlba_key_t){.length = 0x00};
-static const vlba_key_t VLBA_TREE_MAX_KEY = (vlba_key_t){.length = 0xFFFFFFFE};
+static const vlba_key_t VLBA_TREE_INVAL_KEY = (vlba_key_t){.length = VLBA_TREE_LENGTH_OF_INVAL_KEY};
+static const vlba_key_t VLBA_TREE_MIN_KEY = (vlba_key_t){.length = VLBA_TREE_LENGTH_OF_MIN_KEY};
+static const vlba_key_t VLBA_TREE_MAX_KEY = (vlba_key_t){.length = VLBA_TREE_LENGTH_OF_MAX_KEY};
 
 #define VLBA_TREE_KEY_INVAL(_key)          ((_key)->length == VLBA_TREE_INVAL_KEY.length)
 #define VLBA_TREE_KEY_MIN(_key)            ((_key)->length == VLBA_TREE_MIN_KEY.length)
