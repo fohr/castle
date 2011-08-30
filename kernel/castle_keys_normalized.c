@@ -303,6 +303,17 @@ struct castle_norm_key *castle_norm_key_duplicate(const struct castle_norm_key *
     return result;
 }
 
+/**
+ * norm_key_length() - compute the length of a normalized key
+ * @key:        the key whose length we need to compute
+ * @data:       used to store a pointer to the actual key data
+ *
+ * While &struct castle_norm_key has a length field, that field is only two bytes long,
+ * and for large keys it is allowed to overflow and also take up the first four bytes of
+ * the data field. This function computes the actual value of @key's length based on the
+ * length field (and potentially the start of the data field), and also stores in @data
+ * the pointer to the actual start of the key's data.
+ */
 static size_t norm_key_length(const struct castle_norm_key *key, const char **data)
 {
     size_t len = key->length;
@@ -317,12 +328,30 @@ static size_t norm_key_length(const struct castle_norm_key *key, const char **da
     return len;
 }
 
+/**
+ * norm_key_end() - locate the end of a normalized key
+ * @key:        the key whose end we need to locate
+ * @data:       used to store a pointer to the start of the key
+ *
+ * This function is similar to norm_key_length(), except that, instead of returning an
+ * integer with the length of the key, it returns a pointer to its end.
+ */
 inline static const char *norm_key_end(const struct castle_norm_key *key, const char **data)
 {
     size_t length = norm_key_length(key, data);
     return *data + length;
 }
 
+/**
+ * norm_key_dimensions() - return the number of dimensions of a normalized key
+ * @data:       pointer to the key's contents
+ *
+ * After the length of the key, the next thing stored in it is the number of dimensions,
+ * in a similar format (first two bytes, then four more bytes if necessary). Unlike the
+ * length field though, the number of dimensions is always stored in big-endian, in order
+ * to be memcmp()-comparable. This function extracts the number of dimensions and advances
+ * the @data pointer to point just after it.
+ */
 static size_t norm_key_dimensions(const char **data)
 {
     size_t dim = ntohs(*((uint16_t *) *data));
@@ -337,6 +366,16 @@ static size_t norm_key_dimensions(const char **data)
     return dim;
 }
 
+/**
+ * norm_key_data_compare() - compare the contents of two keys
+ * @a_data:     bytestream of the first key
+ * @a_len:      length of the first key
+ * @b_data:     bytestream of the second key
+ * @b_len:      length of the second key
+ *
+ * Compares two keys using memcmp(), resolving ties using the keys' lengths (shorter is
+ * less).
+ */
 inline static int norm_key_data_compare(const char *a_data, size_t a_len,
                                         const char *b_data, size_t b_len)
 {
@@ -366,6 +405,12 @@ int castle_norm_key_compare(const struct castle_norm_key *a, const struct castle
     else return a->length - b->length;
 }
 
+/**
+ * norm_key_dim_next() - scan a key to find the start of the next dimension
+ * @pos:        the current position inside the key
+ *
+ * Scans a key forward to locate the start of the next dimension, or the end of the key.
+ */
 inline static const char *norm_key_dim_next(const char *pos)
 {
     for (pos += MARKER_STRIDE;
@@ -373,6 +418,14 @@ inline static const char *norm_key_dim_next(const char *pos)
     return ++pos;
 }
 
+/**
+ * castle_norm_key_bounds_check() - perform a bounding box comparison on a key
+ * @key:        the key to compare
+ * @lower:      the lower bound of the bounding box
+ * @upper:      the upper bound of the bounding box
+ * @offending_dim: if non-NULL, used to store a pointer to the dimension which made the
+ *                 comparison fail
+ */
 int castle_norm_key_bounds_check(const struct castle_norm_key *key,
                                  const struct castle_norm_key *lower,
                                  const struct castle_norm_key *upper,
