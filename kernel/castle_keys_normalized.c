@@ -199,21 +199,22 @@ struct castle_norm_key *castle_norm_key_pack(const struct castle_var_length_btre
     if (!result)
         return NULL;
 
-    switch (src->length) {
-    case VLBA_TREE_LENGTH_OF_MIN_KEY:
-        result->length = KEY_LENGTH_MIN_KEY;
-        BUG_ON(size != 2);
-        return result;
-    case VLBA_TREE_LENGTH_OF_MAX_KEY:
-        result->length = KEY_LENGTH_MAX_KEY;
-        BUG_ON(size != 2);
-        return result;
-    case VLBA_TREE_LENGTH_OF_INVAL_KEY:
-        result->length = KEY_LENGTH_INVAL_KEY;
-        BUG_ON(size != 2);
-        return result;
-    default:
-        break;                  /* fall through to the rest of the function */
+    switch (src->length)
+    {
+        case VLBA_TREE_LENGTH_OF_MIN_KEY:
+            result->length = KEY_LENGTH_MIN_KEY;
+            BUG_ON(size != 2);
+            return result;
+        case VLBA_TREE_LENGTH_OF_MAX_KEY:
+            result->length = KEY_LENGTH_MAX_KEY;
+            BUG_ON(size != 2);
+            return result;
+        case VLBA_TREE_LENGTH_OF_INVAL_KEY:
+            result->length = KEY_LENGTH_INVAL_KEY;
+            BUG_ON(size != 2);
+            return result;
+        default:
+            break;              /* fall through to the rest of the function */
     }
 
     data = result->data;
@@ -538,20 +539,20 @@ struct castle_var_length_btree_key *castle_norm_key_unpack(const struct castle_n
 
     switch (key->length)
     {
-    case KEY_LENGTH_MIN_KEY:
-        result->length = VLBA_TREE_LENGTH_OF_MIN_KEY;
-        BUG_ON(size != sizeof *result);
-        return result;
-    case KEY_LENGTH_MAX_KEY:
-        result->length = VLBA_TREE_LENGTH_OF_MAX_KEY;
-        BUG_ON(size != sizeof *result);
-        return result;
-    case KEY_LENGTH_INVAL_KEY:
-        result->length = VLBA_TREE_LENGTH_OF_INVAL_KEY;
-        BUG_ON(size != sizeof *result);
-        return result;
-    default:
-        break;                  /* fall through to the rest of the function */
+        case KEY_LENGTH_MIN_KEY:
+            result->length = VLBA_TREE_LENGTH_OF_MIN_KEY;
+            BUG_ON(size != sizeof *result);
+            return result;
+        case KEY_LENGTH_MAX_KEY:
+            result->length = VLBA_TREE_LENGTH_OF_MAX_KEY;
+            BUG_ON(size != sizeof *result);
+            return result;
+        case KEY_LENGTH_INVAL_KEY:
+            result->length = VLBA_TREE_LENGTH_OF_INVAL_KEY;
+            BUG_ON(size != sizeof *result);
+            return result;
+        default:
+            break;              /* fall through to the rest of the function */
     }
 
     result->length = size - sizeof result->length;
