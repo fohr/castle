@@ -475,3 +475,114 @@ int castle_norm_key_bounds_check(const struct castle_norm_key *key,
     BUG_ON(key_curr != key_end || lower_curr != lower_end || upper_curr != upper_end);
     return 0;
 }
+
+static size_t norm_key_unpacked_size_predict(const struct castle_norm_key *key)
+{
+    /* initial size should be 16: 4 bytes length, 4 bytes nr_dims, 8 bytes _unused */
+    size_t size = sizeof(struct castle_var_length_btree_key), n_dim;
+    const char *curr, *next, *end;
+    int dim, marker;
+
+    if (key->length == 0 || key->length > KEY_LENGTH_LARGE)
+        return size;
+
+    end = norm_key_end(key, &curr);
+    n_dim = norm_key_dimensions(&curr);
+
+    for (dim = 0; dim < n_dim; ++dim)
+    {
+        size += 4;              /* size of each dim_head */
+        next = norm_key_dim_next(curr);
+        marker = *(next-1);
+        if (marker != KEY_MARKER_MINUS_INFINITY && marker != KEY_MARKER_PLUS_INFINITY)
+        {
+            size += (next - curr) - (next - curr) / (MARKER_STRIDE + 1)
+                - (MARKER_STRIDE - (marker - KEY_MARKER_END_BASE) / 2);
+        }
+        curr = next;
+    }
+    BUG_ON(curr != end);
+
+    return size;
+}
+
+static const char *norm_key_unlace(char *dst, const char *src, size_t *len)
+{
+    const char *marker = src + MARKER_STRIDE;
+    *len = 0;
+
+    while (*marker == KEY_MARKER_CONTINUES)
+    {
+        memcpy(dst, src, MARKER_STRIDE);
+        dst += MARKER_STRIDE;
+        *len += MARKER_STRIDE;
+        src = ++marker;
+        marker += MARKER_STRIDE;
+    }
+
+    if (*marker != KEY_MARKER_MINUS_INFINITY && *marker != KEY_MARKER_PLUS_INFINITY)
+    {
+        size_t fin_len = (*marker - KEY_MARKER_END_BASE) / 2;
+        memcpy(dst, src, fin_len);
+        len += fin_len;
+    }
+    return ++marker;
+}
+
+struct castle_var_length_btree_key *castle_norm_key_unpack(const struct castle_norm_key *key)
+{
+    size_t size = norm_key_unpacked_size_predict(key), offset;
+    struct castle_var_length_btree_key *result = castle_malloc(size, GFP_KERNEL);
+    const char *key_pos, *key_end;
+    int dim, marker;
+
+    switch (key->length)
+    {
+    case KEY_LENGTH_MIN_KEY:
+        result->length = VLBA_TREE_LENGTH_OF_MIN_KEY;
+        BUG_ON(size != sizeof *result);
+        return result;
+    case KEY_LENGTH_MAX_KEY:
+        result->length = VLBA_TREE_LENGTH_OF_MAX_KEY;
+        BUG_ON(size != sizeof *result);
+        return result;
+    case KEY_LENGTH_INVAL_KEY:
+        result->length = VLBA_TREE_LENGTH_OF_INVAL_KEY;
+        BUG_ON(size != sizeof *result);
+        return result;
+    default:
+        break;                  /* fall through to the rest of the function */
+    }
+
+    result->length = size - sizeof result->length;
+    key_end = norm_key_end(key, &key_pos);
+    result->nr_dims = norm_key_dimensions(&key_pos);
+    offset = sizeof *result + result->nr_dims * sizeof(uint32_t);
+    memset(result->dim_head, 0, offset - sizeof *result);
+
+    for (dim = 0; dim < result->nr_dims; ++dim)
+    {
+        size_t dim_len;
+        key_pos = norm_key_unlace(((char *) result) + offset, key_pos, &dim_len);
+        marker = *(key_pos-1);
+
+        if (marker == KEY_MARKER_MINUS_INFINITY)
+        {
+            result->dim_head[dim] = KEY_DIMENSION_MINUS_INFINITY_FLAG;
+        }
+        else if (marker == KEY_MARKER_PLUS_INFINITY)
+        {
+            result->dim_head[dim] = KEY_DIMENSION_PLUS_INFINITY_FLAG;
+        }
+        else
+        {
+            result->dim_head[dim] = (offset << KEY_DIMENSION_FLAGS_SHIFT);
+            if ((marker - KEY_MARKER_END_BASE) % 2 == 1)
+                result->dim_head[dim] |= KEY_DIMENSION_NEXT_FLAG;
+            offset += dim_len;
+        }
+    }
+
+    BUG_ON(key_pos != key_end);
+    return result;
+}
