@@ -7,14 +7,14 @@
  */
 
 #include <linux/types.h>
-#include <linux/compiler.h>
+#include <linux/compiler.h>     /* likely() */
 #include <linux/kernel.h>
-#include <linux/slab.h>
-#include <linux/string.h>
-#include <asm/byteorder.h>
-#include "castle_debug.h"
+#include <linux/slab.h>         /* kmalloc() and related constants */
+#include <linux/string.h>       /* memcmp() etc */
+#include <asm/byteorder.h>      /* htons() etc */
 #include "castle_public.h"
-#include "castle_btree.h"
+#include "castle_debug.h"       /* castle_malloc() */
+#include "castle_btree.h"       /* VLBA_TREE_LENGTH_OF_*_KEY */
 #include "castle_keys_normalized.h"
 
 /**
