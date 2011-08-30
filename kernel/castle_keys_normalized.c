@@ -1,7 +1,6 @@
 /*
  * Current issues:
  *
- * - the length values of special keys cannot be #included -- must fix
  * - switch from kerneldoc to doxygen
  * - switch from magic numbers like 2 and 4 to sizeof(uint32_t) and the like
  * - then also make those sizes typedefs to have a single definition
@@ -15,6 +14,7 @@
 #include <asm/byteorder.h>
 #include "castle_debug.h"
 #include "castle_public.h"
+#include "castle_btree.h"
 #include "castle_keys_normalized.h"
 
 /**
@@ -109,8 +109,9 @@ static size_t norm_key_packed_size_predict(const struct castle_var_length_btree_
     size_t size = 2;
     int dim;
 
-    /* XXX: declare these constants somewhere where we can #include them */
-    if (src->length == 0 || src->length == 0xfffffffe || src->length == 0xffffffff)
+    if (src->length == VLBA_TREE_LENGTH_OF_MIN_KEY ||
+        src->length == VLBA_TREE_LENGTH_OF_MAX_KEY ||
+        src->length == VLBA_TREE_LENGTH_OF_INVAL_KEY)
         return size;
 
     for (dim = 0; dim < src->nr_dims; ++dim)
@@ -198,17 +199,16 @@ struct castle_norm_key *castle_norm_key_pack(const struct castle_var_length_btre
     if (!result)
         return NULL;
 
-    /* XXX: declare these constants somewhere where we can #include them */
     switch (src->length) {
-    case 0:
+    case VLBA_TREE_LENGTH_OF_MIN_KEY:
         result->length = KEY_LENGTH_MIN_KEY;
         BUG_ON(size != 2);
         return result;
-    case 0xfffffffe:
+    case VLBA_TREE_LENGTH_OF_MAX_KEY:
         result->length = KEY_LENGTH_MAX_KEY;
         BUG_ON(size != 2);
         return result;
-    case 0xffffffff:
+    case VLBA_TREE_LENGTH_OF_INVAL_KEY:
         result->length = KEY_LENGTH_INVAL_KEY;
         BUG_ON(size != 2);
         return result;
