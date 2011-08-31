@@ -1,11 +1,39 @@
+/*
+ * System header file inclusions.
+ */
+#ifdef __KERNEL__
 #include <linux/types.h>
 #include <linux/kernel.h>
 #include <linux/slab.h>         /* kmalloc() and friends */
 #include <linux/string.h>       /* memcmp() etc */
+#else
+#include <stddef.h>
+#include <stdint.h>
+#include <stdlib.h>             /* malloc() etc */
+#include <stdio.h>              /* fprintf() etc */
+#include <string.h>             /* memcmp() etc */
+#include <assert.h>
+#include <errno.h>
+
+#define BUG()                   assert(0)
+#define BUG_ON(x)               assert(!(x))
+#endif
+
+/*
+ * Local header file inclusions.
+ */
 #include "castle_public.h"
 #include "castle_defines.h"
+#ifdef __KERNEL__
 #include "castle_debug.h"
 #include "castle_utils.h"       /* LOG_ERROR */
+#else
+#define LOG_ERROR               stderr
+#define castle_printk           fprintf
+#define castle_malloc(x, _)     malloc(x)
+#define castle_zalloc(x, _)     calloc(1, x)
+#define castle_kfree(x)         free(x)
+#endif
 #include "castle_keys_vlba.h"
 
 #define PLUS_INFINITY_DIM_LENGTH 0xFFFFFFFF
