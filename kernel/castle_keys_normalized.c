@@ -25,6 +25,7 @@
 #include <arpa/inet.h>          /* htons() etc */
 
 #define BUG_ON(x)               assert(!(x))
+#define kmalloc(x, _)           malloc(x)
 
 /* lifted from linux/kernel.h */
 #define likely(x)               __builtin_expect(!!(x), 1)
@@ -40,19 +41,8 @@
  * Local header file inclusions.
  */
 #include "castle_public.h"
-#ifdef __KERNEL__
+#include "castle_keys_vlba.h"   /* VLBA_TREE_LENGTH_OF_*_KEY */
 #include "castle_debug.h"       /* castle_malloc() */
-#include "castle_btree.h"       /* VLBA_TREE_LENGTH_OF_*_KEY */
-#else
-#define castle_malloc(x, _)     malloc(x)
-
-/* lifted from castle_btree.h */
-enum {
-    VLBA_TREE_LENGTH_OF_MIN_KEY   = 0x00000000,
-    VLBA_TREE_LENGTH_OF_MAX_KEY   = 0xFFFFFFFE,
-    VLBA_TREE_LENGTH_OF_INVAL_KEY = 0xFFFFFFFF
-};
-#endif
 #include "castle_keys_normalized.h"
 
 /**
