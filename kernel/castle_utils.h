@@ -116,7 +116,7 @@ static inline struct list_head* _prefix##_hash_alloc(void)                      
     return castle_malloc(sizeof(struct list_head) * _tab_size, GFP_KERNEL);                    \
 }                                                                                              \
                                                                                                \
-static void inline _prefix##_hash_init(void)                                                   \
+static inline void _prefix##_hash_init(void)                                                   \
 {                                                                                              \
     int i;                                                                                     \
     for(i=0; i<_tab_size; i++)                                                                 \

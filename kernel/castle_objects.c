@@ -1673,7 +1673,7 @@ int castle_object_get(struct castle_object_get *get,
 }
 EXPORT_SYMBOL(castle_object_get);
 
-static void inline castle_object_pull_ct_put(struct castle_object_pull *pull)
+static inline void castle_object_pull_ct_put(struct castle_object_pull *pull)
 {
     if(pull->ct)
         castle_ct_put(pull->ct, 0, &pull->ct_ref);
