@@ -516,11 +516,6 @@ enum {
     /* 0x80 - 0xFF should not be used, because it conflicts with CVT_TYPE_DISABLED_FLAG. */
 };
 
-#define MAX_INLINE_VAL_SIZE            512      /* In bytes */
-#define VLBA_TREE_MAX_KEY_SIZE         512      /* In bytes */
-#define MEDIUM_OBJECT_LIMIT (20 * C_CHK_SIZE)
-#define is_medium(_size)    (((_size) > MAX_INLINE_VAL_SIZE) && ((_size) <= MEDIUM_OBJECT_LIMIT))
-
 struct castle_value_tuple {
     /* align:   8 */
     /* offset:  0 */ struct {
@@ -850,8 +845,6 @@ struct castle_btree_node {
 } PACKED;
 
 #define BTREE_NODE_PAYLOAD(_node)   ((void *)&(_node)->payload)
-
-#define PLUS_INFINITY_DIM_LENGTH 0xFFFFFFFF
 
 /* Below encapsulates the internal btree node structure, different type of
    nodes may be used for different trees */

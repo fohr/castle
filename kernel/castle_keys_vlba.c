@@ -3,10 +3,12 @@
 #include <linux/slab.h>         /* kmalloc() and friends */
 #include <linux/string.h>       /* memcmp() etc */
 #include "castle_public.h"
+#include "castle_defines.h"
 #include "castle_debug.h"
-#include "castle.h"
 #include "castle_utils.h"       /* LOG_ERROR */
 #include "castle_keys_vlba.h"
+
+#define PLUS_INFINITY_DIM_LENGTH 0xFFFFFFFF
 
 /**
  * Constructs btree key, from two source keys k1 and k2. Take first n dimensions from k1 and

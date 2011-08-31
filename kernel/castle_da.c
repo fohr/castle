@@ -3,6 +3,7 @@
 #include <linux/kthread.h>
 
 #include "castle_public.h"
+#include "castle_defines.h"
 #include "castle_utils.h"
 #include "castle.h"
 #include "castle_cache.h"

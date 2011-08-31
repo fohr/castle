@@ -2,6 +2,7 @@
 
 #include "castle_public.h"
 #include "castle_compile.h"
+#include "castle_defines.h"
 #include "castle.h"
 #include "castle_keys_vlba.h"
 #include "castle_da.h"
