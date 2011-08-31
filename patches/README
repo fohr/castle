@@ -14,3 +14,4 @@ BTREE-read_null_backend.patch
 Makes castle_btree_read_process() return INVAL_VAL_TUP for all requests.
 __castle_btree_submit() may still do IO but this should still be minimal.
 Useful for testing interface performance.
+Consider running perf_get with --no-check-errors
