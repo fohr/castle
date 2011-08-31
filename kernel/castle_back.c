@@ -16,6 +16,7 @@
 
 #include "castle_public.h"
 #include "castle.h"
+#include "castle_keys_vlba.h"
 #include "castle_objects.h"
 #include "castle_cache.h"
 #include "castle_da.h"
