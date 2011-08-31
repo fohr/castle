@@ -58,8 +58,8 @@
  * bytestreams, and that castle_norm_key_compare() still works correctly!
  */
 struct castle_norm_key {
-    uint16_t length;
-    char     data[0];
+    uint16_t      length;
+    unsigned char data[0];
 } PACKED;
 
 /* special values for the length field */
@@ -150,7 +150,7 @@ static size_t norm_key_packed_size_predict(const struct castle_var_length_btree_
  * %KEY_MARKER_CONTINUES marker every %MARKER_STRIDE bytes. It returns the position in
  * @dst immediately after the copied bytes.
  */
-static char *norm_key_lace(char *dst, const char *src, size_t len)
+static unsigned char *norm_key_lace(unsigned char *dst, const char *src, size_t len)
 {
     while (len > MARKER_STRIDE) {
         memcpy(dst, src, MARKER_STRIDE);
@@ -174,7 +174,7 @@ static char *norm_key_lace(char *dst, const char *src, size_t len)
  * @pad_val, and then inserts an end marker @end_val. It returns the position in @dst
  * immediately after the inserted bytes.
  */
-static char *norm_key_pad(char *dst, int pad_val, int end_val, size_t len)
+static unsigned char *norm_key_pad(unsigned char *dst, int pad_val, int end_val, size_t len)
 {
     memset(dst, pad_val, len);
     dst += len;
@@ -194,7 +194,7 @@ struct castle_norm_key *castle_norm_key_pack(const struct castle_var_length_btre
 {
     size_t size = norm_key_packed_size_predict(src);
     struct castle_norm_key *result = castle_malloc(size, GFP_KERNEL);
-    char *data;
+    unsigned char *data;
     unsigned int dim;
     if (!result)
         return NULL;
@@ -315,7 +315,7 @@ struct castle_norm_key *castle_norm_key_duplicate(const struct castle_norm_key *
  * length field (and potentially the start of the data field), and also stores in @data
  * the pointer to the actual start of the key's data.
  */
-static size_t norm_key_length(const struct castle_norm_key *key, const char **data)
+static size_t norm_key_length(const struct castle_norm_key *key, const unsigned char **data)
 {
     size_t len = key->length;
     *data = key->data;
@@ -337,7 +337,7 @@ static size_t norm_key_length(const struct castle_norm_key *key, const char **da
  * This function is similar to norm_key_length(), except that, instead of returning an
  * integer with the length of the key, it returns a pointer to its end.
  */
-inline static const char *norm_key_end(const struct castle_norm_key *key, const char **data)
+inline static const unsigned char *norm_key_end(const struct castle_norm_key *key, const unsigned char **data)
 {
     size_t length = norm_key_length(key, data);
     return *data + length;
@@ -353,7 +353,7 @@ inline static const char *norm_key_end(const struct castle_norm_key *key, const 
  * to be memcmp()-comparable. This function extracts the number of dimensions and advances
  * the @data pointer to point just after it.
  */
-static size_t norm_key_dimensions(const char **data)
+static size_t norm_key_dimensions(const unsigned char **data)
 {
     size_t dim = ntohs(*((uint16_t *) *data));
     *data += sizeof(uint16_t);
@@ -377,8 +377,8 @@ static size_t norm_key_dimensions(const char **data)
  * Compares two keys using memcmp(), resolving ties using the keys' lengths (shorter is
  * less).
  */
-inline static int norm_key_data_compare(const char *a_data, size_t a_len,
-                                        const char *b_data, size_t b_len)
+inline static int norm_key_data_compare(const unsigned char *a_data, size_t a_len,
+                                        const unsigned char *b_data, size_t b_len)
 {
     int result = memcmp(a_data, b_data, min(a_len, b_len));
     return result ? result : a_len - b_len;
@@ -397,7 +397,7 @@ inline static int norm_key_data_compare(const char *a_data, size_t a_len,
 int castle_norm_key_compare(const struct castle_norm_key *a, const struct castle_norm_key *b)
 {
     if (likely(a->length <= KEY_LENGTH_LARGE && b->length <= KEY_LENGTH_LARGE)) {
-        const char *a_data, *b_data;
+        const unsigned char *a_data, *b_data;
         size_t a_len = norm_key_length(a, &a_data), b_len = norm_key_length(b, &b_data);
         return norm_key_data_compare(a_data, a_len, b_data, b_len);
     }
@@ -412,7 +412,7 @@ int castle_norm_key_compare(const struct castle_norm_key *a, const struct castle
  *
  * Scans a key forward to locate the start of the next dimension, or the end of the key.
  */
-inline static const char *norm_key_dim_next(const char *pos)
+inline static const unsigned char *norm_key_dim_next(const unsigned char *pos)
 {
     for (pos += MARKER_STRIDE;
          *pos == KEY_MARKER_CONTINUES; pos += MARKER_STRIDE + 1);
@@ -432,9 +432,9 @@ int castle_norm_key_bounds_check(const struct castle_norm_key *key,
                                  const struct castle_norm_key *upper,
                                  int *offending_dim)
 {
-    const char *key_data, *key_end = norm_key_end(key, &key_data), *key_curr = key_data;
-    const char *lower_data, *lower_end = norm_key_end(lower, &lower_data), *lower_curr = lower_data;
-    const char *upper_data, *upper_end = norm_key_end(upper, &upper_data), *upper_curr = upper_data;
+    const unsigned char *key_data, *key_end = norm_key_end(key, &key_data), *key_curr = key_data;
+    const unsigned char *lower_data, *lower_end = norm_key_end(lower, &lower_data), *lower_curr = lower_data;
+    const unsigned char *upper_data, *upper_end = norm_key_end(upper, &upper_data), *upper_curr = upper_data;
 
     unsigned int dim;
     size_t key_dim = norm_key_dimensions(&key_curr);
@@ -444,9 +444,9 @@ int castle_norm_key_bounds_check(const struct castle_norm_key *key,
 
     for (dim = 0; dim < key_dim; ++dim)
     {
-        const char *key_next = norm_key_dim_next(key_curr);
-        const char *lower_next = norm_key_dim_next(lower_curr);
-        const char *upper_next = norm_key_dim_next(upper_curr);
+        const unsigned char *key_next = norm_key_dim_next(key_curr);
+        const unsigned char *lower_next = norm_key_dim_next(lower_curr);
+        const unsigned char *upper_next = norm_key_dim_next(upper_curr);
 
         /* the key must be >= the lower bound */
         if (norm_key_data_compare(key_curr, key_next - key_curr,
@@ -481,7 +481,7 @@ static size_t norm_key_unpacked_size_predict(const struct castle_norm_key *key)
 {
     /* initial size should be 16: 4 bytes length, 4 bytes nr_dims, 8 bytes _unused */
     size_t size = sizeof(struct castle_var_length_btree_key), n_dim;
-    const char *curr, *next, *end;
+    const unsigned char *curr, *next, *end;
     unsigned int dim;
 
     if (key->length == 0 || key->length > KEY_LENGTH_LARGE)
@@ -508,9 +508,9 @@ static size_t norm_key_unpacked_size_predict(const struct castle_norm_key *key)
     return size;
 }
 
-static const char *norm_key_unlace(char *dst, const char *src, size_t *len)
+static const char *norm_key_unlace(char *dst, const unsigned char *src, size_t *len)
 {
-    const char *marker = src + MARKER_STRIDE;
+    const unsigned char *marker = src + MARKER_STRIDE;
     *len = 0;
 
     while (*marker == KEY_MARKER_CONTINUES)
@@ -535,7 +535,7 @@ struct castle_var_length_btree_key *castle_norm_key_unpack(const struct castle_n
 {
     size_t size = norm_key_unpacked_size_predict(key), offset;
     struct castle_var_length_btree_key *result = castle_malloc(size, GFP_KERNEL);
-    const char *key_pos, *key_end;
+    const unsigned char *key_pos, *key_end;
     unsigned int dim;
 
     switch (key->length)
