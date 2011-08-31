@@ -381,7 +381,7 @@ inline static int norm_key_data_compare(const unsigned char *a_data, size_t a_le
                                         const unsigned char *b_data, size_t b_len)
 {
     int result = memcmp(a_data, b_data, min(a_len, b_len));
-    return result ? result : a_len - b_len;
+    return result ? result : (int) (a_len - b_len);
 }
 
 /**
@@ -508,7 +508,7 @@ static size_t norm_key_unpacked_size_predict(const struct castle_norm_key *key)
     return size;
 }
 
-static const char *norm_key_unlace(char *dst, const unsigned char *src, size_t *len)
+static const unsigned char *norm_key_unlace(char *dst, const unsigned char *src, size_t *len)
 {
     const unsigned char *marker = src + MARKER_STRIDE;
     *len = 0;
