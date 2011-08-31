@@ -107,7 +107,7 @@ enum {
 static size_t norm_key_packed_size_predict(const struct castle_var_length_btree_key *src)
 {
     size_t size = 2;
-    int dim;
+    unsigned int dim;
 
     if (src->length == VLBA_TREE_LENGTH_OF_MIN_KEY ||
         src->length == VLBA_TREE_LENGTH_OF_MAX_KEY ||
@@ -195,7 +195,7 @@ struct castle_norm_key *castle_norm_key_pack(const struct castle_var_length_btre
     size_t size = norm_key_packed_size_predict(src);
     struct castle_norm_key *result = castle_malloc(size, GFP_KERNEL);
     char *data;
-    int dim;
+    unsigned int dim;
     if (!result)
         return NULL;
 
@@ -436,7 +436,7 @@ int castle_norm_key_bounds_check(const struct castle_norm_key *key,
     const char *lower_data, *lower_end = norm_key_end(lower, &lower_data), *lower_curr = lower_data;
     const char *upper_data, *upper_end = norm_key_end(upper, &upper_data), *upper_curr = upper_data;
 
-    size_t dim;
+    unsigned int dim;
     size_t key_dim = norm_key_dimensions(&key_curr);
     size_t lower_dim = norm_key_dimensions(&lower_curr);
     size_t upper_dim = norm_key_dimensions(&upper_curr);
@@ -482,7 +482,7 @@ static size_t norm_key_unpacked_size_predict(const struct castle_norm_key *key)
     /* initial size should be 16: 4 bytes length, 4 bytes nr_dims, 8 bytes _unused */
     size_t size = sizeof(struct castle_var_length_btree_key), n_dim;
     const char *curr, *next, *end;
-    int dim, marker;
+    unsigned int dim;
 
     if (key->length == 0 || key->length > KEY_LENGTH_LARGE)
         return size;
@@ -492,6 +492,7 @@ static size_t norm_key_unpacked_size_predict(const struct castle_norm_key *key)
 
     for (dim = 0; dim < n_dim; ++dim)
     {
+        int marker;
         size += 4;              /* size of each dim_head */
         next = norm_key_dim_next(curr);
         marker = *(next-1);
@@ -535,7 +536,7 @@ struct castle_var_length_btree_key *castle_norm_key_unpack(const struct castle_n
     size_t size = norm_key_unpacked_size_predict(key), offset;
     struct castle_var_length_btree_key *result = castle_malloc(size, GFP_KERNEL);
     const char *key_pos, *key_end;
-    int dim, marker;
+    unsigned int dim;
 
     switch (key->length)
     {
@@ -564,6 +565,7 @@ struct castle_var_length_btree_key *castle_norm_key_unpack(const struct castle_n
     for (dim = 0; dim < result->nr_dims; ++dim)
     {
         size_t dim_len;
+        int marker;
         key_pos = norm_key_unlace(((char *) result) + offset, key_pos, &dim_len);
         marker = *(key_pos-1);
 
