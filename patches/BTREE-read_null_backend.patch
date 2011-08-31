@@ -1,0 +1,14 @@
+diff --git a/kernel/castle_btree.c b/kernel/castle_btree.c
+--- a/kernel/castle_btree.c
++++ b/kernel/castle_btree.c
+@@ -2559,6 +2559,10 @@
+     int                          lub_idx;
+     c_val_tup_t                  lub_cvt;
+ 
++    /* NULL BACKEND: Return an invalid entry now. */
++    castle_btree_io_end(c_bvec, INVAL_VAL_TUP, 0);
++    return;
++
+     castle_debug_bvec_update(c_bvec, C_BVEC_BTREE_NODE_RPROCESS);
+ 
+     castle_btree_lub_find(node, key, version, &lub_idx, NULL);

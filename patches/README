@@ -7,3 +7,10 @@ You'll need to define:
     TESTS_RANDOM_BTREE_GET_DA_ID - the DA ID
 Expects single-dimensional keys so run perf_replace with --no-thread-safe-keys and --key-type ascending, e.g.:
     perf_replace --iterations 1 --batch-size 10000000 --key-type ascending --value-size 4 --async --reuse-buffer-count 128 --no-thread-safe-keys --output /dev/null
+
+
+BTREE-read_null_backend.patch
+===
+Makes castle_btree_read_process() return INVAL_VAL_TUP for all requests.
+__castle_btree_submit() may still do IO but this should still be minimal.
+Useful for testing interface performance.
