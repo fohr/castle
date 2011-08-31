@@ -6,15 +6,53 @@
  * - then also make those sizes typedefs to have a single definition
  */
 
+/*
+ * System header file inclusions.
+ */
+#ifdef __KERNEL__
 #include <linux/types.h>
 #include <linux/compiler.h>     /* likely() */
 #include <linux/kernel.h>
 #include <linux/slab.h>         /* kmalloc() and related constants */
 #include <linux/string.h>       /* memcmp() etc */
 #include <asm/byteorder.h>      /* htons() etc */
+#else
+#include <stddef.h>
+#include <stdint.h>
+#include <stdlib.h>             /* malloc() */
+#include <string.h>             /* memcmp() etc */
+#include <assert.h>
+#include <arpa/inet.h>          /* htons() etc */
+
+#define BUG_ON(x)               assert(!(x))
+
+/* lifted from linux/kernel.h */
+#define likely(x)               __builtin_expect(!!(x), 1)
+#define roundup(x, y)           ((((x) + ((y) - 1)) / (y)) * (y))
+#define min(x, y) ({				\
+	typeof(x) _min1 = (x);			\
+	typeof(y) _min2 = (y);			\
+	(void) (&_min1 == &_min2);		\
+	_min1 < _min2 ? _min1 : _min2; })
+#endif
+
+/*
+ * Local header file inclusions.
+ */
 #include "castle_public.h"
+#ifdef __KERNEL__
 #include "castle_debug.h"       /* castle_malloc() */
 #include "castle_btree.h"       /* VLBA_TREE_LENGTH_OF_*_KEY */
+#else
+#define castle_malloc(x, _)     malloc(x)
+
+/* lifted from castle_btree.h */
+enum {
+    VLBA_TREE_LENGTH_OF_MIN_KEY   = 0x00000000,
+    VLBA_TREE_LENGTH_OF_MAX_KEY   = 0xFFFFFFFE,
+    VLBA_TREE_LENGTH_OF_INVAL_KEY = 0xFFFFFFFF
+};
+#endif
 #include "castle_keys_normalized.h"
 
 /**
