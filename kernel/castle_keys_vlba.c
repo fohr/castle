@@ -51,9 +51,9 @@
  * @return  out_key SUCCESS
  *          NULL    FAILURE
  */
-static c_vl_bkey_t* castle_object_btree_key_construct(c_vl_bkey_t  *k1,
-                                                      c_vl_bkey_t  *k2,
-                                                      uint32_t      nr_dims_from_k1)
+static c_vl_bkey_t* castle_object_btree_key_construct(const c_vl_bkey_t *k1,
+                                                      const c_vl_bkey_t *k2,
+                                                      uint32_t nr_dims_from_k1)
 {
     uint32_t key_len, nr_dims;
     uint32_t nr_dims_from_k2;
@@ -141,8 +141,8 @@ static c_vl_bkey_t* castle_object_btree_key_construct(c_vl_bkey_t  *k1,
     return out_key;
 }
 
-static inline int castle_object_key_dim_compare(char *dim_a, uint32_t dim_a_len, uint32_t dim_a_flags,
-                                                char *dim_b, uint32_t dim_b_len, uint32_t dim_b_flags)
+static inline int castle_object_key_dim_compare(const char *dim_a, uint32_t dim_a_len, uint32_t dim_a_flags,
+                                                const char *dim_b, uint32_t dim_b_len, uint32_t dim_b_flags)
 {
     int cmp, dim_a_next_flag, dim_b_next_flag;
 
@@ -186,7 +186,7 @@ static inline int castle_object_key_dim_compare(char *dim_a, uint32_t dim_a_len,
     return 0;
 }
 
-int castle_object_btree_key_compare(c_vl_bkey_t *key1, c_vl_bkey_t *key2)
+int castle_object_btree_key_compare(const c_vl_bkey_t *key1, const c_vl_bkey_t *key2)
 {
     int dim;
 
@@ -223,9 +223,9 @@ static void castle_object_btree_key_dim_inc(c_vl_bkey_t *key, int dim)
     key->dim_head[dim] = KEY_DIMENSION_HEADER(offset, flags | KEY_DIMENSION_NEXT_FLAG);
 }
 
-int castle_object_btree_key_copy(c_vl_bkey_t *old_key,
+int castle_object_btree_key_copy(const c_vl_bkey_t *old_key,
                                  c_vl_bkey_t *new_key,
-                                 uint32_t     buf_len)
+                                 uint32_t buf_len)
 {
     int key_length;
 
@@ -242,7 +242,7 @@ int castle_object_btree_key_copy(c_vl_bkey_t *old_key,
     return 0;
 }
 
-void *castle_object_btree_key_duplicate(c_vl_bkey_t *key)
+void *castle_object_btree_key_duplicate(const c_vl_bkey_t *key)
 {
     c_vl_bkey_t *new_key;
 
@@ -255,7 +255,7 @@ void *castle_object_btree_key_duplicate(c_vl_bkey_t *key)
     return new_key;
 }
 
-void *castle_object_btree_key_next(c_vl_bkey_t *key)
+void *castle_object_btree_key_next(const c_vl_bkey_t *key)
 {
     c_vl_bkey_t *new_key;
 
@@ -272,9 +272,9 @@ void *castle_object_btree_key_next(c_vl_bkey_t *key)
    Returns 1 if the most significant dimension is greater than the end, -1 if it is
    less then start, or 0 if the key is within bounds. Optionally, the function can
    be queried about which dimension offeneded */
-int castle_object_btree_key_bounds_check(c_vl_bkey_t *key,
-                                         c_vl_bkey_t *start,
-                                         c_vl_bkey_t *end,
+int castle_object_btree_key_bounds_check(const c_vl_bkey_t *key,
+                                         const c_vl_bkey_t *start,
+                                         const c_vl_bkey_t *end,
                                          int *offending_dim_p)
 {
     int dim;
@@ -290,7 +290,7 @@ int castle_object_btree_key_bounds_check(c_vl_bkey_t *key,
     {
         uint32_t key_dim_len, key_dim_flags, start_dim_len, start_dim_flags;
         uint32_t end_dim_len, end_dim_flags;
-        char *key_dim, *start_dim, *end_dim;
+        const char *key_dim, *start_dim, *end_dim;
         int cmp;
 
         key_dim_len     = castle_object_btree_key_dim_length(key, dim);
@@ -335,8 +335,8 @@ int castle_object_btree_key_bounds_check(c_vl_bkey_t *key,
     return 0;
 }
 
-c_vl_bkey_t* castle_object_btree_key_skip(c_vl_bkey_t *old_key,
-                                          c_vl_bkey_t *start,
+c_vl_bkey_t* castle_object_btree_key_skip(const c_vl_bkey_t *old_key,
+                                          const c_vl_bkey_t *start,
                                           int offending_dim,
                                           int out_of_range)
 {
