@@ -553,7 +553,7 @@ static const unsigned char *norm_key_unlace(char *dst, const unsigned char *src,
     {
         size_t fin_len = (*marker - KEY_MARKER_END_BASE) / 2;
         memcpy(dst, src, fin_len);
-        len += fin_len;
+        *len += fin_len;
     }
     return ++marker;
 }
