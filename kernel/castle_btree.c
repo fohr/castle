@@ -2657,15 +2657,15 @@ static void castle_btree_c2b_forget(c_bvec_t *c_bvec)
     write_unlock = (write ? test_bit(CBV_PARENT_WRITE_LOCKED, &c_bvec->flags) :
                             test_bit(CBV_CHILD_WRITE_LOCKED, &c_bvec->flags));
     /* Release the buffer if one exists */
-    if(c2b_to_forget)
+    if (c2b_to_forget)
     {
-        if(write_unlock)
+        if (write_unlock)
         {
             write_unlock_c2b(c2b_to_forget);
         }
         else
         {
-            read_unlock_c2b(c2b_to_forget);
+            read_unlock_node(c2b_to_forget);
         }
 
         put_c2b(c2b_to_forget);
@@ -2692,7 +2692,7 @@ static void castle_btree_c2b_remember(c_bvec_t *c_bvec, c2_block_t *c2b)
 {
     /* Save the new node buffer, and the lock flags */
     c_bvec->btree_node = c2b;
-    if(test_bit(CBV_C2B_WRITE_LOCKED, &c_bvec->flags))
+    if (test_bit(CBV_C2B_WRITE_LOCKED, &c_bvec->flags))
     {
         BUG_ON(!c2b_write_locked(c2b));
         set_bit(CBV_CHILD_WRITE_LOCKED, &c_bvec->flags);
@@ -2718,14 +2718,14 @@ static void castle_btree_c2b_lock(c_bvec_t *c_bvec, c2_block_t *c2b)
        - on writes, if we reached leaf level (possibly following leaf pointers)
        - on writes, if we are doing splits
      */
-    if(!c2b_uptodate(c2b) || write)
+    if (!c2b_uptodate(c2b) || write)
     {
         write_lock_c2b(c2b);
         set_bit(CBV_C2B_WRITE_LOCKED, &c_bvec->flags);
     }
     else
     {
-        read_lock_c2b(c2b);
+        read_lock_node(c2b);
         clear_bit(CBV_C2B_WRITE_LOCKED, &c_bvec->flags);
     }
     castle_debug_bvec_update(c_bvec, C_BVEC_BTREE_LOCKED_NODE);
@@ -3057,7 +3057,7 @@ static void __castle_btree_iter_release(c_iter_t *c_iter)
             iter_debug("===> Trying to unlock indirect node i=%d\n", i);
             if(indirect_node(i)->c2b)
             {
-                read_unlock_c2b(indirect_node(i)->c2b);
+                read_unlock_node(indirect_node(i)->c2b);
                 put_c2b(indirect_node(i)->c2b);
                 indirect_node(i)->c2b = NULL;
             }
@@ -3067,7 +3067,7 @@ static void __castle_btree_iter_release(c_iter_t *c_iter)
     }
     iter_debug("%p unlocks leaf (0x%x, 0x%x)\n",
         c_iter, leaf->cep.ext_id, leaf->cep.offset);
-    read_unlock_c2b(leaf);
+    read_unlock_node(leaf);
 }
 
 /**
@@ -3204,7 +3204,7 @@ static void castle_btree_iter_leaf_ptrs_lock(c_iter_t *c_iter)
          * IO while we waited; if so, downgrade to a read lock. */
         if (c2b_uptodate(c2b))
         {
-            read_lock_c2b(c2b);
+            read_lock_node(c2b);
         }
         else
         {
@@ -3212,13 +3212,13 @@ static void castle_btree_iter_leaf_ptrs_lock(c_iter_t *c_iter)
             if(c2b_uptodate(c2b))
             {
                 /* Somebody else did IO for us. */
-                downgrade_write_c2b(c2b);
+                downgrade_write_node(c2b);
             }
             else
             {
                 /* We need to do IO. */
                 BUG_ON(submit_c2b_sync(READ, c2b));
-                downgrade_write_c2b(c2b);
+                downgrade_write_node(c2b);
             }
         }
         indirect_node(i)->c2b = c2b;
@@ -3505,7 +3505,7 @@ static int __castle_btree_iter_path_traverse(c_iter_t *c_iter)
         iter_debug("iter %p unlocking cep "cep_fmt_str"\n",
                 c_iter,
                 cep2str(c_iter->path[c_iter->depth]->cep));
-        read_unlock_c2b(c_iter->path[c_iter->depth]);
+        read_unlock_node(c_iter->path[c_iter->depth]);
         /* No need to reset running_async as the iterator is to terminate. */
         castle_btree_iter_end(c_iter, c_iter->err, c_iter->running_async);
 
@@ -3542,12 +3542,12 @@ static int __castle_btree_iter_path_traverse(c_iter_t *c_iter)
             skip = (index == node->used) ||
                    (c_iter->need_visit && !c_iter->need_visit(c_iter, node_cep));
 
-            if(skip)
+            if (skip)
             {
                 castle_btree_iter_parent_node_idx_increment(c_iter);
                 iter_debug("skipping, iter %p, unlocking cep "cep_fmt_str"\n",
                         c_iter, cep2str(node_cep));
-                read_unlock_c2b(c_iter->path[c_iter->depth]);
+                read_unlock_node(c_iter->path[c_iter->depth]);
 
                 castle_btree_iter_start(c_iter);
 
@@ -3559,7 +3559,7 @@ static int __castle_btree_iter_path_traverse(c_iter_t *c_iter)
             BUG_ON((index != -1) || skip);
 
             /* Deal with leafs first */
-            if(node->is_leaf)
+            if (node->is_leaf)
             {
                 int ret;
 
@@ -3648,7 +3648,7 @@ static void _castle_btree_iter_path_traverse(struct work_struct *work)
  * IO completion callback handler for castle_btree_iter_path_traverse().
  *
  * On successful IO:
- * - Downgrades c2b writelock to readlock
+ * - Downgrades c2b writelock to node readlock
  * - Pushes c2b node onto the path stack
  * - Continues iterator via a workqueue
  *
@@ -3673,7 +3673,7 @@ static void castle_btree_iter_path_traverse_endio(c2_block_t *c2b)
     }
     else
     {
-        downgrade_write_c2b(c2b);
+        downgrade_write_node(c2b);
 
         /* Push the node onto the path 'stack' */
         BUG_ON((c_iter->path[c_iter->depth] != NULL) && (c_iter->path[c_iter->depth] != c2b));
@@ -3731,7 +3731,7 @@ static int castle_btree_iter_path_traverse(c_iter_t *c_iter, c_ext_pos_t node_ce
      * while we waited; if so, downgrade to a read lock. */
     if (c2b_uptodate(c2b))
     {
-        read_lock_c2b(c2b);
+        read_lock_node(c2b);
     }
     else
     {
@@ -3739,7 +3739,7 @@ static int castle_btree_iter_path_traverse(c_iter_t *c_iter, c_ext_pos_t node_ce
         if (c2b_uptodate(c2b))
         {
             /* Somebody else did IO for us. */
-            downgrade_write_c2b(c2b);
+            downgrade_write_node(c2b);
         }
         else
             /* We need to schedule IO. */
@@ -3759,7 +3759,7 @@ static int castle_btree_iter_path_traverse(c_iter_t *c_iter, c_ext_pos_t node_ce
         c2_block_t *prev_c2b = c_iter->path[c_iter->depth - 1];
         iter_debug("iter %p unlocking cep "cep_fmt_str"\n",
                 c_iter, cep2str(prev_c2b->cep));
-        read_unlock_c2b(prev_c2b);
+        read_unlock_node(prev_c2b);
         /* Don't put_c2b(), handy if we need to rewalk the tree. */
     }
 
