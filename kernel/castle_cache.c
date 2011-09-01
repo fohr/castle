@@ -216,16 +216,16 @@ static inline int castle_cache_c2b_to_pages(c2_block_t *c2b)
     NOTE: continue in $(block of code) musn't use continue, because this
           would skip the block of code in c2b_for_each_c2p_end().
  */
-#define c2b_for_each_c2p_start(_c2p, _cep, _c2b)                         \
+#define c2b_for_each_c2p_start(_c2p, _cep, _c2b, _start)                 \
 {                                                                        \
     int _a, _nr_c2ps;                                                    \
     _nr_c2ps = castle_cache_pages_to_c2ps((_c2b)->nr_pages);             \
     _cep = (_c2b)->cep;                                                  \
-    for(_a=0; _a<_nr_c2ps; _a++)                                         \
+    for(_a=_start; _a<_nr_c2ps; _a++)                                    \
     {                                                                    \
         _c2p = (_c2b)->c2ps[_a];
 
-#define c2b_for_each_c2p_end(_c2p, _cep, _c2b)                           \
+#define c2b_for_each_c2p_end(_c2p, _cep, _c2b, _start)                   \
         (_cep).offset += (PAGES_PER_C2P * PAGE_SIZE);                    \
     }                                                                    \
 }
@@ -235,7 +235,7 @@ static inline int castle_cache_c2b_to_pages(c2_block_t *c2b)
     c_ext_pos_t __cep;                                                   \
     int _i, _cnt;                                                        \
     _cnt = 0;                                                            \
-    c2b_for_each_c2p_start(_c2p, __cep, _c2b)                            \
+    c2b_for_each_c2p_start(_c2p, __cep, _c2b, 0)                         \
     {                                                                    \
         (_cep) = __cep;                                                  \
         for(_i=0; (_i<PAGES_PER_C2P) && (_cnt < (_c2b)->nr_pages); _i++) \
@@ -247,7 +247,7 @@ static inline int castle_cache_c2b_to_pages(c2_block_t *c2b)
             _cnt++;                                                      \
         }                                                                \
     }                                                                    \
-    c2b_for_each_c2p_end(_c2p, __cep, _c2b)                              \
+    c2b_for_each_c2p_end(_c2p, __cep, _c2b, 0)                           \
 }
 
 int                   castle_last_checkpoint_ongoing = 0;
@@ -567,6 +567,12 @@ static void lock_c2p(c2_page_t *c2p, int write)
         down_read(&c2p->lock);
 }
 
+/**
+ * Try and lock c2p.
+ *
+ * @return  1   Success
+ * @return  0   Failure
+ */
 static int trylock_c2p(c2_page_t *c2p, int write)
 {
     if (write)
@@ -648,50 +654,100 @@ static inline void unlock_c2b_counter(c2_block_t *c2b, int write)
 
 /**
  * Downgrade a c2b write-lock to read-lock.
+ *
+ * @param   first   1 => Downgrade first c2p, unlock other c2ps
+ *                  0 => Downgrade all c2ps
+ *
+ * NOTE: This function is expected to be called following performing read I/O on
+ *       the c2b.  For this reason the semantic for 'nodes' differs from the
+ *       standard read/write lock/unlock functions.
+ *       Rather than downgrading just the first c2p to a read lock, we then
+ *       proceed to drop all locks on the subsequent c2ps.  This makes sense as
+ *       in the case of performing read I/O we still need to write-lock all of
+ *       the c2ps and hence we need to downgrade from a write-locked c2b to a
+ *       read-locked 'node'.
  */
-void downgrade_write_c2b(c2_block_t *c2b)
+void __downgrade_write_c2b(c2_block_t *c2b, int first)
 {
     c_ext_pos_t cep_unused;
     c2_page_t *c2p;
 
     unlock_c2b_counter(c2b, 1 /*write*/);
-    c2b_for_each_c2p_start(c2p, cep_unused, c2b)
+    if (first)
     {
-        downgrade_write_c2p(c2p);
+        /* Downgrade the first c2p to a read lock
+         * then unlock all of the remaining c2ps. */
+        downgrade_write_c2p(c2b->c2ps[0]);
+        c2b_for_each_c2p_start(c2p, cep_unused, c2b, 1)
+        {
+            unlock_c2p(c2p, 1 /*write*/);
+        }
+        c2b_for_each_c2p_end(c2p, cep_unused, c2b, 1)
     }
-    c2b_for_each_c2p_end(c2p, cep_unused, c2b)
+    else
+    {
+        /* Downgrade all of the c2ps to read locks. */
+        c2b_for_each_c2p_start(c2p, cep_unused, c2b, 0)
+        {
+            downgrade_write_c2p(c2p);
+        }
+        c2b_for_each_c2p_end(c2p, cep_unused, c2b, 0)
+    }
     lock_c2b_counter(c2b, 0 /*read*/);
 }
 
-void __lock_c2b(c2_block_t *c2b, int write)
+/**
+ * Lock c2ps associated with c2b.
+ *
+ * @param   write   1 => Write lock
+ *                  0 => Read lock
+ * @param   first   1 => Lock only first c2p
+ *                  0 => Lock all c2ps
+ */
+void __lock_c2b(c2_block_t *c2b, int write, int first)
 {
     c_ext_pos_t cep_unused;
     c2_page_t *c2p;
 
-    c2b_for_each_c2p_start(c2p, cep_unused, c2b)
+    if (first)
+        lock_c2p(c2b->c2ps[0], write);
+    else
     {
-        lock_c2p(c2p, write);
+        c2b_for_each_c2p_start(c2p, cep_unused, c2b, 0)
+        {
+            lock_c2p(c2p, write);
+        }
+        c2b_for_each_c2p_end(c2p, cep_unused, c2b, 0)
     }
-    c2b_for_each_c2p_end(c2p, cep_unused, c2b)
     /* Make sure that c2b counter is updated */
     lock_c2b_counter(c2b, write);
 }
 
+/**
+ * Try and lock c2ps associated with c2b.
+ *
+ * @param   write   1 => Try and get write lock
+ *                  0 => Try and get read lock
+ *
+ * @return  1   Success
+ * @return  0   Failure
+ */
 int __trylock_c2b(c2_block_t *c2b, int write)
 {
     c_ext_pos_t cep_unused;
     c2_page_t *c2p;
     int success_cnt, ret;
 
+    /* Try and lock all c2ps. */
     success_cnt = 0;
-    c2b_for_each_c2p_start(c2p, cep_unused, c2b)
+    c2b_for_each_c2p_start(c2p, cep_unused, c2b, 0)
     {
         ret = trylock_c2p(c2p, write);
         if(ret == 0)
             goto fail_out;
         success_cnt++;
     }
-    c2b_for_each_c2p_end(c2p, cep_unused, c2b)
+    c2b_for_each_c2p_end(c2p, cep_unused, c2b, 0)
 
     /* Succeeded locking all c2ps. Make sure that c2b counter is updated. */
     lock_c2b_counter(c2b, write);
@@ -699,21 +755,34 @@ int __trylock_c2b(c2_block_t *c2b, int write)
     return 1;
 
 fail_out:
-    c2b_for_each_c2p_start(c2p, cep_unused, c2b)
+    c2b_for_each_c2p_start(c2p, cep_unused, c2b, 0)
     {
         if(success_cnt == 0)
             return 0;
         unlock_c2p(c2p, write);
         success_cnt--;
     }
-    c2b_for_each_c2p_end(c2p, cep_unused, c2b)
+    c2b_for_each_c2p_end(c2p, cep_unused, c2b, 0)
 
     /* Should never get here */
     BUG();
     return 0;
 }
 
-static inline void __unlock_c2b(c2_block_t *c2b, int write)
+int __trylock_node(c2_block_t *c2b, int write)
+{
+    return trylock_c2p(c2b->c2ps[0], write);
+}
+
+/**
+ * Unlock c2ps associated with c2b.
+ *
+ * @param   write   1 => Release write lock
+ *                  0 => Release read lock
+ * @param   first   1 => Unlock only first c2p
+ *                  0 => Unlock all c2ps
+ */
+static inline void __unlock_c2b(c2_block_t *c2b, int write, int first)
 {
     c_ext_pos_t cep_unused;
     c2_page_t *c2p;
@@ -727,22 +796,29 @@ static inline void __unlock_c2b(c2_block_t *c2b, int write)
 #endif
 
     unlock_c2b_counter(c2b, write);
-    c2b_for_each_c2p_start(c2p, cep_unused, c2b)
+    if (first)
+        /* Unlock the first c2p only. */
+        unlock_c2p(c2b->c2ps[0], write);
+    else
     {
-        unlock_c2p(c2p, write);
+        /* Unlock all c2ps. */
+        c2b_for_each_c2p_start(c2p, cep_unused, c2b, 0)
+        {
+            unlock_c2p(c2p, write);
+        }
+        c2b_for_each_c2p_end(c2p, cep_unused, c2b, 0)
     }
-    c2b_for_each_c2p_end(c2p, cep_unused, c2b)
 }
 
-void write_unlock_c2b(c2_block_t *c2b)
+void __write_unlock_c2b(c2_block_t *c2b, int first)
 {
     BUG_ON(!c2b_write_locked(c2b));
-    __unlock_c2b(c2b, 1);
+    __unlock_c2b(c2b, 1 /*write*/, first);
 }
 
-void read_unlock_c2b(c2_block_t *c2b)
+void __read_unlock_c2b(c2_block_t *c2b, int first)
 {
-    __unlock_c2b(c2b, 0);
+    __unlock_c2b(c2b, 0 /*write*/, first);
 }
 
 int c2b_write_locked(c2_block_t *c2b)
@@ -2876,9 +2952,9 @@ static void castle_cache_block_free(c2_block_t *c2b)
         c2_page_t *c2p;
         c_ext_pos_t cep_unused;
 
-        c2b_for_each_c2p_start(c2p, cep_unused, c2b)
+        c2b_for_each_c2p_start(c2p, cep_unused, c2b, 0)
             debug("Freeing c2p id=%d, from c2b=%p\n", c2p->id, c2b);
-        c2b_for_each_c2p_end(c2p, cep_unused, c2b)
+        c2b_for_each_c2p_end(c2p, cep_unused, c2b, 0)
     }
 #endif
 
@@ -3593,12 +3669,12 @@ static c2_block_t* c2_pref_block_chunk_get(c_ext_pos_t cep, c2_pref_window_t *wi
         c_ext_pos_t cep_unused;
         int up2date = 1;
 
-        c2b_for_each_c2p_start(c2p, cep_unused, c2b)
+        c2b_for_each_c2p_start(c2p, cep_unused, c2b, 0)
         {
             if (!c2p_uptodate(c2p))
                 up2date = 0;
         }
-        c2b_for_each_c2p_end(c2p, cep_unused, c2b)
+        c2b_for_each_c2p_end(c2p, cep_unused, c2b, 0)
 
         if (up2date)
             set_c2b_uptodate(c2b);

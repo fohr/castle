@@ -4239,8 +4239,10 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
             debug("%s::putting c2b of btree node %i "cep_fmt_str" for da %d level %d.\n",
                 __FUNCTION__, i, cep2str(c2b->cep), merge->da->id, merge->level);
             /* leaf nodes remain locked throughout a merge */
-            if(i==0)
+            if (i == 0)
+            {
                 write_unlock_c2b(c2b);
+            }
             else
                 BUG_ON(c2b_write_locked(c2b));
             put_c2b(c2b);
@@ -6361,8 +6363,10 @@ static int castle_da_merge_do(struct castle_double_array *da,
             node_c2b = merge->levels[i].node_c2b;
             if(node_c2b)
             {
-                if(i==0)
+                if (i == 0)
+                {
                     write_unlock_c2b(node_c2b);
+                }
                 else
                     BUG_ON(c2b_write_locked(node_c2b)); /* arriving here, only leaf node may be locked */
             }

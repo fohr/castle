@@ -41,46 +41,95 @@ typedef struct castle_cache_block {
 /**********************************************************************************************
  * Locking.
  */
-void __lock_c2b             (c2_block_t *c2b, int write_mode);
-int  __trylock_c2b          (c2_block_t *c2b, int write_mode);
-void downgrade_write_c2b    (c2_block_t *c2b);
-void write_unlock_c2b       (c2_block_t *c2b);
-void read_unlock_c2b        (c2_block_t *c2b);
-int  c2b_read_locked        (c2_block_t *c2b);
-int  c2b_write_locked       (c2_block_t *c2b);
+void __lock_c2b                     (c2_block_t *c2b, int write, int first);
+int  __trylock_c2b                  (c2_block_t *c2b, int write);
+int  __trylock_node                 (c2_block_t *c2b, int write);
+void __downgrade_write_c2b          (c2_block_t *c2b, int first);
+void __write_unlock_c2b             (c2_block_t *c2b, int first);
+void __read_unlock_c2b              (c2_block_t *c2b, int first);
+//int write_trylock_c2b             (c2_block_t *c2b);
+//int read_trylock_c2b              (c2_block_t *c2b);
+//void write_lock_c2b               (c2_block_t *c2b);
+//void read_lock_c2b                (c2_block_t *c2b);
+#define downgrade_write_c2b(_c2b)   __downgrade_write_c2b(_c2b, 0);
+#define write_unlock_c2b(_c2b)      __write_unlock_c2b(_c2b, 0);
+#define read_unlock_c2b(_c2b)       __read_unlock_c2b(_c2b, 0);
+//int write_trylock_node            (c2_block_t *c2b);
+//int read_trylock_node             (c2_block_t *c2b);
+//void write_lock_node              (c2_block_t *c2b);
+//void read_lock_node               (c2_block_t *c2b);
+#define downgrade_write_node(_c2b)  __downgrade_write_c2b(_c2b, 1);
+#define write_unlock_node(_c2b)     __write_unlock_c2b(_c2b, 1);
+#define read_unlock_node(_c2b)      __read_unlock_c2b(_c2b, 1);
+int  c2b_read_locked                (c2_block_t *c2b);
+int  c2b_write_locked               (c2_block_t *c2b);
 
+static inline int write_trylock_c2b(c2_block_t *c2b)
+{
+    return __trylock_c2b(c2b, 1);
+}
+static inline int read_trylock_c2b(c2_block_t *c2b)
+{
+    return __trylock_c2b(c2b, 0);
+}
+
+static inline int write_trylock_node(c2_block_t *c2b)
+{
+    return __trylock_node(c2b, 1 /*write*/);
+}
+static inline int read_trylock_node(c2_block_t *c2b)
+{
+    return __trylock_node(c2b, 0 /*write*/);
+}
+
+/*
+ * c2b locks that span all of the c2b->c2ps.
+ */
 #ifdef CASTLE_DEBUG
 #define write_lock_c2b(_c2b)          \
 {                                     \
     might_sleep();                    \
-     __lock_c2b(_c2b, 1);             \
+    __lock_c2b(_c2b, 1, 0);           \
     (_c2b)->file = __FILE__;          \
     (_c2b)->line = __LINE__;          \
 }
 #define read_lock_c2b(_c2b)           \
 {                                     \
     might_sleep();                    \
-     __lock_c2b(_c2b, 0);             \
+    __lock_c2b(_c2b, 0, 0);           \
 }
 #else /* CASTLE_DEBUG */
 #define write_lock_c2b(_c2b)          \
-     __lock_c2b(_c2b, 1);
-
+    __lock_c2b(_c2b, 1, 0);
 #define read_lock_c2b(_c2b)           \
-     __lock_c2b(_c2b, 0);
+    __lock_c2b(_c2b, 0, 0);
 #endif /* CASTLE_DEBUG */
 
-static inline int write_trylock_c2b(c2_block_t *c2b)
-{
-     return __trylock_c2b(c2b, 1);
+/*
+ * c2b locks that lock just c2b->c2ps[0] (e.g. first c2p).
+ */
+#ifdef CASTLE_DEBUG
+#define write_lock_node(_c2b)         \
+{                                     \
+    might_sleep();                    \
+    __lock_c2b(_c2b, 1, 1);           \
+    (_c2b)->file = __FILE__;          \
+    (_c2b)->line = __LINE__;          \
 }
-static inline int read_trylock_c2b(c2_block_t *c2b)
-{
-     return __trylock_c2b(c2b, 0);
+#define read_lock_node(_c2b)          \
+{                                     \
+    might_sleep();                    \
+    __lock_c2b(_c2b, 0, 1);           \
 }
+#else /* CASTLE_DEBUG */
+#define write_lock_node(_c2b)         \
+    __lock_c2b(_c2b, 1, 1);
+#define read_lock_node(_c2b)          \
+    __lock_c2b(_c2b, 0, 1);
+#endif /* CASTLE_DEBUG */
 
 /**********************************************************************************************
- * Dirting & up-to-date.
+ * Dirtying & up-to-date.
  */
 int  c2b_dirty              (c2_block_t *c2b);
 void dirty_c2b              (c2_block_t *c2b);

@@ -2660,9 +2660,13 @@ static void castle_btree_c2b_forget(c_bvec_t *c_bvec)
     if(c2b_to_forget)
     {
         if(write_unlock)
+        {
             write_unlock_c2b(c2b_to_forget);
+        }
         else
+        {
             read_unlock_c2b(c2b_to_forget);
+        }
 
         put_c2b(c2b_to_forget);
     }
@@ -3206,8 +3210,10 @@ static void castle_btree_iter_leaf_ptrs_lock(c_iter_t *c_iter)
         {
             write_lock_c2b(c2b);
             if(c2b_uptodate(c2b))
+            {
                 /* Somebody else did IO for us. */
                 downgrade_write_c2b(c2b);
+            }
             else
             {
                 /* We need to do IO. */
@@ -3731,8 +3737,10 @@ static int castle_btree_iter_path_traverse(c_iter_t *c_iter, c_ext_pos_t node_ce
     {
         write_lock_c2b(c2b);
         if (c2b_uptodate(c2b))
+        {
             /* Somebody else did IO for us. */
             downgrade_write_c2b(c2b);
+        }
         else
             /* We need to schedule IO. */
             write_locked = 1;
