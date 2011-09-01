@@ -159,9 +159,9 @@ static size_t norm_key_packed_size_predict(const struct castle_var_length_btree_
         else size += MARKER_STRIDE + 1;
     }
 
+    size += dim >= DIM_NUMBER_LARGE ? 6 : 2;
     if (size - 2 >= KEY_LENGTH_LARGE)
         size += 4;
-    size += dim >= DIM_NUMBER_LARGE ? 6 : 2;
 
     return size;
 }
@@ -301,7 +301,7 @@ struct castle_norm_key *castle_norm_key_pack(const struct castle_var_length_btre
         }
     }
 
-    BUG_ON(data - result->data != result->length);
+    BUG_ON(data - result->data != size - 2);
     return result;
 }
 
