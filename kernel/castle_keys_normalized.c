@@ -596,21 +596,14 @@ struct castle_var_length_btree_key *castle_norm_key_unpack(const struct castle_n
         key_pos = norm_key_unlace(((char *) result) + offset, key_pos, &dim_len);
         marker = *(key_pos-1);
 
+        result->dim_head[dim] = offset << KEY_DIMENSION_FLAGS_SHIFT;
         if (marker == KEY_MARKER_MINUS_INFINITY)
-        {
-            result->dim_head[dim] = KEY_DIMENSION_MINUS_INFINITY_FLAG;
-        }
+            result->dim_head[dim] |= KEY_DIMENSION_MINUS_INFINITY_FLAG;
         else if (marker == KEY_MARKER_PLUS_INFINITY)
-        {
-            result->dim_head[dim] = KEY_DIMENSION_PLUS_INFINITY_FLAG;
-        }
-        else
-        {
-            result->dim_head[dim] = (offset << KEY_DIMENSION_FLAGS_SHIFT);
-            if ((marker - KEY_MARKER_END_BASE) % 2 == 1)
-                result->dim_head[dim] |= KEY_DIMENSION_NEXT_FLAG;
-            offset += dim_len;
-        }
+            result->dim_head[dim] |= KEY_DIMENSION_PLUS_INFINITY_FLAG;
+        else if ((marker - KEY_MARKER_END_BASE) % 2 == 1)
+            result->dim_head[dim] |= KEY_DIMENSION_NEXT_FLAG;
+        offset += dim_len;
     }
 
     BUG_ON(key_pos != key_end);
