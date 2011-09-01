@@ -17,6 +17,9 @@
 
 #define BUG()                   assert(0)
 #define BUG_ON(x)               assert(!(x))
+#define kmalloc(x, _)           malloc(x)
+#define kzalloc(x, _)           calloc(1, x)
+#define kfree(x)                free(x)
 #endif
 
 /*
@@ -24,15 +27,12 @@
  */
 #include "castle_public.h"
 #include "castle_defines.h"
-#ifdef __KERNEL__
 #include "castle_debug.h"
-#include "castle_utils.h"       /* LOG_ERROR */
+#ifdef __KERNEL__
+#include "castle_utils.h"       /* castle_printk() and friends */
 #else
 #define LOG_ERROR               stderr
 #define castle_printk           fprintf
-#define castle_malloc(x, _)     malloc(x)
-#define castle_zalloc(x, _)     calloc(1, x)
-#define castle_kfree(x)         free(x)
 #endif
 #include "castle_keys_vlba.h"
 
