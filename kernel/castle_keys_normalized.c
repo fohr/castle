@@ -161,8 +161,7 @@ static size_t norm_key_packed_size_predict(const struct castle_var_length_btree_
 
     if (size - 2 >= KEY_LENGTH_LARGE)
         size += 4;
-    if (dim >= DIM_NUMBER_LARGE)
-        size += 4;
+    size += dim >= DIM_NUMBER_LARGE ? 6 : 2;
 
     return size;
 }
