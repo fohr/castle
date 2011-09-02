@@ -724,29 +724,28 @@ struct castle_vlba_tree_node {
     /*         64 */
 } PACKED;
 
-#define VLBA_TREE_NODE_SIZE(_node)          ((_node)->size)
-#define VLBA_TREE_NODE_LENGTH(_node)        ({int _ns = VLBA_TREE_NODE_SIZE(_node);       \
+#define VLBA_TREE_NODE_LENGTH(_node)        ({int _ns = (_node)->size;                    \
                                               BUG_ON(_ns == 0 || _ns > 256);              \
                                               (_ns * C_BLK_SIZE); })
-#define EOF_VLBA_NODE(_node)                (((uint8_t *)_node) + VLBA_TREE_NODE_LENGTH(_node))
+#define EOF_VLBA_NODE(_node)                ((uint8_t *) (_node) + VLBA_TREE_NODE_LENGTH(_node))
 #define VLBA_KEY_LENGTH(_key)               (VLBA_TREE_KEY_MAX(_key) ? 0 : (_key)->length)
 #define VLBA_INLINE_VAL_LENGTH(_entry)                                      \
-                (VLBA_TREE_ENTRY_IS_INLINE(_entry)?(_entry)->val_len:0)
+                (VLBA_TREE_ENTRY_IS_INLINE(_entry) ? (_entry)->val_len : 0)
 #define VLBA_ENTRY_LENGTH(_entry)                                           \
                 (sizeof(struct castle_vlba_tree_entry) +                    \
-                VLBA_KEY_LENGTH(&(_entry)->key) +                           \
-                VLBA_INLINE_VAL_LENGTH(_entry))
+                 VLBA_KEY_LENGTH(&(_entry)->key) +                          \
+                 VLBA_INLINE_VAL_LENGTH(_entry))
 #define MAX_VLBA_ENTRY_LENGTH                                               \
                 (sizeof(struct castle_vlba_tree_entry) +                    \
                  VLBA_TREE_MAX_KEY_SIZE +                                   \
                  MAX_INLINE_VAL_SIZE +                                      \
-                 sizeof(uint32_t))
+                 sizeof(uint32_t)) /* for the index entry */
 #define VLBA_ENTRY_PTR(__node, _vlba_node, _i)                              \
-                (EOF_VLBA_NODE(__node) - _vlba_node->key_idx[_i])
+                (EOF_VLBA_NODE(__node) - (_vlba_node)->key_idx[_i])
 #define VLBA_ENTRY_VAL_PTR(_entry)                                          \
-                ((uint8_t *)((uint8_t *)_entry +                            \
-                 VLBA_ENTRY_LENGTH(_entry) -                                \
-                 _entry->val_len))
+                ((uint8_t *) (_entry) +                                     \
+                 sizeof(struct castle_vlba_tree_entry) +                    \
+                 VLBA_KEY_LENGTH(&(_entry)->key))
 
 /**
  * Returns maximum number of entries that can be stored in a node of the specified size
