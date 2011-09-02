@@ -956,10 +956,10 @@ static int castle_vlba_tree_key_compare(void *keyv1, void *keyv2)
         return 0;
 
     if(unlikely(VLBA_TREE_KEY_INVAL(key1)))
-        return -1;
+        return 1;
 
     if(unlikely(VLBA_TREE_KEY_INVAL(key2)))
-        return 1;
+        return -1;
 
     key1_min = !!VLBA_TREE_KEY_MIN(key1);
     key2_min = !!VLBA_TREE_KEY_MIN(key2);
