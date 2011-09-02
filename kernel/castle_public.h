@@ -517,10 +517,11 @@ typedef struct castle_var_length_btree_key {
  * Castle request interface definitions.
  */
 
-#define CASTLE_RING_PAGES (32)                              /**< 32 requests/page.                */
-#define CASTLE_RING_SIZE (CASTLE_RING_PAGES << PAGE_SHIFT)  /**< Must be ^2 or things break.      */
+#define CASTLE_RING_PAGES (32)                              /**< 32 requests/page.              */
+#define CASTLE_RING_SIZE (CASTLE_RING_PAGES << PAGE_SHIFT)  /**< Must be ^2 or things break.    */
 
-#define CASTLE_STATEFUL_OPS 512
+#define CASTLE_STATEFUL_OPS 512                             /**< Must be adjusted along with
+                                                                 CASTLE_RING_PAGES.             */
 
 #define CASTLE_IOCTL_POKE_RING 2
 #define CASTLE_IOCTL_WAIT 3

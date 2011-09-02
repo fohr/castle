@@ -3332,6 +3332,9 @@ long castle_back_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned lo
     switch (cmd)
     {
         case CASTLE_IOCTL_POKE_RING:
+            /* If conn->work_thread has a lower priority (nice) than the
+             * calling thread, we will enter the scheduler on the return
+             * from the system call. */
             wake_up_process(conn->work_thread);
             break;
 
