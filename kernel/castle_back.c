@@ -22,7 +22,7 @@
 #include "castle_utils.h"
 #include "castle_debug.h"
 #include "castle_back.h"
-#include "ring.h"
+#include "castle_ring.h"
 
 DEFINE_RING_TYPES(castle, castle_request_t, castle_response_t);
 

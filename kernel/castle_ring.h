@@ -232,6 +232,12 @@ typedef struct __name##_back_ring __name##_back_ring_t
         ((_r)->req_cons - (_r)->rsp_prod_pvt);                          \
     req < rsp ? req : rsp;                                              \
 })
+
+#define RING_UNCONSUMED_REQUESTS(_r) ({                                 \
+    unsigned int reqs = (_r)->sring->req_prod - (_r)->req_cons;         \
+    reqs;                                                               \
+})
+
 #else
 /* Same as above, but without the nice GCC ({ ... }) syntax. */
 #define RING_HAS_UNCONSUMED_REQUESTS(_r)                                \
