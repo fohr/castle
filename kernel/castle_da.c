@@ -5897,17 +5897,6 @@ static void castle_da_merge_marshall(struct castle_dmserlist_entry *merge_mstore
         else
             in_tree_merge_mstore[i].iter.immut_next_c2b_cep = INVAL_EXT_POS;
 
-#ifdef DEBUG_MERGE_SERDES
-        if(curr_comp->cached)
-        {
-            vlba_key_t *key;
-            key = (vlba_key_t *)curr_comp->cached_entry.k;
-            debug("%s::Currently cached key (hash) 0x%llx of length %d on comp[%d] "
-                    "for marshalling merge (da %d level %d).\n",
-                    __FUNCTION__, murmur_hash_64(key->_key, key->length, 0), key->length, i,
-                    merge->da->id, merge->level);
-        }
-#endif
         curr_comp++; /* go to next component iterator */
     }
     if (partial_marshall) return;

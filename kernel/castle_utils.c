@@ -631,6 +631,34 @@ print_and_exit:
     castle_printk(level, "%s, len=%d\n", _buf, key->length);
 }
 
+c_val_tup_t convert_to_cvt(uint8_t type,
+                           uint64_t length,
+                           c_ext_pos_t cep,
+                           void *inline_ptr)
+{
+    c_val_tup_t cvt;
+
+    memset(&cvt, 0, sizeof(c_val_tup_t));
+    cvt.type    = type;
+    cvt.length  = length;
+    if (CVT_LEAF_PTR(cvt) || CVT_NODE(cvt) || CVT_ON_DISK(cvt))
+    {
+        cvt.cep    = cep;
+    }
+    else if (CVT_TOMBSTONE(cvt))
+    {
+        cvt.length = 0;
+        cvt.cep    = INVAL_EXT_POS;
+    }
+    else if (CVT_INLINE(cvt))
+    {
+        BUG_ON(!inline_ptr);
+        cvt.val_p = inline_ptr;
+    }
+
+    return cvt;
+}
+
 
 /**
  * Copies a string out of the userspace, performing checks to verify that string

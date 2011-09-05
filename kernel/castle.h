@@ -911,8 +911,6 @@ struct castle_btree_type {
 #endif
 };
 
-#define MTREE_NODE_SIZE     (10) /* In blocks */
-
 typedef struct castle_bloom_filter {
     uint8_t                   num_hashes;
     uint32_t                  block_size_pages;

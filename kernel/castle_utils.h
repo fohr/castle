@@ -332,8 +332,11 @@ void        castle_component_tree_prefetch(struct castle_component_tree *ct);
 inline void list_swap(struct list_head *t1, struct list_head *t2);
 void        list_sort(struct list_head *list,
                       int (*compare)(struct list_head *l1, struct list_head *l2));
-void        vl_bkey_print(c_printk_level_t level, c_vl_bkey_t *key);
+
 void        skb_print(struct sk_buff *skb);
+void        vl_bkey_print(c_printk_level_t level, c_vl_bkey_t *key);
+
+c_val_tup_t convert_to_cvt(uint8_t type, uint64_t length, c_ext_pos_t cep, void *inline_ptr);
 
 int         castle_from_user_copy(const char __user *from, int len, int max_len, char **to);
 
