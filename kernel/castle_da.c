@@ -4223,6 +4223,8 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
         BUG_ON(!merge->da->levels[merge->level].merge.redirection_partition.key);
         castle_key_ptr_destroy(&merge->da->levels[merge->level].merge.redirection_partition);
         write_unlock(&merge->da->lock);
+        debug("%s::[da %d level %d] queriable output trees left: %d\n",
+            __FUNCTION__, merge->da->id, merge->level, atomic_read(&merge->da->queriable_merge_trees_cnt));
     }
 
     /* Free all the buffers */
@@ -4576,9 +4578,11 @@ static void castle_da_merge_new_partition_activate(struct castle_da_merge *merge
         BUG_ON(merge->da->levels[merge->level].merge.redirection_partition.key);
         merge->da->levels[merge->level].merge.queriable_out_tree = merge->out_tree;
         atomic_inc(&merge->da->queriable_merge_trees_cnt);
-        castle_printk(LOG_DEBUG, "%s::[da %d level %d] making output tree %d queriable\n",
+        castle_printk(LOG_DEBUG, "%s::[da %d level %d] making output tree %p queriable;"
+                " now there are %d queriable trees on this DA.\n",
                 __FUNCTION__, merge->da->id, merge->level,
-                merge->da->levels[merge->level].merge.queriable_out_tree);
+                merge->da->levels[merge->level].merge.queriable_out_tree,
+                atomic_read(&merge->da->queriable_merge_trees_cnt));
     }
     else
     {
@@ -8723,6 +8727,7 @@ int castle_double_array_read(void)
             /* output tree pointer */
             des_da->levels[level].merge.queriable_out_tree =
                 des_da->levels[level].merge.serdes.out_tree;
+            atomic_inc(&des_da->queriable_merge_trees_cnt);
 
             /* recover c2b containing partition key */
             node_size = mstore_dmserentry->redirection_partition_node_size;
