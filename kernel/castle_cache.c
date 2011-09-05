@@ -4940,7 +4940,7 @@ restart_traverse:
             }
 
             /* If c2b is not in range, skip to next c2b. */
-            if ((c2b->cep.offset  + (c2b->nr_pages * PAGE_SIZE)) < start_off)
+            if ((c2b->cep.offset  + (c2b->nr_pages * PAGE_SIZE) - 1) < start_off)
                 goto next_c2b;
 
             if (test_set_c2b_flushing(c2b))
