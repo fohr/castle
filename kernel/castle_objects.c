@@ -1,7 +1,6 @@
 #include <linux/delay.h>
 
 #include "castle_public.h"
-#include "castle_compile.h"
 #include "castle.h"
 #include "castle_da.h"
 #include "castle_utils.h"
