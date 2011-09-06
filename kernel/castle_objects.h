@@ -10,14 +10,6 @@ c_vl_okey_t* castle_object_btree_key_convert (c_vl_bkey_t *btree_key);
 void         castle_object_okey_free         (c_vl_okey_t *obj_key);
 c_vl_okey_t *castle_object_okey_copy         (c_vl_okey_t *obj_key);
 #endif
-void         castle_object_bkey_free         (c_vl_bkey_t *btree_key);
-
-int          castle_object_btree_key_compare (c_vl_bkey_t *key1, c_vl_bkey_t *key2);
-void        *castle_object_btree_key_next    (c_vl_bkey_t *key);
-void        *castle_object_btree_key_duplicate(c_vl_bkey_t *key);
-int          castle_object_btree_key_copy    (c_vl_bkey_t   *src_key,
-                                              c_vl_bkey_t   *dest_key,
-                                              uint32_t       dest_len);
 
 int          castle_object_get               (struct castle_object_get *get,
                                               struct castle_attachment *attachment,
