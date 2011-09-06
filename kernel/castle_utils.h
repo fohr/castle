@@ -1,6 +1,7 @@
 #ifndef __CASTLE_UTILS_H__
 #define __CASTLE_UTILS_H__
 
+#include <linux/log2.h>
 #include <linux/skbuff.h>
 #include "castle_public.h"
 #include "castle.h"
@@ -8,8 +9,6 @@
 #include "castle_cache.h"
 
 #define ATOMIC(_i)  ((atomic_t)ATOMIC_INIT(_i))
-
-#define order_base_2(_n) ilog2(roundup_pow_of_two(_n))
 
 /* Uses RW spinlock for synchronization. Use iterate_exclusive() for exclusive
  * access while iterating over the hash table. */
