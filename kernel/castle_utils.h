@@ -339,6 +339,8 @@ c_val_tup_t convert_to_cvt(uint8_t type, uint64_t length, c_ext_pos_t cep, void 
 
 int         castle_from_user_copy(const char __user *from, int len, int max_len, char **to);
 
+void        castle_wake_up_task(struct task_struct *task, int inhibit_cs);
+
 void        castle_unmap_vm_area(void *addr_p, int nr_pages);
 int         castle_map_vm_area(void *addr_p, struct page **pages, int nr_pages, pgprot_t prot);
 

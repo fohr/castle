@@ -6982,7 +6982,7 @@ static int castle_da_merge_start(struct castle_double_array *da, void *unused)
 
     /* Wake up all of the merge threads. */
     for(i=0; i<MAX_DA_LEVEL-1; i++)
-        wake_up_process(da->levels[i].merge.thread);
+        castle_wake_up_task(da->levels[i].merge.thread, 1 /*inhibit_cs*/);
 
     __castle_da_threads_priority_set(da, &castle_nice_value);
 

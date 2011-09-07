@@ -3206,6 +3206,9 @@ int castle_cache_block_destroy(c2_block_t *c2b)
     return ret;
 }
 
+/**
+ * Wake up the castle_cache_flush() thread.
+ */
 void castle_cache_flush_wakeup(void)
 {
     wake_up_process(castle_cache_flush_thread);

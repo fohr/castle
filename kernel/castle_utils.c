@@ -709,6 +709,36 @@ err_out:
     return ret;
 }
 
+/**
+ * Wake-up a task, optionally trying to prevent a context switch.
+ *
+ * @param   task        Task to wake up
+ * @param   inhibit_cs  Whether to try and inhibit an immediate context switch
+ *
+ * wake_up_process() calls try_to_wake_up() in a manner such that when returning
+ * from the systemcall the userland process will be context-switched off the CPU
+ * immediately (in practice).  This is due to task priorities which are
+ * dynamically adjusted by the scheduler.
+ *
+ * To combat this we use default_wake_function() with a faked-up wait_queue
+ * structure and the relevant flags from wake_up_process().
+ *
+ * Used originally to help increase batching on the shared ring.
+ */
+void castle_wake_up_task(struct task_struct *task, int inhibit_cs)
+{
+    if (inhibit_cs)
+    {
+        wait_queue_t waitq;
+
+        waitq.private = task;
+        default_wake_function(&waitq, TASK_STOPPED | TASK_TRACED
+                | TASK_INTERRUPTIBLE | TASK_UNINTERRUPTIBLE, 1, NULL);
+    }
+    else
+        wake_up_process(task);
+}
+
 /**********************************************************************************************
  * Utilities for vmapping/vunmapping pages. Assumes that virtual address to map/unmap is known.
  * Copied from RHEL mm/vmalloc.c.
