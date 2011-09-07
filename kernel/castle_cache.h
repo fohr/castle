@@ -51,16 +51,16 @@ void __read_unlock_c2b              (c2_block_t *c2b, int first);
 //int read_trylock_c2b              (c2_block_t *c2b);
 //void write_lock_c2b               (c2_block_t *c2b);
 //void read_lock_c2b                (c2_block_t *c2b);
-#define downgrade_write_c2b(_c2b)   __downgrade_write_c2b(_c2b, 0);
-#define write_unlock_c2b(_c2b)      __write_unlock_c2b(_c2b, 0);
-#define read_unlock_c2b(_c2b)       __read_unlock_c2b(_c2b, 0);
+#define downgrade_write_c2b(_c2b)   __downgrade_write_c2b(_c2b, 0)
+#define write_unlock_c2b(_c2b)      __write_unlock_c2b(_c2b, 0)
+#define read_unlock_c2b(_c2b)       __read_unlock_c2b(_c2b, 0)
 //int write_trylock_node            (c2_block_t *c2b);
 //int read_trylock_node             (c2_block_t *c2b);
 //void write_lock_node              (c2_block_t *c2b);
 //void read_lock_node               (c2_block_t *c2b);
-#define downgrade_write_node(_c2b)  __downgrade_write_c2b(_c2b, 1);
-#define write_unlock_node(_c2b)     __write_unlock_c2b(_c2b, 1);
-#define read_unlock_node(_c2b)      __read_unlock_c2b(_c2b, 1);
+#define downgrade_write_node(_c2b)  __downgrade_write_c2b(_c2b, 1)
+#define write_unlock_node(_c2b)     __write_unlock_c2b(_c2b, 1)
+#define read_unlock_node(_c2b)      __read_unlock_c2b(_c2b, 1)
 int  c2b_read_locked                (c2_block_t *c2b);
 int  c2b_write_locked               (c2_block_t *c2b);
 
