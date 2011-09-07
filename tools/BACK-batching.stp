@@ -1,0 +1,77 @@
+/**
+ * Returns the number of elements in a list.
+ *
+ * @param   h   struct *list_head
+ *
+ * @return  Number of elements in list
+ */
+function elems_in_list:long (h:long) %{
+    struct list_head *_p, *_n, *head;
+    int i = 0;
+
+    head = (struct list_head *)(long)THIS->h;
+    list_for_each_safe(_p, _n, head) {
+        i++;
+    }
+
+    THIS->__retvalue = i;
+    CATCH_DEREF_FAULT();
+%}
+
+global wq_curr;             /**< Is a workqueue currently running?              */
+global wq_last_items;       /**< Number of work items at start of last event    */
+
+global RET_MIN_DELTA=1;     /**< run_workqueue.return minimum work delta        */
+global MIN_DELTA=1;         /**< Minimum number of work items to print          */
+
+probe kernel.function("run_workqueue") {
+    wq_name = kernel_string($cwq->wq->name);
+
+    if (wq_name == "systemtap" || wq_name == "events" || wq_name == "mpt_poll"
+            || wq_name == "kblockd" || wq_name == "rpciod" || wq_name == "mpt_poll_0"
+            || wq_name == "kthread" || wq_name == "castle_back_timeout"
+            || wq_name == "nfsiod")
+        next;
+
+    /* Must be a Castle WQ */
+    work_cnt = elems_in_list(&$cwq->worklist);
+
+    wq_curr[tid()] = $cwq;
+    wq_last_items[tid()] = work_cnt;
+}
+
+probe kernel.function("run_workqueue").return {
+    if (wq_curr[tid()])
+    {
+        name = kernel_string(@cast(wq_curr[tid()], "cpu_workqueue_struct")->wq->name);
+        delta = wq_last_items[tid()];
+
+        if (delta >= RET_MIN_DELTA)
+            printf("Processed WQ %s ITEMS %d\n", name, delta);
+
+        wq_curr[tid()] = 0;
+    }
+}
+
+probe kernel.trace("sched_switch") {
+    if (wq_curr[tid()])
+    {
+        wq_name = kernel_string(@cast(wq_curr[tid()], "cpu_workqueue_struct")->wq->name);
+        rem     = elems_in_list(&@cast(wq_curr[tid()], "cpu_workqueue_struct")->worklist);
+        delta   = wq_last_items[tid()] - rem;
+
+        wq_last_items[tid()] = rem;
+
+        if (delta >= MIN_DELTA)
+            printf("CSW on %s processed=%d remaining=%d next=%s (%d)\n",
+                    wq_name, delta, rem, kernel_string($next->comm), $next->tgid);
+    }
+}
+
+/*probe kernel.trace("back_work_do") {
+    printf("back_work_do: items %d\n", $items);
+}*/
+
+probe begin {
+    printf("BEGIN\n");
+}

@@ -1,0 +1,4 @@
+BACK-batching.stp
+===
+SystemTap script designed to monitor batching on the shared ring and relevant Castle workqueues.
+Designed with the BTREE-read_null_backend.patch in mind but hopefully useful for other WQ tracing.
