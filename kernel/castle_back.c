@@ -3337,6 +3337,8 @@ static int castle_back_work_do(void *data)
 long castle_back_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
     struct castle_back_conn *conn = file->private_data;
+    wait_queue_t waitq;
+
     if (conn == NULL)
     {
         error("castle_back: ioctl, retrieving connection failed\n");
@@ -3348,10 +3350,19 @@ long castle_back_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned lo
     switch (cmd)
     {
         case CASTLE_IOCTL_POKE_RING:
-            /* If conn->work_thread has a lower priority (nice) than the
-             * calling thread, we will enter the scheduler on the return
-             * from the system call. */
-            wake_up_process(conn->work_thread);
+            /* wake_up_process() calls try_to_wake_up() in a manner such that
+             * when returning from the systemcall the userland process will be
+             * context-switched off the CPU immediately (in practice).  This is
+             * due to task priorities which are dynamically adjusted by the
+             * scheduler.
+             *
+             * To combat this we use default_wake_function() with a faked-up
+             * wait_queue structure and the relevant flags from
+             * wake_up_process().  The result: no context switch and more
+             * efficient batching on the ring. */
+            waitq.private = conn->work_thread;
+            default_wake_function(&waitq, TASK_STOPPED | TASK_TRACED
+                    | TASK_INTERRUPTIBLE | TASK_UNINTERRUPTIBLE, 1, NULL);
             break;
 
         default:
