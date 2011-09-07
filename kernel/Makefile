@@ -56,6 +56,7 @@ $(TARGET).ko: castle_compile.h
 
 install: $(TARGET).ko
 	$(MAKE) -C $(KERNEL_DIR) M=$(PWD) INSTALL_MOD_DIR=$(INSTALL_MOD_DIR) modules_install
+	install -m 0644 castle_systemtap.h $(KERNEL_DIR)/include/trace
 	depmod -aq $(KVER)
 
 clean:

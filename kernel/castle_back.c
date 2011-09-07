@@ -25,6 +25,7 @@
 #include "castle_debug.h"
 #include "castle_back.h"
 #include "castle_ring.h"
+#include "castle_systemtap.h"
 
 DEFINE_RING_TYPES(castle, castle_request_t, castle_response_t);
 
@@ -908,6 +909,9 @@ static struct vm_operations_struct castle_back_vm_ops = {
  * High(er) level rpc callbacks
  */
 
+/**
+ * @also castle_back_poll()
+ */
 static int castle_back_reply(struct castle_back_op *op,
                              int err,
                              castle_interface_token_t token,
@@ -3055,6 +3059,9 @@ err0: castle_back_reply(op, err, 0, 0);
  * Castle device functions
  */
 
+/**
+ * Blocks userland until a response is available on the ring.
+ */
 unsigned int castle_back_poll(struct file *file, poll_table *wait)
 {
     struct castle_back_conn *conn = file->private_data;
@@ -3070,9 +3077,11 @@ unsigned int castle_back_poll(struct file *file, poll_table *wait)
 
     debug("castle_back_poll done\n");
 
-    if (conn->flags & CASTLE_BACK_CONN_NOTIFY_FLAG) {
+    if (conn->flags & CASTLE_BACK_CONN_NOTIFY_FLAG)
+    {
         clear_bit(CASTLE_BACK_CONN_NOTIFY_BIT, &conn->flags);
         RING_PUSH_RESPONSES(&conn->back_ring);
+
         return POLLIN | POLLRDNORM;
     }
 
@@ -3261,7 +3270,7 @@ static int castle_back_work_do(void *data)
 {
     struct castle_back_conn *conn = data;
     castle_back_ring_t *back_ring = &conn->back_ring;
-    int more;
+    int more, items = 0;
     RING_IDX cons, rp;
     struct castle_back_op *op;
     uint32_t ring_size = __RING_SIZE(back_ring->sring, CASTLE_RING_SIZE);
@@ -3298,6 +3307,7 @@ static int castle_back_work_do(void *data)
             castle_back_conn_get(conn);
 
             castle_back_request_process(conn, op);
+            items++;
         }
 
         /* this ensures that if we get an ioctl in between checking the ring
@@ -3312,7 +3322,11 @@ static int castle_back_work_do(void *data)
         if (kthread_should_stop())
             break;
         if (!more)
+        {
+            trace_back_work_do(conn, items);
+            items = 0;
             schedule();
+        }
     }
 
     debug("castle_back: done work for conn = %p.\n", conn);
