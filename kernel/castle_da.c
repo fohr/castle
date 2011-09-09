@@ -72,10 +72,6 @@ static DECLARE_WAIT_QUEUE_HEAD (castle_da_promote_wq);  /**< castle_da_level0_mo
 module_param(castle_merges_abortable, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
 MODULE_PARM_DESC(castle_merges_abortable, "Allow on-going merges to abort upon exit condition");
 
-int                             castle_merges_checkpoint = 1; /* 0 or 1, default=enabled */
-module_param(castle_merges_checkpoint, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
-MODULE_PARM_DESC(castle_merges_checkpoint, "Checkpoint on-going merges");
-
 /* We don't need to set upper/lower bounds for the promition frequency as values
  * < 2 will all results in RWCTs being promoted every checkpoint, while very
  * large values will result in RWCTs 'never' being promoted. */
@@ -319,9 +315,8 @@ static inline void castle_da_growing_rw_clear(struct castle_double_array *da)
 
 #define FOR_EACH_MERGE_TREE(_i, _merge) for((_i)=0; (_i)<(_merge)->nr_trees; (_i)++)
 
-#define MERGE_CHECKPOINTABLE(_merge) ((castle_merges_checkpoint) &&                    \
-                                      ((_merge->level >= MIN_DA_SERDES_LEVEL) ||       \
-                                       (_merge->level == BIG_MERGE)) )
+#define MERGE_CHECKPOINTABLE(_merge) ((_merge->level >= MIN_DA_SERDES_LEVEL) ||        \
+                                      (_merge->level == BIG_MERGE))
 
 static inline int castle_da_deleted(struct castle_double_array *da)
 {
@@ -6769,16 +6764,6 @@ static int castle_da_merge_do(struct castle_double_array *da,
 #endif
 
         serdes_state = atomic_read(&da->levels[level].merge.serdes.valid);
-        if((serdes_state > NULL_DAM_SERDES) && (!castle_merges_checkpoint))
-        {
-            /* user changed castle_merges_checkpoint param from 1 to 0 */
-            castle_printk(LOG_USERINFO,
-                    "Discarding checkpoint state for in-flight merge on DA=%d, level=%d.\n",
-                    da->id, level);
-            mutex_lock(&merge->da->levels[merge->level].merge.serdes.mutex);
-            castle_da_merge_serdes_dealloc(merge);
-            mutex_unlock(&merge->da->levels[merge->level].merge.serdes.mutex);
-        }
         /* Trace event. */
         castle_trace_da_merge_unit(TRACE_END,
                                    TRACE_DA_MERGE_UNIT_ID,
@@ -8576,8 +8561,6 @@ static void castle_da_merge_writeback(struct castle_double_array *da, unsigned i
 
         debug("%s::    internal_ext_free_bs ext_id = %lld.\n",
                 __FUNCTION__, cl->internal_ext_free_bs.ext_id);
-        /* always flush from 0, to account for the possibility that the castle_merges_checkpoint
-           param may have been toggled from 0 to 1 halfway during some merges */
         castle_cache_extent_flush_schedule(
                 cl->internal_ext_free_bs.ext_id, 0, cl->internal_ext_free_bs.used);
 
@@ -8616,6 +8599,7 @@ static void castle_da_merge_writeback(struct castle_double_array *da, unsigned i
 static int castle_da_writeback(struct castle_double_array *da, void *unused)
 {
     struct castle_dlist_entry mstore_dentry;
+    int i; /* DA levels */
 
     castle_da_marshall(&mstore_dentry, da);
 
@@ -8631,21 +8615,17 @@ static int castle_da_writeback(struct castle_double_array *da, void *unused)
     debug("Inserting a DA id=%d\n", da->id);
     castle_mstore_entry_insert(castle_da_store, &mstore_dentry);
 
-    if(castle_merges_checkpoint)
+    for(i=0; i<MAX_DA_LEVEL-1; i++)
     {
-        int i; /* DA levels */
-        for(i=0; i<MAX_DA_LEVEL-1; i++)
-        {
-            c_merge_serdes_state_t current_state;
+        c_merge_serdes_state_t current_state;
 
-            mutex_lock(&da->levels[i].merge.serdes.mutex);
-            current_state = atomic_read(&da->levels[i].merge.serdes.valid);
-            if( (current_state == VALID_AND_FRESH_DAM_SERDES) ||
-                    (current_state == VALID_AND_STALE_DAM_SERDES) )
-                castle_da_merge_writeback(da, i);
-            mutex_unlock(&da->levels[i].merge.serdes.mutex);
-        }/* rof each level */
-    }
+        mutex_lock(&da->levels[i].merge.serdes.mutex);
+        current_state = atomic_read(&da->levels[i].merge.serdes.valid);
+        if( (current_state == VALID_AND_FRESH_DAM_SERDES) ||
+                (current_state == VALID_AND_STALE_DAM_SERDES) )
+            castle_da_merge_writeback(da, i);
+        mutex_unlock(&da->levels[i].merge.serdes.mutex);
+    }/* rof each level */
 
     read_lock_irq(&castle_da_hash_lock);
     return 0;
