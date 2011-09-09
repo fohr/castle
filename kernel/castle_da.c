@@ -6672,54 +6672,11 @@ static int castle_da_merge_do(struct castle_double_array *da,
 
     /* Do the merge. */
     do {
-        //int i;
-        //c2_block_t *node_c2b;
         /* We unlock some c2bs before the unit merge boundary to allow checkpoint thread to flush
            c2bs. It is assumed that no other thread would ever have a wlock on these c2bs. */
         int relock_leaf_node_c2b   = 0;
         int relock_bloom_node_c2b  = 0;
         int relock_bloom_chunk_c2b = 0;
-
-        ///* unlock output ct active leaf c2b, so checkpoint can quickly flush partial merges */
-        //for(i=0; i<MAX_BTREE_DEPTH; i++)
-        //{
-        //    node_c2b = merge->levels[i].node_c2b;
-        //    if(node_c2b)
-        //    {
-        //        if (i == 0)
-        //            write_unlock_c2b(node_c2b);
-        //        else
-        //            BUG_ON(c2b_write_locked(node_c2b)); /* arriving here, only leaf node may be locked */
-        //    }
-        //}
-        ///* ditto the in-progress bloom filter */
-        //if (merge->out_tree->bloom_exists)
-        //{
-        //    struct castle_bloom_build_params *bf_bp =  merge->out_tree->bloom.private;
-        //    if(bf_bp)
-        //    {
-        //        if(bf_bp->chunk_c2b)
-        //        {
-        //            if(c2b_write_locked(bf_bp->chunk_c2b))
-        //            {
-        //                debug("%s::unlocking bloom filter chunk_c2b for merge on da %d level %d.\n",
-        //                        __FUNCTION__, da->id, level);
-        //                write_unlock_c2b(bf_bp->chunk_c2b);
-        //                relock_bloom_chunk_c2b = 1;
-        //            }
-        //        }
-        //        if(bf_bp->node_c2b)
-        //        {
-        //            if(c2b_write_locked(bf_bp->node_c2b))
-        //            {
-        //                debug("%s::unlocking bloom filter node_c2b for merge on da %d level %d.\n",
-        //                        __FUNCTION__, da->id, level);
-        //                write_unlock_c2b(bf_bp->node_c2b);
-        //                relock_bloom_node_c2b = 1;
-        //            }
-        //        }
-        //    }
-        //}
 
         castle_da_merge_active_c2bs_unlock(merge,
                                            &relock_leaf_node_c2b,
@@ -6733,25 +6690,6 @@ static int castle_da_merge_do(struct castle_double_array *da,
                                            relock_leaf_node_c2b,
                                            relock_bloom_node_c2b,
                                            relock_bloom_chunk_c2b);
-
-        ///* relock output ct active leaf c2b, as unit_do expects to find it */
-        //node_c2b = merge->levels[0].node_c2b;
-        //if(node_c2b)
-        //    write_lock_c2b(node_c2b);
-        ///* ditto the in-progress bloom filter */
-        //if(relock_bloom_node_c2b)
-        //{
-        //    struct castle_bloom_build_params *bf_bp = merge->out_tree->bloom.private;
-        //    debug("%s::relocking bloom filter node_c2b for merge on da %d level %d.\n",
-        //            __FUNCTION__, da->id, level);
-        //    write_lock_c2b(bf_bp->node_c2b);
-        //}
-        //if(relock_bloom_chunk_c2b)
-        //{
-        //    struct castle_bloom_build_params *bf_bp = merge->out_tree->bloom.private;
-        //    debug("%s::relocking bloom filter chunk_c2b for merge on da %d level %d.\n",
-        //            __FUNCTION__, da->id, level);
-        //}
 
         debug("%s::doing unit %d on merge %p (da %d level %d)\n", __FUNCTION__,
             units_cnt, merge, da->id, level);
