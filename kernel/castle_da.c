@@ -4146,6 +4146,12 @@ static inline int castle_da_nodes_complete(struct castle_da_merge *merge)
             debug("%s::merge %p tree %d completing level %d\n",
                     __FUNCTION__, merge, merge->out_tree->seq, i);
             castle_da_node_complete(merge, i);
+            if(merge->aborting)
+            {
+                castle_printk(LOG_WARN, "%s::[da %d level %d] aborting merge (WARNING: UNTESTED)\n",
+                        __FUNCTION__, merge->da->id, merge->level);
+                return -ESHUTDOWN;
+            }
             debug("%s::merge %p tree %d completed level %d\n",
                     __FUNCTION__, merge, merge->out_tree->seq, i);
         }
@@ -5075,6 +5081,16 @@ static int castle_da_merge_unit_do(struct castle_da_merge *merge, uint32_t unit_
         ret = castle_da_nodes_complete(merge);
         castle_perf_debug_getnstimeofday(&ts_end);
         castle_perf_debug_bump_ctr(merge->nodes_complete_ns, ts_end, ts_start);
+        if (ret == -ESHUTDOWN)
+        {
+            /* if nodes_complete returned -ESHUTDOWN, merge must have aborted during attempted
+               extent grow */
+            BUG_ON(!merge->aborting);
+            castle_printk(LOG_WARN, "%s::[da %d level %d] aborting merge while doing nodes complete (WARNING: UNTESTED)\n",
+                    __FUNCTION__, merge->da->id, merge->level);
+            return -ESHUTDOWN;
+        }
+
         if (ret != EXIT_SUCCESS)
             goto err_out;
 
