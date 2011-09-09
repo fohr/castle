@@ -1106,26 +1106,29 @@ struct castle_dmserlist_entry {
     /*        956 */ int8_t                           completing;
     /*        957 */ int8_t                           is_new_key;
     /*        958 */ uint32_t                         skipped_count;
+
                      /* Although the redirection partition is contained by the castle_double_array
                         struct, SERDES is left to merge because the partition is tighly linked to
                         merge SERDES state. */
     /*        962 */ c_ext_pos_t                      redirection_partition_node_cep;
     /*        978 */ int32_t                          redirection_partition_node_size;
-    /*        982 */ uint32_t                         growth_control_tree_ext_nodes_capacity;
-    /*        986 */ uint32_t                         growth_control_tree_ext_nodes_occupancy;
-    /*        990 */ uint8_t                          pad_to_iters[2]; /* beyond here entries are
+
+    /*        982 */ uint64_t                         growth_control_tree_ext_used_bytes;
+    /*        990 */ uint64_t                         growth_control_data_ext_used_bytes;
+
+    /*        998 */ uint8_t                          pad_to_iters[10]; /* beyond here entries are
                                                                            frequently marshalled, so
                                                                            alignment is important */
     /*         */
 
     /**************** input ct seq and iters: iters potentially marshalled often *****************/
-    /*        992 */ int32_t                          iter_err;
-    /*        996 */ int64_t                          iter_non_empty_cnt;
-    /*       1004 */ uint64_t                         iter_src_items_completed;
-    /*       1012 */ uint8_t                          unused[12];
-    /*       1024 */
+    /*       1008 */ int32_t                          iter_err;
+    /*       1012 */ int64_t                          iter_non_empty_cnt;
+    /*       1020 */ uint64_t                         iter_src_items_completed;
+    /*       1028 */ uint8_t                          unused[12];
+    /*       1040 */
 } PACKED;
-#define SIZEOF_CASTLE_DMSERLIST_ENTRY (1024)
+#define SIZEOF_CASTLE_DMSERLIST_ENTRY (1040)
 
 /**
  * Ondisk Serialized structure for castle versions.
@@ -2000,16 +2003,16 @@ typedef enum {
 #define DOUBLE_ARRAY_NEED_COMPACTION_BIT    (2)
 #define DOUBLE_ARRAY_COMPACTING_BIT         (3)
 
+//TODO@tr make this something sensible
 #define PARTIAL_MERGES_QUERY_REDIRECTION_BTREE_NODE_LEVEL (0)
 #if PARTIAL_MERGES_QUERY_REDIRECTION_BTREE_NODE_LEVEL > MAX_BTREE_DEPTH
 #error "PARTIAL_MERGES_QUERY_REDIRECTION_BTREE_NODE_LEVEL > MAX_BTREE_DEPTH"
 #endif
 
 /* rate at which output tree leaf nodes extent is grown; in chunks at a time. */
-#define MERGE_OUTPUT_TREE_GROWTH_RATE (8) /* BM said don't make this < 10 */
+#define MERGE_OUTPUT_TREE_GROWTH_RATE (10) /* BM said don't make this < 10 */
 /* rate at which output tree medium objects extent is grown; in chunks at a time. */
-//TODO@tr use this
-#define MERGE_OUTPUT_DATA_GROWTH_RATE (1)
+#define MERGE_OUTPUT_DATA_GROWTH_RATE (10) /* BM said don't make this < 10 */
 
 /* Merge level flags. */
 #define DA_MERGE_RUNNING_BIT                (0)
