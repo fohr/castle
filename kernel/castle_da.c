@@ -234,7 +234,6 @@ tree_seq_t castle_da_next_ct_seq(void);
 /* @TODO: Merges are now effectively always full throughput, because MIN is set high. */
 #define MIN_BUDGET_DELTA    (1000000)
 #define MAX_BUDGET          (1000000)
-#define BIG_MERGE           (0)
 
 /**********************************************************************************************/
 /* Utils */
@@ -297,9 +296,7 @@ static inline void castle_da_growing_rw_clear(struct castle_double_array *da)
 
 #define FOR_EACH_MERGE_TREE(_i, _merge) for((_i)=0; (_i)<(_merge)->nr_trees; (_i)++)
 
-#define MERGE_CHECKPOINTABLE(_merge) ((castle_merges_checkpoint) &&                    \
-                                      ((_merge->level >= MIN_DA_SERDES_LEVEL) ||       \
-                                       (_merge->level == BIG_MERGE)) )
+#define MERGE_CHECKPOINTABLE(_merge) ((castle_merges_checkpoint) && (_merge->level >= MIN_DA_SERDES_LEVEL))
 
 static inline int castle_da_deleted(struct castle_double_array *da)
 {
@@ -309,36 +306,6 @@ static inline int castle_da_deleted(struct castle_double_array *da)
 static inline void castle_da_deleted_set(struct castle_double_array *da)
 {
     set_bit(DOUBLE_ARRAY_DELETED_BIT, &da->flags);
-}
-
-static inline int castle_da_need_compaction(struct castle_double_array *da)
-{
-    return test_bit(DOUBLE_ARRAY_NEED_COMPACTION_BIT, &da->flags);
-}
-
-static inline void castle_da_need_compaction_set(struct castle_double_array *da)
-{
-    set_bit(DOUBLE_ARRAY_NEED_COMPACTION_BIT, &da->flags);
-}
-
-static inline void castle_da_need_compaction_clear(struct castle_double_array *da)
-{
-    clear_bit(DOUBLE_ARRAY_NEED_COMPACTION_BIT, &da->flags);
-}
-
-int castle_da_compacting(struct castle_double_array *da)
-{
-    return test_bit(DOUBLE_ARRAY_COMPACTING_BIT, &da->flags);
-}
-
-static inline void castle_da_compacting_set(struct castle_double_array *da)
-{
-    set_bit(DOUBLE_ARRAY_COMPACTING_BIT, &da->flags);
-}
-
-static inline void castle_da_compacting_clear(struct castle_double_array *da)
-{
-    clear_bit(DOUBLE_ARRAY_COMPACTING_BIT, &da->flags);
 }
 
 int castle_da_merge_running(struct castle_double_array *da, int level)
@@ -2123,9 +2090,6 @@ again:
     /* Get refs to all the component trees, and release the lock */
     j=0;
     last_seen_merge = NULL;
-    //TODO@tr make sure big merge output tree is always the very last tree! This can be done by
-    //        changing the following for-loop to start from i=1, and deal with level 0 (i.e.
-    //        BIG_MERGE) as a special case. OTOH, with all that Golden Nugget stuff...
     for(i=0; i<MAX_DA_LEVEL; i++)
     {
         /* On any given DA level at any given point in time, there can be only one merge (or no
@@ -2501,11 +2465,6 @@ static int castle_da_merge_cts_get(struct castle_double_array *da,
     {
         struct castle_component_tree *ct =
                             list_entry(l, struct castle_component_tree, da_list);
-
-        /* If there are any trees being compacted, they must be older than the
-           two trees we want to merge here. */
-        if (ct->compacting)
-            continue;
 
         if(!cts[1])
             cts[1] = ct;
@@ -4129,7 +4088,7 @@ static void castle_da_merge_serdes_dealloc(struct castle_da_merge *merge)
 
     BUG_ON(!merge);
     BUG_ON(!merge->da);
-    BUG_ON( (level < MIN_DA_SERDES_LEVEL) && (level != BIG_MERGE) );
+    BUG_ON( (level < MIN_DA_SERDES_LEVEL) );
 
     serdes_state = atomic_read(&merge->serdes.valid);
     if(serdes_state == NULL_DAM_SERDES)
@@ -4784,10 +4743,7 @@ entry_done:
         /* Update the progress, returns non-zero if we've completed the current unit. */
         castle_perf_debug_getnstimeofday(&ts_start);
 
-        /* TODO@tr The 2nd line of the following condition is a hack that allows big merges to
-           abort. Do we really want to do this? */
-        if(castle_da_merge_progress_update(merge, unit_nr) ||
-            ( (merge->level == BIG_MERGE) && (castle_da_exiting || castle_da_deleted(merge->da)) )  )
+        if(castle_da_merge_progress_update(merge, unit_nr))
         {
             castle_perf_debug_getnstimeofday(&ts_end);
             castle_perf_debug_bump_ctr(merge->progress_update_ns, ts_end, ts_start);
@@ -4919,7 +4875,6 @@ static inline int castle_da_merge_wait_event(struct castle_double_array *da, int
     /* If the merge isn't deamortised (total merges only), start immediately. */
     if (!da->levels[level].merge.deamortize)
     {
-        BUG_ON(level != BIG_MERGE);
         da->levels[level].merge.units_commited++;
         write_unlock(&da->lock);
         return 1;
@@ -5102,56 +5057,6 @@ static int __castle_da_driver_merge_reset(struct castle_double_array *da, void *
     return 0;
 }
 
-/**
- * Computes the appropriate level to put the output array from a total merge.
- */
-static int castle_da_total_merge_output_level_get(struct castle_double_array *da,
-                                                  struct castle_component_tree *out_tree)
-{
-    int i, nr_units, unit_is_tree, out_tree_level;
-
-    /* DA should be write locked => we shouldn't be able to read lock. */
-    BUG_ON(read_can_lock(&da->lock));
-    out_tree_level = 1;
-    /* Take either MAX_DYNAMIC_TREE_SIZE or MAX_DYNAMIC_DATA_SIZE as unit - based on
-     * which part of the out_tree is bigger. */
-    unit_is_tree = (atomic64_read(&out_tree->tree_ext_free.used) >
-                    atomic64_read(&out_tree->data_ext_free.used));
-
-    /* Calculate the output size (in terms of # of units). */
-    nr_units = (unit_is_tree)?
-               atomic64_read(&out_tree->tree_ext_free.used) / (MAX_DYNAMIC_TREE_SIZE * C_CHK_SIZE):
-               atomic64_read(&out_tree->data_ext_free.used) / (MAX_DYNAMIC_DATA_SIZE * C_CHK_SIZE);
-
-    /* Calculate the level it should go. Logarithm of nr_units. */
-    out_tree_level = order_base_2(nr_units);
-    /* Total merge output _must_ be put in level 2+, because we don't want to mix different tree
-       types in level 1, and of course we don't want to put it in level 0 either. */
-    if(out_tree_level <= 1)
-        out_tree_level = 2;
-    castle_printk(LOG_INFO, "Total merge: #units: %d, size appropriate for level: %d\n",
-                   nr_units, out_tree_level);
-
-    /* Find the highest level in DA with trees. */
-    for (i=MAX_DA_LEVEL-1; i>0; i--)
-        if (da->levels[i].nr_trees)
-            break;
-
-    /* Compacted tree should always be placed on top of all the trees. It contains the oldest
-     * data. */
-    if (i >= out_tree_level)
-        out_tree_level = i + 1;
-
-    /* Max level should never cross MAX_DA_LEVEL-1. */
-    if (out_tree_level >= MAX_DA_LEVEL)
-        out_tree_level = MAX_DA_LEVEL - 1;
-
-    if (out_tree_level)
-    castle_printk(LOG_INFO, "Outputting at level: %d\n", out_tree_level);
-
-    return out_tree_level;
-}
-
 static tree_seq_t castle_da_merge_last_unit_complete(struct castle_double_array *da,
                                                      int level,
                                                      struct castle_da_merge *merge)
@@ -5199,30 +5104,7 @@ static tree_seq_t castle_da_merge_last_unit_complete(struct castle_double_array 
 
     out_tree->data_age = out_tree_data_age;
 
-    /* If this was a total merge, the output level needs to be computed.
-       Otherwise the level should already be set to the next level up. */
-    if(level == BIG_MERGE)
-    {
-        int olevel = castle_da_total_merge_output_level_get(da, out_tree);
-
-        /* Output level should never be as big as MAX_DA_LEVEL. */
-        BUG_ON(olevel >= MAX_DA_LEVEL);
-
-        /* Compact tree should always be added to non empty level except if the level is
-         * MAX_DA_LEVEL-1*/
-        BUG_ON((olevel != (MAX_DA_LEVEL-1)) && (!list_empty(&da->levels[olevel].trees)));
-
-        /* Done with compaction. Time to reset reserved tree seq ID. */
-        BUG_ON(da->compaction_ct_seq != out_tree->seq);
-        da->compaction_ct_seq = INVAL_TREE;
-
-        out_tree->level = olevel;
-
-        /* Always add the compacted tree at the end. */
-        head = da->levels[out_tree->level].trees.prev;
-    }
-    else
-        BUG_ON(out_tree->level != level + 1);
+    BUG_ON(out_tree->level != level + 1);
 
     if (merge->nr_entries)
         castle_component_tree_add(merge->da, out_tree, head);
@@ -5298,14 +5180,14 @@ static int castle_da_merge_init(struct castle_da_merge *merge, void *unused)
     /* Sanity checks. */
     BUG_ON(nr_trees < 2);
     BUG_ON(da->levels[level].merge.units_commited != 0);
-    BUG_ON((level != BIG_MERGE) && (nr_trees != 2));
+    BUG_ON((nr_trees != 2));
     /* Work out what type of trees are we going to be merging. Bug if in_trees don't match. */
     btree = castle_btree_type_get(in_trees[0]->btree_type);
     for (i=0; i<nr_trees; i++)
     {
         /* Btree types may, and often will be different during big merges. */
-        BUG_ON((level != BIG_MERGE) && (btree != castle_btree_type_get(in_trees[i]->btree_type)));
-        BUG_ON((level != BIG_MERGE) && (in_trees[i]->level != level));
+        BUG_ON(btree != castle_btree_type_get(in_trees[i]->btree_type));
+        BUG_ON(in_trees[i]->level != level);
     }
 
     /* Malloc everything ... */
@@ -5329,9 +5211,6 @@ static int castle_da_merge_init(struct castle_da_merge *merge, void *unused)
         /* we cannot tolerate failure to recover an in-progress output ct if this is a
            deserialising merge */
         BUG_ON(merge->serdes.des);
-
-        if (level == BIG_MERGE)
-            ct_seq = da->compaction_ct_seq;
 
         merge->out_tree = castle_ct_alloc(da, RO_VLBA_TREE_TYPE, level+1, ct_seq);
         if(!merge->out_tree)
@@ -5697,7 +5576,7 @@ static void castle_da_merge_serialise(struct castle_da_merge *merge)
     level=merge->level;
     BUG_ON(level > MAX_DA_LEVEL);
     /* assert that we are not serialising merges on lower levels */
-    BUG_ON((level < MIN_DA_SERDES_LEVEL) && (level != BIG_MERGE));
+    BUG_ON((level < MIN_DA_SERDES_LEVEL));
     BUG_ON(!merge->out_tree);
 
     current_state = atomic_read(&merge->serdes.valid);
@@ -6299,7 +6178,7 @@ static void castle_da_merge_des_check(struct castle_da_merge *merge, struct cast
 
     BUG_ON(!da);
     BUG_ON(!merge);
-    BUG_ON((level < MIN_DA_SERDES_LEVEL) && (level != BIG_MERGE));
+    BUG_ON((level < MIN_DA_SERDES_LEVEL));
 
     merge_mstore             = merge->serdes.mstore_entry;
     in_tree_merge_mstore_arr = merge->serdes.in_tree_mstore_entry_arr;
@@ -6591,27 +6470,6 @@ merge_failed:
 }
 
 /**
- * Marks the DA 'dirty', i.e. that a total merge will be required to deal with snapshot deletion.
- *
- * @param da_id     DA id to mark as dirty.
- */
-void castle_da_version_delete(c_da_t da_id)
-{
-    struct castle_double_array *da = castle_da_hash_get(da_id);
-
-    atomic_inc(&(da->nr_del_versions));
-
-    /* Compaction after each version delete is disabled. It leads to inefficient merges. */
-#if 0
-    /* Mark DA for compaction. */
-    castle_da_need_compaction_set(da);
-
-    /* Wakeup compaction thread. */
-    wake_up(&da->merge_waitq);
-#endif
-}
-
-/**
  * Checks for ongoing merge units in any of the merges above the given level.
  *
  * @param da    Doubling array.
@@ -6631,273 +6489,6 @@ static int castle_da_merge_units_ongoing(struct castle_double_array *da, int lev
         if (da->levels[i].merge.active_token)
             return 1;
     }
-
-    return 0;
-}
-
-/**
- * Determines whether to do a total merge.
- *
- * Do not do big-merge in case:
- *  - DA has few outstanding low free space victims
- *  - DA is not marked for compaction
- *  - there is a ongoing merge unit
- *
- * @param da [in] DA id.
- * @return whether to start big-merge or not.
- */
-static int castle_da_big_merge_trigger(struct castle_double_array *da)
-{
-    int ret = 0;
-
-    /* Don't start merge, if there is no disk space. */
-    if (castle_da_no_disk_space(da))
-        return 0;
-
-    read_lock(&da->lock);
-
-    /* Check if marked for compaction. */
-    if (!castle_da_need_compaction(da))
-    {
-        debug_merges("Not marked for compaction.\n");
-        goto out;
-    }
-
-    /* Make sure there are no ongoing merges. */
-    if (atomic_read(&da->ongoing_merges))
-    {
-        debug_merges("Total merge cannot be triggered - ongoing merges : %u\n",
-                     atomic_read(&da->ongoing_merges));
-        goto out;
-    }
-
-    /* All checks succeeded, total merge can start. */
-    ret = 1;
-
-out:
-    read_unlock(&da->lock);
-
-    return ret;
-}
-
-/**
- * Do a total merge on all trees in a DA. Triggered, after completing the last level
- * merge, if any versions marked for deletion.
- *
- * @param da_p [in] doubling array to run total merge on.
- */
-static int castle_da_big_merge_run(void *da_p)
-{
-    struct castle_double_array *da = (struct castle_double_array *)da_p;
-#if 0
-    struct castle_component_tree **in_trees;
-    struct list_head *l;
-    int level=0, ignore;
-    int nr_trees=0;
-    int i, ret = 0;
-#endif
-    int ignore;
-
-    /* Disable deamortization of total merges. */
-    da->levels[BIG_MERGE].merge.deamortize = 0;
-
-    debug_merges("Starting big-merge thread.\n");
-    do {
-        /* Start big-merge only when the DA has versions marked for deletion
-         * and only after completing the top-level merge(to make sure no merge
-         * is going on). */
-        __wait_event_interruptible(da->merge_waitq,
-                                   exit_cond || castle_da_big_merge_trigger(da),
-                                   ignore);
-
-        /* Exit without doing a merge, if we are stopping execution, or da has been deleted. */
-        if(exit_cond)
-            break;
-
-        BUG();
-#if 0
-        /* Otherwise do a merge. */
-        castle_printk(LOG_INFO, "Triggered a total merge.\n");
-
-        /* Allocate array for in_tree pointers, but do that without holding the lock. */
-        in_trees = NULL;
-
-        /* Lock the DA, because we may reset the compacting flag. */
-        write_lock(&da->lock);
-
-        /* Count number of trees to compact. Don't compact level-1 trees.
-         *
-         * Note: Merging T1s need memory as we need to sort them before merge. If we try to
-         * include T1s in compaction, we might run out of memory.
-         */
-        for (nr_trees=0, level=2; level<MAX_DA_LEVEL; level++)
-            nr_trees += da->levels[level].nr_trees;
-
-        /* Merge cannot be scheduled with < 2 trees. */
-        if(nr_trees < 2)
-        {
-            /* Don't compact any more (not enough trees). */
-            castle_printk(LOG_USERINFO, "Aborting compaction: Need minimum 2 trees above"
-                                        " level 1.\n");
-            castle_da_need_compaction_clear(da);
-            write_unlock(&da->lock);
-            goto wait_and_try;
-        }
-
-        /* Mark all the trees for compaction. So, we start compaction on them after allocating
-         * resources. */
-        for (level=2, i=0; level<MAX_DA_LEVEL; level++)
-        {
-            list_for_each(l, &da->levels[level].trees)
-            {
-                struct castle_component_tree *ct = list_entry(l, struct castle_component_tree, da_list);
-
-                BUG_ON(ct->compacting);
-                ct->compacting = 1;
-                da->levels[level].nr_trees--;
-                da->levels[level].nr_compac_trees++;
-                i++;
-                BUG_ON(i > nr_trees);
-            }
-        }
-        BUG_ON(i != nr_trees);
-
-        write_unlock(&da->lock);
-
-        /* Allocate in_trees array for appropriate number of trees. */
-        in_trees = castle_zalloc(sizeof(struct castle_component_tree *) * nr_trees,
-                                 GFP_KERNEL);
-        if (!in_trees)
-        {
-            castle_printk(LOG_USERINFO, "Aborting compaction: Failed to allocate memory.\n");
-            goto wait_and_try;
-        }
-
-        /* Now, lock the DA, take the in trees and start the merge. */
-        write_lock(&da->lock);
-
-        /* Allocated memory for in_trees; store all trees on in_trees array. */
-        for (level=2, i=0; level<MAX_DA_LEVEL; level++)
-        {
-            list_for_each(l, &da->levels[level].trees)
-            {
-                struct castle_component_tree *ct =
-                            list_entry(l, struct castle_component_tree, da_list);
-
-                /* Store trees marked for compaction. */
-                if (ct->compacting)
-                {
-                    in_trees[i] = ct;
-                    i++;
-                }
-
-                BUG_ON(i > nr_trees);
-            }
-        }
-
-        /* We should have seen all marked in trees. */
-        BUG_ON(i != nr_trees);
-
-        /* Marked trees for compaction, register a component tree sequence number, before
-         * letting other merges start.
-         *
-         * Note: This is important as, merges can race with compaction and it is possible to have
-         * compaction out_tree with latest sequence number than the racing merge.
-         */
-        if (TREE_INVAL(da->compaction_ct_seq))
-            da->compaction_ct_seq = castle_da_next_ct_seq();
-
-        write_unlock(&da->lock);
-
-        castle_da_need_compaction_clear(da);
-        atomic_set(&da->nr_del_versions, 0);
-        atomic_inc(&da->ongoing_merges);
-
-        /* Wakeup everyone waiting on merge state update. */
-        wake_up(&da->merge_waitq);
-
-        castle_printk(LOG_USERINFO, "Starting total merge on %d trees\n", nr_trees);
-
-        /* Mark DA as compaction is ongoing. */
-        castle_da_compacting_set(da);
-
-        /* Do the merge. If fails, retry after 10s. */
-        if ((ret = castle_da_merge_do(da, nr_trees, in_trees, BIG_MERGE)))
-        {
-            castle_printk(LOG_WARN, "Total merge failed with error: %d\n", ret);
-            atomic_dec(&da->ongoing_merges);
-wait_and_try:
-            if (nr_trees >= 2)
-            {
-                write_lock(&da->lock);
-
-                /* If the merge was actually scheduled (i.e. some trees were collected),
-                   but failed afterward (e.g. due to NOSPC), readjust the counters again. */
-
-                /* Merge failed, unmark compacting bit for all trees. */
-                for (level=2, i=0; level<MAX_DA_LEVEL; level++)
-                {
-                    list_for_each(l, &da->levels[level].trees)
-                    {
-                        struct castle_component_tree *ct =
-                                    list_entry(l, struct castle_component_tree, da_list);
-
-                        if (ct->compacting)
-                        {
-                            ct->compacting = 0;
-                            i++;
-                        }
-                        BUG_ON(i > nr_trees);
-                    }
-                }
-                BUG_ON(i != nr_trees);
-
-                /* Change count for compaction trees on each level. */
-                for (i=0; i<MAX_DA_LEVEL; i++)
-                {
-                    BUG_ON((i <=1 ) && da->levels[i].nr_compac_trees);
-
-                    da->levels[i].nr_trees += da->levels[i].nr_compac_trees;
-                    da->levels[i].nr_compac_trees = 0;
-                }
-
-                write_unlock(&da->lock);
-            }
-            /* Wakeup everyone waiting on merge state update. */
-            wake_up(&da->merge_waitq);
-
-            /* Mark DA as compaction is completed. */
-            castle_da_compacting_clear(da);
-
-            /* In case we failed the merge because of no memory for in_trees, wait and retry. */
-            msleep_interruptible(10000);
-        }
-        else
-        {
-            atomic_dec(&da->ongoing_merges);
-            /* Mark DA as compaction is completed. */
-            castle_da_compacting_clear(da);
-
-            castle_printk(LOG_USERINFO, "Successfully completed compaction\n");
-        }
-
-        /* Free in_trees structure. */
-        if (in_trees)
-        {
-            castle_kfree(in_trees);
-            in_trees = NULL;
-        }
-#endif
-    } while(1);
-
-    debug_merges("Merge thread exiting.\n");
-
-    write_lock(&da->lock);
-    /* Remove ourselves from the da merge threads array to indicate that we are finished. */
-    da->levels[BIG_MERGE].merge.thread = NULL;
-    write_unlock(&da->lock);
-    /* castle_da_alloc() took a reference for us, we have to drop it now. */
-    castle_da_put(da);
 
     return 0;
 }
@@ -6934,14 +6525,6 @@ static int castle_da_merge_trigger(struct castle_double_array *da, int level)
     if (castle_da_merge_units_ongoing(da, level))
     {
         debug_merges("Merge %d cant be triggered - ongoing merge units.\n", level);
-        goto out;
-    }
-
-    /* If DA is marked for compaction, don't start a new merge if there are no ongoing merges.
-     * (Time to start compaction). */
-    if (castle_da_need_compaction(da) && !atomic_read(&da->ongoing_merges))
-    {
-        debug_merges("Merge %d cant be triggered - compaction going on.\n", level);
         goto out;
     }
 
@@ -7080,7 +6663,7 @@ static int castle_da_merge_start(struct castle_double_array *da, void *unused)
     int i;
 
     /* Wake up all of the merge threads. */
-    for(i=0; i<MAX_DA_LEVEL-1; i++)
+    for(i=1; i<MAX_DA_LEVEL-1; i++)
         castle_wake_up_task(da->levels[i].merge.thread, 1 /*inhibit_cs*/);
 
     __castle_da_threads_priority_set(da, &castle_nice_value);
@@ -7095,7 +6678,7 @@ static int castle_da_merge_stop(struct castle_double_array *da, void *unused)
     /* castle_da_exiting should have been set by now. */
     BUG_ON(!exit_cond);
     wake_up(&da->merge_waitq);
-    for(i=0; i<MAX_DA_LEVEL-1; i++)
+    for(i=1; i<MAX_DA_LEVEL-1; i++)
     {
         while(da->levels[i].merge.thread)
             msleep(10);
@@ -7316,7 +6899,7 @@ static void castle_da_dealloc(struct castle_double_array *da)
     int i; /* DA level */
     BUG_ON(!da);
 
-    for (i=0; i<MAX_DA_LEVEL-1; i++)
+    for (i=1; i<MAX_DA_LEVEL-1; i++)
     {
         castle_printk(LOG_DEBUG, "%s::cleaning up da %d level %d\n", __FUNCTION__, da->id, i);
         if(da->levels[i].merge.thread != NULL)
@@ -7365,10 +6948,8 @@ static struct castle_double_array* castle_da_alloc(c_da_t da_id)
     atomic_set(&da->ios_budget, 0);
     da->ios_rate        = 0;
     da->top_level       = 0;
-    atomic_set(&da->nr_del_versions, 0);
     /* For existing double arrays driver merge has to be reset after loading it. */
     da->driver_merge    = -1;
-    da->compaction_ct_seq = INVAL_TREE;
     atomic_set(&da->epoch_ios, 0);
     atomic_set(&da->merge_budget, 0);
     atomic_set(&da->ongoing_merges, 0);
@@ -7393,23 +6974,26 @@ static struct castle_double_array* castle_da_alloc(c_da_t da_id)
         da->merge_tokens_array[i].ref_cnt      = 0;
         list_add(&da->merge_tokens_array[i].list, &da->merge_tokens);
     }
+
     for(i=0; i<MAX_DA_LEVEL-1; i++)
     {
         /* Initialise merge serdes */
         INIT_LIST_HEAD(&da->levels[i].trees);
         da->levels[i].nr_trees             = 0;
-        da->levels[i].nr_compac_trees      = 0;
         da->levels[i].merge.flags          = 0;
         INIT_LIST_HEAD(&da->levels[i].merge.merge_tokens);
         da->levels[i].merge.active_token   = NULL;
         da->levels[i].merge.driver_token   = NULL;
         da->levels[i].merge.units_commited = 0;
         da->levels[i].merge.thread         = NULL;
+    }
 
-        /* Create merge threads, and take da ref for all levels >= 1. */
+    /* Create merge threads, and take da ref for all levels >= 1. */
+    for(i=1; i<MAX_DA_LEVEL-1; i++)
+    {
         castle_da_get(da);
         da->levels[i].merge.thread =
-            kthread_create((i == BIG_MERGE)? castle_da_big_merge_run: castle_da_merge_run,
+            kthread_create(castle_da_merge_run,
                            da, "castle-m-%d-%.2d", da_id, i);
 
         if(IS_ERR(da->levels[i].merge.thread) || !da->levels[i].merge.thread)
@@ -7430,7 +7014,7 @@ static struct castle_double_array* castle_da_alloc(c_da_t da_id)
 err_out:
     {
         int j;
-        for(j=0; j<MAX_DA_LEVEL-1; j++)
+        for(j=1; j<MAX_DA_LEVEL-1; j++)
         {
             BUG_ON((j<i)  && (da->levels[j].merge.thread == NULL));
             BUG_ON((j>=i) && (da->levels[j].merge.thread != NULL));
@@ -7524,8 +7108,7 @@ static void castle_component_tree_add(struct castle_double_array *da,
     if (ct->level > da->top_level)
     {
         da->top_level = ct->level;
-        castle_printk(LOG_INFO, "DA: %d growing one level to %d, del_vers: %d\n",
-                da->id, ct->level, atomic_read(&da->nr_del_versions));
+        castle_printk(LOG_INFO, "DA: %d growing one level to %d\n", da->id, ct->level);
     }
 }
 
@@ -7542,10 +7125,7 @@ static void castle_component_tree_del(struct castle_double_array *da,
     list_del(&ct->da_list);
     ct->da_list.next = NULL;
     ct->da_list.prev = NULL;
-    if (ct->compacting)
-        da->levels[ct->level].nr_compac_trees--;
-    else
-        da->levels[ct->level].nr_trees--;
+    da->levels[ct->level].nr_trees--;
     da->nr_trees--;
 }
 
@@ -7915,7 +7495,6 @@ static c_da_t castle_da_ct_unmarshall(struct castle_component_tree *ct,
     ct->tree_depth          = ctm->tree_depth;
     ct->root_node           = ctm->root_node;
     ct->new_ct              = 0;
-    ct->compacting          = 0;
     atomic64_set(&ct->large_ext_chk_cnt, ctm->large_ext_chk_cnt);
     init_rwsem(&ct->lock);
     mutex_init(&ct->lo_mutex);
@@ -8209,7 +7788,7 @@ static void __castle_da_merge_writeback(struct castle_da_merge *merge)
 
     BUG_ON(!da);
     BUG_ON(level > MAX_DA_LEVEL);
-    BUG_ON((level < MIN_DA_SERDES_LEVEL) && (level != BIG_MERGE));
+    BUG_ON((level < MIN_DA_SERDES_LEVEL));
 
     ct = merge->serdes.out_tree;
     BUG_ON(!ct);
@@ -8703,7 +8282,7 @@ int castle_double_array_read(void)
         castle_mstore_iterator_next(iterator, mstore_dmserentry, &key);
         da_id = mstore_dmserentry->da_id;
         level = mstore_dmserentry->level;
-        BUG_ON((level < MIN_DA_SERDES_LEVEL) && (level != BIG_MERGE));
+        BUG_ON((level < MIN_DA_SERDES_LEVEL));
 
         des_da = castle_da_hash_get(da_id);
         if(!des_da)
@@ -8762,12 +8341,6 @@ int castle_double_array_read(void)
 
         /* set merge state as immediately re-checkpointable */
         atomic_set(&merge->serdes.valid, VALID_AND_STALE_DAM_SERDES);
-
-        if(level == BIG_MERGE)
-        {
-            castle_da_need_compaction_set(des_da);
-            des_da->compaction_ct_seq = merge->serdes.out_tree->seq;
-        }
 
         /* enable query redirection if necessary */
         if(!EXT_POS_INVAL(mstore_dmserentry->redirection_partition_node_cep))
@@ -8886,7 +8459,7 @@ int castle_double_array_read(void)
         level = merge->level;
 
         BUG_ON(da_id==0);
-        BUG_ON((level < MIN_DA_SERDES_LEVEL) && (level != BIG_MERGE));
+        BUG_ON((level < MIN_DA_SERDES_LEVEL));
         BUG_ON(level > MAX_DA_LEVEL);
 
         da = castle_da_hash_get(da_id);
@@ -8907,11 +8480,8 @@ int castle_double_array_read(void)
         ct = castle_ct_hash_get(mstore_in_tree_merge_state_entry->seq);
         BUG_ON(!ct);
         BUG_ON(ct->da    != da_id);
-        if(level != BIG_MERGE)
-        {
-            castle_printk(LOG_DEBUG, "%s::ct level = %d, level = %d\n", __FUNCTION__, ct->level, level);
-            BUG_ON(ct->level != level);
-        }
+        castle_printk(LOG_DEBUG, "%s::ct level = %d, level = %d\n", __FUNCTION__, ct->level, level);
+        BUG_ON(ct->level != level);
 
         /* Set component tree in the merge in_trees array. */
         merge->in_trees[pos] = ct;
@@ -9040,7 +8610,6 @@ static struct castle_component_tree* castle_ct_alloc(struct castle_double_array 
     ct->tree_depth      = -1;
     ct->root_node       = INVAL_EXT_POS;
     ct->new_ct          = 1;
-    ct->compacting      = 0;
     init_rwsem(&ct->lock);
     mutex_init(&ct->lo_mutex);
     ct->da_list.next = NULL;
@@ -9332,7 +8901,6 @@ void castle_da_ct_next(c_bvec_t *c_bvec)
 {
     struct castle_component_tree *ct;
     int i;
-    uint8_t compacting_tree = 0;
 
     ct = c_bvec->tree;
     /* Find the ct in the array of trees. */
@@ -9341,8 +8909,6 @@ void castle_da_ct_next(c_bvec_t *c_bvec)
             break;
     /* Tree must always be found. */
     BUG_ON(i >= c_bvec->nr_trees);
-
-    compacting_tree = ct->compacting;
 
     /* Remove the tree from the array, and put the reference. */
     c_bvec->trees[i] = NULL;
@@ -9359,7 +8925,6 @@ void castle_da_ct_next(c_bvec_t *c_bvec)
     {
         c_bvec->tree = c_bvec->trees[i];
         memcpy(&c_bvec->ct_ref, &c_bvec->ct_refs[i], sizeof(c_ct_ext_ref_t));
-        BUG_ON(compacting_tree && !c_bvec->tree->compacting);
     }
 }
 
@@ -9508,8 +9073,7 @@ again:
     /* Get refs to all the component trees, and release the lock */
     j=0;
 
-    /* Get all trees that are not compacting. These trees definelty have latest data compared
-     * to trees that are compacting, irrespective of their position in DA. */
+    /* Get all the trees. */
     for(i=0; i<MAX_DA_LEVEL; i++)
     {
         struct castle_da_merge *last_merge_seen = NULL;
@@ -9519,8 +9083,6 @@ again:
             struct castle_component_tree *ct;
 
             ct = list_entry(l, struct castle_component_tree, da_list);
-            if (ct->compacting)
-                continue;
 
             if(ct->merge)
             {
@@ -9560,60 +9122,6 @@ again:
             BUG_ON((castle_btree_type_get(ct->btree_type)->magic != RW_VLBA_TREE_TYPE) &&
                    (castle_btree_type_get(ct->btree_type)->magic != RO_VLBA_TREE_TYPE));
             j++;
-        }
-    }
-
-    /* Get all trees that are compacting. */
-    for(i=0; i<MAX_DA_LEVEL; i++)
-    {
-        struct castle_da_merge *last_merge_seen = NULL;
-        list_for_each(l, &da->levels[i].trees)
-        {
-            struct castle_component_tree *ct;
-
-            ct = list_entry(l, struct castle_component_tree, da_list);
-            if (!ct->compacting)
-                continue;
-
-            if(ct->merge)
-            {
-                struct castle_da_merge *merge = ct->merge;
-
-                /* to avoid adding an output ct more than once, just remember the previous merge
-                   since for now it may be assumed that all cts in a merge will be adjacent.
-                   TODO@tr make this more robust!                                                */
-                if(ct->merge == last_merge_seen)
-                    continue;
-
-                /* under da->lock, partition keys won't advance */
-                if(merge->redirection_partition.key)
-                {
-                    struct castle_btree_type *btree = castle_btree_type_get(RO_VLBA_TREE_TYPE);
-                    int ret = btree->key_compare(merge->redirection_partition.key, c_bvec->key);
-
-                    BUG_ON(!merge->queriable_out_tree);
-                    if(ret>=0) /* partition key >= query key */
-                    {
-                        struct castle_component_tree *out_ct = merge->queriable_out_tree;
-
-                        last_merge_seen = merge;
-                        debug("%s::redirecting query to output tree %d on da %d level %d.\n",
-                            __FUNCTION__, out_ct->seq, ct->merge->level);
-                        ct = out_ct;
-                        got_partial_tree = 1;
-                    }
-                }
-            }
-
-            BUG_ON(j >= nr_cts);
-            cts[j] = ct;
-            castle_ct_get(ct, 0, &refs[j]);
-            BUG_ON((castle_btree_type_get(ct->btree_type)->magic != RW_VLBA_TREE_TYPE) &&
-                   (castle_btree_type_get(ct->btree_type)->magic != RO_VLBA_TREE_TYPE));
-            j++;
-
-            if(last_merge_seen)
-                break; /* assume only 1 big merge happening, and we redirected to the output tree */
         }
     }
 
@@ -9682,7 +9190,6 @@ static void castle_da_cts_put(c_bvec_t *c_bvec)
         {
             debug("%s::putting tree %d (%p)\n",
                     __FUNCTION__, ct->seq, ct);
-            BUG_ON(c_bvec->tree->compacting && !ct->compacting);
             castle_ct_put(ct, 0, &c_bvec->ct_refs[i]);
         }
     }
@@ -10443,24 +9950,6 @@ void castle_double_array_put(c_da_t da_id)
     castle_da_put(da);
 }
 
-/* TODO: Check what happens if ioctl functions or sysfs functions need to get reference on
- * resources. */
-int castle_double_array_compact(c_da_t da_id)
-{
-    struct castle_double_array *da;
-
-    da = castle_da_hash_get(da_id);
-    if (!da)
-        return -EINVAL;
-
-    castle_printk(LOG_USERINFO, "Marking version tree %u for compaction.\n", da_id);
-    castle_da_need_compaction_set(da);
-
-    wake_up(&da->merge_waitq);
-
-    return 0;
-}
-
 /**
  * Prefetch extents associated with DA da_id.
  *
@@ -10564,7 +10053,7 @@ static int __castle_da_threads_priority_set(struct castle_double_array *da, void
     int i;
     int nice_value = *((int *)_value);
 
-    for (i=0; i<MAX_DA_LEVEL; i++)
+    for (i=1; i<MAX_DA_LEVEL; i++)
     {
         if (da->levels[i].merge.thread)
             set_user_nice(da->levels[i].merge.thread, nice_value + 15);

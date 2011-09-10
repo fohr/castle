@@ -176,7 +176,6 @@ void castle_da_rq_iter_init    (c_da_rq_iter_t *iter,
                                 void *end_key);
 extern struct castle_iterator_type castle_da_rq_iter;
 
-int  castle_da_compacting      (struct castle_double_array *da);
 int  castle_double_array_key_cpu_index(c_vl_bkey_t *key, uint32_t key_len);
 int  castle_double_array_request_cpu   (int cpu_index);
 int  castle_double_array_request_cpus  (void);
@@ -198,7 +197,6 @@ int  castle_double_array_alive          (c_da_t da_id);
 int  castle_double_array_get            (c_da_t da_id);
 void castle_double_array_put            (c_da_t da_id);
 int  castle_double_array_destroy        (c_da_t da_id);
-int  castle_double_array_compact        (c_da_t da_id);
 int  castle_double_array_prefetch       (c_da_t da_id);
 void castle_double_arrays_writeback     (void);
 void castle_double_arrays_pre_writeback (void);
@@ -211,7 +209,6 @@ int  castle_ct_large_obj_add    (c_ext_id_t              ext_id,
 int  castle_ct_large_obj_remove (c_ext_id_t              ext_id,
                                  struct list_head       *head,
                                  struct mutex           *mutex);
-void castle_da_version_delete   (c_da_t da_id);
 
 uint32_t castle_da_count(void);
 void castle_da_threads_priority_set(int nice_value);

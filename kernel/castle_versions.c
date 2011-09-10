@@ -702,7 +702,6 @@ int castle_version_delete(c_ver_t version)
         castle_free(event_vs);
 
     castle_versions_count_adjust(da_id, CVH_LIVE, 0 /*add*/);
-    castle_da_version_delete(da_id);
 
     /* raise event */
     castle_events_version_delete_version(version);

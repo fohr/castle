@@ -960,7 +960,6 @@ struct castle_component_tree {
                                                 root node. */
     uint8_t             new_ct;            /**< Marked for cts which are not yet flushed onto
                                                 the disk.                                       */
-    uint8_t             compacting;        /**< compaction is going on this CT.                 */
     struct rw_semaphore lock;              /**< Protects root_node, tree depth & last_node.     */
     uint8_t             tree_depth;
     c_ext_pos_t         root_node;
@@ -1997,8 +1996,6 @@ typedef enum {
 #define MAX_DA_LEVEL                        (20)
 #define DOUBLE_ARRAY_GROWING_RW_TREE_BIT    (0)
 #define DOUBLE_ARRAY_DELETED_BIT            (1)
-#define DOUBLE_ARRAY_NEED_COMPACTION_BIT    (2)
-#define DOUBLE_ARRAY_COMPACTING_BIT         (3)
 
 #define PARTIAL_MERGES_QUERY_REDIRECTION_BTREE_NODE_LEVEL (0)
 #if PARTIAL_MERGES_QUERY_REDIRECTION_BTREE_NODE_LEVEL > MAX_BTREE_DEPTH
@@ -2030,7 +2027,6 @@ struct castle_double_array {
     atomic_t                    queriable_merge_trees_cnt;
     struct {
         int                     nr_trees;           /**< Number of CTs at level                 */
-        int                     nr_compac_trees;    /**< #trees that need to be merged          */
         struct list_head        trees;              /**< List of (nr_trees) at level            */
         /* Merge related variables. */
         struct {
@@ -2055,7 +2051,6 @@ struct castle_double_array {
     atomic_t                    ongoing_merges;     /**< Number of ongoing merges.              */
     atomic_t                    ref_cnt;
     uint32_t                    attachment_cnt;
-    tree_seq_t                  compaction_ct_seq;  /**< Sequence ID to be used by compaction.  */
 
     /* Write IO wait queue members */
     struct castle_da_io_wait_queue {
@@ -2080,7 +2075,6 @@ struct castle_double_array {
     wait_queue_head_t           merge_budget_waitq;
     /* Compaction (Big-merge) */
     int                         top_level;          /**< Levels in the doubling array.          */
-    atomic_t                    nr_del_versions;    /**< Versions deleted since last compaction.*/
 
     /* General purpose structure for placing DA on a workqueue.
      * @TODO Currently used only by castle_da_levle0_modified_promote(), hence

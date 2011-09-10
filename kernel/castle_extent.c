@@ -605,7 +605,6 @@ static int castle_extent_print(c_ext_t *ext, void *unused)
 void castle_extent_mark_live(c_ext_id_t ext_id, c_da_t da_id)
 {
     c_ext_t *ext = castle_extents_hash_get(ext_id);
-    printk("%s::ext_id %lld\n", __FUNCTION__, ext_id);
 
     if (ext)
     {
