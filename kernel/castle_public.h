@@ -712,7 +712,7 @@ struct castle_slave_superblock_public {
 #define CASTLE_FS_MAGIC1        (0x19731121)
 #define CASTLE_FS_MAGIC2        (0x19880624)
 #define CASTLE_FS_MAGIC3        (0x19821120)
-#define CASTLE_FS_VERSION       (1)
+#define CASTLE_FS_VERSION       (2)
 
 struct castle_fs_superblock_public {
     /* align:   4 */
