@@ -4131,6 +4131,17 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
     BUG_ON(!merge->da);
     castle_printk(LOG_DEBUG, "%s::merge %p, da %d level %d\n", __FUNCTION__, merge, merge->da->id, merge->level);
 
+    for (i=0; i<MAX_BTREE_DEPTH; i++)
+    {
+        c2_block_t *c2b = merge->levels[i].node_c2b;
+        if (c2b)
+            put_c2b(c2b);
+    }
+
+    /* Abort (i.e. free) incomplete bloom filters */
+    if (merge->out_tree->bloom_exists)
+        castle_bloom_abort(&merge->out_tree->bloom);
+
     serdes_state = atomic_read(&merge->serdes.valid);
     if (serdes_state > NULL_DAM_SERDES)
         mutex_lock(&merge->serdes.mutex);
@@ -4570,7 +4581,7 @@ static void castle_da_merge_new_partition_update(struct castle_da_merge *merge,
     }
 }
 
-static int castle_da_merge_unit_do(struct castle_da_merge *merge)
+static int castle_da_merge_unit_do(struct castle_da_merge *merge, uint64_t max_nr_entries)
 {
     void *key;
     c_ver_t version;
@@ -4579,6 +4590,9 @@ static int castle_da_merge_unit_do(struct castle_da_merge *merge)
 #ifdef CASTLE_PERF_DEBUG
     struct timespec ts_start, ts_end;
 #endif
+
+    /* max_nr_entries should point to total number of entries this merge could be done upto. */
+    max_nr_entries += merge->nr_entries;
 
     while (castle_iterator_has_next_sync(&castle_ct_merged_iter, merge->merged_iter))
     {
@@ -4698,6 +4712,10 @@ entry_done:
         castle_da_merge_budget_consume(merge);
         castle_perf_debug_getnstimeofday(&ts_end);
         castle_perf_debug_bump_ctr(merge->budget_consume_ns, ts_end, ts_start);
+
+        /* Abort if we completed the work asked to do. */
+        if (merge->nr_entries > max_nr_entries)
+            return EAGAIN;
 
         FAULT(MERGE_FAULT);
     }
@@ -5647,9 +5665,9 @@ static c2_block_t* castle_da_merge_des_out_tree_c2b_write_fetch(struct castle_da
     /* If c2b is not up to date, issue a blocking READ to update */
     if(!c2b_uptodate(c2b))
         BUG_ON(submit_c2b_sync(READ, c2b));
-    /* do not write_unlock leaf node c2b; merge thread expects to find it in a locked state. */
-    if(depth > 0)
-        write_unlock_c2b(c2b);
+
+    write_unlock_c2b(c2b);
+
     return c2b;
 }
 
@@ -5775,6 +5793,9 @@ static void castle_da_merge_deserialise(struct castle_da_merge *merge,
         merge->last_leaf_node_c2b =
             castle_da_merge_des_out_tree_c2b_write_fetch(merge, merge_mstore->last_leaf_node_cep,
                     0 /* leaf */);
+
+        read_lock_c2b(merge->last_leaf_node_c2b);
+
         BUG_ON(!merge->last_leaf_node_c2b);
         node = c2b_bnode(merge->last_leaf_node_c2b);
         BUG_ON(!node);
@@ -5784,8 +5805,7 @@ static void castle_da_merge_deserialise(struct castle_da_merge *merge,
         if( (!merge->last_key) && (node->used) )
             merge->out_btree->entry_get(node, node->used - 1, &merge->last_key, NULL, NULL);
 
-        /* this is a leaf node but it is not still being merged into, so unlock it */
-        write_unlock_c2b(merge->last_leaf_node_c2b);
+        read_unlock_c2b(merge->last_leaf_node_c2b);
 
         debug("%s::recovered last leaf node for merge %p (da %d level %d) from "
                 cep_fmt_str" \n",
@@ -5847,22 +5867,21 @@ static void castle_da_merge_des_check(struct castle_da_merge *merge, struct cast
  * Merge multiple trees into one. The same function gets used by both compaction
  * (total merges) and standard 2 tree merges.
  *
- * @param da [in] doubling array to be merged
- * @param nr_trees [in] number of trees to be merged
- * @param in_trees [in] list of trees
- * @param level [in] level of the double array - 0 for total merge
+ * @param merge     [in]    Do some work on this merge.
+ * @param work_size [in]    Number of entries to be merged.
  *
  * @return non-zero if failure
  */
-static int castle_da_merge_do(struct castle_da_merge *merge)
+static int castle_da_merge_do(struct castle_da_merge *merge, uint64_t nr_entries)
 {
     struct castle_double_array *da = merge->da;
     int level = merge->level;
     struct castle_component_tree **in_trees = merge->in_trees;
     tree_seq_t out_tree_id=0;
+    c_merge_serdes_state_t serdes_state;
     int ret;
     int i;
-    c_merge_serdes_state_t serdes_state;
+
 
     debug("%s::MERGE START - DA %d L %d, with input cts: ",
             __FUNCTION__, da->id, level);
@@ -5882,127 +5901,82 @@ static int castle_da_merge_do(struct castle_da_merge *merge)
                 C2_ADV_EXTENT|C2_ADV_HARDPIN, -1, -1, 0);
     }
 
+    /* If the work size is 0, complete everything in one shot. */
+    if (nr_entries == 0)
+    {
+        FOR_EACH_MERGE_TREE(i, merge)
+            nr_entries += atomic64_read(&in_trees[i]->item_count);
+    }
+
     /* Do the merge. */
-    do {
-        int i;
-        c2_block_t *node_c2b;
 
-        /* We unlock some c2bs before the unit merge boundary to allow checkpoint thread to flush
-           c2bs. It is assumed that no other thread would ever have a wlock on these c2bs. */
-        uint8_t relock_bloom_node_c2b = 0;
-        uint8_t relock_bloom_chunk_c2b = 0;
-        /* unlock output ct active leaf c2b, so checkpoint can quickly flush partial merges */
-        for(i=0; i<MAX_BTREE_DEPTH; i++)
-        {
-            node_c2b = merge->levels[i].node_c2b;
-            if(node_c2b)
-            {
-                if (i == 0)
-                {
-                    write_unlock_c2b(node_c2b);
-                }
-                else
-                    BUG_ON(c2b_write_locked(node_c2b)); /* arriving here, only leaf node may be locked */
-            }
-        }
-        /* ditto the in-progress bloom filter */
-        if (merge->out_tree->bloom_exists)
-        {
-            struct castle_bloom_build_params *bf_bp =  merge->out_tree->bloom.private;
-            if(bf_bp)
-            {
-                if(bf_bp->chunk_c2b)
-                {
-                    if(c2b_write_locked(bf_bp->chunk_c2b))
-                    {
-                        debug("%s::unlocking bloom filter chunk_c2b for merge on da %d level %d.\n",
-                                __FUNCTION__, da->id, level);
-                        write_unlock_c2b(bf_bp->chunk_c2b);
-                        relock_bloom_chunk_c2b = 1;
-                    }
-                }
-                if(bf_bp->node_c2b)
-                {
-                    if(c2b_write_locked(bf_bp->node_c2b))
-                    {
-                        debug("%s::unlocking bloom filter node_c2b for merge on da %d level %d.\n",
-                                __FUNCTION__, da->id, level);
-                        write_unlock_c2b(bf_bp->node_c2b);
-                        relock_bloom_node_c2b = 1;
-                    }
-                }
-            }
-        }
+    /* relock output ct active leaf c2b, as unit_do expects to find it */
+    if (merge->levels[0].node_c2b)
+        write_lock_c2b(merge->levels[0].node_c2b);
 
-        /* relock output ct active leaf c2b, as unit_do expects to find it */
-        node_c2b = merge->levels[0].node_c2b;
-        if(node_c2b)
-            write_lock_c2b(node_c2b);
-        /* ditto the in-progress bloom filter */
-        if(relock_bloom_node_c2b)
-        {
-            struct castle_bloom_build_params *bf_bp = merge->out_tree->bloom.private;
-            debug("%s::relocking bloom filter node_c2b for merge on da %d level %d.\n",
-                    __FUNCTION__, da->id, level);
-            write_lock_c2b(bf_bp->node_c2b);
-        }
-        if(relock_bloom_chunk_c2b)
-        {
-            struct castle_bloom_build_params *bf_bp = merge->out_tree->bloom.private;
-            debug("%s::relocking bloom filter chunk_c2b for merge on da %d level %d.\n",
-                    __FUNCTION__, da->id, level);
-            write_lock_c2b(bf_bp->chunk_c2b);
-        }
+    /* ditto the in-progress bloom filter */
+    if (merge->out_tree->bloom_exists)
+    {
+        struct castle_bloom_build_params *bf_bp =  merge->out_tree->bloom.private;
 
-        /* Check for castle stop and merge abort */
-        if (castle_merges_abortable && exit_cond)
+        if (bf_bp)
         {
-            castle_printk(LOG_INIT, "Merge for DA=%d, level=%d, aborted.\n", da->id, level);
-            printk("Merge for DA=%d, level=%d, entries=%llu aborted.\n", da->id, level, merge->nr_entries);
-            ret = -ESHUTDOWN;
-            CASTLE_TRANSACTION_BEGIN;
-            goto merge_aborted;
+            if (bf_bp->chunk_c2b)
+                write_lock_c2b(bf_bp->chunk_c2b);
+            if (bf_bp->node_c2b)
+                write_lock_c2b(bf_bp->node_c2b);
         }
+    }
 
-        /* Perform the merge work. */
-        ret = castle_da_merge_unit_do(merge);
+    /* Check for castle stop and merge abort */
+    if (castle_merges_abortable && exit_cond)
+    {
+        castle_printk(LOG_INIT, "Merge for DA=%d, level=%d, aborted.\n", da->id, level);
+        printk("Merge for DA=%d, level=%d, entries=%llu aborted.\n", da->id, level, merge->nr_entries);
+        ret = -ESHUTDOWN;
+        goto merge_aborted;
+    }
+
+    /* Perform the merge work. */
+    ret = castle_da_merge_unit_do(merge, nr_entries);
 
 #ifdef CASTLE_PERF_DEBUG
-        /* Output & reset cache efficiency stats. */
-        castle_da_merge_cache_efficiency_stats_flush_reset(da, merge, 0, in_trees);
+    /* Output & reset cache efficiency stats. */
+    castle_da_merge_cache_efficiency_stats_flush_reset(da, merge, 0, in_trees);
 #endif
 
-        serdes_state = atomic_read(&merge->serdes.valid);
-        if((serdes_state > NULL_DAM_SERDES) && (!castle_merges_checkpoint))
-        {
-            /* user changed castle_merges_checkpoint param from 1 to 0 */
-            castle_printk(LOG_USERINFO,
-                    "Discarding checkpoint state for in-flight merge on DA=%d, level=%d.\n",
-                    da->id, level);
-            mutex_lock(&merge->serdes.mutex);
-            castle_da_merge_serdes_dealloc(merge);
-            mutex_unlock(&merge->serdes.mutex);
-        }
+    serdes_state = atomic_read(&merge->serdes.valid);
+    if((serdes_state > NULL_DAM_SERDES) && (!castle_merges_checkpoint))
+    {
+        /* user changed castle_merges_checkpoint param from 1 to 0 */
+        castle_printk(LOG_USERINFO,
+                "Discarding checkpoint state for in-flight merge on DA=%d, level=%d.\n",
+                da->id, level);
+        mutex_lock(&merge->serdes.mutex);
+        castle_da_merge_serdes_dealloc(merge);
+        mutex_unlock(&merge->serdes.mutex);
+    }
 
 #ifdef CASTLE_PERF_DEBUG
-        /* Output & reset performance stats. */
-        castle_da_merge_perf_stats_flush_reset(da, merge, 0, in_trees);
+    /* Output & reset performance stats. */
+    castle_da_merge_perf_stats_flush_reset(da, merge, 0, in_trees);
 #endif
-        /* Exit on errors. */
-        if (ret < 0)
-        {
-            /* Merges should never fail.
-             *
-             * Per-version statistics will now be out of sync. */
-            out_tree_id = INVAL_TREE;
-            castle_printk(LOG_WARN, "%s::MERGE FAILED - DA %d L %d, with input cts %d and %d \n",
-                    __FUNCTION__, da->id, level, in_trees[0]->seq, in_trees[1]->seq);
-            CASTLE_TRANSACTION_BEGIN;
-            goto merge_failed;
-        }
-        /* Only ret>0 we are expecting to continue, i.e. ret==EAGAIN. */
-        BUG_ON(ret && (ret != EAGAIN));
-    } while(ret);
+    /* Exit on errors. */
+    if (ret < 0)
+    {
+        /* Merges should never fail.
+         *
+         * Per-version statistics will now be out of sync. */
+        out_tree_id = INVAL_TREE;
+        castle_printk(LOG_WARN, "%s::MERGE FAILED - DA %d L %d, with input cts %d and %d \n",
+                __FUNCTION__, da->id, level, in_trees[0]->seq, in_trees[1]->seq);
+        goto merge_failed;
+    }
+
+    if (ret == EAGAIN)
+        goto merge_aborted;
+
+    BUG_ON(ret);
 
     CASTLE_TRANSACTION_BEGIN;
     debug("%s::MERGE COMPLETING - DA %d L %d, with input cts %d and %d, "
@@ -6022,8 +5996,13 @@ static int castle_da_merge_do(struct castle_da_merge *merge)
     /* Commit and zero private stats to global crash-consistent tree. */
     castle_version_states_commit(&merge->version_states);
 
+    goto complete_merge_do;
+
 merge_aborted:
 merge_failed:
+    CASTLE_TRANSACTION_BEGIN;
+
+complete_merge_do:
     /* Unhard-pin T1s in the cache. Do this before we deallocate the merge and extents. */
     if (level == 1)
     {
@@ -6036,30 +6015,36 @@ merge_failed:
     debug_merges("%s::MERGE END with ret %d - DA %d L %d, produced out ct seq %d \n",
         __FUNCTION__, ret, da->id, level, out_tree_id);
 
-    for (i=0; i<MAX_BTREE_DEPTH; i++)
+    if (merge->levels[0].node_c2b)
+        write_unlock_c2b(merge->levels[0].node_c2b);
+
+    if (merge->out_tree->bloom_exists)
     {
-        c2_block_t *c2b = merge->levels[i].node_c2b;
-        if (c2b)
+        struct castle_bloom_build_params *bf_bp =  merge->out_tree->bloom.private;
+
+        if (bf_bp)
         {
-            debug("%s::putting c2b of btree node %i "cep_fmt_str" for da %d level %d.\n",
-                __FUNCTION__, i, cep2str(c2b->cep), merge->da->id, merge->level);
-            /* leaf nodes remain locked throughout a merge */
-            if (i == 0)
-                write_unlock_c2b(c2b);
-            else
-                BUG_ON(c2b_write_locked(c2b));
-            put_c2b(c2b);
+            if (bf_bp->chunk_c2b)
+            {
+                debug("%s::unlocking bloom filter chunk_c2b for merge on da %d level %d.\n",
+                        __FUNCTION__, da->id, level);
+                dirty_c2b(bf_bp->chunk_c2b);
+                write_unlock_c2b(bf_bp->chunk_c2b);
+            }
+            if (bf_bp->node_c2b)
+            {
+                debug("%s::unlocking bloom filter node_c2b for merge on da %d level %d.\n",
+                        __FUNCTION__, da->id, level);
+                dirty_c2b(bf_bp->node_c2b);
+                write_unlock_c2b(bf_bp->node_c2b);
+            }
         }
     }
 
-    /* Abort (i.e. free) incomplete bloom filters */
-    if (merge->out_tree->bloom_exists)
-        castle_bloom_abort(&merge->out_tree->bloom);
-
     /* Aborted merges gets cleaned-up during DA cleanup. */
-    if (ret != -ESHUTDOWN)
+    if ((ret != -ESHUTDOWN) && (ret != EAGAIN))
         castle_da_merge_dealloc(merge, ret);
-    else
+    else if (ret == -ESHUTDOWN)
         /* Incase of abort delay merge_dealloc until DA finish. */
         castle_printk(LOG_DEVEL, "Stopping merge due to thread shutdown\n");
 
@@ -6067,12 +6052,15 @@ merge_failed:
     CASTLE_TRANSACTION_END;
 
     castle_trace_da_merge(TRACE_END, TRACE_DA_MERGE_ID, da->id, level, out_tree_id, 0);
-    if(ret==-ESHUTDOWN) return -ESHUTDOWN; /* merge abort */
+
+    if((ret == -ESHUTDOWN) || (ret == EAGAIN))
+        return ret; /* merge abort */
+
     if(ret)
     {
         castle_printk(LOG_WARN, "Merge for DA=%d, level=%d, failed to merge err=%d.\n",
                 da->id, level, ret);
-        return -EAGAIN;
+        return ret;
     }
 
     return 0;
@@ -6124,8 +6112,9 @@ static int castle_da_merge_run(void *da_p)
 {
     struct castle_double_array *da = (struct castle_double_array *)da_p;
     struct castle_component_tree *in_trees[2];
-    int level, ignore, ret;
+    int level, ignore, ret, nr_units;
     struct castle_da_merge *merge = NULL;
+    uint64_t nr_entries;
 
     /* Work out the level at which we are supposed to be doing merges.
        Do that by working out where is this thread in threads array. */
@@ -6199,8 +6188,16 @@ static int castle_da_merge_run(void *da_p)
         }
 
 merge_do:
+        nr_entries = atomic64_read(&in_trees[0]->item_count) + atomic64_read(&in_trees[1]->item_count);
+        BUG_ON(nr_entries == 0);
+        nr_entries = nr_entries / (1 << level);
+
+        nr_units = 0;
         /* Do the merge.  If it fails, retry after 10s (unless it's a merge abort). */
-        ret = castle_da_merge_do(merge);
+        do {
+            ret = castle_da_merge_do(merge, nr_entries);
+        } while(ret == EAGAIN);
+
         if (ret == -ESHUTDOWN)
             /* Merge has been aborted. */
             goto __again;

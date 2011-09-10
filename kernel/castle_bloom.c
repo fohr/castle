@@ -378,16 +378,12 @@ void castle_bloom_abort(castle_bloom_t *bf)
     if(bf_bp->cur_node != NULL)
     {
         debug("Completing node for bloom_filter %p\n", bf);
-        dirty_c2b(bf_bp->node_c2b);
-        write_unlock_c2b(bf_bp->node_c2b);
         put_c2b(bf_bp->node_c2b);
     }
 
     if(bf_bp->chunk_c2b != NULL)
     {
         debug("Completing chunk for bloom_filter %p\n", bf);
-        dirty_c2b(bf_bp->chunk_c2b);
-        write_unlock_c2b(bf_bp->chunk_c2b);
         put_c2b(bf_bp->chunk_c2b);
     }
 
@@ -1054,6 +1050,7 @@ void castle_bloom_build_param_unmarshall(castle_bloom_t *bf, struct castle_bbp_e
             drop_end   = bf_bp->cur_node->used - 1;
             bf->btree->entries_drop(bf_bp->cur_node, drop_start, drop_end);
         }
+        write_unlock_c2b(bf_bp->node_c2b);
     }
 
     /* recover chunk cep, c2b, and buffer */
@@ -1068,6 +1065,7 @@ void castle_bloom_build_param_unmarshall(castle_bloom_t *bf, struct castle_bbp_e
         if (bf->num_chunks <= BLOOM_MAX_SOFTPIN_CHUNKS)
             castle_cache_block_softpin(bf_bp->chunk_c2b);
         bf_bp->cur_chunk_buffer = c2b_buffer(bf_bp->chunk_c2b);
+        write_unlock_c2b(bf_bp->chunk_c2b);
     }
     return;
 }
