@@ -4119,6 +4119,7 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
         return;
     }
 
+    castle_sysfs_merge_del(merge);
     castle_merges_hash_remove(merge);
 
     if (castle_version_states_free(&merge->version_states) != EXIT_SUCCESS)
@@ -4900,7 +4901,7 @@ static int castle_da_merge_init(struct castle_da_merge *merge, void *unused)
         castle_printk(LOG_INIT, "%s::Resuming merge on da %d level %d.\n", __FUNCTION__, da->id, level);
     }
 
-    //BUG_ON(castle_sysfs_merge_add(merge));
+    BUG_ON(castle_sysfs_merge_add(merge));
 
     write_lock(&da->lock);
     FOR_EACH_MERGE_TREE(i, merge)
