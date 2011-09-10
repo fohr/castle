@@ -4643,8 +4643,6 @@ int castle_extent_grow(c_ext_id_t ext_id, c_chk_cnt_t count)
     c_ext_mask_t *mask;
     int ret = 0;
 
-    castle_printk(LOG_DEVEL, "%s::ext %d, %d chunks\n", __FUNCTION__, ext_id, count);
-
     /* Extent should be alive, something is wrong with client. */
     BUG_ON(!ext);
 

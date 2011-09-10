@@ -2008,10 +2008,6 @@ typedef enum {
 //TODO@tr use this
 #define MERGE_OUTPUT_DATA_GROWTH_RATE (1)
 
-/* Merge level flags. */
-#define DA_MERGE_RUNNING_BIT                (0)
-//#define DA_MERGE_UNIT_RUNNING               (1)
-
 #define MIN_DA_SERDES_LEVEL                 (2) /* merges below this level won't be serialised */
 struct castle_double_array {
     c_da_t                      id;
@@ -2030,25 +2026,13 @@ struct castle_double_array {
         struct list_head        trees;              /**< List of (nr_trees) at level            */
         /* Merge related variables. */
         struct {
-            unsigned long       flags;              /**< Flags on level merge.                  */
-            struct list_head    merge_tokens;
-            struct castle_merge_token
-                               *active_token;
-            struct castle_merge_token
-                               *driver_token;
-            uint32_t            units_commited;
             struct task_struct *thread;
-            int                 deamortize;
         } merge;
     } levels[MAX_DA_LEVEL];
     atomic_t                    lfs_victim_count;   /**< Number of components of DA, that are
                                                          blocked due to Low Free-Space.         */
     struct castle_da_lfs_ct_t  *t0_lfs;             /**< Low Free-Space handler for T0s.        */
-    struct castle_merge_token   merge_tokens_array[MAX_DA_LEVEL];
-    struct list_head            merge_tokens;
     struct list_head            hash_list;
-    int                         driver_merge;
-    atomic_t                    ongoing_merges;     /**< Number of ongoing merges.              */
     atomic_t                    ref_cnt;
     uint32_t                    attachment_cnt;
 
