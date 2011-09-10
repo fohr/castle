@@ -351,6 +351,58 @@ err:
     return strlen(buf);
 }
 
+static ssize_t da_array_list_show(struct kobject *kobj,
+                                  struct attribute *attr,
+                                  char *buf)
+{
+    struct castle_double_array *da = container_of(kobj, struct castle_double_array, kobj);
+    int i;
+    int ret = 0;
+
+    /* Get READ lock on DA, to make sure DA doesnt disappear while printing stats. */
+    read_lock(&da->lock);
+
+    /* Total number of trees. */
+    sprintf(buf, "%u %u\n", da->nr_trees, da->top_level);
+
+    for(i=0; i<=da->top_level; i++)
+    {
+        struct castle_component_tree *ct;
+        struct list_head *lh;
+
+        /* Number of trees in each level. */
+        ret = snprintf(buf, PAGE_SIZE, "%s%u ", buf, da->levels[i].nr_trees);
+        /* Buffer is of size one PAGE. MAke sure we are not overflowing buffer. */
+        if (ret >= PAGE_SIZE)
+            goto err;
+
+        list_for_each(lh, &da->levels[i].trees)
+        {
+            struct castle_btree_type *btree;
+
+            ct = list_entry(lh, struct castle_component_tree, da_list);
+            btree = castle_btree_type_get(ct->btree_type);
+            ret = snprintf(buf, PAGE_SIZE,
+                           "%s0x%x ",
+                           buf,
+                           ct->seq);
+            if (ret >= PAGE_SIZE)
+                goto err;
+        }
+        ret = snprintf(buf, PAGE_SIZE, "%s\n", buf);
+        if (ret >= PAGE_SIZE)
+            goto err;
+    }
+    ret = 0;
+
+err:
+    read_unlock(&da->lock);
+
+    if (ret) sprintf(buf + PAGE_SIZE - 20, "Overloaded...\n");
+
+    return strlen(buf);
+}
+
 static ssize_t slaves_number_show(struct kobject *kobj,
                                   struct attribute *attr,
                                   char *buf)
@@ -728,10 +780,14 @@ __ATTR(size, S_IRUGO|S_IWUSR, da_size_show, NULL);
 static struct castle_sysfs_entry da_tree_list =
 __ATTR(component_trees, S_IRUGO|S_IWUSR, da_tree_list_show, NULL);
 
+static struct castle_sysfs_entry da_array_list =
+__ATTR(array_list, S_IRUGO|S_IWUSR, da_array_list_show, NULL);
+
 static struct attribute *castle_da_attrs[] = {
     &da_version.attr,
     &da_size.attr,
     &da_tree_list.attr,
+    &da_array_list.attr,
     NULL,
 };
 

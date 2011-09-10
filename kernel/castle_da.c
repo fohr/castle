@@ -92,7 +92,7 @@ int                             castle_rwct_checkpoint_frequency = 10;  /**< Num
 module_param(castle_rwct_checkpoint_frequency, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
 MODULE_PARM_DESC(castle_rwct_checkpoint_frequency, "Number checkpoints before RWCTs are promoted.");
 
-static int castle_golden_nugget = 0;
+static int castle_golden_nugget = 1;
 
 static struct
 {
@@ -529,8 +529,7 @@ static void castle_ct_immut_iter_next_node(c_immut_iter_t *iter)
     BUG_ON(!iter->curr_node->is_leaf ||
            (iter->curr_node->used <= iter->next_idx));
     iter->curr_idx  = iter->next_idx;
-    castle_printk(LOG_DEBUG, "%s::Moved to cep="cep_fmt_str_nl,
-            __FUNCTION__, cep2str(iter->curr_c2b->cep));
+    debug("%s::Moved to cep="cep_fmt_str_nl, __FUNCTION__, cep2str(iter->curr_c2b->cep));
 
     /* Fire the node_start callback. */
     if (iter->node_start)
@@ -4800,8 +4799,7 @@ static tree_seq_t castle_da_merge_last_unit_complete(struct castle_double_array 
     if (merge->nr_entries)
     {
         castle_sysfs_ct_add(out_tree);
-        if (merge->level == 2)
-            castle_events_new_tree_added(out_tree->seq);
+        castle_events_new_tree_added(out_tree->seq);
     }
 
     castle_da_merge_restart(da, NULL);
@@ -4841,7 +4839,7 @@ static int castle_da_merge_init(struct castle_da_merge *merge, void *unused)
 
     /* Sanity checks. */
     BUG_ON(nr_trees < 2);
-    BUG_ON((nr_trees != 2));
+
     /* Work out what type of trees are we going to be merging. Bug if in_trees don't match. */
     btree = castle_btree_type_get(in_trees[0]->btree_type);
     for (i=0; i<nr_trees; i++)
@@ -9635,17 +9633,22 @@ static int castle_merge_thread_start(void *_data)
 
     while(!kthread_should_stop())
     {
+        set_current_state(TASK_INTERRUPTIBLE);
+        schedule();
+
+        if (kthread_should_stop())
+            break;
+
         /* Running should be set by the wakeup thread. */
         BUG_ON(!merge_thread->running);
 
         merge = castle_merges_hash_get(merge_thread->merge_id);
         BUG_ON(!merge);
 
-        castle_da_merge_do(merge, merge_thread->cur_work_size);
+        if (castle_da_merge_do(merge, merge_thread->cur_work_size) == 0)
+            merge_thread->merge_id = INVAL_MERGE_ID;
 
         merge_thread->running = 0;
-        set_current_state(TASK_INTERRUPTIBLE);
-        schedule();
     }
 
     return 0;
@@ -9662,8 +9665,9 @@ int castle_merge_thread_create(c_thread_id_t *thread_id)
     if (!merge_thread)
         return -EINVAL;
 
-    merge_thread->thread = kthread_create(castle_merge_thread_start, merge_thread,
-                                          "castle_mthread_%u", castle_merge_threads_count);
+    merge_thread->running = 0;
+    merge_thread->thread  = kthread_create(castle_merge_thread_start, merge_thread,
+                                           "castle_mthread_%u", castle_merge_threads_count);
     if (IS_ERR(merge_thread->thread))
     {
         castle_printk(LOG_USERINFO, "Failed to create merge thread\n");
@@ -9790,7 +9794,7 @@ static int castle_da_merge_fill_trees(uint32_t nr_arrays, c_array_id_t *array_id
         }
 
         /* Check if the tree is dynamic. */
-        if (castle_golden_nugget && ct->dynamic)
+        if (ct->dynamic)
         {
             castle_printk(LOG_USERINFO, "Array is dynamic. Can't start merg on: 0x%x\n",
                                     array_ids[i]);
@@ -9846,13 +9850,6 @@ int castle_merge_start(c_merge_cfg_t *merge_cfg, c_merge_id_t *merge_id, int lev
 
     debug_gn("Merge has been called on %u arrays\n", merge_cfg->nr_arrays);
 
-    if (merge_cfg->nr_arrays != 2)
-    {
-        castle_printk(LOG_USERINFO, "Merge can't be done on %u arrays\n", merge_cfg->nr_arrays);
-        ret = -EINVAL;
-        goto err_out;
-    }
-
     /* Allocate memory for list of input arrays. */
     in_trees = castle_malloc(sizeof(void *) * merge_cfg->nr_arrays, GFP_KERNEL);
     if (!in_trees)
@@ -9876,7 +9873,7 @@ int castle_merge_start(c_merge_cfg_t *merge_cfg, c_merge_id_t *merge_id, int lev
     }
 
     /* Allocate and init merge structure. */
-    merge = castle_da_merge_alloc(merge_cfg->nr_arrays, level, da, INVAL_MERGE_ID, in_trees);
+    merge = castle_da_merge_alloc(merge_cfg->nr_arrays, 2, da, INVAL_MERGE_ID, in_trees);
     if (!merge)
     {
         castle_printk(LOG_USERINFO, "Couldn't allocate merge structure.\n");
@@ -9918,7 +9915,7 @@ int castle_merge_do_work(c_merge_id_t merge_id, c_work_size_t work_size, c_work_
 
     if (!merge)
     {
-        castle_printk(LOG_WARN, "Failed to an active merge with id: %u\n", merge_id);
+        castle_printk(LOG_WARN, "Failed to find an active merge with id: %u\n", merge_id);
         ret = -EINVAL;
         goto err_out;
     }
@@ -9965,5 +9962,48 @@ int castle_merge_stop(c_merge_id_t merge_id)
 
 int castle_merge_thread_attach(c_merge_id_t merge_id, c_thread_id_t thread_id)
 {
+    struct castle_da_merge *merge = castle_merges_hash_get(merge_id);
+    struct castle_merge_thread *merge_thread = NULL;
+    int ret = 0;
+
+    if (!merge)
+    {
+        castle_printk(LOG_WARN, "Failed to find an active merge with id: %u\n", merge_id);
+        ret = -EINVAL;
+        goto err_out;
+    }
+
+    if (!THREAD_ID_INVAL(merge->thread_id))
+    {
+        castle_printk(LOG_WARN, "Merge (%u) is already attached to thread (%u)\n",
+                      merge_id, merge->thread_id);
+        ret = -EINVAL;
+        goto err_out;
+    }
+
+    merge_thread = castle_merge_threads_hash_get(thread_id);
+    if (!merge_thread)
+    {
+        castle_printk(LOG_WARN, "Failed to find a thread with id: %u\n", thread_id);
+        ret = -EINVAL;
+        goto err_out;
+    }
+
+    if (!MERGE_ID_INVAL(merge_thread->merge_id))
+    {
+        castle_printk(LOG_WARN, "Thread (%u) is already attached to merge (%u)\n",
+                      thread_id, merge_thread->merge_id);
+        ret = -EINVAL;
+        goto err_out;
+    }
+
+    BUG_ON(merge_thread->running);
+    merge_thread->merge_id = merge_id;
+    merge->thread_id       = thread_id;
+    wmb();
+
     return 0;
+
+err_out:
+    return ret;
 }

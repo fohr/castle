@@ -433,7 +433,7 @@ typedef struct castle_control_cmd_merge_start {
     int             ret;            /* OUT */
 } cctrl_cmd_merge_start_t;
 
-typedef struct castle_control_cmd_do_work {
+typedef struct castle_control_cmd_merge_do_work {
     c_merge_id_t    merge_id;       /* IN  */
     c_work_size_t   work_size;      /* IN  */
     c_work_id_t     work_id;        /* OUT */
