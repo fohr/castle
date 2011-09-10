@@ -34,6 +34,7 @@
 #define debug(_f, ...)            ((void)0)
 #define debug_verbose(_f, ...)    ((void)0)
 #define debug_iter(_f, ...)       ((void)0)
+#define debug_gn(_f, ...)         ((void)0)
 #if 1
 #define debug_merges(_f, ...)     ((void)0)
 #else
@@ -44,9 +45,13 @@
 #define debug(_f, _a...)          (castle_printk(LOG_DEBUG, "%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
 #define debug_verbose(_f, ...)    (castle_printk(LOG_DEBUG, "%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
 #define debug_iter(_f, _a...)     (castle_printk(LOG_DEBUG, "%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
+#define debug_gn(_f, _a...)       (castle_printk(LOG_DEBUG, "%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
 #define debug_merges(_f, _a...)   (castle_printk(LOG_DEBUG, "%s:%.4d: DA=%d, level=%d: " \
                                         _f, __FILE__, __LINE__ , da->id, level, ##_a))
 #endif
+
+#undef debug_gn
+#define debug_gn(_f, _a...)       (printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
 
 #define MAX_DYNAMIC_INTERNAL_SIZE       (5)     /* In C_CHK_SIZE. */
 #define MAX_DYNAMIC_TREE_SIZE           (20)    /* In C_CHK_SIZE. */
@@ -206,11 +211,18 @@ static int castle_merge_thread_stop(struct castle_merge_thread *thread, void *un
 static struct list_head        *castle_merge_threads_hash = NULL;
 
 #define CASTLE_MERGE_THREADS_HASH_SIZE            (100)
-#define CASTLE_MERGES_HASH_SIZE                   (100)
 
 DEFINE_HASH_TBL(castle_merge_threads, castle_merge_threads_hash, CASTLE_MERGE_THREADS_HASH_SIZE, struct castle_merge_thread, hash_list, c_thread_id_t, id);
 
 uint32_t castle_merge_threads_count = 0;
+
+static struct list_head        *castle_merges_hash = NULL;
+
+#define CASTLE_MERGES_HASH_SIZE                   (100)
+
+DEFINE_HASH_TBL(castle_merges, castle_merges_hash, CASTLE_MERGES_HASH_SIZE, struct castle_da_merge, hash_list, c_merge_id_t, id);
+
+uint32_t castle_merges_count = 0;
 
 
 tree_seq_t castle_da_next_ct_seq(void);
@@ -8922,6 +8934,7 @@ static struct castle_component_tree* castle_ct_alloc(struct castle_double_array 
     atomic_set(&ct->write_ref_count, 0);
     atomic64_set(&ct->item_count, 0);
     atomic64_set(&ct->large_ext_chk_cnt, 0);
+    ct->flags           = 0;
     ct->btree_type      = type;
     ct->dynamic         = type == RW_VLBA_TREE_TYPE ? 1 : 0;
     ct->da              = da->id;
@@ -8947,6 +8960,7 @@ static struct castle_component_tree* castle_ct_alloc(struct castle_double_array 
     ct->data_c2bsync_ns = 0;
     ct->get_c2b_ns      = 0;
 #endif
+    ct->merge           = NULL;
 
     return ct;
 }
@@ -10538,9 +10552,152 @@ static int castle_merge_thread_stop(struct castle_merge_thread *thread, void *un
     return 0;
 }
 
+struct castle_component_tree *castle_da_next_array(struct castle_component_tree *ct)
+{
+    struct castle_double_array *da = castle_da_hash_get(ct->da);
+    struct castle_component_tree *next_ct = NULL;
+    int level = ct->level;
+
+    read_lock(&da->lock);
+
+    /* If this is not the last tree in level, return next tree. */
+    if (!list_is_last(&ct->da_list, &da->levels[level].trees))
+    {
+        next_ct = list_entry(ct->da_list.next, struct castle_component_tree, da_list);
+        goto out;
+    }
+
+    /* Go upto next nom-empty level. */
+    for (level++; list_empty(&da->levels[level].trees) && level < MAX_DA_LEVEL; level++);
+
+    if (level == MAX_DA_LEVEL)
+    {
+        BUG_ON(next_ct);
+        goto out;
+    }
+
+    next_ct = list_entry(da->levels[level].trees.next, struct castle_component_tree, da_list);
+
+out:
+    read_unlock(&da->lock);
+
+    return next_ct;
+}
+
+static int castle_da_merge_fill_trees(uint32_t nr_arrays, c_array_id_t *array_ids,
+                                      struct castle_component_tree **in_trees)
+{
+    int i;
+
+    /* Fetch all ct/array structures. And do sanity checks on cts. */
+    for (i=0; i<nr_arrays; i++)
+    {
+        struct castle_component_tree *ct = castle_ct_hash_get(array_ids[i]);
+        if (!ct)
+        {
+            castle_printk(LOG_INFO, "Couldn't find the array: 0x%x\n", array_ids[i]);
+            return -EINVAL;
+        }
+
+        /* Check if the tree is alrady marked for merge. */
+        if (ct->merge)
+        {
+            castle_printk(LOG_INFO, "Array is already merging: 0x%x\n", array_ids[i]);
+            return -EINVAL;
+        }
+
+        /* Check if the tree is dynamic. */
+        if (ct->dynamic)
+        {
+            castle_printk(LOG_INFO, "Array is dynamic. Can't start merg on: 0x%x\n",
+                                    array_ids[i]);
+            return -EINVAL;
+        }
+
+        /* Shouldn't be any outstanding write references. */
+        BUG_ON(atomic_read(&ct->write_ref_count) != 0);
+
+        /* Shouldn't be a empty tree. */
+        BUG_ON(atomic64_read(&ct->item_count) == 0);
+
+        if (i != 0)
+        {
+            /* Check if the tree is contiguous to the previous one or not. */
+            if (castle_da_next_array(ct) != in_trees[i-1])
+            {
+                castle_printk(LOG_INFO, "Array 0x%x is not following 0x%x\n",
+                                        array_ids[i], array_ids[i-1]);
+                return -EINVAL;
+            }
+
+            /* Work out what type of trees are we going to be merging. Return, if
+             * in_trees don't match. */
+            if (in_trees[i-1]->btree_type != ct->btree_type)
+            {
+                castle_printk(LOG_INFO, "Arrays are not of same type\n");
+                return -EINVAL;
+            }
+
+            if (ct->level != in_trees[i-1]->level)
+            {
+                castle_printk(LOG_INFO, "Don't belong to same level\n");
+                return -EINVAL;
+            }
+        }
+
+        in_trees[i] = ct;
+        debug_gn("\tArray: 0x%x\n", array_ids[i]);
+    }
+
+    return 0;
+}
+
 void castle_merge_start(c_merge_cfg_t *merge_cfg, c_merge_id_t *merge_id, int *ret)
 {
+    struct castle_component_tree **in_trees = NULL;
+    struct castle_double_array *da;
+    struct castle_da_merge *merge = NULL;
+
     *ret = 0;
+
+    debug_gn("Merge has been called on %u arrays\n", merge_cfg->nr_arrays);
+
+    if (merge_cfg->nr_arrays != 2)
+    {
+        castle_printk(LOG_INFO, "Merge can't be done on %u arrays\n", merge_cfg->nr_arrays);
+        *ret = -EINVAL;
+        goto err_out;
+    }
+
+    /* Allocate memory for list of input arrays. */
+    in_trees = castle_malloc(sizeof(void *) * merge_cfg->nr_arrays, GFP_KERNEL);
+    if (!in_trees)
+    {
+        *ret = -ENOMEM;
+        goto err_out;
+    }
+
+    /* Get array objects from IDs. */
+    *ret = castle_da_merge_fill_trees(merge_cfg->nr_arrays, merge_cfg->arrays, in_trees);
+    if (*ret < 0)
+        goto err_out;
+
+    /* Get doubling array. */
+    da = castle_da_hash_get(in_trees[0]->da);
+    if (!da)
+    {
+        castle_printk(LOG_INFO, "Couldn't find corresposing version tree.\n");
+        *ret = -EINVAL;
+        goto err_out;
+    }
+
+    return;
+
+err_out:
+    BUG_ON(*ret == 0);
+
+    BUG_ON(merge);
+    if (in_trees)   castle_kfree(in_trees);
 }
 
 void castle_merge_do_work(c_merge_id_t merge_id, c_work_size_t size, c_work_id_t *work_id,

@@ -1102,6 +1102,7 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
             merge_cfg->arrays = castle_malloc(size, GFP_KERNEL);
             if (!merge_cfg->arrays || copy_from_user(merge_cfg->arrays, arrays_list, size))
             {
+                castle_printk(LOG_WARN, "Failed to copy to user space\n");
                 merge_cfg->arrays = arrays_list;
                 ioctl.merge_start.ret = -ENOMEM;
                 break;

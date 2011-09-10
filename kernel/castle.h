@@ -934,9 +934,15 @@ struct castle_bbp_entry
     /*         70 */
 } PACKED;
 
+/* Component tree flags bits. */
+#define CASTLE_CT_DYNAMIC_BIT           0   /* CT is dynamic. RW Tree.                          */
+#define CASTLE_CT_NEW_TREE_BIT          1   /* CT is not yet committed to disk.                 */
+#define CASTLE_CT_BLOOM_EXISTS_BIT      2   /* CT has bloom filter.                             */
+
 struct castle_component_tree {
     tree_seq_t          seq;               /**< Unique ID identifying this tree.                */
     tree_seq_t          data_age;          /**< Denotes the age of data.                        */
+    unsigned long       flags;
 
     atomic_t            ref_count;
     atomic_t            write_ref_count;
@@ -975,6 +981,8 @@ struct castle_component_tree {
     uint8_t             bloom_exists;
     castle_bloom_t      bloom;
     struct kobject      kobj;
+    struct castle_da_merge  *merge;         /**< Contains mreg structure if the tree involved
+                                                 in a merge. */
 #ifdef CASTLE_PERF_DEBUG
     u64                 bt_c2bsync_ns;
     u64                 data_c2bsync_ns;
