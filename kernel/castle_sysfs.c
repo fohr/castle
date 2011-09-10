@@ -21,6 +21,7 @@ MODULE_PARM_DESC(castle_devel, "Whether to enable Castle FS devel sysfs director
 
 static wait_queue_head_t castle_sysfs_kobj_release_wq;
 static struct kobject    double_arrays_kobj;
+static struct kobject    merge_threads_kobj;
 static struct kobject    filesystem_kobj;
 static struct kobject    devel_kobj;
 struct castle_sysfs_versions {
@@ -930,6 +931,193 @@ void castle_sysfs_ct_del(struct castle_component_tree *ct)
     castle_sysfs_kobj_release_wait(&ct->kobj);
 }
 
+/* Definition of Merge threads directory attributes */
+
+static ssize_t merge_threads_number_show(struct kobject *kobj,
+                                        struct attribute *attr,
+                                        char *buf)
+{
+    return sprintf(buf, "%u\n", castle_merge_threads_count);
+}
+
+static struct castle_sysfs_entry merge_threads_number =
+__ATTR(number, S_IRUGO|S_IWUSR, merge_threads_number_show, NULL);
+
+static struct attribute *castle_merge_threads_attrs[] = {
+    &merge_threads_number.attr,
+    NULL,
+};
+
+static struct kobj_type castle_merge_threads_ktype = {
+    .sysfs_ops      = &castle_sysfs_ops,
+    .default_attrs  = castle_merge_threads_attrs,
+};
+
+/* Definition of each merge thread sysfs directory attributes */
+
+static ssize_t merge_thread_merge_id_show(struct kobject *kobj,
+                                          struct attribute *attr,
+                                          char *buf)
+{
+    struct castle_merge_thread *thread = container_of(kobj, struct castle_merge_thread, kobj);
+
+    if (MERGE_ID_INVAL(thread->merge_id))
+        return sprintf(buf, "none\n");
+
+    return sprintf(buf, "0x%x\n", thread->merge_id);
+}
+
+static ssize_t merge_thread_running_show(struct kobject *kobj,
+                                         struct attribute *attr,
+                                         char *buf)
+{
+    struct castle_merge_thread *thread = container_of(kobj, struct castle_merge_thread, kobj);
+
+    return sprintf(buf, "%u\n", thread->running);
+}
+
+static struct castle_sysfs_entry merge_thread_merge_id =
+__ATTR(merge_id, S_IRUGO|S_IWUSR, merge_thread_merge_id_show, NULL);
+
+static struct castle_sysfs_entry merge_thread_running =
+__ATTR(running, S_IRUGO|S_IWUSR, merge_thread_running_show, NULL);
+
+static struct attribute *castle_merge_thread_attrs[] = {
+    &merge_thread_merge_id.attr,
+    &merge_thread_running.attr,
+    NULL,
+};
+
+static struct kobj_type castle_merge_thread_ktype = {
+    .release        = castle_sysfs_kobj_release,
+    .sysfs_ops      = &castle_sysfs_ops,
+    .default_attrs  = castle_merge_thread_attrs,
+};
+
+int castle_sysfs_merge_thread_add(struct castle_merge_thread *merge_thread)
+{
+    int ret;
+
+    /* Don't proceed, just return success - if sysfs is already finished. */
+    if (test_bit(CASTLE_SYSFS_FINISHED, &castle_sysfs_flags))
+        return 0;
+
+    memset(&merge_thread->kobj, 0, sizeof(struct kobject));
+    ret = kobject_tree_add(&merge_thread->kobj,
+                           &merge_threads_kobj,
+                           &castle_merge_thread_ktype,
+                           "0x%x", merge_thread->id);
+
+    if (ret < 0)
+        return ret;
+
+    return 0;
+}
+
+void castle_sysfs_merge_thread_del(struct castle_merge_thread *merge_thread)
+{
+    /* Don't proceed, just return success - if sysfs is already finished. */
+    if (test_bit(CASTLE_SYSFS_FINISHED, &castle_sysfs_flags))
+        return;
+
+    kobject_remove(&merge_thread->kobj);
+    castle_sysfs_kobj_release_wait(&merge_thread->kobj);
+}
+
+/**
+ * sysfs entry for merge.
+ *
+ * path: /sys/fs/castle-fs/vertrees/<da_id>/merges/<merge_id>
+ */
+static ssize_t merge_in_trees_show(struct kobject *kobj,
+                                   struct attribute *attr,
+                                   char *buf)
+{
+    int i, offset = 0;
+    struct castle_da_merge *merge = container_of(kobj, struct castle_da_merge, kobj);
+
+    for (i=0; i<merge->nr_trees; i++)
+    {
+        offset += sprintf(buf+offset, "0x%x ", merge->in_trees[i]->seq);
+        BUG_ON(offset > PAGE_SIZE);
+    }
+
+    return offset;
+}
+
+static ssize_t merge_out_tree_show(struct kobject *kobj,
+                                   struct attribute *attr,
+                                   char *buf)
+{
+    struct castle_da_merge *merge = container_of(kobj, struct castle_da_merge, kobj);
+
+    return sprintf(buf, "0x%x", merge->out_tree->seq);
+}
+
+static ssize_t merge_progress_show(struct kobject *kobj,
+                                   struct attribute *attr,
+                                   char *buf)
+{
+    struct castle_da_merge *merge = container_of(kobj, struct castle_da_merge, kobj);
+
+    return sprintf(buf, "%llu", merge->nr_entries);
+}
+
+static struct castle_sysfs_entry merge_in_trees =
+__ATTR(in_trees, S_IRUGO|S_IWUSR, merge_in_trees_show, NULL);
+
+static struct castle_sysfs_entry merge_progress =
+__ATTR(progress, S_IRUGO|S_IWUSR, merge_progress_show, NULL);
+
+static struct castle_sysfs_entry merge_out_tree =
+__ATTR(out_tree, S_IRUGO|S_IWUSR, merge_out_tree_show, NULL);
+
+static struct attribute *castle_merge_attrs[] = {
+    &merge_in_trees.attr,
+    &merge_progress.attr,
+    &merge_out_tree.attr,
+    NULL,
+};
+
+static struct kobj_type castle_merge_ktype = {
+    .release        = castle_sysfs_kobj_release,
+    .sysfs_ops      = &castle_sysfs_ops,
+    .default_attrs  = castle_merge_attrs,
+};
+
+/**
+ * Add merge to the sysfs in vertree directory.
+ */
+int castle_sysfs_merge_add(struct castle_da_merge *merge)
+{
+    int ret;
+
+    /* Don't proceed, just return success - if sysfs is already finished. */
+    if (test_bit(CASTLE_SYSFS_FINISHED, &castle_sysfs_flags))
+        return 0;
+
+    /* Add a directory for list of arrays. */
+    memset(&merge->kobj, 0, sizeof(struct kobject));
+    ret = kobject_tree_add(&merge->kobj,
+                           &merge->da->merges_kobj,
+                           &castle_merge_ktype,
+                           "%x", merge->id);
+    if (ret < 0)
+        return ret;
+
+    return 0;
+}
+
+void castle_sysfs_merge_del(struct castle_da_merge *merge)
+{
+    /* Don't proceed, just return success - if sysfs is already finished. */
+    if (test_bit(CASTLE_SYSFS_FINISHED, &castle_sysfs_flags))
+        return;
+
+    kobject_remove(&merge->kobj);
+    castle_sysfs_kobj_release_wait(&merge->kobj);
+}
+
 /* Definition of slaves sysfs directory attributes */
 static struct castle_sysfs_entry slaves_number =
 __ATTR(number, S_IRUGO|S_IWUSR, slaves_number_show, NULL);
@@ -1274,9 +1462,18 @@ int castle_sysfs_init(void)
         if (ret < 0) goto out8;
     }
 
+    memset(&merge_threads_kobj, 0, sizeof(struct kobject));
+    ret = kobject_tree_add(&merge_threads_kobj,
+                           &castle.kobj,
+                           &castle_merge_threads_ktype,
+                           "%s", "merge_threads");
+    if(ret < 0) goto out9;
+
     return 0;
 
-    kobject_remove(&devel_kobj); /* Unreachable */
+    kobject_remove(&merge_threads_kobj); /* Unreachable */
+out9:
+    kobject_remove(&devel_kobj);
 out8:
     kobject_remove(&filesystem_kobj);
 out7:
@@ -1301,6 +1498,7 @@ void castle_sysfs_fini(void)
     set_bit(CASTLE_SYSFS_FINISHED, &castle_sysfs_flags);
     mb();
 
+    kobject_remove(&merge_threads_kobj);
     if (castle_devel_enabled)
     {
         castle_devel_enabled = 0;

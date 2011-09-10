@@ -9,9 +9,11 @@ void castle_events_slave_rebuild_notify(void);
 
 /* Events which do not correspond to any particular command. Defined in 0x80+ range not
    to overlap with IOCTL command ids. */
-#define CASTLE_EVENT_SPINUP            (128)
-#define CASTLE_EVENT_SPINDOWN          (129)
-#define CASTLE_EVENT_TRANFSER_FINISHED (130)
+#define CASTLE_EVENT_SPINUP                 (128)
+#define CASTLE_EVENT_SPINDOWN               (129)
+#define CASTLE_EVENT_TRANFSER_FINISHED      (130)
+#define CASTLE_EVENT_NEW_TREE_ADDED         (131)
+#define CASTLE_EVENT_MERGE_WORK_FINISHED    (132)
 
 #define CASTLE_EVENTS_SUCCESS (0)
 
@@ -61,5 +63,10 @@ void castle_events_slave_rebuild_notify(void);
 #define castle_events_init() \
     castle_uevent1(CASTLE_CTRL_INIT, CASTLE_EVENTS_SUCCESS)
 
+#define castle_events_new_tree_added(_array_id) \
+    castle_uevent2(CASTLE_EVENT_NEW_TREE_ADDED, CASTLE_EVENTS_SUCCESS, _array_id)
+
+#define castle_events_merge_work_finished(_work_id, _work_done, _is_merge_finished) \
+    castle_uevent4(CASTLE_EVENT_MERGE_WORK_FINISHED, CASTLE_EVENTS_SUCCESS, _work_id, _work_done, _is_merge_finished)
 
 #endif /* __CASTLE_EVENTS_H__ */

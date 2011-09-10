@@ -17,6 +17,7 @@
 #include "castle_sysfs.h"
 #include "castle_objects.h"
 #include "castle_bloom.h"
+#include "castle_events.h"
 
 #ifndef CASTLE_PERF_DEBUG
 #define ts_delta_ns(a, b)                       ((void)0)
@@ -199,80 +200,23 @@ static int castle_da_no_disk_space(struct castle_double_array *da);
 struct workqueue_struct *castle_da_wqs[NR_CASTLE_DA_WQS];
 char *castle_da_wqs_names[NR_CASTLE_DA_WQS] = {"castle_da0"};
 
+static int castle_merge_thread_stop(struct castle_merge_thread *thread, void *unused);
+
+
+static struct list_head        *castle_merge_threads_hash = NULL;
+
+#define CASTLE_MERGE_THREADS_HASH_SIZE            (100)
+#define CASTLE_MERGES_HASH_SIZE                   (100)
+
+DEFINE_HASH_TBL(castle_merge_threads, castle_merge_threads_hash, CASTLE_MERGE_THREADS_HASH_SIZE, struct castle_merge_thread, hash_list, c_thread_id_t, id);
+
+uint32_t castle_merge_threads_count = 0;
+
+
 tree_seq_t castle_da_next_ct_seq(void);
 
 /**********************************************************************************************/
 /* Merges */
-struct castle_da_merge {
-    struct castle_double_array   *da;
-    struct castle_btree_type     *out_btree;
-    int                           level;
-    int                           nr_trees;     /**< num of component trees being merged */
-    struct castle_component_tree **in_trees;    /**< array of component trees to be merged */
-
-    /* partition update copies extent boundaries from immut_iter_t into ... */
-    c_ext_pos_t                  *in_tree_shrink_activatable_cep;
-    /* partition activate copies the above into... */
-    c_ext_pos_t                  *in_tree_shrinkable_cep;
-
-    struct castle_component_tree *out_tree;
-    void                         **iters;       /**< iterators for component trees */
-    c_merged_iter_t              *merged_iter;
-    int                           root_depth;
-    c2_block_t                   *last_leaf_node_c2b; /**< Previous node c2b at depth 0. */
-    void                         *last_key;           /**< last_key added to
-                                                           out tree at depth 0. */
-    struct castle_key_ptr_t       new_redirection_partition;
-    int                           completing;
-    uint64_t                      nr_entries;
-    uint64_t                      large_chunks;
-    int                           is_new_key;      /**< Is the current key different
-                                                        from last key added to out_tree. */
-    struct castle_da_merge_level {
-        /* Node we are currently generating, and book-keeping variables about the node. */
-        c2_block_t               *node_c2b;
-        void                     *last_key;
-        int                       next_idx;
-        int                       valid_end_idx;
-        c_ver_t                   valid_version;
-    } levels[MAX_BTREE_DEPTH];
-
-    /* Deamortization variables */
-    struct work_struct            work;
-    int                           budget_cons_rate;
-    int                           budget_cons_units;
-    int                           leafs_on_ssds;        /**< Are leaf btree nodes stored on SSD.*/
-    int                           internals_on_ssds;    /**< Are internal nodes stored on SSD.  */
-    struct list_head              new_large_objs;       /**< Large objects added since last
-                                                             checkpoint (for merge serdes).     */
-    struct castle_version_states  version_states;       /**< Merged version states.             */
-    struct castle_version_delete_state snapshot_delete; /**< Snapshot delete state.             */
-
-#ifdef CASTLE_PERF_DEBUG
-    u64                           get_c2b_ns;           /**< ns in castle_cache_block_get_for_merge()     */
-    u64                           merged_iter_next_ns;
-    u64                           da_medium_obj_copy_ns;
-    u64                           nodes_complete_ns;
-    u64                           budget_consume_ns;
-    u64                           progress_update_ns;
-    u64                           merged_iter_next_hasnext_ns;
-    u64                           merged_iter_next_compare_ns;
-#endif
-#ifdef CASTLE_DEBUG
-    uint8_t                       is_recursion;
-#endif
-    uint32_t                      skipped_count;        /**< Count of entries from deleted
-                                                             versions.                          */
-
-    struct growth_control_t {
-        uint32_t tree_ext_nodes_capacity;
-        uint32_t tree_ext_nodes_occupancy;
-        //TODO@tr data extent
-    } growth_control;
-    int aborting; /* TODO@tr unhack this... this hack was put specifically to deal with low
-                             freespace leading to failure to grow extents, until exit_cond. */
-};
-
 #define MAX_IOS             (1000) /* Arbitrary constants */
 /* @TODO: Merges are now effectively always full throughput, because MIN is set high. */
 #define MIN_BUDGET_DELTA    (1000000)
@@ -5311,7 +5255,11 @@ static tree_seq_t castle_da_merge_last_unit_complete(struct castle_double_array 
     write_unlock(&da->lock);
 
     if (merge->nr_entries)
+    {
         castle_sysfs_ct_add(out_tree);
+        if (merge->level == 2)
+            castle_events_new_tree_added(out_tree->seq);
+    }
 
     castle_da_merge_restart(da, NULL);
 
@@ -10176,13 +10124,20 @@ int castle_double_array_init(void)
     if(!castle_ct_hash)
         goto err2;
 
+    castle_merge_threads_hash = castle_merge_threads_hash_alloc();
+    if(!castle_merge_threads_hash)
+        goto err3;
+
     castle_da_hash_init();
     castle_ct_hash_init();
+    castle_merge_threads_hash_init();
     /* Start up the timer which replenishes merge and write IOs budget */
     castle_throttle_timer_fire(1);
 
     return 0;
 
+err3:
+    castle_kfree(castle_ct_hash);
 err2:
     castle_kfree(castle_da_hash);
 err1:
@@ -10199,6 +10154,11 @@ void castle_double_array_merges_fini(void)
     int deleted_das;
 
     castle_da_exiting = 1;
+
+    CASTLE_TRANSACTION_BEGIN;
+    __castle_merge_threads_hash_iterate(castle_merge_thread_stop, NULL);
+    CASTLE_TRANSACTION_END;
+
     del_singleshot_timer_sync(&throttle_timer);
     /* This is happening at the end of execution. No need for the hash lock. */
     __castle_da_hash_iterate(castle_da_merge_stop, NULL);
@@ -10478,4 +10438,123 @@ void castle_da_threads_priority_set(int nice_value)
 
     for(i=0; i<NR_CASTLE_DA_WQS; i++)
         castle_wq_priority_set(castle_da_wqs[i]);
+}
+
+/**
+ * Golden Nugget.
+ */
+
+static int castle_merge_thread_start(void *_data)
+{
+    struct castle_merge_thread *merge_thread = (struct castle_merge_thread *)_data;
+    merge_thread->running = 1;
+
+    while(!kthread_should_stop())
+        msleep(1000);
+
+    merge_thread->running = 0;
+
+    return 0;
+}
+
+void castle_merge_thread_create(c_thread_id_t *thread_id, int *ret)
+{
+    struct castle_merge_thread *merge_thread = castle_malloc(sizeof(struct castle_merge_thread),
+                                                             GFP_KERNEL);
+
+    BUG_ON(!CASTLE_IN_TRANSACTION);
+
+    *thread_id = INVAL_THREAD_ID;
+    *ret = -EINVAL;
+
+    if (!merge_thread)
+        return;
+
+    merge_thread->thread = kthread_create(castle_merge_thread_start, merge_thread,
+                                          "castle_mthread_%u", castle_merge_threads_count);
+    if (IS_ERR(merge_thread->thread))
+    {
+        castle_printk(LOG_INFO, "Failed to create merge thread\n");
+        castle_kfree(merge_thread);
+        return;
+    }
+
+    merge_thread->merge_id  = INVAL_MERGE_ID;
+    *thread_id = merge_thread->id = castle_merge_threads_count++;
+    *ret = 0;
+
+    castle_merge_threads_hash_add(merge_thread);
+
+    castle_sysfs_merge_thread_add(merge_thread);
+
+    wake_up_process(merge_thread->thread);
+}
+
+void _castle_merge_thread_destroy(c_thread_id_t thread_id, int *ret, int force)
+{
+    struct castle_merge_thread *merge_thread = castle_merge_threads_hash_get(thread_id);
+
+    BUG_ON(!CASTLE_IN_TRANSACTION);
+
+    *ret = -EINVAL;
+
+    if (!merge_thread)
+    {
+        castle_printk(LOG_INFO, "Couldn't find merge thread: %u\n", thread_id);
+        return;
+    }
+
+    if (!force && !MERGE_ID_INVAL(merge_thread->merge_id))
+    {
+        castle_printk(LOG_INFO, "Merge %u is still attached to thread %u\n",
+                                merge_thread->merge_id, thread_id);
+        return;
+    }
+
+    kthread_stop(merge_thread->thread);
+
+    castle_sysfs_merge_thread_del(merge_thread);
+
+    castle_merge_threads_hash_remove(merge_thread);
+
+    castle_kfree(merge_thread);
+
+    *ret = 0;
+}
+
+void castle_merge_thread_destroy(c_thread_id_t thread_id, int *ret)
+{
+    _castle_merge_thread_destroy(thread_id, ret, 0);
+}
+
+static int castle_merge_thread_stop(struct castle_merge_thread *thread, void *unused)
+{
+    int ret;
+
+    _castle_merge_thread_destroy(thread->id, &ret, 1);
+
+    BUG_ON(ret);
+
+    return 0;
+}
+
+void castle_merge_start(c_merge_cfg_t *merge_cfg, c_merge_id_t *merge_id, int *ret)
+{
+    *ret = 0;
+}
+
+void castle_merge_do_work(c_merge_id_t merge_id, c_work_size_t size, c_work_id_t *work_id,
+                          int *ret)
+{
+    *ret = 0;
+}
+
+void castle_merge_stop(c_merge_id_t merge_id, int *ret)
+{
+    *ret = 0;
+}
+
+void castle_merge_thread_attach(c_merge_id_t merge_id, c_thread_id_t thread_id, int *ret)
+{
+    *ret = 0;
 }

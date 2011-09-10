@@ -86,7 +86,7 @@ extern char *castle_environment[NR_ENV_VARS];
 extern int   castle_fs_inited;
 extern int   castle_fs_exiting;
 
-typedef uint32_t tree_seq_t;
+typedef c_array_id_t tree_seq_t;
 #define GLOBAL_TREE         ((tree_seq_t)0)
 #define INVAL_TREE          ((tree_seq_t)-1)
 #define TREE_GLOBAL(_t)     ((_t) == GLOBAL_TREE)
@@ -328,16 +328,6 @@ static inline int EXT_POS_COMP(c_ext_pos_t cep1, c_ext_pos_t cep2)
 #define cep2str(_off)                (_off).ext_id, BLOCK((_off).offset), CHUNK((_off).offset), CHUNK_OFFSET((_off).offset)
 #define __cep2str(_off)              (_off).ext_id, ((_off).offset), CHUNK((_off).offset), CHUNK_OFFSET((_off).offset)
 #define PG_ALIGN_CEP(_cep)           (c_ext_pos_t){(_cep).ext_id, MASK_BLK_OFFSET((_cep).offset)}
-
-typedef enum {
-    DEFAULT_RDA,
-    SSD_RDA,
-    META_EXT,
-    MICRO_EXT,
-    SUPER_EXT,
-    SSD_ONLY_EXT,
-    NR_RDA_SPECS
-} c_rda_type_t;
 
 /* Type of data stored within extent. */
 typedef enum {
@@ -2270,4 +2260,15 @@ extern int castle_nice_value;
 extern int castle_checkpoint_period;
 
 extern int castle_last_checkpoint_ongoing;
+
+struct castle_merge_thread {
+    c_thread_id_t         id;
+    struct task_struct   *thread;
+    c_merge_id_t          merge_id;
+    int                   running;
+    struct kobject        kobj;
+    struct list_head      hash_list;
+};
+
+extern uint32_t castle_merge_threads_count;
 #endif /* __CASTLE_H__ */

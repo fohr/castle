@@ -173,6 +173,60 @@ typedef uint32_t c_da_t;
 #define INVAL_VERSION       ((c_ver_t)-1)
 #define VERSION_INVAL(_v)   ((_v) == INVAL_VERSION)
 
+/* Golden Nugget - Types */
+typedef uint32_t c_array_id_t;
+typedef uint32_t c_merge_id_t;
+typedef uint32_t c_thread_id_t;
+typedef uint32_t c_work_id_t;
+typedef uint64_t c_work_size_t;
+
+#define INVAL_ARRAY_ID      ((c_array_id_t)-1)
+#define ARRAY_ID_INVAL(_a)  ((_a) == INVAL_ARRAY_ID)
+#define INVAL_MERGE_ID      ((c_merge_id_t)-1)
+#define MERGE_ID_INVAL(_m)  ((_m) == INVAL_MERGE_ID)
+#define INVAL_THREAD_ID     ((c_thread_id_t)-1)
+#define THREAD_ID_INVAL(_t) ((_t) == INVAL_THREAD_ID)
+
+typedef enum {
+    DEFAULT_RDA,
+    SSD_RDA,
+    META_EXT,
+    MICRO_EXT,
+    SUPER_EXT,
+    SSD_ONLY_EXT,
+    NR_RDA_SPECS
+} c_rda_type_t;
+
+typedef struct castle_medium_extent_info {
+    uint32_t                size;               /**< Size in chunks(MB).                        */
+    uint64_t                item_count;         /**< Number of entries.                         */
+} c_medium_ext_info_t;
+
+typedef struct castle_array_info {
+    uint32_t                size;               /**< Size in chunks(MB).                        */
+    uint64_t                item_count;         /**< Number of entries.                         */
+    c_da_t                  vertree_id;         /**< ID of the versions tree.                   */
+    uint32_t                nr_med_extents;     /**< Number of medium extents in this array.    */
+    /* FIXME: It sends only one medium extent. When we got a list. change it to a pointer. */
+    c_medium_ext_info_t     med_ext;            /**< List of medium extents.                    */
+} c_array_info_t;
+
+typedef struct castle_merge_config {
+    uint32_t                nr_arrays;          /**< # of arrays to be merged.                  */
+    c_array_id_t           *arrays;             /**< List of arrays.                            */
+#if 0
+    uint32_t                nr_med_extents;     /**< Number of medium extents in this array.    */
+    c_medium_ext_info_t    *med_exts;           /**< List of medium extents.                    */
+#endif
+    c_rda_type_t            metadata_ext_type;  /**< Type of the extent that the output metdata *
+                                                  *< to go. (SSD_RDA/DEFAULT_RDA/SSD_ONLY_EXT)  */
+    c_rda_type_t            med_ext_type;       /**< Type of the extent that medium objects     *
+                                                  *< to go. (SSD_RDA/DEFAULT_RDA/SSD_ONLY_EXT)  */
+#if 0
+    uint32_t                bandwidth;
+#endif
+} c_merge_cfg_t;
+
 /* And our IOCTL code is: */
 #define CASTLE_CTRL_IOCTL_TYPE                  (0xCA)
 
@@ -203,6 +257,14 @@ typedef uint32_t c_da_t;
 #define CASTLE_CTRL_DELETE_VERSION           31
 #define CASTLE_CTRL_VERTREE_COMPACT          32
 #define CASTLE_CTRL_COLLECTION_REATTACH      33
+
+/* Golden Nugget - Interface(IOCTL). */
+#define CASTLE_CTRL_MERGE_THREAD_CREATE      34
+#define CASTLE_CTRL_MERGE_THREAD_DESTROY     35
+#define CASTLE_CTRL_MERGE_START              36
+#define CASTLE_CTRL_MERGE_DO_WORK            37
+#define CASTLE_CTRL_MERGE_STOP               38
+#define CASTLE_CTRL_MERGE_THREAD_ATTACH      39
 
 typedef struct castle_control_cmd_claim {
     uint32_t       dev;          /* IN  */
@@ -352,6 +414,41 @@ typedef struct castle_control_cmd_thread_priority {
     int       ret;             /* OUT */
 } cctrl_cmd_thread_priority_t;
 
+/* Golden Nugget - Interface structures. */
+typedef struct castle_control_cmd_merge_thread_create {
+    c_thread_id_t   thread_id;      /* OUT */
+    int             ret;            /* OUT */
+} cctrl_cmd_merge_thread_create_t;
+
+typedef struct castle_control_cmd_merge_thread_destroy {
+    c_thread_id_t   thread_id;      /* IN  */
+    int             ret;            /* OUT */
+} cctrl_cmd_merge_thread_destroy_t;
+
+typedef struct castle_control_cmd_merge_start {
+    c_merge_cfg_t   merge_cfg;      /* IN  */
+    c_merge_id_t    merge_id;       /* OUT */
+    int             ret;            /* OUT */
+} cctrl_cmd_merge_start_t;
+
+typedef struct castle_control_cmd_do_work {
+    c_merge_id_t    merge_id;       /* IN  */
+    c_work_size_t   work_size;      /* IN  */
+    c_work_id_t     work_id;        /* OUT */
+    int             ret;            /* OUT */
+} cctrl_cmd_merge_do_work_t;
+
+typedef struct castle_control_cmd_merge_stop {
+    c_merge_id_t    merge_id;       /* IN  */
+    int             ret;            /* OUT */
+} cctrl_cmd_merge_stop_t;
+
+typedef struct castle_control_cmd_merge_thread_attach {
+    c_merge_id_t    merge_id;       /* IN  */
+    c_thread_id_t   thread_id;      /* IN  */
+    int             ret;            /* OUT */
+} cctrl_cmd_merge_thread_attach_t;
+
 typedef struct castle_control_ioctl {
     uint16_t cmd;
     union {
@@ -391,6 +488,12 @@ typedef struct castle_control_ioctl {
         cctrl_cmd_slave_scan_t          slave_scan;
 
         cctrl_cmd_thread_priority_t     thread_priority;
+        cctrl_cmd_merge_thread_create_t merge_thread_create;
+        cctrl_cmd_merge_thread_destroy_t merge_thread_destroy;
+        cctrl_cmd_merge_start_t         merge_start;
+        cctrl_cmd_merge_do_work_t       merge_do_work;
+        cctrl_cmd_merge_stop_t          merge_stop;
+        cctrl_cmd_merge_thread_attach_t merge_thread_attach;
     };
 } cctrl_ioctl_t;
 
@@ -448,6 +551,18 @@ enum {
         _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_THREAD_PRIORITY, cctrl_ioctl_t),
     CASTLE_CTRL_SLAVE_SCAN_IOCTL =
         _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_SLAVE_SCAN, cctrl_ioctl_t),
+    CASTLE_CTRL_MERGE_THREAD_CREATE_IOCTL =
+        _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_MERGE_THREAD_CREATE, cctrl_ioctl_t),
+    CASTLE_CTRL_MERGE_THREAD_DESTROY_IOCTL =
+        _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_MERGE_THREAD_DESTROY, cctrl_ioctl_t),
+    CASTLE_CTRL_MERGE_START_IOCTL =
+        _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_MERGE_START, cctrl_ioctl_t),
+    CASTLE_CTRL_MERGE_DO_WORK_IOCTL =
+        _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_MERGE_DO_WORK, cctrl_ioctl_t),
+    CASTLE_CTRL_MERGE_STOP_IOCTL =
+        _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_MERGE_STOP, cctrl_ioctl_t),
+    CASTLE_CTRL_MERGE_THREAD_ATTACH_IOCTL =
+        _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_MERGE_THREAD_ATTACH, cctrl_ioctl_t),
 };
 
 /*

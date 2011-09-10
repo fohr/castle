@@ -1084,6 +1084,48 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
                                           &ioctl.thread_priority.ret);
             break;
 
+        /* Golden Nugget. */
+        case CASTLE_CTRL_MERGE_THREAD_CREATE:
+            castle_merge_thread_create(&ioctl.merge_thread_create.thread_id,
+                                       &ioctl.merge_thread_create.ret);
+            break;
+        case CASTLE_CTRL_MERGE_THREAD_DESTROY:
+            castle_merge_thread_destroy(ioctl.merge_thread_destroy.thread_id,
+                                       &ioctl.merge_thread_destroy.ret);
+            break;
+        case CASTLE_CTRL_MERGE_START:
+        {
+            c_merge_cfg_t *merge_cfg = &ioctl.merge_start.merge_cfg;
+            c_array_id_t __user *arrays_list = merge_cfg->arrays;
+            size_t size = sizeof(c_array_id_t) * merge_cfg->nr_arrays;
+
+            merge_cfg->arrays = castle_malloc(size, GFP_KERNEL);
+            if (!merge_cfg->arrays || copy_from_user(merge_cfg->arrays, arrays_list, size))
+            {
+                merge_cfg->arrays = arrays_list;
+                ioctl.merge_start.ret = -ENOMEM;
+                break;
+            }
+
+            castle_merge_start(merge_cfg, &ioctl.merge_start.merge_id, &ioctl.merge_start.ret);
+
+            merge_cfg->arrays = arrays_list;
+            break;
+        }
+        case CASTLE_CTRL_MERGE_DO_WORK:
+            castle_merge_do_work(ioctl.merge_do_work.merge_id,
+                                 ioctl.merge_do_work.work_size,
+                                &ioctl.merge_do_work.work_id,
+                                &ioctl.merge_do_work.ret);
+            break;
+        case CASTLE_CTRL_MERGE_STOP:
+            castle_merge_stop(ioctl.merge_stop.merge_id, &ioctl.merge_stop.ret);
+            break;
+        case CASTLE_CTRL_MERGE_THREAD_ATTACH:
+            castle_merge_thread_attach(ioctl.merge_thread_attach.merge_id,
+                                       ioctl.merge_thread_attach.thread_id,
+                                       &ioctl.merge_thread_attach.ret);
+            break;
         default:
             err = -EINVAL;
             goto err;
