@@ -4759,9 +4759,6 @@ int castle_extent_truncate(c_ext_id_t ext_id, c_chk_cnt_t chunk)
     /* Get the current latest mask. */
     mask = GET_LATEST_MASK(ext);
 
-    castle_printk(LOG_DEBUG, "%s::ext %lld; latest mask range: %lld -> %lld; truncate chunk %d\n",
-            __FUNCTION__, ext_id, mask->range.start, mask->range.end, chunk);
-
     /* Can't shrink if the latest mask doesnt cover that range. */
     BUG_ON(mask->range.end <= chunk);
 
