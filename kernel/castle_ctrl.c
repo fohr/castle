@@ -1010,7 +1010,7 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
             break;
 
         case CASTLE_CTRL_VERTREE_COMPACT:
-            ioctl.destroy_vertree.ret = -EINVAL;
+            ioctl.vertree_compact.ret = castle_da_vertree_compact(ioctl.vertree_compact.vertree_id);
             break;
 
         case CASTLE_CTRL_CLONE:

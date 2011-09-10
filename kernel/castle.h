@@ -1996,6 +1996,7 @@ typedef enum {
 #define MAX_DA_LEVEL                        (20)
 #define DOUBLE_ARRAY_GROWING_RW_TREE_BIT    (0)
 #define DOUBLE_ARRAY_DELETED_BIT            (1)
+#define CASTLE_DA_COMPACTING_BIT            (2)
 
 #define PARTIAL_MERGES_QUERY_REDIRECTION_BTREE_NODE_LEVEL (0)
 #if PARTIAL_MERGES_QUERY_REDIRECTION_BTREE_NODE_LEVEL > MAX_BTREE_DEPTH
@@ -2031,6 +2032,7 @@ struct castle_double_array {
     } levels[MAX_DA_LEVEL];
     atomic_t                    lfs_victim_count;   /**< Number of components of DA, that are
                                                          blocked due to Low Free-Space.         */
+    atomic_t                    ongoing_merges;
     struct castle_da_lfs_ct_t  *t0_lfs;             /**< Low Free-Space handler for T0s.        */
     struct list_head            hash_list;
     atomic_t                    ref_cnt;

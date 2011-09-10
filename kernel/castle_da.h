@@ -225,4 +225,5 @@ int  castle_merge_do_work               (c_merge_id_t   merge_id,
 int  castle_merge_stop                  (c_merge_id_t merge_id);
 int  castle_merge_thread_attach         (c_merge_id_t merge_id, c_thread_id_t thread_id);
 
+int  castle_da_vertree_compact          (c_da_t da_id);
 #endif /* __CASTLE_DA_H__ */
