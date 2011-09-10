@@ -946,6 +946,8 @@ struct castle_bbp_entry
 
 struct castle_component_tree {
     tree_seq_t          seq;               /**< Unique ID identifying this tree.                */
+    tree_seq_t          data_age;          /**< Denotes the age of data.                        */
+
     atomic_t            ref_count;
     atomic_t            write_ref_count;
     atomic64_t          item_count;        /**< Number of items in the tree.                    */
@@ -1028,7 +1030,8 @@ struct castle_clist_entry {
     /*        269 */ uint8_t         bloom_num_hashes;
     /*        270 */ uint16_t        node_sizes[MAX_BTREE_DEPTH];
     /*        290 */ int16_t         merge_level;
-    /*        292 */ uint8_t         _unused[220];
+    /*        292 */ tree_seq_t      data_age;
+    /*        296 */ uint8_t         _unused[216];
     /*        512 */
 } PACKED;
 

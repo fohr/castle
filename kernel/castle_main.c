@@ -33,6 +33,7 @@ struct castle_slaves        castle_slaves;
 
 struct castle_attachments    castle_attachments;
 struct castle_component_tree castle_global_tree = {.seq             = GLOBAL_TREE,
+                                                   .data_age        = 0,
                                                    .ref_count       = {1},
                                                    .write_ref_count = {1},
                                                    .item_count      = {0ULL},

@@ -62,6 +62,7 @@ static struct castle_mstore    *castle_dmser_store   = NULL;
 static struct castle_mstore    *castle_dmser_in_tree_store   = NULL;
        c_da_t                   castle_next_da_id    = 1;
 static atomic_t                 castle_next_tree_seq = ATOMIC(0);
+static atomic_t                 castle_next_tree_data_age = ATOMIC(0);
 static int                      castle_da_exiting    = 0;
 
 static int                      castle_dynamic_driver_merge = 1;
@@ -139,13 +140,11 @@ void castle_ct_get(struct castle_component_tree *ct, int write, c_ct_ext_ref_t *
 void castle_ct_put(struct castle_component_tree *ct, int write, c_ct_ext_ref_t *refs);
 static void castle_component_tree_add(struct castle_double_array *da,
                                       struct castle_component_tree *ct,
-                                      struct list_head *head,
-                                      int in_init);
+                                      struct list_head *head);
 static void castle_component_tree_del(struct castle_double_array *da,
                                       struct castle_component_tree *ct);
 static void castle_component_tree_promote(struct castle_double_array *da,
-                                          struct castle_component_tree *ct,
-                                          int in_init);
+                                          struct castle_component_tree *ct);
 struct castle_da_merge;
 static USED void castle_da_merges_print(struct castle_double_array *da);
 static int castle_da_merge_restart(struct castle_double_array *da, void *unused);
@@ -282,6 +281,24 @@ struct castle_da_merge {
 
 /**********************************************************************************************/
 /* Utils */
+
+/**
+ * Compare two component trees sequence numbers and decide which one is older.
+ *
+ * < 0 - ct1 is older.
+ * = 0 - Same age (impossible for 2 different trees).
+ * > 0 - ct2 is older.
+ */
+static inline int castle_da_ct_compare(struct castle_component_tree *ct1,
+                                       struct castle_component_tree *ct2)
+{
+    int ret = (int)(ct1->data_age - ct2->data_age);
+
+    if (ret == 0)
+        return (int)(ct1->seq - ct2->seq);
+
+    return ret;
+}
 
 /**
  * Set DA's growing bit and return previous state.
@@ -5192,7 +5209,7 @@ static tree_seq_t castle_da_merge_last_unit_complete(struct castle_double_array 
     struct castle_component_tree *out_tree;
     struct castle_merge_token *token;
     struct list_head *head = NULL;
-    tree_seq_t out_tree_id;
+    tree_seq_t out_tree_id, out_tree_data_age = 0;
     int i;
 
     out_tree = castle_da_merge_complete(merge);
@@ -5217,9 +5234,14 @@ static tree_seq_t castle_da_merge_last_unit_complete(struct castle_double_array 
      */
     FOR_EACH_MERGE_TREE(i, merge)
     {
+        if (merge->in_trees[i]->data_age > out_tree_data_age)
+            out_tree_data_age = merge->in_trees[i]->data_age;
+
         BUG_ON(merge->da->id != merge->in_trees[i]->da);
         castle_component_tree_del(merge->da, merge->in_trees[i]);
     }
+
+    out_tree->data_age = out_tree_data_age;
 
     /* If this was a total merge, the output level needs to be computed.
        Otherwise the level should already be set to the next level up. */
@@ -5247,7 +5269,7 @@ static tree_seq_t castle_da_merge_last_unit_complete(struct castle_double_array 
         BUG_ON(out_tree->level != level + 1);
 
     if (merge->nr_entries)
-        castle_component_tree_add(merge->da, out_tree, head, 0 /*not in init*/);
+        castle_component_tree_add(merge->da, out_tree, head);
     else
         BUG_ON(merge->da->levels[merge->level].merge.queriable_out_tree);
 
@@ -7079,15 +7101,6 @@ static void castle_da_merges_print(struct castle_double_array *da)
 /**********************************************************************************************/
 /* Generic DA code */
 
-static int castle_da_ct_dec_cmp(struct list_head *l1, struct list_head *l2)
-{
-    struct castle_component_tree *ct1 = list_entry(l1, struct castle_component_tree, da_list);
-    struct castle_component_tree *ct2 = list_entry(l2, struct castle_component_tree, da_list);
-    BUG_ON(ct1->seq == ct2->seq);
-
-    return ct1->seq > ct2->seq ? -1 : 1;
-}
-
 /**
  * Calculate hash of castle key length key_len and modulo for cpu_index.
  *
@@ -7433,8 +7446,7 @@ struct castle_component_tree* castle_component_tree_get(tree_seq_t seq)
  */
 static void castle_component_tree_add(struct castle_double_array *da,
                                       struct castle_component_tree *ct,
-                                      struct list_head *head,
-                                      int in_init)
+                                      struct list_head *head)
 {
     struct castle_component_tree *cmp_ct;
 
@@ -7442,10 +7454,6 @@ static void castle_component_tree_add(struct castle_double_array *da,
     BUG_ON(ct->level >= MAX_DA_LEVEL);
     BUG_ON(read_can_lock(&da->lock));
     BUG_ON(!CASTLE_IN_TRANSACTION);
-
-    /* Default insert point is the front of the list. */
-    if (!head)
-        head = &da->levels[ct->level].trees;
 
     /* CTs are sorted by decreasing seq number (newer trees towards the front
      * of the list) to guarantee newest values are returned during gets.
@@ -7460,30 +7468,26 @@ static void castle_component_tree_add(struct castle_double_array *da,
      * order, and for the same reasons it is valid at level 0.
      *
      * Skip ordering checks during init (we sort the tree afterwards). */
-    if (!in_init && !list_empty(&da->levels[ct->level].trees))
+    if (!head)
     {
         struct list_head *l;
 
-        /* RWCTs at level 0 are promoted to level 1 in a random order based on how
-         * many keys get hashed to which CPU.  As a result for inserts at level 1
-         * we search the list to find the correct place to insert these trees. */
-        if (ct->level == 1)
+        list_for_each(l, &da->levels[ct->level].trees)
         {
-            list_for_each(l, &da->levels[ct->level].trees)
-            {
-                cmp_ct = list_entry(l, struct castle_component_tree, da_list);
-                if (ct->seq > cmp_ct->seq)
-                    break; /* list_for_each() */
-                head = l;
-            }
+            cmp_ct = list_entry(l, struct castle_component_tree, da_list);
+            if (castle_da_ct_compare(ct, cmp_ct) > 0)
+                break; /* list_for_each() */
+            head = l;
         }
 
-        /* CT seq should be < head->next seq (skip if head is the last elephant) */
-        if (!list_is_last(head, &da->levels[ct->level].trees))
-        {
-            cmp_ct = list_entry(head->next, struct castle_component_tree, da_list);
-            BUG_ON(ct->seq <= cmp_ct->seq);
-        }
+        if (!head)  head = &da->levels[ct->level].trees;
+    }
+
+    /* CT seq should be < head->next seq (skip if head is the last elephant) */
+    if (!list_is_last(head, &da->levels[ct->level].trees))
+    {
+        cmp_ct = list_entry(head->next, struct castle_component_tree, da_list);
+        BUG_ON(castle_da_ct_compare(ct, cmp_ct) <= 0);
     }
 
     list_add(&ct->da_list, head);
@@ -7492,7 +7496,6 @@ static void castle_component_tree_add(struct castle_double_array *da,
 
     if (ct->level > da->top_level)
     {
-        BUG_ON(!in_init && (da->top_level + 1 != ct->level));
         da->top_level = ct->level;
         castle_printk(LOG_INFO, "DA: %d growing one level to %d, del_vers: %d\n",
                 da->id, ct->level, atomic_read(&da->nr_del_versions));
@@ -7527,12 +7530,15 @@ static void castle_component_tree_del(struct castle_double_array *da,
  * @param   in_init Set if we are adding a just demarshalled CT from disk
  */
 static void castle_component_tree_promote(struct castle_double_array *da,
-                                          struct castle_component_tree *ct,
-                                          int in_init)
+                                          struct castle_component_tree *ct)
 {
     castle_component_tree_del(da, ct);
     ct->level++;
-    castle_component_tree_add(da, ct, NULL /* append */, in_init);
+
+    BUG_ON(ct->level != 1);
+    ct->data_age = atomic_inc_return(&castle_next_tree_data_age);
+
+    castle_component_tree_add(da, ct, NULL /* append */);
 }
 
 static void castle_ct_large_obj_writeback(struct castle_large_obj_entry *lo,
@@ -7749,7 +7755,7 @@ static int castle_da_level0_check_promote(struct castle_double_array *da, void *
         list_for_each_safe(l, tmp, &da->levels[0].trees)
         {
             ct = list_entry(l, struct castle_component_tree, da_list);
-            castle_component_tree_promote(da, ct, 1);
+            castle_component_tree_promote(da, ct);
         }
     }
     write_unlock(&da->lock);
@@ -7830,18 +7836,6 @@ static int castle_da_level0_modified_promote(struct castle_double_array *da, voi
     return 0;
 }
 
-static int castle_da_trees_sort(struct castle_double_array *da, void *unused)
-{
-    int i;
-
-    write_lock(&da->lock);
-    for(i=0; i<MAX_DA_LEVEL; i++)
-        list_sort(&da->levels[i].trees, castle_da_ct_dec_cmp);
-    write_unlock(&da->lock);
-
-    return 0;
-}
-
 void castle_da_ct_marshall(struct castle_clist_entry *ctm,
                            struct castle_component_tree *ct)
 {
@@ -7852,6 +7846,7 @@ void castle_da_ct_marshall(struct castle_clist_entry *ctm,
     ctm->btree_type        = ct->btree_type;
     ctm->dynamic           = ct->dynamic;
     ctm->seq               = ct->seq;
+    ctm->data_age          = ct->data_age;
     ctm->level             = ct->level;
     ctm->merge_level       = ct->merge_level;
     ctm->tree_depth        = ct->tree_depth;
@@ -7881,6 +7876,7 @@ static c_da_t castle_da_ct_unmarshall(struct castle_component_tree *ct,
     printk("%s::seq %d\n", __FUNCTION__, ctm->seq);
 
     ct->seq                 = ctm->seq;
+    ct->data_age            = ctm->data_age;
     atomic_set(&ct->ref_count, 1);
     atomic_set(&ct->write_ref_count, 0);
     atomic64_set(&ct->item_count, ctm->item_count);
@@ -8765,13 +8761,17 @@ int castle_double_array_read(void)
             goto error_out;
         debug("Read CT seq=%d\n", ct->seq);
         write_lock(&da->lock);
-        castle_component_tree_add(da, ct, NULL /*head*/, 1 /*in_init*/);
+        castle_component_tree_add(da, ct, NULL /*head*/);
         write_unlock(&da->lock);
         /* Calculate maximum CT sequence number. Be wary of T0 sequence numbers, they prefix
          * CPU indexes. */
         ct_seq = ct->seq & ((1 << TREE_SEQ_SHIFT) - 1);
         if (ct_seq >= atomic_read(&castle_next_tree_seq))
             atomic_set(&castle_next_tree_seq, ct_seq+1);
+
+        /* Calculate current data age. */
+        if (ct->data_age >= atomic_read(&castle_next_tree_data_age))
+            atomic_set(&castle_next_tree_data_age, ct->data_age+1);
     }
     castle_mstore_iterator_destroy(iterator);
     iterator = NULL;
@@ -8887,8 +8887,6 @@ int castle_double_array_read(void)
 
     /* Promote level 0 RWCTs if necessary. */
     castle_da_hash_iterate(castle_da_level0_check_promote, NULL);
-    /* Sort all the tree lists by the sequence number */
-    castle_da_hash_iterate(castle_da_trees_sort, NULL);
 
     /* Create T0 RWCTs for all DAs that don't have them (acquires lock).
      * castle_da_rwct_init() wraps castle_da_rwcts_create() for hash_iter. */
@@ -8942,6 +8940,7 @@ static struct castle_component_tree* castle_ct_alloc(struct castle_double_array 
 
     /* Allocate an id for the tree, init the ct. */
     ct->seq             = (TREE_INVAL(seq)? castle_da_next_ct_seq(): seq);
+    ct->data_age        = 0;
     if(ct->seq >= (1U<<TREE_SEQ_SHIFT))
     {
         castle_printk(LOG_ERROR, "Could not allocate a CT because of sequence # overflow.\n");
@@ -9108,7 +9107,7 @@ static int __castle_da_rwct_create(struct castle_double_array *da, int cpu_index
                 /* Found cpu_index^th element. */
                 old_ct = list_entry(l, struct castle_component_tree, da_list);
                 l = old_ct->da_list.prev; /* Position to insert new CT. */
-                castle_component_tree_promote(da, old_ct, 0 /*in_init*/);
+                castle_component_tree_promote(da, old_ct);
                 /* Recompute merge driver. */
                 castle_da_driver_merge_reset(da);
                 break;
@@ -9116,7 +9115,7 @@ static int __castle_da_rwct_create(struct castle_double_array *da, int cpu_index
         }
     }
     /* Insert new CT onto list.  l will be the previous element (from delete above) or NULL. */
-    castle_component_tree_add(da, ct, l, 0 /* not in init */);
+    castle_component_tree_add(da, ct, l);
 
     debug("Added component tree seq=%d, root_node="cep_fmt_str
           ", it's threaded onto da=%p, level=%d\n",
