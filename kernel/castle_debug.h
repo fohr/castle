@@ -64,5 +64,5 @@ void  castle_debug_fini(void);
 
 #endif /* CASTLE_DEBUG */
 
-
+#define castle_check_kfree(_p)  {   if (_p) {   castle_kfree(_p); (_p) = NULL;  }   }
 #endif /* __CASTLE_DEBUG_H__ */

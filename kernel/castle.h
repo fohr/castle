@@ -1026,9 +1026,8 @@ struct castle_clist_entry {
     /*        268 */ uint8_t         bloom_exists;
     /*        269 */ uint8_t         bloom_num_hashes;
     /*        270 */ uint16_t        node_sizes[MAX_BTREE_DEPTH];
-    /*        290 */ c_merge_id_t    merge_id;
-    /*        294 */ tree_seq_t      data_age;
-    /*        298 */ uint8_t         _unused[214];
+    /*        290 */ tree_seq_t      data_age;
+    /*        294 */ uint8_t         _unused[218];
     /*        512 */
 } PACKED;
 
@@ -1061,7 +1060,7 @@ struct castle_in_tree_merge_state_entry {
                      /* at des time, each c_intree_merge_state uses the da_id and level
                         to find the corresponding merge state */
     /*         56 */ c_da_t                        da_id;
-    /*         60 */ int32_t                       level;
+    /*         60 */ c_merge_id_t                  merge_id;
     /*         64 */ int32_t                       pos_in_merge_struct; /* cld use seq to infer this? */
     /*         68 */ uint8_t                       alignment_pad[12];
     /*         80 */

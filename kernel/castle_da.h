@@ -16,11 +16,6 @@ struct castle_da_merge {
     int                           nr_trees;     /**< num of component trees being merged */
     struct castle_component_tree **in_trees;    /**< array of component trees to be merged */
 
-    /* partition update copies extent boundaries from immut_iter_t into ... */
-    c_ext_pos_t                  *in_tree_shrink_activatable_cep;
-    /* partition activate copies the above into... */
-    c_ext_pos_t                  *in_tree_shrinkable_cep;
-
     struct castle_component_tree *out_tree;
     void                         **iters;       /**< iterators for component trees */
     c_merged_iter_t              *merged_iter;
@@ -28,7 +23,6 @@ struct castle_da_merge {
     c2_block_t                   *last_leaf_node_c2b; /**< Previous node c2b at depth 0. */
     void                         *last_key;           /**< last_key added to
                                                            out tree at depth 0. */
-    struct castle_key_ptr_t       new_redirection_partition;
     int                           completing;
     uint64_t                      nr_entries;
     uint64_t                      large_chunks;
@@ -69,6 +63,13 @@ struct castle_da_merge {
 #endif
     uint32_t                      skipped_count;        /**< Count of entries from deleted
                                                              versions.                          */
+
+    struct castle_key_ptr_t       new_redirection_partition;
+
+    /* partition update copies extent boundaries from immut_iter_t into ... */
+    c_ext_pos_t                  *in_tree_shrink_activatable_cep;
+    /* partition activate copies the above into... */
+    c_ext_pos_t                  *in_tree_shrinkable_cep;
 
     struct growth_control_t {
         uint32_t tree_ext_nodes_capacity;
