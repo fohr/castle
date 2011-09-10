@@ -634,7 +634,10 @@ static int castle_extent_check_alive(c_ext_t *ext, void *unused)
         return 0;
 
     if (ext->alive == 0)
+    {
+        castle_printk(LOG_INFO, "Found dead extent: %llu\n", ext->ext_id);
         castle_extent_free(ext->ext_id);
+    }
 
     return 0;
 }
