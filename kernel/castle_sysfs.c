@@ -754,6 +754,26 @@ static struct kobj_type castle_da_ktype = {
     .default_attrs  = castle_da_attrs,
 };
 
+static struct attribute *castle_da_arrays_attrs[] = {
+    NULL,
+};
+
+static struct kobj_type castle_da_arrays_ktype = {
+    .release        = castle_sysfs_kobj_release,
+    .sysfs_ops      = &castle_sysfs_ops,
+    .default_attrs  = castle_da_arrays_attrs,
+};
+
+static struct attribute *castle_da_merges_attrs[] = {
+    NULL,
+};
+
+static struct kobj_type castle_da_merges_ktype = {
+    .release        = castle_sysfs_kobj_release,
+    .sysfs_ops      = &castle_sysfs_ops,
+    .default_attrs  = castle_da_merges_attrs,
+};
+
 int castle_sysfs_da_add(struct castle_double_array *da)
 {
     int ret;
@@ -771,7 +791,34 @@ int castle_sysfs_da_add(struct castle_double_array *da)
     if (ret < 0)
         return ret;
 
+    /* Add a directory for list of arrays. */
+    memset(&da->arrays_kobj, 0, sizeof(struct kobject));
+    ret = kobject_tree_add(&da->arrays_kobj,
+                           &da->kobj,
+                           &castle_da_arrays_ktype,
+                           "arrays");
+    if (ret < 0)
+        goto err1;
+
+    /* Add a directory for list of merges. */
+    memset(&da->merges_kobj, 0, sizeof(struct kobject));
+    ret = kobject_tree_add(&da->merges_kobj,
+                           &da->kobj,
+                           &castle_da_merges_ktype,
+                           "merges");
+    if (ret < 0)
+        goto err2;
+
     return 0;
+
+err2:
+    kobject_remove(&da->arrays_kobj);
+    castle_sysfs_kobj_release_wait(&da->arrays_kobj);
+err1:
+    kobject_remove(&da->kobj);
+    castle_sysfs_kobj_release_wait(&da->kobj);
+
+    return ret;
 }
 
 void castle_sysfs_da_del(struct castle_double_array *da)
@@ -782,6 +829,105 @@ void castle_sysfs_da_del(struct castle_double_array *da)
 
     kobject_remove(&da->kobj);
     castle_sysfs_kobj_release_wait(&da->kobj);
+}
+
+/**
+ * sysfs entry for component tree.
+ *
+ * path: /sys/fs/castle-fs/vertrees/<da_id>/arrays/<array_id>
+ */
+static ssize_t ct_size_show(struct kobject *kobj,
+                            struct attribute *attr,
+                            char *buf)
+{
+    struct castle_component_tree *ct = container_of(kobj, struct castle_component_tree, kobj);
+    uint32_t size = 0;
+
+    size = (uint32_t) (CHUNK(ct->tree_ext_free.ext_size) +
+                       CHUNK(ct->data_ext_free.ext_size) +
+                       CHUNK(ct->internal_ext_free.ext_size) +
+                       ((ct->bloom_exists)?ct->bloom.num_chunks:0) +
+                       atomic64_read(&ct->large_ext_chk_cnt));
+
+    return sprintf(buf, "%u\n", size);
+}
+
+static ssize_t ct_item_count_show(struct kobject *kobj,
+                                  struct attribute *attr,
+                                  char *buf)
+{
+    struct castle_component_tree *ct = container_of(kobj, struct castle_component_tree, kobj);
+
+    return sprintf(buf, "%lu\n", atomic64_read(&ct->item_count));
+}
+
+static ssize_t ct_daid_show(struct kobject *kobj,
+                            struct attribute *attr,
+                            char *buf)
+{
+    struct castle_component_tree *ct = container_of(kobj, struct castle_component_tree, kobj);
+
+    return sprintf(buf, "0x%x\n", ct->da);
+}
+
+static struct castle_sysfs_entry ct_size =
+__ATTR(size, S_IRUGO|S_IWUSR, ct_size_show, NULL);
+
+static struct castle_sysfs_entry ct_item_count =
+__ATTR(item_count, S_IRUGO|S_IWUSR, ct_item_count_show, NULL);
+
+static struct castle_sysfs_entry ct_daid =
+__ATTR(da_id, S_IRUGO|S_IWUSR, ct_daid_show, NULL);
+
+static struct attribute *castle_ct_attrs[] = {
+    &ct_size.attr,
+    &ct_item_count.attr,
+    &ct_daid.attr,
+    NULL,
+};
+
+static struct kobj_type castle_ct_ktype = {
+    .release        = castle_sysfs_kobj_release,
+    .sysfs_ops      = &castle_sysfs_ops,
+    .default_attrs  = castle_ct_attrs,
+};
+
+/**
+ * Add component tree to the sysfs in vertree directory.
+ */
+int castle_sysfs_ct_add(struct castle_component_tree *ct)
+{
+    struct castle_double_array *da;
+    int ret;
+
+    /* Don't proceed, just return success - if sysfs is already finished. */
+    if (test_bit(CASTLE_SYSFS_FINISHED, &castle_sysfs_flags))
+        return 0;
+
+    /* Get the doubling array. */
+    da = castle_da_get_ptr(ct->da);
+    BUG_ON(!da);
+
+    /* Add a directory for list of arrays. */
+    memset(&ct->kobj, 0, sizeof(struct kobject));
+    ret = kobject_tree_add(&ct->kobj,
+                           &da->arrays_kobj,
+                           &castle_ct_ktype,
+                           "%x", ct->seq);
+    if (ret < 0)
+        return ret;
+
+    return 0;
+}
+
+void castle_sysfs_ct_del(struct castle_component_tree *ct)
+{
+    /* Don't proceed, just return success - if sysfs is already finished. */
+    if (test_bit(CASTLE_SYSFS_FINISHED, &castle_sysfs_flags))
+        return;
+
+    kobject_remove(&ct->kobj);
+    castle_sysfs_kobj_release_wait(&ct->kobj);
 }
 
 /* Definition of slaves sysfs directory attributes */

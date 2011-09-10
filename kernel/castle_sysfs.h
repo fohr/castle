@@ -13,5 +13,7 @@ int  castle_sysfs_device_add     (struct castle_attachment *attachment);
 void castle_sysfs_device_del     (struct castle_attachment *attachment);
 int  castle_sysfs_collection_add (struct castle_attachment *attachment);
 void castle_sysfs_collection_del (struct castle_attachment *attachment);
+int  castle_sysfs_ct_add         (struct castle_component_tree *ct);
+void castle_sysfs_ct_del         (struct castle_component_tree *ct);
 
 #endif /* __CASTLE_SYSFS_H__ */

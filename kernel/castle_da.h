@@ -57,4 +57,6 @@ void castle_da_version_delete   (c_da_t da_id);
 
 uint32_t castle_da_count(void);
 void castle_da_threads_priority_set(int nice_value);
+
+struct castle_double_array * castle_da_get_ptr(c_da_t da_id);
 #endif /* __CASTLE_DA_H__ */

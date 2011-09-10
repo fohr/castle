@@ -301,6 +301,14 @@ static inline int castle_da_ct_compare(struct castle_component_tree *ct1,
 }
 
 /**
+ * Return DA pointer. For the sake of sysfs.
+ */
+struct castle_double_array * castle_da_get_ptr(c_da_t da_id)
+{
+    return castle_da_hash_get(da_id);
+}
+
+/**
  * Set DA's growing bit and return previous state.
  *
  * @return  0   DA was not being grown (but is now)
@@ -2572,6 +2580,9 @@ static int castle_da_merge_cts_get(struct castle_double_array *da,
             /* No items in this CT, deallocate it by removing it from the DA,
                and dropping the ref. */
             CASTLE_TRANSACTION_BEGIN;
+
+            castle_sysfs_ct_del(ct);
+
             write_lock(&da->lock);
             castle_component_tree_del(da, ct);
             write_unlock(&da->lock);
@@ -5220,6 +5231,12 @@ static tree_seq_t castle_da_merge_last_unit_complete(struct castle_double_array 
     /* If we succeeded at creating the last tree, remove the in_trees, and add the out_tree.
        All under appropriate locks. */
 
+    FOR_EACH_MERGE_TREE(i, merge)
+    {
+        BUG_ON(merge->da->id != merge->in_trees[i]->da);
+        castle_sysfs_ct_del(merge->in_trees[i]);
+    }
+
     /* Get the lock. */
     write_lock(&da->lock);
     /* Notify interested parties about merge completion, _before_ moving trees around. */
@@ -5292,6 +5309,9 @@ static tree_seq_t castle_da_merge_last_unit_complete(struct castle_double_array 
 
     /* Release the lock. */
     write_unlock(&da->lock);
+
+    if (merge->nr_entries)
+        castle_sysfs_ct_add(out_tree);
 
     castle_da_merge_restart(da, NULL);
 
@@ -8763,6 +8783,9 @@ int castle_double_array_read(void)
         write_lock(&da->lock);
         castle_component_tree_add(da, ct, NULL /*head*/);
         write_unlock(&da->lock);
+
+        castle_sysfs_ct_add(ct);
+
         /* Calculate maximum CT sequence number. Be wary of T0 sequence numbers, they prefix
          * CPU indexes. */
         ct_seq = ct->seq & ((1 << TREE_SEQ_SHIFT) - 1);
@@ -9129,6 +9152,9 @@ static int __castle_da_rwct_create(struct castle_double_array *da, int cpu_index
     /* DA is attached, therefore we must be holding a ref, therefore it is safe to schedule
        the merge check. */
     write_unlock(&da->lock);
+
+    castle_sysfs_ct_add(ct);
+
     castle_da_merge_restart(da, NULL);
     return 0;
 
@@ -9198,19 +9224,25 @@ int castle_double_array_make(c_da_t da_id, c_ver_t root_version)
     /* Write out the id, and the root version. */
     da->id = da_id;
     da->root_version = root_version;
+
+    /* Insert empty DA into hash. */
+    castle_da_hash_add(da);
+    castle_sysfs_da_add(da);
+
     /* Allocate all T0 RWCTs. */
     ret = castle_da_all_rwcts_create(da, LFS_VCT_T_INVALID);
     if (ret != EXIT_SUCCESS)
     {
         castle_printk(LOG_WARN, "Exiting from failed ct create.\n");
+
+        castle_sysfs_da_del(da);
+        castle_da_hash_remove(da);
         castle_da_dealloc(da);
 
         return ret;
     }
     debug("Successfully made a new doubling array, id=%d, for version=%d\n",
         da_id, root_version);
-    castle_da_hash_add(da);
-    castle_sysfs_da_add(da);
     /* DA make succeeded, start merge threads. */
     castle_da_merge_start(da, NULL);
 

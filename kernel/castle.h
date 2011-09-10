@@ -984,6 +984,7 @@ struct castle_component_tree {
     atomic64_t          large_ext_chk_cnt;
     uint8_t             bloom_exists;
     castle_bloom_t      bloom;
+    struct kobject      kobj;
 #ifdef CASTLE_PERF_DEBUG
     u64                 bt_c2bsync_ns;
     u64                 data_c2bsync_ns;
@@ -2024,6 +2025,8 @@ struct castle_double_array {
     c_ver_t                     root_version;
     rwlock_t                    lock;               /**< Protects levels[].trees lists          */
     struct kobject              kobj;
+    struct kobject              arrays_kobj;        /**< Sysfs entry for list of arrays         */
+    struct kobject              merges_kobj;        /**< Sysfs entry for list of merges         */
     unsigned long               flags;
     int                         nr_trees;           /**< Total number of complete CTs in the da */
     /**< Total number of partially complete in-progress trees in the da; these are trees that are
