@@ -6,6 +6,10 @@
 #define NR_CASTLE_DA_WQS 1
 
 struct castle_da_merge {
+    c_merge_id_t                  id;
+    struct list_head              hash_list;
+    struct kobject                kobj;
+
     struct castle_double_array   *da;
     struct castle_btree_type     *out_btree;
     int                           level;
@@ -73,11 +77,6 @@ struct castle_da_merge {
     } growth_control;
     int aborting; /* TODO@tr unhack this... this hack was put specifically to deal with low
                              freespace leading to failure to grow extents, until exit_cond. */
-
-    /* Golden Nugget variables. */
-    c_merge_id_t                   id;
-    struct list_head               hash_list;
-    struct kobject                 kobj;
 };
 
 extern struct workqueue_struct *castle_da_wqs[NR_CASTLE_DA_WQS];

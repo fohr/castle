@@ -222,7 +222,7 @@ static struct list_head        *castle_merges_hash = NULL;
 
 DEFINE_HASH_TBL(castle_merges, castle_merges_hash, CASTLE_MERGES_HASH_SIZE, struct castle_da_merge, hash_list, c_merge_id_t, id);
 
-uint32_t castle_merges_count = 0;
+atomic_t castle_da_max_merge_id = ATOMIC(0);
 
 
 tree_seq_t castle_da_next_ct_seq(void);
@@ -1996,6 +1996,31 @@ void castle_da_rq_iter_cancel(c_da_rq_iter_t *iter)
     castle_kfree(iter->ct_rqs);
 }
 
+#define ADD_CT_TO_ITERATOR(_ct, _redir_type, _level)                                            \
+{                                                                                               \
+    BUG_ON(j >= iter->nr_cts);                                                                  \
+                                                                                                \
+    iter->ct_rqs[j].ct  = _ct;                                                                  \
+    ct_redir_state[j]   = _redir_type;                                                          \
+    castle_ct_get(_ct, 0, ct_get_refs[j]);                                                      \
+                                                                                                \
+    BUG_ON((castle_btree_type_get((_ct)->btree_type)->magic != RW_VLBA_TREE_TYPE) &&            \
+           (castle_btree_type_get((_ct)->btree_type)->magic != RO_VLBA_TREE_TYPE));             \
+                                                                                                \
+    if(_redir_type != NO_REDIR)                                                                 \
+    {                                                                                           \
+        /* ct in merge, and that merge has a queriable output tree, so there must be a */       \
+        /*   redirection partition to reference. */                                             \
+        debug("%s::ct %d on level %d (merge_level %d) redirects to ct %d\n",                    \
+                __FUNCTION__, (_ct)->seq, i, _level,                                            \
+                da->levels[_level].merge.queriable_out_tree->seq);                              \
+        castle_key_ptr_ref_cp(&iter->ct_rqs[j].redirection_partition,                           \
+                              &da->levels[_level].merge.redirection_partition);                 \
+    }                                                                                           \
+                                                                                                \
+    j++;                                                                                        \
+}
+
 /**
  * Range query iterator initialiser.
  *
@@ -2014,6 +2039,8 @@ void castle_da_rq_iter_init(c_da_rq_iter_t *iter,
     int i, j;
     int refs_malloc_failed = 0;
     c_ct_ext_ref_t **ct_get_refs = NULL;
+    struct castle_da_merge *last_seen_merge = NULL;
+
     /* states to handle key ranges with partial merge redirection */
     typedef enum {
         NO_REDIR = 0,  /* no redirection with this ct */
@@ -2094,6 +2121,7 @@ again:
     }
     /* Get refs to all the component trees, and release the lock */
     j=0;
+    last_seen_merge = NULL;
     //TODO@tr make sure big merge output tree is always the very last tree! This can be done by
     //        changing the following for-loop to start from i=1, and deal with level 0 (i.e.
     //        BIG_MERGE) as a special case. OTOH, with all that Golden Nugget stuff...
@@ -2108,56 +2136,27 @@ again:
         /* init "complete* trees */
         list_for_each(l, &da->levels[i].trees)
         {
-            struct castle_component_tree *ct;
+            struct castle_component_tree *ct = list_entry(l, struct castle_component_tree, da_list);
 
-            BUG_ON(j >= iter->nr_cts);
-            ct = list_entry(l, struct castle_component_tree, da_list);
-            iter->ct_rqs[j].ct = ct;
-            ct_redir_state[j] = NO_REDIR;
-            castle_ct_get(ct, 0, ct_get_refs[j]);
-
-            if( (ct->merge_level >= 0) && (da->levels[ct->merge_level].merge.queriable_out_tree) )
+            if ( (ct->merge) && (da->levels[ct->merge->level].merge.queriable_out_tree) )
             {
-                /* ct in merge, and that merge has a queriable output tree, so there must be a
-                   redirection partition to reference. */
-                debug("%s::ct %d on level %d (merge_level %d) redirects to ct %d\n",
-                        __FUNCTION__, ct->seq, i, ct->merge_level,
-                        da->levels[ct->merge_level].merge.queriable_out_tree->seq);
-                castle_key_ptr_ref_cp(&iter->ct_rqs[j].redirection_partition,
-                                      &da->levels[ct->merge_level].merge.redirection_partition);
-
-                ct_redir_state[j] = REDIR_INTREE;
+                ADD_CT_TO_ITERATOR(ct, REDIR_INTREE, ct->merge->level);
+                if (last_seen_merge != ct->merge)
+                {
+                    ADD_CT_TO_ITERATOR(da->levels[ct->merge->level].merge.queriable_out_tree, REDIR_OUTTREE, ct->merge->level);
+                    last_seen_merge = ct->merge;
+                }
             }
-
-            BUG_ON((castle_btree_type_get(ct->btree_type)->magic != RW_VLBA_TREE_TYPE) &&
-                   (castle_btree_type_get(ct->btree_type)->magic != RO_VLBA_TREE_TYPE));
-            j++;
+            else
+                ADD_CT_TO_ITERATOR(ct, NO_REDIR, ct->merge->level);
         }
-
-        /* init queriable output trees (partial merges) */
-        if(da->levels[i].merge.queriable_out_tree)
-        {
-            struct castle_component_tree *ct;
-
-            BUG_ON(j >= iter->nr_cts);
-            ct = da->levels[i].merge.queriable_out_tree;
-            iter->ct_rqs[j].ct = ct;
-            ct_redir_state[j] = REDIR_OUTTREE;
-            castle_ct_get(ct, 0, ct_get_refs[j]);
-
-            castle_printk(LOG_DEBUG, "%s::ct %d on level %d (merge_level %d) is queriable output tree\n",
-                    __FUNCTION__, ct->seq, i, ct->merge_level);
-            castle_key_ptr_ref_cp(&iter->ct_rqs[j].redirection_partition,
-                                  &da->levels[i].merge.redirection_partition);
-
-            BUG_ON((castle_btree_type_get(ct->btree_type)->magic != RW_VLBA_TREE_TYPE) &&
-                    (castle_btree_type_get(ct->btree_type)->magic != RO_VLBA_TREE_TYPE));
-            j++;
-        }
-
-
     }
     read_unlock(&da->lock);
+    if (j != iter->nr_cts)
+    {
+        castle_printk(LOG_DEVEL, "%u - %u\n", j, iter->nr_cts);
+        BUG();
+    }
     BUG_ON(j != iter->nr_cts);
 
     /* Initialise range queries for individual cts */
@@ -4203,7 +4202,7 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
                 cep2str(merge->da->levels[merge->level].merge.redirection_partition.node_c2b->cep));
         write_lock(&merge->da->lock);
         merge->da->levels[merge->level].merge.queriable_out_tree = NULL;
-        atomic_dec(&merge->da->queriable_merge_trees_cnt);
+        if (err)    atomic_dec(&merge->da->queriable_merge_trees_cnt);
         BUG_ON(!merge->da->levels[merge->level].merge.redirection_partition.node_c2b);
         BUG_ON(!merge->da->levels[merge->level].merge.redirection_partition.key);
         castle_key_ptr_destroy(&merge->da->levels[merge->level].merge.redirection_partition);
@@ -5246,6 +5245,10 @@ static tree_seq_t castle_da_merge_last_unit_complete(struct castle_double_array 
     else
         BUG_ON(merge->da->levels[merge->level].merge.queriable_out_tree);
 
+    /* FIXME: Change this structure with other elements of partial merges. */
+    if (merge->da->levels[merge->level].merge.queriable_out_tree)
+        atomic_dec(&merge->da->queriable_merge_trees_cnt);
+
     /* Reset the number of completed units. */
     BUG_ON(da->levels[level].merge.units_commited != (1U << level));
     da->levels[level].merge.units_commited = 0;
@@ -5363,6 +5366,7 @@ static struct castle_da_merge* castle_da_merge_init(struct castle_double_array *
         merge->in_tree_shrink_activatable_cep         = NULL;
     }
 
+    merge->id                   = INVAL_MERGE_ID;
     merge->da                   = da;
     merge->out_btree            = castle_btree_type_get(RO_VLBA_TREE_TYPE);
     merge->nr_trees             = nr_trees;
@@ -5405,6 +5409,10 @@ static struct castle_da_merge* castle_da_merge_init(struct castle_double_array *
     /* only reason a lock might be needed here would be if we were racing with double_array_read,
        which should never happen */
     if(da->levels[level].merge.serdes.des){
+        merge->id = in_trees[0]->merge_id;
+        FOR_EACH_MERGE_TREE(i, merge)
+            BUG_ON(in_trees[i]->merge_id != merge->id);
+
         castle_printk(LOG_DEBUG, "%s::found serialised merge in da %d level %d, attempting des\n",
                 __FUNCTION__, da->id, level);
         castle_da_merge_des_check(merge, da, level, nr_trees, in_trees);
@@ -5482,8 +5490,19 @@ static struct castle_da_merge* castle_da_merge_init(struct castle_double_array *
         castle_printk(LOG_INIT, "%s::Resuming merge on da %d level %d.\n", __FUNCTION__, da->id, level);
     }
 
+    if (MERGE_ID_INVAL(merge->id))
+    {
+        BUG_ON(da->levels[level].merge.serdes.des);
+        merge->id = atomic_inc_return(&castle_da_max_merge_id);
+    }
+
+    write_lock(&da->lock);
     FOR_EACH_MERGE_TREE(i, merge)
-        in_trees[i]->merge_level = level;
+    {
+        in_trees[i]->merge = merge;
+        in_trees[i]->merge_id = merge->id;
+    }
+    write_unlock(&da->lock);
 
     return merge;
 error_out_4:
@@ -5949,6 +5968,7 @@ update_output_tree_state:
             merge->growth_control.tree_ext_nodes_capacity;
     merge_mstore->growth_control_tree_ext_nodes_occupancy =
             merge->growth_control.tree_ext_nodes_occupancy;
+    merge_mstore->merge_id           = merge->id;
     if(merge->last_leaf_node_c2b)
         merge_mstore->last_leaf_node_cep = merge->last_leaf_node_c2b->cep;
 
@@ -7828,7 +7848,7 @@ void castle_da_ct_marshall(struct castle_clist_entry *ctm,
     ctm->seq               = ct->seq;
     ctm->data_age          = ct->data_age;
     ctm->level             = ct->level;
-    ctm->merge_level       = ct->merge_level;
+    ctm->merge_id          = ct->merge_id;
     ctm->tree_depth        = ct->tree_depth;
     ctm->root_node         = ct->root_node;
     ctm->large_ext_chk_cnt = atomic64_read(&ct->large_ext_chk_cnt);
@@ -7864,7 +7884,8 @@ static c_da_t castle_da_ct_unmarshall(struct castle_component_tree *ct,
     ct->dynamic             = ctm->dynamic;
     ct->da                  = ctm->da_id;
     ct->level               = ctm->level;
-    ct->merge_level         = ctm->merge_level;
+    ct->merge               = NULL;
+    ct->merge_id            = ctm->merge_id;
     ct->tree_depth          = ctm->tree_depth;
     ct->root_node           = ctm->root_node;
     ct->new_ct              = 0;
@@ -8629,6 +8650,9 @@ int castle_double_array_read(void)
             BUG();
         }
 
+        if (mstore_dmserentry->merge_id > atomic_read(&castle_da_max_merge_id))
+            atomic_set(&castle_da_max_merge_id, mstore_dmserentry->merge_id);
+
         /* we know the da and the level, and we passed some sanity checking - so put the serdes
            state in the appropriate merge slot */
         des_da->levels[level].merge.serdes.mstore_entry = mstore_dmserentry;
@@ -8939,7 +8963,6 @@ static struct castle_component_tree* castle_ct_alloc(struct castle_double_array 
     ct->dynamic         = type == RW_VLBA_TREE_TYPE ? 1 : 0;
     ct->da              = da->id;
     ct->level           = level;
-    ct->merge_level     = -1;
     ct->tree_depth      = -1;
     ct->root_node       = INVAL_EXT_POS;
     ct->new_ct          = 1;
@@ -8955,12 +8978,13 @@ static struct castle_component_tree* castle_ct_alloc(struct castle_double_array 
     ct->tree_ext_free.ext_id     = INVAL_EXT_ID;
     ct->data_ext_free.ext_id     = INVAL_EXT_ID;
     ct->bloom_exists    = 0;
+    ct->merge           = NULL;
+    ct->merge_id        = INVAL_MERGE_ID;
 #ifdef CASTLE_PERF_DEBUG
     ct->bt_c2bsync_ns   = 0;
     ct->data_c2bsync_ns = 0;
     ct->get_c2b_ns      = 0;
 #endif
-    ct->merge           = NULL;
 
     return ct;
 }
@@ -9423,31 +9447,31 @@ again:
             if (ct->compacting)
                 continue;
 
-            if(ct->merge_level >= 0)
+            if(ct->merge)
             {
                 /* to avoid adding an output ct more than once, just remember the previous merge
                    since for now it may be assumed that all cts in a merge will be adjacent.
                    TODO@tr make this more robust!                                                */
-                if(ct->merge_level == last_merge_level_seen)
+                if(ct->merge->level == last_merge_level_seen)
                     continue;
 
                 /* under da->lock, partition keys won't advance */
-                if(da->levels[ct->merge_level].merge.redirection_partition.key)
+                if(da->levels[ct->merge->level].merge.redirection_partition.key)
                 {
                     struct castle_btree_type *btree = castle_btree_type_get(RO_VLBA_TREE_TYPE);
                     int ret = btree->key_compare(
-                            da->levels[ct->merge_level].merge.redirection_partition.key,
+                            da->levels[ct->merge->level].merge.redirection_partition.key,
                             c_bvec->key);
 
-                    BUG_ON(!da->levels[ct->merge_level].merge.queriable_out_tree);
+                    BUG_ON(!da->levels[ct->merge->level].merge.queriable_out_tree);
                     if(ret>=0) /* partition key >= query key */
                     {
                         struct castle_component_tree *out_ct;
-                        out_ct = da->levels[ct->merge_level].merge.queriable_out_tree;
-                        last_merge_level_seen = ct->merge_level;
+                        out_ct = da->levels[ct->merge->level].merge.queriable_out_tree;
+                        last_merge_level_seen = ct->merge->level;
 
                         debug("%s::redirecting query to output tree %d (with bf %p) on da %d level %d.\n",
-                                __FUNCTION__, out_ct->seq, &(out_ct->bloom), da->id, ct->merge_level);
+                                __FUNCTION__, out_ct->seq, &(out_ct->bloom), da->id, ct->merge->level);
 
                         ct = out_ct;
                         got_partial_tree = 1;
@@ -9476,30 +9500,30 @@ again:
             if (!ct->compacting)
                 continue;
 
-            if(ct->merge_level >= 0)
+            if(ct->merge)
             {
                 /* to avoid adding an output ct more than once, just remember the previous merge
                    since for now it may be assumed that all cts in a merge will be adjacent.
                    TODO@tr make this more robust!                                                */
-                if(ct->merge_level == last_merge_level_seen)
+                if(ct->merge->level == last_merge_level_seen)
                     continue;
 
                 /* under da->lock, partition keys won't advance */
-                if(da->levels[ct->merge_level].merge.redirection_partition.key)
+                if(da->levels[ct->merge->level].merge.redirection_partition.key)
                 {
                     struct castle_btree_type *btree = castle_btree_type_get(RO_VLBA_TREE_TYPE);
                     int ret = btree->key_compare(
-                            da->levels[ct->merge_level].merge.redirection_partition.key,
+                            da->levels[ct->merge->level].merge.redirection_partition.key,
                             c_bvec->key);
 
-                    BUG_ON(!da->levels[ct->merge_level].merge.queriable_out_tree);
+                    BUG_ON(!da->levels[ct->merge->level].merge.queriable_out_tree);
                     if(ret>=0) /* partition key >= query key */
                     {
                         struct castle_component_tree *out_ct;
-                        out_ct = da->levels[ct->merge_level].merge.queriable_out_tree;
-                        last_merge_level_seen = ct->merge_level;
+                        out_ct = da->levels[ct->merge->level].merge.queriable_out_tree;
+                        last_merge_level_seen = ct->merge->level;
                         debug("%s::redirecting query to output tree %d on da %d level %d.\n",
-                            __FUNCTION__, out_ct->seq, ct->merge_level);
+                            __FUNCTION__, out_ct->seq, ct->merge->level);
                         ct = out_ct;
                         got_partial_tree = 1;
                     }

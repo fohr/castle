@@ -951,9 +951,6 @@ struct castle_component_tree {
     uint8_t             dynamic;           /**< 1 - dynamic modlist btree, 0 - merge result.    */
     c_da_t              da;
     uint8_t             level;             /**< Level in the doubling array.                    */
-    int16_t             merge_level;       /**< Merge level in the doubling array, where this ct
-                                                is input (-1: not being merged). Needed for query
-                                                redirection.                                    */
     uint16_t            node_sizes[MAX_BTREE_DEPTH];
                                            /**< Size of nodes in each level in the b-tree,
                                                 in pages. Only used for !dynamic (i.e. RO)
@@ -983,6 +980,7 @@ struct castle_component_tree {
     struct kobject      kobj;
     struct castle_da_merge  *merge;         /**< Contains mreg structure if the tree involved
                                                  in a merge. */
+    c_merge_id_t        merge_id;
 #ifdef CASTLE_PERF_DEBUG
     u64                 bt_c2bsync_ns;
     u64                 data_c2bsync_ns;
@@ -1028,9 +1026,9 @@ struct castle_clist_entry {
     /*        268 */ uint8_t         bloom_exists;
     /*        269 */ uint8_t         bloom_num_hashes;
     /*        270 */ uint16_t        node_sizes[MAX_BTREE_DEPTH];
-    /*        290 */ int16_t         merge_level;
-    /*        292 */ tree_seq_t      data_age;
-    /*        296 */ uint8_t         _unused[216];
+    /*        290 */ c_merge_id_t    merge_id;
+    /*        294 */ tree_seq_t      data_age;
+    /*        298 */ uint8_t         _unused[214];
     /*        512 */
 } PACKED;
 
@@ -1124,7 +1122,8 @@ struct castle_dmserlist_entry {
     /*        992 */ int32_t                          iter_err;
     /*        996 */ int64_t                          iter_non_empty_cnt;
     /*       1004 */ uint64_t                         iter_src_items_completed;
-    /*       1012 */ uint8_t                          unused[12];
+    /*       1012 */ c_merge_id_t                     merge_id;
+    /*       1016 */ uint8_t                          unused[8];
     /*       1024 */
 } PACKED;
 #define SIZEOF_CASTLE_DMSERLIST_ENTRY (1024)
