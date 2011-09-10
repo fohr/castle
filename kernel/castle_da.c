@@ -1997,7 +1997,7 @@ void castle_da_rq_iter_cancel(c_da_rq_iter_t *iter)
     castle_kfree(iter->ct_rqs);
 }
 
-#define ADD_CT_TO_ITERATOR(_ct, _redir_type, _level)                                            \
+#define ADD_CT_TO_ITERATOR(_ct, _redir_type, _merge)                                            \
 {                                                                                               \
     BUG_ON(j >= iter->nr_cts);                                                                  \
                                                                                                 \
@@ -2012,11 +2012,11 @@ void castle_da_rq_iter_cancel(c_da_rq_iter_t *iter)
     {                                                                                           \
         /* ct in merge, and that merge has a queriable output tree, so there must be a */       \
         /*   redirection partition to reference. */                                             \
-        debug("%s::ct %d on level %d (merge_level %d) redirects to ct %d\n",                    \
-                __FUNCTION__, (_ct)->seq, i, _level,                                            \
-                da->levels[_level].merge.queriable_out_tree->seq);                              \
+        debug("%s::ct %d on level %d redirects to ct %d\n",                                     \
+                __FUNCTION__, (_ct)->seq, i,                                                    \
+                (_merge)->queriable_out_tree->seq);                                             \
         castle_key_ptr_ref_cp(&iter->ct_rqs[j].redirection_partition,                           \
-                              &da->levels[_level].merge.redirection_partition);                 \
+                              &(_merge)->redirection_partition);                                \
     }                                                                                           \
                                                                                                 \
     j++;                                                                                        \
@@ -2139,17 +2139,17 @@ again:
         {
             struct castle_component_tree *ct = list_entry(l, struct castle_component_tree, da_list);
 
-            if ( (ct->merge) && (da->levels[ct->merge->level].merge.queriable_out_tree) )
+            if ( (ct->merge) && (ct->merge->queriable_out_tree) )
             {
-                ADD_CT_TO_ITERATOR(ct, REDIR_INTREE, ct->merge->level);
+                ADD_CT_TO_ITERATOR(ct, REDIR_INTREE, ct->merge);
                 if (last_seen_merge != ct->merge)
                 {
-                    ADD_CT_TO_ITERATOR(da->levels[ct->merge->level].merge.queriable_out_tree, REDIR_OUTTREE, ct->merge->level);
+                    ADD_CT_TO_ITERATOR(ct->merge->queriable_out_tree, REDIR_OUTTREE, ct->merge);
                     last_seen_merge = ct->merge;
                 }
             }
             else
-                ADD_CT_TO_ITERATOR(ct, NO_REDIR, ct->merge->level);
+                ADD_CT_TO_ITERATOR(ct, NO_REDIR, ct->merge);
         }
     }
     read_unlock(&da->lock);
@@ -2389,7 +2389,7 @@ static void castle_da_iterator_create(struct castle_da_merge *merge,
     if (tree->dynamic)
     {
         c_modlist_iter_t *iter = castle_malloc(sizeof(c_modlist_iter_t), GFP_KERNEL);
-        BUG_ON(merge->da->levels[merge->level].merge.serdes.des); /* we should only serialise merges
+        BUG_ON(merge->serdes.des); /* we should only serialise merges
                                                                      with immut in_trees */
         if (!iter)
             return;
@@ -2625,15 +2625,15 @@ static int castle_da_iterators_create(struct castle_da_merge *merge)
         goto err_out;
 
     /* Fast-forward merge iterator and immutable iterators states */
-    if(merge->da->levels[merge->level].merge.serdes.des)
+    if(merge->serdes.des)
     {
         int i;
         struct component_iterator *curr_comp;
         c_immut_iter_t *curr_immut;
         struct castle_dmserlist_entry *merge_mstore =
-                                        merge->da->levels[merge->level].merge.serdes.mstore_entry;
+                                        merge->serdes.mstore_entry;
         struct castle_in_tree_merge_state_entry    *in_tree_merge_mstore_arr =
-                                        merge->da->levels[merge->level].merge.serdes.in_tree_mstore_entry_arr;
+                                        merge->serdes.in_tree_mstore_entry_arr;
 
         debug("%s::Fast-forward iterators on merge %p (da %d level %d)\n",
                       __FUNCTION__, merge, merge->da->id, merge->level);
@@ -3051,8 +3051,10 @@ static int castle_da_lfs_ct_space_alloc(struct castle_da_lfs_ct_t *lfs,
 
     /* If it's a reallocation (last allocation failed due to low free space), reduce the count of lfs
      * victims in DA; If there are no more victims left for DA, then restart merges. */
+#if 0
     if (is_realloc && atomic_dec_and_test(&da->lfs_victim_count))
         castle_da_merge_restart(da, NULL);
+#endif
 
     /* End extent transaction. */
     castle_extent_transaction_end();
@@ -3060,9 +3062,11 @@ static int castle_da_lfs_ct_space_alloc(struct castle_da_lfs_ct_t *lfs,
     return 0;
 
 no_space:
+#if 0
     /* If the allocation is not a reallocation, update victim count. */
     if (!is_realloc)
         atomic_inc(&da->lfs_victim_count);
+#endif
 
     /* Take a copy of ext IDs. */
     internal_ext_id = lfs->internal_ext.ext_id;
@@ -3143,7 +3147,7 @@ static int castle_da_merge_extents_alloc(struct castle_da_merge *merge)
 {
     c_byte_off_t internal_tree_size, tree_size, data_size, bloom_size;
     int i, ret;
-    struct castle_da_lfs_ct_t *lfs = &merge->da->levels[merge->level].lfs;
+    struct castle_da_lfs_ct_t *lfs = &merge->lfs;
 
     /* Allocate an extent for merged tree for the size equal to sum of all the
      * trees being merged (could be a total merge).
@@ -3202,15 +3206,15 @@ __again:
         if (MERGE_CHECKPOINTABLE(merge)) /* partial merges */
             ret = castle_da_lfs_ct_space_alloc(lfs,
                                                0,   /* First allocation. */
-                                               castle_da_lfs_merge_ct_growable_callback,
-                                               lfs,
+                                               NULL,
+                                               NULL,
                                                1,   /* Not a T0. Use SSD. */
                                                1); /* Extents growable */
         else
             ret = castle_da_lfs_ct_space_alloc(lfs,
                                                0,   /* First allocation. */
-                                               castle_da_lfs_merge_ct_callback,
-                                               lfs,
+                                               NULL,
+                                               NULL,
                                                1,   /* Not a T0. Use SSD. */
                                                0); /* Extents not growable */
 
@@ -3584,11 +3588,11 @@ static inline c_val_tup_t* _castle_da_entry_add(struct castle_da_merge *merge,
     if(new_root_node)
     {
         /* only have contention on output tree if tree queriable */
-        if(merge->da->levels[merge->level].merge.queriable_out_tree)
+        if(merge->queriable_out_tree)
             write_lock(&merge->da->lock);
         merge->out_tree->root_node = new_cep;
         merge->out_tree->tree_depth = merge->root_depth + 1;
-        if(merge->da->levels[merge->level].merge.queriable_out_tree)
+        if(merge->queriable_out_tree)
             write_unlock(&merge->da->lock);
     }
 
@@ -3937,12 +3941,12 @@ static struct castle_component_tree* castle_da_merge_package(struct castle_da_me
     /* update list of large objects */
     //TODO@tr have to splice LO list when partition key is advanced... so... shall we just advance
     //   the partition key when serialising?
-    serdes_state = atomic_read(&merge->da->levels[merge->level].merge.serdes.valid);
+    serdes_state = atomic_read(&merge->serdes.valid);
     if(serdes_state > NULL_DAM_SERDES)
-        mutex_lock(&merge->da->levels[merge->level].merge.serdes.mutex);
+        mutex_lock(&merge->serdes.mutex);
     list_splice_init(&merge->new_large_objs, &out_tree->large_objs);
     if(serdes_state > NULL_DAM_SERDES)
-        mutex_unlock(&merge->da->levels[merge->level].merge.serdes.mutex);
+        mutex_unlock(&merge->serdes.mutex);
 
     /* truncate remaining blank chunks in output tree */
     if(merge->growth_control.tree_ext_nodes_capacity >
@@ -4127,7 +4131,7 @@ static void castle_da_merge_serdes_dealloc(struct castle_da_merge *merge)
     BUG_ON(!merge->da);
     BUG_ON( (level < MIN_DA_SERDES_LEVEL) && (level != BIG_MERGE) );
 
-    serdes_state = atomic_read(&da->levels[level].merge.serdes.valid);
+    serdes_state = atomic_read(&merge->serdes.valid);
     if(serdes_state == NULL_DAM_SERDES)
     {
         castle_printk(LOG_WARN, "%s::deallocating non-initialised merge SERDES state on "
@@ -4139,18 +4143,18 @@ static void castle_da_merge_serdes_dealloc(struct castle_da_merge *merge)
     debug("%s::deallocating merge serdes state for da %d level %d\n",
             __FUNCTION__, da->id, level);
 
-    BUG_ON(!da->levels[level].merge.serdes.mstore_entry);
+    BUG_ON(!merge->serdes.mstore_entry);
     BUG_ON(!merge->out_tree);
-    BUG_ON(!da->levels[level].merge.serdes.out_tree);
-    BUG_ON(merge->out_tree != da->levels[level].merge.serdes.out_tree);
-    da->levels[level].merge.serdes.out_tree=NULL;
-    castle_kfree(da->levels[level].merge.serdes.mstore_entry);
-    da->levels[level].merge.serdes.mstore_entry=NULL;
-    castle_kfree(da->levels[level].merge.serdes.in_tree_mstore_entry_arr);
-    da->levels[level].merge.serdes.in_tree_mstore_entry_arr=NULL;
+    BUG_ON(!merge->serdes.out_tree);
+    BUG_ON(merge->out_tree != merge->serdes.out_tree);
+    merge->serdes.out_tree=NULL;
+    castle_kfree(merge->serdes.mstore_entry);
+    merge->serdes.mstore_entry=NULL;
+    castle_kfree(merge->serdes.in_tree_mstore_entry_arr);
+    merge->serdes.in_tree_mstore_entry_arr=NULL;
 
     serdes_state = NULL_DAM_SERDES;
-    atomic_set(&da->levels[level].merge.serdes.valid, (int)serdes_state);
+    atomic_set(&merge->serdes.valid, (int)serdes_state);
 }
 
 /**
@@ -4187,9 +4191,9 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
     BUG_ON(!merge->da);
     castle_printk(LOG_DEBUG, "%s::merge %p, da %d level %d\n", __FUNCTION__, merge, merge->da->id, merge->level);
 
-    serdes_state = atomic_read(&merge->da->levels[merge->level].merge.serdes.valid);
+    serdes_state = atomic_read(&merge->serdes.valid);
     if (serdes_state > NULL_DAM_SERDES)
-        mutex_lock(&merge->da->levels[merge->level].merge.serdes.mutex);
+        mutex_lock(&merge->serdes.mutex);
 
     /* Release the last leaf node c2b. */
     if (merge->last_leaf_node_c2b)
@@ -4198,17 +4202,17 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
     /* Release the redirection partition. */
     if(merge->new_redirection_partition.node_c2b)
         castle_key_ptr_destroy(&merge->new_redirection_partition);
-    if(merge->da->levels[merge->level].merge.queriable_out_tree)
+    if(merge->queriable_out_tree)
     {
         debug("%s::[da %d level %d] putting redirection c2b at "cep_fmt_str".\n",
                 __FUNCTION__, merge->da->id, merge->level,
-                cep2str(merge->da->levels[merge->level].merge.redirection_partition.node_c2b->cep));
+                cep2str(merge->redirection_partition.node_c2b->cep));
         write_lock(&merge->da->lock);
-        merge->da->levels[merge->level].merge.queriable_out_tree = NULL;
+        merge->queriable_out_tree = NULL;
         if (err)    atomic_dec(&merge->da->queriable_merge_trees_cnt);
-        BUG_ON(!merge->da->levels[merge->level].merge.redirection_partition.node_c2b);
-        BUG_ON(!merge->da->levels[merge->level].merge.redirection_partition.key);
-        castle_key_ptr_destroy(&merge->da->levels[merge->level].merge.redirection_partition);
+        BUG_ON(!merge->redirection_partition.node_c2b);
+        BUG_ON(!merge->redirection_partition.key);
+        castle_key_ptr_destroy(&merge->redirection_partition);
         write_unlock(&merge->da->lock);
         debug("%s::[da %d level %d] queriable output trees left: %d\n",
             __FUNCTION__, merge->da->id, merge->level, atomic_read(&merge->da->queriable_merge_trees_cnt));
@@ -4274,7 +4278,7 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
             if( (serdes_state == VALID_AND_FRESH_DAM_SERDES) ||
                     (serdes_state == VALID_AND_STALE_DAM_SERDES) )
                 castle_da_merge_serdes_out_tree_check(
-                        merge->da->levels[merge->level].merge.serdes.mstore_entry,
+                        merge->serdes.mstore_entry,
                         merge->da,
                         merge->level);
 
@@ -4336,7 +4340,7 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
     }
 
     if (serdes_state > NULL_DAM_SERDES)
-        mutex_unlock(&merge->da->levels[merge->level].merge.serdes.mutex);
+        mutex_unlock(&merge->serdes.mutex);
 
     /* Free the merged iterator, if one was allocated. */
     if (merge->merged_iter)
@@ -4346,8 +4350,8 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
     {
         castle_kfree(merge->in_tree_shrink_activatable_cep);
         castle_kfree(merge->in_tree_shrinkable_cep);
-        castle_kfree(merge->da->levels[merge->level].merge.serdes.shrinkable_cep);
-        merge->da->levels[merge->level].merge.serdes.shrinkable_cep = NULL;
+        castle_kfree(merge->serdes.shrinkable_cep);
+        merge->serdes.shrinkable_cep = NULL;
     }
     castle_check_kfree(merge->in_trees);
     castle_kfree(merge);
@@ -4532,39 +4536,39 @@ static void castle_da_merge_new_partition_activate(struct castle_da_merge *merge
     vl_bkey_print(LOG_DEBUG, (c_vl_bkey_t *)merge->new_redirection_partition.key);
 
     write_lock(&merge->da->lock);
-    if(!merge->da->levels[merge->level].merge.queriable_out_tree)
+    if(!merge->queriable_out_tree)
     {
         /* Tree not yet queriable, so this is the first time setting a redirection partition;
            set tree as queriable. */
-        BUG_ON(merge->da->levels[merge->level].merge.redirection_partition.node_c2b);
-        BUG_ON(merge->da->levels[merge->level].merge.redirection_partition.key);
-        merge->da->levels[merge->level].merge.queriable_out_tree = merge->out_tree;
+        BUG_ON(merge->redirection_partition.node_c2b);
+        BUG_ON(merge->redirection_partition.key);
+        merge->queriable_out_tree = merge->out_tree;
         atomic_inc(&merge->da->queriable_merge_trees_cnt);
         castle_printk(LOG_DEBUG, "%s::[da %d level %d] making output tree %p queriable;"
                 " now there are %d queriable trees on this DA.\n",
                 __FUNCTION__, merge->da->id, merge->level,
-                merge->da->levels[merge->level].merge.queriable_out_tree,
+                merge->queriable_out_tree,
                 atomic_read(&merge->da->queriable_merge_trees_cnt));
     }
     else
     {
         struct castle_btree_type *btree = merge->out_btree;
-        BUG_ON(merge->da->levels[merge->level].merge.queriable_out_tree != merge->out_tree);
-        BUG_ON(!merge->da->levels[merge->level].merge.redirection_partition.node_c2b);
-        BUG_ON(!merge->da->levels[merge->level].merge.redirection_partition.key);
+        BUG_ON(merge->queriable_out_tree != merge->out_tree);
+        BUG_ON(!merge->redirection_partition.node_c2b);
+        BUG_ON(!merge->redirection_partition.key);
         /* the new redirection partition key must be greater than the existing
            redirection partition key. */
         BUG_ON(btree->key_compare(merge->new_redirection_partition.key,
-                    merge->da->levels[merge->level].merge.redirection_partition.key)
+                    merge->redirection_partition.key)
                 < 0 );
 
-        castle_key_ptr_destroy(&merge->da->levels[merge->level].merge.redirection_partition);
+        castle_key_ptr_destroy(&merge->redirection_partition);
     }
-    BUG_ON(!merge->da->levels[merge->level].merge.queriable_out_tree);
-    castle_key_ptr_ref_cp(&merge->da->levels[merge->level].merge.redirection_partition,
+    BUG_ON(!merge->queriable_out_tree);
+    castle_key_ptr_ref_cp(&merge->redirection_partition,
                           &merge->new_redirection_partition);
-    BUG_ON(!merge->da->levels[merge->level].merge.redirection_partition.node_c2b);
-    BUG_ON(!merge->da->levels[merge->level].merge.redirection_partition.key);
+    BUG_ON(!merge->redirection_partition.node_c2b);
+    BUG_ON(!merge->redirection_partition.key);
     castle_key_ptr_destroy(&merge->new_redirection_partition);
     write_unlock(&merge->da->lock);
 
@@ -5223,10 +5227,10 @@ static tree_seq_t castle_da_merge_last_unit_complete(struct castle_double_array 
     if (merge->nr_entries)
         castle_component_tree_add(merge->da, out_tree, head);
     else
-        BUG_ON(merge->da->levels[merge->level].merge.queriable_out_tree);
+        BUG_ON(merge->queriable_out_tree);
 
     /* FIXME: Change this structure with other elements of partial merges. */
-    if (merge->da->levels[merge->level].merge.queriable_out_tree)
+    if (merge->queriable_out_tree)
         atomic_dec(&merge->da->queriable_merge_trees_cnt);
 
     /* Reset the number of completed units. */
@@ -5310,12 +5314,12 @@ static int castle_da_merge_init(struct castle_da_merge *merge, void *unused)
     /* Deserialise ongoing merge state */
     /* only reason a lock might be needed here would be if we were racing with double_array_read,
        which should never happen */
-    if(da->levels[level].merge.serdes.des){
+    if(merge->serdes.des){
         castle_printk(LOG_DEBUG, "%s::found serialised merge in da %d level %d, attempting des\n",
                 __FUNCTION__, da->id, level);
         castle_da_merge_des_check(merge, da, level, nr_trees, in_trees);
         castle_da_merge_deserialise(merge, da, level);
-        merge->out_tree = da->levels[level].merge.serdes.out_tree;
+        merge->out_tree = merge->serdes.out_tree;
     }
 
     if(!merge->out_tree)
@@ -5324,7 +5328,7 @@ static int castle_da_merge_init(struct castle_da_merge *merge, void *unused)
 
         /* we cannot tolerate failure to recover an in-progress output ct if this is a
            deserialising merge */
-        BUG_ON(da->levels[level].merge.serdes.des);
+        BUG_ON(merge->serdes.des);
 
         if (level == BIG_MERGE)
             ct_seq = da->compaction_ct_seq;
@@ -5344,19 +5348,19 @@ static int castle_da_merge_init(struct castle_da_merge *merge, void *unused)
     if(ret)
         goto error_out;
 
-    if(!da->levels[level].merge.serdes.des)
+    if(!merge->serdes.des)
     {
         ret = castle_da_merge_extents_alloc(merge);
         if(ret)
             goto error_out;
     }
 
-    if(da->levels[level].merge.serdes.des)
+    if(merge->serdes.des)
     {
 #ifdef DEBUG_MERGE_SERDES
-        da->levels[level].merge.serdes.merge_completed=0;
+        merge->serdes.merge_completed=0;
 #endif
-        da->levels[level].merge.serdes.des=0;
+        merge->serdes.des=0;
         castle_printk(LOG_INIT, "%s::Resuming merge on da %d level %d.\n", __FUNCTION__, da->id, level);
     }
 
@@ -5382,9 +5386,9 @@ error_out:
 }
 
 static struct castle_da_merge* castle_da_merge_alloc(int nr_trees, int level,
-                                                  struct castle_double_array *da,
-                                                  c_merge_id_t merge_id,
-                                                  struct castle_component_tree **in_trees)
+                                                     struct castle_double_array *da,
+                                                     c_merge_id_t merge_id,
+                                                     struct castle_component_tree **in_trees)
 {
     struct castle_da_merge *merge = NULL;
     int i, ret;
@@ -5401,7 +5405,6 @@ static struct castle_da_merge* castle_da_merge_alloc(int nr_trees, int level,
 
     merge->id                   = INVAL_MERGE_ID;
 #if 0
-    merge->flags                = 0;
     merge->thread_id            = INVAL_THREAD_ID;
 #endif
     merge->da                   = da;
@@ -5473,16 +5476,8 @@ static struct castle_da_merge* castle_da_merge_alloc(int nr_trees, int level,
 
     merge->new_redirection_partition.node_c2b = NULL;
     merge->new_redirection_partition.key      = NULL;
-#if 0
     merge->redirection_partition.node_c2b     = NULL;
     merge->redirection_partition.key          = NULL;
-#else
-    write_lock(&da->lock);
-    da->levels[level].merge.redirection_partition.node_c2b = NULL;
-    da->levels[level].merge.redirection_partition.key      = NULL;
-    write_unlock(&da->lock);
-    BUG_ON(da->levels[level].merge.queriable_out_tree); /* should have been reset by prev merge */
-#endif
 
     if(MERGE_CHECKPOINTABLE(merge))
     {
@@ -5491,9 +5486,9 @@ static struct castle_da_merge* castle_da_merge_alloc(int nr_trees, int level,
         if(!merge->in_tree_shrinkable_cep)
             goto error_out;
 
-        da->levels[level].merge.serdes.shrinkable_cep =
+        merge->serdes.shrinkable_cep =
             castle_malloc(sizeof(c_ext_pos_t) * nr_trees * 2, GFP_KERNEL);
-        if(!da->levels[level].merge.serdes.shrinkable_cep)
+        if(!merge->serdes.shrinkable_cep)
             goto error_out;
 
         merge->in_tree_shrink_activatable_cep =
@@ -5502,50 +5497,40 @@ static struct castle_da_merge* castle_da_merge_alloc(int nr_trees, int level,
             goto error_out;
 
         for(i=0; i<nr_trees*2; i++)
-            merge->in_tree_shrinkable_cep[i] = da->levels[level].merge.serdes.shrinkable_cep[i] =
+            merge->in_tree_shrinkable_cep[i] = merge->serdes.shrinkable_cep[i] =
                                     merge->in_tree_shrink_activatable_cep[i] = INVAL_EXT_POS;
-
-        BUG_ON(da->levels[level].merge.serdes.mstore_entry);
-        BUG_ON(da->levels[level].merge.serdes.in_tree_mstore_entry_arr);
     }
     else
     {
         merge->in_tree_shrinkable_cep                 = NULL;
-        da->levels[level].merge.serdes.shrinkable_cep                  = NULL;
+        merge->serdes.shrinkable_cep                  = NULL;
         merge->in_tree_shrink_activatable_cep         = NULL;
-        BUG_ON(da->levels[level].merge.serdes.mstore_entry);
-        BUG_ON(da->levels[level].merge.serdes.in_tree_mstore_entry_arr);
     }
 
     merge->growth_control.tree_ext_nodes_capacity  = 0;
     merge->growth_control.tree_ext_nodes_occupancy = 0;
     merge->aborting                                = 0;
-    da->levels[level].merge.queriable_out_tree                      = 0;
+    merge->queriable_out_tree                      = NULL;
 #ifdef DEBUG_MERGE_SERDES
-    da->levels[level].merge.serdes.merge_completed                  = 0;
+    merge->serdes.merge_completed                  = 0;
 #endif
-    da->levels[level].merge.serdes.out_tree                         = 0;
+    merge->serdes.out_tree                         = NULL;
 
-    mutex_init(&da->levels[level].merge.serdes.mutex);
-    atomic_set(&da->levels[level].merge.serdes.valid, NULL_DAM_SERDES);
+    merge->serdes.mstore_entry = NULL;
+    merge->serdes.in_tree_mstore_entry_arr = NULL;
 
-    if(da->levels[level].merge.serdes.des)
-    {
-#ifdef DEBUG_MERGE_SERDES
-        da->levels[level].merge.serdes.merge_completed=0;
-#endif
-        BUG_ON(level != 2);
-        da->levels[level].merge.serdes.des=0;
-        castle_printk(LOG_INIT, "%s::Resuming merge on da %d level %d.\n", __FUNCTION__, da->id, level);
-    }
+    mutex_init(&merge->serdes.mutex);
+    atomic_set(&merge->serdes.valid, NULL_DAM_SERDES);
+    merge->serdes.des = 0;
 
     if (MERGE_ID_INVAL(merge_id))
-    {
-        BUG_ON(da->levels[level].merge.serdes.des);
         merge->id = atomic_inc_return(&castle_da_max_merge_id);
-    }
     else
         merge->id = merge_id;
+
+    /* Low free space structure. */
+    merge->lfs.da = da;
+    castle_da_lfs_ct_reset(&merge->lfs);
 
     castle_merges_hash_add(merge);
 
@@ -5555,7 +5540,7 @@ error_out:
     BUG_ON(!ret);
 
     castle_check_kfree(merge->in_tree_shrink_activatable_cep);
-    castle_check_kfree(da->levels[level].merge.serdes.shrinkable_cep);
+    castle_check_kfree(merge->serdes.shrinkable_cep);
     castle_check_kfree(merge->in_tree_shrinkable_cep);
     castle_check_kfree(merge->snapshot_delete.need_parent);
     castle_check_kfree(merge->snapshot_delete.occupied);
@@ -5715,7 +5700,7 @@ static void castle_da_merge_serialise(struct castle_da_merge *merge)
     BUG_ON((level < MIN_DA_SERDES_LEVEL) && (level != BIG_MERGE));
     BUG_ON(!merge->out_tree);
 
-    current_state = atomic_read(&da->levels[level].merge.serdes.valid);
+    current_state = atomic_read(&merge->serdes.valid);
     /*
     Possible state transitions: (MT = this thread, CT = checkpoint thread)
         NULL_DAM_SERDES            -> INVALID_DAM_SERDES         [label="MT allocs"]
@@ -5733,14 +5718,14 @@ static void castle_da_merge_serialise(struct castle_da_merge *merge)
     if( unlikely(current_state == NULL_DAM_SERDES ) )
     {
         /* first write - initialise */
-        mutex_lock(&da->levels[level].merge.serdes.mutex);
+        mutex_lock(&merge->serdes.mutex);
         debug("%s::initialising mstore entry for merge %p in "
                 "da %d, level %d\n", __FUNCTION__, merge, da->id, level);
-        BUG_ON(da->levels[level].merge.serdes.mstore_entry);
+        BUG_ON(merge->serdes.mstore_entry);
 
-        da->levels[level].merge.serdes.mstore_entry=
+        merge->serdes.mstore_entry=
             castle_zalloc(sizeof(struct castle_dmserlist_entry), GFP_KERNEL);
-        if(!da->levels[level].merge.serdes.mstore_entry) goto alloc_fail_1;
+        if(!merge->serdes.mstore_entry) goto alloc_fail_1;
 
         /* Using vmalloc for the input tree merge state array...
            An array made up of non-contiguous pages sounds bad in this situation
@@ -5755,28 +5740,28 @@ static void castle_da_merge_serialise(struct castle_da_merge *merge)
            at most, so we might as well. If it is felt that this is actually too
            costly, then an increase in MIN_DA_SERDES_LEVEL should be considered.
          */
-        da->levels[level].merge.serdes.in_tree_mstore_entry_arr=
+        merge->serdes.in_tree_mstore_entry_arr=
             castle_zalloc(sizeof(struct castle_in_tree_merge_state_entry)*merge->nr_trees,
             GFP_KERNEL);
-        if(!da->levels[level].merge.serdes.in_tree_mstore_entry_arr) goto alloc_fail_2;
+        if(!merge->serdes.in_tree_mstore_entry_arr) goto alloc_fail_2;
 
 #ifdef DEBUG_MERGE_SERDES
-        da->levels[level].merge.serdes.merge_completed=0;
+        merge->serdes.merge_completed=0;
 #endif
 
-        da->levels[level].merge.serdes.out_tree=merge->out_tree;
-        castle_da_merge_marshall(da->levels[level].merge.serdes.mstore_entry,
-                da->levels[level].merge.serdes.in_tree_mstore_entry_arr,
+        merge->serdes.out_tree=merge->out_tree;
+        castle_da_merge_marshall(merge->serdes.mstore_entry,
+                merge->serdes.in_tree_mstore_entry_arr,
                 merge,
                 DAM_MARSHALL_ALL);
 
         new_state = INVALID_DAM_SERDES;
-        atomic_set(&da->levels[level].merge.serdes.valid, (int)new_state);
-        mutex_unlock(&da->levels[level].merge.serdes.mutex);
+        atomic_set(&merge->serdes.valid, (int)new_state);
+        mutex_unlock(&merge->serdes.mutex);
 
         return;
 alloc_fail_2:
-        castle_kfree(da->levels[level].merge.serdes.mstore_entry);
+        castle_kfree(merge->serdes.mstore_entry);
 alloc_fail_1:
         castle_printk(LOG_ERROR, "%s::failed to malloc, partial merges disabled for this merge"
                 "[da %d level %d] (warning: UNTESTED).\n", __FUNCTION__, da, level);
@@ -5786,12 +5771,12 @@ alloc_fail_1:
 
     if( unlikely(current_state == INVALID_DAM_SERDES) )
     {
-        mutex_lock(&da->levels[level].merge.serdes.mutex);
-        BUG_ON(!da->levels[level].merge.serdes.mstore_entry);
+        mutex_lock(&merge->serdes.mutex);
+        BUG_ON(!merge->serdes.mstore_entry);
         if( unlikely(merge->is_new_key) )
         {
             /* update output tree state */
-            castle_da_merge_marshall(da->levels[level].merge.serdes.mstore_entry,
+            castle_da_merge_marshall(merge->serdes.mstore_entry,
                     NULL, /* don't need it for this marshall mode */
                     merge,
                     DAM_MARSHALL_OUTTREE);
@@ -5804,55 +5789,55 @@ alloc_fail_1:
             castle_version_states_commit(&merge->version_states);
 
             /* Commit cep shrink list */
-            memcpy(merge->da->levels[merge->level].merge.serdes.shrinkable_cep,
-                    merge->in_tree_shrinkable_cep,
-                    sizeof(c_ext_pos_t) * merge->nr_trees * 2);
+            memcpy(merge->serdes.shrinkable_cep,
+                   merge->in_tree_shrinkable_cep,
+                   sizeof(c_ext_pos_t) * merge->nr_trees * 2);
 
             for(i=0; i<merge->nr_trees*2; i++)
             {
-                if(EXT_POS_INVAL(merge->da->levels[merge->level].merge.serdes.shrinkable_cep[i]))
+                if(EXT_POS_INVAL(merge->serdes.shrinkable_cep[i]))
                     continue;
                 castle_printk(LOG_DEBUG, "%s::[da %d level %d] scheduling shrink of "cep_fmt_str"\n",
                         __FUNCTION__, merge->da->id, merge->level,
-                        cep2str(merge->da->levels[merge->level].merge.serdes.shrinkable_cep[i]));
+                        cep2str(merge->serdes.shrinkable_cep[i]));
             }
 
 
             /* mark serialisation as checkpointable, and no longer updatable */
             new_state = VALID_AND_FRESH_DAM_SERDES;
-            atomic_set(&da->levels[level].merge.serdes.valid, (int)new_state);
-            mutex_unlock(&da->levels[level].merge.serdes.mutex);
+            atomic_set(&merge->serdes.valid, (int)new_state);
+            mutex_unlock(&merge->serdes.mutex);
             return;
         }
 
         /* update iterator state */
         printk("%s::updating mstore entry for merge in "
                 "da %d, level %d\n", __FUNCTION__, da->id, level);
-        castle_da_merge_marshall(da->levels[level].merge.serdes.mstore_entry,
-                da->levels[level].merge.serdes.in_tree_mstore_entry_arr,
+        castle_da_merge_marshall(merge->serdes.mstore_entry,
+                merge->serdes.in_tree_mstore_entry_arr,
                 merge,
                 DAM_MARSHALL_ITERS);
 
-        mutex_unlock(&da->levels[level].merge.serdes.mutex);
+        mutex_unlock(&merge->serdes.mutex);
         return;
     }
 
     if( unlikely(current_state == VALID_AND_STALE_DAM_SERDES) )
     {
         /* we just got back from checkpoint - so FORCE an update */
-        mutex_lock(&da->levels[level].merge.serdes.mutex);
-        BUG_ON(!da->levels[level].merge.serdes.mstore_entry);
+        mutex_lock(&merge->serdes.mutex);
+        BUG_ON(!merge->serdes.mstore_entry);
 
         debug("%s::updating mstore entry for merge in "
                 "da %d, level %d\n", __FUNCTION__, da->id, level);
-        castle_da_merge_marshall(da->levels[level].merge.serdes.mstore_entry,
-                da->levels[level].merge.serdes.in_tree_mstore_entry_arr,
+        castle_da_merge_marshall(merge->serdes.mstore_entry,
+                merge->serdes.in_tree_mstore_entry_arr,
                 merge,
                 DAM_MARSHALL_ITERS);
 
         new_state = INVALID_DAM_SERDES;
-        atomic_set(&da->levels[level].merge.serdes.valid, (int)new_state);
-        mutex_unlock(&da->levels[level].merge.serdes.mutex);
+        atomic_set(&merge->serdes.valid, (int)new_state);
+        mutex_unlock(&merge->serdes.mutex);
         return; /* state now 1,1 */
     }
 
@@ -5865,7 +5850,7 @@ alloc_fail_1:
            read, BUG_ONs aside.
         */
 
-        BUG_ON(!da->levels[level].merge.serdes.mstore_entry);
+        BUG_ON(!merge->serdes.mstore_entry);
         return;
     }
 
@@ -5996,8 +5981,8 @@ update_output_tree_state:
     list_splice_init(&merge->new_large_objs, &merge->out_tree->large_objs);
 
     BUG_ON(!merge->out_tree);
-    BUG_ON(!merge->da->levels[merge->level].merge.serdes.out_tree);
-    BUG_ON(merge->out_tree != merge->da->levels[merge->level].merge.serdes.out_tree );
+    BUG_ON(!merge->serdes.out_tree);
+    BUG_ON(merge->out_tree != merge->serdes.out_tree );
     BUG_ON(EXT_POS_INVAL(merge->out_tree->internal_ext_free));
     BUG_ON(EXT_POS_INVAL(merge->out_tree->tree_ext_free));
     BUG_ON(EXT_POS_INVAL(merge->out_tree->data_ext_free));
@@ -6023,13 +6008,10 @@ update_output_tree_state:
        because the redirection partition could be needed before the merge threads fire up.       */
     merge_mstore->redirection_partition_node_cep   = INVAL_EXT_POS;
     merge_mstore->redirection_partition_node_size = 0;
-    if(merge->da->levels[merge->level].merge.redirection_partition.node_c2b)
+    if(merge->redirection_partition.node_c2b)
     {
-        merge_mstore->redirection_partition_node_size =
-            merge->da->levels[merge->level].merge.redirection_partition.node_size;
-
-        merge_mstore->redirection_partition_node_cep =
-            merge->da->levels[merge->level].merge.redirection_partition.node_c2b->cep;
+        merge_mstore->redirection_partition_node_size = merge->redirection_partition.node_size;
+        merge_mstore->redirection_partition_node_cep  = merge->redirection_partition.node_c2b->cep;
     }
 
 
@@ -6168,14 +6150,14 @@ static void castle_da_merge_deserialise(struct castle_da_merge *merge,
     struct castle_dmserlist_entry *merge_mstore;
     struct castle_btree_node *node;
     struct list_head *lh, *tmp;
-    struct castle_component_tree *des_tree = da->levels[level].merge.serdes.out_tree;
+    struct castle_component_tree *des_tree = merge->serdes.out_tree;
     int i;
 
-    merge_mstore=da->levels[level].merge.serdes.mstore_entry;
+    merge_mstore=merge->serdes.mstore_entry;
     /* recover bloom_build_params. */
-    if(da->levels[level].merge.serdes.mstore_entry->have_bbp)
-        castle_da_ct_bloom_build_param_deserialise(da->levels[level].merge.serdes.out_tree,
-                                &da->levels[level].merge.serdes.mstore_entry->out_tree_bbp);
+    if(merge->serdes.mstore_entry->have_bbp)
+        castle_da_ct_bloom_build_param_deserialise(merge->serdes.out_tree,
+                                &merge->serdes.mstore_entry->out_tree_bbp);
 
     /* out_btree (type) can be assigned directly because we passed the BUG_ON() btree_type->magic
        in da_merge_des_check. */
@@ -6319,8 +6301,8 @@ static void castle_da_merge_des_check(struct castle_da_merge *merge, struct cast
     BUG_ON(!merge);
     BUG_ON((level < MIN_DA_SERDES_LEVEL) && (level != BIG_MERGE));
 
-    merge_mstore             = da->levels[level].merge.serdes.mstore_entry;
-    in_tree_merge_mstore_arr = da->levels[level].merge.serdes.in_tree_mstore_entry_arr;
+    merge_mstore             = merge->serdes.mstore_entry;
+    in_tree_merge_mstore_arr = merge->serdes.in_tree_mstore_entry_arr;
 
     /* if BUG here, there is a problem with the mstore read (probably double_array_read) */
     BUG_ON(!merge_mstore);
@@ -6486,16 +6468,16 @@ static int castle_da_merge_do(struct castle_da_merge *merge)
         castle_da_merge_cache_efficiency_stats_flush_reset(da, merge, units_cnt, in_trees);
 #endif
 
-        serdes_state = atomic_read(&da->levels[level].merge.serdes.valid);
+        serdes_state = atomic_read(&merge->serdes.valid);
         if((serdes_state > NULL_DAM_SERDES) && (!castle_merges_checkpoint))
         {
             /* user changed castle_merges_checkpoint param from 1 to 0 */
             castle_printk(LOG_USERINFO,
                     "Discarding checkpoint state for in-flight merge on DA=%d, level=%d.\n",
                     da->id, level);
-            mutex_lock(&merge->da->levels[merge->level].merge.serdes.mutex);
+            mutex_lock(&merge->serdes.mutex);
             castle_da_merge_serdes_dealloc(merge);
-            mutex_unlock(&merge->da->levels[merge->level].merge.serdes.mutex);
+            mutex_unlock(&merge->serdes.mutex);
         }
         /* Trace event. */
         castle_trace_da_merge_unit(TRACE_END,
@@ -6535,9 +6517,9 @@ static int castle_da_merge_do(struct castle_da_merge *merge)
         merge->out_tree->seq);
 
 #ifdef DEBUG_MERGE_SERDES
-    serdes_state = atomic_read(&da->levels[level].merge.serdes.valid);
+    serdes_state = atomic_read(&merge->serdes.valid);
     if(serdes_state > NULL_DAM_SERDES)
-        da->levels[level].merge.serdes.merge_completed=1;
+        merge->serdes.merge_completed=1;
 #endif
 
     /* Finish the last unit, packaging the output tree. */
@@ -7339,11 +7321,6 @@ static void castle_da_dealloc(struct castle_double_array *da)
         castle_printk(LOG_DEBUG, "%s::cleaning up da %d level %d\n", __FUNCTION__, da->id, i);
         if(da->levels[i].merge.thread != NULL)
             kthread_stop(da->levels[i].merge.thread);
-
-        /* merges dealloc'd, should be no more queriable merge tree */
-        BUG_ON(da->levels[i].merge.queriable_out_tree);
-        BUG_ON(da->levels[i].merge.serdes.out_tree);
-        BUG_ON(da->levels[i].merge.serdes.mstore_entry);
     }
 
     /* all merges dealloc'd, should be no more queriable merge trees */
@@ -7419,17 +7396,6 @@ static struct castle_double_array* castle_da_alloc(c_da_t da_id)
     for(i=0; i<MAX_DA_LEVEL-1; i++)
     {
         /* Initialise merge serdes */
-        mutex_init(&da->levels[i].merge.serdes.mutex);
-        da->levels[i].merge.serdes.mstore_entry=NULL;
-        da->levels[i].merge.serdes.in_tree_mstore_entry_arr=NULL;
-        da->levels[i].merge.serdes.out_tree=NULL;
-        da->levels[i].merge.serdes.shrinkable_cep=NULL;
-        atomic_set(&da->levels[i].merge.serdes.valid, NULL_DAM_SERDES);
-
-        da->levels[i].merge.queriable_out_tree             = NULL;
-        da->levels[i].merge.redirection_partition.key      = NULL;
-        da->levels[i].merge.redirection_partition.node_c2b = NULL;
-
         INIT_LIST_HEAD(&da->levels[i].trees);
         da->levels[i].nr_trees             = 0;
         da->levels[i].nr_compac_trees      = 0;
@@ -7439,10 +7405,6 @@ static struct castle_double_array* castle_da_alloc(c_da_t da_id)
         da->levels[i].merge.driver_token   = NULL;
         da->levels[i].merge.units_commited = 0;
         da->levels[i].merge.thread         = NULL;
-
-        /* Low free space structure. */
-        da->levels[i].lfs.da = da;
-        castle_da_lfs_ct_reset(&da->levels[i].lfs);
 
         /* Create merge threads, and take da ref for all levels >= 1. */
         castle_da_get(da);
@@ -7460,8 +7422,6 @@ static struct castle_double_array* castle_da_alloc(c_da_t da_id)
     /* allocate top-level */
     INIT_LIST_HEAD(&da->levels[MAX_DA_LEVEL-1].trees);
     da->levels[MAX_DA_LEVEL-1].nr_trees = 0;
-    da->levels[MAX_DA_LEVEL-1].lfs.da   = da;
-    castle_da_lfs_ct_reset(&da->levels[MAX_DA_LEVEL-1].lfs);
 
     castle_printk(LOG_USERINFO, "Allocated DA=%d successfully.\n", da_id);
 
@@ -8251,10 +8211,10 @@ static void __castle_da_merge_writeback(struct castle_da_merge *merge)
     BUG_ON(level > MAX_DA_LEVEL);
     BUG_ON((level < MIN_DA_SERDES_LEVEL) && (level != BIG_MERGE));
 
-    ct = da->levels[level].merge.serdes.out_tree;
+    ct = merge->serdes.out_tree;
     BUG_ON(!ct);
 
-    merge_mstore = da->levels[level].merge.serdes.mstore_entry;
+    merge_mstore = merge->serdes.mstore_entry;
     BUG_ON(!merge_mstore);
 
     /* sanity check that there isn't a mismatch between the serdes state
@@ -8262,7 +8222,7 @@ static void __castle_da_merge_writeback(struct castle_da_merge *merge)
     BUG_ON(da->id != merge_mstore->da_id);
     BUG_ON(level  != merge_mstore->level);
 
-    in_tree_merge_mstore_arr = da->levels[level].merge.serdes.in_tree_mstore_entry_arr;
+    in_tree_merge_mstore_arr = merge->serdes.in_tree_mstore_entry_arr;
     BUG_ON(!in_tree_merge_mstore_arr);
 
     /* sanity check each input tree state structure */
@@ -8273,7 +8233,7 @@ static void __castle_da_merge_writeback(struct castle_da_merge *merge)
         BUG_ON(i      != in_tree_merge_mstore_arr[i].pos_in_merge_struct);
     }
 
-    current_state = atomic_read(&da->levels[level].merge.serdes.valid);
+    current_state = atomic_read(&merge->serdes.valid);
 
     castle_printk(LOG_DEBUG, "%s::checkpointing merge on da %d, level %d\n",
             __FUNCTION__, da->id, level);
@@ -8308,14 +8268,14 @@ static void __castle_da_merge_writeback(struct castle_da_merge *merge)
         struct castle_clist_entry *cl    = &merge_mstore->out_tree;
 
         /* == shrink extents == */
-        if(da->levels[level].merge.serdes.shrinkable_cep)
+        if(merge->serdes.shrinkable_cep)
         {
             for(i=0; i<merge_mstore->nr_trees * 2; i++)
             {
-                if(!EXT_POS_INVAL(da->levels[level].merge.serdes.shrinkable_cep[i]))
+                if(!EXT_POS_INVAL(merge->serdes.shrinkable_cep[i]))
                 {
-                    castle_extent_shrink(da->levels[level].merge.serdes.shrinkable_cep[i].ext_id,
-                            da->levels[level].merge.serdes.shrinkable_cep[i].offset/C_CHK_SIZE);
+                    castle_extent_shrink(merge->serdes.shrinkable_cep[i].ext_id,
+                            merge->serdes.shrinkable_cep[i].offset/C_CHK_SIZE);
                 }
             }
         }
@@ -8368,7 +8328,7 @@ static void __castle_da_merge_writeback(struct castle_da_merge *merge)
             castle_cache_extent_flush_schedule(cl->bloom_ext_id, 0, 0);
         }
         new_state = VALID_AND_STALE_DAM_SERDES;
-        atomic_set(&da->levels[level].merge.serdes.valid, (int)new_state);
+        atomic_set(&merge->serdes.valid, (int)new_state);
     }
 
 }
@@ -8402,16 +8362,15 @@ static int castle_da_writeback(struct castle_double_array *da, void *unused)
 static int castle_da_merge_writeback(struct castle_da_merge *merge, void *unused)
 {
     c_merge_serdes_state_t current_state;
-    struct castle_double_array *da = merge->da;
 
     BUG_ON(!CASTLE_IN_TRANSACTION);
 
-    mutex_lock(&da->levels[merge->level].merge.serdes.mutex);
-    current_state = atomic_read(&da->levels[merge->level].merge.serdes.valid);
+    mutex_lock(&merge->serdes.mutex);
+    current_state = atomic_read(&merge->serdes.valid);
     if( (current_state == VALID_AND_FRESH_DAM_SERDES) ||
             (current_state == VALID_AND_STALE_DAM_SERDES) )
         __castle_da_merge_writeback(merge);
-    mutex_unlock(&da->levels[merge->level].merge.serdes.mutex);
+    mutex_unlock(&merge->serdes.mutex);
 
     return 0;
 }
@@ -8762,19 +8721,19 @@ int castle_double_array_read(void)
 
         /* we know the da and the level, and we passed some sanity checking - so put the serdes
            state in the appropriate merge slot */
-        des_da->levels[level].merge.serdes.mstore_entry = mstore_dmserentry;
+        merge->serdes.mstore_entry = mstore_dmserentry;
 
         /* Recover partially complete output CT */
-        des_da->levels[level].merge.serdes.out_tree = NULL;
-        des_da->levels[level].merge.serdes.out_tree =
+        merge->serdes.out_tree = NULL;
+        merge->serdes.out_tree =
             castle_zalloc(sizeof(struct castle_component_tree), GFP_KERNEL);
-        BUG_ON(!des_da->levels[level].merge.serdes.out_tree);
-        ct_da_id = castle_da_ct_unmarshall(des_da->levels[level].merge.serdes.out_tree,
-                &des_da->levels[level].merge.serdes.mstore_entry->out_tree);
+        BUG_ON(!merge->serdes.out_tree);
+        ct_da_id = castle_da_ct_unmarshall(merge->serdes.out_tree,
+                &merge->serdes.mstore_entry->out_tree);
         BUG_ON(da_id != ct_da_id);
-        castle_ct_hash_add(des_da->levels[level].merge.serdes.out_tree);
+        castle_ct_hash_add(merge->serdes.out_tree);
         castle_printk(LOG_DEBUG, "%s::deserialising merge on da %d level %d with partially-complete ct, seq %d\n",
-                __FUNCTION__, da_id, level, des_da->levels[level].merge.serdes.out_tree->seq);
+                __FUNCTION__, da_id, level, merge->serdes.out_tree->seq);
         /* the difference btwn unmarshalling a partially complete in-merge ct and a "normal" ct is
            unlike a normal ct (see code below), a partially complete in-merge ct does not get
            added to a DA through cct_add(da, ct, NULL, 1). */
@@ -8785,29 +8744,29 @@ int castle_double_array_read(void)
         castle_da_merge_serdes_out_tree_check(mstore_dmserentry, des_da, level);
 
         /* inc ct seq number if necessary */
-        if (des_da->levels[level].merge.serdes.out_tree->seq >= atomic_read(&castle_next_tree_seq))
-            atomic_set(&castle_next_tree_seq, des_da->levels[level].merge.serdes.out_tree->seq+1);
+        if (merge->serdes.out_tree->seq >= atomic_read(&castle_next_tree_seq))
+            atomic_set(&castle_next_tree_seq, merge->serdes.out_tree->seq+1);
 
         /* allocate space required for Stage 2 DES */
-        des_da->levels[level].merge.serdes.in_tree_mstore_entry_arr =
+        merge->serdes.in_tree_mstore_entry_arr =
             castle_zalloc(sizeof(struct castle_in_tree_merge_state_entry)*mstore_dmserentry->nr_trees,
                     GFP_KERNEL);
-        if(!des_da->levels[level].merge.serdes.in_tree_mstore_entry_arr)
+        if(!merge->serdes.in_tree_mstore_entry_arr)
         {
             castle_printk(LOG_ERROR, "%s:: castle_zalloc fail.\n", __FUNCTION__);
             BUG();
         }
 
         /* notify merge thread that there is a deserialising merge */
-        des_da->levels[level].merge.serdes.des = 1;
+        merge->serdes.des = 1;
 
         /* set merge state as immediately re-checkpointable */
-        atomic_set(&des_da->levels[level].merge.serdes.valid, VALID_AND_STALE_DAM_SERDES);
+        atomic_set(&merge->serdes.valid, VALID_AND_STALE_DAM_SERDES);
 
         if(level == BIG_MERGE)
         {
             castle_da_need_compaction_set(des_da);
-            des_da->compaction_ct_seq = des_da->levels[level].merge.serdes.out_tree->seq;
+            des_da->compaction_ct_seq = merge->serdes.out_tree->seq;
         }
 
         /* enable query redirection if necessary */
@@ -8818,27 +8777,27 @@ int castle_double_array_read(void)
             struct castle_btree_type *out_btree = castle_btree_type_get(RO_VLBA_TREE_TYPE);
 
             /* output tree pointer */
-            des_da->levels[level].merge.queriable_out_tree =
-                des_da->levels[level].merge.serdes.out_tree;
+            merge->queriable_out_tree =
+                merge->serdes.out_tree;
             atomic_inc(&des_da->queriable_merge_trees_cnt);
 
             /* recover c2b containing partition key */
             node_size = mstore_dmserentry->redirection_partition_node_size;
             BUG_ON(node_size == 0 || node_size > 256);
-            des_da->levels[level].merge.redirection_partition.node_c2b =
+            merge->redirection_partition.node_c2b =
                 castle_cache_block_get_for_merge(mstore_dmserentry->redirection_partition_node_cep, node_size);
-            write_lock_c2b(des_da->levels[level].merge.redirection_partition.node_c2b);
-            if(!c2b_uptodate(des_da->levels[level].merge.redirection_partition.node_c2b))
-                BUG_ON(submit_c2b_sync(READ, des_da->levels[level].merge.redirection_partition.node_c2b));
-            write_unlock_c2b(des_da->levels[level].merge.redirection_partition.node_c2b);
+            write_lock_c2b(merge->redirection_partition.node_c2b);
+            if(!c2b_uptodate(merge->redirection_partition.node_c2b))
+                BUG_ON(submit_c2b_sync(READ, merge->redirection_partition.node_c2b));
+            write_unlock_c2b(merge->redirection_partition.node_c2b);
 
             /* recover partition key */
-            node = c2b_bnode(des_da->levels[level].merge.redirection_partition.node_c2b);
+            node = c2b_bnode(merge->redirection_partition.node_c2b);
             BUG_ON(!node);
             BUG_ON(node->magic != BTREE_NODE_MAGIC);
             BUG_ON(!node->used); /* must have been a completed node! */
             out_btree->entry_get(node, node->used - 1,
-                    &des_da->levels[level].merge.redirection_partition.key, NULL, NULL);
+                    &merge->redirection_partition.key, NULL, NULL);
         }
     }
     castle_mstore_iterator_destroy(iterator);
@@ -8934,16 +8893,16 @@ int castle_double_array_read(void)
         BUG_ON(!da);
 
         /* there must already be a corresponding mstore_entry */
-        BUG_ON(!da->levels[level].merge.serdes.mstore_entry);
+        BUG_ON(!merge->serdes.mstore_entry);
         /* the array should already have been allocated */
-        BUG_ON(!da->levels[level].merge.serdes.in_tree_mstore_entry_arr);
+        BUG_ON(!merge->serdes.in_tree_mstore_entry_arr);
         /* if BUG on following, then there may be a mismatch between the merge state and input
            tree merge state, with the former expecting fewer trees and therefore Stage 1 having
            not allocated enough space. */
-        BUG_ON(pos > da->levels[level].merge.serdes.mstore_entry->nr_trees);
+        BUG_ON(pos > merge->serdes.mstore_entry->nr_trees);
         /* if BUG on the following, then we are trying to insert more than one in_tree_merge_state entry
            into the same slot. */
-        BUG_ON(da->levels[level].merge.serdes.in_tree_mstore_entry_arr[pos].da_id != 0);
+        BUG_ON(merge->serdes.in_tree_mstore_entry_arr[pos].da_id != 0);
 
         ct = castle_ct_hash_get(mstore_in_tree_merge_state_entry->seq);
         BUG_ON(!ct);
@@ -8956,17 +8915,17 @@ int castle_double_array_read(void)
 
         /* Set component tree in the merge in_trees array. */
         merge->in_trees[pos] = ct;
-        memcpy(&da->levels[level].merge.serdes.in_tree_mstore_entry_arr[pos],
+        memcpy(&merge->serdes.in_tree_mstore_entry_arr[pos],
                 mstore_in_tree_merge_state_entry, sizeof(struct castle_in_tree_merge_state_entry));
         castle_kfree(mstore_in_tree_merge_state_entry);
         mstore_in_tree_merge_state_entry=NULL;
 
         castle_printk(LOG_DEBUG, "%s::recovered input tree (seq=%d) merge state for da %d merge_id %u pos %d.\n",
                 __FUNCTION__,
-                da->levels[level].merge.serdes.in_tree_mstore_entry_arr[pos].seq,
-                da->levels[level].merge.serdes.in_tree_mstore_entry_arr[pos].da_id,
-                da->levels[level].merge.serdes.in_tree_mstore_entry_arr[pos].merge_id,
-                da->levels[level].merge.serdes.in_tree_mstore_entry_arr[pos].pos_in_merge_struct);
+                merge->serdes.in_tree_mstore_entry_arr[pos].seq,
+                merge->serdes.in_tree_mstore_entry_arr[pos].da_id,
+                merge->serdes.in_tree_mstore_entry_arr[pos].merge_id,
+                merge->serdes.in_tree_mstore_entry_arr[pos].pos_in_merge_struct);
     }
     castle_mstore_iterator_destroy(iterator);
 
@@ -9553,7 +9512,8 @@ again:
      * to trees that are compacting, irrespective of their position in DA. */
     for(i=0; i<MAX_DA_LEVEL; i++)
     {
-        int last_merge_level_seen = -1;
+        struct castle_da_merge *last_merge_seen = NULL;
+
         list_for_each(l, &da->levels[i].trees)
         {
             struct castle_component_tree *ct;
@@ -9564,26 +9524,26 @@ again:
 
             if(ct->merge)
             {
+                struct castle_da_merge *merge = ct->merge;
+
                 /* to avoid adding an output ct more than once, just remember the previous merge
                    since for now it may be assumed that all cts in a merge will be adjacent.
                    TODO@tr make this more robust!                                                */
-                if(ct->merge->level == last_merge_level_seen)
+                if(merge == last_merge_seen)
                     continue;
 
                 /* under da->lock, partition keys won't advance */
-                if(da->levels[ct->merge->level].merge.redirection_partition.key)
+                if(merge->redirection_partition.key)
                 {
                     struct castle_btree_type *btree = castle_btree_type_get(RO_VLBA_TREE_TYPE);
-                    int ret = btree->key_compare(
-                            da->levels[ct->merge->level].merge.redirection_partition.key,
-                            c_bvec->key);
+                    int ret = btree->key_compare(merge->redirection_partition.key, c_bvec->key);
 
-                    BUG_ON(!da->levels[ct->merge->level].merge.queriable_out_tree);
+                    BUG_ON(!merge->queriable_out_tree);
                     if(ret>=0) /* partition key >= query key */
                     {
                         struct castle_component_tree *out_ct;
-                        out_ct = da->levels[ct->merge->level].merge.queriable_out_tree;
-                        last_merge_level_seen = ct->merge->level;
+                        out_ct = merge->queriable_out_tree;
+                        last_merge_seen = merge;
 
                         debug("%s::redirecting query to output tree %d (with bf %p) on da %d level %d.\n",
                                 __FUNCTION__, out_ct->seq, &(out_ct->bloom), da->id, ct->merge->level);
@@ -9606,7 +9566,7 @@ again:
     /* Get all trees that are compacting. */
     for(i=0; i<MAX_DA_LEVEL; i++)
     {
-        int last_merge_level_seen = -1;
+        struct castle_da_merge *last_merge_seen = NULL;
         list_for_each(l, &da->levels[i].trees)
         {
             struct castle_component_tree *ct;
@@ -9617,26 +9577,26 @@ again:
 
             if(ct->merge)
             {
+                struct castle_da_merge *merge = ct->merge;
+
                 /* to avoid adding an output ct more than once, just remember the previous merge
                    since for now it may be assumed that all cts in a merge will be adjacent.
                    TODO@tr make this more robust!                                                */
-                if(ct->merge->level == last_merge_level_seen)
+                if(ct->merge == last_merge_seen)
                     continue;
 
                 /* under da->lock, partition keys won't advance */
-                if(da->levels[ct->merge->level].merge.redirection_partition.key)
+                if(merge->redirection_partition.key)
                 {
                     struct castle_btree_type *btree = castle_btree_type_get(RO_VLBA_TREE_TYPE);
-                    int ret = btree->key_compare(
-                            da->levels[ct->merge->level].merge.redirection_partition.key,
-                            c_bvec->key);
+                    int ret = btree->key_compare(merge->redirection_partition.key, c_bvec->key);
 
-                    BUG_ON(!da->levels[ct->merge->level].merge.queriable_out_tree);
+                    BUG_ON(!merge->queriable_out_tree);
                     if(ret>=0) /* partition key >= query key */
                     {
-                        struct castle_component_tree *out_ct;
-                        out_ct = da->levels[ct->merge->level].merge.queriable_out_tree;
-                        last_merge_level_seen = ct->merge->level;
+                        struct castle_component_tree *out_ct = merge->queriable_out_tree;
+
+                        last_merge_seen = merge;
                         debug("%s::redirecting query to output tree %d on da %d level %d.\n",
                             __FUNCTION__, out_ct->seq, ct->merge->level);
                         ct = out_ct;
@@ -9652,7 +9612,7 @@ again:
                    (castle_btree_type_get(ct->btree_type)->magic != RO_VLBA_TREE_TYPE));
             j++;
 
-            if(last_merge_level_seen==0)
+            if(last_merge_seen)
                 break; /* assume only 1 big merge happening, and we redirected to the output tree */
         }
     }
