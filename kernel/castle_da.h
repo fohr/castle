@@ -9,6 +9,7 @@ struct castle_da_merge {
     c_merge_id_t                  id;
     struct list_head              hash_list;
     struct kobject                kobj;
+    c_thread_id_t                 thread_id;
 
     struct castle_double_array   *da;
     struct castle_btree_type     *out_btree;
@@ -215,14 +216,13 @@ void castle_da_threads_priority_set(int nice_value);
 
 struct castle_double_array * castle_da_get_ptr(c_da_t da_id);
 
-void castle_merge_thread_create         (c_thread_id_t *thread_id, int *ret);
-void castle_merge_thread_destroy        (c_thread_id_t thread_id, int *ret);
-void castle_merge_start                 (c_merge_cfg_t *merge_cfg, c_merge_id_t *merge_id, int *ret);
-void castle_merge_do_work               (c_merge_id_t   merge_id,
+int  castle_merge_thread_create         (c_thread_id_t *thread_id);
+int  castle_merge_thread_destroy        (c_thread_id_t thread_id);
+int  castle_merge_start                 (c_merge_cfg_t *merge_cfg, c_merge_id_t *merge_id, int level);
+int  castle_merge_do_work               (c_merge_id_t   merge_id,
                                          c_work_size_t  size,
-                                         c_work_id_t   *work_id,
-                                         int           *ret);
-void castle_merge_stop                  (c_merge_id_t merge_id, int *ret);
-void castle_merge_thread_attach         (c_merge_id_t merge_id, c_thread_id_t thread_id, int *ret);
+                                         c_work_id_t   *work_id);
+int  castle_merge_stop                  (c_merge_id_t merge_id);
+int  castle_merge_thread_attach         (c_merge_id_t merge_id, c_thread_id_t thread_id);
 
 #endif /* __CASTLE_DA_H__ */

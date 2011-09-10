@@ -92,6 +92,8 @@ int                             castle_rwct_checkpoint_frequency = 10;  /**< Num
 module_param(castle_rwct_checkpoint_frequency, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
 MODULE_PARM_DESC(castle_rwct_checkpoint_frequency, "Number checkpoints before RWCTs are promoted.");
 
+static int castle_golden_nugget = 0;
+
 static struct
 {
     int                     cnt;    /**< Size of cpus array.                        */
@@ -4780,7 +4782,8 @@ static tree_seq_t castle_da_merge_last_unit_complete(struct castle_double_array 
 
     out_tree->data_age = out_tree_data_age;
 
-    BUG_ON(out_tree->level != level + 1);
+    BUG_ON(!castle_golden_nugget && (out_tree->level != level + 1));
+    BUG_ON(castle_golden_nugget && (out_tree->level != 2));
 
     if (merge->nr_entries)
         castle_component_tree_add(merge->da, out_tree, head);
@@ -4870,7 +4873,7 @@ static int castle_da_merge_init(struct castle_da_merge *merge, void *unused)
            deserialising merge */
         BUG_ON(merge->serdes.des);
 
-        merge->out_tree = castle_ct_alloc(da, RO_VLBA_TREE_TYPE, level+1, ct_seq);
+        merge->out_tree = castle_ct_alloc(da, RO_VLBA_TREE_TYPE, (castle_golden_nugget)? 2: level+1, ct_seq);
         if(!merge->out_tree)
             goto error_out;
         merge->out_tree->internal_ext_free.ext_id = INVAL_EXT_ID;
@@ -4941,9 +4944,7 @@ static struct castle_da_merge* castle_da_merge_alloc(int nr_trees, int level,
         return NULL;
 
     merge->id                   = INVAL_MERGE_ID;
-#if 0
     merge->thread_id            = INVAL_THREAD_ID;
-#endif
     merge->da                   = da;
     merge->out_btree            = castle_btree_type_get(RO_VLBA_TREE_TYPE);
     merge->level                = level;
@@ -5850,7 +5851,8 @@ static void castle_da_merge_des_check(struct castle_da_merge *merge, struct cast
        the wrong state information was written, or it was written to the wrong place */
     BUG_ON(merge_mstore->da_id          != da->id);
     BUG_ON(merge_mstore->level          != level);
-    BUG_ON(merge_mstore->out_tree.level != level + 1);
+    BUG_ON(!castle_golden_nugget && (merge_mstore->out_tree.level != level + 1));
+    BUG_ON(castle_golden_nugget && (merge_mstore->out_tree.level != 2));
     BUG_ON(merge_mstore->btree_type     != castle_btree_type_get(RO_VLBA_TREE_TYPE)->magic);
 
     /* if seq numbers match up, everything else would be fine as well */
@@ -6091,6 +6093,9 @@ static int castle_da_merge_trigger(struct castle_double_array *da, int level)
         return 0;
 
     read_lock(&da->lock);
+
+    if (castle_golden_nugget && level != 1)
+        goto out;
 
     if (da->levels[level].nr_trees < 2)
         goto out;
@@ -6408,7 +6413,8 @@ static void castle_da_merge_serdes_out_tree_check(struct castle_dmserlist_entry 
     BUG_ON(!da);
     BUG_ON(merge_mstore->da_id          != da->id);
     BUG_ON(merge_mstore->level          != level);
-    BUG_ON(merge_mstore->out_tree.level != level + 1);
+    BUG_ON(!castle_golden_nugget && (merge_mstore->out_tree.level != level + 1));
+    BUG_ON(castle_golden_nugget && (merge_mstore->out_tree.level != 2));
     BUG_ON(merge_mstore->btree_type     != castle_btree_type_get(RO_VLBA_TREE_TYPE)->magic);
 
     debug("%s::sanity checking merge SERDES on da %d level %d.\n",
@@ -9625,47 +9631,56 @@ void castle_da_threads_priority_set(int nice_value)
 static int castle_merge_thread_start(void *_data)
 {
     struct castle_merge_thread *merge_thread = (struct castle_merge_thread *)_data;
-    merge_thread->running = 1;
+    struct castle_da_merge *merge;
 
     while(!kthread_should_stop())
-        msleep(1000);
+    {
+        /* Running should be set by the wakeup thread. */
+        BUG_ON(!merge_thread->running);
 
-    merge_thread->running = 0;
+        merge = castle_merges_hash_get(merge_thread->merge_id);
+        BUG_ON(!merge);
+
+        castle_da_merge_do(merge, merge_thread->cur_work_size);
+
+        merge_thread->running = 0;
+        set_current_state(TASK_INTERRUPTIBLE);
+        schedule();
+    }
 
     return 0;
 }
 
-void castle_merge_thread_create(c_thread_id_t *thread_id, int *ret)
+int castle_merge_thread_create(c_thread_id_t *thread_id)
 {
     struct castle_merge_thread *merge_thread = castle_malloc(sizeof(struct castle_merge_thread),
                                                              GFP_KERNEL);
-
     BUG_ON(!CASTLE_IN_TRANSACTION);
 
     *thread_id = INVAL_THREAD_ID;
-    *ret = -EINVAL;
 
     if (!merge_thread)
-        return;
+        return -EINVAL;
 
     merge_thread->thread = kthread_create(castle_merge_thread_start, merge_thread,
                                           "castle_mthread_%u", castle_merge_threads_count);
     if (IS_ERR(merge_thread->thread))
     {
-        castle_printk(LOG_INFO, "Failed to create merge thread\n");
+        castle_printk(LOG_USERINFO, "Failed to create merge thread\n");
         castle_kfree(merge_thread);
-        return;
+        return -ENOMEM;
     }
 
     merge_thread->merge_id  = INVAL_MERGE_ID;
     *thread_id = merge_thread->id = castle_merge_threads_count++;
-    *ret = 0;
 
     castle_merge_threads_hash_add(merge_thread);
 
     castle_sysfs_merge_thread_add(merge_thread);
 
     wake_up_process(merge_thread->thread);
+
+    return 0;
 }
 
 void _castle_merge_thread_destroy(c_thread_id_t thread_id, int *ret, int force)
@@ -9678,13 +9693,13 @@ void _castle_merge_thread_destroy(c_thread_id_t thread_id, int *ret, int force)
 
     if (!merge_thread)
     {
-        castle_printk(LOG_INFO, "Couldn't find merge thread: %u\n", thread_id);
+        castle_printk(LOG_USERINFO, "Couldn't find merge thread: %u\n", thread_id);
         return;
     }
 
     if (!force && !MERGE_ID_INVAL(merge_thread->merge_id))
     {
-        castle_printk(LOG_INFO, "Merge %u is still attached to thread %u\n",
+        castle_printk(LOG_USERINFO, "Merge %u is still attached to thread %u\n",
                                 merge_thread->merge_id, thread_id);
         return;
     }
@@ -9700,9 +9715,13 @@ void _castle_merge_thread_destroy(c_thread_id_t thread_id, int *ret, int force)
     *ret = 0;
 }
 
-void castle_merge_thread_destroy(c_thread_id_t thread_id, int *ret)
+int castle_merge_thread_destroy(c_thread_id_t thread_id)
 {
-    _castle_merge_thread_destroy(thread_id, ret, 0);
+    int ret = 0;
+
+    _castle_merge_thread_destroy(thread_id, &ret, 0);
+
+    return ret;
 }
 
 static int castle_merge_thread_stop(struct castle_merge_thread *thread, void *unused)
@@ -9716,7 +9735,7 @@ static int castle_merge_thread_stop(struct castle_merge_thread *thread, void *un
     return 0;
 }
 
-struct castle_component_tree *castle_da_next_array(struct castle_component_tree *ct)
+static struct castle_component_tree *castle_da_next_array(struct castle_component_tree *ct)
 {
     struct castle_double_array *da = castle_da_hash_get(ct->da);
     struct castle_component_tree *next_ct = NULL;
@@ -9759,21 +9778,21 @@ static int castle_da_merge_fill_trees(uint32_t nr_arrays, c_array_id_t *array_id
         struct castle_component_tree *ct = castle_ct_hash_get(array_ids[i]);
         if (!ct)
         {
-            castle_printk(LOG_INFO, "Couldn't find the array: 0x%x\n", array_ids[i]);
+            castle_printk(LOG_USERINFO, "Couldn't find the array: 0x%x\n", array_ids[i]);
             return -EINVAL;
         }
 
         /* Check if the tree is alrady marked for merge. */
         if (ct->merge)
         {
-            castle_printk(LOG_INFO, "Array is already merging: 0x%x\n", array_ids[i]);
+            castle_printk(LOG_USERINFO, "Array is already merging: 0x%x\n", array_ids[i]);
             return -EINVAL;
         }
 
         /* Check if the tree is dynamic. */
-        if (ct->dynamic)
+        if (castle_golden_nugget && ct->dynamic)
         {
-            castle_printk(LOG_INFO, "Array is dynamic. Can't start merg on: 0x%x\n",
+            castle_printk(LOG_USERINFO, "Array is dynamic. Can't start merg on: 0x%x\n",
                                     array_ids[i]);
             return -EINVAL;
         }
@@ -9787,9 +9806,9 @@ static int castle_da_merge_fill_trees(uint32_t nr_arrays, c_array_id_t *array_id
         if (i != 0)
         {
             /* Check if the tree is contiguous to the previous one or not. */
-            if (castle_da_next_array(ct) != in_trees[i-1])
+            if (castle_da_next_array(in_trees[i-1]) != ct)
             {
-                castle_printk(LOG_INFO, "Array 0x%x is not following 0x%x\n",
+                castle_printk(LOG_USERINFO, "Array 0x%x is not following 0x%x\n",
                                         array_ids[i], array_ids[i-1]);
                 return -EINVAL;
             }
@@ -9798,13 +9817,13 @@ static int castle_da_merge_fill_trees(uint32_t nr_arrays, c_array_id_t *array_id
              * in_trees don't match. */
             if (in_trees[i-1]->btree_type != ct->btree_type)
             {
-                castle_printk(LOG_INFO, "Arrays are not of same type\n");
+                castle_printk(LOG_USERINFO, "Arrays are not of same type\n");
                 return -EINVAL;
             }
 
             if (ct->level != in_trees[i-1]->level)
             {
-                castle_printk(LOG_INFO, "Don't belong to same level\n");
+                castle_printk(LOG_USERINFO, "Don't belong to same level\n");
                 return -EINVAL;
             }
         }
@@ -9816,20 +9835,21 @@ static int castle_da_merge_fill_trees(uint32_t nr_arrays, c_array_id_t *array_id
     return 0;
 }
 
-void castle_merge_start(c_merge_cfg_t *merge_cfg, c_merge_id_t *merge_id, int *ret)
+int castle_merge_start(c_merge_cfg_t *merge_cfg, c_merge_id_t *merge_id, int level)
 {
     struct castle_component_tree **in_trees = NULL;
     struct castle_double_array *da;
     struct castle_da_merge *merge = NULL;
+    int ret = 0;
 
-    *ret = 0;
+    *merge_id = INVAL_MERGE_ID;
 
     debug_gn("Merge has been called on %u arrays\n", merge_cfg->nr_arrays);
 
     if (merge_cfg->nr_arrays != 2)
     {
-        castle_printk(LOG_INFO, "Merge can't be done on %u arrays\n", merge_cfg->nr_arrays);
-        *ret = -EINVAL;
+        castle_printk(LOG_USERINFO, "Merge can't be done on %u arrays\n", merge_cfg->nr_arrays);
+        ret = -EINVAL;
         goto err_out;
     }
 
@@ -9837,45 +9857,113 @@ void castle_merge_start(c_merge_cfg_t *merge_cfg, c_merge_id_t *merge_id, int *r
     in_trees = castle_malloc(sizeof(void *) * merge_cfg->nr_arrays, GFP_KERNEL);
     if (!in_trees)
     {
-        *ret = -ENOMEM;
+        ret = -ENOMEM;
         goto err_out;
     }
 
     /* Get array objects from IDs. */
-    *ret = castle_da_merge_fill_trees(merge_cfg->nr_arrays, merge_cfg->arrays, in_trees);
-    if (*ret < 0)
+    ret = castle_da_merge_fill_trees(merge_cfg->nr_arrays, merge_cfg->arrays, in_trees);
+    if (ret < 0)
         goto err_out;
 
     /* Get doubling array. */
     da = castle_da_hash_get(in_trees[0]->da);
     if (!da)
     {
-        castle_printk(LOG_INFO, "Couldn't find corresposing version tree.\n");
-        *ret = -EINVAL;
+        castle_printk(LOG_USERINFO, "Couldn't find corresposing version tree.\n");
+        ret = -EINVAL;
         goto err_out;
     }
 
-    return;
+    /* Allocate and init merge structure. */
+    merge = castle_da_merge_alloc(merge_cfg->nr_arrays, level, da, INVAL_MERGE_ID, in_trees);
+    if (!merge)
+    {
+        castle_printk(LOG_USERINFO, "Couldn't allocate merge structure.\n");
+        ret = -ENOMEM;
+        goto err_out;
+    }
+
+    ret = castle_da_merge_init(merge, NULL);
+    if (ret < 0)
+    {
+        castle_printk(LOG_USERINFO, "Failed to init merge.\n");
+
+        /* merge_init() would deallocate on failure. */
+        merge = NULL;
+        goto err_out;
+    }
+
+    *merge_id = merge->id;
+
+    return 0;
 
 err_out:
-    BUG_ON(*ret == 0);
 
+    BUG_ON(ret == 0);
     BUG_ON(merge);
+
     if (in_trees)   castle_kfree(in_trees);
+
+    return ret;
 }
 
-void castle_merge_do_work(c_merge_id_t merge_id, c_work_size_t size, c_work_id_t *work_id,
-                          int *ret)
+int castle_merge_do_work(c_merge_id_t merge_id, c_work_size_t work_size, c_work_id_t *work_id)
 {
-    *ret = 0;
+    struct castle_da_merge *merge = castle_merges_hash_get(merge_id);
+    struct castle_merge_thread *merge_thread = NULL;
+    int ret = 0;
+
+    *work_id = INVAL_WORK_ID;
+
+    if (!merge)
+    {
+        castle_printk(LOG_WARN, "Failed to an active merge with id: %u\n", merge_id);
+        ret = -EINVAL;
+        goto err_out;
+    }
+
+    if (THREAD_ID_INVAL(merge->thread_id))
+    {
+        castle_printk(LOG_WARN, "Can't do merge as it is not attached to any thread: %u\n",
+                      merge_id);
+        ret = -EINVAL;
+        goto err_out;
+    }
+
+    merge_thread = castle_merge_threads_hash_get(merge->thread_id);
+    BUG_ON(!merge_thread);
+    BUG_ON(merge_thread->merge_id != merge_id);
+
+    if (merge_thread->running)
+    {
+        castle_printk(LOG_WARN, "Can't do merge as it is already doing work: %u\n", merge_id);
+        ret = -EBUSY;
+        goto err_out;
+    }
+
+    merge_thread->cur_work_size = work_size;
+    merge_thread->running       = 1;
+    wmb();
+
+    wake_up_process(merge_thread->thread);
+
+    *work_id = merge_id;
+
+    return 0;
+
+err_out:
+    BUG_ON(ret == 0);
+
+    return ret;
 }
 
-void castle_merge_stop(c_merge_id_t merge_id, int *ret)
+int castle_merge_stop(c_merge_id_t merge_id)
 {
-    *ret = 0;
+    return 0;
 }
 
-void castle_merge_thread_attach(c_merge_id_t merge_id, c_thread_id_t thread_id, int *ret)
+int castle_merge_thread_attach(c_merge_id_t merge_id, c_thread_id_t thread_id)
 {
-    *ret = 0;
+    return 0;
 }

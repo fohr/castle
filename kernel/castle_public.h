@@ -186,6 +186,8 @@ typedef uint64_t c_work_size_t;
 #define MERGE_ID_INVAL(_m)  ((_m) == INVAL_MERGE_ID)
 #define INVAL_THREAD_ID     ((c_thread_id_t)-1)
 #define THREAD_ID_INVAL(_t) ((_t) == INVAL_THREAD_ID)
+#define INVAL_WORK_ID       ((c_work_id_t)-1)
+#define WORK_ID_INVAL(_t)   ((_t) == INVAL_WORK_ID)
 
 typedef enum {
     DEFAULT_RDA,
