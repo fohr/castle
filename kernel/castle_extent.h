@@ -30,8 +30,7 @@ typedef struct castle_extent {
     uint32_t            k_factor;       /* K factor in K-RDA                            */
     c_ext_pos_t         maps_cep;       /* Offset of chunk mapping in logical extent    */
     struct list_head    hash_list;
-    struct list_head    rebuild_list;
-    struct list_head    rebuild_done_list;
+    struct list_head    process_list;   /* List of extents for rebuild, rebalance etc.  */
     struct list_head    verify_list;    /* Used for testing.                            */
     c_ext_mask_id_t     rebuild_mask_id;/* Stores reference taken by rebuild.           */
     /* TODO: Move rebuild data to a private state structure. */
@@ -114,7 +113,7 @@ c_chk_cnt_t         castle_extent_size_get                  (c_ext_id_t     ext_
 uint32_t            castle_extent_map_get                   (c_ext_id_t     ext_id,
                                                              c_chk_t        offset,
                                                              c_disk_chk_t  *chk_maps,
-                                                             int            rw);
+                                                             int            rw, c_byte_off_t boff);
 #ifdef CASTLE_PERF_DEBUG
 void                castle_extent_not_up2date_inc           (c_ext_id_t         ext_id);
 void                castle_extent_up2date_inc               (c_ext_id_t         ext_id);
@@ -140,8 +139,8 @@ int                 castle_extents_writeback                (void);
 int                 castle_extents_restore                  (void);
 int                 castle_extents_init                     (void);
 void                castle_extents_fini                     (void);
-int                 castle_extents_rebuild_init             (void);
-void                castle_extents_rebuild_fini             (void);
+int                 castle_extents_process_init             (void);
+void                castle_extents_process_fini             (void);
 void                castle_extents_rebuild_wake             (void);
 void                castle_extents_rebuild_startup_check    (int need_rebuild);
 int                 castle_extents_slave_scan               (uint32_t uuid);
@@ -150,5 +149,12 @@ signed int          castle_extent_link_count_get            (c_ext_id_t);
 c_ext_type_t        castle_extent_type_get                  (c_ext_id_t);
 void                castle_extents_remap_writeback_setstate  (void);
 void                castle_extents_remap_writeback           (void);
+void                castle_extents_process_syncpoint         (void);
+
+extern atomic_t             wi_in_flight;
+extern atomic_t             castle_extents_presyncvar;
+extern atomic_t             castle_extents_postsyncvar;
+extern wait_queue_head_t    process_syncpoint_waitq;
+extern int                  castle_checkpoint_syncing;
 
 #endif /* __CASTLE_EXTENT_H__ */

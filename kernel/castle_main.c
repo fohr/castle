@@ -81,6 +81,9 @@ uint32_t                     castle_fault_arg = 0;
 module_param(castle_checkpoint_period, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
 MODULE_PARM_DESC(castle_checkpoint_period, "checkpoint_period,");
 
+module_param(castle_extents_process_ratelimit, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
+MODULE_PARM_DESC(castle_extents_process_ratelimit, "extproc_ratelimit,");
+
 static DECLARE_WAIT_QUEUE_HEAD(castle_detach_waitq);
 
 
@@ -472,7 +475,7 @@ static struct castle_slave *castle_slave_ghost_add(uint32_t uuid)
     list_add_rcu(&slave->list, &castle_slaves.slaves);
 
     if (castle_sysfs_slave_add(slave) != 0)
-        castle_printk(LOG_DEVEL, "Could not add slave to sysfs.\n");
+        debug("Could not add slave 0x%x to sysfs.\n", uuid);
 
     return slave;
 }
@@ -1486,7 +1489,6 @@ struct castle_slave* castle_claim(uint32_t new_dev)
          * This is the initial part of 'disk claim after init'.
          * Set up the relevant superblocks and extents.
          */
-        castle_printk(LOG_DEVEL, "Claiming disk 0x%x after fs inited\n", cs->uuid);
 
         /* Indicate that slave cannot yet be used for allocations. */
         set_bit(CASTLE_SLAVE_CLAIMING_BIT, &cs->flags);
@@ -2437,7 +2439,7 @@ static int __init castle_init(void)
     if((ret = castle_slaves_init()))            goto err_out6;
     if((ret = castle_extents_init()))           goto err_out7;
     if((ret = castle_resubmit_init()))          goto err_out8;
-    if((ret = castle_extents_rebuild_init()))   goto err_out9;
+    if((ret = castle_extents_process_init()))   goto err_out9;
     if((ret = castle_cache_init()))             goto err_out10;
     if((ret = castle_versions_init()))          goto err_out11;
     if((ret = castle_btree_init()))             goto err_out12;
@@ -2472,7 +2474,7 @@ err_out11:
     BUG_ON(!list_empty(&castle_slaves.slaves));
     castle_cache_fini();
 err_out10:
-    castle_extents_rebuild_fini();
+    castle_extents_process_fini();
 err_out9:
     castle_resubmit_fini();
 err_out8:
@@ -2509,7 +2511,7 @@ static void __exit castle_exit(void)
     FAULT(FINI_FAULT);
     /* Now, make sure no more IO can be made, internally or externally generated */
     castle_double_array_merges_fini();  /* Completes all internal i/o - merges. */
-    castle_extents_rebuild_fini();
+    castle_extents_process_fini();
     castle_checkpoint_fini();
     /* Note: Changes from here are not persistent. */
     castle_attachments_free();

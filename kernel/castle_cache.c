@@ -59,6 +59,7 @@ enum c2b_state_bits {
     C2B_remap,              /**< Block is for a remap.                                            */
     C2B_in_flight,          /**< Block is currently in-flight (un-set in c2b_multi_io_end()).     */
     C2B_barrier,            /**< Block in write IO, and should be used as a barrier write.        */
+    C2B_eio,                /**< Block failed to write to slave(s)                                */
 };
 
 #define INIT_C2B_BITS (0)
@@ -102,6 +103,7 @@ C2B_FNS(no_resubmit, no_resubmit)
 C2B_FNS(remap, remap)
 C2B_FNS(in_flight, in_flight)
 C2B_FNS(barrier, barrier)
+C2B_FNS(eio, eio)
 
 /* c2p encapsulates multiple memory pages (in order to reduce overheads).
    NOTE: In order for this to work, c2bs must necessarily be allocated in
@@ -1646,7 +1648,6 @@ typedef struct castle_io_array {
  * @param idx       Returns the index in the chunk for the slave to use
  *
  * @return          ENOENT if no slave found, EXIT_SUCCESS if found
- *                  EXIT_SUCCESS if a slave was found
  */
 static int c_io_next_slave_get(c2_block_t *c2b, c_disk_chk_t *chunks, int k_factor, int *idx)
 {
@@ -1704,6 +1705,16 @@ static int c_io_next_slave_get(c2_block_t *c2b, c_disk_chk_t *chunks, int k_fact
 
 /**
  * Dispatches k copies of the I/O.
+ *
+ * @param rw        Reading or writing
+ * @param c2b       The c2b we are performing I/O for
+ * @param chunks    The disk chunks we are reading/writing from/to
+ * @param k_factor  The number of disk chunks we are reading/writing from/to
+ * @param io_array  The array of pages that we will actually do I/O on
+ * @param ext_id    The extent we are performing I/O for
+ *
+ * @return          EAGAIN if none of the slaves in the disk chunks were found to be live
+ *                  EXIT_SUCCESS if I/O was successfully submitted
  *
  * @see submit_c2b_io()
  */
@@ -1809,6 +1820,7 @@ retry:
      */
     if (!found && !SUPER_EXTENT(ext_id))
     {
+        set_c2b_eio(c2b);
         debug("Could not submit I/O. Only oos slaves specified in disk chunk\n");
         return -EAGAIN;
     }
@@ -1860,6 +1872,8 @@ static inline int c_io_array_page_add(c_io_array_t *array,
     return EXIT_SUCCESS;
 }
 
+extern atomic_t wi_in_flight;
+
 /**
  * Callback for synchronous c2b I/O completion.
  *
@@ -1874,8 +1888,10 @@ static void castle_cache_sync_io_end(c2_block_t *c2b)
     complete(completion);
 }
 
+extern int rebuild_write_chunks;
+
 /**
- * Generates synchronous write I/O for disk block(s) associated with a remap c2b.
+ * Generates asynchronous write I/O for disk block(s) associated with a remap c2b.
  * A remap c2b maps just one logical chunk.
  *
  * Iterates over passed c2b's c2ps
@@ -1903,7 +1919,6 @@ int submit_c2b_remap_rda(c2_block_t *c2b, c_disk_chk_t *chunks, int nr_remaps)
     c_ext_id_t          ext_id = c2b->cep.ext_id;
     uint32_t            k_factor = castle_extent_kfactor_get(ext_id);
     int                 found_dirty_page = 0;
-    struct completion   completion;
 
     /* This can only be called with chunks populated, and nr_remaps > 0 */
     BUG_ON(!chunks || !nr_remaps);
@@ -1918,17 +1933,10 @@ int submit_c2b_remap_rda(c2_block_t *c2b, c_disk_chk_t *chunks, int nr_remaps)
 
     /* TODO: Add a check to make sure cep is within live extent range. */
 
-    /* Set in-flight bit on the block. */
-    set_c2b_in_flight(c2b);
-
     /* c2b->remaining is effectively a reference count. Get one ref before we start. */
     BUG_ON(atomic_read(&c2b->remaining) != 0);
     atomic_inc(&c2b->remaining);
     c_io_array_init(io_array);
-
-    c2b->end_io = castle_cache_sync_io_end;
-    c2b->private = &completion;
-    init_completion(&completion);
 
     found_dirty_page = 0;
     /* Everything initialised, go through each page in the c2p. */
@@ -1986,17 +1994,16 @@ int submit_c2b_remap_rda(c2_block_t *c2b, c_disk_chk_t *chunks, int nr_remaps)
             goto out;
         }
     }
+
+    if (c2b_remap(c2b))
+        rebuild_write_chunks+=nr_remaps;
+
     /* Drop the 1 ref. */
     c2b_remaining_io_sub(WRITE, 1, c2b);
 
 out:
-    wait_for_completion(&completion);
-
     kmem_cache_free(castle_io_array_cache, io_array);
-    if (ret)
-        return ret;
-    else
-        return(c2b_dirty(c2b));
+    return ret;
 }
 
 /**
@@ -2011,17 +2018,18 @@ out:
  * @see c_io_array_page_add()
  * @see c_io_array_submit()
  */
-static int submit_c2b_rda(int rw, c2_block_t *c2b)
+int submit_c2b_rda(int rw, c2_block_t *c2b)
 {
     c2_page_t    *c2p;
     c_io_array_t *io_array;
     struct page  *page;
-    int           skip_c2p, ret = 0;
+    int           skip_c2p, ret = 0, iochunks = 0;
     c_ext_pos_t   cur_cep;
     c_chk_t       last_chk, cur_chk;
     c_ext_id_t    ext_id = c2b->cep.ext_id;
     uint32_t      k_factor = castle_extent_kfactor_get(ext_id);
-    c_disk_chk_t  chunks[k_factor];
+    c_disk_chk_t  chunks[k_factor*2]; /* May need to handle I/O to shadow map chunks as well. */
+    int           chunk;
 
     debug("%s::Submitting c2b "cep_fmt_str", for %s\n",
             __FUNCTION__, __cep2str(c2b->cep), (rw == READ) ? "read" : "write");
@@ -2066,7 +2074,7 @@ static int submit_c2b_rda(int rw, c2_block_t *c2b)
                match with the logical chunk stored in io_array. */
             BUG_ON(io_array->chunk != last_chk);
             /* Submit the array. */
-            ret = c_io_array_submit(rw, c2b, chunks, k_factor, io_array, ext_id);
+            ret = c_io_array_submit(rw, c2b, chunks, iochunks, io_array, ext_id);
             if (ret)
             {
                 /*
@@ -2085,21 +2093,31 @@ static int submit_c2b_rda(int rw, c2_block_t *c2b)
         /* Update chunk map when we move to a new chunk. */
         if(cur_chk != last_chk)
         {
-            int ret;
             debug("Asking extent manager for "cep_fmt_str_nl,
                     cep2str(cur_cep));
-            ret = castle_extent_map_get(cur_cep.ext_id,
+            iochunks = castle_extent_map_get(cur_cep.ext_id,
                                         CHUNK(cur_cep.offset),
                                         chunks,
-                                        rw);
-            /* Return value is supposed to be k_factor, unless the
-               extent has been deleted. */
-            BUG_ON((ret != 0) && (ret != k_factor));
-            if(ret == 0)
+                                        rw, cur_cep.offset);
+            BUG_ON((iochunks != 0) && (iochunks > k_factor*2));
+            if (iochunks == 0)
             {
                 /* Complete the IO by dropping our reference, return early. */
                 c2b_remaining_io_sub(rw, 1, c2b);
                 goto out;
+            }
+
+            /*
+             * Keep track of remap c2b IOs (we're only handling writes).
+             * Any chunks for non-oos slaves will (probably) result into a chunk write.
+             */
+            if (c2b_remap(c2b))
+            {
+                for (chunk=0; chunk<iochunks; chunk++)
+                {
+                    if (!test_bit(CASTLE_SLAVE_OOS_BIT, &chunks[chunk].slave_id))
+                    rebuild_write_chunks++;
+                }
             }
 
             debug("chunks[0]="disk_chk_fmt_nl, disk_chk2str(chunks[0]));
@@ -2114,7 +2132,7 @@ next_page:
     {
         /* Chunks array is always initialised for last_chk. */
         BUG_ON(io_array->chunk != last_chk);
-        ret = c_io_array_submit(rw, c2b, chunks, k_factor, io_array, ext_id);
+        ret = c_io_array_submit(rw, c2b, chunks, iochunks, io_array, ext_id);
         if (ret)
         {
             /*
@@ -6506,8 +6524,6 @@ static int castle_periodic_checkpoint(void *unused)
             goto out;
         }
 
-        castle_extents_remap_writeback_setstate();
-
         CASTLE_TRANSACTION_BEGIN;
 
         fs_sb = castle_fs_superblocks_get();
@@ -6521,9 +6537,16 @@ static int castle_periodic_checkpoint(void *unused)
         castle_extents_sb->current_rebuild_seqno = atomic_read(&current_rebuild_seqno);
         castle_extent_transaction_end();
 
+        if (castle_checkpoint_syncing)
+        {
+            BUG_ON(atomic_read(&castle_extents_presyncvar) == 1);
+            atomic_inc(&castle_extents_presyncvar);
+            wake_up(&process_syncpoint_waitq);
+            wait_event_interruptible(process_syncpoint_waitq, atomic_read(&castle_extents_presyncvar) == 0);
+        }
+
         if (castle_mstores_writeback(version, exit_loop))
         {
-            castle_printk(LOG_WARN, "Mstore writeback failed\n");
             castle_trace_cache(TRACE_END, TRACE_CACHE_CHECKPOINT_ID, 0, 0);
             ret = -2;
             goto out;
@@ -6552,6 +6575,12 @@ static int castle_periodic_checkpoint(void *unused)
             goto out;
         }
 
+        if (castle_checkpoint_syncing)
+        {
+            BUG_ON(atomic_read(&castle_extents_postsyncvar) == 1);
+            atomic_inc(&castle_extents_postsyncvar);
+        }
+
         /* Mark previous on-disk checkpoint as invalid. */
         if (castle_slaves_superblock_invalidate())
         {
@@ -6560,8 +6589,6 @@ static int castle_periodic_checkpoint(void *unused)
         }
 
         castle_checkpoint_version_inc();
-
-        castle_extents_remap_writeback();
 
         castle_printk(LOG_DEVEL, "***** Completed checkpoint of version: %u *****\n", version);
         castle_trace_cache(TRACE_END, TRACE_CACHE_CHECKPOINT_ID, 0, 0);
@@ -6745,4 +6772,23 @@ void castle_cache_fini(void)
     if(castle_cache_page_hash_locks) castle_free(castle_cache_page_hash_locks);
     if(castle_cache_blks)            castle_free(castle_cache_blks);
     if(castle_cache_pgs)             castle_free(castle_cache_pgs);
+}
+
+/*
+ * Determine if a c2b has any clean pages.
+ */
+int c2b_has_clean_pages(c2_block_t *c2b)
+{
+    struct page         *page;
+    c2_page_t           *c2p;
+    c_ext_pos_t         cur_cep;
+
+    c2b_for_each_page_start(page, c2p, cur_cep, c2b)
+    {
+        /* If any page is clean ... */
+        if (!c2p_dirty(c2p))
+            return 1;
+    }
+    c2b_for_each_page_end(page, c2p, cur_cep, c2b);
+    return 0;
 }

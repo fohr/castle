@@ -32,6 +32,7 @@ typedef struct castle_cache_block {
     atomic_t                   lock_cnt;
     c2b_end_io_t               end_io;          /**< IO CB handler routine*/
     void                      *private;         /**< Can only be used if c2b is locked            */
+    struct work_struct         work;
 #ifdef CASTLE_DEBUG
     char                      *file;
     int                        line;
@@ -142,6 +143,9 @@ void clear_c2b_no_resubmit  (c2_block_t *c2b);
 int  c2b_remap              (c2_block_t *c2b);
 void set_c2b_remap          (c2_block_t *c2b);
 void clear_c2b_remap        (c2_block_t *c2b);
+void set_c2b_in_flight      (c2_block_t *c2b);
+void set_c2b_eio            (c2_block_t *c2b);
+int  c2b_eio                (c2_block_t *c2b);
 void castle_cache_extent_dirtytree_remove(c_ext_dirtytree_t *dirtytree);
 
 /**********************************************************************************************
@@ -217,10 +221,12 @@ void castle_cache_prefetches_wait(void);
 int         submit_c2b                (int rw, c2_block_t *c2b);
 int         submit_c2b_sync           (int rw, c2_block_t *c2b);
 int         submit_c2b_sync_barrier   (int rw, c2_block_t *c2b);
+int         submit_c2b_rda            (int rw, c2_block_t *c2b);
 int         submit_c2b_remap_rda      (c2_block_t *c2b, c_disk_chk_t *remap_chunks, int nr_remaps);
 int         submit_direct_io          (int rw, struct block_device *bdev, sector_t sector,
                                        struct page **iopages, int nr_pages);
 
+int         c2b_has_clean_pages       (c2_block_t *c2b);
 
 #define     castle_cache_page_block_get(_cep) \
             castle_cache_block_get    (_cep, 1)

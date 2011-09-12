@@ -2177,4 +2177,7 @@ struct castle_merge_thread {
 };
 
 extern uint32_t castle_merge_threads_count;
+
+extern int castle_extents_process_ratelimit;
+
 #endif /* __CASTLE_H__ */

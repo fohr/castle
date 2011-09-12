@@ -16,6 +16,7 @@
 #include "castle_da.h"
 #include "castle_rebuild.h"
 #include "castle_events.h"
+#include "castle_freespace.h"
 
 /* Extent manager - Every disk reserves few chunks in the begining of the disk to
  * store meta data. Meta data for freespace management (for each disk) would be
@@ -207,14 +208,26 @@ c_ext_t sup_ext = {
 
 uint8_t extent_init_done = 0;
 
-static struct list_head     rebuild_list;
-static struct list_head     rebuild_done_list;
-struct mutex                rebuild_done_list_lock;
-static struct list_head     verify_list; /* Used for testing. */
-static wait_queue_head_t    rebuild_wq;
-static wait_queue_head_t    rebuild_done_wq;
-struct task_struct   *rebuild_thread;
-static LIST_HEAD(castle_lfs_victim_list);
+static LIST_HEAD            (castle_lfs_victim_list);
+
+/* Extent processing (rebuild, rebalance) definitions.*/
+struct workqueue_struct     *castle_extproc_workq;  /* Used to queue async I/O */
+static wait_queue_head_t    process_waitq;          /* Controls activity of processing thread. */
+struct task_struct          *extproc_thread;
+static struct list_head     extent_list;            /* Extents to be processed. */
+static struct list_head     processed_list;         /* Extent ranges that have had data processed. */
+static struct list_head     writeback_list;         /* Extent ranges that can have maps written back. */
+
+static struct list_head     verify_list;            /* Used for testing. */
+
+#define IO_SLEEP_TIME 100 // In microseconds.
+
+/* Used for sync with checkpoint thread. */
+wait_queue_head_t           process_syncpoint_waitq;
+atomic_t                    castle_extents_presyncvar  = ATOMIC_INIT(0);
+atomic_t                    castle_extents_postsyncvar = ATOMIC_INIT(0);
+
+static int                  rebuild_required(void);
 
 /*
  * A difference between current_rebuild_seqno and rebuild_to_seqno indicates that
@@ -223,16 +236,19 @@ static LIST_HEAD(castle_lfs_victim_list);
  * restarted when it finishes it's current run to pick up and remap any extents that
  * have already been remapped to the (old) current_rebuild_seqno.
  */
-atomic_t                    current_rebuild_seqno;/* The latest rebuild sequence number */
+atomic_t                    current_rebuild_seqno;/* The current sequence number */
 static int                  rebuild_to_seqno;     /* The sequence number being rebuilt to */
 
+/* Set if current_rebuild_seqno changes during any extent allocation */
 static int                  castle_extents_rescan_required = 0;
 
+/* Persistent (via mstore) count of chunks remapped during rebuild run. */
 long                        castle_extents_chunks_remapped = 0;
 
-static atomic_t             castle_extents_dead_count = ATOMIC(0);
+static int submit_async_remap_io(c_ext_t *ext, int chunkno, c_disk_chk_t *remap_chunks,
+                                 int remap_idx);
 
-uint32_t castle_rebuild_fs_version = 0;
+static atomic_t             castle_extents_dead_count = ATOMIC(0);
 
 struct task_struct         *extents_gc_thread;
 
@@ -1862,7 +1878,6 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t     rda_type,
 
     /* The rebuild sequence number that this extent starts off at */
     ext->curr_rebuild_seqno = atomic_read(&current_rebuild_seqno);
-    ext->rebuild_done_list.next = NULL;
     ext->remap_seqno = 0;
 
     /* Block aligned chunk maps for each extent. */
@@ -1916,7 +1931,7 @@ alloc_done:
     if (ext->curr_rebuild_seqno != atomic_read(&current_rebuild_seqno))
     {
         castle_extents_rescan_required = 1;
-        wake_up(&rebuild_wq);
+        wake_up(&process_waitq);
     }
 
     castle_extent_print(ext, NULL);
@@ -2072,7 +2087,8 @@ static void castle_extent_resource_release(void *data)
         c_part_schk_t *schk = list_entry(pos, c_part_schk_t, list);
         struct castle_slave *cs = castle_slave_find_by_id(schk->slave_id);
 
-        if (test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags))
+        if (test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags) ||
+            test_bit(CASTLE_SLAVE_EVACUATE_BIT, &cs->flags))
         {
             /* Delete from list. */
             list_del(pos);
@@ -2298,10 +2314,11 @@ static void __castle_extent_map_get(c_ext_t *ext, c_chk_t chk_idx, c_disk_chk_t 
 uint32_t castle_extent_map_get(c_ext_id_t     ext_id,
                                c_chk_t        offset,
                                c_disk_chk_t  *chk_map,
-                               int            rw)
+                               int            rw, c_byte_off_t boff)
 {
     c_ext_t *ext = castle_extents_hash_get(ext_id);
-    uint32_t ret;
+    int i, j;
+    uint32_t idx = ext->k_factor;
 
     if(ext == NULL)
         return 0;
@@ -2328,7 +2345,31 @@ uint32_t castle_extent_map_get(c_ext_id_t     ext_id,
         spin_lock(&ext->shadow_map_lock);
         if (ext->use_shadow_map)
         {
-            memcpy(chk_map, &ext->shadow_map[offset*ext->k_factor], ext->k_factor * sizeof(c_disk_chk_t));
+            /* Load the first half of the chk_map with the 'on-disk' map for this logical chunk. */
+            __castle_extent_map_get(ext, offset, chk_map);
+
+            /*
+             * Now look to see if there are any other disk chunks in the shadow map that are *not*
+             * already present in the chk_map. Any we find must be added. We only need to look at
+             * slave_id's, because these cannot be duplicated across the maps. This needs to be done
+             * because we need to maintain data consistency on evacuating slaves, and these are not
+             * present in the shadow map.
+             */
+            for (i=0; i<ext->k_factor; i++)
+            {
+                int chunk_already_mapped = 0;
+                for (j=0; j<ext->k_factor; j++)
+                {
+                    if (chk_map[j].slave_id == ext->shadow_map[offset*ext->k_factor+i].slave_id)
+                    {
+                        chunk_already_mapped = 1;
+                        break;
+                    }
+                }
+                if (!chunk_already_mapped)
+                    memcpy(chk_map+idx++, &ext->shadow_map[offset*ext->k_factor+i],
+                           sizeof(c_disk_chk_t));
+            }
             spin_unlock(&ext->shadow_map_lock);
             goto map_done;
         }
@@ -2337,9 +2378,8 @@ uint32_t castle_extent_map_get(c_ext_id_t     ext_id,
     __castle_extent_map_get(ext, offset, chk_map);
 
 map_done:
-    ret = ext->k_factor;
-
-    return ret;
+    /* Return the number of chunks in the map (may be > k_factor for remap I/O) */
+    return idx;
 }
 
 c_ext_id_t castle_extent_sup_ext_init(struct castle_slave *cs)
@@ -3096,19 +3136,18 @@ void castle_extent_rebuild_ext_put(c_ext_t *ext, int is_locked)
 }
 
 /*
- * Add an extent to the rebuild list if it is potentially remappable.
+ * Add an extent to the extent processing list.
  *
  * @param ext       The extent to check and add to the rebuild list.
  *
  * @return 0:       Always return 0 so that castle_extents_hash_iterate continues.
  */
-static int castle_extent_rebuild_list_add(c_ext_t *ext, void *unused)
+static int rebuild_list_add(c_ext_t *ext, void *unused)
 {
     /*
      * We are not handling logical extents. The extent is not already at current_rebuild_seqno. The extent
      * is not marked for deletion (it is a live extent).
      */
-
     if ((!SUPER_EXTENT(ext->ext_id) && !(ext->ext_id == MICRO_EXT_ID)) &&
         (ext->curr_rebuild_seqno < atomic_read(&current_rebuild_seqno)))
     {
@@ -3122,13 +3161,13 @@ static int castle_extent_rebuild_list_add(c_ext_t *ext, void *unused)
 
         debug("Adding extent %llu to rebuild list for extent seqno %u, global seqno %u\n",
                ext->ext_id, ext->curr_rebuild_seqno, atomic_read(&current_rebuild_seqno));
-        list_add_tail(&ext->rebuild_list, &rebuild_list);
+        list_add_tail(&ext->process_list, &extent_list);
     }
     return 0;
 }
 
 /*
- * This structure keeps track of the current 'remapping state' - which slaves can be used for
+ * These structures keeps track of the current 'remapping state' - which slaves can be used for
  * remapping, and for each of those slaves a set of chunks to use for remapping, and an indication
  * of which chunk to use next.
  */
@@ -3139,40 +3178,78 @@ typedef struct live_slave {
     uint32_t        flags;                  /* State flags for slave. */
 } live_slave_t;
 
-static struct remap_state {
-    int             nr_live_slaves;              /* Number of slaves available for remapping. */
+static struct process_state {
+    int             nr_live_slaves;              /* Number of slaves available for processing. */
     live_slave_t    *live_slaves[MAX_NR_SLAVES];
-} remap_state;
+} process_state;
+
+/* This structure is used to maintain information about each individual remap chunk I/O. */
+typedef struct process_work_item {
+    int                 rw;             /* Read, Write, Remap, Cleanup. */
+    c2_block_t          *c2b;
+    c_ext_t             *ext;
+    c_disk_chk_t        *remap_chunks;  /* The chunk(s) that need to be remapped */
+    int                 remap_idx;      /* The number of chunk(s) to be remapped */
+    struct list_head    free_list;      /* Free list of unused work items. */
+    struct list_head    error_list;     /* List of chunks that have had I/O errors */
+    struct work_struct  work;           /* Used for queueing work */
+    int                 chunkno;        /* The chunk offset in the extent */
+    uint32_t            has_cleanpages; /* Set if this chunk has any freepages */
+} process_work_item_t;
+
+/*
+ * The rw field uses the standard READ and WRITE (0 and 1) states, overloaded with REMAP and
+ * CLEANUP. The states and sequence is is follows:
+ *
+ * READ: Only if the remap c2b is not uptodate.
+ * WRITE: Standard 'submit_c2b_rda' to pre-write-out c2b to non-remap slaves if c2b has dirty pages.
+ * REMAP: submit_c2b_remap_rda to write out c2b to remap slave(s).
+ * CLEANUP: post-I/O cleanup - unlocking c2b, work item back on freelist etc.
+ */
+
+#define REMAP   2
+#define CLEANUP 3
+
+#define                     MAX_WORK_ITEMS 512
+static process_work_item_t  process_work_items[MAX_WORK_ITEMS];
+
+spinlock_t io_list_lock; /* Serialise access to io free and error lists. */
+static struct list_head     io_free_list;
+static struct list_head     io_error_list;
+wait_queue_head_t           process_io_waitq;
+
+atomic_t                    wi_in_flight = ATOMIC(0); /* Keeps track of work itesm in-flight */
 
 /*
  * (Re-)populate the list of 'live' slaves. This is the list that can currently be used as a
  * source of replacement slaves for remapping.
  */
-static void castle_extents_remap_state_init(void)
+static void castle_extents_process_state_init(void)
 {
     struct list_head        *lh;
     struct castle_slave     *cs;
     int                     i;
 
-    if (remap_state.nr_live_slaves)
+    if (process_state.nr_live_slaves)
     {
         /* This is a re-population - a slave has become unavailable as a source for remapping. */
-        for (i=0; i<remap_state.nr_live_slaves; i++)
+        for (i=0; i<process_state.nr_live_slaves; i++)
         {
-            /* Previous re-population may have left 'holes' in remap_state.live_slaves. */
-            if (remap_state.live_slaves[i])
+            /* Previous re-population may have left 'holes' in process_state.live_slaves. */
+            if (process_state.live_slaves[i])
             {
-                cs = castle_slave_find_by_uuid(remap_state.live_slaves[i]->uuid);
+                cs = castle_slave_find_by_uuid(process_state.live_slaves[i]->uuid);
+                BUG_ON(!cs);
                 if ((test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags)) ||
                     (test_bit(CASTLE_SLAVE_EVACUATE_BIT, &cs->flags)))
                 {
                     /*
                      * A previously-live slave is now no longer available for remapping.
-                     * Leave the slave as a 'hole' in remap_state.live_slaves.
+                     * Leave the slave as a 'hole' in process_state.live_slaves.
                      */
-                    BUG_ON(!remap_state.live_slaves[i]);
-                    castle_kfree(remap_state.live_slaves[i]);
-                    remap_state.live_slaves[i] = NULL;
+                    BUG_ON(!process_state.live_slaves[i]);
+                    castle_kfree(process_state.live_slaves[i]);
+                    process_state.live_slaves[i] = NULL;
                 }
                 /* Still alive - leave it as it is. */
             }
@@ -3187,50 +3264,41 @@ static void castle_extents_remap_state_init(void)
             if ((!test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags)) &&
                 (!test_bit(CASTLE_SLAVE_EVACUATE_BIT, &cs->flags)))
             {
-                remap_state.live_slaves[remap_state.nr_live_slaves] =
+                process_state.live_slaves[process_state.nr_live_slaves] =
                     castle_zalloc(sizeof(live_slave_t), GFP_KERNEL);
-                BUG_ON(!remap_state.live_slaves[remap_state.nr_live_slaves]);
-                remap_state.live_slaves[remap_state.nr_live_slaves]->uuid = cs->uuid;
+                BUG_ON(!process_state.live_slaves[process_state.nr_live_slaves]);
+                process_state.live_slaves[process_state.nr_live_slaves]->uuid = cs->uuid;
                 if (cs->cs_superblock.pub.flags & CASTLE_SLAVE_SSD)
-                    remap_state.live_slaves[remap_state.nr_live_slaves]->flags |= CASTLE_SLAVE_SSD;
-                remap_state.nr_live_slaves++;
+                    process_state.live_slaves[process_state.nr_live_slaves]->flags |= CASTLE_SLAVE_SSD;
+                process_state.nr_live_slaves++;
             }
         }
         rcu_read_unlock();
-        for (i=remap_state.nr_live_slaves; i<MAX_NR_SLAVES; i++)
-            remap_state.live_slaves[i++] = NULL;
+        for (i=process_state.nr_live_slaves; i<MAX_NR_SLAVES; i++)
+            process_state.live_slaves[i++] = NULL;
     }
 }
 
 /*
- * Frees any data associated with the remap_state structure.
+ * Frees any data associated with the process_state structure.
  */
-static void castle_extents_remap_state_fini(void)
+static void castle_extents_process_state_fini(void)
 {
     int i;
 
-    /* There may be outstanding extent maps that need to be written out. */
-    debug("Rebuild writeback flushing out final extent maps.\n");
-    castle_extents_remap_writeback_setstate();
-    castle_extents_remap_writeback();
-    mutex_lock(&rebuild_done_list_lock);
-    if(!list_empty(&rebuild_done_list))
-        castle_printk(LOG_ERROR, "Finishing remap thread while there are still extents "
-                                 "on the rebuild_done_list.\n");
-    mutex_unlock(&rebuild_done_list_lock);
-
     for (i=0; i<MAX_NR_SLAVES; i++)
     {
-        if (remap_state.live_slaves[i])
-            castle_kfree(remap_state.live_slaves[i]);
+        if (process_state.live_slaves[i])
+            castle_free(process_state.live_slaves[i]);
+        process_state.nr_live_slaves = 0;
     }
 }
 
 /*
- * Populates the remap_state.chunks array for the passed slave with a superchunk's
+ * Populates the process_state.chunks array for the passed slave with a superchunk's
  * worth of of disk chunks.
  *
- * @param slave_idx The index into the remap_state chunks / live_slaves array.
+ * @param slave_idx The index into the process_state chunks / live_slaves array.
  *
  * @return EXIT_SUCCESS:       Success.
  * @return -ENOSPC:            Slave is out of space.
@@ -3240,11 +3308,11 @@ static int castle_extent_remap_superchunks_alloc(c_ext_t *ext, int slave_idx)
     c_chk_seq_t         chk_seq;
     struct castle_slave *cs;
 
-    cs = castle_slave_find_by_uuid(remap_state.live_slaves[slave_idx]->uuid);
+    cs = castle_slave_find_by_uuid(process_state.live_slaves[slave_idx]->uuid);
     BUG_ON(!cs);
     BUG_ON(test_bit(CASTLE_SLAVE_GHOST_BIT, &cs->flags));
 
-    BUG_ON(remap_state.live_slaves[slave_idx]->count);
+    BUG_ON(process_state.live_slaves[slave_idx]->count);
 
     castle_extent_transaction_start();
 
@@ -3296,14 +3364,14 @@ static int castle_extent_remap_superchunks_alloc(c_ext_t *ext, int slave_idx)
 
 fill_chks:
 
-    remap_state.live_slaves[slave_idx]->first_chk = chk_seq.first_chk;
-    remap_state.live_slaves[slave_idx]->count = chk_seq.count;
+    process_state.live_slaves[slave_idx]->first_chk = chk_seq.first_chk;
+    process_state.live_slaves[slave_idx]->count = chk_seq.count;
 
     return EXIT_SUCCESS;
 }
 
 /*
- * Return the slave index to use for remapping a chunk. Scans the remap_state.live_slaves
+ * Return the slave index to use for remapping a chunk. Scans the process_state.live_slaves
  * array for a slave which is not already used in the disk chunk.
  *
  * @param ext           The extent for which the remapping is being done.
@@ -3311,28 +3379,29 @@ fill_chks:
  * @param want_ssd      Flag set if we want to remap onto an SSD (if possible).
  * @param ssds_tried    The number of SSDs we have tried, but failed to allocate space from.
  *
- * @return          The index into the remap_state arrays to use for allocation
+ * @return          The index into the process_state arrays to use for allocation
  */
-static int castle_extent_replacement_slave_get(c_ext_t *ext,
-                                               int chunkno,
-                                               int *want_ssd,
-                                               int ssds_tried)
+static int castle_extent_slave_get_random(c_ext_t *ext,
+                                          int chunkno,
+                                          int *want_ssd,
+                                          int ssds_tried,
+                                          int hdds_tried)
 {
     int         chunk_idx, slave_idx, nr_slaves_to_use, already_used;
     int         slaves_to_use[MAX_NR_SLAVES];
     uint16_t    r;
     int         is_ssd=0;
 
-    /* For each slave in remap_state.live_slaves (the list of potential remap slaves). */
+    /* For each slave in process_state.live_slaves (the list of potential remap slaves). */
 retry:
     nr_slaves_to_use = 0;
-    for (slave_idx=0; slave_idx<remap_state.nr_live_slaves; slave_idx++)
+    for (slave_idx=0; slave_idx<process_state.nr_live_slaves; slave_idx++)
     {
-        if (remap_state.live_slaves[slave_idx] == NULL)
+        if (process_state.live_slaves[slave_idx] == NULL)
             /* This slave is no longer available - skip it. */
             continue;
 
-        is_ssd = remap_state.live_slaves[slave_idx]->flags & CASTLE_SLAVE_SSD;
+        is_ssd = process_state.live_slaves[slave_idx]->flags & CASTLE_SLAVE_SSD;
 
         if ((is_ssd && !*want_ssd) || (!is_ssd && *want_ssd))
             /*
@@ -3348,12 +3417,19 @@ retry:
             continue;
         }
 
+        if (!is_ssd && hdds_tried)
+        {
+            /* Skip HDDs that caller has already tried, but failed to allocate space from. */
+            hdds_tried--;
+            continue;
+        }
+
         already_used = 0;
         /* Scan through all the slaves in this logical chunk. */
         for (chunk_idx=0; chunk_idx<ext->k_factor; chunk_idx++)
         {
             if (ext->shadow_map[(chunkno*ext->k_factor)+chunk_idx].slave_id ==
-                remap_state.live_slaves[slave_idx]->uuid)
+                process_state.live_slaves[slave_idx]->uuid)
             {
                 /* This slave is already used in this logical chunk - ignore it. */
                 already_used = 1;
@@ -3379,12 +3455,111 @@ retry:
     BUG_ON(!nr_slaves_to_use);
 
     /*
-     * Now slaves_to_use is an array of indexes into remap_state.live_slaves that reflect
+     * Now slaves_to_use is an array of indexes into process_state.live_slaves that reflect
      * potential target slaves for remapping for this logical chunk. Pick one at random.
      */
     get_random_bytes(&r, 2);
     r = r % nr_slaves_to_use;
     return slaves_to_use[r];
+}
+
+extern      castle_freespace_t * freespace_sblk_get(struct castle_slave *cs);
+extern void freespace_sblk_put(struct castle_slave *cs, int dirty);
+
+/*
+ * Return the slave index to use for remapping a chunk. Scans the process_state.live_slaves
+ * array for a slave which is not already used in the disk chunk.
+ *
+ * @param ext           The extent for which the remapping is being done.
+ * @param chunkno       The logical chunk being remapped.
+ * @param want_ssd      Flag set if we want to remap onto an SSD (if possible).
+ * @param ssds_tried    The number of SSDs we have tried, but failed to allocate space from.
+ * @param slave_idx     The index into the process_state arrays to use for allocation
+ *
+ * @return              EXIT_SUCCESS if we found a candidate slave, otherwise -ENOENT
+ */
+/* Percentage threshold of freespace above which a slave is a candidate */
+#define FREESPACE_THRESHOLD 5
+static int castle_extent_slave_get_by_freespace(c_ext_t *ext,
+                                                int chunkno,
+                                                int *want_ssd,
+                                                int ssds_tried,
+                                                int *slave_idx)
+{
+    int         chunk_idx, idx, chosen_slave=MAX_NR_SLAVES, potential_slaves;
+    int         average_freespace, saved_freespace, slave_freespace;
+    int         is_ssd=0;
+    struct castle_slave *cs;
+    castle_freespace_t  *freespace;
+
+    /* For each slave in process_state.live_slaves (the list of potential remap slaves). */
+retry:
+    potential_slaves = average_freespace = saved_freespace = 0;
+    for (idx=0; idx<process_state.nr_live_slaves; idx++)
+    {
+        if (process_state.live_slaves[idx] == NULL)
+            /* This slave is no longer available - skip it. */
+            continue;
+
+        is_ssd = process_state.live_slaves[idx]->flags & CASTLE_SLAVE_SSD;
+
+        if ((is_ssd && !*want_ssd) || (!is_ssd && *want_ssd))
+            /*
+             * Slave is an SSD, but we want to allocate from non-SSD slaves, or slave is not an
+             * SSD, but we want to allocate from SSD slaves. Do not use this slave.
+             */
+            continue;
+
+        if (is_ssd && ssds_tried)
+        {
+            /* Skip SSDs that caller has already tried, but failed to allocate space from. */
+            ssds_tried--;
+            continue;
+        }
+
+        /* Don't use a slave already represented in this logical chunk. */
+        for (chunk_idx=0; chunk_idx<ext->k_factor; chunk_idx++)
+            if (ext->shadow_map[(chunkno*ext->k_factor)+chunk_idx].slave_id ==
+                process_state.live_slaves[idx]->uuid)
+                /* This slave is already used in this logical chunk. */
+                continue;
+
+        potential_slaves++;
+
+        cs = castle_slave_find_by_uuid(process_state.live_slaves[idx]->uuid);
+        BUG_ON(!cs);
+
+        freespace = freespace_sblk_get(cs);
+        slave_freespace = freespace->free_chk_cnt;
+        freespace_sblk_put(cs, 0);
+
+        if (slave_freespace > saved_freespace)
+        {
+            /* This slave has more freespace. */
+            chosen_slave = idx;
+            saved_freespace = slave_freespace;
+        }
+
+        /* Re-compute average. */
+        average_freespace = ((average_freespace * (potential_slaves - 1)) + slave_freespace)
+                            / potential_slaves;
+    }
+
+    if (!(saved_freespace >
+                    (average_freespace + (average_freespace * FREESPACE_THRESHOLD / 100))))
+    {
+        if (*want_ssd)
+        {
+            /* We want an SSD, but we could not find one - retry for a non-SSD. */
+            debug("Wanted to remap to SSD, but failed to find one. Retrying from non-SSD\n");
+            *want_ssd = 0;
+            goto retry;
+        }
+        return -ENOENT;
+    }
+
+    *slave_idx = chosen_slave;
+    return EXIT_SUCCESS;
 }
 
 /*
@@ -3395,32 +3570,49 @@ retry:
  *
  * @return          The disk chunk to use.
  */
-static c_disk_chk_t castle_extent_remap_disk_chunk_alloc(c_ext_t *ext, int chunkno, int want_ssd)
+c_disk_chk_t castle_extent_remap_disk_chunk_alloc(c_ext_t *ext, struct castle_slave *cs,
+                                                  int chunkno)
 {
     c_disk_chk_t        disk_chk = INVAL_DISK_CHK;
-    int                 slave_idx;
+    int                 slave_idx= -1;
     struct castle_slave *target_slave;
     int                 ret;
-    int                 ssds_tried=0;
+    int                 ssds_tried=0, hdds_tried=0, want_ssd;
 
 retry:
     /* Get the replacement slave */
-    slave_idx = castle_extent_replacement_slave_get(ext, chunkno, &want_ssd, ssds_tried);
-    BUG_ON(slave_idx == -1);
+    want_ssd = cs->cs_superblock.pub.flags & CASTLE_SLAVE_SSD;
+    ret = castle_extent_slave_get_by_freespace(ext, chunkno, &want_ssd, ssds_tried, &slave_idx);
+    if (ret == -ENOENT)
+    {
+        /*
+         * Could not find a slave with freespace of FREESPACE_THRESHOLD above average, revert to
+         * random search. Note: we need to reset search args appropriately again.
+         */
+        want_ssd = cs->cs_superblock.pub.flags & CASTLE_SLAVE_SSD;
+        ssds_tried = 0;
+        slave_idx = castle_extent_slave_get_random(ext, chunkno, &want_ssd, ssds_tried, hdds_tried);
+    }
 
-    target_slave = castle_slave_find_by_uuid(remap_state.live_slaves[slave_idx]->uuid);
+    if (slave_idx == -1)
+    {
+        /* Ran out of slaves to to try to allocate from. */
+        return INVAL_DISK_CHK;
+    }
+
+    target_slave = castle_slave_find_by_uuid(process_state.live_slaves[slave_idx]->uuid);
     BUG_ON(!target_slave);
 
     if ((test_bit(CASTLE_SLAVE_OOS_BIT, &target_slave->flags)) ||
         (test_bit(CASTLE_SLAVE_EVACUATE_BIT, &target_slave->flags)))
     {
-        /* Tried to use a now-dead slave for remapping. Repopulate the remap_state and retry. */
+        /* Tried to use a now-dead slave for remapping. Repopulate the process_state and retry. */
         debug("Rebuild tried using a now-dead slave - repopulating remap state\n");
-        castle_extents_remap_state_init();
+        castle_extents_process_state_init();
         goto retry;
     }
 
-    if (!remap_state.live_slaves[slave_idx]->count)
+    if (!process_state.live_slaves[slave_idx]->count)
     {
         /* We've run out of chunks on this slave, allocate another set. */
         ret = castle_extent_remap_superchunks_alloc(ext, slave_idx);
@@ -3428,35 +3620,32 @@ retry:
         {
             /*
              * Tried to use a now-dead slave for superchunk allocation.
-             * Repopulate the remap_state and retry.
+             * Repopulate the process_state and retry.
              */
             debug("Rebuild tried using a now-dead slave - repopulating remap state\n");
-            castle_extents_remap_state_init();
+            castle_extents_process_state_init();
             goto retry;
         }
-        else
-        if ((ret == -ENOSPC) && want_ssd)
+        else if ((ret == -ENOSPC))
         {
             /*
-             * ssds_tried keeps count of the number of SSDs we have tried, and failed, to allocate
-             * from. We'll keep retrying other SSDs until castle_extent_replacement_slave_get
-             * determines that we have tried all SSDs.
+             * ssds_tried/hdds_tried keep count of the number of SSDs/HDDs we have tried, and
+             * failed, to allocate from. We'll keep retrying other SSDs/HDDs until
+             * castle_extent_replacement_slave_get determines that we have tried all SSDs/HDDs.
              */
-            ssds_tried++;
+            want_ssd ? ssds_tried++: hdds_tried++;
             goto retry;
         }
-
-        if(ret)
-            return INVAL_DISK_CHK;
+        BUG_ON(ret);
     }
 
-    BUG_ON(remap_state.live_slaves[slave_idx]->count == 0);
+    BUG_ON(process_state.live_slaves[slave_idx]->count == 0);
 
-    disk_chk.slave_id   = remap_state.live_slaves[slave_idx]->uuid;
-    disk_chk.offset     = remap_state.live_slaves[slave_idx]->first_chk;
+    disk_chk.slave_id   = process_state.live_slaves[slave_idx]->uuid;
+    disk_chk.offset     = process_state.live_slaves[slave_idx]->first_chk;
 
-    remap_state.live_slaves[slave_idx]->first_chk++;
-    remap_state.live_slaves[slave_idx]->count--;
+    process_state.live_slaves[slave_idx]->first_chk++;
+    process_state.live_slaves[slave_idx]->count--;
 
     BUG_ON(DISK_CHK_INVAL(disk_chk));
 
@@ -3484,10 +3673,6 @@ static struct castle_slave *slave_needs_remapping(uint32_t slave_id)
         return NULL;
 }
 
-static c_ext_id_t current_rebuild_extent = 0, rebuild_extent_last = 0;
-static int rebuild_extent_chunk = 0;
-static atomic_t current_rebuild_chunk = ATOMIC(0);
-
 /* Save all the left-over superchunks back to extent again. */
 static void castle_extent_remap_space_cleanup(c_ext_t *ext)
 {
@@ -3495,17 +3680,17 @@ static void castle_extent_remap_space_cleanup(c_ext_t *ext)
 
     castle_extent_transaction_start();
 
-    for (i=0; i<remap_state.nr_live_slaves; i++)
+    for (i=0; i<process_state.nr_live_slaves; i++)
     {
-        if (remap_state.live_slaves[i] && remap_state.live_slaves[i]->count)
+        if (process_state.live_slaves[i] && process_state.live_slaves[i]->count)
         {
-            struct castle_slave *cs = castle_slave_find_by_uuid(remap_state.live_slaves[i]->uuid);
+            struct castle_slave *cs = castle_slave_find_by_uuid(process_state.live_slaves[i]->uuid);
 
             castle_extent_part_schk_save(ext, cs->id,
-                                         remap_state.live_slaves[i]->first_chk,
-                                         remap_state.live_slaves[i]->count);
+                                         process_state.live_slaves[i]->first_chk,
+                                         process_state.live_slaves[i]->count);
 
-            remap_state.live_slaves[i]->count = 0;
+            process_state.live_slaves[i]->count = 0;
         }
     }
 
@@ -3514,246 +3699,627 @@ static void castle_extent_remap_space_cleanup(c_ext_t *ext)
     castle_extent_transaction_end();
 }
 
+/* This structure keeps track of extent ranges that have been processed. */
+typedef struct writeback_info {
+    struct list_head    list;
+    c_ext_id_t          ext_id;
+    int                 start_chunk;
+    int                 end_chunk;
+    int                 ext_finished;
+} writeback_info_t;
+
+/* The state a processed extent can be in. */
+enum {
+    PROCESSING,   /* Processing is in progress. */
+    INTERRUPTED,  /* Extent has been interrupted (e.g. not live, or kthread stopping) */
+    COMPLETE      /* Extent has been fully processed. */
+};
+
 /*
- * Scan an extent, remapping disk chunks where necessary.
+ * Initialise a writeback_info structure.
+ * @param ext_id  The extent.
+ * @param start   The start chunk in the extent for this range.
+ * @param end     The end chunk in the extent for this range.
  *
- * @param ext       The extent to remap.
- *
- * @return 1:       We got kthread_should_stop() while remapping an extent.
- * @return -ENOSPC: We got an allocation failure (out of disk space).
- * @return 0:       We successfully processed the extent.
+ * @return:       The initialised writeback_info structure.
  */
-static int castle_extent_remap(c_ext_t *ext)
+static writeback_info_t *alloc_writeback_info(c_ext_id_t ext_id, int start, int end)
 {
-    uint32_t            k_factor = castle_extent_kfactor_get(ext->ext_id);
-    int                 chunkno, idx, remap_idx, no_remap_idx, i;
-    struct castle_slave *cs;
-    int ret=0;
-    c_chk_cnt_t ext_start, ext_end;
+    writeback_info_t    *writeback_info;
 
-    debug("\nRemapping extent %llu size: %u, from seqno: %u to seqno: %u\n",
-            ext->ext_id, ext->size, ext->curr_rebuild_seqno, rebuild_to_seqno);
+    writeback_info = castle_alloc(sizeof(writeback_info_t));
+    BUG_ON(!writeback_info);
 
-    mutex_lock(&rebuild_done_list_lock);
-    current_rebuild_extent = ext->ext_id;
-    atomic_set(&current_rebuild_chunk, 0);
-    /* Add this extent to the rebuild_done_list. Move it to the end of the list
-       if its already on it. */
-    if(ext->rebuild_done_list.next != NULL)
-        list_move_tail(&ext->rebuild_done_list, &rebuild_done_list);
-    else
-        list_add_tail(&ext->rebuild_done_list, &rebuild_done_list);
-    mutex_unlock(&rebuild_done_list_lock);
+    INIT_LIST_HEAD(&writeback_info->list);
+    writeback_info->ext_id = ext_id;
+    writeback_info->start_chunk = start;
+    writeback_info->end_chunk = start + (end - 1);
+    writeback_info->ext_finished = PROCESSING;
 
-    ext->shadow_map = castle_vmalloc(ext->size*k_factor*sizeof(c_disk_chk_t));
-    if (!ext->shadow_map)
+    return writeback_info;
+}
+
+/*
+ * Free a writeback_info structure.
+ */
+static void free_writeback_info(writeback_info_t *writeback_info)
+{
+    castle_free(writeback_info);
+}
+
+static int rebuild_exit_check(void);
+
+/* The type of extent processing we are doing. */
+typedef enum {
+    REBUILDING,
+    REBALANCING,
+    EXITING
+} castle_extent_process_type_t;
+
+/* Per-extent-processing-type (e.g. rebuild or rebalance) function vector. */
+typedef struct {
+    castle_extent_process_type_t type;
+    int     (*init)            (void);
+    void    (*finish)          (int interrupted);
+    int     (*find_next_frame) (c_ext_t *ext,
+                                int *curr_chunk,
+                                c_chk_cnt_t ext_end);
+    int     (*process_chunk)   (c_ext_t *ext,
+                                int source_chunks,
+                                int chunk_index, int chunkno);
+    void    (*do_writeback)    (writeback_info_t *writeback_info);
+    int     (*exit_check)      (void);
+    int     (*list_add)        (c_ext_t *ext, void *unused);
+} castle_extent_process_state_t;
+
+castle_extent_process_state_t   *procstate = NULL;
+
+/*
+ * Initialise rebuild state.
+ */
+int rebuild_init(void)
+{
+    struct castle_fs_superblock *fs_sb;
+
+    fs_sb = castle_fs_superblocks_get();
+    fs_sb->fs_in_rebuild = 1;
+    castle_fs_superblocks_put(fs_sb, 1);
+                
+    castle_extents_rescan_required = 0;
+
+    rebuild_to_seqno = atomic_read(&current_rebuild_seqno);
+
+    // State is initialised here, and each time another slave goes oos. */
+    castle_extents_process_state_init();
+
+    return 1;
+}
+
+/*
+ * Handles work to be done when rebuild has finished.
+ * @param interrupted  The rebuild was interrupted.
+ */
+void rebuild_finish(int interrupted)
+{
+    struct castle_fs_superblock *fs_sb;
+    struct list_head            *entry;
+    struct castle_slave         *cs;
+
+    if (rebuild_required())
+        /*
+         * Rebuild has more work to do, for example if it was interrupted by another slave going
+         * oos or evacuating.
+         */
+        return;
+
+    castle_extents_process_state_fini();
+
+    if (interrupted)
+        /*
+         * The rebuild has not yet finished, so break out before updating slave and superblock
+         * states.
+         */
+        return;
+
+    fs_sb = castle_fs_superblocks_get();
+    fs_sb->fs_in_rebuild = 0;
+    castle_fs_superblocks_put(fs_sb, 1);
+    castle_extents_chunks_remapped = 0;
+
+    /* We can now convert any evacuating or out-of-service slaves to remapped state. */
+    rcu_read_lock();
+    list_for_each_rcu(entry, &castle_slaves.slaves)
     {
-        castle_printk(LOG_ERROR, "ERROR: could not allocate rebuild shadow map of size %lu\n",
-                ext->size*k_factor*sizeof(c_disk_chk_t));
-        BUG();
+        cs = list_entry(entry, struct castle_slave, list);
+        if (test_bit(CASTLE_SLAVE_EVACUATE_BIT, &cs->flags) &&
+           !test_bit(CASTLE_SLAVE_REMAPPED_BIT, &cs->flags) &&
+           !test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags))
+        {
+            BUG_ON(test_bit(CASTLE_SLAVE_GHOST_BIT, &cs->flags));
+            castle_printk(LOG_USERINFO, "Finished remapping evacuated slave 0x%x.\n",
+                        cs->uuid);
+            set_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags);
+            set_bit(CASTLE_SLAVE_REMAPPED_BIT, &cs->flags);
+            clear_bit(CASTLE_SLAVE_EVACUATE_BIT, &cs->flags);
+            if (atomic_read(&cs->io_in_flight) == 0 &&
+                test_bit(CASTLE_SLAVE_BDCLAIMED_BIT, &cs->flags))
+                castle_release_device(cs);
+        }
+        if (test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags) &&
+           !test_bit(CASTLE_SLAVE_REMAPPED_BIT, &cs->flags))
+        {
+            castle_printk(LOG_USERINFO, "Finished remapping out-of-service slave 0x%x.\n",
+                          cs->uuid);
+            set_bit(CASTLE_SLAVE_REMAPPED_BIT, &cs->flags);
+            if (atomic_read(&cs->io_in_flight) == 0 &&
+                test_bit(CASTLE_SLAVE_BDCLAIMED_BIT, &cs->flags))
+                castle_release_device(cs);
+        }
+    }
+    rcu_read_unlock();
+
+    castle_printk(LOG_USERINFO, "Rebuild completed.\n");
+    return;
+}
+
+/*
+ * Find the next chunk to be rebuilt.
+ * @param ext           The extent.
+ * @param curr_chunk    (Input) the last chunk processed
+ *                      (Output) the next chunk to process
+ * @param end           The end chunk in the range for this extent.
+ *
+ * @return:             1 If there is a chunk to be processed.
+ */
+int find_next_rebuild_chunk(c_ext_t *ext, int *curr_chunk, c_chk_cnt_t end_chunk)
+{
+    int chunkno, chunkidx;
+
+    for (chunkno=*curr_chunk; chunkno<end_chunk; chunkno++)
+    {
+        for (chunkidx=0; chunkidx<ext->k_factor; chunkidx++)
+        {
+            if (slave_needs_remapping(ext->shadow_map[(chunkno*ext->k_factor)+chunkidx].slave_id))
+            {
+                *curr_chunk = chunkno;
+                /* For rebuild, return frame size (number of chunks) = 1. */
+                return 1;
+            }
+        }
     }
 
-    /* Populate the shadow map - a copy of the existing mapping. */
-    for (chunkno = 0; chunkno<ext->size; chunkno++)
-        __castle_extent_map_get(ext, chunkno, &ext->shadow_map[chunkno*k_factor]);
+    return 0; /* No chunks to process. */
+}
 
-    /*
-     * As we are remapping a new extent, we need to stop using any pre-existing superchunks.
-     * Setting next_chk to 0 will force new superchunk(s) to be allocated for this extent.
-     */
-    for (i=0; i<remap_state.nr_live_slaves; i++)
-        if (remap_state.live_slaves[i])
-            BUG_ON(remap_state.live_slaves[i]->count);
+/*
+ * Process a rebuild chunk.
+ * @param ext           The extent.
+ * @param chunkno       The chunk to process
+ *
+ * @return:             1 If there is a chunk to be processed.
+ */
+int process_rebuild_chunk(c_ext_t *ext, int chunkno, int unused1, int unused2)
+{
+    uint32_t            k_factor = castle_extent_kfactor_get(ext->ext_id);
+    int                 idx, remap_idx;
+    struct castle_slave *cs;
+    int ret=0;
+    c_disk_chk_t *remap_chunks;
 
-    /*
-     * From this point, we will start using the shadow map to remap the extent. All write I/O must
-     * now be submitted via the shadow map because it will be more up-to-date (or at least no less
-     * up-to-date) than the original extent map.
-     */
+
+    remap_chunks = castle_alloc(k_factor*sizeof(c_disk_chk_t));
+    BUG_ON(!remap_chunks);
+
     ext->use_shadow_map = 1;
 
-    /* Get extent current range. */
-    castle_extent_mask_read(ext->rebuild_mask_id, &ext_start, &ext_end);
-
-    atomic_set(&current_rebuild_chunk, ext_start);
-
-    /* Keeps track of which chunk we are remapping. */
-    /* Scan the shadow map, chunk by chunk, remapping slaves as necessary. */
-    /* Note: Remap only for the mask that we got reference on. Masks after that, shouldn't have
-     * any chunks from lost slave. Old masks might have chunks for failed slave, but who cares!! */
-    for (chunkno = ext_start; chunkno<ext_end; chunkno++)
-    {
-        /*
-         * Populate the remap chunks array that will be used to write out remapped data.
-         * Disk chunks for remapped slaves go at the start. Disk chunks for non-remapped slaves
-         * go at the end. This split allows lower level code to submit I/O only for remapped
-         * slaves, or for all slaves, as required. Remap_idx will define the boundary between
-         * the two sets in the remap chunks array.
-         */
-        c_disk_chk_t remap_chunks[k_factor];
+    /*
+     * Populate the remap chunks array that will be used to write out remapped data.
+     * Disk chunks for remapped slaves go at the start. Disk chunks for non-remapped slaves
+     * go at the end. This split allows lower level code to submit I/O only for remapped
+     * slaves, or for all slaves, as required. Remap_idx will define the boundary between
+     * the two sets in the remap chunks array.
+     */
 
 retry:
-        for (idx=0, remap_idx=0, no_remap_idx=k_factor-1; idx<k_factor; idx++)
+
+    for (idx=0, remap_idx=0; idx<k_factor; idx++)
+    {
+        c_disk_chk_t disk_chk;
+        if ((cs = slave_needs_remapping(ext->shadow_map[(chunkno*k_factor)+idx].slave_id)))
         {
-            c_disk_chk_t disk_chk;
-
-            /* Chunks that don't need remapping go to the end of the remap_chunks array. */
-            if (!(cs = slave_needs_remapping(ext->shadow_map[(chunkno*k_factor)+idx].slave_id)))
-            {
-                remap_chunks[no_remap_idx].slave_id =
-                                        ext->shadow_map[(chunkno*k_factor)+idx].slave_id;
-                remap_chunks[no_remap_idx--].offset =
-                                        ext->shadow_map[(chunkno*k_factor)+idx].offset;
-                continue;
-            }
-
             /* This slave needs remapping. Get a replacement disk chunk. */
-            disk_chk = castle_extent_remap_disk_chunk_alloc(ext, chunkno,
-                                            cs->cs_superblock.pub.flags & CASTLE_SLAVE_SSD);
+            disk_chk = castle_extent_remap_disk_chunk_alloc(ext, cs, chunkno);
             if (DISK_CHK_INVAL(disk_chk))
             {
-                /* Failed to allocate a disk chunk (slave out of space is most likely cause). */
+                /* Failed to allocate a disk chunk (all slaves out of space). */
                 castle_printk(LOG_WARN, "Rebuild could not allocate a disk chunk.\n");
-
-                /* Cleanup extent space. */
-                castle_extent_remap_space_cleanup(ext);
-
                 return -ENOSPC;
             }
             /*
-             * Lock the shadow map here because we don't want the read/write path to access
-             * a chunk in mid-remap.
-             */
+            * Lock the shadow map here because we don't want the read/write path to access
+            * a chunk in mid-remap.
+            */
             spin_lock(&ext->shadow_map_lock);
             ext->shadow_map[(chunkno*k_factor)+idx].slave_id = disk_chk.slave_id;
             ext->shadow_map[(chunkno*k_factor)+idx].offset = disk_chk.offset;
             spin_unlock(&ext->shadow_map_lock);
-
-            /* Chunks that need remapping go to the start of the remap_chunks array. */
+    
+            /* Store the chunks that need remapping. */
             remap_chunks[remap_idx].slave_id = disk_chk.slave_id;
             remap_chunks[remap_idx++].offset = disk_chk.offset;
         }
+    }
 
-        FAULT(REBUILD_FAULT2);
+    FAULT(REBUILD_FAULT2);
 
+   /*
+     * The remap_chunks array now contains all the disk chunks for this chunkno.
+     */
+    if (remap_idx)
+    {
         /*
-         * The remap_chunks array now contains all the disk chunks for this chunkno.
+         * If a chunk has been remapped, read it in (via the old map) and write it out (using
+         * the remap_chunks array as the map).
          */
-        if (remap_idx)
+        ret = submit_async_remap_io(ext, chunkno, remap_chunks, remap_idx);
+
+        if (ret)
         {
-            c_ext_pos_t cep;
-            c2_block_t *c2b;
-
-            /*
-             * If a chunk has been remapped, read it in (via the old map) and write it out (using
-             * the remap_chunks array as the map).
-             */
-            cep.ext_id = ext->ext_id;
-            cep.offset = chunkno*C_CHK_SIZE;
-
-            c2b = castle_cache_block_get(cep, BLKS_PER_CHK);
-            write_lock_c2b(c2b);
-
-            /*
-             * Remap c2bs are handled slightly differently in the cache, as we can
-             * have clean c2bs with dirty pages.
-            */
-            set_c2b_remap(c2b);
-
-            /*
-             * If c2b is not up to date, issue a blocking READ to update.
-             * READ uses the existing map.
-             */
-            if(!c2b_uptodate(c2b))
-                BUG_ON(submit_c2b_sync(READ, c2b));
-
-            /* Submit the write. */
-            ret = submit_c2b_remap_rda(c2b, remap_chunks, remap_idx);
-
-            write_unlock_c2b(c2b);
-
-            /* This c2b is not needed any more, and it pollutes the cache, so destroy it. */
-            /* Note: c2b still contains valid data. Destroy could fail due to other potential consumers
-             * of the c2b. Except in the case logical extents, rebuild is the only consumer accesses in
-             * chunks. So, there shouldnt be any other references to this c2b. */
-            BUG_ON(castle_cache_block_destroy(c2b) && LOGICAL_EXTENT(ext->ext_id));
-
-            /*
-             * Check that the submit_c2b_remap_rda succeeded. If it got EAGAIN, then the
-             * remap_chunks contained a now-oos slave (a slave that went oos between the disk chunk
-             * alloc and the submit. In this case, we can retry, which should rebuild remap_chunks
-             * with (hopefully) now valid slave(s). If it got -EINVAL then it failed to get a ref
-             * on the extent, which means that the extent is no longer live, and therefore does not
-             * need remapping.
-             */
-            if (ret == -EAGAIN)
-                goto retry;
-            BUG_ON(ret);
-        }
-
-        /* Keep count of the chunks that have actually been remapped. */
-        castle_extents_chunks_remapped += remap_idx;
-
-        BUG_ON(atomic_read(&current_rebuild_chunk) >= ext_end);
-
-        if (atomic_inc_return(&current_rebuild_chunk) == ext_end)
-            atomic_set(&current_rebuild_chunk, ext->size);
-
-        /*
-         * Allow for shutdown in mid-extent (between chunks), because extents may be large and
-         * take too long to remap.
-         */
-        if (kthread_should_stop() && ext->size != atomic_read(&current_rebuild_chunk))
-        {
-            /* Cleanup extent space. */
-            castle_extent_remap_space_cleanup(ext);
-
-            return -EINTR;
+            switch (ret)
+            {
+                case -EAGAIN:
+                    goto retry;
+                case -ENOENT:
+                    /* No free work items - wait for one to become free. */
+                    castle_free(remap_chunks);
+                    return ret;
+                default:
+                    BUG();
+            }
         }
     }
 
-    /* Cleanup extent space. */
-    castle_extent_remap_space_cleanup(ext);
-
-    /*
-     * Save the rebuild sequence number we have rebuilt the extent to.
-     * This can't be saved in the extent until the remap writeback because if a checkpoint
-     * and crash occurs before the writeback, the extent will have the wrong sequence number.
-     */
-    debug("Setting extent %llu to rebuild seqno %d\n", ext->ext_id, rebuild_to_seqno);
-    ext->remap_seqno = rebuild_to_seqno;
+    /* Keep count of the chunks that have actually been remapped. */
+    castle_extents_chunks_remapped += remap_idx;
 
     return EXIT_SUCCESS;
 }
 
 /*
- * Writeback a remapped extent.
- *
- * @param ext       The extent to writeback.
+ * end_io for extent processing.
  */
-void castle_extent_remap_writeback(c_ext_t *ext)
+static void castle_extent_process_async_end(c2_block_t *c2b)
+{
+    process_work_item_t *wi = c2b->private;
+    unsigned long flags;
+
+    switch (wi->rw) {
+        case READ:
+            /* This was a remap chunk read request. */
+
+            if (c2b_eio(wi->c2b))
+            {
+                /* Slave is no longer live. Abandon the I/O. */
+                spin_lock_irqsave(&io_list_lock, flags);
+                list_add_tail(&wi->error_list, &io_error_list);
+                spin_unlock_irqrestore(&io_list_lock, flags);
+                wake_up(&process_io_waitq);
+            } else
+            {
+                /* We cannot handle the read failing to update the c2b. */
+                BUG_ON(!c2b_uptodate(wi->c2b));
+
+                /* Now schedule the write. */
+                wi->rw = WRITE;
+                BUG_ON(!queue_work(castle_extproc_workq, &wi->work));
+            }
+            break;
+        case WRITE:
+            /*
+             * This was the pre-writeout of the remap chunk.
+             * Next step is to schedule the remap writeout.
+             */
+            if (c2b_eio(wi->c2b))
+            {
+                /* Slave is no longer live. Abandon the I/O. */
+                spin_lock_irqsave(&io_list_lock, flags);
+                list_add_tail(&wi->error_list, &io_error_list);
+                spin_unlock_irqrestore(&io_list_lock, flags);
+                wake_up(&process_io_waitq);
+            } else
+            {
+                BUG_ON(c2b_dirty(wi->c2b)); /* c2b should not be dirty. */
+
+                /*
+                 * If the c2b was entirely populated with dirty pages, then the submit_c2b_rda will have
+                 * written all pages to the remap slave disk chunk, so a further submit_c2b_remap_rda
+                 * is not needed.
+                 */
+                if (wi->has_cleanpages)
+                    wi->rw = REMAP;
+                else
+                    wi->rw = CLEANUP;
+                BUG_ON(!queue_work(castle_extproc_workq, &wi->work));
+            }
+            break;
+        case REMAP:
+            /* This was the remap writeout. We're all done apart from error handling. */
+            if (c2b_eio(wi->c2b))
+            {
+                /* Slave is no longer live. Abandon the I/O. */
+                spin_lock_irqsave(&io_list_lock, flags);
+                list_add_tail(&wi->error_list, &io_error_list);
+                spin_unlock_irqrestore(&io_list_lock, flags);
+                wake_up(&process_io_waitq);
+            } else
+            {
+                BUG_ON(c2b_dirty(wi->c2b)); /* c2b should not be dirty. */
+                /*
+                 * Finally, we are finished with the c2b now. If the c2b has eio set, then we are handling
+                 * the end_io for a failed write. submit_c2b_remap_rda will know about it when it returns
+                 * (if it hasn't already), so leave submit_c2b_remap_rda to handle the CLEANUP.
+                 */
+                wi->rw = CLEANUP;
+                BUG_ON(!queue_work(castle_extproc_workq, &wi->work));
+            }
+            break;
+        default:
+            BUG();
+    }
+}
+
+/*
+ * Handle queued up extent process work out of interrupt context.
+ */
+void process_io_do_work(struct work_struct *work)
+{
+    process_work_item_t *wi = container_of(work, process_work_item_t, work);
+    unsigned long flags;
+    
+    BUG_ON(!wi || wi->rw == READ);
+
+    switch (wi->rw) {
+        case WRITE:
+            /* Need to do a (non-remap) write of the c2b data. */
+            set_c2b_in_flight(wi->c2b);
+            submit_c2b_rda(wi->rw, wi->c2b);
+            break;
+        case REMAP:
+            /* Need to do a (remap) write of the c2b data. */
+            set_c2b_in_flight(wi->c2b);
+            submit_c2b_remap_rda(wi->c2b, wi->remap_chunks, wi->remap_idx);
+            break;
+        case CLEANUP:
+            /* Clean up the I/O structures. */
+            write_unlock_c2b(wi->c2b);
+
+            BUG_ON(c2b_eio(wi->c2b));
+
+            /*
+             * This c2b is not needed any more, and it pollutes the cache, so destroy it.
+             * Note: c2b still contains valid data. Destroy could fail due to other potential consumers
+             * of the c2b. Except in the case logical extents, rebuild is the only consumer accesses in
+             * chunks. So, there shouldnt be any other references to this c2b.
+             */
+            BUG_ON(castle_cache_block_destroy(wi->c2b) && LOGICAL_EXTENT(wi->ext->ext_id));
+
+            castle_free(wi->remap_chunks);
+
+            spin_lock_irqsave(&io_list_lock, flags);
+            list_add_tail(&wi->free_list, &io_free_list);
+            spin_unlock_irqrestore(&io_list_lock, flags);
+            atomic_dec(&wi_in_flight);
+
+            /* In case we are ratelimit waiting. */
+            wake_up(&process_io_waitq);
+            break;
+        default:
+            BUG();
+    }
+    return;
+}
+
+/*
+ * Initialise the work io list from the work_items array.
+ */
+static void init_io_work(void)
+{
+    int i;
+
+    INIT_LIST_HEAD(&io_free_list);
+    INIT_LIST_HEAD(&io_error_list);
+    
+    spin_lock_init(&io_list_lock);
+
+    init_waitqueue_head(&process_io_waitq);
+
+    for (i=0; i<MAX_WORK_ITEMS; i++)
+    {
+        CASTLE_INIT_WORK(&process_work_items[i].work, process_io_do_work);
+        list_add_tail(&process_work_items[i].free_list, &io_free_list);
+    }
+}
+
+/*
+ * Get the next free work item in the list.
+ */
+process_work_item_t *get_free_work_item(void)
+{
+    process_work_item_t *wi;
+
+    spin_lock_irq(&io_list_lock);
+    if (list_empty(&io_free_list))
+    {
+        wi = NULL;
+    } else
+    {
+        wi = list_first_entry(&io_free_list, process_work_item_t, free_list);
+        list_del(&wi->free_list);
+    }
+    spin_unlock_irq(&io_list_lock);
+    return wi;
+}
+
+/*
+ * Initialise a work item.
+ */
+void init_io_work_item(process_work_item_t *wi, c2_block_t *c2b, c_ext_t *ext, c_disk_chk_t *remap_chunks, int remap_idx, int chunkno)
+{
+    wi->rw = c2b_uptodate(c2b) ? WRITE : READ;
+    wi->c2b = c2b;
+    wi->ext = ext;
+    wi->remap_chunks = remap_chunks;
+    wi->remap_idx = remap_idx;
+    wi->chunkno = chunkno;
+    wi->has_cleanpages = 0;
+}
+
+/* Keeps track of how many chunks I/Os we are handling. */
+static int rebuild_read_chunks = 0;
+int rebuild_write_chunks = 0; /* Not static - needs to be accessed from castle cache code. */
+
+/*
+ * Submit async remap I/O work
+ * @param ext           The extent.
+ * @param chunkno       The chunk to process
+ * @param remap_chunks  The chunk(s) to process
+ * @param remap_idx     The number of chunk(s) to process
+ *
+ * @return:             -ENOENT If there are no free work items (caller can throttle).
+ *                      EXIT_SUCCESS if I/O submitted successfully.
+ */
+int submit_async_remap_io(c_ext_t *ext, int chunkno, c_disk_chk_t *remap_chunks, int remap_idx)
+{
+    c2_block_t *c2b;
+    c_ext_pos_t cep;
+    process_work_item_t *wi;
+    int ret = 0;
+
+    cep.ext_id = ext->ext_id;
+    cep.offset = chunkno*C_CHK_SIZE;
+
+    c2b = castle_cache_block_get(cep, BLKS_PER_CHK);
+    write_lock_c2b(c2b);
+
+    /*
+     * Remap c2bs are handled slightly differently in the cache, as we can
+     * have clean c2bs with dirty pages.
+    */
+    set_c2b_remap(c2b);
+
+    wi = get_free_work_item();
+    if (!wi)
+        // No free entries. Return error so caller can throttle
+        return -ENOENT;
+
+    atomic_inc(&wi_in_flight);
+
+    c2b->end_io = castle_extent_process_async_end;
+    init_io_work_item(wi, c2b, ext, remap_chunks, remap_idx, chunkno);
+    c2b->private = wi;
+
+    /* Find out (before we do any writes) if the c2b has any dirty pages. */
+    if (c2b_has_clean_pages(c2b))
+        wi->has_cleanpages = 1;
+
+    if (!c2b_uptodate(c2b))
+    {
+        /* Read will read from one chunk only. */
+        rebuild_read_chunks++;
+        /* Submit read only. Read c2b endio will schedule the write. */
+        BUG_ON(submit_c2b(READ, c2b));
+    } else
+    {
+        /* The c2b was already uptodate - we don't need to read the chunk. */
+        set_c2b_in_flight(c2b);
+
+        ret = submit_c2b_rda(WRITE, c2b);
+        if (ret)
+        {
+            spin_lock_irq(&io_list_lock);
+            list_add(&wi->free_list, &io_free_list);
+            spin_unlock_irq(&io_list_lock);
+            atomic_dec(&wi_in_flight);
+            return ret;
+        }
+    }
+    return EXIT_SUCCESS;
+}
+
+/*
+ * Finish processing extent
+ * @param ext           The extent.
+ * @param update_seqno  The rebuild seqence number to update the extent to.
+ */
+void cleanup_extent(c_ext_t *ext, int update_seqno)
+{
+    spin_lock(&ext->shadow_map_lock);
+    ext->use_shadow_map = 0;
+    spin_unlock(&ext->shadow_map_lock);
+    castle_vfree(ext->shadow_map);
+
+    /* It is now safe to update the (LIVE) extent with the rebuild sequence number. */
+    if (LIVE_EXTENT(ext) && update_seqno)
+    {
+        ext->curr_rebuild_seqno = ext->remap_seqno;
+
+        /*
+         * For superblock meta extents, update the superblock too, because that's what will get
+         * written out to disk.
+         */
+        if ((ext->ext_id == META_EXT_ID) ||
+            (ext->ext_id == MSTORE_EXT_ID) ||
+            (ext->ext_id == MSTORE_EXT_ID+1))
+        {
+            struct castle_extents_superblock* castle_extents_sb;
+
+            castle_extent_transaction_start();
+            castle_extents_sb = castle_extents_super_block_get();
+            switch (ext->ext_id) {
+                case META_EXT_ID:
+                    castle_extents_sb->meta_ext.curr_rebuild_seqno = ext->remap_seqno;
+                    break;
+                case MSTORE_EXT_ID:
+                    castle_extents_sb->mstore_ext[0].curr_rebuild_seqno = ext->remap_seqno;
+                    break;
+                case MSTORE_EXT_ID+1:
+                    castle_extents_sb->mstore_ext[1].curr_rebuild_seqno = ext->remap_seqno;
+                    break;
+            }
+            castle_extent_transaction_end();
+        }
+    }
+    castle_extent_rebuild_ext_put(ext, 0);
+}
+
+/*
+ * Write back the maps for a range of chunks in an extent, defined by the writeback_info.
+ */
+static void writeback_rebuild_chunk(writeback_info_t *writeback_info)
 {
     c_ext_pos_t map_cep, map_page_cep;
     c2_block_t *map_c2b, *reserve_c2b;
     int chunkno;
-    uint32_t            k_factor = castle_extent_kfactor_get(ext->ext_id);
+    c_ext_t             *ext = __castle_extents_hash_get(writeback_info->ext_id);
+    uint32_t            k_factor = castle_extent_kfactor_get(writeback_info->ext_id);
 
-    for (chunkno = 0; chunkno<ext->size; chunkno++)
+    for (chunkno = writeback_info->start_chunk; chunkno<=writeback_info->end_chunk; chunkno++)
     {
         /*
-        * Write back the shadow map entry for this chunk.
-        * First, get the cep for the map for this chunk.
-        */
+         * Write back the shadow map entry for this chunk.
+         * First, get the cep for the map for this chunk.
+         */
         map_cep = castle_extent_map_cep_get(ext->maps_cep, chunkno, ext->k_factor);
         /* Make the map_page_cep offset block aligned. */
         memcpy(&map_page_cep, &map_cep, sizeof(c_ext_pos_t));
         map_page_cep.offset = MASK_BLK_OFFSET(map_page_cep.offset);
 
         /* Get the c2b for the page containing the map cep.
-        *
-        * In order to prevent a situation where we have no reserve c2b/c2ps
-        * for the flush thread, make a single page c2b reservation and
-        * release it once we've finished dirtying the map_c2b. */
+         *
+         * In order to prevent a situation where we have no reserve c2b/c2ps
+         * for the flush thread, make a single page c2b reservation and
+         * release it once we've finished dirtying the map_c2b.
+         */
         reserve_c2b = castle_cache_page_block_reserve();
         map_c2b = castle_cache_page_block_get(map_page_cep);
 
@@ -3775,291 +4341,544 @@ void castle_extent_remap_writeback(c_ext_t *ext)
         castle_cache_page_block_unreserve(reserve_c2b);
     }
 
-    castle_cache_extent_flush(ext->ext_id, 0, 0, 0);
+    /* Make sure the updated map is flushed out. */
+    castle_cache_extent_flush(META_EXT_ID, 0, 0, 0);
 
-    /* Now the shadow map has become the default map, we can stop redirecting write I/O. */
-    spin_lock(&ext->shadow_map_lock);
-    ext->use_shadow_map = 0;
-    spin_unlock(&ext->shadow_map_lock);
-    castle_vfree(ext->shadow_map);
-
-    /* It is now safe to update the extent with the rebuild sequence number. */
-    ext->curr_rebuild_seqno = ext->remap_seqno;
-
-    /*
-     * For superblock meta extents, update the superblock too, because that's what will get
-     * written out to disk.
-     */
-    if ((ext->ext_id == META_EXT_ID) ||
-        (ext->ext_id == MSTORE_EXT_ID) ||
-        (ext->ext_id == MSTORE_EXT_ID+1))
-    {
-        struct castle_extents_superblock* castle_extents_sb;
-
-        castle_extent_transaction_start();
-        castle_extents_sb = castle_extents_super_block_get();
-        switch (ext->ext_id) {
-            case META_EXT_ID:
-                castle_extents_sb->meta_ext.curr_rebuild_seqno = ext->remap_seqno;
-                break;
-            case MSTORE_EXT_ID:
-                castle_extents_sb->mstore_ext[0].curr_rebuild_seqno = ext->remap_seqno;
-                break;
-            case MSTORE_EXT_ID+1:
-                castle_extents_sb->mstore_ext[1].curr_rebuild_seqno = ext->remap_seqno;
-                break;
-        }
-        castle_extent_transaction_end();
-    }
-
-    castle_extent_rebuild_ext_put(ext, 0);
+    if (writeback_info->ext_finished)
+        /* Now the shadow map has become the default map, we can stop redirecting write I/O. */
+        cleanup_extent(ext, (writeback_info->ext_finished == COMPLETE));
 }
 
+/*
+ * Simple check if rebuild should exit.
+ */
+static int rebuild_exit_check(void)
+{
+    /* The only reason that a rebuild run should halt processing is:
+     * If another slave has gone out-of-serice or evacuated.
+     */
+    if (rebuild_required())
+        return 1;
+    else
+        return 0;
+}
 
 /*
- * The main rebuild kthread function.
- *
- * @return 0:       Kthread should stop.
+ * Populate the extent process array with rebuild functions.
  */
+castle_extent_process_state_t rebuild_process = {   REBUILDING,
+                                                    rebuild_init,
+                                                    rebuild_finish,
+                                                    find_next_rebuild_chunk,
+                                                    process_rebuild_chunk,
+                                                    writeback_rebuild_chunk,
+                                                    rebuild_exit_check,
+                                                    rebuild_list_add
+                                                };
 
+/*
+ * Test if rebuild is required.
+ */
+static int rebuild_required(void)
+{
+    if (atomic_read(&current_rebuild_seqno) > rebuild_to_seqno)
+    {
+        procstate = &rebuild_process;
+        return 1;
+    } else
+    {
+        return 0;
+    }
+}
+
+/*
+ * Per-extent state initialisation.
+ */
+static void initialise_extent_state(c_ext_t * ext)
+{
+    int k_factor = ext->k_factor;
+    int map_size = ext->size*k_factor*sizeof(c_disk_chk_t);
+    int chunkno;
+    int i;
+
+    ext->shadow_map = castle_vmalloc(map_size);
+    if (!ext->shadow_map)
+    {
+        castle_printk(LOG_ERROR, "ERROR: could not allocate shadow map of size %lu\n", map_size);
+        BUG();
+    }
+    /* Populate the shadow map - a copy of the existing mapping. */
+    for (chunkno = 0; chunkno<ext->size; chunkno++)
+        __castle_extent_map_get(ext, chunkno, &ext->shadow_map[chunkno*k_factor]);
+
+    /*
+     * As we are remapping a new extent, we need to stop using any pre-existing superchunks.
+     * Setting next_chk to 0 will force new superchunk(s) to be allocated for this extent.
+     */
+    for (i=0; i<process_state.nr_live_slaves; i++)
+        if (process_state.live_slaves[i])
+            BUG_ON(process_state.live_slaves[i]->count);
+
+   /*
+     * Save the rebuild sequence number we have rebuilt the extent to.
+     * This can't be saved in the extent until the remap writeback because if a checkpoint
+     * and crash occurs before the writeback, the extent will have the wrong sequence number.
+     */
+    debug("Setting extent %llu to rebuild seqno %d\n", ext->ext_id, rebuild_to_seqno);
+    ext->remap_seqno = rebuild_to_seqno;
+}
+
+/*
+ * extent processing freespace state.
+ */
+static int  out_of_freespace = 0;
 static int  freespace_added = 0;
 
-int castle_extents_rebuild_callback(void *data)
+int castle_extents_process_callback(void *data)
 {
     freespace_added = 1;
-    wake_up(&rebuild_wq);
+    wake_up(&process_io_waitq);
     return 0;
 }
 
-static int castle_extents_rebuild_run(void *unused)
+static int freespace_now_available(void)
 {
-    struct list_head            *entry, *tmp;
-    c_ext_t                     *ext;
-    struct castle_slave         *cs;
-    int                         ret=0, exit_early=0;
-    struct castle_fs_superblock *fs_sb;
+    if (out_of_freespace && freespace_added)
+    {
+        out_of_freespace = freespace_added = 0;
+        return 1;
+    } else
+        return 0;
+}
 
-    /* Initialise the rebuild list. */
-    INIT_LIST_HEAD(&rebuild_list);
-    INIT_LIST_HEAD(&rebuild_done_list);
-    mutex_init(&rebuild_done_list_lock);
+/*
+ * Initialise extent prcessing low-freespace handler.
+ */
+static void init_lfs_handler(void)
+{
+    c_ext_event_t *event_hdl = NULL;
 
-    debug("Starting rebuild thread ...\n");
+    event_hdl = castle_zalloc(sizeof(c_ext_event_t), GFP_KERNEL);
+    if (!event_hdl)
+        BUG();
+
+    event_hdl->callback = castle_extents_process_callback;
+    event_hdl->data     = NULL;
+
+    castle_extent_transaction_start();
+    castle_extent_lfs_callback_add(event_hdl);
+    castle_extent_transaction_end();
+}
+
+#define SHORT_CHECKPOINT_PERIOD 5
+
+/* Controls whether castle_periodic_checkpoint needs to synchronise with extent processor. */
+int castle_checkpoint_syncing = 0;
+
+void writeback_list_walk(struct list_head * lh)
+{
+    struct list_head *writeback_entry;
+    writeback_info_t *wentry;
+
+    list_for_each(writeback_entry, lh)
+        wentry = list_entry(writeback_entry, writeback_info_t, list);
+}
+
+/*
+ * Check I/O function for extent processing wait queue.
+ * Has three return code ranges:
+ * Return (negative) non-zero for a genuine I/O error.
+ * Return (positive) non-zero if there are free work items
+ * Return zero if there are no free work items
+ */
+int work_io_check(void)
+{
+    struct list_head    *io_error_entry, *tmp;
+    process_work_item_t *wi;
+    int err = 0;
+
+    spin_lock_irq(&io_list_lock);
+    if (!list_empty(&io_error_list))
+    {
+        /*
+         * Scan through all the errors on the list. We should only see -EAGAIN for a failed I/O
+         */
+        list_for_each_safe(io_error_entry, tmp, &io_error_list)
+        {
+            wi = list_entry(io_error_entry, process_work_item_t, error_list);
+            list_del(io_error_entry);
+            if (c2b_eio(wi->c2b))
+                err = -EAGAIN;
+            else
+                BUG();
+
+            write_unlock_c2b(wi->c2b);
+            //BUG_ON(castle_cache_block_destroy(wi->c2b) && LOGICAL_EXTENT(wi->ext->ext_id));
+            put_c2b(wi->c2b);
+            castle_free(wi->remap_chunks);
+
+            list_add_tail(&wi->free_list, &io_free_list);
+            atomic_dec(&wi_in_flight);
+        }
+        spin_unlock_irq(&io_list_lock);
+        return err;
+    }
+    spin_unlock_irq(&io_list_lock);
+
+    if (atomic_read(&wi_in_flight) < MAX_WORK_ITEMS)
+        return 1;
+
+    return 0;
+}
+
+/* Extent processing ratelimiting. */
+unsigned long expected_time;
+unsigned long delta_time;
+#define BATCHSIZE 100        /* 100 x 1m I/Os per process I/O batch. */
+#define RATELIMIT_DEFAULT 0
+#define RATELIMIT_MIN 0     /* No ratelimiting */
+#define RATELIMIT_MAX 10000 /* 10Gb/s max */
+int castle_extents_process_ratelimit = RATELIMIT_DEFAULT;
+
+/*
+ * Main extent processing kthread.
+ */
+static int castle_extents_process(void *unused)
+{
+    struct list_head                *process_entry, *writeback_entry, *ptmp, *wtmp;
+    c_ext_t                         *ext;
+    int                             process_exiting, process_interrupted, extent_interrupted=0;
+    int                             process_drop_extents = 0;
+    int                             ret;
+    int                             i;
+    writeback_info_t                *writeback_info=NULL;
+    int                             saved_checkpoint_period=0;
+    int                             batch;
+    int                             io_error = 0;
+
+    INIT_LIST_HEAD(&extent_list);
+    INIT_LIST_HEAD(&processed_list);
+    INIT_LIST_HEAD(&writeback_list);
+
+    init_waitqueue_head(&process_waitq);
+    init_waitqueue_head(&process_syncpoint_waitq);
+
+    init_io_work();
+
+    debug("Starting extent process thread ...\n");
     do {
-        wait_event_interruptible(rebuild_wq,
-                                 ((atomic_read(&current_rebuild_seqno) > rebuild_to_seqno) ||
-                                  freespace_added ||
-                                  kthread_should_stop()));
+        /*
+         * Normal wait state - will be woken under the following circumstances:
+         * 1: A slave goes out-of-service or is evacuated (current_rebuild_seqno > rebuild_to_seqno)
+         * 2: Slaves need rebalancing (rebalance_required() == TRUE)
+         * 3: kthread_stop has been called (on module exit)
+         */
+        wait_event_interruptible(process_waitq,
+                                 rebuild_required()             ||
+                                 castle_extents_rescan_required ||
+                                 kthread_should_stop());
 
         if (kthread_should_stop())
         {
-            debug("Rebuild thread terminated.\n");
+            debug("Extent processing thread terminating.\n");
             goto out;
         }
 
-restart:
-        castle_printk(LOG_USERINFO, "Rebuild run starting.\n");
+        /* Generic initialisation. */
+        castle_checkpoint_syncing = 1;
+        process_exiting = 0;
+        process_interrupted = 0;
+        process_drop_extents = 0;
 
-        fs_sb = castle_fs_superblocks_get();
-        fs_sb->fs_in_rebuild = 1;
-        castle_fs_superblocks_put(fs_sb, 1);
+        BUG_ON(!procstate);
 
-        castle_extents_rescan_required = exit_early = freespace_added = 0;
+        /* Per-state initialisation. Includes rebuild creating set of rebuild-from and rebuild-to slaves*/
+        procstate->init();
 
-        rebuild_to_seqno = atomic_read(&current_rebuild_seqno);
+        /* Initialisation for I/O ratelimiting. */
+        batch = BATCHSIZE; /* 10 x 1m I/Os per batch. */
+        delta_time = jiffies;
 
-        castle_extents_remap_state_init();
+        /* Build the list of extents to process. */
+        castle_extents_hash_iterate(procstate->list_add, NULL);
 
-        /* Build the list of extents to remap. */
-        castle_extents_hash_iterate(castle_extent_rebuild_list_add, NULL);
-
-        if (list_empty(&rebuild_list))
+        if (list_empty(&extent_list))
         {
-            castle_printk(LOG_WARN, "Rebuild: no extents found.\n");
+            debug(LOG_WARN, "Extent process: no extents found.\n");
             goto finished;
         }
 
-        /*
-         * Iterate over the list, remapping as necessary. If exit_early gets set, we'll just
-         * 'put' the remaining extents in the list.
-         */
-        list_for_each_safe(entry, tmp, &rebuild_list)
+        list_for_each_safe(process_entry, ptmp, &extent_list)
         {
-            ret = 0;
-            ext = list_entry(entry, c_ext_t, rebuild_list);
-            list_del(entry);
-            BUG_ON(ext->curr_rebuild_seqno >= rebuild_to_seqno);
+            int chunk_index;
+            c_chk_cnt_t ext_start, ext_end;
+            int curr_chunk, nr_chunks = 0;
+            int chunk_found = 0;
+            int chunkno=0;
+            
+            extent_interrupted = 0;
 
-            /*
-             * If exit_early is set, then we are abandoning the rest of this rebuild run.
-             * castle_extent_remap will not be called, and all we will do is drop the ref
-             * on the extents remaining inthe rebuild list, before we stop.
-             */
-            if (!exit_early)
+            ext = list_entry(process_entry, c_ext_t, process_list);
+            list_del(process_entry);
+            
+            if (process_drop_extents)
             {
-                ret = castle_extent_remap(ext);
+                castle_extent_rebuild_ext_put(ext, 0);
+                continue;
+            }
 
-                if (ret == -EINTR || ret == -ENOSPC || kthread_should_stop())
-                    /* We will not be remapping any more extents in this rebuild run. */
-                    exit_early = 1;
+            initialise_extent_state(ext);
 
-                if (ret == -EINTR || ret == -ENOSPC || ret == -EINVAL)
+            /* Get extent current range. */
+            castle_extent_mask_read(ext->rebuild_mask_id, &ext_start, &ext_end);
+
+            curr_chunk = ext_start;
+
+            /* Index into extent chunks (1 for rebuild, N for rebalance) that need to be
+            processed. nr_chunks = chunks in start_chunk (1 or N). */
+            while (LIVE_EXTENT(ext) && (nr_chunks = procstate->find_next_frame(ext, &curr_chunk, ext_end)))
+            {
+                chunk_found = 1;
+                chunkno++;
+finishing:
+                if (process_exiting)
+                    wait_event_interruptible(process_syncpoint_waitq, atomic_read(&castle_extents_presyncvar) == 1);
+
+                if (atomic_read(&castle_extents_presyncvar) == 1)
                 {
                     /*
-                     * If A: The remap has been interrupted by a kthread_stop() and it has not yet
-                     *       remapped all the chunks (EINTR).
-                     * or B: An allocation has failed (which implicitly means that it has not yet
-                     *       remapped all the chunks (ENOSPC).
-                     * or C: The extent is no longer live, and therefore we don't care if it has
-                     *       remapped all the chunks (EINVAL).
-                     * then this extent should no longer be scheduled for map writeback. Take it off
-                     * the rebuild_done_list and clean up the shadow map.
+                     * Checkpoint has indicated it is about to update freespace. Move all current
+                     * entries on the processed list to the writeback list (at the tail, because
+                     * there may already be entries there, and their order is important.
                      */
-                    mutex_lock(&rebuild_done_list_lock);
-                    if (ext->ext_id == rebuild_extent_last)
+                    list_splice_init(&processed_list, writeback_list.prev);
+
+                    /* Current writeback_info should no longer be used. */
+                    writeback_info = NULL;
+
+                    /* Drain any outstanding IO, to ensure that all data chunks are on disk before
+                     their mappings are written. Check for any resultant errors*/
+                    while (atomic_read(&wi_in_flight))
                     {
-                        /*
-                         * This extent is the marker used by castle_extents_remap_writeback to
-                         * determine the point in the rebuild_done_list where it should stop. If we
-                         * simply remove this extent from the rebuild_done_list that logic would
-                         * break. Since we know that the previous extent in rebuild_done_list (if
-                         * there is one) will be fully remapped, we can replace the marker with that
-                         * and then we are free to remove this extent from the list.
-                         */
-                        if (ext->rebuild_done_list.prev != NULL)
+                        io_error = work_io_check();
+                        if (io_error < 0)
                         {
-                            c_ext_t *prev_ext;
-                            prev_ext = list_entry(ext->rebuild_done_list.prev,
-                                                  c_ext_t,
-                                                  rebuild_done_list);
-                            rebuild_extent_last = prev_ext->ext_id;
-                            rebuild_extent_chunk = prev_ext->size;
-                        } else
-                            /* No previous extent (rebuild_done_list will become empty). */
-                            rebuild_extent_last = rebuild_extent_chunk = 0;
+                            /* We had an I/O error at some stage for this extent. */
+                            switch (io_error) {
+                                case -EAGAIN:
+                                    /*
+                                     * We found a dead slave during one of the chunk I/Os. This
+                                     * means that extent processing will restart, so there's nothing
+                                     * to do here.
+                                     */
+                                    break;
+                                default:
+                                    BUG();
+                            }
+                        }
+                        msleep(IO_SLEEP_TIME);
                     }
-                    list_del(&ext->rebuild_done_list);
-                    ext->rebuild_done_list.next = ext->rebuild_done_list.prev = NULL;
-                    mutex_unlock(&rebuild_done_list_lock);
-                    spin_lock(&ext->shadow_map_lock);
-                    ext->use_shadow_map = 0;
-                    spin_unlock(&ext->shadow_map_lock);
-                    castle_vfree(ext->shadow_map);
+
+                    /* Reset I/O ratelimiting so we don't get a burst when chunk I/O restarts */
+                    if (list_empty(&extent_list))
+                        rebuild_read_chunks = rebuild_write_chunks = 0;
+
+                    atomic_dec(&castle_extents_presyncvar);
+                    wake_up(&process_syncpoint_waitq);
+                }
+
+                if (!process_exiting)
+                {
+                    for (i=0; i<nr_chunks; i++, chunk_index++)
+                    {
+retry:
+                        /* Stop here if we have been ratelimited. */
+                        wait_event_interruptible(process_io_waitq, (io_error = work_io_check()) ||
+                                                                    kthread_should_stop() ||
+                                                                    freespace_now_available());
+                        if (kthread_should_stop())
+                            break;
+
+                        if (io_error < 0)
+                        {
+                            switch (io_error) {
+                                case -EAGAIN:
+                                    /*
+                                     * We found a dead slave during one of the chunk I/Os. This
+                                     * means that extent processing will restart, so there's nothing
+                                     * to do here.
+                                     */
+                                    break;
+                                default:
+                                    BUG();
+                            }
+                        }
+
+                        /* Process the chunk. */
+                        ret = procstate->process_chunk(ext, curr_chunk, i, chunkno);
+                        if (ret)
+                        {
+                            switch (ret) {
+                                case -ENOSPC:
+                                    out_of_freespace = 1;
+                                    init_lfs_handler();
+                                case -ENOENT:
+                                    goto retry;
+                                    break;
+                                default:
+                                    BUG();
+                            }
+                        }
+
+                        if ((rebuild_read_chunks + rebuild_write_chunks) >= batch)
+                        {
+                            if (castle_extents_process_ratelimit < RATELIMIT_MIN)
+                                castle_extents_process_ratelimit = RATELIMIT_MIN;
+                            if (castle_extents_process_ratelimit > RATELIMIT_MAX)
+                                castle_extents_process_ratelimit = RATELIMIT_MAX;
+                            if (castle_extents_process_ratelimit)
+                            {
+                                expected_time = (rebuild_read_chunks + rebuild_write_chunks) * 1000 /
+                                                castle_extents_process_ratelimit;
+                                delta_time = jiffies - delta_time;
+                                if (expected_time > jiffies_to_msecs(delta_time))
+                                    msleep(expected_time - jiffies_to_msecs(delta_time));
+                                delta_time = jiffies;
+                                rebuild_read_chunks = rebuild_write_chunks = 0;
+                            }
+                        }
+                    }
+                }
+
+                if (process_exiting)
+                {
+                    wait_event_interruptible(process_syncpoint_waitq, atomic_read(&castle_extents_postsyncvar) == 1);
+                }
+
+                if (atomic_read(&castle_extents_postsyncvar) == 1)
+                {
+                    atomic_dec(&castle_extents_postsyncvar);
+                    list_for_each_safe(writeback_entry, wtmp, &writeback_list)
+                    {
+                        writeback_info_t *winfop;
+                        winfop = list_entry(writeback_entry, writeback_info_t, list);
+                        list_del(writeback_entry);
+                        procstate->do_writeback(winfop);
+                        free_writeback_info(winfop);
+                    }
+                }
+
+                if (process_exiting)
+                {
+                    castle_checkpoint_period = saved_checkpoint_period;
+                    break;
+                }
+
+                if (!process_exiting)
+                {
+                    if (writeback_info && (ext->ext_id == writeback_info->ext_id))
+                        writeback_info->end_chunk = curr_chunk + (nr_chunks-1);
+                    else
+                    {
+                        /* This is a new extent, or we've written back the previous writeback_info. */
+                        writeback_info = alloc_writeback_info(ext->ext_id, curr_chunk, nr_chunks);
+                        BUG_ON(!writeback_info);
+                        list_add_tail(&writeback_info->list, &processed_list);
+                    }
+                }
+
+                if (procstate->exit_check() || kthread_should_stop())
+                {
+                    /*
+                     * Finish this extent early. Assume that not all the work has been completed.
+                     * This may not always be true. The last chunk of the last extent might have
+                     * just completed processing, but we can't know that, so we assume the worst.
+                     */
+                    extent_interrupted = 1;
+                    break; /* ... out of process_chunk loop. */
+                }
+            }
+            
+            FAULT(REBUILD_FAULT1);
+
+            if (!process_exiting)
+            {
+                /*
+                 * Finished with this extent. Drain I/O and check for errors.
+                 */
+                if (!chunk_found)
+                {
+                    /* No chunks were found for this extent. Clean up and drop its ref now. */
+                    cleanup_extent(ext, 1);
+                }
+                else if (writeback_info)
+                {
+                    BUG_ON(writeback_info->ext_id != ext->ext_id);
+                    if (extent_interrupted || !LIVE_EXTENT(ext))
+                        writeback_info->ext_finished = INTERRUPTED;
+                    else
+                        writeback_info->ext_finished = COMPLETE;
+                }
+
+                while (atomic_read(&wi_in_flight))
+                {
+                    io_error = work_io_check();
+                    if (io_error < 0)
+                    {
+                        switch (io_error) {
+                            case -EAGAIN:
+                                /*
+                                 * We found a dead slave during one of the chunk I/Os. This
+                                 * means that extent processing will restart, so there's nothing
+                                 * to do here.
+                                 */
+                                break;
+                            default:
+                                BUG();
+                        }
+                    }
+                    msleep(IO_SLEEP_TIME);
+                }
+
+                writeback_info = NULL;
+
+                /* Clean up any chunks left over from this extent. */
+                castle_extent_remap_space_cleanup(ext);
+
+                /*
+                 * At this point we'll check to see if the extent processor needs to terminate
+                 * early, or has finished processing all the extents. Note that we do not use
+                 * the natural termination of the per-extent for loop, because we want to do one
+                 * final pass through the logic in 'process_exiting' mode. So we check if
+                 * extent_list is empty here to trigger that final pass.
+                 */
+                if (list_empty(&extent_list) || procstate->exit_check() || kthread_should_stop())
+                {
+                    if (!list_empty(&extent_list))
+                        process_interrupted = 1;
+                    process_exiting = 1;
+                    saved_checkpoint_period = castle_checkpoint_period;
+                    castle_checkpoint_period = 5;
+                    goto finishing;
                 }
             }
 
-            FAULT(REBUILD_FAULT1);
-
-            /*
-             * If we are exiting early or the last extent is no longer live, and the extent is not
-             * on the rebuild_done list, then drop the ref here. Otherwise writeback will drop it
-             * when it has finished with it.
-             */
-            if ((exit_early || (ret == -EINVAL)) && (ext->rebuild_done_list.next == NULL))
-                castle_extent_rebuild_ext_put(ext, 0);
-        }
-
-        if (exit_early)
-        {
-            if (kthread_should_stop())
-            {
-                castle_printk(LOG_WARN, "Rebuild run terminating early.\n");
-                goto out;
-            } else if (ret == -ENOSPC)
-            {
-                c_ext_event_t *event_hdl = NULL;
-                /* Currently we can't do anything other than go back to the wait_event. */
-                castle_printk(LOG_WARN, "Rebuild run pausing.\n");
-
-                event_hdl = castle_zalloc(sizeof(c_ext_event_t), GFP_KERNEL);
-                if (!event_hdl)
-                    BUG();
-
-                event_hdl->callback = castle_extents_rebuild_callback;
-                event_hdl->data     = NULL;
-
-                castle_extent_transaction_start();
-                castle_extent_lfs_callback_add(event_hdl);
-                castle_extent_transaction_end();
-                continue;
-            } else
-                BUG();
-        }
-
-        /* Now wait until all the extent maps have been written out (via the callback from
-           castle_periodic_checkpoint). */
-        wait_event_interruptible(rebuild_done_wq,
-                    ({int _ret;
-                     mutex_lock(&rebuild_done_list_lock);
-                     _ret = list_empty(&rebuild_done_list);
-                     mutex_unlock(&rebuild_done_list_lock);
-                     _ret;}) ||
-                    kthread_should_stop());
-
-        if (kthread_should_stop())
-        {
-            castle_printk(LOG_WARN, "Rebuild terminating before writeback.\n");
-            goto out;
-        }
-
-        if (castle_extents_rescan_required)
-        {
-            castle_printk(LOG_WARN, "Rebuild run restarting - rescan required.\n");
-            goto restart;
+            if (process_exiting)
+                /* Drop the rest of the extents before we finish. */
+                process_drop_extents = 1;
         }
 
 finished:
-        /*
-         * No further remapping required. We can now convert any evacuating or out-of-service
-         * slaves to remapped state.
-         */
-        rcu_read_lock();
-        list_for_each_rcu(entry, &castle_slaves.slaves)
-        {
-            cs = list_entry(entry, struct castle_slave, list);
-            if (test_bit(CASTLE_SLAVE_EVACUATE_BIT, &cs->flags) &&
-               !test_bit(CASTLE_SLAVE_REMAPPED_BIT, &cs->flags) &&
-               !test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags))
-            {
-                BUG_ON(test_bit(CASTLE_SLAVE_GHOST_BIT, &cs->flags));
-                castle_printk(LOG_USERINFO, "Finished remapping evacuated slave 0x%x.\n",
-                            cs->uuid);
-                set_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags);
-                set_bit(CASTLE_SLAVE_REMAPPED_BIT, &cs->flags);
-                clear_bit(CASTLE_SLAVE_EVACUATE_BIT, &cs->flags);
-                if (atomic_read(&cs->io_in_flight) == 0 &&
-                    test_bit(CASTLE_SLAVE_BDCLAIMED_BIT, &cs->flags))
-                    castle_release_device(cs);
-            }
-            if (test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags) &&
-               !test_bit(CASTLE_SLAVE_REMAPPED_BIT, &cs->flags))
-            {
-                castle_printk(LOG_USERINFO, "Finished remapping out-of-service slave 0x%x.\n",
-                              cs->uuid);
-                set_bit(CASTLE_SLAVE_REMAPPED_BIT, &cs->flags);
-                if (atomic_read(&cs->io_in_flight) == 0 &&
-                    test_bit(CASTLE_SLAVE_BDCLAIMED_BIT, &cs->flags))
-                    castle_release_device(cs);
-            }
-        }
-        rcu_read_unlock();
+        castle_checkpoint_syncing = 0;
+        atomic_set(&castle_extents_presyncvar, 0);
+        atomic_set(&castle_extents_postsyncvar, 0);
+        wake_up(&process_syncpoint_waitq);
 
-        /* Rebuild has finished. Mark it so in the superblock. */
-        fs_sb = castle_fs_superblocks_get();
-        fs_sb->fs_in_rebuild = 0;
-        castle_rebuild_fs_version = fs_sb->fs_version;
-        castle_fs_superblocks_put(fs_sb, 1);
-        castle_extents_chunks_remapped = 0;
-
-        castle_printk(LOG_USERINFO, "Rebuild completed.\n");
+        /* Per-state cleanup, includes rebuild setting slave state bits. */
+        procstate->finish(process_interrupted||extent_interrupted||castle_extents_rescan_required);
 
     } while (1);
-
-    /* NOTREACHED */
-    BUG();
-
 out:
-    castle_extents_remap_state_fini();
     return EXIT_SUCCESS;
 }
 
@@ -4070,34 +4889,40 @@ void castle_extents_rebuild_wake(void)
 {
     atomic_inc(&current_rebuild_seqno);
     castle_events_slave_rebuild_notify();
-    wake_up(&rebuild_wq);
+    wake_up(&process_waitq);
 }
 
 /*
- * Main initialisation function for rebuild.
+ * Main initialisation function for extent processor.
  *
  * @return 0:       Success.
  */
-int castle_extents_rebuild_init(void)
+int castle_extents_process_init(void)
 {
-    atomic_set(&current_rebuild_seqno, 0);
 
-    init_waitqueue_head(&rebuild_wq);
-    init_waitqueue_head(&rebuild_done_wq);
+    castle_extproc_workq = create_workqueue("castle_extproc");
+    if (!castle_extproc_workq)
+    {
+        castle_printk(LOG_ERROR, KERN_ALERT "Error: Could not alloc extproc wq\n");
+        return -ENOMEM;
+    }
 
-    rebuild_thread = kthread_run(castle_extents_rebuild_run, NULL, "castle-rebuild");
-    if(!rebuild_thread)
+    extproc_thread = kthread_run(castle_extents_process, NULL, "castle-extproc");
+
+    if(!extproc_thread)
         return -ENOMEM;
 
     return 0;
 }
 
 /*
- * Main fini function for rebuild.
+ * Main fini function for extent processor.
  */
-void castle_extents_rebuild_fini(void)
+void castle_extents_process_fini(void)
 {
-    kthread_stop(rebuild_thread);
+    kthread_stop(extproc_thread);
+
+    destroy_workqueue(castle_extproc_workq);
 }
 
 /*
@@ -4125,7 +4950,7 @@ void castle_extents_rebuild_startup_check(int need_rebuild)
         castle_printk(LOG_USERINFO, "Rebuild startup check: Restarting rebuild.\n");
 
         /* Wake the rebuild thread */
-        wake_up(&rebuild_wq);
+        wake_up(&process_waitq);
     }
     castle_fs_superblocks_put(fs_sb, 1);
 }
@@ -4177,11 +5002,7 @@ static int castle_extent_scan_uuid(c_ext_t *ext, uint32_t uuid)
         for (idx=0; idx<ext->k_factor; idx++)
         {
             if (chunks[idx].slave_id == uuid)
-            {
-                castle_printk(LOG_DEVEL, "castle_extent_scan_uuid found uuid 0x%x in extent %llu\n",
-                    uuid, ext->ext_id);
                 nr_refs++;
-            }
         }
     }
     return nr_refs;
@@ -4243,63 +5064,6 @@ int castle_extents_slave_scan(uint32_t uuid)
     }
     else
         return 0;
-}
-
-/**
- * Saves current rebuild state before checkpoint
- * (this is the point up to which we will commit remap state.
- */
-void castle_extents_remap_writeback_setstate(void)
-{
-    mutex_lock(&rebuild_done_list_lock);
-    if (list_empty(&rebuild_done_list))
-        rebuild_extent_last = rebuild_extent_chunk = 0;
-    else
-    {
-        rebuild_extent_last = current_rebuild_extent;
-        rebuild_extent_chunk = atomic_read(&current_rebuild_chunk);
-    }
-    mutex_unlock(&rebuild_done_list_lock);
-}
-
-/**
- * 'Commits' current rebuild remap state so that extent maps match the remap allocations.
- */
-void castle_extents_remap_writeback(void)
-{
-    struct list_head    *entry, *tmp;
-    c_ext_t             *ext;
-
-    /* Lock, because rebuild want to add extents to the tail while we commiting. */
-    mutex_lock(&rebuild_done_list_lock);
-    list_for_each_safe(entry, tmp, &rebuild_done_list)
-    {
-        ext = list_entry(entry, c_ext_t, rebuild_done_list);
-
-        /*
-         * We want all the extents in the list up to but not including the one we saved in the
-         * precheckpoint callback, but that one too - only if we finished remapping it.
-         */
-        if (rebuild_extent_last &&
-           ((ext->ext_id != rebuild_extent_last) ||
-           ((ext->ext_id == rebuild_extent_last) && (ext->size == rebuild_extent_chunk))))
-        {
-            list_del(entry);
-            ext->rebuild_done_list.next = NULL;
-            castle_extent_remap_writeback(ext);
-        }
-        if ((!rebuild_extent_last) || (ext->ext_id == rebuild_extent_last))
-            /* We're done for this pass. */
-            break;
-    }
-    /*
-     * If we're done, then kick the rebuild thread to update the slave state bitmaps,
-     * and go back to it's normal wait-for-a-rebuild-event state.
-     */
-    if (list_empty(&rebuild_done_list))
-        wake_up(&rebuild_done_wq);
-    mutex_unlock(&rebuild_done_list_lock);
-
 }
 
 signed int castle_extent_link_count_get(c_ext_id_t ext_id)
@@ -4642,11 +5406,14 @@ int castle_extent_grow(c_ext_id_t ext_id, c_chk_cnt_t count)
     c_ext_t *ext = castle_extents_hash_get(ext_id);
     c_ext_mask_t *mask;
     int ret = 0;
+    int seqno;
 
     /* Extent should be alive, something is wrong with client. */
     BUG_ON(!ext);
 
     debug_resize("Grow the extent by %u chunks\n", count);
+
+    seqno = atomic_read(&current_rebuild_seqno);
 
     castle_extent_transaction_start();
 
@@ -4682,6 +5449,12 @@ int castle_extent_grow(c_ext_id_t ext_id, c_chk_cnt_t count)
 
 out:
     castle_extent_transaction_end();
+
+    if (seqno != atomic_read(&current_rebuild_seqno))
+    {
+        castle_extents_rescan_required = 1;
+        wake_up(&process_waitq);
+    }
 
     return ret;
 }
@@ -4751,8 +5524,6 @@ int castle_extent_truncate(c_ext_id_t ext_id, c_chk_cnt_t chunk)
 
     /* Extent should be alive, something is wrong with client. */
     BUG_ON(!ext);
-
-    castle_printk(LOG_DEVEL, "%s::ext_id %d, chunk %d\n", __FUNCTION__, ext_id, chunk);
 
     castle_extent_transaction_start();
 

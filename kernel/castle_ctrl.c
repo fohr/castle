@@ -783,9 +783,9 @@ void castle_control_slave_evacuate(uint32_t uuid, uint32_t force, int *ret)
 
     } else
     {
-        castle_printk(LOG_ERROR, "Error: slave evacuation is not supported.\n");
-        *ret = -ENOSYS;
-        return;
+        set_bit(CASTLE_SLAVE_EVACUATE_BIT, &slave->flags);
+        castle_printk(LOG_USERINFO, "Slave 0x%x [%s] has been marked as evacuating.\n",
+                      slave->uuid, slave->bdev_name);
     }
     castle_extents_rebuild_wake();
     *ret = EXIT_SUCCESS;
@@ -841,7 +841,7 @@ void castle_wq_priority_set(struct workqueue_struct *wq)
 extern struct workqueue_struct *castle_back_wq;
 extern struct task_struct *castle_cache_flush_thread;
 extern struct task_struct *checkpoint_thread;
-extern struct task_struct *rebuild_thread;
+extern struct task_struct *extproc_thread;
 extern struct task_struct *resubmit_thread;
 #ifdef CASTLE_DEBUG
 extern struct task_struct *debug_thread;
@@ -881,7 +881,7 @@ void castle_control_thread_priority(int nice_value, int *ret)
     set_user_nice(checkpoint_thread, nice_value);
 
     /* Rebuild threads. */
-    set_user_nice(rebuild_thread, nice_value);
+    set_user_nice(extproc_thread, nice_value);
     set_user_nice(resubmit_thread, nice_value);
 
     *ret = 0;

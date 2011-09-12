@@ -435,7 +435,7 @@ void castle_freespace_slave_close(struct castle_slave *cs)
     debug("Closed the module\n");
 }
 
-static int castle_freespace_print(struct castle_slave *cs, void *unused)
+int castle_freespace_print(struct castle_slave *cs, void *unused)
 {
     castle_freespace_t  *freespace;
 
