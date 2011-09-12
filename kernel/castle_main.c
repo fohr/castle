@@ -2532,6 +2532,8 @@ static void __exit castle_exit(void)
     castle_debug_fini();
     castle_printk_fini();
 
+    castle_sysfs_fini_check();
+
     printk("Castle FS exit done.\n");
 }
 

@@ -7134,10 +7134,10 @@ static void __castle_da_foreach_tree(struct castle_double_array *da,
     }
 }
 
-static void castle_da_foreach_tree(struct castle_double_array *da,
-                                   int (*fn)(struct castle_double_array *da,
-                                             struct castle_component_tree *ct,
-                                             int level_cnt))
+static USED void castle_da_foreach_tree(struct castle_double_array *da,
+                                        int (*fn)(struct castle_double_array *da,
+                                                  struct castle_component_tree *ct,
+                                                  int level_cnt))
 {
     write_lock(&da->lock);
     __castle_da_foreach_tree(da, fn);
@@ -7198,16 +7198,9 @@ static int castle_da_ct_dealloc(struct castle_double_array *da,
                                 struct castle_component_tree *ct,
                                 int level_cnt)
 {
-    struct castle_da_merge *merge = castle_merges_hash_get(ct->merge_id);
-
-    if (merge)
-    {
-        BUG_ON(merge != ct->merge);
-        BUG_ON(merge->id == INVAL_MERGE_ID);
-        castle_da_merge_dealloc(merge, -ESHUTDOWN);
-    }
-
     castle_ct_hash_destroy_check(ct, (void*)0UL);
+
+    castle_sysfs_ct_del(ct);
     list_del(&ct->da_list);
     list_del(&ct->hash_list);
     castle_kfree(ct);
@@ -7240,9 +7233,11 @@ static int castle_da_hash_dealloc(struct castle_double_array *da, void *unused)
     /* Shouldn't have any outstanding */
     castle_merges_hash_iterate(castle_da_merge_check, da);
 
-    castle_da_foreach_tree(da, castle_da_ct_dealloc);
+    __castle_da_foreach_tree(da, castle_da_ct_dealloc);
 
     list_del(&da->hash_list);
+
+    castle_sysfs_da_del_check(da);
     castle_da_dealloc(da);
 
     return 0;
@@ -9431,6 +9426,8 @@ void castle_da_destroy_complete(struct castle_double_array *da)
                 castle_da_merge_dealloc(ct->merge, -ESTALE);
             }
 
+            castle_sysfs_ct_del(ct);
+
             /* No out-standing merges and active attachments. Componenet Tree
              * shouldn't be referenced any-where. */
             BUG_ON(atomic_read(&ct->ref_count) != 1);
@@ -9449,6 +9446,8 @@ void castle_da_destroy_complete(struct castle_double_array *da)
 
     /* Delete the DA from the list of deleted DAs. */
     list_del(&da->hash_list);
+
+    castle_sysfs_da_del_check(da);
 
     /* Dealloc the DA. */
     castle_da_dealloc(da);

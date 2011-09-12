@@ -695,7 +695,7 @@ int castle_version_delete(c_ver_t version)
     write_unlock_irq(&castle_versions_hash_lock);
 
     if (castle_versions_deleted_sysfs_hide)
-        castle_sysfs_version_del(version);
+        BUG_ON(castle_sysfs_version_del(version));
     for(event_vs_idx--; event_vs_idx >= 0; event_vs_idx--)
         castle_events_version_changed(event_vs[event_vs_idx]);
     if(event_vs)
@@ -800,7 +800,7 @@ int castle_version_tree_delete(c_ver_t version)
     {
         struct castle_version *del_v = list_entry(pos, struct castle_version, free_list);
 
-        castle_sysfs_version_del(del_v->version);
+        BUG_ON(castle_sysfs_version_del(del_v->version));
         castle_events_version_delete_version(del_v->version);
         list_del(pos);
         kmem_cache_free(castle_versions_cache, del_v);
@@ -830,7 +830,7 @@ int castle_version_free(c_ver_t version)
 
     BUG_ON(castle_version_delete_from_tree(v, NULL) == NULL);
 
-    castle_sysfs_version_del(version);
+    BUG_ON(castle_sysfs_version_del(version));
     castle_events_version_delete_version(version);
     kmem_cache_free(castle_versions_cache, v);
 

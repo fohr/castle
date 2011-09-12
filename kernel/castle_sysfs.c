@@ -47,10 +47,6 @@ struct castle_sysfs_version {
     struct list_head list;
 };
 
-static unsigned long castle_sysfs_flags;
-
-#define CASTLE_SYSFS_FINISHED 0
-
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,18)
     #define fs_kobject  (&fs_subsys.kset.kobj)
 #elif LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,24)
@@ -76,6 +72,12 @@ static unsigned long castle_sysfs_flags;
 #define kobject_remove(_kobj)                                                    \
     kobject_unregister(_kobj)
 
+#define kobject_remove_wait(_kobj)                                               \
+{                                                                                \
+    kobject_unregister(_kobj);                                                   \
+    castle_sysfs_kobj_release_wait(_kobj);                                       \
+}
+
 #else /* KERNEL_VERSION(2,6,24+) */
 
 #define kobject_tree_add(_kobj, _parent, _ktype, _fmt, _a...)                    \
@@ -91,6 +93,16 @@ static unsigned long castle_sysfs_flags;
     kobject_del(_kobj)
 
 #endif
+
+static void castle_sysfs_kobj_release(struct kobject *kobj)
+{
+    wake_up(&castle_sysfs_kobj_release_wq);
+}
+
+static void castle_sysfs_kobj_release_wait(struct kobject *kobj)
+{
+    wait_event(castle_sysfs_kobj_release_wq, atomic_read(&kobj->kref.refcount) == 0);
+}
 
 static ssize_t versions_list_show(struct kobject *kobj, struct attribute *attr, char *buf)
 {
@@ -158,7 +170,18 @@ static void castle_sysfs_versions_fini(void)
     struct castle_sysfs_version *v;
     struct list_head *l, *t;
 
-    kobject_remove(&castle_sysfs_versions.kobj);
+    /* Remove all sysfs files, which in turn releases references on castle_sysfs_versions.kobj. */
+    list_for_each_safe(l, t, &castle_sysfs_versions.version_list)
+    {
+        v = list_entry(l, struct castle_sysfs_version, list);
+        sysfs_remove_file(&castle_sysfs_versions.kobj, &v->csys_entry.attr);
+    }
+
+    /* Remove parent directory for versions sysfs and wait for it to complete. By this time we
+     * should have released all references from fs code. There could be references due to file
+     * opens from userspace. Wait for them to complete. */
+    kobject_remove_wait(&castle_sysfs_versions.kobj);
+
     list_for_each_safe(l, t, &castle_sysfs_versions.version_list)
     {
         list_del(l);
@@ -171,10 +194,6 @@ int castle_sysfs_version_add(c_ver_t version)
 {
     struct castle_sysfs_version *v;
     int ret;
-
-    /* Don't proceed, just return success - if sysfs is already finished. */
-    if (test_bit(CASTLE_SYSFS_FINISHED, &castle_sysfs_flags))
-        return 0;
 
     v = castle_malloc(sizeof(struct castle_sysfs_version), GFP_KERNEL);
     if(!v) return -ENOMEM;
@@ -206,10 +225,6 @@ int castle_sysfs_version_del(c_ver_t version)
 {
     struct castle_sysfs_version *v = NULL, *k;
     struct list_head *pos, *tmp;
-
-    /* Don't proceed, just return success - if sysfs is already finished. */
-    if (test_bit(CASTLE_SYSFS_FINISHED, &castle_sysfs_flags))
-        return 0;
 
     list_for_each_safe(pos, tmp, &castle_sysfs_versions.version_list)
     {
@@ -732,16 +747,6 @@ static ssize_t castle_attr_store(struct kobject *kobj,
     return entry->store(kobj, attr, page, length);
 }
 
-static void castle_sysfs_kobj_release(struct kobject *kobj)
-{
-    wake_up(&castle_sysfs_kobj_release_wq);
-}
-
-static void castle_sysfs_kobj_release_wait(struct kobject *kobj)
-{
-    wait_event(castle_sysfs_kobj_release_wq, atomic_read(&kobj->kref.refcount) == 0);
-}
-
 static struct sysfs_ops castle_sysfs_ops = {
     .show   = castle_attr_show,
     .store  = castle_attr_store,
@@ -752,6 +757,7 @@ static struct attribute *castle_root_attrs[] = {
 };
 
 static struct kobj_type castle_root_ktype = {
+    .release        = castle_sysfs_kobj_release,
     .sysfs_ops      = &castle_sysfs_ops,
     .default_attrs  = castle_root_attrs,
 };
@@ -761,6 +767,7 @@ static struct attribute *castle_versions_attrs[] = {
 };
 
 static struct kobj_type castle_versions_ktype = {
+    .release        = castle_sysfs_kobj_release,
     .sysfs_ops      = &castle_sysfs_ops,
     .default_attrs  = castle_versions_attrs,
 };
@@ -775,6 +782,7 @@ static struct attribute *castle_double_array_attrs[] = {
 };
 
 static struct kobj_type castle_double_array_ktype = {
+    .release        = castle_sysfs_kobj_release,
     .sysfs_ops      = &castle_sysfs_ops,
     .default_attrs  = castle_double_array_attrs,
 };
@@ -834,10 +842,6 @@ int castle_sysfs_da_add(struct castle_double_array *da)
 {
     int ret;
 
-    /* Don't proceed, just return success - if sysfs is already finished. */
-    if (test_bit(CASTLE_SYSFS_FINISHED, &castle_sysfs_flags))
-        return 0;
-
     memset(&da->kobj, 0, sizeof(struct kobject));
     ret = kobject_tree_add(&da->kobj,
                            &double_arrays_kobj,
@@ -868,22 +872,24 @@ int castle_sysfs_da_add(struct castle_double_array *da)
     return 0;
 
 err2:
-    kobject_remove(&da->arrays_kobj);
-    castle_sysfs_kobj_release_wait(&da->arrays_kobj);
+    kobject_remove_wait(&da->arrays_kobj);
 err1:
-    kobject_remove(&da->kobj);
-    castle_sysfs_kobj_release_wait(&da->kobj);
+    kobject_remove_wait(&da->kobj);
 
     return ret;
 }
 
 void castle_sysfs_da_del(struct castle_double_array *da)
 {
-    /* Don't proceed, just return success - if sysfs is already finished. */
-    if (test_bit(CASTLE_SYSFS_FINISHED, &castle_sysfs_flags))
-        return;
-
+    kobject_remove(&da->merges_kobj);
+    kobject_remove(&da->arrays_kobj);
     kobject_remove(&da->kobj);
+}
+
+void castle_sysfs_da_del_check(struct castle_double_array *da)
+{
+    castle_sysfs_kobj_release_wait(&da->merges_kobj);
+    castle_sysfs_kobj_release_wait(&da->arrays_kobj);
     castle_sysfs_kobj_release_wait(&da->kobj);
 }
 
@@ -956,10 +962,6 @@ int castle_sysfs_ct_add(struct castle_component_tree *ct)
     struct castle_double_array *da;
     int ret;
 
-    /* Don't proceed, just return success - if sysfs is already finished. */
-    if (test_bit(CASTLE_SYSFS_FINISHED, &castle_sysfs_flags))
-        return 0;
-
     /* Get the doubling array. */
     da = castle_da_get_ptr(ct->da);
     BUG_ON(!da);
@@ -978,12 +980,7 @@ int castle_sysfs_ct_add(struct castle_component_tree *ct)
 
 void castle_sysfs_ct_del(struct castle_component_tree *ct)
 {
-    /* Don't proceed, just return success - if sysfs is already finished. */
-    if (test_bit(CASTLE_SYSFS_FINISHED, &castle_sysfs_flags))
-        return;
-
-    kobject_remove(&ct->kobj);
-    castle_sysfs_kobj_release_wait(&ct->kobj);
+    kobject_remove_wait(&ct->kobj);
 }
 
 /* Definition of Merge threads directory attributes */
@@ -1004,6 +1001,7 @@ static struct attribute *castle_merge_threads_attrs[] = {
 };
 
 static struct kobj_type castle_merge_threads_ktype = {
+    .release        = castle_sysfs_kobj_release,
     .sysfs_ops      = &castle_sysfs_ops,
     .default_attrs  = castle_merge_threads_attrs,
 };
@@ -1053,10 +1051,6 @@ int castle_sysfs_merge_thread_add(struct castle_merge_thread *merge_thread)
 {
     int ret;
 
-    /* Don't proceed, just return success - if sysfs is already finished. */
-    if (test_bit(CASTLE_SYSFS_FINISHED, &castle_sysfs_flags))
-        return 0;
-
     memset(&merge_thread->kobj, 0, sizeof(struct kobject));
     ret = kobject_tree_add(&merge_thread->kobj,
                            &merge_threads_kobj,
@@ -1071,12 +1065,7 @@ int castle_sysfs_merge_thread_add(struct castle_merge_thread *merge_thread)
 
 void castle_sysfs_merge_thread_del(struct castle_merge_thread *merge_thread)
 {
-    /* Don't proceed, just return success - if sysfs is already finished. */
-    if (test_bit(CASTLE_SYSFS_FINISHED, &castle_sysfs_flags))
-        return;
-
-    kobject_remove(&merge_thread->kobj);
-    castle_sysfs_kobj_release_wait(&merge_thread->kobj);
+    kobject_remove_wait(&merge_thread->kobj);
 }
 
 /**
@@ -1147,10 +1136,6 @@ int castle_sysfs_merge_add(struct castle_da_merge *merge)
 {
     int ret;
 
-    /* Don't proceed, just return success - if sysfs is already finished. */
-    if (test_bit(CASTLE_SYSFS_FINISHED, &castle_sysfs_flags))
-        return 0;
-
     /* Add a directory for list of arrays. */
     memset(&merge->kobj, 0, sizeof(struct kobject));
     ret = kobject_tree_add(&merge->kobj,
@@ -1165,12 +1150,7 @@ int castle_sysfs_merge_add(struct castle_da_merge *merge)
 
 void castle_sysfs_merge_del(struct castle_da_merge *merge)
 {
-    /* Don't proceed, just return success - if sysfs is already finished. */
-    if (test_bit(CASTLE_SYSFS_FINISHED, &castle_sysfs_flags))
-        return;
-
-    kobject_remove(&merge->kobj);
-    castle_sysfs_kobj_release_wait(&merge->kobj);
+    kobject_remove_wait(&merge->kobj);
 }
 
 /* Definition of slaves sysfs directory attributes */
@@ -1187,6 +1167,7 @@ static struct attribute *castle_slaves_attrs[] = {
 };
 
 static struct kobj_type castle_slaves_ktype = {
+    .release        = castle_sysfs_kobj_release,
     .sysfs_ops      = &castle_sysfs_ops,
     .default_attrs  = castle_slaves_attrs,
 };
@@ -1226,10 +1207,6 @@ int castle_sysfs_slave_add(struct castle_slave *slave)
 {
     int ret;
 
-    /* Don't proceed, just return success - if sysfs is already finished. */
-    if (test_bit(CASTLE_SYSFS_FINISHED, &castle_sysfs_flags))
-        return 0;
-
     memset(&slave->kobj, 0, sizeof(struct kobject));
     ret = kobject_tree_add(&slave->kobj,
                            &castle_slaves.kobj,
@@ -1258,15 +1235,10 @@ int castle_sysfs_slave_add(struct castle_slave *slave)
 
 void castle_sysfs_slave_del(struct castle_slave *slave)
 {
-    /* Don't proceed, just return success - if sysfs is already finished. */
-    if (test_bit(CASTLE_SYSFS_FINISHED, &castle_sysfs_flags))
-        return;
-
     /* If slave is not claimed, the sysfs 'dev' link will already have been removed. */
     if (!test_bit(CASTLE_SLAVE_BDCLAIMED_BIT, &slave->flags))
         sysfs_remove_link(&slave->kobj, "dev");
-    kobject_remove(&slave->kobj);
-    castle_sysfs_kobj_release_wait(&slave->kobj);
+    kobject_remove_wait(&slave->kobj);
 }
 
 /* Definition of devices sysfs directory attributes */
@@ -1279,6 +1251,7 @@ static struct attribute *castle_devices_attrs[] = {
 };
 
 static struct kobj_type castle_devices_ktype = {
+    .release        = castle_sysfs_kobj_release,
     .sysfs_ops      = &castle_sysfs_ops,
     .default_attrs  = castle_devices_attrs,
 };
@@ -1293,6 +1266,7 @@ static struct attribute *castle_collections_attrs[] = {
 };
 
 static struct kobj_type castle_collections_ktype = {
+    .release        = castle_sysfs_kobj_release,
     .sysfs_ops      = &castle_sysfs_ops,
     .default_attrs  = castle_collections_attrs,
 };
@@ -1307,6 +1281,7 @@ static struct attribute *castle_filesystem_attrs[] = {
 };
 
 static struct kobj_type castle_filesystem_ktype = {
+    .release        = castle_sysfs_kobj_release,
     .sysfs_ops      = &castle_sysfs_ops,
     .default_attrs  = castle_filesystem_attrs,
 };
@@ -1321,6 +1296,7 @@ static struct attribute *castle_devel_attrs[] = {
 };
 
 static struct kobj_type castle_devel_ktype = {
+    .release        = castle_sysfs_kobj_release,
     .sysfs_ops      = &castle_sysfs_ops,
     .default_attrs  = castle_devel_attrs,
 };
@@ -1348,10 +1324,6 @@ int castle_sysfs_device_add(struct castle_attachment *device)
 {
     int ret;
 
-    /* Don't proceed, just return success - if sysfs is already finished. */
-    if (test_bit(CASTLE_SYSFS_FINISHED, &castle_sysfs_flags))
-        return 0;
-
     memset(&device->kobj, 0, sizeof(struct kobject));
     ret = kobject_tree_add(&device->kobj,
                            &castle_attachments.devices_kobj,
@@ -1373,15 +1345,10 @@ int castle_sysfs_device_add(struct castle_attachment *device)
 
 void castle_sysfs_device_del(struct castle_attachment *device)
 {
-    /* Don't proceed, just return success - if sysfs is already finished. */
-    if (test_bit(CASTLE_SYSFS_FINISHED, &castle_sysfs_flags))
-        return;
-
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,24)
     sysfs_remove_link(&device->kobj, "dev");
 #endif
-    kobject_remove(&device->kobj);
-    castle_sysfs_kobj_release_wait(&device->kobj);
+    kobject_remove_wait(&device->kobj);
 }
 
 /* Definition of each collection sysfs directory attributes */
@@ -1415,10 +1382,6 @@ int castle_sysfs_collection_add(struct castle_attachment *collection)
 {
     int ret;
 
-    /* Don't proceed, just return success - if sysfs is already finished. */
-    if (test_bit(CASTLE_SYSFS_FINISHED, &castle_sysfs_flags))
-        return 0;
-
     memset(&collection->kobj, 0, sizeof(struct kobject));
     ret = kobject_tree_add(&collection->kobj,
                            &castle_attachments.collections_kobj,
@@ -1433,12 +1396,7 @@ int castle_sysfs_collection_add(struct castle_attachment *collection)
 
 void castle_sysfs_collection_del(struct castle_attachment *collection)
 {
-    /* Don't proceed, just return success - if sysfs is already finished. */
-    if (test_bit(CASTLE_SYSFS_FINISHED, &castle_sysfs_flags))
-        return;
-
-    kobject_remove(&collection->kobj);
-    castle_sysfs_kobj_release_wait(&collection->kobj);
+    kobject_remove_wait(&collection->kobj);
 }
 
 /* Initialisation of sysfs dirs == kobjs registration */
@@ -1526,23 +1484,23 @@ int castle_sysfs_init(void)
 
     return 0;
 
-    kobject_remove(&merge_threads_kobj); /* Unreachable */
+    kobject_remove_wait(&merge_threads_kobj); /* Unreachable */
 out9:
-    kobject_remove(&devel_kobj);
+    kobject_remove_wait(&devel_kobj);
 out8:
-    kobject_remove(&filesystem_kobj);
+    kobject_remove_wait(&filesystem_kobj);
 out7:
-    kobject_remove(&double_arrays_kobj);
+    kobject_remove_wait(&double_arrays_kobj);
 out6:
-    kobject_remove(&castle_attachments.collections_kobj);
+    kobject_remove_wait(&castle_attachments.collections_kobj);
 out5:
-    kobject_remove(&castle_attachments.devices_kobj);
+    kobject_remove_wait(&castle_attachments.devices_kobj);
 out4:
-    kobject_remove(&castle_slaves.kobj);
+    kobject_remove_wait(&castle_slaves.kobj);
 out3:
-    kobject_remove(&castle_sysfs_versions.kobj);
+    kobject_remove_wait(&castle_sysfs_versions.kobj);
 out2:
-    kobject_remove(&castle.kobj);
+    kobject_remove_wait(&castle.kobj);
 out1:
 
     return ret;
@@ -1550,9 +1508,6 @@ out1:
 
 void castle_sysfs_fini(void)
 {
-    set_bit(CASTLE_SYSFS_FINISHED, &castle_sysfs_flags);
-    mb();
-
     kobject_remove(&merge_threads_kobj);
     if (castle_devel_enabled)
     {
@@ -1566,4 +1521,29 @@ void castle_sysfs_fini(void)
     kobject_remove(&castle_slaves.kobj);
     castle_sysfs_versions_fini();
     kobject_remove(&castle.kobj);
+}
+
+void castle_sysfs_fini_check(void)
+{
+    printk("Waiting on merge_threads_kobj ...\n");
+    castle_sysfs_kobj_release_wait(&merge_threads_kobj);
+    if (castle_devel_enabled)
+    {
+        castle_devel_enabled = 0;
+        printk("Waiting on devel_kobj ...\n");
+        castle_sysfs_kobj_release_wait(&devel_kobj);
+    }
+    printk("Waiting on filesystem_kobj ...\n");
+    castle_sysfs_kobj_release_wait(&filesystem_kobj);
+    printk("Waiting on double_arrays_kobj ...\n");
+    castle_sysfs_kobj_release_wait(&double_arrays_kobj);
+    printk("Waiting on castle_attachments.collections_kobj ...\n");
+    castle_sysfs_kobj_release_wait(&castle_attachments.collections_kobj);
+    printk("Waiting on castle_attachments.devices_kobj ...\n");
+    castle_sysfs_kobj_release_wait(&castle_attachments.devices_kobj);
+    printk("Waiting on castle_slaves.kobj ...\n");
+    castle_sysfs_kobj_release_wait(&castle_slaves.kobj);
+    printk("Waiting on castle.kobj ...\n");
+    castle_sysfs_kobj_release_wait(&castle.kobj);
+    printk("Released all castle kobjects\n");
 }
