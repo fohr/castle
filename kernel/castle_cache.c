@@ -5864,7 +5864,7 @@ static void castle_mstore_node_add(struct castle_mstore *store)
     c2b = castle_cache_page_block_get(cep);
     debug_mstore("Allocated "cep_fmt_str_nl, cep2str(cep));
     write_lock_c2b(c2b);
-    set_c2b_uptodate(c2b);
+    update_c2b(c2b);
     debug_mstore("Locked.\n");
 
     /* Init the node correctly */
