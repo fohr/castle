@@ -587,18 +587,29 @@ static void castle_vlba_tree_entry_replace(struct castle_btree_node *node,
 
     if (do_replace)
     {
-        memcpy(entry, &new_entry, sizeof(struct castle_vlba_tree_entry));
-        memcpy(&entry->key, key, sizeof(vlba_key_t) + VLBA_KEY_LENGTH(key));
-        BUG_ON(VLBA_TREE_ENTRY_IS_TOMB_STONE(entry) && entry->val_len != 0);
-        if (VLBA_TREE_ENTRY_IS_INLINE(entry))
+        BUG_ON(VLBA_TREE_ENTRY_IS_TOMB_STONE(&new_entry) && new_entry.val_len != 0);
+
+        /* since the key and/or inline value we've been given might be located inside the
+         * entry we're replacing, we have to be careful with the order of the moves */
+
+        if (new_length < old_length && VLBA_TREE_ENTRY_IS_INLINE(&new_entry))
         {
-            BUG_ON(entry->val_len > MAX_INLINE_VAL_SIZE);
-            memcpy(VLBA_ENTRY_VAL_PTR(entry),
-                   CVT_INLINE_VAL_PTR(cvt),
-                   cvt.length);
+            BUG_ON(cvt.length > MAX_INLINE_VAL_SIZE);
+            memmove((uint8_t *) entry + new_length - cvt.length,
+                    CVT_INLINE_VAL_PTR(cvt), cvt.length);
         }
-        else
-            entry->cep      = cvt.cep;
+
+        memmove(&entry->key, key, sizeof(vlba_key_t) + VLBA_KEY_LENGTH(key));
+        memcpy(entry, &new_entry, sizeof(struct castle_vlba_tree_entry) - sizeof(vlba_key_t));
+        if (!VLBA_TREE_ENTRY_IS_INLINE(entry))
+            entry->cep = cvt.cep;
+
+        if (new_length >= old_length && VLBA_TREE_ENTRY_IS_INLINE(entry))
+        {
+            BUG_ON(cvt.length > MAX_INLINE_VAL_SIZE);
+            memmove(VLBA_ENTRY_VAL_PTR(entry),
+                    CVT_INLINE_VAL_PTR(cvt), cvt.length);
+        }
     }
     else
     {
