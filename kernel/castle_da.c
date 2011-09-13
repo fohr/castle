@@ -92,7 +92,7 @@ int                             castle_rwct_checkpoint_frequency = 10;  /**< Num
 module_param(castle_rwct_checkpoint_frequency, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
 MODULE_PARM_DESC(castle_rwct_checkpoint_frequency, "Number checkpoints before RWCTs are promoted.");
 
-static int castle_golden_nugget = 1;
+static int castle_golden_nugget = 0;
 
 static struct
 {
