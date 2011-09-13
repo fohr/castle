@@ -3,6 +3,7 @@
 #include "castle_utils.h"
 #include "castle_keys_vlba.h"
 #include "castle_btree_vlba_tree.h"
+#include "castle_versions.h"
 
 /* lifted from castle_btree.c */
 #ifndef DEBUG
