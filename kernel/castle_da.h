@@ -5,6 +5,12 @@
 
 #define NR_CASTLE_DA_WQS 1
 
+typedef struct {
+    //TODO@tr seems sensible to hold ext_id here as well?
+    uint64_t    ext_used_bytes;       /* bytes currently used */
+    uint64_t    ext_avail_bytes;      /* byets available from extent_grow calls */
+} growth_control_state_t;
+
 struct castle_da_merge {
     c_merge_id_t                  id;
     struct list_head              hash_list;
@@ -72,11 +78,8 @@ struct castle_da_merge {
     /* partition activate copies the above into... */
     c_ext_pos_t                  *in_tree_shrinkable_cep;
 
-    struct growth_control_t {
-        uint32_t tree_ext_nodes_capacity;
-        uint32_t tree_ext_nodes_occupancy;
-        //TODO@tr data extent
-    } growth_control;
+    growth_control_state_t growth_control_tree; /* btree leaf node extent growth control */
+    growth_control_state_t growth_control_data; /* medium objects extent growth control */
     int aborting; /* TODO@tr unhack this... this hack was put specifically to deal with low
                              freespace leading to failure to grow extents, until exit_cond. */
 
