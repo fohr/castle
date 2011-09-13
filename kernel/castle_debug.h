@@ -2,6 +2,7 @@
 #define __CASTLE_DEBUG_H__
 
 #ifdef CASTLE_DEBUG
+#include "castle.h"
 
 /* castle_bio_vec state debugging bits */
 #define C_BVEC_INITIALISED          (0x1)
