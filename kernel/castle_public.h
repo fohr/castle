@@ -216,17 +216,13 @@ typedef struct castle_array_info {
 typedef struct castle_merge_config {
     uint32_t                nr_arrays;          /**< # of arrays to be merged.                  */
     c_array_id_t           *arrays;             /**< List of arrays.                            */
-#if 0
     uint32_t                nr_med_extents;     /**< Number of medium extents in this array.    */
     c_medium_ext_info_t    *med_exts;           /**< List of medium extents.                    */
-#endif
     c_rda_type_t            metadata_ext_type;  /**< Type of the extent that the output metdata *
                                                   *< to go. (SSD_RDA/DEFAULT_RDA/SSD_ONLY_EXT)  */
     c_rda_type_t            med_ext_type;       /**< Type of the extent that medium objects     *
                                                   *< to go. (SSD_RDA/DEFAULT_RDA/SSD_ONLY_EXT)  */
-#if 0
     uint32_t                bandwidth;
-#endif
 } c_merge_cfg_t;
 
 /* And our IOCTL code is: */
