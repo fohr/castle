@@ -3781,6 +3781,8 @@ int rebuild_init(void)
 {
     struct castle_fs_superblock *fs_sb;
 
+    castle_printk(LOG_DEVEL, "Starting rebuild run.\n");
+
     fs_sb = castle_fs_superblocks_get();
     fs_sb->fs_in_rebuild = 1;
     castle_fs_superblocks_put(fs_sb, 1);
