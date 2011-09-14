@@ -46,8 +46,6 @@ struct castle_da_merge {
 
     /* Deamortization variables */
     struct work_struct            work;
-    int                           budget_cons_rate;
-    int                           budget_cons_units;
     int                           leafs_on_ssds;        /**< Are leaf btree nodes stored on SSD.*/
     int                           internals_on_ssds;    /**< Are internal nodes stored on SSD.  */
     struct list_head              new_large_objs;       /**< Large objects added since last
@@ -60,7 +58,6 @@ struct castle_da_merge {
     u64                           merged_iter_next_ns;
     u64                           da_medium_obj_copy_ns;
     u64                           nodes_complete_ns;
-    u64                           budget_consume_ns;
     u64                           progress_update_ns;
     u64                           merged_iter_next_hasnext_ns;
     u64                           merged_iter_next_compare_ns;

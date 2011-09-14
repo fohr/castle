@@ -2047,17 +2047,11 @@ struct castle_double_array {
         struct work_struct      work;               /**< For queue kicks                        */
     } *ios_waiting;                                 /**< Array of pending write IO queues,
                                                          1 queue per request-handling CPU       */
+    int                         inserts_enabled;    /**< Whether write IOs are being accepted.
+                                                         Protected by DA write lock.            */
     atomic_t                    ios_waiting_cnt;    /**< Total number of pending write IOs      */
-    atomic_t                    ios_budget;         /**< Remaining number of write IOs that can
-                                                         hit T0 before they get queued          */
-    int                         ios_rate;           /**< ios_budget initialiser; for throttling
-                                                         writes to the btrees                   */
 
     wait_queue_head_t           merge_waitq;        /**< Merge deamortisation wait queue        */
-    /* Merge throttling. DISABLED ATM. */
-    atomic_t                    epoch_ios;
-    atomic_t                    merge_budget;
-    wait_queue_head_t           merge_budget_waitq;
     /* Compaction (Big-merge) */
     int                         top_level;          /**< Levels in the doubling array.          */
 

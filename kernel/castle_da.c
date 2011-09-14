@@ -158,7 +158,6 @@ struct castle_da_merge;
 static int castle_da_merge_restart(struct castle_double_array *da, void *unused);
 static int castle_da_merge_start(struct castle_double_array *da, void *unused);
 void castle_double_array_merges_fini(void);
-static void castle_da_merge_budget_consume(struct castle_da_merge *merge);
 static struct castle_component_tree* castle_da_rwct_get(struct castle_double_array *da,
                                                         int cpu_index);
 static void castle_da_queue_kick(struct work_struct *work);
@@ -2173,136 +2172,6 @@ struct castle_iterator_type castle_da_rq_iter = {
     .skip       = (castle_iterator_skip_t)       castle_da_rq_iter_skip,
     .cancel     = (castle_iterator_cancel_t)     castle_da_rq_iter_cancel,
 };
-
-/************************************/
-/* Marge rate control functionality */
-static void castle_da_merge_budget_consume(struct castle_da_merge *merge)
-{
-    struct castle_double_array *da;
-
-    BUG_ON(in_atomic());
-    if(castle_da_exiting)
-        return;
-
-    /* Check if we need to consume some merge budget */
-    merge->budget_cons_units++;
-    if(merge->budget_cons_units < merge->budget_cons_rate)
-        return;
-
-    da = merge->da;
-    /* Consume a single unit of budget. */
-    while(atomic_dec_return(&da->merge_budget) < 0)
-    {
-        /* We failed to get merge budget, readd the unit, and wait for some to appear. */
-        atomic_inc(&da->merge_budget);
-        /* Extra warning message, which we shouldn't see. Increase the MIN, if we do. */
-        castle_printk(LOG_WARN,
-                "WARNING, possible error: Merges running fast, but not throttling.\n");
-        atomic_add(MIN_BUDGET_DELTA, &da->merge_budget);
-        return;
-        //wait_event(da->merge_budget_waitq, atomic_read(&da->merge_budget) > 0);
-    }
-}
-
-#define REPLENISH_FREQUENCY (10)        /* Replenish budgets every 100ms. */
-static int castle_da_merge_budget_replenish(struct castle_double_array *da, void *unused)
-{
-    int ios = atomic_read(&da->epoch_ios);
-    int budget_delta = 0, merge_budget;
-
-    atomic_set(&da->epoch_ios, 0);
-    debug("Merge replenish, number of ios in last second=%d.\n", ios);
-    if(ios < MAX_IOS)
-        budget_delta = MAX_IOS - ios;
-    if(budget_delta < MIN_BUDGET_DELTA)
-        budget_delta = MIN_BUDGET_DELTA;
-    BUG_ON(budget_delta <= 0);
-    merge_budget = atomic_add_return(budget_delta, &da->merge_budget);
-    if(merge_budget > MAX_BUDGET)
-        atomic_sub(merge_budget - MAX_BUDGET, &da->merge_budget);
-    wake_up(&da->merge_budget_waitq);
-
-    return 0;
-}
-
-static void castle_merge_budgets_replenish(void *unused)
-{
-   castle_da_hash_iterate(castle_da_merge_budget_replenish, NULL);
-}
-
-/**
- * Replenish ios_budget from ios_rate and schedule IO wait queue kicks.
- *
- * NOTE: This might remove rather than replenish the budget, depending on
- * whether inserts are enabled/disabled(/throttled) on the DA.
- *
- * ios_rate is used to throttle inserts into the btree.  It is used as an
- * initialiser for ios_budget.
- *
- * This function is expected to be called periodically (e.g. via a timer) with
- * values of ios_rate that maintain a sustainable flow of inserts.
- *
- * - Update ios_budget
- * - Schedule queue kicks for all IO wait queues that have elements
- *
- * @also struct castle_double_array
- * @also castle_da_queue_kick()
- */
-static int castle_da_ios_budget_replenish(struct castle_double_array *da, void *unused)
-{
-    int i;
-
-    atomic_set(&da->ios_budget, da->ios_rate);
-
-    if (da->ios_rate || castle_fs_exiting || castle_da_no_disk_space(da))
-    {
-        /* We just replenished the DA's ios_budget.
-         *
-         * We need to kick all of the write IO wait queues.  In the current
-         * context we hold spin_lock_irq(&castle_da_hash_lock) so schedule this
-         * work so we can drop the lock and return immediately. */
-        for (i = 0; i < castle_double_array_request_cpus(); i++)
-        {
-            struct castle_da_io_wait_queue *wq = &da->ios_waiting[i];
-
-            spin_lock(&wq->lock);
-            if (!list_empty(&wq->list))
-                /* wq->work is initialised as castle_da_queue_kick(). */
-                queue_work_on(request_cpus.cpus[i], castle_wqs[0], &wq->work);
-            spin_unlock(&wq->lock);
-        }
-    }
-
-    return 0;
-}
-
-/**
- * Replenish ios_budget for all DAs on the system.
- */
-static void castle_ios_budgets_replenish(void *unused)
-{
-   castle_da_hash_iterate(castle_da_ios_budget_replenish, NULL);
-}
-
-static inline void castle_da_merge_budget_io_end(struct castle_double_array *da)
-{
-    atomic_inc(&da->epoch_ios);
-}
-
-static DECLARE_WORK(merge_budgets_replenish_work, castle_merge_budgets_replenish, NULL);
-static DECLARE_WORK(ios_budgets_replenish_work, castle_ios_budgets_replenish, NULL);
-
-/************************************/
-/* Throttling timers */
-static struct timer_list throttle_timer;
-static void castle_throttle_timer_fire(unsigned long first)
-{
-    schedule_work(&merge_budgets_replenish_work);
-    schedule_work(&ios_budgets_replenish_work);
-    /* Reschedule ourselves */
-    setup_timer(&throttle_timer, castle_throttle_timer_fire, 0);
-    mod_timer(&throttle_timer, jiffies + HZ/REPLENISH_FREQUENCY);
-}
 
 /************************************/
 /* Actual merges */
@@ -4978,9 +4847,7 @@ static int castle_da_merge_unit_do(struct castle_da_merge *merge, uint64_t max_n
 
 entry_done:
         castle_perf_debug_getnstimeofday(&ts_start);
-        castle_da_merge_budget_consume(merge);
         castle_perf_debug_getnstimeofday(&ts_end);
-        castle_perf_debug_bump_ctr(merge->budget_consume_ns, ts_end, ts_start);
 
         /* Abort if we completed the work asked to do. */
         if (merge->nr_entries > max_nr_entries)
@@ -5242,8 +5109,6 @@ static struct castle_da_merge* castle_da_merge_alloc(int nr_trees, int level,
         merge->levels[i].valid_version = INVAL_VERSION;
     }
 
-    merge->budget_cons_rate     = 1;
-    merge->budget_cons_units    = 0;
     INIT_LIST_HEAD(&merge->new_large_objs);
 
     if (castle_version_states_alloc(&merge->version_states,
@@ -5267,7 +5132,6 @@ static struct castle_da_merge* castle_da_merge_alloc(int nr_trees, int level,
     merge->merged_iter_next_ns          = 0;
     merge->da_medium_obj_copy_ns        = 0;
     merge->nodes_complete_ns            = 0;
-    merge->budget_consume_ns            = 0;
     merge->progress_update_ns           = 0;
     merge->merged_iter_next_hasnext_ns  = 0;
     merge->merged_iter_next_compare_ns  = 0;
@@ -6582,32 +6446,47 @@ static int castle_da_merge_stop(struct castle_double_array *da, void *unused)
 }
 
 /**
- * Enable/disable inserts for da and wake-up merge thread.
+ * Enable/disable inserts on DA and wake-up merge threads and kick write queues.
  *
- * @param da    Doubling array to throttle and merge
+ * @param   da  Doubling array to throttle and merge
  */
 static int castle_da_merge_restart(struct castle_double_array *da, void *unused)
 {
     debug("Restarting merge for DA=%d\n", da->id);
 
     write_lock(&da->lock);
+
     if (da->levels[1].nr_trees >= 4 * castle_double_array_request_cpus())
     {
-        if (da->ios_rate != 0)
+        if (da->inserts_enabled)
         {
+            /* Too many backed-up trees at level 0.  Disable inserts. */
             castle_printk(LOG_PERF, "Disabling inserts on da=%d.\n", da->id);
             castle_trace_da(TRACE_START, TRACE_DA_INSERTS_DISABLED_ID, da->id, 0);
+            da->inserts_enabled = 0;
         }
-        da->ios_rate = 0;
     }
-    else
+    else if (!da->inserts_enabled)
     {
-        if (da->ios_rate == 0)
+        /* Merges have caught up, re-enable inserts. */
+        int i;
+
+        castle_printk(LOG_PERF, "Enabling inserts on da=%d.\n", da->id);
+        castle_trace_da(TRACE_END, TRACE_DA_INSERTS_DISABLED_ID, da->id, 0);
+        da->inserts_enabled = 1;
+
+        /* Schedule drain of pending write IOs now inserts are enabled. */
+        for (i = 0; i < castle_double_array_request_cpus(); i++)
         {
-            castle_printk(LOG_PERF, "Enabling inserts on da=%d.\n", da->id);
-            castle_trace_da(TRACE_END, TRACE_DA_INSERTS_DISABLED_ID, da->id, 0);
+            struct castle_da_io_wait_queue *wq;
+
+            wq = &da->ios_waiting[i];
+            spin_lock(&wq->lock);
+            if (!list_empty(&wq->list))
+                /* wq->work == castle_da_queue_kick() */
+                queue_work_on(request_cpus.cpus[i], castle_wqs[0], &wq->work);
+            spin_unlock(&wq->lock);
         }
-        da->ios_rate = INT_MAX;
     }
     write_unlock(&da->lock);
     wake_up(&da->merge_waitq);
@@ -6836,15 +6715,12 @@ static struct castle_double_array* castle_da_alloc(c_da_t da_id)
     atomic_set(&da->queriable_merge_trees_cnt, 0);
     atomic_set(&da->ref_cnt, 1);
     da->attachment_cnt  = 0;
+    da->inserts_enabled = 1;
     atomic_set(&da->ios_waiting_cnt, 0);
     if (castle_da_wait_queue_create(da, NULL) != EXIT_SUCCESS)
         goto err_out;
-    atomic_set(&da->ios_budget, 0);
-    da->ios_rate        = 0;
     da->top_level       = 0;
     /* For existing double arrays driver merge has to be reset after loading it. */
-    atomic_set(&da->epoch_ios, 0);
-    atomic_set(&da->merge_budget, 0);
     atomic_set(&da->ongoing_merges, 0);
 
     atomic_set(&da->lfs_victim_count, 0);
@@ -6858,7 +6734,6 @@ static struct castle_double_array* castle_da_alloc(c_da_t da_id)
     }
 
     init_waitqueue_head(&da->merge_waitq);
-    init_waitqueue_head(&da->merge_budget_waitq);
 
     for(i=0; i<MAX_DA_LEVEL-1; i++)
     {
@@ -9083,16 +8958,15 @@ static void castle_da_bvec_queue(struct castle_double_array *da, c_bvec_t *c_bve
 /**
  * Submit write IOs queued on wait queue to btree.
  *
- * @param work  Embedded in struct castle_da_io_wait_queue
+ * @param   work    Embedded in struct castle_da_io_wait_queue
  *
- * - Remove pending IOs from the wait queue so long as ios_budget is positive
+ * - Submit pending IOs from wait queue while inserts_enabled
  * - Place pending IOs on a new list of IOs to be submitted to the appropriate
  *   btree
  * - We use an intermediate list to minimise the amount of time we hold the
  *   wait queue lock (although subsequent IOs should be hitting the same CPU)
  *
  * @also struct castle_da_io_wait_queue
- * @also castle_da_ios_budget_replenish()
  * @also castle_da_write_bvec_start()
  */
 static void castle_da_queue_kick(struct work_struct *work)
@@ -9105,13 +8979,12 @@ static void castle_da_queue_kick(struct work_struct *work)
     /* Get as many c_bvecs as we can and place them on the submit list.
        Take them all on module exit. */
     spin_lock(&wq->lock);
-    while (((atomic_dec_return(&wq->da->ios_budget) >= 0)
-                || castle_fs_exiting
-                || castle_da_no_disk_space(wq->da))
-            && !list_empty(&wq->list))
+    while (((wq->da->inserts_enabled)
+                    || castle_fs_exiting
+                    || castle_da_no_disk_space(wq->da))
+                && !list_empty(&wq->list))
     {
-        /* New IOs are queued at the end of the list.  Always pull from the
-         * front of the list to preserve ordering. */
+        /* Wait queue is FIFO so pull from the front for correct ordering. */
         c_bvec = list_first_entry(&wq->list, c_bvec_t, io_list);
         list_del(&c_bvec->io_list);
         list_add(&c_bvec->io_list, &submit_list);
@@ -9257,7 +9130,6 @@ static void castle_da_ct_write_complete(c_bvec_t *c_bvec, int err, c_val_tup_t c
     }
     BUG_ON(c_bvec_data_dir(c_bvec) != WRITE);
     debug_verbose("Finished with DA, calling back.\n");
-    castle_da_merge_budget_io_end(castle_da_hash_get(ct->da));
     /* Release the preallocated space in the btree extent. */
     castle_double_array_unreserve(c_bvec);
     BUG_ON(CVT_MEDIUM_OBJECT(cvt) && (cvt.cep.ext_id != c_bvec->tree->data_ext_free.ext_id));
@@ -9359,16 +9231,15 @@ static void castle_da_read_bvec_start(struct castle_double_array *da, c_bvec_t *
 }
 
 /**
- * Submit request to DA, queueing write IOs that are not within the DA ios_budget.
+ * Submit request to DA, write IOs are queued if inserts are disabled.
  *
  * Read requests:
  * - Processed immediately
  *
  * Write requests:
  * - Hold appropriate write queue spinlock to guarantee ordering
- * - If we're within ios_budget and there write queue is empty, queue the write
- *   IO immediately
- * - Otherwise queue write IO and wait for the ios_budget to be replenished
+ * - If da->inserts_enabled and pending write queue is empty, submit immediately
+ * - Otherwise queue write IO and wait for queue kick when inserts reenabled
  *
  * @also castle_da_bvec_queue()
  * @also castle_da_read_bvec_start()
@@ -9518,28 +9389,22 @@ void castle_double_array_queue(c_bvec_t *c_bvec)
     BUG_ON(!da);
     BUG_ON(atomic_read(&c_bvec->reserv_nodes) != 0);
 
-    /* Write requests must operate within the ios_budget but reads can be
-     * scheduled immediately. */
+    /* Write requests only accepted if inserts enabled and no queued writes. */
     wq = &da->ios_waiting[c_bvec->cpu_index];
     spin_lock(&wq->lock);
-    if ((atomic_dec_return(&da->ios_budget) >= 0) && list_empty(&wq->list))
+    if (da->inserts_enabled && list_empty(&wq->list))
     {
-        /* We're within the budget and there are no other IOs on the queue,
-         * schedule this write IO immediately. */
+        /* Inserts enabled, no pending IOs.  Schedule write immediately. */
         spin_unlock(&wq->lock);
         castle_da_reserve(da, c_bvec);
     }
     else
     {
-        /* Either the budget is exhausted or there are other IOs pending on
-         * the write queue.  Queue this write IO.
+        /* Inserts disabled or other pending write IOs - queue this request.
          *
-         * Don't do a manual queue kick as if/when ios_budget is replenished
-         * kicks for all of the DA's write queues will be scheduled.  The
-         * kick for 'our' write queue will block on the spinlock we hold.
-         *
-         * ios_budget will be replenished; save an atomic op and leave it
-         * in a negative state. */
+         * Most likely inserts are disabled.  In the case that there are pending
+         * write IOs and inserts enabled we're racing with an already initiated
+         * queue kick so there's no need to manually do one now. */
         castle_da_bvec_queue(da, c_bvec);
         spin_unlock(&wq->lock);
     }
@@ -9618,8 +9483,6 @@ int castle_double_array_init(void)
     castle_ct_hash_init();
     castle_merge_threads_hash_init();
     castle_merges_hash_init();
-    /* Start up the timer which replenishes merge and write IOs budget */
-    castle_throttle_timer_fire(1);
 
     return 0;
 err4:
@@ -9657,7 +9520,6 @@ void castle_double_array_merges_fini(void)
     __castle_merge_threads_hash_iterate(castle_merge_thread_stop, NULL);
     CASTLE_TRANSACTION_END;
 
-    del_singleshot_timer_sync(&throttle_timer);
     /* This is happening at the end of execution. No need for the hash lock. */
     __castle_da_hash_iterate(castle_da_merge_stop, NULL);
     /* Also, wait for merges on deleted DAs. Merges will hold the last references to those DAs. */
