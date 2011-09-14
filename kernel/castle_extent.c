@@ -4299,48 +4299,95 @@ void cleanup_extent(c_ext_t *ext, int update_seqno)
  */
 static void writeback_rebuild_chunk(writeback_info_t *writeback_info)
 {
-    c_ext_pos_t map_cep, map_page_cep;
+    c_ext_pos_t map_cep;
     c2_block_t *map_c2b, *reserve_c2b;
     int chunkno;
     c_ext_t             *ext = __castle_extents_hash_get(writeback_info->ext_id);
     uint32_t            k_factor = castle_extent_kfactor_get(writeback_info->ext_id);
+    int                 last_map_page, last_map_page_partial;
+    int                 map_page_idx, maps_in_a_page, max_map_page_idx;
+    int chunks;
+
+    /* Shadow map must be page aligned. */
+    BUG_ON((unsigned long)ext->shadow_map % PAGE_SIZE);
+
+    /* Get the map cep for the page containing the first chunk in the range. */
+    map_cep = castle_extent_map_cep_get(ext->maps_cep, writeback_info->start_chunk, ext->k_factor);
+    map_cep.offset = MASK_BLK_OFFSET(map_cep.offset);
+
+    /* The number of map chunks per page. */
+    maps_in_a_page = map_chks_per_page(ext->k_factor);
+    /* The max index (starting from 0) of a chunk in a page. */
+    max_map_page_idx = maps_in_a_page - 1;
+
+    /* Initial index into the page for the start chunk. */
+    map_page_idx = writeback_info->start_chunk % maps_in_a_page;
+
+    /* The page index of the last chunk in the extent that has been processed by rebuild. */
+    last_map_page = writeback_info->end_chunk / maps_in_a_page;
+    /* last_map_page_partial will be 'true' if the last map page is a partial one. */
+    last_map_page_partial = (writeback_info->end_chunk + 1) % maps_in_a_page;
+
+    map_c2b = NULL;
+    reserve_c2b = NULL;
 
     for (chunkno = writeback_info->start_chunk; chunkno<=writeback_info->end_chunk; chunkno++)
     {
+        if (!map_c2b)
+        {
+            /* Get the c2b for the page containing the map cep.
+             *
+             * In order to prevent a situation where we have no reserve c2b/c2ps
+             * for the flush thread, make a single page c2b reservation and
+             * release it once we've finished dirtying the map_c2b.
+             */
+            reserve_c2b = castle_cache_page_block_reserve();
+            map_c2b = castle_cache_page_block_get(map_cep);
+            write_lock_c2b(map_c2b);
+
+            /*
+             * If this is the last page for the shadow map range, and we are only writing back a
+             * partial page, then read in the page first, if it is not updodate. This is because
+             * external threads (e.g. extent grow) may have updated the contents of the part of
+             * the page that we are not overwriting, and we do not want to write back stale data.
+             * (If we are changing the contents of an entire page, then we don't care what the old
+             * contents were).
+             */
+            if ((((chunkno / maps_in_a_page) == last_map_page) && last_map_page_partial) &&
+                !c2b_uptodate(map_c2b))
+                BUG_ON(submit_c2b_sync(READ, map_c2b));
+
+            /* Next (if any) cache block get will be for the next page in the map. */
+            map_cep.offset += C_BLK_SIZE;
+        }
+
+        BUG_ON(!map_c2b);
+
         /*
-         * Write back the shadow map entry for this chunk.
-         * First, get the cep for the map for this chunk.
+         * If we have reached the end of the page, or the end of the extent section, we are
+         * remapping. Update the buffer with the relevant section of the shadow map for the chunk.
          */
-        map_cep = castle_extent_map_cep_get(ext->maps_cep, chunkno, ext->k_factor);
-        /* Make the map_page_cep offset block aligned. */
-        memcpy(&map_page_cep, &map_cep, sizeof(c_ext_pos_t));
-        map_page_cep.offset = MASK_BLK_OFFSET(map_page_cep.offset);
+        if ((map_page_idx == max_map_page_idx) || (chunkno == writeback_info->end_chunk))
+        {
+            /* How many chunks remapped in this page. */
+            chunks = (chunkno % maps_in_a_page) + 1;
 
-        /* Get the c2b for the page containing the map cep.
-         *
-         * In order to prevent a situation where we have no reserve c2b/c2ps
-         * for the flush thread, make a single page c2b reservation and
-         * release it once we've finished dirtying the map_c2b.
-         */
-        reserve_c2b = castle_cache_page_block_reserve();
-        map_c2b = castle_cache_page_block_get(map_page_cep);
+            memcpy(c2b_buffer(map_c2b),
+                (char *)(MASK_BLK_OFFSET((unsigned long)&ext->shadow_map[chunkno*k_factor])),
+                sizeof(c_disk_chk_t)*k_factor*chunks);
 
-        write_lock_c2b(map_c2b);
+            dirty_c2b(map_c2b);
+            update_c2b(map_c2b);
+            write_unlock_c2b(map_c2b);
+            put_c2b(map_c2b);
+            map_c2b = NULL;
 
-        /* Shadow map must be page aligned. */
-        BUG_ON((unsigned long)ext->shadow_map % PAGE_SIZE);
+            castle_cache_page_block_unreserve(reserve_c2b);
 
-        /* Update the entire buffer with the page containing the shadow map for the chunk */
-        memcpy(c2b_buffer(map_c2b),
-            (char *)(MASK_BLK_OFFSET((unsigned long)&ext->shadow_map[chunkno*k_factor])),
-            C_BLK_SIZE);
-
-        dirty_c2b(map_c2b);
-        update_c2b(map_c2b);
-
-        write_unlock_c2b(map_c2b);
-        put_c2b(map_c2b);
-        castle_cache_page_block_unreserve(reserve_c2b);
+            /* Reset the index. */
+            map_page_idx = 0;
+        } else
+            map_page_idx++;
     }
 
     /* Make sure the updated map is flushed out. */
