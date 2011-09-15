@@ -1257,8 +1257,6 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
     {
         BUG_ON(c_bvec->cts_proxy); // _da_ct_read_complete() puts for !on disk
 
-        castle_printk(LOG_DEBUG, "%s::Error, invalid or tombstone.\n", __FUNCTION__);
-
         /* Turn tombstones into invalid CVTs. */
         CVT_INVALID_INIT(get->cvt);
         get->reply_start(get, err, 0, NULL, 0);

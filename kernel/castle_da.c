@@ -9063,9 +9063,6 @@ static int castle_da_cts_proxy_invalidate(struct castle_double_array *da, void *
         proxy = da->cts_proxy;
         da->cts_proxy = NULL;
         castle_da_cts_proxy_put(proxy);
-
-        castle_printk(LOG_DEVEL, "invalidated cts_proxy %p for da %p id %d\n",
-                proxy, da, da->id);
     }
 
     if (!da_locked)
@@ -9079,7 +9076,6 @@ static int castle_da_cts_proxy_invalidate(struct castle_double_array *da, void *
  */
 static void castle_da_cts_proxy_timeout(void *unused)
 {
-    castle_printk(LOG_DEVEL, "proxy timeout\n");
     castle_da_hash_iterate(castle_da_cts_proxy_invalidate, NULL /*da_locked*/);
 }
 
