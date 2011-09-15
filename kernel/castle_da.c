@@ -606,7 +606,6 @@ static void castle_ct_immut_iter_next(c_immut_iter_t *iter,
     /* update the MO pointer so that we can find the most recent MO cep for extent shrinking */
     if(!merge)
         return;
-    BUG_ON(!merge);
     if( (MERGE_CHECKPOINTABLE(merge)) && (CVT_MEDIUM_OBJECT(*cvt_p)) )
             iter->shrinkable_ext_boundary.latest_mo_cep = cvt_p->cep;
 
