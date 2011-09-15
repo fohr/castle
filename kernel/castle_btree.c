@@ -53,8 +53,7 @@ struct castle_btree_node_save {
 static struct castle_btree_type *castle_btrees[1<<(8 * sizeof(btree_t))] =
                                                        {[MTREE_TYPE]        = &castle_mtree,
                                                         [BATREE_TYPE]       = &castle_batree,
-                                                        [RW_VLBA_TREE_TYPE] = &castle_rw_tree,
-                                                        [RO_VLBA_TREE_TYPE] = &castle_ro_tree};
+                                                        [VLBA_TREE_TYPE]    = &castle_vlba_tree};
 
 
 struct castle_btree_type *castle_btree_type_get(btree_t type)
@@ -62,8 +61,7 @@ struct castle_btree_type *castle_btree_type_get(btree_t type)
 #ifdef CASTLE_DEBUG
     BUG_ON((type != MTREE_TYPE) &&
            (type != BATREE_TYPE) &&
-           (type != RW_VLBA_TREE_TYPE) &&
-           (type != RO_VLBA_TREE_TYPE));
+           (type != VLBA_TREE_TYPE));
 #endif
     return castle_btrees[type];
 }
@@ -75,10 +73,10 @@ size_t castle_btree_node_size_get(btree_t type)
             return MTREE_NODE_SIZE;
         case BATREE_TYPE:
             return BATREE_NODE_SIZE;
-        case RW_VLBA_TREE_TYPE:
+        case VLBA_TREE_TYPE:    /* note that the RO tree size is set in the merge code */
             return RW_TREE_NODE_SIZE;
-        default:
-            return 0;           /* other trees don't have a sane default */
+        default:                /* unknown tree type */
+            return 0;
     }
 }
 
@@ -1535,7 +1533,7 @@ static void castle_btree_iter_end(c_iter_t *c_iter, int err, int async)
     _t->entry_get(_n, _i, NULL, NULL, &_cvt);                                \
     if(CVT_LEAF_PTR(_cvt))                                                   \
     {                                                                        \
-        BUG_ON(btree == &castle_ro_tree);                                    \
+        BUG_ON(btree == &castle_vlba_tree);                                  \
         (_real_c2b)  = c2b_follow_ptr(_i);                                   \
         (_real_slot_idx) = indirect_node(_i)->node_idx;                      \
     }                                                                        \
@@ -1712,8 +1710,8 @@ static void castle_btree_iter_leaf_ptrs_lock(c_iter_t *c_iter)
     c2_block_t *c2b;
     int i, j, nr_ptrs;
 
-    /* RO trees don't have leaf pointers. */
-    if(btree == &castle_ro_tree)
+    /* VLBA trees don't have leaf pointers. */
+    if(btree == &castle_vlba_tree)
     {
         BUG_ON(c_iter->indirect_nodes != NULL);
         return;
@@ -2484,8 +2482,8 @@ void castle_btree_iter_init(c_iter_t *c_iter, c_ver_t version, int type)
             return;
         case C_ITER_MATCHING_VERSIONS:
         case C_ITER_ANCESTRAL_VERSIONS:
-            /* RO trees don't have leaf pointers (and have much larger nodes). */
-            if(btree == &castle_ro_tree)
+            /* VLBA trees don't have leaf pointers. */
+            if(btree == &castle_vlba_tree)
                 return;
             c_iter->indirect_nodes =
                 castle_alloc(RW_TREES_MAX_ENTRIES * sizeof(struct castle_indirect_node));
