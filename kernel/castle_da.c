@@ -183,8 +183,6 @@ static int castle_da_ct_bloom_build_param_deserialise(struct castle_component_tr
 void castle_da_ct_marshall(struct castle_clist_entry *ctm, struct castle_component_tree *ct);
 static c_da_t castle_da_ct_unmarshall(struct castle_component_tree *ct,
                                       struct castle_clist_entry *ctm);
-static inline void castle_da_merge_node_size_get(struct castle_da_merge *merge, uint8_t level,
-                                                 uint16_t *node_size);
 /* partial merges: partition handling */
 static void castle_da_merge_new_partition_activate(struct castle_da_merge *merge);
 static void castle_da_merge_new_partition_update(struct castle_da_merge *merge,
@@ -3031,12 +3029,12 @@ static int castle_da_merge_extents_alloc(struct castle_da_merge *merge)
     /* Calculate total size of internal nodes, assuming that leafs are stored on HDDs ... */
     internal_tree_size = tree_size;
     /* ... number of leaf nodes ... */
-    internal_tree_size /= (VLBA_HDD_RO_TREE_NODE_SIZE * C_BLK_SIZE);
+    internal_tree_size /= (HDD_RO_TREE_NODE_SIZE * C_BLK_SIZE);
     /* ... number of level 1 nodes ... */
-    internal_tree_size /= castle_btree_vlba_max_nr_entries_get(VLBA_SSD_RO_TREE_NODE_SIZE);
+    internal_tree_size /= castle_btree_vlba_max_nr_entries_get(SSD_RO_TREE_NODE_SIZE);
     internal_tree_size ++;
     /* ... size of level 1 ... */
-    internal_tree_size *= (VLBA_SSD_RO_TREE_NODE_SIZE * C_BLK_SIZE);
+    internal_tree_size *= (SSD_RO_TREE_NODE_SIZE * C_BLK_SIZE);
     /* ... chunk rounding ... */
     internal_tree_size  = MASK_CHK_OFFSET(internal_tree_size + C_CHK_SIZE);
     /* ... factor of 2 explosion, just as before ... */
@@ -3435,25 +3433,25 @@ static c_val_tup_t castle_da_medium_obj_copy(struct castle_da_merge *merge,
  *
  * @param merge     Merge state structure.
  * @param level     Level counted from leaves.
- * @param node_size Return argument: size of the node.
+ * @return          The size of the node.
  */
-static inline void castle_da_merge_node_size_get(struct castle_da_merge *merge,
-                                                 uint8_t level,
-                                                 uint16_t *node_size)
+static inline uint16_t castle_da_merge_node_size_get(struct castle_da_merge *merge,
+                                                     uint8_t level)
 {
-    if(level > 0)
+    if (level > 0)
     {
-        if(merge->internals_on_ssds)
-            *node_size = VLBA_SSD_RO_TREE_NODE_SIZE;
+        if (merge->internals_on_ssds)
+            return SSD_RO_TREE_NODE_SIZE;
         else
-            *node_size = VLBA_HDD_RO_TREE_NODE_SIZE;
-        return;
+            return HDD_RO_TREE_NODE_SIZE;
     }
-
-    if(merge->leafs_on_ssds)
-        *node_size = VLBA_SSD_RO_TREE_NODE_SIZE;
     else
-        *node_size = VLBA_HDD_RO_TREE_NODE_SIZE;
+    {
+        if (merge->leafs_on_ssds)
+            return SSD_RO_TREE_NODE_SIZE;
+        else
+            return HDD_RO_TREE_NODE_SIZE;
+    }
 }
 
 /**
@@ -3470,21 +3468,21 @@ static inline void castle_da_merge_node_info_get(struct castle_da_merge *merge,
                                                  uint16_t *node_size,
                                                  c_ext_free_t **ext_free)
 {
-    castle_da_merge_node_size_get(merge, level, node_size);
+    *node_size = castle_da_merge_node_size_get(merge, level);
     /* If level is zero, we are allocating from tree_ext. Size depends on whether the
        extent is on SSDs or HDDs. */
-    if(level > 0)
+    if (level > 0)
     {
         /* Internal nodes extent should always exist. */
         BUG_ON(EXT_ID_INVAL(merge->out_tree->internal_ext_free.ext_id));
         *ext_free = &merge->out_tree->internal_ext_free;
-        return;
     }
-
-    BUG_ON(level != 0);
-    /* Leaf nodes extent should always exist. */
-    BUG_ON(EXT_ID_INVAL(merge->out_tree->tree_ext_free.ext_id));
-    *ext_free = &merge->out_tree->tree_ext_free;
+    else
+    {
+        /* Leaf nodes extent should always exist. */
+        BUG_ON(EXT_ID_INVAL(merge->out_tree->tree_ext_free.ext_id));
+        *ext_free = &merge->out_tree->tree_ext_free;
+    }
 }
 
 /**
@@ -4718,9 +4716,8 @@ static void castle_da_merge_new_partition_update(struct castle_da_merge *merge,
     if(merge->new_redirection_partition.key)
         castle_key_ptr_destroy(&merge->new_redirection_partition);
 
-    castle_da_merge_node_size_get(merge,
-                                  PARTIAL_MERGES_QUERY_REDIRECTION_BTREE_NODE_LEVEL,
-                                  &expected_node_size);
+    expected_node_size =
+        castle_da_merge_node_size_get(merge, PARTIAL_MERGES_QUERY_REDIRECTION_BTREE_NODE_LEVEL);
     BUG_ON(node->size != expected_node_size);
     merge->new_redirection_partition.node_size = node->size;
     merge->new_redirection_partition.node_c2b  = node_c2b;
@@ -5837,14 +5834,14 @@ static c2_block_t* castle_da_merge_des_out_tree_c2b_write_fetch(struct castle_da
                                                                 c_ext_pos_t cep,
                                                                 int depth)
 {
-    c2_block_t *c2b=NULL;
-    uint16_t node_size=0;
+    c2_block_t *c2b;
+    uint16_t node_size;
 
     BUG_ON(!merge);
     BUG_ON(EXT_POS_INVAL(cep));
 
-    castle_da_merge_node_size_get(merge, depth, &node_size);
-    BUG_ON(node_size==0);
+    node_size = castle_da_merge_node_size_get(merge, depth);
+    BUG_ON(node_size == 0);
 
     c2b = castle_cache_block_get_for_merge(cep, node_size);
     BUG_ON(!c2b);
@@ -6663,12 +6660,12 @@ static void castle_da_merge_serdes_out_tree_check(struct castle_dmserlist_entry 
             c2_block_t *node_c2b = NULL;
             struct castle_btree_node *node = NULL;
 
-            if (i==0) /* leaf node */
-                node_size = ((merge_mstore->leafs_on_ssds) ? VLBA_SSD_RO_TREE_NODE_SIZE
-                        : VLBA_HDD_RO_TREE_NODE_SIZE);
+            if (i == 0) /* leaf node */
+                node_size = merge_mstore->leafs_on_ssds ?
+                    SSD_RO_TREE_NODE_SIZE : HDD_RO_TREE_NODE_SIZE;
             else /* internal node */
-                node_size = ((merge_mstore->internals_on_ssds) ? VLBA_SSD_RO_TREE_NODE_SIZE
-                        : VLBA_HDD_RO_TREE_NODE_SIZE);
+                node_size = merge_mstore->internals_on_ssds ?
+                    SSD_RO_TREE_NODE_SIZE : HDD_RO_TREE_NODE_SIZE;
 
             node_c2b = castle_cache_block_get_for_merge(merge_mstore->levels[i].node_c2b_cep, node_size);
             BUG_ON(!node_c2b);

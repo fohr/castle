@@ -814,12 +814,12 @@ enum {
                                                           If modified, those need to be reviewed.
                                                       */
 
-#define MTREE_NODE_SIZE                 (10)  /* In blocks */
-#define BATREE_NODE_SIZE                (20)  /* In blocks */
-#define VLBA_RW_TREE_NODE_SIZE          (2)   /**< Size of the RW tree node size.
-                                                   Constant independent of the level. */
-#define VLBA_HDD_RO_TREE_NODE_SIZE      (64)  /**< Size of the default RO tree node size. */
-#define VLBA_SSD_RO_TREE_NODE_SIZE      (2)   /**< Size of the RO tree node size on SSDs. */
+#define MTREE_NODE_SIZE         10      /**< Size of the mtree nodes, in blocks.  */
+#define BATREE_NODE_SIZE        20      /**< Size of the batree nodes, in blocks. */
+#define RW_TREE_NODE_SIZE        2      /**< Size of the RW tree nodes, in blocks.
+                                             Constant independent of the level.   */
+#define HDD_RO_TREE_NODE_SIZE   64      /**< Size of the RO tree nodes on HDDs, in blocks. */
+#define SSD_RO_TREE_NODE_SIZE    2      /**< Size of the RO tree nodes on SSDs, in blocks. */
 
 typedef uint8_t btree_t;
 

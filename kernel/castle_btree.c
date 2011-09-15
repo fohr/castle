@@ -76,7 +76,7 @@ size_t castle_btree_node_size_get(btree_t type)
         case BATREE_TYPE:
             return BATREE_NODE_SIZE;
         case RW_VLBA_TREE_TYPE:
-            return VLBA_RW_TREE_NODE_SIZE;
+            return RW_TREE_NODE_SIZE;
         default:
             return 0;           /* other trees don't have a sane default */
     }
