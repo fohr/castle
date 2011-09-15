@@ -4312,10 +4312,6 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
             put_c2b(c2b);
     }
 
-    /* Abort (i.e. free) incomplete bloom filters */
-    if (merge->out_tree->bloom_exists)
-        castle_bloom_abort(&merge->out_tree->bloom);
-
     serdes_state = atomic_read(&merge->serdes.valid);
     if (serdes_state > NULL_DAM_SERDES)
         mutex_lock(&merge->serdes.mutex);
@@ -4412,6 +4408,10 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
             debug("%s::leaving output extents for merge %p deserialisation "
                     "(da %d, level %d).\n", __FUNCTION__, merge, merge->da->id, merge->level);
         }
+
+        /* Abort (i.e. free) incomplete bloom filters */
+        if (merge->out_tree->bloom_exists)
+            castle_bloom_abort(&merge->out_tree->bloom);
 
         if (merge_out_tree_retain)
         {
