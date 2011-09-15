@@ -239,9 +239,6 @@ static int                  rebuild_required(void);
 atomic_t                    current_rebuild_seqno;/* The current sequence number */
 static int                  rebuild_to_seqno;     /* The sequence number being rebuilt to */
 
-/* Set if current_rebuild_seqno changes during any extent allocation */
-static int                  castle_extents_rescan_required = 0;
-
 /* Persistent (via mstore) count of chunks remapped during rebuild run. */
 long                        castle_extents_chunks_remapped = 0;
 
@@ -1922,17 +1919,6 @@ alloc_done:
 
     /* Add extent and extent dirtylist to hash tables. */
     castle_extents_hash_add(ext);
-
-    /*
-     * If current_rebuild_seqno has changed, then the mappings for this extent may contain
-     * out-of-service slaves. Set the rescan flag and kick the rebuild thread so that the extent
-     * list is rescanned by the rebuild thread. This extent will then be remapped if required.
-     */
-    if (ext->curr_rebuild_seqno != atomic_read(&current_rebuild_seqno))
-    {
-        castle_extents_rescan_required = 1;
-        wake_up(&process_waitq);
-    }
 
     castle_extent_print(ext, NULL);
 
@@ -3787,8 +3773,6 @@ int rebuild_init(void)
     fs_sb->fs_in_rebuild = 1;
     castle_fs_superblocks_put(fs_sb, 1);
 
-    castle_extents_rescan_required = 0;
-
     rebuild_to_seqno = atomic_read(&current_rebuild_seqno);
 
     // State is initialised here, and each time another slave goes oos. */
@@ -4624,7 +4608,6 @@ static int castle_extents_process(void *unused)
          */
         wait_event_interruptible(process_waitq,
                                  rebuild_required()             ||
-                                 castle_extents_rescan_required ||
                                  kthread_should_stop());
 
         if (kthread_should_stop())
@@ -4648,8 +4631,13 @@ static int castle_extents_process(void *unused)
         batch = BATCHSIZE; /* 10 x 1m I/Os per batch. */
         delta_time = jiffies;
 
-        /* Build the list of extents to process. */
+        /*
+         * Build the list of extents to process. Extent transaction protected to avoid racing
+         * with extent alloc and extent grow using oos or evacuating slaves.
+         */
+        castle_extent_transaction_start();
         castle_extents_hash_iterate(procstate->list_add, NULL);
+        castle_extent_transaction_end();
 
         if (list_empty(&extent_list))
         {
@@ -4924,7 +4912,7 @@ finished:
         wake_up(&process_syncpoint_waitq);
 
         /* Per-state cleanup, includes rebuild setting slave state bits. */
-        procstate->finish(process_interrupted||extent_interrupted||castle_extents_rescan_required);
+        procstate->finish(process_interrupted||extent_interrupted);
 
     } while (1);
 out:
@@ -5455,14 +5443,11 @@ int castle_extent_grow(c_ext_id_t ext_id, c_chk_cnt_t count)
     c_ext_t *ext = castle_extents_hash_get(ext_id);
     c_ext_mask_t *mask;
     int ret = 0;
-    int seqno;
 
     /* Extent should be alive, something is wrong with client. */
     BUG_ON(!ext);
 
     debug_resize("Grow the extent by %u chunks\n", count);
-
-    seqno = atomic_read(&current_rebuild_seqno);
 
     castle_extent_transaction_start();
 
@@ -5498,12 +5483,6 @@ int castle_extent_grow(c_ext_id_t ext_id, c_chk_cnt_t count)
 
 out:
     castle_extent_transaction_end();
-
-    if (seqno != atomic_read(&current_rebuild_seqno))
-    {
-        castle_extents_rescan_required = 1;
-        wake_up(&process_waitq);
-    }
 
     return ret;
 }
