@@ -41,6 +41,8 @@ struct castle_component_tree castle_global_tree = {.seq             = GLOBAL_TRE
                                                    .dynamic         = 1,
                                                    .da              = INVAL_DA,
                                                    .level           = -1,
+                                                   .node_sizes      = {[0 ... (MAX_BTREE_DEPTH-1)] =
+                                                                       MTREE_NODE_SIZE},
                                                    .tree_depth      = -1,
                                                    .root_node       = INVAL_EXT_POS,
                                                    .da_list         = {NULL, NULL},

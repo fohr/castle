@@ -8385,6 +8385,7 @@ static struct castle_component_tree* castle_ct_alloc(struct castle_double_array 
                                                      tree_seq_t seq)
 {
     struct castle_component_tree *ct;
+    int i;
 
     BUG_ON((type != RO_VLBA_TREE_TYPE) && (type != RW_VLBA_TREE_TYPE));
     ct = castle_zalloc(sizeof(struct castle_component_tree), GFP_KERNEL);
@@ -8409,6 +8410,8 @@ static struct castle_component_tree* castle_ct_alloc(struct castle_double_array 
     ct->dynamic         = type == RW_VLBA_TREE_TYPE ? 1 : 0;
     ct->da              = da->id;
     ct->level           = level;
+    for (i = 0; i < MAX_BTREE_DEPTH; ++i)
+        ct->node_sizes[i] = castle_btree_node_size_get(type);
     ct->tree_depth      = -1;
     ct->root_node       = INVAL_EXT_POS;
     ct->new_ct          = 1;
