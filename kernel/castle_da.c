@@ -79,10 +79,6 @@ static DECLARE_WAIT_QUEUE_HEAD (castle_da_promote_wq);  /**< castle_da_level0_mo
 module_param(castle_merges_abortable, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
 MODULE_PARM_DESC(castle_merges_abortable, "Allow on-going merges to abort upon exit condition");
 
-int                             castle_merges_checkpoint = 1; /* 0 or 1, default=enabled */
-module_param(castle_merges_checkpoint, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
-MODULE_PARM_DESC(castle_merges_checkpoint, "Checkpoint on-going merges");
-
 /* We don't need to set upper/lower bounds for the promition frequency as values
  * < 2 will all results in RWCTs being promoted every checkpoint, while very
  * large values will result in RWCTs 'never' being promoted. */
@@ -297,7 +293,7 @@ static inline void castle_da_growing_rw_clear(struct castle_double_array *da)
 
 #define FOR_EACH_MERGE_TREE(_i, _merge) for((_i)=0; (_i)<(_merge)->nr_trees; (_i)++)
 
-#define MERGE_CHECKPOINTABLE(_merge) ((castle_merges_checkpoint) && (_merge->level >= MIN_DA_SERDES_LEVEL))
+#define MERGE_CHECKPOINTABLE(_merge) ((_merge->level >= MIN_DA_SERDES_LEVEL))
 
 static inline int castle_da_deleted(struct castle_double_array *da)
 {
@@ -6089,7 +6085,6 @@ static int castle_da_merge_do(struct castle_da_merge *merge, uint64_t nr_entries
     int level = merge->level;
     struct castle_component_tree **in_trees = merge->in_trees;
     tree_seq_t out_tree_id=0;
-    c_merge_serdes_state_t serdes_state;
     int ret;
     int i;
 
@@ -6156,18 +6151,6 @@ static int castle_da_merge_do(struct castle_da_merge *merge, uint64_t nr_entries
     castle_da_merge_cache_efficiency_stats_flush_reset(da, merge, 0, in_trees);
 #endif
 
-    serdes_state = atomic_read(&merge->serdes.valid);
-    if((serdes_state > NULL_DAM_SERDES) && (!castle_merges_checkpoint))
-    {
-        /* user changed castle_merges_checkpoint param from 1 to 0 */
-        castle_printk(LOG_USERINFO,
-                "Discarding checkpoint state for in-flight merge on DA=%d, level=%d.\n",
-                da->id, level);
-        mutex_lock(&merge->serdes.mutex);
-        castle_da_merge_serdes_dealloc(merge);
-        mutex_unlock(&merge->serdes.mutex);
-    }
-
 #ifdef CASTLE_PERF_DEBUG
     /* Output & reset performance stats. */
     castle_da_merge_perf_stats_flush_reset(da, merge, 0, in_trees);
@@ -6195,8 +6178,7 @@ static int castle_da_merge_do(struct castle_da_merge *merge, uint64_t nr_entries
         merge->out_tree->seq);
 
 #ifdef DEBUG_MERGE_SERDES
-    serdes_state = atomic_read(&merge->serdes.valid);
-    if(serdes_state > NULL_DAM_SERDES)
+    if(atomic_read(&merge->serdes.valid) > NULL_DAM_SERDES)
         merge->serdes.merge_completed=1;
 #endif
 
@@ -7659,8 +7641,6 @@ static void __castle_da_merge_writeback(struct castle_da_merge *merge)
 
         debug("%s::    internal_ext_free_bs ext_id = %lld.\n",
                 __FUNCTION__, cl->internal_ext_free_bs.ext_id);
-        /* always flush from 0, to account for the possibility that the castle_merges_checkpoint
-           param may have been toggled from 0 to 1 halfway during some merges */
         castle_cache_extent_flush_schedule(
                 cl->internal_ext_free_bs.ext_id, 0, cl->internal_ext_free_bs.used);
 
@@ -7760,8 +7740,7 @@ void castle_double_arrays_writeback(void)
     __castle_da_hash_iterate(castle_da_writeback, NULL);
 
     /* Writeback all the merges. */
-    if (castle_merges_checkpoint)
-        __castle_merges_hash_iterate(castle_da_merge_writeback, NULL);
+    __castle_merges_hash_iterate(castle_da_merge_writeback, NULL);
 
     castle_da_tree_writeback(NULL, &castle_global_tree, -1);
 

@@ -25,8 +25,7 @@
 #undef BUG_ON
 
 /* Enable additional sanity checking to debug merge serialisation/deserialisation */
-#define DEBUG_MERGE_SERDES
-extern int castle_merges_checkpoint; /* 0 or 1, default=enabled */
+//#define DEBUG_MERGE_SERDES
 
 static inline ATTRIB_NORET void bug_fn(char *file, unsigned long line)
 {
@@ -2008,7 +2007,8 @@ typedef enum {
 /* rate at which output tree medium objects extent is grown; in chunks at a time. */
 #define MERGE_OUTPUT_DATA_GROWTH_RATE (10) /* BM said don't make this < 10 */
 
-#define MIN_DA_SERDES_LEVEL                 (2) /* merges below this level won't be serialised */
+#define MIN_DA_SERDES_LEVEL                 (2) /* merges below this level won't be serialised;
+                                                   and therefore won't use partial merges       */
 struct castle_double_array {
     c_da_t                      id;
     c_ver_t                     root_version;
