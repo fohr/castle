@@ -68,6 +68,20 @@ struct castle_btree_type *castle_btree_type_get(btree_t type)
     return castle_btrees[type];
 }
 
+size_t castle_btree_node_size_get(btree_t type)
+{
+    switch (type) {
+        case MTREE_TYPE:
+            return MTREE_NODE_SIZE;
+        case BATREE_TYPE:
+            return BATREE_NODE_SIZE;
+        case RW_VLBA_TREE_TYPE:
+            return VLBA_RW_TREE_NODE_SIZE;
+        default:
+            return 0;           /* other trees don't have a sane default */
+    }
+}
+
 
 /**********************************************************************************************/
 /* Common modlist btree code */
