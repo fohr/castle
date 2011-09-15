@@ -1237,26 +1237,25 @@ struct castle_request_timeline;
 #define CBV_C2B_WRITE_LOCKED          (5)
 
 typedef struct castle_bio_vec {
-    c_bio_t                        *c_bio;        /**< Where this IO originated                  */
+    c_bio_t                        *c_bio;        /**< Where this IO originated                 */
 
-    void                           *key;          /**< Key we want to read                       */
-    c_ver_t                         version;      /**< Version of key we want to read            */
-    int                             cpu;          /**< CPU id for this request                   */
-    int                             cpu_index;    /**< CPU index (for determining correct CT)    */
-    struct castle_component_tree   *tree;         /**< CT to search                              */
-    //TODO@tr change the following to a pointer and malloc/free in the right places
-    c_ct_ext_ref_t                  ct_ref;       /**< Current CT's ref set                      */
-    struct castle_component_tree  **trees;        /**< CTs to search                             */
-    c_ct_ext_ref_t                 *ct_refs;      /**< CT extent refs                            */
-    int                             nr_trees;     /**< Size of the trees array                   */
+    void                           *key;          /**< Key we want to read                      */
+    c_ver_t                         version;      /**< Version of key we want to read           */
+    int                             cpu;          /**< CPU id for this request                  */
+    int                             cpu_index;    /**< CPU index (for determining correct CT)   */
+    struct castle_component_tree   *tree;         /**< CT to search/insert into.                */
+    // @TODO TR: change the following to a ptr and malloc()/free() in correct places. */
+    c_ct_ext_ref_t                  ct_ref;       /**< CT extents refs (write b_vec only).      */
+    struct castle_da_cts_proxy     *cts_proxy;    /**< Reference-taking snapshot of CTs in DA.  */
+    int                             cts_index;    /**< Current index into cts_proxy->cts[].     */
 
     /* Btree walk variables. */
-    unsigned long                   flags;        /**< Flags                                     */
-    int                             btree_depth;  /**< How far down the btree we've gone so far  */
+    unsigned long                   flags;        /**< Flags                                    */
+    int                             btree_depth;  /**< How far down the btree we've gone so far */
     int                             btree_levels; /**< Levels in the tree (private copy in case
                                                        someone splits root node while we are
-                                                       lower down in the tree                    */
-    void                           *parent_key;   /**< Key in parent node btree_node is from     */
+                                                       lower down in the tree                   */
+    void                           *parent_key;   /**< Key in parent node btree_node is from    */
     /* When writing, B-Tree node and its parent have to be locked concurrently. */
     struct castle_cache_block      *btree_node;
     struct castle_cache_block      *btree_parent_node;
@@ -1833,8 +1832,6 @@ struct castle_object_replace {
 };
 
 struct castle_object_get {
-    struct castle_component_tree *ct;
-    c_ct_ext_ref_t                ct_ref;
     struct castle_cache_block    *data_c2b;
     uint64_t                      data_c2b_length;
     uint64_t                      data_length;
@@ -1855,8 +1852,7 @@ struct castle_object_get {
 };
 
 struct castle_object_pull {
-    struct castle_component_tree *ct;
-    c_ct_ext_ref_t                ct_ref;
+    struct castle_da_cts_proxy   *cts_proxy;     /**< Reference-taking snapshot of CTs in DA.*/
     uint64_t                      remaining;
     uint64_t                      offset;
 
@@ -1965,6 +1961,47 @@ struct castle_merge_token {
     struct list_head list;
 };
 
+/**
+ * CT states to handle key ranges with partial merge redirection.
+ */
+typedef enum {
+    NO_REDIR = 0,   /**< No redirection for this CT.    */
+    REDIR_INTREE,   /**< CT is an input tree.           */
+    REDIR_OUTTREE   /**< CT is an output tree.          */
+} c_ct_redir_state_enum_t;
+
+/**
+ * Snapshot with references of CTs in DA.
+ *
+ * Necessary to amortise the cost of many CT reference gets/puts.
+ *
+ * LOCKING/REFERENCE COUNTING NOTES:
+ *
+ * castle_da_cts_proxy_create() creates a CT's proxy structure under a DA write
+ * lock and takes out two references - one for the DA (it sets da->cts_proxy to
+ * point to itself) and another for the caller who requested the DA CT's proxy.
+ *
+ * Subsequent requests take a further reference.  When the reference count drops
+ * to 0 the proxy is freed and references are dropped.  The first reference (for
+ * the DA) must be dropped after a da->cts_proxy pointer has been updated to
+ * NULL (under DA write lock).
+ *
+ * When creating a DA CT's proxy structure we set CASTLE_DA_CTS_PROXY_CREATE_BIT
+ * in da->flags to ensure creation is serialised.  If the bit is already set we
+ * sleep and then retry.
+ */
+struct castle_da_cts_proxy {
+    struct castle_da_cts_proxy_ct {
+        struct castle_component_tree   *ct;         /**< Pointer to CT.                 */
+        c_ct_ext_ref_t                  ext_refs;   /**< References held on CT extents. */
+        struct castle_key_ptr_t         pk;         /**< Partition key for CT.          */
+        c_ct_redir_state_enum_t         state;      /**< Redirection state.             */
+    } *cts;
+    uint8_t                     nr_cts;     /**< Number of CTs in cts[].                */
+    atomic_t                    ref_cnt;    /**< References held on proxy structure.    */
+    struct castle_double_array *da;         /**< Backpointer to DA (for DEBUG).         */
+};
+
 /* Low free space structure being used by each merge in DA. */
 struct castle_da_lfs_ct_t {
     uint8_t             space_reserved;     /**< Reserved space from low space handler  */
@@ -1993,6 +2030,7 @@ typedef enum {
 #define DOUBLE_ARRAY_GROWING_RW_TREE_BIT    (0)
 #define DOUBLE_ARRAY_DELETED_BIT            (1)
 #define CASTLE_DA_COMPACTING_BIT            (2)
+#define CASTLE_DA_CTS_PROXY_CREATE_BIT      (3)     /**< Serialises creation of da->cts_proxy.  */
 
 #define PARTIAL_MERGES_QUERY_REDIRECTION_BTREE_NODE_LEVEL (0)
 #if PARTIAL_MERGES_QUERY_REDIRECTION_BTREE_NODE_LEVEL > MAX_BTREE_DEPTH
@@ -2026,6 +2064,8 @@ struct castle_double_array {
             struct task_struct *thread;
         } merge;
     } levels[MAX_DA_LEVEL];
+    struct castle_da_cts_proxy *cts_proxy;          /**< Reference-taking snapshot of CTs in DA.
+                                                         Protected by da->lock.                 */
     atomic_t                    lfs_victim_count;   /**< Number of components of DA, that are
                                                          blocked due to Low Free-Space.         */
     atomic_t                    ongoing_merges;

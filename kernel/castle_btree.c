@@ -1143,8 +1143,7 @@ static void castle_btree_read_process(c_bvec_t *c_bvec)
         return;
     }
 
-    btree->entry_get(node, lub_idx, &lub_key, &lub_version,
-                     &lub_cvt);
+    btree->entry_get(node, lub_idx, &lub_key, &lub_version, &lub_cvt);
     /* If we found the LUB, either complete the ftree walk (if we are looking
        at a 'proper' leaf), or go to the next level (possibly following a leaf ptr) */
     if(node->is_leaf && !CVT_LEAF_PTR(lub_cvt))

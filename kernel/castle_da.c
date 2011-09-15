@@ -141,7 +141,6 @@ static struct castle_component_tree* castle_ct_alloc(struct castle_double_array 
                                                      btree_t type,
                                                      int level, tree_seq_t seq);
 void castle_ct_get(struct castle_component_tree *ct, int write, c_ct_ext_ref_t *refs);
-static void castle_inval_ct_put(struct castle_component_tree *ct);
 void castle_ct_put(struct castle_component_tree *ct, int write, c_ct_ext_ref_t *refs);
 static void castle_component_tree_add(struct castle_double_array *da,
                                       struct castle_component_tree *ct,
@@ -188,6 +187,7 @@ static void castle_da_merge_new_partition_activate(struct castle_da_merge *merge
 static void castle_da_merge_new_partition_update(struct castle_da_merge *merge,
                                                  c2_block_t *node_c2b,
                                                  void *key);
+static int castle_da_cts_proxy_invalidate(struct castle_double_array *da, void *da_locked);
 static int __castle_da_rwct_create(struct castle_double_array *da,
                                    int cpu_index,
                                    int in_tran,
@@ -2010,13 +2010,7 @@ void castle_da_rq_iter_init(c_da_rq_iter_t *iter,
     c_ct_ext_ref_t **ct_get_refs = NULL;
     struct castle_da_merge *last_seen_merge = NULL;
 
-    /* states to handle key ranges with partial merge redirection */
-    typedef enum {
-        NO_REDIR = 0,  /* no redirection with this ct */
-        REDIR_INTREE,  /* this ct is input tree       */
-        REDIR_OUTTREE  /* this ct is output tree      */
-    } ct_redir_state_enum_t;
-    ct_redir_state_enum_t *ct_redir_state = NULL;
+    c_ct_redir_state_enum_t *ct_redir_state = NULL;
 
     da = castle_da_hash_get(da_id);
     BUG_ON(!da);
@@ -2046,7 +2040,7 @@ again:
             }
         }
     }
-    ct_redir_state = castle_zalloc(iter->nr_cts * sizeof(ct_redir_state_enum_t), GFP_KERNEL);
+    ct_redir_state = castle_zalloc(iter->nr_cts * sizeof(c_ct_redir_state_enum_t), GFP_KERNEL);
     if(!iter->ct_rqs || !iters || !iter_types || !ct_redir_state ||
         !ct_get_refs || refs_malloc_failed)
     {
@@ -4446,10 +4440,7 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
             BUG_ON(atomic_read(&merge->out_tree->ref_count) != 1);
             if(!merge_out_tree_retain)
             {
-                if(unlikely(TREE_INVAL(merge->out_tree->seq)))
-                    castle_inval_ct_put(merge->out_tree);
-                else
-                    castle_ct_put(merge->out_tree, 0, NULL);
+                castle_ct_put(merge->out_tree, 0, NULL);
                 merge->out_tree=NULL;
             }
             else if (err == -ESHUTDOWN)
@@ -5058,6 +5049,8 @@ static int castle_da_merge_init(struct castle_da_merge *merge, void *unused)
         merge->out_tree = castle_ct_alloc(da, RO_VLBA_TREE_TYPE, (castle_golden_nugget)? 2: level+1, ct_seq);
         if(!merge->out_tree)
             goto error_out;
+        BUG_ON(TREE_INVAL(merge->out_tree->seq));
+        BUG_ON(TREE_GLOBAL(merge->out_tree->seq));
         merge->out_tree->internal_ext_free.ext_id = INVAL_EXT_ID;
         merge->out_tree->tree_ext_free.ext_id = INVAL_EXT_ID;
         merge->out_tree->data_ext_free.ext_id = INVAL_EXT_ID;
@@ -6758,9 +6751,9 @@ static struct castle_double_array* castle_da_alloc(c_da_t da_id)
     da->top_level       = 0;
     /* For existing double arrays driver merge has to be reset after loading it. */
     atomic_set(&da->ongoing_merges, 0);
-
+    da->cts_proxy       = NULL;
     atomic_set(&da->lfs_victim_count, 0);
-    da->t0_lfs = castle_malloc(sizeof(struct castle_da_lfs_ct_t) * nr_cpus, GFP_KERNEL);
+    da->t0_lfs          = castle_malloc(sizeof(struct castle_da_lfs_ct_t) * nr_cpus, GFP_KERNEL);
     if (!da->t0_lfs)
         goto err_out;
     for (i=0; i<nr_cpus; i++)
@@ -7073,33 +7066,6 @@ void castle_ct_get(struct castle_component_tree *ct, int write, c_ct_ext_ref_t *
             refs->ref_id_data,
             refs->ref_id_bloom,
             atomic_inc_return(&ct_get_count));
-}
-
-/* A stripped down version of castle_ct_put(); designed to work for trees that were alloc'd
-   in a castle_da_merge_init() that subsequently failed without out_tree extents allocated. */
-static void castle_inval_ct_put(struct castle_component_tree *ct)
-{
-    BUG_ON(!ct);
-    BUG_ON(!TREE_INVAL(ct->seq));
-    BUG_ON(in_atomic());
-    BUG_ON(atomic_read(&ct->write_ref_count) != 0);
-    /* we currently assume that an INVAL ct can't have a bloom filter */
-    BUG_ON(ct->bloom_exists);
-    /* we assume that noone other than caller should have a reference to an INVAL ct */
-    BUG_ON(!atomic_dec_and_test(&ct->ref_count));
-
-    debug("Ref count for ct id=%d went to 0, releasing.\n", ct->seq);
-    /* If the ct still on the da list, this must be an error. */
-    if(ct->da_list.next != NULL)
-    {
-        castle_printk(LOG_ERROR, "CT=%d, still on DA list, but trying to remove.\n", ct->seq);
-        BUG();
-    }
-    castle_ct_hash_remove(ct);
-
-    /* Poison ct (note this will be repoisoned by kfree on kernel debug build. */
-    memset(ct, 0xde, sizeof(struct castle_component_tree));
-    castle_kfree(ct);
 }
 
 void castle_ct_put(struct castle_component_tree *ct, int write, c_ct_ext_ref_t *refs)
@@ -8577,6 +8543,9 @@ static int __castle_da_rwct_create(struct castle_double_array *da, int cpu_index
 
     if (!in_tran) CASTLE_TRANSACTION_END;
 
+    /* Invalidate any existing DA CTs proxy structure. */
+    castle_da_cts_proxy_invalidate(da, (void *)1 /*da_locked*/);
+
     debug("Created T0: %d\n", ++t0_count);
     /* DA is attached, therefore we must be holding a ref, therefore it is safe to schedule
        the merge check. */
@@ -8679,56 +8648,6 @@ int castle_double_array_make(c_da_t da_id, c_ver_t root_version)
 }
 
 /**
- * Frees up the array of ct pointers used to perform gets.
- */
-static void castle_da_cts_free(c_bvec_t *c_bvec)
-{
-    castle_free(c_bvec->trees);
-    c_bvec->trees = NULL;
-    castle_free(c_bvec->ct_refs);
-    c_bvec->ct_refs = NULL;
-}
-
-/**
- * Advaces current CT used by the bvec provided, to the next one in the trees array.
- * Releases the read reference on the now disused CT.
- *
- * Pointers to the released CTs are replaced with NULLs.
- *
- * @param ct   Current CT to use as basis for finding next CT
- */
-void castle_da_ct_next(c_bvec_t *c_bvec)
-{
-    struct castle_component_tree *ct;
-    int i;
-
-    ct = c_bvec->tree;
-    /* Find the ct in the array of trees. */
-    for(i=0; i<c_bvec->nr_trees; i++)
-        if(c_bvec->trees[i] == ct)
-            break;
-    /* Tree must always be found. */
-    BUG_ON(i >= c_bvec->nr_trees);
-
-    /* Remove the tree from the array, and put the reference. */
-    c_bvec->trees[i] = NULL;
-    castle_ct_put(ct, 0, &c_bvec->ct_refs[i]);
-
-    /* Advance to the next tree. */
-    i++;
-    if(i >= c_bvec->nr_trees)
-    {
-        c_bvec->tree = NULL;
-        castle_da_cts_free(c_bvec);
-    }
-    else
-    {
-        c_bvec->tree = c_bvec->trees[i];
-        memcpy(&c_bvec->ct_ref, &c_bvec->ct_refs[i], sizeof(c_ct_ext_ref_t));
-    }
-}
-
-/**
  * Return cpu_index^th T0 CT for da.
  *
  * - Does not take a reference
@@ -8827,176 +8746,6 @@ again:
 }
 
 /**
- * Takes references to all CTs in the DA, stores pointers to them in a (malloced)
- * array, and returns it and its size.
- *
- * CT pointers are sorted from newest to oldest.
- */
-static int castle_da_all_cts_get(struct castle_double_array *da,
-                                 int *nr_cts_p,
-                                 struct castle_component_tree ***cts_p,
-                                 c_ct_ext_ref_t **refs_p,
-                                 c_bvec_t *c_bvec)
-{
-    struct castle_component_tree **cts;
-    c_ct_ext_ref_t                *refs;
-    struct list_head *l;
-    int i, j, nr_cts;
-    int got_partial_tree = 0;
-
-again:
-    /* Try to allocate the right amount of memory, but remember that nr_trees
-       may change, because we are not holding the da lock (cannot kmalloc holding
-       a spinlock). */
-    nr_cts = da->nr_trees;
-    if(nr_cts <= 0)
-        return -EINVAL;
-
-    cts = castle_zalloc(nr_cts * sizeof(struct castle_component_tree *), GFP_KERNEL);
-    if(!cts)
-        goto malloc_fail_1;
-
-    refs = castle_zalloc(nr_cts * sizeof(c_ct_ext_ref_t), GFP_KERNEL);
-    if(!refs)
-        goto malloc_fail_2;
-
-    read_lock(&da->lock);
-    /* Check the number of trees under lock. Retry again if # changed. */
-    if(nr_cts != da->nr_trees)
-    {
-        read_unlock(&da->lock);
-        castle_printk(LOG_WARN,
-                "Warning. Untested. # of cts changed while allocating memory for rq.\n");
-        castle_free(cts);
-        goto again;
-    }
-    /* Get refs to all the component trees, and release the lock */
-    j=0;
-
-    /* Get all the trees. */
-    for(i=0; i<MAX_DA_LEVEL; i++)
-    {
-        struct castle_da_merge *last_merge_seen = NULL;
-
-        list_for_each(l, &da->levels[i].trees)
-        {
-            struct castle_component_tree *ct;
-
-            ct = list_entry(l, struct castle_component_tree, da_list);
-
-            if(ct->merge)
-            {
-                struct castle_da_merge *merge = ct->merge;
-
-                /* to avoid adding an output ct more than once, just remember the previous merge
-                   since for now it may be assumed that all cts in a merge will be adjacent.
-                   TODO@tr make this more robust!                                                */
-                if(merge == last_merge_seen)
-                    continue;
-
-                /* under da->lock, partition keys won't advance */
-                if(merge->redirection_partition.key)
-                {
-                    struct castle_btree_type *btree = castle_btree_type_get(RO_VLBA_TREE_TYPE);
-                    int ret = btree->key_compare(merge->redirection_partition.key, c_bvec->key);
-
-                    BUG_ON(!merge->queriable_out_tree);
-                    if(ret>=0) /* partition key >= query key */
-                    {
-                        struct castle_component_tree *out_ct;
-                        out_ct = merge->queriable_out_tree;
-                        last_merge_seen = merge;
-
-                        debug("%s::redirecting query to output tree %d (with bf %p) on da %d level %d.\n",
-                                __FUNCTION__, out_ct->seq, &(out_ct->bloom), da->id, ct->merge->level);
-
-                        ct = out_ct;
-                        got_partial_tree = 1;
-                    }
-                }
-            }
-
-            BUG_ON(j >= nr_cts);
-            cts[j] = ct;
-            castle_ct_get(ct, 0, &refs[j]);
-            BUG_ON((castle_btree_type_get(ct->btree_type)->magic != RW_VLBA_TREE_TYPE) &&
-                   (castle_btree_type_get(ct->btree_type)->magic != RO_VLBA_TREE_TYPE));
-            j++;
-        }
-    }
-
-    read_unlock(&da->lock);
-    /* We could have ended up with fewer trees than we "expected", since some queries may have
-       been redirected to output trees. */
-    BUG_ON(j > nr_cts);
-
-    /* make sure no repeat entries - TODO@tr get rid of this once confident */
-    //if(j>1)
-    //{
-    //    if(got_partial_tree)
-    //        castle_printk(LOG_DEVEL, "%s::doing pg with cts :", __FUNCTION__);
-    //    for(i=0; i<j; i++)
-    //    {
-    //        int k;
-    //        for(k=i+1; k<j; k++)
-    //            BUG_ON(cts[i]->seq == cts[k]->seq);
-    //        if(got_partial_tree)
-    //            castle_printk(LOG_DEVEL, " [%d] ", cts[i]->seq);
-    //    }
-    //    if(got_partial_tree)
-    //        castle_printk(LOG_DEVEL, "\n");
-    //}
-
-    *nr_cts_p = j;
-    *cts_p    = cts;
-    *refs_p   = refs;
-
-    return 0;
-
-malloc_fail_2:
-    castle_kfree(cts);
-malloc_fail_1:
-    return -ENOMEM;
-}
-
-/**
- * Releases references to all remaining CTs stored in c_bvec->trees array, and frees
- * that array.
- */
-static void castle_da_cts_put(c_bvec_t *c_bvec)
-{
-    int i, cur_found;
-
-    /* We expecting the trees array to looks as follows:
-       NULL, ..., NULL, c_bvec->tree, ct_b, ct_c, ....
-       Check for the layout for debugging purposes. */
-    BUG_ON(!c_bvec->tree);
-    for(i=0, cur_found=0; i<c_bvec->nr_trees; i++)
-    {
-        struct castle_component_tree *ct;
-
-        ct = c_bvec->trees[i];
-        if(ct == c_bvec->tree)
-        {
-            cur_found = 1;
-            /* Skip c_bvec->tree. This reference must remain. */
-            debug("%s::keeping tree %d (%p)\n",
-                    __FUNCTION__, ct->seq, ct);
-            continue;
-        }
-        BUG_ON(!cur_found && (ct != NULL));
-        BUG_ON( cur_found && (ct == NULL));
-        if(ct)
-        {
-            debug("%s::putting tree %d (%p)\n",
-                    __FUNCTION__, ct->seq, ct);
-            castle_ct_put(ct, 0, &c_bvec->ct_refs[i]);
-        }
-    }
-    castle_da_cts_free(c_bvec);
-}
-
-/**
  * Queue a write IO for later submission.
  *
  * @param da        Doubling array to queue IO for
@@ -9068,38 +8817,341 @@ static void castle_da_queue_kick(struct work_struct *work)
 }
 
 /**
- * Progresses read c_bvec to next CT, or if one is not available it terminates the requset,
- * by calling back to the client.
+ * Create a DA CTs proxy and make it active in the DA.
+ *
+ * @return  *       Pointer to CTs proxy (with 2 references taken)
+ * @return  NULL    Failed to allocate CTs proxy
  */
-static void castle_da_ct_read_next(c_bvec_t *c_bvec)
+static struct castle_da_cts_proxy* castle_da_cts_proxy_create(struct castle_double_array *da)
 {
-    void (*callback) (struct castle_bio_vec *c_bvec, int err, c_val_tup_t cvt);
+#define VERIFY_PROXY_CT(_ct)                                                                    \
+    BUG_ON((castle_btree_type_get((_ct)->btree_type)->magic != RW_VLBA_TREE_TYPE)               \
+            && (castle_btree_type_get((_ct)->btree_type)->magic != RO_VLBA_TREE_TYPE))
 
-    callback = c_bvec->orig_complete;
+    struct castle_da_cts_proxy *proxy;
+    struct castle_da_merge *last_merge;
+    int nr_cts, ct, i;
 
-    castle_da_ct_next(c_bvec);
+    proxy = castle_alloc(sizeof(struct castle_da_cts_proxy));
+    if (!proxy)
+        return NULL;
 
-    /* No more trees left. Callback with invalid cvt. */
-    if(!c_bvec->tree)
+reallocate:
+    nr_cts = da->nr_trees + atomic_read(&da->queriable_merge_trees_cnt);
+    if (nr_cts <= 0)
+        goto err;
+    proxy->cts= castle_alloc(nr_cts * sizeof(struct castle_da_cts_proxy_ct));
+    if (!proxy->cts)
+        goto err2;
+
+    /* Verify nr_cts still matches under DA lock.  Write because we're going
+     * to make this proxy structure active once it is generated. */
+    write_lock(&da->lock);
+
+    if (nr_cts != da->nr_trees + atomic_read(&da->queriable_merge_trees_cnt))
     {
-        callback(c_bvec, 0, INVAL_VAL_TUP);
+        /* nr_cts has changed, we need to re-allocate the structures to
+         * ensure they are large enough to hold all of the references. */
+        write_unlock(&da->lock);
+
+        castle_free(proxy->cts);
+
+        goto reallocate;
+    }
+
+    /* Under the DA lock store pointers to referenced CTs.
+     *
+     * Partially merged input trees point to their merge structure which in
+     * turn points to the output tree.  Merging trees are guaranteed to be
+     * contiguous within the da->levels[].trees list so store last_merge to
+     * ensure we only add an output tree to our proxy once. */
+    for (i = 0, ct = 0, last_merge = NULL; i < MAX_DA_LEVEL; i++)
+    {
+        struct list_head *l;
+
+        list_for_each(l, &da->levels[i].trees)
+        {
+            struct castle_da_cts_proxy_ct *proxy_ct;
+
+            /* Add this CT, take a reference. */
+            proxy_ct = &proxy->cts[ct++];
+            proxy_ct->ct = list_entry(l, struct castle_component_tree, da_list);
+            castle_ct_get(proxy_ct->ct, 0 /*write*/, &proxy_ct->ext_refs);
+            VERIFY_PROXY_CT(proxy_ct->ct);
+
+            /* Set the partition key and partion state, as appropriate. */
+            if (proxy_ct->ct->merge && proxy_ct->ct->merge->queriable_out_tree)
+            {
+                /* CT is an input tree to a merge. */
+                proxy_ct->state = REDIR_INTREE;
+                castle_key_ptr_ref_cp(&proxy_ct->pk,
+                        &proxy_ct->ct->merge->redirection_partition);
+
+                debug("%s::CT %d at level %d redirects to CT %d\n",
+                        __FUNCTION__, proxy_ct->ct->seq, i,
+                        proxy_ct->ct->merge->queriable_out_tree->seq);
+
+                if (last_merge != proxy_ct->ct->merge)
+                {
+                    /* First time we've seen this merge.  Add the output
+                     * CT to the proxy and advance the last_merge pointer. */
+                    struct castle_component_tree *input_ct = proxy_ct->ct;
+
+                    proxy_ct = &proxy->cts[ct++];
+                    proxy_ct->ct    = input_ct->merge->queriable_out_tree;
+                    proxy_ct->state = REDIR_OUTTREE;
+                    castle_key_ptr_ref_cp(&proxy_ct->pk,
+                            &input_ct->merge->redirection_partition);
+                    castle_ct_get(proxy_ct->ct, 0 /*write*/, &proxy_ct->ext_refs);
+                    VERIFY_PROXY_CT(proxy_ct->ct);
+
+                    last_merge = input_ct->merge;
+                }
+            }
+            else
+            {
+                /* CT is not involved in a merge. */
+                proxy_ct->state         = NO_REDIR;
+                proxy_ct->pk.key        = NULL;
+            }
+        }
+    }
+
+    /* Finalise proxy structure. */
+    BUG_ON(ct != nr_cts);
+    proxy->nr_cts = nr_cts;
+    proxy->da     = da;
+    atomic_set(&proxy->ref_cnt, 2); /* 1: DA, 2: caller */
+
+    /* Make this DA CT's proxy live for DA. */
+    BUG_ON(da->cts_proxy);
+    da->cts_proxy = proxy; /* still under DA write lock */
+
+    write_unlock(&da->lock);
+
+    return proxy;
+
+err2:
+    castle_free(proxy->cts);
+err:
+    castle_free(proxy);
+
+    return NULL;
+}
+
+/**
+ * Get a reference to the CTs proxy for this DA, creating it, if necessary.
+ *
+ * @return  *       Pointer to CTs proxy (with reference taken)
+ * @return  NULL    Failed to allocate CTs proxy
+ */
+static struct castle_da_cts_proxy* castle_da_cts_proxy_get(struct castle_double_array *da)
+{
+    struct castle_da_cts_proxy *proxy;
+
+retry:
+    read_lock(&da->lock);
+    proxy = da->cts_proxy;
+    if (proxy)
+        /* Take a reference to an existing proxy. */
+        atomic_inc(&proxy->ref_cnt);
+    read_unlock(&da->lock);
+
+    if (unlikely(!proxy))
+    {
+        if (!test_and_set_bit(CASTLE_DA_CTS_PROXY_CREATE_BIT, &da->flags))
+        {
+            /* Create the CTs proxy (bit not previously set). */
+            proxy = castle_da_cts_proxy_create(da); /* ref_cnt == 2 */
+            clear_bit(CASTLE_DA_CTS_PROXY_CREATE_BIT, &da->flags);
+        }
+        else
+        {
+            /* Wait for CTs proxy to be created (bit already set). */
+            msleep(10);
+            goto retry;
+        }
+    }
+
+    return proxy;
+}
+
+/**
+ * Put a reference on the DA CTs proxy, freeing it, if necessary.
+ *
+ * NOTE: See castle_da_cts_proxy{} for description of why we do not need to
+ *       update da->cts_proxy pointer if dropping the last reference.
+ */
+void castle_da_cts_proxy_put(struct castle_da_cts_proxy *proxy)
+{
+    int ref_cnt;
+
+    ref_cnt = atomic_dec_return(&proxy->ref_cnt);
+
+    /* Drop CT references and free proxy if we put the last reference. */
+    if (ref_cnt == 0)
+    {
+        int ct;
+
+        BUG_ON(proxy->da->cts_proxy == proxy);
+
+        for (ct = 0; ct < proxy->nr_cts; ct++)
+        {
+            if (proxy->cts[ct].pk.key)
+            {
+                BUG_ON(proxy->cts[ct].state == NO_REDIR);
+                castle_key_ptr_destroy(&proxy->cts[ct].pk);
+            }
+            else
+                BUG_ON(proxy->cts[ct].state != NO_REDIR);
+            castle_ct_put(proxy->cts[ct].ct, 0 /*write*/, &proxy->cts[ct].ext_refs);
+        }
+
+        castle_free(proxy->cts);
+        castle_free(proxy);
+    }
+    else
+        BUG_ON(ref_cnt < 0);
+}
+
+/**
+ * Invalidate an existing DA CTs proxy, if one exists.
+ *
+ * @param   da_locked   Whether the DA is write-locked
+ */
+static int castle_da_cts_proxy_invalidate(struct castle_double_array *da, void *da_locked)
+{
+    if (!da_locked)
+        write_lock(&da->lock);
+
+    if (likely(da->cts_proxy))
+    {
+        void *proxy;
+
+        proxy = da->cts_proxy;
+        da->cts_proxy = NULL;
+        castle_da_cts_proxy_put(proxy);
+    }
+
+    if (!da_locked)
+        write_unlock(&da->lock);
+
+    return 0;
+}
+
+/**
+ * Invalidate all exists DA CTs proxys.
+ */
+static void castle_da_cts_proxy_timeout(void *unused)
+{
+    castle_da_hash_iterate(castle_da_cts_proxy_invalidate, NULL /*da_locked*/);
+}
+
+#define CASTLE_DA_CTS_PROXY_TIMEOUT_FREQ    (10)    /* Timeout all DA CT's proxies every 10s.   */
+static DECLARE_WORK(castle_da_cts_proxy_timeout_work, castle_da_cts_proxy_timeout, 0 /*da_locked*/);
+static struct timer_list castle_da_cts_proxy_timer;
+static void castle_da_cts_proxy_timer_fire(unsigned long first)
+{
+    /* Timeout any existing DA CTs proxy structures. */
+    schedule_work(&castle_da_cts_proxy_timeout_work);
+
+    /* Reschedule ourselves. */
+    setup_timer(&castle_da_cts_proxy_timer, castle_da_cts_proxy_timer_fire, 0);
+    mod_timer(&castle_da_cts_proxy_timer, jiffies + HZ * CASTLE_DA_CTS_PROXY_TIMEOUT_FREQ);
+}
+
+/**
+ * Return next CT from CTs proxy matching point c_bvec.
+ *
+ * @param   proxy   [in]    DA CTs proxy structure
+ * @param   index   [both]  Index into DA CT's proxy structure to start search
+ * @param   key     [in]    Search key
+ */
+static struct castle_component_tree* castle_da_cts_proxy_ct_next(struct castle_da_cts_proxy *proxy,
+                                                                 int *index,
+                                                                 void *key)
+{
+    struct castle_da_cts_proxy_ct *proxy_ct;
+    int i;
+
+    BUG_ON(!proxy);
+
+    for (i = *index + 1; i < proxy->nr_cts; i++)
+    {
+        proxy_ct = &proxy->cts[i];
+
+        if (proxy_ct->pk.key)
+        {
+            /* CT has a partition key. */
+            struct castle_btree_type *btree;
+            int cmp;
+
+            BUG_ON(proxy_ct->state == NO_REDIR);
+
+            btree = castle_btree_type_get(RO_VLBA_TREE_TYPE);
+            cmp = btree->key_compare(proxy_ct->pk.key, key);
+
+            if ((proxy_ct->state == REDIR_INTREE && cmp < 0)
+                    || (proxy_ct->state == REDIR_OUTTREE && cmp >= 0))
+                /* Matching candidate found. */
+                goto found;
+            else
+                continue; /* implicit */
+        }
+        else
+            /* No partition key, matching candidate found. */
+            goto found;
+    }
+
+    *index = i; /* proxy->nr_cts */
+
+    return NULL;
+
+found:
+    *index = i;
+
+    return proxy_ct->ct;
+}
+
+/**
+ * Submit request to the next candidate CT, or terminate if exhausted.
+ */
+void castle_da_next_ct_read(c_bvec_t *c_bvec)
+{
+    /* Find next candidate tree from DA CT's proxy structure. */
+    c_bvec->tree = castle_da_cts_proxy_ct_next(c_bvec->cts_proxy,
+                                              &c_bvec->cts_index,
+                                               c_bvec->key);
+    if (!c_bvec->tree)
+    {
+        /* No more candidate trees available.  Let submit_complete()
+         * handle this case for us. */
+        c_bvec->submit_complete(c_bvec, 0, INVAL_VAL_TUP);
+
         return;
     }
 
     debug_verbose("Scheduling btree read in %s tree: %d.\n",
             c_bvec->tree->dynamic ? "dynamic" : "static", c_bvec->tree->seq);
+
     castle_bloom_submit(c_bvec);
 }
 
-
 /**
- * This is the callback used to complete a btree read. It either:
- * - calls back to the client if the key sought for has been found
- * - calls back to the client if there was an error
- * - calls back to the client if no more component trees are available
- * - otherwise it drops the reference to the last CT, takes reference to the next CT and
- *   submits the request to the bloom filter code (which will call this callback again,
- *   directly or indirectly).
+ * Callback for completing a Component Tree read.
+ *
+ * Arranges to search the next CT in DA if:
+ * - Doing counter accumulation
+ * - Key not found in CT
+ *
+ * Completes if:
+ * - All candidate CTs have been searched
+ * - Key found
+ * - An error occurred
+ *
+ * DA CT's proxy structure reference gets dropped here unless CVT is on-disk.
+ * In this case the caller will need to do an out-of-line read and drop the
+ * reference when complete.
  */
 static void castle_da_ct_read_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cvt)
 {
@@ -9110,30 +9162,23 @@ static void castle_da_ct_read_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cv
     BUG_ON(c_bvec_data_dir(c_bvec) != READ);
     BUG_ON(atomic_read(&c_bvec->reserv_nodes));
 
-    /* If there tree is null, it means that no more there are no more trees left
-       to inspect, callback immediately. */
-    if(!c_bvec->tree)
+    /* No more candidate trees available, callback now. */
+    if (!c_bvec->tree)
+        goto complete;
+
+    /* Handle counter accumulation. */
+    if (!err && CVT_ADD_ALLV_COUNTER(cvt))
     {
-        /* Trees array should have been deallocated by now. */
-        BUG_ON(c_bvec->trees);
+        /* Callback handles counter accumulation. */
         callback(c_bvec, err, cvt);
+
+        /* Continue. */
+        castle_da_next_ct_read(c_bvec);
         return;
     }
 
-    /* Deal with counter adds (other component trees may have to be looked at). */
-    if(!err && CVT_ADD_ALLV_COUNTER(cvt))
-    {
-        /* Callback (this should perform counter accumulation).
-           NOTE: DA code retakes control after this callback is complete (after counter
-           accumulation has been done). */
-        callback(c_bvec, err, cvt);
-
-        castle_da_ct_read_next(c_bvec);
-        return;
-    }
-
-    /* If the key hasn't been found, or it is counter add, go to the next tree. */
-    if(!err && CVT_INVALID(cvt))
+    /* No key found, go to the next tree. */
+    if (!err && CVT_INVALID(cvt))
     {
 #ifdef CASTLE_BLOOM_FP_STATS
         if (c_bvec->tree->bloom_exists && c_bvec->bloom_positive)
@@ -9144,15 +9189,27 @@ static void castle_da_ct_read_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cv
 #endif
         debug_verbose("Checking next ct.\n");
 
-        castle_da_ct_read_next(c_bvec);
+        /* Continue. */
+        castle_da_next_ct_read(c_bvec);
         return;
     }
 
-    /* Don't release the ct reference in order to hold on to medium objects array, etc.
-       But release references to all other trees (those further on in the trees array). */
-    debug("%s::putting all trees besides ct %d (%p)\n",
-            __FUNCTION__, c_bvec->tree->seq, c_bvec->tree);
-    castle_da_cts_put(c_bvec);
+complete:
+    /* Terminate now.  One of the following conditions must be true:
+     *
+     * 1) no more candidate trees were available
+     * 2) an error occurred
+     * 3) valid key to return
+     *
+     * For out-of-line CVTs don't drop DA CT's proxy reference.  The caller will
+     * need the references for the during of the out-of-line read.  The caller
+     * must drop the reference when complete. */
+    if (!CVT_ON_DISK(cvt))
+    {
+        castle_da_cts_proxy_put(c_bvec->cts_proxy);
+        c_bvec->cts_proxy = NULL;
+        c_bvec->tree      = NULL;
+    }
     callback(c_bvec, err, cvt);
 }
 
@@ -9264,22 +9321,24 @@ insert:
  */
 static void castle_da_read_bvec_start(struct castle_double_array *da, c_bvec_t *c_bvec)
 {
-    int err;
-
     debug_verbose("Doing DA read for da_id=%d\n", da_id);
     BUG_ON(c_bvec_data_dir(c_bvec) != READ);
 
-    /* Get a reference to the first appropriate CT for this bvec. */
-    err = castle_da_all_cts_get(da, &c_bvec->nr_trees, &c_bvec->trees, &c_bvec->ct_refs, c_bvec);
-    if (err)
+    /* Get this DA's CT proxy structure. */
+    c_bvec->cts_proxy = castle_da_cts_proxy_get(da);
+    if (!c_bvec->cts_proxy)
     {
-        c_bvec->submit_complete(c_bvec, err, INVAL_VAL_TUP);
+        c_bvec->submit_complete(c_bvec, -ENOMEM, INVAL_VAL_TUP);
+
         return;
     }
 
-    /* Start with the first tree. */
-    c_bvec->tree = c_bvec->trees[0];
-    memcpy(&c_bvec->ct_ref, &c_bvec->ct_refs[0], sizeof(c_ct_ext_ref_t));
+    /* Find the first candidate tree. */
+    c_bvec->cts_index   = -1;
+    c_bvec->tree        = castle_da_cts_proxy_ct_next(c_bvec->cts_proxy,
+                                                     &c_bvec->cts_index,
+                                                      c_bvec->key);
+    BUG_ON(!c_bvec->tree); /* must always be at least one candidate */
 
     c_bvec->orig_complete   = c_bvec->submit_complete;
     c_bvec->submit_complete = castle_da_ct_read_complete;
@@ -9324,14 +9383,11 @@ void castle_double_array_submit(c_bvec_t *c_bvec)
     /* orig_complete should be null it is for our privte use */
     BUG_ON(c_bvec->orig_complete);
 
-    /* Start the read bvecs without any queueing. */
-    if(c_bvec_data_dir(c_bvec) == READ)
-    {
+    if (c_bvec_data_dir(c_bvec) == READ)
+        /* Start the read bvecs without any queueing. */
         castle_da_read_bvec_start(da, c_bvec);
-        return;
-    }
-
-    castle_da_write_bvec_start(da, c_bvec);
+    else
+        castle_da_write_bvec_start(da, c_bvec);
 }
 
 /**
@@ -9546,6 +9602,7 @@ int castle_double_array_init(void)
     castle_ct_hash_init();
     castle_merge_threads_hash_init();
     castle_merges_hash_init();
+    castle_da_cts_proxy_timer_fire(1);
 
     return 0;
 err4:
@@ -9582,6 +9639,10 @@ void castle_double_array_merges_fini(void)
     CASTLE_TRANSACTION_BEGIN;
     __castle_merge_threads_hash_iterate(castle_merge_thread_stop, NULL);
     CASTLE_TRANSACTION_END;
+
+    /* Stop DA CTs proxy timer and invalidate any existing proxies. */
+    del_singleshot_timer_sync(&castle_da_cts_proxy_timer);
+    __castle_da_hash_iterate(castle_da_cts_proxy_invalidate, (void *)1 /*da_locked*/);
 
     /* This is happening at the end of execution. No need for the hash lock. */
     __castle_da_hash_iterate(castle_da_merge_stop, NULL);
@@ -9887,6 +9948,8 @@ static int castle_merge_thread_start(void *_data)
 
     while(!kthread_should_stop())
     {
+        int ret;
+
         set_current_state(TASK_INTERRUPTIBLE);
         schedule();
 
@@ -9899,8 +9962,15 @@ static int castle_merge_thread_start(void *_data)
         merge = castle_merges_hash_get(merge_thread->merge_id);
         BUG_ON(!merge);
 
-        if (castle_da_merge_do(merge, merge_thread->cur_work_size) == 0)
+        if ((ret = castle_da_merge_do(merge, merge_thread->cur_work_size)) == 0)
+        {
+            castle_events_merge_work_finished(merge_thread->merge_id, 1, 1);
             merge_thread->merge_id = INVAL_MERGE_ID;
+        }
+        else if (ret == EAGAIN)
+            castle_events_merge_work_finished(merge_thread->merge_id, 1, 0);
+        else
+            castle_events_merge_work_finished(merge_thread->merge_id, 0, 0);
 
         merge_thread->running = 0;
     }

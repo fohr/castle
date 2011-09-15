@@ -2821,6 +2821,10 @@ static void castle_back_big_get_call_queued(struct castle_back_stateful_op *stat
         BUG_ON(!queue_work_on(stateful_op->cpu, castle_back_wq, &stateful_op->work[0]));
 }
 
+/**
+ *
+ * @also castle_back_big_get_do_chunk()
+ */
 static void castle_back_big_get_continue(struct castle_object_pull *pull,
                                          int err,
                                          uint64_t length,
@@ -2893,7 +2897,7 @@ static void castle_back_big_get_continue(struct castle_object_pull *pull,
     if (castle_back_stateful_op_completed_op(stateful_op))
         return;
 
-    castle_back_big_get_call_queued(stateful_op);
+    castle_back_big_get_call_queued(stateful_op); // castle_back_big_get_do_chunk()
 
     spin_unlock(&stateful_op->lock);
 }
