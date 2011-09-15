@@ -4411,14 +4411,11 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
                     "(da %d, level %d).\n", __FUNCTION__, merge, merge->da->id, merge->level);
         }
 
-        /* Abort (i.e. free) incomplete bloom filters */
-        if (merge->out_tree->bloom_exists)
-            castle_bloom_abort(&merge->out_tree->bloom);
-
         if (merge_out_tree_retain)
         {
             struct list_head *lh, *tmp;
             int lo_count=0;
+            BUG_ON(!merge->out_tree); /* can't be retaining out tree without an out_tree! */
             mutex_lock(&merge->out_tree->lo_mutex);
             list_for_each_safe(lh, tmp, &merge->out_tree->large_objs)
             {
@@ -4442,6 +4439,10 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
         /* Free the component tree, if one was allocated. */
         if(merge->out_tree)
         {
+            /* Abort (i.e. free) incomplete bloom filter */
+            if (merge->out_tree->bloom_exists)
+                castle_bloom_abort(&merge->out_tree->bloom);
+
             BUG_ON(atomic_read(&merge->out_tree->write_ref_count) != 0);
             BUG_ON(atomic_read(&merge->out_tree->ref_count) != 1);
             if(!merge_out_tree_retain)
