@@ -45,8 +45,6 @@ struct castle_batree_entry {
     /*        160 */
 } PACKED;
 
-#define BATREE_NODE_SIZE     (20) /* In blocks */
-
 const size_t BATREE_NODE_ENTRIES = (BATREE_NODE_SIZE * PAGE_SIZE - sizeof(struct castle_btree_node))
     / sizeof(struct castle_batree_entry);
 
@@ -56,14 +54,6 @@ static inline void castle_batree_key_print(bakey_t *key)
 
     for(i=0; i<BATREE_KEY_SIZE; i++)
         castle_printk(LOG_DEBUG, "%.2x", key->_key[i]);
-}
-
-/**
- * Size of batree btree nodes equals BATREE_NODE_SIZE (20 pages).
- */
-static uint16_t castle_batree_node_size(struct castle_component_tree *ct, uint8_t level)
-{
-    return BATREE_NODE_SIZE;
 }
 
 static int castle_batree_need_split(struct castle_btree_node *node, int ver_or_key_split)
@@ -311,7 +301,6 @@ struct castle_btree_type castle_batree = {
     .min_key        = (void *)&BATREE_MIN_KEY,
     .max_key        = (void *)&BATREE_MAX_KEY,
     .inv_key        = (void *)&BATREE_INVAL_KEY,
-    .node_size      = castle_batree_node_size,
     .need_split     = castle_batree_need_split,
     .key_compare    = castle_batree_key_compare,
     .key_duplicate  = castle_batree_key_duplicate,

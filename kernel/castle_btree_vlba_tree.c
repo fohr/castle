@@ -16,8 +16,6 @@
 /**********************************************************************************************/
 /* Variable length byte array key btree (vlbatree) definitions */
 
-#define VLBA_RW_TREE_NODE_SIZE                  (2)      /**< Size of the RW tree node size.
-                                                              Constant independent of the level. */
 const size_t VLBA_RW_TREE_MAX_ENTRIES =         2500UL;  /**< Maximum number of entries in any
                                                               of the RW tree entries. */
 
@@ -104,28 +102,6 @@ uint32_t castle_btree_vlba_max_nr_entries_get(uint16_t node_size)
              sizeof(struct castle_btree_node) -
              sizeof(struct castle_vlba_tree_node))
                  / MAX_VLBA_ENTRY_LENGTH;
-}
-
-/**
- * Size of RW vlba tree nodes (VLBA_RW_TREE_NODE_SIZE, currently equals to 2 pages).
- * This is a constant, which prevents from races between calls to this function, and
- * root splits.
- */
-static uint16_t castle_vlba_rw_tree_node_size(struct castle_component_tree *ct, uint8_t level)
-{
-    return VLBA_RW_TREE_NODE_SIZE;
-}
-
-/**
- * Size of RO vlba tree nodes, this is taken from the particular component tree structure.
- * @param ct    Component tree for which node size is to be found.
- * @param level Level, counted from the leafs (which are level=0).
- */
-static uint16_t castle_vlba_ro_tree_node_size(struct castle_component_tree *ct, uint8_t level)
-{
-    //TODO@tr talk to GM, explain why I can't allow this BUG_ON
-    //BUG_ON(level >= ct->tree_depth);
-    return ct->node_sizes[level];
 }
 
 /* Implementation of heap sort from wiki */
@@ -784,7 +760,6 @@ struct castle_btree_type castle_rw_tree = {
     .min_key        = (void *)&VLBA_TREE_MIN_KEY,
     .max_key        = (void *)&VLBA_TREE_MAX_KEY,
     .inv_key        = (void *)&VLBA_TREE_INVAL_KEY,
-    .node_size      = castle_vlba_rw_tree_node_size,
     .need_split     = castle_vlba_tree_need_split,
     .key_compare    = castle_vlba_tree_key_compare,
     .key_duplicate  = castle_vlba_tree_key_duplicate,
@@ -807,7 +782,6 @@ struct castle_btree_type castle_ro_tree = {
     .min_key        = (void *)&VLBA_TREE_MIN_KEY,
     .max_key        = (void *)&VLBA_TREE_MAX_KEY,
     .inv_key        = (void *)&VLBA_TREE_INVAL_KEY,
-    .node_size      = castle_vlba_ro_tree_node_size,
     .need_split     = castle_vlba_tree_need_split,
     .key_compare    = castle_vlba_tree_key_compare,
     .key_duplicate  = castle_vlba_tree_key_duplicate,

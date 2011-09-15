@@ -813,6 +813,11 @@ enum {
                                                           For example castle_clist_entry.
                                                           If modified, those need to be reviewed.
                                                       */
+
+#define MTREE_NODE_SIZE                 (10)  /* In blocks */
+#define BATREE_NODE_SIZE                (20)  /* In blocks */
+#define VLBA_RW_TREE_NODE_SIZE          (2)   /**< Size of the RW tree node size.
+                                                   Constant independent of the level. */
 #define VLBA_HDD_RO_TREE_NODE_SIZE      (64)  /**< Size of the default RO tree node size. */
 #define VLBA_SSD_RO_TREE_NODE_SIZE      (2)   /**< Size of the RO tree node size on SSDs. */
 
@@ -847,14 +852,6 @@ struct castle_btree_type {
                                  should always return a negative number
                                  except if also compared to invalid key
                                  in which case cmp should return zero   */
-    uint16_t (*node_size)     (struct castle_component_tree *ct,
-                               uint8_t level);
-                              /**< Gives btree node size at the given
-                                   level. Levels are counted in reverse
-                                   order. I.e. leaf level is 0, etc.
-                                   This makes it possible to grow the tree
-                                   without renumbering all the existing
-                                   levels. */
     int      (*need_split)    (struct castle_btree_node *node,
                                int                       version_or_key);
                               /* 0 - version split, 1 - key split       */

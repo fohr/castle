@@ -32,18 +32,8 @@ struct castle_mtree_entry {
     /*         32 */
 } PACKED;
 
-#define MTREE_NODE_SIZE     (10) /* In blocks */
-
 const size_t MTREE_NODE_ENTRIES = (MTREE_NODE_SIZE * PAGE_SIZE - sizeof(struct castle_btree_node))
     / sizeof(struct castle_mtree_entry);
-
-/**
- * Size of mtree btree nodes equals MTREE_NODE_SIZE (10 pages).
- */
-static uint16_t castle_mtree_node_size(struct castle_component_tree *ct, uint8_t level)
-{
-    return MTREE_NODE_SIZE;
-}
 
 static int castle_mtree_need_split(struct castle_btree_node *node, int ver_or_key_split)
 {
@@ -265,7 +255,6 @@ struct castle_btree_type castle_mtree = {
     .min_key        = (void *)0,
     .max_key        = (void *)MTREE_MAX_BLK,
     .inv_key        = (void *)MTREE_INVAL_BLK,
-    .node_size      = castle_mtree_node_size,
     .need_split     = castle_mtree_need_split,
     .key_compare    = castle_mtree_key_compare,
     .key_duplicate  = castle_mtree_key_duplicate,
