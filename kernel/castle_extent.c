@@ -3786,7 +3786,7 @@ int rebuild_init(void)
     fs_sb = castle_fs_superblocks_get();
     fs_sb->fs_in_rebuild = 1;
     castle_fs_superblocks_put(fs_sb, 1);
-                
+
     castle_extents_rescan_required = 0;
 
     rebuild_to_seqno = atomic_read(&current_rebuild_seqno);

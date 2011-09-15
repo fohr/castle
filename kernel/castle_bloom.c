@@ -487,8 +487,11 @@ int castle_bloom_add(castle_bloom_t *bf, struct castle_btree_type *btree, void *
  *
  * @return 0 if out of range, non-zero otherwise. cep and chunk_id_out are set if not NULL.
  */
-static int castle_bloom_get_chunk_id(castle_bloom_t *bf, void *key,
-        c2_block_t **btree_nodes_c2bs, c_ext_pos_t *cep, uint32_t *chunk_id_out)
+static int castle_bloom_get_chunk_id(castle_bloom_t *bf,
+                                     void *key,
+                                     c2_block_t **btree_nodes_c2bs,
+                                     c_ext_pos_t *cep,
+                                     uint32_t *chunk_id_out)
 {
     uint32_t chunk_id = 0;
     uint32_t node_index;
@@ -664,22 +667,6 @@ static int castle_bloom_lookup(castle_bloom_t *bf, c2_block_t *c2b, struct castl
 }
 
 /**
- * Used to advance the search to the next tree.  If none left, report not found.
- */
-static void castle_bloom_lookup_next_ct(c_bvec_t *c_bvec)
-{
-    castle_da_ct_next(c_bvec);
-    if (!c_bvec->tree)
-    {
-        /* We've finished looking through all the trees. */
-        c_bvec->submit_complete(c_bvec, 0, INVAL_VAL_TUP);
-        return;
-    }
-
-    castle_bloom_submit(c_bvec);
-}
-
-/**
  * Process the block i.e. perform the actual bloom lookup
  */
 static void castle_bloom_block_process(c_bvec_t *c_bvec)
@@ -703,7 +690,10 @@ static void castle_bloom_block_process(c_bvec_t *c_bvec)
 
     if (!found)
     {
-        castle_bloom_lookup_next_ct(c_bvec);
+        /* Bloom filter states that c_bvec->key is not in the current
+         * c_bvec->tree.  Move to the next tree and search again. */
+        castle_da_next_ct_read(c_bvec);
+
         return;
     }
 
@@ -783,7 +773,7 @@ static void castle_bloom_chunk_read(c_bvec_t *c_bvec, uint32_t chunk_id)
 }
 
 /**
- * Process the bloom filter index to find the chunk
+ * Process the bloom filter index to find the chunk.
  */
 static void castle_bloom_index_process(c_bvec_t *c_bvec, c2_block_t **btree_nodes_c2bs)
 {
@@ -796,13 +786,12 @@ static void castle_bloom_index_process(c_bvec_t *c_bvec, c2_block_t **btree_node
 
     found = castle_bloom_get_chunk_id(bf, key, btree_nodes_c2bs, NULL, &chunk_id);
 
-    //found = 1;
-
     if (!found)
-    {
-        castle_bloom_lookup_next_ct(c_bvec);
-    }
+        /* c_bvec->key is not within the range defined by this bloom filter.
+         * Move to the next tree and search again. */
+        castle_da_next_ct_read(c_bvec);
     else
+        /* Bloom filter states c_bvec->key MAY be in current C_bvec->tree. */
         castle_bloom_chunk_read(c_bvec, chunk_id);
 }
 

@@ -2432,7 +2432,7 @@ static inline c2_block_t* _castle_cache_block_hash_get(c_ext_pos_t cep,
 
     /* Hold the hash lock. */
     read_lock(&castle_cache_block_hash_lock);
-    
+
     /* Try and get the matching block from the hash. */
     c2b = castle_cache_block_hash_find(cep, nr_pages);
     if (c2b)
@@ -5353,7 +5353,7 @@ static int castle_cache_flush(void *unused)
             data = kmem_cache_alloc(castle_flush_cache, GFP_KERNEL);
             if (!data)
             {
-                castle_printk(LOG_DEVEL, "Failed to allocate space for flush elemetn\n");
+                castle_printk(LOG_DEVEL, "Failed to allocate space for flush element.\n");
                 castle_extent_dirtytree_put(dirtytree);
                 continue;
             }

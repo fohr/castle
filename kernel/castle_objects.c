@@ -443,7 +443,7 @@ static void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
     if (ct)
     {
         castle_double_array_unreserve(c_bvec);
-        castle_ct_put(ct, 1, &c_bvec->ct_ref);
+        castle_ct_put(ct, 1 /*write*/, &c_bvec->ct_ref);
     }
     BUG_ON(atomic_read(&c_bvec->reserv_nodes) != 0);
 
@@ -1054,12 +1054,8 @@ void __castle_object_get_complete(struct work_struct *work)
     uint64_t data_c2b_length = get->data_c2b_length;
     uint64_t data_length = get->data_length;
     int first = get->first;
-    struct castle_component_tree *ct = get->ct;
-    c_ct_ext_ref_t ct_ref;
     int last, dont_want_more;
     c_val_tup_t cvt = get->cvt;
-
-    memcpy(&ct_ref, &get->ct_ref, sizeof(c_ct_ext_ref_t));
 
     /* Deal with error case first */
     if(!c2b_uptodate(c2b))
@@ -1115,7 +1111,7 @@ out:
         get, cep2str(c2b->cep));
     put_c2b(c2b);
 
-    castle_ct_put(ct, 0, &ct_ref);
+    castle_da_cts_proxy_put(c_bvec->cts_proxy); /* castle_da_ct_read_complete() */
     castle_object_reference_release(cvt);
     castle_utils_bio_free(c_bvec->c_bio);
 }
@@ -1136,6 +1132,11 @@ void castle_object_get_io_end(c2_block_t *c2b)
     queue_work(castle_wq, &c_bvec->work);
 }
 
+/**
+ * Continue object get by reading in out-of-line values.
+ *
+ * @also castle_object_get_complete()
+ */
 void castle_object_get_continue(struct castle_bio_vec *c_bvec,
                                 struct castle_object_get *get,
                                 c_ext_pos_t  data_cep,
@@ -1205,6 +1206,16 @@ void castle_object_get_continue(struct castle_bio_vec *c_bvec,
     }
 }
 
+/**
+ * Get callback handler.
+ *
+ * Arranges an out-of-line read for medium objects.  Large objects are not
+ * handled here as they would be too large to return in a single buffer.
+ *
+ * Called via orig_complete in castle_da_ct_read_complete().
+ *
+ * @also castle_da_ct_read_complete()
+ */
 void castle_object_get_complete(struct castle_bio_vec *c_bvec,
                                 int err,
                                 c_val_tup_t cvt)
@@ -1241,33 +1252,28 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
     else
         get->cvt = cvt;
 
-    get->ct = c_bvec->tree;
-    memcpy(&get->ct_ref, &c_bvec->ct_ref, sizeof(c_ct_ext_ref_t));
-
-    /* Deal with error case, or non-existant value. */
+    /* Deal with error case, or non-existent value. */
     if(err || CVT_INVALID(cvt) || CVT_TOMBSTONE(cvt))
     {
-        //castle_printk(LOG_DEBUG, "%s::Error, invalid or tombstone.\n", __FUNCTION__);
-        /* Dont have any object returned, no need to release reference of object. */
-        /* Release reference of Component Tree. */
-        if(get->ct)
-            castle_ct_put(get->ct, 0, &get->ct_ref);
+        BUG_ON(c_bvec->cts_proxy); // _da_ct_read_complete() puts for !on disk
+
+        castle_printk(LOG_DEBUG, "%s::Error, invalid or tombstone.\n", __FUNCTION__);
+
         /* Turn tombstones into invalid CVTs. */
         CVT_INVALID_INIT(get->cvt);
         get->reply_start(get, err, 0, NULL, 0);
         castle_utils_bio_free(c_bvec->c_bio);
+
         return;
     }
-    /* For non-counters there must always be a CT. */
-    BUG_ON(!CVT_ANY_COUNTER(cvt) && !get->ct);
 
-    /* Deal with the inlines and local counters (therefore with inlines and all counters). */
-    if(CVT_INLINE(cvt))
+    /* Inline values and local (all) counters. */
+    if (CVT_INLINE(cvt))
     {
-        //castle_printk(LOG_DEBUG, "%s::Inline.\n", __FUNCTION__);
-        /* Release reference of Component Tree. */
-        if(get->ct)
-            castle_ct_put(get->ct, 0, &get->ct_ref);
+        BUG_ON(c_bvec->cts_proxy); // _da_ct_read_complete() puts for !on disk
+
+        castle_printk(LOG_DEBUG, "%s::Inline.\n", __FUNCTION__);
+
         get->reply_start(get,
                          0,
                          cvt.length,
@@ -1280,29 +1286,32 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
         return;
     }
 
-    BUG_ON(CVT_MEDIUM_OBJECT(cvt) &&
-            cvt.cep.ext_id != c_bvec->tree->data_ext_free.ext_id);
+    /* Out-of-line values (medium objects). */
+    {
+        BUG_ON(CVT_MEDIUM_OBJECT(cvt) &&
+                cvt.cep.ext_id != c_bvec->tree->data_ext_free.ext_id);
+        BUG_ON(!c_bvec->tree); // _da_ct_read_complete() leaves this for us
+        BUG_ON(!c_bvec->cts_proxy); // _da_ct_read_complete() leaves this for us
+        BUG_ON(!CVT_ON_DISK(cvt));
 
-    //castle_printk(LOG_DEBUG, "%s::Out of line.\n", __FUNCTION__);
-    /* Finally, out of line values */
-    BUG_ON(!CVT_ON_DISK(cvt));
-    /* Init the variables stored in the call correctly, so that _continue() doesn't
-       get confused */
+        //castle_printk(LOG_DEBUG, "%s::Out of line.\n", __FUNCTION__);
 
-    get->data_c2b        = NULL;
-    get->data_c2b_length = 0;
-    get->data_length     = cvt.length;
-    get->first           = 1; /* first */
+        /* Initialise call variables for _object_get_continue(). */
+        get->data_c2b        = NULL;
+        get->data_c2b_length = 0;
+        get->data_length     = cvt.length;
+        get->first           = 1; /* first */
 
-    castle_object_get_continue(c_bvec, get, cvt.cep, cvt.length);
+        castle_object_get_continue(c_bvec, get, cvt.cep, cvt.length);
 
-    FAULT(GET_FAULT);
+        FAULT(GET_FAULT);
+    }
 }
 
 /**
  * Lookup and return an object from btree.
  *
- * @param cpu_index CPU index (to determine correct T0 CT)
+ * @param   cpu_index   CPU index (to determine correct T0 CT)
  *
  * @also castle_back_get()
  */
@@ -1351,19 +1360,20 @@ int castle_object_get(struct castle_object_get *get,
 }
 EXPORT_SYMBOL(castle_object_get);
 
-static inline void castle_object_pull_ct_put(struct castle_object_pull *pull)
-{
-    if(pull->ct)
-        castle_ct_put(pull->ct, 0, &pull->ct_ref);
-    pull->ct = NULL;
-}
-
+/**
+ * Release references held by object pull.
+ *
+ * @also __castle_object_chunk_pull_complete()
+ * @also castle_object_pull_complete()
+ * @also castle_object_chunk_pull()
+ * @also castle_da_ct_read_complete()
+ */
 void castle_object_pull_finish(struct castle_object_pull *pull)
 {
-    castle_object_pull_ct_put(pull);
+    if (CVT_ON_DISK(pull->cvt))
+        castle_da_cts_proxy_put(pull->cts_proxy); /* castle_da_ct_read_complete() */
     castle_object_reference_release(pull->cvt);
 }
-
 
 void __castle_object_chunk_pull_complete(struct work_struct *work)
 {
@@ -1386,7 +1396,7 @@ void __castle_object_chunk_pull_complete(struct work_struct *work)
     pull->buf = NULL;
     pull->to_copy = 0;
 
-    pull->pull_continue(pull, 0, to_copy, pull->remaining == 0);
+    pull->pull_continue(pull, 0 /*err*/, to_copy, pull->remaining == 0 /*done*/);
 }
 
 void castle_object_chunk_pull_io_end(c2_block_t *c2b)
@@ -1403,6 +1413,11 @@ void castle_object_chunk_pull_io_end(c2_block_t *c2b)
     queue_work(castle_wq, &pull->work);
 }
 
+/**
+ * Copy buf_len's worth of pull->cvt into userland buf.
+ *
+ * @also castle_back_big_get_do_chunk()
+ */
 void castle_object_chunk_pull(struct castle_object_pull *pull, void *buf, size_t buf_len)
 {
     /* @TODO currently relies on objects being page aligned. */
@@ -1419,17 +1434,22 @@ void castle_object_chunk_pull(struct castle_object_pull *pull, void *buf, size_t
 
     BUG_ON(pull->to_copy == 0);
 
-    if(CVT_INLINE(pull->cvt))
+    /* Handle inline values. */
+    if (CVT_INLINE(pull->cvt))
     {
+        BUG_ON(pull->cts_proxy); // _da_ct_read_complete() puts for !on disk
         /* this is assured since buf_len >= PAGE_SIZE > MAX_INLINE_VAL_SIZE */
         BUG_ON(buf_len < pull->remaining);
         memcpy(buf, CVT_INLINE_VAL_PTR(pull->cvt), pull->remaining);
         CVT_INLINE_FREE(pull->cvt);
-        pull->pull_continue(pull, 0, pull->remaining, 1 /* done */);
+        pull->pull_continue(pull, 0, pull->remaining, 1 /*done*/);
+
         return;
     }
 
+    /* Handle out-of-line values. */
     BUG_ON(!CVT_ON_DISK(pull->cvt));
+    BUG_ON(!pull->cts_proxy);
     cep.ext_id = pull->cvt.cep.ext_id;
     cep.offset = pull->cvt.cep.offset + pull->offset; /* @TODO in bytes or blocks? */
 
@@ -1441,13 +1461,14 @@ void castle_object_chunk_pull(struct castle_object_pull *pull, void *buf, size_t
     pull->buf = buf;
 
     debug("c2b uptodate: %d\n", c2b_uptodate(pull->curr_c2b));
-    if(!c2b_uptodate(pull->curr_c2b))
+    if (!c2b_uptodate(pull->curr_c2b))
     {
         /* If the buffer doesn't contain up to date data, schedule the IO */
         pull->curr_c2b->private = pull;
         pull->curr_c2b->end_io = castle_object_chunk_pull_io_end;
         BUG_ON(submit_c2b(READ, pull->curr_c2b));
-    } else
+    }
+    else
     {
         write_unlock_c2b(pull->curr_c2b);
         __castle_object_chunk_pull_complete(&pull->work);
@@ -1459,28 +1480,37 @@ static void castle_object_pull_continue(struct castle_bio_vec *c_bvec, int err, 
 {
     struct castle_object_pull *pull = c_bvec->c_bio->pull;
 
-    pull->ct = c_bvec->tree;
-    memcpy(&pull->ct_ref, &c_bvec->ct_ref, sizeof(c_ct_ext_ref_t));
-    pull->cvt = cvt;
+    pull->cts_proxy = c_bvec->cts_proxy;
+    pull->cvt       = cvt;
     castle_utils_bio_free(c_bvec->c_bio);
 
-    if(err || CVT_INVALID(cvt) || CVT_TOMBSTONE(cvt))
+    /* Deal with error case, or non-existent value. */
+    if (err || CVT_INVALID(cvt) || CVT_TOMBSTONE(cvt))
     {
+        BUG_ON(pull->cts_proxy); // _da_ct_read_complete() puts for !on disk
+
         debug("Error, invalid or tombstone.\n");
 
-        castle_object_pull_ct_put(pull);
+        pull->cts_proxy = NULL;
         CVT_INVALID_INIT(pull->cvt);
-        pull->pull_continue(pull, err, 0, 1 /* done */);
+        pull->pull_continue(pull, err, 0, 1 /*done*/);
+
         return;
     }
 
-    pull->offset = 0;
-    pull->curr_c2b = NULL;
-    pull->buf = NULL;
+    pull->offset    = 0;
+    pull->curr_c2b  = NULL;
+    pull->buf       = NULL;
     pull->remaining = cvt.length;
-    pull->pull_continue(pull, err, cvt.length, 0 /* not done yet */);
+
+    pull->pull_continue(pull, err /*now: 0*/, cvt.length, 0 /*done*/);
 }
 
+/**
+ * Look up and return a (large) object from DA.
+ *
+ * @param   cpu_index   CPU index (to determine correct T0 CT)
+ */
 int castle_object_pull(struct castle_object_pull *pull,
                        struct castle_attachment *attachment,
                        c_vl_bkey_t *key,
