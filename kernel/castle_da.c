@@ -407,7 +407,7 @@ static c_ext_pos_t castle_ct_immut_iter_next_node_cep_find(c_immut_iter_t *iter,
         return INVAL_EXT_POS;
 
     /* We should only be inspecting leaf nodes, work out the node size. */
-    btree_node_size = iter->btree->node_size(iter->tree, 0);
+    btree_node_size = iter->tree->node_sizes[0];
 
     /* Work out the position of the next node. */
     cep.offset += ((c_byte_off_t)btree_node_size) * C_BLK_SIZE;
@@ -694,7 +694,7 @@ static void castle_ct_immut_iter_init(c_immut_iter_t *iter,
         return;
     }
 
-    first_node_size = iter->btree->node_size(iter->tree, 0);
+    first_node_size = iter->tree->node_sizes[0];
     castle_printk(LOG_DEBUG, "%s::first_node_cep = "cep_fmt_str"\n",
             __FUNCTION__, cep2str(first_node_cep));
     castle_ct_immut_iter_next_node_find(iter,
@@ -1051,7 +1051,7 @@ static void castle_ct_modlist_iter_fill(c_modlist_iter_t *iter)
 
             /* Get a new node. */
             node = castle_ct_modlist_iter_buffer_get(iter, node_idx);
-            castle_da_node_buffer_init(btree, node, btree->node_size(iter->tree, 0));
+            castle_da_node_buffer_init(btree, node, iter->tree->node_sizes[0]);
 
             /* We've advance, initialise a good state. */
             iter->enum_advanced = 0;
@@ -1246,7 +1246,7 @@ static void castle_ct_modlist_iter_init(c_modlist_iter_t *iter)
 
     iter->err = 0;
     iter->btree = castle_btree_type_get(ct->btree_type);
-    iter->leaf_node_size = iter->btree->node_size(ct, 0);
+    iter->leaf_node_size = ct->node_sizes[0];
     iter->async_iter.end_io = NULL;
     iter->async_iter.iter_type = &castle_ct_modlist_iter;
 
@@ -3583,7 +3583,7 @@ static inline c_val_tup_t* _castle_da_entry_add(struct castle_da_merge *merge,
         BUG_ON(level->valid_end_idx >= 0);
 
         debug("Allocating a new node at depth: %d\n", depth);
-        BUG_ON(new_node_size != btree->node_size(merge->out_tree, depth));
+        BUG_ON(new_node_size != merge->out_tree->node_sizes[depth]);
         ext_space_needed = new_node_size * C_BLK_SIZE;
 
         /* output tree leaf extent growth */
@@ -4086,7 +4086,7 @@ static void castle_da_max_path_complete(struct castle_da_merge *merge, c_ext_pos
     /* Start with the root node. */
     node_c2b = castle_cache_block_get_for_merge(root_cep,
                                       //btree->node_size(ct, merge->root_depth));
-                                      btree->node_size(ct, merge->out_tree->tree_depth-1));
+                                      ct->node_sizes[merge->out_tree->tree_depth-1]);
     /* Lock and update the c2b. */
     write_lock_c2b(node_c2b);
     if(!c2b_uptodate(node_c2b))
@@ -4115,7 +4115,7 @@ static void castle_da_max_path_complete(struct castle_da_merge *merge, c_ext_pos
         debug("Locking next node cep=" cep_fmt_str_nl,
               cep2str(cvt.cep));
         next_node_c2b = castle_cache_block_get_for_merge(cvt.cep,
-                                               btree->node_size(ct, merge->root_depth - level));
+                                               ct->node_sizes[merge->root_depth - level]);
         write_lock_c2b(next_node_c2b);
         /* We unlikely to need a blocking read, because we've just had these
            nodes in the cache. */
@@ -8807,7 +8807,7 @@ again:
        and try again). */
     btree = castle_btree_type_get(ct->btree_type);
     if(castle_ext_freespace_can_alloc(&ct->tree_ext_free,
-                                      2 * btree->node_size(ct, 0) * C_BLK_SIZE))
+                                      2 * ct->node_sizes[0] * C_BLK_SIZE))
         return ct;
 
     debug("Number of items in component tree %d, # items %ld. Trying to add a new rwct.\n",
@@ -9362,7 +9362,7 @@ again:
 
     /* We may have to create up to 2 new leaf nodes in this write. Preallocate
        the space for this. */
-    req_btree_space = 2 * btree->node_size(ct, 0) * C_BLK_SIZE;
+    req_btree_space = 2 * ct->node_sizes[0] * C_BLK_SIZE;
     if (castle_ext_freespace_prealloc(&ct->tree_ext_free, req_btree_space) < 0)
         goto new_ct;
     /* Save how many nodes we've pre-allocated. */
@@ -9420,7 +9420,7 @@ void castle_double_array_unreserve(c_bvec_t *c_bvec)
     ct = c_bvec->tree;
     btree = castle_btree_type_get(ct->btree_type);
     castle_ext_freespace_free(&ct->tree_ext_free,
-                               reserv_nodes * btree->node_size(ct, 0) * C_BLK_SIZE);
+                               reserv_nodes * ct->node_sizes[0] * C_BLK_SIZE);
     /* Set the reservation back to 0. Don't use atomic_set() because this doesn't use
        locked prefix. */
     atomic_sub(reserv_nodes, &c_bvec->reserv_nodes);
