@@ -650,16 +650,22 @@ struct castle_iterator_type castle_ct_immut_iter = {
  * @param iter          Iterator to initialise
  * @param node_start    CB handler when iterator moves to a new btree node
  * @param private       Private data to pass to CB handler
+ * @param resume_merge_node_cep  When re-initialising an iterator for a deserialising
+ *                               merge, start from the provided cep instead of the start
+ *                               of the extent.
+ * @param already_complete       When re-initialising an iterator for a deserialising
+ *                               merge, where the iterator had already completed, set the
+ *                               completed flag and skip the node_find()
  */
 static void castle_ct_immut_iter_init(c_immut_iter_t *iter,
                                       castle_immut_iter_node_start node_start,
-                                      void *private)
+                                      void *private,
+                                      c_ext_pos_t *resume_merge_node_cep,
+                                      int already_completed)
 {
     c_ext_pos_t first_node_cep;
     uint16_t first_node_size;
 
-    //castle_printk(LOG_DEBUG, "%s::Initialising immut enumerator (iter %p) for ct id=%d\n",
-    //        __FUNCTION__, iter, iter->tree->seq);
     iter->btree     = castle_btree_type_get(iter->tree->btree_type);
     iter->completed = 0;
     iter->curr_c2b  = NULL;
@@ -676,6 +682,22 @@ static void castle_ct_immut_iter_init(c_immut_iter_t *iter,
 
     first_node_cep.ext_id = iter->tree->tree_ext_free.ext_id;
     first_node_cep.offset = 0;
+
+    if(resume_merge_node_cep)
+    {
+        BUG_ON(resume_merge_node_cep->ext_id != first_node_cep.ext_id);
+        first_node_cep.offset = resume_merge_node_cep->offset;
+    }
+
+    if(already_completed)
+    {
+        castle_printk(LOG_DEBUG, "%s::Initialising immut enumerator (iter %p)"
+                " in COMPLETED state for ct id=%d\n",
+                __FUNCTION__, iter, iter->tree->seq);
+        iter->completed = 1;
+        return;
+    }
+
     first_node_size = iter->btree->node_size(iter->tree, 0);
     castle_printk(LOG_DEBUG, "%s::first_node_cep = "cep_fmt_str"\n",
             __FUNCTION__, cep2str(first_node_cep));
@@ -1267,7 +1289,7 @@ static void castle_ct_modlist_iter_init(c_modlist_iter_t *iter)
 
     /* Initialise the immutable iterator */
     iter->enumerator->tree = ct;
-    castle_ct_immut_iter_init(iter->enumerator, castle_ct_modlist_iter_next_node, iter);
+    castle_ct_immut_iter_init(iter->enumerator, castle_ct_modlist_iter_next_node, iter, NULL, 0);
 
     /* Finally, sort the data so we can return sorted entries to the caller. */
     castle_ct_modlist_iter_mergesort(iter);
@@ -2203,7 +2225,9 @@ static void castle_da_iterator_destroy(struct castle_component_tree *tree,
  */
 static void castle_da_iterator_create(struct castle_da_merge *merge,
                                       struct castle_component_tree *tree,
-                                      void **iter_p)
+                                      void **iter_p,
+                                      c_ext_pos_t *resume_merge_node_cep,
+                                      int already_completed)
 {
     if (tree->dynamic)
     {
@@ -2236,7 +2260,7 @@ static void castle_da_iterator_create(struct castle_da_merge *merge,
             return;
         iter->tree = tree;
         iter->merge = merge;
-        castle_ct_immut_iter_init(iter, NULL, NULL);
+        castle_ct_immut_iter_init(iter, NULL, NULL, resume_merge_node_cep, already_completed);
         /* @TODO: after init errors? */
         *iter_p = iter;
     }
@@ -2410,7 +2434,38 @@ static int castle_da_iterators_create(struct castle_da_merge *merge)
     ret = -EINVAL;
     FOR_EACH_MERGE_TREE(i, merge)
     {
-        castle_da_iterator_create(merge, merge->in_trees[i], &merge->iters[i]);
+        c_ext_pos_t *resume_merge_node_cep;
+        int          already_complete;
+
+        resume_merge_node_cep = NULL;
+        already_complete      = 0;
+
+        /* Fast-forward c2bs */
+        if(merge->serdes.des)
+        {
+            struct castle_in_tree_merge_state_entry *in_tree_merge_mstore_arr =
+                merge->serdes.in_tree_mstore_entry_arr;
+            if(!EXT_POS_INVAL(in_tree_merge_mstore_arr[i].iter.immut_curr_c2b_cep))
+            {
+                resume_merge_node_cep = &in_tree_merge_mstore_arr[i].iter.immut_curr_c2b_cep;
+                castle_printk(LOG_DEBUG, "%s::[da %d level %d] des first cep "cep_fmt_str"\n",
+                        __FUNCTION__, merge->da->id, merge->level, cep2str(*resume_merge_node_cep));
+            }
+            else
+            {
+                /* if we don't have a valid curr_c2b_cep, the iterator must have completed */
+                BUG_ON(!in_tree_merge_mstore_arr[i].iter.component_completed);
+                already_complete = 1;
+                castle_printk(LOG_DEBUG, "%s::[da %d level %d] des iter complete \n",
+                        __FUNCTION__, merge->da->id, merge->level);
+            }
+        }
+
+        castle_da_iterator_create(merge,
+                merge->in_trees[i],
+                &merge->iters[i],
+                resume_merge_node_cep,
+                already_complete);
 
         /* Check if the iterators got created properly. */
         if (!merge->iters[i])
@@ -2472,29 +2527,14 @@ static int castle_da_iterators_create(struct castle_da_merge *merge)
             curr_immut->cached_idx = in_tree_merge_mstore_arr[i].iter.immut_cached_idx;
             curr_immut->next_idx   = in_tree_merge_mstore_arr[i].iter.immut_next_idx;
 
-            if(curr_immut->curr_c2b)
-                put_c2b(curr_immut->curr_c2b);
-            curr_immut->curr_c2b = NULL;
-
-            if(curr_immut->next_c2b)
-                put_c2b(curr_immut->next_c2b);
-            curr_immut->next_c2b = NULL;
-
-            /* Restore curr_c2b */
+            /* Sanity check curr_c2b, and restore cache */
             if(!EXT_POS_INVAL(in_tree_merge_mstore_arr[i].iter.immut_curr_c2b_cep))
             {
-                uint16_t node_size;
-                c_ext_pos_t cep;
-
-                cep                = in_tree_merge_mstore_arr[i].iter.immut_curr_c2b_cep;
-                castle_da_merge_node_size_get(merge, 0 /* always at leaf node? */, &node_size);
-                curr_immut->curr_c2b = castle_cache_block_get_for_merge(cep, node_size);
+                c_ext_pos_t cep = in_tree_merge_mstore_arr[i].iter.immut_curr_c2b_cep;
                 BUG_ON(!curr_immut->curr_c2b);
 
-                write_lock_c2b(curr_immut->curr_c2b);
-                if(!c2b_uptodate(curr_immut->curr_c2b))
-                    BUG_ON(submit_c2b_sync(READ, curr_immut->curr_c2b));
-                write_unlock_c2b(curr_immut->curr_c2b);
+                BUG_ON(curr_immut->curr_c2b->cep.ext_id != cep.ext_id);
+                BUG_ON(curr_immut->curr_c2b->cep.offset != cep.offset);
 
                 /* Restore current btree node */
                 curr_immut->curr_node = c2b_bnode(curr_immut->curr_c2b);
@@ -2516,22 +2556,16 @@ static int castle_da_iterators_create(struct castle_da_merge *merge)
             else
                 BUG_ON(!curr_immut->completed);
 
-            /* Restore next_c2b */
+            /* Sanity check next_c2b */
             if(!EXT_POS_INVAL(in_tree_merge_mstore_arr[i].iter.immut_next_c2b_cep))
             {
-                uint16_t node_size;
-                c_ext_pos_t cep;
                 struct castle_btree_node *node;
 
-                cep                = in_tree_merge_mstore_arr[i].iter.immut_next_c2b_cep;
-                castle_da_merge_node_size_get(merge, 0 /* always at leaf node? */, &node_size);
-                curr_immut->next_c2b = castle_cache_block_get_for_merge(cep, node_size);
+                c_ext_pos_t cep = in_tree_merge_mstore_arr[i].iter.immut_next_c2b_cep;
                 BUG_ON(!curr_immut->next_c2b);
 
-                write_lock_c2b(curr_immut->next_c2b);
-                if(!c2b_uptodate(curr_immut->next_c2b))
-                    BUG_ON(submit_c2b_sync(READ, curr_immut->next_c2b));
-                write_unlock_c2b(curr_immut->next_c2b);
+                BUG_ON(curr_immut->next_c2b->cep.ext_id != cep.ext_id);
+                BUG_ON(curr_immut->next_c2b->cep.offset != cep.offset);
 
                 /* Sanity check the node */
                 node = c2b_bnode(curr_immut->next_c2b);
@@ -5016,7 +5050,7 @@ static int castle_da_merge_init(struct castle_da_merge *merge, void *unused)
 
     /* Iterators */
     ret = castle_da_iterators_create(merge); /* built-in handling of deserialisation, triggered by
-                                                da->levels[].merge.serdes.des flag. */
+                                                merge->serdes.des flag. */
     if(ret)
         goto error_out;
 
