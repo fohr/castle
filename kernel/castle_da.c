@@ -9949,6 +9949,8 @@ static int castle_merge_thread_start(void *_data)
 
     while(!kthread_should_stop())
     {
+        int ret;
+
         set_current_state(TASK_INTERRUPTIBLE);
         schedule();
 
@@ -9961,8 +9963,15 @@ static int castle_merge_thread_start(void *_data)
         merge = castle_merges_hash_get(merge_thread->merge_id);
         BUG_ON(!merge);
 
-        if (castle_da_merge_do(merge, merge_thread->cur_work_size) == 0)
+        if ((ret = castle_da_merge_do(merge, merge_thread->cur_work_size)) == 0)
+        {
+            castle_events_merge_work_finished(merge_thread->merge_id, 1, 1);
             merge_thread->merge_id = INVAL_MERGE_ID;
+        }
+        else if (ret == EAGAIN)
+            castle_events_merge_work_finished(merge_thread->merge_id, 1, 0);
+        else
+            castle_events_merge_work_finished(merge_thread->merge_id, 0, 0);
 
         merge_thread->running = 0;
     }
