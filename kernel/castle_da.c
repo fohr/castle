@@ -141,7 +141,6 @@ static struct castle_component_tree* castle_ct_alloc(struct castle_double_array 
                                                      btree_t type,
                                                      int level, tree_seq_t seq);
 void castle_ct_get(struct castle_component_tree *ct, int write, c_ct_ext_ref_t *refs);
-static void castle_inval_ct_put(struct castle_component_tree *ct);
 void castle_ct_put(struct castle_component_tree *ct, int write, c_ct_ext_ref_t *refs);
 static void castle_component_tree_add(struct castle_double_array *da,
                                       struct castle_component_tree *ct,
@@ -4442,10 +4441,7 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
             BUG_ON(atomic_read(&merge->out_tree->ref_count) != 1);
             if(!merge_out_tree_retain)
             {
-                if(unlikely(TREE_INVAL(merge->out_tree->seq)))
-                    castle_inval_ct_put(merge->out_tree);
-                else
-                    castle_ct_put(merge->out_tree, 0, NULL);
+                castle_ct_put(merge->out_tree, 0, NULL);
                 merge->out_tree=NULL;
             }
             else if (err == -ESHUTDOWN)
@@ -5055,6 +5051,8 @@ static int castle_da_merge_init(struct castle_da_merge *merge, void *unused)
         merge->out_tree = castle_ct_alloc(da, RO_VLBA_TREE_TYPE, (castle_golden_nugget)? 2: level+1, ct_seq);
         if(!merge->out_tree)
             goto error_out;
+        BUG_ON(TREE_INVAL(merge->out_tree->seq));
+        BUG_ON(TREE_GLOBAL(ct->seq));
         merge->out_tree->internal_ext_free.ext_id = INVAL_EXT_ID;
         merge->out_tree->tree_ext_free.ext_id = INVAL_EXT_ID;
         merge->out_tree->data_ext_free.ext_id = INVAL_EXT_ID;
@@ -7070,33 +7068,6 @@ void castle_ct_get(struct castle_component_tree *ct, int write, c_ct_ext_ref_t *
             refs->ref_id_data,
             refs->ref_id_bloom,
             atomic_inc_return(&ct_get_count));
-}
-
-/* A stripped down version of castle_ct_put(); designed to work for trees that were alloc'd
-   in a castle_da_merge_init() that subsequently failed without out_tree extents allocated. */
-static void castle_inval_ct_put(struct castle_component_tree *ct)
-{
-    BUG_ON(!ct);
-    BUG_ON(!TREE_INVAL(ct->seq));
-    BUG_ON(in_atomic());
-    BUG_ON(atomic_read(&ct->write_ref_count) != 0);
-    /* we currently assume that an INVAL ct can't have a bloom filter */
-    BUG_ON(ct->bloom_exists);
-    /* we assume that noone other than caller should have a reference to an INVAL ct */
-    BUG_ON(!atomic_dec_and_test(&ct->ref_count));
-
-    debug("Ref count for ct id=%d went to 0, releasing.\n", ct->seq);
-    /* If the ct still on the da list, this must be an error. */
-    if(ct->da_list.next != NULL)
-    {
-        castle_printk(LOG_ERROR, "CT=%d, still on DA list, but trying to remove.\n", ct->seq);
-        BUG();
-    }
-    castle_ct_hash_remove(ct);
-
-    /* Poison ct (note this will be repoisoned by kfree on kernel debug build. */
-    memset(ct, 0xde, sizeof(struct castle_component_tree));
-    castle_kfree(ct);
 }
 
 void castle_ct_put(struct castle_component_tree *ct, int write, c_ct_ext_ref_t *refs)
