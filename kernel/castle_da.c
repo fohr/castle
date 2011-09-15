@@ -4345,10 +4345,12 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
     if (merge->snapshot_delete.need_parent)
         castle_kfree(merge->snapshot_delete.need_parent);
 
-    FOR_EACH_MERGE_TREE(i, merge)
-        castle_da_iterator_destroy(merge->in_trees[i], merge->iters[i]);
     if (merge->iters)
+    {
+        FOR_EACH_MERGE_TREE(i, merge)
+            castle_da_iterator_destroy(merge->in_trees[i], merge->iters[i]);
         castle_kfree(merge->iters);
+    }
     if (merge->merged_iter)
         castle_ct_merged_iter_cancel(merge->merged_iter);
 
