@@ -189,6 +189,7 @@ static void castle_da_merge_new_partition_activate(struct castle_da_merge *merge
 static void castle_da_merge_new_partition_update(struct castle_da_merge *merge,
                                                  c2_block_t *node_c2b,
                                                  void *key);
+static int castle_da_cts_proxy_invalidate(struct castle_double_array *da, void *da_locked);
 static int __castle_da_rwct_create(struct castle_double_array *da,
                                    int cpu_index,
                                    int in_tran,
@@ -7431,14 +7432,10 @@ static int castle_da_ct_merge_dealloc(struct castle_double_array *da,
     return 0;
 }
 
-static int castle_da_cts_proxy_invalidate(struct castle_double_array *da, void *da_locked);
 static int castle_da_hash_dealloc(struct castle_double_array *da, void *unused)
 {
     BUG_ON(!da);
     castle_sysfs_da_del(da);
-
-    /* Release references and free any DA CT's proxy. */
-    castle_da_cts_proxy_invalidate(da, (void *)1 /*da_locked*/);
 
     __castle_da_foreach_tree(da, castle_da_ct_merge_dealloc);
     /* Shouldn't have any outstanding */
@@ -9643,7 +9640,9 @@ void castle_double_array_merges_fini(void)
     __castle_merge_threads_hash_iterate(castle_merge_thread_stop, NULL);
     CASTLE_TRANSACTION_END;
 
+    /* Stop DA CTs proxy timer and invalidate any existing proxies. */
     del_singleshot_timer_sync(&castle_da_cts_proxy_timer);
+    __castle_da_hash_iterate(castle_da_cts_proxy_invalidate, (void *)1 /*da_locked*/);
 
     /* This is happening at the end of execution. No need for the hash lock. */
     __castle_da_hash_iterate(castle_da_merge_stop, NULL);
