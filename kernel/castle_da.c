@@ -5052,7 +5052,7 @@ static int castle_da_merge_init(struct castle_da_merge *merge, void *unused)
         if(!merge->out_tree)
             goto error_out;
         BUG_ON(TREE_INVAL(merge->out_tree->seq));
-        BUG_ON(TREE_GLOBAL(ct->seq));
+        BUG_ON(TREE_GLOBAL(merge->out_tree->seq));
         merge->out_tree->internal_ext_free.ext_id = INVAL_EXT_ID;
         merge->out_tree->tree_ext_free.ext_id = INVAL_EXT_ID;
         merge->out_tree->data_ext_free.ext_id = INVAL_EXT_ID;
