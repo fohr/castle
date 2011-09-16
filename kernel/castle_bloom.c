@@ -76,7 +76,8 @@ int castle_bloom_create(castle_bloom_t *bf, c_da_t da_id, uint64_t num_elements)
     uint64_t nodes_size, chunks_size, size;
     int ret = 0;
     struct castle_bloom_build_params *bf_bp;
-    struct castle_btree_type *btree = castle_btree_type_get(VLBA_TREE_TYPE);
+    struct castle_double_array *da = castle_da_get_ptr(da_id);
+    struct castle_btree_type *btree = castle_btree_type_get(da->btree_type);
 
     BUG_ON(num_elements == 0);
 
@@ -913,7 +914,7 @@ void castle_bloom_unmarshall(castle_bloom_t *bf, struct castle_clist_entry *ctm)
     bf->num_blocks_last_chunk = ctm->bloom_num_blocks_last_chunk;
     bf->chunks_offset = ctm->bloom_chunks_offset;
     bf->num_btree_nodes = ctm->bloom_num_btree_nodes;
-    bf->btree = castle_btree_type_get(VLBA_TREE_TYPE);
+    bf->btree = castle_btree_type_get(ctm->btree_type);
     bf->ext_id = ctm->bloom_ext_id;
 
     castle_printk(LOG_DEBUG, "castle_bloom_unmarshall ext_id=%llu num_chunks=%u num_blocks_last_chunk=%u chunks_offset=%llu num_btree_nodes=%u\n",
@@ -984,9 +985,6 @@ void castle_bloom_build_param_marshall(struct castle_bbp_entry *bbpm,
 void castle_bloom_build_param_unmarshall(castle_bloom_t *bf, struct castle_bbp_entry *bbpm)
 {
     struct castle_bloom_build_params *bf_bp = bf->private;
-
-    /* assumes a priori unmarshalled bloom filter */
-    BUG_ON(bf->btree->magic != VLBA_TREE_TYPE);
 
     /* assumes caller did zalloc */
     BUG_ON(!bf_bp);

@@ -138,7 +138,6 @@ typedef enum {
 /**********************************************************************************************/
 /* Prototypes */
 static struct castle_component_tree* castle_ct_alloc(struct castle_double_array *da,
-                                                     btree_t type,
                                                      int level, tree_seq_t seq);
 void castle_ct_get(struct castle_component_tree *ct, int write, c_ct_ext_ref_t *refs);
 void castle_ct_put(struct castle_component_tree *ct, int write, c_ct_ext_ref_t *refs);
@@ -253,7 +252,7 @@ static inline int castle_da_ct_compare(struct castle_component_tree *ct1,
 }
 
 /**
- * Return DA pointer. For the sake of sysfs.
+ * Return DA pointer. For the sake of sysfs and bloom filters.
  */
 struct castle_double_array * castle_da_get_ptr(c_da_t da_id)
 {
@@ -1973,8 +1972,6 @@ void castle_da_rq_iter_cancel(c_da_rq_iter_t *iter)
     ct_redir_state[j]   = _redir_type;                                                          \
     castle_ct_get(_ct, 0, ct_get_refs[j]);                                                      \
                                                                                                 \
-    BUG_ON(castle_btree_type_get((_ct)->btree_type)->magic != VLBA_TREE_TYPE);                  \
-                                                                                                \
     if(_redir_type != NO_REDIR)                                                                 \
     {                                                                                           \
         /* ct in merge, and that merge has a queriable output tree, so there must be a */       \
@@ -2159,7 +2156,7 @@ again:
 
     /* Iterators have been initialised, now initialise the merged iterator */
     iter->merged_iter.nr_iters = iter->nr_cts;
-    iter->merged_iter.btree    = castle_btree_type_get(VLBA_TREE_TYPE);
+    iter->merged_iter.btree    = castle_btree_type_get(da->btree_type);
     castle_ct_merged_iter_init(&iter->merged_iter,
                                 iters,
                                 iter_types,
@@ -4700,7 +4697,7 @@ static void castle_da_merge_new_partition_update(struct castle_da_merge *merge,
     node = c2b_bnode(node_c2b);
     BUG_ON(node->magic != BTREE_NODE_MAGIC);
 
-    BUG_ON(castle_btree_type_get(merge->out_tree->btree_type)->magic != VLBA_TREE_TYPE);
+    BUG_ON(merge->out_tree->btree_type != merge->da->btree_type);
 
     /* == update redirection partition key == */
     if(merge->new_redirection_partition.key)
@@ -5045,7 +5042,7 @@ static int castle_da_merge_init(struct castle_da_merge *merge, void *unused)
            deserialising merge */
         BUG_ON(merge->serdes.des);
 
-        merge->out_tree = castle_ct_alloc(da, VLBA_TREE_TYPE, (castle_golden_nugget)? 2: level+1, ct_seq);
+        merge->out_tree = castle_ct_alloc(da, (castle_golden_nugget)? 2: level+1, ct_seq);
         if(!merge->out_tree)
             goto error_out;
         BUG_ON(TREE_INVAL(merge->out_tree->seq));
@@ -5121,7 +5118,7 @@ static struct castle_da_merge* castle_da_merge_alloc(int nr_trees, int level,
     merge->id                   = INVAL_MERGE_ID;
     merge->thread_id            = INVAL_THREAD_ID;
     merge->da                   = da;
-    merge->out_btree            = castle_btree_type_get(VLBA_TREE_TYPE);
+    merge->out_btree            = castle_btree_type_get(da->btree_type);
     merge->level                = level;
     merge->nr_trees             = nr_trees;
     if ((merge->in_trees = castle_zalloc(sizeof(void *) * nr_trees, GFP_KERNEL)) == NULL)
@@ -5874,7 +5871,7 @@ static void castle_da_merge_deserialise(struct castle_da_merge *merge,
 
     /* out_btree (type) can be assigned directly because we passed the BUG_ON() btree_type->magic
        in da_merge_des_check. */
-    merge->out_btree         = castle_btree_type_get(VLBA_TREE_TYPE);
+    merge->out_btree         = castle_btree_type_get(da->btree_type);
     merge->root_depth        = merge_mstore->root_depth;
     merge->large_chunks      = merge_mstore->large_chunks;
     merge->completing        = merge_mstore->completing;
@@ -6069,7 +6066,7 @@ static void castle_da_merge_des_check(struct castle_da_merge *merge, struct cast
     BUG_ON(merge_mstore->level          != level);
     BUG_ON(!castle_golden_nugget && (merge_mstore->out_tree.level != level + 1));
     BUG_ON(castle_golden_nugget && (merge_mstore->out_tree.level != 2));
-    BUG_ON(merge_mstore->btree_type     != VLBA_TREE_TYPE);
+    BUG_ON(merge_mstore->btree_type     != da->btree_type);
 
     /* if seq numbers match up, everything else would be fine as well */
     for(i=0; i<nr_trees; i++)
@@ -6639,7 +6636,7 @@ static void castle_da_merge_serdes_out_tree_check(struct castle_dmserlist_entry 
     BUG_ON(merge_mstore->level          != level);
     BUG_ON(!castle_golden_nugget && (merge_mstore->out_tree.level != level + 1));
     BUG_ON(castle_golden_nugget && (merge_mstore->out_tree.level != 2));
-    BUG_ON(merge_mstore->btree_type     != VLBA_TREE_TYPE);
+    BUG_ON(merge_mstore->btree_type     != da->btree_type);
 
     debug("%s::sanity checking merge SERDES on da %d level %d.\n",
             __FUNCTION__, da->id, level);
@@ -6813,6 +6810,7 @@ void castle_da_marshall(struct castle_dlist_entry *dam,
 {
     dam->id           = da->id;
     dam->root_version = da->root_version;
+    dam->btree_type   = da->btree_type;
 }
 
 static void castle_da_unmarshall(struct castle_double_array *da,
@@ -6820,6 +6818,7 @@ static void castle_da_unmarshall(struct castle_double_array *da,
 {
     da->id           = dam->id;
     da->root_version = dam->root_version;
+    da->btree_type   = dam->btree_type;
     castle_sysfs_da_add(da);
 }
 
@@ -7918,7 +7917,7 @@ static int castle_da_ct_bloom_build_param_deserialise(struct castle_component_tr
         return -ENXIO;
     }
 
-    BUG_ON(ct->bloom.btree->magic != VLBA_TREE_TYPE);
+    BUG_ON(ct->bloom.btree->magic != ct->btree_type);
     ct->bloom.private = castle_zalloc(sizeof(struct castle_bloom_build_params), GFP_KERNEL);
     if(!ct->bloom.private)
     {
@@ -8114,7 +8113,8 @@ int castle_double_array_read(void)
         {
             int node_size = -1;
             struct castle_btree_node *node;
-            struct castle_btree_type *out_btree = castle_btree_type_get(VLBA_TREE_TYPE);
+            struct castle_btree_type *out_btree =
+                castle_btree_type_get(mstore_dmserentry->out_tree.btree_type);
 
             /* output tree pointer */
             merge->queriable_out_tree =
@@ -8342,14 +8342,12 @@ tree_seq_t castle_da_next_ct_seq(void)
  * @return NULL (CT could not be allocated) or pointer to new CT
  */
 static struct castle_component_tree* castle_ct_alloc(struct castle_double_array *da,
-                                                     btree_t type,
                                                      int level,
                                                      tree_seq_t seq)
 {
     struct castle_component_tree *ct;
     int i;
 
-    BUG_ON(type != VLBA_TREE_TYPE);
     ct = castle_zalloc(sizeof(struct castle_component_tree), GFP_KERNEL);
     if(!ct)
         return NULL;
@@ -8368,12 +8366,12 @@ static struct castle_component_tree* castle_ct_alloc(struct castle_double_array 
     atomic64_set(&ct->item_count, 0);
     atomic64_set(&ct->large_ext_chk_cnt, 0);
     ct->flags           = 0;
-    ct->btree_type      = type;
+    ct->btree_type      = da->btree_type;
     ct->dynamic         = level == 0;
     ct->da              = da->id;
     ct->level           = level;
     for (i = 0; i < MAX_BTREE_DEPTH; ++i)
-        ct->node_sizes[i] = castle_btree_node_size_get(type);
+        ct->node_sizes[i] = castle_btree_node_size_get(ct->btree_type);
     ct->tree_depth      = -1;
     ct->root_node       = INVAL_EXT_POS;
     ct->new_ct          = 1;
@@ -8439,7 +8437,7 @@ static int __castle_da_rwct_create(struct castle_double_array *da, int cpu_index
     /* Caller must have set the DA's growing bit. */
     BUG_ON(!castle_da_growing_rw_test(da));
 
-    ct = castle_ct_alloc(da, VLBA_TREE_TYPE, 0 /* level */, INVAL_TREE);
+    ct = castle_ct_alloc(da, 0 /* level */, INVAL_TREE);
     if (!ct)
         return -ENOMEM;
 
@@ -8618,9 +8616,10 @@ int castle_double_array_make(c_da_t da_id, c_ver_t root_version)
     da = castle_da_alloc(da_id);
     if(!da)
         return -ENOMEM;
-    /* Write out the id, and the root version. */
+    /* Write out the id, root version and tree type. */
     da->id = da_id;
     da->root_version = root_version;
+    da->btree_type = VLBA_TREE_TYPE;
 
     /* Insert empty DA into hash. */
     castle_da_hash_add(da);
@@ -8823,8 +8822,7 @@ static void castle_da_queue_kick(struct work_struct *work)
  */
 static struct castle_da_cts_proxy* castle_da_cts_proxy_create(struct castle_double_array *da)
 {
-#define VERIFY_PROXY_CT(_ct)                                                                    \
-    BUG_ON(castle_btree_type_get((_ct)->btree_type)->magic != VLBA_TREE_TYPE)
+#define VERIFY_PROXY_CT(_ct, _da) BUG_ON((_ct)->btree_type != (_da)->btree_type)
 
     struct castle_da_cts_proxy *proxy;
     struct castle_da_merge *last_merge;
@@ -8875,7 +8873,7 @@ reallocate:
             proxy_ct = &proxy->cts[ct++];
             proxy_ct->ct = list_entry(l, struct castle_component_tree, da_list);
             castle_ct_get(proxy_ct->ct, 0 /*write*/, &proxy_ct->ext_refs);
-            VERIFY_PROXY_CT(proxy_ct->ct);
+            VERIFY_PROXY_CT(proxy_ct->ct, da);
 
             /* Set the partition key and partion state, as appropriate. */
             if (proxy_ct->ct->merge && proxy_ct->ct->merge->queriable_out_tree)
@@ -8901,7 +8899,7 @@ reallocate:
                     castle_key_ptr_ref_cp(&proxy_ct->pk,
                             &input_ct->merge->redirection_partition);
                     castle_ct_get(proxy_ct->ct, 0 /*write*/, &proxy_ct->ext_refs);
-                    VERIFY_PROXY_CT(proxy_ct->ct);
+                    VERIFY_PROXY_CT(proxy_ct->ct, da);
 
                     last_merge = input_ct->merge;
                 }
@@ -8917,8 +8915,9 @@ reallocate:
 
     /* Finalise proxy structure. */
     BUG_ON(ct != nr_cts);
-    proxy->nr_cts = nr_cts;
-    proxy->da     = da;
+    proxy->nr_cts     = nr_cts;
+    proxy->btree_type = da->btree_type;
+    proxy->da         = da;
     atomic_set(&proxy->ref_cnt, 2); /* 1: DA, 2: caller */
 
     /* Make this DA CT's proxy live for DA. */
@@ -9086,7 +9085,7 @@ static struct castle_component_tree* castle_da_cts_proxy_ct_next(struct castle_d
 
             BUG_ON(proxy_ct->state == NO_REDIR);
 
-            btree = castle_btree_type_get(VLBA_TREE_TYPE);
+            btree = castle_btree_type_get(proxy->btree_type);
             cmp = btree->key_compare(proxy_ct->pk.key, key);
 
             if ((proxy_ct->state == REDIR_INTREE && cmp < 0)
