@@ -4974,7 +4974,7 @@ static tree_seq_t castle_da_merge_last_unit_complete(struct castle_double_array 
     if (merge->nr_entries)
     {
         castle_sysfs_ct_add(out_tree);
-        castle_events_new_tree_added(out_tree->seq);
+        castle_events_new_tree_added(out_tree->seq, out_tree->da);
     }
 
     castle_da_merge_restart(da, NULL);

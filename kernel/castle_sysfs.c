@@ -962,6 +962,9 @@ int castle_sysfs_ct_add(struct castle_component_tree *ct)
     struct castle_double_array *da;
     int ret;
 
+    if (ct->level < 2)
+        return 0;
+
     /* Get the doubling array. */
     da = castle_da_get_ptr(ct->da);
     BUG_ON(!da);
@@ -980,6 +983,9 @@ int castle_sysfs_ct_add(struct castle_component_tree *ct)
 
 void castle_sysfs_ct_del(struct castle_component_tree *ct)
 {
+    if (ct->level < 2)
+        return;
+
     kobject_remove_wait(&ct->kobj);
 }
 
