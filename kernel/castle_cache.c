@@ -5015,9 +5015,6 @@ restart_traverse:
 dont_flush: read_unlock_c2b(c2b);
 cant_lock:  clear_c2b_flushing(c2b);
 next_c2b:
-            /* Calculate extent offset where current c2b ends. */
-            last_end_off = c2b->cep.offset
-                            + castle_cache_c2b_to_pages(c2b) * PAGE_SIZE;
             if (likely(dirtytree_locked))
                 parent = rb_next(parent);
             else
@@ -5025,6 +5022,10 @@ next_c2b:
                 put_c2b(c2b); /* extra ref */
                 goto restart_traverse;
             }
+
+            /* Calculate extent offset where current c2b ends. */
+            last_end_off = c2b->cep.offset
+                            + castle_cache_c2b_to_pages(c2b) * PAGE_SIZE;
         }
 
         /* Release holds. */
