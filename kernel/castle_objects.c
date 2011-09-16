@@ -1270,7 +1270,7 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
     {
         BUG_ON(c_bvec->cts_proxy); // _da_ct_read_complete() puts for !on disk
 
-        castle_printk(LOG_DEBUG, "%s::Inline.\n", __FUNCTION__);
+//        castle_printk(LOG_DEBUG, "%s::Inline.\n", __FUNCTION__);
 
         get->reply_start(get,
                          0,
