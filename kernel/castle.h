@@ -970,6 +970,7 @@ struct castle_component_tree {
     c_ext_free_t        tree_ext_free;      /**< Extent for leaf btree nodes.                   */
     c_ext_free_t        data_ext_free;      /**< Medium-object data extent.                     */
     atomic64_t          large_ext_chk_cnt;
+    c_ext_pos_t         curr_merge_c2b_cep;
     uint8_t             bloom_exists;
     castle_bloom_t      bloom;
     struct kobject      kobj;

@@ -552,6 +552,7 @@ static void castle_ct_immut_iter_next_node(c_immut_iter_t *iter)
             iter->shrinkable_ext_boundary.data_cep.offset--;
         iter->shrinkable_ext_boundary.valid_and_fresh = 1;
     }
+    iter->tree->curr_merge_c2b_cep = iter->curr_c2b->cep;
 }
 
 static int castle_ct_immut_iter_prep_next(c_immut_iter_t *iter)
@@ -2278,11 +2279,13 @@ static void castle_da_each_skip(c_merged_iter_t *iter,
     BUG_ON(!new_iter->cached);
     BUG_ON(dup_iter->cached_entry.v != new_iter->cached_entry.v);
 
+#if 0
     if (CVT_LARGE_OBJECT(dup_iter->cached_entry.cvt))
     {
         /* No need to remove this large object, it gets deleted part of Tree
          * deletion. */
     }
+#endif
 
     /* Update per-version statistics. */
     if (!CVT_TOMBSTONE(dup_iter->cached_entry.cvt))
@@ -7279,6 +7282,7 @@ static c_da_t castle_da_ct_unmarshall(struct castle_component_tree *ct,
     ct->tree_depth          = ctm->tree_depth;
     ct->root_node           = ctm->root_node;
     ct->new_ct              = 0;
+    ct->curr_merge_c2b_cep  = INVAL_EXT_POS;
     atomic64_set(&ct->large_ext_chk_cnt, ctm->large_ext_chk_cnt);
     init_rwsem(&ct->lock);
     mutex_init(&ct->lo_mutex);
@@ -8368,6 +8372,7 @@ static struct castle_component_tree* castle_ct_alloc(struct castle_double_array 
     atomic_set(&ct->write_ref_count, 0);
     atomic64_set(&ct->item_count, 0);
     atomic64_set(&ct->large_ext_chk_cnt, 0);
+    ct->curr_merge_c2b_cep = INVAL_EXT_POS;
     ct->flags           = 0;
     ct->btree_type      = type;
     ct->dynamic         = type == RW_VLBA_TREE_TYPE ? 1 : 0;
