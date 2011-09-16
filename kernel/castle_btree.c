@@ -1533,7 +1533,7 @@ static void castle_btree_iter_end(c_iter_t *c_iter, int err, int async)
     _t->entry_get(_n, _i, NULL, NULL, &_cvt);                                \
     if(CVT_LEAF_PTR(_cvt))                                                   \
     {                                                                        \
-        BUG_ON(btree == &castle_vlba_tree);                                  \
+        BUG_ON(1 /* btree == &castle_vlba_tree */);                          \
         (_real_c2b)  = c2b_follow_ptr(_i);                                   \
         (_real_slot_idx) = indirect_node(_i)->node_idx;                      \
     }                                                                        \
@@ -1711,7 +1711,7 @@ static void castle_btree_iter_leaf_ptrs_lock(c_iter_t *c_iter)
     int i, j, nr_ptrs;
 
     /* VLBA trees don't have leaf pointers. */
-    if(btree == &castle_vlba_tree)
+    if(1 /* btree == &castle_vlba_tree */)
     {
         BUG_ON(c_iter->indirect_nodes != NULL);
         return;
@@ -2483,7 +2483,7 @@ void castle_btree_iter_init(c_iter_t *c_iter, c_ver_t version, int type)
         case C_ITER_MATCHING_VERSIONS:
         case C_ITER_ANCESTRAL_VERSIONS:
             /* VLBA trees don't have leaf pointers. */
-            if(btree == &castle_vlba_tree)
+            if(1 /* btree == &castle_vlba_tree */)
                 return;
             c_iter->indirect_nodes =
                 castle_alloc(RW_TREES_MAX_ENTRIES * sizeof(struct castle_indirect_node));
