@@ -201,7 +201,7 @@ static inline c_bio_t* castle_utils_bio_alloc(int nr_bvecs)
     int i;
 
     /* Allocate bio & bvec structures in one memory block */
-    c_bio = castle_malloc(sizeof(c_bio_t) + nr_bvecs * sizeof(c_bvec_t), GFP_NOIO);
+    c_bio = castle_malloc(sizeof(c_bio_t) + nr_bvecs * sizeof(c_bvec_t), GFP_KERNEL);
     if(!c_bio)
         return NULL;
     c_bvecs = (c_bvec_t *)(c_bio + 1);
