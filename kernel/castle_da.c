@@ -9694,6 +9694,9 @@ void castle_da_destroy_complete(struct castle_double_array *da)
 
     castle_printk(LOG_USERINFO, "Cleaning VerTree: %u\n", da->id);
 
+    /* Invalidate DA CTs proxy structure. */
+    castle_da_cts_proxy_invalidate(da, (void *)1);
+
     /* Destroy Component Trees. */
     for(i=0; i<MAX_DA_LEVEL; i++)
     {
