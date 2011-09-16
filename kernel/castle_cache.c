@@ -4939,12 +4939,12 @@ static void __castle_cache_extent_flush(c_ext_dirtytree_t  *dirtytree,
         int dirtytree_locked;
 
         batch_idx = 0;
-        last_end_off = 0;
 
 restart_traverse:
         /* Hold dirtytree lock. */
         spin_lock_irq(&dirtytree->lock);
         dirtytree_locked = 1;
+        last_end_off = 0;
 
         /* Walk dirty c2bs until we hit end_off or flush max_pgs. */
         parent = rb_first(&dirtytree->rb_root);
