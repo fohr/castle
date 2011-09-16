@@ -27,7 +27,7 @@ void castle_uevent4(uint16_t cmd, uint64_t arg1, uint64_t arg2, uint64_t arg3, u
     int err = 0;
     struct kobj_uevent_env *env;
 
-    env = castle_zalloc(sizeof(struct kobj_uevent_env), GFP_NOIO);
+    env = castle_zalloc(sizeof(struct kobj_uevent_env), GFP_KERNEL);
     if(!env)
     {
         castle_printk(LOG_WARN, "No memory\n");

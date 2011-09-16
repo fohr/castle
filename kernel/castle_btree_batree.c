@@ -100,7 +100,7 @@ static void* castle_batree_key_duplicate(void *keyv)
     if (BATREE_KEY_INVAL(key) || BATREE_KEY_MIN(key) || BATREE_KEY_MAX(key))
         return key;
 
-    new_key = castle_malloc(sizeof(bakey_t), GFP_NOIO);
+    new_key = castle_malloc(sizeof(bakey_t), GFP_KERNEL);
     BUG_ON(!new_key);
     memcpy(new_key, key, sizeof(bakey_t));
 
@@ -122,7 +122,7 @@ static void* castle_batree_key_next(void *keyv)
         return (void *)&BATREE_INVAL_KEY;
 
     /* Finally allocate and return the successor key */
-    succ = castle_malloc(sizeof(bakey_t), GFP_NOIO);
+    succ = castle_malloc(sizeof(bakey_t), GFP_KERNEL);
     /* @TODO: Should this be handled properly? */
     BUG_ON(!succ);
     memcpy(succ, key, sizeof(bakey_t));

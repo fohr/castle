@@ -4970,7 +4970,7 @@ static tree_seq_t castle_da_merge_last_unit_complete(struct castle_double_array 
     if (merge->nr_entries)
     {
         castle_sysfs_ct_add(out_tree);
-        castle_events_new_tree_added(out_tree->seq);
+        castle_events_new_tree_added(out_tree->seq, out_tree->da);
     }
 
     castle_da_merge_restart(da, NULL);
@@ -9690,6 +9690,9 @@ void castle_da_destroy_complete(struct castle_double_array *da)
     BUG_ON(!CASTLE_IN_TRANSACTION);
 
     castle_printk(LOG_USERINFO, "Cleaning VerTree: %u\n", da->id);
+
+    /* Invalidate DA CTs proxy structure. */
+    castle_da_cts_proxy_invalidate(da, (void *)1);
 
     /* Destroy Component Trees. */
     for(i=0; i<MAX_DA_LEVEL; i++)

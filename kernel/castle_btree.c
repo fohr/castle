@@ -1167,7 +1167,7 @@ static void castle_btree_read_process(c_bvec_t *c_bvec)
             if (CVT_INLINE(lub_cvt))
             {
                 char *loc_buf;
-                loc_buf = castle_malloc(lub_cvt.length, GFP_NOIO);
+                loc_buf = castle_malloc(lub_cvt.length, GFP_KERNEL);
                 memcpy(loc_buf, CVT_INLINE_VAL_PTR(lub_cvt), lub_cvt.length);
                 lub_cvt.val_p = loc_buf;
             }
