@@ -3438,7 +3438,8 @@ retry:
         goto retry;
     }
 
-    BUG_ON(!nr_slaves_to_use);
+    /* We've run out of potential slaves to choose from (caller has exhausted them). */
+    return(-1);
 
     /*
      * Now slaves_to_use is an array of indexes into process_state.live_slaves that reflect
@@ -4474,14 +4475,18 @@ int castle_extents_process_callback(void *data)
     return 0;
 }
 
-static int freespace_now_available(void)
+static int freespace_available(void)
 {
-    if (out_of_freespace && freespace_added)
+    if (out_of_freespace)
     {
-        out_of_freespace = freespace_added = 0;
-        return 1;
+        if (freespace_added)
+        {
+            out_of_freespace = freespace_added = 0;
+            return 1;
+        } else
+            return 0;
     } else
-        return 0;
+        return 1;
 }
 
 /*
@@ -4730,9 +4735,9 @@ finishing:
                     {
 retry:
                         /* Stop here if we have been ratelimited. */
-                        wait_event_interruptible(process_io_waitq, (io_error = work_io_check()) ||
-                                                                    kthread_should_stop() ||
-                                                                    freespace_now_available());
+                        wait_event_interruptible(process_io_waitq,
+                                        ((io_error = work_io_check()) && freespace_available()) ||
+                                         kthread_should_stop());
                         if (kthread_should_stop())
                             break;
 
