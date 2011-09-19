@@ -380,39 +380,66 @@ static ssize_t da_array_list_show(struct kobject *kobj,
                                   char *buf)
 {
     struct castle_double_array *da = container_of(kobj, struct castle_double_array, kobj);
-    int i;
     int ret = 0;
+    struct castle_da_merge *last_seen_merge = NULL;
 
     /* Get READ lock on DA, to make sure DA doesnt disappear while printing stats. */
     read_lock(&da->lock);
 
-    /* Total number of trees. */
-    sprintf(buf, "%u %u\n", da->nr_trees, da->top_level);
-
-    for(i=0; i<=da->top_level; i++)
     {
         struct castle_component_tree *ct;
         struct list_head *lh;
+        char *nr_trees_ptr;
+        uint32_t nr_trees;
 
         /* Number of trees in each level. */
-        ret = snprintf(buf, PAGE_SIZE, "%s%u ", buf, da->levels[i].nr_trees);
+        nr_trees_ptr = buf + strlen(buf);
+        nr_trees = da->levels[2].nr_trees;
+        ret = snprintf(buf, PAGE_SIZE, "%s%02u ", buf, 0);
         /* Buffer is of size one PAGE. MAke sure we are not overflowing buffer. */
         if (ret >= PAGE_SIZE)
             goto err;
 
-        list_for_each(lh, &da->levels[i].trees)
+        list_for_each(lh, &da->levels[2].trees)
         {
-            struct castle_btree_type *btree;
-
             ct = list_entry(lh, struct castle_component_tree, da_list);
-            btree = castle_btree_type_get(ct->btree_type);
+
+            if (last_seen_merge && (ct->merge != last_seen_merge))
+            {
+                ret = snprintf(buf, PAGE_SIZE,
+                               "%s0x%x ",
+                               buf,
+                               last_seen_merge->out_tree->seq);
+                if (ret >= PAGE_SIZE)
+                    goto err;
+
+                nr_trees++;
+            }
             ret = snprintf(buf, PAGE_SIZE,
                            "%s0x%x ",
                            buf,
                            ct->seq);
             if (ret >= PAGE_SIZE)
                 goto err;
+
+            last_seen_merge = ct->merge;
         }
+
+        if (last_seen_merge)
+        {
+            ret = snprintf(buf, PAGE_SIZE,
+                           "%s0x%x ",
+                           buf,
+                           last_seen_merge->out_tree->seq);
+            if (ret >= PAGE_SIZE)
+                goto err;
+
+            nr_trees++;
+        }
+
+        sprintf(nr_trees_ptr, "%02u", nr_trees);
+        nr_trees_ptr[2] = ' ';
+
         ret = snprintf(buf, PAGE_SIZE, "%s\n", buf);
         if (ret >= PAGE_SIZE)
             goto err;
