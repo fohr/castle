@@ -88,7 +88,7 @@ int                             castle_rwct_checkpoint_frequency = 10;  /**< Num
 module_param(castle_rwct_checkpoint_frequency, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
 MODULE_PARM_DESC(castle_rwct_checkpoint_frequency, "Number checkpoints before RWCTs are promoted.");
 
-static int castle_golden_nugget = 0;
+static int castle_golden_nugget = 1;
 
 static struct
 {
@@ -4977,9 +4977,10 @@ static tree_seq_t castle_da_merge_last_unit_complete(struct castle_double_array 
 
     if (merge->nr_entries)
     {
-        merge->out_tree->merge = NULL;
-        clear_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &merge->out_tree->flags);
-        castle_events_new_tree_added(out_tree->seq, out_tree->da);
+        out_tree->merge = NULL;
+        clear_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &out_tree->flags);
+        if (merge->level == 1)
+            castle_events_new_tree_added(out_tree->seq, out_tree->da);
     }
 
     castle_da_merge_restart(da, NULL);
@@ -5012,6 +5013,7 @@ static int castle_da_merge_init(struct castle_da_merge *merge, void *unused)
     int nr_trees = merge->nr_trees;
     struct castle_component_tree **in_trees = merge->in_trees;
     int i, ret;
+    int new_out_tree = 0;
 
     debug("%s::Merging ct=%d (dynamic=%d) with ct=%d (dynamic=%d)\n",
             __FUNCTION__,
@@ -5060,6 +5062,8 @@ static int castle_da_merge_init(struct castle_da_merge *merge, void *unused)
         merge->out_tree->tree_ext_free.ext_id = INVAL_EXT_ID;
         merge->out_tree->data_ext_free.ext_id = INVAL_EXT_ID;
         INIT_LIST_HEAD(&merge->out_tree->large_objs);
+
+        new_out_tree = 1;
     }
 
     merge->out_tree->merge = merge;
@@ -5090,6 +5094,9 @@ static int castle_da_merge_init(struct castle_da_merge *merge, void *unused)
     castle_sysfs_ct_add(merge->out_tree);
     if (castle_golden_nugget && merge->level != 1)
         BUG_ON(castle_sysfs_merge_add(merge));
+
+    if (new_out_tree && merge->level == 2)
+        castle_events_new_tree_added(merge->out_tree->seq, merge->out_tree->da);
 
     write_lock(&da->lock);
     FOR_EACH_MERGE_TREE(i, merge)
