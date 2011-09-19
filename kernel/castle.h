@@ -933,6 +933,7 @@ struct castle_bbp_entry
 #define CASTLE_CT_DYNAMIC_BIT           0   /* CT is dynamic. RW Tree.                          */
 #define CASTLE_CT_NEW_TREE_BIT          1   /* CT is not yet committed to disk.                 */
 #define CASTLE_CT_BLOOM_EXISTS_BIT      2   /* CT has bloom filter.                             */
+#define CASTLE_CT_MERGE_OUTPUT_BIT      3   /* CT is being created by a merge.                  */
 
 struct castle_component_tree {
     tree_seq_t          seq;               /**< Unique ID identifying this tree.                */

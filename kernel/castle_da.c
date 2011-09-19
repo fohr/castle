@@ -2097,6 +2097,7 @@ again:
 
             if ( (ct->merge) && (ct->merge->queriable_out_tree) )
             {
+                BUG_ON(test_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &ct->flags));
                 ADD_CT_TO_ITERATOR(ct, REDIR_INTREE, ct->merge);
                 if (last_seen_merge != ct->merge)
                 {
@@ -4363,6 +4364,7 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
             castle_ct_put(merge->in_trees[i], 0, NULL);
         if (merge->nr_entries == 0)
         {
+            castle_sysfs_ct_del(merge->out_tree);
             castle_printk(LOG_WARN, "Empty merge at level: %u\n", merge->level);
             castle_ct_put(merge->out_tree, 0, NULL);
         }
@@ -4431,6 +4433,9 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
         /* Free the component tree, if one was allocated. */
         if(merge->out_tree)
         {
+            /* Remove output tree from sysfs. */
+            castle_sysfs_ct_del(merge->out_tree);
+
             /* Abort (i.e. free) incomplete bloom filter */
             if (merge->out_tree->bloom_exists)
                 castle_bloom_abort(&merge->out_tree->bloom);
@@ -4972,7 +4977,8 @@ static tree_seq_t castle_da_merge_last_unit_complete(struct castle_double_array 
 
     if (merge->nr_entries)
     {
-        castle_sysfs_ct_add(out_tree);
+        merge->out_tree->merge = NULL;
+        clear_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &merge->out_tree->flags);
         castle_events_new_tree_added(out_tree->seq, out_tree->da);
     }
 
@@ -5056,6 +5062,9 @@ static int castle_da_merge_init(struct castle_da_merge *merge, void *unused)
         INIT_LIST_HEAD(&merge->out_tree->large_objs);
     }
 
+    merge->out_tree->merge = merge;
+    BUG_ON(test_and_set_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &merge->out_tree->flags));
+
     /* Iterators */
     ret = castle_da_iterators_create(merge); /* built-in handling of deserialisation, triggered by
                                                 merge->serdes.des flag. */
@@ -5078,6 +5087,7 @@ static int castle_da_merge_init(struct castle_da_merge *merge, void *unused)
         castle_printk(LOG_INIT, "%s::Resuming merge on da %d level %d.\n", __FUNCTION__, da->id, level);
     }
 
+    castle_sysfs_ct_add(merge->out_tree);
     if (castle_golden_nugget && merge->level != 1)
         BUG_ON(castle_sysfs_merge_add(merge));
 
@@ -8883,6 +8893,8 @@ reallocate:
             /* Set the partition key and partion state, as appropriate. */
             if (proxy_ct->ct->merge && proxy_ct->ct->merge->queriable_out_tree)
             {
+                BUG_ON(test_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &proxy_ct->ct->flags));
+
                 /* CT is an input tree to a merge. */
                 proxy_ct->state = REDIR_INTREE;
                 castle_key_ptr_ref_cp(&proxy_ct->pk,

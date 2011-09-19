@@ -906,11 +906,18 @@ static ssize_t ct_size_show(struct kobject *kobj,
     struct castle_component_tree *ct = container_of(kobj, struct castle_component_tree, kobj);
     uint32_t size = 0;
 
-    size = (uint32_t) (CHUNK(ct->tree_ext_free.ext_size) +
-                       CHUNK(ct->data_ext_free.ext_size) +
-                       CHUNK(ct->internal_ext_free.ext_size) +
-                       ((ct->bloom_exists)?ct->bloom.num_chunks:0) +
-                       atomic64_read(&ct->large_ext_chk_cnt));
+    if (test_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &proxy_ct->ct->flags))
+        size = (uint32_t) (CHUNK(ct->tree_ext_free.ext_size) +
+                           CHUNK(ct->data_ext_free.ext_size) +
+                           CHUNK(ct->internal_ext_free.ext_size) +
+                           ((ct->bloom_exists)?ct->bloom.num_chunks:0) +
+                           &ct->merge->large_chunks);
+    else
+        size = (uint32_t) (CHUNK(ct->tree_ext_free.ext_size) +
+                           CHUNK(ct->data_ext_free.ext_size) +
+                           CHUNK(ct->internal_ext_free.ext_size) +
+                           ((ct->bloom_exists)?ct->bloom.num_chunks:0) +
+                           atomic64_read(&ct->large_ext_chk_cnt));
 
     return sprintf(buf, "%u\n", size);
 }
@@ -921,6 +928,9 @@ static ssize_t ct_item_count_show(struct kobject *kobj,
                                   char *buf)
 {
     struct castle_component_tree *ct = container_of(kobj, struct castle_component_tree, kobj);
+
+    if (test_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &ct->flags))
+        return sprintf(buf, "%llu\n", ct->merge->nr_entries);
 
     return sprintf(buf, "%lu\n", atomic64_read(&ct->item_count));
 }
@@ -944,8 +954,8 @@ static ssize_t ct_reserved_size_show(struct kobject *kobj,
 }
 
 static ssize_t ct_used_show(struct kobject *kobj,
-                                struct attribute *attr,
-                                char *buf)
+                            struct attribute *attr,
+                            char *buf)
 {
     struct castle_component_tree *ct = container_of(kobj, struct castle_component_tree, kobj);
 
