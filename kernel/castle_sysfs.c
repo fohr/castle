@@ -976,6 +976,20 @@ static ssize_t ct_current_size_show(struct kobject *kobj,
     return sprintf(buf, "%lu\n", atomic64_read(&ct->tree_ext_free.used));
 }
 
+static ssize_t ct_merge_state_show(struct kobject *kobj,
+                                   struct attribute *attr,
+                                   char *buf)
+{
+    struct castle_component_tree *ct = container_of(kobj, struct castle_component_tree, kobj);
+
+    if (!ct->merge)
+        return sprintf(buf, "idle\n");
+    else if (test_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &ct->flags))
+        return sprintf(buf, "output\n");
+    else
+        return sprintf(buf, "input\n");
+}
+
 static struct castle_sysfs_entry ct_reserved_size =
 __ATTR(reserved_size, S_IRUGO|S_IWUSR, ct_reserved_size_show, NULL);
 
@@ -991,12 +1005,16 @@ __ATTR(item_count, S_IRUGO|S_IWUSR, ct_item_count_show, NULL);
 static struct castle_sysfs_entry ct_daid =
 __ATTR(da_id, S_IRUGO|S_IWUSR, ct_daid_show, NULL);
 
+static struct castle_sysfs_entry ct_merge_state =
+__ATTR(merge_state, S_IRUGO|S_IWUSR, ct_merge_state_show, NULL);
+
 static struct attribute *castle_ct_attrs[] = {
     &ct_reserved_size.attr,
     &ct_used.attr,
     &ct_current_size.attr,
     &ct_item_count.attr,
     &ct_daid.attr,
+    &ct_merge_state.attr,
     NULL,
 };
 
