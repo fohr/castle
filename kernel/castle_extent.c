@@ -3439,7 +3439,8 @@ retry:
     }
 
     /* We've run out of potential slaves to choose from (caller has exhausted them). */
-    return(-1);
+    if (!nr_slaves_to_use)
+        return(-1);
 
     /*
      * Now slaves_to_use is an array of indexes into process_state.live_slaves that reflect
