@@ -21,7 +21,7 @@
 #define debug(_f, _a...)  (castle_printk(LOG_DEBUG, "%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
 #endif
 
-static int castle_versions_process(void);
+static int castle_versions_process(int lock);
 
 static struct kmem_cache *castle_versions_cache  = NULL;
 
@@ -757,6 +757,7 @@ int castle_version_tree_delete(c_ver_t version)
     int ret = 0;
     struct list_head *pos, *tmp;
     LIST_HEAD(version_list);
+    int batch;
 
     v = castle_versions_hash_get(version);
     if (!v)
@@ -769,8 +770,18 @@ int castle_version_tree_delete(c_ver_t version)
     write_lock_irq(&castle_versions_hash_lock);
     BUG_ON(!(v->flags & CV_INITED_MASK));
     cur = v;
+    batch = 100;
     while (1)
     {
+        /* Preemption point ever 'batch' versions. */
+        if(batch-- < 0)
+        {
+            write_unlock_irq(&castle_versions_hash_lock);
+            might_resched();
+            write_lock_irq(&castle_versions_hash_lock);
+            batch = 100;
+        }
+
         /* Check if the version is leaf. */
         if (!cur->first_child)
         {
@@ -807,7 +818,7 @@ int castle_version_tree_delete(c_ver_t version)
     }
 
     /* Run processing to re-calculate the version ordering. */
-    castle_versions_process();
+    castle_versions_process(1);
 
 error_out:
     return ret;
@@ -1365,7 +1376,7 @@ static struct castle_version* castle_version_new_create(int snap_or_clone,
 
     /* Run processing (which will thread the new version into the tree,
        and recalculate the order numbers) */
-    castle_versions_process();
+    castle_versions_process(1);
 
     /* Check if the version got initialised */
     if(!(v->flags & CV_INITED_MASK))
@@ -1552,7 +1563,7 @@ static void castle_versions_drop(struct castle_version *v)
     v->next_sybling = v->parent = NULL;
 }
 
-static int castle_versions_process(void)
+static int castle_versions_process(int lock)
 {
     struct castle_version *v, *p, *n;
     LIST_HEAD(sysfs_list);
@@ -1560,7 +1571,8 @@ static int castle_versions_process(void)
     int children_first, ret;
     int err = 0;
 
-    write_lock_irq(&castle_versions_hash_lock);
+    if(lock)
+        write_lock_irq(&castle_versions_hash_lock);
     /* Start processing elements from the init list, one at the time */
     while(!list_empty(&castle_versions_init_list))
     {
@@ -1655,7 +1667,8 @@ process_version:
         if(n) debug("Next version is: %d\n", n->version);
         v = n;
     }
-    write_unlock_irq(&castle_versions_hash_lock);
+    if(lock)
+        write_unlock_irq(&castle_versions_hash_lock);
 
     while(!list_empty(&sysfs_list))
     {
@@ -1818,7 +1831,7 @@ int castle_versions_read(void)
                         v->version > atomic_read(&castle_versions_last))
             atomic_set(&castle_versions_last, v->version);
     }
-    ret = castle_versions_process();
+    ret = castle_versions_process(0);
 
 out:
     if (iterator)               castle_mstore_iterator_destroy(iterator);
