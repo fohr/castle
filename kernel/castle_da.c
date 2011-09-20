@@ -8969,6 +8969,9 @@ reallocate:
     BUG_ON(da->cts_proxy);
     da->cts_proxy = proxy; /* still under DA write lock */
 
+    castle_printk(LOG_DEBUG, "%s: created proxy=%p, da=%p, da_id=%d\n",
+            __FUNCTION__, proxy, da, da->id);
+
     write_unlock(&da->lock);
 
     return proxy;
@@ -9036,6 +9039,8 @@ void castle_da_cts_proxy_put(struct castle_da_cts_proxy *proxy)
         int ct;
 
         BUG_ON(proxy->da->cts_proxy == proxy);
+        castle_printk(LOG_DEBUG, "%s: ref_cnt==0, proxy=%p, da=%p\n",
+                __FUNCTION__, proxy, proxy->da);
 
         for (ct = 0; ct < proxy->nr_cts; ct++)
         {
@@ -9069,6 +9074,9 @@ static int castle_da_cts_proxy_invalidate(struct castle_double_array *da, void *
     if (likely(da->cts_proxy))
     {
         void *proxy;
+
+        castle_printk(LOG_DEBUG, "%s: proxy=%p, da=%p, da_id=%d\n",
+                __FUNCTION__, da->cts_proxy, da, da->id);
 
         proxy = da->cts_proxy;
         da->cts_proxy = NULL;
