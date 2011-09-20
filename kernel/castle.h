@@ -915,7 +915,7 @@ typedef struct castle_bloom_filter {
 struct castle_bbp_entry
 {
     /* align:   8 */
-    /* offset:  0 */ uint64_t    expected_num_elements;
+    /* offset:  0 */ uint64_t    max_num_elements;
     /*          8 */ uint64_t    elements_inserted;
     /*         16 */ uint32_t    chunks_complete;
     /*         20 */ uint32_t    cur_node_cur_chunk_id;

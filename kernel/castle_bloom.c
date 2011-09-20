@@ -98,11 +98,13 @@ int castle_bloom_create(castle_bloom_t *bf, c_da_t da_id, uint64_t num_elements)
      * bf->num_chunks is updated to the actual number in castle_bloom_complete */
     bf->num_chunks = ceiling(num_elements, BLOOM_ELEMENTS_PER_CHUNK);
 
-    /* Again this is estimated, will be updated to correct number in castle_bloom_complete */
-    bf->num_btree_nodes = ceiling(bf->num_chunks,
-              castle_btree_vlba_max_nr_entries_get(BLOOM_INDEX_NODE_SIZE_PAGES));
+    /* This is incremented as new nodes are created */
+    bf->num_btree_nodes = 0;
 
-    nodes_size = bf->num_btree_nodes * BLOOM_INDEX_NODE_SIZE;
+    nodes_size = ceiling(ceiling(num_elements, BLOOM_ELEMENTS_PER_CHUNK),
+                         castle_btree_vlba_max_nr_entries_get(BLOOM_INDEX_NODE_SIZE_PAGES)) *
+                 BLOOM_INDEX_NODE_SIZE;
+
     chunks_size = bf->num_chunks * BLOOM_CHUNK_SIZE;
     size = nodes_size + chunks_size;
 
@@ -132,7 +134,7 @@ int castle_bloom_create(castle_bloom_t *bf, c_da_t da_id, uint64_t num_elements)
     bf_bp->elements_inserted_per_block = castle_malloc(sizeof(uint32_t) * BLOOM_BLOCKS_PER_CHUNK(bf), GFP_KERNEL);
 #endif
 
-    bf_bp->expected_num_elements = num_elements;
+    bf_bp->max_num_elements = num_elements;
     bf->num_hashes = num_hashes;
     bf->chunks_offset = nodes_size;
 
@@ -158,8 +160,6 @@ int castle_bloom_create(castle_bloom_t *bf, c_da_t da_id, uint64_t num_elements)
     atomic64_set(&bf->queries, 0);
     atomic64_set(&bf->false_positives, 0);
 #endif
-
-    BUG_ON(bf->num_blocks_last_chunk == 0);
 
     return 0;
 
@@ -190,6 +190,10 @@ static void castle_bloom_complete_btree_node(castle_bloom_t *bf)
 
     BUG_ON(bf_bp->cur_node == NULL);
 
+    BUG_ON(bf_bp->node_c2b->cep.offset == bf->chunks_offset);
+    BUG_ON(bf_bp->node_c2b->cep.offset >  bf->chunks_offset);
+
+    write_lock_c2b(bf_bp->node_c2b);
     dirty_c2b(bf_bp->node_c2b);
     write_unlock_c2b(bf_bp->node_c2b);
     put_c2b(bf_bp->node_c2b);
@@ -199,6 +203,7 @@ static void castle_bloom_complete_btree_node(castle_bloom_t *bf)
 
     bf_bp->node_cep.offset += BLOOM_INDEX_NODE_SIZE;
     bf_bp->nodes_complete++;
+    BUG_ON(bf->num_btree_nodes != bf_bp->nodes_complete);
 
     debug("now "cep_fmt_str".\n", cep2str(bf_bp->node_cep));
 }
@@ -213,8 +218,6 @@ static void castle_bloom_next_btree_node(castle_bloom_t *bf)
     if (bf_bp->cur_node != NULL)
         castle_bloom_complete_btree_node(bf);
 
-    debug("%s::making new node for bf %p at "cep_fmt_str"\n",
-            __FUNCTION__, bf, cep2str(bf_bp->node_cep));
     bf_bp->node_c2b = castle_cache_block_get(bf_bp->node_cep, BLOOM_INDEX_NODE_SIZE_PAGES);
     write_lock_c2b(bf_bp->node_c2b);
     castle_cache_block_softpin(bf_bp->node_c2b);
@@ -222,6 +225,14 @@ static void castle_bloom_next_btree_node(castle_bloom_t *bf)
     /* Init the node properly */
     bf_bp->cur_node = c2b_bnode(bf_bp->node_c2b);
     castle_bloom_node_buffer_init(bf->btree, bf_bp->cur_node);
+    write_unlock_c2b(bf_bp->node_c2b);
+
+    /* Since num_chunks is a max value that never increases (but could decrease at the end of bloom
+       filter construction; see castle_bloom_complete()), we can use it to assert the max possible
+       value for num_btree_nodes. */
+    BUG_ON(bf->num_btree_nodes == ceiling(bf->num_chunks,
+              castle_btree_vlba_max_nr_entries_get(BLOOM_INDEX_NODE_SIZE_PAGES)));
+    bf->num_btree_nodes++;
 }
 
 /**
@@ -255,6 +266,7 @@ static void castle_bloom_complete_chunk(castle_bloom_t *bf)
     put_c2b(bf_bp->chunk_c2b);
 
     bf_bp->chunks_complete++;
+
     debug("chunk completed, offset was %llu, ", bf_bp->chunk_cep.offset);
     bf_bp->chunk_cep.offset += BLOOM_CHUNK_SIZE;
     debug("now %llu.\n", bf_bp->chunk_cep.offset);
@@ -308,7 +320,11 @@ static void castle_bloom_add_index_key(castle_bloom_t *bf, void *key, c_baik_typ
 
     if(mode == BAIK_REPLACE_LAST_KEY)
     {
-        bf->btree->entry_add(bf_bp->cur_node, bf_bp->cur_node->used - 1, key, version, cvt);
+        BUG_ON(bf_bp->cur_node_cur_chunk_id != bf_bp->cur_node->used - 1);
+        write_lock_c2b(bf_bp->node_c2b);
+        bf->btree->entry_replace(bf_bp->cur_node, bf_bp->cur_node->used - 1, key, version, cvt);
+        dirty_c2b(bf_bp->node_c2b);
+        write_unlock_c2b(bf_bp->node_c2b);
         return;
     }
 
@@ -321,7 +337,10 @@ static void castle_bloom_add_index_key(castle_bloom_t *bf, void *key, c_baik_typ
 
     debug("%s::Adding key for chunk_id %u to btree node for bf %p.\n",
             __FUNCTION__, bf_bp->cur_node_cur_chunk_id, bf);
+    write_lock_c2b(bf_bp->node_c2b);
     bf->btree->entry_add(bf_bp->cur_node, bf_bp->cur_node_cur_chunk_id, key, version, cvt);
+    dirty_c2b(bf_bp->node_c2b);
+    write_unlock_c2b(bf_bp->node_c2b);
 }
 
 /**
@@ -334,19 +353,13 @@ void castle_bloom_complete(castle_bloom_t *bf)
 {
     struct castle_bloom_build_params *bf_bp = bf->private;
 
-    debug("castle_bloom_complete, elements inserted %llu, expected %llu\n", bf_bp->elements_inserted, bf_bp->expected_num_elements);
+    debug("castle_bloom_complete, elements inserted %llu, expected %llu\n", bf_bp->elements_inserted, bf_bp->max_num_elements);
 
     if (bf_bp->elements_inserted == 0)
     {
         castle_bloom_abort(bf);
         return;
     }
-
-    /* if got less elements than expected, we will need to add in the key into the index here
-     * we don't have a copy of the key here, so insert the largest key
-     */
-    if (bf_bp->elements_inserted < bf_bp->expected_num_elements)
-        castle_bloom_add_index_key(bf, bf->btree->max_key, BAIK_INSERT_KEY);
 
     castle_bloom_complete_btree_node(bf);
     castle_bloom_complete_chunk(bf);
@@ -360,9 +373,6 @@ void castle_bloom_complete(castle_bloom_t *bf)
     /* set number of chunks to actual number */
     debug("actual num_chunks was %u, expected was %u.\n", bf_bp->chunks_complete, bf->num_chunks);
     bf->num_chunks = bf_bp->chunks_complete;
-    /* set number of btree nodes to actual number */
-    debug("actual num_btree_nodes was %u, expected was %u.\n", bf_bp->nodes_complete, bf->num_btree_nodes);
-    bf->num_btree_nodes = bf_bp->nodes_complete;
 }
 
 /**
@@ -437,17 +447,16 @@ int castle_bloom_add(castle_bloom_t *bf, struct castle_btree_type *btree, void *
     uint64_t bit_offset;
     uint32_t i;
     struct castle_bloom_build_params *bf_bp = bf->private;
-    int chunk_reachable = 0;
+    int chunk_completed = 0;
 
-    BUG_ON(bf_bp->elements_inserted == bf_bp->expected_num_elements);
+    BUG_ON(bf_bp->elements_inserted == bf_bp->max_num_elements);
 
     /* the last element of this chunk */
     if (bf_bp->elements_inserted % BLOOM_ELEMENTS_PER_CHUNK == BLOOM_ELEMENTS_PER_CHUNK - 1 ||
-            bf_bp->elements_inserted == bf_bp->expected_num_elements - 1)
+            bf_bp->elements_inserted == bf_bp->max_num_elements - 1)
     {
-        //castle_bloom_add_index_key(bf, key, BAIK_REPLACE_LAST_KEY);
-        castle_bloom_add_index_key(bf, key, BAIK_INSERT_KEY);
-        chunk_reachable = 1;
+        castle_bloom_add_index_key(bf, key, BAIK_REPLACE_LAST_KEY);
+        chunk_completed = 1;
     }
 
     /* start a new chunk */
@@ -455,10 +464,8 @@ int castle_bloom_add(castle_bloom_t *bf, struct castle_btree_type *btree, void *
     {
         BUG_ON(bf_bp->chunks_complete >= bf->num_chunks);
         castle_bloom_next_chunk(bf);
-        //castle_bloom_add_index_key(bf, bf->btree->max_key, BAIK_INSERT_KEY);
+        castle_bloom_add_index_key(bf, bf->btree->max_key, BAIK_INSERT_KEY);
     }
-
-    bf_bp->elements_inserted++;
 
     /* insert value into filter */
     block_id = castle_bloom_get_block_id(bf, key, bf_bp->cur_chunk_num_blocks);
@@ -476,7 +483,10 @@ int castle_bloom_add(castle_bloom_t *bf, struct castle_btree_type *btree, void *
         hash = hash1 + i * hash2;
         __set_bit(hash % BLOOM_BLOCK_SIZE_BITS(bf) + bit_offset, bf_bp->cur_chunk_buffer);
     }
-    return chunk_reachable;
+
+    bf_bp->elements_inserted++;
+
+    return chunk_completed;
 }
 
 /**
@@ -687,8 +697,6 @@ static void castle_bloom_block_process(c_bvec_t *c_bvec)
 
     put_c2b(chunk_c2b);
 
-    //found = 1;
-
     if (!found)
     {
         /* Bloom filter states that c_bvec->key is not in the current
@@ -891,6 +899,16 @@ void castle_bloom_submit(c_bvec_t *c_bvec)
 
 void castle_bloom_marshall(castle_bloom_t *bf, struct castle_clist_entry *ctm)
 {
+    struct castle_bloom_build_params *bf_bp = bf->private;
+    if(bf_bp)
+    {
+        if(bf_bp->elements_inserted != 0)
+        {
+            BUG_ON(bf->num_btree_nodes == 0);
+            BUG_ON(bf->num_chunks      == 0);
+        }
+    }
+
     ctm->bloom_num_hashes = bf->num_hashes;
     ctm->bloom_block_size_pages = bf->block_size_pages;
     ctm->bloom_num_chunks = bf->num_chunks;
@@ -947,7 +965,7 @@ void castle_bloom_unmarshall(castle_bloom_t *bf, struct castle_clist_entry *ctm)
 void castle_bloom_build_param_marshall(struct castle_bbp_entry *bbpm,
                                        struct castle_bloom_build_params *bf_bp)
 {
-    bbpm->expected_num_elements = bf_bp->expected_num_elements;
+    bbpm->max_num_elements      = bf_bp->max_num_elements;
     bbpm->elements_inserted     = bf_bp->elements_inserted;
     bbpm->chunks_complete       = bf_bp->chunks_complete;
     bbpm->cur_node_cur_chunk_id = bf_bp->cur_node_cur_chunk_id;
@@ -959,16 +977,20 @@ void castle_bloom_build_param_marshall(struct castle_bbp_entry *bbpm,
 
     if(bf_bp->cur_node)
     {
+        BUG_ON(!bf_bp->node_c2b);
         BUG_ON(bf_bp->cur_node->magic != BTREE_NODE_MAGIC);
         BUG_ON(EXT_POS_INVAL(bbpm->node_cep));
         bbpm->node_used         = bf_bp->cur_node->used;
-        /* we need to explicitly tell deserialisation whether or not to recover the bnode bcos
-           it cannot be assumed that (!EXT_POS_INVAL(node_cep)) is sufficient evidence of this */
         bbpm->node_avail = 1;
+        write_lock_c2b(bf_bp->node_c2b);
         dirty_c2b(bf_bp->node_c2b);
+        write_unlock_c2b(bf_bp->node_c2b);
     }
     else
+    {
+        BUG_ON(bf_bp->node_c2b);
         bbpm->node_avail = 0;
+    }
 
     if(bf_bp->cur_chunk_buffer)
     {
@@ -996,7 +1018,7 @@ void castle_bloom_build_param_unmarshall(castle_bloom_t *bf, struct castle_bbp_e
     BUG_ON(EXT_POS_INVAL(bbpm->node_cep));
     BUG_ON(EXT_POS_INVAL(bbpm->chunk_cep));
 
-    bf_bp->expected_num_elements = bbpm->expected_num_elements;
+    bf_bp->max_num_elements      = bbpm->max_num_elements;
     bf_bp->elements_inserted     = bbpm->elements_inserted;
     bf_bp->chunks_complete       = bbpm->chunks_complete;
     bf_bp->cur_node_cur_chunk_id = bbpm->cur_node_cur_chunk_id;

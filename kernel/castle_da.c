@@ -3095,10 +3095,10 @@ __again:
     castle_da_lfs_ct_reset(lfs);
 
     /* Allocate Bloom filters. */
-    //if ((ret = castle_bloom_create(&merge->out_tree->bloom, merge->da->id, bloom_size)))
+    if ((ret = castle_bloom_create(&merge->out_tree->bloom, merge->da->id, bloom_size)))
         merge->out_tree->bloom_exists = 0;
-    //else
-    //    merge->out_tree->bloom_exists = 1;
+    else
+        merge->out_tree->bloom_exists = 1;
 
     return 0;
 }
@@ -3134,6 +3134,7 @@ static void castle_da_merge_active_c2bs_unlock(struct castle_da_merge *merge,
             {
                 if(c2b_write_locked(node_c2b))
                 {
+                    dirty_c2b(node_c2b);
                     write_unlock_c2b(node_c2b);
                     *leaf_node_unlocked = 1;
                 }
@@ -3150,12 +3151,14 @@ static void castle_da_merge_active_c2bs_unlock(struct castle_da_merge *merge,
     if (merge->out_tree->bloom_exists)
     {
         struct castle_bloom_build_params *bf_bp =  merge->out_tree->bloom.private;
+        //TODO@tr clean all this up, lock removal underway!
         if(bf_bp)
         {
             if(bf_bp->chunk_c2b)
             {
                 if(c2b_write_locked(bf_bp->chunk_c2b))
                 {
+                    dirty_c2b(bf_bp->chunk_c2b);
                     write_unlock_c2b(bf_bp->chunk_c2b);
                     *bloom_chunk_unlocked = 1;
                 }//fi locked
@@ -3165,11 +3168,6 @@ static void castle_da_merge_active_c2bs_unlock(struct castle_da_merge *merge,
             if(bf_bp->node_c2b)
             {
                 if(c2b_write_locked(bf_bp->node_c2b))
-                {
-                    write_unlock_c2b(bf_bp->node_c2b);
-                    *bloom_node_unlocked = 1;
-                }//fi locked
-                else
                     BUG();
             }//fi got node
         }//fi got bf_bp
@@ -3184,6 +3182,10 @@ static void castle_da_merge_active_c2bs_relock(struct castle_da_merge *merge,
                                                int relock_bloom_chunk)
 {
     BUG_ON(!merge);
+
+    //TODO@tr bloom filter c2b lock refactoring underway - nodes should never be left locked anymore
+    BUG_ON(relock_bloom_node);
+
     if(relock_leaf_node)
     {
         c2_block_t *node_c2b;
@@ -3192,19 +3194,13 @@ static void castle_da_merge_active_c2bs_relock(struct castle_da_merge *merge,
         write_lock_c2b(node_c2b);
     }
 
-    if(relock_bloom_node || relock_bloom_chunk)
+    if(relock_bloom_chunk)
     {
         struct castle_bloom_build_params *bf_bp;
         /* relock requested, we must have bloom build params! */
         BUG_ON(!merge->out_tree->bloom_exists);
         bf_bp = merge->out_tree->bloom.private;
         BUG_ON(!bf_bp);
-
-        if(relock_bloom_node)
-        {
-            BUG_ON(!bf_bp->node_c2b);
-            write_lock_c2b(bf_bp->node_c2b);
-        }
 
         if(relock_bloom_chunk)
         {
@@ -4275,6 +4271,17 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
         return;
     }
 
+#ifdef DEBUG
+    castle_printk(LOG_DEVEL, "%s::[da %d level %d] merge ended with err %d, produced out ct seq %d and performed %d partition activations\n",
+        __FUNCTION__,
+        merge->da->id,
+        merge->level,
+        err,
+        merge->out_tree->seq,
+        merge->new_partition_activations);
+#endif
+
+
     if (castle_golden_nugget && merge->level != 1)
         castle_sysfs_merge_del(merge);
     castle_merges_hash_remove(merge);
@@ -4671,6 +4678,9 @@ static void castle_da_merge_new_partition_activate(struct castle_da_merge *merge
     BUG_ON(!merge->redirection_partition.key);
     castle_key_ptr_destroy(&merge->new_redirection_partition);
     write_unlock(&merge->da->lock);
+#ifdef DEBUG
+    merge->new_partition_activations++;
+#endif
 
     /* == propogate extents shrink boundaries == */
     if(!MERGE_CHECKPOINTABLE(merge))
@@ -4839,6 +4849,16 @@ static int castle_da_merge_unit_do(struct castle_da_merge *merge, uint64_t max_n
         }
         if (merge->out_tree->bloom_exists)
         {
+            //TODO@tr do we not have to watch out for repeat keys? if we are reinserting the same
+            //        key but different version, and the current chunk in the bf is just about to
+            //        fill up, then we may get the same key "present" in more than 1 chunk, which
+            //        is poor, but not a deal breaker since the only consequence is a possibly
+            //        higher false positive rate, but it we want to timstamp chunks then we have to
+            //        be careful to prevent the possibility of a timestamp-based FALSE NEGATIVE.
+            //        (this is unlikely to happen because the spillover into the next chunk will be
+            //        for an ancestral key, and for an v-order older key to have a newer timestamp
+            //        than it's children, a lot of other things will probably be broken anyway...
+            //        but nevertheless, this is something to watch out for).
             if(castle_bloom_add(&merge->out_tree->bloom, merge->out_btree, key))
                 castle_da_merge_new_partition_activate(merge);
         }
@@ -6158,8 +6178,8 @@ static int castle_da_merge_do(struct castle_da_merge *merge, uint64_t nr_entries
         {
             if (bf_bp->chunk_c2b)
                 write_lock_c2b(bf_bp->chunk_c2b);
-            if (bf_bp->node_c2b)
-                write_lock_c2b(bf_bp->node_c2b);
+            //if (bf_bp->node_c2b)
+            //    write_lock_c2b(bf_bp->node_c2b);
         }
     }
 
@@ -6238,7 +6258,10 @@ complete_merge_do:
         __FUNCTION__, ret, da->id, level, out_tree_id);
 
     if (merge->levels[0].node_c2b)
+    {
+        dirty_c2b(merge->levels[0].node_c2b);
         write_unlock_c2b(merge->levels[0].node_c2b);
+    }
 
     if (merge->out_tree->bloom_exists)
     {
@@ -6255,10 +6278,8 @@ complete_merge_do:
             }
             if (bf_bp->node_c2b)
             {
-                debug("%s::unlocking bloom filter node_c2b for merge on da %d level %d.\n",
-                        __FUNCTION__, da->id, level);
-                dirty_c2b(bf_bp->node_c2b);
-                write_unlock_c2b(bf_bp->node_c2b);
+                if(c2b_write_locked(bf_bp->node_c2b))
+                    BUG();
             }
         }
     }

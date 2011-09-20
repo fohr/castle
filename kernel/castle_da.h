@@ -65,6 +65,9 @@ struct castle_da_merge {
 #ifdef CASTLE_DEBUG
     uint8_t                       is_recursion;
 #endif
+#ifdef DEBUG
+    int                           new_partition_activations;
+#endif
     uint32_t                      skipped_count;        /**< Count of entries from deleted
                                                              versions.                          */
 

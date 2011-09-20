@@ -7,7 +7,7 @@
 
 struct castle_bloom_build_params
 {
-    uint64_t expected_num_elements;
+    uint64_t max_num_elements;
     uint64_t elements_inserted;
     uint32_t chunks_complete;
     uint32_t cur_node_cur_chunk_id;
