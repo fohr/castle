@@ -2969,7 +2969,7 @@ static int castle_da_lfs_rwct_callback(void *data)
  *
  * @also castle_da_lfs_ct_space_alloc
  */
-static int castle_da_lfs_merge_ct_callback(void *data)
+static USED int castle_da_lfs_merge_ct_callback(void *data)
 {
     return castle_da_lfs_ct_space_alloc(data,
                                         1,    /* Reallocation. */
@@ -2978,7 +2978,7 @@ static int castle_da_lfs_merge_ct_callback(void *data)
                                         1,    /* Not a T0. Use SSD. */
                                         0);   /* Extents not growable. */
 }
-static int castle_da_lfs_merge_ct_growable_callback(void *data)
+static USED int castle_da_lfs_merge_ct_growable_callback(void *data)
 {
     return castle_da_lfs_ct_space_alloc(data,
                                         1,    /* Reallocation. */
