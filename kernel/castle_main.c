@@ -86,6 +86,9 @@ MODULE_PARM_DESC(castle_checkpoint_period, "checkpoint_period,");
 module_param(castle_extents_process_ratelimit, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
 MODULE_PARM_DESC(castle_extents_process_ratelimit, "extproc_ratelimit,");
 
+module_param(castle_rebuild_freespace_threshold, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
+MODULE_PARM_DESC(castle_rebuild_freespace_threshold, "extproc_freesp_thresh,");
+
 static DECLARE_WAIT_QUEUE_HEAD(castle_detach_waitq);
 
 

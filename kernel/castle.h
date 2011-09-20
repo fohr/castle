@@ -2214,4 +2214,5 @@ extern uint32_t castle_merge_threads_count;
 
 extern int castle_extents_process_ratelimit;
 
+extern int castle_rebuild_freespace_threshold;
 #endif /* __CASTLE_H__ */
