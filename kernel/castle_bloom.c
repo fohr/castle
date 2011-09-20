@@ -102,7 +102,7 @@ int castle_bloom_create(castle_bloom_t *bf, c_da_t da_id, uint64_t num_elements)
     bf->num_btree_nodes = 0;
 
     nodes_size = ceiling(ceiling(num_elements, BLOOM_ELEMENTS_PER_CHUNK),
-                         castle_btree_vlba_max_nr_entries_get(BLOOM_INDEX_NODE_SIZE_PAGES)) *
+                         btree->max_entries(BLOOM_INDEX_NODE_SIZE_PAGES)) *
                  BLOOM_INDEX_NODE_SIZE;
 
     chunks_size = bf->num_chunks * BLOOM_CHUNK_SIZE;
@@ -231,7 +231,7 @@ static void castle_bloom_next_btree_node(castle_bloom_t *bf)
        filter construction; see castle_bloom_complete()), we can use it to assert the max possible
        value for num_btree_nodes. */
     BUG_ON(bf->num_btree_nodes == ceiling(bf->num_chunks,
-              castle_btree_vlba_max_nr_entries_get(BLOOM_INDEX_NODE_SIZE_PAGES)));
+              bf->btree->max_entries(BLOOM_INDEX_NODE_SIZE_PAGES)));
     bf->num_btree_nodes++;
 }
 

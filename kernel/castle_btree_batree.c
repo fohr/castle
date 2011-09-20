@@ -1,6 +1,5 @@
 #include "castle.h"
 #include "castle_utils.h"
-#include "castle_btree_batree.h"
 
 /**********************************************************************************************/
 /* Fixed size byte array key btree (batree) definitions */
@@ -45,8 +44,14 @@ struct castle_batree_entry {
     /*        160 */
 } PACKED;
 
-const size_t BATREE_NODE_ENTRIES = (BATREE_NODE_SIZE * PAGE_SIZE - sizeof(struct castle_btree_node))
-    / sizeof(struct castle_batree_entry);
+#define BATREE_MAX_ENTRIES(_size) (((_size) * C_BLK_SIZE - sizeof(struct castle_btree_node)) \
+                                   / sizeof(struct castle_batree_entry))
+#define BATREE_NODE_ENTRIES       BATREE_MAX_ENTRIES(BATREE_NODE_SIZE)
+
+static size_t castle_batree_max_entries(size_t size)
+{
+    return BATREE_MAX_ENTRIES(size);
+}
 
 static inline void castle_batree_key_print(bakey_t *key)
 {
@@ -301,6 +306,7 @@ struct castle_btree_type castle_batree = {
     .min_key        = (void *)&BATREE_MIN_KEY,
     .max_key        = (void *)&BATREE_MAX_KEY,
     .inv_key        = (void *)&BATREE_INVAL_KEY,
+    .max_entries    = castle_batree_max_entries,
     .need_split     = castle_batree_need_split,
     .key_compare    = castle_batree_key_compare,
     .key_duplicate  = castle_batree_key_duplicate,

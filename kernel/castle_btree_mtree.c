@@ -1,6 +1,5 @@
 #include "castle.h"
 #include "castle_utils.h"
-#include "castle_btree_mtree.h"
 
 /**********************************************************************************************/
 /* Block mapper btree (mtree) definitions */
@@ -32,8 +31,14 @@ struct castle_mtree_entry {
     /*         32 */
 } PACKED;
 
-const size_t MTREE_NODE_ENTRIES = (MTREE_NODE_SIZE * PAGE_SIZE - sizeof(struct castle_btree_node))
-    / sizeof(struct castle_mtree_entry);
+#define MTREE_MAX_ENTRIES(_size) (((_size) * C_BLK_SIZE - sizeof(struct castle_btree_node)) \
+                                  / sizeof(struct castle_mtree_entry))
+#define MTREE_NODE_ENTRIES       MTREE_MAX_ENTRIES(MTREE_NODE_SIZE)
+
+static size_t castle_mtree_max_entries(size_t size)
+{
+    return MTREE_MAX_ENTRIES(size);
+}
 
 static int castle_mtree_need_split(struct castle_btree_node *node, int ver_or_key_split)
 {
@@ -255,6 +260,7 @@ struct castle_btree_type castle_mtree = {
     .min_key        = (void *)0,
     .max_key        = (void *)MTREE_MAX_BLK,
     .inv_key        = (void *)MTREE_INVAL_BLK,
+    .max_entries    = castle_mtree_max_entries,
     .need_split     = castle_mtree_need_split,
     .key_compare    = castle_mtree_key_compare,
     .key_duplicate  = castle_mtree_key_duplicate,

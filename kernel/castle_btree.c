@@ -6,9 +6,6 @@
 #include "castle.h"
 #include "castle_cache.h"
 #include "castle_btree.h"
-#include "castle_btree_mtree.h"
-#include "castle_btree_batree.h"
-#include "castle_btree_vlba_tree.h"
 #include "castle_utils.h"
 #include "castle_versions.h"
 #include "castle_da.h"
@@ -47,8 +44,13 @@ struct castle_btree_node_save {
 
 /**********************************************************************************************/
 /* Array of btree types */
-#define RW_TREES_MAX_ENTRIES    (max(max(MTREE_NODE_ENTRIES, BATREE_NODE_ENTRIES),  \
-                                     VLBA_RW_TREE_MAX_ENTRIES))
+
+/* Lifted from the VLBA tree code. Only here pending removal of the leaf pointer code. */
+#define RW_TREES_MAX_ENTRIES 2500UL
+
+extern struct castle_btree_type castle_mtree;
+extern struct castle_btree_type castle_batree;
+extern struct castle_btree_type castle_vlba_tree;
 
 static struct castle_btree_type *castle_btrees[1<<(8 * sizeof(btree_t))] =
                                                        {[MTREE_TYPE]        = &castle_mtree,
@@ -2507,9 +2509,6 @@ void castle_btree_iter_init(c_iter_t *c_iter, c_ver_t version, int type)
 STATIC_BUG_ON(sizeof(btree_t) != 1);
 int castle_btree_init(void)
 {
-    BUG_ON(RW_TREES_MAX_ENTRIES < MTREE_NODE_ENTRIES);
-    BUG_ON(RW_TREES_MAX_ENTRIES < BATREE_NODE_ENTRIES);
-    BUG_ON(RW_TREES_MAX_ENTRIES < VLBA_RW_TREE_MAX_ENTRIES);
     return 0;
 }
 

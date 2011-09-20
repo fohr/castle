@@ -2,7 +2,6 @@
 #include "castle.h"
 #include "castle_utils.h"
 #include "castle_keys_vlba.h"
-#include "castle_btree_vlba_tree.h"
 #include "castle_versions.h"
 
 /* lifted from castle_btree.c */
@@ -15,9 +14,6 @@
 
 /**********************************************************************************************/
 /* Variable length byte array key btree (vlbatree) definitions */
-
-const size_t VLBA_RW_TREE_MAX_ENTRIES =         2500UL;  /**< Maximum number of entries in any
-                                                              of the RW tree entries. */
 
 #define VLBA_TREE_ENTRY_IS_NODE(_slot)          CVT_NODE(*(_slot))
 #define VLBA_TREE_ENTRY_IS_LEAF_VAL(_slot)      CVT_LEAF_VAL(*(_slot))
@@ -83,6 +79,11 @@ struct castle_vlba_tree_node {
                  VLBA_TREE_MAX_KEY_SIZE +                                   \
                  MAX_INLINE_VAL_SIZE +                                      \
                  sizeof(uint32_t)) /* for the index entry */
+#define VLBA_TREE_MAX_ENTRIES(_size)                                        \
+                (((_size) * C_BLK_SIZE -                                    \
+                  sizeof(struct castle_btree_node) -                        \
+                  sizeof(struct castle_vlba_tree_node))                     \
+                 / MAX_VLBA_ENTRY_LENGTH)
 #define VLBA_ENTRY_PTR(__node, _vlba_node, _i)                              \
                 (EOF_VLBA_NODE(__node) - (_vlba_node)->key_idx[_i])
 #define VLBA_ENTRY_VAL_PTR(_entry)                                          \
@@ -94,14 +95,11 @@ struct castle_vlba_tree_node {
  * Returns maximum number of entries that can be stored in a node of the specified size
  * (assuming that the entries are the biggest possible).
  *
- * @param node_size     Size of the node in pages.
+ * @param size     Size of the node in pages.
  */
-uint32_t castle_btree_vlba_max_nr_entries_get(uint16_t node_size)
+static size_t castle_vlba_tree_max_entries(size_t size)
 {
-    return (((size_t)node_size) * PAGE_SIZE -
-             sizeof(struct castle_btree_node) -
-             sizeof(struct castle_vlba_tree_node))
-                 / MAX_VLBA_ENTRY_LENGTH;
+    return VLBA_TREE_MAX_ENTRIES(size);
 }
 
 /* Implementation of heap sort from wiki */
@@ -759,6 +757,7 @@ struct castle_btree_type castle_vlba_tree = {
     .min_key        = (void *)&VLBA_TREE_MIN_KEY,
     .max_key        = (void *)&VLBA_TREE_MAX_KEY,
     .inv_key        = (void *)&VLBA_TREE_INVAL_KEY,
+    .max_entries    = castle_vlba_tree_max_entries,
     .need_split     = castle_vlba_tree_need_split,
     .key_compare    = castle_vlba_tree_key_compare,
     .key_duplicate  = castle_vlba_tree_key_duplicate,

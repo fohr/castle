@@ -851,6 +851,10 @@ struct castle_btree_type {
                                  should always return a negative number
                                  except if also compared to invalid key
                                  in which case cmp should return zero   */
+    size_t   (*max_entries)   (size_t size);
+                              /* Returns a conservative estimate of the
+                                 max number of entries which can fit in
+                                 a node of the given size (in blocks).  */
     int      (*need_split)    (struct castle_btree_node *node,
                                int                       version_or_key);
                               /* 0 - version split, 1 - key split       */
