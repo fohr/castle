@@ -804,7 +804,6 @@ enum {
 
 #define MTREE_TYPE                 0x33
 #define MTREE_BVEC_BLOCK(_bvec)   ((sector_t)(_bvec)->key)
-#define BATREE_TYPE                0x44
 #define VLBA_TREE_TYPE             0x66
 
 #define MAX_BTREE_DEPTH           (10)               /**< Maximum depth of btrees.
@@ -814,7 +813,6 @@ enum {
                                                       */
 
 #define MTREE_NODE_SIZE         10      /**< Size of the mtree nodes, in blocks.  */
-#define BATREE_NODE_SIZE        20      /**< Size of the batree nodes, in blocks. */
 #define RW_TREE_NODE_SIZE        2      /**< Size of the RW tree nodes, in blocks.
                                              Constant independent of the level.   */
 #define HDD_RO_TREE_NODE_SIZE   64      /**< Size of the RO tree nodes on HDDs, in blocks. */

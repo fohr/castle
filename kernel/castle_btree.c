@@ -49,12 +49,10 @@ struct castle_btree_node_save {
 #define RW_TREES_MAX_ENTRIES 2500UL
 
 extern struct castle_btree_type castle_mtree;
-extern struct castle_btree_type castle_batree;
 extern struct castle_btree_type castle_vlba_tree;
 
 static struct castle_btree_type *castle_btrees[1<<(8 * sizeof(btree_t))] =
                                                        {[MTREE_TYPE]        = &castle_mtree,
-                                                        [BATREE_TYPE]       = &castle_batree,
                                                         [VLBA_TREE_TYPE]    = &castle_vlba_tree};
 
 
@@ -62,7 +60,6 @@ struct castle_btree_type *castle_btree_type_get(btree_t type)
 {
 #ifdef CASTLE_DEBUG
     BUG_ON((type != MTREE_TYPE) &&
-           (type != BATREE_TYPE) &&
            (type != VLBA_TREE_TYPE));
 #endif
     return castle_btrees[type];
@@ -73,8 +70,6 @@ size_t castle_btree_node_size_get(btree_t type)
     switch (type) {
         case MTREE_TYPE:
             return MTREE_NODE_SIZE;
-        case BATREE_TYPE:
-            return BATREE_NODE_SIZE;
         case VLBA_TREE_TYPE:    /* note that the RO tree size is set in the merge code */
             return RW_TREE_NODE_SIZE;
         default:                /* unknown tree type */
