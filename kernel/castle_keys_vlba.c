@@ -223,48 +223,41 @@ static void castle_object_btree_key_dim_inc(c_vl_bkey_t *key, int dim)
     key->dim_head[dim] = KEY_DIMENSION_HEADER(offset, flags | KEY_DIMENSION_NEXT_FLAG);
 }
 
-int castle_object_btree_key_copy(const c_vl_bkey_t *old_key,
-                                 c_vl_bkey_t *new_key,
-                                 uint32_t buf_len)
+c_vl_bkey_t *castle_object_btree_key_copy(const c_vl_bkey_t *src,
+                                          c_vl_bkey_t *dst, size_t *dst_len)
 {
-    int key_length;
+    size_t src_len;
 
-    if(!new_key || !old_key)
-        return -ENOMEM;
-
-    key_length = old_key->length + 4;
-
-    if (buf_len < key_length)
-        return -ENOMEM;
-
-    memcpy(new_key, old_key, key_length);
-
-    return 0;
-}
-
-void *castle_object_btree_key_duplicate(const c_vl_bkey_t *key)
-{
-    c_vl_bkey_t *new_key;
-
-    new_key = castle_malloc(key->length + 4, GFP_KERNEL);
-    if(!new_key)
+    if (!src)
         return NULL;
+    src_len = src->length + 4;
 
-    BUG_ON(castle_object_btree_key_copy(key, new_key, key->length + 4));
+    if (!dst)
+    {
+        dst = castle_alloc(src_len);
+        if (!dst)
+            return NULL;
+    }
+    else if (!dst_len || *dst_len < src_len)
+        return NULL;
+    else
+        *dst_len = src_len;
 
-    return new_key;
+    memcpy(dst, src, src_len);
+    return dst;
 }
 
-void *castle_object_btree_key_next(const c_vl_bkey_t *key)
+c_vl_bkey_t *castle_object_btree_key_next(const c_vl_bkey_t *src,
+                                          c_vl_bkey_t *dst, size_t *dst_len)
 {
     c_vl_bkey_t *new_key;
 
     /* Duplicate the key first */
-    new_key = castle_object_btree_key_duplicate(key);
+    if (!(new_key = castle_object_btree_key_copy(src, dst, dst_len)))
+        return NULL;
 
     /* Increment the least significant dimension */
     castle_object_btree_key_dim_inc(new_key, new_key->nr_dims-1);
-
     return new_key;
 }
 

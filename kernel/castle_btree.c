@@ -1360,7 +1360,7 @@ static void __castle_btree_submit(c_bvec_t *c_bvec,
     {
         if (c_bvec->parent_key)
             btree->key_dealloc(c_bvec->parent_key);
-        c_bvec->parent_key = btree->key_duplicate(parent_key);
+        c_bvec->parent_key = btree->key_copy(parent_key, NULL, NULL);
     }
 
     castle_debug_bvec_btree_walk(c_bvec);
@@ -1876,7 +1876,7 @@ void castle_iter_parent_key_set(c_iter_t *iter, void *key)
 #endif
     if (iter->parent_key)
         btree->key_dealloc(iter->parent_key);
-    iter->parent_key = btree->key_duplicate(key);
+    iter->parent_key = btree->key_copy(key, NULL, NULL);
 }
 
 static int castle_btree_iter_version_leaf_process(c_iter_t *c_iter)
@@ -1905,7 +1905,7 @@ static int castle_btree_iter_version_leaf_process(c_iter_t *c_iter)
     }
     else
     {
-        c_iter->next_key.key          = btree->key_next(c_iter->parent_key);
+        c_iter->next_key.key          = btree->key_next(c_iter->parent_key, NULL, NULL);
         c_iter->next_key.need_destroy = 1;
     }
 

@@ -79,27 +79,32 @@ static int castle_mtree_key_compare(void *key1, void *key2)
     return 0;
 }
 
-static void* castle_mtree_key_duplicate(void *key)
+static size_t castle_mtree_key_size(const void *key)
 {
-    /* No need to do anything in mtree keys, because they are ints (casted to void *). */
-    return key;
+    return sizeof(unsigned long);
 }
 
-static void* castle_mtree_key_next(void *key)
+static void *castle_mtree_key_copy(const void *src, void *dst, size_t *dst_len)
 {
-    block_t blk = (block_t)(unsigned long)key;
+    /* No need to do anything in mtree keys, because they are ints (cast to void *). */
+    return (void *) src;
+}
+
+static void *castle_mtree_key_next(const void *src, void *dst, size_t *dst_len)
+{
+    block_t blk = (block_t)(unsigned long)src;
 
     /* No successor to invalid block */
     if(MTREE_BLK_INVAL(blk))
         return (void *)(unsigned long)MTREE_INVAL_BLK;
 
-    /* MTREE_INVAL_BLK is the successor of MTREE_MAX_BLK, conviniently */
+    /* MTREE_INVAL_BLK is the successor of MTREE_MAX_BLK, conveniently */
     return (void *)(unsigned long)(blk+1);
 }
 
 static void castle_mtree_key_dealloc(void *key)
 {
-    /* No need to do anything in mtree keys, because they are ints (casted to void *). */
+    /* No need to do anything in mtree keys, because they are ints (cast to void *). */
 }
 
 static uint32_t castle_mtree_key_hash(void *key, uint32_t seed)
@@ -263,7 +268,8 @@ struct castle_btree_type castle_mtree = {
     .max_entries    = castle_mtree_max_entries,
     .need_split     = castle_mtree_need_split,
     .key_compare    = castle_mtree_key_compare,
-    .key_duplicate  = castle_mtree_key_duplicate,
+    .key_size       = castle_mtree_key_size,
+    .key_copy       = castle_mtree_key_copy,
     .key_next       = castle_mtree_key_next,
     .key_dealloc    = castle_mtree_key_dealloc,
     .key_hash       = castle_mtree_key_hash,

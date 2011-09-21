@@ -6,11 +6,12 @@
 
 int          castle_object_btree_key_compare     (const c_vl_bkey_t *key1,
                                                   const c_vl_bkey_t *key2);
-int          castle_object_btree_key_copy        (const c_vl_bkey_t *old_key,
-                                                  c_vl_bkey_t       *new_key,
-                                                  uint32_t           buf_len);
-void *       castle_object_btree_key_duplicate   (const c_vl_bkey_t *key);
-void *       castle_object_btree_key_next        (const c_vl_bkey_t *key);
+c_vl_bkey_t *castle_object_btree_key_copy        (const c_vl_bkey_t *src,
+                                                  c_vl_bkey_t       *dst,
+                                                  size_t            *dst_len);
+c_vl_bkey_t *castle_object_btree_key_next        (const c_vl_bkey_t *key,
+                                                  c_vl_bkey_t       *dst,
+                                                  size_t            *dst_len);
 int          castle_object_btree_key_bounds_check(const c_vl_bkey_t *key,
                                                   const c_vl_bkey_t *start,
                                                   const c_vl_bkey_t *end,

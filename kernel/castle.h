@@ -859,12 +859,18 @@ struct castle_btree_type {
     int      (*key_compare)   (void *key1, void *key2);
                               /* Returns negative if key1 < key2, zero
                                  if equal, positive otherwise           */
-    void*    (*key_duplicate) (void *key);
-                              /* Returns duplicate of key. Need to call
-                               * a dealloc later to free resources      */
-    void*    (*key_next)      (void *key);
+    size_t   (*key_size)      (const void *key);
+                              /* Returns the amount of space needed to
+                                 store the key, in bytes.               */
+    void    *(*key_copy)      (const void *src, void *dst, size_t *dst_len);
+                              /* Copies a key from src to dst. If dst
+                                 is NULL, the key is copied into a
+                                 freshly alloc'ed buffer which needs to
+                                 be dealloc'ed later by the caller.     */
+    void    *(*key_next)      (const void *src, void *dst, size_t *dst_len);
                               /* Successor key, succ(MAX) = INVAL,
-                                 succ(INVAL) = INVAL                    */
+                                 succ(MIN) / succ(INVAL) -> BUG(). Uses
+                                 its arguments exactly like key_copy(). */
     void     (*key_dealloc)   (void *key);
                               /* Destroys the key, frees resources
                                  associated with it                     */

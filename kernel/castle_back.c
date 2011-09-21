@@ -1068,7 +1068,7 @@ static int castle_back_key_copy_get(struct castle_back_conn *conn, c_vl_bkey_t *
         }
     }
 
-    *key_out = castle_object_btree_key_duplicate(bkey);
+    *key_out = castle_object_btree_key_copy(bkey, NULL, NULL);
 
     castle_back_buffer_put(conn, buf);
 
@@ -1092,7 +1092,7 @@ static void castle_back_key_kernel_to_user(c_vl_bkey_t                 *kernel_k
                                            uint32_t                    *buf_used)
 {
     c_vl_bkey_t *bkey;
-    int ret;
+    size_t blen;
 
 #ifdef DEBUG
     debug("castle_back_key_kernel_to_user copying key:\n");
@@ -1101,8 +1101,8 @@ static void castle_back_key_kernel_to_user(c_vl_bkey_t                 *kernel_k
 #endif
 
     bkey = (c_vl_bkey_t *)castle_back_user_to_kernel(buf, user_buf);
-    ret = castle_object_btree_key_copy(kernel_key, bkey, buf_len);
-    if (ret)
+    blen = buf_len;
+    if (!castle_object_btree_key_copy(kernel_key, bkey, &blen))
     {
         *buf_used = 0;
         return;
@@ -2067,7 +2067,7 @@ static int castle_back_iter_next_callback(struct castle_object_iterator *iterato
         stateful_op->iterator.kv_list_tail->next = (struct castle_key_value_list *)
                                                                     op->buf->user_addr;
 
-        stateful_op->iterator.saved_key = castle_object_btree_key_duplicate(key);
+        stateful_op->iterator.saved_key = castle_object_btree_key_copy(key, NULL, NULL);
         if (!stateful_op->iterator.saved_key)
         {
             err = -ENOMEM;

@@ -295,9 +295,17 @@ static int castle_vlba_tree_key_compare(void *keyv1, void *keyv2)
     return castle_object_btree_key_compare(keyv1, keyv2);
 }
 
-static void* castle_vlba_tree_key_next(void *keyv)
+static size_t castle_vlba_tree_key_size(const void *keyv)
 {
-    vlba_key_t *key = (vlba_key_t *)keyv;
+    const vlba_key_t *key = keyv;
+    if (unlikely(VLBA_TREE_KEY_MAX(key) || VLBA_TREE_KEY_INVAL(key)))
+        return 4;
+    return key->length + 4;
+}
+
+static void *castle_vlba_tree_key_next(const void *src, void *dst, size_t *dst_len)
+{
+    const vlba_key_t *key = src;
 
     /* No successor to invalid or min key. */
     BUG_ON(VLBA_TREE_KEY_INVAL(key));
@@ -306,27 +314,46 @@ static void* castle_vlba_tree_key_next(void *keyv)
     if(VLBA_TREE_KEY_MAX(key))
     {
         iter_debug("making INVAL_KEY\n");
-        return (void *)&VLBA_TREE_INVAL_KEY;
+        if (dst)
+        {
+            if (!dst_len || *dst_len < sizeof(vlba_key_t))
+                return NULL;
+            memcpy(dst, &VLBA_TREE_INVAL_KEY, sizeof(vlba_key_t));
+            *dst_len = sizeof(vlba_key_t);
+            return dst;
+        }
+        else return (void *) &VLBA_TREE_INVAL_KEY;
     }
 
-    return castle_object_btree_key_next(keyv);
+    return castle_object_btree_key_next(src, dst, dst_len);
 }
 
-static void* castle_vlba_tree_key_duplicate(void *keyv)
+static void *castle_vlba_tree_key_copy(const void *src, void *dst, size_t *dst_len)
 {
-    vlba_key_t *key = (vlba_key_t *)keyv;
+    const vlba_key_t *key = src;
 
     /* No need to duplicate static keys */
-    if (VLBA_TREE_KEY_INVAL(key))
-        return (void *)&VLBA_TREE_INVAL_KEY;
-    if (VLBA_TREE_KEY_MIN(key))
-        return (void *)&VLBA_TREE_MIN_KEY;
-    if (VLBA_TREE_KEY_MAX(key))
-        return (void *)&VLBA_TREE_MAX_KEY;
+    if (!dst)
+    {
+        if (VLBA_TREE_KEY_INVAL(key))
+            return (void *) &VLBA_TREE_INVAL_KEY;
+        if (VLBA_TREE_KEY_MIN(key))
+            return (void *) &VLBA_TREE_MIN_KEY;
+        if (VLBA_TREE_KEY_MAX(key))
+            return (void *) &VLBA_TREE_MAX_KEY;
+    }
 
-    keyv = ((void *)castle_object_btree_key_duplicate(keyv));
+    /* ... unless we're explicitly given a buffer to copy them to */
+    else if (VLBA_TREE_KEY_INVAL(key) || VLBA_TREE_KEY_MIN(key) || VLBA_TREE_KEY_MAX(key))
+    {
+        if (!dst_len || *dst_len < sizeof(vlba_key_t))
+            return NULL;
+        memcpy(dst, src, sizeof(vlba_key_t));
+        *dst_len = sizeof(vlba_key_t);
+        return dst;
+    }
 
-    return keyv;
+    return castle_object_btree_key_copy(src, dst, dst_len);
 }
 
 static void castle_vlba_tree_key_dealloc(void *keyv)
@@ -334,7 +361,7 @@ static void castle_vlba_tree_key_dealloc(void *keyv)
     vlba_key_t *key = (vlba_key_t *)keyv;
 
     /* Should not free static keys */
-    if(VLBA_TREE_KEY_INVAL(key) || VLBA_TREE_KEY_MAX(key) || VLBA_TREE_KEY_MIN(key))
+    if (VLBA_TREE_KEY_INVAL(key) || VLBA_TREE_KEY_MIN(key) || VLBA_TREE_KEY_MAX(key))
     {
         /* Should not have allocated them either */
         BUG_ON(!((key == &VLBA_TREE_INVAL_KEY) || (key == &VLBA_TREE_MIN_KEY) ||
@@ -761,7 +788,8 @@ struct castle_btree_type castle_vlba_tree = {
     .max_entries    = castle_vlba_tree_max_entries,
     .need_split     = castle_vlba_tree_need_split,
     .key_compare    = castle_vlba_tree_key_compare,
-    .key_duplicate  = castle_vlba_tree_key_duplicate,
+    .key_size       = castle_vlba_tree_key_size,
+    .key_copy       = castle_vlba_tree_key_copy,
     .key_next       = castle_vlba_tree_key_next,
     .key_dealloc    = castle_vlba_tree_key_dealloc,
     .key_hash       = castle_vlba_tree_key_hash,
