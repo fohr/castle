@@ -25,7 +25,7 @@ endif
 DEBFLAGS += -Wall -Werror -g
 
 ifeq ($(PERF_DEBUG),y)
-  EXTRA_CFLAGS += -DCASTLE_PERF_DEBUG 
+  EXTRA_CFLAGS += -DCASTLE_PERF_DEBUG
   $(TARGET)-objs += castle_time.o
 endif
 
@@ -62,7 +62,7 @@ install: $(TARGET).ko
 clean:
 	rm -rf *.o *~ core .depend .*.o.d .*.cmd *.ko *.mod.c .tmp_versions Module.symvers
 
-define all_sources	
+define all_sources
 	(find . -name '*.[ch]' -print)
 endef
 
