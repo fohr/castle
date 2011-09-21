@@ -68,7 +68,7 @@ uint32_t opt_hashes_per_bit[] =
  * @param   num_elements    Expected number of elements.  The actual number of elements added
  *                          can be less, but not more.
  */
-int castle_bloom_create(castle_bloom_t *bf, c_da_t da_id, uint64_t num_elements)
+int castle_bloom_create(castle_bloom_t *bf, struct castle_double_array *da, uint64_t num_elements)
 {
     uint32_t bits_per_element = BLOOM_BITS_PER_ELEMENT;
     uint32_t num_hashes = opt_hashes_per_bit[bits_per_element];
@@ -76,7 +76,6 @@ int castle_bloom_create(castle_bloom_t *bf, c_da_t da_id, uint64_t num_elements)
     uint64_t nodes_size, chunks_size, size;
     int ret = 0;
     struct castle_bloom_build_params *bf_bp;
-    struct castle_double_array *da = castle_da_get_ptr(da_id);
     struct castle_btree_type *btree = castle_btree_type_get(da->btree_type);
 
     BUG_ON(num_elements == 0);
@@ -110,7 +109,7 @@ int castle_bloom_create(castle_bloom_t *bf, c_da_t da_id, uint64_t num_elements)
 
     /* Try for SSD extent. If fails, go for DEFAULT_RDA */
     /* No need to handle Low Free-Space situation. Dont use bloom filter, in case of LFS. */
-    bf->ext_id = castle_extent_alloc(SSD_ONLY_EXT, da_id, EXT_T_BLOOM_FILTER,
+    bf->ext_id = castle_extent_alloc(SSD_ONLY_EXT, da->id, EXT_T_BLOOM_FILTER,
                                      ceiling(size, C_CHK_SIZE), 0,
                                      NULL, NULL);
     castle_printk(LOG_DEBUG, "%s::making bf %p on ext %d\n", __FUNCTION__, bf, bf->ext_id);
@@ -119,7 +118,7 @@ int castle_bloom_create(castle_bloom_t *bf, c_da_t da_id, uint64_t num_elements)
         bf->block_size_pages = BLOOM_BLOCK_SIZE_HDD_PAGES;
 
         /* No need to handle Low Free-Space situation. Dont use bloom filter, in case of LFS. */
-        bf->ext_id = castle_extent_alloc(DEFAULT_RDA, da_id, EXT_T_BLOOM_FILTER,
+        bf->ext_id = castle_extent_alloc(DEFAULT_RDA, da->id, EXT_T_BLOOM_FILTER,
                                          ceiling(size, C_CHK_SIZE), 0,
                                          NULL, NULL);
         if (EXT_ID_INVAL(bf->ext_id))

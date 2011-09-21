@@ -252,7 +252,7 @@ static inline int castle_da_ct_compare(struct castle_component_tree *ct1,
 }
 
 /**
- * Return DA pointer. For the sake of sysfs and bloom filters.
+ * Return DA pointer. For the sake of sysfs.
  */
 struct castle_double_array * castle_da_get_ptr(c_da_t da_id)
 {
@@ -3095,7 +3095,7 @@ __again:
     castle_da_lfs_ct_reset(lfs);
 
     /* Allocate Bloom filters. */
-    if ((ret = castle_bloom_create(&merge->out_tree->bloom, merge->da->id, bloom_size)))
+    if ((ret = castle_bloom_create(&merge->out_tree->bloom, merge->da, bloom_size)))
         merge->out_tree->bloom_exists = 0;
     else
         merge->out_tree->bloom_exists = 1;
