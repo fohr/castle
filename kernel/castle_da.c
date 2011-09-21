@@ -7516,34 +7516,34 @@ static int castle_da_tree_writeback(struct castle_double_array *da,
 {
     struct castle_clist_entry mstore_entry;
     struct list_head *lh, *tmp;
+    int being_written;
 
-    /* For periodic checkpoints flush component trees onto disk. */
-    if (!castle_da_exiting)
-    {
-        /* Always writeback Global tree structure but, don't writeback. */
-        /* Note: Global Tree is not Crash-Consistent. */
-        if (TREE_GLOBAL(ct->seq))
-            goto mstore_writeback;
+    /* Always writeback Global tree structure but, don't writeback. */
+    /* Note: Global Tree is not Crash-Consistent. */
+    if (TREE_GLOBAL(ct->seq))
+        goto mstore_writeback;
 
-        /* Don't write back T0. */
-        if (ct->level == 0)
-            return 0;
+    /* Don't write back T0, unless the FS is exiting. */
+    if ((ct->level == 0) && !castle_da_exiting)
+        return 0;
 
-        /* Don't write back trees with outstanding writes. */
-        if (atomic_read(&ct->write_ref_count) != 0)
-            return 0;
+    being_written = atomic_read(&ct->write_ref_count) > 0;
+    /* There should be no ongoing writes when exiting. */
+    BUG_ON(castle_da_exiting && being_written);
+    /* Don't write back trees with outstanding writes. */
+    if (being_written)
+        return 0;
 
-        /* Schedule flush of the CT onto disk. */
-        if(!EXT_ID_INVAL(ct->internal_ext_free.ext_id))
-            castle_cache_extent_flush_schedule(ct->internal_ext_free.ext_id, 0,
-                                           atomic64_read(&ct->internal_ext_free.used));
-        castle_cache_extent_flush_schedule(ct->tree_ext_free.ext_id, 0,
-                                           atomic64_read(&ct->tree_ext_free.used));
-        castle_cache_extent_flush_schedule(ct->data_ext_free.ext_id, 0,
-                                           atomic64_read(&ct->data_ext_free.used));
-        if(ct->bloom_exists)
-            castle_cache_extent_flush_schedule(ct->bloom.ext_id, 0, 0);
-    }
+    /* Schedule flush of the CT onto disk. */
+    if(!EXT_ID_INVAL(ct->internal_ext_free.ext_id))
+        castle_cache_extent_flush_schedule(ct->internal_ext_free.ext_id, 0,
+                                       atomic64_read(&ct->internal_ext_free.used));
+    castle_cache_extent_flush_schedule(ct->tree_ext_free.ext_id, 0,
+                                       atomic64_read(&ct->tree_ext_free.used));
+    castle_cache_extent_flush_schedule(ct->data_ext_free.ext_id, 0,
+                                       atomic64_read(&ct->data_ext_free.used));
+    if(ct->bloom_exists)
+        castle_cache_extent_flush_schedule(ct->bloom.ext_id, 0, 0);
 
 mstore_writeback:
     /* Never writeback T0 in periodic checkpoints. */
