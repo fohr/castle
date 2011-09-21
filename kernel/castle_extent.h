@@ -38,6 +38,7 @@ typedef struct castle_extent {
     uint32_t            remap_seqno;
     spinlock_t          shadow_map_lock;
     c_disk_chk_t        *shadow_map;
+    c_ext_mask_range_t  shadow_map_range; /* Range of chunks covered by shadow map. */
     int                 use_shadow_map; /* Extent is currently being remapped           */
     atomic_t            link_cnt;
     /* This global mask gets updated after freeing resources. Checkpoint has to commit

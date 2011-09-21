@@ -2329,7 +2329,8 @@ uint32_t castle_extent_map_get(c_ext_id_t     ext_id,
     if ((rw == WRITE) && (!SUPER_EXTENT(ext->ext_id)) && !(ext->ext_id == MICRO_EXT_ID))
     {
         spin_lock(&ext->shadow_map_lock);
-        if (ext->use_shadow_map)
+        if (ext->use_shadow_map &&
+          ((offset >= ext->shadow_map_range.start) && (offset < ext->shadow_map_range.end)))
         {
             /* Load the first half of the chk_map with the 'on-disk' map for this logical chunk. */
             __castle_extent_map_get(ext, offset, chk_map);
@@ -2346,6 +2347,8 @@ uint32_t castle_extent_map_get(c_ext_id_t     ext_id,
                 int chunk_already_mapped = 0;
                 for (j=0; j<ext->k_factor; j++)
                 {
+                    BUG_ON((offset >= ext->shadow_map_range.end) ||
+                           (offset < ext->shadow_map_range.start));
                     if (chk_map[j].slave_id == ext->shadow_map[offset*ext->k_factor+i].slave_id)
                     {
                         chunk_already_mapped = 1;
@@ -4373,6 +4376,7 @@ static void writeback_rebuild_chunk(writeback_info_t *writeback_info)
 
     for (chunkno = writeback_info->start_chunk; chunkno<=writeback_info->end_chunk; chunkno++)
     {
+        BUG_ON((chunkno >= ext->shadow_map_range.end) || (chunkno < ext->shadow_map_range.start));
         if (!map_c2b)
         {
             /* Get the c2b for the page containing the map cep.
@@ -4486,10 +4490,12 @@ static int rebuild_required(void)
 static void initialise_extent_state(c_ext_t * ext)
 {
     int k_factor = ext->k_factor;
-    int map_size = ext->size*k_factor*sizeof(c_disk_chk_t);
+    int map_size;
     int chunkno;
     int i;
 
+    map_size =
+        (ext->shadow_map_range.end-ext->shadow_map_range.start)*k_factor*sizeof(c_disk_chk_t);
     ext->shadow_map = castle_vmalloc(map_size);
     if (!ext->shadow_map)
     {
@@ -4497,7 +4503,7 @@ static void initialise_extent_state(c_ext_t * ext)
         BUG();
     }
     /* Populate the shadow map - a copy of the existing mapping. */
-    for (chunkno = 0; chunkno<ext->size; chunkno++)
+    for (chunkno = ext->shadow_map_range.start; chunkno<ext->shadow_map_range.end; chunkno++)
         __castle_extent_map_get(ext, chunkno, &ext->shadow_map[chunkno*k_factor]);
 
     /*
@@ -4724,10 +4730,15 @@ static int castle_extents_process(void *unused)
                 continue;
             }
 
-            initialise_extent_state(ext);
+            BUG_ON(MASK_ID_INVAL(ext->rebuild_mask_id));
 
             /* Get extent current range. */
             castle_extent_mask_read(ext->rebuild_mask_id, &ext_start, &ext_end);
+
+            ext->shadow_map_range.start = ext_start;
+            ext->shadow_map_range.end = ext_end;
+
+            initialise_extent_state(ext);
 
             curr_chunk = ext_start;
 
