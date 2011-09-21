@@ -229,7 +229,7 @@ static int castle_vlba_tree_need_split(struct castle_btree_node *node,
     struct castle_vlba_tree_node *vlba_node =
                 (struct castle_vlba_tree_node *) BTREE_NODE_PAYLOAD(node);
 
-    /* Special case, unitialised node should never be split. */
+    /* Special case, uninitialised node should never be split. */
     if(node->used == 0)
         return 0;
 
@@ -336,6 +336,7 @@ static void castle_vlba_tree_key_dealloc(void *keyv)
     /* Should not free static keys */
     if(VLBA_TREE_KEY_INVAL(key) || VLBA_TREE_KEY_MAX(key) || VLBA_TREE_KEY_MIN(key))
     {
+        /* Should not have allocated them either */
         BUG_ON(!((key == &VLBA_TREE_INVAL_KEY) || (key == &VLBA_TREE_MIN_KEY) ||
                  (key == &VLBA_TREE_MAX_KEY)));
         return;
