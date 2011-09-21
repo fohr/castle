@@ -7320,7 +7320,6 @@ static c_da_t castle_da_ct_unmarshall(struct castle_component_tree *ct,
     ct->merge_id            = INVAL_MERGE_ID;
     ct->tree_depth          = ctm->tree_depth;
     ct->root_node           = ctm->root_node;
-    ct->new_ct              = 0;
     ct->curr_merge_c2b_cep  = INVAL_EXT_POS;
     atomic64_set(&ct->large_ext_chk_cnt, ctm->large_ext_chk_cnt);
     init_rwsem(&ct->lock);
@@ -7534,22 +7533,16 @@ static int castle_da_tree_writeback(struct castle_double_array *da,
         if (atomic_read(&ct->write_ref_count) != 0)
             return 0;
 
-        /* Mark new trees for flush. */
-        if (ct->new_ct)
-        {
-            /* Schedule flush of new CT onto disk. */
-            if(!EXT_ID_INVAL(ct->internal_ext_free.ext_id))
-                castle_cache_extent_flush_schedule(ct->internal_ext_free.ext_id, 0,
-                                               atomic64_read(&ct->internal_ext_free.used));
-            castle_cache_extent_flush_schedule(ct->tree_ext_free.ext_id, 0,
-                                               atomic64_read(&ct->tree_ext_free.used));
-            castle_cache_extent_flush_schedule(ct->data_ext_free.ext_id, 0,
-                                               atomic64_read(&ct->data_ext_free.used));
-            if(ct->bloom_exists)
-                castle_cache_extent_flush_schedule(ct->bloom.ext_id, 0, 0);
-
-            ct->new_ct = 0;
-        }
+        /* Schedule flush of the CT onto disk. */
+        if(!EXT_ID_INVAL(ct->internal_ext_free.ext_id))
+            castle_cache_extent_flush_schedule(ct->internal_ext_free.ext_id, 0,
+                                           atomic64_read(&ct->internal_ext_free.used));
+        castle_cache_extent_flush_schedule(ct->tree_ext_free.ext_id, 0,
+                                           atomic64_read(&ct->tree_ext_free.used));
+        castle_cache_extent_flush_schedule(ct->data_ext_free.ext_id, 0,
+                                           atomic64_read(&ct->data_ext_free.used));
+        if(ct->bloom_exists)
+            castle_cache_extent_flush_schedule(ct->bloom.ext_id, 0, 0);
     }
 
 mstore_writeback:
@@ -8420,7 +8413,6 @@ static struct castle_component_tree* castle_ct_alloc(struct castle_double_array 
         ct->node_sizes[i] = castle_btree_node_size_get(ct->btree_type);
     ct->tree_depth      = -1;
     ct->root_node       = INVAL_EXT_POS;
-    ct->new_ct          = 1;
     init_rwsem(&ct->lock);
     mutex_init(&ct->lo_mutex);
     ct->da_list.next = NULL;

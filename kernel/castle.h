@@ -962,8 +962,6 @@ struct castle_component_tree {
                                                 i.e. node_sizes[0] is the size of leaf level,
                                                 node_sizes[tree_depth-1] is the size of the
                                                 root node. */
-    uint8_t             new_ct;            /**< Marked for cts which are not yet flushed onto
-                                                the disk.                                       */
     struct rw_semaphore lock;              /**< Protects root_node, tree depth & last_node.     */
     uint8_t             tree_depth;
     c_ext_pos_t         root_node;
