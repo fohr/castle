@@ -945,6 +945,13 @@ struct castle_bbp_entry
 #define CASTLE_CT_MERGE_INPUT_BIT       4   /* CT is being merged.                              */
 #define CASTLE_CT_PARTIAL_TREE_BIT      5   /* CT tree is partial could be intree/outree.       */
 
+/**
+ * Is CT queriable.
+ */
+#define CASTLE_CT_QUERIABLE(_ct)                                            \
+    (test_bit(CASTLE_CT_PARTIAL_TREE_BIT, &((_ct)->flags))                  \
+        || !test_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &((_ct)->flags)))
+
 struct castle_component_tree {
     tree_seq_t          seq;               /**< Unique ID identifying this tree.                */
     tree_seq_t          data_age;          /**< Denotes the age of data.                        */
@@ -1582,18 +1589,19 @@ typedef struct castle_merged_iterator {
     castle_merged_iterator_each_skip each_skip;
 } c_merged_iter_t;
 
+/**
+ * Range Query iterator.
+ */
 typedef struct castle_da_rq_iterator {
-    c_async_iterator_t        async_iter;
-    int                       nr_cts;
-    int                       err;
-    c_merged_iter_t           merged_iter;
+    c_merged_iter_t             merged_iter;        /**< Merged iterator for rq_iters.          */
 
-    struct ct_rq {
-        struct castle_component_tree *ct;
-        c_ct_ext_ref_t               *ct_refs;
-        struct castle_key_ptr_t       redirection_partition;
-        c_rq_iter_t                   ct_rq_iter;
-    } *ct_rqs;
+    struct castle_da_cts_proxy *cts_proxy;          /**< Reference-taking snapshot of CTs in DA.*/
+    c_rq_iter_t                *ct_iters;           /**< nr_iters RQ iterators.                 */
+    int                         nr_iters;           /**< Number of ct_iters[].                  */
+
+    c_async_iterator_t          async_iter;         /**< Async iterator callback.               */
+
+    int                         err;
 } c_da_rq_iter_t;
 
 
@@ -2004,10 +2012,13 @@ struct castle_da_cts_proxy {
     struct castle_da_cts_proxy_ct {
         struct castle_component_tree   *ct;         /**< Pointer to CT.                 */
         c_ct_ext_ref_t                  ext_refs;   /**< References held on CT extents. */
-        struct castle_key_ptr_t         pk;         /**< Partition key for CT.          */
+        void                           *pk;         /**< Partition key for CT.          */
+        void                           *pk_next;    /**< Next key of partition key.
+                                                         Set for REDIR_INTREE only.     */
         c_ct_redir_state_enum_t         state;      /**< Redirection state.             */
     } *cts;
     uint8_t                     nr_cts;     /**< Number of CTs in cts[].                */
+    void                       *keys;       /**< Buffer of partition keys.              */
     btree_t                     btree_type; /**< Tree type used for the CTs.            */
     atomic_t                    ref_cnt;    /**< References held on proxy structure.    */
     struct castle_double_array *da;         /**< Backpointer to DA (for DEBUG).         */
@@ -2064,10 +2075,11 @@ struct castle_double_array {
     struct kobject              merges_kobj;        /**< Sysfs entry for list of merges         */
     unsigned long               flags;
     btree_t                     btree_type;         /**< Tree type used for the CTs             */
-    int                         nr_trees;           /**< Total number of complete CTs in the da */
-    /**< Total number of partially complete in-progress trees in the da; these are trees that are
-         complete enough to be queried. This count is helpful for query init.                   */
-    atomic_t                    queriable_merge_trees_cnt;
+    int                         nr_trees;           /**< Total number of CTs in the DA, including
+                                                         input, output, not-merging, queriable
+                                                         and non-queriable CTs.                 */
+    atomic_t            queriable_merge_trees_cnt;  /**< Subset of nr_trees that are queriable
+                                                         merge output trees.                    */
     struct {
         int                     nr_trees;           /**< Number of queriable CTs at level.      */
         int                     nr_output_trees;    /**< Number of output trees at level.       */

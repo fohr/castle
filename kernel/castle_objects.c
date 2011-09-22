@@ -204,11 +204,11 @@ static void castle_objects_rq_iter_init(castle_object_iterator_t *iter)
     castle_da_rq_iter.register_cb(&iter->da_rq_iter,
                                   castle_objects_rq_iter_end_io,
                                   (void *)iter);
-    if(iter->da_rq_iter.err)
-    {
-        iter->err = iter->da_rq_iter.err;
-        return;
-    }
+
+    /* Propagate iterator errors up the stack. */
+    iter->err = iter->da_rq_iter.err;
+
+    return;
 }
 
 /**********************************************************************************************/

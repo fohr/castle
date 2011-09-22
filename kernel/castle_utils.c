@@ -32,8 +32,8 @@ void castle_key_ptr_ref_cp(struct castle_key_ptr_t *dest, struct castle_key_ptr_
     BUG_ON(!dest);
     BUG_ON(src->node_c2b == NULL);
     BUG_ON(src->key      == NULL);
-    dest->node_c2b   = src->node_c2b;
-    dest->key        = src->key;
+    dest->node_c2b  = src->node_c2b;
+    dest->key       = src->key;
     dest->node_size = src->node_size;
     get_c2b(dest->node_c2b);
 }

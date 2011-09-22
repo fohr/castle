@@ -155,6 +155,7 @@ static int castle_da_merge_start(struct castle_double_array *da, void *unused);
 void castle_double_array_merges_fini(void);
 static struct castle_component_tree* castle_da_rwct_get(struct castle_double_array *da,
                                                         int cpu_index);
+static struct castle_da_cts_proxy* castle_da_cts_proxy_get(struct castle_double_array *da);
 static void castle_da_queue_kick(struct work_struct *work);
 static void castle_da_read_bvec_start(struct castle_double_array *da, c_bvec_t *c_bvec);
 static void castle_da_write_bvec_start(struct castle_double_array *da, c_bvec_t *c_bvec);
@@ -1971,29 +1972,32 @@ static void castle_da_rq_iter_skip(c_da_rq_iter_t *iter, void *key)
     castle_ct_merged_iter_skip(&iter->merged_iter, key);
 }
 
+/**
+ * Deinitialise Range Query iterator.
+ *
+ * Drops references and frees structures.
+ */
 void castle_da_rq_iter_cancel(c_da_rq_iter_t *iter)
 {
     int i;
 
+    /* Cancel merged iterator. */
     castle_ct_merged_iter_cancel(&iter->merged_iter);
-    for(i=0; i<iter->nr_cts; i++)
+
+    /* Cancel CT iterators. */
+    BUG_ON(iter->nr_iters != iter->cts_proxy->nr_cts);
+    for (i = 0; i < iter->nr_iters; i++)
     {
-        struct ct_rq *ct_rq = iter->ct_rqs + i;
-        castle_rq_iter_cancel(&ct_rq->ct_rq_iter);
+        c_rq_iter_t *ct_iter = &iter->ct_iters[i];
 
-        castle_ct_put(ct_rq->ct, 0, ct_rq->ct_refs);
-        castle_kfree(ct_rq->ct_refs);
-        ct_rq->ct_refs = NULL;
-
-        if(ct_rq->redirection_partition.key)
-        {
-            put_c2b(ct_rq->redirection_partition.node_c2b);
-            ct_rq->redirection_partition.node_c2b = NULL;
-            ct_rq->redirection_partition.key      = NULL;
-        }
-
+        castle_rq_iter_cancel(ct_iter);
     }
-    castle_kfree(iter->ct_rqs);
+
+    /* Free CT iterators structures. */
+    castle_free(iter->ct_iters);
+
+    /* Put DA CTs proxy structure. */
+    castle_da_cts_proxy_put(iter->cts_proxy);
 }
 
 #define ADD_CT_TO_ITERATOR(_ct, _redir_type, _merge)                                            \
@@ -2019,9 +2023,9 @@ void castle_da_rq_iter_cancel(c_da_rq_iter_t *iter)
 }
 
 /**
- * Range query iterator initialiser.
+ * Range Query iterator initialiser.
  *
- * Implemented as a merged iterator of CTs at every level of the doubling array.
+ * Implemented as a merged iterator of CTs at every level of the DA.
  */
 void castle_da_rq_iter_init(c_da_rq_iter_t *iter,
                             c_ver_t version,
@@ -2029,178 +2033,101 @@ void castle_da_rq_iter_init(c_da_rq_iter_t *iter,
                             void *start_key,
                             void *end_key)
 {
-    void **iters;
-    struct castle_iterator_type **iter_types = NULL;
+    struct castle_iterator_type **iters_types;
     struct castle_double_array *da;
-    struct list_head *l;
-    int i, j;
-    int refs_malloc_failed = 0;
-    c_ct_ext_ref_t **ct_get_refs = NULL;
-    struct castle_da_merge *last_seen_merge = NULL;
+    void **iters;
+    int i;
 
-    c_ct_redir_state_enum_t *ct_redir_state = NULL;
-
+    /* Get DA from hash, verify it is ancestor of version. */
     da = castle_da_hash_get(da_id);
     BUG_ON(!da);
     BUG_ON(!castle_version_is_ancestor(da->root_version, version));
-again:
-    /* Try to allocate the right amount of memory, but remember that nr_trees
-       may change, because we are not holding the da lock (cannot kmalloc holding
-       a spinlock). */
-    iter->nr_cts = da->nr_trees + atomic_read(&da->queriable_merge_trees_cnt);
-    iter->err    = 0;
+
+    /* Initialise RQ iterator, allocate structures for CT/merged iterators. */
+    iter->cts_proxy         = castle_da_cts_proxy_get(da);
+    if (!iter->cts_proxy)
+        goto alloc_fail;
+    iter->nr_iters          = iter->cts_proxy->nr_cts;
+    iter->err               = 0;
     iter->async_iter.end_io = NULL;
-    iter->ct_rqs   = castle_zalloc(iter->nr_cts * sizeof(struct ct_rq), GFP_KERNEL);
-    iters          = castle_malloc(iter->nr_cts * sizeof(void *), GFP_KERNEL);
-    iter_types     = castle_malloc(iter->nr_cts * sizeof(struct castle_iterator_type *), GFP_KERNEL);
-    /* a temporary placeholder for the ct refs */
-    ct_get_refs    = castle_zalloc(iter->nr_cts * sizeof(c_ct_ext_ref_t *), GFP_KERNEL);
-    if(ct_get_refs)
-    {
-        for(i=0; i< iter->nr_cts; i++)
-        {
-            /* each of these will be given to a ct_rq */
-            ct_get_refs[i] = castle_zalloc(sizeof(c_ct_ext_ref_t), GFP_KERNEL);
-            if(!ct_get_refs[i])
-            {
-                refs_malloc_failed = 1;
-                break;
-            }
-        }
-    }
-    ct_redir_state = castle_zalloc(iter->nr_cts * sizeof(c_ct_redir_state_enum_t), GFP_KERNEL);
-    if(!iter->ct_rqs || !iters || !iter_types || !ct_redir_state ||
-        !ct_get_refs || refs_malloc_failed)
-    {
-        if(iter->ct_rqs)
-            castle_kfree(iter->ct_rqs);
-        if(iters)
-            castle_kfree(iters);
-        if(iter_types)
-            castle_kfree(iter_types);
-        if(ct_redir_state)
-            castle_kfree(ct_redir_state);
-        if(refs_malloc_failed)
-        {
-            BUG_ON(ct_get_refs);
-            for(i=0; i< iter->nr_cts; i++)
-            {
-                if(ct_get_refs[i])
-                {
-                    castle_kfree(ct_get_refs[i]);
-                    ct_get_refs[i] = NULL;
-                }
-            }
-        }
-        if(ct_get_refs)
-            castle_kfree(ct_get_refs);
-        iter->err = -ENOMEM;
-        return;
-    }
 
-    read_lock(&da->lock);
-    /* Check the number of trees under lock. Retry again if # changed. */
-    if(iter->nr_cts != da->nr_trees + atomic_read(&da->queriable_merge_trees_cnt))
-    {
-        read_unlock(&da->lock);
-        castle_printk(LOG_WARN,
-                "Warning. Untested. # of cts changed while allocating memory for rq.\n");
-        castle_kfree(iter->ct_rqs);
-        castle_kfree(iters);
-        castle_kfree(iter_types);
-        goto again;
-    }
-    /* Get refs to all the component trees, and release the lock */
-    j=0;
-    last_seen_merge = NULL;
-    for(i=0; i<MAX_DA_LEVEL; i++)
-    {
-        /* On any given DA level at any given point in time, there can be only one merge (or no
-           merge). If there is a merge, it will be merging the oldest trees on that level.
-           Therefore, the output tree of a merge will effectively be the oldest tree on the
-           level. Therefore, add in-merge trees to the RQ *after* dealing with all the complete
-           trees on the level. */
+    iter->ct_iters  = castle_zalloc(iter->nr_iters * sizeof(c_rq_iter_t), GFP_KERNEL);
+    iters           = castle_alloc(iter->nr_iters * sizeof(void *));
+    iters_types     = castle_alloc(iter->nr_iters * sizeof(struct castle_iterator_type *));
+    if (!iter->ct_iters || !iters || !iters_types)
+        goto alloc_fail2;
 
-        /* init "complete* trees */
-        list_for_each(l, &da->levels[i].trees)
-        {
-            struct castle_component_tree *ct = list_entry(l, struct castle_component_tree, da_list);
-
-            if ( (ct->merge) && (ct->merge->queriable_out_tree) )
-            {
-                BUG_ON(test_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &ct->flags));
-                ADD_CT_TO_ITERATOR(ct, REDIR_INTREE, ct->merge);
-                if (last_seen_merge != ct->merge)
-                {
-                    ADD_CT_TO_ITERATOR(ct->merge->queriable_out_tree, REDIR_OUTTREE, ct->merge);
-                    last_seen_merge = ct->merge;
-                }
-            }
-            else
-                ADD_CT_TO_ITERATOR(ct, NO_REDIR, ct->merge);
-        }
-    }
-    read_unlock(&da->lock);
-    if (j != iter->nr_cts)
+    /* Initialise CT iterators. */
+    for (i = 0; i < iter->nr_iters; i++)
     {
-        castle_printk(LOG_DEVEL, "%u - %u\n", j, iter->nr_cts);
-        BUG();
-    }
-    BUG_ON(j != iter->nr_cts);
+        struct castle_da_cts_proxy_ct *proxy_ct;
+        void *ct_start_key, *ct_end_key;
+        c_rq_iter_t *ct_iter;
 
-    /* Initialise range queries for individual cts */
-    /* @TODO: Better to re-organize the code, such that these iterators belong to
-     * merged iterator. Easy to manage resources - Talk to Gregor */
-    for(i=0; i<iter->nr_cts; i++)
-    {
-        struct ct_rq *ct_rq = iter->ct_rqs + i;
-        void *ct_start_key  = start_key;
-        void *ct_end_key    = end_key;
-        ct_rq->ct_refs      = ct_get_refs[i];
+        proxy_ct    = &iter->cts_proxy->cts[i];
+        ct_iter     = &iter->ct_iters[i];
 
-        debug("%s::init ct %d ", __FUNCTION__, ct_rq->ct->seq);
-        switch(ct_redir_state[i])
+        switch (proxy_ct->state)
         {
             case NO_REDIR:
-                debug("no redir.\n");
+                /* No redirection, use requested start and end keys. */
+                ct_start_key    = start_key;
+                ct_end_key      = end_key;
                 break;
             case REDIR_INTREE:
-                debug("start at partition key.\n");
-                ct_start_key = ct_rq->redirection_partition.key;
+                /* Input tree, start at key_next(partition key).
+                 * Prior keys are handled by the output tree. */
+                ct_start_key    = proxy_ct->pk_next;
+                ct_end_key      = end_key;
                 break;
             case REDIR_OUTTREE:
-                debug("end at partition key.\n");
-                ct_end_key   = ct_rq->redirection_partition.key;
+                /* Output tree, end at partition key.  Later keys are
+                 * handled by the input trees. */
+                ct_start_key    = start_key;
+                ct_end_key      = proxy_ct->pk;
                 break;
             default:
                 BUG();
         }
 
-        castle_rq_iter_init(&ct_rq->ct_rq_iter,
-                            version,
-                            ct_rq->ct,
-                            ct_start_key,
-                            ct_end_key);
-        /* @TODO: handle errors! Don't know how to destroy ct_rq_iter ATM. */
-        BUG_ON(ct_rq->ct_rq_iter.err);
-        iters[i]        = &ct_rq->ct_rq_iter;
-        iter_types[i]   = &castle_rq_iter;
+        /* Initialise CT iterator. */
+        castle_rq_iter_init(ct_iter, version, proxy_ct->ct, ct_start_key, ct_end_key);
+        BUG_ON(ct_iter->err); /* doesn't fail */
+
+        /* Add initialised iterator to merged iterators lists. */
+        iters[i]        = ct_iter;
+        iters_types[i]  = &castle_rq_iter;
     }
 
-    /* Iterators have been initialised, now initialise the merged iterator */
-    iter->merged_iter.nr_iters = iter->nr_cts;
-    iter->merged_iter.btree    = castle_btree_type_get(da->btree_type);
-    castle_ct_merged_iter_init(&iter->merged_iter,
-                                iters,
-                                iter_types,
-                                NULL);
-    castle_ct_merged_iter_register_cb(&iter->merged_iter,
-                                      castle_da_rq_iter_end_io,
-                                      iter);
-    castle_kfree(ct_redir_state);
-    castle_kfree(ct_get_refs);
-    castle_kfree(iters);
-    castle_kfree(iter_types);
+    /* Initialise merged iterator. */
+    iter->merged_iter.nr_iters  = iter->nr_iters;
+    iter->merged_iter.btree     = castle_btree_type_get(da->btree_type);
+    castle_ct_merged_iter_init(&iter->merged_iter, iters, iters_types, NULL);
+    castle_ct_merged_iter_register_cb(&iter->merged_iter, castle_da_rq_iter_end_io, iter);
+
+    /* Free structures used to initialise merged iterator. */
+    castle_free(iters);
+    castle_free(iters_types);
+
+    return;
+
+alloc_fail2:
+    if (iters_types)
+        castle_free(iters_types);
+    if (iters)
+        castle_free(iters);
+    if (iter->ct_iters)
+        castle_free(iter->ct_iters);
+    if (iter->cts_proxy)
+    {
+        castle_da_cts_proxy_put(iter->cts_proxy);
+        iter->cts_proxy = NULL;
+    }
+    else
+        BUG();
+
+alloc_fail:
+    iter->err = -ENOMEM;
 }
 
 struct castle_iterator_type castle_da_rq_iter = {
@@ -8917,6 +8844,52 @@ static void castle_da_queue_kick(struct work_struct *work)
 }
 
 /**
+ * Return number of Bytes required to duplicate all merge partition keys in DA.
+ *
+ * @param   da  Locked DA
+ *
+ * @return  Bytes required to duplicate all partition keys.
+ */
+static inline size_t castle_da_cts_proxy_keys_size(struct castle_double_array *da)
+{
+    struct castle_da_merge *last_merge;
+    int i, keys;
+    size_t size;
+
+    /* Evaluate all mergeable CTs in the DA (not level 0). */
+    for (i = 1, keys = size = 0, last_merge = NULL; i < MAX_DA_LEVEL; i++)
+    {
+        struct list_head *l;
+
+        list_for_each(l, &da->levels[i].trees)
+        {
+            struct castle_component_tree *ct;
+
+            ct = list_entry(l, struct castle_component_tree, da_list);
+
+            if (test_bit(CASTLE_CT_PARTIAL_TREE_BIT, &ct->flags))
+            {
+                /* CT is involved in a merge. */
+                BUG_ON(!ct->merge || !ct->merge->queriable_out_tree);
+                if (ct->merge != last_merge)
+                {
+                    /* CT is involved in a merge we've not seen before. */
+                    struct castle_btree_type *btree;
+
+                    btree = castle_btree_type_get(ct->btree_type);
+                    size += btree->key_size(ct->merge->redirection_partition.key);
+
+                    /* Update last_merge pointer. */
+                    last_merge = ct->merge;
+                }
+            }
+        }
+    }
+
+    return size;
+}
+
+/**
  * Create a DA CTs proxy and make it active in the DA.
  *
  * @return  *       Pointer to CTs proxy (with 2 references taken)
@@ -8928,30 +8901,45 @@ static struct castle_da_cts_proxy* castle_da_cts_proxy_create(struct castle_doub
 
     struct castle_da_cts_proxy *proxy;
     struct castle_da_merge *last_merge;
-    int nr_cts, ct, i;
+    void *keys, *pk, *pk_next;
+    int nr_cts, ct, level;
+    size_t keys_rem;
 
     proxy = castle_alloc(sizeof(struct castle_da_cts_proxy));
     if (!proxy)
         return NULL;
 
 reallocate:
-    nr_cts = da->nr_trees + atomic_read(&da->queriable_merge_trees_cnt);
+    read_lock(&da->lock);
+    /* Determine Bytes required to duplicate all partition keys.  We double the
+     * result to handle key_next()s and once again in case between switching
+     * from read to write lock the required size has increased. */
+    keys_rem    = 4 * castle_da_cts_proxy_keys_size(da);
+    read_unlock(&da->lock);
+
+    nr_cts      = da->nr_trees;
     if (nr_cts <= 0)
         goto err;
-    proxy->cts= castle_alloc(nr_cts * sizeof(struct castle_da_cts_proxy_ct));
+    proxy->cts  = castle_alloc(nr_cts * sizeof(struct castle_da_cts_proxy_ct));
     if (!proxy->cts)
+        goto err;
+    proxy->keys = castle_alloc(keys_rem);
+    if (!proxy->keys)
         goto err2;
 
     /* Verify nr_cts still matches under DA lock.  Write because we're going
      * to make this proxy structure active once it is generated. */
     write_lock(&da->lock);
 
-    if (nr_cts != da->nr_trees + atomic_read(&da->queriable_merge_trees_cnt))
+    if (nr_cts != da->nr_trees
+            || keys_rem < 4 * castle_da_cts_proxy_keys_size(da))
     {
-        /* nr_cts has changed, we need to re-allocate the structures to
-         * ensure they are large enough to hold all of the references. */
+        /* nr_cts has changed or the memory required to duplicate all partition
+         * keys has greatly expanded.  We need to re-allocate the structures to
+         * ensure they are large enough to hold all references and keys. */
         write_unlock(&da->lock);
 
+        castle_free(proxy->keys);
         castle_free(proxy->cts);
 
         goto reallocate;
@@ -8959,67 +8947,111 @@ reallocate:
 
     /* Under the DA lock store pointers to referenced CTs.
      *
-     * Partially merged input trees point to their merge structure which in
-     * turn points to the output tree.  Merging trees are guaranteed to be
-     * contiguous within the da->levels[].trees list so store last_merge to
-     * ensure we only add an output tree to our proxy once. */
-    for (i = 0, ct = 0, last_merge = NULL; i < MAX_DA_LEVEL; i++)
+     * In the case of partially merged trees we can assume that input trees are
+     * followed immediately by their output tree (even across levels, e.g. input
+     * CTs at level 1 will be followed by an output CT at the start of level 2).
+     * Make a copy of the partition key for the first seen input CT and assign
+     * this to all subsequent CTs, resetting it once it has been assigned to the
+     * output CT. */
+    ct          = 0;
+    last_merge  = NULL;
+    pk          = NULL;
+    pk_next     = NULL;
+    keys        = proxy->keys;
+    for (level = 0; level < MAX_DA_LEVEL; level++)
     {
         struct list_head *l;
 
-        list_for_each(l, &da->levels[i].trees)
+        list_for_each(l, &da->levels[level].trees)
         {
             struct castle_da_cts_proxy_ct *proxy_ct;
+            struct castle_component_tree *ct_p;
+
+            /* Skip if the CT is not queriable. */
+            ct_p = list_entry(l, struct castle_component_tree, da_list);
+            if (!CASTLE_CT_QUERIABLE(ct_p))
+                continue;
 
             /* Add this CT, take a reference. */
             proxy_ct = &proxy->cts[ct++];
-            proxy_ct->ct = list_entry(l, struct castle_component_tree, da_list);
+            proxy_ct->ct = ct_p;
             castle_ct_get(proxy_ct->ct, 0 /*write*/, &proxy_ct->ext_refs);
             VERIFY_PROXY_CT(proxy_ct->ct, da);
 
-            /* Set the partition key and partion state, as appropriate. */
-            if (proxy_ct->ct->merge && proxy_ct->ct->merge->queriable_out_tree)
+            if (!test_bit(CASTLE_CT_PARTIAL_TREE_BIT, &proxy_ct->ct->flags))
             {
-                BUG_ON(test_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &proxy_ct->ct->flags));
-
-                /* CT is an input tree to a merge. */
-                proxy_ct->state = REDIR_INTREE;
-                castle_key_ptr_ref_cp(&proxy_ct->pk,
-                        &proxy_ct->ct->merge->redirection_partition);
-
-                debug("%s::CT %d at level %d redirects to CT %d\n",
-                        __FUNCTION__, proxy_ct->ct->seq, i,
-                        proxy_ct->ct->merge->queriable_out_tree->seq);
-
-                if (last_merge != proxy_ct->ct->merge)
-                {
-                    /* First time we've seen this merge.  Add the output
-                     * CT to the proxy and advance the last_merge pointer. */
-                    struct castle_component_tree *input_ct = proxy_ct->ct;
-
-                    proxy_ct = &proxy->cts[ct++];
-                    proxy_ct->ct    = input_ct->merge->queriable_out_tree;
-                    proxy_ct->state = REDIR_OUTTREE;
-                    castle_key_ptr_ref_cp(&proxy_ct->pk,
-                            &input_ct->merge->redirection_partition);
-                    castle_ct_get(proxy_ct->ct, 0 /*write*/, &proxy_ct->ext_refs);
-                    VERIFY_PROXY_CT(proxy_ct->ct, da);
-
-                    last_merge = input_ct->merge;
-                }
+                /* CT is complete. */
+                proxy_ct->state     = NO_REDIR;
+                proxy_ct->pk        = NULL;
+                proxy_ct->pk_next   = NULL;
             }
             else
             {
-                /* CT is not involved in a merge. */
-                proxy_ct->state         = NO_REDIR;
-                proxy_ct->pk.key        = NULL;
+                /* CT is a merge input or output tree. */
+                BUG_ON(!proxy_ct->ct->merge);
+                BUG_ON(level < 1);
+
+                if (test_bit(CASTLE_CT_MERGE_INPUT_BIT, &proxy_ct->ct->flags))
+                {
+                    proxy_ct->state = REDIR_INTREE;
+
+                    debug("%s::CT %d at level %d redirects to CT %d\n",
+                            __FUNCTION__, proxy_ct->ct->seq, i,
+                            proxy_ct->ct->merge->queriable_out_tree->seq);
+                }
+                else if (test_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &proxy_ct->ct->flags))
+                    proxy_ct->state = REDIR_OUTTREE;
+                else
+                    BUG(); /* must be INTREE or OUTTREE */
+
+                if (last_merge != proxy_ct->ct->merge)
+                {
+                    /* New merge.  Copy the partition key and key_next(partition
+                     * key) to our keys buffer and maintain pointers to each. */
+                    struct castle_btree_type *btree;
+                    void *merge_pk;
+                    size_t key_len;
+
+                    BUG_ON(proxy_ct->state == REDIR_OUTTREE);
+
+                    btree = castle_btree_type_get(proxy_ct->ct->btree_type);
+                    merge_pk = proxy_ct->ct->merge->redirection_partition.key;
+
+                    /* Copy the partition key. */
+                    key_len     = keys_rem;
+                    pk          = btree->key_copy(merge_pk, keys, &key_len);
+                    BUG_ON(!pk); /* we allocated space for all copies */
+                    keys_rem   -= key_len;
+                    keys       += key_len;
+
+                    /* Copy key_next(partition key). */
+                    key_len     = keys_rem;
+                    pk_next     = btree->key_next(merge_pk, keys, &key_len);
+                    BUG_ON(!pk_next); /* we allocated space for all copies */
+                    keys_rem   -= key_len;
+                    keys       += key_len;
+
+                    /* Track this merge. */
+                    last_merge = proxy_ct->ct->merge;
+                }
+
+                BUG_ON(!pk || !pk_next);
+                proxy_ct->pk        = pk;
+                proxy_ct->pk_next   = pk_next;
+
+                if (test_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &proxy_ct->ct->flags))
+                {
+                    /* Invalidate these pointers if we hit an output tree. */
+                    pk      = NULL;
+                    pk_next = NULL;
+                }
             }
         }
     }
 
     /* Finalise proxy structure. */
-    BUG_ON(ct != nr_cts);
-    proxy->nr_cts     = nr_cts;
+    BUG_ON(ct > nr_cts);
+    proxy->nr_cts     = ct;
     proxy->btree_type = da->btree_type;
     proxy->da         = da;
     atomic_set(&proxy->ref_cnt, 2); /* 1: DA, 2: caller */
@@ -9103,16 +9135,14 @@ void castle_da_cts_proxy_put(struct castle_da_cts_proxy *proxy)
 
         for (ct = 0; ct < proxy->nr_cts; ct++)
         {
-            if (proxy->cts[ct].pk.key)
-            {
-                BUG_ON(proxy->cts[ct].state == NO_REDIR);
-                castle_key_ptr_destroy(&proxy->cts[ct].pk);
-            }
+            if (proxy->cts[ct].state != NO_REDIR)
+                BUG_ON(!proxy->cts[ct].pk);
             else
-                BUG_ON(proxy->cts[ct].state != NO_REDIR);
+                BUG_ON(proxy->cts[ct].pk);
             castle_ct_put(proxy->cts[ct].ct, 0 /*write*/, &proxy->cts[ct].ext_refs);
         }
 
+        castle_free(proxy->keys);
         castle_free(proxy->cts);
         castle_free(proxy);
     }
@@ -9189,7 +9219,7 @@ static struct castle_component_tree* castle_da_cts_proxy_ct_next(struct castle_d
     {
         proxy_ct = &proxy->cts[i];
 
-        if (proxy_ct->pk.key)
+        if (proxy_ct->pk)
         {
             /* CT has a partition key. */
             struct castle_btree_type *btree;
@@ -9198,7 +9228,7 @@ static struct castle_component_tree* castle_da_cts_proxy_ct_next(struct castle_d
             BUG_ON(proxy_ct->state == NO_REDIR);
 
             btree = castle_btree_type_get(proxy->btree_type);
-            cmp = btree->key_compare(proxy_ct->pk.key, key);
+            cmp = btree->key_compare(proxy_ct->pk, key);
 
             if ((proxy_ct->state == REDIR_INTREE && cmp < 0)
                     || (proxy_ct->state == REDIR_OUTTREE && cmp >= 0))
