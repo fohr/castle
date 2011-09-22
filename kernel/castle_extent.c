@@ -2321,9 +2321,11 @@ uint32_t castle_extent_map_get(c_ext_id_t     ext_id,
     if ((offset < ext->chkpt_global_mask.start) || (offset >= ext->chkpt_global_mask.end))
         return 0;
 
+    __castle_extent_map_get(ext, offset, chk_map);
+
     /*
-     * This extent may be being remapped, in which case writes need to be redirected via its shadow
-     * map. This needs to be checked under the shadow map lock, but that lock and the
+     * This extent may be being remapped, in which case writes may also need to be directed via its
+     * shadow map. This needs to be checked under the shadow map lock, but that lock and the
      * 'use_shadow_map' flag are only initialised for 'normal' extents, hence the extent id checks.
      */
     if ((rw == WRITE) && (!SUPER_EXTENT(ext->ext_id)) && !(ext->ext_id == MICRO_EXT_ID))
@@ -2332,15 +2334,12 @@ uint32_t castle_extent_map_get(c_ext_id_t     ext_id,
         if (ext->use_shadow_map &&
           ((offset >= ext->shadow_map_range.start) && (offset < ext->shadow_map_range.end)))
         {
-            /* Load the first half of the chk_map with the 'on-disk' map for this logical chunk. */
-            __castle_extent_map_get(ext, offset, chk_map);
-
             /*
-             * Now look to see if there are any other disk chunks in the shadow map that are *not*
-             * already present in the chk_map. Any we find must be added. We only need to look at
-             * slave_id's, because these cannot be duplicated across the maps. This needs to be done
-             * because we need to maintain data consistency on evacuating slaves, and these are not
-             * present in the shadow map.
+             * We've already loaded the first half of the chk_map with the 'on-disk' map for this
+             * logical chunk. Now look to see if there are any other disk chunks in the shadow map
+             * that are *not* already present in the chk_map. Any we find must be added.
+             * These extra chunks are the remapped ones, and the data must be updated there too.
+             * We only need to check slave_id, because this cannot be duplicated in the map.
              */
             for (i=0; i<ext->k_factor; i++)
             {
@@ -2359,14 +2358,10 @@ uint32_t castle_extent_map_get(c_ext_id_t     ext_id,
                     memcpy(chk_map+idx++, &ext->shadow_map[offset*ext->k_factor+i],
                            sizeof(c_disk_chk_t));
             }
-            spin_unlock(&ext->shadow_map_lock);
-            goto map_done;
         }
         spin_unlock(&ext->shadow_map_lock);
     }
-    __castle_extent_map_get(ext, offset, chk_map);
 
-map_done:
     /* Return the number of chunks in the map (may be > k_factor for remap I/O) */
     return idx;
 }
