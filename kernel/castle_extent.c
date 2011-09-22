@@ -4724,12 +4724,6 @@ static int castle_extents_process(void *unused)
             ext = list_entry(process_entry, c_ext_t, process_list);
             list_del(process_entry);
             
-            if (process_drop_extents)
-            {
-                castle_extent_rebuild_ext_put(ext, 0);
-                continue;
-            }
-
             BUG_ON(MASK_ID_INVAL(ext->rebuild_mask_id));
 
             /* Get extent current range. */
@@ -4737,6 +4731,16 @@ static int castle_extents_process(void *unused)
 
             ext->shadow_map_range.start = ext_start;
             ext->shadow_map_range.end = ext_end;
+
+            /*
+             * Dropping extents (for early exit), or there is no range to process - nothing to do
+             * for this extent.
+             */
+            if (process_drop_extents || ((ext_end - ext_start) == 0))
+            {
+                castle_extent_rebuild_ext_put(ext, 0);
+                continue;
+            }
 
             initialise_extent_state(ext);
 
