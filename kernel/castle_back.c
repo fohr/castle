@@ -791,7 +791,8 @@ static int castle_back_stateful_op_prod(struct castle_back_stateful_op *stateful
 }
 
 static int castle_back_reply(struct castle_back_op *op, int err,
-     castle_interface_token_t token, uint64_t length);
+                             castle_interface_token_t token,
+                             uint64_t length);
 
 /**
  * Finish all ops on the stateful op queue, giving them err & closing their buffers
@@ -2032,13 +2033,17 @@ static int castle_back_iter_next_callback(struct castle_object_iterator *iterato
     if (key == NULL)
     {
         stateful_op->iterator.kv_list_tail->next = NULL;
-        stateful_op->curr_op = NULL;
 
         /* Iterator has finished.  Fake up an iter_finish request and pass it
          * to castle_back_iter_finish() to end the iterator.
          * See also: libcastle.hg:castle_iter_finish_prepare() */
+        spin_lock(&stateful_op->lock);
+        BUG_ON(!stateful_op->curr_op);
+        stateful_op->curr_op = NULL;
+
         op->req.tag = CASTLE_RING_ITER_FINISH;
         op->req.iter_finish.token = op->req.iter_next.token;
+        spin_unlock(&stateful_op->lock);
 
         /* End the iterator. */
         castle_back_buffer_put(conn, op->buf);
