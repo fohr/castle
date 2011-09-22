@@ -937,8 +937,8 @@ static int castle_back_reply(struct castle_back_op *op,
 
     RING_PUSH_RESPONSES_AND_CHECK_NOTIFY(back_ring, notify);
 
-    /* Put op back on freelist. */
-    list_add(&op->list, &conn->free_ops);
+    /* Put op at the back of the freelist. */
+    list_add_tail(&op->list, &conn->free_ops);
 
     spin_unlock(&conn->response_lock);
 
