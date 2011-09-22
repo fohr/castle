@@ -235,7 +235,7 @@ tree_seq_t castle_da_next_ct_seq(void);
 /* Utils */
 
 /**
- * Compare compoenent trees based on their data age. (this is similar to seq_no - smaller the number
+ * Compare component trees based on their data age. (this is similar to seq_no - smaller the number
  * older the tree is).
  *
  * FIMXE: Probably should change the name of data_age.
@@ -248,8 +248,8 @@ tree_seq_t castle_da_next_ct_seq(void);
  * For merging trees - output tree should come after all input trees. We took this approach as output
  * of level1 goes to level2 etc..
  */
-static inline int castle_da_ct_compare(struct castle_component_tree *ct1,
-                                       struct castle_component_tree *ct2)
+static int castle_da_ct_compare(struct castle_component_tree *ct1,
+                                struct castle_component_tree *ct2)
 {
     int ret = (int)(ct1->data_age - ct2->data_age);
 
@@ -3455,12 +3455,12 @@ static inline void castle_da_merge_node_info_get(struct castle_da_merge *merge,
  * the key gets added.  Used when entry is being moved from one node to another
  * node.
  */
-static inline c_val_tup_t* _castle_da_entry_add(struct castle_da_merge *merge,
-                                                int depth,
-                                                void *key,
-                                                c_ver_t version,
-                                                c_val_tup_t cvt,
-                                                int is_re_add)
+static c_val_tup_t* _castle_da_entry_add(struct castle_da_merge *merge,
+                                         int depth,
+                                         void *key,
+                                         c_ver_t version,
+                                         c_val_tup_t cvt,
+                                         int is_re_add)
 {
     struct castle_da_merge_level *level = merge->levels + depth;
     struct castle_btree_type *btree = merge->out_btree;
@@ -3688,12 +3688,12 @@ static inline c_val_tup_t* _castle_da_entry_add(struct castle_da_merge *merge,
 }
 
 /* wrapper around the real castle_da_entry_add; this performs orphan node preadoption iteratively */
-static inline void castle_da_entry_add(struct castle_da_merge *merge,
-                                       int depth,
-                                       void *key,
-                                       c_ver_t version,
-                                       c_val_tup_t cvt,
-                                       int is_re_add)
+static void castle_da_entry_add(struct castle_da_merge *merge,
+                                int depth,
+                                void *key,
+                                c_ver_t version,
+                                c_val_tup_t cvt,
+                                int is_re_add)
 {
     c_val_tup_t* preadoption_cvt = NULL;
     int initial_root_depth = merge->root_depth;
@@ -3897,7 +3897,7 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
 #endif
 }
 
-static inline int castle_da_nodes_complete(struct castle_da_merge *merge)
+static int castle_da_nodes_complete(struct castle_da_merge *merge)
 {
     struct castle_da_merge_level *level;
     int i;
@@ -8850,7 +8850,7 @@ static void castle_da_queue_kick(struct work_struct *work)
  *
  * @return  Bytes required to duplicate all partition keys.
  */
-static inline size_t castle_da_cts_proxy_keys_size(struct castle_double_array *da)
+static size_t castle_da_cts_proxy_keys_size(struct castle_double_array *da)
 {
     struct castle_da_merge *last_merge;
     int i, keys;
