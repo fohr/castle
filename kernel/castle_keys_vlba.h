@@ -20,7 +20,7 @@ c_vl_bkey_t *castle_object_btree_key_skip        (const c_vl_bkey_t *old_key,
                                                   const c_vl_bkey_t *start,
                                                   int                offending_dim,
                                                   int                out_of_range);
-void         castle_object_bkey_free             (c_vl_bkey_t       *bkey);
+void         castle_object_btree_key_free        (c_vl_bkey_t       *bkey);
 
 /*
  * The special values used for the length field of struct vlba_key / struct

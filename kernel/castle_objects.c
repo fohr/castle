@@ -51,7 +51,7 @@ static void castle_objects_rq_iter_next(castle_object_iterator_t *iter,
 static void castle_objects_rq_iter_next_key_free(castle_object_iterator_t *iter)
 {
     if(iter->last_next_key)
-        castle_object_bkey_free(iter->last_next_key);
+        castle_object_btree_key_free(iter->last_next_key);
     iter->last_next_key = NULL;
 }
 

@@ -372,7 +372,7 @@ static void castle_vlba_tree_key_dealloc(void *keyv)
                  (key == &VLBA_TREE_MAX_KEY)));
         return;
     }
-    castle_object_bkey_free(keyv);
+    castle_object_btree_key_free(keyv);
 }
 
 static uint32_t castle_vlba_tree_key_hash(void *keyv, uint32_t seed) {
