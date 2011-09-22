@@ -17,7 +17,6 @@
 #include "castle_public.h"
 #include "castle_defines.h"
 #include "castle.h"
-#include "castle_keys_vlba.h"
 #include "castle_objects.h"
 #include "castle_cache.h"
 #include "castle_da.h"
@@ -995,19 +994,20 @@ static int castle_back_key_copy_get(struct castle_back_conn *conn, c_vl_bkey_t *
         goto err1;
     }
 
-    bkey = castle_back_user_to_kernel(buf, user_key);
+    bkey = castle_dup_or_copy(castle_back_user_to_kernel(buf, user_key), key_len, NULL, NULL);
+
     if (key_len != (bkey->length + 4))
     {
         error("Buffer length(%u) doesnt match with key length(%u)\n", key_len, bkey->length+4);
         err = -EINVAL;
-        goto err1;
+        goto err2;
     }
 
     if (*((uint64_t *)bkey->_unused) != 0)
     {
         error("Unused bits need to be set to 0\n");
         err = -EINVAL;
-        goto err1;
+        goto err2;
     }
 
     /* Check if the key length is smaller than space needed for all dim_heads. */
@@ -1015,14 +1015,14 @@ static int castle_back_key_copy_get(struct castle_back_conn *conn, c_vl_bkey_t *
     {
         error("Too many dimensions %d\n", bkey->nr_dims);
         err = -EINVAL;
-        goto err1;
+        goto err2;
     }
 
     if (bkey->nr_dims == 0)
     {
         error("Zero-dimensional key\n");
         err = -EINVAL;
-        goto err1;
+        goto err2;
     }
 
     debug("Original key pointer %p\n", user_key);
@@ -1039,7 +1039,7 @@ static int castle_back_key_copy_get(struct castle_back_conn *conn, c_vl_bkey_t *
         {
             error("Found flags other than INFINITY %u\n", dim_flags);
             err = -EINVAL;
-            goto err1;
+            goto err2;
         }
 
         /* Only one kind of infinity is possible. */
@@ -1048,7 +1048,7 @@ static int castle_back_key_copy_get(struct castle_back_conn *conn, c_vl_bkey_t *
         {
             error("Found both PLUS_INFINITY and MINUS_INFINITY for the same dimension.\n");
             err = -EINVAL;
-            goto err1;
+            goto err2;
         }
 
         /* Length should be zero, if the dimension is infinity. */
@@ -1056,7 +1056,7 @@ static int castle_back_key_copy_get(struct castle_back_conn *conn, c_vl_bkey_t *
         {
             error("Found mis-match for INFINITY flags and dimension length.\n");
             err = -EINVAL;
-            goto err1;
+            goto err2;
         }
 
         /* Dimension payload shouldn't cross key boundaries. */
@@ -1065,20 +1065,21 @@ static int castle_back_key_copy_get(struct castle_back_conn *conn, c_vl_bkey_t *
             error("Dimension payload going beyond the key boundaries [%p, %u] - [%p, %u]\n",
                   dim_data, dim_len, bkey, key_len);
             err = -EINVAL;
-            goto err1;
+            goto err2;
         }
     }
 
-    *key_out = castle_object_btree_key_copy(bkey, NULL, NULL);
+    *key_out = bkey;
 
     castle_back_buffer_put(conn, buf);
 
 #ifdef DEBUG
-    vl_okey_print(okey);
+    vl_bkey_print(LOG_DEBUG, bkey);
 #endif
 
     return 0;
 
+err2: castle_free(bkey);
 err1: castle_back_buffer_put(conn, buf);
 err0: return err;
 }
@@ -1092,26 +1093,16 @@ static void castle_back_key_kernel_to_user(c_vl_bkey_t                 *kernel_k
                                            uint32_t                     buf_len,
                                            uint32_t                    *buf_used)
 {
-    c_vl_bkey_t *bkey;
-    size_t blen;
+    size_t blen = buf_len;
 
 #ifdef DEBUG
     debug("castle_back_key_kernel_to_user copying key:\n");
-    vl_okey_print(LOG_DEBUG, key);
+    vl_bkey_print(LOG_DEBUG, kernel_key);
     debug("user_buf = %p\n", (void *)user_buf);
 #endif
 
-    bkey = (c_vl_bkey_t *)castle_back_user_to_kernel(buf, user_buf);
-    blen = buf_len;
-    if (!castle_object_btree_key_copy(kernel_key, bkey, &blen))
-    {
-        *buf_used = 0;
-        return;
-    }
-
-    *buf_used = bkey->length + 4;
-
-    return;
+    *buf_used = castle_dup_or_copy(kernel_key, kernel_key->length + 4,
+                                   castle_back_user_to_kernel(buf, user_buf), &blen) ? blen : 0;
 }
 
 /**
@@ -1201,7 +1192,7 @@ static void castle_back_replace_complete(struct castle_object_replace *replace, 
         atomic64_add(op->replace.value_len, &op->attachment->put.bytes);
     }
 
-    castle_object_bkey_free(replace->key);
+    castle_free(replace->key);
 
     castle_attachment_put(op->attachment);
 
@@ -1303,7 +1294,7 @@ static void castle_back_replace(void *data)
     return;
 
 err3: if (op->buf) castle_back_buffer_put(conn, op->buf);
-err2: castle_object_bkey_free(key);
+err2: castle_free(key);
 err1: castle_attachment_put(op->attachment);
 err0: castle_back_reply(op, err, 0, 0);
 }
@@ -1373,7 +1364,7 @@ static void castle_back_counter_replace(void *data)
     return;
 
 err3: if (op->buf) castle_back_buffer_put(conn, op->buf);
-err2: castle_object_bkey_free(key);
+err2: castle_free(key);
 err1: castle_attachment_put(op->attachment);
 err0: castle_back_reply(op, err, 0, 0);
 }
@@ -1391,7 +1382,7 @@ static void castle_back_remove_complete(struct castle_object_replace *replace, i
         /* Replacing with Tomb Stone. Dont increment bytes. */
     }
 
-    castle_object_bkey_free(replace->key);
+    castle_free(replace->key);
 
     castle_attachment_put(op->attachment);
 
@@ -1438,7 +1429,7 @@ static void castle_back_remove(void *data)
 
     return;
 
-err2: castle_object_bkey_free(key);
+err2: castle_free(key);
 err1: castle_attachment_put(op->attachment);
 err0: castle_back_reply(op, err, 0, 0);
 }
@@ -1484,7 +1475,7 @@ int castle_back_get_reply_continue(struct castle_object_get *get,
             atomic64_add(op->req.get.value_len, &op->attachment->get.bytes);
         }
 
-        castle_object_bkey_free(get->key);
+        castle_free(get->key);
         castle_attachment_put(op->attachment);
         castle_back_reply(op, 0, 0, op->value_length);
     }
@@ -1526,7 +1517,7 @@ int castle_back_get_reply_start(struct castle_object_get *get,
                                           buffer_length == data_length);
 
 err:
-    castle_object_bkey_free(get->key);
+    castle_free(get->key);
     castle_back_buffer_put(op->conn, op->buf);
     castle_attachment_put(op->attachment);
     castle_back_reply(op, err_prime, 0, 0);
@@ -1588,7 +1579,7 @@ static void castle_back_get(void *data)
     return;
 
 err3: castle_back_buffer_put(conn, op->buf);
-err2: castle_object_bkey_free(key);
+err2: castle_free(key);
 err1: castle_attachment_put(op->attachment);
 err0: castle_back_reply(op, err, 0, 0);
 }
@@ -1904,8 +1895,8 @@ static void castle_back_iter_start(void *data)
 
     return;
 
-err4: castle_object_bkey_free(end_key);
-err3: castle_object_bkey_free(start_key);
+err4: castle_free(end_key);
+err3: castle_free(start_key);
 err2: castle_attachment_put(attachment);
       stateful_op->attachment = NULL;
 err1: /* No one could have added another op to queue as we haven't returns token yet */
@@ -2072,7 +2063,7 @@ static int castle_back_iter_next_callback(struct castle_object_iterator *iterato
         stateful_op->iterator.kv_list_tail->next = (struct castle_key_value_list *)
                                                                     op->buf->user_addr;
 
-        stateful_op->iterator.saved_key = castle_object_btree_key_copy(key, NULL, NULL);
+        stateful_op->iterator.saved_key = castle_dup_or_copy(key, key->length + 4, NULL, NULL);
         if (!stateful_op->iterator.saved_key)
         {
             err = -ENOMEM;
@@ -2177,7 +2168,7 @@ static void __castle_back_iter_next(void *data)
             goto err0;
         }
 
-        castle_object_bkey_free(stateful_op->iterator.saved_key);
+        castle_free(stateful_op->iterator.saved_key);
         /* we copied it so free it */
         CVT_INLINE_FREE(stateful_op->iterator.saved_val);
 
@@ -2296,12 +2287,12 @@ static void castle_back_iter_cleanup(struct castle_back_stateful_op *stateful_op
 
     if (stateful_op->iterator.saved_key != NULL)
     {
-        castle_object_bkey_free(stateful_op->iterator.saved_key);
+        castle_free(stateful_op->iterator.saved_key);
         CVT_INLINE_FREE(stateful_op->iterator.saved_val);
     }
 
-    castle_object_bkey_free(stateful_op->iterator.start_key);
-    castle_object_bkey_free(stateful_op->iterator.end_key);
+    castle_free(stateful_op->iterator.start_key);
+    castle_free(stateful_op->iterator.end_key);
     attachment = stateful_op->attachment;
     stateful_op->attachment = NULL;
 
@@ -2418,7 +2409,7 @@ static void castle_back_big_put_expire(struct castle_back_stateful_op *stateful_
     BUG_ON(stateful_op->curr_op != NULL);
 
     castle_object_replace_cancel(&stateful_op->replace);
-    castle_object_bkey_free(stateful_op->replace.key);
+    castle_free(stateful_op->replace.key);
 
     spin_lock(&stateful_op->lock);
     attachment = stateful_op->attachment;
@@ -2509,7 +2500,7 @@ static void castle_back_big_put_complete(struct castle_object_replace *replace, 
 
     /* Will drop stateful_op->lock. */
     castle_back_put_stateful_op(stateful_op->conn, stateful_op);
-    castle_object_bkey_free(key);
+    castle_free(key);
 
     castle_attachment_put(attachment);
 }
@@ -2686,7 +2677,7 @@ static void castle_back_big_put(void *data)
 
     return;
 
-err3: castle_object_bkey_free(key);
+err3: castle_free(key);
 err2: castle_attachment_put(attachment);
       stateful_op->attachment = NULL;
 err1: /* Safe as no-one could have queued up an op - we have not returned token */
@@ -2793,7 +2784,7 @@ static void castle_back_big_get_expire(struct castle_back_stateful_op *stateful_
 
     castle_object_pull_finish(&stateful_op->pull);
 
-    castle_object_bkey_free(stateful_op->pull.key);
+    castle_free(stateful_op->pull.key);
     stateful_op->pull.key = NULL;
 
     spin_lock(&stateful_op->lock);
@@ -2877,7 +2868,7 @@ static void castle_back_big_get_continue(struct castle_object_pull *pull,
             atomic64_add(stateful_op->pull.cvt.length, &attachment->big_get.bytes);
         }
 
-        castle_object_bkey_free(pull->key);
+        castle_free(pull->key);
 
         spin_lock(&stateful_op->lock);
 
@@ -2976,7 +2967,7 @@ static void castle_back_big_get(void *data)
 
     return;
 
-err3: castle_object_bkey_free(key);
+err3: castle_free(key);
 err2: castle_attachment_put(attachment);
       stateful_op->attachment = NULL;
 err1: /* Safe as no one will have queued up a op - we haven't returned token yet */
@@ -3259,7 +3250,7 @@ static void castle_back_request_process(struct castle_back_conn *conn, struct ca
     if (key != NULL)
     {
         op->cpu_index = castle_double_array_key_cpu_index(key, key_len);
-        castle_object_bkey_free(key);
+        castle_free(key);
     }
 
     /* Get CPU and queue work. */
