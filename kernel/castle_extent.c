@@ -3257,7 +3257,7 @@ static void castle_extents_process_state_init(void)
             /* For each slave, check if it already exists. */
             for (i=0; i<process_state.nr_live_slaves; i++)
             {
-                if (process_state.live_slaves[i]->uuid == cs->uuid)
+                if (process_state.live_slaves[i] && process_state.live_slaves[i]->uuid == cs->uuid)
                 {
                     slave_exists = 1;
                     break;
