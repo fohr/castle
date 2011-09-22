@@ -234,19 +234,50 @@ tree_seq_t castle_da_next_ct_seq(void);
 /* Utils */
 
 /**
- * Compare two component trees sequence numbers and decide which one is older.
+ * Compare compoenent trees based on their data age. (this is similar to seq_no - smaller the number
+ * older the tree is).
  *
- * < 0 - ct1 is older.
- * = 0 - Same age (impossible for 2 different trees).
- * > 0 - ct2 is older.
+ * FIMXE: Probably should change the name of data_age.
+ *
+ * if the age of two trees equal (can happen only for trees that are being merged or T0s.)
+ *
+ * For T0s:
+ *      Compare two component trees sequence numbers and decide which one is older.
+ *
+ * For merging trees - output tree should come after all input trees. We took this approach as output
+ * of level1 goes to level2 etc..
  */
 static inline int castle_da_ct_compare(struct castle_component_tree *ct1,
                                        struct castle_component_tree *ct2)
 {
     int ret = (int)(ct1->data_age - ct2->data_age);
 
+    /* Age of two trees could be equal only if they are T0s or if they are participating in a
+     * merge. */
     if (ret == 0)
-        return (int)(ct1->seq - ct2->seq);
+    {
+        /* If they are T0, compare based on seq_id. */
+        if (ct1->level == 0)
+            return (int)(ct1->seq - ct2->seq);
+
+        /* If not, one of them should be output of the merge and other should be input of same
+         * merge. */
+        BUG_ON(ct1->merge != ct2->merge);
+
+        /* Treat output tree as the latest. We want it to be added before all input trees. */
+        if (test_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &ct1->flags))
+        {
+            BUG_ON(!test_bit(CASTLE_CT_MERGE_INPUT_BIT, &ct2->flags));
+            return -1;
+        }
+        else if (test_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &ct2->flags))
+        {
+            BUG_ON(!test_bit(CASTLE_CT_MERGE_INPUT_BIT, &ct1->flags));
+            return 1;
+        }
+        else
+            BUG();
+    }
 
     return ret;
 }
@@ -2333,11 +2364,16 @@ static int castle_da_merge_cts_get(struct castle_double_array *da,
         struct castle_component_tree *ct =
                             list_entry(l, struct castle_component_tree, da_list);
 
+        BUG_ON(test_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &ct->flags));
+
         if(!cts[1])
             cts[1] = ct;
         else
         if(!cts[0])
+        {
             cts[0] = ct;
+            break;
+        }
     }
     read_unlock(&da->lock);
 
@@ -4445,6 +4481,11 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
         {
             /* Remove output tree from sysfs. */
             castle_sysfs_ct_del(merge->out_tree);
+            CASTLE_TRANSACTION_BEGIN;
+            write_lock(&merge->da->lock);
+            castle_component_tree_del(merge->da, merge->out_tree);
+            write_unlock(&merge->da->lock);
+            CASTLE_TRANSACTION_END;
 
             /* Abort (i.e. free) incomplete bloom filter */
             if (merge->out_tree->bloom_exists)
@@ -4633,7 +4674,8 @@ static void castle_da_counter_delete(struct castle_da_merge *merge,
 */
 static void castle_da_merge_new_partition_activate(struct castle_da_merge *merge)
 {
-    static int i = 0;
+    int i;
+
     BUG_ON(!merge);
     if(!merge->new_redirection_partition.key)
         return;
@@ -4654,6 +4696,12 @@ static void castle_da_merge_new_partition_activate(struct castle_da_merge *merge
         BUG_ON(merge->redirection_partition.key);
         merge->queriable_out_tree = merge->out_tree;
         atomic_inc(&merge->da->queriable_merge_trees_cnt);
+
+        /* Mark all input/outtrees as partial trees. */
+        BUG_ON(test_and_set_bit(CASTLE_CT_PARTIAL_TREE_BIT, &merge->out_tree->flags));
+        for (i=0; i<merge->nr_trees; i++)
+            BUG_ON(test_and_set_bit(CASTLE_CT_PARTIAL_TREE_BIT, &merge->in_trees[i]->flags));
+
         castle_printk(LOG_DEBUG, "%s::[da %d level %d] making output tree %p queriable;"
                 " now there are %d queriable trees on this DA.\n",
                 __FUNCTION__, merge->da->id, merge->level,
@@ -4944,8 +4992,7 @@ static tree_seq_t castle_da_merge_last_unit_complete(struct castle_double_array 
                                                      struct castle_da_merge *merge)
 {
     struct castle_component_tree *out_tree;
-    struct list_head *head = NULL;
-    tree_seq_t out_tree_id, out_tree_data_age = 0;
+    tree_seq_t out_tree_id;
     int i;
 
     out_tree = castle_da_merge_complete(merge);
@@ -4974,37 +5021,34 @@ static tree_seq_t castle_da_merge_last_unit_complete(struct castle_double_array 
      */
     FOR_EACH_MERGE_TREE(i, merge)
     {
-        if (merge->in_trees[i]->data_age > out_tree_data_age)
-            out_tree_data_age = merge->in_trees[i]->data_age;
-
         BUG_ON(merge->da->id != merge->in_trees[i]->da);
         castle_component_tree_del(merge->da, merge->in_trees[i]);
     }
 
-    out_tree->data_age = out_tree_data_age;
-
     BUG_ON(!castle_golden_nugget && (out_tree->level != level + 1));
     BUG_ON(castle_golden_nugget && (out_tree->level != 2));
 
-    if (merge->nr_entries)
-        castle_component_tree_add(merge->da, out_tree, head);
-    else
+    if (!merge->nr_entries)
+    {
+        castle_component_tree_del(merge->da, out_tree);
         BUG_ON(merge->queriable_out_tree);
+    }
 
     /* FIXME: Change this structure with other elements of partial merges. */
     if (merge->queriable_out_tree)
         atomic_dec(&merge->da->queriable_merge_trees_cnt);
 
+    out_tree->merge     = NULL;
+    out_tree->merge_id  = INVAL_MERGE_ID;
+    clear_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &out_tree->flags);
+    clear_bit(CASTLE_CT_PARTIAL_TREE_BIT, &out_tree->flags);
+    da->levels[out_tree->level].nr_output_trees--;
+
     /* Release the lock. */
     write_unlock(&da->lock);
 
-    if (merge->nr_entries)
-    {
-        out_tree->merge = NULL;
-        clear_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &out_tree->flags);
-        if (merge->level == 1)
-            castle_events_new_tree_added(out_tree->seq, out_tree->da);
-    }
+    if (merge->nr_entries && merge->level == 1)
+        castle_events_new_tree_added(out_tree->seq, out_tree->da);
 
     castle_da_merge_restart(da, NULL);
 
@@ -5036,7 +5080,8 @@ static int castle_da_merge_init(struct castle_da_merge *merge, void *unused)
     int nr_trees = merge->nr_trees;
     struct castle_component_tree **in_trees = merge->in_trees;
     int i, ret;
-    int new_out_tree = 0;
+    tree_seq_t out_tree_data_age;
+
 
     debug("%s::Merging ct=%d (dynamic=%d) with ct=%d (dynamic=%d)\n",
             __FUNCTION__,
@@ -5060,37 +5105,32 @@ static int castle_da_merge_init(struct castle_da_merge *merge, void *unused)
     /* Deserialise ongoing merge state */
     /* only reason a lock might be needed here would be if we were racing with double_array_read,
        which should never happen */
-    if(merge->serdes.des){
+    if (merge->serdes.des)
+    {
         castle_printk(LOG_DEBUG, "%s::found serialised merge in da %d level %d, attempting des\n",
                 __FUNCTION__, da->id, level);
         castle_da_merge_des_check(merge, da, level, nr_trees, in_trees);
         merge->out_tree = merge->serdes.out_tree;
         castle_da_merge_deserialise(merge, da, level);
+
+        goto deser_done;
     }
 
+    merge->out_tree = castle_ct_alloc(da, (castle_golden_nugget)? 2: level+1, INVAL_TREE);
     if(!merge->out_tree)
-    {
-        tree_seq_t ct_seq = INVAL_TREE;
+        goto error_out;
+    BUG_ON(TREE_INVAL(merge->out_tree->seq));
+    BUG_ON(TREE_GLOBAL(merge->out_tree->seq));
+    merge->out_tree->internal_ext_free.ext_id = INVAL_EXT_ID;
+    merge->out_tree->tree_ext_free.ext_id = INVAL_EXT_ID;
+    merge->out_tree->data_ext_free.ext_id = INVAL_EXT_ID;
+    INIT_LIST_HEAD(&merge->out_tree->large_objs);
 
-        /* we cannot tolerate failure to recover an in-progress output ct if this is a
-           deserialising merge */
-        BUG_ON(merge->serdes.des);
+    ret = castle_da_merge_extents_alloc(merge);
+    if(ret)
+        goto error_out;
 
-        merge->out_tree = castle_ct_alloc(da, (castle_golden_nugget)? 2: level+1, ct_seq);
-        if(!merge->out_tree)
-            goto error_out;
-        BUG_ON(TREE_INVAL(merge->out_tree->seq));
-        BUG_ON(TREE_GLOBAL(merge->out_tree->seq));
-        merge->out_tree->internal_ext_free.ext_id = INVAL_EXT_ID;
-        merge->out_tree->tree_ext_free.ext_id = INVAL_EXT_ID;
-        merge->out_tree->data_ext_free.ext_id = INVAL_EXT_ID;
-        INIT_LIST_HEAD(&merge->out_tree->large_objs);
-
-        new_out_tree = 1;
-    }
-
-    merge->out_tree->merge = merge;
-    BUG_ON(test_and_set_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &merge->out_tree->flags));
+deser_done:
 
     /* Iterators */
     ret = castle_da_iterators_create(merge); /* built-in handling of deserialisation, triggered by
@@ -5098,36 +5138,51 @@ static int castle_da_merge_init(struct castle_da_merge *merge, void *unused)
     if(ret)
         goto error_out;
 
-    if(!merge->serdes.des)
+    if (!merge->serdes.des) CASTLE_TRANSACTION_BEGIN;
+
+    /* This is very importnat to be write locked, as the requests need to see consistent view
+     * mergable state of DA. */
+    write_lock(&da->lock);
+
+    out_tree_data_age = in_trees[0]->data_age;
+    /* Attach all input trees to this merge.  */
+    FOR_EACH_MERGE_TREE(i, merge)
     {
-        ret = castle_da_merge_extents_alloc(merge);
-        if(ret)
-            goto error_out;
+        if (in_trees[i]->data_age < out_tree_data_age)
+            out_tree_data_age = in_trees[i]->data_age;
+
+        /* If this merge trying to finish the left-over, it should have already set proper bits. */
+        BUG_ON(test_and_set_bit(CASTLE_CT_MERGE_INPUT_BIT, &in_trees[i]->flags));
+
+        in_trees[i]->merge = merge;
+        in_trees[i]->merge_id = merge->id;
     }
 
-    if(merge->serdes.des)
-    {
-#ifdef DEBUG_MERGE_SERDES
-        merge->serdes.merge_completed=0;
-#endif
-        merge->serdes.des=0;
-        castle_printk(LOG_INIT, "%s::Resuming merge on da %d level %d.\n", __FUNCTION__, da->id, level);
-    }
+    /* Attach the output tree to the merge and mark as output tree. */
+    merge->out_tree->merge      = merge;
+    merge->out_tree->merge_id   = merge->id;
+    merge->out_tree->data_age   = out_tree_data_age;
+
+    /* Add the output tree to the DA list. */
+    BUG_ON(test_and_set_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &merge->out_tree->flags));
+    castle_component_tree_add(merge->da, merge->out_tree, NULL);
+    da->levels[merge->out_tree->level].nr_output_trees++;
+
+    write_unlock(&da->lock);
+
+    if (!merge->serdes.des) CASTLE_TRANSACTION_END;
 
     castle_sysfs_ct_add(merge->out_tree);
     if (castle_golden_nugget && merge->level != 1)
         BUG_ON(castle_sysfs_merge_add(merge));
 
-    if (new_out_tree && merge->level == 2)
+    if (!merge->serdes.des && merge->level == 2)
         castle_events_new_tree_added(merge->out_tree->seq, merge->out_tree->da);
 
-    write_lock(&da->lock);
-    FOR_EACH_MERGE_TREE(i, merge)
-    {
-        in_trees[i]->merge = merge;
-        in_trees[i]->merge_id = merge->id;
-    }
-    write_unlock(&da->lock);
+#ifdef DEBUG_MERGE_SERDES
+    merge->serdes.merge_completed=0;
+#endif
+    merge->serdes.des=0;
 
     return 0;
 
@@ -6343,7 +6398,7 @@ static int castle_da_merge_trigger(struct castle_double_array *da, int level)
     if (castle_golden_nugget && level != 1)
         goto out;
 
-    if (da->levels[level].nr_trees < 2)
+    if ((da->levels[level].nr_trees - da->levels[level].nr_output_trees) < 2)
         goto out;
 
     atomic_inc(&da->ongoing_merges);
@@ -6809,6 +6864,7 @@ static struct castle_double_array* castle_da_alloc(c_da_t da_id)
         /* Initialise merge serdes */
         INIT_LIST_HEAD(&da->levels[i].trees);
         da->levels[i].nr_trees             = 0;
+        da->levels[i].nr_output_trees      = 0;
         da->levels[i].merge.thread         = NULL;
     }
 
@@ -7308,6 +7364,7 @@ static c_da_t castle_da_ct_unmarshall(struct castle_component_tree *ct,
     printk("%s::seq %d\n", __FUNCTION__, ctm->seq);
 
     ct->seq                 = ctm->seq;
+    ct->flags               = 0;
     ct->data_age            = ctm->data_age;
     atomic_set(&ct->ref_count, 1);
     atomic_set(&ct->write_ref_count, 0);
@@ -7445,6 +7502,9 @@ static int castle_da_ct_dealloc(struct castle_double_array *da,
                                 struct castle_component_tree *ct,
                                 int level_cnt)
 {
+    if (test_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &ct->flags))
+        return 0;
+
     castle_ct_hash_destroy_check(ct, (void*)0UL);
 
     castle_sysfs_ct_del(ct);
@@ -7517,6 +7577,11 @@ static int castle_da_tree_writeback(struct castle_double_array *da,
     struct castle_clist_entry mstore_entry;
     struct list_head *lh, *tmp;
     int being_written;
+
+    /* Partial merge output tree is being cehckpointed using merge serialisation. */
+    /* FIXME: Move that to here. */
+    if (test_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &ct->flags))
+        return 0;
 
     /* Always writeback Global tree structure but, don't writeback. */
     /* Note: Global Tree is not Crash-Consistent. */
@@ -8155,8 +8220,7 @@ int castle_double_array_read(void)
                 castle_btree_type_get(mstore_dmserentry->out_tree.btree_type);
 
             /* output tree pointer */
-            merge->queriable_out_tree =
-                merge->serdes.out_tree;
+            merge->queriable_out_tree = merge->serdes.out_tree;
             atomic_inc(&des_da->queriable_merge_trees_cnt);
 
             /* recover c2b containing partition key */
@@ -9754,6 +9818,10 @@ void castle_da_destroy_complete(struct castle_double_array *da)
 
             ct = list_entry(l, struct castle_component_tree, da_list);
 
+            /* Output trees would get destroyed during merge_dealloc. */
+            if (test_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &ct->flags))
+                continue;
+
             merge = castle_merges_hash_get(ct->merge_id);
             if (merge)
             {
@@ -10426,6 +10494,7 @@ int castle_da_vertree_compact(c_da_t da_id)
             struct castle_component_tree *ct = list_entry(pos, struct castle_component_tree, da_list);
 
             BUG_ON(ct->merge);
+            BUG_ON(test_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &ct->flags));
 
             list_del(&ct->da_list);
             list_add_tail(&ct->da_list, &da->levels[2].trees);

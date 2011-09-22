@@ -942,6 +942,8 @@ struct castle_bbp_entry
 #define CASTLE_CT_NEW_TREE_BIT          1   /* CT is not yet committed to disk.                 */
 #define CASTLE_CT_BLOOM_EXISTS_BIT      2   /* CT has bloom filter.                             */
 #define CASTLE_CT_MERGE_OUTPUT_BIT      3   /* CT is being created by a merge.                  */
+#define CASTLE_CT_MERGE_INPUT_BIT       4   /* CT is being merged.                              */
+#define CASTLE_CT_PARTIAL_TREE_BIT      5   /* CT tree is partial could be intree/outree.       */
 
 struct castle_component_tree {
     tree_seq_t          seq;               /**< Unique ID identifying this tree.                */
@@ -1030,7 +1032,7 @@ struct castle_clist_entry {
     /*        269 */ uint8_t         bloom_num_hashes;
     /*        270 */ uint16_t        node_sizes[MAX_BTREE_DEPTH];
     /*        290 */ tree_seq_t      data_age;
-    /*        294 */ uint8_t         _unused[218];
+    /*        394 */ uint8_t         _unused[218];
     /*        512 */
 } PACKED;
 
@@ -2067,7 +2069,8 @@ struct castle_double_array {
          complete enough to be queried. This count is helpful for query init.                   */
     atomic_t                    queriable_merge_trees_cnt;
     struct {
-        int                     nr_trees;           /**< Number of CTs at level                 */
+        int                     nr_trees;           /**< Number of queriable CTs at level.      */
+        int                     nr_output_trees;    /**< Number of output trees at level.       */
         struct list_head        trees;              /**< List of (nr_trees) at level            */
         /* Merge related variables. */
         struct {
