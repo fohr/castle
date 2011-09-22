@@ -226,25 +226,7 @@ static void castle_object_btree_key_dim_inc(c_vl_bkey_t *key, int dim)
 c_vl_bkey_t *castle_object_btree_key_copy(const c_vl_bkey_t *src,
                                           c_vl_bkey_t *dst, size_t *dst_len)
 {
-    size_t src_len;
-
-    if (!src)
-        return NULL;
-    src_len = src->length + 4;
-
-    if (!dst)
-    {
-        dst = castle_alloc(src_len);
-        if (!dst)
-            return NULL;
-    }
-    else if (!dst_len || *dst_len < src_len)
-        return NULL;
-    else
-        *dst_len = src_len;
-
-    memcpy(dst, src, src_len);
-    return dst;
+    return castle_dup_or_copy(src, src->length + sizeof src->length, dst, dst_len);
 }
 
 c_vl_bkey_t *castle_object_btree_key_next(const c_vl_bkey_t *src,

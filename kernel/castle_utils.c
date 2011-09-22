@@ -70,6 +70,39 @@ void castle_free_func(void *ptr)
         kfree(ptr);
 }
 
+/**
+ * Copy a buffer, either to a freshly allocated buffer, or to one supplied by the caller.
+ * @param src       the source buffer
+ * @param src_len   the length of the source buffer
+ * @param dst       the destination buffer, or NULL if one is not provided
+ * @param dst_len   the available space in the destination buffer (ignored if dst is NULL)
+ * @return          the destination buffer
+ *
+ * If dst is NULL, then src is copied to a freshly allocated buffer of size src_len, which
+ * is returned to the caller. dst_len is completely ignored in this case.
+ *
+ * On the other hand, if dst is non-NULL, then dst_len must also be non-NULL and contain
+ * the available space inside dst. If there is enough space the copy is performed, dst_len
+ * is updated with the number of bytes copied, and dst is returned. Otherwise NULL is
+ * returned, and dst_len is not modified.
+ */
+void *castle_dup_or_copy(const void *src, size_t src_len, void *dst, size_t *dst_len)
+{
+    if (!dst)
+    {
+        dst = castle_alloc(src_len);
+        if (!dst)
+            return NULL;
+    }
+    else if (!dst_len || *dst_len < src_len)
+        return NULL;
+    else
+        *dst_len = src_len;
+
+    memcpy(dst, src, src_len);
+    return dst;
+}
+
 /*****
  * castle_printk()
  ****/

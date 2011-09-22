@@ -299,8 +299,8 @@ static size_t castle_vlba_tree_key_size(const void *keyv)
 {
     const vlba_key_t *key = keyv;
     if (unlikely(VLBA_TREE_KEY_MAX(key) || VLBA_TREE_KEY_INVAL(key)))
-        return 4;
-    return key->length + 4;
+        return sizeof key->length;
+    return key->length + sizeof key->length;
 }
 
 static void *castle_vlba_tree_key_next(const void *src, void *dst, size_t *dst_len)
@@ -314,15 +314,9 @@ static void *castle_vlba_tree_key_next(const void *src, void *dst, size_t *dst_l
     if(VLBA_TREE_KEY_MAX(key))
     {
         iter_debug("making INVAL_KEY\n");
-        if (dst)
-        {
-            if (!dst_len || *dst_len < sizeof(vlba_key_t))
-                return NULL;
-            memcpy(dst, &VLBA_TREE_INVAL_KEY, sizeof(vlba_key_t));
-            *dst_len = sizeof(vlba_key_t);
-            return dst;
-        }
-        else return (void *) &VLBA_TREE_INVAL_KEY;
+        return dst ?
+            castle_dup_or_copy(&VLBA_TREE_INVAL_KEY, sizeof VLBA_TREE_INVAL_KEY, dst, dst_len) :
+            (void *) &VLBA_TREE_INVAL_KEY;
     }
 
     return castle_object_btree_key_next(src, dst, dst_len);
@@ -345,15 +339,9 @@ static void *castle_vlba_tree_key_copy(const void *src, void *dst, size_t *dst_l
 
     /* ... unless we're explicitly given a buffer to copy them to */
     else if (VLBA_TREE_KEY_INVAL(key) || VLBA_TREE_KEY_MIN(key) || VLBA_TREE_KEY_MAX(key))
-    {
-        if (!dst_len || *dst_len < sizeof(vlba_key_t))
-            return NULL;
-        memcpy(dst, src, sizeof(vlba_key_t));
-        *dst_len = sizeof(vlba_key_t);
-        return dst;
-    }
+        return castle_dup_or_copy(src, sizeof key->length, dst, dst_len);
 
-    return castle_object_btree_key_copy(src, dst, dst_len);
+    return castle_dup_or_copy(src, key->length + sizeof key->length, dst, dst_len);
 }
 
 static void castle_vlba_tree_key_dealloc(void *keyv)
