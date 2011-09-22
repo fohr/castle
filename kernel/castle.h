@@ -856,6 +856,14 @@ struct castle_btree_type {
     int      (*need_split)    (struct castle_btree_node *node,
                                int                       version_or_key);
                               /* 0 - version split, 1 - key split       */
+    void    *(*key_pack)      (const c_vl_bkey_t *src, void *dst, size_t *dst_len);
+                              /* Packs a standard backend key into the
+                                 tree's native key format. Uses its
+                                 arguments exactly like key_copy().     */
+    c_vl_bkey_t *(*key_unpack)(const void *src, c_vl_bkey_t *dst, size_t *dst_len);
+                              /* Unpacks a native key into the standard
+                                 backend format. Uses its arguments
+                                 exactly like key_copy().               */
     int      (*key_compare)   (void *key1, void *key2);
                               /* Returns negative if key1 < key2, zero
                                  if equal, positive otherwise           */

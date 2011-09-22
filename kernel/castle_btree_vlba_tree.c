@@ -341,7 +341,23 @@ static void *castle_vlba_tree_key_copy(const void *src, void *dst, size_t *dst_l
     else if (VLBA_TREE_KEY_INVAL(key) || VLBA_TREE_KEY_MIN(key) || VLBA_TREE_KEY_MAX(key))
         return castle_dup_or_copy(src, sizeof key->length, dst, dst_len);
 
-    return castle_dup_or_copy(src, key->length + sizeof key->length, dst, dst_len);
+    return castle_object_btree_key_copy(src, dst, dst_len);
+}
+
+static void *castle_vlba_tree_key_pack(const c_vl_bkey_t *src, void *dst, size_t *dst_len)
+{
+    return castle_vlba_tree_key_copy(src, dst, dst_len);
+}
+
+static c_vl_bkey_t *castle_vlba_tree_key_unpack(const void *src, c_vl_bkey_t *dst, size_t *dst_len)
+{
+    const vlba_key_t *key = src;
+
+    /* handle static keys specially */
+    if (VLBA_TREE_KEY_INVAL(key) || VLBA_TREE_KEY_MIN(key) || VLBA_TREE_KEY_MAX(key))
+        return castle_dup_or_copy(src, sizeof key->length, dst, dst_len);
+
+    return castle_object_btree_key_copy(src, dst, dst_len);
 }
 
 static void castle_vlba_tree_key_dealloc(void *keyv)
@@ -775,6 +791,8 @@ struct castle_btree_type castle_vlba_tree = {
     .inv_key        = (void *)&VLBA_TREE_INVAL_KEY,
     .max_entries    = castle_vlba_tree_max_entries,
     .need_split     = castle_vlba_tree_need_split,
+    .key_pack       = castle_vlba_tree_key_pack,
+    .key_unpack     = castle_vlba_tree_key_unpack,
     .key_compare    = castle_vlba_tree_key_compare,
     .key_size       = castle_vlba_tree_key_size,
     .key_copy       = castle_vlba_tree_key_copy,
