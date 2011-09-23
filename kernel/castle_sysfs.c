@@ -269,6 +269,24 @@ static ssize_t da_compacting_show(struct kobject *kobj,
     return sprintf(buf, "%d\n", test_bit(CASTLE_DA_COMPACTING_BIT, &da->flags));
 }
 
+static ssize_t da_io_stats_show(struct kobject *kobj,
+                                struct attribute *attr,
+                                char *buf)
+{
+    struct castle_double_array *da = container_of(kobj, struct castle_double_array, kobj);
+
+    sprintf(buf, "Write Rate: %llu\n", da->write_rate);
+    sprintf(buf + strlen(buf), "Read Rate: %llu\n", da->read_rate);
+    sprintf(buf + strlen(buf), "Sample Delay: %llu\n", da->sample_delay);
+    sprintf(buf + strlen(buf), "Write key bytes: %lu\n", atomic64_read(&da->write_key_bytes));
+    sprintf(buf + strlen(buf), "Write data bytes: %lu\n", atomic64_read(&da->write_data_bytes));
+    sprintf(buf + strlen(buf), "Read key bytes: %lu\n", atomic64_read(&da->read_key_bytes));
+    sprintf(buf + strlen(buf), "Read data bytes: %lu\n", atomic64_read(&da->read_data_bytes));
+    //sprintf(buf + strlen(buf), "Current write rate: %llu\n", da->cur_write_rate);
+
+    return strlen(buf);
+}
+
 static ssize_t da_size_show(struct kobject *kobj,
                             struct attribute *attr,
                             char *buf)
@@ -797,12 +815,16 @@ __ATTR(array_list, S_IRUGO|S_IWUSR, da_array_list_show, NULL);
 static struct castle_sysfs_entry da_compacting =
 __ATTR(compacting, S_IRUGO|S_IWUSR, da_compacting_show, NULL);
 
+static struct castle_sysfs_entry da_io_stats =
+__ATTR(io_stats, S_IRUGO|S_IWUSR, da_io_stats_show, NULL);
+
 static struct attribute *castle_da_attrs[] = {
     &da_version.attr,
     &da_size.attr,
     &da_tree_list.attr,
     &da_array_list.attr,
     &da_compacting.attr,
+    &da_io_stats.attr,
     NULL,
 };
 

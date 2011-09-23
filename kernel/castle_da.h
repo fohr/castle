@@ -228,4 +228,6 @@ int  castle_merge_stop                  (c_merge_id_t merge_id);
 int  castle_merge_thread_attach         (c_merge_id_t merge_id, c_thread_id_t thread_id);
 
 int  castle_da_vertree_compact          (c_da_t da_id);
+int  castle_da_insert_rate_set          (c_da_t da_id, uint32_t insert_rate);
+int  castle_da_read_rate_set            (c_da_t da_id, uint32_t read_rate);
 #endif /* __CASTLE_DA_H__ */

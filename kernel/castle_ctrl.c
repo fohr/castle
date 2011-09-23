@@ -1125,6 +1125,16 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
                             castle_merge_thread_attach(ioctl.merge_thread_attach.merge_id,
                                                        ioctl.merge_thread_attach.thread_id);
             break;
+        case CASTLE_CTRL_INSERT_RATE_SET:
+            ioctl.insert_rate_set.ret =
+                            castle_da_insert_rate_set(ioctl.insert_rate_set.vertree_id,
+                                                      ioctl.insert_rate_set.insert_rate);
+            break;
+        case CASTLE_CTRL_READ_RATE_SET:
+            ioctl.read_rate_set.ret =
+                            castle_da_read_rate_set(ioctl.read_rate_set.vertree_id,
+                                                    ioctl.read_rate_set.read_rate);
+            break;
         default:
             err = -EINVAL;
             goto err;

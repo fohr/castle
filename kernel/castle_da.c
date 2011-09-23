@@ -6500,43 +6500,6 @@ static int castle_da_merge_restart(struct castle_double_array *da, void *unused)
 {
     debug("Restarting merge for DA=%d\n", da->id);
 
-    write_lock(&da->lock);
-
-    if (da->levels[1].nr_trees >= 4 * castle_double_array_request_cpus())
-    {
-#if 0
-        if (da->inserts_enabled)
-        {
-            /* Too many backed-up trees at level 0.  Disable inserts. */
-            castle_printk(LOG_PERF, "Disabling inserts on da=%d.\n", da->id);
-            castle_trace_da(TRACE_START, TRACE_DA_INSERTS_DISABLED_ID, da->id, 0);
-            da->inserts_enabled = 0;
-        }
-#endif
-    }
-    else if (!da->inserts_enabled)
-    {
-        /* Merges have caught up, re-enable inserts. */
-        int i;
-
-        castle_printk(LOG_PERF, "Enabling inserts on da=%d.\n", da->id);
-        castle_trace_da(TRACE_END, TRACE_DA_INSERTS_DISABLED_ID, da->id, 0);
-        da->inserts_enabled = 1;
-
-        /* Schedule drain of pending write IOs now inserts are enabled. */
-        for (i = 0; i < castle_double_array_request_cpus(); i++)
-        {
-            struct castle_da_io_wait_queue *wq;
-
-            wq = &da->ios_waiting[i];
-            /* Want to use this logic from interrupt context. Not good to make spin_lcok as
-             * spin_lock_irq instead make the count atomic. */
-            if (atomic_read(&wq->cnt))
-                /* wq->work == castle_da_queue_kick() */
-                queue_work_on(request_cpus.cpus[i], castle_wqs[0], &wq->work);
-        }
-    }
-    write_unlock(&da->lock);
     wake_up(&da->merge_waitq);
 
     return 0;
@@ -6707,6 +6670,135 @@ static void castle_da_merge_serdes_out_tree_check(struct castle_dmserlist_entry 
             __FUNCTION__, da->id, level);
 }
 
+int castle_da_insert_rate_set(c_da_t da_id, uint32_t insert_rate)
+{
+    struct castle_double_array *da = castle_da_hash_get(da_id);
+
+    if (!da)
+    {
+        castle_printk(LOG_USERINFO, "Couldn't set insert rate for unknown version tree: %u\n",
+                                    da_id);
+        return -EINVAL;
+    }
+
+    /* User passes it in MB/s, but kernel stores it in Bytes/secs. */
+    da->write_rate = insert_rate * 1024 * 1024;
+
+    return 0;
+}
+
+int castle_da_read_rate_set(c_da_t da_id, uint32_t read_rate)
+{
+    struct castle_double_array *da = castle_da_hash_get(da_id);
+
+    if (!da)
+    {
+        castle_printk(LOG_USERINFO, "Couldn't set read rate for unknown version tree: %u\n",
+                                    da_id);
+        return -EINVAL;
+    }
+
+    /* User passes it in MB/s, but kernel stores it in Bytes/secs. */
+    da->read_rate = read_rate * 1024 * 1024;
+
+    return 0;
+}
+
+/**
+ * Check if data rate is faster than set rate. If so, then calculate the time that the
+ * requests have to be throttled.
+ *
+ * @param   [in]    set_rate        rate set - bytes/second
+ */
+static inline uint64_t castle_da_throttle_time_get(uint64_t data_bytes, uint64_t time_us,
+                                                   uint64_t set_rate)
+{
+    uint64_t nr_usecs;
+
+    /* If the rate is not set, consider as infinite. */
+    if (set_rate == 0)
+        return 0;
+
+    /* Number of micro seconds that should have been taken. */
+    nr_usecs = (data_bytes / set_rate) * 1000000L;
+
+    if (nr_usecs > time_us)
+        return nr_usecs - time_us;
+
+    return 0;
+}
+
+/**
+ * Checks the current write rate and throttles them if the writes are going faster than
+ * set rate.
+ */
+static void castle_da_write_throttle_timer_fire(unsigned long data)
+{
+    struct castle_double_array *da = (struct castle_double_array *)data;
+    struct timeval cur_time;
+    uint64_t delta_bytes;
+    uint64_t delta_time, throttle_time;
+
+    do_gettimeofday(&cur_time);
+
+    /* Bytes written since last sample. */
+    delta_bytes     = atomic64_read(&da->write_data_bytes) - da->prev_sample.write_data_bytes;
+
+    /* Time since last recorded sample in micro seconds. */
+    delta_time      = (timeval_to_ns(&cur_time) - timeval_to_ns(&da->prev_time)) / 1000;
+
+    /* Calculate the data rate since last sample. */
+    if (likely(delta_time))
+        da->cur_write_rate = delta_bytes * 1000000L / delta_time;
+
+    /* Find the time to throttle writes. */
+    throttle_time   = castle_da_throttle_time_get(delta_bytes, delta_time, da->write_rate);
+
+    /* If writes running over the limit, disable them for some time and ignore the current
+     * sample. We don't care about this. We still compare to the old one. */
+    if (throttle_time)
+    {
+        printk("Disabling inserts\n");
+        da->inserts_enabled = 0;
+    }
+    /* If writes are not over the limit, then enable inserts and record the sample. */
+    else
+    {
+        int i;
+
+        if (da->inserts_enabled == 0)
+            printk("Enabling inserts\n");
+
+        da->inserts_enabled                 = 1;
+        da->prev_time                       = cur_time;
+        da->prev_sample.write_data_bytes   += delta_bytes;
+        throttle_time                       = da->sample_delay * 1000 * 1000;
+
+        /* Schedule drain of pending write IOs now inserts are enabled. */
+        for (i = 0; i < castle_double_array_request_cpus(); i++)
+        {
+            struct castle_da_io_wait_queue *wq;
+
+            wq = &da->ios_waiting[i];
+
+            /* This runs in interrupt context. Instead of making wq->lock spin_lock_irq, making
+             * the count atomic. */
+            if (atomic_read(&wq->cnt))
+                queue_work_on(request_cpus.cpus[i], castle_wqs[0], &wq->work);
+        }
+
+        wake_up(&da->merge_waitq);
+    }
+
+    /* Reschedule ourselves. */
+    setup_timer(&da->write_throttle_timer, castle_da_write_throttle_timer_fire,
+                (unsigned long)da);
+
+    /* throttle_time is in micro seconds, convert it into jiffies. */
+    mod_timer(&da->write_throttle_timer,
+               jiffies + (HZ * throttle_time) / (1000L * 1000L) + 1);
+}
+
 /**
  * Deallocate doubling array and all associated data.
  *
@@ -6719,6 +6811,9 @@ static void castle_da_dealloc(struct castle_double_array *da)
 {
     int i; /* DA level */
     BUG_ON(!da);
+
+    /* Stop rate control timers. */
+    del_singleshot_timer_sync(&da->write_throttle_timer);
 
     for (i=1; i<MAX_DA_LEVEL-1; i++)
     {
@@ -6810,6 +6905,22 @@ static struct castle_double_array* castle_da_alloc(c_da_t da_id)
     /* allocate top-level */
     INIT_LIST_HEAD(&da->levels[MAX_DA_LEVEL-1].trees);
     da->levels[MAX_DA_LEVEL-1].nr_trees = 0;
+
+    /* Init rate control parameters. */
+    atomic64_set(&da->write_key_bytes, 0);
+    atomic64_set(&da->write_data_bytes, 0);
+    atomic64_set(&da->read_key_bytes, 0);
+    atomic64_set(&da->read_data_bytes, 0);
+    da->prev_sample.write_key_bytes = da->prev_sample.write_data_bytes = 0;
+    da->prev_sample.read_key_bytes  = da->prev_sample.read_data_bytes  = 0;
+    da->write_rate                  = 0;
+    da->read_rate                   = 0;
+    da->sample_delay                = 1;
+    da->cur_write_rate              = 0;
+    do_gettimeofday(&da->prev_time);
+
+    /* Trigger the write throttle timer for first time. */
+    castle_da_write_throttle_timer_fire((unsigned long) da);
 
     castle_printk(LOG_USERINFO, "Allocated DA=%d successfully.\n", da_id);
 
@@ -9196,6 +9307,7 @@ static void castle_da_cts_proxy_timer_fire(unsigned long first)
     setup_timer(&castle_da_cts_proxy_timer, castle_da_cts_proxy_timer_fire, 0);
     mod_timer(&castle_da_cts_proxy_timer, jiffies + HZ * CASTLE_DA_CTS_PROXY_TIMEOUT_FREQ);
 }
+
 
 /**
  * Return next CT from CTs proxy matching point c_bvec.

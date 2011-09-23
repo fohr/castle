@@ -2130,6 +2130,29 @@ struct castle_double_array {
      * there is no locking. */
     struct work_struct          work;               /**< General purpose work structure.        */
     void                       *private;            /**< Work private data.                     */
+
+    /* Rate control parameters. */
+    atomic64_t                  write_key_bytes;    /**< # of key bytes written since FS start. */
+    atomic64_t                  write_data_bytes;   /**< # of data bytes written since FS start.*/
+    atomic64_t                  read_key_bytes;     /**< # of key bytes read since FS start.    */
+    atomic64_t                  read_data_bytes;    /**< # of data bytes read since FS start.   */
+
+    struct {
+        uint64_t                write_key_bytes;
+        uint64_t                write_data_bytes;
+        uint64_t                read_key_bytes;
+        uint64_t                read_data_bytes;
+    } prev_sample;                                  /**< Recorded stats from prev sample.       */
+
+
+    struct timeval              prev_time;          /**< Last sample time.                      */
+    uint64_t                    write_rate;         /**< Max write rate set. (in bytes/usecs).  */
+    uint64_t                    read_rate;          /**< Max read rate set. (in bytes/usecs).   */
+    uint64_t                    sample_delay;       /**< Delay between samples. (in usecs).     */
+    struct timer_list           write_throttle_timer;
+                                                    /**< Timer to check write rate and throttle
+                                                     **< if required.                           */
+    uint64_t                    cur_write_rate;
 };
 
 extern int castle_latest_key;

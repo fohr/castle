@@ -262,6 +262,13 @@ static c2_block_t* castle_object_write_buffer_alloc(c_ext_pos_t new_data_cep,
     return new_data_c2b;
 }
 
+static void castle_objecte_replace_data_copy(struct castle_object_replace *replace,
+                                             void *buffer, uint32_t buffer_length, int not_last)
+{
+    replace->data_copy(replace, buffer, buffer_length, not_last);
+    atomic64_add(buffer_length, &replace->c_bvec->tree->da->write_data_bytes);
+}
+
 static int castle_object_data_write(struct castle_object_replace *replace)
 {
     c2_block_t *data_c2b;
@@ -316,10 +323,8 @@ static int castle_object_data_write(struct castle_object_replace *replace)
         update_c2b(data_c2b);
         c2b_locked = 1;
 
-        replace->data_copy(replace,
-                          data_c2b_buffer,
-                          copy_length,
-                          last_copy ? 0 : 1);
+        castle_objecte_replace_data_copy(replace, data_c2b_buffer, copy_length,
+                                         last_copy ? 0 : 1);
 
         data_length     -= copy_length;
         data_c2b_offset += copy_length;
@@ -685,7 +690,7 @@ static int castle_object_replace_space_reserve(struct castle_object_replace *rep
             {CVT_INLINE_INIT(replace->cvt, value_len, value);}
         /* Get the data copied into the cvt. It should all be available in one shot. */
         BUG_ON(replace->data_length_get(replace) < value_len);
-        replace->data_copy(replace, value, value_len, 0 /* not partial */);
+        castle_objecte_replace_data_copy(replace, value, value_len, 0 /* not partial */);
         /* If we are handling a counter, accumulating sub-counter needs to be the same
            as the non-accumulating sub-counter. */
         if(counter)

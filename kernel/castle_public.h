@@ -263,6 +263,8 @@ typedef struct castle_merge_config {
 #define CASTLE_CTRL_MERGE_DO_WORK            37
 #define CASTLE_CTRL_MERGE_STOP               38
 #define CASTLE_CTRL_MERGE_THREAD_ATTACH      39
+#define CASTLE_CTRL_INSERT_RATE_SET          40
+#define CASTLE_CTRL_READ_RATE_SET            41
 
 typedef struct castle_control_cmd_claim {
     uint32_t       dev;          /* IN  */
@@ -447,6 +449,18 @@ typedef struct castle_control_cmd_merge_thread_attach {
     int             ret;            /* OUT */
 } cctrl_cmd_merge_thread_attach_t;
 
+typedef struct castle_control_cmd_insert_rate_set {
+    c_da_t          vertree_id;     /* IN  */
+    uint32_t        insert_rate;    /* IN  */
+    int             ret;            /* OUT */
+} cctrl_cmd_insert_rate_set_t;
+
+typedef struct castle_control_cmd_read_rate_set {
+    c_da_t          vertree_id;     /* IN  */
+    uint32_t        read_rate;      /* IN  */
+    int             ret;            /* OUT */
+} cctrl_cmd_read_rate_set_t;
+
 typedef struct castle_control_ioctl {
     uint16_t cmd;
     union {
@@ -492,6 +506,8 @@ typedef struct castle_control_ioctl {
         cctrl_cmd_merge_do_work_t       merge_do_work;
         cctrl_cmd_merge_stop_t          merge_stop;
         cctrl_cmd_merge_thread_attach_t merge_thread_attach;
+        cctrl_cmd_insert_rate_set_t     insert_rate_set;
+        cctrl_cmd_read_rate_set_t       read_rate_set;
     };
 } cctrl_ioctl_t;
 
@@ -561,6 +577,10 @@ enum {
         _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_MERGE_STOP, cctrl_ioctl_t),
     CASTLE_CTRL_MERGE_THREAD_ATTACH_IOCTL =
         _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_MERGE_THREAD_ATTACH, cctrl_ioctl_t),
+    CASTLE_CTRL_INSERT_RATE_SET_IOCTL =
+        _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_INSERT_RATE_SET, cctrl_ioctl_t),
+    CASTLE_CTRL_READ_RATE_SET_IOCTL =
+        _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_READ_RATE_SET, cctrl_ioctl_t),
 };
 
 /*
