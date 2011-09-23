@@ -3055,7 +3055,8 @@ __again:
     castle_da_lfs_ct_reset(lfs);
 
     /* Allocate Bloom filters. */
-    if ((ret = castle_bloom_create(&merge->out_tree->bloom, merge->da, bloom_size)))
+    if ((ret = castle_bloom_create(&merge->out_tree->bloom, merge->da->id,
+                                   merge->da->btree_type, bloom_size)))
         merge->out_tree->bloom_exists = 0;
     else
         merge->out_tree->bloom_exists = 1;
