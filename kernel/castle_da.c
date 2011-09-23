@@ -284,14 +284,6 @@ static int castle_da_ct_compare(struct castle_component_tree *ct1,
 }
 
 /**
- * Return DA pointer. For the sake of sysfs.
- */
-struct castle_double_array * castle_da_get_ptr(c_da_t da_id)
-{
-    return castle_da_hash_get(da_id);
-}
-
-/**
  * Set DA's growing bit and return previous state.
  *
  * @return  0   DA was not being grown (but is now)

@@ -218,8 +218,6 @@ int  castle_ct_large_obj_remove (c_ext_id_t              ext_id,
 uint32_t castle_da_count(void);
 void castle_da_threads_priority_set(int nice_value);
 
-struct castle_double_array * castle_da_get_ptr(c_da_t da_id);
-
 int  castle_merge_thread_create         (c_thread_id_t *thread_id);
 int  castle_merge_thread_destroy        (c_thread_id_t thread_id);
 int  castle_merge_start                 (c_merge_cfg_t *merge_cfg, c_merge_id_t *merge_id, int level);
