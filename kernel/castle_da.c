@@ -4998,7 +4998,7 @@ static tree_seq_t castle_da_merge_last_unit_complete(struct castle_double_array 
  */
 static int castle_da_merge_init(struct castle_da_merge *merge, void *unused)
 {
-    struct castle_btree_type *btree;
+    btree_t btree_type;
     struct castle_double_array *da = merge->da;
     int level = merge->level;
     int nr_trees = merge->nr_trees;
@@ -5015,11 +5015,11 @@ static int castle_da_merge_init(struct castle_da_merge *merge, void *unused)
     BUG_ON(nr_trees < 2);
 
     /* Work out what type of trees are we going to be merging. Bug if in_trees don't match. */
-    btree = castle_btree_type_get(in_trees[0]->btree_type);
+    btree_type = in_trees[0]->btree_type;
     for (i=0; i<nr_trees; i++)
     {
         /* Btree types may, and often will be different during big merges. */
-        BUG_ON(btree != castle_btree_type_get(in_trees[i]->btree_type));
+        BUG_ON(btree_type != in_trees[i]->btree_type);
         BUG_ON(in_trees[i]->level != level);
     }
 
@@ -8563,7 +8563,6 @@ static int __castle_da_rwct_create(struct castle_double_array *da, int cpu_index
                                    c_lfs_vct_type_t lfs_type)
 {
     struct castle_component_tree *ct, *old_ct;
-    struct castle_btree_type *btree;
     struct list_head *l = NULL;
     c2_block_t *c2b;
     int err;
@@ -8583,8 +8582,6 @@ static int __castle_da_rwct_create(struct castle_double_array *da, int cpu_index
     ct = castle_ct_alloc(da, 0 /* level */, INVAL_TREE);
     if (!ct)
         return -ENOMEM;
-
-    btree = castle_btree_type_get(ct->btree_type);
 
     /* RWCTs are present only at levels 0,1 in the DA.
      * Prefix these CTs with cpu_index to preserve operation ordering when
@@ -8851,7 +8848,6 @@ static struct castle_component_tree* castle_da_rwct_acquire(struct castle_double
                                                             int cpu_index)
 {
     struct castle_component_tree *ct;
-    struct castle_btree_type *btree;
     int ret;
 
 
@@ -8865,7 +8861,6 @@ again:
     /* Use this tree, but only if there is still some space left in it (otherwise
        we could get stuck in a loop where write fails, but we still use the same CT
        and try again). */
-    btree = castle_btree_type_get(ct->btree_type);
     if(castle_ext_freespace_can_alloc(&ct->tree_ext_free,
                                       2 * ct->node_sizes[0] * C_BLK_SIZE))
         return ct;
@@ -9652,7 +9647,6 @@ void castle_double_array_submit(c_bvec_t *c_bvec)
 static void castle_da_reserve(struct castle_double_array *da, c_bvec_t *c_bvec)
 {
     struct castle_component_tree *ct;
-    struct castle_btree_type *btree;
     uint64_t value_len, req_btree_space, req_medium_space;
     int ret;
 
@@ -9668,7 +9662,6 @@ again:
     BUG_ON(!ct);
 
     /* Attempt to preallocate space in the btree and m-obj extents for writes. */
-    btree = castle_btree_type_get(ct->btree_type);
 
     /* We may have to create up to 2 new leaf nodes in this write. Preallocate
        the space for this. */
@@ -9715,7 +9708,6 @@ new_ct:
 void castle_double_array_unreserve(c_bvec_t *c_bvec)
 {
     struct castle_component_tree *ct;
-    struct castle_btree_type *btree;
     uint32_t reserv_nodes;
 
     /* Only works for write requests. */
@@ -9728,7 +9720,6 @@ void castle_double_array_unreserve(c_bvec_t *c_bvec)
 
     /* Free the nodes. */
     ct = c_bvec->tree;
-    btree = castle_btree_type_get(ct->btree_type);
     castle_ext_freespace_free(&ct->tree_ext_free,
                                reserv_nodes * ct->node_sizes[0] * C_BLK_SIZE);
     /* Set the reservation back to 0. Don't use atomic_set() because this doesn't use
