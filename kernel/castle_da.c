@@ -6512,6 +6512,7 @@ static int castle_da_merge_restart(struct castle_double_array *da, void *unused)
 
     if (da->levels[1].nr_trees >= 4 * castle_double_array_request_cpus())
     {
+#if 0
         if (da->inserts_enabled)
         {
             /* Too many backed-up trees at level 0.  Disable inserts. */
@@ -6519,6 +6520,7 @@ static int castle_da_merge_restart(struct castle_double_array *da, void *unused)
             castle_trace_da(TRACE_START, TRACE_DA_INSERTS_DISABLED_ID, da->id, 0);
             da->inserts_enabled = 0;
         }
+#endif
     }
     else if (!da->inserts_enabled)
     {
@@ -6535,11 +6537,11 @@ static int castle_da_merge_restart(struct castle_double_array *da, void *unused)
             struct castle_da_io_wait_queue *wq;
 
             wq = &da->ios_waiting[i];
-            spin_lock(&wq->lock);
-            if (!list_empty(&wq->list))
+            /* Want to use this logic from interrupt context. Not good to make spin_lcok as
+             * spin_lock_irq instead make the count atomic. */
+            if (atomic_read(&wq->cnt))
                 /* wq->work == castle_da_queue_kick() */
                 queue_work_on(request_cpus.cpus[i], castle_wqs[0], &wq->work);
-            spin_unlock(&wq->lock);
         }
     }
     write_unlock(&da->lock);
@@ -6645,7 +6647,7 @@ static int castle_da_wait_queue_create(struct castle_double_array *da, void *unu
         spin_lock_init(&da->ios_waiting[i].lock);
         INIT_LIST_HEAD(&da->ios_waiting[i].list);
         CASTLE_INIT_WORK(&da->ios_waiting[i].work, castle_da_queue_kick);
-        da->ios_waiting[i].cnt = 0;
+        atomic_set(&da->ios_waiting[i].cnt, 0);
         da->ios_waiting[i].da = da;
     }
 
@@ -8794,7 +8796,7 @@ static void castle_da_bvec_queue(struct castle_double_array *da, c_bvec_t *c_bve
     list_add_tail(&c_bvec->io_list, &wq->list);
 
     /* Increment IO waiting counters. */
-    wq->cnt++;
+    atomic_inc(&wq->cnt);
     atomic_inc(&da->ios_waiting_cnt);
 }
 
@@ -8833,7 +8835,7 @@ static void castle_da_queue_kick(struct work_struct *work)
         list_add(&c_bvec->io_list, &submit_list);
 
         /* Decrement IO waiting counters. */
-        BUG_ON(--wq->cnt < 0);
+        BUG_ON(atomic_dec_return(&wq->cnt) < 0);
         BUG_ON(atomic_dec_return(&wq->da->ios_waiting_cnt) < 0);
     }
     spin_unlock(&wq->lock);
