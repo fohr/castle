@@ -2351,11 +2351,8 @@ static int castle_da_iterators_create(struct castle_da_merge *merge)
 {
     struct castle_btree_type *btree;
     int ret;
-    struct castle_iterator_type *iter_types[merge->nr_trees];
+    struct castle_iterator_type **iter_types;
     int i;
-
-    /* Make sure iter_types is not too big.  It's on stack. */
-    BUG_ON(sizeof(iter_types) > 512);
 
     debug("Creating iterators for the merge.\n");
     FOR_EACH_MERGE_TREE(i, merge)
@@ -2367,11 +2364,16 @@ static int castle_da_iterators_create(struct castle_da_merge *merge)
     FOR_EACH_MERGE_TREE(i, merge)
         BUG_ON(atomic_read(&merge->in_trees[i]->write_ref_count) != 0);
 
-    /* Alloc space for iterators. */
+    /* Allocate space for iter_types. */
     ret = -ENOMEM;
+    iter_types = castle_alloc(merge->nr_trees * sizeof(struct castle_iterator_type *));
+    if (!iter_types)
+        goto err_out;
+
+    /* Allocate space for iterators. */
     merge->iters = castle_zalloc(sizeof(void *) * merge->nr_trees, GFP_KERNEL);
     if (!merge->iters)
-        goto err_out;
+        goto err_out2;
 
     /* Create appropriate iterators for all of the trees. */
     ret = -EINVAL;
@@ -2412,7 +2414,7 @@ static int castle_da_iterators_create(struct castle_da_merge *merge)
 
         /* Check if the iterators got created properly. */
         if (!merge->iters[i])
-            goto err_out;
+            goto err_out2;
     }
     debug("Tree iterators created.\n");
 
@@ -2420,7 +2422,7 @@ static int castle_da_iterators_create(struct castle_da_merge *merge)
     ret = -ENOMEM;
     merge->merged_iter = castle_malloc(sizeof(c_merged_iter_t), GFP_KERNEL);
     if(!merge->merged_iter)
-        goto err_out;
+        goto err_out2;
     debug("Merged iterator allocated.\n");
 
     merge->merged_iter->nr_iters = merge->nr_trees;
@@ -2434,7 +2436,7 @@ static int castle_da_iterators_create(struct castle_da_merge *merge)
     ret = merge->merged_iter->err;
     debug("Merged iterator inited with ret=%d.\n", ret);
     if(ret)
-        goto err_out;
+        goto err_out2;
 
     /* Fast-forward merge iterator and immutable iterators states */
     if(merge->serdes.des)
@@ -2522,7 +2524,10 @@ static int castle_da_iterators_create(struct castle_da_merge *merge)
     /* Success */
     return 0;
 
+err_out2:
+    castle_free(iter_types);
 err_out:
+    /* castle_da_merge_dealloc() frees merge-> allocations. */
     debug("Failed to create iterators. Ret=%d\n", ret);
 
     BUG_ON(!ret);
