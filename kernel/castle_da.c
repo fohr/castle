@@ -5065,8 +5065,6 @@ deser_done:
     if(ret)
         goto error_out;
 
-    if (!merge->serdes.des) CASTLE_TRANSACTION_BEGIN;
-
     /* This is very importnat to be write locked, as the requests need to see consistent view
      * mergable state of DA. */
     write_lock(&da->lock);
@@ -5096,8 +5094,6 @@ deser_done:
     da->levels[merge->out_tree->level].nr_output_trees++;
 
     write_unlock(&da->lock);
-
-    if (!merge->serdes.des) CASTLE_TRANSACTION_END;
 
     castle_sysfs_ct_add(merge->out_tree);
     if (castle_golden_nugget && merge->level != 1)
@@ -6413,7 +6409,14 @@ static int castle_da_merge_run(void *da_p)
          * currently done using a malloc'd buffer.  Serialise function entry across
          * all DAs to prevent races decrementing the modlist mem budget. */
         if (level == 1) mutex_lock(&castle_da_level1_merge_init);
+
+        /* Run merge_init() in transaction lock, component_tree_add() needs it. */
+        /* Note: Only component_tree_add needs the lock, no other operation in merge_init() require
+         * transaction lock. Holding it more than required time. */
+        CASTLE_TRANSACTION_BEGIN;
         ret = castle_da_merge_init(merge, NULL);
+        CASTLE_TRANSACTION_END;
+
         if (level == 1) mutex_unlock(&castle_da_level1_merge_init);
 
         /* On failure merge_init() cleansup the merge structure. */
