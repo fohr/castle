@@ -6735,72 +6735,97 @@ static inline uint64_t castle_da_throttle_time_get(uint64_t data_bytes, uint64_t
 }
 
 /**
- * Checks the current write rate and throttles them if the writes are going faster than
- * set rate.
+ * Check if number of trees in level 1 are not too many. If so, enable inserts.
  */
-static void castle_da_write_throttle_timer_fire(unsigned long data)
+static void castle_da_inserts_enable(unsigned long data)
 {
     struct castle_double_array *da = (struct castle_double_array *)data;
     struct timeval cur_time;
-    uint64_t delta_bytes;
-    uint64_t delta_time, throttle_time;
+    int i;
 
+    /* Check for number of tree in level 1. */
+    if (da->levels[1].nr_trees >= 4 * castle_double_array_request_cpus())
+    {
+        /* If the number of trees are too many, disable inserts. */
+        castle_da_write_rate_check(da);
+        return;
+    }
+
+    /* Get current time. */
     do_gettimeofday(&cur_time);
 
-    /* Bytes written since last sample. */
-    delta_bytes     = atomic64_read(&da->write_data_bytes) - da->prev_sample.write_data_bytes;
+    /* Inserts should have been disabled. */
+    BUG_ON(!test_bit(CASTLE_DA_INSERTS_DISABLED, &da->flags));
+
+    /* Note the current time. */
+    da->prev_time = cur_time;
+
+    /* Reset data byte count for next sample duration. */
+    atomic64_set(&da->sample_data_bytes, 0);
+
+    /* Enable inserts. */
+    clear_bit(CASTLE_DA_INSERTS_DISABLED, &da->flags);
+
+    /* Schedule drain of pending write IOs now inserts are enabled. */
+    for (i = 0; i < castle_double_array_request_cpus(); i++)
+    {
+        struct castle_da_io_wait_queue *wq;
+
+        wq = &da->ios_waiting[i];
+
+        /* This runs in interrupt context. Instead of making wq->lock spin_lock_irq, making
+         * the count atomic. */
+        if (atomic_read(&wq->cnt))
+            queue_work_on(request_cpus.cpus[i], castle_wqs[0], &wq->work);
+    }
+
+    wake_up(&da->merge_waitq);
+}
+
+/**
+ * Checks the current write rate and throttles them if the writes are going faster than
+ * set rate.
+ */
+void castle_da_write_rate_check(struct castle_double_array *da)
+{
+    struct timeval cur_time;
+    uint64_t delta_time, throttle_time;
+
+    /* Check for number of tree in level 1. */
+    if (da->levels[1].nr_trees >= 4 * castle_double_array_request_cpus())
+    {
+        /* Note: This could be starving ios, unncessary long time. Fix it. */
+        throttle_time = 300; /* in micro seconds. */
+        goto throttle_ios;
+    }
+
+    /* Get current time. */
+    do_gettimeofday(&cur_time);
 
     /* Time since last recorded sample in micro seconds. */
     delta_time      = (timeval_to_ns(&cur_time) - timeval_to_ns(&da->prev_time)) / 1000;
 
-    /* Calculate the data rate since last sample. */
-    if (likely(delta_time))
-        da->cur_write_rate = delta_bytes * 1000000L / delta_time;
-
     /* Find the time to throttle writes. */
-    throttle_time   = castle_da_throttle_time_get(delta_bytes, delta_time, da->write_rate);
+    throttle_time   = castle_da_throttle_time_get(atomic64_read(&da->sample_data_bytes),
+                                                  delta_time, da->write_rate);
+
+    /* If data rate is under the limit, just return. */
+    if (!throttle_time)
+        return;
 
     /* If writes running over the limit, disable them for some time and ignore the current
      * sample. We don't care about this. We still compare to the old one. */
-    if (throttle_time)
-    {
-        printk("Disabling inserts\n");
-        da->inserts_enabled = 0;
-    }
-    /* If writes are not over the limit, then enable inserts and record the sample. */
-    else
-    {
-        int i;
 
-        if (da->inserts_enabled == 0)
-            printk("Enabling inserts\n");
+throttle_ios:
 
-        da->inserts_enabled                 = 1;
-        da->prev_time                       = cur_time;
-        da->prev_sample.write_data_bytes   += delta_bytes;
-        throttle_time                       = da->sample_delay * 1000 * 1000;
-
-        /* Schedule drain of pending write IOs now inserts are enabled. */
-        for (i = 0; i < castle_double_array_request_cpus(); i++)
-        {
-            struct castle_da_io_wait_queue *wq;
-
-            wq = &da->ios_waiting[i];
-
-            /* This runs in interrupt context. Instead of making wq->lock spin_lock_irq, making
-             * the count atomic. */
-            if (atomic_read(&wq->cnt))
-                queue_work_on(request_cpus.cpus[i], castle_wqs[0], &wq->work);
-        }
-
-        wake_up(&da->merge_waitq);
-    }
+    /* Disable inserts. */
+    set_bit(CASTLE_DA_INSERTS_DISABLED, &da->flags);
 
     /* Reschedule ourselves. */
-    setup_timer(&da->write_throttle_timer, castle_da_write_throttle_timer_fire,
+    setup_timer(&da->write_throttle_timer, castle_da_inserts_enable,
                 (unsigned long)da);
 
-    /* throttle_time is in micro seconds, convert it into jiffies. */
+    /* Throttle_time is in micro seconds, convert it into jiffies. */
     mod_timer(&da->write_throttle_timer,
                jiffies + (HZ * throttle_time) / (1000L * 1000L) + 1);
 }
@@ -6817,9 +6842,6 @@ static void castle_da_dealloc(struct castle_double_array *da)
 {
     int i; /* DA level */
     BUG_ON(!da);
-
-    /* Stop rate control timers. */
-    del_singleshot_timer_sync(&da->write_throttle_timer);
 
     for (i=1; i<MAX_DA_LEVEL-1; i++)
     {
@@ -6864,7 +6886,6 @@ static struct castle_double_array* castle_da_alloc(c_da_t da_id)
     atomic_set(&da->queriable_merge_trees_cnt, 0);
     atomic_set(&da->ref_cnt, 1);
     da->attachment_cnt  = 0;
-    da->inserts_enabled = 1;
     atomic_set(&da->ios_waiting_cnt, 0);
     if (castle_da_wait_queue_create(da, NULL) != EXIT_SUCCESS)
         goto err_out;
@@ -6917,16 +6938,12 @@ static struct castle_double_array* castle_da_alloc(c_da_t da_id)
     atomic64_set(&da->write_data_bytes, 0);
     atomic64_set(&da->read_key_bytes, 0);
     atomic64_set(&da->read_data_bytes, 0);
-    da->prev_sample.write_key_bytes = da->prev_sample.write_data_bytes = 0;
-    da->prev_sample.read_key_bytes  = da->prev_sample.read_data_bytes  = 0;
+    //da->write_rate                  = 50 * 1024 * 1024;
     da->write_rate                  = 0;
     da->read_rate                   = 0;
-    da->sample_delay                = 1;
-    da->cur_write_rate              = 0;
+    da->sample_rate                 = 5 * 1024 * 1024;
+    atomic64_set(&da->sample_data_bytes, 0);
     do_gettimeofday(&da->prev_time);
-
-    /* Trigger the write throttle timer for first time. */
-    castle_da_write_throttle_timer_fire((unsigned long) da);
 
     castle_printk(LOG_USERINFO, "Allocated DA=%d successfully.\n", da_id);
 
@@ -8928,7 +8945,7 @@ static void castle_da_queue_kick(struct work_struct *work)
     /* Get as many c_bvecs as we can and place them on the submit list.
        Take them all on module exit. */
     spin_lock(&wq->lock);
-    while (((wq->da->inserts_enabled)
+    while ((!test_bit(CASTLE_DA_INSERTS_DISABLED, &wq->da->flags)
                     || castle_fs_exiting
                     || castle_da_no_disk_space(wq->da))
                 && !list_empty(&wq->list))
@@ -9757,7 +9774,7 @@ void castle_double_array_queue(c_bvec_t *c_bvec)
     /* Write requests only accepted if inserts enabled and no queued writes. */
     wq = &da->ios_waiting[c_bvec->cpu_index];
     spin_lock(&wq->lock);
-    if (da->inserts_enabled && list_empty(&wq->list))
+    if (!test_bit(CASTLE_DA_INSERTS_DISABLED, &da->flags) && list_empty(&wq->list))
     {
         /* Inserts enabled, no pending IOs.  Schedule write immediately. */
         spin_unlock(&wq->lock);

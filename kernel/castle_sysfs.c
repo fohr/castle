@@ -277,7 +277,7 @@ static ssize_t da_io_stats_show(struct kobject *kobj,
 
     sprintf(buf, "Write Rate: %llu\n", da->write_rate);
     sprintf(buf + strlen(buf), "Read Rate: %llu\n", da->read_rate);
-    sprintf(buf + strlen(buf), "Sample Delay: %llu\n", da->sample_delay);
+    sprintf(buf + strlen(buf), "Sample Delay: %llu\n", da->sample_rate);
     sprintf(buf + strlen(buf), "Write key bytes: %lu\n", atomic64_read(&da->write_key_bytes));
     sprintf(buf + strlen(buf), "Write data bytes: %lu\n", atomic64_read(&da->write_data_bytes));
     sprintf(buf + strlen(buf), "Read key bytes: %lu\n", atomic64_read(&da->read_key_bytes));
@@ -358,24 +358,25 @@ static ssize_t da_tree_list_show(struct kobject *kobj,
 
         list_for_each(lh, &da->levels[i].trees)
         {
-            struct castle_btree_type *btree;
+            uint64_t ct_size;
 
             ct = list_entry(lh, struct castle_component_tree, da_list);
-            btree = castle_btree_type_get(ct->btree_type);
+
+            if (ct->level >= 2 && test_bit(CASTLE_CT_MERGE_INPUT_BIT, &ct->flags)
+                && !EXT_POS_INVAL(ct->curr_merge_c2b_cep))
+                ct_size = atomic64_read(&ct->tree_ext_free.used) - ct->curr_merge_c2b_cep.offset;
+            else
+                ct_size = atomic64_read(&ct->tree_ext_free.used);
+
             ret = snprintf(buf, PAGE_SIZE,
-                           "%s[%lu %u %u %u %u] ",
+                           "%s[%lu %u %u %u %llu] ",
                            buf,
                            atomic64_read(&ct->item_count),       /* Item count*/
                            (uint32_t)ct->node_sizes[0],          /* Leaf node size */
                            ct->tree_depth > 1 ?                  /* Internal node size */
                                (uint32_t)ct->node_sizes[1] : 0,
                            (uint32_t)ct->tree_depth,             /* Depth of tree */
-                           (uint32_t)
-                           (CHUNK(ct->tree_ext_free.ext_size) +
-                            CHUNK(ct->data_ext_free.ext_size) +
-                            CHUNK(ct->internal_ext_free.ext_size) +
-                            ((ct->bloom_exists)?ct->bloom.num_chunks:0) +
-                            atomic64_read(&ct->large_ext_chk_cnt)));           /* Tree size */
+                           ct_size);
             if (ret >= PAGE_SIZE)
                 goto err;
         }
@@ -985,7 +986,8 @@ static ssize_t ct_current_size_show(struct kobject *kobj,
     struct castle_component_tree *ct = container_of(kobj, struct castle_component_tree, kobj);
 
     /* For input trees, take the current size from merge cep. */
-    if (ct->level >= 2 && ct->merge && !EXT_POS_INVAL(ct->curr_merge_c2b_cep))
+    if (ct->level >= 2 && test_bit(CASTLE_CT_MERGE_INPUT_BIT, &ct->flags)
+        && !EXT_POS_INVAL(ct->curr_merge_c2b_cep))
         return sprintf(buf, "%llu\n", atomic64_read(&ct->tree_ext_free.used)
                                                 - ct->curr_merge_c2b_cep.offset);
 

@@ -2061,6 +2061,8 @@ typedef enum {
 #define DOUBLE_ARRAY_DELETED_BIT            (1)
 #define CASTLE_DA_COMPACTING_BIT            (2)
 #define CASTLE_DA_CTS_PROXY_CREATE_BIT      (3)     /**< Serialises creation of da->cts_proxy.  */
+#define CASTLE_DA_INSERTS_DISABLED          (4)     /**< Set when inserts are disabled.         */
+#define CASTLE_DA_RATE_CHECK_ONGOING        (5)     /**< Rate check is going on this DA.        */
 
 #define PARTIAL_MERGES_QUERY_REDIRECTION_BTREE_NODE_LEVEL (0)
 #if PARTIAL_MERGES_QUERY_REDIRECTION_BTREE_NODE_LEVEL > MAX_BTREE_DEPTH
@@ -2117,8 +2119,6 @@ struct castle_double_array {
         struct work_struct      work;               /**< For queue kicks                        */
     } *ios_waiting;                                 /**< Array of pending write IO queues,
                                                          1 queue per request-handling CPU       */
-    int                         inserts_enabled;    /**< Whether write IOs are being accepted.
-                                                         Protected by DA write lock.            */
     atomic_t                    ios_waiting_cnt;    /**< Total number of pending write IOs      */
 
     wait_queue_head_t           merge_waitq;        /**< Merge deamortisation wait queue        */
@@ -2137,22 +2137,14 @@ struct castle_double_array {
     atomic64_t                  read_key_bytes;     /**< # of key bytes read since FS start.    */
     atomic64_t                  read_data_bytes;    /**< # of data bytes read since FS start.   */
 
-    struct {
-        uint64_t                write_key_bytes;
-        uint64_t                write_data_bytes;
-        uint64_t                read_key_bytes;
-        uint64_t                read_data_bytes;
-    } prev_sample;                                  /**< Recorded stats from prev sample.       */
-
-
     struct timeval              prev_time;          /**< Last sample time.                      */
     uint64_t                    write_rate;         /**< Max write rate set. (in bytes/usecs).  */
     uint64_t                    read_rate;          /**< Max read rate set. (in bytes/usecs).   */
-    uint64_t                    sample_delay;       /**< Delay between samples. (in usecs).     */
     struct timer_list           write_throttle_timer;
                                                     /**< Timer to check write rate and throttle
                                                      **< if required.                           */
-    uint64_t                    cur_write_rate;
+    uint64_t                    sample_rate;
+    atomic64_t                  sample_data_bytes;
 };
 
 extern int castle_latest_key;

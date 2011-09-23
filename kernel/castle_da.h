@@ -230,4 +230,5 @@ int  castle_merge_thread_attach         (c_merge_id_t merge_id, c_thread_id_t th
 int  castle_da_vertree_compact          (c_da_t da_id);
 int  castle_da_insert_rate_set          (c_da_t da_id, uint32_t insert_rate);
 int  castle_da_read_rate_set            (c_da_t da_id, uint32_t read_rate);
+void castle_da_write_rate_check         (struct castle_double_array *da);
 #endif /* __CASTLE_DA_H__ */
