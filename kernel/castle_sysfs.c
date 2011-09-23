@@ -390,7 +390,7 @@ static ssize_t da_array_list_show(struct kobject *kobj,
         struct list_head *lh;
 
         /* Number of trees in each level. */
-        ret = snprintf(buf, PAGE_SIZE, "%s%02u ", buf, da->levels[2].nr_trees);
+        ret = snprintf(buf, PAGE_SIZE, "%s%u ", buf, da->levels[2].nr_trees);
         /* Buffer is of size one PAGE. MAke sure we are not overflowing buffer. */
         if (ret >= PAGE_SIZE)
             goto err;
@@ -935,7 +935,7 @@ static ssize_t ct_daid_show(struct kobject *kobj,
 {
     struct castle_component_tree *ct = container_of(kobj, struct castle_component_tree, kobj);
 
-    return sprintf(buf, "0x%x\n", ct->da);
+    return sprintf(buf, "0x%x\n", ct->da->id);
 }
 
 static ssize_t ct_reserved_size_show(struct kobject *kobj,
@@ -1023,20 +1023,15 @@ static struct kobj_type castle_ct_ktype = {
  */
 int castle_sysfs_ct_add(struct castle_component_tree *ct)
 {
-    struct castle_double_array *da;
     int ret;
 
     if (ct->level < 2)
         return 0;
 
-    /* Get the doubling array. */
-    da = castle_da_get_ptr(ct->da);
-    BUG_ON(!da);
-
     /* Add a directory for list of arrays. */
     memset(&ct->kobj, 0, sizeof(struct kobject));
     ret = kobject_tree_add(&ct->kobj,
-                           &da->arrays_kobj,
+                           &ct->da->arrays_kobj,
                            &castle_ct_ktype,
                            "%x", ct->seq);
     if (ret < 0)

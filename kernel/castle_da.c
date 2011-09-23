@@ -238,7 +238,7 @@ tree_seq_t castle_da_next_ct_seq(void);
  * Compare component trees based on their data age. (this is similar to seq_no - smaller the number
  * older the tree is).
  *
- * FIMXE: Probably should change the name of data_age.
+ * FIXME: Probably should change the name of data_age.
  *
  * if the age of two trees equal (can happen only for trees that are being merged or T0s.)
  *
@@ -4016,7 +4016,7 @@ static struct castle_component_tree* castle_da_merge_package(struct castle_da_me
             atomic64_read(&out_tree->item_count));
 
     /* Add the new tree to the doubling array */
-    BUG_ON(merge->da->id != out_tree->da);
+    BUG_ON(merge->da != out_tree->da);
     castle_printk(LOG_INFO, "Finishing merge of ");
     FOR_EACH_MERGE_TREE(i, merge)
         castle_printk(LOG_INFO, "ct%d=%d, ", i, merge->in_trees[i]->seq);
@@ -4932,7 +4932,7 @@ static tree_seq_t castle_da_merge_last_unit_complete(struct castle_double_array 
 
     FOR_EACH_MERGE_TREE(i, merge)
     {
-        BUG_ON(merge->da->id != merge->in_trees[i]->da);
+        BUG_ON(merge->da != merge->in_trees[i]->da);
         castle_sysfs_ct_del(merge->in_trees[i]);
     }
 
@@ -4948,7 +4948,7 @@ static tree_seq_t castle_da_merge_last_unit_complete(struct castle_double_array 
      */
     FOR_EACH_MERGE_TREE(i, merge)
     {
-        BUG_ON(merge->da->id != merge->in_trees[i]->da);
+        BUG_ON(merge->da != merge->in_trees[i]->da);
         castle_component_tree_del(merge->da, merge->in_trees[i]);
     }
 
@@ -4975,7 +4975,7 @@ static tree_seq_t castle_da_merge_last_unit_complete(struct castle_double_array 
     write_unlock(&da->lock);
 
     if (merge->nr_entries && merge->level == 1)
-        castle_events_new_tree_added(out_tree->seq, out_tree->da);
+        castle_events_new_tree_added(out_tree->seq, out_tree->da->id);
 
     castle_da_merge_restart(da, NULL);
 
@@ -5100,7 +5100,7 @@ deser_done:
         BUG_ON(castle_sysfs_merge_add(merge));
 
     if (!merge->serdes.des && merge->level == 2)
-        castle_events_new_tree_added(merge->out_tree->seq, merge->out_tree->da);
+        castle_events_new_tree_added(merge->out_tree->seq, merge->out_tree->da->id);
 
 #ifdef DEBUG_MERGE_SERDES
     merge->serdes.merge_completed=0;
@@ -6873,7 +6873,7 @@ static void castle_component_tree_add(struct castle_double_array *da,
 {
     struct castle_component_tree *cmp_ct;
 
-    BUG_ON(da->id != ct->da);
+    BUG_ON(da != ct->da);
     BUG_ON(ct->level >= MAX_DA_LEVEL);
     BUG_ON(read_can_lock(&da->lock));
     BUG_ON(!CASTLE_IN_TRANSACTION);
@@ -6930,7 +6930,7 @@ static void castle_component_tree_add(struct castle_double_array *da,
 static void castle_component_tree_del(struct castle_double_array *da,
                                       struct castle_component_tree *ct)
 {
-    BUG_ON(da->id != ct->da);
+    BUG_ON(da != ct->da);
     BUG_ON(read_can_lock(&da->lock));
     BUG_ON(!CASTLE_IN_TRANSACTION);
 
@@ -7260,7 +7260,7 @@ void castle_da_ct_marshall(struct castle_clist_entry *ctm,
 {
     int i;
 
-    ctm->da_id             = ct->da;
+    ctm->da_id             = (ct->da)?ct->da->id:INVAL_DA;
     ctm->item_count        = atomic64_read(&ct->item_count);
     ctm->btree_type        = ct->btree_type;
     ctm->dynamic           = ct->dynamic;
@@ -7301,7 +7301,8 @@ static c_da_t castle_da_ct_unmarshall(struct castle_component_tree *ct,
     atomic64_set(&ct->item_count, ctm->item_count);
     ct->btree_type          = ctm->btree_type;
     ct->dynamic             = ctm->dynamic;
-    ct->da                  = ctm->da_id;
+    ct->da                  = castle_da_hash_get(ctm->da_id);
+    BUG_ON(!ct->da && !TREE_GLOBAL(ct->seq));
     ct->level               = ctm->level;
     ct->merge               = NULL;
     ct->merge_id            = INVAL_MERGE_ID;
@@ -7316,9 +7317,9 @@ static c_da_t castle_da_ct_unmarshall(struct castle_component_tree *ct,
     castle_ext_freespace_unmarshall(&ct->internal_ext_free, &ctm->internal_ext_free_bs);
     castle_ext_freespace_unmarshall(&ct->tree_ext_free, &ctm->tree_ext_free_bs);
     castle_ext_freespace_unmarshall(&ct->data_ext_free, &ctm->data_ext_free_bs);
-    castle_extent_mark_live(ct->internal_ext_free.ext_id, ct->da);
-    castle_extent_mark_live(ct->tree_ext_free.ext_id, ct->da);
-    castle_extent_mark_live(ct->data_ext_free.ext_id, ct->da);
+    castle_extent_mark_live(ct->internal_ext_free.ext_id, ctm->da_id);
+    castle_extent_mark_live(ct->tree_ext_free.ext_id, ctm->da_id);
+    castle_extent_mark_live(ct->data_ext_free.ext_id, ctm->da_id);
     ct->da_list.next = NULL;
     ct->da_list.prev = NULL;
     INIT_LIST_HEAD(&ct->large_objs);
@@ -7387,7 +7388,7 @@ static int castle_ct_hash_destroy_check(struct castle_component_tree *ct, void *
     if(((unsigned long)ct_hash > 0) && !TREE_GLOBAL(ct->seq))
     {
         castle_printk(LOG_WARN, "Error: Found CT=%d not on any DA's list, it claims DA=%d\n",
-            ct->seq, ct->da);
+            ct->seq, ct->da->id);
         err = -1;
     }
 
@@ -7395,14 +7396,14 @@ static int castle_ct_hash_destroy_check(struct castle_component_tree *ct, void *
    if(!TREE_GLOBAL(ct->seq) && (ct->da_list.next == NULL))
    {
        castle_printk(LOG_WARN, "Error: CT=%d is not on DA list, for DA=%d\n",
-               ct->seq, ct->da);
+               ct->seq, ct->da->id);
        err = -2;
    }
 
    if(TREE_GLOBAL(ct->seq) && (ct->da_list.next != NULL))
    {
-       castle_printk(LOG_WARN, "Error: Global CT=%d is on DA list, for DA=%d\n",
-               ct->seq, ct->da);
+       castle_printk(LOG_WARN, "Error: Global CT=%d is on DA list, for DA=INVAL_DA\n",
+               ct->seq);
        err = -3;
    }
 
@@ -7410,7 +7411,7 @@ static int castle_ct_hash_destroy_check(struct castle_component_tree *ct, void *
    if(atomic_read(&ct->ref_count) != 1)
    {
        castle_printk(LOG_WARN, "Error: Bogus ref count=%d for ct=%d, da=%d when exiting.\n",
-               atomic_read(&ct->ref_count), ct->seq, ct->da);
+               atomic_read(&ct->ref_count), ct->seq, ct->da->id);
        err = -4;
    }
 
@@ -8278,7 +8279,7 @@ int castle_double_array_read(void)
 
         ct = castle_ct_hash_get(mstore_in_tree_merge_state_entry->seq);
         BUG_ON(!ct);
-        BUG_ON(ct->da    != da_id);
+        BUG_ON(ct->da->id    != da_id);
         castle_printk(LOG_DEBUG, "%s::ct level = %d, level = %d\n", __FUNCTION__, ct->level, level);
         BUG_ON(ct->level != level);
 
@@ -8325,7 +8326,7 @@ int castle_double_array_read(void)
                     mstore_loentry.ct_seq);
             goto error_out;
         }
-        castle_extent_mark_live(mstore_loentry.ext_id, ct->da);
+        castle_extent_mark_live(mstore_loentry.ext_id, ct->da->id);
         debug("%s::Acquired Large Object %llu on CT: %u.\n",
                     __FUNCTION__, mstore_loentry.ext_id, mstore_loentry.ct_seq);
     }
@@ -8401,7 +8402,7 @@ static struct castle_component_tree* castle_ct_alloc(struct castle_double_array 
     ct->flags           = 0;
     ct->btree_type      = da->btree_type;
     ct->dynamic         = level == 0;
-    ct->da              = da->id;
+    ct->da              = da;
     ct->level           = level;
     for (i = 0; i < MAX_BTREE_DEPTH; ++i)
         ct->node_sizes[i] = castle_btree_node_size_get(ct->btree_type);
@@ -9371,7 +9372,7 @@ static void castle_da_ct_write_complete(c_bvec_t *c_bvec, int err, c_val_tup_t c
 
     callback = c_bvec->orig_complete;
     ct = c_bvec->tree;
-    da = castle_da_hash_get(ct->da);
+    da = ct->da;
 
     /*
      * If the insert space failed, create a new ct, and continue.
@@ -10214,7 +10215,7 @@ static int castle_merge_thread_stop(struct castle_merge_thread *thread, void *un
 
 static struct castle_component_tree *castle_da_next_array(struct castle_component_tree *ct)
 {
-    struct castle_double_array *da = castle_da_hash_get(ct->da);
+    struct castle_double_array *da = ct->da;
     struct castle_component_tree *next_ct = NULL;
     int level = ct->level;
 
@@ -10337,7 +10338,7 @@ int castle_merge_start(c_merge_cfg_t *merge_cfg, c_merge_id_t *merge_id, int lev
         goto err_out;
 
     /* Get doubling array. */
-    da = castle_da_hash_get(in_trees[0]->da);
+    da = in_trees[0]->da;
     if (!da)
     {
         castle_printk(LOG_USERINFO, "Couldn't find corresposing version tree.\n");

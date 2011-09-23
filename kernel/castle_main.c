@@ -39,7 +39,7 @@ struct castle_component_tree castle_global_tree = {.seq             = GLOBAL_TRE
                                                    .item_count      = {0ULL},
                                                    .btree_type      = MTREE_TYPE,
                                                    .dynamic         = 1,
-                                                   .da              = INVAL_DA,
+                                                   .da              = NULL,
                                                    .level           = -1,
                                                    .node_sizes      = {[0 ... (MAX_BTREE_DEPTH-1)] =
                                                                        MTREE_NODE_SIZE},
@@ -810,7 +810,7 @@ int castle_fs_init(void)
         castle_extent_transaction_start();
 
         if ((ret = castle_new_ext_freespace_init(&castle_global_tree.tree_ext_free,
-                                                  castle_global_tree.da,
+                                                  INVAL_DA,
                                                   EXT_T_GLOBAL_BTREE,
                                                   castle_global_tree.tree_ext_free.ext_size, 1,
                                                   NULL, NULL)) < 0)
@@ -821,7 +821,7 @@ int castle_fs_init(void)
         }
 
         if ((ret = castle_new_ext_freespace_init(&castle_global_tree.data_ext_free,
-                                                  castle_global_tree.da,
+                                                  INVAL_DA,
                                                   EXT_T_BLOCK_DEV,
                                                   castle_global_tree.data_ext_free.ext_size, 1,
                                                   NULL, NULL)) < 0)

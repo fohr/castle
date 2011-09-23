@@ -970,7 +970,7 @@ struct castle_component_tree {
     atomic64_t          item_count;        /**< Number of items in the tree.                    */
     btree_t             btree_type;
     uint8_t             dynamic;           /**< 1 - dynamic modlist btree, 0 - merge result.    */
-    c_da_t              da;
+    struct castle_double_array *da;        /**< DA that this CT belongs to.                     */
     uint8_t             level;             /**< Level in the doubling array.                    */
     uint16_t            node_sizes[MAX_BTREE_DEPTH];
                                            /**< Size of nodes in each level in the b-tree,
