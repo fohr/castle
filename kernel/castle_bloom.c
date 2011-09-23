@@ -529,12 +529,13 @@ static int castle_bloom_get_chunk_id(castle_bloom_t *bf,
             castle_btree_lub_find(node, key, 0, &found_index, NULL);
             BUG_ON(found_index < 0 || found_index >= node->used);
             chunk_id += found_index;
-            castle_printk(LOG_DEBUG, "%s::chunk_id (inner loop) = %d\n", __FUNCTION__, chunk_id);
+            debug("%s::chunk_id (inner loop) = %d\n", __FUNCTION__, chunk_id);
+
             break;
         }
 
         chunk_id += node->used;
-        castle_printk(LOG_DEBUG, "%s::chunk_id (outer loop) = %d\n", __FUNCTION__, chunk_id);
+        debug("%s::chunk_id (outer loop) = %d\n", __FUNCTION__, chunk_id);
     }
 
     /* it was never found i.e. greater than the last chunk key */
