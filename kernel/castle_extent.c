@@ -5357,11 +5357,11 @@ static int castle_extent_mask_destroy(c_ext_mask_t *mask)
         castle_extent_mask_reduce(ext, mask->range, GET_OLDEST_MASK(ext)->range,
                                   &ext->chkpt_global_mask, 1);
 
-    castle_kfree(mask);
-
     if (ext_free)
         /* Free the extent resources. */
         castle_extent_resource_release(mask->ext);
+
+    castle_kfree(mask);
 
     return 0;
 }
