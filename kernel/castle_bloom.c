@@ -97,7 +97,8 @@ int castle_bloom_create(castle_bloom_t *bf, c_da_t da_id, btree_t btree_type, ui
      * bf->num_chunks is updated to the actual number in castle_bloom_complete */
     bf->num_chunks = ceiling(num_elements, BLOOM_ELEMENTS_PER_CHUNK);
 
-    /* This is incremented as new nodes are created */
+    /* This is incremented as new nodes are created... note that this is _non-empty_
+       nodes, so the increment is only done once something actually occupies the node. */
     bf->num_btree_nodes = 0;
 
     nodes_size = ceiling(ceiling(num_elements, BLOOM_ELEMENTS_PER_CHUNK),
@@ -231,7 +232,8 @@ static void castle_bloom_next_btree_node(castle_bloom_t *bf)
        value for num_btree_nodes. */
     BUG_ON(bf->num_btree_nodes == ceiling(bf->num_chunks,
               bf->btree->max_entries(BLOOM_INDEX_NODE_SIZE_PAGES)));
-    bf->num_btree_nodes++;
+
+    /* don't forget to inc bf->num_btree_nodes once you've put something in the node! */
 }
 
 /**
@@ -312,6 +314,7 @@ static void castle_bloom_add_index_key(castle_bloom_t *bf, void *key, c_baik_typ
     c_ver_t version = 0;
     c_val_tup_t cvt;
     struct castle_bloom_build_params *bf_bp = bf->private;
+    int new_node = 0;
 
     /* Bloom filters don't store values, just keys. Since btree code requires values,
        store tombstones. */
@@ -331,6 +334,7 @@ static void castle_bloom_add_index_key(castle_bloom_t *bf, void *key, c_baik_typ
     {
         bf_bp->cur_node_cur_chunk_id = 0;
         castle_bloom_next_btree_node(bf);
+        new_node = 1;
     } else
         bf_bp->cur_node_cur_chunk_id++;
 
@@ -340,6 +344,8 @@ static void castle_bloom_add_index_key(castle_bloom_t *bf, void *key, c_baik_typ
     bf->btree->entry_add(bf_bp->cur_node, bf_bp->cur_node_cur_chunk_id, key, version, cvt);
     dirty_c2b(bf_bp->node_c2b);
     write_unlock_c2b(bf_bp->node_c2b);
+    if (new_node)
+        bf->num_btree_nodes++;
 }
 
 /**
