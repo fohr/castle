@@ -5319,7 +5319,7 @@ static int castle_cache_flush(void *unused)
                 we are doing this. What matter is that we stop eventually). */
             i = atomic_read(&castle_cache_extent_dirtylist_sizes[prio]);
 
-            while(--i >= 0)
+            while((--i >= 0) && (to_flush > 0))
             {
                 /* Get next per-extent dirtytree to flush. */
                 spin_lock_irq(&castle_cache_block_lru_lock);
