@@ -4,6 +4,7 @@
 #include "castle.h"
 
 typedef enum {
+    DEAD_EXT_FLUSH_PRIO,
     META_FLUSH_PRIO,
     LARGE_OBJS_FLUSH_PRIO,
     DEFAULT_FLUSH_PRIO,

@@ -1100,6 +1100,28 @@ static int c2_dirtytree_insert(c2_block_t *c2b)
 }
 
 /**
+ * Demote tree of dirty blocks (dirtytree) when the extent is being deleted.
+ * This priotises flushing the blocks of this extent out of the cache.
+ *
+ * @param c2b   Dirtytree to demote. 
+ *
+ * @also c2_dirtytree_remove()
+ */
+void castle_cache_dirtytree_demote(c_ext_dirtytree_t *dirtytree)
+{
+    spin_lock_irq(&castle_cache_block_hash_lock);
+    if (likely(!RB_EMPTY_ROOT(&dirtytree->rb_root)))
+    {
+        atomic_dec(&castle_cache_extent_dirtylist_sizes[dirtytree->flush_prio]);
+        list_del(&dirtytree->list);
+        dirtytree->flush_prio = DEAD_EXT_FLUSH_PRIO;
+        list_add(&dirtytree->list, &castle_cache_extent_dirtylists[dirtytree->flush_prio]);
+        atomic_inc(&castle_cache_extent_dirtylist_sizes[dirtytree->flush_prio]);
+    }
+    spin_unlock_irq(&castle_cache_block_hash_lock);
+}
+
+/**
  * Mark c2b and associated c2ps dirty and place on dirtytree.
  *
  * @param c2b   c2b to mark as dirty.

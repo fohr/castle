@@ -3403,6 +3403,7 @@ static void castle_extent_resource_release(void *data)
     BUG_ON(atomic_read(&ext->dirtytree->ref_cnt) != 1);
 
     /* Drop 'extent exists' reference on c2b dirtytree. */
+    castle_cache_dirtytree_demote(ext->dirtytree);
     castle_extent_dirtytree_put(ext->dirtytree);
 
     castle_kfree(ext);
