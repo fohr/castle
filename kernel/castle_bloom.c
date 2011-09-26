@@ -99,7 +99,7 @@ int castle_bloom_create(castle_bloom_t *bf, c_da_t da_id, btree_t btree_type, ui
 
     /* This is incremented as new nodes are created... note that this is _non-empty_
        nodes, so the increment is only done once something actually occupies the node. */
-    bf->num_btree_nodes = 0;
+    atomic_set(&bf->num_btree_nodes, 0);
 
     nodes_size = ceiling(ceiling(num_elements, BLOOM_ELEMENTS_PER_CHUNK),
                          btree->max_entries(BLOOM_INDEX_NODE_SIZE_PAGES)) *
@@ -148,7 +148,7 @@ int castle_bloom_create(castle_bloom_t *bf, c_da_t da_id, btree_t btree_type, ui
     bf->btree = btree;
 
     debug("castle_bloom_create num_elements=%llu num_chunks=%u num_blocks=%u size=%llu num_blocks_last_chunk=%u num_btree_nodes=%u\n",
-            num_elements, bf->num_chunks, num_blocks, size, bf->num_blocks_last_chunk, bf->num_btree_nodes);
+            num_elements, bf->num_chunks, num_blocks, size, bf->num_blocks_last_chunk, atomic_read(&bf->num_btree_nodes));
 
     bf_bp->node_cep.ext_id = bf->ext_id;
     bf_bp->node_cep.offset = 0;
@@ -203,7 +203,7 @@ static void castle_bloom_complete_btree_node(castle_bloom_t *bf)
 
     bf_bp->node_cep.offset += BLOOM_INDEX_NODE_SIZE;
     bf_bp->nodes_complete++;
-    BUG_ON(bf->num_btree_nodes != bf_bp->nodes_complete);
+    BUG_ON(atomic_read(&bf->num_btree_nodes) != bf_bp->nodes_complete);
 
     debug("now "cep_fmt_str".\n", cep2str(bf_bp->node_cep));
 }
@@ -218,6 +218,12 @@ static void castle_bloom_next_btree_node(castle_bloom_t *bf)
     if (bf_bp->cur_node != NULL)
         castle_bloom_complete_btree_node(bf);
 
+    /* Since num_chunks is a max value that never increases (but could decrease at the end of bloom
+       filter construction; see castle_bloom_complete()), we can use it to assert the max possible
+       value for num_btree_nodes. */
+    BUG_ON(atomic_read(&bf->num_btree_nodes) == ceiling(bf->num_chunks,
+              bf->btree->max_entries(BLOOM_INDEX_NODE_SIZE_PAGES)));
+
     bf_bp->node_c2b = castle_cache_block_get(bf_bp->node_cep, BLOOM_INDEX_NODE_SIZE_PAGES);
     write_lock_c2b(bf_bp->node_c2b);
     castle_cache_block_softpin(bf_bp->node_c2b);
@@ -226,12 +232,6 @@ static void castle_bloom_next_btree_node(castle_bloom_t *bf)
     bf_bp->cur_node = c2b_bnode(bf_bp->node_c2b);
     castle_bloom_node_buffer_init(bf->btree, bf_bp->cur_node);
     write_unlock_c2b(bf_bp->node_c2b);
-
-    /* Since num_chunks is a max value that never increases (but could decrease at the end of bloom
-       filter construction; see castle_bloom_complete()), we can use it to assert the max possible
-       value for num_btree_nodes. */
-    BUG_ON(bf->num_btree_nodes == ceiling(bf->num_chunks,
-              bf->btree->max_entries(BLOOM_INDEX_NODE_SIZE_PAGES)));
 
     /* don't forget to inc bf->num_btree_nodes once you've put something in the node! */
 }
@@ -345,7 +345,7 @@ static void castle_bloom_add_index_key(castle_bloom_t *bf, void *key, c_baik_typ
     dirty_c2b(bf_bp->node_c2b);
     write_unlock_c2b(bf_bp->node_c2b);
     if (new_node)
-        bf->num_btree_nodes++;
+        atomic_inc(&bf->num_btree_nodes);
 }
 
 /**
@@ -520,7 +520,7 @@ static int castle_bloom_get_chunk_id(castle_bloom_t *bf,
     //TODO@tr shouldn't this be || instead of &&?
     BUG_ON(cep == NULL && chunk_id_out == NULL);
 
-    for (node_index = 0; node_index < bf->num_btree_nodes; node_index++)
+    for (node_index = 0; node_index < atomic_read(&bf->num_btree_nodes); node_index++)
     {
         BUG_ON(!c2b_uptodate(btree_nodes_c2bs[node_index]));
         buffer = c2b_buffer(btree_nodes_c2bs[node_index]);
@@ -823,15 +823,16 @@ static void castle_bloom_index_read(c_bvec_t *c_bvec)
     uint32_t num_btree_nodes;
 
     bf = &c_bvec->tree->bloom;
-    BUG_ON(bf->num_btree_nodes == 0);
+    BUG_ON(atomic_read(&bf->num_btree_nodes) == 0);
 
     btree_nodes_cep.ext_id = bf->ext_id;
     btree_nodes_cep.offset = 0;
 
     /* We need a local copy of this because at the end we've put the ct
-     * so bf may have been freed.
+     * so bf may have been freed... and also, since partial merges, num_btree_nodes
+     * may change anyway.
      */
-    num_btree_nodes = bf->num_btree_nodes;
+    num_btree_nodes = atomic_read(&bf->num_btree_nodes);
 
     btree_nodes_c2bs = castle_malloc(sizeof(c2_block_t*) * num_btree_nodes, GFP_KERNEL);
     if (!btree_nodes_c2bs)
@@ -910,7 +911,7 @@ void castle_bloom_marshall(castle_bloom_t *bf, struct castle_clist_entry *ctm)
     {
         if(bf_bp->elements_inserted != 0)
         {
-            BUG_ON(bf->num_btree_nodes == 0);
+            BUG_ON(atomic_read(&bf->num_btree_nodes) == 0);
             BUG_ON(bf->num_chunks      == 0);
         }
     }
@@ -920,7 +921,7 @@ void castle_bloom_marshall(castle_bloom_t *bf, struct castle_clist_entry *ctm)
     ctm->bloom_num_chunks = bf->num_chunks;
     ctm->bloom_num_blocks_last_chunk = bf->num_blocks_last_chunk;
     ctm->bloom_chunks_offset = bf->chunks_offset;
-    ctm->bloom_num_btree_nodes = bf->num_btree_nodes;
+    ctm->bloom_num_btree_nodes = atomic_read(&bf->num_btree_nodes);
     ctm->bloom_ext_id = bf->ext_id;
 }
 
@@ -937,12 +938,12 @@ void castle_bloom_unmarshall(castle_bloom_t *bf, struct castle_clist_entry *ctm)
     bf->num_chunks = ctm->bloom_num_chunks;
     bf->num_blocks_last_chunk = ctm->bloom_num_blocks_last_chunk;
     bf->chunks_offset = ctm->bloom_chunks_offset;
-    bf->num_btree_nodes = ctm->bloom_num_btree_nodes;
+    atomic_set(&bf->num_btree_nodes, ctm->bloom_num_btree_nodes);
     bf->btree = castle_btree_type_get(ctm->btree_type);
     bf->ext_id = ctm->bloom_ext_id;
 
     castle_printk(LOG_DEBUG, "castle_bloom_unmarshall ext_id=%llu num_chunks=%u num_blocks_last_chunk=%u chunks_offset=%llu num_btree_nodes=%u\n",
-                bf->ext_id, bf->num_chunks, bf->num_blocks_last_chunk, bf->chunks_offset, bf->num_btree_nodes);
+                bf->ext_id, bf->num_chunks, bf->num_blocks_last_chunk, bf->chunks_offset, atomic_read(&bf->num_btree_nodes));
 
     castle_extent_mark_live(bf->ext_id, ctm->da_id);
 
