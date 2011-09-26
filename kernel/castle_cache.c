@@ -988,11 +988,9 @@ static int c2_dirtytree_remove(c2_block_t *c2b)
     }
     spin_unlock(&castle_cache_block_lru_lock);
 
-#ifdef CASTLE_PERF_DEBUG
     /* Maintain the number of pages in this dirtytree. */
     dirtytree->nr_pages -= c2b->nr_pages;
     BUG_ON(dirtytree->nr_pages < 0);
-#endif
 
     /* Release lock and put reference, potentially freeing the dirtytree if
      * the extent has already been freed. */
@@ -1087,10 +1085,8 @@ static int c2_dirtytree_insert(c2_block_t *c2b)
     rb_insert_color(&c2b->rb_dirtytree, &dirtytree->rb_root);
     spin_unlock(&castle_cache_block_lru_lock);
 
-#ifdef CASTLE_PERF_DEBUG
     /* Maintain the number of pages in this dirtytree. */
     dirtytree->nr_pages += c2b->nr_pages;
-#endif
 
     /* Keep the reference until the c2b is clean but drop the lock. */
     c2b->dirtytree = dirtytree;
@@ -1103,7 +1099,7 @@ static int c2_dirtytree_insert(c2_block_t *c2b)
  * Demote tree of dirty blocks (dirtytree) when the extent is being deleted.
  * This priotises flushing the blocks of this extent out of the cache.
  *
- * @param c2b   Dirtytree to demote. 
+ * @param c2b   Dirtytree to demote.
  *
  * @also c2_dirtytree_remove()
  */
@@ -5286,11 +5282,12 @@ out:
  */
 static int castle_cache_flush(void *unused)
 {
-#define MIN_FLUSH_SIZE  128
-#define MAX_FLUSH_SIZE  (10*256*castle_cache_flush_nr_slaves())
+#define MIN_FLUSH_SIZE              128
+#define MAX_FLUSH_SIZE              (10*256*castle_cache_flush_nr_slaves())
                                               /* 10MB/s per slave.                    */
+#define MIN_EFFICIENT_DIRTYTREE     (5*256)   /* In pages, equals 5MB                 */
 #define MIN_FLUSH_FREQ  5                     /* Min flush rate: 5*128pgs/s = 2.5MB/s */
-    int exiting, target_dirty_pgs, dirty_pgs, to_flush, last_flush, i, prio;
+    int exiting, target_dirty_pgs, dirty_pgs, to_flush, last_flush, i, prio, aggressive;
     atomic_t in_flight = ATOMIC(0);
     c_ext_inflight_t *data;
     c_chk_cnt_t start_chk;
@@ -5352,14 +5349,20 @@ static int castle_cache_flush(void *unused)
         last_flush = to_flush;
 
         /* Iterate over all dirty extents trying to find pages to flush.
-           Try flushing extents from high priority (i.e. low value) dirtylists first. */
+           Try flushing extents from high priority (i.e. low value) dirtylists first.
+           Start with 'non-aggresive' flush (i.e. when only extents that are deemed
+           to be worth-while flushing are flushed), if to_flush pages aren't found,
+           switch to aggresive.
+         */
+        aggressive = 0;
+aggressive:
         for(prio = 0; prio < NR_EXTENT_FLUSH_PRIOS; prio++)
         {
             c_ext_dirtytree_t *dirtytree;
             int flushed = 0;
 
             /* Stop looping if we've managed to flush enough pages. */
-            if (to_flush <= 0)
+            if(to_flush <= 0)
                 break;
 
             /* Record the size of this list at this point in time,
@@ -5415,6 +5418,16 @@ static int castle_cache_flush(void *unused)
                 /* Get the range of extent. */
                 castle_extent_mask_read_all(dirtytree->ext_id, &start_chk, &end_chk);
 
+                /* On non-aggressive scan, only flush extents with plenty of dirty
+                   blocks. This makes IO more efficient. */
+                if(!aggressive &&
+                   prio != DEAD_EXT_FLUSH_PRIO &&
+                   dirtytree->nr_pages < MIN_EFFICIENT_DIRTYTREE)
+                {
+                    castle_extent_dirtytree_put(dirtytree);
+                    continue;
+                }
+
                 /* Flushed will be set to an approximation of pages flushed. */
                 __castle_cache_extent_flush(dirtytree,                      /* dirtytree    */
                                             start_chk * C_CHK_SIZE,         /* start offset */
@@ -5437,6 +5450,14 @@ static int castle_cache_flush(void *unused)
 
                 to_flush -= flushed;
             }
+        }
+
+        /* Check that enough pages were found, if not go through the extents more
+           exhaustively. */
+        if(!aggressive && (to_flush > 0))
+        {
+            aggressive = 1;
+            goto aggressive;
         }
     }
 
