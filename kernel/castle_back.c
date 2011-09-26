@@ -493,7 +493,7 @@ static void castle_back_stateful_op_expire(struct work_struct *work);
 
 /* *op_ptr is NULL if there are no free ones */
 static castle_interface_token_t
-castle_back_get_stateful_op(struct castle_back_conn *conn,
+castle_back_stateful_op_get(struct castle_back_conn *conn,
                             struct castle_back_stateful_op **op_ptr,
                             int cpu,
                             int cpu_index,
@@ -514,7 +514,7 @@ castle_back_get_stateful_op(struct castle_back_conn *conn,
     list_del(&stateful_op->list);
     spin_unlock(&conn->response_lock);
 
-    debug("castle_back_get_stateful_op got op: in_use = %d, "
+    debug("castle_back_stateful_op_get got op: in_use = %d, "
             "token = %u, use_count = %u, index = %ld\n",
             stateful_op->in_use, stateful_op->token,
             stateful_op->use_count, stateful_op - conn->stateful_ops);
@@ -1810,7 +1810,7 @@ static void castle_back_iter_start(void *data)
 
     debug_iter("castle_back_iter_start\n");
 
-    token = castle_back_get_stateful_op(conn,
+    token = castle_back_stateful_op_get(conn,
                                         &stateful_op,
                                         op->cpu,
                                         op->cpu_index,
@@ -2613,7 +2613,7 @@ static void castle_back_big_put(void *data)
     }
 
     /* Get a new stateful op to handle big_put. */
-    token = castle_back_get_stateful_op(conn,
+    token = castle_back_stateful_op_get(conn,
                                         &stateful_op,
                                         op->cpu,
                                         op->cpu_index,
@@ -2924,7 +2924,7 @@ static void castle_back_big_get(void *data)
 
     debug("castle_back_big_get\n");
 
-    token = castle_back_get_stateful_op(conn,
+    token = castle_back_stateful_op_get(conn,
                                         &stateful_op,
                                         op->cpu,
                                         op->cpu_index,
@@ -3107,7 +3107,7 @@ unsigned int castle_back_poll(struct file *file, poll_table *wait)
 /**
  * Get cpu_index for a given stateful op.
  */
-static int castle_back_get_stateful_op_cpu_index(struct castle_back_conn *conn,
+static int castle_back_stateful_op_cpu_index_get(struct castle_back_conn *conn,
                                                  castle_interface_token_t token,
                                                  uint32_t tag)
 {
@@ -3225,28 +3225,28 @@ static void castle_back_request_process(struct castle_back_conn *conn, struct ca
 
         case CASTLE_RING_ITER_NEXT:
             INIT_WORK(&op->work, castle_back_iter_next, op);
-            op->cpu_index = castle_back_get_stateful_op_cpu_index(conn,
+            op->cpu_index = castle_back_stateful_op_cpu_index_get(conn,
                                                                   op->req.iter_next.token,
                                                                   CASTLE_RING_ITER_START);
             break;
 
         case CASTLE_RING_ITER_FINISH:
             INIT_WORK(&op->work, castle_back_iter_finish, op);
-            op->cpu_index = castle_back_get_stateful_op_cpu_index(conn,
+            op->cpu_index = castle_back_stateful_op_cpu_index_get(conn,
                                                                   op->req.iter_finish.token,
                                                                   CASTLE_RING_ITER_START);
             break;
 
         case CASTLE_RING_PUT_CHUNK:
             INIT_WORK(&op->work, castle_back_put_chunk, op);
-            op->cpu_index = castle_back_get_stateful_op_cpu_index(conn,
+            op->cpu_index = castle_back_stateful_op_cpu_index_get(conn,
                                                                   op->req.put_chunk.token,
                                                                   CASTLE_RING_BIG_PUT);
             break;
 
         case CASTLE_RING_GET_CHUNK:
             INIT_WORK(&op->work, castle_back_get_chunk, op);
-            op->cpu_index = castle_back_get_stateful_op_cpu_index(conn,
+            op->cpu_index = castle_back_stateful_op_cpu_index_get(conn,
                                                                   op->req.get_chunk.token,
                                                                   CASTLE_RING_BIG_GET);
             break;
