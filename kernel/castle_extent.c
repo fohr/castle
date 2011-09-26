@@ -1232,6 +1232,48 @@ error_out:
 }
 
 /**
+ * Calculates flush priority on the basis of extent type, and its size.
+ * Smaller flush prio means that extent is more likely to be flushed out.
+ * The priorities are arranged in such a way that btree + medium object extents of small
+ * CTs are least likely to be flushed out.
+ */
+c_ext_flush_prio_t castle_ext_flush_prio_get(c_ext_type_t type, c_chk_cnt_t size)
+{
+    switch(type)
+    {
+        case EXT_T_META_DATA:
+            return META_FLUSH_PRIO;
+
+        case EXT_T_GLOBAL_BTREE:
+        case EXT_T_BLOCK_DEV:
+        case EXT_T_BLOOM_FILTER:
+            return DEFAULT_FLUSH_PRIO;
+
+        case EXT_T_T0_INTERNAL_NODES:
+        case EXT_T_T0_LEAF_NODES:
+        case EXT_T_T0_MEDIUM_OBJECTS:
+            return SMALL_CT_FLUSH_PRIO;
+
+        case EXT_T_INTERNAL_NODES:
+        case EXT_T_LEAF_NODES:
+        case EXT_T_MEDIUM_OBJECTS:
+            /* If extents are smaller than 1/4 of the cache size, alloc them to medium
+               ct flush prio, otherwise large ct flush prio. */
+            if(size < castle_cache_size_get() / (4 * BLKS_PER_CHK))
+                return MEDIUM_CT_FLUSH_PRIO;
+            else
+                return LARGE_CT_FLUSH_PRIO;
+
+        case EXT_T_LARGE_OBJECT:
+            return LARGE_OBJS_FLUSH_PRIO;
+        default:
+            castle_printk(LOG_ERROR, "Unknown extent type: %d\n", type);
+            BUG();
+    }
+}
+
+
+/**
  * Allocate and initialise extent and per-extent dirtytree structures.
  */
 static c_ext_t * castle_ext_alloc(c_ext_id_t ext_id)
@@ -1263,9 +1305,10 @@ static c_ext_t * castle_ext_alloc(c_ext_id_t ext_id)
     ext->rebuild_mask_id    = INVAL_MASK_ID;
 
     /* Per-extent RB dirtytree structure. */
-    ext->dirtytree->ext_id  = ext_id;
-    ext->dirtytree->ref_cnt = ATOMIC(1);
-    ext->dirtytree->rb_root = RB_ROOT;
+    ext->dirtytree->ext_id     = ext_id;
+    ext->dirtytree->ref_cnt    = ATOMIC(1);
+    ext->dirtytree->rb_root    = RB_ROOT;
+    ext->dirtytree->flush_prio = (uint8_t)-1;
     INIT_LIST_HEAD(&ext->dirtytree->list);
     spin_lock_init(&ext->dirtytree->lock);
 #ifdef CASTLE_PERF_DEBUG
@@ -1583,14 +1626,15 @@ static int castle_extent_micro_ext_create(void)
     if (!micro_ext)
         return -ENOMEM;
 
-    micro_ext->size     = MICRO_EXT_SIZE;
-    micro_ext->type     = MICRO_EXT;
-    micro_ext->ext_type = EXT_T_META_DATA;
-    micro_ext->da_id    = 0;
-    micro_ext->maps_cep = INVAL_EXT_POS;
+    micro_ext->size                  = MICRO_EXT_SIZE;
+    micro_ext->type                  = MICRO_EXT;
+    micro_ext->ext_type              = EXT_T_META_DATA;
+    micro_ext->da_id                 = 0;
+    micro_ext->maps_cep              = INVAL_EXT_POS;
+    micro_ext->dirtytree->flush_prio = castle_ext_flush_prio_get(EXT_T_META_DATA, MICRO_EXT_SIZE);
 #ifdef CASTLE_PERF_DEBUG
-    micro_ext->dirtytree->ext_size  = micro_ext->size;
-    micro_ext->dirtytree->ext_type  = micro_ext->ext_type;
+    micro_ext->dirtytree->ext_size   = micro_ext->size;
+    micro_ext->dirtytree->ext_type   = micro_ext->ext_type;
 #endif
 
     memset(micro_maps, 0, sizeof(castle_extents_sb->micro_maps));
@@ -1881,6 +1925,7 @@ static int load_extent_from_mentry(struct castle_elist_entry *mstore_entry)
     ext->alive = 0;
 
     CONVERT_MENTRY_TO_EXTENT(ext, mstore_entry);
+    ext->dirtytree->flush_prio = castle_ext_flush_prio_get(ext->ext_type, ext->size);
     if (EXT_ID_INVAL(ext->ext_id))
     {
         ret = -EINVAL;
@@ -3050,15 +3095,16 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t     rda_type,
     }
     castle_extents_sb       = castle_extents_super_block_get();
 
-    ext->ext_id             = EXT_ID_INVAL(ext_id) ? castle_extents_sb->ext_id_seq : ext_id;
-    ext->dirtytree->ext_id  = ext->ext_id;
-    ext->size               = ext_size;
-    ext->type               = rda_type;
-    ext->k_factor           = rda_spec->k_factor;
-    ext->ext_type           = ext_type;
-    ext->da_id              = da_id;
-    ext->use_shadow_map     = 0;
-    ext->shadow_map         = NULL;
+    ext->ext_id                = EXT_ID_INVAL(ext_id) ? castle_extents_sb->ext_id_seq : ext_id;
+    ext->dirtytree->ext_id     = ext->ext_id;
+    ext->size                  = ext_size;
+    ext->type                  = rda_type;
+    ext->k_factor              = rda_spec->k_factor;
+    ext->ext_type              = ext_type;
+    ext->da_id                 = da_id;
+    ext->use_shadow_map        = 0;
+    ext->shadow_map            = NULL;
+    ext->dirtytree->flush_prio = castle_ext_flush_prio_get(ext->ext_type, ext->size);
 #ifdef CASTLE_PERF_DEBUG
     ext->dirtytree->ext_size= ext->size;
     ext->dirtytree->ext_type= ext->ext_type;
@@ -3628,12 +3674,13 @@ c_ext_id_t castle_extent_sup_ext_init(struct castle_slave *cs)
         castle_printk(LOG_WARN, "Failed to allocate memory for extent\n");
         goto err1;
     }
-    ext->size       = sup_ext.size;
-    ext->type       = sup_ext.type;
-    ext->k_factor   = sup_ext.k_factor;
-    ext->maps_cep   = sup_ext.maps_cep;
-    ext->ext_type   = EXT_T_META_DATA;
-    ext->da_id      = 0;
+    ext->size                  = sup_ext.size;
+    ext->type                  = sup_ext.type;
+    ext->k_factor              = sup_ext.k_factor;
+    ext->maps_cep              = sup_ext.maps_cep;
+    ext->ext_type              = EXT_T_META_DATA;
+    ext->da_id                 = 0;
+    ext->dirtytree->flush_prio = castle_ext_flush_prio_get(ext->ext_type, ext->size);
 #ifdef CASTLE_PERF_DEBUG
     ext->dirtytree->ext_size    = ext->size;
     ext->dirtytree->ext_type    = ext->ext_type;

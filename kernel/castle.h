@@ -349,7 +349,10 @@ static USED char *castle_rda_type_str[] = {
     "NR_RDA_SPECS"
 };
 
-/* Type of data stored within extent. */
+/* Type of data stored within extent.
+   NOTE: all extent types must be dealt with in castle_ext_flush_prio_get(), please modify
+         that function if adding any types.
+ */
 typedef enum {
     EXT_T_META_DATA,
     EXT_T_GLOBAL_BTREE,

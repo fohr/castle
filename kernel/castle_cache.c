@@ -297,9 +297,11 @@ static struct kmem_cache      *castle_io_array_cache = NULL;
 static struct kmem_cache      *castle_flush_cache = NULL;
 
 /* Following LIST_HEADs are protected by castle_cache_block_lru_lock. */
-static               LIST_HEAD(castle_cache_extent_dirtylist);      /**< Extents with dirty c2bs  */
+static struct list_head        castle_cache_extent_dirtylists[NR_EXTENT_FLUSH_PRIOS];
+                                                                    /**< Lists of dirtytrees      */
 static               LIST_HEAD(castle_cache_cleanlist);             /**< Clean c2bs               */
-static atomic_t                castle_cache_extent_dirtylist_size;  /**< Number of dirty extents  */
+static atomic_t                castle_cache_extent_dirtylist_sizes[NR_EXTENT_FLUSH_PRIOS];
+                                                                    /**< Number of dirty extents  */
 static atomic_t                castle_cache_cleanlist_size;         /**< Blocks on the cleanlist  */
 static atomic_t                castle_cache_cleanlist_softpin_size; /**< Softpin blks on cleanlist*/
 static atomic_t                castle_cache_block_victims;          /**< #clean blocks evicted    */
@@ -982,7 +984,7 @@ static int c2_dirtytree_remove(c2_block_t *c2b)
         /* Last dirty c2b for this extent, remove it from the global
          * list of dirty extents. */
         list_del_init(&dirtytree->list);
-        BUG_ON(atomic_dec_return(&castle_cache_extent_dirtylist_size) < 0);
+        BUG_ON(atomic_dec_return(&castle_cache_extent_dirtylist_sizes[dirtytree->flush_prio]) < 0);
     }
     spin_unlock(&castle_cache_block_lru_lock);
 
@@ -1077,8 +1079,9 @@ static int c2_dirtytree_insert(c2_block_t *c2b)
     {
         /* First dirty c2b for this extent, place it onto the global
          * list of dirty extents. */
-        list_add(&dirtytree->list, &castle_cache_extent_dirtylist);
-        atomic_inc(&castle_cache_extent_dirtylist_size);
+        BUG_ON(dirtytree->flush_prio >= NR_EXTENT_FLUSH_PRIOS);
+        list_add(&dirtytree->list, &castle_cache_extent_dirtylists[dirtytree->flush_prio]);
+        atomic_inc(&castle_cache_extent_dirtylist_sizes[dirtytree->flush_prio]);
     }
     rb_link_node(&c2b->rb_dirtytree, parent, p);
     rb_insert_color(&c2b->rb_dirtytree, &dirtytree->rb_root);
@@ -5238,9 +5241,8 @@ static int castle_cache_flush(void *unused)
 #define MIN_FLUSH_SIZE  128
 #define MAX_FLUSH_SIZE  (4*1024)
 #define MIN_FLUSH_FREQ  5           /* Min flush rate: 5*128pgs/s = 2.5MB/s */
-    int i, exiting, flushing_rwcts, target_dirty_pgs, dirty_pgs, to_flush, last_flush;
+    int exiting, target_dirty_pgs, dirty_pgs, to_flush, last_flush, i, prio;
     atomic_t in_flight = ATOMIC(0);
-    c_ext_type_t ext_type;
     c_ext_inflight_t *data;
     c_chk_cnt_t start_chk;
     c_chk_cnt_t end_chk;
@@ -5274,7 +5276,11 @@ static int castle_cache_flush(void *unused)
         /* Exit if we've finished waiting for all outstanding IOs. */
         if (unlikely(exiting))
         {
-            if (atomic_read(&castle_cache_extent_dirtylist_size) == 0)
+            /* Exit iff all dirtylists have been drained. */
+            for(i=0; i<NR_EXTENT_FLUSH_PRIOS; i++)
+                if(atomic_read(&castle_cache_extent_dirtylist_sizes[i]) != 0)
+                    break;
+            if(i >= NR_EXTENT_FLUSH_PRIOS)
                 break; /* only way out */
 
             /* We've not finished the flush.  Set last_flush such that it will
@@ -5296,16 +5302,9 @@ static int castle_cache_flush(void *unused)
         }
         last_flush = to_flush;
 
-        /* Iterate over all dirty extents trying to find pages to flush. */
-        flushing_rwcts = 0;
-        i = atomic_read(&castle_cache_extent_dirtylist_size);
-
-        /* Sort the list of dirtytrees in descending extent size. */
-        spin_lock_irq(&castle_cache_block_lru_lock);
-        list_sort(&castle_cache_extent_dirtylist, castle_cache_dirtytree_compare);
-        spin_unlock_irq(&castle_cache_block_lru_lock);
-
-        while(true)
+        /* Iterate over all dirty extents trying to find pages to flush.
+           Try flushing extents from high priority (i.e. low value) dirtylists first. */
+        for(prio = 0; prio < NR_EXTENT_FLUSH_PRIOS; prio++)
         {
             c_ext_dirtytree_t *dirtytree;
             int flushed = 0;
@@ -5314,115 +5313,91 @@ static int castle_cache_flush(void *unused)
             if (to_flush <= 0)
                 break;
 
-            /* If counter reached zero the, and the flusing rwcts flag isn't set,
-               consider setting it (reset the counter too). */
-            if (i == 0 &&
-                !flushing_rwcts &&
-                (exiting || dirty_pgs > target_dirty_pgs))
+            /* Record the size of this list at this point in time,
+               stop processing extents once we checked that many
+               (more extents could be added, or some removed while
+                we are doing this. What matter is that we stop eventually). */
+            i = atomic_read(&castle_cache_extent_dirtylist_sizes[prio]);
+
+            while(--i >= 0)
             {
-                flushing_rwcts = 1;
-                i = atomic_read(&castle_cache_extent_dirtylist_size);
-            }
+                /* Get next per-extent dirtytree to flush. */
+                spin_lock_irq(&castle_cache_block_lru_lock);
 
-            /* Stop looping if i reached 0. */
-            if (i == 0)
-                break;
-
-
-            /* Update the counter here, before any 'continue' statements.
-               That's fine because the counter isn't used for anything other than
-               checking the termination conditions. */
-            i--;
-
-            /* Get next per-extent dirtytree to flush. */
-            spin_lock_irq(&castle_cache_block_lru_lock);
-            if (list_empty(&castle_cache_extent_dirtylist))
-            {
+                dirtytree = list_entry(castle_cache_extent_dirtylists[prio].next,
+                        c_ext_dirtytree_t, list);
+                /* Get dirtytree ref under castle_cache_block_lru_lock.  Prevents
+                 * a potential race where all c2bs in tree are flushing and final
+                 * c2b IO completion callback handler might free the dirtytree. */
+                castle_extent_dirtytree_get(dirtytree);
+                /* Move it to the end of the list. So that next time a different
+                   extent will be considered next time around. */
+                list_move_tail(&dirtytree->list, &castle_cache_extent_dirtylists[prio]);
                 spin_unlock_irq(&castle_cache_block_lru_lock);
-                break;
-            }
-            dirtytree = list_entry(castle_cache_extent_dirtylist.next,
-                    c_ext_dirtytree_t, list);
-            /* Get dirtytree ref under castle_cache_block_lru_lock.  Prevents
-             * a potential race where all c2bs in tree are flushing and final
-             * c2b IO completion callback handler might free the dirtytree. */
-            castle_extent_dirtytree_get(dirtytree);
-            list_move_tail(&dirtytree->list, &castle_cache_extent_dirtylist);
-            spin_unlock_irq(&castle_cache_block_lru_lock);
 
-            /* Check extent type. If its T0, only flush if flushing_rwcts flag is set.
-             * Note that if ext_id belongs to a deleted extent, we are going to get
-             * EXT_T_INVALID returned. We are therefore going to flush it, _even_ if
-             * it used to belong to a T0. */
-            ext_type = castle_extent_type_get(dirtytree->ext_id);
-            if (!flushing_rwcts &&
-                    (ext_type == EXT_T_T0_INTERNAL_NODES ||
-                     ext_type == EXT_T_T0_LEAF_NODES ||
-                     ext_type == EXT_T_T0_MEDIUM_OBJECTS))
-            {
+                /* We need to pass two reference counts to __castle_cache_extent_flush() one
+                 * for global counting (for rate limiting) and another per extent cound to
+                 * release references. */
+                data = kmem_cache_alloc(castle_flush_cache, GFP_KERNEL);
+                if (!data)
+                {
+                    castle_printk(LOG_DEVEL, "Failed to allocate space for flush element.\n");
+                    castle_extent_dirtytree_put(dirtytree);
+                    continue;
+                }
+                data->in_flight = &in_flight;
+                /* Give an initial reference, to handle end_io(c2b) being called before issuing all
+                 * submit_c2b(). */
+                atomic_set(&data->ext_in_flight, 1);
+
+                /* Get a reference on extent with all outstanding masks. */
+                data->mask_id = castle_extent_get_all(dirtytree->ext_id);
+
+                /* Check if extent is already dead. This shouldn't happen as before we delete
+                 * the extent, we get rid off all dirty pages. It could happen only if after last
+                 * link is gone. */
+                if (MASK_ID_INVAL(data->mask_id))
+                {
+                    castle_extent_dirtytree_put(dirtytree);
+                    kmem_cache_free(castle_flush_cache, data);
+                    continue;
+                }
+
+                /* Get the range of extent. */
+                castle_extent_mask_read_all(dirtytree->ext_id, &start_chk, &end_chk);
+
+                /* Flushed will be set to an approximation of pages flushed. */
+                __castle_cache_extent_flush(dirtytree,                      /* dirtytree    */
+                                            start_chk * C_CHK_SIZE,         /* start offset */
+                                            (end_chk + 1) * C_CHK_SIZE - 1, /* end offset   */
+                                            to_flush,                       /* max_pgs      */
+                                            castle_cache_flush_endio,       /* Callback     */
+                                            (atomic_t *)data,               /* Callback data*/
+                                            &flushed,                       /* flushed_p    */
+                                            0);                             /* waitlock     */
+
+                /* If per extent inflight count reached 0, time to release the reference. All
+                 * io's completed or failed, or nothing scheudled for flush. */
+                if (!atomic_dec_return(&data->ext_in_flight))
+                {
+                    castle_extent_put_all(data->mask_id);
+                    kmem_cache_free(castle_flush_cache, data);
+                }
+
                 castle_extent_dirtytree_put(dirtytree);
-                continue;
+
+                to_flush -= flushed;
             }
-
-            /* We need to pass two reference counts to __castle_cache_extent_flush() one
-             * for global counting (for rate limiting) and another per extent cound to
-             * release references. */
-            data = kmem_cache_alloc(castle_flush_cache, GFP_KERNEL);
-            if (!data)
-            {
-                castle_printk(LOG_DEVEL, "Failed to allocate space for flush element.\n");
-                castle_extent_dirtytree_put(dirtytree);
-                continue;
-            }
-            data->in_flight = &in_flight;
-            /* Give an initial reference, to handle end_io(c2b) being called before issuing all
-             * submit_c2b(). */
-            atomic_set(&data->ext_in_flight, 1);
-
-            /* Get a reference on extent with all outstanding masks. */
-            data->mask_id = castle_extent_get_all(dirtytree->ext_id);
-
-            /* Check if extent is already dead. This shouldn't happen as before we delete
-             * the extent, we get rid off all dirty pages. It could happen only if after last
-             * link is gone. */
-            if (MASK_ID_INVAL(data->mask_id))
-            {
-                castle_extent_dirtytree_put(dirtytree);
-                kmem_cache_free(castle_flush_cache, data);
-                continue;
-            }
-
-            /* Get the range of extent. */
-            castle_extent_mask_read_all(dirtytree->ext_id, &start_chk, &end_chk);
-
-            /* Flushed will be set to an approximation of pages flushed. */
-            __castle_cache_extent_flush(dirtytree,                      /* dirtytree    */
-                                        start_chk * C_CHK_SIZE,         /* start offset */
-                                        (end_chk + 1) * C_CHK_SIZE - 1, /* end offset   */
-                                        to_flush,                       /* max_pgs      */
-                                        castle_cache_flush_endio,       /* Callback     */
-                                        (atomic_t *)data,               /* Callback data*/
-                                        &flushed,                       /* flushed_p    */
-                                        0);                             /* waitlock     */
-
-            /* If per extent inflight count reached 0, time to release the reference. All
-             * io's completed or failed, or nothing scheudled for flush. */
-            if (!atomic_dec_return(&data->ext_in_flight))
-            {
-                castle_extent_put_all(data->mask_id);
-                kmem_cache_free(castle_flush_cache, data);
-            }
-
-            castle_extent_dirtytree_put(dirtytree);
-
-            to_flush -= flushed;
         }
     }
 
-    /* We shouldn't need locks to check these lists now. */
-    BUG_ON(atomic_read(&castle_cache_extent_dirtylist_size) != 0);
-    BUG_ON(!list_empty(&castle_cache_extent_dirtylist));
     BUG_ON(atomic_read(&in_flight) != 0);
+    /* Exiting the flush thread. We shouldn't need locks to check these lists now. */
+    for (i = 0; i < NR_EXTENT_FLUSH_PRIOS; i++)
+    {
+        BUG_ON(atomic_read(&castle_cache_extent_dirtylist_sizes[i]) != 0);
+        BUG_ON(!list_empty(&castle_cache_extent_dirtylists[i]));
+    }
 
     return EXIT_SUCCESS;
 }
@@ -6663,7 +6638,7 @@ int castle_cache_init(void)
     unsigned long max_ram;
     struct sysinfo i;
     struct mutex* vmap_mutex_ptr;
-    int ret, cpu_iter;
+    int ret, j, cpu_iter;
 
     /* Find out how much memory there is in the system. */
     si_meminfo(&i);
@@ -6711,10 +6686,14 @@ int castle_cache_init(void)
     castle_cache_pgs        = castle_alloc(castle_cache_page_freelist_size  *
                                            sizeof(c2_page_t));
     /* Init other variables */
+    for(j=0; j<NR_EXTENT_FLUSH_PRIOS; j++)
+    {
+        INIT_LIST_HEAD(&castle_cache_extent_dirtylists[j]);
+        atomic_set(&castle_cache_extent_dirtylist_sizes[j], 0);
+    }
     atomic_set(&castle_cache_dirty_pages, 0);
     atomic_set(&castle_cache_clean_pages, 0);
     atomic_set(&castle_cache_flush_seq, 0);
-    atomic_set(&castle_cache_extent_dirtylist_size, 0);
     atomic_set(&castle_cache_cleanlist_size, 0);
     atomic_set(&castle_cache_cleanlist_softpin_size, 0);
     atomic_set(&castle_cache_block_victims, 0);

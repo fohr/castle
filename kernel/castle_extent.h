@@ -3,6 +3,16 @@
 
 #include "castle.h"
 
+typedef enum {
+    META_FLUSH_PRIO,
+    LARGE_OBJS_FLUSH_PRIO,
+    DEFAULT_FLUSH_PRIO,
+    LARGE_CT_FLUSH_PRIO,
+    MEDIUM_CT_FLUSH_PRIO,
+    SMALL_CT_FLUSH_PRIO,
+} c_ext_flush_prio_t;
+#define NR_EXTENT_FLUSH_PRIOS   16
+
 /**
  * Extent dirtytree structure.
  *
@@ -10,16 +20,18 @@
  *          1 reference per dirty c2b
  */
 typedef struct castle_extent_dirtytree {
-    c_ext_id_t          ext_id;     /**< Extent ID this dirtylist describes.        */
-    spinlock_t          lock;       /**< Protects count, rb_root.                   */
-    atomic_t            ref_cnt;    /**< References to this dirtylist.              */
-    struct rb_root      rb_root;    /**< RB-tree of dirty c2bs.                     */
-    struct list_head    list;       /**< Position on castle_cache_extent_dirtylist. */
+    c_ext_id_t          ext_id;     /**< Extent ID this dirtylist describes.          */
+    spinlock_t          lock;       /**< Protects count, rb_root.                     */
+    atomic_t            ref_cnt;    /**< References to this dirtylist.                */
+    struct rb_root      rb_root;    /**< RB-tree of dirty c2bs.                       */
+    struct list_head    list;       /**< Position in a castle_cache_extent_dirtylist. */
+    uint8_t             flush_prio; /**< Decides which dirtylist to use (low #, is
+                                         higher priority.                             */
 #ifdef CASTLE_PERF_DEBUG
     int                 nr_pages;   /**< Sum of c2b->nr_pages for c2bs in tree.
-                                         Protected by lock.                         */
-    c_chk_cnt_t         ext_size;   /**< Size of extent when created (in chunks).   */
-    c_ext_type_t        ext_type;   /**< Extent type when created.                  */
+                                         Protected by lock.                           */
+    c_chk_cnt_t         ext_size;   /**< Size of extent when created (in chunks).     */
+    c_ext_type_t        ext_type;   /**< Extent type when created.                    */
 #endif
 } c_ext_dirtytree_t;
 
