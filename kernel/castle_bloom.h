@@ -29,7 +29,7 @@ void castle_bloom_complete(castle_bloom_t *bf);
 void castle_bloom_abort(castle_bloom_t *bf);
 void castle_bloom_destroy(castle_bloom_t *bf);
 int castle_bloom_add(castle_bloom_t *bf, struct castle_btree_type *btree, void *key);
-void castle_bloom_submit(c_bvec_t *c_bvec);
+void castle_bloom_submit(c_bvec_t *c_bvec, int go_async);
 void castle_bloom_marshall(castle_bloom_t *bf, struct castle_clist_entry *ctm);
 void castle_bloom_unmarshall(castle_bloom_t *bf, struct castle_clist_entry *ctm);
 void castle_bloom_build_param_marshall(struct castle_bbp_entry *bbpm,

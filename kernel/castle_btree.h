@@ -10,7 +10,7 @@ c2_block_t* castle_btree_node_create  (struct castle_component_tree *ct,
                                        int version,
                                        uint16_t level,
                                        int was_preallocated);
-void        castle_btree_submit       (c_bvec_t *c_bvec);
+void        castle_btree_submit       (c_bvec_t *c_bvec, int go_async);
 
 void        castle_btree_iter_init    (c_iter_t *c_iter, c_ver_t version, int type);
 void        castle_btree_iter_start   (c_iter_t *c_iter);

@@ -1437,9 +1437,10 @@ static void _castle_btree_submit(struct work_struct *work)
 /**
  * Submit request to the btree.
  *
- * - Queue the request to the c_bvec-specified CPU
+ * @param   c_bvec      Request to submit
+ * @param   go_async    Whether to go asynchronous
  */
-void castle_btree_submit(c_bvec_t *c_bvec)
+void castle_btree_submit(c_bvec_t *c_bvec, int go_async)
 {
     c_bvec->btree_depth       = 0;
     c_bvec->btree_node        = NULL;
@@ -1447,7 +1448,13 @@ void castle_btree_submit(c_bvec_t *c_bvec)
     c_bvec->parent_key        = NULL;
 
     CASTLE_INIT_WORK(&c_bvec->work, _castle_btree_submit);
-    castle_btree_bvec_queue(c_bvec);
+
+    if (go_async)
+        /* Submit asynchronously. */
+        castle_btree_bvec_queue(c_bvec);
+    else
+        /* Submit directly. */
+        _castle_btree_submit(&c_bvec->work);
 }
 
 /**********************************************************************************************/

@@ -732,7 +732,7 @@ static void castle_bloom_block_process(c_bvec_t *c_bvec)
 #ifdef CASTLE_BLOOM_FP_STATS
     c_bvec->bloom_positive = 1;
 #endif
-    castle_btree_submit(c_bvec);
+    castle_btree_submit(c_bvec, 0 /*go_async*/);
 }
 
 /**
@@ -904,18 +904,27 @@ static void _castle_bloom_submit(void *data)
 /**
  * Perform a lookup in the entire Bloom filter.
  *
+ * Only CTs which have been merged can have bloom filters.
+ *
  * @param   c_bvec      The bvec to query
+ * @param   go_async    Whether to go asynchronous
  */
-void castle_bloom_submit(c_bvec_t *c_bvec)
+void castle_bloom_submit(c_bvec_t *c_bvec, int go_async)
 {
-    /* bloom filters won't exist for unmerged trees i.e. T0s */
-    if (!castle_bloom_use || !c_bvec->tree->bloom_exists)
-        castle_btree_submit(c_bvec);
-    else
+    if (castle_bloom_use && c_bvec->tree->bloom_exists)
     {
+        /* Submit via Bloom filter. */
         INIT_WORK(&c_bvec->work, _castle_bloom_submit, c_bvec);
-        queue_work_on(c_bvec->cpu, castle_wqs[19], &c_bvec->work);
+        if (go_async)
+            /* Submit asynchronously. */
+            queue_work_on(c_bvec->cpu, castle_wqs[19], &c_bvec->work);
+        else
+            /* Submit directly. */
+            _castle_bloom_submit(&c_bvec->work);
     }
+    else
+        /* Submit directly to Btree. */
+        castle_btree_submit(c_bvec, go_async /*go_async*/);
 }
 
 /**** Marshalling ****/

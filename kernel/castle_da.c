@@ -9401,7 +9401,7 @@ void castle_da_next_ct_read(c_bvec_t *c_bvec)
     debug_verbose("Scheduling btree read in %s tree: %d.\n",
             c_bvec->tree->dynamic ? "dynamic" : "static", c_bvec->tree->seq);
 
-    castle_bloom_submit(c_bvec);
+    castle_bloom_submit(c_bvec, 1 /*async*/);
 }
 
 /**
@@ -9573,7 +9573,7 @@ insert:
     debug_verbose("Looking up in ct=%d\n", c_bvec->tree->seq);
 
     /* Submit directly to btree. */
-    castle_btree_submit(c_bvec);
+    castle_btree_submit(c_bvec, 0 /*go_async*/);
 }
 
 /**
@@ -9600,23 +9600,22 @@ static void castle_da_read_bvec_start(struct castle_double_array *da, c_bvec_t *
         return;
     }
 
-    /* Find the first candidate tree. */
-    c_bvec->cts_index   = -1;
-    c_bvec->tree        = castle_da_cts_proxy_ct_next(c_bvec->cts_proxy,
-                                                     &c_bvec->cts_index,
-                                                      c_bvec->key);
+    /* Find first candidate tree and initialise request. */
+    c_bvec->cts_index       = -1;
+    c_bvec->tree            = castle_da_cts_proxy_ct_next(c_bvec->cts_proxy,
+                                                         &c_bvec->cts_index,
+                                                          c_bvec->key);
     BUG_ON(!c_bvec->tree); /* must always be at least one candidate */
-
     c_bvec->orig_complete   = c_bvec->submit_complete;
     c_bvec->submit_complete = castle_da_ct_read_complete;
 
     debug_verbose("Looking up in ct=%d\n", c_bvec->tree->seq);
 
-    /* Submit via bloom filter. */
+    /* Submit request (via bloom filter). */
 #ifdef CASTLE_BLOOM_FP_STATS
     c_bvec->bloom_positive = 0;
 #endif
-    castle_bloom_submit(c_bvec);
+    castle_bloom_submit(c_bvec, 0 /*go_async*/);
 }
 
 /**
