@@ -918,7 +918,7 @@ typedef struct castle_bloom_filter {
     uint32_t                  num_chunks;
     uint32_t                  num_blocks_last_chunk;
     uint64_t                  chunks_offset;
-    uint32_t                  num_btree_nodes;
+    atomic_t                  num_btree_nodes;
     struct castle_btree_type *btree;
     c_ext_id_t                ext_id;
     void                     *private; /* used for builds */

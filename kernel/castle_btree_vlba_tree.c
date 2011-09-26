@@ -393,7 +393,8 @@ static int castle_vlba_tree_entry_get(struct castle_btree_node *node,
                (struct castle_vlba_tree_entry *) VLBA_ENTRY_PTR(node, vlba_node, idx);
     c_val_tup_t cvt;
 
-    BUG_ON(idx < 0 || idx >= node->used);
+    BUG_ON(idx < 0);
+    BUG_ON(idx >= node->used);
     BUG_ON(((uint8_t *)entry) >= EOF_VLBA_NODE(node));
 
     if(key_p)         *key_p         = (void *)&entry->key;
