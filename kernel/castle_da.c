@@ -2725,7 +2725,7 @@ static int castle_da_lfs_ct_space_alloc(struct castle_da_lfs_ct_t *lfs,
     if (use_ssd)
     {
         lfs->internals_on_ssds = 1;
-        lfs->internal_ext.ext_id = castle_extent_alloc(SSD_RDA,
+        lfs->internal_ext.ext_id = castle_extent_alloc(castle_get_ssd_rda_lvl(),
                                                        da->id,
                                                        lfs->rwct ?
                                                             EXT_T_T0_INTERNAL_NODES :
@@ -2739,7 +2739,7 @@ static int castle_da_lfs_ct_space_alloc(struct castle_da_lfs_ct_t *lfs,
         /* FAILED to allocate internal node SSD extent.
          * ATTEMPT to allocate internal node HDD extent. */
         lfs->internals_on_ssds = 0;
-        lfs->internal_ext.ext_id = castle_extent_alloc(DEFAULT_RDA,
+        lfs->internal_ext.ext_id = castle_extent_alloc(castle_get_rda_lvl(),
                                                        da->id,
                                                        lfs->rwct ?
                                                             EXT_T_T0_INTERNAL_NODES :
@@ -2761,7 +2761,7 @@ static int castle_da_lfs_ct_space_alloc(struct castle_da_lfs_ct_t *lfs,
         {
             if(growable)
             {
-                lfs->tree_ext.ext_id = castle_extent_alloc_sparse(SSD_RDA,
+                lfs->tree_ext.ext_id = castle_extent_alloc_sparse(castle_get_ssd_rda_lvl(),
                                                                   da->id,
                                                                   lfs->rwct ?
                                                                        EXT_T_T0_LEAF_NODES :
@@ -2774,7 +2774,7 @@ static int castle_da_lfs_ct_space_alloc(struct castle_da_lfs_ct_t *lfs,
                         lfs->tree_ext.ext_id);
             }
             else
-                lfs->tree_ext.ext_id = castle_extent_alloc(DEFAULT_RDA,
+                lfs->tree_ext.ext_id = castle_extent_alloc(castle_get_rda_lvl(),
                                                            da->id,
                                                            lfs->rwct ?
                                                                 EXT_T_T0_LEAF_NODES :
@@ -2793,7 +2793,7 @@ static int castle_da_lfs_ct_space_alloc(struct castle_da_lfs_ct_t *lfs,
         lfs->leafs_on_ssds = 0;
         if(growable)
         {
-            lfs->tree_ext.ext_id = castle_extent_alloc_sparse(DEFAULT_RDA,
+            lfs->tree_ext.ext_id = castle_extent_alloc_sparse(castle_get_rda_lvl(),
                                                               da->id,
                                                               lfs->rwct ?
                                                                    EXT_T_T0_LEAF_NODES :
@@ -2806,7 +2806,7 @@ static int castle_da_lfs_ct_space_alloc(struct castle_da_lfs_ct_t *lfs,
                     lfs->tree_ext.ext_id);
         }
         else
-            lfs->tree_ext.ext_id = castle_extent_alloc(DEFAULT_RDA,
+            lfs->tree_ext.ext_id = castle_extent_alloc(castle_get_rda_lvl(),
                                                        da->id,
                                                        lfs->rwct ?
                                                             EXT_T_T0_LEAF_NODES :
@@ -2828,7 +2828,7 @@ static int castle_da_lfs_ct_space_alloc(struct castle_da_lfs_ct_t *lfs,
      * sum of both the trees. */
     if(growable)
     {
-        lfs->data_ext.ext_id = castle_extent_alloc_sparse(DEFAULT_RDA,
+        lfs->data_ext.ext_id = castle_extent_alloc_sparse(castle_get_rda_lvl(),
                                                           da->id,
                                                           lfs->rwct ?
                                                                EXT_T_T0_MEDIUM_OBJECTS :
@@ -2841,7 +2841,7 @@ static int castle_da_lfs_ct_space_alloc(struct castle_da_lfs_ct_t *lfs,
                 lfs->data_ext.ext_id);
     }
     else
-        lfs->data_ext.ext_id = castle_extent_alloc(DEFAULT_RDA,
+        lfs->data_ext.ext_id = castle_extent_alloc(castle_get_rda_lvl(),
                                                    da->id,
                                                    lfs->rwct ?
                                                         EXT_T_T0_MEDIUM_OBJECTS :

@@ -732,7 +732,7 @@ static int castle_object_replace_space_reserve(struct castle_object_replace *rep
 
     /* Large objects. */
     memset(&cep, 0, sizeof(c_ext_pos_t));
-    cep.ext_id = castle_extent_alloc(DEFAULT_RDA,
+    cep.ext_id = castle_extent_alloc(castle_get_rda_lvl(),
                                      c_bvec->tree->da->id,
                                      EXT_T_LARGE_OBJECT,
                                      nr_chunks, 0,  /* Not in transaction. */

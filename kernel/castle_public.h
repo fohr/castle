@@ -190,8 +190,10 @@ typedef uint64_t c_work_size_t;
 #define WORK_ID_INVAL(_t)   ((_t) == INVAL_WORK_ID)
 
 typedef enum {
-    DEFAULT_RDA,
-    SSD_RDA,
+    RDA_1,
+    RDA_2,
+    SSD_RDA_2,
+    SSD_RDA_3,
     META_EXT,
     MICRO_EXT,
     SUPER_EXT,

@@ -300,7 +300,7 @@ int castle_new_ext_freespace_init(c_ext_free_t           *ext_free,
     /* Calculate the number of chunks requried. */
     nr_chunks = ((size - 1) / C_CHK_SIZE) + 1;
     /* Try allocating the extent of the requested size. */
-    ext_id = castle_extent_alloc(DEFAULT_RDA, da_id, ext_type, nr_chunks, in_tran, data, callback);
+    ext_id = castle_extent_alloc(castle_get_rda_lvl(), da_id, ext_type, nr_chunks, in_tran, data, callback);
     if(EXT_ID_INVAL(ext_id))
         return -ENOSPC;
 
