@@ -185,6 +185,7 @@ struct castle_back_stateful_op
     castle_back_stateful_op_expire_t    expire;
     int                                 expire_enabled;     /**< expire() called only iff
                                                                  expire_enabled != 0            */
+    int                                 cancelled;          /**< #3006 debug                    */
 
     /* set when this stateful_op is expiring. No further operations
      * on the stateful_op are valid while expiring. */
@@ -527,6 +528,7 @@ castle_back_get_stateful_op(struct castle_back_conn *conn,
     stateful_op->expire_enabled = 0;
     stateful_op->expiring = 0;
     stateful_op->cancel_on_op_complete = 0;
+    stateful_op->cancelled = 0;
     CASTLE_INIT_WORK(&stateful_op->expire_work, castle_back_stateful_op_expire);
     stateful_op->in_use = 0;
     /* see def of castle_back_stateful_op */
@@ -2351,6 +2353,10 @@ static void _castle_back_iter_finish(struct castle_back_op *op,
      * Put this op on the queue for the iterator
      */
     spin_lock(&stateful_op->lock);
+
+    /* Verify this iter hasn't been finished twice. */
+    BUG_ON(stateful_op->cancelled);
+    stateful_op->cancelled++;
 
     castle_printk(LOG_DEBUG, "%s: conn=%p stateful_op=%p op=%p in_use=%d cancel_on_op_complete=%d curr_op=%p\n",
             __FUNCTION__, stateful_op->conn, stateful_op, op, stateful_op->in_use,
