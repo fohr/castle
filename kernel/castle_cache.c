@@ -5231,6 +5231,32 @@ static void castle_cache_flush_endio(c2_block_t *c2b)
     wake_up(&castle_cache_flush_wq);
 }
 
+static inline int castle_cache_flush_nr_slaves(void)
+{
+    static int cache_nr_slaves;
+    int tmp_nr_slaves;
+    static unsigned long last_nr_slaves_check_jiffies = 0;
+#define nr_slaves_sane(_cnt)  (((_cnt) >= 1) && ((_cnt) <= MAX_NR_SLAVES))
+
+    /* Only recheck sporadically. */
+    if(likely(last_nr_slaves_check_jiffies + 10 * HZ > jiffies))
+        goto out;
+
+    /* Work out how many slaves we've got. */
+    tmp_nr_slaves = castle_nr_slaves_get();
+    if(!nr_slaves_sane(tmp_nr_slaves))
+        tmp_nr_slaves = 1;
+
+    /* Once sanity checked, assign to the cached variable. */
+    cache_nr_slaves = tmp_nr_slaves;
+    /* Update the check jiffies. */
+    last_nr_slaves_check_jiffies = jiffies;
+
+out:
+    BUG_ON(!nr_slaves_sane(cache_nr_slaves));
+    return cache_nr_slaves;
+}
+
 /**
  * Flush dirty blocks to disk and place them on the cleanlist.
  *
@@ -5261,8 +5287,9 @@ static void castle_cache_flush_endio(c2_block_t *c2b)
 static int castle_cache_flush(void *unused)
 {
 #define MIN_FLUSH_SIZE  128
-#define MAX_FLUSH_SIZE  (4*1024)
-#define MIN_FLUSH_FREQ  5           /* Min flush rate: 5*128pgs/s = 2.5MB/s */
+#define MAX_FLUSH_SIZE  (10*256*castle_cache_flush_nr_slaves())
+                                              /* 10MB/s per slave.                    */
+#define MIN_FLUSH_FREQ  5                     /* Min flush rate: 5*128pgs/s = 2.5MB/s */
     int exiting, target_dirty_pgs, dirty_pgs, to_flush, last_flush, i, prio;
     atomic_t in_flight = ATOMIC(0);
     c_ext_inflight_t *data;
