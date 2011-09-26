@@ -448,15 +448,9 @@ static ssize_t slaves_number_show(struct kobject *kobj,
                                   struct attribute *attr,
                                   char *buf)
 {
-    struct castle_slaves *slaves =
-                container_of(kobj, struct castle_slaves, kobj);
-    struct list_head *lh;
-    int nr_slaves = 0;
+    int nr_slaves;
 
-    rcu_read_lock();
-    list_for_each_rcu(lh, &slaves->slaves)
-        nr_slaves++;
-    rcu_read_unlock();
+    nr_slaves = castle_nr_slaves_get();
 
     return sprintf(buf, "%d\n", nr_slaves);
 }

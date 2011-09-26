@@ -304,6 +304,23 @@ inline static int cvt_type_to_btree_entry_type(int type)
     return type;
 }
 
+/**
+ * Returns number of slaves known to the filesystem (including out of service slaves).
+ */
+static inline int castle_nr_slaves_get(void)
+{
+    struct list_head *lh;
+    int nr_slaves;
+
+    nr_slaves = 0;
+    rcu_read_lock();
+    list_for_each_rcu(lh, &castle_slaves.slaves)
+        nr_slaves++;
+    rcu_read_unlock();
+
+    return nr_slaves;
+}
+
 #ifdef DEBUG
 #include <linux/sched.h>
 static USED void check_stack_usage(void)
