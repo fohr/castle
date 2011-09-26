@@ -118,7 +118,7 @@ int castle_bloom_create(castle_bloom_t *bf, c_da_t da_id, btree_t btree_type, ui
         bf->block_size_pages = BLOOM_BLOCK_SIZE_HDD_PAGES;
 
         /* No need to handle Low Free-Space situation. Dont use bloom filter, in case of LFS. */
-        bf->ext_id = castle_extent_alloc(DEFAULT_RDA, da_id, EXT_T_BLOOM_FILTER,
+        bf->ext_id = castle_extent_alloc(castle_get_rda_lvl(), da_id, EXT_T_BLOOM_FILTER,
                                          ceiling(size, C_CHK_SIZE), 0,
                                          NULL, NULL);
         if (EXT_ID_INVAL(bf->ext_id))

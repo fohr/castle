@@ -36,7 +36,7 @@ typedef struct c_ssd_rda_state {
     struct castle_freespace_reservation  freespace_reservation;
 } c_ssd_rda_state_t;
 
-static c_rda_spec_t castle_default_rda;
+static c_rda_spec_t castle_rda_1, castle_rda_2;
 
 /**
  * (Re)permute the array of castle_slave pointers, used to contruct the extent. Uses Fisher-Yates
@@ -87,12 +87,14 @@ static int castle_rda_slave_usable(c_rda_spec_t *rda_spec, struct castle_slave *
 
     switch(rda_spec->type)
     {
-        case DEFAULT_RDA:
-            /* Default RDA doesn't use SSD disks. */
+        case RDA_1:
+        case RDA_2:
+            /* N_RDA doesn't use SSD disks. */
             if(slave->cs_superblock.pub.flags & CASTLE_SLAVE_SSD)
                 return 0;
             break;
-        case SSD_RDA:
+        case SSD_RDA_2:
+        case SSD_RDA_3:
         case SSD_ONLY_EXT:
             if(!(slave->cs_superblock.pub.flags & CASTLE_SLAVE_SSD))
                 return 0;
@@ -317,7 +319,7 @@ static struct castle_freespace_reservation *castle_ssd_rda_reservation_token_get
     if(state->rda_spec->type == SSD_ONLY_EXT)
         return &state->freespace_reservation;
 
-    if(state->rda_spec->type == SSD_RDA)
+    if((state->rda_spec->type == SSD_RDA_2) || (state->rda_spec->type == SSD_RDA_3))
         return &state->def_state->freespace_reservation;
 
     /* Unknown RDA type. */
@@ -344,10 +346,11 @@ void* castle_ssd_rda_extent_init(c_ext_t *ext,
     struct list_head *l;
 
     /* This function is only expected to be invoked for SSD_RDA or SSD_ONLY_EXT spec type. */
-    BUG_ON((rda_type != SSD_RDA) && (rda_type != SSD_ONLY_EXT));
+    BUG_ON((rda_type != SSD_RDA_2) && (rda_type != SSD_RDA_3) &&(rda_type != SSD_ONLY_EXT));
     rda_spec = castle_rda_spec_get(rda_type);
     /* Make sure that the k_factor is correct. */
-    BUG_ON((rda_type == SSD_RDA)      && (rda_spec->k_factor != 1 + castle_default_rda.k_factor));
+    BUG_ON((rda_type == SSD_RDA_2) && (rda_spec->k_factor != 1 + castle_rda_1.k_factor));
+    BUG_ON((rda_type == SSD_RDA_3) && (rda_spec->k_factor != 1 + castle_rda_2.k_factor));
     BUG_ON((rda_type == SSD_ONLY_EXT) && (rda_spec->k_factor != 1));
     /* Allocate state structure, and corresponding default RDA spec state. */
     state = castle_zalloc(sizeof(c_ssd_rda_state_t), GFP_KERNEL);
@@ -356,7 +359,7 @@ void* castle_ssd_rda_extent_init(c_ext_t *ext,
     state->rda_spec = rda_spec;
     if(rda_type != SSD_ONLY_EXT)
     {
-        state->def_state = castle_def_rda_extent_init(ext, ext_size, alloc_size, DEFAULT_RDA);
+        state->def_state = castle_def_rda_extent_init(ext, ext_size, alloc_size, castle_get_rda_lvl());
         if(!state->def_state)
             goto err_out;
     }
@@ -452,18 +455,33 @@ int castle_ssd_rda_next_slave_get(struct castle_slave **cs,
     return 0;
 }
 
-
 /* RDA specs. */
-static c_rda_spec_t castle_default_rda = {
-    .type               = DEFAULT_RDA,
+static c_rda_spec_t castle_rda_1 = {
+    .type               = RDA_1,
+    .k_factor           = 1,
+    .extent_init        = castle_def_rda_extent_init,
+    .next_slave_get     = castle_def_rda_next_slave_get,
+    .extent_fini        = castle_def_rda_extent_fini,
+};
+
+static c_rda_spec_t castle_rda_2 = {
+    .type               = RDA_2,
     .k_factor           = 2,
     .extent_init        = castle_def_rda_extent_init,
     .next_slave_get     = castle_def_rda_next_slave_get,
     .extent_fini        = castle_def_rda_extent_fini,
 };
 
-static c_rda_spec_t castle_ssd_rda = {
-    .type               = SSD_RDA,
+static c_rda_spec_t castle_ssd_rda_2 = {
+    .type               = SSD_RDA_2,
+    .k_factor           = 2,
+    .extent_init        = castle_ssd_rda_extent_init,
+    .next_slave_get     = castle_ssd_rda_next_slave_get,
+    .extent_fini        = castle_ssd_rda_extent_fini,
+};
+
+static c_rda_spec_t castle_ssd_rda_3 = {
+    .type               = SSD_RDA_3,
     .k_factor           = 3,
     .extent_init        = castle_ssd_rda_extent_init,
     .next_slave_get     = castle_ssd_rda_next_slave_get,
@@ -495,16 +513,40 @@ static c_rda_spec_t castle_meta_ext_rda = {
 };
 
 c_rda_spec_t *castle_rda_specs[] = {
-    [DEFAULT_RDA]       = &castle_default_rda,
-    [SSD_RDA]           = &castle_ssd_rda,
+    [RDA_1]             = &castle_rda_1,
+    [RDA_2]             = &castle_rda_2,
+    [SSD_RDA_2]         = &castle_ssd_rda_2,
+    [SSD_RDA_3]         = &castle_ssd_rda_3,
     [SSD_ONLY_EXT]      = &castle_ssd_only_rda,
     [SUPER_EXT]         = &castle_super_ext_rda,
     [META_EXT]          = &castle_meta_ext_rda,
     [MICRO_EXT]         = NULL,
 };
 
+/* Default is 2-RDA */
+unsigned int castle_rda_lvl = 2;
+module_param(castle_rda_lvl, uint, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
+MODULE_PARM_DESC(castle_rda_lvl, "RDA level");
+
 c_rda_spec_t *castle_rda_spec_get(c_rda_type_t rda_type)
 {
     BUG_ON((rda_type < 0) || (rda_type >= NR_RDA_SPECS));
     return castle_rda_specs[rda_type];
+}
+
+/* Convert castle_rda_lvl module param to corresponding RDA_N or SSD_RDA_N enum */
+unsigned int castle_get_rda_lvl(void)
+{
+    if (castle_rda_lvl == 1)
+        return RDA_1;
+    else
+    {
+        castle_rda_lvl = 2;
+        return RDA_2; /* If set to 2, or anything else, then it's 2-RDA. */
+    }
+}
+
+unsigned int castle_get_ssd_rda_lvl(void)
+{
+    return (castle_get_rda_lvl() + (SSD_RDA_2 - RDA_1));
 }

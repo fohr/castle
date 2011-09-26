@@ -1819,7 +1819,9 @@ void                  castle_ext_freespace_unmarshall
 
 c_byte_off_t          castle_ext_freespace_summary_get
                                                    (c_ext_free_t     *ext_free);
-void                  castle_release_oos_slave     (struct work_struct *work) ;
+void                  castle_release_oos_slave     (struct work_struct *work);
+unsigned int          castle_get_rda_lvl           (void);
+unsigned int          castle_get_ssd_rda_lvl       (void);
 
 struct castle_cache_block;
 
@@ -2259,4 +2261,6 @@ extern uint32_t castle_merge_threads_count;
 extern int castle_extents_process_ratelimit;
 
 extern int castle_rebuild_freespace_threshold;
+
+extern unsigned int castle_rda_lvl;
 #endif /* __CASTLE_H__ */
