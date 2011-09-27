@@ -4824,8 +4824,6 @@ static int castle_da_merge_unit_do(struct castle_da_merge *merge, uint64_t max_n
         castle_da_entry_add(merge, 0, key, version, cvt, 0);
         if(merge->aborting)
         {
-            printk("%s::[da %d level %d] aborting merge while attempting entry add (WARNING: UNTESTED)\n",
-                    __FUNCTION__, merge->da->id, merge->level);
             castle_printk(LOG_WARN, "%s::[da %d level %d] aborting merge while attempting entry add (WARNING: UNTESTED)\n",
                     __FUNCTION__, merge->da->id, merge->level);
             return -ESHUTDOWN;
@@ -5545,8 +5543,6 @@ alloc_fail_1:
         }
 
         /* update iterator state */
-        printk("%s::updating mstore entry for merge in "
-                "da %d, level %d\n", __FUNCTION__, da->id, level);
         castle_da_merge_marshall(merge->serdes.mstore_entry,
                 merge->serdes.in_tree_mstore_entry_arr,
                 merge,
@@ -6179,7 +6175,6 @@ static int castle_da_merge_do(struct castle_da_merge *merge, uint64_t nr_entries
     if (castle_merges_abortable && exit_cond)
     {
         castle_printk(LOG_INIT, "Merge for DA=%d, level=%d, aborted.\n", da->id, level);
-        printk("Merge for DA=%d, level=%d, entries=%llu aborted.\n", da->id, level, merge->nr_entries);
         ret = -ESHUTDOWN;
         goto merge_aborted;
     }
