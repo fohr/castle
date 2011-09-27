@@ -358,8 +358,8 @@ void castle_printk(c_printk_level_t level, const char *fmt, ...)
     tmp_bufp = &tmp_buf[len];
 
     va_start(args, fmt);
-    len = (c_byte_off_t) vscnprintf(tmp_bufp,
-            sizeof(tmp_buf) - len, fmt, args) + 1; /* +1 for '\0'$ */
+    len += (c_byte_off_t) vscnprintf(tmp_bufp,
+	    sizeof(tmp_buf) - len, fmt, args) + 1; /* +1 for '\0'$ */
     va_end(args);
 
     /* Serialise access to the ring buffer. */
