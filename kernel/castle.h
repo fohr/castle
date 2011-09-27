@@ -1857,6 +1857,9 @@ struct castle_object_replace {
                                     int                           partial);
     /*0: not a counter, 1: counter SET, 2: counter ADD */
     uint8_t                       counter_type;
+
+    uint8_t                       has_user_timestamp;
+    castle_user_timestamp_t       user_timestamp;
 };
 
 struct castle_object_get {

@@ -9,7 +9,7 @@
 #include <linux/time.h>
 #endif
 
-#define CASTLE_PROTOCOL_VERSION 19
+#define CASTLE_PROTOCOL_VERSION 20
 
 #define PACKED               __attribute__((packed))
 
@@ -673,8 +673,12 @@ typedef struct castle_var_length_btree_key {
 #define CASTLE_RING_ITER_FINISH 10
 #define CASTLE_RING_REMOVE 11
 #define CASTLE_RING_COUNTER_REPLACE 12
+#define CASTLE_RING_TIMESTAMPED_REPLACE 13
+#define CASTLE_RING_TIMESTAMPED_REMOVE 14
 
 typedef uint32_t castle_interface_token_t;
+
+typedef uint64_t castle_user_timestamp_t;
 
 typedef struct castle_request_replace {
     c_collection_id_t     collection_id;
@@ -683,6 +687,15 @@ typedef struct castle_request_replace {
     void                 *value_ptr;
     uint32_t              value_len;
 } castle_request_replace_t;
+
+typedef struct castle_request_timestamped_replace {
+    c_collection_id_t        collection_id;
+    uint32_t                 key_len;
+    c_vl_bkey_t             *key_ptr;
+    void                    *value_ptr;
+    uint32_t                 value_len;
+    castle_user_timestamp_t  user_timestamp;
+} castle_request_timestamped_replace_t;
 
 enum{
     CASTLE_COUNTER_TYPE_SET=0,
@@ -703,6 +716,13 @@ typedef struct castle_request_remove {
     uint32_t              key_len;
     c_vl_bkey_t          *key_ptr;
 } castle_request_remove_t;
+
+typedef struct castle_request_timestamped_remove {
+    c_collection_id_t        collection_id;
+    uint32_t                 key_len;
+    c_vl_bkey_t             *key_ptr;
+    castle_user_timestamp_t  user_timestamp;
+} castle_request_timestamped_remove_t;
 
 typedef struct castle_request_get {
     c_collection_id_t    collection_id;
@@ -761,6 +781,9 @@ typedef struct castle_request {
     uint32_t    call_id;
     uint32_t    tag;
     union {
+        castle_request_timestamped_replace_t     timestamped_replace;
+        castle_request_timestamped_remove_t      timestamped_remove;
+
         castle_request_replace_t            replace;
         castle_request_remove_t             remove;
         castle_request_get_t                get;

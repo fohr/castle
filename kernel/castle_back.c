@@ -1288,6 +1288,76 @@ static void castle_back_replace(void *data)
     op->replace.data_length_get = castle_back_replace_data_length_get;
     op->replace.data_copy = castle_back_replace_data_copy;
     op->replace.counter_type = CASTLE_OBJECT_NOT_COUNTER;
+    op->replace.has_user_timestamp = 0;
+    op->replace.key = key;      /* Key would be freed by replace_complete. */
+
+    err = castle_object_replace(&op->replace, op->attachment, key, op->cpu_index, 0);
+    if (err)
+        goto err3;
+
+    return;
+
+err3: if (op->buf) castle_back_buffer_put(conn, op->buf);
+err2: castle_free(key);
+err1: castle_attachment_put(op->attachment);
+err0: castle_back_reply(op, err, 0, 0);
+}
+
+static void castle_back_timestamped_replace(void *data)
+{
+    struct castle_back_op *op = data;
+    struct castle_back_conn *conn = op->conn;
+    int err;
+    c_vl_bkey_t *key;
+
+    op->attachment = castle_attachment_get(op->req.timestamped_replace.collection_id, WRITE);
+    if (op->attachment == NULL)
+    {
+        error("Collection not found id=0x%x\n", op->req.timestamped_replace.collection_id);
+        err = -ENOTCONN;
+        goto err0;
+    }
+
+    err = castle_back_key_copy_get(conn, op->req.timestamped_replace.key_ptr, op->req.timestamped_replace.key_len, &key);
+    if (err)
+        goto err1;
+
+    /*
+     * Get buffer with value in it and save it
+     */
+    if (op->req.timestamped_replace.value_len > 0)
+    {
+        op->buf = castle_back_buffer_get(conn, (unsigned long) op->req.timestamped_replace.value_ptr);
+        if (op->buf == NULL)
+        {
+            error("Could not get buffer for pointer=%p\n", op->req.timestamped_replace.value_ptr);
+            err = -EINVAL;
+            goto err2;
+        }
+
+        if (!castle_back_user_addr_in_buffer(op->buf,
+                    op->req.timestamped_replace.value_ptr + op->req.timestamped_replace.value_len - 1))
+        {
+            error("Invalid value length %u (ptr=%p)\n",
+                    op->req.timestamped_replace.value_len, op->req.timestamped_replace.value_ptr);
+            err = -EINVAL;
+            goto err3;
+        }
+    }
+    else
+        op->buf = NULL;
+
+    op->buffer_offset = 0;
+
+    op->replace.value_len = op->req.timestamped_replace.value_len;
+    op->replace.replace_continue = NULL;
+    op->replace.complete = castle_back_replace_complete;
+    op->replace.data_length_get = castle_back_replace_data_length_get;
+    op->replace.data_copy = castle_back_replace_data_copy;
+    op->replace.counter_type = CASTLE_OBJECT_NOT_COUNTER;
+    op->replace.has_user_timestamp = 1;
+    op->replace.user_timestamp = op->req.timestamped_replace.user_timestamp;
+    castle_printk(LOG_DEVEL, "%s::timestamp %llu\n", __FUNCTION__, op->replace.user_timestamp);
     op->replace.key = key;      /* Key would be freed by replace_complete. */
 
     err = castle_object_replace(&op->replace, op->attachment, key, op->cpu_index, 0);
@@ -1358,6 +1428,7 @@ static void castle_back_counter_replace(void *data)
     op->replace.counter_type = ( (op->req.counter_replace.add == CASTLE_COUNTER_TYPE_SET) ?
                                     CASTLE_OBJECT_COUNTER_SET :
                                     CASTLE_OBJECT_COUNTER_ADD);
+    op->replace.has_user_timestamp = 0;
     op->replace.key = key;      /* Key would be freed by replace_complete. */
 
     err = castle_object_replace(&op->replace, op->attachment, key, op->cpu_index, 0);
@@ -1424,6 +1495,49 @@ static void castle_back_remove(void *data)
     op->replace.data_length_get = NULL;
     op->replace.data_copy = NULL;
     op->replace.counter_type = CASTLE_OBJECT_NOT_COUNTER;
+    op->replace.has_user_timestamp = 0;
+    op->replace.key = key;      /* Key would be freed by remove_complete. */
+
+    err = castle_object_replace(&op->replace, op->attachment, key, op->cpu_index, 1 /*tombstone*/);
+    if (err)
+        goto err2;
+
+    return;
+
+err2: castle_free(key);
+err1: castle_attachment_put(op->attachment);
+err0: castle_back_reply(op, err, 0, 0);
+}
+
+static void castle_back_timestamped_remove(void *data)
+{
+    struct castle_back_op *op = data;
+    struct castle_back_conn *conn = op->conn;
+    int err;
+    c_vl_bkey_t *key;
+
+    op->attachment = castle_attachment_get(op->req.timestamped_remove.collection_id, WRITE);
+    if (op->attachment == NULL)
+    {
+        error("Collection not found id=0x%x\n", op->req.timestamped_remove.collection_id);
+        err = -ENOTCONN;
+        goto err0;
+    }
+
+    err = castle_back_key_copy_get(conn, op->req.timestamped_remove.key_ptr, op->req.timestamped_remove.key_len, &key);
+    if (err)
+        goto err1;
+
+    op->buf = NULL;
+    op->replace.value_len = 0;
+    op->replace.replace_continue = NULL;
+    op->replace.complete = castle_back_remove_complete;
+    op->replace.data_length_get = NULL;
+    op->replace.data_copy = NULL;
+    op->replace.counter_type = CASTLE_OBJECT_NOT_COUNTER;
+    op->replace.has_user_timestamp = 1;
+    op->replace.user_timestamp = op->req.timestamped_replace.user_timestamp;
+    castle_printk(LOG_DEVEL, "%s::timestamp %llu\n", __FUNCTION__, op->replace.user_timestamp);
     op->replace.key = key;      /* Key would be freed by remove_complete. */
 
     err = castle_object_replace(&op->replace, op->attachment, key, op->cpu_index, 1 /*tombstone*/);
@@ -2677,6 +2791,9 @@ static void castle_back_big_put(void *data)
     /* We would never big_put counters. */
     stateful_op->replace.counter_type = CASTLE_OBJECT_NOT_COUNTER;
 
+    /* We would never timestamp big_puts. */
+    stateful_op->replace.has_user_timestamp = 0;
+
     /* Work structure to run every queued op. Every put_chunk gets queued. */
     INIT_WORK(&stateful_op->work[0], castle_back_put_chunk_continue, stateful_op);
 
@@ -3153,6 +3270,18 @@ static void castle_back_request_process(struct castle_back_conn *conn, struct ca
             INIT_WORK(&op->work, castle_back_remove, op);
             key_len = op->req.remove.key_len;
             castle_back_key_copy_get(conn, op->req.remove.key_ptr, key_len, &key);
+            break;
+
+        case CASTLE_RING_TIMESTAMPED_REMOVE:
+            INIT_WORK(&op->work, castle_back_timestamped_remove, op);
+            key_len = op->req.timestamped_remove.key_len;
+            castle_back_key_copy_get(conn, op->req.timestamped_remove.key_ptr, key_len, &key);
+            break;
+
+        case CASTLE_RING_TIMESTAMPED_REPLACE:
+            INIT_WORK(&op->work, castle_back_timestamped_replace, op);
+            key_len = op->req.timestamped_replace.key_len;
+            castle_back_key_copy_get(conn, op->req.timestamped_replace.key_ptr, key_len, &key);
             break;
 
         case CASTLE_RING_REPLACE:
