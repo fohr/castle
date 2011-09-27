@@ -248,10 +248,10 @@ c_vl_bkey_t *castle_object_btree_key_next(const c_vl_bkey_t *src,
    Returns 1 if the most significant dimension is greater than the end, -1 if it is
    less then start, or 0 if the key is within bounds. Optionally, the function can
    be queried about which dimension offeneded */
-int castle_object_btree_key_bounds_check(const c_vl_bkey_t *key,
-                                         const c_vl_bkey_t *start,
-                                         const c_vl_bkey_t *end,
-                                         int *offending_dim_p)
+static int castle_object_btree_key_bounds_check(const c_vl_bkey_t *key,
+                                                const c_vl_bkey_t *start,
+                                                const c_vl_bkey_t *end,
+                                                int *offending_dim_p)
 {
     int dim;
 
@@ -311,10 +311,10 @@ int castle_object_btree_key_bounds_check(const c_vl_bkey_t *key,
     return 0;
 }
 
-c_vl_bkey_t* castle_object_btree_key_skip(const c_vl_bkey_t *old_key,
-                                          const c_vl_bkey_t *start,
-                                          int offending_dim,
-                                          int out_of_range)
+static c_vl_bkey_t* castle_object_btree_key_skip(const c_vl_bkey_t *old_key,
+                                                 const c_vl_bkey_t *start,
+                                                 int offending_dim,
+                                                 int out_of_range)
 {
     c_vl_bkey_t *new_key;
 
@@ -330,6 +330,22 @@ c_vl_bkey_t* castle_object_btree_key_skip(const c_vl_bkey_t *old_key,
         castle_object_btree_key_dim_inc(new_key, offending_dim - 1);
 
     return new_key;
+}
+
+c_vl_bkey_t* castle_object_btree_key_hypercube_next(const c_vl_bkey_t *key,
+                                                    const c_vl_bkey_t *start,
+                                                    const c_vl_bkey_t *end)
+{
+    int offending_dim, out_of_range;
+    out_of_range = castle_object_btree_key_bounds_check(key, start, end, &offending_dim);
+    if (out_of_range)
+    {
+        if (offending_dim > 0)
+            return castle_object_btree_key_skip(key, start, offending_dim, out_of_range);
+        else
+            return NULL;
+    }
+    else return (c_vl_bkey_t *) key;
 }
 
 void castle_object_btree_key_free(c_vl_bkey_t *bkey)

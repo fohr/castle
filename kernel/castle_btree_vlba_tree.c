@@ -361,6 +361,11 @@ static c_vl_bkey_t *castle_vlba_tree_key_unpack(const void *src, c_vl_bkey_t *ds
     return castle_object_btree_key_copy(src, dst, dst_len);
 }
 
+static void *castle_vlba_tree_key_hc_next(const void *key, const void *low, const void *high)
+{
+    return castle_object_btree_key_hypercube_next(key, low, high);
+}
+
 static void castle_vlba_tree_key_dealloc(void *keyv)
 {
     vlba_key_t *key = (vlba_key_t *)keyv;
@@ -802,6 +807,7 @@ struct castle_btree_type castle_vlba_tree = {
     .key_size       = castle_vlba_tree_key_size,
     .key_copy       = castle_vlba_tree_key_copy,
     .key_next       = castle_vlba_tree_key_next,
+    .key_hc_next    = castle_vlba_tree_key_hc_next,
     .key_dealloc    = castle_vlba_tree_key_dealloc,
     .key_hash       = castle_vlba_tree_key_hash,
     .entry_get      = castle_vlba_tree_entry_get,

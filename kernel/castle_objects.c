@@ -57,10 +57,9 @@ static void castle_objects_rq_iter_next_key_free(castle_object_iterator_t *iter)
 
 static int castle_objects_rq_iter_prep_next(castle_object_iterator_t *iter)
 {
-    void *k;
+    void *k, *next_key;
     c_ver_t v;
     c_val_tup_t cvt;
-    int offending_dim=0, out_of_range;
 
     while(1)
     {
@@ -78,31 +77,16 @@ static int castle_objects_rq_iter_prep_next(castle_object_iterator_t *iter)
         /* Nothing cached, but there is something in the da_rq_iter.
            Check if that's within the rq hypercube */
         castle_da_rq_iter.next(&iter->da_rq_iter, &k, &v, &cvt);
-        out_of_range = castle_object_btree_key_bounds_check(k,
-                                                            iter->start_key,
-                                                            iter->end_key,
-                                                            &offending_dim);
-#ifdef DEBUG
-        debug("Got the following key from da_rq iterator. Is in range: %d, offending_dim=%d\n",
-                out_of_range, offending_dim);
-        vl_bkey_print(k);
-#endif
-        if(out_of_range)
-        {
-            c_vl_bkey_t *next_key;
+        next_key = castle_object_btree_key_hypercube_next(k, iter->start_key, iter->end_key);
 
-            if (offending_dim == 0)
+        if (next_key != k)      /* key is outside the hypercube */
+        {
+            if (next_key == NULL) /* key is completely past end_key */
             {
                 iter->completed = 1;
                 return 1;
             }
 
-            /* We are outside of the rq hypercube, find next intersection point
-               and skip to that */
-            next_key = castle_object_btree_key_skip(k,
-                                                    iter->start_key,
-                                                    offending_dim,
-                                                    out_of_range);
             /* Save the key, to be freed the next time around the loop/on cancel */
             castle_objects_rq_iter_next_key_free(iter);
             iter->last_next_key = next_key;
