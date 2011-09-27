@@ -56,7 +56,7 @@ static int castle_mtree_need_split(struct castle_btree_node *node, int ver_or_ke
     return -1;
 }
 
-static int castle_mtree_key_compare(void *key1, void *key2)
+static int castle_mtree_key_compare(const void *key1, const void *key2)
 {
     block_t blk1 = (block_t)(unsigned long)key1;
     block_t blk2 = (block_t)(unsigned long)key2;
@@ -107,7 +107,7 @@ static void castle_mtree_key_dealloc(void *key)
     /* No need to do anything in mtree keys, because they are ints (cast to void *). */
 }
 
-static uint32_t castle_mtree_key_hash(void *key, uint32_t seed)
+static uint32_t castle_mtree_key_hash(const void *key, uint32_t seed)
 {
     BUG();
 }

@@ -865,7 +865,7 @@ struct castle_btree_type {
                               /* Unpacks a native key into the standard
                                  backend format. Uses its arguments
                                  exactly like key_copy().               */
-    int      (*key_compare)   (void *key1, void *key2);
+    int      (*key_compare)   (const void *key1, const void *key2);
                               /* Returns negative if key1 < key2, zero
                                  if equal, positive otherwise           */
     size_t   (*key_size)      (const void *key);
@@ -883,7 +883,7 @@ struct castle_btree_type {
     void     (*key_dealloc)   (void *key);
                               /* Destroys the key, frees resources
                                  associated with it                     */
-    uint32_t (*key_hash)      (void *key, uint32_t seed);
+    uint32_t (*key_hash)      (const void *key, uint32_t seed);
                               /* Get hash of key with seed              */
     int      (*entry_get)     (struct castle_btree_node *node,
                                int                       idx,

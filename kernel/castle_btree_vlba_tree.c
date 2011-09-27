@@ -263,10 +263,10 @@ static int castle_vlba_tree_need_split(struct castle_btree_node *node,
     return -1;
 }
 
-static int castle_vlba_tree_key_compare(void *keyv1, void *keyv2)
+static int castle_vlba_tree_key_compare(const void *keyv1, const void *keyv2)
 {
-    vlba_key_t *key1 = (vlba_key_t *)keyv1;
-    vlba_key_t *key2 = (vlba_key_t *)keyv2;
+    const vlba_key_t *key1 = keyv1;
+    const vlba_key_t *key2 = keyv2;
     int key1_min, key2_min, key1_max, key2_max;
 
     BUG_ON(!key1 || !key2);
@@ -376,8 +376,8 @@ static void castle_vlba_tree_key_dealloc(void *keyv)
     castle_object_btree_key_free(keyv);
 }
 
-static uint32_t castle_vlba_tree_key_hash(void *keyv, uint32_t seed) {
-    vlba_key_t *key = (vlba_key_t *)keyv;
+static uint32_t castle_vlba_tree_key_hash(const void *keyv, uint32_t seed) {
+    const vlba_key_t *key = keyv;
 
     return murmur_hash_32(key->_key, key->length, seed);
 }
