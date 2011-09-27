@@ -3197,6 +3197,7 @@ static int castle_da_merge_extent_growth_control(struct castle_da_merge *merge,
 
     while(space_remaining_bytes < space_needed_bytes)
     {
+        c_chk_cnt_t start, end;
         while(castle_extent_grow(ext_id, growth_rate_chunks))
         {
             int relock_leaf_node_c2b   = 0;
@@ -3239,8 +3240,14 @@ static int castle_da_merge_extent_growth_control(struct castle_da_merge *merge,
             growth_rate_chunks * C_CHK_SIZE;
         space_remaining_bytes = growth_control_state->ext_avail_bytes -
             growth_control_state->ext_used_bytes;
+
+        /* sanity check extent */
+        castle_extent_mask_read_all(ext_id, &start, &end);
+        BUG_ON(start!=0);
+        BUG_ON(growth_control_state->ext_avail_bytes != (end+1) * C_CHK_SIZE);
     }
     growth_control_state->ext_used_bytes += space_needed_bytes;
+    BUG_ON(growth_control_state->ext_used_bytes > growth_control_state->ext_avail_bytes );
     return 0;
 }
 
@@ -6021,6 +6028,7 @@ static void castle_da_merge_deserialise(struct castle_da_merge *merge,
             merge->growth_control_tree.ext_avail_bytes = 0;
         else
             merge->growth_control_tree.ext_avail_bytes = end * C_CHK_SIZE;
+
         castle_printk(LOG_DEBUG, "%s::[da %d level %d] recovering sparse tree ext %lld (%lu -> %lu) with %llu bytes avail\n",
                 __FUNCTION__,
                 merge->da->id,
@@ -6029,6 +6037,8 @@ static void castle_da_merge_deserialise(struct castle_da_merge *merge,
                 start,
                 end,
                 merge->growth_control_tree.ext_avail_bytes);
+        BUG_ON(merge->growth_control_tree.ext_avail_bytes <
+                merge->growth_control_tree.ext_used_bytes);
 
         castle_extent_mask_read_all(data_ext_id, &start, &end);
         BUG_ON(start!=0);
@@ -6036,6 +6046,7 @@ static void castle_da_merge_deserialise(struct castle_da_merge *merge,
             merge->growth_control_data.ext_avail_bytes = 0;
         else
             merge->growth_control_data.ext_avail_bytes = end * C_CHK_SIZE;
+
         castle_printk(LOG_DEBUG, "%s::[da %d level %d] recovering sparse data ext %lld (%lu -> %lu) with %llu bytes avail\n",
                 __FUNCTION__,
                 merge->da->id,
@@ -6044,6 +6055,8 @@ static void castle_da_merge_deserialise(struct castle_da_merge *merge,
                 start,
                 end,
                 merge->growth_control_data.ext_avail_bytes);
+        BUG_ON(merge->growth_control_data.ext_avail_bytes <
+                merge->growth_control_data.ext_used_bytes);
     }
 
     return;
