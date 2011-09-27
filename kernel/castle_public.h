@@ -9,7 +9,7 @@
 #include <linux/time.h>
 #endif
 
-#define CASTLE_PROTOCOL_VERSION 20
+#define CASTLE_PROTOCOL_VERSION 20 /* last updated by TR */
 
 #define PACKED               __attribute__((packed))
 

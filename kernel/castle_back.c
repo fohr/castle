@@ -1199,6 +1199,12 @@ static void castle_back_replace_complete(struct castle_object_replace *replace, 
 
     castle_attachment_put(op->attachment);
 
+    /* If we receive -EEXIST here, it must be because we tried to insert an object into a T0 that
+       already contains an object with the same key but newer timestamp (see c_o_replace_cvt_get);
+       the entry is dropped, and we choose to be quiet about it by pretending there was no error. */
+    if(err==-EEXIST)
+        err=0;
+
     castle_back_reply(op, err, 0, 0);
 }
 
@@ -1357,7 +1363,6 @@ static void castle_back_timestamped_replace(void *data)
     op->replace.counter_type = CASTLE_OBJECT_NOT_COUNTER;
     op->replace.has_user_timestamp = 1;
     op->replace.user_timestamp = op->req.timestamped_replace.user_timestamp;
-    castle_printk(LOG_DEVEL, "%s::timestamp %llu\n", __FUNCTION__, op->replace.user_timestamp);
     op->replace.key = key;      /* Key would be freed by replace_complete. */
 
     err = castle_object_replace(&op->replace, op->attachment, key, op->cpu_index, 0);
@@ -1460,6 +1465,13 @@ static void castle_back_remove_complete(struct castle_object_replace *replace, i
 
     castle_attachment_put(op->attachment);
 
+    /* If we receive -EEXIST here, it must be because we tried to remove an object from a T0 that
+       contained an object with the same key but newer timestamp than the tombstone (see
+       c_o_replace_cvt_get); the tombstone is dropped, and we choose to be quiet about it by
+       pretending there was no error. */
+    if(err==-EEXIST)
+        err=0;
+
     castle_back_reply(op, err, 0, 0);
 }
 
@@ -1537,7 +1549,6 @@ static void castle_back_timestamped_remove(void *data)
     op->replace.counter_type = CASTLE_OBJECT_NOT_COUNTER;
     op->replace.has_user_timestamp = 1;
     op->replace.user_timestamp = op->req.timestamped_replace.user_timestamp;
-    castle_printk(LOG_DEVEL, "%s::timestamp %llu\n", __FUNCTION__, op->replace.user_timestamp);
     op->replace.key = key;      /* Key would be freed by remove_complete. */
 
     err = castle_object_replace(&op->replace, op->attachment, key, op->cpu_index, 1 /*tombstone*/);
@@ -2791,7 +2802,7 @@ static void castle_back_big_put(void *data)
     /* We would never big_put counters. */
     stateful_op->replace.counter_type = CASTLE_OBJECT_NOT_COUNTER;
 
-    /* We would never timestamp big_puts. */
+    //TODO@tr would we ever timestamp big_puts?
     stateful_op->replace.has_user_timestamp = 0;
 
     /* Work structure to run every queued op. Every put_chunk gets queued. */

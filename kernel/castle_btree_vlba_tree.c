@@ -45,13 +45,14 @@ static const vlba_key_t VLBA_TREE_MAX_KEY = (vlba_key_t){.length = VLBA_TREE_LEN
 
 struct castle_vlba_tree_entry {
     /* align:   8 */
-    /* offset:  0 */ uint8_t      type;
-    /*          1 */ uint8_t      _pad[3];
-    /*          4 */ c_ver_t      version;
-    /*          8 */ uint64_t     val_len;
-    /*         16 */ c_ext_pos_t  cep;
-    /*         32 */ vlba_key_t   key;
-    /*         36 *//* Inline values are stored at the end of entry */
+    /* offset:  0 */ uint8_t                 type;
+    /*          1 */ uint8_t                 _pad[3];
+    /*          4 */ c_ver_t                 version;
+    /*          8 */ castle_user_timestamp_t user_timestamp;
+    /*         16 */ uint64_t                val_len;
+    /*         24 */ c_ext_pos_t             cep;
+    /*         40 */ vlba_key_t              key;
+    /*         44 *//* Inline values are stored at the end of entry */
 } PACKED;
 
 struct castle_vlba_tree_node {
@@ -404,7 +405,8 @@ static int castle_vlba_tree_entry_get(struct castle_btree_node *node,
         *cvt_p = convert_to_cvt(entry->type,
                                 entry->val_len,
                                 entry->cep,
-                                VLBA_ENTRY_VAL_PTR(entry));
+                                VLBA_ENTRY_VAL_PTR(entry),
+                                entry->user_timestamp);
         BUG_ON(VLBA_TREE_ENTRY_IS_TOMB_STONE(entry) && entry->val_len != 0);
         BUG_ON(VLBA_TREE_ENTRY_IS_INLINE(entry) &&
                (entry->val_len > MAX_INLINE_VAL_SIZE));
@@ -464,10 +466,11 @@ static void castle_vlba_tree_entry_add(struct castle_btree_node *node,
     }
 #endif
 
-    new_entry.version    = version;
-    new_entry.type       = castle_vlba_tree_cvt_type_to_entry_type(cvt);
-    new_entry.val_len    = cvt.length;
-    new_entry.key.length = key_length;
+    new_entry.version        = version;
+    new_entry.type           = castle_vlba_tree_cvt_type_to_entry_type(cvt);
+    new_entry.val_len        = cvt.length;
+    new_entry.key.length     = key_length;
+    new_entry.user_timestamp = cvt.user_timestamp;
     req_space = VLBA_ENTRY_LENGTH((&new_entry)) + sizeof(uint32_t);
 
     /* Initialization of node free space structures */
@@ -570,10 +573,11 @@ static void castle_vlba_tree_entry_replace(struct castle_btree_node *node,
 #endif
     BUG_ON(((uint8_t *)entry) >= EOF_VLBA_NODE(node));
 
-    new_entry.version    = version;
-    new_entry.type       = castle_vlba_tree_cvt_type_to_entry_type(cvt);
-    new_entry.val_len    = cvt.length;
-    new_entry.key.length = key->length;
+    new_entry.version        = version;
+    new_entry.type           = castle_vlba_tree_cvt_type_to_entry_type(cvt);
+    new_entry.val_len        = cvt.length;
+    new_entry.key.length     = key->length;
+    new_entry.user_timestamp = cvt.user_timestamp;
     new_length = VLBA_ENTRY_LENGTH((&new_entry));
     old_length = VLBA_ENTRY_LENGTH(entry);
 

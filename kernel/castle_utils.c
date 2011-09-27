@@ -667,13 +667,15 @@ print_and_exit:
 c_val_tup_t convert_to_cvt(uint8_t type,
                            uint64_t length,
                            c_ext_pos_t cep,
-                           void *inline_ptr)
+                           void *inline_ptr,
+                           castle_user_timestamp_t user_timestamp)
 {
     c_val_tup_t cvt;
 
     memset(&cvt, 0, sizeof(c_val_tup_t));
-    cvt.type    = type;
-    cvt.length  = length;
+    cvt.type           = type;
+    cvt.length         = length;
+    cvt.user_timestamp = user_timestamp;
     if (CVT_LEAF_PTR(cvt) || CVT_NODE(cvt) || CVT_ON_DISK(cvt))
     {
         cvt.cep    = cep;

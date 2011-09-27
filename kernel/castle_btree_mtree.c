@@ -128,7 +128,7 @@ static int castle_mtree_entry_get(struct castle_btree_node *node,
     if(version_p)     *version_p     = entry->version;
     if(cvt_p)
     {
-        *cvt_p = convert_to_cvt(entry->type, entry->val_len, entry->cep, NULL);
+        *cvt_p = convert_to_cvt(entry->type, entry->val_len, entry->cep, NULL, 0);
         BUG_ON(!CVT_MEDIUM_OBJECT(*cvt_p) && !CVT_NODE(*cvt_p) && !CVT_LEAF_PTR(*cvt_p));
     }
 

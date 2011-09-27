@@ -443,7 +443,9 @@ static void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
 
     debug("castle_object_replace_complete\n");
 
-    if(err && !cancelled)
+    if(err == -EEXIST && !cancelled)
+        castle_printk(LOG_WARN, "Failed to insert into btree (timestamp violation).\n");
+    else if(err && !cancelled)
         castle_printk(LOG_WARN, "Failed to insert into btree.\n");
 
     /* If there was an error inserting on large objects, free the extent.
@@ -599,12 +601,35 @@ static int castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
 {
     struct castle_object_replace *replace = c_bvec->c_bio->replace;
     uint64_t nr_chunks;
+    castle_user_timestamp_t existing_object_user_timestamp = 0;
 
     /* We should be handling a write (possibly a tombstone write). */
     BUG_ON(c_bvec_data_dir(c_bvec) != WRITE);
     /* Some sanity checks on the prev_cvt. */
     BUG_ON(!CVT_INVALID(prev_cvt) && !CVT_LEAF_VAL(prev_cvt));
     BUG_ON(CVT_TOMBSTONE(prev_cvt) && (prev_cvt.length != 0));
+
+    /* Check if this insert should be disabled immediately because of it's timestamp vs
+       other entries in the T0. */
+
+    if(!CVT_INVALID(prev_cvt))
+        existing_object_user_timestamp = prev_cvt.user_timestamp;
+    if(!CVT_INVALID(ancestral_cvt))
+        existing_object_user_timestamp = ancestral_cvt.user_timestamp;
+
+    if(existing_object_user_timestamp > replace->user_timestamp)
+    {
+        replace->cvt = INVAL_VAL_TUP;
+        *cvt = replace->cvt;
+        castle_printk(LOG_DEVEL, "%s::dropping an insert because it's timestamp (%llu) "
+                "is \"older\" than the timestamp of an existing entry (%llu).\n",
+                __FUNCTION__, replace->user_timestamp, existing_object_user_timestamp);
+        //TODO@tr record some stats here; increment a drop count?
+        return -EEXIST; /* existential crisis */
+    }
+    /* this object passed the timestamp smell test...proceed with replace. */
+
+    replace->cvt.user_timestamp = replace->user_timestamp;
 
     /* Bookkeeping for large objects (about to be inserted into the tree). */
     if(CVT_LARGE_OBJECT(replace->cvt))
@@ -689,6 +714,16 @@ static int castle_object_replace_space_reserve(struct castle_object_replace *rep
             return -ENOMEM;
 
         /* Construct the cvt. */
+        if(replace->has_user_timestamp)
+        {
+            if(unlikely(replace->counter_type == CASTLE_OBJECT_COUNTER_SET) ||
+                (replace->counter_type == CASTLE_OBJECT_COUNTER_SET))
+            {
+                castle_printk(LOG_ERROR, "%s::counters cannot be timestamped... we don't even provide an interface to do it, so what's going on?!?\n", __FUNCTION__);
+                WARN_ON(1);
+                return -EINVAL;
+            }
+        }
         if(unlikely(replace->counter_type == CASTLE_OBJECT_COUNTER_SET))
         {
             CVT_COUNTER_ACCUM_SET_SET_INIT(replace->cvt, 16, value);
@@ -823,6 +858,16 @@ int castle_object_replace(struct castle_object_replace *replace,
     c_bvec_t *c_bvec = NULL;
     c_bio_t *c_bio = NULL;
     int ret;
+
+    if(replace->has_user_timestamp)
+        castle_printk(LOG_DEVEL, "%s::user provided timestamp %llu\n", __FUNCTION__, replace->user_timestamp);
+    else
+    {
+        //TODO@tr infer timestamp from attachment/version
+        replace->user_timestamp = 0;
+        //replace->user_timestamp = version.creation_ts;
+    }
+
 
     /* Sanity checks. */
     BUG_ON(!attachment);
