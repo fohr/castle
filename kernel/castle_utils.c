@@ -1,6 +1,7 @@
 #include <linux/list.h>
 #include <asm/tlbflush.h>
 #include <linux/vmalloc.h>
+#include <linux/time.h>
 
 #include "castle_public.h"
 #include "castle_utils.h"
@@ -337,7 +338,6 @@ static int castle_printk_ratelimit(c_printk_level_t level)
  * @also castle_printk_fini()
  * @also castle_printk_ratelimit()
  *
- * @TODO timestamp
  * @TODO castle-trace handler
  */
 void castle_printk(c_printk_level_t level, const char *fmt, ...)
@@ -345,12 +345,21 @@ void castle_printk(c_printk_level_t level, const char *fmt, ...)
     c_byte_off_t len, rem, pos = 0;
     unsigned long flags;
     char tmp_buf[1024];
+    char *tmp_bufp;
+    struct timespec time;
     va_list args;
 
     BUG_ON(PRINTK_BUFFER_SIZE < sizeof(tmp_buf));
 
+    /* Prepend timestamp and CPU to string. */
+    getnstimeofday(&time);
+    len = snprintf(tmp_buf, sizeof(tmp_buf), "%ld.%ld %d: ",
+            time.tv_sec, time.tv_nsec, current->thread_info->cpu);
+    tmp_bufp = &tmp_buf[len];
+
     va_start(args, fmt);
-    len = (c_byte_off_t) vscnprintf(tmp_buf, sizeof(tmp_buf), fmt, args) + 1; /* +1 for '\0'$ */
+    len = (c_byte_off_t) vscnprintf(tmp_bufp,
+            sizeof(tmp_buf) - len, fmt, args) + 1; /* +1 for '\0'$ */
     va_end(args);
 
     /* Serialise access to the ring buffer. */
