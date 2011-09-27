@@ -9632,6 +9632,27 @@ static void castle_da_read_bvec_start(struct castle_double_array *da, c_bvec_t *
 }
 
 /**
+ * Retrieve the DA pointer associated with a particular request.
+ *
+ * Since an attachment exists, the DA structure is guaranteed to be found, and thus this
+ * function cannot return NULL.
+ */
+static struct castle_double_array *castle_da_ptr_get(struct castle_attachment *att)
+{
+    struct castle_double_array *da;
+    c_da_t da_id;
+
+    down_read(&att->lock);
+    /* Since the version is attached, it must be found */
+    BUG_ON(DA_INVAL(da_id = castle_version_da_id_get(att->version)));
+    up_read(&att->lock);
+
+    da = castle_da_hash_get(da_id);
+    BUG_ON(!da);
+    return da;
+}
+
+/**
  * Submit request to DA, write IOs are queued if inserts are disabled.
  *
  * Read requests:
@@ -9648,17 +9669,8 @@ static void castle_da_read_bvec_start(struct castle_double_array *da, c_bvec_t *
  */
 void castle_double_array_submit(c_bvec_t *c_bvec)
 {
-    struct castle_attachment *att = c_bvec->c_bio->attachment;
-    struct castle_double_array *da;
-    c_da_t da_id;
+    struct castle_double_array *da = castle_da_ptr_get(c_bvec->c_bio->attachment);
 
-    down_read(&att->lock);
-    /* Since the version is attached, it must be found */
-    BUG_ON(castle_version_read(att->version, &da_id, NULL, NULL, NULL, NULL));
-    up_read(&att->lock);
-
-    da = castle_da_hash_get(da_id);
-    BUG_ON(!da);
     /* orig_complete should be null it is for our privte use */
     BUG_ON(c_bvec->orig_complete);
 
@@ -9767,20 +9779,11 @@ void castle_double_array_unreserve(c_bvec_t *c_bvec)
  */
 void castle_double_array_queue(c_bvec_t *c_bvec)
 {
-    struct castle_attachment *att = c_bvec->c_bio->attachment;
     struct castle_da_io_wait_queue *wq;
-    struct castle_double_array *da;
-    c_da_t da_id;
+    struct castle_double_array *da = castle_da_ptr_get(c_bvec->c_bio->attachment);
 
     BUG_ON(c_bvec_data_dir(c_bvec) != WRITE);
 
-    down_read(&att->lock);
-    /* Since the version is attached, it must be found */
-    BUG_ON(castle_version_read(att->version, &da_id, NULL, NULL, NULL, NULL));
-    up_read(&att->lock);
-
-    da = castle_da_hash_get(da_id);
-    BUG_ON(!da);
     BUG_ON(atomic_read(&c_bvec->reserv_nodes) != 0);
 
     /* Write requests only accepted if inserts enabled and no queued writes. */
