@@ -990,7 +990,8 @@ int castle_object_iter_next(castle_object_iterator_t *iterator,
                             castle_object_iter_next_available_t callback,
                             void *data)
 {
-    void *k, *key = NULL;
+    c_vl_bkey_t *key;
+    void *k;
     c_val_tup_t val;
     c_ver_t v;
     int has_response;
@@ -1019,8 +1020,7 @@ int castle_object_iter_next(castle_object_iterator_t *iterator,
                 {
                     has_response = 1;
 
-                    key = k;
-                    if (!key)
+                    if (!k || !(key = iterator->btree->key_unpack(k, NULL, NULL)))
                     {
                         callback(iterator, NULL, NULL, -ENOMEM, iterator->next_available_data);
                         return 0;
@@ -1045,6 +1045,7 @@ int castle_object_iter_next(castle_object_iterator_t *iterator,
         {
             debug_rq("Calling next available callback with key=%p.\n", key);
             continue_iterator = callback(iterator, key, &val, 0, iterator->next_available_data);
+            castle_free(key);
         }
         debug_rq("Next available callback gave response %d.\n", continue_iterator);
     }
