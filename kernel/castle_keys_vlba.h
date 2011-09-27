@@ -4,23 +4,18 @@
 #include <linux/types.h>
 #include "castle_public.h"
 
-int          castle_object_btree_key_compare     (const c_vl_bkey_t *key1,
-                                                  const c_vl_bkey_t *key2);
-c_vl_bkey_t *castle_object_btree_key_copy        (const c_vl_bkey_t *src,
-                                                  c_vl_bkey_t       *dst,
-                                                  size_t            *dst_len);
-c_vl_bkey_t *castle_object_btree_key_next        (const c_vl_bkey_t *key,
-                                                  c_vl_bkey_t       *dst,
-                                                  size_t            *dst_len);
-int          castle_object_btree_key_bounds_check(const c_vl_bkey_t *key,
-                                                  const c_vl_bkey_t *start,
-                                                  const c_vl_bkey_t *end,
-                                                  int               *offending_dim_p);
-c_vl_bkey_t *castle_object_btree_key_skip        (const c_vl_bkey_t *old_key,
-                                                  const c_vl_bkey_t *start,
-                                                  int                offending_dim,
-                                                  int                out_of_range);
-void         castle_object_btree_key_free        (c_vl_bkey_t       *bkey);
+int          castle_object_btree_key_compare       (const c_vl_bkey_t *key1,
+                                                    const c_vl_bkey_t *key2);
+c_vl_bkey_t *castle_object_btree_key_copy          (const c_vl_bkey_t *src,
+                                                    c_vl_bkey_t       *dst,
+                                                    size_t            *dst_len);
+c_vl_bkey_t *castle_object_btree_key_next          (const c_vl_bkey_t *key,
+                                                    c_vl_bkey_t       *dst,
+                                                    size_t            *dst_len);
+c_vl_bkey_t* castle_object_btree_key_hypercube_next(const c_vl_bkey_t *key,
+                                                    const c_vl_bkey_t *start,
+                                                    const c_vl_bkey_t *end);
+void         castle_object_btree_key_free          (c_vl_bkey_t       *bkey);
 
 /*
  * The special values used for the length field of struct vlba_key / struct

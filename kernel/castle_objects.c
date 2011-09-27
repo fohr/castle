@@ -3,7 +3,6 @@
 #include "castle_public.h"
 #include "castle_defines.h"
 #include "castle.h"
-#include "castle_keys_vlba.h"
 #include "castle_da.h"
 #include "castle_utils.h"
 #include "castle_btree.h"
@@ -24,6 +23,15 @@
 #endif
 
 static const uint32_t OBJ_TOMBSTONE = ((uint32_t)-1);
+
+/**********************************************************************************************/
+/* Helper functions */
+
+inline static void castle_object_bvec_key_dealloc(struct castle_bio_vec *c_bvec)
+{
+    castle_double_array_btree_type_get(c_bvec->c_bio->attachment)->key_dealloc(c_bvec->key);
+    c_bvec->key = NULL;
+}
 
 /**********************************************************************************************/
 /* Iterator(s) */
@@ -50,17 +58,16 @@ static void castle_objects_rq_iter_next(castle_object_iterator_t *iter,
 
 static void castle_objects_rq_iter_next_key_free(castle_object_iterator_t *iter)
 {
-    if(iter->last_next_key)
-        castle_object_btree_key_free(iter->last_next_key);
+    if (iter->last_next_key)
+        iter->btree->key_dealloc(iter->last_next_key);
     iter->last_next_key = NULL;
 }
 
 static int castle_objects_rq_iter_prep_next(castle_object_iterator_t *iter)
 {
-    void *k;
+    void *k, *next_key;
     c_ver_t v;
     c_val_tup_t cvt;
-    int offending_dim=0, out_of_range;
 
     while(1)
     {
@@ -78,31 +85,16 @@ static int castle_objects_rq_iter_prep_next(castle_object_iterator_t *iter)
         /* Nothing cached, but there is something in the da_rq_iter.
            Check if that's within the rq hypercube */
         castle_da_rq_iter.next(&iter->da_rq_iter, &k, &v, &cvt);
-        out_of_range = castle_object_btree_key_bounds_check(k,
-                                                            iter->start_key,
-                                                            iter->end_key,
-                                                            &offending_dim);
-#ifdef DEBUG
-        debug("Got the following key from da_rq iterator. Is in range: %d, offending_dim=%d\n",
-                out_of_range, offending_dim);
-        vl_bkey_print(k);
-#endif
-        if(out_of_range)
-        {
-            c_vl_bkey_t *next_key;
+        next_key = iter->btree->key_hc_next(k, iter->start_key, iter->end_key);
 
-            if (offending_dim == 0)
+        if (next_key != k)      /* key is outside the hypercube */
+        {
+            if (next_key == NULL) /* key is completely past end_key */
             {
                 iter->completed = 1;
                 return 1;
             }
 
-            /* We are outside of the rq hypercube, find next intersection point
-               and skip to that */
-            next_key = castle_object_btree_key_skip(k,
-                                                    iter->start_key,
-                                                    offending_dim,
-                                                    out_of_range);
             /* Save the key, to be freed the next time around the loop/on cancel */
             castle_objects_rq_iter_next_key_free(iter);
             iter->last_next_key = next_key;
@@ -443,18 +435,18 @@ static void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
 
     debug("castle_object_replace_complete\n");
 
-    if(err == -EEXIST && !cancelled)
+    if (err == -EEXIST && !cancelled)
         castle_printk(LOG_WARN, "Failed to insert into btree (timestamp violation).\n");
-    else if(err && !cancelled)
+    else if (err && !cancelled)
         castle_printk(LOG_WARN, "Failed to insert into btree.\n");
 
     /* If there was an error inserting on large objects, free the extent.
        Since there was an error, the object hasn't been threaded onto large object list yet.
        There is no need to remove it from there, or to change any accounting. */
-    if(err && CVT_LARGE_OBJECT(cvt))
+    if (err && CVT_LARGE_OBJECT(cvt))
         castle_extent_free(cvt.cep.ext_id);
 
-    /* Reserve kmalloced memory for inline objects. */
+    /* Release kmalloced memory for inline objects. */
     CVT_INLINE_FREE(cvt);
 
     /* Unreserve any space we may still hold in the CT. Drop the CT ref. */
@@ -465,11 +457,12 @@ static void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
     }
     BUG_ON(atomic_read(&c_bvec->reserv_nodes) != 0);
 
-    /* Free the bio. */
+    /* Free the packed key and the bio. */
+    castle_object_bvec_key_dealloc(c_bvec);
     castle_utils_bio_free(c_bio);
 
     /* Tell the client everything is finished. */
-    if(!cancelled)
+    if (!cancelled)
         replace->complete(replace, err);
 }
 
@@ -851,12 +844,13 @@ err_out:
  */
 int castle_object_replace(struct castle_object_replace *replace,
                           struct castle_attachment *attachment,
-                          c_vl_bkey_t *key,
                           int cpu_index,
                           int tombstone)
 {
-    c_bvec_t *c_bvec = NULL;
-    c_bio_t *c_bio = NULL;
+    struct castle_btree_type *btree;
+    void *key;
+    c_bio_t *c_bio;
+    c_bvec_t *c_bvec;
     int ret;
 
     if(replace->has_user_timestamp)
@@ -876,25 +870,26 @@ int castle_object_replace(struct castle_object_replace *replace,
      * Make sure that the filesystem has been fully initialised before accepting any requsets.
      * @TODO consider moving this check to castle_back_open().
      */
-    if(!castle_fs_inited)
+    if (!castle_fs_inited)
         return -ENODEV;
 
-    /* Create btree key out of the object key. */
-    ret = -EINVAL;
+    /* Create the packed key out of the backend key. */
+    btree = castle_double_array_btree_type_get(attachment);
+    key = btree->key_pack(replace->key, NULL, NULL);
     if (!key)
-        goto err_out;
+        return -ENOMEM;
 
     /* Allocate castle bio with a single bvec. */
     ret = -ENOMEM;
     c_bio = castle_utils_bio_alloc(1);
-    if(!c_bio)
-        goto err_out;
+    if (!c_bio)
+        goto err0;
 
     /* Initialise the bio. */
     c_bio->attachment    = attachment;
     c_bio->replace       = replace;
     c_bio->data_dir      = WRITE;
-    if(tombstone)
+    if (tombstone)
         c_bio->data_dir |= REMOVE;
 
     /* Initialise the bvec. */
@@ -916,17 +911,10 @@ int castle_object_replace(struct castle_object_replace *replace,
 
     /* Queue up in the DA. */
     castle_double_array_queue(c_bvec);
-
     return 0;
 
-err_out:
-    /* Free up allocated memory on errors. */
-    if(ret)
-    {
-        if(c_bio)
-            castle_utils_bio_free(c_bio);
-    }
-
+err0:
+    btree->key_dealloc(key);
     return ret;
 }
 EXPORT_SYMBOL(castle_object_replace);
@@ -934,64 +922,75 @@ EXPORT_SYMBOL(castle_object_replace);
 void castle_object_slice_get_end_io(void *obj_iter, int err);
 
 int castle_object_iter_start(struct castle_attachment *attachment,
-                            c_vl_bkey_t *start_key,
-                            c_vl_bkey_t *end_key,
-                            castle_object_iterator_t **iter)
+                             c_vl_bkey_t *start_key,
+                             c_vl_bkey_t *end_key,
+                             castle_object_iterator_t **iter)
 {
     castle_object_iterator_t *iterator;
-    int i;
+    int i, ret;
 
     /* Checks on keys. */
-    if(start_key->nr_dims != end_key->nr_dims)
+    if (start_key->nr_dims != end_key->nr_dims)
     {
         castle_printk(LOG_WARN, "Range query with different # of dimensions.\n");
         return -EINVAL;
     }
 
     /* Empty dimensions on start_key are allowed only if it is -ve infinity. */
-    for (i=0; i<start_key->nr_dims; i++)
+    for (i = 0; i < start_key->nr_dims; i++)
         if (castle_object_btree_key_dim_length(start_key, i) == 0 &&
             !(castle_object_btree_key_dim_flags_get(start_key, i) & KEY_DIMENSION_MINUS_INFINITY_FLAG))
             return -EINVAL;
 
     /* Empty dimensions on end_key are allowed only if it is +ve infinity. */
-    for (i=0; i<end_key->nr_dims; i++)
+    for (i = 0; i < end_key->nr_dims; i++)
         if (castle_object_btree_key_dim_length(end_key, i) == 0 &&
             !(castle_object_btree_key_dim_flags_get(end_key, i) & KEY_DIMENSION_PLUS_INFINITY_FLAG))
             return -EINVAL;
 
     iterator = castle_malloc(sizeof(castle_object_iterator_t), GFP_KERNEL);
-    if(!iterator)
+    if (!iterator)
         return -ENOMEM;
-
     *iter = iterator;
 
-    /* Initialise the iterator */
-    iterator->start_key = start_key;
-    iterator->end_key   = end_key;
+    /* Create the packed keys out of the backend keys. */
+    ret = -ENOMEM;
+    iterator->btree = castle_double_array_btree_type_get(attachment);
+    iterator->start_key = iterator->btree->key_pack(start_key, NULL, NULL);
+    if (!iterator->start_key)
+        goto err0;
+    iterator->end_key = iterator->btree->key_pack(end_key, NULL, NULL);
+    if (!iterator->end_key)
+        goto err1;
+
+    /* Initialise the rest of the iterator */
     iterator->version   = attachment->version;
     iterator->da_id     = castle_version_da_id_get(iterator->version);
 
     debug_rq("rq_iter_init.\n");
     castle_objects_rq_iter_init(iterator);
-    if(iterator->err)
+    if (iterator->err)
     {
-        castle_kfree(iterator);
-        return iterator->err;
+        ret = iterator->err;
+        goto err2;
     }
 
     castle_objects_rq_iter_register_cb(iterator, castle_object_slice_get_end_io, NULL);
 
     debug_rq("rq_iter_init done.\n");
-
     return 0;
+
+err2: iterator->btree->key_dealloc(iterator->end_key);
+err1: iterator->btree->key_dealloc(iterator->start_key);
+err0: castle_kfree(iterator);
+    return ret;
 }
 
 int castle_object_iter_next(castle_object_iterator_t *iterator,
                             castle_object_iter_next_available_t callback,
                             void *data)
 {
-    c_vl_bkey_t *k, *key = NULL;
+    void *k, *key = NULL;
     c_val_tup_t val;
     c_ver_t v;
     int has_response;
@@ -1014,10 +1013,7 @@ int castle_object_iter_next(castle_object_iterator_t *iterator,
             else
             {
                 debug_rq("Getting an entry for the range query.\n");
-                castle_objects_rq_iter.next(iterator,
-                                            (void **)&k,
-                                            &v,
-                                            &val);
+                castle_objects_rq_iter.next(iterator, &k, &v, &val);
                 debug_rq("Got an entry for the range query.\n");
                 if (!CVT_TOMBSTONE(val))
                 {
@@ -1060,6 +1056,8 @@ int castle_object_iter_finish(castle_object_iterator_t *iterator)
 {
     castle_objects_rq_iter_cancel(iterator);
     debug_rq("Freeing iterators & buffers.\n");
+    iterator->btree->key_dealloc(iterator->end_key);
+    iterator->btree->key_dealloc(iterator->start_key);
     castle_kfree(iterator);
 
     return 0;
@@ -1106,6 +1104,7 @@ void castle_object_get_continue(struct castle_bio_vec *c_bvec,
                                 struct castle_object_get *get,
                                 c_ext_pos_t  data_cep,
                                 uint64_t data_length);
+
 void __castle_object_get_complete(struct work_struct *work)
 {
     c_bvec_t *c_bvec = container_of(work, c_bvec_t, work);
@@ -1119,10 +1118,10 @@ void __castle_object_get_complete(struct work_struct *work)
     c_val_tup_t cvt = get->cvt;
 
     /* Deal with error case first */
-    if(!c2b_uptodate(c2b))
+    if (!c2b_uptodate(c2b))
     {
         debug("Not up to date.\n");
-        if(first)
+        if (first)
             get->reply_start(get, -EIO, 0, NULL, 0);
         else
             get->reply_continue(get, -EIO, NULL, 0, 1 /* last */);
@@ -1133,7 +1132,7 @@ void __castle_object_get_complete(struct work_struct *work)
     last = (data_length == 0);
     debug("Last=%d\n", last);
     read_lock_c2b(c2b);
-    if(first)
+    if (first)
         dont_want_more = get->reply_start(get,
                                           0,
                                           data_c2b_length + data_length,
@@ -1147,7 +1146,7 @@ void __castle_object_get_complete(struct work_struct *work)
                                              last);
     read_unlock_c2b(c2b);
 
-    if(last || dont_want_more)
+    if (last || dont_want_more)
         goto out;
 
     BUG_ON(data_c2b_length != OBJ_IO_MAX_BUFFER_SIZE * C_BLK_SIZE);
@@ -1174,6 +1173,7 @@ out:
 
     castle_da_cts_proxy_put(c_bvec->cts_proxy); /* castle_da_ct_read_complete() */
     castle_object_reference_release(cvt);
+    castle_object_bvec_key_dealloc(c_bvec);
     castle_utils_bio_free(c_bvec->c_bio);
 }
 
@@ -1294,7 +1294,7 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
 
     /* We are handling a counter if either we just got a counter or we were already
        accumulating counters. */
-    if(CVT_ANY_COUNTER(cvt) || CVT_ANY_COUNTER(get->cvt))
+    if (CVT_ANY_COUNTER(cvt) || CVT_ANY_COUNTER(get->cvt))
     {
         int finished;
 
@@ -1314,20 +1314,19 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
         get->cvt = cvt;
 
     /* Deal with error case, or non-existent value. */
-    if(err || CVT_INVALID(cvt) || CVT_TOMBSTONE(cvt))
+    if (err || CVT_INVALID(cvt) || CVT_TOMBSTONE(cvt))
     {
         BUG_ON(c_bvec->cts_proxy); // _da_ct_read_complete() puts for !on disk
 
         /* Turn tombstones into invalid CVTs. */
         CVT_INVALID_INIT(get->cvt);
         get->reply_start(get, err, 0, NULL, 0);
+        castle_object_bvec_key_dealloc(c_bvec);
         castle_utils_bio_free(c_bvec->c_bio);
-
-        return;
     }
 
     /* Inline values and local (all) counters. */
-    if (CVT_INLINE(cvt))
+    else if (CVT_INLINE(cvt))
     {
         BUG_ON(c_bvec->cts_proxy); // _da_ct_read_complete() puts for !on disk
 
@@ -1339,13 +1338,14 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
                          CVT_INLINE_VAL_PTR(cvt),
                          cvt.length);
         CVT_INLINE_FREE(cvt);
+        castle_object_bvec_key_dealloc(c_bvec);
         castle_utils_bio_free(c_bvec->c_bio);
 
         FAULT(GET_FAULT);
-        return;
     }
 
     /* Out-of-line values (medium objects). */
+    else
     {
         BUG_ON(CVT_MEDIUM_OBJECT(cvt) &&
                 cvt.cep.ext_id != c_bvec->tree->data_ext_free.ext_id);
@@ -1376,25 +1376,31 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
  */
 int castle_object_get(struct castle_object_get *get,
                       struct castle_attachment *attachment,
-                      c_vl_bkey_t *key,
                       int cpu_index)
 {
-    c_bvec_t *c_bvec;
+    struct castle_btree_type *btree;
+    void *key;
     c_bio_t *c_bio;
+    c_bvec_t *c_bvec;
+    int ret;
 
     debug("castle_object_get get=%p\n", get);
+    BUG_ON(!attachment);
 
-    if(!castle_fs_inited)
+    if (!castle_fs_inited)
         return -ENODEV;
 
+    /* Create the packed key out of the backend key. */
+    btree = castle_double_array_btree_type_get(attachment);
+    key = btree->key_pack(get->key, NULL, NULL);
     if (!key)
-        return -EINVAL;
+        return -ENOMEM;
 
     /* Single c_bvec for the bio */
+    ret = -ENOMEM;
     c_bio = castle_utils_bio_alloc(1);
-    if(!c_bio)
-        return -ENOMEM; // @TODO leaking btree_key?
-    BUG_ON(!attachment);
+    if (!c_bio)
+        goto err0;
 
     /* Set CVT to invalid. We need that to recognise and handle counters properly. */
     CVT_INVALID_INIT(get->cvt);
@@ -1414,8 +1420,11 @@ int castle_object_get(struct castle_object_get *get,
 
     /* @TODO: add bios to the debugger! */
     castle_double_array_submit(c_bvec);
-
     return 0;
+
+err0:
+    btree->key_dealloc(key);
+    return ret;
 }
 EXPORT_SYMBOL(castle_object_get);
 
@@ -1541,6 +1550,7 @@ static void castle_object_pull_continue(struct castle_bio_vec *c_bvec, int err, 
 
     pull->cts_proxy = c_bvec->cts_proxy;
     pull->cvt       = cvt;
+    castle_object_bvec_key_dealloc(c_bvec);
     castle_utils_bio_free(c_bvec->c_bio);
 
     /* Deal with error case, or non-existent value. */
@@ -1553,16 +1563,17 @@ static void castle_object_pull_continue(struct castle_bio_vec *c_bvec, int err, 
         pull->cts_proxy = NULL;
         CVT_INVALID_INIT(pull->cvt);
         pull->pull_continue(pull, err, 0, 1 /*done*/);
-
-        return;
     }
 
-    pull->offset    = 0;
-    pull->curr_c2b  = NULL;
-    pull->buf       = NULL;
-    pull->remaining = cvt.length;
+    else
+    {
+        pull->offset    = 0;
+        pull->curr_c2b  = NULL;
+        pull->buf       = NULL;
+        pull->remaining = cvt.length;
 
-    pull->pull_continue(pull, err /*now: 0*/, cvt.length, 0 /*done*/);
+        pull->pull_continue(pull, err /*now: 0*/, cvt.length, 0 /*done*/);
+    }
 }
 
 /**
@@ -1572,25 +1583,32 @@ static void castle_object_pull_continue(struct castle_bio_vec *c_bvec, int err, 
  */
 int castle_object_pull(struct castle_object_pull *pull,
                        struct castle_attachment *attachment,
-                       c_vl_bkey_t *key,
                        int cpu_index)
 {
-    c_bvec_t *c_bvec;
+    struct castle_btree_type *btree;
+    void *key;
     c_bio_t *c_bio;
+    c_bvec_t *c_bvec;
+    int ret;
 
     debug("castle_object_pull pull=%p\n", pull);
+    BUG_ON(!attachment);
 
-    if(!castle_fs_inited)
+    if (!castle_fs_inited)
         return -ENODEV;
 
+    /* Create the packed key out of the backend key. */
+    btree = castle_double_array_btree_type_get(attachment);
+    key = btree->key_pack(pull->key, NULL, NULL);
     if (!key)
-        return -EINVAL;
+        return -ENOMEM;
 
     /* Single c_bvec for the bio */
+    ret = -ENOMEM;
     c_bio = castle_utils_bio_alloc(1);
-    if(!c_bio)
-        return -ENOMEM; /* @TODO leaking btree_key? */
-    BUG_ON(!attachment);
+    if (!c_bio)
+        goto err0;
+
     c_bio->attachment    = attachment;
     c_bio->pull          = pull;
     c_bio->data_dir      = READ;
@@ -1606,7 +1624,10 @@ int castle_object_pull(struct castle_object_pull *pull,
 
     /* @TODO: add bios to the debugger! */
     castle_double_array_submit(c_bvec);
-
     return 0;
+
+err0:
+    btree->key_dealloc(key);
+    return ret;
 }
 EXPORT_SYMBOL(castle_object_pull);

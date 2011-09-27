@@ -880,6 +880,11 @@ struct castle_btree_type {
                               /* Successor key, succ(MAX) = INVAL,
                                  succ(MIN) / succ(INVAL) -> BUG(). Uses
                                  its arguments exactly like key_copy(). */
+    void    *(*key_hc_next)   (const void *key, const void *low, const void *high);
+                              /* Returns the next key to fall inside
+                                 the hypercube defined by low and high;
+                                 key itself if it is already inside the
+                                 hypercube; NULL if no such key exists. */
     void     (*key_dealloc)   (void *key);
                               /* Destroys the key, frees resources
                                  associated with it                     */
@@ -1920,13 +1925,14 @@ typedef struct castle_object_iterator {
     /* Filled in by the client */
     c_da_t              da_id;
     c_ver_t             version;
-    c_vl_bkey_t        *start_key;
-    c_vl_bkey_t        *end_key;
+    struct castle_btree_type *btree;
+    void               *start_key;
+    void               *end_key;
 
     /* Rest */
     int                 err;
     int                 completed;
-    c_vl_bkey_t        *last_next_key;
+    void               *last_next_key;
     c_da_rq_iter_t      da_rq_iter;
     /* Cached entry, guaranteed to fall in the hypercube */
     int                 cached;

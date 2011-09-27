@@ -185,6 +185,8 @@ int  castle_double_array_key_cpu_index(c_vl_bkey_t *key, uint32_t key_len);
 int  castle_double_array_request_cpu   (int cpu_index);
 int  castle_double_array_request_cpus  (void);
 
+struct castle_btree_type
+    *castle_double_array_btree_type_get(struct castle_attachment *att);
 void castle_double_array_queue    (c_bvec_t *c_bvec);
 void castle_double_array_unreserve(c_bvec_t *c_bvec);
 void castle_double_array_submit   (c_bvec_t *c_bvec);

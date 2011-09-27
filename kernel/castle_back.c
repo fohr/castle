@@ -1297,7 +1297,7 @@ static void castle_back_replace(void *data)
     op->replace.has_user_timestamp = 0;
     op->replace.key = key;      /* Key would be freed by replace_complete. */
 
-    err = castle_object_replace(&op->replace, op->attachment, key, op->cpu_index, 0);
+    err = castle_object_replace(&op->replace, op->attachment, op->cpu_index, 0);
     if (err)
         goto err3;
 
@@ -1365,7 +1365,7 @@ static void castle_back_timestamped_replace(void *data)
     op->replace.user_timestamp = op->req.timestamped_replace.user_timestamp;
     op->replace.key = key;      /* Key would be freed by replace_complete. */
 
-    err = castle_object_replace(&op->replace, op->attachment, key, op->cpu_index, 0);
+    err = castle_object_replace(&op->replace, op->attachment, op->cpu_index, 0);
     if (err)
         goto err3;
 
@@ -1436,7 +1436,7 @@ static void castle_back_counter_replace(void *data)
     op->replace.has_user_timestamp = 0;
     op->replace.key = key;      /* Key would be freed by replace_complete. */
 
-    err = castle_object_replace(&op->replace, op->attachment, key, op->cpu_index, 0);
+    err = castle_object_replace(&op->replace, op->attachment, op->cpu_index, 0);
     if (err)
         goto err3;
 
@@ -1510,7 +1510,7 @@ static void castle_back_remove(void *data)
     op->replace.has_user_timestamp = 0;
     op->replace.key = key;      /* Key would be freed by remove_complete. */
 
-    err = castle_object_replace(&op->replace, op->attachment, key, op->cpu_index, 1 /*tombstone*/);
+    err = castle_object_replace(&op->replace, op->attachment, op->cpu_index, 1 /*tombstone*/);
     if (err)
         goto err2;
 
@@ -1551,7 +1551,7 @@ static void castle_back_timestamped_remove(void *data)
     op->replace.user_timestamp = op->req.timestamped_replace.user_timestamp;
     op->replace.key = key;      /* Key would be freed by remove_complete. */
 
-    err = castle_object_replace(&op->replace, op->attachment, key, op->cpu_index, 1 /*tombstone*/);
+    err = castle_object_replace(&op->replace, op->attachment, op->cpu_index, 1 /*tombstone*/);
     if (err)
         goto err2;
 
@@ -1700,7 +1700,7 @@ static void castle_back_get(void *data)
     op->get.reply_continue = castle_back_get_reply_continue;
     op->get.key = key;
 
-    err = castle_object_get(&op->get, op->attachment, key, op->cpu_index);
+    err = castle_object_get(&op->get, op->attachment, op->cpu_index);
     if (err)
         goto err3;
 
@@ -2811,7 +2811,6 @@ static void castle_back_big_put(void *data)
     /* Call castle_object layer to insert (k,v) pair. */
     err = castle_object_replace(&stateful_op->replace,
                                 attachment,
-                                key,
                                 op->cpu_index,
                                 0 /*tombstone*/);
     if (err)
@@ -3103,7 +3102,7 @@ static void castle_back_big_get(void *data)
     #endif
 
     stateful_op->pull.key = key;
-    err = castle_object_pull(&stateful_op->pull, attachment, key, op->cpu_index);
+    err = castle_object_pull(&stateful_op->pull, attachment, op->cpu_index);
     if (err)
         goto err3;
 
