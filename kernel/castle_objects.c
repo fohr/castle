@@ -994,7 +994,6 @@ int castle_object_iter_next(castle_object_iterator_t *iterator,
     void *k;
     c_val_tup_t val;
     c_ver_t v;
-    int has_response;
     int continue_iterator = 1;
 
     iterator->next_available = callback;
@@ -1002,51 +1001,37 @@ int castle_object_iter_next(castle_object_iterator_t *iterator,
 
     while (continue_iterator)
     {
-        has_response = 0;
-        while (!has_response && castle_objects_rq_iter.prep_next(iterator))
-        {
-            if (!castle_objects_rq_iter.has_next(iterator))
-            {
-                debug_rq("Iterator at end.\n");
-                key = NULL;
-                has_response = 1;
-            }
-            else
-            {
-                debug_rq("Getting an entry for the range query.\n");
-                castle_objects_rq_iter.next(iterator, &k, &v, &val);
-                debug_rq("Got an entry for the range query.\n");
-                if (!CVT_TOMBSTONE(val))
-                {
-                    has_response = 1;
-
-                    if (!k || !(key = iterator->btree->key_unpack(k, NULL, NULL)))
-                    {
-                        callback(iterator, NULL, NULL, -ENOMEM, iterator->next_available_data);
-                        return 0;
-                    }
-                }
-            }
-        }
-
-        if (!has_response)
+        if (!castle_objects_rq_iter.prep_next(iterator))
         {
             /* we're waiting for the iterator */
             debug_rq("Waiting for next available.\n");
             return 0;
         }
-
-        if (!key)
+        else if (!castle_objects_rq_iter.has_next(iterator))
         {
+            debug_rq("Iterator at end.\n");
             debug_rq("Calling next available callback with NULL key.\n");
             continue_iterator = callback(iterator, NULL, NULL, 0, iterator->next_available_data);
         }
         else
         {
+            debug_rq("Getting an entry for the range query.\n");
+            castle_objects_rq_iter.next(iterator, &k, &v, &val);
+            debug_rq("Got an entry for the range query.\n");
+            if (CVT_TOMBSTONE(val))
+                continue;
+
+            if (!k || !(key = iterator->btree->key_unpack(k, NULL, NULL)))
+            {
+                callback(iterator, NULL, NULL, -ENOMEM, iterator->next_available_data);
+                return 0;
+            }
+
             debug_rq("Calling next available callback with key=%p.\n", key);
             continue_iterator = callback(iterator, key, &val, 0, iterator->next_available_data);
             castle_free(key);
         }
+
         debug_rq("Next available callback gave response %d.\n", continue_iterator);
     }
 
