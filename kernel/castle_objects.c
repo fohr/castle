@@ -3,7 +3,6 @@
 #include "castle_public.h"
 #include "castle_defines.h"
 #include "castle.h"
-#include "castle_keys_vlba.h"
 #include "castle_da.h"
 #include "castle_utils.h"
 #include "castle_btree.h"
@@ -59,8 +58,8 @@ static void castle_objects_rq_iter_next(castle_object_iterator_t *iter,
 
 static void castle_objects_rq_iter_next_key_free(castle_object_iterator_t *iter)
 {
-    if(iter->last_next_key)
-        castle_object_btree_key_free(iter->last_next_key);
+    if (iter->last_next_key)
+        iter->btree->key_dealloc(iter->last_next_key);
     iter->last_next_key = NULL;
 }
 
@@ -86,7 +85,7 @@ static int castle_objects_rq_iter_prep_next(castle_object_iterator_t *iter)
         /* Nothing cached, but there is something in the da_rq_iter.
            Check if that's within the rq hypercube */
         castle_da_rq_iter.next(&iter->da_rq_iter, &k, &v, &cvt);
-        next_key = castle_object_btree_key_hypercube_next(k, iter->start_key, iter->end_key);
+        next_key = iter->btree->key_hc_next(k, iter->start_key, iter->end_key);
 
         if (next_key != k)      /* key is outside the hypercube */
         {
@@ -923,64 +922,75 @@ EXPORT_SYMBOL(castle_object_replace);
 void castle_object_slice_get_end_io(void *obj_iter, int err);
 
 int castle_object_iter_start(struct castle_attachment *attachment,
-                            c_vl_bkey_t *start_key,
-                            c_vl_bkey_t *end_key,
-                            castle_object_iterator_t **iter)
+                             c_vl_bkey_t *start_key,
+                             c_vl_bkey_t *end_key,
+                             castle_object_iterator_t **iter)
 {
     castle_object_iterator_t *iterator;
-    int i;
+    int i, ret;
 
     /* Checks on keys. */
-    if(start_key->nr_dims != end_key->nr_dims)
+    if (start_key->nr_dims != end_key->nr_dims)
     {
         castle_printk(LOG_WARN, "Range query with different # of dimensions.\n");
         return -EINVAL;
     }
 
     /* Empty dimensions on start_key are allowed only if it is -ve infinity. */
-    for (i=0; i<start_key->nr_dims; i++)
+    for (i = 0; i < start_key->nr_dims; i++)
         if (castle_object_btree_key_dim_length(start_key, i) == 0 &&
             !(castle_object_btree_key_dim_flags_get(start_key, i) & KEY_DIMENSION_MINUS_INFINITY_FLAG))
             return -EINVAL;
 
     /* Empty dimensions on end_key are allowed only if it is +ve infinity. */
-    for (i=0; i<end_key->nr_dims; i++)
+    for (i = 0; i < end_key->nr_dims; i++)
         if (castle_object_btree_key_dim_length(end_key, i) == 0 &&
             !(castle_object_btree_key_dim_flags_get(end_key, i) & KEY_DIMENSION_PLUS_INFINITY_FLAG))
             return -EINVAL;
 
     iterator = castle_malloc(sizeof(castle_object_iterator_t), GFP_KERNEL);
-    if(!iterator)
+    if (!iterator)
         return -ENOMEM;
-
     *iter = iterator;
 
-    /* Initialise the iterator */
-    iterator->start_key = start_key;
-    iterator->end_key   = end_key;
+    /* Create the packed keys out of the backend keys. */
+    ret = -ENOMEM;
+    iterator->btree = castle_double_array_btree_type_get(attachment);
+    iterator->start_key = iterator->btree->key_pack(start_key, NULL, NULL);
+    if (!iterator->start_key)
+        goto err0;
+    iterator->end_key = iterator->btree->key_pack(end_key, NULL, NULL);
+    if (!iterator->end_key)
+        goto err1;
+
+    /* Initialise the rest of the iterator */
     iterator->version   = attachment->version;
     iterator->da_id     = castle_version_da_id_get(iterator->version);
 
     debug_rq("rq_iter_init.\n");
     castle_objects_rq_iter_init(iterator);
-    if(iterator->err)
+    if (iterator->err)
     {
-        castle_kfree(iterator);
-        return iterator->err;
+        ret = iterator->err;
+        goto err2;
     }
 
     castle_objects_rq_iter_register_cb(iterator, castle_object_slice_get_end_io, NULL);
 
     debug_rq("rq_iter_init done.\n");
-
     return 0;
+
+err2: iterator->btree->key_dealloc(iterator->end_key);
+err1: iterator->btree->key_dealloc(iterator->start_key);
+err0: castle_kfree(iterator);
+    return ret;
 }
 
 int castle_object_iter_next(castle_object_iterator_t *iterator,
                             castle_object_iter_next_available_t callback,
                             void *data)
 {
-    c_vl_bkey_t *k, *key = NULL;
+    void *k, *key = NULL;
     c_val_tup_t val;
     c_ver_t v;
     int has_response;
@@ -1003,10 +1013,7 @@ int castle_object_iter_next(castle_object_iterator_t *iterator,
             else
             {
                 debug_rq("Getting an entry for the range query.\n");
-                castle_objects_rq_iter.next(iterator,
-                                            (void **)&k,
-                                            &v,
-                                            &val);
+                castle_objects_rq_iter.next(iterator, &k, &v, &val);
                 debug_rq("Got an entry for the range query.\n");
                 if (!CVT_TOMBSTONE(val))
                 {
@@ -1049,6 +1056,8 @@ int castle_object_iter_finish(castle_object_iterator_t *iterator)
 {
     castle_objects_rq_iter_cancel(iterator);
     debug_rq("Freeing iterators & buffers.\n");
+    iterator->btree->key_dealloc(iterator->end_key);
+    iterator->btree->key_dealloc(iterator->start_key);
     castle_kfree(iterator);
 
     return 0;
