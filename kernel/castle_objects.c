@@ -835,7 +835,6 @@ err_out:
  */
 int castle_object_replace(struct castle_object_replace *replace,
                           struct castle_attachment *attachment,
-                          c_vl_bkey_t *key,
                           int cpu_index,
                           int tombstone)
 {
@@ -865,7 +864,7 @@ int castle_object_replace(struct castle_object_replace *replace,
 
     /* Create btree key out of the object key. */
     ret = -EINVAL;
-    if (!key)
+    if (!replace->key)
         goto err_out;
 
     /* Allocate castle bio with a single bvec. */
@@ -883,7 +882,7 @@ int castle_object_replace(struct castle_object_replace *replace,
 
     /* Initialise the bvec. */
     c_bvec = c_bio->c_bvecs;
-    c_bvec->key            = key;
+    c_bvec->key            = replace->key;
     c_bvec->tree           = NULL;
     c_bvec->cpu_index      = cpu_index;
     c_bvec->cpu            = castle_double_array_request_cpu(c_bvec->cpu_index);
@@ -1360,7 +1359,6 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
  */
 int castle_object_get(struct castle_object_get *get,
                       struct castle_attachment *attachment,
-                      c_vl_bkey_t *key,
                       int cpu_index)
 {
     c_bvec_t *c_bvec;
@@ -1371,7 +1369,7 @@ int castle_object_get(struct castle_object_get *get,
     if(!castle_fs_inited)
         return -ENODEV;
 
-    if (!key)
+    if (!get->key)
         return -EINVAL;
 
     /* Single c_bvec for the bio */
@@ -1388,7 +1386,7 @@ int castle_object_get(struct castle_object_get *get,
     c_bio->data_dir      = READ;
 
     c_bvec = c_bio->c_bvecs;
-    c_bvec->key             = key;
+    c_bvec->key             = get->key;
     c_bvec->cpu_index       = cpu_index;
     c_bvec->cpu             = castle_double_array_request_cpu(c_bvec->cpu_index);
     c_bvec->ref_get         = castle_object_reference_get;
@@ -1556,7 +1554,6 @@ static void castle_object_pull_continue(struct castle_bio_vec *c_bvec, int err, 
  */
 int castle_object_pull(struct castle_object_pull *pull,
                        struct castle_attachment *attachment,
-                       c_vl_bkey_t *key,
                        int cpu_index)
 {
     c_bvec_t *c_bvec;
@@ -1567,7 +1564,7 @@ int castle_object_pull(struct castle_object_pull *pull,
     if(!castle_fs_inited)
         return -ENODEV;
 
-    if (!key)
+    if (!pull->key)
         return -EINVAL;
 
     /* Single c_bvec for the bio */
@@ -1580,7 +1577,7 @@ int castle_object_pull(struct castle_object_pull *pull,
     c_bio->data_dir      = READ;
 
     c_bvec = c_bio->c_bvecs;
-    c_bvec->key             = key;
+    c_bvec->key             = pull->key;
     c_bvec->cpu_index       = cpu_index;
     c_bvec->cpu             = castle_double_array_request_cpu(c_bvec->cpu_index);
     c_bvec->ref_get         = castle_object_reference_get;
