@@ -9653,6 +9653,14 @@ static struct castle_double_array *castle_da_ptr_get(struct castle_attachment *a
 }
 
 /**
+ * Return the btree type structure associated with a particular DA.
+ */
+struct castle_btree_type *castle_double_array_btree_type_get(struct castle_attachment *att)
+{
+    return castle_btree_type_get(castle_da_ptr_get(att)->btree_type);
+}
+
+/**
  * Submit request to DA, write IOs are queued if inserts are disabled.
  *
  * Read requests:
