@@ -34,11 +34,11 @@ static inline ATTRIB_NORET void bug_fn(char *file, unsigned long line)
     /* Dump Castle dmesg output before panicking. */
     castle_dmesg();
 
-    /* From inline/asm-x86_64/bug.h */
-    asm volatile("ud2; pushq $%c1; ret $%c0" :: "i"(line), "i"(file));
+    /* Print a stack backtrace. */
+    dump_stack();
 
-    /* Will never get here. */
-    while (1) {};
+    /* Generate a crashdump. */
+    panic("Castle BUG, from: %s:%ld\n", file, line);
 }
 
 #define BUG()            do { bug_fn(__FILE__, __LINE__); } while(0)
