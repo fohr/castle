@@ -31,18 +31,16 @@ static inline ATTRIB_NORET void bug_fn(char *file, unsigned long line)
 {
     void castle_dmesg(void);
 
+    /* Dump Castle dmesg output before panicking. */
     castle_dmesg();
-    panic("Castle BUG, from: %s:%ld\n", file, line);
-#if 0
-    /* Write the line number into R15, but push it onto the stack first. */
-    __asm__ __volatile__ ("pushq %%r15\n\t"
-                          "movq %0, %%r15;\n\t"
-                          "movq $0x0,0xca511e\n\t"
-                            : : "i" (line) : "%r15" );
+
+    /* From inline/asm-x86_64/bug.h */
+    asm volatile("ud2; pushq $%c1; ret $%c0" :: "i"(line), "i"(file));
+
     /* Will never get here. */
-    while(1){};
-#endif
+    while (1) {};
 }
+
 #define BUG()            do { bug_fn(__FILE__, __LINE__); } while(0)
 #define BUG_ON(_cond)    do { if(unlikely(_cond)) BUG(); } while(0)
 
