@@ -351,10 +351,10 @@ void castle_printk(c_printk_level_t level, const char *fmt, ...)
 
     BUG_ON(PRINTK_BUFFER_SIZE < sizeof(tmp_buf));
 
-    /* Prepend timestamp and CPU to string. */
+    /* Prepend timestamp, CPU and log level to string. */
     getnstimeofday(&time);
-    len = snprintf(tmp_buf, sizeof(tmp_buf), "%ld.%ld %d: ",
-            time.tv_sec, time.tv_nsec, current->thread_info->cpu);
+    len = snprintf(tmp_buf, sizeof(tmp_buf), "%ld.%ld C=%d L=%d: ",
+            time.tv_sec, time.tv_nsec, current->thread_info->cpu, level);
     tmp_bufp = &tmp_buf[len];
 
     va_start(args, fmt);
@@ -447,6 +447,7 @@ void castle_dmesg(void)
     printk("================================================================================\n");
     printk("DUMPING %lld BYTES OF CASTLE PRINTK BUFFER WRAPPED %d TIME(S)\n",
             CASTLE_DMESG_DUMP_SIZE - read_off, wraps);
+    printk("SECONDS.NANOSECONDS C=CPU_ID L=LOG_LEVEL: MESSAGE\n");
     printk("================================================================================\n");
 
     /* Dump the buffer in lines as large as possible (1024). */

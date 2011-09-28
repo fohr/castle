@@ -2313,7 +2313,7 @@ static int castle_da_merge_cts_get(struct castle_double_array *da,
         /* Check that the tree has non-zero elements. */
         if(atomic64_read(&ct->item_count) == 0)
         {
-            printk("Found empty CT=%d, freeing it up.\n", ct->seq);
+            castle_printk(LOG_DEBUG, "Found empty CT=%d, freeing it up.\n", ct->seq);
             /* No items in this CT, deallocate it by removing it from the DA,
                and dropping the ref. */
             CASTLE_TRANSACTION_BEGIN;
@@ -7427,7 +7427,7 @@ static c_da_t castle_da_ct_unmarshall(struct castle_component_tree *ct,
                                       struct castle_clist_entry *ctm)
 {
     int i;
-    printk("%s::seq %d\n", __FUNCTION__, ctm->seq);
+    castle_printk(LOG_DEBUG, "%s::seq %d\n", __FUNCTION__, ctm->seq);
 
     ct->seq                 = ctm->seq;
     ct->flags               = 0;
@@ -10639,11 +10639,11 @@ int castle_da_vertree_compact(c_da_t da_id)
 
     CASTLE_TRANSACTION_END;
 
-    printk("waiting for merges to compelte\n");
+    castle_printk(LOG_DEBUG, "waiting for merges to compelte\n");
     while (atomic_read(&da->ongoing_merges))
         msleep(1000);
 
-    printk("Stoppped all the merges\n");
+    castle_printk(LOG_DEBUG, "Stoppped all the merges\n");
 
     CASTLE_TRANSACTION_BEGIN;
 

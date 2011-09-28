@@ -2085,7 +2085,8 @@ static void castle_extent_resource_release(void *data)
             continue;
         }
 
-        printk("%llu: Superchunk: (%u:%u)\n", ext_id, schk->first_chk, schk->count);
+        castle_printk(LOG_DEBUG, "%llu: Superchunk: (%u:%u)\n",
+                ext_id, schk->first_chk, schk->count);
     }
 
     BUG_ON(!list_empty(&ext->schks_list));
@@ -2547,7 +2548,7 @@ void castle_extent_mask_put(c_ext_mask_id_t mask_id)
     /* Reference count shouldn't be zero. */
     if (atomic_read(&mask->ref_count) == 0)
     {
-        printk("mask: %p\n", mask);
+        castle_printk(LOG_ERROR, "mask: %p\n", mask);
         BUG();
     }
 
@@ -2672,7 +2673,7 @@ c_ext_mask_id_t castle_extent_get_all(c_ext_id_t ext_id)
         mask = castle_extent_mask_hash_get(mask_id);
         if (!mask)
         {
-            printk("%llu %u\n", ext_id, mask_id);
+            castle_printk(LOG_ERROR, "%llu %u\n", ext_id, mask_id);
             BUG();
         }
 
@@ -3022,15 +3023,17 @@ c_ext_dirtytree_t* castle_extent_dirtytree_by_id_get(c_ext_id_t ext_id)
 
     read_lock_irqsave(&castle_extents_hash_lock, flags);
     ext = __castle_extents_hash_get(ext_id);
-    if(!ext)
+    if (!ext)
     {
-        printk("%s::no extent %lld\n", __FUNCTION__, ext_id);\
+        castle_printk(LOG_ERROR, "%s::no extent %lld\n",
+                __FUNCTION__, ext_id);\
         read_unlock_irqrestore(&castle_extents_hash_lock, flags);
         BUG();
     }
     BUG_ON(!ext);
-    if(atomic_inc_return(&ext->dirtytree->ref_cnt) < 2)
-        printk("%s::extent ref_cnt < 2; %lld\n", __FUNCTION__, ext_id);
+    if (atomic_inc_return(&ext->dirtytree->ref_cnt) < 2)
+        castle_printk(LOG_ERROR, "%s::extent ref_cnt < 2; %lld\n",
+                __FUNCTION__, ext_id);
     BUG_ON(atomic_inc_return(&ext->dirtytree->ref_cnt) < 2);
     dirtytree = ext->dirtytree;
     read_unlock_irqrestore(&castle_extents_hash_lock, flags);

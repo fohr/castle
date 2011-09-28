@@ -1955,7 +1955,7 @@ static int castle_btree_iter_version_leaf_process(c_iter_t *c_iter)
             if ((btree->key_compare(c_iter->next_key.key, btree->inv_key) != 0) &&
                     btree->key_compare(c_iter->next_key.key, entry_key) <= 0)
             {
-                printk("Unexpected key ordering: %p, %p\n", c_iter, entry_key);
+                castle_printk(LOG_ERROR, "Unexpected key ordering: %p, %p\n", c_iter, entry_key);
                 BUG();
             }
 #endif
@@ -3059,7 +3059,8 @@ static int castle_rq_iter_each(c_iter_t *c_iter,
         /* Keys should not go backwards. */
         if (rq_iter->cur_key && (cmp > 0))
         {
-            printk("re_enum: %p, cur_key: %p, key: %p\n", rq_iter, rq_iter->cur_key, key);
+            castle_printk(LOG_ERROR, "re_enum: %p, cur_key: %p, key: %p\n",
+                    rq_iter, rq_iter->cur_key, key);
             BUG();
         }
         BUG_ON(CVT_LEAF_PTR(cvt));
