@@ -1998,28 +1998,6 @@ void castle_da_rq_iter_cancel(c_da_rq_iter_t *iter)
     castle_da_cts_proxy_put(iter->cts_proxy);
 }
 
-#define ADD_CT_TO_ITERATOR(_ct, _redir_type, _merge)                                            \
-{                                                                                               \
-    BUG_ON(j >= iter->nr_cts);                                                                  \
-                                                                                                \
-    iter->ct_rqs[j].ct  = _ct;                                                                  \
-    ct_redir_state[j]   = _redir_type;                                                          \
-    castle_ct_get(_ct, 0, ct_get_refs[j]);                                                      \
-                                                                                                \
-    if(_redir_type != NO_REDIR)                                                                 \
-    {                                                                                           \
-        /* ct in merge, and that merge has a queriable output tree, so there must be a */       \
-        /*   redirection partition to reference. */                                             \
-        debug("%s::ct %d on level %d redirects to ct %d\n",                                     \
-                __FUNCTION__, (_ct)->seq, i,                                                    \
-                (_merge)->queriable_out_tree->seq);                                             \
-        castle_key_ptr_ref_cp(&iter->ct_rqs[j].redirection_partition,                           \
-                              &(_merge)->redirection_partition);                                \
-    }                                                                                           \
-                                                                                                \
-    j++;                                                                                        \
-}
-
 /**
  * Range Query iterator initialiser.
  *
