@@ -920,42 +920,6 @@ void castle_sysfs_da_del_check(struct castle_double_array *da)
  *
  * path: /sys/fs/castle-fs/vertrees/<da_id>/arrays/<array_id>
  */
-#if 0
-static ssize_t ct_size_show(struct kobject *kobj,
-                            struct attribute *attr,
-                            char *buf)
-{
-    struct castle_component_tree *ct = container_of(kobj, struct castle_component_tree, kobj);
-    uint32_t size = 0;
-
-    if (test_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &proxy_ct->ct->flags))
-        size = (uint32_t) (CHUNK(ct->tree_ext_free.ext_size) +
-                           CHUNK(ct->data_ext_free.ext_size) +
-                           CHUNK(ct->internal_ext_free.ext_size) +
-                           ((ct->bloom_exists)?ct->bloom.num_chunks:0) +
-                           &ct->merge->large_chunks);
-    else
-        size = (uint32_t) (CHUNK(ct->tree_ext_free.ext_size) +
-                           CHUNK(ct->data_ext_free.ext_size) +
-                           CHUNK(ct->internal_ext_free.ext_size) +
-                           ((ct->bloom_exists)?ct->bloom.num_chunks:0) +
-                           atomic64_read(&ct->large_ext_chk_cnt));
-
-    return sprintf(buf, "%u\n", size);
-}
-#endif
-
-static ssize_t ct_item_count_show(struct kobject *kobj,
-                                  struct attribute *attr,
-                                  char *buf)
-{
-    struct castle_component_tree *ct = container_of(kobj, struct castle_component_tree, kobj);
-
-    if (test_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &ct->flags))
-        return sprintf(buf, "%llu\n", ct->merge->nr_entries);
-
-    return sprintf(buf, "%lu\n", atomic64_read(&ct->item_count));
-}
 
 static ssize_t ct_daid_show(struct kobject *kobj,
                             struct attribute *attr,
@@ -966,37 +930,29 @@ static ssize_t ct_daid_show(struct kobject *kobj,
     return sprintf(buf, "0x%x\n", ct->da->id);
 }
 
-static ssize_t ct_reserved_size_show(struct kobject *kobj,
-                                     struct attribute *attr,
-                                     char *buf)
-{
-    struct castle_component_tree *ct = container_of(kobj, struct castle_component_tree, kobj);
-
-    return sprintf(buf, "%llu\n", ct->tree_ext_free.ext_size);
-}
-
-static ssize_t ct_used_show(struct kobject *kobj,
+static ssize_t ct_size_show(struct kobject *kobj,
                             struct attribute *attr,
                             char *buf)
 {
     struct castle_component_tree *ct = container_of(kobj, struct castle_component_tree, kobj);
 
-    return sprintf(buf, "%lu\n", atomic64_read(&ct->tree_ext_free.used));
-}
+    if (test_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &ct->flags))
+        sprintf(buf, "Item Count%llu\n", ct->merge->nr_entries);
+    else
+        sprintf(buf, "Item Count: %lu\n", atomic64_read(&ct->item_count));
 
-static ssize_t ct_current_size_show(struct kobject *kobj,
-                                    struct attribute *attr,
-                                    char *buf)
-{
-    struct castle_component_tree *ct = container_of(kobj, struct castle_component_tree, kobj);
+    sprintf(buf, "%sReserved Bytes: %llu\n", buf, ct->tree_ext_free.ext_size);
+    sprintf(buf, "%sUsed Bytes: %lu\n", buf, atomic64_read(&ct->tree_ext_free.used));
 
     /* For input trees, take the current size from merge cep. */
     if (ct->level >= 2 && test_bit(CASTLE_CT_MERGE_INPUT_BIT, &ct->flags)
         && !EXT_POS_INVAL(ct->curr_merge_c2b_cep))
-        return sprintf(buf, "%llu\n", atomic64_read(&ct->tree_ext_free.used)
-                                                - ct->curr_merge_c2b_cep.offset);
+        return sprintf(buf, "%sCurrent Size Bytes: %llu\n",
+                       buf, atomic64_read(&ct->tree_ext_free.used)
+                                    - ct->curr_merge_c2b_cep.offset);
 
-    return sprintf(buf, "%lu\n", atomic64_read(&ct->tree_ext_free.used));
+    return sprintf(buf, "%sCurrent Size Bytes: %lu\n", buf,
+                        atomic64_read(&ct->tree_ext_free.used));
 }
 
 static ssize_t ct_merge_state_show(struct kobject *kobj,
@@ -1027,17 +983,8 @@ static ssize_t ct_data_extents_show(struct kobject *kobj,
     return sprintf(buf, "%s\n", buf);
 }
 
-static struct castle_sysfs_entry ct_reserved_size =
-__ATTR(reserved_size, S_IRUGO|S_IWUSR, ct_reserved_size_show, NULL);
-
-static struct castle_sysfs_entry ct_used =
-__ATTR(used, S_IRUGO|S_IWUSR, ct_used_show, NULL);
-
-static struct castle_sysfs_entry ct_current_size =
-__ATTR(current_size, S_IRUGO|S_IWUSR, ct_current_size_show, NULL);
-
-static struct castle_sysfs_entry ct_item_count =
-__ATTR(item_count, S_IRUGO|S_IWUSR, ct_item_count_show, NULL);
+static struct castle_sysfs_entry ct_size =
+__ATTR(size, S_IRUGO|S_IWUSR, ct_size_show, NULL);
 
 static struct castle_sysfs_entry ct_daid =
 __ATTR(da_id, S_IRUGO|S_IWUSR, ct_daid_show, NULL);
@@ -1049,10 +996,7 @@ static struct castle_sysfs_entry ct_data_extents =
 __ATTR(data_extents, S_IRUGO|S_IWUSR, ct_data_extents_show, NULL);
 
 static struct attribute *castle_ct_attrs[] = {
-    &ct_reserved_size.attr,
-    &ct_used.attr,
-    &ct_current_size.attr,
-    &ct_item_count.attr,
+    &ct_size.attr,
     &ct_daid.attr,
     &ct_merge_state.attr,
     &ct_data_extents.attr,
