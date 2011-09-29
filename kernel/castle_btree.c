@@ -178,8 +178,8 @@ static void castle_btree_io_end(c_bvec_t    *c_bvec,
 
 static void USED castle_btree_node_print(struct castle_btree_type *t, struct castle_btree_node *node)
 {
-    castle_printk(LOG_DEBUG, "Printing node version=%d with used=%d, is_leaf=%d\n",
-        node->version, node->used, node->is_leaf);
+    castle_printk(LOG_DEBUG, "Printing node version=%d with used=%d, flags=%d\n",
+                  node->version, node->used, node->flags);
 
     t->node_print(node);
 }
@@ -300,7 +300,7 @@ static void castle_btree_node_init(struct castle_component_tree *ct,
     node->type      = ct->btree_type;
     node->version   = version;
     node->used      = 0;
-    node->is_leaf   = (rev_level == 0);
+    node->flags     = (rev_level == 0 ? BTREE_NODE_IS_LEAF_FLAG : 0) | BTREE_NODE_HAS_TIMESTAMPS_FLAG;
     node->size      = node_size;
 }
 
@@ -423,8 +423,8 @@ static c2_block_t* castle_btree_effective_node_create(struct castle_component_tr
     /* First build effective node in memory and allocate disk space only if it
      * is not same as original node. */
     eff_node = castle_alloc(node_size * C_BLK_SIZE);
-    /* rev_level == 0 should be equivalent to node->is_leaf test */
-    BUG_ON((rev_level == 0) ^ (node->is_leaf));
+    /* rev_level == 0 should be equivalent to the IS_LEAF flag */
+    BUG_ON((rev_level == 0) ^ (BTREE_NODE_IS_LEAF(node) != 0));
     castle_btree_node_init(ct, eff_node, version, rev_level);
 
     last_eff_key = btree->inv_key;
@@ -460,7 +460,7 @@ static c2_block_t* castle_btree_effective_node_create(struct castle_component_tr
               but different from the old node version)
          */
         need_move = (entry_version == version) && (node->version != version);
-        //if(!node->is_leaf || CVT_LEAF_PTR(entry_cvt) || need_move)
+        //if (!BTREE_NODE_IS_LEAF(node) || CVT_LEAF_PTR(entry_cvt) || need_move)
         //{
             /* If already a leaf pointer, or a non-leaf entry copy directly. */
             btree->entry_add(eff_node,
@@ -621,7 +621,7 @@ static void castle_btree_slot_insert(c2_block_t  *c2b,
            because lub_version is strictly ancestoral to the node version.
            It implies that the key hasn't been insterted here, because
            keys are only inserted to weakly ancestoral nodes */
-        //BUG_ON(!CVT_LEAF_PTR(lub_cvt) && node->is_leaf);
+        //BUG_ON(!CVT_LEAF_PTR(lub_cvt) && BTREE_NODE_IS_LEAF(node));
         /* Replace the slot */
         BUG_ON(CVT_LEAF_PTR(cvt));
         btree->entry_replace(node, index, key, version, cvt);
@@ -911,7 +911,7 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
     if((btree->key_compare(c_bvec->parent_key, btree->inv_key) != 0) &&
        (btree->need_split(node, 0 /* version split */)))
     {
-        debug("===> Splitting node: leaf=%d, used=%d\n", node->is_leaf, node->used);
+        debug("===> Splitting node: leaf=%d, used=%d\n", BTREE_NODE_IS_LEAF(node), node->used);
         ret = castle_btree_node_split(c_bvec);
         if(ret)
         {
@@ -931,7 +931,7 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
                          &lub_cvt);
 
     /* Deal with non-leaf nodes first */
-    if(!node->is_leaf)
+    if (!BTREE_NODE_IS_LEAF(node))
     {
         /* We should always find the LUB if we are not looking at a leaf node */
         BUG_ON(lub_idx < 0);
@@ -950,7 +950,7 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
     }
 
     /* Deal with leaf nodes */
-    BUG_ON(!node->is_leaf);
+    BUG_ON(!BTREE_NODE_IS_LEAF(node));
 
     /* Insert an entry if LUB doesn't match our (key,version) precisely. */
     lub_key_different = 1;
@@ -981,7 +981,7 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
         castle_version_live_stats_adjust(version, stats);
 
         debug("%s::Need to insert (%p, 0x%x) into node (used: 0x%x, leaf=%d).\n",
-                __FUNCTION__, key, version, node->used, node->is_leaf);
+                __FUNCTION__, key, version, node->used, BTREE_NODE_IS_LEAF(node));
         BUG_ON(btree->key_compare(c_bvec->parent_key, btree->inv_key) == 0);
         BUG_ON(CVT_LEAF_PTR(new_cvt));
         castle_btree_slot_insert(c_bvec->btree_node,
@@ -1128,7 +1128,7 @@ static void castle_btree_read_process(c_bvec_t *c_bvec)
     /* We should always find the LUB if we are not looking at a leaf node */
     /* UPDATE: now that we're doing orphan node preadoption and query redirection, this
                assertion is no longer true, so disable the BUG_ON. */
-    //BUG_ON((lub_idx < 0) && (!node->is_leaf));
+    //BUG_ON((lub_idx < 0) && (!BTREE_NODE_IS_LEAF(node)));
 
     /* If we haven't found the LUB (in the leaf node), return early */
     if(lub_idx < 0)
@@ -1141,7 +1141,7 @@ static void castle_btree_read_process(c_bvec_t *c_bvec)
     btree->entry_get(node, lub_idx, &lub_key, &lub_version, &lub_cvt);
     /* If we found the LUB, either complete the ftree walk (if we are looking
        at a 'proper' leaf), or go to the next level (possibly following a leaf ptr) */
-    if(node->is_leaf && !CVT_LEAF_PTR(lub_cvt))
+    if (BTREE_NODE_IS_LEAF(node) && !CVT_LEAF_PTR(lub_cvt))
     {
         BUG_ON(!CVT_LEAF_VAL(lub_cvt));
         if (CVT_ON_DISK(lub_cvt))
@@ -1561,7 +1561,7 @@ void castle_btree_iter_replace(c_iter_t *c_iter, int index, c_val_tup_t cvt)
     BUG_ON(real_c2b == NULL);
 
     node = c2b_bnode(real_c2b);
-    BUG_ON(!node->is_leaf);
+    BUG_ON(!BTREE_NODE_IS_LEAF(node));
     BUG_ON(index >= node->used);
 #endif
 
@@ -1611,7 +1611,7 @@ static void __castle_btree_iter_release(c_iter_t *c_iter)
     BUG_ON(leaf == NULL);
 
     node = c2b_bnode(leaf);
-    BUG_ON(!node->is_leaf);
+    BUG_ON(!BTREE_NODE_IS_LEAF(node));
 
     if(c_iter->indirect_nodes != NULL)
     {
@@ -1899,7 +1899,7 @@ static int castle_btree_iter_version_leaf_process(c_iter_t *c_iter)
     BUG_ON(leaf == NULL);
 
     node = c2b_bnode(leaf);
-    BUG_ON(!node->is_leaf);
+    BUG_ON(!BTREE_NODE_IS_LEAF(node));
 
     iter_debug("Processing %d entries\n", node->used);
 
@@ -1993,7 +1993,7 @@ static int castle_btree_iter_all_leaf_process(c_iter_t *c_iter)
     BUG_ON(leaf == NULL);
 
     node = c2b_bnode(leaf);
-    BUG_ON(!node->is_leaf);
+    BUG_ON(!BTREE_NODE_IS_LEAF(node));
 
     iter_debug("All entries: processing %d entries\n", node->used);
 
@@ -2121,7 +2121,7 @@ static int __castle_btree_iter_path_traverse(c_iter_t *c_iter)
             BUG_ON((index != -1) || skip);
 
             /* Deal with leafs first */
-            if (node->is_leaf)
+            if (BTREE_NODE_IS_LEAF(node))
             {
                 int ret;
 
@@ -2142,7 +2142,7 @@ static int __castle_btree_iter_path_traverse(c_iter_t *c_iter)
         case C_ITER_MATCHING_VERSIONS:
         case C_ITER_ANCESTRAL_VERSIONS:
             /* Deal with leafs first */
-            if (node->is_leaf)
+            if (BTREE_NODE_IS_LEAF(node))
                 return castle_btree_iter_version_leaf_process(c_iter);
 
              /* If we are enumerating all entries for a particular version,
@@ -2710,7 +2710,7 @@ static void castle_btree_node_buffer_init(struct castle_component_tree *tree,
     buffer->type    = tree->btree_type;
     buffer->version = 0;
     buffer->used    = 0;
-    buffer->is_leaf = 1;
+    buffer->flags   = BTREE_NODE_IS_LEAF_FLAG | BTREE_NODE_HAS_TIMESTAMPS_FLAG;
     buffer->size    = node_size;
 }
 
@@ -2865,7 +2865,7 @@ static int castle_rq_iter_node_start(c_iter_t *c_iter)
     BUG_ON(leaf == NULL);
 
     node = c2b_bnode(leaf);
-    BUG_ON(!node->is_leaf);
+    BUG_ON(!BTREE_NODE_IS_LEAF(node));
 
     castle_btree_lub_find(node, rq_iter->start_key, rq_iter->version, &idx, NULL);
 

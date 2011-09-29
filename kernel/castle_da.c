@@ -394,7 +394,7 @@ static int castle_ct_immut_iter_next_node_init(c_immut_iter_t *iter,
                                                struct castle_btree_node *node)
 {
     /* We should never encounter a non-leaf node. */
-    BUG_ON(!node->is_leaf);
+    BUG_ON(!BTREE_NODE_IS_LEAF(node));
 
     /* Non-dynamic trees do not contain leaf pointers => the node must be non-empty,
        and will not contain leaf pointers */
@@ -535,16 +535,12 @@ static void castle_ct_immut_iter_next_node(c_immut_iter_t *iter)
     node_size = iter->curr_c2b->nr_pages;
     BUG_ON(!c2b_uptodate(iter->curr_c2b));
     iter->curr_node = c2b_bnode(iter->curr_c2b);
-    if(!iter->curr_node->is_leaf ||
-           (iter->curr_node->used <= iter->next_idx))
+    if (!BTREE_NODE_IS_LEAF(iter->curr_node) || (iter->curr_node->used <= iter->next_idx))
     {
         castle_printk(LOG_INFO, "curr_node=%d, used=%d, next_idx=%d\n",
-                iter->curr_node->is_leaf,
-                iter->curr_node->used,
-                iter->next_idx);
+                      iter->curr_node->flags, iter->curr_node->used, iter->next_idx);
+        BUG();
     }
-    BUG_ON(!iter->curr_node->is_leaf ||
-           (iter->curr_node->used <= iter->next_idx));
     iter->curr_idx  = iter->next_idx;
     debug("%s::Moved to cep="cep_fmt_str_nl, __FUNCTION__, cep2str(iter->curr_c2b->cep));
 
@@ -764,7 +760,7 @@ static void castle_da_node_buffer_init(struct castle_btree_type *btree,
     buffer->type      = btree->magic;
     buffer->version   = 0;
     buffer->used      = 0;
-    buffer->is_leaf   = 1;
+    buffer->flags     = BTREE_NODE_IS_LEAF_FLAG | BTREE_NODE_HAS_TIMESTAMPS_FLAG;
     buffer->size      = node_size;
 }
 
@@ -3577,8 +3573,8 @@ static c_val_tup_t* _castle_da_entry_add(struct castle_da_merge *merge,
         /* Init the node properly */
         node = c2b_bnode(level->node_c2b);
         castle_da_node_buffer_init(btree, node, new_node_size);
-        if(depth > 0)
-            node->is_leaf = 0;
+        if (depth > 0)
+            node->flags &= ~BTREE_NODE_IS_LEAF_FLAG;
         debug("%s::Allocating a new node at depth: %d for merge %p (da %d level %d)\n",
             __FUNCTION__, depth, merge, merge->da->id, merge->level);
 
@@ -3753,8 +3749,8 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
     debug("Node version=%d\n", level->valid_version);
     node->version = level->valid_version;
 
-    if(depth > 0)
-        BUG_ON(node->is_leaf);
+    if (depth > 0)
+        BUG_ON(BTREE_NODE_IS_LEAF(node));
 
     /* Note: This code calls castle_da_entry_add(), which would change all
      * parameters in level. Taking a copy of required members. */
@@ -4055,7 +4051,7 @@ static void castle_da_max_path_complete(struct castle_da_merge *merge, c_ext_pos
             cep2str(node_c2b->cep));
     /* Init other temp vars. */
     level = 0;
-    while(!node->is_leaf)
+    while (!BTREE_NODE_IS_LEAF(node))
     {
         void *k;
         c_ver_t v;
@@ -5776,8 +5772,8 @@ update_output_tree_state:
             BUG_ON(node->magic != BTREE_NODE_MAGIC);
             merge_mstore->levels[i].node_used = node->used; /* to know which entries to drop at DES time */
 
-            debug("%s::level[%d] for merge %p (da %d level %d) node size %d, node isleaf %d\n",
-                    __FUNCTION__, i, merge, merge->da->id, merge->level, node->size, node->is_leaf);
+            debug("%s::level[%d] for merge %p (da %d level %d) node size %d, node flags %d\n",
+                    __FUNCTION__, i, merge, merge->da->id, merge->level, node->size, node->flags);
 
             /* dirty the incomplete node so it will be flushed at next checkpoint */
             if(i > 0)

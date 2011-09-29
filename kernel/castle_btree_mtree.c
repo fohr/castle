@@ -45,8 +45,8 @@ static int castle_mtree_need_split(struct castle_btree_node *node, int ver_or_ke
     switch(ver_or_key_split)
     {
         case 0:
-            return ((node->is_leaf &&  (node->used == MTREE_NODE_ENTRIES)) ||
-                    (!node->is_leaf && (MTREE_NODE_ENTRIES - node->used < 2)));
+            return ((BTREE_NODE_IS_LEAF(node) &&  (node->used == MTREE_NODE_ENTRIES)) ||
+                    (!BTREE_NODE_IS_LEAF(node) && (MTREE_NODE_ENTRIES - node->used < 2)));
         case 1:
             return (node->used > 2 * MTREE_NODE_ENTRIES / 3);
         default:
@@ -148,8 +148,8 @@ static void castle_mtree_entry_add(struct castle_btree_node *node,
     BUG_ON(idx < 0 || idx > node->used);
     BUG_ON(sizeof(*entry) * node->used + sizeof(struct castle_btree_node) >
                                                 MTREE_NODE_SIZE * C_BLK_SIZE);
-    BUG_ON(!node->is_leaf && CVT_LEAF_PTR(cvt));
-    BUG_ON(node->is_leaf && CVT_NODE(cvt));
+    BUG_ON(!BTREE_NODE_IS_LEAF(node) && CVT_LEAF_PTR(cvt));
+    BUG_ON(BTREE_NODE_IS_LEAF(node) && CVT_NODE(cvt));
 
     /* Make space for the new entry, noop if we are adding one at the end
        of the node */
@@ -177,8 +177,8 @@ static void castle_mtree_entry_replace(struct castle_btree_node *node,
     struct castle_mtree_entry *entry = entries + idx;
 
     BUG_ON(idx < 0 || idx >= node->used);
-    BUG_ON(!node->is_leaf && CVT_LEAF_PTR(cvt));
-    BUG_ON(node->is_leaf && CVT_NODE(cvt));
+    BUG_ON(!BTREE_NODE_IS_LEAF(node) && CVT_LEAF_PTR(cvt));
+    BUG_ON(BTREE_NODE_IS_LEAF(node) && CVT_NODE(cvt));
 
     entry->block   = (block_t)(unsigned long)key;
     entry->version = version;
@@ -234,9 +234,9 @@ static void castle_mtree_node_validate(struct castle_btree_node *node)
     for(i=0; i < node->used; i++)
     {
         struct castle_mtree_entry *entry = entries + i;
-        /* Fail if node is_leaf doesn't match with the slot. ! needed
+        /* Fail if node IS_LEAF doesn't match with the slot. ! needed
            to guarantee canonical value for boolean true */
-        BUG_ON(!(node->is_leaf) != !(MTREE_ENTRY_IS_ANY_LEAF(entry)));
+        BUG_ON(!(BTREE_NODE_IS_LEAF(node)) != !(MTREE_ENTRY_IS_ANY_LEAF(entry)));
     }
 }
 #endif
@@ -247,8 +247,8 @@ static void castle_mtree_node_print(struct castle_btree_node *node)
                 (struct castle_mtree_entry *) BTREE_NODE_PAYLOAD(node);
     int i;
 
-    castle_printk(LOG_DEBUG, "Node: used=%d, version=%d, is_leaf=%d\n",
-        node->used, node->version, node->is_leaf);
+    castle_printk(LOG_DEBUG, "Node: used=%d, version=%d, flags=%d\n",
+                  node->used, node->version, node->flags);
     for(i=0; i<node->used; i++)
         castle_printk(LOG_DEBUG, "[%d] (0x%x, 0x%x, %s) -> "cep_fmt_str_nl,
             i,

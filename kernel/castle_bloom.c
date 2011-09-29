@@ -177,7 +177,7 @@ static void castle_bloom_node_buffer_init(struct castle_btree_type *btree, struc
     buffer->type = btree->magic;
     buffer->version = 0;
     buffer->used = 0;
-    buffer->is_leaf = 1;
+    buffer->flags = BTREE_NODE_IS_LEAF_FLAG | BTREE_NODE_HAS_TIMESTAMPS_FLAG;
     buffer->size = BLOOM_INDEX_NODE_SIZE_PAGES;
 }
 

@@ -820,13 +820,18 @@ enum {
 typedef uint8_t btree_t;
 
 #define BTREE_NODE_MAGIC  0x0100cdab
+enum {
+    BTREE_NODE_IS_LEAF_FLAG        = 1,
+    BTREE_NODE_HAS_TIMESTAMPS_FLAG = 2
+};
+
 struct castle_btree_node {
     /* align:   8 */
     /* offset:  0 */ uint32_t        magic;
     /*          4 */ uint32_t        version;
     /*          8 */ uint32_t        used;
     /*         12 */ btree_t         type;
-    /*         13 */ uint8_t         is_leaf;
+    /*         13 */ uint8_t         flags;
     /*         14 */ uint16_t        size;           /**< Size of this btree node in pages.     */
                      /* Payload (i.e. btree entries) depend on the B-tree type */
     /*         16 */ uint8_t         _unused[48];
@@ -834,7 +839,9 @@ struct castle_btree_node {
     /*         64 */
 } PACKED;
 
-#define BTREE_NODE_PAYLOAD(_node)   ((void *)&(_node)->payload)
+#define BTREE_NODE_IS_LEAF(_node)        ((_node)->flags & BTREE_NODE_IS_LEAF_FLAG)
+#define BTREE_NODE_HAS_TIMESTAMPS(_node) ((_node)->flags & BTREE_NODE_HAS_TIMESTAMPS_FLAG)
+#define BTREE_NODE_PAYLOAD(_node)        ((void *)&(_node)->payload)
 
 /* Below encapsulates the internal btree node structure, different type of
    nodes may be used for different trees */
