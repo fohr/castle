@@ -418,6 +418,8 @@ static ssize_t da_array_list_show(struct kobject *kobj,
         {
             ct = list_entry(lh, struct castle_component_tree, da_list);
 
+   	    if (test_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &ct->flags) && ct->merge->level == 1)
+		continue;
             ret = snprintf(buf, PAGE_SIZE,
                            "%s0x%x ",
                            buf,
