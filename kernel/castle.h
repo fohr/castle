@@ -1073,7 +1073,8 @@ struct castle_clist_entry {
     /*        269 */ uint8_t         bloom_num_hashes;
     /*        270 */ uint16_t        node_sizes[MAX_BTREE_DEPTH];
     /*        290 */ tree_seq_t      data_age;
-    /*        394 */ uint8_t         _unused[218];
+    /*        294 */ uint32_t        nr_data_exts;
+    /*        298 */ uint8_t         _unused[214];
     /*        512 */
 } PACKED;
 
@@ -1168,7 +1169,8 @@ struct castle_dmserlist_entry {
     /*       1012 */ int64_t                          iter_non_empty_cnt;
     /*       1020 */ uint64_t                         iter_src_items_completed;
     /*       1028 */ c_merge_id_t                     merge_id;
-    /*       1032 */ uint8_t                          unused[8];
+    /*       1032 */ uint32_t                         nr_data_exts;
+    /*       1036 */ uint8_t                          unused[4];
     /*       1040 */
 } PACKED;
 #define SIZEOF_CASTLE_DMSERLIST_ENTRY (1040)
@@ -1235,11 +1237,15 @@ struct castle_dext_list_entry {
     /*         32 */
 } PACKED;
 
-struct castle_ct_dext_list_entry {
+struct castle_dext_map_list_entry {
     /* align:   8 */
-    /* offset:  0 */ tree_seq_t  ct_seq;
+    /* offset:  0 */ union {
+                        tree_seq_t      ct_seq;
+                        c_merge_id_t    merge_id;
+                     };
     /*          4 */ c_ext_id_t  ext_id;
-    /*         12 */ uint8_t     _unused[4];
+    /*         12 */ uint8_t     is_merge;
+    /*         13 */ uint8_t     _unused[3];
     /*         16 */
 } PACKED;
 
@@ -1638,6 +1644,7 @@ typedef struct castle_merged_iterator {
     struct rb_root                   rb_root;
     cv_nonatomic_stats_t             stats;         /**< Stat changes during last _next().  */
     castle_merged_iterator_each_skip each_skip;
+    struct castle_da_merge          *merge;
 } c_merged_iter_t;
 
 /**
@@ -1781,6 +1788,7 @@ extern struct workqueue_struct *castle_wqs[2*MAX_BTREE_DEPTH+1];
 /* Various utilities */
 #define C_BLK_SHIFT                    (12)
 #define C_BLK_SIZE                     (1 << C_BLK_SHIFT)
+#define NR_BLOCKS(_bytes)              (((_bytes) - 1) / C_BLK_SIZE + 1)
 //#define disk_blk_to_offset(_cdb)     ((_cdb).block * C_BLK_SIZE)
 
 #define CASTLE_ATTACH_RDONLY           (0)

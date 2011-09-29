@@ -1096,20 +1096,40 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
         {
             c_merge_cfg_t *merge_cfg = &ioctl.merge_start.merge_cfg;
             c_array_id_t __user *arrays_list = merge_cfg->arrays;
+            c_data_ext_id_t __user *data_exts = merge_cfg->data_exts;
             size_t size = sizeof(c_array_id_t) * merge_cfg->nr_arrays;
 
+            merge_cfg->data_exts = NULL;
             merge_cfg->arrays = castle_malloc(size, GFP_KERNEL);
             if (!merge_cfg->arrays || copy_from_user(merge_cfg->arrays, arrays_list, size))
             {
                 castle_printk(LOG_WARN, "Failed to copy to user space\n");
-                merge_cfg->arrays = arrays_list;
                 ioctl.merge_start.ret = -ENOMEM;
-                break;
+                goto err_out;
+            }
+
+            if (!merge_cfg->nr_data_exts)
+                merge_cfg->data_exts = NULL;
+            else
+            {
+                printk("Dataextents: %u, %llu, %llu\n", merge_cfg->nr_data_exts, data_exts[0], data_exts[1]);
+                size = sizeof(c_ext_id_t) * merge_cfg->nr_data_exts;
+                merge_cfg->data_exts = castle_malloc(size, GFP_KERNEL);
+                if (!merge_cfg->data_exts || copy_from_user(merge_cfg->data_exts, data_exts, size))
+                {
+                    castle_printk(LOG_WARN, "Failed to copy to user space\n");
+                    ioctl.merge_start.ret = -ENOMEM;
+                    goto err_out;
+                }
             }
 
             ioctl.merge_start.ret = castle_merge_start(merge_cfg, &ioctl.merge_start.merge_id, -1);
 
+err_out:
+            castle_check_kfree(merge_cfg->data_exts);
+            castle_check_kfree(merge_cfg->arrays);
             merge_cfg->arrays = arrays_list;
+            merge_cfg->data_exts = data_exts;
             break;
         }
         case CASTLE_CTRL_MERGE_DO_WORK:

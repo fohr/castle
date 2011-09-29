@@ -353,7 +353,7 @@ void castle_printk(c_printk_level_t level, const char *fmt, ...)
 
     /* Prepend timestamp, CPU and log level to string. */
     getnstimeofday(&time);
-    len = snprintf(tmp_buf, sizeof(tmp_buf), "%ld.%ld C=%d L=%d: ",
+    len = snprintf(tmp_buf, sizeof(tmp_buf), "%ld.%09ld C=%d L=%d: ",
             time.tv_sec, time.tv_nsec, current->thread_info->cpu, level);
     tmp_bufp = &tmp_buf[len];
 

@@ -41,6 +41,7 @@
 #define debug_merges(_f, _a...)   (castle_printk(LOG_DEBUG, "%s:%.4d: DA=%d, level=%d: " \
                                         _f, __FILE__, __LINE__ , da->id, level, ##_a))
 #endif
+#define debug_dexts(_f, _a...)    ((void)0)
 #else
 #define debug(_f, _a...)          (castle_printk(LOG_DEBUG, "%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
 #define debug_verbose(_f, ...)    (castle_printk(LOG_DEBUG, "%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
@@ -48,6 +49,7 @@
 #define debug_gn(_f, _a...)       (castle_printk(LOG_DEBUG, "%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
 #define debug_merges(_f, _a...)   (castle_printk(LOG_DEBUG, "%s:%.4d: DA=%d, level=%d: " \
                                         _f, __FILE__, __LINE__ , da->id, level, ##_a))
+#define debug_dexts(_f, _a...)    (castle_printk(LOG_DEBUG, _f, ##_a))
 #endif
 
 #undef debug_gn
@@ -67,7 +69,7 @@ static struct castle_mstore    *castle_da_store      = NULL;
 static struct castle_mstore    *castle_tree_store    = NULL;
 static struct castle_mstore    *castle_lo_store      = NULL;
 static struct castle_mstore    *castle_data_exts_store = NULL;
-static struct castle_mstore    *castle_ct_data_exts_store = NULL;
+static struct castle_mstore    *castle_data_exts_maps_store = NULL;
 static struct castle_mstore    *castle_dmser_store   = NULL;
 static struct castle_mstore    *castle_dmser_in_tree_store   = NULL;
        c_da_t                   castle_next_da_id    = 1;
@@ -143,7 +145,8 @@ typedef enum {
 /**********************************************************************************************/
 /* Prototypes */
 static struct castle_component_tree* castle_ct_alloc(struct castle_double_array *da,
-                                                     int level, tree_seq_t seq);
+                                                     int level, tree_seq_t seq,
+                                                     uint32_t nr_data_exts);
 void castle_ct_get(struct castle_component_tree *ct, int write, c_ct_ext_ref_t *refs);
 void castle_ct_put(struct castle_component_tree *ct, int write, c_ct_ext_ref_t *refs);
 static void castle_component_tree_add(struct castle_double_array *da,
@@ -210,6 +213,7 @@ static int castle_merge_thread_stop(struct castle_merge_thread *thread, void *un
 
 static int castle_da_merge_check(struct castle_da_merge *merge, void *da);
 static void castle_data_extent_stats_commit(struct castle_component_tree *ct);
+static int castle_data_ext_mergable(c_ext_id_t ext_id, struct castle_da_merge *merge);
 
 static struct list_head        *castle_merge_threads_hash = NULL;
 
@@ -2224,20 +2228,21 @@ static void castle_da_each_skip(c_merged_iter_t *iter,
                                 struct component_iterator *dup_iter,
                                 struct component_iterator *new_iter)
 {
+    c_val_tup_t dup_cvt;
+    struct castle_da_merge *merge = iter->merge;
+
     BUG_ON(!dup_iter->cached);
     BUG_ON(!new_iter->cached);
     BUG_ON(dup_iter->cached_entry.v != new_iter->cached_entry.v);
 
-#if 0
-    if (CVT_LARGE_OBJECT(dup_iter->cached_entry.cvt))
-    {
-        /* No need to remove this large object, it gets deleted part of Tree
-         * deletion. */
-    }
-#endif
+    dup_cvt = dup_iter->cached_entry.cvt;
+
+    /* If this is a medium object that is marked not to drain, then change the stats. */
+    if (CVT_MEDIUM_OBJECT(dup_cvt) && !castle_data_ext_mergable(dup_cvt.cep.ext_id, merge))
+        castle_data_extent_update(dup_cvt.cep.ext_id, NR_BLOCKS(dup_cvt.length) * C_BLK_SIZE, 0);
 
     /* Update per-version statistics. */
-    if (!CVT_TOMBSTONE(dup_iter->cached_entry.cvt))
+    if (!CVT_TOMBSTONE(dup_cvt))
     {
         iter->stats.keys--;
 
@@ -2427,6 +2432,7 @@ static int castle_da_iterators_create(struct castle_da_merge *merge)
         goto err_out2;
     debug("Merged iterator allocated.\n");
 
+    merge->merged_iter->merge    = merge;
     merge->merged_iter->nr_iters = merge->nr_trees;
     merge->merged_iter->btree    = btree;
     FOR_EACH_MERGE_TREE(i, merge)
@@ -2972,15 +2978,20 @@ static int castle_da_merge_extents_alloc(struct castle_da_merge *merge)
     internal_tree_size = tree_size = data_size = bloom_size = 0;
     FOR_EACH_MERGE_TREE(i, merge)
     {
-        BUG_ON(!castle_ext_freespace_consistent(&merge->in_trees[i]->tree_ext_free));
-        tree_size += atomic64_read(&merge->in_trees[i]->tree_ext_free.used);
+        struct castle_component_tree *ct = merge->in_trees[i];
+        int j;
 
-        BUG_ON(!castle_ext_freespace_consistent(&merge->in_trees[i]->data_ext_free));
-        data_size += atomic64_read(&merge->in_trees[i]->data_ext_free.used);
-        data_size = MASK_CHK_OFFSET(data_size + C_CHK_SIZE);
+        BUG_ON(!castle_ext_freespace_consistent(&ct->tree_ext_free));
+        tree_size += atomic64_read(&ct->tree_ext_free.used);
+
+        for (j=0; j<ct->nr_data_exts; j++)
+            if (castle_data_ext_mergable(ct->data_exts[j], merge))
+                data_size += atomic64_read(&castle_data_exts_hash_get(ct->data_exts[j])->nr_bytes);
 
         bloom_size += atomic64_read(&merge->in_trees[i]->item_count);
     }
+    data_size = MASK_CHK_OFFSET(data_size + C_CHK_SIZE);
+
     /* In case of multiple version test-case, in worst case tree could grow upto
      * double the size. Ex: For every alternative k_n in o/p stream of merged
      * iterator, k_n has only one version and k_(n+1) has (p-1) versions, where p
@@ -3277,11 +3288,24 @@ static c_val_tup_t castle_da_medium_obj_copy(struct castle_da_merge *merge,
     BUG_ON(!is_medium(old_cvt.length));
     /* It must belong to one of the in_trees data extent. */
     FOR_EACH_MERGE_TREE(i, merge)
-        if (old_cvt.cep.ext_id == merge->in_trees[i]->data_ext_free.ext_id)
+    {
+        struct castle_component_tree *ct = merge->in_trees[i];
+        int j;
+
+        for (j=0; j<ct->nr_data_exts; j++)
+            if (old_cvt.cep.ext_id == ct->data_exts[j])
+                break;
+
+        if (j != ct->nr_data_exts)
             break;
+    }
     BUG_ON(i == merge->nr_trees);
     /* We assume objects are page aligned. */
     BUG_ON(BLOCK_OFFSET(old_cep.offset) != 0);
+
+    /* Don't copy if data extent is marked not to merge. */
+    if (!castle_data_ext_mergable(old_cvt.cep.ext_id, merge))
+        return old_cvt;
 
     /* Allocate space for the new copy. */
     total_blocks = (old_cvt.length - 1) / C_BLK_SIZE + 1;
@@ -3389,7 +3413,7 @@ static c_val_tup_t castle_da_medium_obj_copy(struct castle_da_merge *merge,
     }
 
     /* Update stats for Data extent stats. */
-    castle_data_extent_update(new_cvt.cep.ext_id, new_cvt.length, 1);
+    castle_data_extent_update(new_cvt.cep.ext_id, NR_BLOCKS(new_cvt.length) * C_BLK_SIZE, 1);
     debug("Finished copy, i=%d\n", i);
 
     return new_cvt;
@@ -3521,9 +3545,11 @@ static c_val_tup_t* _castle_da_entry_add(struct castle_da_merge *merge,
         }
     }
 
+#if 0
     BUG_ON(is_re_add &&
            CVT_MEDIUM_OBJECT(cvt) &&
            (cvt.cep.ext_id != merge->out_tree->data_ext_free.ext_id));
+#endif
 
     debug("Adding an entry at depth: %d for merge on da %d level %d\n",
         depth, merge->da->id, merge->level);
@@ -4472,6 +4498,7 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
         castle_kfree(merge->serdes.shrinkable_cep);
         merge->serdes.shrinkable_cep = NULL;
     }
+    castle_check_kfree(merge->data_exts);
     castle_check_kfree(merge->in_trees);
     castle_kfree(merge);
 }
@@ -5059,7 +5086,10 @@ static int castle_da_merge_init(struct castle_da_merge *merge, void *unused)
         goto deser_done;
     }
 
-    merge->out_tree = castle_ct_alloc(da, (castle_golden_nugget)? 2: level+1, INVAL_TREE);
+    /* Data extents in output tree - Number of data extents that are not being
+     * merged and one more for the extents that are being merged.  */
+    merge->out_tree = castle_ct_alloc(da, (castle_golden_nugget)? 2: level+1, INVAL_TREE,
+                                      merge->nr_data_exts + 1);
     if(!merge->out_tree)
         goto error_out;
     BUG_ON(TREE_INVAL(merge->out_tree->seq));
@@ -5072,6 +5102,10 @@ static int castle_da_merge_init(struct castle_da_merge *merge, void *unused)
     ret = castle_da_merge_extents_alloc(merge);
     if(ret)
         goto error_out;
+
+    /* Link data extents that are not being merged to out_tree. */
+    for (i=0; i<merge->nr_data_exts; i++)
+        castle_ct_data_ext_link(merge->data_exts[i], merge->out_tree);
 
 deser_done:
 
@@ -5134,10 +5168,13 @@ error_out:
     return ret;
 }
 
-static struct castle_da_merge* castle_da_merge_alloc(int nr_trees, int level,
-                                                     struct castle_double_array *da,
-                                                     c_merge_id_t merge_id,
-                                                     struct castle_component_tree **in_trees)
+static struct castle_da_merge* castle_da_merge_alloc(int                            nr_trees,
+                                                     int                            level,
+                                                     struct castle_double_array    *da,
+                                                     c_merge_id_t                   merge_id,
+                                                     struct castle_component_tree **in_trees,
+                                                     int                            nr_data_exts,
+                                                     c_ext_id_t                    *data_exts)
 {
     struct castle_da_merge *merge = NULL;
     int i, ret;
@@ -5165,8 +5202,8 @@ static struct castle_da_merge* castle_da_merge_alloc(int nr_trees, int level,
     }
     if (in_trees)
         memcpy(merge->in_trees, in_trees, sizeof(void *) * nr_trees);
-    merge->med_obj_exts         = NULL;
-    merge->nr_med_obj_exts      = 0;
+    merge->data_exts            = data_exts;
+    merge->nr_data_exts         = nr_data_exts;
     merge->out_tree             = NULL;
     merge->iters                = NULL;
     merge->merged_iter          = NULL;
@@ -6370,6 +6407,9 @@ static int castle_da_merge_run(void *da_p)
     int level, ignore, ret, nr_units;
     struct castle_da_merge *merge = NULL;
     uint64_t nr_entries;
+    uint32_t nr_data_exts;
+    c_ext_id_t *data_exts;
+    int i, j, k;
 
     /* Work out the level at which we are supposed to be doing merges.
        Do that by working out where is this thread in threads array. */
@@ -6413,7 +6453,32 @@ static int castle_da_merge_run(void *da_p)
             goto merge_do;
         }
 
-        if ((merge = castle_da_merge_alloc(2, level, da, INVAL_MERGE_ID, in_trees)) == NULL)
+#if 0
+        nr_data_exts    = in_trees[0]->nr_data_exts + in_trees[1]->nr_data_exts;
+        data_exts       = castle_zalloc(nr_data_exts * sizeof(c_ext_id_t), GFP_KERNEL);
+        BUG_ON(!data_exts);
+
+        k = 0;
+        for (i=0; i<2; i++)
+            for (j=0; j<in_trees[i]->nr_data_exts; j++)
+                data_exts[k++] = in_trees[i]->data_exts[j];
+#else
+        nr_data_exts    = in_trees[0]->nr_data_exts;
+        data_exts       = castle_zalloc(nr_data_exts * sizeof(c_ext_id_t), GFP_KERNEL);
+        BUG_ON(!data_exts);
+
+        k = 0;
+        for (i=0; i<1; i++)
+            for (j=0; j<in_trees[i]->nr_data_exts; j++)
+            {
+                debug_dexts(LOG_DEBUG, "Not merging data extent: %llu\n", in_trees[i]->data_exts[j]);
+                data_exts[k++] = in_trees[i]->data_exts[j];
+            }
+#endif
+
+        BUG_ON(k != nr_data_exts);
+
+        if ((merge = castle_da_merge_alloc(2, level, da, INVAL_MERGE_ID, in_trees, nr_data_exts, data_exts)) == NULL)
         {
             /* Merge failed, wait 10s to retry. */
             msleep_interruptible(10000);
@@ -7240,6 +7305,18 @@ static void castle_data_extent_stats_commit(struct castle_component_tree *ct)
     }
 }
 
+static int castle_data_ext_mergable(c_ext_id_t ext_id, struct castle_da_merge *merge)
+{
+    int i;
+
+    /* The list contains all extents that are not to be merged. */
+    for (i=0; i<merge->nr_data_exts; i++)
+        if (merge->data_exts[i] == ext_id)
+            return 0;
+
+    return 1;
+}
+
 /**
  * Create data extent object and add to the sysfs. This could be called for either during
  * creation or unmarshall.
@@ -7260,6 +7337,8 @@ int castle_data_ext_add(c_ext_id_t                    ext_id,
 
     if (!data_ext)
         return -ENOMEM;
+
+    debug_dexts("Creating data extent: %llu\n", ext_id);
 
     /* Shouldn't be already in the hash. */
     BUG_ON(castle_data_exts_hash_get(ext_id));
@@ -7286,6 +7365,8 @@ int castle_data_ext_add(c_ext_id_t                    ext_id,
  */
 static int castle_data_ext_remove(struct castle_data_extent *data_ext, void *unused)
 {
+    debug_dexts("Removing data extent: %llu\n", data_ext->ext_id);
+
     castle_sysfs_data_extent_del(data_ext);
     castle_data_exts_hash_remove(data_ext);
 
@@ -7297,6 +7378,8 @@ static int castle_data_ext_remove(struct castle_data_extent *data_ext, void *unu
 void castle_ct_data_ext_link(c_ext_id_t ext_id, struct castle_component_tree *ct)
 {
     struct castle_data_extent *data_ext = castle_data_exts_hash_get(ext_id);
+
+    debug_dexts("Linking data extent %llu to ct %u\n", ext_id, ct->seq);
 
     /* Take a reference and Sanity check. */
     BUG_ON(atomic_inc_return(&data_ext->ref_cnt) <= 0);
@@ -7323,7 +7406,10 @@ static void castle_ct_data_exts_unlink(struct castle_component_tree *ct)
     int i;
 
     for (i=0; i<ct->nr_data_exts; i++)
+    {
+        debug_dexts("Unlinking data extent %llu to ct %u\n", ct->data_exts[i], ct->seq);
         castle_data_ext_unlink(ct->data_exts[i]);
+    }
 
     castle_check_kfree(ct->data_exts);
     ct->nr_data_exts = 0;
@@ -7348,6 +7434,29 @@ static void castle_data_ext_check_orphans(void)
     __castle_data_exts_hash_iterate(castle_data_ext_check_orphan, NULL);
 }
 
+static int castle_merge_data_exts_writeback(struct castle_da_merge *merge,
+                                            struct castle_mstore *store)
+{
+    int i;
+
+    for (i=0; i<merge->nr_data_exts; i++)
+    {
+        struct castle_dext_map_list_entry mentry;
+        c_ext_id_t ext_id = merge->data_exts[i];
+
+        /* Data extent should be alive. */
+        BUG_ON(castle_data_exts_hash_get(ext_id) == NULL);
+
+        mentry.ext_id       = ext_id;
+        mentry.merge_id     = merge->id;
+        mentry.is_merge     = 1;
+
+        castle_mstore_entry_insert(store, &mentry);
+    }
+
+    return 0;
+}
+
 static int castle_ct_data_exts_writeback(struct castle_component_tree *ct,
                                          struct castle_mstore *store)
 {
@@ -7355,14 +7464,15 @@ static int castle_ct_data_exts_writeback(struct castle_component_tree *ct,
 
     for (i=0; i<ct->nr_data_exts; i++)
     {
-        struct castle_ct_dext_list_entry mentry;
+        struct castle_dext_map_list_entry mentry;
         c_ext_id_t ext_id = ct->data_exts[i];
 
         /* Data extent should be alive. */
         BUG_ON(castle_data_exts_hash_get(ext_id) == NULL);
 
-        mentry.ext_id = ext_id;
-        mentry.ct_seq = ct->seq;
+        mentry.ext_id   = ext_id;
+        mentry.ct_seq   = ct->seq;
+        mentry.is_merge = 0;
 
         castle_mstore_entry_insert(store, &mentry);
 
@@ -7374,7 +7484,7 @@ static int castle_ct_data_exts_writeback(struct castle_component_tree *ct,
     return 0;
 }
 
-static int castle_ct_data_exts_read(struct castle_mstore *store)
+static int castle_data_exts_maps_read(struct castle_mstore *store)
 {
     struct castle_mstore_iter *iterator = castle_mstore_iterate(store);
 
@@ -7384,18 +7494,27 @@ static int castle_ct_data_exts_read(struct castle_mstore *store)
     while(castle_mstore_iterator_has_next(iterator))
     {
         struct castle_component_tree *ct;
-        struct castle_ct_dext_list_entry mentry;
+        struct castle_da_merge *merge;
+        struct castle_dext_map_list_entry mentry;
         c_mstore_key_t key;
 
         castle_mstore_iterator_next(iterator, &mentry, &key);
 
-        ct = castle_ct_hash_get(mentry.ct_seq);
+        if (!mentry.is_merge)
+        {
+            ct = castle_ct_hash_get(mentry.ct_seq);
 
-        castle_ct_data_ext_link(mentry.ext_id, ct);
+            castle_ct_data_ext_link(mentry.ext_id, ct);
 
-        /* CT could be NULL, if just recovering from crash. Data extent could belong to
-         * a T0. */
-        castle_extent_mark_live(mentry.ext_id, (ct->da)? ct->da->id: INVAL_DA);
+            /* CT could be NULL, if just recovering from crash. Data extent could belong to
+             * a T0. */
+            castle_extent_mark_live(mentry.ext_id, (ct->da)? ct->da->id: INVAL_DA);
+        }
+        else
+        {
+            merge = castle_merges_hash_get(mentry.merge_id);
+            merge->data_exts[merge->nr_data_exts++] = mentry.ext_id;
+        }
     }
 
     castle_mstore_iterator_destroy(iterator);
@@ -7468,6 +7587,8 @@ void castle_ct_get(struct castle_component_tree *ct, int write, c_ct_ext_ref_t *
     BUG_ON(refs->ref_id_internal == INVAL_MASK_ID);
     refs->ref_id_tree     = castle_extent_get(ct->tree_ext_free.ext_id);
     BUG_ON(refs->ref_id_tree     == INVAL_MASK_ID);
+    /* FIXME: CT can have more than one data extent associated to it. Take reference on
+     * all of them. */
     refs->ref_id_data     = castle_extent_get(ct->data_ext_free.ext_id);
     BUG_ON(refs->ref_id_data     == INVAL_MASK_ID);
     if(ct->bloom_exists)
@@ -7666,6 +7787,7 @@ void castle_da_ct_marshall(struct castle_clist_entry *ctm,
     ctm->tree_depth        = ct->tree_depth;
     ctm->root_node         = ct->root_node;
     ctm->large_ext_chk_cnt = atomic64_read(&ct->large_ext_chk_cnt);
+    ctm->nr_data_exts      = ct->nr_data_exts;
     for(i=0; i<MAX_BTREE_DEPTH; i++)
         ctm->node_sizes[i] = ct->node_sizes[i];
 
@@ -7691,7 +7813,7 @@ static struct castle_component_tree * castle_da_ct_unmarshall(struct castle_comp
 
     castle_printk(LOG_DEBUG, "%s::seq %d\n", __FUNCTION__, ctm->seq);
 
-    ct = castle_ct_init(ct, da);
+    ct = castle_ct_init(ct, da, ctm->nr_data_exts);
     if (!ct)
         return NULL;
 
@@ -7958,7 +8080,7 @@ mstore_writeback:
     mutex_unlock(&ct->lo_mutex);
 
     /* Writeback data extents. */
-    castle_ct_data_exts_writeback(ct, castle_ct_data_exts_store);
+    castle_ct_data_exts_writeback(ct, castle_data_exts_maps_store);
 
     castle_da_ct_marshall(&mstore_entry, ct);
     castle_mstore_entry_insert(castle_tree_store, &mstore_entry);
@@ -8043,6 +8165,8 @@ static void __castle_da_merge_writeback(struct castle_da_merge *merge)
         mutex_unlock(&ct->lo_mutex);
     }
 
+    /* Writeback list of data extents not to be merged. */
+    castle_merge_data_exts_writeback(merge, castle_data_exts_maps_store);
     /* insert merge state into mstore */
     castle_mstore_entry_insert(castle_dmser_store, merge_mstore);
     for(i=0; i<merge_mstore->nr_trees; i++)
@@ -8105,7 +8229,7 @@ static void __castle_da_merge_writeback(struct castle_da_merge *merge)
                 cl->data_ext_free_bs.ext_id, 0, cl->data_ext_free_bs.used);
 
         /* Writeback data extents. */
-        castle_ct_data_exts_writeback(ct, castle_ct_data_exts_store);
+        castle_ct_data_exts_writeback(ct, castle_data_exts_maps_store);
 
         if(cl->bloom_exists)
         {
@@ -8183,15 +8307,15 @@ void castle_double_arrays_writeback(void)
                                          sizeof(struct castle_lolist_entry));
     castle_data_exts_store = castle_mstore_init(MSTORE_DATA_EXTENTS,
                                          sizeof(struct castle_dext_list_entry));
-    castle_ct_data_exts_store = castle_mstore_init(MSTORE_CT_DATA_EXTENTS,
-                                         sizeof(struct castle_ct_dext_list_entry));
+    castle_data_exts_maps_store = castle_mstore_init(MSTORE_CT_DATA_EXTENTS,
+                                         sizeof(struct castle_dext_map_list_entry));
     castle_dmser_store= castle_mstore_init(MSTORE_DA_MERGE,
                                          sizeof(struct castle_dmserlist_entry));
     castle_dmser_in_tree_store= castle_mstore_init(MSTORE_DA_MERGE_IN_TREE,
                                          sizeof(struct castle_in_tree_merge_state_entry));
 
     if(!castle_da_store || !castle_tree_store || !castle_lo_store || !castle_data_exts_store
-        || !castle_ct_data_exts_store || !castle_dmser_store || !castle_dmser_in_tree_store)
+        || !castle_data_exts_maps_store || !castle_dmser_store || !castle_dmser_in_tree_store)
     {
         castle_printk(LOG_USERINFO, "FS Checkpoint failed: mstore open failed in %s\n", __FUNCTION__);
         goto out;
@@ -8212,12 +8336,12 @@ out:
     if (castle_dmser_store) castle_mstore_fini(castle_dmser_store);
     if (castle_lo_store)    castle_mstore_fini(castle_lo_store);
     if (castle_data_exts_store)    castle_mstore_fini(castle_data_exts_store);
-    if (castle_ct_data_exts_store) castle_mstore_fini(castle_ct_data_exts_store);
+    if (castle_data_exts_maps_store) castle_mstore_fini(castle_data_exts_maps_store);
     if (castle_tree_store)  castle_mstore_fini(castle_tree_store);
     if (castle_da_store)    castle_mstore_fini(castle_da_store);
 
     castle_da_store = castle_tree_store = castle_lo_store = castle_data_exts_store =
-    castle_ct_data_exts_store = castle_dmser_store = castle_dmser_in_tree_store = NULL;
+    castle_data_exts_maps_store = castle_dmser_store = castle_dmser_in_tree_store = NULL;
 }
 
 /**
@@ -8420,12 +8544,12 @@ int castle_double_array_read(void)
                                          sizeof(struct castle_lolist_entry));
     castle_data_exts_store = castle_mstore_open(MSTORE_DATA_EXTENTS,
                                          sizeof(struct castle_dext_list_entry));
-    castle_ct_data_exts_store = castle_mstore_open(MSTORE_CT_DATA_EXTENTS,
-                                         sizeof(struct castle_ct_dext_list_entry));
+    castle_data_exts_maps_store = castle_mstore_open(MSTORE_CT_DATA_EXTENTS,
+                                         sizeof(struct castle_dext_map_list_entry));
 
     if(!castle_da_store || !castle_dmser_store || !castle_dmser_in_tree_store ||
        !castle_tree_store || !castle_lo_store || !castle_data_exts_store ||
-       !castle_ct_data_exts_store)
+       !castle_data_exts_maps_store)
         goto error_out;
 
     /* Read doubling arrays */
@@ -8494,6 +8618,7 @@ int castle_double_array_read(void)
         struct castle_double_array *des_da = NULL;
         struct castle_dmserlist_entry *mstore_dmserentry = NULL;
         struct castle_da_merge *merge = NULL;
+        c_ext_id_t *data_exts;
 
         mstore_dmserentry =
             castle_zalloc(sizeof(struct castle_dmserlist_entry), GFP_KERNEL);
@@ -8518,9 +8643,16 @@ int castle_double_array_read(void)
         if (mstore_dmserentry->merge_id > atomic_read(&castle_da_max_merge_id))
             atomic_set(&castle_da_max_merge_id, mstore_dmserentry->merge_id);
 
+        data_exts = castle_zalloc(sizeof(c_ext_id_t) * mstore_dmserentry->nr_data_exts, GFP_KERNEL);
+        BUG_ON(!data_exts);
+
         merge = castle_da_merge_alloc(mstore_dmserentry->nr_trees, level, des_da,
-                                      mstore_dmserentry->merge_id, NULL);
+                                      mstore_dmserentry->merge_id, NULL,
+                                      mstore_dmserentry->nr_data_exts, data_exts);
         BUG_ON(!merge);
+
+        /* Change the count to 0 for now, while serialising data_ext maps we add them. */
+        merge->nr_data_exts = 0;
 
         /* we know the da and the level, and we passed some sanity checking - so put the serdes
            state in the appropriate merge slot */
@@ -8641,7 +8773,7 @@ int castle_double_array_read(void)
     castle_data_exts_read(castle_data_exts_store);
 
     /* Read data extent to CT mappings. Expects data extents and CTs in hash table. */
-    castle_ct_data_exts_read(castle_ct_data_exts_store);
+    castle_data_exts_maps_read(castle_data_exts_maps_store);
 
     iterator = NULL;
     debug("castle_next_da_id = %d, castle_next_tree_id=%d\n",
@@ -8777,17 +8909,17 @@ out:
     if (castle_tree_store)          castle_mstore_fini(castle_tree_store);
     if (castle_lo_store)            castle_mstore_fini(castle_lo_store);
     if (castle_data_exts_store)     castle_mstore_fini(castle_data_exts_store);
-    if (castle_ct_data_exts_store)  castle_mstore_fini(castle_ct_data_exts_store);
+    if (castle_data_exts_maps_store)  castle_mstore_fini(castle_data_exts_maps_store);
     if (castle_dmser_store)         castle_mstore_fini(castle_dmser_store);
     if (castle_dmser_in_tree_store) castle_mstore_fini(castle_dmser_in_tree_store);
 
-    castle_da_store             =
-    castle_dmser_store          =
-    castle_dmser_in_tree_store  =
-    castle_tree_store           =
-    castle_lo_store             =
-    castle_data_exts_store      =
-    castle_ct_data_exts_store   = NULL;
+    castle_da_store               =
+    castle_dmser_store            =
+    castle_dmser_in_tree_store    =
+    castle_tree_store             =
+    castle_lo_store               =
+    castle_data_exts_store        =
+    castle_data_exts_maps_store   = NULL;
 
     debug("%s::end.\n", __FUNCTION__);
     return ret;
@@ -8799,7 +8931,8 @@ tree_seq_t castle_da_next_ct_seq(void)
 }
 
 struct castle_component_tree * castle_ct_init(struct castle_component_tree *ct,
-                                              struct castle_double_array *da)
+                                              struct castle_double_array *da,
+                                              uint32_t nr_data_exts)
 {
     int i;
 
@@ -8821,7 +8954,7 @@ struct castle_component_tree * castle_ct_init(struct castle_component_tree *ct,
     ct->internal_ext_free.ext_id = INVAL_EXT_ID;
     ct->tree_ext_free.ext_id     = INVAL_EXT_ID;
     ct->data_ext_free.ext_id     = INVAL_EXT_ID;
-    ct->data_exts                = castle_zalloc(sizeof(c_ext_id_t), GFP_KERNEL);
+    ct->data_exts                = castle_zalloc(sizeof(c_ext_id_t) * nr_data_exts, GFP_KERNEL);
     ct->nr_data_exts             = 0;
     ct->curr_merge_c2b_cep       = INVAL_EXT_POS;
     ct->bloom_exists             = 0;
@@ -8872,11 +9005,12 @@ err_out:
  */
 static struct castle_component_tree* castle_ct_alloc(struct castle_double_array *da,
                                                      int level,
-                                                     tree_seq_t seq)
+                                                     tree_seq_t seq,
+                                                     uint32_t nr_data_exts)
 {
     struct castle_component_tree *ct;
 
-    ct = castle_ct_init(NULL, da);
+    ct = castle_ct_init(NULL, da, nr_data_exts);
     if(!ct)
         return NULL;
 
@@ -8937,7 +9071,7 @@ static int __castle_da_rwct_create(struct castle_double_array *da, int cpu_index
     /* Caller must have set the DA's growing bit. */
     BUG_ON(!castle_da_growing_rw_test(da));
 
-    ct = castle_ct_alloc(da, 0 /* level */, INVAL_TREE);
+    ct = castle_ct_alloc(da, 0 /* level */, INVAL_TREE, 1);
     if (!ct)
         return -ENOMEM;
 
@@ -10793,12 +10927,25 @@ static int castle_da_merge_fill_trees(uint32_t nr_arrays, c_array_id_t *array_id
     return 0;
 }
 
+int check_dext_list(c_ext_id_t ext_id, c_ext_id_t *list, uint32_t size)
+{
+    int i;
+
+    for (i=0; i<size; i++)
+        if (list[i] == ext_id)
+            return 1;
+
+    return 0;
+}
+
 int castle_merge_start(c_merge_cfg_t *merge_cfg, c_merge_id_t *merge_id, int level)
 {
     struct castle_component_tree **in_trees = NULL;
     struct castle_double_array *da;
     struct castle_da_merge *merge = NULL;
+    c_ext_id_t *data_exts = NULL;
     int ret = 0;
+    int i, j, k;
 
     *merge_id = INVAL_MERGE_ID;
 
@@ -10826,8 +10973,70 @@ int castle_merge_start(c_merge_cfg_t *merge_cfg, c_merge_id_t *merge_id, int lev
         goto err_out;
     }
 
+
+    /* FIXME: Very lazy and naive implementaiton. change it. */
+
+    /* Check if any of the data extents are not valid. */
+    for (i=0; i<merge_cfg->nr_data_exts; i++)
+    {
+        if (castle_data_exts_hash_get(merge_cfg->data_exts[i]) == NULL)
+        {
+            castle_printk(LOG_USERINFO, "Data extent %llu is not valid\n",
+                                        merge_cfg->data_exts[i]);
+            ret = -EINVAL;
+            goto err_out;
+        }
+    }
+
+    /* Data extents should belong to one of the input trees. */
+    for (i=0; i<merge_cfg->nr_data_exts; i++)
+    {
+        for (j=0; j<merge_cfg->nr_arrays; j++)
+            if (check_dext_list(merge_cfg->data_exts[i], in_trees[j]->data_exts,
+                                in_trees[j]->nr_data_exts))
+                break;
+
+        if (j == merge_cfg->nr_arrays)
+        {
+            castle_printk(LOG_USERINFO, "Data extent %llu is not linked to any of the in-trees\n",
+                                        merge_cfg->data_exts[i]);
+            ret = -EINVAL;
+            goto err_out;
+        }
+    }
+
+    /* Find total number of data extents in input trees that are not to be drained. */
+    for (i=0, k=0; i<merge_cfg->nr_arrays; i++)
+    {
+        for (j=0; j<in_trees[i]->nr_data_exts; j++)
+            if (!check_dext_list(in_trees[i]->data_exts[j], merge_cfg->data_exts,
+                                 merge_cfg->nr_data_exts))
+                k++;
+    }
+
+    /* Allocate space for data extents list. */
+    data_exts = castle_zalloc(sizeof(c_ext_id_t)*k, GFP_KERNEL);
+    if (data_exts == NULL)
+    {
+        castle_printk(LOG_USERINFO, "Couldn't allocate memory.\n");
+        ret = -ENOMEM;
+        goto err_out;
+    }
+
+    /* List passed by user is list of data extents to be drained. Merge takes list of data
+     * extents not to be drained. Create the list. */
+    /* FIXME: Buggy, if 2 trees have same data extent. Could be duplicates. */
+    for (i=0, k=0; i<merge_cfg->nr_arrays; i++)
+    {
+        for (j=0; j<in_trees[i]->nr_data_exts; j++)
+            if (!check_dext_list(in_trees[i]->data_exts[j], merge_cfg->data_exts,
+                                 merge_cfg->nr_data_exts))
+                data_exts[k++] = in_trees[i]->data_exts[j];
+    }
+
     /* Allocate and init merge structure. */
-    merge = castle_da_merge_alloc(merge_cfg->nr_arrays, 2, da, INVAL_MERGE_ID, in_trees);
+    merge = castle_da_merge_alloc(merge_cfg->nr_arrays, 2, da, INVAL_MERGE_ID, in_trees,
+                                  merge_cfg->nr_data_exts, data_exts);
     if (!merge)
     {
         castle_printk(LOG_USERINFO, "Couldn't allocate merge structure.\n");

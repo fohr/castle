@@ -803,7 +803,7 @@ int castle_fs_init(void)
         c2_block_t *c2b;
 
         /* Init global tree. */
-        castle_ct_init(&castle_global_tree, NULL);
+        castle_ct_init(&castle_global_tree, NULL, 1);
 
         castle_global_tree.seq          = GLOBAL_TREE;
         castle_global_tree.dynamic      = 1;

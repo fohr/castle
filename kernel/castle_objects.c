@@ -448,7 +448,7 @@ static void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
 
     /* Update stats for Data extent stats. */
     if (!err && CVT_MEDIUM_OBJECT(cvt))
-        castle_data_extent_update(cvt.cep.ext_id, cvt.length, 1);
+        castle_data_extent_update(cvt.cep.ext_id, NR_BLOCKS(cvt.length) * C_BLK_SIZE, 1);
 
     /* Release kmalloced memory for inline objects. */
     CVT_INLINE_FREE(cvt);
@@ -1337,8 +1337,10 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
     /* Out-of-line values (medium objects). */
     else
     {
+#if 0
         BUG_ON(CVT_MEDIUM_OBJECT(cvt) &&
                 cvt.cep.ext_id != c_bvec->tree->data_ext_free.ext_id);
+#endif
         BUG_ON(!c_bvec->tree); // _da_ct_read_complete() leaves this for us
         BUG_ON(!c_bvec->cts_proxy); // _da_ct_read_complete() leaves this for us
         BUG_ON(!CVT_ON_DISK(cvt));

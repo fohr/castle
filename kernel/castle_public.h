@@ -9,7 +9,7 @@
 #include <linux/time.h>
 #endif
 
-#define CASTLE_PROTOCOL_VERSION 20 /* last updated by TR */
+#define CASTLE_PROTOCOL_VERSION 21 /* last updated by BM */
 
 #define PACKED               __attribute__((packed))
 
@@ -179,6 +179,7 @@ typedef uint32_t c_merge_id_t;
 typedef uint32_t c_thread_id_t;
 typedef uint32_t c_work_id_t;
 typedef uint64_t c_work_size_t;
+typedef uint64_t c_data_ext_id_t;
 
 #define INVAL_ARRAY_ID      ((c_array_id_t)-1)
 #define ARRAY_ID_INVAL(_a)  ((_a) == INVAL_ARRAY_ID)
@@ -201,28 +202,14 @@ typedef enum {
     NR_RDA_SPECS
 } c_rda_type_t;
 
-typedef struct castle_medium_extent_info {
-    uint32_t                size;               /**< Size in chunks(MB).                        */
-    uint64_t                item_count;         /**< Number of entries.                         */
-} c_medium_ext_info_t;
-
-typedef struct castle_array_info {
-    uint32_t                size;               /**< Size in chunks(MB).                        */
-    uint64_t                item_count;         /**< Number of entries.                         */
-    c_da_t                  vertree_id;         /**< ID of the versions tree.                   */
-    uint32_t                nr_med_extents;     /**< Number of medium extents in this array.    */
-    /* FIXME: It sends only one medium extent. When we got a list. change it to a pointer. */
-    c_medium_ext_info_t     med_ext;            /**< List of medium extents.                    */
-} c_array_info_t;
-
 typedef struct castle_merge_config {
     uint32_t                nr_arrays;          /**< # of arrays to be merged.                  */
     c_array_id_t           *arrays;             /**< List of arrays.                            */
-    uint32_t                nr_med_extents;     /**< Number of medium extents in this array.    */
-    c_medium_ext_info_t    *med_exts;           /**< List of medium extents.                    */
+    uint32_t                nr_data_exts;       /**< Number of medium extents in this array.    */
+    c_data_ext_id_t        *data_exts;          /**< List of medium extents.                    */
     c_rda_type_t            metadata_ext_type;  /**< Type of the extent that the output metdata *
                                                   *< to go. (SSD_RDA/DEFAULT_RDA/SSD_ONLY_EXT)  */
-    c_rda_type_t            med_ext_type;       /**< Type of the extent that medium objects     *
+    c_rda_type_t            data_ext_type;      /**< Type of the extent that medium objects     *
                                                   *< to go. (SSD_RDA/DEFAULT_RDA/SSD_ONLY_EXT)  */
     uint32_t                bandwidth;
 } c_merge_cfg_t;

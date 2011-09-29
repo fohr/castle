@@ -20,11 +20,11 @@ struct castle_da_merge {
     struct castle_double_array   *da;
     struct castle_btree_type     *out_btree;
     int                           level;
-    int                           nr_trees;     /**< num of component trees being merged */
-    struct castle_component_tree **in_trees;    /**< array of component trees to be merged */
-    c_ext_id_t                   *med_obj_exts;     /**< medium object extents that are nto to be
-                                                         merged.  */
-    int                           nr_med_obj_exts;  /**< size of medium object extents array.     */
+    int                           nr_trees;     /**< num of component trees being merged        */
+    struct castle_component_tree **in_trees;    /**< array of component trees to be merged      */
+    c_ext_id_t                   *data_exts;    /**< medium object extents that are nto to be
+                                                     merged.                                    */
+    int                           nr_data_exts; /**< size of medium object extents array.       */
 
 
     struct castle_component_tree *out_tree;
@@ -243,7 +243,8 @@ int  castle_data_ext_add                (c_ext_id_t ext_id,
 void castle_ct_data_ext_link            (c_ext_id_t ext_id,
                                          struct castle_component_tree *ct);
 struct castle_component_tree * castle_ct_init(struct castle_component_tree *ct,
-                                              struct castle_double_array *da);
+                                              struct castle_double_array *da,
+                                              uint32_t nr_data_exts);
 void castle_data_extent_update          (c_ext_id_t     ext_id,
                                          uint64_t       length,
                                          int            to_add);
