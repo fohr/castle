@@ -3328,7 +3328,8 @@ static inline void castle_cache_page_freelist_grow(int nr_pages)
     castle_cache_freelists_grow(0, nr_pages);
 }
 
-static c2_block_t* _castle_cache_block_get(c_ext_pos_t cep, int nr_pages, 
+static c2_block_t* _castle_cache_block_get(c_ext_pos_t cep,
+                                           int nr_pages,
 					   int transient,
 					   int merge_originated)
 {
@@ -3367,7 +3368,7 @@ static c2_block_t* _castle_cache_block_get(c_ext_pos_t cep, int nr_pages,
 
             /* Check sanity of CEP. */
             ext_size = (uint64_t)castle_extent_size_get(cep.ext_id);
-            BUG_ON(ext_size==0);
+            BUG_ON(ext_size == 0 && cep.ext_id != RESERVE_EXT_ID);
             if (ext_size &&
                 ((ext_size * C_CHK_SIZE) < (cep.offset + (nr_pages * C_BLK_SIZE))))
             {
