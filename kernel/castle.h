@@ -882,7 +882,7 @@ struct castle_btree_type {
                               /* Returns the next key to fall inside
                                  the hypercube defined by low and high;
                                  key itself if it is already inside the
-                                 hypercube; NULL if no such key exists. */
+                                 hypercube; high if no such key exists. */
     void     (*key_dealloc)   (void *key);
                               /* Destroys the key, frees resources
                                  associated with it                     */

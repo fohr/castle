@@ -89,7 +89,7 @@ static int castle_objects_rq_iter_prep_next(castle_object_iterator_t *iter)
 
         if (next_key != k)      /* key is outside the hypercube */
         {
-            if (next_key == NULL) /* key is completely past end_key */
+            if (next_key == iter->end_key) /* key is completely past end_key */
             {
                 iter->completed = 1;
                 return 1;

@@ -343,7 +343,7 @@ c_vl_bkey_t* castle_object_btree_key_hypercube_next(const c_vl_bkey_t *key,
         if (offending_dim > 0)
             return castle_object_btree_key_skip(key, start, offending_dim, out_of_range);
         else
-            return NULL;
+            return (c_vl_bkey_t *) end;
     }
     else return (c_vl_bkey_t *) key;
 }
