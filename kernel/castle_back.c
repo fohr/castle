@@ -808,8 +808,10 @@ static void castle_back_stateful_op_finish_all(struct castle_back_stateful_op *s
 
     BUG_ON(!spin_is_locked(&stateful_op->lock));
 
-    /* Return err on all queued ops */
+    /* Prevent any further ops from being queued. */
+    stateful_op->cancel_on_op_complete = 1;
 
+    /* Return err for all ops already queued. */
     list_for_each_safe(pos, tmp, &stateful_op->op_queue)
     {
         op = list_entry(pos, struct castle_back_op, list);
