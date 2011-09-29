@@ -802,10 +802,14 @@ int castle_fs_init(void)
     if(first) {
         c2_block_t *c2b;
 
-        /* Init the root btree node */
-        init_rwsem(&castle_global_tree.lock);
-        mutex_init(&castle_global_tree.lo_mutex);
-        INIT_LIST_HEAD(&castle_global_tree.large_objs);
+        /* Init global tree. */
+        castle_ct_init(&castle_global_tree, NULL);
+
+        castle_global_tree.seq          = GLOBAL_TREE;
+        castle_global_tree.dynamic      = 1;
+        castle_global_tree.internal_ext_free.ext_size   = 100 * C_CHK_SIZE;
+        castle_global_tree.tree_ext_free.ext_size       = 100 * C_CHK_SIZE;
+        castle_global_tree.data_ext_free.ext_size       = 512ULL * C_CHK_SIZE;
 
         castle_extent_transaction_start();
 
@@ -832,6 +836,10 @@ int castle_fs_init(void)
         }
 
         castle_extent_transaction_end();
+
+        /* Create data extent object. */
+        castle_data_ext_add(castle_global_tree.data_ext_free.ext_id, 0, 0);
+        castle_ct_data_ext_link(castle_global_tree.data_ext_free.ext_id, &castle_global_tree);
 
         c2b = castle_btree_node_create(&castle_global_tree,
                                        0 /* version */,
@@ -2512,11 +2520,11 @@ static void __exit castle_exit(void)
        (so that no new connections can be created). */
     castle_control_fini();
     castle_back_fini();
-    castle_sysfs_fini();
     FAULT(FINI_FAULT);
     /* Now, make sure no more IO can be made, internally or externally generated */
     castle_double_array_merges_fini();  /* Completes all internal i/o - merges. */
     castle_extents_process_fini();
+    castle_sysfs_fini();
     castle_checkpoint_fini();
     /* Note: Changes from here are not persistent. */
     castle_attachments_free();

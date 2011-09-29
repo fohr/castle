@@ -22,6 +22,10 @@ struct castle_da_merge {
     int                           level;
     int                           nr_trees;     /**< num of component trees being merged */
     struct castle_component_tree **in_trees;    /**< array of component trees to be merged */
+    c_ext_id_t                   *med_obj_exts;     /**< medium object extents that are nto to be
+                                                         merged.  */
+    int                           nr_med_obj_exts;  /**< size of medium object extents array.     */
+
 
     struct castle_component_tree *out_tree;
     void                         **iters;       /**< iterators for component trees */
@@ -233,4 +237,14 @@ int  castle_da_vertree_compact          (c_da_t da_id);
 int  castle_da_insert_rate_set          (c_da_t da_id, uint32_t insert_rate);
 int  castle_da_read_rate_set            (c_da_t da_id, uint32_t read_rate);
 void castle_da_write_rate_check         (struct castle_double_array *da);
+int  castle_data_ext_add                (c_ext_id_t ext_id,
+                                         uint64_t   nr_entries,
+                                         uint64_t   nr_bytes);
+void castle_ct_data_ext_link            (c_ext_id_t ext_id,
+                                         struct castle_component_tree *ct);
+struct castle_component_tree * castle_ct_init(struct castle_component_tree *ct,
+                                              struct castle_double_array *da);
+void castle_data_extent_update          (c_ext_id_t     ext_id,
+                                         uint64_t       length,
+                                         int            to_add);
 #endif /* __CASTLE_DA_H__ */

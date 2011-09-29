@@ -21,5 +21,7 @@ int  castle_sysfs_merge_thread_add(struct castle_merge_thread *merge_thread);
 void castle_sysfs_merge_thread_del(struct castle_merge_thread *merge_thread);
 int  castle_sysfs_merge_add      (struct castle_da_merge *merge);
 void castle_sysfs_merge_del      (struct castle_da_merge *merge);
+int  castle_sysfs_data_extent_add(struct castle_data_extent *data_ext);
+void castle_sysfs_data_extent_del(struct castle_data_extent *data_ext);
 
 #endif /* __CASTLE_SYSFS_H__ */

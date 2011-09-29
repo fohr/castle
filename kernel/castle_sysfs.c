@@ -22,6 +22,7 @@ MODULE_PARM_DESC(castle_devel, "Whether to enable Castle FS devel sysfs director
 static wait_queue_head_t castle_sysfs_kobj_release_wq;
 static struct kobject    double_arrays_kobj;
 static struct kobject    merge_threads_kobj;
+static struct kobject    data_extents_kobj;
 static struct kobject    filesystem_kobj;
 static struct kobject    devel_kobj;
 struct castle_sysfs_versions {
@@ -29,6 +30,8 @@ struct castle_sysfs_versions {
     struct list_head version_list;
 };
 static struct castle_sysfs_versions castle_sysfs_versions;
+
+static uint32_t castle_data_extents_count = 0;
 
 struct castle_sysfs_entry {
     struct attribute attr;
@@ -1010,6 +1013,20 @@ static ssize_t ct_merge_state_show(struct kobject *kobj,
         return sprintf(buf, "input\n");
 }
 
+static ssize_t ct_data_extents_show(struct kobject *kobj,
+                                    struct attribute *attr,
+                                    char *buf)
+{
+    struct castle_component_tree *ct = container_of(kobj, struct castle_component_tree, kobj);
+    int i;
+
+    buf[0] = '\0';
+    for (i=0; i<ct->nr_data_exts; i++)
+        sprintf(buf, "%s%llx ", buf, ct->data_exts[i]);
+
+    return sprintf(buf, "%s\n", buf);
+}
+
 static struct castle_sysfs_entry ct_reserved_size =
 __ATTR(reserved_size, S_IRUGO|S_IWUSR, ct_reserved_size_show, NULL);
 
@@ -1028,6 +1045,9 @@ __ATTR(da_id, S_IRUGO|S_IWUSR, ct_daid_show, NULL);
 static struct castle_sysfs_entry ct_merge_state =
 __ATTR(merge_state, S_IRUGO|S_IWUSR, ct_merge_state_show, NULL);
 
+static struct castle_sysfs_entry ct_data_extents =
+__ATTR(data_extents, S_IRUGO|S_IWUSR, ct_data_extents_show, NULL);
+
 static struct attribute *castle_ct_attrs[] = {
     &ct_reserved_size.attr,
     &ct_used.attr,
@@ -1035,6 +1055,7 @@ static struct attribute *castle_ct_attrs[] = {
     &ct_item_count.attr,
     &ct_daid.attr,
     &ct_merge_state.attr,
+    &ct_data_extents.attr,
     NULL,
 };
 
@@ -1076,9 +1097,83 @@ void castle_sysfs_ct_del(struct castle_component_tree *ct)
 
 /* Definition of Merge threads directory attributes */
 
-static ssize_t merge_threads_number_show(struct kobject *kobj,
+static ssize_t data_extents_number_show(struct kobject *kobj,
                                         struct attribute *attr,
                                         char *buf)
+{
+    return sprintf(buf, "%u\n", castle_data_extents_count);
+}
+
+static struct castle_sysfs_entry data_extents_number =
+__ATTR(number, S_IRUGO|S_IWUSR, data_extents_number_show, NULL);
+
+static struct attribute *castle_data_extents_attrs[] = {
+    &data_extents_number.attr,
+    NULL,
+};
+
+static struct kobj_type castle_data_extents_ktype = {
+    .release        = castle_sysfs_kobj_release,
+    .sysfs_ops      = &castle_sysfs_ops,
+    .default_attrs  = castle_data_extents_attrs,
+};
+
+/* Definition of each merge thread sysfs directory attributes */
+
+static ssize_t data_extent_size_show(struct kobject *kobj,
+                                     struct attribute *attr,
+                                     char *buf)
+{
+    struct castle_data_extent *data_ext = container_of(kobj, struct castle_data_extent, kobj);
+
+    return sprintf(buf, "Bytes: %lu\nEntries: %lu\n",
+                        atomic64_read(&data_ext->nr_bytes),
+                        atomic64_read(&data_ext->nr_entries));
+}
+
+static struct castle_sysfs_entry data_extent_size =
+__ATTR(size, S_IRUGO|S_IWUSR, data_extent_size_show, NULL);
+
+static struct attribute *castle_data_extent_attrs[] = {
+    &data_extent_size.attr,
+    NULL,
+};
+
+static struct kobj_type castle_data_extent_ktype = {
+    .release        = castle_sysfs_kobj_release,
+    .sysfs_ops      = &castle_sysfs_ops,
+    .default_attrs  = castle_data_extent_attrs,
+};
+
+int castle_sysfs_data_extent_add(struct castle_data_extent *data_ext)
+{
+    int ret;
+
+    memset(&data_ext->kobj, 0, sizeof(struct kobject));
+    ret = kobject_tree_add(&data_ext->kobj,
+                           &data_extents_kobj,
+                           &castle_data_extent_ktype,
+                           "%llx", data_ext->ext_id);
+
+    castle_data_extents_count++;
+
+    if (ret < 0)
+        return ret;
+
+    return 0;
+}
+
+void castle_sysfs_data_extent_del(struct castle_data_extent *data_ext)
+{
+    castle_data_extents_count--;
+    kobject_remove_wait(&data_ext->kobj);
+}
+
+/* Definition of Merge threads directory attributes */
+
+static ssize_t merge_threads_number_show(struct kobject *kobj,
+                                         struct attribute *attr,
+                                         char *buf)
 {
     return sprintf(buf, "%u\n", castle_merge_threads_count);
 }
@@ -1573,9 +1668,18 @@ int castle_sysfs_init(void)
                            "%s", "merge_threads");
     if(ret < 0) goto out9;
 
+    memset(&data_extents_kobj, 0, sizeof(struct kobject));
+    ret = kobject_tree_add(&data_extents_kobj,
+                           &castle.kobj,
+                           &castle_data_extents_ktype,
+                           "%s", "data_extents");
+    if(ret < 0) goto out10;
+
     return 0;
 
-    kobject_remove_wait(&merge_threads_kobj); /* Unreachable */
+    kobject_remove_wait(&data_extents_kobj); /* Unreachable */
+out10:
+    kobject_remove_wait(&merge_threads_kobj);
 out9:
     kobject_remove_wait(&devel_kobj);
 out8:
@@ -1599,6 +1703,7 @@ out1:
 
 void castle_sysfs_fini(void)
 {
+    kobject_remove(&data_extents_kobj);
     kobject_remove(&merge_threads_kobj);
     if (castle_devel_enabled)
     {
@@ -1616,6 +1721,8 @@ void castle_sysfs_fini(void)
 
 void castle_sysfs_fini_check(void)
 {
+    printk("Waiting on data_extents_kobj ...\n");
+    castle_sysfs_kobj_release_wait(&data_extents_kobj);
     printk("Waiting on merge_threads_kobj ...\n");
     castle_sysfs_kobj_release_wait(&merge_threads_kobj);
     if (castle_devel_enabled)

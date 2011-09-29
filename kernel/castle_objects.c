@@ -446,6 +446,10 @@ static void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
     if (err && CVT_LARGE_OBJECT(cvt))
         castle_extent_free(cvt.cep.ext_id);
 
+    /* Update stats for Data extent stats. */
+    if (!err && CVT_MEDIUM_OBJECT(cvt))
+        castle_data_extent_update(cvt.cep.ext_id, cvt.length, 1);
+
     /* Release kmalloced memory for inline objects. */
     CVT_INLINE_FREE(cvt);
 

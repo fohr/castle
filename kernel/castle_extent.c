@@ -733,6 +733,9 @@ static int castle_extent_hash_remove(c_ext_t *ext, void *unused)
     BUG_ON(!list_is_last(&mask->list, &ext->mask_list));
 
     /* And its reference count should be equal to number of links. */
+    if (atomic_read(&mask->ref_count) != 1)
+        printk("%s: Extent ref count Freeing extent #%llu\n", __FUNCTION__, ext->ext_id);
+
     BUG_ON(atomic_read(&mask->ref_count) != 1);
 
     /* There shouldn't be any outstanding extents for deletion on exit. */

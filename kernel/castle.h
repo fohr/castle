@@ -798,6 +798,8 @@ enum {
     MSTORE_DA_MERGE_IN_TREE,          /* state of input trees in a merge, mainly iterator state */
     MSTORE_PART_SCHKS,
     MSTORE_STATS,
+    MSTORE_DATA_EXTENTS,
+    MSTORE_CT_DATA_EXTENTS,
 };
 
 
@@ -1003,6 +1005,8 @@ struct castle_component_tree {
     c_ext_free_t        internal_ext_free;  /**< Extent for internal btree nodes.               */
     c_ext_free_t        tree_ext_free;      /**< Extent for leaf btree nodes.                   */
     c_ext_free_t        data_ext_free;      /**< Medium-object data extent.                     */
+    c_ext_id_t         *data_exts;          /**< Array of data extent IDs.                      */
+    uint32_t            nr_data_exts;       /**< Number of data extents in in this CT.          */
     atomic64_t          large_ext_chk_cnt;
     c_ext_pos_t         curr_merge_c2b_cep;
     uint8_t             bloom_exists;
@@ -1023,6 +1027,17 @@ struct castle_large_obj_entry {
     c_ext_id_t          ext_id;
     uint64_t            length;
     struct list_head    list;
+};
+
+struct castle_data_extent {
+    c_ext_id_t          ext_id;
+    atomic_t            ref_cnt;
+    atomic64_t          nr_entries;
+    atomic64_t          nr_bytes;
+    uint64_t            chkpt_nr_entries;
+    uint64_t            chkpt_nr_bytes;
+    struct list_head    hash_list;
+    struct kobject      kobj;
 };
 
 struct castle_dlist_entry {
@@ -1209,6 +1224,23 @@ struct castle_lolist_entry {
     /*         16 */ tree_seq_t  ct_seq;
     /*         20 */ uint8_t     _unused[12];
     /*         32 */
+} PACKED;
+
+struct castle_dext_list_entry {
+    /* align:   8 */
+    /* offset:  0 */ c_ext_id_t  ext_id;
+    /*          8 */ uint64_t    nr_entries;
+    /*         16 */ uint64_t    nr_bytes;
+    /*         24 */ uint8_t     _unused[8];
+    /*         32 */
+} PACKED;
+
+struct castle_ct_dext_list_entry {
+    /* align:   8 */
+    /* offset:  0 */ tree_seq_t  ct_seq;
+    /*          4 */ c_ext_id_t  ext_id;
+    /*         12 */ uint8_t     _unused[4];
+    /*         16 */
 } PACKED;
 
 enum {
