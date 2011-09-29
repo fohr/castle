@@ -8161,7 +8161,9 @@ static void __castle_da_merge_writeback(struct castle_da_merge *merge)
         {
             for(i=0; i<merge_mstore->nr_trees * 2; i++)
             {
-                if(!EXT_POS_INVAL(merge->serdes.shrinkable_cep[i]))
+                /* If this extent is data extent and marked not to merge. Don't shrink it. */
+                if(!EXT_POS_INVAL(merge->serdes.shrinkable_cep[i]) &&
+                    castle_data_ext_mergable(merge->serdes.shrinkable_cep[i].ext_id, merge))
                 {
                     castle_extent_shrink(merge->serdes.shrinkable_cep[i].ext_id,
                             merge->serdes.shrinkable_cep[i].offset/C_CHK_SIZE);
