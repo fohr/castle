@@ -2067,26 +2067,22 @@ static void castle_extent_resource_release(void *data)
     /* Should be in transaction. */
     BUG_ON(!castle_extent_in_transaction());
 
-    /* Shouldn't have partial superchunks left. */
+    /*
+     * Shouldn't have partial superchunks left, unless there is a leak.
+     * Currently only rebuild leaks freespace.
+     */
     list_for_each_safe(pos, tmp, &ext->schks_list)
     {
         c_part_schk_t *schk = list_entry(pos, c_part_schk_t, list);
-        struct castle_slave *cs = castle_slave_find_by_id(schk->slave_id);
 
-        if (test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags) ||
-            test_bit(CASTLE_SLAVE_EVACUATE_BIT, &cs->flags))
-        {
-            /* Delete from list. */
-            list_del(pos);
+        /* Delete from list. */
+        list_del(pos);
 
-            /* Free space. */
-            kmem_cache_free(castle_partial_schks_cache, schk);
+        /* Free space. */
+        kmem_cache_free(castle_partial_schks_cache, schk);
 
-            continue;
-        }
-
-        castle_printk(LOG_DEBUG, "%llu: Superchunk: (%u:%u)\n",
-                ext_id, schk->first_chk, schk->count);
+        castle_printk(LOG_DEBUG, "%llu: Superchunk: (%u:%u) on slave 0x%x.\n",
+                ext_id, schk->first_chk, schk->count, schk->slave_id);
     }
 
     BUG_ON(!list_empty(&ext->schks_list));
