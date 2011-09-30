@@ -31,6 +31,8 @@ static inline ATTRIB_NORET void bug_fn(char *file, unsigned long line)
 {
     void castle_dmesg(void);
 
+    WARN_ON(1);
+
     /* Dump Castle dmesg output before panicking. */
     castle_dmesg();
 

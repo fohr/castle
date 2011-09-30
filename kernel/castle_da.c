@@ -2626,7 +2626,6 @@ static int castle_da_lfs_ct_init_tree(struct castle_component_tree *ct,
     /* Space is already reserved, we should have had valid extents already. */
     BUG_ON(EXT_ID_INVAL(lfs->internal_ext.ext_id));
     BUG_ON(EXT_ID_INVAL(lfs->tree_ext.ext_id));
-    BUG_ON(EXT_ID_INVAL(lfs->data_ext.ext_id));
 
     /* Sizes of extents should match. */
     if (tree_size > lfs->tree_ext.size ||
@@ -2654,12 +2653,11 @@ static int castle_da_lfs_ct_init_tree(struct castle_component_tree *ct,
                                ct->internal_ext_free.ext_id);
     castle_ext_freespace_init(&ct->tree_ext_free,
                                ct->tree_ext_free.ext_id);
-    castle_ext_freespace_init(&ct->data_ext_free,
-                               ct->data_ext_free.ext_id);
 
     /* Add the new data extent to list of medium objects. */
     if (!EXT_ID_INVAL(ct->data_ext_free.ext_id))
     {
+        castle_ext_freespace_init(&ct->data_ext_free, ct->data_ext_free.ext_id);
         castle_data_ext_add(ct->data_ext_free.ext_id, 0, 0);
         castle_ct_data_ext_link(ct->data_ext_free.ext_id, ct);
     }
@@ -2708,7 +2706,7 @@ static int castle_da_lfs_ct_space_alloc(struct castle_da_lfs_ct_t *lfs,
           lfs->data_ext.size);
 
     /* Size of extents to be created should have been set. */
-    BUG_ON(!lfs->internal_ext.size || !lfs->tree_ext.size || !lfs->data_ext.size);
+    BUG_ON(!lfs->internal_ext.size || !lfs->tree_ext.size);
     BUG_ON(!EXT_ID_INVAL(lfs->internal_ext.ext_id) || !EXT_ID_INVAL(lfs->tree_ext.ext_id) ||
            !EXT_ID_INVAL(lfs->data_ext.ext_id));
 
@@ -2820,6 +2818,9 @@ static int castle_da_lfs_ct_space_alloc(struct castle_da_lfs_ct_t *lfs,
         goto no_space;
     }
 
+    if (lfs->data_ext.size == 0)
+        goto skip_data_ext;
+
     /* Allocate an extent for medium objects of merged tree for the size equal to
      * sum of both the trees. */
     if(growable)
@@ -2851,6 +2852,7 @@ static int castle_da_lfs_ct_space_alloc(struct castle_da_lfs_ct_t *lfs,
         goto no_space;
     }
 
+skip_data_ext:
     /* Mark it as space reserved. */
     lfs->space_reserved = 1;
 
@@ -2971,7 +2973,9 @@ static int castle_da_merge_extents_alloc(struct castle_da_merge *merge)
 
         bloom_size += atomic64_read(&merge->in_trees[i]->item_count);
     }
-    data_size = MASK_CHK_OFFSET(data_size + C_CHK_SIZE);
+
+    if (CHUNK_OFFSET(data_size))
+        data_size = MASK_CHK_OFFSET(data_size + C_CHK_SIZE);
 
     /* In case of multiple version test-case, in worst case tree could grow upto
      * double the size. Ex: For every alternative k_n in o/p stream of merged
@@ -3288,6 +3292,9 @@ static c_val_tup_t castle_da_medium_obj_copy(struct castle_da_merge *merge,
     if (!castle_data_ext_should_drain(old_cvt.cep.ext_id, merge))
         return old_cvt;
 
+    /* Should have a valid data extent. */
+    BUG_ON(EXT_ID_INVAL(merge->out_tree->data_ext_free.ext_id));
+
     /* Allocate space for the new copy. */
     total_blocks = (old_cvt.length - 1) / C_BLK_SIZE + 1;
     ext_space_needed = total_blocks * C_BLK_SIZE;
@@ -3527,12 +3534,6 @@ static c_val_tup_t* _castle_da_entry_add(struct castle_da_merge *merge,
                 __FUNCTION__, cep2str(cvt.cep), merge->da->id, merge->level);
         }
     }
-
-#if 0
-    BUG_ON(is_re_add &&
-           CVT_MEDIUM_OBJECT(cvt) &&
-           (cvt.cep.ext_id != merge->out_tree->data_ext_free.ext_id));
-#endif
 
     debug("Adding an entry at depth: %d for merge on da %d level %d\n",
         depth, merge->da->id, merge->level);
@@ -4329,10 +4330,8 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
     }
 
     /* Free all the buffers */
-    if (merge->snapshot_delete.occupied)
-        castle_kfree(merge->snapshot_delete.occupied);
-    if (merge->snapshot_delete.need_parent)
-        castle_kfree(merge->snapshot_delete.need_parent);
+    castle_check_kfree(merge->snapshot_delete.occupied);
+    castle_check_kfree(merge->snapshot_delete.need_parent);
 
     if (merge->iters)
     {
@@ -5401,6 +5400,8 @@ static void castle_da_merge_cache_efficiency_stats_flush_reset(struct castle_dou
         c_ext_id_t ext_id;
 
         ext_id = in_trees[i]->data_ext_free.ext_id;
+        if (EXT_ID_INVAL(ext_id))
+            continue;
 
         pref_chunks_not_up2date += castle_extent_not_up2date_get_reset(ext_id);
         pref_chunks_up2date += castle_extent_up2date_get_reset(ext_id);
@@ -5788,7 +5789,6 @@ update_output_tree_state:
     BUG_ON(merge->out_tree != merge->serdes.out_tree );
     BUG_ON(EXT_POS_INVAL(merge->out_tree->internal_ext_free));
     BUG_ON(EXT_POS_INVAL(merge->out_tree->tree_ext_free));
-    BUG_ON(EXT_POS_INVAL(merge->out_tree->data_ext_free));
     castle_da_ct_marshall(&merge_mstore->out_tree, merge->out_tree);
     merge_mstore->root_depth         = merge->root_depth;
     merge_mstore->large_chunks       = merge->large_chunks;
@@ -6111,6 +6111,9 @@ static void castle_da_merge_deserialise(struct castle_da_merge *merge,
         BUG_ON(merge->growth_control_tree.ext_avail_bytes <
                 merge->growth_control_tree.ext_used_bytes);
 
+        if (EXT_ID_INVAL(data_ext_id))
+            goto done;
+
         castle_extent_mask_read_all(data_ext_id, &start, &end);
         BUG_ON(start!=0);
         if(end == (c_chk_cnt_t)(-1)) /* range.end==-1; the ext was never grown */
@@ -6130,6 +6133,7 @@ static void castle_da_merge_deserialise(struct castle_da_merge *merge,
                 merge->growth_control_data.ext_used_bytes);
     }
 
+done:
     return;
 }
 
@@ -8103,8 +8107,9 @@ static int castle_da_tree_writeback(struct castle_double_array *da,
                                        atomic64_read(&ct->internal_ext_free.used));
     castle_cache_extent_flush_schedule(ct->tree_ext_free.ext_id, 0,
                                        atomic64_read(&ct->tree_ext_free.used));
-    castle_cache_extent_flush_schedule(ct->data_ext_free.ext_id, 0,
-                                       atomic64_read(&ct->data_ext_free.used));
+    if (!EXT_ID_INVAL(ct->data_ext_free.ext_id))
+        castle_cache_extent_flush_schedule(ct->data_ext_free.ext_id, 0,
+                                           atomic64_read(&ct->data_ext_free.used));
     if(ct->bloom_exists)
         castle_cache_extent_flush_schedule(ct->bloom.ext_id, 0, 0);
 
