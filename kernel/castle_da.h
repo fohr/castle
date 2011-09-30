@@ -22,10 +22,8 @@ struct castle_da_merge {
     int                           level;
     int                           nr_trees;     /**< num of component trees being merged        */
     struct castle_component_tree **in_trees;    /**< array of component trees to be merged      */
-    c_ext_id_t                   *data_exts;    /**< medium object extents that are nto to be
-                                                     merged.                                    */
-    int                           nr_data_exts; /**< size of medium object extents array.       */
-
+    c_ext_id_t                   *drain_exts;   /**< List of data extents that are to be drained*/
+    int                           nr_drain_exts;/**< # of data extents that are to be drained.  */
 
     struct castle_component_tree *out_tree;
     void                         **iters;       /**< iterators for component trees */

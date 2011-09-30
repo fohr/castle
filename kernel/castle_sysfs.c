@@ -835,7 +835,6 @@ static struct attribute *castle_da_attrs[] = {
 };
 
 static struct kobj_type castle_da_ktype = {
-    .release        = castle_sysfs_kobj_release,
     .sysfs_ops      = &castle_sysfs_ops,
     .default_attrs  = castle_da_attrs,
 };
@@ -937,7 +936,7 @@ static ssize_t ct_size_show(struct kobject *kobj,
     struct castle_component_tree *ct = container_of(kobj, struct castle_component_tree, kobj);
 
     if (test_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &ct->flags))
-        sprintf(buf, "Item Count%llu\n", ct->merge->nr_entries);
+        sprintf(buf, "Item Count: %llu\n", ct->merge->nr_entries);
     else
         sprintf(buf, "Item Count: %lu\n", atomic64_read(&ct->item_count));
 
@@ -1237,6 +1236,28 @@ static ssize_t merge_progress_show(struct kobject *kobj,
     return sprintf(buf, "%llu", merge->nr_entries);
 }
 
+static ssize_t merge_drain_list_show(struct kobject *kobj,
+                                     struct attribute *attr,
+                                     char *buf)
+{
+    int i;
+    struct castle_da_merge *merge = container_of(kobj, struct castle_da_merge, kobj);
+
+    for (i=0; i<merge->nr_drain_exts; i++)
+        sprintf(buf, "%s0x%llx ", buf, merge->drain_exts[i]);
+
+    return sprintf(buf, "%s\n", buf);
+}
+
+static ssize_t merge_output_dext_show(struct kobject *kobj,
+                                      struct attribute *attr,
+                                      char *buf)
+{
+    struct castle_da_merge *merge = container_of(kobj, struct castle_da_merge, kobj);
+
+    return sprintf(buf, "0x%llx\n", merge->out_tree->data_ext_free.ext_id);
+}
+
 static struct castle_sysfs_entry merge_in_trees =
 __ATTR(in_trees, S_IRUGO|S_IWUSR, merge_in_trees_show, NULL);
 
@@ -1246,10 +1267,18 @@ __ATTR(progress, S_IRUGO|S_IWUSR, merge_progress_show, NULL);
 static struct castle_sysfs_entry merge_out_tree =
 __ATTR(out_tree, S_IRUGO|S_IWUSR, merge_out_tree_show, NULL);
 
+static struct castle_sysfs_entry merge_drain_list =
+__ATTR(drain_list, S_IRUGO|S_IWUSR, merge_drain_list_show, NULL);
+
+static struct castle_sysfs_entry merge_output_dext =
+__ATTR(output_data_extent, S_IRUGO|S_IWUSR, merge_output_dext_show, NULL);
+
 static struct attribute *castle_merge_attrs[] = {
     &merge_in_trees.attr,
     &merge_progress.attr,
     &merge_out_tree.attr,
+    &merge_drain_list.attr,
+    &merge_output_dext.attr,
     NULL,
 };
 

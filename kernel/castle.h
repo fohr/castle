@@ -1175,7 +1175,7 @@ struct castle_dmserlist_entry {
     /*       1012 */ int64_t                          iter_non_empty_cnt;
     /*       1020 */ uint64_t                         iter_src_items_completed;
     /*       1028 */ c_merge_id_t                     merge_id;
-    /*       1032 */ uint32_t                         nr_data_exts;
+    /*       1032 */ uint32_t                         nr_drain_exts;
     /*       1036 */ uint8_t                          unused[4];
     /*       1040 */
 } PACKED;
