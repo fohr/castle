@@ -207,17 +207,13 @@ static inline c_bio_t* castle_utils_bio_alloc(int nr_bvecs)
     c_bvecs = (c_bvec_t *)(c_bio + 1);
     for (i = 0; i < nr_bvecs; i++)
     {
-        c_bvecs[i].cpu                      = -1;
-        c_bvecs[i].c_bio                    = c_bio;
-        c_bvecs[i].tree                     = NULL;
-        c_bvecs[i].ct_ref.ref_id_internal   = INVAL_MASK_ID;
-        c_bvecs[i].ct_ref.ref_id_tree       = INVAL_MASK_ID;
-        c_bvecs[i].ct_ref.ref_id_data       = INVAL_MASK_ID;
-        c_bvecs[i].ct_ref.ref_id_bloom      = INVAL_MASK_ID;
-        c_bvecs[i].cts_proxy                = NULL;
-        c_bvecs[i].cts_index                = -1;
+        c_bvecs[i].cpu       = -1;
+        c_bvecs[i].c_bio     = c_bio;
+        c_bvecs[i].tree      = NULL;
+        c_bvecs[i].cts_proxy = NULL;
+        c_bvecs[i].cts_index = -1;
 #ifdef CASTLE_PERF_DEBUG
-        c_bvecs[i].timeline                 = NULL;
+        c_bvecs[i].timeline  = NULL;
 #endif
     }
     c_bio->c_bvecs = c_bvecs;

@@ -973,6 +973,12 @@ struct castle_bbp_entry
     (test_bit(CASTLE_CT_PARTIAL_TREE_BIT, &((_ct)->flags))                  \
         || !test_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &((_ct)->flags)))
 
+/**
+ * Total number of extents associated with a CT.
+ */
+#define CASTLE_CT_EXTENTS(_ct)                                                      \
+    (((_ct)->bloom_exists) ? 3 + (_ct)->nr_data_exts : 2 + (_ct)->nr_data_exts)
+
 struct castle_component_tree {
     tree_seq_t          seq;               /**< Unique ID identifying this tree.                */
     tree_seq_t          data_age;          /**< Denotes the age of data.                        */
@@ -1290,17 +1296,6 @@ typedef struct castle_bio {
 #endif
 } c_bio_t;
 
-/* Queries that take reference to a CT must also take extent references to prevent extent
-   shrinkage; extent reference taking returns a mask_id that must be used for a matching
-   extent reference put, hence the masks have to be saved for each query */
-typedef struct castle_ct_extent_reference_set_t
-{
-    c_ext_mask_id_t ref_id_internal;
-    c_ext_mask_id_t ref_id_tree;
-    c_ext_mask_id_t ref_id_data;
-    c_ext_mask_id_t ref_id_bloom;
-} c_ct_ext_ref_t;
-
 struct castle_cache_block;
 struct castle_request_timeline;
 #define CBV_ONE2ONE_BIT               (0)
@@ -1318,8 +1313,6 @@ typedef struct castle_bio_vec {
     int                             cpu;          /**< CPU id for this request                  */
     int                             cpu_index;    /**< CPU index (for determining correct CT)   */
     struct castle_component_tree   *tree;         /**< CT to search/insert into.                */
-    // @TODO TR: change the following to a ptr and malloc()/free() in correct places. */
-    c_ct_ext_ref_t                  ct_ref;       /**< CT extents refs (write b_vec only).      */
     struct castle_da_cts_proxy     *cts_proxy;    /**< Reference-taking snapshot of CTs in DA.  */
     int                             cts_index;    /**< Current index into cts_proxy->cts[].     */
 
@@ -2045,6 +2038,18 @@ struct castle_merge_token {
 };
 
 /**
+ * Structure to store extent references for CT.
+ */
+typedef struct castle_ct_extent_reference_set_t
+{
+    /* align:  4 */
+    /* offset: 0 */ uint32_t        nr_refs;    /**< Number of extents handled by structure.    */
+    /*         4 */ c_ext_mask_id_t refs[0];    /**< Array of nr_refs extent references.        */
+    /*         4 */
+} c_ct_ext_ref_t;
+STATIC_BUG_ON((sizeof(c_ct_ext_ref_t) + sizeof(c_ext_mask_id_t)) % 4);
+
+/**
  * CT states to handle key ranges with partial merge redirection.
  */
 typedef enum {
@@ -2075,15 +2080,16 @@ typedef enum {
  */
 struct castle_da_cts_proxy {
     struct castle_da_cts_proxy_ct {
-        struct castle_component_tree   *ct;         /**< Pointer to CT.                 */
-        c_ct_ext_ref_t                  ext_refs;   /**< References held on CT extents. */
-        void                           *pk;         /**< Partition key for CT.          */
+        struct castle_component_tree   *ct;         /**< Pointer to CT.                         */
+        c_ct_ext_ref_t                 *ext_refs;   /**< References held on CT extents.         */
+        void                           *pk;         /**< Partition key for CT.                  */
         void                           *pk_next;    /**< Next key of partition key.
-                                                         Set for REDIR_INTREE only.     */
-        c_ct_redir_state_enum_t         state;      /**< Redirection state.             */
+                                                         Set for REDIR_INTREE only.             */
+        c_ct_redir_state_enum_t         state;      /**< Redirection state.                     */
     } *cts;
     uint8_t                     nr_cts;     /**< Number of CTs in cts[].                */
     void                       *keys;       /**< Buffer of partition keys.              */
+    void                       *ext_refs;   /**< Buffer of per-CT extent references.    */
     btree_t                     btree_type; /**< Tree type used for the CTs.            */
     atomic_t                    ref_cnt;    /**< References held on proxy structure.    */
     struct castle_double_array *da;         /**< Backpointer to DA (for DEBUG).         */

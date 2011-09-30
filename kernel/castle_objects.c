@@ -457,7 +457,7 @@ static void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
     if (ct)
     {
         castle_double_array_unreserve(c_bvec);
-        castle_ct_put(ct, 1 /*write*/, &c_bvec->ct_ref);
+        castle_ct_put(ct, 1 /*write*/, NULL);
     }
     BUG_ON(atomic_read(&c_bvec->reserv_nodes) != 0);
 

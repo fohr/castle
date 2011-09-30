@@ -147,8 +147,6 @@ typedef enum {
 static struct castle_component_tree* castle_ct_alloc(struct castle_double_array *da,
                                                      int level, tree_seq_t seq,
                                                      uint32_t nr_data_exts);
-void castle_ct_get(struct castle_component_tree *ct, int write, c_ct_ext_ref_t *refs);
-void castle_ct_put(struct castle_component_tree *ct, int write, c_ct_ext_ref_t *refs);
 static void castle_component_tree_add(struct castle_double_array *da,
                                       struct castle_component_tree *ct,
                                       struct list_head *head);
@@ -2309,7 +2307,7 @@ static int castle_da_merge_cts_get(struct castle_double_array *da,
             castle_component_tree_del(da, ct);
             write_unlock(&da->lock);
             CASTLE_TRANSACTION_END;
-            castle_ct_put(ct, 0, NULL);
+            castle_ct_put(ct, 0 /*write*/, NULL);
 
             return -EAGAIN;
         }
@@ -4355,12 +4353,12 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
         /* If succeeded at merging, old trees need to be destroyed (they've already been removed
            from the DA by castle_da_merge_package(). */
         FOR_EACH_MERGE_TREE(i, merge)
-            castle_ct_put(merge->in_trees[i], 0, NULL);
+            castle_ct_put(merge->in_trees[i], 0 /*write*/, NULL);
         if (merge->nr_entries == 0)
         {
             castle_sysfs_ct_del(merge->out_tree);
             castle_printk(LOG_WARN, "Empty merge at level: %u\n", merge->level);
-            castle_ct_put(merge->out_tree, 0, NULL);
+            castle_ct_put(merge->out_tree, 0 /*write*/, NULL);
         }
     }
     else
@@ -4443,7 +4441,7 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
             BUG_ON(atomic_read(&merge->out_tree->ref_count) != 1);
             if(!merge_out_tree_retain)
             {
-                castle_ct_put(merge->out_tree, 0, NULL);
+                castle_ct_put(merge->out_tree, 0 /*write*/, NULL);
                 merge->out_tree=NULL;
             }
             else if (err == -ESHUTDOWN)
@@ -7546,37 +7544,52 @@ static int castle_data_exts_read(struct castle_mstore *store)
 /**
  * Get a reference to the CT.
  *
- * @param ct    Component Tree to get bump reference count on
- * @param write True to get a write reference count
- *              False to get a read reference count
- * @param refs  A pointer to write extent_new_get() ref ids; if NULL, don't take refs
+ * @param   ct      Component Tree to get bump reference count on
+ * @param   write   1 => Get a write reference
+ *                  0 => Get a read reference
+ * @param   refs    *    => Pre-allocated array of extent references.
+ *                  NULL => Don't take extent references.
  *
  * NOTE: Caller should hold castle_da_lock.
+ *
+ * NOTE: Extent references must be taken on all CTs which might be involved in
+ *       partial merges, i.e. those that are the result of a merge.
+ *
+ * @also castle_ct_put()
  */
 void castle_ct_get(struct castle_component_tree *ct, int write, c_ct_ext_ref_t *refs)
 {
+    int i, nr_refs = 0;
+
+    /* Take read reference. */
     atomic_inc(&ct->ref_count);
     if (write)
+        /* Take write reference. */
         atomic_inc(&ct->write_ref_count);
-    if(refs == NULL)
-        return;
 
-    refs->ref_id_internal = castle_extent_get(ct->internal_ext_free.ext_id);
-    BUG_ON(refs->ref_id_internal == INVAL_MASK_ID);
-    refs->ref_id_tree     = castle_extent_get(ct->tree_ext_free.ext_id);
-    BUG_ON(refs->ref_id_tree     == INVAL_MASK_ID);
-    /* FIXME: CT can have more than one data extent associated to it. Take reference on
-     * all of them. */
-    refs->ref_id_data     = castle_extent_get(ct->data_ext_free.ext_id);
-    BUG_ON(refs->ref_id_data     == INVAL_MASK_ID);
-    if(ct->bloom_exists)
+    if (refs == NULL)
     {
-        refs->ref_id_bloom = castle_extent_get(ct->bloom.ext_id);
-        BUG_ON(refs->ref_id_bloom == INVAL_MASK_ID);
+        BUG_ON(ct->level >= MIN_DA_SERDES_LEVEL); /* allow RWCTs only */
+
+        return;
     }
-    else
-        refs->ref_id_bloom = INVAL_MASK_ID;
-    debug("%s::ct %d (%p), extents %d %d %d %d, refs %d, %d, %d, %d... %d\n",
+
+    refs->nr_refs = CASTLE_CT_EXTENTS(ct);
+
+    /* Take references on all extents associated with CT. */
+    refs->refs[nr_refs++] = castle_extent_get(ct->internal_ext_free.ext_id);
+    refs->refs[nr_refs++] = castle_extent_get(ct->tree_ext_free.ext_id);
+    if (ct->bloom_exists)
+        refs->refs[nr_refs++] = castle_extent_get(ct->bloom.ext_id);
+    for (i = 0; i < ct->nr_data_exts; i++)
+        refs->refs[nr_refs++] = castle_extent_get(ct->data_exts[i]);
+
+    /* Verify we got references on all extents. */
+    BUG_ON(nr_refs != refs->nr_refs);
+    for (i = 0; i < nr_refs; i++)
+        BUG_ON(refs->refs[i] == INVAL_MASK_ID);
+
+/*    debug("%s::ct %d (%p), extents %d %d %d %d, refs %d, %d, %d, %d... %d\n",
             __FUNCTION__, ct->seq, ct,
             ct->internal_ext_free.ext_id,
             ct->tree_ext_free.ext_id,
@@ -7586,34 +7599,36 @@ void castle_ct_get(struct castle_component_tree *ct, int write, c_ct_ext_ref_t *
             refs->ref_id_tree,
             refs->ref_id_data,
             refs->ref_id_bloom,
-            atomic_inc_return(&ct_get_count));
+            atomic_inc_return(&ct_get_count));*/
 }
 
+/**
+ * Drop CT and extent references.
+ *
+ * @param   ct      Component Tree to drop references on
+ * @param   write   1 => Get a write reference
+ *                  0 => Get a read reference
+ * @param   refs    *    => Pointer to extent references to drop
+ *                  NULL => Don't drop extent references (not taken during get)
+ *
+ * NOTE: Caller must hold castle_da_lock.
+ *
+ * @also castle_ct_get()
+ */
 void castle_ct_put(struct castle_component_tree *ct, int write, c_ct_ext_ref_t *refs)
 {
+    int i;
+
     BUG_ON(in_atomic());
-    if(write)
+
+    if (write)
+        /* Drop write reference. */
         atomic_dec(&ct->write_ref_count);
 
-    /* release extent references */
-    if(refs)
-    {
-        debug("%s::ct %d (%p), refs %d, %d, %d, %d... %d\n",
-                __FUNCTION__, ct->seq, ct,
-                refs->ref_id_internal,
-                refs->ref_id_tree,
-                refs->ref_id_data,
-                refs->ref_id_bloom,
-                atomic_inc_return(&ct_put_count));
-        if(refs->ref_id_internal != INVAL_MASK_ID)
-            castle_extent_put(refs->ref_id_internal);
-        if(refs->ref_id_tree != INVAL_MASK_ID)
-            castle_extent_put(refs->ref_id_tree);
-        if(refs->ref_id_data != INVAL_MASK_ID)
-            castle_extent_put(refs->ref_id_data);
-        if(refs->ref_id_bloom != INVAL_MASK_ID)
-            castle_extent_put(refs->ref_id_bloom);
-    }
+    /* Drop CT extent references. */
+    if (refs)
+        for (i = 0; i < refs->nr_refs; i++)
+            castle_extent_put(refs->refs[i]);
 
     if(likely(!atomic_dec_and_test(&ct->ref_count)))
         return;
@@ -8425,7 +8440,7 @@ err_out:
         l->next = NULL; /* for castle_ct_put() */
         l->prev = NULL; /* for castle_ct_put() */
         ct = list_entry(l, struct castle_component_tree, da_list);
-        castle_ct_put(ct, 0, NULL);
+        castle_ct_put(ct, 0 /*write*/, NULL);
     }
 
     /* Clear the growing bit and return failure. */
@@ -9167,7 +9182,7 @@ static int __castle_da_rwct_create(struct castle_double_array *da, int cpu_index
 
 no_space:
     if (ct)
-        castle_ct_put(ct, 0, NULL);
+        castle_ct_put(ct, 0 /*write*/, NULL);
     return err;
 }
 
@@ -9471,6 +9486,29 @@ static size_t castle_da_cts_proxy_keys_size(struct castle_double_array *da)
 }
 
 /**
+ * Return total number of extents associated with CTs in DA.
+ *
+ * @param   da  Locked DA
+ *
+ * @return  Number of extents in DA.
+ */
+static inline int castle_da_cts_proxy_extents(struct castle_double_array *da)
+{
+    int i, extents = 0;
+
+    for (i = 0; i < MAX_DA_LEVEL; i++)
+    {
+        struct list_head *l;
+
+        list_for_each(l, &da->levels[i].trees)
+            extents += CASTLE_CT_EXTENTS(list_entry(l,
+                                        struct castle_component_tree, da_list));
+    }
+
+    return extents;
+}
+
+/**
  * Create a DA CTs proxy and make it active in the DA.
  *
  * @return  *       Pointer to CTs proxy (with 2 references taken)
@@ -9482,9 +9520,10 @@ static struct castle_da_cts_proxy* castle_da_cts_proxy_create(struct castle_doub
 
     struct castle_da_cts_proxy *proxy;
     struct castle_da_merge *last_merge;
+    int nr_exts, nr_cts, ct, level;
     void *keys, *pk, *pk_next;
-    int nr_cts, ct, level;
     size_t keys_rem;
+    void *ext_refs;
 
     proxy = castle_alloc(sizeof(struct castle_da_cts_proxy));
     if (!proxy)
@@ -9495,7 +9534,10 @@ reallocate:
     /* Determine Bytes required to duplicate all partition keys.  We double the
      * result to handle key_next()s and once again in case between switching
      * from read to write lock the required size has increased. */
-    keys_rem    = 4 * castle_da_cts_proxy_keys_size(da);
+    keys_rem = 4 * castle_da_cts_proxy_keys_size(da);
+    /* Determine total number of extents in DA.  Overestimate in case the
+     * number of extents changes after we allocate buffers. */
+    nr_exts  = 2 * castle_da_cts_proxy_extents(da);
     read_unlock(&da->lock);
 
     nr_cts      = da->nr_trees;
@@ -9507,19 +9549,26 @@ reallocate:
     proxy->keys = castle_alloc(keys_rem);
     if (!proxy->keys)
         goto err2;
+    proxy->ext_refs = castle_alloc(nr_cts  * sizeof(c_ct_ext_ref_t)
+                                 + nr_exts * sizeof(c_ext_mask_id_t));
+    if (!proxy->ext_refs)
+        goto err3;
+    ext_refs = proxy->ext_refs;
 
     /* Verify nr_cts still matches under DA lock.  Write because we're going
      * to make this proxy structure active once it is generated. */
     write_lock(&da->lock);
 
     if (nr_cts != da->nr_trees
-            || keys_rem < 4 * castle_da_cts_proxy_keys_size(da))
+            || nr_exts < castle_da_cts_proxy_extents(da)
+            || keys_rem < 2 * castle_da_cts_proxy_keys_size(da))
     {
-        /* nr_cts has changed or the memory required to duplicate all partition
-         * keys has greatly expanded.  We need to re-allocate the structures to
-         * ensure they are large enough to hold all references and keys. */
+        /* nr_cts has changed or the memory we pre-allocated to store partition
+         * keys and extent references is no longer sufficient.  We need to
+         * re-allocate these structures to ensure they're large enough. */
         write_unlock(&da->lock);
 
+        castle_free(proxy->ext_refs);
         castle_free(proxy->keys);
         castle_free(proxy->cts);
 
@@ -9554,10 +9603,13 @@ reallocate:
                 continue;
 
             /* Add this CT, take a reference. */
-            proxy_ct = &proxy->cts[ct++];
-            proxy_ct->ct = ct_p;
-            castle_ct_get(proxy_ct->ct, 0 /*write*/, &proxy_ct->ext_refs);
+            proxy_ct            = &proxy->cts[ct++];
+            proxy_ct->ct        = ct_p;
+            proxy_ct->ext_refs  = (c_ct_ext_ref_t *)ext_refs;
+            castle_ct_get(proxy_ct->ct, 0 /*write*/, proxy_ct->ext_refs);
             VERIFY_PROXY_CT(proxy_ct->ct, da);
+            ext_refs += sizeof(c_ct_ext_ref_t)
+                + proxy_ct->ext_refs->nr_refs * sizeof(((c_ct_ext_ref_t *)0)->refs[0]);
 
             if (!test_bit(CASTLE_CT_PARTIAL_TREE_BIT, &proxy_ct->ct->flags))
             {
@@ -9648,6 +9700,8 @@ reallocate:
 
     return proxy;
 
+err3:
+    castle_free(proxy->keys);
 err2:
     castle_free(proxy->cts);
 err:
@@ -9720,9 +9774,10 @@ void castle_da_cts_proxy_put(struct castle_da_cts_proxy *proxy)
                 BUG_ON(!proxy->cts[ct].pk);
             else
                 BUG_ON(proxy->cts[ct].pk);
-            castle_ct_put(proxy->cts[ct].ct, 0 /*write*/, &proxy->cts[ct].ext_refs);
+            castle_ct_put(proxy->cts[ct].ct, 0 /*write*/, proxy->cts[ct].ext_refs);
         }
 
+        castle_free(proxy->ext_refs);
         castle_free(proxy->keys);
         castle_free(proxy->cts);
         castle_free(proxy);
@@ -9960,7 +10015,7 @@ static void castle_da_ct_write_complete(c_bvec_t *c_bvec, int err, c_val_tup_t c
     if(err == -ENOSPC)
     {
         /* Release the reference to the tree. */
-        castle_ct_put(ct, 1, NULL);
+        castle_ct_put(ct, 1 /*write*/, NULL);
         /*
          * For now all inserts reserve space, and castle_da_write_bvec_start is not reentrant,
          * therefore err should never be -ENOSPC.
@@ -10465,7 +10520,7 @@ void castle_da_destroy_complete(struct castle_double_array *da)
             BUG_ON(atomic_read(&ct->write_ref_count));
             list_del(&ct->da_list);
             ct->da_list.next = ct->da_list.prev = NULL;
-            castle_ct_put(ct, 0, NULL);
+            castle_ct_put(ct, 0 /*write*/, NULL);
         }
     }
 
@@ -10564,8 +10619,9 @@ void castle_double_array_put(c_da_t da_id)
 int castle_double_array_prefetch(c_da_t da_id)
 {
     struct castle_double_array *da;
+    c_ct_ext_ref_t *ct_refs;
+    int nr_cts, nr_exts, i;
     struct list_head *l;
-    int i;
 
     if (castle_double_array_get(da_id) != 0)
     {
@@ -10582,6 +10638,29 @@ int castle_double_array_prefetch(c_da_t da_id)
 
     castle_printk(LOG_DEVEL, "Prefetching CTs for DA=%p id=0x%d\n", da, da_id);
 
+reallocate:
+    read_lock(&da->lock);
+    nr_cts  = da->nr_trees;
+    nr_exts = 2 * castle_da_cts_proxy_extents(da);
+    read_unlock(&da->lock);
+
+    ct_refs = castle_alloc(nr_cts * sizeof(c_ct_ext_ref_t)
+                                + nr_exts * sizeof(c_ext_mask_id_t));
+    if (!ct_refs)
+        return -ENOMEM;
+
+    read_lock(&da->lock);
+
+    if (nr_cts != da->nr_trees
+            || nr_exts < castle_da_cts_proxy_extents(da))
+    {
+        read_unlock(&da->lock);
+
+        castle_free(ct_refs);
+
+        goto reallocate;
+    }
+
     /* Prefetch ROCTs. */
     for (i = 2; i < MAX_DA_LEVEL; i++)
     {
@@ -10590,11 +10669,13 @@ int castle_double_array_prefetch(c_da_t da_id)
             struct castle_component_tree *ct;
 
             ct = list_entry(l, struct castle_component_tree, da_list);
-            castle_ct_get(ct, 0, NULL);
+            castle_ct_get(ct, 0 /*write*/, ct_refs);
             castle_component_tree_prefetch(ct);
-            castle_ct_put(ct, 0, NULL);
+            castle_ct_put(ct, 0 /*write*/, ct_refs);
         }
     }
+
+    read_unlock(&da->lock);
 
     castle_da_put(da);
 
