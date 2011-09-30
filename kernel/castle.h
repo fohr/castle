@@ -1013,6 +1013,8 @@ struct castle_component_tree {
     c_ext_free_t        data_ext_free;      /**< Medium-object data extent.                     */
     c_ext_id_t         *data_exts;          /**< Array of data extent IDs.                      */
     uint32_t            nr_data_exts;       /**< Number of data extents in in this CT.          */
+    /* FIXME: Just for debugging sake. get rid of data_exts_count later. */
+    uint32_t            data_exts_count;
     atomic64_t          large_ext_chk_cnt;
     c_ext_pos_t         curr_merge_c2b_cep;
     uint8_t             bloom_exists;

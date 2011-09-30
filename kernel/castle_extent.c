@@ -1336,8 +1336,7 @@ void castle_extents_fini(void)
         castle_kfree(castle_extents_hash);
     }
 
-    if (castle_extent_mask_hash)
-        castle_kfree(castle_extent_mask_hash);
+    castle_check_kfree(castle_extent_mask_hash);
 
     if (castle_partial_schks_cache)
         kmem_cache_destroy(castle_partial_schks_cache);
@@ -2113,6 +2112,8 @@ static void castle_extent_resource_release(void *data)
 
     /* Drop 'extent exists' reference on c2b dirtytree. */
     castle_extent_dirtytree_put(ext->dirtytree);
+
+    castle_kfree(ext);
 
     debug("Completed deleting ext: %lld\n", ext_id);
 

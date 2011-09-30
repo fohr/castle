@@ -7406,6 +7406,7 @@ void castle_ct_data_ext_link(c_ext_id_t ext_id, struct castle_component_tree *ct
     /* Take a reference and Sanity check. */
     BUG_ON(atomic_inc_return(&data_ext->ref_cnt) <= 0);
 
+    BUG_ON(ct->nr_data_exts >= ct->data_exts_count);
     ct->data_exts[ct->nr_data_exts++] = ext_id;
 }
 
@@ -7443,6 +7444,10 @@ static int castle_data_ext_check_orphan(struct castle_data_extent *data_ext, voi
     if (atomic_read(&data_ext->ref_cnt) == 0)
     {
         castle_printk(LOG_WARN, "Cleaning orphaned data extent: %llu\n", data_ext->ext_id);
+        /* No need to free-up the extent, orphan extents gets freed by extent layer. And
+         * also extent layer can't handle extent_free() until fs_init() is completed.
+         * All the freed extents would still hang to extents hash and check_alive would
+         * try to free it again. */
         castle_data_ext_remove(data_ext, NULL);
     }
 
@@ -7992,6 +7997,7 @@ static int castle_da_ct_dealloc(struct castle_double_array *da,
     castle_sysfs_ct_del(ct);
     list_del(&ct->da_list);
     list_del(&ct->hash_list);
+    castle_check_kfree(ct->data_exts);
     castle_kfree(ct);
 
     return 0;
@@ -8992,6 +8998,7 @@ struct castle_component_tree * castle_ct_init(struct castle_component_tree *ct,
     ct->tree_ext_free.ext_id     = INVAL_EXT_ID;
     ct->data_ext_free.ext_id     = INVAL_EXT_ID;
     ct->data_exts                = castle_zalloc(sizeof(c_ext_id_t) * nr_data_exts, GFP_KERNEL);
+    ct->data_exts_count          = nr_data_exts;
     ct->nr_data_exts             = 0;
     ct->curr_merge_c2b_cep       = INVAL_EXT_POS;
     ct->bloom_exists             = 0;
