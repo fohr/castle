@@ -583,6 +583,8 @@ static c_ext_t * castle_ext_alloc(c_ext_id_t ext_id)
     ext->ext_type           = EXT_T_INVALID;
     ext->da_id              = INVAL_DA;
     atomic_set(&ext->link_cnt, 1);
+    ext->use_shadow_map     = 0;
+    ext->shadow_map         = NULL;
     spin_lock_init(&ext->shadow_map_lock);
 
     INIT_LIST_HEAD(&ext->mask_list);
@@ -1871,6 +1873,7 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t     rda_type,
     ext->ext_type           = ext_type;
     ext->da_id              = da_id;
     ext->use_shadow_map     = 0;
+    ext->shadow_map         = NULL;
 #ifdef CASTLE_PERF_DEBUG
     ext->dirtytree->ext_size= ext->size;
     ext->dirtytree->ext_type= ext->ext_type;
@@ -4298,7 +4301,9 @@ void cleanup_extent(c_ext_t *ext, int update_seqno)
     spin_lock(&ext->shadow_map_lock);
     ext->use_shadow_map = 0;
     spin_unlock(&ext->shadow_map_lock);
-    castle_vfree(ext->shadow_map);
+
+    if (ext->shadow_map)
+        castle_vfree(ext->shadow_map);
 
     /* It is now safe to update the (LIVE) extent with the rebuild sequence number. */
     if (LIVE_EXTENT(ext) && update_seqno)
