@@ -91,7 +91,7 @@ void* castle_debug_malloc(size_t size, gfp_t flags, char *file, int line)
 {
     struct castle_malloc_debug *dobj;
 
-    BUG_ON(in_atomic());
+    BUG_ON((flags != GFP_ATOMIC) && in_atomic());
 
     size += sizeof(struct castle_malloc_debug);
     /* Alloc the object */
