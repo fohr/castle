@@ -3034,9 +3034,6 @@ c_ext_dirtytree_t* castle_extent_dirtytree_by_id_get(c_ext_id_t ext_id)
         BUG();
     }
     BUG_ON(!ext);
-    if (atomic_inc_return(&ext->dirtytree->ref_cnt) < 2)
-        castle_printk(LOG_ERROR, "%s::extent ref_cnt < 2; %lld\n",
-                __FUNCTION__, ext_id);
     BUG_ON(atomic_inc_return(&ext->dirtytree->ref_cnt) < 2);
     dirtytree = ext->dirtytree;
     read_unlock_irqrestore(&castle_extents_hash_lock, flags);
