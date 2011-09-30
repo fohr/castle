@@ -10994,6 +10994,9 @@ int castle_merge_start(c_merge_cfg_t *merge_cfg, c_merge_id_t *merge_id, int lev
                 k++;
     }
 
+    if (k == 0)
+        goto no_data_exts;
+
     /* Allocate space for data extents list. */
     data_exts = castle_zalloc(sizeof(c_ext_id_t)*k, GFP_KERNEL);
     if (data_exts == NULL)
@@ -11014,9 +11017,10 @@ int castle_merge_start(c_merge_cfg_t *merge_cfg, c_merge_id_t *merge_id, int lev
                 data_exts[k++] = in_trees[i]->data_exts[j];
     }
 
+no_data_exts:
     /* Allocate and init merge structure. */
     merge = castle_da_merge_alloc(merge_cfg->nr_arrays, 2, da, INVAL_MERGE_ID, in_trees,
-                                  merge_cfg->nr_data_exts, data_exts);
+                                  k, data_exts);
     if (!merge)
     {
         castle_printk(LOG_USERINFO, "Couldn't allocate merge structure.\n");
