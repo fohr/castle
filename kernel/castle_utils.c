@@ -10,6 +10,10 @@
 #include "castle_objects.h"
 #include "castle.h"
 
+static unsigned int castle_fast_panic = 0;
+module_param(castle_fast_panic, uint, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
+MODULE_PARM_DESC(castle_fast_panic, "Dumps Castle dmesg if unset");
+
 /**
  * Reinit and drop ref on a castle_key_ptr_t.
  */
@@ -410,6 +414,15 @@ void castle_dmesg(void)
     char *buf, line[1024];
     unsigned long flags;
     int wraps;
+
+    if (castle_fast_panic)
+    {
+        printk("================================================================================\n");
+        printk("CASTLE_FAST_PANIC ENABLED, SKIPPING CASTLE PRINTK BUFFER\n");
+        printk("================================================================================\n");
+
+        return;
+    }
 
     /* Allocate a buffer to store CASTLE_DMESG_DUMP_SIZE of buffer. */
     buf = castle_alloc(CASTLE_DMESG_DUMP_SIZE);
