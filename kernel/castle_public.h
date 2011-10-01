@@ -190,6 +190,8 @@ typedef uint64_t c_data_ext_id_t;
 #define INVAL_WORK_ID       ((c_work_id_t)-1)
 #define WORK_ID_INVAL(_t)   ((_t) == INVAL_WORK_ID)
 
+#define MERGE_ALL_DATA_EXTS ((uint32_t)(~0U))
+
 typedef enum {
     RDA_1,
     RDA_2,

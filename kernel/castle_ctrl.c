@@ -1105,7 +1105,7 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
                 goto err_out;
             }
 
-            if (!merge_cfg->nr_data_exts)
+            if (!merge_cfg->nr_data_exts || (merge_cfg->nr_data_exts == MERGE_ALL_DATA_EXTS))
                 merge_cfg->data_exts = NULL;
             else
             {
@@ -1122,6 +1122,8 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 
             ioctl.merge_start.ret = castle_merge_start(merge_cfg, &ioctl.merge_start.merge_id, -1);
 
+            /* Incase of SUCCESS don't free data_exts. */
+            merge_cfg->data_exts = NULL;
 err_out:
             castle_check_kfree(merge_cfg->data_exts);
             castle_check_kfree(merge_cfg->arrays);

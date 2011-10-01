@@ -11061,7 +11061,6 @@ int castle_merge_start(c_merge_cfg_t *merge_cfg, c_merge_id_t *merge_id, int lev
     struct castle_component_tree **in_trees = NULL;
     struct castle_double_array *da;
     struct castle_da_merge *merge = NULL;
-    c_ext_id_t *data_exts = NULL;
     int ret = 0;
     int i, j;
     c_thread_id_t thread_id = INVAL_THREAD_ID;
@@ -11106,6 +11105,37 @@ int castle_merge_start(c_merge_cfg_t *merge_cfg, c_merge_id_t *merge_id, int lev
         goto err_out;
     }
 
+    if (merge_cfg->nr_data_exts == MERGE_ALL_DATA_EXTS)
+    {
+        int k;
+
+        /* Find the total number of data extents. */
+        merge_cfg->nr_data_exts = 0;
+        for (i=0; i<merge_cfg->nr_arrays; i++)
+            merge_cfg->nr_data_exts += in_trees[i]->nr_data_exts;
+
+        BUG_ON(merge_cfg->data_exts != NULL);
+        merge_cfg->data_exts = castle_malloc(sizeof(c_ext_id_t) * merge_cfg->nr_data_exts, GFP_KERNEL);
+        if (!merge_cfg->data_exts)
+        {
+            castle_printk(LOG_USERINFO, "Failed to allocate memory\n");
+            ret = -ENOMEM;
+            goto err_out;
+        }
+
+        for (i=0, k=0; i<merge_cfg->nr_arrays; i++)
+        {
+            memcpy(&merge_cfg->data_exts[k], in_trees[i]->data_exts,
+                   sizeof(c_ext_id_t) * in_trees[i]->nr_data_exts);
+            k += in_trees[i]->nr_data_exts;
+        }
+
+        BUG_ON(k != merge_cfg->nr_data_exts);
+
+        /* FIXME: There could be duplicate data extents in this list, if we allow multiple
+         * CTs refering same data extent. Review the code once. */
+    }
+
     /* Check if any of the data extents are not valid. */
     for (i=0; i<merge_cfg->nr_data_exts; i++)
     {
@@ -11135,21 +11165,9 @@ int castle_merge_start(c_merge_cfg_t *merge_cfg, c_merge_id_t *merge_id, int lev
         }
     }
 
-    /* Allocate space for data extent, this would be freed by merge_edalloc(). */
-    data_exts = castle_zalloc(sizeof(c_ext_id_t) * merge_cfg->nr_data_exts, GFP_KERNEL);
-    if (!data_exts)
-    {
-        castle_printk(LOG_USERINFO, "Failed to allocate memory fro list of data extents\n");
-        ret = -EINVAL;
-        goto err_out;
-    }
-
-    /* Make a copy of data extents. */
-    memcpy(data_exts, merge_cfg->data_exts, sizeof(c_ext_id_t) * merge_cfg->nr_data_exts);
-
     /* Allocate and init merge structure. */
     merge = castle_da_merge_alloc(merge_cfg->nr_arrays, 2, da, INVAL_MERGE_ID, in_trees,
-                                  merge_cfg->nr_data_exts, data_exts);
+                                  merge_cfg->nr_data_exts, merge_cfg->data_exts);
     if (!merge)
     {
         castle_printk(LOG_USERINFO, "Couldn't allocate merge structure.\n");
@@ -11361,7 +11379,7 @@ int castle_da_vertree_compact(c_da_t da_id)
 
     merge_cfg.nr_arrays     = j;
     merge_cfg.arrays        = &arrays[0];
-    merge_cfg.nr_data_exts  = 0;
+    merge_cfg.nr_data_exts  = MERGE_ALL_DATA_EXTS;
     merge_cfg.data_exts     = NULL;
 
 #if 0
