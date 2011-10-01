@@ -5050,13 +5050,13 @@ static int castle_da_merge_init(struct castle_da_merge *merge, void *unused)
     uint32_t nr_non_drain_exts;
     tree_seq_t out_tree_data_age;
 
+    debug("Merging Trees:\n");
+    for (i=0; i<nr_trees; i++)
+        debug("\tct=0x%x, dynamic=%d\n", in_trees[i]->seq, in_trees[i]->dynamic);
 
-    debug("%s::Merging ct=%d (dynamic=%d) with ct=%d (dynamic=%d)\n",
-            __FUNCTION__,
-            in_trees[0]->seq, in_trees[0]->dynamic, in_trees[1]->seq, in_trees[1]->dynamic);
-
-    /* Sanity checks. */
-    BUG_ON(nr_trees < 2);
+    /* Sanity checks. Now, we do allow merge on single tree for the sake of
+     * snaphsot delete and data extents compaction. */
+    BUG_ON(nr_trees < 1);
 
     /* Work out what type of trees are we going to be merging. Bug if in_trees don't match. */
     btree_type = in_trees[0]->btree_type;
@@ -5200,7 +5200,7 @@ static struct castle_da_merge* castle_da_merge_alloc(int                        
 
     /* Sanity checks. */
     //BUG_ON(level > 2);
-    BUG_ON(nr_trees < 2);
+    BUG_ON(nr_trees < 1);
 
     /* Malloc everything. Use zalloc to make sure everything is set to 0. */
     ret = -ENOMEM;
@@ -11064,7 +11064,18 @@ int castle_merge_start(c_merge_cfg_t *merge_cfg, c_merge_id_t *merge_id, int lev
     c_ext_id_t *data_exts = NULL;
     int ret = 0;
     int i, j;
-    c_thread_id_t thread_id = INVAL_MERGE_ID;
+    c_thread_id_t thread_id = INVAL_THREAD_ID;
+
+    *merge_id = INVAL_MERGE_ID;
+
+    debug_gn("Merge has been called on %u arrays\n", merge_cfg->nr_arrays);
+
+    if (merge_cfg->nr_arrays == 0)
+    {
+        ret = -EINVAL;
+        castle_printk(LOG_USERINFO, "Can't do merge on 0 trees\n");
+        goto err_out;
+    }
 
     if (castle_merge_thread_create(&thread_id) < 0)
     {
@@ -11072,10 +11083,6 @@ int castle_merge_start(c_merge_cfg_t *merge_cfg, c_merge_id_t *merge_id, int lev
         castle_printk(LOG_USERINFO, "Failed to create merge thread\n");
         goto err_out;
     }
-
-    *merge_id = INVAL_MERGE_ID;
-
-    debug_gn("Merge has been called on %u arrays\n", merge_cfg->nr_arrays);
 
     /* Allocate memory for list of input arrays. */
     in_trees = castle_malloc(sizeof(void *) * merge_cfg->nr_arrays, GFP_KERNEL);
@@ -11287,11 +11294,16 @@ int castle_da_vertree_compact(c_da_t da_id)
     struct castle_double_array *da = castle_da_hash_get(da_id);
     struct list_head *pos, *tmp;
     c_merge_id_t merge_id = INVAL_MERGE_ID;
-    c_thread_id_t thread_id = INVAL_THREAD_ID;
     c_work_id_t work_id;
     c_merge_cfg_t merge_cfg;
     c_array_id_t *arrays = NULL;
     int i, j;
+
+    if (da == NULL)
+    {
+        castle_printk(LOG_WARN, "Compaction can't be done on invalid da: %u\n", da_id);
+        return -EINVAL;
+    }
 
     if (test_and_set_bit(CASTLE_DA_COMPACTING_BIT, &da->flags))
     {
@@ -11352,17 +11364,16 @@ int castle_da_vertree_compact(c_da_t da_id)
     merge_cfg.nr_data_exts  = 0;
     merge_cfg.data_exts     = NULL;
 
+#if 0
     /* No need of compaction. */
     if (j < 2)
     {
         castle_check_kfree(arrays);
-        if (!THREAD_ID_INVAL(thread_id))
-            castle_merge_thread_destroy(thread_id);
-
         clear_bit(CASTLE_DA_COMPACTING_BIT, &da->flags);
 
         return 0;
     }
+#endif
 
     castle_golden_nugget = 1;
     if (castle_merge_start(&merge_cfg, &merge_id, 0) < 0)
