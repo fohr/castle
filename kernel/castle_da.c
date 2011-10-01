@@ -217,6 +217,7 @@ static int castle_merge_thread_stop(struct castle_merge_thread *thread, void *un
 static int castle_da_merge_check(struct castle_da_merge *merge, void *da);
 static void castle_data_extent_stats_commit(struct castle_component_tree *ct);
 static int castle_data_ext_should_drain(c_ext_id_t ext_id, struct castle_da_merge *merge);
+static void castle_merge_thread_cleanup(struct castle_merge_thread *merge_thread, int self_exit);
 
 static struct list_head        *castle_merge_threads_hash = NULL;
 
@@ -10845,6 +10846,8 @@ static int castle_merge_thread_start(void *_data)
         {
             castle_events_merge_work_finished(merge_thread->merge_id, 1, 1);
             merge_thread->merge_id = INVAL_MERGE_ID;
+            /* No need of this thread any more. Kill it. */
+            castle_merge_thread_cleanup(merge_thread, 1);
         }
         else if (ret == EAGAIN)
             castle_events_merge_work_finished(merge_thread->merge_id, 1, 0);
@@ -10890,6 +10893,23 @@ int castle_merge_thread_create(c_thread_id_t *thread_id)
     return 0;
 }
 
+static void castle_merge_thread_cleanup(struct castle_merge_thread *merge_thread, int self_exit)
+{
+    castle_printk(LOG_DEVEL, "Thread destroy: %u/%u\n", merge_thread->id, self_exit);
+
+    if (!self_exit)
+        kthread_stop(merge_thread->thread);
+
+    castle_sysfs_merge_thread_del(merge_thread);
+
+    castle_merge_threads_hash_remove(merge_thread);
+
+    castle_kfree(merge_thread);
+
+    if (self_exit)
+        do_exit(0);
+}
+
 void _castle_merge_thread_destroy(c_thread_id_t thread_id, int *ret, int force)
 {
     struct castle_merge_thread *merge_thread = castle_merge_threads_hash_get(thread_id);
@@ -10911,15 +10931,9 @@ void _castle_merge_thread_destroy(c_thread_id_t thread_id, int *ret, int force)
         return;
     }
 
-    kthread_stop(merge_thread->thread);
+    castle_merge_thread_cleanup(merge_thread, 0);
 
-    castle_sysfs_merge_thread_del(merge_thread);
-
-    castle_merge_threads_hash_remove(merge_thread);
-
-    castle_kfree(merge_thread);
-
-    *ret = 0;
+    *ret = 1;
 }
 
 int castle_merge_thread_destroy(c_thread_id_t thread_id)
@@ -11050,6 +11064,14 @@ int castle_merge_start(c_merge_cfg_t *merge_cfg, c_merge_id_t *merge_id, int lev
     c_ext_id_t *data_exts = NULL;
     int ret = 0;
     int i, j;
+    c_thread_id_t thread_id = INVAL_MERGE_ID;
+
+    if (castle_merge_thread_create(&thread_id) < 0)
+    {
+        ret = -EINVAL;
+        castle_printk(LOG_USERINFO, "Failed to create merge thread\n");
+        goto err_out;
+    }
 
     *merge_id = INVAL_MERGE_ID;
 
@@ -11140,6 +11162,9 @@ int castle_merge_start(c_merge_cfg_t *merge_cfg, c_merge_id_t *merge_id, int lev
 
     *merge_id = merge->id;
 
+    /* Attach merge thread to merge. */
+    BUG_ON(castle_merge_thread_attach(merge->id, thread_id) < 0);
+
     return 0;
 
 err_out:
@@ -11147,7 +11172,9 @@ err_out:
     BUG_ON(ret == 0);
     BUG_ON(merge);
 
-    if (in_trees)   castle_kfree(in_trees);
+    castle_check_kfree(in_trees);
+    if (!THREAD_ID_INVAL(thread_id))
+        castle_merge_thread_destroy(thread_id);
 
     return ret;
 }
@@ -11282,12 +11309,6 @@ int castle_da_vertree_compact(c_da_t da_id)
 
     CASTLE_TRANSACTION_BEGIN;
 
-    if (castle_merge_thread_create(&thread_id) < 0)
-    {
-        castle_printk(LOG_WARN, "Failed to create merge thread for compaction\n");
-        goto err_out;
-    }
-
     arrays = castle_zalloc(sizeof(c_array_id_t) * (da->nr_trees + 10), GFP_KERNEL);
     BUG_ON(!arrays);
 
@@ -11350,8 +11371,6 @@ int castle_da_vertree_compact(c_da_t da_id)
         goto err_out;
     }
 
-    BUG_ON(castle_merge_thread_attach(merge_id, thread_id) < 0);
-
     BUG_ON(castle_merge_do_work(merge_id, 0, &work_id));
 
     castle_kfree(arrays);
@@ -11362,9 +11381,6 @@ err_out:
     BUG_ON(!MERGE_ID_INVAL(merge_id));
 
     castle_check_kfree(arrays);
-    if (!THREAD_ID_INVAL(thread_id))
-        castle_merge_thread_destroy(thread_id);
-
     clear_bit(CASTLE_DA_COMPACTING_BIT, &da->flags);
 
     return -EINVAL;

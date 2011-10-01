@@ -1085,13 +1085,10 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 
         /* Golden Nugget. */
         case CASTLE_CTRL_MERGE_THREAD_CREATE:
-            ioctl.merge_thread_create.ret =
-                            castle_merge_thread_create(&ioctl.merge_thread_create.thread_id);
-            break;
         case CASTLE_CTRL_MERGE_THREAD_DESTROY:
-            ioctl.merge_thread_destroy.ret =
-                            castle_merge_thread_destroy(ioctl.merge_thread_destroy.thread_id);
-            break;
+        case CASTLE_CTRL_MERGE_THREAD_ATTACH:
+            err = -EINVAL;
+            goto err;
         case CASTLE_CTRL_MERGE_START:
         {
             c_merge_cfg_t *merge_cfg = &ioctl.merge_start.merge_cfg;
@@ -1139,11 +1136,6 @@ err_out:
             break;
         case CASTLE_CTRL_MERGE_STOP:
             ioctl.merge_stop.ret = castle_merge_stop(ioctl.merge_stop.merge_id);
-            break;
-        case CASTLE_CTRL_MERGE_THREAD_ATTACH:
-            ioctl.merge_thread_attach.ret =
-                            castle_merge_thread_attach(ioctl.merge_thread_attach.merge_id,
-                                                       ioctl.merge_thread_attach.thread_id);
             break;
         case CASTLE_CTRL_INSERT_RATE_SET:
             ioctl.insert_rate_set.ret =
