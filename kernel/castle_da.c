@@ -99,7 +99,7 @@ int                             castle_rwct_checkpoint_frequency = 10;  /**< Num
 module_param(castle_rwct_checkpoint_frequency, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
 MODULE_PARM_DESC(castle_rwct_checkpoint_frequency, "Number checkpoints before RWCTs are promoted.");
 
-static int castle_golden_nugget = 0;
+static int castle_golden_nugget = 1;
 
 static struct
 {
@@ -218,6 +218,7 @@ static int castle_da_merge_check(struct castle_da_merge *merge, void *da);
 static void castle_data_extent_stats_commit(struct castle_component_tree *ct);
 static int castle_data_ext_should_drain(c_ext_id_t ext_id, struct castle_da_merge *merge);
 static void castle_merge_thread_cleanup(struct castle_merge_thread *merge_thread, int self_exit);
+static void castle_data_ext_size_get(c_ext_id_t ext_id, uint64_t *nr_bytes, uint64_t *nr_entries);
 
 static struct list_head        *castle_merge_threads_hash = NULL;
 
@@ -5121,8 +5122,20 @@ static int castle_da_merge_init(struct castle_da_merge *merge, void *unused)
         struct castle_component_tree *ct = merge->in_trees[i];
 
         for (j=0; j<ct->nr_data_exts; j++)
+        {
+            uint64_t size_in_bytes, size_in_entries;
+
+            castle_data_ext_size_get(ct->data_exts[j], &size_in_bytes, &size_in_entries);
+
+            if (size_in_entries == 0)
+            {
+                BUG_ON(size_in_bytes);
+                continue;
+            }
+
             if (!check_dext_list(ct->data_exts[j], merge->drain_exts, merge->nr_drain_exts))
                 castle_ct_data_ext_link(ct->data_exts[j], merge->out_tree);
+        }
     }
 
     BUG_ON(merge->out_tree->nr_data_exts > nr_non_drain_exts + 1);
@@ -7414,6 +7427,16 @@ static int castle_data_ext_remove(struct castle_data_extent *data_ext, void *unu
     castle_kfree(data_ext);
 
     return 0;
+}
+
+static void castle_data_ext_size_get(c_ext_id_t ext_id, uint64_t *nr_bytes, uint64_t *nr_entries)
+{
+    struct castle_data_extent *data_ext = castle_data_exts_hash_get(ext_id);
+
+    BUG_ON(data_ext == NULL);
+
+    *nr_bytes   = atomic64_read(&data_ext->nr_bytes);
+    *nr_entries = atomic64_read(&data_ext->nr_entries);
 }
 
 void castle_ct_data_ext_link(c_ext_id_t ext_id, struct castle_component_tree *ct)
