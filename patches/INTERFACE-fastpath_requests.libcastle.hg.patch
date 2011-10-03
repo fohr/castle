@@ -1,0 +1,210 @@
+diff --git a/castle.h b/castle.h
+--- a/castle.h
++++ b/castle.h
+@@ -70,6 +70,16 @@
+ void castle_disconnect            (castle_connection *conn);
+ void castle_free                  (castle_connection *conn);
+ int castle_fd                     (castle_connection *conn);
++void castle_ioctl_request_send    (castle_connection *conn,
++                                   castle_request_t *reqs,
++                                   castle_callback *callbacks,
++                                   void **datas,
++                                   int reqs_count);
++void castle_old_request_send      (castle_connection *conn,
++                                   castle_request_t *req,
++                                   castle_callback *callbacks,
++                                   void **datas,
++                                   int reqs_count);
+ void castle_request_send          (castle_connection *conn,
+                                    castle_request *req,
+                                    castle_callback *callbacks,
+diff --git a/castle_front.c b/castle_front.c
+--- a/castle_front.c
++++ b/castle_front.c
+@@ -588,14 +588,80 @@
+     return err;
+ }
+ 
+-void castle_request_send(castle_connection *conn,
+-                               castle_request_t *req, castle_callback *callbacks,
+-                               void **datas, int reqs_count)
++void castle_ioctl_request_send(castle_connection *conn,
++                               castle_request_t *reqs,
++                               castle_callback *callbacks,
++                               void **datas,
++                               int reqs_count)
++{
++    struct castle_front_callback *callback;
++    int call_id, i;
++
++    for (i = 0; i < reqs_count; i++)
++    {
++        castle_request_t *req;
++
++        req = reqs + i;
++
++        if (conn->fd < 0)
++            break;
++
++        pthread_mutex_lock(&conn->free_mutex);
++        assert(!list_empty(&conn->free_callbacks));
++        callback = list_entry(conn->free_callbacks.next, struct castle_front_callback, list);
++        list_del(&callback->list);
++        pthread_mutex_unlock(&conn->free_mutex);
++
++        call_id = callback - conn->callbacks;
++        req->call_id = call_id;
++
++        callback->callback = callbacks ? callbacks[i] : NULL;
++        callback->data = datas ? datas[i] : NULL;
++
++        callback->token = get_request_token(req);
++
++//        printf("i=%d reqs_count=%d req->tag=%d\n", i, reqs_count, req->tag);
++        assert(!callback->token);
++        assert(req->tag == CASTLE_RING_REPLACE);
++
++//        printf("%s: ioctl() req=%p\n", __FUNCTION__, req);
++
++        ioctl(conn->fd, CASTLE_IOCTL_REQUEST, (char *)req);
++
++//        printf("%s: ioctl() req=%p err=%d\n", __FUNCTION__, req, req->resp.err);
++
++        if (req->resp.err)
++            printf("req->err = %d\n", req->resp.err);
++
++        if (callback->callback)
++        {
++            assert(callback->callback == conn->callbacks[call_id].callback);
++
++            callback->callback(conn, &req->resp, callback->data);
++        }
++
++        pthread_mutex_lock(&conn->free_mutex);
++        list_add(&conn->callbacks[call_id].list, &conn->free_callbacks);
++        pthread_mutex_unlock(&conn->free_mutex);
++    }
++}
++
++void castle_old_request_send(castle_connection *conn,
++                             castle_request_t *req,
++                             castle_callback *callbacks,
++                             void **datas,
++                             int reqs_count)
+ {
+     // TODO check return codes?
+     int notify, i=0, call_id;
+     struct castle_front_callback *callback;
+ 
++    if (req[0].tag == CASTLE_RING_REPLACE)
++    {
++        castle_ioctl_request_send(conn, req, callbacks, datas, reqs_count);
++        return;
++    }
++
+     /* This mutex is currently being abused for two distinct purposes,
+        creating false scheduling hazards: it is both the condition
+        variable mutex for ring_cond, which is used for signalling
+@@ -685,6 +751,51 @@
+     pthread_mutex_unlock(&conn->ring_mutex);
+ }
+ 
++/**
++ * Process reqs_count individually.
++ */
++void castle_request_send(castle_connection *conn,
++                         castle_request_t *reqs,
++                         castle_callback *callbacks,
++                         void **datas,
++                         int reqs_count)
++{
++    castle_old_request_send(conn, reqs, callbacks, datas, reqs_count);
++/*    int i;
++
++//    i = 0;
++//    while (i < reqs_count)
++//    {
++//        printf("%s: reqs=%p i=%d reqs_count=%d tag=%d\n",
++//                __FUNCTION__, reqs, i, reqs_count, reqs[i].tag);
++//        assert(reqs[i].tag < 15);
++//        i++;
++//    }
++
++    i = 0;
++    while (i < reqs_count)
++    {
++        castle_request_t *req;
++        castle_callback *callback;
++        void *data;
++
++        req      = reqs + i;
++        callback = callbacks ? &callbacks[i] : NULL;
++        data     = datas     ? datas[i]      : NULL;
++
++        printf("%s: i=%d reqs_count=%d tag=%d\n",
++                __FUNCTION__, i, reqs_count, req->tag);
++//        assert(req->tag < 15);
++
++        if (req->tag == CASTLE_RING_REPLACE)
++            castle_ioctl_request_send(conn, req, callback, &data, 1);
++        else
++            castle_old_request_send(conn, req, callback, &data, 1);
++
++        i++;
++    }*/
++}
++
+ static void castle_blocking_callback(castle_connection *conn __attribute__((unused)),
+                                     castle_response_t *resp, void *data)
+ {
+diff --git a/castle_public.h b/castle_public.h
+--- a/castle_public.h
++++ b/castle_public.h
+@@ -645,8 +645,9 @@
+ #define CASTLE_STATEFUL_OPS 512                             /**< Must be adjusted along with
+                                                                  CASTLE_RING_PAGES.             */
+ 
+-#define CASTLE_IOCTL_POKE_RING 2
+-#define CASTLE_IOCTL_WAIT 3
++#define CASTLE_IOCTL_POKE_RING          2
++//#define CASTLE_IOCTL_WAIT               3                 /**< Unused.                        */
++#define CASTLE_IOCTL_REQUEST            4                   /**< Synchronously do a request.    */
+ 
+ #define CASTLE_RING_REPLACE 1
+ #define CASTLE_RING_BIG_PUT 2
+@@ -764,6 +765,13 @@
+     void                     *buffer_ptr;
+ } castle_request_put_chunk_t;
+ 
++typedef struct castle_response {
++    uint32_t                 call_id;
++    uint32_t                 err;
++    uint64_t                 length;
++    castle_interface_token_t token;
++} castle_response_t;
++
+ typedef struct castle_request {
+     uint32_t    call_id;
+     uint32_t    tag;
+@@ -787,6 +795,7 @@
+         castle_request_iter_finish_t        iter_finish;
+     };
+     uint8_t     flags;                      /**< Flags affecting op, see CASTLE_RING_FLAGs.     */
++    struct castle_response  resp;           /**< For from_ioctl.                                */
+ } castle_request_t;
+ 
+ /**
+@@ -799,13 +808,6 @@
+     CASTLE_RING_FLAG_ITER_NO_VALUES         /**< Iterator to return only keys, not values.      */
+ };
+ 
+-typedef struct castle_response {
+-    uint32_t                 call_id;
+-    uint32_t                 err;
+-    uint64_t                 length;
+-    castle_interface_token_t token;
+-} castle_response_t;
+-
+ /* Value types used in struct castle_iter_val. */
+ enum {
+     CASTLE_VALUE_TYPE_INVALID         = 0,

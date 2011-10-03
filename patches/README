@@ -15,3 +15,10 @@ Makes castle_btree_read_process() return INVAL_VAL_TUP for all requests.
 __castle_btree_submit() may still do IO but this should still be minimal.
 Useful for testing interface performance.
 Consider running perf_get with --no-check-errors, e.g. /opt/acunu/tests/fs-tests.hg/perf_get --collection 0x0 --key-type ascending --value-size 4 --iterations 1 --batch-size 999999999 --reuse-buffer-count 2048 --output /dev/null --no-check-errors
+
+
+INTERFACE-fastpath_requests.fs.hg.patch
+INTERFACE-fastpath_requests.libcastle.hg.patch
+===
+Implements an ioctl()-based interface for puts that avoids using the shared ring.
+No other special changes required.

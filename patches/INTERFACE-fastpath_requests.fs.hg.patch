@@ -1,0 +1,309 @@
+diff --git a/kernel/castle_back.c b/kernel/castle_back.c
+--- a/kernel/castle_back.c
++++ b/kernel/castle_back.c
+@@ -113,6 +113,9 @@
+     struct work_struct               work;
+     int                              cpu;           /**< CPU id for this op                 */
+     int                              cpu_index;     /**< CPU index for this op              */
++    castle_request_t                *from_ioctl;    /**< Backpointer to req structure.      */
++    int                              ioctl_finished;/**< When async ioctl complete.         */
++    wait_queue_head_t                ioctl_wait;    /**< ioctl wait queue.                  */
+ 
+     castle_request_t                 req;           /**< Contains call_id etc.              */
+     struct castle_back_conn         *conn;
+@@ -922,37 +925,51 @@
+                              castle_interface_token_t token,
+                              uint64_t length)
+ {
+-    struct castle_back_conn *conn = op->conn;
+-    castle_back_ring_t *back_ring = &conn->back_ring;
+-    castle_response_t resp;
+-    int notify;
+-
+-    resp.call_id = op->req.call_id;
+-    resp.err = err;
+-    resp.token = token;
+-    resp.length = length;
+-
+-    debug("castle_back_reply op=%p, call_id=%d, err=%d, token=0x%x, length=%llu\n",
+-        op, op->req.call_id, err, token, length);
+-
+-    spin_lock(&conn->response_lock);
+-
+-    memcpy(RING_GET_RESPONSE(back_ring, back_ring->rsp_prod_pvt), &resp, sizeof(resp));
+-    back_ring->rsp_prod_pvt++;
+-
+-    RING_PUSH_RESPONSES_AND_CHECK_NOTIFY(back_ring, notify);
+-
+-    /* Put op at the back of the freelist. */
+-    list_add_tail(&op->list, &conn->free_ops);
+-
+-    spin_unlock(&conn->response_lock);
+-
+-    /* @TODO if (notify) ? */
+-    debug(">>>notifying user\n");
+-    set_bit(CASTLE_BACK_CONN_NOTIFY_BIT, &conn->flags);
+-    wake_up(&conn->wait);
+-
+-    castle_back_conn_put(conn);
++    if (op->from_ioctl)
++    {
++        op->from_ioctl->resp.err     = err;
++        op->from_ioctl->resp.token   = token;
++        op->from_ioctl->resp.length  = length;
++        op->from_ioctl->resp.call_id = op->req.call_id;
++
++        /* Wake up in case we went async. */
++        op->ioctl_finished = 1;
++        wake_up(&op->ioctl_wait);
++    }
++    else
++    {
++        struct castle_back_conn *conn = op->conn;
++        castle_back_ring_t *back_ring = &conn->back_ring;
++        castle_response_t resp;
++        int notify;
++
++        resp.call_id = op->req.call_id;
++        resp.err = err;
++        resp.token = token;
++        resp.length = length;
++
++        debug("castle_back_reply op=%p, call_id=%d, err=%d, token=0x%x, length=%llu\n",
++            op, op->req.call_id, err, token, length);
++
++        spin_lock(&conn->response_lock);
++
++        memcpy(RING_GET_RESPONSE(back_ring, back_ring->rsp_prod_pvt), &resp, sizeof(resp));
++        back_ring->rsp_prod_pvt++;
++
++        RING_PUSH_RESPONSES_AND_CHECK_NOTIFY(back_ring, notify);
++
++        /* Put op at the back of the freelist. */
++        list_add_tail(&op->list, &conn->free_ops);
++
++        spin_unlock(&conn->response_lock);
++
++        /* @TODO if (notify) ? */
++        debug(">>>notifying user\n");
++        set_bit(CASTLE_BACK_CONN_NOTIFY_BIT, &conn->flags);
++        wake_up(&conn->wait);
++
++        castle_back_conn_put(conn);
++    }
+ 
+     return 0;
+ }
+@@ -3250,6 +3267,71 @@
+         return stateful_op->cpu_index;
+ }
+ 
++static void castle_back_ioctl_request_process(struct castle_back_conn *conn,
++                                              struct castle_back_op *op)
++{
++    CVT_INVALID_INIT(op->replace.cvt);
++
++    if (op->req.tag == CASTLE_RING_REPLACE)
++    {
++//        castle_printk(LOG_DEVEL, "%s: tag == CASTLE_RING_REPLACE\n", __FUNCTION__);
++        INIT_WORK(&op->work, castle_back_replace, op);
++        castle_back_replace(op);
++    }
++    else
++    {
++        /* Fail all other requests. */
++        op->req.resp.err = -EINVAL;
++        op->ioctl_finished = 1;
++    }
++
++    /* Wait for ioctl_finished if we did go asynchronous. */
++    wait_event(op->ioctl_wait, op->ioctl_finished == 1);
++
++    spin_lock(&conn->response_lock);
++    list_add_tail(&op->list, &conn->free_ops);
++    spin_unlock(&conn->response_lock);
++
++    castle_back_conn_put(conn);
++}
++
++/**
++ * Entry-point for processing a synchronous user request ioctl.
++ */
++static void castle_back_request_ioctl(struct castle_back_conn *conn, unsigned long arg)
++{
++    void __user *argp = (void __user *)arg;
++    castle_request_t *req = argp;
++    struct castle_back_op *op;
++
++    spin_lock(&conn->response_lock);
++    if (list_empty(&conn->free_ops))
++    {
++        WARN_ON(1);
++        spin_unlock(&conn->response_lock);
++
++        return;
++    }
++    op = list_entry(conn->free_ops.next, struct castle_back_op, list);
++    list_del(&op->list);
++    spin_unlock(&conn->response_lock);
++
++    op->buf        = NULL;
++    op->from_ioctl = req;
++    op->cpu        = 0;
++    op->cpu_index  = 0;
++    init_waitqueue_head(&op->ioctl_wait);
++//    castle_printk(LOG_DEVEL, "%s: op=%p from_ioctl=%p ioctl_wait=%p\n",
++//            __FUNCTION__, op, op->from_ioctl, op->ioctl_wait);
++    memcpy(&op->req, req, sizeof(castle_request_t));
++//    castle_printk(LOG_DEVEL, "%s: req->tag=%d req->replace.collection_id=%d op->req.tag=%d op->req.replace.collection_id=%d\n",
++//            __FUNCTION__, req->tag, req->replace.collection_id, op->req.tag, op->req.replace.collection_id);
++
++    castle_back_conn_get(conn);
++
++    castle_back_ioctl_request_process(conn, op);
++}
++
+ /**
+  * Queue request on key-hash specified CPU with appropriate op function.
+  *
+@@ -3454,6 +3536,7 @@
+             spin_unlock(&conn->response_lock);
+ 
+             op->buf = NULL;
++            op->from_ioctl = NULL;
+             memcpy(&op->req, RING_GET_REQUEST(back_ring, cons), sizeof(castle_request_t));
+ 
+             back_ring->req_cons++;
+@@ -3507,6 +3590,10 @@
+             castle_wake_up_task(conn->work_thread, 1 /*inhibit_cs*/);
+             break;
+ 
++        case CASTLE_IOCTL_REQUEST:
++            castle_back_request_ioctl(conn, arg);
++            break;
++
+         default:
+             return -ENOIOCTLCMD;
+     }
+diff --git a/kernel/castle_da.c b/kernel/castle_da.c
+--- a/kernel/castle_da.c
++++ b/kernel/castle_da.c
+@@ -9445,7 +9445,7 @@
+  *
+  * WARNING: Caller must hold c_bvec's wait queue lock.
+  */
+-static void castle_da_bvec_queue(struct castle_double_array *da, c_bvec_t *c_bvec)
++static void USED castle_da_bvec_queue(struct castle_double_array *da, c_bvec_t *c_bvec)
+ {
+     struct castle_da_io_wait_queue *wq = &da->ios_waiting[c_bvec->cpu_index];
+ 
+@@ -10352,7 +10352,7 @@
+  */
+ void castle_double_array_queue(c_bvec_t *c_bvec)
+ {
+-    struct castle_da_io_wait_queue *wq;
++//    struct castle_da_io_wait_queue *wq;
+     struct castle_double_array *da = castle_da_ptr_get(c_bvec->c_bio->attachment);
+ 
+     BUG_ON(c_bvec_data_dir(c_bvec) != WRITE);
+@@ -10360,24 +10360,24 @@
+     BUG_ON(atomic_read(&c_bvec->reserv_nodes) != 0);
+ 
+     /* Write requests only accepted if inserts enabled and no queued writes. */
+-    wq = &da->ios_waiting[c_bvec->cpu_index];
+-    spin_lock(&wq->lock);
+-    if (!test_bit(CASTLE_DA_INSERTS_DISABLED, &da->flags) && list_empty(&wq->list))
+-    {
++//    wq = &da->ios_waiting[c_bvec->cpu_index];
++//    spin_lock(&wq->lock);
++//    if (!test_bit(CASTLE_DA_INSERTS_DISABLED, &da->flags) && list_empty(&wq->list))
++//    {
+         /* Inserts enabled, no pending IOs.  Schedule write immediately. */
+-        spin_unlock(&wq->lock);
++//        spin_unlock(&wq->lock);
+         castle_da_reserve(da, c_bvec);
+-    }
+-    else
+-    {
++//    }
++//    else
++//    {
+         /* Inserts disabled or other pending write IOs - queue this request.
+          *
+          * Most likely inserts are disabled.  In the case that there are pending
+          * write IOs and inserts enabled we're racing with an already initiated
+          * queue kick so there's no need to manually do one now. */
+-        castle_da_bvec_queue(da, c_bvec);
+-        spin_unlock(&wq->lock);
+-    }
++//        castle_da_bvec_queue(da, c_bvec);
++//        spin_unlock(&wq->lock);
++//    }
+ }
+ 
+ /**************************************/
+diff --git a/kernel/castle_public.h b/kernel/castle_public.h
+--- a/kernel/castle_public.h
++++ b/kernel/castle_public.h
+@@ -647,8 +647,9 @@
+ #define CASTLE_STATEFUL_OPS 512                             /**< Must be adjusted along with
+                                                                  CASTLE_RING_PAGES.             */
+ 
+-#define CASTLE_IOCTL_POKE_RING 2
+-#define CASTLE_IOCTL_WAIT 3
++#define CASTLE_IOCTL_POKE_RING          2
++//#define CASTLE_IOCTL_WAIT               3                 /**< Unused.                        */
++#define CASTLE_IOCTL_REQUEST            4                   /**< Synchronously do a request.    */
+ 
+ #define CASTLE_RING_REPLACE 1
+ #define CASTLE_RING_BIG_PUT 2
+@@ -766,6 +767,13 @@
+     void                     *buffer_ptr;
+ } castle_request_put_chunk_t;
+ 
++typedef struct castle_response {
++    uint32_t                 call_id;
++    uint32_t                 err;
++    uint64_t                 length;
++    castle_interface_token_t token;
++} castle_response_t;
++
+ typedef struct castle_request {
+     uint32_t    call_id;
+     uint32_t    tag;
+@@ -789,6 +797,7 @@
+         castle_request_iter_finish_t        iter_finish;
+     };
+     uint8_t     flags;                      /**< Flags affecting op, see CASTLE_RING_FLAGs.     */
++    struct castle_response  resp;           /**< For from_ioctl.                                */
+ } castle_request_t;
+ 
+ /**
+@@ -801,13 +810,6 @@
+     CASTLE_RING_FLAG_ITER_NO_VALUES         /**< Iterator to return only keys, not values.      */
+ };
+ 
+-typedef struct castle_response {
+-    uint32_t                 call_id;
+-    uint32_t                 err;
+-    uint64_t                 length;
+-    castle_interface_token_t token;
+-} castle_response_t;
+-
+ /* Value types used in struct castle_iter_val. */
+ enum {
+     CASTLE_VALUE_TYPE_INVALID         = 0,
+diff --git a/patches/README b/patches/README
+--- a/patches/README
++++ b/patches/README
+@@ -15,3 +15,10 @@
+ __castle_btree_submit() may still do IO but this should still be minimal.
+ Useful for testing interface performance.
+ Consider running perf_get with --no-check-errors, e.g. /opt/acunu/tests/fs-tests.hg/perf_get --collection 0x0 --key-type ascending --value-size 4 --iterations 1 --batch-size 999999999 --reuse-buffer-count 2048 --output /dev/null --no-check-errors
++
++
++INTERFACE-fastpath_requests.fs.hg.patch
++INTERFACE-fastpath_requests.libcastle.hg.patch
++===
++Implements an ioctl()-based interface for puts that avoids using the shared ring.
++No other special changes required.
