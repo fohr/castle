@@ -5049,6 +5049,7 @@ static int castle_da_merge_init(struct castle_da_merge *merge, void *unused)
     int i, j, ret;
     uint32_t nr_non_drain_exts;
     tree_seq_t out_tree_data_age;
+    c_thread_id_t thread_id;
 
     debug("Merging Trees:\n");
     for (i=0; i<nr_trees; i++)
@@ -5163,6 +5164,19 @@ deser_done:
     da->levels[merge->out_tree->level].nr_output_trees++;
 
     write_unlock(&da->lock);
+
+    /* If the merge is getting de-serialised for golden nugget, create a thread for it. */
+    if (merge->serdes.des && castle_golden_nugget && (merge->level == 2))
+    {
+        castle_merge_thread_create(&thread_id);
+        if (THREAD_ID_INVAL(thread_id))
+        {
+            castle_printk(LOG_USERINFO, "Failed to create thread for the merge: %u\n", merge->id);
+            goto error_out;
+        }
+
+        BUG_ON(castle_merge_thread_attach(merge->id, thread_id));
+    }
 
     castle_sysfs_ct_add(merge->out_tree);
     if (castle_golden_nugget && merge->level != 1)
