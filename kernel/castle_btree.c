@@ -264,12 +264,12 @@ void castle_btree_lub_find(struct castle_btree_node *node,
     //if(key_lub)
     //{
     //    castle_printk(LOG_DEBUG, "%s::node %p, key_lub : ", __FUNCTION__, node);
-    //    vl_bkey_print(LOG_DEBUG, key_lub);
+    //    btree->key_print(LOG_DEBUG, key_lub);
     //}
     //if(key)
     //{
     //    castle_printk(LOG_DEBUG, "%s::node %p, key : ", __FUNCTION__, node);
-    //    vl_bkey_print(LOG_DEBUG, key);
+    //    btree->key_print(LOG_DEBUG, key);
     //}
     /* Return the indices */
     if(lub_idx_p) *lub_idx_p = lub_idx;
@@ -1879,7 +1879,7 @@ void castle_iter_parent_key_set(c_iter_t *iter, void *key)
     struct castle_btree_type *btree = castle_btree_type_get(iter->tree->btree_type);
 #ifdef DEBUG
     iter_debug("iter %p key: ", iter);
-    vl_bkey_print(LOG_DEBUG, key);
+    btree->key_print(LOG_DEBUG, key);
 #endif
     if (iter->parent_key)
         btree->key_dealloc(iter->parent_key);
@@ -2166,10 +2166,10 @@ static int __castle_btree_iter_path_traverse(c_iter_t *c_iter)
             cep2str(c_iter->tree->root_node), c_iter->version);
     iter_debug("iter %p, node %p, parent_key: ", c_iter, node);
     if (c_iter->parent_key)
-        vl_bkey_print(LOG_DEBUG, c_iter->parent_key);
+        btree->key_print(LOG_DEBUG, c_iter->parent_key);
     iter_debug("iter %p, node %p, next_key: ", c_iter, node);
     if (c_iter->next_key.key)
-        vl_bkey_print(LOG_DEBUG, c_iter->next_key.key);
+        btree->key_print(LOG_DEBUG, c_iter->next_key.key);
 #endif
     if(index == -1)
     {

@@ -381,10 +381,15 @@ static void castle_vlba_tree_key_dealloc(void *keyv)
     castle_object_btree_key_free(keyv);
 }
 
-static uint32_t castle_vlba_tree_key_hash(const void *keyv, uint32_t seed) {
+static uint32_t castle_vlba_tree_key_hash(const void *keyv, uint32_t seed)
+{
     const vlba_key_t *key = keyv;
-
     return murmur_hash_32(key->_key, key->length, seed);
+}
+
+static void castle_vlba_tree_key_print(int level, const void *key)
+{
+    vl_bkey_print(level, key);
 }
 
 static int castle_vlba_tree_entry_get(struct castle_btree_node *node,
@@ -810,6 +815,7 @@ struct castle_btree_type castle_vlba_tree = {
     .key_hc_next    = castle_vlba_tree_key_hc_next,
     .key_dealloc    = castle_vlba_tree_key_dealloc,
     .key_hash       = castle_vlba_tree_key_hash,
+    .key_print      = castle_vlba_tree_key_print,
     .entry_get      = castle_vlba_tree_entry_get,
     .entry_add      = castle_vlba_tree_entry_add,
     .entry_replace  = castle_vlba_tree_entry_replace,

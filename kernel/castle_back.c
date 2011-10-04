@@ -1970,10 +1970,10 @@ static void castle_back_iter_start(void *data)
 
 #ifdef DEBUG
     debug_iter("start_key: \n");
-    vl_okey_print(LOG_DEBUG, start_key);
+    vl_bkey_print(LOG_DEBUG, start_key);
 
     debug_iter("end_key: \n");
-    vl_okey_print(LOG_DEBUG, end_key);
+    vl_bkey_print(LOG_DEBUG, end_key);
 #endif
 
     stateful_op->tag = CASTLE_RING_ITER_START;
@@ -2274,10 +2274,10 @@ static void __castle_back_iter_next(void *data)
 
 #ifdef DEBUG
     debug_iter("iter_next start_key\n");
-    vl_okey_print(LOG_DEBUG, iterator->start_okey);
+    vl_bkey_print(LOG_DEBUG, iterator->start_key);
 
     debug_iter("iter_next end_key\n");
-    vl_okey_print(LOG_DEBUG, iterator->end_okey);
+    vl_bkey_print(LOG_DEBUG, iterator->end_key);
 #endif
 
     /* if we have a saved key and value from the last call, add them to the buffer */
@@ -2772,7 +2772,7 @@ static void castle_back_big_put(void *data)
 
     #ifdef DEBUG
     debug("key: \n");
-    vl_okey_print(LOG_DEBUG, key);
+    vl_bkey_print(LOG_DEBUG, key);
     #endif
 
     /* Initialize stateful op. */
@@ -3100,7 +3100,7 @@ static void castle_back_big_get(void *data)
 
     #ifdef DEBUG
     debug_iter("key: \n");
-    vl_okey_print(LOG_DEBUG, key);
+    vl_bkey_print(LOG_DEBUG, key);
     #endif
 
     stateful_op->pull.key = key;

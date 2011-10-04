@@ -3841,7 +3841,7 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
 
             debug("%s::replacing preadoption link with real link.("cep_fmt_str"->"cep_fmt_str")\n",
                     __FUNCTION__, cep2str(level->node_c2b->cep), cep2str(parent_node_c2b->cep));
-            //vl_bkey_print(LOG_DEBUG, key);
+            //btree->key_print(LOG_DEBUG, key);
 
             btree->entry_replace(parent_node, parent_node->used - 1, key, node->version, node_cvt);
             write_unlock_c2b(parent_node_c2b);
@@ -4672,10 +4672,10 @@ static void castle_da_merge_new_partition_activate(struct castle_da_merge *merge
     BUG_ON(!merge->new_redirection_partition.node_c2b);
 
     /* == activate redirection partition key == */
-    castle_printk(LOG_DEBUG, "%s::[da %d level %d] activating partition at " cep_fmt_str", key = ",
-            __FUNCTION__, merge->da->id, merge->level,
-            cep2str(merge->new_redirection_partition.node_c2b->cep));
-    vl_bkey_print(LOG_DEBUG, (c_vl_bkey_t *)merge->new_redirection_partition.key);
+    debug("%s::[da %d level %d] activating partition at " cep_fmt_str", key = ",
+          __FUNCTION__, merge->da->id, merge->level,
+          cep2str(merge->new_redirection_partition.node_c2b->cep));
+    //btree->key_print(LOG_DEBUG, merge->new_redirection_partition.key);
 
     write_lock(&merge->da->lock);
     if(!merge->queriable_out_tree)

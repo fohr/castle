@@ -616,36 +616,12 @@ void skb_print(struct sk_buff *skb)
     castle_printk(LOG_DEBUG, "\n");
 }
 
-#if 0
-void vl_key_print(c_printk_level_t level, c_vl_key_t *vl_key)
-{
-    castle_printk(level, " key len=%d: ", vl_key->length);
-    print_hex_dump_bytes("", DUMP_PREFIX_NONE, vl_key->key, vl_key->length);
-}
-
-EXPORT_SYMBOL(vl_okey_print);
-
-void vl_bkey_print(c_printk_level_t level, c_vl_bkey_t *key)
-{
-    c_vl_okey_t *okey;
-
-    okey = castle_object_btree_key_convert(key);
-    if(!okey)
-    {
-        castle_printk(level, "Couldn't convert btree key for printing.\n");
-        return;
-    }
-    castle_printk(level, "Btree key, length=%d\n", key->length);
-    vl_okey_print(level, okey);
-    castle_object_okey_free(okey);
-}
-#endif
 /**
  * Parse vl_okey as a string in form "[dim,dim,...dim]".
  *
  * Suitable for piping straight into castle-cli.
  */
-void vl_bkey_print(c_printk_level_t level, c_vl_bkey_t *key)
+void vl_bkey_print(c_printk_level_t level, const c_vl_bkey_t *key)
 {
     int i, j;
     static char _buf[1024];

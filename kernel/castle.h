@@ -899,6 +899,8 @@ struct castle_btree_type {
                                  associated with it                     */
     uint32_t (*key_hash)      (const void *key, uint32_t seed);
                               /* Get hash of key with seed              */
+    void     (*key_print)     (int level, const void *key);
+                              /* Print the key with log level           */
     int      (*entry_get)     (struct castle_btree_node *node,
                                int                       idx,
                                void                    **key_p,

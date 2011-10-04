@@ -101,7 +101,7 @@ static int castle_objects_rq_iter_prep_next(castle_object_iterator_t *iter)
 
 #ifdef DEBUG
             debug("Skipping to:\n");
-            vl_bkey_print(next_key);
+            iter->btree->key_print(next_key);
 #endif
             castle_da_rq_iter.skip(&iter->da_rq_iter, next_key);
         }
@@ -180,11 +180,9 @@ static void castle_objects_rq_iter_init(castle_object_iterator_t *iter)
     iter->completed     = 0;
 #ifdef DEBUG
     castle_printk(LOG_DEBUG, "====================== RQ start keys =======================\n");
-    vl_okey_print(iter->start_okey);
-    vl_bkey_print(iter->start_bkey);
+    iter->btree->key_print(iter->start_key);
     castle_printk(LOG_DEBUG, "======================= RQ end keys ========================\n");
-    vl_okey_print(iter->end_okey);
-    vl_bkey_print(iter->end_bkey);
+    iter->btree->key_print(iter->end_key);
     castle_printk(LOG_DEBUG, "============================================================\n");
 #endif
 
