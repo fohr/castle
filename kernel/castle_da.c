@@ -99,7 +99,7 @@ int                             castle_rwct_checkpoint_frequency = 10;  /**< Num
 module_param(castle_rwct_checkpoint_frequency, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
 MODULE_PARM_DESC(castle_rwct_checkpoint_frequency, "Number checkpoints before RWCTs are promoted.");
 
-static int castle_golden_nugget = 0;
+static int castle_golden_nugget = 1;
 
 static struct
 {
@@ -3015,6 +3015,7 @@ __again:
                                   /* add a growth safety margin */
                                   ((MERGE_CHECKPOINTABLE(merge) ?
                                       (MERGE_OUTPUT_TREE_GROWTH_RATE) : 0)),
+                              (!data_size)?0:
                               CHUNK(data_size) +
                                   /* add a growth safety margin */
                                   ((MERGE_CHECKPOINTABLE(merge) ?

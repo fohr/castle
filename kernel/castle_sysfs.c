@@ -1255,7 +1255,10 @@ static ssize_t merge_output_dext_show(struct kobject *kobj,
 {
     struct castle_da_merge *merge = container_of(kobj, struct castle_da_merge, kobj);
 
-    return sprintf(buf, "0x%llx\n", merge->out_tree->data_ext_free.ext_id);
+    if (!EXT_ID_INVAL(merge->out_tree->data_ext_free.ext_id))
+        return sprintf(buf, "0x%llx\n", merge->out_tree->data_ext_free.ext_id);
+
+    return sprintf(buf, "\n");
 }
 
 static struct castle_sysfs_entry merge_in_trees =
