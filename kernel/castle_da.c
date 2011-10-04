@@ -1865,7 +1865,7 @@ static void castle_ct_merged_iter_init(c_merged_iter_t *iter,
     iter->async_iter.iter_type = &castle_ct_merged_iter;
     iter->iter_running = 0;
     iter->rb_root = RB_ROOT;
-    iter->iterators = castle_malloc(iter->nr_iters * sizeof(struct component_iterator), GFP_KERNEL);
+    iter->iterators = castle_alloc(iter->nr_iters * sizeof(struct component_iterator));
     if(!iter->iterators)
     {
         castle_printk(LOG_WARN, "Failed to allocate memory for merged iterator.\n");
