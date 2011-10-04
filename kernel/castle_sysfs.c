@@ -941,17 +941,10 @@ static ssize_t ct_size_show(struct kobject *kobj,
         sprintf(buf, "Item Count: %lu\n", atomic64_read(&ct->item_count));
 
     sprintf(buf, "%sReserved Bytes: %llu\n", buf, ct->tree_ext_free.ext_size);
-    sprintf(buf, "%sUsed Bytes: %lu\n", buf, atomic64_read(&ct->tree_ext_free.used));
-
-    /* For input trees, take the current size from merge cep. */
-    if (ct->level >= 2 && test_bit(CASTLE_CT_MERGE_INPUT_BIT, &ct->flags)
-        && !EXT_POS_INVAL(ct->curr_merge_c2b_cep))
-        return sprintf(buf, "%sCurrent Size Bytes: %llu\n",
-                       buf, atomic64_read(&ct->tree_ext_free.used)
-                                    - ct->curr_merge_c2b_cep.offset);
+    sprintf(buf, "%sUsed Bytes: %lu\n", buf, atomic64_read(&ct->nr_bytes));
 
     return sprintf(buf, "%sCurrent Size Bytes: %lu\n", buf,
-                        atomic64_read(&ct->tree_ext_free.used));
+                        atomic64_read(&ct->nr_bytes) - atomic64_read(&ct->nr_drained_bytes));
 }
 
 static ssize_t ct_merge_state_show(struct kobject *kobj,
@@ -1008,6 +1001,7 @@ static struct kobj_type castle_ct_ktype = {
     .default_attrs  = castle_ct_attrs,
 };
 
+#define DONT_SHOW_T0
 /**
  * Add component tree to the sysfs in vertree directory.
  */
@@ -1015,8 +1009,10 @@ int castle_sysfs_ct_add(struct castle_component_tree *ct)
 {
     int ret;
 
+#ifdef DONT_SHOW_T0
     if (ct->level < 2)
         return 0;
+#endif
 
     /* Add a directory for list of arrays. */
     memset(&ct->kobj, 0, sizeof(struct kobject));
@@ -1032,8 +1028,10 @@ int castle_sysfs_ct_add(struct castle_component_tree *ct)
 
 void castle_sysfs_ct_del(struct castle_component_tree *ct)
 {
+#ifdef DONT_SHOW_T0
     if (ct->level < 2)
         return;
+#endif
 
     kobject_remove_wait(&ct->kobj);
 }

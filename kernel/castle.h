@@ -989,6 +989,15 @@ struct castle_component_tree {
     atomic_t            ref_count;
     atomic_t            write_ref_count;
     atomic64_t          item_count;        /**< Number of items in the tree.                    */
+    atomic64_t          nr_bytes;          /**< Size of B-Tree - includes keys and inline values
+                                                but not B-Tree overhead and empty space in Tree.
+                                                So, it doesn't add upto space occupied by all
+                                                B-Tree nodes. This would be good/more accurate
+                                                way to report B-Tree size that GN cares.        */
+    atomic64_t          nr_drained_bytes;  /**< Number of bytes drained from the tree, during
+                                                merge. Measurement units are same as nr_bytes.  */
+    uint64_t            chkpt_nr_bytes;
+    uint64_t            chkpt_nr_drained_bytes;
     btree_t             btree_type;
     uint8_t             dynamic;           /**< 1 - dynamic modlist btree, 0 - merge result.    */
     struct castle_double_array *da;        /**< DA that this CT belongs to.                     */
@@ -1084,7 +1093,9 @@ struct castle_clist_entry {
     /*        270 */ uint16_t        node_sizes[MAX_BTREE_DEPTH];
     /*        290 */ tree_seq_t      data_age;
     /*        294 */ uint32_t        nr_data_exts;
-    /*        298 */ uint8_t         _unused[214];
+    /*        298 */ uint64_t        nr_bytes;
+    /*        306 */ uint64_t        nr_drained_bytes;
+    /*        314 */ uint8_t         _unused[198];
     /*        512 */
 } PACKED;
 

@@ -446,10 +446,6 @@ static void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
     if (err && CVT_LARGE_OBJECT(cvt))
         castle_extent_free(cvt.cep.ext_id);
 
-    /* Update stats for Data extent stats. */
-    if (!err && CVT_MEDIUM_OBJECT(cvt))
-        castle_data_extent_update(cvt.cep.ext_id, NR_BLOCKS(cvt.length) * C_BLK_SIZE, 1);
-
     /* Release kmalloced memory for inline objects. */
     CVT_INLINE_FREE(cvt);
 
@@ -599,6 +595,9 @@ static int castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
     struct castle_object_replace *replace = c_bvec->c_bio->replace;
     uint64_t nr_chunks;
     castle_user_timestamp_t existing_object_user_timestamp = 0;
+    long entry_size = 0;
+    struct castle_btree_type *btree = castle_btree_type_get(c_bvec->tree->btree_type);
+    c_val_tup_t *new_cvt = &replace->cvt;
 
     /* We should be handling a write (possibly a tombstone write). */
     BUG_ON(c_bvec_data_dir(c_bvec) != WRITE);
@@ -616,8 +615,8 @@ static int castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
 
     if(existing_object_user_timestamp > replace->user_timestamp)
     {
-        replace->cvt = INVAL_VAL_TUP;
-        *cvt = replace->cvt;
+        *new_cvt = INVAL_VAL_TUP;
+        *cvt = *new_cvt;
         castle_printk(LOG_DEVEL, "%s::dropping an insert because it's timestamp (%llu) "
                 "is \"older\" than the timestamp of an existing entry (%llu).\n",
                 __FUNCTION__, replace->user_timestamp, existing_object_user_timestamp);
@@ -626,12 +625,12 @@ static int castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
     }
     /* this object passed the timestamp smell test...proceed with replace. */
 
-    replace->cvt.user_timestamp = replace->user_timestamp;
+    new_cvt->user_timestamp = replace->user_timestamp;
 
     /* Bookkeeping for large objects (about to be inserted into the tree). */
-    if(CVT_LARGE_OBJECT(replace->cvt))
+    if(CVT_LARGE_OBJECT(*new_cvt))
     {
-        if (castle_ct_large_obj_add(replace->cvt.cep.ext_id,
+        if (castle_ct_large_obj_add(new_cvt->cep.ext_id,
                                     replace->value_len,
                                     &c_bvec->tree->large_objs,
                                     &c_bvec->tree->lo_mutex))
@@ -647,13 +646,13 @@ static int castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
 
     /* For counter add operation (which uses ACCUM_ADD_ADD cvt type). Reduce with
        either the previous entry or ancestral entry if either exists. */
-    if(CVT_COUNTER_ACCUM_ADD_ADD(replace->cvt))
+    if(CVT_COUNTER_ACCUM_ADD_ADD(*new_cvt))
     {
         if(!CVT_INVALID(prev_cvt))
-            castle_counter_accumulating_reduce(&replace->cvt, prev_cvt, 0);
+            castle_counter_accumulating_reduce(new_cvt, prev_cvt, 0);
         else
         if(!CVT_INVALID(ancestral_cvt))
-            castle_counter_accumulating_reduce(&replace->cvt, ancestral_cvt, 1);
+            castle_counter_accumulating_reduce(new_cvt, ancestral_cvt, 1);
     }
 
     /* Free the space occupied by large object, if prev_cvt points to a large object. */
@@ -664,7 +663,35 @@ static int castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
        successfully */
     c_bvec->cvt_get = NULL;
     /* Finally set the cvt. */
-    *cvt = replace->cvt;
+    *cvt = *new_cvt;
+
+    /* Update stats. */
+    entry_size = 0;
+
+    /* If this is new key add key length. */
+    if (CVT_INVALID(prev_cvt))
+        entry_size = btree->key_size(c_bvec->key);
+
+    /* Deduct length of previous inline value from tree-size. */
+    if (CVT_INLINE(prev_cvt))
+        entry_size -= prev_cvt.length;
+
+    /* Add length of new inline value to tree-size. */
+    if (CVT_INLINE(*new_cvt))
+        entry_size += new_cvt->length;
+
+    /* Update tree-size. */
+    atomic64_add(entry_size, &c_bvec->tree->nr_bytes);
+
+    /* Deduct length of previous medium sized value from tree-size. */
+    if (CVT_MEDIUM_OBJECT(prev_cvt))
+        castle_data_extent_update(prev_cvt.cep.ext_id,
+                                  NR_BLOCKS(prev_cvt.length) * C_BLK_SIZE, 0);
+
+    /* Add length of new medium sized value to tree-size. */
+    if (CVT_MEDIUM_OBJECT(*new_cvt))
+        castle_data_extent_update(new_cvt->cep.ext_id,
+                                  NR_BLOCKS(new_cvt->length) * C_BLK_SIZE, 1);
 
     FAULT(REPLACE_FAULT);
 
