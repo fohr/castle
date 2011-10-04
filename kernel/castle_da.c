@@ -650,6 +650,8 @@ static void castle_ct_immut_iter_next(c_immut_iter_t *iter,
 
     BUG_ON(atomic64_read(&iter->tree->nr_drained_bytes) > atomic64_read(&iter->tree->nr_bytes));
 
+    merge->nr_bytes += entry_size;
+
     if( (MERGE_CHECKPOINTABLE(merge)) && (CVT_MEDIUM_OBJECT(*cvt_p)) )
             iter->shrinkable_ext_boundary.latest_mo_cep = cvt_p->cep;
 
@@ -909,6 +911,8 @@ static void castle_ct_modlist_iter_next(c_modlist_iter_t *iter,
     atomic64_add(entry_size, &iter->tree->nr_drained_bytes);
 
     BUG_ON(atomic64_read(&iter->tree->nr_drained_bytes) > atomic64_read(&iter->tree->nr_bytes));
+
+    iter->merge->nr_bytes += entry_size;
 }
 
 /**
@@ -4367,6 +4371,9 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
 
     if(!err)
     {
+        /* Should have goen through all input entries. */
+        BUG_ON(merge->nr_bytes != merge->total_nr_bytes);
+
         if(serdes_state > NULL_DAM_SERDES)
         {
             debug("%s::Merge (da id=%d, level=%d) completed; "
@@ -4385,7 +4392,7 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
         {
             struct castle_component_tree *in_ct = merge->in_trees[i];
 
-            castle_printk(LOG_DEVEL, "Deleting input tree of size: %lu - %lu\n",
+            castle_printk(LOG_DEBUG, "Deleting input tree of size: %lu - %lu\n",
                                      atomic64_read(&in_ct->nr_bytes),
                                      atomic64_read(&in_ct->nr_drained_bytes));
             BUG_ON(atomic64_read(&in_ct->nr_bytes) != atomic64_read(&in_ct->nr_drained_bytes));
@@ -5229,6 +5236,16 @@ deser_done:
         BUG_ON(castle_merge_thread_attach(merge->id, thread_id));
     }
 
+    /* Update merge stats. */
+    merge->total_nr_bytes = merge->nr_bytes = 0;
+    for (i=0; i<merge->nr_trees; i++)
+    {
+        merge->total_nr_bytes   += atomic64_read(&merge->in_trees[i]->nr_bytes);
+        merge->nr_bytes         += atomic64_read(&merge->in_trees[i]->nr_drained_bytes);
+    }
+
+    BUG_ON(merge->nr_bytes > merge->total_nr_bytes);
+
     castle_sysfs_ct_add(merge->out_tree);
     if (castle_golden_nugget && merge->level != 1)
         BUG_ON(castle_sysfs_merge_add(merge));
@@ -5296,6 +5313,8 @@ static struct castle_da_merge* castle_da_merge_alloc(int                        
     merge->last_key             = NULL;
     merge->completing           = 0;
     merge->nr_entries           = 0;
+    merge->total_nr_bytes       = 0;
+    merge->nr_bytes             = 0;
     merge->large_chunks         = 0;
     merge->is_new_key           = 1;
 

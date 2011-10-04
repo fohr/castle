@@ -1231,7 +1231,8 @@ static ssize_t merge_progress_show(struct kobject *kobj,
 {
     struct castle_da_merge *merge = container_of(kobj, struct castle_da_merge, kobj);
 
-    return sprintf(buf, "%llu", merge->nr_entries);
+    return sprintf(buf, "%llu %llu %llu", merge->nr_bytes, merge->total_nr_bytes,
+                                          merge->nr_bytes * 100 / merge->total_nr_bytes);
 }
 
 static ssize_t merge_drain_list_show(struct kobject *kobj,
