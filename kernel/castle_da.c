@@ -4810,7 +4810,7 @@ static void castle_da_merge_new_partition_update(struct castle_da_merge *merge,
     }
 }
 
-static int castle_da_merge_unit_do(struct castle_da_merge *merge, uint64_t max_nr_entries)
+static int castle_da_merge_unit_do(struct castle_da_merge *merge, uint64_t max_nr_bytes)
 {
     void *key;
     c_ver_t version;
@@ -4821,8 +4821,8 @@ static int castle_da_merge_unit_do(struct castle_da_merge *merge, uint64_t max_n
     struct timespec ts_start, ts_end;
 #endif
 
-    /* max_nr_entries should point to total number of entries this merge could be done upto. */
-    max_nr_entries += merge->nr_entries;
+    /* max_nr_bytes should point to total number of bytes this merge could be done upto. */
+    max_nr_bytes += merge->nr_bytes;
 
     while (castle_iterator_has_next_sync(&castle_ct_merged_iter, merge->merged_iter))
     {
@@ -4967,7 +4967,7 @@ entry_done:
         castle_perf_debug_getnstimeofday(&ts_end);
 
         /* Abort if we completed the work asked to do. */
-        if (merge->nr_entries > max_nr_entries)
+        if (merge->nr_bytes > max_nr_bytes)
             return EAGAIN;
 
         FAULT(MERGE_FAULT);
@@ -6284,7 +6284,7 @@ static void castle_da_merge_des_check(struct castle_da_merge *merge, struct cast
  *
  * @return non-zero if failure
  */
-static int castle_da_merge_do(struct castle_da_merge *merge, uint64_t nr_entries)
+static int castle_da_merge_do(struct castle_da_merge *merge, uint64_t nr_bytes)
 {
     struct castle_double_array *da = merge->da;
     int level = merge->level;
@@ -6313,10 +6313,10 @@ static int castle_da_merge_do(struct castle_da_merge *merge, uint64_t nr_entries
     }
 
     /* If the work size is 0, complete everything in one shot. */
-    if (nr_entries == 0)
+    if (nr_bytes == 0)
     {
         FOR_EACH_MERGE_TREE(i, merge)
-            nr_entries += atomic64_read(&in_trees[i]->item_count);
+            nr_bytes += atomic64_read(&in_trees[i]->nr_bytes);
     }
 
     /* Do the merge. */
@@ -6348,7 +6348,7 @@ static int castle_da_merge_do(struct castle_da_merge *merge, uint64_t nr_entries
     }
 
     /* Perform the merge work. */
-    ret = castle_da_merge_unit_do(merge, nr_entries);
+    ret = castle_da_merge_unit_do(merge, nr_bytes);
 
 #ifdef CASTLE_PERF_DEBUG
     /* Output & reset cache efficiency stats. */
@@ -6520,7 +6520,7 @@ static int castle_da_merge_run(void *da_p)
     struct castle_component_tree *in_trees[2];
     int level, ignore, ret, nr_units;
     struct castle_da_merge *merge = NULL;
-    uint64_t nr_entries;
+    uint64_t nr_bytes;
     uint32_t nr_data_exts;
     c_ext_id_t *data_exts;
     int i, j, k;
@@ -6630,14 +6630,14 @@ static int castle_da_merge_run(void *da_p)
         }
 
 merge_do:
-        nr_entries = atomic64_read(&in_trees[0]->item_count) + atomic64_read(&in_trees[1]->item_count);
-        BUG_ON(nr_entries == 0);
-        nr_entries = nr_entries / (1 << level);
+        nr_bytes = atomic64_read(&in_trees[0]->nr_bytes) + atomic64_read(&in_trees[1]->nr_bytes);
+        BUG_ON(nr_bytes == 0);
+        nr_bytes = nr_bytes / (1 << level);
 
         nr_units = 0;
         /* Do the merge.  If it fails, retry after 10s (unless it's a merge abort). */
         do {
-            ret = castle_da_merge_do(merge, nr_entries);
+            ret = castle_da_merge_do(merge, nr_bytes);
         } while(ret == EAGAIN);
 
         if (ret == -ESHUTDOWN)
