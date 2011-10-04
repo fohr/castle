@@ -359,7 +359,8 @@ void* castle_ssd_rda_extent_init(c_ext_t *ext,
     state->rda_spec = rda_spec;
     if(rda_type != SSD_ONLY_EXT)
     {
-        state->def_state = castle_def_rda_extent_init(ext, ext_size, alloc_size, castle_get_rda_lvl());
+        state->def_state = castle_def_rda_extent_init(ext, ext_size, alloc_size,
+                                                      castle_ssdrda_to_rda(rda_type));
         if(!state->def_state)
             goto err_out;
     }
@@ -534,8 +535,8 @@ c_rda_spec_t *castle_rda_spec_get(c_rda_type_t rda_type)
     return castle_rda_specs[rda_type];
 }
 
-/* Convert castle_rda_lvl module param to corresponding RDA_N or SSD_RDA_N enum */
-unsigned int castle_get_rda_lvl(void)
+/* Convert castle_rda_lvl module param to corresponding RDA_N rda_type */
+c_rda_type_t castle_get_rda_lvl(void)
 {
     if (castle_rda_lvl == 1)
         return RDA_1;
@@ -546,7 +547,24 @@ unsigned int castle_get_rda_lvl(void)
     }
 }
 
-unsigned int castle_get_ssd_rda_lvl(void)
+/* Convert castle_rda_lvl module param to corresponding SSD_RDA_N rda_type */
+c_rda_type_t castle_get_ssd_rda_lvl(void)
 {
     return (castle_get_rda_lvl() + (SSD_RDA_2 - RDA_1));
+}
+
+/* Convert SSD_RDA_N rda_type to equivalent RDA_N rda_type */
+c_rda_type_t castle_ssdrda_to_rda(c_rda_type_t rda_type)
+{
+    switch (rda_type)
+    {
+        case SSD_RDA_2:
+            return RDA_1;
+            break;
+        case SSD_RDA_3:
+            return RDA_2;
+            break;
+        default:
+            BUG();
+    }
 }
