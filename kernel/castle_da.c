@@ -8352,7 +8352,6 @@ static void __castle_da_merge_writeback(struct castle_da_merge *merge)
         /* make sure extents are valid */
         BUG_ON(EXT_ID_INVAL(cl->internal_ext_free_bs.ext_id));
         BUG_ON(EXT_ID_INVAL(cl->tree_ext_free_bs.ext_id));
-        BUG_ON(EXT_ID_INVAL(cl->data_ext_free_bs.ext_id));
 
         /* make sure serialised extents match live extents */
         BUG_ON(ct->internal_ext_free.ext_id != cl->internal_ext_free_bs.ext_id);
@@ -8382,8 +8381,9 @@ static void __castle_da_merge_writeback(struct castle_da_merge *merge)
 
         debug("%s::    data_ext_free_bs ext_id = %lld.\n",
                 __FUNCTION__, cl->data_ext_free_bs.ext_id);
-        castle_cache_extent_flush_schedule(
-                cl->data_ext_free_bs.ext_id, 0, cl->data_ext_free_bs.used);
+        if (!EXT_ID_INVAL(cl->data_ext_free_bs.ext_id))
+            castle_cache_extent_flush_schedule(cl->data_ext_free_bs.ext_id, 0,
+                                               cl->data_ext_free_bs.used);
 
         /* Writeback data extents. */
         castle_ct_data_exts_writeback(ct, castle_data_exts_maps_store);
