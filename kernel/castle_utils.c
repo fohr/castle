@@ -617,7 +617,7 @@ void skb_print(struct sk_buff *skb)
 }
 
 /**
- * Parse vl_okey as a string in form "[dim,dim,...dim]".
+ * Parse vl_bkey as a string in form "[dim,dim,...dim]".
  *
  * Suitable for piping straight into castle-cli.
  */
@@ -628,38 +628,32 @@ void vl_bkey_print(c_printk_level_t level, const c_vl_bkey_t *key)
     char *buf = _buf;
 
     if (!key || key->length == 0) /* e.g. for big_put */
-    {
         buf = "[null]";
-        goto print_and_exit;
-    }
-    if (key->length == 0xFFFFFFFE)
-    {
+    else if (key->length == 0xFFFFFFFE)
         buf = "[max key]";
-        goto print_and_exit;
-    }
-    if (key->length == 0xFFFFFFFF)
-    {
+    else if (key->length == 0xFFFFFFFF)
         buf = "[inval key]";
-        goto print_and_exit;
-    }
-
-    *buf++ = '[';
-    for(i=0; i<key->nr_dims; i++)
+    else
     {
-        const uint8_t *dim = castle_object_btree_key_dim_get(key, i);
-
-        *buf++ = '0';
-        *buf++ = 'x';
-        for(j=0; j<castle_object_btree_key_dim_length(key, i); j++)
+        *buf++ = '[';
+        for(i = 0; i < key->nr_dims; i++)
         {
-            sprintf(buf, "%.2x", dim[j]);
-            buf += 2;
+            const uint8_t *dim = castle_object_btree_key_dim_get(key, i);
+
+            *buf++ = '0';
+            *buf++ = 'x';
+            for(j = 0; j < castle_object_btree_key_dim_length(key, i); j++)
+            {
+                sprintf(buf, "%.2x", dim[j]);
+                buf += 2;
+            }
+            *buf++ = ',';
         }
-        *buf++ = ',';
+        *(buf-1) = ']';
+        *buf++ = '\0';
+        BUG_ON(buf - _buf > 1024);
     }
-    *(buf-1) = ']';
-    *buf++ = '\0';
-print_and_exit:
+
     castle_printk(level, "%s, len=%d\n", _buf, key->length);
 }
 
