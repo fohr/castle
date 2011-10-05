@@ -298,6 +298,44 @@ static int castle_da_ct_compare(struct castle_component_tree *ct1,
     return ret;
 }
 
+/* Update component tree size stats. We do maintain two counters. nr_bytes counter gets updated
+ * during tree creation. nr_drained_bytes gets updated, when the tree is getting merged. */
+int castle_tree_size_stats_update(void                            *key,
+                                  c_val_tup_t                     *cvt_p,
+                                  struct castle_component_tree    *ct,
+                                  int                              op)
+{
+    int entry_size;
+
+    BUG_ON(CVT_INVALID(*cvt_p));
+
+    /* Find key length. */
+    entry_size = castle_btree_type_get(ct->btree_type)->key_size(key);
+
+    /* Find inline value length. Treat all counters of size 16, for the sake of simplicity. */
+    entry_size += CVT_ANY_COUNTER(*cvt_p)? 16: CVT_INLINE_VAL_LENGTH(*cvt_p);
+
+    /* Update tree-size. */
+    switch (op)
+    {
+        case  1: /* Add. */
+            atomic64_add(entry_size, &ct->nr_bytes);
+            break;
+        case -1: /* Deduct. */
+            atomic64_sub(entry_size, &ct->nr_bytes);
+            BUG_ON(0 > atomic64_read(&ct->nr_bytes));
+            break;
+        case  0: /* Drain. */
+            atomic64_add(entry_size, &ct->nr_drained_bytes);
+            BUG_ON(atomic64_read(&ct->nr_drained_bytes) > atomic64_read(&ct->nr_bytes));
+            break;
+        default:
+            BUG();
+    }
+
+    return entry_size;
+}
+
 /**
  * Set DA's growing bit and return previous state.
  *
@@ -621,7 +659,6 @@ static void castle_ct_immut_iter_next(c_immut_iter_t *iter,
 {
     struct castle_da_merge *merge = iter->merge;
     int disabled;
-    long entry_size;
 
     /* Check if we can read from the curr_node. If not move to the next node.
        Make sure that if entries exist, they are not leaf pointers. */
@@ -643,14 +680,8 @@ static void castle_ct_immut_iter_next(c_immut_iter_t *iter,
         return;
 
     /* Update merge stats. */
-    entry_size = iter->btree->key_size(*key_p);
-    if (CVT_INLINE(*cvt_p))
-        entry_size += cvt_p->length;
-    atomic64_add(entry_size, &iter->tree->nr_drained_bytes);
-
-    BUG_ON(atomic64_read(&iter->tree->nr_drained_bytes) > atomic64_read(&iter->tree->nr_bytes));
-
-    merge->nr_bytes += entry_size;
+    merge->nr_bytes += castle_tree_size_stats_update(*key_p, cvt_p, iter->tree,
+                                                      0 /* Drain. */);
 
     if( (MERGE_CHECKPOINTABLE(merge)) && (CVT_MEDIUM_OBJECT(*cvt_p)) )
             iter->shrinkable_ext_boundary.latest_mo_cep = cvt_p->cep;
@@ -899,20 +930,12 @@ static void castle_ct_modlist_iter_next(c_modlist_iter_t *iter,
                                         c_ver_t *version_p,
                                         c_val_tup_t *cvt_p)
 {
-    long entry_size;
-
     castle_ct_modlist_iter_item_get(iter, iter->next_item, key_p, version_p, cvt_p);
     iter->next_item++;
 
     /* Update merge stats. */
-    entry_size = iter->btree->key_size(*key_p);
-    if (CVT_INLINE(*cvt_p))
-        entry_size += cvt_p->length;
-    atomic64_add(entry_size, &iter->tree->nr_drained_bytes);
-
-    BUG_ON(atomic64_read(&iter->tree->nr_drained_bytes) > atomic64_read(&iter->tree->nr_bytes));
-
-    iter->merge->nr_bytes += entry_size;
+    iter->merge->nr_bytes += castle_tree_size_stats_update(*key_p, cvt_p, iter->tree,
+                                                            0 /* Drain. */);
 }
 
 /**
@@ -4372,6 +4395,8 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
     if(!err)
     {
         /* Should have goen through all input entries. */
+        if (merge->nr_bytes != merge->total_nr_bytes)
+            castle_printk(LOG_DEBUG, "merge: %p, %llu, %llu\n", merge, merge->nr_bytes, merge->total_nr_bytes);
         BUG_ON(merge->nr_bytes != merge->total_nr_bytes);
 
         if(serdes_state > NULL_DAM_SERDES)
@@ -4816,7 +4841,6 @@ static int castle_da_merge_unit_do(struct castle_da_merge *merge, uint64_t max_n
     c_ver_t version;
     c_val_tup_t cvt;
     int ret;
-    long entry_size;
 #ifdef CASTLE_PERF_DEBUG
     struct timespec ts_start, ts_end;
 #endif
@@ -4940,11 +4964,7 @@ static int castle_da_merge_unit_do(struct castle_da_merge *merge, uint64_t max_n
         }
 
         /* Update component tree size stats. */
-        entry_size = merge->out_btree->key_size(key);
-        if (CVT_INLINE(cvt))
-            entry_size += cvt.length;
-
-        atomic64_add(entry_size, &merge->out_tree->nr_bytes);
+        castle_tree_size_stats_update(key, &cvt, merge->out_tree, 1 /* Add. */);
 
         /* Try to complete node. */
         castle_perf_debug_getnstimeofday(&ts_start);

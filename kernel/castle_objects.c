@@ -593,8 +593,6 @@ static int castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
     struct castle_object_replace *replace = c_bvec->c_bio->replace;
     uint64_t nr_chunks;
     castle_user_timestamp_t existing_object_user_timestamp = 0;
-    long entry_size = 0;
-    struct castle_btree_type *btree = castle_btree_type_get(c_bvec->tree->btree_type);
     c_val_tup_t *new_cvt = &replace->cvt;
 
     /* We should be handling a write (possibly a tombstone write). */
@@ -664,22 +662,13 @@ static int castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
     *cvt = *new_cvt;
 
     /* Update stats. */
-    entry_size = 0;
 
-    /* If this is new key add key length. */
-    if (CVT_INVALID(prev_cvt))
-        entry_size = btree->key_size(c_bvec->key);
+    /* Add new entry to stats. */
+    castle_tree_size_stats_update(c_bvec->key, new_cvt, c_bvec->tree, 1 /* Add */);
 
-    /* Deduct length of previous inline value from tree-size. */
-    if (CVT_INLINE(prev_cvt))
-        entry_size -= prev_cvt.length;
-
-    /* Add length of new inline value to tree-size. */
-    if (CVT_INLINE(*new_cvt))
-        entry_size += new_cvt->length;
-
-    /* Update tree-size. */
-    atomic64_add(entry_size, &c_bvec->tree->nr_bytes);
+    /* Deduct old entry from stats. No need to deduct key length. */
+    if (!CVT_INVALID(prev_cvt))
+        castle_tree_size_stats_update(c_bvec->key, &prev_cvt, c_bvec->tree, -1 /* Deduct */);
 
     /* Deduct length of previous medium sized value from tree-size. */
     if (CVT_MEDIUM_OBJECT(prev_cvt))

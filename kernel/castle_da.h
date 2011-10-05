@@ -247,4 +247,8 @@ struct castle_component_tree * castle_ct_init(struct castle_component_tree *ct,
 void castle_data_extent_update          (c_ext_id_t     ext_id,
                                          uint64_t       length,
                                          int            to_add);
+int  castle_tree_size_stats_update      (void                            *key,
+                                         c_val_tup_t                     *cvt_p,
+                                         struct castle_component_tree    *ct,
+                                         int                              op);
 #endif /* __CASTLE_DA_H__ */
