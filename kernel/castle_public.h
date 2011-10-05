@@ -9,7 +9,7 @@
 #include <linux/time.h>
 #endif
 
-#define CASTLE_PROTOCOL_VERSION 22 /* last updated by BM */
+#define CASTLE_PROTOCOL_VERSION 23 /* last updated by LT */
 
 #define PACKED               __attribute__((packed))
 
@@ -798,7 +798,8 @@ enum {
     CASTLE_RING_FLAG_NONE = 0x0,            /**< No flags specified.                            */
     CASTLE_RING_FLAG_NO_PREFETCH,           /**< Don't prefetch as part of this request.        */
     CASTLE_RING_FLAG_NO_CACHE,              /**< Don't evict other data to cache this request.  */
-    CASTLE_RING_FLAG_ITER_NO_VALUES         /**< Iterator to return only keys, not values.      */
+    CASTLE_RING_FLAG_ITER_NO_VALUES,        /**< Iterator to return only keys, not values.      */
+    CASTLE_RING_FLAG_ITER_GET_OOL,          /**< Return out-of-line values inline.              */
 };
 
 typedef struct castle_response {

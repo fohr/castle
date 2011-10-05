@@ -1928,9 +1928,9 @@ struct castle_object_get {
     struct castle_cache_block    *data_c2b;
     uint64_t                      data_c2b_length;
     uint64_t                      data_length;
-    int                           first;
-    c_val_tup_t                   cvt;
-    c_vl_bkey_t                  *key;             /**< Key of the value to be replaced.       */
+    int                           first;            /**< First call of _object_iter_continue()? */
+    c_val_tup_t                   cvt;              /**< Describes value (e.g. disk offset).    */
+    c_vl_bkey_t                  *key;              /**< Requested key.                         */
 
     int       (*reply_start)     (struct castle_object_get *get,
                                   int err,
