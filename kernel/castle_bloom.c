@@ -444,6 +444,9 @@ static uint32_t castle_bloom_get_block_id(castle_bloom_t *bf, void *key, uint32_
  * Add a key to the bloom filter
  *
  * @param   btree   The btree type that the key belongs to (used for key_hash)
+ *
+ * @return  0       More space remaining within current bloom chunk
+ * @param   1       Currently bloom chunk filled
  */
 int castle_bloom_add(castle_bloom_t *bf, struct castle_btree_type *btree, void *key)
 {

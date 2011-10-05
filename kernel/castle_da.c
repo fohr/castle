@@ -4894,18 +4894,20 @@ static int castle_da_merge_unit_do(struct castle_da_merge *merge, uint64_t max_n
         }
         if (merge->out_tree->bloom_exists)
         {
-            //TODO@tr do we not have to watch out for repeat keys? if we are reinserting the same
-            //        key but different version, and the current chunk in the bf is just about to
-            //        fill up, then we may get the same key "present" in more than 1 chunk, which
-            //        is poor, but not a deal breaker since the only consequence is a possibly
-            //        higher false positive rate, but it we want to timstamp chunks then we have to
-            //        be careful to prevent the possibility of a timestamp-based FALSE NEGATIVE.
-            //        (this is unlikely to happen because the spillover into the next chunk will be
-            //        for an ancestral key, and for an v-order older key to have a newer timestamp
-            //        than it's children, a lot of other things will probably be broken anyway...
-            //        but nevertheless, this is something to watch out for).
-            if(castle_bloom_add(&merge->out_tree->bloom, merge->out_btree, key))
+            /* Only add this key to the bloom filter if it is a new key. */
+            if (merge->is_new_key
+                    && castle_bloom_add(&merge->out_tree->bloom, merge->out_btree, key))
+                /* Advance partition key if by adding the new key the current
+                 * bloom chunk was completed. */
                 castle_da_merge_new_partition_activate(merge);
+
+            //TODO@tr
+            //        it we want to timstamp chunks then we have to be careful to prevent the
+            //        possibility of a timestamp-based FALSE NEGATIVE.  (this is unlikely to happen
+            //        because the spillover into the next chunk will be for an ancestral key, and
+            //        for an v-order older key to have a newer timestamp than it's children, a lot
+            //        of other things will probably be broken anyway... but nevertheless, this is
+            //        something to watch out for).
         }
         else
             castle_da_merge_new_partition_activate(merge);

@@ -26,19 +26,18 @@ struct castle_da_merge {
     int                           nr_drain_exts;/**< # of data extents that are to be drained.  */
 
     struct castle_component_tree *out_tree;
-    void                         **iters;       /**< iterators for component trees */
+    void                         **iters;       /**< Component Tree iterators.                  */
     c_merged_iter_t              *merged_iter;
     int                           root_depth;
-    c2_block_t                   *last_leaf_node_c2b; /**< Previous node c2b at depth 0. */
-    void                         *last_key;           /**< last_key added to
-                                                           out tree at depth 0. */
+    c2_block_t                   *last_leaf_node_c2b; /**< Last node c2b at depth 0.            */
+    void                         *last_key;           /**< Last key added to out tree, depth 0. */
     int                           completing;
     uint64_t                      nr_entries;
     uint64_t                      total_nr_bytes;
     uint64_t                      nr_bytes;
     uint64_t                      large_chunks;
-    int                           is_new_key;      /**< Is the current key different
-                                                        from last key added to out_tree. */
+    int                           is_new_key;   /**< Is the current key different from the last
+                                                     key added to out_tree.                     */
     struct castle_da_merge_level {
         /* Node we are currently generating, and book-keeping variables about the node. */
         c2_block_t               *node_c2b;
