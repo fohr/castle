@@ -1,6 +1,11 @@
 #ifndef __CASTLE_SYSFS_H__
 #define __CASTLE_SYSFS_H__
 
+#define kobject_poison(_kobj)                                                   \
+do {                                                                            \
+    (_kobj)->ktype = NULL;                                                      \
+} while(0)
+
 int  castle_sysfs_init           (void);
 void castle_sysfs_fini           (void);
 void castle_sysfs_fini_check     (void);

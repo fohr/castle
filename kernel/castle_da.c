@@ -4413,15 +4413,11 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
     }
 
 #ifdef DEBUG
-    castle_printk(LOG_DEVEL, "%s::[da %d level %d] merge ended with err %d, produced out ct seq %d and performed %d partition activations\n",
-        __FUNCTION__,
-        merge->da->id,
-        merge->level,
-        err,
-        merge->out_tree->seq,
-        merge->new_partition_activations);
+    castle_printk(LOG_DEBUG, "%s::[da %d level %d] merge ended with err %d, produced out"
+                             " ct seq %d and performed %d partition activations\n",
+                             __FUNCTION__, merge->da->id, merge->level, err,
+                             merge->out_tree->seq, merge->new_partition_activations);
 #endif
-
 
     if (castle_golden_nugget && merge->level != 1)
         castle_sysfs_merge_del(merge);
@@ -4567,6 +4563,19 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
                     "(da %d, level %d).\n", __FUNCTION__, merge, merge->da->id, merge->level);
         }
 
+        /* We are here either due to 1) merge failure and doing dealloc immediatly or 2) merge
+         * aborted and doing dealloc at the end of module life-time. In both circumstances,
+         * it is valid to reset input trees to non-merge state. */
+        FOR_EACH_MERGE_TREE(i, merge)
+        {
+            struct castle_component_tree *in_ct = merge->in_trees[i];
+
+            in_ct->merge        = NULL;
+            in_ct->merge_id     = INVAL_MERGE_ID;
+            clear_bit(CASTLE_CT_MERGE_INPUT_BIT, &in_ct->flags);
+            clear_bit(CASTLE_CT_PARTIAL_TREE_BIT, &in_ct->flags);
+        }
+
         if (merge_out_tree_retain)
         {
             struct list_head *lh, *tmp;
@@ -4597,11 +4606,17 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
         {
             /* Remove output tree from sysfs. */
             castle_sysfs_ct_del(merge->out_tree);
-            CASTLE_TRANSACTION_BEGIN;
-            write_lock(&merge->da->lock);
-            castle_component_tree_del(merge->da, merge->out_tree);
-            write_unlock(&merge->da->lock);
-            CASTLE_TRANSACTION_END;
+
+            /* Remove output tree from DA, if it is already added. */
+            if (merge->out_tree->da_list.next)
+            {
+                /* Any operations on DA tree lists should be a transaction. */
+                BUG_ON(!CASTLE_IN_TRANSACTION);
+
+                write_lock(&merge->da->lock);
+                castle_component_tree_del(merge->da, merge->out_tree);
+                write_unlock(&merge->da->lock);
+            }
 
             /* Abort (i.e. free) incomplete bloom filter */
             if (merge->out_tree->bloom_exists)
@@ -4625,8 +4640,7 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
                 mutex_unlock(&merge->out_tree->lo_mutex);
 
                 /* don't put the tree - we want the extents kept alive for deserialisation */
-                castle_kfree(merge->out_tree);
-                merge->out_tree=NULL;
+                castle_check_kfree(merge->out_tree);
             }
         }
     }
@@ -5295,12 +5309,6 @@ static int castle_da_merge_init(struct castle_da_merge *merge, void *unused)
                                       nr_non_drain_exts + 1);
     if(!merge->out_tree)
         goto error_out;
-    BUG_ON(TREE_INVAL(merge->out_tree->seq));
-    BUG_ON(TREE_GLOBAL(merge->out_tree->seq));
-    merge->out_tree->internal_ext_free.ext_id = INVAL_EXT_ID;
-    merge->out_tree->tree_ext_free.ext_id = INVAL_EXT_ID;
-    merge->out_tree->data_ext_free.ext_id = INVAL_EXT_ID;
-    INIT_LIST_HEAD(&merge->out_tree->large_objs);
 
     ret = castle_da_merge_extents_alloc(merge);
     if(ret)
@@ -5563,6 +5571,9 @@ static struct castle_da_merge* castle_da_merge_alloc(int                        
     /* Low free space structure. */
     merge->lfs.da = da;
     castle_da_lfs_ct_reset(&merge->lfs);
+
+    /* Poison kobject, so we don't try to free the kobject that is not yet initialised. */
+    kobject_poison(&merge->kobj);
 
     castle_merges_hash_add(merge);
 
@@ -8974,7 +8985,6 @@ int castle_double_array_read(void)
         merge->serdes.mstore_entry = mstore_dmserentry;
 
         /* Recover partially complete output CT */
-        merge->serdes.out_tree = NULL;
         merge->serdes.out_tree = castle_da_ct_unmarshall(NULL,
                                                         &merge->serdes.mstore_entry->out_tree);
         BUG_ON(!merge->serdes.out_tree);
@@ -9302,6 +9312,9 @@ struct castle_component_tree * castle_ct_init(struct castle_component_tree *ct,
     mutex_init(&ct->lo_mutex);
 
     atomic64_set(&ct->max_user_timestamp, 0);
+
+    /* Poison kobject, so we don't try to free the kobject that is not yet initialised. */
+    kobject_poison(&ct->kobj);
 
 #ifdef CASTLE_PERF_DEBUG
     ct->bt_c2bsync_ns            = 0;

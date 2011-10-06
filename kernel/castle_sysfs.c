@@ -1034,7 +1034,8 @@ void castle_sysfs_ct_del(struct castle_component_tree *ct)
         return;
 #endif
 
-    kobject_remove_wait(&ct->kobj);
+    if (ct->kobj.ktype)
+        kobject_remove_wait(&ct->kobj);
 }
 
 /* Definition of Merge threads directory attributes */
@@ -1312,7 +1313,8 @@ int castle_sysfs_merge_add(struct castle_da_merge *merge)
 
 void castle_sysfs_merge_del(struct castle_da_merge *merge)
 {
-    kobject_remove_wait(&merge->kobj);
+    if (merge->kobj.ktype)
+        kobject_remove_wait(&merge->kobj);
 }
 
 /* Definition of slaves sysfs directory attributes */
