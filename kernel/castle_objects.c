@@ -613,7 +613,7 @@ static int castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
     {
         *new_cvt = INVAL_VAL_TUP;
         *cvt = *new_cvt;
-        castle_printk(LOG_DEVEL, "%s::dropping an insert because it's timestamp (%llu) "
+        debug(LOG_DEVEL, "%s::dropping an insert because it's timestamp (%llu) "
                 "is \"older\" than the timestamp of an existing entry (%llu).\n",
                 __FUNCTION__, replace->user_timestamp, existing_object_user_timestamp);
         //TODO@tr record some stats here; increment a drop count?
@@ -872,7 +872,7 @@ int castle_object_replace(struct castle_object_replace *replace,
     int ret;
 
     if(replace->has_user_timestamp)
-        castle_printk(LOG_DEVEL, "%s::user provided timestamp %llu\n", __FUNCTION__, replace->user_timestamp);
+        debug("%s::user provided timestamp %llu\n", __FUNCTION__, replace->user_timestamp);
     else
     {
         //TODO@tr infer timestamp from attachment/version
