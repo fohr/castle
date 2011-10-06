@@ -1420,6 +1420,7 @@ int castle_object_get(struct castle_object_get *get,
     c_bvec->cpu_index       = cpu_index;
     c_bvec->cpu             = castle_double_array_request_cpu(c_bvec->cpu_index);
     c_bvec->ref_get         = castle_object_reference_get;
+    c_bvec->ref_put         = castle_object_reference_release;
     c_bvec->submit_complete = castle_object_get_complete;
     c_bvec->orig_complete   = NULL;
     atomic_set(&c_bvec->reserv_nodes, 0);
@@ -1624,6 +1625,7 @@ int castle_object_pull(struct castle_object_pull *pull,
     c_bvec->cpu_index       = cpu_index;
     c_bvec->cpu             = castle_double_array_request_cpu(c_bvec->cpu_index);
     c_bvec->ref_get         = castle_object_reference_get;
+    c_bvec->ref_put         = castle_object_reference_release;
     c_bvec->submit_complete = castle_object_pull_continue;
     c_bvec->orig_complete   = NULL;
     atomic_set(&c_bvec->reserv_nodes, 0);

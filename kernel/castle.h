@@ -1362,6 +1362,8 @@ typedef struct castle_bio_vec {
         /* Get reference on objects for reads */
         int                       (*ref_get)    (struct castle_bio_vec *,
                                                  c_val_tup_t);
+        /* Put reference on objects for reads, if they are timestamp deprecated */
+        void                      (*ref_put)    (c_val_tup_t);
     };
     /* Completion callback */
     union {

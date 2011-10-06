@@ -10104,6 +10104,54 @@ void castle_da_next_ct_read(c_bvec_t *c_bvec)
 }
 
 /**
+ * Update get->cvt with most up-to-date (according to user-timestamp) instance of an object.
+ *
+ * Return 1 if we're sure that we have the most up-to-date entry in get->cvt; else return 0.
+ */
+int castle_da_ct_read_complete_cvt_timestamp_check(c_bvec_t *c_bvec,
+                                                        c_val_tup_t *cvt,
+                                                        int last_tree)
+{
+    struct castle_object_get *get = c_bvec->c_bio->get;
+    int finished = 0;
+
+    if(CVT_INVALID(*cvt))
+    {
+        BUG_ON(!last_tree);
+        if(!CVT_ANY_COUNTER(get->cvt))
+            *cvt = get->cvt;
+        return 0;
+    }
+
+    //TODO@tr use suspicioun tags to indicate if we can safely terminate
+    //        the query (if get->cvt is non-suspicious candidate, and cvt
+    //        is ancestral, then we can stop)
+    //if(!CVT_INVALID(get->cvt) && !CVT_INVALID(cvt))
+    //    if(!CVT_SUSPICIOUS(get->cvt) && castle_version_is_ancestor(get->cvt.version, cvt.version))
+    //        return 1;
+    //Hmmmm.... cvts don't have a version field, so how can I figure out what the source version is?
+
+    if(!finished)
+    {
+        if(CVT_INVALID(get->cvt))
+        {
+            //printk("%s::[%p] first init\n", __FUNCTION__, c_bvec);
+            get->cvt = *cvt;
+        }
+        else if(!CVT_INVALID(*cvt))
+        {
+            if(cvt->user_timestamp > get->cvt.user_timestamp)
+            {
+                //printk("%s::[%p] found something newer\n", __FUNCTION__, c_bvec);
+                c_bvec->ref_put(get->cvt);
+                get->cvt = *cvt;
+            }
+        }
+    }
+    return finished;
+}
+
+/**
  * Callback for completing a Component Tree read.
  *
  * Arranges to search the next CT in DA if:
@@ -10130,7 +10178,10 @@ static void castle_da_ct_read_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cv
 
     /* No more candidate trees available, callback now. */
     if (!c_bvec->tree)
+    {
+        castle_da_ct_read_complete_cvt_timestamp_check(c_bvec, &cvt, 1);
         goto complete;
+    }
 
     /* Handle counter accumulation. */
     if (!err && CVT_ADD_ALLV_COUNTER(cvt))
@@ -10141,6 +10192,16 @@ static void castle_da_ct_read_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cv
         /* Continue. */
         castle_da_next_ct_read(c_bvec);
         return;
+    }
+    /* Handle timestamps */
+    else if (!err && !CVT_INVALID(cvt))
+    {
+        if(!castle_da_ct_read_complete_cvt_timestamp_check(c_bvec, &cvt, 0))
+        {
+            /* Continue. */
+            castle_da_next_ct_read(c_bvec);
+            return;
+        }
     }
 
     /* No key found, go to the next tree. */
