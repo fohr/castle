@@ -1804,8 +1804,6 @@ static c_val_tup_t castle_ct_merged_iter_timestamp_select(struct component_itera
     struct rb_node *rb_entry;
     struct list_head *l, *t;
 
-    castle_printk(LOG_DEBUG, "%s::start\n", __FUNCTION__);
-
     /* We start with the most recent iter; therefore, we would only change to a different iter if
        another iter has an object with a newer timestamp. Thus, in the event of equal user timestamps,
        the newer iter wins. */
