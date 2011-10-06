@@ -4936,6 +4936,101 @@ static void castle_da_merge_new_partition_update(struct castle_da_merge *merge,
     }
 }
 
+static int castle_da_entry_do(struct castle_da_merge *merge,
+                              void *key,
+                              c_ver_t version,
+                              c_val_tup_t *cvt_p,
+                              uint64_t max_nr_bytes,
+                              cv_nonatomic_stats_t *stats_p)
+{
+    int ret;
+    /* Update merge serialisation state. */
+    if(MERGE_CHECKPOINTABLE(merge))
+        castle_da_merge_serialise(merge);
+
+    /* Add entry to the output btree.
+     *
+     * - Add to level 0 node (and recurse up the tree)
+     * - Update the bloom filter */
+    castle_da_entry_add(merge, 0, key, version, *cvt_p, 0);
+    if(merge->aborting)
+    {
+        castle_printk(LOG_WARN, "%s::[da %d level %d] aborting merge while attempting entry add (WARNING: UNTESTED)\n",
+                __FUNCTION__, merge->da->id, merge->level);
+        return -ESHUTDOWN;
+    }
+    if (merge->da->user_timestamping)
+        atomic64_set(&merge->out_tree->max_user_timestamp,
+                max((uint64_t)atomic64_read(&merge->out_tree->max_user_timestamp),
+                    (uint64_t)cvt_p->user_timestamp));
+
+    if (merge->out_tree->bloom_exists)
+    {
+        /* Only add this key to the bloom filter if it is a new key. */
+        if (merge->is_new_key
+                && castle_bloom_add(&merge->out_tree->bloom, merge->out_btree, key))
+            /* Advance partition key if by adding the new key the current
+             * bloom chunk was completed. */
+            castle_da_merge_new_partition_activate(merge);
+
+        //TODO@tr
+        //        it we want to timstamp chunks then we have to be careful to prevent the
+        //        possibility of a timestamp-based FALSE NEGATIVE.  (this is unlikely to happen
+        //        because the spillover into the next chunk will be for an ancestral key, and
+        //        for an v-order older key to have a newer timestamp than it's children, a lot
+        //        of other things will probably be broken anyway... but nevertheless, this is
+        //        something to watch out for).
+    }
+    else
+        castle_da_merge_new_partition_activate(merge);
+
+    /* Update per-version and merge statistics.
+     * We are starting with merged iterator stats (from above). */
+    merge->nr_entries++;
+    if (merge->level == 1)
+    {
+        /* Live stats to reflect adjustments by castle_da_each_skip(). */
+        castle_version_live_stats_adjust(version, *stats_p);
+
+        /* Key & tombstone inserts have not been accounted for in private
+         * level 1 merge version stats.  Zero any stat adjustments made in
+         * castle_da_each_skip() and perform accounting now. */
+        stats_p->keys = 0;
+        stats_p->tombstones = 0;
+
+        if (CVT_TOMBSTONE(*cvt_p))
+            stats_p->tombstones++;
+        else
+            stats_p->keys++;
+
+        castle_version_private_stats_adjust(version, *stats_p, &merge->version_states);
+    }
+    else
+    {
+        castle_version_live_stats_adjust(version, *stats_p);
+        castle_version_private_stats_adjust(version, *stats_p, &merge->version_states);
+    }
+
+    /* Update component tree size stats. */
+    castle_tree_size_stats_update(key, cvt_p, merge->out_tree, 1 /* Add. */);
+
+    /* Try to complete node. */
+    castle_perf_debug_getnstimeofday(&ts_start);
+    ret = castle_da_nodes_complete(merge);
+    castle_perf_debug_getnstimeofday(&ts_end);
+    castle_perf_debug_bump_ctr(merge->nodes_complete_ns, ts_end, ts_start);
+    if (ret == -ESHUTDOWN)
+    {
+        /* if nodes_complete returned -ESHUTDOWN, merge must have aborted during attempted
+           extent grow */
+        BUG_ON(!merge->aborting);
+        castle_printk(LOG_WARN, "%s::[da %d level %d] aborting merge while doing nodes complete (WARNING: UNTESTED)\n",
+                __FUNCTION__, merge->da->id, merge->level);
+        return -ESHUTDOWN;
+    }
+    return ret;
+}
+
 static int castle_da_merge_unit_do(struct castle_da_merge *merge, uint64_t max_nr_bytes)
 {
     void *key;
@@ -5002,92 +5097,15 @@ static int castle_da_merge_unit_do(struct castle_da_merge *merge, uint64_t max_n
             goto entry_done;
         }
 
-        /* Update merge serialisation state. */
-        if(MERGE_CHECKPOINTABLE(merge))
-            castle_da_merge_serialise(merge);
+        do{
+            ret = castle_da_entry_do(merge, key, version, &cvt, max_nr_bytes, &stats);
 
-        /* Add entry to the output btree.
-         *
-         * - Add to level 0 node (and recurse up the tree)
-         * - Update the bloom filter */
-        castle_da_entry_add(merge, 0, key, version, cvt, 0);
-        if(merge->aborting)
-        {
-            castle_printk(LOG_WARN, "%s::[da %d level %d] aborting merge while attempting entry add (WARNING: UNTESTED)\n",
-                    __FUNCTION__, merge->da->id, merge->level);
-            return -ESHUTDOWN;
-        }
-        if (merge->da->user_timestamping)
-            atomic64_set(&merge->out_tree->max_user_timestamp,
-                MAX_DONT_INC(atomic64_read(&merge->out_tree->max_user_timestamp), cvt.user_timestamp));
+            if (ret == -ESHUTDOWN)
+                return -ESHUTDOWN;
 
-        if (merge->out_tree->bloom_exists)
-        {
-            /* Only add this key to the bloom filter if it is a new key. */
-            if (merge->is_new_key
-                    && castle_bloom_add(&merge->out_tree->bloom, merge->out_btree, key))
-                /* Advance partition key if by adding the new key the current
-                 * bloom chunk was completed. */
-                castle_da_merge_new_partition_activate(merge);
-
-            //TODO@tr
-            //        it we want to timstamp chunks then we have to be careful to prevent the
-            //        possibility of a timestamp-based FALSE NEGATIVE.  (this is unlikely to happen
-            //        because the spillover into the next chunk will be for an ancestral key, and
-            //        for an v-order older key to have a newer timestamp than it's children, a lot
-            //        of other things will probably be broken anyway... but nevertheless, this is
-            //        something to watch out for).
-        }
-        else
-            castle_da_merge_new_partition_activate(merge);
-
-        /* Update per-version and merge statistics.
-         * We are starting with merged iterator stats (from above). */
-        merge->nr_entries++;
-        if (merge->level == 1)
-        {
-            /* Live stats to reflect adjustments by castle_da_each_skip(). */
-            castle_version_live_stats_adjust(version, stats);
-
-            /* Key & tombstone inserts have not been accounted for in private
-             * level 1 merge version stats.  Zero any stat adjustments made in
-             * castle_da_each_skip() and perform accounting now. */
-            stats.keys = 0;
-            stats.tombstones = 0;
-
-            if (CVT_TOMBSTONE(cvt))
-                stats.tombstones++;
-            else
-                stats.keys++;
-
-            castle_version_private_stats_adjust(version, stats, &merge->version_states);
-        }
-        else
-        {
-            castle_version_live_stats_adjust(version, stats);
-            castle_version_private_stats_adjust(version, stats, &merge->version_states);
-        }
-
-        /* Update component tree size stats. */
-        castle_tree_size_stats_update(key, &cvt, merge->out_tree, 1 /* Add. */);
-
-        /* Try to complete node. */
-        castle_perf_debug_getnstimeofday(&ts_start);
-        ret = castle_da_nodes_complete(merge);
-        castle_perf_debug_getnstimeofday(&ts_end);
-        castle_perf_debug_bump_ctr(merge->nodes_complete_ns, ts_end, ts_start);
-        if (ret == -ESHUTDOWN)
-        {
-            /* if nodes_complete returned -ESHUTDOWN, merge must have aborted during attempted
-               extent grow */
-            BUG_ON(!merge->aborting);
-            castle_printk(LOG_WARN, "%s::[da %d level %d] aborting merge while doing nodes complete (WARNING: UNTESTED)\n",
-                    __FUNCTION__, merge->da->id, merge->level);
-            return -ESHUTDOWN;
-        }
-
-        if (ret != EXIT_SUCCESS)
-            goto err_out;
+            if (ret != EXIT_SUCCESS)
+                goto err_out;
+        } while(0);
 
 entry_done:
         castle_perf_debug_getnstimeofday(&ts_start);

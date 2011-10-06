@@ -10,9 +10,6 @@
 
 #define ATOMIC(_i)  ((atomic_t)ATOMIC_INIT(_i))
 
-/* the DONT_INC is a reminder to users, on the dangers of ++/-- ops in a MAX macro! */
-#define MAX_DONT_INC(_a, _b) ((_a)>(_b)?(_a):(_b))
-
 /* Uses RW spinlock for synchronization. Use iterate_exclusive() for exclusive
  * access while iterating over the hash table. */
 #define DEFINE_HASH_TBL(_prefix, _tab, _tab_size, _struct, _list_mbr, _key_t, _key)            \
