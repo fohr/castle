@@ -1768,6 +1768,80 @@ static c_val_tup_t castle_ct_merged_iter_counter_reduce(struct component_iterato
     return accumulator;
 }
 
+/**
+ * Picks the most recently timestamped entry (wrapped into a cvt) from the component iterator
+ * specified and older iterators present in the same_kv list.
+ *
+ * The function uses O(n*log(n)) sort on same_kv list.
+ *
+ * (based on castle_ct_merged_iter_counter_reduce)
+ */
+static c_val_tup_t castle_ct_merged_iter_timestamp_select(struct component_iterator *iter)
+{
+    c_val_tup_t most_recent_object; /* most recent in terms of user timestamp */
+    struct list_head *l, *t;
+    struct rb_root rb_root;
+    struct rb_node **p, *parent, *rb_entry;
+
+    /* We start with the most recent iter; therefore, we would only change to a different iter if
+       another iter has an object with a newer timestamp. Thus, in the event of equal user timestamps,
+       the newer iter wins. */
+    most_recent_object = iter->cached_entry.cvt;
+
+    /* If the list same_kv list is emtpy, return now. */
+    if(list_empty(&iter->same_kv_head))
+        return most_recent_object;
+
+    //TODO@tr: check other iters ct time range to see if it's impossible that we will find
+    //         something newer, and for extra credit, build a new list of iters that may
+    //         have something more recent, then sort/search on that new list.
+
+    /* The same_kv list isn't sorted. Insert sort it. */
+    rb_root = RB_ROOT;
+    list_for_each_safe(l, t, &iter->same_kv_head)
+    {
+        struct component_iterator *current_iter;
+
+        /* Work ot the iterator structure pointer, and delete list entry. */
+        current_iter = list_entry(l, struct component_iterator, same_kv_list);
+        list_del(l);
+
+        /* Insert into rb tree. */
+        parent = NULL;
+        p = &rb_root.rb_node;
+        while(*p)
+        {
+            struct component_iterator *tree_iter;
+
+            parent = *p;
+            tree_iter = rb_entry(parent, struct component_iterator, rb_node);
+            /* We never expect to see the same iterator twice. */
+            BUG_ON(tree_iter == current_iter);
+            if(tree_iter > current_iter)
+                p = &(*p)->rb_left;
+            else
+                p = &(*p)->rb_right;
+        }
+        rb_link_node(&current_iter->rb_node, parent, p);
+        rb_insert_color(&current_iter->rb_node, &rb_root);
+    }
+
+    /* Now check the user_timestamps one iterator at the time. */
+    rb_entry = rb_first(&rb_root);
+    /* There was a check for emtpy same_kv list, so there should be something in the tree. */
+    BUG_ON(!rb_entry);
+    do {
+        iter = rb_entry(rb_entry, struct component_iterator, rb_node);
+
+        if (iter->cached_entry.cvt.user_timestamp > most_recent_object.user_timestamp)
+            most_recent_object = iter->cached_entry.cvt;
+
+    } while((rb_entry = rb_next(&iter->rb_node)));
+
+    /* Never reached a terminating cvt, assume implicit set 0. */
+    return most_recent_object;
+}
+
 static void castle_ct_merged_iter_next(c_merged_iter_t *iter,
                                        void **key_p,
                                        c_ver_t *version_p,
@@ -1793,8 +1867,10 @@ static void castle_ct_merged_iter_next(c_merged_iter_t *iter,
        NOTE: this destroys same_kv list. Don't use it after this point. */
     if(CVT_ANY_COUNTER(comp_iter->cached_entry.cvt))
         cvt = castle_ct_merged_iter_counter_reduce(comp_iter);
-    else
-        cvt = comp_iter->cached_entry.cvt;
+    else //if this DA timestamped
+        cvt = castle_ct_merged_iter_timestamp_select(comp_iter);
+    //else (this DA not timestamped)
+        //cvt = comp_iter->cached_entry.cvt;
 
     /* Return the smallest entry */
     if(key_p)     *key_p     = comp_iter->cached_entry.k;

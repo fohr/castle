@@ -1641,6 +1641,7 @@ typedef struct castle_merged_iterator {
             void                    *k;
             c_ver_t                  v;
             c_val_tup_t              cvt;
+            castle_user_timestamp_t  u_ts;
         } cached_entry;
         struct list_head             same_kv_head;
         union {
