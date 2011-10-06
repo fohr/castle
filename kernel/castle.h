@@ -516,7 +516,7 @@ struct castle_value_tuple {
     /*          8 */     uint8_t      *val_p;
     /*          8 */     int64_t       counter;
     /*         24 */ };
-    /*         24 */ castle_user_timestamp_t user_timestamp;
+    /*         24 */ castle_user_timestamp_t user_timestamp; //TODO@tr this is just here temporarily, will get rid of it soon...
     /*         32 */
 } PACKED;
 typedef struct castle_value_tuple c_val_tup_t;
@@ -1036,6 +1036,9 @@ struct castle_component_tree {
     struct castle_da_merge  *merge;         /**< Contains mreg structure if the tree involved
                                                  in a merge. */
     c_merge_id_t        merge_id;
+
+    atomic64_t          max_user_timestamp;
+
 #ifdef CASTLE_PERF_DEBUG
     u64                 bt_c2bsync_ns;
     u64                 data_c2bsync_ns;
@@ -1066,7 +1069,8 @@ struct castle_dlist_entry {
     /* offset:  0 */ c_da_t      id;
     /*          4 */ c_ver_t     root_version;
     /*          8 */ btree_t     btree_type;
-    /*          9 */ uint8_t     _unused[247];
+    /*          9 */ uint8_t     user_timestamping;
+    /*         10 */ uint8_t     _unused[246];
     /*        256 */
 } PACKED;
 
@@ -1097,7 +1101,8 @@ struct castle_clist_entry {
     /*        294 */ uint32_t        nr_data_exts;
     /*        298 */ uint64_t        nr_bytes;
     /*        306 */ uint64_t        nr_drained_bytes;
-    /*        314 */ uint8_t         _unused[198];
+    /*        314 */ uint64_t        max_user_timestamp;
+    /*        322 */ uint8_t         _unused[190];
     /*        512 */
 } PACKED;
 
@@ -1658,6 +1663,7 @@ typedef struct castle_merged_iterator {
     cv_nonatomic_stats_t             stats;         /**< Stat changes during last _next().  */
     castle_merged_iterator_each_skip each_skip;
     struct castle_da_merge          *merge;
+    struct castle_double_array      *da;
 } c_merged_iter_t;
 
 /**
@@ -2229,6 +2235,7 @@ struct castle_double_array {
                                                      **< if required.                           */
     uint64_t                    sample_rate;
     atomic64_t                  sample_data_bytes;
+    uint8_t                     user_timestamping;  /**< User timestamping (init 1/0)           */
 };
 
 extern int castle_latest_key;

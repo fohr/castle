@@ -1697,6 +1697,50 @@ static void castle_ct_merged_iter_consume(struct component_iterator *iter,
 }
 
 /**
+ * Sort a list of iterators (with same kv) according to iter order, which is
+ * implicitly ct seq order.
+ */
+static void castle_ct_merged_iter_same_kv_iters_sort(struct list_head *same_kv_head,
+                                                     struct rb_root *rb_root_p)
+{
+    struct list_head *l, *t;
+    struct rb_node **p, *parent;
+
+    /* The same_kv list isn't sorted. Insert sort it. */
+    *rb_root_p = RB_ROOT;
+    list_for_each_safe(l, t, same_kv_head)
+    {
+        struct component_iterator *current_iter;
+
+        /* Work ot the iterator structure pointer, and delete list entry. */
+        current_iter = list_entry(l, struct component_iterator, same_kv_list);
+        list_del(l);
+
+        /* Insert into rb tree. */
+        parent = NULL;
+        p = &rb_root_p->rb_node;
+        while(*p)
+        {
+            struct component_iterator *tree_iter;
+
+            parent = *p;
+            tree_iter = rb_entry(parent, struct component_iterator, rb_node);
+
+            BUG_ON(!CVT_LEAF_VAL(tree_iter->cached_entry.cvt));
+
+            /* We never expect to see the same iterator twice. */
+            BUG_ON(tree_iter == current_iter);
+            if(tree_iter > current_iter)
+                p = &(*p)->rb_left;
+            else
+                p = &(*p)->rb_right;
+        }
+        rb_link_node(&current_iter->rb_node, parent, p);
+        rb_insert_color(&current_iter->rb_node, rb_root_p);
+    }
+}
+
+/**
  * Accumulates and returns counter (wrapped into a cvt) from the component iterator
  * specified and older iterators present in the same_kv list.
  *
@@ -1705,9 +1749,10 @@ static void castle_ct_merged_iter_consume(struct component_iterator *iter,
 static c_val_tup_t castle_ct_merged_iter_counter_reduce(struct component_iterator *iter)
 {
     c_val_tup_t accumulator;
-    struct list_head *l, *t;
     struct rb_root rb_root;
-    struct rb_node **p, *parent, *rb_entry;
+    struct rb_node *rb_entry;
+
+    castle_printk(LOG_DEBUG, "%s::start\n", __FUNCTION__);
 
     /* We expecting for the list head of the same_kv list to be a counter (at least). */
     BUG_ON(!CVT_ANY_COUNTER(iter->cached_entry.cvt));
@@ -1724,34 +1769,7 @@ static c_val_tup_t castle_ct_merged_iter_counter_reduce(struct component_iterato
         return accumulator;
 
     /* The same_kv list isn't sorted. Insert sort it. */
-    rb_root = RB_ROOT;
-    list_for_each_safe(l, t, &iter->same_kv_head)
-    {
-        struct component_iterator *current_iter;
-
-        /* Work ot the iterator structure pointer, and delete list entry. */
-        current_iter = list_entry(l, struct component_iterator, same_kv_list);
-        list_del(l);
-
-        /* Insert into rb tree. */
-        parent = NULL;
-        p = &rb_root.rb_node;
-        while(*p)
-        {
-            struct component_iterator *tree_iter;
-
-            parent = *p;
-            tree_iter = rb_entry(parent, struct component_iterator, rb_node);
-            /* We never expect to see the same iterator twice. */
-            BUG_ON(tree_iter == current_iter);
-            if(tree_iter > current_iter)
-                p = &(*p)->rb_left;
-            else
-                p = &(*p)->rb_right;
-        }
-        rb_link_node(&current_iter->rb_node, parent, p);
-        rb_insert_color(&current_iter->rb_node, &rb_root);
-    }
+    castle_ct_merged_iter_same_kv_iters_sort(&iter->same_kv_head, &rb_root);
 
     /* Now accumulate the results one iterator at the time. */
     rb_entry = rb_first(&rb_root);
@@ -1769,62 +1787,52 @@ static c_val_tup_t castle_ct_merged_iter_counter_reduce(struct component_iterato
 }
 
 /**
- * Picks the most recently timestamped entry (wrapped into a cvt) from the component iterator
+ * Picks the entry with largest user timestamp (wrapped into a cvt) from the component iterator
  * specified and older iterators present in the same_kv list.
  *
- * The function uses O(n*log(n)) sort on same_kv list.
+ * The function does O(n) search on the same_kv list looking for entries with larger user
+ * timestamp, and if there are m entries with a larger timestamp, it does O(m*log(m)) sort on
+ * a subset of the same_kv list. If m == 0, it returns immediately. Therefore in the common case
+ * where user timestamps are in iter order, the expense is O(n).
  *
  * (based on castle_ct_merged_iter_counter_reduce)
  */
 static c_val_tup_t castle_ct_merged_iter_timestamp_select(struct component_iterator *iter)
 {
     c_val_tup_t most_recent_object; /* most recent in terms of user timestamp */
-    struct list_head *l, *t;
     struct rb_root rb_root;
-    struct rb_node **p, *parent, *rb_entry;
+    struct rb_node *rb_entry;
+    struct list_head *l, *t;
+
+    castle_printk(LOG_DEBUG, "%s::start\n", __FUNCTION__);
 
     /* We start with the most recent iter; therefore, we would only change to a different iter if
        another iter has an object with a newer timestamp. Thus, in the event of equal user timestamps,
        the newer iter wins. */
     most_recent_object = iter->cached_entry.cvt;
+    BUG_ON(!CVT_LEAF_VAL(most_recent_object));
 
     /* If the list same_kv list is emtpy, return now. */
     if(list_empty(&iter->same_kv_head))
         return most_recent_object;
 
-    //TODO@tr: check other iters ct time range to see if it's impossible that we will find
-    //         something newer, and for extra credit, build a new list of iters that may
-    //         have something more recent, then sort/search on that new list.
-
-    /* The same_kv list isn't sorted. Insert sort it. */
-    rb_root = RB_ROOT;
+    /* remove list entries of iters that don't have greater timestamps */
     list_for_each_safe(l, t, &iter->same_kv_head)
     {
         struct component_iterator *current_iter;
-
-        /* Work ot the iterator structure pointer, and delete list entry. */
         current_iter = list_entry(l, struct component_iterator, same_kv_list);
-        list_del(l);
+        BUG_ON(!CVT_LEAF_VAL(current_iter->cached_entry.cvt));
 
-        /* Insert into rb tree. */
-        parent = NULL;
-        p = &rb_root.rb_node;
-        while(*p)
-        {
-            struct component_iterator *tree_iter;
-
-            parent = *p;
-            tree_iter = rb_entry(parent, struct component_iterator, rb_node);
-            /* We never expect to see the same iterator twice. */
-            BUG_ON(tree_iter == current_iter);
-            if(tree_iter > current_iter)
-                p = &(*p)->rb_left;
-            else
-                p = &(*p)->rb_right;
-        }
-        rb_link_node(&current_iter->rb_node, parent, p);
-        rb_insert_color(&current_iter->rb_node, &rb_root);
+        if(!(current_iter->cached_entry.cvt.user_timestamp > most_recent_object.user_timestamp))
+            list_del(l);
     }
+
+    /* If the new same_kv list is emtpy, return now. */
+    if(list_empty(&iter->same_kv_head))
+        return most_recent_object;
+
+    /* The same_kv list isn't sorted. Insert sort it. */
+    castle_ct_merged_iter_same_kv_iters_sort(&iter->same_kv_head, &rb_root);
 
     /* Now check the user_timestamps one iterator at the time. */
     rb_entry = rb_first(&rb_root);
@@ -1832,14 +1840,18 @@ static c_val_tup_t castle_ct_merged_iter_timestamp_select(struct component_itera
     BUG_ON(!rb_entry);
     do {
         iter = rb_entry(rb_entry, struct component_iterator, rb_node);
+        BUG_ON(!CVT_LEAF_VAL(iter->cached_entry.cvt));
 
         if (iter->cached_entry.cvt.user_timestamp > most_recent_object.user_timestamp)
             most_recent_object = iter->cached_entry.cvt;
 
     } while((rb_entry = rb_next(&iter->rb_node)));
 
-    /* Never reached a terminating cvt, assume implicit set 0. */
+    BUG_ON(!CVT_LEAF_VAL(most_recent_object));
     return most_recent_object;
+    //TODO@tr here we have the most recent entry for kv within v; next we need to resolve against
+    //        ancestral versions to decide if we should include this entry or not... and right here
+    //        would be a good place to do it.
 }
 
 static void castle_ct_merged_iter_next(c_merged_iter_t *iter,
@@ -1850,6 +1862,9 @@ static void castle_ct_merged_iter_next(c_merged_iter_t *iter,
     struct component_iterator *comp_iter;
     c_val_tup_t cvt;
 
+    BUG_ON(!iter);
+    BUG_ON(!iter->da);
+
     debug_iter("%s:%p\n", __FUNCTION__, iter);
     debug("Merged iterator next.\n");
 
@@ -1858,6 +1873,7 @@ static void castle_ct_merged_iter_next(c_merged_iter_t *iter,
 
     /* Get the smallest kv pair from RB tree. */
     comp_iter = castle_ct_merge_iter_rbtree_min_del(iter);
+    BUG_ON(!comp_iter);
     debug("Smallest entry is from iterator: %p.\n", comp_iter);
 
     /* Consume (clear cached flags) from the component iterators. */
@@ -1867,12 +1883,13 @@ static void castle_ct_merged_iter_next(c_merged_iter_t *iter,
        NOTE: this destroys same_kv list. Don't use it after this point. */
     if(CVT_ANY_COUNTER(comp_iter->cached_entry.cvt))
         cvt = castle_ct_merged_iter_counter_reduce(comp_iter);
-    else //if this DA timestamped
+    else if (iter->da->user_timestamping) /* it's not a counter, and we are timestamping */
         cvt = castle_ct_merged_iter_timestamp_select(comp_iter);
-    //else (this DA not timestamped)
-        //cvt = comp_iter->cached_entry.cvt;
+    else /* this DA not timestamped */
+        cvt = comp_iter->cached_entry.cvt;
 
     /* Return the smallest entry */
+    //TODO@tr add an entry for user_timestamp so it doesn't have to be in the cvt
     if(key_p)     *key_p     = comp_iter->cached_entry.k;
     if(version_p) *version_p = comp_iter->cached_entry.v;
     if(cvt_p)     *cvt_p     = cvt;
@@ -1951,7 +1968,8 @@ struct castle_iterator_type castle_ct_merged_iter = {
 static void castle_ct_merged_iter_init(c_merged_iter_t *iter,
                                        void **iterators,
                                        struct castle_iterator_type **iterator_types,
-                                       castle_merged_iterator_each_skip each_skip)
+                                       castle_merged_iterator_each_skip each_skip,
+                                       struct castle_double_array *da)
 {
     int i;
 
@@ -1972,6 +1990,7 @@ static void castle_ct_merged_iter_init(c_merged_iter_t *iter,
         return;
     }
     iter->each_skip = each_skip;
+    iter->da        = da;
     /* Memory allocated for the iterators array, init the state.
        Assume that all iterators have something in them, and let the has_next_check()
        handle the opposite. */
@@ -2033,10 +2052,13 @@ static USED void castle_ct_sort(struct castle_component_tree *ct1,
     iters[1] = &test_iter2;
     iter_types[0] = &castle_ct_modlist_iter;
     iter_types[1] = &castle_ct_modlist_iter;
+
+    BUG_ON(ct1->da != ct2->da);
     castle_ct_merged_iter_init(&test_miter,
                                iters,
                                iter_types,
-                               NULL);
+                               NULL,
+                               ct1->da);
     debug("=============== SORTED ================\n");
     while(castle_iterator_has_next_sync(&castle_ct_merged_iter, &test_miter))
     {
@@ -2206,7 +2228,7 @@ void castle_da_rq_iter_init(c_da_rq_iter_t *iter,
     /* Initialise merged iterator. */
     iter->merged_iter.nr_iters  = iter->nr_iters;
     iter->merged_iter.btree     = castle_btree_type_get(da->btree_type);
-    castle_ct_merged_iter_init(&iter->merged_iter, iters, iters_types, NULL);
+    castle_ct_merged_iter_init(&iter->merged_iter, iters, iters_types, NULL, da);
     castle_ct_merged_iter_register_cb(&iter->merged_iter, castle_da_rq_iter_end_io, iter);
 
     /* Free structures used to initialise merged iterator. */
@@ -2546,7 +2568,8 @@ static int castle_da_iterators_create(struct castle_da_merge *merge)
     castle_ct_merged_iter_init(merge->merged_iter,
                                merge->iters,
                                iter_types,
-                               castle_da_each_skip);
+                               castle_da_each_skip,
+                               merge->da);
     ret = merge->merged_iter->err;
     debug("Merged iterator inited with ret=%d.\n", ret);
     if(ret)
@@ -3849,10 +3872,14 @@ static void castle_da_entry_add(struct castle_da_merge *merge,
     int initial_root_depth = merge->root_depth;
 
     do{
+        if(depth==0)
+            BUG_ON(!CVT_LEAF_VAL(cvt) && !CVT_LOCAL_COUNTER(cvt));
+
         preadoption_cvt = _castle_da_entry_add(merge, depth, key, version, cvt, is_re_add);
         if(!preadoption_cvt) return; /* no new node created */
 
         /*  if _castle_da_entry_add returned non-NULL, then a sibling node was created */
+        //TODO@tr restructure this so there's no memcpy
         memcpy(&cvt, preadoption_cvt, sizeof(c_val_tup_t));
         castle_kfree(preadoption_cvt); /* malloc'd by _castle_da_entry_add */
         preadoption_cvt = NULL;
@@ -4992,6 +5019,10 @@ static int castle_da_merge_unit_do(struct castle_da_merge *merge, uint64_t max_n
                     __FUNCTION__, merge->da->id, merge->level);
             return -ESHUTDOWN;
         }
+        if (merge->da->user_timestamping)
+            atomic64_set(&merge->out_tree->max_user_timestamp,
+                MAX_DONT_INC(atomic64_read(&merge->out_tree->max_user_timestamp), cvt.user_timestamp));
+
         if (merge->out_tree->bloom_exists)
         {
             /* Only add this key to the bloom filter if it is a new key. */
@@ -7248,6 +7279,9 @@ static struct castle_double_array* castle_da_alloc(c_da_t da_id)
     atomic64_set(&da->sample_data_bytes, 0);
     do_gettimeofday(&da->prev_time);
 
+    //TODO@tr make this a creation-time option
+    da->user_timestamping = 1;
+
     castle_printk(LOG_USERINFO, "Allocated DA=%d successfully.\n", da_id);
 
     return da;
@@ -7269,17 +7303,19 @@ err_out:
 void castle_da_marshall(struct castle_dlist_entry *dam,
                         struct castle_double_array *da)
 {
-    dam->id           = da->id;
-    dam->root_version = da->root_version;
-    dam->btree_type   = da->btree_type;
+    dam->id                = da->id;
+    dam->root_version      = da->root_version;
+    dam->btree_type        = da->btree_type;
+    dam->user_timestamping = da->user_timestamping;
 }
 
 static void castle_da_unmarshall(struct castle_double_array *da,
                                  struct castle_dlist_entry *dam)
 {
-    da->id           = dam->id;
-    da->root_version = dam->root_version;
-    da->btree_type   = dam->btree_type;
+    da->id                = dam->id;
+    da->root_version      = dam->root_version;
+    da->btree_type        = dam->btree_type;
+    da->user_timestamping = dam->user_timestamping;
     castle_sysfs_da_add(da);
 }
 
@@ -8052,6 +8088,11 @@ void castle_da_ct_marshall(struct castle_clist_entry *ctm,
     ctm->bloom_exists = ct->bloom_exists;
     if (ct->bloom_exists)
         castle_bloom_marshall(&ct->bloom, ctm);
+
+    /* if someone changed the typedef of castle_user_timestamp_t, make sure a corresponding
+       change has been made in the clist_entry and the atomic in the cct struct.            */
+    BUILD_BUG_ON(sizeof(castle_user_timestamp_t) != sizeof(uint64_t));
+    ctm->max_user_timestamp = atomic64_read(&ct->max_user_timestamp);
 }
 
 /**
@@ -8103,6 +8144,8 @@ static struct castle_component_tree * castle_da_ct_unmarshall(struct castle_comp
         castle_cache_advise((c_ext_pos_t){ct->tree_ext_free.ext_id, 0},
                 C2_ADV_EXTENT|C2_ADV_PREFETCH, chunks, -1, 0);
     }
+
+    atomic64_set(&ct->max_user_timestamp, ctm->max_user_timestamp);
 
     castle_ct_hash_add(ct);
 
@@ -9242,6 +9285,8 @@ struct castle_component_tree * castle_ct_init(struct castle_component_tree *ct,
     atomic64_set(&ct->large_ext_chk_cnt, 0);
     mutex_init(&ct->lo_mutex);
 
+    atomic64_set(&ct->max_user_timestamp, 0);
+
 #ifdef CASTLE_PERF_DEBUG
     ct->bt_c2bsync_ns            = 0;
     ct->data_c2bsync_ns          = 0;
@@ -10156,22 +10201,71 @@ found:
 }
 
 /**
+ * Returns a +ve if the ct's max timestamp is > t, -ve if it's < t, 0 if it's == t...
+ *
+ * Up to the caller to make sure this DA is timestamping, the candidate cvt is valid,
+ * and the candidate cvt is not a counter.
+ */
+static int64_t castle_da_ct_timestamp_compare(struct castle_component_tree *ct,
+                                              c_val_tup_t *cvt_p,
+                                              castle_user_timestamp_t candidate_timestamp)
+{
+    int64_t ret;
+    uint64_t max_ct_ts_for_cvt;
+    BUG_ON(!ct);
+
+    /* not sure what to return if any of the following conditions are true, so we leave it to the
+       caller to make sure it never happens */
+    BUG_ON(!ct->da->user_timestamping);
+    BUG_ON(CVT_INVALID(*cvt_p));
+    BUG_ON(CVT_ANY_COUNTER(*cvt_p));
+
+    max_ct_ts_for_cvt = atomic64_read(&ct->max_user_timestamp);
+    ret = max_ct_ts_for_cvt - candidate_timestamp;
+    if(ret < 0) /* the entire ct does not have anything with a timestamp > t */
+        return ret;
+
+    /* TODO@tr if we come up with something more fine-grained than the max timestamp of the entire ct,
+       here is where we would set max_ct_ts_for_cvt and calculate the new ret. */
+
+    return ret;
+}
+
+/**
  * Submit request to the next candidate CT, or terminate if exhausted.
  */
 void castle_da_next_ct_read(c_bvec_t *c_bvec)
 {
-    /* Find next candidate tree from DA CT's proxy structure. */
-    c_bvec->tree = castle_da_cts_proxy_ct_next(c_bvec->cts_proxy,
-                                              &c_bvec->cts_index,
-                                               c_bvec->key);
-    if (!c_bvec->tree)
-    {
-        /* No more candidate trees available.  Let submit_complete()
-         * handle this case for us. */
-        c_bvec->submit_complete(c_bvec, 0, INVAL_VAL_TUP);
+    /* loop over every tree, until we find a break/return clause */
+    do {
 
-        return;
-    }
+        /* Find next candidate tree from DA CT's proxy structure. */
+        c_bvec->tree = castle_da_cts_proxy_ct_next(c_bvec->cts_proxy,
+                                                  &c_bvec->cts_index,
+                                                   c_bvec->key);
+        if (!c_bvec->tree)
+        {
+            /* No more candidate trees available.  Let submit_complete()
+             * handle this case for us. */
+            c_bvec->submit_complete(c_bvec, 0, INVAL_VAL_TUP);
+
+            return; /* no trees left */
+        }
+        else if (c_bvec->tree->da->user_timestamping)
+        {
+            struct castle_object_get *get = c_bvec->c_bio->get;
+            if(CVT_INVALID(get->cvt) || (CVT_ANY_COUNTER(get->cvt)))
+                break; /* no candidate return object yet, or it's a counter */
+
+            /* We have a tree, we have a previously found object that is not a counter, and we are
+               timestamping this DA; let's compare timestamps to see if we need to query this tree,
+               or if we can go on to the next tree right away. */
+            if (castle_da_ct_timestamp_compare(c_bvec->tree, &get->cvt, get->cvt.user_timestamp) > 0);
+                break; /* this tree might have something newer (according to user_timestamp) */
+        }
+        else break; /* not timestamping */
+
+    } while(1);
 
     debug_verbose("Scheduling btree read in %s tree: %d.\n",
             c_bvec->tree->dynamic ? "dynamic" : "static", c_bvec->tree->seq);

@@ -1354,8 +1354,8 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
 #if 0
         BUG_ON(CVT_MEDIUM_OBJECT(cvt) &&
                 cvt.cep.ext_id != c_bvec->tree->data_ext_free.ext_id);
-#endif
         BUG_ON(!c_bvec->tree); // _da_ct_read_complete() leaves this for us
+#endif
         BUG_ON(!c_bvec->cts_proxy); // _da_ct_read_complete() leaves this for us
         BUG_ON(!CVT_ON_DISK(cvt));
 

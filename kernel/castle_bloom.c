@@ -637,7 +637,7 @@ static int castle_bloom_get_chunk_id(castle_bloom_t *bf,
  *   | found           | not found
  *   |                 |
  *   |                 v
- *   |               castle_bloom_lookup_next_ct -> castle_bloom_submit
+ *   |              castle_da_next_ct_read
  *   |
  *   v
  * castle_btree_submit
