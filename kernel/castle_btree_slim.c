@@ -135,11 +135,16 @@ inline static int cvt_type_to_entry_type(int type)
  * Structure definitions for leaf node entries.
  */
 
+enum {
+    LEAF_ENTRY_DISABLED_FLAG  = 1, /* not used at the moment */
+    LEAF_ENTRY_TIMESTAMP_FLAG = 2
+};
+
 struct slim_leaf_entry {
     /* align:   2 */
     /* offset:  0 */ c_ver_t      version;
     /*          4 */ uint8_t      type;
-    /*          5 */ uint8_t      _pad;
+    /*          5 */ uint8_t      flags;
     /*          6 */ struct castle_norm_key key;
     /*          8 */ /* value information is stored immediately after the key */
 } PACKED;
@@ -157,28 +162,51 @@ struct slim_extern_val {
     /*         24 */
 } PACKED;
 
-#define LEAF_ENTRY_MAX_SIZE              (sizeof(struct slim_leaf_entry) - \
-                                          sizeof(struct castle_norm_key) + \
-                                          sizeof(struct slim_inline_val) + \
-                                          SLIM_TREE_MAX_KEY_SIZE +         \
-                                          MAX_INLINE_VAL_SIZE +            \
+#define LEAF_ENTRY_MAX_SIZE              (sizeof(struct slim_leaf_entry) -      \
+                                          sizeof(struct castle_norm_key) +      \
+                                          sizeof(struct slim_inline_val) +      \
+                                          sizeof(castle_user_timestamp_t) +     \
+                                          SLIM_TREE_MAX_KEY_SIZE +              \
+                                          MAX_INLINE_VAL_SIZE +                 \
                                           4) /* for the index entry */
 #define LEAF_ENTRY_BASE_SIZE(key)        (sizeof(struct slim_leaf_entry) - sizeof *(key) + \
                                           castle_norm_key_size(key))
 #define LEAF_ENTRY_VAL_PTR(entry)        ((char *) (entry) + LEAF_ENTRY_BASE_SIZE(&(entry)->key))
 #define LEAF_ENTRY_INLINE_VAL_PTR(entry) ((struct slim_inline_val *) LEAF_ENTRY_VAL_PTR(entry))
 #define LEAF_ENTRY_EXTERN_VAL_PTR(entry) ((struct slim_extern_val *) LEAF_ENTRY_VAL_PTR(entry))
+#define LEAF_ENTRY_INLINE_VAL_END(val)   ((char *) (val) + sizeof(struct slim_inline_val) + (val)->length)
+#define LEAF_ENTRY_EXTERN_VAL_END(val)   ((char *) (val) + sizeof(struct slim_extern_val))
+#define LEAF_ENTRY_HAS_TIMESTAMP(entry)  ((entry)->flags & LEAF_ENTRY_TIMESTAMP_FLAG)
 
-inline static size_t leaf_entry_size(const struct slim_leaf_entry *entry)
+static size_t leaf_entry_size(const struct slim_leaf_entry *entry)
 {
-    size_t base_size = LEAF_ENTRY_BASE_SIZE(&entry->key);
+    size_t size = LEAF_ENTRY_BASE_SIZE(&entry->key);
+
     if (!TYPE_ON_DISK(STRIP_DISABLED(entry->type)))
     {
         const struct slim_inline_val *val =
-            (const struct slim_inline_val *) ((const char *) entry + base_size);
-        return base_size + sizeof *val + val->length;
+            (const struct slim_inline_val *) ((const char *) entry + size);
+        size += sizeof *val + val->length;
     }
-    else return base_size + sizeof(struct slim_extern_val);
+    else size += sizeof(struct slim_extern_val);
+
+    if (LEAF_ENTRY_HAS_TIMESTAMP(entry))
+        size += sizeof(castle_user_timestamp_t);
+
+    return size;
+}
+
+inline static castle_user_timestamp_t leaf_entry_timestamp_get(const void **pos)
+{
+    castle_user_timestamp_t timestamp = *((const castle_user_timestamp_t *) *pos);
+    *pos = (const char *) *pos + sizeof(castle_user_timestamp_t);
+    return timestamp;
+}
+
+inline static void leaf_entry_timestamp_put(void **pos, castle_user_timestamp_t timestamp)
+{
+    *((castle_user_timestamp_t *) *pos) = timestamp;
+    *pos = (char *) *pos + sizeof(castle_user_timestamp_t);
 }
 
 /*
@@ -202,7 +230,7 @@ struct slim_intern_entry {
 #define INTERN_ENTRY_BASE_SIZE(key)      (sizeof(struct slim_intern_entry) - sizeof *(key) + \
                                           castle_norm_key_size(key))
 
-inline static size_t intern_entry_size(const struct slim_intern_entry *entry)
+static size_t intern_entry_size(const struct slim_intern_entry *entry)
 {
     return INTERN_ENTRY_BASE_SIZE(&entry->key);
 }
@@ -356,15 +384,23 @@ static int castle_slim_entry_get(struct castle_btree_node *node, int idx,
             if (TYPE_ON_DISK(type))
             {
                 struct slim_extern_val *val = LEAF_ENTRY_EXTERN_VAL_PTR(entry);
-                *cvt = convert_to_cvt(entry->type, val->length, val->cep, NULL, 0);
+                const void *entry_end = LEAF_ENTRY_EXTERN_VAL_END(val);
+                castle_user_timestamp_t timestamp = 0;
+                if (LEAF_ENTRY_HAS_TIMESTAMP(entry))
+                    timestamp = leaf_entry_timestamp_get(&entry_end);
+                *cvt = convert_to_cvt(entry->type, val->length, val->cep, NULL, timestamp);
             }
             else
             {
                 struct slim_inline_val *val = LEAF_ENTRY_INLINE_VAL_PTR(entry);
+                const void *entry_end = LEAF_ENTRY_INLINE_VAL_END(val);
+                castle_user_timestamp_t timestamp = 0;
+                if (LEAF_ENTRY_HAS_TIMESTAMP(entry))
+                    timestamp = leaf_entry_timestamp_get(&entry_end);
                 BUG_ON(TYPE_NODE(type));
                 BUG_ON(TYPE_TOMBSTONE(type) && val->length != 0);
                 BUG_ON(val->length > MAX_INLINE_VAL_SIZE);
-                *cvt = convert_to_cvt(entry->type, val->length, INVAL_EXT_POS, val->data, 0);
+                *cvt = convert_to_cvt(entry->type, val->length, INVAL_EXT_POS, val->data, timestamp);
             }
         }
         return entry->type & CVT_TYPE_DISABLED_FLAG;
@@ -390,14 +426,15 @@ static int castle_slim_entry_get(struct castle_btree_node *node, int idx,
     }
 }
 
-inline static size_t castle_slim_entry_size_predict(const struct castle_norm_key *key,
-                                                    c_val_tup_t cvt, int leaf)
+static size_t castle_slim_entry_size_predict(const struct castle_norm_key *key,
+                                             c_val_tup_t cvt, int leaf, int timestamp)
 {
     if (leaf)
         return LEAF_ENTRY_BASE_SIZE(key) +
             (TYPE_ON_DISK(cvt.type) ?
              sizeof(struct slim_extern_val) :
-             sizeof(struct slim_inline_val) + cvt.length);
+             sizeof(struct slim_inline_val) + cvt.length) +
+            (timestamp ? sizeof(castle_user_timestamp_t) : 0);
     else
         return INTERN_ENTRY_BASE_SIZE(key);
 }
@@ -502,12 +539,14 @@ static void castle_slim_entry_construct(struct castle_btree_node *node, int idx,
     if (BTREE_NODE_IS_LEAF(node))
     {
         struct slim_leaf_entry *entry = NODE_LEAF_ENTRY_PTR(node, idx);
+        void *entry_end;
         if (TYPE_ON_DISK(cvt.type))
         {
             struct slim_extern_val *val =
                 (struct slim_extern_val *) ((char *) &entry->key + key_size);
             val->cep = cvt.cep;
             val->length = cvt.length;
+            entry_end = LEAF_ENTRY_EXTERN_VAL_END(val);
         }
         else
         {
@@ -519,10 +558,14 @@ static void castle_slim_entry_construct(struct castle_btree_node *node, int idx,
             if (!TYPE_TOMBSTONE(cvt.type))
                 memmove(val->data, CVT_INLINE_VAL_PTR(cvt), cvt.length);
             val->length = cvt.length;
+            entry_end = LEAF_ENTRY_INLINE_VAL_END(val);
         }
         memmove(&entry->key, key, key_size);
+        entry->flags = BTREE_NODE_HAS_TIMESTAMPS(node) ? LEAF_ENTRY_TIMESTAMP_FLAG : 0;
         entry->type = cvt_type_to_entry_type(cvt.type);
         entry->version = version;
+        if (LEAF_ENTRY_HAS_TIMESTAMP(entry))
+            leaf_entry_timestamp_put(&entry_end, cvt.user_timestamp);
         BUG_ON((char *) entry + leaf_entry_size(entry) > NODE_INDEX_BOUND(node));
     }
 
@@ -544,7 +587,9 @@ static void castle_slim_entry_add(struct castle_btree_node *node, int idx,
 {
     struct slim_header *header = SLIM_HEADER_PTR(node);
     const struct castle_norm_key *norm_key = key;
-    size_t req_space = castle_slim_entry_size_predict(norm_key, cvt, BTREE_NODE_IS_LEAF(node)) + 4;
+    size_t req_space = castle_slim_entry_size_predict(norm_key, cvt,
+                                                      BTREE_NODE_IS_LEAF(node),
+                                                      BTREE_NODE_HAS_TIMESTAMPS(node)) + 4;
 
     BUG_ON(idx < 0 || idx > node->used);
 
@@ -575,7 +620,9 @@ static void castle_slim_entry_replace(struct castle_btree_node *node, int idx,
     struct slim_header *header = SLIM_HEADER_PTR(node);
     const struct castle_norm_key *norm_key = key;
     size_t old_size = castle_slim_entry_size(node, idx);
-    size_t new_size = castle_slim_entry_size_predict(norm_key, cvt, BTREE_NODE_IS_LEAF(node));
+    size_t new_size = castle_slim_entry_size_predict(norm_key, cvt,
+                                                     BTREE_NODE_IS_LEAF(node),
+                                                     BTREE_NODE_HAS_TIMESTAMPS(node));
 
     BUG_ON(idx < 0 || idx > node->used);
 
@@ -634,13 +681,21 @@ static void castle_slim_node_print(struct castle_btree_node *node)
             if (TYPE_ON_DISK(STRIP_DISABLED(entry->type)))
             {
                 struct slim_extern_val *val = LEAF_ENTRY_EXTERN_VAL_PTR(entry);
-                castle_printk(LOG_DEBUG, "[ext] len=%lu cep=" cep_fmt_str_nl,
-                              val->length, cep2str(val->cep));
+                const void *entry_end = LEAF_ENTRY_EXTERN_VAL_END(val);
+                castle_user_timestamp_t timestamp = 0;
+                if (LEAF_ENTRY_HAS_TIMESTAMP(entry))
+                    timestamp = leaf_entry_timestamp_get(&entry_end);
+                castle_printk(LOG_DEBUG, "[ext] timestamp=%lu len=%lu cep=" cep_fmt_str_nl,
+                              timestamp, val->length, cep2str(val->cep));
             }
             else
             {
                 struct slim_inline_val *val = LEAF_ENTRY_INLINE_VAL_PTR(entry);
-                castle_printk(LOG_DEBUG, "[inl] len=%u\n", val->length);
+                const void *entry_end = LEAF_ENTRY_INLINE_VAL_END(val);
+                castle_user_timestamp_t timestamp = 0;
+                if (LEAF_ENTRY_HAS_TIMESTAMP(entry))
+                    timestamp = leaf_entry_timestamp_get(&entry_end);
+                castle_printk(LOG_DEBUG, "[inl] timestamp=%lu len=%u\n", timestamp, val->length);
             }
         }
     }
@@ -769,6 +824,9 @@ static void castle_slim_node_validate(struct castle_btree_node *node)
                 type != CVT_TYPE_COUNTER_ACCUM_SET_SET && type != CVT_TYPE_COUNTER_ACCUM_ADD_SET &&
                 type != CVT_TYPE_COUNTER_ACCUM_ADD_ADD && (failed = 1))
                 castle_printk(LOG_ERROR, "error: found invalid type %u at position %u\n", type, i);
+
+            if (!LEAF_ENTRY_HAS_TIMESTAMP(entry) != !BTREE_NODE_HAS_TIMESTAMPS(node) && (failed = 1))
+                castle_printk(LOG_ERROR, "error: entry timestamp flag does not agree with node at position %u\n", i);
 
             version = entry->version;
             key = &entry->key;
