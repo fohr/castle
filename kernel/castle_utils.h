@@ -286,6 +286,7 @@ void castle_key_ptr_ref_cp(struct castle_key_ptr_t *dest, struct castle_key_ptr_
 void * castle_alloc_func(size_t size);
 void castle_free_func(void *ptr);
 
+void *castle_alloc_maybe(size_t len, void *dst, size_t *dst_len);
 void *castle_dup_or_copy(const void *src, size_t src_len, void *dst, size_t *dst_len);
 
 /**

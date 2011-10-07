@@ -76,6 +76,28 @@ void castle_free_func(void *ptr)
 }
 
 /**
+ * Allocate a buffer, unless a suitable one is provided by the caller.
+ * @param len       the length of the buffer to be allocated
+ * @param dst       if non-NULL, the destination buffer to use instead of allocating
+ * @param dst_len   the available space in the destination buffer (ignored if dst is NULL)
+ * @return          the destination buffer
+ *
+ * If dst is NULL, a fresh buffer of size len is allocated using castle_alloc(). If dst is
+ * non-NULL, then dst_len must also be non-NULL and be greater than or equal to len. If
+ * these conditions hold true, then dst_len is set to len and dst is returned. Otherwise
+ * NULL is returned, and dst_len is not modified.
+ */
+void *castle_alloc_maybe(size_t len, void *dst, size_t *dst_len)
+{
+    if (!dst)
+        return castle_alloc(len);
+    else if (dst_len && *dst_len >= len)
+        return *dst_len = len, dst;
+    else
+        return NULL;
+}
+
+/**
  * Copy a buffer, either to a freshly allocated buffer, or to one supplied by the caller.
  * @param src       the source buffer
  * @param src_len   the length of the source buffer
@@ -93,18 +115,8 @@ void castle_free_func(void *ptr)
  */
 void *castle_dup_or_copy(const void *src, size_t src_len, void *dst, size_t *dst_len)
 {
-    if (!dst)
-    {
-        dst = castle_alloc(src_len);
-        if (!dst)
-            return NULL;
-    }
-    else if (!dst_len || *dst_len < src_len)
-        return NULL;
-    else
-        *dst_len = src_len;
-
-    memcpy(dst, src, src_len);
+    if ((dst = castle_alloc_maybe(src_len, dst, dst_len)))
+        memcpy(dst, src, src_len);
     return dst;
 }
 
