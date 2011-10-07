@@ -515,7 +515,8 @@ static void castle_slim_entry_construct(struct castle_btree_node *node, int idx,
             BUG_ON(TYPE_NODE(cvt.type));
             BUG_ON(TYPE_TOMBSTONE(cvt.type) && cvt.length != 0);
             BUG_ON(cvt.length > MAX_INLINE_VAL_SIZE);
-            memmove(val->data, CVT_INLINE_VAL_PTR(cvt), cvt.length);
+            if (!TYPE_TOMBSTONE(cvt.type))
+                memmove(val->data, CVT_INLINE_VAL_PTR(cvt), cvt.length);
             val->length = cvt.length;
         }
         memmove(&entry->key, key, key_size);
