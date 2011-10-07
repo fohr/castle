@@ -50,17 +50,20 @@ struct castle_btree_node_save {
 
 extern struct castle_btree_type castle_mtree;
 extern struct castle_btree_type castle_vlba_tree;
+extern struct castle_btree_type castle_slim_tree;
 
 static struct castle_btree_type *castle_btrees[1<<(8 * sizeof(btree_t))] =
                                                        {[MTREE_TYPE]        = &castle_mtree,
-                                                        [VLBA_TREE_TYPE]    = &castle_vlba_tree};
+                                                        [VLBA_TREE_TYPE]    = &castle_vlba_tree,
+                                                        [SLIM_TREE_TYPE]    = &castle_slim_tree};
 
 
 struct castle_btree_type *castle_btree_type_get(btree_t type)
 {
 #ifdef CASTLE_DEBUG
     BUG_ON((type != MTREE_TYPE) &&
-           (type != VLBA_TREE_TYPE));
+           (type != VLBA_TREE_TYPE) &&
+           (type != SLIM_TREE_TYPE));
 #endif
     return castle_btrees[type];
 }
@@ -71,6 +74,7 @@ size_t castle_btree_node_size_get(btree_t type)
         case MTREE_TYPE:
             return MTREE_NODE_SIZE;
         case VLBA_TREE_TYPE:    /* note that the RO tree size is set in the merge code */
+        case SLIM_TREE_TYPE:
             return RW_TREE_NODE_SIZE;
         default:                /* unknown tree type */
             return 0;

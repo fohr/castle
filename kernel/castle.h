@@ -808,6 +808,7 @@ enum {
 #define MTREE_TYPE                 0x33
 #define MTREE_BVEC_BLOCK(_bvec)   ((sector_t)(_bvec)->key)
 #define VLBA_TREE_TYPE             0x66
+#define SLIM_TREE_TYPE             0x77
 
 #define MAX_BTREE_DEPTH           (10)               /**< Maximum depth of btrees.
                                                           This is used in on-disk datastructures.
