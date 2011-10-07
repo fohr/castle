@@ -473,11 +473,12 @@ static int castle_slim_entry_alloc(struct castle_btree_node *node, int idx, size
 static void castle_slim_entries_drop(struct castle_btree_node *node, int low, int high)
 {
     struct slim_header *header = SLIM_HEADER_PTR(node);
+    int i;
 
     BUG_ON(low < 0 || high >= node->used || low > high);
 
-    while (low <= high)
-        header->dead_bytes += castle_slim_entry_size(node, low++) + 4;
+    for (i = low; i <= high; ++i)
+        header->dead_bytes += castle_slim_entry_size(node, i) + 4;
     memmove(&NODE_INDEX(node, node->used-1 - (high-low+1)),
             &NODE_INDEX(node, node->used-1), (node->used - (high+1)) * 4);
     if (!BTREE_NODE_IS_LEAF(node))
