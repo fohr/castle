@@ -9586,7 +9586,7 @@ int castle_double_array_make(c_da_t da_id, c_ver_t root_version)
     /* Write out the id, root version and tree type. */
     da->id = da_id;
     da->root_version = root_version;
-    da->btree_type = VLBA_TREE_TYPE;
+    da->btree_type = SLIM_TREE_TYPE;
 
     /* Insert empty DA into hash. */
     castle_da_hash_add(da);
