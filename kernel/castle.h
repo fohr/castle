@@ -1889,7 +1889,11 @@ void                  castle_ext_freespace_unmarshall
 
 c_byte_off_t          castle_ext_freespace_summary_get
                                                    (c_ext_free_t     *ext_free);
+castle_freespace_t *  freespace_sblk_get           (struct castle_slave *cs);
+void                  freespace_sblk_put           (struct castle_slave *cs, int dirty);
+
 void                  castle_release_oos_slave     (struct work_struct *work);
+
 c_rda_type_t          castle_get_rda_lvl           (void);
 c_rda_type_t          castle_get_ssd_rda_lvl       (void);
 c_rda_type_t          castle_ssdrda_to_rda         (c_rda_type_t rda_type);
