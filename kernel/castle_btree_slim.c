@@ -302,7 +302,7 @@ static void intern_entry_extents_drop(struct slim_header *header, int low, int h
 #define NODE_SIZE_MAX                    (256 * C_BLK_SIZE)
 #define NODE_SIZE(node)                  ((node)->size * C_BLK_SIZE)
 #define NODE_END(node)                   ((char *) (node) + NODE_SIZE(node))
-#define NODE_INDEX(node, i)              (((uint32_t *) NODE_END(node))[-((i)+1)])
+#define NODE_INDEX(node, i)              (*((uint32_t *) NODE_END(node) - ((i)+1)))
 #define NODE_INDEX_BOUND(node)           ((char *) &NODE_INDEX(node, (node)->used-1))
 #define NODE_ENTRY_PTR(node, i)          ((char *) (node) + NODE_INDEX(node, i))
 #define NODE_LEAF_ENTRY_PTR(node, i)     ((struct slim_leaf_entry *) NODE_ENTRY_PTR(node, i))
