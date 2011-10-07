@@ -8775,7 +8775,7 @@ err_out:
 
     /* Clear the growing bit and return failure. */
     castle_da_growing_rw_clear(da);
-    return -EINVAL;
+    return -ENOSPC;
 }
 
 /**

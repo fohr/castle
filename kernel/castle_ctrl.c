@@ -137,7 +137,7 @@ void castle_control_create(uint64_t size, int *ret, c_ver_t *id)
                                  size);
 
     /* We use doubling arrays for collection trees */
-    if (collection_tree && castle_double_array_make(da_id, version))
+    if (collection_tree && (*ret = castle_double_array_make(da_id, version)))
     {
         /* Free the created version. */
         BUG_ON(castle_version_free(version));
@@ -154,7 +154,6 @@ void castle_control_create(uint64_t size, int *ret, c_ver_t *id)
 
 err_out:
     *id  = -1;
-    *ret = -EINVAL;
 }
 
 void castle_control_clone(c_ver_t version, int *ret, c_ver_t *clone)
