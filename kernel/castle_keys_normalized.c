@@ -534,7 +534,7 @@ static struct castle_norm_key *castle_norm_key_dim_inc(struct castle_norm_key *k
     castle_norm_key_len_get(key, &curr);
     n_dim = castle_norm_key_dim_get(&curr);
     BUG_ON(inc_dim >= n_dim);
-    for (dim = 0; dim < inc_dim; ++dim)
+    for (dim = 0; dim <= inc_dim; ++dim)
         curr = castle_norm_key_dim_next(curr);
     --curr;
     BUG_ON(*curr == KEY_MARKER_MINUS_INFINITY || *curr == KEY_MARKER_PLUS_INFINITY ||
