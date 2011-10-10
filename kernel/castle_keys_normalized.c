@@ -732,6 +732,8 @@ struct castle_var_length_btree_key *castle_norm_key_unpack(const struct castle_n
 
     if (!(dst = castle_alloc_maybe(size, dst, dst_len)))
         return NULL;
+    dst->nr_dims = 0;
+    memset(dst->_unused, 0, sizeof dst->_unused);
 
     switch (src->length)
     {
