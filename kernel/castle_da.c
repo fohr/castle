@@ -7118,7 +7118,8 @@ static void castle_da_inserts_enable(unsigned long data)
     int i;
 
     /* Check for number of tree in level 1. */
-    if (da->levels[1].nr_trees >= 4 * castle_double_array_request_cpus())
+    if ((da->levels[1].nr_trees >= 4 * castle_double_array_request_cpus()) ||
+            da->write_rate == 0)
     {
         /* If the number of trees are too many, disable inserts. */
         castle_da_write_rate_check(da);
@@ -7165,8 +7166,9 @@ void castle_da_write_rate_check(struct castle_double_array *da)
     struct timeval cur_time;
     uint64_t delta_time, throttle_time;
 
-    /* Check for number of tree in level 1. */
-    if (da->levels[1].nr_trees >= 4 * castle_double_array_request_cpus())
+    /* If the number of trees in level 1 or more than 4 or write rate 0 - disable inserts. */
+    if ((da->levels[1].nr_trees >= 4 * castle_double_array_request_cpus()) ||
+            da->write_rate == 0)
     {
         /* Note: This could be starving ios, unncessary long time. Fix it. */
         throttle_time = 300; /* in micro seconds. */
@@ -7313,9 +7315,9 @@ static struct castle_double_array* castle_da_alloc(c_da_t da_id)
     atomic64_set(&da->read_key_bytes, 0);
     atomic64_set(&da->read_data_bytes, 0);
     //da->write_rate                  = 50 * 1024 * 1024;
-    da->write_rate                  = 0;
+    da->write_rate                  = UINT_MAX * 1024 * 1024;
     da->read_rate                   = 0;
-    da->sample_rate                 = 5 * 1024 * 1024;
+    da->sample_rate                 = 1 * 1024 * 1024;
     atomic64_set(&da->sample_data_bytes, 0);
     do_gettimeofday(&da->prev_time);
 
