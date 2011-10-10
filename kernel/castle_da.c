@@ -309,7 +309,7 @@ int castle_tree_size_stats_update(void                            *key,
                                   struct castle_component_tree    *ct,
                                   int                              op)
 {
-    int entry_size;
+    uint32_t entry_size;
 
     BUG_ON(CVT_INVALID(*cvt_p));
 
@@ -330,8 +330,9 @@ int castle_tree_size_stats_update(void                            *key,
             BUG_ON(0 > atomic64_read(&ct->nr_bytes));
             break;
         case  0: /* Drain. */
-            atomic64_add(entry_size, &ct->nr_drained_bytes);
-            BUG_ON(atomic64_read(&ct->nr_drained_bytes) > atomic64_read(&ct->nr_bytes));
+            /* nr_drained_bytes is accessed by single merge thread only, no need of atomic. */
+            if (entry_size + ct->nr_drained_bytes <= atomic64_read(&ct->nr_bytes))
+                ct->nr_drained_bytes += entry_size;
             break;
         default:
             BUG();
@@ -4498,7 +4499,6 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
         /* Should have goen through all input entries. */
         if (merge->nr_bytes != merge->total_nr_bytes)
             castle_printk(LOG_DEBUG, "merge: %p, %llu, %llu\n", merge, merge->nr_bytes, merge->total_nr_bytes);
-        BUG_ON(merge->nr_bytes != merge->total_nr_bytes);
 
         if(serdes_state > NULL_DAM_SERDES)
         {
@@ -4520,8 +4520,7 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
 
             castle_printk(LOG_DEBUG, "Deleting input tree of size: %lu - %lu\n",
                                      atomic64_read(&in_ct->nr_bytes),
-                                     atomic64_read(&in_ct->nr_drained_bytes));
-            BUG_ON(atomic64_read(&in_ct->nr_bytes) != atomic64_read(&in_ct->nr_drained_bytes));
+                                     in_ct->nr_drained_bytes);
             castle_ct_put(in_ct, 0 /*write*/, NULL);
         }
         if (merge->nr_entries == 0)
@@ -5398,7 +5397,7 @@ deser_done:
     for (i=0; i<merge->nr_trees; i++)
     {
         merge->total_nr_bytes   += atomic64_read(&merge->in_trees[i]->nr_bytes);
-        merge->nr_bytes         += atomic64_read(&merge->in_trees[i]->nr_drained_bytes);
+        merge->nr_bytes         += merge->in_trees[i]->nr_drained_bytes;
     }
 
     BUG_ON(merge->nr_bytes > merge->total_nr_bytes);
@@ -6791,7 +6790,17 @@ static int castle_da_merge_run(void *da_p)
 
 merge_do:
         nr_bytes = atomic64_read(&in_trees[0]->nr_bytes) + atomic64_read(&in_trees[1]->nr_bytes);
-        BUG_ON(nr_bytes == 0);
+        if (nr_bytes == 0)
+        {
+            printk("Level %u, CT1 size: %lu/%lu\n", in_trees[0]->level,
+                                                    atomic64_read(&in_trees[0]->nr_bytes),
+                                                    atomic64_read(&in_trees[0]->item_count));
+            printk("Level %u, CT2 size: %lu/%lu\n", in_trees[1]->level,
+                                                    atomic64_read(&in_trees[1]->nr_bytes),
+                                                    atomic64_read(&in_trees[1]->item_count));
+        }
+        /* We don't want to start a new merge on empty trees. */
+        BUG_ON(MERGE_ID_INVAL(in_trees[0]->merge_id) && nr_bytes == 0);
         nr_bytes = nr_bytes / (1 << level);
 
         nr_units = 0;
@@ -7588,7 +7597,7 @@ static void castle_data_extent_stats_commit(struct castle_component_tree *ct)
 static void castle_ct_stats_commit(struct castle_component_tree *ct)
 {
     ct->chkpt_nr_bytes              =   atomic64_read(&ct->nr_bytes);
-    ct->chkpt_nr_drained_bytes      =   atomic64_read(&ct->nr_drained_bytes);
+    ct->chkpt_nr_drained_bytes      =   ct->nr_drained_bytes;
 
     castle_data_extent_stats_commit(ct);
 }
@@ -8146,6 +8155,10 @@ static struct castle_component_tree * castle_da_ct_unmarshall(struct castle_comp
     ct->seq                 = ctm->seq;
     ct->data_age            = ctm->data_age;
     atomic64_set(&ct->item_count, ctm->item_count);
+    atomic64_set(&ct->nr_bytes, ctm->nr_bytes);
+    ct->nr_drained_bytes    = ctm->nr_drained_bytes;
+    ct->chkpt_nr_bytes      = ctm->nr_bytes;
+    ct->chkpt_nr_drained_bytes = ctm->nr_drained_bytes;
     ct->btree_type          = ctm->btree_type;
     ct->dynamic             = ctm->dynamic;
     ct->da                  = da;           BUG_ON(!ct->da && !TREE_GLOBAL(ct->seq));
@@ -9278,6 +9291,7 @@ struct castle_component_tree * castle_ct_init(struct castle_component_tree *ct,
     ct->seq                      = INVAL_TREE;
     ct->data_age                 = 0;
     ct->flags                    = 0;
+    ct->nr_drained_bytes         = 0;
     ct->chkpt_nr_bytes           = 0;
     ct->chkpt_nr_drained_bytes   = 0;
     ct->btree_type               = da? da->btree_type: MTREE_TYPE;
@@ -9304,7 +9318,6 @@ struct castle_component_tree * castle_ct_init(struct castle_component_tree *ct,
     atomic_set(&ct->write_ref_count, 0);
     atomic64_set(&ct->item_count, 0);
     atomic64_set(&ct->nr_bytes, 0);
-    atomic64_set(&ct->nr_drained_bytes, 0);
 
     for (i = 0; i < MAX_BTREE_DEPTH; ++i)
         ct->node_sizes[i] = castle_btree_node_size_get(ct->btree_type);

@@ -997,8 +997,10 @@ struct castle_component_tree {
                                                 So, it doesn't add upto space occupied by all
                                                 B-Tree nodes. This would be good/more accurate
                                                 way to report B-Tree size that GN cares.        */
-    atomic64_t          nr_drained_bytes;  /**< Number of bytes drained from the tree, during
-                                                merge. Measurement units are same as nr_bytes.  */
+    uint64_t            nr_drained_bytes;  /**< Number of bytes drained from the tree, during
+                                                merge. Measurement units are same as nr_bytes.
+                                                This counter is accessed in serialised fasion
+                                                by a single merge thread, atomic not needed.    */
     uint64_t            chkpt_nr_bytes;
     uint64_t            chkpt_nr_drained_bytes;
     btree_t             btree_type;

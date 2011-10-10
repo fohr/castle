@@ -976,7 +976,7 @@ static ssize_t ct_size_show(struct kobject *kobj,
     sprintf(buf, "%sUsed Bytes: %lu\n", buf, atomic64_read(&ct->nr_bytes));
 
     return sprintf(buf, "%sCurrent Size Bytes: %lu\n", buf,
-                        atomic64_read(&ct->nr_bytes) - atomic64_read(&ct->nr_drained_bytes));
+                        atomic64_read(&ct->nr_bytes) - (unsigned long)ct->nr_drained_bytes);
 }
 
 static ssize_t ct_merge_state_show(struct kobject *kobj,
