@@ -11295,8 +11295,10 @@ exit_thread:
 
     atomic_dec(&castle_da_merge_thread_count);
 
-    /* Note: Verify if it okay to do_exit() when kthread_should_stop() is set. */
-    do_exit(0);
+    /* Note: Mereg thread code isnot very clean. Changes from user level merge handling to kernel are
+     * particularly. Clean it up before v2. */
+    if (!kthread_should_stop())
+        do_exit(0);
 
     return 0;
 }
