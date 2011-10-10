@@ -217,8 +217,12 @@ static int castle_merge_thread_stop(struct castle_merge_thread *thread, void *un
 static int castle_da_merge_check(struct castle_da_merge *merge, void *da);
 static void castle_ct_stats_commit(struct castle_component_tree *ct);
 static int castle_data_ext_should_drain(c_ext_id_t ext_id, struct castle_da_merge *merge);
-static void castle_merge_thread_cleanup(struct castle_merge_thread *merge_thread, int self_exit);
 static void castle_data_ext_size_get(c_ext_id_t ext_id, uint64_t *nr_bytes, uint64_t *nr_entries);
+static int castle_merge_thread_create(c_thread_id_t *thread_id);
+static int castle_merge_thread_attach(c_merge_id_t merge_id, c_thread_id_t thread_id);
+static int castle_da_merge_thread_wakeup(struct castle_merge_thread *merge_thread, void *unused);
+
+static atomic_t castle_da_merge_thread_count = ATOMIC(0);
 
 static struct list_head        *castle_merge_threads_hash = NULL;
 
@@ -8306,7 +8310,11 @@ static int castle_da_hash_dealloc(struct castle_double_array *da, void *unused)
     BUG_ON(!da);
     castle_sysfs_da_del(da);
 
+    /* castle_da_merge_dealloc() should run under transaction lock. */
+    CASTLE_TRANSACTION_BEGIN;
     __castle_da_foreach_tree(da, castle_da_ct_merge_dealloc);
+    CASTLE_TRANSACTION_END;
+
     /* Shouldn't have any outstanding */
     castle_merges_hash_iterate(castle_da_merge_check, da);
 
@@ -10875,11 +10883,16 @@ void castle_double_array_merges_fini(void)
 
     castle_da_exiting = 1;
 
+    /* Write memory barried to make sure all threads see castle_da_exiting. */
+    wmb();
+
     __castle_da_hash_iterate(castle_da_wait_for_compaction, NULL);
 
-    CASTLE_TRANSACTION_BEGIN;
-    __castle_merge_threads_hash_iterate(castle_merge_thread_stop, NULL);
-    CASTLE_TRANSACTION_END;
+   castle_merge_threads_hash_iterate(castle_da_merge_thread_wakeup, NULL);
+
+    /* Wait for all merge threads to complete. */
+    while (atomic_read(&castle_da_merge_thread_count))
+        msleep(1000);
 
     /* Stop DA CTs proxy timer and invalidate any existing proxies. */
     del_singleshot_timer_sync(&castle_da_cts_proxy_timer);
@@ -11221,14 +11234,16 @@ static int castle_merge_thread_start(void *_data)
     struct castle_merge_thread *merge_thread = (struct castle_merge_thread *)_data;
     struct castle_da_merge *merge;
 
-    while(!kthread_should_stop())
+    atomic_inc(&castle_da_merge_thread_count);
+
+    while(!castle_da_exiting && !kthread_should_stop())
     {
         int ret;
 
         set_current_state(TASK_INTERRUPTIBLE);
         schedule();
 
-        if (kthread_should_stop())
+        if (castle_da_exiting || kthread_should_stop())
             break;
 
         /* Running should be set by the wakeup thread. */
@@ -11237,25 +11252,50 @@ static int castle_merge_thread_start(void *_data)
         merge = castle_merges_hash_get(merge_thread->merge_id);
         BUG_ON(!merge);
 
+        /* Check if merge completed successfully. */
         if ((ret = castle_da_merge_do(merge, merge_thread->cur_work_size)) == 0)
         {
             castle_events_merge_work_finished(merge_thread->merge_id, 1, 1);
             merge_thread->merge_id = INVAL_MERGE_ID;
-            /* No need of this thread any more. Kill it. */
-            castle_merge_thread_cleanup(merge_thread, 1);
+
+            /* No need of this thread any more - exit. */
+            goto exit_thread;
         }
+        /* Merge not completed, but work completed successfully. */
         else if (ret == EAGAIN)
             castle_events_merge_work_finished(merge_thread->merge_id, 1, 0);
+        /* Merge not completed and work not completed. */
         else
             castle_events_merge_work_finished(merge_thread->merge_id, 0, 0);
 
         merge_thread->running = 0;
     }
 
+exit_thread:
+    castle_printk(LOG_DEVEL, "Thread destroy: %u\n", merge_thread->id);
+
+    castle_sysfs_merge_thread_del(merge_thread);
+
+    castle_merge_threads_hash_remove(merge_thread);
+
+    castle_kfree(merge_thread);
+
+    atomic_dec(&castle_da_merge_thread_count);
+
+    /* Note: Verify if it okay to do_exit() when kthread_should_stop() is set. */
+    do_exit(0);
+
     return 0;
 }
 
-int castle_merge_thread_create(c_thread_id_t *thread_id)
+static int castle_da_merge_thread_wakeup(struct castle_merge_thread *merge_thread, void *unused)
+{
+    wake_up_process(merge_thread->thread);
+
+    return 0;
+}
+
+static int castle_merge_thread_create(c_thread_id_t *thread_id)
 {
     struct castle_merge_thread *merge_thread = castle_malloc(sizeof(struct castle_merge_thread),
                                                              GFP_KERNEL);
@@ -11288,65 +11328,12 @@ int castle_merge_thread_create(c_thread_id_t *thread_id)
     return 0;
 }
 
-static void castle_merge_thread_cleanup(struct castle_merge_thread *merge_thread, int self_exit)
+static int castle_merge_thread_stop(struct castle_merge_thread *merge_thread, void *unused)
 {
-    castle_printk(LOG_DEVEL, "Thread destroy: %u/%u\n", merge_thread->id, self_exit);
-
-    if (!self_exit)
-        kthread_stop(merge_thread->thread);
-
-    castle_sysfs_merge_thread_del(merge_thread);
-
-    castle_merge_threads_hash_remove(merge_thread);
-
-    castle_kfree(merge_thread);
-
-    if (self_exit)
-        do_exit(0);
-}
-
-void _castle_merge_thread_destroy(c_thread_id_t thread_id, int *ret, int force)
-{
-    struct castle_merge_thread *merge_thread = castle_merge_threads_hash_get(thread_id);
-
     BUG_ON(!CASTLE_IN_TRANSACTION);
+    BUG_ON(!merge_thread);
 
-    *ret = -EINVAL;
-
-    if (!merge_thread)
-    {
-        castle_printk(LOG_USERINFO, "Couldn't find merge thread: %u\n", thread_id);
-        return;
-    }
-
-    if (!force && !MERGE_ID_INVAL(merge_thread->merge_id))
-    {
-        castle_printk(LOG_USERINFO, "Merge %u is still attached to thread %u\n",
-                                merge_thread->merge_id, thread_id);
-        return;
-    }
-
-    castle_merge_thread_cleanup(merge_thread, 0);
-
-    *ret = 1;
-}
-
-int castle_merge_thread_destroy(c_thread_id_t thread_id)
-{
-    int ret = 0;
-
-    _castle_merge_thread_destroy(thread_id, &ret, 0);
-
-    return ret;
-}
-
-static int castle_merge_thread_stop(struct castle_merge_thread *thread, void *unused)
-{
-    int ret;
-
-    _castle_merge_thread_destroy(thread->id, &ret, 1);
-
-    BUG_ON(ret);
+    kthread_stop(merge_thread->thread);
 
     return 0;
 }
@@ -11594,7 +11581,7 @@ err_out:
 
     castle_check_kfree(in_trees);
     if (!THREAD_ID_INVAL(thread_id))
-        castle_merge_thread_destroy(thread_id);
+        castle_merge_thread_stop(castle_merge_threads_hash_get(thread_id), NULL);
 
     return ret;
 }
@@ -11654,7 +11641,7 @@ int castle_merge_stop(c_merge_id_t merge_id)
     return 0;
 }
 
-int castle_merge_thread_attach(c_merge_id_t merge_id, c_thread_id_t thread_id)
+static int castle_merge_thread_attach(c_merge_id_t merge_id, c_thread_id_t thread_id)
 {
     struct castle_da_merge *merge = castle_merges_hash_get(merge_id);
     struct castle_merge_thread *merge_thread = NULL;

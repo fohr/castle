@@ -223,14 +223,11 @@ int  castle_ct_large_obj_remove (c_ext_id_t              ext_id,
 uint32_t castle_da_count(void);
 void castle_da_threads_priority_set(int nice_value);
 
-int  castle_merge_thread_create         (c_thread_id_t *thread_id);
-int  castle_merge_thread_destroy        (c_thread_id_t thread_id);
 int  castle_merge_start                 (c_merge_cfg_t *merge_cfg, c_merge_id_t *merge_id, int level);
 int  castle_merge_do_work               (c_merge_id_t   merge_id,
                                          c_work_size_t  size,
                                          c_work_id_t   *work_id);
 int  castle_merge_stop                  (c_merge_id_t merge_id);
-int  castle_merge_thread_attach         (c_merge_id_t merge_id, c_thread_id_t thread_id);
 
 int  castle_da_vertree_compact          (c_da_t da_id);
 int  castle_da_insert_rate_set          (c_da_t da_id, uint32_t insert_rate);
