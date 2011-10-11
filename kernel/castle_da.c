@@ -7131,6 +7131,7 @@ static void castle_da_inserts_enable(unsigned long data)
     }
 
 enable_inserts:
+
     /* Get current time. */
     do_gettimeofday(&cur_time);
 
@@ -7169,30 +7170,34 @@ enable_inserts:
 void castle_da_write_rate_check(struct castle_double_array *da)
 {
     struct timeval cur_time;
-    uint64_t delta_time, throttle_time;
+    uint64_t delta_time, throttle_time, data_bytes;
 
     /* No rate control on exit. */
     if (castle_fs_exiting)
         return;
-
-    /* If the number of trees in level 1 or more than 4 or write rate 0 - disable inserts. */
-    if ((da->levels[1].nr_trees >= 4 * castle_double_array_request_cpus()) ||
-            da->write_rate == 0)
-    {
-        /* Note: This could be starving ios, unncessary long time. Fix it. */
-        throttle_time = 300; /* in micro seconds. */
-        goto throttle_ios;
-    }
 
     /* Get current time. */
     do_gettimeofday(&cur_time);
 
     /* Time since last recorded sample in micro seconds. */
     delta_time      = (timeval_to_ns(&cur_time) - timeval_to_ns(&da->prev_time)) / 1000;
+    data_bytes      = atomic64_read(&da->sample_data_bytes);
+
+    /* Reset timer and accumulating counter. */
+    da->prev_time   = cur_time;
+    atomic64_set(&da->sample_data_bytes, 0);
+
+    /* If the number of trees in level 1 or more than 4 or write rate 0 - disable inserts. */
+    if ((da->levels[1].nr_trees >= 4 * castle_double_array_request_cpus()) ||
+            da->write_rate == 0)
+    {
+        /* Note: This could be starving ios, unncessary long time. Fix it. */
+        throttle_time = 1000; /* in micro seconds. */
+        goto throttle_ios;
+    }
 
     /* Find the time to throttle writes. */
-    throttle_time   = castle_da_throttle_time_get(atomic64_read(&da->sample_data_bytes),
-                                                  delta_time, da->write_rate);
+    throttle_time   = castle_da_throttle_time_get(data_bytes, delta_time, da->write_rate);
 
     /* If data rate is under the limit, just return. */
     if (!throttle_time)
