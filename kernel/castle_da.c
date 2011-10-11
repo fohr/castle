@@ -7117,6 +7117,10 @@ static void castle_da_inserts_enable(unsigned long data)
     struct timeval cur_time;
     int i;
 
+    /* If FS is exiting, enable inserts, un-conditionally. */
+    if (castle_fs_exiting)
+        goto enable_inserts;
+
     /* Check for number of tree in level 1. */
     if ((da->levels[1].nr_trees >= 4 * castle_double_array_request_cpus()) ||
             da->write_rate == 0)
@@ -7126,6 +7130,7 @@ static void castle_da_inserts_enable(unsigned long data)
         return;
     }
 
+enable_inserts:
     /* Get current time. */
     do_gettimeofday(&cur_time);
 
@@ -7166,6 +7171,10 @@ void castle_da_write_rate_check(struct castle_double_array *da)
     struct timeval cur_time;
     uint64_t delta_time, throttle_time;
 
+    /* No rate control on exit. */
+    if (castle_fs_exiting)
+        return;
+
     /* If the number of trees in level 1 or more than 4 or write rate 0 - disable inserts. */
     if ((da->levels[1].nr_trees >= 4 * castle_double_array_request_cpus()) ||
             da->write_rate == 0)
@@ -7198,9 +7207,6 @@ throttle_ios:
     set_bit(CASTLE_DA_INSERTS_DISABLED, &da->flags);
 
     /* Reschedule ourselves. */
-    setup_timer(&da->write_throttle_timer, castle_da_inserts_enable,
-                (unsigned long)da);
-
     /* Throttle_time is in micro seconds, convert it into jiffies. */
     mod_timer(&da->write_throttle_timer,
                jiffies + (HZ * throttle_time) / (1000L * 1000L) + 1);
@@ -7225,6 +7231,9 @@ static void castle_da_dealloc(struct castle_double_array *da)
         if(da->levels[i].merge.thread != NULL)
             kthread_stop(da->levels[i].merge.thread);
     }
+
+    /* Delete rate control timer. */
+    del_timer_sync(&da->write_throttle_timer);
 
     /* all merges dealloc'd, should be no more queriable merge trees */
     BUG_ON(atomic_read(&da->queriable_merge_trees_cnt)!=0);
@@ -7320,6 +7329,9 @@ static struct castle_double_array* castle_da_alloc(c_da_t da_id)
     da->sample_rate                 = 1 * 1024 * 1024;
     atomic64_set(&da->sample_data_bytes, 0);
     do_gettimeofday(&da->prev_time);
+
+    /* Setup rate control timer. */
+    setup_timer(&da->write_throttle_timer, castle_da_inserts_enable, (unsigned long)da);
 
     //TODO@tr make this a creation-time option
     da->user_timestamping = 1;
