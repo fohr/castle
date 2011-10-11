@@ -1947,6 +1947,9 @@ struct castle_object_get {
     int                           first;            /**< First call of _object_iter_continue()? */
     c_val_tup_t                   cvt;              /**< Describes value (e.g. disk offset).    */
     c_vl_bkey_t                  *key;              /**< Requested key.                         */
+    uint8_t                       flags;            /**< From userland request                  */
+    castle_user_timestamp_t       user_timestamp;   //TODO@tr get rid of this if we don't want to use it!
+
 
     int       (*reply_start)     (struct castle_object_get *get,
                                   int err,

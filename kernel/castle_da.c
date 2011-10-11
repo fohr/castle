@@ -10642,6 +10642,14 @@ struct castle_btree_type *castle_double_array_btree_type_get(struct castle_attac
 }
 
 /**
+ * Return the user_timestamping flag associated with a particular DA.
+ */
+uint8_t castle_double_array_user_timestamping_get(struct castle_attachment *att)
+{
+    return castle_da_ptr_get(att)->user_timestamping;
+}
+
+/**
  * Submit request to DA, write IOs are queued if inserts are disabled.
  *
  * Read requests:

@@ -1181,7 +1181,8 @@ static uint32_t castle_back_val_kernel_to_user(c_val_tup_t *val,
                                                uint32_t buf_used,
                                                uint32_t *this_v_used,
                                                c_collection_id_t collection_id,
-                                               int get_ool)
+                                               int get_ool,
+                                               int ret_timestamp)
 {
     struct castle_iter_val *val_copy;
     uint32_t length, val_length, rem_buf_len;
@@ -1196,6 +1197,8 @@ static uint32_t castle_back_val_kernel_to_user(c_val_tup_t *val,
 
     /* Total size is sum of userland val structure + value itself. */
     length = sizeof(struct castle_iter_val) + val_length;
+    if (ret_timestamp)
+        length += sizeof(castle_user_timestamp_t);
 
     if (rem_buf_len < length)
     {
@@ -1226,6 +1229,11 @@ static uint32_t castle_back_val_kernel_to_user(c_val_tup_t *val,
     else
         /* Set the collection_id. */
         val_copy->collection_id = collection_id;
+
+    if (ret_timestamp)
+        memcpy((uint8_t *)(castle_back_user_to_kernel(buf, val_copy->val) + val->length),
+                &val->user_timestamp,
+                sizeof(castle_user_timestamp_t));
 
     *this_v_used = length;
 
@@ -1647,18 +1655,34 @@ int castle_back_get_reply_continue(struct castle_object_get *get,
 
     if (last)
     {
+        uint32_t get_value_len = op->req.get.value_len;
+
+        /* Return timestamps */
+        if( CASTLE_RING_FLAG_RET_TIMESTAMP & get->flags ){
+            if( buffer_len - op->buffer_offset - 1 >= sizeof(castle_user_timestamp_t) )
+            {
+                /* user requested return timestamp, and we have space for it */
+                void *ts_dest = castle_back_user_to_kernel(op->buf, op->req.get.value_ptr + op->buffer_offset);
+                memcpy(ts_dest, &get->cvt.user_timestamp, sizeof(castle_user_timestamp_t));
+                op->buffer_offset += sizeof(castle_user_timestamp_t);
+                get_value_len += sizeof(castle_user_timestamp_t);
+            }
+            else
+                err = -ENOSPC;
+        }
+
         castle_back_buffer_put(op->conn, op->buf);
 
         /* Update stats. */
         if (!err)
         {
             atomic64_inc(&op->attachment->get.ios);
-            atomic64_add(op->req.get.value_len, &op->attachment->get.bytes);
+            atomic64_add(get_value_len, &op->attachment->get.bytes);
         }
 
         castle_free(get->key);
         castle_attachment_put(op->attachment);
-        castle_back_reply(op, 0, 0, op->value_length);
+        castle_back_reply(op, err, 0, op->value_length);
     }
 
     return last;
@@ -1752,6 +1776,18 @@ static void castle_back_get(void *data)
     op->get.reply_start = castle_back_get_reply_start;
     op->get.reply_continue = castle_back_get_reply_continue;
     op->get.key = key;
+    op->get.flags = op->req.flags;
+
+    if(CASTLE_RING_FLAG_RET_TIMESTAMP && op->get.flags)
+    {
+        if(!castle_double_array_user_timestamping_get(op->attachment))
+        {
+            error("User requested timestamp return on a non-timestamped collection, id=0x%x\n",
+                    op->req.get.collection_id);
+            err = -EINVAL;
+            goto err3;
+        }
+    }
 
     err = castle_object_get(&op->get, op->attachment, op->cpu_index);
     if (err)
@@ -2046,6 +2082,17 @@ static void castle_back_iter_start(void *data)
     if (err)
         goto err4;
 
+    if(CASTLE_RING_FLAG_RET_TIMESTAMP & stateful_op->get.flags)
+    {
+        if(!castle_double_array_user_timestamping_get(stateful_op->attachment))
+        {
+            error("User requested timestamp return on a non-timestamped collection, id=0x%x\n",
+                    op->req.get.collection_id);
+            err = -EINVAL;
+            goto err4;
+        }
+    }
+
     /* Check CASTLE_BACK_CONN_DEAD_FLAG under the stateful_op lock to prevent
      * racing with castle_back_release().  _op_enable_expire() also needs it. */
     spin_lock(&stateful_op->lock);
@@ -2109,6 +2156,7 @@ static uint32_t castle_back_save_key_value_to_list(struct castle_back_stateful_o
 {
     int save_val = !(stateful_op->flags & CASTLE_RING_FLAG_ITER_NO_VALUES);
     int get_ool  =   stateful_op->flags & CASTLE_RING_FLAG_ITER_GET_OOL;
+    int ret_timestamp = stateful_op->flags & CASTLE_RING_FLAG_RET_TIMESTAMP;
     uint32_t rem_buf_len;   /* How much space is free in the userland buffer.   */
     uint32_t this_kv_used;  /* How much space has been used saving this KVP.    */
     uint32_t key_len, val_len, cvt_len = 0;
@@ -2151,7 +2199,8 @@ static uint32_t castle_back_save_key_value_to_list(struct castle_back_stateful_o
                                                  buf_used + this_kv_used,       /* buf_used     */
                                                  &val_len,                      /* this_v_used  */
                                                  collection_id,                 /* collection_id*/
-                                                 get_ool);                      /* get_ool      */
+                                                 get_ool,                       /* get_ool      */
+                                                 ret_timestamp);                /* ret_timestamp*/
         if (val_len == 0)
         {
             this_kv_used = 0;

@@ -9,7 +9,7 @@
 #include <linux/time.h>
 #endif
 
-#define CASTLE_PROTOCOL_VERSION 23 /* last updated by LT */
+#define CASTLE_PROTOCOL_VERSION 24 /* last updated by TR */
 
 #define PACKED               __attribute__((packed))
 
@@ -792,14 +792,17 @@ typedef struct castle_request {
 } castle_request_t;
 
 /**
- * Value types used in struct castle_request.flags field.
+ * Value types used in struct castle_request.flags field, which is a uint8_t.
  */
+#define CASTLE_RING_FLAG_RET_TIMESTAMP (0x80)
 enum {
     CASTLE_RING_FLAG_NONE = 0x0,            /**< No flags specified.                            */
     CASTLE_RING_FLAG_NO_PREFETCH,           /**< Don't prefetch as part of this request.        */
     CASTLE_RING_FLAG_NO_CACHE,              /**< Don't evict other data to cache this request.  */
     CASTLE_RING_FLAG_ITER_NO_VALUES,        /**< Iterator to return only keys, not values.      */
     CASTLE_RING_FLAG_ITER_GET_OOL,          /**< Return out-of-line values inline.              */
+    /* When adding new flags, check to make sure there are no collisions with reserved bits like
+       CASTLE_RING_FLAG_RET_TIMESTAMPS. */
 };
 
 typedef struct castle_response {

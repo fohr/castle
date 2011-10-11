@@ -190,6 +190,8 @@ int  castle_double_array_request_cpus  (void);
 
 struct castle_btree_type
     *castle_double_array_btree_type_get(struct castle_attachment *att);
+uint8_t
+    castle_double_array_user_timestamping_get(struct castle_attachment *att);
 void castle_double_array_queue    (c_bvec_t *c_bvec);
 void castle_double_array_unreserve(c_bvec_t *c_bvec);
 void castle_double_array_submit   (c_bvec_t *c_bvec);
