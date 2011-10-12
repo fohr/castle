@@ -55,8 +55,19 @@ enum {
     NORM_DIM_NUMBER_LARGE = NORM_KEY_LENGTH_LARGE
 };
 
-/* insert a marker byte after this number of content bytes */
-#define MARKER_STRIDE 8
+/* arrays of marker strides and length bounds where the stride changes */
+static const unsigned int STRIDE_VALUES[] = { 1, 3, 4, 8, 16, 32, 64 };
+static const unsigned int STRIDE_BOUNDS[] = { 1, 4, 16, 64, 256, 1024, 0 };
+
+/* common code for all the functions which deal with variable-length strides */
+#define STRIDE_INIT_VARS                                                \
+    unsigned int str_idx = 0, stride = STRIDE_VALUES[str_idx], bound = STRIDE_BOUNDS[str_idx]
+#define STRIDE_CHECK_BOUND(pos)                                         \
+    if ((pos) == bound && ++str_idx < ARRAY_SIZE(STRIDE_VALUES))        \
+    {                                                                   \
+        stride = STRIDE_VALUES[str_idx];                                \
+        bound = STRIDE_BOUNDS[str_idx];                                 \
+    }
 
 /* special values for the marker bytes */
 enum {
@@ -66,12 +77,6 @@ enum {
     KEY_MARKER_CONTINUES      = 0xfe,
     KEY_MARKER_PLUS_INFINITY  = 0xff
 };
-
-/* the number of special values in the above enum */
-#define KEY_MARKER_NUM_SPECIAL 4
-#if (MARKER_STRIDE + 1) * 2 + KEY_MARKER_NUM_SPECIAL > 256
-#error Normalized key marker values do not fit inside a byte.
-#endif
 
 /*
  * Helper macros.
@@ -213,6 +218,63 @@ static void castle_norm_key_dim_put(unsigned char **data, size_t dim)
  */
 
 /**
+ * Predict the size of a laced bytestream.
+ * @param len       the length of the bytestream to be laced
+ *
+ * This helper function is used by castle_norm_key_packed_size_predict() to calculate the
+ * space needed for each individual dimension of the normalized key.
+ */
+static size_t castle_norm_key_lace_predict(size_t len)
+{
+    STRIDE_INIT_VARS;
+    size_t pos = 0, result = 0;
+
+    while (pos + stride < len)
+    {
+        result += stride + 1;
+        pos += stride;
+        STRIDE_CHECK_BOUND(pos);
+    }
+
+    result += stride + 1;
+    return result;
+}
+
+/**
+ * Copy a bytestream and lace it with marker bytes.
+ * @param dst       the destination buffer of the copy
+ * @param src       the source buffer of the copy
+ * @param len       number of src bytes to be copied
+ *
+ * This is a helper function which copies len bytes of a standard key from src into a
+ * series of segments of a normalized key in dst, by lacing the source bytestream with the
+ * KEY_MARKER_CONTINUES marker according to the rules defined by the STRIDE_VALUES /
+ * STRIDE_BOUNDS arrays. It returns the position in dst immediately after the copied
+ * bytes.
+ */
+static unsigned char *castle_norm_key_lace(unsigned char *dst, const char *src, size_t len)
+{
+    STRIDE_INIT_VARS;
+    size_t pos = 0;
+
+    while (pos + stride < len)
+    {
+        memcpy(dst, src, stride);
+        dst += stride;
+        *dst++ = KEY_MARKER_CONTINUES;
+        src += stride;
+        pos += stride;
+        STRIDE_CHECK_BOUND(pos);
+    }
+
+    memcpy(dst, src, len - pos);
+    memset(dst + (len - pos), 0x00, stride - (len - pos));
+    dst += stride;
+    *dst++ = KEY_MARKER_END_BASE + (len - pos) * 2;
+    return dst;
+}
+
+/**
  * Predict the size of a normalized key.
  * @param src       the source key that needs to be normalized
  *
@@ -239,44 +301,13 @@ static size_t castle_norm_key_packed_size_predict(const struct castle_var_length
         if (!(flags & KEY_DIMENSION_INFINITY_FLAGS_MASK))
         {
             size_t dim_len = castle_object_btree_key_dim_length(src, dim);
-            if (dim_len != 0)
-            {
-                dim_len = roundup(dim_len, MARKER_STRIDE);
-                dim_len += dim_len / MARKER_STRIDE;
-            }
-            else dim_len = MARKER_STRIDE + 1;
-            len += dim_len;
+            len += castle_norm_key_lace_predict(dim_len);
         }
-        else len += MARKER_STRIDE + 1;
+        else len += castle_norm_key_lace_predict(0);
     }
 
     len += NORM_KEY_DIM_SIZE(dim);
     return NORM_KEY_LENGTH_TO_SIZE(len);
-}
-
-/**
- * Copy a bytestream and lace it with marker bytes.
- * @param dst       the destination buffer of the copy
- * @param src       the source buffer of the copy
- * @param len       number of src bytes to be copied
- *
- * This is a helper function which copies len bytes of a standard key from src into a
- * series of segments of a normalized key in dst, by lacing the source bytestream with the
- * KEY_MARKER_CONTINUES marker every MARKER_STRIDE bytes. It returns the position in dst
- * immediately after the copied bytes.
- */
-static unsigned char *castle_norm_key_lace(unsigned char *dst, const char *src, size_t len)
-{
-    while (len > MARKER_STRIDE)
-    {
-        memcpy(dst, src, MARKER_STRIDE);
-        dst += MARKER_STRIDE;
-        *dst++ = KEY_MARKER_CONTINUES;
-        src += MARKER_STRIDE;
-        len -= MARKER_STRIDE;
-    }
-    memcpy(dst, src, len);
-    return dst + len;
 }
 
 /**
@@ -346,33 +377,19 @@ struct castle_norm_key *castle_norm_key_pack(const struct castle_var_length_btre
         unsigned int flags = castle_object_btree_key_dim_flags_get(src, dim);
         if (flags & KEY_DIMENSION_MINUS_INFINITY_FLAG)
         {
-            data = castle_norm_key_pad(data, 0, KEY_MARKER_MINUS_INFINITY, MARKER_STRIDE);
+            data = castle_norm_key_pad(data, 0x00, KEY_MARKER_MINUS_INFINITY, STRIDE_VALUES[0]);
         }
         else if (flags & KEY_DIMENSION_PLUS_INFINITY_FLAG)
         {
-            data = castle_norm_key_pad(data, 0xff, KEY_MARKER_PLUS_INFINITY, MARKER_STRIDE);
+            data = castle_norm_key_pad(data, 0xff, KEY_MARKER_PLUS_INFINITY, STRIDE_VALUES[0]);
         }
         else
         {
-            int marker;
             size_t dim_len = castle_object_btree_key_dim_length(src, dim);
-            if (dim_len != 0)
-            {
-                const char *dim_key = castle_object_btree_key_dim_get(src, dim);
-                data = castle_norm_key_lace(data, dim_key, dim_len);
-                /* calculate the length of the last segment: this is essentially dim_len %
-                   MARKER_STRIDE, but in the range [1..MARKER_STRIDE] instead of
-                   [0..MARKER_STRIDE-1] (except for 0) */
-                dim_len = (dim_len + MARKER_STRIDE - 1) % MARKER_STRIDE + 1;
-            }
-            /*
-             * calculate the value of the final marker byte:
-             * - start with KEY_MARKER_END_BASE as the base value
-             * - add 2 for each byte occupied since the last marker
-             * - add an extra 1 if the key value has the "next" flag
-             */
-            marker = KEY_MARKER_END_BASE + dim_len * 2 + ((flags & KEY_DIMENSION_NEXT_FLAG) != 0);
-            data = castle_norm_key_pad(data, 0, marker, MARKER_STRIDE - dim_len);
+            const char *dim_key = castle_object_btree_key_dim_get(src, dim);
+            data = castle_norm_key_lace(data, dim_key, dim_len);
+            if (flags & KEY_DIMENSION_NEXT_FLAG)
+                *(data-1) |= 1;
         }
     }
 
@@ -450,8 +467,14 @@ int castle_norm_key_compare(const struct castle_norm_key *a, const struct castle
  */
 inline static const unsigned char *castle_norm_key_dim_next(const unsigned char *pos)
 {
-    for (pos += MARKER_STRIDE; *pos == KEY_MARKER_CONTINUES;
-         pos += MARKER_STRIDE + 1);
+    STRIDE_INIT_VARS;
+    size_t len = 0;
+
+    for (pos += stride; *pos == KEY_MARKER_CONTINUES; pos += stride + 1)
+    {
+        len += stride;
+        STRIDE_CHECK_BOUND(len);
+    }
     return ++pos;
 }
 
@@ -639,41 +662,30 @@ struct castle_norm_key *castle_norm_key_hypercube_next(const struct castle_norm_
  */
 
 /**
- * Predict the size of a de-normalized key.
- * @param key       the key that needs to be de-normalized
+ * Predict the size of a de-normalized bytestream.
+ * @param src       The source buffer for the de-normalization.
  *
- * Similar to @see castle_norm_key_packed_size_predict(), this functions performs a "dummy
- * run" of the unpacking operation in order to figure out the size of the unpacked key.
+ * This helper function is used by castle_norm_key_unpacked_size_predict() to calculate
+ * the space needed for each individual dimension of the key after removing the marker
+ * bytes.
  */
-static size_t castle_norm_key_unpacked_size_predict(const struct castle_norm_key *key)
+static size_t castle_norm_key_unlace_predict(const unsigned char **src)
 {
-    /* initial size should be 16: 4 bytes length, 4 bytes nr_dims, 8 bytes _unused */
-    size_t size = sizeof(struct castle_var_length_btree_key), n_dim;
-    const unsigned char *curr, *next, *end;
-    unsigned int dim;
+    STRIDE_INIT_VARS;
+    size_t len = 0;
 
-    if (NORM_KEY_SPECIAL(key))
-        return size;
-
-    end = castle_norm_key_end(key, &curr);
-    n_dim = castle_norm_key_dim_get(&curr);
-
-    for (dim = 0; dim < n_dim; ++dim)
+    for ( ; *(*src += stride) == KEY_MARKER_CONTINUES; ++*src)
     {
-        int marker;
-        size += 4;              /* size of each dim_head */
-        next = castle_norm_key_dim_next(curr);
-        marker = *(next-1);
-        if (marker != KEY_MARKER_MINUS_INFINITY && marker != KEY_MARKER_PLUS_INFINITY)
-        {
-            size += (next - curr) - (next - curr) / (MARKER_STRIDE + 1)
-                - (MARKER_STRIDE - (marker - KEY_MARKER_END_BASE) / 2);
-        }
-        curr = next;
+        len += stride;
+        STRIDE_CHECK_BOUND(len);
     }
-    BUG_ON(curr != end);
 
-    return size;
+    if (**src != KEY_MARKER_MINUS_INFINITY && **src != KEY_MARKER_PLUS_INFINITY)
+        len += (**src - KEY_MARKER_END_BASE) / 2;
+    else
+        BUG_ON(len > 0);
+    ++*src;
+    return len;
 }
 
 /**
@@ -689,16 +701,16 @@ static size_t castle_norm_key_unpacked_size_predict(const struct castle_norm_key
  */
 static const unsigned char *castle_norm_key_unlace(char *dst, const unsigned char *src, size_t *len)
 {
-    const unsigned char *marker = src + MARKER_STRIDE;
+    STRIDE_INIT_VARS;
+    const unsigned char *marker = src;
     *len = 0;
 
-    while (*marker == KEY_MARKER_CONTINUES)
+    for ( ; *(marker += stride) == KEY_MARKER_CONTINUES; src = ++marker)
     {
-        memcpy(dst, src, MARKER_STRIDE);
-        dst += MARKER_STRIDE;
-        *len += MARKER_STRIDE;
-        src = ++marker;
-        marker += MARKER_STRIDE;
+        memcpy(dst, src, stride);
+        dst += stride;
+        *len += stride;
+        STRIDE_CHECK_BOUND(*len);
     }
 
     if (*marker != KEY_MARKER_MINUS_INFINITY && *marker != KEY_MARKER_PLUS_INFINITY)
@@ -707,7 +719,35 @@ static const unsigned char *castle_norm_key_unlace(char *dst, const unsigned cha
         memcpy(dst, src, fin_len);
         *len += fin_len;
     }
+    else BUG_ON(*len > 0);
     return ++marker;
+}
+
+/**
+ * Predict the size of a de-normalized key.
+ * @param key       the key that needs to be de-normalized
+ *
+ * Similar to @see castle_norm_key_packed_size_predict(), this functions performs a "dummy
+ * run" of the unpacking operation in order to figure out the size of the unpacked key.
+ */
+static size_t castle_norm_key_unpacked_size_predict(const struct castle_norm_key *key)
+{
+    /* initial size should be 16: 4 bytes length, 4 bytes nr_dims, 8 bytes _unused */
+    size_t size = sizeof(struct castle_var_length_btree_key), n_dim;
+    const unsigned char *curr, *end;
+    unsigned int dim;
+
+    if (NORM_KEY_SPECIAL(key))
+        return size;
+
+    end = castle_norm_key_end(key, &curr);
+    n_dim = castle_norm_key_dim_get(&curr);
+
+    for (dim = 0; dim < n_dim; ++dim)
+        size += castle_norm_key_unlace_predict(&curr) + 4 /* for the dim_head */;
+    BUG_ON(curr != end);
+
+    return size;
 }
 
 /**
@@ -819,15 +859,19 @@ void castle_norm_key_print(int level, const struct castle_norm_key *key)
         *p++ = '[';
         for (dim = 0; dim < n_dim; ++dim)
         {
+            STRIDE_INIT_VARS;
+            size_t pos = 0;
             *p++ = '0';
             *p++ = 'x';
             do
             {
-                for (i = 0; i < MARKER_STRIDE; ++i)
+                for (i = 0; i < stride; ++i)
                 {
                     sprintf(p, "%.2x", *data++);
                     p += 2;
                 }
+                pos += stride;
+                STRIDE_CHECK_BOUND(pos);
             }
             while (*data++ == KEY_MARKER_CONTINUES);
             *p++ = ',';
