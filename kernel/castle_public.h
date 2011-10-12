@@ -5,6 +5,7 @@
 #include <asm/ioctl.h>
 #ifndef __KERNEL__
 #include <sys/time.h>
+#include <sys/types.h>
 #else
 #include <linux/time.h>
 #endif
