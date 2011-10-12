@@ -2917,9 +2917,9 @@ static void castle_cache_block_init(c2_block_t *c2b,
     if (nr_pages == 1)
         c2b->buffer = pfn_to_kaddr(page_to_pfn(vmap_per_cpu_pgs_ptr[0]));
     else if (nr_pages <= CASTLE_VMAP_PGS)
-            c2b->buffer = castle_vmap_fast_map(vmap_per_cpu_pgs_ptr, i);
-        else
-            c2b->buffer = vmap(vmap_per_cpu_pgs_ptr, i, VM_READ|VM_WRITE, PAGE_KERNEL);
+        c2b->buffer = castle_vmap_fast_map(vmap_per_cpu_pgs_ptr, i);
+    else
+        c2b->buffer = vmap(vmap_per_cpu_pgs_ptr, i, VM_READ|VM_WRITE, PAGE_KERNEL);
 
     mutex_unlock(vmap_per_cpu_mutex_ptr);
     BUG_ON(!c2b->buffer);
