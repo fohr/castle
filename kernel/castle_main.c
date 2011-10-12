@@ -27,6 +27,7 @@
 #include "castle_extent.h"
 #include "castle_freespace.h"
 #include "castle_rebuild.h"
+#include "castle_ctrl_prog.h"
 
 struct castle               castle;
 struct castle_slaves        castle_slaves;
@@ -2460,16 +2461,19 @@ static int __init castle_init(void)
     if((ret = castle_attachments_init()))       goto err_out14;
     if((ret = castle_checkpoint_init()))        goto err_out15;
     if((ret = castle_control_init()))           goto err_out16;
-    if((ret = castle_sysfs_init()))             goto err_out17;
-    if((ret = castle_back_init()))              goto err_out18;
+    if((ret = castle_ctrl_prog_init()))         goto err_out17;
+    if((ret = castle_sysfs_init()))             goto err_out18;
+    if((ret = castle_back_init()))              goto err_out19;
 
     castle_printk(LOG_INIT, "Castle FS init done.\n");
 
     return 0;
 
     castle_back_fini(); /* Unreachable */
-err_out18:
+err_out19:
     castle_sysfs_fini();
+err_out18:
+    castle_ctrl_prog_fini();
 err_out17:
     castle_control_fini();
 err_out16:
@@ -2518,6 +2522,7 @@ static void __exit castle_exit(void)
     castle_fs_exiting = 1;
     /* Remove externaly visible interfaces. Starting with the control file
        (so that no new connections can be created). */
+    castle_ctrl_prog_fini();
     castle_control_fini();
     castle_back_fini();
     FAULT(FINI_FAULT);

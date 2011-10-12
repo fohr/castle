@@ -10,7 +10,7 @@
 #include <linux/time.h>
 #endif
 
-#define CASTLE_PROTOCOL_VERSION 25 /* last updated by GM */
+#define CASTLE_PROTOCOL_VERSION 26 /* last updated by GM */
 
 #define PACKED               __attribute__((packed))
 
@@ -457,14 +457,17 @@ typedef struct castle_control_cmd_read_rate_set {
 } cctrl_cmd_read_rate_set_t;
 
 typedef struct castle_control_cmd_prog_register {
+    int             ret;            /* OUT */
 } cctrl_cmd_prog_register_t;
 
 typedef struct castle_control_cmd_prog_deregister {
     pid_t           pid;            /* IN  */
     uint8_t         shutdown;       /* IN  */
+    int             ret;            /* OUT */
 } cctrl_cmd_prog_deregister_t;
 
 typedef struct castle_control_cmd_prog_heartbeat {
+    int             ret;            /* OUT */
 } cctrl_cmd_prog_heartbeat_t;
 
 typedef struct castle_control_ioctl {

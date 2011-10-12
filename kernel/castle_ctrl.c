@@ -18,6 +18,7 @@
 #include "castle_trace.h"
 #include "castle_extent.h"
 #include "castle_rebuild.h"
+#include "castle_ctrl_prog.h"
 
 //#define DEBUG
 #ifndef DEBUG
@@ -926,6 +927,10 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
         return -EINVAL;
     }
 
+    /* Handle ioctl from the control program outside of the transaction lock. */
+    if(castle_ctrl_prog_ioctl(&ioctl))
+        goto copy_out;
+
     CASTLE_TRANSACTION_BEGIN;
     debug("Lock taken: in_atomic=%d.\n", in_atomic());
     debug("IOCTL Cmd: %u\n", (uint32_t)ioctl.cmd);
@@ -1154,6 +1159,7 @@ err_out:
     }
     CASTLE_TRANSACTION_END;
 
+copy_out:
     /* Copy the results back */
     if(copy_to_user(udata, &ioctl, sizeof(cctrl_ioctl_t)))
         return -EFAULT;
