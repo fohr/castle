@@ -1611,6 +1611,8 @@ int castle_back_get_reply_continue(struct castle_object_get *get,
         castle_back_buffer_put(op->conn, op->buf);
         castle_attachment_put(op->attachment);
         castle_back_reply(op, err, 0, 0, 0);
+
+        return 1;
     }
 
     BUG_ON(!buffer);
