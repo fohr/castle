@@ -467,8 +467,6 @@ static void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
 
     if (err == -EEXIST)
         debug(LOG_WARN, "Failed to insert into btree (timestamp violation).\n");
-    else if (err && !cancelled)
-        castle_printk(LOG_WARN, "Failed to insert into btree.\n");
 
     /* If there was an error inserting on large objects, free the extent.
        Since there was an error, the object hasn't been threaded onto large object list yet.
