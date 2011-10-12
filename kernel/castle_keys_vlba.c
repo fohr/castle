@@ -17,9 +17,8 @@
 
 #define BUG()                   assert(0)
 #define BUG_ON(x)               assert(!(x))
-#define kmalloc(x, _)           malloc(x)
-#define kzalloc(x, _)           calloc(1, x)
-#define kfree(x)                free(x)
+#define castle_alloc(x)         malloc(x)
+#define castle_free(x)          free(x)
 #endif
 
 /*
@@ -27,10 +26,11 @@
  */
 #include "castle_public.h"
 #include "castle_defines.h"
-#include "castle_debug.h"
 #ifdef __KERNEL__
+#include "castle_debug.h"
 #include "castle_utils.h"       /* castle_printk() and friends */
 #else
+void *castle_dup_or_copy(const void *src, size_t src_len, void *dst, size_t *dst_len);
 #define LOG_ERROR               stderr
 #define castle_printk           fprintf
 #endif

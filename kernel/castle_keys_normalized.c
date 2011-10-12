@@ -28,6 +28,7 @@
 #define castle_free(x)          free(x)
 
 /* lifted from linux/kernel.h */
+#define ARRAY_SIZE(x)           (sizeof(x) / sizeof((x)[0]))
 #define likely(x)               __builtin_expect(!!(x), 1)
 #define roundup(x, y)           ((((x) + ((y) - 1)) / (y)) * (y))
 #define min(x, y) ({				\
@@ -43,7 +44,12 @@
 
 #include "castle_public.h"
 #include "castle_keys_vlba.h"   /* VLBA_TREE_LENGTH_OF_*_KEY */
+#ifdef __KERNEL__
 #include "castle_utils.h"
+#else
+void *castle_alloc_maybe(size_t len, void *dst, size_t *dst_len);
+void *castle_dup_or_copy(const void *src, size_t src_len, void *dst, size_t *dst_len);
+#endif
 #include "castle_keys_normalized.h"
 
 /*
