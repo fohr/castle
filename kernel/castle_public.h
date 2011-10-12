@@ -9,7 +9,7 @@
 #include <linux/time.h>
 #endif
 
-#define CASTLE_PROTOCOL_VERSION 24 /* last updated by TR */
+#define CASTLE_PROTOCOL_VERSION 25 /* last updated by GM */
 
 #define PACKED               __attribute__((packed))
 
@@ -256,6 +256,9 @@ typedef struct castle_merge_config {
 #define CASTLE_CTRL_MERGE_THREAD_ATTACH      39
 #define CASTLE_CTRL_INSERT_RATE_SET          40
 #define CASTLE_CTRL_READ_RATE_SET            41
+#define CASTLE_CTRL_PROG_REGISTER            42
+#define CASTLE_CTRL_PROG_DEREGISTER          43
+#define CASTLE_CTRL_PROG_HEARTBEAT           44
 
 typedef struct castle_control_cmd_claim {
     uint32_t       dev;          /* IN  */
@@ -452,6 +455,17 @@ typedef struct castle_control_cmd_read_rate_set {
     int             ret;            /* OUT */
 } cctrl_cmd_read_rate_set_t;
 
+typedef struct castle_control_cmd_prog_register {
+} cctrl_cmd_prog_register_t;
+
+typedef struct castle_control_cmd_prog_deregister {
+    pid_t           pid;            /* IN  */
+    uint8_t         shutdown;       /* IN  */
+} cctrl_cmd_prog_deregister_t;
+
+typedef struct castle_control_cmd_prog_heartbeat {
+} cctrl_cmd_prog_heartbeat_t;
+
 typedef struct castle_control_ioctl {
     uint16_t cmd;
     union {
@@ -499,6 +513,9 @@ typedef struct castle_control_ioctl {
         cctrl_cmd_merge_thread_attach_t merge_thread_attach;
         cctrl_cmd_insert_rate_set_t     insert_rate_set;
         cctrl_cmd_read_rate_set_t       read_rate_set;
+        cctrl_cmd_prog_register_t       ctrl_prog_register;
+        cctrl_cmd_prog_deregister_t     ctrl_prog_deregister;
+        cctrl_cmd_prog_heartbeat_t      ctrl_prog_heartbeat;
     };
 } cctrl_ioctl_t;
 
@@ -572,6 +589,12 @@ enum {
         _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_INSERT_RATE_SET, cctrl_ioctl_t),
     CASTLE_CTRL_READ_RATE_SET_IOCTL =
         _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_READ_RATE_SET, cctrl_ioctl_t),
+    CASTLE_CTRL_PROG_REGISTER_IOCTL =
+        _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_PROG_REGISTER, cctrl_ioctl_t),
+    CASTLE_CTRL_PROG_DEREGISTER_IOCTL =
+        _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_PROG_DEREGISTER, cctrl_ioctl_t),
+    CASTLE_CTRL_PROG_HEARTBEAT_IOCTL =
+        _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_PROG_HEARTBEAT, cctrl_ioctl_t),
 };
 
 /*
