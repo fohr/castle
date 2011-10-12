@@ -166,7 +166,11 @@ static void castle_btree_io_end(c_bvec_t    *c_bvec,
     }
 
     /* If DA timestamped, and successful write, update ct->max_user_timestamp */
-    if((c_bvec->tree->da->user_timestamping)  && (c_bvec_data_dir(c_bvec) == WRITE) && (!err))
+    if( (c_bvec->tree) &&
+            (!TREE_GLOBAL(c_bvec->tree->seq)) &&
+            (c_bvec->tree->da->user_timestamping)  &&
+            (c_bvec_data_dir(c_bvec) == WRITE) &&
+            (!err) )
         atomic64_set(&c_bvec->tree->max_user_timestamp,
             max((uint64_t)atomic64_read(&c_bvec->tree->max_user_timestamp),
                 (uint64_t)cvt.user_timestamp));
