@@ -179,10 +179,6 @@ int castle_rda_space_reserve(c_rda_type_t            rda_type,
         return -EINVAL;
     }
 
-    /* Permute the list of slaves the first time around. This is important for small extents as we
-     * don't want to go with same set of slaves all the time. */
-    castle_rda_slaves_shuffle(slaves, nr_slaves);
-
     /* We used to do the optimiztion "when allocating small extents, limit the number of disks, which
      * reduce the wasted space". Not doing this optimization for reservations anymore as it is fine to
      * over-reserve, as we reservations get destroyed after completing the task(ex: merge). */

@@ -186,8 +186,7 @@ static void castle_freespace_slave_superchunk_over_usage(struct castle_slave  *c
         pool->reserved_schks[cs->id]--;
 }
 
-static void castle_freespace_slave_superchunks_free(struct castle_slave  *cs,
-                                                    c_chk_cnt_t           nr_schks,
+static void castle_freespace_slave_superchunk_freed(struct castle_slave  *cs,
                                                     c_res_pool_t         *pool)
 {
     /* Should be part of a extent transaction, to avoid race with checkpoints. */
@@ -196,15 +195,13 @@ static void castle_freespace_slave_superchunks_free(struct castle_slave  *cs,
     /* Unreserve superchunks from reservation pool. */
     if (pool)
     {
-        BUG_ON(nr_schks != 1);
-
         castle_res_pool_counter_check(pool, cs->id);
 
         /* If we still got few overallocated chunks, first free them. */
         if (pool->reserved_schks[cs->id] < 0)
-            pool->reserved_schks[cs->id] += nr_schks;
+            pool->reserved_schks[cs->id]++;
         else
-            pool->freed_schks[cs->id] += nr_schks;
+            pool->freed_schks[cs->id]++;
     }
 }
 
@@ -395,7 +392,11 @@ void castle_freespace_slave_superchunk_free(struct castle_slave *cs,
     atomic_add(chk_seq.count, &cs->free_chk_cnt);
     freespace->nr_entries += nr_sup_chunks;
 
-    castle_freespace_slave_superchunks_free(cs, chk_seq.count / CHKS_PER_SLOT, pool);
+    if (pool)
+    {
+        BUG_ON(chk_seq.count != CHKS_PER_SLOT);
+        castle_freespace_slave_superchunk_freed(cs, pool);
+    }
 
     if ((freespace->cons == ((freespace->prod + 1) % freespace->max_entries)) &&
         (freespace->nr_entries != freespace->max_entries - 1))

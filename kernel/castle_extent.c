@@ -416,6 +416,12 @@ int __castle_extent_space_reserve(c_rda_type_t       rda_type,
         c_res_pool_t *local_pool = castle_alloc(sizeof(c_res_pool_t));
         int ret;
 
+        /* All reservation pool operations are done first on a local pool, and updated to
+         * the client pool only on success. As, it is hard to find-out how many superchunks
+         * are reserved in this session, in case of failure. If it is a local pool, we just
+         * destroy it on failure. */
+        /* All freespace pool functions can/should work on pools without any valid ID (so
+         * not in hash). They just depend on pool object. */
         castle_res_pool_init(local_pool);
 
         /* First reserve some space on hard drives. */
@@ -2551,6 +2557,9 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t     rda_type,
         if (!pool)
             goto __hell;
 
+        /* This is just a temporary pool, just to make allocation much simpler. This is not
+         * added to hash table and so can't be checkpointed. And the life time of this pool
+         * is just during extent_alloc(). */
         castle_res_pool_init(pool);
 
         if (__castle_extent_space_reserve(rda_type, alloc_size, pool) < 0)
