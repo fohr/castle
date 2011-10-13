@@ -103,6 +103,28 @@ int castle_ctrl_prog_ioctl(cctrl_ioctl_t *ioctl)
             ioctl->ctrl_prog_heartbeat.ret = 0;
             break;
 
+        case CASTLE_CTRL_MERGE_START:
+            ioctl->merge_start.ret = -EPERM;
+            goto check_pid;
+        case CASTLE_CTRL_MERGE_DO_WORK:
+            ioctl->merge_do_work.ret = -EPERM;
+            goto check_pid;
+        case CASTLE_CTRL_MERGE_STOP:
+            ioctl->merge_stop.ret = -EPERM;
+            goto check_pid;
+        case CASTLE_CTRL_INSERT_RATE_SET:
+            ioctl->insert_rate_set.ret = -EPERM;
+            goto check_pid;
+        case CASTLE_CTRL_READ_RATE_SET:
+            ioctl->read_rate_set.ret = -EPERM;
+check_pid:
+            /* If ctrl prog not registered, return 'not handled'. */
+            if(castle_ctrl_prog_state != CTRL_PROG_PRESENT)
+                return 0;
+            /* If ctrl program registered, and the pids don't match, return 'handled'. */
+            if(current->pid != castle_ctrl_prog_pid)
+                return 1;
+            break;
         default:
             return 0;
     }
