@@ -413,8 +413,12 @@ int __castle_extent_space_reserve(c_rda_type_t       rda_type,
     /* Handle SSD_RDA as a special case. */
     if ((rda_type == SSD_RDA_2) || (rda_type == SSD_RDA_3))
     {
-        c_res_pool_t *local_pool = castle_alloc(sizeof(c_res_pool_t));
+        c_res_pool_t *local_pool;
         int ret;
+
+        local_pool = castle_alloc(sizeof(c_res_pool_t));
+        if (!local_pool)
+            return -ENOSPC;
 
         /* All reservation pool operations are done first on a local pool, and updated to
          * the client pool only on success. As, it is hard to find-out how many superchunks
@@ -425,13 +429,15 @@ int __castle_extent_space_reserve(c_rda_type_t       rda_type,
         castle_res_pool_init(local_pool);
 
         /* First reserve some space on hard drives. */
-        ret = castle_rda_space_reserve(castle_ssdrda_to_rda(rda_type), logical_chk_cnt,
+        ret = castle_rda_space_reserve(castle_ssdrda_to_rda(rda_type),
+                                       logical_chk_cnt,
                                        local_pool);
         if (ret < 0)
         {
             debug_res_pools("Failed to reserve %u chunks for pool: %u for RDA: %s\n",
                              logical_chk_cnt, pool->id,
                              castle_rda_type_str[castle_ssdrda_to_rda(rda_type)]);
+            castle_free(local_pool);
             return -ENOSPC;
         }
 
@@ -445,6 +451,7 @@ int __castle_extent_space_reserve(c_rda_type_t       rda_type,
                              castle_rda_type_str[SSD_ONLY_EXT]);
             /* Unreserve space allocated on hard drives. */
             castle_res_pool_unreserve(local_pool);
+            castle_free(local_pool);
             return -ENOSPC;
         }
 
