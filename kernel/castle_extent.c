@@ -52,11 +52,15 @@
 #define debug_res_pools(_f, _a...)  ((void)0)
 #endif
 
+#if 0
 #undef debug_res_pools
 #define debug_res_pools(_f, _a...)  (printk(_f, ##_a))
+#endif
 
+#if 0
 #undef debug_resize
 #define debug_resize(_f, _a...)  (printk(_f, ##_a))
+#endif
 
 #define MAP_IDX(_ext, _i, _j)       (((_ext)->k_factor * _i) + _j)
 #define CASTLE_EXTENTS_HASH_SIZE    100
@@ -274,9 +278,9 @@ static USED void castle_res_pool_print(c_res_pool_t *pool)
     struct list_head *lh;
 
     if (RES_POOL_INVAL(pool->id))
-        printk("INVAL_POOL_ID\n");
+        debug_res_pools("INVAL_RES_POOL\n");
     else
-        printk("%u\n", pool->id);
+        debug_res_pools("%u\n", pool->id);
 
     rcu_read_lock();
 
@@ -284,16 +288,15 @@ static USED void castle_res_pool_print(c_res_pool_t *pool)
     list_for_each_rcu(lh, &castle_slaves.slaves)
     {
         struct castle_slave *slave = list_entry(lh, struct castle_slave, list);
-        int id = slave->id;
 
         /* If the slave is OOS, no point in keeping track of reservations. */
         if (test_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags))
             continue;
 
-        printk("%u - %d:%u:%u\n", id,
-                                  pool->reserved_schks[id],
-                                  pool->freed_schks[id],
-                                  pool->frozen_freed_schks[id]);
+        debug_res_pools("%u - %d:%u:%u\n", slave->id,
+                                           pool->reserved_schks[slave->id],
+                                           pool->freed_schks[slave->id],
+                                           pool->frozen_freed_schks[slave->id]);
     }
 
     rcu_read_unlock();
@@ -372,6 +375,14 @@ static void castle_res_pool_init(c_res_pool_t *pool)
 
     pool->id = INVAL_RES_POOL;
     INIT_LIST_HEAD(&pool->hash_list);
+}
+
+int castle_res_pool_is_alive(c_res_pool_id_t pool_id)
+{
+    if (castle_res_pool_hash_get(pool_id))
+        return 1;
+
+    return 0;
 }
 
 /**
@@ -492,7 +503,9 @@ c_res_pool_id_t castle_res_pool_create(c_rda_type_t rda_type, c_chk_cnt_t logica
     if (logical_chk_cnt && __castle_extent_space_reserve(rda_type, logical_chk_cnt, pool))
     {
         /* Failed to allocate space for pool. */
+        castle_extent_transaction_end();
         castle_kfree(pool);
+
         return INVAL_RES_POOL;
     }
 
@@ -662,10 +675,10 @@ static int castle_res_pool_writeback(c_res_pool_t *pool, void *store)
         /* Prepare mstore entry. */
         entry->slaves[i].uuid           = slave->uuid;
 
-        i++;
-
         debug_res_pools("\t%d chunks from slave: 0x%x\n", entry->slaves[i].reserved_schks,
                                                           slave->uuid);
+
+        i++;
 
 skip_slave:
         /* Reset freed_schks. */
@@ -2542,8 +2555,8 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t     rda_type,
 
         if (__castle_extent_space_reserve(rda_type, alloc_size, pool) < 0)
         {
-            castle_printk(LOG_WARN, "Failed to reserve space for extent allocation: %u, %s\n",
-                                    alloc_size, castle_rda_type_str[rda_type]);
+            debug_res_pools("Failed to reserve space for extent allocation: %u, %s\n",
+                             alloc_size, castle_rda_type_str[rda_type]);
             castle_kfree(pool);
             pool = NULL;
 
@@ -6218,6 +6231,9 @@ int castle_extent_grow(c_ext_id_t ext_id, c_chk_cnt_t count)
 
     castle_extent_transaction_start();
 
+    if (ext->pool)
+        castle_res_pool_print(ext->pool);
+
     /* Allocate space to the extent. */
     ret = castle_extent_space_alloc(ext, INVAL_DA, count);
     if (ret < 0)
@@ -6248,6 +6264,9 @@ int castle_extent_grow(c_ext_id_t ext_id, c_chk_cnt_t count)
         goto out;
     }
 
+    if (ext->pool)
+        castle_res_pool_print(ext->pool);
+
 out:
     castle_extent_transaction_end();
 
@@ -6277,6 +6296,9 @@ int castle_extent_shrink(c_ext_id_t ext_id, c_chk_cnt_t chunk)
 
     castle_extent_transaction_start();
 
+    if (ext->pool)
+        castle_res_pool_print(ext->pool);
+
     /* Get the current latest mask. */
     mask = GET_LATEST_MASK(ext);
 
@@ -6292,6 +6314,9 @@ int castle_extent_shrink(c_ext_id_t ext_id, c_chk_cnt_t chunk)
         debug_resize("Fail to shrink the extent: %llu\n", ext_id);
         goto out;
     }
+
+    if (ext->pool)
+        castle_res_pool_print(ext->pool);
 
 out:
     castle_extent_transaction_end();

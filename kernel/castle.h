@@ -1266,7 +1266,7 @@ struct castle_dmserlist_entry {
     /*       1020 */ uint64_t                         iter_src_items_completed;
     /*       1028 */ c_merge_id_t                     merge_id;
     /*       1032 */ uint32_t                         nr_drain_exts;
-    /*       1036 */ uint8_t                          unused[4];
+    /*       1036 */ uint32_t                         pool_id;
     /*       1040 */
 } PACKED;
 #define SIZEOF_CASTLE_DMSERLIST_ENTRY (1040)

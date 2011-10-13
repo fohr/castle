@@ -200,6 +200,7 @@ int castle_rda_space_reserve(c_rda_type_t            rda_type,
         ret = castle_freespace_slave_superchunks_reserve(slaves[i], reservation_size, pool);
         if(ret)
         {
+            castle_printk(LOG_DEVEL, "Failed to reserve space on slave: 0x%x\n", slaves[i]->uuid);
             /* Fail to reserve space. Unreserve space from slaves. */
             for (i=i-1; i>=0; i--)
                 castle_freespace_slave_superchunks_unreserve(slaves[i], reservation_size, pool);

@@ -16,6 +16,7 @@ struct castle_da_merge {
     struct list_head              hash_list;
     struct kobject                kobj;
     c_thread_id_t                 thread_id;
+    c_res_pool_id_t               pool_id;
 
     struct castle_double_array   *da;
     struct castle_btree_type     *out_btree;

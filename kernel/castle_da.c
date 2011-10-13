@@ -42,6 +42,7 @@
                                         _f, __FILE__, __LINE__ , da->id, level, ##_a))
 #endif
 #define debug_dexts(_f, _a...)    ((void)0)
+#define debug_res_pools(_f, _a...)  ((void)0)
 #else
 #define debug(_f, _a...)          (castle_printk(LOG_DEBUG, "%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
 #define debug_verbose(_f, ...)    (castle_printk(LOG_DEBUG, "%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
@@ -50,6 +51,7 @@
 #define debug_merges(_f, _a...)   (castle_printk(LOG_DEBUG, "%s:%.4d: DA=%d, level=%d: " \
                                         _f, __FILE__, __LINE__ , da->id, level, ##_a))
 #define debug_dexts(_f, _a...)    (castle_printk(LOG_DEBUG, _f, ##_a))
+#define debug_res_pools(_f, _a...)  (castle_printk(LOG_DEBUG, _f, ##_a))
 #endif
 
 #if 0
@@ -59,6 +61,11 @@
 
 #undef debug_gn
 #define debug_gn(_f, _a...)       (printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
+
+#if 0
+#undef debug_res_pools
+#define debug_res_pools(_f, _a...)  (printk(_f, ##_a))
+#endif
 
 #define MAX_DYNAMIC_INTERNAL_SIZE       (5)     /* In C_CHK_SIZE. */
 #define MAX_DYNAMIC_TREE_SIZE           (20)    /* In C_CHK_SIZE. */
@@ -3153,6 +3160,22 @@ static int castle_da_merge_extents_alloc(struct castle_da_merge *merge)
     BUG_ON(!EXT_ID_INVAL(merge->out_tree->internal_ext_free.ext_id) ||
            !EXT_ID_INVAL(merge->out_tree->tree_ext_free.ext_id));
 
+    /* Create a reservation pool and reserve some space. For now, allocate fixed amount of space
+     * for all merges. We could change this based on merge type, later. */
+    merge->pool_id = castle_res_pool_create(castle_get_ssd_rda_lvl(), 100);
+    if (RES_POOL_INVAL(merge->pool_id))
+    {
+        debug_res_pools("Failed to reserve space for merge on SSD\n");
+        merge->pool_id = castle_res_pool_create(castle_get_rda_lvl(), 100);
+        if (RES_POOL_INVAL(merge->pool_id))
+        {
+            castle_printk(LOG_USERINFO, "Failed to reserve space for merge\n");
+            return -ENOSPC;
+        }
+    }
+    debug_res_pools("Created reservation pool %u for the merge at level %u\n",
+                     merge->pool_id, merge->level);
+
 __again:
     /* If the space is not already reserved for the merge, allocate it from freespace. */
     if (!lfs->space_reserved)
@@ -3189,7 +3212,16 @@ __again:
 
         /* If failed to allocate space, return error. lfs structure is already set.
          * Low freespace handler would allocate space, when more freespace is available. */
-        if (ret)    return ret;
+        if (ret)
+        {
+            /* Destroy reservation pool and reset ID in merge structure, merge_dealloc() can't
+             * handle partial done work from extents_alloc(). */
+            castle_res_pool_destroy(merge->pool_id);
+            BUG_ON(castle_res_pool_is_alive(merge->pool_id));
+            merge->pool_id = INVAL_RES_POOL;
+
+            return ret;
+        }
     }
 
     /* Successfully allocated space. Initialize the component tree with alloced extents.
@@ -3214,6 +3246,20 @@ __again:
         merge->out_tree->bloom_exists = 0;
     else
         merge->out_tree->bloom_exists = 1;
+
+    /* Attach extents to reservation pools. */
+    /* Attach all in-tree tree extents to reservation pool, adds space to pool. */
+    for (i=0; i<merge->nr_trees; i++)
+        castle_res_pool_extent_attach(merge->pool_id, merge->in_trees[i]->tree_ext_free.ext_id);
+
+    /* Attach all data extents that are going to drain to reservation pool, adds space to pool. */
+    for (i=0; i<merge->nr_drain_exts; i++)
+        castle_res_pool_extent_attach(merge->pool_id, merge->drain_exts[i]);
+
+    /* Attach output tree's tree extent and data extent to reservation pool, consume's space. */
+    castle_res_pool_extent_attach(merge->pool_id, merge->out_tree->tree_ext_free.ext_id);
+    if (!EXT_ID_INVAL(merge->out_tree->data_ext_free.ext_id))
+        castle_res_pool_extent_attach(merge->pool_id, merge->out_tree->data_ext_free.ext_id);
 
     return 0;
 }
@@ -4494,6 +4540,32 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
     if (merge->merged_iter)
         castle_ct_merged_iter_cancel(merge->merged_iter);
 
+    /* Detach extents from reservation pools. */
+    if (!RES_POOL_INVAL(merge->pool_id))
+    {
+        /* Detach all in-tree tree extents from reservation pool. */
+        for (i=0; i<merge->nr_trees; i++)
+            castle_res_pool_extent_detach(merge->in_trees[i]->tree_ext_free.ext_id);
+
+        /* Detach all data extents that are drained from reservation pool. */
+        for (i=0; i<merge->nr_drain_exts; i++)
+            castle_res_pool_extent_detach(merge->drain_exts[i]);
+
+        /* Detach output tree's tree extent and data extent from reservation pool. */
+        castle_res_pool_extent_detach(merge->out_tree->tree_ext_free.ext_id);
+        if (!EXT_ID_INVAL(merge->out_tree->data_ext_free.ext_id))
+            castle_res_pool_extent_detach(merge->out_tree->data_ext_free.ext_id);
+
+        /* Destroy reservation pool, if this end of merge. */
+        if (err != -ESHUTDOWN)
+        {
+            castle_res_pool_destroy(merge->pool_id);
+
+            /* Already detached all extents from it. Shouldn't be alive any more. */
+            BUG_ON(castle_res_pool_is_alive(merge->pool_id));
+        }
+    }
+
     if(!err)
     {
         /* Should have goen through all input entries. */
@@ -5290,6 +5362,22 @@ static int castle_da_merge_init(struct castle_da_merge *merge, void *unused)
         merge->out_tree = merge->serdes.out_tree;
         castle_da_merge_deserialise(merge, da, level);
 
+        debug_res_pools("Found merge %u with pool: %u\n", merge->id, merge->pool_id);
+
+        /* Attach extents to reservation pools. */
+        /* Attach all in-tree tree extents to reservation pool, adds space to pool. */
+        for (i=0; i<merge->nr_trees; i++)
+            castle_res_pool_extent_attach(merge->pool_id, merge->in_trees[i]->tree_ext_free.ext_id);
+
+        /* Attach all data extents that are going to drain to reservation pool, adds space to pool. */
+        for (i=0; i<merge->nr_drain_exts; i++)
+            castle_res_pool_extent_attach(merge->pool_id, merge->drain_exts[i]);
+
+        /* Attach output tree's tree extent and data extent to reservation pool, consume's space. */
+        castle_res_pool_extent_attach(merge->pool_id, merge->out_tree->tree_ext_free.ext_id);
+        if (!EXT_ID_INVAL(merge->out_tree->data_ext_free.ext_id))
+            castle_res_pool_extent_attach(merge->pool_id, merge->out_tree->data_ext_free.ext_id);
+
         castle_printk(LOG_DEVEL, "Found merge with %llu entries\n", merge->nr_entries);
 
         goto deser_done;
@@ -5448,6 +5536,7 @@ static struct castle_da_merge* castle_da_merge_alloc(int                        
 
     merge->id                   = INVAL_MERGE_ID;
     merge->thread_id            = INVAL_THREAD_ID;
+    merge->pool_id              = INVAL_RES_POOL;
     merge->da                   = da;
     merge->out_btree            = castle_btree_type_get(da->btree_type);
     merge->level                = level;
@@ -6158,6 +6247,8 @@ update_output_tree_state:
     merge_mstore->internals_on_ssds  = merge->internals_on_ssds;
 
     merge_mstore->nr_drain_exts      = merge->nr_drain_exts;
+
+    merge_mstore->pool_id            = merge->pool_id;
 
     return;
 }
@@ -9019,6 +9110,10 @@ int castle_double_array_read(void)
 
         /* Change the count to 0 for now, while serialising data_ext maps we add them. */
         merge->nr_drain_exts = 0;
+
+        /* Check and update reservation pool_id. */
+        merge->pool_id = mstore_dmserentry->pool_id;
+        BUG_ON(!castle_res_pool_is_alive(merge->pool_id));
 
         /* we know the da and the level, and we passed some sanity checking - so put the serdes
            state in the appropriate merge slot */

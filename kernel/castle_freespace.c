@@ -16,8 +16,10 @@
 #define debug_res_pools(_f, _a...)  ((void)0)
 #endif
 
+#if 0
 #undef debug_res_pools
 #define debug_res_pools(_f, _a...)  (printk(_f, ##_a))
+#endif
 
 #define DISK_NO_SPACE(_fs) (((_fs)->prod == (_fs)->cons) &&            \
                             ((_fs)->nr_entries == 0))
@@ -76,7 +78,7 @@ int castle_freespace_slave_superchunks_reserve(struct castle_slave  *cs,
     /* Allocate freespace, if enough freespace is available. */
     if (free_schks >= nr_schks)
     {
-        debug_res_pools("Reservation count for slave: 0x%x updated: %u -> %u",
+        debug_res_pools("Reservation count for slave: 0x%x updated: %u -> %u\n",
                          cs->uuid, cs->reserved_schks, cs->reserved_schks + nr_schks);
         cs->reserved_schks += nr_schks;
 
@@ -111,7 +113,7 @@ static void _castle_freespace_slave_superchunks_unreserve(struct castle_slave  *
 
     BUG_ON(schks_to_free > cs->reserved_schks);
 
-    debug_res_pools("Reservation count for slave: 0x%x updated: %u -> %u",
+    debug_res_pools("Reservation count for slave: 0x%x updated: %u -> %u\n",
                      cs->uuid, cs->reserved_schks, cs->reserved_schks - schks_to_free);
 
     cs->reserved_schks -= schks_to_free;

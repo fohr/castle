@@ -167,6 +167,11 @@ c_res_pool_id_t     castle_res_pool_create                   (c_rda_type_t      
 int                 castle_extent_space_reserve              (c_rda_type_t         rda_type,
                                                               c_chk_cnt_t          logical_chk_cnt,
                                                               c_res_pool_id_t      pool_id);
+void                castle_res_pool_extent_attach            (c_res_pool_id_t      pool_id,
+                                                              c_ext_id_t           ext_id);
+void                castle_res_pool_extent_detach            (c_ext_id_t           ext_id);
+void                castle_res_pool_destroy                  (c_res_pool_id_t      pool_id);
+int                 castle_res_pool_is_alive                 (c_res_pool_id_t      pool_id);
 
 #define castle_res_pool_counter_check(_pool, _id)                                           \
 do {                                                                                        \
