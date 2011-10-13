@@ -69,7 +69,14 @@ int castle_vmap_fast_map_init(void)
             debug("castle_vmap_fast_map_init freelist vmalloc/vmap failure\n");
             /* Before we error out, delete the freelists sucessfully allocated so far, if any */
             while (--freelist_bucket_idx)
-                castle_vmap_freelist_delete(get_freelist_head(freelist_bucket_idx));
+            {
+                castle_vmap_freelist_t *freelist;
+
+                freelist = get_freelist_head (freelist_bucket_idx);
+
+                castle_vmap_freelist_delete(freelist);
+                castle_kfree(freelist);
+            }
             return -ENOMEM;
         }
 
@@ -216,7 +223,6 @@ static void castle_vmap_freelist_delete(castle_vmap_freelist_t *castle_vmap_free
     castle_vfree(castle_vmap_freelist->freelist);
     /* Let vmalloc.c destroy vm_area_struct by vmunmping it. */
     vunmap(castle_vmap_freelist->vstart);
-    BUG_ON(list_empty(&castle_vmap_freelist->list));
 }
 
 static void castle_vmap_freelist_add(castle_vmap_freelist_t *castle_vmap_freelist, uint32_t id)
@@ -388,6 +394,7 @@ static void castle_vmap_freelist_grow(int freelist_bucket_idx, int slots)
     {
         debug("Dropping new list for freelist bucket index %d\n", freelist_bucket_idx);
         castle_vmap_freelist_delete(new);
+        castle_kfree(new);
         goto out;
     }
     list_add(&new->list, castle_vmap_fast_maps_ptr+freelist_bucket_idx);
