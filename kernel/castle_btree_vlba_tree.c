@@ -381,9 +381,10 @@ static void castle_vlba_tree_key_dealloc(void *keyv)
     castle_object_btree_key_free(keyv);
 }
 
-static uint32_t castle_vlba_tree_key_hash(const void *keyv, uint32_t seed)
+static uint32_t castle_vlba_tree_key_hash(const void *keyv, c_btree_hash_enum_t type, uint32_t seed)
 {
     const vlba_key_t *key = keyv;
+    BUG_ON(type != HASH_WHOLE_KEY);
     return murmur_hash_32(key->_key, key->length, seed);
 }
 

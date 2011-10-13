@@ -107,7 +107,7 @@ static void castle_mtree_key_dealloc(void *key)
     /* No need to do anything in mtree keys, because they are ints (cast to void *). */
 }
 
-static uint32_t castle_mtree_key_hash(const void *key, uint32_t seed)
+static uint32_t castle_mtree_key_hash(const void *key, c_btree_hash_enum_t type, uint32_t seed)
 {
     BUG();
 }

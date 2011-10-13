@@ -848,9 +848,20 @@ struct castle_btree_node {
 #define BTREE_NODE_HAS_TIMESTAMPS(_node) ((_node)->flags & BTREE_NODE_HAS_TIMESTAMPS_FLAG)
 #define BTREE_NODE_PAYLOAD(_node)        ((void *)&(_node)->payload)
 
-/* Below encapsulates the internal btree node structure, different type of
-   nodes may be used for different trees */
+/**
+ * CT states to handle key ranges with partial merge redirection.
+ */
+#define HASH_STRIPPED_DIMS      2   /**< Number of significant dimensions in stripped key.      */
+typedef enum {
+    HASH_WHOLE_KEY = 0,             /**< Hash whole key.                                        */
+    HASH_STRIPPED_KEYS              /**< Hash just stripped key dimensions in key.              */
+} c_btree_hash_enum_t;
+
 struct castle_component_tree;
+
+/**
+ * Generic btree node functions.
+ */
 struct castle_btree_type {
     btree_t    magic;         /* Also used as an index to castle_btrees
                                  array.                                 */
@@ -898,8 +909,13 @@ struct castle_btree_type {
     void     (*key_dealloc)   (void *key);
                               /* Destroys the key, frees resources
                                  associated with it                     */
-    uint32_t (*key_hash)      (const void *key, uint32_t seed);
-                              /* Get hash of key with seed              */
+    int      (*nr_dims)       (const void *key);
+                              /**< Get number of key dimensions.        */
+    void    *(*key_strip)     (const void *src, void *dst, size_t dst_len, int nr_dims);
+                              /**< Build key with first nr_dims dimensions, remaining
+                                   dimensions set to -inf.                              */
+    uint32_t (*key_hash)      (const void *key, c_btree_hash_enum_t type, uint32_t seed);
+                              /**< Hash key using seed.                 */
     void     (*key_print)     (int level, const void *key);
                               /* Print the key with log level           */
     int      (*entry_get)     (struct castle_btree_node *node,
