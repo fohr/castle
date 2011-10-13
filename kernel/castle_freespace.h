@@ -37,18 +37,24 @@ struct castle_freespace_reservation {
 int         castle_freespace_slave_superchunks_reserve
                                                     (struct castle_slave *cs,
                                                      c_chk_cnt_t nr_schks,
-                                                     struct castle_freespace_reservation *token);
+                                                     c_res_pool_t *pool);
 void        castle_freespace_slave_superchunks_unreserve
                                                     (struct castle_slave *cs,
-                                                     struct castle_freespace_reservation *token);
+                                                     c_chk_cnt_t nr_schks,
+                                                     c_res_pool_t *pool);
 c_chk_seq_t castle_freespace_slave_superchunk_alloc (struct castle_slave *cs,
                                                      c_da_t da_id,
-                                                     struct castle_freespace_reservation *token);
+                                                     c_res_pool_t *pool);
 
 void        castle_freespace_slave_superchunk_free  (struct castle_slave  *cs,
-                                                     c_chk_seq_t           chk_seq);
+                                                     c_chk_seq_t           chk_seq,
+                                                     c_res_pool_t         *pool);
 
 void        castle_freespace_stats_print            (void);
 
 c_chk_cnt_t castle_freespace_space_get              (void);
+
+void        castle_freespace_post_checkpoint        (void);
+
+c_chk_cnt_t castle_freespace_free_superchunks             (struct castle_slave *cs);
 #endif /* __CASTLE_FREESPACE_H__ */

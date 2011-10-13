@@ -436,7 +436,7 @@ static uint32_t castle_bloom_get_block_id(castle_bloom_t *bf, void *key, uint32_
 
     BUG_ON(num_blocks == 0);
 
-    block_hash = bf->btree->key_hash(key, BLOOM_BLOCK_HASH_SEED);
+    block_hash = bf->btree->key_hash(key, HASH_WHOLE_KEY, BLOOM_BLOCK_HASH_SEED);
     return block_hash % num_blocks;
 }
 
@@ -483,8 +483,8 @@ int castle_bloom_add(castle_bloom_t *bf, struct castle_btree_type *btree, void *
     bf_bp->elements_inserted_per_block[block_id]++;
 #endif
 
-    hash1 = bf->btree->key_hash(key, 0);
-    hash2 = bf->btree->key_hash(key, hash1);
+    hash1 = bf->btree->key_hash(key, HASH_WHOLE_KEY, 0);
+    hash2 = bf->btree->key_hash(key, HASH_WHOLE_KEY, hash1);
 
     for (i = 0; i < bf->num_hashes; i++)
     {
@@ -678,8 +678,8 @@ static int castle_bloom_lookup(castle_bloom_t *bf, c2_block_t *c2b, struct castl
      * A test showed that 1 million hash evaluations on the same key with the previous hash as the
      * seed took an average of 32 ns per evaluation on a VM.  So the hash is pretty cheap.
      */
-    hash1 = btree->key_hash(key, 0);
-    hash2 = btree->key_hash(key, hash1);
+    hash1 = btree->key_hash(key, HASH_WHOLE_KEY, 0);
+    hash2 = btree->key_hash(key, HASH_WHOLE_KEY, hash1);
 
 #ifdef CASTLE_BLOOM_FP_STATS
     queries = atomic64_inc_return(&bf->queries);

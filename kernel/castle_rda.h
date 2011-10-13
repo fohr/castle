@@ -17,7 +17,6 @@
  */
 typedef int  (*c_next_slave_get_t)(struct castle_slave                 **cs,
                                    int                                  *schk_ids,
-                                   struct castle_freespace_reservation **reservation_token,
                                    void                                 *state,
                                    c_chk_t                               chk_num);
 
@@ -39,7 +38,9 @@ typedef struct c_rda_spec {
 
 c_rda_spec_t *castle_rda_spec_get(c_rda_type_t rda_type);
 
-
+int castle_rda_space_reserve(c_rda_type_t            rda_type,
+                             c_chk_cnt_t             logical_chk_cnt,
+                             c_res_pool_t           *pool);
 
 #endif /* __CASTLE_RDA_H__ */
 

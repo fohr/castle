@@ -10,8 +10,15 @@
 //#define DEBUG
 #ifdef DEBUG
 #define debug(_f, _a...)        (castle_printk(LOG_DEBUG, _f, ##_a))
+#define debug_res_pools(_f, _a...)  (castle_printk(LOG_DEBUG, _f, ##_a))
 #else
 #define debug(_f, ...)          ((void)0)
+#define debug_res_pools(_f, _a...)  ((void)0)
+#endif
+
+#if 0
+#undef debug_res_pools
+#define debug_res_pools(_f, _a...)  (printk(_f, ##_a))
 #endif
 
 #define DISK_NO_SPACE(_fs) (((_fs)->prod == (_fs)->cons) &&            \
@@ -32,73 +39,67 @@ void freespace_sblk_put(struct castle_slave *cs, int dirty)
     mutex_unlock(&cs->freespace_lock);
 }
 
-/**
- * Sanity checks on freespace reservation token, before a new reservation is recorded in it.
- *
- * @param cs    Slave from which freespace will be reserved.
- * @param token Freespace reservation token.
- */
-static void castle_freespace_reservation_token_validate(struct castle_slave *cs,
-                                                        struct castle_freespace_reservation *token)
+inline c_chk_cnt_t castle_freespace_free_superchunks(struct castle_slave *cs)
 {
-    /* Freespace token must be zeroed. */
-    if(!token->inited)
-    {
-        int i;
-        for(i=0; i<sizeof(struct castle_freespace_reservation); i++)
-            BUG_ON(((char *)token)[i]);
-        token->inited = 1;
-    }
-    BUG_ON(token->reserved_schks[cs->id]);
+    /* Should be part of a extent transaction, to make sure counters are consistent. */
+    BUG_ON(!castle_extent_in_transaction());
+
+    if (cs->freespace.cons <= cs->prev_prod)
+        return (cs->prev_prod - cs->freespace.cons);
+
+    return (cs->freespace.max_entries - cs->freespace.cons + cs->prev_prod);
 }
 
 /**
  * Reserves specified amount of freespace from a slave. Reservation is stored in
  * an appropriate reservation structure, which must be provided to subsequent allocation
- * requests. Reservation can be cancelled. This function cannot be called mulitple times for
- * the same slave, using the same token.
+ * requests. Reservation can be cancelled.
  *
  * @param cs        Slave from which to reserve freespace.
  * @param nr_schks  Number of superchunks to reserve.
- * @param token     Reservation structure, updated by this function. Must be zeroed before first
- *                  call to this function. If token pointer is NULL, the reservation will be
- *                  made without recording it anywhare. This is dangerous, use with care.
+ * @param pool      Reservation pool that the reservations should be bound to.
  *
  * @return 0:       Success.
  * @return -ENOSPC: Not enough freespace.
  */
-int castle_freespace_slave_superchunks_reserve(struct castle_slave *cs,
-                                               c_chk_cnt_t nr_schks,
-                                               struct castle_freespace_reservation *token)
+int castle_freespace_slave_superchunks_reserve(struct castle_slave  *cs,
+                                               c_chk_cnt_t           nr_schks,
+                                               c_res_pool_t         *pool)
 {
     castle_freespace_t *freespace;
     c_chk_cnt_t free_schks;
-    int ret;
+    int ret = 0;
 
-    /* Validate token, if we have one. */
-    if(token)
-        castle_freespace_reservation_token_validate(cs, token);
+    /* Should be part of a extent transaction, to avoid race with checkpoints. */
+    BUG_ON(!castle_extent_in_transaction());
+
     /* Get the superblock lock. */
     freespace = freespace_sblk_get(cs);
+
     /* Work out how many free superchunks there are ATM. */
-    if(freespace->cons <= cs->prev_prod)
-        free_schks = cs->prev_prod - freespace->cons;
-    else
-        free_schks = freespace->max_entries - freespace->cons + cs->prev_prod;
+    free_schks = castle_freespace_free_superchunks(cs);
+
     /* Subtract reserved superchunks. */
     BUG_ON(free_schks < cs->reserved_schks);
     free_schks -= cs->reserved_schks;
 
     /* Allocate freespace, if enough freespace is available. */
-    ret = -ENOSPC;
-    if(free_schks >= nr_schks)
+    if (free_schks >= nr_schks)
     {
+        debug_res_pools("Reservation count for slave: 0x%x updated: %u -> %u\n",
+                         cs->uuid, cs->reserved_schks, cs->reserved_schks + nr_schks);
         cs->reserved_schks += nr_schks;
-        /* Record the reservation, if token was provided. */
-        if(token)
-            token->reserved_schks[cs->id] = nr_schks;
-        ret = 0;
+
+        /* Update reservation counters in pool structure. */
+        if (pool)
+        {
+            pool->reserved_schks[cs->id] += ((c_signed_chk_cnt_t)nr_schks);
+            castle_res_pool_counter_check(pool, cs->id);
+        }
     }
+    else
+        ret = -ENOSPC;
+
     /* Release the lock. */
     freespace_sblk_put(cs, 0);
 
@@ -111,17 +112,35 @@ int castle_freespace_slave_superchunks_reserve(struct castle_slave *cs,
  * @param cs            Slave to unreserve the superchunks for.
  * @param schks_to_free How many superchunks to free.
  */
-static void _castle_freespace_slave_superchunks_unreserve(struct castle_slave *cs,
-                                                          c_chk_cnt_t schks_to_free)
+static void _castle_freespace_slave_superchunks_unreserve(struct castle_slave  *cs,
+                                                          c_chk_cnt_t           schks_to_free,
+                                                          c_res_pool_t         *pool)
 {
-    castle_freespace_t *freespace;
+    /* Should be part of a extent transaction, to avoid race with checkpoints. */
+    BUG_ON(!castle_extent_in_transaction());
 
-    /* Get the superblock lock. */
-    freespace = freespace_sblk_get(cs);
     BUG_ON(schks_to_free > cs->reserved_schks);
+
+    debug_res_pools("Reservation count for slave: 0x%x updated: %u -> %u\n",
+                     cs->uuid, cs->reserved_schks, cs->reserved_schks - schks_to_free);
+
     cs->reserved_schks -= schks_to_free;
-    /* Release the lock. */
-    freespace_sblk_put(cs, 0);
+
+    /* Unreserve superchunks from reservation pool. */
+    if (pool)
+    {
+        c_signed_chk_cnt_t nr_schks = pool->reserved_schks[cs->id];
+
+        /* Unreserve shouldn't be called when we are overallocated. */
+        BUG_ON(nr_schks < 0);
+
+        /* We dont use this function to reduce count on over used reservations. */
+        BUG_ON(((c_signed_chk_cnt_t)schks_to_free) > nr_schks);
+
+        pool->reserved_schks[cs->id] -= ((c_signed_chk_cnt_t)schks_to_free);
+
+        castle_res_pool_counter_check(pool, cs->id);
+    }
 }
 
 /**
@@ -132,28 +151,79 @@ static void _castle_freespace_slave_superchunks_unreserve(struct castle_slave *c
  * @param token Reservation structure to free from.
  */
 void castle_freespace_slave_superchunks_unreserve(struct castle_slave *cs,
-                                                  struct castle_freespace_reservation *token)
+                                                  c_chk_cnt_t schks_to_free,
+                                                  c_res_pool_t *pool)
 {
-    c_chk_cnt_t schks_to_free;
+    c_signed_chk_cnt_t nr_schks = pool->reserved_schks[cs->id];
 
-    /* Reservation token must be initialised. */
-    BUG_ON(!token->inited);
-    /* Exit early if no superchunks are reserved. */
-    schks_to_free = token->reserved_schks[cs->id];
-    token->reserved_schks[cs->id] = 0;
-    if(schks_to_free == 0)
-        return;
+    /* If asked to unreserve 0 chunks, free all of them. */
+    if (schks_to_free == 0)
+    {
+        /* Exit early if no superchunks are reserved. */
+        if (nr_schks <= 0)
+        {
+            pool->reserved_schks[cs->id] = 0;
+            return;
+        }
+        else
+            schks_to_free = (c_chk_cnt_t)nr_schks;
+    }
 
     /* Do the actual work. */
-    _castle_freespace_slave_superchunks_unreserve(cs, schks_to_free);
+    _castle_freespace_slave_superchunks_unreserve(cs, schks_to_free, pool);
+}
+
+static void castle_freespace_slave_superchunk_over_usage(struct castle_slave  *cs,
+                                                         c_res_pool_t         *pool)
+{
+    BUG_ON(!pool);
+
+    /* Should be part of a extent transaction, to avoid race with checkpoints. */
+    BUG_ON(!castle_extent_in_transaction());
+
+    /* There shouldnt be any reserved supechunks. */
+    BUG_ON(pool->reserved_schks[cs->id] > 0);
+
+    castle_res_pool_counter_check(pool, cs->id);
+
+    /* Never include overallocated chunks shouldn't be added to freed_schks. If we got
+     * any free_schks, first use them instead of incrementing overallocated count. */
+    if (pool->freed_schks[cs->id])
+        pool->freed_schks[cs->id]--;
+    else
+        pool->reserved_schks[cs->id]--;
+}
+
+static void castle_freespace_slave_superchunk_freed(struct castle_slave  *cs,
+                                                    c_res_pool_t         *pool)
+{
+    /* Should be part of a extent transaction, to avoid race with checkpoints. */
+    BUG_ON(!castle_extent_in_transaction());
+
+    /* Unreserve superchunks from reservation pool. */
+    if (pool)
+    {
+        castle_res_pool_counter_check(pool, cs->id);
+
+        /* If we still got few overallocated chunks, first free them. */
+        if (pool->reserved_schks[cs->id] < 0)
+            pool->reserved_schks[cs->id]++;
+        else
+            pool->freed_schks[cs->id]++;
+    }
 }
 
 /*
- * TBD - document the interface, including use of a NULL token.
+ * Allocate a superchunk from the slave with reservation from reservation pool. It is
+ * possible to pass invalid pool id.
+ *
+ * @param   cs      [in]    Slave that the superchunk has to be reserved from.
+ * @param   da_id   [in]    Doubling Array that the space is accounted for.
+ * @param   pool    [in]    Reservation pool, that space has to be taken from.
  */
 c_chk_seq_t castle_freespace_slave_superchunk_alloc(struct castle_slave *cs,
                                                     c_da_t da_id,
-                                                    struct castle_freespace_reservation *token)
+                                                    c_res_pool_t *pool)
 {
     castle_freespace_t  *freespace;
     c_chk_seq_t          chk_seq;
@@ -162,26 +232,26 @@ c_chk_seq_t castle_freespace_slave_superchunk_alloc(struct castle_slave *cs,
     c2_block_t          *c2b;
     c_chk_t             *cons_chk;
     int                  ret;
+    int                  reserved_here = 0;
 
-    if (token)
+    /* Check if the reservations are already available. */
+    if (pool && (pool->reserved_schks[cs->id] > 0))
+        goto get_super_chunk;
+
+    /* Reservations are not available try to reserve some space from unreserved freespace. */
+    ret = castle_freespace_slave_superchunks_reserve(cs, 1, NULL);
+    if (ret)
     {
-        /* If token supplied, check validity. */
-        BUG_ON(!token->inited);
-        BUG_ON(token->reserved_schks[cs->id] == 0);
-        /* Check for underflows. */
-        BUG_ON(token->reserved_schks[cs->id] > ((c_chk_cnt_t)-1)/3);
-    } else
-    {
-        /* If there wasn't an apriori reservation, try reserving it now. */
-        ret = castle_freespace_slave_superchunks_reserve(cs, 1, NULL);
-        if(ret)
-        {
-            /* If reservation failed, we are expecting -ENOSPC error. */
-            BUG_ON(ret != -ENOSPC);
-            return INVAL_CHK_SEQ;
-        }
-        /* Reservations succeeded. */
+        /* If reservation failed, we are expecting -ENOSPC error. */
+        BUG_ON(ret != -ENOSPC);
+
+        return INVAL_CHK_SEQ;
     }
+
+    /* Reservations succeeded. */
+    reserved_here = 1;
+
+get_super_chunk:
 
     /* Lock the slave. */
     freespace = freespace_sblk_get(cs);
@@ -190,12 +260,14 @@ c_chk_seq_t castle_freespace_slave_superchunk_alloc(struct castle_slave *cs,
     BUG_ON(freespace->cons == cs->prev_prod);
     BUG_ON(!freespace->free_chk_cnt || !freespace->nr_entries);
 
+    /* Calculate consumer offset within super extent and cep to be used to fetch c2b. */
     cons_off   = FREESPACE_OFFSET + freespace->cons * sizeof(c_chk_t);
     cep.ext_id = cs->sup_ext;
     cep.offset = MASK_BLK_OFFSET(cons_off);
     c2b = castle_cache_page_block_get(cep);
     write_lock_c2b(c2b);
 
+    /* Get the uptodate buffer, If failed it should be due to disk failure. */
     if ((!c2b_uptodate(c2b)) && (submit_c2b_sync(READ, c2b)))
     {
         debug("Failed to read superblock from slave %x\n", cs->uuid);
@@ -205,8 +277,9 @@ c_chk_seq_t castle_freespace_slave_superchunk_alloc(struct castle_slave *cs,
         /* If we reserved superchunks at the top of this function, we should return them.
            This is unlikely to matter, as the above error will only happen when the
            slave goes out of service, but still. */
-        if(!token)
-            _castle_freespace_slave_superchunks_unreserve(cs, 1);
+        if (reserved_here)
+            _castle_freespace_slave_superchunks_unreserve(cs, 1, NULL);
+
         return INVAL_CHK_SEQ;
     }
 
@@ -221,9 +294,24 @@ c_chk_seq_t castle_freespace_slave_superchunk_alloc(struct castle_slave *cs,
     atomic_sub(CHKS_PER_SLOT, &cs->free_chk_cnt);
     freespace->cons          = (freespace->cons + 1) % freespace->max_entries;
     freespace->nr_entries--;
-    if (token)
-        token->reserved_schks[cs->id]--;
-    cs->reserved_schks--;
+
+    /* Is the space is grabbed from freespace wihtout any reservation for a pool, then update
+     * over usage count. */
+    if (pool && reserved_here)
+    {
+        /* Update over usage count. */
+        castle_freespace_slave_superchunk_over_usage(cs, pool);
+
+        /* Remove reservation from freespace. */
+        _castle_freespace_slave_superchunks_unreserve(cs, 1, NULL);
+    }
+    else
+    {
+        BUG_ON(!pool && !reserved_here);
+
+        /* Remove reservation from freespace and pool. */
+        _castle_freespace_slave_superchunks_unreserve(cs, 1, pool);
+    }
 
     BUG_ON(freespace->nr_entries < 0 || freespace->free_chk_cnt < 0);
 
@@ -244,7 +332,8 @@ c_chk_seq_t castle_freespace_slave_superchunk_alloc(struct castle_slave *cs,
 }
 
 void castle_freespace_slave_superchunk_free(struct castle_slave *cs,
-                                            c_chk_seq_t          chk_seq)
+                                            c_chk_seq_t          chk_seq,
+                                            c_res_pool_t        *pool)
 {
     castle_freespace_t  *freespace;
     c2_block_t          *c2b;
@@ -311,6 +400,12 @@ void castle_freespace_slave_superchunk_free(struct castle_slave *cs,
     atomic_add(chk_seq.count, &cs->free_chk_cnt);
     freespace->nr_entries += nr_sup_chunks;
 
+    if (pool)
+    {
+        BUG_ON(chk_seq.count != CHKS_PER_SLOT);
+        castle_freespace_slave_superchunk_freed(cs, pool);
+    }
+
     if ((freespace->cons == ((freespace->prod + 1) % freespace->max_entries)) &&
         (freespace->nr_entries != freespace->max_entries - 1))
     {
@@ -369,7 +464,15 @@ int castle_freespace_slave_init(struct castle_slave *cs, int fresh)
     INJECT_FAULT;
 
     if (fresh)
-        castle_freespace_slave_superchunk_free(cs, (c_chk_seq_t){FREE_SPACE_START, nr_chunks});
+    {
+        castle_extent_transaction_start();
+
+        castle_freespace_slave_superchunk_free(cs,
+                                               (c_chk_seq_t){FREE_SPACE_START, nr_chunks},
+                                               NULL);
+
+        castle_extent_transaction_end();
+    }
 
     cs->frozen_prod = cs->prev_prod = freespace->prod;
 
@@ -476,4 +579,37 @@ c_chk_cnt_t castle_freespace_space_get(void)
     castle_freespace_foreach_slave(castle_freespace_get, &space);
 
     return space;
+}
+
+/* Make the freespace, released since last checkpoint, available for usage.
+   As the flushed version is consistent now on disk, It is okay to overwrite
+   the previous version now. Change freespace producer accordingly. */
+void castle_freespace_post_checkpoint(void)
+{
+    struct list_head *lh;
+
+    /* Makes sure no parallel freespace operations happening. */
+    castle_extent_transaction_start();
+
+    /* Update counters for all slaves. */
+    rcu_read_lock();
+    list_for_each_rcu(lh, &castle_slaves.slaves)
+    {
+        struct castle_slave *cs = list_entry(lh, struct castle_slave, list);
+
+        /* Do not worry about out-of-service slaves. */
+        if (test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags))
+            continue;
+
+        cs->prev_prod = cs->frozen_prod;
+    }
+    rcu_read_unlock();
+
+    /* Update reservation pool counters. */
+    castle_res_pools_post_checkpoint();
+
+    castle_extent_transaction_end();
+
+    /* Created more freespace, wakeup all low freespace victims. */
+    castle_extent_lfs_victims_wakeup();
 }

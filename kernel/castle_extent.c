@@ -42,12 +42,24 @@
 #define debug_resize(_f, _a...) (castle_printk(LOG_DEBUG, _f, ##_a))
 #define debug_schks(_f, _a...)  (castle_printk(LOG_DEBUG, _f, ##_a))
 #define debug_ext_ref(_f, _a...)  (castle_printk(LOG_DEBUG, _f, ##_a))
+#define debug_res_pools(_f, _a...)  (castle_printk(LOG_DEBUG, _f, ##_a))
 #else
 #define debug(_f, ...)          ((void)0)
 #define debug_mask(_f, ...)     ((void)0)
 #define debug_resize(_f, ...)   ((void)0)
 #define debug_schks(_f, ...)    ((void)0)
 #define debug_ext_ref(_f, _a...)  ((void)0)
+#define debug_res_pools(_f, _a...)  ((void)0)
+#endif
+
+#if 0
+#undef debug_res_pools
+#define debug_res_pools(_f, _a...)  (printk(_f, ##_a))
+#endif
+
+#if 0
+#undef debug_resize
+#define debug_resize(_f, _a...)  (printk(_f, ##_a))
 #endif
 
 #define MAP_IDX(_ext, _i, _j)       (((_ext)->k_factor * _i) + _j)
@@ -197,6 +209,12 @@ static void castle_extent_mask_reduce(c_ext_t             *ext,
 DEFINE_HASH_TBL(castle_extents, castle_extents_hash, CASTLE_EXTENTS_HASH_SIZE,
                 c_ext_t, hash_list, c_ext_id_t, ext_id);
 
+#define CASTLE_RES_POOL_HASH_SIZE 100
+static struct list_head *castle_res_pool_hash = NULL;
+
+DEFINE_HASH_TBL(castle_res_pool, castle_res_pool_hash, CASTLE_RES_POOL_HASH_SIZE, c_res_pool_t, hash_list, c_res_pool_id_t, id);
+
+static c_res_pool_id_t castle_max_res_pool_id = INVAL_RES_POOL;
 
 c_ext_t sup_ext = {
     .ext_id         = SUP_EXT_ID,
@@ -250,6 +268,650 @@ static atomic_t             castle_extents_dead_count = ATOMIC(0);
 struct task_struct         *extents_gc_thread;
 
 static struct kmem_cache   *castle_partial_schks_cache = NULL;
+
+/**
+ * Reservation pools.
+ */
+
+static USED void castle_res_pool_print(c_res_pool_t *pool)
+{
+    struct list_head *lh;
+
+    if (RES_POOL_INVAL(pool->id))
+        debug_res_pools("INVAL_RES_POOL\n");
+    else
+        debug_res_pools("%u\n", pool->id);
+
+    rcu_read_lock();
+
+    /* Go through all live slaves and remove reservations for them for this pool. */
+    list_for_each_rcu(lh, &castle_slaves.slaves)
+    {
+        struct castle_slave *slave = list_entry(lh, struct castle_slave, list);
+
+        /* If the slave is OOS, no point in keeping track of reservations. */
+        if (test_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags))
+            continue;
+
+        debug_res_pools("%u - %d:%u:%u\n", slave->id,
+                                           pool->reserved_schks[slave->id],
+                                           pool->freed_schks[slave->id],
+                                           pool->frozen_freed_schks[slave->id]);
+    }
+
+    rcu_read_unlock();
+}
+
+c_chk_cnt_t castle_res_pool_available_space(c_res_pool_t *pool, struct castle_slave *cs)
+{
+    c_signed_chk_cnt_t space = pool->reserved_schks[cs->id];
+
+    if (space > 0)
+        return (c_chk_cnt_t)space;
+
+    return 0;
+}
+
+static void castle_res_pool_unreserve(c_res_pool_t *pool)
+{
+    struct list_head *lh;
+
+    BUG_ON(!castle_extent_in_transaction());
+
+    debug_res_pools("Unreserving all reserved chunks from pool: %u\n", pool->id);
+
+    rcu_read_lock();
+
+    /* Go through all live slaves and remove reservations for them for this pool. */
+    list_for_each_rcu(lh, &castle_slaves.slaves)
+    {
+        struct castle_slave *slave = list_entry(lh, struct castle_slave, list);
+
+        /* If the slave is OOS, no point in keeping track of reservations. */
+        if (test_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags))
+            continue;
+
+        debug_res_pools("\t%d super chunks from slave: 0x%x\n",
+                        pool->reserved_schks[slave->id], slave->uuid);
+
+        /* If we got any reserved superchunks, this function will give them back to freespace.
+         * If we have overallocated superchunks, just ignore them; freespace counters don't
+         * keep-track the overallocated superchunks. If we got outstanding freed-superchunks,
+         * we can ignore them as well; These chunks will be added to un-reserved space. */
+        /* Unreserve all the space from this slave. */
+        castle_freespace_slave_superchunks_unreserve(slave, 0, pool);
+    }
+
+    rcu_read_unlock();
+}
+
+static void castle_res_pool_append(c_res_pool_t *pool1, c_res_pool_t *pool2)
+{
+    struct list_head *lh;
+
+    rcu_read_lock();
+
+    /* Go through all live slaves and append reservations for pool2 to pool1. */
+    list_for_each_rcu(lh, &castle_slaves.slaves)
+    {
+        struct castle_slave *slave = list_entry(lh, struct castle_slave, list);
+        int id = slave->id;
+
+        pool1->reserved_schks[id]        += pool2->reserved_schks[id];
+        pool1->frozen_freed_schks[id]    += pool2->frozen_freed_schks[id];
+        pool1->freed_schks[id]           += pool2->freed_schks[id];
+
+        pool2->reserved_schks[id] = pool2->frozen_freed_schks[id] = pool2->freed_schks[id] = 0;
+    }
+
+    rcu_read_unlock();
+}
+
+static void castle_res_pool_init(c_res_pool_t *pool)
+{
+    memset(pool, 0, sizeof(c_res_pool_t));
+
+    atomic_set(&pool->ref_count, 1);
+
+    pool->id = INVAL_RES_POOL;
+    INIT_LIST_HEAD(&pool->hash_list);
+}
+
+int castle_res_pool_is_alive(c_res_pool_id_t pool_id)
+{
+    if (castle_res_pool_hash_get(pool_id))
+        return 1;
+
+    return 0;
+}
+
+/**
+ * Reserves space for the pool, based on RDA_TYPE provided.
+ *
+ * @param [in]      rda_type        Type of the RDA that should be used to pick slaves and layout.
+ * @param [in]      logical_chk_cnt Number of logical chunks client is looking for, RDA decides
+ *                                  how many physical chunks to be used from each slave.
+ * @param [inout]   pool            Reservation pool that reserved chunks to be added to.
+ *
+ * @return 0 SUCCESS  Reservation succeeded.
+ *        -1 FAILURE  Couldn't find space on slaves.
+ */
+int __castle_extent_space_reserve(c_rda_type_t       rda_type,
+                                  c_chk_cnt_t        logical_chk_cnt,
+                                  c_res_pool_t      *pool)
+{
+    BUG_ON(!castle_extent_in_transaction());
+
+    /* This part of the RDA code is very specific to RDA type. Review the code when we add
+     * more RDA types. */
+    BUG_ON((rda_type != RDA_1) && (rda_type != RDA_2) &&
+           (rda_type != SSD_RDA_2) && (rda_type != SSD_RDA_3) && (rda_type != SSD_ONLY_EXT));
+
+    debug_res_pools("Reserving %u chunks for pool: %u for RDA: %s\n",
+                    logical_chk_cnt, pool->id, castle_rda_type_str[rda_type]);
+
+    /* Handle SSD_RDA as a special case. */
+    if ((rda_type == SSD_RDA_2) || (rda_type == SSD_RDA_3))
+    {
+        c_res_pool_t *local_pool;
+        int ret;
+
+        local_pool = castle_alloc(sizeof(c_res_pool_t));
+        if (!local_pool)
+            return -ENOSPC;
+
+        /* All reservation pool operations are done first on a local pool, and updated to
+         * the client pool only on success. As, it is hard to find-out how many superchunks
+         * are reserved in this session, in case of failure. If it is a local pool, we just
+         * destroy it on failure. */
+        /* All freespace pool functions can/should work on pools without any valid ID (so
+         * not in hash). They just depend on pool object. */
+        castle_res_pool_init(local_pool);
+
+        /* First reserve some space on hard drives. */
+        ret = castle_rda_space_reserve(castle_ssdrda_to_rda(rda_type),
+                                       logical_chk_cnt,
+                                       local_pool);
+        if (ret < 0)
+        {
+            debug_res_pools("Failed to reserve %u chunks for pool: %u for RDA: %s\n",
+                             logical_chk_cnt, pool->id,
+                             castle_rda_type_str[castle_ssdrda_to_rda(rda_type)]);
+            castle_free(local_pool);
+            return -ENOSPC;
+        }
+
+        /* Reserve space on SSDs. */
+        ret = castle_rda_space_reserve(SSD_ONLY_EXT, logical_chk_cnt, local_pool);
+        /* Failed to allocate space on SSDs. */
+        if (ret < 0)
+        {
+            debug_res_pools("Failed to reserve %u chunks for pool: %u for RDA: %s\n",
+                             logical_chk_cnt, pool->id,
+                             castle_rda_type_str[SSD_ONLY_EXT]);
+            /* Unreserve space allocated on hard drives. */
+            castle_res_pool_unreserve(local_pool);
+            castle_free(local_pool);
+            return -ENOSPC;
+        }
+
+        /* Move space from local pool to reserved pool. */
+        castle_res_pool_append(pool, local_pool);
+
+        castle_free(local_pool);
+
+        return 0;
+    }
+
+    /* Reserve space for SSD_ONLY_EXT or DEFAULT_RDA. */
+    return castle_rda_space_reserve(rda_type, logical_chk_cnt, pool);
+}
+
+int castle_extent_space_reserve(c_rda_type_t       rda_type,
+                                c_chk_cnt_t        logical_chk_cnt,
+                                c_res_pool_id_t    pool_id)
+{
+    c_res_pool_t *pool;
+    int ret;
+
+    castle_extent_transaction_start();
+
+    pool = castle_res_pool_hash_get(pool_id);
+
+    /* Pool should be a valid one. */
+    BUG_ON(!pool);
+
+    /* Call low level function. */
+    ret = __castle_extent_space_reserve(rda_type, logical_chk_cnt, pool);
+
+    castle_extent_transaction_end();
+
+    return ret;
+}
+
+/**
+ * Creates a new reservation pool.
+ *
+ * Space allocation has to be done RDA specific and actual space allocation happens within
+ * freespace. Freespace modules need reservation pool in hash before adding space. Seperating
+ * space allocation from pool_create().
+ *
+ * @also castle_da_merge_init()
+ */
+c_res_pool_id_t castle_res_pool_create(c_rda_type_t rda_type, c_chk_cnt_t logical_chk_cnt)
+{
+    c_res_pool_t *pool;
+
+    /* Should be part of a extent transaction, to avoid race with checkpoints. */
+    castle_extent_transaction_start();
+
+    pool = castle_zalloc(sizeof(c_res_pool_t), GFP_KERNEL);
+    if (!pool)
+        goto out;
+
+    /* Init the pool. */
+    castle_res_pool_init(pool);
+
+    /* Reserve space for it. */
+    if (logical_chk_cnt && __castle_extent_space_reserve(rda_type, logical_chk_cnt, pool))
+    {
+        /* Failed to allocate space for pool. */
+        castle_extent_transaction_end();
+        castle_kfree(pool);
+
+        return INVAL_RES_POOL;
+    }
+
+    /* Get a new pool ID. */
+    pool->id = ++castle_max_res_pool_id;
+
+    /* Add to the hash table. */
+    castle_res_pool_hash_add(pool);
+
+    debug_res_pools("Created reservation pool: %u and reserved %u chunks\n",
+                     pool->id, logical_chk_cnt);
+
+out:
+    castle_extent_transaction_end();
+
+    return pool->id;
+}
+
+void __castle_res_pool_destroy(c_res_pool_t *pool)
+{
+    castle_printk(LOG_DEBUG, "Destroying pool: %u\n", pool->id);
+
+    castle_res_pool_print(pool);
+
+    castle_res_pool_unreserve(pool);
+
+    castle_res_pool_print(pool);
+
+    castle_res_pool_hash_remove(pool);
+
+    castle_kfree(pool);
+}
+
+void castle_res_pool_destroy(c_res_pool_id_t pool_id)
+{
+    c_res_pool_t *pool;
+
+    castle_extent_transaction_start();
+
+    pool = castle_res_pool_hash_get(pool_id);
+
+    if (atomic_dec_return(&pool->ref_count) == 0)
+        __castle_res_pool_destroy(pool);
+
+    castle_extent_transaction_end();
+}
+
+void __castle_res_pool_extent_attach(c_res_pool_t *pool, c_ext_t *ext)
+{
+    BUG_ON(!castle_extent_in_transaction());
+
+    ext->pool = pool;
+    atomic_inc(&pool->ref_count);
+}
+
+void castle_res_pool_extent_attach(c_res_pool_id_t pool_id, c_ext_id_t ext_id)
+{
+    c_res_pool_t *pool;
+    c_ext_t *ext;
+
+    castle_extent_transaction_start();
+
+    pool = castle_res_pool_hash_get(pool_id);
+    ext = castle_extents_hash_get(ext_id);
+
+    /* If we can't get extent or pool, something is wrong with client. */
+    BUG_ON(!pool || !ext);
+
+    __castle_res_pool_extent_attach(pool, ext);
+
+    debug_res_pools("Attached reservation pool %u to extent %llu\n", pool->id, ext->ext_id);
+
+    castle_extent_transaction_end();
+}
+
+void __castle_res_pool_extent_detach(c_ext_t *ext)
+{
+    c_res_pool_t *pool = ext->pool;
+
+    BUG_ON(!castle_extent_in_transaction());
+
+    BUG_ON(!pool);
+
+    if (atomic_dec_return(&pool->ref_count) == 0)
+        __castle_res_pool_destroy(pool);
+
+    ext->pool = NULL;
+}
+
+void castle_res_pool_extent_detach(c_ext_id_t ext_id)
+{
+    c_ext_t *ext;
+
+    castle_extent_transaction_start();
+
+    ext = castle_extents_hash_get(ext_id);
+
+    /* If we can't get extent or pool, something is wrong with client. */
+    BUG_ON(!ext);
+
+    debug_res_pools("Detached reservation pool %u to extent %llu\n", ext->pool->id, ext->ext_id);
+
+    __castle_res_pool_extent_detach(ext);
+
+    castle_extent_transaction_end();
+}
+
+/* rlist_entry is too big to keep it on stack, and it is un-necessary to allocate for each pool.
+ * Checkpoint is anyway serialised process. Just use this global buffer. */
+struct castle_rlist_entry global_rentry_buffer;
+
+/* Should be called with extent lock held. Keeps freespace and extents in sync. */
+static int castle_res_pool_writeback(c_res_pool_t *pool, void *store)
+{
+    c_mstore_t *mstore = store;
+    struct castle_rlist_entry *entry = &global_rentry_buffer;
+    struct list_head *lh;
+    int i = 0;
+
+    /* Reservation pools, extents and freespace consistency is very much tied to extent transaction
+     * lock. Very important to hold this. */
+    BUG_ON(!castle_extent_in_transaction());
+
+    debug_res_pools("Writing back reservation pool %u\n", pool->id);
+
+    /* FIXME: Current checkpoint error handling is not handled properly. Even passing error
+     * wouldn't help much. */
+    BUG_ON(!entry);
+
+    /* Set entry to 0. */
+    memset(entry, 0, sizeof(struct castle_rlist_entry));
+
+    /* Set frozen counters to 0. */
+    memset(pool->frozen_freed_schks, 0, sizeof(c_chk_cnt_t) * MAX_NR_SLAVES);
+
+    /* Set the reservation pool ID. */
+    entry->id = pool->id;
+
+    rcu_read_lock();
+
+    /* Go through all live slaves and commit the reservations for them for this pool. */
+    list_for_each_rcu(lh, &castle_slaves.slaves)
+    {
+        struct castle_slave *slave = list_entry(lh, struct castle_slave, list);
+        int id = slave->id;
+
+        /* If the slave is OOS, no point in keeping track of reservations. */
+        if (test_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags))
+            continue;
+
+        castle_res_pool_counter_check(pool, id);
+
+        /* Commit only non-zero reservations. During init, we stop looking when we see
+         * zero reservation. */
+        if (pool->reserved_schks[id] + ((c_signed_chk_cnt_t)pool->freed_schks[id]) == 0)
+            goto skip_slave;
+
+        /* We maintian freed superchunks only for the sake of not over using reserved space.
+         * If we already over-allocating space, it should compenstate freed space. Never
+         * include overallocated chunks in freed_schks. */
+        BUG_ON((pool->reserved_schks[id] < 0) && pool->freed_schks[id]);
+
+        /* Calculate the reserved_schks count. */
+        entry->slaves[i].reserved_schks = pool->reserved_schks[id] +
+                                         ((c_signed_chk_cnt_t)pool->freed_schks[id]);
+
+        /* Prepare mstore entry. */
+        entry->slaves[i].uuid           = slave->uuid;
+
+        debug_res_pools("\t%d chunks from slave: 0x%x\n", entry->slaves[i].reserved_schks,
+                                                          slave->uuid);
+
+        i++;
+
+skip_slave:
+        /* Reset freed_schks. */
+        pool->frozen_freed_schks[id]   = pool->freed_schks[id];
+    }
+
+    rcu_read_unlock();
+
+    /* Set free counters to 0. */
+    memset(pool->freed_schks, 0, sizeof(c_chk_cnt_t) * MAX_NR_SLAVES);
+
+    /* Insert entry into mstore: could sleep. */
+    castle_mstore_entry_insert(mstore, entry);
+
+    return 0;
+}
+
+static int castle_res_pools_writeback(void)
+{
+    c_mstore_t *castle_res_pool_mstore = NULL;
+
+    BUG_ON(!castle_extent_in_transaction());
+
+    castle_res_pool_mstore =
+        castle_mstore_init(MSTORE_RES_POOLS, sizeof(struct castle_rlist_entry));
+    if(!castle_res_pool_mstore)
+        return -ENOMEM;
+
+    /* All reservation pool opertions are protected by extent lock. Doesn't need to run
+     * with hash lock. */
+    __castle_res_pool_hash_iterate(castle_res_pool_writeback, castle_res_pool_mstore);
+
+    castle_mstore_fini(castle_res_pool_mstore);
+
+    return 0;
+}
+
+static int castle_res_pool_post_checkpoint(c_res_pool_t *pool, void *unused)
+{
+    struct list_head *lh;
+
+    /* Reservation pools, extents and freespace consistency is very much tied to extent transaction
+     * lock. Very important to hold this. */
+    BUG_ON(!castle_extent_in_transaction());
+
+    rcu_read_lock();
+
+    /* Go through all live slaves and commit the reservations for them for this pool. */
+    list_for_each_rcu(lh, &castle_slaves.slaves)
+    {
+        struct castle_slave *slave = list_entry(lh, struct castle_slave, list);
+
+        castle_res_pool_counter_check(pool, slave->id);
+
+        /* If the reserved_schks are +ve, just add the freed_schks in since last checkpoint to
+         * pool/global reserved_schks counts. */
+        if (pool->reserved_schks[slave->id] >= 0)
+        {
+            /* Calculate the reserved_schks count. */
+            pool->reserved_schks[slave->id] +=
+                                    ((c_signed_chk_cnt_t)pool->frozen_freed_schks[slave->id]);
+
+            /* Update global count normally. */
+            slave->reserved_schks += pool->frozen_freed_schks[slave->id];
+        }
+        else
+        {
+            /* If reserved_schks count is -ve, update reserved_schks count normally. */
+            pool->reserved_schks[slave->id] +=
+                                    ((c_signed_chk_cnt_t)pool->frozen_freed_schks[slave->id]);
+
+            /* But, don't update global counter for over-allocated schks. */
+            if (pool->reserved_schks[slave->id] > 0)
+                slave->reserved_schks += pool->reserved_schks[slave->id];
+        }
+
+        castle_res_pool_counter_check(pool, slave->id);
+    }
+
+    rcu_read_unlock();
+
+    return 0;
+}
+
+void castle_res_pools_post_checkpoint(void)
+{
+    BUG_ON(!castle_extent_in_transaction());
+
+    __castle_res_pool_hash_iterate(castle_res_pool_post_checkpoint, NULL);
+}
+
+int castle_res_pools_read(void)
+{
+    struct castle_mstore_iter *iterator = NULL;
+    c_mstore_t *mstore = NULL;
+    c_res_pool_t *pool = NULL;
+    struct list_head *lh;
+    int ret = 0;
+
+    /* Open reservation pools mstore. */
+    mstore = castle_mstore_open(MSTORE_RES_POOLS, sizeof(struct castle_rlist_entry));
+    if(!mstore)
+    {
+        ret = -ENOMEM;
+        goto error_out;
+    }
+
+    /* Create an iterator for the mstore. */
+    iterator = castle_mstore_iterate(mstore);
+    if (!iterator)
+    {
+        ret = -EINVAL;
+        goto error_out;
+    }
+
+    /* Go through all entries in the mstore. */
+    while (castle_mstore_iterator_has_next(iterator))
+    {
+        struct castle_rlist_entry *entry = &global_rentry_buffer;
+        struct castle_slave *cs;
+        c_mstore_key_t key;
+        int i;
+
+        /* Get the next entry. */
+        castle_mstore_iterator_next(iterator, entry, &key);
+
+        /* Allocate space for new pool. */
+        pool = castle_malloc(sizeof(c_res_pool_t), GFP_KERNEL);
+        if (!pool)
+        {
+            ret = -ENOMEM;
+            goto error_out;
+        }
+
+        castle_res_pool_init(pool);
+
+        pool->id = entry->id;
+
+        debug_res_pools("Reading reservation pool: %u\n", pool->id);
+
+        for (i=0; i<MAX_NR_SLAVES; i++)
+        {
+            /* If we see zero length reservations, no more reservations left from this pool. */
+            if (entry->slaves[i].reserved_schks == 0)
+                break;
+
+            cs = castle_slave_find_by_uuid(entry->slaves[i].uuid);
+
+            /* There should be a slave corresponding to this uuid. */
+            if (!cs)
+            {
+                castle_printk(LOG_ERROR, "Reservation pools mstore seems to be corrupted.\n");
+                BUG();
+                /* TODO: Crash for now, just to not miss this issue. Change later to error. */
+#if 0
+                ret = -EINVAL;
+                goto error_out;
+#endif
+            }
+
+            /* If the slave is dead, no need to maintain reservation. */
+            if (test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags))
+                continue;
+
+            /* There shouldn't be another entry for this pool and this slave. */
+            BUG_ON(pool->reserved_schks[cs->id]);
+
+            /* Add the reservation to pool. */
+            pool->reserved_schks[cs->id] = entry->slaves[i].reserved_schks;
+
+            /* Add to slave count. For the sake of sanity check. */
+            if (entry->slaves[i].reserved_schks > 0)
+                cs->reserved_schks += ((c_chk_cnt_t)entry->slaves[i].reserved_schks);
+
+            debug_res_pools("\t%d chunks from slave 0x%x\n", pool->reserved_schks[cs->id],
+                                                             entry->slaves[i].uuid);
+            castle_res_pool_counter_check(pool, i);
+        }
+
+        /* Shouldn't be in the hash yet. */
+        BUG_ON(castle_res_pool_hash_get(pool->id));
+
+        /* Add to the hash. */
+        castle_res_pool_hash_add(pool);
+
+        /* Update next_res_pool_id. */
+        castle_max_res_pool_id = (castle_max_res_pool_id < pool->id)?
+                                  pool->id:
+                                  castle_max_res_pool_id;
+    }
+
+    /* Done with the iterator, destroy it. */
+    castle_mstore_iterator_destroy(iterator);
+    iterator = NULL;
+
+    /* Close the mstore. */
+    castle_mstore_fini(mstore);
+    mstore = NULL;
+
+    /* Do sanity check on slaves. */
+    rcu_read_lock();
+    list_for_each_rcu(lh, &castle_slaves.slaves)
+    {
+        struct castle_slave *slave = list_entry(lh, struct castle_slave, list);
+
+        /* If the slave is OOS, no point in keeping track of reservations. */
+        if (test_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags))
+            continue;
+
+        /* Just try to reserve 0 super chunks, this would do some checks on cs->reserved_schks. */
+        castle_freespace_slave_superchunks_reserve(slave, 0, NULL);
+    }
+    rcu_read_unlock();
+
+error_out:
+    if (iterator)       castle_mstore_iterator_destroy(iterator);
+    if (mstore)         castle_mstore_fini(mstore);
+
+    return ret;
+}
 
 /**
  * Partial Superchunks handling.
@@ -343,7 +1005,7 @@ static int castle_extent_part_schks_merge(c_part_schk_t  *part_schk,
     return -1;
 }
 
-static void castle_extent_part_schk_free(c_part_schk_t *part_schk)
+static void castle_extent_part_schk_free(c_part_schk_t *part_schk, c_res_pool_t *pool)
 {
     BUG_ON(part_schk->count != CHKS_PER_SLOT);
 
@@ -354,7 +1016,7 @@ static void castle_extent_part_schk_free(c_part_schk_t *part_schk)
 
     /* Free super chunk. */
     castle_freespace_slave_superchunk_free(castle_slave_find_by_id(part_schk->slave_id),
-                                           SUPER_CHUNK_STRUCT(part_schk->first_chk));
+                                           SUPER_CHUNK_STRUCT(part_schk->first_chk), pool);
 
     /* Delete from list. */
     list_del(&part_schk->list);
@@ -404,7 +1066,7 @@ static void castle_extent_part_schk_save(c_ext_t       *ext,
 
         /* If the superchunk is full, free it. */
         if (part_schk->count == CHKS_PER_SLOT)
-            castle_extent_part_schk_free(part_schk);
+            castle_extent_part_schk_free(part_schk, ext->pool);
 
         return;
     }
@@ -469,7 +1131,7 @@ static void castle_extent_part_schks_converge(c_ext_t *ext)
 
         /* If the superchunk is full, free it. */
         if (part_schk->count == CHKS_PER_SLOT)
-            castle_extent_part_schk_free(part_schk);
+            castle_extent_part_schk_free(part_schk, ext->pool);
     }
 }
 
@@ -544,6 +1206,7 @@ static int castle_extents_part_schks_read(void)
         /* TODO: Handle gracefully. */
         BUG_ON(!ext || !cs);
 
+        /* This shouldn't really free any superchunks. */
         castle_extent_part_schk_save(ext, cs->id,
                                      entry.first_chk,
                                      entry.count);
@@ -582,6 +1245,7 @@ static c_ext_t * castle_ext_alloc(c_ext_id_t ext_id)
     ext->maps_cep           = INVAL_EXT_POS;
     ext->ext_type           = EXT_T_INVALID;
     ext->da_id              = INVAL_DA;
+    ext->pool               = NULL;
     atomic_set(&ext->link_cnt, 1);
     ext->use_shadow_map     = 0;
     ext->shadow_map         = NULL;
@@ -698,6 +1362,17 @@ int castle_extents_init(void)
         goto err_out;
     }
     castle_extent_mask_hash_init();
+
+    /* Initialise hash table for reservation pools. */
+    castle_res_pool_hash = castle_res_pool_hash_alloc();
+    if (!castle_res_pool_hash)
+    {
+        castle_printk(LOG_INIT, "Could not allocate extents hash.\n");
+        kthread_stop(extents_gc_thread);
+
+        goto err_out;
+    }
+    castle_res_pool_hash_init();
 
     /* Init kmem_cache for in_flight counters for extent_flush. */
     castle_partial_schks_cache = kmem_cache_create("castle_partial_schks_cache",
@@ -945,7 +1620,7 @@ static int castle_extent_micro_ext_create(void)
 
 static int castle_extent_meta_ext_create(void)
 {
-    int k_factor = (castle_rda_spec_get(META_EXT))->k_factor, i = 0;
+    int k_factor = (castle_rda_spec_get(RDA_2))->k_factor, i = 0;
     struct castle_extents_superblock *castle_extents_sb;
     struct list_head *l;
     c_ext_t *meta_ext;
@@ -962,7 +1637,7 @@ static int castle_extent_meta_ext_create(void)
        slaves, divided by the k-factor (2) */
     meta_ext_size = META_SPACE_SIZE * MAX_NR_SLAVES / k_factor;
 
-    ext_id = _castle_extent_alloc(META_EXT, 0,
+    ext_id = _castle_extent_alloc(RDA_2, 0,
                                   EXT_T_META_DATA,
                                   meta_ext_size,
                                   meta_ext_size,
@@ -1172,6 +1847,8 @@ int castle_extents_writeback(void)
      * make sure freesapce and extents are in sync. */
     castle_freespace_writeback();
 
+    castle_res_pools_writeback();
+
     castle_extents_super_block_writeback();
 
     castle_extent_transaction_end();
@@ -1256,8 +1933,11 @@ int castle_extents_read(void)
 
     atomic_set(&current_rebuild_seqno, ext_sblk->current_rebuild_seqno);
 
-    /* Mark Logical extents as alive. */
     meta_ext_size = castle_extent_size_get(META_EXT_ID);
+
+    /* Read reservation pools from mstore. */
+    castle_res_pools_read();
+
     extent_init_done = 1;
 
 out:
@@ -1331,12 +2011,11 @@ void castle_extents_fini(void)
     /* Iterate over extents hash with exclusive access. Indeed, we don't need a
      * lock here as this happenes in the module end. */
     if (castle_extents_hash)
-    {
         castle_extents_hash_iterate_exclusive(castle_extent_hash_remove, NULL);
-        castle_kfree(castle_extents_hash);
-    }
 
+    castle_check_kfree(castle_extents_hash);
     castle_check_kfree(castle_extent_mask_hash);
+    castle_check_kfree(castle_res_pool_hash);
 
     if (castle_partial_schks_cache)
         kmem_cache_destroy(castle_partial_schks_cache);
@@ -1473,13 +2152,11 @@ static void castle_extent_space_free(c_ext_t *ext, c_chk_cnt_t start, c_chk_cnt_
  * @param da_id     Doubling array id for which the extent is to be allocated.
  * @param slave     Disk slave to allocate disk chunk from.
  * @param copy_id   Which copy in the k-RDA set we are trying to allocate.
- * @param token     Reservation token, required to allocate freespace.
  */
 static c_disk_chk_t castle_extent_disk_chk_alloc(c_da_t da_id,
                                                  struct castle_extent_state *ext_state,
                                                  struct castle_slave *slave,
-                                                 int copy_id,
-                                                 struct castle_freespace_reservation *token)
+                                                 int copy_id)
 {
     c_disk_chk_t disk_chk;
     c_chk_seq_t chk_seq;
@@ -1518,7 +2195,7 @@ static c_disk_chk_t castle_extent_disk_chk_alloc(c_da_t da_id,
     }
 
     /* If we got here, we need to allocate a new superchunk. */
-    chk_seq = castle_freespace_slave_superchunk_alloc(slave, da_id, token);
+    chk_seq = castle_freespace_slave_superchunk_alloc(slave, da_id, ext_state->ext->pool);
     if (CHK_SEQ_INVAL(chk_seq))
     {
         /*
@@ -1580,7 +2257,6 @@ static inline c_ext_pos_t castle_extent_map_cep_get(c_ext_pos_t map_start,
 int castle_extent_space_alloc(c_ext_t *ext, c_da_t da_id, c_chk_cnt_t alloc_size)
 {
     struct castle_extent_state *ext_state;
-    struct castle_freespace_reservation *reservation_token;
     struct castle_slave *slaves[ext->k_factor];
     int schk_ids[ext->k_factor];
     c_rda_spec_t *rda_spec;
@@ -1675,7 +2351,6 @@ retry:
         /* Ask the RDA spec which slaves to use. */
         if (rda_spec->next_slave_get( slaves,
                                       schk_ids,
-                                     &reservation_token,
                                       rda_state,
                                       chunk) < 0)
         {
@@ -1690,8 +2365,7 @@ retry:
             disk_chk = castle_extent_disk_chk_alloc(da_id,
                                                     ext_state,
                                                     slaves[j],
-                                                    schk_ids[j],
-                                                    reservation_token);
+                                                    schk_ids[j]);
             debug("Allocation for (logical_chunk=%d, copy=%d) -> (slave=0x%x, "disk_chk_fmt")\n",
                 chunk, j, slaves[j]->uuid, disk_chk2str(disk_chk));
             if(DISK_CHK_INVAL(disk_chk))
@@ -1848,6 +2522,7 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t     rda_type,
     int ret = 0;
     c_rda_spec_t *rda_spec = castle_rda_spec_get(rda_type);
     struct castle_extents_superblock *castle_extents_sb;
+    c_res_pool_t *pool = NULL;
 
     BUG_ON(!castle_extent_in_transaction());
     BUG_ON(!extent_init_done && !LOGICAL_EXTENT(ext_id));
@@ -1882,6 +2557,31 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t     rda_type,
     ext->curr_rebuild_seqno = atomic_read(&current_rebuild_seqno);
     ext->remap_seqno = 0;
 
+    /* Try to reserve space on disk. */
+    if (alloc_size)
+    {
+        pool = castle_zalloc(sizeof(c_res_pool_t), GFP_KERNEL);
+        if (!pool)
+            goto __hell;
+
+        /* This is just a temporary pool, just to make allocation much simpler. This is not
+         * added to hash table and so can't be checkpointed. And the life time of this pool
+         * is just during extent_alloc(). */
+        castle_res_pool_init(pool);
+
+        if (__castle_extent_space_reserve(rda_type, alloc_size, pool) < 0)
+        {
+            debug_res_pools("Failed to reserve space for extent allocation: %u, %s\n",
+                             alloc_size, castle_rda_type_str[rda_type]);
+            castle_kfree(pool);
+            pool = NULL;
+
+            goto __low_space;
+        }
+
+        __castle_res_pool_extent_attach(pool, ext);
+    }
+
     /* Block aligned chunk maps for each extent. */
     if (ext->ext_id == META_EXT_ID)
     {
@@ -1905,6 +2605,9 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t     rda_type,
     if (alloc_size == 0)
         goto alloc_done;
 
+    /* We must have already set the pool. */
+    BUG_ON(ext->pool == NULL || ext->pool != pool);
+
     if ((ret = castle_extent_space_alloc(ext, da_id, alloc_size)) == -ENOSPC)
     {
         debug("Extent alloc failed to allocate space for %u chunks\n", alloc_size);
@@ -1915,6 +2618,12 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t     rda_type,
         debug("Extent alloc failed for %u chunks\n", alloc_size);
         goto __hell;
     }
+
+    /* Pool is just local, destroy it before returning. */
+    __castle_res_pool_extent_detach(ext);
+    castle_res_pool_unreserve(pool);
+    castle_kfree(pool);
+    pool = NULL;
 
 alloc_done:
     /* Successfully allocated space for extent. Create a mask for it. */
@@ -1934,8 +2643,7 @@ alloc_done:
     }
 
     /* Extent allocation is SUCCESS. No need of event handler. Free it. */
-    if (event_hdl)
-        castle_kfree(event_hdl);
+    castle_check_kfree(event_hdl);
 
     return ext->ext_id;
 
@@ -1949,6 +2657,13 @@ __low_space:
     castle_extent_lfs_callback_add(event_hdl);
 
 __hell:
+    if (pool)
+    {
+        __castle_res_pool_extent_detach(ext);
+        castle_res_pool_unreserve(pool);
+        castle_kfree(pool);
+    }
+
     if (ext)
     {
         castle_kfree(ext->dirtytree);
@@ -2094,6 +2809,10 @@ static void castle_extent_resource_release(void *data)
 
     /* Shouldn't have any live masks left. */
     BUG_ON(!list_empty(&ext->mask_list));
+
+    /* If extent is attached to any reservation pool, detach it first. */
+    if (ext->pool)
+        __castle_res_pool_extent_detach(ext);
 
     /* Reference count should be zero. */
     if (atomic_read(&ext->link_cnt))
@@ -3350,7 +4069,7 @@ static int castle_extent_remap_superchunks_alloc(c_ext_t *ext, int slave_idx)
     }
 
     /*
-     * Allocate a superchunk. We do not want to pre-reserve space, so use a NULL token.
+     * Allocate a superchunk.
      */
     chk_seq = castle_freespace_slave_superchunk_alloc(cs, 0, NULL);
 
@@ -3519,7 +4238,6 @@ static int castle_extent_slave_get_by_freespace(c_ext_t *ext,
     int         avg_freespace, max_freespace, slave_freespace;
     int         is_ssd=0;
     struct castle_slave *cs;
-    castle_freespace_t  *freespace;
 
     /* For each slave in process_state.live_slaves (the list of potential remap slaves). */
 retry:
@@ -3560,13 +4278,8 @@ retry:
         BUG_ON(!cs);
 
         castle_extent_transaction_start();
-        freespace = freespace_sblk_get(cs);
         /* Work out how many free superchunks there are ATM. */
-        if(freespace->cons <= cs->prev_prod)
-            slave_freespace = cs->prev_prod - freespace->cons;
-        else
-            slave_freespace = freespace->max_entries - freespace->cons + cs->prev_prod;
-        freespace_sblk_put(cs, 0);
+        slave_freespace = castle_freespace_free_superchunks(cs);
         castle_extent_transaction_end();
 
         if (slave_freespace > max_freespace)
@@ -5528,6 +6241,9 @@ int castle_extent_grow(c_ext_id_t ext_id, c_chk_cnt_t count)
 
     castle_extent_transaction_start();
 
+    if (ext->pool)
+        castle_res_pool_print(ext->pool);
+
     /* Allocate space to the extent. */
     ret = castle_extent_space_alloc(ext, INVAL_DA, count);
     if (ret < 0)
@@ -5558,6 +6274,9 @@ int castle_extent_grow(c_ext_id_t ext_id, c_chk_cnt_t count)
         goto out;
     }
 
+    if (ext->pool)
+        castle_res_pool_print(ext->pool);
+
 out:
     castle_extent_transaction_end();
 
@@ -5587,6 +6306,9 @@ int castle_extent_shrink(c_ext_id_t ext_id, c_chk_cnt_t chunk)
 
     castle_extent_transaction_start();
 
+    if (ext->pool)
+        castle_res_pool_print(ext->pool);
+
     /* Get the current latest mask. */
     mask = GET_LATEST_MASK(ext);
 
@@ -5602,6 +6324,9 @@ int castle_extent_shrink(c_ext_id_t ext_id, c_chk_cnt_t chunk)
         debug_resize("Fail to shrink the extent: %llu\n", ext_id);
         goto out;
     }
+
+    if (ext->pool)
+        castle_res_pool_print(ext->pool);
 
 out:
     castle_extent_transaction_end();

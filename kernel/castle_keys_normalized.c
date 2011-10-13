@@ -468,6 +468,17 @@ int castle_norm_key_compare(const struct castle_norm_key *a, const struct castle
  */
 
 /**
+ * Return the number of dimensions of a normalized key.
+ * @param key       the key to examine
+ */
+int castle_norm_key_nr_dims(const struct castle_norm_key *key)
+{
+    const unsigned char *data;
+    castle_norm_key_len_get(key, &data);
+    return castle_norm_key_dim_get(&data);
+}
+
+/**
  * Scan a key to find the start of the next dimension, or the end of the key.
  * @param pos       the current position inside the key
  */
@@ -593,6 +604,36 @@ struct castle_norm_key *castle_norm_key_next(const struct castle_norm_key *src,
     castle_norm_key_len_get(dst, &data);
     n_dim = castle_norm_key_dim_get(&data);
     return castle_norm_key_dim_inc(dst, n_dim-1);
+}
+
+struct castle_norm_key *castle_norm_key_strip(const struct castle_norm_key *src,
+                                              struct castle_norm_key *dst, size_t *dst_len,
+                                              int n_keep)
+{
+    const unsigned char *src_data, *boundary;
+    unsigned char *dst_data;
+    size_t n_dim, keep_len, total_len;
+    unsigned int dim;
+
+    /* locate the key boundary */
+    castle_norm_key_len_get(src, &src_data);
+    n_dim = castle_norm_key_dim_get(&src_data);
+    BUG_ON(n_dim < n_keep);
+    for (dim = 0, boundary = src_data; dim < n_keep; ++dim)
+        boundary = castle_norm_key_dim_next(boundary);
+    keep_len = boundary - src_data;
+
+    /* allocate and copy things over */
+    total_len = NORM_KEY_DIM_SIZE(n_dim) + keep_len + (STRIDE_VALUES[0] + 1) * (n_dim - n_keep);
+    dst = castle_alloc_maybe(NORM_KEY_LENGTH_TO_SIZE(total_len), dst, dst_len);
+    if (!dst)
+        return NULL;
+    castle_norm_key_len_put(dst, &dst_data, total_len);
+    castle_norm_key_dim_put(&dst_data, n_dim);
+    memcpy(dst_data, src_data, keep_len);
+    for (dst_data += keep_len; dim < n_dim; ++dim) /* dim == n_keep from previous loop */
+        dst_data = castle_norm_key_pad(dst_data, 0x00, KEY_MARKER_MINUS_INFINITY, STRIDE_VALUES[0]);
+    return dst;
 }
 
 static struct castle_norm_key *castle_norm_key_meld(const struct castle_norm_key *a,
@@ -829,13 +870,28 @@ struct castle_var_length_btree_key *castle_norm_key_unpack(const struct castle_n
 /**
  * Hash a normalized key.
  * @param key       the key to hash
+ * @param type      whether the key is a normal key or a "stripped" key
  * @param seed      the seed value for the hash function
  */
-uint32_t castle_norm_key_hash(const struct castle_norm_key *key, uint32_t seed)
+uint32_t castle_norm_key_hash(const struct castle_norm_key *key, c_btree_hash_enum_t type, uint32_t seed)
 {
-    const unsigned char *data;
-    size_t len = castle_norm_key_len_get(key, &data);
-    return murmur_hash_32(data, len, seed);
+    const unsigned char *data, *boundary;
+    size_t len = castle_norm_key_len_get(key, &data), n_dim;
+    unsigned int dim;
+
+    switch (type)
+    {
+        case HASH_WHOLE_KEY:
+            return murmur_hash_32(data, len, seed);
+        case HASH_STRIPPED_KEYS:
+            n_dim = castle_norm_key_dim_get(&data);
+            BUG_ON(n_dim < HASH_STRIPPED_DIMS);
+            for (dim = 0, boundary = data; dim < HASH_STRIPPED_DIMS; ++dim)
+                boundary = castle_norm_key_dim_next(boundary);
+            return murmur_hash_32(data, boundary - data, seed);
+        default:
+            BUG();
+    }
 }
 
 /**

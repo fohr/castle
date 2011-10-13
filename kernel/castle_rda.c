@@ -24,7 +24,6 @@ typedef struct c_def_rda_state {
     uint32_t                             nr_slaves;
     struct castle_slave                 *permuted_slaves[MAX_NR_SLAVES];
     uint8_t                              permut_idx;
-    struct castle_freespace_reservation  freespace_reservation;
 } c_def_rda_state_t;
 
 typedef struct c_ssd_rda_state {
@@ -33,7 +32,6 @@ typedef struct c_ssd_rda_state {
     uint32_t                             nr_slaves;
     struct castle_slave                 *permuted_slaves[MAX_NR_SLAVES];
     uint8_t                              permut_idx;
-    struct castle_freespace_reservation  freespace_reservation;
 } c_ssd_rda_state_t;
 
 static c_rda_spec_t castle_rda_1, castle_rda_2;
@@ -136,49 +134,79 @@ static c_chk_cnt_t castle_rda_reservation_size_get(c_chk_cnt_t ext_size,
 }
 
 /**
- * Tries to reserve specified number of superchunks from each of the slaves supplied.
- * All reservations are stored in a single reservation structure, also provided as a parameter.
+ * Reserves space for the pool, based on RDA_TYPE provided.
  *
- * @param slaves            Array of slaves to allocate superchunks from.
- * @param nr_slaves         Size of the slaves array.
- * @param reservation_size  Number of super chunks to reserve for each copy.
- * @param token             Reservation structure to store the reservations in.
+ * @param [in]      rda_type        Type of the RDA that should be used to pick slaves and layout.
+ * @param [in]      logical_chk_cnt Number of logical chunks client is looking for, RDA decides
+ *                                  how many physical chunks to be used from each slave.
+ * @param [inout]   pool            Reservation pool that reserved chunks to be added to.
  *
- * @return -ENOSPC:    At least one reservation failed.
- * @return       0:    All reservations succeede.
+ * @return 0 SUCCESS  Reservation succeeded.
+ *        -1 FAILURE  Couldn't find space on slaves.
  */
-static int castle_rda_reserve(struct castle_slave **slaves,
-                              int nr_slaves,
-                              c_chk_cnt_t reservation_size,
-                              struct castle_freespace_reservation *token)
+int castle_rda_space_reserve(c_rda_type_t            rda_type,
+                             c_chk_cnt_t             logical_chk_cnt,
+                             c_res_pool_t           *pool)
 {
-    int i, ret;
-
-    for(i=0; i<nr_slaves; i++)
-    {
-        ret = castle_freespace_slave_superchunks_reserve(slaves[i], reservation_size, token);
-        if(ret)
-            return ret;
-    }
-
-    return 0;
-}
-
-/**
- * Frees freespace reservation for the specified array of slaves.
- *
- * @param slaves            Array of slaves to free the reservation for.
- * @param nr_slaves         Size of the slaves array.
- * @param token             Reservation structure with the reservations.
- */
-static void castle_rda_unreserve(struct castle_slave **slaves,
-                                 int nr_slaves,
-                                 struct castle_freespace_reservation *token)
-{
+    struct castle_slave *slaves[MAX_NR_SLAVES];
+    c_rda_spec_t *rda_spec = castle_rda_spec_get(rda_type);
+    struct list_head *l;
+    uint32_t nr_slaves = 0, reservation_size;
     int i;
 
+    /* Space reserve can be done only for DEFAULT_RDA and SSD_ONLY_EXT. For SSD_RDA call
+     * this fucntion twice with both the RDA types. Before adding new RDA type verify this
+     * function. */
+    BUG_ON((rda_type != RDA_1) && (rda_type != RDA_2) && (rda_type != SSD_ONLY_EXT));
+
+    /* Initialise the slaves array. */
+    rcu_read_lock();
+    list_for_each_rcu(l, &castle_slaves.slaves)
+    {
+        struct castle_slave *slave;
+
+        slave = list_entry(l, struct castle_slave, list);
+        if (castle_rda_slave_usable(rda_spec, slave))
+            slaves[nr_slaves++] = slave;
+    }
+    rcu_read_unlock();
+
+    /* Check whether we've got enough slaves. */
+    if (nr_slaves < rda_spec->k_factor)
+    {
+        //castle_printk(LOG_ERROR, "Do not have enough disks to support %d-RDA\n", rda_spec->k_factor);
+        debug("Do not have enough disks to support %d-RDA\n", rda_spec->k_factor);
+        return -EINVAL;
+    }
+
+    /* We used to do the optimiztion "when allocating small extents, limit the number of disks, which
+     * reduce the wasted space". Not doing this optimization for reservations anymore as it is fine to
+     * over-reserve, as we reservations get destroyed after completing the task(ex: merge). */
+
+    /* Find the number of chunks to be reserved from each slave. */
+    reservation_size = castle_rda_reservation_size_get(logical_chk_cnt,
+                                                       rda_spec->k_factor,
+                                                       nr_slaves);
+
+    /* Reserve space from all slaves. If failed to allocate space from any single slave, skip. */
     for(i=0; i<nr_slaves; i++)
-        castle_freespace_slave_superchunks_unreserve(slaves[i], token);
+    {
+        int ret;
+
+        ret = castle_freespace_slave_superchunks_reserve(slaves[i], reservation_size, pool);
+        if(ret)
+        {
+            castle_printk(LOG_DEVEL, "Failed to reserve space on slave: 0x%x\n", slaves[i]->uuid);
+            /* Fail to reserve space. Unreserve space from slaves. */
+            for (i=i-1; i>=0; i--)
+                castle_freespace_slave_superchunks_unreserve(slaves[i], reservation_size, pool);
+
+            return -ENOSPC;
+        }
+    }
+
+    /* Return Success. */
+    return 0;
 }
 
 void* castle_def_rda_extent_init(c_ext_t *ext,
@@ -190,6 +218,7 @@ void* castle_def_rda_extent_init(c_ext_t *ext,
     struct castle_slave *slave;
     c_def_rda_state_t *state;
     struct list_head *l;
+    uint32_t nr_slaves;
 
     /* Allocate memory for the state structure. */
     state = castle_zalloc(sizeof(c_def_rda_state_t), GFP_KERNEL);
@@ -226,25 +255,64 @@ void* castle_def_rda_extent_init(c_ext_t *ext,
     /* Permute the list of slaves the first time around. */
     castle_rda_slaves_shuffle(state->permuted_slaves, state->nr_slaves);
 
-    /* When allocating small extents, limit the number of disks, which reduces the wasted space. */
     BUG_ON(state->size == 0);
-    state->nr_slaves = min(state->nr_slaves, SUPER_CHUNK(ext_size - 1) + 1);
-    state->nr_slaves = max(state->nr_slaves, rda_spec->k_factor);
 
-    /* Reserve space from each of the disks. */
-    if(castle_rda_reserve(state->permuted_slaves,
-                          state->nr_slaves,
-                          castle_rda_reservation_size_get(alloc_size,
-                                                          rda_spec->k_factor,
-                                                          state->nr_slaves),
-                          &state->freespace_reservation))
-        goto unreserve_err_out;
+    nr_slaves = state->nr_slaves;
+
+    /* If the allocation size is not same as extent size, treat it as extent grow, and use all slaves.
+     * Other wise, for small extent, limit the number of disks, which reduces the wasted space. */
+    if (ext_size == alloc_size)
+    {
+        nr_slaves = min(nr_slaves, SUPER_CHUNK(ext_size - 1) + 1);
+        nr_slaves = max(nr_slaves, rda_spec->k_factor);
+    }
+
+#if 0
+    /* TODO: For the sake cleanness, implemented bruteforce. Improvize this code. */
+    /* If we are not using all the slaves, then use the slaves for which we got reservations. */
+    if (nr_slaves != state->nr_slaves && ext->pool)
+    {
+        int i, j;
+        struct castle_slave **slaves;
+
+        BUG_ON(nr_slaves > state->nr_slaves);
+
+        slaves = castle_zalloc(sizeof(struct castle_slave *) * nr_slaves, GFP_KERNEL);
+        if (!slaves)
+            goto err_out;
+
+        /* Take slaves for which, we got reservations. */
+        for (i=0, j=0; i<state->nr_slaves && j<nr_slaves; i++)
+        {
+            /* Note: not really checking for whether reserved space is enough or not. If not
+             * enough, we would over allocate. */
+            if (castle_res_pool_available_space(ext->pool, state->permuted_slaves[i]))
+            {
+                slaves[j++] = state->permuted_slaves[i];
+                state->permuted_slaves[i] = NULL;
+            }
+        }
+
+        /* If those slaves are not enough, get more, even if no space is reserved. */
+        for (i=0; i<state->nr_slaves && j<nr_slaves; i++)
+        {
+            if (state->permuted_slaves[i])
+                slaves[j++] = state->permuted_slaves[i];
+        }
+
+        /* Copy the newly set slaves to state. */
+        memset(&state->permuted_slaves, 0, sizeof(struct castle_slave *) * MAX_NR_SLAVES);
+        memcpy(&state->permuted_slaves, slaves, sizeof(struct castle_slave *) * nr_slaves);
+
+        castle_kfree(slaves);
+    }
+#endif
+
+    state->nr_slaves = nr_slaves;
 
     /* Success. Return the state structure. */
     return state;
 
-unreserve_err_out:
-    castle_rda_unreserve(state->permuted_slaves, state->nr_slaves, &state->freespace_reservation);
 err_out:
     if (state)
         castle_kfree(state);
@@ -256,13 +324,11 @@ void castle_def_rda_extent_fini(void *state_p)
 {
     c_def_rda_state_t *state = (c_def_rda_state_t *)state_p;
 
-    castle_rda_unreserve(state->permuted_slaves, state->nr_slaves, &state->freespace_reservation);
     castle_kfree(state);
 }
 
 int castle_def_rda_next_slave_get(struct castle_slave **cs,
                                   int *schk_ids,
-                                  struct castle_freespace_reservation **reservation_token,
                                   void *state_p,
                                   c_chk_t chk_num)
 {
@@ -295,7 +361,6 @@ int castle_def_rda_next_slave_get(struct castle_slave **cs,
         cs[i] = state->permuted_slaves[(state->permut_idx + i) % state->nr_slaves];
         schk_ids[i] = i;
     }
-    *reservation_token = &state->freespace_reservation;
 
     /* Advance the permutation index. */
     state->permut_idx++;
@@ -304,26 +369,6 @@ int castle_def_rda_next_slave_get(struct castle_slave **cs,
     state->prev_chk = chk_num;
 
     return 0;
-}
-
-/**
- * Gets the appropriate freespace reservation structure (either from ssd rda state structure
- * or from the def rda state structure, depending whether we the ssd spec is SSD_ONLY_EXT or
- * SSD_RDA).
- *
- * @param state RDA state structure.
- */
-static struct castle_freespace_reservation *castle_ssd_rda_reservation_token_get(
-                                                                        c_ssd_rda_state_t *state)
-{
-    if(state->rda_spec->type == SSD_ONLY_EXT)
-        return &state->freespace_reservation;
-
-    if((state->rda_spec->type == SSD_RDA_2) || (state->rda_spec->type == SSD_RDA_3))
-        return &state->def_state->freespace_reservation;
-
-    /* Unknown RDA type. */
-    BUG();
 }
 
 /**
@@ -376,25 +421,13 @@ void* castle_ssd_rda_extent_init(c_ext_t *ext,
     if(state->nr_slaves == 0)
     {
         debug("Could not allocate SSD extent size: %d. No SSDs found.\n", alloc_size);
-        goto unreserve_err_out;
+        goto err_out;
     }
     castle_rda_slaves_shuffle(state->permuted_slaves, state->nr_slaves);
-    /* Reserve space from each of the disks. */
-    if(castle_rda_reserve(state->permuted_slaves,
-                          state->nr_slaves,
-                          castle_rda_reservation_size_get(alloc_size,
-                                                          1,
-                                                          state->nr_slaves),
-                          castle_ssd_rda_reservation_token_get(state)))
-        goto unreserve_err_out;
 
     /* Success. Return. */
     return state;
 
-unreserve_err_out:
-    castle_rda_unreserve(state->permuted_slaves,
-                         state->nr_slaves,
-                         castle_ssd_rda_reservation_token_get(state));
 err_out:
     if(state)
     {
@@ -409,11 +442,6 @@ void castle_ssd_rda_extent_fini(void *state_v)
 {
     c_ssd_rda_state_t *state = state_v;
 
-    /* Free SSD reservations _before_ calling def_rda_extent_fini() because that
-       destroys the def state structure, which contains the reservation token. */
-    castle_rda_unreserve(state->permuted_slaves,
-                         state->nr_slaves,
-                         castle_ssd_rda_reservation_token_get(state));
     if(state->def_state)
         castle_def_rda_extent_fini(state->def_state);
     castle_kfree(state);
@@ -421,7 +449,6 @@ void castle_ssd_rda_extent_fini(void *state_v)
 
 int castle_ssd_rda_next_slave_get(struct castle_slave **cs,
                                   int *schk_ids,
-                                  struct castle_freespace_reservation **reservation_token,
                                   void *state_v,
                                   c_chk_t chk_num)
 {
@@ -434,7 +461,6 @@ int castle_ssd_rda_next_slave_get(struct castle_slave **cs,
         BUG_ON(!state->def_state);
         ret = castle_def_rda_next_slave_get(&cs[1],
                                             &schk_ids[1],
-                                            reservation_token,
                                             state->def_state,
                                             chk_num);
         if(ret)
@@ -450,7 +476,6 @@ int castle_ssd_rda_next_slave_get(struct castle_slave **cs,
     /* Use SSD for the 0th copy. */
     cs[0] = state->permuted_slaves[state->permut_idx];
     schk_ids[0] = 0;
-    *reservation_token = castle_ssd_rda_reservation_token_get(state);
     state->permut_idx++;
 
     return 0;
@@ -505,6 +530,8 @@ static c_rda_spec_t castle_super_ext_rda = {
     .extent_fini        = NULL,
 };
 
+/* BM: Just to avoid confusion, commenting it. Talk to GM and re-enable if needed. */
+#if 0
 static c_rda_spec_t castle_meta_ext_rda = {
     .type               = META_EXT,
     .k_factor           = 2,
@@ -512,6 +539,7 @@ static c_rda_spec_t castle_meta_ext_rda = {
     .next_slave_get     = castle_def_rda_next_slave_get,
     .extent_fini        = castle_def_rda_extent_fini,
 };
+#endif
 
 c_rda_spec_t *castle_rda_specs[] = {
     [RDA_1]             = &castle_rda_1,
@@ -520,7 +548,7 @@ c_rda_spec_t *castle_rda_specs[] = {
     [SSD_RDA_3]         = &castle_ssd_rda_3,
     [SSD_ONLY_EXT]      = &castle_ssd_only_rda,
     [SUPER_EXT]         = &castle_super_ext_rda,
-    [META_EXT]          = &castle_meta_ext_rda,
+    [META_EXT]          = &castle_rda_2,
     [MICRO_EXT]         = NULL,
 };
 
