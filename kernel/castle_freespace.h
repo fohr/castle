@@ -55,4 +55,6 @@ void        castle_freespace_stats_print            (void);
 c_chk_cnt_t castle_freespace_space_get              (void);
 
 void        castle_freespace_post_checkpoint        (void);
+
+c_chk_cnt_t castle_freespace_free_superchunks             (struct castle_slave *cs);
 #endif /* __CASTLE_FREESPACE_H__ */

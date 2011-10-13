@@ -39,6 +39,17 @@ void freespace_sblk_put(struct castle_slave *cs, int dirty)
     mutex_unlock(&cs->freespace_lock);
 }
 
+inline c_chk_cnt_t castle_freespace_free_superchunks(struct castle_slave *cs)
+{
+    /* Should be part of a extent transaction, to make sure counters are consistent. */
+    BUG_ON(!castle_extent_in_transaction());
+
+    if (cs->freespace.cons <= cs->prev_prod)
+        return (cs->prev_prod - cs->freespace.cons);
+
+    return (cs->freespace.max_entries - cs->freespace.cons + cs->prev_prod);
+}
+
 /**
  * Reserves specified amount of freespace from a slave. Reservation is stored in
  * an appropriate reservation structure, which must be provided to subsequent allocation
@@ -66,10 +77,7 @@ int castle_freespace_slave_superchunks_reserve(struct castle_slave  *cs,
     freespace = freespace_sblk_get(cs);
 
     /* Work out how many free superchunks there are ATM. */
-    if (freespace->cons <= cs->prev_prod)
-        free_schks = cs->prev_prod - freespace->cons;
-    else
-        free_schks = freespace->max_entries - freespace->cons + cs->prev_prod;
+    free_schks = castle_freespace_free_superchunks(cs);
 
     /* Subtract reserved superchunks. */
     BUG_ON(free_schks < cs->reserved_schks);

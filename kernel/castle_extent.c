@@ -4231,7 +4231,6 @@ static int castle_extent_slave_get_by_freespace(c_ext_t *ext,
     int         avg_freespace, max_freespace, slave_freespace;
     int         is_ssd=0;
     struct castle_slave *cs;
-    castle_freespace_t  *freespace;
 
     /* For each slave in process_state.live_slaves (the list of potential remap slaves). */
 retry:
@@ -4272,13 +4271,8 @@ retry:
         BUG_ON(!cs);
 
         castle_extent_transaction_start();
-        freespace = freespace_sblk_get(cs);
         /* Work out how many free superchunks there are ATM. */
-        if(freespace->cons <= cs->prev_prod)
-            slave_freespace = cs->prev_prod - freespace->cons;
-        else
-            slave_freespace = freespace->max_entries - freespace->cons + cs->prev_prod;
-        freespace_sblk_put(cs, 0);
+        slave_freespace = castle_freespace_free_superchunks(cs);
         castle_extent_transaction_end();
 
         if (slave_freespace > max_freespace)
