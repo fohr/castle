@@ -6125,44 +6125,32 @@ int castle_checkpoint_version_inc(void)
     struct   castle_slave *cs = NULL;
     uint32_t fs_version;
 
+    /* Done with previous checkpoint. Update freespace counters now. Safe to
+     * resue them now. */
+    castle_freespace_post_checkpoint();
+
     /* Goto next version. */
     fs_sb = castle_fs_superblocks_get();
     fs_sb->fs_version++;
     fs_version = fs_sb->fs_version;
     castle_fs_superblocks_put(fs_sb, 1);
 
-    /* Makes sure no parallel freespace operations happening. */
-    castle_extent_transaction_start();
-
+    /* Increment version on each slave. */
     rcu_read_lock();
     list_for_each_rcu(lh, &castle_slaves.slaves)
     {
         cs = list_entry(lh, struct castle_slave, list);
+
         /* Do not checkpoint out-of-service slaves. */
         if (test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags))
             continue;
+
         cs_sb = castle_slave_superblock_get(cs);
         cs_sb->fs_version++;
-        if (fs_version != cs_sb->fs_version)
-        {
-            castle_printk(LOG_ERROR, "%x:%x\n", fs_version, cs_sb->fs_version);
-            BUG();
-        }
-
-        /* Make the freespace, released since last checkpoint, available for usage. */
-
-        /* As the flushed version is consistent now on disk, It is okay to
-         * overwrite the previous version now. Change freespace producer
-         * accordingly. */
-        cs->prev_prod = cs->frozen_prod;
+        BUG_ON(fs_version != cs_sb->fs_version);
         castle_slave_superblock_put(cs, 1);
     }
     rcu_read_unlock();
-
-    castle_extent_transaction_end();
-
-    /* Created more freespace, wakeup all low freespace victims. */
-    castle_extent_lfs_victims_wakeup();
 
     castle_printk(LOG_INFO, "Number of logical extent pages: %u\n",
             atomic_read(&castle_cache_logical_ext_pages));

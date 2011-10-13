@@ -222,10 +222,32 @@ typedef uint32_t block_t;
                                             || EXT_ID_INVAL(_ext_id))
 
 typedef uint32_t c_chk_cnt_t;
+/* Signed chunk count is used by reservation pool counters. So, it
+ * supports upto 2**31 chunks which is 2 PB, too big for reservation pool buffers(is it!!). */
+typedef int32_t  c_signed_chk_cnt_t;
 typedef uint32_t c_chk_t;
 typedef uint64_t c_ext_id_t;
 typedef uint32_t c_uuid_t;
 typedef uint32_t c_ext_mask_id_t;
+typedef uint32_t c_res_pool_id_t;
+
+#define INVAL_RES_POOL                  ((c_res_pool_id_t) -1)
+#define RES_POOL_INVAL(_pool)           ((_pool) == INVAL_RES_POOL)
+
+/**
+ * Reservation pools contain reservation from all the slaves, together. Reservation pool IDs are
+ * persistent across reboots.
+ */
+typedef struct castle_reservation_pool {
+    c_res_pool_id_t     id;
+    struct list_head    hash_list;
+    atomic_t            ref_count;
+    c_signed_chk_cnt_t  reserved_schks[MAX_NR_SLAVES];
+    c_chk_cnt_t         frozen_freed_schks[MAX_NR_SLAVES];
+    c_chk_cnt_t         freed_schks[MAX_NR_SLAVES];    /* Superchunks freed, but not yet
+                                                          checkpointed. Couldn't allocate
+                                                          these yet. */
+} c_res_pool_t;
 
 /* Extent mask represents the view of an extent. We always make changes to extents to ends.
  * Any point of time, extent view corresponds to one contigous range. */
@@ -327,6 +349,18 @@ static inline int EXT_POS_COMP(c_ext_pos_t cep1, c_ext_pos_t cep2)
 #define cep2str(_off)                (_off).ext_id, BLOCK((_off).offset), CHUNK((_off).offset), CHUNK_OFFSET((_off).offset)
 #define __cep2str(_off)              (_off).ext_id, ((_off).offset), CHUNK((_off).offset), CHUNK_OFFSET((_off).offset)
 #define PG_ALIGN_CEP(_cep)           (c_ext_pos_t){(_cep).ext_id, MASK_BLK_OFFSET((_cep).offset)}
+
+static USED char *castle_rda_type_str[] = {
+    "RDA_1",
+    "RDA_2",
+    "SSD_RDA_2",
+    "SSD_RDA_3",
+    "META_EXT",
+    "MICRO_EXT",
+    "SUPER_EXT",
+    "SSD_ONLY_EXT",
+    "NR_RDA_SPECS"
+};
 
 /* Type of data stored within extent. */
 typedef enum {
@@ -437,6 +471,20 @@ struct castle_plist_entry {
     /*         16 */ c_chk_cnt_t      count;
     /*         20 */ uint8_t          _unused[12];
     /*         32 */
+} PACKED;
+
+struct castle_rlist_entry {
+    /* align:   4 */
+    /* offset:  0 */ c_res_pool_id_t    id;
+    /*          4 */ struct {
+       /*          0 */ c_uuid_t               uuid;
+                        /* Reserved superchunks for a given slave could be -ve, if it
+                         * has over allocated chunks. */
+       /*          4 */ c_signed_chk_cnt_t     reserved_schks;
+       /*          8 */
+                     } slaves[MAX_NR_SLAVES];
+    /*        516 */ uint8_t            _unused[508];
+    /*       1024 */
 } PACKED;
 
 struct castle_extents_superblock {
@@ -802,6 +850,7 @@ enum {
     MSTORE_STATS,
     MSTORE_DATA_EXTENTS,
     MSTORE_CT_DATA_EXTENTS,
+    MSTORE_RES_POOLS,
 };
 
 
@@ -1758,7 +1807,8 @@ struct castle_slave {
     uint32_t                        fs_versions[2]; /* The fs versions for this slave. */
     struct mutex                    sblk_lock;
     c_chk_cnt_t                     disk_size; /* in chunks; max_chk_num + 1 */
-    c_chk_cnt_t                     reserved_schks;
+    c_chk_cnt_t                     reserved_schks;     /**< # of super chunks reserved in this
+                                                             slave. */
     atomic_t                        free_chk_cnt;
     atomic_t                        io_in_flight;
     char                            bdev_name[BDEVNAME_SIZE];

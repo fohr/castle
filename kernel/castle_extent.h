@@ -46,6 +46,7 @@ typedef struct castle_extent {
     c_ext_mask_range_t  chkpt_global_mask;
     struct list_head    mask_list;      /* List of all valid masks - latest first.      */
     struct list_head    schks_list;     /* List of partially used superchunks.          */
+    c_res_pool_t       *pool;           /* Reservation pool that this extent tied to.*/
     uint8_t             alive;
     c_ext_dirtytree_t  *dirtytree;      /**< RB-tree of dirty c2bs.                     */
     c_ext_type_t        ext_type;       /**< Type of extent.                            */
@@ -158,4 +159,17 @@ extern atomic_t             castle_extents_postsyncvar;
 extern wait_queue_head_t    process_syncpoint_waitq;
 extern int                  castle_checkpoint_syncing;
 
+void                castle_res_pools_post_checkpoint         (void);
+c_chk_cnt_t         castle_res_pool_available_space          (c_res_pool_t        *pool,
+                                                              struct castle_slave *cs);
+c_res_pool_id_t     castle_res_pool_create                   (c_rda_type_t         rda_type,
+                                                              c_chk_cnt_t          logical_chk_cnt);
+int                 castle_extent_space_reserve              (c_rda_type_t         rda_type,
+                                                              c_chk_cnt_t          logical_chk_cnt,
+                                                              c_res_pool_id_t      pool_id);
+
+#define castle_res_pool_counter_check(_pool, _id)                                           \
+do {                                                                                        \
+    BUG_ON(((_pool)->reserved_schks[_id] < 0) && (_pool)->freed_schks[_id]);                \
+} while(0)
 #endif /* __CASTLE_EXTENT_H__ */
