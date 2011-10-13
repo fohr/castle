@@ -461,8 +461,8 @@ typedef struct castle_control_cmd_prog_register {
 } cctrl_cmd_prog_register_t;
 
 typedef struct castle_control_cmd_prog_deregister {
-    pid_t           pid;            /* IN  */
     uint8_t         shutdown;       /* IN  */
+    pid_t           pid;            /* OUT  */
     int             ret;            /* OUT */
 } cctrl_cmd_prog_deregister_t;
 
