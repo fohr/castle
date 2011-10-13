@@ -17,7 +17,6 @@
  */
 typedef int  (*c_next_slave_get_t)(struct castle_slave                 **cs,
                                    int                                  *schk_ids,
-                                   struct castle_freespace_reservation **reservation_token,
                                    void                                 *state,
                                    c_chk_t                               chk_num);
 

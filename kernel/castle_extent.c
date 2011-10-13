@@ -1473,13 +1473,11 @@ static void castle_extent_space_free(c_ext_t *ext, c_chk_cnt_t start, c_chk_cnt_
  * @param da_id     Doubling array id for which the extent is to be allocated.
  * @param slave     Disk slave to allocate disk chunk from.
  * @param copy_id   Which copy in the k-RDA set we are trying to allocate.
- * @param token     Reservation token, required to allocate freespace.
  */
 static c_disk_chk_t castle_extent_disk_chk_alloc(c_da_t da_id,
                                                  struct castle_extent_state *ext_state,
                                                  struct castle_slave *slave,
-                                                 int copy_id,
-                                                 struct castle_freespace_reservation *token)
+                                                 int copy_id)
 {
     c_disk_chk_t disk_chk;
     c_chk_seq_t chk_seq;
@@ -1518,7 +1516,7 @@ static c_disk_chk_t castle_extent_disk_chk_alloc(c_da_t da_id,
     }
 
     /* If we got here, we need to allocate a new superchunk. */
-    chk_seq = castle_freespace_slave_superchunk_alloc(slave, da_id, token);
+    chk_seq = castle_freespace_slave_superchunk_alloc(slave, da_id, NULL);
     if (CHK_SEQ_INVAL(chk_seq))
     {
         /*
@@ -1580,7 +1578,6 @@ static inline c_ext_pos_t castle_extent_map_cep_get(c_ext_pos_t map_start,
 int castle_extent_space_alloc(c_ext_t *ext, c_da_t da_id, c_chk_cnt_t alloc_size)
 {
     struct castle_extent_state *ext_state;
-    struct castle_freespace_reservation *reservation_token;
     struct castle_slave *slaves[ext->k_factor];
     int schk_ids[ext->k_factor];
     c_rda_spec_t *rda_spec;
@@ -1675,7 +1672,6 @@ retry:
         /* Ask the RDA spec which slaves to use. */
         if (rda_spec->next_slave_get( slaves,
                                       schk_ids,
-                                     &reservation_token,
                                       rda_state,
                                       chunk) < 0)
         {
@@ -1690,8 +1686,7 @@ retry:
             disk_chk = castle_extent_disk_chk_alloc(da_id,
                                                     ext_state,
                                                     slaves[j],
-                                                    schk_ids[j],
-                                                    reservation_token);
+                                                    schk_ids[j]);
             debug("Allocation for (logical_chunk=%d, copy=%d) -> (slave=0x%x, "disk_chk_fmt")\n",
                 chunk, j, slaves[j]->uuid, disk_chk2str(disk_chk));
             if(DISK_CHK_INVAL(disk_chk))
@@ -3350,7 +3345,7 @@ static int castle_extent_remap_superchunks_alloc(c_ext_t *ext, int slave_idx)
     }
 
     /*
-     * Allocate a superchunk. We do not want to pre-reserve space, so use a NULL token.
+     * Allocate a superchunk.
      */
     chk_seq = castle_freespace_slave_superchunk_alloc(cs, 0, NULL);
 
