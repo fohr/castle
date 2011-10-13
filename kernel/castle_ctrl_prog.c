@@ -20,7 +20,7 @@ enum {
 
 static unsigned long castle_ctrl_prog_timeouts[CTRL_PROG_INVAL]
                         = {[CTRL_PROG_NOT_PRESENT] =  10 * HZ,
-                           [CTRL_PROG_PRESENT]     =   3 * HZ,
+                           [CTRL_PROG_PRESENT]     =  10 * HZ,
                            [CTRL_PROG_SHUTDOWN]    = 120 * HZ };
 
 static struct timer_list castle_ctrl_prog_heartbeat_timer;
@@ -134,7 +134,6 @@ static DECLARE_WORK(castle_ctrl_prog_work, castle_ctrl_prog_work_do, 0);
 
 static void castle_ctrl_prog_timer(unsigned long unused)
 {
-    printk("Heartbeat timer.\n");
     if(castle_ctrl_prog_timed_out())
         schedule_work(&castle_ctrl_prog_work);
     mod_timer(&castle_ctrl_prog_heartbeat_timer, jiffies + HZ);
