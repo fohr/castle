@@ -960,7 +960,7 @@ struct castle_btree_type {
                                  associated with it                     */
     int      (*nr_dims)       (const void *key);
                               /**< Get number of key dimensions.        */
-    void    *(*key_strip)     (const void *src, void *dst, size_t dst_len, int nr_dims);
+    void    *(*key_strip)     (const void *src, void *dst, size_t *dst_len, int nr_dims);
                               /**< Build key with first nr_dims dimensions, remaining
                                    dimensions set to -inf.                              */
     uint32_t (*key_hash)      (const void *key, c_btree_hash_enum_t type, uint32_t seed);

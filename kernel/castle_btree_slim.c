@@ -96,22 +96,22 @@ static void castle_slim_key_dealloc(void *keyv)
     castle_norm_key_free(key);
 }
 
-static int castle_slim_key_nr_dims(const void *key)
+static int castle_slim_key_nr_dims(const void *keyv)
 {
-    BUG(); /*unimplemented*/
+    const struct castle_norm_key *key = keyv;
+    return NORM_KEY_SPECIAL(key) ? 0 : castle_norm_key_nr_dims(key);
 }
 
-static void *castle_slim_key_strip(const void *src, void *dst, size_t dst_len, int nr_dims)
+static void *castle_slim_key_strip(const void *src, void *dst, size_t *dst_len, int nr_dims)
 {
-    BUG(); /*unimplemented*/
+    return castle_norm_key_strip(src, dst, dst_len, nr_dims);
 }
 
 inline static uint32_t castle_slim_key_hash(const void *key,
                                             c_btree_hash_enum_t type,
                                             uint32_t seed)
 {
-    BUG_ON(type != HASH_WHOLE_KEY);
-    return castle_norm_key_hash(key, seed);
+    return castle_norm_key_hash(key, type, seed);
 }
 
 static void castle_slim_key_print(int level, const void *key)

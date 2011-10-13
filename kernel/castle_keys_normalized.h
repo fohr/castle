@@ -80,12 +80,16 @@ struct castle_norm_key *castle_norm_key_copy(const struct castle_norm_key *src,
                                              struct castle_norm_key *dst, size_t *dst_len);
 struct castle_norm_key *castle_norm_key_next(const struct castle_norm_key *src,
                                              struct castle_norm_key *dst, size_t *dst_len);
+struct castle_norm_key *castle_norm_key_strip(const struct castle_norm_key *src,
+                                              struct castle_norm_key *dst, size_t *dst_len,
+                                              int nr_dims);
 struct castle_norm_key *castle_norm_key_hypercube_next(const struct castle_norm_key *key,
                                                        const struct castle_norm_key *low,
                                                        const struct castle_norm_key *high);
 
 int castle_norm_key_compare(const struct castle_norm_key *a, const struct castle_norm_key *b);
-uint32_t castle_norm_key_hash(const struct castle_norm_key *key, uint32_t seed);
+int castle_norm_key_nr_dims(const struct castle_norm_key *key);
+uint32_t castle_norm_key_hash(const struct castle_norm_key *key, c_btree_hash_enum_t type, uint32_t seed);
 void castle_norm_key_print(int level, const struct castle_norm_key *key);
 
 struct castle_var_length_btree_key *castle_norm_key_unpack(const struct castle_norm_key *src,
