@@ -12,8 +12,10 @@
 //#define DEBUG
 #ifdef DEBUG
 #define debug(_f, _a...)        (castle_printk(LOG_DEBUG, _f, ##_a))
+#define debug_res_pools(_f, _a...)  (castle_printk(LOG_DEBUG, _f, ##_a))
 #else
 #define debug(_f, ...)          ((void)0)
+#define debug_res_pools(_f, _a...)  ((void)0)
 #endif
 
 typedef struct c_def_rda_state {
@@ -196,7 +198,7 @@ int castle_rda_space_reserve(c_rda_type_t            rda_type,
         ret = castle_freespace_slave_superchunks_reserve(slaves[i], reservation_size, pool);
         if(ret)
         {
-            castle_printk(LOG_DEVEL, "Failed to reserve space on slave: 0x%x\n", slaves[i]->uuid);
+            castle_printk(LOG_DEBUG, "Failed to reserve space on slave: 0x%x\n", slaves[i]->uuid);
             /* Fail to reserve space. Unreserve space from slaves. */
             for (i=i-1; i>=0; i--)
                 castle_freespace_slave_superchunks_unreserve(slaves[i], reservation_size, pool);

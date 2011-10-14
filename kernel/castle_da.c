@@ -5046,14 +5046,16 @@ static int castle_da_merge_unit_do(struct castle_da_merge *merge, uint64_t max_n
             /* Make sure we got enough space for the entry_add() current cvt to be success. */
             while (castle_da_merge_space_reserve(merge, cvt))
             {
+                /* On exit, just return error code -ESHUTDOWN. */
+                if (castle_da_exiting)
+                    return -ESHUTDOWN;
+
                 printk("******* Sleeping on LFS *****\n");
                 msleep(1000);
             }
 
             ret = castle_da_entry_do(merge, key, version, &cvt, max_nr_bytes, &stats);
-
-            if (ret == -ESHUTDOWN)
-                return -ESHUTDOWN;
+            BUG_ON(ret == -ESHUTDOWN);
 
             if (ret != EXIT_SUCCESS)
                 goto err_out;
