@@ -14,6 +14,27 @@ static unsigned int castle_fast_panic = 0;
 module_param(castle_fast_panic, uint, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
 MODULE_PARM_DESC(castle_fast_panic, "Dumps Castle dmesg if unset");
 
+/*
+ * WARNING: This has been moved here from castle.h because it's fairly complicated and
+ * increases object code size a lot if it's inline. If we switch to a simpler
+ * implementation, it should probably be moved back.
+ */
+void ATTRIB_NORET bug_fn(char *file, unsigned long line)
+{
+    void castle_dmesg(void);
+
+    WARN_ON(1);
+
+    /* Dump Castle dmesg output before panicking. */
+    castle_dmesg();
+
+    /* Print a stack backtrace. */
+    dump_stack();
+
+    /* Generate a crashdump. */
+    panic("Castle BUG, from: %s:%ld\n", file, line);
+}
+
 /**
  * Reinit and drop ref on a castle_key_ptr_t.
  */

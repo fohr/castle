@@ -27,21 +27,8 @@
 /* Enable additional sanity checking to debug merge serialisation/deserialisation */
 //#define DEBUG_MERGE_SERDES
 
-static inline ATTRIB_NORET void bug_fn(char *file, unsigned long line)
-{
-    void castle_dmesg(void);
-
-    WARN_ON(1);
-
-    /* Dump Castle dmesg output before panicking. */
-    castle_dmesg();
-
-    /* Print a stack backtrace. */
-    dump_stack();
-
-    /* Generate a crashdump. */
-    panic("Castle BUG, from: %s:%ld\n", file, line);
-}
+/* moved to castle_utils.c for now */
+void ATTRIB_NORET bug_fn(char *file, unsigned long line);
 
 #define BUG()            do { bug_fn(__FILE__, __LINE__); } while(0)
 #define BUG_ON(_cond)    do { if(unlikely(_cond)) BUG(); } while(0)
