@@ -10424,7 +10424,7 @@ void castle_da_next_ct_read(c_bvec_t *c_bvec)
             /* We have a tree, we have a previously found object that is not a counter, and we are
                timestamping this DA; let's compare timestamps to see if we need to query this tree,
                or if we can go on to the next tree right away. */
-            if (castle_da_ct_timestamp_compare(c_bvec->tree, &get->cvt, get->cvt.user_timestamp) > 0);
+            if (castle_da_ct_timestamp_compare(c_bvec->tree, &get->cvt, get->cvt.user_timestamp) > 0)
                 break; /* this tree might have something newer (according to user_timestamp) */
         }
         else break; /* not timestamping */
