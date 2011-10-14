@@ -25,12 +25,15 @@ static inline int _prefix##_hash_idx(_key_t key)                                
     return (int)(hash % _tab_size);                                                            \
 }                                                                                              \
                                                                                                \
+static inline _struct* __##_prefix##_hash_get(_key_t key);                                     \
+                                                                                               \
 static inline void _prefix##_hash_add(_struct *v)                                              \
 {                                                                                              \
     int idx = _prefix##_hash_idx(v->_key);                                                     \
     unsigned long flags;                                                                       \
                                                                                                \
     write_lock_irqsave(&_prefix##_hash_lock, flags);                                           \
+    BUG_ON(__##_prefix##_hash_get(v->_key));                                                   \
     list_add(&v->_list_mbr, &_tab[idx]);                                                       \
     write_unlock_irqrestore(&_prefix##_hash_lock, flags);                                      \
 }                                                                                              \
@@ -46,6 +49,7 @@ static inline void _prefix##_hash_remove(_struct *v)                            
                                                                                                \
     write_lock_irqsave(&_prefix##_hash_lock, flags);                                           \
     list_del(&v->_list_mbr);                                                                   \
+    BUG_ON(__##_prefix##_hash_get(v->_key));                                                   \
     write_unlock_irqrestore(&_prefix##_hash_lock, flags);                                      \
 }                                                                                              \
                                                                                                \

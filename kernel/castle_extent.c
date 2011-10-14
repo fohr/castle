@@ -214,7 +214,7 @@ static struct list_head *castle_res_pool_hash = NULL;
 
 DEFINE_HASH_TBL(castle_res_pool, castle_res_pool_hash, CASTLE_RES_POOL_HASH_SIZE, c_res_pool_t, hash_list, c_res_pool_id_t, id);
 
-static c_res_pool_id_t castle_max_res_pool_id = INVAL_RES_POOL;
+static c_res_pool_id_t castle_next_res_pool_id = 0;
 
 c_ext_t sup_ext = {
     .ext_id         = SUP_EXT_ID,
@@ -523,7 +523,7 @@ c_res_pool_id_t castle_res_pool_create(c_rda_type_t rda_type, c_chk_cnt_t logica
     }
 
     /* Get a new pool ID. */
-    pool->id = ++castle_max_res_pool_id;
+    pool->id = castle_next_res_pool_id++;
 
     /* Add to the hash table. */
     castle_res_pool_hash_add(pool);
@@ -534,7 +534,7 @@ c_res_pool_id_t castle_res_pool_create(c_rda_type_t rda_type, c_chk_cnt_t logica
 out:
     castle_extent_transaction_end();
 
-    return pool->id;
+    return (pool? pool->id: INVAL_RES_POOL);
 }
 
 void __castle_res_pool_destroy(c_res_pool_t *pool)
@@ -548,6 +548,8 @@ void __castle_res_pool_destroy(c_res_pool_t *pool)
     castle_res_pool_print(pool);
 
     castle_res_pool_hash_remove(pool);
+
+    BUG_ON(castle_res_pool_hash_get(pool->id));
 
     castle_kfree(pool);
 }
@@ -643,6 +645,7 @@ static int castle_res_pool_writeback(c_res_pool_t *pool, void *store)
     BUG_ON(!castle_extent_in_transaction());
 
     debug_res_pools("Writing back reservation pool %u\n", pool->id);
+    BUG_ON(pool->id >= castle_next_res_pool_id);
 
     /* FIXME: Current checkpoint error handling is not handled properly. Even passing error
      * wouldn't help much. */
@@ -878,9 +881,9 @@ int castle_res_pools_read(void)
         castle_res_pool_hash_add(pool);
 
         /* Update next_res_pool_id. */
-        castle_max_res_pool_id = (castle_max_res_pool_id < pool->id)?
-                                  pool->id:
-                                  castle_max_res_pool_id;
+        castle_next_res_pool_id = (castle_next_res_pool_id < pool->id)?
+                                   (pool->id + 1):
+                                   castle_next_res_pool_id;
     }
 
     /* Done with the iterator, destroy it. */
@@ -2828,6 +2831,11 @@ static void castle_extent_resource_release(void *data)
 
     /* Remove extent from hash. */
     castle_extents_hash_remove(ext);
+
+    /* We have already freed-up all the space, consequently marked all dirty c2bs in
+     * that space as clean, there shouldn't be any more references on dirty tree,
+     * other than the live extent reference. */
+    BUG_ON(atomic_read(&ext->dirtytree->ref_cnt) != 1);
 
     /* Drop 'extent exists' reference on c2b dirtytree. */
     castle_extent_dirtytree_put(ext->dirtytree);

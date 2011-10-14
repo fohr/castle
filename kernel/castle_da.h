@@ -84,8 +84,6 @@ struct castle_da_merge {
 
     growth_control_state_t growth_control_tree; /* btree leaf node extent growth control */
     growth_control_state_t growth_control_data; /* medium objects extent growth control */
-    int aborting; /* TODO@tr unhack this... this hack was put specifically to deal with low
-                             freespace leading to failure to grow extents, until exit_cond. */
 
     /* Members copied from castel_double_array.levels */
     struct castle_key_ptr_t redirection_partition; /**< The key used to decide if a query

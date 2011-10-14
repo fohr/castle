@@ -1022,7 +1022,18 @@ static int c2_dirtytree_insert(c2_block_t *c2b)
     c_ext_dirtytree_t *dirtytree;
     c2_block_t *tree_c2b;
     unsigned long flags;
+    c_chk_cnt_t start, end;
     int cmp;
+
+    /* Get the current valid extent space. This is not a strict check. Strict check
+     * would have to use the mask_id that the client is using. */
+    castle_extent_mask_read_all(c2b->cep.ext_id, &start, &end);
+
+    /* End of c2b, shouldn't below current valid extent space. */
+    BUG_ON((c2b->cep.offset + (c2b->nr_pages * C_BLK_SIZE)) < (start * C_CHK_SIZE));
+
+    /* Start of c2b, shouldn't be after valid extent space. */
+    BUG_ON(c2b->cep.offset >= ((end + 1) * C_CHK_SIZE));
 
     /* Get dirtytree and hold its lock while we manipulate the tree. */
     dirtytree = castle_extent_dirtytree_by_id_get(c2b->cep.ext_id);
