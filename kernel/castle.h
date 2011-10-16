@@ -2258,6 +2258,7 @@ struct castle_double_array {
                                                          blocked due to Low Free-Space.         */
     atomic_t                    ongoing_merges;
     struct castle_da_lfs_ct_t  *t0_lfs;             /**< Low Free-Space handler for T0s.        */
+    struct castle_da_lfs_ct_t   l1_merge_lfs;       /**< LFS Structure for L1 merge.            */
     struct list_head            hash_list;
     atomic_t                    ref_cnt;
     uint32_t                    attachment_cnt;

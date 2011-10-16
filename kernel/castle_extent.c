@@ -2081,13 +2081,15 @@ static void castle_extent_state_dealloc(c_ext_t *ext, struct castle_extent_state
  * Frees specified number of disk chunks allocated to the specified extent. Called when destroying
  * extents, or during failed allocations, to return already allocated disk space.
  *
- * @param ext   Extent to free the disk space for.
- * @param count Number of chunks to free.
+ * @param   ext     Extent to free the disk space for.
+ * @parm    start   LOGICAL chunk to start free from.
+ * @param   count   Number of PHYSICAL chunks to free.
  *
+ * Note: Make sure PHYSICAL/LOGICAL counts are being used properly.
  * @FIXME Cannot handle kmalloc failure. We should retry freeing extent freespace,
  * once memory becomes available.
  */
-static void castle_extent_space_free(c_ext_t *ext, c_chk_cnt_t start, c_chk_cnt_t count)
+static void _castle_extent_space_free(c_ext_t *ext, c_chk_cnt_t start, c_chk_cnt_t count)
 {
     c_chk_cnt_t                 chks_per_page;
     c_ext_pos_t                 map_cep;
@@ -2147,6 +2149,18 @@ static void castle_extent_space_free(c_ext_t *ext, c_chk_cnt_t start, c_chk_cnt_
 }
 
 /**
+ * Frees specified number of disk chunks allocated to the specified extent. Called when destroying
+ * extents, or during failed allocations, to return already allocated disk space.
+ *
+ * @param   ext     Extent to free the disk space for.
+ * @parm    start   LOGICAL chunk to start free from.
+ * @param   count   Number of LOGICAL chunks to free.
+ */
+static void castle_extent_space_free(c_ext_t *ext, c_chk_cnt_t start, c_chk_cnt_t count)
+{
+    _castle_extent_space_free(ext, start, count * ext->k_factor);
+}
+/**
  * Allocates disk chunks for particular extent (specified by the extent state struct).
  * Allocates chunks from the specified slave, takes the copy id into account, to make sure
  * continous reads perform well. Gets superchunks from the freespace periodically, and
@@ -2180,6 +2194,8 @@ static c_disk_chk_t castle_extent_disk_chk_alloc(c_da_t da_id,
          * happens after shrink or truncate. */
         /* Note: Rebuild can happen after shrink or truncate. But, rebuild doenst go thrrough
          * this code flow. */
+        if ((chk_seq.first_chk + chk_seq.count) % CHKS_PER_SLOT)
+            printk("%p %u %u\n", ext_state, chk_seq.first_chk, chk_seq.count);
         BUG_ON((chk_seq.first_chk + chk_seq.count) % CHKS_PER_SLOT);
 
         /* Update the chunk buffer in extent state. */
@@ -2379,7 +2395,7 @@ retry:
                 write_unlock_c2b(map_c2b);
                 put_c2b(map_c2b);
                 map_c2b = NULL;
-                castle_extent_space_free(ext, 0, ext->k_factor * chunk + j);
+                _castle_extent_space_free(ext, start, ext->k_factor * chunk + j);
                 if (test_bit(CASTLE_SLAVE_OOS_BIT, &slaves[j]->flags))
                     /*
                      * The slave went out-of-service since the 'next_slave_get'. Retry, and the
@@ -6263,7 +6279,7 @@ int castle_extent_grow(c_ext_id_t ext_id, c_chk_cnt_t count)
     /* Get the current latest mask. */
     mask = GET_LATEST_MASK(ext);
 
-    if(!mask)
+    if (!mask)
     {
         castle_printk(LOG_ERROR, "%s::failed to recover a mask for extent %d\n", ext->ext_id);
         BUG();
@@ -6278,7 +6294,7 @@ int castle_extent_grow(c_ext_id_t ext_id, c_chk_cnt_t count)
                                     mask->mask_id);
     if (ret < 0)
     {
-        castle_extent_space_free(ext, mask->range.start, mask->range.end + count);
+        castle_extent_space_free(ext, mask->range.end, count);
         goto out;
     }
 
@@ -6433,7 +6449,7 @@ static void castle_extent_free_range(c_ext_t               *ext,
                               range.start,
                               (range.end - range.start));
 
-    castle_extent_space_free(ext, range.start, (range.end - range.start) * ext->k_factor);
+    castle_extent_space_free(ext, range.start, (range.end - range.start));
 }
 
 static void castle_extent_mask_reduce(c_ext_t             *ext,

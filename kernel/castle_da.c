@@ -3110,8 +3110,29 @@ static USED int castle_da_lfs_merge_ct_growable_callback(void *data)
 static int castle_da_merge_extents_alloc(struct castle_da_merge *merge)
 {
     c_byte_off_t internal_tree_size, tree_size, data_size, bloom_size;
+    struct castle_da_lfs_ct_t _lfs, *lfs;
+    c_ext_event_callback_t lfs_callback;
+    void *lfs_data;
     int i, ret;
-    struct castle_da_lfs_ct_t *lfs = &merge->lfs;
+    const int growable = MERGE_CHECKPOINTABLE(merge);
+
+    /* Handle Low Freespace gracefully, for L1 merges - fail the merge and also register
+     * for notification when more space available. */
+    if (merge->level == 1)
+    {
+        lfs             = &merge->da->l1_merge_lfs;
+        lfs_callback    = castle_da_lfs_merge_ct_callback;
+        lfs_data        = lfs;
+    }
+    /* For other merges just fail the merge. */
+    else
+    {
+        lfs             = &_lfs;
+        lfs_callback    = NULL;
+        lfs_data        = NULL;
+        lfs->da         = merge->da;
+        castle_da_lfs_ct_reset(lfs);
+    }
 
     /* Allocate an extent for merged tree for the size equal to sum of all the
      * trees being merged (could be a total merge).
@@ -3162,53 +3183,43 @@ static int castle_da_merge_extents_alloc(struct castle_da_merge *merge)
 
     /* Create a reservation pool and reserve some space. For now, allocate fixed amount of space
      * for all merges. We could change this based on merge type, later. */
-    merge->pool_id = castle_res_pool_create(castle_get_ssd_rda_lvl(), 100);
-    if (RES_POOL_INVAL(merge->pool_id))
+    if (growable)
     {
-        debug_res_pools("Failed to reserve space for merge on SSD\n");
-        merge->pool_id = castle_res_pool_create(castle_get_rda_lvl(), 100);
+        merge->pool_id = castle_res_pool_create(castle_get_ssd_rda_lvl(), 100);
         if (RES_POOL_INVAL(merge->pool_id))
         {
-            castle_printk(LOG_USERINFO, "Failed to reserve space for merge\n");
-            return -ENOSPC;
+            debug_res_pools("Failed to reserve space for merge on SSD\n");
+            merge->pool_id = castle_res_pool_create(castle_get_rda_lvl(), 100);
+            if (RES_POOL_INVAL(merge->pool_id))
+            {
+                castle_printk(LOG_USERINFO, "Failed to reserve space for merge\n");
+                return -ENOSPC;
+            }
         }
+        debug_res_pools("Created reservation pool %u for the merge at level %u\n",
+                         merge->pool_id, merge->level);
     }
-    debug_res_pools("Created reservation pool %u for the merge at level %u\n",
-                     merge->pool_id, merge->level);
 
 __again:
     /* If the space is not already reserved for the merge, allocate it from freespace. */
     if (!lfs->space_reserved)
     {
         /* Initialize the lfs structure with required extent sizes. */
+        /* Note: Also, add a growth safety margin */
         castle_da_lfs_ct_init(lfs,
                               CHUNK(internal_tree_size),
-                              CHUNK(tree_size) +
-                                  /* add a growth safety margin */
-                                  ((MERGE_CHECKPOINTABLE(merge) ?
-                                      (MERGE_OUTPUT_TREE_GROWTH_RATE) : 0)),
-                              (!data_size)?0:
-                              CHUNK(data_size) +
-                                  /* add a growth safety margin */
-                                  ((MERGE_CHECKPOINTABLE(merge) ?
-                                      (MERGE_OUTPUT_DATA_GROWTH_RATE) : 0)),
+                              CHUNK(tree_size) + (growable? (MERGE_OUTPUT_TREE_GROWTH_RATE) : 0),
+                              (!data_size)? 0:
+                              CHUNK(data_size) + (growable ? (MERGE_OUTPUT_DATA_GROWTH_RATE) : 0),
                               0 /* Not a T0. */);
 
         /* Allocate space from freespace. */
-        if (MERGE_CHECKPOINTABLE(merge)) /* partial merges */
-            ret = castle_da_lfs_ct_space_alloc(lfs,
-                                               0,   /* First allocation. */
-                                               NULL,
-                                               NULL,
-                                               1,   /* Not a T0. Use SSD. */
-                                               1); /* Extents growable */
-        else
-            ret = castle_da_lfs_ct_space_alloc(lfs,
-                                               0,   /* First allocation. */
-                                               NULL,
-                                               NULL,
-                                               1,   /* Not a T0. Use SSD. */
-                                               0); /* Extents not growable */
+        ret = castle_da_lfs_ct_space_alloc(lfs,
+                                           0,                   /* First allocation. */
+                                           lfs_callback,
+                                           lfs_data,
+                                           1,                   /* Not a T0. Use SSD. */
+                                           growable);           /* Extents growable */
 
         /* If failed to allocate space, return error. lfs structure is already set.
          * Low freespace handler would allocate space, when more freespace is available. */
@@ -3216,9 +3227,12 @@ __again:
         {
             /* Destroy reservation pool and reset ID in merge structure, merge_dealloc() can't
              * handle partial done work from extents_alloc(). */
-            castle_res_pool_destroy(merge->pool_id);
-            BUG_ON(castle_res_pool_is_alive(merge->pool_id));
-            merge->pool_id = INVAL_RES_POOL;
+            if (growable)
+            {
+                castle_res_pool_destroy(merge->pool_id);
+                BUG_ON(castle_res_pool_is_alive(merge->pool_id));
+                merge->pool_id = INVAL_RES_POOL;
+            }
 
             return ret;
         }
@@ -3246,6 +3260,10 @@ __again:
         merge->out_tree->bloom_exists = 0;
     else
         merge->out_tree->bloom_exists = 1;
+
+    /* If the merge is not partial merge, we don't have any reservation pools, so no attachments. */
+    if (!growable)
+        return 0;
 
     /* Attach extents to reservation pools. */
     /* Attach all in-tree tree extents to reservation pool, adds space to pool. */
@@ -5524,10 +5542,6 @@ static struct castle_da_merge* castle_da_merge_alloc(int                        
     else
         merge->id = merge_id;
 
-    /* Low free space structure. */
-    merge->lfs.da = da;
-    castle_da_lfs_ct_reset(&merge->lfs);
-
     /* Poison kobject, so we don't try to free the kobject that is not yet initialised. */
     kobject_poison(&merge->kobj);
 
@@ -7244,6 +7258,10 @@ static struct castle_double_array* castle_da_alloc(c_da_t da_id)
         da->t0_lfs[i].da = da;
         castle_da_lfs_ct_reset(&da->t0_lfs[i]);
     }
+
+    /* Init LFS structure for Level-1 merge. */
+    da->l1_merge_lfs.da  = da;
+    castle_da_lfs_ct_reset(&da->l1_merge_lfs);
 
     init_waitqueue_head(&da->merge_waitq);
 

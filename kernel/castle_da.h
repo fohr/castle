@@ -164,7 +164,6 @@ struct castle_da_merge {
                                  deserialisation still running. */
         c_ext_pos_t     *shrinkable_cep;
     } serdes;
-    struct castle_da_lfs_ct_t lfs;              /**< Low Free-Space handler for merge       */
 };
 
 extern struct workqueue_struct *castle_da_wqs[NR_CASTLE_DA_WQS];
