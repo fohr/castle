@@ -839,7 +839,7 @@ int castle_fs_init(void)
         castle_extent_transaction_end();
 
         /* Create data extent object. */
-        castle_data_ext_add(castle_global_tree.data_ext_free.ext_id, 0, 0);
+        castle_data_ext_add(castle_global_tree.data_ext_free.ext_id, 0, 0, 0);
         castle_ct_data_ext_link(castle_global_tree.data_ext_free.ext_id, &castle_global_tree);
 
         c2b = castle_btree_node_create(&castle_global_tree,

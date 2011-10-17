@@ -673,7 +673,7 @@ static int castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
     /* Deduct length of previous medium sized value from tree-size. */
     if (CVT_MEDIUM_OBJECT(prev_cvt))
         castle_data_extent_update(prev_cvt.cep.ext_id,
-                                  NR_BLOCKS(prev_cvt.length) * C_BLK_SIZE, 0);
+                                  NR_BLOCKS(prev_cvt.length) * C_BLK_SIZE, -1);
 
     /* Add length of new medium sized value to tree-size. */
     if (CVT_MEDIUM_OBJECT(*new_cvt))

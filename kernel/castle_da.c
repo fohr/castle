@@ -224,7 +224,8 @@ static int castle_merge_thread_stop(struct castle_merge_thread *thread, void *un
 static int castle_da_merge_check(struct castle_da_merge *merge, void *da);
 static void castle_ct_stats_commit(struct castle_component_tree *ct);
 static int castle_data_ext_should_drain(c_ext_id_t ext_id, struct castle_da_merge *merge);
-static void castle_data_ext_size_get(c_ext_id_t ext_id, uint64_t *nr_bytes, uint64_t *nr_entries);
+static void castle_data_ext_size_get(c_ext_id_t ext_id, uint64_t *nr_bytes,
+                                     uint64_t *nr_drain_bytes, uint64_t *nr_entries);
 static int castle_merge_thread_create(c_thread_id_t *thread_id);
 static int castle_merge_thread_attach(c_merge_id_t merge_id, c_thread_id_t thread_id);
 static int castle_da_merge_thread_wakeup(struct castle_merge_thread *merge_thread, void *unused);
@@ -2376,8 +2377,11 @@ static void castle_da_each_skip(c_merged_iter_t *iter,
     dup_cvt = dup_iter->cached_entry.cvt;
 
     /* If this is a medium object that is marked not to drain, then change the stats. */
-    if (CVT_MEDIUM_OBJECT(dup_cvt) && !castle_data_ext_should_drain(dup_cvt.cep.ext_id, merge))
+    if (CVT_MEDIUM_OBJECT(dup_cvt))
+    {
         castle_data_extent_update(dup_cvt.cep.ext_id, NR_BLOCKS(dup_cvt.length) * C_BLK_SIZE, 0);
+        merge->nr_bytes += NR_BLOCKS(dup_cvt.length) * C_BLK_SIZE;
+    }
 
     /* Update per-version statistics. */
     if (!CVT_TOMBSTONE(dup_cvt))
@@ -2816,7 +2820,7 @@ static int castle_da_lfs_ct_init_tree(struct castle_component_tree *ct,
     if (!EXT_ID_INVAL(ct->data_ext_free.ext_id))
     {
         castle_ext_freespace_init(&ct->data_ext_free, ct->data_ext_free.ext_id);
-        castle_data_ext_add(ct->data_ext_free.ext_id, 0, 0);
+        castle_data_ext_add(ct->data_ext_free.ext_id, 0, 0, 0);
         castle_ct_data_ext_link(ct->data_ext_free.ext_id, ct);
     }
 
@@ -3475,6 +3479,7 @@ static c_val_tup_t castle_da_medium_obj_copy(struct castle_da_merge *merge,
     /* Update stats for Data extent stats. */
     castle_data_extent_update(new_cvt.cep.ext_id, NR_BLOCKS(new_cvt.length) * C_BLK_SIZE, 1);
     castle_data_extent_update(old_cvt.cep.ext_id, NR_BLOCKS(old_cvt.length) * C_BLK_SIZE, 0);
+    merge->nr_bytes += NR_BLOCKS(old_cvt.length) * C_BLK_SIZE;
 
     debug("Finished copy, i=%d\n", i);
 
@@ -4419,6 +4424,18 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
         /* Commit output tree stats. */
         castle_ct_stats_commit(merge->out_tree);
 
+#if 0
+        for (i=0; i<merge->nr_drain_exts; i++)
+        {
+            uint64_t nr_bytes, nr_drain_bytes, nr_entries;
+
+            castle_data_ext_size_get(merge->drain_exts[i], &nr_bytes, &nr_drain_bytes, &nr_entries);
+            printk("Merge at %u for %llu -> %llu/%llu/%llu\n", merge->level, merge->drain_exts[i],
+                                                               nr_bytes,
+                                                               nr_drain_bytes, nr_entries);
+        }
+#endif
+
         debug("Destroying old CTs.\n");
         /* If succeeded at merging, old trees need to be destroyed (they've already been removed
            from the DA by castle_da_merge_package(). */
@@ -5295,13 +5312,14 @@ static int castle_da_merge_init(struct castle_da_merge *merge, void *unused)
 
         for (j=0; j<ct->nr_data_exts; j++)
         {
-            uint64_t size_in_bytes, size_in_entries;
+            uint64_t nr_bytes, nr_entries, nr_drain_bytes;
 
-            castle_data_ext_size_get(ct->data_exts[j], &size_in_bytes, &size_in_entries);
+            castle_data_ext_size_get(ct->data_exts[j], &nr_bytes, &nr_drain_bytes,
+                                     &nr_entries);
 
-            if (size_in_entries == 0)
+            if (nr_entries == 0)
             {
-                BUG_ON(size_in_bytes);
+                BUG_ON(nr_bytes - nr_drain_bytes);
                 continue;
             }
 
@@ -5364,11 +5382,22 @@ deser_done:
     }
 
     /* Update merge stats. */
+    /* Add all input B-Trees size. */
     merge->total_nr_bytes = merge->nr_bytes = 0;
     for (i=0; i<merge->nr_trees; i++)
     {
         merge->total_nr_bytes   += atomic64_read(&merge->in_trees[i]->nr_bytes);
         merge->nr_bytes         += merge->in_trees[i]->nr_drained_bytes;
+    }
+
+    /* Add all data extents that are being drained to the merge progress. */
+    for (i=0; i<merge->nr_drain_exts; i++)
+    {
+        uint64_t nr_bytes, nr_drain_bytes, nr_entries;
+
+        castle_data_ext_size_get(merge->drain_exts[i], &nr_bytes, &nr_drain_bytes, &nr_entries);
+        merge->total_nr_bytes   += nr_bytes;
+        merge->nr_bytes         += nr_drain_bytes;
     }
 
     BUG_ON(merge->nr_bytes > merge->total_nr_bytes);
@@ -7550,21 +7579,28 @@ int castle_ct_large_obj_add(c_ext_id_t              ext_id,
     return 0;
 }
 
-void castle_data_extent_update(c_ext_id_t ext_id, uint64_t length, int to_add)
+void castle_data_extent_update(c_ext_id_t ext_id, uint64_t length, int op)
 {
     struct castle_data_extent *data_ext = castle_data_exts_hash_get(ext_id);
 
     BUG_ON(data_ext == NULL);
 
-    if (to_add)
+    switch (op)
     {
-        atomic64_add(length, &data_ext->nr_bytes);
-        atomic64_inc(&data_ext->nr_entries);
-    }
-    else
-    {
-        atomic64_sub(length, &data_ext->nr_bytes);
-        atomic64_dec(&data_ext->nr_entries);
+        case  1:     /* Add.    */
+            atomic64_add(length, &data_ext->nr_bytes);
+            atomic64_inc(&data_ext->nr_entries);
+            break;
+        case -1:    /* Deduct.  */
+            atomic64_sub(length, &data_ext->nr_bytes);
+            atomic64_dec(&data_ext->nr_entries);
+            break;
+        case  0:     /* Drain.   */
+            atomic64_add(length, &data_ext->nr_drain_bytes);
+            atomic64_dec(&data_ext->nr_entries);
+            break;
+        default:
+            BUG();
     }
 }
 
@@ -7578,8 +7614,9 @@ static void castle_data_extent_stats_commit(struct castle_component_tree *ct)
 
         BUG_ON(data_ext == NULL);
 
-        data_ext->chkpt_nr_bytes    = atomic64_read(&data_ext->nr_bytes);
-        data_ext->chkpt_nr_entries  = atomic64_read(&data_ext->nr_entries);
+        data_ext->chkpt_nr_bytes        = atomic64_read(&data_ext->nr_bytes);
+        data_ext->chkpt_nr_drain_bytes  = atomic64_read(&data_ext->nr_drain_bytes);
+        data_ext->chkpt_nr_entries      = atomic64_read(&data_ext->nr_entries);
     }
 }
 
@@ -7616,7 +7653,8 @@ static int castle_data_ext_should_drain(c_ext_id_t ext_id, struct castle_da_merg
  */
 int castle_data_ext_add(c_ext_id_t                    ext_id,
                         uint64_t                      nr_entries,
-                        uint64_t                      nr_bytes)
+                        uint64_t                      nr_bytes,
+                        uint64_t                      nr_drain_bytes)
 {
     struct castle_data_extent *data_ext =
                     castle_malloc(sizeof(struct castle_data_extent), GFP_KERNEL);
@@ -7629,11 +7667,13 @@ int castle_data_ext_add(c_ext_id_t                    ext_id,
     /* Shouldn't be already in the hash. */
     BUG_ON(castle_data_exts_hash_get(ext_id));
 
-    data_ext->ext_id            = ext_id;
+    data_ext->ext_id                = ext_id;
+    data_ext->chkpt_nr_entries      = nr_entries;
+    data_ext->chkpt_nr_bytes        = nr_bytes;
+    data_ext->chkpt_nr_drain_bytes  = nr_drain_bytes;
     atomic64_set(&data_ext->nr_entries, nr_entries);
     atomic64_set(&data_ext->nr_bytes, nr_bytes);
-    data_ext->chkpt_nr_entries  = nr_entries;
-    data_ext->chkpt_nr_bytes    = nr_bytes;
+    atomic64_set(&data_ext->nr_drain_bytes, nr_drain_bytes);
 
     /* Set initial reference. */
     atomic_set(&data_ext->ref_cnt, 0);
@@ -7662,14 +7702,16 @@ static int castle_data_ext_remove(struct castle_data_extent *data_ext, void *unu
     return 0;
 }
 
-static void castle_data_ext_size_get(c_ext_id_t ext_id, uint64_t *nr_bytes, uint64_t *nr_entries)
+static void castle_data_ext_size_get(c_ext_id_t ext_id, uint64_t *nr_bytes,
+                                     uint64_t *nr_drain_bytes, uint64_t *nr_entries)
 {
     struct castle_data_extent *data_ext = castle_data_exts_hash_get(ext_id);
 
     BUG_ON(data_ext == NULL);
 
-    *nr_bytes   = atomic64_read(&data_ext->nr_bytes);
-    *nr_entries = atomic64_read(&data_ext->nr_entries);
+    *nr_bytes           = atomic64_read(&data_ext->nr_bytes);
+    *nr_drain_bytes     = atomic64_read(&data_ext->nr_drain_bytes);
+    *nr_entries         = atomic64_read(&data_ext->nr_entries);
 }
 
 void castle_ct_data_ext_link(c_ext_id_t ext_id, struct castle_component_tree *ct)
@@ -7831,9 +7873,10 @@ static int castle_data_ext_writeback(struct castle_data_extent *data_ext,
     struct castle_mstore *store = _store;
     struct castle_dext_list_entry mentry;
 
-    mentry.ext_id       = data_ext->ext_id;
-    mentry.nr_entries   = data_ext->chkpt_nr_entries;
-    mentry.nr_bytes     = data_ext->chkpt_nr_bytes;
+    mentry.ext_id           = data_ext->ext_id;
+    mentry.nr_entries       = data_ext->chkpt_nr_entries;
+    mentry.nr_bytes         = data_ext->chkpt_nr_bytes;
+    mentry.nr_drain_bytes   = data_ext->chkpt_nr_drain_bytes;
 
     castle_mstore_entry_insert(store, &mentry);
 
@@ -7854,7 +7897,8 @@ static int castle_data_exts_read(struct castle_mstore *store)
 
         castle_mstore_iterator_next(iterator, &mentry, &key);
 
-        castle_data_ext_add(mentry.ext_id, mentry.nr_entries, mentry.nr_bytes);
+        castle_data_ext_add(mentry.ext_id, mentry.nr_entries, mentry.nr_bytes,
+                            mentry.nr_drain_bytes);
 
         castle_printk(LOG_DEVEL, "Reading data extent of %llu bytes and %llu entries\n",
                                  mentry.nr_bytes, mentry.nr_entries);

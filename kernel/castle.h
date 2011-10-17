@@ -1113,8 +1113,10 @@ struct castle_data_extent {
     atomic_t            ref_cnt;
     atomic64_t          nr_entries;
     atomic64_t          nr_bytes;
+    atomic64_t          nr_drain_bytes;
     uint64_t            chkpt_nr_entries;
     uint64_t            chkpt_nr_bytes;
+    uint64_t            chkpt_nr_drain_bytes;
     struct list_head    hash_list;
     struct kobject      kobj;
 };
@@ -1316,7 +1318,7 @@ struct castle_dext_list_entry {
     /* offset:  0 */ c_ext_id_t  ext_id;
     /*          8 */ uint64_t    nr_entries;
     /*         16 */ uint64_t    nr_bytes;
-    /*         24 */ uint8_t     _unused[8];
+    /*         24 */ uint64_t    nr_drain_bytes;
     /*         32 */
 } PACKED;
 
