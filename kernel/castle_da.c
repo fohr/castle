@@ -7057,7 +7057,7 @@ int castle_da_insert_rate_set(c_da_t da_id, uint32_t insert_rate)
     }
 
     /* User passes it in MB/s, but kernel stores it in Bytes/secs. */
-    da->write_rate = insert_rate * 1024 * 1024;
+    da->write_rate = insert_rate * 1024L * 1024L;
 
     return 0;
 }
