@@ -23,8 +23,6 @@
 
 #define DISK_NO_SPACE(_fs) (((_fs)->prod == (_fs)->cons) &&            \
                             ((_fs)->nr_entries == 0))
-#define DISK_NOT_USED(_fs) (((_fs)->prod == (_fs)->cons) &&            \
-                            ((_fs)->nr_entries == (_fs)->max_entries))
 
 #define FAULT_CODE FREESPACE_FAULT
 
@@ -405,15 +403,6 @@ void castle_freespace_slave_superchunk_free(struct castle_slave *cs,
         castle_freespace_slave_superchunk_freed(cs, pool);
     }
 
-    if ((freespace->cons == ((freespace->prod + 1) % freespace->max_entries)) &&
-        (freespace->nr_entries != freespace->max_entries - 1))
-    {
-        castle_printk(LOG_INFO, "    Free Chunks: %u from slave %u\n", freespace->free_chk_cnt,
-                cs->uuid);
-        freespace_sblk_put(cs, 1);
-        castle_freespace_stats_print();
-        BUG();
-    }
     BUG_ON(freespace->nr_entries > freespace->max_entries ||
                 freespace->free_chk_cnt > freespace->disk_size);
 
@@ -451,6 +440,10 @@ int castle_freespace_slave_init(struct castle_slave *cs, int fresh)
         freespace->disk_size   = disk_sz / C_CHK_SIZE - FREE_SPACE_START;
         freespace->disk_size  -= (freespace->disk_size % CHKS_PER_SLOT);
         freespace->max_entries = (freespace->disk_size / CHKS_PER_SLOT) + 1;
+        /* Now, double the max_entries, which guarantees that freespace
+           has enough space to produce entries, even if checkpoint is taking
+           ages. */
+        freespace->max_entries *= 2;
     }
     mutex_init(&cs->freespace_lock);
 
