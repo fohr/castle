@@ -6232,6 +6232,7 @@ update_output_tree_state:
             /* dirty the incomplete node so it will be flushed at next checkpoint */
             if(i > 0)
             {
+                //TODO@tr clean this up: we should know for sure wether merge would have this locked or not!
                 /* potential for deadlock here! to avoid it, we have to temporarily unlock the
                    current leaf node before we try to lock an internal node */
                 if(merge->levels[0].node_c2b)
@@ -6259,6 +6260,7 @@ update_output_tree_state:
         struct castle_bloom_build_params *bf_bp = merge->out_tree->bloom.private;
         BUG_ON(!bf_bp);
 
+        //TODO@tr clean this up
         /* just me testing a theory... */
         /* if these ever BUG, it means we need to flush the bloom build param extents as well */
         BUG_ON(bf_bp->chunk_cep.ext_id != bf_bp->node_cep.ext_id);

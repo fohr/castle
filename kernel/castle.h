@@ -2223,7 +2223,7 @@ typedef enum {
 #define CASTLE_DA_CTS_PROXY_CREATE_BIT      (3)     /**< Serialises creation of da->cts_proxy.  */
 #define CASTLE_DA_INSERTS_DISABLED          (4)     /**< Set when inserts are disabled.         */
 #define CASTLE_DA_RATE_CHECK_ONGOING        (5)     /**< Rate check is going on this DA.        */
-#define CASTLE_TOMBSTONE_DISCARD_TD_DEFAULT (1800) /**< Tombstone discard threshold in seconds */
+#define CASTLE_TOMBSTONE_DISCARD_TD_DEFAULT (3600) /**< Tombstone discard threshold in seconds */
 
 #define PARTIAL_MERGES_QUERY_REDIRECTION_BTREE_NODE_LEVEL (0)
 #if PARTIAL_MERGES_QUERY_REDIRECTION_BTREE_NODE_LEVEL > MAX_BTREE_DEPTH
