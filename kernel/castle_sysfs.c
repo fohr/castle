@@ -1025,9 +1025,13 @@ static ssize_t ct_data_extents_show(struct kobject *kobj,
 
     buf[0] = '\0';
     for (i=0; i<ct->nr_data_exts; i++)
-        sprintf(buf, "%s%llx ", buf, ct->data_exts[i]);
+        snprintf(buf, PAGE_SIZE, "%s%llx ", buf, ct->data_exts[i]);
 
-    return sprintf(buf, "%s\n", buf);
+    /* Check if list has crossed PAGE_SIZE. */
+    if (snprintf(buf, PAGE_SIZE, "%s\n", buf) >= PAGE_SIZE)
+        snprintf(buf + PAGE_SIZE - 50, 50, "Overflow.. can't fit in PAGE_SIZE\n");
+
+    return strlen(buf);
 }
 
 static struct castle_sysfs_entry ct_size =
@@ -1040,7 +1044,7 @@ static struct castle_sysfs_entry ct_merge_state =
 __ATTR(merge_state, S_IRUGO|S_IWUSR, ct_merge_state_show, NULL);
 
 static struct castle_sysfs_entry ct_data_extents =
-__ATTR(data_extents, S_IRUGO|S_IWUSR, ct_data_extents_show, NULL);
+__ATTR(data_extents_list, S_IRUGO|S_IWUSR, ct_data_extents_show, NULL);
 
 static struct attribute *castle_ct_attrs[] = {
     &ct_size.attr,
@@ -1056,13 +1060,23 @@ static struct kobj_type castle_ct_ktype = {
     .default_attrs  = castle_ct_attrs,
 };
 
+static struct attribute *castle_ct_data_extents_attrs[] = {
+    NULL,
+};
+
+static struct kobj_type castle_ct_data_extents_ktype = {
+    .release        = castle_sysfs_kobj_release,
+    .sysfs_ops      = &castle_sysfs_ops,
+    .default_attrs  = castle_ct_data_extents_attrs,
+};
+
 #define DONT_SHOW_T0
 /**
  * Add component tree to the sysfs in vertree directory.
  */
 int castle_sysfs_ct_add(struct castle_component_tree *ct)
 {
-    int ret;
+    int ret, i = 0;
 
 #ifdef DONT_SHOW_T0
     if (ct->level < 2)
@@ -1078,18 +1092,70 @@ int castle_sysfs_ct_add(struct castle_component_tree *ct)
     if (ret < 0)
         return ret;
 
+    /* Add a directory for data extent symbolic links. */
+    memset(&ct->data_extents_kobj, 0, sizeof(struct kobject));
+    ret = kobject_tree_add(&ct->data_extents_kobj,
+                           &ct->kobj,
+                           &castle_ct_data_extents_ktype,
+                           "data_extents");
+    if (ret < 0)
+        goto err1;
+
+    /* Link all data extents that belong to this CT. */
+    for (i=0; i<ct->nr_data_exts; i++)
+    {
+        struct castle_data_extent *data_ext = castle_data_extent_get(ct->data_exts[i]);
+
+        ret = sysfs_create_link(&ct->data_extents_kobj, &data_ext->kobj, data_ext->kobj.k_name);
+        if (ret < 0)
+            goto err2;
+    }
+
     return 0;
+
+err2:
+    castle_printk(LOG_USERINFO, "Failed to create sysfs entry for CT: 0x%x\n", ct->seq);
+    /* Remove all the links that are succeeded. */
+    while (i)
+    {
+        struct castle_data_extent *data_ext;
+
+        /* Last entry is not linked successfully. */
+        i--;
+        data_ext = castle_data_extent_get(ct->data_exts[i]);
+
+        /* Remove the link. */
+        sysfs_remove_link(&ct->data_extents_kobj, data_ext->kobj.k_name);
+    }
+    kobject_remove_wait(&ct->data_extents_kobj);
+err1:
+    castle_printk(LOG_USERINFO, "Failed to create sysfs entry for CT: 0x%x\n", ct->seq);
+    kobject_remove_wait(&ct->kobj);
+
+    BUG_ON(ret == 0);
+
+    return ret;
 }
 
 void castle_sysfs_ct_del(struct castle_component_tree *ct)
 {
+    int i;
+
 #ifdef DONT_SHOW_T0
     if (ct->level < 2)
         return;
 #endif
 
-    if (ct->kobj.ktype)
-        kobject_remove_wait(&ct->kobj);
+    /* Remove all the links for data extents. */
+    for (i=0; i<ct->nr_data_exts; i++)
+    {
+        struct castle_data_extent *data_ext = castle_data_extent_get(ct->data_exts[i]);
+
+        sysfs_remove_link(&ct->data_extents_kobj, data_ext->kobj.k_name);
+    }
+
+    kobject_remove_wait(&ct->data_extents_kobj);
+    kobject_remove_wait(&ct->kobj);
 }
 
 /* Definition of Merge threads directory attributes */
@@ -1123,8 +1189,9 @@ static ssize_t data_extent_size_show(struct kobject *kobj,
 {
     struct castle_data_extent *data_ext = container_of(kobj, struct castle_data_extent, kobj);
 
-    return sprintf(buf, "Bytes: %lu\nEntries: %lu\n",
+    return sprintf(buf, "Total Size Bytes: %lu\nCurrent Size Bytes: %lu\nEntries: %lu\n",
                         atomic64_read(&data_ext->nr_bytes),
+                        atomic64_read(&data_ext->nr_bytes) - atomic64_read(&data_ext->nr_drain_bytes),
                         atomic64_read(&data_ext->nr_entries));
 }
 

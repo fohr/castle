@@ -1088,6 +1088,7 @@ struct castle_component_tree {
     uint8_t             bloom_exists;
     castle_bloom_t      bloom;
     struct kobject      kobj;
+    struct kobject      data_extents_kobj;
     struct castle_da_merge  *merge;         /**< Contains mreg structure if the tree involved
                                                  in a merge. */
     c_merge_id_t        merge_id;

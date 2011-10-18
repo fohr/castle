@@ -6857,6 +6857,11 @@ static int castle_da_merge_run(void *da_p)
         }
 
 #if 0
+        nr_data_exts = 0;
+        data_exts = NULL;
+        i = j = k = 0;
+#endif
+#if 0
         nr_data_exts    = in_trees[0]->nr_data_exts + in_trees[1]->nr_data_exts;
         data_exts       = castle_zalloc(nr_data_exts * sizeof(c_ext_id_t), GFP_KERNEL);
         BUG_ON(!data_exts);
@@ -6866,6 +6871,7 @@ static int castle_da_merge_run(void *da_p)
             for (j=0; j<in_trees[i]->nr_data_exts; j++)
                 data_exts[k++] = in_trees[i]->data_exts[j];
 #else
+#if 1
         nr_data_exts    = in_trees[0]->nr_data_exts;
         data_exts       = castle_zalloc(nr_data_exts * sizeof(c_ext_id_t), GFP_KERNEL);
         BUG_ON(!data_exts);
@@ -6878,6 +6884,7 @@ static int castle_da_merge_run(void *da_p)
                 debug_dexts("Draining data extent: %llu\n", in_trees[i]->data_exts[j]);
                 data_exts[k++] = in_trees[i]->data_exts[j];
             }
+#endif
 #endif
 
         BUG_ON(k != nr_data_exts);
@@ -7759,6 +7766,11 @@ void castle_data_extent_update(c_ext_id_t ext_id, uint64_t length, int op)
         default:
             BUG();
     }
+}
+
+struct castle_data_extent * castle_data_extent_get(c_ext_id_t ext_id)
+{
+    return castle_data_exts_hash_get(ext_id);
 }
 
 static void castle_data_extent_stats_commit(struct castle_component_tree *ct)
@@ -9054,6 +9066,25 @@ static int castle_da_ct_bloom_build_param_deserialise(struct castle_component_tr
     return 0;
 }
 
+static int _castle_sysfs_ct_add(struct castle_component_tree *ct, void *_unused)
+{
+    /* No need to add global tree to sysfs. */
+    if (TREE_GLOBAL(ct->seq))
+        return 0;
+
+    /* Don't add output trees to sysfs yet. */
+    if (test_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &ct->flags))
+        return 0;
+
+    if (castle_sysfs_ct_add(ct))
+    {
+        castle_printk(LOG_USERINFO, "Failed to add CT: 0x%x to sysfs\n", ct->seq);
+        return -1;
+    }
+
+    return 0;
+}
+
 /**
  * Read doubling arrays and serialised component trees in from disk.
  *
@@ -9300,8 +9331,6 @@ int castle_double_array_read(void)
         castle_component_tree_add(da, ct, NULL /*head*/);
         write_unlock(&da->lock);
 
-        castle_sysfs_ct_add(ct);
-
         /* Calculate maximum CT sequence number. Be wary of T0 sequence numbers, they prefix
          * CPU indexes. */
         ct_seq = ct->seq & ((1 << TREE_SEQ_SHIFT) - 1);
@@ -9435,6 +9464,9 @@ int castle_double_array_read(void)
 
     /* Stage 4: Merge de-serialization. */
     __castle_merges_hash_iterate(castle_da_merge_init, NULL);
+
+    /* Add CTs to sysfs. */
+    __castle_ct_hash_iterate(_castle_sysfs_ct_add, NULL);
 
     /* Promote level 0 RWCTs if necessary. */
     castle_da_hash_iterate(castle_da_level0_check_promote, NULL);
