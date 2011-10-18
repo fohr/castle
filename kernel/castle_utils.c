@@ -35,6 +35,68 @@ void ATTRIB_NORET bug_fn(char *file, unsigned long line)
     panic("Castle BUG, from: %s:%ld\n", file, line);
 }
 
+/****** Stack implementation, designed to hold array indices ******/
+int castle_uint32_stack_construct(c_uint32_stack *stack, uint32_t size)
+{
+    int ret = 0;
+    BUG_ON(!stack);
+
+    /* Allocate stack array */
+    stack->_stack = castle_alloc(sizeof(uint32_t) * size);
+    if(!stack->_stack)
+    {
+        ret = -ENOMEM;
+        goto err0;
+    }
+
+    /* Init stuff */
+    stack->top      = 0;
+    stack->_max_top = size;
+    return 0;
+
+err0:
+    return ret;
+
+}
+
+void castle_uint32_stack_destroy(c_uint32_stack *stack)
+{
+    BUG_ON(!stack);
+
+    castle_free(stack->_stack);
+    stack->_stack = NULL;
+}
+
+void castle_uint32_stack_push(c_uint32_stack *stack, uint32_t new_element)
+{
+    BUG_ON(!stack);
+    BUG_ON(stack->top == stack->_max_top);
+    stack->_stack[stack->top++] = new_element;
+}
+
+uint32_t castle_uint32_stack_pop(c_uint32_stack *stack)
+{
+    BUG_ON(!stack);
+    BUG_ON(stack->top == 0);
+    return stack->_stack[--stack->top];
+}
+
+uint32_t castle_uint32_stack_top_val_ret(c_uint32_stack *stack)
+{
+    uint32_t tmp;
+    BUG_ON(!stack);
+    BUG_ON(stack->top == 0); /* up to caller to make sure this never happens! */
+    tmp = stack->top - 1;
+    return stack->_stack[tmp];
+}
+
+void castle_uint32_stack_reset(c_uint32_stack *stack)
+{
+    BUG_ON(!stack);
+    stack->top = 0;
+}
+/******************************************************************/
+
 /**
  * Reinit and drop ref on a castle_key_ptr_t.
  */

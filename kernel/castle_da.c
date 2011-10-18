@@ -180,7 +180,7 @@ static void castle_da_write_bvec_start(struct castle_double_array *da, c_bvec_t 
 static void castle_da_reserve(struct castle_double_array *da, c_bvec_t *c_bvec);
 static void castle_da_get(struct castle_double_array *da);
 static void castle_da_put(struct castle_double_array *da);
-static void castle_da_merge_serialise(struct castle_da_merge *merge);
+static void castle_da_merge_serialise(struct castle_da_merge *merge, int using_tvr, int update_now);
 static void castle_da_merge_marshall(struct castle_dmserlist_entry *merge_mstore,
                                      struct castle_in_tree_merge_state_entry *in_tree_merge_mstore,
                                      struct castle_da_merge *merge,
@@ -820,7 +820,7 @@ static int castle_kv_compare(struct castle_btree_type *btree,
     return castle_version_compare(v2, v1);
 }
 
-static void castle_da_node_buffer_init(struct castle_btree_type *btree,
+void castle_da_node_buffer_init(struct castle_btree_type *btree,
                                        struct castle_btree_node *buffer,
                                        uint16_t node_size)
 {
@@ -3493,8 +3493,7 @@ static c_val_tup_t castle_da_medium_obj_copy(struct castle_da_merge *merge,
  * @param level     Level counted from leaves.
  * @return          The size of the node.
  */
-static inline uint16_t castle_da_merge_node_size_get(struct castle_da_merge *merge,
-                                                     uint8_t level)
+uint16_t castle_da_merge_node_size_get(struct castle_da_merge *merge, uint8_t level)
 {
     if (level > 0)
     {
@@ -4304,6 +4303,15 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
         return;
     }
 
+    //TODO@tr robustify this: if merge_init succeeded, we expect to have a tv_resolver iff
+    //        the DA was timestamped or the merge was "top-level".
+    if(merge->tv_resolver)
+    {
+        castle_dfs_resolver_destroy(merge->tv_resolver);
+        castle_free(merge->tv_resolver);
+        merge->tv_resolver = NULL;
+    }
+
 #ifdef DEBUG
     castle_printk(LOG_DEBUG, "%s::[da %d level %d] merge ended with err %d, produced out"
                              " ct seq %d and performed %d partition activations\n",
@@ -4878,89 +4886,6 @@ static void castle_da_merge_new_partition_update(struct castle_da_merge *merge,
     }
 }
 
-static int castle_da_entry_do(struct castle_da_merge *merge,
-                              void *key,
-                              c_ver_t version,
-                              c_val_tup_t *cvt_p,
-                              uint64_t max_nr_bytes,
-                              cv_nonatomic_stats_t *stats_p)
-{
-    int ret;
-    /* Update merge serialisation state. */
-    if(MERGE_CHECKPOINTABLE(merge))
-        castle_da_merge_serialise(merge);
-
-    /* Add entry to the output btree.
-     *
-     * - Add to level 0 node (and recurse up the tree)
-     * - Update the bloom filter */
-    castle_da_entry_add(merge, 0, key, version, *cvt_p, 0);
-
-    if (merge->da->user_timestamping)
-        atomic64_set(&merge->out_tree->max_user_timestamp,
-                max((uint64_t)atomic64_read(&merge->out_tree->max_user_timestamp),
-                    (uint64_t)cvt_p->user_timestamp));
-
-    if (merge->out_tree->bloom_exists)
-    {
-        /* Only add this key to the bloom filter if it is a new key. */
-        if (merge->is_new_key
-                && castle_bloom_add(&merge->out_tree->bloom, merge->out_btree, key))
-            /* Advance partition key if by adding the new key the current
-             * bloom chunk was completed. */
-            castle_da_merge_new_partition_activate(merge);
-
-        //TODO@tr
-        //        it we want to timstamp chunks then we have to be careful to prevent the
-        //        possibility of a timestamp-based FALSE NEGATIVE.  (this is unlikely to happen
-        //        because the spillover into the next chunk will be for an ancestral key, and
-        //        for an v-order older key to have a newer timestamp than it's children, a lot
-        //        of other things will probably be broken anyway... but nevertheless, this is
-        //        something to watch out for).
-    }
-    else
-        castle_da_merge_new_partition_activate(merge);
-
-    /* Update per-version and merge statistics.
-     * We are starting with merged iterator stats (from above). */
-    merge->nr_entries++;
-    if (merge->level == 1)
-    {
-        /* Live stats to reflect adjustments by castle_da_each_skip(). */
-        castle_version_live_stats_adjust(version, *stats_p);
-
-        /* Key & tombstone inserts have not been accounted for in private
-         * level 1 merge version stats.  Zero any stat adjustments made in
-         * castle_da_each_skip() and perform accounting now. */
-        stats_p->keys = 0;
-        stats_p->tombstones = 0;
-
-        if (CVT_TOMBSTONE(*cvt_p))
-            stats_p->tombstones++;
-        else
-            stats_p->keys++;
-
-        castle_version_private_stats_adjust(version, *stats_p, &merge->version_states);
-    }
-    else
-    {
-        castle_version_live_stats_adjust(version, *stats_p);
-        castle_version_private_stats_adjust(version, *stats_p, &merge->version_states);
-    }
-
-    /* Update component tree size stats. */
-    castle_tree_size_stats_update(key, cvt_p, merge->out_tree, 1 /* Add. */);
-
-    /* Try to complete node. */
-    castle_perf_debug_getnstimeofday(&ts_start);
-    ret = castle_da_nodes_complete(merge);
-    castle_perf_debug_getnstimeofday(&ts_end);
-    castle_perf_debug_bump_ctr(merge->nodes_complete_ns, ts_end, ts_start);
-    BUG_ON(ret == -ESHUTDOWN);
-
-    return ret;
-}
-
 static int castle_da_merge_space_reserve(struct castle_da_merge *merge, c_val_tup_t cvt)
 {
     c_byte_off_t space_needed;
@@ -5011,12 +4936,150 @@ static int castle_da_merge_space_reserve(struct castle_da_merge *merge, c_val_tu
     return 0;
 }
 
+static int castle_da_entry_do(struct castle_da_merge *merge,
+                              void *key,
+                              c_val_tup_t cvt,
+                              c_ver_t version,
+                              uint64_t max_nr_bytes,
+                              cv_nonatomic_stats_t *stats_p)
+{
+    int ret;
+
+    /* Make sure we got enough space for the entry_add() current cvt to be success. */
+    while (castle_da_merge_space_reserve(merge, cvt))
+    {
+        /* On exit, just return error code -ESHUTDOWN. */
+        if (castle_da_exiting)
+            return -ESHUTDOWN;
+
+        printk("******* Sleeping on LFS *****\n");
+        msleep(1000);
+    }
+
+    /* Add entry to the output btree.
+     *
+     * - Add to level 0 node (and recurse up the tree)
+     * - Update the bloom filter */
+    castle_da_entry_add(merge, 0, key, version, cvt, 0);
+
+    if (merge->da->user_timestamping)
+        atomic64_set(&merge->out_tree->max_user_timestamp,
+                max((uint64_t)atomic64_read(&merge->out_tree->max_user_timestamp),
+                    (uint64_t)cvt.user_timestamp));
+
+    if (merge->out_tree->bloom_exists)
+    {
+        /* Only add this key to the bloom filter if it is a new key. */
+        if (merge->is_new_key
+                && castle_bloom_add(&merge->out_tree->bloom, merge->out_btree, key))
+            /* Advance partition key if by adding the new key the current
+             * bloom chunk was completed. */
+            castle_da_merge_new_partition_activate(merge);
+
+        //TODO@tr
+        //        it we want to timstamp chunks then we have to be careful to prevent the
+        //        possibility of a timestamp-based FALSE NEGATIVE.  (this is unlikely to happen
+        //        because the spillover into the next chunk will be for an ancestral key, and
+        //        for an v-order older key to have a newer timestamp than it's children, a lot
+        //        of other things will probably be broken anyway... but nevertheless, this is
+        //        something to watch out for).
+    }
+    else
+        castle_da_merge_new_partition_activate(merge);
+
+    /* Update per-version and merge statistics.
+     * We are starting with merged iterator stats (from above). */
+    merge->nr_entries++;
+    if (merge->level == 1)
+    {
+        /* Live stats to reflect adjustments by castle_da_each_skip(). */
+        castle_version_live_stats_adjust(version, *stats_p);
+
+        /* Key & tombstone inserts have not been accounted for in private
+         * level 1 merge version stats.  Zero any stat adjustments made in
+         * castle_da_each_skip() and perform accounting now. */
+        stats_p->keys = 0;
+        stats_p->tombstones = 0;
+
+        if (CVT_TOMBSTONE(cvt))
+            stats_p->tombstones++;
+        else
+            stats_p->keys++;
+
+        castle_version_private_stats_adjust(version, *stats_p, &merge->version_states);
+    }
+    else
+    {
+        castle_version_live_stats_adjust(version, *stats_p);
+        castle_version_private_stats_adjust(version, *stats_p, &merge->version_states);
+    }
+
+    /* Update component tree size stats. */
+    castle_tree_size_stats_update(key, &cvt, merge->out_tree, 1 /* Add. */);
+
+    /* Try to complete node. */
+    castle_perf_debug_getnstimeofday(&ts_start);
+    ret = castle_da_nodes_complete(merge);
+    castle_perf_debug_getnstimeofday(&ts_end);
+    castle_perf_debug_bump_ctr(merge->nodes_complete_ns, ts_end, ts_start);
+    BUG_ON(ret == -ESHUTDOWN);
+
+    return ret;
+}
+
+static int castle_da_merge_tv_resolver_flush(struct castle_da_merge *merge,
+                                             uint64_t max_nr_bytes, /* pass through */
+                                             cv_nonatomic_stats_t *stats_p) /* pass through */
+{
+    int ret = 0;
+
+    uint32_t expected_pop_count;
+    uint32_t actual_pop_count = 0;
+
+    void                    *tvr_key     = NULL;
+    c_ver_t                  tvr_version = INVAL_VERSION;
+    castle_user_timestamp_t  tvr_u_ts    = 0;
+    c_val_tup_t              tvr_cvt;
+    CVT_INVALID_INIT(tvr_cvt);
+
+    BUG_ON(!merge);
+    BUG_ON(!merge->tv_resolver);
+    BUG_ON(!merge->da->user_timestamping);
+
+    expected_pop_count = castle_dfs_resolver_process(merge->tv_resolver);
+    while(castle_dfs_resolver_entry_pop(merge->tv_resolver,
+                                        &tvr_key,
+                                        &tvr_cvt,
+                                        &tvr_version,
+                                        &tvr_u_ts))
+    {
+        //TODO@tr get rid of the user_timestamp field in the cvt structure... but in the meantime,
+        //        use it to sanity check things here and there!
+        BUG_ON(tvr_u_ts != tvr_cvt.user_timestamp);
+        BUG_ON(actual_pop_count == expected_pop_count);
+        actual_pop_count++;
+        BUG_ON(!CVT_LEAF_VAL(tvr_cvt) && !CVT_LOCAL_COUNTER(tvr_cvt));
+        BUG_ON(!tvr_key);
+        ret = castle_da_entry_do(merge,
+                                 tvr_key,
+                                 tvr_cvt,
+                                 tvr_version,
+                                 max_nr_bytes,
+                                 stats_p);
+        if(ret != EXIT_SUCCESS)
+            return ret;
+    }
+    BUG_ON(actual_pop_count != expected_pop_count);
+    return ret;
+}
+
 static int castle_da_merge_unit_do(struct castle_da_merge *merge, uint64_t max_nr_bytes)
 {
     void *key;
     c_ver_t version;
     c_val_tup_t cvt;
-    int ret;
+    int ret = 0;
+    cv_nonatomic_stats_t stats;
 #ifdef CASTLE_PERF_DEBUG
     struct timespec ts_start, ts_end;
 #endif
@@ -5026,7 +5089,6 @@ static int castle_da_merge_unit_do(struct castle_da_merge *merge, uint64_t max_n
 
     while (castle_iterator_has_next_sync(&castle_ct_merged_iter, merge->merged_iter))
     {
-        cv_nonatomic_stats_t stats;
 
         might_resched();
 
@@ -5077,24 +5139,35 @@ static int castle_da_merge_unit_do(struct castle_da_merge *merge, uint64_t max_n
             goto entry_done;
         }
 
-        do {
-            /* Make sure we got enough space for the entry_add() current cvt to be success. */
-            while (castle_da_merge_space_reserve(merge, cvt))
+        /* If we are using a timestamp-version resolver, we handle the buffering here. */
+        if(merge->tv_resolver)
+        {
+            if(castle_dfs_resolver_is_new_key_check(merge->tv_resolver, key))
             {
-                /* On exit, just return error code -ESHUTDOWN. */
-                if (castle_da_exiting)
+                int ret;
+                ret = castle_da_merge_tv_resolver_flush(merge, max_nr_bytes, &stats);
+                if(ret == -ESHUTDOWN)
                     return -ESHUTDOWN;
-
-                printk("******* Sleeping on LFS *****\n");
-                msleep(1000);
+                if (ret != EXIT_SUCCESS)
+                    goto err_out;
+                if(MERGE_CHECKPOINTABLE(merge))
+                    castle_da_merge_serialise(merge, 1, 1); /* try to update output tree state */
             }
-
-            ret = castle_da_entry_do(merge, key, version, &cvt, max_nr_bytes, &stats);
-            BUG_ON(ret == -ESHUTDOWN);
-
-            if (ret != EXIT_SUCCESS)
+            if(MERGE_CHECKPOINTABLE(merge))
+                castle_da_merge_serialise(merge, 1, 0); /* try to update itors state */
+            castle_dfs_resolver_entry_add(merge->tv_resolver, key, cvt, version, cvt.user_timestamp);
+        }
+        else
+        {
+            /* not timestamping */
+            if(MERGE_CHECKPOINTABLE(merge))
+                castle_da_merge_serialise(merge, 0, 0); /* use is_new_key to manage state */
+            ret = castle_da_entry_do(merge, key, cvt, version, max_nr_bytes, &stats);
+            if(ret == -ESHUTDOWN)
+                return -ESHUTDOWN;
+            if(ret != EXIT_SUCCESS)
                 goto err_out;
-        } while(0);
+        }
 
 entry_done:
         castle_perf_debug_getnstimeofday(&ts_start);
@@ -5106,11 +5179,24 @@ entry_done:
 
         FAULT(MERGE_FAULT);
     }
+    /* flush whatever is left in the tv resolver */
+    if(merge->tv_resolver)
+    {
+        int ret;
+        ret = castle_da_merge_tv_resolver_flush(merge, max_nr_bytes, &stats);
+        if(ret == -ESHUTDOWN)
+            return -ESHUTDOWN;
+        if (ret != EXIT_SUCCESS)
+            goto err_out;
+        /* don't bother serialising merge state anymore, the merge is nearly done */
+    }
 
     /* Return success, if we are finished with the merge. */
     return EXIT_SUCCESS;
 
 err_out:
+    if (ret == -ESHUTDOWN) /* merge aborted */
+        return -ESHUTDOWN;
     /* While we handle it, merges should never fail.
      *
      * Per-version statistics will now be inconsistent. */
@@ -5413,6 +5499,19 @@ deser_done:
     merge->serdes.merge_completed=0;
 #endif
     merge->serdes.des=0;
+
+    if(merge->da->user_timestamping)
+    {
+        //TODO@tr make sure error_out dealloc's things properly!
+        merge->tv_resolver = castle_zalloc(sizeof(c_dfs_resolver), GFP_KERNEL);
+        if(!merge->tv_resolver)
+            goto error_out;
+        if(castle_dfs_resolver_construct(merge->tv_resolver, merge))
+            goto error_out;
+        BUG_ON(!merge->tv_resolver);
+    }
+    else
+        merge->tv_resolver = NULL;
 
     return 0;
 
@@ -5720,13 +5819,19 @@ static void castle_da_merge_perf_stats_flush_reset(struct castle_double_array *d
  * Produce a serialisable "snapshot" of merge state. Saves state in merge->da.
  *
  * @param merge [in] in-flight merge.
+ * @param using_tvr [in] indicates the use of a buffering timestamp-version resolver, which means
+ *                       we cannot trust the merge->is_new_key flag.
+ * @param tvr_update_outct_now [in] with the use of a tv_resolver, this flag indicates when to
+ *                                  update the state of the output tree.
  *
  * @also castle_da_merge_unit_do
  * @note blocks on serdes.mutex
  * @note positioning of the call is crucial: it MUST be after iter state is updated,
  *       and before the output tree is updated.
  */
-static void castle_da_merge_serialise(struct castle_da_merge *merge)
+static void castle_da_merge_serialise(struct castle_da_merge *merge,
+                                      int using_tvr,
+                                      int tvr_update_outct_now)
 {
     int i;
     struct castle_double_array *da;
@@ -5815,9 +5920,16 @@ alloc_fail_1:
 
     if( unlikely(current_state == INVALID_DAM_SERDES) )
     {
+        int update_outct_now = 0;
+        if(using_tvr)
+            update_outct_now = tvr_update_outct_now;
+        else
+            update_outct_now = merge->is_new_key;
+
         mutex_lock(&merge->serdes.mutex);
         BUG_ON(!merge->serdes.mstore_entry);
-        if( unlikely(merge->is_new_key) )
+
+        if( update_outct_now )
         {
             /* update output tree state */
             castle_da_merge_marshall(merge->serdes.mstore_entry,
@@ -10366,8 +10478,8 @@ void castle_da_next_ct_read(c_bvec_t *c_bvec)
  * Return 1 if we're sure that we have the most up-to-date entry in get->cvt; else return 0.
  */
 int castle_da_ct_read_complete_cvt_timestamp_check(c_bvec_t *c_bvec,
-                                                        c_val_tup_t *cvt,
-                                                        int last_tree)
+                                                   c_val_tup_t *cvt,
+                                                   int last_tree)
 {
     struct castle_object_get *get = c_bvec->c_bio->get;
     int finished = 0;
@@ -10377,34 +10489,38 @@ int castle_da_ct_read_complete_cvt_timestamp_check(c_bvec_t *c_bvec,
         BUG_ON(!last_tree);
         if(!CVT_ANY_COUNTER(get->cvt))
             *cvt = get->cvt;
-        return 0;
+        return 1;
     }
 
-    //TODO@tr use suspicioun tags to indicate if we can safely terminate
-    //        the query (if get->cvt is non-suspicious candidate, and cvt
-    //        is ancestral, then we can stop)
-    //if(!CVT_INVALID(get->cvt) && !CVT_INVALID(cvt))
-    //    if(!CVT_SUSPICIOUS(get->cvt) && castle_version_is_ancestor(get->cvt.version, cvt.version))
-    //        return 1;
-    //Hmmmm.... cvts don't have a version field, so how can I figure out what the source version is?
+    /*
+    TODO@tr use suspicioun tags to indicate if we can safely terminate
+            the query (if get->cvt is non-suspicious candidate, and cvt
+            is ancestral, then we can stop)
+    if(!CVT_INVALID(get->cvt) && !CVT_INVALID(cvt))
+        if(!CVT_SUSPICIOUS(get->cvt) && castle_version_is_ancestor(get->cvt.version, cvt.version))
+            return 1;
+    Note: doing this means we need the version as well as the timestamp of the cvt.
+    */
 
-    if(!finished)
+    if(finished)
+        return finished;
+
+    if(CVT_INVALID(get->cvt))
+        get->cvt = *cvt;
+    else if(!CVT_INVALID(*cvt))
     {
-        if(CVT_INVALID(get->cvt))
+        if(cvt->user_timestamp > get->cvt.user_timestamp)
         {
-            //printk("%s::[%p] first init\n", __FUNCTION__, c_bvec);
+            c_bvec->ref_put(get->cvt);
             get->cvt = *cvt;
         }
-        else if(!CVT_INVALID(*cvt))
+        else
         {
-            if(cvt->user_timestamp > get->cvt.user_timestamp)
-            {
-                //printk("%s::[%p] found something newer\n", __FUNCTION__, c_bvec);
-                c_bvec->ref_put(get->cvt);
-                get->cvt = *cvt;
-            }
+            c_bvec->ref_put(*cvt);
+            *cvt = get->cvt;
         }
     }
+
     return finished;
 }
 
@@ -10434,7 +10550,7 @@ static void castle_da_ct_read_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cv
     BUG_ON(atomic_read(&c_bvec->reserv_nodes));
 
     /* No more candidate trees available, callback now. */
-    if (!c_bvec->tree)
+    if (!err && !c_bvec->tree)
     {
         castle_da_ct_read_complete_cvt_timestamp_check(c_bvec, &cvt, 1);
         goto complete;

@@ -2,6 +2,7 @@
 #define __CASTLE_DA_H__
 
 #include "castle_cache.h"
+#include "castle_timestamps.h"
 
 #define NR_CASTLE_DA_WQS 1
 
@@ -10,6 +11,9 @@ typedef struct {
     uint64_t    ext_used_bytes;       /* bytes currently used */
     uint64_t    ext_avail_bytes;      /* byets available from extent_grow calls */
 } growth_control_state_t;
+
+
+struct castle_dfs_resolver;
 
 struct castle_da_merge {
     c_merge_id_t                  id;
@@ -164,6 +168,10 @@ struct castle_da_merge {
                                  deserialisation still running. */
         c_ext_pos_t     *shrinkable_cep;
     } serdes;
+
+    struct castle_dfs_resolver *tv_resolver; /* A buffering DFS walker to resolve timestamp-version
+                                                disputes, and/or for tombstone discard. */
+
 };
 
 extern struct workqueue_struct *castle_da_wqs[NR_CASTLE_DA_WQS];
@@ -249,4 +257,11 @@ int  castle_tree_size_stats_update      (void                            *key,
                                          c_val_tup_t                     *cvt_p,
                                          struct castle_component_tree    *ct,
                                          int                              op);
+uint16_t castle_da_merge_node_size_get(struct castle_da_merge *merge,
+                                              uint8_t level);
+void castle_da_node_buffer_init(struct castle_btree_type *btree,
+                                struct castle_btree_node *buffer,
+                                uint16_t node_size);
+
+
 #endif /* __CASTLE_DA_H__ */

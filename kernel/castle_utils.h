@@ -285,6 +285,21 @@ static USED void check_stack_usage(void)
 }
 #endif
 
+/****** Stack implementation, designed to hold array indices ******/
+typedef struct castle_uint32t_stack_t{
+    uint32_t *_stack;
+    uint32_t top; /* can't be bothered to provide an 'is_empty'; just check this! */
+    uint32_t _max_top;
+} c_uint32_stack;
+int      castle_uint32_stack_construct(c_uint32_stack *stack, uint32_t size);
+void     castle_uint32_stack_destroy(c_uint32_stack *stack);
+void     castle_uint32_stack_push(c_uint32_stack *stack, uint32_t new_element);
+uint32_t castle_uint32_stack_top_val_ret(c_uint32_stack *stack);
+uint32_t castle_uint32_stack_pop(c_uint32_stack *stack);
+void     castle_uint32_stack_reset(c_uint32_stack *stack);
+/******************************************************************/
+
+
 void castle_key_ptr_destroy(struct castle_key_ptr_t *key_ptr);
 void castle_key_ptr_ref_cp(struct castle_key_ptr_t *dest, struct castle_key_ptr_t *src);
 void * castle_alloc_func(size_t size);
