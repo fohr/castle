@@ -4746,7 +4746,6 @@ static void castle_da_merge_new_partition_activate(struct castle_da_merge *merge
     if(!merge->new_redirection_partition.key)
         return;
     BUG_ON(!merge->new_redirection_partition.node_c2b);
-    BUG_ON(!MERGE_CHECKPOINTABLE(merge));
 
     /* == activate redirection partition key == */
     debug("%s::[da %d level %d] activating partition at " cep_fmt_str", key = ",
@@ -4814,8 +4813,10 @@ static void castle_da_merge_new_partition_activate(struct castle_da_merge *merge
 
     for(i=0; i<merge->nr_trees * 2; i++)
         if(!EXT_POS_INVAL(merge->in_tree_shrinkable_cep[i]))
+        {
             castle_printk(LOG_DEBUG, "%s::activating shrink partition "cep_fmt_str_nl,
                     __FUNCTION__, cep2str(merge->in_tree_shrinkable_cep[i]));
+        }
 }
 
 static void castle_da_merge_new_partition_update(struct castle_da_merge *merge,
@@ -5876,6 +5877,11 @@ static void castle_da_merge_serialise(struct castle_da_merge *merge,
 
     if( unlikely(current_state == NULL_DAM_SERDES ) )
     {
+        /* Don't bother serialising a merge that hasn't gone far enough to produce an output tree
+           with > 1 level yet. */
+        if( ((int8_t)merge->out_tree->tree_depth) < 2 )
+            return;
+
         /* first write - initialise */
         mutex_lock(&merge->serdes.mutex);
         debug("%s::initialising mstore entry for merge %p in "
@@ -5960,6 +5966,11 @@ alloc_fail_1:
             /* Commit input tree stats. */
             for (i=0; i<merge->nr_trees; i++)
                 castle_ct_stats_commit(merge->in_trees[i]);
+
+            for(i=0; i<merge->nr_trees*2; i++)
+                debug("%s::[da %d level %d] scheduling shrink of "cep_fmt_str"\n",
+                        __FUNCTION__, merge->da->id, merge->level,
+                        cep2str(merge->in_tree_shrinkable_cep[i]));
 
             /* Commit cep shrink list */
             memcpy(merge->serdes.shrinkable_cep,
