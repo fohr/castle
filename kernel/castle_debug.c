@@ -87,6 +87,32 @@ void castle_debug_free_func(void *ptr)
         castle_kfree(ptr);
 }
 
+/**
+ * Allocate a buffer, unless a suitable one is provided by the caller.
+ * @see castle_alloc_maybe_func()
+ */
+void *castle_debug_alloc_maybe_func(size_t len, void *dst, size_t *dst_len, char *file, int line)
+{
+    if (!dst)
+        return castle_debug_alloc_func(len, file, line);
+    else if (dst_len && *dst_len >= len)
+        return *dst_len = len, dst;
+    else
+        return NULL;
+}
+
+/**
+ * Copy a buffer, either to a freshly allocated buffer, or to one supplied by the caller.
+ * @see castle_dup_or_copy_func()
+ */
+void *castle_debug_dup_or_copy_func(const void *src, size_t src_len, void *dst, size_t *dst_len,
+                                    char *file, int line)
+{
+    if ((dst = castle_debug_alloc_maybe_func(src_len, dst, dst_len, file, line)))
+        memcpy(dst, src, src_len);
+    return dst;
+}
+
 void* castle_debug_malloc(size_t size, gfp_t flags, char *file, int line)
 {
     struct castle_malloc_debug *dobj;

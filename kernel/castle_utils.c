@@ -170,10 +170,10 @@ void castle_free_func(void *ptr)
  * these conditions hold true, then dst_len is set to len and dst is returned. Otherwise
  * NULL is returned, and dst_len is not modified.
  */
-void *castle_alloc_maybe(size_t len, void *dst, size_t *dst_len)
+void *castle_alloc_maybe_func(size_t len, void *dst, size_t *dst_len)
 {
     if (!dst)
-        return castle_alloc(len);
+        return castle_alloc_func(len);
     else if (dst_len && *dst_len >= len)
         return *dst_len = len, dst;
     else
@@ -196,9 +196,9 @@ void *castle_alloc_maybe(size_t len, void *dst, size_t *dst_len)
  * is updated with the number of bytes copied, and dst is returned. Otherwise NULL is
  * returned, and dst_len is not modified.
  */
-void *castle_dup_or_copy(const void *src, size_t src_len, void *dst, size_t *dst_len)
+void *castle_dup_or_copy_func(const void *src, size_t src_len, void *dst, size_t *dst_len)
 {
-    if ((dst = castle_alloc_maybe(src_len, dst, dst_len)))
+    if ((dst = castle_alloc_maybe_func(src_len, dst, dst_len)))
         memcpy(dst, src, src_len);
     return dst;
 }
