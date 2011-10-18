@@ -20,6 +20,7 @@ user/utils/castle_scan
 *cscope.po.out
 *tags
 TAGS
+.emacs.desktop*
 *.swp
 *.patch
 kernel/.tmp_versions/castle-fs.mod
