@@ -22,6 +22,17 @@ int castle_dfs_resolver_construct(c_dfs_resolver *dfs_resolver, struct castle_da
     BUG_ON(!merge->da->user_timestamping);
     BUG_ON(!dfs_resolver);
 
+    /* Set resolver functions */
+    if( merge->da->user_timestamping )
+        dfs_resolver->functions |= DFS_RESOLVE_TIMESTAMPS;
+    if( merge->out_tree->data_age == 1)
+        dfs_resolver->functions |= DFS_RESOLVE_TOMBSTONES;
+    if(!dfs_resolver->functions)
+    {
+        ret = -EINVAL;
+        goto err1;
+    }
+
     /* Allocate and init btree node buffer */
     new_node_size = castle_da_merge_node_size_get(merge, 0);
     dfs_resolver->buffer_node = castle_alloc(new_node_size * C_BLK_SIZE);
@@ -72,8 +83,8 @@ int castle_dfs_resolver_construct(c_dfs_resolver *dfs_resolver, struct castle_da
         }
     }
 #endif
-    castle_printk(LOG_DEBUG, "%s::merge id %u, with capacity for %u entries\n",
-            __FUNCTION__, merge->id, dfs_resolver->_buffer_max);
+    castle_printk(LOG_DEBUG, "%s::merge id %u, function mode %u, with capacity for %u entries\n",
+            __FUNCTION__, dfs_resolver->merge->id, dfs_resolver->functions, dfs_resolver->_buffer_max);
     return 0;
 
 err3:
@@ -182,14 +193,14 @@ int castle_dfs_resolver_entry_add(c_dfs_resolver *dfs_resolver,
 
     btree->entry_add(dfs_resolver->buffer_node, dfs_resolver->top_index, key, version, cvt);
 
-    debug("%s::merge id %u adding entry %llu with version %u timestamp %llu of key : ",
+    castle_printk(LOG_DEBUG, "%s::merge id %u adding entry %llu with version %u timestamp %llu of key : ",
             __FUNCTION__,
             dfs_resolver->merge->id,
             dfs_resolver->top_index,
             version,
             cvt.user_timestamp);
-    //dfs_resolver->merge->out_btree->key_print(LOG_DEBUG, key);
-    debug("\n");
+    dfs_resolver->merge->out_btree->key_print(LOG_DEBUG, key);
+    castle_printk(LOG_DEBUG, "\n");
 
     dfs_resolver->top_index++;
 
@@ -207,7 +218,7 @@ int castle_dfs_resolver_entry_pop(c_dfs_resolver *dfs_resolver,
                                   c_ver_t *version_p,
                                   castle_user_timestamp_t *u_ts_p)
 {
-    int entry_included = 0;
+    struct castle_btree_type *btree;
 
     BUG_ON(!dfs_resolver);
     BUG_ON(!key_p);
@@ -215,13 +226,16 @@ int castle_dfs_resolver_entry_pop(c_dfs_resolver *dfs_resolver,
     BUG_ON(!version_p);
     BUG_ON(!u_ts_p);
 
+    btree = dfs_resolver->merge->out_btree;
+    BUG_ON(!btree);
+
     if(dfs_resolver->mode == DFS_RESOLVER_NULL)
         return 0; /* nothing processed yet; just return nothing to pop */
 
     if(dfs_resolver->mode == DFS_RESOLVER_BUFFER_PROCESS)
     {
         /* first pop */
-        debug("%s::merge id %u first pop\n",
+        castle_printk(LOG_DEBUG, "%s::merge id %u first pop\n",
                 __FUNCTION__,
                 dfs_resolver->merge->id);
         BUG_ON(dfs_resolver->curr_index != 0);
@@ -234,68 +248,58 @@ int castle_dfs_resolver_entry_pop(c_dfs_resolver *dfs_resolver,
     }
 
     if(dfs_resolver->curr_index == dfs_resolver->top_index)
-    {
-        debug("%s::merge id %u finished popping at %llu\n",
-                __FUNCTION__,
-                dfs_resolver->merge->id,
-                dfs_resolver->curr_index);
-        castle_dfs_resolver_reset(dfs_resolver);
-        return 0;
-    }
+        goto no_more_entries;
 
     /* skip over excluded entries */
     while(dfs_resolver->inclusion_buffer[dfs_resolver->curr_index].included == 0)
     {
-        /* The "top-most" entry must be included; there is no v-order older entry
-           to deprecate it. */
-        BUG_ON(dfs_resolver->curr_index == dfs_resolver->top_index);
+        /* The locally "oldest" entry must be included; there is no v-order older entry
+           to deprecate it (UNLESS we are discarding tombstones...) */
+        BUG_ON( !( dfs_resolver->functions & DFS_RESOLVE_TOMBSTONES ) &&
+                (dfs_resolver->curr_index == dfs_resolver->top_index - 1) );
+
         dfs_resolver->curr_index++;
+
+        if(dfs_resolver->curr_index == dfs_resolver->top_index)
+            goto no_more_entries;
     }
 
-#ifdef DEBUG
-    BUG_ON(dfs_resolver->inclusion_buffer[dfs_resolver->curr_index].included == 2);
+    BUG_ON(dfs_resolver->inclusion_buffer[dfs_resolver->curr_index].included != 1);
+
+    /* Pop the entry */
+
+#if 0
+    *key_p     = dfs_resolver->key;
+    *cvt_p     = dfs_resolver->buffer[dfs_resolver->curr_index].cvt;
+    *version_p = dfs_resolver->buffer[dfs_resolver->curr_index].version;
+    *u_ts_p    = dfs_resolver->buffer[dfs_resolver->curr_index].u_ts;
 #endif
 
-    if(dfs_resolver->inclusion_buffer[dfs_resolver->curr_index].included == 1)
-    {
-        struct castle_btree_type *btree;
+    btree->entry_get(dfs_resolver->buffer_node,
+                     dfs_resolver->curr_index,
+                     key_p,
+                     version_p,
+                     cvt_p);
+    *u_ts_p    = cvt_p->user_timestamp;
 
-        //*key_p     = dfs_resolver->key;
-        //*cvt_p     = dfs_resolver->buffer[dfs_resolver->curr_index].cvt;
-        //*version_p = dfs_resolver->buffer[dfs_resolver->curr_index].version;
-        //*u_ts_p    = dfs_resolver->buffer[dfs_resolver->curr_index].u_ts;
+    castle_printk(LOG_DEBUG, "%s::merge id %u popping entry %llu with version %u timestamp %llu of key : ",
+            __FUNCTION__,
+            dfs_resolver->merge->id,
+            dfs_resolver->curr_index,
+            *version_p,
+            *u_ts_p);
+    dfs_resolver->merge->out_btree->key_print(LOG_DEBUG, *key_p);
+    castle_printk(LOG_DEBUG, "\n");
 
-        btree = dfs_resolver->merge->out_btree;
-        BUG_ON(!btree);
+    /* Prepare for next pop */
+    dfs_resolver->curr_index++;
+    return EAGAIN;
 
-        btree->entry_get(dfs_resolver->buffer_node,
-                         dfs_resolver->curr_index,
-                         key_p,
-                         version_p,
-                         cvt_p);
-        *u_ts_p    = cvt_p->user_timestamp;
-        entry_included = 1;
+    BUG(); /* Impossible to arrive here */
 
-        debug("%s::merge id %u popping entry %llu with version %u timestamp %llu of key : ",
-                __FUNCTION__,
-                dfs_resolver->merge->id,
-                dfs_resolver->curr_index,
-                *version_p,
-                *u_ts_p);
-        //dfs_resolver->merge->out_btree->key_print(LOG_DEBUG, *key_p);
-        debug("\n");
-
-        /* root entry must be included */
-        BUG_ON((dfs_resolver->curr_index == dfs_resolver->top_index) && !entry_included);
-
-        dfs_resolver->curr_index++;
-
-        return EAGAIN;
-    }
-
-    /* Impossible to arrive here */
-    BUG();
-    return -1;
+no_more_entries:
+    castle_dfs_resolver_reset(dfs_resolver);
+    return 0;
 }
 
 #ifdef DEBUG
@@ -356,50 +360,107 @@ uint32_t castle_dfs_resolver_process(c_dfs_resolver *dfs_resolver)
 
         if(stack empty) || e.ts > stack.top.ts
             include e and push it onto the stack
+
+        (does not include tombstone discardation magic)
     */
 
     BUG_ON(dfs_resolver->top_index != dfs_resolver->buffer_node->used);
     for(i = dfs_resolver->top_index - 1; i>=0; i--)
     {
+        int entry_included = 0;
         castle_user_timestamp_t entry_i_ts,
                                 stack_top_ts = 0;
         c_ver_t                 entry_i_version,
                                 stack_top_version;
-        c_val_tup_t cvt_tmp; // TODO@tr get rid of this once we can get the timestamp directly
+        c_val_tup_t             entry_i_cvt,
+                                stack_top_cvt;
 
-        btree->entry_get(dfs_resolver->buffer_node, i, NULL, &entry_i_version, &cvt_tmp);
-        entry_i_ts = cvt_tmp.user_timestamp;
+        btree->entry_get(dfs_resolver->buffer_node, i, NULL, &entry_i_version, &entry_i_cvt);
+        entry_i_ts = entry_i_cvt.user_timestamp;
 
         while( dfs_resolver->stack->top != 0 )
         {
             uint32_t stack_top_index = castle_uint32_stack_top_val_ret(dfs_resolver->stack);
-            btree->entry_get(dfs_resolver->buffer_node, stack_top_index, NULL, &stack_top_version, &cvt_tmp);
-            stack_top_ts = cvt_tmp.user_timestamp;
+            btree->entry_get(dfs_resolver->buffer_node,
+                             stack_top_index,
+                             NULL,
+                             &stack_top_version,
+                             &stack_top_cvt);
+            stack_top_ts = stack_top_cvt.user_timestamp;
             if(castle_version_is_ancestor(stack_top_version, entry_i_version))
                 break;
             else
                 castle_uint32_stack_pop(dfs_resolver->stack);
         }
 
-        if( (dfs_resolver->stack->top == 0) || !(stack_top_ts > entry_i_ts) )
+        /* Handle timestamps first */
+        if( dfs_resolver->functions & DFS_RESOLVE_TIMESTAMPS )
         {
-            castle_uint32_stack_push(dfs_resolver->stack, i);
-            dfs_resolver->inclusion_buffer[i].included = 1;
-            entries_included++;
+            if( (dfs_resolver->stack->top == 0) || !(stack_top_ts > entry_i_ts) )
+                entry_included = 1;
+        }
+        else /* No timestamping, so entries cannot be timestamp deprecated */
+            entry_included = 1;
+
+        /* Handle tombstone discardation */
+        if( ( dfs_resolver->functions & DFS_RESOLVE_TOMBSTONES ) && /* Discarding tombstones... */
+            ( CVT_TOMBSTONE(entry_i_cvt) ) &&           /* this is a tombstone... */
+            ( (dfs_resolver->stack->top == 0) || /* it has no included ancestors, or */
+              CVT_TOMBSTONE(stack_top_cvt) ) )   /* it's immediate ancestor is a tombstone... */
+        {
+            castle_printk(LOG_DEBUG, "%s::merge id %u, tombstone discarded\n",
+                    __FUNCTION__, dfs_resolver->merge->id);
+            entry_included = 0;                         /* ... so, we can discard it! */
+        }
+
+        //if( (dfs_resolver->functions & DFS_RESOLVE_TOMBSTONES) && entry_included)
+        //{
+        //    if( CVT_TOMBSTONE(entry_i_cvt) )
+        //    {
+        //        if( dfs_resolver->stack->top == 0 ) /* local root version */
+        //        {
+        //            entry_included = 0;
+        //            dfs_resolver->inclusion_buffer[i].discardable = 1;
+        //        }
+        //        else /* got local ancestor */
+        //        {
+        //            dfs_resolver->inclusion_buffer[i].discardable =
+        //                dfs_resolver->inclusion_buffer[stack_top_index].discardable;
+        //            /* included only if it's ancestor was not discarded */
+        //            entry_included = !discardable[i];
+        //            // does this block mean effectively that the entry will be included????????
+        //        }
+        //    }
+        //    else
+        //        /* non-tombstone included entry; entries from this point on in the dfs path
+        //           cannot be discarded */
+        //        dfs_resolver->inclusion_buffer[i].discardable = 0;
+        //}
+
+
+        if(entry_included)
+        {
+                castle_uint32_stack_push(dfs_resolver->stack, i);
+                dfs_resolver->inclusion_buffer[i].included = 1;
+                entries_included++;
 #ifdef DEBUG
-            DEBUG_castle_dfs_resolver_stack_check(dfs_resolver->stack)
+                DEBUG_castle_dfs_resolver_stack_check(dfs_resolver->stack)
 #endif
         }
         else
         {
-            BUG_ON(dfs_resolver->stack->top == 0);
+            /* Top of the stack is never excluded, unless we are discarding tombstones */
+            BUG_ON( !( dfs_resolver->functions & DFS_RESOLVE_TOMBSTONES ) &&
+                    dfs_resolver->stack->top == 0);
             dfs_resolver->inclusion_buffer[i].included = 0;
             entries_excluded++;
         }
     }//for each entry (reverse iter)
 
     BUG_ON(dfs_resolver->top_index != entries_included + entries_excluded);
-    BUG_ON(entries_included == 0); /* at least the root entry must be included */
+    BUG_ON( !( dfs_resolver->functions & DFS_RESOLVE_TOMBSTONES ) &&
+        (entries_included == 0)); /* at least the root entry must be included (UNLESS we are
+                                     discarding tombstones...)*/
 
     debug(LOG_DEBUG, "%s::merge id %u, entries included = %u out of %u\n",
                   __FUNCTION__,

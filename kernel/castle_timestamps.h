@@ -15,7 +15,9 @@ struct castle_da_entry_candidate_t{
     //c_val_tup_t              cvt;
     //c_ver_t                  version;
     //castle_user_timestamp_t  u_ts;
-    int                      included;
+
+    int included;    /* to mark entries to be included in output stream */
+    //int discardable; /* used internally by resolver_process for tombstone discard */
 };
 
 typedef enum {
@@ -24,6 +26,12 @@ typedef enum {
     DFS_RESOLVER_BUFFER_PROCESS,
     DFS_RESOLVER_ENTRY_POP
 } c_dfs_resolver_mode_t;
+
+/* each entry must be a power of 2 */
+typedef enum {
+    DFS_RESOLVE_TOMBSTONES = 1,
+    DFS_RESOLVE_TIMESTAMPS = 2
+} c_dfs_resolver_functions_t;
 
 /**
  * Timestamp/tombstone-version key stream resolver.
@@ -62,7 +70,9 @@ typedef struct castle_dfs_resolver
 
     struct castle_da_entry_candidate_t           *inclusion_buffer;
     c_uint32_stack                               *stack; /* for DFS walk */
-    c_dfs_resolver_mode_t  mode;
+
+    c_dfs_resolver_mode_t       mode;      /* current resolver cycle/state */
+    c_dfs_resolver_functions_t  functions; /* what functions the resolver provides */
 
     struct castle_btree_node *buffer_node;
 } c_dfs_resolver;

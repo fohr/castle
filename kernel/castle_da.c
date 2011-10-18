@@ -5055,11 +5055,11 @@ static int castle_da_merge_tv_resolver_flush(struct castle_da_merge *merge,
     {
         //TODO@tr get rid of the user_timestamp field in the cvt structure... but in the meantime,
         //        use it to sanity check things here and there!
+        BUG_ON(!tvr_key);
         BUG_ON(tvr_u_ts != tvr_cvt.user_timestamp);
         BUG_ON(actual_pop_count == expected_pop_count);
         actual_pop_count++;
         BUG_ON(!CVT_LEAF_VAL(tvr_cvt) && !CVT_LOCAL_COUNTER(tvr_cvt));
-        BUG_ON(!tvr_key);
         ret = castle_da_entry_do(merge,
                                  tvr_key,
                                  tvr_cvt,
@@ -5500,7 +5500,9 @@ deser_done:
 #endif
     merge->serdes.des=0;
 
-    if(merge->da->user_timestamping)
+    /* We need a DFS resolver if we are timestamping, of if this is the top-level merge and we need
+       to discard non-queriable tombstones, or both. */
+    if( merge->da->user_timestamping || (merge->out_tree->data_age == 1) )
     {
         //TODO@tr make sure error_out dealloc's things properly!
         merge->tv_resolver = castle_zalloc(sizeof(c_dfs_resolver), GFP_KERNEL);
