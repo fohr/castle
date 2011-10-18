@@ -426,45 +426,30 @@ static ssize_t da_array_list_show(struct kobject *kobj,
                                   char *buf)
 {
     struct castle_double_array *da = container_of(kobj, struct castle_double_array, kobj);
-    int ret = 0;
+    struct castle_component_tree *ct;
+    struct list_head *lh;
 
     /* Get READ lock on DA, to make sure DA doesnt disappear while printing stats. */
     read_lock(&da->lock);
 
+    /* Number of trees in each level. */
+    snprintf(buf, PAGE_SIZE, "%s%u ", buf, da->levels[2].nr_trees);
+
+    list_for_each(lh, &da->levels[2].trees)
     {
-        struct castle_component_tree *ct;
-        struct list_head *lh;
+        ct = list_entry(lh, struct castle_component_tree, da_list);
 
-        /* Number of trees in each level. */
-        ret = snprintf(buf, PAGE_SIZE, "%s%u ", buf, da->levels[2].nr_trees);
-        /* Buffer is of size one PAGE. MAke sure we are not overflowing buffer. */
-        if (ret >= PAGE_SIZE)
-            goto err;
+	    if (test_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &ct->flags) && ct->merge->level == 1)
+	        continue;
 
-        list_for_each(lh, &da->levels[2].trees)
-        {
-            ct = list_entry(lh, struct castle_component_tree, da_list);
-
-   	    if (test_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &ct->flags) && ct->merge->level == 1)
-		continue;
-            ret = snprintf(buf, PAGE_SIZE,
-                           "%s0x%x ",
-                           buf,
-                           ct->seq);
-            if (ret >= PAGE_SIZE)
-                goto err;
-        }
-
-        ret = snprintf(buf, PAGE_SIZE, "%s\n", buf);
-        if (ret >= PAGE_SIZE)
-            goto err;
+        snprintf(buf, PAGE_SIZE, "%s0x%x ", buf, ct->seq);
     }
-    ret = 0;
 
-err:
     read_unlock(&da->lock);
 
-    if (ret) sprintf(buf + PAGE_SIZE - 20, "Overloaded...\n");
+    /* Check if list has crossed PAGE_SIZE. */
+    if (snprintf(buf, PAGE_SIZE, "%s\n", buf) >= PAGE_SIZE)
+        snprintf(buf + PAGE_SIZE - 50, 50, "Overflow.. can't fit in PAGE_SIZE\n");
 
     return strlen(buf);
 }
@@ -1025,13 +1010,22 @@ static ssize_t ct_data_extents_show(struct kobject *kobj,
 
     buf[0] = '\0';
     for (i=0; i<ct->nr_data_exts; i++)
-        snprintf(buf, PAGE_SIZE, "%s%llx ", buf, ct->data_exts[i]);
+        snprintf(buf, PAGE_SIZE, "%s0x%llx ", buf, ct->data_exts[i]);
 
     /* Check if list has crossed PAGE_SIZE. */
     if (snprintf(buf, PAGE_SIZE, "%s\n", buf) >= PAGE_SIZE)
         snprintf(buf + PAGE_SIZE - 50, 50, "Overflow.. can't fit in PAGE_SIZE\n");
 
     return strlen(buf);
+}
+
+static ssize_t ct_data_time_show(struct kobject *kobj,
+                                 struct attribute *attr,
+                                 char *buf)
+{
+    struct castle_component_tree *ct = container_of(kobj, struct castle_component_tree, kobj);
+
+    return sprintf(buf, "0x%x\n", ct->data_age);
 }
 
 static struct castle_sysfs_entry ct_size =
@@ -1046,11 +1040,15 @@ __ATTR(merge_state, S_IRUGO|S_IWUSR, ct_merge_state_show, NULL);
 static struct castle_sysfs_entry ct_data_extents =
 __ATTR(data_extents_list, S_IRUGO|S_IWUSR, ct_data_extents_show, NULL);
 
+static struct castle_sysfs_entry ct_data_time =
+__ATTR(data_time, S_IRUGO|S_IWUSR, ct_data_time_show, NULL);
+
 static struct attribute *castle_ct_attrs[] = {
     &ct_size.attr,
     &ct_daid.attr,
     &ct_merge_state.attr,
     &ct_data_extents.attr,
+    &ct_data_time.attr,
     NULL,
 };
 
@@ -1366,9 +1364,13 @@ static ssize_t merge_drain_list_show(struct kobject *kobj,
     struct castle_da_merge *merge = container_of(kobj, struct castle_da_merge, kobj);
 
     for (i=0; i<merge->nr_drain_exts; i++)
-        sprintf(buf, "%s0x%llx ", buf, merge->drain_exts[i]);
+        snprintf(buf, PAGE_SIZE, "%s0x%llx ", buf, merge->drain_exts[i]);
 
-    return sprintf(buf, "%s\n", buf);
+    /* Check if list has crossed PAGE_SIZE. */
+    if (snprintf(buf, PAGE_SIZE, "%s\n", buf) >= PAGE_SIZE)
+        snprintf(buf + PAGE_SIZE - 50, 50, "Overflow.. can't fit in PAGE_SIZE\n");
+
+    return strlen(buf);
 }
 
 static ssize_t merge_output_dext_show(struct kobject *kobj,
