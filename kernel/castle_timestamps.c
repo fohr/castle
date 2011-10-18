@@ -83,7 +83,7 @@ int castle_dfs_resolver_construct(c_dfs_resolver *dfs_resolver, struct castle_da
         }
     }
 #endif
-    castle_printk(LOG_DEVEL, "%s::merge id %u, function mode %u, with capacity for %u entries\n",
+    castle_printk(LOG_DEBUG, "%s::merge id %u, function mode %u, with capacity for %u entries\n",
             __FUNCTION__, dfs_resolver->merge->id, dfs_resolver->functions, dfs_resolver->_buffer_max);
     return 0;
 
@@ -109,7 +109,7 @@ void castle_dfs_resolver_destroy(c_dfs_resolver *dfs_resolver)
 {
     BUG_ON(!dfs_resolver);
 
-    castle_printk(LOG_DEVEL, "%s::merge id %u\n", __FUNCTION__, dfs_resolver->merge->id);
+    castle_printk(LOG_DEBUG, "%s::merge id %u\n", __FUNCTION__, dfs_resolver->merge->id);
 
     /* Destroy stack */
     BUG_ON(!dfs_resolver->stack);
@@ -152,7 +152,7 @@ int castle_dfs_resolver_entry_add(c_dfs_resolver *dfs_resolver,
 #ifdef DEBUG
         BUG_ON(!castle_dfs_resolver_is_new_key_check(dfs_resolver, key));
 #endif
-        castle_printk(LOG_DEBUG, "%s::merge id %u first add\n",
+        debug("%s::merge id %u first add\n",
                 __FUNCTION__,
                 dfs_resolver->merge->id);
         dfs_resolver->mode = DFS_RESOLVER_ENTRY_ADD;
@@ -193,14 +193,14 @@ int castle_dfs_resolver_entry_add(c_dfs_resolver *dfs_resolver,
 
     btree->entry_add(dfs_resolver->buffer_node, dfs_resolver->top_index, key, version, cvt);
 
-    castle_printk(LOG_DEBUG, "%s::merge id %u adding entry %llu with version %u timestamp %llu of key : ",
+    debug("%s::merge id %u adding entry %llu with version %u timestamp %llu of key : ",
             __FUNCTION__,
             dfs_resolver->merge->id,
             dfs_resolver->top_index,
             version,
             cvt.user_timestamp);
-    dfs_resolver->merge->out_btree->key_print(LOG_DEBUG, key);
-    castle_printk(LOG_DEBUG, "\n");
+    //dfs_resolver->merge->out_btree->key_print(LOG_DEBUG, key);
+    debug("\n");
 
     dfs_resolver->top_index++;
 
@@ -235,7 +235,7 @@ int castle_dfs_resolver_entry_pop(c_dfs_resolver *dfs_resolver,
     if(dfs_resolver->mode == DFS_RESOLVER_BUFFER_PROCESS)
     {
         /* first pop */
-        castle_printk(LOG_DEBUG, "%s::merge id %u first pop\n",
+        debug("%s::merge id %u first pop\n",
                 __FUNCTION__,
                 dfs_resolver->merge->id);
         BUG_ON(dfs_resolver->curr_index != 0);
@@ -282,14 +282,14 @@ int castle_dfs_resolver_entry_pop(c_dfs_resolver *dfs_resolver,
                      cvt_p);
     *u_ts_p    = cvt_p->user_timestamp;
 
-    castle_printk(LOG_DEBUG, "%s::merge id %u popping entry %llu with version %u timestamp %llu of key : ",
+    debug("%s::merge id %u popping entry %llu with version %u timestamp %llu of key : ",
             __FUNCTION__,
             dfs_resolver->merge->id,
             dfs_resolver->curr_index,
             *version_p,
             *u_ts_p);
-    dfs_resolver->merge->out_btree->key_print(LOG_DEBUG, *key_p);
-    castle_printk(LOG_DEBUG, "\n");
+    //dfs_resolver->merge->out_btree->key_print(LOG_DEBUG, *key_p);
+    debug("\n");
 
     /* Prepare for next pop */
     dfs_resolver->curr_index++;
@@ -513,7 +513,7 @@ uint32_t castle_dfs_resolver_process(c_dfs_resolver *dfs_resolver)
         (entries_included == 0)); /* at least the root entry must be included (UNLESS we are
                                      discarding tombstones...)*/
 
-    debug(LOG_DEBUG, "%s::merge id %u, entries included = %u out of %u\n",
+    debug("%s::merge id %u, entries included = %u out of %u\n",
                   __FUNCTION__,
                   dfs_resolver->merge->id,
                   entries_included,
