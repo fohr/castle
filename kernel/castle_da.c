@@ -6861,7 +6861,7 @@ static int castle_da_merge_run(void *da_p)
         data_exts = NULL;
         i = j = k = 0;
 #endif
-#if 0
+#if 1
         nr_data_exts    = in_trees[0]->nr_data_exts + in_trees[1]->nr_data_exts;
         data_exts       = castle_zalloc(nr_data_exts * sizeof(c_ext_id_t), GFP_KERNEL);
         BUG_ON(!data_exts);
@@ -6871,7 +6871,6 @@ static int castle_da_merge_run(void *da_p)
             for (j=0; j<in_trees[i]->nr_data_exts; j++)
                 data_exts[k++] = in_trees[i]->data_exts[j];
 #else
-#if 1
         nr_data_exts    = in_trees[0]->nr_data_exts;
         data_exts       = castle_zalloc(nr_data_exts * sizeof(c_ext_id_t), GFP_KERNEL);
         BUG_ON(!data_exts);
@@ -6884,7 +6883,6 @@ static int castle_da_merge_run(void *da_p)
                 debug_dexts("Draining data extent: %llu\n", in_trees[i]->data_exts[j]);
                 data_exts[k++] = in_trees[i]->data_exts[j];
             }
-#endif
 #endif
 
         BUG_ON(k != nr_data_exts);
