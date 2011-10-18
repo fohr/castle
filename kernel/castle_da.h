@@ -3,6 +3,7 @@
 
 #include "castle_cache.h"
 #include "castle_timestamps.h"
+#include "castle_public.h"
 
 #define NR_CASTLE_DA_WQS 1
 
@@ -262,6 +263,8 @@ uint16_t castle_da_merge_node_size_get(struct castle_da_merge *merge,
 void castle_da_node_buffer_init(struct castle_btree_type *btree,
                                 struct castle_btree_node *buffer,
                                 uint16_t node_size);
+castle_user_timestamp_t castle_da_min_ts_cts_exclude_this_merge_get(struct castle_da_merge *merge);
+
 
 
 #endif /* __CASTLE_DA_H__ */

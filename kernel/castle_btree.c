@@ -171,9 +171,14 @@ static void castle_btree_io_end(c_bvec_t    *c_bvec,
             (c_bvec->tree->da->user_timestamping)  &&
             (c_bvec_data_dir(c_bvec) == WRITE) &&
             (!err) )
+    {
         atomic64_set(&c_bvec->tree->max_user_timestamp,
             max((uint64_t)atomic64_read(&c_bvec->tree->max_user_timestamp),
                 (uint64_t)cvt.user_timestamp));
+        atomic64_set(&c_bvec->tree->min_user_timestamp,
+            min((uint64_t)atomic64_read(&c_bvec->tree->min_user_timestamp),
+                (uint64_t)cvt.user_timestamp));
+    }
 
     /* Get reference on objects before reads. */
     if (!err && (c_bvec_data_dir(c_bvec) == READ))

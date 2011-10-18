@@ -393,7 +393,7 @@ uint32_t castle_dfs_resolver_process(c_dfs_resolver *dfs_resolver)
                 castle_uint32_stack_pop(dfs_resolver->stack);
         }
 
-        /* Handle timestamps first */
+        /* Handle timestamps */
         if( dfs_resolver->functions & DFS_RESOLVE_TIMESTAMPS )
         {
             if( (dfs_resolver->stack->top == 0) || !(stack_top_ts > entry_i_ts) )
@@ -408,9 +408,36 @@ uint32_t castle_dfs_resolver_process(c_dfs_resolver *dfs_resolver)
             ( (dfs_resolver->stack->top == 0) || /* it has no included ancestors, or */
               CVT_TOMBSTONE(stack_top_cvt) ) )   /* it's immediate ancestor is a tombstone... */
         {
-            castle_printk(LOG_DEBUG, "%s::merge id %u, tombstone discarded\n",
-                    __FUNCTION__, dfs_resolver->merge->id);
-            entry_included = 0;                         /* ... so, we can discard it! */
+            int discard_tombstone = 0;
+
+            if( dfs_resolver->functions & DFS_RESOLVE_TIMESTAMPS )
+            {
+                BUG_ON(!dfs_resolver->merge->da->user_timestamping);
+
+                /* Requirement 1: this tombstone's REAL timestamp is > now()-T_d */
+                //TODO implement this
+
+                /* Requirement: the user timestamp of the tombstone is <= the min user timestamp
+                                on every tree not involved with this merge. */
+                if( entry_i_ts > castle_da_min_ts_cts_exclude_this_merge_get(dfs_resolver->merge) )
+                {
+                    castle_printk(LOG_DEVEL, "%s::merge id %u, cannot discard tombstone (req 2)\n",
+                            __FUNCTION__, dfs_resolver->merge->id);
+                    break;
+                }
+
+                discard_tombstone = 1; /* and it's satisfied the timestamping requirements... */
+            }
+            else
+                discard_tombstone = 1; /* and we don't care about timestamps... */
+
+            if( discard_tombstone )
+            {
+                castle_printk(LOG_DEVEL, "%s::merge id %u, tombstone discarded\n",
+                        __FUNCTION__, dfs_resolver->merge->id);
+                entry_included = 0;                         /* ... so, we can discard it! */
+                //TODO@tr save some stats on discarded tombstones
+            }
         }
 
         //if( (dfs_resolver->functions & DFS_RESOLVE_TOMBSTONES) && entry_included)

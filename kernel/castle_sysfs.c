@@ -372,7 +372,7 @@ static ssize_t da_tree_list_show(struct kobject *kobj,
                 ct_size = atomic64_read(&ct->tree_ext_free.used);
 
             ret = snprintf(buf, PAGE_SIZE,
-                           "%s[%lu %u %u %u %llu %lu] ",
+                           "%s[%lu %u %u %u %llu %lu %lu] ",
                            buf,
                            atomic64_read(&ct->item_count),       /* Item count*/
                            (uint32_t)ct->node_sizes[0],          /* Leaf node size */
@@ -380,6 +380,7 @@ static ssize_t da_tree_list_show(struct kobject *kobj,
                                (uint32_t)ct->node_sizes[1] : 0,
                            (uint32_t)ct->tree_depth,             /* Depth of tree */
                            ct_size,
+                           atomic64_read(&ct->min_user_timestamp),
                            atomic64_read(&ct->max_user_timestamp));
             if (ret >= PAGE_SIZE)
                 goto err;

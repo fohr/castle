@@ -1092,7 +1092,8 @@ struct castle_component_tree {
                                                  in a merge. */
     c_merge_id_t        merge_id;
 
-    atomic64_t          max_user_timestamp;
+    atomic64_t          max_user_timestamp; /**< To terminate point gets early */
+    atomic64_t          min_user_timestamp; /**< For tombstone discard */
 
 #ifdef CASTLE_PERF_DEBUG
     u64                 bt_c2bsync_ns;
@@ -1159,7 +1160,8 @@ struct castle_clist_entry {
     /*        298 */ uint64_t        nr_bytes;
     /*        306 */ uint64_t        nr_drained_bytes;
     /*        314 */ uint64_t        max_user_timestamp;
-    /*        322 */ uint8_t         _unused[190];
+    /*        322 */ uint64_t        min_user_timestamp;
+    /*        330 */ uint8_t         _unused[182];
     /*        512 */
 } PACKED;
 

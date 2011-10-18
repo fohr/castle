@@ -4963,9 +4963,14 @@ static int castle_da_entry_do(struct castle_da_merge *merge,
     castle_da_entry_add(merge, 0, key, version, cvt, 0);
 
     if (merge->da->user_timestamping)
+    {
         atomic64_set(&merge->out_tree->max_user_timestamp,
                 max((uint64_t)atomic64_read(&merge->out_tree->max_user_timestamp),
                     (uint64_t)cvt.user_timestamp));
+        atomic64_set(&merge->out_tree->min_user_timestamp,
+                min((uint64_t)atomic64_read(&merge->out_tree->min_user_timestamp),
+                    (uint64_t)cvt.user_timestamp));
+    }
 
     if (merge->out_tree->bloom_exists)
     {
@@ -8280,6 +8285,7 @@ void castle_da_ct_marshall(struct castle_clist_entry *ctm,
        change has been made in the clist_entry and the atomic in the cct struct.            */
     BUILD_BUG_ON(sizeof(castle_user_timestamp_t) != sizeof(uint64_t));
     ctm->max_user_timestamp = atomic64_read(&ct->max_user_timestamp);
+    ctm->min_user_timestamp = atomic64_read(&ct->min_user_timestamp);
 }
 
 /**
@@ -8337,6 +8343,7 @@ static struct castle_component_tree * castle_da_ct_unmarshall(struct castle_comp
     }
 
     atomic64_set(&ct->max_user_timestamp, ctm->max_user_timestamp);
+    atomic64_set(&ct->min_user_timestamp, ctm->min_user_timestamp);
 
     castle_ct_hash_add(ct);
 
@@ -9484,6 +9491,7 @@ struct castle_component_tree * castle_ct_init(struct castle_component_tree *ct,
     mutex_init(&ct->lo_mutex);
 
     atomic64_set(&ct->max_user_timestamp, 0);
+    atomic64_set(&ct->min_user_timestamp, ULLONG_MAX);
 
     /* Poison kobject, so we don't try to free the kobject that is not yet initialised. */
     kobject_poison(&ct->kobj);
@@ -11974,3 +11982,40 @@ err_out:
 
     return -EINVAL;
 }
+
+/**
+ * Iterate over all cts in a doubling array associated with a merge, and return the
+ * min timestamp of all trees not associated with the merge.
+ *
+ * Needed for tombstone discard.
+ *
+ * @also __castle_da_foreach_tree
+ */
+castle_user_timestamp_t castle_da_min_ts_cts_exclude_this_merge_get(struct castle_da_merge *merge)
+{
+    struct castle_component_tree *ct;
+    struct list_head *lh, *t;
+    int i;
+    castle_user_timestamp_t min_ts = ULLONG_MAX;
+
+    struct castle_double_array *da;
+    c_merge_id_t this_merge_id;
+    BUG_ON(!merge);
+
+    da = merge->da;
+    this_merge_id = merge->id;
+
+    write_lock(&da->lock);
+    for(i=0; i<MAX_DA_LEVEL; i++)
+    {
+        list_for_each_safe(lh, t, &da->levels[i].trees)
+        {
+            ct = list_entry(lh, struct castle_component_tree, da_list);
+            if (ct->merge_id != this_merge_id)
+                min_ts = min(min_ts, (uint64_t)atomic64_read(&ct->min_user_timestamp));
+        }
+    }
+    write_unlock(&da->lock);
+    return min_ts;
+}
+
