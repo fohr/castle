@@ -6567,11 +6567,11 @@ static int castle_da_merge_do(struct castle_da_merge *merge, uint64_t nr_bytes)
     int i;
 
 
-    debug("%s::MERGE START - DA %d L %d, with input cts: ",
+    printk("%s::MERGE START - DA %d L %d, with input cts: ",
             __FUNCTION__, da->id, level);
     FOR_EACH_MERGE_TREE(i, merge)
-        debug(" [%d]", in_trees[i]->seq);
-    debug(" -> output ct %d.\n", merge->out_tree->seq);
+        printk(" [%d]", in_trees[i]->seq);
+    printk(" -> output ct %d.\n", merge->out_tree->seq);
 
     /* Merge no fail zone starts here. Can't fail from here. Expected to complete, unless
      * someone aborts merge in between. */
@@ -7459,6 +7459,10 @@ static struct castle_double_array* castle_da_alloc(c_da_t da_id)
     //TODO@tr make this a creation-time option
     da->user_timestamping = 1;
 
+    /* Set default tombstone discard realtime threshold */
+    atomic64_set(&da->tombstone_discard_threshold_time_s,
+            CASTLE_TOMBSTONE_DISCARD_TD_DEFAULT);
+
     castle_printk(LOG_USERINFO, "Allocated DA=%d successfully.\n", da_id);
 
     return da;
@@ -7484,15 +7488,23 @@ void castle_da_marshall(struct castle_dlist_entry *dam,
     dam->root_version      = da->root_version;
     dam->btree_type        = da->btree_type;
     dam->user_timestamping = da->user_timestamping;
+
+    dam->tombstone_discard_threshold_time_s =
+            atomic64_read(&da->tombstone_discard_threshold_time_s);
 }
 
 static void castle_da_unmarshall(struct castle_double_array *da,
                                  struct castle_dlist_entry *dam)
 {
+    BUILD_BUG_ON(sizeof(struct castle_dlist_entry) != 256);
     da->id                = dam->id;
     da->root_version      = dam->root_version;
     da->btree_type        = dam->btree_type;
     da->user_timestamping = dam->user_timestamping;
+
+    atomic64_set(&da->tombstone_discard_threshold_time_s,
+            dam->tombstone_discard_threshold_time_s);
+
     castle_sysfs_da_add(da);
 }
 

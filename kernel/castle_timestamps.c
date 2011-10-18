@@ -83,7 +83,7 @@ int castle_dfs_resolver_construct(c_dfs_resolver *dfs_resolver, struct castle_da
         }
     }
 #endif
-    castle_printk(LOG_DEBUG, "%s::merge id %u, function mode %u, with capacity for %u entries\n",
+    castle_printk(LOG_DEVEL, "%s::merge id %u, function mode %u, with capacity for %u entries\n",
             __FUNCTION__, dfs_resolver->merge->id, dfs_resolver->functions, dfs_resolver->_buffer_max);
     return 0;
 
@@ -109,7 +109,7 @@ void castle_dfs_resolver_destroy(c_dfs_resolver *dfs_resolver)
 {
     BUG_ON(!dfs_resolver);
 
-    castle_printk(LOG_DEBUG, "%s::merge id %u\n", __FUNCTION__, dfs_resolver->merge->id);
+    castle_printk(LOG_DEVEL, "%s::merge id %u\n", __FUNCTION__, dfs_resolver->merge->id);
 
     /* Destroy stack */
     BUG_ON(!dfs_resolver->stack);
@@ -325,6 +325,60 @@ static void DEBUG_castle_dfs_resolver_stack_check(c_uint32_stack *stack)
 #endif
 
 /**
+ * Given the version and user_timestamp of some entry (presumed to be a tombstone), check if the
+ * timestamping rules permit this tombstone to be discarded.
+ *
+ * There's not a lot of sanity checking here - use with caution!
+ */
+static int castle_timestamped_tombstone_discardable_check(struct castle_da_merge *merge,
+                                                          c_ver_t ver,
+                                                          castle_user_timestamp_t u_ts)
+{
+    int ret;
+    struct timeval now;
+    struct timeval tombstone_realtime;
+    BUG_ON(!merge);
+    BUG_ON(!merge->da->user_timestamping);
+
+    /* Requirement: this tombstone's REAL timestamp is > now()-T_d */
+    /* (we guesstimate the tombstone's real timestsamp as the immute timestamp of
+       it's version) */
+
+    /* Sub-requirement: cannot discard tombstone in leaf version */
+    debug("%s::merge id %u, checking if version %u is leaf\n",
+            __FUNCTION__, merge->id, ver);
+    ret = castle_version_is_leaf(ver);
+    BUG_ON(ret == -EINVAL);
+    if(ret)
+    {
+        debug("%s::merge id %u, cannot discard tombstone (req 1a)\n",
+                __FUNCTION__, merge->id);
+        return 0;
+    }
+
+    do_gettimeofday(&now);
+    tombstone_realtime = castle_version_immute_timestamp_get(ver);
+    BUG_ON(timeval_compare(&now, &tombstone_realtime) < 0);
+    if( !( (now.tv_sec - tombstone_realtime.tv_sec) >
+                atomic64_read(&merge->da->tombstone_discard_threshold_time_s)) )
+    {
+        debug("%s::merge id %u, cannot discard tombstone (req 1b)\n",
+                __FUNCTION__, merge->id);
+        return 0;
+    }
+
+    /* Requirement: the user timestamp of the tombstone is <= the min user timestamp
+       on every tree not involved with this merge. */
+    if( u_ts > castle_da_min_ts_cts_exclude_this_merge_get(merge) )
+    {
+        debug("%s::merge id %u, cannot discard tombstone (req 2)\n",
+                __FUNCTION__, merge->id);
+        return 0;
+    }
+    return 1;
+}
+
+/**
  * Process the resolver buffer; mark entries as included/not included for the benefit of
  * the entry_pop method.
  *
@@ -404,66 +458,34 @@ uint32_t castle_dfs_resolver_process(c_dfs_resolver *dfs_resolver)
 
         /* Handle tombstone discardation */
         if( ( dfs_resolver->functions & DFS_RESOLVE_TOMBSTONES ) && /* Discarding tombstones... */
-            ( CVT_TOMBSTONE(entry_i_cvt) ) &&           /* this is a tombstone... */
-            ( (dfs_resolver->stack->top == 0) || /* it has no included ancestors, or */
-              CVT_TOMBSTONE(stack_top_cvt) ) )   /* it's immediate ancestor is a tombstone... */
+            ( CVT_TOMBSTONE(entry_i_cvt) ) &&    /* AND this is a tombstone... */
+            ( (dfs_resolver->stack->top == 0) || /* AND (it has no included ancestors... */
+              CVT_TOMBSTONE(stack_top_cvt) ) )   /*    OR the newest ancestor is a tombstone)... */
         {
             int discard_tombstone = 0;
 
             if( dfs_resolver->functions & DFS_RESOLVE_TIMESTAMPS )
             {
-                BUG_ON(!dfs_resolver->merge->da->user_timestamping);
-
-                /* Requirement 1: this tombstone's REAL timestamp is > now()-T_d */
-                //TODO implement this
-
-                /* Requirement: the user timestamp of the tombstone is <= the min user timestamp
-                                on every tree not involved with this merge. */
-                if( entry_i_ts > castle_da_min_ts_cts_exclude_this_merge_get(dfs_resolver->merge) )
-                {
-                    castle_printk(LOG_DEVEL, "%s::merge id %u, cannot discard tombstone (req 2)\n",
-                            __FUNCTION__, dfs_resolver->merge->id);
-                    break;
-                }
-
-                discard_tombstone = 1; /* and it's satisfied the timestamping requirements... */
+                /* and it's satisfied the timestamping requirements... */
+                discard_tombstone =
+                    castle_timestamped_tombstone_discardable_check(dfs_resolver->merge,
+                                                                   entry_i_version,
+                                                                   entry_i_ts);
             }
-            else
-                discard_tombstone = 1; /* and we don't care about timestamps... */
+            else /* - OR - */
+            {
+                /* and we don't care about timestamps... */
+                discard_tombstone = 1;
+            }
 
             if( discard_tombstone )
             {
-                castle_printk(LOG_DEVEL, "%s::merge id %u, tombstone discarded\n",
+                debug("%s::merge id %u, tombstone discarded\n",
                         __FUNCTION__, dfs_resolver->merge->id);
                 entry_included = 0;                         /* ... so, we can discard it! */
                 //TODO@tr save some stats on discarded tombstones
             }
         }
-
-        //if( (dfs_resolver->functions & DFS_RESOLVE_TOMBSTONES) && entry_included)
-        //{
-        //    if( CVT_TOMBSTONE(entry_i_cvt) )
-        //    {
-        //        if( dfs_resolver->stack->top == 0 ) /* local root version */
-        //        {
-        //            entry_included = 0;
-        //            dfs_resolver->inclusion_buffer[i].discardable = 1;
-        //        }
-        //        else /* got local ancestor */
-        //        {
-        //            dfs_resolver->inclusion_buffer[i].discardable =
-        //                dfs_resolver->inclusion_buffer[stack_top_index].discardable;
-        //            /* included only if it's ancestor was not discarded */
-        //            entry_included = !discardable[i];
-        //            // does this block mean effectively that the entry will be included????????
-        //        }
-        //    }
-        //    else
-        //        /* non-tombstone included entry; entries from this point on in the dfs path
-        //           cannot be discarded */
-        //        dfs_resolver->inclusion_buffer[i].discardable = 0;
-        //}
-
 
         if(entry_included)
         {

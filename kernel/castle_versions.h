@@ -13,6 +13,8 @@ int         castle_version_read                     (c_ver_t version,
                                                      int *leaf);
 struct timeval
             castle_version_creation_timestamp_get   (c_ver_t version);
+struct timeval
+            castle_version_immute_timestamp_get     (c_ver_t version);
 
 c_da_t      castle_version_da_id_get                (c_ver_t version);
 

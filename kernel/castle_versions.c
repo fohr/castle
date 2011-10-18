@@ -55,6 +55,12 @@ LIST_HEAD(castle_versions_deleted);
 #define CV_LEAF_BIT               (3)
 #define CV_LEAF_MASK              (1 << CV_LEAF_BIT)
 
+#define V_IMMUTABLE_INIT(_v)                   \
+{                                              \
+    clear_bit(CV_LEAF_BIT, &(_v)->flags);       \
+    do_gettimeofday(&(_v)->immute_timestamp);   \
+}                                              \
+
 struct castle_version {
     /* Various tree links */
     c_ver_t                    version;     /**< Version ID, unique across all Doubling Arrays. */
@@ -93,6 +99,7 @@ struct castle_version {
 
     /* Misc info about the version. */
     struct timeval creation_timestamp;
+    struct timeval immute_timestamp; /* the time the version was made immutable */
 };
 
 /**
@@ -916,7 +923,9 @@ static struct castle_version* castle_version_add(c_ver_t version,
     atomic64_set(&v->live_stats.key_replaces, 0);
 
     /* Clean timestamp. */
+    //TODO@tr is this the proper way to init timevals? or should we use timerclear?
     memset(&v->creation_timestamp, 0, sizeof(struct timeval));
+    memset(&v->immute_timestamp, 0, sizeof(struct timeval));
 
     /* Initialise version 0 fully, defer full init of all other versions by
        putting it on the init list. */
@@ -1278,6 +1287,22 @@ struct timeval castle_version_creation_timestamp_get(c_ver_t version)
     return v->creation_timestamp;
 }
 
+/**
+ * Return the immutisation timestamp for a particular version.
+ *
+ * The version asked for is expected to exist, and must be immutable (BUG otherwise).
+ */
+struct timeval castle_version_immute_timestamp_get(c_ver_t version)
+{
+    struct castle_version *v;
+
+    v = castle_versions_hash_get(version);
+    BUG_ON(!v);
+    BUG_ON(test_bit(CV_LEAF_BIT, &v->flags));
+
+    return v->immute_timestamp;
+}
+
 /* TODO who should handle errors in writeback? */
 static int castle_version_writeback(struct castle_version *v, void *_data)
 {
@@ -1300,6 +1325,8 @@ static int castle_version_writeback(struct castle_version *v, void *_data)
     mstore_ventry.key_replaces      = atomic64_read(&v->stats.key_replaces);
     mstore_ventry.creation_time_s   = v->creation_timestamp.tv_sec;
     mstore_ventry.creation_time_us  = v->creation_timestamp.tv_usec;
+    mstore_ventry.immute_time_s     = v->immute_timestamp.tv_sec;
+    mstore_ventry.immute_time_us    = v->immute_timestamp.tv_usec;
 
     read_unlock_irq(&castle_versions_hash_lock);
     castle_mstore_entry_insert(castle_versions_mstore, &mstore_ventry);
@@ -1390,7 +1417,8 @@ static struct castle_version* castle_version_new_create(int snap_or_clone,
 
     /* Set is_leaf bit for the the child and clear for parent. */
     set_bit(CV_LEAF_BIT, &v->flags);
-    clear_bit(CV_LEAF_BIT, &p->flags);
+    //clear_bit(CV_LEAF_BIT, &p->flags);
+    V_IMMUTABLE_INIT(p);
 
     castle_events_version_create(version);
     BUG_ON(version != atomic_read(&castle_versions_last) + 1);
@@ -1825,6 +1853,8 @@ int castle_versions_read(void)
             /* Misc. */
             v->creation_timestamp.tv_sec  = mstore_ventry.creation_time_s;
             v->creation_timestamp.tv_usec = mstore_ventry.creation_time_us;
+            v->immute_timestamp.tv_sec    = mstore_ventry.immute_time_s;
+            v->immute_timestamp.tv_usec   = mstore_ventry.immute_time_us;
         }
 
         if (VERSION_INVAL(atomic_read(&castle_versions_last)) ||
