@@ -106,7 +106,7 @@ int                             castle_rwct_checkpoint_frequency = 10;  /**< Num
 module_param(castle_rwct_checkpoint_frequency, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
 MODULE_PARM_DESC(castle_rwct_checkpoint_frequency, "Number checkpoints before RWCTs are promoted.");
 
-static int castle_golden_nugget = 0;
+static int castle_golden_nugget = 1;
 
 static struct
 {
@@ -7179,8 +7179,6 @@ void castle_da_write_rate_check(struct castle_double_array *da)
     data_bytes      = atomic64_read(&da->sample_data_bytes);
 
     /* Reset timer and accumulating counter. */
-    da->prev_time   = cur_time;
-    atomic64_set(&da->sample_data_bytes, 0);
 
     /* If the number of trees in level 1 or more than 4 or write rate 0 - disable inserts. */
     if ((da->levels[1].nr_trees >= 4 * castle_double_array_request_cpus()) ||
@@ -7202,6 +7200,8 @@ void castle_da_write_rate_check(struct castle_double_array *da)
      * sample. We don't care about this. We still compare to the old one. */
 
 throttle_ios:
+    da->prev_time   = cur_time;
+    atomic64_set(&da->sample_data_bytes, 0);
 
     /* Disable inserts. */
     set_bit(CASTLE_DA_INSERTS_DISABLED, &da->flags);

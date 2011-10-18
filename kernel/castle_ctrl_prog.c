@@ -103,6 +103,7 @@ int castle_ctrl_prog_ioctl(cctrl_ioctl_t *ioctl)
             ioctl->ctrl_prog_heartbeat.ret = 0;
             break;
 
+#if 0
         case CASTLE_CTRL_MERGE_START:
             ioctl->merge_start.ret = -EPERM;
             goto check_pid;
@@ -125,6 +126,7 @@ check_pid:
             if(current->pid != castle_ctrl_prog_pid)
                 return 1;
             break;
+#endif
         default:
             return 0;
     }
