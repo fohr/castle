@@ -452,6 +452,8 @@ uint32_t castle_dfs_resolver_process(c_dfs_resolver *dfs_resolver)
         {
             if( (dfs_resolver->stack->top == 0) || !(stack_top_ts > entry_i_ts) )
                 entry_included = 1;
+            else
+                atomic64_inc(&dfs_resolver->merge->da->stats.user_timestamps.merge_discards);
         }
         else /* No timestamping, so entries cannot be timestamp deprecated */
             entry_included = 1;
@@ -480,10 +482,10 @@ uint32_t castle_dfs_resolver_process(c_dfs_resolver *dfs_resolver)
 
             if( discard_tombstone )
             {
+                atomic64_inc(&dfs_resolver->merge->da->stats.tombstone_discard.tombstone_discards);
                 debug("%s::merge id %u, tombstone discarded\n",
                         __FUNCTION__, dfs_resolver->merge->id);
                 entry_included = 0;                         /* ... so, we can discard it! */
-                //TODO@tr save some stats on discarded tombstones
             }
         }
 

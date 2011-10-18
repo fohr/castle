@@ -2309,6 +2309,24 @@ struct castle_double_array {
     atomic64_t                  sample_data_bytes;
     uint8_t                     user_timestamping;  /**< User timestamping (init 1/0)           */
     atomic64_t                  tombstone_discard_threshold_time_s;
+
+    struct {
+        struct{
+            atomic64_t partition_updates;
+            atomic64_t partition_activations;
+            atomic64_t extent_shrinks;
+        } partial_merges;
+        struct{
+            atomic64_t tombstone_inserts;
+            atomic64_t tombstone_discards;
+        } tombstone_discard;
+        struct{
+            atomic64_t t0_discards;
+            atomic64_t merge_discards;
+            atomic64_t ct_max_uts_negatives;
+            atomic64_t ct_max_uts_false_positives;
+        } user_timestamps;
+    } stats;
 };
 
 extern int castle_latest_key;

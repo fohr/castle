@@ -285,6 +285,28 @@ static ssize_t da_io_stats_show(struct kobject *kobj,
     sprintf(buf + strlen(buf), "Write data bytes: %lu\n", atomic64_read(&da->write_data_bytes));
     sprintf(buf + strlen(buf), "Read key bytes: %lu\n", atomic64_read(&da->read_key_bytes));
     sprintf(buf + strlen(buf), "Read data bytes: %lu\n", atomic64_read(&da->read_data_bytes));
+
+    sprintf(buf + strlen(buf), "PM partition updates: %lu\n",
+            atomic64_read(&da->stats.partial_merges.partition_updates));
+    sprintf(buf + strlen(buf), "PM partition activations: %lu\n",
+            atomic64_read(&da->stats.partial_merges.partition_activations));
+    sprintf(buf + strlen(buf), "PM extent shrinks: %lu\n",
+            atomic64_read(&da->stats.partial_merges.extent_shrinks));
+
+    sprintf(buf + strlen(buf), "TD tombstone inserts: %lu\n",
+            atomic64_read(&da->stats.tombstone_discard.tombstone_inserts));
+    sprintf(buf + strlen(buf), "TD tombstone discards: %lu\n",
+            atomic64_read(&da->stats.tombstone_discard.tombstone_discards));
+
+    sprintf(buf + strlen(buf), "UT t0 discards: %lu\n",
+            atomic64_read(&da->stats.user_timestamps.t0_discards));
+    sprintf(buf + strlen(buf), "UT merge discards: %lu\n",
+            atomic64_read(&da->stats.user_timestamps.merge_discards));
+    sprintf(buf + strlen(buf), "UT ct max uts -ves: %lu\n",
+            atomic64_read(&da->stats.user_timestamps.ct_max_uts_negatives));
+    sprintf(buf + strlen(buf), "UT ct max uts false +ves: %lu\n",
+            atomic64_read(&da->stats.user_timestamps.ct_max_uts_false_positives));
+
     //sprintf(buf + strlen(buf), "Current write rate: %llu\n", da->cur_write_rate);
 
     return strlen(buf);

@@ -4746,6 +4746,7 @@ static void castle_da_merge_new_partition_activate(struct castle_da_merge *merge
     if(!merge->new_redirection_partition.key)
         return;
     BUG_ON(!merge->new_redirection_partition.node_c2b);
+    BUG_ON(!MERGE_CHECKPOINTABLE(merge));
 
     /* == activate redirection partition key == */
     debug("%s::[da %d level %d] activating partition at " cep_fmt_str", key = ",
@@ -4780,8 +4781,8 @@ static void castle_da_merge_new_partition_activate(struct castle_da_merge *merge
         BUG_ON(merge->queriable_out_tree != merge->out_tree);
         BUG_ON(!merge->redirection_partition.node_c2b);
         BUG_ON(!merge->redirection_partition.key);
-        /* the new redirection partition key must be greater than the existing
-           redirection partition key. */
+        /* The new redirection partition key must not be less than the existing
+           redirection partition key (but could be the same). */
         BUG_ON(btree->key_compare(merge->new_redirection_partition.key,
                     merge->redirection_partition.key)
                 < 0 );
@@ -4798,6 +4799,7 @@ static void castle_da_merge_new_partition_activate(struct castle_da_merge *merge
 #ifdef DEBUG
     merge->new_partition_activations++;
 #endif
+    atomic64_inc(&merge->da->stats.partial_merges.partition_activations);
 
     /* == propogate extents shrink boundaries == */
     if(!MERGE_CHECKPOINTABLE(merge))
@@ -4853,6 +4855,7 @@ static void castle_da_merge_new_partition_update(struct castle_da_merge *merge,
     BUG_ON(!merge->in_tree_shrink_activatable_cep);
     BUG_ON(!merge->merged_iter);
     BUG_ON(!merge->merged_iter->iterators);
+    atomic64_inc(&merge->da->stats.partial_merges.partition_updates);
 
     curr_comp = merge->merged_iter->iterators;
     for(i = 0; i < merge->nr_trees; i++)
@@ -6567,11 +6570,11 @@ static int castle_da_merge_do(struct castle_da_merge *merge, uint64_t nr_bytes)
     int i;
 
 
-    printk("%s::MERGE START - DA %d L %d, with input cts: ",
+    debug("%s::MERGE START - DA %d L %d, with input cts: ",
             __FUNCTION__, da->id, level);
     FOR_EACH_MERGE_TREE(i, merge)
-        printk(" [%d]", in_trees[i]->seq);
-    printk(" -> output ct %d.\n", merge->out_tree->seq);
+        debug(" [%d]", in_trees[i]->seq);
+    debug(" -> output ct %d.\n", merge->out_tree->seq);
 
     /* Merge no fail zone starts here. Can't fail from here. Expected to complete, unless
      * someone aborts merge in between. */
@@ -7462,6 +7465,16 @@ static struct castle_double_array* castle_da_alloc(c_da_t da_id)
     /* Set default tombstone discard realtime threshold */
     atomic64_set(&da->tombstone_discard_threshold_time_s,
             CASTLE_TOMBSTONE_DISCARD_TD_DEFAULT);
+
+    atomic64_set(&da->stats.partial_merges.partition_updates, 0);
+    atomic64_set(&da->stats.partial_merges.partition_activations, 0);
+    atomic64_set(&da->stats.partial_merges.extent_shrinks, 0);
+    atomic64_set(&da->stats.tombstone_discard.tombstone_inserts, 0);
+    atomic64_set(&da->stats.tombstone_discard.tombstone_discards, 0);
+    atomic64_set(&da->stats.user_timestamps.t0_discards, 0);
+    atomic64_set(&da->stats.user_timestamps.merge_discards, 0);
+    atomic64_set(&da->stats.user_timestamps.ct_max_uts_negatives, 0);
+    atomic64_set(&da->stats.user_timestamps.ct_max_uts_false_positives, 0);
 
     castle_printk(LOG_USERINFO, "Allocated DA=%d successfully.\n", da_id);
 
@@ -8698,8 +8711,11 @@ static void __castle_da_merge_writeback(struct castle_da_merge *merge)
             {
                 /* If this extent is data extent and marked not to merge. Don't shrink it. */
                 if(!EXT_POS_INVAL(merge->serdes.shrinkable_cep[i]))
+                {
                     castle_extent_shrink(merge->serdes.shrinkable_cep[i].ext_id,
                                          merge->serdes.shrinkable_cep[i].offset/C_CHK_SIZE);
+                    atomic64_inc(&merge->da->stats.partial_merges.extent_shrinks);
+                }
             }
         }
 
@@ -10483,6 +10499,12 @@ void castle_da_next_ct_read(c_bvec_t *c_bvec)
                or if we can go on to the next tree right away. */
             if (castle_da_ct_timestamp_compare(c_bvec->tree, &get->cvt, get->cvt.user_timestamp) > 0)
                 break; /* this tree might have something newer (according to user_timestamp) */
+            else
+            {
+                struct castle_double_array *da = c_bvec->tree->da;
+                BUG_ON(!da);
+                atomic64_inc(&da->stats.user_timestamps.ct_max_uts_negatives);
+            }
         }
         else break; /* not timestamping */
 
@@ -10538,6 +10560,8 @@ int castle_da_ct_read_complete_cvt_timestamp_check(c_bvec_t *c_bvec,
         }
         else
         {
+            BUG_ON(!c_bvec->tree);
+            atomic64_inc(&c_bvec->tree->da->stats.user_timestamps.ct_max_uts_false_positives);
             c_bvec->ref_put(*cvt);
             *cvt = get->cvt;
         }

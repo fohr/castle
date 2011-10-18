@@ -613,10 +613,10 @@ static int castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
     {
         *new_cvt = INVAL_VAL_TUP;
         *cvt = *new_cvt;
+        atomic64_inc(&c_bvec->tree->da->stats.user_timestamps.t0_discards);
         debug(LOG_DEVEL, "%s::dropping an insert because it's timestamp (%llu) "
                 "is \"older\" than the timestamp of an existing entry (%llu).\n",
                 __FUNCTION__, replace->user_timestamp, existing_object_user_timestamp);
-        //TODO@tr record some stats here; increment a drop count?
         return -EEXIST; /* existential crisis */
     }
     /* this object passed the timestamp smell test...proceed with replace. */
@@ -680,6 +680,13 @@ static int castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
         castle_data_extent_update(new_cvt->cep.ext_id,
                                   NR_BLOCKS(new_cvt->length) * C_BLK_SIZE, 1);
 
+    /* Inc counter for per-DA tombstone discard stats. */
+    if (CVT_TOMBSTONE(*new_cvt))
+    {
+        struct castle_double_array *da = c_bvec->tree->da;
+        BUG_ON(!da);
+        atomic64_inc(&da->stats.tombstone_discard.tombstone_inserts);
+    }
     FAULT(REPLACE_FAULT);
 
     return 0;
