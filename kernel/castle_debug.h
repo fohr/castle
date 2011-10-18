@@ -37,6 +37,9 @@
 
 void* castle_debug_alloc_func(size_t size, char *file, int line);
 void  castle_debug_free_func(void *ptr);
+void *castle_debug_alloc_maybe_func(size_t len, void *dst, size_t *dst_len, char *file, int line);
+void *castle_debug_dup_or_copy_func(const void *src, size_t src_len, void *dst, size_t *dst_len,
+                                    char *file, int line);
 void* castle_debug_malloc(size_t size, gfp_t flags, char *file, int line);
 void* castle_debug_zalloc(size_t size, gfp_t flags, char *file, int line);
 void  castle_debug_free(void *obj);
