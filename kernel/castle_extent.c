@@ -881,7 +881,7 @@ int castle_res_pools_read(void)
         castle_res_pool_hash_add(pool);
 
         /* Update next_res_pool_id. */
-        castle_next_res_pool_id = (castle_next_res_pool_id < pool->id)?
+        castle_next_res_pool_id = (castle_next_res_pool_id <= pool->id)?
                                    (pool->id + 1):
                                    castle_next_res_pool_id;
     }
