@@ -40,19 +40,23 @@ static int castle_ctrl_prog_timed_out(void)
             castle_ctrl_prog_timeouts[castle_ctrl_prog_state] < jiffies);
 }
 
+static pid_t castle_ctrl_prog_curr_pid_get(void)
+{
+    return current->group_leader->pid;
+}
 
 int castle_ctrl_prog_ioctl(cctrl_ioctl_t *ioctl)
 {
     switch(ioctl->cmd)
     {
         case CASTLE_CTRL_PROG_REGISTER:
-            printk("Registering, from pid=%d\n", current->pid);
+            printk("Registering, from pid=%d\n", castle_ctrl_prog_curr_pid_get());
             if(castle_ctrl_prog_state != CTRL_PROG_NOT_PRESENT)
             {
                 ioctl->ctrl_prog_register.ret = -EEXIST;
                 break;
             }
-            castle_ctrl_prog_pid = current->pid;
+            castle_ctrl_prog_pid = castle_ctrl_prog_curr_pid_get();
             castle_ctrl_prog_state = CTRL_PROG_PRESENT;
             castle_ctrl_prog_touch();
 
@@ -60,7 +64,7 @@ int castle_ctrl_prog_ioctl(cctrl_ioctl_t *ioctl)
             break;
 
         case CASTLE_CTRL_PROG_DEREGISTER:
-            printk("Deregistering, from pid=%d\n", current->pid);
+            printk("Deregistering, from pid=%d\n", castle_ctrl_prog_curr_pid_get());
             if(ioctl->ctrl_prog_deregister.shutdown)
             {
                 if(castle_ctrl_prog_state == CTRL_PROG_PRESENT)
@@ -87,13 +91,13 @@ int castle_ctrl_prog_ioctl(cctrl_ioctl_t *ioctl)
             break;
 
         case CASTLE_CTRL_PROG_HEARTBEAT:
-            printk("Heartbeat, from pid=%d\n", current->pid);
+            printk("Heartbeat, from pid=%d\n", castle_ctrl_prog_curr_pid_get());
             if(castle_ctrl_prog_state != CTRL_PROG_PRESENT)
             {
                 ioctl->ctrl_prog_register.ret = -EEXIST;
                 break;
             }
-            if(current->pid != castle_ctrl_prog_pid)
+            if(castle_ctrl_prog_curr_pid_get() != castle_ctrl_prog_pid)
             {
                 ioctl->ctrl_prog_register.ret = -ECHILD;
                 break;
@@ -103,7 +107,6 @@ int castle_ctrl_prog_ioctl(cctrl_ioctl_t *ioctl)
             ioctl->ctrl_prog_heartbeat.ret = 0;
             break;
 
-#if 0
         case CASTLE_CTRL_MERGE_START:
             ioctl->merge_start.ret = -EPERM;
             goto check_pid;
@@ -123,10 +126,9 @@ check_pid:
             if(castle_ctrl_prog_state != CTRL_PROG_PRESENT)
                 return 0;
             /* If ctrl program registered, and the pids don't match, return 'handled'. */
-            if(current->pid != castle_ctrl_prog_pid)
+            if(castle_ctrl_prog_curr_pid_get() != castle_ctrl_prog_pid)
                 return 1;
             break;
-#endif
         default:
             return 0;
     }
