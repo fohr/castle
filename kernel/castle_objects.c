@@ -164,11 +164,53 @@ struct castle_iterator_type castle_objects_rq_iter = {
     .cancel     = (castle_iterator_cancel_t)     castle_objects_rq_iter_cancel,
 };
 
-static void castle_objects_rq_iter_init(castle_object_iterator_t *iter)
+/**
+ * Complete initialisation of iterator and asynchronously inform caller.
+ *
+ * @param   private castle_object_iterator_t pointer
+ *
+ * Asynchronous callback from castle_da_rq_iter_init().  Propogate da_rq_iter
+ * errors up the stack and asynchronously call caller via the init_cb.
+ *
+ * @also castle_objects_rq_iter_init()
+ * @also castle_da_rq_iter_init()
+ */
+void _castle_objects_rq_iter_init(void *private)
+{
+    castle_object_iterator_t *iter = private;
+
+    /* Propagate iterator errors up the stack. */
+    iter->err = iter->da_rq_iter.err;
+
+    /* Register callback handler. */
+    castle_da_rq_iter.register_cb(&iter->da_rq_iter,
+                                  castle_objects_rq_iter_end_io,
+                                  (void *)iter);
+
+    /* Go up the stack */
+    iter->init_cb(iter);
+}
+
+/**
+ * Initialise range query iterator.
+ *
+ * @param   iter    Iterator to initialise
+ * @param   init_cb Asynchronous callback when initialisation is complete
+ *
+ * Sets up basic iterator state and then hands off to castle_da_rq_iter_init()
+ * which goes asynchronous.  Iterator completion is handled in
+ * _castle_objects_rq_iter_init().
+ *
+ * @also _castle_objects_rq_iter_init()
+ */
+static void castle_objects_rq_iter_init(castle_object_iterator_t *iter,
+                                        castle_object_iter_init_cb_t init_cb)
 {
     BUG_ON(!iter->start_key || !iter->end_key);
+    BUG_ON(!init_cb);
 
     iter->err = 0;
+    iter->init_cb = init_cb;
     iter->async_iter.end_io = NULL;
     iter->async_iter.iter_type = &castle_objects_rq_iter;
     iter->cached = 0;
@@ -187,18 +229,14 @@ static void castle_objects_rq_iter_init(castle_object_iterator_t *iter)
 #endif
 
     castle_da_rq_iter_init(&iter->da_rq_iter,
-                            iter->version,
-                            iter->da_id,
-                            iter->start_key,
-                            iter->end_key);
-    castle_da_rq_iter.register_cb(&iter->da_rq_iter,
-                                  castle_objects_rq_iter_end_io,
-                                  (void *)iter);
+                           iter->version,
+                           iter->da_id,
+                           iter->start_key,
+                           iter->end_key,
+                           _castle_objects_rq_iter_init, /*init_cb*/
+                           iter /*private*/);
 
-    /* Propagate iterator errors up the stack. */
-    iter->err = iter->da_rq_iter.err;
-
-    return;
+    /* Init completes asynchronously in _castle_objects_rq_iter_init(). */
 }
 
 /**********************************************************************************************/
@@ -946,13 +984,65 @@ EXPORT_SYMBOL(castle_object_replace);
 
 void castle_object_slice_get_end_io(void *obj_iter, int err);
 
-int castle_object_iter_start(struct castle_attachment *attachment,
+/**
+ * Asynchronous callback handler for castle_objects_rq_iter_init().
+ *
+ * Calls asynchronous callback passed to castle_object_iter_init().
+ *
+ * @also castle_objects_rq_iter_init()
+ * @also castle_object_iter_init()
+ */
+void _castle_object_iter_init(castle_object_iterator_t *iterator)
+{
+    castle_object_iter_start_cb_t start_cb = iterator->start_cb;
+    void *start_private = iterator->start_private;
+    int err = iterator->err;
+
+    if (err)
+    {
+        iterator->btree->key_dealloc(iterator->end_key);
+        iterator->btree->key_dealloc(iterator->start_key);
+        castle_kfree(iterator);
+    }
+    else
+        castle_objects_rq_iter_register_cb(iterator,
+                                           castle_object_slice_get_end_io,
+                                           NULL);
+
+    debug_rq("rq_iter_init done, err=%d\n", err);
+    start_cb(start_private, err);
+}
+
+/**
+ * Initialise a range query.
+ *
+ * @param   start_cb    Callback in the event we go asynchronous
+ * @param   private     Caller-provided data passed to start_cb()
+ *
+ * If we are able to allocate all necessary structures and caller-provided keys
+ * are valid we call into castle_objects_rq_iter_init() which handles the
+ * initialisation of the DA range query iterator - the initialisation has now
+ * gone asynchronous and the caller should wait for their callback to fire,
+ * this happens from our own callback, _castle_object_iter_init().
+ *
+ * @return  0       Initialisation went asynchronous
+ * @return -EINVAL  Invalid start and/or end key
+ * @return -ENOMEM  Failed to allocate memory for initialisation
+ *
+ * @also castle_objects_rq_iter_init()
+ * @also _castle_object_iter_init()
+ */
+int castle_object_iter_init(struct castle_attachment *attachment,
                              c_vl_bkey_t *start_key,
                              c_vl_bkey_t *end_key,
-                             castle_object_iterator_t **iter)
+                             castle_object_iterator_t **iter,
+                             castle_object_iter_start_cb_t start_cb,
+                             void *private)
 {
     castle_object_iterator_t *iterator;
     int i, ret;
+
+    BUG_ON(!start_cb || !private);
 
     /* Checks on keys. */
     if (start_key->nr_dims != end_key->nr_dims)
@@ -989,23 +1079,18 @@ int castle_object_iter_start(struct castle_attachment *attachment,
         goto err1;
 
     /* Initialise the rest of the iterator */
-    iterator->version   = attachment->version;
-    iterator->da_id     = castle_version_da_id_get(iterator->version);
+    iterator->version       = attachment->version;
+    iterator->da_id         = castle_version_da_id_get(iterator->version);
+    iterator->start_cb      = start_cb;
+    iterator->start_private = private;
 
     debug_rq("rq_iter_init.\n");
-    castle_objects_rq_iter_init(iterator);
-    if (iterator->err)
-    {
-        ret = iterator->err;
-        goto err2;
-    }
+    castle_objects_rq_iter_init(iterator, _castle_object_iter_init);
 
-    castle_objects_rq_iter_register_cb(iterator, castle_object_slice_get_end_io, NULL);
+    /* Init completes asynchronously in _castle_object_iter_init(). */
 
-    debug_rq("rq_iter_init done.\n");
     return 0;
 
-err2: iterator->btree->key_dealloc(iterator->end_key);
 err1: iterator->btree->key_dealloc(iterator->start_key);
 err0: castle_kfree(iterator);
     return ret;

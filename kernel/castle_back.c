@@ -1813,7 +1813,7 @@ err0: castle_back_reply(op, err, 0, 0);
  *      castle_back_iter_start()
  *          Gets, initialises and takes a stateful_op reference.  Enables
  *          expiry and decodes the relevant keys to be passed to the
- *          castle_objects function (castle_object_iter_start()) that
+ *          castle_objects function (castle_object_iter_init()) that
  *          initialises the underlying iterator structures.
  *
  *          Fakes up a userland iter_next structure and calls directly into
@@ -2004,9 +2004,90 @@ static void castle_back_iter_reply(struct castle_back_stateful_op *stateful_op,
 }
 
 /**
+ * Complete initialisation of stateful op range query.
+ *
+ * @param   private     stateful_op pointer
+ * @param   err         Error code from castle_object_iter_init()
+ *
+ * Called asynchronously from castle_object_iter_init() once the object iterator
+ * has been initialised.
+ *
+ * @also castle_back_iter_start()
+ * @also castle_object_iter_init()
+ */
+void _castle_back_iter_start(void *private, int err)
+{
+    struct castle_back_stateful_op *stateful_op = private;
+    struct castle_back_op *op = stateful_op->curr_op;
+    struct castle_attachment *attachment = stateful_op->attachment;
+    struct castle_back_conn *conn = op->conn;
+    uint32_t buffer_len;
+    char *buffer_ptr;
+
+    /* See related comment in castle_back_iter_start() */
+    stateful_op->curr_op = NULL;
+
+    /* Objects code iterator returned an error. */
+    if (err)
+        goto err;
+
+    if (CASTLE_RING_FLAG_RET_TIMESTAMP & stateful_op->get.flags)
+    {
+        if (!castle_double_array_user_timestamping_get(stateful_op->attachment))
+        {
+            error("User requested timestamp return on a non-timestamped collection, id=0x%x\n",
+                    op->req.get.collection_id);
+            err = -EINVAL;
+            goto err;
+        }
+    }
+
+    /* Check CASTLE_BACK_CONN_DEAD_FLAG under the stateful_op lock to prevent
+     * racing with castle_back_release().  _op_enable_expire() also needs it. */
+    spin_lock(&stateful_op->lock);
+
+    if (stateful_op->conn->flags & CASTLE_BACK_CONN_DEAD_FLAG)
+    {
+        stateful_op->expiring = 1;
+        spin_unlock(&stateful_op->lock);
+        stateful_op->expire(stateful_op);
+
+        return;
+    }
+    else
+        stateful_op->in_use = 1;
+    castle_back_stateful_op_enable_expire(stateful_op);
+
+    spin_unlock(&stateful_op->lock);
+
+    /* Iterator has been initialised.  Fake up an iter_next request and pass
+     * it to castle_back_iter_next() to return the first buffer of results.
+     * See also: libcastle.hg:castle_iter_next_prepare() */
+    buffer_len = op->req.iter_start.buffer_len;
+    buffer_ptr = op->req.iter_start.buffer_ptr;
+    op->req.tag = CASTLE_RING_ITER_NEXT;
+    op->req.iter_next.token = stateful_op->token;
+    op->req.iter_next.buffer_ptr = buffer_ptr;
+    op->req.iter_next.buffer_len = buffer_len;
+
+    /* Start the iterator.  iter_next() handles castle_back(_iter)_reply(). */
+    _castle_back_iter_next(op, stateful_op);
+
+    return;
+
+err:
+    castle_attachment_put(attachment);
+    stateful_op->attachment = NULL;
+    spin_lock(&stateful_op->lock);
+    castle_back_put_stateful_op(conn, stateful_op);
+    castle_back_reply(op, err, 0, 0);
+}
+
+/**
  * Begin stateful op iterating for values in specified key,version range in DA.
  *
- * @also castle_object_iter_start()
+ * @also _castle_back_iter_start()
+ * @also castle_object_iter_init()
  * @also castle_back_iter_next()
  */
 static void castle_back_iter_start(void *data)
@@ -2018,8 +2099,6 @@ static void castle_back_iter_start(void *data)
     castle_interface_token_t token;
     c_vl_bkey_t *start_key;
     c_vl_bkey_t *end_key;
-    uint32_t buffer_len;
-    char *buffer_ptr;
     int err;
 
     debug_iter("castle_back_iter_start\n");
@@ -2065,7 +2144,14 @@ static void castle_back_iter_start(void *data)
 
     stateful_op->tag = CASTLE_RING_ITER_START;
     stateful_op->flags = op->req.flags;
-    stateful_op->curr_op = NULL;
+    /* Here we abuse the curr_op field to store *this* op.  This is necessary
+     * as we use the stateful_op as our private data to be passed back from the
+     * asynchronous castle_object_iter_init() callback.
+     * There is no need to hold the stateful_op->lock while we set curr_op as
+     * in_use is 0 (set by castle_back_stateful_op_get()) so this stateful_op
+     * will never be handled by castle_back_release().  In addition we have not
+     * set a timeout for this stateful_op yet. */
+    stateful_op->curr_op = op;
 
     stateful_op->iterator.collection_id = op->req.iter_start.collection_id;
     stateful_op->iterator.saved_key = NULL;
@@ -2078,51 +2164,17 @@ static void castle_back_iter_start(void *data)
     INIT_WORK(&stateful_op->work[0], __castle_back_iter_next, stateful_op);
     INIT_WORK(&stateful_op->work[1], __castle_back_iter_finish, stateful_op);
 
-    err = castle_object_iter_start(attachment, start_key, end_key, &stateful_op->iterator.iterator);
+    err = castle_object_iter_init(attachment,
+                                  start_key,
+                                  end_key,
+                                  &stateful_op->iterator.iterator,
+                                  _castle_back_iter_start, /*async_cb*/
+                                  stateful_op /*private*/);
     if (err)
         goto err4;
 
-    if(CASTLE_RING_FLAG_RET_TIMESTAMP & stateful_op->get.flags)
-    {
-        if(!castle_double_array_user_timestamping_get(stateful_op->attachment))
-        {
-            error("User requested timestamp return on a non-timestamped collection, id=0x%x\n",
-                    op->req.get.collection_id);
-            err = -EINVAL;
-            goto err4;
-        }
-    }
-
-    /* Check CASTLE_BACK_CONN_DEAD_FLAG under the stateful_op lock to prevent
-     * racing with castle_back_release().  _op_enable_expire() also needs it. */
-    spin_lock(&stateful_op->lock);
-
-    if (stateful_op->conn->flags & CASTLE_BACK_CONN_DEAD_FLAG)
-    {
-        stateful_op->expiring = 1;
-        spin_unlock(&stateful_op->lock);
-        stateful_op->expire(stateful_op);
-
-        return;
-    }
-    else
-        stateful_op->in_use = 1;
-    castle_back_stateful_op_enable_expire(stateful_op);
-
-    spin_unlock(&stateful_op->lock);
-
-    /* Iterator has been initialised.  Fake up an iter_next request and pass
-     * it to castle_back_iter_next() to return the first buffer of results.
-     * See also: libcastle.hg:castle_iter_next_prepare() */
-    buffer_len = op->req.iter_start.buffer_len;
-    buffer_ptr = op->req.iter_start.buffer_ptr;
-    op->req.tag = CASTLE_RING_ITER_NEXT;
-    op->req.iter_next.token = token;
-    op->req.iter_next.buffer_ptr = buffer_ptr;
-    op->req.iter_next.buffer_len = buffer_len;
-
-    /* Start the iterator.  iter_next() handles castle_back(_iter)_reply(). */
-    _castle_back_iter_next(op, stateful_op);
+    /* castle_object_iter_init() has gone asynchronous, iter_start will be
+     * continued via callback handler, _castle_back_iter_start(). */
 
     return;
 

@@ -381,11 +381,171 @@ static void castle_vlba_tree_key_dealloc(void *keyv)
     castle_object_btree_key_free(keyv);
 }
 
-static uint32_t castle_vlba_tree_key_hash(const void *keyv, c_btree_hash_enum_t type, uint32_t seed)
+/**
+ * Return the number of dimensions in the key.
+ */
+static int castle_vlba_tree_key_nr_dims(const void *key)
 {
-    const vlba_key_t *key = keyv;
-    BUG_ON(type != HASH_WHOLE_KEY);
-    return murmur_hash_32(key->_key, key->length, seed);
+    const c_vl_bkey_t *vl_bkey = key;
+
+    return vl_bkey->nr_dims;
+}
+
+/**
+ * Build a VLBA key of nr_dims.
+ *
+ * @param nr_dims       [in]    Number of dimensions
+ * @param keys[]        [in]    Per-dimension keys
+ * @param key_lens[]    [in]    Per-dimension key sizes (of keys[])
+ * @param key_flags[]   [in]    Per-dimension key flags
+ * @param key           [both]  NULL => Allocate a new key
+ *                              *    => Buffer of key_len to build key
+ * @param key_len       [in]    Size of key buffer
+ *                      [out]   Size of key
+ *
+ * NOTE: If a key is passed in key_len describes the size of this buffer.
+ *
+ * NOTE: key_len is always updated to return the size of the constructed key.
+ *
+ * @return  Allocated key
+ */
+void * castle_vlba_tree_key_build(int nr_dims,
+                                  int *keys,
+                                  int *key_lens,
+                                  int *key_flags,
+                                  void *key,
+                                  size_t *key_len)
+{
+    int key_size, payload_off, i;
+    c_vl_bkey_t *vl_bkey = key;
+
+    BUG_ON(nr_dims == 0);
+    BUG_ON(!key_lens || !keys);
+
+    /* Calculate the total size of the key. */
+    key_size    = castle_object_btree_key_header_size(nr_dims);
+    payload_off = key_size;
+    for (i = 0; i < nr_dims; i++)
+        key_size += key_lens[i];
+
+    /* Allocate and initialise the key. */
+    if (key)
+        BUG_ON(*key_len >= key_size);
+    else
+        key = castle_alloc(key_size);
+    vl_bkey->length  = key_size - 4; /* length doesn't include length field */
+    vl_bkey->nr_dims = nr_dims;
+    *((uint64_t *)vl_bkey->_unused) = 0;
+
+    /* Populate key dimensions and flags. */
+    for (i = 0; i < nr_dims; i++)
+    {
+        if (key_flags)
+            vl_bkey->dim_head[i] = KEY_DIMENSION_HEADER(payload_off, key_flags[i]);
+        else
+            vl_bkey->dim_head[i] = KEY_DIMENSION_HEADER(payload_off, 0);
+        memcpy(key + payload_off, &keys[i], key_lens[i]);
+        payload_off += key_lens[i];
+    }
+
+    BUG_ON(payload_off != key_size);
+
+    /* Return size of the constructed key. */
+    *key_len = key_size;
+
+    return key;
+}
+
+/**
+ * Strip all but the first nr_dims from key and replace them with -inf.
+ *
+ * @param   src     Source key
+ * @param   dst     Destination key buffer (can be NULL)
+ * @param   dst_len Size of destination key buffer
+ * @param   nr_dims Number of dimensions to keep (from beginning of key)
+ */
+void *castle_vlba_tree_key_strip(const void *src, void *dst, size_t *dst_len, int nr_dims)
+{
+    const c_vl_bkey_t *vl_bkey = src;
+
+    if (vl_bkey->nr_dims <= 20)
+    {
+        /* Allocate key dimensions, lengths and flags on the stack. */
+        int keys[20], key_lens[20], key_flags[20];
+        int i;
+
+        for (i = 0; i < nr_dims; i++)
+        {
+            keys[i]      = *castle_object_btree_key_dim_get(vl_bkey, i);
+            key_lens[i]  =  castle_object_btree_key_dim_length(vl_bkey, i);
+            key_flags[i] =  castle_object_btree_key_dim_flags_get(vl_bkey, i);
+        }
+        for (i = nr_dims; i < vl_bkey->nr_dims; i++)
+        {
+            //keys[i]      = 0;
+            key_lens[i]  = 0;
+            key_flags[i] = 0;
+        }
+
+        dst = castle_vlba_tree_key_build(vl_bkey->nr_dims,
+                                         keys,
+                                         key_lens,
+                                         key_flags,
+                                         dst,
+                                         dst_len);
+    }
+    else
+    {
+        /* Allocate key dimensions, lengths and flags from the heap. */
+        BUG();
+    }
+
+    return dst;
+}
+
+/**
+ * Hash all but the last strip_dims dimensions of the key.
+ *
+ * @param   key         Key to hash
+ * @param   type        Whether to hash the whole key or stripped dimensions
+ * @param   seed        Hash seed
+ *
+ * NOTE: Hashing with type==HASH_STRIPPED_KEYS will result in a collision for
+ *       some keys (e.g. [12,34] and [123,4]) because the dimension headers
+ *       (which include dimension length) are not hashed.
+ *       With type==HASH_WHOLE_KEY everything but the overall key length is
+ *       hashed and so a collision is less likely (but not impossible).
+ *
+ * @return  Key hash    Hash of the key
+ */
+static uint32_t castle_vlba_tree_key_hash(const void *key, c_btree_hash_enum_t type, uint32_t seed)
+{
+    const vlba_key_t *vlba_key = key;
+    const c_vl_bkey_t *vl_bkey = key;
+    int length;
+
+    switch (type)
+    {
+        case HASH_WHOLE_KEY:
+            /* Hash all of the key but the length field. */
+
+            return murmur_hash_32(vlba_key->_key, vlba_key->length, seed);
+
+        case HASH_STRIPPED_KEYS:
+            /* Hash the key's relevant stripped dimensions. */
+
+            BUG_ON(vl_bkey->nr_dims <= HASH_STRIPPED_DIMS);
+
+            key += KEY_DIMENSION_OFFSET(vl_bkey->dim_head[0]);
+
+            length  = KEY_DIMENSION_OFFSET(vl_bkey->dim_head[HASH_STRIPPED_DIMS]);
+            length -= KEY_DIMENSION_OFFSET(vl_bkey->dim_head[0]);
+
+            return murmur_hash_32(key, length, seed);
+
+        default:
+            BUG();
+    }
 }
 
 static void castle_vlba_tree_key_print(int level, const void *key)
@@ -815,6 +975,8 @@ struct castle_btree_type castle_vlba_tree = {
     .key_next       = castle_vlba_tree_key_next,
     .key_hc_next    = castle_vlba_tree_key_hc_next,
     .key_dealloc    = castle_vlba_tree_key_dealloc,
+    .nr_dims        = castle_vlba_tree_key_nr_dims,
+    .key_strip      = castle_vlba_tree_key_strip,
     .key_hash       = castle_vlba_tree_key_hash,
     .key_print      = castle_vlba_tree_key_print,
     .entry_get      = castle_vlba_tree_entry_get,

@@ -14,10 +14,12 @@ c_vl_okey_t *castle_object_okey_copy         (c_vl_okey_t *obj_key);
 int          castle_object_get               (struct castle_object_get *get,
                                               struct castle_attachment *attachment,
                                               int cpu_index);
-int          castle_object_iter_start        (struct castle_attachment *attachment,
+int          castle_object_iter_init         (struct castle_attachment *attachment,
                                               c_vl_bkey_t *start_key,
                                               c_vl_bkey_t *end_key,
-                                              castle_object_iterator_t **iter);
+                                              castle_object_iterator_t **iter,
+                                              castle_object_iter_start_cb_t async_cb,
+                                              void *private);
 int          castle_object_iter_next         (castle_object_iterator_t *iterator,
                                               castle_object_iter_next_available_t callback,
                                               void *data);

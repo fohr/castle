@@ -1012,7 +1012,8 @@ struct castle_bbp_entry
     /*         64 */ uint32_t    node_used;   /* for entries_drop */
     /*         68 */ uint8_t     node_avail;  /* flag to indicate if we should recover node */
     /*         69 */ uint8_t     chunk_avail; /* flag to indicate if we should recover chunk */
-    /*         70 */
+    /*         70 */ uint32_t    last_stripped_hash;
+    /*         74 */
 } PACKED;
 
 /* Component tree flags bits. */
@@ -1235,20 +1236,20 @@ struct castle_dmserlist_entry {
     /*        864 */
     /*        864 */ c_ext_pos_t                      last_leaf_node_cep;
     /*        880 */ struct castle_bbp_entry          out_tree_bbp;
-    /*        950 */ uint8_t                          have_bbp;
-    /*        951 */ btree_t                          btree_type;
-    /*        952 */ int32_t                          root_depth;
-    /*        956 */ int8_t                           completing;
-    /*        957 */ int8_t                           is_new_key;
-    /*        958 */ uint32_t                         skipped_count;
+    /*        954 */ uint8_t                          have_bbp;
+    /*        955 */ btree_t                          btree_type;
+    /*        956 */ int32_t                          root_depth;
+    /*        960 */ int8_t                           completing;
+    /*        961 */ int8_t                           is_new_key;
+    /*        962 */ uint32_t                         skipped_count;
                      /* Although the redirection partition is contained by the castle_double_array
                         struct, SERDES is left to merge because the partition is tighly linked to
                         merge SERDES state. */
-    /*        962 */ c_ext_pos_t                      redirection_partition_node_cep;
-    /*        978 */ int32_t                          redirection_partition_node_size;
-    /*        982 */ uint64_t                         growth_control_tree_ext_used_bytes;
-    /*        990 */ uint64_t                         growth_control_data_ext_used_bytes;
-    /*        998 */ uint8_t                          pad_to_iters[10]; /* beyond here entries are
+    /*        966 */ c_ext_pos_t                      redirection_partition_node_cep;
+    /*        982 */ int32_t                          redirection_partition_node_size;
+    /*        986 */ uint64_t                         growth_control_tree_ext_used_bytes;
+    /*        994 */ uint64_t                         growth_control_data_ext_used_bytes;
+    /*       1002 */ uint8_t                          pad_to_iters[6];  /**< beyond here entries are
                                                                            frequently marshalled, so
                                                                            alignment is important */
     /*         */
@@ -1390,6 +1391,25 @@ struct castle_request_timeline;
 /* Temporary variable used to set the above correctly, at the right point in time */
 #define CBV_C2B_WRITE_LOCKED          (5)
 
+/**
+ * Bloom lookup request structure.
+ */
+typedef void (*castle_bloom_lookup_async_cb_t)(void *private, int key_exists);
+typedef struct castle_bloom_lookup
+{
+    castle_bloom_t                 *bf;         /**< Bloom filter.                  */
+
+    void                           *key;        /**< Key to search for.             */
+    c_btree_hash_enum_t             hash_type;  /**< Key hash to use.               */
+
+    struct castle_cache_block      *block_c2b;  /**< c2b for relevant filter block. */
+
+    struct work_struct              work;       /**< Asynchronous work handler.     */
+    castle_bloom_lookup_async_cb_t  async_cb;   /**< Asynchronous CB handler.       */
+    void                           *private;    /**< Caller-provided private data.  */
+} c_bloom_lookup_t;
+
+struct castle_bloom_lookup;
 typedef struct castle_bio_vec {
     c_bio_t                        *c_bio;        /**< Where this IO originated                 */
 
@@ -1413,7 +1433,7 @@ typedef struct castle_bio_vec {
     struct castle_cache_block      *btree_parent_node;
 
     /* Bloom filters. */
-    struct castle_cache_block      *bloom_c2b;
+    c_bloom_lookup_t                bloom_lookup;   /**< Bloom lookup request structure.        */
 #ifdef CASTLE_BLOOM_FP_STATS
     int bloom_positive;
 #endif
@@ -1729,21 +1749,59 @@ typedef struct castle_merged_iterator {
     struct castle_double_array      *da;
 } c_merged_iter_t;
 
+typedef struct castle_da_rq_iterator c_da_rq_iter_t;
+
 /**
- * Range Query iterator.
+ * Structure that stores individual CT relevance to a range query.
+ *
+ * castle_da_rq_iter_init() calls castle_da_rq_iterator_relevant_cts_get() to
+ * get a list of which of its proxy_ct->cts[] are relevant to the range query.
+ * The results are stored in an array of proxy_ct->nr_cts of these structures.
+ *
+ * A structure is required because a bloom filter lookup may go asynchronous.
+ *
+ * @also castle_da_rq_iterator_relevant_cts_get()
+ * @also _castle_da_rq_iter_init()
  */
-typedef struct castle_da_rq_iterator {
+typedef struct castle_da_rq_iterator_ct_relevant {
+    c_da_rq_iter_t             *rq_iter;            /**< Range query iterator backpointer.  */
+    c_bloom_lookup_t            bloom_lookup;       /**< Bloom lookup structure.            */
+    int                         relevant;           /**< Is CT relevant for range query?    */
+} c_da_rq_iter_ct_relevant_t;
+
+typedef struct castle_object_iterator castle_object_iterator_t;
+
+/**
+ * Range query iterator structure.
+ */
+typedef void (*castle_da_rq_iter_init_cb_t)(void *private);
+struct castle_da_rq_iterator
+{
     c_merged_iter_t             merged_iter;        /**< Merged iterator for rq_iters.          */
 
     struct castle_da_cts_proxy *cts_proxy;          /**< Reference-taking snapshot of CTs in DA.*/
     c_rq_iter_t                *ct_iters;           /**< nr_iters RQ iterators.                 */
     int                         nr_iters;           /**< Number of ct_iters[].                  */
 
+    struct castle_double_array *da;
+    c_ver_t                     version;
+    void                       *start_key;
+    void                       *end_key;
+    void                       *start_stripped;
+    void                       *end_stripped;
+
+    c_da_rq_iter_ct_relevant_t *relevant_cts;       /**< CT range query relevance.              */
+    atomic_t                    pending_lookups;    /**< Number of pending CT relevance checks. */
+    void                       *stripped_start;     /**< Stripped start key.                    */
+    void                       *stripped_end;       /**< Stripped end key.                      */
+
     c_async_iterator_t          async_iter;         /**< Async iterator callback.               */
 
-    int                         err;
-} c_da_rq_iter_t;
+    castle_da_rq_iter_init_cb_t init_cb;            /**< Initialisation complete callback.      */
+    void                       *private;            /**< Passed to init_cb().                   */
 
+    int                         err;
+};
 
 #define BLOCKS_HASH_SIZE        (100)
 struct castle_slave_block_cnt
@@ -2048,7 +2106,6 @@ struct castle_object_pull {
  * it wants the next value without calling castle_object_iter_next
  * again.
  */
-struct castle_object_iterator;
 typedef int (*castle_object_iter_next_available_t)
         (struct castle_object_iterator *iter,
          c_vl_bkey_t *key,
@@ -2056,29 +2113,37 @@ typedef int (*castle_object_iter_next_available_t)
          int err,
          void *data);
 
-typedef struct castle_object_iterator {
-    c_async_iterator_t  async_iter;
+typedef void (*castle_object_iter_start_cb_t)(void *private, int err);
+typedef void (*castle_object_iter_init_cb_t)(castle_object_iterator_t *iterator);
+struct castle_object_iterator
+{
+    c_async_iterator_t                  async_iter;
     /* Filled in by the client */
-    c_da_t              da_id;
-    c_ver_t             version;
-    struct castle_btree_type *btree;
-    void               *start_key;
-    void               *end_key;
+    c_da_t                              da_id;
+    c_ver_t                             version;
+    struct castle_btree_type           *btree;
+    void                               *start_key;
+    void                               *end_key;
 
     /* Rest */
-    int                 err;
-    int                 completed;
-    void               *last_next_key;
-    c_da_rq_iter_t      da_rq_iter;
+    int                                 err;
+    int                                 completed;
+    void                               *last_next_key;
+    c_da_rq_iter_t                      da_rq_iter;
     /* Cached entry, guaranteed to fall in the hypercube */
-    int                 cached;
-    void               *cached_k;
-    c_ver_t             cached_v;
-    c_val_tup_t         cached_cvt;
+    int                                 cached;
+    void                               *cached_k;
+    c_ver_t                             cached_v;
+    c_val_tup_t                         cached_cvt;
     castle_object_iter_next_available_t next_available;
-    void               *next_available_data;
-    struct work_struct  work;
-} castle_object_iterator_t;
+    void                               *next_available_data;
+    struct work_struct                  work;
+
+    castle_object_iter_start_cb_t       start_cb;               /**< Iterator start callback.   */
+    void                               *start_private;          /**< Passed to start_cb().      */
+
+    castle_object_iter_init_cb_t        init_cb;                /**< Iterator init callback.    */
+};
 
 int castle_superblocks_writeback(uint32_t version);
 

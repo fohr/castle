@@ -5,23 +5,40 @@
 
 /**** Bloom filter builds ****/
 
+/**
+ * State structure used during construction of bloom filter.
+ */
 struct castle_bloom_build_params
 {
-    uint64_t max_num_elements;
-    uint64_t elements_inserted;
-    uint32_t chunks_complete;
-    uint32_t cur_node_cur_chunk_id;
-    struct castle_btree_node *cur_node;
-    c2_block_t *node_c2b;
-    c_ext_pos_t node_cep;
-    void *cur_chunk_buffer;
-    c2_block_t *chunk_c2b;
-    c_ext_pos_t chunk_cep;
-    uint32_t cur_chunk_num_blocks;
-    uint32_t nodes_complete;
+    uint64_t                    max_num_elements;
+    uint64_t                    elements_inserted;
+    uint32_t                    chunks_complete;
+    uint32_t                    cur_node_cur_chunk_id;
+    struct castle_btree_node   *cur_node;
+    c2_block_t                 *node_c2b;
+    c_ext_pos_t                 node_cep;
+    void                       *cur_chunk_buffer;
+    c2_block_t                 *chunk_c2b;
+    c_ext_pos_t                 chunk_cep;
+    uint32_t                    cur_chunk_num_blocks;
+    uint32_t                    nodes_complete;
+
+    uint32_t                    last_stripped_hash;         /**< Hash of last stripped key, see
+                                                                 @also castle_bloom_add().      */
+
 #ifdef DEBUG
-    uint32_t *elements_inserted_per_block;
+    uint32_t                   *elements_inserted_per_block;
 #endif
+};
+
+/**
+ * Structure to store bloom filter index btree node c2bs.
+ */
+#define CASTLE_BLOOM_INDEX_NODES_MAX    20      /**< Maximum number of btree nodes for index.   */
+struct castle_bloom_index
+{
+    int         nr_c2bs;                        /**< Number of index c2bs handled by structure. */
+    c2_block_t *c2bs[CASTLE_BLOOM_INDEX_NODES_MAX]; /**< Array of index node c2bs.              */
 };
 
 int castle_bloom_create(castle_bloom_t *bf, c_da_t da_id, btree_t btree_type, uint64_t num_elements);
@@ -29,7 +46,14 @@ void castle_bloom_complete(castle_bloom_t *bf);
 void castle_bloom_abort(castle_bloom_t *bf);
 void castle_bloom_destroy(castle_bloom_t *bf);
 int castle_bloom_add(castle_bloom_t *bf, struct castle_btree_type *btree, void *key);
-void castle_bloom_submit(c_bvec_t *c_bvec, int go_async);
+
+int castle_bloom_key_exists(c_bloom_lookup_t *bl,
+                            castle_bloom_t *bf,
+                            void *key,
+                            c_btree_hash_enum_t hash_type,
+                            castle_bloom_lookup_async_cb_t async_cb,
+                            void *private);
+
 void castle_bloom_marshall(castle_bloom_t *bf, struct castle_clist_entry *ctm);
 void castle_bloom_unmarshall(castle_bloom_t *bf, struct castle_clist_entry *ctm);
 void castle_bloom_build_param_marshall(struct castle_bbp_entry *bbpm,

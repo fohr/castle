@@ -607,7 +607,8 @@ struct castle_norm_key *castle_norm_key_next(const struct castle_norm_key *src,
 }
 
 struct castle_norm_key *castle_norm_key_strip(const struct castle_norm_key *src,
-                                              struct castle_norm_key *dst, size_t *dst_len,
+                                              struct castle_norm_key *dst,
+                                              size_t *dst_len,
                                               int n_keep)
 {
     const unsigned char *src_data, *boundary;
@@ -873,7 +874,9 @@ struct castle_var_length_btree_key *castle_norm_key_unpack(const struct castle_n
  * @param type      whether the key is a normal key or a "stripped" key
  * @param seed      the seed value for the hash function
  */
-uint32_t castle_norm_key_hash(const struct castle_norm_key *key, c_btree_hash_enum_t type, uint32_t seed)
+uint32_t castle_norm_key_hash(const struct castle_norm_key *key,
+                              c_btree_hash_enum_t type,
+                              uint32_t seed)
 {
     const unsigned char *data, *boundary;
     size_t len = castle_norm_key_len_get(key, &data), n_dim;

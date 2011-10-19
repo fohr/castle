@@ -215,6 +215,7 @@ static int castle_da_rwct_create(struct castle_double_array *da,
                                  int in_tran,
                                  c_lfs_vct_type_t lfs_type);
 static int castle_da_no_disk_space(struct castle_double_array *da);
+void castle_da_next_ct_read(c_bvec_t *c_bvec);
 
 struct workqueue_struct *castle_da_wqs[NR_CASTLE_DA_WQS];
 char *castle_da_wqs_names[NR_CASTLE_DA_WQS] = {"castle_da0"};
@@ -2144,7 +2145,6 @@ void castle_da_rq_iter_cancel(c_da_rq_iter_t *iter)
     castle_ct_merged_iter_cancel(&iter->merged_iter);
 
     /* Cancel CT iterators. */
-    BUG_ON(iter->nr_iters != iter->cts_proxy->nr_cts);
     for (i = 0; i < iter->nr_iters; i++)
     {
         c_rq_iter_t *ct_iter = &iter->ct_iters[i];
@@ -2160,67 +2160,72 @@ void castle_da_rq_iter_cancel(c_da_rq_iter_t *iter)
 }
 
 /**
- * Range Query iterator initialiser.
+ * Complete range query iterator initialisation.
  *
- * Implemented as a merged iterator of CTs at every level of the DA.
+ * @param   iter    Range query iterator to initialise
+ *
+ * Called from castle_da_rq_iter_relevant_cts_get() or one of the asynchronous
+ * check callbacks once iter->relevant_cts[] has been finalised.  Finalise
+ * iterator initialisation and asynchronously inform the caller that it has
+ * been done.
+ *
+ * @also castle_da_rq_iter_init()
+ * @also castle_da_rq_iter_relevant_cts_get()
  */
-void castle_da_rq_iter_init(c_da_rq_iter_t *iter,
-                            c_ver_t version,
-                            c_da_t da_id,
-                            void *start_key,
-                            void *end_key)
+static void _castle_da_rq_iter_init(c_da_rq_iter_t *iter)
 {
-    struct castle_iterator_type **iters_types;
-    struct castle_double_array *da;
-    void **iters;
-    int i;
+    struct castle_iterator_type **iters_types = NULL;
+    void **iters = NULL;
+    int nr_iters, i;
 
-    /* Get DA from hash, verify it is ancestor of version. */
-    da = castle_da_hash_get(da_id);
-    BUG_ON(!da);
-    BUG_ON(!castle_version_is_ancestor(da->root_version, version));
+    /* Count how many relevant CTs there are. */
+    for (i = 0, nr_iters = 0; i < iter->cts_proxy->nr_cts; i++)
+        if (iter->relevant_cts[i].relevant)
+            nr_iters++;
 
-    /* Initialise RQ iterator, allocate structures for CT/merged iterators. */
-    iter->cts_proxy         = castle_da_cts_proxy_get(da);
-    if (!iter->cts_proxy)
-        goto alloc_fail;
-    iter->nr_iters          = iter->cts_proxy->nr_cts;
-    iter->err               = 0;
-    iter->async_iter.end_io = NULL;
+    // @TODO LT: correctly handle the 'no relevant CTs case'
+    // to anybody that hits this: I'm working on it right now
+    BUG_ON(nr_iters == 0);
 
-    iter->ct_iters  = castle_zalloc(iter->nr_iters * sizeof(c_rq_iter_t), GFP_KERNEL);
-    iters           = castle_alloc(iter->nr_iters * sizeof(void *));
-    iters_types     = castle_alloc(iter->nr_iters * sizeof(struct castle_iterator_type *));
+    /* Initialise iterator structure. */
+    iter->nr_iters = nr_iters;
+    iter->ct_iters = castle_zalloc(nr_iters * sizeof(c_rq_iter_t), GFP_KERNEL);
+    iters          = castle_alloc(nr_iters * sizeof(void *));
+    iters_types    = castle_alloc(nr_iters * sizeof(struct castle_iterator_type *));
     if (!iter->ct_iters || !iters || !iters_types)
-        goto alloc_fail2;
+        goto alloc_fail;
 
     /* Initialise CT iterators. */
-    for (i = 0; i < iter->nr_iters; i++)
+    for (i = 0, nr_iters = 0; i < iter->cts_proxy->nr_cts; i++)
     {
         struct castle_da_cts_proxy_ct *proxy_ct;
         void *ct_start_key, *ct_end_key;
         c_rq_iter_t *ct_iter;
 
-        proxy_ct    = &iter->cts_proxy->cts[i];
-        ct_iter     = &iter->ct_iters[i];
+        /* Don't initialise irrelevant CTs. */
+        if (!iter->relevant_cts[i].relevant)
+            continue;
+
+        proxy_ct = &iter->cts_proxy->cts[i];
+        ct_iter  = &iter->ct_iters[nr_iters];
 
         switch (proxy_ct->state)
         {
             case NO_REDIR:
                 /* No redirection, use requested start and end keys. */
-                ct_start_key    = start_key;
-                ct_end_key      = end_key;
+                ct_start_key    = iter->start_key;
+                ct_end_key      = iter->end_key;
                 break;
             case REDIR_INTREE:
                 /* Input tree, start at key_next(partition key).
                  * Prior keys are handled by the output tree. */
                 ct_start_key    = proxy_ct->pk_next;
-                ct_end_key      = end_key;
+                ct_end_key      = iter->end_key;
                 break;
             case REDIR_OUTTREE:
                 /* Output tree, end at partition key.  Later keys are
                  * handled by the input trees. */
-                ct_start_key    = start_key;
+                ct_start_key    = iter->start_key;
                 ct_end_key      = proxy_ct->pk;
                 break;
             default:
@@ -2228,33 +2233,39 @@ void castle_da_rq_iter_init(c_da_rq_iter_t *iter,
         }
 
         /* Initialise CT iterator. */
-        castle_rq_iter_init(ct_iter, version, proxy_ct->ct, ct_start_key, ct_end_key);
+        castle_rq_iter_init(ct_iter, iter->version, proxy_ct->ct, ct_start_key, ct_end_key);
         BUG_ON(ct_iter->err); /* doesn't fail */
 
         /* Add initialised iterator to merged iterators lists. */
-        iters[i]        = ct_iter;
-        iters_types[i]  = &castle_rq_iter;
+        iters[nr_iters]       = ct_iter;
+        iters_types[nr_iters] = &castle_rq_iter;
+
+        /* We've added one more iterator. */
+        nr_iters++;
     }
+    BUG_ON(nr_iters != iter->nr_iters);
 
     /* Initialise merged iterator. */
-    iter->merged_iter.nr_iters  = iter->nr_iters;
-    iter->merged_iter.btree     = castle_btree_type_get(da->btree_type);
-    castle_ct_merged_iter_init(&iter->merged_iter, iters, iters_types, NULL, da);
+    iter->merged_iter.nr_iters = iter->nr_iters;
+    iter->merged_iter.btree    = castle_btree_type_get(iter->da->btree_type);
+    castle_ct_merged_iter_init(&iter->merged_iter, iters, iters_types, NULL, iter->da);
     castle_ct_merged_iter_register_cb(&iter->merged_iter, castle_da_rq_iter_end_io, iter);
 
     /* Free structures used to initialise merged iterator. */
-    castle_free(iters);
+    if (iter->start_stripped)
+        castle_free(iter->start_stripped);
+    if (iter->end_stripped)
+        castle_free(iter->end_stripped);
+    castle_free(iter->relevant_cts);
     castle_free(iters_types);
+    castle_free(iters);
+
+    /* Fire asynchronous initialisation callback. */
+    iter->init_cb(iter->private);
 
     return;
 
-alloc_fail2:
-    if (iters_types)
-        castle_free(iters_types);
-    if (iters)
-        castle_free(iters);
-    if (iter->ct_iters)
-        castle_free(iter->ct_iters);
+alloc_fail:
     if (iter->cts_proxy)
     {
         castle_da_cts_proxy_put(iter->cts_proxy);
@@ -2262,9 +2273,286 @@ alloc_fail2:
     }
     else
         BUG();
+    if (iter->relevant_cts)
+    {
+        castle_free(iter->relevant_cts);
+        iter->relevant_cts = NULL;
+    }
+    else
+        BUG();
+    if (iter->start_stripped)
+    {
+        castle_free(iter->start_stripped);
+        iter->start_stripped = NULL;
+    }
+    if (iter->end_stripped)
+    {
+        castle_free(iter->end_stripped);
+        iter->end_stripped = NULL;
+    }
+    if (iters_types)
+        castle_free(iters_types);
+    if (iters)
+        castle_free(iters);
+    if (iter->ct_iters)
+        castle_free(iter->ct_iters);
 
+    iter->err = -ENOMEM;
+    iter->init_cb(iter->private);
+}
+
+/**
+ * Callback handler when castle_bloom_key_exists() returns a result.
+ *
+ * @param   private     relevant_ct pointer
+ * @param   key_exists  Whether relevant_ct->iter->stripped_start exists
+ *
+ * NOTE: Called only from castle_bloom_key_exists() if it needed to go
+ *       asynchronous to issue read I/O.
+ *
+ * @also castle_da_rq_iter_relevant_cts_get()
+ */
+inline void castle_da_rq_iter_relevant_ct_cb(void *private, int key_exists)
+{
+    c_da_rq_iter_ct_relevant_t *relevant_ct = private;
+
+    BUG_ON(key_exists < 0);
+
+    relevant_ct->relevant = key_exists;
+
+    if (atomic_dec_return(&relevant_ct->rq_iter->pending_lookups) == 0)
+        /* All CT relevance checks complete, finish initialising iterator. */
+        _castle_da_rq_iter_init(relevant_ct->rq_iter);
+}
+
+/**
+ * Is proxy_ct->ct relevant for range query between start_key, end_key?
+ *
+ * @return  0   CT is not relevant for this range query
+ * @return  1   CT is relevant for this range query, needs to be searched
+ * @return  2   CT may be relevant for this range query, verify in bloom filter
+ */
+static inline int castle_da_rq_iter_ct_relevant(struct castle_da_cts_proxy_ct *proxy_ct,
+                                                struct castle_btree_type *btree,
+                                                void *start_key,
+                                                void *end_key,
+                                                void **start_stripped,
+                                                void **end_stripped)
+{
+    if (proxy_ct->state == REDIR_INTREE
+            && btree->key_compare(proxy_ct->pk_next, end_key) > 0)
+        /* Skip this input tree if the next(partition key) is greater than
+         * the end key - it can't have any relevant results. */
+        return 0;
+
+    if (proxy_ct->state == REDIR_OUTTREE
+            && btree->key_compare(start_key, proxy_ct->pk) > 0)
+        /* Skip this output tree if the start key is greater than the
+         * partition key - it can't have any relevant results. */
+        return 0;
+
+    if (!proxy_ct->ct->bloom_exists)
+        /* Query all trees that do not have bloom filters. */
+        return 1;
+
+    else if (btree->nr_dims(start_key) <= HASH_STRIPPED_DIMS)
+        /* Bloom filters cannot be used if the keys are too short. */
+        return 1;
+
+    else
+    {
+        /* Tree has a bloom filter. */
+        if (!*start_stripped)
+        {
+            /* Start and end keys have not yet been stripped, do it now. */
+            *start_stripped = btree->key_strip(start_key, NULL, 0, HASH_STRIPPED_DIMS);
+            *end_stripped   = btree->key_strip(end_key,   NULL, 0, HASH_STRIPPED_DIMS);
+            BUG_ON(!*start_stripped || !*end_stripped);
+        }
+
+        if (btree->key_compare(*start_stripped, *end_stripped) != 0)
+            /* Significant stripped dimensions are different.  Query this
+             * tree as we can not currently use bloom filters here. */
+            return 1;
+        else
+            /* Significant stripped dimensions are the same.  Query the
+             * bloom filter to see if the significant stripped dimensions
+             * exist within the filter. */
+            return 2;
+    }
+
+    BUG(); /* not reached */
+}
+
+/**
+ * Determine which trees are relevant for a range query of start_key to end_key.
+ *
+ * @param   iter        Range query iterator to check CTs for
+ * @param   start_key   Range query start key
+ * @param   end_key     Range query end key
+ *
+ * Allocates an array of relevant CTs structures (c_da_rq_iter_ct_relevant_t[])
+ * and sets the 'relevant' field accordingly.
+ *
+ * Caller assumes that the iterator completes asynchronously.  This is necessary
+ * as we may need to query bloom filters which may go asynchronous.
+ *
+ * Asynchronous relevance checks are tracked via the iter->pending_lookups.
+ * Whoever takes this count down to 0 calls into _castle_da_rq_iter_init() to
+ * complete initialisation of the iterator.  In certain circumstances, this may
+ * be us at the bottom of this function, otherwise via the bloom filter lookup
+ * callback, castle_da_rq_iter_relevant_ct_cb().
+ *
+ * @return  0       Succesfully allocated relevant_cts structure
+ * @return -ENOMEM  Failed to allocate relevant_cts structure
+ *
+ * @also _castle_da_rq_iter_init()
+ * @also castle_bloom_key_exists()
+ * @also castle_da_rq_iter_ct_relevant()
+ * @also castle_da_rq_iter_relevant_ct_cb()
+ */
+int castle_da_rq_iter_relevant_cts_get(c_da_rq_iter_t *iter,
+                                       void *start_key,
+                                       void *end_key)
+{
+    struct castle_btree_type *btree = castle_btree_type_get(iter->da->btree_type);
+    struct castle_da_cts_proxy *cts_proxy = iter->cts_proxy;
+    int key_exists, i;
+
+    /* Allocate CT relevance structure. */
+    iter->relevant_cts   = castle_alloc(cts_proxy->nr_cts * sizeof(c_da_rq_iter_ct_relevant_t));
+    if (!iter->relevant_cts)
+        return -ENOMEM;
+
+    iter->start_stripped = NULL;
+    iter->end_stripped   = NULL;
+    atomic_set(&iter->pending_lookups, 1);
+
+    for (i = 0; i < cts_proxy->nr_cts; i++)
+    {
+        switch (castle_da_rq_iter_ct_relevant(&cts_proxy->cts[i],
+                                              btree,
+                                              start_key,
+                                              end_key,
+                                              &iter->start_stripped,
+                                              &iter->end_stripped))
+        {
+            case 0:
+                /* CT is not relevant to range query. */
+                iter->relevant_cts[i].relevant = 0;
+                break;
+
+            case 1:
+                /* CT is relevant to range query. */
+                iter->relevant_cts[i].relevant = 1;
+                break;
+
+            case 2:
+                /* CT may be relevant to range query, check bloom filter. */
+                atomic_inc(&iter->pending_lookups);
+                iter->relevant_cts[i].rq_iter = iter;
+                key_exists = castle_bloom_key_exists(&iter->relevant_cts[i].bloom_lookup,
+                                                     &cts_proxy->cts[i].ct->bloom,
+                                                     iter->start_stripped,
+                                                     HASH_STRIPPED_KEYS,
+                                                     castle_da_rq_iter_relevant_ct_cb,
+                                                     &iter->relevant_cts[i]);
+                if (key_exists >= 0)
+                {
+                    iter->relevant_cts[i].relevant = key_exists;
+                    BUG_ON(atomic_dec_return(&iter->pending_lookups) == 0);
+                }
+                break;
+
+            default:
+                BUG();
+        }
+    }
+
+    if (atomic_dec_return(&iter->pending_lookups) == 0)
+        /* All CT relevance checks complete, finish initialising iterator. */
+        _castle_da_rq_iter_init(iter);
+
+    return 0;
+}
+
+/**
+ * Initialise range query iterator.
+ *
+ * @param   iter        Range query iterator to initialise
+ * @param   version     Version to query
+ * @param   da_id       DA to iterate
+ * @param   start_key   Range query start key
+ * @param   end_key     Range query end key
+ * @param   init_cb     Callback to fire when initialisation is complete
+ * @param   private     Caller-provided data to be passed to init_cb()
+ *
+ * Iterator initialisation is likely to go asynchronous due to bloom filter
+ * lookups.  As a result we inform the caller of initialisation success/failure
+ * asynchronously via the init_cb() callback.
+ *
+ * The real heavy lifting is done in _castle_da_rq_iter_init().
+ *
+ * @also _castle_da_rq_iter_init()
+ * @also castle_da_rq_iter_prep_next()
+ * @also castle_da_rq_iter_relevant_cts_get()
+ */
+void castle_da_rq_iter_init(c_da_rq_iter_t *iter,
+                            c_ver_t version,
+                            c_da_t da_id,
+                            void *start_key,
+                            void *end_key,
+                            castle_da_rq_iter_init_cb_t init_cb,
+                            void *private)
+{
+    struct castle_double_array *da;
+    struct castle_btree_type *btree;
+
+    BUG_ON(!init_cb);
+
+    /* Get DA structure from hash. */
+    da = castle_da_hash_get(da_id);
+    BUG_ON(!da);
+    BUG_ON(!castle_version_is_ancestor(da->root_version, version));
+    btree = castle_btree_type_get(da->btree_type);
+
+    /* Get CTs proxy structure. */
+    iter->cts_proxy = castle_da_cts_proxy_get(da);
+    if (!iter->cts_proxy)
+        goto alloc_fail;
+
+    /* Initialise the iterator. */
+    iter->async_iter.end_io = NULL;
+    iter->err               = 0;
+    iter->version           = version;
+
+    /* Initialise async init stuff. */
+    iter->da                = da;
+    iter->init_cb           = init_cb;
+    iter->private           = private;
+    /* It's safe to reference the passed start and end keys as the caller will
+     * not go away at least until we asynchronously wake them up. */
+    iter->start_key         = start_key;
+    iter->end_key           = end_key;
+
+    /* Determine CTs relevant to range query. */
+    if (castle_da_rq_iter_relevant_cts_get(iter, start_key, end_key) != 0)
+        goto alloc_fail2;
+
+    /* The remainder of the iterator initialisation is done asynchronously.
+     * See _castle_da_rq_iter_init() for more details. */
+
+    return;
+
+alloc_fail2:
+    if (iter->cts_proxy)
+    {
+        castle_da_cts_proxy_put(iter->cts_proxy);
+        iter->cts_proxy = NULL;
+    }
 alloc_fail:
     iter->err = -ENOMEM;
+    init_cb(private);
 }
 
 struct castle_iterator_type castle_da_rq_iter = {
@@ -2671,6 +2959,8 @@ static int castle_da_iterators_create(struct castle_da_merge *merge)
             curr_comp++;
         } /* restored c_immut_iters */
     } /* merged iterator fast-forwarded to serialised state */
+
+    castle_free(iter_types);
 
     /* Success */
     return 0;
@@ -10516,6 +10806,85 @@ static int64_t castle_da_ct_timestamp_compare(struct castle_component_tree *ct,
 }
 
 /**
+ * Callback handler when castle_bloom_key_exists() returns a result.
+ *
+ * @param   private     c_bvec pointer
+ * @param   key_exists  Whether c_bvec->key exists in c_bvec->tree
+ *
+ * NOTE: Called directly from castle_bloom_key_exists() if it needed to go
+ *       asynchronous to issue read I/O.
+ *
+ * NOTE: Called from _castle_da_bloom_submit() if castle_bloom_key_exists()
+ *       returned a result synchronously.
+ *
+ * @also _castle_da_bloom_submit()
+ */
+inline void castle_da_bloom_submit_cb(void *private, int key_exists)
+{
+    c_bvec_t *c_bvec = private;
+
+    BUG_ON(key_exists < 0);
+
+    if (key_exists)
+    {
+        /* Key may exist, submit request to btree. */
+#ifdef CASTLE_BLOOM_FP_STATS
+        if (key_exists == 1)
+            c_bvec->bloom_positive = 1;
+#endif
+        castle_btree_submit(c_bvec, 0 /*go_async*/);
+    }
+    else
+        /* Key doesn't exist in btree, try next CT. */
+        castle_da_next_ct_read(c_bvec);
+}
+
+static inline void _castle_da_bloom_submit(void *data)
+{
+    c_bvec_t *c_bvec = data;
+    int key_exists;
+
+    key_exists = castle_bloom_key_exists(&c_bvec->bloom_lookup,
+                                         &c_bvec->tree->bloom,
+                                         c_bvec->key,
+                                         HASH_WHOLE_KEY,
+                                         castle_da_bloom_submit_cb,
+                                         c_bvec);
+
+    if (key_exists < 0)
+        /* Bloom lookup went asynchronous, CB will be fired asynchronously. */
+        return;
+
+    castle_da_bloom_submit_cb(c_bvec, key_exists);
+}
+
+/**
+ * Perform a lookup in the entire bloom filter.
+ *
+ * @param   c_bvec      Point read key to look for
+ * @param   go_async    Whether to immediately go asynchronous
+ *
+ * Only CTs which have been merged can have bloom filters.
+ */
+void castle_da_bloom_submit(c_bvec_t *c_bvec, int go_async)
+{
+    if (c_bvec->tree->bloom_exists)
+    {
+        /* Search in bloom filter. */
+        INIT_WORK(&c_bvec->work, _castle_da_bloom_submit, c_bvec);
+        if (go_async)
+            /* Submit asynchronously. */
+            queue_work_on(c_bvec->cpu, castle_wqs[19], &c_bvec->work);
+        else
+            /* Submit synchronously. */
+            _castle_da_bloom_submit(&c_bvec->work);
+    }
+    else
+        /* Submit directly to btree. */
+        castle_btree_submit(c_bvec, go_async);
+}
+
+/**
  * Submit request to the next candidate CT, or terminate if exhausted.
  */
 void castle_da_next_ct_read(c_bvec_t *c_bvec)
@@ -10560,7 +10929,7 @@ void castle_da_next_ct_read(c_bvec_t *c_bvec)
     debug_verbose("Scheduling btree read in %s tree: %d.\n",
             c_bvec->tree->dynamic ? "dynamic" : "static", c_bvec->tree->seq);
 
-    castle_bloom_submit(c_bvec, 1 /*async*/);
+    castle_da_bloom_submit(c_bvec, 1 /*async*/);
 }
 
 /**
@@ -10841,7 +11210,7 @@ static void castle_da_read_bvec_start(struct castle_double_array *da, c_bvec_t *
 #ifdef CASTLE_BLOOM_FP_STATS
     c_bvec->bloom_positive = 0;
 #endif
-    castle_bloom_submit(c_bvec, 0 /*go_async*/);
+    castle_da_bloom_submit(c_bvec, 0 /*go_async*/);
 }
 
 /**

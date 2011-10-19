@@ -107,6 +107,16 @@ static void castle_mtree_key_dealloc(void *key)
     /* No need to do anything in mtree keys, because they are ints (cast to void *). */
 }
 
+static int castle_mtree_key_nr_dims(const void *key)
+{
+    BUG();
+}
+
+static void *castle_mtree_key_strip(const void *src, void *dst, size_t *dst_len, int nr_dims)
+{
+    BUG();
+}
+
 static uint32_t castle_mtree_key_hash(const void *key, c_btree_hash_enum_t type, uint32_t seed)
 {
     BUG();
@@ -272,6 +282,8 @@ struct castle_btree_type castle_mtree = {
     .key_copy       = castle_mtree_key_copy,
     .key_next       = castle_mtree_key_next,
     .key_dealloc    = castle_mtree_key_dealloc,
+    .nr_dims        = castle_mtree_key_nr_dims,
+    .key_strip      = castle_mtree_key_strip,
     .key_hash       = castle_mtree_key_hash,
     .entry_get      = castle_mtree_entry_get,
     .entry_add      = castle_mtree_entry_add,

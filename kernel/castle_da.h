@@ -188,7 +188,9 @@ void castle_da_rq_iter_init    (c_da_rq_iter_t *iter,
                                 c_ver_t version,
                                 c_da_t da_id,
                                 void *start_key,
-                                void *end_key);
+                                void *end_key,
+                                castle_da_rq_iter_init_cb_t init_cb,
+                                void *private);
 extern struct castle_iterator_type castle_da_rq_iter;
 
 int  castle_double_array_key_cpu_index(c_vl_bkey_t *key, uint32_t key_len);
