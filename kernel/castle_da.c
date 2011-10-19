@@ -9855,6 +9855,10 @@ int castle_double_array_make(c_da_t da_id, c_ver_t root_version)
 
         return ret;
     }
+
+    /* Successfully created a DA. Send event. */
+    castle_events_version_tree_created(da->id);
+
     debug("Successfully made a new doubling array, id=%d, for version=%d\n",
         da_id, root_version);
     /* DA make succeeded, start merge threads. */
@@ -11433,8 +11437,14 @@ int castle_double_array_destroy(c_da_t da_id)
         ret = -EBUSY;
         goto err_out;
     }
-    /* Now we are happy to delete the DA. Remove it from the hash. */
     BUG_ON(castle_da_deleted(da));
+
+    /* Now we are happy to delete the DA. */
+
+    /* Send an event, first. */
+    castle_events_version_tree_destroyed(da->id);
+
+    /* Remove it from the hash. */
     __castle_da_hash_remove(da);
     da->hash_list.next = da->hash_list.prev = NULL;
     write_unlock_irqrestore(&castle_da_hash_lock, flags);
