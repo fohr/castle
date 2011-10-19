@@ -943,7 +943,7 @@ void castle_norm_key_print(int level, const struct castle_norm_key *key)
         BUG_ON(data != key->data + len);
         BUG_ON(p - buf > buf_len);
 
-        castle_printk(level, "%s, len=%lu", buf, len);
+        castle_printk(level, "%s, len=%lu\n", buf, len);
         castle_free(buf);
     }
 }
